@@ -26,6 +26,9 @@ public class MentorService {
 
 	@Transactional
 	public Mentor create(String userId, List<String> expertise, String price) {
+		if (repository.findByUserId(userId).isPresent()) {
+			throw new ApiException(409, "ALREADY_MENTOR", "Voce ja esta cadastrado como mentor.");
+		}
 		String id = "mentor_" + UUID.randomUUID().toString().replace("-", "");
 		Mentor mentor = Mentor.create(id, userId, expertise, price, clock.instant());
 		repository.save(mentor);
@@ -33,9 +36,12 @@ public class MentorService {
 	}
 
 	@Transactional
-	public MentorSlot createSlot(String mentorId, java.time.Instant startsAt, java.time.Instant endsAt) {
-		repository.findById(mentorId)
+	public MentorSlot createSlot(String mentorId, String userId, java.time.Instant startsAt, java.time.Instant endsAt) {
+		Mentor mentor = repository.findById(mentorId)
 			.orElseThrow(() -> new ApiException(404, "MENTOR_NOT_FOUND", "Mentor nao encontrado."));
+		if (!mentor.userId().equals(userId)) {
+			throw new ApiException(403, "FORBIDDEN", "Voce nao e o dono deste perfil de mentor.");
+		}
 		String id = "slot_" + UUID.randomUUID().toString().replace("-", "");
 		MentorSlot slot = MentorSlot.create(id, mentorId, startsAt, endsAt);
 		repository.saveSlot(slot);

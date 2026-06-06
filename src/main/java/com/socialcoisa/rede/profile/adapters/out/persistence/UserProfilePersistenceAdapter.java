@@ -1,5 +1,7 @@
 package com.socialcoisa.rede.profile.adapters.out.persistence;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.stereotype.Repository;
@@ -28,6 +30,13 @@ class UserProfilePersistenceAdapter implements UserProfileRepository {
 	@Override
 	public Optional<UserProfile> findById(String id) {
 		return repository.findById(id).map(UserProfileJpaEntity::toDomain);
+	}
+
+	@Override
+	public List<UserProfile> findAllByIds(Collection<String> ids) {
+		return repository.findAllById(ids).stream()
+			.map(UserProfileJpaEntity::toDomain)
+			.toList();
 	}
 
 	@Override

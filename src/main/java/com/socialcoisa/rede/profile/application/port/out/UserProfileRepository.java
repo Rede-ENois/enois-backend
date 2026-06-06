@@ -1,5 +1,7 @@
 package com.socialcoisa.rede.profile.application.port.out;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 import com.socialcoisa.rede.profile.domain.UserProfile;
@@ -9,6 +11,8 @@ public interface UserProfileRepository {
 	UserProfile save(UserProfile profile);
 
 	Optional<UserProfile> findById(String id);
+
+	List<UserProfile> findAllByIds(Collection<String> ids);
 
 	Optional<UserProfile> findByUsername(String username);
 

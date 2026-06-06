@@ -25,6 +25,8 @@ import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
 import com.socialcoisa.rede.feed.domain.PostType;
 import com.socialcoisa.rede.feed.domain.UserId;
+import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
+import com.socialcoisa.rede.profile.domain.UserProfile;
 import com.socialcoisa.rede.shared.web.CursorCodec;
 
 @Service
@@ -33,14 +35,17 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase {
 	private final PostRepository postRepository;
 	private final FeedCacheRepository feedCacheRepository;
 	private final ConnectionGraphRepository connectionGraphRepository;
+	private final UserProfileRepository userProfileRepository;
 	private final CursorCodec cursorCodec;
 	private static final Instant DEFAULT_BEFORE = Instant.parse("9999-12-31T23:59:59Z");
 
 	public GetFeedService(PostRepository postRepository, FeedCacheRepository feedCacheRepository,
-			ConnectionGraphRepository connectionGraphRepository, CursorCodec cursorCodec) {
+			ConnectionGraphRepository connectionGraphRepository, UserProfileRepository userProfileRepository,
+			CursorCodec cursorCodec) {
 		this.postRepository = postRepository;
 		this.feedCacheRepository = feedCacheRepository;
 		this.connectionGraphRepository = connectionGraphRepository;
+		this.userProfileRepository = userProfileRepository;
 		this.cursorCodec = cursorCodec;
 	}
 
@@ -57,10 +62,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase {
 		authors.add(query.userId());
 		authors.addAll(connectionGraphRepository.findFriends(query.userId()));
 		authors.addAll(connectionGraphRepository.findFriendsOfFriends(query.userId()));
-		List<PostView> posts = postRepository.findActiveByAuthors(authors, before, limit).stream()
-			.map(PostView::from)
-			.toList();
-		return page(filterByTab(posts, query.tab()), limit);
+		List<Post> posts = postRepository.findActiveByAuthors(authors, before, limit);
+		return page(filterByTab(enrich(posts), query.tab()), limit);
 	}
 
 	@Override
@@ -68,10 +71,28 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase {
 	public FeedPage getProfilePosts(GetProfilePostsQuery query) {
 		int limit = normalizeLimit(query.limit());
 		Instant before = query.before().orElse(DEFAULT_BEFORE);
-		List<PostView> posts = postRepository.findActiveByAuthor(new UserId(query.username()), before, limit).stream()
-			.map(PostView::from)
+		List<Post> posts = postRepository.findActiveByAuthor(new UserId(query.username()), before, limit);
+		return page(enrich(posts), limit);
+	}
+
+	private List<PostView> enrich(List<Post> posts) {
+		if (posts.isEmpty()) {
+			return List.of();
+		}
+		Set<String> authorIds = posts.stream()
+			.map(p -> p.authorId().value())
+			.collect(Collectors.toSet());
+		Map<String, UserProfile> profiles = userProfileRepository.findAllByIds(authorIds).stream()
+			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
+		return posts.stream()
+			.map(post -> {
+				UserProfile profile = profiles.get(post.authorId().value());
+				return PostView.from(post,
+					profile != null ? profile.username() : null,
+					profile != null ? profile.name() : post.authorId().value(),
+					profile != null ? profile.avatar() : null);
+			})
 			.toList();
-		return page(posts, limit);
 	}
 
 	private List<PostView> filterByTab(List<PostView> posts, FeedTab tab) {
@@ -101,18 +122,18 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase {
 		for (FeedItem item : items) {
 			orderedItems.put(item.postId().value(), item);
 		}
-		Map<PostId, Post> posts = postRepository.findByIds(orderedItems.values().stream().map(FeedItem::postId).toList())
+		Map<PostId, Post> postsById = postRepository.findByIds(orderedItems.values().stream().map(FeedItem::postId).toList())
 			.stream()
 			.filter(Post::isActive)
 			.collect(Collectors.toMap(Post::id, Function.identity()));
-		List<PostView> result = new ArrayList<>();
+		List<Post> ordered = new ArrayList<>();
 		for (FeedItem item : orderedItems.values()) {
-			Post post = posts.get(item.postId());
+			Post post = postsById.get(item.postId());
 			if (post != null) {
-				result.add(PostView.from(post));
+				ordered.add(post);
 			}
 		}
-		return result.stream()
+		return enrich(ordered).stream()
 			.sorted(Comparator.comparing(PostView::createdAt).reversed())
 			.toList();
 	}

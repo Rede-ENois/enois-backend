@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.mentoring.adapters.in.web;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -67,6 +68,39 @@ class MentoringContractController {
 		return new PageResponse<>(items, null);
 	}
 
+	@PostMapping
+	ResponseEntity<String> create(@RequestHeader(value = "X-User-Id", required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@RequestBody CreateMentorRequest request) {
+		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		String hash = idempotency.hash(request);
+		return idempotency.execute(user.id(), "POST", "/api/mentors", idempotencyKey, hash,
+			() -> {
+				Mentor m = mentorService.create(user.id().value(), request.expertise(), request.price());
+				return new CommandResponse(201, new MentorView(m.id(), m.userId(), m.expertise(), m.rating(),
+					m.sessionsCount(), m.price(), null));
+			});
+	}
+
+	@PostMapping("/{mentorId}/slots")
+	ResponseEntity<String> createSlot(@RequestHeader(value = "X-User-Id", required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@PathVariable String mentorId, @RequestBody CreateSlotRequest request) {
+		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		String hash = idempotency.hash(Map.of("mentorId", mentorId, "request", request));
+		return idempotency.execute(user.id(), "POST", "/api/mentors/{mentorId}/slots", idempotencyKey, hash,
+			() -> {
+				MentorSlot slot = mentorService.createSlot(mentorId, user.id().value(),
+					request.startsAt(), request.endsAt());
+				return new CommandResponse(201, new MentorSlotView(slot.id(),
+					slot.startsAt() != null ? slot.startsAt().toString() : null,
+					slot.endsAt() != null ? slot.endsAt().toString() : null,
+					slot.available()));
+			});
+	}
+
 	@PostMapping("/{mentorId}/sessions")
 	ResponseEntity<String> session(@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
@@ -90,6 +124,12 @@ class MentoringContractController {
 	}
 
 	record MentorSessionRequest(String slotId, String message) {
+	}
+
+	record CreateMentorRequest(List<String> expertise, String price) {
+	}
+
+	record CreateSlotRequest(Instant startsAt, Instant endsAt) {
 	}
 
 }

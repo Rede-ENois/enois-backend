@@ -13,6 +13,8 @@ public interface MentorRepository {
 
 	Optional<Mentor> findById(String id);
 
+	Optional<Mentor> findByUserId(String userId);
+
 	List<Mentor> findAll(String expertise, int limit);
 
 	void saveSlot(MentorSlot slot);

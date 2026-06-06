@@ -5,6 +5,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -56,10 +60,29 @@ class NetworkContractController {
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
 		List<UserConnection> connections = networkService.getConnections(user.id().value());
-		var items = connections.stream()
-			.map(c -> {
-				String otherId = c.requesterUserId().equals(user.id().value()) ? c.receiverUserId() : c.requesterUserId();
-				return new NetworkUserView(otherId, null, null, null, null, 0, 0, true);
+		Set<String> connectedIds = connections.stream()
+			.map(c -> c.requesterUserId().equals(user.id().value()) ? c.receiverUserId() : c.requesterUserId())
+			.collect(Collectors.toSet());
+		Map<String, UserProfile> profiles = userProfileRepository.findAllByIds(connectedIds).stream()
+			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
+		String q = query != null ? query.toLowerCase() : "";
+		var items = connectedIds.stream()
+			.filter(id -> {
+				if (q.isEmpty()) return true;
+				UserProfile p = profiles.get(id);
+				return p != null
+					&& (p.name().toLowerCase().contains(q) || p.username().toLowerCase().contains(q));
+			})
+			.map(id -> {
+				UserProfile p = profiles.get(id);
+				return new NetworkUserView(id,
+					p != null ? p.username() : null,
+					p != null ? p.name() : null,
+					p != null ? p.headline() : null,
+					p != null ? p.avatar() : null,
+					p != null ? p.connectionsCount() : 0,
+					p != null ? p.followersCount() : 0,
+					true);
 			})
 			.toList();
 		return new PageResponse<>(items, null);
@@ -71,14 +94,14 @@ class NetworkContractController {
 			@RequestParam(defaultValue = "4") int limit) {
 		CurrentUser currentUser = currentUserResolver.resolve(userId, sessionToken);
 		List<ConnectionSuggestion> suggestions = networkService.getSuggestions(currentUser.id().value(), limit);
-		return suggestions.stream()
-			.map(s -> {
-				UserProfile profile = userProfileRepository.findById(s.userId()).orElse(null);
-				if (profile == null) return null;
-				return new NetworkUserView(profile.id(), profile.username(), profile.name(), profile.headline(),
-					profile.avatar(), 0, 0, false);
-			})
-			.filter(v -> v != null)
+		Set<String> suggestedIds = suggestions.stream().map(ConnectionSuggestion::userId).collect(Collectors.toSet());
+		Map<String, UserProfile> profiles = userProfileRepository.findAllByIds(suggestedIds).stream()
+			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
+		return suggestedIds.stream()
+			.map(profiles::get)
+			.filter(p -> p != null)
+			.map(p -> new NetworkUserView(p.id(), p.username(), p.name(), p.headline(), p.avatar(),
+				p.connectionsCount(), p.followersCount(), false))
 			.toList();
 	}
 

@@ -37,6 +37,11 @@ class MentorPersistenceAdapter implements MentorRepository {
 	}
 
 	@Override
+	public Optional<Mentor> findByUserId(String userId) {
+		return springData.findByUserId(userId).map(MentorJpaEntity::toDomain);
+	}
+
+	@Override
 	public List<Mentor> findAll(String expertise, int limit) {
 		List<MentorJpaEntity> entities;
 		if (StringUtils.hasText(expertise)) {
