@@ -1,7 +1,11 @@
 package com.socialcoisa.rede.communities.adapters.in.web;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -17,8 +21,13 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.communities.application.CommunityService;
 import com.socialcoisa.rede.communities.domain.Community;
+import com.socialcoisa.rede.communities.domain.CommunityMember;
+import com.socialcoisa.rede.feed.application.FeedPage;
+import com.socialcoisa.rede.feed.application.GetFeedService;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
+import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
+import com.socialcoisa.rede.profile.domain.UserProfile;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 import com.socialcoisa.rede.shared.web.PageResponse;
@@ -31,12 +40,17 @@ class CommunityContractController {
 	private final IdempotencyApplicationService idempotency;
 	private final CurrentUserResolver currentUserResolver;
 	private final CommunityService communityService;
+	private final UserProfileRepository userProfileRepository;
+	private final GetFeedService getFeedService;
 
 	CommunityContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
-			CommunityService communityService) {
+			CommunityService communityService, UserProfileRepository userProfileRepository,
+			GetFeedService getFeedService) {
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.communityService = communityService;
+		this.userProfileRepository = userProfileRepository;
+		this.getFeedService = getFeedService;
 	}
 
 	@GetMapping
@@ -134,11 +148,44 @@ class CommunityContractController {
 			});
 	}
 
+	@GetMapping("/{communityId}/members")
+	PageResponse<MemberView> members(@RequestHeader(value = "X-User-Id", required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String communityId) {
+		resolveSafely(userId, sessionToken);
+		List<CommunityMember> members = communityService.findMembers(communityId);
+		Set<String> userIds = members.stream().map(CommunityMember::userId).collect(Collectors.toSet());
+		Map<String, UserProfile> profiles = userProfileRepository.findAllByIds(userIds).stream()
+			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
+		var items = members.stream()
+			.map(m -> {
+				UserProfile p = profiles.get(m.userId());
+				return new MemberView(m.userId(),
+					p != null ? p.username() : null,
+					p != null ? p.name() : null,
+					p != null ? p.avatar() : null,
+					m.role().name());
+			})
+			.toList();
+		return new PageResponse<>(items, null);
+	}
+
+	@GetMapping("/{communityId}/feed")
+	FeedPage communityFeed(@PathVariable String communityId,
+			@RequestParam(required = false) String cursor,
+			@RequestParam(defaultValue = "20") int limit) {
+		Instant before = cursor != null ? Instant.parse(cursor) : null;
+		return getFeedService.getCommunityFeed(communityId, before, limit);
+	}
+
 	record CommunityView(String id, String name, String description, int members, String topic, String cover,
 			boolean joined) {
 	}
 
 	record CommunityRequest(String name, String description, String topic, String cover) {
+	}
+
+	record MemberView(String userId, String username, String name, String avatar, String role) {
 	}
 
 }

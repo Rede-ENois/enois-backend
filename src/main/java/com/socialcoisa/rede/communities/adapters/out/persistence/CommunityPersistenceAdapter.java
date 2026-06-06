@@ -63,4 +63,11 @@ class CommunityPersistenceAdapter implements CommunityRepository {
 		return memberRepo.countByCommunityId(communityId);
 	}
 
+	@Override
+	public List<CommunityMember> findMembersByCommunity(String communityId) {
+		return memberRepo.findByCommunityId(communityId).stream()
+			.map(CommunityMemberJpaEntity::toDomain)
+			.toList();
+	}
+
 }

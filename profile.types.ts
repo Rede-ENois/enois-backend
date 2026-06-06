@@ -56,6 +56,7 @@ export interface Post {
   mediaIds: string[]
   createdAt: string
   counters: { reactions: number; comments: number; saves: number; shares: number }
+  communityId?: string | null
 }
 
 // ─── Experiências (/me/experiences) ───
@@ -261,6 +262,15 @@ export interface Event {
   cover: string | null
 }
 
+export interface CreateEventRequest {
+  title: string
+  date: string
+  time: string
+  format: string
+  host: string
+  cover?: string | null
+}
+
 // ─── Mentoria ───
 
 export interface Mentor {
@@ -293,4 +303,21 @@ export interface CreateMentorRequest {
 export interface CreateSlotRequest {
   startsAt: string  // ISO instant "2025-08-15T14:00:00Z"
   endsAt: string    // ISO instant "2025-08-15T15:00:00Z"
+}
+
+// ─── Paginação (cursor) ───
+
+export interface FeedPage<T> {
+  items: T[]
+  nextCursor: string | null
+}
+
+// ─── Membro da comunidade ───
+
+export interface MemberView {
+  userId: string
+  username: string | null
+  name: string | null
+  avatar: string | null
+  role: 'ADMIN' | 'MEMBER'
 }

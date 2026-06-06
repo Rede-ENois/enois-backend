@@ -22,4 +22,6 @@ public interface CommunityRepository {
 
 	int countMembers(String communityId);
 
+	List<CommunityMember> findMembersByCommunity(String communityId);
+
 }

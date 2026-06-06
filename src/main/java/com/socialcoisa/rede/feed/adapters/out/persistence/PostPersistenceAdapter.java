@@ -62,4 +62,15 @@ class PostPersistenceAdapter implements PostRepository {
 			.map(PostJpaEntity::toDomain)
 			.toList();
 	}
+
+	@Override
+	public List<Post> findActiveByCommunity(String communityId, Instant before, int limit) {
+		if (communityId == null || communityId.isBlank()) {
+			return List.of();
+		}
+		return repository.findByCommunityIdAndStatusAndCreatedAtBeforeOrderByCreatedAtDesc(communityId.trim(),
+			PostStatus.ACTIVE, before, PageRequest.of(0, limit)).stream()
+			.map(PostJpaEntity::toDomain)
+			.toList();
+	}
 }

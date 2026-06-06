@@ -21,4 +21,6 @@ public interface PostRepository {
 	List<Post> findActiveByAuthors(Set<UserId> authorIds, Instant before, int limit);
 
 	List<Post> findActiveByAuthor(UserId authorId, Instant before, int limit);
+
+	List<Post> findActiveByCommunity(String communityId, Instant before, int limit);
 }

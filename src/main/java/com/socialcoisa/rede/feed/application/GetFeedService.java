@@ -75,6 +75,14 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase {
 		return page(enrich(posts), limit);
 	}
 
+	@Transactional(readOnly = true)
+	public FeedPage getCommunityFeed(String communityId, Instant before, int limit) {
+		limit = normalizeLimit(limit);
+		before = before == null ? DEFAULT_BEFORE : before;
+		List<Post> posts = postRepository.findActiveByCommunity(communityId, before, limit);
+		return page(enrich(posts), limit);
+	}
+
 	private List<PostView> enrich(List<Post> posts) {
 		if (posts.isEmpty()) {
 			return List.of();

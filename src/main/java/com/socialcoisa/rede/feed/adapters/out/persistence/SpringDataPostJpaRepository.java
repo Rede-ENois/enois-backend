@@ -18,4 +18,7 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 
 	List<PostJpaEntity> findByAuthorIdAndStatusAndCreatedAtBeforeOrderByCreatedAtDesc(String authorId, PostStatus status,
 			Instant before, Pageable pageable);
+
+	List<PostJpaEntity> findByCommunityIdAndStatusAndCreatedAtBeforeOrderByCreatedAtDesc(String communityId,
+			PostStatus status, Instant before, Pageable pageable);
 }

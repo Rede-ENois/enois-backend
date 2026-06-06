@@ -81,4 +81,8 @@ public class CommunityService {
 		return repository.countMembers(communityId);
 	}
 
+	public List<CommunityMember> findMembers(String communityId) {
+		return repository.findMembersByCommunity(communityId);
+	}
+
 }

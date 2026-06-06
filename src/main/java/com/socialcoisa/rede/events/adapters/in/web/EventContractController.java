@@ -55,6 +55,22 @@ class EventContractController {
 			eventService.countAttendees(e.id()), e.cover());
 	}
 
+	@PostMapping
+	ResponseEntity<String> create(@RequestHeader(value = "X-User-Id", required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@RequestBody CreateEventRequest request) {
+		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		String hash = idempotency.hash(request);
+		return idempotency.execute(user.id(), "POST", "/api/events", idempotencyKey, hash,
+			() -> {
+				Event e = eventService.create(request.title(), request.date(), request.time(), request.format(),
+					request.host(), request.cover(), user.id().value());
+				return new CommandResponse(201, new EventView(e.id(), e.title(), e.date(), e.time(), e.format(),
+					e.host(), 1, e.cover()));
+			});
+	}
+
 	@PostMapping("/{eventId}/attendees")
 	ResponseEntity<String> attend(@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
@@ -85,6 +101,9 @@ class EventContractController {
 
 	record EventView(String id, String title, String date, String time, String format, String host, int attendees,
 			String cover) {
+	}
+
+	record CreateEventRequest(String title, String date, String time, String format, String host, String cover) {
 	}
 
 }

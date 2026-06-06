@@ -51,8 +51,9 @@ public class PublishPostService implements PublishPostUseCase {
 			.distinct()
 			.toList();
 		validateMediaOwnershipUseCase.validateOwnedBy(command.authorId(), mediaIds);
+		String communityId = StringUtils.hasText(command.communityId()) ? command.communityId().trim() : null;
 		Post post = Post.publish(idGenerator.newPostId(), command.authorId(), command.type(), command.content().trim(),
-			tags, mediaIds, clock.instant());
+			tags, mediaIds, communityId, clock.instant());
 		Post saved = postRepository.save(post);
 		feedDistributionService.distribute(saved);
 		outboxEventRepository.append("PostPublished", saved.id().value(), "{\"postId\":\"" + saved.id().value() + "\"}");

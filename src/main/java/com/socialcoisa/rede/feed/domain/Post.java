@@ -11,6 +11,7 @@ public class Post {
 	private final String content;
 	private final List<String> tags;
 	private final List<String> mediaIds;
+	private final String communityId;
 	private final Instant createdAt;
 	private final Visibility visibility;
 	private Counters counters;
@@ -18,13 +19,15 @@ public class Post {
 	private Instant deletedAt;
 
 	private Post(PostId id, UserId authorId, PostType type, String content, List<String> tags, List<String> mediaIds,
-			Instant createdAt, Visibility visibility, Counters counters, PostStatus status, Instant deletedAt) {
+			String communityId, Instant createdAt, Visibility visibility, Counters counters, PostStatus status,
+			Instant deletedAt) {
 		this.id = id;
 		this.authorId = authorId;
 		this.type = type;
 		this.content = content;
 		this.tags = List.copyOf(tags);
 		this.mediaIds = List.copyOf(mediaIds);
+		this.communityId = communityId;
 		this.createdAt = createdAt;
 		this.visibility = visibility;
 		this.counters = counters;
@@ -33,15 +36,16 @@ public class Post {
 	}
 
 	public static Post publish(PostId id, UserId authorId, PostType type, String content, List<String> tags,
-			List<String> mediaIds, Instant createdAt) {
-		return new Post(id, authorId, type, content, tags, mediaIds, createdAt, Visibility.PUBLIC, Counters.zero(),
-			PostStatus.ACTIVE, null);
+			List<String> mediaIds, String communityId, Instant createdAt) {
+		return new Post(id, authorId, type, content, tags, mediaIds, communityId, createdAt, Visibility.PUBLIC,
+			Counters.zero(), PostStatus.ACTIVE, null);
 	}
 
 	public static Post restore(PostId id, UserId authorId, PostType type, String content, List<String> tags,
-			List<String> mediaIds, Instant createdAt, Visibility visibility, Counters counters, PostStatus status,
-			Instant deletedAt) {
-		return new Post(id, authorId, type, content, tags, mediaIds, createdAt, visibility, counters, status, deletedAt);
+			List<String> mediaIds, String communityId, Instant createdAt, Visibility visibility, Counters counters,
+			PostStatus status, Instant deletedAt) {
+		return new Post(id, authorId, type, content, tags, mediaIds, communityId, createdAt, visibility, counters,
+			status, deletedAt);
 	}
 
 	public boolean isActive() {
@@ -107,6 +111,10 @@ public class Post {
 
 	public List<String> mediaIds() {
 		return mediaIds;
+	}
+
+	public String communityId() {
+		return communityId;
 	}
 
 	public Instant createdAt() {
