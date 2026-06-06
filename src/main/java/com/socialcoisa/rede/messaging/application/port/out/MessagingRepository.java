@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.messaging.application.port.out;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -15,7 +16,7 @@ public interface MessagingRepository {
 
 	Optional<Conversation> findConversationById(String id);
 
-	List<Conversation> findConversationsByUserId(String userId, int limit);
+	List<Conversation> findConversationsByUserId(String userId, java.time.Instant before, int limit);
 
 	List<ConversationParticipant> findParticipantsByConversation(String conversationId);
 

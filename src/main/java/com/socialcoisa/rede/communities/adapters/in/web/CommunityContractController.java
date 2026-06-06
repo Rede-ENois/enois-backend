@@ -1,6 +1,5 @@
 package com.socialcoisa.rede.communities.adapters.in.web;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -30,8 +29,10 @@ import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
+import com.socialcoisa.rede.shared.web.CursorCodec;
 import com.socialcoisa.rede.shared.web.PageResponse;
 import com.socialcoisa.rede.shared.web.StatusResponse;
+import java.time.Instant;
 
 @RestController
 @RequestMapping("/api/communities")
@@ -42,15 +43,17 @@ class CommunityContractController {
 	private final CommunityService communityService;
 	private final UserProfileRepository userProfileRepository;
 	private final GetFeedService getFeedService;
+	private final CursorCodec cursorCodec;
 
 	CommunityContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
 			CommunityService communityService, UserProfileRepository userProfileRepository,
-			GetFeedService getFeedService) {
+			GetFeedService getFeedService, CursorCodec cursorCodec) {
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.communityService = communityService;
 		this.userProfileRepository = userProfileRepository;
 		this.getFeedService = getFeedService;
+		this.cursorCodec = cursorCodec;
 	}
 
 	@GetMapping
@@ -59,13 +62,16 @@ class CommunityContractController {
 			@RequestParam(required = false) String topic,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit) {
 		CurrentUser user = resolveSafely(userId, sessionToken);
-		List<Community> communities = communityService.list(topic, limit);
+		Instant before = cursorCodec.decode(cursor).orElse(null);
+		List<Community> communities = communityService.list(topic, before, limit);
 		var items = communities.stream()
 			.map(c -> new CommunityView(c.id(), c.name(), c.description(),
 				communityService.countMembers(c.id()), c.topic(), c.cover(),
 				user != null && communityService.isMember(c.id(), user.id().value())))
 			.toList();
-		return new PageResponse<>(items, null);
+		String nextCursor = communities.size() == limit
+			? cursorCodec.encode(communities.get(communities.size() - 1).createdAt()) : null;
+		return new PageResponse<>(items, nextCursor);
 	}
 
 	@GetMapping("/{communityId}")

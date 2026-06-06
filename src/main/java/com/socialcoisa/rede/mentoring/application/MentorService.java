@@ -64,8 +64,8 @@ public class MentorService {
 		return session;
 	}
 
-	public List<Mentor> list(String expertise, int limit) {
-		return repository.findAll(expertise, limit);
+	public List<Mentor> list(String expertise, java.time.Instant before, int limit) {
+		return repository.findAll(expertise, before, limit);
 	}
 
 	public Mentor getById(String id) {

@@ -50,8 +50,8 @@ public class EventService {
 		repository.removeAttendee(eventId, userId);
 	}
 
-	public List<Event> list(String format, int limit) {
-		return repository.findAll(format, limit);
+	public List<Event> list(String format, java.time.Instant before, int limit) {
+		return repository.findAll(format, before, limit);
 	}
 
 	public Event getById(String id) {

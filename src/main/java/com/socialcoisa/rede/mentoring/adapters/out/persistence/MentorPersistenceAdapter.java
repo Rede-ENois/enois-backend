@@ -1,8 +1,10 @@
 package com.socialcoisa.rede.mentoring.adapters.out.persistence;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
 import org.springframework.util.StringUtils;
 
@@ -42,14 +44,15 @@ class MentorPersistenceAdapter implements MentorRepository {
 	}
 
 	@Override
-	public List<Mentor> findAll(String expertise, int limit) {
+	public List<Mentor> findAll(String expertise, Instant before, int limit) {
+		PageRequest page = PageRequest.of(0, limit);
 		List<MentorJpaEntity> entities;
 		if (StringUtils.hasText(expertise)) {
-			entities = springData.findByExpertise(expertise);
+			entities = springData.findByExpertise(expertise, before, page);
 		} else {
-			entities = springData.findAllByOrderByCreatedAtDesc();
+			entities = springData.findAllBefore(before, page);
 		}
-		return entities.stream().map(MentorJpaEntity::toDomain).limit(limit).toList();
+		return entities.stream().map(MentorJpaEntity::toDomain).toList();
 	}
 
 	@Override

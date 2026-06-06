@@ -90,8 +90,9 @@ public class JobService {
 		repository.removeBookmark(jobId, userId);
 	}
 
-	public List<Job> list(String query, String type, int limit) {
-		return repository.findAll(query, type, limit);
+	public List<Job> list(String query, String type, String level, String location, List<String> skills,
+			java.time.Instant before, int limit) {
+		return repository.findAll(query, type, level, location, skills, before, limit);
 	}
 
 	public Job getById(String id) {

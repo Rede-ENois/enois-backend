@@ -1,8 +1,10 @@
 package com.socialcoisa.rede.notifications.adapters.out.persistence;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
 
 import com.socialcoisa.rede.notifications.application.port.out.NotificationRepository;
@@ -28,10 +30,9 @@ class NotificationPersistenceAdapter implements NotificationRepository {
 	}
 
 	@Override
-	public List<Notification> findByUserId(String userId, int limit) {
-		return springData.findByUserIdOrderByCreatedAtDesc(userId).stream()
+	public List<Notification> findByUserId(String userId, java.time.Instant before, int limit) {
+		return springData.findByUserId(userId, before, PageRequest.of(0, limit)).stream()
 			.map(NotificationJpaEntity::toDomain)
-			.limit(limit)
 			.toList();
 	}
 

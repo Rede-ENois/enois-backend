@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.notifications.adapters.in.web;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -18,6 +19,7 @@ import com.socialcoisa.rede.notifications.application.NotificationService;
 import com.socialcoisa.rede.notifications.domain.Notification;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
+import com.socialcoisa.rede.shared.web.CursorCodec;
 import com.socialcoisa.rede.shared.web.PageResponse;
 import com.socialcoisa.rede.shared.web.StatusResponse;
 
@@ -28,12 +30,14 @@ class NotificationContractController {
 	private final IdempotencyApplicationService idempotency;
 	private final CurrentUserResolver currentUserResolver;
 	private final NotificationService notificationService;
+	private final CursorCodec cursorCodec;
 
 	NotificationContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
-			NotificationService notificationService) {
+			NotificationService notificationService, CursorCodec cursorCodec) {
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.notificationService = notificationService;
+		this.cursorCodec = cursorCodec;
 	}
 
 	@GetMapping
@@ -41,12 +45,15 @@ class NotificationContractController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
-		List<Notification> notifications = notificationService.list(user.id().value(), limit);
+		Instant before = cursorCodec.decode(cursor).orElse(null);
+		List<Notification> notifications = notificationService.list(user.id().value(), before, limit);
 		var items = notifications.stream()
 			.map(n -> new NotificationView(n.id(), n.kind(), n.actorId(), n.title(), n.body(),
 				n.createdAt() != null ? n.createdAt().toString() : null, n.isRead(), n.href(), n.ctaLabel()))
 			.toList();
-		return new PageResponse<>(items, null);
+		String nextCursor = notifications.size() == limit
+			? cursorCodec.encode(notifications.get(notifications.size() - 1).createdAt()) : null;
+		return new PageResponse<>(items, nextCursor);
 	}
 
 	@PostMapping("/{notificationId}/read")

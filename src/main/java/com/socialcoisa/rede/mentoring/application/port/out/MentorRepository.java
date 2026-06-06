@@ -15,7 +15,7 @@ public interface MentorRepository {
 
 	Optional<Mentor> findByUserId(String userId);
 
-	List<Mentor> findAll(String expertise, int limit);
+	List<Mentor> findAll(String expertise, java.time.Instant before, int limit);
 
 	void saveSlot(MentorSlot slot);
 

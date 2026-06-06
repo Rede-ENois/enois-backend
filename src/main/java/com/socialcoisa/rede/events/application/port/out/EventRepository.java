@@ -12,7 +12,7 @@ public interface EventRepository {
 
 	Optional<Event> findById(String id);
 
-	List<Event> findAll(String format, int limit);
+	List<Event> findAll(String format, java.time.Instant before, int limit);
 
 	void saveAttendee(EventAttendee attendee);
 

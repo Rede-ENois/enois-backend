@@ -37,10 +37,10 @@ class JobJpaEntity {
 	private String location;
 
 	@Column(nullable = false)
-	private String type;
+	String type;
 
 	@Column(nullable = false)
-	private String level;
+	String level;
 
 	private String salary;
 

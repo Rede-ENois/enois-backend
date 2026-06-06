@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.events.adapters.in.web;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -19,6 +20,7 @@ import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
+import com.socialcoisa.rede.shared.web.CursorCodec;
 import com.socialcoisa.rede.shared.web.PageResponse;
 import com.socialcoisa.rede.shared.web.StatusResponse;
 
@@ -29,23 +31,28 @@ class EventContractController {
 	private final IdempotencyApplicationService idempotency;
 	private final CurrentUserResolver currentUserResolver;
 	private final EventService eventService;
+	private final CursorCodec cursorCodec;
 
 	EventContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
-			EventService eventService) {
+			EventService eventService, CursorCodec cursorCodec) {
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.eventService = eventService;
+		this.cursorCodec = cursorCodec;
 	}
 
 	@GetMapping
 	PageResponse<EventView> events(@RequestParam(required = false) String format,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit) {
-		List<Event> events = eventService.list(format, limit);
+		Instant before = cursorCodec.decode(cursor).orElse(null);
+		List<Event> events = eventService.list(format, before, limit);
 		var items = events.stream()
 			.map(e -> new EventView(e.id(), e.title(), e.date(), e.time(), e.format(), e.host(),
 				eventService.countAttendees(e.id()), e.cover()))
 			.toList();
-		return new PageResponse<>(items, null);
+		String nextCursor = events.size() == limit
+			? cursorCodec.encode(events.get(events.size() - 1).createdAt()) : null;
+		return new PageResponse<>(items, nextCursor);
 	}
 
 	@GetMapping("/{eventId}")

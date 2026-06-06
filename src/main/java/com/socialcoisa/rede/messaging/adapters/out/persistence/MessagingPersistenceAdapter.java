@@ -7,7 +7,10 @@ import java.util.Optional;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
 
+import org.springframework.data.domain.Pageable;
+
 import com.socialcoisa.rede.messaging.application.port.out.MessagingRepository;
+import com.socialcoisa.rede.messaging.domain.Conversation;
 import com.socialcoisa.rede.messaging.domain.Conversation;
 import com.socialcoisa.rede.messaging.domain.ConversationParticipant;
 import com.socialcoisa.rede.messaging.domain.Message;
@@ -44,10 +47,9 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 	}
 
 	@Override
-	public List<Conversation> findConversationsByUserId(String userId, int limit) {
-		return conversationRepo.findByParticipantUserId(userId).stream()
+	public List<Conversation> findConversationsByUserId(String userId, java.time.Instant before, int limit) {
+		return conversationRepo.findByParticipantUserId(userId, before, PageRequest.of(0, limit)).stream()
 			.map(ConversationJpaEntity::toDomain)
-			.limit(limit)
 			.toList();
 	}
 

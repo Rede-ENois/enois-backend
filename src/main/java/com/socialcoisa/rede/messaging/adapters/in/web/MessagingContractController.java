@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.messaging.adapters.in.web;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -23,6 +24,7 @@ import com.socialcoisa.rede.messaging.domain.ConversationParticipant;
 import com.socialcoisa.rede.messaging.domain.Message;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
+import com.socialcoisa.rede.shared.web.CursorCodec;
 import com.socialcoisa.rede.shared.web.PageResponse;
 import com.socialcoisa.rede.shared.web.StatusResponse;
 
@@ -33,12 +35,14 @@ class MessagingContractController {
 	private final IdempotencyApplicationService idempotency;
 	private final CurrentUserResolver currentUserResolver;
 	private final MessagingService messagingService;
+	private final CursorCodec cursorCodec;
 
 	MessagingContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
-			MessagingService messagingService) {
+			MessagingService messagingService, CursorCodec cursorCodec) {
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.messagingService = messagingService;
+		this.cursorCodec = cursorCodec;
 	}
 
 	@GetMapping
@@ -46,7 +50,8 @@ class MessagingContractController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
-		List<Conversation> conversations = messagingService.listConversations(user.id().value(), limit);
+		Instant before = cursorCodec.decode(cursor).orElse(null);
+		List<Conversation> conversations = messagingService.listConversations(user.id().value(), before, limit);
 		var items = conversations.stream()
 			.map(c -> {
 				List<String> pIds = messagingService.getParticipants(c.id()).stream()
@@ -59,7 +64,9 @@ class MessagingContractController {
 					messagingService.countUnread(c.id(), user.id().value()));
 			})
 			.toList();
-		return new PageResponse<>(items, null);
+		String nextCursor = conversations.size() == limit
+			? cursorCodec.encode(conversations.get(conversations.size() - 1).updatedAt()) : null;
+		return new PageResponse<>(items, nextCursor);
 	}
 
 	@GetMapping("/search")

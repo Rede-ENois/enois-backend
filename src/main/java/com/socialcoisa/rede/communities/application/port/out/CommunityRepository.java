@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.communities.application.port.out;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -12,7 +13,7 @@ public interface CommunityRepository {
 
 	Optional<Community> findById(String id);
 
-	List<Community> findAll(String topic, int limit);
+	List<Community> findAll(String topic, Instant before, int limit);
 
 	void saveMember(CommunityMember member);
 

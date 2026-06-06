@@ -22,6 +22,7 @@ import com.socialcoisa.rede.mentoring.domain.MentorSession;
 import com.socialcoisa.rede.mentoring.domain.MentorSlot;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
+import com.socialcoisa.rede.shared.web.CursorCodec;
 import com.socialcoisa.rede.shared.web.PageResponse;
 import com.socialcoisa.rede.shared.web.StatusResponse;
 
@@ -32,22 +33,27 @@ class MentoringContractController {
 	private final IdempotencyApplicationService idempotency;
 	private final CurrentUserResolver currentUserResolver;
 	private final MentorService mentorService;
+	private final CursorCodec cursorCodec;
 
 	MentoringContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
-			MentorService mentorService) {
+			MentorService mentorService, CursorCodec cursorCodec) {
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.mentorService = mentorService;
+		this.cursorCodec = cursorCodec;
 	}
 
 	@GetMapping
 	PageResponse<MentorView> mentors(@RequestParam(required = false) String expertise,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit) {
-		List<Mentor> mentors = mentorService.list(expertise, limit);
+		Instant before = cursorCodec.decode(cursor).orElse(null);
+		List<Mentor> mentors = mentorService.list(expertise, before, limit);
 		var items = mentors.stream()
 			.map(m -> new MentorView(m.id(), m.userId(), m.expertise(), m.rating(), m.sessionsCount(), m.price(), null))
 			.toList();
-		return new PageResponse<>(items, null);
+		String nextCursor = mentors.size() == limit
+			? cursorCodec.encode(mentors.get(mentors.size() - 1).createdAt()) : null;
+		return new PageResponse<>(items, nextCursor);
 	}
 
 	@GetMapping("/{mentorId}")

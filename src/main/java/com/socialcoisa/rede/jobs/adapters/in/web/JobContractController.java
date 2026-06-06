@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.jobs.adapters.in.web;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -22,6 +23,7 @@ import com.socialcoisa.rede.jobs.application.JobService;
 import com.socialcoisa.rede.jobs.domain.Job;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
+import com.socialcoisa.rede.shared.web.CursorCodec;
 import com.socialcoisa.rede.shared.web.PageResponse;
 import com.socialcoisa.rede.shared.web.StatusResponse;
 
@@ -32,12 +34,14 @@ class JobContractController {
 	private final IdempotencyApplicationService idempotency;
 	private final CurrentUserResolver currentUserResolver;
 	private final JobService jobService;
+	private final CursorCodec cursorCodec;
 
 	JobContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
-			JobService jobService) {
+			JobService jobService, CursorCodec cursorCodec) {
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.jobService = jobService;
+		this.cursorCodec = cursorCodec;
 	}
 
 	@PostMapping
@@ -53,14 +57,20 @@ class JobContractController {
 	}
 
 	@GetMapping
-	PageResponse<JobView> jobs(@RequestParam(required = false) String query, @RequestParam(required = false) String type,
+	PageResponse<JobView> jobs(@RequestParam(required = false) String query,
+			@RequestParam(required = false) String type, @RequestParam(required = false) String level,
+			@RequestParam(required = false) String location,
+			@RequestParam(required = false) List<String> skills,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit) {
-		List<Job> jobs = jobService.list(query, type, limit);
+		Instant before = cursorCodec.decode(cursor).orElse(null);
+		List<Job> jobs = jobService.list(query, type, level, location, skills, before, limit);
 		var items = jobs.stream()
 			.map(j -> new JobView(j.id(), j.title(), j.company(), j.logo(), j.location(), j.type(), j.level(),
 				j.salary(), j.skills(), j.postedAt() != null ? j.postedAt().toString() : null, 0))
 			.toList();
-		return new PageResponse<>(items, null);
+		String nextCursor = jobs.size() == limit
+			? cursorCodec.encode(jobs.get(jobs.size() - 1).postedAt()) : null;
+		return new PageResponse<>(items, nextCursor);
 	}
 
 	@GetMapping("/{jobId}")

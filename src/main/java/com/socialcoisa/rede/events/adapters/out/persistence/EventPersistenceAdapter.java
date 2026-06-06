@@ -1,9 +1,11 @@
 package com.socialcoisa.rede.events.adapters.out.persistence;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
 import org.springframework.util.StringUtils;
 
@@ -35,14 +37,15 @@ class EventPersistenceAdapter implements EventRepository {
 	}
 
 	@Override
-	public List<Event> findAll(String format, int limit) {
+	public List<Event> findAll(String format, Instant before, int limit) {
+		PageRequest page = PageRequest.of(0, limit);
 		List<EventJpaEntity> entities;
 		if (StringUtils.hasText(format)) {
-			entities = springData.findByFormatOrderByCreatedAtDesc(format);
+			entities = springData.findByFormat(format, before, page);
 		} else {
-			entities = springData.findAllByOrderByCreatedAtDesc();
+			entities = springData.findAllBefore(before, page);
 		}
-		return entities.stream().map(EventJpaEntity::toDomain).limit(limit).toList();
+		return entities.stream().map(EventJpaEntity::toDomain).toList();
 	}
 
 	@Override

@@ -11,7 +11,7 @@ public interface NotificationRepository {
 
 	Optional<Notification> findById(String id);
 
-	List<Notification> findByUserId(String userId, int limit);
+	List<Notification> findByUserId(String userId, java.time.Instant before, int limit);
 
 	void markRead(String notificationId);
 

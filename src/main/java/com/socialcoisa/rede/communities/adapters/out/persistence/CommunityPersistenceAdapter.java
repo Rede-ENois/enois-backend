@@ -1,8 +1,10 @@
 package com.socialcoisa.rede.communities.adapters.out.persistence;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
 import org.springframework.util.StringUtils;
 
@@ -33,14 +35,15 @@ class CommunityPersistenceAdapter implements CommunityRepository {
 	}
 
 	@Override
-	public List<Community> findAll(String topic, int limit) {
+	public List<Community> findAll(String topic, Instant before, int limit) {
+		PageRequest page = PageRequest.of(0, limit);
 		List<CommunityJpaEntity> entities;
 		if (StringUtils.hasText(topic)) {
-			entities = springData.findByTopicOrderByCreatedAtDesc(topic);
+			entities = springData.findByTopic(topic, before, page);
 		} else {
-			entities = springData.findAllByOrderByCreatedAtDesc();
+			entities = springData.findAllBefore(before, page);
 		}
-		return entities.stream().map(CommunityJpaEntity::toDomain).limit(limit).toList();
+		return entities.stream().map(CommunityJpaEntity::toDomain).toList();
 	}
 
 	@Override

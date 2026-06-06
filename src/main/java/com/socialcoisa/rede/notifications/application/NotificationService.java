@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.notifications.application;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -48,8 +49,8 @@ public class NotificationService {
 		repository.markAllReadByUser(userId);
 	}
 
-	public List<Notification> list(String userId, int limit) {
-		return repository.findByUserId(userId, limit);
+	public List<Notification> list(String userId, java.time.Instant before, int limit) {
+		return repository.findByUserId(userId, before, limit);
 	}
 
 }

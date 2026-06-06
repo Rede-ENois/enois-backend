@@ -12,16 +12,19 @@ import com.socialcoisa.rede.messaging.application.port.out.MessagingRepository;
 import com.socialcoisa.rede.messaging.domain.Conversation;
 import com.socialcoisa.rede.messaging.domain.ConversationParticipant;
 import com.socialcoisa.rede.messaging.domain.Message;
+import com.socialcoisa.rede.notifications.application.NotificationService;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 @Service
 public class MessagingService {
 
 	private final MessagingRepository repository;
+	private final NotificationService notificationService;
 	private final Clock clock;
 
-	public MessagingService(MessagingRepository repository, Clock clock) {
+	public MessagingService(MessagingRepository repository, NotificationService notificationService, Clock clock) {
 		this.repository = repository;
+		this.notificationService = notificationService;
 		this.clock = clock;
 	}
 
@@ -50,6 +53,14 @@ public class MessagingService {
 		String id = "message_" + UUID.randomUUID().toString().replace("-", "");
 		Message message = Message.create(id, conversationId, senderId, text, clock.instant());
 		repository.saveMessage(message);
+		String preview = text.length() > 80 ? text.substring(0, 77) + "..." : text;
+		List<ConversationParticipant> participants = repository.findParticipantsByConversation(conversationId);
+		for (ConversationParticipant p : participants) {
+			if (p.userId().equals(senderId)) continue;
+			notificationService.create(p.userId(), "NEW_MESSAGE", senderId,
+				"Nova mensagem", preview,
+				"/api/conversations/" + conversationId, "Responder");
+		}
 		return message;
 	}
 
@@ -61,8 +72,8 @@ public class MessagingService {
 		repository.markRead(conversationId, userId, clock.instant());
 	}
 
-	public List<Conversation> listConversations(String userId, int limit) {
-		return repository.findConversationsByUserId(userId, limit);
+	public List<Conversation> listConversations(String userId, java.time.Instant before, int limit) {
+		return repository.findConversationsByUserId(userId, before, limit);
 	}
 
 	public Conversation getConversation(String id) {

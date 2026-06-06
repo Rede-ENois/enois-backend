@@ -1,9 +1,12 @@
 package com.socialcoisa.rede.jobs.adapters.out.persistence;
 
 import java.time.Clock;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
 import org.springframework.util.StringUtils;
 
@@ -38,16 +41,24 @@ class JobPersistenceAdapter implements JobRepository {
 	}
 
 	@Override
-	public List<Job> findAll(String query, String type, int limit) {
+	public List<Job> findAll(String query, String type, String level, String location, List<String> skills,
+			Instant before, int limit) {
+		PageRequest page = PageRequest.of(0, limit);
 		List<JobJpaEntity> entities;
 		if (StringUtils.hasText(query)) {
-			entities = springData.searchByQuery(query);
+			entities = springData.searchByQuery(query, before, page);
+		} else if (skills != null && !skills.isEmpty()) {
+			entities = springData.findBySkills(skills, before, page);
+		} else if (StringUtils.hasText(level)) {
+			entities = springData.findByLevel(level, before, page);
 		} else if (StringUtils.hasText(type)) {
-			entities = springData.findByTypeOrderByPostedAtDesc(type);
+			entities = springData.findByType(type, before, page);
+		} else if (StringUtils.hasText(location)) {
+			entities = springData.findByLocation(location, before, page);
 		} else {
-			entities = springData.findAllByOrderByPostedAtDesc();
+			entities = springData.findAllBefore(before, page);
 		}
-		return entities.stream().map(JobJpaEntity::toDomain).limit(limit).toList();
+		return entities.stream().map(JobJpaEntity::toDomain).toList();
 	}
 
 	@Override

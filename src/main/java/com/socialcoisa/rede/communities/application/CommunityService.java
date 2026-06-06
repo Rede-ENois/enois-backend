@@ -64,8 +64,8 @@ public class CommunityService {
 		repository.removeMember(communityId, userId);
 	}
 
-	public List<Community> list(String topic, int limit) {
-		return repository.findAll(topic, limit);
+	public List<Community> list(String topic, java.time.Instant before, int limit) {
+		return repository.findAll(topic, before, limit);
 	}
 
 	public Community getById(String id) {

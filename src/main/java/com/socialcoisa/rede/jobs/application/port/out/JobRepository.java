@@ -11,7 +11,8 @@ public interface JobRepository {
 
 	Optional<Job> findById(String id);
 
-	List<Job> findAll(String query, String type, int limit);
+	List<Job> findAll(String query, String type, String level, String location, List<String> skills,
+			java.time.Instant before, int limit);
 
 	void deleteById(String id);
 
