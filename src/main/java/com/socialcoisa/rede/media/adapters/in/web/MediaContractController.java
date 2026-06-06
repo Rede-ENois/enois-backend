@@ -1,8 +1,6 @@
 package com.socialcoisa.rede.media.adapters.in.web;
 
-import java.time.Instant;
 import java.util.Map;
-import java.util.UUID;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -14,20 +12,32 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.socialcoisa.rede.media.application.CreateMediaUploadCommand;
+import com.socialcoisa.rede.media.application.RequestMediaDeletionCommand;
+import com.socialcoisa.rede.media.application.port.in.CreateMediaUploadUseCase;
+import com.socialcoisa.rede.media.application.port.in.GetMediaAssetUseCase;
+import com.socialcoisa.rede.media.application.port.in.RequestMediaDeletionUseCase;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
-import com.socialcoisa.rede.shared.web.StatusResponse;
 
 @RestController
 @RequestMapping("/api/media")
 class MediaContractController {
 
+	private final CreateMediaUploadUseCase createMediaUploadUseCase;
+	private final GetMediaAssetUseCase getMediaAssetUseCase;
+	private final RequestMediaDeletionUseCase requestMediaDeletionUseCase;
 	private final IdempotencyApplicationService idempotency;
 	private final CurrentUserResolver currentUserResolver;
 
-	MediaContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver) {
+	MediaContractController(CreateMediaUploadUseCase createMediaUploadUseCase, GetMediaAssetUseCase getMediaAssetUseCase,
+			RequestMediaDeletionUseCase requestMediaDeletionUseCase, IdempotencyApplicationService idempotency,
+			CurrentUserResolver currentUserResolver) {
+		this.createMediaUploadUseCase = createMediaUploadUseCase;
+		this.getMediaAssetUseCase = getMediaAssetUseCase;
+		this.requestMediaDeletionUseCase = requestMediaDeletionUseCase;
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 	}
@@ -39,17 +49,14 @@ class MediaContractController {
 			@RequestBody UploadRequest request) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
 		String hash = idempotency.hash(request);
-		return idempotency.execute(user.id(), "POST", "/api/media/uploads", idempotencyKey, hash, () -> {
-			String mediaId = newId("media");
-			MediaUploadView view = new MediaUploadView(mediaId, request.fileName(), request.mimeType(), request.size(),
-				"PENDING", "NONE", "/api/media/" + mediaId, "/dev/uploads/" + mediaId, Instant.now());
-			return new CommandResponse(201, view);
-		});
+		return idempotency.execute(user.id(), "POST", "/api/media/uploads", idempotencyKey, hash,
+			() -> new CommandResponse(201, createMediaUploadUseCase.createUpload(new CreateMediaUploadCommand(user.id(),
+				request.fileName(), request.mimeType(), request.size(), request.purpose()))));
 	}
 
 	@GetMapping("/{mediaId}")
-	MediaAssetView media(@PathVariable String mediaId) {
-		return new MediaAssetView(mediaId, null, null, 0, "PENDING", "NONE", "/api/media/" + mediaId, null);
+	Object media(@PathVariable String mediaId) {
+		return getMediaAssetUseCase.getMedia(mediaId);
 	}
 
 	@DeleteMapping("/{mediaId}")
@@ -60,21 +67,10 @@ class MediaContractController {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
 		String hash = idempotency.hash(Map.of("mediaId", mediaId));
 		return idempotency.execute(user.id(), "DELETE", "/api/media/{mediaId}", idempotencyKey, hash,
-			() -> new CommandResponse(200, new StatusResponse(mediaId, "DELETE_REQUESTED")));
-	}
-
-	private String newId(String prefix) {
-		return prefix + "_" + UUID.randomUUID().toString().replace("-", "");
+			() -> new CommandResponse(200, requestMediaDeletionUseCase.requestDeletion(new RequestMediaDeletionCommand(
+				user.id(), mediaId))));
 	}
 
 	record UploadRequest(String fileName, String mimeType, long size, String purpose) {
-	}
-
-	record MediaAssetView(String id, String fileName, String mimeType, long size, String status, String deleteStatus,
-			String cdnUrl, String objectKey) {
-	}
-
-	record MediaUploadView(String id, String fileName, String mimeType, long size, String status, String deleteStatus,
-			String cdnUrl, String uploadUrl, Instant expiresAt) {
 	}
 }

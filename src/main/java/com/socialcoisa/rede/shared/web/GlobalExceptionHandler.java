@@ -8,6 +8,10 @@ import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import io.github.resilience4j.bulkhead.BulkheadFullException;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.ratelimiter.RequestNotPermitted;
+
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -21,6 +25,18 @@ public class GlobalExceptionHandler {
 	ResponseEntity<ErrorResponse> handleBadRequest(Exception exception) {
 		return ResponseEntity.badRequest()
 			.body(new ErrorResponse("BAD_REQUEST", exception.getMessage(), Instant.now()));
+	}
+
+	@ExceptionHandler(RequestNotPermitted.class)
+	ResponseEntity<ErrorResponse> handleRateLimit(RequestNotPermitted exception) {
+		return ResponseEntity.status(429)
+			.body(new ErrorResponse("RATE_LIMITED", "Limite de requisicoes excedido.", Instant.now()));
+	}
+
+	@ExceptionHandler({ CallNotPermittedException.class, BulkheadFullException.class })
+	ResponseEntity<ErrorResponse> handleUnavailable(RuntimeException exception) {
+		return ResponseEntity.status(503)
+			.body(new ErrorResponse("DEPENDENCY_UNAVAILABLE", "Dependencia temporariamente indisponivel.", Instant.now()));
 	}
 
 	@ExceptionHandler(Exception.class)

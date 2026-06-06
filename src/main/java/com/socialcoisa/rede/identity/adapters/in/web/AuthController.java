@@ -24,6 +24,8 @@ import com.socialcoisa.rede.identity.application.port.in.SignupUseCase;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
 
+import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
+
 @RestController
 @RequestMapping("/api/auth")
 class AuthController {
@@ -44,6 +46,7 @@ class AuthController {
 	}
 
 	@PostMapping("/signup")
+	@RateLimiter(name = "auth")
 	ResponseEntity<String> signup(@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@RequestBody SignupRequest request) {
 		String scope = authScope(request.email());
@@ -53,6 +56,7 @@ class AuthController {
 	}
 
 	@PostMapping("/login")
+	@RateLimiter(name = "auth")
 	ResponseEntity<String> login(@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@RequestBody LoginRequest request) {
 		String scope = authScope(request.email());
@@ -78,12 +82,14 @@ class AuthController {
 	}
 
 	@GetMapping("/oauth/{provider}/start")
+	@RateLimiter(name = "auth")
 	Object oauthStart(@PathVariable String provider) {
 		String state = "state_" + UUID.randomUUID().toString().replace("-", "");
 		return new OAuthStartResponse(provider, state, "/api/auth/oauth/" + provider + "/callback?state=" + state);
 	}
 
 	@GetMapping("/oauth/{provider}/callback")
+	@RateLimiter(name = "auth")
 	Object oauthCallback(@PathVariable String provider, @RequestParam(required = false) String code,
 			@RequestParam(required = false) String state) {
 		return new OAuthCallbackResponse(provider, state, "NOT_CONFIGURED");

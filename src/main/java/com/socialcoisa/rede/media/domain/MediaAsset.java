@@ -56,12 +56,27 @@ public class MediaAsset {
 	}
 
 	public boolean requestDeletion(Instant deletedAt) {
-		if (deleteStatus != MediaDeleteStatus.NONE) {
+		if (deleteStatus != MediaDeleteStatus.NONE && deleteStatus != MediaDeleteStatus.FAILED) {
 			return false;
 		}
 		this.deleteStatus = MediaDeleteStatus.REQUESTED;
 		this.deletedAt = deletedAt;
 		return true;
+	}
+
+	public void markCdnPurged() {
+		if (deleteStatus == MediaDeleteStatus.REQUESTED) {
+			this.deleteStatus = MediaDeleteStatus.CDN_PURGED;
+		}
+	}
+
+	public void markObjectDeleted(Instant deletedAt) {
+		this.deleteStatus = MediaDeleteStatus.OBJECT_DELETED;
+		this.deletedAt = deletedAt;
+	}
+
+	public void markDeletionFailed() {
+		this.deleteStatus = MediaDeleteStatus.FAILED;
 	}
 
 	public String id() {

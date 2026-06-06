@@ -44,6 +44,16 @@ class ContractControllerTests {
 	}
 
 	@Test
+	void addsRequestIdToResponses() throws Exception {
+		MvcResult result = mockMvc.perform(get("/api/health")
+				.header("X-Request-Id", "request-contract-1"))
+			.andExpect(status().isOk())
+			.andReturn();
+
+		assertThat(result.getResponse().getHeader("X-Request-Id")).isEqualTo("request-contract-1");
+	}
+
+	@Test
 	void replaysIdempotentContractWrites() throws Exception {
 		MvcResult first = mockMvc.perform(post("/api/jobs/{jobId}/saves", "job_contract")
 				.header("X-User-Id", "user_contract")

@@ -12,6 +12,7 @@ import com.socialcoisa.rede.feed.application.port.out.IdGenerator;
 import com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.Post;
+import com.socialcoisa.rede.media.application.port.in.ValidateMediaOwnershipUseCase;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 @Service
@@ -22,14 +23,17 @@ public class PublishPostService implements PublishPostUseCase {
 	private final Clock clock;
 	private final FeedDistributionService feedDistributionService;
 	private final OutboxEventRepository outboxEventRepository;
+	private final ValidateMediaOwnershipUseCase validateMediaOwnershipUseCase;
 
 	public PublishPostService(PostRepository postRepository, IdGenerator idGenerator, Clock clock,
-			FeedDistributionService feedDistributionService, OutboxEventRepository outboxEventRepository) {
+			FeedDistributionService feedDistributionService, OutboxEventRepository outboxEventRepository,
+			ValidateMediaOwnershipUseCase validateMediaOwnershipUseCase) {
 		this.postRepository = postRepository;
 		this.idGenerator = idGenerator;
 		this.clock = clock;
 		this.feedDistributionService = feedDistributionService;
 		this.outboxEventRepository = outboxEventRepository;
+		this.validateMediaOwnershipUseCase = validateMediaOwnershipUseCase;
 	}
 
 	@Override
@@ -46,6 +50,7 @@ public class PublishPostService implements PublishPostUseCase {
 			.map(String::trim)
 			.distinct()
 			.toList();
+		validateMediaOwnershipUseCase.validateOwnedBy(command.authorId(), mediaIds);
 		Post post = Post.publish(idGenerator.newPostId(), command.authorId(), command.type(), command.content().trim(),
 			tags, mediaIds, clock.instant());
 		Post saved = postRepository.save(post);

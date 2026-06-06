@@ -18,6 +18,7 @@ import com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
+import com.socialcoisa.rede.media.application.port.in.RequestPostMediaDeletionUseCase;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 @Service
@@ -27,14 +28,17 @@ public class DeletePostService implements DeletePostUseCase, BulkDeletePostsUseC
 	private final FeedCacheRepository feedCacheRepository;
 	private final OutboxEventRepository outboxEventRepository;
 	private final AuditLogRepository auditLogRepository;
+	private final RequestPostMediaDeletionUseCase requestPostMediaDeletionUseCase;
 	private final Clock clock;
 
 	public DeletePostService(PostRepository postRepository, FeedCacheRepository feedCacheRepository,
-			OutboxEventRepository outboxEventRepository, AuditLogRepository auditLogRepository, Clock clock) {
+			OutboxEventRepository outboxEventRepository, AuditLogRepository auditLogRepository,
+			RequestPostMediaDeletionUseCase requestPostMediaDeletionUseCase, Clock clock) {
 		this.postRepository = postRepository;
 		this.feedCacheRepository = feedCacheRepository;
 		this.outboxEventRepository = outboxEventRepository;
 		this.auditLogRepository = auditLogRepository;
+		this.requestPostMediaDeletionUseCase = requestPostMediaDeletionUseCase;
 		this.clock = clock;
 	}
 
@@ -53,6 +57,7 @@ public class DeletePostService implements DeletePostUseCase, BulkDeletePostsUseC
 		postRepository.save(post);
 		feedCacheRepository.removeEverywhere(post.id());
 		outboxEventRepository.append("PostDeleted", post.id().value(), "{\"postId\":\"" + post.id().value() + "\"}");
+		requestMediaDeletion(post);
 		auditLogRepository.record(command.userId(), "POST_DELETED", post.id().value(), normalizeReason(command.reason()));
 		return new DeletePostResult(post.id().value(), "DELETED");
 	}
@@ -85,6 +90,7 @@ public class DeletePostService implements DeletePostUseCase, BulkDeletePostsUseC
 			postRepository.save(post);
 			feedCacheRepository.removeEverywhere(post.id());
 			outboxEventRepository.append("PostDeleted", post.id().value(), "{\"postId\":\"" + post.id().value() + "\"}");
+			requestMediaDeletion(post);
 			auditLogRepository.record(command.userId(), "POST_BULK_DELETED", post.id().value(),
 				normalizeReason(command.reason()));
 			results.add(new BulkDeleteItemResult(post.id().value(), "MARKED_DELETED"));
@@ -105,5 +111,13 @@ public class DeletePostService implements DeletePostUseCase, BulkDeletePostsUseC
 
 	private String normalizeReason(String reason) {
 		return StringUtils.hasText(reason) ? reason.trim() : null;
+	}
+
+	private void requestMediaDeletion(Post post) {
+		List<String> requestedMediaIds = requestPostMediaDeletionUseCase.requestPostMediaDeletion(post.authorId(), post.id(),
+			post.mediaIds());
+		for (String mediaId : requestedMediaIds) {
+			outboxEventRepository.append("MediaDeletionRequested", mediaId, "{\"mediaId\":\"" + mediaId + "\"}");
+		}
 	}
 }
