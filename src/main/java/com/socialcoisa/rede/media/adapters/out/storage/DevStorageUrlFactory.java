@@ -1,11 +1,13 @@
 package com.socialcoisa.rede.media.adapters.out.storage;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.stereotype.Component;
 import org.springframework.web.util.UriUtils;
 
 import com.socialcoisa.rede.media.application.port.out.StorageUrlFactory;
 
 @Component
+@ConditionalOnMissingBean(StorageUrlFactory.class)
 class DevStorageUrlFactory implements StorageUrlFactory {
 
 	@Override

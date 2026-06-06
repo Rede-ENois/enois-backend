@@ -13,6 +13,8 @@ public interface JobRepository {
 
 	List<Job> findAll(String query, String type, int limit);
 
+	void deleteById(String id);
+
 	void saveApplication(String jobId, String userId);
 
 	void removeApplication(String jobId, String userId);

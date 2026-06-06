@@ -8,4 +8,6 @@ interface SpringDataJobApplicationJpaRepository extends JpaRepository<JobApplica
 
 	void deleteByJobIdAndUserId(String jobId, String userId);
 
+	void deleteByJobId(String jobId);
+
 }

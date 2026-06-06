@@ -14,7 +14,7 @@ Rede is a social platform backend built with **Spring Boot 4** (Java 25) followi
 ./mvnw spring-boot:run
 ```
 
-This starts with the `dev` profile using an **H2 in-memory database**. Swagger UI is available at [http://localhost:8080/swagger-ui.html](http://localhost:8080/swagger-ui.html).
+This starts with the `dev` profile using an **H2 in-memory database**. Swagger UI is available at [http://localhost:8081/swagger-ui.html](http://localhost:8081/swagger-ui.html).
 
 ## Profiles
 
@@ -82,8 +82,8 @@ docker compose --profile hml up --build
 
 ## API Documentation
 
-- **Swagger UI**: [http://localhost:8080/swagger-ui.html](http://localhost:8080/swagger-ui.html)
-- **OpenAPI JSON**: [http://localhost:8080/api/openapi.json](http://localhost:8080/api/openapi.json)
+- **Swagger UI**: [http://localhost:8081/swagger-ui.html](http://localhost:8081/swagger-ui.html)
+- **OpenAPI JSON**: [http://localhost:8081/api/openapi.json](http://localhost:8081/api/openapi.json)
 
 ## Monitoring
 

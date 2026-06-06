@@ -80,4 +80,11 @@ class JobPersistenceAdapter implements JobRepository {
 		return saveRepo.existsByJobIdAndUserId(jobId, userId);
 	}
 
+	@Override
+	public void deleteById(String id) {
+		applicationRepo.deleteByJobId(id);
+		saveRepo.deleteByJobId(id);
+		springData.deleteById(id);
+	}
+
 }

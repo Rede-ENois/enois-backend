@@ -3,11 +3,14 @@ package com.socialcoisa.rede.jobs.adapters.in.web;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -37,6 +40,18 @@ class JobContractController {
 		this.jobService = jobService;
 	}
 
+	@PostMapping
+	ResponseEntity<JobView> create(@RequestBody CreateJobRequest body,
+			@RequestHeader(value = "X-User-Id", required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		Job job = jobService.create(body.title(), body.company(), body.logo(), body.location(), body.type(), body.level(),
+			body.salary(), body.skills(), user.id().value());
+		return ResponseEntity.status(HttpStatus.CREATED)
+			.body(new JobView(job.id(), job.title(), job.company(), job.logo(), job.location(), job.type(),
+				job.level(), job.salary(), job.skills(), job.postedAt().toString(), 0));
+	}
+
 	@GetMapping
 	PageResponse<JobView> jobs(@RequestParam(required = false) String query, @RequestParam(required = false) String type,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit) {
@@ -53,6 +68,26 @@ class JobContractController {
 		Job j = jobService.getById(jobId);
 		return new JobView(j.id(), j.title(), j.company(), j.logo(), j.location(), j.type(), j.level(),
 			j.salary(), j.skills(), j.postedAt() != null ? j.postedAt().toString() : null, 0);
+	}
+
+	@PutMapping("/{jobId}")
+	ResponseEntity<JobView> update(@PathVariable String jobId, @RequestBody CreateJobRequest body,
+			@RequestHeader(value = "X-User-Id", required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		Job job = jobService.update(jobId, body.title(), body.company(), body.logo(), body.location(), body.type(),
+			body.level(), body.salary(), body.skills(), user.id().value());
+		return ResponseEntity.ok(new JobView(job.id(), job.title(), job.company(), job.logo(), job.location(),
+			job.type(), job.level(), job.salary(), job.skills(), job.postedAt().toString(), 0));
+	}
+
+	@DeleteMapping("/{jobId}")
+	ResponseEntity<Void> delete(@PathVariable String jobId,
+			@RequestHeader(value = "X-User-Id", required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		jobService.delete(jobId, user.id().value());
+		return ResponseEntity.noContent().build();
 	}
 
 	@PostMapping("/{jobId}/applications")
@@ -99,6 +134,10 @@ class JobContractController {
 
 	record JobView(String id, String title, String company, String logo, String location, String type, String level,
 			String salary, List<String> skills, String postedAt, int matchScore) {
+	}
+
+	record CreateJobRequest(String title, String company, String logo, String location, String type, String level,
+			String salary, List<String> skills) {
 	}
 
 }

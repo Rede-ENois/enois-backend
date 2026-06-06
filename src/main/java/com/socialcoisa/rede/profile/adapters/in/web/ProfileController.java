@@ -66,6 +66,11 @@ class ProfileController {
 		return getUserProfileUseCase.getByUsername(username);
 	}
 
+	@GetMapping("/users/by-id/{userId}")
+	Object userById(@PathVariable String userId) {
+		return getUserProfileUseCase.getById(userId);
+	}
+
 	@PatchMapping("/me/profile")
 	ResponseEntity<String> update(@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,

@@ -67,4 +67,40 @@ class UserProfilePersistenceAdapter implements UserProfileRepository {
 			.getSingleResult();
 		return ((Number) result).intValue();
 	}
+
+	@Override
+	public int countPostInteractionsReceived(String userId) {
+		var result = em.createNativeQuery(
+			"select coalesce(sum(reactions + comments + shares), 0) from posts where author_id = :uid and status <> 'DELETED'")
+			.setParameter("uid", userId)
+			.getSingleResult();
+		return ((Number) result).intValue();
+	}
+
+	@Override
+	public int countCommunitiesJoined(String userId) {
+		var result = em.createNativeQuery(
+			"select count(*) from community_members where user_id = :uid")
+			.setParameter("uid", userId)
+			.getSingleResult();
+		return ((Number) result).intValue();
+	}
+
+	@Override
+	public int countEventsAttended(String userId) {
+		var result = em.createNativeQuery(
+			"select count(*) from event_attendees where user_id = :uid")
+			.setParameter("uid", userId)
+			.getSingleResult();
+		return ((Number) result).intValue();
+	}
+
+	@Override
+	public int countMentoringSessionsAsMentee(String userId) {
+		var result = em.createNativeQuery(
+			"select count(*) from mentor_sessions where mentee_id = :uid and status = 'COMPLETED'")
+			.setParameter("uid", userId)
+			.getSingleResult();
+		return ((Number) result).intValue();
+	}
 }

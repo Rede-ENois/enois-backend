@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.media.adapters.out.storage;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.stereotype.Component;
 
 import com.socialcoisa.rede.media.application.port.out.MediaStorageGateway;
@@ -10,6 +11,7 @@ import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
 
 @Component
+@ConditionalOnMissingBean(MediaStorageGateway.class)
 class DevMediaStorageGateway implements MediaStorageGateway {
 
 	@Override

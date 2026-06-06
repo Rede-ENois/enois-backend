@@ -21,4 +21,12 @@ public interface UserProfileRepository {
 	int countConnections(String userId);
 
 	int countFollowers(String userId);
+
+	int countPostInteractionsReceived(String userId);
+
+	int countCommunitiesJoined(String userId);
+
+	int countEventsAttended(String userId);
+
+	int countMentoringSessionsAsMentee(String userId);
 }

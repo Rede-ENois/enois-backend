@@ -47,6 +47,15 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
 	}
 
+	@Override
+	@Transactional(readOnly = true)
+	public UserProfileView getById(String userId) {
+		return repository.findById(userId)
+			.map(this::populateCounts)
+			.map(UserProfileView::from)
+			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
+	}
+
 	private UserProfile populateCounts(UserProfile profile) {
 		String userId = profile.id();
 		int connections = repository.countConnections(userId);
@@ -54,8 +63,14 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 		int experiences = extensionRepository.countExperiencesByUserId(userId);
 		int educations = extensionRepository.countEducationsByUserId(userId);
 		int certifications = extensionRepository.countCertificationsByUserId(userId);
-		int reputation = Math.min(experiences * 10 + educations * 10 + certifications * 5 + connections + followers / 2,
-			100);
+		int postInteractions = repository.countPostInteractionsReceived(userId);
+		int communities = repository.countCommunitiesJoined(userId);
+		int events = repository.countEventsAttended(userId);
+		int mentoring = repository.countMentoringSessionsAsMentee(userId);
+		int reputation = Math.min(
+			experiences * 10 + educations * 10 + certifications * 5 + connections + followers / 2
+				+ postInteractions + communities * 5 + events * 3 + mentoring * 10,
+			1000);
 		profile.setCounts(connections, followers, reputation);
 		return profile;
 	}
