@@ -24,4 +24,9 @@ public class JpaConnectionGraphRepository implements ConnectionGraphRepository {
 		return networkService.findFriendsOfFriends(userId);
 	}
 
+	@Override
+	public Set<String> findUserTags(UserId userId) {
+		return networkService.findUserTags(userId);
+	}
+
 }

@@ -9,4 +9,6 @@ public interface ConnectionGraphRepository {
 	Set<UserId> findFriends(UserId userId);
 
 	Set<UserId> findFriendsOfFriends(UserId userId);
+
+	Set<String> findUserTags(UserId userId);
 }

@@ -26,6 +26,7 @@ import com.socialcoisa.rede.feed.application.GetProfilePostsQuery;
 import com.socialcoisa.rede.feed.application.PostActionCommand;
 import com.socialcoisa.rede.feed.application.PublishPostCommand;
 import com.socialcoisa.rede.feed.application.ReactToPostCommand;
+import com.socialcoisa.rede.feed.domain.FeedTab;
 import com.socialcoisa.rede.feed.application.port.in.BulkDeletePostsUseCase;
 import com.socialcoisa.rede.feed.application.port.in.CommentOnPostUseCase;
 import com.socialcoisa.rede.feed.application.port.in.DeletePostUseCase;
@@ -99,9 +100,10 @@ class FeedController {
 	@GetMapping("/feed")
 	Object feed(@RequestHeader(value = USER_HEADER, required = false) String userId,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
-			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit) {
+			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit,
+			@RequestParam(defaultValue = "FOR_YOU") FeedTab tab) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
-		return getFeedUseCase.getFeed(new GetFeedQuery(user.id(), cursorCodec.decode(cursor), limit));
+		return getFeedUseCase.getFeed(new GetFeedQuery(user.id(), cursorCodec.decode(cursor), limit, tab));
 	}
 
 	@GetMapping("/users/{username}/posts")

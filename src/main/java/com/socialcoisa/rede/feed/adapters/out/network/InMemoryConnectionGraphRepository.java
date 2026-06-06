@@ -26,4 +26,9 @@ public class InMemoryConnectionGraphRepository implements ConnectionGraphReposit
 		result.remove(userId);
 		return result;
 	}
+
+	@Override
+	public Set<String> findUserTags(UserId userId) {
+		return Set.of();
+	}
 }

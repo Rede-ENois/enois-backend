@@ -2,7 +2,6 @@ package com.socialcoisa.rede.identity.adapters.in.web;
 
 import java.util.Map;
 import java.util.Locale;
-import java.util.UUID;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.util.StringUtils;
@@ -20,9 +19,11 @@ import com.socialcoisa.rede.identity.application.SignupCommand;
 import com.socialcoisa.rede.identity.application.port.in.GetAuthenticatedUserUseCase;
 import com.socialcoisa.rede.identity.application.port.in.LoginUseCase;
 import com.socialcoisa.rede.identity.application.port.in.LogoutUseCase;
+import com.socialcoisa.rede.identity.application.port.in.OAuthUseCase;
 import com.socialcoisa.rede.identity.application.port.in.RequestPasswordResetUseCase;
 import com.socialcoisa.rede.identity.application.port.in.ResetPasswordUseCase;
 import com.socialcoisa.rede.identity.application.port.in.SignupUseCase;
+import com.socialcoisa.rede.identity.domain.OAuthProvider;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
 
@@ -36,12 +37,14 @@ class AuthController {
 	private final LoginUseCase loginUseCase;
 	private final LogoutUseCase logoutUseCase;
 	private final GetAuthenticatedUserUseCase getAuthenticatedUserUseCase;
+	private final OAuthUseCase oAuthUseCase;
 	private final RequestPasswordResetUseCase requestPasswordResetUseCase;
 	private final ResetPasswordUseCase resetPasswordUseCase;
 	private final IdempotencyApplicationService idempotency;
 
 	AuthController(SignupUseCase signupUseCase, LoginUseCase loginUseCase, LogoutUseCase logoutUseCase,
 			GetAuthenticatedUserUseCase getAuthenticatedUserUseCase,
+			OAuthUseCase oAuthUseCase,
 			RequestPasswordResetUseCase requestPasswordResetUseCase,
 			ResetPasswordUseCase resetPasswordUseCase,
 			IdempotencyApplicationService idempotency) {
@@ -49,6 +52,7 @@ class AuthController {
 		this.loginUseCase = loginUseCase;
 		this.logoutUseCase = logoutUseCase;
 		this.getAuthenticatedUserUseCase = getAuthenticatedUserUseCase;
+		this.oAuthUseCase = oAuthUseCase;
 		this.requestPasswordResetUseCase = requestPasswordResetUseCase;
 		this.resetPasswordUseCase = resetPasswordUseCase;
 		this.idempotency = idempotency;
@@ -93,15 +97,25 @@ class AuthController {
 	@GetMapping("/oauth/{provider}/start")
 	@RateLimiter(name = "auth")
 	Object oauthStart(@PathVariable String provider) {
-		String state = "state_" + UUID.randomUUID().toString().replace("-", "");
-		return new OAuthStartResponse(provider, state, "/api/auth/oauth/" + provider + "/callback?state=" + state);
+		OAuthProvider oauthProvider = parseProvider(provider);
+		return oAuthUseCase.start(oauthProvider);
 	}
 
 	@GetMapping("/oauth/{provider}/callback")
 	@RateLimiter(name = "auth")
 	Object oauthCallback(@PathVariable String provider, @RequestParam(required = false) String code,
 			@RequestParam(required = false) String state) {
-		return new OAuthCallbackResponse(provider, state, "NOT_CONFIGURED");
+		OAuthProvider oauthProvider = parseProvider(provider);
+		return oAuthUseCase.callback(oauthProvider, code, state);
+	}
+
+	private OAuthProvider parseProvider(String value) {
+		try {
+			return OAuthProvider.valueOf(value.toUpperCase(Locale.ROOT));
+		} catch (IllegalArgumentException e) {
+			throw new com.socialcoisa.rede.shared.web.ApiException(400, "INVALID_OAUTH_PROVIDER",
+				"Provedor OAuth invalido: " + value);
+		}
 	}
 
 	@PostMapping("/password/forgot")
@@ -130,12 +144,6 @@ class AuthController {
 
 	private String authScope(String email) {
 		return "auth:" + (StringUtils.hasText(email) ? email.trim().toLowerCase(Locale.ROOT) : "anonymous");
-	}
-
-	record OAuthStartResponse(String provider, String state, String authorizationUrl) {
-	}
-
-	record OAuthCallbackResponse(String provider, String state, String status) {
 	}
 
 	record ForgotPasswordRequest(String email) {

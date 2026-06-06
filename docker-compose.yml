@@ -1,0 +1,46 @@
+services:
+  rede:
+    build: .
+    container_name: rede
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+
+  mariadb:
+    image: mariadb:11
+    profiles: ["hml"]
+    container_name: rede-mariadb
+    environment:
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: rede_hml
+      MARIADB_USER: rede_hml
+      MARIADB_PASSWORD: rede_hml
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+
+  mysql:
+    image: mysql:8
+    profiles: ["prd"]
+    container_name: rede-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: rede_prd
+      MYSQL_USER: rede_prd
+      MYSQL_PASSWORD: rede_prd
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+volumes:
+  mariadb_data:
+  mysql_data:

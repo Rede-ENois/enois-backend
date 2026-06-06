@@ -21,5 +21,4 @@ rad.json
 *.flf
 #Test results file
 TestResults.xml
-*.md
 target/*

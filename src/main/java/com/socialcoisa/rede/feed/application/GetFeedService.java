@@ -20,8 +20,10 @@ import com.socialcoisa.rede.feed.application.port.out.ConnectionGraphRepository;
 import com.socialcoisa.rede.feed.application.port.out.FeedCacheRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.FeedItem;
+import com.socialcoisa.rede.feed.domain.FeedTab;
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
+import com.socialcoisa.rede.feed.domain.PostType;
 import com.socialcoisa.rede.feed.domain.UserId;
 import com.socialcoisa.rede.shared.web.CursorCodec;
 
@@ -49,7 +51,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase {
 		Instant before = query.before().orElse(DEFAULT_BEFORE);
 		List<PostView> cached = fromCache(query.userId(), before, limit);
 		if (!cached.isEmpty()) {
-			return page(cached, limit);
+			return page(filterByTab(cached, query.tab()), limit);
 		}
 		Set<UserId> authors = new LinkedHashSet<>();
 		authors.add(query.userId());
@@ -58,7 +60,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase {
 		List<PostView> posts = postRepository.findActiveByAuthors(authors, before, limit).stream()
 			.map(PostView::from)
 			.toList();
-		return page(posts, limit);
+		return page(filterByTab(posts, query.tab()), limit);
 	}
 
 	@Override
@@ -70,6 +72,24 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase {
 			.map(PostView::from)
 			.toList();
 		return page(posts, limit);
+	}
+
+	private List<PostView> filterByTab(List<PostView> posts, FeedTab tab) {
+		if (tab == null || tab == FeedTab.FOR_YOU) {
+			return posts;
+		}
+		return posts.stream()
+			.filter(p -> matchesTab(p, tab))
+			.toList();
+	}
+
+	private boolean matchesTab(PostView post, FeedTab tab) {
+		return switch (tab) {
+			case FOR_YOU -> true;
+			case FOLLOWING -> true;
+			case DISCUSSIONS -> post.type() == PostType.QUESTION;
+			case PROJECTS -> post.type() == PostType.PROJECT;
+		};
 	}
 
 	private List<PostView> fromCache(UserId userId, Instant before, int limit) {

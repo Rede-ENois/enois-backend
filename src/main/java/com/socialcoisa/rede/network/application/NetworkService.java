@@ -8,21 +8,27 @@ import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.stream.Collectors;
+
 import com.socialcoisa.rede.feed.domain.UserId;
 import com.socialcoisa.rede.network.application.port.out.ConnectionRepository;
 import com.socialcoisa.rede.network.domain.ConnectionSuggestion;
 import com.socialcoisa.rede.network.domain.ConnectionStatus;
 import com.socialcoisa.rede.network.domain.UserConnection;
+import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 @Service
 public class NetworkService {
 
 	private final ConnectionRepository connectionRepository;
+	private final UserProfileRepository userProfileRepository;
 	private final Clock clock;
 
-	public NetworkService(ConnectionRepository connectionRepository, Clock clock) {
+	public NetworkService(ConnectionRepository connectionRepository, UserProfileRepository userProfileRepository,
+			Clock clock) {
 		this.connectionRepository = connectionRepository;
+		this.userProfileRepository = userProfileRepository;
 		this.clock = clock;
 	}
 
@@ -101,6 +107,14 @@ public class NetworkService {
 		}
 		result.remove(userId);
 		return result;
+	}
+
+	public Set<String> findUserTags(UserId userId) {
+		return userProfileRepository.findById(userId.value())
+			.map(profile -> profile.skills().stream()
+				.map(String::toLowerCase)
+				.collect(Collectors.toSet()))
+			.orElseGet(Set::of);
 	}
 
 }
