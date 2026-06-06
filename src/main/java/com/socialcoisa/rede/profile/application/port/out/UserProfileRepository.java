@@ -1,0 +1,20 @@
+package com.socialcoisa.rede.profile.application.port.out;
+
+import java.util.Optional;
+
+import com.socialcoisa.rede.profile.domain.UserProfile;
+
+public interface UserProfileRepository {
+
+	UserProfile save(UserProfile profile);
+
+	Optional<UserProfile> findById(String id);
+
+	Optional<UserProfile> findByUsername(String username);
+
+	Optional<UserProfile> findByEmail(String email);
+
+	boolean existsByUsername(String username);
+
+	boolean existsByEmail(String email);
+}
