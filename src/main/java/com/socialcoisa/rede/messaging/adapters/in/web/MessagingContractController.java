@@ -74,7 +74,7 @@ class MessagingContractController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(required = false) String q, @RequestParam(defaultValue = "20") int limit) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
-		List<Conversation> conversations = messagingService.listConversations(user.id().value(), limit);
+		List<Conversation> conversations = messagingService.listConversations(user.id().value(), null, limit);
 		String query = q != null ? q.toLowerCase() : "";
 		var items = conversations.stream()
 			.filter(c -> query.isEmpty() || (c.title() != null && c.title().toLowerCase().contains(query)))
