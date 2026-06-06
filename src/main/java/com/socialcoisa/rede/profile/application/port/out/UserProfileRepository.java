@@ -17,4 +17,8 @@ public interface UserProfileRepository {
 	boolean existsByUsername(String username);
 
 	boolean existsByEmail(String email);
+
+	int countConnections(String userId);
+
+	int countFollowers(String userId);
 }

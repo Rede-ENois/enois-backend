@@ -2,7 +2,6 @@ package com.socialcoisa.rede.communities.adapters.in.web;
 
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -16,6 +15,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.socialcoisa.rede.communities.application.CommunityService;
+import com.socialcoisa.rede.communities.domain.Community;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
 import com.socialcoisa.rede.shared.web.CurrentUser;
@@ -29,21 +30,47 @@ class CommunityContractController {
 
 	private final IdempotencyApplicationService idempotency;
 	private final CurrentUserResolver currentUserResolver;
+	private final CommunityService communityService;
 
-	CommunityContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver) {
+	CommunityContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
+			CommunityService communityService) {
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
+		this.communityService = communityService;
 	}
 
 	@GetMapping
-	PageResponse<CommunityView> communities(@RequestParam(required = false) String topic,
+	PageResponse<CommunityView> communities(@RequestHeader(value = "X-User-Id", required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(required = false) String topic,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit) {
-		return new PageResponse<>(List.of(), null);
+		CurrentUser user = resolveSafely(userId, sessionToken);
+		List<Community> communities = communityService.list(topic, limit);
+		var items = communities.stream()
+			.map(c -> new CommunityView(c.id(), c.name(), c.description(),
+				communityService.countMembers(c.id()), c.topic(), c.cover(),
+				user != null && communityService.isMember(c.id(), user.id().value())))
+			.toList();
+		return new PageResponse<>(items, null);
 	}
 
 	@GetMapping("/{communityId}")
-	CommunityView community(@PathVariable String communityId) {
-		return new CommunityView(communityId, "", "", 0, "", null, false);
+	CommunityView community(@RequestHeader(value = "X-User-Id", required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String communityId) {
+		CurrentUser user = resolveSafely(userId, sessionToken);
+		Community c = communityService.getById(communityId);
+		return new CommunityView(c.id(), c.name(), c.description(),
+			communityService.countMembers(c.id()), c.topic(), c.cover(),
+			user != null && communityService.isMember(c.id(), user.id().value()));
+	}
+
+	private CurrentUser resolveSafely(String userId, String sessionToken) {
+		try {
+			return currentUserResolver.resolve(userId, sessionToken);
+		} catch (Exception e) {
+			return null;
+		}
 	}
 
 	@PostMapping
@@ -54,8 +81,12 @@ class CommunityContractController {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
 		String hash = idempotency.hash(request);
 		return idempotency.execute(user.id(), "POST", "/api/communities", idempotencyKey, hash,
-			() -> new CommandResponse(201, new CommunityView(newId("community"), request.name(),
-				request.description(), 1, request.topic(), request.cover(), true)));
+			() -> {
+				Community c = communityService.create(request.name(), request.description(), request.topic(),
+					request.cover(), user.id().value());
+				return new CommandResponse(201, new CommunityView(c.id(), c.name(), c.description(),
+					1, c.topic(), c.cover(), true));
+			});
 	}
 
 	@PatchMapping("/{communityId}")
@@ -64,10 +95,15 @@ class CommunityContractController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String communityId, @RequestBody CommunityRequest request) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
-		String hash = idempotency.hash(new CommunityPayload(communityId, request));
+		String hash = idempotency.hash(Map.of("communityId", communityId, "request", request));
 		return idempotency.execute(user.id(), "PATCH", "/api/communities/{communityId}", idempotencyKey, hash,
-			() -> new CommandResponse(200, new CommunityView(communityId, request.name(), request.description(), 0,
-				request.topic(), request.cover(), false)));
+			() -> {
+				Community c = communityService.update(communityId, request.name(), request.description(),
+					request.topic(), request.cover(), user.id().value());
+				return new CommandResponse(200, new CommunityView(c.id(), c.name(), c.description(),
+					communityService.countMembers(c.id()), c.topic(), c.cover(),
+					communityService.isMember(c.id(), user.id().value())));
+			});
 	}
 
 	@PostMapping("/{communityId}/members")
@@ -78,7 +114,10 @@ class CommunityContractController {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
 		String hash = idempotency.hash(Map.of("communityId", communityId));
 		return idempotency.execute(user.id(), "POST", "/api/communities/{communityId}/members", idempotencyKey, hash,
-			() -> new CommandResponse(200, new StatusResponse(communityId, "JOINED")));
+			() -> {
+				communityService.join(communityId, user.id().value());
+				return new CommandResponse(200, new StatusResponse(communityId, "JOINED"));
+			});
 	}
 
 	@DeleteMapping("/{communityId}/members")
@@ -89,11 +128,10 @@ class CommunityContractController {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
 		String hash = idempotency.hash(Map.of("communityId", communityId));
 		return idempotency.execute(user.id(), "DELETE", "/api/communities/{communityId}/members", idempotencyKey, hash,
-			() -> new CommandResponse(200, new StatusResponse(communityId, "LEFT")));
-	}
-
-	private String newId(String prefix) {
-		return prefix + "_" + UUID.randomUUID().toString().replace("-", "");
+			() -> {
+				communityService.leave(communityId, user.id().value());
+				return new CommandResponse(200, new StatusResponse(communityId, "LEFT"));
+			});
 	}
 
 	record CommunityView(String id, String name, String description, int members, String topic, String cover,
@@ -103,6 +141,4 @@ class CommunityContractController {
 	record CommunityRequest(String name, String description, String topic, String cover) {
 	}
 
-	record CommunityPayload(String communityId, CommunityRequest request) {
-	}
 }

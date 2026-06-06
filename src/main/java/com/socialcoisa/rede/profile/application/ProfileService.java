@@ -10,6 +10,7 @@ import org.springframework.util.StringUtils;
 import com.socialcoisa.rede.profile.application.port.in.GetMeUseCase;
 import com.socialcoisa.rede.profile.application.port.in.GetUserProfileUseCase;
 import com.socialcoisa.rede.profile.application.port.in.UpdateProfileUseCase;
+import com.socialcoisa.rede.profile.application.port.out.ProfileExtensionRepository;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -18,10 +19,13 @@ import com.socialcoisa.rede.shared.web.ApiException;
 public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, UpdateProfileUseCase {
 
 	private final UserProfileRepository repository;
+	private final ProfileExtensionRepository extensionRepository;
 	private final Clock clock;
 
-	public ProfileService(UserProfileRepository repository, Clock clock) {
+	public ProfileService(UserProfileRepository repository, ProfileExtensionRepository extensionRepository,
+			Clock clock) {
 		this.repository = repository;
+		this.extensionRepository = extensionRepository;
 		this.clock = clock;
 	}
 
@@ -29,6 +33,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 	@Transactional(readOnly = true)
 	public UserProfileView getMe(String userId) {
 		return repository.findById(userId)
+			.map(this::populateCounts)
 			.map(UserProfileView::from)
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
 	}
@@ -37,8 +42,22 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 	@Transactional(readOnly = true)
 	public UserProfileView getByUsername(String username) {
 		return repository.findByUsername(username)
+			.map(this::populateCounts)
 			.map(UserProfileView::from)
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
+	}
+
+	private UserProfile populateCounts(UserProfile profile) {
+		String userId = profile.id();
+		int connections = repository.countConnections(userId);
+		int followers = repository.countFollowers(userId);
+		int experiences = extensionRepository.countExperiencesByUserId(userId);
+		int educations = extensionRepository.countEducationsByUserId(userId);
+		int certifications = extensionRepository.countCertificationsByUserId(userId);
+		int reputation = Math.min(experiences * 10 + educations * 10 + certifications * 5 + connections + followers / 2,
+			100);
+		profile.setCounts(connections, followers, reputation);
+		return profile;
 	}
 
 	@Override

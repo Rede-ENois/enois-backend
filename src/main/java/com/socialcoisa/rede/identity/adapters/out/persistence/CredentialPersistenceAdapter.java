@@ -31,6 +31,12 @@ class CredentialPersistenceAdapter implements CredentialRepository {
 	}
 
 	@Override
+	public Optional<StoredCredential> findByUserId(String userId) {
+		return repository.findById(userId)
+			.map(entity -> new StoredCredential(entity.userId(), entity.email(), entity.passwordHash()));
+	}
+
+	@Override
 	public boolean existsByEmail(String email) {
 		return repository.existsByEmail(email);
 	}

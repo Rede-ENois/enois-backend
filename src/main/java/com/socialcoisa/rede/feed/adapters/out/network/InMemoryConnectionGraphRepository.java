@@ -5,13 +5,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.springframework.stereotype.Repository;
-
 import com.socialcoisa.rede.feed.application.port.out.ConnectionGraphRepository;
 import com.socialcoisa.rede.feed.domain.UserId;
 
-@Repository
-class InMemoryConnectionGraphRepository implements ConnectionGraphRepository {
+public class InMemoryConnectionGraphRepository implements ConnectionGraphRepository {
 
 	private final Map<UserId, Set<UserId>> connections = new ConcurrentHashMap<>();
 

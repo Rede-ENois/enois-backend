@@ -22,6 +22,9 @@ public class UserProfile {
 	private List<String> externalLinks;
 	private boolean openToWork;
 	private boolean mentor;
+	private int connectionsCount;
+	private int followersCount;
+	private int reputation;
 	private final Instant createdAt;
 	private Instant updatedAt;
 
@@ -154,6 +157,24 @@ public class UserProfile {
 
 	public boolean mentor() {
 		return mentor;
+	}
+
+	public void setCounts(int connectionsCount, int followersCount, int reputation) {
+		this.connectionsCount = connectionsCount;
+		this.followersCount = followersCount;
+		this.reputation = reputation;
+	}
+
+	public int connectionsCount() {
+		return connectionsCount;
+	}
+
+	public int followersCount() {
+		return followersCount;
+	}
+
+	public int reputation() {
+		return reputation;
 	}
 
 	public Instant createdAt() {

@@ -2,7 +2,6 @@ package com.socialcoisa.rede.mentoring.adapters.in.web;
 
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -16,6 +15,10 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
+import com.socialcoisa.rede.mentoring.application.MentorService;
+import com.socialcoisa.rede.mentoring.domain.Mentor;
+import com.socialcoisa.rede.mentoring.domain.MentorSession;
+import com.socialcoisa.rede.mentoring.domain.MentorSlot;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 import com.socialcoisa.rede.shared.web.PageResponse;
@@ -27,26 +30,41 @@ class MentoringContractController {
 
 	private final IdempotencyApplicationService idempotency;
 	private final CurrentUserResolver currentUserResolver;
+	private final MentorService mentorService;
 
-	MentoringContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver) {
+	MentoringContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
+			MentorService mentorService) {
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
+		this.mentorService = mentorService;
 	}
 
 	@GetMapping
 	PageResponse<MentorView> mentors(@RequestParam(required = false) String expertise,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit) {
-		return new PageResponse<>(List.of(), null);
+		List<Mentor> mentors = mentorService.list(expertise, limit);
+		var items = mentors.stream()
+			.map(m -> new MentorView(m.id(), m.userId(), m.expertise(), m.rating(), m.sessionsCount(), m.price(), null))
+			.toList();
+		return new PageResponse<>(items, null);
 	}
 
 	@GetMapping("/{mentorId}")
 	MentorView mentor(@PathVariable String mentorId) {
-		return new MentorView(mentorId, "", List.of(), 0.0, 0, null, null);
+		Mentor m = mentorService.getById(mentorId);
+		return new MentorView(m.id(), m.userId(), m.expertise(), m.rating(), m.sessionsCount(), m.price(), null);
 	}
 
 	@GetMapping("/{mentorId}/slots")
 	PageResponse<MentorSlotView> slots(@PathVariable String mentorId) {
-		return new PageResponse<>(List.of(), null);
+		List<MentorSlot> slots = mentorService.getSlots(mentorId);
+		var items = slots.stream()
+			.map(s -> new MentorSlotView(s.id(),
+				s.startsAt() != null ? s.startsAt().toString() : null,
+				s.endsAt() != null ? s.endsAt().toString() : null,
+				s.available()))
+			.toList();
+		return new PageResponse<>(items, null);
 	}
 
 	@PostMapping("/{mentorId}/sessions")
@@ -55,13 +73,13 @@ class MentoringContractController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String mentorId, @RequestBody MentorSessionRequest request) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
-		String hash = idempotency.hash(new MentorSessionPayload(mentorId, request));
+		String hash = idempotency.hash(Map.of("mentorId", mentorId, "request", request));
 		return idempotency.execute(user.id(), "POST", "/api/mentors/{mentorId}/sessions", idempotencyKey, hash,
-			() -> new CommandResponse(201, new StatusResponse(newId("mentor_session"), "SCHEDULED")));
-	}
-
-	private String newId(String prefix) {
-		return prefix + "_" + UUID.randomUUID().toString().replace("-", "");
+			() -> {
+				MentorSession session = mentorService.scheduleSession(mentorId, user.id().value(),
+					request.slotId(), request.message());
+				return new CommandResponse(201, new StatusResponse(session.id(), "SCHEDULED"));
+			});
 	}
 
 	record MentorView(String id, String userId, List<String> expertise, double rating, int sessions, String price,
@@ -74,6 +92,4 @@ class MentoringContractController {
 	record MentorSessionRequest(String slotId, String message) {
 	}
 
-	record MentorSessionPayload(String mentorId, MentorSessionRequest request) {
-	}
 }

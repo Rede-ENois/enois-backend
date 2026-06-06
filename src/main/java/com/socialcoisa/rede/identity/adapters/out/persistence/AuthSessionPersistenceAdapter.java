@@ -35,4 +35,9 @@ class AuthSessionPersistenceAdapter implements AuthSessionRepository {
 			repository.save(session);
 		});
 	}
+
+	@Override
+	public void revokeAllByUser(String userId, Instant revokedAt) {
+		repository.revokeAllByUser(userId, revokedAt);
+	}
 }

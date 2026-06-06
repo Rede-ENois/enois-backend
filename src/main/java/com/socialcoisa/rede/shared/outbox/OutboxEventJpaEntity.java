@@ -52,6 +52,18 @@ class OutboxEventJpaEntity {
 		return id;
 	}
 
+	String eventType() {
+		return eventType;
+	}
+
+	String aggregateId() {
+		return aggregateId;
+	}
+
+	String payload() {
+		return payload;
+	}
+
 	String status() {
 		return status;
 	}

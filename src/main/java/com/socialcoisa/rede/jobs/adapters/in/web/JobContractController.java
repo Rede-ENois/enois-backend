@@ -15,6 +15,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
+import com.socialcoisa.rede.jobs.application.JobService;
+import com.socialcoisa.rede.jobs.domain.Job;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 import com.socialcoisa.rede.shared.web.PageResponse;
@@ -26,21 +28,31 @@ class JobContractController {
 
 	private final IdempotencyApplicationService idempotency;
 	private final CurrentUserResolver currentUserResolver;
+	private final JobService jobService;
 
-	JobContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver) {
+	JobContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
+			JobService jobService) {
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
+		this.jobService = jobService;
 	}
 
 	@GetMapping
 	PageResponse<JobView> jobs(@RequestParam(required = false) String query, @RequestParam(required = false) String type,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit) {
-		return new PageResponse<>(List.of(), null);
+		List<Job> jobs = jobService.list(query, type, limit);
+		var items = jobs.stream()
+			.map(j -> new JobView(j.id(), j.title(), j.company(), j.logo(), j.location(), j.type(), j.level(),
+				j.salary(), j.skills(), j.postedAt() != null ? j.postedAt().toString() : null, 0))
+			.toList();
+		return new PageResponse<>(items, null);
 	}
 
 	@GetMapping("/{jobId}")
 	JobView job(@PathVariable String jobId) {
-		return new JobView(jobId, "", "", null, "", "", "", null, List.of(), null, 0);
+		Job j = jobService.getById(jobId);
+		return new JobView(j.id(), j.title(), j.company(), j.logo(), j.location(), j.type(), j.level(),
+			j.salary(), j.skills(), j.postedAt() != null ? j.postedAt().toString() : null, 0);
 	}
 
 	@PostMapping("/{jobId}/applications")
@@ -51,7 +63,10 @@ class JobContractController {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
 		String hash = idempotency.hash(Map.of("jobId", jobId));
 		return idempotency.execute(user.id(), "POST", "/api/jobs/{jobId}/applications", idempotencyKey, hash,
-			() -> new CommandResponse(201, new StatusResponse(jobId, "APPLIED")));
+			() -> {
+				jobService.apply(jobId, user.id().value());
+				return new CommandResponse(201, new StatusResponse(jobId, "APPLIED"));
+			});
 	}
 
 	@PostMapping("/{jobId}/saves")
@@ -62,7 +77,10 @@ class JobContractController {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
 		String hash = idempotency.hash(Map.of("jobId", jobId));
 		return idempotency.execute(user.id(), "POST", "/api/jobs/{jobId}/saves", idempotencyKey, hash,
-			() -> new CommandResponse(200, new StatusResponse(jobId, "SAVED")));
+			() -> {
+				jobService.save(jobId, user.id().value());
+				return new CommandResponse(200, new StatusResponse(jobId, "SAVED"));
+			});
 	}
 
 	@DeleteMapping("/{jobId}/saves")
@@ -73,10 +91,14 @@ class JobContractController {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
 		String hash = idempotency.hash(Map.of("jobId", jobId));
 		return idempotency.execute(user.id(), "DELETE", "/api/jobs/{jobId}/saves", idempotencyKey, hash,
-			() -> new CommandResponse(200, new StatusResponse(jobId, "UNSAVED")));
+			() -> {
+				jobService.removeSave(jobId, user.id().value());
+				return new CommandResponse(200, new StatusResponse(jobId, "UNSAVED"));
+			});
 	}
 
 	record JobView(String id, String title, String company, String logo, String location, String type, String level,
 			String salary, List<String> skills, String postedAt, int matchScore) {
 	}
+
 }

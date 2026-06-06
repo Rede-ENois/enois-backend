@@ -20,6 +20,8 @@ import com.socialcoisa.rede.identity.application.SignupCommand;
 import com.socialcoisa.rede.identity.application.port.in.GetAuthenticatedUserUseCase;
 import com.socialcoisa.rede.identity.application.port.in.LoginUseCase;
 import com.socialcoisa.rede.identity.application.port.in.LogoutUseCase;
+import com.socialcoisa.rede.identity.application.port.in.RequestPasswordResetUseCase;
+import com.socialcoisa.rede.identity.application.port.in.ResetPasswordUseCase;
 import com.socialcoisa.rede.identity.application.port.in.SignupUseCase;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
@@ -34,14 +36,21 @@ class AuthController {
 	private final LoginUseCase loginUseCase;
 	private final LogoutUseCase logoutUseCase;
 	private final GetAuthenticatedUserUseCase getAuthenticatedUserUseCase;
+	private final RequestPasswordResetUseCase requestPasswordResetUseCase;
+	private final ResetPasswordUseCase resetPasswordUseCase;
 	private final IdempotencyApplicationService idempotency;
 
 	AuthController(SignupUseCase signupUseCase, LoginUseCase loginUseCase, LogoutUseCase logoutUseCase,
-			GetAuthenticatedUserUseCase getAuthenticatedUserUseCase, IdempotencyApplicationService idempotency) {
+			GetAuthenticatedUserUseCase getAuthenticatedUserUseCase,
+			RequestPasswordResetUseCase requestPasswordResetUseCase,
+			ResetPasswordUseCase resetPasswordUseCase,
+			IdempotencyApplicationService idempotency) {
 		this.signupUseCase = signupUseCase;
 		this.loginUseCase = loginUseCase;
 		this.logoutUseCase = logoutUseCase;
 		this.getAuthenticatedUserUseCase = getAuthenticatedUserUseCase;
+		this.requestPasswordResetUseCase = requestPasswordResetUseCase;
+		this.resetPasswordUseCase = resetPasswordUseCase;
 		this.idempotency = idempotency;
 	}
 
@@ -101,7 +110,10 @@ class AuthController {
 		String scope = authScope(request.email());
 		String hash = idempotency.hash(request);
 		return idempotency.execute(scope, "POST", "/api/auth/password/forgot", idempotencyKey, hash,
-			() -> new CommandResponse(202, Map.of("status", "RESET_REQUEST_ACCEPTED")));
+			() -> {
+				requestPasswordResetUseCase.requestReset(request.email());
+				return new CommandResponse(202, Map.of("status", "RESET_REQUEST_ACCEPTED"));
+			});
 	}
 
 	@PostMapping("/password/reset")
@@ -110,7 +122,10 @@ class AuthController {
 		String scope = "reset:" + (StringUtils.hasText(request.token()) ? request.token().trim() : "anonymous");
 		String hash = idempotency.hash(request);
 		return idempotency.execute(scope, "POST", "/api/auth/password/reset", idempotencyKey, hash,
-			() -> new CommandResponse(200, Map.of("status", "PASSWORD_RESET_ACCEPTED")));
+			() -> {
+				resetPasswordUseCase.reset(request.token(), request.password());
+				return new CommandResponse(200, Map.of("status", "PASSWORD_RESET_ACCEPTED"));
+			});
 	}
 
 	private String authScope(String email) {

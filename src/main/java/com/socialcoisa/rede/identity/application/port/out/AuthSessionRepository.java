@@ -10,4 +10,6 @@ public interface AuthSessionRepository {
 	Optional<String> findActiveUserId(String token, Instant now);
 
 	void revoke(String token, Instant revokedAt);
+
+	void revokeAllByUser(String userId, Instant revokedAt);
 }

@@ -7,13 +7,17 @@ import org.springframework.stereotype.Repository;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
 
+import jakarta.persistence.EntityManager;
+
 @Repository
 class UserProfilePersistenceAdapter implements UserProfileRepository {
 
 	private final SpringDataUserProfileJpaRepository repository;
+	private final EntityManager em;
 
-	UserProfilePersistenceAdapter(SpringDataUserProfileJpaRepository repository) {
+	UserProfilePersistenceAdapter(SpringDataUserProfileJpaRepository repository, EntityManager em) {
 		this.repository = repository;
+		this.em = em;
 	}
 
 	@Override
@@ -44,5 +48,23 @@ class UserProfilePersistenceAdapter implements UserProfileRepository {
 	@Override
 	public boolean existsByEmail(String email) {
 		return repository.existsByEmail(email);
+	}
+
+	@Override
+	public int countConnections(String userId) {
+		var result = em.createNativeQuery(
+			"select count(*) from user_connections where (requester_user_id = :uid or receiver_user_id = :uid) and status = 'ACCEPTED'")
+			.setParameter("uid", userId)
+			.getSingleResult();
+		return ((Number) result).intValue();
+	}
+
+	@Override
+	public int countFollowers(String userId) {
+		var result = em.createNativeQuery(
+			"select count(*) from user_connections where receiver_user_id = :uid and status = 'ACCEPTED'")
+			.setParameter("uid", userId)
+			.getSingleResult();
+		return ((Number) result).intValue();
 	}
 }

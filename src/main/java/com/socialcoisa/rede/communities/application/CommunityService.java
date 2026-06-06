@@ -1,0 +1,84 @@
+package com.socialcoisa.rede.communities.application;
+
+import java.time.Clock;
+import java.util.List;
+import java.util.UUID;
+
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.socialcoisa.rede.communities.application.port.out.CommunityRepository;
+import com.socialcoisa.rede.communities.domain.Community;
+import com.socialcoisa.rede.communities.domain.CommunityMember;
+import com.socialcoisa.rede.communities.domain.MemberRole;
+import com.socialcoisa.rede.shared.web.ApiException;
+
+@Service
+public class CommunityService {
+
+	private final CommunityRepository repository;
+	private final Clock clock;
+
+	public CommunityService(CommunityRepository repository, Clock clock) {
+		this.repository = repository;
+		this.clock = clock;
+	}
+
+	@Transactional
+	public Community create(String name, String description, String topic, String cover, String userId) {
+		String id = "community_" + UUID.randomUUID().toString().replace("-", "");
+		Community community = Community.create(id, name, description, topic, cover, userId, clock.instant());
+		repository.save(community);
+		repository.saveMember(CommunityMember.join(id, userId, MemberRole.ADMIN, clock.instant()));
+		return community;
+	}
+
+	@Transactional
+	public Community update(String communityId, String name, String description, String topic, String cover,
+			String userId) {
+		Community community = repository.findById(communityId)
+			.orElseThrow(() -> new ApiException(404, "COMMUNITY_NOT_FOUND", "Comunidade nao encontrada."));
+		if (!community.createdBy().equals(userId)) {
+			throw new ApiException(403, "FORBIDDEN", "So o criador pode atualizar a comunidade.");
+		}
+		Community updated = community.update(name, description, topic, cover, clock.instant());
+		repository.save(updated);
+		return updated;
+	}
+
+	@Transactional
+	public CommunityMember join(String communityId, String userId) {
+		if (repository.isMember(communityId, userId)) {
+			throw new ApiException(409, "ALREADY_MEMBER", "Voce ja e membro desta comunidade.");
+		}
+		CommunityMember member = CommunityMember.join(communityId, userId, MemberRole.MEMBER, clock.instant());
+		repository.saveMember(member);
+		return member;
+	}
+
+	@Transactional
+	public void leave(String communityId, String userId) {
+		if (!repository.isMember(communityId, userId)) {
+			throw new ApiException(404, "NOT_MEMBER", "Voce nao e membro desta comunidade.");
+		}
+		repository.removeMember(communityId, userId);
+	}
+
+	public List<Community> list(String topic, int limit) {
+		return repository.findAll(topic, limit);
+	}
+
+	public Community getById(String id) {
+		return repository.findById(id)
+			.orElseThrow(() -> new ApiException(404, "COMMUNITY_NOT_FOUND", "Comunidade nao encontrada."));
+	}
+
+	public boolean isMember(String communityId, String userId) {
+		return repository.isMember(communityId, userId);
+	}
+
+	public int countMembers(String communityId) {
+		return repository.countMembers(communityId);
+	}
+
+}

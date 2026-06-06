@@ -1,5 +1,7 @@
 package com.socialcoisa.rede.feed.adapters.out.cache;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -9,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Repository;
 
 import com.socialcoisa.rede.feed.application.port.out.FeedCacheRepository;
@@ -19,9 +22,17 @@ import com.socialcoisa.rede.feed.domain.UserId;
 @Repository
 class InMemoryFeedCacheRepository implements FeedCacheRepository {
 
-	private static final int MAX_ITEMS_PER_USER = 500;
-
+	private final int maxItemsPerUser;
+	private final Duration ttl;
+	private final Clock clock;
 	private final Map<String, Deque<FeedItem>> feeds = new ConcurrentHashMap<>();
+
+	InMemoryFeedCacheRepository(@Value("${rede.feed.cache.max-items-per-user:500}") int maxItemsPerUser,
+			@Value("${rede.feed.cache.ttl-seconds:3600}") int ttlSeconds, Clock clock) {
+		this.maxItemsPerUser = maxItemsPerUser;
+		this.ttl = Duration.ofSeconds(ttlSeconds);
+		this.clock = clock;
+	}
 
 	@Override
 	public void prepend(UserId userId, FeedItem item) {
@@ -29,7 +40,7 @@ class InMemoryFeedCacheRepository implements FeedCacheRepository {
 		synchronized (feed) {
 			feed.removeIf(existing -> existing.postId().equals(item.postId()));
 			feed.addFirst(item);
-			while (feed.size() > MAX_ITEMS_PER_USER) {
+			while (feed.size() > maxItemsPerUser) {
 				feed.removeLast();
 			}
 		}
@@ -41,8 +52,10 @@ class InMemoryFeedCacheRepository implements FeedCacheRepository {
 		if (feed == null) {
 			return List.of();
 		}
+		Instant cutoff = clock.instant().minus(ttl);
 		synchronized (feed) {
 			return feed.stream()
+				.filter(item -> item.createdAt().isAfter(cutoff))
 				.filter(item -> item.createdAt().isBefore(before))
 				.sorted(Comparator.comparing(FeedItem::createdAt).reversed())
 				.limit(limit)

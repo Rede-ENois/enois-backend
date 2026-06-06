@@ -60,7 +60,7 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 		post.addComment();
 		postRepository.save(post);
 		outboxEventRepository.append("PostCommented", post.id().value(), "{\"postId\":\"" + post.id().value()
-			+ "\",\"commentId\":\"" + saved.id() + "\"}");
+			+ "\",\"commentId\":\"" + saved.id() + "\",\"authorId\":\"" + command.authorId() + "\"}");
 		return CommentView.from(saved);
 	}
 
@@ -90,7 +90,8 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 		if (added) {
 			post.addReaction();
 			postRepository.save(post);
-			outboxEventRepository.append("PostReacted", post.id().value(), "{\"postId\":\"" + post.id().value() + "\"}");
+			outboxEventRepository.append("PostReacted", post.id().value(), "{\"postId\":\"" + post.id().value()
+				+ "\",\"authorId\":\"" + command.userId() + "\"}");
 		}
 		return new PostActionResult(post.id().value(), added ? "REACTED" : "ALREADY_REACTED", post.counters());
 	}

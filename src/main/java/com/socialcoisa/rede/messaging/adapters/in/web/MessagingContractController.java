@@ -1,7 +1,9 @@
 package com.socialcoisa.rede.messaging.adapters.in.web;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -15,6 +17,10 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
+import com.socialcoisa.rede.messaging.application.MessagingService;
+import com.socialcoisa.rede.messaging.domain.Conversation;
+import com.socialcoisa.rede.messaging.domain.ConversationParticipant;
+import com.socialcoisa.rede.messaging.domain.Message;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 import com.socialcoisa.rede.shared.web.PageResponse;
@@ -26,34 +32,71 @@ class MessagingContractController {
 
 	private final IdempotencyApplicationService idempotency;
 	private final CurrentUserResolver currentUserResolver;
+	private final MessagingService messagingService;
 
-	MessagingContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver) {
+	MessagingContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
+			MessagingService messagingService) {
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
+		this.messagingService = messagingService;
 	}
 
 	@GetMapping
 	PageResponse<ConversationView> conversations(@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit) {
-		currentUserResolver.resolve(userId, sessionToken);
-		return new PageResponse<>(List.of(), null);
+		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		List<Conversation> conversations = messagingService.listConversations(user.id().value(), limit);
+		var items = conversations.stream()
+			.map(c -> {
+				List<String> pIds = messagingService.getParticipants(c.id()).stream()
+					.map(ConversationParticipant::userId)
+					.toList();
+				return new ConversationView(c.id(), user.id().value(), c.kind(), c.title(), pIds,
+					messagingService.getLastMessageText(c.id()),
+					messagingService.getLastMessageTime(c.id()) != null
+						? messagingService.getLastMessageTime(c.id()).toString() : null,
+					messagingService.countUnread(c.id(), user.id().value()));
+			})
+			.toList();
+		return new PageResponse<>(items, null);
 	}
 
 	@GetMapping("/search")
 	PageResponse<ConversationView> search(@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(required = false) String q, @RequestParam(defaultValue = "20") int limit) {
-		currentUserResolver.resolve(userId, sessionToken);
-		return new PageResponse<>(List.of(), null);
+		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		List<Conversation> conversations = messagingService.listConversations(user.id().value(), limit);
+		String query = q != null ? q.toLowerCase() : "";
+		var items = conversations.stream()
+			.filter(c -> query.isEmpty() || (c.title() != null && c.title().toLowerCase().contains(query)))
+			.map(c -> {
+				List<String> pIds = messagingService.getParticipants(c.id()).stream()
+					.map(ConversationParticipant::userId)
+					.toList();
+				return new ConversationView(c.id(), user.id().value(), c.kind(), c.title(), pIds,
+					messagingService.getLastMessageText(c.id()),
+					messagingService.getLastMessageTime(c.id()) != null
+						? messagingService.getLastMessageTime(c.id()).toString() : null,
+					messagingService.countUnread(c.id(), user.id().value()));
+			})
+			.toList();
+		return new PageResponse<>(items, null);
 	}
 
 	@GetMapping("/{conversationId}")
 	ConversationDetailView conversation(@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String conversationId) {
-		currentUserResolver.resolve(userId, sessionToken);
-		return new ConversationDetailView(conversationId, null, "", List.of(), null, 0);
+		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		Conversation c = messagingService.getConversation(conversationId);
+		List<String> pIds = messagingService.getParticipants(c.id()).stream()
+			.map(ConversationParticipant::userId)
+			.toList();
+		return new ConversationDetailView(c.id(), c.kind(), c.title(), pIds,
+			messagingService.getLastMessageText(c.id()),
+			messagingService.countUnread(c.id(), user.id().value()));
 	}
 
 	@GetMapping("/{conversationId}/messages")
@@ -62,7 +105,12 @@ class MessagingContractController {
 			@PathVariable String conversationId, @RequestParam(required = false) String cursor,
 			@RequestParam(defaultValue = "50") int limit) {
 		currentUserResolver.resolve(userId, sessionToken);
-		return new PageResponse<>(List.of(), null);
+		List<Message> msgs = messagingService.getMessages(conversationId, cursor, limit);
+		var items = msgs.stream()
+			.map(m -> new MessageView(m.id(), m.conversationId(), m.senderId(), m.text(),
+				m.createdAt() != null ? m.createdAt().toString() : null))
+			.toList();
+		return new PageResponse<>(items, null);
 	}
 
 	@PostMapping("/{conversationId}/messages")
@@ -71,10 +119,13 @@ class MessagingContractController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String conversationId, @RequestBody SendMessageRequest request) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
-		String hash = idempotency.hash(new SendMessagePayload(conversationId, request));
+		String hash = idempotency.hash(Map.of("conversationId", conversationId, "text", request.text()));
 		return idempotency.execute(user.id(), "POST", "/api/conversations/{conversationId}/messages", idempotencyKey,
-			hash, () -> new CommandResponse(201, new MessageView(newId("message"), conversationId, user.id().value(),
-				request.text(), null)));
+			hash, () -> {
+				Message msg = messagingService.sendMessage(conversationId, user.id().value(), request.text());
+				return new CommandResponse(201, new MessageView(msg.id(), msg.conversationId(), msg.senderId(),
+					msg.text(), msg.createdAt() != null ? msg.createdAt().toString() : null));
+			});
 	}
 
 	@PostMapping("/{conversationId}/read")
@@ -83,9 +134,12 @@ class MessagingContractController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String conversationId) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
-		String hash = idempotency.hash(new ConversationPayload(conversationId));
+		String hash = idempotency.hash(Map.of("conversationId", conversationId));
 		return idempotency.execute(user.id(), "POST", "/api/conversations/{conversationId}/read", idempotencyKey, hash,
-			() -> new CommandResponse(200, new StatusResponse(conversationId, "READ")));
+			() -> {
+				messagingService.markRead(conversationId, user.id().value());
+				return new CommandResponse(200, new StatusResponse(conversationId, "READ"));
+			});
 	}
 
 	@PostMapping
@@ -96,12 +150,16 @@ class MessagingContractController {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
 		String hash = idempotency.hash(request);
 		return idempotency.execute(user.id(), "POST", "/api/conversations", idempotencyKey, hash,
-			() -> new CommandResponse(201, new ConversationDetailView(newId("conversation"), request.kind(),
-				request.title(), request.participantIds(), null, 0)));
-	}
-
-	private String newId(String prefix) {
-		return prefix + "_" + UUID.randomUUID().toString().replace("-", "");
+			() -> {
+				Conversation c = messagingService.createConversation(request.kind(), request.title(),
+					request.participantIds(), user.id().value());
+				List<String> pIds = messagingService.getParticipants(c.id()).stream()
+					.map(ConversationParticipant::userId)
+					.toList();
+				return new CommandResponse(201, new ConversationDetailView(c.id(), c.kind(), c.title(), pIds,
+					messagingService.getLastMessageText(c.id()),
+					messagingService.countUnread(c.id(), user.id().value())));
+			});
 	}
 
 	record ConversationView(String id, String userId, String kind, String title, List<String> participantIds,
@@ -121,9 +179,4 @@ class MessagingContractController {
 	record SendMessageRequest(String text) {
 	}
 
-	record SendMessagePayload(String conversationId, SendMessageRequest request) {
-	}
-
-	record ConversationPayload(String conversationId) {
-	}
 }
