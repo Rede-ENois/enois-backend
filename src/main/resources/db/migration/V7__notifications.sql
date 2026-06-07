@@ -7,9 +7,9 @@ create table notifications (
   body varchar(2000),
   href varchar(500),
   cta_label varchar(255),
-  read boolean not null,
+  `read` boolean not null,
   created_at timestamp not null,
   primary key (id)
 );
 
-create index idx_notifications_user_read_created on notifications (user_id, read, created_at);
+create index idx_notifications_user_read_created on notifications (user_id, `read`, created_at);
