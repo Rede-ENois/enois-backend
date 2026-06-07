@@ -2,7 +2,7 @@ app = "rede"
 primary_region = "iad"
 
 [env]
-  SPRING_PROFILES_ACTIVE = "dev"
+  SPRING_PROFILES_ACTIVE = "qa"
   SERVER_ADDRESS = "0.0.0.0"
   JAVA_TOOL_OPTIONS = "-Xmx256m -Xss512k -XX:MaxMetaspaceSize=128m -XX:ReservedCodeCacheSize=64m -XX:+UseSerialGC -XX:+TieredCompilation -XX:TieredStopAtLevel=1 -Djava.security.egd=file:/dev/./urandom"
 
