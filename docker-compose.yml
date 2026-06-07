@@ -8,10 +8,12 @@ services:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8081/api/health"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 15s
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 180s
+    volumes:
+      - h2_data:/app/data
 
   mariadb:
     image: mariadb:11
@@ -42,5 +44,6 @@ services:
       - mysql_data:/var/lib/mysql
 
 volumes:
+  h2_data:
   mariadb_data:
   mysql_data:
