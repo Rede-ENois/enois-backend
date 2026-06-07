@@ -121,4 +121,12 @@ class UserProfilePersistenceAdapter implements UserProfileRepository {
 			.getSingleResult();
 		return ((Number) result).intValue();
 	}
+
+	@Override
+	public List<UserProfile> findTopByReputation(int limit) {
+		return repository.findByOrderByReputationDesc().stream()
+			.limit(limit)
+			.map(UserProfileJpaEntity::toDomain)
+			.toList();
+	}
 }

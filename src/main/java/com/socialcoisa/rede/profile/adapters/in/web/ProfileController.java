@@ -71,6 +71,11 @@ class ProfileController {
 		return getUserProfileUseCase.getById(userId);
 	}
 
+	@GetMapping("/ranking")
+	Object ranking(@RequestParam(defaultValue = "20") int limit) {
+		return profileService.getRanking(limit);
+	}
+
 	@PatchMapping("/me/profile")
 	ResponseEntity<String> update(@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,

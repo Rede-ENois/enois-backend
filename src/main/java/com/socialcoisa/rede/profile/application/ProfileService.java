@@ -74,7 +74,14 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 				- reports * 50,
 			1000));
 		profile.setCounts(connections, followers, reputation);
+		repository.save(profile);
 		return profile;
+	}
+
+	public List<UserProfileView> getRanking(int limit) {
+		return repository.findTopByReputation(limit).stream()
+			.map(UserProfileView::from)
+			.toList();
 	}
 
 	@Override

@@ -77,6 +77,9 @@ class UserProfileJpaEntity {
 	@Column(name = "is_mentor", nullable = false)
 	private boolean mentor;
 
+	@Column(nullable = false)
+	private int reputation;
+
 	@Column(name = "created_at", nullable = false)
 	private Instant createdAt;
 
@@ -105,13 +108,16 @@ class UserProfileJpaEntity {
 		entity.externalLinks = new ArrayList<>(profile.externalLinks());
 		entity.openToWork = profile.openToWork();
 		entity.mentor = profile.mentor();
+		entity.reputation = profile.reputation();
 		entity.createdAt = profile.createdAt();
 		entity.updatedAt = profile.updatedAt();
 		return entity;
 	}
 
 	UserProfile toDomain() {
-		return UserProfile.restore(id, username, email, name, headline, company, location, avatar, banner, bio, skills,
-			goals, availability, portfolio, externalLinks, openToWork, mentor, createdAt, updatedAt);
+		UserProfile profile = UserProfile.restore(id, username, email, name, headline, company, location, avatar, banner,
+			bio, skills, goals, availability, portfolio, externalLinks, openToWork, mentor, createdAt, updatedAt);
+		profile.setCounts(profile.connectionsCount(), profile.followersCount(), reputation);
+		return profile;
 	}
 }
