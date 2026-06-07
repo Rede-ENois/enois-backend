@@ -49,8 +49,7 @@ public class IdempotencyKeyEntity {
 	@Column(name = "response_status")
 	private Integer responseStatus;
 
-	@Lob
-	@Column(name = "response_body", columnDefinition = "LONGTEXT")
+	@Column(name = "response_body", length = 10000)
 	private String responseBody;
 
 	@Column(name = "created_at", nullable = false)

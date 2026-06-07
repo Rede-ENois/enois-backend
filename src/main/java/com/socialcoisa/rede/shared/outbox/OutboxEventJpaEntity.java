@@ -22,8 +22,7 @@ class OutboxEventJpaEntity {
 	@Column(name = "aggregate_id", nullable = false)
 	private String aggregateId;
 
-	@Lob
-	@Column(nullable = false, columnDefinition = "LONGTEXT")
+	@Column(nullable = false, length = 10000)
 	private String payload;
 
 	@Column(nullable = false)

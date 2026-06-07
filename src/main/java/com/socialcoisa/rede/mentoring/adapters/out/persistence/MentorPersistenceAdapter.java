@@ -79,6 +79,6 @@ class MentorPersistenceAdapter implements MentorRepository {
 
 	@Override
 	public void delete(String mentorId) {
-		mentorRepo.deleteById(mentorId);
+		springData.deleteById(mentorId);
 	}
 }

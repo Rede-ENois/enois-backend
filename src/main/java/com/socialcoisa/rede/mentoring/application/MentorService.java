@@ -43,12 +43,13 @@ public class MentorService {
 			throw new ApiException(403, "FORBIDDEN", "Voce nao e o dono deste perfil de mentor.");
 		}
 		Mentor updated = mentor.update(expertise, price, clock.instant());
-		return repository.save(updated);
+		repository.save(updated);
+		return updated;
 	}
 
 	@Transactional
-	public MentorSlot createSlot(String mentorId, java.time.Instant startsAt, java.time.Instant endsAt) {
-		repository.findById(mentorId)
+	public MentorSlot createSlot(String mentorId, String userId, java.time.Instant startsAt, java.time.Instant endsAt) {
+		Mentor mentor = repository.findById(mentorId)
 			.orElseThrow(() -> new ApiException(404, "MENTOR_NOT_FOUND", "Mentor nao encontrado."));
 		if (!mentor.userId().equals(userId)) {
 			throw new ApiException(403, "FORBIDDEN", "Voce nao e o dono deste perfil de mentor.");

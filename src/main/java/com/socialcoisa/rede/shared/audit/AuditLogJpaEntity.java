@@ -25,8 +25,7 @@ class AuditLogJpaEntity {
 	@Column(name = "target_id", nullable = false)
 	private String targetId;
 
-	@Lob
-	@Column(columnDefinition = "LONGTEXT")
+	@Column(length = 10000)
 	private String metadata;
 
 	@Column(name = "created_at", nullable = false)
