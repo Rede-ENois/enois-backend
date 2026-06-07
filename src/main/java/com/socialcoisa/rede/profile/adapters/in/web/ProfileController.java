@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -27,6 +28,7 @@ import com.socialcoisa.rede.profile.application.port.in.ManageProfileExtensionUs
 import com.socialcoisa.rede.profile.application.port.in.UpdateProfileUseCase;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
+import com.socialcoisa.rede.profile.application.ProfileService;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 
@@ -38,18 +40,20 @@ class ProfileController {
 	private final GetUserProfileUseCase getUserProfileUseCase;
 	private final UpdateProfileUseCase updateProfileUseCase;
 	private final ManageProfileExtensionUseCase profileExtensionUseCase;
+	private final ProfileService profileService;
 	private final CurrentUserResolver currentUserResolver;
 	private final IdempotencyApplicationService idempotency;
 
 	ProfileController(GetMeUseCase getMeUseCase, GetUserProfileUseCase getUserProfileUseCase,
 			UpdateProfileUseCase updateProfileUseCase,
-			ManageProfileExtensionUseCase profileExtensionUseCase,
+			ManageProfileExtensionUseCase profileExtensionUseCase, ProfileService profileService,
 			CurrentUserResolver currentUserResolver,
 			IdempotencyApplicationService idempotency) {
 		this.getMeUseCase = getMeUseCase;
 		this.getUserProfileUseCase = getUserProfileUseCase;
 		this.updateProfileUseCase = updateProfileUseCase;
 		this.profileExtensionUseCase = profileExtensionUseCase;
+		this.profileService = profileService;
 		this.currentUserResolver = currentUserResolver;
 		this.idempotency = idempotency;
 	}

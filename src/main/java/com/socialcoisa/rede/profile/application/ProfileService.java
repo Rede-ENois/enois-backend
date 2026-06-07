@@ -11,6 +11,7 @@ import com.socialcoisa.rede.profile.application.port.in.GetMeUseCase;
 import com.socialcoisa.rede.profile.application.port.in.GetUserProfileUseCase;
 import com.socialcoisa.rede.profile.application.port.in.UpdateProfileUseCase;
 import com.socialcoisa.rede.profile.application.port.out.ProfileExtensionRepository;
+import com.socialcoisa.rede.profile.application.port.out.RecommendationRepository;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -20,12 +21,14 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 
 	private final UserProfileRepository repository;
 	private final ProfileExtensionRepository extensionRepository;
+	private final RecommendationRepository recommendationRepository;
 	private final Clock clock;
 
 	public ProfileService(UserProfileRepository repository, ProfileExtensionRepository extensionRepository,
-			Clock clock) {
+			RecommendationRepository recommendationRepository, Clock clock) {
 		this.repository = repository;
 		this.extensionRepository = extensionRepository;
+		this.recommendationRepository = recommendationRepository;
 		this.clock = clock;
 	}
 
@@ -68,10 +71,11 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 		int events = repository.countEventsAttended(userId);
 		int mentoring = repository.countMentoringSessionsAsMentee(userId);
 		int reports = repository.countApprovedReports(userId);
+		int recommendations = recommendationRepository.findByRecommendedId(userId).size();
 		int reputation = Math.max(0, Math.min(
 			experiences * 10 + educations * 10 + certifications * 5 + connections + followers / 2
 				+ postInteractions + communities * 5 + events * 3 + mentoring * 10
-				- reports * 50,
+				- reports * 50 + recommendations * 20,
 			1000));
 		profile.setCounts(connections, followers, reputation);
 		repository.save(profile);
