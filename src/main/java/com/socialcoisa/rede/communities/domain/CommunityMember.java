@@ -34,6 +34,10 @@ public class CommunityMember {
 
 	public MemberRole role() { return role; }
 
+	public CommunityMember promoteToAdmin() {
+		return new CommunityMember(id, communityId, userId, MemberRole.ADMIN, joinedAt);
+	}
+
 	public Instant joinedAt() { return joinedAt; }
 
 }

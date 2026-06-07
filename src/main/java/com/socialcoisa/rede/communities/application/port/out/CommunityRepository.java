@@ -25,4 +25,5 @@ public interface CommunityRepository {
 
 	List<CommunityMember> findMembersByCommunity(String communityId);
 
+	void delete(String communityId);
 }

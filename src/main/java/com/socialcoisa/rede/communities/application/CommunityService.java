@@ -2,6 +2,7 @@ package com.socialcoisa.rede.communities.application;
 
 import java.time.Clock;
 import java.util.List;
+import java.util.Random;
 import java.util.UUID;
 
 import org.springframework.stereotype.Service;
@@ -66,7 +67,19 @@ public class CommunityService {
 		if (!repository.isMember(communityId, userId)) {
 			throw new ApiException(404, "NOT_MEMBER", "Voce nao e membro desta comunidade.");
 		}
+		boolean wasAdmin = repository.findMembersByCommunity(communityId).stream()
+			.anyMatch(m -> m.userId().equals(userId) && m.role() == MemberRole.ADMIN);
 		repository.removeMember(communityId, userId);
+		int remaining = repository.countMembers(communityId);
+		if (remaining == 0) {
+			repository.delete(communityId);
+			return;
+		}
+		if (wasAdmin) {
+			List<CommunityMember> members = repository.findMembersByCommunity(communityId);
+			CommunityMember newAdmin = members.get(new Random().nextInt(members.size()));
+			repository.saveMember(newAdmin.promoteToAdmin());
+		}
 	}
 
 	public List<Community> list(String topic, java.time.Instant before, int limit) {

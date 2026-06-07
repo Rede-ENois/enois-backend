@@ -73,4 +73,8 @@ class CommunityPersistenceAdapter implements CommunityRepository {
 			.toList();
 	}
 
+	@Override
+	public void delete(String communityId) {
+		springData.deleteById(communityId);
+	}
 }
