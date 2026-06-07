@@ -41,7 +41,12 @@ public class CommunityService {
 		if (!community.createdBy().equals(userId)) {
 			throw new ApiException(403, "FORBIDDEN", "So o criador pode atualizar a comunidade.");
 		}
-		Community updated = community.update(name, description, topic, cover, avatar, clock.instant());
+		String finalName = name != null ? name : community.name();
+		String finalDesc = description != null ? description : community.description();
+		String finalTopic = topic != null ? topic : community.topic();
+		String finalCover = cover != null ? cover : community.cover();
+		String finalAvatar = avatar != null ? avatar : community.avatar();
+		Community updated = community.update(finalName, finalDesc, finalTopic, finalCover, finalAvatar, clock.instant());
 		repository.save(updated);
 		return updated;
 	}
