@@ -84,6 +84,12 @@ public class NetworkService {
 		connectionRepository.save(removed);
 	}
 
+	public String getConnectionStatus(String currentUserId, String targetUserId) {
+		return connectionRepository.findBetweenUsers(currentUserId, targetUserId)
+			.map(c -> c.status().name())
+			.orElse("NONE");
+	}
+
 	public List<UserConnection> getConnections(String userId) {
 		return connectionRepository.findConnections(userId, ConnectionStatus.ACCEPTED);
 	}

@@ -159,6 +159,15 @@ class NetworkContractController {
 			});
 	}
 
+	@GetMapping("/connections/{targetUserId}/status")
+	ConnectionStatusView status(@RequestHeader(value = "X-User-Id", required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String targetUserId) {
+		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		String status = networkService.getConnectionStatus(user.id().value(), targetUserId);
+		return new ConnectionStatusView(targetUserId, status);
+	}
+
 	@DeleteMapping("/connections/{targetUserId}")
 	ResponseEntity<String> remove(@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
@@ -181,5 +190,8 @@ class NetworkContractController {
 	}
 
 	record ConnectionRequestView(String id, String fromUserId, String toUserId, String status, String createdAt) {
+	}
+
+	record ConnectionStatusView(String targetUserId, String status) {
 	}
 }
