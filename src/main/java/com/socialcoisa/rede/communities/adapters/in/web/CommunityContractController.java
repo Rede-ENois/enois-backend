@@ -66,7 +66,7 @@ class CommunityContractController {
 		List<Community> communities = communityService.list(topic, before, limit);
 		var items = communities.stream()
 			.map(c -> new CommunityView(c.id(), c.name(), c.description(),
-				communityService.countMembers(c.id()), c.topic(), c.cover(),
+				communityService.countMembers(c.id()), c.topic(), c.cover(), c.avatar(),
 				user != null && communityService.isMember(c.id(), user.id().value())))
 			.toList();
 		String nextCursor = communities.size() == limit
@@ -81,7 +81,7 @@ class CommunityContractController {
 		CurrentUser user = resolveSafely(userId, sessionToken);
 		Community c = communityService.getById(communityId);
 		return new CommunityView(c.id(), c.name(), c.description(),
-			communityService.countMembers(c.id()), c.topic(), c.cover(),
+			communityService.countMembers(c.id()), c.topic(), c.cover(), c.avatar(),
 			user != null && communityService.isMember(c.id(), user.id().value()));
 	}
 
@@ -103,9 +103,9 @@ class CommunityContractController {
 		return idempotency.execute(user.id(), "POST", "/api/communities", idempotencyKey, hash,
 			() -> {
 				Community c = communityService.create(request.name(), request.description(), request.topic(),
-					request.cover(), user.id().value());
+					request.cover(), request.avatar(), user.id().value());
 				return new CommandResponse(201, new CommunityView(c.id(), c.name(), c.description(),
-					1, c.topic(), c.cover(), true));
+					1, c.topic(), c.cover(), c.avatar(), true));
 			});
 	}
 
@@ -119,9 +119,9 @@ class CommunityContractController {
 		return idempotency.execute(user.id(), "PATCH", "/api/communities/{communityId}", idempotencyKey, hash,
 			() -> {
 				Community c = communityService.update(communityId, request.name(), request.description(),
-					request.topic(), request.cover(), user.id().value());
+					request.topic(), request.cover(), request.avatar(), user.id().value());
 				return new CommandResponse(200, new CommunityView(c.id(), c.name(), c.description(),
-					communityService.countMembers(c.id()), c.topic(), c.cover(),
+					communityService.countMembers(c.id()), c.topic(), c.cover(), c.avatar(),
 					communityService.isMember(c.id(), user.id().value())));
 			});
 	}
@@ -179,16 +179,20 @@ class CommunityContractController {
 	@GetMapping("/{communityId}/feed")
 	FeedPage communityFeed(@PathVariable String communityId,
 			@RequestParam(required = false) String cursor,
-			@RequestParam(defaultValue = "20") int limit) {
+			@RequestParam(defaultValue = "20") int limit,
+			@RequestHeader(value = "X-User-Id", required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = resolveSafely(userId, sessionToken);
 		Instant before = cursor != null ? Instant.parse(cursor) : null;
-		return getFeedService.getCommunityFeed(communityId, before, limit);
+		return getFeedService.getCommunityFeed(communityId, before, limit,
+			user != null ? user.id() : new com.socialcoisa.rede.feed.domain.UserId("anonymous"));
 	}
 
 	record CommunityView(String id, String name, String description, int members, String topic, String cover,
-			boolean joined) {
+			String avatar, boolean joined) {
 	}
 
-	record CommunityRequest(String name, String description, String topic, String cover) {
+	record CommunityRequest(String name, String description, String topic, String cover, String avatar) {
 	}
 
 	record MemberView(String userId, String username, String name, String avatar, String role) {

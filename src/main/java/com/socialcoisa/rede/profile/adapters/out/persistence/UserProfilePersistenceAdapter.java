@@ -112,4 +112,13 @@ class UserProfilePersistenceAdapter implements UserProfileRepository {
 			.getSingleResult();
 		return ((Number) result).intValue();
 	}
+
+	@Override
+	public int countApprovedReports(String userId) {
+		var result = em.createNativeQuery(
+			"select count(*) from reports where target_id in (select id from posts where author_id = :uid) and status = 'APPROVED'")
+			.setParameter("uid", userId)
+			.getSingleResult();
+		return ((Number) result).intValue();
+	}
 }

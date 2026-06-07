@@ -45,4 +45,9 @@ class ReactionJpaEntity {
 		this.reactionType = reactionType;
 		this.createdAt = createdAt;
 	}
+
+	String getPostId() { return postId; }
+	String getUserId() { return userId; }
+	ReactionType getReactionType() { return reactionType; }
+	Instant getCreatedAt() { return createdAt; }
 }

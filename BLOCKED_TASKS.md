@@ -40,17 +40,17 @@ Implementação necessária:
 - O link deve ser: `{FRONTEND_URL}/auth/reset?token={token}`
 - Configurar `FRONTEND_URL` como variável de ambiente
 
-### 4. CDN purge real + Object Store
+### 4. CDN purge real + Object Store ✅
 
-**Arquivos afetados:** `MediaDeletionWorker.java`, `DevMediaStorageGateway.java`
+**Arquivos afetados:** `ImageKitMediaStorageGateway.java`, `ImageKitStorageUrlFactory.java`
 
-`DELETE /api/media/{mediaId}` marca para deleção mas não executa purge real.
-Implementação necessária:
-- Implementar `MediaStorageGateway` real com S3 SDK (`aws-java-sdk-s3`)
-- Implementar `StorageUrlFactory` real com URLs de CDN
-- Configurar `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_BUCKET`, `CDN_DOMAIN`
-- Configurar presigned URLs reais para upload
-- Workers de deleção com purge real no CDN CloudFront/Cloudflare
+`DELETE /api/media/{mediaId}` agora executa purge real no CDN ImageKit.
+
+Implementado:
+- ✅ `ImageKitConfig` — lê credenciais de `rede.media.imagekit.*`
+- ✅ `ImageKitStorageUrlFactory` — gera URLs reais de CDN (`https://ik.imagekit.io/socialcoisa/...`)
+- ✅ `ImageKitMediaStorageGateway` — purge CDN (`POST /files/purge`) + delete (`DELETE /files/by-path/{path}`)
+- ✅ Dev implementations substituídas automaticamente via `@ConditionalOnMissingBean`
 
 ## Prioridade Média
 

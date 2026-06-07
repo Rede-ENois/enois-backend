@@ -37,6 +37,7 @@ import com.socialcoisa.rede.feed.application.port.in.PublishPostUseCase;
 import com.socialcoisa.rede.feed.application.port.in.ReactToPostUseCase;
 import com.socialcoisa.rede.feed.application.port.in.SavePostUseCase;
 import com.socialcoisa.rede.feed.application.port.in.SharePostUseCase;
+import com.socialcoisa.rede.feed.application.port.out.PostInteractionRepository;
 import com.socialcoisa.rede.feed.domain.PostId;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
@@ -62,6 +63,7 @@ class FeedController {
 	private final SharePostUseCase sharePostUseCase;
 	private final IdempotencyApplicationService idempotency;
 	private final CurrentUserResolver currentUserResolver;
+	private final PostInteractionRepository postInteractionRepository;
 	private final CursorCodec cursorCodec;
 
 	FeedController(PublishPostUseCase publishPostUseCase, GetFeedUseCase getFeedUseCase,
@@ -69,7 +71,8 @@ class FeedController {
 			BulkDeletePostsUseCase bulkDeletePostsUseCase, CommentOnPostUseCase commentOnPostUseCase,
 			GetCommentsUseCase getCommentsUseCase, ReactToPostUseCase reactToPostUseCase,
 			SavePostUseCase savePostUseCase, SharePostUseCase sharePostUseCase,
-			IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver, CursorCodec cursorCodec) {
+			IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
+			PostInteractionRepository postInteractionRepository, CursorCodec cursorCodec) {
 		this.publishPostUseCase = publishPostUseCase;
 		this.getFeedUseCase = getFeedUseCase;
 		this.getProfilePostsUseCase = getProfilePostsUseCase;
@@ -82,6 +85,7 @@ class FeedController {
 		this.sharePostUseCase = sharePostUseCase;
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
+		this.postInteractionRepository = postInteractionRepository;
 		this.cursorCodec = cursorCodec;
 	}
 
@@ -224,6 +228,15 @@ class FeedController {
 		return idempotency.execute(user.id(), "DELETE", "/api/feed/posts/{postId}/saves", idempotencyKey, hash,
 			() -> new CommandResponse(200, savePostUseCase.removeSave(new PostActionCommand(user.id(),
 				new PostId(postId)))));
+	}
+
+	@GetMapping("/feed/posts/{postId}/reactions")
+	Object listReactions(@RequestHeader(value = USER_HEADER, required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String postId, @RequestParam(defaultValue = "20") int limit) {
+		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		var reactions = postInteractionRepository.findReactionsByPostId(new PostId(postId), null, limit);
+		return Map.of("postId", postId, "reactions", reactions);
 	}
 
 	@PostMapping("/feed/posts/{postId}/shares")

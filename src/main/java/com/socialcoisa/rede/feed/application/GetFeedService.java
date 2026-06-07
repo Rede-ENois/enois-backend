@@ -18,12 +18,14 @@ import com.socialcoisa.rede.feed.application.port.in.GetFeedUseCase;
 import com.socialcoisa.rede.feed.application.port.in.GetProfilePostsUseCase;
 import com.socialcoisa.rede.feed.application.port.out.ConnectionGraphRepository;
 import com.socialcoisa.rede.feed.application.port.out.FeedCacheRepository;
+import com.socialcoisa.rede.feed.application.port.out.PostInteractionRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.FeedItem;
 import com.socialcoisa.rede.feed.domain.FeedTab;
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
 import com.socialcoisa.rede.feed.domain.PostType;
+import com.socialcoisa.rede.feed.domain.ReactionType;
 import com.socialcoisa.rede.feed.domain.UserId;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
@@ -36,16 +38,18 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase {
 	private final FeedCacheRepository feedCacheRepository;
 	private final ConnectionGraphRepository connectionGraphRepository;
 	private final UserProfileRepository userProfileRepository;
+	private final PostInteractionRepository postInteractionRepository;
 	private final CursorCodec cursorCodec;
 	private static final Instant DEFAULT_BEFORE = Instant.parse("9999-12-31T23:59:59Z");
 
 	public GetFeedService(PostRepository postRepository, FeedCacheRepository feedCacheRepository,
 			ConnectionGraphRepository connectionGraphRepository, UserProfileRepository userProfileRepository,
-			CursorCodec cursorCodec) {
+			PostInteractionRepository postInteractionRepository, CursorCodec cursorCodec) {
 		this.postRepository = postRepository;
 		this.feedCacheRepository = feedCacheRepository;
 		this.connectionGraphRepository = connectionGraphRepository;
 		this.userProfileRepository = userProfileRepository;
+		this.postInteractionRepository = postInteractionRepository;
 		this.cursorCodec = cursorCodec;
 	}
 
@@ -63,7 +67,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase {
 		authors.addAll(connectionGraphRepository.findFriends(query.userId()));
 		authors.addAll(connectionGraphRepository.findFriendsOfFriends(query.userId()));
 		List<Post> posts = postRepository.findActiveByAuthors(authors, before, limit);
-		return page(filterByTab(enrich(posts), query.tab()), limit);
+		return page(filterByTab(enrich(posts, query.userId()), query.tab()), limit);
 	}
 
 	@Override
@@ -72,18 +76,18 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase {
 		int limit = normalizeLimit(query.limit());
 		Instant before = query.before().orElse(DEFAULT_BEFORE);
 		List<Post> posts = postRepository.findActiveByAuthor(new UserId(query.username()), before, limit);
-		return page(enrich(posts), limit);
+		return page(enrich(posts, query.viewerId()), limit);
 	}
 
 	@Transactional(readOnly = true)
-	public FeedPage getCommunityFeed(String communityId, Instant before, int limit) {
+	public FeedPage getCommunityFeed(String communityId, Instant before, int limit, UserId currentUserId) {
 		limit = normalizeLimit(limit);
 		before = before == null ? DEFAULT_BEFORE : before;
 		List<Post> posts = postRepository.findActiveByCommunity(communityId, before, limit);
-		return page(enrich(posts), limit);
+		return page(enrich(posts, currentUserId), limit);
 	}
 
-	private List<PostView> enrich(List<Post> posts) {
+	private List<PostView> enrich(List<Post> posts, UserId currentUserId) {
 		if (posts.isEmpty()) {
 			return List.of();
 		}
@@ -92,13 +96,18 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase {
 			.collect(Collectors.toSet());
 		Map<String, UserProfile> profiles = userProfileRepository.findAllByIds(authorIds).stream()
 			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
+		List<PostId> postIds = posts.stream().map(Post::id).toList();
+		Map<PostId, ReactionType> currentUserReactions = postInteractionRepository
+			.findReactionsByUserAndPostIds(currentUserId, postIds);
 		return posts.stream()
 			.map(post -> {
 				UserProfile profile = profiles.get(post.authorId().value());
-				return PostView.from(post,
+				PostView view = PostView.from(post,
 					profile != null ? profile.username() : null,
 					profile != null ? profile.name() : post.authorId().value(),
 					profile != null ? profile.avatar() : null);
+				ReactionType reaction = currentUserReactions.get(post.id());
+				return reaction != null ? view.withCurrentUserReaction(reaction) : view;
 			})
 			.toList();
 	}
@@ -141,7 +150,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase {
 				ordered.add(post);
 			}
 		}
-		return enrich(ordered).stream()
+		return enrich(ordered, userId).stream()
 			.sorted(Comparator.comparing(PostView::createdAt).reversed())
 			.toList();
 	}

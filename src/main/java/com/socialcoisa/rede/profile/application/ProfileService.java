@@ -67,10 +67,12 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 		int communities = repository.countCommunitiesJoined(userId);
 		int events = repository.countEventsAttended(userId);
 		int mentoring = repository.countMentoringSessionsAsMentee(userId);
-		int reputation = Math.min(
+		int reports = repository.countApprovedReports(userId);
+		int reputation = Math.max(0, Math.min(
 			experiences * 10 + educations * 10 + certifications * 5 + connections + followers / 2
-				+ postInteractions + communities * 5 + events * 3 + mentoring * 10,
-			1000);
+				+ postInteractions + communities * 5 + events * 3 + mentoring * 10
+				- reports * 50,
+			1000));
 		profile.setCounts(connections, followers, reputation);
 		return profile;
 	}

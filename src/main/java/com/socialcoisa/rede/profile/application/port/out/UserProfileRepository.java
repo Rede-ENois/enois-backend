@@ -33,4 +33,6 @@ public interface UserProfileRepository {
 	int countEventsAttended(String userId);
 
 	int countMentoringSessionsAsMentee(String userId);
+
+	int countApprovedReports(String userId);
 }

@@ -28,6 +28,9 @@ class CommunityJpaEntity {
 	@Column(length = 500)
 	private String cover;
 
+	@Column(length = 500)
+	private String avatar;
+
 	@Column(name = "created_by", nullable = false)
 	private String createdBy;
 
@@ -47,6 +50,7 @@ class CommunityJpaEntity {
 		e.description = community.description();
 		e.topic = community.topic();
 		e.cover = community.cover();
+		e.avatar = community.avatar();
 		e.createdBy = community.createdBy();
 		e.createdAt = community.createdAt();
 		e.updatedAt = community.updatedAt();
@@ -54,7 +58,7 @@ class CommunityJpaEntity {
 	}
 
 	Community toDomain() {
-		return Community.restore(id, name, description, topic, cover, createdBy, createdAt, updatedAt);
+		return Community.restore(id, name, description, topic, cover, avatar, createdBy, createdAt, updatedAt);
 	}
 
 }

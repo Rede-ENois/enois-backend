@@ -1,6 +1,10 @@
 package com.socialcoisa.rede.feed.adapters.out.persistence;
 
 import java.time.Instant;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
@@ -47,6 +51,24 @@ class PostInteractionPersistenceAdapter implements PostInteractionRepository {
 				return true;
 			})
 			.orElse(false);
+	}
+
+	@Override
+	public Map<PostId, ReactionType> findReactionsByUserAndPostIds(UserId userId, Collection<PostId> postIds) {
+		List<String> ids = postIds.stream().map(PostId::value).toList();
+		List<ReactionJpaEntity> reactions = reactionRepository.findByPostIdInAndUserId(ids, userId.value());
+		Map<PostId, ReactionType> result = new HashMap<>();
+		for (ReactionJpaEntity r : reactions) {
+			result.put(new PostId(r.getPostId()), r.getReactionType());
+		}
+		return result;
+	}
+
+	@Override
+	public List<ReactionSummary> findReactionsByPostId(PostId postId, Instant before, int limit) {
+		return reactionRepository.findByPostIdOrderByCreatedAtDesc(postId.value()).stream()
+			.map(r -> new ReactionSummary(r.getUserId(), r.getReactionType(), r.getCreatedAt()))
+			.toList();
 	}
 
 	@Override

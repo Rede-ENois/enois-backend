@@ -25,9 +25,9 @@ public class CommunityService {
 	}
 
 	@Transactional
-	public Community create(String name, String description, String topic, String cover, String userId) {
+	public Community create(String name, String description, String topic, String cover, String avatar, String userId) {
 		String id = "community_" + UUID.randomUUID().toString().replace("-", "");
-		Community community = Community.create(id, name, description, topic, cover, userId, clock.instant());
+		Community community = Community.create(id, name, description, topic, cover, avatar, userId, clock.instant());
 		repository.save(community);
 		repository.saveMember(CommunityMember.join(id, userId, MemberRole.ADMIN, clock.instant()));
 		return community;
@@ -35,13 +35,13 @@ public class CommunityService {
 
 	@Transactional
 	public Community update(String communityId, String name, String description, String topic, String cover,
-			String userId) {
+			String avatar, String userId) {
 		Community community = repository.findById(communityId)
 			.orElseThrow(() -> new ApiException(404, "COMMUNITY_NOT_FOUND", "Comunidade nao encontrada."));
 		if (!community.createdBy().equals(userId)) {
 			throw new ApiException(403, "FORBIDDEN", "So o criador pode atualizar a comunidade.");
 		}
-		Community updated = community.update(name, description, topic, cover, clock.instant());
+		Community updated = community.update(name, description, topic, cover, avatar, clock.instant());
 		repository.save(updated);
 		return updated;
 	}

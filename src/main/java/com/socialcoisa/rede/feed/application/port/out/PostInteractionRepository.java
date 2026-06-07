@@ -1,6 +1,9 @@
 package com.socialcoisa.rede.feed.application.port.out;
 
 import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
 
 import com.socialcoisa.rede.feed.domain.PostId;
 import com.socialcoisa.rede.feed.domain.ReactionType;
@@ -17,4 +20,11 @@ public interface PostInteractionRepository {
 	boolean removeSave(PostId postId, UserId userId);
 
 	boolean addShare(String id, PostId postId, UserId userId, Instant createdAt);
+
+	Map<PostId, ReactionType> findReactionsByUserAndPostIds(UserId userId, Collection<PostId> postIds);
+
+	List<ReactionSummary> findReactionsByPostId(PostId postId, Instant before, int limit);
+
+	record ReactionSummary(String userId, ReactionType type, Instant createdAt) {
+	}
 }
