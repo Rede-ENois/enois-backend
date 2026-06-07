@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
@@ -77,6 +78,21 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase {
 		Instant before = query.before().orElse(DEFAULT_BEFORE);
 		List<Post> posts = postRepository.findActiveByAuthor(new UserId(query.username()), before, limit);
 		return page(enrich(posts, query.viewerId()), limit);
+	}
+
+	@Transactional(readOnly = true)
+	public FeedPage getSavedFeed(UserId userId) {
+		List<String> savedIds = postInteractionRepository.findSavedPostIdsByUserId(userId);
+		if (savedIds.isEmpty()) return new FeedPage(List.of(), null);
+		List<PostId> postIds = savedIds.stream().map(PostId::new).toList();
+		List<Post> posts = postRepository.findByIds(postIds).stream()
+			.filter(Post::isActive).toList();
+		List<PostView> enriched = enrich(posts, userId);
+		List<PostView> ordered = savedIds.stream()
+			.map(id -> enriched.stream().filter(p -> p.id().equals(id)).findFirst().orElse(null))
+			.filter(java.util.Objects::nonNull)
+			.toList();
+		return new FeedPage(ordered, null);
 	}
 
 	@Transactional(readOnly = true)

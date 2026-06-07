@@ -261,8 +261,7 @@ class FeedController {
 	Object savedPosts(@RequestHeader(value = USER_HEADER, required = false) String userId,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
-		var savedIds = postInteractionRepository.findSavedPostIdsByUserId(user.id());
-		return Map.of("userId", user.id().value(), "savedPostIds", savedIds);
+		return getFeedUseCase.getSavedFeed(user.id());
 	}
 
 	@PostMapping("/feed/posts/{postId}/shares")
