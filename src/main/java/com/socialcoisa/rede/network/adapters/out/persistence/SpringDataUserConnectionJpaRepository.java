@@ -23,6 +23,10 @@ interface SpringDataUserConnectionJpaRepository extends JpaRepository<UserConnec
 
 	List<UserConnectionJpaEntity> findByReceiverUserIdAndStatus(String receiverUserId, ConnectionStatus status);
 
+	List<UserConnectionJpaEntity> findByRequesterUserIdAndStatusOrReceiverUserIdAndStatus(
+		String requesterUserId, ConnectionStatus requesterStatus,
+		String receiverUserId, ConnectionStatus receiverStatus);
+
 	int countByRequesterUserIdAndStatus(String requesterUserId, ConnectionStatus status);
 
 	int countByReceiverUserIdAndStatus(String receiverUserId, ConnectionStatus status);

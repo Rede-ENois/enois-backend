@@ -50,7 +50,8 @@ class ConnectionPersistenceAdapter implements ConnectionRepository {
 
 	@Override
 	public List<UserConnection> findRequests(String userId, ConnectionStatus status) {
-		return springData.findByReceiverUserIdAndStatus(userId, status).stream()
+		return springData.findByRequesterUserIdAndStatusOrReceiverUserIdAndStatus(userId, status, userId, status)
+			.stream()
 			.map(UserConnectionJpaEntity::toDomain)
 			.toList();
 	}
