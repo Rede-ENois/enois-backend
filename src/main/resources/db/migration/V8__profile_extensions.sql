@@ -9,8 +9,8 @@ create table user_experiences (
   start_date date not null,
   end_date date,
   display_order integer not null default 0,
-  created_at timestamp with time zone not null,
-  updated_at timestamp with time zone not null,
+  created_at timestamp not null,
+  updated_at timestamp not null,
   primary key (id)
 );
 create index idx_user_experiences_user on user_experiences (user_id);
@@ -26,8 +26,8 @@ create table user_education (
   start_date date not null,
   end_date date,
   display_order integer not null default 0,
-  created_at timestamp with time zone not null,
-  updated_at timestamp with time zone not null,
+  created_at timestamp not null,
+  updated_at timestamp not null,
   primary key (id)
 );
 create index idx_user_education_user on user_education (user_id);
@@ -41,8 +41,8 @@ create table user_certifications (
   issue_date date not null,
   expiration_date date,
   credential_url varchar(500),
-  created_at timestamp with time zone not null,
-  updated_at timestamp with time zone not null,
+  created_at timestamp not null,
+  updated_at timestamp not null,
   primary key (id)
 );
 create index idx_user_certifications_user on user_certifications (user_id);

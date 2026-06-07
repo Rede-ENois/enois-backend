@@ -6,9 +6,9 @@ create table reports (
   reason varchar(32) not null,
   description varchar(2000),
   status varchar(32) not null,
-  created_at timestamp with time zone not null,
+  created_at timestamp not null,
   reviewed_by varchar(255),
-  reviewed_at timestamp with time zone,
+  reviewed_at timestamp,
   resolution_note varchar(1000),
   primary key (id)
 );

@@ -9,9 +9,9 @@ create table media_assets (
   cdn_url varchar(500) not null,
   status varchar(32) not null,
   delete_status varchar(32) not null,
-  created_at timestamp with time zone not null,
-  expires_at timestamp with time zone not null,
-  deleted_at timestamp with time zone,
+  created_at timestamp not null,
+  expires_at timestamp not null,
+  deleted_at timestamp,
   primary key (id)
 );
 
@@ -25,9 +25,9 @@ create table media_deletion_jobs (
   owner_id varchar(255) not null,
   status varchar(32) not null,
   attempts integer not null,
-  created_at timestamp with time zone not null,
-  next_attempt_at timestamp with time zone not null,
-  processed_at timestamp with time zone,
+  created_at timestamp not null,
+  next_attempt_at timestamp not null,
+  processed_at timestamp,
   error_message varchar(1024),
   primary key (id)
 );

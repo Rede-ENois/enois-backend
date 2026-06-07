@@ -3,9 +3,9 @@ create table user_connections (
   requester_user_id varchar(255) not null,
   receiver_user_id varchar(255) not null,
   status varchar(32) not null,
-  created_at timestamp with time zone not null,
-  accepted_at timestamp with time zone,
-  removed_at timestamp with time zone,
+  created_at timestamp not null,
+  accepted_at timestamp,
+  removed_at timestamp,
   primary key (id)
 );
 

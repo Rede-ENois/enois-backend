@@ -13,8 +13,8 @@ create table users (
   portfolio varchar(500),
   open_to_work boolean not null,
   is_mentor boolean not null,
-  created_at timestamp with time zone not null,
-  updated_at timestamp with time zone not null,
+  created_at timestamp not null,
+  updated_at timestamp not null,
   primary key (id)
 );
 
@@ -41,8 +41,8 @@ create table user_credentials (
   user_id varchar(255) not null,
   email varchar(255) not null,
   password_hash varchar(500) not null,
-  created_at timestamp with time zone not null,
-  updated_at timestamp with time zone not null,
+  created_at timestamp not null,
+  updated_at timestamp not null,
   primary key (user_id)
 );
 
@@ -51,9 +51,9 @@ alter table user_credentials add constraint uk_user_credentials_email unique (em
 create table auth_sessions (
   token varchar(255) not null,
   user_id varchar(255) not null,
-  created_at timestamp with time zone not null,
-  expires_at timestamp with time zone not null,
-  revoked_at timestamp with time zone,
+  created_at timestamp not null,
+  expires_at timestamp not null,
+  revoked_at timestamp,
   primary key (token)
 );
 
@@ -64,14 +64,14 @@ create table posts (
   author_id varchar(255) not null,
   type varchar(32) not null,
   content varchar(1024) not null,
-  created_at timestamp with time zone not null,
+  created_at timestamp not null,
   visibility varchar(32) not null,
   reactions integer not null,
   comments integer not null,
   saves integer not null,
   shares integer not null,
   status varchar(32) not null,
-  deleted_at timestamp with time zone,
+  deleted_at timestamp,
   primary key (id)
 );
 
@@ -101,9 +101,9 @@ create table idempotency_keys (
   status varchar(32) not null,
   response_status integer,
   response_body clob,
-  created_at timestamp with time zone not null,
-  expires_at timestamp with time zone not null,
-  completed_at timestamp with time zone,
+  created_at timestamp not null,
+  expires_at timestamp not null,
+  completed_at timestamp,
   primary key (id)
 );
 
@@ -116,8 +116,8 @@ create table outbox_events (
   aggregate_id varchar(255) not null,
   payload clob not null,
   status varchar(255) not null,
-  created_at timestamp with time zone not null,
-  next_attempt_at timestamp with time zone not null,
+  created_at timestamp not null,
+  next_attempt_at timestamp not null,
   primary key (id)
 );
 
@@ -125,7 +125,7 @@ create index idx_outbox_status_next_attempt on outbox_events (status, next_attem
 
 create table processed_events (
   event_id varchar(255) not null,
-  processed_at timestamp with time zone not null,
+  processed_at timestamp not null,
   primary key (event_id)
 );
 
@@ -135,7 +135,7 @@ create table audit_logs (
   action varchar(255) not null,
   target_id varchar(255) not null,
   metadata clob,
-  created_at timestamp with time zone not null,
+  created_at timestamp not null,
   primary key (id)
 );
 

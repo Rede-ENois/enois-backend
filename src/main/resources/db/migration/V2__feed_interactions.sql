@@ -4,7 +4,7 @@ create table comments (
   author_id varchar(255) not null,
   parent_comment_id varchar(255),
   content varchar(1024) not null,
-  created_at timestamp with time zone not null,
+  created_at timestamp not null,
   status varchar(32) not null,
   primary key (id)
 );
@@ -17,7 +17,7 @@ create table reactions (
   post_id varchar(255) not null,
   user_id varchar(255) not null,
   reaction_type varchar(32) not null,
-  created_at timestamp with time zone not null,
+  created_at timestamp not null,
   primary key (id)
 );
 
@@ -28,7 +28,7 @@ create table saved_posts (
   id varchar(255) not null,
   post_id varchar(255) not null,
   user_id varchar(255) not null,
-  created_at timestamp with time zone not null,
+  created_at timestamp not null,
   primary key (id)
 );
 
@@ -39,7 +39,7 @@ create table post_shares (
   id varchar(255) not null,
   post_id varchar(255) not null,
   user_id varchar(255) not null,
-  created_at timestamp with time zone not null,
+  created_at timestamp not null,
   primary key (id)
 );
 

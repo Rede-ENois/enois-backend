@@ -8,7 +8,7 @@ create table notifications (
   href varchar(500),
   cta_label varchar(255),
   read boolean not null,
-  created_at timestamp with time zone not null,
+  created_at timestamp not null,
   primary key (id)
 );
 

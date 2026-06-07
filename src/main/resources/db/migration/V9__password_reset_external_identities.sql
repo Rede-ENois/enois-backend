@@ -1,9 +1,9 @@
 create table password_reset_tokens (
   token varchar(255) not null,
   user_id varchar(255) not null,
-  expires_at timestamp with time zone not null,
-  used_at timestamp with time zone,
-  created_at timestamp with time zone not null,
+  expires_at timestamp not null,
+  used_at timestamp,
+  created_at timestamp not null,
   primary key (token)
 );
 
@@ -16,7 +16,7 @@ create table user_external_identities (
   provider varchar(32) not null,
   external_user_id varchar(255) not null,
   email varchar(255),
-  created_at timestamp with time zone not null,
+  created_at timestamp not null,
   primary key (id)
 );
 
