@@ -14,4 +14,6 @@ public interface CommentRepository {
 	Optional<Comment> findById(String id);
 
 	List<Comment> findActiveByPost(PostId postId, Instant before, int limit);
+
+	void deleteById(String id);
 }

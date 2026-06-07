@@ -32,6 +32,11 @@ class CommentPersistenceAdapter implements CommentRepository {
 	}
 
 	@Override
+	public void deleteById(String id) {
+		repository.deleteById(id);
+	}
+
+	@Override
 	public List<Comment> findActiveByPost(PostId postId, Instant before, int limit) {
 		return repository.findByPostIdAndStatusAndCreatedAtBeforeOrderByCreatedAtDesc(postId.value(),
 			CommentStatus.ACTIVE, before, PageRequest.of(0, limit)).stream()

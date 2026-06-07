@@ -36,4 +36,6 @@ class SavedPostJpaEntity {
 		this.userId = userId;
 		this.createdAt = createdAt;
 	}
+
+	String getPostId() { return postId; }
 }

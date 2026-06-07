@@ -54,6 +54,13 @@ class PostInteractionPersistenceAdapter implements PostInteractionRepository {
 	}
 
 	@Override
+	public List<String> findSavedPostIdsByUserId(UserId userId) {
+		return savedPostRepository.findByUserIdOrderByCreatedAtDesc(userId.value()).stream()
+			.map(SavedPostJpaEntity::getPostId)
+			.toList();
+	}
+
+	@Override
 	public Map<PostId, ReactionType> findReactionsByUserAndPostIds(UserId userId, Collection<PostId> postIds) {
 		List<String> ids = postIds.stream().map(PostId::value).toList();
 		List<ReactionJpaEntity> reactions = reactionRepository.findByPostIdInAndUserId(ids, userId.value());

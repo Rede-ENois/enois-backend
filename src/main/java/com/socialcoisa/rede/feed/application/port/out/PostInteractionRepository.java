@@ -21,6 +21,8 @@ public interface PostInteractionRepository {
 
 	boolean addShare(String id, PostId postId, UserId userId, Instant createdAt);
 
+	List<String> findSavedPostIdsByUserId(UserId userId);
+
 	Map<PostId, ReactionType> findReactionsByUserAndPostIds(UserId userId, Collection<PostId> postIds);
 
 	List<ReactionSummary> findReactionsByPostId(PostId postId, Instant before, int limit);

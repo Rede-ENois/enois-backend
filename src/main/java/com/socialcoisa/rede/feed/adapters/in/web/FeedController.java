@@ -33,6 +33,7 @@ import com.socialcoisa.rede.feed.application.port.in.DeletePostUseCase;
 import com.socialcoisa.rede.feed.application.port.in.GetCommentsUseCase;
 import com.socialcoisa.rede.feed.application.port.in.GetFeedUseCase;
 import com.socialcoisa.rede.feed.application.port.in.GetProfilePostsUseCase;
+import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.in.PublishPostUseCase;
 import com.socialcoisa.rede.feed.application.port.in.ReactToPostUseCase;
 import com.socialcoisa.rede.feed.application.port.in.SavePostUseCase;
@@ -64,6 +65,7 @@ class FeedController {
 	private final IdempotencyApplicationService idempotency;
 	private final CurrentUserResolver currentUserResolver;
 	private final PostInteractionRepository postInteractionRepository;
+	private final CommentRepository commentRepository;
 	private final CursorCodec cursorCodec;
 
 	FeedController(PublishPostUseCase publishPostUseCase, GetFeedUseCase getFeedUseCase,
@@ -72,7 +74,8 @@ class FeedController {
 			GetCommentsUseCase getCommentsUseCase, ReactToPostUseCase reactToPostUseCase,
 			SavePostUseCase savePostUseCase, SharePostUseCase sharePostUseCase,
 			IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
-			PostInteractionRepository postInteractionRepository, CursorCodec cursorCodec) {
+			PostInteractionRepository postInteractionRepository, CommentRepository commentRepository,
+			CursorCodec cursorCodec) {
 		this.publishPostUseCase = publishPostUseCase;
 		this.getFeedUseCase = getFeedUseCase;
 		this.getProfilePostsUseCase = getProfilePostsUseCase;
@@ -86,6 +89,7 @@ class FeedController {
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.postInteractionRepository = postInteractionRepository;
+		this.commentRepository = commentRepository;
 		this.cursorCodec = cursorCodec;
 	}
 
@@ -237,6 +241,28 @@ class FeedController {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
 		var reactions = postInteractionRepository.findReactionsByPostId(new PostId(postId), null, limit);
 		return Map.of("postId", postId, "reactions", reactions);
+	}
+
+	@DeleteMapping("/feed/posts/{postId}/comments/{commentId}")
+	ResponseEntity<String> deleteComment(@RequestHeader(value = USER_HEADER, required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@PathVariable String postId, @PathVariable String commentId) {
+		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		String hash = idempotency.hash(Map.of("commentId", commentId, "postId", postId));
+		return idempotency.execute(user.id(), "DELETE", "/api/feed/posts/{postId}/comments/{commentId}", idempotencyKey, hash,
+			() -> {
+				commentRepository.deleteById(commentId);
+				return new CommandResponse(200, Map.of("status", "COMMENT_DELETED"));
+			});
+	}
+
+	@GetMapping("/feed/saved")
+	Object savedPosts(@RequestHeader(value = USER_HEADER, required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		var savedIds = postInteractionRepository.findSavedPostIdsByUserId(user.id());
+		return Map.of("userId", user.id().value(), "savedPostIds", savedIds);
 	}
 
 	@PostMapping("/feed/posts/{postId}/shares")
