@@ -41,9 +41,7 @@ public class NetworkService {
 		if (existing.isPresent()) {
 			var conn = existing.get();
 			return switch (conn.status()) {
-				case PENDING -> throw new ApiException(409, "CONNECTION_ALREADY_REQUESTED",
-					"Solicitacao de conexao ja enviada.");
-				case ACCEPTED -> throw new ApiException(409, "ALREADY_CONNECTED", "Usuarios ja estao conectados.");
+				case PENDING, ACCEPTED -> conn;
 				case REMOVED, BLOCKED -> {
 					var renewed = UserConnection.request(requesterUserId, receiverUserId, clock.instant());
 					connectionRepository.save(renewed);
@@ -60,6 +58,9 @@ public class NetworkService {
 	public UserConnection acceptConnection(String targetUserId, String currentUserId) {
 		var connection = connectionRepository.findBetweenUsers(targetUserId, currentUserId)
 			.orElseThrow(() -> new ApiException(404, "CONNECTION_NOT_FOUND", "Solicitacao de conexao nao encontrada."));
+		if (connection.status() == ConnectionStatus.ACCEPTED) {
+			return connection;
+		}
 		if (connection.status() != ConnectionStatus.PENDING) {
 			throw new ApiException(409, "INVALID_STATUS", "Solicitacao de conexao nao esta pendente.");
 		}
@@ -76,6 +77,9 @@ public class NetworkService {
 		var connection = connectionRepository.findBetweenUsers(currentUserId, targetUserId)
 			.or(() -> connectionRepository.findBetweenUsers(targetUserId, currentUserId))
 			.orElseThrow(() -> new ApiException(404, "CONNECTION_NOT_FOUND", "Conexao nao encontrada."));
+		if (connection.status() == ConnectionStatus.REMOVED) {
+			return;
+		}
 		var removed = connection.remove(clock.instant());
 		connectionRepository.save(removed);
 	}
