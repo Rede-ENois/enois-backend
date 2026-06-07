@@ -12,4 +12,6 @@ interface SpringDataCommentJpaRepository extends JpaRepository<CommentJpaEntity,
 
 	List<CommentJpaEntity> findByPostIdAndStatusAndCreatedAtBeforeOrderByCreatedAtDesc(String postId,
 			CommentStatus status, Instant before, Pageable pageable);
+
+	List<CommentJpaEntity> findByAuthorId(String authorId);
 }

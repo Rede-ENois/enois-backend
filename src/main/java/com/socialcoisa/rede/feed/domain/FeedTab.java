@@ -4,5 +4,7 @@ public enum FeedTab {
 	FOR_YOU,
 	FOLLOWING,
 	DISCUSSIONS,
-	PROJECTS
+	PROJECTS,
+	ALL,
+	RECENT
 }

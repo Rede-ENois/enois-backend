@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.feed.application.port.in.GetFeedUseCase;
 import com.socialcoisa.rede.feed.application.port.in.GetProfilePostsUseCase;
+import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.out.ConnectionGraphRepository;
 import com.socialcoisa.rede.feed.application.port.out.FeedCacheRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostInteractionRepository;
@@ -40,17 +41,20 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase {
 	private final ConnectionGraphRepository connectionGraphRepository;
 	private final UserProfileRepository userProfileRepository;
 	private final PostInteractionRepository postInteractionRepository;
+	private final CommentRepository commentRepository;
 	private final CursorCodec cursorCodec;
 	private static final Instant DEFAULT_BEFORE = Instant.parse("9999-12-31T23:59:59Z");
 
 	public GetFeedService(PostRepository postRepository, FeedCacheRepository feedCacheRepository,
 			ConnectionGraphRepository connectionGraphRepository, UserProfileRepository userProfileRepository,
-			PostInteractionRepository postInteractionRepository, CursorCodec cursorCodec) {
+			PostInteractionRepository postInteractionRepository, CommentRepository commentRepository,
+			CursorCodec cursorCodec) {
 		this.postRepository = postRepository;
 		this.feedCacheRepository = feedCacheRepository;
 		this.connectionGraphRepository = connectionGraphRepository;
 		this.userProfileRepository = userProfileRepository;
 		this.postInteractionRepository = postInteractionRepository;
+		this.commentRepository = commentRepository;
 		this.cursorCodec = cursorCodec;
 	}
 
@@ -59,16 +63,26 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase {
 	public FeedPage getFeed(GetFeedQuery query) {
 		int limit = normalizeLimit(query.limit());
 		Instant before = query.before().orElse(DEFAULT_BEFORE);
-		List<PostView> cached = fromCache(query.userId(), before, limit);
-		if (!cached.isEmpty()) {
-			return page(filterByTab(cached, query.tab()), limit);
-		}
-		Set<UserId> authors = new LinkedHashSet<>();
-		authors.add(query.userId());
-		authors.addAll(connectionGraphRepository.findFriends(query.userId()));
-		authors.addAll(connectionGraphRepository.findFriendsOfFriends(query.userId()));
-		List<Post> posts = postRepository.findActiveByAuthors(authors, before, limit);
-		return page(filterByTab(enrich(posts, query.userId()), query.tab()), limit);
+		FeedTab tab = query.tab() != null ? query.tab() : FeedTab.FOR_YOU;
+		List<Post> posts = switch (tab) {
+			case FOR_YOU, FOLLOWING -> {
+				Set<UserId> authors = new LinkedHashSet<>();
+				authors.add(query.userId());
+				authors.addAll(connectionGraphRepository.findFriends(query.userId()));
+				yield postRepository.findActiveByAuthors(authors, before, limit);
+			}
+			case ALL -> postRepository.findActiveAll(before, limit);
+			case DISCUSSIONS, RECENT -> {
+				List<String> postIds = commentRepository.findPostIdsByAuthor(query.userId().value());
+				yield postRepository.findByIds(postIds.stream().map(PostId::new).toList()).stream()
+					.filter(Post::isActive)
+					.filter(p -> p.createdAt().isBefore(before))
+					.limit(limit)
+					.toList();
+			}
+			case PROJECTS -> postRepository.findActiveByType(PostType.PROJECT, before, limit);
+		};
+		return page(enrich(posts, query.userId()), limit);
 	}
 
 	@Override

@@ -8,6 +8,7 @@ import java.util.Set;
 
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
+import com.socialcoisa.rede.feed.domain.PostType;
 import com.socialcoisa.rede.feed.domain.UserId;
 
 public interface PostRepository {
@@ -23,4 +24,8 @@ public interface PostRepository {
 	List<Post> findActiveByAuthor(UserId authorId, Instant before, int limit);
 
 	List<Post> findActiveByCommunity(String communityId, Instant before, int limit);
+
+	List<Post> findActiveAll(Instant before, int limit);
+
+	List<Post> findActiveByType(PostType type, Instant before, int limit);
 }

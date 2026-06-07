@@ -37,6 +37,14 @@ class CommentPersistenceAdapter implements CommentRepository {
 	}
 
 	@Override
+	public List<String> findPostIdsByAuthor(String authorId) {
+		return repository.findByAuthorId(authorId).stream()
+			.map(CommentJpaEntity::getPostId)
+			.distinct()
+			.toList();
+	}
+
+	@Override
 	public List<Comment> findActiveByPost(PostId postId, Instant before, int limit) {
 		return repository.findByPostIdAndStatusAndCreatedAtBeforeOrderByCreatedAtDesc(postId.value(),
 			CommentStatus.ACTIVE, before, PageRequest.of(0, limit)).stream()

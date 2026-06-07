@@ -13,6 +13,7 @@ import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
 import com.socialcoisa.rede.feed.domain.PostStatus;
+import com.socialcoisa.rede.feed.domain.PostType;
 import com.socialcoisa.rede.feed.domain.UserId;
 
 @Repository
@@ -59,6 +60,22 @@ class PostPersistenceAdapter implements PostRepository {
 	public List<Post> findActiveByAuthor(UserId authorId, Instant before, int limit) {
 		return repository.findByAuthorIdAndStatusAndCreatedAtBeforeOrderByCreatedAtDesc(authorId.value(),
 			PostStatus.ACTIVE, before, PageRequest.of(0, limit)).stream()
+			.map(PostJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public List<Post> findActiveAll(Instant before, int limit) {
+		return repository.findByStatusAndCreatedAtBeforeOrderByCreatedAtDesc(PostStatus.ACTIVE, before,
+			PageRequest.of(0, limit)).stream()
+			.map(PostJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public List<Post> findActiveByType(PostType type, Instant before, int limit) {
+		return repository.findByTypeAndStatusAndCreatedAtBeforeOrderByCreatedAtDesc(type, PostStatus.ACTIVE, before,
+			PageRequest.of(0, limit)).stream()
 			.map(PostJpaEntity::toDomain)
 			.toList();
 	}

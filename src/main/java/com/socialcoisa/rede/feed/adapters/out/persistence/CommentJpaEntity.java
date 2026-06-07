@@ -61,4 +61,6 @@ class CommentJpaEntity {
 	Comment toDomain() {
 		return new Comment(id, new PostId(postId), new UserId(authorId), parentCommentId, content, createdAt, status);
 	}
+
+	String getPostId() { return postId; }
 }

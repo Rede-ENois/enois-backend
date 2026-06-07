@@ -8,6 +8,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import com.socialcoisa.rede.feed.domain.PostStatus;
+import com.socialcoisa.rede.feed.domain.PostType;
 
 interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, String> {
 
@@ -21,4 +22,10 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 
 	List<PostJpaEntity> findByCommunityIdAndStatusAndCreatedAtBeforeOrderByCreatedAtDesc(String communityId,
 			PostStatus status, Instant before, Pageable pageable);
+
+	List<PostJpaEntity> findByStatusAndCreatedAtBeforeOrderByCreatedAtDesc(PostStatus status, Instant before,
+			Pageable pageable);
+
+	List<PostJpaEntity> findByTypeAndStatusAndCreatedAtBeforeOrderByCreatedAtDesc(PostType type, PostStatus status,
+			Instant before, Pageable pageable);
 }
