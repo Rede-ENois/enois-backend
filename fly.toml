@@ -1,0 +1,26 @@
+app = "rede"
+primary_region = "iad"
+
+[env]
+  SPRING_PROFILES_ACTIVE = "dev"
+  JAVA_TOOL_OPTIONS = "-Xmx120m -XX:+UseSerialGC -XX:CICompilerCount=1 -XX:+TieredCompilation -XX:TieredStopAtLevel=1 -Djava.security.egd=file:/dev/./urandom"
+
+[http_service]
+  auto_start_machines = true
+  auto_stop_machines = "off"
+  force_https = true
+  internal_port = 8081
+  min_machines_running = 0
+  processes = ["app"]
+
+  [[http_service.checks]]
+    grace_period = "180s"
+    interval = "15s"
+    method = "GET"
+    path = "/api/health"
+    timeout = "10s"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256
