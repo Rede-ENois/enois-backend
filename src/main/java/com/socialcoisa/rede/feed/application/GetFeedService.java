@@ -153,9 +153,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase {
 
 	private boolean matchesTab(PostView post, FeedTab tab) {
 		return switch (tab) {
-			case FOR_YOU -> true;
-			case FOLLOWING -> true;
-			case DISCUSSIONS -> post.type() == PostType.QUESTION;
+			case FOR_YOU, FOLLOWING, ALL -> true;
+			case DISCUSSIONS, RECENT -> post.type() == PostType.QUESTION;
 			case PROJECTS -> post.type() == PostType.PROJECT;
 		};
 	}
