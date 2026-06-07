@@ -100,7 +100,7 @@ create table idempotency_keys (
   request_hash varchar(255) not null,
   status varchar(32) not null,
   response_status integer,
-  response_body text,
+  response_body longtext,
   created_at timestamp not null,
   expires_at timestamp not null,
   completed_at timestamp,
@@ -114,7 +114,7 @@ create table outbox_events (
   id varchar(255) not null,
   event_type varchar(255) not null,
   aggregate_id varchar(255) not null,
-  payload text not null,
+  payload longtext not null,
   status varchar(255) not null,
   created_at timestamp not null,
   next_attempt_at timestamp not null,
@@ -134,7 +134,7 @@ create table audit_logs (
   actor_id varchar(255) not null,
   action varchar(255) not null,
   target_id varchar(255) not null,
-  metadata text,
+  metadata longtext,
   created_at timestamp not null,
   primary key (id)
 );
