@@ -6,6 +6,7 @@ import java.util.Map;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -85,6 +86,21 @@ class MentoringContractController {
 			() -> {
 				Mentor m = mentorService.create(user.id().value(), request.expertise(), request.price());
 				return new CommandResponse(201, new MentorView(m.id(), m.userId(), m.expertise(), m.rating(),
+					m.sessionsCount(), m.price(), null));
+			});
+	}
+
+	@PatchMapping("/{mentorId}")
+	ResponseEntity<String> update(@RequestHeader(value = "X-User-Id", required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@PathVariable String mentorId, @RequestBody CreateMentorRequest request) {
+		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		String hash = idempotency.hash(Map.of("mentorId", mentorId, "request", request));
+		return idempotency.execute(user.id(), "PATCH", "/api/mentors/{mentorId}", idempotencyKey, hash,
+			() -> {
+				Mentor m = mentorService.update(mentorId, request.expertise(), request.price(), user.id().value());
+				return new CommandResponse(200, new MentorView(m.id(), m.userId(), m.expertise(), m.rating(),
 					m.sessionsCount(), m.price(), null));
 			});
 	}

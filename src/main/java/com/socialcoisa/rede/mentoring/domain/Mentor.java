@@ -35,6 +35,10 @@ public class Mentor {
 		return new Mentor(id, userId, expertise, rating, sessionsCount, price, createdAt, updatedAt);
 	}
 
+	public Mentor update(List<String> expertise, String price, Instant now) {
+		return new Mentor(id, userId, expertise, rating, sessionsCount, price, createdAt, now);
+	}
+
 	public String id() { return id; }
 
 	public String userId() { return userId; }
