@@ -77,4 +77,8 @@ class MentorPersistenceAdapter implements MentorRepository {
 		sessionRepo.save(MentorSessionJpaEntity.fromDomain(session));
 	}
 
+	@Override
+	public void delete(String mentorId) {
+		mentorRepo.deleteById(mentorId);
+	}
 }

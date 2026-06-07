@@ -75,6 +75,16 @@ public class MentorService {
 		return session;
 	}
 
+	@Transactional
+	public void delete(String mentorId, String userId) {
+		Mentor mentor = repository.findById(mentorId)
+			.orElseThrow(() -> new ApiException(404, "MENTOR_NOT_FOUND", "Mentor nao encontrado."));
+		if (!mentor.userId().equals(userId)) {
+			throw new ApiException(403, "FORBIDDEN", "Voce nao e o dono deste perfil de mentor.");
+		}
+		repository.delete(mentorId);
+	}
+
 	public List<Mentor> list(String expertise, java.time.Instant before, int limit) {
 		return repository.findAll(expertise, before, limit);
 	}

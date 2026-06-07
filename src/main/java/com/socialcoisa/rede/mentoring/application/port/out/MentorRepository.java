@@ -25,4 +25,5 @@ public interface MentorRepository {
 
 	void saveSession(MentorSession session);
 
+	void delete(String mentorId);
 }
