@@ -16,4 +16,6 @@ interface SpringDataUserProfileJpaRepository extends JpaRepository<UserProfileJp
 	boolean existsByEmail(String email);
 
 	List<UserProfileJpaEntity> findByOrderByReputationDesc();
+
+	List<UserProfileJpaEntity> findTop20ByNameContainingIgnoreCaseOrUsernameContainingIgnoreCaseOrderByReputationDesc(String name, String username);
 }

@@ -15,6 +15,7 @@ import com.socialcoisa.rede.network.application.port.out.ConnectionRepository;
 import com.socialcoisa.rede.network.domain.ConnectionSuggestion;
 import com.socialcoisa.rede.network.domain.ConnectionStatus;
 import com.socialcoisa.rede.network.domain.UserConnection;
+import com.socialcoisa.rede.notifications.application.NotificationService;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -23,12 +24,14 @@ public class NetworkService {
 
 	private final ConnectionRepository connectionRepository;
 	private final UserProfileRepository userProfileRepository;
+	private final NotificationService notificationService;
 	private final Clock clock;
 
 	public NetworkService(ConnectionRepository connectionRepository, UserProfileRepository userProfileRepository,
-			Clock clock) {
+			NotificationService notificationService, Clock clock) {
 		this.connectionRepository = connectionRepository;
 		this.userProfileRepository = userProfileRepository;
+		this.notificationService = notificationService;
 		this.clock = clock;
 	}
 
@@ -45,13 +48,24 @@ public class NetworkService {
 				case REMOVED, BLOCKED -> {
 					var renewed = UserConnection.request(requesterUserId, receiverUserId, clock.instant());
 					connectionRepository.save(renewed);
+					notifyConnectionRequest(requesterUserId, receiverUserId);
 					yield renewed;
 				}
 			};
 		}
 		var connection = UserConnection.request(requesterUserId, receiverUserId, clock.instant());
 		connectionRepository.save(connection);
+		notifyConnectionRequest(requesterUserId, receiverUserId);
 		return connection;
+	}
+
+	private void notifyConnectionRequest(String requesterUserId, String receiverUserId) {
+		userProfileRepository.findById(requesterUserId).ifPresent(requester ->
+			notificationService.create(receiverUserId, "CONNECTION_REQUEST", requesterUserId,
+				"Solicitação de conexão",
+				requester.name() + " quer se conectar com você.",
+				"/api/network/requests", "Ver")
+		);
 	}
 
 	@Transactional
@@ -69,6 +83,12 @@ public class NetworkService {
 		}
 		var accepted = connection.accept(clock.instant());
 		connectionRepository.save(accepted);
+		userProfileRepository.findById(currentUserId).ifPresent(accepter ->
+			notificationService.create(targetUserId, "CONNECTION_ACCEPTED", currentUserId,
+				"Conexão aceita",
+				accepter.name() + " aceitou sua solicitação de conexão.",
+				"/api/network/connections/" + currentUserId, "Ver")
+		);
 		return accepted;
 	}
 

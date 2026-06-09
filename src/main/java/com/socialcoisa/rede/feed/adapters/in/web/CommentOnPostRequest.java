@@ -1,4 +1,6 @@
 package com.socialcoisa.rede.feed.adapters.in.web;
 
-public record CommentOnPostRequest(String parentCommentId, String content) {
+import java.util.List;
+
+public record CommentOnPostRequest(String parentCommentId, String content, List<String> mentionedUserIds) {
 }

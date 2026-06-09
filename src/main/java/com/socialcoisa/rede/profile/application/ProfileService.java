@@ -82,6 +82,12 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 		return profile;
 	}
 
+	public List<UserProfileView> search(String query) {
+		return repository.searchByQuery(query).stream()
+			.map(UserProfileView::from)
+			.toList();
+	}
+
 	public List<UserProfileView> getRanking(int limit) {
 		return repository.findTopByReputation(limit).stream()
 			.map(UserProfileView::from)
@@ -93,11 +99,27 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 	public UserProfileView update(UpdateProfileCommand command) {
 		UserProfile profile = repository.findById(command.userId())
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
+		String username = trim(command.username());
+		if (username != null && !username.equals(profile.username())) {
+			String slug = slug(username);
+			if (repository.existsByUsername(slug)) {
+				throw new ApiException(409, "USERNAME_TAKEN", "Nome de usuario ja esta em uso.");
+			}
+			username = slug;
+		}
 		profile.update(trim(command.name()), trim(command.headline()), trim(command.company()), trim(command.location()),
 			trim(command.avatar()), trim(command.banner()), trim(command.bio()), clean(command.skills()),
 			clean(command.goals()), trim(command.availability()), trim(command.portfolio()), clean(command.externalLinks()),
-			command.openToWork(), command.isMentor(), clock.instant());
+			command.openToWork(), command.isMentor(), username, clock.instant());
 		return UserProfileView.from(repository.save(profile));
+	}
+
+	private String slug(String value) {
+		if (!StringUtils.hasText(value)) return null;
+		String slug = value.toLowerCase(java.util.Locale.ROOT)
+			.replaceAll("[^a-z0-9]+", "-")
+			.replaceAll("(^-|-$)", "");
+		return StringUtils.hasText(slug) ? slug : null;
 	}
 
 	private String trim(String value) {

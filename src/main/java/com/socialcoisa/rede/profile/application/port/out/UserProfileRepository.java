@@ -37,4 +37,6 @@ public interface UserProfileRepository {
 	int countApprovedReports(String userId);
 
 	List<UserProfile> findTopByReputation(int limit);
+
+	List<UserProfile> searchByQuery(String query);
 }

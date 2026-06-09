@@ -102,7 +102,7 @@ class FeedController {
 		String hash = idempotency.hash(request);
 		return idempotency.execute(user.id(), "POST", "/api/feed/posts", idempotencyKey, hash, () -> new CommandResponse(201,
 			publishPostUseCase.publish(new PublishPostCommand(user.id(), request.type(), request.content(),
-				request.tags(), request.mediaIds(), request.communityId()))));
+				request.tags(), request.mediaIds(), request.communityId(), request.mentionedUserIds()))));
 	}
 
 	@GetMapping("/feed")
@@ -172,7 +172,7 @@ class FeedController {
 		String hash = idempotency.hash(payload);
 		return idempotency.execute(user.id(), "POST", "/api/feed/posts/{postId}/comments", idempotencyKey, hash,
 			() -> new CommandResponse(201, commentOnPostUseCase.comment(new CommentOnPostCommand(user.id(),
-				new PostId(postId), request.parentCommentId(), request.content()))));
+				new PostId(postId), request.parentCommentId(), request.content(), request.mentionedUserIds()))));
 	}
 
 	@GetMapping("/feed/posts/{postId}/comments")

@@ -129,4 +129,12 @@ class UserProfilePersistenceAdapter implements UserProfileRepository {
 			.map(UserProfileJpaEntity::toDomain)
 			.toList();
 	}
+
+	@Override
+	public List<UserProfile> searchByQuery(String query) {
+		return repository.findTop20ByNameContainingIgnoreCaseOrUsernameContainingIgnoreCaseOrderByReputationDesc(query, query)
+			.stream()
+			.map(UserProfileJpaEntity::toDomain)
+			.toList();
+	}
 }

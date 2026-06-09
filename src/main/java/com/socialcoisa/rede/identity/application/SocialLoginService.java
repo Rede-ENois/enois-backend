@@ -1,9 +1,12 @@
 package com.socialcoisa.rede.identity.application;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
@@ -12,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import com.socialcoisa.rede.identity.adapters.out.oauth.OAuthProperties;
 import com.socialcoisa.rede.identity.application.port.in.OAuthStartResponse;
 import com.socialcoisa.rede.identity.application.port.in.OAuthUseCase;
 import com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository;
@@ -29,35 +33,73 @@ public class SocialLoginService implements OAuthUseCase {
 
 	private static final Duration SESSION_TTL = Duration.ofDays(7);
 
-	private final TokenValidator tokenValidator;
+	private final List<TokenValidator> tokenValidators;
 	private final UserExternalIdentityRepository externalIdentityRepository;
 	private final UserProfileRepository userProfileRepository;
 	private final CredentialRepository credentialRepository;
 	private final AuthSessionRepository authSessionRepository;
 	private final PasswordHasher passwordHasher;
+	private final OAuthProperties oAuthProperties;
 	private final Clock clock;
 
-	public SocialLoginService(TokenValidator tokenValidator,
+	public SocialLoginService(List<TokenValidator> tokenValidators,
 			UserExternalIdentityRepository externalIdentityRepository,
 			UserProfileRepository userProfileRepository,
 			CredentialRepository credentialRepository,
 			AuthSessionRepository authSessionRepository,
 			PasswordHasher passwordHasher,
+			OAuthProperties oAuthProperties,
 			Clock clock) {
-		this.tokenValidator = tokenValidator;
+		this.tokenValidators = tokenValidators;
 		this.externalIdentityRepository = externalIdentityRepository;
 		this.userProfileRepository = userProfileRepository;
 		this.credentialRepository = credentialRepository;
 		this.authSessionRepository = authSessionRepository;
 		this.passwordHasher = passwordHasher;
+		this.oAuthProperties = oAuthProperties;
 		this.clock = clock;
 	}
 
 	@Override
 	public OAuthStartResponse start(OAuthProvider provider) {
 		String state = "state_" + UUID.randomUUID().toString().replace("-", "");
-		String authorizationUrl = "/api/auth/oauth/" + provider.name().toLowerCase() + "/callback?state=" + state;
+		String authorizationUrl = buildAuthorizationUrl(provider, state);
 		return new OAuthStartResponse(provider, state, authorizationUrl);
+	}
+
+	private String buildAuthorizationUrl(OAuthProvider provider, String state) {
+		return switch (provider) {
+			case GOOGLE -> {
+				var config = oAuthProperties.getGoogle();
+				if (!StringUtils.hasText(config.getClientId())) {
+					throw new ApiException(501, "OAUTH_NOT_CONFIGURED",
+						"Login com Google nao configurado. Configure GOOGLE_CLIENT_ID.");
+				}
+				yield String.format(
+					"https://accounts.google.com/o/oauth2/v2/auth?client_id=%s&redirect_uri=%s&response_type=code&scope=openid+email+profile&state=%s",
+					urlEncode(config.getClientId()),
+					urlEncode(config.getRedirectUri()),
+					urlEncode(state)
+				);
+			}
+			case APPLE -> {
+				var config = oAuthProperties.getApple();
+				if (!StringUtils.hasText(config.getClientId())) {
+					throw new ApiException(501, "OAUTH_NOT_CONFIGURED",
+						"Login com Apple nao configurado. Configure APPLE_CLIENT_ID.");
+				}
+				yield String.format(
+					"https://appleid.apple.com/auth/authorize?client_id=%s&redirect_uri=%s&response_type=code&scope=name+email&response_mode=form_post&state=%s",
+					urlEncode(config.getClientId()),
+					urlEncode(config.getRedirectUri()),
+					urlEncode(state)
+				);
+			}
+		};
+	}
+
+	private String urlEncode(String value) {
+		return URLEncoder.encode(value, StandardCharsets.UTF_8);
 	}
 
 	@Override
@@ -66,9 +108,13 @@ public class SocialLoginService implements OAuthUseCase {
 		if (!StringUtils.hasText(code)) {
 			throw new ApiException(400, "INVALID_OAUTH_CODE", "Codigo de autorizacao obrigatorio.");
 		}
-		TokenValidationResult validation = tokenValidator.validate(provider, code)
+		TokenValidationResult validation = tokenValidators.stream()
+			.map(v -> v.validate(provider, code))
+			.filter(Optional::isPresent)
+			.findFirst()
 			.orElseThrow(() -> new ApiException(401, "INVALID_OAUTH_TOKEN",
-				"Falha ao validar token do " + provider.name() + "."));
+				"Falha ao validar token do " + provider.name() + "."))
+			.get();
 		String userId = findOrCreateUser(provider, validation);
 		return createSession(userId);
 	}

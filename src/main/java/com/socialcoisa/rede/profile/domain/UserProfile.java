@@ -6,7 +6,7 @@ import java.util.List;
 public class UserProfile {
 
 	private final String id;
-	private final String username;
+	private String username;
 	private final String email;
 	private String name;
 	private String headline;
@@ -69,7 +69,7 @@ public class UserProfile {
 
 	public void update(String name, String headline, String company, String location, String avatar, String banner,
 			String bio, List<String> skills, List<String> goals, String availability, String portfolio,
-			List<String> externalLinks, Boolean openToWork, Boolean mentor, Instant now) {
+			List<String> externalLinks, Boolean openToWork, Boolean mentor, String username, Instant now) {
 		this.name = keep(name, this.name);
 		this.headline = keep(headline, this.headline);
 		this.company = keep(company, this.company);
@@ -84,6 +84,7 @@ public class UserProfile {
 		this.externalLinks = externalLinks == null ? this.externalLinks : List.copyOf(externalLinks);
 		this.openToWork = openToWork == null ? this.openToWork : openToWork;
 		this.mentor = mentor == null ? this.mentor : mentor;
+		this.username = keep(username, this.username);
 		this.updatedAt = now;
 	}
 

@@ -5,5 +5,5 @@ import java.util.List;
 import com.socialcoisa.rede.feed.domain.PostType;
 
 public record PublishPostRequest(PostType type, String content, List<String> tags, List<String> mediaIds,
-		String communityId) {
+		String communityId, List<String> mentionedUserIds) {
 }

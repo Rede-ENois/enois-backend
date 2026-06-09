@@ -13,6 +13,7 @@ import com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.media.application.port.in.ValidateMediaOwnershipUseCase;
+import com.socialcoisa.rede.notifications.application.NotificationService;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 @Service
@@ -24,16 +25,22 @@ public class PublishPostService implements PublishPostUseCase {
 	private final FeedDistributionService feedDistributionService;
 	private final OutboxEventRepository outboxEventRepository;
 	private final ValidateMediaOwnershipUseCase validateMediaOwnershipUseCase;
+	private final NotificationService notificationService;
+	private final com.socialcoisa.rede.profile.application.port.out.UserProfileRepository userProfileRepository;
 
 	public PublishPostService(PostRepository postRepository, IdGenerator idGenerator, Clock clock,
 			FeedDistributionService feedDistributionService, OutboxEventRepository outboxEventRepository,
-			ValidateMediaOwnershipUseCase validateMediaOwnershipUseCase) {
+			ValidateMediaOwnershipUseCase validateMediaOwnershipUseCase,
+			NotificationService notificationService,
+			com.socialcoisa.rede.profile.application.port.out.UserProfileRepository userProfileRepository) {
 		this.postRepository = postRepository;
 		this.idGenerator = idGenerator;
 		this.clock = clock;
 		this.feedDistributionService = feedDistributionService;
 		this.outboxEventRepository = outboxEventRepository;
 		this.validateMediaOwnershipUseCase = validateMediaOwnershipUseCase;
+		this.notificationService = notificationService;
+		this.userProfileRepository = userProfileRepository;
 	}
 
 	@Override
@@ -57,7 +64,21 @@ public class PublishPostService implements PublishPostUseCase {
 		Post saved = postRepository.save(post);
 		feedDistributionService.distribute(saved);
 		outboxEventRepository.append("PostPublished", saved.id().value(), "{\"postId\":\"" + saved.id().value() + "\"}");
+		notifyMentions(command.mentionedUserIds(), command.authorId().value(), saved.id().value(), "post");
 		return PostView.from(saved);
+	}
+
+	private void notifyMentions(List<String> mentionedUserIds, String actorId, String postId, String kind) {
+		if (mentionedUserIds == null) return;
+		for (String mentionedId : mentionedUserIds.stream().filter(StringUtils::hasText).map(String::trim).distinct().toList()) {
+			if (mentionedId.equals(actorId)) continue;
+			if (userProfileRepository.findById(mentionedId).isEmpty()) continue;
+			String title = "Menção em " + ("post".equals(kind) ? "publicação" : "comentário");
+			String href = "/api/feed/posts/" + postId;
+			notificationService.create(mentionedId, "MENTION", actorId, title,
+				"Você foi mencionado em um " + ("post".equals(kind) ? "publicação" : "comentário") + ".",
+				href, "Ver");
+		}
 	}
 
 	private void validate(PublishPostCommand command) {

@@ -8,6 +8,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.util.List;
+
 import com.socialcoisa.rede.feed.application.port.in.CommentOnPostUseCase;
 import com.socialcoisa.rede.feed.application.port.in.GetCommentsUseCase;
 import com.socialcoisa.rede.feed.application.port.in.ReactToPostUseCase;
@@ -21,6 +23,7 @@ import com.socialcoisa.rede.feed.domain.Comment;
 import com.socialcoisa.rede.feed.domain.CommentStatus;
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
+import com.socialcoisa.rede.notifications.application.NotificationService;
 import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.CursorCodec;
 
@@ -36,16 +39,22 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 	private final OutboxEventRepository outboxEventRepository;
 	private final CursorCodec cursorCodec;
 	private final Clock clock;
+	private final NotificationService notificationService;
+	private final com.socialcoisa.rede.profile.application.port.out.UserProfileRepository userProfileRepository;
 
 	public PostInteractionService(PostRepository postRepository, CommentRepository commentRepository,
 			PostInteractionRepository postInteractionRepository, OutboxEventRepository outboxEventRepository,
-			CursorCodec cursorCodec, Clock clock) {
+			CursorCodec cursorCodec, Clock clock,
+			NotificationService notificationService,
+			com.socialcoisa.rede.profile.application.port.out.UserProfileRepository userProfileRepository) {
 		this.postRepository = postRepository;
 		this.commentRepository = commentRepository;
 		this.postInteractionRepository = postInteractionRepository;
 		this.outboxEventRepository = outboxEventRepository;
 		this.cursorCodec = cursorCodec;
 		this.clock = clock;
+		this.notificationService = notificationService;
+		this.userProfileRepository = userProfileRepository;
 	}
 
 	@Override
@@ -61,7 +70,20 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 		postRepository.save(post);
 		outboxEventRepository.append("PostCommented", post.id().value(), "{\"postId\":\"" + post.id().value()
 			+ "\",\"commentId\":\"" + saved.id() + "\",\"authorId\":\"" + command.authorId() + "\"}");
+		notifyMentions(command.mentionedUserIds(), command.authorId().value(), post.id().value());
 		return CommentView.from(saved);
+	}
+
+	private void notifyMentions(List<String> mentionedUserIds, String actorId, String postId) {
+		if (mentionedUserIds == null) return;
+		for (String mentionedId : mentionedUserIds.stream().filter(StringUtils::hasText).map(String::trim).distinct().toList()) {
+			if (mentionedId.equals(actorId)) continue;
+			if (userProfileRepository.findById(mentionedId).isEmpty()) continue;
+			notificationService.create(mentionedId, "MENTION", actorId,
+				"Menção em comentário",
+				"Você foi mencionado em um comentário.",
+				"/api/feed/posts/" + postId, "Ver");
+		}
 	}
 
 	@Override

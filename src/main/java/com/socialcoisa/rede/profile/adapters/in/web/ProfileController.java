@@ -18,6 +18,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+import org.springframework.util.StringUtils;
+
 import com.socialcoisa.rede.profile.application.UpdateProfileCommand;
 import com.socialcoisa.rede.profile.application.port.in.GetMeUseCase;
 import com.socialcoisa.rede.profile.application.port.in.GetUserProfileUseCase;
@@ -75,6 +77,14 @@ class ProfileController {
 		return getUserProfileUseCase.getById(userId);
 	}
 
+	@GetMapping("/users/search")
+	Object searchUsers(@RequestParam String q) {
+		if (!StringUtils.hasText(q) || q.trim().length() < 2) {
+			return List.of();
+		}
+		return profileService.search(q.trim());
+	}
+
 	@GetMapping("/ranking")
 	Object ranking(@RequestParam(defaultValue = "20") int limit) {
 		return profileService.getRanking(limit);
@@ -91,7 +101,8 @@ class ProfileController {
 			() -> new CommandResponse(200, updateProfileUseCase.update(new UpdateProfileCommand(user.id().value(),
 				request.name(), request.headline(), request.company(), request.location(), request.avatar(),
 				request.banner(), request.bio(), request.skills(), request.goals(), request.availability(),
-				request.portfolio(), request.externalLinks(), request.openToWork(), request.isMentor()))));
+				request.portfolio(), request.externalLinks(), request.openToWork(), request.isMentor(),
+				request.username()))));
 	}
 
 	private CurrentUser resolve(String userId, String sessionToken) {
