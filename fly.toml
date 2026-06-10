@@ -4,7 +4,7 @@ primary_region = "iad"
 [env]
   SPRING_PROFILES_ACTIVE = "qa"
   SERVER_ADDRESS = "0.0.0.0"
-  JAVA_TOOL_OPTIONS = "-Xmx256m -Xss512k -XX:MaxMetaspaceSize=128m -XX:ReservedCodeCacheSize=64m -XX:+UseSerialGC -XX:+TieredCompilation -XX:TieredStopAtLevel=1 -Djava.security.egd=file:/dev/./urandom"
+  JAVA_TOOL_OPTIONS = "-Xmx1536m -Xss512k -XX:MaxMetaspaceSize=256m -XX:ReservedCodeCacheSize=128m -XX:+UseParallelGC -XX:+TieredCompilation -XX:TieredStopAtLevel=1 -Djava.security.egd=file:/dev/./urandom"
 
 [http_service]
   auto_start_machines = true
@@ -16,5 +16,5 @@ primary_region = "iad"
 
 [[vm]]
   cpu_kind = "shared"
-  cpus = 1
-  memory_mb = 512
+  cpus = 2
+  memory_mb = 2048
