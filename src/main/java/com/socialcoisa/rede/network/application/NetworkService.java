@@ -64,7 +64,7 @@ public class NetworkService {
 			notificationService.create(receiverUserId, "CONNECTION_REQUEST", requesterUserId,
 				"Solicitação de conexão",
 				requester.name() + " quer se conectar com você.",
-				"/api/network/requests", "Ver")
+				"/api/network/connections/" + requesterUserId + "/accept", "Aceitar")
 		);
 	}
 

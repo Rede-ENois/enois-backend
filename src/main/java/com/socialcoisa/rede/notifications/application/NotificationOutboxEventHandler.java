@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
+import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.shared.outbox.OutboxEventHandler;
 
 @Component
@@ -16,10 +17,13 @@ class NotificationOutboxEventHandler implements OutboxEventHandler {
 
 	private final NotificationService notificationService;
 	private final PostRepository postRepository;
+	private final UserProfileRepository userProfileRepository;
 
-	NotificationOutboxEventHandler(NotificationService notificationService, PostRepository postRepository) {
+	NotificationOutboxEventHandler(NotificationService notificationService, PostRepository postRepository,
+			UserProfileRepository userProfileRepository) {
 		this.notificationService = notificationService;
 		this.postRepository = postRepository;
+		this.userProfileRepository = userProfileRepository;
 	}
 
 	@Override
@@ -43,8 +47,10 @@ class NotificationOutboxEventHandler implements OutboxEventHandler {
 		Post post = postRepository.findById(new PostId(postId)).orElse(null);
 		if (post == null) return;
 		if (post.authorId().value().equals(authorId)) return;
+		String actorName = userProfileRepository.findById(authorId)
+			.map(p -> p.name()).orElse("Alguém");
 		notificationService.create(post.authorId().value(), "NEW_COMMENT", authorId,
-			"Novo comentario", "Alguem comentou no seu post.",
+			"Novo comentário", actorName + " comentou no seu post.",
 			"/api/feed/posts/" + postId, "Ver");
 	}
 
@@ -55,8 +61,10 @@ class NotificationOutboxEventHandler implements OutboxEventHandler {
 		Post post = postRepository.findById(new PostId(postId)).orElse(null);
 		if (post == null) return;
 		if (post.authorId().value().equals(authorId)) return;
+		String actorName = userProfileRepository.findById(authorId)
+			.map(p -> p.name()).orElse("Alguém");
 		notificationService.create(post.authorId().value(), "NEW_REACTION", authorId,
-			"Nova reacao", "Alguem reagiu ao seu post.",
+			"Nova reação", actorName + " reagiu ao seu post.",
 			"/api/feed/posts/" + postId, "Ver");
 	}
 
