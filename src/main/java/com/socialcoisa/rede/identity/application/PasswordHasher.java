@@ -33,7 +33,13 @@ class PasswordHasher {
 		}
 		byte[] salt = Base64.getDecoder().decode(parts[1]);
 		byte[] expected = Base64.getDecoder().decode(parts[2]);
-		byte[] actual = pbkdf2(password, salt, Integer.parseInt(parts[0]));
+		int iterations;
+		try {
+			iterations = Integer.parseInt(parts[0]);
+		} catch (NumberFormatException e) {
+			return false;
+		}
+		byte[] actual = pbkdf2(password, salt, iterations);
 		return MessageDigest.isEqual(expected, actual);
 	}
 

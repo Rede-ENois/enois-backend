@@ -25,6 +25,7 @@ import com.socialcoisa.rede.identity.application.port.in.GetAuthenticatedUserUse
 import com.socialcoisa.rede.identity.application.port.in.LoginUseCase;
 import com.socialcoisa.rede.identity.application.port.in.LogoutUseCase;
 import com.socialcoisa.rede.identity.application.port.in.OAuthUseCase;
+import com.socialcoisa.rede.identity.application.port.in.RefreshSessionUseCase;
 import com.socialcoisa.rede.identity.application.port.in.RequestPasswordResetUseCase;
 import com.socialcoisa.rede.identity.application.port.in.ResetPasswordUseCase;
 import com.socialcoisa.rede.identity.application.port.in.SignupUseCase;
@@ -43,6 +44,7 @@ class AuthController {
 	private final LogoutUseCase logoutUseCase;
 	private final GetAuthenticatedUserUseCase getAuthenticatedUserUseCase;
 	private final OAuthUseCase oAuthUseCase;
+	private final RefreshSessionUseCase refreshSessionUseCase;
 	private final RequestPasswordResetUseCase requestPasswordResetUseCase;
 	private final ResetPasswordUseCase resetPasswordUseCase;
 	private final IdempotencyApplicationService idempotency;
@@ -51,6 +53,7 @@ class AuthController {
 	AuthController(SignupUseCase signupUseCase, LoginUseCase loginUseCase, LogoutUseCase logoutUseCase,
 			GetAuthenticatedUserUseCase getAuthenticatedUserUseCase,
 			OAuthUseCase oAuthUseCase,
+			RefreshSessionUseCase refreshSessionUseCase,
 			RequestPasswordResetUseCase requestPasswordResetUseCase,
 			ResetPasswordUseCase resetPasswordUseCase,
 			IdempotencyApplicationService idempotency,
@@ -60,6 +63,7 @@ class AuthController {
 		this.logoutUseCase = logoutUseCase;
 		this.getAuthenticatedUserUseCase = getAuthenticatedUserUseCase;
 		this.oAuthUseCase = oAuthUseCase;
+		this.refreshSessionUseCase = refreshSessionUseCase;
 		this.requestPasswordResetUseCase = requestPasswordResetUseCase;
 		this.resetPasswordUseCase = resetPasswordUseCase;
 		this.idempotency = idempotency;
@@ -73,7 +77,7 @@ class AuthController {
 		String scope = authScope(request.email());
 		String hash = idempotency.hash(request);
 		return idempotency.execute(scope, "POST", "/api/auth/signup", idempotencyKey, hash, () -> new CommandResponse(201,
-			signupUseCase.signup(new SignupCommand(request.name(), request.role(), request.email(), request.password()))));
+			signupUseCase.signup(new SignupCommand(request.name(), "USER", request.email(), request.password()))));
 	}
 
 	@PostMapping("/login")
@@ -123,6 +127,11 @@ class AuthController {
 		return auth;
 	}
 
+	@PostMapping("/refresh")
+	Object refreshSession(@RequestBody RefreshRequest request) {
+		return refreshSessionUseCase.refresh(request.refreshToken());
+	}
+
 	@PostMapping("/oauth/{provider}/token")
 	@RateLimiter(name = "auth")
 	Object oauthToken(@PathVariable String provider, @RequestBody OAuthTokenRequest request) {
@@ -131,6 +140,9 @@ class AuthController {
 	}
 
 	record OAuthTokenRequest(String idToken) {
+	}
+
+	record RefreshRequest(String refreshToken) {
 	}
 
 	private OAuthProvider parseProvider(String value) {

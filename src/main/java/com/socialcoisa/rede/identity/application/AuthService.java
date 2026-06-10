@@ -8,6 +8,7 @@ import java.util.Base64;
 import java.util.Locale;
 import java.util.UUID;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -15,6 +16,7 @@ import org.springframework.util.StringUtils;
 import com.socialcoisa.rede.identity.application.port.in.GetAuthenticatedUserUseCase;
 import com.socialcoisa.rede.identity.application.port.in.LoginUseCase;
 import com.socialcoisa.rede.identity.application.port.in.LogoutUseCase;
+import com.socialcoisa.rede.identity.application.port.in.RefreshSessionUseCase;
 import com.socialcoisa.rede.identity.application.port.in.RequestPasswordResetUseCase;
 import com.socialcoisa.rede.identity.application.port.in.ResetPasswordUseCase;
 import com.socialcoisa.rede.identity.application.port.in.SignupUseCase;
@@ -30,11 +32,12 @@ import com.socialcoisa.rede.shared.web.ApiException;
 
 @Service
 public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, GetAuthenticatedUserUseCase,
-		RequestPasswordResetUseCase, ResetPasswordUseCase {
+		RequestPasswordResetUseCase, ResetPasswordUseCase, RefreshSessionUseCase {
 
-	private static final Duration SESSION_TTL = Duration.ofDays(7);
 	private static final Duration RESET_TOKEN_TTL = Duration.ofHours(24);
 
+	private final Duration accessTokenTtl;
+	private final Duration refreshTokenTtl;
 	private final UserProfileRepository userProfileRepository;
 	private final CredentialRepository credentialRepository;
 	private final AuthSessionRepository authSessionRepository;
@@ -43,9 +46,13 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 	private final Clock clock;
 	private final SecureRandom secureRandom = new SecureRandom();
 
-	public AuthService(UserProfileRepository userProfileRepository, CredentialRepository credentialRepository,
+	public AuthService(@Value("${rede.auth.access-token-ttl-minutes:60}") int accessTokenTtlMinutes,
+			@Value("${rede.auth.refresh-token-ttl-days:30}") int refreshTokenTtlDays,
+			UserProfileRepository userProfileRepository, CredentialRepository credentialRepository,
 			AuthSessionRepository authSessionRepository, PasswordResetTokenRepository passwordResetTokenRepository,
 			PasswordHasher passwordHasher, Clock clock) {
+		this.accessTokenTtl = Duration.ofMinutes(accessTokenTtlMinutes);
+		this.refreshTokenTtl = Duration.ofDays(refreshTokenTtlDays);
 		this.userProfileRepository = userProfileRepository;
 		this.credentialRepository = credentialRepository;
 		this.authSessionRepository = authSessionRepository;
@@ -112,11 +119,11 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 			throw new ApiException(400, "INVALID_EMAIL", "Email invalido.");
 		}
 		String normalizedEmail = email.trim().toLowerCase(Locale.ROOT);
-		UserProfile profile = userProfileRepository.findByEmail(normalizedEmail)
-			.orElseThrow(() -> new ApiException(404, "EMAIL_NOT_REGISTERED", "Email nao encontrado."));
-		String token = newResetToken();
-		Instant now = clock.instant();
-		passwordResetTokenRepository.save(PasswordResetToken.create(token, profile.id(), now.plus(RESET_TOKEN_TTL), now));
+		userProfileRepository.findByEmail(normalizedEmail).ifPresent(profile -> {
+			String token = newResetToken();
+			Instant now = clock.instant();
+			passwordResetTokenRepository.save(PasswordResetToken.create(token, profile.id(), now.plus(RESET_TOKEN_TTL), now));
+		});
 	}
 
 	@Override
@@ -145,10 +152,30 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 
 	private AuthResponse createResponse(UserProfile profile) {
 		Instant now = clock.instant();
-		Instant expiresAt = now.plus(SESSION_TTL);
+		Instant expiresAt = now.plus(accessTokenTtl);
+		Instant refreshExpiresAt = now.plus(refreshTokenTtl);
 		String token = newToken();
-		authSessionRepository.save(token, profile.id(), now, expiresAt);
-		return new AuthResponse(token, expiresAt, AuthUserView.from(UserProfileView.from(profile)));
+		String refreshToken = newToken();
+		authSessionRepository.save(token, refreshToken, profile.id(), now, expiresAt);
+		return new AuthResponse(token, refreshToken, expiresAt, refreshExpiresAt, AuthUserView.from(UserProfileView.from(profile)));
+	}
+
+	private AuthResponse refreshSession(String currentRefreshToken) {
+		Instant now = clock.instant();
+		String userId = authSessionRepository.findActiveUserIdByRefreshToken(currentRefreshToken, now)
+			.orElseThrow(() -> new ApiException(401, "INVALID_REFRESH_TOKEN", "Refresh token invalido ou expirado."));
+		authSessionRepository.revokeByRefreshToken(currentRefreshToken, now);
+		UserProfile profile = userProfileRepository.findById(userId)
+			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
+		return createResponse(profile);
+	}
+
+	@Override
+	public AuthResponse refresh(String refreshToken) {
+		if (!StringUtils.hasText(refreshToken)) {
+			throw new ApiException(400, "INVALID_REFRESH_TOKEN", "Refresh token obrigatorio.");
+		}
+		return refreshSession(refreshToken.trim());
 	}
 
 	private String newToken() {

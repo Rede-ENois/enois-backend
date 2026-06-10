@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -13,12 +14,26 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import tools.jackson.databind.ObjectMapper;
+
 @SpringBootTest
 @AutoConfigureMockMvc
 class ContractControllerTests {
 
 	@Autowired
 	private MockMvc mockMvc;
+
+	@Autowired
+	private ObjectMapper objectMapper;
+
+	private TestAuthHelper auth;
+
+	@BeforeEach
+	void setUp() {
+		auth = new TestAuthHelper(mockMvc, objectMapper);
+	}
+
+	private String userToken;
 
 	@Test
 	void exposesInitialHttpContractsInOpenApi() throws Exception {
@@ -55,15 +70,17 @@ class ContractControllerTests {
 
 	@Test
 	void replaysIdempotentContractWrites() throws Exception {
+		var session = auth.authenticate("user_contract");
+
 		MvcResult first = mockMvc.perform(post("/api/jobs/{jobId}/saves", "job_contract")
-				.header("X-User-Id", "user_contract")
+				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "contract-job-save-1"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("SAVED"))
 			.andReturn();
 
 		MvcResult replay = mockMvc.perform(post("/api/jobs/{jobId}/saves", "job_contract")
-				.header("X-User-Id", "user_contract")
+				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "contract-job-save-1"))
 			.andExpect(status().isOk())
 			.andReturn();

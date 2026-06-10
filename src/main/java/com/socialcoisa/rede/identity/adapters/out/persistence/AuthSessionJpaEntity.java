@@ -15,6 +15,9 @@ class AuthSessionJpaEntity {
 	@Id
 	private String token;
 
+	@Column(name = "refresh_token", unique = true)
+	private String refreshToken;
+
 	@Column(name = "user_id", nullable = false)
 	private String userId;
 
@@ -30,8 +33,9 @@ class AuthSessionJpaEntity {
 	protected AuthSessionJpaEntity() {
 	}
 
-	AuthSessionJpaEntity(String token, String userId, Instant createdAt, Instant expiresAt) {
+	AuthSessionJpaEntity(String token, String refreshToken, String userId, Instant createdAt, Instant expiresAt) {
 		this.token = token;
+		this.refreshToken = refreshToken;
 		this.userId = userId;
 		this.createdAt = createdAt;
 		this.expiresAt = expiresAt;
@@ -39,6 +43,10 @@ class AuthSessionJpaEntity {
 
 	String userId() {
 		return userId;
+	}
+
+	String refreshToken() {
+		return refreshToken;
 	}
 
 	boolean activeAt(Instant now) {

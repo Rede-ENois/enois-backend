@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.util.List;
 import java.util.Map;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -20,6 +21,7 @@ import org.springframework.test.web.servlet.MvcResult;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -31,8 +33,16 @@ class MediaControllerTests {
 	@Autowired
 	private ObjectMapper objectMapper;
 
+	private TestAuthHelper auth;
+
+	@BeforeEach
+	void setUp() {
+		auth = new TestAuthHelper(mockMvc, objectMapper);
+	}
+
 	@Test
 	void createsMediaUploadAndReplaysIdempotentResponse() throws Exception {
+		var session = auth.authenticate("user_media_upload");
 		String payload = objectMapper.writeValueAsString(Map.of(
 			"fileName", "arquitetura.png",
 			"mimeType", "image/png",
@@ -40,19 +50,19 @@ class MediaControllerTests {
 			"purpose", "POST_IMAGE"));
 
 		MvcResult first = mockMvc.perform(post("/api/media/uploads")
-				.header("X-User-Id", "user_media_upload")
+				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "media-upload-1")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(payload))
 			.andExpect(status().isCreated())
-			.andExpect(jsonPath("$.ownerId").value("user_media_upload"))
+			.andExpect(jsonPath("$.ownerId").exists())
 			.andExpect(jsonPath("$.status").value("PENDING"))
 			.andExpect(jsonPath("$.deleteStatus").value("NONE"))
 			.andExpect(jsonPath("$.uploadUrl").exists())
 			.andReturn();
 
 		MvcResult replay = mockMvc.perform(post("/api/media/uploads")
-				.header("X-User-Id", "user_media_upload")
+				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "media-upload-1")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(payload))
@@ -64,6 +74,7 @@ class MediaControllerTests {
 
 	@Test
 	void deletesMediaReferencedByDeletedPost() throws Exception {
+		var session = auth.authenticate("user_media_feed");
 		String mediaPayload = objectMapper.writeValueAsString(Map.of(
 			"fileName", "post.png",
 			"mimeType", "image/png",
@@ -71,7 +82,7 @@ class MediaControllerTests {
 			"purpose", "POST_IMAGE"));
 
 		MvcResult mediaResult = mockMvc.perform(post("/api/media/uploads")
-				.header("X-User-Id", "user_media_feed")
+				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "media-feed-upload-1")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(mediaPayload))
@@ -86,7 +97,7 @@ class MediaControllerTests {
 			"mediaIds", List.of(mediaId)));
 
 		MvcResult postResult = mockMvc.perform(post("/api/feed/posts")
-				.header("X-User-Id", "user_media_feed")
+				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "media-feed-post-1")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(postPayload))
@@ -97,12 +108,13 @@ class MediaControllerTests {
 		String postId = objectMapper.readTree(postResult.getResponse().getContentAsString()).get("id").asText();
 
 		mockMvc.perform(delete("/api/feed/posts/{postId}", postId)
-				.header("X-User-Id", "user_media_feed")
+				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "media-feed-delete-1"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("DELETED"));
 
-		MvcResult deletedMedia = mockMvc.perform(get("/api/media/{mediaId}", mediaId))
+		MvcResult deletedMedia = mockMvc.perform(get("/api/media/{mediaId}", mediaId)
+				.header("X-Session-Token", session.token()))
 			.andExpect(status().isOk())
 			.andReturn();
 

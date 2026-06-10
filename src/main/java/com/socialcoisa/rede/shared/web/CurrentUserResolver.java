@@ -19,22 +19,26 @@ public class CurrentUserResolver {
 		this.clock = clock;
 	}
 
-	public CurrentUser resolve(String userId) {
-		if (!StringUtils.hasText(userId)) {
-			throw new ApiException(401, "UNAUTHENTICATED", "Usuario autenticado ausente.");
-		}
-		return new CurrentUser(new UserId(userId.trim()));
-	}
-
-	public CurrentUser resolve(String userId, String sessionToken) {
-		if (StringUtils.hasText(userId)) {
-			return resolve(userId);
-		}
+	public CurrentUser resolve(String sessionToken) {
 		if (!StringUtils.hasText(sessionToken)) {
-			throw new ApiException(401, "UNAUTHENTICATED", "Usuario autenticado ausente.");
+			throw new ApiException(401, "UNAUTHENTICATED", "Sessao invalida ou expirada.");
 		}
 		String resolvedUserId = authSessionRepository.findActiveUserId(sessionToken.trim(), clock.instant())
 			.orElseThrow(() -> new ApiException(401, "UNAUTHENTICATED", "Sessao invalida ou expirada."));
 		return new CurrentUser(new UserId(resolvedUserId));
+	}
+
+	public CurrentUser resolve(String userId, String sessionToken) {
+		if (StringUtils.hasText(sessionToken)) {
+			return resolve(sessionToken);
+		}
+		throw new ApiException(401, "UNAUTHENTICATED", "Sessao invalida ou expirada.");
+	}
+
+	public CurrentUser resolveById(String userId) {
+		if (!StringUtils.hasText(userId)) {
+			throw new ApiException(401, "UNAUTHENTICATED", "Usuario autenticado ausente.");
+		}
+		return new CurrentUser(new UserId(userId.trim()));
 	}
 }

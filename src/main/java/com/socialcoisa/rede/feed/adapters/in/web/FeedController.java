@@ -45,6 +45,7 @@ import com.socialcoisa.rede.feed.application.port.out.PostInteractionRepository;
 import com.socialcoisa.rede.feed.domain.PostId;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
+import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 import com.socialcoisa.rede.shared.web.CursorCodec;
@@ -123,7 +124,7 @@ class FeedController {
 			@RequestParam(required = false) String cursor,
 			@RequestParam(defaultValue = "20") int limit) {
 		CurrentUser user = StringUtils.hasText(userId) || StringUtils.hasText(sessionToken)
-			? currentUserResolver.resolve(userId, sessionToken) : currentUserResolver.resolve(username);
+			? currentUserResolver.resolve(userId, sessionToken) : currentUserResolver.resolveById(username);
 		return getProfilePostsUseCase.getProfilePosts(new GetProfilePostsQuery(user.id(), username,
 			cursorCodec.decode(cursor), limit));
 	}
@@ -257,6 +258,11 @@ class FeedController {
 		String hash = idempotency.hash(Map.of("commentId", commentId, "postId", postId));
 		return idempotency.execute(user.id(), "DELETE", "/api/feed/posts/{postId}/comments/{commentId}", idempotencyKey, hash,
 			() -> {
+				var comment = commentRepository.findById(commentId)
+					.orElseThrow(() -> new ApiException(404, "COMMENT_NOT_FOUND", "Comentario nao encontrado."));
+				if (!comment.authorId().equals(user.id())) {
+					throw new ApiException(403, "NOT_AUTHORIZED", "Voce nao pode deletar este comentario.");
+				}
 				commentRepository.deleteById(commentId);
 				return new CommandResponse(200, Map.of("status", "COMMENT_DELETED"));
 			});

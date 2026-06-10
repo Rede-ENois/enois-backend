@@ -17,8 +17,8 @@ class AuthSessionPersistenceAdapter implements AuthSessionRepository {
 	}
 
 	@Override
-	public void save(String token, String userId, Instant createdAt, Instant expiresAt) {
-		repository.save(new AuthSessionJpaEntity(token, userId, createdAt, expiresAt));
+	public void save(String token, String refreshToken, String userId, Instant createdAt, Instant expiresAt) {
+		repository.save(new AuthSessionJpaEntity(token, refreshToken, userId, createdAt, expiresAt));
 	}
 
 	@Override
@@ -29,8 +29,23 @@ class AuthSessionPersistenceAdapter implements AuthSessionRepository {
 	}
 
 	@Override
+	public Optional<String> findActiveUserIdByRefreshToken(String refreshToken, Instant now) {
+		return repository.findByRefreshToken(refreshToken)
+			.filter(session -> session.activeAt(now))
+			.map(AuthSessionJpaEntity::userId);
+	}
+
+	@Override
 	public void revoke(String token, Instant revokedAt) {
 		repository.findById(token).ifPresent(session -> {
+			session.revoke(revokedAt);
+			repository.save(session);
+		});
+	}
+
+	@Override
+	public void revokeByRefreshToken(String refreshToken, Instant revokedAt) {
+		repository.findByRefreshToken(refreshToken).ifPresent(session -> {
 			session.revoke(revokedAt);
 			repository.save(session);
 		});

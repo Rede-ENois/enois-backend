@@ -25,6 +25,7 @@ import com.socialcoisa.rede.messaging.application.port.out.MessagingRepository;
 import com.socialcoisa.rede.messaging.domain.Conversation;
 import com.socialcoisa.rede.messaging.domain.ConversationParticipant;
 import com.socialcoisa.rede.messaging.domain.Message;
+import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 import com.socialcoisa.rede.shared.web.CursorCodec;
@@ -100,6 +101,9 @@ class MessagingContractController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String conversationId) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		if (!messagingService.isParticipant(conversationId, user.id().value())) {
+			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
+		}
 		Conversation c = messagingService.getConversation(conversationId);
 		List<String> pIds = messagingService.getParticipants(c.id()).stream()
 			.map(ConversationParticipant::userId)
@@ -114,7 +118,10 @@ class MessagingContractController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String conversationId, @RequestParam(required = false) String cursor,
 			@RequestParam(defaultValue = "50") int limit) {
-		currentUserResolver.resolve(userId, sessionToken);
+		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		if (!messagingService.isParticipant(conversationId, user.id().value())) {
+			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
+		}
 		List<Message> msgs = messagingService.getMessages(conversationId, cursor, limit);
 		var items = msgs.stream()
 			.map(m -> new MessageView(m.id(), m.conversationId(), m.senderId(), m.text(),
@@ -194,7 +201,10 @@ class MessagingContractController {
 	Object listMessageReactions(@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String conversationId, @PathVariable String messageId) {
-		currentUserResolver.resolve(userId, sessionToken);
+		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		if (!messagingService.isParticipant(conversationId, user.id().value())) {
+			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
+		}
 		var reactions = messagingService.getReactions(messageId);
 		var summary = reactions.stream()
 			.collect(Collectors.groupingBy(MessagingRepository.ReactionSummary::type, Collectors.counting()));

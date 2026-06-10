@@ -11,6 +11,7 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -31,7 +32,8 @@ import com.socialcoisa.rede.shared.web.ApiException;
 @Service
 public class SocialLoginService implements OAuthUseCase {
 
-	private static final Duration SESSION_TTL = Duration.ofDays(7);
+	private final Duration accessTokenTtl;
+	private final Duration refreshTokenTtl;
 
 	private final List<TokenValidator> tokenValidators;
 	private final UserExternalIdentityRepository externalIdentityRepository;
@@ -42,7 +44,9 @@ public class SocialLoginService implements OAuthUseCase {
 	private final OAuthProperties oAuthProperties;
 	private final Clock clock;
 
-	public SocialLoginService(List<TokenValidator> tokenValidators,
+	public SocialLoginService(@Value("${rede.auth.access-token-ttl-minutes:60}") int accessTokenTtlMinutes,
+			@Value("${rede.auth.refresh-token-ttl-days:30}") int refreshTokenTtlDays,
+			List<TokenValidator> tokenValidators,
 			UserExternalIdentityRepository externalIdentityRepository,
 			UserProfileRepository userProfileRepository,
 			CredentialRepository credentialRepository,
@@ -50,6 +54,8 @@ public class SocialLoginService implements OAuthUseCase {
 			PasswordHasher passwordHasher,
 			OAuthProperties oAuthProperties,
 			Clock clock) {
+		this.accessTokenTtl = Duration.ofMinutes(accessTokenTtlMinutes);
+		this.refreshTokenTtl = Duration.ofDays(refreshTokenTtlDays);
 		this.tokenValidators = tokenValidators;
 		this.externalIdentityRepository = externalIdentityRepository;
 		this.userProfileRepository = userProfileRepository;
@@ -108,6 +114,9 @@ public class SocialLoginService implements OAuthUseCase {
 		if (!StringUtils.hasText(code)) {
 			throw new ApiException(400, "INVALID_OAUTH_CODE", "Codigo de autorizacao obrigatorio.");
 		}
+		if (!StringUtils.hasText(state)) {
+			throw new ApiException(400, "INVALID_OAUTH_STATE", "State obrigatorio.");
+		}
 		TokenValidationResult validation = tokenValidators.stream()
 			.map(v -> v.validate(provider, code))
 			.filter(Optional::isPresent)
@@ -147,13 +156,18 @@ public class SocialLoginService implements OAuthUseCase {
 
 	private AuthResponse createSession(String userId) {
 		Instant now = clock.instant();
-		Instant expiresAt = now.plus(SESSION_TTL);
+		Instant expiresAt = now.plus(accessTokenTtl);
+		Instant refreshExpiresAt = now.plus(refreshTokenTtl);
 		byte[] bytes = new byte[32];
+		new java.security.SecureRandom().nextBytes(bytes);
 		String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-		authSessionRepository.save(token, userId, now, expiresAt);
+		byte[] refreshBytes = new byte[32];
+		new java.security.SecureRandom().nextBytes(refreshBytes);
+		String refreshToken = Base64.getUrlEncoder().withoutPadding().encodeToString(refreshBytes);
+		authSessionRepository.save(token, refreshToken, userId, now, expiresAt);
 		UserProfile profile = userProfileRepository.findById(userId)
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
-		return new AuthResponse(token, expiresAt, AuthUserView.from(com.socialcoisa.rede.profile.application.UserProfileView.from(profile)));
+		return new AuthResponse(token, refreshToken, expiresAt, refreshExpiresAt, AuthUserView.from(com.socialcoisa.rede.profile.application.UserProfileView.from(profile)));
 	}
 
 	private String uniqueUsername(String name, String email) {

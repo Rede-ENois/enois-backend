@@ -77,6 +77,10 @@ public class MessagingService {
 		return repository.findConversationsByUserId(userId, before, limit);
 	}
 
+	public boolean isParticipant(String conversationId, String userId) {
+		return repository.isParticipant(conversationId, userId);
+	}
+
 	public Conversation getConversation(String id) {
 		return repository.findConversationById(id)
 			.orElseThrow(() -> new ApiException(404, "CONVERSATION_NOT_FOUND", "Conversa nao encontrada."));

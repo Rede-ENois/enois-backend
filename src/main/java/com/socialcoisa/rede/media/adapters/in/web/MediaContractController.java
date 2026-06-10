@@ -55,7 +55,10 @@ class MediaContractController {
 	}
 
 	@GetMapping("/{mediaId}")
-	Object media(@PathVariable String mediaId) {
+	Object media(@RequestHeader(value = "X-User-Id", required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String mediaId) {
+		currentUserResolver.resolve(userId, sessionToken);
 		return getMediaAssetUseCase.getMedia(mediaId);
 	}
 

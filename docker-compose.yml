@@ -20,10 +20,10 @@ services:
     profiles: ["hml"]
     container_name: rede-mariadb
     environment:
-      MARIADB_ROOT_PASSWORD: root
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
       MARIADB_DATABASE: rede_hml
       MARIADB_USER: rede_hml
-      MARIADB_PASSWORD: rede_hml
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD}
     ports:
       - "3306:3306"
     volumes:
@@ -34,10 +34,10 @@ services:
     profiles: ["prd"]
     container_name: rede-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: root
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: rede_prd
       MYSQL_USER: rede_prd
-      MYSQL_PASSWORD: rede_prd
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     ports:
       - "3307:3306"
     volumes:

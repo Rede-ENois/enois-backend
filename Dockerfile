@@ -9,6 +9,7 @@ RUN ./mvnw package -DskipTests -q
 FROM eclipse-temurin:25-jre-alpine
 WORKDIR /app
 COPY --from=builder /app/target/rede-0.0.1-SNAPSHOT.jar app.jar
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data && addgroup -S appgroup && adduser -S appuser -G appgroup && chown -R appuser:appgroup /app
+USER appuser
 EXPOSE 8081
 ENTRYPOINT ["java", "-jar", "app.jar"]

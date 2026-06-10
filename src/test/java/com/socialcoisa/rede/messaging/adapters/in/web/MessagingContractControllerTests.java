@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.util.List;
 import java.util.Map;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -19,6 +20,7 @@ import org.springframework.test.web.servlet.MvcResult;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -30,14 +32,23 @@ class MessagingContractControllerTests {
 	@Autowired
 	private ObjectMapper objectMapper;
 
+	private TestAuthHelper auth;
+
+	@BeforeEach
+	void setUp() {
+		auth = new TestAuthHelper(mockMvc, objectMapper);
+	}
+
 	@Test
 	void createsConversationSendsMessageAndMarksRead() throws Exception {
+		var sessionA = auth.authenticate("msg_user_a");
+		var sessionB = auth.authenticate("msg_user_b");
 		String createPayload = objectMapper.writeValueAsString(Map.of(
 			"kind", "DIRECT",
-			"participantIds", List.of("msg_user_b")));
+			"participantIds", List.of(sessionB.userId())));
 
 		MvcResult created = mockMvc.perform(post("/api/conversations")
-				.header("X-User-Id", "msg_user_a")
+				.header("X-Session-Token", sessionA.token())
 				.header("Idempotency-Key", "msg-create-1")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(createPayload))
@@ -48,30 +59,30 @@ class MessagingContractControllerTests {
 		String conversationId = objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asText();
 
 		MvcResult msgResult = mockMvc.perform(post("/api/conversations/{id}/messages", conversationId)
-				.header("X-User-Id", "msg_user_a")
+				.header("X-Session-Token", sessionA.token())
 				.header("Idempotency-Key", "msg-send-1")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("text", "Ola, tudo bem?"))))
 			.andExpect(status().isCreated())
 			.andExpect(jsonPath("$.text").value("Ola, tudo bem?"))
-			.andExpect(jsonPath("$.from").value("msg_user_a"))
+			.andExpect(jsonPath("$.from").value(sessionA.userId()))
 			.andReturn();
 
 		String messageId = objectMapper.readTree(msgResult.getResponse().getContentAsString()).get("id").asText();
 
 		mockMvc.perform(get("/api/conversations/{id}", conversationId)
-				.header("X-User-Id", "msg_user_a"))
+				.header("X-Session-Token", sessionA.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.lastMessage").value("Ola, tudo bem?"));
 
 		mockMvc.perform(post("/api/conversations/{id}/read", conversationId)
-				.header("X-User-Id", "msg_user_b")
+				.header("X-Session-Token", sessionB.token())
 				.header("Idempotency-Key", "msg-read-1"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("READ"));
 
 		mockMvc.perform(get("/api/conversations/{id}/messages", conversationId)
-				.header("X-User-Id", "msg_user_a"))
+				.header("X-Session-Token", sessionA.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.items.length()").value(1))
 			.andExpect(jsonPath("$.items[0].id").value(messageId));
@@ -79,12 +90,14 @@ class MessagingContractControllerTests {
 
 	@Test
 	void replaysIdempotentMessageSend() throws Exception {
+		var sessionC = auth.authenticate("msg_user_c");
+		var sessionD = auth.authenticate("msg_user_d");
 		String createPayload = objectMapper.writeValueAsString(Map.of(
 			"kind", "DIRECT",
-			"participantIds", List.of("msg_user_d")));
+			"participantIds", List.of(sessionD.userId())));
 
 		MvcResult conv = mockMvc.perform(post("/api/conversations")
-				.header("X-User-Id", "msg_user_c")
+				.header("X-Session-Token", sessionC.token())
 				.header("Idempotency-Key", "msg-create-idem")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(createPayload))
@@ -95,7 +108,7 @@ class MessagingContractControllerTests {
 		String msgPayload = objectMapper.writeValueAsString(Map.of("text", "Idempotente"));
 
 		MvcResult first = mockMvc.perform(post("/api/conversations/{id}/messages", cid)
-				.header("X-User-Id", "msg_user_c")
+				.header("X-Session-Token", sessionC.token())
 				.header("Idempotency-Key", "msg-send-idem")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(msgPayload))
@@ -103,7 +116,7 @@ class MessagingContractControllerTests {
 			.andReturn();
 
 		MvcResult replay = mockMvc.perform(post("/api/conversations/{id}/messages", cid)
-				.header("X-User-Id", "msg_user_c")
+				.header("X-Session-Token", sessionC.token())
 				.header("Idempotency-Key", "msg-send-idem")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(msgPayload))

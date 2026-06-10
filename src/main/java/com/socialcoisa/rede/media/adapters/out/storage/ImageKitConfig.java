@@ -33,9 +33,9 @@ class ImageKitConfig {
 	@ConfigurationProperties(prefix = "rede.media.imagekit")
 	static class ImageKitProperties {
 
-		private String urlEndpoint;
-		private String publicKey;
-		private String privateKey;
+		private String urlEndpoint = "";
+		private String publicKey = "";
+		private String privateKey = "";
 
 		String getUrlEndpoint() { return urlEndpoint; }
 		void setUrlEndpoint(String urlEndpoint) { this.urlEndpoint = urlEndpoint; }

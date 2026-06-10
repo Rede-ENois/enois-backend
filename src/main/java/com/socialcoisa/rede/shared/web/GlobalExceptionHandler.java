@@ -24,7 +24,7 @@ public class GlobalExceptionHandler {
 	@ExceptionHandler({ MissingRequestHeaderException.class, MethodArgumentNotValidException.class })
 	ResponseEntity<ErrorResponse> handleBadRequest(Exception exception) {
 		return ResponseEntity.badRequest()
-			.body(new ErrorResponse("BAD_REQUEST", exception.getMessage(), Instant.now()));
+			.body(new ErrorResponse("BAD_REQUEST", "Requisicao invalida.", Instant.now()));
 	}
 
 	@ExceptionHandler(RequestNotPermitted.class)
