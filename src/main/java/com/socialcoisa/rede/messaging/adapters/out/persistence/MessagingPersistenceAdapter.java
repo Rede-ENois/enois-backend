@@ -9,8 +9,10 @@ import org.springframework.stereotype.Repository;
 
 import org.springframework.data.domain.Pageable;
 
+import org.springframework.dao.DataIntegrityViolationException;
+
+import com.socialcoisa.rede.feed.domain.ReactionType;
 import com.socialcoisa.rede.messaging.application.port.out.MessagingRepository;
-import com.socialcoisa.rede.messaging.domain.Conversation;
 import com.socialcoisa.rede.messaging.domain.Conversation;
 import com.socialcoisa.rede.messaging.domain.ConversationParticipant;
 import com.socialcoisa.rede.messaging.domain.Message;
@@ -22,13 +24,16 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 	private final SpringDataConversationJpaRepository conversationRepo;
 	private final SpringDataConversationParticipantJpaRepository participantRepo;
 	private final SpringDataMessageJpaRepository messageRepo;
+	private final SpringDataMessageReactionJpaRepository messageReactionRepo;
 
 	MessagingPersistenceAdapter(SpringDataConversationJpaRepository conversationRepo,
 			SpringDataConversationParticipantJpaRepository participantRepo,
-			SpringDataMessageJpaRepository messageRepo) {
+			SpringDataMessageJpaRepository messageRepo,
+			SpringDataMessageReactionJpaRepository messageReactionRepo) {
 		this.conversationRepo = conversationRepo;
 		this.participantRepo = participantRepo;
 		this.messageRepo = messageRepo;
+		this.messageReactionRepo = messageReactionRepo;
 	}
 
 	@Override
@@ -105,4 +110,41 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 			.map(MessageJpaEntity::toDomain);
 	}
 
+	@Override
+	public boolean addMessageReaction(String id, String messageId, String userId, ReactionType type, Instant createdAt) {
+		var existing = messageReactionRepo.findByMessageIdAndUserId(messageId, userId);
+		if (existing.isPresent()) {
+			var old = existing.get();
+			if (old.getReactionType() == type) {
+				messageReactionRepo.delete(old);
+				return false;
+			}
+			messageReactionRepo.delete(old);
+			messageReactionRepo.flush();
+		}
+		try {
+			messageReactionRepo.saveAndFlush(new MessageReactionJpaEntity(id, messageId, userId, type, createdAt));
+			return true;
+		}
+		catch (DataIntegrityViolationException exception) {
+			return false;
+		}
+	}
+
+	@Override
+	public boolean removeMessageReaction(String messageId, String userId) {
+		return messageReactionRepo.findByMessageIdAndUserId(messageId, userId)
+			.map(reaction -> {
+				messageReactionRepo.delete(reaction);
+				return true;
+			})
+			.orElse(false);
+	}
+
+	@Override
+	public List<MessagingRepository.ReactionSummary> findReactionsByMessageId(String messageId) {
+		return messageReactionRepo.findByMessageIdOrderByCreatedAtDesc(messageId).stream()
+			.map(r -> new MessagingRepository.ReactionSummary(r.getUserId(), r.getReactionType(), r.getCreatedAt()))
+			.toList();
+	}
 }

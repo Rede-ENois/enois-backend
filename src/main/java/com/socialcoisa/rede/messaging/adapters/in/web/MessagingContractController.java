@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.messaging.adapters.in.web;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -16,9 +17,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.socialcoisa.rede.feed.domain.ReactionType;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
 import com.socialcoisa.rede.messaging.application.MessagingService;
+import com.socialcoisa.rede.messaging.application.port.out.MessagingRepository;
 import com.socialcoisa.rede.messaging.domain.Conversation;
 import com.socialcoisa.rede.messaging.domain.ConversationParticipant;
 import com.socialcoisa.rede.messaging.domain.Message;
@@ -167,6 +170,36 @@ class MessagingContractController {
 					messagingService.getLastMessageText(c.id()),
 					messagingService.countUnread(c.id(), user.id().value())));
 			});
+	}
+
+	@PostMapping("/{conversationId}/messages/{messageId}/reactions")
+	ResponseEntity<String> reactToMessage(@RequestHeader(value = "X-User-Id", required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@PathVariable String conversationId, @PathVariable String messageId,
+			@RequestBody ReactToMessageRequest request) {
+		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		Map<String, Object> payload = new LinkedHashMap<>();
+		payload.put("messageId", messageId);
+		payload.put("type", request.type() == null ? "" : request.type());
+		String hash = idempotency.hash(payload);
+		return idempotency.execute(user.id(), "POST", "/api/conversations/{conversationId}/messages/{messageId}/reactions",
+			idempotencyKey, hash, () -> {
+				boolean added = messagingService.addReaction(messageId, user.id().value(), request.type());
+				return new CommandResponse(200, Map.of("status", added ? "REACTED" : "REMOVED"));
+			});
+	}
+
+	@GetMapping("/{conversationId}/messages/{messageId}/reactions")
+	Object listMessageReactions(@RequestHeader(value = "X-User-Id", required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String conversationId, @PathVariable String messageId) {
+		currentUserResolver.resolve(userId, sessionToken);
+		var reactions = messagingService.getReactions(messageId);
+		return Map.of("messageId", messageId, "reactions", reactions);
+	}
+
+	record ReactToMessageRequest(ReactionType type) {
 	}
 
 	record ConversationView(String id, String userId, String kind, String title, List<String> participantIds,

@@ -34,4 +34,9 @@ public interface MessagingRepository {
 
 	Optional<Message> findLastMessage(String conversationId);
 
+	boolean addMessageReaction(String id, String messageId, String userId, com.socialcoisa.rede.feed.domain.ReactionType type, java.time.Instant createdAt);
+	boolean removeMessageReaction(String messageId, String userId);
+	List<ReactionSummary> findReactionsByMessageId(String messageId);
+
+	record ReactionSummary(String userId, com.socialcoisa.rede.feed.domain.ReactionType type, java.time.Instant createdAt) {}
 }

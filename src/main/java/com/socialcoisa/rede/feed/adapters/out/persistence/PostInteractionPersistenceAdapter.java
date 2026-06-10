@@ -18,21 +18,31 @@ import com.socialcoisa.rede.feed.domain.UserId;
 class PostInteractionPersistenceAdapter implements PostInteractionRepository {
 
 	private final SpringDataReactionJpaRepository reactionRepository;
+	private final SpringDataCommentReactionJpaRepository commentReactionRepository;
 	private final SpringDataSavedPostJpaRepository savedPostRepository;
 	private final SpringDataPostShareJpaRepository postShareRepository;
 
 	PostInteractionPersistenceAdapter(SpringDataReactionJpaRepository reactionRepository,
+			SpringDataCommentReactionJpaRepository commentReactionRepository,
 			SpringDataSavedPostJpaRepository savedPostRepository,
 			SpringDataPostShareJpaRepository postShareRepository) {
 		this.reactionRepository = reactionRepository;
+		this.commentReactionRepository = commentReactionRepository;
 		this.savedPostRepository = savedPostRepository;
 		this.postShareRepository = postShareRepository;
 	}
 
 	@Override
 	public boolean addReaction(String id, PostId postId, UserId userId, ReactionType type, Instant createdAt) {
-		if (reactionRepository.existsByPostIdAndUserId(postId.value(), userId.value())) {
-			return false;
+		var existing = reactionRepository.findByPostIdAndUserId(postId.value(), userId.value());
+		if (existing.isPresent()) {
+			var old = existing.get();
+			if (old.getReactionType() == type) {
+				reactionRepository.delete(old);
+				return false;
+			}
+			reactionRepository.delete(old);
+			reactionRepository.flush();
 		}
 		try {
 			reactionRepository.saveAndFlush(new ReactionJpaEntity(id, postId.value(), userId.value(), type, createdAt));
@@ -114,5 +124,43 @@ class PostInteractionPersistenceAdapter implements PostInteractionRepository {
 		catch (DataIntegrityViolationException exception) {
 			return false;
 		}
+	}
+
+	@Override
+	public boolean addCommentReaction(String id, String commentId, UserId userId, ReactionType type, Instant createdAt) {
+		var existing = commentReactionRepository.findByCommentIdAndUserId(commentId, userId.value());
+		if (existing.isPresent()) {
+			var old = existing.get();
+			if (old.getReactionType() == type) {
+				commentReactionRepository.delete(old);
+				return false;
+			}
+			commentReactionRepository.delete(old);
+			commentReactionRepository.flush();
+		}
+		try {
+			commentReactionRepository.saveAndFlush(new CommentReactionJpaEntity(id, commentId, userId.value(), type, createdAt));
+			return true;
+		}
+		catch (DataIntegrityViolationException exception) {
+			return false;
+		}
+	}
+
+	@Override
+	public boolean removeCommentReaction(String commentId, UserId userId) {
+		return commentReactionRepository.findByCommentIdAndUserId(commentId, userId.value())
+			.map(reaction -> {
+				commentReactionRepository.delete(reaction);
+				return true;
+			})
+			.orElse(false);
+	}
+
+	@Override
+	public List<ReactionSummary> findReactionsByCommentId(String commentId) {
+		return commentReactionRepository.findByCommentIdOrderByCreatedAtDesc(commentId).stream()
+			.map(r -> new ReactionSummary(r.getUserId(), r.getReactionType(), r.getCreatedAt()))
+			.toList();
 	}
 }

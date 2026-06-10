@@ -27,6 +27,10 @@ public interface PostInteractionRepository {
 
 	List<ReactionSummary> findReactionsByPostId(PostId postId, Instant before, int limit);
 
+	boolean addCommentReaction(String id, String commentId, UserId userId, ReactionType type, Instant createdAt);
+	boolean removeCommentReaction(String commentId, UserId userId);
+	List<ReactionSummary> findReactionsByCommentId(String commentId);
+
 	record ReactionSummary(String userId, ReactionType type, Instant createdAt) {
 	}
 }

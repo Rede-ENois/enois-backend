@@ -8,6 +8,7 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialcoisa.rede.feed.domain.ReactionType;
 import com.socialcoisa.rede.messaging.application.port.out.MessagingRepository;
 import com.socialcoisa.rede.messaging.domain.Conversation;
 import com.socialcoisa.rede.messaging.domain.ConversationParticipant;
@@ -106,6 +107,16 @@ public class MessagingService {
 		return repository.findLastMessage(conversationId)
 			.map(Message::createdAt)
 			.orElse(null);
+	}
+
+	@Transactional
+	public boolean addReaction(String messageId, String userId, ReactionType type) {
+		String id = "mreac_" + UUID.randomUUID().toString().replace("-", "");
+		return repository.addMessageReaction(id, messageId, userId, type, clock.instant());
+	}
+
+	public List<MessagingRepository.ReactionSummary> getReactions(String messageId) {
+		return repository.findReactionsByMessageId(messageId);
 	}
 
 }

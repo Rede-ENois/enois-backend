@@ -1,9 +1,11 @@
 package com.socialcoisa.rede.feed.adapters.in.web;
 
+import java.time.Instant;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -255,6 +257,34 @@ class FeedController {
 				commentRepository.deleteById(commentId);
 				return new CommandResponse(200, Map.of("status", "COMMENT_DELETED"));
 			});
+	}
+
+	@PostMapping("/feed/posts/{postId}/comments/{commentId}/reactions")
+	ResponseEntity<String> reactToComment(@RequestHeader(value = USER_HEADER, required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@PathVariable String postId, @PathVariable String commentId, @RequestBody ReactToPostRequest request) {
+		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		Map<String, Object> payload = new LinkedHashMap<>();
+		payload.put("commentId", commentId);
+		payload.put("type", request.type() == null ? "" : request.type());
+		String hash = idempotency.hash(payload);
+		return idempotency.execute(user.id(), "POST", "/api/feed/posts/{postId}/comments/{commentId}/reactions", idempotencyKey, hash,
+			() -> {
+				boolean added = postInteractionRepository.addCommentReaction(
+					"creact_" + UUID.randomUUID().toString().replace("-", ""),
+					commentId, user.id(), request.type(), Instant.now());
+				return new CommandResponse(200, Map.of("status", added ? "REACTED" : "REMOVED"));
+			});
+	}
+
+	@GetMapping("/feed/posts/{postId}/comments/{commentId}/reactions")
+	Object listCommentReactions(@RequestHeader(value = USER_HEADER, required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String postId, @PathVariable String commentId) {
+		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		var reactions = postInteractionRepository.findReactionsByCommentId(commentId);
+		return Map.of("commentId", commentId, "reactions", reactions);
 	}
 
 	@GetMapping("/feed/saved")
