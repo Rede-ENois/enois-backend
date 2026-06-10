@@ -23,7 +23,7 @@ class SearchPersistenceAdapter implements SearchRepository {
 	public List<SearchResult> searchUsers(String query, int limit) {
 		String raw = query.replace("%", "");
 		Query q = em.createNativeQuery("""
-				SELECT id, name, headline, avatar,
+				SELECT id, name, headline, avatar, username,
 				  (CASE WHEN LOWER(name) = :exact THEN 10
 				        WHEN LOWER(name) LIKE :prefix THEN 5
 				        WHEN LOWER(name) LIKE :q THEN 1 ELSE 0 END
@@ -37,7 +37,7 @@ class SearchPersistenceAdapter implements SearchRepository {
 		q.setParameter("prefix", raw + "%");
 		q.setParameter("exact", raw);
 		q.setParameter("limit", limit);
-		return mapResults(q.getResultList(), "users", "/api/users/");
+		return mapUserResults(q.getResultList());
 	}
 
 	@Override
@@ -133,6 +133,19 @@ class SearchPersistenceAdapter implements SearchRepository {
 				(String) row[2],
 				(String) row[3],
 				hrefPrefix + row[0]))
+			.toList();
+	}
+
+	@SuppressWarnings("unchecked")
+	private List<SearchResult> mapUserResults(List<Object[]> rows) {
+		return rows.stream()
+			.map(row -> new SearchResult(
+				(String) row[0],
+				"users",
+				(String) row[1],
+				(String) row[2],
+				(String) row[3],
+				"/api/users/" + row[4]))
 			.toList();
 	}
 
