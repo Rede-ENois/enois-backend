@@ -71,7 +71,10 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 		outboxEventRepository.append("PostCommented", post.id().value(), "{\"postId\":\"" + post.id().value()
 			+ "\",\"commentId\":\"" + saved.id() + "\",\"authorId\":\"" + command.authorId() + "\"}");
 		notifyMentions(command.mentionedUserIds(), command.authorId().value(), post.id().value());
-		return CommentView.from(saved);
+		var profile = userProfileRepository.findById(command.authorId().value()).orElse(null);
+		return CommentView.from(saved,
+			profile != null ? profile.name() : null,
+			profile != null ? profile.avatar() : null);
 	}
 
 	private void notifyMentions(List<String> mentionedUserIds, String actorId, String postId) {
@@ -93,7 +96,12 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 		Instant before = query.before().orElse(DEFAULT_BEFORE);
 		activePost(query.postId());
 		var comments = commentRepository.findActiveByPost(query.postId(), before, limit).stream()
-			.map(CommentView::from)
+			.map(c -> {
+				var p = userProfileRepository.findById(c.authorId().value()).orElse(null);
+				return CommentView.from(c,
+					p != null ? p.name() : null,
+					p != null ? p.avatar() : null);
+			})
 			.toList();
 		String nextCursor = comments.size() == limit ? cursorCodec.encode(comments.get(comments.size() - 1).createdAt())
 			: null;
