@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -239,10 +240,12 @@ class FeedController {
 	@GetMapping("/feed/posts/{postId}/reactions")
 	Object listReactions(@RequestHeader(value = USER_HEADER, required = false) String userId,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
-			@PathVariable String postId, @RequestParam(defaultValue = "20") int limit) {
+			@PathVariable String postId) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
-		var reactions = postInteractionRepository.findReactionsByPostId(new PostId(postId), null, limit);
-		return Map.of("postId", postId, "reactions", reactions);
+		var reactions = postInteractionRepository.findReactionsByPostId(new PostId(postId), null, 50);
+		var summary = reactions.stream()
+			.collect(Collectors.groupingBy(PostInteractionRepository.ReactionSummary::type, Collectors.counting()));
+		return Map.of("postId", postId, "summary", summary, "reactions", reactions);
 	}
 
 	@DeleteMapping("/feed/posts/{postId}/comments/{commentId}")
@@ -284,7 +287,9 @@ class FeedController {
 			@PathVariable String postId, @PathVariable String commentId) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
 		var reactions = postInteractionRepository.findReactionsByCommentId(commentId);
-		return Map.of("commentId", commentId, "reactions", reactions);
+		var summary = reactions.stream()
+			.collect(Collectors.groupingBy(PostInteractionRepository.ReactionSummary::type, Collectors.counting()));
+		return Map.of("commentId", commentId, "summary", summary, "reactions", reactions);
 	}
 
 	@GetMapping("/feed/saved")

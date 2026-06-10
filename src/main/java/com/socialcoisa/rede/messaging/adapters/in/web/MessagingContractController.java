@@ -196,7 +196,9 @@ class MessagingContractController {
 			@PathVariable String conversationId, @PathVariable String messageId) {
 		currentUserResolver.resolve(userId, sessionToken);
 		var reactions = messagingService.getReactions(messageId);
-		return Map.of("messageId", messageId, "reactions", reactions);
+		var summary = reactions.stream()
+			.collect(Collectors.groupingBy(MessagingRepository.ReactionSummary::type, Collectors.counting()));
+		return Map.of("messageId", messageId, "summary", summary, "reactions", reactions);
 	}
 
 	record ReactToMessageRequest(ReactionType type) {
