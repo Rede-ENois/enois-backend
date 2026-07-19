@@ -22,3 +22,5 @@ rad.json
 #Test results file
 TestResults.xml
 target/
+#Env
+.env
