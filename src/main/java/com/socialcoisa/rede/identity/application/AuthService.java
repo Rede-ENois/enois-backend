@@ -24,6 +24,7 @@ import com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository;
 import com.socialcoisa.rede.identity.application.port.out.CredentialRepository;
 import com.socialcoisa.rede.identity.application.port.out.PasswordResetTokenRepository;
 import com.socialcoisa.rede.identity.application.port.out.StoredCredential;
+import com.socialcoisa.rede.identity.application.EmailService;
 import com.socialcoisa.rede.identity.domain.PasswordResetToken;
 import com.socialcoisa.rede.profile.application.UserProfileView;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
@@ -43,14 +44,15 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 	private final AuthSessionRepository authSessionRepository;
 	private final PasswordResetTokenRepository passwordResetTokenRepository;
 	private final PasswordHasher passwordHasher;
+	private final EmailService emailService;
 	private final Clock clock;
 	private final SecureRandom secureRandom = new SecureRandom();
 
 	public AuthService(@Value("${rede.auth.access-token-ttl-minutes:60}") int accessTokenTtlMinutes,
-			@Value("${rede.auth.refresh-token-ttl-days:30}") int refreshTokenTtlDays,
-			UserProfileRepository userProfileRepository, CredentialRepository credentialRepository,
-			AuthSessionRepository authSessionRepository, PasswordResetTokenRepository passwordResetTokenRepository,
-			PasswordHasher passwordHasher, Clock clock) {
+                       @Value("${rede.auth.refresh-token-ttl-days:30}") int refreshTokenTtlDays,
+                       UserProfileRepository userProfileRepository, CredentialRepository credentialRepository,
+                       AuthSessionRepository authSessionRepository, PasswordResetTokenRepository passwordResetTokenRepository,
+                       PasswordHasher passwordHasher, EmailService emailService, Clock clock) {
 		this.accessTokenTtl = Duration.ofMinutes(accessTokenTtlMinutes);
 		this.refreshTokenTtl = Duration.ofDays(refreshTokenTtlDays);
 		this.userProfileRepository = userProfileRepository;
@@ -58,7 +60,8 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 		this.authSessionRepository = authSessionRepository;
 		this.passwordResetTokenRepository = passwordResetTokenRepository;
 		this.passwordHasher = passwordHasher;
-		this.clock = clock;
+        this.emailService = emailService;
+        this.clock = clock;
 	}
 
 	@Override
@@ -123,6 +126,7 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 			String token = newResetToken();
 			Instant now = clock.instant();
 			passwordResetTokenRepository.save(PasswordResetToken.create(token, profile.id(), now.plus(RESET_TOKEN_TTL), now));
+			emailService.sendPasswordResetEmail(normalizedEmail, profile.name(), token);
 		});
 	}
 
