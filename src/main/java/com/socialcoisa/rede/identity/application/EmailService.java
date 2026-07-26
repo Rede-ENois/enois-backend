@@ -25,19 +25,17 @@ public class EmailService {
     public EmailService(
             JavaMailSender mailSender,
             TemplateEngine templateEngine,
-            @Value("${rede.frontend.url:http://localhost:5173}") String frontendUrl,
-            @Value("${spring.mail.username:noreply@socialcoisa.com}") String fromEmail) {
+            @Value("${rede.frontend.url}") String frontendUrl,
+            @Value("${spring.mail.username}") String fromEmail) {
         this.mailSender = mailSender;
         this.templateEngine = templateEngine;
-        this.frontendUrl = frontendUrl.endsWith("/")
-                ? frontendUrl.substring(0, frontendUrl.length() - 1)
-                : frontendUrl;
+        this.frontendUrl = frontendUrl;
         this.fromEmail = fromEmail;
     }
 
     public void sendPasswordResetEmail(String toEmail, String userName, String resetToken) {
         String resetLink = buildResetLink(resetToken);
-        String subject = "Redefinição de senha · Conexão";
+        String subject = "Redefinição de senha";
         String htmlBody = renderTemplate(userName, resetLink);
 
         try {
@@ -46,11 +44,9 @@ public class EmailService {
             helper.setFrom(fromEmail);
             helper.setTo(toEmail);
             helper.setSubject(subject);
-            helper.setText(htmlBody, true); // true = HTML
-
+            helper.setText(htmlBody, true);
             mailSender.send(message);
-            LOG.info("Email de reset de senha enviado para {}", toEmail);
-        } catch (MessagingException e) {
+        } catch (Exception e) {
             LOG.error("Falha ao enviar email de reset para {}: {}", toEmail, e.getMessage(), e);
         }
     }
@@ -61,7 +57,7 @@ public class EmailService {
 
     private String renderTemplate(String userName, String resetLink) {
         Context context = new Context();
-        context.setVariable("userName", userName != null && !userName.isBlank() ? userName : "usuário");
+        context.setVariable("userName", userName);
         context.setVariable("resetLink", resetLink);
         context.setVariable("currentYear", java.time.Year.now().getValue());
         return templateEngine.process("password-reset", context);
