@@ -25,8 +25,8 @@ public class EmailService {
     public EmailService(
             JavaMailSender mailSender,
             TemplateEngine templateEngine,
-            @Value("${rede.frontend.url:http://localhost:5173}") String frontendUrl,
-            @Value("${spring.mail.username:noreply@socialcoisa.com}") String fromEmail) {
+            @Value("${rede.frontend.url}") String frontendUrl,
+            @Value("${spring.mail.username}") String fromEmail) {
         this.mailSender = mailSender;
         this.templateEngine = templateEngine;
         this.frontendUrl = frontendUrl.endsWith("/")
