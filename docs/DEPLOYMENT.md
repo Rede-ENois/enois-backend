@@ -22,6 +22,50 @@ fly logs
 fly open
 ```
 
+## EKS com RDS MariaDB (perfil QA)
+
+O Deployment em `manifests/enois-app.yaml` usa `SERVER_PORT=8080`, alinhado ao
+Service e aos probes. A configuração padrão da aplicação usa a porta 8081;
+`PORT` sozinho não altera `server.port`.
+
+O banco é configurado pelo Secret `socialthing-db-secrets` (chaves `host`,
+`port`, `dbname`, `username` e `password`). O perfil QA usa `DB_PORT`, com
+3306 como padrão. Configure também `REDE_FRONTEND_URL` e `REDE_BACKEND_URL`
+com as URLs públicas dos ambientes: o perfil QA usa essas variáveis nos
+callbacks OAuth, e elas não estão definidas no manifesto de exemplo.
+
+O startup probe aguarda até aproximadamente 5 minutos pela prontidão da
+aplicação, incluindo a inicialização JPA. Só depois começam os probes de
+readiness e liveness do Actuator. O liveness verifica o estado da aplicação,
+sem depender da disponibilidade do RDS.
+
+Os recursos iniciais são 250m CPU/512Mi de memória solicitados e limites de
+1 CPU/1Gi. O heap Java pode usar até 60% da memória do container; ajuste
+esses valores conforme métricas de consumo e carga.
+
+Para identificar a causa de reinícios, consulte o estado anterior e os eventos:
+
+```bash
+kubectl -n forest-apps get pods -l app=socialcoiso-back
+kubectl -n forest-apps describe pod <pod-name>
+kubectl -n forest-apps logs <pod-name> --previous --tail=100
+```
+
+`OOMKilled` indica que o container excedeu o limite de memória. Eventos de
+falha de liveness seguidos por `Killing` indicam reinício pelo kubelet.
+Um código de saída 137 sozinho não distingue essas causas. Um erro de
+inicialização Java deve aparecer nos logs anteriores.
+
+O aviso `Unknown system variable 'WSREP_ON'` pode ocorrer na detecção de
+Galera pelo Flyway em MariaDB RDS. O Flyway trata a ausência dessa variável
+como Galera desativado. Se a verificação/migração termina normalmente, esse
+aviso não é a causa do encerramento.
+
+Copie as alterações de manifesto para o repositório GitOps. A alteração de
+`application-qa.properties` exige reconstruir a imagem e atualizar a referência
+no Deployment. Prefira uma tag imutável ou digest: `latest` com
+`imagePullPolicy: IfNotPresent` pode reutilizar uma imagem antiga do nó.
+
 ## Docker
 
 ### Construção Multi-stage

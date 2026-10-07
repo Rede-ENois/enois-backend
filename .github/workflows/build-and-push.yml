@@ -1,0 +1,125 @@
+name: Build, Push and GitOps Deploy
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: 818928662779.dkr.ecr.us-east-1.amazonaws.com
+  ECR_REPOSITORY: enois/backend
+  GITOPS_REPO: florestaencantada/integration_gitops
+  GITOPS_BRANCH: main
+  MANIFEST_PATH: gitops/clusters/forest-dev/applications/enois-app.yaml
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # =========================================================================
+  # ETAPA 1: Build da imagem Docker e Push para o ECR
+  # =========================================================================
+  build-and-push:
+    name: 🐳 Build & Push Docker Image
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.vars.outputs.sha_short }}
+      image_ref: ${{ steps.vars.outputs.image_ref }}
+
+    steps:
+      - name: 📥 Checkout do código
+        uses: actions/checkout@v4
+
+      - name: 🏷️ Definir Tag (SHA Curto)
+        id: vars
+        run: |
+          SHA_SHORT=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
+          echo "image_ref=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${SHA_SHORT}" >> $GITHUB_OUTPUT
+
+      - name: ⚙️ Configurar Credenciais AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v6.2.4
+        with:
+          role-to-assume: arn:aws:iam::818928662779:role/forest-dev-github
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: 🔑 Login no Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Verifica e cria o repositório no ECR
+        uses: int128/create-ecr-repository-action@v1
+        with:
+          repository: ${{ env.ECR_REPOSITORY }}
+
+      - name: ⚙️ Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🚀 Build & Push para o ECR
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ steps.vars.outputs.sha_short }}
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # =========================================================================
+  # ETAPA 2: Promoção GitOps → EKS Floresta
+  # =========================================================================
+  promote-gitops:
+    name: 🔄 GitOps Update → EKS Floresta
+    needs: build-and-push
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout do Repositório GitOps (integration_onprem)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          ref: ${{ env.GITOPS_BRANCH }}
+          token: ${{ secrets.GITOPS_TOKEN }}
+          path: gitops-repo
+
+      - name: ✏️ Atualizar Tag da Imagem no Manifesto
+        run: |
+          cd gitops-repo
+          echo "==> Atualizando ${{ env.MANIFEST_PATH }} para tag ${{ needs.build-and-push.outputs.image_tag }}"
+
+          # Atualiza a tag da imagem no skilrush-front
+          sed -i -E \
+            "s|(image:\s*${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:).*|\1${{ needs.build-and-push.outputs.image_tag }}|g" \
+            "${{ env.MANIFEST_PATH }}"
+
+          echo "Diff gerado:"
+          git diff "${{ env.MANIFEST_PATH }}"
+
+      - name: 🚀 Commit & Push no GitOps
+        run: |
+          cd gitops-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add "${{ env.MANIFEST_PATH }}"
+
+          if git diff --staged --quiet; then
+            echo "Nenhuma mudança de imagem, pulando commit."
+            exit 0
+          fi
+
+          git commit \
+            -m "ci(skillify-frontend): atualiza imagem para ${{ needs.build-and-push.outputs.image_tag }}" \
+            -m "Disparado pelo commit ${{ github.sha }} por @${{ github.actor }}"
+
+          git push origin ${{ env.GITOPS_BRANCH }}
