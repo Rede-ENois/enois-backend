@@ -43,8 +43,8 @@ class RecommendationController {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
 		String hash = idempotency.hash(Map.of("targetId", targetId, "comment", body != null ? body.comment() : ""));
 		return idempotency.execute(user.id(), "POST", "/api/recommendations/{targetId}", idempotencyKey, hash,
-			() -> new CommandResponse(201, service.recommend(user.id().value(), targetId,
-				body != null ? body.comment() : null)));
+			() -> new CommandResponse(201, RecommendationView.from(service.recommend(user.id().value(), targetId,
+				body != null ? body.comment() : null))));
 	}
 
 	@DeleteMapping("/{targetId}")

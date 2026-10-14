@@ -34,7 +34,7 @@ public interface UserProfileRepository {
 
 	int countMentoringSessionsAsMentee(String userId);
 
-	int countApprovedReports(String userId);
+	int countActiveReportsAgainst(String userId);
 
 	List<UserProfile> findTopByReputation(int limit);
 

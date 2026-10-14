@@ -10,8 +10,6 @@ import org.springframework.util.StringUtils;
 import com.socialcoisa.rede.profile.application.port.in.GetMeUseCase;
 import com.socialcoisa.rede.profile.application.port.in.GetUserProfileUseCase;
 import com.socialcoisa.rede.profile.application.port.in.UpdateProfileUseCase;
-import com.socialcoisa.rede.profile.application.port.out.ProfileExtensionRepository;
-import com.socialcoisa.rede.profile.application.port.out.RecommendationRepository;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -20,15 +18,12 @@ import com.socialcoisa.rede.shared.web.ApiException;
 public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, UpdateProfileUseCase {
 
 	private final UserProfileRepository repository;
-	private final ProfileExtensionRepository extensionRepository;
-	private final RecommendationRepository recommendationRepository;
+	private final ReputationService reputationService;
 	private final Clock clock;
 
-	public ProfileService(UserProfileRepository repository, ProfileExtensionRepository extensionRepository,
-			RecommendationRepository recommendationRepository, Clock clock) {
+	public ProfileService(UserProfileRepository repository, ReputationService reputationService, Clock clock) {
 		this.repository = repository;
-		this.extensionRepository = extensionRepository;
-		this.recommendationRepository = recommendationRepository;
+		this.reputationService = reputationService;
 		this.clock = clock;
 	}
 
@@ -59,24 +54,8 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 	}
 
 	private UserProfile populateCounts(UserProfile profile) {
-		String userId = profile.id();
-		int connections = repository.countConnections(userId);
-		int followers = repository.countFollowers(userId);
-		int experiences = extensionRepository.countExperiencesByUserId(userId);
-		int educations = extensionRepository.countEducationsByUserId(userId);
-		int certifications = extensionRepository.countCertificationsByUserId(userId);
-		int postInteractions = repository.countPostInteractionsReceived(userId);
-		int communities = repository.countCommunitiesJoined(userId);
-		int events = repository.countEventsAttended(userId);
-		int mentoring = repository.countMentoringSessionsAsMentee(userId);
-		int reports = repository.countApprovedReports(userId);
-		int recommendations = recommendationRepository.findByRecommendedId(userId).size();
-		int reputation = Math.max(0, Math.min(
-			experiences * 10 + educations * 10 + certifications * 5 + connections + followers / 2
-				+ postInteractions + communities * 5 + events * 3 + mentoring * 10
-				- reports * 50 + recommendations * 20,
-			1000));
-		profile.setCounts(connections, followers, reputation);
+		ReputationService.Counts counts = reputationService.countsFor(profile.id());
+		profile.setCounts(counts.connections(), counts.followers(), counts.reputation());
 		repository.save(profile);
 		return profile;
 	}

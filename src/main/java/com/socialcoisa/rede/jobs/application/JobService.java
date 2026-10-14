@@ -9,30 +9,31 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.jobs.application.port.out.JobRepository;
 import com.socialcoisa.rede.jobs.domain.Job;
-import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
+import com.socialcoisa.rede.profile.application.ReputationService;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 @Service
 public class JobService {
 
+	public static final int MIN_REPUTATION_TO_CREATE_JOB = 150;
+
 	private final JobRepository repository;
-	private final UserProfileRepository profileRepository;
+	private final ReputationService reputationService;
 	private final Clock clock;
 
-	public JobService(JobRepository repository, UserProfileRepository profileRepository, Clock clock) {
+	public JobService(JobRepository repository, ReputationService reputationService, Clock clock) {
 		this.repository = repository;
-		this.profileRepository = profileRepository;
+		this.reputationService = reputationService;
 		this.clock = clock;
 	}
 
 	@Transactional
 	public Job create(String title, String company, String logo, String location, String type, String level,
 			String salary, List<String> skills, String userId) {
-		int reputation = profileRepository.findById(userId)
-			.map(p -> p.reputation())
-			.orElse(0);
-		if (reputation < 300) {
-			throw new ApiException(403, "LOW_REPUTATION", "Reputacao insuficiente para criar vagas.");
+		int reputation = reputationService.reputationOf(userId);
+		if (reputation <= MIN_REPUTATION_TO_CREATE_JOB) {
+			throw new ApiException(403, "LOW_REPUTATION", "E necessario ter mais de " + MIN_REPUTATION_TO_CREATE_JOB
+				+ " de reputacao para criar vagas.");
 		}
 		String id = "job_" + UUID.randomUUID().toString().replace("-", "");
 		Job job = Job.create(id, title, company, logo, location, type, level, salary, skills, userId, clock.instant());

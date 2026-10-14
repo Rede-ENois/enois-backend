@@ -114,9 +114,13 @@ class UserProfilePersistenceAdapter implements UserProfileRepository {
 	}
 
 	@Override
-	public int countApprovedReports(String userId) {
+	public int countActiveReportsAgainst(String userId) {
+		// Denuncias pendentes ou aprovadas contra conteudo do usuario (post, comentario, vaga).
 		var result = em.createNativeQuery(
-			"select count(*) from reports where target_id in (select id from posts where author_id = :uid) and status = 'APPROVED'")
+			"select count(*) from reports where status <> 'DISMISSED' and ("
+				+ "target_id in (select id from posts where author_id = :uid) "
+				+ "or target_id in (select id from comments where author_id = :uid) "
+				+ "or target_id in (select id from jobs where posted_by = :uid))")
 			.setParameter("uid", userId)
 			.getSingleResult();
 		return ((Number) result).intValue();

@@ -8,6 +8,7 @@ import org.springframework.stereotype.Repository;
 import com.socialcoisa.rede.moderation.application.port.out.ReportRepository;
 import com.socialcoisa.rede.moderation.domain.Report;
 import com.socialcoisa.rede.moderation.domain.ReportStatus;
+import com.socialcoisa.rede.moderation.domain.TargetType;
 
 @Repository
 class ReportPersistenceAdapter implements ReportRepository {
@@ -38,6 +39,7 @@ class ReportPersistenceAdapter implements ReportRepository {
 
 	@Override
 	public boolean existsByReporterAndTarget(String reporterId, String targetType, String targetId) {
-		return jpaRepository.existsByReporterIdAndTargetTypeAndTargetId(reporterId, targetType, targetId);
+		return jpaRepository.existsByReporterIdAndTargetTypeAndTargetId(reporterId, TargetType.valueOf(targetType),
+			targetId);
 	}
 }

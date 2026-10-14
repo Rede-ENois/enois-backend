@@ -44,8 +44,8 @@ class ReportController {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
 		String hash = idempotency.hash(request);
 		return idempotency.execute(user.id(), "POST", "/api/reports", idempotencyKey, hash,
-			() -> new CommandResponse(201, moderationService.report(user.id().value(),
-				request.targetType(), request.targetId(), request.reason(), request.description())));
+			() -> new CommandResponse(201, ReportView.from(moderationService.report(user.id().value(),
+				request.targetType(), request.targetId(), request.reason(), request.description()))));
 	}
 
 	@GetMapping("/admin/reports")
@@ -66,7 +66,8 @@ class ReportController {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
 		String hash = idempotency.hash(Map.of("reportId", reportId, "note", request.note() == null ? "" : request.note()));
 		return idempotency.execute(user.id(), "POST", "/api/admin/reports/{reportId}/approve", idempotencyKey, hash,
-			() -> new CommandResponse(200, moderationService.approve(reportId, user.id().value(), request.note())));
+			() -> new CommandResponse(200, ReportView.from(
+				moderationService.approve(reportId, user.id().value(), request.note()))));
 	}
 
 	@PostMapping("/admin/reports/{reportId}/dismiss")
@@ -77,7 +78,8 @@ class ReportController {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
 		String hash = idempotency.hash(Map.of("reportId", reportId, "note", request.note() == null ? "" : request.note()));
 		return idempotency.execute(user.id(), "POST", "/api/admin/reports/{reportId}/dismiss", idempotencyKey, hash,
-			() -> new CommandResponse(200, moderationService.dismiss(reportId, user.id().value(), request.note())));
+			() -> new CommandResponse(200, ReportView.from(
+				moderationService.dismiss(reportId, user.id().value(), request.note()))));
 	}
 
 	record CreateReportRequest(TargetType targetType, String targetId, ReportReason reason, String description) {
