@@ -33,7 +33,7 @@ public class TestAuthHelper {
 			"password", "Test1234!"
 		));
 
-		MvcResult result = mockMvc.perform(post("/api/auth/signup")
+		MvcResult result = mockMvc.perform(post("/auth/signup")
 				.header("Idempotency-Key", "signup-" + userId)
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(payload))

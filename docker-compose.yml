@@ -9,7 +9,7 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8081/api/health"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/health"]
       interval: 15s
       timeout: 5s
       retries: 12

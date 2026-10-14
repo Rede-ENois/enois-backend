@@ -30,7 +30,7 @@ import com.socialcoisa.rede.shared.web.PageResponse;
 import com.socialcoisa.rede.shared.web.StatusResponse;
 
 @RestController
-@RequestMapping("/api/notifications")
+@RequestMapping("/notifications")
 class NotificationContractController {
 
 	private final IdempotencyApplicationService idempotency;

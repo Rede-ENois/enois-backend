@@ -28,7 +28,7 @@ import com.socialcoisa.rede.shared.web.PageResponse;
 import com.socialcoisa.rede.shared.web.StatusResponse;
 
 @RestController
-@RequestMapping("/api/jobs")
+@RequestMapping("/jobs")
 class JobContractController {
 
 	private final IdempotencyApplicationService idempotency;

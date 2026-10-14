@@ -26,7 +26,7 @@ import com.socialcoisa.rede.shared.web.PageResponse;
 import com.socialcoisa.rede.shared.web.StatusResponse;
 
 @RestController
-@RequestMapping("/api/events")
+@RequestMapping("/events")
 class EventContractController {
 
 	private final IdempotencyApplicationService idempotency;

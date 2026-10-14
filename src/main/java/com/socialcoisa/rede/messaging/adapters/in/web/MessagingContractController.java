@@ -33,7 +33,7 @@ import com.socialcoisa.rede.shared.web.PageResponse;
 import com.socialcoisa.rede.shared.web.StatusResponse;
 
 @RestController
-@RequestMapping("/api/conversations")
+@RequestMapping("/conversations")
 class MessagingContractController {
 
 	private final IdempotencyApplicationService idempotency;

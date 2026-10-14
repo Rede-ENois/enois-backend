@@ -39,7 +39,7 @@ class AuthProfileFlowTests {
 			"email", "ana.flow@example.com",
 			"password", "senha-segura"));
 
-		MvcResult signup = mockMvc.perform(post("/api/auth/signup")
+		MvcResult signup = mockMvc.perform(post("/auth/signup")
 				.header("Idempotency-Key", "auth-signup-flow-1")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(signupPayload))
@@ -50,7 +50,7 @@ class AuthProfileFlowTests {
 		JsonNode signupNode = objectMapper.readTree(signup.getResponse().getContentAsString());
 		String firstToken = signupNode.get("token").asText();
 
-		MvcResult replay = mockMvc.perform(post("/api/auth/signup")
+		MvcResult replay = mockMvc.perform(post("/auth/signup")
 				.header("Idempotency-Key", "auth-signup-flow-1")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(signupPayload))
@@ -63,7 +63,7 @@ class AuthProfileFlowTests {
 			"email", "ana.flow@example.com",
 			"password", "senha-segura"));
 
-		MvcResult login = mockMvc.perform(post("/api/auth/login")
+		MvcResult login = mockMvc.perform(post("/auth/login")
 				.header("Idempotency-Key", "auth-login-flow-1")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(loginPayload))
@@ -74,7 +74,7 @@ class AuthProfileFlowTests {
 		String token = objectMapper.readTree(login.getResponse().getContentAsString()).get("token").asText();
 		assertThat(token).isNotBlank().isNotEqualTo(firstToken);
 
-		mockMvc.perform(get("/api/auth/me")
+		mockMvc.perform(get("/auth/me")
 				.header("X-Session-Token", token))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.username").value("ana-souza"));
@@ -85,7 +85,7 @@ class AuthProfileFlowTests {
 			"location", "Sao Paulo",
 			"skills", List.of("Produto", "Discovery")));
 
-		mockMvc.perform(patch("/api/me/profile")
+		mockMvc.perform(patch("/me/profile")
 				.header("X-Session-Token", token)
 				.header("Idempotency-Key", "profile-update-flow-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -100,7 +100,7 @@ class AuthProfileFlowTests {
 			"tags", List.of("Backend"),
 			"mediaIds", List.of()));
 
-		mockMvc.perform(post("/api/feed/posts")
+		mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", token)
 				.header("Idempotency-Key", "session-feed-post-flow-1")
 				.contentType(MediaType.APPLICATION_JSON)

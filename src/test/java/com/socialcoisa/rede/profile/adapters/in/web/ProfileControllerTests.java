@@ -45,7 +45,7 @@ class ProfileControllerTests {
 			"email", unique + "@example.com",
 			"password", "senha-segura"));
 
-		MvcResult signup = mockMvc.perform(post("/api/auth/signup")
+		MvcResult signup = mockMvc.perform(post("/auth/signup")
 				.header("Idempotency-Key", "prof-setup-" + unique)
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(signupPayload))
@@ -67,7 +67,7 @@ class ProfileControllerTests {
 			"skills", List.of("Java", "Spring"),
 			"openToWork", true));
 
-		mockMvc.perform(patch("/api/me/profile")
+		mockMvc.perform(patch("/me/profile")
 				.header("X-User-Id", userId)
 				.header("X-Session-Token", sessionToken)
 				.header("Idempotency-Key", "prof-update-1")
@@ -78,7 +78,7 @@ class ProfileControllerTests {
 			.andExpect(jsonPath("$.company").value("Connect Grow"))
 			.andExpect(jsonPath("$.skills[0]").value("Java"));
 
-		mockMvc.perform(get("/api/me")
+		mockMvc.perform(get("/me")
 				.header("X-User-Id", userId)
 				.header("X-Session-Token", sessionToken))
 			.andExpect(status().isOk())
@@ -92,7 +92,7 @@ class ProfileControllerTests {
 			"company", "Tech Co",
 			"startDate", "2020-01-01"));
 
-		MvcResult expResult = mockMvc.perform(post("/api/me/experiences")
+		MvcResult expResult = mockMvc.perform(post("/me/experiences")
 				.header("X-User-Id", userId)
 				.header("X-Session-Token", sessionToken)
 				.header("Idempotency-Key", "prof-exp-create-1")
@@ -109,7 +109,7 @@ class ProfileControllerTests {
 			"company", "Tech Co",
 			"startDate", "2020-01-01"));
 
-		mockMvc.perform(put("/api/me/experiences/{id}", expId)
+		mockMvc.perform(put("/me/experiences/{id}", expId)
 				.header("X-User-Id", userId)
 				.header("X-Session-Token", sessionToken)
 				.header("Idempotency-Key", "prof-exp-update-1")
@@ -118,13 +118,13 @@ class ProfileControllerTests {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.title").value("Senior Software Engineer"));
 
-		mockMvc.perform(delete("/api/me/experiences/{id}", expId)
+		mockMvc.perform(delete("/me/experiences/{id}", expId)
 				.header("X-User-Id", userId)
 				.header("X-Session-Token", sessionToken)
 				.header("Idempotency-Key", "prof-exp-delete-1"))
 			.andExpect(status().isOk());
 
-		mockMvc.perform(get("/api/me/experiences")
+		mockMvc.perform(get("/me/experiences")
 				.header("X-User-Id", userId)
 				.header("X-Session-Token", sessionToken))
 			.andExpect(status().isOk())
@@ -140,7 +140,7 @@ class ProfileControllerTests {
 			"startDate", "2015-01-01",
 			"endDate", "2019-12-31"));
 
-		MvcResult eduResult = mockMvc.perform(post("/api/me/education")
+		MvcResult eduResult = mockMvc.perform(post("/me/education")
 				.header("X-User-Id", userId)
 				.header("X-Session-Token", sessionToken)
 				.header("Idempotency-Key", "prof-edu-create-1")
@@ -152,7 +152,7 @@ class ProfileControllerTests {
 
 		String eduId = objectMapper.readTree(eduResult.getResponse().getContentAsString()).get("id").asText();
 
-		mockMvc.perform(put("/api/me/education/{id}", eduId)
+		mockMvc.perform(put("/me/education/{id}", eduId)
 				.header("X-User-Id", userId)
 				.header("X-Session-Token", sessionToken)
 				.header("Idempotency-Key", "prof-edu-update-1")
@@ -166,7 +166,7 @@ class ProfileControllerTests {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.degree").value("MS"));
 
-		mockMvc.perform(delete("/api/me/education/{id}", eduId)
+		mockMvc.perform(delete("/me/education/{id}", eduId)
 				.header("X-User-Id", userId)
 				.header("X-Session-Token", sessionToken)
 				.header("Idempotency-Key", "prof-edu-delete-1"))
@@ -180,7 +180,7 @@ class ProfileControllerTests {
 			"issuer", "Amazon",
 			"issueDate", "2023-06-01"));
 
-		MvcResult certResult = mockMvc.perform(post("/api/me/certifications")
+		MvcResult certResult = mockMvc.perform(post("/me/certifications")
 				.header("X-User-Id", userId)
 				.header("X-Session-Token", sessionToken)
 				.header("Idempotency-Key", "prof-cert-create-1")
@@ -192,7 +192,7 @@ class ProfileControllerTests {
 
 		String certId = objectMapper.readTree(certResult.getResponse().getContentAsString()).get("id").asText();
 
-		mockMvc.perform(put("/api/me/certifications/{id}", certId)
+		mockMvc.perform(put("/me/certifications/{id}", certId)
 				.header("X-User-Id", userId)
 				.header("X-Session-Token", sessionToken)
 				.header("Idempotency-Key", "prof-cert-update-1")
@@ -204,7 +204,7 @@ class ProfileControllerTests {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.name").value("AWS Certified Solutions Architect"));
 
-		mockMvc.perform(delete("/api/me/certifications/{id}", certId)
+		mockMvc.perform(delete("/me/certifications/{id}", certId)
 				.header("X-User-Id", userId)
 				.header("X-Session-Token", sessionToken)
 				.header("Idempotency-Key", "prof-cert-delete-1"))
@@ -213,7 +213,7 @@ class ProfileControllerTests {
 
 	@Test
 	void viewsPublicProfile() throws Exception {
-		mockMvc.perform(get("/api/me")
+		mockMvc.perform(get("/me")
 				.header("X-User-Id", userId)
 				.header("X-Session-Token", sessionToken))
 			.andExpect(status().isOk())

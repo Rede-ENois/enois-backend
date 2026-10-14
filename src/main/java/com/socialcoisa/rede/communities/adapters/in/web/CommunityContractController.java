@@ -35,7 +35,7 @@ import com.socialcoisa.rede.shared.web.StatusResponse;
 import java.time.Instant;
 
 @RestController
-@RequestMapping("/api/communities")
+@RequestMapping("/communities")
 class CommunityContractController {
 
 	private final IdempotencyApplicationService idempotency;

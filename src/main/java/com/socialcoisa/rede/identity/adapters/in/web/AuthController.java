@@ -36,7 +36,7 @@ import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationServic
 import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 
 @RestController
-@RequestMapping("/api/auth")
+@RequestMapping("/auth")
 class AuthController {
 
 	private final SignupUseCase signupUseCase;

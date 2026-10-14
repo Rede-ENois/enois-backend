@@ -14,7 +14,7 @@ import com.socialcoisa.rede.shared.web.PageResponse;
 import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 
 @RestController
-@RequestMapping("/api/search")
+@RequestMapping("/search")
 class SearchContractController {
 
 	private final SearchService searchService;

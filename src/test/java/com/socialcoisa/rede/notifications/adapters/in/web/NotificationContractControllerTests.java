@@ -36,12 +36,12 @@ class NotificationContractControllerTests {
 	void listsNotificationsAndMarksAllRead() throws Exception {
 		var session = auth.authenticate("notif_user");
 
-		mockMvc.perform(get("/api/notifications")
+		mockMvc.perform(get("/notifications")
 				.header("X-Session-Token", session.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.items").isArray());
 
-		mockMvc.perform(post("/api/notifications/read-all")
+		mockMvc.perform(post("/notifications/read-all")
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "notif-read-all-1"))
 			.andExpect(status().isOk())

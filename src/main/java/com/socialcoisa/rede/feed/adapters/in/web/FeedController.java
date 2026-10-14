@@ -51,7 +51,6 @@ import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 import com.socialcoisa.rede.shared.web.CursorCodec;
 
 @RestController
-@RequestMapping("/api")
 class FeedController {
 
 	private static final String USER_HEADER = "X-User-Id";

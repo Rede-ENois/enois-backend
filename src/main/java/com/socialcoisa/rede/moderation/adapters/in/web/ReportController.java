@@ -23,7 +23,6 @@ import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 
 @RestController
-@RequestMapping("/api")
 class ReportController {
 
 	private final ModerationService moderationService;
@@ -38,7 +37,7 @@ class ReportController {
 	}
 
 	@PostMapping("/reports")
-	ResponseEntity<String> report(@RequestHeader("X-User-Id") String userId,
+	ResponseEntity<String> report(@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader("X-Session-Token") String sessionToken,
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@RequestBody CreateReportRequest request) {
@@ -50,7 +49,7 @@ class ReportController {
 	}
 
 	@GetMapping("/admin/reports")
-	List<ReportView> listPending(@RequestHeader("X-User-Id") String userId,
+	List<ReportView> listPending(@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader("X-Session-Token") String sessionToken,
 			@RequestParam(defaultValue = "20") int limit) {
 		currentUserResolver.resolve(userId, sessionToken);
@@ -60,7 +59,7 @@ class ReportController {
 	}
 
 	@PostMapping("/admin/reports/{reportId}/approve")
-	ResponseEntity<String> approve(@RequestHeader("X-User-Id") String userId,
+	ResponseEntity<String> approve(@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader("X-Session-Token") String sessionToken,
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String reportId, @RequestBody ReviewRequest request) {
@@ -71,7 +70,7 @@ class ReportController {
 	}
 
 	@PostMapping("/admin/reports/{reportId}/dismiss")
-	ResponseEntity<String> dismiss(@RequestHeader("X-User-Id") String userId,
+	ResponseEntity<String> dismiss(@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader("X-Session-Token") String sessionToken,
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String reportId, @RequestBody ReviewRequest request) {

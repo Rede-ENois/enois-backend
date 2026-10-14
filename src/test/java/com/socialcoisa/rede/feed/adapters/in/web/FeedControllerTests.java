@@ -49,7 +49,7 @@ class FeedControllerTests {
 			"tags", List.of("Arquitetura", "Java"),
 			"mediaIds", List.of()));
 
-		MvcResult first = mockMvc.perform(post("/api/feed/posts")
+		MvcResult first = mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "feed-replay-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -58,7 +58,7 @@ class FeedControllerTests {
 			.andExpect(jsonPath("$.authorId").exists())
 			.andReturn();
 
-		MvcResult replay = mockMvc.perform(post("/api/feed/posts")
+		MvcResult replay = mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "feed-replay-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -83,14 +83,14 @@ class FeedControllerTests {
 			"tags", List.of(),
 			"mediaIds", List.of()));
 
-		mockMvc.perform(post("/api/feed/posts")
+		mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "feed-conflict-1")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(first))
 			.andExpect(status().isCreated());
 
-		mockMvc.perform(post("/api/feed/posts")
+		mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "feed-conflict-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -108,7 +108,7 @@ class FeedControllerTests {
 			"tags", List.of("Backend"),
 			"mediaIds", List.of()));
 
-		MvcResult created = mockMvc.perform(post("/api/feed/posts")
+		MvcResult created = mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "feed-delete-create-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -119,18 +119,18 @@ class FeedControllerTests {
 		JsonNode node = objectMapper.readTree(created.getResponse().getContentAsString());
 		String postId = node.get("id").asText();
 
-		mockMvc.perform(get("/api/feed")
+		mockMvc.perform(get("/feed")
 				.header("X-Session-Token", session.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.items[0].id").value(postId));
 
-		mockMvc.perform(delete("/api/feed/posts/{postId}", postId)
+		mockMvc.perform(delete("/feed/posts/{postId}", postId)
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "feed-delete-1"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("DELETED"));
 
-		mockMvc.perform(get("/api/feed")
+		mockMvc.perform(get("/feed")
 				.header("X-Session-Token", session.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.items").isEmpty());
@@ -150,7 +150,7 @@ class FeedControllerTests {
 			"tags", List.of("Feed"),
 			"mediaIds", List.of()));
 
-		MvcResult created = mockMvc.perform(post("/api/feed/posts")
+		MvcResult created = mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "feed-interactions-create-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -161,7 +161,7 @@ class FeedControllerTests {
 		String postId = objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asText();
 		String commentPayload = objectMapper.writeValueAsString(Map.of("content", "Concordo com a abordagem."));
 
-		MvcResult comment = mockMvc.perform(post("/api/feed/posts/{postId}/comments", postId)
+		MvcResult comment = mockMvc.perform(post("/feed/posts/{postId}/comments", postId)
 				.header("X-Session-Token", commenterSession.token())
 				.header("Idempotency-Key", "feed-comment-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -170,7 +170,7 @@ class FeedControllerTests {
 			.andExpect(jsonPath("$.postId").value(postId))
 			.andReturn();
 
-		mockMvc.perform(post("/api/feed/posts/{postId}/comments", postId)
+		mockMvc.perform(post("/feed/posts/{postId}/comments", postId)
 				.header("X-Session-Token", commenterSession.token())
 				.header("Idempotency-Key", "feed-comment-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -184,7 +184,7 @@ class FeedControllerTests {
 			"parentCommentId", commentId,
 			"content", "Resposta mantendo a thread no mesmo post."));
 
-		mockMvc.perform(post("/api/feed/posts/{postId}/comments", postId)
+		mockMvc.perform(post("/feed/posts/{postId}/comments", postId)
 				.header("X-Session-Token", authorReplySession.token())
 				.header("Idempotency-Key", "feed-reply-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -192,7 +192,7 @@ class FeedControllerTests {
 			.andExpect(status().isCreated())
 			.andExpect(jsonPath("$.parentCommentId").value(commentId));
 
-		mockMvc.perform(post("/api/feed/posts/{postId}/reactions", postId)
+		mockMvc.perform(post("/feed/posts/{postId}/reactions", postId)
 				.header("X-Session-Token", reactorSession.token())
 				.header("Idempotency-Key", "feed-reaction-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -202,32 +202,32 @@ class FeedControllerTests {
 			.andExpect(jsonPath("$.counters.reactions").value(1))
 			.andExpect(jsonPath("$.counters.comments").value(2));
 
-		mockMvc.perform(post("/api/feed/posts/{postId}/saves", postId)
+		mockMvc.perform(post("/feed/posts/{postId}/saves", postId)
 				.header("X-Session-Token", saverSession.token())
 				.header("Idempotency-Key", "feed-save-1"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("SAVED"))
 			.andExpect(jsonPath("$.counters.saves").value(1));
 
-		mockMvc.perform(post("/api/feed/posts/{postId}/shares", postId)
+		mockMvc.perform(post("/feed/posts/{postId}/shares", postId)
 				.header("X-Session-Token", sharerSession.token())
 				.header("Idempotency-Key", "feed-share-1"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("SHARED"))
 			.andExpect(jsonPath("$.counters.shares").value(1));
 
-		mockMvc.perform(get("/api/feed/posts/{postId}/comments", postId))
+		mockMvc.perform(get("/feed/posts/{postId}/comments", postId))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.items.length()").value(2));
 
-		mockMvc.perform(delete("/api/feed/posts/{postId}/reactions", postId)
+		mockMvc.perform(delete("/feed/posts/{postId}/reactions", postId)
 				.header("X-Session-Token", reactorSession.token())
 				.header("Idempotency-Key", "feed-reaction-delete-1"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("REACTION_REMOVED"))
 			.andExpect(jsonPath("$.counters.reactions").value(0));
 
-		mockMvc.perform(delete("/api/feed/posts/{postId}/saves", postId)
+		mockMvc.perform(delete("/feed/posts/{postId}/saves", postId)
 				.header("X-Session-Token", saverSession.token())
 				.header("Idempotency-Key", "feed-save-delete-1"))
 			.andExpect(status().isOk())

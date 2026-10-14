@@ -49,7 +49,7 @@ class MediaControllerTests {
 			"size", 2048,
 			"purpose", "POST_IMAGE"));
 
-		MvcResult first = mockMvc.perform(post("/api/media/uploads")
+		MvcResult first = mockMvc.perform(post("/media/uploads")
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "media-upload-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -61,7 +61,7 @@ class MediaControllerTests {
 			.andExpect(jsonPath("$.uploadUrl").exists())
 			.andReturn();
 
-		MvcResult replay = mockMvc.perform(post("/api/media/uploads")
+		MvcResult replay = mockMvc.perform(post("/media/uploads")
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "media-upload-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -81,7 +81,7 @@ class MediaControllerTests {
 			"size", 4096,
 			"purpose", "POST_IMAGE"));
 
-		MvcResult mediaResult = mockMvc.perform(post("/api/media/uploads")
+		MvcResult mediaResult = mockMvc.perform(post("/media/uploads")
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "media-feed-upload-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -96,7 +96,7 @@ class MediaControllerTests {
 			"tags", List.of("Media"),
 			"mediaIds", List.of(mediaId)));
 
-		MvcResult postResult = mockMvc.perform(post("/api/feed/posts")
+		MvcResult postResult = mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "media-feed-post-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -107,13 +107,13 @@ class MediaControllerTests {
 
 		String postId = objectMapper.readTree(postResult.getResponse().getContentAsString()).get("id").asText();
 
-		mockMvc.perform(delete("/api/feed/posts/{postId}", postId)
+		mockMvc.perform(delete("/feed/posts/{postId}", postId)
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "media-feed-delete-1"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("DELETED"));
 
-		MvcResult deletedMedia = mockMvc.perform(get("/api/media/{mediaId}", mediaId)
+		MvcResult deletedMedia = mockMvc.perform(get("/media/{mediaId}", mediaId)
 				.header("X-Session-Token", session.token()))
 			.andExpect(status().isOk())
 			.andReturn();

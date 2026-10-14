@@ -37,7 +37,7 @@ class ContractControllerTests {
 
 	@Test
 	void exposesInitialHttpContractsInOpenApi() throws Exception {
-		mockMvc.perform(get("/api/openapi.json"))
+		mockMvc.perform(get("/openapi.json"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.paths['/api/network/users']").exists())
 			.andExpect(jsonPath("$.paths['/api/media/uploads']").exists())
@@ -52,7 +52,7 @@ class ContractControllerTests {
 
 	@Test
 	void returnsStableEmptyPagesForContractLists() throws Exception {
-		mockMvc.perform(get("/api/communities"))
+		mockMvc.perform(get("/communities"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.items").isArray())
 			.andExpect(jsonPath("$.items").isEmpty());
@@ -60,7 +60,7 @@ class ContractControllerTests {
 
 	@Test
 	void addsRequestIdToResponses() throws Exception {
-		MvcResult result = mockMvc.perform(get("/api/health")
+		MvcResult result = mockMvc.perform(get("/health")
 				.header("X-Request-Id", "request-contract-1"))
 			.andExpect(status().isOk())
 			.andReturn();
@@ -72,14 +72,14 @@ class ContractControllerTests {
 	void replaysIdempotentContractWrites() throws Exception {
 		var session = auth.authenticate("user_contract");
 
-		MvcResult first = mockMvc.perform(post("/api/jobs/{jobId}/saves", "job_contract")
+		MvcResult first = mockMvc.perform(post("/jobs/{jobId}/saves", "job_contract")
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "contract-job-save-1"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("SAVED"))
 			.andReturn();
 
-		MvcResult replay = mockMvc.perform(post("/api/jobs/{jobId}/saves", "job_contract")
+		MvcResult replay = mockMvc.perform(post("/jobs/{jobId}/saves", "job_contract")
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "contract-job-save-1"))
 			.andExpect(status().isOk())

@@ -21,7 +21,7 @@ import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 
 @RestController
-@RequestMapping("/api/recommendations")
+@RequestMapping("/recommendations")
 class RecommendationController {
 
 	private final RecommendationService service;
@@ -36,7 +36,7 @@ class RecommendationController {
 	}
 
 	@PostMapping("/{targetId}")
-	ResponseEntity<String> recommend(@RequestHeader("X-User-Id") String userId,
+	ResponseEntity<String> recommend(@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader("X-Session-Token") String sessionToken,
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String targetId, @RequestBody(required = false) RecommendBody body) {
@@ -48,7 +48,7 @@ class RecommendationController {
 	}
 
 	@DeleteMapping("/{targetId}")
-	ResponseEntity<String> remove(@RequestHeader("X-User-Id") String userId,
+	ResponseEntity<String> remove(@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader("X-Session-Token") String sessionToken,
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String targetId) {

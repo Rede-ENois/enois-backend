@@ -24,7 +24,7 @@ class CorsConfig {
 				String[] patterns = allowedOrigins.isBlank()
 					? new String[] { "*" }
 					: Arrays.stream(allowedOrigins.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toArray(String[]::new);
-				registry.addMapping("/api/**")
+				registry.addMapping("/**")
 					.allowedOriginPatterns(patterns)
 					.allowedMethods("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
 					.allowedHeaders("*")

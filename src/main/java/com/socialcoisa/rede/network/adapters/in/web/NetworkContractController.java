@@ -35,7 +35,7 @@ import com.socialcoisa.rede.shared.web.PageResponse;
 import com.socialcoisa.rede.shared.web.StatusResponse;
 
 @RestController
-@RequestMapping("/api/network")
+@RequestMapping("/network")
 class NetworkContractController {
 
 	private final IdempotencyApplicationService idempotency;

@@ -19,7 +19,7 @@ class SearchContractControllerTests {
 
 	@Test
 	void searchesByKeyword() throws Exception {
-		mockMvc.perform(get("/api/search")
+		mockMvc.perform(get("/search")
 				.param("q", "design")
 				.param("types", "users,communities"))
 			.andExpect(status().isOk())
@@ -28,7 +28,7 @@ class SearchContractControllerTests {
 
 	@Test
 	void returnsEmptyForGibberish() throws Exception {
-		mockMvc.perform(get("/api/search")
+		mockMvc.perform(get("/search")
 				.param("q", "zzzzzznotfound")
 				.param("types", "users"))
 			.andExpect(status().isOk())

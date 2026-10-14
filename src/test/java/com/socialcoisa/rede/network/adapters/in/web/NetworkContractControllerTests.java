@@ -41,59 +41,59 @@ class NetworkContractControllerTests {
 		var sessionA = auth.authenticate("net_user_a_" + System.nanoTime());
 		var sessionB = auth.authenticate("net_user_b_" + System.nanoTime());
 
-		mockMvc.perform(get("/api/network/suggestions")
+		mockMvc.perform(get("/network/suggestions")
 				.header("X-Session-Token", sessionA.token())
 				.param("limit", "4"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$").isArray());
 
-		mockMvc.perform(post("/api/network/connections/{target}", sessionB.userId())
+		mockMvc.perform(post("/network/connections/{target}", sessionB.userId())
 				.header("X-Session-Token", sessionA.token())
 				.header("Idempotency-Key", "net-req-" + sessionA.userId()))
 			.andExpect(status().isAccepted())
 			.andExpect(jsonPath("$.status").value("REQUESTED"));
 
-		mockMvc.perform(get("/api/network/requests")
+		mockMvc.perform(get("/network/requests")
 				.header("X-Session-Token", sessionB.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.items.length()").value(1))
 			.andExpect(jsonPath("$.items[0].fromUserId").value(sessionA.userId()));
 
-		mockMvc.perform(put("/api/network/connections/{target}/accept", sessionA.userId())
+		mockMvc.perform(put("/network/connections/{target}/accept", sessionA.userId())
 				.header("X-Session-Token", sessionB.token())
 				.header("Idempotency-Key", "net-acc-" + sessionA.userId()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("ACCEPTED"));
 
-		mockMvc.perform(get("/api/network/summary")
+		mockMvc.perform(get("/network/summary")
 				.header("X-Session-Token", sessionA.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.connections").value(1));
 
-		mockMvc.perform(get("/api/network/summary")
+		mockMvc.perform(get("/network/summary")
 				.header("X-Session-Token", sessionB.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.connections").value(1));
 
-		mockMvc.perform(get("/api/network/suggestions")
+		mockMvc.perform(get("/network/suggestions")
 				.header("X-Session-Token", sessionA.token())
 				.param("limit", "4"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$").isArray());
 
-		mockMvc.perform(get("/api/network/users")
+		mockMvc.perform(get("/network/users")
 				.header("X-Session-Token", sessionA.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.items.length()").value(1))
 			.andExpect(jsonPath("$.items[0].connected").value(true));
 
-		mockMvc.perform(delete("/api/network/connections/{target}", sessionB.userId())
+		mockMvc.perform(delete("/network/connections/{target}", sessionB.userId())
 				.header("X-Session-Token", sessionA.token())
 				.header("Idempotency-Key", "net-rem-" + sessionA.userId()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("REMOVED"));
 
-		mockMvc.perform(get("/api/network/summary")
+		mockMvc.perform(get("/network/summary")
 				.header("X-Session-Token", sessionA.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.connections").value(0));
@@ -104,13 +104,13 @@ class NetworkContractControllerTests {
 		var targetSession = auth.authenticate("net_idem_target_" + System.nanoTime());
 		var session = auth.authenticate("net_idem_user");
 
-		MvcResult first = mockMvc.perform(post("/api/network/connections/{target}", targetSession.userId())
+		MvcResult first = mockMvc.perform(post("/network/connections/{target}", targetSession.userId())
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "net-idem-req"))
 			.andExpect(status().isAccepted())
 			.andReturn();
 
-		MvcResult replay = mockMvc.perform(post("/api/network/connections/{target}", targetSession.userId())
+		MvcResult replay = mockMvc.perform(post("/network/connections/{target}", targetSession.userId())
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "net-idem-req"))
 			.andExpect(status().isAccepted())

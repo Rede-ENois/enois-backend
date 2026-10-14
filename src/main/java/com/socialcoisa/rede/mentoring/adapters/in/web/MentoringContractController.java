@@ -29,7 +29,7 @@ import com.socialcoisa.rede.shared.web.PageResponse;
 import com.socialcoisa.rede.shared.web.StatusResponse;
 
 @RestController
-@RequestMapping("/api/mentors")
+@RequestMapping("/mentors")
 class MentoringContractController {
 
 	private final IdempotencyApplicationService idempotency;
