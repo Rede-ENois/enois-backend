@@ -183,7 +183,7 @@ class CommunityContractController {
 			@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		CurrentUser user = resolveSafely(userId, sessionToken);
-		Instant before = cursor != null ? Instant.parse(cursor) : null;
+		Instant before = cursorCodec.decode(cursor).orElse(null);
 		return getFeedService.getCommunityFeed(communityId, before, limit,
 			user != null ? user.id() : new com.socialcoisa.rede.feed.domain.UserId("anonymous"));
 	}

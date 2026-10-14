@@ -15,7 +15,7 @@ env:
   ECR_REPOSITORY: enois/backend
   GITOPS_REPO: florestaencantada/integration_gitops
   GITOPS_BRANCH: main
-  MANIFEST_PATH: gitops/clusters/forest-dev/applications/enois-app.yaml
+  MANIFEST_PATH: clusters/forest-dev/applications/enois-app.yaml
 
 permissions:
   id-token: write

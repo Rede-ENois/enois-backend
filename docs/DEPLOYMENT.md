@@ -24,7 +24,7 @@ fly open
 
 ## EKS com RDS MariaDB (perfil QA)
 
-O Deployment em `manifests/enois-app.yaml` usa `SERVER_PORT=8080`, alinhado ao
+O Deployment em `clusters/forest-dev/applications/enois-app.yaml` usa `SERVER_PORT=8080`, alinhado ao
 Service e aos probes. A configuração padrão da aplicação usa a porta 8081;
 `PORT` sozinho não altera `server.port`.
 

@@ -1,5 +1,7 @@
 package com.socialcoisa.rede.shared.web;
 
+import java.util.Arrays;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -17,11 +19,16 @@ class CorsConfig {
 		return new WebMvcConfigurer() {
 			@Override
 			public void addCorsMappings(CorsRegistry registry) {
-				String[] origins = allowedOrigins.isBlank() ? new String[]{"http://localhost:5173"} : allowedOrigins.split(",");
+				// allowedOriginPatterns e obrigatorio para aceitar "*" junto com
+				// allowCredentials(true); allowedOrigins("*") lanca excecao em toda requisicao.
+				String[] patterns = allowedOrigins.isBlank()
+					? new String[] { "*" }
+					: Arrays.stream(allowedOrigins.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toArray(String[]::new);
 				registry.addMapping("/api/**")
-					.allowedOrigins(origins)
+					.allowedOriginPatterns(patterns)
 					.allowedMethods("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
 					.allowedHeaders("*")
+					.exposedHeaders("*")
 					.allowCredentials(true);
 			}
 		};
