@@ -35,6 +35,7 @@ import com.socialcoisa.rede.feed.application.port.in.CommentOnPostUseCase;
 import com.socialcoisa.rede.feed.application.port.in.DeletePostUseCase;
 import com.socialcoisa.rede.feed.application.port.in.GetCommentsUseCase;
 import com.socialcoisa.rede.feed.application.port.in.GetFeedUseCase;
+import com.socialcoisa.rede.feed.application.port.in.GetPostUseCase;
 import com.socialcoisa.rede.feed.application.port.in.GetProfilePostsUseCase;
 import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.in.PublishPostUseCase;
@@ -57,6 +58,7 @@ class FeedController {
 
 	private final PublishPostUseCase publishPostUseCase;
 	private final GetFeedUseCase getFeedUseCase;
+	private final GetPostUseCase getPostUseCase;
 	private final GetProfilePostsUseCase getProfilePostsUseCase;
 	private final DeletePostUseCase deletePostUseCase;
 	private final BulkDeletePostsUseCase bulkDeletePostsUseCase;
@@ -71,7 +73,7 @@ class FeedController {
 	private final CommentRepository commentRepository;
 	private final CursorCodec cursorCodec;
 
-	FeedController(PublishPostUseCase publishPostUseCase, GetFeedUseCase getFeedUseCase,
+	FeedController(PublishPostUseCase publishPostUseCase, GetFeedUseCase getFeedUseCase, GetPostUseCase getPostUseCase,
 			GetProfilePostsUseCase getProfilePostsUseCase, DeletePostUseCase deletePostUseCase,
 			BulkDeletePostsUseCase bulkDeletePostsUseCase, CommentOnPostUseCase commentOnPostUseCase,
 			GetCommentsUseCase getCommentsUseCase, ReactToPostUseCase reactToPostUseCase,
@@ -81,6 +83,7 @@ class FeedController {
 			CursorCodec cursorCodec) {
 		this.publishPostUseCase = publishPostUseCase;
 		this.getFeedUseCase = getFeedUseCase;
+		this.getPostUseCase = getPostUseCase;
 		this.getProfilePostsUseCase = getProfilePostsUseCase;
 		this.deletePostUseCase = deletePostUseCase;
 		this.bulkDeletePostsUseCase = bulkDeletePostsUseCase;
@@ -115,6 +118,14 @@ class FeedController {
 			@RequestParam(defaultValue = "FOR_YOU") FeedTab tab) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
 		return getFeedUseCase.getFeed(new GetFeedQuery(user.id(), cursorCodec.decode(cursor), limit, tab));
+	}
+
+	@GetMapping("/feed/posts/{postId}")
+	Object post(@RequestHeader(value = USER_HEADER, required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String postId) {
+		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		return getPostUseCase.getPost(postId, user.id());
 	}
 
 	@GetMapping("/users/{username}/posts")

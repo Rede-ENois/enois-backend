@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.feed.application.port.in.GetFeedUseCase;
+import com.socialcoisa.rede.feed.application.port.in.GetPostUseCase;
 import com.socialcoisa.rede.feed.application.port.in.GetProfilePostsUseCase;
 import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.out.ConnectionGraphRepository;
@@ -31,10 +32,11 @@ import com.socialcoisa.rede.feed.domain.ReactionType;
 import com.socialcoisa.rede.feed.domain.UserId;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
+import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.CursorCodec;
 
 @Service
-public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase {
+public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, GetPostUseCase {
 
 	private final PostRepository postRepository;
 	private final FeedCacheRepository feedCacheRepository;
@@ -96,6 +98,16 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase {
 			.orElse(query.username());
 		List<Post> posts = postRepository.findActiveByAuthor(new UserId(authorId), before, limit);
 		return page(enrich(posts, query.viewerId()), limit);
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public PostView getPost(String postId, UserId viewerId) {
+		Post post = postRepository.findById(new PostId(postId))
+			.filter(Post::isActive)
+			.orElseThrow(() -> new ApiException(404, "POST_NOT_FOUND", "Post nao encontrado."));
+		List<PostView> enriched = enrich(List.of(post), viewerId);
+		return enriched.isEmpty() ? PostView.from(post) : enriched.get(0);
 	}
 
 	@Transactional(readOnly = true)
