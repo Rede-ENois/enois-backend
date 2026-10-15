@@ -8,10 +8,7 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.socialcoisa.rede.feed.application.DeletePostCommand;
-import com.socialcoisa.rede.feed.application.port.in.DeletePostUseCase;
-import com.socialcoisa.rede.feed.domain.PostId;
-import com.socialcoisa.rede.feed.domain.UserId;
+import com.socialcoisa.rede.feed.application.port.in.ModerationRemovePostUseCase;
 import com.socialcoisa.rede.moderation.application.port.out.ReportRepository;
 import com.socialcoisa.rede.moderation.domain.Report;
 import com.socialcoisa.rede.moderation.domain.ReportReason;
@@ -23,18 +20,28 @@ import com.socialcoisa.rede.shared.web.ApiException;
 public class ModerationService {
 
 	private final ReportRepository reportRepository;
-	private final DeletePostUseCase deletePostUseCase;
+	private final ModerationRemovePostUseCase moderationRemovePostUseCase;
 	private final Clock clock;
 
-	public ModerationService(ReportRepository reportRepository, DeletePostUseCase deletePostUseCase, Clock clock) {
+	public ModerationService(ReportRepository reportRepository,
+			ModerationRemovePostUseCase moderationRemovePostUseCase, Clock clock) {
 		this.reportRepository = reportRepository;
-		this.deletePostUseCase = deletePostUseCase;
+		this.moderationRemovePostUseCase = moderationRemovePostUseCase;
 		this.clock = clock;
 	}
 
 	@Transactional
 	public Report report(String reporterId, TargetType targetType, String targetId, ReportReason reason,
 			String description) {
+		if (targetType == null) {
+			throw new ApiException(400, "INVALID_TARGET_TYPE", "Tipo do alvo da denuncia e obrigatorio.");
+		}
+		if (!org.springframework.util.StringUtils.hasText(targetId)) {
+			throw new ApiException(400, "INVALID_TARGET_ID", "Alvo da denuncia e obrigatorio.");
+		}
+		if (reason == null) {
+			throw new ApiException(400, "INVALID_REASON", "Motivo da denuncia e obrigatorio.");
+		}
 		if (reportRepository.existsByReporterAndTarget(reporterId, targetType.name(), targetId)) {
 			throw new ApiException(409, "ALREADY_REPORTED", "Voce ja denunciou este conteudo.");
 		}
@@ -53,8 +60,8 @@ public class ModerationService {
 		}
 		report.approve(reviewerId, note);
 		if (report.targetType() == TargetType.POST) {
-			deletePostUseCase.delete(new DeletePostCommand(new UserId(reviewerId), new PostId(report.targetId()),
-				"REPORTED:" + report.reason().name()));
+			moderationRemovePostUseCase.removeAsModerator(reviewerId, report.targetId(),
+				"REPORTED:" + report.reason().name());
 		}
 		return reportRepository.save(report);
 	}

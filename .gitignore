@@ -25,3 +25,7 @@ TestResults.xml
 target/
 #Env
 .env
+
+# Dump de banco com dados pessoais - nunca versionar
+dump_rede.sql
+*.dump.sql

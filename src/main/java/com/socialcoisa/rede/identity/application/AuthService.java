@@ -13,6 +13,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import com.socialcoisa.rede.identity.application.port.in.ChangeEmailUseCase;
+import com.socialcoisa.rede.identity.application.port.in.ChangePasswordUseCase;
+import com.socialcoisa.rede.identity.application.port.in.DeleteAccountUseCase;
 import com.socialcoisa.rede.identity.application.port.in.GetAuthenticatedUserUseCase;
 import com.socialcoisa.rede.identity.application.port.in.LoginUseCase;
 import com.socialcoisa.rede.identity.application.port.in.LogoutUseCase;
@@ -24,6 +27,7 @@ import com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository;
 import com.socialcoisa.rede.identity.application.port.out.CredentialRepository;
 import com.socialcoisa.rede.identity.application.port.out.PasswordResetTokenRepository;
 import com.socialcoisa.rede.identity.application.port.out.StoredCredential;
+import com.socialcoisa.rede.identity.application.port.out.UserExternalIdentityRepository;
 import com.socialcoisa.rede.identity.application.EmailService;
 import com.socialcoisa.rede.identity.domain.PasswordResetToken;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
@@ -32,7 +36,8 @@ import com.socialcoisa.rede.shared.web.ApiException;
 
 @Service
 public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, GetAuthenticatedUserUseCase,
-		RequestPasswordResetUseCase, ResetPasswordUseCase, RefreshSessionUseCase {
+		RequestPasswordResetUseCase, ResetPasswordUseCase, RefreshSessionUseCase, ChangeEmailUseCase,
+		ChangePasswordUseCase, DeleteAccountUseCase {
 
 	private static final Duration RESET_TOKEN_TTL = Duration.ofHours(24);
 
@@ -42,6 +47,7 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 	private final CredentialRepository credentialRepository;
 	private final AuthSessionRepository authSessionRepository;
 	private final PasswordResetTokenRepository passwordResetTokenRepository;
+	private final UserExternalIdentityRepository externalIdentityRepository;
 	private final PasswordHasher passwordHasher;
 	private final EmailService emailService;
 	private final Clock clock;
@@ -51,6 +57,7 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
                        @Value("${rede.auth.refresh-token-ttl-days:30}") int refreshTokenTtlDays,
                        UserProfileRepository userProfileRepository, CredentialRepository credentialRepository,
                        AuthSessionRepository authSessionRepository, PasswordResetTokenRepository passwordResetTokenRepository,
+                       UserExternalIdentityRepository externalIdentityRepository,
                        PasswordHasher passwordHasher, EmailService emailService, Clock clock) {
 		this.accessTokenTtl = Duration.ofMinutes(accessTokenTtlMinutes);
 		this.refreshTokenTtl = Duration.ofDays(refreshTokenTtlDays);
@@ -58,6 +65,7 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 		this.credentialRepository = credentialRepository;
 		this.authSessionRepository = authSessionRepository;
 		this.passwordResetTokenRepository = passwordResetTokenRepository;
+		this.externalIdentityRepository = externalIdentityRepository;
 		this.passwordHasher = passwordHasher;
         this.emailService = emailService;
         this.clock = clock;
@@ -74,8 +82,8 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 		Instant now = clock.instant();
 		String userId = "user_" + UUID.randomUUID().toString().replace("-", "");
 		String username = uniqueUsername(command.name(), email);
-		UserProfile profile = UserProfile.create(userId, username, email, command.name().trim(), command.role().trim(),
-			now);
+		// Nao existe papel no schema; o headline deve ficar vazio ate o usuario preencher.
+		UserProfile profile = UserProfile.create(userId, username, email, command.name().trim(), null, now);
 		UserProfile saved = userProfileRepository.save(profile);
 		credentialRepository.save(saved.id(), email, passwordHasher.hash(command.password()));
 		return createResponse(saved);
@@ -151,6 +159,78 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 		credentialRepository.save(credential.userId(), credential.email(), passwordHasher.hash(newPassword));
 		passwordResetTokenRepository.markUsed(token.trim());
 		authSessionRepository.revokeAllByUser(resetToken.userId(), clock.instant());
+	}
+
+	@Override
+	@Transactional
+	public void changeEmail(String sessionToken, String newEmail, String password) {
+		String userId = requireUserId(sessionToken);
+		if (!StringUtils.hasText(newEmail) || !newEmail.contains("@")) {
+			throw new ApiException(400, "INVALID_EMAIL", "Email invalido.");
+		}
+		String normalized = newEmail.trim().toLowerCase(Locale.ROOT);
+		StoredCredential credential = credentialRepository.findByUserId(userId)
+			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
+		if (!StringUtils.hasText(password) || !passwordHasher.matches(password, credential.passwordHash())) {
+			throw new ApiException(401, "INVALID_CREDENTIALS", "Senha incorreta.");
+		}
+		if (normalized.equals(credential.email())) {
+			return;
+		}
+		if (userProfileRepository.existsByEmail(normalized) || credentialRepository.existsByEmail(normalized)) {
+			throw new ApiException(409, "EMAIL_ALREADY_REGISTERED", "Email ja esta em uso.");
+		}
+		UserProfile profile = userProfileRepository.findById(userId)
+			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
+		profile.changeEmail(normalized, clock.instant());
+		userProfileRepository.save(profile);
+		credentialRepository.save(userId, normalized, credential.passwordHash());
+	}
+
+	@Override
+	@Transactional
+	public void changePassword(String sessionToken, String currentPassword, String newPassword) {
+		String userId = requireUserId(sessionToken);
+		if (!StringUtils.hasText(newPassword) || newPassword.length() < 8) {
+			throw new ApiException(400, "WEAK_PASSWORD", "Senha deve ter pelo menos 8 caracteres.");
+		}
+		StoredCredential credential = credentialRepository.findByUserId(userId)
+			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
+		if (!StringUtils.hasText(currentPassword)
+				|| !passwordHasher.matches(currentPassword, credential.passwordHash())) {
+			throw new ApiException(401, "INVALID_CREDENTIALS", "Senha atual incorreta.");
+		}
+		credentialRepository.save(userId, credential.email(), passwordHasher.hash(newPassword));
+		// Encerra todas as sessoes: e preciso entrar de novo com a nova senha.
+		authSessionRepository.revokeAllByUser(userId, clock.instant());
+	}
+
+	@Override
+	@Transactional
+	public void deleteAccount(String sessionToken, String password) {
+		String userId = requireUserId(sessionToken);
+		StoredCredential credential = credentialRepository.findByUserId(userId)
+			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
+		if (!StringUtils.hasText(password) || !passwordHasher.matches(password, credential.passwordHash())) {
+			throw new ApiException(401, "INVALID_CREDENTIALS", "Senha incorreta.");
+		}
+		UserProfile profile = userProfileRepository.findById(userId)
+			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
+		Instant now = clock.instant();
+		authSessionRepository.revokeAllByUser(userId, now);
+		credentialRepository.deleteByUserId(userId);
+		externalIdentityRepository.deleteByUserId(userId);
+		String suffix = userId.startsWith("user_") ? userId.substring("user_".length()) : userId;
+		profile.anonymize("removed+" + suffix + "@enois.invalid", "removed-" + suffix, now);
+		userProfileRepository.save(profile);
+	}
+
+	private String requireUserId(String sessionToken) {
+		if (!StringUtils.hasText(sessionToken)) {
+			throw new ApiException(401, "UNAUTHENTICATED", "Sessao invalida ou expirada.");
+		}
+		return authSessionRepository.findActiveUserId(sessionToken.trim(), clock.instant())
+			.orElseThrow(() -> new ApiException(401, "UNAUTHENTICATED", "Sessao invalida ou expirada."));
 	}
 
 	private AuthResponse createResponse(UserProfile profile) {

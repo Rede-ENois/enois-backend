@@ -88,7 +88,7 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 	public int countUnread(String conversationId, String userId) {
 		var participant = participantRepo.findByConversationIdAndUserId(conversationId, userId).orElse(null);
 		if (participant == null || participant.getLastReadAt() == null) {
-			return (int) messageRepo.count();
+			return messageRepo.countByConversationId(conversationId);
 		}
 		return messageRepo.countUnreadAfter(conversationId, participant.getLastReadAt());
 	}

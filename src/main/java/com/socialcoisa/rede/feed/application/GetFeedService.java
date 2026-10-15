@@ -90,7 +90,11 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase {
 	public FeedPage getProfilePosts(GetProfilePostsQuery query) {
 		int limit = normalizeLimit(query.limit());
 		Instant before = query.before().orElse(DEFAULT_BEFORE);
-		List<Post> posts = postRepository.findActiveByAuthor(new UserId(query.username()), before, limit);
+		// O path aceita username ou id; o conteudo guarda author_id, entao resolvemos o username.
+		String authorId = userProfileRepository.findByUsername(query.username())
+			.map(com.socialcoisa.rede.profile.domain.UserProfile::id)
+			.orElse(query.username());
+		List<Post> posts = postRepository.findActiveByAuthor(new UserId(authorId), before, limit);
 		return page(enrich(posts, query.viewerId()), limit);
 	}
 

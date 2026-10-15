@@ -33,4 +33,9 @@ class UserExternalIdentityPersistenceAdapter implements UserExternalIdentityRepo
 	public boolean existsByProviderAndExternalId(String provider, String externalUserId) {
 		return repository.existsByProviderAndExternalUserId(provider, externalUserId);
 	}
+
+	@Override
+	public void deleteByUserId(String userId) {
+		repository.deleteByUserId(userId);
+	}
 }

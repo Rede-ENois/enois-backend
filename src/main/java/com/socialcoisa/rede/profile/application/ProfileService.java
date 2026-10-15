@@ -49,6 +49,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 	@Transactional(readOnly = true)
 	public UserProfileView getById(String userId) {
 		return repository.findById(userId)
+			.map(this::populateCounts)
 			.map(UserProfileView::from)
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
 	}

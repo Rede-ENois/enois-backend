@@ -11,4 +11,6 @@ public interface CredentialRepository {
 	Optional<StoredCredential> findByUserId(String userId);
 
 	boolean existsByEmail(String email);
+
+	void deleteByUserId(String userId);
 }

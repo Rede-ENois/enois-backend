@@ -9,4 +9,6 @@ public interface UserExternalIdentityRepository {
 	Optional<String> findUserIdByProviderAndExternalId(String provider, String externalUserId);
 
 	boolean existsByProviderAndExternalId(String provider, String externalUserId);
+
+	void deleteByUserId(String userId);
 }

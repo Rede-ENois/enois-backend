@@ -9,4 +9,6 @@ interface SpringDataUserExternalIdentityJpaRepository extends JpaRepository<User
 	Optional<UserExternalIdentityJpaEntity> findByProviderAndExternalUserId(String provider, String externalUserId);
 
 	boolean existsByProviderAndExternalUserId(String provider, String externalUserId);
+
+	void deleteByUserId(String userId);
 }

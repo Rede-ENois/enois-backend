@@ -19,6 +19,7 @@ import com.socialcoisa.rede.moderation.application.ModerationService;
 import com.socialcoisa.rede.moderation.domain.Report;
 import com.socialcoisa.rede.moderation.domain.ReportReason;
 import com.socialcoisa.rede.moderation.domain.TargetType;
+import com.socialcoisa.rede.shared.web.AdminGuard;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 
@@ -28,12 +29,14 @@ class ReportController {
 	private final ModerationService moderationService;
 	private final IdempotencyApplicationService idempotency;
 	private final CurrentUserResolver currentUserResolver;
+	private final AdminGuard adminGuard;
 
 	ReportController(ModerationService moderationService, IdempotencyApplicationService idempotency,
-			CurrentUserResolver currentUserResolver) {
+			CurrentUserResolver currentUserResolver, AdminGuard adminGuard) {
 		this.moderationService = moderationService;
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
+		this.adminGuard = adminGuard;
 	}
 
 	@PostMapping("/reports")
@@ -52,7 +55,7 @@ class ReportController {
 	List<ReportView> listPending(@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader("X-Session-Token") String sessionToken,
 			@RequestParam(defaultValue = "20") int limit) {
-		currentUserResolver.resolve(userId, sessionToken);
+		adminGuard.requireAdmin(currentUserResolver.resolve(userId, sessionToken));
 		return moderationService.listPending(limit).stream()
 			.map(ReportView::from)
 			.toList();
@@ -64,6 +67,7 @@ class ReportController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String reportId, @RequestBody ReviewRequest request) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		adminGuard.requireAdmin(user);
 		String hash = idempotency.hash(Map.of("reportId", reportId, "note", request.note() == null ? "" : request.note()));
 		return idempotency.execute(user.id(), "POST", "/api/admin/reports/{reportId}/approve", idempotencyKey, hash,
 			() -> new CommandResponse(200, ReportView.from(
@@ -76,6 +80,7 @@ class ReportController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String reportId, @RequestBody ReviewRequest request) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
+		adminGuard.requireAdmin(user);
 		String hash = idempotency.hash(Map.of("reportId", reportId, "note", request.note() == null ? "" : request.note()));
 		return idempotency.execute(user.id(), "POST", "/api/admin/reports/{reportId}/dismiss", idempotencyKey, hash,
 			() -> new CommandResponse(200, ReportView.from(

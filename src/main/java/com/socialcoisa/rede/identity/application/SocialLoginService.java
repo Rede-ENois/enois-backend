@@ -111,14 +111,25 @@ public class SocialLoginService implements OAuthUseCase {
 	@Override
 	@Transactional
 	public AuthResponse callback(OAuthProvider provider, String code, String state) {
+		// O state e comparado com o cookie definido em /oauth/{provider}/start pelo controller.
 		if (!StringUtils.hasText(code)) {
 			throw new ApiException(400, "INVALID_OAUTH_CODE", "Codigo de autorizacao obrigatorio.");
 		}
-		if (!StringUtils.hasText(state)) {
-			throw new ApiException(400, "INVALID_OAUTH_STATE", "State obrigatorio.");
+		return completeLogin(provider, code);
+	}
+
+	@Override
+	@Transactional
+	public AuthResponse tokenLogin(OAuthProvider provider, String idToken) {
+		if (!StringUtils.hasText(idToken)) {
+			throw new ApiException(400, "INVALID_OAUTH_TOKEN", "id_token obrigatorio.");
 		}
+		return completeLogin(provider, idToken);
+	}
+
+	private AuthResponse completeLogin(OAuthProvider provider, String credential) {
 		TokenValidationResult validation = tokenValidators.stream()
-			.map(v -> v.validate(provider, code))
+			.map(v -> v.validate(provider, credential))
 			.filter(Optional::isPresent)
 			.findFirst()
 			.orElseThrow(() -> new ApiException(401, "INVALID_OAUTH_TOKEN",

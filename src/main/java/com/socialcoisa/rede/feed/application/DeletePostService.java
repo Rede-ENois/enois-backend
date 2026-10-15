@@ -15,6 +15,7 @@ import com.socialcoisa.rede.feed.application.port.in.DeletePostUseCase;
 import com.socialcoisa.rede.feed.application.port.out.AuditLogRepository;
 import com.socialcoisa.rede.feed.application.port.out.FeedCacheRepository;
 import com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository;
+import com.socialcoisa.rede.feed.application.port.in.ModerationRemovePostUseCase;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
@@ -22,7 +23,7 @@ import com.socialcoisa.rede.media.application.port.in.RequestPostMediaDeletionUs
 import com.socialcoisa.rede.shared.web.ApiException;
 
 @Service
-public class DeletePostService implements DeletePostUseCase, BulkDeletePostsUseCase {
+public class DeletePostService implements DeletePostUseCase, BulkDeletePostsUseCase, ModerationRemovePostUseCase {
 
 	private final PostRepository postRepository;
 	private final FeedCacheRepository feedCacheRepository;
@@ -96,6 +97,22 @@ public class DeletePostService implements DeletePostUseCase, BulkDeletePostsUseC
 			results.add(new BulkDeleteItemResult(post.id().value(), "MARKED_DELETED"));
 		}
 		return new BulkDeleteResult("COMPLETED", results);
+	}
+
+	@Override
+	@Transactional
+	public void removeAsModerator(String moderatorId, String postId, String reason) {
+		Post post = postRepository.findById(new PostId(postId)).orElse(null);
+		if (post == null || !post.isActive()) {
+			return;
+		}
+		post.delete(clock.instant());
+		postRepository.save(post);
+		feedCacheRepository.removeEverywhere(post.id());
+		outboxEventRepository.append("PostDeleted", post.id().value(), "{\"postId\":\"" + post.id().value() + "\"}");
+		requestMediaDeletion(post);
+		auditLogRepository.record(new com.socialcoisa.rede.feed.domain.UserId(moderatorId),
+			"POST_DELETED_BY_MODERATION", post.id().value(), normalizeReason(reason));
 	}
 
 	private List<PostId> normalizePostIds(BulkDeletePostsCommand command) {

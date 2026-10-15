@@ -40,4 +40,9 @@ class CredentialPersistenceAdapter implements CredentialRepository {
 	public boolean existsByEmail(String email) {
 		return repository.existsByEmail(email);
 	}
+
+	@Override
+	public void deleteByUserId(String userId) {
+		repository.deleteById(userId);
+	}
 }

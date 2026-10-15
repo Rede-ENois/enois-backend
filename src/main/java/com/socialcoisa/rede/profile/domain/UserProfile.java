@@ -7,7 +7,7 @@ public class UserProfile {
 
 	private final String id;
 	private String username;
-	private final String email;
+	private String email;
 	private String name;
 	private String headline;
 	private String company;
@@ -85,6 +85,35 @@ public class UserProfile {
 		this.openToWork = openToWork == null ? this.openToWork : openToWork;
 		this.mentor = mentor == null ? this.mentor : mentor;
 		this.username = keep(username, this.username);
+		this.updatedAt = now;
+	}
+
+	public void changeEmail(String email, Instant now) {
+		this.email = email;
+		this.updatedAt = now;
+	}
+
+	/**
+	 * Anonimiza os dados pessoais apos a exclusao da conta, preservando o id para integridade
+	 * referencial do conteudo ja publicado.
+	 */
+	public void anonymize(String anonymizedEmail, String anonymizedUsername, Instant now) {
+		this.email = anonymizedEmail;
+		this.username = anonymizedUsername;
+		this.name = "Usuario removido";
+		this.headline = null;
+		this.company = null;
+		this.location = null;
+		this.avatar = null;
+		this.banner = null;
+		this.bio = null;
+		this.skills = List.of();
+		this.goals = List.of();
+		this.availability = null;
+		this.portfolio = null;
+		this.externalLinks = List.of();
+		this.openToWork = false;
+		this.mentor = false;
 		this.updatedAt = now;
 	}
 
