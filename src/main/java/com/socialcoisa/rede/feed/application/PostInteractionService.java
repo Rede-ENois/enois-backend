@@ -69,7 +69,7 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 		post.addComment();
 		postRepository.save(post);
 		outboxEventRepository.append("PostCommented", post.id().value(), "{\"postId\":\"" + post.id().value()
-			+ "\",\"commentId\":\"" + saved.id() + "\",\"authorId\":\"" + command.authorId() + "\"}");
+			+ "\",\"commentId\":\"" + saved.id() + "\",\"authorId\":\"" + command.authorId().value() + "\"}");
 		notifyMentions(command.mentionedUserIds(), command.authorId().value(), post.id().value());
 		var profile = userProfileRepository.findById(command.authorId().value()).orElse(null);
 		return CommentView.from(saved,
@@ -121,7 +121,7 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 			post.addReaction();
 			postRepository.save(post);
 			outboxEventRepository.append("PostReacted", post.id().value(), "{\"postId\":\"" + post.id().value()
-				+ "\",\"authorId\":\"" + command.userId() + "\"}");
+				+ "\",\"authorId\":\"" + command.userId().value() + "\"}");
 		}
 		return new PostActionResult(post.id().value(), added ? "REACTED" : "ALREADY_REACTED", post.counters());
 	}

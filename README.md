@@ -124,6 +124,10 @@ prefixo `/api` antes de encaminhar ao backend**. Por isso os controllers deste p
 chama `https://enois.ia.br/api/...`. Esse é o mesmo padrão do app irmão (skillify) — não adicione `/api`
 nos `@RequestMapping` do backend.
 
+Aviso de segurança decorrente disso: como o gateway encaminha `/api/*` **sem autenticação**, tudo que o
+backend expõe fica público em `https://enois.ia.br/api/...` — inclusive `/api/actuator/*` (que chega em
+`/actuator/*`) e `/api/api/openapi.json`. Por isso os defaults abaixo são restritivos.
+
 ## Configuração e ações manuais
 
 ### Variáveis de ambiente (runtime do Deployment)
@@ -142,6 +146,8 @@ nos `@RequestMapping` do backend.
 | `IMAGEKIT_URL_ENDPOINT` / `IMAGEKIT_PUBLIC_KEY` / `IMAGEKIT_PRIVATE_KEY` | p/ mídia | |
 | `CORS_ALLOWED_ORIGINS` | não | padrão `*` |
 | `OAUTH_STATE_COOKIE_SECURE` | não | padrão `true`; use `false` só em dev http |
+| `SPRINGDOC_ENABLED` | não | padrão `false`. `true` liga `/api/openapi.json` + Swagger UI (use só em dev/VPN) |
+| `MANAGEMENT_ENDPOINTS` | não | padrão `health`. Para métricas use `health,prometheus` **e bloqueie `/api/actuator/*` no gateway** |
 
 ### Passo a passo das ações manuais
 
@@ -170,3 +176,19 @@ nos `@RequestMapping` do backend.
   aprovava/descartava denúncias.
 - **Recomendações** (`GET /recommendations/received|given/{userId}`) seguem **sem autenticação** por serem
   exibidas em perfis públicos — avalie se devem exigir login.
+
+### Já corrigido
+
+- **Doc da API público**: `GET /api/openapi.json` (stub manual) e `GET /api/api/openapi.json` + Swagger UI
+  (springdoc) respondiam 200 sem autenticação, entregando o mapa completo da API. Agora o stub foi removido
+  e o springdoc fica desligado por padrão (`SPRINGDOC_ENABLED=false`).
+- **Actuator público**: `/api/actuator/prometheus` devolvia ~110 KB de métricas (JVM, pool de conexões,
+  URIs) e `/api/actuator/metrics` idem. Agora só `health` é exposto e o índice `/actuator` também.
+- **Sem headers de segurança**: adicionados HSTS, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: no-referrer`, `Permissions-Policy` e CSP restritiva (`default-src 'none'`) nas respostas
+  da API — ver `SecurityHeadersFilter`.
+- **Email de terceiros** em `GET /users/{username}`, `/users/by-id/{id}`, `/users/search` e `/ranking`
+  (era público, sem login): removido da projeção pública.
+- **`/admin/reports/**`** exigia apenas sessão: agora exige admin (`REDE_ADMIN_EMAILS`).
+
+Testes de regressão cobrem os dois primeiros itens em `ContractControllerTests`.

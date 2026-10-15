@@ -16,7 +16,11 @@ import org.springframework.test.web.servlet.MvcResult;
 
 import tools.jackson.databind.ObjectMapper;
 
-@SpringBootTest
+@SpringBootTest(properties = {
+	// Mesma configuracao de qa/prd: doc da API desligado (o gateway expoe o backend sem auth).
+	"springdoc.api-docs.enabled=false",
+	"springdoc.swagger-ui.enabled=false",
+})
 @AutoConfigureMockMvc
 class ContractControllerTests {
 
@@ -36,18 +40,17 @@ class ContractControllerTests {
 	private String userToken;
 
 	@Test
-	void exposesInitialHttpContractsInOpenApi() throws Exception {
-		mockMvc.perform(get("/openapi.json"))
-			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.paths['/api/network/users']").exists())
-			.andExpect(jsonPath("$.paths['/api/media/uploads']").exists())
-			.andExpect(jsonPath("$.paths['/api/communities']").exists())
-			.andExpect(jsonPath("$.paths['/api/jobs/{jobId}/applications']").exists())
-			.andExpect(jsonPath("$.paths['/api/events/{eventId}/attendees']").exists())
-			.andExpect(jsonPath("$.paths['/api/mentors/{mentorId}/sessions']").exists())
-			.andExpect(jsonPath("$.paths['/api/conversations/{conversationId}/messages']").exists())
-			.andExpect(jsonPath("$.paths['/api/notifications/read-all']").exists())
-			.andExpect(jsonPath("$.paths['/api/search']").exists());
+	void doesNotExposeApiDocumentation() throws Exception {
+		// O doc da API nao pode ficar publico: o gateway expoe o backend em /api/* sem autenticacao.
+		mockMvc.perform(get("/openapi.json")).andExpect(status().isNotFound());
+		mockMvc.perform(get("/v3/api-docs")).andExpect(status().isNotFound());
+	}
+
+	@Test
+	void doesNotExposeActuatorBeyondHealth() throws Exception {
+		mockMvc.perform(get("/actuator/health")).andExpect(status().isOk());
+		mockMvc.perform(get("/actuator/prometheus")).andExpect(status().isNotFound());
+		mockMvc.perform(get("/actuator/metrics")).andExpect(status().isNotFound());
 	}
 
 	@Test
