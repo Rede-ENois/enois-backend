@@ -167,7 +167,7 @@ public class SocialLoginService implements OAuthUseCase {
 		authSessionRepository.save(token, refreshToken, userId, now, expiresAt);
 		UserProfile profile = userProfileRepository.findById(userId)
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
-		return new AuthResponse(token, refreshToken, expiresAt, refreshExpiresAt, AuthUserView.from(com.socialcoisa.rede.profile.application.UserProfileView.from(profile)));
+		return new AuthResponse(token, refreshToken, expiresAt, refreshExpiresAt, AuthUserView.from(profile));
 	}
 
 	private String uniqueUsername(String name, String email) {

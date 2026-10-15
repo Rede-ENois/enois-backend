@@ -29,10 +29,10 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 
 	@Override
 	@Transactional(readOnly = true)
-	public UserProfileView getMe(String userId) {
+	public OwnProfileView getMe(String userId) {
 		return repository.findById(userId)
 			.map(this::populateCounts)
-			.map(UserProfileView::from)
+			.map(OwnProfileView::from)
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
 	}
 
@@ -74,7 +74,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 
 	@Override
 	@Transactional
-	public UserProfileView update(UpdateProfileCommand command) {
+	public OwnProfileView update(UpdateProfileCommand command) {
 		UserProfile profile = repository.findById(command.userId())
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
 		String username = trim(command.username());
@@ -89,7 +89,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 			trim(command.avatar()), trim(command.banner()), trim(command.bio()), clean(command.skills()),
 			clean(command.goals()), trim(command.availability()), trim(command.portfolio()), clean(command.externalLinks()),
 			command.openToWork(), command.isMentor(), username, clock.instant());
-		return UserProfileView.from(repository.save(profile));
+		return OwnProfileView.from(repository.save(profile));
 	}
 
 	private String slug(String value) {

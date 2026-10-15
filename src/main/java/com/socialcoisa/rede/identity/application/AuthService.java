@@ -26,7 +26,6 @@ import com.socialcoisa.rede.identity.application.port.out.PasswordResetTokenRepo
 import com.socialcoisa.rede.identity.application.port.out.StoredCredential;
 import com.socialcoisa.rede.identity.application.EmailService;
 import com.socialcoisa.rede.identity.domain.PasswordResetToken;
-import com.socialcoisa.rede.profile.application.UserProfileView;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -112,7 +111,7 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 			.orElseThrow(() -> new ApiException(401, "UNAUTHENTICATED", "Sessao invalida ou expirada."));
 		UserProfile profile = userProfileRepository.findById(userId)
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
-		return AuthUserView.from(UserProfileView.from(profile));
+		return AuthUserView.from(profile);
 	}
 
 	@Override
@@ -161,7 +160,7 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 		String token = newToken();
 		String refreshToken = newToken();
 		authSessionRepository.save(token, refreshToken, profile.id(), now, expiresAt);
-		return new AuthResponse(token, refreshToken, expiresAt, refreshExpiresAt, AuthUserView.from(UserProfileView.from(profile)));
+		return new AuthResponse(token, refreshToken, expiresAt, refreshExpiresAt, AuthUserView.from(profile));
 	}
 
 	private AuthResponse refreshSession(String currentRefreshToken) {

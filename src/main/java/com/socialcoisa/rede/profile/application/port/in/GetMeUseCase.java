@@ -1,8 +1,8 @@
 package com.socialcoisa.rede.profile.application.port.in;
 
-import com.socialcoisa.rede.profile.application.UserProfileView;
+import com.socialcoisa.rede.profile.application.OwnProfileView;
 
 public interface GetMeUseCase {
 
-	UserProfileView getMe(String userId);
+	OwnProfileView getMe(String userId);
 }

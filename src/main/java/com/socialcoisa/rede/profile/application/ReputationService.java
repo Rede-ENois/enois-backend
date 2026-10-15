@@ -13,8 +13,12 @@ import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 @Service
 public class ReputationService {
 
-	/** Credibilidade perdida por cada denuncia contra conteudo do usuario (post, comentario ou vaga). */
-	private static final int PENALTY_PER_REPORT = 50;
+	/**
+	 * Base da penalidade por denuncia. A penalidade e progressiva: a n-esima denuncia contra o
+	 * usuario custa {@code BASE * n}, ou seja, o total descontado e {@code BASE * n(n+1)/2}
+	 * (50, 150, 300, 500, ...). Reincidencia pesa cada vez mais.
+	 */
+	private static final int PENALTY_BASE_PER_REPORT = 50;
 
 	private static final int MAX_REPUTATION = 1000;
 
@@ -41,10 +45,11 @@ public class ReputationService {
 		int mentoring = profileRepository.countMentoringSessionsAsMentee(userId);
 		int reports = profileRepository.countActiveReportsAgainst(userId);
 		int recommendations = recommendationRepository.findByRecommendedId(userId).size();
+		int reportPenalty = PENALTY_BASE_PER_REPORT * reports * (reports + 1) / 2;
 		int reputation = Math.max(0, Math.min(
 			experiences * 10 + educations * 10 + certifications * 5 + connections + followers / 2
 				+ postInteractions + communities * 5 + events * 3 + mentoring * 10
-				- reports * PENALTY_PER_REPORT + recommendations * 20,
+				- reportPenalty + recommendations * 20,
 			MAX_REPUTATION));
 		return new Counts(connections, followers, reputation);
 	}
