@@ -36,7 +36,7 @@ class DailyMazeServiceTest {
     }
     @Test void persistsSharedChallengeAndRejectsInvalidMoves() {
         var ds=new DriverManagerDataSource("jdbc:h2:mem:"+UUID.randomUUID()+";MODE=MySQL;DB_CLOSE_DELAY=-1","sa","");
-        new ResourceDatabasePopulator(new ClassPathResource("db/migration/V84__daily_maze_games.sql")).execute(ds);
+        new ResourceDatabasePopulator(new ClassPathResource("db/migration/V87__daily_maze_games.sql")).execute(ds);
         JdbcTemplate jdbc=new JdbcTemplate(ds);
         jdbc.execute("create table users (id varchar(255), username varchar(80), name varchar(160))");
         var clock=Clock.fixed(Instant.parse("2026-10-18T12:00:00Z"),ZoneOffset.UTC);

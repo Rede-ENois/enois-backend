@@ -20,7 +20,7 @@ class DailyWordServiceTest {
     }
     @Test void dailyChallengeIsSharedPrivateAndIdempotent() {
         DriverManagerDataSource ds = new DriverManagerDataSource("jdbc:h2:mem:"+UUID.randomUUID()+";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
-        new ResourceDatabasePopulator(new ClassPathResource("db/migration/V83__daily_word_games.sql")).execute(ds);
+        new ResourceDatabasePopulator(new ClassPathResource("db/migration/V86__daily_word_games.sql")).execute(ds);
         JdbcTemplate jdbc = new JdbcTemplate(ds);
         jdbc.execute("create table users (id varchar(255), username varchar(80), name varchar(160))");
         jdbc.update("insert into users values ('u1','ana','Ana'),('u2','bia','Bia')");
