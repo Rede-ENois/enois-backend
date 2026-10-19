@@ -101,4 +101,10 @@ public class DailyWordService {
         List<Entry> items = jdbc.query("select u.username,u.name,count(g.attempt_no) as attempts,s.completed_at from daily_word_sessions s join users u on u.id=s.user_id join daily_word_guesses g on g.challenge_date=s.challenge_date and g.user_id=s.user_id where s.challenge_date=? and s.status='WON' group by u.username,u.name,s.completed_at order by attempts asc,s.completed_at asc,u.username asc limit 100", (r,n)-> new Entry(r.getString(1),r.getString(2),r.getInt(3),r.getTimestamp(4).toInstant().toString()), Date.valueOf(today()));
         return new Ranking(items);
     }
+
+    /** Contas na ordem do placar do dia, sem teto de 100 e sem quem não acertou: é a fila do prêmio. */
+    @Transactional(readOnly = true)
+    public List<String> payoutOrder(LocalDate day) {
+        return jdbc.query("select s.user_id from daily_word_sessions s join users u on u.id=s.user_id join daily_word_guesses g on g.challenge_date=s.challenge_date and g.user_id=s.user_id where s.challenge_date=? and s.status='WON' group by s.user_id,u.username order by count(g.attempt_no) asc,min(s.completed_at) asc,u.username asc", (r,n) -> r.getString(1), Date.valueOf(day));
+    }
 }

@@ -76,4 +76,12 @@ public class DailyMazeService {
         var entries=jdbc.query("select u.username,u.name,s.started_at,s.completed_at,s.moves from daily_maze_sessions s join users u on u.id=s.user_id where s.challenge_date=? and s.completed_at is not null",(r,n)->new Entry(r.getString(1),r.getString(2),Math.max(0,Duration.between(r.getTimestamp(3).toInstant(),r.getTimestamp(4).toInstant()).toMillis()),r.getInt(5)),Date.valueOf(today()));
         return new Ranking(entries.stream().sorted(Comparator.comparingLong(Entry::elapsedMillis).thenComparingInt(Entry::moves).thenComparing(Entry::username)).limit(100).toList());
     }
+
+    /** Contas na ordem do placar do dia, sem teto de 100 e sem quem não saiu do labirinto: é a fila do prêmio. */
+    @Transactional(readOnly=true)
+    public List<String> payoutOrder(LocalDate day) {
+        record Row(String userId,String username,long elapsedMillis,int moves) {}
+        var rows = jdbc.query("select s.user_id,u.username,s.started_at,s.completed_at,s.moves from daily_maze_sessions s join users u on u.id=s.user_id where s.challenge_date=? and s.completed_at is not null",(r,n)->new Row(r.getString(1),r.getString(2),Math.max(0,Duration.between(r.getTimestamp(3).toInstant(),r.getTimestamp(4).toInstant()).toMillis()),r.getInt(5)),Date.valueOf(day));
+        return rows.stream().sorted(Comparator.comparingLong(Row::elapsedMillis).thenComparingInt(Row::moves).thenComparing(Row::username)).map(Row::userId).toList();
+    }
 }

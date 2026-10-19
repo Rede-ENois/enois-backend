@@ -18,6 +18,10 @@ Uma conclusão é registrada uma vez, inclusive quando o jogador perde; a sequê
 
 Resultados e posição aparecem ao concluir. Compartilhar resumo sem solução ou convidar alguém exige ação explícita; nunca publicar, enviar mensagem ou criar engajamento automaticamente. Lembretes são opt-in, desligados inicialmente, e devem respeitar preferências e canais reais disponíveis. A [política de publicações](../PUBLISHING_POLICY.md) se aplica.
 
+### Prêmio em faíscas
+
+O placar de cada jogo paga faíscas quando o dia fecha, não na conclusão: enquanto a janela de retomada está aberta, a posição ainda pode mudar. O dia D só é pago a partir de D+2. O prêmio é de 10 faíscas para o 1º lugar, 5 para o 2º e o 3º, 3 para o 4º ao 10º e 1 para os demais que completaram o desafio; quem não completa não recebe. O crédito sai da tesouraria pelo ledger da moeda com a referência `jogos:<jogo>:<dia>:<conta>`, que é idempotente — rodar o fechamento de novo não duplica prêmio nem notificação. A notificação leva à carteira, onde o lançamento aparece no extrato.
+
 ## Contrato a implementar
 
 O contrato HTTP definitivo deve seguir os padrões de autenticação, erros e paginação já existentes e especificar exemplos OpenAPI. A capacidade mínima é:

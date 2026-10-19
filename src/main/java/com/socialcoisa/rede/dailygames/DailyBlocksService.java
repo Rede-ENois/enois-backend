@@ -107,4 +107,11 @@ public class DailyBlocksService {
         var entries=jdbc.query("select u.username,u.name,s.score,s.lines,s.started_at,s.completed_at from daily_blocks_sessions s join users u on u.id=s.user_id where s.challenge_date=? and s.status='WON'",(r,n)->new Entry(r.getString(1),r.getString(2),r.getInt(3),r.getInt(4),Math.max(0,Duration.between(r.getTimestamp(5).toInstant(),r.getTimestamp(6).toInstant()).toMillis())),Date.valueOf(today()));
         return new Ranking(entries.stream().sorted(Comparator.comparingInt(Entry::score).reversed().thenComparingLong(Entry::elapsedMillis).thenComparing(Entry::username)).limit(100).toList());
     }
+
+    /** Contas na ordem do placar do dia, sem teto de 100 e sem quem não limpou as linhas: é a fila do prêmio. */
+    @Transactional(readOnly=true) public List<String> payoutOrder(LocalDate day) {
+        record Row(String userId,String username,int score,long elapsedMillis) {}
+        var rows=jdbc.query("select s.user_id,u.username,s.score,s.started_at,s.completed_at from daily_blocks_sessions s join users u on u.id=s.user_id where s.challenge_date=? and s.status='WON'",(r,n)->new Row(r.getString(1),r.getString(2),r.getInt(3),Math.max(0,Duration.between(r.getTimestamp(4).toInstant(),r.getTimestamp(5).toInstant()).toMillis())),Date.valueOf(day));
+        return rows.stream().sorted(Comparator.comparingInt(Row::score).reversed().thenComparingLong(Row::elapsedMillis).thenComparing(Row::username)).map(Row::userId).toList();
+    }
 }
