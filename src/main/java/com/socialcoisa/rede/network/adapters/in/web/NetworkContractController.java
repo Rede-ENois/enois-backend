@@ -88,7 +88,7 @@ class NetworkContractController {
 					p != null ? p.avatar() : null,
 					p != null ? p.connectionsCount() : 0,
 					p != null ? p.followersCount() : 0,
-					true);
+					true, p != null ? p.avatarFrame() : null);
 			})
 			.toList();
 		return new PageResponse<>(items, null);
@@ -111,7 +111,7 @@ class NetworkContractController {
 			.map(profiles::get)
 			.filter(p -> p != null)
 			.map(p -> new NetworkUserView(p.id(), p.username(), p.name(), p.headline(), p.avatar(),
-				p.connectionsCount(), p.followersCount(), false))
+				p.connectionsCount(), p.followersCount(), false, p.avatarFrame()))
 			.toList();
 	}
 
@@ -245,7 +245,7 @@ class NetworkContractController {
 	}
 
 	record NetworkUserView(String id, String username, String name, String headline, String avatar, int connections,
-			int followers, boolean connected) {
+			int followers, boolean connected, String avatarFrame) {
 	}
 
 	record BlockedUserView(String userId, String username, String name, String avatar, String blockedAt) {

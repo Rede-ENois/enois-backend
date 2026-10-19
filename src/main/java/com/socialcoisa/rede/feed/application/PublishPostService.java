@@ -107,7 +107,7 @@ public class PublishPostService implements PublishPostUseCase {
 		notifyMentions(command.mentionedUserIds(), command.authorId().value(), saved.id().value(), "post");
 		UserProfile author = userProfileRepository.findById(command.authorId().value()).orElse(null);
 		if (author != null) {
-			return PostView.from(saved, author.username(), author.name(), author.avatar(), author.allBadges());
+			return PostView.from(saved, author.username(), author.name(), author.avatar(), author.allBadges()).withAvatarFrame(author.avatarFrame());
 		}
 		return PostView.from(saved);
 	}

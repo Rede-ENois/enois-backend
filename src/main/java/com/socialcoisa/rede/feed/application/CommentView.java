@@ -8,12 +8,12 @@ import com.socialcoisa.rede.feed.domain.ReactionType;
 
 public record CommentView(String id, String postId, String authorId, String authorName, String authorUsername,
 		String authorAvatar, String authorBadge, List<String> authorBadges, String parentCommentId, String content,
-		List<String> mediaIds, Instant createdAt, Instant editedAt, ReactionType currentUserReaction) {
+		List<String> mediaIds, Instant createdAt, Instant editedAt, ReactionType currentUserReaction, String authorAvatarFrame) {
 
 	public static CommentView from(Comment comment) {
 		return new CommentView(comment.id(), comment.postId().value(), comment.authorId().value(),
 			null, null, null, null, List.of(), comment.parentCommentId(), comment.content(), comment.mediaIds(),
-			comment.createdAt(), comment.editedAt(), null);
+			comment.createdAt(), comment.editedAt(), null, null);
 	}
 
 	/**
@@ -28,12 +28,17 @@ public record CommentView(String id, String postId, String authorId, String auth
 		return new CommentView(comment.id(), comment.postId().value(), comment.authorId().value(),
 			authorName, authorUsername, authorAvatar, badges.isEmpty() ? null : badges.get(0), badges,
 			comment.parentCommentId(), comment.content(), comment.mediaIds(), comment.createdAt(),
-			comment.editedAt(), null);
+			comment.editedAt(), null, null);
+	}
+
+	public CommentView withAvatarFrame(String frame) {
+		return new CommentView(id, postId, authorId, authorName, authorUsername, authorAvatar, authorBadge,
+			authorBadges, parentCommentId, content, mediaIds, createdAt, editedAt, currentUserReaction, frame);
 	}
 
 	/** Anexa a reacao do proprio leitor (o front precisa dela para nao "perder" a reacao ao recarregar). */
 	public CommentView withCurrentUserReaction(ReactionType reaction) {
 		return new CommentView(id, postId, authorId, authorName, authorUsername, authorAvatar, authorBadge,
-			authorBadges, parentCommentId, content, mediaIds, createdAt, editedAt, reaction);
+			authorBadges, parentCommentId, content, mediaIds, createdAt, editedAt, reaction, authorAvatarFrame);
 	}
 }

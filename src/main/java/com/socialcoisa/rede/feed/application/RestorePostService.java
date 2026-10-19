@@ -47,7 +47,7 @@ public class RestorePostService implements RestorePostUseCase {
 		auditLogRepository.record(userId, "POST_RESTORED", saved.id().value(), null);
 		var author = userProfileRepository.findById(saved.authorId().value()).orElse(null);
 		return author != null
-			? PostView.from(saved, author.username(), author.name(), author.avatar(), author.allBadges())
+			? PostView.from(saved, author.username(), author.name(), author.avatar(), author.allBadges()).withAvatarFrame(author.avatarFrame())
 			: PostView.from(saved);
 	}
 }

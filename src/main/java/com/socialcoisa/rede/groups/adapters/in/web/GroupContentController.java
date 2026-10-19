@@ -269,7 +269,7 @@ class GroupContentController {
 			author == null ? null : author.username(),
 			author == null ? null : author.avatar(),
 			author == null ? List.of() : author.allBadges(),
-			comment.parentId(), comment.content(), comment.createdAt());
+			comment.parentId(), comment.content(), comment.createdAt(), author == null ? null : author.avatarFrame());
 	}
 
 	private GroupPostView postView(GroupPost post, ReactionType myReaction) {
@@ -281,7 +281,7 @@ class GroupContentController {
 			author == null ? null : author.avatar(),
 			badges,
 			post.content(), post.mediaIds(), post.pinned(), post.reactions(), post.comments(),
-			myReaction == null ? null : myReaction.name(), post.createdAt());
+			myReaction == null ? null : myReaction.name(), post.createdAt(), author == null ? null : author.avatarFrame());
 	}
 
 	private static TopicView topicView(GroupTopic topic) {
@@ -305,7 +305,7 @@ class GroupContentController {
 	record GroupPostView(String id, String groupId, String topicId, String authorId, String authorName,
 			String authorUsername, String authorAvatar, List<String> authorBadges, String content,
 			List<String> mediaIds, boolean pinned, int reactions, int comments, String myReaction,
-			Instant createdAt) {
+			Instant createdAt, String authorAvatarFrame) {
 	}
 
 	record CommentRequest(String content, String parentCommentId) {
@@ -316,6 +316,6 @@ class GroupContentController {
 
 	record CommentView(String id, String postId, String authorId, String authorName, String authorUsername,
 			String authorAvatar, List<String> authorBadges, String parentCommentId, String content,
-			Instant createdAt) {
+			Instant createdAt, String authorAvatarFrame) {
 	}
 }

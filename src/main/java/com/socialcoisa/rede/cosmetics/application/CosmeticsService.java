@@ -34,7 +34,10 @@ public class CosmeticsService {
 		new CosmeticItem("moldura-violeta", "Moldura Violeta", "O roxo da marca, no seu rosto.", 5_000,
 			"ring-2 ring-violet-500"),
 		new CosmeticItem("moldura-coral", "Moldura Coral", "Um aro coral para o seu retrato.", 2_000,
-			"ring-2 ring-rose-400"));
+			"ring-2 ring-rose-400"),
+		new CosmeticItem("moldura-aurora", "Aurora", "Cores que se transformam ao redor do avatar.", 5_000, ""),
+		new CosmeticItem("moldura-pulsar", "Pulsar", "Um brilho violeta que pulsa suavemente.", 5_000, ""),
+		new CosmeticItem("moldura-solar", "Solar", "Um brilho quente e vivo.", 5_000, ""));
 
 	private final CoinService coins;
 	private final CoinLedgerRepository ledger;

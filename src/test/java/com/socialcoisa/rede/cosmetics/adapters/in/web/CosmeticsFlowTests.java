@@ -10,6 +10,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.http.MediaType;
+import java.util.List;
+import java.util.Map;
 import org.springframework.test.web.servlet.MvcResult;
 
 import tools.jackson.databind.ObjectMapper;
@@ -71,6 +74,27 @@ class CosmeticsFlowTests {
 		mockMvc.perform(post("/loja/none/equipar").header("X-Session-Token", buyer.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.equipped").value(false));
+	}
+
+	@Test
+	void animatedFrameAppearsOnPostAndComment() throws Exception {
+		var buyer = auth("moldura_feed_buyer");
+		mockMvc.perform(get("/carteira").header("X-Session-Token", buyer.token())).andExpect(status().isOk());
+		mockMvc.perform(post("/loja/moldura-aurora/comprar").header("X-Session-Token", buyer.token())).andExpect(status().isOk());
+		mockMvc.perform(post("/loja/moldura-aurora/equipar").header("X-Session-Token", buyer.token())).andExpect(status().isOk());
+		MvcResult published = mockMvc.perform(post("/feed/posts")
+			.header("X-Session-Token", buyer.token()).header("Idempotency-Key", "frame-post")
+			.contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(Map.of(
+				"type", "INSIGHT", "content", "Uma publicacao com moldura", "tags", List.of(), "mediaIds", List.of()))))
+			.andExpect(status().isCreated()).andExpect(jsonPath("$.authorAvatarFrame").value("moldura-aurora")).andReturn();
+		String postId = objectMapper.readTree(published.getResponse().getContentAsString()).get("id").asText();
+		mockMvc.perform(post("/feed/posts/" + postId + "/comments")
+			.header("X-Session-Token", buyer.token()).header("Idempotency-Key", "frame-comment")
+			.contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(Map.of(
+				"content", "Comentario com moldura", "mediaIds", List.of(), "mentionedUserIds", List.of()))))
+			.andExpect(status().isCreated()).andExpect(jsonPath("$.authorAvatarFrame").value("moldura-aurora"));
+		mockMvc.perform(get("/feed/posts/" + postId + "/comments").header("X-Session-Token", buyer.token()))
+			.andExpect(status().isOk()).andExpect(jsonPath("$.items[0].authorAvatarFrame").value("moldura-aurora"));
 	}
 
 	private TestAuthHelper.AuthSession auth(String name) throws Exception {
