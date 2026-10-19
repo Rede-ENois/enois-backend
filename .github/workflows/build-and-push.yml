@@ -45,16 +45,19 @@ jobs:
           echo "image_ref=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${SHA_SHORT}" >> $GITHUB_OUTPUT
 
       - name: ⚙️ Configurar Credenciais AWS via OIDC
+        if: github.event_name != 'pull_request'
         uses: aws-actions/configure-aws-credentials@v6.2.4
         with:
           role-to-assume: arn:aws:iam::818928662779:role/forest-dev-enois-ecr
           aws-region: ${{ env.AWS_REGION }}
 
       - name: 🔑 Login no Amazon ECR
+        if: github.event_name != 'pull_request'
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Verifica e cria o repositório no ECR
+        if: github.event_name != 'pull_request'
         uses: int128/create-ecr-repository-action@v1
         with:
           repository: ${{ env.ECR_REPOSITORY }}
@@ -62,7 +65,18 @@ jobs:
       - name: ⚙️ Configurar Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # PRs, especialmente de forks, não precisam de credenciais ou acesso ao ECR.
+      - name: 🧪 Validar build da imagem no PR
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: enois/backend:pr
+
       - name: 🚀 Build & Push para o ECR
+        if: github.event_name != 'pull_request'
         id: build
         uses: docker/build-push-action@v5
         with:
