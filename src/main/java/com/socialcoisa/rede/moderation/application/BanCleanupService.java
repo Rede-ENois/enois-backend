@@ -18,6 +18,9 @@ import com.socialcoisa.rede.feed.application.port.in.ModerationRemovePostUseCase
 import com.socialcoisa.rede.messaging.application.port.out.MessagingRepository;
 import com.socialcoisa.rede.messaging.domain.Message;
 import com.socialcoisa.rede.moderation.application.port.out.BanContentArchiveRepository;
+import com.socialcoisa.rede.network.application.port.out.ConnectionRepository;
+import com.socialcoisa.rede.network.domain.ConnectionStatus;
+import com.socialcoisa.rede.network.domain.UserConnection;
 
 /**
  * Ao banir um usuario, arquiva todo o conteudo dele (posts, comentarios, mensagens)
@@ -37,16 +40,18 @@ public class BanCleanupService {
 	private final MessagingRepository messagingRepository;
 	private final ModerationRemovePostUseCase removePost;
 	private final BanContentArchiveRepository archive;
+	private final ConnectionRepository connectionRepository;
 	private final Clock clock;
 
 	public BanCleanupService(PostRepository postRepository, CommentRepository commentRepository,
 			MessagingRepository messagingRepository, ModerationRemovePostUseCase removePost,
-			BanContentArchiveRepository archive, Clock clock) {
+			BanContentArchiveRepository archive, ConnectionRepository connectionRepository, Clock clock) {
 		this.postRepository = postRepository;
 		this.commentRepository = commentRepository;
 		this.messagingRepository = messagingRepository;
 		this.removePost = removePost;
 		this.archive = archive;
+		this.connectionRepository = connectionRepository;
 		this.clock = clock;
 	}
 
@@ -60,8 +65,9 @@ public class BanCleanupService {
 		int posts = archiveAndRemovePosts(sanctionId, userId, now);
 		int comments = archiveAndRemoveComments(sanctionId, userId, now);
 		int messages = archiveMessages(sanctionId, userId, now);
-		LOG.info("Ban cleanup para usuario {}: {} posts, {} comentarios, {} mensagens arquivados",
-			userId, posts, comments, messages);
+		int connections = removeConnections(userId, now);
+		LOG.info("Ban cleanup para usuario {}: {} posts, {} comentarios, {} mensagens, {} conexoes",
+			userId, posts, comments, messages, connections);
 	}
 
 	private int archiveAndRemovePosts(String sanctionId, String userId, Instant now) {
@@ -106,6 +112,29 @@ public class BanCleanupService {
 			}
 		}
 		return messages.size();
+	}
+
+	private int removeConnections(String userId, Instant now) {
+		List<UserConnection> pending = connectionRepository.findConnections(userId, ConnectionStatus.PENDING);
+		List<UserConnection> accepted = connectionRepository.findConnections(userId, ConnectionStatus.ACCEPTED);
+		int count = 0;
+		for (UserConnection conn : pending) {
+			try {
+				connectionRepository.save(conn.remove(now));
+				count++;
+			} catch (RuntimeException e) {
+				LOG.warn("Falha ao remover conexao pendente {} do usuario {}: {}", conn.id(), userId, e.getMessage());
+			}
+		}
+		for (UserConnection conn : accepted) {
+			try {
+				connectionRepository.save(conn.remove(now));
+				count++;
+			} catch (RuntimeException e) {
+				LOG.warn("Falha ao remover conexao aceita {} do usuario {}: {}", conn.id(), userId, e.getMessage());
+			}
+		}
+		return count;
 	}
 
 	private String snapshotPost(Post post) {
