@@ -5,6 +5,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -16,6 +18,8 @@ import com.socialcoisa.rede.shared.web.ApiException;
 
 @Service
 public class EventService {
+
+	private static final Logger LOG = LoggerFactory.getLogger(EventService.class);
 
 	/** Folga antes de apagar as presencas: da tempo de quem clicou no evento no fim do dia. */
 	private static final java.time.Duration SANITIZE_GRACE = java.time.Duration.ofHours(24);
@@ -107,6 +111,11 @@ public class EventService {
 			throw new ApiException(409, "ALREADY_ATTENDING", "Voce ja confirmou presenca.");
 		}
 		repository.saveAttendee(EventAttendee.attend(eventId, userId, clock.instant()));
+		// userId ja vem do MDC (CurrentUserResolver); nao repetir em addKeyValue — structured log rejeita.
+		LOG.atInfo()
+			.addKeyValue("eventId", eventId)
+			.addKeyValue("action", "ATTENDING")
+			.log("event_attendance eventId={} userId={} action=ATTENDING", eventId, userId);
 	}
 
 	@Transactional
@@ -115,6 +124,10 @@ public class EventService {
 			throw new ApiException(404, "NOT_ATTENDING", "Voce nao esta inscrito neste evento.");
 		}
 		repository.removeAttendee(eventId, userId);
+		LOG.atInfo()
+			.addKeyValue("eventId", eventId)
+			.addKeyValue("action", "NOT_ATTENDING")
+			.log("event_attendance eventId={} userId={} action=NOT_ATTENDING", eventId, userId);
 	}
 
 	/**
