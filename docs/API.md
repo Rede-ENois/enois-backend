@@ -289,11 +289,13 @@ Nota: Criar vaga requer reputação >= 300.
 
 | Método | Rota | Descrição | Autenticação |
 |---|---|---|---|
-| GET | `/api/events` | Listar eventos | Sim |
+| GET | `/api/events` | Listar eventos | Não (viewer opcional) |
 | POST | `/api/events` | Criar evento | Sim |
-| GET | `/api/events/{eventId}` | Detalhes do evento | Sim |
+| GET | `/api/events/{eventId}` | Detalhes do evento | Não (viewer opcional) |
 | POST | `/api/events/{eventId}/attendees` | Confirmar presença | Sim |
 | DELETE | `/api/events/{eventId}/attendees` | Cancelar presença | Sim |
+
+`EventView` inclui `attending: boolean` — `true` quando o requester autenticado confirmou presença naquele evento; sem sessão, sempre `false`. A listagem permanece pública; com `X-Session-Token` (ou `X-User-Id` + sessão válida) o campo reflete o viewer.
 
 ---
 

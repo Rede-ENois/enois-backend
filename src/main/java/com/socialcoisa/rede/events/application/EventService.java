@@ -198,4 +198,9 @@ public class EventService {
 		return repository.countAttendees(eventId);
 	}
 
+	/** Events among {@code eventIds} where the user confirmed attendance (one query). */
+	public java.util.Set<String> attendingEventIds(String userId, java.util.List<String> eventIds) {
+		return repository.findAttendingEventIds(userId, eventIds);
+	}
+
 }

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "event-view.json",
+  "title": "EventView",
+  "type": "object",
+  "required": [
+    "id",
+    "title",
+    "date",
+    "time",
+    "format",
+    "host",
+    "attendees",
+    "expired",
+    "attending"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "date": { "type": "string" },
+    "time": { "type": "string" },
+    "format": { "type": "string" },
+    "host": { "type": "string" },
+    "attendees": { "type": "integer", "minimum": 0 },
+    "cover": { "type": ["string", "null"] },
+    "streamUrl": { "type": ["string", "null"] },
+    "location": { "type": ["string", "null"] },
+    "expired": { "type": "boolean" },
+    "attending": {
+      "type": "boolean",
+      "description": "True when the authenticated viewer has confirmed attendance; always false without auth."
+    }
+  },
+  "additionalProperties": true
+}

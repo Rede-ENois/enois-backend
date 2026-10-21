@@ -3,6 +3,7 @@ package com.socialcoisa.rede.events.adapters.in.web;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -79,27 +80,38 @@ class EventContractController {
 	@GetMapping
 	PageResponse<EventView> events(@RequestParam(required = false) String format,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit,
-			@RequestParam(defaultValue = "false") boolean includePast) {
+			@RequestParam(defaultValue = "false") boolean includePast,
+			@RequestHeader(value = "X-User-Id", required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		var page = eventService.list(format, before, limit, includePast);
-		var items = page.items().stream().map(this::toView).toList();
+		String viewer = viewerId(userId, sessionToken);
+		List<String> ids = page.items().stream().map(Event::id).toList();
+		Set<String> attendingIds = viewer != null ? eventService.attendingEventIds(viewer, ids) : Set.of();
+		var items = page.items().stream().map(event -> toView(event, attendingIds.contains(event.id()))).toList();
 		// Cursor pela pagina que veio do banco: esconder evento vencido nao pode encerrar a paginacao.
 		String nextCursor = page.fetched().size() == limit
 			? cursorCodec.encode(page.fetched().get(page.fetched().size() - 1).createdAt()) : null;
 		return new PageResponse<>(items, nextCursor);
 	}
 
-	private EventView toView(Event event) {
+	private EventView toView(Event event, boolean attending) {
 		// Depois da sanitizacao as presencas somem: o numero guardado sustenta o total.
 		Integer finalCount = event.finalAttendeesCount();
 		int attendees = finalCount != null ? finalCount : eventService.countAttendees(event.id());
 		return new EventView(event.id(), event.title(), event.date(), event.time(), event.format(), event.host(),
-			attendees, event.cover(), event.streamUrl(), event.location(), eventService.hasEnded(event));
+			attendees, event.cover(), event.streamUrl(), event.location(), eventService.hasEnded(event), attending);
 	}
 
 	@GetMapping("/{eventId}")
-	EventView event(@PathVariable String eventId) {
-		return toView(eventService.getById(eventId));
+	EventView event(@PathVariable String eventId,
+			@RequestHeader(value = "X-User-Id", required = false) String userId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		Event event = eventService.getById(eventId);
+		String viewer = viewerId(userId, sessionToken);
+		boolean attending = viewer != null
+			&& eventService.attendingEventIds(viewer, List.of(event.id())).contains(event.id());
+		return toView(event, attending);
 	}
 
 	@PostMapping
@@ -114,8 +126,18 @@ class EventContractController {
 				Event e = eventService.create(request.title(), request.date(), request.time(), request.format(),
 					request.host(), request.cover(), request.streamUrl(), request.location(),
 					user.id().value());
-				return new CommandResponse(201, toView(e));
+				return new CommandResponse(201, toView(e, false));
 			});
+	}
+
+	/** Resolve o usuario quando ha sessao; listagem publica segue sem login. */
+	private String viewerId(String userId, String sessionToken) {
+		try {
+			return currentUserResolver.resolve(userId, sessionToken).id().value();
+		}
+		catch (RuntimeException exception) {
+			return null;
+		}
 	}
 
 	@PostMapping("/{eventId}/attendees")
@@ -147,7 +169,7 @@ class EventContractController {
 	}
 
 	record EventView(String id, String title, String date, String time, String format, String host, int attendees,
-			String cover, String streamUrl, String location, boolean expired) {
+			String cover, String streamUrl, String location, boolean expired, boolean attending) {
 	}
 
 	record CreateEventRequest(String title, String date, String time, String format, String host, String cover,

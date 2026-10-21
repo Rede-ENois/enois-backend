@@ -20,6 +20,9 @@ public interface EventRepository {
 
 	boolean isAttending(String eventId, String userId);
 
+	/** Event ids from {@code eventIds} where the user has confirmed attendance (batch). */
+	java.util.Set<String> findAttendingEventIds(String userId, java.util.Collection<String> eventIds);
+
 	int countAttendees(String eventId);
 
 	/** Eventos que ainda nao passaram pela sanitizacao (o vencimento e avaliado no dominio). */

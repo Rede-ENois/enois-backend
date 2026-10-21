@@ -1,9 +1,11 @@
 package com.socialcoisa.rede.events.adapters.out.persistence;
 
+import java.util.Collection;
 import java.util.List;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 interface SpringDataEventAttendeeJpaRepository extends JpaRepository<EventAttendeeJpaEntity, Long> {
 
@@ -19,4 +21,8 @@ interface SpringDataEventAttendeeJpaRepository extends JpaRepository<EventAttend
 	/** Só os IDs (a sanitização não precisa de nada além disso). */
 	@Query("select a.userId from EventAttendeeJpaEntity a where a.eventId = :eventId")
 	List<String> findUserIdsByEventId(String eventId);
+
+	@Query("SELECT a.eventId FROM EventAttendeeJpaEntity a WHERE a.userId = :userId AND a.eventId IN :eventIds")
+	List<String> findEventIdsByUserIdAndEventIdIn(@Param("userId") String userId,
+			@Param("eventIds") Collection<String> eventIds);
 }

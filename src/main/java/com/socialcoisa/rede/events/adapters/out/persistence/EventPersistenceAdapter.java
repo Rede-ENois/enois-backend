@@ -67,6 +67,14 @@ class EventPersistenceAdapter implements EventRepository {
 	}
 
 	@Override
+	public java.util.Set<String> findAttendingEventIds(String userId, java.util.Collection<String> eventIds) {
+		if (eventIds == null || eventIds.isEmpty()) {
+			return java.util.Set.of();
+		}
+		return java.util.Set.copyOf(attendeeRepo.findEventIdsByUserIdAndEventIdIn(userId, eventIds));
+	}
+
+	@Override
 	public List<com.socialcoisa.rede.events.domain.Event> findNotSanitized() {
 		return springData.findBySanitizedAtIsNull().stream().map(EventJpaEntity::toDomain).toList();
 	}
