@@ -298,6 +298,17 @@ public class GameService {
 		return games.save(game.reject(reviewerId, note.trim(), clock.instant()));
 	}
 
+	/**
+	 * Conflito de interesse: quem modera nao aprova o proprio jogo. A fila de moderacao e aberta a
+	 * moderadores da comunidade, e sem isso um moderador publicava o que ele mesmo enviou, pulando
+	 * a revisao. Admin segue podendo (a rota /admin/games/... nao chama isto).
+	 */
+	public void requireNotOwnSubmission(String gameId, String reviewerId) {
+		if (game(gameId).ownedBy(reviewerId)) {
+			throw new ApiException(403, "OWN_SUBMISSION", "Quem modera não aprova o próprio jogo.");
+		}
+	}
+
 	private Game game(String gameId) {
 		return games.findById(gameId)
 			.orElseThrow(() -> new ApiException(404, "GAME_NOT_FOUND", "Jogo não encontrado."));

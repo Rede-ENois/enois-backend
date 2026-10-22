@@ -374,6 +374,9 @@ class ModeratorController {
 			@RequestBody(required = false) DecisionRequest request) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
 		requireModerator(user);
+		if (!adminGuard.isAdmin(user)) {
+			games.requireNotOwnSubmission(gameId, user.id().value());
+		}
 		Game approved = games.approve(gameId, user.id().value(), request == null ? null : request.note());
 		return Map.of("id", approved.id(), "status", approved.status().name());
 	}
@@ -430,6 +433,9 @@ class ModeratorController {
 			@RequestBody(required = false) DecisionRequest request) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
 		requireModerator(user);
+		if (!adminGuard.isAdmin(user)) {
+			serviceOffers.requireNotOwnSubmission(serviceId, user.id().value());
+		}
 		var approved = serviceOffers.approve(serviceId, user.id().value(),
 			request == null ? null : request.note());
 		return Map.of("id", approved.id(), "status", approved.status().name());

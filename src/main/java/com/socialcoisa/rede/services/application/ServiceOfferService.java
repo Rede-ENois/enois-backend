@@ -140,6 +140,13 @@ public class ServiceOfferService {
 		return repository.save(offer.resubmit(clock.instant()));
 	}
 
+	/** Mesmo conflito de interesse dos jogos: moderador nao aprova o proprio servico. */
+	public void requireNotOwnSubmission(String serviceId, String reviewerId) {
+		if (byId(serviceId).ownedBy(reviewerId)) {
+			throw new ApiException(403, "OWN_SUBMISSION", "Quem modera não aprova o próprio serviço.");
+		}
+	}
+
 	private ServiceOffer byId(String serviceId) {
 		return repository.findById(serviceId)
 			.orElseThrow(() -> new ApiException(404, "SERVICE_NOT_FOUND", "Serviço não encontrado."));
