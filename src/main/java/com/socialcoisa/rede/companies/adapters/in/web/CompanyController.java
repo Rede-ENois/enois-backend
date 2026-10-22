@@ -47,7 +47,7 @@ class CompanyController {
 	List<CompanySummaryView> list(@RequestParam(defaultValue = "30") int limit) {
 		// Listagem por enquanto via paginas de quem publica: o diretorio derivado de vagas
 		// (/jobs/companies) cobre descoberta; aqui ficam as paginas empresariais criadas.
-		return companies.listAll(limit).stream().map(CompanySummaryView::from).toList();
+		return companies.listAll(publicListLimit(limit)).stream().map(CompanySummaryView::from).toList();
 	}
 
 	@GetMapping("/empresa/{slug}")
@@ -117,7 +117,12 @@ class CompanyController {
 
 	@GetMapping("/microprojetos")
 	List<MicroProjectView> openProjects(@RequestParam(defaultValue = "30") int limit) {
-		return microProjects.openProjects(limit).stream().map(MicroProjectView::from).toList();
+		return microProjects.openProjects(publicListLimit(limit)).stream().map(MicroProjectView::from).toList();
+	}
+
+	/** Teto das listas publicas: sem ele, um `limit` enorme trazia a tabela inteira sem sessao. */
+	private static int publicListLimit(int limit) {
+		return Math.min(Math.max(limit, 1), 100);
 	}
 
 	@GetMapping("/microprojetos/{projectId}")

@@ -162,12 +162,20 @@ class ProfileController {
 
 	@GetMapping("/ranking")
 	Object ranking(@RequestParam(defaultValue = "20") int limit) {
-		return profileService.getRanking(limit);
+		return profileService.getRanking(publicListLimit(limit));
 	}
 
 	@GetMapping("/profile/ranking")
 	Object profileRanking(@RequestParam(defaultValue = "20") int limit) {
-		return profileService.getRanking(limit);
+		return profileService.getRanking(publicListLimit(limit));
+	}
+
+	/**
+	 * Teto da vitrine publica. Sem ele, `?limit=1000000` devolvia todos os perfis numa resposta so,
+	 * sem sessao: carga pesada no banco e a base inteira raspada de uma vez.
+	 */
+	private static int publicListLimit(int limit) {
+		return Math.min(Math.max(limit, 1), 50);
 	}
 
 	/**

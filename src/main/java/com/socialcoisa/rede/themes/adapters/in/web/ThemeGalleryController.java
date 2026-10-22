@@ -31,7 +31,8 @@ class ThemeGalleryController {
 
 	@GetMapping("/temas/galeria")
 	List<ThemeGalleryView> list(@RequestParam(defaultValue = "60") int limit) {
-		return gallery.list(limit).stream().map(ThemeGalleryView::from).toList();
+		// Teto: cada tema carrega o pacote JSON inteiro, e a galeria e publica.
+		return gallery.list(Math.min(Math.max(limit, 1), 100)).stream().map(ThemeGalleryView::from).toList();
 	}
 
 	@GetMapping("/temas/galeria/{themeId}")
