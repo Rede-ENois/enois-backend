@@ -48,6 +48,9 @@ class CosmeticsFlowTests {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$[?(@.id == 'moldura-violeta')].priceMf").value(5_000))
 			.andExpect(jsonPath("$[?(@.id == 'moldura-buraco-negro')].priceMf").value(10_000))
+			.andExpect(jsonPath("$[?(@.id == 'moldura-nebulosa')].priceMf").value(10_000))
+                        .andExpect(jsonPath("$[?(@.id == 'moldura-supernova')].priceMf").value(10_000))
+                        .andExpect(jsonPath("$[?(@.id == 'moldura-dragao')]").isEmpty())
 			.andReturn();
 
 		// A compra direta: 5.000 mf saem (105.000 -> 100.000).
@@ -82,7 +85,9 @@ class CosmeticsFlowTests {
 
         @ParameterizedTest
         @ValueSource(strings = { "moldura-aurora", "moldura-tempestade", "moldura-inferno",
-                "moldura-buraco-negro", "moldura-orbita", "moldura-glacial", "moldura-toxica" })
+                "moldura-buraco-negro", "moldura-orbita", "moldura-glacial", "moldura-toxica",
+                "moldura-nebulosa", "moldura-supernova", "moldura-prisma", "moldura-portal",
+                "moldura-holograma" })
         void animatedFrameAppearsOnPostAndComment(String frame) throws Exception {
                 var buyer = auth("frame_" + frame.substring("moldura-".length()).replace('-', '_'));
                 mockMvc.perform(get("/carteira").header("X-Session-Token", buyer.token())).andExpect(status().isOk());
