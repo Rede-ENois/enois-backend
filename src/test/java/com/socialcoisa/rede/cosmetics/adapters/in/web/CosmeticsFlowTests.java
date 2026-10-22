@@ -50,6 +50,10 @@ class CosmeticsFlowTests {
 			.andExpect(jsonPath("$[?(@.id == 'moldura-buraco-negro')].priceMf").value(10_000))
 			.andExpect(jsonPath("$[?(@.id == 'moldura-nebulosa')].priceMf").value(10_000))
                         .andExpect(jsonPath("$[?(@.id == 'moldura-supernova')].priceMf").value(10_000))
+			.andExpect(jsonPath("$[?(@.id == 'moldura-galaxia')].name").value("Galáxia"))
+			.andExpect(jsonPath("$[?(@.id == 'moldura-galaxia')].priceMf").value(10_000))
+			.andExpect(jsonPath("$[?(@.id == 'moldura-galaxia')].cssRing").value(""))
+			.andExpect(jsonPath("$[?(@.id == 'moldura-prisma')]").isEmpty())
                         .andExpect(jsonPath("$[?(@.id == 'moldura-dragao')]").isEmpty())
 			.andReturn();
 
@@ -86,7 +90,7 @@ class CosmeticsFlowTests {
         @ParameterizedTest
         @ValueSource(strings = { "moldura-aurora", "moldura-tempestade", "moldura-inferno",
                 "moldura-buraco-negro", "moldura-orbita", "moldura-glacial", "moldura-toxica",
-                "moldura-nebulosa", "moldura-supernova", "moldura-prisma", "moldura-portal",
+                "moldura-nebulosa", "moldura-supernova", "moldura-galaxia", "moldura-portal",
                 "moldura-holograma" })
         void animatedFrameAppearsOnPostAndComment(String frame) throws Exception {
                 var buyer = auth("frame_" + frame.substring("moldura-".length()).replace('-', '_'));
@@ -95,10 +99,23 @@ class CosmeticsFlowTests {
                         .andExpect(status().isOk())
                         .andExpect(jsonPath("$[?(@.id == '" + frame + "')].priceMf")
                                 .value("moldura-aurora".equals(frame) ? 5_000 : 10_000));
+		mockMvc.perform(post("/loja/" + frame + "/equipar").header("X-Session-Token", buyer.token()))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("NOT_OWNED"));
                 mockMvc.perform(post("/loja/" + frame + "/comprar").header("X-Session-Token", buyer.token()))
                         .andExpect(status().isOk())
                         .andExpect(jsonPath("$.owned").value(true));
+		mockMvc.perform(post("/loja/" + frame + "/comprar").header("X-Session-Token", buyer.token()))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.code").value("ALREADY_OWNED"));
+                mockMvc.perform(get("/carteira").header("X-Session-Token", buyer.token()))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.balance").value("moldura-aurora".equals(frame) ? 100_000 : 95_000));
                 mockMvc.perform(post("/loja/" + frame + "/equipar").header("X-Session-Token", buyer.token())).andExpect(status().isOk());
+		mockMvc.perform(get("/loja").header("X-Session-Token", buyer.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[?(@.id == '" + frame + "')].owned").value(true))
+			.andExpect(jsonPath("$[?(@.id == '" + frame + "')].equipped").value(true));
 		MvcResult published = mockMvc.perform(post("/feed/posts")
 			.header("X-Session-Token", buyer.token()).header("Idempotency-Key", "frame-post")
 			.contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(Map.of(
@@ -112,6 +129,23 @@ class CosmeticsFlowTests {
                         .andExpect(status().isCreated()).andExpect(jsonPath("$.authorAvatarFrame").value(frame));
 		mockMvc.perform(get("/feed/posts/" + postId + "/comments").header("X-Session-Token", buyer.token()))
                         .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].authorAvatarFrame").value(frame));
+	}
+
+	@Test
+	void replacedPrismaIsUnavailableAndDoesNotChargeTheWallet() throws Exception {
+		var buyer = auth("frame_prisma_replaced");
+		mockMvc.perform(get("/carteira").header("X-Session-Token", buyer.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.balance").value(105_000));
+		mockMvc.perform(post("/loja/moldura-prisma/comprar").header("X-Session-Token", buyer.token()))
+			.andExpect(status().isNotFound())
+			.andExpect(jsonPath("$.code").value("ITEM_NOT_FOUND"));
+		mockMvc.perform(post("/loja/moldura-prisma/equipar").header("X-Session-Token", buyer.token()))
+			.andExpect(status().isNotFound())
+			.andExpect(jsonPath("$.code").value("ITEM_NOT_FOUND"));
+		mockMvc.perform(get("/carteira").header("X-Session-Token", buyer.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.balance").value(105_000));
 	}
 
 	private TestAuthHelper.AuthSession auth(String name) throws Exception {

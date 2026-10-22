@@ -48,7 +48,7 @@ public class CosmeticsService {
 		new CosmeticItem("moldura-toxica", "Tóxica", "Gosma radioativa que borbulha e escorre.", 10_000, ""),
 		new CosmeticItem("moldura-nebulosa", "Nebulosa", "Nuvens cósmicas e estrelas envolvendo o seu avatar.", 10_000, ""),
 		new CosmeticItem("moldura-supernova", "Supernova", "Uma explosão estelar com ondas de luz e partículas.", 10_000, ""),
-		new CosmeticItem("moldura-prisma", "Prisma", "Fragmentos de vidro colorido flutuando ao redor, com reflexos e rotação suave.", 10_000, ""),
+		new CosmeticItem("moldura-galaxia", "Galáxia", "Braços espirais de gás e poeira, com estrelas e partículas em movimento.", 10_000, ""),
 		new CosmeticItem("moldura-portal", "Portal", "Um vórtice de energia sugando faíscas para dentro.", 10_000, ""),
 		new CosmeticItem("moldura-holograma", "Holograma", "Sinal holográfico com glitch e linhas de varredura.", 10_000,
 			""));
