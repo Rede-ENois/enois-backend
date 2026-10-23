@@ -21,17 +21,22 @@ import com.socialcoisa.rede.media.application.port.out.MediaUploadSigner;
  *  2. O prazo e o mesmo da janela do asset (15 min), curtinho de proposito.
  *  3. Nao existe credencial no cliente: quem tem permissao e o pod, que assina. O `S3Presigner`
  *     usa a cadeia padrao (IRSA do service account, no cluster).
+ *
+ * `objectKey` que chega aqui JA vem com o prefixo (`rede.media.s3.prefix`) embutido — quem gera e
+ * `S3StorageUrlFactory.objectKey()`, a mesma chave que fica gravada no asset e usada depois para
+ * ler o objeto de volta. Prepender o prefixo de novo aqui assinaria a escrita para
+ * `uploads/uploads/...`, um endereco que `cdnUrl()` nunca aponta — bug real que existiu aqui ate
+ * 2026-10-23 e nunca foi exercitado com sucesso em producao (todo asset S3 ate essa data chegou
+ * por migracao, nunca por upload novo via este signer).
  */
 class S3UploadSigner implements MediaUploadSigner {
 
 	private final S3Presigner presigner;
 	private final String bucket;
-	private final String prefix;
 
-	S3UploadSigner(S3Presigner presigner, String bucket, String prefix) {
+	S3UploadSigner(S3Presigner presigner, String bucket) {
 		this.presigner = presigner;
 		this.bucket = bucket;
-		this.prefix = prefix == null ? "" : prefix;
 	}
 
 	@Override
@@ -39,7 +44,7 @@ class S3UploadSigner implements MediaUploadSigner {
 		Duration validade = Duration.ofMinutes(60);
 		PutObjectRequest request = PutObjectRequest.builder()
 			.bucket(bucket)
-			.key(prefix + objectKey)
+			.key(objectKey)
 			.contentType(mimeType)
 			.build();
 		PresignedPutObjectRequest presigned = presigner.presignPutObject(PutObjectPresignRequest.builder()

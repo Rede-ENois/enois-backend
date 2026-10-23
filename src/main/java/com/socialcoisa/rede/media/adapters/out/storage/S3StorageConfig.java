@@ -15,6 +15,7 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Configuration;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
+import com.socialcoisa.rede.media.application.port.out.MediaDownloadSigner;
 import com.socialcoisa.rede.media.application.port.out.MediaUploadSigner;
 import com.socialcoisa.rede.media.application.port.out.StorageUrlFactory;
 
@@ -58,7 +59,18 @@ class S3StorageConfig {
 
 	@Bean
 	MediaUploadSigner mediaUploadSigner(S3Presigner presigner, S3Properties props) {
-		return new S3UploadSigner(presigner, props.getBucket(), props.getPrefix());
+		return new S3UploadSigner(presigner, props.getBucket());
+	}
+
+	/**
+	 * Leitura assinada: o gateway S3-compativel proprio (object-storage b7cloud) exige SigV4 em
+	 * TODO GET, nao so no PUT — nao existe bucket/objeto publico nele (correto e intencional, nao
+	 * e gap a corrigir la). `cdn_url` gravado no asset so funciona direto no S3 real da AWS; aqui
+	 * `MediaService.getMedia()` troca por uma URL assinada a cada leitura quando o provider e S3.
+	 */
+	@Bean
+	MediaDownloadSigner mediaDownloadSigner(S3Presigner presigner, S3Properties props) {
+		return new S3DownloadSigner(presigner, props.getBucket());
 	}
 
 	@Bean

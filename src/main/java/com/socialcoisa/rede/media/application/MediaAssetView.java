@@ -11,8 +11,13 @@ public record MediaAssetView(String id, String ownerId, String fileName, String 
 		Instant expiresAt, Instant deletedAt) {
 
 	public static MediaAssetView from(MediaAsset asset) {
+		return from(asset, asset.cdnUrl());
+	}
+
+	/** Mesma leitura, com `cdnUrl` trocado (caso S3: URL assinada em vez do endereco gravado). */
+	public static MediaAssetView from(MediaAsset asset, String cdnUrl) {
 		return new MediaAssetView(asset.id(), asset.ownerId().value(), asset.fileName(), asset.mimeType(), asset.size(),
-			asset.purpose(), asset.objectKey(), asset.cdnUrl(), asset.status(), asset.deleteStatus(), asset.createdAt(),
+			asset.purpose(), asset.objectKey(), cdnUrl, asset.status(), asset.deleteStatus(), asset.createdAt(),
 			asset.expiresAt(), asset.deletedAt());
 	}
 }

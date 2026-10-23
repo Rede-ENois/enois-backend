@@ -20,9 +20,11 @@ import com.socialcoisa.rede.media.application.port.in.RequestMediaDeletionUseCas
 import com.socialcoisa.rede.media.application.port.in.ValidateMediaOwnershipUseCase;
 import com.socialcoisa.rede.media.application.port.out.MediaAssetRepository;
 import com.socialcoisa.rede.media.application.port.out.MediaDeletionJobRepository;
+import com.socialcoisa.rede.media.application.port.out.MediaDownloadSigner;
 import com.socialcoisa.rede.media.application.port.out.MediaUploadSigner;
 import com.socialcoisa.rede.media.application.port.out.StorageUrlFactory;
 import com.socialcoisa.rede.media.domain.MediaAsset;
+import com.socialcoisa.rede.media.domain.MediaStorageProvider;
 import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.StatusResponse;
 
@@ -54,17 +56,25 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 	private final StorageUrlFactory storageUrlFactory;
 	/** So existe com storage S3 (ver S3StorageConfig); sem ele, o fluxo do ImageKit segue igual. */
 	private final java.util.Optional<MediaUploadSigner> uploadSigner;
+	/**
+	 * So existe com storage S3. O gateway proprio exige SigV4 em todo GET (sem bucket/objeto
+	 * publico, de proposito), entao `cdn_url` gravado nao abre direto no browser quando o asset e
+	 * S3 — `getMedia()` troca por uma URL assinada a cada leitura. ImageKit nunca passa por aqui.
+	 */
+	private final java.util.Optional<MediaDownloadSigner> downloadSigner;
 	/** Só existe com a migração ligada; presente aqui para a leitura agendar a cópia oportunista. */
 	private final org.springframework.beans.factory.ObjectProvider<LazyMediaCopyTrigger> lazyCopy;
 	private final Clock clock;
 
 	public MediaService(MediaAssetRepository mediaAssetRepository, MediaDeletionJobRepository mediaDeletionJobRepository,
 			StorageUrlFactory storageUrlFactory, java.util.Optional<MediaUploadSigner> uploadSigner,
+			java.util.Optional<MediaDownloadSigner> downloadSigner,
 			org.springframework.beans.factory.ObjectProvider<LazyMediaCopyTrigger> lazyCopy, Clock clock) {
 		this.mediaAssetRepository = mediaAssetRepository;
 		this.mediaDeletionJobRepository = mediaDeletionJobRepository;
 		this.storageUrlFactory = storageUrlFactory;
 		this.uploadSigner = uploadSigner;
+		this.downloadSigner = downloadSigner;
 		this.lazyCopy = lazyCopy;
 		this.clock = clock;
 	}
@@ -110,7 +120,19 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 		// Leitura = oportunidade de migração: quem pede o asset (grade do post, preview) agenda a
 		// cópia para o S3 sem esperar. Resposta idêntica à de sempre; nada bloqueia.
 		lazyCopy.ifAvailable(trigger -> trigger.copySoon(asset));
-		return MediaAssetView.from(asset);
+		return MediaAssetView.from(asset, resolveCdnUrl(asset));
+	}
+
+	/**
+	 * `cdn_url` gravado so abre direto no browser quando o provider e IMAGEKIT (CDN publico). Em
+	 * S3 o gateway proprio exige SigV4 em todo GET — sem signer configurado (storage voltou para
+	 * imagekit com asset ja migrado), cai pro endereco gravado em vez de quebrar a leitura.
+	 */
+	private String resolveCdnUrl(MediaAsset asset) {
+		if (asset.storageProvider() != MediaStorageProvider.S3) {
+			return asset.cdnUrl();
+		}
+		return downloadSigner.map(signer -> signer.sign(asset.objectKey())).orElse(asset.cdnUrl());
 	}
 
 	@Override
