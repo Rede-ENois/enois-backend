@@ -1,0 +1,17 @@
+name: QA Unblock
+on:
+  push:
+    branches: [chore/qa-unblock]
+jobs:
+  restart:
+    runs-on: ubuntu-latest
+    steps:
+      - name: restart qa backend
+        env:
+          PB: ${{ secrets.PORTAINER_BASE_URL }}
+          PK: ${{ secrets.PORTAINER_API_KEY }}
+        run: |
+          API="$PB/api/endpoints/8/docker"
+          curl -sS -o /dev/null -w "restart=%{http_code}\n" -X POST -H "X-API-Key: $PK" -H "Referer: $PB" "$API/containers/enois-qa-backend/restart?t=5"
+          sleep 45
+          curl -sS -o /dev/null -w "health=%{http_code}\n" https://enois-api-qa.b7cloud.tech/api/health
