@@ -269,6 +269,20 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.PROD_AWS_SECRET_ACCESS_KEY }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          # Observabilidade (TASK-041). Nao sao segredo (so apontam pro Alloy local e ligam
+          # endpoints do Actuator), por isso ficam em Actions Variables, nao Secrets.
+          # MANAGEMENT_ENDPOINTS expoe prometheus/metrics ALEM de health — isso so e seguro porque
+          # o Traefik em docker-prod3 tem um router dedicado bloqueando Host(api.enois.ia.br) &&
+          # PathPrefix(/api/actuator) com ipAllowList (ver dynamic.yml do enois-traefik); sem esse
+          # bloqueio, subir este valor aqui vazaria metricas internas da JVM publicamente.
+          MANAGEMENT_ENDPOINTS: ${{ vars.MANAGEMENT_ENDPOINTS }}
+          # Alloy (stack enois-observability, Portainer id 353) escuta OTLP em 127.0.0.1:4318;
+          # o backend roda host-network no mesmo node2, entao "localhost" aqui e o host real.
+          MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT: ${{ vars.MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT }}
+          # 0.2 = 20% das requests tracadas em prod. O default do app (1.0) e dev-grade; 1.0 em
+          # prod gravaria span de TODA request no Tempo sem necessidade. Ajustar depois com dado
+          # real de volume se 20% gerar ruido/custo de storage demais ou pouca amostra.
+          TRACING_SAMPLING_PROBABILITY: ${{ vars.TRACING_SAMPLING_PROBABILITY }}
         run: |
           set -euo pipefail
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
@@ -315,6 +329,9 @@ jobs:
                 AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
                 GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
                 GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+                MANAGEMENT_ENDPOINTS: ${MANAGEMENT_ENDPOINTS}
+                MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT: ${MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT}
+                TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY}
           EOF
 
           echo "==> Montar payload JSON (python escapa o YAML certo pro body)"
