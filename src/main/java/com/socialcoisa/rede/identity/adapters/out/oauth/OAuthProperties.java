@@ -24,8 +24,19 @@ public class OAuthProperties {
 		return StringUtils.hasText(linkedin.clientId);
 	}
 
-	public String getFrontendRedirectUrl() { return frontendRedirectUrl; }
+	public String getFrontendRedirectUrl() { return clean(frontendRedirectUrl); }
 	public void setFrontendRedirectUrl(String frontendRedirectUrl) { this.frontendRedirectUrl = frontendRedirectUrl; }
+
+	/**
+	 * URL de retorno sem barra final nem espaco sobrando.
+	 *
+	 * O callback do OAuth e montado como {@code base + "/api/auth/oauth/..."}: se a variavel de
+	 * ambiente vier com "/" no fim, o redirect sai com barra dupla e o Google recusa como
+	 * redirect_uri_mismatch (Erro 400 no login, 23/10).
+	 */
+	private static String clean(String url) {
+		return url == null ? "" : url.trim().replaceAll("/+$", "");
+	}
 
 	public boolean isGoogleConfigured() {
 		return StringUtils.hasText(google.clientId);
@@ -46,7 +57,7 @@ public class OAuthProperties {
 		public String getClientSecret() { return clientSecret; }
 		public void setClientSecret(String clientSecret) { this.clientSecret = clientSecret; }
 
-		public String getRedirectUri() { return redirectUri; }
+		public String getRedirectUri() { return clean(redirectUri); }
 		public void setRedirectUri(String redirectUri) { this.redirectUri = redirectUri; }
 	}
 
@@ -61,7 +72,7 @@ public class OAuthProperties {
 		public String getClientSecret() { return clientSecret; }
 		public void setClientSecret(String clientSecret) { this.clientSecret = clientSecret; }
 
-		public String getRedirectUri() { return redirectUri; }
+		public String getRedirectUri() { return clean(redirectUri); }
 		public void setRedirectUri(String redirectUri) { this.redirectUri = redirectUri; }
 	}
 
@@ -84,7 +95,7 @@ public class OAuthProperties {
 		public String getPrivateKey() { return privateKey; }
 		public void setPrivateKey(String privateKey) { this.privateKey = privateKey; }
 
-		public String getRedirectUri() { return redirectUri; }
+		public String getRedirectUri() { return clean(redirectUri); }
 		public void setRedirectUri(String redirectUri) { this.redirectUri = redirectUri; }
 	}
 }
