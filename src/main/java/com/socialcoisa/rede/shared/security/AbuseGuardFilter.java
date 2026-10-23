@@ -91,7 +91,7 @@ public class AbuseGuardFilter extends OncePerRequestFilter {
 		long now = clock.millis();
 		Block bloqueio = bloqueios.get(ip);
 		if (bloqueio != null && bloqueio.until() > now) {
-			negar(response, bloqueio.until() - now);
+			negar(request, response, bloqueio.until() - now);
 			return;
 		}
 
@@ -147,10 +147,18 @@ public class AbuseGuardFilter extends OncePerRequestFilter {
 	}
 
 	/** 429 com o tempo de espera: o cliente honesto sabe quando voltar, o scanner não ganha nada. */
-	private void negar(HttpServletResponse response, long restanteMs) throws IOException {
+	private void negar(HttpServletRequest request, HttpServletResponse response, long restanteMs)
+			throws IOException {
 		long segundos = Math.max(1, (restanteMs + 999) / 1000);
 		response.setStatus(429);
 		response.setHeader("Retry-After", Long.toString(segundos));
+		// Sem o cabecalho de CORS o navegador transforma este 429 em `NetworkError` e a pessoa ve
+		// "erro de rede" em vez de "muitas requisicoes invalidas". Devolve a origem que pediu.
+		String origem = request.getHeader("Origin");
+		if (origem != null && !origem.isBlank()) {
+			response.setHeader("Access-Control-Allow-Origin", origem);
+			response.setHeader("Vary", "Origin");
+		}
 		response.setContentType("application/json");
 		response.setCharacterEncoding("UTF-8");
 		response.getWriter().write("{\"code\":\"RATE_LIMITED\",\"message\":\"Muitas requisicoes invalidas. "

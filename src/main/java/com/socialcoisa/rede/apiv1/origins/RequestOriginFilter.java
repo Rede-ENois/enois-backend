@@ -127,7 +127,15 @@ class RequestOriginFilter extends OncePerRequestFilter {
 		}
 
 		if (trusted) {
-			// A origem do app segue o CORS estático (CorsConfig), inclusive no preflight.
+			// O preflight da PROPRIA origem tambem e respondido aqui. Em `/admin` o OPTIONS caia no
+			// handler, que exige sessao: o navegador recebia 500 no preflight e o painel de
+			// moderacao nunca abria (`NetworkError` no console). O resto segue no CORS estatico.
+			if ("OPTIONS".equalsIgnoreCase(method) && StringUtils.hasText(origin)) {
+				setCors(response, origin);
+				if (preflight(request, response)) {
+					return;
+				}
+			}
 			chain.doFilter(request, response);
 			return;
 		}

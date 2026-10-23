@@ -29,6 +29,12 @@ class AdminRouteInterceptor implements HandlerInterceptor {
 
 	@Override
 	public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+		// Preflight nao carrega sessao: quem responde e o CORS. Sem esta saida o OPTIONS de
+		// qualquer /admin caia aqui, o resolver lancava 401 e o navegador recebia 500 no
+		// preflight — o painel de moderacao nunca abria (visto em producao em 2026-10-23).
+		if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+			return true;
+		}
 		if (!isAdminPath(request)) {
 			return true;
 		}
