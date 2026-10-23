@@ -26,10 +26,20 @@ class S3UploadSigner implements MediaUploadSigner {
 
 	private final S3Presigner presigner;
 	private final String bucket;
+	/** Quando preenchido, a subida vai pelo proprio app em vez de direto no bucket. */
+	private final String proxyBaseUrl;
 
 	S3UploadSigner(S3Presigner presigner, String bucket) {
+		this(presigner, bucket, null);
+	}
+
+	S3UploadSigner(S3Presigner presigner, String bucket, String proxyBaseUrl) {
 		this.presigner = presigner;
 		this.bucket = bucket;
+		// Mesma forma do `cdnUrl` (base com barra no fim + chave), para a URL de subida e a de
+		// leitura apontarem para o MESMO caminho.
+		this.proxyBaseUrl = proxyBaseUrl == null || proxyBaseUrl.isBlank() ? null
+			: proxyBaseUrl.endsWith("/") ? proxyBaseUrl : proxyBaseUrl + "/";
 	}
 
 	/**
@@ -41,6 +51,12 @@ class S3UploadSigner implements MediaUploadSigner {
 	@Override
 	public SignedUpload sign(String objectKey, String mimeType) {
 		Duration validade = Duration.ofMinutes(60);
+		// Gateway sem CORS: o navegador nao consegue PUT cross-origin, entao a URL devolvida e a do
+		// nosso proxy (mesma origem da API). O app valida a sessao e repassa o corpo ao bucket.
+		if (proxyBaseUrl != null) {
+			return new SignedUpload(proxyBaseUrl + objectKey, "PUT", Map.of("Content-Type", mimeType),
+				Instant.now().plus(validade));
+		}
 		PutObjectRequest request = PutObjectRequest.builder()
 			.bucket(bucket)
 			.key(objectKey)

@@ -9,6 +9,26 @@ depois da virada. É esse o "fallback": ele é estrutural, não um caminho espec
 > real** (o S3 só existe em produção). A primeira virada de ambiente é a estreia — vale ler a seção
 > "Primeira virada, com calma". A migração dos objetos antigos ainda **não** está implementada.
 
+## Midia servida pelo proprio app (2026-10-23)
+
+O gateway do b7cloud nao responde CORS (`PutBucketCors` -> `InternalError`) e o bucket nao e
+publico (GET anonimo -> 403), entao o navegador nao conseguia nem subir nem ler midia direto do
+bucket. A saida foi tirar o bucket do caminho do navegador:
+
+- `GET /api/storage/{chave}` — le o objeto do bucket com a credencial do pod, com `Range` (video
+  arrasta a barra), `Cache-Control` longo e ETag. Publico, como o `GET /media/{id}`.
+- `PUT /api/storage/{chave}` — recebe o arquivo do navegador e repassa ao bucket. Exige sessao e a
+  chave exata registrada para aquele asset (nao da para escrever em qualquer lugar).
+- `S3UploadSigner` devolve a URL do proxy (`publicBaseUrl`) sempre que ha endpoint custom — ou
+  seja, em gateway. Na AWS real continua a URL assinada direto no bucket.
+- `V169` reescreve os prefixos antigos (`https://cdn.enois.ia.br/` e
+  `https://s3.b7cloud.tech/enois-bucket/`) para `https://api.enois.ia.br/api/storage/` nas colunas
+  que guardam midia. O caminho depois do prefixo e o mesmo `objectKey`, entao nada e remapeado.
+
+Consequencia operacional: a largura de banda da midia passa pelo pod. Se um dia o b7 liberar CORS
+e leitura publica, basta apontar `REDE_MEDIA_S3_PUBLIC_BASE_URL` de volta para o bucket/CDN e
+`REDE_MEDIA_S3_UPLOAD_THROUGH_API=false`.
+
 ## Estado verificado em 2026-10-23 (bucket b7cloud)
 
 A infraestrutura mudou: o storage agora é um **gateway S3-compatível do b7cloud**

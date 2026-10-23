@@ -203,6 +203,10 @@ class RequestOriginFilter extends OncePerRequestFilter {
 		if (path.startsWith("/media/") && "GET".equalsIgnoreCase(method)) {
 			return true;
 		}
+		// A midia servida pelo proprio app (proxy do bucket): `<img>` e `<video>` nao mandam Origin.
+		if (path.startsWith("/storage/") && ("GET".equalsIgnoreCase(method) || "HEAD".equalsIgnoreCase(method))) {
+			return true;
+		}
 		return path.equals("/blogs/descadastrar");
 	}
 

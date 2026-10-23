@@ -58,7 +58,16 @@ class S3StorageConfig {
 
 	@Bean
 	MediaUploadSigner mediaUploadSigner(S3Presigner presigner, S3Properties props) {
-		return new S3UploadSigner(presigner, props.getBucket());
+		// Gateway S3-compativel (endpoint configurado) normalmente nao responde CORS: o navegador
+		// nao consegue fazer o PUT assinado direto no bucket. Nesse caso a subida passa pelo
+		// proprio app (`PUT /api/storage/{chave}`), que e a mesma origem da API.
+		return new S3UploadSigner(presigner, props.getBucket(), props.uploadThroughApi() ? props.getPublicBaseUrl() : null);
+	}
+
+	@Bean
+	com.socialcoisa.rede.media.application.port.out.MediaObjectStore s3MediaObjectStore(
+			software.amazon.awssdk.services.s3.S3Client s3Client, S3Properties props) {
+		return new S3MediaObjectStore(s3Client, props.getBucket());
 	}
 
 	@Bean
@@ -97,6 +106,19 @@ class S3StorageConfig {
 		private String endpoint = "";
 		private boolean forcePathStyle = false;
 		private String publicBaseUrl = "";
+		/** null = automatico: sobe pelo app quando ha endpoint custom (gateway), direto na AWS. */
+		private Boolean uploadThroughApi;
+
+		/** O gateway do b7cloud recusa PutBucketCors, entao o navegador nao sobe direto nele. */
+		boolean uploadThroughApi() {
+			if (uploadThroughApi != null) {
+				return uploadThroughApi;
+			}
+			return StringUtils.hasText(endpoint);
+		}
+
+		Boolean getUploadThroughApi() { return uploadThroughApi; }
+		void setUploadThroughApi(Boolean uploadThroughApi) { this.uploadThroughApi = uploadThroughApi; }
 
 		String getBucket() { return bucket; }
 		void setBucket(String bucket) { this.bucket = bucket; }
