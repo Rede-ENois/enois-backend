@@ -133,7 +133,15 @@ jobs:
           REDE_SECURITY_ENCRYPTION_KEY: ${{ secrets.QA_REDE_SECURITY_ENCRYPTION_KEY }}
           TURNSTILE_SITE_KEY: ${{ secrets.QA_TURNSTILE_SITE_KEY }}
           TURNSTILE_SECRET_KEY: ${{ secrets.QA_TURNSTILE_SECRET_KEY }}
+          # Login social nos DOIS ambientes: a QA roda em `enois-qa.b7cloud.tech` com a API em
+          # `enois-api-qa.b7cloud.tech/api`, entao precisa das mesmas credenciais do app, com o
+          # redirect apontando para o FRONT da QA (e esse par que esta no allowlist do LinkedIn).
+          # Sem o client-secret aqui a troca do `code` falha e o login nao completa.
+          LINKEDIN_CLIENT_ID: ${{ secrets.LINKEDIN_CLIENT_ID }}
+          LINKEDIN_CLIENT_SECRET: ${{ secrets.LINKEDIN_CLIENT_SECRET }}
           LINKEDIN_REDIRECT_URI: ${{ vars.LINKEDIN_REDIRECT_URI_QA }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           # panic:yes => somente leitura; vazio/ausente => online (o botão do painel decide).
           PANIC_MODE: ${{ secrets.PANIC_MODE }}
         run: |
@@ -171,7 +179,11 @@ jobs:
               "REDE_SECURITY_ENCRYPTION_KEY=${REDE_SECURITY_ENCRYPTION_KEY}",
               "TURNSTILE_SITE_KEY=${TURNSTILE_SITE_KEY}",
               "TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY}",
+              "LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}",
+              "LINKEDIN_CLIENT_SECRET=${LINKEDIN_CLIENT_SECRET}",
               "LINKEDIN_REDIRECT_URI=${LINKEDIN_REDIRECT_URI}",
+              "GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}",
+              "GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}",
               "REDE_AUTH_SIGNUP_ENABLED=true",
               "SIGNUP_CAPTCHA_ENABLED=true"
             ],
