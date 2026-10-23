@@ -26,20 +26,24 @@ class S3UploadSigner implements MediaUploadSigner {
 
 	private final S3Presigner presigner;
 	private final String bucket;
-	private final String prefix;
 
-	S3UploadSigner(S3Presigner presigner, String bucket, String prefix) {
+	S3UploadSigner(S3Presigner presigner, String bucket) {
 		this.presigner = presigner;
 		this.bucket = bucket;
-		this.prefix = prefix == null ? "" : prefix;
 	}
 
+	/**
+	 * A chave recebida JA vem com o prefixo: quem a monta e `S3StorageUrlFactory.objectKey()`, a
+	 * mesma que produz o `cdnUrl` gravado no asset. Prefixar de novo aqui mandava o arquivo para
+	 * `uploads/uploads/...` enquanto o endereco publico apontava para `uploads/...` — o upload
+	 * "dava certo" e a midia nunca aparecia (visto num HAR real em 2026-10-23).
+	 */
 	@Override
 	public SignedUpload sign(String objectKey, String mimeType) {
 		Duration validade = Duration.ofMinutes(60);
 		PutObjectRequest request = PutObjectRequest.builder()
 			.bucket(bucket)
-			.key(prefix + objectKey)
+			.key(objectKey)
 			.contentType(mimeType)
 			.build();
 		PresignedPutObjectRequest presigned = presigner.presignPutObject(PutObjectPresignRequest.builder()

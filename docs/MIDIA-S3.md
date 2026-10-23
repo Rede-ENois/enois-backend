@@ -9,6 +9,27 @@ depois da virada. É esse o "fallback": ele é estrutural, não um caminho espec
 > real** (o S3 só existe em produção). A primeira virada de ambiente é a estreia — vale ler a seção
 > "Primeira virada, com calma". A migração dos objetos antigos ainda **não** está implementada.
 
+## Estado verificado em 2026-10-23 (bucket b7cloud)
+
+A infraestrutura mudou: o storage agora é um **gateway S3-compatível do b7cloud**
+(`https://s3.b7cloud.tech`), não mais AWS/IRSA. O que um HAR real do navegador mostrou:
+
+- **Prefixo duplicado na URL assinada (corrigido).** `S3UploadSigner` prefixava de novo uma chave
+  que já vinha com o prefixo (`S3StorageUrlFactory.objectKey`), então o `PUT` ia para
+  `.../enois-bucket/uploads/uploads/media_<id>/...` enquanto o `cdnUrl` gravado no asset apontava
+  para `.../uploads/media_<id>/...`. O upload terminava e a mídia nunca aparecia. A chave agora é
+  assinada como veio; `S3UploadSignerTests` compara o caminho assinado com o `cdnUrl`.
+- **CORS do bucket continua bloqueando o upload do navegador.** O preflight `OPTIONS` em
+  `https://s3.b7cloud.tech/enois-bucket/...` responde **403 sem nenhum header `Access-Control-*`**,
+  e é o navegador que faz o `PUT` direto na URL assinada. Falta configurar CORS no bucket para
+  `PUT`/`GET` com origem `https://enois.ia.br` e `content-type` nos headers permitidos.
+- **Leitura pública ainda não existe.** `GET` anônimo em `.../enois-bucket/uploads/...` responde
+  **403**, e a base antiga `cdn.enois.ia.br` está em **NXDOMAIN** no nameserver autoritativo. Os
+  assets migrados continuam gravados com essa base antiga, então só voltam a abrir com o registro
+  de DNS criado (ou reescrevendo o `cdn_url` para a base nova).
+- `GET /api/media/migration` em produção: `total=3502`, `imagekit=1737`, `s3Copied=1765`,
+  `s3Active=1765`, `errors=113`, worker desligado (`enabled=false`).
+
 ## Estado verificado em 2026-10-19
 
 Verificação feita contra a produção e o código deste repo:

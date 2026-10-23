@@ -58,7 +58,7 @@ class S3StorageConfig {
 
 	@Bean
 	MediaUploadSigner mediaUploadSigner(S3Presigner presigner, S3Properties props) {
-		return new S3UploadSigner(presigner, props.getBucket(), props.getPrefix());
+		return new S3UploadSigner(presigner, props.getBucket());
 	}
 
 	@Bean
