@@ -133,6 +133,7 @@ jobs:
           REDE_SECURITY_ENCRYPTION_KEY: ${{ secrets.QA_REDE_SECURITY_ENCRYPTION_KEY }}
           TURNSTILE_SITE_KEY: ${{ secrets.QA_TURNSTILE_SITE_KEY }}
           TURNSTILE_SECRET_KEY: ${{ secrets.QA_TURNSTILE_SECRET_KEY }}
+          LINKEDIN_REDIRECT_URI: ${{ vars.LINKEDIN_REDIRECT_URI_QA }}
           # panic:yes => somente leitura; vazio/ausente => online (o botão do painel decide).
           PANIC_MODE: ${{ secrets.PANIC_MODE }}
         run: |
@@ -170,6 +171,7 @@ jobs:
               "REDE_SECURITY_ENCRYPTION_KEY=${REDE_SECURITY_ENCRYPTION_KEY}",
               "TURNSTILE_SITE_KEY=${TURNSTILE_SITE_KEY}",
               "TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY}",
+              "LINKEDIN_REDIRECT_URI=${LINKEDIN_REDIRECT_URI}",
               "REDE_AUTH_SIGNUP_ENABLED=true",
               "SIGNUP_CAPTCHA_ENABLED=true"
             ],
