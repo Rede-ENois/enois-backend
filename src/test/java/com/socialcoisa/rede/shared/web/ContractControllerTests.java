@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -43,15 +44,20 @@ class ContractControllerTests {
 	@Test
 	void doesNotExposeApiDocumentation() throws Exception {
 		// O doc da API nao pode ficar publico: o gateway expoe o backend em /api/* sem autenticacao.
-		mockMvc.perform(get("/openapi.json")).andExpect(status().isNotFound());
-		mockMvc.perform(get("/v3/api-docs")).andExpect(status().isNotFound());
+		// Caminhos fora da superficie recebem a resposta padronizada (200, corpo vazio) - nada vaza.
+		mockMvc.perform(get("/openapi.json")).andExpect(status().isOk())
+			.andExpect(content().string(""));
+		mockMvc.perform(get("/v3/api-docs")).andExpect(status().isOk())
+			.andExpect(content().string(""));
 	}
 
 	@Test
 	void doesNotExposeActuatorBeyondHealth() throws Exception {
 		mockMvc.perform(get("/actuator/health")).andExpect(status().isOk());
-		mockMvc.perform(get("/actuator/prometheus")).andExpect(status().isNotFound());
-		mockMvc.perform(get("/actuator/metrics")).andExpect(status().isNotFound());
+		mockMvc.perform(get("/actuator/prometheus")).andExpect(status().isOk())
+			.andExpect(content().string(""));
+		mockMvc.perform(get("/actuator/metrics")).andExpect(status().isOk())
+			.andExpect(content().string(""));
 	}
 
 	@Test

@@ -181,7 +181,7 @@ class ModeratorController {
 			@RequestHeader("X-Session-Token") String sessionToken, @PathVariable String username,
 			@RequestBody SanctionRequest request) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
-		adminGuard.requireAdmin(user);
+		requireModerator(user);
 		return moderators.sanctionUser(user.id().value(), username, request.type(), request.reason());
 	}
 
@@ -192,7 +192,7 @@ class ModeratorController {
 			@RequestHeader("X-Session-Token") String sessionToken, @PathVariable String username,
 			@RequestBody(required = false) DecisionRequest request) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
-		adminGuard.requireAdmin(user);
+		requireModerator(user);
 		return moderators.sanitizeUser(user.id().value(), username,
 			request == null ? "Limpeza por spam (motivo não informado)" : request.note());
 	}
@@ -243,7 +243,7 @@ class ModeratorController {
 			@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader("X-Session-Token") String sessionToken, @PathVariable String username) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
-		adminGuard.requireAdmin(user);
+		requireModerator(user);
 		return ipBlocks.ipsOfUser(username);
 	}
 
@@ -253,7 +253,7 @@ class ModeratorController {
 			@RequestHeader("X-Session-Token") String sessionToken,
 			@RequestBody BlockIpRequest request) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
-		adminGuard.requireAdmin(user);
+		requireModerator(user);
 		return ipBlocks.block(user.id().value(), request.ip(), request.reason());
 	}
 
@@ -263,7 +263,7 @@ class ModeratorController {
 			@RequestHeader("X-Session-Token") String sessionToken,
 			@RequestParam(defaultValue = "100") int limit) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
-		adminGuard.requireAdmin(user);
+		requireModerator(user);
 		return ipBlocks.list(limit);
 	}
 
@@ -272,7 +272,7 @@ class ModeratorController {
 			@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader("X-Session-Token") String sessionToken, @PathVariable String ip) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
-		adminGuard.requireAdmin(user);
+		requireModerator(user);
 		ipBlocks.unblock(ip);
 		return Map.of("ip", ip, "blocked", "false");
 	}

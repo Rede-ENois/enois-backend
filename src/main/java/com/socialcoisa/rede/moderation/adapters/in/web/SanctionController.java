@@ -12,10 +12,12 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository;
+import com.socialcoisa.rede.moderation.application.ModeratorService;
 import com.socialcoisa.rede.moderation.application.SanctionService;
 import com.socialcoisa.rede.moderation.domain.Appeal;
 import com.socialcoisa.rede.moderation.domain.UserSanction;
 import com.socialcoisa.rede.shared.web.AdminGuard;
+import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 
@@ -29,13 +31,15 @@ class SanctionController {
 	private final SanctionService sanctions;
 	private final CurrentUserResolver currentUserResolver;
 	private final AdminGuard adminGuard;
+	private final ModeratorService moderators;
 	private final AuthSessionRepository sessions;
 
 	SanctionController(SanctionService sanctions, CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
-			AuthSessionRepository sessions) {
+			ModeratorService moderators, AuthSessionRepository sessions) {
 		this.sanctions = sanctions;
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
+		this.moderators = moderators;
 		this.sessions = sessions;
 	}
 
@@ -65,7 +69,7 @@ class SanctionController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(defaultValue = "30") int limit) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
-		adminGuard.requireAdmin(user);
+		requireModerator(user);
 		return sanctions.pendingAppeals(limit).stream().map(AppealView::from).toList();
 	}
 
@@ -75,7 +79,7 @@ class SanctionController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String appealId) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
-		adminGuard.requireAdmin(user);
+		requireModerator(user);
 		UserSanction sanction = sanctions.approveAppeal(appealId, user.id().value());
 		return Map.of("status", "APPROVED", "sanction", SanctionView.from(sanction));
 	}
@@ -86,9 +90,15 @@ class SanctionController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String appealId) {
 		CurrentUser user = currentUserResolver.resolve(userId, sessionToken);
-		adminGuard.requireAdmin(user);
+		requireModerator(user);
 		UserSanction sanction = sanctions.denyAppeal(appealId, user.id().value(), sessions);
 		return Map.of("status", "DENIED", "sanction", SanctionView.from(sanction));
+	}
+
+	private void requireModerator(CurrentUser user) {
+		if (!adminGuard.isAdmin(user) && !moderators.isModerator(user.id().value())) {
+			throw new ApiException(403, "FORBIDDEN", "Acesso restrito a moderadores.");
+		}
 	}
 
 	record CreateAppealRequest(String message) {

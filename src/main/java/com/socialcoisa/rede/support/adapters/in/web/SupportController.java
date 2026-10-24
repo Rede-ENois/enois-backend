@@ -16,7 +16,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.socialcoisa.rede.moderation.application.ModeratorService;
 import com.socialcoisa.rede.shared.web.AdminGuard;
+import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 import com.socialcoisa.rede.shared.web.PiiMask;
@@ -33,15 +35,17 @@ class SupportController {
 	private final SupportGithubConfig githubConfig;
 	private final CurrentUserResolver currentUserResolver;
 	private final AdminGuard adminGuard;
+	private final ModeratorService moderators;
 	private final String supportEmail;
 
 	SupportController(SupportService supportService, SupportGithubConfig githubConfig,
-			CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
+			CurrentUserResolver currentUserResolver, AdminGuard adminGuard, ModeratorService moderators,
 			@org.springframework.beans.factory.annotation.Value("${rede.support.email:}") String supportEmail) {
 		this.supportService = supportService;
 		this.githubConfig = githubConfig;
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
+		this.moderators = moderators;
 		this.supportEmail = supportEmail;
 	}
 
@@ -83,7 +87,7 @@ class SupportController {
 			@RequestParam(required = false) SupportCategory category,
 			@RequestParam(required = false) SupportStatus status,
 			@RequestParam(defaultValue = "50") int limit) {
-		adminGuard.requireAdmin(currentUserResolver.resolve(userId, sessionToken));
+		requireModerator(currentUserResolver.resolve(userId, sessionToken));
 		return supportService.list(category, status, limit).stream()
 			.map(SupportAdminView::from)
 			.toList();
@@ -94,7 +98,7 @@ class SupportController {
 	SupportAdminView update(@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String id, @RequestBody UpdateSupportRequest request) {
-		adminGuard.requireAdmin(currentUserResolver.resolve(userId, sessionToken));
+		requireModerator(currentUserResolver.resolve(userId, sessionToken));
 		return SupportAdminView.from(supportService.update(id, request.status(), request.category()));
 	}
 
@@ -104,7 +108,7 @@ class SupportController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String id, @RequestBody ReplySupportRequest request) {
 		CurrentUser admin = currentUserResolver.resolve(userId, sessionToken);
-		adminGuard.requireAdmin(admin);
+		requireModerator(admin);
 		return SupportAdminView.from(supportService.reply(id, admin.id().value(), request.message()));
 	}
 
@@ -114,7 +118,7 @@ class SupportController {
 	@GetMapping("/admin/support/github")
 	SupportGithubSettingsView githubSettings(@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
-		adminGuard.requireAdmin(currentUserResolver.resolve(userId, sessionToken));
+		requireModerator(currentUserResolver.resolve(userId, sessionToken));
 		return githubView();
 	}
 
@@ -127,7 +131,7 @@ class SupportController {
 			@RequestHeader(value = "X-User-Id", required = false) String userId,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestBody UpdateGithubSettings request) {
-		adminGuard.requireAdmin(currentUserResolver.resolve(userId, sessionToken));
+		requireModerator(currentUserResolver.resolve(userId, sessionToken));
 		githubConfig.update(request.token(), request.repo(), request.webhookSecret());
 		return githubView();
 	}
@@ -135,6 +139,12 @@ class SupportController {
 	private SupportGithubSettingsView githubView() {
 		return new SupportGithubSettingsView(githubConfig.enabled(), githubConfig.repository(),
 			githubConfig.tokenConfigured(), githubConfig.webhookSecretConfigured());
+	}
+
+	private void requireModerator(CurrentUser user) {
+		if (!adminGuard.isAdmin(user) && !moderators.isModerator(user.id().value())) {
+			throw new ApiException(403, "FORBIDDEN", "Acesso restrito a moderadores.");
+		}
 	}
 
 	record SupportConfigView(String email) {

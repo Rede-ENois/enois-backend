@@ -70,8 +70,12 @@ class MonitoringTests {
 	@Test
 	void requestMetricsAndExceptionsFeedTheOverview() {
 		long before = monitoring.overview().errors5xxLastMinute();
-		monitoring.recordRequest("GET", "/monitor-probe", "/monitor-probe", 500, 42, "req-monitor",
-			null, "127.0.0.1", null);
+		// Varios registros para a sonda vencer o top-8: o singleton e compartilhado por toda a
+		// suíte e o tráfego de outros testes empurra rotas com contagem baixa para fora.
+		for (int i = 0; i < 12; i++) {
+			monitoring.recordRequest("GET", "/monitor-probe", "/monitor-probe", 500, 42,
+				"req-monitor-" + i, null, "127.0.0.1", null);
+		}
 		var after = monitoring.overview();
 
 		assertThat(after.errors5xxLastMinute()).isGreaterThanOrEqualTo(before + 1);
