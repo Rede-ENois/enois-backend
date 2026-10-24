@@ -36,6 +36,9 @@ public interface CoinLedgerRepository {
 
 	java.util.List<CoinAccount> allAccounts();
 
+	/** Soma de todos os saldos snapshot — a conferência do supply fechado. */
+	long totalBalance();
+
 	/** O LEDGER é a verdade: a soma dos lançamentos reconstrói o saldo da conta. */
 	long balanceFromLedger(String accountId);
 

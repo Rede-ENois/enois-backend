@@ -129,6 +129,58 @@ class CoinFlowTests {
 	}
 
 	/**
+	 * Supply da moeda: o total do gênese é fixo e a soma de todas as contas tem que fechar com ele
+	 * (nada cria faísca, nada some). A leitura é dado de tesouraria — só a administração vê.
+	 */
+	@Test
+	void supplyIsClosedLoopAndAdminOnly() throws Exception {
+		var user = auth("coin_supply_plain");
+		var admin = auth("group-admin");
+
+		// O gênese acontece no primeiro acesso à carteira; a airdrop só MOVE valor (cofre -> usuário).
+		mockMvc.perform(get("/carteira").header("X-Session-Token", admin.token()))
+			.andExpect(status().isOk());
+		mockMvc.perform(get("/carteira").header("X-Session-Token", user.token()))
+			.andExpect(status().isOk());
+		mockMvc.perform(get("/admin/carteira/supply").header("X-Session-Token", user.token()))
+			.andExpect(status().isForbidden());
+
+		// O H2 é compartilhado: não se afirma valor absoluto de circulação, afirma-se o INVARIANTE.
+		long circulacaoAntes = leiaSupply(admin);
+
+		// Transferência entre contas não muda o total nem a circulação: valor só se move.
+		mockMvc.perform(post("/carteira/transferencias")
+				.header("X-Session-Token", admin.token())
+				.header("Idempotency-Key", "coin-supply-transfer")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("toUsername", "coin-supply-plain", "amount", 500))))
+			.andExpect(status().isOk());
+
+		long circulacaoDepois = leiaSupply(admin);
+		org.junit.jupiter.api.Assertions.assertEquals(circulacaoAntes, circulacaoDepois,
+			"Transferência não pode mudar o que circula");
+	}
+
+	/** Lê o supply e afirma os invariantes: total fixo, nada criado, soma = circulação. */
+	private long leiaSupply(TestAuthHelper.AuthSession admin) throws Exception {
+		var resultado = mockMvc.perform(get("/admin/carteira/supply").header("X-Session-Token", admin.token()))
+			.andExpect(status().isOk())
+			.andReturn();
+		var node = objectMapper.readTree(resultado.getResponse().getContentAsString());
+		long total = node.get("total").asLong();
+		long cofre = node.get("cofre").asLong();
+		long circulacao = node.get("circulacao").asLong();
+		long soma = node.get("somaSaldos").asLong();
+		org.junit.jupiter.api.Assertions.assertEquals(2_000_000_000L, total, "Total do genesis é fixo");
+		org.junit.jupiter.api.Assertions.assertTrue(node.get("coerente").asBoolean(),
+			"Soma dos saldos tem que ser igual ao total (nada emite, nada desaparece)");
+		org.junit.jupiter.api.Assertions.assertEquals(total, cofre + circulacao, "Cofre + circulação = total");
+		org.junit.jupiter.api.Assertions.assertEquals(total, soma,
+			"Soma de TODAS as contas (cofre incluído) = total do genesis");
+		return circulacao;
+	}
+
+	/**
 	 * Incidente 22/10: o atacante varreu /admin/carteira/disputas. A trava de /admin/** tem de
 	 * responder 403 para quem não é admin (e 200 para quem é).
 	 */

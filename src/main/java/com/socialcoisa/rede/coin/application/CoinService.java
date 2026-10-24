@@ -430,6 +430,26 @@ public class CoinService {
 		grant(senderId, amount, CoinEntry.Kind.REVERSAL_IN, originalRef + ":reversao", reason, now);
 	}
 
+	/** Visão de supply: total fixo do gênese, o que ficou no cofre e o que circula. */
+	public record SupplyView(long total, long cofre, long circulacao, long somaSaldos, boolean coerente) {
+	}
+
+	/**
+	 * A soma de todos os saldos TEM que ser igual ao total do gênese: nada cria faíscas, tudo gira
+	 * do valor que já existe. Divergência é bug ou fraude — o painel mostra e a investigação vem.
+	 */
+	@Transactional(readOnly = true)
+	public SupplyView supply() {
+		long total = TREASURY_GENESIS;
+		var tesouraria = ledger.findAccount(TREASURY_ACCOUNT);
+		long cofre = tesouraria.map(CoinAccount::balance).orElse(0L);
+		long soma = ledger.totalBalance();
+		// Pré-gênese (nenhuma carteira acessada ainda) não é divergência: só é alarme quando a
+		// tesouraria existe e a soma dos saldos não fecha com o total.
+		boolean coerente = tesouraria.isPresent() ? soma == total : soma == 0;
+		return new SupplyView(total, cofre, total - cofre, soma, coerente);
+	}
+
 	/**
 	 * Reconciliação (plano C4): o LEDGER é a verdade — reconstrói o saldo de cada conta
 	 * somando os lançamentos e compara com o snapshot. Divergência LOGA ALERTA (nada de

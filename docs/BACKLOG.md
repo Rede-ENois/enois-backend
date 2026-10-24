@@ -209,6 +209,34 @@ Os 4 últimos são **BLOQUEADOS** por dependência externa (não é código meu)
   container MariaDB aplicando as migrações (o do front, o `ci.yml`, já roda lint, typecheck e
   vitest).
 ## Higiene do backend (entregue 2026-10-21)
+- **[x] ENTREGUE 2026-10-24 — O cartão da moeda no painel chamava uma rota que a API não tinha.**
+  O painel de monitorabilidade ganhou um cartão com o *supply* da faísca (total do gênese, o que
+  está no cofre, o que circula e se a soma de todas as contas fecha com o total). A metade do
+  front existia (`GET /admin/carteira/supply`, em `src/lib/api/monitoring.ts`), mas a da API vivia
+  só num branch local (`feat/supply-moeda`) apoiado num `main` velho — **nem na `main` nem na
+  `qa` publicadas**. Consequência: para a administração o cartão **simplesmente não aparecia** (a
+  query dava 404 e o `{supply.data && ...}` esconde o bloco), sem erro na tela — um painel que
+  parece completo e não mostra o número que ele existe para mostrar.
+  *Como o problema foi achado:* as 382 chamadas de API do front foram extraídas do código (por
+  script) e cruzadas com o índice de rotas **ao vivo** da QA (`GET /api/v1`, 487 endpoints). O
+  front **publicado** bate 100% — nenhuma rota quebrada; o branch que vai para a QA tinha
+  **exatamente uma**: a do supply.
+  *O que foi feito:* a implementação da API foi trazida para a base de hoje (branch
+  `feat/supply-moeda-main`, em cima da `main` atual) — `GET /admin/carteira/supply` devolvendo
+  `{total, cofre, circulacao, somaSaldos, coerente}`, a soma dos saldos no repositório
+  (`CoinLedgerRepository.totalBalance()`) e o cálculo em `CoinService.supply()`. A proteção
+  continua em duas camadas: o `AdminRouteInterceptor` barra `/admin/**` (401 sem sessão, 403 sem
+  ser admin) e o controller ainda chama o `AdminGuard` — saldo do cofre é dado financeiro, só a
+  administração vê.
+  *Testes:* `CoinFlowTests` (3) — o supply fecha o ciclo (soma dos saldos = total do gênese;
+  cofre + circulação = total) e a transferência entre contas não muda o que circula; a leitura por
+  quem não é admin responde 403.
+  *Um teste frágil quebrou junto e foi consertado:* `MonitoringTests` provava que a requisição
+  registrada aparece no painel, mas a prova se apoiava no **top 8** de rotas por contagem — e o
+  registro de métricas é compartilhado pela suíte inteira: a rota nova virou a 9ª e empurrou a
+  sonda (contagem 1) para fora da lista. A sonda agora mede o corte da 8ª rota **antes** de se
+  registrar e passa na frente dele, em vez de depender de quantas rotas o resto da suíte pediu.
+  Nada foi desligado: a asserção continua sendo a mesma.
 - **[x] ENTREGUE 2026-10-22 — A recorrência do banimento JÁ estava coberta (o plano ainda
   dizia que faltava).** Conferido no código: o banimento revoga **todas** as sessões da conta
   (`revokeAllByUser` — access e refresh na mesma linha de sessão), o **login** é recusado com 403

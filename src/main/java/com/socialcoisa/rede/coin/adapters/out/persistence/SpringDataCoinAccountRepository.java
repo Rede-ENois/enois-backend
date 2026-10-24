@@ -6,6 +6,9 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 interface SpringDataCoinAccountRepository extends JpaRepository<CoinAccountJpaEntity, String> {
 
+	@org.springframework.data.jpa.repository.Query("select coalesce(sum(a.balance), 0) from CoinAccountJpaEntity a")
+	long sumBalances();
+
 	java.util.List<CoinAccountJpaEntity> findAll();
 
 	@org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
