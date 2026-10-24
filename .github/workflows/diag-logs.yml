@@ -1,0 +1,37 @@
+name: Diagnóstico de boot
+on:
+  push:
+    branches:
+      - chore/diag-logs
+permissions:
+  contents: read
+jobs:
+  logs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Logs QA + PROD
+        env:
+          PB: ${{ secrets.PORTAINER_BASE_URL }}
+          PK: ${{ secrets.PORTAINER_API_KEY }}
+        run: |
+          set -euo pipefail
+          dump() {
+            local ep="$1" name="$2"
+            echo "===== $name (endpoint $ep) ====="
+            curl -sS --max-time 30 -H "X-API-Key: $PK" -H "Referer: $PB" \
+              "$PB/api/endpoints/$ep/docker/containers/$name/logs?stdout=1&stderr=1&tail=300" -o /tmp/l.raw || { echo "(indisponivel)"; return; }
+            python3 - /tmp/l.raw <<'PY'
+          import sys
+          data = open(sys.argv[1],'rb').read()
+          out=[]; i=0
+          while i+8 <= len(data):
+              size = int.from_bytes(data[i+4:i+8],'big')
+              out.append(data[i+8:i+8+size].decode('utf-8','replace').rstrip('\n')); i += 8+size
+          text='\n'.join(out)
+          lines=text.split('\n')
+          keep=[l for l in lines if any(k in l.lower() for k in ['migration','flyway','caused by','error','exception','failed'])]
+          print('\n'.join(keep[-60:]) if keep else '\n'.join(lines[-40:]))
+          PY
+          }
+          dump 8 enois-qa-backend
+          dump 11 enois-prod-backend
