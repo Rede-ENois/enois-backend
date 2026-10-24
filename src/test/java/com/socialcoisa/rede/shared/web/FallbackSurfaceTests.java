@@ -18,7 +18,9 @@ import org.springframework.test.web.servlet.MvcResult;
  * documentos legados continuam sendo servidos; o que o roteador conhece — inclusive sob o alias
  * <code>/v1</code> — passa ao aplicativo normalmente.
  */
-@SpringBootTest
+// QA sobe com lazy-initialization=false, ao contrário do dev: o contexto precisa iniciar mesmo
+// quando o roteador do MVC é resolvido cedo (o filtro não pode puxar o EntityManager no boot).
+@SpringBootTest(properties = "spring.main.lazy-initialization=false")
 @AutoConfigureMockMvc
 class FallbackSurfaceTests {
 

@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.server.PathContainer;
 import org.springframework.stereotype.Component;
@@ -28,7 +29,9 @@ import org.springframework.web.util.pattern.PathPatternParser;
 @Component
 class RouteSurface {
 
-	private final RequestMappingHandlerMapping mappings;
+	private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(RouteSurface.class);
+
+	private final ObjectProvider<RequestMappingHandlerMapping> mappings;
 
 	private static final String V1_ALIAS = "/v1";
 
@@ -36,7 +39,7 @@ class RouteSurface {
 	private volatile List<PathPattern> variaveis;
 	private volatile boolean completo;
 
-	RouteSurface(@Qualifier("requestMappingHandlerMapping") RequestMappingHandlerMapping mappings) {
+	RouteSurface(@Qualifier("requestMappingHandlerMapping") ObjectProvider<RequestMappingHandlerMapping> mappings) {
 		this.mappings = mappings;
 	}
 
@@ -76,11 +79,12 @@ class RouteSurface {
 			return;
 		}
 		try {
+			RequestMappingHandlerMapping roteador = mappings.getObject();
 			Set<String> literaisNovos = new HashSet<>();
 			List<PathPattern> variaveisNovas = new ArrayList<>();
 			final boolean[] irregular = { false };
 			PathPatternParser parser = PathPatternParser.defaultInstance;
-			mappings.getHandlerMethods().keySet().forEach(info -> {
+			roteador.getHandlerMethods().keySet().forEach(info -> {
 				for (String padrao : info.getPatternValues()) {
 					if (padrao == null || padrao.isBlank()) {
 						continue;
@@ -108,6 +112,7 @@ class RouteSurface {
 		}
 		catch (RuntimeException leituraFalhou) {
 			// Sem o índice, cada caminho é considerado conhecido e o aplicativo responde.
+			LOG.warn("indice_de_rotas_indisponivel", leituraFalhou);
 			this.literais = null;
 		}
 	}
