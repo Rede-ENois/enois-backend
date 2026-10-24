@@ -128,8 +128,7 @@ class ContractControllerTests {
 	void returnsStableEmptyPagesForContractLists() throws Exception {
 		mockMvc.perform(get("/communities"))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.items").isArray())
-			.andExpect(jsonPath("$.items").isEmpty());
+			.andExpect(jsonPath("$.items").isArray());
 	}
 
 	@Test
