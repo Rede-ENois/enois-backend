@@ -26,6 +26,13 @@ target/
 #Env
 .env
 
+#Devin/Windsurf
+.devin
+.windsurf
+
 # Dump de banco com dados pessoais - nunca versionar
 dump_rede.sql
 *.dump.sql
+
+# Pentest reports
+reports/
