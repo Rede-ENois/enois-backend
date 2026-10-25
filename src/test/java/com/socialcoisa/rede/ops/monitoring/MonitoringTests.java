@@ -47,7 +47,12 @@ class MonitoringTests {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.series").isArray())
 			.andExpect(jsonPath("$.recent").isArray())
-			.andExpect(jsonPath("$.jvm.heapMaxBytes").isNumber());
+			.andExpect(jsonPath("$.jvm.heapMaxBytes").isNumber())
+			// O pool vem do DataSource embrulhado (LazyConnectionDataSourceProxy); se o
+			// desembrulho quebrar, resources.dbPool vira null e o painel mostra 0/0.
+			.andExpect(jsonPath("$.resources.dbPool.max").isNumber())
+			.andExpect(jsonPath("$.resources.dbPool.active").isNumber())
+			.andExpect(jsonPath("$.resources.dbPool.waiting").isNumber());
 
 		mockMvc.perform(get("/admin/monitoring/events")
 				.header("X-Session-Token", admin.token())
@@ -159,20 +164,30 @@ class MonitoringTests {
 	}
 
 	@Test
-	void clientErrorCountsMetricsWithoutCreatingEvent() throws Exception {
+	void everyRequestBecomesAnEventWithLevelByStatus() throws Exception {
 		var admin = new TestAuthHelper(mockMvc, objectMapper).authenticate("group-admin");
-		String marker = "monitor-4xx-" + UUID.randomUUID();
-		String path = "/prova-4xx-" + UUID.randomUUID();
-		// 4xx conta métrica (o gráfico de 4xx sobe) mas não vira linha de evento: o painel
-		// mostra só 5xx por padrão, sem afogar nos 429/409 do tráfego normal.
-		monitoring.recordRequest("GET", path, path, 429, 12, "req-" + marker, null, "127.0.0.1",
-			null);
+		String successPath = "/prova-2xx-" + UUID.randomUUID();
+		String errorPath = "/prova-4xx-" + UUID.randomUUID();
+		// A pedido da dona (2026-10-25): o painel mostra TUDO — 200, 4xx e 5xx. O nível segue o
+		// status (2xx INFO, 4xx WARN, 5xx ERROR), então filtrar por "só falhas" continua possível.
+		monitoring.recordRequest("GET", successPath, successPath, 200, 8, "req-" + UUID.randomUUID(),
+			null, "127.0.0.1", null);
+		monitoring.recordRequest("GET", errorPath, errorPath, 429, 12, "req-" + UUID.randomUUID(),
+			null, "127.0.0.1", null);
 		drain();
 
 		mockMvc.perform(get("/admin/monitoring/events")
 				.header("X-Session-Token", admin.token())
-				.param("q", path))
+				.param("q", successPath))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$").isEmpty());
+			.andExpect(jsonPath("$[0].status").value(200))
+			.andExpect(jsonPath("$[0].level").value("INFO"));
+
+		mockMvc.perform(get("/admin/monitoring/events")
+				.header("X-Session-Token", admin.token())
+				.param("q", errorPath))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[0].status").value(429))
+			.andExpect(jsonPath("$[0].level").value("WARN"));
 	}
 }

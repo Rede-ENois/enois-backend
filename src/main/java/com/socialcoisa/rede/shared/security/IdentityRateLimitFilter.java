@@ -56,7 +56,8 @@ class IdentityRateLimitFilter extends OncePerRequestFilter {
 			throws ServletException, IOException {
 		String action = actionFor(request);
 		if (action != null && !limiter.tryAcquire(action, ipResolver.resolve(request))) {
-			writeTooManyRequests(response);
+			RateLimitResponses.send(request, response, 300, "RATE_LIMITED",
+				"Muitas tentativas em sequencia. Espere alguns minutos e tente de novo.");
 			return;
 		}
 		filterChain.doFilter(request, response);
@@ -76,32 +77,6 @@ class IdentityRateLimitFilter extends OncePerRequestFilter {
 		return RULES.get(normalized);
 	}
 
-	private void writeTooManyRequests(HttpServletResponse response) throws IOException {
-		response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
-		response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-		response.setCharacterEncoding("UTF-8");
-		Map<String, String> body = new LinkedHashMap<>();
-		body.put("code", "RATE_LIMITED");
-		body.put("message", "Muitas tentativas em sequência. Espere alguns minutos e tente de novo.");
-		body.put("timestamp", Instant.now().toString());
-		response.getWriter().write(toJson(body));
-	}
 
-	/** JSON montado à mão: o filtro roda antes do MVC, então não há ObjectMapper injetado aqui. */
-	private String toJson(Map<String, String> body) {
-		StringBuilder json = new StringBuilder("{");
-		List<Map.Entry<String, String>> entries = List.copyOf(body.entrySet());
-		for (int i = 0; i < entries.size(); i++) {
-			Map.Entry<String, String> entry = entries.get(i);
-			if (i > 0) {
-				json.append(',');
-			}
-			json.append('"').append(entry.getKey()).append("\":\"").append(escape(entry.getValue())).append('"');
-		}
-		return json.append('}').toString();
-	}
 
-	private String escape(String value) {
-		return value.replace("\\", "\\\\").replace("\"", "\\\"");
-	}
 }

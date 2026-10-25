@@ -64,19 +64,29 @@ public class PublicReadRateLimitFilter extends OncePerRequestFilter {
 	@Override
 	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
 			throws ServletException, IOException {
-		String ip = ipResolver.resolve(request);
+		// Logado tem balde próprio (sessão); anônimo divide o do IP — é a enumeração anônima
+		// que este teto existe para conter, não o usuário navegando entre perfis.
+		String session = request.getHeader("X-Session-Token");
+		String key;
+		String who;
+		if (org.springframework.util.StringUtils.hasText(session)) {
+			key = "u:" + com.socialcoisa.rede.shared.security.Hashes.sha256Hex(session.trim());
+			who = "sessao";
+		}
+		else {
+			key = "ip:" + ipResolver.resolve(request);
+			who = key;
+		}
 		long now = clock.millis();
-		Deque<Long> marks = hits.computeIfAbsent(ip == null ? "desconhecido" : ip, key -> new ArrayDeque<>());
+		Deque<Long> marks = hits.computeIfAbsent(key, k -> new ArrayDeque<>());
 		synchronized (marks) {
 			while (!marks.isEmpty() && marks.peekFirst() < now - WINDOW_MS) {
 				marks.pollFirst();
 			}
 			if (marks.size() >= perMinute) {
-				LOG.warn("Leitura pública acima do teto (ip={}, rota={})", ip, request.getRequestURI());
-				response.setStatus(429);
-				response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-				response.getWriter().write("{\"code\":\"ENUMERATION_GUARD\","
-					+ "\"message\":\"Muitas consultas de perfis em pouco tempo. Tente de novo em instantes.\"}");
+				LOG.warn("Leitura pública acima do teto (chave={}, rota={})", who, request.getRequestURI());
+				RateLimitResponses.send(request, response, 60, "ENUMERATION_GUARD",
+					"Muitas consultas de perfis em pouco tempo. Tente de novo em instantes.");
 				return;
 			}
 			marks.addLast(now);

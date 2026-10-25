@@ -142,6 +142,10 @@ jobs:
           LINKEDIN_REDIRECT_URI: ${{ vars.LINKEDIN_REDIRECT_URI_QA }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          # GitHub e usado apenas para VINCULAR a conta aos selos de contribuicao.
+          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+          GITHUB_CONTRIBUTIONS_TOKEN: ${{ secrets.GITHUB_CONTRIBUTIONS_TOKEN }}
           # panic:yes => somente leitura; vazio/ausente => online (o botão do painel decide).
           # ImageKit aposentado, mas o purge/delete de midia antiga precisa funcionar ate a migracao.
           IMAGEKIT_URL_ENDPOINT: ${{ secrets.IMAGEKIT_URL_ENDPOINT }}
@@ -158,7 +162,12 @@ jobs:
           REDE_MEDIA_S3_REGION: ${{ secrets.PROD_REDE_MEDIA_S3_REGION }}
           REDE_MEDIA_S3_ENDPOINT: ${{ secrets.PROD_REDE_MEDIA_S3_ENDPOINT }}
           REDE_MEDIA_S3_FORCE_PATH_STYLE: ${{ secrets.PROD_REDE_MEDIA_S3_FORCE_PATH_STYLE }}
-          REDE_MEDIA_S3_PUBLIC_BASE_URL: ${{ secrets.PROD_REDE_MEDIA_S3_PUBLIC_BASE_URL }}
+          # Base publica = por onde o navegador LE e SOBE a midia. Como o PUT passa pelo app,
+          # e ela que define QUAL API autentica a subida: com a base de producao, o upload da
+          # QA ia para a API de producao (a sessao da QA nao vale la) e o arquivo nunca era
+          # gravado. Cada ambiente aponta para a propria API; o bucket e o mesmo, separado
+          # pelo prefixo `qa/`.
+          REDE_MEDIA_S3_PUBLIC_BASE_URL: https://enois-api-qa.b7cloud.tech/api/storage/
           REDE_MEDIA_S3_PREFIX: qa/
           AWS_ACCESS_KEY_ID: ${{ secrets.PROD_AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.PROD_AWS_SECRET_ACCESS_KEY }}
@@ -209,6 +218,11 @@ jobs:
               "LINKEDIN_REDIRECT_URI=${LINKEDIN_REDIRECT_URI}",
               "GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}",
               "GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}",
+              "GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}",
+              "GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}",
+              "GITHUB_REDIRECT_URI=https://enois-api-qa.b7cloud.tech/api/auth/oauth/github/callback",
+              "GITHUB_CONTRIBUTIONS_TOKEN=${GITHUB_CONTRIBUTIONS_TOKEN}",
+              "GITHUB_SYNC_ENABLED=false",
               "IMAGEKIT_URL_ENDPOINT=${IMAGEKIT_URL_ENDPOINT}",
               "IMAGEKIT_PUBLIC_KEY=${IMAGEKIT_PUBLIC_KEY}",
               "IMAGEKIT_PRIVATE_KEY=${IMAGEKIT_PRIVATE_KEY}",
@@ -317,6 +331,10 @@ jobs:
           # PathPrefix(/api/actuator) com ipAllowList (ver dynamic.yml do enois-traefik); sem esse
           # bloqueio, subir este valor aqui vazaria metricas internas da JVM publicamente.
           MANAGEMENT_ENDPOINTS: ${{ vars.MANAGEMENT_ENDPOINTS }}
+          # IP do Traefik em docker-prod3, unico hop confiavel pra X-Forwarded-For em prod
+          # (ver ClientIpResolver.isTrustedProxy). Sem isto o backend cai no fallback de
+          # getRemoteAddr() e todo request vira o IP do proxy, nao o do cliente real.
+          TRUSTED_PROXY_IPS: ${{ vars.TRUSTED_PROXY_IPS }}
           # Alloy (stack enois-observability, Portainer id 353) escuta OTLP em 127.0.0.1:4318;
           # o backend roda host-network no mesmo node2, entao "localhost" aqui e o host real.
           MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT: ${{ vars.MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT }}
@@ -324,6 +342,14 @@ jobs:
           # prod gravaria span de TODA request no Tempo sem necessidade. Ajustar depois com dado
           # real de volume se 20% gerar ruido/custo de storage demais ou pouca amostra.
           TRACING_SAMPLING_PROBABILITY: ${{ vars.TRACING_SAMPLING_PROBABILITY }}
+          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+          GITHUB_CONTRIBUTIONS_TOKEN: ${{ secrets.GITHUB_CONTRIBUTIONS_TOKEN }}
+          # ImageKit aposentado (storage no S3), mas o purge/delete de midia antiga ainda
+          # conversa com ele ate a migracao de objetos terminar.
+          IMAGEKIT_URL_ENDPOINT: ${{ secrets.IMAGEKIT_URL_ENDPOINT }}
+          IMAGEKIT_PUBLIC_KEY: ${{ secrets.IMAGEKIT_PUBLIC_KEY }}
+          IMAGEKIT_PRIVATE_KEY: ${{ secrets.IMAGEKIT_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
@@ -356,16 +382,6 @@ jobs:
                 # com erro claro (em vez de ser morta pelo kernel sem log).
                 JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=60.0 -XX:+ExitOnOutOfMemoryError"
                 SPRING_PROFILES_ACTIVE: prd
-                # Proxy reverso da frente (Traefik em docker-prod3). Sem esta lista o app nao
-                # confia no X-Forwarded-For e responde com o IP do proprio proxy para todo
-                # mundo — foi assim que os limites por IP passaram a valer para a plataforma
-                # inteira como se fosse uma pessoa so. O valor existia apenas no Portainer
-                # (fora deste arquivo), entao um deploy da stack o apagaria.
-                TRUSTED_PROXY_IPS: 31.220.102.169
-                # Observabilidade em arquivo na VPS (fora do banco): o dir usa o default
-                # /app/data/monitoring. Sem volume dedicado, o arquivo morre com o container
-                # (aceito: série de 60 min em memória continua; o painel lê o dia corrente).
-                # Se o ruído voltar, montar volume acaba com a perda — sem tocar no banco.
                 DB_PASSWORD: ${DB_PASSWORD}
                 REDE_FRONTEND_URL: https://enois.ia.br
                 REDE_BACKEND_URL: https://api.enois.ia.br
@@ -398,9 +414,18 @@ jobs:
                 AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
                 GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
                 GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+                GITHUB_CLIENT_ID: "${GITHUB_CLIENT_ID}"
+                GITHUB_CLIENT_SECRET: "${GITHUB_CLIENT_SECRET}"
+                GITHUB_REDIRECT_URI: "https://api.enois.ia.br/api/auth/oauth/github/callback"
+                GITHUB_CONTRIBUTIONS_TOKEN: "${GITHUB_CONTRIBUTIONS_TOKEN}"
+                GITHUB_SYNC_ENABLED: "false"
                 MANAGEMENT_ENDPOINTS: ${MANAGEMENT_ENDPOINTS}
+                TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS}
                 MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT: ${MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT}
                 TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY}
+                IMAGEKIT_URL_ENDPOINT: "${IMAGEKIT_URL_ENDPOINT}"
+                IMAGEKIT_PUBLIC_KEY: "${IMAGEKIT_PUBLIC_KEY}"
+                IMAGEKIT_PRIVATE_KEY: "${IMAGEKIT_PRIVATE_KEY}"
           EOF
 
           echo "==> Montar payload JSON (python escapa o YAML certo pro body)"

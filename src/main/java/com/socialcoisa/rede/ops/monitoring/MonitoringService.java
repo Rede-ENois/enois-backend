@@ -134,14 +134,13 @@ public class MonitoringService {
 		metrics.methods.computeIfAbsent(method == null ? "?" : method, key -> new LongAdder()).increment();
 		metrics.routes.computeIfAbsent(route == null ? "UNMATCHED" : route, key -> new LongAdder()).increment();
 		seconds.computeIfAbsent(now / 1000, key -> new LongAdder()).increment();
-		// Só 5xx vira evento com request completa (método, rota, IP, pilha quando houver): é o
-		// sinal que interessa. 4xx (validação, permissão, rate limit) conta métrica e não vira
-		// linha — antes cada 429/409 de qualquer usuário enterrava os erros reais no painel.
-		if (status >= 500) {
-			String message = method + " " + (route == null ? path : route) + " -> " + status;
-			enqueue(new EventRow(id(), clock.instant(), "ERROR", "REQUEST", message, requestId, method, path,
-				route, status, durationMs, userId, clientIp, deviceId, null));
-		}
+		// TODO: request inteira no painel (200, 4xx, 5xx — tudo). O nível reflete o status:
+		// 5xx ERROR, 4xx WARN, resto INFO. A fila tem teto e o painel pagina, então o volume
+		// extra não derruba nada.
+		String level = status >= 500 ? "ERROR" : status >= 400 ? "WARN" : "INFO";
+		String message = method + " " + (route == null ? path : route) + " -> " + status;
+		enqueue(new EventRow(id(), clock.instant(), level, "REQUEST", message, requestId, method, path,
+			route, status, durationMs, userId, clientIp, deviceId, null));
 	}
 
 	// Exceções gravam com o IP da requisição atual (via MDC do filtro): é o IP de origem
@@ -490,12 +489,42 @@ public class MonitoringService {
 
 	private DbPoolView pool() {
 		DataSource source = dataSource.getIfAvailable();
-		if (!(source instanceof HikariDataSource hikari) || hikari.getHikariPoolMXBean() == null) {
+		HikariDataSource hikari = unwrapHikari(source);
+		if (hikari == null || hikari.getHikariPoolMXBean() == null) {
 			return null;
 		}
 		var mx = hikari.getHikariPoolMXBean();
 		return new DbPoolView(mx.getActiveConnections(), mx.getIdleConnections(), mx.getTotalConnections(),
 			mx.getThreadsAwaitingConnection(), hikari.getMaximumPoolSize(), hikari.getMinimumIdle());
+	}
+
+	/**
+	 * O DataSource pode estar embrulhado: com `bootstrap-mode=deferred` o Spring usa um
+	 * `LazyConnectionDataSourceProxy` por cima do Hikari, e o instanceof direto falha — o painel
+	 * mostrava 0/0 sempre. Desembrulha até chegar no Hikari real.
+	 */
+	private static HikariDataSource unwrapHikari(DataSource source) {
+		if (source instanceof HikariDataSource hikari) {
+			return hikari;
+		}
+		if (source == null) {
+			return null;
+		}
+		// DataSource.unwrap é o contrato padrão e cobre os proxies do Spring (Lazy/TransactionAware);
+		// o fallback por DelegatingDataSource pega versões que não implementam unwrap.
+		try {
+			HikariDataSource unwrapped = source.unwrap(HikariDataSource.class);
+			if (unwrapped != null) {
+				return unwrapped;
+			}
+		}
+		catch (java.sql.SQLException | RuntimeException ignored) {
+			// Segue para o fallback.
+		}
+		if (source instanceof org.springframework.jdbc.datasource.DelegatingDataSource delegating) {
+			return unwrapHikari(delegating.getTargetDataSource());
+		}
+		return null;
 	}
 
 	private static long cgroupLong(String v2, String v1) {

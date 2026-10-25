@@ -73,7 +73,9 @@ public class PostRateLimitFilter extends OncePerRequestFilter {
 		boolean userAllowed = !StringUtils.hasText(token)
 			|| tryAcquire("u:" + Hashes.sha256Hex(token.trim()), userLimit);
 		if (!userAllowed) {
-			writeTooManyRequests(response);
+			LOG.warn("Rate limit de POST atingido");
+			RateLimitResponses.send(request, response, 60, "RATE_LIMITED",
+				"Muitas acoes em pouco tempo. Espere um minuto e tente de novo.");
 			return;
 		}
 		chain.doFilter(request, response);
@@ -112,14 +114,4 @@ public class PostRateLimitFilter extends OncePerRequestFilter {
 		});
 	}
 
-	private void writeTooManyRequests(HttpServletResponse response) throws IOException {
-		LOG.warn("Rate limit de POST atingido");
-		response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
-		response.setHeader("Retry-After", "60");
-		response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-		response.setCharacterEncoding("UTF-8");
-		response.getWriter().write("{\"code\":\"RATE_LIMITED\","
-			+ "\"message\":\"Muitas ações em pouco tempo. Espere um minuto e tente de novo.\","
-			+ "\"timestamp\":\"" + clock.instant() + "\"}");
-	}
 }

@@ -21,15 +21,14 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 /**
- * Rate limit GLOBAL por IP para toda a API — a última linha de defesa contra varredura, flood e
+ * Rate limit GLOBAL de escrita para toda a API — a última linha de defesa contra varredura, flood e
  * scripts que martelam endpoints variados (os limites por usuário e por ação ficam nos guards
  * específicos; este é o teto de superfície inteira).
  *
- * <p>Key: {@link ClientIpResolver} (last X-Forwarded-For hop, the one the ALB appends). Client-sent
- * X-Real-IP or a forged first XFF entry must not pick the bucket, or rotating it bypasses the limit.
- * Quando não há header nenhum (tráfego interno do cluster atrás do ingress), o balde fica compartilhado —
- * e ganha um limite multiplicado para não estrangular humanos se o ingress não mandar headers.
- * Endpoints de sonda (actuator) passam fora: derrubar o health check derruba o pod.
+ * <p>Chave por usuário autenticado (hash do token, nunca em claro); sem sessão, cai no IP. Assim um
+ * atacante sem conta não consome a cota de quem está logado — e quem está logado tem teto próprio,
+ * não dividido com a rede inteira atrás do mesmo proxy. Endpoints de sonda (actuator) passam fora:
+ * derrubar o health check derruba o pod.</p>
  */
 @Component
 @Order(1)
@@ -76,10 +75,21 @@ public class GlobalApiRateLimitFilter extends OncePerRequestFilter {
 			chain.doFilter(request, response);
 			return;
 		}
+	// Sessão tem teto próprio; sem sessão, o IP com multiplicador (tráfego interno do
+	// cluster atrás do ingress não tem header e dividia o balde com todo mundo).
+	String session = request.getHeader("X-Session-Token");
+	String key;
+	int limit;
+	if (StringUtils.hasText(session)) {
+		key = "u:" + com.socialcoisa.rede.shared.security.Hashes.sha256Hex(session.trim());
+		limit = perMinute;
+	}
+	else {
 		boolean hasHeader = StringUtils.hasText(request.getHeader("X-Forwarded-For"))
 			|| StringUtils.hasText(request.getHeader("X-Real-IP"));
-		String key = clientIpResolver.resolve(request);
-		int limit = hasHeader ? perMinute : perMinute * sharedMultiplier;
+		key = "ip:" + clientIpResolver.resolve(request);
+		limit = hasHeader ? perMinute : perMinute * sharedMultiplier;
+	}
 
 		long now = clock.millis();
 		if (hits.size() > MAX_KEYS) {
@@ -100,10 +110,9 @@ public class GlobalApiRateLimitFilter extends OncePerRequestFilter {
 			}
 		}
 		if (!allowed) {
-			LOG.warn("Rate limit global atingido (ip: {})", key);
-			response.setStatus(429);
-			response.setContentType("application/json");
-			response.getWriter().write("{\"error\":\"RATE_LIMITED\",\"message\":\"Muitas requisicoes. Tente novamente em instantes.\"}");
+			LOG.warn("Rate limit global atingido (chave: {})", key);
+			RateLimitResponses.send(request, response, 60, "RATE_LIMITED",
+				"Muitas requisicoes. Tente novamente em instantes.");
 			return;
 		}
 		chain.doFilter(request, response);

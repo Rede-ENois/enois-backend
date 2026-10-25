@@ -222,6 +222,11 @@ Os 4 últimos são **BLOQUEADOS** por dependência externa (não é código meu)
   Traefik) mas os IPs resolvidos eram faixas **172.6x/172.7x — do próprio Cloudflare**, que fica
   na frente: 91 de 131 requisições vindas de 3 endereços de borda. O IP real da pessoa estava no
   cabeçalho que o Cloudflare escreve (`CF-Connecting-IP`) e o app não lia.
+  *O sintoma que a dona viu ("erro na aplicação inteira") não é erro 500:* os logs de produção
+  estavam com **1361 linhas e zero ERROR** — só INFO. O que falhava eram os **429** dos limites por
+  IP (login 60/15min, cadastro 10/hora), medidos no balde da borda: meia dúzia de endereços para a
+  plataforma inteira, então o limite acabava para todo mundo ao mesmo tempo. 429 não deixa linha de
+  erro — por isso o sintoma parece "o app quebrou" sem nenhum erro no log.
   *A segunda metade do defeito (código):* o `ClientIpResolver` passou a ler o **primeiro** item do
   `X-Forwarded-For` — e o primeiro item é o único que o **cliente** controla: cada pessoa podia
   escolher com que IP os limites a viam. O próprio teste que existia para provar que o cliente não

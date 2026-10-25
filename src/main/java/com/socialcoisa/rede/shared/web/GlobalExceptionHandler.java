@@ -116,6 +116,7 @@ public class GlobalExceptionHandler {
 	@ExceptionHandler(RequestNotPermitted.class)
 	ResponseEntity<ErrorResponse> handleRateLimit(RequestNotPermitted exception) {
 		return ResponseEntity.status(429)
+			.header("Retry-After", "60")
 			.body(new ErrorResponse("RATE_LIMITED", "Limite de requisicoes excedido.", Instant.now()));
 	}
 

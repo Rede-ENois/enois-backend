@@ -128,6 +128,31 @@ class ClientIpSpoofingTests {
 		assertThat(lastStatus).isEqualTo(429);
 	}
 
+	@Test
+	void loggedInUserHasOwnBucketSeparateFromTheIp() throws Exception {
+		Clock clock = Clock.fixed(Instant.parse("2026-10-20T00:00:00Z"), ZoneOffset.UTC);
+		GlobalApiRateLimitFilter filter = new GlobalApiRateLimitFilter(clock, resolver, 2, 50);
+
+		// Anônimo esgota o balde do IP em 2.
+		for (int i = 0; i < 2; i++) {
+			MockHttpServletRequest request = albRequest();
+			MockHttpServletResponse response = new MockHttpServletResponse();
+			filter.doFilter(request, response, new MockFilterChain());
+			assertThat(response.getStatus()).isNotEqualTo(429);
+		}
+		MockHttpServletRequest blocked = albRequest();
+		MockHttpServletResponse blockedResponse = new MockHttpServletResponse();
+		filter.doFilter(blocked, blockedResponse, new MockFilterChain());
+		assertThat(blockedResponse.getStatus()).isEqualTo(429);
+
+		// Logado usa o balde da sessão: o IP lotado não o atinge.
+		MockHttpServletRequest logged = albRequest();
+		logged.addHeader("X-Session-Token", "token-user-a");
+		MockHttpServletResponse loggedResponse = new MockHttpServletResponse();
+		filter.doFilter(logged, loggedResponse, new MockFilterChain());
+		assertThat(loggedResponse.getStatus()).isNotEqualTo(429);
+	}
+
 	/** POST: o teto global agora vale para escrita (leitura é livre). */
 	private static MockHttpServletRequest albRequest() {
 		MockHttpServletRequest request = new MockHttpServletRequest("POST", "/feed");
