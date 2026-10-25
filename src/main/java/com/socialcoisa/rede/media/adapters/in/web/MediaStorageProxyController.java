@@ -65,6 +65,11 @@ class MediaStorageProxyController {
 	 * Leitura publica, como o `GET /media/{id}`: a chave so aparece em conteudo que qualquer
 	 * pessoa ja pode ver, e `<img src>` nao manda `Origin` — exigir sessao aqui deixaria o post
 	 * sem imagem para quem nao entrou.
+	 *
+	 * <p>Sem migracao oportunista: a leitura e streaming direto do storage ativo. Objetos antigos
+	 * gravados no ImageKit continuam servidos pelas URLs dele gravadas no banco; objetos novos
+	 * nascem no S3 ja limpos (a sanitizacao acontece na escrita). Nada de escrita dentro de
+	 * leitura — era isso que causava hangs de 30-60s no primeiro acesso (25/10).</p>
 	 */
 	@GetMapping("/{*key}")
 	ResponseEntity<StreamingResponseBody> read(@PathVariable String key,
@@ -79,35 +84,6 @@ class MediaStorageProxyController {
 		}
 		MediaAsset asset = assets.findById(mediaIdOf(objectKey)).orElse(null);
 		String mime = asset != null ? asset.mimeType() : object.contentType();
-		// Limpeza oportunista na LEITURA: objetos antigos (gravados antes da limpeza) são
-		// sanitizados e, se mudaram, regravados com a mesma chave. Range (vídeo) não entra aqui.
-		if (range == null && object.length() > 0
-				&& object.length() <= com.socialcoisa.rede.media.application.MediaMetadataSanitizer.MAX_IN_MEMORY
-				&& sanitizer.supportsInMemory(mime)) {
-			byte[] raw;
-			try (var body = object.body()) {
-				raw = body.readAllBytes();
-			}
-			catch (java.io.IOException readFailed) {
-				throw new ApiException(502, "MEDIA_READ_FAILED", "Nao foi possivel ler a midia do storage.");
-			}
-			byte[] clean = sanitizer.sanitize(raw, mime, asset != null ? asset.fileName() : objectKey);
-			if (!java.util.Arrays.equals(raw, clean)) {
-				try {
-					store().write(objectKey, mime, clean.length, new java.io.ByteArrayInputStream(clean));
-				}
-				catch (RuntimeException rewriteFailed) {
-					// Serve o conteúdo limpo mesmo se a regravação falhar.
-				}
-			}
-			byte[] served = clean;
-			return ResponseEntity.ok()
-				.header(HttpHeaders.CONTENT_TYPE, mime == null ? "application/octet-stream" : mime)
-				.header(HttpHeaders.ACCEPT_RANGES, "bytes")
-				.header(HttpHeaders.CACHE_CONTROL, "public, max-age=31536000, immutable")
-				.header(HttpHeaders.CONTENT_LENGTH, String.valueOf(served.length))
-				.body(output -> output.write(served));
-		}
 		ResponseEntity.BodyBuilder response = ResponseEntity
 			.status(object.contentRange() == null ? HttpStatus.OK : HttpStatus.PARTIAL_CONTENT)
 			.header(HttpHeaders.CONTENT_TYPE, mime == null ? "application/octet-stream" : mime)
