@@ -433,6 +433,27 @@ Os 4 últimos são **BLOQUEADOS** por dependência externa (não é código meu)
   corporativo, objetivos profissionais no perfil, termos de limitação de responsabilidade).
   Front: `cb9b38aa` + esta rodada; back: templates dos e-mails.
 ## Higiene do front (entregue 2026-10-21)
+- **[x] ENTREGUE 2026-10-25 — O seletor de comentários do post devolvia um array NOVO a cada
+  leitura (o React avisando: "getSnapshot should be cached").** O `useSyncExternalStore` (zustand)
+  compara o snapshot por **referência**; o seletor fazia `state.cards[postId]?.localComments ?? []`
+  e, quando o post não estava no store, cada leitura devolvia um array diferente — o React entendia
+  que o estado tinha mudado e renderizava de novo. Acontece em dois lugares: a **página do post**
+  (o primeiro render, antes do card entrar no store) e o **post do blog**, que renderiza os
+  comentários sem passar pelo card do feed e nunca registra o card.
+  *Como foi achado:* a varredura das rotas que faltavam na auditoria de responsividade (19 telas a
+  390px, com sessão real e dado real da QA)apanhou o aviso do React no console da página do post;
+  o stack (obtido instrumentando o `console.error`) apontou `useSyncExternalStore` → zustand →
+  `PostComments`.
+  *O que foi feito:* os seletores (`selectLocalComments` e `selectCommentMentions`) foram para o
+  store, que é onde vivem, com as referências estáveis `NENHUM_COMENTARIO`/`NENHUMA_MENCAO`.
+  *Verificado no navegador:* antes **1 aviso** do React por carregamento da página do post, depois
+  **0**. (O número de renders não mudou — 12 nos dois casos: o aviso era o sintoma do snapshot
+  instável, não um loop em curso.)
+  *Teste:* `src/stores/post-card.store.test.ts` (3) — o seletor devolve a MESMA referência quando o
+  post não está no store, e o valor do store quando está.
+  *Verificado:* `vitest` 392/392, `eslint` 15 = os 15 da base (delta zero), `tsc --noEmit` sem erro,
+  `vite build` ok.
+  Front: `4e6fbada` (branch `auditoria/rotas-restantes`, sobre a `qa`).
 - **[x] ENTREGUE 2026-10-24 — O app oferecia login com Google mesmo num ambiente onde a API o
   desliga.** A API tem o flag `rede.oauth.google.enabled`: quando está desligado, `/auth/config`
   avisa (`googleLoginEnabled: false`) e `/oauth/google/start` **recusa** com 403
