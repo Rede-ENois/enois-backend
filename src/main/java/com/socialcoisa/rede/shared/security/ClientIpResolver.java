@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.shared.security;
 
 import java.util.Arrays;
+import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
 

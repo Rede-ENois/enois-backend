@@ -286,6 +286,10 @@ jobs:
           # PathPrefix(/api/actuator) com ipAllowList (ver dynamic.yml do enois-traefik); sem esse
           # bloqueio, subir este valor aqui vazaria metricas internas da JVM publicamente.
           MANAGEMENT_ENDPOINTS: ${{ vars.MANAGEMENT_ENDPOINTS }}
+          # IP do Traefik em docker-prod3, unico hop confiavel pra X-Forwarded-For em prod
+          # (ver ClientIpResolver.isTrustedProxy). Sem isto o backend cai no fallback de
+          # getRemoteAddr() e todo request vira o IP do proxy, nao o do cliente real.
+          TRUSTED_PROXY_IPS: ${{ vars.TRUSTED_PROXY_IPS }}
           # Alloy (stack enois-observability, Portainer id 353) escuta OTLP em 127.0.0.1:4318;
           # o backend roda host-network no mesmo node2, entao "localhost" aqui e o host real.
           MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT: ${{ vars.MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT }}
@@ -358,6 +362,7 @@ jobs:
                 GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
                 GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
                 MANAGEMENT_ENDPOINTS: ${MANAGEMENT_ENDPOINTS}
+                TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS}
                 MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT: ${MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT}
                 TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY}
           EOF
