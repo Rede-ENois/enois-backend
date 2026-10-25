@@ -209,6 +209,24 @@ Os 4 últimos são **BLOQUEADOS** por dependência externa (não é código meu)
   container MariaDB aplicando as migrações (o do front, o `ci.yml`, já roda lint, typecheck e
   vitest).
 ## Higiene do backend (entregue 2026-10-21)
+- **[x] ENTREGUE 2026-10-25 — O arquivo de properties da QA repetia 5 chaves, e a repetição era
+  silenciosa.** Em `.properties` a **última** ocorrência da chave vence, e nada avisa: o arquivo
+  parece limpo e o valor que vale é o do fim. Na QA o bloco de OAuth aparecia **três vezes** (o
+  genérico com `${REDE_FRONTEND_URL}`, o do sandbox com os hosts fixos e um `enabled=true` solto,
+  mais dois comentários órfãos) — e o callback do Google é justamente a configuração que já
+  quebrou por divergência de host (o `redirect_uri_mismatch`).
+  *O conserto:* um bloco só, com o **valor efetivo de hoje, chave por chave** — provado por
+  comparação automática: 28 chaves antes, 28 depois, nenhuma chave a mais ou a menos, **nenhum
+  valor diferente**. Só a repetição foi embora.
+  *Teste:* `ProfilePropertiesTests` (2) — nenhum perfil pode repetir chave (a falha lista as
+  chaves e o número de vezes), e o callback do OAuth de cada ambiente tem de apontar para o host
+  DELE (a QA para o host da QA, a produção para a URL do ambiente). Comprovado que o teste pega:
+  restaurando o arquivo antigo, ele falha listando as cinco chaves (`frontend-redirect-url (3x)`,
+  `google.client-id (3x)`, `google.client-secret (3x)`, `google.redirect-uri (3x)`,
+  `google.enabled (3x)`).
+  *Verificado:* `ProfilePropertiesTests` + `OAuthHardeningTests` + `EmailVerificationFlowTests` =
+  13 testes, 0 falhas.
+  Back: `78d8cef3` (branch `fix/config-qa-sem-duplicata`, sobre a `qa`).
 - **[x] ENTREGUE 2026-10-22 — A recorrência do banimento JÁ estava coberta (o plano ainda
   dizia que faltava).** Conferido no código: o banimento revoga **todas** as sessões da conta
   (`revokeAllByUser` — access e refresh na mesma linha de sessão), o **login** é recusado com 403
