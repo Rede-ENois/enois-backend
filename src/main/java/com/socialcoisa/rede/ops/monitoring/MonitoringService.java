@@ -10,7 +10,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Deque;
@@ -32,7 +31,6 @@ import javax.sql.DataSource;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -40,11 +38,13 @@ import org.springframework.util.StringUtils;
 import com.zaxxer.hikari.HikariDataSource;
 
 /**
- * Monitorabilidade do painel admin: carga, latência, recursos, eventos persistidos e logs.
+ * Monitorabilidade do painel admin: carga, latência, recursos, eventos e logs.
  *
  * <p>As métricas são em memória (séries de 60 minutos) e por pod; os eventos/erros/logs vão para
- * o banco de forma assíncrona. Nada bloqueia a requisição: a fila tem teto e o excedente é contado
- * em {@code droppedEvents}. Dados sensíveis são redigidos antes de persistir.</p>
+ * arquivo JSONL na VPS de forma assíncrona — a observabilidade NUNCA usa o pool do banco, para não
+ * concorrer com as requisições dos usuários. Nada bloqueia a requisição: a fila tem teto e o
+ * excedente é contado em {@code droppedEvents}. Dados sensíveis são redigidos antes de persistir.
+ * Só 5xx vira evento; 4xx conta métrica (não vira linha) para o painel não afogar em ruído.</p>
  */
 @Service
 public class MonitoringService {
@@ -55,12 +55,10 @@ public class MonitoringService {
 	private static final long MINUTE = 60_000L;
 	private static final long SLOW_MS = 2000L;
 
-	private final JdbcTemplate jdbc;
 	private final Clock clock;
-	private final int retentionDays;
 	private final int maxEventsPerMinute;
-	private final long maxRows;
 	private final ObjectProvider<DataSource> dataSource;
+	private final FileEventSink sink;
 	private final ArrayBlockingQueue<EventRow> queue = new ArrayBlockingQueue<>(QUEUE_LIMIT);
 	private final ConcurrentLinkedDeque<EventView> recent = new ConcurrentLinkedDeque<>();
 	private final ConcurrentHashMap<Long, MinuteMetrics> minutes = new ConcurrentHashMap<>();
@@ -78,16 +76,12 @@ public class MonitoringService {
 	private volatile List<CountView> typeCounts = List.of();
 	private volatile long countsAt;
 
-	MonitoringService(JdbcTemplate jdbc, Clock clock, ObjectProvider<DataSource> dataSource,
-			@Value("${rede.monitoring.retention-days:7}") int retentionDays,
-			@Value("${rede.monitoring.max-events-per-minute:1000}") int maxEventsPerMinute,
-			@Value("${rede.monitoring.max-rows:250000}") long maxRows) {
-		this.jdbc = jdbc;
+	MonitoringService(Clock clock, ObjectProvider<DataSource> dataSource, FileEventSink sink,
+			@Value("${rede.monitoring.max-events-per-minute:1000}") int maxEventsPerMinute) {
 		this.clock = clock;
 		this.dataSource = dataSource;
-		this.retentionDays = Math.max(1, retentionDays);
+		this.sink = sink;
 		this.maxEventsPerMinute = Math.max(1, maxEventsPerMinute);
-		this.maxRows = Math.max(0, maxRows);
 	}
 
 	// ------------------------------------------------------------------ ingestão
@@ -105,7 +99,7 @@ public class MonitoringService {
 		inFlight.updateAndGet(value -> Math.max(0, value - 1));
 	}
 
-	/** Chamado pelo filtro: métricas de TODA requisição; 4xx/5xx também viram evento. */
+	/** Chamado pelo filtro: métricas de TODA requisição; só 5xx vira evento. */
 	public void recordRequest(String method, String path, String route, int status, long durationMs,
 			String requestId, String userId, String clientIp, String deviceId) {
 		inFlight.updateAndGet(value -> Math.max(0, value - 1));
@@ -140,10 +134,12 @@ public class MonitoringService {
 		metrics.methods.computeIfAbsent(method == null ? "?" : method, key -> new LongAdder()).increment();
 		metrics.routes.computeIfAbsent(route == null ? "UNMATCHED" : route, key -> new LongAdder()).increment();
 		seconds.computeIfAbsent(now / 1000, key -> new LongAdder()).increment();
-		if (status >= 400) {
-			String level = status >= 500 ? "ERROR" : "WARN";
+		// Só 5xx vira evento com request completa (método, rota, IP, pilha quando houver): é o
+		// sinal que interessa. 4xx (validação, permissão, rate limit) conta métrica e não vira
+		// linha — antes cada 429/409 de qualquer usuário enterrava os erros reais no painel.
+		if (status >= 500) {
 			String message = method + " " + (route == null ? path : route) + " -> " + status;
-			enqueue(new EventRow(id(), clock.instant(), level, "REQUEST", message, requestId, method, path,
+			enqueue(new EventRow(id(), clock.instant(), "ERROR", "REQUEST", message, requestId, method, path,
 				route, status, durationMs, userId, clientIp, deviceId, null));
 		}
 	}
@@ -211,41 +207,10 @@ public class MonitoringService {
 		if (batch.isEmpty()) {
 			return;
 		}
-		try {
-			jdbc.batchUpdate("""
-				insert into system_events (id, created_at, level, type, message, request_id, method, path, route,
-					status, duration_ms, user_id, client_ip, device_id, metadata)
-				values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-				""", batch, 100, (statement, row) -> {
-					statement.setString(1, row.id());
-					statement.setTimestamp(2, java.sql.Timestamp.from(row.createdAt()));
-					statement.setString(3, row.level());
-					statement.setString(4, row.type());
-					statement.setString(5, row.message());
-					statement.setString(6, row.requestId());
-					statement.setString(7, row.method());
-					statement.setString(8, row.path());
-					statement.setString(9, row.route());
-					if (row.status() == null) {
-						statement.setNull(10, java.sql.Types.INTEGER);
-					}
-					else {
-						statement.setInt(10, row.status());
-					}
-					if (row.durationMs() == null) {
-						statement.setNull(11, java.sql.Types.BIGINT);
-					}
-					else {
-						statement.setLong(11, row.durationMs());
-					}
-					statement.setString(12, row.userId());
-					statement.setString(13, row.clientIp());
-					statement.setString(14, row.deviceId());
-					statement.setString(15, row.metadata());
-				});
-		}
-		catch (RuntimeException failure) {
-			dropped.addAndGet(batch.size());
+		// Arquivo na VPS, fora do pool do banco: a observabilidade nunca disputa conexão
+		// com as requisições dos usuários.
+		for (EventRow row : batch) {
+			sink.append(row.view());
 		}
 	}
 
@@ -276,26 +241,8 @@ public class MonitoringService {
 
 	@Scheduled(fixedDelay = 3_600_000, initialDelay = 60_000)
 	void purgeOld() {
-		try {
-			jdbc.update("delete from system_events where created_at < ?",
-				java.sql.Timestamp.from(clock.instant().minus(retentionDays, ChronoUnit.DAYS)));
-			// Redes contra volume patológico: mesmo com o teto por minuto, uma semana cheia
-			// poderia somar milhões de linhas. Acima do limite, as mais antigas saem primeiro.
-			if (maxRows > 0) {
-				jdbc.update("""
-					delete from system_events where id in (
-						select id from system_events order by created_at asc offset ? rows
-					)""", Math.max(0, countRows() - maxRows));
-			}
-		}
-		catch (RuntimeException ignored) {
-			// Banco indisponível: tenta de novo no próximo ciclo.
-		}
-	}
-
-	private long countRows() {
-		Long total = jdbc.queryForObject("select count(*) from system_events", Long.class);
-		return total == null ? 0 : total;
+		// Rotação por dia no próprio sink: fecha o dia anterior e apaga além da retenção.
+		sink.rotate();
 	}
 
 	// ------------------------------------------------------------------ leitura
@@ -398,63 +345,71 @@ public class MonitoringService {
 	}
 
 	public List<EventView> events(String level, String type, String q, String from, String to, String before, int limit) {
-		StringBuilder sql = new StringBuilder("""
-			select id, created_at, level, type, message, request_id, method, path, route, status, duration_ms,
-				user_id, client_ip, device_id, metadata from system_events where 1=1
-			""");
-		List<Object> params = new ArrayList<>();
-		if (StringUtils.hasText(level)) {
-			sql.append(" and level = ?");
-			params.add(level.trim().toUpperCase(Locale.ROOT));
-		}
-		if (StringUtils.hasText(type)) {
-			sql.append(" and type = ?");
-			params.add(type.trim().toUpperCase(Locale.ROOT));
-		}
-		String pattern = com.socialcoisa.rede.shared.web.LikePattern.contains(q);
-		if (pattern != null) {
-			sql.append(" and (lower(message) like ? escape '!' or lower(path) like ? escape '!')");
-			params.add(pattern);
-			params.add(pattern);
-		}
-		if (StringUtils.hasText(from)) {
-			try {
-				sql.append(" and created_at >= ?");
-				params.add(java.sql.Timestamp.from(Instant.parse(from.trim())));
+		// Lê do arquivo na VPS (sem banco): dias mais novos primeiro, predicado por linha e
+		// parando quando o limite do painel é atingido.
+		String wantLevel = StringUtils.hasText(level) ? level.trim().toUpperCase(Locale.ROOT) : null;
+		String wantType = StringUtils.hasText(type) ? type.trim().toUpperCase(Locale.ROOT) : null;
+		EventQuery query = EventQuery.parse(q);
+		Instant fromAt = instantOrNull(from);
+		Instant toAt = instantOrNull(to);
+		Instant beforeAt = instantOrNull(before);
+		int teto = Math.max(1, Math.min(limit, 200));
+		Instant cutoff = beforeAt;
+		return sink.search(event -> {
+			if (wantLevel != null && !wantLevel.equals(event.level())) {
+				return false;
 			}
-			catch (RuntimeException ignored) {
-				// Data inicial inválida é ignorada; o filtro fica com o que veio válido.
+			if (wantType != null && !wantType.equals(event.type())) {
+				return false;
 			}
+			if (!query.matches(haystack(event))) {
+				return false;
+			}
+			Instant at = FileEventSink.instantOf(event);
+			if (fromAt != null && at.isBefore(fromAt)) {
+				return false;
+			}
+			if (toAt != null && at.isAfter(toAt)) {
+				return false;
+			}
+			if (cutoff != null && !at.isBefore(cutoff)) {
+				return false;
+			}
+			return true;
+		}, teto);
+	}
+
+	/** Texto pesquisável do evento: mensagem, caminho, rota, ids, IP e pilha. */
+	static String haystack(EventView event) {
+		StringBuilder hay = new StringBuilder(512);
+		appendHay(hay, event.message());
+		appendHay(hay, event.path());
+		appendHay(hay, event.route());
+		appendHay(hay, event.requestId());
+		appendHay(hay, event.userId());
+		appendHay(hay, event.clientIp());
+		appendHay(hay, event.metadata());
+		return hay.toString().toLowerCase(Locale.ROOT);
+	}
+
+	private static void appendHay(StringBuilder hay, String value) {
+		if (value != null && !value.isBlank()) {
+			if (hay.length() > 0) {
+				hay.append(' ');
+			}
+			hay.append(value);
 		}
-		if (StringUtils.hasText(to)) {
-			try {
-				sql.append(" and created_at <= ?");
-				params.add(java.sql.Timestamp.from(Instant.parse(to.trim())));
-			}
-			catch (RuntimeException ignored) {
-				// Data final inválida é ignorada; o filtro fica com o que veio válido.
-			}
+	}
+
+	private static Instant instantOrNull(String value) {
+		if (!StringUtils.hasText(value)) {
+			return null;
 		}
-				if (StringUtils.hasText(before)) {
-			try {
-				sql.append(" and created_at < ?");
-				params.add(java.sql.Timestamp.from(Instant.parse(before.trim())));
-			}
-			catch (RuntimeException ignored) {
-				// `before` inválido é ignorado; a lista continua com os mais recentes.
-			}
-		}
-		sql.append(" order by created_at desc limit ?");
-		params.add(Math.max(1, Math.min(limit, 200)));
 		try {
-			return jdbc.query(sql.toString(), (rs, rowNum) -> new EventView(rs.getString(1),
-				rs.getTimestamp(2).toInstant().toString(), rs.getString(3), rs.getString(4), rs.getString(5),
-				rs.getString(6), rs.getString(7), rs.getString(8), rs.getString(9),
-				(Integer) rs.getObject(10), (Long) rs.getObject(11), rs.getString(12), rs.getString(13),
-				rs.getString(14), rs.getString(15)), params.toArray());
+			return Instant.parse(value.trim());
 		}
-		catch (RuntimeException failure) {
-			return List.of();
+		catch (RuntimeException ignored) {
+			return null;
 		}
 	}
 
@@ -462,7 +417,7 @@ public class MonitoringService {
 		return recent.stream().limit(Math.max(1, Math.min(limit, RECENT_LIMIT))).toList();
 	}
 
-	/** Contagens de 24h não precisam bater no banco a cada polling de 2,5s. */
+	/** Contagens de 24h a partir do buffer em memória (sem banco, sem custo por polling). */
 	private void refreshCounts() {
 		if (clock.millis() - countsAt < 30_000) {
 			return;
@@ -471,23 +426,28 @@ public class MonitoringService {
 			if (clock.millis() - countsAt < 30_000) {
 				return;
 			}
-			levelCounts = countBy("level");
-			typeCounts = countBy("type");
+			Map<String, Long> levels = new LinkedHashMap<>();
+			Map<String, Long> types = new LinkedHashMap<>();
+			for (EventView event : recent) {
+				if (event.level() != null) {
+					levels.merge(event.level(), 1L, Long::sum);
+				}
+				if (event.type() != null) {
+					types.merge(event.type(), 1L, Long::sum);
+				}
+			}
+			levelCounts = top(levels);
+			typeCounts = top(types);
 			countsAt = clock.millis();
 		}
 	}
 
-	private List<CountView> countBy(String column) {
-		try {
-			return jdbc.query("""
-				select %s, count(*) from system_events
-				where created_at >= ? group by %s order by count(*) desc limit 12
-				""".formatted(column, column), (rs, rowNum) -> new CountView(rs.getString(1), rs.getLong(2)),
-				java.sql.Timestamp.from(clock.instant().minus(24, ChronoUnit.HOURS)));
-		}
-		catch (RuntimeException failure) {
-			return List.of();
-		}
+	private static List<CountView> top(Map<String, Long> counts) {
+		return counts.entrySet().stream()
+			.sorted(Map.Entry.<String, Long>comparingByValue(Comparator.reverseOrder()))
+			.limit(12)
+			.map(entry -> new CountView(entry.getKey(), entry.getValue()))
+			.toList();
 	}
 
 	// ------------------------------------------------------------------ recursos

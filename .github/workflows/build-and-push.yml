@@ -325,6 +325,10 @@ jobs:
                 # com erro claro (em vez de ser morta pelo kernel sem log).
                 JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=60.0 -XX:+ExitOnOutOfMemoryError"
                 SPRING_PROFILES_ACTIVE: prd
+                # Observabilidade em arquivo na VPS (fora do banco): o dir usa o default
+                # /app/data/monitoring. Sem volume dedicado, o arquivo morre com o container
+                # (aceito: série de 60 min em memória continua; o painel lê o dia corrente).
+                # Se o ruído voltar, montar volume acaba com a perda — sem tocar no banco.
                 DB_PASSWORD: ${DB_PASSWORD}
                 REDE_FRONTEND_URL: https://enois.ia.br
                 REDE_BACKEND_URL: https://api.enois.ia.br
