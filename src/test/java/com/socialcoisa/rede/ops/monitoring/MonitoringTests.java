@@ -49,7 +49,12 @@ class MonitoringTests {
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.series").isArray())
 				.andExpect(jsonPath("$.recent").isArray())
-				.andExpect(jsonPath("$.jvm.heapMaxBytes").isNumber());
+				.andExpect(jsonPath("$.jvm.heapMaxBytes").isNumber())
+				// O pool vem do DataSource embrulhado (LazyConnectionDataSourceProxy); se o
+				// desembrulho quebrar, resources.dbPool vira null e o painel mostra 0/0.
+				.andExpect(jsonPath("$.resources.dbPool.max").isNumber())
+				.andExpect(jsonPath("$.resources.dbPool.active").isNumber())
+				.andExpect(jsonPath("$.resources.dbPool.waiting").isNumber());
 
 			mockMvc.perform(get("/admin/monitoring/events")
 					.header("X-Session-Token", admin.token())
