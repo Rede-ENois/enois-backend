@@ -227,6 +227,29 @@ Os 4 últimos são **BLOQUEADOS** por dependência externa (não é código meu)
   *Verificado:* `ProfilePropertiesTests` + `OAuthHardeningTests` + `EmailVerificationFlowTests` =
   13 testes, 0 falhas.
   Back: `78d8cef3` (branch `fix/config-qa-sem-duplicata`, sobre a `qa`).
+- **[x] ENTREGUE 2026-10-25 — Guarda-corpo para a coluna com palavra reservada do MariaDB (a
+  classe de bug que já derrubou a produção DUAS vezes).** A V140 criava a coluna `signal`
+  (reservada) e o `CREATE TABLE` devolvia 1064 — o pod não subia; a coluna `read` das notificações
+  (também reservada) fazia o Hibernate gerar `update notifications set ..., read=?, ...` — 500 em
+  todo insert/update de notificação, ou seja, **comentar um post quebrava** (a V170 renomeou para
+  `is_read`). Nas duas vezes o **H2 dos testes aceitava** e só o MariaDB da produção recusava — e a
+  **QA cita identificadores** (`globally_quoted_identifiers=true`), então o bug passa nos dois
+  lugares onde ele é testado e quebra só em produção.
+  *O que foi feito:* `MariaDbReservedWordsTests` (2) — nenhuma migration pode declarar coluna
+  reservada **sem crase**, e nenhuma entidade JPA pode mapear coluna reservada (o Hibernate monta
+  o SQL e não cita). A lista de reservadas não é cópia: foi extraída do **próprio motor**
+  (MariaDB 11.4.13 da bancada), testando cada palavra como nome de coluna e guardando as que
+  falham com 1064 — 227 palavras em `src/test/resources/mariadb-reserved-words.txt`.
+  *A auditoria que motivou:* as 156 migrations, as entidades JPA e o SQL cru foram varridos contra
+  essa lista — **não há nenhuma coluna reservada sem citar no código de hoje** (a `lines` da V120 é
+  usada por JDBC cru, sempre entre crases). O que faltava era o guarda-corpo para a terceira
+  ocorrência.
+  *Comprovado que o teste pega:* reconstruindo o bug histórico (a entidade voltando a mapear o
+  campo `read` na coluna `read`), ele falha com `NotificationJpaEntity.java: coluna 'read' (campo
+  'read') e palavra reservada do MariaDB`.
+  *Verificado:* `MariaDbReservedWordsTests` + `ProfilePropertiesTests` + `FlywayMigrationConfigTests`
+  = 8 testes, 0 falhas.
+  Back: `57efb0a3` (mesmo branch `fix/config-qa-sem-duplicata`, sobre a `qa`).
 - **[x] ENTREGUE 2026-10-22 — A recorrência do banimento JÁ estava coberta (o plano ainda
   dizia que faltava).** Conferido no código: o banimento revoga **todas** as sessões da conta
   (`revokeAllByUser` — access e refresh na mesma linha de sessão), o **login** é recusado com 403
