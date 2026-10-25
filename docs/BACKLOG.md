@@ -433,6 +433,29 @@ Os 4 últimos são **BLOQUEADOS** por dependência externa (não é código meu)
   corporativo, objetivos profissionais no perfil, termos de limitação de responsabilidade).
   Front: `cb9b38aa` + esta rodada; back: templates dos e-mails.
 ## Higiene do front (entregue 2026-10-21)
+- **[x] ENTREGUE 2026-10-24 — Duas listas faziam a página rolar de lado no celular.** Item de grid
+  nasce com `min-width: auto`, ou seja, o mínimo dele é o **min-content** do conteúdo; quando o card
+  tem um título que não quebra (`truncate`/`nowrap`) ou uma palavra gigante sem espaço, esse
+  min-content é maior que a tela — a coluna cresce, o card sai do container e a página passa a
+  rolar horizontalmente.
+  *Medido* no Chrome headless a 390px e 1280px, com a sessão real e dado real da QA (17 telas
+  principais: feed, blogs, vagas, eventos, mentoria, comunidades, grupos, mensagens, carteira,
+  jogos, marketplace, perfil, moderador, login, serviços, salvos):
+
+  | tela | 360px, dado real | 360px, título longo |
+  |---|---|---|
+  | `/servicos` | **estourava 31px** | 572px |
+  | `/freelances` | 0 | **417px** |
+
+  As outras 15 telas ficaram em **0px** de overflow — inclusive com título patológico injetado
+  nos cards, o que mostra que o problema era local, não do app inteiro.
+  *O que foi feito:* `min-w-0` no `<li>` do card de oferta (e no `<ul>` da grade) — o título já era
+  truncado, mas o `nowrap` dele ainda contava no min-content do item; e `min-w-0` + `break-words`
+  no card de freelance, cujo título é texto do prestador e pode ser uma palavra sem espaço.
+  Agora as duas ficam em **0px** nos dois cenários.
+  *Teste:* `src/lib/layout-cards.test.ts` (3) trava a regra nos dois cards que quebraram.
+  *Verificado:* `vitest` 404/404, `eslint` limpo, `tsc --noEmit` sem erro, `vite build` ok.
+  Front: `55fba796` (branch `auditoria/responsividade`, sobre a `qa`).
 - **[x] ENTREGUE 2026-10-24 — O app oferecia login com Google mesmo num ambiente onde a API o
   desliga.** A API tem o flag `rede.oauth.google.enabled`: quando está desligado, `/auth/config`
   avisa (`googleLoginEnabled: false`) e `/oauth/google/start` **recusa** com 403
