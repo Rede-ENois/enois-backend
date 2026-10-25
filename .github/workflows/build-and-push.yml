@@ -142,6 +142,16 @@ jobs:
           LINKEDIN_REDIRECT_URI: ${{ vars.LINKEDIN_REDIRECT_URI_QA }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          # GitHub e usado apenas para VINCULAR a conta aos selos de contribuicao.
+          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+          GITHUB_CONTRIBUTIONS_TOKEN: ${{ secrets.GITHUB_CONTRIBUTIONS_TOKEN }}
+          # ImageKit esta aposentado (storage mudou para S3), mas as chaves seguem obrigatorias
+          # enquanto a migracao de objetos antigos nao termina: o purge/delete de midia antiga
+          # (exclusao de usuario, remocao de post) conversa com o ImageKit ate la.
+          IMAGEKIT_URL_ENDPOINT: ${{ secrets.IMAGEKIT_URL_ENDPOINT }}
+          IMAGEKIT_PUBLIC_KEY: ${{ secrets.IMAGEKIT_PUBLIC_KEY }}
+          IMAGEKIT_PRIVATE_KEY: ${{ secrets.IMAGEKIT_PRIVATE_KEY }}
           # panic:yes => somente leitura; vazio/ausente => online (o botão do painel decide).
           PANIC_MODE: ${{ secrets.PANIC_MODE }}
         run: |
@@ -185,6 +195,14 @@ jobs:
               "LINKEDIN_REDIRECT_URI=${LINKEDIN_REDIRECT_URI}",
               "GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}",
               "GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}",
+              "GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}",
+              "GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}",
+              "GITHUB_REDIRECT_URI=https://enois-api-qa.b7cloud.tech/api/auth/oauth/github/callback",
+              "GITHUB_CONTRIBUTIONS_TOKEN=${GITHUB_CONTRIBUTIONS_TOKEN}",
+              "GITHUB_SYNC_ENABLED=false",
+              "IMAGEKIT_URL_ENDPOINT=${IMAGEKIT_URL_ENDPOINT}",
+              "IMAGEKIT_PUBLIC_KEY=${IMAGEKIT_PUBLIC_KEY}",
+              "IMAGEKIT_PRIVATE_KEY=${IMAGEKIT_PRIVATE_KEY}",
               "REDE_AUTH_SIGNUP_ENABLED=true",
               "SIGNUP_CAPTCHA_ENABLED=true"
             ],
@@ -269,6 +287,14 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.PROD_AWS_SECRET_ACCESS_KEY }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+          GITHUB_CONTRIBUTIONS_TOKEN: ${{ secrets.GITHUB_CONTRIBUTIONS_TOKEN }}
+          # ImageKit aposentado (storage no S3), mas o purge/delete de midia antiga ainda
+          # conversa com ele ate a migracao de objetos terminar.
+          IMAGEKIT_URL_ENDPOINT: ${{ secrets.IMAGEKIT_URL_ENDPOINT }}
+          IMAGEKIT_PUBLIC_KEY: ${{ secrets.IMAGEKIT_PUBLIC_KEY }}
+          IMAGEKIT_PRIVATE_KEY: ${{ secrets.IMAGEKIT_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
@@ -313,8 +339,16 @@ jobs:
                 REDE_MEDIA_S3_PUBLIC_BASE_URL: ${REDE_MEDIA_S3_PUBLIC_BASE_URL}
                 AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
                 AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
-                GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
-                GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+              GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+              GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+              GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID}
+              GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}
+              GITHUB_REDIRECT_URI: https://api.enois.ia.br/api/auth/oauth/github/callback
+              GITHUB_CONTRIBUTIONS_TOKEN: ${GITHUB_CONTRIBUTIONS_TOKEN}
+              GITHUB_SYNC_ENABLED: "false"
+              IMAGEKIT_URL_ENDPOINT: ${IMAGEKIT_URL_ENDPOINT}
+              IMAGEKIT_PUBLIC_KEY: ${IMAGEKIT_PUBLIC_KEY}
+              IMAGEKIT_PRIVATE_KEY: ${IMAGEKIT_PRIVATE_KEY}
           EOF
 
           echo "==> Montar payload JSON (python escapa o YAML certo pro body)"

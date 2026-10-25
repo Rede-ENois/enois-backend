@@ -57,7 +57,7 @@ public class AbuseGuardFilter extends OncePerRequestFilter {
 	private final long bloqueioMaximoMs;
 
 	public AbuseGuardFilter(java.time.Clock clock, ClientIpResolver ipResolver,
-			@Value("${rede.security.abuse.max-errors:20}") int limiteDeErros,
+			@Value("${rede.security.abuse.max-errors:0}") int limiteDeErros,
 			@Value("${rede.security.abuse.window-seconds:180}") long janelaSegundos,
 			@Value("${rede.security.abuse.first-block-minutes:15}") long primeiroBloqueioMinutos,
 			@Value("${rede.security.abuse.max-block-minutes:360}") long bloqueioMaximoMinutos) {
@@ -138,12 +138,13 @@ public class AbuseGuardFilter extends OncePerRequestFilter {
 
 	/**
 	 * O que conta como "erro de varredura": rota que não existe (404), acesso negado (401/403),
-	 * payload/método/tipo inválidos (400/405/415) e o 429 do próprio teto. O 409 (conflito de
-	 * estado, como e-mail já cadastrado) NÃO conta: é resposta normal de gente usando o app.
+	 * método/tipo inválidos (405/415). O 400 (Bad Request) NÃO conta: é resposta normal de
+	 * validação de formulário. O 409 (conflito de estado) também não. O 429 também NÃO conta:
+	 * o IP já está bloqueado ou limitado por outro guard, contar de novo só escala o bloqueio
+	 * e pune usuários legítimos que tentam de novo após um erro temporário.
 	 */
 	private static boolean contabiliza(int status) {
-		return status == 404 || status == 401 || status == 403 || status == 400 || status == 405
-			|| status == 415 || status == 429;
+		return status == 404 || status == 401 || status == 403 || status == 405 || status == 415;
 	}
 
 	private void negarDeVez(String ip, long now, int statusQueEstourou) {
