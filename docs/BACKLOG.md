@@ -433,6 +433,31 @@ Os 4 últimos são **BLOQUEADOS** por dependência externa (não é código meu)
   corporativo, objetivos profissionais no perfil, termos de limitação de responsabilidade).
   Front: `cb9b38aa` + esta rodada; back: templates dos e-mails.
 ## Higiene do front (entregue 2026-10-21)
+- **[x] ENTREGUE 2026-10-24 — O card da comunidade mostrava o CÓDIGO do assunto ("TECNOLOGIA") em
+  vez da palavra, e três tipos do front diziam que um campo nunca era nulo quando a API anula.**
+  A API devolve o assunto como código (`"TECNOLOGIA"`, `"CARREIRA"`) e o app tem o dicionário
+  `TOPIC_LABELS`, que o filtro de assuntos e o card do post já usavam — mas o card da comunidade e a
+  página de detalhe renderizavam o código cru. Na mesma tela, o chip dizia "Tecnologia" e o card
+  dizia "TECNOLOGIA" (confirmado na QA).
+  *O que foi feito:* `topicLabel()` (`src/constants/community-topics.ts`) traduz o código na
+  palavra, e os três lugares (card da comunidade, prateleira do perfil e página da comunidade) passam
+  a usá-lo. Verificado no navegador depois da mudança: o card mostra "Engraçado"/"Tecnologia" e não
+  sobra nenhum código cru na tela.
+  *E os tipos:* três campos são anuláveis na API e o front afirmava o contrário — `Community.topic`
+  (`null` na comunidade sem assunto), `Mentor.nextSlot` (`null` quando o mentor não tem vaga livre)
+  e `TimeSlot.startsAt`/`endsAt` (`null` no slot sem horário). Medido na QA: 2 dos 5 mentores da
+  lista vinham com `nextSlot: null` e a primeira comunidade com `topic: null`; o backend anula os
+  dois explicitamente (`orElse(null)` e `startsAt() != null ? ... : null`). E o `sessionId` da
+  resposta de agendar sessão: **a API nunca mandou esse nome** (ela devolve o `id`).
+  *Como foi achado:* 30 endpoints da API comparados com os tipos do front, com dado real da QA
+  (~300 campos) — estes foram os que mentiam. A lista de assuntos do front e do backend bate (34 nos
+  dois lados).
+  *Teste:* `src/constants/community-topics.test.ts` (5) — o rótulo traduz o código, comunidade sem
+  assunto não mostra nada, assunto desconhecido cai no próprio código, e as telas não podem voltar
+  a renderizar o código cru.
+  *Verificado:* `vitest` 394/394, `eslint` sem erro novo (15 = os 15 da base), `tsc --noEmit` sem
+  erro, `vite build` ok.
+  Front: `1be8c186` (branch `fix/mentor-tipo-null`, sobre a `qa`).
 - **[x] ENTREGUE 2026-10-24 — O app oferecia login com Google mesmo num ambiente onde a API o
   desliga.** A API tem o flag `rede.oauth.google.enabled`: quando está desligado, `/auth/config`
   avisa (`googleLoginEnabled: false`) e `/oauth/google/start` **recusa** com 403
