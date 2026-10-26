@@ -5,6 +5,19 @@
 > (nomes de chaves, ARNs, papéis do KMS e procedimento de emergência) **não** mora no repositório
 > público — fica no cofre do time.
 
+## 0. Onde este trabalho vive
+
+**Branch dedicada: `sec/cripto-pq`.** Nada de criptografia entra na `qa` enquanto a funcionalidade
+não estiver completa e provada — `qa` é ambiente de teste do produto, não de experimento de
+criptografia. O fluxo é:
+
+1. Cada incremento nasce de `sec/cripto-pq` (nunca de `qa`) e volta para ela por PR.
+2. A branch é sincronizada com a `qa` com frequência para não apodrecer, mas **nunca o contrário**:
+   `qa` não recebe nada dela.
+3. Só depois de: migração de dado verificada (decifra == claro), rotação ensaiada, nenhuma falha de
+   decifra em QA e revisão de segurança — a branch é promovida (`sec/cripto-pq` → `qa` → `main`).
+4. O frontend tem a mesma branch `sec/cripto-pq`, pelo mesmo motivo.
+
 ## 1. Resumo executivo — o que é honesto prometer
 
 "Ponta a ponta" tem dois significados e só um deles é possível sem mentir:
