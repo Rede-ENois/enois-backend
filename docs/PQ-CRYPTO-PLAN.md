@@ -12,10 +12,16 @@ não estiver completa e provada — `qa` é ambiente de teste do produto, não d
 criptografia. O fluxo é:
 
 1. Cada incremento nasce de `sec/cripto-pq` (nunca de `qa`) e volta para ela por PR.
-2. A branch é sincronizada com a `qa` com frequência para não apodrecer, mas **nunca o contrário**:
-   `qa` não recebe nada dela.
-3. Só depois de: migração de dado verificada (decifra == claro), rotação ensaiada, nenhuma falha de
-   decifra em QA e revisão de segurança — a branch é promovida (`sec/cripto-pq` → `qa` → `main`).
+2. **Nenhum PR desta branch pode ter `qa` como base.** A sincronização é sempre `qa` →
+   `sec/cripto-pq` (para não apodrecer), nunca o contrário. Um PR com base `qa` é o erro a evitar:
+   já aconteceu de o `gh pr edit` não trocar a base e o merge cair no lugar errado — confira a base
+   antes de mergear.
+3. Só depois de **tudo** isto a branch é promovida (`sec/cripto-pq` → `qa` → `main`):
+   - migração de dado verificada (decifra == claro, 100% das linhas, com contador);
+   - rotação de chave ensaiada sem downtime;
+   - zero falha de decifra e zero fallback para claro nos últimos dias de QA;
+   - suíte completa verde, incluindo o boot duplo (H2 e MariaDB);
+   - revisão de segurança registrada no PR de promoção.
 4. O frontend tem a mesma branch `sec/cripto-pq`, pelo mesmo motivo.
 
 ## 1. Resumo executivo — o que é honesto prometer

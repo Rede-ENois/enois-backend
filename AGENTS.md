@@ -50,6 +50,13 @@ regras valem para agentes autônomos, sessões assistidas e contribuições huma
 - **Migração de banco é a parte mais perigosa:** migração aplicada não se edita; siga as regras do
   [`CONTRIBUTING.md`](CONTRIBUTING.md) (charset/collation explícito, aditiva, testada). Deploy parado
   por migração ruim derruba o site inteiro — é o incidente mais caro deste projeto.
+- **Criptografia não abre PR para a `qa`.** O trabalho de criptografia pós-quântica e proteção de
+  dados vive na branch **`sec/cripto-pq`** (nos dois repositórios), e todo PR dele tem essa branch
+  como base — **nunca `qa`**. A promoção só acontece com o checklist do
+  [`docs/PQ-CRYPTO-PLAN.md`](docs/PQ-CRYPTO-PLAN.md) cumprido por inteiro: migração verificada
+  (decifra == claro), rotação ensaiada, zero falha de decifra, suíte completa verde e revisão de
+  segurança registrada. Já aconteceu de a base do PR não trocar e o merge cair no lugar errado —
+  **confira a base antes de mergear**.
 
 ## Qualidade (gates)
 
