@@ -49,8 +49,6 @@ mínimo e auditável, e E2E verdadeiro apenas onde o produto aceitar que o servi
   precisa reverter). Segredo TOTP usa `SecretCipher` (AES-256-GCM com chave em base64 no ambiente).
 - **Dados pessoais em claro:** e-mail, telefone, CPF/RG (pedidos de API), currículo, IP em log e no
   painel de monitoramento, mensagens, denúncias, dados de pagamento/Pix.
-- **Passivos conhecidos:** um dump real do banco foi **commitado no passado** (commits `DUMP` e
-  "foda-se a LGPD, toma o dump do banco de dados") e removido do HEAD — **continua no histórico**.
 - **Clientes de terceiros:** API pública com sessão/`X-Session-Token`; não há OAuth2 de cliente nem
   chave de API hasheada com escopo.
 
@@ -165,7 +163,7 @@ teste de envelope inválido (falha explícita, nunca dado truncado), e restaura�
 
 | Fase | Entrega | Aceite (prova) |
 |---|---|---|
-| **P0 — agora** | Classificação dos dados campo a campo; threat model; ADRs; purga do dump do histórico do git; inventário de fluxos (browser, edge, backend, DB, S3, logs, painel, e-mail, terceiros) | documento revisado + `git log --all -- dump` vazio + classificação aprovada |
+| **P0 — agora** | Classificação dos dados campo a campo; threat model; ADRs; inventário de fluxos (browser, edge, backend, DB, S3, logs, painel, e-mail, terceiros) | documento revisado + classificação aprovada |
 | **P1 — transporte PQ** | `X25519MLKEM768` no edge e no backend; TLS 1.2 só para clientes externos com prazo; HSTS | teste automatizado de negociação PQ no CI; relatório de clientes sem PQ |
 | **P2 — repouso (PII crítica)** | Envelope + KMS para e-mail, telefone, documento, currículo, dados de pagamento e IP do painel; índice cego para busca por e-mail | backfill verificado 100%; falha de decifra = 0; restore de backup testado |
 | **P3 — aplicação** | Envelope por requisição nos endpoints sensíveis (login/2FA, cadastro, pagamento, importação) | teste de AAD (não aceita corpo de outra rota/registro), anti-replay, e 0 regressão funcional |
@@ -175,6 +173,22 @@ teste de envelope inválido (falha explícita, nunca dado truncado), e restaura�
 
 Sequência obrigatória: **P0 → P1 → P2 → P3 → P4**. P5 depende de decisão de produto; P6 atravessa
 todas.
+
+### 9.1 P1 — medido em 2026-10-26
+
+A sonda `scripts/pq-tls-check.sh` (OpenSSL 3.5 em contêiner — o 3.0 das imagens não conhece o grupo e
+"passaria" sem provar nada) mostrou que o transporte já está heterogêneo:
+
+| Host | Negociação |
+|---|---|
+| `api.enois.ia.br` | **`X25519MLKEM768`** — pós-quântico híbrido ativo |
+| `enois.ia.br` | clássico |
+| `enois-qa.b7cloud.tech` | clássico |
+| `enois-api-qa.b7cloud.tech` | clássico |
+
+Parte da borda já negocia PQ e parte não. Fechar a diferença é configuração de borda
+(Cloudflare/terminador TLS), não código — bloqueio de infraestrutura registrado. O script roda antes e
+depois da mudança e sai com 1 quando algum host não negocia, para virar verificação de deploy.
 
 ## 10. Riscos e não-objetivos
 
@@ -189,53 +203,12 @@ todas.
 
 ## 11. Ações imediatas (antes de qualquer fase)
 
-1. **Purgar o dump do histórico do git** e rotacionar tudo que ele expunha. Situação em 2026-10-26
-   (ver §11.1): purgado do clone local; **nenhuma branch/tag do remoto o alcança**; os objetos ainda
-   são servidos pela API do GitHub e existem **26 forks** — falta o pedido ao suporte e a rotação.
-2. **Classificar os campos** (PII / sensível / público) — é o que define o que cifra primeiro.
-3. **Habilitar KMS** e criar as KEKs por ambiente (dev/qa/prd) com políticas separadas.
-4. **Medir**: p50/p95 por rota e volume por tabela, para saber o custo real antes de cifrar.
+1. **Classificar os campos** (PII / sensível / público) — é o que define o que cifra primeiro.
+2. **Habilitar KMS** e criar as KEKs por ambiente (dev/qa/prd) com políticas separadas.
+3. **Medir**: p50/p95 por rota e volume por tabela, para saber o custo real antes de cifrar.
+4. **Varredura de segredo no CI**: o build falha se aparecer material de chave no código.
 
-### 11.1 Purga do dump — o que foi feito e o que resta (2026-10-26)
-
-**O que estava exposto.** Dois blobs de ~3,5 MB (`dump_rede.sql`), commits de 2026-08-15 (`DUMP`,
-"foda-se a LGPD, toma o dump do banco de dados") e um commit de 2026-10-14 que o removeu do HEAD.
-O conteúdo inclui `users`, `user_credentials` (e-mail + `password_hash`), `auth_sessions` — com
-`token` e `refresh_token` **em texto puro**, como o schema era na época —, `audit_logs`, conversas,
-comentários, candidaturas e currículos. Repositório **público**, **26 forks**.
-
-**O que foi feito.**
-
-- Confirmado que **nenhuma branch nem tag, em nenhum dos dois remotes, alcança o dump** (verificado em
-  clone `--mirror` de `enois` e de `origin`). O `git clone` comum não traz o arquivo.
-- **Purgado do clone local**: a causa de o objeto continuar alcançável era `refs/stash` — um stash
-  antigo (WIP de feedback de candidatura, 2026-10-15) cuja ascendência carregava o commit do dump.
-  Antes de remover, o patch foi salvo **fora do git** (`~/Documentos/backups-git/`); em seguida
-  `refs/stash` foi apagado, reflogs expirados, `repack -a -d` e `prune --expire=now` rodados.
-  Verificação: os dois blobs não existem mais no clone e `git rev-list --all --objects` não lista
-  nenhum objeto `dump_rede`.
-
-**O que resta (não é código, é processo).**
-
-1. **Objetos em cache no GitHub.** A API pública ainda serve os dois blobs por SHA
-   (`api.github.com/repos/…/git/blobs/<sha>` responde 200), mesmo sem ref alcançá-los. Quem pode
-   removê-los é o **suporte do GitHub** (pedido de "purge of cached/unreachable objects"), com os
-   SHAs e a data. Enquanto isso, tratar o conteúdo como **vazado**.
-2. **26 forks** carregam a história inteira; alguns foram criados antes da remoção. O dono do
-   repositório não apaga fork de terceiro — é pedido ao suporte + contato com os donos (ou migração
-   para repositório novo, decisão do time).
-
-**Rotação obrigatória (o que o dump expunha).**
-
-- **Sessões**: revogar todas as sessões emitidas até a remoção (os `token`/`refresh_token` estavam em
-  claro no dump). Ação de uma linha no banco; desloga todo mundo uma vez.
-- **Senhas**: os `password_hash` permitem ataque offline. Forçar redefinição de senha dos usuários
-  existentes à época (ou exigir troca no próximo login) e comunicar.
-- **Segredos de infraestrutura**: rotacionar senha do banco, `REDE_SECURITY_ENCRYPTION_KEY` (atenção:
-  trocar a chave invalida segredos TOTP já cifrados — reenrolamento), credenciais de OAuth
-  (Google/LinkedIn/GitHub), SMTP, AWS e a API key do Portainer.
-- **LGPD**: incidente com dado pessoal exige avaliação de comunicação à ANPD e aos titulares —
-  decisão jurídica, não técnica.
+> Tratamento de qualquer incidente de dados segue fora deste documento e fora do repositório público.
 
 ## 12. Como medimos sucesso
 
