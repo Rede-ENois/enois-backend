@@ -7,11 +7,13 @@ import java.util.Optional;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Repository;
 
 import com.socialcoisa.rede.coin.application.port.out.CoinLedgerRepository;
 import com.socialcoisa.rede.coin.domain.CoinAccount;
 import com.socialcoisa.rede.coin.domain.CoinEntry;
+import com.socialcoisa.rede.coin.domain.CoinEntryPage;
 
 @Repository
 class CoinLedgerPersistenceAdapter implements CoinLedgerRepository {
@@ -73,6 +75,25 @@ class CoinLedgerPersistenceAdapter implements CoinLedgerRepository {
 	public List<CoinEntry> recentEntries(String accountId, int limit) {
 		return entries.findByAccountIdOrderByCreatedAtDesc(accountId, PageRequest.of(0, Math.max(1, limit)))
 			.stream().map(CoinEntryJpaEntity::toDomain).toList();
+	}
+
+	@Override
+	public CoinEntryPage entryPage(String accountId, int pageNumber, int size, Instant from, Instant to) {
+		var page = PageRequest.of(pageNumber, size);
+		Slice<CoinEntryJpaEntity> result;
+		if (from != null && to != null) {
+			result = entries.findByAccountIdAndCreatedAtGreaterThanEqualAndCreatedAtLessThanOrderByCreatedAtDescIdDesc(
+					accountId, from, to, page);
+		} else if (from != null) {
+			result = entries.findByAccountIdAndCreatedAtGreaterThanEqualOrderByCreatedAtDescIdDesc(
+					accountId, from, page);
+		} else if (to != null) {
+			result = entries.findByAccountIdAndCreatedAtLessThanOrderByCreatedAtDescIdDesc(
+					accountId, to, page);
+		} else {
+			result = entries.findByAccountIdOrderByCreatedAtDescIdDesc(accountId, page);
+		}
+		return new CoinEntryPage(result.stream().map(CoinEntryJpaEntity::toDomain).toList(), result.hasNext());
 	}
 
 	@Override

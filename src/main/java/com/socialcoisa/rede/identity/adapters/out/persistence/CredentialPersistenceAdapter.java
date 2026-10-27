@@ -35,7 +35,8 @@ class CredentialPersistenceAdapter implements CredentialRepository {
 	}
 
 	private StoredCredential toDomain(UserCredentialJpaEntity entity) {
-		return new StoredCredential(entity.userId(), entity.email(), entity.passwordHash(), entity.passwordUsable());
+		return new StoredCredential(entity.userId(), entity.email(), entity.passwordHash(), entity.passwordUsable(),
+			entity.resetNeeded());
 	}
 
 	@Override

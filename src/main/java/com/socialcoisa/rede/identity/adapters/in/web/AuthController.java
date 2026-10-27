@@ -266,6 +266,12 @@ class AuthController {
 		try {
 			LoginResult result = loginUseCase.login(new LoginCommand(body.email(), body.password(), ip));
 			throttle.limpaLogin(body.email(), ip);
+			if (result.requiresPasswordReset()) {
+				return ResponseEntity.status(200).contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+					.body(objectMapper.writeValueAsString(Map.of(
+					"passwordExpired", true,
+					"resetToken", result.resetToken())));
+			}
 			if (!result.requiresTwoFactor()) {
 				newDeviceNotifier.check(result.session().user().id(), deviceFingerprint);
 				// Tokens go out as HttpOnly cookies (AuthCookieAdvice), never in the body.

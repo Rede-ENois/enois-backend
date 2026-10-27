@@ -86,47 +86,30 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		this.readerPreferences = readerPreferences;
 	}
 
+	private static final long TRENDING_WINDOW_HOURS = 48;
+
 	@Override
 	@Transactional(readOnly = true)
 	public FeedPage getFeed(GetFeedQuery query) {
 		int limit = normalizeLimit(query.limit());
 		Instant before = query.before().orElse(DEFAULT_BEFORE);
-		FeedTab tab = query.tab() != null ? query.tab() : FeedTab.FOR_YOU;
+		FeedTab tab = normalizeTab(query.tab());
+
 		if (tab == FeedTab.FOR_YOU) {
 			return forYou(query, before, limit);
 		}
 		List<Post> posts = switch (tab) {
-			case FOR_YOU, FOLLOWING -> {
-				Set<UserId> authors = new LinkedHashSet<>();
-				authors.add(query.userId());
-				authors.addAll(connectionGraphRepository.findFriends(query.userId()));
-				yield postRepository.findActiveByAuthors(authors, before, limit);
-			}
+			case FOR_YOU -> throw new IllegalStateException();
 			case ALL -> {
+				// Filtro por tipo de post (opcional): se o frontend mandar types, filtra.
+				if (query.types() != null && !query.types().isEmpty()) {
+					yield postRepository.findActiveByTypes(query.types(), before, limit);
+				}
 				Collection<String> blocked = readerPreferences.blockedTopics(query.userId().value());
 				yield blocked.isEmpty() ? postRepository.findActiveAll(before, limit)
 					: postRepository.findActiveAllExcludingTopics(blocked, before, limit);
 			}
-			case DISCUSSIONS, RECENT -> {
-				List<String> postIds = commentRepository.findPostIdsByAuthor(query.userId().value());
-				yield postRepository.findByIds(postIds.stream().map(PostId::new).toList()).stream()
-					.filter(Post::isActive)
-					.filter(p -> p.createdAt().isBefore(before))
-					.limit(limit)
-					.toList();
-			}
-			case PROJECTS -> postRepository.findActiveByType(PostType.PROJECT, before, limit);
-			case NEWS -> postRepository.findActiveByType(PostType.NEWS, before, limit);
-			case TUTORIALS -> postRepository.findActiveByType(PostType.TUTORIAL, before, limit);
-			case OPPORTUNITIES -> postRepository.findActiveByType(PostType.OPPORTUNITY, before, limit);
-			case REVIEWS -> postRepository.findActiveByType(PostType.REVIEW, before, limit);
-			case FUN -> postRepository.findActiveByType(PostType.DIVERTIDO, before, limit);
 			case UNSEEN -> {
-				// "Ainda nao vi": o oposto de Discussoes (que sao os posts em que a pessoa
-				// comentou). Aqui entram os posts em que ela ainda nao REAGIU nem COMENTOU.
-				//
-				// A janela de candidatos e maior que a pagina: o filtro descarta varios, e sem
-				// isso a aba viria quase vazia para quem ja interagiu com muita coisa.
 				Collection<String> bloqueados = readerPreferences.blockedTopics(query.userId().value());
 				int janela = Math.max(limit * 5, 60);
 				List<Post> candidatos = bloqueados.isEmpty()
@@ -139,15 +122,39 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 						candidatos.stream().map(Post::id).toList())
 					.keySet().stream().map(PostId::value).collect(Collectors.toSet());
 				yield candidatos.stream()
-					// O proprio post da pessoa nao entra: ela ja sabe que escreveu.
 					.filter(p -> !p.authorId().value().equals(query.userId().value()))
 					.filter(p -> !comentados.contains(p.id().value()))
 					.filter(p -> !reagidos.contains(p.id().value()))
 					.limit(limit)
 					.toList();
 			}
+			case TRENDING -> {
+				Instant since = java.time.Clock.systemUTC().instant()
+					.minus(java.time.Duration.ofHours(TRENDING_WINDOW_HOURS));
+				yield postRepository.findTrending(since, limit);
+			}
+			// Legado: tabs por tipo que o frontend antigo ainda pode mandar.
+			case PROJECTS -> postRepository.findActiveByType(PostType.PROJECT, before, limit);
+			case NEWS -> postRepository.findActiveByType(PostType.NEWS, before, limit);
+			case TUTORIALS -> postRepository.findActiveByType(PostType.TUTORIAL, before, limit);
+			case OPPORTUNITIES -> postRepository.findActiveByType(PostType.OPPORTUNITY, before, limit);
+			case REVIEWS -> postRepository.findActiveByType(PostType.REVIEW, before, limit);
+			case FUN -> postRepository.findActiveByType(PostType.DIVERTIDO, before, limit);
+			// Legado: FOLLOWING e DISCUSSIONS mapeados pro FOR_YOU.
+			case FOLLOWING, DISCUSSIONS, RECENT -> {
+				Set<UserId> authors = new LinkedHashSet<>();
+				authors.add(query.userId());
+				authors.addAll(connectionGraphRepository.findFriends(query.userId()));
+				yield postRepository.findActiveByAuthors(authors, before, limit);
+			}
 		};
 		return page(enrich(posts, query.userId()), posts, limit);
+	}
+
+	/** Mapeia tabs legados pros novos. */
+	private static FeedTab normalizeTab(FeedTab tab) {
+		if (tab == null) return FeedTab.FOR_YOU;
+		return tab;
 	}
 
 	@Override
@@ -355,8 +362,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 
 	private boolean matchesTab(PostView post, FeedTab tab) {
 		return switch (tab) {
-			case FOR_YOU, FOLLOWING, ALL, UNSEEN -> true;
-			case DISCUSSIONS, RECENT -> post.type() == PostType.QUESTION;
+			case FOR_YOU, FOLLOWING, ALL, UNSEEN, TRENDING, DISCUSSIONS, RECENT -> true;
 			case PROJECTS -> post.type() == PostType.PROJECT;
 			case NEWS -> post.type() == PostType.NEWS;
 			case TUTORIALS -> post.type() == PostType.TUTORIAL;

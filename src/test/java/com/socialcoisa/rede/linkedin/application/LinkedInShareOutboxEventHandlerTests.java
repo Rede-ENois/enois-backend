@@ -196,5 +196,15 @@ class LinkedInShareOutboxEventHandlerTests {
 		public List<Post> findActiveByType(PostType type, Instant before, int limit) {
 			throw new UnsupportedOperationException();
 		}
+
+		@Override
+		public List<Post> findTrending(Instant since, int limit) {
+			return List.of();
+		}
+
+		@Override
+		public List<Post> findActiveByTypes(Set<PostType> types, Instant before, int limit) {
+			return List.of();
+		}
 	}
 }

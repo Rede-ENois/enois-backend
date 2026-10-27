@@ -151,5 +151,23 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 			ORDER BY p.createdAt DESC""")
 	List<PostJpaEntity> findCorporateByAuthor(@Param("authorId") String authorId, @Param("status") PostStatus status,
 			@Param("corporate") AuthorIdentity corporate, @Param("before") Instant before, Pageable pageable);
+	/** Em alta: mais reagidos numa janela de tempo, ordenados por reações desc. */
+	@Query("""
+			SELECT p FROM PostJpaEntity p
+			WHERE p.status = :status AND p.type NOT IN :excluded AND p.channelId IS NULL
+			  AND p.createdAt >= :since
+			ORDER BY p.reactions DESC, p.createdAt DESC""")
+	List<PostJpaEntity> findTrending(@Param("status") PostStatus status,
+			@Param("excluded") Collection<PostType> excluded, @Param("since") Instant since, Pageable pageable);
+
+	/** Feed "Tudo" filtrado por tipos de post. */
+	@Query("""
+			SELECT p FROM PostJpaEntity p
+			WHERE p.status = :status AND p.type IN :types AND p.channelId IS NULL
+			  AND p.createdAt < :before
+			ORDER BY p.createdAt DESC""")
+	List<PostJpaEntity> findByTypes(@Param("status") PostStatus status,
+			@Param("types") Collection<PostType> types, @Param("before") Instant before, Pageable pageable);
+
 	/** Todos os posts do autor (sem filtro de status) — ban cleanup, PR #37. */
 }

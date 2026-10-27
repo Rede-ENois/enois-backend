@@ -1,5 +1,9 @@
 package com.socialcoisa.rede.coin.adapters.in.web;
 
+import java.time.DateTimeException;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 
@@ -199,6 +203,40 @@ class CoinController {
 			"cotacaoBrlCents", wallet.cotacaoBrlCents(),
 			"chave", wallet.chave(),
 			"entries", wallet.entries().stream().map(EntryView::from).toList());
+	}
+
+	@GetMapping("/carteira/extrato")
+	Map<String, Object> extract(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(defaultValue = "0") int page,
+			@RequestParam(defaultValue = "20") int size,
+			@RequestParam(required = false) String from,
+			@RequestParam(required = false) String to) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		if (page < 0 || page > 10_000 || size < 1 || size > 100) {
+			throw new ApiException(400, "INVALID_EXTRACT_PAGE", "Informe uma página e um tamanho válidos.");
+		}
+		Instant start = extractDate(from, false);
+		Instant end = extractDate(to, true);
+		if (start != null && end != null && !start.isBefore(end)) {
+			throw new ApiException(400, "INVALID_EXTRACT_DATE", "Informe um intervalo de datas válido.");
+		}
+		var result = coins.extract(user.id().value(), page, size, start, end);
+		return Map.of("entries", result.entries().stream().map(EntryView::from).toList(),
+				"page", page, "size", size, "hasNext", result.hasNext());
+	}
+
+	private Instant extractDate(String value, boolean endOfDay) {
+		if (value == null) return null;
+		try {
+			if (!value.matches("[0-9]{4}-[0-9]{2}-[0-9]{2}")) throw new DateTimeException("Formato inválido");
+			LocalDate date = LocalDate.parse(value);
+			if (date.getYear() < 1) throw new DateTimeException("Ano inválido");
+			// O período usa o mesmo dia de calendário exibido pelo frontend.
+			return (endOfDay ? date.plusDays(1) : date).atStartOfDay(ZoneId.of("America/Sao_Paulo")).toInstant();
+		} catch (DateTimeException invalid) {
+			throw new ApiException(400, "INVALID_EXTRACT_DATE", "Informe um intervalo de datas válido.");
+		}
 	}
 
 	@PostMapping("/carteira/transferencias")

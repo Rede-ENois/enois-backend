@@ -69,10 +69,17 @@ public class PostRateLimitFilter extends OncePerRequestFilter {
 	@Override
 	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
 			throws ServletException, IOException {
+		// Logado: teto pelo hash da sessão (120/min). Anônimo: teto pelo IP (300/min).
+		// Nunca os dois juntos — usuário logado não herda rate limit de outra pessoa no mesmo IP.
 		String token = request.getHeader("X-Session-Token");
-		boolean userAllowed = !StringUtils.hasText(token)
-			|| tryAcquire("u:" + Hashes.sha256Hex(token.trim()), userLimit);
-		if (!userAllowed) {
+		boolean allowed;
+		if (StringUtils.hasText(token)) {
+			allowed = tryAcquire("u:" + Hashes.sha256Hex(token.trim()), userLimit);
+		}
+		else {
+			allowed = tryAcquire("i:" + ipResolver.resolve(request), ipLimit);
+		}
+		if (!allowed) {
 			LOG.warn("Rate limit de POST atingido");
 			RateLimitResponses.send(request, response, 60, "RATE_LIMITED",
 				"Muitas acoes em pouco tempo. Espere um minuto e tente de novo.");

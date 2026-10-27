@@ -30,6 +30,9 @@ class UserCredentialJpaEntity {
 	@Column(name = "password_usable", nullable = false)
 	private boolean passwordUsable = true;
 
+	@Column(name = "reset_needed", nullable = false)
+	private boolean resetNeeded = false;
+
 	protected UserCredentialJpaEntity() {
 	}
 
@@ -56,5 +59,9 @@ class UserCredentialJpaEntity {
 
 	boolean passwordUsable() {
 		return passwordUsable;
+	}
+
+	boolean resetNeeded() {
+		return resetNeeded;
 	}
 }

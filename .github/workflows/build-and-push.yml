@@ -190,10 +190,17 @@ jobs:
           LINKEDIN_REDIRECT_URI: ${{ vars.LINKEDIN_REDIRECT_URI_QA }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          # GitHub e usado apenas para VINCULAR a conta aos selos de contribuicao.
-          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
-          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
-          GITHUB_CONTRIBUTIONS_TOKEN: ${{ secrets.GITHUB_CONTRIBUTIONS_TOKEN }}
+          # GitHub e usado apenas para VINCULAR a conta aos selos de contribuicao. A QA tem
+          # credenciais proprias (prefixo QA_): assim o OAuth App de teste nao vaza para o
+          # deploy de producao, que usa os nomes sem prefixo. Sem eles o vínculo responde
+          # OAUTH_NOT_CONFIGURED e o sync usa a API publica (limite baixo).
+          GITHUB_CLIENT_ID: ${{ secrets.QA_GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.QA_GITHUB_CLIENT_SECRET }}
+          GITHUB_CONTRIBUTIONS_TOKEN: ${{ secrets.QA_GITHUB_CONTRIBUTIONS_TOKEN }}
+          # Na QA, issue com a label `bug` (aplicada por mantenedor) ja conta para o selo de
+          # issues; em producao o default e vazio (so revisao humana). O worker segue desligado:
+          # o backfill de teste e disparado pelo painel de moderacao.
+          GITHUB_QUALIFIED_ISSUE_LABELS: bug
           # panic:yes => somente leitura; vazio/ausente => online (o botão do painel decide).
           # ImageKit aposentado, mas o purge/delete de midia antiga precisa funcionar ate a migracao.
           IMAGEKIT_URL_ENDPOINT: ${{ secrets.IMAGEKIT_URL_ENDPOINT }}
@@ -274,6 +281,7 @@ jobs:
               "GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}",
               "GITHUB_REDIRECT_URI=https://enois-api-qa.b7cloud.tech/api/auth/oauth/github/callback",
               "GITHUB_CONTRIBUTIONS_TOKEN=${GITHUB_CONTRIBUTIONS_TOKEN}",
+              "GITHUB_QUALIFIED_ISSUE_LABELS=${GITHUB_QUALIFIED_ISSUE_LABELS}",
               "GITHUB_SYNC_ENABLED=false",
               "IMAGEKIT_URL_ENDPOINT=${IMAGEKIT_URL_ENDPOINT}",
               "IMAGEKIT_PUBLIC_KEY=${IMAGEKIT_PUBLIC_KEY}",
@@ -412,9 +420,11 @@ jobs:
           # prod gravaria span de TODA request no Tempo sem necessidade. Ajustar depois com dado
           # real de volume se 20% gerar ruido/custo de storage demais ou pouca amostra.
           TRACING_SAMPLING_PROBABILITY: ${{ vars.TRACING_SAMPLING_PROBABILITY }}
-          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
-          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
-          GITHUB_CONTRIBUTIONS_TOKEN: ${{ secrets.GITHUB_CONTRIBUTIONS_TOKEN }}
+          # O GitHub recusa secrets cujo NOME comeca com GITHUB_ (HTTP 422), por isso o nome do
+          # secret e OAUTH_GITHUB_*; a variavel de ambiente que o app le continua GITHUB_*.
+          GITHUB_CLIENT_ID: ${{ secrets.OAUTH_GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_CLIENT_SECRET }}
+          GITHUB_CONTRIBUTIONS_TOKEN: ${{ secrets.OAUTH_GITHUB_CONTRIBUTIONS_TOKEN }}
           # ImageKit aposentado (storage no S3), mas o purge/delete de midia antiga ainda
           # conversa com ele ate a migracao de objetos terminar.
           IMAGEKIT_URL_ENDPOINT: ${{ secrets.IMAGEKIT_URL_ENDPOINT }}

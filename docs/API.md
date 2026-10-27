@@ -447,3 +447,24 @@ autenticação, sem transformar a requisição em leitura anônima.
 |---|---|
 | `/api/auth/*` | 10 requisições/minuto |
 | `/api/search*` | 30 requisições/minuto |
+
+## Extrato da carteira
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/carteira/extrato?page=0&size=20` | Lançamentos da própria carteira, mais recentes primeiro | Sim |
+
+`page` começa em zero e aceita até 10.000; `size` aceita de 1 a 100 (padrão 20).
+Valores fora dessas faixas retornam `400`, código `INVALID_EXTRACT_PAGE`.
+Os parâmetros opcionais `from` e `to` usam `YYYY-MM-DD`, podem ser enviados separadamente
+e incluem o dia inteiro no fuso `America/Sao_Paulo`, o mesmo usado nas datas do frontend.
+Datas inválidas e intervalos invertidos retornam `400`, código `INVALID_EXTRACT_DATE`.
+
+A resposta contém `entries`, `page`, `size` e `hasNext`. Os campos de cada lançamento
+são os mesmos do extrato de `/carteira`. A consulta filtra e pagina no banco,
+ordenando por `created_at DESC, id DESC`; `hasNext` considera um lançamento adicional
+sem alterar o deslocamento entre páginas. Uma última página cheia retorna `hasNext: false`.
+
+Este endpoint só lê os lançamentos existentes: não cria conta nem credita presença ou
+distribuição inicial. O contrato de `GET /carteira` permanece igual. Sem migração:
+as colunas e o índice por `account_id, created_at` já existem no ledger.

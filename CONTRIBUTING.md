@@ -7,6 +7,22 @@ fica no repositório `enois-frontend` — o contrato entre os dois é a API, e m
 Antes de começar: leia o [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md). Falha de segurança **não** vira
 issue — o canal está no [`SECURITY.md`](SECURITY.md).
 
+## Selos de contribuição
+
+PRs integrados e issues qualificadas nos repositórios oficiais da organização
+[`Rede-ENois`](https://github.com/Rede-ENois) geram selos de reconhecimento por faixa: **Ajudante,
+Contribuinte sério, Hardcore, Tryhard, Get a life** (código) e **Beta tester, Exigente, Esforço
+máximo, Plus ultra, Genkidama** (issues). O nível é derivado da contagem verificada no backend —
+nunca de um contador enviado pelo cliente. PR revertido deixa de contar; issue só conta quando tem
+label de qualificação ou é validada por um mantenedor.
+
+Critérios públicos e o fluxo completo estão em [`docs/CONTRIBUTION_SEALS.md`](docs/CONTRIBUTION_SEALS.md)
+e em <https://enois.ia.br/selos>. O selo reconhece contribuição; não é verificação de identidade
+civil, vínculo empregatício, cargo administrativo, privilégio de moderação ou recompensa financeira.
+
+Para vincular o GitHub, entre na conta do Énóis e use **Segurança → GitHub para selos**. PRs
+triviais, fragmentados artificialmente ou revertidos por problemas introduzidos não contam.
+
 ## Verificando o ambiente local
 
 Antes de iniciar o backend, execute o diagnóstico de pré-requisitos:

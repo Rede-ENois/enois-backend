@@ -125,6 +125,21 @@ class PostPersistenceAdapter implements PostRepository, SocialPostCountReader {
 	}
 
 	@Override
+	public List<Post> findTrending(Instant since, int limit) {
+		return repository.findTrending(PostStatus.ACTIVE, List.of(PostType.BLOG, PostType.BUSINESS), since,
+			PageRequest.of(0, limit)).stream()
+			.map(PostJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public List<Post> findActiveByTypes(Set<PostType> types, Instant before, int limit) {
+		return repository.findByTypes(PostStatus.ACTIVE, types, before, PageRequest.of(0, limit)).stream()
+			.map(PostJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
 	public List<Post> findActiveAllExcludingTopics(Collection<String> blockedTopics, Instant before, int limit) {
 		return repository.findFeedExcludingAndBlocking(PostStatus.ACTIVE, List.of(PostType.BLOG, PostType.BUSINESS),
 			blockedTopics == null || blockedTopics.isEmpty() ? List.of("") : blockedTopics, before,

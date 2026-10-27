@@ -21,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.socialcoisa.rede.coin.application.port.out.CoinLedgerRepository;
 import com.socialcoisa.rede.coin.domain.CoinAccount;
 import com.socialcoisa.rede.coin.domain.CoinEntry;
+import com.socialcoisa.rede.coin.domain.CoinEntryPage;
 import com.socialcoisa.rede.shared.security.ActionThrottle;
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -479,5 +480,12 @@ public class CoinService {
 	@Transactional(readOnly = true)
 	public List<CoinEntry> entries(String accountId, int limit) {
 		return ledger.recentEntries(accountId, limit);
+	}
+
+	@Transactional(readOnly = true)
+	public CoinEntryPage extract(String accountId, int page, int size, Instant from, Instant to) {
+		var result = ledger.entryPage(accountId, page, size, from, to);
+		return new CoinEntryPage(result.entries().stream()
+				.map(e -> e.withMessage(decifrar(e.message()))).toList(), result.hasNext());
 	}
 }

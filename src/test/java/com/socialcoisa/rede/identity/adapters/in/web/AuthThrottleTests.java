@@ -49,10 +49,22 @@ class AuthThrottleTests {
 				.andExpect(status().isUnauthorized());
 		}
 
-		// A 6ª sofre atraso progressivo, mas a senha CERTA continua entrando (E-13: ninguém
-		// derruba a conta da vítima com 5 senhas erradas).
+		// A 6ª tentativa da mesma rede que errou 5 vezes é recusada com 429 (libera a thread de imediato).
 		mockMvc.perform(post("/auth/login")
 				.header("Idempotency-Key", "thr-login-lock")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+					"email", "throttle_vitima@test.com", "password", "Test1234!"))))
+			.andExpect(status().isTooManyRequests())
+			.andExpect(jsonPath("$.code").value("LOGIN_THROTTLED"));
+
+		// Mas a vítima de outra rede limpa continua entrando normalmente (ninguém derruba a conta da vítima).
+		mockMvc.perform(post("/auth/login")
+				.with(req -> {
+					req.setRemoteAddr("203.0.113.7");
+					return req;
+				})
+				.header("Idempotency-Key", "thr-login-owner")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of(
 					"email", "throttle_vitima@test.com", "password", "Test1234!"))))

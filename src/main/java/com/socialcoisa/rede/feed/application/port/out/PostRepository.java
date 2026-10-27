@@ -58,6 +58,12 @@ public interface PostRepository {
 	List<Post> findActiveByAuthorsExcludingTopics(Set<UserId> authorIds, Collection<String> blockedTopics,
 			Instant before, int limit);
 
+	/** Em alta: mais reagidos nas últimas windowHours, ordenados por reações desc. */
+	List<Post> findTrending(Instant since, int limit);
+
+	/** Feed "Tudo" filtrado por tipos de post. */
+	List<Post> findActiveByTypes(Set<PostType> types, Instant before, int limit);
+
 	/** Feed corporativo: só o que a identidade profissional assinou. */
 	List<Post> findActiveCorporate(Instant before, int limit);
 

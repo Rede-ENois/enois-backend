@@ -21,12 +21,12 @@ class AuthThrottleKeyTests {
 		throttle.exigeLoginPermitido("victim@test.com", "203.0.113.7");
 		long otherIpMillis = (System.nanoTime() - start) / 1_000_000;
 
-		start = System.nanoTime();
-		throttle.exigeLoginPermitido("victim@test.com", "198.51.100.1");
-		long sameIpMillis = (System.nanoTime() - start) / 1_000_000;
-
 		assertThat(otherIpMillis).isLessThan(100);
-		assertThat(sameIpMillis).isGreaterThanOrEqualTo(200);
+		assertThatThrownBy(() -> throttle.exigeLoginPermitido("victim@test.com", "198.51.100.1"))
+			.isInstanceOfSatisfying(ApiException.class, error -> {
+				assertThat(error.code()).isEqualTo("LOGIN_THROTTLED");
+				assertThat(error.status()).isEqualTo(429);
+			});
 	}
 
 	@Test

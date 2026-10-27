@@ -2,9 +2,11 @@ package com.socialcoisa.rede.coin.application.port.out;
 
 import java.util.List;
 import java.util.Optional;
+import java.time.Instant;
 
 import com.socialcoisa.rede.coin.domain.CoinAccount;
 import com.socialcoisa.rede.coin.domain.CoinEntry;
+import com.socialcoisa.rede.coin.domain.CoinEntryPage;
 
 public interface CoinLedgerRepository {
 
@@ -22,6 +24,8 @@ public interface CoinLedgerRepository {
 	boolean existsByKindAndRefId(com.socialcoisa.rede.coin.domain.CoinEntry.Kind kind, String refId);
 
 	List<CoinEntry> recentEntries(String accountId, int limit);
+
+	CoinEntryPage entryPage(String accountId, int page, int size, Instant from, Instant to);
 
 	/** Total transferido por uma conta num dia (para o teto de contas novas). */
 	long transferredOn(String accountId, java.time.Instant startOfDay, java.time.Instant endOfDay);

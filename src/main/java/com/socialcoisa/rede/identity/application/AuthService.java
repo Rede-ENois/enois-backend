@@ -213,6 +213,16 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 			LOG.warn("auth_login_failed reason=invalid_password");
 			throw new ApiException(401, "INVALID_CREDENTIALS", "Email ou senha invalidos.");
 		}
+		if (credential.resetNeeded()) {
+			LOG.info("auth_login_reset_needed userId={}", credential.userId());
+			String rawToken = newResetToken();
+			Instant now = clock.instant();
+			passwordResetTokenRepository.deleteByUserId(credential.userId());
+			passwordResetTokenRepository.save(
+				com.socialcoisa.rede.identity.domain.PasswordResetToken.create(
+					hashToken(rawToken), credential.userId(), now.plus(RESET_TOKEN_TTL), now));
+			return LoginResult.passwordExpired(rawToken);
+		}
 		UserProfile profile = userProfileRepository.findById(credential.userId())
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
 		requireVerifiedIdentity(profile);

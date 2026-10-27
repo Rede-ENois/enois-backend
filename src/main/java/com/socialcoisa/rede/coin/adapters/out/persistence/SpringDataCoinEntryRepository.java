@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -18,6 +19,17 @@ interface SpringDataCoinEntryRepository extends JpaRepository<CoinEntryJpaEntity
 	Optional<CoinEntryJpaEntity> findByAccountIdAndIdempotencyKeyOrderByIdDesc(String accountId, String idempotencyKey);
 
 	List<CoinEntryJpaEntity> findByAccountIdOrderByCreatedAtDesc(String accountId, Pageable pageable);
+
+	Slice<CoinEntryJpaEntity> findByAccountIdOrderByCreatedAtDescIdDesc(String accountId, Pageable pageable);
+
+	Slice<CoinEntryJpaEntity> findByAccountIdAndCreatedAtGreaterThanEqualAndCreatedAtLessThanOrderByCreatedAtDescIdDesc(
+			String accountId, Instant from, Instant to, Pageable pageable);
+
+	Slice<CoinEntryJpaEntity> findByAccountIdAndCreatedAtGreaterThanEqualOrderByCreatedAtDescIdDesc(
+			String accountId, Instant from, Pageable pageable);
+
+	Slice<CoinEntryJpaEntity> findByAccountIdAndCreatedAtLessThanOrderByCreatedAtDescIdDesc(
+			String accountId, Instant to, Pageable pageable);
 
 	@Query("SELECT COALESCE(SUM(-e.amount), 0) FROM CoinEntryJpaEntity e " +
 		"WHERE e.accountId = :accountId AND e.amount < 0 AND e.createdAt >= :start AND e.createdAt < :end")

@@ -9,6 +9,7 @@ public class OAuthProperties {
 	private GoogleConfig google = new GoogleConfig();
 	private AppleConfig apple = new AppleConfig();
 	private LinkedInConfig linkedin = new LinkedInConfig();
+	private GitHubConfig github = new GitHubConfig();
 	private String frontendRedirectUrl = "";
 
 	public GoogleConfig getGoogle() { return google; }
@@ -20,8 +21,15 @@ public class OAuthProperties {
 	public LinkedInConfig getLinkedin() { return linkedin; }
 	public void setLinkedin(LinkedInConfig linkedin) { this.linkedin = linkedin; }
 
+	public GitHubConfig getGithub() { return github; }
+	public void setGithub(GitHubConfig github) { this.github = github; }
+
 	public boolean isLinkedinConfigured() {
 		return StringUtils.hasText(linkedin.clientId);
+	}
+
+	public boolean isGithubConfigured() {
+		return StringUtils.hasText(github.clientId);
 	}
 
 	public String getFrontendRedirectUrl() { return frontendRedirectUrl; }
@@ -62,6 +70,21 @@ public class OAuthProperties {
 	}
 
 	public static class LinkedInConfig {
+		private String clientId = "";
+		private String clientSecret = "";
+		private String redirectUri = "";
+
+		public String getClientId() { return clientId; }
+		public void setClientId(String clientId) { this.clientId = clientId; }
+
+		public String getClientSecret() { return clientSecret; }
+		public void setClientSecret(String clientSecret) { this.clientSecret = clientSecret; }
+
+		public String getRedirectUri() { return clean(redirectUri); }
+		public void setRedirectUri(String redirectUri) { this.redirectUri = redirectUri; }
+	}
+
+	public static class GitHubConfig {
 		private String clientId = "";
 		private String clientSecret = "";
 		private String redirectUri = "";
