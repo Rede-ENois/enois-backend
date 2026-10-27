@@ -9,6 +9,7 @@ import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import com.socialcoisa.rede.shared.web.TrustedOriginCors;
@@ -60,7 +61,17 @@ public class CryptoChannelFilter extends OncePerRequestFilter {
 			throws ServletException, IOException {
 		String path = applicationPath(request);
 		if (!isProtected(path, request.getMethod())) {
-			chain.doFilter(request, response);
+			// Rota fora da lista, mas o cliente pediu canal: decifra mesmo assim.
+			//
+			// Sem isso a lista não seria um interruptor seguro. O front novo continua mandando
+			// envelope; desmarcar a rota para "desligar" faria o ciphertext chegar cru ao controller
+			// e falhar. Aqui a rota desmarcada aceita os dois lados: envelope é aberto, corpo em
+			// claro segue como sempre. Não enfraquece nada — rota desmarcada não tem exigência.
+			if (isBodyless(request) || !StringUtils.hasText(request.getHeader(SESSION_HEADER))) {
+				chain.doFilter(request, response);
+				return;
+			}
+			decryptAndContinue(request, response, chain, path);
 			return;
 		}
 		if (isBodyless(request)) {
@@ -68,7 +79,11 @@ public class CryptoChannelFilter extends OncePerRequestFilter {
 			chain.doFilter(request, response);
 			return;
 		}
+		decryptAndContinue(request, response, chain, path);
+	}
 
+	private void decryptAndContinue(HttpServletRequest request, HttpServletResponse response, FilterChain chain,
+			String path) throws ServletException, IOException {
 		String sessionId = request.getHeader(SESSION_HEADER);
 		java.util.Optional<CryptoSession> session = registry.find(sessionId);
 		if (session.isEmpty()) {

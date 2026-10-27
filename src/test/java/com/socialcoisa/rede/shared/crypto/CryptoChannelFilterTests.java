@@ -85,6 +85,44 @@ class CryptoChannelFilterTests {
 	}
 
 	@Test
+	void rotaNaoMarcadaAbreEnvelopeDoClienteNovo() throws Exception {
+		// Desmarcar a rota tem de funcionar como interruptor: o front que já manda envelope
+		// continua atendido em vez de entregar ciphertext ao controller.
+		CryptoChannelFilter filter = new CryptoChannelFilter(registry, "");
+		Canal canal = abrirCanal();
+		String ts = String.valueOf(Instant.now().getEpochSecond());
+		String nonce = "nonce-sem-flag";
+		String aad = "REQ POST " + ROTA + " " + ts + " " + nonce;
+
+		MockHttpServletRequest request = request(ROTA, "POST", envelope(canal, aad));
+		request.addHeader(CryptoChannelFilter.SESSION_HEADER, canal.sessionId());
+		request.addHeader(CryptoChannelFilter.TIMESTAMP_HEADER, ts);
+		request.addHeader(CryptoChannelFilter.NONCE_HEADER, nonce);
+		AtomicReference<String> viu = new AtomicReference<>();
+
+		MockHttpServletResponse response = new MockHttpServletResponse();
+		filter.doFilter(request, response, chainCapture(viu));
+
+		assertThat(viu.get()).isEqualTo(CORPO);
+		assertThat(response.getStatus()).isEqualTo(200);
+	}
+
+	@Test
+	void rotaNaoMarcadaComSessaoInvalidaRecusaEmVezDeServirCiphertext() throws Exception {
+		CryptoChannelFilter filter = new CryptoChannelFilter(registry, "");
+		MockHttpServletRequest request = request(ROTA, "POST", "v1:kid:qualquer-coisa");
+		request.addHeader(CryptoChannelFilter.SESSION_HEADER, "sessao-que-nao-existe");
+
+		AtomicReference<String> viu = new AtomicReference<>();
+		MockHttpServletResponse response = new MockHttpServletResponse();
+		filter.doFilter(request, response, chainCapture(viu));
+
+		assertThat(viu.get()).isNull();
+		assertThat(response.getStatus()).isEqualTo(409);
+		assertThat(response.getContentAsString()).contains("CRYPTO_CHANNEL_REQUIRED");
+	}
+
+	@Test
 	void rotaMarcadaDecifraOCorpoParaOController() throws Exception {
 		CryptoChannelFilter filter = new CryptoChannelFilter(registry, ROTA);
 		Canal canal = abrirCanal();
