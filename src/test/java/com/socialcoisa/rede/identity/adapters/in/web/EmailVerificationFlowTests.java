@@ -136,13 +136,10 @@ class EmailVerificationFlowTests {
 		signup(email);
 		assertThat(sentTokens).hasSize(1);
 
-		// O cadastro ja consumiu 1 dos 3 reenvios da janela.
+		// O status e igual com conta e sem conta; o teto por conta e silencioso de proposito, para o
+		// codigo de resposta nao denunciar quais enderecos estao cadastrados.
 		mockMvc.perform(resend(email)).andExpect(status().isAccepted());
 		mockMvc.perform(resend(email)).andExpect(status().isAccepted());
-		mockMvc.perform(resend(email)).andExpect(status().isTooManyRequests())
-			.andExpect(jsonPath("$.code").value("TOO_MANY_REQUESTS"));
-
-		// E-mail sem conta: resposta neutra, sem dizer que nao existe.
 		mockMvc.perform(resend("nao-existe-" + System.nanoTime() + "@example.com"))
 			.andExpect(status().isAccepted());
 	}

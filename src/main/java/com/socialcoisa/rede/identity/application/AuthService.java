@@ -331,6 +331,15 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 			throw new ApiException(400, "INVALID_EMAIL", "Email invalido.");
 		}
 		String normalizedEmail = email.trim().toLowerCase(Locale.ROOT);
+		// Teto UNIFORME, aplicado antes de qualquer consulta e chaveado pelo e-mail (nao pela conta):
+		// o mesmo 429 para endereco que existe e que nao existe. O teto por conta logo abaixo e
+		// silencioso de proposito — quando ele respondia 429, quem nao tinha conta via 202 para
+		// sempre e quem tinha via 429, o que denunciava o cadastro sem precisar de senha.
+		if (!rateLimiter.tryAcquire(com.socialcoisa.rede.shared.security.IpRateLimiter.EMAIL,
+				"resend:" + hashToken(normalizedEmail))) {
+			throw new ApiException(429, "TOO_MANY_REQUESTS",
+				"Limite de reenvios atingido. Tente novamente mais tarde.");
+		}
 		// Resposta neutra: nao confirmamos se o e-mail existe (evita enumeracao de contas).
 		userProfileRepository.findByEmail(normalizedEmail)
 			.filter(profile -> !profile.emailVerified())
@@ -338,8 +347,8 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 				Instant now = clock.instant();
 				if (emailVerificationTokenRepository.countByUserIdSince(profile.id(),
 						now.minus(VERIFICATION_RESEND_WINDOW)) >= VERIFICATION_RESEND_LIMIT) {
-					throw new ApiException(429, "TOO_MANY_REQUESTS",
-						"Limite de reenvios atingido. Tente novamente mais tarde.");
+					// Silencioso: o teto visivel ja foi aplicado acima, igual para todos.
+					return;
 				}
 				issueVerificationToken(profile, now);
 			});
@@ -349,8 +358,7 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 		pendingSignups.findByEmail(normalizedEmail).ifPresent(pending -> {
 			Instant now = clock.instant();
 			if (pending.sendsWithin(now, VERIFICATION_RESEND_WINDOW) >= VERIFICATION_RESEND_LIMIT) {
-				throw new ApiException(429, "TOO_MANY_REQUESTS",
-					"Limite de reenvios atingido. Tente novamente mais tarde.");
+				return;
 			}
 			String rawToken = newVerificationToken();
 			pendingSignups.save(pending.resent(hashToken(rawToken), now.plus(VERIFICATION_TOKEN_TTL), now));
