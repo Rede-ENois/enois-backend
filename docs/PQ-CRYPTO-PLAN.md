@@ -229,3 +229,37 @@ depois da mudança e sai com 1 quando algum host não negocia, para virar verifi
 - Tempo de revogação de cliente de API < 1 min; tempo de rotação de KEK sem downtime.
 - Backfill sempre com contador de progresso e verificação de igualdade — nunca um "deve ter dado
   certo".
+
+## 13. Escopo essencial (decisão de 2026-10-26)
+
+Cifrar **tudo** não entra: em leitura de alto volume (feed, listagens, busca, ranking) a cifra
+quebraria índice e ordenação e apareceria como lentidão. O alvo é **tráfego de dado do usuário e o que
+é essencial**.
+
+### 13.1 O que entra no canal (corpo cifrado)
+
+| Grupo | Rotas | Por quê |
+|---|---|---|
+| Credenciais e sessão | `/auth/login`, `/auth/signup`, `/auth/2fa/{verify,resend}`, `/auth/email/{verify,resend}`, redefinição de senha, `/auth/refresh` | senha e código não podem aparecer em proxy/log |
+| Identidade e documentos | `/identity/verification`, `/age/parental/*` | CPF/RG e dados do responsável |
+| Perfil e PII | `/me/*` (e-mail, telefone, nascimento, currículo, links) | dado pessoal do usuário |
+| Candidatura e vaga | `/jobs/{id}/applications`, `/jobs`, `/jobs/external` | currículo, respostas pessoais, contato |
+| Suporte | `/support/requests` | o formulário de acesso à API pede nome, RG, CPF, e-mail e telefone |
+| Mensagens | `/conversations/direct`, `/conversations/{id}/messages` | conteúdo privado |
+| Dinheiro | `/marketplace/{listingId}/buy`, `/purchases/*`, `/coin/cotacao` | pagamento/carteira |
+| Chaves de integração | `/developers/origins` | origem/chave de terceiro |
+
+### 13.2 O que fica de fora (de propósito)
+
+Conteúdo público e de alto volume — posts, comentários, reações, listagens, vitrine, ranking, busca.
+Esses continuam protegidos pelo TLS e nada mais; cifrá-los custaria latência e quebraria consulta sem
+proteger "dado do usuário" no sentido que importa.
+
+### 13.3 Ordem de ligação (sem quebrar quem já está na rua)
+
+1. **Front primeiro**: handshake + envelope nas rotas do 13.1, com re-handshake no vencimento.
+2. **Janela de transição por rota**: o servidor aceita corpo em claro e registra a ocorrência (métrica
+   de "legado"), para medir quanto tráfego antigo ainda existe.
+3. **Fechar**: rota marcada em `rede.crypto.protected-paths` (fail-closed) só quando o "legado" zerar.
+4. **Prova de latência**: p50/p95 da rota antes e depois de ligar — se piorar de forma visível, a rota
+   sai do escopo.
