@@ -334,3 +334,37 @@ cifra.
    varredura/IA. É o maior ganho de exposição por menor custo.
 2. **Cifra em repouso das DMs** (com KMS): protege dump e backup, ainda legível por nós.
 3. **E2E de verdade** (P5, semanas): o desenho de 14.2, incluindo o fluxo de denúncia e o backup.
+
+## 15. Decisões de 2026-10-27 (registradas)
+
+### 15.1 Chave-mestra: **cofre próprio** (opção B)
+
+Cofre gerenciado na própria infraestrutura (OpenBao/Vault com o motor *Transit*) rodando no Portainer,
+em vez de KMS de nuvem e em vez de chave em variável de ambiente.
+
+- **O que compra**: o banco, os backups e os dumps deixam de conter material legível; a chave-mestra não
+  fica no ambiente do app; rotação e auditoria de uso passam a existir.
+- **O que NÃO compra (e o plano não vai fingir)**: o cofre mora na mesma infraestrutura. Quem tem root
+  no host e consegue deslacrar o cofre ainda decifra. A promessa honesta passa a ser "não é legível por
+  quem lê banco/backup/dump", não "inacessível a nós".
+- **Runbook** (unseal, backup das chaves de lacre, rotação, break-glass) fica **fora do repositório
+  público**, como já previsto na abertura deste documento.
+
+### 15.2 TLS: **misto** (opção C) — Cloudflare fica
+
+O Cloudflare não sai: WAF, bot e PQ híbrido em parte dos hosts já existem e serão mantidos.
+
+**Consequência que muda o plano**: onde o Cloudflare termina o TLS, **ele vê o corpo em claro**. Portanto,
+nas rotas de dado do usuário (§13.1), o canal de aplicação não é camada de reforço — é **o** mecanismo que
+impede terceiro de ler o conteúdo. Isso eleva a prioridade de ligar o canal nessas rotas (era "fase 3",
+passa a ser pré-requisito de exposição segura). O transporte pós-quântico continua sendo medido por
+`scripts/pq-tls-check.sh`.
+
+### 15.3 Mensagens: **cifra em repouso** por ora (opção B)
+
+E2E de verdade (servidor cego) **não** entra agora: o conteúdo continua legível pelo servidor, para
+preservar busca, moderação automática e resposta a pedido judicial. A trilha de E2E (§14.2) fica
+registrada como decisão futura, condicionada a aceitar moderação por denúncia com ciphertext original.
+
+O que já vale: **parar de copiar conteúdo** (feito — notificação sem texto) e, quando o cofre de 15.1
+estiver no ar, cifrar as mensagens em repouso.
