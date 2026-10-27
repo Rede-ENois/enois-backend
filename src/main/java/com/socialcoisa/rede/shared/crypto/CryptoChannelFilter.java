@@ -33,9 +33,14 @@ import jakarta.servlet.http.HttpServletResponse;
  * <p><strong>Limites desta etapa:</strong> só a <em>requisição</em> é decifrada; a resposta ainda vai em
  * claro e a cifra dela entra no próximo incremento. Requisição sem corpo (GET) não é afetada mesmo em
  * rota marcada.</p>
+ *
+ * <p><strong>Precisa rodar antes do {@code DuplicatePostFilter}</strong> (ambos olham o corpo): o
+ * filtro de duplicidade calcula a chave a partir do corpo, e o envelope muda a cada envio (IV e nonce
+ * novos). Se ele visse o ciphertext, todo duplo clique viraria duas chaves e a proteção sumiria sem
+ * ninguém notar.</p>
  */
 @Component
-@Order(4)
+@Order(3)
 public class CryptoChannelFilter extends OncePerRequestFilter {
 
 	public static final String SESSION_HEADER = "X-Crypto-Session";
