@@ -174,6 +174,17 @@ teste de envelope inválido (falha explícita, nunca dado truncado), e restaura�
 Sequência obrigatória: **P0 → P1 → P2 → P3 → P4**. P5 depende de decisão de produto; P6 atravessa
 todas.
 
+### 9.0 Estado da implementação (2026-10-26)
+
+| Peça | Situação |
+|---|---|
+| Envelope `v1:<kid>:<base64>` (AES-256-GCM + AAD) | **implementado e testado** (`shared/crypto/EnvelopeCipher`) |
+| Canal de aplicação (ECDH P-256 + HKDF, handshake, sessão com TTL) | **implementado e testado** (`POST /crypto/session`) |
+| Filtro que cifra/decifra corpo por rota | próximo incremento, atrás de flag por rota |
+| Front (WebCrypto: handshake + envelope por requisição) | próximo incremento, na `sec/cripto-pq` do front |
+| Cifra em repouso ligada a campos | depende do KMS |
+| Transporte PQ | ver 9.1 |
+
 ### 9.1 P1 — medido em 2026-10-26
 
 A sonda `scripts/pq-tls-check.sh` (OpenSSL 3.5 em contêiner — o 3.0 das imagens não conhece o grupo e
