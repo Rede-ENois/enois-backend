@@ -204,9 +204,10 @@ public class MessagingService {
 		// A lista de conversas ordena por updatedAt; sem este toque a conversa antiga fica no lugar
 		// mesmo recebendo mensagem nova (#25 dos issues).
 		repository.saveConversation(conversation.touch(clock.instant()));
-		String preview = corpo.isEmpty()
-			? (midias.isEmpty() ? "Nova mensagem" : "Enviou uma midia")
-			: (corpo.length() > 80 ? corpo.substring(0, 77) + "..." : corpo);
+		// A notificacao NAO leva o conteudo da mensagem: antes ia um recorte de ate 80 caracteres,
+		// que copiava o texto para outra tabela e daí para push/e-mail. Conteudo de conversa e privado
+		// da conversa — o aviso diz so que chegou algo (plano de privacidade, secao 14).
+		String preview = midias.isEmpty() ? "Nova mensagem" : "Enviou uma midia";
 		List<ConversationParticipant> participants = repository.findParticipantsByConversation(conversationId);
 		for (ConversationParticipant p : participants) {
 			if (p.userId().equals(senderId)) continue;
