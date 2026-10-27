@@ -183,10 +183,13 @@ todas.
 | Canal de aplicação (ECDH P-256 + HKDF, handshake, sessão com TTL) | **implementado e testado** (`POST /crypto/session`) |
 | Filtro que cifra/decifra corpo por rota | **implementado e testado**, desligado até a rota entrar em `rede.crypto.protected-paths` (ver §17) |
 | Interruptor seguro (desmarcar rota sem quebrar o front que já cifra) | **implementado e testado** — envelope é aberto mesmo em rota desmarcada |
-| Cofre (Transit) para a chave de dados | **implementado** (`VaultTransitClient`/`VaultBackedKeyProvider`), sem fiação: não é bean até a tabela de chaves existir |
-| Front (WebCrypto: handshake + envelope por requisição) | próximo incremento, na `sec/cripto-pq` do front |
-| Tabela `data_keys` + backfill dos campos | **não existe ainda** — próximo incremento da cifra em repouso |
-| Cifra em repouso ligada a campos | depende do cofre no ar (§15.1) |
+| Cofre (Transit) para a chave de dados | **implementado e testado** (`VaultTransitClient`/`VaultBackedKeyProvider`) |
+| Front (WebCrypto: handshake + envelope por requisição) | **implementado e testado**, ligado por `VITE_CRYPTO_PATHS` (vazio no padrão) |
+| Tabela `data_keys` (V183) + store + bootstrap | **implementado e testado**, atrás de `rede.crypto.at-rest.enabled=false` |
+| Backfill dos campos em repouso | próximo incremento (depende do cofre no ar, §15.1) |
+| Cifra em repouso ligada a campos | próximo incremento |
+| Perfil: allowlist do que é público | **implementado e testado** (`UserProfileViewExposureTests`) |
+| Reenvio de confirmação sem revelar cadastro | **implementado e testado** (teto uniforme por e-mail) |
 | Transporte PQ | ver 9.1 |
 
 ### 9.1 P1 — medido em 2026-10-26
@@ -326,8 +329,8 @@ cifra.
 ### 14.5 O que hoje fura a promessa (evidência no código)
 
 - `MessageJpaEntity.text` guarda o texto **em claro**.
-- `MessagingService` monta **preview de até 80 caracteres** e grava numa notificação — o conteúdo sai
-  da conversa e vira outro registro, que também alimenta push/e-mail.
+- ~~`MessagingService` monta preview de até 80 caracteres e grava numa notificação~~ — **corrigido**:
+  a notificação passou a dizer só que chegou algo (ver §14.6, item 1).
 - `ModerationAiService` (`ReportedContentReader`) e `SuspiciousContentSweepWorker` leem/varrem
   conteúdo — enquanto DMs forem legíveis, elas são superfície de moderação automática, exatamente o
   que o E2E remove.
@@ -414,12 +417,41 @@ work que dá a garantia viraria específico de um host.
    atendido, e quem manda claro volta a passar. Sem esse comportamento, desmarcar a rota quebraria
    o front novo — foi por isso que ele entrou antes de qualquer ligação.
 
-### 16.4 O que continua proibido
+### 16.4 Matriz de ligação (o que precisa estar definido, por ambiente)
+
+| Chave | Onde | Padrão | Efeito |
+|---|---|---|---|
+| `rede.crypto.protected-paths` | backend | vazio | rotas cujo corpo **exige** envelope (fail-closed) |
+| `VITE_CRYPTO_PATHS` | front (build) | vazio | rotas que o cliente cifra |
+| `rede.crypto.at-rest.enabled` | backend | `false` | liga cofre + tabela de chaves |
+| `rede.crypto.vault.{address,token,transit-key}` | backend | vazio | exigidos só quando a cifra em repouso está ligada |
+
+As duas primeiras precisam concordar em **conjunto de rotas**, mas não em momento: o backend aceita
+envelope em rota desmarcada (§16.3, item 4). Por isso a ordem segura é
+
+1. `VITE_CRYPTO_PATHS` no front → nada muda de exigência, e o backend já abre os envelopes;
+2. observar: sessões criadas, zero erro de integridade;
+3. `rede.crypto.protected-paths` no backend → a exigência passa a valer.
+
+Invertida, a ordem quebra o tráfego antigo; é por isso que ela está escrita.
+
+### 16.5 O que continua proibido
 
 - Ligar a flag em produção enquanto a validação está na QA.
 - Usar a QA como ambiente de experimento de criptografia (é o motivo da branch dedicada, §0).
 - Fazer o front da QA apontar para a API de produção para "testar o canal" — isso mistura dados e
   sessões de dois ambientes.
+
+### 16.6 IP de origem — decisão de 2026-10-27
+
+O objetivo era guardar o IP do painel como HMAC. Ao ler o código, a premissa não se confirmou: **o
+painel não lê mais do banco**. O sink ativo é o arquivo JSONL (`FileEventSink`), e a tabela
+`system_events` (V172) não tem leitor nem escritor no código — um dump do banco **não leva IP**.
+
+Decisão: manter o IP em claro **no log operacional** (JSONL, retenção curta, dentro do contêiner) e
+não criá-lo em tabela nenhuma. HMAC ali removeria a informação de investigação sem proteger nada que
+um dump alcance; a proteção que importa — o IP não estar no banco — já existe. Se a tabela
+`system_events` voltar a ser usada, a coluna de IP entra como HMAC, nunca em claro.
 
 ## 17. Runbook de promoção (o que fazer, na ordem)
 
