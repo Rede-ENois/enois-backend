@@ -181,9 +181,12 @@ todas.
 |---|---|
 | Envelope `v1:<kid>:<base64>` (AES-256-GCM + AAD) | **implementado e testado** (`shared/crypto/EnvelopeCipher`) |
 | Canal de aplicação (ECDH P-256 + HKDF, handshake, sessão com TTL) | **implementado e testado** (`POST /crypto/session`) |
-| Filtro que cifra/decifra corpo por rota | próximo incremento, atrás de flag por rota |
+| Filtro que cifra/decifra corpo por rota | **implementado e testado**, desligado até a rota entrar em `rede.crypto.protected-paths` (ver §17) |
+| Interruptor seguro (desmarcar rota sem quebrar o front que já cifra) | **implementado e testado** — envelope é aberto mesmo em rota desmarcada |
+| Cofre (Transit) para a chave de dados | **implementado** (`VaultTransitClient`/`VaultBackedKeyProvider`), sem fiação: não é bean até a tabela de chaves existir |
 | Front (WebCrypto: handshake + envelope por requisição) | próximo incremento, na `sec/cripto-pq` do front |
-| Cifra em repouso ligada a campos | depende do KMS |
+| Tabela `data_keys` + backfill dos campos | **não existe ainda** — próximo incremento da cifra em repouso |
+| Cifra em repouso ligada a campos | depende do cofre no ar (§15.1) |
 | Transporte PQ | ver 9.1 |
 
 ### 9.1 P1 — medido em 2026-10-26
@@ -406,7 +409,10 @@ work que dá a garantia viraria específico de um host.
    promovido. Ligar `protected-paths` na QA **antes** de o front da QA estar no ar transforma todo
    login em 409.
 3. **Produção por último**, com a mesma ordem (front publicado, janela de métrica, depois a flag).
-4. **Desligar é voltar a lista para vazio** — não exige mudança de código. É o kill switch.
+4. **Desligar é voltar a lista para vazio** — não exige mudança de código. É o kill switch
+   **porque** o filtro abre envelope também em rota desmarcada: o front que já cifra continua
+   atendido, e quem manda claro volta a passar. Sem esse comportamento, desmarcar a rota quebraria
+   o front novo — foi por isso que ele entrou antes de qualquer ligação.
 
 ### 16.4 O que continua proibido
 
@@ -414,3 +420,57 @@ work que dá a garantia viraria específico de um host.
 - Usar a QA como ambiente de experimento de criptografia (é o motivo da branch dedicada, §0).
 - Fazer o front da QA apontar para a API de produção para "testar o canal" — isso mistura dados e
   sessões de dois ambientes.
+
+## 17. Runbook de promoção (o que fazer, na ordem)
+
+Promover a branch **não** liga a proteção. Este é o procedimento completo, com a prova de cada passo.
+
+### 17.1 Pré-condições
+
+- Front da `sec/cripto-pq` (outro repositório) falando o canal contra o backend da branch **em
+  local** — ida e volta provada antes de qualquer ambiente.
+- Suíte completa verde, incluindo o boot duplo (H2 e MariaDB).
+- Migrações (se houver) aditivas, com `charset`/`collation` explícitos, ensaiadas em MariaDB.
+- Revisão de segurança registrada no PR de promoção (§0).
+- Se o pacote incluir cifra em repouso: cofre no ar, chave *transit* criada, token do app e a
+  migração `data_keys` — **nada disso existe hoje**.
+
+### 17.2 QA
+
+1. PR `sec/cripto-pq` → `qa` no backend (**conferir a base antes de mergear**; já aconteceu de o
+   merge cair no lugar errado). Merge dispara o deploy automático.
+2. Prova de pod novo: `GET /api/version` no host da QA mostrando a versão do commit promovido.
+3. PR da branch do front → `qa`; deploy do front.
+4. Só então preencher `rede.crypto.protected-paths` na QA com as rotas do §13.1.
+5. **Prova de que a flag pegou**: mandar um corpo em claro para uma rota marcada e exigir recusa
+   (`CRYPTO_ENVELOPE_REQUIRED`/`CRYPTO_CHANNEL_REQUIRED`), e fazer o login pela tela funcionar. Sem
+   essa prova, um erro de digitação na lista deixa tudo funcionando e nada protegido — o filtro abre
+   envelope em rota desmarcada, então o produto parece normal.
+6. Janela de observação: zero falha de decifra; uso do canal maior que zero; 409 do canal só por
+   sessão expirada.
+
+### 17.3 Produção
+
+1. `qa` → `main` nos dois repositórios, **backend primeiro** (a dependência de sessão já obrigou essa
+   ordem na promoção anterior). Push em `main` dispara deploy.
+2. Prova de pod novo (`GET /api/version`) e `GET /health`.
+3. Preencher `protected-paths` em produção **depois** do front de produção publicado.
+4. Repetir a prova do item 17.2.5 e conferir o painel: nenhuma tempestade de 409.
+5. Rodar `scripts/pq-tls-check.sh` (hosts de produção) e registrar o resultado.
+
+### 17.4 Interruptor e rollback
+
+| Situação | Ação | Efeito |
+|---|---|---|
+| Precisa desligar a exigência | esvaziar `protected-paths` e reiniciar | front que cifra continua atendido; claro volta a passar |
+| Precisa religar | preencher de novo e reiniciar | exigência volta, front já está pronto |
+| Precisa desfazer o front | rollback da imagem do front | obrigatório **só** se o backend ficar em versão anterior à do envelope |
+
+Nenhum dos dois primeiros exige mudança de código ou deploy do front. O terceiro é o único caso em
+que a ordem front↔back importa.
+
+### 17.5 O que este runbook não cobre
+
+- Cofre (unseal, rotação, break-glass): runbook do time, **fora do repositório público** (§15.1).
+- Rotação de credenciais e o trabalho da branch paralela: não fazem parte desta promoção.
+- TLS PQ da QA: depende da borda de lá; a sonda é informativa (§9.1).
