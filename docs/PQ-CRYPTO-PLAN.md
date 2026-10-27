@@ -263,3 +263,74 @@ proteger "dado do usuário" no sentido que importa.
 3. **Fechar**: rota marcada em `rede.crypto.protected-paths` (fail-closed) só quando o "legado" zerar.
 4. **Prova de latência**: p50/p95 da rota antes e depois de ligar — se piorar de forma visível, a rota
    sai do escopo.
+
+## 14. Privacidade por arquitetura — o que o Énóis precisa saber (decidido em 2026-10-26)
+
+A pergunta que organiza tudo: **quais dados o Énóis precisa conhecer para funcionar e quais precisam
+continuar inacessíveis até para nós?** Privacidade não pode depender de confiar em quem administra o
+servidor; precisa de proteção técnica.
+
+### 14.1 Classificação — o servidor precisa ler?
+
+| Dado | Precisa? | Consequência |
+|---|---|---|
+| Conteúdo de mensagem direta | **Não** — só entregar | cifra no cliente; servidor guarda blob cifrado e fica cego |
+| Anexo de mensagem | **Não** | cifrado no cliente antes do upload; servidor hospeda bytes opacos |
+| E-mail da conta | sim (login/recuperação) | guardado, com exposição controlada e cifra em repouso |
+| Telefone | **só se houver função que use** | hoje não há; não deve ser público nem consultável |
+| Nome, @, bio, foto, skills | sim — é o produto | público **por decisão explícita**, campo a campo (14.3) |
+| CPF/RG (API e suporte) | sim, para verificação | cifrado em repouso, acesso auditado |
+| Currículo | sim, para entregar ao contratante | cifrado em repouso; entrega por link assinado e expirável |
+| Post/comentário | sim — público por definição | TLS + integridade; cifrar aqui não protege nada |
+| Metadados de conversa (quem, quando, volume) | sim, para rotear | reduzir com *sealed sender*; o resto é limite honesto |
+| Senha, códigos 2FA, tokens | só o hash | nunca reversível (já é assim) |
+
+### 14.2 Mensagens privadas — E2E como arquitetura (trilha P5)
+
+O mínimo para "o servidor não consegue ler" ser garantia, e não promessa:
+
+1. **Identidade por dispositivo** (assinatura + troca de chave) publicada num **diretório de chaves com
+   log de transparência** — o servidor não troca a chave de ninguém sem isso aparecer.
+2. **X3DH** para abrir a sessão e **Double Ratchet** por mensagem: sigilo futuro e recuperação
+   pós-comprometimento.
+3. **Multi-dispositivo**: sessão por aparelho, lista assinada pela identidade, aparelho novo aprovado.
+4. **Servidor cego**: roteia, guarda ciphertext, entrega. **Push sem conteúdo** — hoje a notificação
+   leva um pedaço do texto, o que já fura a promessa.
+5. **Denúncia sem backdoor**: o cliente encaminha a mensagem denunciada **com o ciphertext original**;
+   o servidor confere que é o mesmo que está guardado (não dá para forjar) e o moderador lê só aquilo.
+6. **Backup cifrado no cliente**; senão o backup vira o ponto cego.
+
+**O que se perde, dito sem enfeite:** busca no conteúdo das DMs, moderação automática por texto,
+heurística de spam por conteúdo; pedido judicial entrega ciphertext + metadados. Em troca, a confiança
+deixa de depender de quem opera o servidor. Moderação passa a ser por denúncia + metadados.
+
+### 14.3 Perfil — política de exposição
+
+- **Allowlist explícita** do que é público (nome, @, bio, skills, foto); cada campo novo entra por
+  decisão registrada e com teste que falha se vazar.
+- **E-mail e telefone nunca saem em resposta pública**, nem em busca, nem em listagem.
+- **Contato por mediação**: o interessado pede contato, o servidor entrega a mensagem ao dono, o
+  endereço não trafega.
+
+### 14.4 Camadas que **não** são confidencialidade
+
+Rate limit, paginação e cursor com TTL são **anti-extração**: dificultam varredura em massa e não
+transformam dado público em privado. Watermark rastreia cópia distribuída a um destinatário; não
+impede extração nem identifica com confiança (colusão, reencode, print). Nenhum dos dois substitui
+cifra.
+
+### 14.5 O que hoje fura a promessa (evidência no código)
+
+- `MessageJpaEntity.text` guarda o texto **em claro**.
+- `MessagingService` monta **preview de até 80 caracteres** e grava numa notificação — o conteúdo sai
+  da conversa e vira outro registro, que também alimenta push/e-mail.
+- `ModerationAiService` (`ReportedContentReader`) e `SuspiciousContentSweepWorker` leem/varrem
+  conteúdo — enquanto DMs forem legíveis, elas são superfície de moderação automática, exatamente o
+  que o E2E remove.
+
+### 14.6 Ordem de execução
+
+1. **Parar de copiar conteúdo** (dias): remover o preview da notificação de mensagem e excluir DMs de
+   varredura/IA. É o maior ganho de exposição por menor custo.
+2. **Cifra em repouso das DMs** (com KMS): protege dump e backup, ainda legível por nós.
+3. **E2E de verdade** (P5, semanas): o desenho de 14.2, incluindo o fluxo de denúncia e o backup.
