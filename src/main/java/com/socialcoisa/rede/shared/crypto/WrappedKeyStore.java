@@ -16,4 +16,7 @@ public interface WrappedKeyStore {
 
 	/** Ciphertext do cofre para o identificador, se existir. */
 	Optional<String> wrappedByKid(String kid);
+
+	/** Registra uma chave recém-embrulhada pelo cofre (bootstrap e rotação). */
+	void save(String kid, String wrappedKey);
 }

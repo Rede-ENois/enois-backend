@@ -154,6 +154,11 @@ class VaultTransitTests {
 			public Optional<String> wrappedByKid(String kid) {
 				return "dek-1".equals(kid) ? Optional.of("vault:v1:abc") : Optional.empty();
 			}
+
+			@Override
+			public void save(String kid, String wrappedKey) {
+				throw new UnsupportedOperationException("somente leitura neste teste");
+			}
 		};
 		VaultBackedKeyProvider provider = new VaultBackedKeyProvider(store, cliente());
 
@@ -175,6 +180,11 @@ class VaultTransitTests {
 			@Override
 			public Optional<String> wrappedByKid(String kid) {
 				return Optional.empty();
+			}
+
+			@Override
+			public void save(String kid, String wrappedKey) {
+				throw new UnsupportedOperationException("somente leitura neste teste");
 			}
 		};
 		VaultBackedKeyProvider provider = new VaultBackedKeyProvider(store, cliente());
@@ -198,6 +208,11 @@ class VaultTransitTests {
 			@Override
 			public Optional<String> wrappedByKid(String kid) {
 				return Optional.of("vault:v1:abc");
+			}
+
+			@Override
+			public void save(String kid, String wrappedKey) {
+				throw new UnsupportedOperationException("somente leitura neste teste");
 			}
 		};
 
@@ -227,6 +242,11 @@ class VaultTransitTests {
 			@Override
 			public Optional<String> wrappedByKid(String kid) {
 				return Optional.of("vault:v1:abc");
+			}
+
+			@Override
+			public void save(String kid, String wrappedKey) {
+				throw new UnsupportedOperationException("somente leitura neste teste");
 			}
 		};
 		EnvelopeCipher cipher = new EnvelopeCipher(new VaultBackedKeyProvider(store, cliente()));
