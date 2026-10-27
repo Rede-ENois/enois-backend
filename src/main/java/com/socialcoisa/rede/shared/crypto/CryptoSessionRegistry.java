@@ -21,6 +21,9 @@ import org.springframework.stereotype.Component;
 public class CryptoSessionRegistry {
 
 	private final Map<String, CryptoSession> sessions = new ConcurrentHashMap<>();
+	/** Nonces já usados por sessão: impede repetir a mesma requisição cifrada. */
+	private final Map<String, java.util.Set<String>> usedNonces = new ConcurrentHashMap<>();
+	private static final int MAX_NONCES_PER_SESSION = 512;
 	private final Clock clock;
 	private final int maxSessions;
 	private final AtomicLong created = new AtomicLong();
@@ -51,6 +54,7 @@ public class CryptoSessionRegistry {
 		}
 		if (session.isExpired(clock.instant())) {
 			sessions.remove(sessionId);
+			usedNonces.remove(sessionId);
 			return java.util.Optional.empty();
 		}
 		return java.util.Optional.of(session);
@@ -58,6 +62,34 @@ public class CryptoSessionRegistry {
 
 	public int size() {
 		return sessions.size();
+	}
+
+	/**
+	 * Marca o nonce como usado e diz se ele é novo.
+	 *
+	 * <p>Repetir o corpo cifrado (same session, same nonce) é replay: a cifra continuaria válida, por
+	 * isso a defesa tem que ser aqui, na identidade da requisição.</p>
+	 */
+	public boolean acceptNonce(String sessionId, String nonce) {
+		if (sessionId == null || nonce == null || nonce.isBlank()) {
+			return false;
+		}
+		java.util.Set<String> seen = usedNonces.computeIfAbsent(sessionId,
+			key -> java.util.Collections.synchronizedSet(new java.util.LinkedHashSet<>()));
+		synchronized (seen) {
+			if (!seen.add(nonce)) {
+				return false;
+			}
+			while (seen.size() > MAX_NONCES_PER_SESSION) {
+				java.util.Iterator<String> oldest = seen.iterator();
+				if (!oldest.hasNext()) {
+					break;
+				}
+				oldest.next();
+				oldest.remove();
+			}
+		}
+		return true;
 	}
 
 	/** Total já criado — útil para métrica, sem revelar nada sobre as chaves. */
