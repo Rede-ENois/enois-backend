@@ -59,8 +59,9 @@ mínimo e auditável, e E2E verdadeiro apenas onde o produto aceitar que o servi
    preload`.
 2. **Troca de chave híbrida PQ**: `X25519MLKEM768` no edge (Cloudflare já suporta) e no terminador
    do backend. Híbrido é a escolha certa: se o ML-KEM cair, o X25519 segura a confidencialidade.
-   - Provas: `openssl s_client -groups X25519MLKEM768` negocia o grupo; teste automatizado no CI
-     contra a QA, falhando se o grupo não for aceito; relatório mensal de clientes sem PQ.
+   - Provas: `openssl s_client -groups X25519MLKEM768` negocia o grupo; sonda automatizada contra os
+     hosts de produção, falhando o deploy se o grupo não for aceito; na QA a sonda é **informativa**
+     enquanto a borda de lá não suportar o grupo (ver §9.1 e §16); relatório mensal de clientes sem PQ.
 3. **Certificados**: ECDSA P-256 (ou RSA-3072) com OCSP stapling. Certificado com assinatura PQ
    (ML-DSA) ainda não é prático nas CAs públicas — entra como acompanhamento, não como bloqueio.
 4. **Clientes que controlamos** (apps futuros, integrações servidor-a-servidor): mTLS + **token JWT
@@ -368,3 +369,48 @@ registrada como decisão futura, condicionada a aceitar moderação por denúnci
 
 O que já vale: **parar de copiar conteúdo** (feito — notificação sem texto) e, quando o cofre de 15.1
 estiver no ar, cifrar as mensagens em repouso.
+
+## 16. Paridade de ambientes — QA (sem WAF/Cloudflare) e produção
+
+Regra que vale daqui em diante: **nada da camada de aplicação pode depender da borda.** Se a proteção
+só funcionasse atrás do Cloudflare, a QA deixaria de testar o que vai para produção — e o próprio
+work que dá a garantia viraria específico de um host.
+
+### 16.1 O que foi verificado no código (2026-10-27)
+
+| Item | Situação | Consequência para a QA |
+|---|---|---|
+| `rede.crypto.protected-paths` | **vazio em todos os perfis** (`dev`, `hml`, `qa`, `prd`) | o filtro é no-op até o ambiente optar; subir o código não muda o comportamento da QA |
+| Cofre / KMS | `VaultBackedKeyProvider` e `VaultTransitClient` **não são `@Component`**; nenhum `@Bean` os instancia | boot da QA não precisa de OpenBao/Vault no ar |
+| CORS / origem | `enois-qa.b7cloud.tech` e `enois-api-qa.b7cloud.tech` estão em `rede.cors.allowed-origins` e `rede.origins.trusted` | handshake `POST /crypto/session` e as rotas do §13.1 passam pelo gate de origem igual à produção |
+| Recusas do filtro (409/400) | passaram a refletir CORS da origem confiável (`TrustedOriginCors.apply`) | o front lê `CRYPTO_CHANNEL_REQUIRED` e abre o canal **nos dois ambientes**; antes o navegador escondia o status |
+| IP real | `ClientIpResolver` só usa `CF-Connecting-IP` quando o salto é faixa do Cloudflare; senão lê o `X-Forwarded-For` da direita para a esquerda | QA (Traefik direto) continua com IP correto sem Cloudflare |
+| Prefixo `/api` | `CryptoChannelFilter.applicationPath` remove o prefixo | a mesma lista de rotas vale nos dois ambientes |
+| Relay do Chrome/`X-Crypto-*` | `allowedHeaders("*")` no CORS e o preflight reflete o pedido | cabeçalhos novos não exigem mudança de CORS |
+
+### 16.2 O que difere e não é código
+
+- **PQ no TLS do salto** é propriedade da borda de cada host: `api.enois.ia.br` negocia
+  `X25519MLKEM768`; os hosts da QA negociam clássico até o terminador de lá suportar o grupo (§9.1).
+  Isso muda o atributo criptográfico *daquele salto*, não a funcionalidade — e é justamente o motivo
+  de a camada de aplicação existir: ela entrega a mesma proteção nos dois lugares.
+- **WAF/bot do Cloudflare** não existe na QA. Nenhum controle do app pode pressupor que exista: o que
+  for bloqueio de borda fica na borda; o que for regra de negócio fica no app (rate limit, origem,
+  captcha com política `degrade` na QA).
+
+### 16.3 Ordem de ligação, ambiente por ambiente
+
+1. **Local primeiro**: os dois repositórios na `sec/cripto-pq`, front falando o canal contra um backend
+   local. Prova de ida e volta antes de qualquer ambiente compartilhado.
+2. **QA depois da promoção** (§0, item 3): o front da QA só recebe o handshake junto com o backend
+   promovido. Ligar `protected-paths` na QA **antes** de o front da QA estar no ar transforma todo
+   login em 409.
+3. **Produção por último**, com a mesma ordem (front publicado, janela de métrica, depois a flag).
+4. **Desligar é voltar a lista para vazio** — não exige mudança de código. É o kill switch.
+
+### 16.4 O que continua proibido
+
+- Ligar a flag em produção enquanto a validação está na QA.
+- Usar a QA como ambiente de experimento de criptografia (é o motivo da branch dedicada, §0).
+- Fazer o front da QA apontar para a API de produção para "testar o canal" — isso mistura dados e
+  sessões de dois ambientes.

@@ -11,6 +11,8 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
+import com.socialcoisa.rede.shared.web.TrustedOriginCors;
+
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -70,7 +72,7 @@ public class CryptoChannelFilter extends OncePerRequestFilter {
 		String sessionId = request.getHeader(SESSION_HEADER);
 		java.util.Optional<CryptoSession> session = registry.find(sessionId);
 		if (session.isEmpty()) {
-			reject(response, 409, "CRYPTO_CHANNEL_REQUIRED",
+			reject(request, response, 409, "CRYPTO_CHANNEL_REQUIRED",
 				"Esta requisicao precisa de um canal cifrado. Abra o canal e tente de novo.");
 			return;
 		}
@@ -78,18 +80,18 @@ public class CryptoChannelFilter extends OncePerRequestFilter {
 		String timestamp = request.getHeader(TIMESTAMP_HEADER);
 		String nonce = request.getHeader(NONCE_HEADER);
 		if (!withinWindow(timestamp)) {
-			reject(response, 409, "CRYPTO_TIMESTAMP_INVALID",
+			reject(request, response, 409, "CRYPTO_TIMESTAMP_INVALID",
 				"Requisicao fora da janela de tempo. Sincronize o relogio e tente de novo.");
 			return;
 		}
 		if (!registry.acceptNonce(sessionId, nonce)) {
-			reject(response, 409, "CRYPTO_REPLAY", "Requisicao repetida recusada. Monte uma nova.");
+			reject(request, response, 409, "CRYPTO_REPLAY", "Requisicao repetida recusada. Monte uma nova.");
 			return;
 		}
 
 		String envelope = new String(request.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
 		if (envelope.isEmpty()) {
-			reject(response, 400, "CRYPTO_ENVELOPE_REQUIRED", "Corpo cifrado obrigatorio nesta rota.");
+			reject(request, response, 400, "CRYPTO_ENVELOPE_REQUIRED", "Corpo cifrado obrigatorio nesta rota.");
 			return;
 		}
 		String aad = "REQ " + request.getMethod() + " " + path + " " + timestamp + " " + nonce;
@@ -98,7 +100,7 @@ public class CryptoChannelFilter extends OncePerRequestFilter {
 			body = new EnvelopeCipher(new CryptoSessionKeyProvider(session.get())).decrypt(envelope, aad);
 		}
 		catch (CryptoException failure) {
-			reject(response, 400, failure.code(), failure.getMessage());
+			reject(request, response, 400, failure.code(), failure.getMessage());
 			return;
 		}
 
@@ -139,8 +141,17 @@ public class CryptoChannelFilter extends OncePerRequestFilter {
 		}
 	}
 
-	private static void reject(HttpServletResponse response, int status, String code, String message)
-			throws IOException {
+	/**
+	 * Recusa com corpo JSON e os cabeçalhos de CORS da origem confiável.
+	 *
+	 * <p>Sem o CORS aqui o navegador esconde o status: o front (que mora em outro host, tanto em
+	 * produção quanto na QA) não conseguiria ler {@code CRYPTO_CHANNEL_REQUIRED} para abrir o canal e
+	 * repetir — veria só "falha de rede". O gate de origem já correu antes deste filtro e marcou a
+	 * origem; {@link TrustedOriginCors#apply} reflete só a marcada.</p>
+	 */
+	private static void reject(HttpServletRequest request, HttpServletResponse response, int status, String code,
+			String message) throws IOException {
+		TrustedOriginCors.apply(request, response);
 		response.setStatus(status);
 		response.setContentType("application/json");
 		response.setCharacterEncoding(StandardCharsets.UTF_8.name());
