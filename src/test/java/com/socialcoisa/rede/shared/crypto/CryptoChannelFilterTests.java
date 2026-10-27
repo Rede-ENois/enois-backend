@@ -16,6 +16,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
+import com.socialcoisa.rede.shared.web.TrustedOriginCors;
+
 import jakarta.servlet.FilterChain;
 
 /**
@@ -112,6 +114,35 @@ class CryptoChannelFilterTests {
 
 		assertThat(response.getStatus()).isEqualTo(409);
 		assertThat(response.getContentAsString()).contains("CRYPTO_CHANNEL_REQUIRED");
+	}
+
+	@Test
+	void recusaLevaCorsDaOrigemConfiavel() throws Exception {
+		// O front e a API moram em hosts diferentes (produção e QA). Sem CORS na recusa, o navegador
+		// engole o 409 como falha de rede e o front não consegue abrir o canal e repetir.
+		CryptoChannelFilter filter = new CryptoChannelFilter(registry, ROTA);
+		MockHttpServletRequest request = request(ROTA, "POST", CORPO);
+		request.addHeader("Origin", "https://enois-qa.b7cloud.tech");
+		TrustedOriginCors.markTrusted(request, "https://enois-qa.b7cloud.tech");
+
+		MockHttpServletResponse response = new MockHttpServletResponse();
+		filter.doFilter(request, response, chainCapture(new AtomicReference<>()));
+
+		assertThat(response.getStatus()).isEqualTo(409);
+		assertThat(response.getHeader("Access-Control-Allow-Origin")).isEqualTo("https://enois-qa.b7cloud.tech");
+		assertThat(response.getHeader("Access-Control-Allow-Credentials")).isEqualTo("true");
+	}
+
+	@Test
+	void recusaNaoOfereceCorsAOrigemNaoMarcada() throws Exception {
+		CryptoChannelFilter filter = new CryptoChannelFilter(registry, ROTA);
+		MockHttpServletRequest request = request(ROTA, "POST", CORPO);
+		request.addHeader("Origin", "https://exemplo.invalid");
+
+		MockHttpServletResponse response = new MockHttpServletResponse();
+		filter.doFilter(request, response, chainCapture(new AtomicReference<>()));
+
+		assertThat(response.getHeader("Access-Control-Allow-Origin")).isNull();
 	}
 
 	@Test

@@ -4,13 +4,19 @@
 # Por que dentro de um contêiner: o OpenSSL 3.0 das imagens atuais não conhece o grupo, e um
 # cliente que não o conhece "passa" no teste sem provar nada. A imagem alpine traz OpenSSL 3.5.
 #
-# Uso: scripts/pq-tls-check.sh [host...]   (padrão: os hosts do app)
+# Uso: scripts/pq-tls-check.sh [host...]   (padrão: os hosts de PRODUÇÃO)
 # Sai com código 1 se algum host NÃO negociar o grupo — serve para virar verificação de deploy.
+#
+# A QA fica FORA do padrão de propósito: a borda dela (Traefik direto, sem Cloudflare) ainda não
+# negocia o grupo, e um host que não PODE cumprir não deve transformar o portão em vermelho
+# permanente. Para medir a QA (informativo):
+#   scripts/pq-tls-check.sh enois-qa.b7cloud.tech enois-api-qa.b7cloud.tech
+# — leia o código de saída como relatório daquele ambiente, não como gate de produção.
 set -uo pipefail
 
 HOSTS=("$@")
 if [ ${#HOSTS[@]} -eq 0 ]; then
-  HOSTS=(enois.ia.br api.enois.ia.br enois-qa.b7cloud.tech enois-api-qa.b7cloud.tech)
+  HOSTS=(enois.ia.br api.enois.ia.br)
 fi
 
 falhou=0
