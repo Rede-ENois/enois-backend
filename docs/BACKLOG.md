@@ -787,7 +787,7 @@ Os 4 últimos são **BLOQUEADOS** por dependência externa (não é código meu)
   3 casos de conteúdo falham**. `vitest` da linha `qa` sem regressão e `tsc` sem erro novo
   (472 = 472, todos do pacote privado `@rede-enois/design-system`).
   Front: PR #348 (branch `fix/texto-longo-nao-estoura`, sobre a `qa`).
-- **[x] ENTREGUE 2026-10-27 — O dock de mensagens (novo) deixava a mini-janela de conversa
+- **[ ] EM REVISÃO 2026-10-28 — O dock de mensagens (novo) deixava a mini-janela de conversa
   FORA da tela, com o botão de fechar inalcançável.** O dock é ancorado à direita e cresce para
   a **esquerda**: cada mini-janela tem 22rem (352px), o painel tem 20rem (320px), o espaço entre
   eles é 8px e a margem da direita é 16px. O estado aceita até 4 janelas abertas
@@ -802,8 +802,13 @@ Os 4 últimos são **BLOQUEADOS** por dependência externa (não é código meu)
   As conversas **continuam abertas no estado**: elas não são fechadas, apenas não são
   desenhadas fora da tela.
   *Testes:* `src/lib/chat-dock/chat-dock-layout.test.ts` (9) e `chat-dock-window.test.ts` (3) —
-  o segundo **falha 3/3 sem o conserto**. `vitest` da linha `qa` sem regressão e `tsc` sem erro
-  novo (472 = 472, todos do pacote privado `@rede-enois/design-system`).
+  o segundo **falha 3/3 sem o conserto**; mais `src/stores/chat-dock.store.test.ts` (5) para o
+  caso que a revisão achou (abrir uma conversa que já estava aberta e ficou fora do desenho:
+  agora ela **volta para a frente** ao ser clicada, senão ficaria marcada como aberta sem janela
+  e sem botão de fechar). `vitest` da linha `qa` sem regressão e `tsc` sem erro novo
+  (472 = 472, todos do pacote privado `@rede-enois/design-system`).
+  *Estado:* o conserto está no front #349, **ainda em revisão** — o item vira ENTREGUE quando o
+  PR entrar na `qa`.
   Front: PR #349 (branch `fix/dock-chat-nao-sai-da-tela`, sobre a `qa`).
 - **[x] ENTREGUE 2026-10-27 — Auditoria de contrato da linha `qa` (front x API): nenhuma
   divergência.** O que a lista do repo já tinha contado antes foi reconferido no código de
