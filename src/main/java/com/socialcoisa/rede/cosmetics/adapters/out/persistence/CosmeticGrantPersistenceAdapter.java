@@ -42,4 +42,18 @@ class CosmeticGrantPersistenceAdapter implements CosmeticGrantRepository {
 		}
 	}
 
+	@Override
+	public void grantToChoosers(String eventId, String choice, String itemId, String source, Instant now) {
+		try {
+			jdbc.update("""
+					insert into cosmetic_grants (user_id, item_id, source, created_at)
+					select e.user_id, ?, ?, ? from cosmetic_event_entries e
+					where e.event_id = ? and e.choice = ?
+					and not exists (select 1 from cosmetic_grants g where g.user_id = e.user_id and g.item_id = ?)""",
+				itemId, source, Timestamp.from(now), eventId, choice, itemId);
+		}
+		catch (DuplicateKeyException concurrentRead) {
+			// Another reader granted the same rows at the same time; every winner already has the item.
+		}
+	}
 }
