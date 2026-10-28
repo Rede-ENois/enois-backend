@@ -834,7 +834,7 @@ Os 4 últimos são **BLOQUEADOS** por dependência externa (não é código meu)
   *Entregue:* front #350 e back #287 mergeados na `qa` (a regra do backend — trocar a senha
   encerra as sessões — é intencional e vale para qualquer troca; o que mudou foi a ordem no
   front).
-- **[ ] EM REVISÃO 2026-10-28 — A aba "Plataformas externas" da tela de empresas ficava
+- **[x] ENTREGUE 2026-10-28 — A aba "Plataformas externas" da tela de empresas ficava
   sempre vazia: o backend produzia a origem da empresa e não a mandava na resposta.** O
   diretório de empresas junta as vagas internas e as agregadas de plataformas externas, e cada
   empresa sai com a sua `origem` (`CompanyDirectoryReader.CompanySummary.origem`, com
@@ -847,7 +847,9 @@ Os 4 últimos são **BLOQUEADOS** por dependência externa (não é código meu)
   *Teste:* `CompanyDirectoryOriginTests` (2) — a interna vem como "enois" e a externa como
   "externa"; **sem o conserto os 2 falham**. `mvn -Dtest='*Job*Tests,*Compan*Tests,
   *ExternalJob*Tests'` → 83/83 verdes.
-  *Estado:* o PR #289 está **em revisão** — o item vira ENTREGUE quando ele entrar na `qa`.
+  *Verificado no ar:* depois do merge do #289, `GET /jobs/companies` na QA devolve a `origem` em
+  todas as 60 empresas do diretório (GitLab, EverAI, Nebius, Monzo… como "externa"), e a aba
+  "Plataformas externas" da tela passa a ter conteúdo.
 - **[x] ENTREGUE 2026-10-27 — Auditoria de contrato da linha `qa` (front x API): nenhuma
   divergência.** O que a lista do repo já tinha contado antes foi reconferido no código de
   hoje: as **427 chamadas do front** (`src/lib/api/**`) contra as **505 rotas** do backend da
