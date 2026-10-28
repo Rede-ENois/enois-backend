@@ -766,6 +766,27 @@ Os 4 últimos são **BLOQUEADOS** por dependência externa (não é código meu)
   o conserto os 9 falham**. `vitest` da linha `qa` sem regressão e `tsc` sem erro novo (472 =
   472, todos do pacote privado `@rede-enois/design-system`).
   Front: PR #339 (branch `fix/login-longo-quebra-celular`, sobre a `qa`).
+- **[x] ENTREGUE 2026-10-27 — Título ou descrição do usuário escrita sem espaços estourava a
+  tela em até 586px — e a correção é de raiz, no CSS do app.** O item acima consertou o *login*;
+  o mesmo problema aparece com **qualquer texto** que a pessoa escreva colado: título de jogo,
+  nome de projeto, assunto de ticket, título de PR, descrição. Sem ponto de quebra, a palavra
+  estoura a caixa e a **página inteira passa a rolar de lado no celular**.
+  *Medido (Chrome headless, 390px e 1280px, DOM real e CSS compilado da QA):* a fila de jogos
+  (+440px), a de projetos (+520px a 390px e +6px a 1280px), a de pull requests (+438px), a de
+  contribuições do GitHub (+438px) e a de tickets de suporte (+438px) do painel de moderador.
+  *O conserto:* `overflow-wrap: break-word` nos elementos de texto do `src/styles.css`, na
+  camada `base` — assim as utilities `truncate`, `line-clamp` e `break-all` continuam valendo
+  quando o app quer cortar o texto de propósito. É melhor do que repetir `break-words` em cada
+  componente: o texto do usuário aparece em dezenas de lugares e qualquer um deles pode
+  receber a palavra colada.
+  *Prova de que a regra não mexe no visual:* com **dado curto** (com espaços), a geometria de
+  **nenhum** elemento de texto muda em **44 telas** medidas (as 22 rotas principais a 390px e a
+  1280px) — a regra só age quando a palavra realmente não cabe na linha. Com o dado adversarial
+  (palavra colada), os 6 transbordos vão a **0px**.
+  *Teste:* `src/lib/layout-texto-longo.test.ts` (4) — trava a regra no CSS; **sem o conserto os
+  3 casos de conteúdo falham**. `vitest` da linha `qa` sem regressão e `tsc` sem erro novo
+  (472 = 472, todos do pacote privado `@rede-enois/design-system`).
+  Front: PR #348 (branch `fix/texto-longo-nao-estoura`, sobre a `qa`).
 - **[x] ENTREGUE 2026-10-27 — Auditoria de contrato da linha `qa` (front x API): nenhuma
   divergência.** O que a lista do repo já tinha contado antes foi reconferido no código de
   hoje: as **427 chamadas do front** (`src/lib/api/**`) contra as **505 rotas** do backend da
