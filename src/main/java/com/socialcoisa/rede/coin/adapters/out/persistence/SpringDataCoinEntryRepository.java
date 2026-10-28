@@ -16,6 +16,10 @@ interface SpringDataCoinEntryRepository extends JpaRepository<CoinEntryJpaEntity
 
 	boolean existsByKindAndRefId(com.socialcoisa.rede.coin.domain.CoinEntry.Kind kind, String refId);
 
+	@Query("SELECT e.refId FROM CoinEntryJpaEntity e WHERE e.accountId = :accountId AND e.kind = :kind")
+	List<String> findRefIdsByAccountIdAndKind(@Param("accountId") String accountId,
+			@Param("kind") com.socialcoisa.rede.coin.domain.CoinEntry.Kind kind);
+
 	Optional<CoinEntryJpaEntity> findByAccountIdAndIdempotencyKeyOrderByIdDesc(String accountId, String idempotencyKey);
 
 	List<CoinEntryJpaEntity> findByAccountIdOrderByCreatedAtDesc(String accountId, Pageable pageable);

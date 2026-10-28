@@ -19,6 +19,14 @@ public class UserProfile {
 	private String nameColor;
 	/** Cor da tag "Contribuinte" abaixo do nome (hex); so quem tem contribuicao verificada escolhe. */
 	private String contributorTagColor;
+	/** Itens da loja equipados no cartao do perfil (ids do catalogo); null = nada equipado. */
+	private String cardTheme;
+	private String nameplate;
+	private String bannerItem;
+	private String profileEffect;
+	/** Recado curto do perfil (texto ja limpo) e o icone de emblema que o acompanha. */
+	private String statusText;
+	private String statusIcon;
 	private String company;
 	private String location;
 	private String avatar;
@@ -476,6 +484,55 @@ public class UserProfile {
 
 	public void hydrateContributorTagColor(String color) {
 		this.contributorTagColor = color;
+	}
+
+	/** Equipa (ou limpa, com null) os itens de cartao, placa, capa e efeito do perfil. */
+	public void updateProfileCosmetics(String cardTheme, String nameplate, String bannerItem, String profileEffect,
+			Instant now) {
+		hydrateProfileCosmetics(cardTheme, nameplate, bannerItem, profileEffect);
+		this.updatedAt = now;
+	}
+
+	public void hydrateProfileCosmetics(String cardTheme, String nameplate, String bannerItem, String profileEffect) {
+		this.cardTheme = cardTheme;
+		this.nameplate = nameplate;
+		this.bannerItem = bannerItem;
+		this.profileEffect = profileEffect;
+	}
+
+	/** Recado do perfil; texto e icone ja validados no service (null limpa). */
+	public void updateStatus(String text, String icon, Instant now) {
+		hydrateStatus(text, icon);
+		this.updatedAt = now;
+	}
+
+	public void hydrateStatus(String text, String icon) {
+		this.statusText = text;
+		this.statusIcon = icon;
+	}
+
+	public String cardTheme() {
+		return cardTheme;
+	}
+
+	public String nameplate() {
+		return nameplate;
+	}
+
+	public String bannerItem() {
+		return bannerItem;
+	}
+
+	public String profileEffect() {
+		return profileEffect;
+	}
+
+	public String statusText() {
+		return statusText;
+	}
+
+	public String statusIcon() {
+		return statusIcon;
 	}
 
 	/** Declara (ou regulariza) a data de nascimento. Validacao de plausibilidade fica no service. */

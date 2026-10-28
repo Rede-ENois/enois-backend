@@ -5,6 +5,7 @@ import java.util.List;
 
 import org.springframework.stereotype.Service;
 
+import com.socialcoisa.rede.profile.application.port.out.OfficialBadgeReader;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
 import com.socialcoisa.rede.shared.text.PlainText;
@@ -22,10 +23,13 @@ import com.socialcoisa.rede.shared.web.ApiException;
 public class UpdateIdentityDisplayService {
 
 	private final UserProfileRepository repository;
+	private final OfficialBadgeReader officialBadges;
 	private final Clock clock;
 
-	public UpdateIdentityDisplayService(UserProfileRepository repository, Clock clock) {
+	public UpdateIdentityDisplayService(UserProfileRepository repository, OfficialBadgeReader officialBadges,
+			Clock clock) {
 		this.repository = repository;
+		this.officialBadges = officialBadges;
 		this.clock = clock;
 	}
 
@@ -57,6 +61,9 @@ public class UpdateIdentityDisplayService {
 				.filter(value -> !value.isEmpty())
 				.peek(value -> check("emblema", value, 500))
 				.toList();
+		if (!officialBadges.ownsAllOfficial(userId, clean)) {
+			throw new ApiException(403, "NOT_OWNED", "Voce so pode exibir emblemas oficiais que tem.");
+		}
 		profile.updateBadges(clean, clock.instant());
 		return repository.save(profile);
 	}

@@ -47,6 +47,24 @@ class UserProfileJpaEntity {
 	@Column(name = "contributor_tag_color", length = 7)
 	private String contributorTagColor;
 
+	@Column(name = "card_theme", length = 64)
+	private String cardTheme;
+
+	@Column(name = "nameplate", length = 64)
+	private String nameplate;
+
+	@Column(name = "banner_item", length = 64)
+	private String bannerItem;
+
+	@Column(name = "profile_effect", length = 64)
+	private String profileEffect;
+
+	@Column(name = "status_text", length = 60)
+	private String statusText;
+
+	@Column(name = "status_icon", length = 32)
+	private String statusIcon;
+
 	@Column(nullable = false, unique = true)
 	private String email;
 
@@ -175,6 +193,12 @@ class UserProfileJpaEntity {
 		entity.nameFont = profile.nameFont();
 		entity.nameColor = profile.nameColor();
 		entity.contributorTagColor = profile.contributorTagColor();
+		entity.cardTheme = profile.cardTheme();
+		entity.nameplate = profile.nameplate();
+		entity.bannerItem = profile.bannerItem();
+		entity.profileEffect = profile.profileEffect();
+		entity.statusText = profile.statusText();
+		entity.statusIcon = profile.statusIcon();
 		entity.email = profile.email();
 		entity.company = profile.company();
 		entity.location = profile.location();
@@ -239,6 +263,8 @@ class UserProfileJpaEntity {
 		profile.hydrateAvatarFrame(avatarFrame);
 		profile.hydrateNameStyle(nameTheme, nameFont, nameColor);
 		profile.hydrateContributorTagColor(contributorTagColor);
+		profile.hydrateProfileCosmetics(cardTheme, nameplate, bannerItem, profileEffect);
+		profile.hydrateStatus(statusText, statusIcon);
 		profile.hydrateBadges(badges == null || badges.isBlank() ? List.of() : List.of(badges.split("\n")));
 		return profile;
 	}

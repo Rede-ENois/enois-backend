@@ -66,7 +66,11 @@ class CosmeticsFlowTests {
                         org.junit.jupiter.api.Assertions.assertEquals(previous + 1, releaseOrder);
                         previous = releaseOrder;
                 }
-                org.junit.jupiter.api.Assertions.assertEquals("moldura-radar", items.get(items.size() - 1).get("id").asText());
+                // The original frames keep their release order; the seasonal catalog comes after them.
+                org.junit.jupiter.api.Assertions.assertEquals("moldura-radar", items.get(25).get("id").asText());
+                org.junit.jupiter.api.Assertions.assertEquals("tema-saci", items.get(26).get("id").asText());
+                org.junit.jupiter.api.Assertions.assertEquals("emblema-vitoria-halloween",
+                                items.get(items.size() - 1).get("id").asText());
                 var explicit = mockMvc.perform(get("/loja").param("order", "oldest"))
                         .andExpect(status().isOk()).andReturn();
                 org.junit.jupiter.api.Assertions.assertEquals(items,
@@ -77,10 +81,10 @@ class CosmeticsFlowTests {
         void catalogListsNewestFirstByReleaseOrder() throws Exception {
                 var result = mockMvc.perform(get("/loja").param("order", "newest"))
                         .andExpect(status().isOk())
-                        .andExpect(jsonPath("$[0].id").value("moldura-radar"))
-                        .andExpect(jsonPath("$[0].releaseOrder").value(26))
-                        .andExpect(jsonPath("$[1].id").value("moldura-neon"))
-                        .andExpect(jsonPath("$[2].id").value("moldura-circuito"))
+                        .andExpect(jsonPath("$[0].id").value("emblema-vitoria-halloween"))
+                        .andExpect(jsonPath("$[?(@.id == 'moldura-radar')].releaseOrder").value(26))
+                        .andExpect(jsonPath("$[?(@.id == 'moldura-neon')].releaseOrder").value(25))
+                        .andExpect(jsonPath("$[?(@.id == 'tema-saci')].releaseOrder").value(27))
                         .andReturn();
                 var items = objectMapper.readTree(result.getResponse().getContentAsString());
                 int previous = items.size() + 1;

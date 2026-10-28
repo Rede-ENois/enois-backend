@@ -11,6 +11,7 @@ import org.springframework.util.StringUtils;
 import com.socialcoisa.rede.profile.application.port.in.GetMeUseCase;
 import com.socialcoisa.rede.profile.application.port.in.GetUserProfileUseCase;
 import com.socialcoisa.rede.profile.application.port.in.UpdateProfileUseCase;
+import com.socialcoisa.rede.profile.application.port.out.OfficialBadgeReader;
 import com.socialcoisa.rede.profile.application.port.out.SocialPostCountReader;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
@@ -27,12 +28,13 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 	private final com.socialcoisa.rede.age.application.port.out.ParentalLinkRepository parentalLinks;
 	private final SocialPostCountReader postCounts;
 	private final SanctionGateReader sanctionGate;
+	private final OfficialBadgeReader officialBadges;
 	private final Clock clock;
 
 	public ProfileService(UserProfileRepository repository, ReputationService reputationService,
 			org.springframework.beans.factory.ObjectProvider<com.socialcoisa.rede.media.application.LazyUrlMigrationService> lazyMedia,
 			com.socialcoisa.rede.age.application.port.out.ParentalLinkRepository parentalLinks,
-			SocialPostCountReader postCounts, SanctionGateReader sanctionGate,
+			SocialPostCountReader postCounts, SanctionGateReader sanctionGate, OfficialBadgeReader officialBadges,
 			Clock clock) {
 		this.repository = repository;
 		this.reputationService = reputationService;
@@ -40,6 +42,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 		this.parentalLinks = parentalLinks;
 		this.postCounts = postCounts;
 		this.sanctionGate = sanctionGate;
+		this.officialBadges = officialBadges;
 		this.clock = clock;
 	}
 
@@ -243,6 +246,10 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 			username = slug;
 		}
 		validateLengths(command);
+		// The single badge column is shown like the badge list: an official id there needs ownership too.
+		if (command.badge() != null && !officialBadges.ownsAllOfficial(profile.id(), List.of(command.badge().trim()))) {
+			throw new ApiException(403, "NOT_OWNED", "Voce so pode exibir emblemas oficiais que tem.");
+		}
 		String portfolio = com.socialcoisa.rede.shared.web.SafeUrl.requireHttpUrl(trim(command.portfolio()), "portfolio");
 		List<String> externalLinks = com.socialcoisa.rede.shared.web.SafeUrl
 			.requireHttpUrls(clean(command.externalLinks()), "link");
