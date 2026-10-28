@@ -787,7 +787,7 @@ Os 4 últimos são **BLOQUEADOS** por dependência externa (não é código meu)
   3 casos de conteúdo falham**. `vitest` da linha `qa` sem regressão e `tsc` sem erro novo
   (472 = 472, todos do pacote privado `@rede-enois/design-system`).
   Front: PR #348 (branch `fix/texto-longo-nao-estoura`, sobre a `qa`).
-- **[ ] EM REVISÃO 2026-10-28 — O dock de mensagens (novo) deixava a mini-janela de conversa
+- **[x] ENTREGUE 2026-10-28 — O dock de mensagens (novo) deixava a mini-janela de conversa
   FORA da tela, com o botão de fechar inalcançável.** O dock é ancorado à direita e cresce para
   a **esquerda**: cada mini-janela tem 22rem (352px), o painel tem 20rem (320px), o espaço entre
   eles é 8px e a margem da direita é 16px. O estado aceita até 4 janelas abertas
@@ -807,8 +807,10 @@ Os 4 últimos são **BLOQUEADOS** por dependência externa (não é código meu)
   agora ela **volta para a frente** ao ser clicada, senão ficaria marcada como aberta sem janela
   e sem botão de fechar). `vitest` da linha `qa` sem regressão e `tsc` sem erro novo
   (472 = 472, todos do pacote privado `@rede-enois/design-system`).
-  *Estado:* o conserto está no front #349, **ainda em revisão** — o item vira ENTREGUE quando o
-  PR entrar na `qa`.
+  *Verificado no ar:* com o front #349 mergeado na `qa`, a 1024px com 2 conversas abertas só a
+  que cabe é desenhada (borda esquerda em 328px, dentro da tela — antes era -32px) e a 1280px
+  cabem duas; e clicar numa conversa que ficou fora do desenho a **traz para a frente** (o
+  estado passa a `[conv_1, conv_2]` e a janela dela passa a ser desenhada).
   Front: PR #349 (branch `fix/dock-chat-nao-sai-da-tela`, sobre a `qa`).
 - **[x] ENTREGUE 2026-10-27 — Auditoria de contrato da linha `qa` (front x API): nenhuma
   divergência.** O que a lista do repo já tinha contado antes foi reconferido no código de
