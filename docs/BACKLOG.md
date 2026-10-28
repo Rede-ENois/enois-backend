@@ -812,6 +812,27 @@ Os 4 últimos são **BLOQUEADOS** por dependência externa (não é código meu)
   cabem duas; e clicar numa conversa que ficou fora do desenho a **traz para a frente** (o
   estado passa a `[conv_1, conv_2]` e a janela dela passa a ser desenhada).
   Front: PR #349 (branch `fix/dock-chat-nao-sai-da-tela`, sobre a `qa`).
+- **[ ] EM REVISÃO 2026-10-28 — Ativar o E2E numa conta sem senha trocava a senha ANTES de
+  guardar a chave — e a troca encerra a sessão, então o upload saía com 401.** O banner de
+  ativação da criptografia ponta a ponta (`E2eSetupBanner`, no topo do chat) tem dois caminhos:
+  conta **com** senha (pede a senha e guarda o keypair) e conta **sem** senha, de login social
+  (define a senha e guarda o keypair). No segundo, a ordem estava errada: a senha era trocada
+  primeiro e o keypair subia depois — mas trocar a senha **encerra todas as sessões** da conta
+  (`AuthService.changePassword` → `revokeAllByUser`), inclusive a que está em uso.
+  *Confirmado no log do backend:* `POST /auth/password/change` → 200 e, na sequência,
+  `POST /e2e/keypair` → **401**. O banner caía em "Não foi possível definir a senha" e a pessoa
+  ficava **sem chave E com a senha já trocada** — na volta ao login o banner aparecia de novo e
+  o E2E não podia ser ativado.
+  *O conserto (front #350):* o keypair é gerado, cifrado com a senha nova e guardado **antes**
+  da troca; a sessão local é limpa depois (a troca a encerrou no servidor) e a pessoa entra de
+  novo com a senha nova — o mesmo que acontece em qualquer troca de senha do app. A ordem ficou
+  num módulo próprio (`src/lib/e2e/ativar-e2e.ts`) para poder ser testada.
+  *Testes:* front `src/lib/e2e/ativar-e2e.test.ts` (4 — a ordem `keypair` → `senha` → `limpa`
+  **falha com a ordem antiga**) e back `PasswordChangeEndsSessionTests` (3 — a troca derruba a
+  sessão, o upload falha depois dela, a conta social que cria a primeira senha também perde a
+  sessão).
+  *Estado:* o conserto está no front #350, **ainda em revisão** — o item vira ENTREGUE quando o
+  PR entrar na `qa`.
 - **[x] ENTREGUE 2026-10-27 — Auditoria de contrato da linha `qa` (front x API): nenhuma
   divergência.** O que a lista do repo já tinha contado antes foi reconferido no código de
   hoje: as **427 chamadas do front** (`src/lib/api/**`) contra as **505 rotas** do backend da
