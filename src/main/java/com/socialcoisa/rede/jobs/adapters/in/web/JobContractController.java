@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
+import com.socialcoisa.rede.jobs.application.port.out.CompanyDirectoryReader;
 import com.socialcoisa.rede.jobs.application.port.out.ExternalJobRepository;
 import com.socialcoisa.rede.jobs.domain.ExternalJob;
 import com.socialcoisa.rede.jobs.application.JobService;
@@ -258,11 +259,15 @@ class JobContractController {
 	@GetMapping("/companies")
 	List<Map<String, Object>> companies(@RequestParam(required = false) String query,
 			@RequestParam(defaultValue = "60") int limit) {
+		// A `origem` separa as duas abas da tela de empresas (Énóis × plataformas externas):
+		// sem ela no corpo, a aba "Plataformas externas" ficava sempre vazia, porque o front
+		// filtra por `c.origem === "externa"` — e um campo ausente nunca é "externa".
 		return companyDirectory.directory(query, Math.min(Math.max(limit, 1), 200)).stream()
 			.map(c -> Map.<String, Object>of(
 				"name", c.name(),
 				"logo", c.logo() == null ? "" : c.logo(),
-				"openJobs", c.openJobs()))
+				"openJobs", c.openJobs(),
+				"origem", c.origem() == null ? CompanyDirectoryReader.ORIGEM_ENOIS : c.origem()))
 			.toList();
 	}
 

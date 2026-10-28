@@ -97,6 +97,20 @@ public final class TestDatabase {
 		require().update("update jobs set posted_by = ? where id = ?", userId, jobId);
 	}
 
+	/**
+	 * Insere uma vaga EXTERNA (agregada de uma plataforma) direto no banco. O diretório de
+	 * empresas junta as duas origens, e só a externa carrega a origem "externa".
+	 */
+	public static void insertExternalJob(String id, String title, String company, String location,
+			String url, Instant importedAt) {
+		require().update("delete from external_jobs where id = ?", id);
+		require().update("""
+				insert into external_jobs (id, platform, external_id, title, company, location, salary,
+					currency, url, imported_at, last_checked_at, external_status)
+				values (?, 'Plataforma Teste', ?, ?, ?, ?, null, 'BRL', ?, ?, ?, 'FOUND')""",
+			id, id + "-externo", title, company, location, url, importedAt, importedAt);
+	}
+
 	/** Insere uma candidatura direto no banco (para reproduzir uma candidatura orfa do dono). */
 	public static void insertJobApplication(String jobId, String userId) {
 		require().update("delete from job_applications where job_id = ? and user_id = ?", jobId, userId);
