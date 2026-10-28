@@ -731,6 +731,38 @@ Os 4 últimos são **BLOQUEADOS** por dependência externa (não é código meu)
   foram semeados uma denúncia e uma sanção para as tabelas de moderação terem conteúdo.
   *Fora do escopo (externo):* Turnstile em produção, CORS do bucket S3 e a aprovação do app do
   LinkedIn.
+- **[x] ENTREGUE 2026-10-27 — O painel de contribuintes (aba nova do `/moderador`) levava a
+  página a rolar de lado no celular: um e-mail longo estourava 40px.** A varredura acima mediu
+  as telas do dia; a aba "Contribuintes" do painel de moderadores entrou depois e mostra o
+  contato de quem se candidatou — login do GitHub e e-mail. São texto do usuário e não têm
+  espaço em que quebrar: como item de flex, o `min-width: auto` deles é o **min-content** do
+  próprio e-mail, ou seja, o e-mail inteiro.
+  *Medido (Chrome headless, 390px, DOM real do painel com o CSS compilado da QA):* o link de
+  e-mail ficava com 401px numa tela de 390px — **40px de transbordo**. A 1280px nada estourava.
+  *O conserto:* `min-w-0` + `break-all` nos dois links (o `break-words` sozinho não resolve,
+  porque não muda o cálculo do min-content) e `shrink-0` nos ícones, para o ícone não ser
+  espremido quando o texto quebra em duas linhas. Depois: **0px de transbordo** a 390px, e a
+  1280px continua igual.
+  *Teste:* `src/lib/layout-contato.test.ts` (3) — trava a regra nos dois links e nos ícones;
+  **sem o conserto os 3 falham**. `vitest` da linha `qa` sem regressão (as 10 falhas de arquivo
+  e os 2 testes quebrados são o pacote privado `@rede-enois/design-system`, que não resolve
+  neste host — o CI da PR resolve com o token do registry).
+  Front: PR #338 (branch `fix/contato-transborda-celular`, sobre a `qa`).
+- **[x] ENTREGUE 2026-10-27 — Auditoria de contrato da linha `qa` (front x API): nenhuma
+  divergência.** O que a lista do repo já tinha contado antes foi reconferido no código de
+  hoje: as **427 chamadas do front** (`src/lib/api/**`) contra as **505 rotas** do backend da
+  linha `qa` — todo caminho tem par; os **tipos de campo** dos módulos novos (selos de
+  contribuição, painel de contribuintes, PRs, notas, LinkedIn, perfil do GitHub) batem registro a
+  registro com os `record` do backend; os **33 `href` de notificação** que o backend produz
+  estão todos no allowlist de `src/utils/navigation.ts` (fora dele o clique é mudo); as **18
+  abas** do `/moderador` têm componente e nenhuma é botão morto; e as rotas do router
+  (`src/routes/**`) batem com os links internos.
+  *Também foram medidas as telas novas a 390px e 1280px na QA no ar (Chrome headless): as 32
+  rotas públicas (landing, Apoiar, Selos, perfil, profissional, blogs, grupos, vagas, empresas,
+  serviços, carteira, diretrizes, jogos, marketplace, developers, projetos, etc.) — overflow
+  horizontal 0 em todas. A única com transbordo era a aba "Contribuintes" do painel, corrigida
+  acima (o painel é protegido: a medição usou a API interceptada no Chrome, com o DOM e o CSS
+  reais da QA).
 - **[x] ENTREGUE 2026-10-22 — As abas da caixa de entrada cortavam no celular.** Com a quinta aba
   ("Serviços", que veio do chat de serviço), a faixa de abas da caixa de entrada ficava sem
   respiro a 390px e cortava "Arquivadas" na borda a 360px — cortada sem nenhuma pista de que
