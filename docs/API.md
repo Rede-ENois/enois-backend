@@ -399,30 +399,50 @@ Idempotency-Key: <uuid>
 
 A resposta será cacheadada e reutilizada se a mesma chave for reenviada.
 
-## Loja de molduras
+## Cosmetics shop
 
-| Método | Rota | Descrição | Autenticação |
+| Method | Route | Description | Authentication |
 |---|---|---|---|
-| GET | `/api/loja?order=oldest` | Catálogo da moldura mais antiga para a mais nova (padrão) | Não; com sessão, inclui posse e equipamento |
-| GET | `/api/loja?order=newest` | Catálogo da moldura mais nova para a mais antiga | Não; com sessão, inclui posse e equipamento |
+| GET | `/api/loja?order=oldest\|newest` | Native catalog (default `oldest`) | No; with a session, adds `owned` and `equipped` |
+| GET | `/api/loja/colecoes` | Seasonal collections, sale windows and ready-made looks | No |
+| POST | `/api/loja/{itemId}/comprar` | Buy one item | Yes |
+| POST | `/api/loja/looks/{lookId}/comprar` | Buy the missing pieces of a look and wear it | Yes |
+| POST | `/api/loja/{itemId}/equipar` / `.../desequipar` | Equip / unequip an owned item (`none` unequips the frame) | Yes |
+| PUT | `/api/me/status` | Status bubble `{ text, icon }` | Yes |
+| PUT | `/api/cosmetics/profile/name-style` | Name theme (free preset or owned `NAME_STYLE` id), font, color | Yes |
+| GET / POST | `/api/eventos/saci-halloween` / `.../escolha` | Saci x Halloween duel | Read: no; choice: yes |
+| GET / POST | `/api/eventos/caca-saci` / `.../achados/{spot}` | Saci hunt | Read: no; find: yes |
 
-Cada item inclui `releaseOrder`, sequência positiva e única de entrada no catálogo.
-A ordenação usa esse campo, independentemente da posição do item no código. Novos
-itens recebem o próximo número da sequência. O catálogo inclui 26 molduras: as 18
-existentes mantêm seus IDs e sua sequência; Elementos adiciona Maré (19),
-Trepadeira (20), Vendaval (21) e Vaga-lumes (22); Tecnologia adiciona Fliperama
-(23), Circuito (24), Neon (25) e Radar (26). As oito novas custam `10_000` mF cada
-e usam os mesmos contratos de compra, equipamento e exposição no perfil, nos posts
-e nos comentários.
+The catalog lives in `src/main/resources/cosmetics/catalog.json` and is validated at startup
+(unique ids and release orders, known collections, parseable windows, look items that exist and
+are for sale); a broken file stops the boot. Each item has `id`, `kind` (`FRAME`, `BADGE`,
+`NAME_STYLE`, `NAMEPLATE`, `BANNER`, `CARD_THEME`, `PROFILE_EFFECT`), `collection`, `name`,
+`description`, `priceMf`, `cssRing`, `releaseOrder`, `available` and `purchasable`.
 
-As molduras nativas são definidas no serviço, sem tabela de catálogo. Os itens e a lista
-são imutáveis; a sequência é validada na inicialização e cada consulta retorna uma lista
-completa e imutável na ordem solicitada, sem modificar o catálogo compartilhado.
-Esta alteração não grava dados e não requer migração de banco.
+- `releaseOrder` is the positive, unique order of entry in the catalog. The 26 original frames
+  keep 1 to 26, have `collection: null` and are always on sale; the seasonal items follow.
+- Seasons are month-day windows in America/Sao_Paulo, inclusive, and may wrap the year. Out of
+  season an item is listed with `available: false` and buying it returns `409 OUT_OF_SEASON`;
+  owned items can always be equipped. Event rewards are never for sale (`403 NOT_FOR_SALE`).
+- Owning = a PURCHASE ledger entry with ref `cosmetico:{userId}:{itemId}` or a row in
+  `cosmetic_grants` (free event rewards). The listing loads ownership in two queries, never per item.
+- A look costs 75% of its missing pieces, rounded to whole faíscas; each piece is still charged
+  under its own ref, so buying the same look twice never charges twice. It equips every piece,
+  replaces the badge list with the look badges and sets the look status.
+- Badges equip at the front of the list, deduplicated, up to 5 (`409 MAX_BADGES`). Official badges
+  (`emblema-*`) can only be shown by who owns them, also through `PUT /me/badges` and the profile
+  edit (`403 NOT_OWNED`).
+- Status: `text` up to 60 characters (cleaned; empty clears), `icon` is `cafe`, `estrela`,
+  `coracao`, `chip` or the icon of an official badge the person owns (`400 INVALID_STATUS_ICON`).
+- Events run in the windows set by `COSMETICS_DUEL_STARTS_AT` / `COSMETICS_DUEL_ENDS_AT` and
+  `COSMETICS_HUNT_STARTS_AT` / `COSMETICS_HUNT_ENDS_AT` (local date-time in America/Sao_Paulo,
+  default 2026-10-31 00:00:00 to 23:59:59). One duel choice per person (`409 ALREADY_CHOSEN`),
+  writes only while open (`409 EVENT_CLOSED`); the team badge comes with the choice and, after the
+  end, the first reads grant the victory badge to the winning team (a tie: both teams). The hunt
+  has 7 spots; the seventh grants `emblema-achei-saci`.
 
-`order` aceita somente `oldest` e `newest`. Valor vazio ou inválido retorna `400`
-com código `INVALID_CATALOG_ORDER`. Uma sessão enviada e inválida retorna erro de
-autenticação, sem transformar a requisição em leitura anônima.
+`order` accepts only `oldest` and `newest`; anything else returns `400 INVALID_CATALOG_ORDER`. A
+session that is sent and invalid returns an authentication error instead of an anonymous read.
 
 ## Tratamento de Erros
 

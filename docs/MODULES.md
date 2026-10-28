@@ -1123,8 +1123,11 @@ Temas da galeria (criados pela comunidade, instaláveis com um clique) e cosmét
 |---|---|
 | `GET /temas/galeria` / `.../mine` / `.../{themeId}` | Galeria pública / meus temas / detalhe |
 | `POST /temas/galeria` / `.../install` / `.../hide` / `.../report` | Publicar, instalar, ocultar, denunciar |
-| `GET /cosmetics/catalog` / `.../loja` / `.../mine` | Catálogo, loja, meus itens |
-| `POST /cosmetics/loja/{itemId}/comprar` / `.../equipar` | Comprar / equipar item |
+| `GET /cosmetics/catalog` / `.../mine` | Community cosmetics catalog, my items |
+| `GET /loja` / `/loja/colecoes` | Native shop catalog / seasonal collections and looks |
+| `POST /loja/{itemId}/comprar` / `.../equipar` / `.../desequipar`, `POST /loja/looks/{lookId}/comprar` | Buy, equip, unequip, buy a look |
+| `PUT /me/status` | Profile status bubble |
+| `GET`/`POST /eventos/saci-halloween`, `/eventos/caca-saci` | Free cosmetic events (duel, hunt) |
 | `PUT /cosmetics/profile/name-style` | Estilo do nome no perfil e em todo lugar onde o nome aparece |
 
 ## 25. DailyGames (Jogos diários)
