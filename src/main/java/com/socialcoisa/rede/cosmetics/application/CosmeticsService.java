@@ -258,8 +258,16 @@ public class CosmeticsService implements OfficialBadgeReader {
 		String id = item.id();
 		switch (item.kind()) {
 			case FRAME -> profile.updateAvatarFrame(swap(profile.avatarFrame(), id, equip), now);
-			case NAME_STYLE -> profile.updateNameStyle(swap(profile.nameTheme(), id, equip), profile.nameFont(),
-				profile.nameColor(), now);
+			// A seasonal name style brings its own font and colors: a kept font or color would repaint it.
+			case NAME_STYLE -> {
+				if (equip) {
+					profile.updateNameStyle(id, null, null, now);
+				}
+				else {
+					profile.updateNameStyle(swap(profile.nameTheme(), id, false), profile.nameFont(), profile.nameColor(),
+						now);
+				}
+			}
 			case CARD_THEME, NAMEPLATE, BANNER, PROFILE_EFFECT -> profile.updateProfileCosmetics(
 				item.kind() == CosmeticKind.CARD_THEME ? swap(profile.cardTheme(), id, equip) : profile.cardTheme(),
 				item.kind() == CosmeticKind.NAMEPLATE ? swap(profile.nameplate(), id, equip) : profile.nameplate(),

@@ -410,6 +410,23 @@ class SeasonalCosmeticsFlowTests {
 	}
 
 	@Test
+	void equippingASeasonalNameStyleDropsTheFontAndColorPickedBefore() throws Exception {
+		var user = wallet("seasonal_name_reset");
+		mockMvc.perform(put("/cosmetics/profile/name-style").header("X-Session-Token", user.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(json(Map.of("theme", "GOLD", "font", "SERIF", "color", "#123ABC"))))
+			.andExpect(status().isOk());
+		buy(user, "nome-saci");
+		mockMvc.perform(post("/loja/nome-saci/equipar").header("X-Session-Token", user.token()))
+			.andExpect(status().isOk());
+
+		JsonNode me = me(user);
+		assertThat(me.get("nameTheme").asText()).isEqualTo("nome-saci");
+		assertThat(me.get("nameFont").isNull()).isTrue();
+		assertThat(me.get("nameColor").isNull()).isTrue();
+	}
+
+	@Test
 	void nameStyleAcceptsFreeAndOwnedSeasonalThemesAndFollowsPostsAndComments() throws Exception {
 		var user = wallet("seasonal_name_style");
 		mockMvc.perform(put("/cosmetics/profile/name-style").header("X-Session-Token", user.token())

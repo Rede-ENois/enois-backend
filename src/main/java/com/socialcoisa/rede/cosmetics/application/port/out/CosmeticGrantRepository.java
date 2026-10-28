@@ -13,7 +13,6 @@ public interface CosmeticGrantRepository {
 	/** Idempotent: granting an item the person already has is a no-op. */
 	void grant(String userId, String itemId, String source, Instant now);
 
-
 	/** Grants the item to everyone who made {@code choice} in the event; idempotent. */
 	void grantToChoosers(String eventId, String choice, String itemId, String source, Instant now);
 }
