@@ -409,4 +409,47 @@ class SeasonalCosmeticsFlowTests {
 		assertThat(me.get("statusIcon").isNull()).isTrue();
 	}
 
+	@Test
+	void nameStyleAcceptsFreeAndOwnedSeasonalThemesAndFollowsPostsAndComments() throws Exception {
+		var user = wallet("seasonal_name_style");
+		mockMvc.perform(put("/cosmetics/profile/name-style").header("X-Session-Token", user.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(json(Map.of("theme", "GOLD", "font", "SERIF", "color", "#123ABC"))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.theme").value("GOLD"))
+			.andExpect(jsonPath("$.color").value("#123abc"));
+
+		mockMvc.perform(put("/cosmetics/profile/name-style").header("X-Session-Token", user.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(json(Map.of("theme", "nome-assombrado"))))
+			.andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("NOT_OWNED"));
+
+		buy(user, "nome-saci");
+		mockMvc.perform(put("/cosmetics/profile/name-style").header("X-Session-Token", user.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(json(Map.of("theme", "nome-saci"))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.theme").value("nome-saci"))
+			.andExpect(jsonPath("$.font").doesNotExist());
+
+		MvcResult published = mockMvc.perform(post("/feed/posts").header("X-Session-Token", user.token())
+				.header("Idempotency-Key", "seasonal-name-style-post")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(json(Map.of("type", "INSIGHT", "content", "Post com nome do Saci", "tags", List.of(),
+					"mediaIds", List.of()))))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.authorStyle.theme").value("nome-saci"))
+			.andReturn();
+		String postId = objectMapper.readTree(published.getResponse().getContentAsString()).get("id").asText();
+		mockMvc.perform(post("/feed/posts/" + postId + "/comments").header("X-Session-Token", user.token())
+				.header("Idempotency-Key", "seasonal-name-style-comment")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(json(Map.of("content", "Comentario do Saci", "mediaIds", List.of(),
+					"mentionedUserIds", List.of()))))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.authorStyle.theme").value("nome-saci"));
+		mockMvc.perform(get("/feed/posts/" + postId + "/comments").header("X-Session-Token", user.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[0].authorStyle.theme").value("nome-saci"));
+	}
 }
