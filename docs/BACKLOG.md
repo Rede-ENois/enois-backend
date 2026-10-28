@@ -748,6 +748,24 @@ Os 4 últimos são **BLOQUEADOS** por dependência externa (não é código meu)
   e os 2 testes quebrados são o pacote privado `@rede-enois/design-system`, que não resolve
   neste host — o CI da PR resolve com o token do registry).
   Front: PR #338 (branch `fix/contato-transborda-celular`, sobre a `qa`).
+- **[x] ENTREGUE 2026-10-27 — Um login (ou nome) longo sem espaços levava a página a rolar de
+  lado no celular: 34px de transbordo em 9 telas.** O `username` é o slug do nome — troca cada
+  espaço por hífen, mas quem se cadastra com o nome colado ("MariaAparecidaConceicao…") fica
+  com um login sem hífen nenhum, e aí não existe ponto de quebra. Onde o login é mostrado num
+  bloco, a palavra estoura a caixa; onde é item de flex, o `min-width: auto` dele é o
+  min-content do login inteiro e o item não encolhe: o mesmo estouro, com a forma diferente.
+  *Medido (Chrome headless, 390px, DOM real e CSS compilado da QA):* a lista de freelas
+  (`/freelances`) e a fila de notas do moderador estouravam **34px** com um login de 72
+  caracteres sem hífen — e o formulário de cadastro aceita nome de até 80, ou seja, é dado real.
+  A 1280px nada estourava.
+  *O conserto:* `break-words` nos 9 lugares onde o app mostra o login de uma pessoa (freelas,
+  fila de notas, fila de jogos, fila de projetos, triagem de post, perfil profissional, perfil de
+  quem faz jogos, lista de contas suspeitas e o nome do candidato no painel de contribuintes) e
+  `min-w-0` nos dois que são item de flex. Depois: **0px de transbordo** nas duas telas medidas.
+  *Teste:* `src/lib/layout-username.test.ts` (9) — trava a regra em cada uma das 9 telas; **sem
+  o conserto os 9 falham**. `vitest` da linha `qa` sem regressão e `tsc` sem erro novo (472 =
+  472, todos do pacote privado `@rede-enois/design-system`).
+  Front: PR #339 (branch `fix/login-longo-quebra-celular`, sobre a `qa`).
 - **[x] ENTREGUE 2026-10-27 — Auditoria de contrato da linha `qa` (front x API): nenhuma
   divergência.** O que a lista do repo já tinha contado antes foi reconferido no código de
   hoje: as **427 chamadas do front** (`src/lib/api/**`) contra as **505 rotas** do backend da
