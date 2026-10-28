@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
@@ -130,7 +131,8 @@ class AutomatedWritePathsTests {
 	private RequestBuilder requisicao(Rota rota) {
 		String caminho = rota.path().replace("{", "").replace("}", "");
 		if (rota.multipart()) {
-			return multipart(caminho)
+			// The flag is per file: a PUT in a controller that also has an upload must keep its verb.
+			return multipart(HttpMethod.valueOf(rota.verb()), caminho)
 				.file(new MockMultipartFile("file", "perfil.zip", "application/zip", new byte[] { 1, 2, 3 }));
 		}
 		MockHttpServletRequestBuilder requisicao = switch (rota.verb()) {
