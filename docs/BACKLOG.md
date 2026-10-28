@@ -812,7 +812,7 @@ Os 4 últimos são **BLOQUEADOS** por dependência externa (não é código meu)
   cabem duas; e clicar numa conversa que ficou fora do desenho a **traz para a frente** (o
   estado passa a `[conv_1, conv_2]` e a janela dela passa a ser desenhada).
   Front: PR #349 (branch `fix/dock-chat-nao-sai-da-tela`, sobre a `qa`).
-- **[ ] EM REVISÃO 2026-10-28 — Ativar o E2E numa conta sem senha trocava a senha ANTES de
+- **[x] ENTREGUE 2026-10-28 — Ativar o E2E numa conta sem senha trocava a senha ANTES de
   guardar a chave — e a troca encerra a sessão, então o upload saía com 401.** O banner de
   ativação da criptografia ponta a ponta (`E2eSetupBanner`, no topo do chat) tem dois caminhos:
   conta **com** senha (pede a senha e guarda o keypair) e conta **sem** senha, de login social
@@ -831,8 +831,9 @@ Os 4 últimos são **BLOQUEADOS** por dependência externa (não é código meu)
   **falha com a ordem antiga**) e back `PasswordChangeEndsSessionTests` (3 — a troca derruba a
   sessão, o upload falha depois dela, a conta social que cria a primeira senha também perde a
   sessão).
-  *Estado:* o conserto está no front #350, **ainda em revisão** — o item vira ENTREGUE quando o
-  PR entrar na `qa`.
+  *Entregue:* front #350 e back #287 mergeados na `qa` (a regra do backend — trocar a senha
+  encerra as sessões — é intencional e vale para qualquer troca; o que mudou foi a ordem no
+  front).
 - **[x] ENTREGUE 2026-10-27 — Auditoria de contrato da linha `qa` (front x API): nenhuma
   divergência.** O que a lista do repo já tinha contado antes foi reconferido no código de
   hoje: as **427 chamadas do front** (`src/lib/api/**`) contra as **505 rotas** do backend da
