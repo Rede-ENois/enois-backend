@@ -787,6 +787,24 @@ Os 4 últimos são **BLOQUEADOS** por dependência externa (não é código meu)
   3 casos de conteúdo falham**. `vitest` da linha `qa` sem regressão e `tsc` sem erro novo
   (472 = 472, todos do pacote privado `@rede-enois/design-system`).
   Front: PR #348 (branch `fix/texto-longo-nao-estoura`, sobre a `qa`).
+- **[x] ENTREGUE 2026-10-27 — O dock de mensagens (novo) deixava a mini-janela de conversa
+  FORA da tela, com o botão de fechar inalcançável.** O dock é ancorado à direita e cresce para
+  a **esquerda**: cada mini-janela tem 22rem (352px), o painel tem 20rem (320px), o espaço entre
+  eles é 8px e a margem da direita é 16px. O estado aceita até 4 janelas abertas
+  (`MAX_OPEN_CHATS`), mas a largura da tela quase nunca comporta isso — e a janela mais à
+  esquerda **saía da tela**, levando o botão de fechar junto.
+  *Medido (Chrome headless, DOM real e CSS compilado da QA, medindo a borda esquerda de cada
+  janela):* a 1024px com 2 janelas a primeira começava em **-32px** e com 3 em **-392px**; a
+  1280px com 4 janelas, em **-496px**.
+  *O conserto:* o dock desenha só as janelas que cabem — a largura da janela do navegador é
+  medida em tempo de execução (`useLarguraDaJanela`) e o teto vem de
+  `src/lib/chat-dock/chat-dock-layout.ts` (1024px → 1 janela, 1280 → 2, 1440 → 3, 1920 → 4).
+  As conversas **continuam abertas no estado**: elas não são fechadas, apenas não são
+  desenhadas fora da tela.
+  *Testes:* `src/lib/chat-dock/chat-dock-layout.test.ts` (9) e `chat-dock-window.test.ts` (3) —
+  o segundo **falha 3/3 sem o conserto**. `vitest` da linha `qa` sem regressão e `tsc` sem erro
+  novo (472 = 472, todos do pacote privado `@rede-enois/design-system`).
+  Front: PR #349 (branch `fix/dock-chat-nao-sai-da-tela`, sobre a `qa`).
 - **[x] ENTREGUE 2026-10-27 — Auditoria de contrato da linha `qa` (front x API): nenhuma
   divergência.** O que a lista do repo já tinha contado antes foi reconferido no código de
   hoje: as **427 chamadas do front** (`src/lib/api/**`) contra as **505 rotas** do backend da
