@@ -2,6 +2,12 @@
 
 Migrações Flyway em `src/main/resources/db/migration/`.
 
+## V200 - Presença
+
+`user_presence` guarda a escolha de presença e a última atividade por usuário. A tabela
+é criada por `V200__user_presence.sql`; o heartbeat atualiza apenas a atividade, sem
+alterar a escolha.
+
 ## V1 - Schema Inicial
 
 ### `users`
