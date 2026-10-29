@@ -80,14 +80,14 @@ class ArticlePostsTests {
 	}
 
 	@Test
-	void articleBodyLimitIsFourThousand() throws Exception {
+	void articleBodyLimitIsTenThousand() throws Exception {
 		var author = auth.authenticate("user_article_owner2");
 
 		mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "article-limit")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "ARTICLE", "content", "Titulo", "articleBody", "a".repeat(4001)))))
+				.content(json(Map.of("type", "ARTICLE", "content", "Titulo", "articleBody", "a".repeat(10_001)))))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("ARTICLE_BODY_TOO_LONG"));
 	}

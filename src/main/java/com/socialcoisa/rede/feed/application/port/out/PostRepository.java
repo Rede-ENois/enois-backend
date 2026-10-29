@@ -26,6 +26,13 @@ public interface PostRepository {
 	/** TODOS os posts do autor, em qualquer status — uso da purga (sanitização por spam). */
 	List<Post> findAllByAuthor(UserId authorId);
 
+	/**
+	 * Posts que anexam uma mídia, em qualquer status. É como a checagem de conteúdo explícito
+	 * encontra tudo o que precisa sair do ar quando a imagem é barrada — a mesma imagem pode ter
+	 * sido publicada mais de uma vez.
+	 */
+	List<Post> findByMediaId(String mediaId);
+
 	/** "Para você"/Seguindo: o que as identidades sociais assinaram (BUSINESS nunca entra). */
 	List<Post> findActiveByAuthors(Set<UserId> authorIds, Instant before, int limit);
 

@@ -397,9 +397,9 @@ Query params: `q=<termo>`, `types=users,communities,jobs,events,mentors`, `limit
 | POST | `/api/admin/reports/{reportId}/approve` | Aprovar report (deletar alvo) | Sim |
 | POST | `/api/admin/reports/{reportId}/dismiss` | Rejeitar report | Sim |
 
-Razões: `SPAM`, `INAPPROPRIATE`, `ABUSIVE`, `MISINFORMATION`, `COPYRIGHT`, `OTHER`
+Razões: `AI_GENERATED`, `FAKE_CONTENT`, `SCAM`, `DISCRIMINATION`, `PREJUDICE`, `HARASSMENT`, `SPAM`, `VIOLENCE`, `SEXUAL_CONTENT`, `COPYRIGHT`, `OTHER`
 
-Target types: `POST`, `COMMENT`, `USER`, `COMMUNITY`, `JOB`, `EVENT`
+Target types: `POST`, `COMMENT`, `USER`, `JOB`, `GAME`, `GROUP_POST`, `GROUP_COMMENT`, `MESSAGE`
 
 ---
 

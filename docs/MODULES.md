@@ -963,9 +963,9 @@ inválidas são rejeitadas integralmente. A operação exige autenticação e ch
 | Classe | Descrição |
 |---|---|
 | `Report` | Entidade: id, reporterId, targetType, targetId, reason, description, status |
-| `ReportReason` | Enum: `SPAM`, `INAPPROPRIATE`, `ABUSIVE`, `MISINFORMATION`, `COPYRIGHT`, `OTHER` |
-| `ReportStatus` | Enum: `PENDING`, `APPROVED`, `DISMISSED` |
-| `TargetType` | Enum: `POST`, `COMMENT`, `USER`, `COMMUNITY`, `JOB`, `EVENT` |
+| `ReportReason` | Enum: `AI_GENERATED`, `FAKE_CONTENT`, `SCAM`, `DISCRIMINATION`, `PREJUDICE`, `HARASSMENT`, `SPAM`, `VIOLENCE`, `SEXUAL_CONTENT`, `COPYRIGHT`, `OTHER` |
+| `ReportStatus` | Enum: `PENDING`, `AUTO_PENALIZED`, `APPROVED`, `DISMISSED` |
+| `TargetType` | Enum: `POST`, `COMMENT`, `USER`, `JOB`, `GAME`, `GROUP_POST`, `GROUP_COMMENT`, `MESSAGE` |
 
 ### ReportController
 

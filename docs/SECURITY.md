@@ -11,6 +11,7 @@ arquivo primeiro e siga a ordem das fases.
 | Denúncia com alvo e categoria | `moderation/` (V38+) | alvos: POST, COMMENT, USER, JOB (falta GAME) |
 | Triagem por IA da denúncia | `moderation/ai/ModerationAiService` + `AiVerdictApplicationService` + `ReportAiTriageScheduler` | provedor por env (`MODERATION_LLM_*`), desligável |
 | Penalidades e recursos | `moderation/` + `shared/sanctions/SanctionGateReader` | restrição com confiança ≥ 0,7 e sem ambiguidade; ban só com recurso negado por humano |
+| Barreira de mídia | `moderation/` (V199) — ver [`MODERACAO-MIDIA.md`](MODERACAO-MIDIA.md) | imagem publicada é classificada mesmo sem denúncia; ação automática só acima do piso de confiança |
 | Auditoria | `shared/audit/AuditLogPersistenceAdapter` | usado nas decisões administrativas |
 | Idempotência | `idempotency/IdempotencyApplicationService` | chave + hash em toda escrita sensível |
 | Faísca | `coin/` (V69) | `coin_accounts` com `version` (concorrência otimista) + `coin_entries` (razão com `Kind`) |

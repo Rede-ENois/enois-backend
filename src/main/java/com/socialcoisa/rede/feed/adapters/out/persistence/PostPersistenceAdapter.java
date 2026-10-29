@@ -62,6 +62,13 @@ class PostPersistenceAdapter implements PostRepository, SocialPostCountReader {
 	}
 
 	@Override
+	public List<Post> findByMediaId(String mediaId) {
+		return repository.findByMediaId(mediaId).stream()
+			.map(PostJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
 	public List<Post> findActiveByAuthors(Set<UserId> authorIds, Instant before, int limit) {
 		if (authorIds == null || authorIds.isEmpty()) {
 			return List.of();

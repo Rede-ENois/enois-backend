@@ -94,6 +94,7 @@ public class ReportPreTriageService {
 
 		String reasonSignal = switch (report.reason()) {
 			case VIOLENCE, HARASSMENT, DISCRIMINATION, PREJUDICE, SCAM -> ModerationSignalCatalog.REASON_VIOLENCE;
+			case SEXUAL_CONTENT -> ModerationSignalCatalog.REASON_SEXUAL;
 			case SPAM, FAKE_CONTENT, COPYRIGHT -> ModerationSignalCatalog.REASON_SPAM;
 			default -> ModerationSignalCatalog.REASON_OTHER;
 		};

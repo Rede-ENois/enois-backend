@@ -58,6 +58,27 @@ class ReportPreTriageServiceTests {
 	}
 
 	@Test
+	void aSexualContentReportAlwaysReachesTheModel() {
+		// O incidente de 2026-10-29: denúncia de conteúdo sexual com post curto, autor antigo, sem
+		// link e sem reincidência. Com o peso de REASON_OTHER (5) ela nunca chegava ao modelo.
+		ReportRepository reports = mock(ReportRepository.class);
+		when(reports.countAgainstTargetSince(anyString(), anyString(), any())).thenReturn(1L);
+		ReportPreTriageService service = service(reports, (type, id) -> Optional.of("oi"),
+			(type, id) -> Optional.of("author_1"), mock(UserProfileRepository.class));
+
+		Report report = Report.create("rep_sexual", "user_rep", TargetType.POST, "post_x",
+			ReportReason.SEXUAL_CONTENT, "foto explícita", now);
+
+		var score = service.score(report, "oi", null);
+
+		assertThat(score.signals()).contains(ModerationSignalCatalog.REASON_SEXUAL);
+		assertThat(score.score()).isGreaterThanOrEqualTo(30);
+
+		report.attachPreTriage(service.toJson(score), score.score(), now);
+		assertThat(service.shouldCallAi(report)).isTrue();
+	}
+
+	@Test
 	void weakReportStaysOutOfTheLlm() {
 		ReportRepository reports = mock(ReportRepository.class);
 		ReportPreTriageService service = service(reports, (type, id) -> Optional.empty(),

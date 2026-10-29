@@ -6,6 +6,8 @@ import java.util.Map;
 public final class ModerationSignalCatalog {
 
 	public static final String REASON_VIOLENCE = "REASON_VIOLENCE";
+	/** Conteúdo sexual explícito: sinal próprio porque a prova costuma estar na IMAGEM, não no texto. */
+	public static final String REASON_SEXUAL = "REASON_SEXUAL";
 	public static final String REASON_SPAM = "REASON_SPAM";
 	public static final String REASON_OTHER = "REASON_OTHER";
 	public static final String REPEATED_TARGET = "REPEATED_TARGET";
@@ -17,6 +19,9 @@ public final class ModerationSignalCatalog {
 
 	public static final Map<String, Integer> BASE_WEIGHTS = Map.of(
 		REASON_VIOLENCE, 50,
+		// Acima do piso de 30 da pré-triagem por si só: uma denúncia de conteúdo sexual sempre
+		// chega ao modelo, mesmo sem nenhum outro sinal (conta antiga, texto curto, sem link).
+		REASON_SEXUAL, 60,
 		REASON_SPAM, 25,
 		REASON_OTHER, 5,
 		REPEATED_TARGET, 30,

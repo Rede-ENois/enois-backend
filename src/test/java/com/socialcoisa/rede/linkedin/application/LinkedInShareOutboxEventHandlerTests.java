@@ -116,6 +116,11 @@ class LinkedInShareOutboxEventHandlerTests {
 		}
 
 		@Override
+		public List<Post> findByMediaId(String mediaId) {
+			return List.of();
+		}
+
+		@Override
 		public Optional<Post> findById(PostId id) {
 			return post != null && post.id().equals(id) ? Optional.of(post) : Optional.empty();
 		}

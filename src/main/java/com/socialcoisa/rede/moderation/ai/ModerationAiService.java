@@ -39,15 +39,18 @@ public class ModerationAiService {
 	private final ObjectMapper objectMapper;
 	private final ReportRepository reportRepository;
 	private final ReportedContentReader contentReader;
+	private final com.socialcoisa.rede.moderation.application.port.out.ReportedMediaReader mediaReader;
 	private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
 	public ModerationAiService(ReportRepository reportRepository, ReportedContentReader contentReader,
+			com.socialcoisa.rede.moderation.application.port.out.ReportedMediaReader mediaReader,
 			@Value("${rede.moderation.llm.base-url:https://infer.flatt.com.br/v1}") String baseUrl,
 			@Value("${rede.moderation.llm.api-key:}") String apiKey,
 			@Value("${rede.moderation.llm.model:qwen3.8-27b}") String model,
 			ObjectMapper objectMapper) {
 		this.reportRepository = reportRepository;
 		this.contentReader = contentReader;
+		this.mediaReader = mediaReader;
 		this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
 		this.apiKey = apiKey;
 		this.model = model;
@@ -56,6 +59,11 @@ public class ModerationAiService {
 
 	public boolean available() {
 		return StringUtils.hasText(apiKey);
+	}
+
+	/** Modelo em uso, para o ledger registrar com o que a decisão foi tomada. */
+	public String model() {
+		return model;
 	}
 
 	/**
@@ -84,13 +92,26 @@ public class ModerationAiService {
 			6. Citar uma expressao ofensiva em uma denuncia NAO e usar a expressao contra alguem.
 			7. Discussao politica ou religiosa legitima e diferente de intolerancia/ameaca.
 			8. Conteudo repetitivo ou gerado por IA nao e infracao por si so.
+			9. Proibida NUDEZ e conteudo SEXUAL EXPLICITO — genitalia, ato sexual, orgao sexual em
+			   destaque, pornografia de qualquer tipo. Isso vale tambem para imagem, GIF, video e
+			   desenho/hentai, e NAO depende do texto do post: a foto e a infracao.
+			10. Proibido conteudo SEXUAL envolvendo menores de idade, real ou simulado (inclusive
+			   desenho e personagem ficticio). Isso e a violacao mais grave da lista.
+			11. Nao e infracao por si so: educacao sexual, materia jornalistica, denuncia, obra de
+			   arte sem exposicao explicita, afeto entre adultos e imagem sem nudez. Nesses casos,
+			   se houver duvida, use "ambiguo": true e "acao": "HUMAN_REVIEW".
+
+			Se houver IMAGENS anexadas na mensagem, elas sao o CONTEUDO denunciado: olhe as imagens
+			antes de decidir. Texto inocente com imagem explicita e violacao; imagem inocente com
+			denuncia falsa nao e. Nunca diga que viu algo que nao esta na imagem.
 
 			Regras obrigatorias de saida:
 			- "acao" pode ser "PENALIZAR", "HUMAN_REVIEW" ou "NENHUMA".
 			- "PENALIZAR" e para violacao CONFIRMADA das diretrizes: racismo, homofobia, transfobia,
 			  intolerancia religiosa, xenofobia, discriminacao ou preconceito DIRECIONADOS a pessoa
 			  ou grupo; ameaca, intimidacao ou incitacao a violencia; assedio ou humilhacao
-			  DIRECIONADA; golpe, fraude, phishing ou link malicioso; spam ou manipulacao.
+			  DIRECIONADA; golpe, fraude, phishing ou link malicioso; spam ou manipulacao; nudez ou
+			  conteudo sexual explicito (diretrizes 9 e 10).
 			  UMA denuncia comprovada ja basta — nao exija varias denuncias nem gravidade alta.
 			- Use "PENALIZAR" quando o proprio CONTEUDO comprova a violacao e nao ha duvida:
 			  "ambiguo": false e "confianca" >= 0.7. "gravidade" (LOW..CRITICAL) classifica o caso,
@@ -139,17 +160,59 @@ public class ModerationAiService {
 		return userPrompt(content, report.reason().name(), report.description());
 	}
 
+	/**
+	 * As imagens do alvo que vao junto do prompt. Denuncia de conteudo sexual e o caso em que a
+	 * prova esta na imagem: sem ela, o modelo so tem o texto do denunciante.
+	 */
+	List<byte[]> reportImages(Report report) {
+		if (mediaReader == null) {
+			return List.of();
+		}
+		try {
+			return mediaReader.imagesOf(report.targetType().name(), report.targetId(), MAX_REPORT_IMAGES);
+		}
+		catch (RuntimeException failure) {
+			// Leitura de midia e best-effort: falha aqui vira "sem imagem", nunca denuncia perdida.
+			return List.of();
+		}
+	}
+
+	/** Teto de imagens por denuncia: o suficiente para provar o caso, sem inflar a requisicao. */
+	static final int MAX_REPORT_IMAGES = 2;
+
 	/** Chama o LLM com um prompt de usuario ja montado. Vazio/erro = sem palpite. */
 	public Optional<String> triage(String userPromptText) {
+		return triage(userPromptText, List.of());
+	}
+
+	/**
+	 * Mesma chamada, com as imagens do alvo junto.
+	 *
+	 * <p>Sem imagem o corpo continua sendo uma string simples — e o formato que o endpoint sempre
+	 * recebeu. Com imagem, o conteudo do usuario vira a lista de partes do protocolo de visao
+	 * (texto + `image_url` em data URL), que e o que faz o modelo OLHAR em vez de julgar so pelo
+	 * texto do denunciante.</p>
+	 */
+	public Optional<String> triage(String userPromptText, List<byte[]> images) {
+		return triageVision(systemPrompt(), userPromptText, images);
+	}
+
+	/**
+	 * Chamada com instrucao propria — usada pela classificacao de imagem, que tem um contrato
+	 * diferente do de denuncia. Sem esse ponto de entrada, o analisador de midia teria de duplicar
+	 * a montagem da requisicao (timeout, UA, tratamento de erro) que ja existe aqui.
+	 */
+	public Optional<String> triageVision(String systemInstruction, String userPromptText, List<byte[]> images) {
 		if (!available()) {
 			return Optional.empty();
 		}
 		try {
+			Object userContent = images == null || images.isEmpty() ? userPromptText : contentParts(userPromptText, images);
 			String body = objectMapper.writeValueAsString(java.util.Map.of(
 				"model", model,
 				"messages", List.of(
-					java.util.Map.of("role", "system", "content", systemPrompt()),
-					java.util.Map.of("role", "user", "content", userPromptText)),
+					java.util.Map.of("role", "system", "content", systemInstruction),
+					java.util.Map.of("role", "user", "content", userContent)),
 				"temperature", 0.1));
 			HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/chat/completions"))
 				.timeout(Duration.ofSeconds(30))
@@ -177,9 +240,28 @@ public class ModerationAiService {
 		}
 	}
 
+	/**
+	 * Partes do conteudo do usuario para o protocolo de visao: o texto primeiro, as imagens
+	 * depois, cada uma como data URL JPEG (o adaptador ja entrega reduzido e sem EXIF).
+	 */
+	static List<java.util.Map<String, Object>> contentParts(String text, List<byte[]> images) {
+		List<java.util.Map<String, Object>> parts = new java.util.ArrayList<>();
+		parts.add(java.util.Map.of("type", "text", "text", text));
+		for (byte[] image : images) {
+			parts.add(java.util.Map.of("type", "image_url", "image_url",
+				java.util.Map.of("url", "data:image/jpeg;base64," + java.util.Base64.getEncoder().encodeToString(image))));
+		}
+		return parts;
+	}
+
 	/** Mesma chamada, montando o prompt a partir do conteudo/categoria/descricao soltos. */
 	public Optional<String> triage(String reportedContent, String reasonName, String description) {
 		return triage(userPrompt(reportedContent, reasonName, description));
+	}
+
+	/** Mesma chamada, com as imagens do alvo (usada pelo automod e pela triagem de denúncia). */
+	public Optional<String> triage(String reportedContent, String reasonName, String description, List<byte[]> images) {
+		return triage(userPrompt(reportedContent, reasonName, description), images);
 	}
 
 	/**
@@ -252,7 +334,7 @@ public class ModerationAiService {
 			if (!filter.test(report)) {
 				continue;
 			}
-			String verdict = triage(reportUserPrompt(report))
+			String verdict = triage(reportUserPrompt(report), reportImages(report))
 				.orElse(null);
 			var parsed = verdict == null ? Optional.<JsonNode>empty() : parseVerdict(verdict);
 			if (parsed.isEmpty()) {
