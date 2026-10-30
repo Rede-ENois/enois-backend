@@ -49,7 +49,15 @@ public enum NotificationCategory {
 		Map.entry("JOB_APPLICATION_STATUS", JOBS),
 		Map.entry("SUPORTE", SYSTEM),
 		Map.entry("MICROPROJETO", SYSTEM),
-		Map.entry("SISTEMA", SYSTEM));
+		Map.entry("SISTEMA", SYSTEM),
+		// Kinds from sibling PRs, mapped ahead so the merge order does not matter:
+		// ANSWER_ACCEPTED (#336), EVENT_NEXT_OCCURRENCE (#337), STUDY_PAIR_* (#338).
+		Map.entry("ANSWER_ACCEPTED", SOCIAL),
+		Map.entry("EVENT_NEXT_OCCURRENCE", GROUPS),
+		Map.entry("STUDY_PAIR_MATCHED", SOCIAL),
+		Map.entry("STUDY_PAIR_CHECKIN", SOCIAL),
+		Map.entry("STUDY_PAIR_ENDED", SOCIAL),
+		Map.entry("STUDY_PAIR_REMINDER", SOCIAL));
 
 	public static NotificationCategory of(String kind) {
 		return kind == null ? SYSTEM : BY_KIND.getOrDefault(kind, SYSTEM);
