@@ -87,6 +87,12 @@ class PostInteractionPersistenceAdapter implements PostInteractionRepository {
 	}
 
 	@Override
+	public List<String> findReactedPostIdsByUserId(UserId userId, int limit) {
+		return reactionRepository.findPostIdsByUserId(userId.value(),
+			org.springframework.data.domain.PageRequest.of(0, Math.max(1, limit)));
+	}
+
+	@Override
 	public Map<PostId, ReactionType> findReactionsByUserAndPostIds(UserId userId, Collection<PostId> postIds) {
 		List<String> ids = postIds.stream().map(PostId::value).toList();
 		List<ReactionJpaEntity> reactions = reactionRepository.findByPostIdInAndUserId(ids, userId.value());

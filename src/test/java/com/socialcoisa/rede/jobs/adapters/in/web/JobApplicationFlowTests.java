@@ -202,6 +202,32 @@ class JobApplicationFlowTests {
 			.andExpect(status().isCreated());
 	}
 
+	/**
+	 * Issue 321: a DM ao empregador corre na transacao da candidatura. Se ela for recusada (aqui, o
+	 * portao de idade de quem nao declarou a data de nascimento), a candidatura nao pode cair junto
+	 * com 500 — ela fica registrada e o empregador ainda recebe o e-mail.
+	 */
+	@Test
+	void refusedDirectMessageDoesNotBreakTheApplication() throws Exception {
+		var employer = auth.authenticate("cand_dm_employer");
+		var candidate = auth.authenticate("cand_dm_candidate");
+		String jobId = createJob(employer, "[]");
+		com.socialcoisa.rede.shared.web.TestDatabase.clearBirthDate(candidate.userId());
+
+		mockMvc.perform(post("/jobs/" + jobId + "/applications")
+				.header("X-Session-Token", candidate.token())
+				.header("Idempotency-Key", "cand-dm-apply")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"message\":\"Quero muito essa vaga\"}"))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.status").value("APPLIED"));
+
+		mockMvc.perform(get("/jobs/" + jobId + "/applications").header("X-Session-Token", employer.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.length()").value(1));
+		assertThat(sentSubjects).contains("Nova candidatura: Pessoa Desenvolvedora");
+	}
+
 	@Test
 	void formRejectsDuplicateLabelsAndAbsurdFieldCounts() throws Exception {
 		var employer = auth.authenticate("cand_limits");

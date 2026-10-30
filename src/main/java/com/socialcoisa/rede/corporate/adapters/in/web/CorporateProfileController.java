@@ -44,6 +44,9 @@ class CorporateProfileController {
 	record NameRequest(String name) {
 	}
 
+	record UsernameRequest(String username) {
+	}
+
 	record ImportRequest(List<String> fields) {
 	}
 
@@ -82,6 +85,16 @@ class CorporateProfileController {
 	Map<String, Object> rename(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken, @RequestBody NameRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		return view(service.rename(user.id().value(), request.name()));
+	}
+
+	/**
+	 * Troca o nametag do perfil profissional — o `@` e o fim da URL pública
+	 * (`/profissional/{nametag}`). É independente do @ do perfil social.
+	 */
+	@PostMapping("/me/business-profile/username")
+	Map<String, Object> changeUsername(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken, @RequestBody UsernameRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return view(service.changeUsername(user.id().value(), request.username()));
 	}
 
 	/** Prévia da importação do perfil social — nada é gravado. */

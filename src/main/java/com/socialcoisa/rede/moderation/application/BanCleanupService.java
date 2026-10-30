@@ -84,7 +84,7 @@ public class BanCleanupService {
 			try {
 				String snapshot = snapshotPost(post);
 				archive.archive(sanctionId, userId, "POST", post.id().value(), snapshot, now);
-				if (post.status() == PostStatus.ACTIVE) {
+				if (post.status() == PostStatus.ACTIVE || post.status() == PostStatus.QUARANTINED) {
 					removePost.removeAsModerator("ban-cleanup", post.id().value(), "BAN:" + sanctionId);
 				}
 			} catch (RuntimeException e) {

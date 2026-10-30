@@ -184,15 +184,15 @@ class CoinController {
 			Map.entry("indice", summary.result().index()),
 			Map.entry("cotacaoAtualMicros", summary.previousMicros()),
 			Map.entry("cotacaoSugeridaMicros", summary.result().suggestedMicros()),
+			Map.entry("publicavelAgora", publishable(summary)),
 			Map.entry("periodoDecorrido", summary.elapsedFraction()),
 			Map.entry("proximaAvaliacaoEm", summary.nextEvaluationAt().toString()));
 	}
 
 	/**
-	 * Roda o cálculo AGORA (admin) — o worker diário faz sozinho; isto serve para conferir o
-	 * resultado sem esperar a janela e publica a cotação se o valor sugerido mudou. O passo
-	 * publicável é proporcional ao tempo desde a última publicação: clicar várias vezes no mesmo
-	 * dia NÃO equivale a vários períodos.
+	 * Roda o cálculo AGORA (admin) — o worker diário faz sozinho. A cadência é a mesma do worker:
+	 * no máximo UMA publicação por período (24h). Clicar de novo dentro do período não publica
+	 * nada, só devolve o cálculo do momento e quando é a próxima avaliação.
 	 */
 	@PostMapping("/admin/carteira/economia/recalcular")
 	Map<String, Object> recalculateEconomy(
@@ -212,8 +212,14 @@ class CoinController {
 			Map.entry("emissao", summary.metrics().issuance()),
 			Map.entry("circulacao", summary.metrics().circulation()),
 			Map.entry("cofre", summary.metrics().treasuryBalance()),
+			Map.entry("publicavelAgora", publishable(summary)),
 			Map.entry("periodoDecorrido", summary.elapsedFraction()),
 			Map.entry("proximaAvaliacaoEm", summary.nextEvaluationAt().toString()));
+	}
+
+	/** A próxima chamada publicaria um valor novo? Fora do período, nunca. */
+	private static boolean publishable(com.socialcoisa.rede.coin.application.CoinEconomyService.Summary summary) {
+		return summary.due() && summary.result().suggestedMicros() != summary.previousMicros();
 	}
 
 	@GetMapping("/admin/carteira/disputas")

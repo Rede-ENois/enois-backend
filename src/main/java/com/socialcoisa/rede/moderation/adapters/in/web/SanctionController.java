@@ -13,8 +13,12 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository;
 import com.socialcoisa.rede.moderation.application.SanctionService;
+import com.socialcoisa.rede.moderation.application.SanctionService.SanctionEntry;
 import com.socialcoisa.rede.moderation.domain.Appeal;
+import com.socialcoisa.rede.moderation.domain.SanctionStatus;
+import com.socialcoisa.rede.moderation.domain.SanctionType;
 import com.socialcoisa.rede.moderation.domain.UserSanction;
+import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.AdminGuard;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
@@ -90,7 +94,68 @@ class SanctionController {
 	}
 
 
+	/** Penalidades de toda a rede (fila do admin): listar para corrigir ou remover manualmente. */
+	@GetMapping("/admin/sanctions")
+	List<AdminSanctionView> list(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(defaultValue = "ACTIVE") String status,
+			@RequestParam(defaultValue = "100") int limit) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		adminGuard.requireAdmin(user);
+		SanctionStatus parsed;
+		try {
+			parsed = SanctionStatus.valueOf(status.trim().toUpperCase());
+		}
+		catch (IllegalArgumentException failure) {
+			throw new ApiException(400, "INVALID_STATUS", "Estado de penalidade inválido.");
+		}
+		return sanctions.adminSanctions(parsed, limit).stream().map(AdminSanctionView::from).toList();
+	}
+
+	/** Penalidade aplicada errada: o admin tira a sanção e a conta volta ao normal. */
+	@PostMapping("/admin/sanctions/{sanctionId}/revoke")
+	Map<String, Object> revoke(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String sanctionId, @RequestBody RevokeSanctionRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		adminGuard.requireAdmin(user);
+		UserSanction removed = sanctions.revokeSanction(user.id().value(), sanctionId, request.reason());
+		return Map.of("status", "REVOKED", "sanction", SanctionView.from(removed));
+	}
+
+	/** Corrige a penalidade sem removê-la: troca o tipo e o motivo, mantendo o mesmo registro. */
+	@PostMapping("/admin/sanctions/{sanctionId}/edit")
+	Map<String, Object> edit(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String sanctionId, @RequestBody EditSanctionRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		adminGuard.requireAdmin(user);
+		SanctionType type;
+		try {
+			type = SanctionType.valueOf(request.type().trim().toUpperCase());
+		}
+		catch (IllegalArgumentException | NullPointerException failure) {
+			throw new ApiException(400, "INVALID_SANCTION_TYPE", "Escolha o novo tipo de penalidade.");
+		}
+		UserSanction updated = sanctions.editSanction(user.id().value(), sanctionId, type, request.reason(),
+			sessions);
+		return Map.of("status", "UPDATED", "sanction", SanctionView.from(updated));
+	}
+
 	record CreateAppealRequest(String message) {
+	}
+
+	record RevokeSanctionRequest(String reason) {
+	}
+
+	record EditSanctionRequest(String type, String reason) {
+	}
+
+	record AdminSanctionView(String id, String userId, String username, String name, String reportId, String type,
+			String reason, String status, String createdAt, String removedAt) {
+		static AdminSanctionView from(SanctionEntry entry) {
+			UserSanction s = entry.sanction();
+			return new AdminSanctionView(s.id(), s.userId(), entry.username(), entry.name(), s.reportId(),
+				s.type().name(), s.reason(), s.status().name(), s.createdAt().toString(),
+				s.removedAt() != null ? s.removedAt().toString() : null);
+		}
 	}
 
 	record SanctionView(String id, String userId, String reportId, String type, String reason, String status,

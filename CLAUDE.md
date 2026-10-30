@@ -15,4 +15,5 @@ regras valem por inteiro; a de baixo é repetida porque é a mais fácil de pula
 - Migração que neutraliza dado perigoso usa denylist explícita do que é perigoso (ex.: `^(javascript|vbscript|data|file):` depois de tirar `[\x00-\x20]` do início), nunca allowlist com exceções em regex — a exceção (`host:port`) virou brecha.
 - Docker em tarefa de agente: remova só o container que você criou, pelo nome (`docker rm -f <nome>`); nunca `docker container prune`, `system prune` ou remoção em massa — apaga containers de outros projetos da máquina.
 - Item que ocupa um slot do perfil (estilo de nome, tema, moldura): antes de gravar, confira como o front/DS desenha aquele slot e zere os campos vizinhos que mudam o desenho (fonte e cor do nome sobrescrevem o tema sazonal) — o teste afirma o estado completo do slot, não só o id.
+- Suíte de teste com outro processo usando a mesma cópia (agente subindo o app com `mvnw spring-boot:run`, outro `mvnw test`): rode num `git worktree` separado — os dois reescrevem `target/` e a suíte falha com `ClassNotFoundException`/contexto que não sobe, sem defeito no código.
 <!-- /engineering-learn:live -->

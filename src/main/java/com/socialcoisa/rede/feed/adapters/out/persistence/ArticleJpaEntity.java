@@ -15,7 +15,7 @@ class ArticleJpaEntity {
 	@Column(name = "post_id")
 	private String postId;
 
-	@Column(nullable = false, length = 4000)
+	@Column(nullable = false, length = 10000)
 	private String body;
 
 	@Column(name = "created_at", nullable = false)

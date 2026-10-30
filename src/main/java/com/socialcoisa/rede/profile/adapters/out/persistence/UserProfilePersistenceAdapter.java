@@ -81,8 +81,10 @@ class UserProfilePersistenceAdapter implements UserProfileRepository {
 
 	@Override
 	public int countPostInteractionsReceived(String userId) {
+		// Post em quarentena não soma credibilidade: ele está fora do ar até a revisão humana.
 		var result = em.createNativeQuery(
-			"select coalesce(sum(reactions + comments + shares), 0) from posts where author_id = :uid and status <> 'DELETED'")
+			"select coalesce(sum(reactions + comments + shares), 0) from posts where author_id = :uid"
+				+ " and status not in ('DELETED', 'QUARANTINED')")
 			.setParameter("uid", userId)
 			.getSingleResult();
 		return ((Number) result).intValue();
@@ -150,10 +152,11 @@ class UserProfilePersistenceAdapter implements UserProfileRepository {
 		var result = em.createNativeQuery(
 			"select count(*) from ("
 				+ "select r.user_id as actor from reactions r join posts p on p.id = r.post_id "
-				+ "where p.author_id = :uid and p.status <> 'DELETED' "
+				+ "where p.author_id = :uid and p.status not in ('DELETED', 'QUARANTINED') "
 				+ "union "
 				+ "select c.author_id as actor from comments c join posts p2 on p2.id = c.post_id "
-				+ "where p2.author_id = :uid and p2.status <> 'DELETED' and c.status <> 'DELETED'"
+				+ "where p2.author_id = :uid and p2.status not in ('DELETED', 'QUARANTINED')"
+				+ " and c.status <> 'DELETED'"
 				+ ") engajadores where engajadores.actor <> :uid")
 			.setParameter("uid", userId)
 			.getSingleResult();

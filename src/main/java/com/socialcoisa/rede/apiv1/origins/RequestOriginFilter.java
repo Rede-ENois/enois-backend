@@ -251,6 +251,12 @@ class RequestOriginFilter extends OncePerRequestFilter {
 		if (path.startsWith("/storage/") && ("GET".equalsIgnoreCase(method) || "HEAD".equalsIgnoreCase(method))) {
 			return true;
 		}
+		// Figurinha de chat: mesmo caso — o `<img>` do texto e da grade nao manda Origin, e a imagem e
+		// conteudo publico de leitura. As rotas de DADOS do catalogo (`/emotes`, `/emotes/index`)
+		// continuam exigindo origem.
+		if (path.startsWith("/emotes/image/") && ("GET".equalsIgnoreCase(method) || "HEAD".equalsIgnoreCase(method))) {
+			return true;
+		}
 		// Link de confirmação do novo e-mail: clique no cliente de e-mail, sem Origin.
 		if (path.equals("/auth/email/change/confirm") && "GET".equalsIgnoreCase(method)) {
 			return true;

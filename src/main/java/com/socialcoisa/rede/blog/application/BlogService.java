@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -87,17 +88,20 @@ public class BlogService {
 	/** Vitrine: os blogs criados, mais recentes primeiro. */
 	@Transactional(readOnly = true)
 	public List<BlogSummaryView> directory(int limit) {
-		List<Blog> listed = blogs.findAll(limit).stream()
+		List<Blog> page = blogs.findAll(limit);
+		// Bans, authors and post counts of the page in one query each, instead of one per blog.
+		Set<String> banned = sanctionGate.bannedAmong(page.stream().map(Blog::userId).collect(Collectors.toSet()));
+		List<Blog> listed = page.stream()
 			// Blog de conta banida sai da vitrine (o perfil já dá 404).
-			.filter(blog -> !sanctionGate.banned(blog.userId()))
+			.filter(blog -> !banned.contains(blog.userId()))
 			.filter(blog -> !suspiciousText.matches(blog.title(), blog.slug()))
 			.toList();
-		// One query for the authors of the page instead of one per blog.
 		Map<String, UserProfile> authors = profiles.findAllByIds(listed.stream().map(Blog::userId).toList())
 			.stream()
 			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
+		Map<String, Integer> postCounts = posts.countByBlogs(listed.stream().map(Blog::id).toList());
 		return listed.stream()
-			.map(blog -> BlogSummaryView.from(blog, authors.get(blog.userId()), posts.countByBlog(blog.id())))
+			.map(blog -> BlogSummaryView.from(blog, authors.get(blog.userId()), postCounts.getOrDefault(blog.id(), 0)))
 			.toList();
 	}
 

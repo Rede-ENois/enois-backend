@@ -5,7 +5,10 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
 import com.socialcoisa.rede.identity.application.EmailService;
@@ -30,12 +33,15 @@ class JobApplicationDeliveryAdapter implements JobApplicationDelivery {
 	private final UserProfileRepository userProfileRepository;
 	private final MessagingService messagingService;
 	private final EmailService emailService;
+	private final TransactionTemplate dmTransaction;
 
 	JobApplicationDeliveryAdapter(UserProfileRepository userProfileRepository, MessagingService messagingService,
-			EmailService emailService) {
+			EmailService emailService, PlatformTransactionManager transactionManager) {
 		this.userProfileRepository = userProfileRepository;
 		this.messagingService = messagingService;
 		this.emailService = emailService;
+		this.dmTransaction = new TransactionTemplate(transactionManager);
+		this.dmTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
 	}
 
 	@Override
@@ -48,9 +54,14 @@ class JobApplicationDeliveryAdapter implements JobApplicationDelivery {
 		var candidate = userProfileRepository.findById(application.userId()).orElse(null);
 		String summary = summaryText(job, application, candidate == null ? application.userId() : candidate.displayWithNickname());
 
+		// Transacao propria: o sendMessage e @Transactional, e uma recusa dele (portao de idade,
+		// sancao, rate limit) marcaria a transacao da candidatura como rollback-only mesmo com o catch
+		// abaixo — o commit viraria UnexpectedRollbackException e a candidatura, 500.
 		try {
-			String conversationId = messagingService.directConversationBetween(application.userId(), job.postedBy(), "JOB");
-			messagingService.sendMessage(conversationId, application.userId(), summary);
+			dmTransaction.executeWithoutResult(status -> {
+				String conversationId = messagingService.directConversationBetween(application.userId(), job.postedBy(), "JOB");
+				messagingService.sendMessage(conversationId, application.userId(), summary);
+			});
 		}
 		catch (RuntimeException exception) {
 			LOG.warn("Candidatura {} registrada, mas a mensagem direta falhou: {}", application.id(),

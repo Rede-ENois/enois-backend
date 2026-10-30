@@ -34,6 +34,7 @@ import com.socialcoisa.rede.identity.application.port.out.TokenValidator;
 import com.socialcoisa.rede.identity.application.port.out.UserExternalIdentityRepository;
 import com.socialcoisa.rede.identity.domain.OAuthAuthorizationRequest;
 import com.socialcoisa.rede.identity.domain.OAuthProvider;
+import com.socialcoisa.rede.identity.domain.UsernameSlug;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -521,7 +522,7 @@ public class SocialLoginService implements OAuthUseCase {
 	}
 
 	private String uniqueUsername(String name, String email) {
-		String base = slug(StringUtils.hasText(name) ? name
+		String base = UsernameSlug.from(StringUtils.hasText(name) ? name
 			: (StringUtils.hasText(email) ? email.substring(0, email.indexOf('@')) : "user"));
 		String candidate = base;
 		int suffix = 1;
@@ -530,12 +531,5 @@ public class SocialLoginService implements OAuthUseCase {
 			candidate = base + "-" + suffix++;
 		}
 		return candidate;
-	}
-
-	private String slug(String value) {
-		String slug = value.toLowerCase(Locale.ROOT)
-			.replaceAll("[^a-z0-9]+", "-")
-			.replaceAll("(^-|-$)", "");
-		return StringUtils.hasText(slug) ? slug : "user";
 	}
 }

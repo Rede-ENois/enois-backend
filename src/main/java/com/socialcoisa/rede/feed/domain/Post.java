@@ -196,6 +196,34 @@ public class Post {
 		return status == PostStatus.ACTIVE;
 	}
 
+	/** Está em quarentena de moderação (fora do ar, aguardando revisão humana). */
+	public boolean isQuarantined() {
+		return status == PostStatus.QUARANTINED;
+	}
+
+	/**
+	 * Tira o post do ar SEM apagar: quarentena é precaução, não punição. O conteúdo continua no
+	 * banco e {@link #release()} devolve tudo ao normal — por isso não mexe em {@code deletedAt}.
+	 */
+	public boolean quarantine() {
+		if (status != PostStatus.ACTIVE) {
+			return false;
+		}
+		status = PostStatus.QUARANTINED;
+		deletedAt = null;
+		return true;
+	}
+
+	/** Revisão humana concluiu que não havia violação: o post volta ao ar como estava. */
+	public boolean release() {
+		if (status != PostStatus.QUARANTINED) {
+			return false;
+		}
+		status = PostStatus.ACTIVE;
+		deletedAt = null;
+		return true;
+	}
+
 	public Instant expiresAt() {
 		return expiresAt;
 	}

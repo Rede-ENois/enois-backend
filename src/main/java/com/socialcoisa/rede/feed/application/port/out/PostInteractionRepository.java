@@ -43,6 +43,9 @@ public interface PostInteractionRepository {
 
 	List<String> findSavedPostIdsByUserId(UserId userId);
 
+	/** Post IDs que o usuario reagiu, do mais recente ao mais antigo (limitado). */
+	List<String> findReactedPostIdsByUserId(UserId userId, int limit);
+
 	Map<PostId, ReactionType> findReactionsByUserAndPostIds(UserId userId, Collection<PostId> postIds);
 
 	/** Most recent reactions of a post (created before `before`, at most `limit`). */

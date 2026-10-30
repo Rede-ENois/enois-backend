@@ -164,6 +164,12 @@ public class MessagingService {
 	@Transactional
 	public Message sendMessage(String conversationId, String senderId, String text,
 			java.util.List<String> mediaIds, boolean mediaSpoiler) {
+		return sendMessage(conversationId, senderId, text, mediaIds, mediaSpoiler, null);
+	}
+
+	@Transactional
+	public Message sendMessage(String conversationId, String senderId, String text,
+			java.util.List<String> mediaIds, boolean mediaSpoiler, String replyToId) {
 		// ECA Digital: sem data de nascimento declarada, nao envia mensagem (tela de regularizacao).
 		ageGate.requireCanWrite(senderId);
 		// Sancao de moderacao: conta restrita nao manda mensagem. O canal privado e onde a
@@ -187,6 +193,12 @@ public class MessagingService {
 		if (midias.size() > 4) {
 			throw new ApiException(400, "TOO_MANY_MEDIA", "Anexe no maximo 4 midias por mensagem.");
 		}
+		// Reply: a mensagem citada precisa existir e pertencer a esta conversa.
+		if (replyToId != null) {
+			repository.findMessageById(replyToId)
+				.filter(m -> m.conversationId().equals(conversationId))
+				.orElseThrow(() -> new ApiException(400, "INVALID_REPLY", "Mensagem citada nao encontrada nesta conversa."));
+		}
 		// Duplo clique/retry: a MESMA mensagem (texto + mídias) do mesmo remetente em até 2
 		// minutos devolve a linha já criada em vez de duplicar e notificar de novo.
 		var duplicate = repository.findRecentDuplicate(conversationId, senderId, corpo,
@@ -196,7 +208,7 @@ public class MessagingService {
 			return duplicate.get();
 		}
 		String id = "message_" + UUID.randomUUID().toString().replace("-", "");
-		Message message = Message.create(id, conversationId, senderId, corpo, midias, mediaSpoiler, clock.instant());
+		Message message = Message.create(id, conversationId, senderId, corpo, midias, mediaSpoiler, replyToId, clock.instant());
 		repository.saveMessage(message);
 		// Ao enviar, a conversa fica lida para QUEM ENVIOU (PR #15) — antes o contador continuava
 		// aceso mesmo com a conversa aberta.
@@ -221,6 +233,12 @@ public class MessagingService {
 	@Transactional
 	public Message sendE2eMessage(String conversationId, String senderId, String ciphertext,
 			String iv, java.util.List<String> mediaIds, boolean mediaSpoiler) {
+		return sendE2eMessage(conversationId, senderId, ciphertext, iv, mediaIds, mediaSpoiler, null);
+	}
+
+	@Transactional
+	public Message sendE2eMessage(String conversationId, String senderId, String ciphertext,
+			String iv, java.util.List<String> mediaIds, boolean mediaSpoiler, String replyToId) {
 		ageGate.requireCanWrite(senderId);
 		sanctionGate.requireNotRestricted(senderId);
 		userRateLimiter.require(senderId, UserRateLimiter.SEND_MESSAGE);
@@ -240,11 +258,16 @@ public class MessagingService {
 		if (iv == null || iv.isBlank() || iv.length() > 44) {
 			throw new ApiException(400, "MISSING_IV", "IV obrigatorio para mensagem E2E.");
 		}
+		if (replyToId != null) {
+			repository.findMessageById(replyToId)
+				.filter(m -> m.conversationId().equals(conversationId))
+				.orElseThrow(() -> new ApiException(400, "INVALID_REPLY", "Mensagem citada nao encontrada nesta conversa."));
+		}
 		java.util.List<String> midias = mediaIds == null ? java.util.List.of()
 			: mediaIds.stream().filter(v -> v != null && !v.isBlank()).map(String::trim).distinct().toList();
 		String id = "message_" + UUID.randomUUID().toString().replace("-", "");
 		Message message = Message.createE2e(id, conversationId, senderId, ciphertext, iv, midias, mediaSpoiler,
-			clock.instant());
+			replyToId, clock.instant());
 		repository.saveMessage(message);
 		repository.markRead(conversationId, senderId, clock.instant());
 		repository.saveConversation(conversation.touch(clock.instant()));
@@ -399,6 +422,11 @@ public class MessagingService {
 
 	public List<MessagingRepository.ReactionSummary> getReactions(String messageId) {
 		return repository.findReactionsByMessageId(messageId);
+	}
+
+	/** Mensagens por ids em batch (reply previews). */
+	public List<Message> findMessagesByIds(java.util.Collection<String> messageIds) {
+		return repository.findMessagesByIds(messageIds);
 	}
 
 	/**

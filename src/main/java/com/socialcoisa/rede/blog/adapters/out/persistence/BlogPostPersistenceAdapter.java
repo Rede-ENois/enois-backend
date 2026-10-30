@@ -1,8 +1,11 @@
 package com.socialcoisa.rede.blog.adapters.out.persistence;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
@@ -39,6 +42,15 @@ class BlogPostPersistenceAdapter implements BlogPostRepository {
 	@Override
 	public int countByBlog(String blogId) {
 		return springData.countByBlogId(blogId);
+	}
+
+	@Override
+	public Map<String, Integer> countByBlogs(Collection<String> blogIds) {
+		if (blogIds.isEmpty()) {
+			return Map.of();
+		}
+		return springData.countGroupedByBlog(blogIds).stream()
+			.collect(Collectors.toMap(row -> (String) row[0], row -> ((Number) row[1]).intValue()));
 	}
 
 	@Override

@@ -31,24 +31,6 @@ class CoinEconomyCalculatorTests {
 	}
 
 	@Test
-	void passoEhProporcionalAoTempoDecorrido() {
-		// Meio período decorrido: o movimento tem que ser metade do passo cheio (0,5%), não 1%.
-		var result = CoinEconomyCalculator.evaluate(20_000,
-			metrics(0, 0, 0, 0, 1_000_000, 1_000_000), params, 0.5);
-
-		assertThat(result.suggestedMicros()).isEqualTo(19_900);
-	}
-
-	@Test
-	void cliqueNoMesmoInstanteDaUltimaPublicacaoNaoMoveOPreco() {
-		// Era o bug do botão "Recalcular": cada clique contava como um período e o valor só caía.
-		var result = CoinEconomyCalculator.evaluate(20_000,
-			metrics(0, 0, 0, 0, 1_000_000, 1_000_000), params, 0.0);
-
-		assertThat(result.suggestedMicros()).isEqualTo(20_000);
-	}
-
-	@Test
 	void noPisoOPrecoNaoDesceMais() {
 		var result = CoinEconomyCalculator.evaluate(1_000,
 			metrics(0, 0, 0, 10_000_000, 1_000_000, 1_000_000), params);

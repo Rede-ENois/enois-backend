@@ -14,9 +14,12 @@ import com.socialcoisa.rede.shared.blocks.BlockedUsersReader;
 class UserBlockPersistenceAdapter implements UserBlockRepository, BlockedUsersReader {
 
 	private final SpringDataUserBlockJpaRepository repository;
+	private final SpringDataUserMuteJpaRepository muteRepository;
 
-	UserBlockPersistenceAdapter(SpringDataUserBlockJpaRepository repository) {
+	UserBlockPersistenceAdapter(SpringDataUserBlockJpaRepository repository,
+			SpringDataUserMuteJpaRepository muteRepository) {
 		this.repository = repository;
+		this.muteRepository = muteRepository;
 	}
 
 	@Override
@@ -70,6 +73,10 @@ class UserBlockPersistenceAdapter implements UserBlockRepository, BlockedUsersRe
 		repository.findByBlockedId(userId).stream()
 			.map(UserBlockJpaEntity::toDomain)
 			.map(UserBlock::blockerId)
+			.forEach(hidden::add);
+		muteRepository.findByMuterIdOrderByCreatedAtDesc(userId).stream()
+			.map(UserMuteJpaEntity::toDomain)
+			.map(com.socialcoisa.rede.network.domain.UserMute::mutedId)
 			.forEach(hidden::add);
 		return hidden;
 	}

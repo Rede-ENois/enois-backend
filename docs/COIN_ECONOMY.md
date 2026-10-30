@@ -24,10 +24,17 @@ documento descreve o cálculo automático da **cotação de referência** (BRL) 
 2. Compara o giro com a **meta** (`target-turnover`, padrão 5% do estoque em circulação no
    período) e multiplica pela **escassez** do cofre: quanto menos faíscas restam no cofre em
    relação ao total, mais cada faísca vale. Emissão dilui e empurra para baixo.
-3. Aplica no máximo **1% de variação por execução** (`max-step`) e respeita piso de 0,1 centavo e
-   teto de R$ 1,00 por faísca (`min-micros` / `max-micros`).
-4. Se o valor mudou, publica uma nova linha em `coin_rate_history` — a mini bolsa mostra o
-   histórico. Sem mudança, nada é gravado.
+3. Aplica no máximo **1% de variação por publicação** (`max-step`) e respeita piso de 0,1 centavo
+   e teto de R$ 1,00 por faísca (`min-micros` / `max-micros`).
+4. Se o valor mudou **e o período já fechou**, publica uma nova linha em `coin_rate_history` — a
+   mini bolsa mostra o histórico. Sem mudança, nada é gravado.
+
+**Cadência: uma publicação por período.** O período é `period-hours` (padrão 24h) contado da
+última publicação. O cron diário e o botão `POST /admin/carteira/economia/recalcular` obedecem à
+mesma regra: fora do período, nada é publicado e o valor não se move — clicar repetidamente não
+equivale a vários dias de mercado. Diferente de um passo proporcional ao tempo decorrido, a
+cotação anda um passo inteiro por período, sempre para cima ou para baixo conforme o movimento
+medido; quem decide é a janela, não o relógio do clique.
 
 **Economia parada derruba o preço:** sem uso, sem P2P e sem retorno ao cofre o índice vai a zero e
 a cotação cede um passo por dia (até o piso). O cofre precisa continuar recebendo faíscas para a
@@ -84,6 +91,7 @@ permitir passos de 1%. A API expõe:
 | `rede.coin.economy.enabled` | `COIN_ECONOMY_ENABLED` | `true` |
 | `rede.coin.economy.cron` | `COIN_ECONOMY_CRON` | `0 10 3 * * *` |
 | `rede.coin.economy.zone` | `COIN_ECONOMY_ZONE` | `America/Sao_Paulo` |
+| `rede.coin.economy.period-hours` | `COIN_ECONOMY_PERIOD_HOURS` | `24` |
 | `rede.coin.economy.window-days` | `COIN_ECONOMY_WINDOW_DAYS` | `30` |
 | `rede.coin.economy.target-turnover` | `COIN_ECONOMY_TARGET_TURNOVER` | `0.05` |
 | `rede.coin.economy.p2p-weight` | `COIN_ECONOMY_P2P_WEIGHT` | `0.5` |
@@ -99,6 +107,7 @@ Desligar `enabled` congela a cotação automática (a publicação manual contin
 ## Observabilidade
 
 `GET /admin/carteira/economia` (admin) devolve janela, uso de escrow, P2P, retorno ao cofre,
-emissão, circulação, saldo do cofre, escassez, índice e a cotação sugerida — sem publicar nada. `POST /admin/carteira/economia/recalcular`
-(admin) roda o cálculo na hora e publica se o valor mudou. O worker loga
+emissão, circulação, saldo do cofre, escassez, índice, a cotação sugerida, o período já decorrido,
+a próxima avaliação e `publicavelAgora` — sem publicar nada. `POST /admin/carteira/economia/recalcular`
+(admin) roda o cálculo na hora e publica só se o período fechou e o valor mudou. O worker loga
 `coin_economy quote_micros=...` quando publica.

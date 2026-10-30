@@ -278,6 +278,21 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 				? SafeHtml.requireProfileHtml(command.bannerHtml())
 				: null, clock.instant());
 		}
+		// Data de nascimento: ausente no corpo preserva; presente salva via declareBirthDate
+		// (mesma validacao do endpoint dedicado).
+		if (command.birthDate() != null) {
+			if (StringUtils.hasText(command.birthDate())) {
+				java.time.LocalDate date;
+				try {
+					date = java.time.LocalDate.parse(command.birthDate().trim());
+				}
+				catch (Exception e) {
+					throw new ApiException(400, "INVALID_BIRTH_DATE",
+						"Data de nascimento invalida (use aaaa-mm-dd).");
+				}
+				profile.declareBirthDate(date, clock.instant());
+			}
+		}
 		return OwnProfileView.from(repository.save(profile));
 	}
 

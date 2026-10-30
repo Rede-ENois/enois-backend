@@ -85,6 +85,15 @@ class DeveloperOriginTests {
 			.andExpect(status().isBadRequest());
 		mockMvc.perform(get("/media/nao-existe")).andExpect(status().isNotFound());
 		mockMvc.perform(get("/pages/nao-existe")).andExpect(status().isNotFound());
+		// Figurinha: o `<img>` do texto e da grade não manda Origin (provedor inválido = 404, sem rede).
+		mockMvc.perform(get("/emotes/image/XYZ/1")).andExpect(status().isNotFound());
+		// ...mas as rotas de DADOS do catálogo continuam exigindo origem.
+		mockMvc.perform(get("/emotes").param("page", "1"))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("ORIGIN_REQUIRED"));
+		mockMvc.perform(get("/emotes/index"))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("ORIGIN_REQUIRED"));
 	}
 
 	@Test

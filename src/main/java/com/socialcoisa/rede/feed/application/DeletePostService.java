@@ -16,6 +16,7 @@ import com.socialcoisa.rede.feed.application.port.out.AuditLogRepository;
 import com.socialcoisa.rede.feed.application.port.out.FeedCacheRepository;
 import com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository;
 import com.socialcoisa.rede.feed.application.port.in.ModerationRemovePostUseCase;
+import com.socialcoisa.rede.feed.application.port.in.ModerationQuarantinePostUseCase;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
@@ -23,7 +24,9 @@ import com.socialcoisa.rede.media.application.port.in.RequestPostMediaDeletionUs
 import com.socialcoisa.rede.shared.web.ApiException;
 
 @Service
-public class DeletePostService implements DeletePostUseCase, BulkDeletePostsUseCase, ModerationRemovePostUseCase {
+public class DeletePostService
+		implements DeletePostUseCase, BulkDeletePostsUseCase, ModerationRemovePostUseCase,
+		ModerationQuarantinePostUseCase {
 
 	private final PostRepository postRepository;
 	private final FeedCacheRepository feedCacheRepository;
@@ -51,7 +54,7 @@ public class DeletePostService implements DeletePostUseCase, BulkDeletePostsUseC
 		if (!post.belongsTo(command.userId())) {
 			throw new ApiException(403, "POST_OWNER_MISMATCH", "Post nao pertence ao usuario autenticado.");
 		}
-		if (!post.isActive()) {
+		if (!post.isActive() && !post.isQuarantined()) {
 			return new DeletePostResult(post.id().value(), "ALREADY_DELETED");
 		}
 		post.delete(clock.instant());
@@ -127,7 +130,9 @@ public class DeletePostService implements DeletePostUseCase, BulkDeletePostsUseC
 	@Transactional
 	public void removeAsModerator(String moderatorId, String postId, String reason) {
 		Post post = postRepository.findById(new PostId(postId)).orElse(null);
-		if (post == null || !post.isActive()) {
+		// Post em quarentena também pode ser removido: é o desfecho de "violação confirmada" na
+		// revisão humana, e ele não está ACTIVE.
+		if (post == null || (!post.isActive() && !post.isQuarantined())) {
 			return;
 		}
 		post.delete(clock.instant());
@@ -139,6 +144,35 @@ public class DeletePostService implements DeletePostUseCase, BulkDeletePostsUseC
 		requestMediaDeletion(post);
 		auditLogRepository.record(new com.socialcoisa.rede.feed.domain.UserId(moderatorId),
 			"POST_DELETED_BY_MODERATION", post.id().value(), normalizeReason(reason));
+	}
+
+	@Override
+	@Transactional
+	public boolean quarantine(String actorId, String postId, String reason) {
+		Post post = postRepository.findById(new PostId(postId)).orElse(null);
+		if (post == null || !post.quarantine()) {
+			return false;
+		}
+		postRepository.save(post);
+		// Some do feed imediatamente (o cache não pode continuar servindo o post).
+		feedCacheRepository.removeEverywhere(post.id());
+		auditLogRepository.record(new com.socialcoisa.rede.feed.domain.UserId(actorId),
+			"POST_QUARANTINED", post.id().value(), normalizeReason(reason));
+		return true;
+	}
+
+	@Override
+	@Transactional
+	public boolean release(String actorId, String postId) {
+		Post post = postRepository.findById(new PostId(postId)).orElse(null);
+		if (post == null || !post.release()) {
+			return false;
+		}
+		postRepository.save(post);
+		feedCacheRepository.removeEverywhere(post.id());
+		auditLogRepository.record(new com.socialcoisa.rede.feed.domain.UserId(actorId),
+			"POST_QUARANTINE_RELEASED", post.id().value(), null);
+		return true;
 	}
 
 	private List<PostId> normalizePostIds(BulkDeletePostsCommand command) {

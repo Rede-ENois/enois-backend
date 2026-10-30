@@ -13,20 +13,11 @@ public class Message {
 	private final boolean mediaSpoiler;
 	private final boolean e2e;
 	private final String iv;
+	private final String replyToId;
 	private final Instant createdAt;
 
 	private Message(String id, String conversationId, String senderId, String text, List<String> mediaIds,
-			Instant createdAt) {
-		this(id, conversationId, senderId, text, mediaIds, createdAt, false, false, null);
-	}
-
-	private Message(String id, String conversationId, String senderId, String text, List<String> mediaIds,
-			Instant createdAt, boolean mediaSpoiler) {
-		this(id, conversationId, senderId, text, mediaIds, createdAt, mediaSpoiler, false, null);
-	}
-
-	private Message(String id, String conversationId, String senderId, String text, List<String> mediaIds,
-			Instant createdAt, boolean mediaSpoiler, boolean e2e, String iv) {
+			Instant createdAt, boolean mediaSpoiler, boolean e2e, String iv, String replyToId) {
 		this.id = id;
 		this.conversationId = conversationId;
 		this.senderId = senderId;
@@ -35,45 +26,66 @@ public class Message {
 		this.mediaSpoiler = mediaSpoiler;
 		this.e2e = e2e;
 		this.iv = iv;
+		this.replyToId = replyToId;
 		this.createdAt = createdAt;
 	}
 
 	public static Message create(String id, String conversationId, String senderId, String text, Instant now) {
-		return create(id, conversationId, senderId, text, List.of(), now);
+		return new Message(id, conversationId, senderId, text, List.of(), now, false, false, null, null);
 	}
 
 	public static Message create(String id, String conversationId, String senderId, String text,
 			List<String> mediaIds, Instant now) {
-		return new Message(id, conversationId, senderId, text, mediaIds, now);
+		return new Message(id, conversationId, senderId, text, mediaIds, now, false, false, null, null);
 	}
 
 	public static Message create(String id, String conversationId, String senderId, String text,
 			List<String> mediaIds, boolean mediaSpoiler, Instant now) {
-		return new Message(id, conversationId, senderId, text, mediaIds, now, mediaSpoiler);
+		return new Message(id, conversationId, senderId, text, mediaIds, now, mediaSpoiler, false, null, null);
+	}
+
+	public static Message create(String id, String conversationId, String senderId, String text,
+			List<String> mediaIds, boolean mediaSpoiler, String replyToId, Instant now) {
+		return new Message(id, conversationId, senderId, text, mediaIds, now, mediaSpoiler, false, null, replyToId);
 	}
 
 	public static Message restore(String id, String conversationId, String senderId, String text, Instant createdAt) {
-		return restore(id, conversationId, senderId, text, List.of(), createdAt);
+		return new Message(id, conversationId, senderId, text, List.of(), createdAt, false, false, null, null);
 	}
 
 	public static Message restore(String id, String conversationId, String senderId, String text,
 			List<String> mediaIds, Instant createdAt) {
-		return new Message(id, conversationId, senderId, text, mediaIds, createdAt);
+		return new Message(id, conversationId, senderId, text, mediaIds, createdAt, false, false, null, null);
 	}
 
 	public static Message restore(String id, String conversationId, String senderId, String text,
 			List<String> mediaIds, boolean mediaSpoiler, Instant createdAt) {
-		return new Message(id, conversationId, senderId, text, mediaIds, createdAt, mediaSpoiler);
+		return new Message(id, conversationId, senderId, text, mediaIds, createdAt, mediaSpoiler, false, null, null);
+	}
+
+	public static Message restore(String id, String conversationId, String senderId, String text,
+			List<String> mediaIds, boolean mediaSpoiler, String replyToId, Instant createdAt) {
+		return new Message(id, conversationId, senderId, text, mediaIds, createdAt, mediaSpoiler, false, null, replyToId);
 	}
 
 	public static Message createE2e(String id, String conversationId, String senderId, String ciphertext,
 			String iv, List<String> mediaIds, boolean mediaSpoiler, Instant now) {
-		return new Message(id, conversationId, senderId, ciphertext, mediaIds, now, mediaSpoiler, true, iv);
+		return new Message(id, conversationId, senderId, ciphertext, mediaIds, now, mediaSpoiler, true, iv, null);
+	}
+
+	public static Message createE2e(String id, String conversationId, String senderId, String ciphertext,
+			String iv, List<String> mediaIds, boolean mediaSpoiler, String replyToId, Instant now) {
+		return new Message(id, conversationId, senderId, ciphertext, mediaIds, now, mediaSpoiler, true, iv, replyToId);
 	}
 
 	public static Message restoreE2e(String id, String conversationId, String senderId, String ciphertext,
 			String iv, List<String> mediaIds, boolean mediaSpoiler, Instant createdAt) {
-		return new Message(id, conversationId, senderId, ciphertext, mediaIds, createdAt, mediaSpoiler, true, iv);
+		return new Message(id, conversationId, senderId, ciphertext, mediaIds, createdAt, mediaSpoiler, true, iv, null);
+	}
+
+	public static Message restoreE2e(String id, String conversationId, String senderId, String ciphertext,
+			String iv, List<String> mediaIds, boolean mediaSpoiler, String replyToId, Instant createdAt) {
+		return new Message(id, conversationId, senderId, ciphertext, mediaIds, createdAt, mediaSpoiler, true, iv, replyToId);
 	}
 
 	public String id() { return id; }
@@ -92,6 +104,8 @@ public class Message {
 	public boolean e2e() { return e2e; }
 
 	public String iv() { return iv; }
+
+	public String replyToId() { return replyToId; }
 
 	public Instant createdAt() { return createdAt; }
 

@@ -34,12 +34,14 @@ public class CoinEconomyService {
 
 	/**
 	 * @param elapsedFraction quanto do período já passou desde a última publicação (1.0 = período
-	 * completo); o passo máximo publicável é proporcional a ele
+	 * completo); é só informativo — o passo é sempre o do período inteiro
+	 * @param due o período já fechou, então a próxima avaliação pode publicar agora; fica falso
+	 * assim que uma publicação acontece, até o período seguinte fechar
 	 * @param nextEvaluationAt quando a próxima publicação pode acontecer
 	 */
 	public record Summary(int windowDays, CoinEconomyCalculator.Metrics metrics,
 			CoinEconomyCalculator.Result result, long previousMicros, long currentMicros, boolean published,
-			double elapsedFraction, Instant nextEvaluationAt) {
+			double elapsedFraction, boolean due, Instant nextEvaluationAt) {
 	}
 
 	private final CoinLedgerRepository ledger;
@@ -76,7 +78,6 @@ public class CoinEconomyService {
 	/** Execução diária: publica uma nova cotação quando o valor sugerido mudou. */
 	@Scheduled(cron = "${rede.coin.economy.cron:0 10 3 * * *}",
 		zone = "${rede.coin.economy.zone:America/Sao_Paulo}")
-	@Transactional
 	public void scheduledRecalculate() {
 		if (!enabled) {
 			return;
@@ -96,33 +97,40 @@ public class CoinEconomyService {
 	}
 
 	/**
-	 * Calcula e, se o botão estiver ligado, publica a cotação sugerida. O passo publicável é
-	 * proporcional ao tempo decorrido desde a última publicação: o cron diário dá o passo cheio,
-	 * e cliques manuais seguidos não valem um período cada um.
+	 * Publica a cotação do período, se o período já fechou. A cadência é a mesma para o cron e
+	 * para o botão: **no máximo uma publicação por período** (24h). Clicar várias vezes no botão
+	 * não move a cotação — só devolve o cálculo do momento e quando é a próxima avaliação.
+	 *
+	 * <p>Sem essa trava cada clique valia um dia de mercado: dava para mexer no preço quantas
+	 * vezes quisesse, e o histórico da QA registrava uma publicação por segundo.</p>
+	 *
+	 * <p>Não é `@Transactional` de propósito: a transação da publicação tem que commitar ANTES de
+	 * liberar a trava, senão quem entrasse logo depois ainda leria a cotação anterior (READ
+	 * COMMITTED não vê o commit alheio) e publicaria de novo. Quem publica é
+	 * {@link CoinRateService#publish}, com transação própria.</p>
 	 */
-	@Transactional
-	public Summary recalculate() {
+	public synchronized Summary recalculate() {
 		var latest = rates.latest();
 		long previous = latest.brlMicros();
 		Instant lastAt = latest.effectiveAt();
 		Instant now = clock.instant();
-		double elapsed = elapsedFraction(lastAt, now);
+		Instant next = nextEvaluationAt(lastAt, now);
 		CoinEconomyCalculator.Metrics metrics = metrics();
-		CoinEconomyCalculator.Result result = CoinEconomyCalculator.evaluate(previous, metrics, params, elapsed);
+		CoinEconomyCalculator.Result result = CoinEconomyCalculator.evaluate(previous, metrics, params);
+		double elapsed = elapsedFraction(lastAt, now);
 		boolean published = false;
-		if (enabled && result.suggestedMicros() != previous) {
+		if (isOpen(next, now) && enabled && result.suggestedMicros() != previous) {
 			rates.publish(result.suggestedMicros(), note(metrics, result));
 			published = true;
+			next = now.plus(period);
 		}
-		Instant next = published || lastAt == null ? now.plus(period) : lastAt.plus(period);
 		return new Summary(params.windowDays(), metrics, result, previous,
-			published ? result.suggestedMicros() : previous, published, elapsed, next);
+			published ? result.suggestedMicros() : previous, published, elapsed, isOpen(next, now), next);
 	}
 
 	/**
-	 * Leitura para o painel: as mesmas métricas, sem publicar nada. A sugestão é a que um
-	 * "recalcular agora" publicaria — proporcional ao período já decorrido, para o painel não
-	 * prometer um movimento que o clique não faz.
+	 * Leitura para o painel: as mesmas métricas, sem publicar nada. A sugestão é o passo que a
+	 * próxima publicação vai aplicar (o cálculo é o mesmo do cron, com o movimento da janela).
 	 */
 	@Transactional
 	public Summary snapshot() {
@@ -132,10 +140,20 @@ public class CoinEconomyService {
 		Instant lastAt = latest.effectiveAt();
 		double elapsed = elapsedFraction(lastAt, now);
 		CoinEconomyCalculator.Metrics metrics = metrics();
-		Instant next = lastAt == null ? now : lastAt.plus(period);
+		Instant next = nextEvaluationAt(lastAt, now);
 		return new Summary(params.windowDays(), metrics,
-			CoinEconomyCalculator.evaluate(previous, metrics, params, elapsed), previous, previous, false, elapsed,
-			next);
+			CoinEconomyCalculator.evaluate(previous, metrics, params), previous, previous, false, elapsed,
+			isOpen(next, now), next);
+	}
+
+	/** O período já fechou: uma avaliação neste instante pode publicar. */
+	private static boolean isOpen(Instant nextEvaluationAt, Instant now) {
+		return !now.isBefore(nextEvaluationAt);
+	}
+
+	/** Quando o período fecha: `lastAt + período`; sem publicação anterior, agora. */
+	private Instant nextEvaluationAt(Instant lastPublishedAt, Instant now) {
+		return lastPublishedAt == null ? now : lastPublishedAt.plus(period);
 	}
 
 	/** Fração do período já decorrida desde a última publicação, limitada a [0, 1]. */

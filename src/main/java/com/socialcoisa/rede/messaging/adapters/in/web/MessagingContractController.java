@@ -130,14 +130,29 @@ class MessagingContractController {
 		List<Message> msgs = messagingService.getMessages(conversationId, user.id().value(), before, limit);
 		var summaries = messagingService.reactionSummaries(msgs.stream().map(Message::id).toList(),
 			user.id().value());
+		// Carrega em batch as mensagens citadas (reply) da página, sem N+1.
+		java.util.Set<String> replyIds = msgs.stream()
+			.map(Message::replyToId).filter(java.util.Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+		java.util.Map<String, Message> repliedMessages = replyIds.isEmpty() ? java.util.Map.of()
+			: messagingService.findMessagesByIds(replyIds).stream()
+				.collect(java.util.stream.Collectors.toMap(Message::id, java.util.function.Function.identity()));
 		var items = msgs.stream()
 			.map(m -> {
 				var summary = summaries.get(m.id());
+				ReplyView replyView = null;
+				if (m.replyToId() != null) {
+					Message replied = repliedMessages.get(m.replyToId());
+					if (replied != null) {
+						String replyText = replied.text().length() > 100
+							? replied.text().substring(0, 97) + "..." : replied.text();
+						replyView = new ReplyView(replied.id(), replied.senderId(), replyText, replied.e2e());
+					}
+				}
 				return new MessageView(m.id(), m.conversationId(), m.senderId(), m.text(), m.mediaIds(),
 					m.createdAt() != null ? m.createdAt().toString() : null,
 					summary == null ? java.util.Map.of() : summary.counts(),
 					summary == null ? null : summary.myReaction(), m.mediaSpoiler(),
-					m.e2e(), m.iv());
+					m.e2e(), m.iv(), m.replyToId(), replyView);
 			})
 			.toList();
 		// Pagina cheia => ainda ha mensagens mais antigas: o cursor aponta para a mais antiga desta pagina.
@@ -185,18 +200,20 @@ class MessagingContractController {
 		return idempotency.execute(user.id(), "POST", "/api/conversations/{conversationId}/messages", idempotencyKey,
 			hash, () -> {
 				Message msg;
+				String replyTo = request.replyToId() != null && !request.replyToId().isBlank()
+					? request.replyToId().trim() : null;
 				if (Boolean.TRUE.equals(request.e2e())) {
 					msg = messagingService.sendE2eMessage(conversationId, user.id().value(), request.text(),
-						request.iv(), request.mediaIds(), Boolean.TRUE.equals(request.mediaSpoiler()));
+						request.iv(), request.mediaIds(), Boolean.TRUE.equals(request.mediaSpoiler()), replyTo);
 				}
 				else {
 					msg = messagingService.sendMessage(conversationId, user.id().value(), request.text(),
-						request.mediaIds(), Boolean.TRUE.equals(request.mediaSpoiler()));
+						request.mediaIds(), Boolean.TRUE.equals(request.mediaSpoiler()), replyTo);
 				}
 				return new CommandResponse(201, new MessageView(msg.id(), msg.conversationId(), msg.senderId(),
 					msg.text(), msg.mediaIds(),
 					msg.createdAt() != null ? msg.createdAt().toString() : null, java.util.Map.of(), null,
-					msg.mediaSpoiler(), msg.e2e(), msg.iv()));
+					msg.mediaSpoiler(), msg.e2e(), msg.iv(), msg.replyToId(), null));
 			});
 	}
 
@@ -410,7 +427,10 @@ class MessagingContractController {
 
 	record MessageView(String id, String conversationId, String from, String text, List<String> mediaIds,
 			String time, java.util.Map<String, Integer> reactions, String myReaction, boolean mediaSpoiler,
-			boolean e2e, String iv) {
+			boolean e2e, String iv, String replyToId, ReplyView replyTo) {
+	}
+
+	record ReplyView(String id, String from, String text, boolean e2e) {
 	}
 
 	record CreateConversationRequest(String kind, String title, List<String> participantIds) {
@@ -423,7 +443,7 @@ class MessagingContractController {
 	}
 
 	record SendMessageRequest(String text, List<String> mediaIds, Boolean mediaSpoiler,
-			Boolean e2e, String iv) {
+			Boolean e2e, String iv, String replyToId) {
 	}
 
 }

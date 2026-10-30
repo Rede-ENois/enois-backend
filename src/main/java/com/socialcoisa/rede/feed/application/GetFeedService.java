@@ -95,7 +95,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		this.postNotes = postNotes;
 	}
 
-	private static final long TRENDING_WINDOW_HOURS = 48;
+	private static final long TRENDING_WINDOW_HOURS = 24;
 
 	@Override
 	@Transactional(readOnly = true)
@@ -141,6 +141,24 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				Instant since = java.time.Clock.systemUTC().instant()
 					.minus(java.time.Duration.ofHours(TRENDING_WINDOW_HOURS));
 				yield postRepository.findTrending(since, limit);
+			}
+			case INTERACTED -> {
+				// Post IDs onde o usuario reagiu ou comentou, unificados e ordenados.
+				int cap = limit * 3;
+				Set<String> interacted = new LinkedHashSet<>(
+					postInteractionRepository.findReactedPostIdsByUserId(query.userId(), cap));
+				interacted.addAll(commentRepository.findPostIdsByAuthor(query.userId().value()));
+				if (interacted.isEmpty()) {
+					yield List.<Post>of();
+				}
+				List<PostId> postIds = interacted.stream().map(PostId::new).toList();
+				List<Post> found = postRepository.findByIds(postIds).stream()
+					.filter(Post::isActive)
+					.filter(p -> p.createdAt().isBefore(before))
+					.sorted(Comparator.comparing(Post::createdAt).reversed())
+					.limit(limit)
+					.toList();
+				yield found;
 			}
 			// Legado: tabs por tipo que o frontend antigo ainda pode mandar.
 			case PROJECTS -> postRepository.findActiveByType(PostType.PROJECT, before, limit);
@@ -382,7 +400,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 
 	private boolean matchesTab(PostView post, FeedTab tab) {
 		return switch (tab) {
-			case FOR_YOU, FOLLOWING, ALL, UNSEEN, TRENDING, DISCUSSIONS, RECENT -> true;
+			case FOR_YOU, FOLLOWING, ALL, UNSEEN, TRENDING, INTERACTED, DISCUSSIONS, RECENT -> true;
 			case PROJECTS -> post.type() == PostType.PROJECT;
 			case NEWS -> post.type() == PostType.NEWS;
 			case TUTORIALS -> post.type() == PostType.TUTORIAL;

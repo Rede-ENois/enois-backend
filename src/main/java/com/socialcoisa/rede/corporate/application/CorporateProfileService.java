@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -33,7 +34,16 @@ public class CorporateProfileService {
 	/** Campos que podem vir do perfil social — por nome, nunca em bloco. */
 	public static final List<String> IMPORTABLE_FIELDS = List.of(
 		"name", "headline", "bio", "avatar", "banner", "bannerHtml", "location");
-	private static final Set<String> IMPORTABLE_SET = Set.copyOf(IMPORTABLE_FIELDS);
+
+	/**
+	 * O conjunto de nomes aceitos é comparado SEMPRE em minúsculas (o cliente manda o nome do
+	 * campo do jeito que aparece na prévia, `bannerHtml`), então ele nasce normalizado. Comparar
+	 * o pedido já convertido contra a lista original era o que recusava justamente o `bannerHtml`
+	 * como campo desconhecido.
+	 */
+	private static final Set<String> IMPORTABLE_SET = IMPORTABLE_FIELDS.stream()
+		.map(field -> field.toLowerCase(Locale.ROOT))
+		.collect(Collectors.toUnmodifiableSet());
 
 	private final CorporateProfileRepository repository;
 	private final UserProfileRepository profiles;
@@ -86,7 +96,7 @@ public class CorporateProfileService {
 			.orElseThrow(() -> new ApiException(404, "PROFILE_NOT_FOUND", "Perfil social não encontrado."));
 		return new ImportPreview(
 			fit(social.name(), 160), fit(social.headline(), 200), fit(social.bio(), 2000),
-			fit(social.avatar(), 500), fit(social.banner(), 500), fit(social.bannerHtml(), 20000),
+			fit(social.avatar(), 500), fit(social.banner(), 500), fitHtml(social.bannerHtml(), 20000),
 			fit(social.location(), 200));
 	}
 
@@ -120,7 +130,7 @@ public class CorporateProfileService {
 		String bio = selected.contains("bio") ? fit(social.bio(), 2000) : current.bio();
 		String avatar = selected.contains("avatar") ? fit(social.avatar(), 500) : current.avatar();
 		String banner = selected.contains("banner") ? fit(social.banner(), 500) : current.banner();
-		String bannerHtml = selected.contains("bannerhtml") ? fit(social.bannerHtml(), 20000) : current.bannerHtml();
+		String bannerHtml = selected.contains("bannerhtml") ? fitHtml(social.bannerHtml(), 20000) : current.bannerHtml();
 		String location = selected.contains("location") ? fit(social.location(), 200) : current.location();
 		CorporateProfile updated = current.withDetails(headline, bio, avatar, banner, bannerHtml, location,
 			current.industry(), current.externalLinks(), clock.instant());
@@ -142,9 +152,57 @@ public class CorporateProfileService {
 		return trimmed.substring(0, Math.max(0, max - 1)).trim() + "…";
 	}
 
+	/**
+	 * Markup tem regra própria: cortar HTML no meio de uma tag transforma o resto da capa em
+	 * texto visível (o navegador segue lendo o atributo até achar o fechamento). O corte cai no
+	 * último `>` que cabe; se nem isso cabe, o campo fica vazio em vez de virar markup quebrado.
+	 */
+	static String fitHtml(String value, int max) {
+		if (!StringUtils.hasText(value)) {
+			return null;
+		}
+		String trimmed = value.trim();
+		if (trimmed.length() <= max) {
+			return trimmed;
+		}
+		int corte = trimmed.lastIndexOf('>', max - 1);
+		return corte <= 0 ? null : trimmed.substring(0, corte + 1);
+	}
+
 	public CorporateProfile rename(String userId, String name) {
 		CorporateProfile current = byUserIdOrThrow(userId);
 		return repository.save(current.withName(name, clock.instant()));
+	}
+
+	/**
+	 * Troca o nametag do perfil profissional: é o `@` E o fim da URL pública
+	 * (`/profissional/{nametag}`).
+	 *
+	 * O nametag vive em namespace próprio (índice único no banco) e é independente do @ social —
+	 * a mesma pessoa pode ser `aminadojava` no social e `melsantos` no profissional. Mandar o
+	 * valor que já está lá não é erro nem gera escrita; o nametag de outra pessoa é 409.
+	 */
+	public CorporateProfile changeUsername(String userId, String username) {
+		CorporateProfile current = byUserIdOrThrow(userId);
+		String desired = normalize(username);
+		if (desired.isEmpty()) {
+			throw new ApiException(400, "INVALID_USERNAME",
+				"Escolha o nametag do perfil profissional: é ele que aparece como @ e no fim da URL.");
+		}
+		if (desired.equals(current.username())) {
+			return current;
+		}
+		if (repository.existsByUsername(desired)) {
+			throw new ApiException(409, "USERNAME_TAKEN",
+				"Esse usuário profissional já está em uso. Escolha outro.");
+		}
+		try {
+			return repository.save(current.withUsername(desired, clock.instant()));
+		}
+		catch (IllegalArgumentException invalido) {
+			// O formato é regra do domínio; a mensagem dela é o que a pessoa precisa ler.
+			throw new ApiException(400, "INVALID_USERNAME", invalido.getMessage());
+		}
 	}
 
 	/** Ativação exige nome e headline: perfil incompleto nunca aparece como pronto. */
@@ -168,7 +226,7 @@ public class CorporateProfileService {
 	}
 
 	private String normalize(String username) {
-		return username == null ? "" : username.trim().toLowerCase();
+		return username == null ? "" : username.trim().toLowerCase(Locale.ROOT);
 	}
 
 	private String trimOrNull(String value, int max) {

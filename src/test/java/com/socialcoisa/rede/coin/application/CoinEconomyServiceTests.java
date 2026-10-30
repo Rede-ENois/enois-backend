@@ -5,6 +5,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Clock;
@@ -20,9 +22,9 @@ import com.socialcoisa.rede.coin.application.port.out.CoinLedgerRepository;
 import com.socialcoisa.rede.coin.domain.CoinRate;
 
 /**
- * O botão "Recalcular agora" rodava a mesma conta do cron e publicava um passo de UM DIA a cada
- * clique — clicando, o valor despencava como se tivessem passado vários períodos. Agora o passo
- * publicável é proporcional ao tempo decorrido desde a última publicação.
+ * O botão "Recalcular agora" rodava a mesma conta do cron e publicava uma cotação nova a cada
+ * clique — no histórico da QA isso virou uma publicação por segundo, mexendo no mercado. Agora a
+ * publicação é, no máximo, uma por período (24h): spam no botão não move o preço.
  */
 class CoinEconomyServiceTests {
 
@@ -32,6 +34,8 @@ class CoinEconomyServiceTests {
 		new AtomicReference<>(new CoinRate("rate_1", 1, 10_000, null, START.minus(Duration.ofDays(2))));
 
 	private final AtomicReference<Instant> now = new AtomicReference<>(START);
+
+	private final CoinRateService rates = mock(CoinRateService.class);
 
 	private final Clock clock = new Clock() {
 
@@ -52,21 +56,23 @@ class CoinEconomyServiceTests {
 	};
 
 	@Test
-	void cliquesSeguidosNaoValemUmPeriodoCada() {
+	void spamNoBotaoPublicaUmaVezSo() {
 		CoinEconomyService service = service();
 
 		var first = service.recalculate();
 		assertThat(first.published()).isTrue();
 		assertThat(first.currentMicros()).isEqualTo(9_900);
+		assertThat(first.due()).isFalse();
 
-		// Cinco cliques em seguida, dentro do mesmo período: nenhum publica de novo.
-		for (int click = 0; click < 5; click++) {
-			now.set(now.get().plus(Duration.ofMinutes(1)));
+		// O caso do histórico da QA: uma publicação por segundo, cada clique mexendo no mercado.
+		for (int click = 0; click < 50; click++) {
+			now.set(now.get().plus(Duration.ofSeconds(1)));
 			var again = service.recalculate();
 			assertThat(again.published()).isFalse();
 			assertThat(again.currentMicros()).isEqualTo(9_900);
-			assertThat(again.elapsedFraction()).isLessThan(0.01);
+			assertThat(again.due()).isFalse();
 		}
+		verify(rates, times(1)).publish(anyLong(), anyString());
 	}
 
 	@Test
@@ -75,33 +81,61 @@ class CoinEconomyServiceTests {
 		service.recalculate();
 
 		now.set(now.get().plus(Duration.ofHours(24)));
+		assertThat(service.snapshot().due()).isTrue();
 		var next = service.recalculate();
 
 		assertThat(next.elapsedFraction()).isEqualTo(1.0);
 		assertThat(next.published()).isTrue();
 		assertThat(next.currentMicros()).isEqualTo(9_801);
+		assertThat(next.due()).isFalse();
 	}
 
 	@Test
-	void painelNaoPrometeUmMovimentoQueOCliqueNaoFaz() {
+	void cronDepoisDePublicarNaoPublicaDeNovoNoMesmoDia() {
 		CoinEconomyService service = service();
 		service.recalculate();
 
-		// Meio período depois, a sugestão do painel é metade do passo (0,5%), não o passo inteiro.
+		now.set(now.get().plus(Duration.ofHours(24)));
+		service.scheduledRecalculate();
+		service.scheduledRecalculate();
+		service.scheduledRecalculate();
+
+		// A do primeiro dia + a do dia seguinte; o resto do dia não publica nada.
+		verify(rates, times(2)).publish(anyLong(), anyString());
+	}
+
+	@Test
+	void painelMostraOPassoQueVaiSerPublicado() {
+		CoinEconomyService service = service();
+		service.recalculate();
+
+		// Meio período depois o painel já antecipa o passo cheio do fechamento do dia.
 		now.set(now.get().plus(Duration.ofHours(12)));
 		var snapshot = service.snapshot();
 
 		assertThat(snapshot.published()).isFalse();
 		assertThat(snapshot.currentMicros()).isEqualTo(9_900);
 		assertThat(snapshot.elapsedFraction()).isEqualTo(0.5);
-		assertThat(snapshot.result().suggestedMicros()).isEqualTo(9_851);
+		assertThat(snapshot.result().suggestedMicros()).isEqualTo(9_801);
+		assertThat(snapshot.due()).isFalse();
+		assertThat(snapshot.nextEvaluationAt()).isEqualTo(now.get().plus(Duration.ofHours(12)));
+	}
+
+	@Test
+	void cronAntesDoPeriodoFecharNaoPublica() {
+		CoinEconomyService service = service();
+		service.recalculate();
+
+		now.set(now.get().plus(Duration.ofHours(20)));
+		service.scheduledRecalculate();
+
+		verify(rates, times(1)).publish(anyLong(), anyString());
 	}
 
 	private CoinEconomyService service() {
 		CoinLedgerRepository ledger = mock(CoinLedgerRepository.class);
 		when(ledger.sumAmountByKindBetween(any(), any(), any())).thenReturn(0L);
 
-		CoinRateService rates = mock(CoinRateService.class);
 		when(rates.latest()).thenAnswer(invocation -> latest.get());
 		when(rates.publish(anyLong(), anyString())).thenAnswer(invocation -> {
 			CoinRate rate = CoinRate.create(invocation.getArgument(0), invocation.getArgument(1), now.get());

@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.moderation.adapters.out.persistence;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -16,6 +17,10 @@ interface SpringDataUserSanctionJpaRepository extends JpaRepository<UserSanction
 
 	List<UserSanctionJpaEntity> findTop20ByUserIdOrderByCreatedAtDesc(String userId);
 
+	List<UserSanctionJpaEntity> findByUserIdInAndStatus(Collection<String> userIds, SanctionStatus status);
+
 	List<UserSanctionJpaEntity> findByTypeAndStatusAndCreatedAtBeforeOrderByCreatedAtAsc(
 			SanctionType type, SanctionStatus status, Instant cutoff, Pageable pageable);
+
+	List<UserSanctionJpaEntity> findByStatusOrderByCreatedAtDesc(SanctionStatus status, Pageable pageable);
 }

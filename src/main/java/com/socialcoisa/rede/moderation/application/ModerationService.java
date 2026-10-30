@@ -23,8 +23,12 @@ import com.socialcoisa.rede.shared.web.ApiException;
 @Service
 public class ModerationService {
 
+	/** Denunciante das automações: não é conta, é o próprio sistema. */
+	static final String SYSTEM_REPORTER = "system";
+
 	private final ReportRepository reportRepository;
 	private final ModerationRemovePostUseCase moderationRemovePostUseCase;
+	private final ContentQuarantineReviewService quarantineReview;
 	private final EmailService emailService;
 	private final String supportEmail;
 	private final String frontendUrl;
@@ -39,7 +43,9 @@ public class ModerationService {
 	private final int reportsPerHour;
 
 	public ModerationService(ReportRepository reportRepository,
-			ModerationRemovePostUseCase moderationRemovePostUseCase, EmailService emailService,
+			ModerationRemovePostUseCase moderationRemovePostUseCase,
+			ContentQuarantineReviewService quarantineReview,
+			EmailService emailService,
 			@org.springframework.beans.factory.annotation.Value("${rede.support.email:}") String supportEmail,
 			@org.springframework.beans.factory.annotation.Value("${rede.frontend.url:https://enois.ia.br}") String frontendUrl,
 			com.socialcoisa.rede.profile.application.port.out.UserProfileRepository profiles,
@@ -52,6 +58,7 @@ public class ModerationService {
 			Clock clock) {
 		this.reportRepository = reportRepository;
 		this.moderationRemovePostUseCase = moderationRemovePostUseCase;
+		this.quarantineReview = quarantineReview;
 		this.emailService = emailService;
 		this.supportEmail = supportEmail;
 		this.frontendUrl = frontendUrl.endsWith("/") ? frontendUrl.substring(0, frontendUrl.length() - 1) : frontendUrl;
@@ -118,7 +125,8 @@ public class ModerationService {
 	public Report report(String reporterId, TargetType targetType, String targetId, ReportReason reason,
 			String description) {
 		// Teto por conta: denúncia em massa (coordenação) deixa de ser barata. O limite é de
-		// FREQUÊNCIA, não de conteúdo — quem denuncia de boa-fé não chega perto dele.
+		// FREQUÊNCIA, não de conteúdo — quem denuncia de boa-fé não chega perto dele. A automação
+		// não passa por aqui: ela usa systemReport, onde o teto não faz sentido.
 		actionThrottle.exigePermitido("report", reporterId, reportsPerHour, java.time.Duration.ofHours(1));
 		if (targetType == null) {
 			throw new ApiException(400, "INVALID_TARGET_TYPE", "Tipo do alvo da denuncia e obrigatorio.");
@@ -144,6 +152,34 @@ public class ModerationService {
 	@Transactional(readOnly = true)
 	public List<Report> reportsOf(String reporterId, int limit) {
 		return reportRepository.findByReporter(reporterId, limit);
+	}
+
+	/**
+	 * Denúncia criada pelo PRÓPRIO SISTEMA (automações de barreira). O teto de frequência por conta
+	 * não existe aqui: quem denuncia não é uma conta, e o teto existe para conter pessoas, não a
+	 * defesa da rede. O dedupe por alvo continua — um alvo, uma fila.
+	 */
+	@Transactional
+	public Report systemReport(TargetType targetType, String targetId, ReportReason reason, String description) {
+		if (targetType == null) {
+			throw new ApiException(400, "INVALID_TARGET_TYPE", "Tipo do alvo da denuncia e obrigatorio.");
+		}
+		if (!org.springframework.util.StringUtils.hasText(targetId)) {
+			throw new ApiException(400, "INVALID_TARGET_ID", "Alvo da denuncia e obrigatorio.");
+		}
+		if (reason == null) {
+			throw new ApiException(400, "INVALID_REASON", "Motivo da denuncia e obrigatorio.");
+		}
+		if (reportRepository.existsByReporterAndTarget(SYSTEM_REPORTER, targetType.name(), targetId)) {
+			// Já existe fila para este alvo: a automação não abre uma segunda.
+			return null;
+		}
+		String id = "report_" + UUID.randomUUID().toString().replace("-", "");
+		Report report = Report.create(id, SYSTEM_REPORTER, targetType, targetId, reason,
+			description != null ? description : "", Instant.now(clock));
+		Report saved = reportRepository.save(report);
+		notifySupport(saved);
+		return saved;
 	}
 
 	private String describeUser(String userId) {
@@ -191,6 +227,10 @@ public class ModerationService {
 		Report report = pendingReport(reportId);
 		report.approve(reviewerId, "AVISO da moderação (conteúdo mantido)");
 		Report saved = reportRepository.save(report);
+		// Conteúdo mantido = o que estava em quarentena por precaução volta ao ar e sai da fila.
+		if (report.targetType() == TargetType.POST) {
+			quarantineReview.releaseByReport(reviewerId, report.targetId());
+		}
 		learning.record(saved, "WARN", "HUMAN", reviewerId);
 		contentAuthors.authorOf(report.targetType().name(), report.targetId()).ifPresent(authorId ->
 			notifications.create(authorId, "MODERACAO", reviewerId, "Aviso da moderação",
@@ -265,6 +305,11 @@ public class ModerationService {
 		}
 		report.dismiss(reviewerId, note);
 		Report saved = reportRepository.save(report);
+		// Revisão inocentou o conteúdo: o que estava em quarentena por precaução volta ao ar e sai
+		// da fila. (Só age sobre post realmente em quarentena; nos demais casos não faz nada.)
+		if (report.targetType() == TargetType.POST) {
+			quarantineReview.releaseByReport(reviewerId, report.targetId());
+		}
 		learning.record(saved, "DISMISS", "HUMAN", reviewerId);
 		return saved;
 	}

@@ -34,7 +34,7 @@ import com.socialcoisa.rede.shared.web.ApiException;
 public class PublishPostService implements PublishPostUseCase {
 
 	/** Teto do texto do artigo — maior que o do post (1.200) porque artigo e outro formato. */
-	static final int MAX_ARTICLE_BODY = 4_000;
+	static final int MAX_ARTICLE_BODY = 10_000;
 
 	private final PostRepository postRepository;
 	private final ArticleRepository articleRepository;

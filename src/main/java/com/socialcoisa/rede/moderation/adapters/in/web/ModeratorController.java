@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.socialcoisa.rede.games.application.GameService;
 import com.socialcoisa.rede.games.domain.Game;
 import com.socialcoisa.rede.moderation.application.BulkBanService;
+import com.socialcoisa.rede.moderation.application.ContentQuarantineReviewService;
 import com.socialcoisa.rede.moderation.application.ModeratorService;
 import com.socialcoisa.rede.moderation.application.SanctionProposalService;
 import com.socialcoisa.rede.moderation.application.SuspiciousAutoBanWorker;
@@ -44,6 +45,7 @@ class ModeratorController {
 
 	private final ModeratorService moderators;
 	private final SanctionProposalService sanctionProposals;
+	private final ContentQuarantineReviewService quarantineReview;
 	private final SuspiciousUserService suspiciousUsers;
 	private final BulkBanService bulkBans;
 	private final SuspiciousAutoBanWorker autoBan;
@@ -57,6 +59,7 @@ class ModeratorController {
 	private final ModeratorGuard moderatorGuard;
 
 	ModeratorController(ModeratorService moderators, SanctionProposalService sanctionProposals,
+			ContentQuarantineReviewService quarantineReview,
 			SuspiciousUserService suspiciousUsers, BulkBanService bulkBans, SuspiciousAutoBanWorker autoBan,
 			com.socialcoisa.rede.moderation.application.IpBlockService ipBlocks,
 			com.socialcoisa.rede.moderation.application.port.out.RiskAssessmentReader riskAssessments,
@@ -64,6 +67,7 @@ class ModeratorController {
 			CurrentUserResolver currentUserResolver, AdminGuard adminGuard, ModeratorGuard moderatorGuard) {
 		this.moderators = moderators;
 		this.sanctionProposals = sanctionProposals;
+		this.quarantineReview = quarantineReview;
 		this.suspiciousUsers = suspiciousUsers;
 		this.bulkBans = bulkBans;
 		this.autoBan = autoBan;
@@ -109,6 +113,31 @@ class ModeratorController {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		moderatorGuard.requireModerator(user);
 		return moderators.vote(reportId, user.id().value(), request.vote(), request.note());
+	}
+
+	@GetMapping("/moderation/quarantine")
+	List<ContentQuarantineReviewService.PendingView> quarantine(
+			@RequestHeader("X-Session-Token") String sessionToken,
+			@RequestParam(defaultValue = "50") int limit) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		moderatorGuard.requireModerator(user);
+		return quarantineReview.pending(limit);
+	}
+
+	@PostMapping("/moderation/quarantine/{postId}/release")
+	Map<String, Object> releaseQuarantine(@RequestHeader("X-Session-Token") String sessionToken,
+			@PathVariable String postId) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		moderatorGuard.requireModerator(user);
+		return Map.of("postId", postId, "released", quarantineReview.release(user.id().value(), postId));
+	}
+
+	@PostMapping("/moderation/quarantine/{postId}/remove")
+	Map<String, Object> removeQuarantine(@RequestHeader("X-Session-Token") String sessionToken,
+			@PathVariable String postId) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		moderatorGuard.requireModerator(user);
+		return Map.of("postId", postId, "removed", quarantineReview.remove(user.id().value(), postId));
 	}
 
 	@GetMapping("/admin/moderator-applications")

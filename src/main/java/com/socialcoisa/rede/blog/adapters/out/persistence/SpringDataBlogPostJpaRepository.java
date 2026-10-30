@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.blog.adapters.out.persistence;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 
 import org.springframework.data.domain.Pageable;
@@ -16,4 +17,7 @@ interface SpringDataBlogPostJpaRepository extends JpaRepository<BlogPostJpaEntit
 			Pageable pageable);
 
 	int countByBlogId(String blogId);
+
+	@Query("SELECT p.blogId, COUNT(p) FROM BlogPostJpaEntity p WHERE p.blogId IN :blogIds GROUP BY p.blogId")
+	List<Object[]> countGroupedByBlog(@Param("blogIds") Collection<String> blogIds);
 }

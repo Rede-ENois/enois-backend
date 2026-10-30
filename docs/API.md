@@ -253,6 +253,45 @@ Resposta:
 
 ---
 
+## Figurinhas (emotes de texto)
+
+Leitura pública (sem sessão): post público desenha figurinha para quem nem entrou. O catálogo é
+montado no backend e atualizado de 3 em 3 horas; ver [`FIGURINHAS.md`](FIGURINHAS.md).
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/emotes?page=&limit=&q=&provider=` | Página do seletor (40 por padrão, máx. 100) | Não |
+| GET | `/api/emotes/index` | `código → endereço da imagem` para a leitura do texto | Não |
+| GET | `/api/emotes/image/{provider}/{id}?variant=thumb\|full` | Imagem (cache do backend) | Não |
+
+`/api/emotes` responde:
+
+```json
+{
+  "items": [
+    {
+      "code": "catJAM",
+      "provider": "FFZ",
+      "id": "720564",
+      "animated": true,
+      "popularRank": 41,
+      "image": "/emotes/image/FFZ/720564?variant=full&a=1",
+      "thumb": "/emotes/image/FFZ/720564?variant=thumb"
+    }
+  ],
+  "page": 1,
+  "limit": 40,
+  "total": 1127,
+  "totalPages": 29,
+  "generatedAt": "2026-10-29T01:53:14.352Z"
+}
+```
+
+Os caminhos de imagem são **relativos ao host da API** (o gateway tira o `/api`). O `&a=1` marca
+figurinha com versão em movimento.
+
+---
+
 ## Comunidades
 
 | Método | Rota | Descrição | Autenticação |
@@ -376,9 +415,9 @@ Query params: `q=<termo>`, `types=users,communities,jobs,events,mentors`, `limit
 | POST | `/api/admin/reports/{reportId}/approve` | Aprovar report (deletar alvo) | Sim |
 | POST | `/api/admin/reports/{reportId}/dismiss` | Rejeitar report | Sim |
 
-Razões: `SPAM`, `INAPPROPRIATE`, `ABUSIVE`, `MISINFORMATION`, `COPYRIGHT`, `OTHER`
+Razões: `AI_GENERATED`, `FAKE_CONTENT`, `SCAM`, `DISCRIMINATION`, `PREJUDICE`, `HARASSMENT`, `SPAM`, `VIOLENCE`, `SEXUAL_CONTENT`, `COPYRIGHT`, `OTHER`
 
-Target types: `POST`, `COMMENT`, `USER`, `COMMUNITY`, `JOB`, `EVENT`
+Target types: `POST`, `COMMENT`, `USER`, `JOB`, `GAME`, `GROUP_POST`, `GROUP_COMMENT`, `MESSAGE`
 
 ---
 
@@ -461,7 +500,8 @@ are for sale); a broken file stops the boot. Each item has `id`, `kind` (`FRAME`
 - The equipped nameplate travels with the name style (`nameStyle` / `authorStyle` / `actorStyle` /
   `sellerStyle`: `{ theme, font, color, nameplate }`) in every projection that shows a person,
   community members included; the style is `null` only when all four are empty. Lists load their
-  people in one query (`findAllByIds`), never one lookup per row.
+  people in one query (`findAllByIds`), never one lookup per row; the blog directory also
+  loads bans and post counts for the page in one query each.
 
 `order` accepts only `oldest` and `newest`; anything else returns `400 INVALID_CATALOG_ORDER`. A
 session that is sent and invalid returns an authentication error instead of an anonymous read.

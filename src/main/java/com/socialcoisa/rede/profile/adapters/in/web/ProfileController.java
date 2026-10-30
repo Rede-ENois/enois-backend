@@ -202,7 +202,7 @@ class ProfileController {
 				request.banner(), request.badge(), request.bio(), request.bioHtml(), request.bannerHtml(), request.skills(), request.goals(),
 				request.availability(),
 				request.portfolio(), request.externalLinks(), request.openToWork(), request.isMentor(),
-				request.username(), request.aka(), request.resumeUrl(), request.resumeName()))));
+				request.username(), request.aka(), request.resumeUrl(), request.resumeName(), request.birthDate()))));
 	}
 
 

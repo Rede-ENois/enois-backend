@@ -30,9 +30,19 @@ public record CorporateProfile(String userId, String username, String name, Stri
 			newBannerHtml, newLocation, newIndustry, newExternalLinks, status, createdAt, now);
 	}
 
-	/** Renomear a apresentação não muda o @ (o @ tem fluxo próprio, decidido na fase de app). */
+	/** Renomear a apresentação não muda o @ profissional (o @ tem fluxo próprio). */
 	public CorporateProfile withName(String newName, Instant now) {
 		return new CorporateProfile(userId, username, validName(newName), headline, bio, avatar, banner,
+			bannerHtml, location, industry, externalLinks, status, createdAt, now);
+	}
+
+	/**
+	 * Troca o @ profissional (`/profissional/{username}`). Independente do @ social pela própria
+	 * natureza do perfil: são duas apresentações da mesma conta, cada uma com seu endereço.
+	 * O formato é o mesmo da criação e a unicidade é do banco.
+	 */
+	public CorporateProfile withUsername(String newUsername, Instant now) {
+		return new CorporateProfile(userId, validUsername(newUsername), name, headline, bio, avatar, banner,
 			bannerHtml, location, industry, externalLinks, status, createdAt, now);
 	}
 

@@ -61,18 +61,12 @@ public final class CoinEconomyCalculator {
 			long suggestedMicros) {
 	}
 
-	public static Result evaluate(long previousMicros, Metrics metrics, Params params) {
-		return evaluate(previousMicros, metrics, params, 1.0);
-	}
-
 	/**
-	 * Mesma conta, com o passo limitado pela FRAÇÃO do período já decorrida desde a última
-	 * publicação ({@code 1.0} = período inteiro). Sem isso, cada clique em "recalcular" valia um
-	 * período e o preço despencava; agora N cliques dentro do mesmo dia somam, no máximo, o passo
-	 * de um dia.
+	 * Um passo da cotação — sempre o passo de UM PERÍODO (o dia). Quem decide se já é hora de
+	 * publicar é o {@code CoinEconomyService}: a conta não olha o relógio nem quantas vezes o
+	 * botão foi clicado, só o movimento medido no ledger.
 	 */
-	public static Result evaluate(long previousMicros, Metrics metrics, Params params,
-			double elapsedFraction) {
+	public static Result evaluate(long previousMicros, Metrics metrics, Params params) {
 		long previous = Math.max(1, previousMicros);
 		long circulation = Math.max(0, metrics.circulation());
 		long treasury = Math.max(0, metrics.treasuryBalance());
@@ -100,7 +94,7 @@ public final class CoinEconomyCalculator {
 		double ratio = target <= 0 ? scarcity : (effective / target) * scarcity;
 		double dilution = 1.0 + (double) issuance / circulation;
 		double index = ratio / dilution;
-		double step = params.maxStep() * clamp(elapsedFraction, 0.0, 1.0);
+		double step = params.maxStep();
 		double delta = clamp((index - 1.0) * params.sensitivity(), -step, step);
 		long next = Math.round(previous * (1.0 + delta));
 		return new Result(usage, Math.round(effective), Math.round(scarcity * 100) / 100.0, index,

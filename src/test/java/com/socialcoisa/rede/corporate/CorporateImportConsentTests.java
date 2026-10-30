@@ -116,6 +116,39 @@ class CorporateImportConsentTests {
 			.andExpect(jsonPath("$.name").value("Nome Profissional"));
 	}
 
+	/**
+	 * A capa em HTML é IMPORTÁVEL. O campo é escolhido pelo nome que a prévia mostra
+	 * (`bannerHtml`), e a lista de campos aceitos é comparada sem diferenciar maiúsculas — sem
+	 * isso o pedido caía em "campo desconhecido" justamente na capa.
+	 */
+	@Test
+	void bannerHtmlIsImportedWhenChosen() throws Exception {
+		var session = auth.authenticate("import_banner_html");
+		mockMvc.perform(patch("/me/profile")
+				.header("X-Session-Token", session.token())
+				.header("Idempotency-Key", "imp-banner-setup")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of(
+					"username", "capa.social",
+					"headline", "Headline do social",
+					"bannerHtml", "<section class=\"capa\">capa do social</section>"))))
+			.andExpect(status().isOk());
+		createProfile(session, "import.banner");
+
+		mockMvc.perform(get("/me/business-profile/import-preview").header("X-Session-Token", session.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.bannerHtml").value("<section class=\"capa\">capa do social</section>"));
+
+		mockMvc.perform(post("/me/business-profile/import")
+				.header("X-Session-Token", session.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of(
+					"fields", java.util.List.of("bannerHtml")))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.bannerHtml").value("<section class=\"capa\">capa do social</section>"))
+			.andExpect(jsonPath("$.headline").value(""));
+	}
+
 	@Test
 	void emptySelectionIsRefused() throws Exception {
 		var session = auth.authenticate("import_empty");

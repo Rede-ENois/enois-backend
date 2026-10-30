@@ -61,6 +61,9 @@ public interface MessagingRepository {
 	/** A mensagem por id (para conferir de qual conversa ela e antes de mexer nela). */
 	Optional<Message> findMessageById(String messageId);
 
+	/** Mensagens por ids em batch (para montar os previews de reply sem N+1). */
+	List<Message> findMessagesByIds(Collection<String> messageIds);
+
 	long countMessagesInConversation(String conversationId, Collection<String> messageIds);
 
 	/** Apaga mensagens SO para quem chama (o outro participante mantem). */

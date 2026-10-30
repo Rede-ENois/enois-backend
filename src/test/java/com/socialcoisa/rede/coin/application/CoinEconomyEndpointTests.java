@@ -53,13 +53,17 @@ class CoinEconomyEndpointTests {
 			.andExpect(jsonPath("$.escassez").exists())
 			.andExpect(jsonPath("$.indice").exists())
 			.andExpect(jsonPath("$.cotacaoAtualMicros").value(10_000))
-			.andExpect(jsonPath("$.cotacaoSugeridaMicros").exists());
+			.andExpect(jsonPath("$.cotacaoSugeridaMicros").exists())
+			.andExpect(jsonPath("$.publicavelAgora").exists())
+			.andExpect(jsonPath("$.proximaAvaliacaoEm").exists());
 
 		mockMvc.perform(post("/admin/carteira/economia/recalcular").header("X-Session-Token", admin))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.publicada").value(false))
 			.andExpect(jsonPath("$.cotacaoAnteriorMicros").value(10_000))
 			.andExpect(jsonPath("$.cotacaoAtualMicros").value(10_000))
+			.andExpect(jsonPath("$.publicavelAgora").exists())
+			.andExpect(jsonPath("$.proximaAvaliacaoEm").exists())
 			.andExpect(jsonPath("$.retornoCofre").exists())
 			.andExpect(jsonPath("$.escassez").exists());
 	}

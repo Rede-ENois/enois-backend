@@ -8,6 +8,7 @@ import java.time.Instant;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataAccessException;
 
 import com.socialcoisa.rede.corporate.domain.CorporateProfile;
 import com.socialcoisa.rede.corporate.domain.CorporateProfileStatus;
@@ -45,8 +46,26 @@ class CorporateProfilePersistenceTests {
 		// Outra conta com o mesmo @ profissional: o banco recusa e vira 409 amigável.
 		assertThatThrownBy(() -> adapter.save(
 				CorporateProfile.create("user_corp_3", "nome.unico", "Segunda", now.plusSeconds(1))))
-			.isInstanceOf(ApiException.class)
+			.isInstanceOfSatisfying(ApiException.class, e -> {
+				assertThat(e.status()).isEqualTo(409);
+				assertThat(e.code()).isEqualTo("USERNAME_TAKEN");
+			})
 			.hasMessageContaining("usuário profissional");
+	}
+
+	@Test
+	void outraViolacaoDeGravacaoNaoViraConflitoDeUsername() {
+		CorporateProfile perfil = adapter.save(CorporateProfile.create("user_corp_5", "local.longo", "Local Longo", now));
+
+		// location é varchar(200): o banco recusa o valor, e isso não tem nada a ver com o @
+		// (#294: um erro de gravação da capa aparecia como USERNAME_TAKEN).
+		CorporateProfile comLocalGrandeDemais = perfil.withDetails(null, null, null, null, null,
+			"x".repeat(201), null, null, now.plusSeconds(1));
+
+		// A subclasse exata depende do driver; o que importa é o erro subir sem virar 409.
+		assertThatThrownBy(() -> adapter.save(comLocalGrandeDemais))
+			.isInstanceOf(DataAccessException.class)
+			.isNotInstanceOf(ApiException.class);
 	}
 
 	@Test

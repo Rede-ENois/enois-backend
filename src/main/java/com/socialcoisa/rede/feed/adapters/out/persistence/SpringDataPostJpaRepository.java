@@ -33,6 +33,20 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 
 	List<PostJpaEntity> findByIdIn(Collection<String> ids);
 
+	/** Posts que anexam a mídia — a checagem de conteúdo derruba tudo o que usa a mesma imagem. */
+	@Query("select p from PostJpaEntity p where :mediaId member of p.mediaIds")
+	List<PostJpaEntity> findByMediaId(@Param("mediaId") String mediaId);
+
+	/** Posts ativos com link no corpo ou na mini página (a varredura da barreira de links). */
+	@Query("""
+		select p from PostJpaEntity p
+		where p.status = :status and p.createdAt >= :since
+		  and (p.content like '%http%' or p.pageHtml like '%http%')
+		order by p.createdAt desc
+		""")
+	List<PostJpaEntity> findWithLinksSince(@Param("status") PostStatus status, @Param("since") Instant since,
+			Pageable pageable);
+
 	List<PostJpaEntity> findByAuthorIdInAndStatusAndChannelIdIsNullAndCreatedAtBeforeOrderByCreatedAtDesc(Collection<String> authorIds,
 			PostStatus status, Instant before, Pageable pageable);
 

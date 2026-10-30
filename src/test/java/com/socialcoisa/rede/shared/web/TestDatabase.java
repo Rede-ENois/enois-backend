@@ -39,6 +39,11 @@ public final class TestDatabase {
 		require().update("update users set email_verified_at = null where id = ?", userId);
 	}
 
+	/** Conta anterior a exigencia da data de nascimento: o portao de idade barra a escrita dela. */
+	public static void clearBirthDate(String userId) {
+		require().update("update users set birth_date = null where id = ?", userId);
+	}
+
 	/** Liga um segundo fator sem passar pelo fluxo, para cenarios que so precisam do estado final. */
 	public static void enableTwoFactor(String userId, Instant at) {
 		require().update("update users set totp_enabled_at = ? where id = ?", at, userId);

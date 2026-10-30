@@ -974,9 +974,9 @@ Detalhes em [`DIGEST.md`](DIGEST.md).
 | Classe | Descrição |
 |---|---|
 | `Report` | Entidade: id, reporterId, targetType, targetId, reason, description, status |
-| `ReportReason` | Enum: `SPAM`, `INAPPROPRIATE`, `ABUSIVE`, `MISINFORMATION`, `COPYRIGHT`, `OTHER` |
-| `ReportStatus` | Enum: `PENDING`, `APPROVED`, `DISMISSED` |
-| `TargetType` | Enum: `POST`, `COMMENT`, `USER`, `COMMUNITY`, `JOB`, `EVENT` |
+| `ReportReason` | Enum: `AI_GENERATED`, `FAKE_CONTENT`, `SCAM`, `DISCRIMINATION`, `PREJUDICE`, `HARASSMENT`, `SPAM`, `VIOLENCE`, `SEXUAL_CONTENT`, `COPYRIGHT`, `OTHER` |
+| `ReportStatus` | Enum: `PENDING`, `AUTO_PENALIZED`, `APPROVED`, `DISMISSED` |
+| `TargetType` | Enum: `POST`, `COMMENT`, `USER`, `JOB`, `GAME`, `GROUP_POST`, `GROUP_COMMENT`, `MESSAGE` |
 
 ### ReportController
 
@@ -988,6 +988,33 @@ Detalhes em [`DIGEST.md`](DIGEST.md).
 | `listPending(...)` | GET /api/admin/reports |
 | `approve(...)` | POST /api/admin/reports/{reportId}/approve |
 | `dismiss(...)` | POST /api/admin/reports/{reportId}/dismiss |
+
+### SanctionService (fila de penalidades do admin)
+
+**Arquivo**: `src/main/java/com/socialcoisa/rede/moderation/application/SanctionService.java`
+
+Correção manual de penalidades aplicadas erradas: o admin lista quem está penalizado, remove a
+sanção (conta liberada, denúncia de origem descartada) ou corrige o tipo/motivo sem remover.
+Rebaixar um ban libera o login de volta — o conteúdo purgado pelo ban não volta.
+
+| Função | Rota |
+|---|---|
+| `adminSanctions(status, limit)` | GET /api/admin/sanctions?status=ACTIVE\|REMOVED |
+| `revokeSanction(adminId, sanctionId, reason)` | POST /api/admin/sanctions/{sanctionId}/revoke |
+| `editSanction(adminId, sanctionId, type, reason)` | POST /api/admin/sanctions/{sanctionId}/edit |
+
+### ContentQuarantineReviewService
+
+**Arquivo**: `src/main/java/com/socialcoisa/rede/moderation/application/ContentQuarantineReviewService.java`
+
+Fila de revisão do que a barreira de conteúdo automatizado tirou do ar. Liberar devolve o post ao
+ar; remover apaga o post. Nenhuma das duas pune a conta. Ver `docs/MODERACAO-CONTEUDO.md`.
+
+| Função | Rota |
+|---|---|
+| `pending(limit)` | GET /api/moderation/quarantine |
+| `release(reviewerId, postId)` | POST /api/moderation/quarantine/{postId}/release |
+| `remove(reviewerId, postId)` | POST /api/moderation/quarantine/{postId}/remove |
 
 ---
 
@@ -1195,6 +1222,14 @@ corporativo do usuário (importável do LinkedIn).
 | `GET /microprojetos` / `POST /empresas/{companyId}/microprojetos` | Catálogo / criar microprojeto |
 | `POST /microprojetos/{projectId}/proposals` / `.../complete` / `.../select` | Propostas, concluir, selecionar |
 | `POST /me/business-profile` / `.../import` / `.../activate` | Perfil corporativo, importar, ativar |
+| `POST /me/business-profile/username` | Troca o nametag (o `@` e o fim de `/profissional/{nametag}`) |
+
+O **nametag** do perfil profissional vive em namespace próprio (índice único no banco) e é
+independente do `@` social: a mesma conta pode ser `aminadojava` no social e `melsantos` no
+profissional. É ele que aparece como `@` e no fim da URL pública; trocar muda o endereço (o antigo
+deixa de responder) sem tocar no perfil social. A importação do perfil social aceita
+`name`, `headline`, `bio`, `avatar`, `banner`, `bannerHtml` e `location` — campo a campo, e a
+comparação do nome do campo ignora maiúsculas (`bannerHtml` chega como o cliente escreve).
 
 ## 30. CommunityProjects + Projects (Projetos)
 
@@ -1276,3 +1311,18 @@ exportado é o caminho sancionado. Convites já resolvidos não se repetem em re
 | `POST /me/integrations/linkedin` | Integração com a conta do LinkedIn |
 
 Documentação detalhada do fluxo de import em [`JOB_IMPORT_JOBRADAR.md`](JOB_IMPORT_JOBRADAR.md).
+
+## 37. Emotes (Figurinhas de chat)
+
+Catálogo de figurinhas montado **no backend**, em memória, e atualizado de 3 em 3 horas: coleções
+globais do BTTV e do FFZ, as mais usadas do FFZ (com o recorte animado) e um retrato popular
+embarcado como reserva. O navegador lê uma página por vez e recebe as imagens pelo proxy deste
+backend — era o CDN do FFZ que deixava metade da grade vazia (30% de falha, timeout de 12s).
+
+| Rota | Descrição |
+|---|---|
+| `GET /emotes?page&limit&q&provider` | Página do seletor (40 por padrão, máx. 100) |
+| `GET /emotes/index` | Índice compacto `código → imagem` para o texto |
+| `GET /emotes/image/{provider}/{id}?variant=thumb\|full` | Imagem com cache em memória |
+
+Todas são leitura pública. Documentação detalhada em [`FIGURINHAS.md`](FIGURINHAS.md).

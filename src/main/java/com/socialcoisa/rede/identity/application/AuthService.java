@@ -40,6 +40,7 @@ import com.socialcoisa.rede.identity.domain.EmailVerificationToken;
 import com.socialcoisa.rede.identity.domain.PasswordResetToken;
 import com.socialcoisa.rede.identity.domain.PendingSignup;
 import com.socialcoisa.rede.identity.domain.TwoFactorChallenge;
+import com.socialcoisa.rede.identity.domain.UsernameSlug;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -698,7 +699,7 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 	}
 
 	private String uniqueUsername(String name, String email) {
-		String base = slug(StringUtils.hasText(name) ? name : email.substring(0, email.indexOf('@')));
+		String base = UsernameSlug.from(StringUtils.hasText(name) ? name : email.substring(0, email.indexOf('@')));
 		String candidate = base;
 		int suffix = 1;
 		while (userProfileRepository.existsByUsername(candidate)
@@ -708,12 +709,6 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 		return candidate;
 	}
 
-	private String slug(String value) {
-		String slug = value.toLowerCase(Locale.ROOT)
-			.replaceAll("[^a-z0-9]+", "-")
-			.replaceAll("(^-|-$)", "");
-		return StringUtils.hasText(slug) ? slug : "user";
-	}
 
 	/** Hash do token de reset: so o hash e persistido, para nao guardar credencial em claro. */
 	private String hashToken(String rawToken) {

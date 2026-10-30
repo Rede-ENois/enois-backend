@@ -44,16 +44,20 @@ class NetworkContractController {
 	private final CurrentUserResolver currentUserResolver;
 	private final NetworkService networkService;
 	private final BlockService blockService;
+	private final com.socialcoisa.rede.network.application.MuteService muteService;
 	private final UserProfileRepository userProfileRepository;
 	private final Clock clock;
 
 	NetworkContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
-			NetworkService networkService, BlockService blockService, UserProfileRepository userProfileRepository,
+			NetworkService networkService, BlockService blockService,
+			com.socialcoisa.rede.network.application.MuteService muteService,
+			UserProfileRepository userProfileRepository,
 			Clock clock) {
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.networkService = networkService;
 		this.blockService = blockService;
+		this.muteService = muteService;
 		this.userProfileRepository = userProfileRepository;
 		this.clock = clock;
 	}
@@ -170,7 +174,8 @@ class NetworkContractController {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		String status = networkService.getConnectionStatus(user.id().value(), targetUserId);
 		boolean blocked = blockService.isBlockedBy(user.id().value(), targetUserId);
-		return new ConnectionStatusView(targetUserId, status, blocked);
+		boolean muted = muteService.isMuted(user.id().value(), targetUserId);
+		return new ConnectionStatusView(targetUserId, status, blocked, muted);
 	}
 
 	/** Bloqueia um usuario: ele some do feed, dos comentarios, das notificacoes e da busca. */
@@ -221,6 +226,53 @@ class NetworkContractController {
 			.toList();
 	}
 
+	@PostMapping("/mutes/{targetUserId}")
+	ResponseEntity<String> mute(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@PathVariable String targetUserId) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		String hash = idempotency.hash(Map.of("targetUserId", targetUserId));
+		return idempotency.execute(user.id(), "POST", "/api/network/mutes/{userId}", idempotencyKey, hash,
+			() -> {
+				muteService.mute(user.id().value(), targetUserId);
+				return new CommandResponse(201, new StatusResponse(targetUserId, "MUTED"));
+			});
+	}
+
+	@DeleteMapping("/mutes/{targetUserId}")
+	ResponseEntity<String> unmute(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@PathVariable String targetUserId) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		String hash = idempotency.hash(Map.of("targetUserId", targetUserId));
+		return idempotency.execute(user.id(), "DELETE", "/api/network/mutes/{userId}", idempotencyKey, hash,
+			() -> {
+				muteService.unmute(user.id().value(), targetUserId);
+				return new CommandResponse(200, new StatusResponse(targetUserId, "UNMUTED"));
+			});
+	}
+
+	/** Quem eu silenciei (para poder desfazer). */
+	@GetMapping("/mutes")
+	List<MutedUserView> mutes(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		var mutes = muteService.listMuted(user.id().value());
+		Map<String, UserProfile> profiles = userProfileRepository
+			.findAllByIds(mutes.stream().map(com.socialcoisa.rede.network.domain.UserMute::mutedId).toList())
+			.stream()
+			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
+		return mutes.stream()
+			.map(m -> {
+				UserProfile p = profiles.get(m.mutedId());
+				return new MutedUserView(m.mutedId(),
+					p != null ? p.username() : null,
+					p != null ? p.name() : null,
+					p != null ? p.avatar() : null,
+					m.createdAt() != null ? m.createdAt().toString() : null);
+			})
+			.toList();
+	}
+
 	@DeleteMapping("/connections/{targetUserId}")
 	ResponseEntity<String> remove(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
@@ -241,12 +293,15 @@ class NetworkContractController {
 	record BlockedUserView(String userId, String username, String name, String avatar, String blockedAt) {
 	}
 
+	record MutedUserView(String userId, String username, String name, String avatar, String mutedAt) {
+	}
+
 	record NetworkSummaryView(String userId, int connections, int followers, int pendingRequests) {
 	}
 
 	record ConnectionRequestView(String id, String fromUserId, String toUserId, String status, String createdAt) {
 	}
 
-	record ConnectionStatusView(String targetUserId, String status, boolean blocked) {
+	record ConnectionStatusView(String targetUserId, String status, boolean blocked, boolean muted) {
 	}
 }

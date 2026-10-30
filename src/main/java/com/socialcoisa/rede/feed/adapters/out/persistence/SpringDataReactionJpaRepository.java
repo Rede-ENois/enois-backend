@@ -28,6 +28,12 @@ interface SpringDataReactionJpaRepository extends JpaRepository<ReactionJpaEntit
 	List<ReactionJpaEntity> findByPostIdAndCreatedAtBeforeOrderByCreatedAtDesc(String postId, java.time.Instant before,
 		org.springframework.data.domain.Pageable page);
 
+	/** Post IDs que o usuario reagiu, do mais recente ao mais antigo. */
+	@org.springframework.data.jpa.repository.Query(
+		"SELECT r.postId FROM ReactionJpaEntity r WHERE r.userId = :userId ORDER BY r.createdAt DESC")
+	List<String> findPostIdsByUserId(@org.springframework.data.repository.query.Param("userId") String userId,
+		org.springframework.data.domain.Pageable pageable);
+
 	/** Rows of (postId, reactionType, count). `excluded` must not be empty (NOT IN () is invalid SQL). */
 	@org.springframework.data.jpa.repository.Query(
 		"SELECT r.postId, r.reactionType, COUNT(r) FROM ReactionJpaEntity r "

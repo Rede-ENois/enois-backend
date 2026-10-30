@@ -23,6 +23,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 
 import tools.jackson.databind.ObjectMapper;
 import com.socialcoisa.rede.media.application.port.out.MediaObjectStore;
@@ -103,6 +104,25 @@ class MediaStorageProxyTests {
 		return (FakeObjectStore) store;
 	}
 
+	/**
+	 * O corpo da leitura é escrito na thread de streaming (`StreamingResponseBody`), então o
+	 * `perform` pode voltar antes de o buffer estar completo — na suíte inteira isso aparecia
+	 * como falha intermitente de corpo vazio. Esperar o buffer encher mantém a asserção exata.
+	 */
+	private void assertCorpoEmStreaming(MvcResult resultado, byte[] esperado) throws InterruptedException {
+		long limite = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+		byte[] corpo;
+		do {
+			corpo = resultado.getResponse().getContentAsByteArray();
+			if (corpo.length == esperado.length || System.nanoTime() > limite) {
+				break;
+			}
+			Thread.sleep(10);
+		}
+		while (true);
+		assertThat(corpo).isEqualTo(esperado);
+	}
+
 	@Test
 	void leituraFuncionaSemSessaoEComCacheLongo() throws Exception {
 		var resultado = mockMvc.perform(get("/storage/uploads/media_abc/media/x/foto.jpg"))
@@ -112,7 +132,7 @@ class MediaStorageProxyTests {
 			.andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("immutable")))
 			.andReturn();
 
-		assertThat(resultado.getResponse().getContentAsByteArray()).isEqualTo(store().conteudo);
+		assertCorpoEmStreaming(resultado, store().conteudo);
 	}
 
 	@Test
