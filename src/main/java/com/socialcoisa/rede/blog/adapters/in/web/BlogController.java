@@ -159,6 +159,12 @@ class BlogController {
 		return com.socialcoisa.rede.shared.web.ConfirmationPage.of(ok, titulo, mensagem);
 	}
 
+	/** RFC 8058: o cliente de e-mail faz POST "List-Unsubscribe=One-Click" na URL do List-Unsubscribe. */
+	@org.springframework.web.bind.annotation.PostMapping("/descadastrar")
+	ResponseEntity<Void> descadastrarUmClique(@RequestParam(required = false) String token) {
+		return ResponseEntity.status(newsletter.unsubscribeByToken(token) ? 200 : 400).build();
+	}
+
 	record BlogPostRequest(String title, String body, BlogPostFormat format, Boolean notifySubscribers) {
 	}
 }

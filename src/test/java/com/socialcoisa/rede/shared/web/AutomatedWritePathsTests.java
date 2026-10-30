@@ -64,7 +64,9 @@ class AutomatedWritePathsTests {
 		"/auth/oauth/*/callback",
 		"/auth/oauth/*/token",
 		"/games/tokens/validate",
-		"/webhooks/github");
+		"/webhooks/github",
+		"/blogs/descadastrar",
+		"/notifications/digest/unsubscribe");
 
 	private static final Pattern MAPPING = Pattern
 		.compile("@(Get|Post|Put|Patch|Delete)Mapping(?:\\(\\s*(?:value\\s*=\\s*)?\"([^\"]*)\"[^)]*\\))?");

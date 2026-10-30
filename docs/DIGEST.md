@@ -54,7 +54,15 @@ Todo resumo traz o link "Não quero mais receber" e o cabeçalho `List-Unsubscri
 `GET /api/notifications/digest/unsubscribe?token=...`. O token é o mesmo esquema da newsletter do
 blog (AES-GCM com a chave da instalação, base64 url-safe) com prefixo próprio: token alterado ou de
 outro uso é recusado (400). O clique desliga `weeklyDigest`, é idempotente e responde uma página
-HTML simples. Sem `REDE_SECURITY_ENCRYPTION_KEY` nenhum resumo é enviado (não haveria link de saída).
+HTML simples.
+
+Descadastro em um clique do cliente de e-mail (RFC 8058): o e-mail também leva
+`List-Unsubscribe-Post: List-Unsubscribe=One-Click`, e a mesma URL aceita `POST` (corpo
+`List-Unsubscribe=One-Click`, token na query) sem sessão e sem `Origin`, respondendo 200 sem corpo
+(400 para token inválido). O cabeçalho sai do `EmailService.sendHtml` sempre que há URL de
+descadastro, então a newsletter do blog ganhou o mesmo `POST /blogs/descadastrar`. As duas rotas
+estão no catálogo de escritas públicas do `WriteRouteInterceptor` (travado pelo
+`AutomatedWritePathsTests`): o token cifrado é a autorização e o único efeito é parar e-mails. Sem `REDE_SECURITY_ENCRYPTION_KEY` nenhum resumo é enviado (não haveria link de saída).
 
 ## Configuração
 

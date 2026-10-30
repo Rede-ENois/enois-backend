@@ -9,6 +9,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.sql.Timestamp;
@@ -81,8 +82,8 @@ class WeeklyDigestTests {
 		var reader = auth.authenticate("digest_send_reader");
 		var author = auth.authenticate("digest_send_author");
 		String community = community("digest-send", reader.userId());
-		post(community, author.userId(), "Como vocês organizam o estudo de algoritmos?", 4);
-		post(community, author.userId(), "Compartilhando um guia de testes de contrato", 1);
+		communityPost(community, author.userId(), "Como vocês organizam o estudo de algoritmos?", 4);
+		communityPost(community, author.userId(), "Compartilhando um guia de testes de contrato", 1);
 		job(author.userId(), "Pessoa engenheira Kotlin digest", "Kotlin", reader.userId());
 		event(reader.userId(), "Encontro de Kotlin digest");
 		group("digest-send", reader.userId(), author.userId());
@@ -112,9 +113,9 @@ class WeeklyDigestTests {
 		var author = auth.authenticate("digest_empty_author");
 		String community = community("digest-empty", reader.userId());
 		// The person's own posts never count, and one item alone is not a digest.
-		post(community, reader.userId(), "Meu proprio post", 9);
-		post(community, reader.userId(), "Outro post meu", 9);
-		post(community, author.userId(), "Unico post de outra pessoa", 1);
+		communityPost(community, reader.userId(), "Meu proprio post", 9);
+		communityPost(community, reader.userId(), "Outro post meu", 9);
+		communityPost(community, author.userId(), "Unico post de outra pessoa", 1);
 
 		assertThat(digest.sendTo(reader.userId())).isEqualTo(Outcome.EMPTY);
 
@@ -131,8 +132,8 @@ class WeeklyDigestTests {
 		var reader = auth.authenticate("digest_optout_reader");
 		var author = auth.authenticate("digest_optout_author");
 		String community = community("digest-optout", reader.userId());
-		post(community, author.userId(), "Post um", 1);
-		post(community, author.userId(), "Post dois", 1);
+		communityPost(community, author.userId(), "Post um", 1);
+		communityPost(community, author.userId(), "Post dois", 1);
 		preferences.update(reader.userId(), false, null, null, null, null, null);
 
 		assertThat(digest.sendTo(reader.userId())).isEqualTo(Outcome.NOT_ELIGIBLE);
@@ -167,6 +168,27 @@ class WeeklyDigestTests {
 			.andExpect(status().isOk());
 	}
 
+	@Test
+	void oneClickPostFromTheMailClientTurnsTheDigestOff() throws Exception {
+		var reader = auth.authenticate("digest_oneclick_reader");
+		String token = digest.unsubscribeToken(reader.userId());
+		char last = token.charAt(token.length() - 1);
+		String tampered = token.substring(0, token.length() - 1) + (last == 'A' ? 'B' : 'A');
+
+		// RFC 8058: no session, no Origin, form body "List-Unsubscribe=One-Click", token in the URL.
+		mockMvc.perform(post("/notifications/digest/unsubscribe").param("token", tampered)
+				.contentType(org.springframework.http.MediaType.APPLICATION_FORM_URLENCODED)
+				.content("List-Unsubscribe=One-Click"))
+			.andExpect(status().isBadRequest());
+		assertThat(preferences.of(reader.userId()).weeklyDigest()).isTrue();
+
+		mockMvc.perform(post("/notifications/digest/unsubscribe").queryParam("token", token)
+				.contentType(org.springframework.http.MediaType.APPLICATION_FORM_URLENCODED)
+				.content("List-Unsubscribe=One-Click"))
+			.andExpect(status().isOk());
+		assertThat(preferences.of(reader.userId()).weeklyDigest()).isFalse();
+	}
+
 	private String community(String prefix, String memberId) {
 		String id = prefix + "-" + UUID.randomUUID();
 		Timestamp now = Timestamp.from(Instant.now());
@@ -188,7 +210,7 @@ class WeeklyDigestTests {
 			+ "values (?, ?, 'topic', ?, 'Conteudo do grupo', ?, ?)", UUID.randomUUID().toString(), id, authorId, now, now);
 	}
 
-	private void post(String communityId, String authorId, String content, int reactions) {
+	private void communityPost(String communityId, String authorId, String content, int reactions) {
 		jdbc.update("insert into posts (id, author_id, type, content, created_at, visibility, reactions, comments, "
 			+ "saves, shares, status, community_id) values (?, ?, 'TEXT', ?, ?, 'PUBLIC', ?, 0, 0, 0, 'ACTIVE', ?)",
 			"digest-post-" + UUID.randomUUID(), authorId, content, Timestamp.from(Instant.now()), reactions, communityId);

@@ -261,6 +261,9 @@ public class EmailService {
             }
             if (org.springframework.util.StringUtils.hasText(listUnsubscribeUrl)) {
                 message.setHeader("List-Unsubscribe", "<" + listUnsubscribeUrl + ">");
+                // RFC 8058 one-click: the mail client POSTs to the same URL, so every caller of this
+                // overload must also serve POST there (blog newsletter and weekly digest do).
+                message.setHeader("List-Unsubscribe-Post", "List-Unsubscribe=One-Click");
             }
             helper.setSubject(subject);
             helper.setText(htmlBody, true);

@@ -339,6 +339,8 @@ Nota: Criar vaga requer reputação >= 300.
 | GET | `/api/me/notification-preferences` | Preferências de push e do resumo semanal | Sim |
 | PUT | `/api/me/notification-preferences` | Atualização parcial (campo ausente/nulo mantém o valor) | Sim |
 | GET | `/api/notifications/digest/unsubscribe?token=` | Descadastro do resumo semanal (link do e-mail, HTML) | Não (token) |
+| POST | `/api/notifications/digest/unsubscribe?token=` | Descadastro em um clique (RFC 8058, cliente de e-mail): 200/400 sem corpo | Não (token) |
+| POST | `/api/blogs/descadastrar?token=` | Mesmo descadastro em um clique para a newsletter do blog | Não (token) |
 
 Preferências (GET e resposta do PUT):
 

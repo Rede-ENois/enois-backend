@@ -5,6 +5,7 @@ import java.time.Instant;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -22,7 +23,8 @@ import com.socialcoisa.rede.shared.web.CurrentUserResolver;
  *
  * GET /me/notification-preferences — current toggles (defaults: everything on).
  * PUT /me/notification-preferences — partial update (a null or missing field keeps its value).
- * GET /notifications/digest/unsubscribe?token= — one-click opt-out from the weekly digest e-mail.
+ * GET /notifications/digest/unsubscribe?token= — opt-out link clicked in the weekly digest e-mail.
+ * POST /notifications/digest/unsubscribe?token= — RFC 8058 one-click opt-out sent by the mail client.
  */
 @RestController
 class NotificationPreferenceController {
@@ -73,5 +75,11 @@ class NotificationPreferenceController {
 				"Pronto: você não vai mais receber o resumo semanal por e-mail. Se mudar de ideia, dá para religar nas preferências de notificação.")
 			: ConfirmationPage.of(false, "Link inválido",
 				"Este link não é válido. Entre no Énóis e desligue o resumo semanal nas preferências de notificação.");
+	}
+
+	/** RFC 8058: the mail client POSTs "List-Unsubscribe=One-Click" to the List-Unsubscribe URL. */
+	@PostMapping("/notifications/digest/unsubscribe")
+	ResponseEntity<Void> oneClickUnsubscribe(@RequestParam(required = false) String token) {
+		return ResponseEntity.status(digest.unsubscribeByToken(token) ? 200 : 400).build();
 	}
 }

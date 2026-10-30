@@ -163,4 +163,28 @@ class BlogNewsletterTests {
 		mockMvc.perform(get("/blogs/descadastrar").param("token", "nao-e-um-token"))
 			.andExpect(status().isBadRequest());
 	}
+
+	@Test
+	void descadastroUmCliquePorPostDoClienteDeEmail() throws Exception {
+		var autor = auth.authenticate("blognews_oneclick_autor");
+		var assinante = auth.authenticate("blognews_oneclick_assinante");
+		publicar(autor, "Primeiro post um clique", false);
+		Blog blog = blogs.findBySlug(slugDoBlog(autor)).orElseThrow();
+		assinar(blog.slug(), assinante);
+
+		String token = newsletter.unsubscribeToken(blog.id(), assinante.userId());
+		char ultimo = token.charAt(token.length() - 1);
+		String adulterado = token.substring(0, token.length() - 1) + (ultimo == 'A' ? 'B' : 'A');
+
+		// RFC 8058: sem sessao e sem Origin, corpo "List-Unsubscribe=One-Click", token na URL.
+		mockMvc.perform(post("/blogs/descadastrar").queryParam("token", adulterado)
+				.contentType(MediaType.APPLICATION_FORM_URLENCODED).content("List-Unsubscribe=One-Click"))
+			.andExpect(status().isBadRequest());
+		assertThat(subscriptions.exists(blog.id(), assinante.userId())).isTrue();
+
+		mockMvc.perform(post("/blogs/descadastrar").queryParam("token", token)
+				.contentType(MediaType.APPLICATION_FORM_URLENCODED).content("List-Unsubscribe=One-Click"))
+			.andExpect(status().isOk());
+		assertThat(subscriptions.exists(blog.id(), assinante.userId())).isFalse();
+	}
 }
