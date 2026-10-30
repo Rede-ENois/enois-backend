@@ -161,7 +161,7 @@ public class BlogNewsletterService {
 	}
 
 	/** Prévia do corpo do post: sem tags, sem markdown, sem excesso de linhas. */
-	static String previewOf(String body) {
+	public static String previewOf(String body) {
 		if (!StringUtils.hasText(body)) {
 			return "";
 		}

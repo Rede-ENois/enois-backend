@@ -336,6 +336,22 @@ Nota: Criar vaga requer reputação >= 300.
 | GET | `/api/notifications` | Listar notificações | Sim |
 | POST | `/api/notifications/{notificationId}/read` | Marcar como lida | Sim |
 | POST | `/api/notifications/read-all` | Marcar todas como lidas | Sim |
+| GET | `/api/me/notification-preferences` | Preferências de push e do resumo semanal | Sim |
+| PUT | `/api/me/notification-preferences` | Atualização parcial (campo ausente/nulo mantém o valor) | Sim |
+| GET | `/api/notifications/digest/unsubscribe?token=` | Descadastro do resumo semanal (link do e-mail, HTML) | Não (token) |
+
+Preferências (GET e resposta do PUT):
+
+```json
+{ "weeklyDigest": true, "pushSocial": true, "pushMessages": true, "pushGroups": true,
+  "pushJobs": true, "pushSystem": true, "updatedAt": "2026-10-30T12:00:00Z" }
+```
+
+`updatedAt` é `null` enquanto a pessoa nunca mudou nada (padrão: tudo ligado). Segurança, moderação e
+sanções sempre viram push. Regras e categorias em [`DIGEST.md`](DIGEST.md).
+
+Mudança de estado da candidatura também gera a notificação `JOB_APPLICATION_STATUS`
+(`href` = `/vagas/{jobId}`), além da mensagem direta e do e-mail.
 
 ---
 

@@ -255,7 +255,8 @@ class RequestOriginFilter extends OncePerRequestFilter {
 		if (path.equals("/auth/email/change/confirm") && "GET".equalsIgnoreCase(method)) {
 			return true;
 		}
-		return path.equals("/blogs/descadastrar");
+		// Links de descadastro (newsletter do blog e resumo semanal): clique no cliente de e-mail.
+		return path.equals("/blogs/descadastrar") || path.equals("/notifications/digest/unsubscribe");
 	}
 
 	/** Rotas do painel: somente a origem confiável do frontend. */

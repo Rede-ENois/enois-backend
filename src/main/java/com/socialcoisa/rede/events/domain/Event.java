@@ -61,7 +61,8 @@ public class Event {
 		return java.util.Optional.of(parsed.atTime(limit).toInstant(java.time.ZoneOffset.UTC));
 	}
 
-	private java.time.LocalDate parseDate(String raw) {
+	/** ISO (what the app sends) or dd/MM/yyyy; null when the free-text date cannot be read. */
+	public static java.time.LocalDate parseDate(String raw) {
 		if (raw == null || raw.isBlank()) {
 			return null;
 		}

@@ -909,6 +909,17 @@ inválidas são rejeitadas integralmente. A operação exige autenticação e ch
 | `read(...)` | POST /api/notifications/{notificationId}/read |
 | `readAll(...)` | POST /api/notifications/read-all |
 
+### Preferências e resumo semanal
+
+Detalhes em [`DIGEST.md`](DIGEST.md).
+
+| Classe | Descrição |
+|---|---|
+| `NotificationCategory` | Mapa único kind → categoria de push (`ALWAYS` para segurança/moderação/sanção) |
+| `NotificationPreferenceService` | Lê/grava as preferências (`notification_preferences`); `allowsPush(userId, kind)` |
+| `NotificationPreferenceController` | GET/PUT /api/me/notification-preferences, GET /api/notifications/digest/unsubscribe |
+| `WeeklyDigestService` | Agendamento, conteúdo, envio único por semana ISO e token de descadastro |
+
 ---
 
 ## 14. Search (Busca)
@@ -1146,6 +1157,10 @@ Notificações push no navegador (VAPID): inscrição, cancelamento e configura�
 |---|---|
 | `GET /push/config` | Chave pública VAPID |
 | `POST /push/subscriptions` / `DELETE /push/subscriptions` | Inscrever / cancelar dispositivo |
+
+`PushNotificationListener` espelha cada notificação criada como push depois do commit, **exceto** quando
+a pessoa desligou a categoria do kind (`NotificationPreferenceService.allowsPush`). A notificação
+in-app é criada do mesmo jeito; segurança, moderação e sanção sempre viram push. Ver [`DIGEST.md`](DIGEST.md).
 
 ## 27. Gifs (Busca de GIFs)
 

@@ -42,6 +42,7 @@ próprio no [`SECURITY.md`](SECURITY.md) — não vira issue pública.
 | Segurança, risco e antifraude | [`docs/SECURITY.md`](docs/SECURITY.md) |
 | Identidade e contas | [`docs/IDENTITY.md`](docs/IDENTITY.md) |
 | Jogos indie | [`docs/GAMES.md`](docs/GAMES.md) |
+| Notificações: push por categoria e resumo semanal | [`docs/DIGEST.md`](docs/DIGEST.md) |
 | Portal do desenvolvedor (API pública) | [`docs/DEVELOPERS_PORTAL.md`](docs/DEVELOPERS_PORTAL.md) |
 
 ## Licença
