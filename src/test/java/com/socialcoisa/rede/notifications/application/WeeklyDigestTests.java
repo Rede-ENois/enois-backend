@@ -128,6 +128,26 @@ class WeeklyDigestTests {
 	}
 
 	@Test
+	void mutedAndBlockedPeopleStayOutOfTheDigest() throws Exception {
+		var reader = auth.authenticate("digest_hidden_reader");
+		var muted = auth.authenticate("digest_hidden_muted");
+		var blocker = auth.authenticate("digest_hidden_blocker");
+		String community = community("digest-hidden", reader.userId());
+		communityPost(community, muted.userId(), "Post de quem foi silenciado", 5);
+		communityPost(community, muted.userId(), "Outro post silenciado", 5);
+		communityPost(community, blocker.userId(), "Post de quem bloqueou", 5);
+		Timestamp now = Timestamp.from(Instant.now());
+		jdbc.update("insert into user_mutes (muter_id, muted_id, created_at) values (?, ?, ?)", reader.userId(),
+			muted.userId(), now);
+		jdbc.update("insert into user_blocks (blocker_id, blocked_id, created_at) values (?, ?, ?)", blocker.userId(),
+			reader.userId(), now);
+
+		assertThat(digest.sendTo(reader.userId())).isEqualTo(Outcome.EMPTY);
+		verify(email, never()).sendHtml(eq("digest_hidden_reader@test.com"), anyString(), anyString(), any(), any(),
+			any(), any());
+	}
+
+	@Test
 	void neverSendsToWhoOptedOut() throws Exception {
 		var reader = auth.authenticate("digest_optout_reader");
 		var author = auth.authenticate("digest_optout_author");

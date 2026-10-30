@@ -41,7 +41,7 @@ obedecendo a um botão da pessoa).
   - até 3 vagas abertas publicadas na semana com alguma habilidade em comum, em que a pessoa ainda
     não se candidatou;
   - até 3 eventos com presença confirmada nos próximos 7 dias.
-  - Bloqueios valem nos dois sentidos, e módulos desligados em "O que não quero ver"
+  - Bloqueios valem nos dois sentidos, quem a pessoa silenciou (mute) não aparece, e módulos desligados em "O que não quero ver"
     (`COMMUNITIES`, `GROUPS`, `JOBS`, `EVENTS`) ficam de fora.
 - **Só envia com conteúdo real**: pelo menos 2 itens além da contagem de não lidas. Semana vazia não
   envia e não grava nada (a próxima semana tenta de novo).

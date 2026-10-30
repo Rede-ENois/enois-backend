@@ -18,10 +18,14 @@ import com.socialcoisa.rede.notifications.domain.DigestItem;
 @Repository
 class WeeklyDigestPersistenceAdapter implements WeeklyDigestRepository {
 
-	/** Neither side of a block shows up in the other's digest. */
-	private static final String NOT_BLOCKED = """
+	/**
+	 * Neither side of a block shows up in the other's digest, and someone the reader muted stays
+	 * out of the reader's digest (a mute is one-way, like in the feed).
+	 */
+	private static final String NOT_HIDDEN = """
 		not exists (select 1 from user_blocks b where (b.blocker_id = ? and b.blocked_id = %1$s)
-		or (b.blocker_id = %1$s and b.blocked_id = ?))""";
+		or (b.blocker_id = %1$s and b.blocked_id = ?))
+		and not exists (select 1 from user_mutes mu where mu.muter_id = ? and mu.muted_id = %1$s)""";
 
 	private final JdbcTemplate jdbc;
 
@@ -72,9 +76,9 @@ class WeeklyDigestPersistenceAdapter implements WeeklyDigestRepository {
 				where p.author_id <> ? and p.status = 'ACTIVE' and p.deleted_at is null and p.visibility = 'PUBLIC'
 				and p.channel_id is null and p.expires_at is null and p.repost_of is null and p.created_at >= ?
 				and %s
-				order by score desc, p.created_at desc limit ?""".formatted(NOT_BLOCKED.formatted("p.author_id")),
+				order by score desc, p.created_at desc limit ?""".formatted(NOT_HIDDEN.formatted("p.author_id")),
 			(rs, row) -> new DigestItem(rs.getString(2), rs.getString(3), "/post/" + rs.getString(1), rs.getInt(4)),
-			userId, userId, Timestamp.from(since), userId, userId, limit);
+			userId, userId, Timestamp.from(since), userId, userId, userId, limit);
 	}
 
 	@Override
@@ -86,9 +90,9 @@ class WeeklyDigestPersistenceAdapter implements WeeklyDigestRepository {
 				where gp.author_id <> ? and gp.status = 'PUBLISHED' and g.status = 'ACTIVE' and gp.created_at >= ?
 				and %s
 				group by g.name, g.slug
-				order by score desc limit ?""".formatted(NOT_BLOCKED.formatted("gp.author_id")),
+				order by score desc limit ?""".formatted(NOT_HIDDEN.formatted("gp.author_id")),
 			(rs, row) -> new DigestItem("Conversas novas em " + rs.getString(1), null, "/grupos/" + rs.getString(2), rs.getInt(3)),
-			userId, userId, Timestamp.from(since), userId, userId, limit);
+			userId, userId, Timestamp.from(since), userId, userId, userId, limit);
 	}
 
 	@Override
