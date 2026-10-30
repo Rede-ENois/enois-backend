@@ -12,10 +12,12 @@ import com.socialcoisa.rede.jobs.domain.Job;
 import com.socialcoisa.rede.jobs.domain.JobApplication;
 import com.socialcoisa.rede.jobs.domain.JobApplicationStatus;
 import com.socialcoisa.rede.messaging.application.MessagingService;
+import com.socialcoisa.rede.notifications.application.NotificationService;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 
 /**
- * Notifica o candidato sobre a mudanca de estado: mensagem direta e e-mail.
+ * Notifica o candidato sobre a mudanca de estado: notificacao in-app (que tambem vira push, se a
+ * pessoa nao desligou vagas), mensagem direta e e-mail.
  *
  * Falha de entrega nao derruba a mudanca de estado (ela ja foi persistida antes daqui): o erro e
  * logado e o candidato continua vendo o estado atualizado na lista dele.
@@ -30,18 +32,24 @@ class JobApplicationStatusNotifierAdapter implements JobApplicationStatusNotifie
 	private final UserProfileRepository userProfileRepository;
 	private final MessagingService messagingService;
 	private final EmailService emailService;
+	private final NotificationService notificationService;
 
 	JobApplicationStatusNotifierAdapter(UserProfileRepository userProfileRepository, MessagingService messagingService,
-			EmailService emailService) {
+			EmailService emailService, NotificationService notificationService) {
 		this.userProfileRepository = userProfileRepository;
 		this.messagingService = messagingService;
 		this.emailService = emailService;
+		this.notificationService = notificationService;
 	}
 
 	@Override
 	@Transactional
 	public void notifyStatusChange(Job job, JobApplication application, JobApplicationStatus status) {
 		String text = messageFor(job, application, status);
+
+		// Sem o retorno da empresa: o corpo pode aparecer na tela bloqueada (push); o retorno segue na mensagem direta, no e-mail e na lista de candidaturas.
+		notificationService.create(application.userId(), "JOB_APPLICATION_STATUS", job.postedBy(),
+			"Atualização da sua candidatura", statusLine(job, status), "/vagas/" + job.id(), "Ver vaga");
 
 		try {
 			String conversationId = messagingService.directConversationBetween(application.userId(), job.postedBy());
@@ -70,6 +78,16 @@ class JobApplicationStatusNotifierAdapter implements JobApplicationStatusNotifie
 		// O retorno do empregador vem junto: e o que faz a resposta ser util para quem se candidatou.
 		return application.feedback() == null ? base
 			: base + "\n\nRetorno da empresa: " + application.feedback();
+	}
+
+	private String statusLine(Job job, JobApplicationStatus status) {
+		String title = subjectText(job.title());
+		return switch (status) {
+			case IN_REVIEW -> "Sua candidatura para \"" + title + "\" está em análise.";
+			case ADVANCED -> "Você avançou no processo de \"" + title + "\".";
+			case NOT_SELECTED -> "A empresa respondeu sobre \"" + title + "\".";
+			case APPLIED -> "Sua candidatura para \"" + title + "\" foi recebida.";
+		};
 	}
 
 	private String subjectFor(Job job, JobApplicationStatus status) {

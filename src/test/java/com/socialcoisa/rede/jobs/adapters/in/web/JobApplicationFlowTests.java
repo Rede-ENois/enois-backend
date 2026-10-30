@@ -403,6 +403,14 @@ class JobApplicationFlowTests {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("IN_REVIEW"));
 
+		// O candidato tambem recebe na caixa de notificacoes, apontando para a vaga.
+		mockMvc.perform(get("/notifications").header("X-Session-Token", candidate.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.kind == 'JOB_APPLICATION_STATUS')].href")
+				.value(org.hamcrest.Matchers.contains("/vagas/" + jobId)))
+			.andExpect(jsonPath("$.items[?(@.kind == 'JOB_APPLICATION_STATUS')].body")
+				.value(org.hamcrest.Matchers.contains(org.hamcrest.Matchers.containsString("em análise"))));
+
 		// Persistiu de verdade: a lista do empregador mostra o novo estado.
 		mockMvc.perform(get("/jobs/" + jobId + "/applications").header("X-Session-Token", employer.token()))
 			.andExpect(status().isOk())
