@@ -232,7 +232,7 @@ class WeeklyDigestTests {
 
 	private void communityPost(String communityId, String authorId, String content, int reactions) {
 		jdbc.update("insert into posts (id, author_id, type, content, created_at, visibility, reactions, comments, "
-			+ "saves, shares, status, community_id) values (?, ?, 'TEXT', ?, ?, 'PUBLIC', ?, 0, 0, 0, 'ACTIVE', ?)",
+			+ "saves, shares, status, community_id) values (?, ?, 'INSIGHT', ?, ?, 'PUBLIC', ?, 0, 0, 0, 'ACTIVE', ?)",
 			"digest-post-" + UUID.randomUUID(), authorId, content, Timestamp.from(Instant.now()), reactions, communityId);
 	}
 
