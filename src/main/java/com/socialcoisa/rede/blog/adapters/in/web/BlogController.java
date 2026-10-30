@@ -156,23 +156,7 @@ class BlogController {
 		String mensagem = ok
 			? "Pronto: você não vai mais receber os e-mails deste blog. A inscrição no Énóis segue, e você pode voltar quando quiser."
 			: "Este link de descadastro não é válido (ou já foi usado). Abra o blog no Énóis e cancele por lá.";
-		String html = """
-			<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
-			<meta name="viewport" content="width=device-width, initial-scale=1.0"><title>%s</title></head>
-			<body style="margin:0;background:#f8f7ff;font-family:'Inter',system-ui,sans-serif;display:grid;place-items:center;min-height:100vh">
-			<div style="max-width:440px;background:#fff;border-radius:16px;padding:32px;margin:16px;box-shadow:0 8px 24px -8px rgba(99,102,241,.15);text-align:center">
-			<h1 style="margin:0 0 12px;color:#1a1a2e;font-size:20px">%s</h1>
-			<p style="margin:0 0 20px;color:#4b5563;font-size:14px;line-height:1.6">%s</p>
-			<a href="%s" style="display:inline-block;padding:12px 24px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;text-decoration:none;border-radius:999px;font-weight:600;font-size:14px">Ir para o Énóis</a>
-			</div></body></html>
-			""".formatted(titulo, titulo, mensagem, frontendUrl());
-		return ResponseEntity.status(ok ? 200 : 400)
-			.contentType(org.springframework.http.MediaType.TEXT_HTML)
-			.body(html);
-	}
-
-	private String frontendUrl() {
-		return "https://enois.ia.br";
+		return com.socialcoisa.rede.shared.web.ConfirmationPage.of(ok, titulo, mensagem);
 	}
 
 	record BlogPostRequest(String title, String body, BlogPostFormat format, Boolean notifySubscribers) {
