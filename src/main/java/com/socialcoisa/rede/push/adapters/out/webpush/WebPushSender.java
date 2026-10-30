@@ -104,7 +104,7 @@ class WebPushSender implements PushSender {
 				LOG.info("push subscription expirada removida para o usuario {}", device.userId());
 			}
 			else if (status >= 400) {
-				LOG.warn("push rejeitado (status {}) para o usuario {}: {}", status, device.userId(), payload);
+				LOG.warn("push rejeitado (status {}) para o usuario {}", status, device.userId());
 			}
 		}
 		catch (Exception exception) {
