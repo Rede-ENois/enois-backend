@@ -7,19 +7,19 @@ import com.socialcoisa.rede.shared.geo.CityState;
 public class Event {
 
 	private final String id;
-	private final String title;
-	private final String date;
-	private final String time;
-	private final String format;
-	private final String host;
-	private final String cover;
-	private final String streamUrl;
-	private final String location;
+	private String title;
+	private String date;
+	private String time;
+	private String format;
+	private String host;
+	private String cover;
+	private String streamUrl;
+	private String location;
 	/** Cidade + UF estruturados do encontro presencial/hibrido; nulo = sem cidade (ou online). */
 	private CityState place;
 	private final String createdBy;
 	private final Instant createdAt;
-	private final Instant updatedAt;
+	private Instant updatedAt;
 	private Instant sanitizedAt;
 	private Integer finalAttendeesCount;
 	private EventRecurrence recurrence = EventRecurrence.NONE;
@@ -180,6 +180,23 @@ public class Event {
 	/** Presencas confirmadas no momento da sanitizacao (o numero sobrevive sem as identidades). */
 	public Integer finalAttendeesCount() {
 		return finalAttendeesCount;
+	}
+
+	/**
+	 * Edição do ritual pelo dono: troca os campos de conteúdo e a data/hora. A recorrencia fica de
+	 * fora (tem endpoint próprio, porque ligar/desligar mexe na série inteira).
+	 */
+	public void applyUpdate(String title, String date, String time, String format, String host, String cover,
+			String streamUrl, String location, Instant now) {
+		this.title = title;
+		this.date = date;
+		this.time = time;
+		this.format = format;
+		this.host = host;
+		this.cover = cover;
+		this.streamUrl = streamUrl;
+		this.location = location;
+		this.updatedAt = now;
 	}
 
 	/** Cidade/UF: o servico valida (formato presencial/hibrido); o restore hidrata do banco. */

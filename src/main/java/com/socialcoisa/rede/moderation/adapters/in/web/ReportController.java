@@ -182,7 +182,21 @@ class ReportController {
 	ResponseEntity<String> ban(@RequestHeader("X-Session-Token") String sessionToken, @PathVariable String reportId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		adminGuard.requireAdmin(user);
-		return ResponseEntity.ok(ReportView.from(moderationService.ban(reportId, user.id().value(), sessions)).toString());
+		return ResponseEntity.ok(ReportView.from(moderationService.ban(reportId, user.id().value(), this.sessions)).toString());
+	}
+
+	/** Remove a pagina empresarial denunciada (fecha a pagina; nao toca a conta do dono). */
+	@PostMapping("/admin/reports/{reportId}/remove-company")
+	ResponseEntity<String> removeCompany(@RequestHeader("X-Session-Token") String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@PathVariable String reportId) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		adminGuard.requireAdmin(user);
+		String hash = idempotency.hash(Map.of("reportId", reportId, "op", "remove-company"));
+		return idempotency.execute(user.id(), "POST", "/api/admin/reports/{reportId}/remove-company",
+			idempotencyKey, hash,
+			() -> new CommandResponse(200, ReportView.from(moderationService.removeCompany(
+				reportId, user.id().value()))));
 	}
 
 	@PostMapping("/admin/reports/{reportId}/approve")

@@ -44,6 +44,13 @@ public class Freelance {
 			paymentMethod == null ? PaymentMethod.FAISCAS : paymentMethod, status, createdAt, updatedAt);
 	}
 
+	/** Edição pelo dono: troca o conteúdo, mantém identidade, estado e data de criação. */
+	public Freelance edit(String title, String scope, int budgetMin, int budgetMax, LocalDate deadline,
+			PaymentMethod paymentMethod, Instant now) {
+		return new Freelance(id, userId, title, scope, budgetMin, budgetMax, deadline,
+			paymentMethod == null ? PaymentMethod.FAISCAS : paymentMethod, status, createdAt, now);
+	}
+
 	public Freelance close(Instant now) {
 		return new Freelance(id, userId, title, scope, budgetMin, budgetMax, deadline, paymentMethod,
 			Status.CLOSED, createdAt, now);

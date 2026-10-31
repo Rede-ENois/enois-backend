@@ -116,6 +116,13 @@ Até 10 objetivos com pedidos abertos, sem id nem nome de ninguém:
 { "items": [{ "goalKey": "aprender-rust", "goal": "Aprender Rust", "topic": null, "openRequests": 1 }] }
 ```
 
+### `GET /study-pairs/search?q=&limit=`
+
+Busca por texto nos pedidos abertos (objetivo e tópico), sem revelar quem pediu: cada item traz só
+`goal`, `topic` e `createdAt`. Passa pelo mesmo filtro de elegibilidade do pareamento (bloqueio/mudo
+nas duas direções, menores, banidos, módulo desligado, teto de pares). Termo com menos de 2 letras
+devolve lista vazia; acima de 80 letras: `400 STUDY_SEARCH_TOO_LONG`.
+
 ## Dados
 
 - `study_pair_requests(id, user_id, goal_key, goal_text, topic, status OPEN|MATCHED|CANCELLED, created_at)`

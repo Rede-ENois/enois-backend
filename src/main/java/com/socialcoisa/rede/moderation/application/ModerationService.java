@@ -35,6 +35,8 @@ public class ModerationService {
 	private final com.socialcoisa.rede.profile.application.port.out.UserProfileRepository profiles;
 	private final ReportedContentAuthorReader contentAuthors;
 	private final ReportedContentReader contentReader;
+	private final com.socialcoisa.rede.moderation.application.port.out.CompanyReportReader companyReader;
+	private final com.socialcoisa.rede.moderation.application.port.out.CompanyRemovalPort companyRemoval;
 	private final SanctionService sanctionService;
 	private final NotificationService notifications;
 	private final com.socialcoisa.rede.shared.security.ActionThrottle actionThrottle;
@@ -50,6 +52,8 @@ public class ModerationService {
 			@org.springframework.beans.factory.annotation.Value("${rede.frontend.url:https://enois.ia.br}") String frontendUrl,
 			com.socialcoisa.rede.profile.application.port.out.UserProfileRepository profiles,
 			ReportedContentAuthorReader contentAuthors, ReportedContentReader contentReader,
+			com.socialcoisa.rede.moderation.application.port.out.CompanyReportReader companyReader,
+			com.socialcoisa.rede.moderation.application.port.out.CompanyRemovalPort companyRemoval,
 			SanctionService sanctionService,
 			NotificationService notifications,
 			com.socialcoisa.rede.shared.security.ActionThrottle actionThrottle,
@@ -67,12 +71,30 @@ public class ModerationService {
 		this.profiles = profiles;
 		this.contentAuthors = contentAuthors;
 		this.contentReader = contentReader;
+		this.companyReader = companyReader;
+		this.companyRemoval = companyRemoval;
 		this.sanctionService = sanctionService;
 		this.notifications = notifications;
 		this.actionThrottle = actionThrottle;
 		this.learning = learning;
 		this.events = events;
 		this.reportsPerHour = reportsPerHour;
+	}
+
+	/** Autor do alvo: para pagina empresarial e o DONO da pagina (os demais leitores trazem o perfil). */
+	private java.util.Optional<String> authorOf(Report report) {
+		if (report.targetType() == TargetType.COMPANY) {
+			return companyReader.ownerOf(report.targetId());
+		}
+		return contentAuthors.authorOf(report.targetType().name(), report.targetId());
+	}
+
+	/** Conteudo do alvo: para pagina empresarial e o que ela diz sobre si. */
+	private java.util.Optional<String> contentOf(Report report) {
+		if (report.targetType() == TargetType.COMPANY) {
+			return companyReader.contentOf(report.targetId());
+		}
+		return contentReader.contentOf(report.targetType().name(), report.targetId());
 	}
 
 	/** Aviso ao suporte: best-effort. A denuncia JA ESTA salva; falha de e-mail nao perde nada. */
@@ -82,10 +104,10 @@ public class ModerationService {
 		}
 		try {
 			String reporter = EmailService.escapeHtml(describeUser(report.reporterId()));
-			String authorId = contentAuthors.authorOf(report.targetType().name(), report.targetId()).orElse(null);
+			String authorId = authorOf(report).orElse(null);
 			String reported = EmailService.escapeHtml(
 				authorId == null ? "(autor nao identificado para este alvo)" : describeUser(authorId));
-			String content = contentReader.contentOf(report.targetType().name(), report.targetId()).orElse(null);
+			String content = contentOf(report).orElse(null);
 
 			StringBuilder body = new StringBuilder();
 			body.append("<h2 style=\"margin:0 0 12px\">Denúncia recebida</h2>");
@@ -214,8 +236,8 @@ public class ModerationService {
 	public ReportReview review(String reportId) {
 		Report report = reportRepository.findById(reportId)
 			.orElseThrow(() -> new ApiException(404, "REPORT_NOT_FOUND", "Denuncia nao encontrada."));
-		String authorId = contentAuthors.authorOf(report.targetType().name(), report.targetId()).orElse(null);
-		String content = contentReader.contentOf(report.targetType().name(), report.targetId()).orElse(null);
+		String authorId = authorOf(report).orElse(null);
+		String content = contentOf(report).orElse(null);
 		return new ReportReview(report, describeUser(report.reporterId()), authorId,
 			authorId == null ? null : describeUser(authorId), content);
 	}
@@ -226,6 +248,11 @@ public class ModerationService {
 	@Transactional
 	public Report penalize(String reportId, String reviewerId) {
 		Report report = pendingReport(reportId);
+		if (report.targetType() == TargetType.COMPANY) {
+			// Pagina empresarial se REMOVE pela acao propria; penalizar restringiria a conta do dono.
+			throw new ApiException(400, "COMPANY_TARGET",
+				"Pagina empresarial se remove pela acao própria, nao se penaliza o dono por isso.");
+		}
 		boolean applied = sanctionService.applyForReport(report,
 			"Penalização manual por uma pessoa do time (motivo da denúncia: " + report.reason().name() + ")");
 		if (!applied) {
@@ -247,7 +274,7 @@ public class ModerationService {
 			quarantineReview.releaseByReport(reviewerId, report.targetId());
 		}
 		learning.record(saved, "WARN", "HUMAN", reviewerId);
-		contentAuthors.authorOf(report.targetType().name(), report.targetId()).ifPresent(authorId ->
+		authorOf(report).ifPresent(authorId ->
 			notifications.create(authorId, "MODERACAO", reviewerId, "Aviso da moderação",
 				"Uma denúncia sobre seu conteúdo foi revisada e o time decidiu avisar você: "
 					+ "revise as diretrizes da rede para não perder o acesso. O conteúdo foi mantido.",
@@ -260,7 +287,13 @@ public class ModerationService {
 	public Report ban(String reportId, String reviewerId,
 			com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository sessions) {
 		Report report = pendingReport(reportId);
-		String authorId = contentAuthors.authorOf(report.targetType().name(), report.targetId())
+		if (report.targetType() == TargetType.COMPANY) {
+			// Pagina empresarial se REMOVE (acao propria, revisada); banir baniria a conta do dono
+			// por algo que a pagina publicou — engano caro.
+			throw new ApiException(400, "COMPANY_TARGET",
+				"Pagina empresarial se remove pela acao própria, nao se bane o dono por isso.");
+		}
+		String authorId = authorOf(report)
 			.orElseThrow(() -> new ApiException(409, "NO_AUTHOR", "Este alvo não tem autor identificável."));
 		contentRemover.remove(report, reviewerId, "BAN");
 		report.approve(reviewerId, "BANIMENTO da conta");
@@ -290,6 +323,26 @@ public class ModerationService {
 			throw new ApiException(409, "ALREADY_REVIEWED", "Denuncia ja foi revisada.");
 		}
 		return report;
+	}
+
+	/**
+	 * Remover a pagina empresarial denunciada: fecha a pagina (sai do diretorio e deixa de
+	 * existir para quem visita) e resolve a denuncia como confirmada. O dono recebe o aviso e
+	 * responde pelo recurso — a conta dele nao e tocada.
+	 */
+	@Transactional
+	public Report removeCompany(String reportId, String reviewerId) {
+		Report report = pendingReport(reportId);
+		if (report.targetType() != TargetType.COMPANY) {
+			throw new ApiException(400, "NOT_A_COMPANY", "Esta denuncia nao e sobre uma pagina empresarial.");
+		}
+		if (!companyRemoval.remove(report.targetId(), reviewerId)) {
+			throw new ApiException(409, "COMPANY_GONE", "Esta pagina ja foi removida.");
+		}
+		report.approve(reviewerId, "Pagina empresarial removida do diretorio");
+		Report saved = reportRepository.save(report);
+		learning.record(saved, "APPROVE", "HUMAN", reviewerId);
+		return saved;
 	}
 
 	@Transactional

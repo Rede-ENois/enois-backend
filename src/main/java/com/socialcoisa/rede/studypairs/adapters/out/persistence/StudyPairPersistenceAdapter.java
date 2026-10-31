@@ -58,6 +58,14 @@ class StudyPairPersistenceAdapter implements StudyPairRepository {
 	}
 
 	@Override
+	public List<StudyPairRequest> searchOpenRequests(String term, int limit) {
+		String like = "%" + term.toLowerCase(java.util.Locale.ROOT) + "%";
+		return jdbc.query("select " + REQUEST_COLUMNS + " from study_pair_requests where status = 'OPEN'"
+				+ " and (lower(goal_text) like ? or lower(coalesce(topic, '')) like ?)"
+				+ " order by created_at, id limit ?", (rs, n) -> request(rs), like, like, limit);
+	}
+
+	@Override
 	public boolean closeOpenRequest(String requestId, StudyPairRequest.Status status) {
 		return jdbc.update("update study_pair_requests set status = ? where id = ? and status = 'OPEN'",
 			status.name(), requestId) == 1;

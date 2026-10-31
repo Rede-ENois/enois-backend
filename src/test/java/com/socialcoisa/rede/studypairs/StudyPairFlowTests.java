@@ -310,6 +310,45 @@ class StudyPairFlowTests {
 			.andExpect(status().isOk());
 	}
 
+	@Test
+	void searchFindsOpenGoalsWithoutRevealingWhoAsked() throws Exception {
+		AuthSession owner = auth.authenticate("sp-search-owner");
+		AuthSession viewer = auth.authenticate("sp-search-viewer");
+
+		requestPair(owner, "Estudar Kotlin para Android sp-search").andExpect(status().isCreated())
+			.andExpect(jsonPath("$.status").value("OPEN"));
+
+		var result = body(mockMvc.perform(get("/study-pairs/search").param("q", "kotlin")
+				.header("X-Session-Token", viewer.token()))
+			.andExpect(status().isOk())).get("items");
+		assertThat(result.size()).isEqualTo(1);
+		assertThat(result.get(0).get("goal").asText()).contains("Kotlin");
+		// O resultado é anônimo: não sai id de pedido nem de quem pediu.
+		assertThat(result.get(0).has("userId")).isFalse();
+		assertThat(result.get(0).has("id")).isFalse();
+
+		// O próprio pedido não aparece para quem buscou.
+		var mine = body(mockMvc.perform(get("/study-pairs/search").param("q", "kotlin")
+				.header("X-Session-Token", owner.token()))
+			.andExpect(status().isOk())).get("items");
+		assertThat(mine.size()).isZero();
+
+		// Termo curto não busca nada (evita varrer a tabela a cada tecla).
+		var shortTerm = body(mockMvc.perform(get("/study-pairs/search").param("q", "k")
+				.header("X-Session-Token", viewer.token()))
+			.andExpect(status().isOk())).get("items");
+		assertThat(shortTerm.size()).isZero();
+
+		// Quem foi bloqueado não aparece na busca.
+		AuthSession blocker = auth.authenticate("sp-search-blocker");
+		requestPair(blocker, "Estudar Elixir sp-search").andExpect(status().isCreated());
+		blocks.block(viewer.userId(), blocker.userId());
+		var hidden = body(mockMvc.perform(get("/study-pairs/search").param("q", "elixir")
+				.header("X-Session-Token", viewer.token()))
+			.andExpect(status().isOk())).get("items");
+		assertThat(hidden.size()).isZero();
+	}
+
 	private ResultActions requestPair(AuthSession session, String goal) throws Exception {
 		Map<String, Object> payload = new HashMap<>();
 		payload.put("goal", goal);

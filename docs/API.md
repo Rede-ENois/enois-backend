@@ -537,6 +537,9 @@ carry `companySlug` (null when the job is not linked to a page).
 | GET | `/api/empresas/diretorio?query=&sector=&limit=60` | Directory (limit 1..200): pages first, then names from jobs, each by open jobs + projects | No |
 | GET | `/api/empresas/setores` | Distinct sectors of active pages | No |
 | GET | `/api/empresa/{slug}` | Page with projects, jobs, stats, reviews, viewer state | No (session adds viewer state) |
+
+Página fechada (removida pela moderação ou pela própria empresa) sai do diretório (`GET /api/empresas`)
+e responde `404 COMPANY_NOT_FOUND` em `/api/empresa/{slug}`; operações sobre ela dão `409 COMPANY_CLOSED`.
 | POST / DELETE | `/api/empresas/{companyId}/follow` | Follow / unfollow (idempotent) | Yes |
 | POST | `/api/microprojetos/{id}/proposals` | Proposal from the active professional profile | Yes |
 | POST | `/api/microprojetos/{id}/complete` | Complete, optionally with a review | Yes (EDITOR or above) |
@@ -569,6 +572,11 @@ Complete body  { rating?: 1..5, text?: <= 500 }     (400 INVALID_RATING)
 | POST | `/api/events/{eventId}/attendees` | Confirmar presença | Sim |
 | DELETE | `/api/events/{eventId}/attendees` | Cancelar presença | Sim |
 | PATCH | `/api/events/{eventId}/recurrence` | Ligar, trocar ou desligar a recorrência (só quem criou) | Sim |
+| PATCH | `/api/events/{eventId}` | Editar o evento (título, data, hora, formato, host, capa, stream, local; só quem criou) | Sim |
+| DELETE | `/api/events/{eventId}` | Excluir o evento (só quem criou) | Sim |
+
+`PATCH /api/events/{eventId}` valida exatamente igual à criação (`TextFieldLimit`, horário realista,
+`EVENT_CITY_NOT_IN_PERSON`) e devolve o `EventView`. Fora do dono: `403 NOT_EVENT_OWNER`.
 
 `POST /api/events` aceita `city` e `state` opcionais (mesmas regras do perfil). Evento `ONLINE` com
 cidade é `400 EVENT_CITY_NOT_IN_PERSON`. `GET /api/events?city=<cidade>&state=<UF>` lista só
@@ -628,6 +636,7 @@ tratados como texto literal, assim como na busca de mentorias.
 | POST | `/api/study-pairs/{pairId}/checkins` | Check-in da semana (`{note}`, até 500); repetir na semana edita | Sim (membro) |
 | POST | `/api/study-pairs/{pairId}/end` | Encerrar o par | Sim (membro) |
 | GET | `/api/study-pairs/goals/popular` | Objetivos com pedidos abertos (sem dado pessoal) | Sim |
+| GET | `/api/study-pairs/search?q=&limit=` | Buscar objetivos abertos por texto (anônimo, sem revelar quem pediu) | Sim |
 
 Contrato completo, regras e códigos de erro em [`STUDY_PAIRS.md`](STUDY_PAIRS.md).
 
@@ -698,7 +707,9 @@ Query params: `q=<termo>`, `types=users,communities,jobs,events,mentors`, `limit
 
 Razões: `AI_GENERATED`, `FAKE_CONTENT`, `SCAM`, `DISCRIMINATION`, `PREJUDICE`, `HARASSMENT`, `SPAM`, `VIOLENCE`, `SEXUAL_CONTENT`, `COPYRIGHT`, `OTHER`
 
-Target types: `POST`, `COMMENT`, `USER`, `JOB`, `GAME`, `GROUP_POST`, `GROUP_COMMENT`, `MESSAGE`
+Target types: `POST`, `COMMENT`, `USER`, `JOB`, `GAME`, `GROUP_POST`, `GROUP_COMMENT`, `MESSAGE`, `COMPANY`.
+Alvo `COMPANY` se remove por `POST /api/admin/reports/{reportId}/remove-company` (fecha a página, sem tocar
+na conta do dono); `ban`/`penalize` recusam esse alvo com `400 COMPANY_TARGET`.
 
 ---
 

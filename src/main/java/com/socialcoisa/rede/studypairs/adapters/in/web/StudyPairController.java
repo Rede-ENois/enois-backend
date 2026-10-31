@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
@@ -46,6 +47,15 @@ class StudyPairController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		currentUserResolver.resolve(sessionToken);
 		return Map.of("items", service.popularGoals());
+	}
+
+	/** Busca nos pedidos abertos por objetivo/assunto. Resultado anônimo (sem quem pediu). */
+	@GetMapping("/search")
+	Map<String, List<StudyPairService.SearchResult>> search(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(required = false) String q, @RequestParam(required = false) Integer limit) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return Map.of("items", service.search(user.id().value(), q, limit == null ? 20 : limit));
 	}
 
 	@PostMapping("/requests")
