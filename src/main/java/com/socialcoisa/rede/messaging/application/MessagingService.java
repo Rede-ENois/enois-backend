@@ -32,6 +32,7 @@ public class MessagingService {
 	private final com.socialcoisa.rede.shared.sanctions.SanctionGate sanctionGate;
 	private final com.socialcoisa.rede.network.application.port.out.ConnectionRepository connections;
 	private final com.socialcoisa.rede.shared.blocks.BlockedUsersReader blockedUsers;
+	private final com.socialcoisa.rede.corporate.application.CorporateProfileService corporateProfiles;
 	private final com.socialcoisa.rede.coin.application.CoinService coins;
 
 	public MessagingService(MessagingRepository repository, NotificationService notificationService, Clock clock,
@@ -40,6 +41,7 @@ public class MessagingService {
 			com.socialcoisa.rede.shared.sanctions.SanctionGate sanctionGate,
 			com.socialcoisa.rede.network.application.port.out.ConnectionRepository connections,
 			com.socialcoisa.rede.shared.blocks.BlockedUsersReader blockedUsers,
+			com.socialcoisa.rede.corporate.application.CorporateProfileService corporateProfiles,
 			com.socialcoisa.rede.coin.application.CoinService coins) {
 		this.coins = coins;
 		this.repository = repository;
@@ -52,6 +54,7 @@ public class MessagingService {
 		this.sanctionGate = sanctionGate;
 		this.connections = connections;
 		this.blockedUsers = blockedUsers;
+		this.corporateProfiles = corporateProfiles;
 	}
 
 	@Transactional
@@ -153,6 +156,16 @@ public class MessagingService {
 		return pairConversation(proposerId, posterId, "FREELANCE", title);
 	}
 
+	/**
+	 * DM corporativa entre duas pessoas: o iniciador assina com a identidade profissional.
+	 * Exige perfil profissional ativo do iniciador; o destinatario nao precisa ter.
+	 */
+	@Transactional
+	public String businessDirectConversation(String initiatorId, String targetUserId) {
+		corporateProfiles.requireActive(initiatorId);
+		return pairConversation(initiatorId, targetUserId, "BUSINESS_DIRECT", null);
+	}
+
 	private String pairConversation(String userA, String userB, String kind, String title) {
 		var existing = repository.findPairByKind(userA, userB, kind);
 		if (existing.isPresent()) {
@@ -198,6 +211,7 @@ public class MessagingService {
 		if (!repository.isParticipant(conversationId, senderId)) {
 			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
 		}
+		requireBusinessDirectInitiatorProfile(conversation, senderId);
 		protegeMenorDestinatario(conversationId, senderId);
 		java.util.List<String> midias = mediaIds == null ? java.util.List.of()
 			: mediaIds.stream().filter(v -> v != null && !v.isBlank()).map(String::trim).distinct().toList();
@@ -264,6 +278,7 @@ public class MessagingService {
 		if (!repository.isParticipant(conversationId, senderId)) {
 			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
 		}
+		requireBusinessDirectInitiatorProfile(conversation, senderId);
 		protegeMenorDestinatario(conversationId, senderId);
 		if (ciphertext == null || ciphertext.isBlank()) {
 			throw new ApiException(400, "EMPTY_MESSAGE", "Mensagem cifrada vazia.");
@@ -336,6 +351,17 @@ public class MessagingService {
 	private void requireMayContactMinor(String actorId, String recipientId) {
 		if (agePolicy.isMinor(recipientId) && !connections.existsAcceptedConnection(actorId, recipientId)) {
 			throw minorDmRestricted();
+		}
+	}
+
+	/**
+	 * BUSINESS_DIRECT: so quem iniciou a conversa precisa de perfil profissional ativo.
+	 * O destinatario responde com identidade social se nao tiver perfil. Nao afeta
+	 * JOB/FREELANCE/SERVICE — esses kinds mantem o comportamento anterior.
+	 */
+	private void requireBusinessDirectInitiatorProfile(Conversation conversation, String senderId) {
+		if ("BUSINESS_DIRECT".equals(conversation.kind()) && conversation.createdBy().equals(senderId)) {
+			corporateProfiles.requireActive(senderId);
 		}
 	}
 
