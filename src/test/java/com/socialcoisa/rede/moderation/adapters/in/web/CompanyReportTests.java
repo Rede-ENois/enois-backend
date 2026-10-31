@@ -1,6 +1,9 @@
 package com.socialcoisa.rede.moderation.adapters.in.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -13,10 +16,13 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import com.socialcoisa.rede.identity.application.EmailService;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 import tools.jackson.databind.JsonNode;
@@ -29,7 +35,7 @@ import tools.jackson.databind.ObjectMapper;
  * responsavel; a acao própria fecha a pagina (404 para quem visita, some do diretorio) sem tocar
  * na conta do dono; banir/penalizar o dono por causa da pagina e recusado.
  */
-@SpringBootTest
+@SpringBootTest(properties = "rede.support.email=support@test.com")
 @AutoConfigureMockMvc
 class CompanyReportTests {
 
@@ -40,6 +46,9 @@ class CompanyReportTests {
 	private ObjectMapper objectMapper;
 
 	private TestAuthHelper auth;
+
+	@MockitoBean
+	private EmailService emailService;
 
 	@org.springframework.test.context.DynamicPropertySource
 	static void adminAllowlist(org.springframework.test.context.DynamicPropertyRegistry registry) {
@@ -75,6 +84,20 @@ class CompanyReportTests {
 			.andExpect(status().isCreated())
 			.andReturn();
 		return objectMapper.readTree(reported.getResponse().getContentAsString()).get("id").asText();
+	}
+
+	@Test
+	void companyReportEmailOffersTheCompanyActionInsteadOfPostActions() throws Exception {
+		var owner = auth.authenticate("crep_mail_owner");
+		var reporter = auth.authenticate("crep_mail_reporter");
+		JsonNode company = createCompany(owner, "Empresa Crepe Mail");
+		report(reporter, company.get("id").asText());
+
+		ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+		verify(emailService).sendHtmlEmail(eq("support@test.com"), anyString(), body.capture());
+		assertThat(body.getValue())
+			.contains("?acao=empresa")
+			.doesNotContain("?acao=banir", "?acao=penalizar", "?acao=excluir");
 	}
 
 	@Test

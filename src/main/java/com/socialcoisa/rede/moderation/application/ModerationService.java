@@ -119,7 +119,9 @@ public class ModerationService {
 				.append("<li><b>ID da denúncia:</b> ").append(report.id()).append("</li>")
 				.append("</ul>");
 			if (content != null) {
-				body.append("<p><b>Conteúdo do post denunciado:</b></p>")
+				body.append(report.targetType() == TargetType.COMPANY
+					? "<p><b>O que a página diz sobre si:</b></p>"
+					: "<p><b>Conteúdo do post denunciado:</b></p>")
 					.append("<blockquote style=\"margin:8px 0;padding:8px 12px;border-left:3px solid #ccc;")
 					.append("white-space:pre-wrap\">").append(EmailService.escapeHtml(truncate(content, 2000))).append("</blockquote>");
 			}
@@ -128,12 +130,20 @@ public class ModerationService {
 			}
 			String base = frontendUrl + "/moderacao/" + report.id();
 			body.append("<p style=\"margin-top:16px\"><b>Ações rápidas</b> (abrem o painel; a ação é "
-				+ "confirmada lá, com a sua sessão de admin):</p><ul>")
-				.append("<li><a href=\"").append(base).append("?acao=penalizar\">Penalizar o autor</a></li>")
-				.append("<li><a href=\"").append(base).append("?acao=avisar\">Avisar o autor</a></li>")
-				.append("<li><a href=\"").append(base).append("?acao=excluir\">Excluir o post</a></li>")
-				.append("<li><a href=\"").append(base).append("?acao=banir\">Banir o autor</a></li>")
-				.append("</ul>");
+				+ "confirmada lá, com a sua sessão de admin):</p><ul>");
+			if (report.targetType() == TargetType.COMPANY) {
+				// Página empresarial tem ação própria. As ações de post/banir aparecem no painel só
+				// para alvos de conteúdo — oferecê-las aqui levava a um caminho que o servidor recusa.
+				body.append("<li><a href=\"").append(base).append("?acao=empresa\">Remover a página</a></li>")
+					.append("<li><a href=\"").append(base).append("?acao=avisar\">Avisar o dono</a></li>");
+			}
+			else {
+				body.append("<li><a href=\"").append(base).append("?acao=penalizar\">Penalizar o autor</a></li>")
+					.append("<li><a href=\"").append(base).append("?acao=avisar\">Avisar o autor</a></li>")
+					.append("<li><a href=\"").append(base).append("?acao=excluir\">Excluir o post</a></li>")
+					.append("<li><a href=\"").append(base).append("?acao=banir\">Banir o autor</a></li>");
+			}
+			body.append("</ul>");
 
 			emailService.sendHtmlEmail(supportEmail,
 				"[Denúncia " + report.id() + "] " + report.reason().name() + " em " + report.targetType().name(),
