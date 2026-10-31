@@ -1225,13 +1225,35 @@ quebradas para não notificar ninguém): nome, e-mail e id de quem sugeriu nunca
 A aprovação é reivindicada de forma atômica (`PENDING` -> `PUBLISHED`) antes de falar com o GitHub:
 duas aprovações simultâneas não abrem duas issues, e falha do GitHub devolve a sugestão para a fila.
 
-Configuração por variável de ambiente (destino sem repositório fica desligado e a aprovação responde
-503 sem mexer na sugestão). O token é próprio e **nunca** o do suporte, cujo repositório é privado:
+#### Configuração e operação
+
+**Token.** As sugestões usam o **mesmo token das issues do suporte**, para a equipe ter um token de
+issues só e uma rotação só. Ele fica cifrado no banco e é trocado em `/admin/support/github` (só
+admin), sem reiniciar o pod; o módulo lê o valor a cada chamada. Não existe secret nem variável de
+token próprios das sugestões. Os outros tokens GitHub do projeto não servem para isso:
+`GITHUB_CONTRIBUTIONS_TOKEN` (selos) é somente leitura e `GITOPS_TOKEN` é do repositório de deploy.
+
+Como esse token também enxerga o repositório privado de suporte, o que sai para a issue pública é
+só título e texto da sugestão (nunca nome, e-mail ou id), e o token **precisa de escrita em Issues
+em cada repositório de destino**. Um token fine-grained limitado ao repositório de suporte devolve
+erro do GitHub e a aprovação responde 502 (a sugestão volta para a fila).
+
+**Repositórios de destino** (variáveis de ambiente; vêm do deploy como `vars` do GitHub Actions
+`SUGGESTIONS_REPO_*`):
 
 | Variável | Descrição |
 |---|---|
-| `GITHUB_SUGGESTIONS_TOKEN` | Token com permissão de abrir issues nos repositórios de destino |
 | `GITHUB_SUGGESTIONS_REPO_BACKEND` / `_FRONTEND` / `_DESIGN_SYSTEM` | Repositório de cada destino, no formato `dono/nome` |
+
+Destino sem repositório (ou com formato inválido) fica desligado: a aprovação responde 503 e a
+sugestão continua pendente. Sem token do suporte configurado, todos os destinos ficam desligados.
+
+**QA e produção usam os mesmos repositórios.** Aprovar uma sugestão na QA abre uma issue pública de
+verdade nos repositórios oficiais; aprove na QA só o que pode ficar público.
+
+**Falhas comuns na aprovação:** 503 = destino sem repositório ou token do suporte ausente; 502 = o
+GitHub recusou (token sem escrita em Issues naquele repositório, token expirado ou GitHub fora do ar).
+Em ambos a sugestão continua `PENDING` e pode ser aprovada de novo depois de corrigir.
 
 | Rota | Descrição |
 |---|---|

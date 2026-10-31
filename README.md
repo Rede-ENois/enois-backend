@@ -405,6 +405,7 @@ backend expõe fica público em `https://enois.ia.br/api/...` — inclusive `/ap
 | `SPRINGDOC_ENABLED` | não | padrão `false`. `true` liga `/api/openapi.json` + Swagger UI (use só em dev/VPN) |
 | `MANAGEMENT_ENDPOINTS` | não | padrão `health`. Para métricas use `health,prometheus` **e bloqueie `/api/actuator/*` no gateway** |
 | `SUPPORT_EMAIL` | não | e-mail do time que recebe os pedidos de suporte. Sem ele o pedido ainda fica registrado e visível em `/admin/support` |
+| `GITHUB_SUGGESTIONS_REPO_BACKEND` / `GITHUB_SUGGESTIONS_REPO_FRONTEND` / `GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM` | p/ sugestões | repositório (`dono/nome`) que recebe a issue pública de cada destino depois da aprovação. Sem ele o destino fica desligado (aprovação responde 503). O token é o mesmo do suporte (painel `/admin/support/github`); ver `docs/MODULES.md` 22.1 |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | p/ push no celular | par de chaves do Web Push (ver passo 7 abaixo). Sem elas o push fica desligado e só as notificações dentro do app funcionam |
 | `REDE_SECURITY_ENCRYPTION_KEY` | **sim** (fora do `dev`) | chave de 32 bytes em base64 (`openssl rand -base64 32`) que cifra os segredos TOTP em repouso (AES-GCM) e assina o desafio do cadastro. **Fora do perfil `dev` o pod não sobe sem ela** (o mesmo valor em todas as réplicas) |
 | `VAPID_SUBJECT` | não | contato do emissor VAPID, no formato `mailto:contato@dominio` (padrão `mailto:suporte@enois.ia.br`) |
