@@ -216,6 +216,22 @@ class GroupContentController {
 		return new PageResponse<>(items, null);
 	}
 
+	@PatchMapping("/{groupId}/posts/{postId}/comments/{commentId}")
+	ResponseEntity<String> editComment(@RequestHeader(value = "X-Session-Token", required = false) String token,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@PathVariable String groupId, @PathVariable String postId, @PathVariable String commentId,
+			@RequestBody CommentEditRequest request) {
+		CurrentUser user = currentUserResolver.resolve(token);
+		String hash = idempotency.hash(Map.of("groupId", groupId, "postId", postId, "commentId", commentId,
+			"request", request));
+		return idempotency.execute(user.id(), "PATCH", "/api/groups/{groupId}/posts/{postId}/comments/{commentId}",
+			idempotencyKey, hash, () -> {
+				GroupComment comment = feed.editComment(groupId, postId, commentId, user.id().value(),
+					request.content());
+				return new CommandResponse(200, commentView(comment, author(comment.authorId())));
+			});
+	}
+
 	@PostMapping("/{groupId}/posts/{postId}/reactions")
 	ResponseEntity<String> react(@RequestHeader(value = "X-Session-Token", required = false) String token,
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
@@ -324,6 +340,9 @@ class GroupContentController {
 	}
 
 	record CommentRequest(String content, String parentCommentId) {
+	}
+
+	record CommentEditRequest(String content) {
 	}
 
 	record ReactionRequest(String type) {

@@ -48,6 +48,10 @@ public class GroupComment {
 		return new GroupComment(id, postId, groupId, authorId, parentId, content, status, createdAt, updatedAt);
 	}
 
+	public GroupComment edit(String newContent, Instant now) {
+		return new GroupComment(id, postId, groupId, authorId, parentId, newContent, status, createdAt, now);
+	}
+
 	public GroupComment remove(Instant now) {
 		return new GroupComment(id, postId, groupId, authorId, parentId, content, GroupCommentStatus.REMOVED,
 			createdAt, now);
