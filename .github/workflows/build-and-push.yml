@@ -197,6 +197,13 @@ jobs:
           GITHUB_CLIENT_ID: ${{ secrets.QA_GITHUB_CLIENT_ID }}
           GITHUB_CLIENT_SECRET: ${{ secrets.QA_GITHUB_CLIENT_SECRET }}
           GITHUB_CONTRIBUTIONS_TOKEN: ${{ secrets.QA_GITHUB_CONTRIBUTIONS_TOKEN }}
+          # Sugestoes da comunidade: issue PUBLICA nos repos de destino, aberta so apos aprovacao
+          # de moderador. Token proprio (nunca o do suporte, que e privado). O mesmo par vale em
+          # QA e prod, entao aprovar na QA tambem publica de verdade.
+          GITHUB_SUGGESTIONS_TOKEN: ${{ secrets.SUGGESTIONS_GITHUB_TOKEN }}
+          GITHUB_SUGGESTIONS_REPO_BACKEND: ${{ vars.SUGGESTIONS_REPO_BACKEND }}
+          GITHUB_SUGGESTIONS_REPO_FRONTEND: ${{ vars.SUGGESTIONS_REPO_FRONTEND }}
+          GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM: ${{ vars.SUGGESTIONS_REPO_DESIGN_SYSTEM }}
           # Na QA, issue com a label `bug` (aplicada por mantenedor) ja conta para o selo de
           # issues; em producao o default e vazio (so revisao humana). O worker roda a cada 10
           # minutos para os selos acompanharem o GitHub sozinhos.
@@ -287,6 +294,10 @@ jobs:
               "GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}",
               "GITHUB_REDIRECT_URI=https://enois-api-qa.b7cloud.tech/api/auth/oauth/github/callback",
               "GITHUB_CONTRIBUTIONS_TOKEN=${GITHUB_CONTRIBUTIONS_TOKEN}",
+              "GITHUB_SUGGESTIONS_TOKEN=${GITHUB_SUGGESTIONS_TOKEN}",
+              "GITHUB_SUGGESTIONS_REPO_BACKEND=${GITHUB_SUGGESTIONS_REPO_BACKEND}",
+              "GITHUB_SUGGESTIONS_REPO_FRONTEND=${GITHUB_SUGGESTIONS_REPO_FRONTEND}",
+              "GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM=${GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM}",
               "GITHUB_QUALIFIED_ISSUE_LABELS=${GITHUB_QUALIFIED_ISSUE_LABELS}",
               "GITHUB_SYNC_ENABLED=true",
               "GITHUB_SYNC_CRON=${GITHUB_SYNC_CRON}",
@@ -434,6 +445,12 @@ jobs:
           GITHUB_CLIENT_ID: ${{ secrets.OAUTH_GITHUB_CLIENT_ID }}
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_CLIENT_SECRET }}
           GITHUB_CONTRIBUTIONS_TOKEN: ${{ secrets.OAUTH_GITHUB_CONTRIBUTIONS_TOKEN }}
+          # Sugestoes da comunidade (issue publica apos aprovacao). O nome do secret nao pode
+          # comecar com GITHUB_, mas a variavel que o app le comeca.
+          GITHUB_SUGGESTIONS_TOKEN: ${{ secrets.SUGGESTIONS_GITHUB_TOKEN }}
+          GITHUB_SUGGESTIONS_REPO_BACKEND: ${{ vars.SUGGESTIONS_REPO_BACKEND }}
+          GITHUB_SUGGESTIONS_REPO_FRONTEND: ${{ vars.SUGGESTIONS_REPO_FRONTEND }}
+          GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM: ${{ vars.SUGGESTIONS_REPO_DESIGN_SYSTEM }}
           # ImageKit aposentado (storage no S3), mas o purge/delete de midia antiga ainda
           # conversa com ele ate a migracao de objetos terminar.
           IMAGEKIT_URL_ENDPOINT: ${{ secrets.IMAGEKIT_URL_ENDPOINT }}
@@ -520,6 +537,10 @@ jobs:
                 GITHUB_CLIENT_SECRET: "${GITHUB_CLIENT_SECRET}"
                 GITHUB_REDIRECT_URI: "https://api.enois.ia.br/api/auth/oauth/github/callback"
                 GITHUB_CONTRIBUTIONS_TOKEN: "${GITHUB_CONTRIBUTIONS_TOKEN}"
+                GITHUB_SUGGESTIONS_TOKEN: "${GITHUB_SUGGESTIONS_TOKEN}"
+                GITHUB_SUGGESTIONS_REPO_BACKEND: "${GITHUB_SUGGESTIONS_REPO_BACKEND}"
+                GITHUB_SUGGESTIONS_REPO_FRONTEND: "${GITHUB_SUGGESTIONS_REPO_FRONTEND}"
+                GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM: "${GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM}"
                 GITHUB_SYNC_ENABLED: "true"
                 GITHUB_SYNC_CRON: "0 */10 * * * *"
                 MANAGEMENT_ENDPOINTS: ${MANAGEMENT_ENDPOINTS}
