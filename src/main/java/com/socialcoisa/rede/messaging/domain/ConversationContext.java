@@ -14,10 +14,10 @@ public enum ConversationContext {
 	SOCIAL,
 	PROFESSIONAL;
 
-	public static final Set<String> PROFESSIONAL_KINDS = Set.of("JOB", "FREELANCE", "SERVICE");
+	public static final Set<String> PROFESSIONAL_KINDS = Set.of("JOB", "FREELANCE", "SERVICE", "BUSINESS_DIRECT");
 
 	/** Same list as {@link #PROFESSIONAL_KINDS}, inlined in the JPQL filters. */
-	public static final String PROFESSIONAL_KINDS_JPQL = "('JOB', 'FREELANCE', 'SERVICE')";
+	public static final String PROFESSIONAL_KINDS_JPQL = "('JOB', 'FREELANCE', 'SERVICE', 'BUSINESS_DIRECT')";
 
 	public static ConversationContext of(String kind) {
 		return kind != null && PROFESSIONAL_KINDS.contains(kind.toUpperCase(Locale.ROOT)) ? PROFESSIONAL : SOCIAL;

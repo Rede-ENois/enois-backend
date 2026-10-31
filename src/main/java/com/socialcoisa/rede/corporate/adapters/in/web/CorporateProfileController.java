@@ -81,6 +81,7 @@ class CorporateProfileController {
 		String userId = profile.userId();
 		var account = accounts.findById(userId).orElse(null);
 		Map<String, Object> result = new java.util.LinkedHashMap<>(view(profile));
+		result.put("userId", userId);
 		result.put("identityVerified", account != null && account.identityVerified());
 		result.put("memberSince", profile.createdAt() == null ? null : profile.createdAt().toString());
 		result.put("skills", account == null || account.skills() == null ? List.of() : account.skills());
