@@ -382,6 +382,8 @@ UNIQUE: (requester_user_id, receiver_user_id)
 | rating | DOUBLE DEFAULT 0 |
 | sessions_count | INT DEFAULT 0 |
 | price | DECIMAL(10,2) |
+| room_mode | VARCHAR(24) — JITSI_SESSION (padrão), JITSI_PERMANENT ou CUSTOM (V223) |
+| jitsi_room | VARCHAR(120) — slug da sala permanente do Jitsi, só em JITSI_PERMANENT (V223) |
 | created_at | TIMESTAMP |
 | updated_at | TIMESTAMP |
 
@@ -405,6 +407,8 @@ UNIQUE: (requester_user_id, receiver_user_id)
 | slot_id | VARCHAR(36) FK → mentor_slots.id |
 | message | TEXT |
 | status | VARCHAR(20) (SCHEDULED, COMPLETED, CANCELLED) |
+| room_mode | VARCHAR(24) — modo usado no agendamento (V223) |
+| room_url | VARCHAR(500) — link da sala congelado no agendamento (V223) |
 | created_at | TIMESTAMP |
 
 ---
