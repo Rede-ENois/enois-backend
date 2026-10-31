@@ -16,5 +16,5 @@ public interface BlogRepository {
 	Optional<Blog> findBySlug(String slug);
 
 	/** Vitrine de blogs (mais recentes primeiro), para a aba Blogs. */
-	List<Blog> findAll(int limit);
+	List<Blog> findAll(String query, int limit);
 }

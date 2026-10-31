@@ -598,11 +598,17 @@ encontros não online (`IN_PERSON`, `HYBRID`) daquele lugar, com a cidade compar
 
 ---
 
+## Busca de blogs
+
+`GET /api/blogs` aceita `query` opcional para buscar por título ou descrição antes de aplicar
+`limit`. Uma busca em branco mantém a listagem sem filtro. Os caracteres `%`, `_` e `!` são
+tratados como texto literal, assim como na busca de mentorias.
+
 ## Mentoria
 
 | Método | Rota | Descrição | Autenticação |
 |---|---|---|---|
-| GET | `/api/mentors` | Listar mentores | Sim |
+| GET | `/api/mentors` | Listar mentores; `query` opcional busca por nome, username ou especialidade, combinado com `expertise`, `cursor` e `limit` | Sim |
 | POST | `/api/mentors` | Registrar como mentor | Sim |
 | PATCH | `/api/mentors/{mentorId}` | Atualizar perfil de mentor | Sim |
 | DELETE | `/api/mentors/{mentorId}` | Remover perfil de mentor | Sim |

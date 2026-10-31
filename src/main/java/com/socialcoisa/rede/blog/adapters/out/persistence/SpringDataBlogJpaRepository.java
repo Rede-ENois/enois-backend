@@ -5,6 +5,8 @@ import java.util.Optional;
 
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 interface SpringDataBlogJpaRepository extends JpaRepository<BlogJpaEntity, String> {
 
@@ -12,5 +14,11 @@ interface SpringDataBlogJpaRepository extends JpaRepository<BlogJpaEntity, Strin
 
 	Optional<BlogJpaEntity> findBySlug(String slug);
 
-	List<BlogJpaEntity> findAllByOrderByCreatedAtDesc(Pageable pageable);
+	@Query("""
+		SELECT b FROM BlogJpaEntity b
+		WHERE (:query IS NULL OR LOWER(b.title) LIKE :query ESCAPE '!'
+		       OR LOWER(b.description) LIKE :query ESCAPE '!')
+		ORDER BY b.createdAt DESC
+		""")
+	List<BlogJpaEntity> findDirectory(@Param("query") String query, Pageable pageable);
 }

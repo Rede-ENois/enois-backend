@@ -90,8 +90,8 @@ public class BlogService {
 
 	/** Vitrine: os blogs criados, mais recentes primeiro. */
 	@Transactional(readOnly = true)
-	public List<BlogSummaryView> directory(int limit) {
-		List<Blog> page = blogs.findAll(limit);
+	public List<BlogSummaryView> directory(String query, int limit) {
+		List<Blog> page = blogs.findAll(query, limit);
 		// Bans, authors and post counts of the page in one query each, instead of one per blog.
 		Set<String> banned = sanctionGate.bannedAmong(page.stream().map(Blog::userId).collect(Collectors.toSet()));
 		List<Blog> listed = page.stream()

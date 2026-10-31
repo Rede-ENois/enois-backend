@@ -54,8 +54,9 @@ class BlogController {
 	}
 
 	@GetMapping
-	List<BlogSummaryView> directory(@RequestParam(defaultValue = "50") int limit) {
-		return blogService.directory(Math.clamp(limit, 1, MAX_LIMIT));
+	List<BlogSummaryView> directory(@RequestParam(defaultValue = "50") int limit,
+			@RequestParam(required = false) String query) {
+		return blogService.directory(query, Math.clamp(limit, 1, MAX_LIMIT));
 	}
 
 	@GetMapping("/{slug}")

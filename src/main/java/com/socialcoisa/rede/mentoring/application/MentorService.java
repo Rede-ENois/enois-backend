@@ -229,8 +229,8 @@ public class MentorService {
 		repository.delete(mentorId);
 	}
 
-	public List<Mentor> list(String expertise, java.time.Instant before, int limit) {
-		return repository.findAll(expertise, before, limit);
+	public List<Mentor> list(String expertise, String query, java.time.Instant before, int limit) {
+		return repository.findAll(expertise, query, before, limit);
 	}
 
 	public Mentor getById(String id) {

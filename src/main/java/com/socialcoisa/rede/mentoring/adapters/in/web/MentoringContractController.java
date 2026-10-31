@@ -55,9 +55,10 @@ class MentoringContractController {
 
 	@GetMapping
 	PageResponse<MentorView> mentors(@RequestParam(required = false) String expertise,
+			@RequestParam(required = false) String query,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit) {
 		Instant before = cursorCodec.decode(cursor).orElse(null);
-		List<Mentor> mentors = mentorService.list(expertise, before, limit);
+		List<Mentor> mentors = mentorService.list(expertise, query, before, limit);
 		var items = mentors.stream()
 			.map(m -> mentorView(m))
 			.toList();
