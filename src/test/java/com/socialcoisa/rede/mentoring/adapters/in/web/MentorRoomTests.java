@@ -171,6 +171,43 @@ class MentorRoomTests {
 	}
 
 	@Test
+	void switchingBackToJitsiDropsTheExternalLink() throws Exception {
+		var owner = new TestAuthHelper(mockMvc, objectMapper).authenticate("mentor_room_switch_owner");
+		String mentorId = createMentor(owner, Map.of(
+			"expertise", List.of("Java"),
+			"price", "Gratuito",
+			"roomMode", "CUSTOM",
+			"meetingUrl", "https://meet.google.com/velha-sala"));
+		mockMvc.perform(get("/mentors/" + mentorId))
+			.andExpect(jsonPath("$.meetingUrl").value("https://meet.google.com/velha-sala"));
+
+		// Volta para o Jitsi sem mandar link: o Meet antigo nao pode continuar anunciado no perfil.
+		mockMvc.perform(patch("/mentors/" + mentorId)
+				.header("X-Session-Token", owner.token())
+				.header("Idempotency-Key", "mentor-room-" + UUID.randomUUID())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+					"expertise", List.of("Java"),
+					"price", "Gratuito",
+					"roomMode", "JITSI_PERMANENT",
+					"jitsiRoom", "Sala Da Mel"))))
+			.andExpect(status().isOk());
+
+		mockMvc.perform(get("/mentors/" + mentorId))
+			.andExpect(jsonPath("$.roomMode").value("JITSI_PERMANENT"))
+			.andExpect(jsonPath("$.meetingUrl").doesNotExist());
+
+		MvcResult room = mockMvc.perform(get("/mentors/" + mentorId + "/room")
+				.header("X-Session-Token", owner.token()))
+			.andExpect(status().isOk())
+			.andReturn();
+		JsonNode view = objectMapper.readTree(room.getResponse().getContentAsString());
+		// O nome pedido e normalizado para o formato que o Jitsi aceita.
+		assertThat(view.get("jitsiRoom").asText()).isEqualTo("sala-da-mel");
+		assertThat(view.get("roomUrl").asText()).isEqualTo("https://meet.jit.si/sala-da-mel");
+	}
+
+	@Test
 	void dialInIsOnlyForParticipantsAndAnswersForJitsiRooms() throws Exception {
 		var owner = new TestAuthHelper(mockMvc, objectMapper).authenticate("mentor_room_dial_owner");
 		String mentorId = createMentor(owner, Map.of("expertise", List.of("Java"), "price", "Gratuito"));

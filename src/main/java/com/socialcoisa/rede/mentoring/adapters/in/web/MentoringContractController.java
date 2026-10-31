@@ -367,9 +367,16 @@ class MentoringContractController {
 		return new SessionDialInView(dialIn.conference(), dialIn.pin(), dialIn.numbers());
 	}
 
-	/** O modo vem como texto da tela; valor desconhecido cai no padrão (sala Jitsi por sessão). */
+	/**
+	 * O modo vem como texto da tela. Ausente (tela antiga ou integração que não manda o campo) fica
+	 * {@code null}: o serviço deduz pelo link informado, para não trocar a sala de quem já tinha uma
+	 * configurada. Valor desconhecido cai no padrão (sala Jitsi por sessão).
+	 */
 	private static com.socialcoisa.rede.mentoring.domain.RoomMode roomMode(CreateMentorRequest request) {
-		return request == null ? null : com.socialcoisa.rede.mentoring.domain.RoomMode.fromStored(request.roomMode());
+		if (request == null || request.roomMode() == null || request.roomMode().isBlank()) {
+			return null;
+		}
+		return com.socialcoisa.rede.mentoring.domain.RoomMode.fromStored(request.roomMode());
 	}
 
 	private MentorView mentorView(Mentor m) {

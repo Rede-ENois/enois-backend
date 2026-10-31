@@ -566,6 +566,10 @@ encontros não online (`IN_PERSON`, `HYBRID`) daquele lugar, com a cidade compar
 | `JITSI_PERMANENT` | Uma sala Jitsi fixa do mentor (`jitsiRoom` opcional; sem ele o slug vem do id) |
 | `CUSTOM` | Sala própria (`meetingUrl`, https) — Meet, Zoom, o que o mentor já usa |
 
+Sem `roomMode`, o campo é deduzido: link presente mantém a sala própria (compatibilidade com quem já
+tinha uma configurada) e nenhum link cai na sala Jitsi por sessão. Ao voltar para um modo Jitsi, o
+`meetingUrl` antigo sai do perfil (e mandar `meetingUrl` vazio também devolve a sessão ao Jitsi).
+
 O link é resolvido e gravado na sessão no agendamento (`roomUrl`/`roomMode` em `/mentors/sessions/mine`
 e nas inscrições recebidas), então trocar a sala do perfil não move uma sessão já marcada. A base do
 Jitsi é configurável em `rede.mentoring.jitsi.base-url` (padrão `https://meet.jit.si`) e a API pública

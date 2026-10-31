@@ -99,11 +99,12 @@ public class MentorService {
 		if (repository.findByUserId(userId).isPresent()) {
 			throw new ApiException(409, "ALREADY_MENTOR", "Voce ja esta cadastrado como mentor.");
 		}
-		String cleanUrl = sanitizeMeetingUrl(meetingUrl);
+		String candidateUrl = sanitizeMeetingUrl(meetingUrl);
+		RoomMode mode = validatedRoomMode(roomMode, candidateUrl);
+		String cleanUrl = mode == RoomMode.CUSTOM ? candidateUrl : null;
 		String id = "mentor_" + UUID.randomUUID().toString().replace("-", "");
 		Mentor mentor = Mentor.create(id, userId, expertise, price, banner, cleanUrl,
-			validarPrecoEmFaiscas(sparksPrice), validatedRoomMode(roomMode, cleanUrl),
-			validatedJitsiRoom(jitsiRoom), clock.instant());
+			validarPrecoEmFaiscas(sparksPrice), mode, validatedJitsiRoom(jitsiRoom), clock.instant());
 		repository.save(mentor);
 		return mentor;
 	}
@@ -134,8 +135,23 @@ public class MentorService {
 	public Mentor update(String mentorId, List<String> expertise, String price, String banner, String meetingUrl,
 			Long sparksPrice, RoomMode roomMode, String jitsiRoom, String userId) {
 		Mentor mentor = requireOwner(mentorId, userId);
-		String cleanUrl = sanitizeMeetingUrl(meetingUrl == null ? mentor.meetingUrl() : meetingUrl);
-		RoomMode mode = validatedRoomMode(roomMode == null ? mentor.roomMode() : roomMode, cleanUrl);
+		boolean urlProvided = meetingUrl != null;
+		String candidateUrl = sanitizeMeetingUrl(meetingUrl == null ? mentor.meetingUrl() : meetingUrl);
+		RoomMode mode;
+		if (roomMode != null) {
+			mode = validatedRoomMode(roomMode, candidateUrl);
+		} else if (!urlProvided) {
+			// A tela nao mandou modo nem link: o mentor continua com a sala que ja tinha.
+			mode = mentor.roomMode();
+		} else if (candidateUrl == null) {
+			// O mentor mandou o link vazio: a sala externa sai do perfil e a sessão volta ao Jitsi.
+			mode = RoomMode.JITSI_SESSION;
+		} else {
+			mode = validatedRoomMode(mentor.roomMode(), candidateUrl);
+		}
+		// Link externo so vale para sala propria: ao voltar para o Jitsi, o antigo (Meet, Zoom)
+		// some do perfil em vez de ficar anunciado como se ainda fosse a sala da sessao.
+		String cleanUrl = mode == RoomMode.CUSTOM ? candidateUrl : null;
 		// Sala permanente: mantém a que existe; nome novo só quando o mentor pediu um agora.
 		String room = roomMode == null || roomMode != RoomMode.JITSI_PERMANENT
 			? mentor.jitsiRoom()
