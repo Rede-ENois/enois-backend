@@ -108,11 +108,9 @@ public class ProjectsService {
 		for (String item : stack) {
 			check(item, 40, "cada tecnologia");
 		}
-		String repoUrl = input.repoUrl() == null || input.repoUrl().isBlank() ? null : input.repoUrl().trim();
-		if (repoUrl != null && !repoUrl.startsWith("https://")) {
-			throw new ApiException(400, "INVALID_REPO_URL", "O link do repositorio deve ser https.");
-		}
-		check(repoUrl, 500, "o link do repositorio");
+		String repoUrl = httpsUrl(input.repoUrl(), "INVALID_REPO_URL", "O link do repositorio deve ser https.");
+		String banner = httpsUrl(input.banner(), "INVALID_BANNER", "O banner do projeto deve ser uma URL https.");
+		String icon = httpsUrl(input.icon(), "INVALID_ICON", "O icone do projeto deve ser uma URL https.");
 		String status = PlainText.defuse(input.status());
 		check(status, 40, "o status");
 		if (input.diary().size() > MAX_DIARY_ENTRIES) {
@@ -130,8 +128,21 @@ public class ProjectsService {
 		if (html == null && input.html() != null && !input.html().isBlank()) {
 			throw new ApiException(400, "INVALID_PROJECT_HTML", "HTML do projeto precisa de conteudo valido.");
 		}
-		return new UserProject(id, userId, position, title.trim(), description, stack, repoUrl,
+		return new UserProject(id, userId, position, title.trim(), description, banner, icon, stack, repoUrl,
 			status == null || status.isBlank() ? null : status.trim(), diary, html, now, now);
+	}
+
+	/** Link de imagem/repositorio: so https (o mesmo guarda do repositorio, com erro proprio). */
+	private String httpsUrl(String raw, String code, String message) {
+		if (raw == null || raw.isBlank()) {
+			return null;
+		}
+		String url = raw.trim();
+		if (!url.startsWith("https://")) {
+			throw new ApiException(400, code, message);
+		}
+		check(url, 500, "o link");
+		return url;
 	}
 
 	private void check(String value, int max, String label) {

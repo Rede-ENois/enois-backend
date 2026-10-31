@@ -48,11 +48,21 @@ public class FreelanceService {
 		this.clock = clock;
 	}
 
-	@Transactional
-	public Freelance create(String userId, String title, String scope, int budgetMin, int budgetMax,
-			String deadline, String paymentMethod) {
-		ageGate.requireCanWrite(userId);
-		throttle.exigePermitido("freelance", userId, PER_HOUR, java.time.Duration.ofHours(1));
+	private LocalDate validateDeadline(String deadline) {
+		LocalDate date;
+		try {
+			date = LocalDate.parse(deadline == null ? "" : deadline.trim());
+		}
+		catch (DateTimeParseException invalid) {
+			throw new ApiException(400, "INVALID_DEADLINE", "Informe uma data de prazo válida.");
+		}
+		if (date.isBefore(LocalDate.now(clock))) {
+			throw new ApiException(400, "INVALID_DEADLINE", "O prazo precisa ser hoje ou no futuro.");
+		}
+		return date;
+	}
+
+	private void validateContent(String title, String scope, int budgetMin, int budgetMax) {
 		if (!StringUtils.hasText(title) || title.trim().length() < 3) {
 			throw new ApiException(400, "INVALID_TITLE", "Título do freela precisa de pelo menos 3 caracteres.");
 		}
@@ -68,20 +78,49 @@ public class FreelanceService {
 		if (budgetMin <= 0 || budgetMax < budgetMin) {
 			throw new ApiException(400, "INVALID_BUDGET", "Informe uma faixa de valor válida.");
 		}
-		LocalDate date;
-		try {
-			date = LocalDate.parse(deadline == null ? "" : deadline.trim());
-		}
-		catch (DateTimeParseException invalid) {
-			throw new ApiException(400, "INVALID_DEADLINE", "Informe uma data de prazo válida.");
-		}
-		if (date.isBefore(LocalDate.now(clock))) {
-			throw new ApiException(400, "INVALID_DEADLINE", "O prazo precisa ser hoje ou no futuro.");
-		}
+	}
+
+	@Transactional
+	public Freelance create(String userId, String title, String scope, int budgetMin, int budgetMax,
+			String deadline, String paymentMethod) {
+		ageGate.requireCanWrite(userId);
+		throttle.exigePermitido("freelance", userId, PER_HOUR, java.time.Duration.ofHours(1));
+		validateContent(title, scope, budgetMin, budgetMax);
+		LocalDate date = validateDeadline(deadline);
 		Freelance.PaymentMethod payment = parsePaymentMethod(paymentMethod);
 		Freelance f = Freelance.create("free_" + UUID.randomUUID().toString().replace("-", ""), userId,
 			title.trim(), scope.trim(), budgetMin, budgetMax, date, payment, clock.instant());
 		return freelances.save(f);
+	}
+
+	/** Edição pelo dono: mesmo contrato da criação, sem passar pelo gargalo de criação de novo. */
+	@Transactional
+	public Freelance update(String id, String userId, String title, String scope, int budgetMin, int budgetMax,
+			String deadline, String paymentMethod) {
+		Freelance f = freelances.findById(id)
+			.orElseThrow(() -> new ApiException(404, "FREELANCE_NOT_FOUND", "Freela não encontrado."));
+		if (!f.ownedBy(userId)) {
+			throw new ApiException(403, "NOT_OWNER", "Este freela não é seu.");
+		}
+		if (f.status() == Freelance.Status.CLOSED) {
+			throw new ApiException(409, "FREELANCE_CLOSED", "Este freela já está encerrado.");
+		}
+		validateContent(title, scope, budgetMin, budgetMax);
+		LocalDate date = validateDeadline(deadline);
+		Freelance.PaymentMethod payment = parsePaymentMethod(paymentMethod);
+		return freelances.save(f.edit(title.trim(), scope.trim(), budgetMin, budgetMax, date, payment,
+			clock.instant()));
+	}
+
+	/** Exclusão pelo dono: o freela sai da listagem e de "meus freelas" por inteiro. */
+	@Transactional
+	public void delete(String id, String userId) {
+		Freelance f = freelances.findById(id)
+			.orElseThrow(() -> new ApiException(404, "FREELANCE_NOT_FOUND", "Freela não encontrado."));
+		if (!f.ownedBy(userId)) {
+			throw new ApiException(403, "NOT_OWNER", "Este freela não é seu.");
+		}
+		freelances.deleteById(id);
 	}
 
 	@Transactional

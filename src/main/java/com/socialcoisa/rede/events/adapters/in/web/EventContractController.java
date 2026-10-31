@@ -142,6 +142,22 @@ class EventContractController {
 			});
 	}
 
+	/** Edita o ritual. So quem criou; a recorrencia fica no proprio endpoint. */
+	@PatchMapping("/{eventId}")
+	ResponseEntity<String> update(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@PathVariable String eventId, @RequestBody UpdateEventRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		String hash = idempotency.hash(Map.of("eventId", eventId, "request", request));
+		return idempotency.execute(user.id(), "PATCH", "/api/events/{eventId}", idempotencyKey, hash,
+			() -> {
+				Event e = eventService.update(eventId, request.title(), request.date(), request.time(),
+					request.format(), request.host(), request.cover(), request.streamUrl(), request.location(),
+					request.city(), request.state(), user.id().value());
+				return new CommandResponse(200, toView(e, false, user.id().value()));
+			});
+	}
+
 	/** Liga, troca ou desliga a recorrencia (so quem criou). NONE encerra a serie. */
 	@PatchMapping("/{eventId}/recurrence")
 	ResponseEntity<String> changeRecurrence(
@@ -200,6 +216,10 @@ class EventContractController {
 
 	record CreateEventRequest(String title, String date, String time, String format, String host, String cover,
 			String streamUrl, String location, String recurrence, String city, String state) {
+	}
+
+	record UpdateEventRequest(String title, String date, String time, String format, String host, String cover,
+			String streamUrl, String location, String city, String state) {
 	}
 
 	record RecurrenceRequest(String recurrence) {

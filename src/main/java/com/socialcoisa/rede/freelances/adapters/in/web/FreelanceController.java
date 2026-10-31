@@ -56,6 +56,24 @@ class FreelanceController {
 		return FreelanceView.of(f, freelances.usernameOf(user.id().value()), user.id().value());
 	}
 
+	/** Edição pelo dono: mesmo corpo da criação. Freela encerrado não edita. */
+	@PatchMapping("/freelances/{id}")
+	FreelanceView update(@RequestHeader("X-Session-Token") String sessionToken, @PathVariable String id,
+			@RequestBody CreateFreelanceRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		Freelance f = freelances.update(id, user.id().value(), request.title(), request.scope(),
+			request.budgetMin(), request.budgetMax(), request.deadline(), request.paymentMethod());
+		return FreelanceView.of(f, freelances.usernameOf(user.id().value()), user.id().value());
+	}
+
+	/** Exclusão pelo dono. */
+	@DeleteMapping("/freelances/{id}")
+	Map<String, Object> delete(@RequestHeader("X-Session-Token") String sessionToken, @PathVariable String id) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		freelances.delete(id, user.id().value());
+		return Map.of("id", id, "status", "DELETED");
+	}
+
 	@PostMapping("/freelances/{id}/close")
 	Map<String, Object> close(@RequestHeader("X-Session-Token") String sessionToken, @PathVariable String id) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);

@@ -12,4 +12,6 @@ public interface FreelanceRepository {
 	List<Freelance> findOpen(String query, int limit, int offset);
 	List<Freelance> findByUser(String userId);
 	long countOpen();
+	/** Apaga o freela e as propostas dele (quem criou desistiu do trabalho). */
+	void deleteById(String id);
 }
