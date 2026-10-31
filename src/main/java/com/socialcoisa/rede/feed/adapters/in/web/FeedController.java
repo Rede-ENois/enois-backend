@@ -96,6 +96,9 @@ class FeedController {
 	private final com.socialcoisa.rede.coin.application.CoinService coins;
 	private final com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository outboxEventRepository;
 	private final com.socialcoisa.rede.feed.application.port.out.FeedSeenMarkerRepository feedSeenMarkers;
+	private final com.socialcoisa.rede.feed.application.port.in.VotePollUseCase votePoll;
+	/** Resposta do voto da enquete (PollView): o endpoint devolve o estado da enquete em JSON. */
+	private final tools.jackson.databind.ObjectMapper pollJson = new tools.jackson.databind.ObjectMapper();
 
 	FeedController(PublishPostUseCase publishPostUseCase, GetFeedUseCase getFeedUseCase, GetPostUseCase getPostUseCase,
 			GetProfilePostsUseCase getProfilePostsUseCase, DeletePostUseCase deletePostUseCase,
@@ -112,7 +115,8 @@ class FeedController {
 			HoneypotGuard honeypots,
 			com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository outboxEventRepository,
 			com.socialcoisa.rede.coin.application.CoinService coins,
-			com.socialcoisa.rede.feed.application.port.out.FeedSeenMarkerRepository feedSeenMarkers) {
+			com.socialcoisa.rede.feed.application.port.out.FeedSeenMarkerRepository feedSeenMarkers,
+			com.socialcoisa.rede.feed.application.port.in.VotePollUseCase votePoll) {
 		this.coins = coins;
 		this.publishPostUseCase = publishPostUseCase;
 		this.getFeedUseCase = getFeedUseCase;
@@ -140,6 +144,7 @@ class FeedController {
 		this.honeypots = honeypots;
 		this.outboxEventRepository = outboxEventRepository;
 		this.feedSeenMarkers = feedSeenMarkers;
+		this.votePoll = votePoll;
 	}
 
 	@PostMapping("/feed/posts")
@@ -157,7 +162,8 @@ class FeedController {
 		return idempotency.execute(user.id(), "POST", "/api/feed/posts", idempotencyKey, hash, () -> {
 			var published = publishPostUseCase.publish(new PublishPostCommand(user.id(), request.type(), request.content(),
 				request.pageHtml(), request.articleBody(), request.tags(), request.mediaIds(), request.communityId(),
-				request.mentionedUserIds(), request.topic(), request.channelId(), Boolean.TRUE.equals(request.mediaSpoiler())));
+				request.mentionedUserIds(), request.topic(), request.channelId(), Boolean.TRUE.equals(request.mediaSpoiler()),
+				request.pollOptions()));
 			// Presence counts here and not inside PublishPostService: the scheduler also publishes
 			// through it, and a scheduled post going live is not the person being here today.
 			coins.recordPresence(user.id().value());
@@ -550,6 +556,18 @@ class FeedController {
 		return idempotency.execute(user.id(), "DELETE", "/api/feed/posts/{postId}/comments/{commentId}/reactions",
 			idempotencyKey, hash, () -> new CommandResponse(200, Map.of(
 				"status", postInteractionRepository.removeCommentReaction(commentId, user.id()) ? "REMOVED" : "NO_REACTION")));
+	}
+
+	/**
+	 * Voto da enquete: uma alternativa, um voto por pessoa, definitivo. Votar de novo (na mesma ou
+	 * em outra) responde 409 ALREADY_VOTED.
+	 */
+	@PostMapping("/feed/posts/{postId}/poll/vote")
+	ResponseEntity<String> votePoll(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String postId, @RequestBody PollVoteRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		var poll = votePoll.vote(new PostId(postId), user.id(), request.option() == null ? -1 : request.option());
+		return ResponseEntity.ok().body(pollJson.writeValueAsString(poll));
 	}
 
 	@GetMapping("/feed/posts/{postId}/comments/{commentId}/reactions")

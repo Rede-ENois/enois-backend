@@ -75,7 +75,7 @@ Migrações Flyway em `src/main/resources/db/migration/`.
 | id | VARCHAR(36) PK | ID do post (post_<uuid>) |
 | author_id | VARCHAR(36) FK → users.id | |
 | community_id | VARCHAR(36) (nullable) FK → communities.id | Post em comunidade |
-| type | VARCHAR(20) | INSIGHT, ARTICLE, QUESTION, PROJECT, OPPORTUNITY |
+| type | VARCHAR(20) | INSIGHT, ARTICLE, QUESTION, PROJECT, OPPORTUNITY, POLL, ... (ver `PostType`) |
 | content | TEXT | Conteúdo |
 | visibility | VARCHAR(20) | PUBLIC, CONNECTIONS, COMMUNITY |
 | reactions | INT DEFAULT 0 | Contador de reações |
@@ -85,6 +85,30 @@ Migrações Flyway em `src/main/resources/db/migration/`.
 | status | VARCHAR(20) | ACTIVE, DELETED |
 | deleted_at | TIMESTAMP (nullable) | Data de deleção (soft delete) |
 | created_at | TIMESTAMP | |
+
+### `poll_options` (enquete)
+
+| Coluna | Tipo | Descrição |
+|---|---|---|
+| id | VARCHAR(64) PK | `poll_option_<uuid>` |
+| post_id | VARCHAR(64) | Post `POLL` dono da alternativa |
+| position | INT | Ordem (0..5) — é o que o voto guarda |
+| text | VARCHAR(120) | Texto da alternativa |
+
+Unique `(post_id, position)`. Em `posts`, o `content` do post `POLL` é o título da enquete (400).
+
+### `poll_votes` (enquete)
+
+| Coluna | Tipo | Descrição |
+|---|---|---|
+| id | VARCHAR(64) PK | `poll_vote_<uuid>` |
+| post_id | VARCHAR(64) | Post `POLL` |
+| user_id | VARCHAR(64) | Quem votou |
+| option_position | INT | Alternativa escolhida |
+| created_at | TIMESTAMP | |
+
+Unique `(post_id, user_id)`: **um voto por pessoa, imutável** — não existe UPDATE do voto; o
+segundo INSERT é recusado pelo banco.
 
 ### `post_tags`
 

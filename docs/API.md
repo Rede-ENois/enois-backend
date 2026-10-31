@@ -159,7 +159,43 @@ Cidade e UF (`city`, `state`) são estruturadas e separadas do `location` livre,
 }
 ```
 
-Tipos: `INSIGHT`, `ARTICLE`, `QUESTION`, `PROJECT`, `OPPORTUNITY`
+Tipos: `INSIGHT`, `ARTICLE`, `QUESTION`, `PROJECT`, `OPPORTUNITY`, `PAGE`, `NEWS`, `TUTORIAL`,
+`REVIEW`, `DIVERTIDO`, `MOMENT`, `BLOG`, `BUSINESS`, `POLL`
+
+#### Enquete (`type: "POLL"`)
+
+`content` é o **título da enquete** (até 400 caracteres) e `pollOptions` traz as alternativas: de
+**2 a 6**, cada uma com até 120 caracteres, sem repetição (a comparação ignora maiúsculas).
+
+```json
+{
+  "type": "POLL",
+  "content": "Qual linguagem você usa no trabalho?",
+  "pollOptions": ["Java", "Kotlin", "Go", "TypeScript"]
+}
+```
+
+Fora de `POLL` o campo `pollOptions` é ignorado (não vira linha no banco). O post volta com
+`poll: { options: [...], counts: [0,0,0,0], myVote: null, totalVotes: 0 }`.
+
+### POST /api/feed/posts/{postId}/poll/vote
+
+```json
+{ "option": 2 }
+```
+
+`option` é a **posição** da alternativa (0..5). O voto é **único e definitivo**: uma pessoa, um
+voto, sem troca depois. O segundo voto — na mesma alternativa ou em outra — responde
+**409 `ALREADY_VOTED`**, e a contagem não muda. Alternativa fora do intervalo (ou corpo sem
+`option`) responde 400 `INVALID_POLL_OPTION`; post que não é enquete responde 400 `NOT_A_POLL`.
+Sem sessão: 401. A resposta é o estado atualizado da enquete:
+
+```json
+{ "options": ["Java","Kotlin","Go","TypeScript"], "counts": [1,0,0,0], "myVote": 0, "totalVotes": 1 }
+```
+
+Todo `PostView` de um post `POLL` traz o campo `poll` (nas leituras de feed e de post único); a
+contagem é derivada de `poll_votes`, nunca um contador acumulado.
 
 ### GET /api/feed
 

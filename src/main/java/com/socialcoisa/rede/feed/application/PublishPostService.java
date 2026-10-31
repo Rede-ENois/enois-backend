@@ -36,6 +36,11 @@ public class PublishPostService implements PublishPostUseCase {
 	/** Teto do texto do artigo — maior que o do post (1.200) porque artigo e outro formato. */
 	static final int MAX_ARTICLE_BODY = 10_000;
 
+	/** Enquete: de 2 a 6 alternativas, cada uma curta (cabe no cartao sem virar paragrafo). */
+	static final int MIN_POLL_OPTIONS = 2;
+	static final int MAX_POLL_OPTIONS = 6;
+	static final int MAX_POLL_OPTION_LENGTH = 120;
+
 	private final PostRepository postRepository;
 	private final ArticleRepository articleRepository;
 	private final IdGenerator idGenerator;
@@ -61,6 +66,7 @@ public class PublishPostService implements PublishPostUseCase {
 	private final ContentDuplicationGuard duplicationGuard;
 	/** Detecção comportamental de automação (PR #36). */
 	private final BehavioralTimingGuard behavioralTimingGuard;
+	private final com.socialcoisa.rede.feed.application.port.out.PollRepository polls;
 
 	public PublishPostService(PostRepository postRepository, ArticleRepository articleRepository,
 			IdGenerator idGenerator, Clock clock,
@@ -79,7 +85,8 @@ public class PublishPostService implements PublishPostUseCase {
 			NewAccountCooldown newAccountCooldown,
 			UserRateLimiter userRateLimiter,
 			ContentDuplicationGuard duplicationGuard,
-			BehavioralTimingGuard behavioralTimingGuard) {
+			BehavioralTimingGuard behavioralTimingGuard,
+			com.socialcoisa.rede.feed.application.port.out.PollRepository polls) {
 		this.postRepository = postRepository;
 		this.articleRepository = articleRepository;
 		this.idGenerator = idGenerator;
@@ -101,6 +108,7 @@ public class PublishPostService implements PublishPostUseCase {
 		this.userRateLimiter = userRateLimiter;
 		this.duplicationGuard = duplicationGuard;
 		this.behavioralTimingGuard = behavioralTimingGuard;
+		this.polls = polls;
 	}
 
 	@Override
@@ -203,6 +211,10 @@ public class PublishPostService implements PublishPostUseCase {
 			// Corpo do artigo em tabela propria: nao pesa na linha que o feed le e nao viaja na
 			// listagem (ver PostView.from). Mesma transacao do post: ou nasce inteiro, ou nao nasce.
 			articleRepository.save(saved.id(), articleBody, clock.instant());
+		}
+		if (saved.type() == PostType.POLL) {
+			// Alternativas em tabela propria, na mesma transacao: enquete sem alternativa nao existe.
+			polls.saveOptions(saved.id(), pollOptions(command));
 		}
 		feedDistributionService.distribute(saved);
 		outboxEventRepository.append("PostPublished", saved.id().value(), "{\"postId\":\"" + saved.id().value() + "\"}");
@@ -314,5 +326,39 @@ public class PublishPostService implements PublishPostUseCase {
 		if (command.mediaIds() != null && command.mediaIds().stream().filter(StringUtils::hasText).distinct().count() > 5) {
 			throw new ApiException(400, "TOO_MANY_MEDIA", "Post deve ter no maximo 5 midias.");
 		}
+		// Enquete: o titulo e o content (400, ver PostContentLimits) e as alternativas sao o voto.
+		// Fora de POLL as alternativas sao ignoradas — nunca ficam guardadas como lixo.
+		if (command.type() == PostType.POLL) {
+			pollOptions(command);
+		}
+	}
+
+	/** Alternativas da enquete, normalizadas; fora de POLL devolve vazio (o campo e ignorado). */
+	private List<String> pollOptions(PublishPostCommand command) {
+		if (command.type() != PostType.POLL) {
+			return List.of();
+		}
+		List<String> raw = command.pollOptions() == null ? List.of() : command.pollOptions().stream()
+			.map(value -> value == null ? "" : PlainText.defuse(value.trim()))
+			.toList();
+		if (raw.size() < MIN_POLL_OPTIONS) {
+			throw new ApiException(400, "POLL_TOO_FEW_OPTIONS",
+				"Enquete precisa de pelo menos " + MIN_POLL_OPTIONS + " alternativas.");
+		}
+		if (raw.size() > MAX_POLL_OPTIONS) {
+			throw new ApiException(400, "POLL_TOO_MANY_OPTIONS",
+				"Enquete aceita no maximo " + MAX_POLL_OPTIONS + " alternativas.");
+		}
+		if (raw.stream().anyMatch(option -> !StringUtils.hasText(option))) {
+			throw new ApiException(400, "POLL_EMPTY_OPTION", "Toda alternativa da enquete precisa de texto.");
+		}
+		if (raw.stream().anyMatch(option -> option.length() > MAX_POLL_OPTION_LENGTH)) {
+			throw new ApiException(400, "POLL_OPTION_TOO_LONG",
+				"Cada alternativa aceita no maximo " + MAX_POLL_OPTION_LENGTH + " caracteres.");
+		}
+		if (raw.stream().map(option -> option.toLowerCase(java.util.Locale.ROOT)).distinct().count() != raw.size()) {
+			throw new ApiException(400, "POLL_DUPLICATE_OPTION", "As alternativas da enquete nao podem se repetir.");
+		}
+		return raw;
 	}
 }

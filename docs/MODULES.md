@@ -359,7 +359,7 @@ o mesmo do post comum: pergunta técnica precisa de espaço para código.
 | `Post` | Entidade principal: id, authorId, type, content, visibility, counters, status, createdAt |
 | `PostId` | Value object para ID de post (`post_<uuid>`) |
 | `UserId` | Value object para ID de usuário |
-| `PostType` | Enum: `INSIGHT`, `ARTICLE`, `QUESTION`, `PROJECT`, `OPPORTUNITY` |
+| `PostType` | Enum: `INSIGHT`, `ARTICLE`, `QUESTION`, `PROJECT`, `OPPORTUNITY`, `POLL` (enquete), ... |
 | `Visibility` | Enum: `PUBLIC`, `CONNECTIONS`, `COMMUNITY` |
 | `PostStatus` | Enum: `ACTIVE`, `DELETED` |
 | `Comment` | Entidade: id, postId, authorId, parentCommentId, content, status |

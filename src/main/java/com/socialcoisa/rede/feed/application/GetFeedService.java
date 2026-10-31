@@ -64,6 +64,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	private final com.socialcoisa.rede.corporate.application.port.out.CorporateProfileRepository corporateProfiles;
 	private final com.socialcoisa.rede.feed.application.port.out.ReaderPreferencesReader readerPreferences;
 	private final PostNoteService postNotes;
+	private final com.socialcoisa.rede.feed.application.port.out.PollRepository polls;
 	private static final Instant DEFAULT_BEFORE = Instant.parse("9999-12-31T23:59:59Z");
 
 	public GetFeedService(PostRepository postRepository, ArticleRepository articleRepository,
@@ -76,7 +77,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			SubscribedBlogAuthorsReader subscribedBlogAuthors,
 			com.socialcoisa.rede.corporate.application.port.out.CorporateProfileRepository corporateProfiles,
 			com.socialcoisa.rede.feed.application.port.out.ReaderPreferencesReader readerPreferences,
-			PostNoteService postNotes) {
+			PostNoteService postNotes,
+			com.socialcoisa.rede.feed.application.port.out.PollRepository polls) {
 		this.postRepository = postRepository;
 		this.articleRepository = articleRepository;
 		this.feedCacheRepository = feedCacheRepository;
@@ -93,6 +95,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		this.corporateProfiles = corporateProfiles;
 		this.readerPreferences = readerPreferences;
 		this.postNotes = postNotes;
+		this.polls = polls;
 	}
 
 	private static final long TRENDING_WINDOW_HOURS = 24;
@@ -345,6 +348,12 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		// Reaction pills for the whole page in one query: the card used to fetch them per post.
 		Map<PostId, Map<ReactionType, Long>> reactionSummaries = postInteractionRepository
 			.countReactionsByPostIds(postIds, hidden);
+		// Enquete: alternativas, contagem e o voto de quem le, em lote para a página inteira.
+		Map<String, List<String>> pollOptions = polls.optionsByPostIds(postIdValues);
+		Map<String, Map<Integer, Long>> pollCounts = pollOptions.isEmpty() ? Map.of()
+			: polls.countsByPostIds(pollOptions.keySet());
+		Map<String, Integer> myVotes = currentUserId == null || pollOptions.isEmpty() ? Map.of()
+			: polls.votesByUserAndPostIds(currentUserId, pollOptions.keySet());
 		// Citação do repost com opinião: busca os originais da página em UMA consulta.
 		java.util.Set<String> quotedIds = visible.stream()
 			.filter(p -> p.repostWithOpinion() && p.repostOf() != null)
@@ -383,8 +392,20 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				PostView withCommunity = community == null ? withReaction
 					: withReaction.withCommunity(community.id(),
 						new PostView.CommunityView(community.id(), community.name(), community.joined()));
-				return withCommunity.withNotes(notesByPost.getOrDefault(post.id().value(), List.of()),
-					myNotes.get(post.id().value()));
+				PostView withNotesView = withCommunity.withNotes(
+					notesByPost.getOrDefault(post.id().value(), List.of()), myNotes.get(post.id().value()));
+				List<String> options = pollOptions.get(post.id().value());
+				if (options == null) {
+					return withNotesView;
+				}
+				Map<Integer, Long> counts = pollCounts.getOrDefault(post.id().value(), Map.of());
+				List<Long> perOption = new java.util.ArrayList<>(options.size());
+				for (int position = 0; position < options.size(); position++) {
+					perOption.add(counts.getOrDefault(position, 0L));
+				}
+				long total = perOption.stream().mapToLong(Long::longValue).sum();
+				return withNotesView.withPoll(new PollView(options, perOption,
+					myVotes.get(post.id().value()), total));
 			})
 			.toList();
 	}
