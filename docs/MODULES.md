@@ -1214,6 +1214,30 @@ integração com issues do GitHub e log de e-mails no painel.
 | `GET /admin/support/github` / `PUT /admin/support/github` / `POST /webhooks/github` | Integração de issues (espelho, comentários e estado) |
 | `GET /admin/emails` | Log de metadados de e-mails enviados (sem conteúdo de 2FA) |
 
+### 22.1 Suggestions (Sugestões da comunidade)
+
+Separado do suporte. A pessoa escolhe o destino (`BACKEND`, `FRONTEND` ou `DESIGN_SYSTEM`) e envia
+título + texto. A sugestão nasce `PENDING`; um moderador aprova e só então o app abre uma issue
+**pública** no repositório do destino. A issue leva apenas o título e o texto (menções `@` são
+quebradas para não notificar ninguém): nome, e-mail e id de quem sugeriu nunca vão junto, e a tabela
+`suggestions` nem guarda e-mail de contato. Limite de 5 sugestões por pessoa em 24h.
+
+A aprovação é reivindicada de forma atômica (`PENDING` -> `PUBLISHED`) antes de falar com o GitHub:
+duas aprovações simultâneas não abrem duas issues, e falha do GitHub devolve a sugestão para a fila.
+
+Configuração por variável de ambiente (destino sem repositório fica desligado e a aprovação responde
+503 sem mexer na sugestão). O token é próprio e **nunca** o do suporte, cujo repositório é privado:
+
+| Variável | Descrição |
+|---|---|
+| `GITHUB_SUGGESTIONS_TOKEN` | Token com permissão de abrir issues nos repositórios de destino |
+| `GITHUB_SUGGESTIONS_REPO_BACKEND` / `_FRONTEND` / `_DESIGN_SYSTEM` | Repositório de cada destino, no formato `dono/nome` |
+
+| Rota | Descrição |
+|---|---|
+| `POST /suggestions` / `GET /suggestions/mine` | Enviar sugestão / minhas sugestões (com o link da issue após aprovação) |
+| `GET /admin/suggestions` / `POST /admin/suggestions/{id}/approve` / `POST /admin/suggestions/{id}/reject` | Fila, aprovar e publicar, rejeitar (equipe de moderação) |
+
 ## 23. Ops (Monitoramento e operação)
 
 Painel de monitorabilidade: KPIs de tráfego, latência, recursos do pod, pool do banco, e a lista de

@@ -37,7 +37,7 @@ class AdminRouteInterceptor implements HandlerInterceptor {
 	private static final PathPattern ADMIN_PATH = pattern("/admin/**");
 
 	private static final List<PathPattern> CAMINHOS_DE_MODERADOR = List.of(
-		"/admin/appeals/**", "/admin/support/**", "/admin/emails/**",
+		"/admin/appeals/**", "/admin/support/**", "/admin/suggestions/**", "/admin/emails/**",
 		"/admin/blocked-ips/**", "/admin/monitoring/**").stream()
 		.map(AdminRouteInterceptor::pattern).toList();
 
