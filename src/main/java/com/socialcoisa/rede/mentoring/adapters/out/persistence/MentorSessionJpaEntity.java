@@ -3,6 +3,7 @@ package com.socialcoisa.rede.mentoring.adapters.out.persistence;
 import java.time.Instant;
 
 import com.socialcoisa.rede.mentoring.domain.MentorSession;
+import com.socialcoisa.rede.mentoring.domain.RoomMode;
 import com.socialcoisa.rede.mentoring.domain.SessionStatus;
 
 import jakarta.persistence.Column;
@@ -41,6 +42,12 @@ class MentorSessionJpaEntity {
 	@Column(name = "price_sparks")
 	private Long priceSparks;
 
+	@Column(name = "room_mode", length = 24)
+	private String roomMode;
+
+	@Column(name = "room_url", length = 500)
+	private String roomUrl;
+
 	@Column(name = "created_at", nullable = false)
 	private Instant createdAt;
 
@@ -56,12 +63,15 @@ class MentorSessionJpaEntity {
 		e.message = session.message();
 		e.status = session.status();
 		e.priceSparks = session.priceSparks();
+		e.roomMode = session.roomMode() == null ? RoomMode.JITSI_SESSION.name() : session.roomMode().name();
+		e.roomUrl = session.roomUrl();
 		e.createdAt = session.createdAt();
 		return e;
 	}
 
 	MentorSession toDomain() {
-		return MentorSession.restore(id, mentorId, menteeId, slotId, message, status, priceSparks, createdAt);
+		return MentorSession.restore(id, mentorId, menteeId, slotId, message, status, priceSparks,
+			RoomMode.fromStored(roomMode), roomUrl, createdAt);
 	}
 
 }

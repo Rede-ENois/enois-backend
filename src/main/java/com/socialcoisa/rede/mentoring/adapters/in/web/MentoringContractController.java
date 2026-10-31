@@ -93,7 +93,7 @@ class MentoringContractController {
 		return idempotency.execute(user.id(), "POST", "/api/mentors", idempotencyKey, hash,
 			() -> {
 				Mentor m = mentorService.create(user.id().value(), request.expertise(), request.price(),
-					request.banner(), request.meetingUrl(), request.sparksPrice());
+					request.banner(), request.meetingUrl(), request.sparksPrice(), roomMode(request), request.jitsiRoom());
 				return new CommandResponse(201, mentorView(m));
 			});
 	}
@@ -107,7 +107,8 @@ class MentoringContractController {
 		return idempotency.execute(user.id(), "PATCH", "/api/mentors/{mentorId}", idempotencyKey, hash,
 			() -> {
 				Mentor m = mentorService.update(mentorId, request.expertise(), request.price(), request.banner(),
-					request.meetingUrl(), request.sparksPrice(), user.id().value());
+					request.meetingUrl(), request.sparksPrice(), roomMode(request), request.jitsiRoom(),
+					user.id().value());
 				return new CommandResponse(200, mentorView(m));
 			});
 	}
@@ -157,7 +158,7 @@ class MentoringContractController {
 	}
 
 	record MentorView(String id, String userId, List<String> expertise, double rating, int sessions, String price,
-			String banner, String meetingUrl, Long sparksPrice, String nextSlot) {
+			String banner, String meetingUrl, Long sparksPrice, String roomMode, String nextSlot) {
 	}
 
 	/** Inscrições recebidas (agenda do mentor): quem marcou, quando e o recado. Só o dono. */
@@ -172,6 +173,7 @@ class MentoringContractController {
 		List<MenteeSessionView> views = new ArrayList<>();
 		Map<String, MentorSlot> slots = new HashMap<>();
 		mentorService.getSlots(mentorId).forEach(slot -> slots.put(slot.id(), slot));
+		Mentor mentor = mentorService.getById(mentorId);
 		for (MentorSession session : sessions) {
 			MentorSlot slot = session.slotId() == null ? null : slots.get(session.slotId());
 			UserProfile mentee = mentees.get(session.menteeId());
@@ -181,6 +183,7 @@ class MentoringContractController {
 				slot != null && slot.startsAt() != null ? slot.startsAt().toString() : null,
 				slot != null && slot.endsAt() != null ? slot.endsAt().toString() : null,
 				session.message(), session.status().name(), session.priceSparks(),
+				mentorService.roomUrlOf(session, mentor), session.roomMode().name(),
 				session.createdAt().toString()));
 		}
 		views.sort((first, second) -> {
@@ -241,7 +244,7 @@ class MentoringContractController {
 
 	record MenteeSessionView(String id, String menteeId, String menteeUsername, String menteeName, String menteeAvatar,
 			String slotId, String startsAt, String endsAt, String message, String status, Long priceSparks,
-			String createdAt) {
+			String roomUrl, String roomMode, String createdAt) {
 	}
 
 	@org.springframework.web.bind.annotation.DeleteMapping("/{mentorId}/slots/{slotId}")
@@ -289,7 +292,7 @@ class MentoringContractController {
 				slot != null && slot.startsAt() != null ? slot.startsAt().toString() : null,
 				slot != null && slot.endsAt() != null ? slot.endsAt().toString() : null,
 				session.message(), session.status().name(), session.priceSparks(),
-				mentor == null ? null : mentor.meetingUrl(), session.createdAt().toString()));
+				mentorService.roomUrlOf(session, mentor), session.roomMode().name(), session.createdAt().toString()));
 		}
 		return views;
 	}
@@ -328,20 +331,58 @@ class MentoringContractController {
 	}
 
 	record MySessionView(String id, String mentorId, String mentorUsername, String mentorName, String mentorAvatar,
-			String startsAt, String endsAt, String message, String status, Long priceSparks, String meetingUrl,
-			String createdAt) {
+			String startsAt, String endsAt, String message, String status, Long priceSparks, String roomUrl,
+			String roomMode, String createdAt) {
 	}
 
 	record MentorSessionRequest(String slotId, String message) {
 	}
 
 	record CreateMentorRequest(List<String> expertise, String price, String banner, String meetingUrl,
-			Long sparksPrice) {
+			Long sparksPrice, String roomMode, String jitsiRoom) {
+	}
+
+	/** Sala fixa do mentor: só o dono vê — o link permanente não vai para a vitrine pública. */
+	record MentorRoomView(String roomMode, String roomUrl, String meetingUrl, String jitsiRoom) {
+	}
+
+	/** Como entrar por telefone numa sala Jitsi (API pública do Jitsi). */
+	record SessionDialInView(String conference, String pin, List<String> numbers) {
+	}
+
+	@GetMapping("/{mentorId}/room")
+	MentorRoomView room(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String mentorId) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		Mentor mentor = mentorService.ownMentor(mentorId, user.id().value());
+		return new MentorRoomView(mentor.roomMode().name(), mentorService.mentorRoomUrl(mentor), mentor.meetingUrl(),
+			mentor.jitsiRoom());
+	}
+
+	/** Dial-in (entrar por telefone) de uma sessão Jitsi; só quem participa. */
+	@GetMapping("/{mentorId}/sessions/{sessionId}/dial-in")
+	SessionDialInView dialIn(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String mentorId, @PathVariable String sessionId) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		MentorService.SessionDialIn dialIn = mentorService.dialIn(sessionId, user.id().value());
+		return new SessionDialInView(dialIn.conference(), dialIn.pin(), dialIn.numbers());
+	}
+
+	/**
+	 * O modo vem como texto da tela. Ausente (tela antiga ou integração que não manda o campo) fica
+	 * {@code null}: o serviço deduz pelo link informado, para não trocar a sala de quem já tinha uma
+	 * configurada. Valor desconhecido cai no padrão (sala Jitsi por sessão).
+	 */
+	private static com.socialcoisa.rede.mentoring.domain.RoomMode roomMode(CreateMentorRequest request) {
+		if (request == null || request.roomMode() == null || request.roomMode().isBlank()) {
+			return null;
+		}
+		return com.socialcoisa.rede.mentoring.domain.RoomMode.fromStored(request.roomMode());
 	}
 
 	private MentorView mentorView(Mentor m) {
 		return new MentorView(m.id(), m.userId(), m.expertise(), m.rating(), m.sessionsCount(), m.price(),
-			m.banner(), m.meetingUrl(), m.sparksPrice(), mentorService.nextAvailableSlot(m.id()));
+			m.banner(), m.meetingUrl(), m.sparksPrice(), m.roomMode().name(), mentorService.nextAvailableSlot(m.id()));
 	}
 
 	record CreateSlotRequest(Instant startsAt, Instant endsAt) {
