@@ -38,7 +38,10 @@ sequência, ranking nem métrica pública. O módulo é `studypairs` (migração
 - **Moderação**: conta restrita não pede par nem faz check-in (`ACCOUNT_RESTRICTED`).
 - **Check-in**: um por pessoa por semana ISO (`2026-W44`, fuso America/Sao_Paulo), nota de até 500
   caracteres (pode ser vazia). Repetir na mesma semana edita a nota. Só o primeiro check-in da
-  semana notifica o par. Só os dois membros veem as notas (`403` para os demais).
+  semana notifica o par. Só os dois membros veem as notas (`403` para os demais). Dois envios
+  simultâneos (toque duplo, duas abas) continuam sendo **uma** linha por semana: a PK
+  `(pair_id, user_id, week_key)` decide quem insere e a outra requisição vira edição da nota, sem
+  segundo aviso ao par.
 - **Módulo desativável**: chave `STUDY_PAIRS` em `disabledModules` de `/me/preferences`
   ("O que não quero ver"). Com o módulo desligado: pedir par responde `409 STUDY_PAIRS_DISABLED`;
   um pedido aberto antes fica pausado (não é casado, segue `OPEN` e volta a valer ao religar; quem
