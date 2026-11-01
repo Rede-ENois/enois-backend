@@ -65,6 +65,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	private final com.socialcoisa.rede.feed.application.port.out.ReaderPreferencesReader readerPreferences;
 	private final PostNoteService postNotes;
 	private final com.socialcoisa.rede.feed.application.port.out.PollRepository polls;
+	private final com.socialcoisa.rede.feed.application.port.out.PostRepostRepository postReposts;
 	private static final Instant DEFAULT_BEFORE = Instant.parse("9999-12-31T23:59:59Z");
 
 	public GetFeedService(PostRepository postRepository, ArticleRepository articleRepository,
@@ -78,7 +79,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			com.socialcoisa.rede.corporate.application.port.out.CorporateProfileRepository corporateProfiles,
 			com.socialcoisa.rede.feed.application.port.out.ReaderPreferencesReader readerPreferences,
 			PostNoteService postNotes,
-			com.socialcoisa.rede.feed.application.port.out.PollRepository polls) {
+			com.socialcoisa.rede.feed.application.port.out.PollRepository polls,
+			com.socialcoisa.rede.feed.application.port.out.PostRepostRepository postReposts) {
 		this.postRepository = postRepository;
 		this.articleRepository = articleRepository;
 		this.feedCacheRepository = feedCacheRepository;
@@ -96,6 +98,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		this.readerPreferences = readerPreferences;
 		this.postNotes = postNotes;
 		this.polls = polls;
+		this.postReposts = postReposts;
 	}
 
 	private static final long TRENDING_WINDOW_HOURS = 24;
@@ -505,7 +508,50 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 					.thenComparing(Post::createdAt, java.util.Comparator.reverseOrder()))
 				.toList();
 		}
-		return new FeedPage(enrich(visible, query.userId()), nextCursor);
+		List<PostView> enriched = enrich(visible, query.userId());
+
+		// Reposts puros dos amigos: posts que amigos repostaram aparecem no feed com "X republicou".
+		Set<String> friendIds = authors.stream().map(UserId::value)
+			.filter(id -> !id.equals(query.userId().value())).collect(Collectors.toSet());
+		Set<String> alreadyInFeed = visible.stream().map(p -> p.id().value()).collect(Collectors.toSet());
+		java.util.Map<String, java.util.List<com.socialcoisa.rede.feed.domain.PostRepost>> friendReposts =
+			new java.util.LinkedHashMap<>();
+		for (String friendId : friendIds) {
+			for (String repostedPostId : postReposts.findPostIdsByUserId(friendId, limit)) {
+				if (!alreadyInFeed.contains(repostedPostId)) {
+					friendReposts.computeIfAbsent(repostedPostId, k -> new java.util.ArrayList<>())
+						.add(com.socialcoisa.rede.feed.domain.PostRepost.restore(null, friendId, repostedPostId, null));
+				}
+			}
+		}
+		if (!friendReposts.isEmpty()) {
+			List<Post> repostedPosts = postRepository.findByIds(
+				friendReposts.keySet().stream().map(PostId::new).toList()).stream()
+				.filter(Post::isActive).toList();
+			List<PostView> repostedViews = enrich(repostedPosts, query.userId());
+			// Anexa quem repostou (primeiro amigo que repostou) ao card.
+			java.util.Map<String, com.socialcoisa.rede.profile.domain.UserProfile> repostProfiles =
+				userProfileRepository.findAllByIds(friendIds).stream()
+					.collect(Collectors.toMap(com.socialcoisa.rede.profile.domain.UserProfile::id,
+						java.util.function.Function.identity()));
+			for (PostView view : repostedViews) {
+				var reposters = friendReposts.get(view.id());
+				if (reposters != null && !reposters.isEmpty()) {
+					var reposter = repostProfiles.get(reposters.get(0).userId());
+					if (reposter != null) {
+						enriched = new java.util.ArrayList<>(enriched);
+						enriched.add(view.withRepostedBy(new PostView.RepostedByView(
+							reposter.name(), reposter.username(), reposter.avatar())));
+					}
+				}
+			}
+			// Re-ordena cronologicamente depois de misturar.
+			enriched = enriched.stream()
+				.sorted(java.util.Comparator.comparing(PostView::createdAt).reversed())
+				.collect(Collectors.toList());
+		}
+
+		return new FeedPage(enriched, nextCursor);
 	}
 
 	/** Comunidades da pagina em que o leitor NAO participa (uma consulta em lote, nao uma por post). */
