@@ -194,7 +194,11 @@ public class UserProfile {
 		this.company = keep(company, this.company);
 		this.location = keep(location, this.location);
 		this.avatar = keep(avatar, this.avatar);
-		this.banner = keep(banner, this.banner);
+		String nextBanner = keep(banner, this.banner);
+		if (!java.util.Objects.equals(nextBanner, this.banner)) {
+			this.bannerItem = null;
+		}
+		this.banner = nextBanner;
 		this.badge = keep(badge, this.badge);
 		this.bio = keep(bio, this.bio);
 		this.aka = keep(aka, this.aka);
@@ -701,7 +705,14 @@ public class UserProfile {
 		return bio;
 	}
 
+	/**
+	 * A person who picks their own cover (photo above, HTML here) wants to see it: an equipped shop
+	 * banner would keep drawing over it, so it comes off. The item stays owned.
+	 */
 	public void updateBannerHtml(String sanitizedHtml, Instant now) {
+		if (!java.util.Objects.equals(sanitizedHtml, this.bannerHtml)) {
+			this.bannerItem = null;
+		}
 		this.bannerHtml = sanitizedHtml;
 		this.updatedAt = now;
 	}

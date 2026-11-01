@@ -803,6 +803,8 @@ are for sale); a broken file stops the boot. Each item has `id`, `kind` (`FRAME`
 - Seasons are month-day windows in America/Sao_Paulo, inclusive, and may wrap the year. Out of
   season an item is listed with `available: false` and buying it returns `409 OUT_OF_SEASON`;
   owned items can always be equipped. Event rewards are never for sale (`403 NOT_FOR_SALE`).
+- An equipped `BANNER` draws over the person's own cover. Changing the own cover (`banner` or
+  `bannerHtml` on `PATCH /api/me/profile`) unequips it; the item stays owned.
 - Owning = a PURCHASE ledger entry with ref `cosmetico:{userId}:{itemId}` or a row in
   `cosmetic_grants` (free event rewards). The listing loads ownership in two queries, never per item.
 - A look costs 75% of its missing pieces, rounded to whole faíscas; each piece is still charged
