@@ -57,8 +57,11 @@ class WebPushSender implements PushSender {
 				service = new PushService(publicKey, privateKey, vapidSubject);
 			}
 			catch (Exception exception) {
-				// Chave malformada na configuracao: desliga o push em vez de derrubar o boot.
-				LOG.error("VAPID configurado mas invalido; Web Push ficara desligado: {}", exception.getMessage());
+				// Chave malformada na configuracao: desliga o push em vez de derrubar o boot. So a
+				// classe da falha vai para o log — a mensagem de um erro de chave pode carregar o
+				// material da chave, que nao pode aparecer em log nenhum.
+				LOG.error("VAPID configurado mas invalido; Web Push ficara desligado ({})",
+					exception.getClass().getSimpleName());
 			}
 		}
 		else {
@@ -108,8 +111,10 @@ class WebPushSender implements PushSender {
 			}
 		}
 		catch (Exception exception) {
-			// Push e melhor esforco: nunca deve derrubar o fluxo que gerou a notificacao.
-			LOG.warn("falha ao enviar push para o usuario {}: {}", device.userId(), exception.getMessage());
+			// Push e melhor esforco: nunca deve derrubar o fluxo que gerou a notificacao. A mensagem
+			// da falha pode trazer o endpoint do aparelho (dado pessoal), entao so a classe vai ao log.
+			LOG.warn("falha ao enviar push para o usuario {} ({})", device.userId(),
+				exception.getClass().getSimpleName());
 		}
 	}
 
