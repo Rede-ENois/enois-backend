@@ -29,12 +29,16 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 	private final SocialPostCountReader postCounts;
 	private final SanctionGateReader sanctionGate;
 	private final OfficialBadgeReader officialBadges;
+	private final com.socialcoisa.rede.shared.security.ActionThrottle actionThrottle;
+	private final int updatesPerHour;
 	private final Clock clock;
 
 	public ProfileService(UserProfileRepository repository, ReputationService reputationService,
 			org.springframework.beans.factory.ObjectProvider<com.socialcoisa.rede.media.application.LazyUrlMigrationService> lazyMedia,
 			com.socialcoisa.rede.age.application.port.out.ParentalLinkRepository parentalLinks,
 			SocialPostCountReader postCounts, SanctionGateReader sanctionGate, OfficialBadgeReader officialBadges,
+			com.socialcoisa.rede.shared.security.ActionThrottle actionThrottle,
+			@org.springframework.beans.factory.annotation.Value("${rede.profile.updates-per-hour:30}") int updatesPerHour,
 			Clock clock) {
 		this.repository = repository;
 		this.reputationService = reputationService;
@@ -43,6 +47,8 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 		this.postCounts = postCounts;
 		this.sanctionGate = sanctionGate;
 		this.officialBadges = officialBadges;
+		this.actionThrottle = actionThrottle;
+		this.updatesPerHour = updatesPerHour;
 		this.clock = clock;
 	}
 
@@ -232,6 +238,12 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 	@Override
 	@Transactional
 	public OwnProfileView update(UpdateProfileCommand command) {
+		// Teto por conta, antes de qualquer trabalho: a atualizacao de perfil e uma acao de humano
+		// (o app so chama nos dialogos de edicao), entao repeticao em rajada so vem de script.
+		if (updatesPerHour > 0) {
+			actionThrottle.exigePermitido("profile-update", command.userId(), updatesPerHour,
+				java.time.Duration.ofHours(1));
+		}
 		// A limpeza do HTML/CSS da bio e da capa e trabalho de CPU: roda antes de qualquer leitura no
 		// banco para nao ocupar uma conexao do pool enquanto acontece. Dentro da transacao e depois do
 		// findById, uma limpeza lenta prendia a conexao e esgotava o pool.
