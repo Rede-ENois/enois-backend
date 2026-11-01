@@ -124,7 +124,9 @@ class WebPushSender implements PushSender {
 				message.url() == null ? "/feed" : message.url()));
 		}
 		catch (Exception exception) {
-			LOG.warn("falha ao serializar payload de push: {}", exception.getMessage());
+			// A mensagem de um erro de serializacao pode trazer o corpo da notificacao, que tem
+			// nome de usuario e o objetivo estudado. So a classe vai ao log, como nas outras falhas.
+			LOG.warn("falha ao serializar payload de push ({})", exception.getClass().getSimpleName());
 			return "{}";
 		}
 	}
