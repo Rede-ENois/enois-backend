@@ -79,13 +79,21 @@ public class RepostPostService {
 		}
 
 		reposts.save(PostRepost.create(userId, root.id().value(), clock.instant()));
+		root.repost();
+		posts.save(root);
 		return root;
 	}
 
 	/** Remove o repost puro (desfazer). */
 	@Transactional
 	public void undoRepost(String userId, String postId) {
-		reposts.delete(userId, postId);
+		if (reposts.exists(userId, postId)) {
+			reposts.delete(userId, postId);
+			posts.findById(new PostId(postId)).ifPresent(post -> {
+				post.unrepost();
+				posts.save(post);
+			});
+		}
 	}
 
 	/** Repost com opinião: cria post novo do repostador citando o original. */

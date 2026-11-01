@@ -199,8 +199,28 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		String authorId = userProfileRepository.findByUsername(query.username())
 			.map(com.socialcoisa.rede.profile.domain.UserProfile::id)
 			.orElse(query.username());
-		List<Post> posts = postRepository.findActiveByAuthor(new UserId(authorId), before, limit);
-		return page(enrich(posts, query.viewerId()), posts, limit);
+		List<Post> ownPosts = postRepository.findActiveByAuthor(new UserId(authorId), before, limit);
+		List<PostView> enriched = enrich(ownPosts, query.viewerId());
+
+		// Reposts puros: posts que este user repostou aparecem no perfil dele.
+		List<String> repostedIds = postReposts.findPostIdsByUserId(authorId, limit);
+		Set<String> ownIds = ownPosts.stream().map(p -> p.id().value()).collect(Collectors.toSet());
+		List<String> missingIds = repostedIds.stream().filter(id -> !ownIds.contains(id)).toList();
+		if (!missingIds.isEmpty()) {
+			List<Post> reposted = postRepository.findByIds(missingIds.stream().map(PostId::new).toList())
+				.stream().filter(Post::isActive).toList();
+			List<PostView> repostedViews = enrich(reposted, query.viewerId());
+			var profile = userProfileRepository.findById(authorId).orElse(null);
+			enriched = new java.util.ArrayList<>(enriched);
+			for (PostView v : repostedViews) {
+				enriched.add(v.withRepostedBy(profile != null
+					? new PostView.RepostedByView(profile.name(), profile.username(), profile.avatar())
+					: null));
+			}
+			enriched.sort(java.util.Comparator.comparing(PostView::createdAt).reversed());
+		}
+
+		return page(enriched, ownPosts, limit);
 	}
 
 	@Override
