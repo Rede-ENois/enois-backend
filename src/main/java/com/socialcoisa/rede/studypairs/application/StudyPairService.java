@@ -287,7 +287,18 @@ public class StudyPairService {
 			repository.updateCheckinNote(pairId, userId, week, note, now);
 			return new CheckinView(userId, week, note, existing.get().createdAt().toString(), now.toString());
 		}
-		repository.insertCheckin(new StudyCheckin(pairId, userId, week, note, now, now));
+		try {
+			repository.insertCheckin(new StudyCheckin(pairId, userId, week, note, now, now));
+		}
+		catch (DuplicateKeyException raced) {
+			// A double tap with two Idempotency-Keys (or two devices) can both miss the read above.
+			// The primary key (pair, member, week) lets exactly one insert win; the loser edited the
+			// note the winner wrote, and must not notify the partner a second time.
+			repository.updateCheckinNote(pairId, userId, week, note, now);
+			StudyCheckin saved = repository.findCheckin(pairId, userId, week)
+				.orElseThrow(() -> new ApiException(409, "STUDY_PAIR_ENDED", "Este par de estudo foi encerrado."));
+			return new CheckinView(userId, week, note, saved.createdAt().toString(), saved.updatedAt().toString());
+		}
 		// Only the first check-in of the week notifies; editing the note stays quiet.
 		profiles.findById(userId).ifPresent(me -> notifications.create(pair.partnerOf(userId), "STUDY_PAIR_CHECKIN", userId,
 			"Seu par fez o check-in da semana",

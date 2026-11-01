@@ -127,6 +127,30 @@ class StudyPairConcurrencyTests {
 	}
 
 	@Test
+	void twoCheckinsAtOnceKeepOneRowAndNotifyThePartnerOnce() throws Exception {
+		AuthSession a = auth.authenticate("sp-race-checkin-a");
+		AuthSession b = auth.authenticate("sp-race-checkin-b");
+		assertThat(request(a, "objetivo sp-race-checkin").status()).isEqualTo(201);
+		Response matched = request(b, "objetivo sp-race-checkin");
+		assertThat(matched.status()).isEqualTo(201);
+		assertThat(matched.pairId()).isNotNull();
+
+		// Double tap: the browser sends two writes with different Idempotency-Keys, so both reach the
+		// service and only the primary key (pair, member, week) decides who inserted the row.
+		List<Integer> statuses = together(() -> checkin(a, matched.pairId(), "primeira nota"),
+			() -> checkin(a, matched.pairId(), "segunda nota"));
+
+		assertThat(statuses).containsExactlyInAnyOrder(200, 200);
+		assertThat(jdbc.queryForObject(
+			"select count(*) from study_checkins where pair_id = ? and user_id = ?", Integer.class, matched.pairId(),
+			a.userId())).isEqualTo(1);
+		// The partner hears about the week once, not once per write.
+		assertThat(jdbc.queryForObject(
+			"select count(*) from notifications where user_id = ? and kind = 'STUDY_PAIR_CHECKIN'", Integer.class,
+			b.userId())).isEqualTo(1);
+	}
+
+	@Test
 	void anEndedPairFreesTheSlotAndAClosedRequestFreesTheQueue() throws Exception {
 		AuthSession a = auth.authenticate("sp-race-slot-a");
 		AuthSession b = auth.authenticate("sp-race-slot-b");
@@ -148,6 +172,15 @@ class StudyPairConcurrencyTests {
 
 		assertThat(request(a, "objetivo sp-race-slot-3").status()).isEqualTo(201);
 		assertThat(activePairs(a.userId())).isEqualTo(1);
+	}
+
+	private int checkin(AuthSession session, String pairId, String note) throws Exception {
+		return mockMvc.perform(post("/study-pairs/" + pairId + "/checkins")
+				.header("X-Session-Token", session.token())
+				.header("Idempotency-Key", key())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(json(Map.of("note", note))))
+			.andReturn().getResponse().getStatus();
 	}
 
 	private Callable<Integer> concurrent(AuthSession session, String goal) {
