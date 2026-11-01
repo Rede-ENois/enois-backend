@@ -87,6 +87,9 @@ class CosmeticsFlowTests {
                         .andExpect(jsonPath("$[?(@.id == 'tema-saci')].releaseOrder").value(27))
                         .andReturn();
                 var items = objectMapper.readTree(result.getResponse().getContentAsString());
+                // O primeiro da lista "newest" é o de MAIOR releaseOrder do catálogo (o catálogo
+                // cresce a cada lançamento, então o teste não fixa qual item é o mais novo).
+                org.junit.jupiter.api.Assertions.assertEquals(items.size(), items.get(0).get("releaseOrder").asInt());
                 int previous = items.size() + 1;
                 for (var item : items) {
                         int releaseOrder = item.get("releaseOrder").asInt();

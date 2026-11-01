@@ -12,6 +12,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -102,6 +103,10 @@ public class StudyPairService {
 			throw new ApiException(409, "STUDY_PAIRS_DISABLED",
 				"O par de estudo está desativado nas suas preferências.");
 		}
+		// Serializes this person's participation: a second request firing at the same time waits here
+		// and then sees the request (or the pair) the first one created, instead of both passing the
+		// "one open request / two active pairs" checks below.
+		repository.lockUser(userId);
 
 		String goal = rawGoal == null ? "" : PlainText.defuse(rawGoal.trim());
 		TextFieldLimit.check("STUDY_GOAL_TOO_LONG", "objetivo", goal, StudyGoal.MAX_LENGTH);
@@ -117,7 +122,7 @@ public class StudyPairService {
 			throw new ApiException(409, "STUDY_REQUEST_ALREADY_OPEN",
 				"Você já está procurando um par. Cancele o pedido atual para trocar de objetivo.");
 		}
-		List<StudyPair> myPairs = repository.findActivePairs(userId);
+		List<StudyPair> myPairs = activePairsOf(userId);
 		if (myPairs.size() >= MAX_ACTIVE_PAIRS) {
 			throw new ApiException(409, "STUDY_PAIR_LIMIT",
 				"Você já tem " + MAX_ACTIVE_PAIRS + " pares de estudo ativos. Encerre um para procurar outro.");
@@ -144,8 +149,16 @@ public class StudyPairService {
 			}
 			return new RequestResult(requestId, StudyPairRequest.Status.MATCHED.name(), pair.id());
 		}
-		repository.saveRequest(new StudyPairRequest(requestId, userId, goalKey, goal, topic,
-			StudyPairRequest.Status.OPEN, now));
+		try {
+			repository.saveRequest(new StudyPairRequest(requestId, userId, goalKey, goal, topic,
+				StudyPairRequest.Status.OPEN, now));
+		}
+		catch (DuplicateKeyException raced) {
+			// The unique open-per-user index is the backstop if the row lock could not serialize:
+			// the second request gets the same answer as the one that arrived after the first.
+			throw new ApiException(409, "STUDY_REQUEST_ALREADY_OPEN",
+				"Você já está procurando um par. Cancele o pedido atual para trocar de objetivo.");
+		}
 		return new RequestResult(requestId, StudyPairRequest.Status.OPEN.name(), null);
 	}
 
@@ -157,15 +170,21 @@ public class StudyPairService {
 	 */
 	@Transactional(readOnly = true)
 	public List<SearchResult> search(String userId, String rawTerm, int limit) {
-		String term = rawTerm == null ? "" : rawTerm.trim().replace("%", "").replace("_", "");
+		String term = rawTerm == null ? "" : rawTerm.trim().replace("%", "").replace("_", "").replace("\\", "");
 		if (term.length() < 2) {
 			return List.of();
 		}
 		TextFieldLimit.check("STUDY_SEARCH_TOO_LONG", "busca", term, 80);
+		// Same folding the goal goes through when it is stored, so "química orgânica" finds
+		// "quimica-organica" and "Quimica" finds it too.
+		String folded = StudyGoal.key(term);
+		if (folded.isEmpty()) {
+			return List.of();
+		}
 		Set<String> currentPartners = repository.findActivePairs(userId).stream()
 			.map(p -> p.partnerOf(userId))
 			.collect(Collectors.toSet());
-		return visibleOpen(repository.searchOpenRequests(term, Math.min(50, Math.max(1, limit))), userId,
+		return visibleOpen(repository.searchOpenRequests(folded, Math.min(50, Math.max(1, limit))), userId,
 			currentPartners)
 			.stream()
 			.map(r -> new SearchResult(r.goalText(), r.topic(), r.createdAt().toString()))
@@ -204,7 +223,7 @@ public class StudyPairService {
 			.filter(r -> !blocks.hiddenIdsFor(r.userId()).contains(userId))
 			// Turned the module off: the request is paused, not matched, until it is turned back on.
 			.filter(r -> !moduleDisabled(r.userId()))
-			.filter(r -> repository.findActivePairs(r.userId()).size() < MAX_ACTIVE_PAIRS)
+			.filter(r -> activePairsOf(r.userId()).size() < MAX_ACTIVE_PAIRS)
 			.toList();
 	}
 
@@ -218,6 +237,10 @@ public class StudyPairService {
 		return open.id();
 	}
 
+	/**
+	 * The pairs and the open request of one person. Not read-only on purpose: a block or a mute
+	 * between the two ends the pair here, and that cleanup is a write.
+	 */
 	@Transactional
 	public MyStudyPairs mine(String userId) {
 		LocalDate today = today();
@@ -342,6 +365,14 @@ public class StudyPairService {
 		}
 		repository.endPair(pair.id(), clock.instant());
 		return true;
+	}
+
+	/**
+	 * Active pairs of a person, with a pair already ended by a block or a mute left out: it is over
+	 * even before the lazy cleanup writes it down, and must not count against the two-pair ceiling.
+	 */
+	private List<StudyPair> activePairsOf(String userId) {
+		return repository.findActivePairs(userId).stream().filter(pair -> !closedByBlock(pair)).toList();
 	}
 
 	private boolean moduleDisabled(String userId) {
