@@ -1,8 +1,8 @@
 package com.socialcoisa.rede.shared.application;
 
-import java.time.Duration;
 import java.util.List;
 
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.cache.caffeine.CaffeineCache;
@@ -15,63 +15,76 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 /**
  * Cache em memoria do processo.
  *
- * Serve para contadores e agregados que custam uma varredura no banco e nao precisam ser exatos ao
- * segundo — hoje o contador de usuarios ativos da landing. E de proposito em memoria (nao Redis):
- * o dado e recalculavel, cada pod pode ter o seu proprio numero por alguns minutos, e assim nao
- * entra dependencia de infra nova por causa de um contador.
+ * <p>Serve para leituras compartilhadas que custam caro (contadores, agregados, vitrines e a
+ * projecao publica de perfil) e para nao repetir a mesma consulta a cada abertura de tela. E de
+ * proposito em memoria (nao Redis): cada pod tem o seu proprio cache, o dado e recalculavel e
+ * assim nao entra dependencia de infra nova. A contrapartida esta documentada em
+ * {@link CacheInvalidator}: invalidar aqui nao invalida os outros pods, quem garante o limite e o
+ * TTL.</p>
  *
- * Lista de caches fechada: cache sem TTL e sem dono conhecido virou fonte de bug em todo lugar que
- * eu vi; aqui cada um precisa ser declarado com o seu frescor.
+ * <p><b>Nada aqui consulta o banco por conta propria.</b> {@code expireAfterWrite} so marca a
+ * entrada como vencida; a proxima requisicao que precisar do dado paga a consulta e repoe o cache.
+ * Recurso que ninguem abre nao gera consulta nenhuma. {@code @Cacheable(sync = true)} fecha a
+ * avalanche quando varias requisicoes chegam com a entrada vencida: uma consulta, as outras
+ * esperam o resultado dela.</p>
+ *
+ * <p>A lista de caches e fechada: cache sem TTL e sem dono conhecido vira fonte de bug. Cada um
+ * declara o seu frescor em {@link CacheProperties} ({@code rede.cache.*}).</p>
  */
 @Configuration(proxyBeanMethods = false)
 @EnableCaching
+@EnableConfigurationProperties(CacheProperties.class)
 public class CacheConfig {
 
-	/** Frescor do contador da comunidade: o numero pode ficar ate 10 min atras do banco. */
-	private static final Duration COMMUNITY_STATS_TTL = Duration.ofMinutes(10);
+	/** Projecao publica de um perfil (`GET /users/{username}` e `/users/by-id/{id}`). */
+	public static final String PUBLIC_PROFILES = "publicProfiles";
 
-	/**
-	 * Cartao de compartilhamento das paginas (PNG desenhado no servidor). Uma hora: o cartao so muda
-	 * quando a pagina e editada, e o cabecalho HTTP ja pede um dia de cache para as plataformas.
-	 */
-	private static final Duration PAGE_PREVIEW_CARD_TTL = Duration.ofHours(1);
+	/** Vitrine "quem esta chegando agora" (`GET /ranking`). */
+	public static final String PUBLIC_RANKING = "publicRanking";
 
-	/** Vagas externas so mudam na importacao (boot/meia-noite): 5 min de cache evitam bater no banco. */
-	private static final Duration EXTERNAL_JOBS_TTL = Duration.ofMinutes(5);
+	/** Vitrine de comunidades. */
+	public static final String COMMUNITIES = "communitiesList";
 
-	/**
-	 * Busca de GIF do seletor. Dez minutos: o termo repetido nao gasta a cota do provedor de novo, e
-	 * a chave inclui o termo — por isso o teto de entradas e maior que o dos outros caches.
-	 */
-	private static final Duration GIF_SEARCH_TTL = Duration.ofMinutes(10);
-	private static final int GIF_SEARCH_MAX_ENTRIES = 200;
+	/** Vitrine de eventos. */
+	public static final String EVENTS = "eventsList";
 
-	/**
-	 * Repositórios e README públicos do GitHub, por login (importação para o perfil). Poucos minutos:
-	 * o suficiente para abrir o diálogo e importar sem repetir a ida ao GitHub, curto o bastante para
-	 * o repositório recém-criado aparecer logo. O teto de entradas é de logins distintos.
-	 */
-	private static final Duration GITHUB_PROFILE_TTL = Duration.ofMinutes(3);
-	private static final int GITHUB_PROFILE_MAX_ENTRIES = 200;
+	/** Vitrine de vagas internas. */
+	public static final String JOBS = "jobsList";
+
+	public static final String COMMUNITY_STATS = "communityStats";
+
+	public static final String EXTERNAL_JOBS = "externalJobs";
+
+	public static final String PAGE_PREVIEW_CARDS = "pagePreviewCards";
+
+	public static final String GIF_SEARCH = "gifSearch";
+
+	public static final String GITHUB_REPOSITORIES = "githubRepositories";
+
+	public static final String GITHUB_README = "githubReadme";
 
 	@Bean
-	CacheManager cacheManager() {
+	CacheManager cacheManager(CacheProperties properties) {
 		SimpleCacheManager manager = new SimpleCacheManager();
-		manager.setCaches(List.of(cache("communityStats", COMMUNITY_STATS_TTL),
-			cache("externalJobs", EXTERNAL_JOBS_TTL),
-			cache("pagePreviewCards", PAGE_PREVIEW_CARD_TTL),
-			cache("gifSearch", GIF_SEARCH_TTL, GIF_SEARCH_MAX_ENTRIES),
-			cache("githubRepositories", GITHUB_PROFILE_TTL, GITHUB_PROFILE_MAX_ENTRIES),
-			cache("githubReadme", GITHUB_PROFILE_TTL, GITHUB_PROFILE_MAX_ENTRIES)));
+		manager.setCaches(List.of(cache(PUBLIC_PROFILES, properties.getPublicProfiles()),
+			cache(PUBLIC_RANKING, properties.getPublicRanking()), cache(COMMUNITIES, properties.getCommunities()),
+			cache(EVENTS, properties.getEvents()), cache(JOBS, properties.getJobs()),
+			cache(COMMUNITY_STATS, properties.getCommunityStats()),
+			cache(EXTERNAL_JOBS, properties.getExternalJobs()),
+			cache(PAGE_PREVIEW_CARDS, properties.getPagePreviewCards()),
+			cache(GIF_SEARCH, properties.getGifSearch()),
+			cache(GITHUB_REPOSITORIES, properties.getGithubRepositories()),
+			cache(GITHUB_README, properties.getGithubReadme())));
 		return manager;
 	}
 
-	private CaffeineCache cache(String name, Duration ttl) {
-		return cache(name, ttl, 16);
-	}
-
-	private CaffeineCache cache(String name, Duration ttl, int maxEntries) {
-		return new CaffeineCache(name,
-			Caffeine.newBuilder().expireAfterWrite(ttl).maximumSize(maxEntries).build());
+	private CaffeineCache cache(String name, CacheProperties.Category category) {
+		return new CaffeineCache(name, Caffeine.newBuilder()
+			// Vencimento sob demanda: marca, nao busca. Nenhum scheduler toca no banco.
+			.expireAfterWrite(category.getTtl())
+			.maximumSize(category.getMaxEntries())
+			// Acertos e erros por cache; os testes de comportamento leem daqui.
+			.recordStats()
+			.build());
 	}
 }
