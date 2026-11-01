@@ -3,6 +3,7 @@ package com.socialcoisa.rede.cosmetics.adapters.in.web;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -346,6 +347,34 @@ class SeasonalCosmeticsFlowTests {
 		JsonNode cleared = me(user);
 		slots.values().forEach(field -> assertThat(cleared.get(field).isNull()).as(field).isTrue());
 		assertThat(cleared.get("badges")).isEmpty();
+	}
+
+	@Test
+	void pickingOwnCoverTakesTheShopBannerOff() throws Exception {
+		var user = wallet("seasonal_own_cover");
+		buy(user, "banner-saci");
+		mockMvc.perform(post("/loja/banner-saci/equipar").header("X-Session-Token", user.token()))
+			.andExpect(status().isOk());
+		// Editing other fields (the profile form sends the same cover back) keeps the banner on.
+		mockMvc.perform(patch("/me/profile").header("X-Session-Token", user.token()).header("Idempotency-Key", "own-cover-1")
+				.contentType(MediaType.APPLICATION_JSON).content(json(Map.of("headline", "Dev"))))
+			.andExpect(status().isOk());
+		assertThat(me(user).get("bannerItem").asText()).isEqualTo("banner-saci");
+
+		mockMvc.perform(patch("/me/profile").header("X-Session-Token", user.token()).header("Idempotency-Key", "own-cover-2")
+				.contentType(MediaType.APPLICATION_JSON).content(json(Map.of("banner", "https://ik.imagekit.io/x/capa.jpg"))))
+			.andExpect(status().isOk());
+		assertThat(me(user).get("bannerItem").isNull()).isTrue();
+
+		mockMvc.perform(post("/loja/banner-saci/equipar").header("X-Session-Token", user.token()))
+			.andExpect(status().isOk());
+		mockMvc.perform(patch("/me/profile").header("X-Session-Token", user.token()).header("Idempotency-Key", "own-cover-3")
+				.contentType(MediaType.APPLICATION_JSON).content(json(Map.of("bannerHtml", "<p>minha capa</p>"))))
+			.andExpect(status().isOk());
+		assertThat(me(user).get("bannerItem").isNull()).isTrue();
+		// Still owned: it can go back on.
+		mockMvc.perform(post("/loja/banner-saci/equipar").header("X-Session-Token", user.token()))
+			.andExpect(status().isOk());
 	}
 
 	@Test
