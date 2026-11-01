@@ -69,9 +69,10 @@ public class CoinService {
 	/** Volume interno fixo do genesis. Não é público; nunca muda. */
 	private static final long TREASURY_GENESIS = FAIS(2_000_000L);
 	public static final long AIRDROP_PER_USER = FAIS(100L);
-	/** Presença diária (plano C2): 5/dia, bônus de 25 a cada 7 dias seguidos. */
+	/** Presença diária (plano C2): 5/dia, bônus de 25 a cada 7 dias seguidos (dia 7, 14, 21...). */
 	public static final long DAILY_PRESENCE = FAIS(5L);
 	public static final long STREAK_BONUS = FAIS(25L);
+	private static final int STREAK_BONUS_EVERY_DAYS = 7;
 	/** Teto de envio para contas com menos de 7 dias. */
 	private static final long NEW_ACCOUNT_DAILY_CAP = FAIS(500L);
 	public static final Duration NEW_ACCOUNT_WINDOW = Duration.ofDays(7);
@@ -210,8 +211,9 @@ public class CoinService {
 	}
 
 	/**
-	 * Presença diária (plano C2): +5 por dia; com 7 ou mais dias seguidos de sequência, +25 de
-	 * bônus. Idempotente por conta+dia (fuso de São Paulo). A sequência fica em `user_streaks`
+	 * Presença diária (plano C2): +5 por dia; +25 de bônus a cada 7 dias seguidos de sequência
+	 * (dia 7, 14, 21...), contados sobre a sequência guardada: o dia congelado não soma, então
+	 * não antecipa nem pula o bônus. Idempotente por conta+dia (fuso de São Paulo). A sequência fica em `user_streaks`
 	 * (com o congelamento semanal); os valores são convertidos pela cotação vigente.
 	 */
 	private void ensureDailyPresence(String accountId) {
@@ -229,7 +231,7 @@ public class CoinService {
 		Instant now = Instant.now(clock);
 		long amount = scaledReward(DAILY_PRESENCE);
 		String message = "Presença diária";
-		if (after.currentDays() >= 7) {
+		if (after.currentDays() % STREAK_BONUS_EVERY_DAYS == 0) {
 			amount += scaledReward(STREAK_BONUS);
 			message = "Presença diária (bônus de " + after.currentDays() + " dias seguidos)";
 		}

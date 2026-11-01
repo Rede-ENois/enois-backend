@@ -60,6 +60,9 @@ class UserProfileJpaEntity {
 	@Column(name = "profile_effect", length = 64)
 	private String profileEffect;
 
+	@Column(name = "garden_style", length = 64)
+	private String gardenStyle;
+
 	@Column(name = "status_text", length = 60)
 	private String statusText;
 
@@ -214,6 +217,7 @@ class UserProfileJpaEntity {
 		entity.nameplate = profile.nameplate();
 		entity.bannerItem = profile.bannerItem();
 		entity.profileEffect = profile.profileEffect();
+		entity.gardenStyle = profile.gardenStyle();
 		entity.statusText = profile.statusText();
 		entity.statusIcon = profile.statusIcon();
 		entity.email = profile.email();
@@ -289,6 +293,7 @@ class UserProfileJpaEntity {
 		profile.hydrateNameStyle(nameTheme, nameFont, nameColor);
 		profile.hydrateContributorTagColor(contributorTagColor);
 		profile.hydrateProfileCosmetics(cardTheme, nameplate, bannerItem, profileEffect);
+		profile.hydrateGardenStyle(gardenStyle);
 		profile.hydrateStatus(statusText, statusIcon);
 		profile.hydratePlace(city == null || state == null ? null : new CityState(city, state, cityKey), showCity);
 		profile.hydrateBadges(badges == null || badges.isBlank() ? List.of() : List.of(badges.split("\n")));

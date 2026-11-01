@@ -19,6 +19,9 @@ public interface StudyPairRepository {
 	/** Open requests for this goal, oldest first (FIFO). */
 	List<StudyPairRequest> findOpenByGoal(String goalKey, int limit);
 
+	/** Open requests matching the term in the goal text or the topic, oldest first. */
+	List<StudyPairRequest> searchOpenRequests(String term, int limit);
+
 	/** Moves an OPEN request to {@code status}; false when it was no longer OPEN (claimed by someone else). */
 	boolean closeOpenRequest(String requestId, StudyPairRequest.Status status);
 

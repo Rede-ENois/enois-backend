@@ -83,7 +83,8 @@ class ContributorSealFlowTests {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$[0].type").value("CONTRIBUINTE_SERIO"))
 			.andExpect(jsonPath("$[0].category").value("CODE"))
-			.andExpect(jsonPath("$[0].evidenceCount").value(11));
+			.andExpect(jsonPath("$[0].evidenceCount").value(11))
+			.andExpect(jsonPath("$[0].emblem").value("contribuinte-serio"));
 
 		mockMvc.perform(get("/users/" + username + "/seals/CODE/evidence?page=0&size=5"))
 			.andExpect(status().isOk())
@@ -188,6 +189,7 @@ class ContributorSealFlowTests {
 			.andExpect(jsonPath("$.categories[0].tiers[0].type").value("AJUDANTE"))
 			.andExpect(jsonPath("$.categories[0].tiers[0].minCount").value(1))
 			.andExpect(jsonPath("$.categories[0].tiers[0].maxCount").value(10))
+			.andExpect(jsonPath("$.categories[0].tiers[0].emblem").value("ajudante"))
 			.andExpect(jsonPath("$.categories[0].tiers[4].type").value("GET_A_LIFE"))
 			.andExpect(jsonPath("$.categories[0].tiers[4].maxCount").doesNotExist())
 			.andExpect(jsonPath("$.categories[1].category").value("ISSUES"))

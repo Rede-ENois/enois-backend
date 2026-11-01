@@ -26,6 +26,9 @@ public interface CommentRepository {
 
 	void deleteById(String id);
 
+	/** Soft delete (status DELETED) for moderation: the row stays so a confirmed report keeps its target. */
+	void markDeleted(Comment comment);
+
 	List<String> findPostIdsByAuthor(String authorId);
 
 	/** TODOS os comentários do autor, em qualquer status — purga por spam e ban cleanup. */

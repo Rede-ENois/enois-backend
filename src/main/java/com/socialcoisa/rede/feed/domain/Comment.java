@@ -30,4 +30,10 @@ public record Comment(String id, PostId postId, UserId authorId, String parentCo
 		return new Comment(id, postId, authorId, parentCommentId, content, mediaIds, createdAt, status, editedAt,
 			newPinned, mediaSpoiler);
 	}
+
+	/** Removed by moderation: kept for audit and the report review, hidden from every list. */
+	public Comment deleted() {
+		return new Comment(id, postId, authorId, parentCommentId, content, mediaIds, createdAt, CommentStatus.DELETED,
+			editedAt, false, mediaSpoiler);
+	}
 }

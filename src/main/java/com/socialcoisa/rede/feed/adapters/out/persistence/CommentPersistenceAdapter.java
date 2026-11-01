@@ -42,6 +42,13 @@ class CommentPersistenceAdapter implements CommentRepository {
 	}
 
 	@Override
+	public void markDeleted(Comment comment) {
+		// Same invariant as deleteById: a removed accepted answer cannot keep its question resolved.
+		posts.clearAcceptedAnswers(List.of(comment.id()));
+		repository.save(CommentJpaEntity.fromDomain(comment.deleted()));
+	}
+
+	@Override
 	public List<String> findPostIdsByAuthor(String authorId) {
 		return repository.findByAuthorId(authorId).stream()
 			.map(CommentJpaEntity::getPostId)

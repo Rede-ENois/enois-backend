@@ -89,6 +89,27 @@ Resposta (signup e login):
 | GET | `/api/recommendations/received/{userId}` | Recomendações recebidas | Sim |
 | GET | `/api/recommendations/given/{userId}` | Recomendações dadas | Sim |
 
+### Profile garden
+
+`GET /api/users/{username}`, `GET /api/users/by-id/{userId}` and `GET /api/me` carry the reputation
+garden next to `reputation`, computed on read in the same pass as the counts (never stored):
+
+```json
+"gardenStyle": "garden-cerrado",
+"garden": { "trajectory": 2, "relations": 1, "contribution": 0, "tenure": 3, "health": 2 }
+```
+
+- `trajectory`, `relations`, `contribution` and `tenure` are stages 0..3 from the fraction of each
+  reputation component's cap (195, 300, 420 and 120): below 10% is 0, below 35% is 1, below 70% is
+  2, otherwise 3.
+- `health` is 0..2 from the integrity penalty: none is 2, up to 150 points is 1, more is 0. It only
+  dims the garden colors.
+- Every account gets a garden, verified or not; the numeric `reputation` keeps its rule (0 without
+  a verified identity).
+- Lists and write responses (search, ranking, status and badge updates, profile edit) carry
+  `garden: null`.
+- `gardenStyle` is the equipped `GARDEN` item id, `null` for the default garden.
+
 ### PATCH /api/me/profile
 
 ```json
@@ -159,7 +180,43 @@ Cidade e UF (`city`, `state`) são estruturadas e separadas do `location` livre,
 }
 ```
 
-Tipos: `INSIGHT`, `ARTICLE`, `QUESTION`, `PROJECT`, `OPPORTUNITY`
+Tipos: `INSIGHT`, `ARTICLE`, `QUESTION`, `PROJECT`, `OPPORTUNITY`, `PAGE`, `NEWS`, `TUTORIAL`,
+`REVIEW`, `DIVERTIDO`, `MOMENT`, `BLOG`, `BUSINESS`, `POLL`
+
+#### Enquete (`type: "POLL"`)
+
+`content` é o **título da enquete** (até 400 caracteres) e `pollOptions` traz as alternativas: de
+**2 a 6**, cada uma com até 120 caracteres, sem repetição (a comparação ignora maiúsculas).
+
+```json
+{
+  "type": "POLL",
+  "content": "Qual linguagem você usa no trabalho?",
+  "pollOptions": ["Java", "Kotlin", "Go", "TypeScript"]
+}
+```
+
+Fora de `POLL` o campo `pollOptions` é ignorado (não vira linha no banco). O post volta com
+`poll: { options: [...], counts: [0,0,0,0], myVote: null, totalVotes: 0 }`.
+
+### POST /api/feed/posts/{postId}/poll/vote
+
+```json
+{ "option": 2 }
+```
+
+`option` é a **posição** da alternativa (0..5). O voto é **único e definitivo**: uma pessoa, um
+voto, sem troca depois. O segundo voto — na mesma alternativa ou em outra — responde
+**409 `ALREADY_VOTED`**, e a contagem não muda. Alternativa fora do intervalo (ou corpo sem
+`option`) responde 400 `INVALID_POLL_OPTION`; post que não é enquete responde 400 `NOT_A_POLL`.
+Sem sessão: 401. A resposta é o estado atualizado da enquete:
+
+```json
+{ "options": ["Java","Kotlin","Go","TypeScript"], "counts": [1,0,0,0], "myVote": 0, "totalVotes": 1 }
+```
+
+Todo `PostView` de um post `POLL` traz o campo `poll` (nas leituras de feed e de post único); a
+contagem é derivada de `poll_votes`, nunca um contador acumulado.
 
 ### GET /api/feed
 
@@ -198,18 +255,20 @@ Resposta:
 }
 ```
 
-`lastSeenAt` (ISO-8601 ou `null`): o marcador "Você está em dia" da pessoa **como estava antes desta
-visita**. Só vem na primeira página (sem `cursor`); páginas com `cursor` mandam `null` e o front guarda o
-valor recebido na primeira. Só vem nas abas em ordem cronológica (`ALL`, `UNSEEN`, filtros por tipo e as
-legadas); `FOR_YOU` (tópicos preferidos primeiro), `TRENDING` (por reações) e `INTERACTED` mandam sempre
-`null`, porque nelas "o primeiro post mais antigo" não marca a fronteira do que é novo. `null` na primeira página significa que a pessoa nunca marcou nada (não
-desenhe o divisor).
+`lastSeenAt` (ISO-8601 or `null`): the person's "Você está em dia" marker **as it was before this
+visit**. Only `tab=FOR_YOU` ("Para você") carries it, and only on the first page (no `cursor`); cursor
+pages and every other tab send `null`, and the front keeps the value it got on the first page. `null` on
+the first `FOR_YOU` page means the person never marked anything (do not draw the divider).
 
-Contrato do front: desenhe o divisor "Você está em dia" **antes do primeiro post com `createdAt` menor
-ou igual a `lastSeenAt`**, olhando os posts que a resposta trouxe (quarentena, silenciados e bloqueios já
-foram filtrados no servidor). Se nenhum post da lista carregada for tão antigo, o divisor ainda não aparece
-(ele surge quando a página com posts antigos chegar). Quando a pessoa rolar além do post mais recente,
-chame `POST /api/feed/seen` com o `createdAt` desse post (uma vez por visita basta).
+`FOR_YOU` pages are date windows: page N holds the `limit` newest visible posts older than the cursor, and
+the liked-topics boost only reorders posts inside the page. So no post is skipped or repeated, and a later
+page never holds a post newer than an earlier one.
+
+Front contract (`FOR_YOU` only): show the loaded posts with `createdAt` newer than `lastSeenAt` first,
+newest first ("new since your last visit"), then the "Você está em dia" divider, then the remaining posts
+in API order. Draw the divider only when there is at least one new post above it and one older post loaded
+below it. When the person scrolls past the newest post, call `POST /api/feed/seen` with that post's
+`createdAt` (once per visit is enough), only from `FOR_YOU`.
 
 ### POST /api/feed/seen
 
@@ -287,7 +346,8 @@ Tipos de reação: `LIKE`, `LOVE`, `CONGRATS`, `INSIGHTFUL`, `CURIOUS`
 | POST | `/api/me/onboarding/skip` | Conclui sem mudar nada | Sim |
 
 `onboardingCompleted` (boolean) vem em `/auth/me` e nas respostas de login/verificação: `false`
-só para contas criadas depois da V210 que ainda não concluíram nem pularam.
+enquanto a conta ainda não concluiu nem pulou. Vale para toda conta, inclusive as anteriores à
+V210 (a V224 desfez o preenchimento que as marcava como concluídas).
 
 `starter-pack` devolve até 6 comunidades (sem as que a pessoa já participa), até 6 grupos ativos
 de entrada aberta (sem os que já participa) e até 8 pessoas (contas ativas, verificadas e adultas,
@@ -477,6 +537,9 @@ carry `companySlug` (null when the job is not linked to a page).
 | GET | `/api/empresas/diretorio?query=&sector=&limit=60` | Directory (limit 1..200): pages first, then names from jobs, each by open jobs + projects | No |
 | GET | `/api/empresas/setores` | Distinct sectors of active pages | No |
 | GET | `/api/empresa/{slug}` | Page with projects, jobs, stats, reviews, viewer state | No (session adds viewer state) |
+
+Página fechada (removida pela moderação ou pela própria empresa) sai do diretório (`GET /api/empresas`)
+e responde `404 COMPANY_NOT_FOUND` em `/api/empresa/{slug}`; operações sobre ela dão `409 COMPANY_CLOSED`.
 | POST / DELETE | `/api/empresas/{companyId}/follow` | Follow / unfollow (idempotent) | Yes |
 | POST | `/api/microprojetos/{id}/proposals` | Proposal from the active professional profile | Yes |
 | POST | `/api/microprojetos/{id}/complete` | Complete, optionally with a review | Yes (EDITOR or above) |
@@ -509,6 +572,11 @@ Complete body  { rating?: 1..5, text?: <= 500 }     (400 INVALID_RATING)
 | POST | `/api/events/{eventId}/attendees` | Confirmar presença | Sim |
 | DELETE | `/api/events/{eventId}/attendees` | Cancelar presença | Sim |
 | PATCH | `/api/events/{eventId}/recurrence` | Ligar, trocar ou desligar a recorrência (só quem criou) | Sim |
+| PATCH | `/api/events/{eventId}` | Editar o evento (título, data, hora, formato, host, capa, stream, local; só quem criou) | Sim |
+| DELETE | `/api/events/{eventId}` | Excluir o evento (só quem criou) | Sim |
+
+`PATCH /api/events/{eventId}` valida exatamente igual à criação (`TextFieldLimit`, horário realista,
+`EVENT_CITY_NOT_IN_PERSON`) e devolve o `EventView`. Fora do dono: `403 NOT_EVENT_OWNER`.
 
 `POST /api/events` aceita `city` e `state` opcionais (mesmas regras do perfil). Evento `ONLINE` com
 cidade é `400 EVENT_CITY_NOT_IN_PERSON`. `GET /api/events?city=<cidade>&state=<UF>` lista só
@@ -538,17 +606,49 @@ encontros não online (`IN_PERSON`, `HYBRID`) daquele lugar, com a cidade compar
 
 ---
 
+## Busca de blogs
+
+`GET /api/blogs` aceita `query` opcional para buscar por título ou descrição antes de aplicar
+`limit`. Uma busca em branco mantém a listagem sem filtro. Os caracteres `%`, `_` e `!` são
+tratados como texto literal, assim como na busca de mentorias.
+
 ## Mentoria
 
 | Método | Rota | Descrição | Autenticação |
 |---|---|---|---|
-| GET | `/api/mentors` | Listar mentores | Sim |
+| GET | `/api/mentors` | Listar mentores; `query` opcional busca por nome, username ou especialidade, combinado com `expertise`, `cursor` e `limit` | Sim |
 | POST | `/api/mentors` | Registrar como mentor | Sim |
 | PATCH | `/api/mentors/{mentorId}` | Atualizar perfil de mentor | Sim |
 | DELETE | `/api/mentors/{mentorId}` | Remover perfil de mentor | Sim |
 | GET | `/api/mentors/{mentorId}/slots` | Listar horários | Sim |
 | POST | `/api/mentors/{mentorId}/slots` | Criar horário | Sim |
 | POST | `/api/mentors/{mentorId}/sessions` | Agendar sessão | Sim |
+| GET | `/api/mentors/{mentorId}/sessions` | Inscrições recebidas (só o dono) | Sim |
+| GET | `/api/mentors/sessions/mine` | Minhas sessões como mentorado | Sim |
+| POST | `/api/mentors/{mentorId}/sessions/{sessionId}/complete` | Concluir sessão (libera o escrow) | Sim |
+| POST | `/api/mentors/{mentorId}/sessions/{sessionId}/cancel` | Cancelar sessão (devolve o escrow) | Sim |
+| GET | `/api/mentors/{mentorId}/room` | Sala configurada (só o dono) | Sim |
+| GET | `/api/mentors/{mentorId}/sessions/{sessionId}/dial-in` | Entrar por telefone numa sala Jitsi (participantes) | Sim |
+
+### Sala da sessão
+
+`roomMode` no corpo de `POST`/`PATCH /api/mentors` decide de onde vem o link:
+
+| `roomMode` | Sala |
+|---|---|
+| `JITSI_SESSION` (padrão) | Uma sala Jitsi por sessão, criada no agendamento; nada a configurar |
+| `JITSI_PERMANENT` | Uma sala Jitsi fixa do mentor (`jitsiRoom` opcional; sem ele o slug vem do id) |
+| `CUSTOM` | Sala própria (`meetingUrl`, https) — Meet, Zoom, o que o mentor já usa |
+
+Sem `roomMode`, o campo é deduzido: link presente mantém a sala própria (compatibilidade com quem já
+tinha uma configurada) e nenhum link cai na sala Jitsi por sessão. Ao voltar para um modo Jitsi, o
+`meetingUrl` antigo sai do perfil (e mandar `meetingUrl` vazio também devolve a sessão ao Jitsi).
+
+O link é resolvido e gravado na sessão no agendamento (`roomUrl`/`roomMode` em `/mentors/sessions/mine`
+e nas inscrições recebidas), então trocar a sala do perfil não move uma sessão já marcada. A base do
+Jitsi é configurável em `rede.mentoring.jitsi.base-url` (padrão `https://meet.jit.si`) e a API pública
+em `rede.mentoring.jitsi.api-base`. O `dial-in` consulta `phoneNumberList`/`conferenceMapper` do
+`api.jitsi.net` e devolve lista vazia quando a API não responde — a sala no navegador não depende dela.
 
 ---
 
@@ -562,6 +662,7 @@ encontros não online (`IN_PERSON`, `HYBRID`) daquele lugar, com a cidade compar
 | POST | `/api/study-pairs/{pairId}/checkins` | Check-in da semana (`{note}`, até 500); repetir na semana edita | Sim (membro) |
 | POST | `/api/study-pairs/{pairId}/end` | Encerrar o par | Sim (membro) |
 | GET | `/api/study-pairs/goals/popular` | Objetivos com pedidos abertos (sem dado pessoal) | Sim |
+| GET | `/api/study-pairs/search?q=&limit=` | Buscar objetivos abertos por texto (anônimo, sem revelar quem pediu) | Sim |
 
 Contrato completo, regras e códigos de erro em [`STUDY_PAIRS.md`](STUDY_PAIRS.md).
 
@@ -627,12 +728,14 @@ Query params: `q=<termo>`, `types=users,communities,jobs,events,mentors`, `limit
 |---|---|---|---|
 | POST | `/api/reports` | Reportar conteúdo | Sim |
 | GET | `/api/admin/reports` | Listar reports pendentes | Sim |
-| POST | `/api/admin/reports/{reportId}/approve` | Aprovar report (deletar alvo) | Sim |
+| POST | `/api/admin/reports/{reportId}/approve` | Aprovar report (remove o alvo quando é post ou comentário do feed) | Sim |
 | POST | `/api/admin/reports/{reportId}/dismiss` | Rejeitar report | Sim |
 
 Razões: `AI_GENERATED`, `FAKE_CONTENT`, `SCAM`, `DISCRIMINATION`, `PREJUDICE`, `HARASSMENT`, `SPAM`, `VIOLENCE`, `SEXUAL_CONTENT`, `COPYRIGHT`, `OTHER`
 
-Target types: `POST`, `COMMENT`, `USER`, `JOB`, `GAME`, `GROUP_POST`, `GROUP_COMMENT`, `MESSAGE`
+Target types: `POST`, `COMMENT`, `USER`, `JOB`, `GAME`, `GROUP_POST`, `GROUP_COMMENT`, `MESSAGE`, `COMPANY`.
+Alvo `COMPANY` se remove por `POST /api/admin/reports/{reportId}/remove-company` (fecha a página, sem tocar
+na conta do dono); `ban`/`penalize` recusam esse alvo com `400 COMPANY_TARGET`.
 
 ---
 
@@ -688,11 +791,14 @@ A resposta será cacheadada e reutilizada se a mesma chave for reenviada.
 The catalog lives in `src/main/resources/cosmetics/catalog.json` and is validated at startup
 (unique ids and release orders, known collections, parseable windows, look items that exist and
 are for sale); a broken file stops the boot. Each item has `id`, `kind` (`FRAME`, `BADGE`,
-`NAME_STYLE`, `NAMEPLATE`, `BANNER`, `CARD_THEME`, `PROFILE_EFFECT`), `collection`, `name`,
+`NAME_STYLE`, `NAMEPLATE`, `BANNER`, `CARD_THEME`, `PROFILE_EFFECT`, `GARDEN`), `collection`, `name`,
 `description`, `priceMf`, `cssRing`, `releaseOrder`, `available` and `purchasable`.
 
 - `releaseOrder` is the positive, unique order of entry in the catalog. The 26 original frames
   keep 1 to 26, have `collection: null` and are always on sale; the seasonal items follow.
+- `GARDEN` items (`garden-cerrado`, `garden-mata-atlantica`, `garden-caatinga`, `garden-pampa`)
+  style the profile garden. They have `collection: null`, so they are always on sale; the equipped
+  one is `gardenStyle` on the profile (`users.garden_style`), and none equipped is the default garden.
 - Seasons are month-day windows in America/Sao_Paulo, inclusive, and may wrap the year. Out of
   season an item is listed with `available: false` and buying it returns `409 OUT_OF_SEASON`;
   owned items can always be equipped. Event rewards are never for sale (`403 NOT_FOR_SALE`).
@@ -791,3 +897,33 @@ Resposta:
 
 `GET /api/carteira` traz o mesmo objeto no campo `streak` (aditivo). Ler a sequência não credita
 nada; a presença é contada pelas ações descritas em `docs/COIN_ECONOMY.md`.
+
+## Release notes ("O que há de novo no Énóis")
+
+| Method | Route | Description | Auth |
+|---|---|---|---|
+| GET | `/api/novidades/atual` | Current release notes; `204` with no body when nothing is published | No |
+| PUT | `/api/admin/novidades` | Publishes or replaces the release notes | Admin |
+| DELETE | `/api/admin/novidades` | Takes the release notes down (`204`, idempotent) | Admin |
+
+`PUT` body and `GET`/`PUT` response:
+
+```json
+{ "items": [{ "title": "Enquetes", "description": "Agora dá para criar enquete no feed." }] }
+```
+
+```json
+{
+  "id": "ativo",
+  "items": [{ "title": "Enquetes", "description": "Agora dá para criar enquete no feed." }],
+  "publishedAt": "2026-10-31T13:00:00Z",
+  "updatedAt": "2026-10-31T13:00:00Z"
+}
+```
+
+There is a single release at a time (fixed id `ativo`): publishing replaces it. `publishedAt` is the
+first publication and survives edits; `updatedAt` changes on every publish and is the version key
+the front uses to show the popup once per release. Items are plain text, trimmed and passed through
+the same defense as post content (`PlainText.defuse`). `400` codes: `INVALID_RELEASE_ITEMS` (missing,
+empty or more than 8 items), `RELEASE_ITEM_TITLE_REQUIRED`, `RELEASE_ITEM_TITLE_TOO_LONG` (80),
+`RELEASE_ITEM_DESCRIPTION_REQUIRED`, `RELEASE_ITEM_DESCRIPTION_TOO_LONG` (240).

@@ -22,11 +22,13 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.socialcoisa.rede.coin.application.CoinService;
+import com.socialcoisa.rede.mentoring.application.port.out.JitsiDialInGateway;
 import com.socialcoisa.rede.mentoring.application.port.out.MentorRepository;
 import com.socialcoisa.rede.mentoring.domain.Mentor;
 import com.socialcoisa.rede.mentoring.domain.MentorAvailability;
 import com.socialcoisa.rede.mentoring.domain.MentorSession;
 import com.socialcoisa.rede.mentoring.domain.MentorSlot;
+import com.socialcoisa.rede.mentoring.domain.RoomMode;
 import com.socialcoisa.rede.mentoring.domain.SessionStatus;
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -55,13 +57,17 @@ public class MentorService {
 	private final MentorRepository repository;
 	private final Clock clock;
 	private final CoinService coins;
+	private final MentoringRooms rooms;
+	private final JitsiDialInGateway dialInGateway;
 	private final TransactionTemplate settlement;
 
-	public MentorService(MentorRepository repository, Clock clock, CoinService coins,
-			PlatformTransactionManager transactionManager) {
+	public MentorService(MentorRepository repository, Clock clock, CoinService coins, MentoringRooms rooms,
+			JitsiDialInGateway dialInGateway, PlatformTransactionManager transactionManager) {
 		this.repository = repository;
 		this.clock = clock;
 		this.coins = coins;
+		this.rooms = rooms;
+		this.dialInGateway = dialInGateway;
 		this.settlement = new TransactionTemplate(transactionManager);
 		this.settlement.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
 	}
@@ -84,13 +90,21 @@ public class MentorService {
 	@Transactional
 	public Mentor create(String userId, List<String> expertise, String price, String banner, String meetingUrl,
 			Long sparksPrice) {
+		return create(userId, expertise, price, banner, meetingUrl, sparksPrice, RoomMode.JITSI_SESSION, null);
+	}
+
+	@Transactional
+	public Mentor create(String userId, List<String> expertise, String price, String banner, String meetingUrl,
+			Long sparksPrice, RoomMode roomMode, String jitsiRoom) {
 		if (repository.findByUserId(userId).isPresent()) {
 			throw new ApiException(409, "ALREADY_MENTOR", "Voce ja esta cadastrado como mentor.");
 		}
-		String cleanUrl = sanitizeMeetingUrl(meetingUrl);
+		String candidateUrl = sanitizeMeetingUrl(meetingUrl);
+		RoomMode mode = validatedRoomMode(roomMode, candidateUrl);
+		String cleanUrl = mode == RoomMode.CUSTOM ? candidateUrl : null;
 		String id = "mentor_" + UUID.randomUUID().toString().replace("-", "");
 		Mentor mentor = Mentor.create(id, userId, expertise, price, banner, cleanUrl,
-			validarPrecoEmFaiscas(sparksPrice), clock.instant());
+			validarPrecoEmFaiscas(sparksPrice), mode, validatedJitsiRoom(jitsiRoom), clock.instant());
 		repository.save(mentor);
 		return mentor;
 	}
@@ -114,11 +128,57 @@ public class MentorService {
 	@Transactional
 	public Mentor update(String mentorId, List<String> expertise, String price, String banner, String meetingUrl,
 			Long sparksPrice, String userId) {
+		return update(mentorId, expertise, price, banner, meetingUrl, sparksPrice, null, null, userId);
+	}
+
+	@Transactional
+	public Mentor update(String mentorId, List<String> expertise, String price, String banner, String meetingUrl,
+			Long sparksPrice, RoomMode roomMode, String jitsiRoom, String userId) {
 		Mentor mentor = requireOwner(mentorId, userId);
-		Mentor updated = mentor.update(expertise, price, banner, sanitizeMeetingUrl(meetingUrl),
-			validarPrecoEmFaiscas(sparksPrice), clock.instant());
+		boolean urlProvided = meetingUrl != null;
+		String candidateUrl = sanitizeMeetingUrl(meetingUrl == null ? mentor.meetingUrl() : meetingUrl);
+		RoomMode mode;
+		if (roomMode != null) {
+			mode = validatedRoomMode(roomMode, candidateUrl);
+		} else if (!urlProvided) {
+			// A tela nao mandou modo nem link: o mentor continua com a sala que ja tinha.
+			mode = mentor.roomMode();
+		} else if (candidateUrl == null) {
+			// O mentor mandou o link vazio: a sala externa sai do perfil e a sessão volta ao Jitsi.
+			mode = RoomMode.JITSI_SESSION;
+		} else {
+			mode = validatedRoomMode(mentor.roomMode(), candidateUrl);
+		}
+		// Link externo so vale para sala propria: ao voltar para o Jitsi, o antigo (Meet, Zoom)
+		// some do perfil em vez de ficar anunciado como se ainda fosse a sala da sessao.
+		String cleanUrl = mode == RoomMode.CUSTOM ? candidateUrl : null;
+		// Sala permanente: mantém a que existe; nome novo só quando o mentor pediu um agora.
+		String room = roomMode == null || roomMode != RoomMode.JITSI_PERMANENT
+			? mentor.jitsiRoom()
+			: validatedJitsiRoom(jitsiRoom == null ? mentor.jitsiRoom() : jitsiRoom);
+		Mentor updated = mentor.update(expertise, price, banner, cleanUrl, validarPrecoEmFaiscas(sparksPrice), mode,
+			room, clock.instant());
 		repository.save(updated);
 		return updated;
+	}
+
+	/**
+	 * Modo de sala coerente com os dados: sala própria exige link; Jitsi funciona sem nada. Sem
+	 * modo informado, quem tem link configurado continua com sala própria (mesma regra do backfill
+	 * da migração) — e quem não tem, ganha a sala Jitsi por sessão.
+	 */
+	private RoomMode validatedRoomMode(RoomMode requested, String meetingUrl) {
+		RoomMode mode = requested != null ? requested
+			: (meetingUrl != null && !meetingUrl.isBlank() ? RoomMode.CUSTOM : RoomMode.JITSI_SESSION);
+		if (mode == RoomMode.CUSTOM && (meetingUrl == null || meetingUrl.isBlank())) {
+			throw new ApiException(400, "MEETING_URL_REQUIRED",
+				"Para usar uma sala propria, informe o link da sala.");
+		}
+		return mode;
+	}
+
+	private String validatedJitsiRoom(String jitsiRoom) {
+		return jitsiRoom == null ? null : rooms.sanitizeRoom(jitsiRoom);
 	}
 
 	/**
@@ -204,12 +264,15 @@ public class MentorService {
 		}
 		repository.saveSlot(slot.book());
 		String id = "mentor_session_" + UUID.randomUUID().toString().replace("-", "");
+		// A sala é resolvida agora e fica gravada na sessão: mudar a sala do perfil depois não move
+		// uma sessão já marcada (quem agendou já recebeu este link).
+		String roomUrl = rooms.sessionRoom(mentor, id);
 		// Sessão paga: as faíscas do mentorado vão para o escrow AGORA e só saem de lá na conclusão
 		// (menos a taxa da plataforma) ou no cancelamento (integral). Se não há saldo, a inscrição
 		// inteira falha e o horário continua livre — nada de sessão marcada sem pagamento.
 		Long price = mentor.sparksPrice();
 		MentorSession session = MentorSession.schedule(id, mentorId, menteeId, slotId, message, price,
-			clock.instant());
+			mentor.roomMode(), roomUrl, clock.instant());
 		if (price != null && price > 0) {
 			coins.ensureGenesisFor(menteeId);
 			coins.escrowHold(menteeId, price, escrowRef(session),
@@ -229,8 +292,8 @@ public class MentorService {
 		repository.delete(mentorId);
 	}
 
-	public List<Mentor> list(String expertise, java.time.Instant before, int limit) {
-		return repository.findAll(expertise, before, limit);
+	public List<Mentor> list(String expertise, String query, java.time.Instant before, int limit) {
+		return repository.findAll(expertise, query, before, limit);
 	}
 
 	public Mentor getById(String id) {
@@ -283,6 +346,77 @@ public class MentorService {
 	/** Sessões que EU marquei como mentorado (a pessoa também acompanha o que agendou). */
 	public List<MentorSession> sessionsByMentee(String menteeId) {
 		return repository.findSessionsByMentee(menteeId);
+	}
+
+	/**
+	 * Link da sala de uma sessão. Sessão antiga (marcada antes deste recurso) não tem o link
+	 * gravado, então ele é derivado do perfil do mentor na leitura — sem gravar nada.
+	 */
+	public String roomUrlOf(MentorSession session, Mentor mentor) {
+		if (session.roomUrl() != null && !session.roomUrl().isBlank()) {
+			return session.roomUrl();
+		}
+		return mentor == null ? null : rooms.sessionRoom(mentor, session.id());
+	}
+
+	/** Sessão vista por quem participa dela (mentor dono ou mentorado); qualquer outro recebe 403. */
+	public MentorSession sessionForParticipant(String sessionId, String userId) {
+		MentorSession session = repository.findSessionById(sessionId)
+			.orElseThrow(() -> new ApiException(404, "SESSION_NOT_FOUND", "Sessao nao encontrada."));
+		if (!session.menteeId().equals(userId)) {
+			Mentor mentor = repository.findById(session.mentorId()).orElse(null);
+			if (mentor == null || !mentor.userId().equals(userId)) {
+				throw new ApiException(403, "FORBIDDEN", "Voce nao participa desta sessao.");
+			}
+		}
+		return session;
+	}
+
+	/** Perfil do mentor exigindo que quem pede seja o dono (painel de configuração da sala). */
+	public Mentor ownMentor(String mentorId, String userId) {
+		return requireOwner(mentorId, userId);
+	}
+
+	/**
+	 * Sala que a próxima sessão vai usar, para o painel do mentor. Em
+	 * {@link RoomMode#JITSI_SESSION} ainda não existe link: a sala nasce no agendamento.
+	 */
+	public String mentorRoomUrl(Mentor mentor) {
+		if (mentor.roomMode() == RoomMode.JITSI_PERMANENT) {
+			return rooms.jitsiUrl(rooms.permanentRoom(mentor));
+		}
+		if (mentor.roomMode() == RoomMode.CUSTOM) {
+			return mentor.meetingUrl();
+		}
+		return null;
+	}
+	/** Sala no Jitsi (com dial-in pela API pública) ou sala própria do mentor. */
+	public boolean jitsiRoom(MentorSession session) {
+		return rooms.isJitsi(session.roomMode());
+	}
+
+	public String conferenceName(String roomUrl) {
+		return rooms.conferenceName(roomUrl);
+	}
+
+	/** Como entrar na conferência por telefone (API pública do Jitsi); vazio quando indisponível. */
+	public record SessionDialIn(String conference, String pin, List<String> numbers) {
+	}
+
+	public SessionDialIn dialIn(String sessionId, String userId) {
+		MentorSession session = sessionForParticipant(sessionId, userId);
+		if (!rooms.isJitsi(session.roomMode())) {
+			throw new ApiException(400, "NOT_A_JITSI_ROOM",
+				"Esta sessao usa uma sala externa; pergunte ao mentor como entrar.");
+		}
+		Mentor mentor = mentorOrNull(session.mentorId());
+		String roomUrl = roomUrlOf(session, mentor);
+		if (roomUrl == null) {
+			throw new ApiException(404, "ROOM_NOT_FOUND", "Sessao nao encontrada.");
+		}
+		String conference = rooms.conferenceName(roomUrl);
+		return new SessionDialIn(conference, dialInGateway.conferencePin(conference).orElse(null),
+			dialInGateway.phoneNumbers(conference));
 	}
 
 	/**

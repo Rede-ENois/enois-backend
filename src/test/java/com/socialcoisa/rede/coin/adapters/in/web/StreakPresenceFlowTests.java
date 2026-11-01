@@ -93,6 +93,39 @@ class StreakPresenceFlowTests {
 	}
 
 	@Test
+	void theBonusIsPaidEverySevenDaysNotEveryDayAfterTheSeventh() throws Exception {
+		LocalDate today = UserStreak.today(clock);
+		var eighth = auth("streak_day8");
+		jdbc.update("insert into user_streaks (user_id, current_days, longest_days, last_day, updated_at)"
+			+ " values (?, 7, 7, ?, current_timestamp)", eighth.userId(), today.minusDays(1));
+		var fourteenth = auth("streak_day14");
+		jdbc.update("insert into user_streaks (user_id, current_days, longest_days, last_day, updated_at)"
+			+ " values (?, 13, 13, ?, current_timestamp)", fourteenth.userId(), today.minusDays(1));
+
+		publish(eighth, "streak-day8-post");
+		publish(fourteenth, "streak-day14-post");
+
+		assertThat(presenceEntry(wallet(eighth), today, eighth.userId()).get("message").asText())
+			.isEqualTo("Presença diária");
+		assertThat(presenceEntry(wallet(fourteenth), today, fourteenth.userId()).get("message").asText())
+			.isEqualTo("Presença diária (bônus de 14 dias seguidos)");
+	}
+
+	@Test
+	void aFrozenDayDoesNotCountTowardsTheBonus() throws Exception {
+		var user = auth("streak_bonus_freeze");
+		LocalDate today = UserStreak.today(clock);
+		// 6 days up to the day before yesterday; yesterday is frozen and does not add, so today is day 7.
+		jdbc.update("insert into user_streaks (user_id, current_days, longest_days, last_day, updated_at)"
+			+ " values (?, 6, 6, ?, current_timestamp)", user.userId(), today.minusDays(2));
+
+		publish(user, "streak-bonus-freeze-post");
+
+		assertThat(presenceEntry(wallet(user), today, user.userId()).get("message").asText())
+			.isEqualTo("Presença diária (bônus de 7 dias seguidos)");
+	}
+
+	@Test
 	void existingPresenceHistoryIsKeptOnTheFirstTouch() throws Exception {
 		var user = auth("streak_legacy");
 		LocalDate today = UserStreak.today(clock);

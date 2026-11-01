@@ -59,24 +59,27 @@ class UserBlockPersistenceAdapter implements UserBlockRepository, BlockedUsersRe
 			.collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
 	}
 
+	/** Bloqueios + mutes: usado pelo feed, notificacoes e comentarios para filtrar conteudo. */
 	@Override
 	public Set<String> hiddenIdsFor(String userId) {
 		if (userId == null || userId.isBlank()) {
 			return Set.of();
 		}
-		return findHiddenIds(userId);
+		Set<String> hidden = findHiddenIds(userId);
+		muteRepository.findByMuterIdOrderByCreatedAtDesc(userId).stream()
+			.map(UserMuteJpaEntity::toDomain)
+			.map(com.socialcoisa.rede.network.domain.UserMute::mutedId)
+			.forEach(hidden::add);
+		return hidden;
 	}
 
+	/** So bloqueios (duas direcoes): usado pelo modulo de rede para conexoes, sugestoes e requests. */
 	@Override
 	public Set<String> findHiddenIds(String userId) {
 		Set<String> hidden = findBlockedIds(userId);
 		repository.findByBlockedId(userId).stream()
 			.map(UserBlockJpaEntity::toDomain)
 			.map(UserBlock::blockerId)
-			.forEach(hidden::add);
-		muteRepository.findByMuterIdOrderByCreatedAtDesc(userId).stream()
-			.map(UserMuteJpaEntity::toDomain)
-			.map(com.socialcoisa.rede.network.domain.UserMute::mutedId)
 			.forEach(hidden::add);
 		return hidden;
 	}

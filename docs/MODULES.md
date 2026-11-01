@@ -333,8 +333,8 @@ colunas, então salvar contadores nunca desfaz a escolha).
 | `accept(PostId, UserId, String commentId)` | Só o autor da dúvida; comentário ativo, da mesma dúvida e de outra pessoa. Notifica `ANSWER_ACCEPTED` e paga a recompensa de ajuda depois do commit (uma vez por dúvida; contas com menos de 7 dias não recebem) |
 | `unaccept(PostId, UserId)` | Reabre a dúvida (zera as duas colunas) |
 
-Comentário aceito apagado reabre a dúvida na mesma transação: `CommentRepository.deleteById` (autor e
-limpeza de banimento) e a purga de spam (`UserContentPurgeService`) zeram as duas colunas de quem
+Comentário aceito apagado reabre a dúvida na mesma transação: `CommentRepository.deleteById` (autor),
+`CommentRepository.markDeleted` (moderação e limpeza de banimento) e a purga de spam (`UserContentPurgeService`) zeram as duas colunas de quem
 apontava para ele. A recompensa já paga fica (a ref é por dúvida).
 
 `PostView` expõe `acceptedCommentId` e `resolved`; `CommentView` expõe `accepted`. O feed `ALL`
@@ -359,7 +359,7 @@ o mesmo do post comum: pergunta técnica precisa de espaço para código.
 | `Post` | Entidade principal: id, authorId, type, content, visibility, counters, status, createdAt |
 | `PostId` | Value object para ID de post (`post_<uuid>`) |
 | `UserId` | Value object para ID de usuário |
-| `PostType` | Enum: `INSIGHT`, `ARTICLE`, `QUESTION`, `PROJECT`, `OPPORTUNITY` |
+| `PostType` | Enum: `INSIGHT`, `ARTICLE`, `QUESTION`, `PROJECT`, `OPPORTUNITY`, `POLL` (enquete), ... |
 | `Visibility` | Enum: `PUBLIC`, `CONNECTIONS`, `COMMUNITY` |
 | `PostStatus` | Enum: `ACTIVE`, `DELETED` |
 | `Comment` | Entidade: id, postId, authorId, parentCommentId, content, status |
@@ -390,7 +390,7 @@ o mesmo do post comum: pergunta técnica precisa de espaço para código.
 | Interface | Métodos principais |
 |---|---|
 | `PostRepository` | `save`, `findById`, `findByIds`, `findActiveByAuthors`, `findActiveByAuthor`, `findActiveAll`, `findActiveByType`, `findActiveByCommunity` |
-| `CommentRepository` | `save`, `findById`, `deleteById`, `findActiveByPost`, `findPostIdsByAuthor` |
+| `CommentRepository` | `save`, `findById`, `deleteById`, `markDeleted`, `findActiveByPost`, `findPostIdsByAuthor` |
 | `PostInteractionRepository` | `addReaction`, `removeReaction`, `addSave`, `removeSave`, `addShare`, `addCommentReaction`, `removeCommentReaction`, `findReactionsByPostId`, `findReactionsByCommentId`, `findSavedPostIdsByUserId`, `findReactionsByUserAndPostIds` |
 | `IdGenerator` | `generate()` |
 | `ConnectionGraphRepository` | `findFriends`, `findFriendsOfFriends`, `findUserTags` |
@@ -437,13 +437,15 @@ Um ponto de parada explícito no feed ("você já viu tudo o que é novo desde a
 rolagem infinita. Uma linha por pessoa em `feed_seen_markers` (V214), lida e gravada por
 `FeedSeenMarkerRepository` (`FeedSeenMarkerJdbcAdapter`).
 
-- `GET /api/feed` sem `cursor` devolve `lastSeenAt`: o marcador **antes** desta visita (ou `null`).
-  Páginas com `cursor` devolvem `null`; o front guarda o valor da primeira página. Abas ranqueadas
-  (`FOR_YOU`, `TRENDING`, `INTERACTED`) também devolvem `null`: o divisor depende de ordem cronológica.
+- `GET /api/feed?tab=FOR_YOU` without `cursor` returns `lastSeenAt`: the marker **before** this visit (or
+  `null`). Cursor pages and every other tab return `null` (maintainer decision: the marker belongs to
+  "Para você" only). The front keeps the first page's value for the whole visit.
+- `FOR_YOU` pages are date windows (`GetFeedService.forYou`): the `limit` newest visible posts, cursor =
+  the oldest of them; the liked-topics boost reorders only inside the page.
 - `POST /api/feed/seen {seenUntil}` é um único upsert com `greatest(...)`: o marcador nunca volta, mesmo
   com chamadas concorrentes ou fora de ordem, e o valor é limitado ao relógio do servidor (sem futuro).
-- Front: desenhar o divisor "Você está em dia" antes do primeiro post com `createdAt <= lastSeenAt`;
-  chamar `POST /api/feed/seen` com o `createdAt` do post mais recente depois que a pessoa rolar além dele.
+- Front: on "Para você", posts newer than `lastSeenAt` go first (newest first), then the divider, then
+  the rest in API order; `POST /api/feed/seen` with the newest `createdAt` once the person scrolls past it.
 
 ---
 
@@ -1041,9 +1043,21 @@ Detalhes em [`DIGEST.md`](DIGEST.md).
 | Função | Descrição |
 |---|---|
 | `report(String reporterId, String targetType, String targetId, String reason, String description)` | Cria report de conteúdo |
-| `approve(String reportId, String reviewerId)` | Aprova report, deleta post alvo (soft-delete) |
+| `approve(String reportId, String reviewerId, String note)` | Aprova report e remove o alvo quando é post ou comentário do feed (soft-delete) |
+| `ban(String reportId, String reviewerId, AuthSessionRepository sessions)` | Remove o alvo (post ou comentário), bane o autor e revoga as sessões |
 | `dismiss(String reportId, String reviewerId)` | Rejeita report |
 | `listPending(int limit)` | Lista reports pendentes |
+
+**Remoção do alvo confirmado** (`ReportedContentRemover`): aprovar, penalizar (IA ou voto de
+moderadores) e banir removem o conteúdo denunciado pelo mesmo caminho. Post sai por
+`ModerationRemovePostUseCase`; comentário do feed sai por `ModerationRemoveCommentUseCase`
+(`DeleteCommentService.removeAsModerator`): status `DELETED`, some das listas, o contador de
+comentários do post devolve a unidade, o aceite de resposta é desfeito e a ação vai para o audit log
+(`COMMENT_DELETED_BY_MODERATION`). A linha fica (soft-delete) para a revisão da denúncia, o recurso e a
+contagem de fatos confirmados da reputação. Respostas ao comentário removido continuam no ar; o
+front as mostra como comentário de primeiro nível. Os demais alvos (perfil, vaga, jogo, grupo,
+mensagem) não têm remoção automática: o time age no módulo do alvo. A limpeza de banimento
+(`BanCleanupService`) remove os comentários do banido pelo mesmo caso de uso.
 
 ### Domain Objects
 
@@ -1213,6 +1227,52 @@ integração com issues do GitHub e log de e-mails no painel.
 | `GET /admin/support/{id}/messages` | Conversa do ticket: respostas do painel + comentários da issue |
 | `GET /admin/support/github` / `PUT /admin/support/github` / `POST /webhooks/github` | Integração de issues (espelho, comentários e estado) |
 | `GET /admin/emails` | Log de metadados de e-mails enviados (sem conteúdo de 2FA) |
+
+### 22.1 Suggestions (Sugestões da comunidade)
+
+Separado do suporte. A pessoa escolhe o destino (`BACKEND`, `FRONTEND` ou `DESIGN_SYSTEM`) e envia
+título + texto. A sugestão nasce `PENDING`; um moderador aprova e só então o app abre uma issue
+**pública** no repositório do destino. A issue leva apenas o título e o texto (menções `@` são
+quebradas para não notificar ninguém): nome, e-mail e id de quem sugeriu nunca vão junto, e a tabela
+`suggestions` nem guarda e-mail de contato. Limite de 5 sugestões por pessoa em 24h.
+
+A aprovação é reivindicada de forma atômica (`PENDING` -> `PUBLISHED`) antes de falar com o GitHub:
+duas aprovações simultâneas não abrem duas issues, e falha do GitHub devolve a sugestão para a fila.
+
+#### Configuração e operação
+
+**Token.** As sugestões usam o **mesmo token das issues do suporte**, para a equipe ter um token de
+issues só e uma rotação só. Ele fica cifrado no banco e é trocado em `/admin/support/github` (só
+admin), sem reiniciar o pod; o módulo lê o valor a cada chamada. Não existe secret nem variável de
+token próprios das sugestões. Os outros tokens GitHub do projeto não servem para isso:
+`GITHUB_CONTRIBUTIONS_TOKEN` (selos) é somente leitura e `GITOPS_TOKEN` é do repositório de deploy.
+
+Como esse token também enxerga o repositório privado de suporte, o que sai para a issue pública é
+só título e texto da sugestão (nunca nome, e-mail ou id), e o token **precisa de escrita em Issues
+em cada repositório de destino**. Um token fine-grained limitado ao repositório de suporte devolve
+erro do GitHub e a aprovação responde 502 (a sugestão volta para a fila).
+
+**Repositórios de destino** (variáveis de ambiente; vêm do deploy como `vars` do GitHub Actions
+`SUGGESTIONS_REPO_*`):
+
+| Variável | Descrição |
+|---|---|
+| `GITHUB_SUGGESTIONS_REPO_BACKEND` / `_FRONTEND` / `_DESIGN_SYSTEM` | Repositório de cada destino, no formato `dono/nome` |
+
+Destino sem repositório (ou com formato inválido) fica desligado: a aprovação responde 503 e a
+sugestão continua pendente. Sem token do suporte configurado, todos os destinos ficam desligados.
+
+**QA e produção usam os mesmos repositórios.** Aprovar uma sugestão na QA abre uma issue pública de
+verdade nos repositórios oficiais; aprove na QA só o que pode ficar público.
+
+**Falhas comuns na aprovação:** 503 = destino sem repositório ou token do suporte ausente; 502 = o
+GitHub recusou (token sem escrita em Issues naquele repositório, token expirado ou GitHub fora do ar).
+Em ambos a sugestão continua `PENDING` e pode ser aprovada de novo depois de corrigir.
+
+| Rota | Descrição |
+|---|---|
+| `POST /suggestions` / `GET /suggestions/mine` | Enviar sugestão / minhas sugestões (com o link da issue após aprovação) |
+| `GET /admin/suggestions` / `POST /admin/suggestions/{id}/approve` / `POST /admin/suggestions/{id}/reject` | Fila, aprovar e publicar, rejeitar (equipe de moderação) |
 
 ## 23. Ops (Monitoramento e operação)
 
@@ -1486,3 +1546,23 @@ o check-in da semana, reivindicado em `study_pair_reminders` (seguro com várias
 | `StudyPairController` | Rotas `/study-pairs/**` |
 
 Detalhes e contrato em [`STUDY_PAIRS.md`](STUDY_PAIRS.md).
+
+## 40. ReleaseNotes (Novidades)
+
+The "O que há de novo no Énóis" popup: admins publish a short list of plain text items from the
+panel and the front shows it once per release. Separate from the admin notice (`notices/`), which is
+sanitized HTML for a banner/modal. A single row in `release_note` (V225, fixed id `ativo`) with the
+items as a JSON array; publishing replaces it, keeping `publishedAt` and bumping `updatedAt` (the
+version key the front uses).
+
+| Route | Description |
+|---|---|
+| `GET /novidades/atual` | Public read; `204` when nothing is published |
+| `PUT /admin/novidades` | Publish or replace (admin) |
+| `DELETE /admin/novidades` | Take it down (admin) |
+
+Validation: 1 to 8 items, title up to 80 and description up to 240 characters, both required after
+trim and `PlainText.defuse`. Contract in [`API.md`](API.md#release-notes-o-que-há-de-novo-no-énóis).
+
+Files: `ReleaseNoteController`, `ReleaseNoteService`, `ReleaseNoteRepository`,
+`ReleaseNotePersistenceAdapter`, `ReleaseNoteJpaEntity`.

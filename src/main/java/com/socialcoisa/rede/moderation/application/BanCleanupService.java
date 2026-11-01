@@ -16,6 +16,7 @@ import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.Comment;
 import com.socialcoisa.rede.feed.domain.PostStatus;
 import com.socialcoisa.rede.feed.domain.UserId;
+import com.socialcoisa.rede.feed.application.port.in.ModerationRemoveCommentUseCase;
 import com.socialcoisa.rede.feed.application.port.in.ModerationRemovePostUseCase;
 import com.socialcoisa.rede.messaging.application.port.out.MessagingRepository;
 import com.socialcoisa.rede.messaging.domain.Message;
@@ -41,6 +42,7 @@ public class BanCleanupService {
 	private final CommentRepository commentRepository;
 	private final MessagingRepository messagingRepository;
 	private final ModerationRemovePostUseCase removePost;
+	private final ModerationRemoveCommentUseCase removeComment;
 	private final BanContentArchiveRepository archive;
 	private final ConnectionRepository connectionRepository;
 	private final JdbcTemplate jdbc;
@@ -49,12 +51,14 @@ public class BanCleanupService {
 
 	public BanCleanupService(PostRepository postRepository, CommentRepository commentRepository,
 			MessagingRepository messagingRepository, ModerationRemovePostUseCase removePost,
+			ModerationRemoveCommentUseCase removeComment,
 			BanContentArchiveRepository archive, ConnectionRepository connectionRepository, JdbcTemplate jdbc,
 			SuspiciousContentTargets sweepTargets, Clock clock) {
 		this.postRepository = postRepository;
 		this.commentRepository = commentRepository;
 		this.messagingRepository = messagingRepository;
 		this.removePost = removePost;
+		this.removeComment = removeComment;
 		this.archive = archive;
 		this.connectionRepository = connectionRepository;
 		this.jdbc = jdbc;
@@ -100,7 +104,8 @@ public class BanCleanupService {
 			try {
 				String snapshot = snapshotComment(comment);
 				archive.archive(sanctionId, userId, "COMMENT", comment.id(), snapshot, now);
-				commentRepository.deleteById(comment.id());
+				// Same removal as a moderated comment: the post counter gives it back.
+				removeComment.removeAsModerator("ban-cleanup", comment.id(), "BAN:" + sanctionId);
 			} catch (RuntimeException e) {
 				LOG.warn("Falha ao arquivar comentario {} do usuario {}: {}", comment.id(), userId, e.getMessage());
 			}

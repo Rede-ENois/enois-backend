@@ -45,7 +45,7 @@ class FeedSeenMarkerTests {
 	@Test
 	void firstVisitHasNoMarkerAndTheNextFirstPageReturnsIt() throws Exception {
 		var leitor = auth.authenticate("seenmk_first");
-		mockMvc.perform(get("/feed").param("tab", "ALL").header("X-Session-Token", leitor.token()))
+		mockMvc.perform(get("/feed").param("tab", "FOR_YOU").header("X-Session-Token", leitor.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.items").isArray())
 			.andExpect(jsonPath("$.lastSeenAt").value(nullValue()));
@@ -80,23 +80,23 @@ class FeedSeenMarkerTests {
 		var leitor = auth.authenticate("seenmk_cursor");
 		markSeen(leitor.token(), Instant.now().minus(Duration.ofHours(2)).toString());
 
-		mockMvc.perform(get("/feed").param("tab", "ALL").param("cursor", Instant.now().toString())
+		mockMvc.perform(get("/feed").param("tab", "FOR_YOU").param("cursor", Instant.now().toString())
 				.header("X-Session-Token", leitor.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.lastSeenAt").value(nullValue()));
 	}
 
 	@Test
-	void rankedTabsDoNotCarryTheMarker() throws Exception {
-		var leitor = auth.authenticate("seenmk_ranked");
+	void onlyForYouCarriesTheMarker() throws Exception {
+		var leitor = auth.authenticate("seenmk_tabs");
 		markSeen(leitor.token(), Instant.now().minus(Duration.ofHours(2)).toString());
 
-		for (String tab : new String[] { "FOR_YOU", "TRENDING", "INTERACTED" }) {
+		for (String tab : new String[] { "ALL", "UNSEEN", "TRENDING", "INTERACTED", "PROJECTS" }) {
 			mockMvc.perform(get("/feed").param("tab", tab).header("X-Session-Token", leitor.token()))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.lastSeenAt").value(nullValue()));
 		}
-		mockMvc.perform(get("/feed").param("tab", "UNSEEN").header("X-Session-Token", leitor.token()))
+		mockMvc.perform(get("/feed").param("tab", "FOR_YOU").header("X-Session-Token", leitor.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.lastSeenAt").isNotEmpty());
 	}
@@ -127,7 +127,7 @@ class FeedSeenMarkerTests {
 	}
 
 	private Instant lastSeenAt(String token) throws Exception {
-		String body = mockMvc.perform(get("/feed").param("tab", "ALL").header("X-Session-Token", token))
+		String body = mockMvc.perform(get("/feed").param("tab", "FOR_YOU").header("X-Session-Token", token))
 			.andExpect(status().isOk())
 			.andReturn().getResponse().getContentAsString();
 		return Instant.parse(objectMapper.readTree(body).get("lastSeenAt").asText());

@@ -13,7 +13,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
-import com.socialcoisa.rede.feed.application.port.in.ModerationRemovePostUseCase;
 import com.socialcoisa.rede.moderation.application.port.out.AppealRepository;
 import com.socialcoisa.rede.moderation.application.port.out.ReportRepository;
 import com.socialcoisa.rede.moderation.application.port.out.ReportedContentAuthorReader;
@@ -42,14 +41,14 @@ public class SanctionService {
 	private final AppealRepository appeals;
 	private final ReportRepository reports;
 	private final ReportedContentAuthorReader contentAuthors;
-	private final ModerationRemovePostUseCase moderationRemovePostUseCase;
+	private final ReportedContentRemover contentRemover;
 	private final NotificationService notificationService;
 	private final BanCleanupService banCleanup;
 	private final UserProfileRepository profiles;
 	private final Clock clock;
 
 	public SanctionService(SanctionRepository sanctions, AppealRepository appeals, ReportRepository reports,
-			ReportedContentAuthorReader contentAuthors, ModerationRemovePostUseCase moderationRemovePostUseCase,
+			ReportedContentAuthorReader contentAuthors, ReportedContentRemover contentRemover,
 			NotificationService notificationService, BanCleanupService banCleanup, UserProfileRepository profiles,
 			Clock clock) {
 		this.profiles = profiles;
@@ -57,15 +56,15 @@ public class SanctionService {
 		this.appeals = appeals;
 		this.reports = reports;
 		this.contentAuthors = contentAuthors;
-		this.moderationRemovePostUseCase = moderationRemovePostUseCase;
+		this.contentRemover = contentRemover;
 		this.notificationService = notificationService;
 		this.banCleanup = banCleanup;
 		this.clock = clock;
 	}
 
 	/**
-	 * Aplica a penalidade de um veredito PENALIZAR da pre-triagem: remove o conteudo (quando
-	 * post), restringe o autor e notifica com o caminho do recurso. So vale para alvo com autor
+	 * Aplica a penalidade de um veredito PENALIZAR da pre-triagem: remove o conteudo (post ou
+	 * comentario), restringe o autor e notifica com o caminho do recurso. So vale para alvo com autor
 	 * inequivoco (post/comentario); o resto segue para revisao humana.
 	 */
 	@Transactional
@@ -77,10 +76,7 @@ public class SanctionService {
 		if (authorId == null) {
 			return false; // alvo sem autor claro (perfil, vaga): revisao humana decide
 		}
-		if (report.targetType().name().equals("POST")) {
-			moderationRemovePostUseCase.removeAsModerator("ia-triagem", report.targetId(),
-				"IA:" + report.reason().name());
-		}
+		contentRemover.remove(report, "ia-triagem", "IA");
 		if (sanctions.findActiveByUser(authorId).isEmpty()) {
 			String id = "sanc_" + UUID.randomUUID().toString().replace("-", "");
 			sanctions.save(UserSanction.create(id, authorId, report.id(), motive, Instant.now(clock)));

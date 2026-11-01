@@ -2,6 +2,7 @@ package com.socialcoisa.rede.profile.application;
 
 import java.util.List;
 
+import com.socialcoisa.rede.profile.domain.ReputationGarden;
 import com.socialcoisa.rede.profile.domain.UserProfile;
 
 /**
@@ -23,7 +24,14 @@ public record UserProfileView(String id, String username, String name, String he
 		/** Quando a pessoa chegou na plataforma: o "ranking" público lista quem chegou por último. */
 		String joinedAt,
 		/** Cidade/UF: so saem quando a pessoa ligou `showCity` (privado por padrao). */
-		String city, String state) {
+		String city, String state,
+		/** Equipped GARDEN item id; null = the default garden. */
+		String gardenStyle,
+		/**
+		 * Reputation garden stages. Only the single-profile reads ({@code /users/{username}},
+		 * {@code /users/by-id/{id}}) compute it; lists and write responses carry null.
+		 */
+		ReputationGarden garden) {
 
 	public static UserProfileView from(UserProfile profile) {
 		return new UserProfileView(profile.id(), profile.username(), profile.displayWithNickname(), profile.headline(),
@@ -35,7 +43,8 @@ public record UserProfileView(String id, String username, String name, String he
 			profile.contributorTagColor(), profile.cardTheme(), profile.nameplate(), profile.bannerItem(),
 			profile.profileEffect(), profile.statusText(), profile.statusIcon(), profile.createdAt() == null ? null : profile.createdAt().toString(),
 			profile.publicPlace() == null ? null : profile.publicPlace().city(),
-			profile.publicPlace() == null ? null : profile.publicPlace().state());
+			profile.publicPlace() == null ? null : profile.publicPlace().state(), profile.gardenStyle(),
+			profile.garden());
 
 	}
 
@@ -47,7 +56,8 @@ public record UserProfileView(String id, String username, String name, String he
 		return new UserProfileView(id, username, name, headline, company, location, avatar, banner, badge, bio, bioHtml,
 			bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, connectionsCount,
 			followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme, nameFont, nameColor,
-			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state);
+			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state,
+			gardenStyle, garden);
 	}
 
 	/** Capa em HTML/CSS; so a leitura do perfil anexa (mesmo motivo da bio). */
@@ -55,6 +65,7 @@ public record UserProfileView(String id, String username, String name, String he
 		return new UserProfileView(id, username, name, headline, company, location, avatar, banner, badge, bio, bioHtml,
 			bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, connectionsCount,
 			followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme, nameFont, nameColor,
-			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state);
+			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state,
+			gardenStyle, garden);
 	}
 }

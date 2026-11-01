@@ -26,6 +26,10 @@ public class UserProfile {
 	private String nameplate;
 	private String bannerItem;
 	private String profileEffect;
+	/** Garden style item (GARDEN catalog id); null = the default garden. */
+	private String gardenStyle;
+	/** Reputation garden, computed on read with the counts (never persisted); null when not computed. */
+	private ReputationGarden garden;
 	/** Recado curto do perfil (texto ja limpo) e o icone de emblema que o acompanha. */
 	private String statusText;
 	private String statusIcon;
@@ -553,6 +557,28 @@ public class UserProfile {
 		this.nameplate = nameplate;
 		this.bannerItem = bannerItem;
 		this.profileEffect = profileEffect;
+	}
+
+	/** Equips (or clears, with null) the garden style. */
+	public void updateGardenStyle(String gardenStyle, Instant now) {
+		hydrateGardenStyle(gardenStyle);
+		this.updatedAt = now;
+	}
+
+	public void hydrateGardenStyle(String gardenStyle) {
+		this.gardenStyle = gardenStyle;
+	}
+
+	public String gardenStyle() {
+		return gardenStyle;
+	}
+
+	public void setGarden(ReputationGarden garden) {
+		this.garden = garden;
+	}
+
+	public ReputationGarden garden() {
+		return garden;
 	}
 
 	/** Recado do perfil; texto e icone ja validados no service (null limpa). */

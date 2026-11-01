@@ -17,8 +17,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
@@ -77,6 +79,26 @@ class OnboardingFlowTests {
 		assertThat(me(user).get("onboardingCompleted").asBoolean()).isTrue();
 		assertThat(jdbc.queryForObject("select count(*) from user_preferences where user_id = ?", Integer.class,
 			user.userId())).isZero();
+	}
+
+	@Test
+	void accountsBackfilledAsCompletedSeeOnboardingAgainButRealCompletionsStay() throws Exception {
+		AuthSession existing = auth.authenticate("onb-old-" + shortId());
+		jdbc.update("update users set onboarding_completed_at = created_at where id = ?", existing.userId());
+		assertThat(me(existing).get("onboardingCompleted").asBoolean()).isTrue();
+
+		AuthSession skipped = auth.authenticate("onb-done-" + shortId());
+		mockMvc.perform(post("/me/onboarding/skip").header("X-Session-Token", skipped.token()))
+			.andExpect(status().isOk());
+
+		jdbc.execute((java.sql.Connection connection) -> {
+			ScriptUtils.executeSqlScript(connection,
+				new ClassPathResource("db/migration/V224__onboarding_for_existing_accounts.sql"));
+			return null;
+		});
+
+		assertThat(me(existing).get("onboardingCompleted").asBoolean()).isFalse();
+		assertThat(me(skipped).get("onboardingCompleted").asBoolean()).isTrue();
 	}
 
 	@Test

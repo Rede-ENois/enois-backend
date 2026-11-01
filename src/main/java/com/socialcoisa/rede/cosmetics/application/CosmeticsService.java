@@ -275,6 +275,7 @@ public class CosmeticsService implements OfficialBadgeReader {
 				item.kind() == CosmeticKind.PROFILE_EFFECT ? swap(profile.profileEffect(), id, equip)
 					: profile.profileEffect(),
 				now);
+			case GARDEN -> profile.updateGardenStyle(swap(profile.gardenStyle(), id, equip), now);
 			case BADGE -> throw new IllegalArgumentException("Badges go to the badge list.");
 		}
 	}
@@ -296,6 +297,7 @@ public class CosmeticsService implements OfficialBadgeReader {
 			case BANNER -> id.equals(profile.bannerItem());
 			case CARD_THEME -> id.equals(profile.cardTheme());
 			case PROFILE_EFFECT -> id.equals(profile.profileEffect());
+			case GARDEN -> id.equals(profile.gardenStyle());
 		};
 	}
 

@@ -262,7 +262,11 @@
 {"releaseOrder": 247, "id": "emblema-time-saci", "kind": "BADGE", "collection": "saci", "name": "Time Saci", "description": "Recompensa de evento. Não está à venda.", "priceMf": 0, "purchasable": false, "icon": "carapuca"},
 {"releaseOrder": 248, "id": "emblema-time-halloween", "kind": "BADGE", "collection": "halloween", "name": "Time Halloween", "description": "Recompensa de evento. Não está à venda.", "priceMf": 0, "purchasable": false, "icon": "morcegoRoxo"},
 {"releaseOrder": 249, "id": "emblema-vitoria-saci", "kind": "BADGE", "collection": "saci", "name": "Vitória do Time Saci", "description": "Recompensa de evento. Não está à venda.", "priceMf": 0, "purchasable": false, "icon": "carapuca"},
-{"releaseOrder": 250, "id": "emblema-vitoria-halloween", "kind": "BADGE", "collection": "halloween", "name": "Vitória do Time Halloween", "description": "Recompensa de evento. Não está à venda.", "priceMf": 0, "purchasable": false, "icon": "morcegoRoxo"}
+{"releaseOrder": 250, "id": "emblema-vitoria-halloween", "kind": "BADGE", "collection": "halloween", "name": "Vitória do Time Halloween", "description": "Recompensa de evento. Não está à venda.", "priceMf": 0, "purchasable": false, "icon": "morcegoRoxo"},
+{"releaseOrder": 251, "id": "garden-cerrado", "kind": "GARDEN", "collection": null, "name": "Jardim do Cerrado", "description": "Ipê, pequizeiro e capim dourado no seu perfil.", "priceMf": 4000, "purchasable": true},
+{"releaseOrder": 252, "id": "garden-mata-atlantica", "kind": "GARDEN", "collection": null, "name": "Jardim da Mata Atlântica", "description": "Bromélias, samambaias e um verde bem fechado.", "priceMf": 4000, "purchasable": true},
+{"releaseOrder": 253, "id": "garden-caatinga", "kind": "GARDEN", "collection": null, "name": "Jardim da Caatinga", "description": "Mandacaru, xique-xique e flores que resistem ao sol.", "priceMf": 4000, "purchasable": true},
+{"releaseOrder": 254, "id": "garden-pampa", "kind": "GARDEN", "collection": null, "name": "Jardim do Pampa", "description": "Campo aberto, macela e o vento do sul.", "priceMf": 4000, "purchasable": true}
 ],
 "looks": [
 {"collection": "halloween", "title": "Noite azul", "items": ["tema-halloween", "moldura-asas-morcego", "nome-assombrado", "efeito-morcegos", "banner-halloween", "placa-teia", "emblema-morcego", "emblema-abobora", "emblema-fantasma", "emblema-aranha", "emblema-lua"], "statusIcon": "morcego", "statusText": "Deploy na sexta 13, vai dar bom"},

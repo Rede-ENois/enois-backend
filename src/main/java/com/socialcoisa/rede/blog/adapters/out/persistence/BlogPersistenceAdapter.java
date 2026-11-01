@@ -39,8 +39,9 @@ class BlogPersistenceAdapter implements BlogRepository {
 	}
 
 	@Override
-	public List<Blog> findAll(int limit) {
-		return springData.findAllByOrderByCreatedAtDesc(PageRequest.of(0, limit)).stream()
+	public List<Blog> findAll(String query, int limit) {
+		String like = com.socialcoisa.rede.shared.web.LikePattern.contains(query);
+		return springData.findDirectory(like, PageRequest.of(0, limit)).stream()
 			.map(BlogJpaEntity::toDomain)
 			.toList();
 	}

@@ -2,7 +2,6 @@ package com.socialcoisa.rede.feed.adapters.in.web;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Set;
 
 import com.socialcoisa.rede.feed.application.FeedPage;
 import com.socialcoisa.rede.feed.application.PostView;
@@ -13,16 +12,15 @@ import com.socialcoisa.rede.feed.domain.FeedTab;
  * BEFORE this visit. Only the first page (no cursor) carries it; cursor pages send null and the front
  * keeps the value it got on the first page.
  *
- * <p>The front draws the divider before the first returned post with {@code createdAt <= lastSeenAt},
- * which only makes sense when the page is newest-first. FOR_YOU (preferred topics first), TRENDING
- * (by reactions) and INTERACTED (posts the person touched) are not, so they always send null.
+ * <p>Only FOR_YOU carries it (maintainer decision: the marker belongs to "Para voce", the default
+ * tab). FOR_YOU pages are date windows reordered by relevance inside the page, so the front shows the
+ * posts newer than {@code lastSeenAt} first (newest first), then the divider, then the rest in API
+ * order.
  */
 record FeedResponse(List<PostView> items, String nextCursor, Instant lastSeenAt) {
 
-	private static final Set<FeedTab> RANKED_TABS = Set.of(FeedTab.FOR_YOU, FeedTab.TRENDING, FeedTab.INTERACTED);
-
 	static boolean carriesMarker(FeedTab tab) {
-		return tab != null && !RANKED_TABS.contains(tab);
+		return tab == FeedTab.FOR_YOU;
 	}
 
 	static FeedResponse of(FeedPage page, Instant lastSeenAt) {

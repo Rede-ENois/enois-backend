@@ -30,7 +30,7 @@ class CosmeticCatalogTests {
 	@Test
 	void shippedCatalogLoadsWithEveryCollectionAndLook() {
 		CosmeticCatalog catalog = new CosmeticCatalog(JsonMapper.builder().build());
-		assertThat(catalog.items()).hasSize(250);
+		assertThat(catalog.items()).hasSize(254);
 		assertThat(catalog.collections()).hasSize(11);
 		assertThat(catalog.item("moldura-ambar").orElseThrow().releaseOrder()).isEqualTo(1);
 		assertThat(catalog.item("moldura-radar").orElseThrow().releaseOrder()).isEqualTo(26);
@@ -41,6 +41,19 @@ class CosmeticCatalogTests {
 			.isTrue();
 		assertThat(catalog.available(catalog.item("tema-saci").orElseThrow(), Instant.parse("2026-04-01T12:00:00Z")))
 			.isFalse();
+	}
+
+	@Test
+	void gardenStylesAreAlwaysOnSale() {
+		CosmeticCatalog catalog = new CosmeticCatalog(JsonMapper.builder().build());
+		List<Item> gardens = catalog.items().stream().filter(item -> item.kind() == CosmeticKind.GARDEN).toList();
+		assertThat(gardens).extracting(Item::id)
+			.containsExactly("garden-cerrado", "garden-mata-atlantica", "garden-caatinga", "garden-pampa");
+		assertThat(gardens).allSatisfy(item -> {
+			assertThat(item.collection()).isNull();
+			assertThat(item.purchasable()).isTrue();
+			assertThat(catalog.available(item, Instant.parse("2026-04-01T12:00:00Z"))).isTrue();
+		});
 	}
 
 	@Test

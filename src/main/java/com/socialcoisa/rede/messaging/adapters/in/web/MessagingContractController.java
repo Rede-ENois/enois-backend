@@ -250,18 +250,7 @@ class MessagingContractController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@RequestBody DirectConversationRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		String otherId = request.userId() == null ? "" : request.userId().trim();
-		if (otherId.isEmpty()) {
-			throw new ApiException(400, "INVALID_RECIPIENT", "Destinatario obrigatorio.");
-		}
-		if (otherId.equals(user.id().value())) {
-			throw new ApiException(400, "INVALID_RECIPIENT", "Nao da para abrir uma conversa consigo mesmo.");
-		}
-		// Bloqueio vale nos dois sentidos: ninguem fala com quem bloqueou (ou foi bloqueado).
-		if (blockedUsersReader.hiddenIdsFor(user.id().value()).contains(otherId)
-				|| blockedUsersReader.hiddenIdsFor(otherId).contains(user.id().value())) {
-			throw new ApiException(403, "USER_BLOCKED", "Nao e possivel conversar com este usuario.");
-		}
+		String otherId = resolveRecipient(user, request.userId());
 		Map<String, Object> payload = Map.of("direct", otherId);
 		String hash = idempotency.hash(payload);
 		return idempotency.execute(user.id(), "POST", "/api/conversations/direct", idempotencyKey, hash, () -> {
@@ -271,6 +260,30 @@ class MessagingContractController {
 				.map(ConversationParticipant::userId)
 				.toList();
 			return new CommandResponse(200, toDetailView(conversationId, "DIRECT", null, pIds,
+				messagingService.countUnread(conversationId, user.id().value()),
+				otherLastReadAt(participants, user.id().value())));
+		});
+	}
+
+	/**
+	 * Abre (ou reaproveita) a DM corporativa com um usuario — o botao "Mensagem" do perfil
+	 * profissional. Exige perfil profissional ativo do iniciador; o destinatario nao precisa ter.
+	 */
+	@PostMapping("/business-direct")
+	ResponseEntity<String> businessDirect(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@RequestBody DirectConversationRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		String otherId = resolveRecipient(user, request.userId());
+		Map<String, Object> payload = Map.of("business-direct", otherId);
+		String hash = idempotency.hash(payload);
+		return idempotency.execute(user.id(), "POST", "/api/conversations/business-direct", idempotencyKey, hash, () -> {
+			String conversationId = messagingService.businessDirectConversation(user.id().value(), otherId);
+			var participants = messagingService.getParticipants(conversationId);
+			List<String> pIds = participants.stream()
+				.map(ConversationParticipant::userId)
+				.toList();
+			return new CommandResponse(200, toDetailView(conversationId, "BUSINESS_DIRECT", null, pIds,
 				messagingService.countUnread(conversationId, user.id().value()),
 				otherLastReadAt(participants, user.id().value())));
 		});
@@ -428,6 +441,22 @@ class MessagingContractController {
 		ConversationContext context = ConversationContext.of(kind);
 		return new ConversationDetailView(convId, kind, context.name(), title, participantIds,
 			identitiesOf(context, participantIds), lm.text(), unread, otherLastReadAt, lm.e2e(), lm.iv());
+	}
+
+	/** Valida o destinatario: obrigatorio, nao pode ser voce, nao pode estar bloqueado. */
+	private String resolveRecipient(CurrentUser user, String rawUserId) {
+		String otherId = rawUserId == null ? "" : rawUserId.trim();
+		if (otherId.isEmpty()) {
+			throw new ApiException(400, "INVALID_RECIPIENT", "Destinatario obrigatorio.");
+		}
+		if (otherId.equals(user.id().value())) {
+			throw new ApiException(400, "INVALID_RECIPIENT", "Nao da para abrir uma conversa consigo mesmo.");
+		}
+		if (blockedUsersReader.hiddenIdsFor(user.id().value()).contains(otherId)
+				|| blockedUsersReader.hiddenIdsFor(otherId).contains(user.id().value())) {
+			throw new ApiException(403, "USER_BLOCKED", "Nao e possivel conversar com este usuario.");
+		}
+		return otherId;
 	}
 
 	/**

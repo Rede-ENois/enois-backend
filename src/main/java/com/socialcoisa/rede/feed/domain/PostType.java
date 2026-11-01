@@ -22,6 +22,8 @@ public enum PostType {
 	DIVERTIDO,
 	/** Momento: some sozinho em 24 horas (o texto fica em 500). */
 	MOMENT,
+	/** Enquete: o titulo fica no content (ate 400) e as alternativas/votos em tabelas proprias. */
+	POLL,
 	/**
 	 * Ponteiro de um post de blog: o conteudo mora no blog do autor, nao no feed. Entra so no "Para
 	 * voce" de quem se inscreveu no blog (nunca no "Tudo") e leva a tag "blog".

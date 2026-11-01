@@ -149,10 +149,39 @@ public class StudyPairService {
 		return new RequestResult(requestId, StudyPairRequest.Status.OPEN.name(), null);
 	}
 
+	/**
+	 * Busca de pedidos abertos por objetivo/assunto, com a mesma régua do pareamento.
+	 *
+	 * O resultado é ANÔNIMO: sai o objetivo e o assunto, não quem pediu. Quem quer o par clica e
+	 * entra na fila do mesmo objetivo — o pareamento é que revela as duas pessoas.
+	 */
+	@Transactional(readOnly = true)
+	public List<SearchResult> search(String userId, String rawTerm, int limit) {
+		String term = rawTerm == null ? "" : rawTerm.trim().replace("%", "").replace("_", "");
+		if (term.length() < 2) {
+			return List.of();
+		}
+		TextFieldLimit.check("STUDY_SEARCH_TOO_LONG", "busca", term, 80);
+		Set<String> currentPartners = repository.findActivePairs(userId).stream()
+			.map(p -> p.partnerOf(userId))
+			.collect(Collectors.toSet());
+		return visibleOpen(repository.searchOpenRequests(term, Math.min(50, Math.max(1, limit))), userId,
+			currentPartners)
+			.stream()
+			.map(r -> new SearchResult(r.goalText(), r.topic(), r.createdAt().toString()))
+			.toList();
+	}
+
 	/** Open requests anyone in {@code userId}'s situation may be paired with, oldest first. */
 	private List<StudyPairRequest> eligibleCandidates(String userId, String goalKey, Set<String> currentPartners) {
+		return visibleOpen(repository.findOpenByGoal(goalKey, CANDIDATE_SCAN), userId, currentPartners);
+	}
+
+	/** Pedidos abertos que a pessoa pode de fato parear: some quem ela bloqueou/mutou e vice-versa. */
+	private List<StudyPairRequest> visibleOpen(List<StudyPairRequest> fetched, String userId,
+			Set<String> currentPartners) {
 		Set<String> hidden = blocks.hiddenIdsFor(userId);
-		List<StudyPairRequest> open = repository.findOpenByGoal(goalKey, CANDIDATE_SCAN).stream()
+		List<StudyPairRequest> open = fetched.stream()
 			.filter(r -> !r.userId().equals(userId))
 			.filter(r -> !hidden.contains(r.userId()))
 			.filter(r -> !currentPartners.contains(r.userId()))
@@ -327,6 +356,10 @@ public class StudyPairService {
 
 	private LocalDate today() {
 		return LocalDate.now(clock.withZone(ZONE));
+	}
+
+	/** Entrada da busca: o objetivo, sem revelar quem pediu. */
+	public record SearchResult(String goal, String topic, String createdAt) {
 	}
 
 	public record RequestResult(String requestId, String status, String pairId) {

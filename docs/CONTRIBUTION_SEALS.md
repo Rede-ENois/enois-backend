@@ -38,6 +38,26 @@ spam de issues não vira selo.
 Cada categoria exibe **apenas o nível mais alto alcançado**. Ao subir de nível, o anterior é
 revogado e o evento fica no histórico; ao cair (revert, issue invalidada), o nível é recalculado.
 
+## Emblemas
+
+Cada nível tem um **emblema fixo e exclusivo**, ilustrado e versionado no frontend
+(`public/seals/<emblema>.png`, 256×256, fundo transparente). O backend só informa o identificador
+(`emblem`) do nível em `GET /users/{username}/seals` e `GET /seals/criteria`; ele é função do nível
+(`SealType.emblem()`), não é escolhido pela pessoa e só aparece para quem recebeu o selo pelas
+regras de contribuição acima (ou por concessão explícita e auditada da administração).
+
+| Nível | Emblema | Arte |
+| --- | --- | --- |
+| Ajudante | `ajudante` | disquete |
+| Contribuinte sério | `contribuinte-serio` | PC retrô |
+| Hardcore | `hardcore` | cafeteira de PC |
+| Tryhard | `tryhard` | teclado |
+| Get a life | `get-a-life` | grama com mouse |
+| Beta tester | `beta-tester` | tecla com bug |
+| Exigente | `exigente` | lupa com bugs |
+| Esforço máximo | `esforco-maximo` | lanterna detectora de bugs |
+| Plus ultra | `plus-ultra` | luva de herói |
+| Genkidama | `genkidama` | esfera de energia |
 ### Categorias futuras
 
 `DOCUMENTATION`, `SECURITY`, `COMMUNITY`, `DONATION` e `INFRASTRUCTURE` existem no modelo para
@@ -230,7 +250,7 @@ nos repositórios elegíveis; sem ele a API pública limita em 60 requisições/
 ## Testes
 
 - `SealTypeTests`: todos os limites das duas categorias (0, 1, 10, 11, 20, 21, 50, 51, 100, 101,
-  1.000, 1.001).
+  1.000, 1.001) e um emblema único e fixo por nível.
 - `GitHubContributionSyncTests`: idempotência de PR e issue, mapeamento por ID, qualificação por
   label, perda de qualificação, dry-run e revert.
 - `ContributorSealFlowTests`: promoção/rebaixamento por contagem, qualificação por revisão,

@@ -98,7 +98,7 @@ class SeasonalCosmeticsFlowTests {
 	void catalogListsKindsCollectionsSeasonAndSaleFlags() throws Exception {
 		mockMvc.perform(get("/loja"))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.length()").value(250))
+			.andExpect(jsonPath("$.length()").value(254))
 			.andExpect(jsonPath("$[?(@.id == 'moldura-ambar')].collection").value(org.hamcrest.Matchers.contains(
 				org.hamcrest.Matchers.nullValue())))
 			.andExpect(jsonPath("$[?(@.id == 'moldura-ambar')].available").value(true))
@@ -115,6 +115,8 @@ class SeasonalCosmeticsFlowTests {
 			.andExpect(jsonPath("$[?(@.id == 'placa-mata')].kind").value("NAMEPLATE"))
 			.andExpect(jsonPath("$[?(@.id == 'banner-saci')].kind").value("BANNER"))
 			.andExpect(jsonPath("$[?(@.id == 'efeito-redemoinho')].kind").value("PROFILE_EFFECT"))
+			.andExpect(jsonPath("$[?(@.id == 'garden-cerrado')].kind").value("GARDEN"))
+			.andExpect(jsonPath("$[?(@.id == 'garden-cerrado')].available").value(true))
 			.andExpect(jsonPath("$[?(@.id == 'tema-criancas')].available").value(false))
 			.andExpect(jsonPath("$[?(@.id == 'emblema-time-saci')].purchasable").value(false))
 			.andExpect(jsonPath("$[?(@.id == 'emblema-time-saci')].collection").value("saci"))
@@ -294,6 +296,7 @@ class SeasonalCosmeticsFlowTests {
 		slots.put("banner-saci", "bannerItem");
 		slots.put("tema-saci", "cardTheme");
 		slots.put("efeito-redemoinho", "profileEffect");
+		slots.put("garden-cerrado", "gardenStyle");
 
 		for (String item : slots.keySet()) {
 			mockMvc.perform(post("/loja/" + item + "/equipar").header("X-Session-Token", user.token()))
@@ -312,6 +315,12 @@ class SeasonalCosmeticsFlowTests {
 
 		JsonNode me = me(user);
 		slots.forEach((item, field) -> assertThat(me.get(field).asText()).as(field).isEqualTo(item));
+		// The public profile carries the garden style and the garden itself (a new account: seeds, healthy).
+		mockMvc.perform(get("/users/" + me.get("username").asText()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.gardenStyle").value("garden-cerrado"))
+			.andExpect(jsonPath("$.garden.tenure").value(0))
+			.andExpect(jsonPath("$.garden.health").value(2));
 		assertThat(me.get("badges").get(0).asText()).isEqualTo("emblema-carapuca");
 		MvcResult shop = mockMvc.perform(get("/loja").header("X-Session-Token", user.token()))
 			.andExpect(status().isOk())

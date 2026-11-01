@@ -81,8 +81,14 @@ public class CompanyService {
 
 	@Transactional(readOnly = true)
 	public Company bySlug(String slug) {
-		return companies.findBySlug(slug)
+		Company company = companies.findBySlug(slug)
 			.orElseThrow(() -> new ApiException(404, "COMPANY_NOT_FOUND", "Pagina empresarial nao encontrada."));
+		// Pagina fechada (pela moderacao ou pelo fim dela) nao existe mais para quem visita:
+		// sai 404, do mesmo jeito que um perfil apagado.
+		if (!company.active()) {
+			throw new ApiException(404, "COMPANY_NOT_FOUND", "Pagina empresarial nao encontrada.");
+		}
+		return company;
 	}
 
 	@Transactional(readOnly = true)
@@ -98,7 +104,8 @@ public class CompanyService {
 
 	@Transactional(readOnly = true)
 	public List<Company> listAll(int limit) {
-		return companies.listAll(limit);
+		// Diretorio publico: pagina fechada (removida pela moderacao ou pela propria empresa) sai da lista.
+		return companies.listAll(limit).stream().filter(Company::active).toList();
 	}
 
 	@Transactional(readOnly = true)
@@ -115,6 +122,10 @@ public class CompanyService {
 
 	@Transactional
 	public void requireRole(Company company, String userId, CompanyRole minimum) {
+		// Pagina fechada nao aceita equipe, vaga nem projeto: a operacao sobre ela morre aqui.
+		if (!company.active()) {
+			throw new ApiException(409, "COMPANY_CLOSED", "Esta pagina empresarial foi removida.");
+		}
 		CompanyRole role = roleOf(company.id(), userId);
 		if (role == null) {
 			throw new ApiException(403, "NOT_A_MEMBER", "Voce nao faz parte desta pagina empresarial.");
@@ -146,6 +157,33 @@ public class CompanyService {
 		}
 		return companies.saveMember(CompanyMember.create(
 			"cmemb_" + UUID.randomUUID().toString().replace("-", ""), company.id(), userId, role, clock.instant()));
+	}
+
+	/**
+	 * Fecha a pagina por decisao da moderacao: sai do diretorio e deixa de existir para quem
+	 * visita. Idempotente — fechar pagina ja fechada nao faz nada e devolve {@code false}.
+	 * O dono recebe o aviso (a resposta dele continua pelo canal de recurso da moderacao).
+	 */
+	@Transactional
+	public boolean closeByModeration(String companyId, String reviewerId) {
+		Company company = companies.findById(companyId).orElse(null);
+		if (company == null || !company.active()) {
+			return false;
+		}
+		companies.save(company.close(clock.instant()));
+		notificationService.create(company.ownerUserId(), "MODERACAO", reviewerId,
+			"Sua página empresarial foi removida",
+			"Uma denúncia sobre a página \"" + company.name()
+				+ "\" foi revisada pela moderação e a página foi removida do diretório. "
+				+ "Se acredita que foi um engano, fale com o suporte pelo canal de recursos.",
+			"/api/suporte", "Falar com o suporte");
+		return true;
+	}
+
+	/** Pagina por id, inclusive fechada (a moderacao le paginas removidas para revisar). */
+	@Transactional(readOnly = true)
+	public java.util.Optional<Company> findById(String companyId) {
+		return companies.findById(companyId);
 	}
 
 	@Transactional(readOnly = true)

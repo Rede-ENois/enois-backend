@@ -142,6 +142,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 	private UserProfile populateCounts(UserProfile profile) {
 		ReputationService.Counts counts = reputationService.countsFor(profile.id());
 		profile.setCounts(counts.connections(), counts.followers(), counts.reputation());
+		profile.setGarden(counts.garden());
 		profile.setPostsCount(postCounts.countByUser(profile.id()));
 		repository.save(profile);
 		return profile;

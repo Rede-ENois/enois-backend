@@ -96,6 +96,10 @@ class FeedController {
 	private final com.socialcoisa.rede.coin.application.CoinService coins;
 	private final com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository outboxEventRepository;
 	private final com.socialcoisa.rede.feed.application.port.out.FeedSeenMarkerRepository feedSeenMarkers;
+	private final com.socialcoisa.rede.feed.application.port.in.VotePollUseCase votePoll;
+	private final com.socialcoisa.rede.feed.application.DeleteCommentService deleteComment;
+	/** Resposta do voto da enquete (PollView): o endpoint devolve o estado da enquete em JSON. */
+	private final tools.jackson.databind.ObjectMapper pollJson = new tools.jackson.databind.ObjectMapper();
 
 	FeedController(PublishPostUseCase publishPostUseCase, GetFeedUseCase getFeedUseCase, GetPostUseCase getPostUseCase,
 			GetProfilePostsUseCase getProfilePostsUseCase, DeletePostUseCase deletePostUseCase,
@@ -112,7 +116,9 @@ class FeedController {
 			HoneypotGuard honeypots,
 			com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository outboxEventRepository,
 			com.socialcoisa.rede.coin.application.CoinService coins,
-			com.socialcoisa.rede.feed.application.port.out.FeedSeenMarkerRepository feedSeenMarkers) {
+			com.socialcoisa.rede.feed.application.port.out.FeedSeenMarkerRepository feedSeenMarkers,
+			com.socialcoisa.rede.feed.application.port.in.VotePollUseCase votePoll,
+			com.socialcoisa.rede.feed.application.DeleteCommentService deleteComment) {
 		this.coins = coins;
 		this.publishPostUseCase = publishPostUseCase;
 		this.getFeedUseCase = getFeedUseCase;
@@ -140,6 +146,8 @@ class FeedController {
 		this.honeypots = honeypots;
 		this.outboxEventRepository = outboxEventRepository;
 		this.feedSeenMarkers = feedSeenMarkers;
+		this.votePoll = votePoll;
+		this.deleteComment = deleteComment;
 	}
 
 	@PostMapping("/feed/posts")
@@ -157,7 +165,8 @@ class FeedController {
 		return idempotency.execute(user.id(), "POST", "/api/feed/posts", idempotencyKey, hash, () -> {
 			var published = publishPostUseCase.publish(new PublishPostCommand(user.id(), request.type(), request.content(),
 				request.pageHtml(), request.articleBody(), request.tags(), request.mediaIds(), request.communityId(),
-				request.mentionedUserIds(), request.topic(), request.channelId(), Boolean.TRUE.equals(request.mediaSpoiler())));
+				request.mentionedUserIds(), request.topic(), request.channelId(), Boolean.TRUE.equals(request.mediaSpoiler()),
+				request.pollOptions()));
 			// Presence counts here and not inside PublishPostService: the scheduler also publishes
 			// through it, and a scheduled post going live is not the person being here today.
 			coins.recordPresence(user.id().value());
@@ -409,21 +418,7 @@ class FeedController {
 		String hash = idempotency.hash(Map.of("commentId", commentId, "postId", postId));
 		return idempotency.execute(user.id(), "DELETE", "/api/feed/posts/{postId}/comments/{commentId}", idempotencyKey, hash,
 			() -> {
-				var comment = commentRepository.findById(commentId)
-					.orElseThrow(() -> new ApiException(404, "COMMENT_NOT_FOUND", "Comentario nao encontrado."));
-				if (!comment.authorId().equals(user.id())) {
-					throw new ApiException(403, "NOT_AUTHORIZED", "Voce nao pode deletar este comentario.");
-				}
-				boolean eraAtivo = comment.status() == com.socialcoisa.rede.feed.domain.CommentStatus.ACTIVE;
-				commentRepository.deleteById(commentId);
-				// O contador do post precisa DEVOLVER o comentário apagado — antes ele só crescia,
-				// e "comentar/apagar" inflava a interação recebida (e a credibilidade) sem limite.
-				if (eraAtivo) {
-					postRepository.findById(comment.postId()).ifPresent(post -> {
-						post.removeComment();
-						postRepository.save(post);
-					});
-				}
+				deleteComment.deleteAsAuthor(user.id(), commentId);
 				return new CommandResponse(200, Map.of("status", "COMMENT_DELETED"));
 			});
 	}
@@ -550,6 +545,18 @@ class FeedController {
 		return idempotency.execute(user.id(), "DELETE", "/api/feed/posts/{postId}/comments/{commentId}/reactions",
 			idempotencyKey, hash, () -> new CommandResponse(200, Map.of(
 				"status", postInteractionRepository.removeCommentReaction(commentId, user.id()) ? "REMOVED" : "NO_REACTION")));
+	}
+
+	/**
+	 * Voto da enquete: uma alternativa, um voto por pessoa, definitivo. Votar de novo (na mesma ou
+	 * em outra) responde 409 ALREADY_VOTED.
+	 */
+	@PostMapping("/feed/posts/{postId}/poll/vote")
+	ResponseEntity<String> votePoll(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String postId, @RequestBody PollVoteRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		var poll = votePoll.vote(new PostId(postId), user.id(), request.option() == null ? -1 : request.option());
+		return ResponseEntity.ok().body(pollJson.writeValueAsString(poll));
 	}
 
 	@GetMapping("/feed/posts/{postId}/comments/{commentId}/reactions")

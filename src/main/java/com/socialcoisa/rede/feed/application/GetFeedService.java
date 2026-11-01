@@ -64,6 +64,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	private final com.socialcoisa.rede.corporate.application.port.out.CorporateProfileRepository corporateProfiles;
 	private final com.socialcoisa.rede.feed.application.port.out.ReaderPreferencesReader readerPreferences;
 	private final PostNoteService postNotes;
+	private final com.socialcoisa.rede.feed.application.port.out.PollRepository polls;
 	private static final Instant DEFAULT_BEFORE = Instant.parse("9999-12-31T23:59:59Z");
 
 	public GetFeedService(PostRepository postRepository, ArticleRepository articleRepository,
@@ -76,7 +77,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			SubscribedBlogAuthorsReader subscribedBlogAuthors,
 			com.socialcoisa.rede.corporate.application.port.out.CorporateProfileRepository corporateProfiles,
 			com.socialcoisa.rede.feed.application.port.out.ReaderPreferencesReader readerPreferences,
-			PostNoteService postNotes) {
+			PostNoteService postNotes,
+			com.socialcoisa.rede.feed.application.port.out.PollRepository polls) {
 		this.postRepository = postRepository;
 		this.articleRepository = articleRepository;
 		this.feedCacheRepository = feedCacheRepository;
@@ -93,6 +95,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		this.corporateProfiles = corporateProfiles;
 		this.readerPreferences = readerPreferences;
 		this.postNotes = postNotes;
+		this.polls = polls;
 	}
 
 	private static final long TRENDING_WINDOW_HOURS = 24;
@@ -345,6 +348,12 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		// Reaction pills for the whole page in one query: the card used to fetch them per post.
 		Map<PostId, Map<ReactionType, Long>> reactionSummaries = postInteractionRepository
 			.countReactionsByPostIds(postIds, hidden);
+		// Enquete: alternativas, contagem e o voto de quem le, em lote para a página inteira.
+		Map<String, List<String>> pollOptions = polls.optionsByPostIds(postIdValues);
+		Map<String, Map<Integer, Long>> pollCounts = pollOptions.isEmpty() ? Map.of()
+			: polls.countsByPostIds(pollOptions.keySet());
+		Map<String, Integer> myVotes = currentUserId == null || pollOptions.isEmpty() ? Map.of()
+			: polls.votesByUserAndPostIds(currentUserId, pollOptions.keySet());
 		// Citação do repost com opinião: busca os originais da página em UMA consulta.
 		java.util.Set<String> quotedIds = visible.stream()
 			.filter(p -> p.repostWithOpinion() && p.repostOf() != null)
@@ -383,8 +392,20 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				PostView withCommunity = community == null ? withReaction
 					: withReaction.withCommunity(community.id(),
 						new PostView.CommunityView(community.id(), community.name(), community.joined()));
-				return withCommunity.withNotes(notesByPost.getOrDefault(post.id().value(), List.of()),
-					myNotes.get(post.id().value()));
+				PostView withNotesView = withCommunity.withNotes(
+					notesByPost.getOrDefault(post.id().value(), List.of()), myNotes.get(post.id().value()));
+				List<String> options = pollOptions.get(post.id().value());
+				if (options == null) {
+					return withNotesView;
+				}
+				Map<Integer, Long> counts = pollCounts.getOrDefault(post.id().value(), Map.of());
+				List<Long> perOption = new java.util.ArrayList<>(options.size());
+				for (int position = 0; position < options.size(); position++) {
+					perOption.add(counts.getOrDefault(position, 0L));
+				}
+				long total = perOption.stream().mapToLong(Long::longValue).sum();
+				return withNotesView.withPoll(new PollView(options, perOption,
+					myVotes.get(post.id().value()), total));
 			})
 			.toList();
 	}
@@ -460,11 +481,20 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			? postRepository.findActiveByAuthors(authors, before, limit * 3)
 			: postRepository.findActiveByAuthorsExcludingTopics(authors, blocked, before, limit * 3);
 		Set<String> hiddenCommunities = communityIdsWithoutMembership(fetched, query.userId());
-		List<Post> visible = fetched.stream()
+		List<Post> filtered = fetched.stream()
 			.filter(post -> post.communityId() == null || !hiddenCommunities.contains(post.communityId()))
 			.toList();
-		// "O que quero ver" es AUMENTO DE PRIORIDAD, no filtro: los posts de los asuntos
-		// elegidos van primero, el resto sigue cronológico. Nada se elimina del feed.
+		// The page is a DATE WINDOW: the `limit` newest visible posts, and the cursor is the oldest
+		// of them (or of the raw fetch, when the filter left fewer than `limit`). The relevance boost
+		// below only reorders inside the window, so no post is skipped or repeated across pages, and
+		// a later page never holds a post newer than an earlier one (the front's "voce esta em dia"
+		// section relies on that).
+		List<Post> visible = filtered.stream().limit(limit).toList();
+		String nextCursor = filtered.size() > limit
+			? cursorCodec.encode(visible.get(visible.size() - 1).createdAt())
+			: fetched.size() == limit * 3 ? cursorCodec.encode(fetched.get(fetched.size() - 1).createdAt()) : null;
+		// "O que quero ver" is a priority boost, not a filter: inside the page, posts on the chosen
+		// topics come first and the rest stays newest first. Nothing leaves the feed.
 		Collection<String> liked = readerPreferences.likedTopics(query.userId().value());
 		if (!liked.isEmpty() && visible.size() > 1) {
 			// topic() is null for posts without a topic, and liked is immutable: contains(null) throws.
@@ -475,11 +505,6 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 					.thenComparing(Post::createdAt, java.util.Comparator.reverseOrder()))
 				.toList();
 		}
-		visible = visible.stream().limit(limit).toList();
-		// Cursor pela pagina EXIBIDA (nao pela bruta): repetir post ou pular pedaco seria pior do que
-		// uma pagina mais curta. So ha "proxima pagina" quando a busca bruta veio saturada.
-		String nextCursor = fetched.size() == limit * 3 && !visible.isEmpty()
-			? cursorCodec.encode(visible.get(visible.size() - 1).createdAt()) : null;
 		return new FeedPage(enrich(visible, query.userId()), nextCursor);
 	}
 

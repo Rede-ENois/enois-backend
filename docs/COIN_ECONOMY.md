@@ -129,8 +129,10 @@ pessoa agiu, e a quarentena é revisão posterior, não punição; quem tem san�
   **exatamente ontem** e a semana desse dia ainda não usou o congelamento, ele é consumido sozinho na
   próxima ação: a sequência continua e o dia congelado não soma. Faltar uma segunda vez na mesma
   semana, ou dois dias seguidos, zera a sequência. Tudo é aplicado de forma preguiçosa, sem job.
-- **Bônus de sequência:** com a sequência guardada em 7 dias ou mais, a presença paga também o bônus
-  (25, escalado), como antes.
+- **Bônus de sequência:** a cada 7 dias seguidos (dia 7, 14, 21...) a presença paga também o bônus
+  (25, escalado); nos outros dias, só a presença. O múltiplo de 7 é contado sobre a sequência
+  guardada (`current_days`): o dia congelado não soma, então o descanso adia o bônus em um dia e
+  nunca o paga duas vezes. Sequência zerada recomeça a contagem.
 - **Quem já tinha presença:** sem backfill. Na primeira ação (ou leitura) depois do deploy, a
   sequência é reconstruída a partir das presenças dos últimos 60 dias no ledger.
 

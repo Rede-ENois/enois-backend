@@ -101,9 +101,14 @@ com notificações.
   dado real (ex.: contadores de visualização com mecanismo já existente); **sem rastrear pessoas**.
 
 ## Moderação reforçada (transversal)
-- `TargetType.COMPANY_PAGE` nas denúncias (fluxo já existente) + regras reforçadas para empresas
-  (fraude, vaga falsa, publicidade enganosa) — penalidades: restrição/suspensão/encerramento,
-  com recurso e revisão humana (aproveita o fluxo geral).
+
+**IMPLEMENTADO (2026-10-31):** denúncia com alvo `COMPANY` (mesma `POST /api/reports`). O painel de
+revisão mostra o conteúdo da página e o dono como responsável. A ação própria é
+`POST /api/admin/reports/{reportId}/remove-company`: fecha a página (`CompanyStatus.CLOSED`) — ela sai
+do diretório (`GET /api/empresas`), responde `404 COMPANY_NOT_FOUND` na leitura pública e recusa
+operações com `409 COMPANY_CLOSED` — e a conta do dono fica intacta, com notificação do caminho de
+recurso. `ban`/`penalize` recusam alvo `COMPANY` com `400 COMPANY_TARGET`: a página se remove, não se
+bane o dono por causa dela.
 
 ## Pendências/decisões suas
 - Verificação de representação: CNPJ valida existência, **não** representação — aceitamos

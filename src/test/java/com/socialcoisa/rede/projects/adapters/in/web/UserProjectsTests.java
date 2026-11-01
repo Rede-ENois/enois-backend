@@ -167,6 +167,41 @@ class UserProjectsTests {
 	}
 
 	@Test
+	void projectBannerAndIconRoundTripAndRejectNonHttps() throws Exception {
+		var session = auth.authenticate("user_proj_banner");
+
+		var response = mockMvc.perform(withSession(post("/me/projects"), session).contentType(MediaType.APPLICATION_JSON)
+			.content("""
+				{"title":"Com banner","description":"card com imagem","banner":"https://images.example/banner.png",
+				"icon":"https://images.example/icon.png","stack":[],"diary":[]}
+				"""))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.banner").value("https://images.example/banner.png"))
+			.andExpect(jsonPath("$.icon").value("https://images.example/icon.png"))
+			.andReturn().getResponse().getContentAsString();
+		String projectId = objectMapper.readTree(response).get("id").asText();
+
+		// Leitura pública por username: as imagens saem para quem vê o perfil.
+		var me = objectMapper
+			.readTree(mockMvc.perform(withSession(get("/me"), session)).andReturn().getResponse()
+				.getContentAsString());
+		mockMvc.perform(get("/users/" + me.get("username").asText() + "/projects"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[?(@.id == '" + projectId + "')].banner")
+				.value("https://images.example/banner.png"))
+			.andExpect(jsonPath("$[?(@.id == '" + projectId + "')].icon")
+				.value("https://images.example/icon.png"));
+
+		// Sem https, banner e ícone recusam (o mesmo guarda do repositório).
+		mockMvc.perform(withSession(put("/me/projects/" + projectId), session).contentType(MediaType.APPLICATION_JSON)
+			.content("""
+				{"title":"Com banner","banner":"http://inseguro.example/banner.png","stack":[],"diary":[]}
+				"""))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("INVALID_BANNER"));
+	}
+
+	@Test
 	void projectHtmlKeepsUnicodeOutsideLatin1() throws Exception {
 		var session = auth.authenticate("user_proj_unicode_html");
 		String html = "<p>Conhecer a Flecha →</p>";

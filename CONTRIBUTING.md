@@ -138,7 +138,8 @@ infraestrutura e as ações manuais estão no README.
 Este projeto aceita e usa código escrito com ajuda de IA — com as mesmas regras de sempre e mais
 algumas próprias:
 
-1. **Declare o uso.** Mencione na PR que a mudança foi feita com auxílio de IA e qual ferramenta.
+1. **Declare the use.** Check the AI box in the PR template checklist. No tool name and no
+   attribution line (Co-Authored-By, "Generated with") in commits or PRs: the checkbox is the record.
 2. **Quem submete responde pelo código.** Entenda cada linha antes de abrir a PR; saída de IA colada
    sem revisão é a forma mais rápida de introduzir regressão sutil.
 3. **Prova, não promessa.** "Deveria funcionar" não é verificação: rode os testes do escopo e

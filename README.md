@@ -282,7 +282,7 @@ e o endpoint exige sessão — anônimo não gasta a cota.
 | ~~0~~ | ~~Trust policy do front~~ — **resolvido em 18/10 pelo raposo**: os dois repositórios deployam automaticamente no push da `main` | — | — |
 | 1 | Certificado (ACM) + DNS de `paginas.enois.ia.br` | ACM us-east-1 + DNS do `ia.br` | player dentro das páginas publicadas |
 | 2 | Rotacionar a senha do banco (a antiga está no histórico do Git) | MariaDB + `git filter-repo` | segurança |
-| 3 | `REDE_GIFS_TENOR_KEY` e `REDE_GIFS_GIPHY_KEY` | secrets do Deployment | busca externa de GIF (sem elas, só os GIFs da comunidade) |
+| ~~3~~ | ~~`REDE_GIFS_TENOR_KEY` e `REDE_GIFS_GIPHY_KEY`~~ — **resolvido em 30/10**: a chave GIPHY existe como secret e o workflow de deploy a injeta nos dois ambientes (busca externa de GIF respondendo em produção, verificada por sonda) | — | — |
 | 4 | `REDE_SECURITY_ENCRYPTION_KEY` (base64 de 32 bytes) | secrets do Deployment | 2FA (a seção fica escondida sem ela) |
 | 5 | `dump_rede.sql` no histórico do Git (dados pessoais reais) | `git filter-repo` + trocar as senhas dos afetados | LGPD |
 | 6 | Sanitizar usuários e posts de teste em produção | precisa de acesso ao banco ou de um endpoint admin | — |
@@ -405,6 +405,7 @@ backend expõe fica público em `https://enois.ia.br/api/...` — inclusive `/ap
 | `SPRINGDOC_ENABLED` | não | padrão `false`. `true` liga `/api/openapi.json` + Swagger UI (use só em dev/VPN) |
 | `MANAGEMENT_ENDPOINTS` | não | padrão `health`. Para métricas use `health,prometheus` **e bloqueie `/api/actuator/*` no gateway** |
 | `SUPPORT_EMAIL` | não | e-mail do time que recebe os pedidos de suporte. Sem ele o pedido ainda fica registrado e visível em `/admin/support` |
+| `GITHUB_SUGGESTIONS_REPO_BACKEND` / `GITHUB_SUGGESTIONS_REPO_FRONTEND` / `GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM` | p/ sugestões | repositório (`dono/nome`) que recebe a issue pública de cada destino depois da aprovação. Sem ele o destino fica desligado (aprovação responde 503). O token é o mesmo do suporte (painel `/admin/support/github`); ver `docs/MODULES.md` 22.1 |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | p/ push no celular | par de chaves do Web Push (ver passo 7 abaixo). Sem elas o push fica desligado e só as notificações dentro do app funcionam |
 | `REDE_SECURITY_ENCRYPTION_KEY` | **sim** (fora do `dev`) | chave de 32 bytes em base64 (`openssl rand -base64 32`) que cifra os segredos TOTP em repouso (AES-GCM) e assina o desafio do cadastro. **Fora do perfil `dev` o pod não sobe sem ela** (o mesmo valor em todas as réplicas) |
 | `VAPID_SUBJECT` | não | contato do emissor VAPID, no formato `mailto:contato@dominio` (padrão `mailto:suporte@enois.ia.br`) |
@@ -536,6 +537,8 @@ delete from flyway_schema_history where version = '<versao que falhou>';    # ou
   (`users.email_verified_at`, `totp_enabled_at`, `email_otp_enabled_at`). Sem nenhum dos dois a reputação é
   **multiplicada por zero** (regra em `ReputationService`, fonte única: vale para o perfil, o ranking e a regra
   de publicar vaga) e as funcionalidades protegidas respondem `403 EMAIL_NOT_VERIFIED` no `CurrentUserResolver`.
+  O mesmo cálculo gera o jardim do perfil (`garden`, um estágio 0..3 por componente e `health` 0..2), que
+  aparece para toda conta, verificada ou não (detalhes em `docs/API.md`, "Profile garden").
 - **Segundo fator (2FA)**: `GET /auth/2fa/status` mostra o estado. Por aplicativo authenticator (TOTP RFC 6238,
   segredo cifrado com `REDE_SECURITY_ENCRYPTION_KEY`): `POST /auth/2fa/totp/setup` devolve o segredo e a URI
   `otpauth://`, `POST /auth/2fa/totp/enable` confirma um código e devolve 8 códigos de recuperação (uso único,

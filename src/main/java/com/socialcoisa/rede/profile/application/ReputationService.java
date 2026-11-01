@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import com.socialcoisa.rede.profile.application.port.out.ProfileExtensionRepository;
 import com.socialcoisa.rede.profile.application.port.out.RecommendationRepository;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
+import com.socialcoisa.rede.profile.domain.ReputationGarden;
 import com.socialcoisa.rede.profile.domain.UserProfile;
 
 /**
@@ -33,6 +34,9 @@ import com.socialcoisa.rede.profile.domain.UserProfile;
  *
  * <p>Conta verificada (e-mail OU segundo fator) continua sendo o requisito de identidade: sem
  * ela a credibilidade é zero. Identidade não é confiança — é pré-condição.</p>
+ *
+ * <p>The same pass also yields the profile garden ({@link ReputationGarden}): one stage per component
+ * and a health level from the penalty. The garden is computed for every account, verified or not.</p>
  */
 @Service
 public class ReputationService {
@@ -121,7 +125,8 @@ public class ReputationService {
 		int capped = Math.max(0, Math.min(MAX_REPUTATION, raw));
 
 		boolean identityVerified = profile.map(UserProfile::identityVerified).orElse(false);
-		return new Counts(connections, followers, identityVerified ? capped : 0, identityVerified);
+		ReputationGarden garden = ReputationGarden.of(trajectory, relations, contribution, consistency, penalty);
+		return new Counts(connections, followers, identityVerified ? capped : 0, identityVerified, garden);
 	}
 
 	public int reputationOf(String userId) {
@@ -135,6 +140,7 @@ public class ReputationService {
 		return Math.max(0, Duration.between(createdAt, clock.instant()).toDays() / 30);
 	}
 
-	public record Counts(int connections, int followers, int reputation, boolean identityVerified) {
+	public record Counts(int connections, int followers, int reputation, boolean identityVerified,
+			ReputationGarden garden) {
 	}
 }
