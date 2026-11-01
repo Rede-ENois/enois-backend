@@ -84,6 +84,31 @@ public class GitHubApiClient implements GitHubGateway, GitHubProfileGateway {
 	}
 
 	@Override
+	public List<String> listOrganizationRepositories(String organization, int maxPages) {
+		List<String> result = new ArrayList<>();
+		int pages = Math.max(1, Math.min(maxPages, 10));
+		for (int page = 1; page <= pages; page++) {
+			JsonNode array = get("/orgs/" + URLEncoder.encode(organization, StandardCharsets.UTF_8)
+				+ "/repos?type=public&per_page=100&page=" + page);
+			if (!array.isArray() || array.isEmpty()) {
+				break;
+			}
+			for (JsonNode repo : array) {
+				String fullName = repo.path("full_name").asText("");
+				if (fullName.isBlank() || repo.path("private").asBoolean(false) || repo.path("fork").asBoolean(false)
+						|| repo.path("archived").asBoolean(false) || repo.path("disabled").asBoolean(false)) {
+					continue;
+				}
+				result.add(fullName);
+			}
+			if (array.size() < 100) {
+				break;
+			}
+		}
+		return result;
+	}
+
+	@Override
 	public List<GitHubIssue> listIssues(String repository, Instant since, int maxPages) {
 		List<GitHubIssue> result = new ArrayList<>();
 		int pages = Math.max(1, Math.min(maxPages, 20));

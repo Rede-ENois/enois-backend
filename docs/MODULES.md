@@ -854,7 +854,8 @@ A ocorrência nova herda cidade/UF da anterior (o encontro segue no mesmo lugar 
 | `createSlot(String mentorId, Instant startsAt, Instant endsAt)` | Cria horário disponível |
 | `scheduleSession(String mentorId, String menteeId, String slotId, String message)` | Agenda sessão; com `sparksPrice` o valor do mentorado vai para o escrow no ato (sem saldo, a inscrição falha e o horário continua livre) |
 | `completeSession(...)` / `cancelSession(...)` | Conclusão libera o escrow (−10% de taxa); cancelamento devolve integral |
-| `settleExpiredSessions()` | Worker horário: sete dias depois do fim do horário, libera o escrow sem depender da confirmação do mentor |
+| `completeFinishedSessions()` | Worker de 5 min (e a leitura das duas agendas): sessão cujo horário terminou vira `COMPLETED` e sai das próximas — sem mexer no escrow |
+| `settleExpiredSessions()` | Worker horário: sete dias depois do fim do horário, libera o escrow sem depender da confirmação do mentor (também as sessões que o relógio já concluiu) |
 | `delete(String mentorId, String userId)` | Remove perfil de mentor |
 | `list(String expertise, int limit)` | Lista mentores, filtro por expertise |
 | `getById(String mentorId)` | Busca mentor por ID |
@@ -866,7 +867,7 @@ A ocorrência nova herda cidade/UF da anterior (o encontro segue no mesmo lugar 
 |---|---|
 | `Mentor` | Entidade: user, expertise, rating, sessionsCount, price, meetingUrl (sala externa https opcional), sparksPrice (milésimos de faísca por sessão; null = não aceita faíscas) |
 | `MentorSlot` | Entidade: mentor, startsAt, endsAt, available |
-| `MentorSession` | Entidade: mentor, mentee, slot, message, status, priceSparks (valor retido no escrow) |
+| `MentorSession` | Entidade: mentor, mentee, slot, message, status, priceSparks (valor retido no escrow), settledAt (quando o valor foi pago/devolvido; null = ainda no escrow) |
 | `MentorAvailability` | Regra semanal: mentorId, dayOfWeek (1=segunda..7=domingo), timeOfDay ("HH:mm") |
 | `SessionStatus` | Enum: `SCHEDULED`, `COMPLETED`, `CANCELLED` |
 
@@ -884,10 +885,10 @@ A ocorrência nova herda cidade/UF da anterior (o encontro segue no mesmo lugar 
 | `delete(...)` | DELETE /api/mentors/{mentorId} |
 | `createSlot(...)` | POST /api/mentors/{mentorId}/slots |
 | `session(...)` | POST /api/mentors/{mentorId}/sessions |
-| `sessions(...)` | GET /api/mentors/{mentorId}/sessions — agenda do mentor (só o dono): quem se inscreveu, horário, mensagem e status |
+| `sessions(...)` | GET /api/mentors/{mentorId}/sessions — agenda do mentor (só o dono): quem se inscreveu, horário, mensagem e status; sessão cujo horário terminou volta como `COMPLETED` |
 | `availability(...)` | GET /api/mentors/{mentorId}/availability — regras semanais do dono (dia 1..7 + horários HH:mm) |
 | `saveAvailability(...)` | PUT /api/mentors/{mentorId}/availability — substitui as regras, gera horários por 28 dias (fuso America/Sao_Paulo, duração 60 min) e retira horários livres que saíram das regras; horário reservado nunca é tocado |
-| `mySessions(...)` | GET /api/mentors/sessions/mine — o que EU agendei: mentor, horário, valor retido, status e sala |
+| `mySessions(...)` | GET /api/mentors/sessions/mine — o que EU agendei: mentor, horário, valor retido, status e sala; sessão cujo horário terminou volta como `COMPLETED` |
 | `completeSession(...)` | POST /api/mentors/{mentorId}/sessions/{sessionId}/complete — só o dono; libera o escrow para o mentor menos os 10% da plataforma |
 | `cancelSession(...)` | POST /api/mentors/{mentorId}/sessions/{sessionId}/cancel — reembolso integral; o mentorado cancela até o horário começar, o mentor até a conclusão; horário futuro volta para a agenda |
 
@@ -1360,6 +1361,7 @@ corporativo do usuário (importável do LinkedIn).
 | `POST /empresas/{companyId}/follow` / `DELETE .../follow` | Follow / unfollow a page (idempotent; team members can follow too) |
 | `GET /microprojetos` / `POST /empresas/{companyId}/microprojetos` | Catálogo / criar microprojeto |
 | `POST /microprojetos/{projectId}/proposals` / `.../complete` / `.../select` | Propostas, concluir, selecionar |
+| `PUT /microprojetos/{projectId}` / `DELETE /microprojetos/{projectId}` | Editar ou remover da vitrine projeto aberto sem candidaturas (EDITOR ou superior); remoção preserva o histórico |
 | `GET /microprojetos/{projectId}` | Projeto; as propostas (com `person`) só para quem gerencia a página (EDITOR ou acima) |
 | `POST /me/business-profile` / `.../import` / `.../activate` | Perfil corporativo, importar, ativar |
 | `POST /me/business-profile/username` | Troca o nametag (o `@` e o fim de `/profissional/{nametag}`) |

@@ -111,4 +111,15 @@ class PushControllerTests {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.enabled").isBoolean());
 	}
+
+	@Test
+	void configHasNoKeyWhenVapidIsNotConfigured() throws Exception {
+		// A suíte não define VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY: o push fica desligado e o app não
+		// oferece o botão. Ligar é só preencher as duas variáveis do ambiente (ver PushConfigEnabledTests).
+		String body = mockMvc.perform(get("/push/config"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.enabled").value(false))
+			.andReturn().getResponse().getContentAsString();
+		org.assertj.core.api.Assertions.assertThat(body).doesNotContain("publicKey\":\"");
+	}
 }

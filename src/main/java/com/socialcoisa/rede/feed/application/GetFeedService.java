@@ -65,6 +65,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	private final com.socialcoisa.rede.feed.application.port.out.ReaderPreferencesReader readerPreferences;
 	private final PostNoteService postNotes;
 	private final com.socialcoisa.rede.feed.application.port.out.PollRepository polls;
+	private final com.socialcoisa.rede.feed.application.port.out.PostRepostRepository postReposts;
 	private static final Instant DEFAULT_BEFORE = Instant.parse("9999-12-31T23:59:59Z");
 
 	public GetFeedService(PostRepository postRepository, ArticleRepository articleRepository,
@@ -78,7 +79,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			com.socialcoisa.rede.corporate.application.port.out.CorporateProfileRepository corporateProfiles,
 			com.socialcoisa.rede.feed.application.port.out.ReaderPreferencesReader readerPreferences,
 			PostNoteService postNotes,
-			com.socialcoisa.rede.feed.application.port.out.PollRepository polls) {
+			com.socialcoisa.rede.feed.application.port.out.PollRepository polls,
+			com.socialcoisa.rede.feed.application.port.out.PostRepostRepository postReposts) {
 		this.postRepository = postRepository;
 		this.articleRepository = articleRepository;
 		this.feedCacheRepository = feedCacheRepository;
@@ -96,6 +98,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		this.readerPreferences = readerPreferences;
 		this.postNotes = postNotes;
 		this.polls = polls;
+		this.postReposts = postReposts;
 	}
 
 	private static final long TRENDING_WINDOW_HOURS = 24;
@@ -505,7 +508,59 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 					.thenComparing(Post::createdAt, java.util.Comparator.reverseOrder()))
 				.toList();
 		}
-		return new FeedPage(enrich(visible, query.userId()), nextCursor);
+		List<PostView> enriched = enrich(visible, query.userId());
+
+		// Reposts puros dos amigos: uma consulta em batch (todos os amigos de uma vez).
+		// Filtros do "Para você" valem: comunidade sem participacao, topico bloqueado e bloqueio.
+		Set<String> alreadyInFeed = visible.stream().map(p -> p.id().value()).collect(Collectors.toSet());
+		Set<String> hidden = blockedUsersReader.hiddenIdsFor(query.userId().value());
+		List<String> friendIdList = authors.stream().map(UserId::value)
+			.filter(id -> !id.equals(query.userId().value())).toList();
+		// Uma consulta batch: todos os reposts recentes dos amigos.
+		java.util.Map<String, java.util.List<com.socialcoisa.rede.feed.domain.PostRepost>> allReposts =
+			postReposts.findRepostsByUserIds(friendIdList, limit);
+		// Agrupa por post ID, guardando o repost mais recente (determinístico).
+		java.util.Map<String, com.socialcoisa.rede.feed.domain.PostRepost> bestRepost = new java.util.LinkedHashMap<>();
+		for (var entry : allReposts.entrySet()) {
+			for (var repost : entry.getValue()) {
+				if (alreadyInFeed.contains(repost.postId())) continue;
+				if (hidden.contains(repost.userId())) continue;
+				var existing = bestRepost.get(repost.postId());
+				if (existing == null || (repost.createdAt() != null && existing.createdAt() != null
+						&& repost.createdAt().isAfter(existing.createdAt()))) {
+					bestRepost.put(repost.postId(), repost);
+				}
+			}
+		}
+		if (!bestRepost.isEmpty()) {
+			List<Post> repostedPosts = postRepository.findByIds(
+				bestRepost.keySet().stream().map(PostId::new).toList()).stream()
+				.filter(Post::isActive)
+				// Mesmos filtros do "Para você": sem comunidade alheia, sem topico bloqueado.
+				.filter(p -> p.communityId() == null || !hiddenCommunities.contains(p.communityId()))
+				.filter(p -> blocked.isEmpty() || p.topic() == null || !blocked.contains(p.topic()))
+				.toList();
+			List<PostView> repostedViews = enrich(repostedPosts, query.userId());
+			java.util.Map<String, com.socialcoisa.rede.profile.domain.UserProfile> repostProfiles =
+				userProfileRepository.findAllByIds(bestRepost.values().stream()
+					.map(com.socialcoisa.rede.feed.domain.PostRepost::userId).collect(Collectors.toSet()))
+					.stream().collect(Collectors.toMap(
+						com.socialcoisa.rede.profile.domain.UserProfile::id,
+						java.util.function.Function.identity()));
+			enriched = new java.util.ArrayList<>(enriched);
+			for (PostView view : repostedViews) {
+				var repost = bestRepost.get(view.id());
+				if (repost == null) continue;
+				var reposter = repostProfiles.get(repost.userId());
+				if (reposter != null) {
+					enriched.add(view.withRepostedBy(new PostView.RepostedByView(
+						reposter.name(), reposter.username(), reposter.avatar())));
+				}
+			}
+			enriched.sort(java.util.Comparator.comparing(PostView::createdAt).reversed());
+		}
+
+		return new FeedPage(enriched, nextCursor);
 	}
 
 	/** Comunidades da pagina em que o leitor NAO participa (uma consulta em lote, nao uma por post). */

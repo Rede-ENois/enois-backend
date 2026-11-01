@@ -35,8 +35,11 @@ public interface MentorRepository {
 
 	Optional<MentorSession> findSessionById(String sessionId);
 
-	/** Sessões pagas e ainda em aberto — a liberação automática do escrow. */
-	List<MentorSession> findScheduledPaidSessions();
+	/** Sessões ainda agendadas (qualquer preço) — o relógio conclui as que já terminaram. */
+	List<MentorSession> findScheduledSessions();
+
+	/** Sessões pagas com dinheiro ainda no escrow — a liberação automática cuida delas. */
+	List<MentorSession> findUnsettledPaidSessions();
 
 	void delete(String mentorId);
 

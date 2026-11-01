@@ -38,6 +38,11 @@ class MicroProjectPersistenceAdapter implements MicroProjectRepository {
 	}
 
 	@Override
+	public Optional<MicroProject> findByIdForUpdate(String id) {
+		return projects.findForUpdate(id).map(MicroProjectJpaEntity::toDomain);
+	}
+
+	@Override
 	public List<MicroProject> findOpen(int limit) {
 		return projects.findByStatusOrderByCreatedAtDesc(MicroProjectStatus.OPEN, PageRequest.of(0, Math.max(1, limit)))
 			.stream().map(MicroProjectJpaEntity::toDomain).toList();
@@ -45,7 +50,7 @@ class MicroProjectPersistenceAdapter implements MicroProjectRepository {
 
 	@Override
 	public List<MicroProject> findByCompany(String companyId, int limit) {
-		return projects.findTop50ByCompanyIdOrderByCreatedAtDesc(companyId).stream()
+		return projects.findTop50ByCompanyIdAndStatusNotOrderByCreatedAtDesc(companyId, MicroProjectStatus.CANCELLED).stream()
 			.map(MicroProjectJpaEntity::toDomain).toList();
 	}
 
@@ -57,6 +62,11 @@ class MicroProjectPersistenceAdapter implements MicroProjectRepository {
 	@Override
 	public Optional<MicroProjectProposal> findProposalById(String id) {
 		return proposals.findById(id).map(MicroProjectProposalJpaEntity::toDomain);
+	}
+
+	@Override
+	public boolean hasProposalsForUpdate(String projectId) {
+		return !proposals.findForUpdate(projectId).isEmpty();
 	}
 
 	@Override

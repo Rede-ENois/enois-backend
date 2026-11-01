@@ -138,9 +138,10 @@ class FreelanceFlowTests {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("CLOSED"));
 
+		// A listagem é global (outros testes deixam freelances abertos): afirma só sobre o próprio.
 		mockMvc.perform(get("/freelances"))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.items.length()").value(0));
+			.andExpect(jsonPath("$.items[?(@.id == '" + id + "')]").isEmpty());
 	}
 
 	@Test

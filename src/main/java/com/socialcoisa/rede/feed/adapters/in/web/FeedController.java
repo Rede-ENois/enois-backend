@@ -591,14 +591,27 @@ class FeedController {
 			() -> new CommandResponse(200, sharePostUseCase.share(new PostActionCommand(user.id(), new PostId(postId)))));
 	}
 
-	/** Republica um post no feed de quem clicou (cópia com crédito ao autor original). */
+	/**
+	 * Republicar: sem body ou body vazio cria repost puro (ponteiro pro original);
+	 * com opiniao cria post novo do repostador citando o original.
+	 */
 	@PostMapping("/feed/posts/{postId}/repost")
 	@org.springframework.web.bind.annotation.ResponseStatus(org.springframework.http.HttpStatus.CREATED)
 	PostView repost(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String postId, @RequestBody(required = false) RepostRequest body) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		Post copy = repostPostService.repost(user.id().value(), postId, body == null ? null : body.opinion());
-		return PostView.from(copy);
+		String opinion = body == null ? null : body.opinion();
+		Post result = repostPostService.repost(user.id().value(), postId, opinion);
+		return PostView.from(result);
+	}
+
+	/** Desfaz o repost puro (remove o ponteiro, não o post original). */
+	@DeleteMapping("/feed/posts/{postId}/repost")
+	ResponseEntity<String> undoRepost(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String postId) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		repostPostService.undoRepost(user.id().value(), postId);
+		return ResponseEntity.ok("{\"status\":\"REMOVED\"}");
 	}
 
 	record RepostRequest(String opinion) {

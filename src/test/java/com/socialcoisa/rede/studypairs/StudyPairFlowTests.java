@@ -55,6 +55,9 @@ class StudyPairFlowTests {
 	@Autowired
 	private StudyPairService service;
 
+	@Autowired
+	private com.socialcoisa.rede.push.application.PushService pushService;
+
 	private TestAuthHelper auth;
 
 	@BeforeEach
@@ -296,6 +299,105 @@ class StudyPairFlowTests {
 		assertThat(mine).isNotNull();
 		assertThat(mine.get("openRequests").asInt()).isEqualTo(1);
 		assertThat(response).doesNotContain(a.userId()).doesNotContain("sp-popular-a");
+	}
+
+	@Test
+	void unverifiedEmailCannotLookForAPair() throws Exception {
+		AuthSession a = auth.authenticate("sp-unverified-a");
+		jdbc.update("update users set email_verified_at = null where id = ?", a.userId());
+
+		requestPair(a, "goal sp-unverified").andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("EMAIL_NOT_VERIFIED"));
+		// Com o e-mail sem confirmação até a sessão vira leitura: nada do módulo responde 200.
+		mockMvc.perform(get("/study-pairs/me").header("X-Session-Token", a.token()))
+			.andExpect(status().isForbidden());
+	}
+
+	@Test
+	void semanticallyDifferentGoalsNeverMerge() throws Exception {
+		AuthSession rust = auth.authenticate("sp-dist-rust");
+		AuthSession advanced = auth.authenticate("sp-dist-advanced");
+
+		requestPair(rust, "aprender rust sp-dist").andExpect(jsonPath("$.status").value("OPEN"));
+		requestPair(advanced, "aprender rust avançado sp-dist").andExpect(jsonPath("$.status").value("OPEN"));
+
+		assertThat(jdbc.queryForObject("select count(*) from study_pairs where user_a in (?, ?) or user_b in (?, ?)",
+			Integer.class, rust.userId(), advanced.userId(), rust.userId(), advanced.userId())).isZero();
+	}
+
+	@Test
+	void searchFoldsAccentsAndPunctuationLikeTheGoalKey() throws Exception {
+		AuthSession owner = auth.authenticate("sp-fold-owner");
+		AuthSession viewer = auth.authenticate("sp-fold-viewer");
+		requestPair(owner, "Química Orgânica sp-fold").andExpect(jsonPath("$.status").value("OPEN"));
+
+		for (String term : java.util.List.of("quimica organica sp-fold", "QUÍMICA ORGÂNICA SP-FOLD",
+				"Química, Orgânica")) {
+			JsonNode items = body(mockMvc.perform(get("/study-pairs/search").param("q", term)
+					.header("X-Session-Token", viewer.token()))
+				.andExpect(status().isOk())).get("items");
+			assertThat(items.size()).as("termo %s", term).isEqualTo(1);
+			assertThat(items.get(0).get("goal").asText()).isEqualTo("Química Orgânica sp-fold");
+		}
+	}
+
+	@Test
+	void checkinAcceptsExactlyFiveHundredCharacters() throws Exception {
+		AuthSession a = auth.authenticate("sp-limit500-a");
+		AuthSession b = auth.authenticate("sp-limit500-b");
+		String pairId = pair(a, b, "goal sp-limit500");
+
+		// Texto de verdade: o PlainText.defuse corta repetições acima de 12, então "aaaa..." mediria
+		// 12 e não 500 — o limite tem que ser provado com uma nota de tamanho real.
+		String base = "Estudei ownership, borrowing e lifetimes em Rust. ";
+		String fiveHundred = base.repeat(10).stripTrailing() + "!";
+		String fiveHundredAndOne = fiveHundred + "!";
+
+		assertThat(body(checkin(a, pairId, fiveHundred).andExpect(status().isOk())).get("note").asText())
+			.hasSize(500);
+		checkin(a, pairId, fiveHundredAndOne).andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("STUDY_NOTE_TOO_LONG"));
+	}
+
+	@Test
+	void reminderRunsOnThursdayAtSixInBrasiliaTime() throws Exception {
+		Class<?> scheduler = Class.forName("com.socialcoisa.rede.studypairs.application.StudyPairReminderScheduler");
+		java.lang.reflect.Method remind = scheduler.getDeclaredMethod("remind");
+		org.springframework.scheduling.annotation.Scheduled schedule = remind
+			.getAnnotation(org.springframework.scheduling.annotation.Scheduled.class);
+
+		assertThat(schedule).isNotNull();
+		assertThat(schedule.cron()).isEqualTo("${rede.study-pairs.reminder-cron:0 0 18 * * THU}");
+		assertThat(schedule.zone()).isEqualTo("America/Sao_Paulo");
+	}
+
+	@Test
+	void checkinStillNotifiesInAppWhenPushIsOff() throws Exception {
+		AuthSession a = auth.authenticate("sp-pushoff-a");
+		AuthSession b = auth.authenticate("sp-pushoff-b");
+		String pairId = pair(a, b, "goal sp-pushoff");
+
+		// A suíte roda sem VAPID: o push está desligado e a notificação in-app existe do mesmo jeito.
+		assertThat(pushService.isEnabled()).isFalse();
+		checkin(a, pairId, "estudei sem push").andExpect(status().isOk());
+		assertThat(notifications(b.userId(), "STUDY_PAIR_CHECKIN")).isEqualTo(1);
+	}
+
+	@Test
+	void checkinNotesNeverReachSomeoneOutsideThePair() throws Exception {
+		AuthSession a = auth.authenticate("sp-private-a");
+		AuthSession b = auth.authenticate("sp-private-b");
+		AuthSession outsider = auth.authenticate("sp-private-out");
+		String pairId = pair(a, b, "goal sp-private");
+		checkin(a, pairId, "nota privada sp-private").andExpect(status().isOk());
+
+		String mine = mockMvc.perform(get("/study-pairs/me").header("X-Session-Token", b.token()))
+			.andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+		assertThat(mine).contains("nota privada sp-private");
+
+		String others = mockMvc.perform(get("/study-pairs/me").header("X-Session-Token", outsider.token()))
+			.andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+		assertThat(others).doesNotContain("nota privada sp-private").doesNotContain(pairId);
 	}
 
 	private String pair(AuthSession first, AuthSession second, String goal) throws Exception {

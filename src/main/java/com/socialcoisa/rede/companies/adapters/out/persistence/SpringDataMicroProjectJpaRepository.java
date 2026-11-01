@@ -11,7 +11,11 @@ interface SpringDataMicroProjectJpaRepository extends JpaRepository<MicroProject
 
 	List<MicroProjectJpaEntity> findByStatusOrderByCreatedAtDesc(MicroProjectStatus status, Pageable pageable);
 
-	List<MicroProjectJpaEntity> findTop50ByCompanyIdOrderByCreatedAtDesc(String companyId);
+	List<MicroProjectJpaEntity> findTop50ByCompanyIdAndStatusNotOrderByCreatedAtDesc(String companyId, MicroProjectStatus status);
+
+	@org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+	@org.springframework.data.jpa.repository.Query("select p from MicroProjectJpaEntity p where p.id = :id")
+	java.util.Optional<MicroProjectJpaEntity> findForUpdate(@org.springframework.data.repository.query.Param("id") String id);
 
 	long countByCompanyIdAndStatus(String companyId, MicroProjectStatus status);
 
