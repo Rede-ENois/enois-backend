@@ -199,8 +199,41 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		String authorId = userProfileRepository.findByUsername(query.username())
 			.map(com.socialcoisa.rede.profile.domain.UserProfile::id)
 			.orElse(query.username());
-		List<Post> posts = postRepository.findActiveByAuthor(new UserId(authorId), before, limit);
-		return page(enrich(posts, query.viewerId()), posts, limit);
+		List<Post> authored = postRepository.findActiveByAuthor(new UserId(authorId), before, limit);
+
+		// Reposts puros: ponteiros na tabela post_reposts. Busca os IDs e depois os posts.
+		List<String> repostedIds = postReposts.findPostIdsByUserId(authorId, limit);
+		List<Post> repostedPosts = repostedIds.isEmpty() ? List.of()
+			: postRepository.findByIds(repostedIds.stream().map(PostId::new).toList()).stream()
+				.filter(Post::isActive)
+				.filter(p -> p.createdAt().isBefore(before))
+				.toList();
+
+		// Mescla posts autorais e repostados, sem duplicatas, ordenados por data.
+		Set<String> authoredIds = authored.stream().map(p -> p.id().value()).collect(Collectors.toSet());
+		List<Post> merged = new ArrayList<>(authored);
+		for (Post rp : repostedPosts) {
+			if (!authoredIds.contains(rp.id().value())) {
+				merged.add(rp);
+			}
+		}
+		merged.sort(Comparator.comparing(Post::createdAt).reversed());
+		List<Post> page = merged.stream().limit(limit).toList();
+
+		// Enriquece e marca os reposts com o badge "X republicou".
+		List<PostView> enriched = enrich(page, query.viewerId());
+		UserProfile ownerProfile = userProfileRepository.findById(authorId).orElse(null);
+		if (ownerProfile != null && !repostedIds.isEmpty()) {
+			Set<String> repostedSet = new java.util.HashSet<>(repostedIds);
+			PostView.RepostedByView badge = new PostView.RepostedByView(
+				ownerProfile.displayWithNickname(), ownerProfile.username(), ownerProfile.avatar());
+			enriched = enriched.stream()
+				.map(v -> repostedSet.contains(v.id()) && !v.authorId().equals(authorId)
+					? v.withRepostedBy(badge) : v)
+				.toList();
+		}
+
+		return page(enriched, page, limit);
 	}
 
 	@Override
@@ -357,6 +390,9 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			: polls.countsByPostIds(pollOptions.keySet());
 		Map<String, Integer> myVotes = currentUserId == null || pollOptions.isEmpty() ? Map.of()
 			: polls.votesByUserAndPostIds(currentUserId, pollOptions.keySet());
+		// Reposts puros do viewer: batch check para marcar currentUserReposted.
+		Set<String> repostedByViewer = currentUserId == null ? Set.of()
+			: postReposts.findPostIdsRepostedByUser(currentUserId.value(), postIdValues);
 		// Citação do repost com opinião: busca os originais da página em UMA consulta.
 		java.util.Set<String> quotedIds = visible.stream()
 			.filter(p -> p.repostWithOpinion() && p.repostOf() != null)
@@ -397,9 +433,11 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 						new PostView.CommunityView(community.id(), community.name(), community.joined()));
 				PostView withNotesView = withCommunity.withNotes(
 					notesByPost.getOrDefault(post.id().value(), List.of()), myNotes.get(post.id().value()));
+				boolean userReposted = repostedByViewer.contains(post.id().value());
+				PostView withRepostedFlag = userReposted ? withNotesView.withCurrentUserReposted(true) : withNotesView;
 				List<String> options = pollOptions.get(post.id().value());
 				if (options == null) {
-					return withNotesView;
+					return withRepostedFlag;
 				}
 				Map<Integer, Long> counts = pollCounts.getOrDefault(post.id().value(), Map.of());
 				List<Long> perOption = new java.util.ArrayList<>(options.size());
@@ -407,7 +445,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 					perOption.add(counts.getOrDefault(position, 0L));
 				}
 				long total = perOption.stream().mapToLong(Long::longValue).sum();
-				return withNotesView.withPoll(new PollView(options, perOption,
+				return withRepostedFlag.withPoll(new PollView(options, perOption,
 					myVotes.get(post.id().value()), total));
 			})
 			.toList();
