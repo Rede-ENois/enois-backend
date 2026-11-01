@@ -244,9 +244,11 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 			actionThrottle.exigePermitido("profile-update", command.userId(), updatesPerHour,
 				java.time.Duration.ofHours(1));
 		}
-		// A limpeza do HTML/CSS da bio e da capa e trabalho de CPU: roda antes de qualquer leitura no
-		// banco para nao ocupar uma conexao do pool enquanto acontece. Dentro da transacao e depois do
-		// findById, uma limpeza lenta prendia a conexao e esgotava o pool.
+		// A limpeza do HTML/CSS da bio e da capa e trabalho de CPU. A transacao ja esta aberta aqui (o
+		// proxy do `@Transactional` abre no inicio do metodo), mas a conexao do Hikari so e tomada no
+		// primeiro SQL: limpar antes de tocar no repositorio deixa o pool livre enquanto a CPU
+		// trabalha. Na ordem anterior (findById primeiro), cada limpeza lenta segurava uma conexao do
+		// pool e o esgotava.
 		boolean bioPresent = command.bioHtml() != null;
 		boolean bannerPresent = command.bannerHtml() != null;
 		String bioHtml = bioPresent && StringUtils.hasText(command.bioHtml())

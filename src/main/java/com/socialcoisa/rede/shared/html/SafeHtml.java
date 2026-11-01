@@ -94,10 +94,12 @@ public final class SafeHtml {
 	/**
 	 * `url(...)`. As classes de caractere sao possessivas e excluem `(` e as aspas: o argumento de um
 	 * `url()` nao pode conter nenhum deles, entao o casamento continua o mesmo — mas a varredura para
-	 * no primeiro delimitador em vez de percorrer o resto da folha a cada candidato.
+	 * no primeiro delimitador em vez de percorrer o resto da folha a cada candidato. Espaco continua
+	 * valendo no argumento sem aspas, como no regex anterior: `url(foo bar)` e recusado por inteiro em
+	 * vez de deixar o resto da declaracao na folha.
 	 */
 	private static final Pattern STYLE_URL = Pattern
-		.compile("(?is)url\\s*\\(\\s*(?:\"([^\"]*+)\"|'([^']*+)'|([^'\"()\\s]*+))\\s*\\)");
+		.compile("(?is)url\\s*\\(\\s*(?:\"([^\"]*+)\"|'([^']*+)'|([^'\"()]*+))\\s*\\)");
 	private static final Pattern STYLE_ATTRIBUTE = Pattern.compile("(?is)\\sstyle\\s*=\\s*(\"([^\"]*)\"|'([^']*)')");
 
 	/** Tag de embed de terceiro (quadro/objeto) com o endereco numa das duas formas usadas. */
@@ -459,6 +461,12 @@ public final class SafeHtml {
 		StringBuilder out = null;
 		int copied = 0;
 		while (matcher.find()) {
+			// Token que caiu dentro do trecho ja apagado: `declarationEnd` varreria o resto da folha
+			// de novo so para o recorte ser descartado logo abaixo. Com tokens colados (sem
+			// `;`/`{`/`}` entre eles) era uma varredura do resto da folha por token.
+			if (matcher.start() < copied) {
+				continue;
+			}
 			int start = Math.max(copied, declarationStart(css, matcher.start(), copied));
 			int end = declarationEnd(css, matcher.end());
 			if (end <= start) {

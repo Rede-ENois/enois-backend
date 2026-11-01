@@ -83,6 +83,25 @@ class SafeHtmlCostTests {
 		assertTimeoutPreemptively(LIMITE, () -> limpar(payload));
 	}
 
+	/**
+	 * Tokens perigosos colados, sem `;`/`{`/`}` entre eles: a declaracao que contem o primeiro token
+	 * vai ate o fim da folha, e os outros ~4.600 casamentos caem dentro do trecho ja apagado. Se o
+	 * laco voltar a varrer o resto da folha para cada um deles, o custo vira quadratico de novo —
+	 * e o teto aqui e apertado de proposito, porque so o caminho correto termina nessa faixa.
+	 */
+	@Test
+	void tokensPerigososSemDelimitadorTerminamRapido() {
+		String payload = "<style>a:" + repetir("expression(x)", 4_600) + "</style><p>ok</p>";
+		assertTimeoutPreemptively(Duration.ofMillis(300), () -> limpar(payload));
+	}
+
+	@Test
+	void urlComEspacoNoArgumentoSemAspasEhRecusado() {
+		String out = SafeHtml.requireProfileHtml("<style>.a{background:url(foo bar)}</style><p>ok</p>");
+		assertThat(out).doesNotContain("url(");
+		assertThat(out).doesNotContain("foo bar");
+	}
+
 	@Test
 	void markupSemFechamentoDeTagTerminaRapido() {
 		String payload = "<p>ok</p>" + repetir("<a ", TAMANHO / 3);
