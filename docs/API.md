@@ -810,6 +810,11 @@ are for sale); a broken file stops the boot. Each item has `id`, `kind` (`FRAME`
 - A look costs 75% of its missing pieces, rounded to whole faíscas; each piece is still charged
   under its own ref, so buying the same look twice never charges twice. It equips every piece,
   replaces the badge list with the look badges and sets the look status.
+- A collection may hold several looks. Each look entry takes an optional `id` (a slug such as
+  `look-floresta`); without it the id stays `look-<collection>`, so the original look of every
+  collection keeps its address. The shipped look ids are unique and validated at startup. Looks
+  follow their collection's season, and the theme-inspired looks of each collection are named
+  after the appearance themes with the same palette (`Vaporwave`, `Terminal`, `Vale Esmeralda`…).
 - Badges equip at the front of the list, deduplicated, up to 5 (`409 MAX_BADGES`). Official badges
   (`emblema-*`) can only be shown by who owns them, also through `PUT /me/badges` and the profile
   edit (`403 NOT_OWNED`).
