@@ -79,6 +79,24 @@ public class MicroProjectService {
 		if (!access.hasRole()) {
 			throw new ApiException(403, "NOT_COMPANY_MEMBER", "Voce nao faz parte desta pagina empresarial.");
 		}
+		validateFields(title, problem, scope, deliverables, acceptanceCriteria, budget);
+		MicroProject project = MicroProject.create(
+			"mproj_" + UUID.randomUUID().toString().replace("-", ""), access.company().id(), userId,
+			title.trim(), problem.trim(),
+			StringUtils.hasText(scope) ? scope.trim() : null,
+			deliverables.trim(), acceptanceCriteria.trim(),
+			StringUtils.hasText(budget) ? budget.trim() : null,
+			deadline, clock.instant());
+		MicroProject saved = projects.save(project);
+		notificationService.create(access.company().ownerUserId(), "MICROPROJETO", userId, "Microprojeto publicado",
+			"\"" + saved.title() + "\" esta aberto na pagina da empresa.", "/api/empresa/" + access.company().slug(),
+			"Ver");
+		companyService.notifyFollowers(access.company(), userId, "Novo microprojeto",
+			access.company().name() + " publicou \"" + saved.title() + "\".");
+		return saved;
+	}
+
+	private void validateFields(String title, String problem, String scope, String deliverables, String acceptanceCriteria, String budget) {
 		// O teto e o da COLUNA (`micro_projects.title varchar(200)`).
 		TextFieldLimit.check("COMPANY_FIELD_TOO_LONG", "titulo", title, 200);
 		if (!StringUtils.hasText(title) || title.trim().length() < 8) {
@@ -94,20 +112,42 @@ public class MicroProjectService {
 		if (!StringUtils.hasText(acceptanceCriteria)) {
 			throw new ApiException(400, "INVALID_ACCEPTANCE", "Criterios de aceite sao obrigatorios.");
 		}
-		MicroProject project = MicroProject.create(
-			"mproj_" + UUID.randomUUID().toString().replace("-", ""), access.company().id(), userId,
-			title.trim(), problem.trim(),
-			StringUtils.hasText(scope) ? scope.trim() : null,
-			deliverables.trim(), acceptanceCriteria.trim(),
-			StringUtils.hasText(budget) ? budget.trim() : null,
-			deadline, clock.instant());
-		MicroProject saved = projects.save(project);
-		notificationService.create(access.company().ownerUserId(), "MICROPROJETO", userId, "Microprojeto publicado",
-			"\"" + saved.title() + "\" esta aberto na pagina da empresa.", "/api/empresa/" + access.company().slug(),
-			"Ver");
-		companyService.notifyFollowers(access.company(), userId, "Novo microprojeto",
-			access.company().name() + " publicou \"" + saved.title() + "\".");
-		return saved;
+		TextFieldLimit.check("COMPANY_FIELD_TOO_LONG", "problema", problem, 4000);
+		TextFieldLimit.check("COMPANY_FIELD_TOO_LONG", "escopo", scope, 4000);
+		TextFieldLimit.check("COMPANY_FIELD_TOO_LONG", "entregaveis", deliverables, 4000);
+		TextFieldLimit.check("COMPANY_FIELD_TOO_LONG", "criterios de aceite", acceptanceCriteria, 4000);
+		TextFieldLimit.check("COMPANY_FIELD_TOO_LONG", "orcamento", budget, 160);
+	}
+
+	private MicroProject lockedProject(String id) {
+		return projects.findByIdForUpdate(id)
+			.orElseThrow(() -> new ApiException(404, "PROJECT_NOT_FOUND", "Microprojeto nao encontrado."));
+	}
+
+	private void requireEditable(MicroProject project, String userId) {
+		requireCompanyRole(project, userId);
+		if (!project.isOpen() || projects.hasProposalsForUpdate(project.id())) {
+			throw new ApiException(409, "PROJECT_NOT_EDITABLE",
+				"Apenas microprojetos abertos sem candidaturas podem ser editados ou removidos.");
+		}
+	}
+
+	@Transactional
+	public MicroProject edit(String projectId, String userId, String title, String problem, String scope,
+			String deliverables, String acceptanceCriteria, String budget, LocalDate deadline) {
+		MicroProject project = lockedProject(projectId);
+		requireEditable(project, userId);
+		validateFields(title, problem, scope, deliverables, acceptanceCriteria, budget);
+		return projects.save(project.edit(title.trim(), problem.trim(),
+			StringUtils.hasText(scope) ? scope.trim() : null, deliverables.trim(), acceptanceCriteria.trim(),
+			StringUtils.hasText(budget) ? budget.trim() : null, deadline, clock.instant()));
+	}
+
+	@Transactional
+	public MicroProject remove(String projectId, String userId) {
+		MicroProject project = lockedProject(projectId);
+		requireEditable(project, userId);
+		return projects.save(project.cancel(clock.instant()));
 	}
 
 	@Transactional(readOnly = true)
@@ -144,7 +184,7 @@ public class MicroProjectService {
 				"Conte sua proposta em pelo menos 20 caracteres.");
 		}
 		TextFieldLimit.check("COMPANY_FIELD_TOO_LONG", "proposta", message.trim(), 2000);
-		MicroProject project = project(projectId);
+		MicroProject project = lockedProject(projectId);
 		if (!project.isOpen()) {
 			throw new ApiException(409, "PROJECT_NOT_OPEN", "Este microprojeto nao esta mais aberto.");
 		}
@@ -182,8 +222,11 @@ public class MicroProjectService {
 
 	@Transactional
 	public MicroProject selectProposal(String projectId, String proposalId, String userId) {
-		MicroProject project = project(projectId);
+		MicroProject project = lockedProject(projectId);
 		requireCompanyRole(project, userId);
+		if (!project.isOpen()) {
+			throw new ApiException(409, "PROJECT_NOT_OPEN", "Este microprojeto nao esta mais aberto.");
+		}
 		MicroProjectProposal proposal = projects.findProposalById(proposalId)
 			.orElseThrow(() -> new ApiException(404, "PROPOSAL_NOT_FOUND", "Candidatura nao encontrada."));
 		if (!proposal.projectId().equals(projectId) || !proposal.isSent()) {
@@ -205,7 +248,7 @@ public class MicroProjectService {
 	 */
 	@Transactional
 	public MicroProject complete(String projectId, String userId, Integer rating, String text) {
-		MicroProject project = project(projectId);
+		MicroProject project = lockedProject(projectId);
 		requireCompanyRole(project, userId);
 		if (project.status() != com.socialcoisa.rede.companies.domain.MicroProjectStatus.IN_PROGRESS) {
 			throw new ApiException(409, "PROJECT_NOT_IN_PROGRESS", "So microprojeto em andamento pode ser concluido.");

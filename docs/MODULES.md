@@ -1360,6 +1360,7 @@ corporativo do usuário (importável do LinkedIn).
 | `POST /empresas/{companyId}/follow` / `DELETE .../follow` | Follow / unfollow a page (idempotent; team members can follow too) |
 | `GET /microprojetos` / `POST /empresas/{companyId}/microprojetos` | Catálogo / criar microprojeto |
 | `POST /microprojetos/{projectId}/proposals` / `.../complete` / `.../select` | Propostas, concluir, selecionar |
+| `PUT /microprojetos/{projectId}` / `DELETE /microprojetos/{projectId}` | Editar ou remover da vitrine projeto aberto sem candidaturas (EDITOR ou superior); remoção preserva o histórico |
 | `GET /microprojetos/{projectId}` | Projeto; as propostas (com `person`) só para quem gerencia a página (EDITOR ou acima) |
 | `POST /me/business-profile` / `.../import` / `.../activate` | Perfil corporativo, importar, ativar |
 | `POST /me/business-profile/username` | Troca o nametag (o `@` e o fim de `/profissional/{nametag}`) |

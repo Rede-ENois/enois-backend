@@ -220,6 +220,9 @@ class CompanyController {
 			@PathVariable String projectId) {
 		CurrentUser viewer = resolveSafely(sessionToken);
 		MicroProject project = microProjects.project(projectId);
+		if (project.status() == MicroProjectStatus.CANCELLED) {
+			throw new com.socialcoisa.rede.shared.web.ApiException(404, "PROJECT_NOT_FOUND", "Microprojeto nao encontrado.");
+		}
 		// Proposals are for whoever manages the page; anyone else (logged in or not) reads the project alone.
 		boolean team = viewer != null && seesProposals(companies.roleOf(project.companyId(), viewer.id().value()));
 		List<MicroProjectProposal> proposals = team ? microProjects.proposals(projectId, viewer.id().value())
@@ -236,6 +239,23 @@ class CompanyController {
 		MicroProject created = microProjects.publish(companyId, user.id().value(), request.title(), request.problem(),
 			request.scope(), request.deliverables(), request.acceptanceCriteria(), request.budget(), request.deadline());
 		return Map.of("id", created.id(), "status", created.status().name());
+	}
+
+	@org.springframework.web.bind.annotation.PutMapping("/microprojetos/{projectId}")
+	Map<String, Object> editProject(@RequestHeader(value = "X-Session-Token", required = false) String token,
+			@PathVariable String projectId, @RequestBody PublishProjectRequest request) {
+		CurrentUser user = currentUserResolver.resolve(token);
+		MicroProject edited = microProjects.edit(projectId, user.id().value(), request.title(), request.problem(),
+			request.scope(), request.deliverables(), request.acceptanceCriteria(), request.budget(), request.deadline());
+		return Map.of("id", edited.id(), "status", edited.status().name());
+	}
+
+	@DeleteMapping("/microprojetos/{projectId}")
+	Map<String, Object> removeProject(@RequestHeader(value = "X-Session-Token", required = false) String token,
+			@PathVariable String projectId) {
+		CurrentUser user = currentUserResolver.resolve(token);
+		MicroProject removed = microProjects.remove(projectId, user.id().value());
+		return Map.of("id", removed.id(), "status", removed.status().name());
 	}
 
 	@PostMapping("/microprojetos/{projectId}/proposals")

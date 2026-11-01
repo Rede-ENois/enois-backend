@@ -58,6 +58,12 @@ public class MicroProject {
 			budget, deadline, status, selectedProposalId, createdAt, updatedAt);
 	}
 
+	public MicroProject edit(String title, String problem, String scope, String deliverables,
+			String acceptanceCriteria, String budget, LocalDate deadline, Instant now) {
+		return new MicroProject(id, companyId, createdBy, title, problem, scope, deliverables, acceptanceCriteria,
+			budget, deadline, status, selectedProposalId, createdAt, now);
+	}
+
 	public MicroProject touch(Instant now) {
 		return new MicroProject(id, companyId, createdBy, title, problem, scope, deliverables, acceptanceCriteria,
 			budget, deadline, status, selectedProposalId, createdAt, now);

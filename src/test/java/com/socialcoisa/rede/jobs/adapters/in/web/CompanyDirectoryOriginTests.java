@@ -46,12 +46,12 @@ class CompanyDirectoryOriginTests {
 	@Test
 	void oDiretorioDizAOrigemDeCadaEmpresa() throws Exception {
 		Instant agora = Instant.now();
-		TestDatabase.insertJob("job_dir_enois", "Vaga interna", "Empresa Interna LTDA", "Remoto",
+		TestDatabase.insertJob("job_dir_enois", "Vaga interna", "DirOrigem Empresa Interna", "Remoto",
 			"FULL_TIME", "SENIOR", List.of("Java"), agora);
-		TestDatabase.insertExternalJob("ext_dir_externa", "Vaga agregada", "Plataforma Externa SA",
+		TestDatabase.insertExternalJob("ext_dir_externa", "Vaga agregada", "DirOrigem Plataforma Externa",
 			"Remoto", "https://plataforma.exemplo.test/vaga/1", agora);
 
-		MvcResult resposta = mockMvc.perform(get("/jobs/companies"))
+		MvcResult resposta = mockMvc.perform(get("/jobs/companies").param("query", "DirOrigem"))
 			.andExpect(status().isOk())
 			.andReturn();
 
@@ -61,10 +61,10 @@ class CompanyDirectoryOriginTests {
 		JsonNode interna = null;
 		JsonNode externa = null;
 		for (JsonNode item : raiz) {
-			if ("Empresa Interna LTDA".equals(item.path("name").asText())) {
+			if ("DirOrigem Empresa Interna".equals(item.path("name").asText())) {
 				interna = item;
 			}
-			if ("Plataforma Externa SA".equals(item.path("name").asText())) {
+			if ("DirOrigem Plataforma Externa".equals(item.path("name").asText())) {
 				externa = item;
 			}
 		}

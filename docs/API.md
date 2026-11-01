@@ -541,6 +541,7 @@ carry `companySlug` (null when the job is not linked to a page).
 Página fechada (removida pela moderação ou pela própria empresa) sai do diretório (`GET /api/empresas`)
 e responde `404 COMPANY_NOT_FOUND` em `/api/empresa/{slug}`; operações sobre ela dão `409 COMPANY_CLOSED`.
 | POST / DELETE | `/api/empresas/{companyId}/follow` | Follow / unfollow (idempotent) | Yes |
+| PUT / DELETE | `/api/microprojetos/{id}` | Editar ou remover da vitrine um projeto aberto sem candidaturas | Yes (EDITOR or above) |
 | POST | `/api/microprojetos/{id}/proposals` | Proposal from the active professional profile | Yes |
 | POST | `/api/microprojetos/{id}/complete` | Complete, optionally with a review | Yes (EDITOR or above) |
 
