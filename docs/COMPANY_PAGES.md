@@ -70,7 +70,7 @@ Fluxo (com notificações em cada virada):
 4. Profissional entrega (mensagem/link pela conversa da página — Fase 2; MVP: aceite manual).
 5. Empresa marca COMPLETED (critérios de aceite conferidos).
 
-Regras: quem publica precisa de papel na página; um profissional não candidata a projeto da
+Regras: gestores (EDITOR ou superior) podem editar ou remover da vitrine projetos abertos sem candidaturas. A remoção cancela o projeto e preserva o histórico; projetos com candidaturas ou em andamento mantêm o contrato. Quem publica precisa de papel na página; um profissional não candidata a projeto da
 própria empresa; projeto CANCELLED some da vitrine mas mantém histórico. Aceite: projeto
 aberto aparece na página e no diretório; fluxo candidato→selecionado→entrega→aceite funciona
 com notificações.

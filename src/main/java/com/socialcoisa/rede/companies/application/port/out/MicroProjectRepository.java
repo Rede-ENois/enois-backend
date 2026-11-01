@@ -13,6 +13,8 @@ public interface MicroProjectRepository {
 
 	Optional<MicroProject> findById(String id);
 
+	Optional<MicroProject> findByIdForUpdate(String id);
+
 	/** Vitrine: projetos abertos, mais recentes primeiro. */
 	List<MicroProject> findOpen(int limit);
 
@@ -22,6 +24,8 @@ public interface MicroProjectRepository {
 	MicroProjectProposal saveProposal(MicroProjectProposal proposal);
 
 	Optional<MicroProjectProposal> findProposalById(String id);
+
+	boolean hasProposalsForUpdate(String projectId);
 
 	boolean existsProposalByUser(String projectId, String userId);
 
