@@ -40,6 +40,10 @@ class UserPreferenceJpaEntity {
 	@Column(name = "lite_mode", nullable = false)
 	private boolean liteMode;
 
+	/** Interface classica e economica (BATATA); implica o modo lite na apresentacao. */
+	@Column(name = "batata_mode", nullable = false)
+	private boolean batataMode;
+
 	@Column(name = "updated_at", nullable = false)
 	private Instant updatedAt;
 
@@ -61,11 +65,12 @@ class UserPreferenceJpaEntity {
 		entity.nightRestReminder = preference.nightRestReminder();
 		entity.nightRestDismissedOn = preference.nightRestDismissedOn();
 		entity.liteMode = preference.liteMode();
+		entity.batataMode = preference.batataMode();
 		return entity;
 	}
 
 	UserPreference toDomain() {
 		return new UserPreference(userId, themeId, likedTopics, blockedTopics, disabledModules,
-			nightRestReminder, nightRestDismissedOn, liteMode, updatedAt);
+			nightRestReminder, nightRestDismissedOn, liteMode, batataMode, updatedAt);
 	}
 }

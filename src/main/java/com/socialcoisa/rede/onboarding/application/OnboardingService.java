@@ -169,7 +169,7 @@ public class OnboardingService {
 			return;
 		}
 		personalization.update(userId, new ArrayList<>(liked), current.blockedTopics(), current.disabledModules(),
-			null, null);
+			null, null, null);
 	}
 
 	/** Adds skills through the profile update (same validation), keeping the existing ones. */
