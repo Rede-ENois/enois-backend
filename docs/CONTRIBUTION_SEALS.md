@@ -90,6 +90,14 @@ financeiro nunca se mistura com reputação técnica.
    primeira página e “Carregar mais” busca o resto, então não existe mais o teto de 12 por
    categoria. Notas internas, suspeitas, e-mail e detalhes de revisão nunca são públicos.
 
+## Repositórios elegíveis
+
+Todo repositório **público** da organização conta, inclusive os criados depois: a cada sincronização
+(que não seja dry-run) o sistema lista os repositórios da organização (`GITHUB_ORGANIZATION`) e registra
+os novos já habilitados. Forks, arquivados e privados nunca entram — o título de PR/issue vira evidência
+pública. Uma linha existente nunca é alterada pela descoberta: o que a administração desligou em
+`PATCH /admin/contributors/repositories` continua desligado. Falha ao listar não interrompe o ciclo.
+
 ## Revisão de PRs no painel
 
 - A aba **Pull requests** lista os PRs abertos dos repositórios elegíveis (`GET /admin/github/pulls`,
@@ -128,7 +136,7 @@ financeiro nunca se mistura com reputação técnica.
 | Tabela | Papel |
 | --- | --- |
 | `github_identities` | vínculo usuário Énóis ↔ ID imutável do GitHub, login e estado da última sync |
-| `github_repositories` | allowlist explícita de repositórios elegíveis |
+| `github_repositories` | repositórios elegíveis: os públicos da organização entram sozinhos; o painel pode desligar |
 | `github_contributions` | evidência por `(repository, kind, object_number)` — PR **ou** issue |
 | `github_contribution_events` | auditoria de importação, revisão, contestação e revogação |
 | `user_seals` | uma linha por `(user_id, seal_type)`, status ACTIVE/REVOKED |
@@ -211,6 +219,7 @@ O processo é seguro para reexecução: o índice único e o upsert preservam a 
 | `GITHUB_SYNC_CRON` | cadência do worker (default `0 */10 * * * *`, a cada 10 minutos) |
 | `GITHUB_SYNC_MAX_PAGES` | páginas por repositório por ciclo (default 3) |
 | `GITHUB_SYNC_MAX_DETAILS` | PRs com detalhes (arquivos/revisões) por ciclo (default 60) |
+| `GITHUB_ORGANIZATION` | organização cujos repositórios públicos (sem forks nem arquivados) são elegíveis e descobertos a cada sincronização (default `Rede-ENois`; vazio desliga a descoberta) |
 | `GITHUB_QUALIFIED_ISSUE_LABELS` | labels que qualificam issue automaticamente, separadas por vírgula (default vazio = só revisão humana; QA e produção definem `bug`) |
 
 **Nome dos secrets no GitHub:** o GitHub recusa secrets cujo **nome** comece com `GITHUB_`
@@ -253,6 +262,7 @@ nos repositórios elegíveis; sem ele a API pública limita em 60 requisições/
   1.000, 1.001) e um emblema único e fixo por nível.
 - `GitHubContributionSyncTests`: idempotência de PR e issue, mapeamento por ID, qualificação por
   label, perda de qualificação, dry-run e revert.
+- `GitHubContributionSyncTests` também cobre a descoberta de repositórios novos da organização.
 - `ContributorSealFlowTests`: promoção/rebaixamento por contagem, qualificação por revisão,
   projeção pública, revogação/concessão manual e critérios.
 - `GitHubIdentityServiceTests`: exclusividade do ID e desvínculo.

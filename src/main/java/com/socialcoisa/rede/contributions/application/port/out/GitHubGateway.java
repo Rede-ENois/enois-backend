@@ -9,6 +9,14 @@ import java.util.List;
  */
 public interface GitHubGateway {
 
+	/**
+	 * Nomes completos ({@code org/repo}) dos repositórios públicos da organização, sem forks nem
+	 * arquivados. Repositório privado nunca entra: o título de PR/issue vira evidência pública.
+	 */
+	default List<String> listOrganizationRepositories(String organization, int maxPages) {
+		return List.of();
+	}
+
 	/** PRs fechados/integrados, ordenados por atualização desc, com teto de páginas. */
 	List<GitHubPullRequest> listMergedPullRequests(String repository, Instant since, int maxPages);
 
