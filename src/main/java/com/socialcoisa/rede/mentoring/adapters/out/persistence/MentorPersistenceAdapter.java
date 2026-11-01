@@ -110,8 +110,15 @@ class MentorPersistenceAdapter implements MentorRepository {
 	}
 
 	@Override
-	public List<MentorSession> findScheduledPaidSessions() {
-		return sessionRepo.findByStatusAndPriceSparksIsNotNull(SessionStatus.SCHEDULED).stream()
+	public List<MentorSession> findScheduledSessions() {
+		return sessionRepo.findByStatus(SessionStatus.SCHEDULED).stream()
+			.map(MentorSessionJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public List<MentorSession> findUnsettledPaidSessions() {
+		return sessionRepo.findByPriceSparksIsNotNullAndSettledAtIsNull().stream()
 			.map(MentorSessionJpaEntity::toDomain)
 			.toList();
 	}

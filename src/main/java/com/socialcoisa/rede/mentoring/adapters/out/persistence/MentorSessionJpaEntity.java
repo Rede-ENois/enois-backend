@@ -48,6 +48,10 @@ class MentorSessionJpaEntity {
 	@Column(name = "room_url", length = 500)
 	private String roomUrl;
 
+	/** Quando o valor do escrow foi pago ou devolvido; null enquanto a liquidação está pendente. */
+	@Column(name = "settled_at")
+	private Instant settledAt;
+
 	@Column(name = "created_at", nullable = false)
 	private Instant createdAt;
 
@@ -65,13 +69,14 @@ class MentorSessionJpaEntity {
 		e.priceSparks = session.priceSparks();
 		e.roomMode = session.roomMode() == null ? RoomMode.JITSI_SESSION.name() : session.roomMode().name();
 		e.roomUrl = session.roomUrl();
+		e.settledAt = session.settledAt();
 		e.createdAt = session.createdAt();
 		return e;
 	}
 
 	MentorSession toDomain() {
 		return MentorSession.restore(id, mentorId, menteeId, slotId, message, status, priceSparks,
-			RoomMode.fromStored(roomMode), roomUrl, createdAt);
+			RoomMode.fromStored(roomMode), roomUrl, settledAt, createdAt);
 	}
 
 }

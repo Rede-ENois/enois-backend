@@ -335,7 +335,7 @@ public class MentorService {
 	/** Inscrições recebidas pelo mentor (só o dono), com o horário de cada uma. */
 	public List<MentorSession> sessionsOf(String mentorId, String userId) {
 		requireOwner(mentorId, userId);
-		return repository.findSessionsByMentor(mentorId);
+		return withTheClock(repository.findSessionsByMentor(mentorId));
 	}
 
 	public List<MentorAvailability> availabilitiesOf(String mentorId, String userId) {
@@ -345,7 +345,78 @@ public class MentorService {
 
 	/** Sessões que EU marquei como mentorado (a pessoa também acompanha o que agendou). */
 	public List<MentorSession> sessionsByMentee(String menteeId) {
-		return repository.findSessionsByMentee(menteeId);
+		return withTheClock(repository.findSessionsByMentee(menteeId));
+	}
+
+	/**
+	 * Aplica o relógio à lista: sessão cujo horário já terminou não continua "agendada" — ela é
+	 * concluída na hora da leitura, então sai da agenda e vai para o histórico dos dois lados.
+	 *
+	 * A conclusão aqui só muda o estado. O dinheiro do escrow continua sendo resolvido por
+	 * {@link #settleExpiredSessions()} depois da janela de contestação (ou pela confirmação do
+	 * mentor); antecipar o pagamento tiraria do mentorado o prazo para contestar a sessão.
+	 */
+	private List<MentorSession> withTheClock(List<MentorSession> sessions) {
+		Instant now = clock.instant();
+		List<MentorSession> applied = new ArrayList<>(sessions.size());
+		for (MentorSession session : sessions) {
+			applied.add(finished(session, now) ? finish(session, now) : session);
+		}
+		return applied;
+	}
+
+	/** O horário da sessão já terminou? Vale o fim do horário; o início só quando não há fim. */
+	private boolean finished(MentorSession session, Instant now) {
+		if (session.status() != SessionStatus.SCHEDULED) {
+			return false;
+		}
+		MentorSlot slot = session.slotId() == null ? null
+			: repository.findSlotById(session.slotId()).orElse(null);
+		Instant endsAt = slot == null ? null : (slot.endsAt() != null ? slot.endsAt() : slot.startsAt());
+		return endsAt != null && !endsAt.isAfter(now);
+	}
+
+	/**
+	 * Conclui a sessão na própria transação e devolve a versão gravada. Relê antes de agir: entre
+	 * a leitura da lista e aqui a sessão pode ter sido confirmada ou cancelada por outra pessoa.
+	 * Falha de concorrência não derruba a leitura — a próxima passada (ou o worker) resolve.
+	 */
+	private MentorSession finish(MentorSession candidate, Instant now) {
+		MentorSession[] completed = new MentorSession[1];
+		try {
+			settlement.executeWithoutResult(status -> {
+				MentorSession session = repository.findSessionById(candidate.id()).orElse(null);
+				if (session == null || !finished(session, now)) {
+					return;
+				}
+				MentorSession done = session.complete();
+				repository.saveSession(done);
+				Mentor mentor = repository.findById(session.mentorId()).orElse(null);
+				if (mentor != null) {
+					repository.save(mentor.withSessionCompleted(now));
+				}
+				completed[0] = done;
+			});
+		}
+		catch (RuntimeException ignored) {
+			// a lista ainda é devolvida; a próxima leitura ou o worker conclui
+		}
+		return completed[0] != null ? completed[0] : candidate;
+	}
+
+	/**
+	 * Sessão cujo horário terminou não fica presa como "agendada" para quem não abre a agenda: o
+	 * worker aplica a mesma regra da leitura, sem mexer no dinheiro do escrow.
+	 */
+	@Scheduled(fixedDelayString = "${rede.mentoring.session-completion-delay-ms:300000}",
+		initialDelayString = "${rede.mentoring.session-completion-initial-delay-ms:120000}")
+	public void completeFinishedSessions() {
+		Instant now = clock.instant();
+		for (MentorSession candidate : repository.findScheduledSessions()) {
+			if (finished(candidate, now)) {
+				finish(candidate, now);
+			}
+		}
 	}
 
 	/**
@@ -431,9 +502,10 @@ public class MentorService {
 		if (session.paid()) {
 			coins.escrowRelease(mentor.userId(), session.priceSparks(), escrowRef(session), "Mentoria concluida");
 		}
-		MentorSession completed = session.complete();
+		Instant now = clock.instant();
+		MentorSession completed = session.complete().settled(now);
 		repository.saveSession(completed);
-		repository.save(mentor.withSessionCompleted(clock.instant()));
+		repository.save(mentor.withSessionCompleted(now));
 		return completed;
 	}
 
@@ -462,7 +534,7 @@ public class MentorService {
 		if (session.paid()) {
 			coins.escrowRefund(session.menteeId(), session.priceSparks(), escrowRef(session), "Mentoria cancelada");
 		}
-		MentorSession cancelled = session.cancel();
+		MentorSession cancelled = session.cancel().settled(clock.instant());
 		repository.saveSession(cancelled);
 		if (slot != null && !slot.available() && slot.startsAt() != null
 				&& slot.startsAt().isAfter(clock.instant())) {
@@ -475,20 +547,27 @@ public class MentorService {
 	 * O escrow não pode ficar preso: passada a janela de contestação do mentorado, o valor cai para
 	 * o mentor com a taxa, mesmo sem a confirmação dele — a sessão aconteceu. Roda de hora em hora,
 	 * cada sessão na própria transação para uma falha não travar as outras.
+	 *
+	 * A sessão pode já ter sido concluída pelo relógio ({@link #completeFinishedSessions()}):
+	 * {@code settledAt} distingue "concluída e paga" de "concluída esperando a janela", e é o que
+	 * impede o dinheiro de ser liberado duas vezes.
 	 */
 	@Scheduled(fixedDelay = 3_600_000, initialDelay = 600_000)
 	public void settleExpiredSessions() {
 		Instant now = clock.instant();
-		for (MentorSession candidate : repository.findScheduledPaidSessions()) {
+		for (MentorSession candidate : repository.findUnsettledPaidSessions()) {
 			try {
 				if (!settleable(candidate, now)) {
 					continue;
 				}
 				settlement.executeWithoutResult(status -> {
 					MentorSession session = repository.findSessionById(candidate.id()).orElse(null);
-					if (session == null || session.status() != SessionStatus.SCHEDULED || !settleable(session, now)) {
+					if (session == null || session.settledAt() != null || session.status() == SessionStatus.CANCELLED
+							|| !settleable(session, now)) {
 						return;
 					}
+					// Só some do "agendado" agora se ninguém já o concluiu antes (leitura/worker).
+					boolean wasScheduled = session.status() == SessionStatus.SCHEDULED;
 					Mentor mentor = repository.findById(session.mentorId()).orElse(null);
 					if (mentor == null) {
 						// Perfil de mentor apagado no meio do caminho: ninguém para receber, então o
@@ -500,8 +579,8 @@ public class MentorService {
 						coins.escrowRelease(mentor.userId(), session.priceSparks(), escrowRef(session),
 							"Mentoria concluida (liberacao automatica)");
 					}
-					repository.saveSession(session.complete());
-					if (mentor != null) {
+					repository.saveSession(session.complete().settled(now));
+					if (mentor != null && wasScheduled) {
 						repository.save(mentor.withSessionCompleted(now));
 					}
 				});

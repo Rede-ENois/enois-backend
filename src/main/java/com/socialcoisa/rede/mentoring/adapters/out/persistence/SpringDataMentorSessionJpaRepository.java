@@ -10,7 +10,9 @@ interface SpringDataMentorSessionJpaRepository extends JpaRepository<MentorSessi
 
 	List<MentorSessionJpaEntity> findByMenteeIdOrderByCreatedAtDesc(String menteeId);
 
-	/** Sessões pagas ainda em aberto: a liberação automática depois da janela de contestação. */
-	List<MentorSessionJpaEntity> findByStatusAndPriceSparksIsNotNull(com.socialcoisa.rede.mentoring.domain.SessionStatus status);
+	List<MentorSessionJpaEntity> findByStatus(com.socialcoisa.rede.mentoring.domain.SessionStatus status);
+
+	/** Sessões com dinheiro ainda no escrow: a liberação automática depois da janela de contestação. */
+	List<MentorSessionJpaEntity> findByPriceSparksIsNotNullAndSettledAtIsNull();
 
 }
