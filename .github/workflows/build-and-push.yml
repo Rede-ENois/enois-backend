@@ -460,6 +460,8 @@ jobs:
           GITHUB_SUGGESTIONS_REPO_BACKEND: ${{ vars.SUGGESTIONS_REPO_BACKEND }}
           GITHUB_SUGGESTIONS_REPO_FRONTEND: ${{ vars.SUGGESTIONS_REPO_FRONTEND }}
           GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM: ${{ vars.SUGGESTIONS_REPO_DESIGN_SYSTEM }}
+          # Issue com a label `bug` (aplicada por mantenedor) ja conta para o selo de issues, como na QA.
+          GITHUB_QUALIFIED_ISSUE_LABELS: bug
           # ImageKit aposentado (storage no S3), mas o purge/delete de midia antiga ainda
           # conversa com ele ate a migracao de objetos terminar.
           IMAGEKIT_URL_ENDPOINT: ${{ secrets.IMAGEKIT_URL_ENDPOINT }}
@@ -556,6 +558,7 @@ jobs:
                 GITHUB_SUGGESTIONS_REPO_BACKEND: "${GITHUB_SUGGESTIONS_REPO_BACKEND}"
                 GITHUB_SUGGESTIONS_REPO_FRONTEND: "${GITHUB_SUGGESTIONS_REPO_FRONTEND}"
                 GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM: "${GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM}"
+                GITHUB_QUALIFIED_ISSUE_LABELS: "${GITHUB_QUALIFIED_ISSUE_LABELS}"
                 GITHUB_SYNC_ENABLED: "true"
                 GITHUB_SYNC_CRON: "0 */10 * * * *"
                 MANAGEMENT_ENDPOINTS: ${MANAGEMENT_ENDPOINTS}
