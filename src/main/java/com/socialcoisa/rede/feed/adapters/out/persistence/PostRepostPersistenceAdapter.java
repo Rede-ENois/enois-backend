@@ -50,4 +50,16 @@ class PostRepostPersistenceAdapter implements PostRepostRepository {
 		}
 		return result;
 	}
+
+	@Override
+	public Map<String, List<PostRepost>> findRepostsByUserIds(java.util.Collection<String> userIds, int limitPerUser) {
+		Map<String, List<PostRepost>> result = new LinkedHashMap<>();
+		if (userIds == null || userIds.isEmpty()) return result;
+		// Uma query batch: todos os reposts desses users, ordenados pelo mais recente.
+		for (PostRepostJpaEntity entity : repository.findByUserIdInOrderByCreatedAtDesc(userIds)) {
+			result.computeIfAbsent(entity.getPostId(), k -> new java.util.ArrayList<>())
+				.add(entity.toDomain());
+		}
+		return result;
+	}
 }

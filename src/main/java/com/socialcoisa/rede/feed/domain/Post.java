@@ -348,6 +348,14 @@ public class Post {
 		counters = counters.incrementShares();
 	}
 
+	public void repost() {
+		counters = counters.incrementReposts();
+	}
+
+	public void unrepost() {
+		counters = counters.decrementReposts();
+	}
+
 	public PostId id() {
 		return id;
 	}
