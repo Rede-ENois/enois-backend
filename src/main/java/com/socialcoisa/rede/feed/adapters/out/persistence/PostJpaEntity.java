@@ -112,6 +112,9 @@ class PostJpaEntity {
 	@Column(nullable = false)
 	private int shares;
 
+	@Column(nullable = false)
+	private int reposts;
+
 	@Enumerated(EnumType.STRING)
 	@Column(nullable = false)
 	private PostStatus status;
@@ -156,6 +159,7 @@ class PostJpaEntity {
 		entity.comments = post.counters().comments();
 		entity.saves = post.counters().saves();
 		entity.shares = post.counters().shares();
+		entity.reposts = post.counters().reposts();
 		entity.status = post.status();
 		entity.deletedAt = post.deletedAt();
 		entity.editedAt = post.editedAt();
@@ -167,7 +171,7 @@ class PostJpaEntity {
 
 	Post toDomain() {
 		return Post.restore(new PostId(id), new UserId(authorId), type, content, pageHtml, tags, mediaIds, communityId,
-			topic, channelId, createdAt, visibility, new Counters(reactions, comments, saves, shares), status,
+			topic, channelId, createdAt, visibility, new Counters(reactions, comments, saves, shares, reposts), status,
 			deletedAt, editedAt, expiresAt, authorIdentity, mediaSpoiler)
 			.markRepostOf(repostOf, repostOfAuthor, repostWithOpinion)
 			.markAcceptedAnswer(acceptedCommentId, resolvedAt);

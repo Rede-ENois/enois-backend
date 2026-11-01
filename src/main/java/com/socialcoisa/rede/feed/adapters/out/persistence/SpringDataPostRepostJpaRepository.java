@@ -15,4 +15,6 @@ interface SpringDataPostRepostJpaRepository extends JpaRepository<PostRepostJpaE
 	List<PostRepostJpaEntity> findByPostIdIn(java.util.Collection<String> postIds);
 
 	void deleteByUserIdAndPostId(String userId, String postId);
+
+	List<PostRepostJpaEntity> findByUserIdInOrderByCreatedAtDesc(java.util.Collection<String> userIds);
 }

@@ -17,4 +17,7 @@ public interface PostRepostRepository {
 	List<String> findPostIdsByUserId(String userId, int limit);
 
 	java.util.Map<String, List<PostRepost>> findRepostsByPostIds(java.util.Collection<String> postIds);
+
+	/** Reposts recentes de varios users em batch (uma query, sem N+1). Chave = post ID. */
+	java.util.Map<String, List<PostRepost>> findRepostsByUserIds(java.util.Collection<String> userIds, int limitPerUser);
 }
