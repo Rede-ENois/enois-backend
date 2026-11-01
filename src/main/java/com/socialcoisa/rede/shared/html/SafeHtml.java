@@ -69,22 +69,36 @@ public final class SafeHtml {
 	 */
 	private static final int MAX_RAW_INPUT = 400_000;
 
+	/**
+	 * Teto do CSS que passa pela limpeza. O teto do documento bruto e 400 KB, mas uma folha de estilo
+	 * desse tamanho nao e conteudo real — e entrada escolhida para custar CPU. Acima disso a recusa e
+	 * explicita, em vez de gastar o tempo de uma thread de requisicao.
+	 */
+	private static final int MAX_CSS_INPUT = 64_000;
+
 	private static final Pattern STYLE_IMPORT = Pattern.compile("(?is)@import\\b[^;]*;?");
 	/**
-	 * Declaracao de CSS perigosa inteira (nao so a palavra): tirar apenas o `expression(` deixava o
-	 * resto do texto do ataque guardado como lixo na folha de estilo.
+	 * Token de CSS perigoso (a palavra, nao a declaracao inteira).
+	 *
+	 * Aqui NAO existe o prefixo ganancioso `[^;{}]*`: com ele o motor tentava cada inicio possivel do
+	 * trecho e o custo crescia com o quadrado do tamanho da entrada. Quem apaga a declaracao inteira
+	 * agora e {@link #stripDangerous}, em uma passada linear.
 	 */
 	// `behavior:` com lookbehind: sem ele, `scroll-behavior: smooth` (CSS legitimo e comum em
 	// paginas animadas) casava no "behavior:" e a declaracao inteira era descartada.
-	private static final Pattern STYLE_DANGEROUS = Pattern.compile(
-		"(?is)[^;{}]*(?:expression\\s*\\(|javascript\\s*:\\s*|vbscript\\s*:|-moz-binding\\s*:"
-			+ "|(?<![a-zA-Z-])behavior\\s*:|image-set\\s*\\()[^;}]*;?");
+	private static final Pattern CSS_DANGEROUS_TOKEN = Pattern.compile(
+		"(?is)expression\\s*\\(|javascript\\s*:\\s*|vbscript\\s*:|-moz-binding\\s*:"
+			+ "|(?<![a-zA-Z-])behavior\\s*:|image-set\\s*\\(");
 	/** CSS escape: a backslash plus 1-6 hex digits (and one optional whitespace), or plus any other char. */
 	private static final Pattern CSS_ESCAPE = Pattern.compile("\\\\(?:([0-9a-fA-F]{1,6})[ \\t\\r\\n\\f]?|([^0-9a-fA-F\\r\\n\\f]))");
-	private static final Pattern CSS_COMMENT = Pattern.compile("(?s)/\\*.*?(?:\\*/|$)");
-	private static final Pattern STYLE_URL = Pattern.compile("(?is)url\\s*\\(\\s*(['\"]?)([^'\")]*)\\1\\s*\\)");
+	/**
+	 * `url(...)`. As classes de caractere sao possessivas e excluem `(` e as aspas: o argumento de um
+	 * `url()` nao pode conter nenhum deles, entao o casamento continua o mesmo — mas a varredura para
+	 * no primeiro delimitador em vez de percorrer o resto da folha a cada candidato.
+	 */
+	private static final Pattern STYLE_URL = Pattern
+		.compile("(?is)url\\s*\\(\\s*(?:\"([^\"]*+)\"|'([^']*+)'|([^'\"()\\s]*+))\\s*\\)");
 	private static final Pattern STYLE_ATTRIBUTE = Pattern.compile("(?is)\\sstyle\\s*=\\s*(\"([^\"]*)\"|'([^']*)')");
-	private static final Pattern STYLE_ELEMENT = Pattern.compile("(?is)<style\\b[^>]*>(.*?)</style>");
 
 	/** Tag de embed de terceiro (quadro/objeto) com o endereco numa das duas formas usadas. */
 	private static final Pattern EMBED_TAG = Pattern
@@ -196,9 +210,10 @@ public final class SafeHtml {
 			throw new ApiException(400, tooLongCode, label + " e grande demais.");
 		}
 
-		String css = sanitizeCss(collectCss(raw));
+		StyleDocument document = splitStyles(raw);
+		String css = sanitizeCss(document.css());
 		// O <style> sai do markup antes da limpeza e volta sanitizado, no formato que o front espera.
-		String withoutStyles = STYLE_ELEMENT.matcher(raw).replaceAll("");
+		String withoutStyles = document.markup();
 		// Embed de provedor conhecido e PRESERVADO (com o endereco validado), porque a pagina e servida
 		// na origem de conteudo: ali o quadro pode rodar o script do player sem que isso signifique
 		// acesso ao app. Host desconhecido sai fora.
@@ -318,14 +333,60 @@ public final class SafeHtml {
 			}));
 	}
 
-	/** Junta o CSS de todos os blocos {@code <style>} do documento colado (head e body). */
-	private static String collectCss(String raw) {
+	/**
+	 * Separa o documento colado em markup (sem os blocos {@code <style>}) e a folha de estilo junta.
+	 *
+	 * A varredura anterior era um regex com `(.*?)</style>`: sem o fechamento, cada abertura relia o
+	 * resto da entrada — quadratico. Aqui os indices so caminham para frente, e a ausencia de um
+	 * fechamento encerra a busca de uma vez.
+	 */
+	private static StyleDocument splitStyles(String raw) {
+		String lower = raw.toLowerCase(Locale.ROOT);
+		StringBuilder markup = new StringBuilder(raw.length());
 		StringBuilder css = new StringBuilder();
-		Matcher matcher = STYLE_ELEMENT.matcher(raw);
-		while (matcher.find()) {
-			css.append(matcher.group(1)).append('\n');
+		int cursor = 0;
+		int search = 0;
+		while (true) {
+			int open = lower.indexOf("<style", search);
+			if (open < 0) {
+				break;
+			}
+			if (!isStyleOpen(lower, open)) {
+				search = open + "<style".length();
+				continue;
+			}
+			int openEnd = lower.indexOf('>', open);
+			if (openEnd < 0) {
+				break;
+			}
+			int close = lower.indexOf("</style", openEnd);
+			if (close < 0) {
+				break;
+			}
+			int closeEnd = lower.indexOf('>', close);
+			if (closeEnd < 0) {
+				break;
+			}
+			markup.append(raw, cursor, open);
+			css.append(raw, openEnd + 1, close).append('\n');
+			cursor = closeEnd + 1;
+			search = cursor;
 		}
-		return css.toString();
+		markup.append(raw, cursor, raw.length());
+		return new StyleDocument(markup.toString(), css.toString());
+	}
+
+	/** {@code <style>} e nao {@code <styleX>}: o nome da tag acaba no `>` ou num espaco. */
+	private static boolean isStyleOpen(String lower, int open) {
+		int after = open + "<style".length();
+		if (after >= lower.length()) {
+			return true;
+		}
+		char next = lower.charAt(after);
+		return next == '>' || next == '/' || Character.isWhitespace(next);
+	}
+
+	private record StyleDocument(String markup, String css) {
 	}
 
 	/** Remove do CSS o que pode sair da caixa: importacao remota, expressao e url() nao-https. */
@@ -333,11 +394,16 @@ public final class SafeHtml {
 		if (!StringUtils.hasText(css)) {
 			return "";
 		}
-		String out = decodeIdentifierEscapes(CSS_COMMENT.matcher(css).replaceAll("")).replace("<", "");
+		if (css.length() > MAX_CSS_INPUT) {
+			throw new ApiException(400, "CSS_TOO_LONG",
+				"CSS deve ter no maximo " + MAX_CSS_INPUT + " caracteres.");
+		}
+		String out = stripComments(css);
+		out = decodeIdentifierEscapes(out).replace("<", "");
 		out = STYLE_IMPORT.matcher(out).replaceAll("");
-		out = STYLE_DANGEROUS.matcher(out).replaceAll("");
+		out = stripDangerous(out);
 		out = STYLE_URL.matcher(out).replaceAll(match -> {
-			String target = match.group(2).trim().toLowerCase(Locale.ROOT);
+			String target = firstNonNull(match.group(1), match.group(2), match.group(3)).trim().toLowerCase(Locale.ROOT);
 			// CSS so carrega `data:`: um `url(https://...)` e requisicao invisivel — o leitor nao ve
 			// nada na tela e o dono do endereco descobre que a pagina foi aberta (e de onde). Imagem
 			// remota continua permitida por `<img>`, que aparece no markup e pode ser inspecionada.
@@ -345,6 +411,93 @@ public final class SafeHtml {
 			return target.startsWith("data:") ? match.group(0) : "";
 		});
 		return out.trim();
+	}
+
+	private static String firstNonNull(String... values) {
+		for (String value : values) {
+			if (value != null) {
+				return value;
+			}
+		}
+		return "";
+	}
+
+	/**
+	 * Tira os comentarios `/* ... *&#47;` em uma passada. O regex anterior (`.*?` com alternativa `$`)
+	 * relia o resto da folha a cada abertura quando nao havia fechamento.
+	 */
+	private static String stripComments(String css) {
+		int open = css.indexOf("/*");
+		if (open < 0) {
+			return css;
+		}
+		StringBuilder out = new StringBuilder(css.length());
+		int from = 0;
+		while (open >= 0) {
+			out.append(css, from, open);
+			int close = css.indexOf("*/", open + 2);
+			if (close < 0) {
+				return out.toString();
+			}
+			from = close + 2;
+			open = css.indexOf("/*", from);
+		}
+		out.append(css, from, css.length());
+		return out.toString();
+	}
+
+	/**
+	 * Apaga a declaracao inteira que contem um token perigoso.
+	 *
+	 * O {@link #CSS_DANGEROUS_TOKEN} marca a palavra; o trecho apagado vai do ultimo `;`/`{`/`}` antes
+	 * dela ate o proximo `;`/`{`/`}`, incluindo o `;` — o mesmo recorte do regex antigo, agora em O(N)
+	 * em vez de quadratico. A varredura para tras nunca passa do ponto ja copiado, entao cada
+	 * caractere da entrada e lido um numero constante de vezes.
+	 */
+	private static String stripDangerous(String css) {
+		Matcher matcher = CSS_DANGEROUS_TOKEN.matcher(css);
+		StringBuilder out = null;
+		int copied = 0;
+		while (matcher.find()) {
+			int start = Math.max(copied, declarationStart(css, matcher.start(), copied));
+			int end = declarationEnd(css, matcher.end());
+			if (end <= start) {
+				continue;
+			}
+			if (out == null) {
+				out = new StringBuilder(css.length());
+			}
+			out.append(css, copied, start);
+			copied = end;
+		}
+		if (out == null) {
+			return css;
+		}
+		out.append(css, copied, css.length());
+		return out.toString();
+	}
+
+	private static int declarationStart(String css, int index, int floor) {
+		int start = index;
+		while (start > floor && !isDeclarationBoundary(css.charAt(start - 1))) {
+			start--;
+		}
+		return start;
+	}
+
+	private static int declarationEnd(String css, int from) {
+		int end = from;
+		while (end < css.length() && !isDeclarationBoundary(css.charAt(end))) {
+			end++;
+		}
+		if (end < css.length() && css.charAt(end) == ';') {
+			end++;
+		}
+		return end;
+	}
+
+	private static boolean isDeclarationBoundary(char c) {
+		return c == ';' || c == '{' || c == '}';
 	}
 
 	/**

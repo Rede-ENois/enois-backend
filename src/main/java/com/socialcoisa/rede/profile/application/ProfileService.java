@@ -232,6 +232,15 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 	@Override
 	@Transactional
 	public OwnProfileView update(UpdateProfileCommand command) {
+		// A limpeza do HTML/CSS da bio e da capa e trabalho de CPU: roda antes de qualquer leitura no
+		// banco para nao ocupar uma conexao do pool enquanto acontece. Dentro da transacao e depois do
+		// findById, uma limpeza lenta prendia a conexao e esgotava o pool.
+		boolean bioPresent = command.bioHtml() != null;
+		boolean bannerPresent = command.bannerHtml() != null;
+		String bioHtml = bioPresent && StringUtils.hasText(command.bioHtml())
+			? SafeHtml.requireProfileHtml(command.bioHtml()) : null;
+		String bannerHtml = bannerPresent && StringUtils.hasText(command.bannerHtml())
+			? SafeHtml.requireProfileHtml(command.bannerHtml()) : null;
 		UserProfile profile = repository.findById(command.userId())
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
 		String username = trim(command.username());
@@ -275,17 +284,13 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 		}
 		// A bio em HTML e sanitizada aqui, como o HTML do post de pagina: allowlist de tags e CSS.
 		// Vazio limpa (o perfil volta para a bio de texto); ausente no corpo da requisicao mantem.
-		if (command.bioHtml() != null) {
-			profile.updateBioHtml(StringUtils.hasText(command.bioHtml())
-				? SafeHtml.requireProfileHtml(command.bioHtml())
-				: null, clock.instant());
+		if (bioPresent) {
+			profile.updateBioHtml(bioHtml, clock.instant());
 		}
 		// A capa em HTML/CSS segue a mesma regra: sanitizada aqui, vazia limpa (volta para a foto),
 		// ausente no corpo da requisicao mantem.
-		if (command.bannerHtml() != null) {
-			profile.updateBannerHtml(StringUtils.hasText(command.bannerHtml())
-				? SafeHtml.requireProfileHtml(command.bannerHtml())
-				: null, clock.instant());
+		if (bannerPresent) {
+			profile.updateBannerHtml(bannerHtml, clock.instant());
 		}
 		// Data de nascimento: ausente no corpo preserva; presente salva via declareBirthDate
 		// (mesma validacao do endpoint dedicado).
