@@ -26,8 +26,8 @@ class ProfileUpdateThrottleTests {
 	private static ProfileService service() {
 		UserProfileRepository repository = mock(UserProfileRepository.class);
 		when(repository.findById(any())).thenReturn(Optional.empty());
-		return new ProfileService(repository, null, null, null, null, null, null, new ActionThrottle(), TETO,
-			Clock.systemUTC());
+		return new ProfileService(repository, null, null, null, null, null, null, new ActionThrottle(),
+			mock(com.socialcoisa.rede.shared.application.CacheInvalidator.class), TETO, Clock.systemUTC());
 	}
 
 	private static UpdateProfileCommand comando() {

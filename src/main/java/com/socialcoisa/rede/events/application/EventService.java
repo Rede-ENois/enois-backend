@@ -7,6 +7,7 @@ import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -15,6 +16,8 @@ import com.socialcoisa.rede.events.application.port.out.EventRepository;
 import com.socialcoisa.rede.events.domain.Event;
 import com.socialcoisa.rede.events.domain.EventAttendee;
 import com.socialcoisa.rede.events.domain.EventRecurrence;
+import com.socialcoisa.rede.shared.application.CacheConfig;
+import com.socialcoisa.rede.shared.application.CacheInvalidator;
 import com.socialcoisa.rede.shared.geo.CityState;
 import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.TextFieldLimit;
@@ -34,14 +37,17 @@ public class EventService {
 	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
 	private final com.socialcoisa.rede.shared.security.SuspiciousText suspiciousText;
 	private final Clock clock;
+	private final CacheInvalidator cacheInvalidator;
 
 	public EventService(EventRepository repository,
 			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate,
-			com.socialcoisa.rede.shared.security.SuspiciousText suspiciousText, Clock clock) {
+			com.socialcoisa.rede.shared.security.SuspiciousText suspiciousText, Clock clock,
+			CacheInvalidator cacheInvalidator) {
 		this.repository = repository;
 		this.sanctionGate = sanctionGate;
 		this.suspiciousText = suspiciousText;
 		this.clock = clock;
+		this.cacheInvalidator = cacheInvalidator;
 	}
 
 	@Transactional
@@ -69,8 +75,10 @@ public class EventService {
 			requireScheduledTime(event);
 		}
 		repository.save(event);
+		cacheInvalidator.afterCommit(CacheConfig.EVENTS);
 		return event;
 	}
+
 	@Transactional
 	public Event create(String title, String date, String time, String format, String host, String cover,
 			String streamUrl, String location, String recurrence, String city, String state, String userId) {
@@ -98,6 +106,7 @@ public class EventService {
 			event.changeRecurrence(parsed, id);
 		}
 		repository.save(event);
+		cacheInvalidator.afterCommit(CacheConfig.EVENTS);
 		return event;
 	}
 
@@ -123,6 +132,7 @@ public class EventService {
 		if (seriesId != null) {
 			repository.updateSeriesRecurrence(seriesId, parsed);
 		}
+		cacheInvalidator.afterCommit(CacheConfig.EVENTS);
 		return event;
 	}
 
@@ -181,6 +191,7 @@ public class EventService {
 		}
 		repository.deleteAttendees(eventId);
 		repository.deleteById(eventId);
+		cacheInvalidator.afterCommit(CacheConfig.EVENTS);
 	}
 
 	/**
@@ -211,6 +222,8 @@ public class EventService {
 			throw new ApiException(409, "ALREADY_ATTENDING", "Voce ja confirmou presenca.");
 		}
 		repository.saveAttendee(EventAttendee.attend(eventId, userId, clock.instant()));
+		// O total de presencas aparece em cada card da lista.
+		cacheInvalidator.afterCommit(CacheConfig.EVENTS);
 		// userId ja vem do MDC (CurrentUserResolver); nao repetir em addKeyValue — structured log rejeita.
 		LOG.atInfo()
 			.addKeyValue("eventId", eventId)
@@ -224,6 +237,7 @@ public class EventService {
 			throw new ApiException(404, "NOT_ATTENDING", "Voce nao esta inscrito neste evento.");
 		}
 		repository.removeAttendee(eventId, userId);
+		cacheInvalidator.afterCommit(CacheConfig.EVENTS);
 		LOG.atInfo()
 			.addKeyValue("eventId", eventId)
 			.addKeyValue("action", "NOT_ATTENDING")
@@ -236,7 +250,13 @@ public class EventService {
 	 *
 	 * O cursor sai da pagina que veio do banco: filtrar depois de paginar sem isso faria a lista
 	 * achar que acabou.
+	 *
+	 * A vitrine e a mesma para todo mundo: entra no cache e sai dele quando um evento e criado,
+	 * editado, apagado ou quando alguem confirma presenca.
 	 */
+	@Cacheable(cacheNames = CacheConfig.EVENTS,
+		key = "#format + '|' + #city + '|' + #state + '|' + #before + '|' + #limit + '|' + #includePast + '|' + #recurringOnly",
+		sync = true)
 	public EventPage list(String format, String city, String state, java.time.Instant before, int limit,
 			boolean includePast, boolean recurringOnly) {
 		// Filtro por lugar (so encontros presenciais/hibridos): `state` sozinho filtra a UF; `city`
@@ -321,6 +341,11 @@ public class EventService {
 
 	public int countAttendees(String eventId) {
 		return repository.countAttendees(eventId);
+	}
+
+	/** Presencas da pagina inteira, numa consulta. */
+	public java.util.Map<String, Integer> countAttendeesByEventIds(java.util.Collection<String> eventIds) {
+		return repository.countAttendeesByEventIds(eventIds);
 	}
 
 	/** Events among {@code eventIds} where the user confirmed attendance (one query). */

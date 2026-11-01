@@ -73,8 +73,15 @@ class CommunityContractController {
 		CurrentUser user = resolveSafely(sessionToken);
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		List<Community> communities = communityService.list(topic, q, city, state, before, limit);
+		// Duas consultas para a pagina inteira (contagem e "sou membro"), nao quatro por item: com 20
+		// comunidades a antiga vitrine disparava ~40 consultas identicas so para desenhar a lista.
+		java.util.Map<String, Integer> memberCounts = communityService
+			.countMembersByCommunityIds(communities.stream().map(Community::id).toList());
+		java.util.Set<String> myCommunities = user == null ? java.util.Set.of()
+			: communityService.memberCommunityIds(user.id().value(),
+				communities.stream().map(Community::id).toList());
 		var items = communities.stream()
-			.map(c -> view(c, user != null && communityService.isMember(c.id(), user.id().value())))
+			.map(c -> view(c, memberCounts.getOrDefault(c.id(), 0), myCommunities.contains(c.id())))
 			.toList();
 		String nextCursor = communities.size() == limit
 			? cursorCodec.encode(communities.get(communities.size() - 1).createdAt()) : null;

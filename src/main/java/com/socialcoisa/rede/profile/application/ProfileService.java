@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
 
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -15,6 +16,8 @@ import com.socialcoisa.rede.profile.application.port.out.OfficialBadgeReader;
 import com.socialcoisa.rede.profile.application.port.out.SocialPostCountReader;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
+import com.socialcoisa.rede.shared.application.CacheConfig;
+import com.socialcoisa.rede.shared.application.CacheInvalidator;
 import com.socialcoisa.rede.shared.html.SafeHtml;
 import com.socialcoisa.rede.shared.sanctions.SanctionGateReader;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -30,6 +33,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 	private final SanctionGateReader sanctionGate;
 	private final OfficialBadgeReader officialBadges;
 	private final com.socialcoisa.rede.shared.security.ActionThrottle actionThrottle;
+	private final CacheInvalidator cacheInvalidator;
 	private final int updatesPerHour;
 	private final Clock clock;
 
@@ -38,6 +42,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 			com.socialcoisa.rede.age.application.port.out.ParentalLinkRepository parentalLinks,
 			SocialPostCountReader postCounts, SanctionGateReader sanctionGate, OfficialBadgeReader officialBadges,
 			com.socialcoisa.rede.shared.security.ActionThrottle actionThrottle,
+			CacheInvalidator cacheInvalidator,
 			@org.springframework.beans.factory.annotation.Value("${rede.profile.updates-per-hour:30}") int updatesPerHour,
 			Clock clock) {
 		this.repository = repository;
@@ -48,6 +53,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 		this.sanctionGate = sanctionGate;
 		this.officialBadges = officialBadges;
 		this.actionThrottle = actionThrottle;
+		this.cacheInvalidator = cacheInvalidator;
 		this.updatesPerHour = updatesPerHour;
 		this.clock = clock;
 	}
@@ -70,8 +76,21 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 		return OwnProfileView.from(profile).withBioHtml(profile.bioHtml()).withBannerHtml(profile.bannerHtml());
 	}
 
+	/**
+	 * Perfil publico: a projecao e a MESMA para qualquer leitor (sem e-mail, sem dado de sessao),
+	 * entao pode ser compartilhada entre requisicoes. Montar essa pagina custa caro — uma consulta
+	 * do perfil, treze contadores de credibilidade, a contagem de posts e a checagem de banimento —,
+	 * e o mesmo perfil e aberto varias vezes em minutos (post -> autor, lista -> autor, recarregar).
+	 * O cache guarda o resultado por 20 s (`rede.cache.public-profiles.ttl`); quem edita o perfil
+	 * limpa a entrada na hora (ver {@link #update}).
+	 *
+	 * <p>`sync = true` fecha a avalanche: com a entrada vencida, varias requisicoes simultaneas
+	 * esperam UMA consulta em vez de dispararem uma cada.</p>
+	 */
 	@Override
 	@Transactional(readOnly = true)
+	@Cacheable(cacheNames = CacheConfig.PUBLIC_PROFILES,
+			key = "'u:' + #username.toLowerCase()", sync = true)
 	public UserProfileView getByUsername(String username) {
 		UserProfile profile = repository.findByUsername(username)
 			.map(this::populateCounts)
@@ -91,12 +110,15 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
 		profile.setShowRanking(showRanking, clock.instant());
 		repository.save(profile);
+		invalidarPerfilPublico(profile, null);
 		return new com.socialcoisa.rede.shared.web.StatusResponse(userId,
 			showRanking ? "RANKING_VISIBLE" : "RANKING_HIDDEN");
 	}
 
 	@Override
 	@Transactional(readOnly = true)
+	@Cacheable(cacheNames = CacheConfig.PUBLIC_PROFILES,
+			key = "'i:' + #userId", sync = true)
 	public UserProfileView getById(String userId) {
 		UserProfile profile = repository.findById(userId)
 			.map(this::populateCounts)
@@ -150,7 +172,9 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 		profile.setCounts(counts.connections(), counts.followers(), counts.reputation());
 		profile.setGarden(counts.garden());
 		profile.setPostsCount(postCounts.countByUser(profile.id()));
-		repository.save(profile);
+		// Sem `save`: leitura nao escreve. O metodo roda em transacao `readOnly` (sem flush), entao o
+		// save nunca chegava ao banco — so custava o SELECT que o `merge` faz para carregar a linha.
+		// Quem persiste contador e a operacao que o muda, nao a tela que o mostra.
 		return profile;
 	}
 
@@ -169,7 +193,12 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 	 *
 	 * Conta banida sai da vitrine: depois da limpeza dos cadastros em série (2026-10-22) elas
 	 * continuavam aparecendo como "chegando agora" — a conta está punida, o perfil é que ficava.
+	 *
+	 * Cacheado por alguns segundos: a lista é a mesma para todo mundo (é vitrine pública) e o
+	 * cadastro novo aparece no máximo um TTL depois, que é o proprio contrato da vitrine.
 	 */
+	@Cacheable(cacheNames = CacheConfig.PUBLIC_RANKING,
+			key = "#limit", sync = true)
 	public List<UserProfileView> getRanking(int limit) {
 		int wanted = Math.max(1, limit);
 		// A vitrine é curta: buscar um pouco além do pedido cobre as banidas sem varrer a tabela.
@@ -209,6 +238,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
 		profile.declareBirthDate(date, java.time.Instant.now(clock));
 		repository.save(profile);
+		invalidarPerfilPublico(profile, null);
 		boolean minor = age < 18;
 		boolean supervised = minor && parentalLinks.findActiveByMinor(userId).isPresent();
 		return new AgeStateView(minor ? (supervised ? "MINOR_SUPERVISED" : "MINOR_CONSENT_PENDING")
@@ -257,6 +287,8 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 			? SafeHtml.requireProfileHtml(command.bannerHtml()) : null;
 		UserProfile profile = repository.findById(command.userId())
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
+		// Guardado antes do `update`: troca de nome de usuario muda a chave do cache publico.
+		String nomeAnterior = profile.username();
 		String username = trim(command.username());
 		if (username != null && !username.equals(profile.username())) {
 			String slug = slug(username);
@@ -321,7 +353,30 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 				profile.declareBirthDate(date, clock.instant());
 			}
 		}
-		return OwnProfileView.from(repository.save(profile));
+		OwnProfileView saved = OwnProfileView.from(repository.save(profile));
+		invalidarPerfilPublico(profile, nomeAnterior);
+		return saved;
+	}
+
+	/**
+	 * Cache de perfil publico e da vitrine: editar o proprio perfil precisa aparecer na hora, nao
+	 * no TTL. A limpeza fica para depois do commit — perfil que nao salvou nao pode sumir do cache.
+	 *
+	 * <p>So as entradas DESTA pessoa saem, por id e pelos dois nomes (antes e depois de uma troca
+	 * de usuario). Limpar o cache inteiro custaria a leitura de todo mundo por uma edicao. A
+	 * vitrine, que devolve um recorte de varios perfis, e limpa por inteiro — sao poucas chaves
+	 * (uma por `limit`) e qualquer cartao dela pode ter mudado.</p>
+	 */
+	private void invalidarPerfilPublico(UserProfile profile, String nomeAnterior) {
+		cacheInvalidator.afterCommit(CacheConfig.PUBLIC_RANKING);
+		cacheInvalidator.evictAfterCommit(CacheConfig.PUBLIC_PROFILES, "i:" + profile.id());
+		String atual = profile.username();
+		if (atual != null) {
+			cacheInvalidator.evictAfterCommit(CacheConfig.PUBLIC_PROFILES, "u:" + atual.toLowerCase());
+		}
+		if (nomeAnterior != null && (atual == null || !nomeAnterior.equalsIgnoreCase(atual))) {
+			cacheInvalidator.evictAfterCommit(CacheConfig.PUBLIC_PROFILES, "u:" + nomeAnterior.toLowerCase());
+		}
 	}
 
 	private String slug(String value) {
