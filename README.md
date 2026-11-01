@@ -435,6 +435,11 @@ backend expõe fica público em `https://enois.ia.br/api/...` — inclusive `/ap
    antigas param de receber push (o usuário reativa no menu da conta); as inscrições expiradas (404/410 do
    serviço de push) são removidas sozinhas. Vale para Chrome/Edge/Firefox no Android e desktop; no iOS só
    funciona com o app **instalado na tela de início** (iOS 16.4+).
+   No deploy por GitHub Actions os segredos têm nome por ambiente: `QA_VAPID_PUBLIC_KEY` /
+   `QA_VAPID_PRIVATE_KEY` e `PROD_VAPID_PUBLIC_KEY` / `PROD_VAPID_PRIVATE_KEY` (o `.github/workflows/build-and-push.yml`
+   injeta cada par no container do seu ambiente). Os dois pares são **independentes**: uma inscrição
+   de teste da QA nunca vale em produção. O par é fixo entre deploys — gerar novo a cada boot ou deploy
+   invalida todas as inscrições.
 
 ### Migrações travadas (rollout parado servindo versão antiga)
 

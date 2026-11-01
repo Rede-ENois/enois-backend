@@ -14,6 +14,18 @@ sequência, ranking nem métrica pública. O módulo é `studypairs` (migração
   chave, do mais antigo para o mais novo (FIFO), e casa com o primeiro elegível. Sem candidato, o
   pedido fica `OPEN`. A reivindicação do pedido da fila é atômica
   (`update ... where status = 'OPEN'`): dois pedidos simultâneos não levam a mesma pessoa.
+- **Concorrência (V228)**: dois cliques no mesmo botão (ou duas réplicas) passavam pelas checagens
+  antes de qualquer escrita e criavam pedido/par duplicado. Agora `POST /study-pairs/requests`
+  trava a linha da pessoa (`select ... for update`) antes de contar pares e pedidos: a segunda
+  requisição espera e vê o que a primeira criou. Como rede de segurança, o banco recusa o que a
+  aplicação deixaria passar — índice único em `open_user_id` (uma solicitação `OPEN` por pessoa;
+  `NULL` quando casa ou cancela) e em `active_pair_key` (`menor:maior`, só enquanto `ACTIVE`). A
+  colisão de índice vira o mesmo `409` que a checagem da aplicação devolveria. A migração saneia
+  antes de criar os índices: pedidos `OPEN` repetidos ficam os mais antigos; pares `ACTIVE`
+  repetidos da mesma dupla são encerrados.
+- **Busca de pedidos** (`GET /study-pairs/search?q=`): o termo passa pela mesma dobra do objetivo
+  (`StudyGoal.key`), então "Química Orgânica" acha "quimica-organica"; o assunto entra na busca com
+  `_` tratado como `-`. Resultado anônimo (objetivo e assunto, sem quem pediu).
 - **Elegível**: não é a própria pessoa, sem bloqueio nem silenciamento em nenhum sentido, e-mail confirmado, conta
   não banida, adulta, com menos de 2 pares ativos e que ainda não forma par ativo com quem pede.
 - **Limites**: até 2 pares ativos por pessoa (`STUDY_PAIR_LIMIT`).
