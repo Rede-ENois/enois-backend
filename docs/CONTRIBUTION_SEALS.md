@@ -211,7 +211,7 @@ O processo é seguro para reexecução: o índice único e o upsert preservam a 
 | `GITHUB_SYNC_CRON` | cadência do worker (default `0 */10 * * * *`, a cada 10 minutos) |
 | `GITHUB_SYNC_MAX_PAGES` | páginas por repositório por ciclo (default 3) |
 | `GITHUB_SYNC_MAX_DETAILS` | PRs com detalhes (arquivos/revisões) por ciclo (default 60) |
-| `GITHUB_QUALIFIED_ISSUE_LABELS` | labels que qualificam issue automaticamente, separadas por vírgula (default vazio = só revisão humana) |
+| `GITHUB_QUALIFIED_ISSUE_LABELS` | labels que qualificam issue automaticamente, separadas por vírgula (default vazio = só revisão humana; QA e produção definem `bug`) |
 
 **Nome dos secrets no GitHub:** o GitHub recusa secrets cujo **nome** comece com `GITHUB_`
 (HTTP 422, “Secret names must not start with GITHUB_”). Por isso o deploy usa nomes diferentes do
