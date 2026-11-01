@@ -2,6 +2,7 @@ package com.socialcoisa.rede.groups;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -29,6 +30,7 @@ import tools.jackson.databind.ObjectMapper;
  * - o autor apaga o que escreveu; outro membro comum NÃO apaga o post alheio (403);
  * - quem administra apaga comentário de qualquer um, e o contador da publicação acompanha;
  * - o dono encerra o grupo (só ele): sai da descoberta e o feed privado deixa de abrir (404);
+ * - só o autor edita o próprio comentário (quem modera e outro membro recebem 403);
  * - o conteúdo removido some das listagens (não fica na tela como se nada tivesse acontecido).
  */
 @SpringBootTest
@@ -146,6 +148,68 @@ class GroupModerationTests {
 
 		mockMvc.perform(get("/groups/" + groupId + "/posts").header("X-Session-Token", dono.token()))
 			.andExpect(jsonPath("$.items[0].comments").value(0));
+	}
+
+	@Test
+	void soOAutorEditaOProprioComentario() throws Exception {
+		var dono = authHelper().authenticate("gmod-dono4");
+		var membro = authHelper().authenticate("gmod-membro4");
+		var outro = authHelper().authenticate("gmod-outro4");
+		String groupId = createGroup(dono, "Grupo Edicao", "gmod-create-4");
+		join(membro, groupId, "gmod-join-4");
+		join(outro, groupId, "gmod-join-outro4");
+		String topicId = topic(dono, groupId, "Geral", "gmod-topic-4");
+		String postId = publish(dono, groupId, topicId, "Post para editar", "gmod-post-4");
+		String commentId = comment(membro, groupId, postId, "Comentario original", "gmod-comment-4");
+		String path = "/groups/" + groupId + "/posts/" + postId + "/comments/" + commentId;
+
+		mockMvc.perform(patch(path)
+				.header("X-Session-Token", outro.token())
+				.header("Idempotency-Key", "gmod-edit-outro")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("content", "tentativa"))))
+			.andExpect(status().isForbidden());
+
+		// Quem modera remove, mas não reescreve o que o outro disse.
+		mockMvc.perform(patch(path)
+				.header("X-Session-Token", dono.token())
+				.header("Idempotency-Key", "gmod-edit-dono")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("content", "tentativa"))))
+			.andExpect(status().isForbidden());
+
+		mockMvc.perform(patch(path)
+				.header("X-Session-Token", membro.token())
+				.header("Idempotency-Key", "gmod-edit-vazio")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("content", "   "))))
+			.andExpect(status().isBadRequest());
+
+		mockMvc.perform(patch(path)
+				.header("X-Session-Token", membro.token())
+				.header("Idempotency-Key", "gmod-edit-autor")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("content", "Comentario corrigido"))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.id").value(commentId))
+			.andExpect(jsonPath("$.content").value("Comentario corrigido"));
+
+		mockMvc.perform(get("/groups/" + groupId + "/posts/" + postId + "/comments")
+				.header("X-Session-Token", dono.token()))
+			.andExpect(jsonPath("$.items.length()").value(1))
+			.andExpect(jsonPath("$.items[0].content").value("Comentario corrigido"));
+
+		mockMvc.perform(delete(path)
+				.header("X-Session-Token", membro.token())
+				.header("Idempotency-Key", "gmod-edit-remove"))
+			.andExpect(status().isOk());
+
+		mockMvc.perform(patch(path)
+				.header("X-Session-Token", membro.token())
+				.header("Idempotency-Key", "gmod-edit-removido")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("content", "tarde demais"))))
+			.andExpect(status().isNotFound());
 	}
 
 	@Test
