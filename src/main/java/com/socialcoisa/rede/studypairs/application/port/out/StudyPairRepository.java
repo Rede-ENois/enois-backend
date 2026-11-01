@@ -12,6 +12,13 @@ import com.socialcoisa.rede.studypairs.domain.StudyPairRequest;
 
 public interface StudyPairRepository {
 
+	/**
+	 * Serializes the reads and writes of one person's participation (open request and active
+	 * pair count). Two requests firing at once for the same person wait for each other instead of
+	 * both passing the "one open request / two active pairs" checks.
+	 */
+	void lockUser(String userId);
+
 	void saveRequest(StudyPairRequest request);
 
 	Optional<StudyPairRequest> findOpenRequest(String userId);
@@ -19,11 +26,18 @@ public interface StudyPairRepository {
 	/** Open requests for this goal, oldest first (FIFO). */
 	List<StudyPairRequest> findOpenByGoal(String goalKey, int limit);
 
-	/** Open requests matching the term in the goal text or the topic, oldest first. */
+	/**
+	 * Open requests whose goal or topic contains the term, oldest first. The term must already be
+	 * folded the way {@code StudyGoal.key} folds text (lowercase, no accents, single dashes), which is
+	 * the shape {@code goal_key} is stored in.
+	 */
 	List<StudyPairRequest> searchOpenRequests(String term, int limit);
 
 	/** Moves an OPEN request to {@code status}; false when it was no longer OPEN (claimed by someone else). */
 	boolean closeOpenRequest(String requestId, StudyPairRequest.Status status);
+
+	/** Puts a just-claimed request back in the queue (the match could not be completed). */
+	void reopenRequest(String requestId);
 
 	void savePair(StudyPair pair);
 

@@ -39,9 +39,18 @@ class StudyPairPersistenceAdapter implements StudyPairRepository {
 	}
 
 	@Override
+	public void lockUser(String userId) {
+		// The row is only a handle: a session always has a `users` row, so the lock never comes
+		// back empty and two concurrent requests for the same person line up here.
+		jdbc.queryForList("select id from users where id = ? for update", String.class, userId);
+	}
+
+	@Override
 	public void saveRequest(StudyPairRequest r) {
-		jdbc.update("insert into study_pair_requests (" + REQUEST_COLUMNS + ") values (?, ?, ?, ?, ?, ?, ?)",
-			r.id(), r.userId(), r.goalKey(), r.goalText(), r.topic(), r.status().name(), ts(r.createdAt()));
+		jdbc.update("insert into study_pair_requests (" + REQUEST_COLUMNS + ", open_user_id)"
+			+ " values (?, ?, ?, ?, ?, ?, ?, ?)",
+			r.id(), r.userId(), r.goalKey(), r.goalText(), r.topic(), r.status().name(), ts(r.createdAt()),
+			r.status() == StudyPairRequest.Status.OPEN ? r.userId() : null);
 	}
 
 	@Override
@@ -59,23 +68,32 @@ class StudyPairPersistenceAdapter implements StudyPairRepository {
 
 	@Override
 	public List<StudyPairRequest> searchOpenRequests(String term, int limit) {
-		String like = "%" + term.toLowerCase(java.util.Locale.ROOT) + "%";
+		// goal_key is stored already folded (lowercase, no accents, single dashes). The topic is stored
+		// as the taxonomy constant ("QUALIDADE_VIDA"), so the underscore is folded to a dash before the
+		// comparison and "qualidade" still finds it.
+		String like = "%" + term + "%";
 		return jdbc.query("select " + REQUEST_COLUMNS + " from study_pair_requests where status = 'OPEN'"
-				+ " and (lower(goal_text) like ? or lower(coalesce(topic, '')) like ?)"
+				+ " and (goal_key like ? or replace(lower(coalesce(topic, '')), '_', '-') like ?)"
 				+ " order by created_at, id limit ?", (rs, n) -> request(rs), like, like, limit);
 	}
 
 	@Override
 	public boolean closeOpenRequest(String requestId, StudyPairRequest.Status status) {
-		return jdbc.update("update study_pair_requests set status = ? where id = ? and status = 'OPEN'",
+		return jdbc.update("update study_pair_requests set status = ?, open_user_id = null where id = ? and status = 'OPEN'",
 			status.name(), requestId) == 1;
 	}
 
 	@Override
+	public void reopenRequest(String requestId) {
+		jdbc.update("update study_pair_requests set status = 'OPEN', open_user_id = user_id"
+			+ " where id = ? and status = 'MATCHED'", requestId);
+	}
+
+	@Override
 	public void savePair(StudyPair p) {
-		jdbc.update("insert into study_pairs (" + PAIR_COLUMNS + ") values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		jdbc.update("insert into study_pairs (" + PAIR_COLUMNS + ", active_pair_key) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			p.id(), p.userA(), p.userB(), p.goalKey(), p.goalText(), p.topic(), p.status().name(), ts(p.startedAt()),
-			p.endedAt() == null ? null : ts(p.endedAt()));
+			p.endedAt() == null ? null : ts(p.endedAt()), activePairKey(p));
 	}
 
 	@Override
@@ -97,8 +115,8 @@ class StudyPairPersistenceAdapter implements StudyPairRepository {
 
 	@Override
 	public boolean endPair(String pairId, Instant endedAt) {
-		return jdbc.update("update study_pairs set status = 'ENDED', ended_at = ? where id = ? and status = 'ACTIVE'",
-			ts(endedAt), pairId) == 1;
+		return jdbc.update("update study_pairs set status = 'ENDED', ended_at = ?, active_pair_key = null"
+			+ " where id = ? and status = 'ACTIVE'", ts(endedAt), pairId) == 1;
 	}
 
 	@Override
@@ -155,6 +173,15 @@ class StudyPairPersistenceAdapter implements StudyPairRepository {
 		catch (DuplicateKeyException alreadyClaimed) {
 			return false;
 		}
+	}
+
+	private static String activePairKey(StudyPair p) {
+		if (p.status() != StudyPair.Status.ACTIVE) {
+			return null;
+		}
+		String a = p.userA();
+		String b = p.userB();
+		return a.compareTo(b) <= 0 ? a + ":" + b : b + ":" + a;
 	}
 
 	private static StudyPairRequest request(ResultSet rs) throws SQLException {

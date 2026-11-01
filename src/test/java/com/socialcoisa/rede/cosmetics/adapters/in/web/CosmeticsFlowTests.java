@@ -69,8 +69,16 @@ class CosmeticsFlowTests {
                 // The original frames keep their release order; the seasonal catalog comes after them.
                 org.junit.jupiter.api.Assertions.assertEquals("moldura-radar", items.get(25).get("id").asText());
                 org.junit.jupiter.api.Assertions.assertEquals("tema-saci", items.get(26).get("id").asText());
-                org.junit.jupiter.api.Assertions.assertEquals("emblema-vitoria-halloween",
-                                items.get(items.size() - 1).get("id").asText());
+                // Seasonal badge stays where it was released; it is no longer the LAST item, because
+                // the catalog keeps growing — the order rule is what the test protects, not today's
+                // newest item.
+                for (var item : items) {
+                        if ("emblema-vitoria-halloween".equals(item.get("id").asText())) {
+                                org.junit.jupiter.api.Assertions.assertEquals(250, item.get("releaseOrder").asInt());
+                        }
+                }
+                org.junit.jupiter.api.Assertions.assertEquals(items.size(),
+                                items.get(items.size() - 1).get("releaseOrder").asInt());
                 var explicit = mockMvc.perform(get("/loja").param("order", "oldest"))
                         .andExpect(status().isOk()).andReturn();
                 org.junit.jupiter.api.Assertions.assertEquals(items,
@@ -81,12 +89,15 @@ class CosmeticsFlowTests {
         void catalogListsNewestFirstByReleaseOrder() throws Exception {
                 var result = mockMvc.perform(get("/loja").param("order", "newest"))
                         .andExpect(status().isOk())
-                        .andExpect(jsonPath("$[0].id").value("emblema-vitoria-halloween"))
+                        .andExpect(jsonPath("$[0].releaseOrder").value(org.hamcrest.Matchers.greaterThan(1)))
                         .andExpect(jsonPath("$[?(@.id == 'moldura-radar')].releaseOrder").value(26))
                         .andExpect(jsonPath("$[?(@.id == 'moldura-neon')].releaseOrder").value(25))
                         .andExpect(jsonPath("$[?(@.id == 'tema-saci')].releaseOrder").value(27))
                         .andReturn();
                 var items = objectMapper.readTree(result.getResponse().getContentAsString());
+                // O primeiro da lista "newest" é o de MAIOR releaseOrder do catálogo (o catálogo
+                // cresce a cada lançamento, então o teste não fixa qual item é o mais novo).
+                org.junit.jupiter.api.Assertions.assertEquals(items.size(), items.get(0).get("releaseOrder").asInt());
                 int previous = items.size() + 1;
                 for (var item : items) {
                         int releaseOrder = item.get("releaseOrder").asInt();
