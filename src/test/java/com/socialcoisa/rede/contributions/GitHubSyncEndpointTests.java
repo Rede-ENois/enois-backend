@@ -48,7 +48,7 @@ class GitHubSyncEndpointTests {
 		@Primary
 		GitHubContributionSyncService fakeSync() {
 			return new GitHubContributionSyncService(null, null, null, null, null, null, null,
-				Clock.systemUTC(), 1, 1, "") {
+				Clock.systemUTC(), 1, 1, "", "") {
 				@Override
 				public SyncReport syncForGithubUser(String githubUserId) {
 					return new SyncReport(false, false, List.of("Rede-ENois/x"), 10, 2, 1, 0, 0, 0, 3, 1, 0,
