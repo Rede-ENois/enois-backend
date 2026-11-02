@@ -185,12 +185,16 @@ Enquanto houver pendência real, a automação fica viva.
       pedido pendente e entrada aberta avisam dono/admin; decisão avisa o solicitante; remoção
       avisa o removido; transferência avisa o novo dono; mudança de estado pela plataforma avisa
       o dono; comentário avisa o autor da publicação e resposta avisa o autor do comentário pai;
-      remoção pela moderação avisa o autor. O corpo nunca leva o texto do conteúdo (só o nome
+      remoção pela moderação avisa o autor; publicação nova avisa os outros membros
+      (`GROUP_NEW_POST`, categoria GROUPS), uma notificação por grupo: enquanto não lida, as
+      próximas publicações atualizam a mesma ("3 novas publicações em X", sem novo push), e depois
+      de lida a seguinte abre outra. O aviso sai pelo outbox (`GroupPostPublished`), fora da
+      requisição de publicar. O corpo nunca leva o texto do conteúdo (só o nome
       público do grupo) e o href `/grupos/{slug}` continua exigindo autorização; ação própria
-      nunca notifica o autor. `GroupNotificationsTests` (9) cobre os caminhos e o removido
+      nunca notifica o autor. `GroupNotificationsTests` (10) cobre os caminhos e o removido
       perdendo a leitura do feed; **suíte de grupos 46/46 verde** (2026-10-19). O front ganhou
       ícones e navegação para os kinds novos (`8ec0223`, build verificado). **Fora do escopo
-      real:** "tópico seguido" e menção dentro do grupo não existem como recurso, então não há
+      real:** "tópico seguido" (a publicação nova avisa por grupo, não por tópico) e menção dentro do grupo não existem como recurso, então não há
       notificação para eles.
 
 ### Etapa 7 — Comunidades
@@ -248,7 +252,7 @@ Enquanto houver pendência real, a automação fica viva.
     SUSPENDED, ACTIVE; efeito na entrada/conteúdo/descoberta; auditoria).
 17. **Proteção do HTML personalizado** — `GroupSecurityTests` (script não é guardado) +
     `GroupIdentityTests` (bannerHtml sanitizado).
-18. **Notificações com autorização correta** — `GroupNotificationsTests` (9 casos; o corpo nunca
+18. **Notificações com autorização correta** — `GroupNotificationsTests` (10 casos; o corpo nunca
     leva o texto do conteúdo; href continua exigindo autorização).
 19. **Mudanças concorrentes de estado e permissões** — `GroupFlowTests` (duas aprovações → 409) e
     `GroupSecurityTests`; **residual:** a corrida "suspensão no meio de uma publicação" não tem

@@ -42,6 +42,7 @@ public enum NotificationCategory {
 		Map.entry("GROUP_OWNERSHIP_TRANSFERRED", GROUPS),
 		Map.entry("GROUP_CONTENT_REMOVED", GROUPS),
 		Map.entry("GROUP_STATUS_CHANGED", GROUPS),
+		Map.entry("GROUP_NEW_POST", GROUPS),
 		Map.entry("NEW_GROUP_COMMENT", GROUPS),
 		Map.entry("NEW_GROUP_REPLY", GROUPS),
 		Map.entry("NEW_BLOG_POST", GROUPS),

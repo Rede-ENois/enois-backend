@@ -53,11 +53,36 @@ public class NotificationService {
 		if (unread.isPresent()) {
 			Notification current = unread.get();
 			int count = actorId.equals(current.actorId()) ? current.actorCount() : current.actorCount() + 1;
-			Notification joined = current.joinedBy(actorId, count == 1 ? body : groupedBody.apply(count),
+			Notification joined = current.joinedBy(actorId, count, count == 1 ? body : groupedBody.apply(count),
 				count == 1 ? href : groupedHref, clock.instant());
 			repository.save(joined);
 			return joined;
 		}
+		return createFirstOfGroup(userId, kind, groupKey, actorId, title, body, href, ctaLabel);
+	}
+
+	/**
+	 * Like {@link #createGrouped}, but every call counts, not every new person: the unread
+	 * notification of {@code groupKey} becomes "3 novas publicações em X" ({@code countedBody} of the
+	 * new count) and moves back to the top, without a new push. Once read, the next call starts over.
+	 * {@code actorCount} then holds the number of events.
+	 */
+	@Transactional
+	public Notification createCounted(String userId, String kind, String groupKey, String actorId, String title,
+			String body, java.util.function.IntFunction<String> countedBody, String href, String ctaLabel) {
+		var unread = repository.findUnreadGroup(userId, groupKey);
+		if (unread.isPresent()) {
+			Notification current = unread.get();
+			int count = current.actorCount() + 1;
+			Notification joined = current.joinedBy(actorId, count, countedBody.apply(count), href, clock.instant());
+			repository.save(joined);
+			return joined;
+		}
+		return createFirstOfGroup(userId, kind, groupKey, actorId, title, body, href, ctaLabel);
+	}
+
+	private Notification createFirstOfGroup(String userId, String kind, String groupKey, String actorId,
+			String title, String body, String href, String ctaLabel) {
 		String id = "notification_" + UUID.randomUUID().toString().replace("-", "");
 		Notification notification = Notification.grouped(id, userId, kind, groupKey, actorId, title, body, href,
 			ctaLabel, clock.instant());

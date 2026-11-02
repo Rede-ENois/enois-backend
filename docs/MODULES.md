@@ -957,6 +957,7 @@ inválidas são rejeitadas integralmente. A operação exige autenticação e ch
 |---|---|
 | `create(String userId, String kind, String actorId, String title, String body, String href, String ctaLabel)` | Cria notificação |
 | `createGrouped(userId, kind, groupKey, actorId, title, body, groupedBody, href, ctaLabel)` | Agrupa com a notificação NÃO lida do mesmo alvo (`groupKey`): a pessoa mais recente lidera, `actorCount` cresce (a mesma pessoa não conta duas vezes), o texto vira "Ana e mais 14 pessoas reagiram ao seu post." e ela volta ao topo; com mais de uma pessoa o `href` vira o do agrupado (no post: `?reacoes=1`, que abre a lista de quem reagiu). Só a primeira gera push. Depois de lida, a próxima reação abre outra. Usado em `NEW_REACTION` (`NEW_REACTION:post:{id}`) e `COMMENT_REACTION` (`COMMENT_REACTION:comment:{id}`); colunas `group_key` e `actor_count` (V220). A API devolve `actorCount`. |
+| `createCounted(userId, kind, groupKey, actorId, title, body, countedBody, href, ctaLabel)` | Como `createGrouped`, mas toda chamada conta (não só pessoa nova): a notificação NÃO lida do `groupKey` vira "3 novas publicações em X" (`countedBody` do novo total), volta ao topo e não gera push; `actorCount` guarda o número de eventos. Depois de lida, a próxima abre outra. Usado em `GROUP_NEW_POST` (`GROUP_NEW_POST:group:{id}`). |
 | `markRead(String notificationId, String userId)` | Marca como lida |
 | `markAllRead(String userId)` | Marca todas como lidas |
 | `list(String userId, int limit)` | Lista notificações |
