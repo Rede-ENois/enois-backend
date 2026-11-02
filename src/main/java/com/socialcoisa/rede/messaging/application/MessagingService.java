@@ -478,13 +478,14 @@ public class MessagingService {
 		return repository.hideMessages(userId, ids, clock.instant());
 	}
 
-	public record LastMessagePreview(String text, boolean e2e, String iv, java.time.Instant time) {
-		static final LastMessagePreview EMPTY = new LastMessagePreview(null, false, null, null);
+	/** {@code from} is the sender's account id: the inbox marks the viewer's own last message. */
+	public record LastMessagePreview(String text, boolean e2e, String iv, java.time.Instant time, String from) {
+		static final LastMessagePreview EMPTY = new LastMessagePreview(null, false, null, null, null);
 	}
 
 	public LastMessagePreview getLastMessagePreview(String conversationId) {
 		return repository.findLastMessage(conversationId)
-			.map(m -> new LastMessagePreview(m.text(), m.e2e(), m.iv(), m.createdAt()))
+			.map(m -> new LastMessagePreview(m.text(), m.e2e(), m.iv(), m.createdAt(), m.senderId()))
 			.orElse(LastMessagePreview.EMPTY);
 	}
 

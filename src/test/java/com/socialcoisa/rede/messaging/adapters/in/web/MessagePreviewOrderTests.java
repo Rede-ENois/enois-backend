@@ -89,12 +89,16 @@ class MessagePreviewOrderTests {
 			.andReturn();
 		var listItems = objectMapper.readTree(conversations.getResponse().getContentAsString()).get("items");
 		String preview = null;
+		String previewFrom = null;
 		for (var item : listItems) {
 			if (id.equals(item.get("id").asText())) {
 				preview = item.get("lastMessage").asText();
+				previewFrom = item.get("lastMessageFrom").asText();
 			}
 		}
 		assertThat(preview).isEqualTo("segunda");
+		// The inbox prefixes the viewer's own last message, so it needs to know who sent it.
+		assertThat(previewFrom).isEqualTo(a.userId());
 	}
 
 	private void send(String token, String conversationId, String text, String key) throws Exception {
