@@ -71,6 +71,13 @@ public class DuplicatePostFilter extends OncePerRequestFilter {
 	@Override
 	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
 			throws ServletException, IOException {
+		// Corpo declarado grande: nao materializa so para descobrir que passa do teto. Segue sem
+		// cache (o duplo clique nao e o risco aqui; o heap e).
+		long declaredLength = request.getContentLengthLong();
+		if (declaredLength > MAX_BODY) {
+			chain.doFilter(request, response);
+			return;
+		}
 		byte[] body = StreamUtils.copyToByteArray(request.getInputStream());
 		if (body.length > MAX_BODY) {
 			// Corpo grande: não guarda na janela, mas devolve o corpo lido ao controller.
