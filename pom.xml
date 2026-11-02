@@ -62,15 +62,22 @@
 				<artifactId>jackson-core</artifactId>
 				<version>2.22.4</version>
 			</dependency>
+			<!-- As anotacoes sao compartilhadas pelas duas linhagens; o databind 3.2 usa
+			     JsonApplyView, que so existe a partir da 2.22. -->
+			<dependency>
+				<groupId>com.fasterxml.jackson.core</groupId>
+				<artifactId>jackson-annotations</artifactId>
+				<version>2.22</version>
+			</dependency>
 			<dependency>
 				<groupId>tools.jackson.core</groupId>
 				<artifactId>jackson-core</artifactId>
-				<version>3.1.7</version>
+				<version>3.2.4</version>
 			</dependency>
 			<dependency>
 				<groupId>tools.jackson.core</groupId>
 				<artifactId>jackson-databind</artifactId>
-				<version>3.1.7</version>
+				<version>3.2.4</version>
 			</dependency>
 		</dependencies>
 	</dependencyManagement>
