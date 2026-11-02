@@ -74,8 +74,9 @@ Resposta (signup e login):
 | GET | `/api/users/{username}/presence` | Estado público | Não |
 
 As leituras retornam `{"status":"..."}`. Após dois minutos sem atividade, o estado público
-é `OFFLINE`; `INVISIBLE` também aparece como `OFFLINE`. `DO_NOT_DISTURB` impede push,
-mas mantém a notificação no aplicativo. O status de texto/ícone de `PUT /api/me/status`
+é `OFFLINE`; `INVISIBLE` também aparece como `OFFLINE`. `DO_NOT_DISTURB` impede o push das
+categorias configuráveis (segurança, moderação, sanção e recurso continuam), mas mantém a
+notificação no aplicativo. O status de texto/ícone de `PUT /api/me/status`
 é independente.
 
 | Método | Rota | Descrição | Autenticação |
