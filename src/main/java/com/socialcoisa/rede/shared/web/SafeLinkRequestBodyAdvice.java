@@ -11,6 +11,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpInputMessage;
 import org.springframework.http.MediaType;
 import org.springframework.http.converter.HttpMessageConverter;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.servlet.mvc.method.annotation.RequestBodyAdviceAdapter;
 
@@ -29,6 +30,9 @@ import tools.jackson.databind.ObjectMapper;
  */
 @ControllerAdvice
 class SafeLinkRequestBodyAdvice extends RequestBodyAdviceAdapter {
+
+	/** Teto do JSON lido para a checagem de links. DTOs do app ficam muito abaixo disto. */
+	private static final long MAX_JSON_BODY = 2L * 1024 * 1024;
 
 	private final ObjectMapper objectMapper;
 
@@ -51,7 +55,16 @@ class SafeLinkRequestBodyAdvice extends RequestBodyAdviceAdapter {
 		if (type == null || !(type.isCompatibleWith(MediaType.APPLICATION_JSON) || type.getSubtype().endsWith("+json"))) {
 			return input;
 		}
-		byte[] body = input.getBody().readAllBytes();
+		long declared = input.getHeaders().getContentLength();
+		if (declared > MAX_JSON_BODY) {
+			throw new HttpMessageNotReadableException("Corpo JSON acima do limite permitido.", input);
+		}
+		// Sem Content-Length (chunked) o tamanho nao e conhecido: le no maximo o teto + 1 byte
+		// para descobrir que passou, em vez de materializar o corpo inteiro.
+		byte[] body = input.getBody().readNBytes((int) MAX_JSON_BODY + 1);
+		if (body.length > MAX_JSON_BODY) {
+			throw new HttpMessageNotReadableException("Corpo JSON acima do limite permitido.", input);
+		}
 		if (body.length > 0) {
 			try {
 				check(objectMapper.readTree(body), "texto");

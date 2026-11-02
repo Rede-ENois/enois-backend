@@ -382,7 +382,7 @@ public class MessagingService {
 
 	public List<Conversation> listConversations(String userId, java.time.Instant before, ConversationContext context,
 			int limit) {
-		return repository.findConversationsByUserId(userId, before, context, limit);
+		return repository.findConversationsByUserId(userId, before, context, pageLimit(limit));
 	}
 
 	public int hideConversations(String userId, java.util.List<String> ids) {
@@ -392,7 +392,12 @@ public class MessagingService {
 	/** As conversas arquivadas (apagadas so para quem chama). */
 	public List<Conversation> listArchivedConversations(String userId, java.time.Instant before,
 			ConversationContext context, int limit) {
-		return repository.findArchivedConversationsByUserId(userId, before, context, limit);
+		return repository.findArchivedConversationsByUserId(userId, before, context, pageLimit(limit));
+	}
+
+	/** Teto das listagens de conversas e mensagens (o limit ia direto ao PageRequest). */
+	private static int pageLimit(int limit) {
+		return Math.clamp(limit, 1, 100);
 	}
 
 	/** Restaurar: a conversa volta para a caixa de entrada de quem chamou. */
@@ -434,6 +439,7 @@ public class MessagingService {
 	}
 
 	public List<Message> getMessages(String conversationId, String viewerId, java.time.Instant before, int limit) {
+		limit = pageLimit(limit);
 		if (!repository.findConversationById(conversationId).isPresent()) {
 			throw new ApiException(404, "CONVERSATION_NOT_FOUND", "Conversa nao encontrada.");
 		}

@@ -65,9 +65,9 @@ class CommunityChannelTests {
 		return objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asText();
 	}
 
-	private void publishInChannel(TestAuthHelper.AuthSession member, String communityId, String channelId,
+	private String publishInChannel(TestAuthHelper.AuthSession member, String communityId, String channelId,
 			String content, String key) throws Exception {
-		mockMvc.perform(post("/feed/posts")
+		MvcResult created = mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", member.token())
 				.header("Idempotency-Key", key)
 				.contentType(MediaType.APPLICATION_JSON)
@@ -76,7 +76,9 @@ class CommunityChannelTests {
 					"content", content,
 					"communityId", communityId,
 					"channelId", channelId))))
-			.andExpect(status().isCreated());
+			.andExpect(status().isCreated())
+			.andReturn();
+		return objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asText();
 	}
 
 	@Test
@@ -120,7 +122,22 @@ class CommunityChannelTests {
 
 		// Membro publica no canal.
 		String content = "Segredo do canal: o bastidor fica aqui.";
-		publishInChannel(member, communityId, channelId, content, "chan-post-1");
+		String postId = publishInChannel(member, communityId, channelId, content, "chan-post-1");
+
+		// O link direto do post respeita o canal: sem sessao ou de fora, e 404 (nao confirma que
+		// o post existe); so o membro le o conteudo.
+		mockMvc.perform(get("/feed/posts/" + postId))
+			.andExpect(status().isNotFound());
+		mockMvc.perform(get("/feed/posts/" + postId)
+				.header("X-Session-Token", outsider.token()))
+			.andExpect(status().isNotFound());
+		mockMvc.perform(get("/feed/posts/" + postId + "/comments")
+				.header("X-Session-Token", outsider.token()))
+			.andExpect(status().isNotFound());
+		mockMvc.perform(get("/feed/posts/" + postId)
+				.header("X-Session-Token", member.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.content").value(content));
 
 		// O feed do canal mostra; o feed da comunidade não mostra.
 		mockMvc.perform(get("/communities/" + communityId + "/channels/" + channelId + "/posts")

@@ -52,6 +52,10 @@ class WebPushDeliveryTests {
 
 	private PushSubscriptionRepository repository;
 
+	private String vapidPublic;
+
+	private String vapidPrivate;
+
 	@BeforeEach
 	void setUp() throws Exception {
 		server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -64,11 +68,13 @@ class WebPushDeliveryTests {
 		server.start();
 
 		KeyPair vapid = keyPair();
+		vapidPublic = Base64Encoder.encodeUrlWithoutPadding(Utils.encode((ECPublicKey) vapid.getPublic()));
+		vapidPrivate = Base64Encoder.encodeUrlWithoutPadding(Utils.encode((ECPrivateKey) vapid.getPrivate()));
 		repository = new InMemorySubscriptions();
-		sender = new WebPushSender(repository, new ObjectMapper(),
-			Base64Encoder.encodeUrlWithoutPadding(Utils.encode((ECPublicKey) vapid.getPublic())),
-			Base64Encoder.encodeUrlWithoutPadding(Utils.encode((ECPrivateKey) vapid.getPrivate())),
-			"mailto:teste@enois.test");
+		// O servico de push do teste roda em HTTP na loopback; o filtro de allowlist e testado
+		// separadamente com o filtro de producao.
+		sender = new WebPushSender(repository, new ObjectMapper(), vapidPublic, vapidPrivate,
+			"mailto:teste@enois.test", endpoint -> true);
 	}
 
 	@AfterEach
@@ -103,6 +109,31 @@ class WebPushDeliveryTests {
 	void doesNothingWithoutDevices() {
 		sender.sendToUser("user_sem_dispositivo", new PushMessage("Titulo", "Corpo", "/feed"));
 		assertThat(received).isEmpty();
+	}
+
+	@Test
+	void skipsEndpointsOutsideTheAllowlist() {
+		// Com o filtro de producao, um endpoint local (ou qualquer host desconhecido) nao vira
+		// POST server-side: e o que fecha o SSRF cego do registro de push.
+		WebPushSender strict = new WebPushSender(repository, new ObjectMapper(), vapidPublic, vapidPrivate,
+			"mailto:teste@enois.test", com.socialcoisa.rede.push.application.PushService::allowedPushEndpoint);
+		repository.save(subscription("push_local", "user_1", "/ok"));
+
+		strict.sendToUser("user_1", new PushMessage("Titulo", "Corpo", "/feed"));
+
+		assertThat(received).isEmpty();
+	}
+
+	@Test
+	void capsTheNumberOfDevicesPerAccount() {
+		for (int index = 0; index < com.socialcoisa.rede.push.application.PushService.MAX_SUBSCRIPTIONS_PER_USER
+				+ 2; index++) {
+			repository.save(subscription("push_cap_" + index, "user_1", "/ok"));
+		}
+
+		sender.sendToUser("user_1", new PushMessage("Titulo", "Corpo", "/feed"));
+
+		assertThat(received).hasSize(com.socialcoisa.rede.push.application.PushService.MAX_SUBSCRIPTIONS_PER_USER);
 	}
 
 	@Test

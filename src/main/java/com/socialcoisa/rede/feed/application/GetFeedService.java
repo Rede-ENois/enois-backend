@@ -217,6 +217,27 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	@Override
 	@Transactional(readOnly = true)
 	public PostView getPost(String postId, UserId viewerId) {
+		Post post = visiblePost(postId, viewerId);
+		List<PostView> enriched = enrich(List.of(post), viewerId);
+		// Unico lugar que devolve o corpo da pagina e o texto do artigo (ver PostView.from): e a
+		// leitura de um post so — a listagem nao carrega nem um nem outro.
+		return (enriched.isEmpty() ? PostView.from(post) : enriched.get(0))
+			.withPageHtml(post.pageHtml())
+			.withArticleBody(articleRepository.findBody(post.id()).orElse(null));
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public void requireVisible(String postId, UserId viewerId) {
+		visiblePost(postId, viewerId);
+	}
+
+	/**
+	 * Carrega o post e aplica as regras de visibilidade. Post de canal privado nao e publico: sem
+	 * sessao, ou com sessao de quem nao participa da comunidade, a resposta e 404 — o mesmo que um
+	 * id inexistente, para nao confirmar a existencia do conteudo.
+	 */
+	private Post visiblePost(String postId, UserId viewerId) {
 		Post post = postRepository.findById(new PostId(postId))
 			.filter(Post::isActive)
 			.orElseThrow(() -> new ApiException(404, "POST_NOT_FOUND", "Post nao encontrado."));
@@ -224,12 +245,14 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		if (viewerId != null && blockedUsersReader.hiddenIdsFor(viewerId.value()).contains(post.authorId().value())) {
 			throw new ApiException(404, "POST_NOT_FOUND", "Post nao encontrado.");
 		}
-		List<PostView> enriched = enrich(List.of(post), viewerId);
-		// Unico lugar que devolve o corpo da pagina e o texto do artigo (ver PostView.from): e a
-		// leitura de um post so — a listagem nao carrega nem um nem outro.
-		return (enriched.isEmpty() ? PostView.from(post) : enriched.get(0))
-			.withPageHtml(post.pageHtml())
-			.withArticleBody(articleRepository.findBody(post.id()).orElse(null));
+		if (post.channelId() != null) {
+			PostCommunityReader.CommunityRef community = post.communityId() == null || viewerId == null ? null
+				: postCommunityReader.byIds(List.of(post.communityId()), viewerId.value()).get(post.communityId());
+			if (community == null || !community.joined()) {
+				throw new ApiException(404, "POST_NOT_FOUND", "Post nao encontrado.");
+			}
+		}
+		return post;
 	}
 
 	@Transactional(readOnly = true)

@@ -178,7 +178,12 @@ class MentorRoomTests {
 			"price", "Gratuito",
 			"roomMode", "CUSTOM",
 			"meetingUrl", "https://meet.google.com/velha-sala"));
+		// A vitrine nao anuncia o link; o dono o recebe na rota privada da sala.
 		mockMvc.perform(get("/mentors/" + mentorId))
+			.andExpect(jsonPath("$.meetingUrl").doesNotExist());
+		mockMvc.perform(get("/mentors/" + mentorId + "/room")
+				.header("X-Session-Token", owner.token()))
+			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.meetingUrl").value("https://meet.google.com/velha-sala"));
 
 		// Volta para o Jitsi sem mandar link: o Meet antigo nao pode continuar anunciado no perfil.
