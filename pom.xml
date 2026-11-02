@@ -161,7 +161,21 @@
 		<dependency>
 			<groupId>nl.martijndwars</groupId>
 			<artifactId>web-push</artifactId>
-			<version>5.1.1</version>
+			<version>5.1.2</version>
+		</dependency>
+		<!-- O web-push 5.1.2 mudou o async-http-client e o jose4j para runtime, mas
+		     WebPushSender usa os dois direto: as dependencias de compilacao sao explicitas. -->
+		<dependency>
+			<groupId>org.asynchttpclient</groupId>
+			<artifactId>async-http-client</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.httpcomponents</groupId>
+			<artifactId>httpasyncclient</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.bitbucket.b_c</groupId>
+			<artifactId>jose4j</artifactId>
 		</dependency>
 
 		<!-- BouncyCastle: exigido em runtime pelo web-push para a criptografia do payload. -->
