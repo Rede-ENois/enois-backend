@@ -41,6 +41,21 @@ class FeedControllerTests {
 	}
 
 	@Test
+	void acceptsRankingCursorsAndPreservesChronologicalCursors() throws Exception {
+		var session = auth.authenticate("user_feed_pagination_cursor");
+		var until = java.time.Instant.now().minusSeconds(60);
+		String cursor = new com.socialcoisa.rede.feed.application.TrendingCursor(
+			until, 0, until.minusSeconds(1), "synthetic_cursor_post").encode();
+		mockMvc.perform(get("/feed").param("tab", "TRENDING").param("cursor", cursor)
+				.header("X-Session-Token", session.token())).andExpect(status().isOk());
+		mockMvc.perform(get("/feed").param("tab", "ALL").param("cursor", until.toString())
+				.header("X-Session-Token", session.token())).andExpect(status().isOk());
+		mockMvc.perform(get("/feed").param("tab", "TRENDING").param("cursor", until.toString())
+				.header("X-Session-Token", session.token())).andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("INVALID_CURSOR"));
+	}
+
+	@Test
 	void publishesPostAndReplaysIdempotentResponse() throws Exception {
 		var session = auth.authenticate("user_feed_replay");
 		String payload = objectMapper.writeValueAsString(Map.of(

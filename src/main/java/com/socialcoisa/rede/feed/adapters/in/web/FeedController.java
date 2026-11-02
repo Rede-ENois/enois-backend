@@ -181,9 +181,10 @@ class FeedController {
 			@RequestParam(required = false) Set<com.socialcoisa.rede.feed.domain.PostType> type,
 			@RequestParam(required = false) Boolean resolved) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		Optional<Instant> before = cursorCodec.decode(cursor);
+		Optional<Instant> before = tab == FeedTab.TRENDING ? Optional.empty() : cursorCodec.decode(cursor);
 		var page = getFeedUseCase.getFeed(new GetFeedQuery(user.id(), before, limit, tab,
-			type == null ? Set.of() : type, resolved));
+			type == null ? Set.of() : type, resolved, tab == FeedTab.TRENDING
+				? com.socialcoisa.rede.feed.application.TrendingCursor.decode(cursor) : null));
 		// "Voce esta em dia": only the first page carries the marker (see FeedResponse).
 		boolean withMarker = before.isEmpty() && FeedResponse.carriesMarker(tab);
 		return FeedResponse.of(page, withMarker ? feedSeenMarkers.lastSeenAt(user.id()).orElse(null) : null);
