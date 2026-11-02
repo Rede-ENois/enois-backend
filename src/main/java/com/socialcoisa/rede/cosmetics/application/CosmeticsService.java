@@ -94,10 +94,26 @@ public class CosmeticsService implements OfficialBadgeReader {
 			profile != null && equipped(profile, item))).toList();
 	}
 
-	public List<CollectionRow> collections() {
+	/**
+	 * O que a loja mostra hoje para quem olha: as coleções na temporada e a permanente com o que
+	 * está à venda nelas, mais o que a pessoa já tem — a peça comprada continua à mão para equipar
+	 * depois que a temporada passa.
+	 */
+	@Transactional(readOnly = true)
+	public List<ShopItem> onSaleNow(String viewerId, String order) {
+		Set<String> owned = viewerId == null ? Set.of() : ownedItemIds(viewerId);
+		return shop(viewerId, order).stream()
+			.filter(row -> row.available() || owned.contains(row.item().id()))
+			.toList();
+	}
+
+	/** Só as coleções na temporada: as outras não aparecem, nem antes nem depois da data delas. */
+	public List<CollectionRow> collectionsInSeason() {
 		Instant now = clock.instant();
-		return catalog.collections().stream().map(collection -> new CollectionRow(collection,
-			catalog.available(collection, now), catalog.looksOf(collection.id()))).toList();
+		return catalog.collections().stream()
+			.filter(collection -> catalog.available(collection, now))
+			.map(collection -> new CollectionRow(collection, true, catalog.looksOf(collection.id())))
+			.toList();
 	}
 
 	/** Everything a person owns: bought (ledger) or granted. Two queries, whatever the catalog size. */
