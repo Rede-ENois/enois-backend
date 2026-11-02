@@ -157,6 +157,18 @@ class MediaSafetyServiceTests {
 	}
 
 	@Test
+	void videoIsRecordedAsUnsupportedWithoutCallingTheImageReaderOrClassifier() {
+		when(assets.findById("media_1")).thenReturn(Optional.of(midiaDo("user_1", "video/mp4")));
+
+		MediaSafetyService.Outcome resultado = service.check("media_1");
+
+		assertThat(resultado.status()).isEqualTo("UNSUPPORTED_MEDIA");
+		verify(mediaReader, never()).imagesOf(anyString(), anyString(), anyInt());
+		verify(analyzer, never()).analyze(any());
+		verify(checks).save(any(MediaSafetyCheck.class));
+	}
+
+	@Test
 	void aDisabledSwitchChecksNothing() {
 		MediaSafetyService desligado = new MediaSafetyService(checks, mediaReader, analyzer, assets, posts, removePost,
 			moderators, profiles, RELOGIO, false);
@@ -166,7 +178,11 @@ class MediaSafetyServiceTests {
 	}
 
 	private static MediaAsset midiaDo(String ownerId) {
-		return MediaAsset.pending("media_1", new UserId(ownerId), "foto.jpg", "image/jpeg", 1000, "post",
+		return midiaDo(ownerId, "image/jpeg");
+	}
+
+	private static MediaAsset midiaDo(String ownerId, String mimeType) {
+		return MediaAsset.pending("media_1", new UserId(ownerId), "arquivo", mimeType, 1000, "post",
 			"media_1.jpg", "https://cdn.test/media_1.jpg", AGORA, AGORA.plusSeconds(3600));
 	}
 
