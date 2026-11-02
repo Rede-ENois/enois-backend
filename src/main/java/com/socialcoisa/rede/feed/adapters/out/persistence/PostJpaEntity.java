@@ -86,6 +86,13 @@ class PostJpaEntity {
 	@Column(name = "repost_with_opinion", nullable = false)
 	private boolean repostWithOpinion;
 
+	/** Read-only here: written by SpringDataPostJpaRepository#updateAcceptedAnswer only. */
+	@Column(name = "accepted_comment_id", insertable = false, updatable = false)
+	private String acceptedCommentId;
+
+	@Column(name = "resolved_at", insertable = false, updatable = false)
+	private Instant resolvedAt;
+
 	@Column(name = "created_at", nullable = false)
 	private Instant createdAt;
 
@@ -104,6 +111,9 @@ class PostJpaEntity {
 
 	@Column(nullable = false)
 	private int shares;
+
+	@Column(nullable = false)
+	private int reposts;
 
 	@Enumerated(EnumType.STRING)
 	@Column(nullable = false)
@@ -149,6 +159,7 @@ class PostJpaEntity {
 		entity.comments = post.counters().comments();
 		entity.saves = post.counters().saves();
 		entity.shares = post.counters().shares();
+		entity.reposts = post.counters().reposts();
 		entity.status = post.status();
 		entity.deletedAt = post.deletedAt();
 		entity.editedAt = post.editedAt();
@@ -160,8 +171,9 @@ class PostJpaEntity {
 
 	Post toDomain() {
 		return Post.restore(new PostId(id), new UserId(authorId), type, content, pageHtml, tags, mediaIds, communityId,
-			topic, channelId, createdAt, visibility, new Counters(reactions, comments, saves, shares), status,
+			topic, channelId, createdAt, visibility, new Counters(reactions, comments, saves, shares, reposts), status,
 			deletedAt, editedAt, expiresAt, authorIdentity, mediaSpoiler)
-			.markRepostOf(repostOf, repostOfAuthor, repostWithOpinion);
+			.markRepostOf(repostOf, repostOfAuthor, repostWithOpinion)
+			.markAcceptedAnswer(acceptedCommentId, resolvedAt);
 	}
 }

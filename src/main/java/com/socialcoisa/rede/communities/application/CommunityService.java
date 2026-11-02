@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,6 +16,9 @@ import com.socialcoisa.rede.communities.domain.MemberRole;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
+import com.socialcoisa.rede.shared.application.CacheConfig;
+import com.socialcoisa.rede.shared.application.CacheInvalidator;
+import com.socialcoisa.rede.shared.geo.CityState;
 import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.TextFieldLimit;
 
@@ -26,38 +30,46 @@ public class CommunityService {
 	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
 	private final com.socialcoisa.rede.shared.security.SuspiciousText suspiciousText;
 	private final Clock clock;
+	private final com.socialcoisa.rede.coin.application.CoinService coins;
+	private final CacheInvalidator cacheInvalidator;
 
 	public CommunityService(CommunityRepository repository, PostRepository postRepository,
 			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate,
-			com.socialcoisa.rede.shared.security.SuspiciousText suspiciousText, Clock clock) {
+			com.socialcoisa.rede.shared.security.SuspiciousText suspiciousText, Clock clock,
+			com.socialcoisa.rede.coin.application.CoinService coins, CacheInvalidator cacheInvalidator) {
+		this.coins = coins;
 		this.repository = repository;
 		this.postRepository = postRepository;
 		this.sanctionGate = sanctionGate;
 		this.suspiciousText = suspiciousText;
 		this.clock = clock;
+		this.cacheInvalidator = cacheInvalidator;
 	}
 
 	@Transactional
-	public Community create(String name, String description, String topic, String cover, String avatar, String userId) {
+	public Community create(String name, String description, String topic, String cover, String avatar, String city,
+			String state, String userId) {
 		// Os tetos sao os das COLUNAS (`communities.name varchar(255)`, `description varchar(2000)`):
 		// sem a checagem o banco recusava com "Data too long" e a pessoa levava 409 "conflita com o
 		// estado atual dos dados".
 		TextFieldLimit.check("COMMUNITY_FIELD_TOO_LONG", "nome", name, 255);
 		TextFieldLimit.check("COMMUNITY_FIELD_TOO_LONG", "descricao", description, 2000);
+		CityState place = CityState.of(city, state);
 		String id = "community_" + UUID.randomUUID().toString().replace("-", "");
 		// Descrição é opcional: em branco vira NULL (o banco guarda "sem descrição", não texto vazio).
 		String finalDescription = org.springframework.util.StringUtils.hasText(description) ? description.trim()
 			: null;
-		Community community = Community.create(id, name, finalDescription, topic, cover, avatar, userId,
+		Community community = Community.create(id, name, finalDescription, topic, cover, avatar, place, userId,
 			clock.instant());
 		repository.save(community);
 		repository.saveMember(CommunityMember.join(id, userId, MemberRole.ADMIN, clock.instant()));
+		cacheInvalidator.afterCommit(CacheConfig.COMMUNITIES);
 		return community;
 	}
 
 	@Transactional
 	public Community update(String communityId, String name, String description, String topic, String cover,
-			String avatar, String bannerHtml, String userId) {
+			String avatar, String bannerHtml, String city, String state, String userId) {
 		Community community = repository.findById(communityId)
 			.orElseThrow(() -> new ApiException(404, "COMMUNITY_NOT_FOUND", "Comunidade nao encontrada."));
 		if (!community.createdBy().equals(userId)) {
@@ -76,19 +88,28 @@ public class CommunityService {
 			: (org.springframework.util.StringUtils.hasText(bannerHtml)
 				? com.socialcoisa.rede.shared.html.SafeHtml.requireProfileHtml(bannerHtml)
 				: "");
+		// Cidade/UF: os dois ausentes mantem; os dois vazios limpam; so um preenchido e 400.
+		CityState finalPlace = city == null && state == null ? community.place() : CityState.of(city, state);
 		Community updated = community.update(finalName, finalDesc, finalTopic, finalCover, finalAvatar,
-			finalBannerHtml, clock.instant());
+			finalBannerHtml, finalPlace, clock.instant());
 		repository.save(updated);
+		cacheInvalidator.afterCommit(CacheConfig.COMMUNITIES);
 		return updated;
 	}
 
 	@Transactional
 	public CommunityMember join(String communityId, String userId) {
+		// Without this an unknown id left a membership row pointing at nothing.
+		repository.findById(communityId)
+			.orElseThrow(() -> new ApiException(404, "COMMUNITY_NOT_FOUND", "Comunidade nao encontrada."));
 		if (repository.isMember(communityId, userId)) {
 			throw new ApiException(409, "ALREADY_MEMBER", "Voce ja e membro desta comunidade.");
 		}
 		CommunityMember member = CommunityMember.join(communityId, userId, MemberRole.MEMBER, clock.instant());
 		repository.saveMember(member);
+		coins.recordPresence(userId);
+		// O total de membros aparece na vitrine: a entrada ja conta no proximo pedido.
+		cacheInvalidator.afterCommit(CacheConfig.COMMUNITIES);
 		return member;
 	}
 
@@ -115,6 +136,7 @@ public class CommunityService {
 			repository.removeAllMembers(communityId);
 			repository.delete(communityId);
 		}
+		cacheInvalidator.afterCommit(CacheConfig.COMMUNITIES);
 	}
 
 	/**
@@ -161,6 +183,7 @@ public class CommunityService {
 		}
 		repository.removeAllMembers(communityId);
 		repository.delete(communityId);
+		cacheInvalidator.afterCommit(CacheConfig.COMMUNITIES);
 	}
 
 	/** Comunidades das quais o usuario participa (menu lateral). */
@@ -184,9 +207,44 @@ public class CommunityService {
 		return repository.findFavorites(userId, limit);
 	}
 
-	public List<Community> list(String topic, String query, java.time.Instant before, int limit) {
-		// Comunidade criada por conta banida sai da vitrine (o conteúdo dela já é limpo).
-		return repository.findAll(topic, query, before, limit).stream()
+	/**
+	 * Vitrine. `state` sozinho filtra pela UF; `city` exige `state` (o mesmo nome de cidade existe em
+	 * varios estados). A cidade compara sem acento e sem caixa ("Sao Paulo" acha "São Paulo").
+	 *
+	 * <p>O resultado NAO depende de quem pede — o "sou membro" de cada leitor e aplicado depois, na
+	 * camada web —, entao pode ficar alguns segundos em cache: abrir a vitrine, trocar de filtro e
+	 * voltar custava a mesma varredura toda vez. A chave e o filtro + a paginacao + o cursor.</p>
+	 */
+	@Cacheable(cacheNames = CacheConfig.COMMUNITIES,
+		key = "#topic + '|' + #query + '|' + #city + '|' + #state + '|' + #before + '|' + #limit", sync = true)
+	public List<Community> list(String topic, String query, String city, String state, java.time.Instant before,
+			int limit) {
+		String uf = null;
+		String cityKey = null;
+		if (org.springframework.util.StringUtils.hasText(city)) {
+			CityState place = CityState.of(city, state);
+			uf = place.state();
+			cityKey = place.cityKey();
+		} else if (org.springframework.util.StringUtils.hasText(state)) {
+			uf = CityState.requireState(state);
+		}
+		return visible(repository.findAll(topic, query, uf, cityKey, before, limit));
+	}
+
+	/**
+	 * Comunidades perto de quem pede: as da mesma cidade primeiro, depois as do mesmo estado, cada
+	 * grupo por numero de membros. Sem cidade no perfil, lista vazia (nada de chutar o lugar).
+	 */
+	public List<Community> listLocal(CityState viewerPlace, int limit) {
+		if (viewerPlace == null) {
+			return List.of();
+		}
+		return visible(repository.findLocal(viewerPlace.state(), viewerPlace.cityKey(), limit));
+	}
+
+	// Comunidade criada por conta banida sai da vitrine (o conteúdo dela já é limpo).
+	private List<Community> visible(List<Community> communities) {
+		return communities.stream()
 			.filter(community -> !sanctionGate.banned(community.createdBy()))
 			.filter(community -> !suspiciousText.matches(community.name(), community.description()))
 			.toList();
@@ -239,6 +297,16 @@ public class CommunityService {
 
 	public int countMembers(String communityId) {
 		return repository.countMembers(communityId);
+	}
+
+	/** Contagem de membros da pagina inteira, numa consulta (a vitrine fazia uma por comunidade). */
+	public java.util.Map<String, Integer> countMembersByCommunityIds(java.util.Collection<String> communityIds) {
+		return repository.countMembersByCommunityIds(communityIds);
+	}
+
+	/** Das comunidades da pagina, quais a pessoa participa — numa consulta. */
+	public java.util.Set<String> memberCommunityIds(String userId, java.util.Collection<String> communityIds) {
+		return repository.memberCommunityIds(userId, communityIds);
 	}
 
 	public List<CommunityMember> findMembers(String communityId) {

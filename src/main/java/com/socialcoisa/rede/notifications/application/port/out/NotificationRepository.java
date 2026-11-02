@@ -11,7 +11,12 @@ public interface NotificationRepository {
 
 	Optional<Notification> findById(String id);
 
-	List<Notification> findByUserId(String userId, java.time.Instant before, int limit);
+	/** A null context keeps every kind. */
+	List<Notification> findByUserId(String userId, java.time.Instant before,
+			com.socialcoisa.rede.notifications.domain.NotificationContext context, int limit);
+
+	/** The unread notification of a group, if there is one. */
+	Optional<Notification> findUnreadGroup(String userId, String groupKey);
 
 	void markRead(String notificationId);
 

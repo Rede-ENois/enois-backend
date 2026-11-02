@@ -91,15 +91,29 @@ public class ModerationAiService {
 			   importam ("porra, tu e foda" entre amigos e diferente de insulto direcionado).
 			6. Citar uma expressao ofensiva em uma denuncia NAO e usar a expressao contra alguem.
 			7. Discussao politica ou religiosa legitima e diferente de intolerancia/ameaca.
-			8. Conteudo repetitivo ou gerado por IA nao e infracao por si so.
+			8. CONTEUDO GERADO POR BOT OU POR IA DE FORMA AUTONOMA e proibido. Esta rede e para
+			   gente: quem publica responde pelo que publica. Sinais de publicacao automatizada:
+			   texto que se declara gerado por IA, "como um modelo de linguagem", resposta a prompt,
+			   postura de assistente, volume e formato de saida de robo, propaganda automatica de
+			   ferramenta de IA, conta que so reproduz saida de gerador. Uso de IA como ferramenta
+			   (revisar um texto, corrigir gramatica, tirar duvida) NAO e infracao: o que a regra
+			   barra e a conta que existe para publicar saida de maquina sem pessoa por tras.
 			9. Proibida NUDEZ e conteudo SEXUAL EXPLICITO — genitalia, ato sexual, orgao sexual em
-			   destaque, pornografia de qualquer tipo. Isso vale tambem para imagem, GIF, video e
-			   desenho/hentai, e NAO depende do texto do post: a foto e a infracao.
+			   destaque, pornografia de qualquer tipo. Isso vale tambem para imagem, GIF, video,
+			   desenho/hentai e para ARTE GERADA POR IA com esse conteudo, e NAO depende do texto do
+			   post: a foto e a infracao. Conteudo adulto nao tem versao "soft" aceitavel aqui:
+			   nudez parcial, close em orgao sexual, lingerie com intencao sexual e "quase pornografia"
+			   contam como o mesmo problema.
 			10. Proibido conteudo SEXUAL envolvendo menores de idade, real ou simulado (inclusive
-			   desenho e personagem ficticio). Isso e a violacao mais grave da lista.
+			   desenho, personagem ficticio e imagem gerada por IA). Isso e a violacao mais grave da
+			   lista e vale ate quando o conteudo e "so" sugestivo.
 			11. Nao e infracao por si so: educacao sexual, materia jornalistica, denuncia, obra de
 			   arte sem exposicao explicita, afeto entre adultos e imagem sem nudez. Nesses casos,
 			   se houver duvida, use "ambiguo": true e "acao": "HUMAN_REVIEW".
+			12. LINK PARA CONTEUDO PROIBIDO e infracao, mesmo que o texto do post seja inocente e o
+			   dominio seja conhecido. Se o conteudo mostra um endereco, avalie o DESTINO: link para
+			   pornografia, nudez, venda de conteudo adulto, golpe ou phishing e violacao. Nao
+			   aprove um link so porque o dominio e famoso.
 
 			Se houver IMAGENS anexadas na mensagem, elas sao o CONTEUDO denunciado: olhe as imagens
 			antes de decidir. Texto inocente com imagem explicita e violacao; imagem inocente com
@@ -111,7 +125,8 @@ public class ModerationAiService {
 			  intolerancia religiosa, xenofobia, discriminacao ou preconceito DIRECIONADOS a pessoa
 			  ou grupo; ameaca, intimidacao ou incitacao a violencia; assedio ou humilhacao
 			  DIRECIONADA; golpe, fraude, phishing ou link malicioso; spam ou manipulacao; nudez ou
-			  conteudo sexual explicito (diretrizes 9 e 10).
+			  conteudo sexual explicito (diretrizes 9 e 10); link para conteudo proibido (diretriz
+			  12); publicacao automatizada por bot ou IA (diretriz 8).
 			  UMA denuncia comprovada ja basta — nao exija varias denuncias nem gravidade alta.
 			- Use "PENALIZAR" quando o proprio CONTEUDO comprova a violacao e nao ha duvida:
 			  "ambiguo": false e "confianca" >= 0.7. "gravidade" (LOW..CRITICAL) classifica o caso,

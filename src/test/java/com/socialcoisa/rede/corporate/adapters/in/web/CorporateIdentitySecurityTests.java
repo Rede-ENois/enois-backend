@@ -226,6 +226,14 @@ class CorporateIdentitySecurityTests {
 			.andExpect(jsonPath("$.reputation").doesNotExist())
 			.andExpect(jsonPath("$.followersCount").doesNotExist())
 			.andExpect(jsonPath("$.connectionsCount").doesNotExist())
-			.andExpect(jsonPath("$.email").doesNotExist());
+			.andExpect(jsonPath("$.email").doesNotExist())
+			// A pagina de trabalho mostra o portfolio publico da conta, sem o @ social.
+			.andExpect(jsonPath("$.identityVerified").isBoolean())
+			.andExpect(jsonPath("$.memberSince").isString())
+			.andExpect(jsonPath("$.skills").isArray())
+			.andExpect(jsonPath("$.experiences").isArray())
+			.andExpect(jsonPath("$.educations").isArray())
+			.andExpect(jsonPath("$.certifications").isArray())
+			.andExpect(jsonPath("$.socialUsername").doesNotExist());
 	}
 }

@@ -168,4 +168,56 @@ class PersonalizationFeedTests {
 			.forEach(item -> ids.add(item.path("id").asText()));
 		org.assertj.core.api.Assertions.assertThat(ids).containsSubsequence(likedPost, untopicPost);
 	}
+
+	/**
+	 * For You pages are date windows and the liked-topics boost only reorders inside a page. Before,
+	 * the boost ran before the page was cut: liked posts filled the page, the cursor jumped past the
+	 * newer unliked posts and they never showed (and the "voce esta em dia" section had no stable order).
+	 */
+	@Test
+	void forYouPagesAreDateWindowsBoostedInside() throws Exception {
+		var author = auth.authenticate("persfeed_pages");
+		String communityId = createCommunity(author, "PersFeed Pages Tech", "TECNOLOGIA");
+		String liked1 = publishInCommunity(author, communityId, "Pages: liked, oldest.");
+		String plain1 = publishPlain(author, "Pages: plain, second.");
+		String plain2 = publishPlain(author, "Pages: plain, third.");
+		String liked2 = publishInCommunity(author, communityId, "Pages: liked, newest.");
+
+		mockMvc.perform(put("/me/preferences")
+				.header("X-Session-Token", author.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of(
+					"likedTopics", java.util.List.of("TECNOLOGIA")))))
+			.andExpect(status().isOk());
+
+		java.util.List<String> ids = new java.util.ArrayList<>();
+		String cursor = null;
+		do {
+			var request = get("/feed").param("tab", "FOR_YOU").param("limit", "2")
+				.header("X-Session-Token", author.token());
+			if (cursor != null) {
+				request.param("cursor", cursor);
+			}
+			var body = objectMapper.readTree(mockMvc.perform(request).andExpect(status().isOk())
+				.andReturn().getResponse().getContentAsString());
+			body.path("items").forEach(item -> ids.add(item.path("id").asText()));
+			cursor = body.path("nextCursor").isTextual() ? body.path("nextCursor").asText() : null;
+		} while (cursor != null);
+
+		// Page 1 = the two newest (liked2, plain2); page 2 = the two oldest, liked first.
+		org.assertj.core.api.Assertions.assertThat(ids).containsExactly(liked2, plain2, liked1, plain1);
+	}
+
+	private String publishPlain(TestAuthHelper.AuthSession session, String content) throws Exception {
+		MvcResult result = mockMvc.perform(post("/feed/posts")
+				.header("X-Session-Token", session.token())
+				.header("Idempotency-Key", "plain-" + content.hashCode() + "-" + System.nanoTime())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of(
+					"type", "INSIGHT", "content", content, "tags", java.util.List.of(),
+					"mediaIds", java.util.List.of()))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		return objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asText();
+	}
 }

@@ -47,7 +47,11 @@ class WriteRouteInterceptor implements HandlerInterceptor {
 		"/auth/oauth/*/token",
 		"/games/tokens/validate",
 		// GitHub não tem sessão no app: a autenticação é o HMAC X-Hub-Signature-256 do webhook.
-		"/webhooks/github");
+		"/webhooks/github",
+		// RFC 8058 one-click unsubscribe: the mail client POSTs without a session. The encrypted
+		// token in the URL is the authorization and the only effect is turning e-mails off.
+		"/blogs/descadastrar",
+		"/notifications/digest/unsubscribe");
 
 	private final AntPathMatcher matcher = new AntPathMatcher();
 	private final CurrentUserResolver currentUserResolver;

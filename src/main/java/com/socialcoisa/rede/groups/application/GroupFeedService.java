@@ -301,6 +301,38 @@ public class GroupFeedService {
 		return comment;
 	}
 
+	/**
+	 * Edição do comentário: só o autor edita (quem modera remove, não reescreve o que o outro disse).
+	 * Passa pelos mesmos portões do comentar — ECA, sanção de moderação e permissão de interagir.
+	 */
+	@Transactional
+	public GroupComment editComment(String groupId, String postId, String commentId, String actorId, String text) {
+		ageGate.requireCanWrite(actorId);
+		sanctionGate.requireNotRestricted(actorId);
+		requireGroup(groupId);
+		requirePost(groupId, postId);
+		GroupComment comment = content.findComment(commentId)
+			.filter(item -> item.postId().equals(postId) && item.isPublished())
+			.orElseThrow(() -> new ApiException(404, "COMMENT_NOT_FOUND",
+				"Comentario nao encontrado nesta publicacao."));
+		if (!comment.authorId().equals(actorId)) {
+			throw new ApiException(403, "FORBIDDEN", "Voce so pode editar o seu proprio comentario.");
+		}
+		require(roleOf(groupId, actorId), GroupCapability.INTERACT);
+		if (!StringUtils.hasText(text)) {
+			throw new ApiException(400, "EMPTY_COMMENT", "Escreva alguma coisa antes de comentar.");
+		}
+		String clean = PlainText.defuse(text.trim());
+		if (clean.length() > GroupComment.MAX_CONTENT) {
+			throw new ApiException(400, "CONTENT_TOO_LONG", "Comentario deve ter ate 1.200 caracteres.");
+		}
+		GroupComment edited = comment.edit(clean, clock.instant());
+		content.saveComment(edited);
+		audit.record(new UserId(actorId), "GROUP_COMMENT_EDITED", commentId,
+			"{\"groupId\":\"" + groupId + "\",\"postId\":\"" + postId + "\"}");
+		return edited;
+	}
+
 	@Transactional(readOnly = true)
 	public List<GroupComment> listComments(String groupId, String postId, String actorId, int limit) {
 		requireMember(groupId, actorId);

@@ -10,6 +10,9 @@ public interface ManageProfileExtensionUseCase {
 	/** Experiências públicas de alguém (a tela de perfil busca por username). */
 	List<ExperienceView> getExperiencesOf(String username);
 
+	/** Public order (most recent first), by account id. */
+	List<ExperienceView> publicExperiences(String userId);
+
 	ExperienceView addExperience(String userId, String title, String company, String location, String description,
 			LocalDate startDate, LocalDate endDate);
 

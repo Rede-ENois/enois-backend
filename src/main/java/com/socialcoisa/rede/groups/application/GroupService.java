@@ -44,7 +44,11 @@ public class GroupService {
 	private final GroupNotifier notifier;
 	private final Clock clock;
 
-	public GroupService(GroupRepository repository, AuditLogRepository audit, GroupNotifier notifier, Clock clock) {
+	private final com.socialcoisa.rede.coin.application.CoinService coins;
+
+	public GroupService(GroupRepository repository, AuditLogRepository audit, GroupNotifier notifier, Clock clock,
+			com.socialcoisa.rede.coin.application.CoinService coins) {
+		this.coins = coins;
 		this.repository = repository;
 		this.audit = audit;
 		this.notifier = notifier;
@@ -139,6 +143,7 @@ public class GroupService {
 			repository.saveMember(GroupMember.join(groupId, userId, GroupRole.MEMBER, clock.instant()));
 			repository.adjustMemberCount(groupId, 1);
 			notifier.memberJoined(group, userId);
+			coins.recordPresence(userId);
 			return JoinOutcome.MEMBER;
 		}
 		// Entrada por aprovação: um pendente por pessoa e grupo (o banco também garante).
@@ -148,6 +153,7 @@ public class GroupService {
 		repository.saveJoinRequest(
 			GroupJoinRequest.create(newId("group_request"), groupId, userId, null, clock.instant()));
 		notifier.joinRequested(group, userId);
+		coins.recordPresence(userId);
 		return JoinOutcome.PENDING;
 	}
 

@@ -9,6 +9,7 @@ import java.util.Set;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
 
+import com.socialcoisa.rede.feed.application.TrendingCursor;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.AuthorIdentity;
 import com.socialcoisa.rede.feed.domain.Post;
@@ -64,6 +65,14 @@ class PostPersistenceAdapter implements PostRepository, SocialPostCountReader {
 	@Override
 	public List<Post> findByMediaId(String mediaId) {
 		return repository.findByMediaId(mediaId).stream()
+			.map(PostJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public List<Post> findActiveWithLinksSince(Instant since, int limit) {
+		return repository.findWithLinksSince(PostStatus.ACTIVE, since, PageRequest.of(0, Math.max(1, limit)))
+			.stream()
 			.map(PostJpaEntity::toDomain)
 			.toList();
 	}
@@ -132,16 +141,30 @@ class PostPersistenceAdapter implements PostRepository, SocialPostCountReader {
 	}
 
 	@Override
-	public List<Post> findTrending(Instant since, int limit) {
-		return repository.findTrending(PostStatus.ACTIVE, List.of(PostType.BLOG, PostType.BUSINESS), since,
-			PageRequest.of(0, limit)).stream()
+	public List<Post> findTrending(Instant since, Instant until, TrendingCursor after, int limit) {
+		return repository.findTrending(PostStatus.ACTIVE, List.of(PostType.BLOG, PostType.BUSINESS), since, until,
+			after == null ? null : after.reactions(), after == null ? null : after.createdAt(),
+			after == null ? null : after.postId(), PageRequest.of(0, limit)).stream()
 			.map(PostJpaEntity::toDomain)
 			.toList();
 	}
 
 	@Override
-	public List<Post> findActiveByTypes(Set<PostType> types, Instant before, int limit) {
-		return repository.findByTypes(PostStatus.ACTIVE, types, before, PageRequest.of(0, limit)).stream()
+	public List<Post> findActiveUnseen(UserId reader, Collection<String> blockedTopics, Instant before, int limit) {
+		return repository.findUnseen(PostStatus.ACTIVE, List.of(PostType.BLOG, PostType.BUSINESS), reader.value(),
+			blockedTopics == null || blockedTopics.isEmpty() ? List.of("") : blockedTopics, before,
+			PageRequest.of(0, limit)).stream().map(PostJpaEntity::toDomain).toList();
+	}
+
+	@Override
+	public List<Post> findActiveInteracted(UserId reader, Instant before, int limit) {
+		return repository.findInteracted(PostStatus.ACTIVE, reader.value(), before, PageRequest.of(0, limit))
+			.stream().map(PostJpaEntity::toDomain).toList();
+	}
+
+	@Override
+	public List<Post> findActiveByTypes(Set<PostType> types, Boolean resolved, Instant before, int limit) {
+		return repository.findByTypes(PostStatus.ACTIVE, types, resolved, before, PageRequest.of(0, limit)).stream()
 			.map(PostJpaEntity::toDomain)
 			.toList();
 	}
@@ -207,5 +230,10 @@ class PostPersistenceAdapter implements PostRepository, SocialPostCountReader {
 			PostStatus.ACTIVE, before, PageRequest.of(0, limit)).stream()
 			.map(PostJpaEntity::toDomain)
 			.toList();
+	}
+
+	@Override
+	public void updateAcceptedAnswer(PostId id, String commentId, Instant resolvedAt) {
+		repository.updateAcceptedAnswer(id.value(), commentId, resolvedAt);
 	}
 }

@@ -40,6 +40,9 @@ class MessageJpaEntity {
 	@Column(length = 44)
 	private String iv;
 
+	@Column(name = "reply_to_id")
+	private String replyToId;
+
 	@Column(name = "created_at", nullable = false)
 	private Instant createdAt;
 
@@ -56,6 +59,7 @@ class MessageJpaEntity {
 		e.mediaSpoiler = message.mediaSpoiler();
 		e.e2e = message.e2e();
 		e.iv = message.iv();
+		e.replyToId = message.replyToId();
 		e.createdAt = message.createdAt();
 		return e;
 	}
@@ -65,9 +69,9 @@ class MessageJpaEntity {
 			? List.of()
 			: Arrays.stream(mediaIds.split(",")).map(String::trim).filter(v -> !v.isEmpty()).toList();
 		if (e2e) {
-			return Message.restoreE2e(id, conversationId, senderId, text, iv, media, mediaSpoiler, createdAt);
+			return Message.restoreE2e(id, conversationId, senderId, text, iv, media, mediaSpoiler, replyToId, createdAt);
 		}
-		return Message.restore(id, conversationId, senderId, text, media, mediaSpoiler, createdAt);
+		return Message.restore(id, conversationId, senderId, text, media, mediaSpoiler, replyToId, createdAt);
 	}
 
 }

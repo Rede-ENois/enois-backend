@@ -4,6 +4,13 @@
 
 ## Decisões
 
+- **2026-10-30: Social and professional interfaces.** Applying to a job and proposing for a freelance
+  require the ACTIVE professional identity, resolved from the session; professional conversations
+  (`JOB`, `FREELANCE`, `SERVICE`) never share a thread with the social DM; LinkedIn auto-share only
+  takes professional posts. Account values stay account-level (decision 0), but the public
+  professional page does not display reputation, followers or connections. Details in
+  `docs/SOCIAL_PROFESSIONAL_CONTEXTS.md`.
+
 0. **2026-10-20 — Valores de conta compartilhados (diretriz da dona).** Faíscas, credibilidade,
    reputação, seguidores, verificação e segundo fator são do nível da CONTA: as duas
    identidades os compartilham, sem duplicação nem separação de carteira. O que muda por

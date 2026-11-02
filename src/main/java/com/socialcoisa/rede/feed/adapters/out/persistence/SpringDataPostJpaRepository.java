@@ -37,6 +37,16 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 	@Query("select p from PostJpaEntity p where :mediaId member of p.mediaIds")
 	List<PostJpaEntity> findByMediaId(@Param("mediaId") String mediaId);
 
+	/** Posts ativos com link no corpo ou na mini página (a varredura da barreira de links). */
+	@Query("""
+		select p from PostJpaEntity p
+		where p.status = :status and p.createdAt >= :since
+		  and (p.content like '%http%' or p.pageHtml like '%http%')
+		order by p.createdAt desc
+		""")
+	List<PostJpaEntity> findWithLinksSince(@Param("status") PostStatus status, @Param("since") Instant since,
+			Pageable pageable);
+
 	List<PostJpaEntity> findByAuthorIdInAndStatusAndChannelIdIsNullAndCreatedAtBeforeOrderByCreatedAtDesc(Collection<String> authorIds,
 			PostStatus status, Instant before, Pageable pageable);
 
@@ -124,6 +134,27 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 			@Param("excluded") Collection<PostType> excluded, @Param("blocked") Collection<String> blocked,
 			@Param("before") Instant before, Pageable pageable);
 
+	@Query("""
+			SELECT p FROM PostJpaEntity p
+			WHERE p.status = :status AND p.type NOT IN :excluded AND p.channelId IS NULL
+			  AND p.authorId <> :reader AND p.createdAt < :before
+			  AND (p.topic IS NULL OR p.topic NOT IN :blocked)
+			  AND NOT EXISTS (SELECT r.id FROM ReactionJpaEntity r WHERE r.postId = p.id AND r.userId = :reader)
+			  AND NOT EXISTS (SELECT c.id FROM CommentJpaEntity c WHERE c.postId = p.id AND c.authorId = :reader)
+			ORDER BY p.createdAt DESC""")
+	List<PostJpaEntity> findUnseen(@Param("status") PostStatus status,
+			@Param("excluded") Collection<PostType> excluded, @Param("reader") String reader,
+			@Param("blocked") Collection<String> blocked, @Param("before") Instant before, Pageable pageable);
+
+	@Query("""
+			SELECT p FROM PostJpaEntity p
+			WHERE p.status = :status AND p.createdAt < :before
+			  AND (EXISTS (SELECT r.id FROM ReactionJpaEntity r WHERE r.postId = p.id AND r.userId = :reader)
+			    OR EXISTS (SELECT c.id FROM CommentJpaEntity c WHERE c.postId = p.id AND c.authorId = :reader))
+			ORDER BY p.createdAt DESC""")
+	List<PostJpaEntity> findInteracted(@Param("status") PostStatus status, @Param("reader") String reader,
+			@Param("before") Instant before, Pageable pageable);
+
 	/**
 	 * "Para você"/Seguindo com assuntos bloqueados: apenas o que a identidade SOCIAL assinou
 	 * e cujo tópico não está bloqueado (posts sem tópico passam).
@@ -159,19 +190,39 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 	@Query("""
 			SELECT p FROM PostJpaEntity p
 			WHERE p.status = :status AND p.type NOT IN :excluded AND p.channelId IS NULL
-			  AND p.createdAt >= :since
-			ORDER BY p.reactions DESC, p.createdAt DESC""")
+			  AND p.createdAt >= :since AND p.createdAt <= :until
+			  AND (:afterReactions IS NULL OR p.reactions < :afterReactions
+			    OR (p.reactions = :afterReactions AND (p.createdAt < :afterCreatedAt
+			      OR (p.createdAt = :afterCreatedAt AND p.id < :afterId))))
+			ORDER BY p.reactions DESC, p.createdAt DESC, p.id DESC""")
 	List<PostJpaEntity> findTrending(@Param("status") PostStatus status,
-			@Param("excluded") Collection<PostType> excluded, @Param("since") Instant since, Pageable pageable);
+			@Param("excluded") Collection<PostType> excluded, @Param("since") Instant since,
+			@Param("until") Instant until, @Param("afterReactions") Integer afterReactions,
+			@Param("afterCreatedAt") Instant afterCreatedAt, @Param("afterId") String afterId, Pageable pageable);
 
-	/** Feed "Tudo" filtrado por tipos de post. */
+	/** Feed "Tudo" filtrado por tipos de post; `resolved` (nulo = tanto faz) filtra as dúvidas resolvidas. */
 	@Query("""
 			SELECT p FROM PostJpaEntity p
 			WHERE p.status = :status AND p.type IN :types AND p.channelId IS NULL
 			  AND p.createdAt < :before
+			  AND (:resolved IS NULL OR (:resolved = TRUE AND p.resolvedAt IS NOT NULL)
+			    OR (:resolved = FALSE AND p.resolvedAt IS NULL))
 			ORDER BY p.createdAt DESC""")
 	List<PostJpaEntity> findByTypes(@Param("status") PostStatus status,
-			@Param("types") Collection<PostType> types, @Param("before") Instant before, Pageable pageable);
+			@Param("types") Collection<PostType> types, @Param("resolved") Boolean resolved,
+			@Param("before") Instant before, Pageable pageable);
+
+	/** Resposta aceita da dúvida: só esta escrita toca as duas colunas (o save() não as grava). */
+	@org.springframework.data.jpa.repository.Modifying(flushAutomatically = true, clearAutomatically = true)
+	@Query("UPDATE PostJpaEntity p SET p.acceptedCommentId = :commentId, p.resolvedAt = :resolvedAt WHERE p.id = :id")
+	int updateAcceptedAnswer(@Param("id") String id, @Param("commentId") String commentId,
+			@Param("resolvedAt") Instant resolvedAt);
+
+	/** A resposta aceita sumiu (apagada pelo autor ou pela moderação): a dúvida volta a ficar aberta. */
+	@org.springframework.transaction.annotation.Transactional
+	@org.springframework.data.jpa.repository.Modifying(flushAutomatically = true, clearAutomatically = true)
+	@Query("UPDATE PostJpaEntity p SET p.acceptedCommentId = NULL, p.resolvedAt = NULL WHERE p.acceptedCommentId IN :commentIds")
+	int clearAcceptedAnswers(@Param("commentIds") Collection<String> commentIds);
 
 	/** Todos os posts do autor (sem filtro de status) — ban cleanup, PR #37. */
 }

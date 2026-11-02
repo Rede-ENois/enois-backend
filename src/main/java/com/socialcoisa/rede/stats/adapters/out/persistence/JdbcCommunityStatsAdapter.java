@@ -28,7 +28,7 @@ class JdbcCommunityStatsAdapter implements CommunityStatsReader {
 		  select user_id from auth_sessions
 		    where revoked_at is null and refresh_expires_at > ?
 		  union
-		  select author_id from posts where created_at > ? and status <> 'DELETED'
+		  select author_id from posts where created_at > ? and status not in ('DELETED', 'QUARANTINED')
 		  union
 		  select author_id from comments where created_at > ?
 		) as ativos

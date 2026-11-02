@@ -30,6 +30,7 @@
 - **Vagas de emprego** com candidatura
 - **Mentoria** com agendamento de sessões
 - **Mensagens diretas** em conversas
+- **Interfaces social e profissional** na mesma conta ([SOCIAL_PROFESSIONAL_CONTEXTS.md](SOCIAL_PROFESSIONAL_CONTEXTS.md))
 - **Notificações** de interações sociais
 - **Busca global** entre usuários, comunidades, vagas, eventos e mentores
 - **Moderação** de conteúdo com reports

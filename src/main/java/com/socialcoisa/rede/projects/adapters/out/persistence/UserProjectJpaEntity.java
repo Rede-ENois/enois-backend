@@ -44,6 +44,12 @@ class UserProjectJpaEntity {
 	@Column(name = "repo_url", length = 500)
 	private String repoUrl;
 
+	@Column(length = 500)
+	private String banner;
+
+	@Column(length = 500)
+	private String icon;
+
 	@Column(name = "status", length = 40)
 	private String status;
 
@@ -70,6 +76,8 @@ class UserProjectJpaEntity {
 		entity.position = project.position();
 		entity.title = project.title();
 		entity.description = project.description();
+		entity.banner = project.banner();
+		entity.icon = project.icon();
 		entity.stack = String.join("\n", project.stack());
 		entity.repoUrl = project.repoUrl();
 		entity.status = project.status();
@@ -81,7 +89,7 @@ class UserProjectJpaEntity {
 	}
 
 	UserProject toDomain() {
-		return new UserProject(id, userId, position, title, description,
+		return new UserProject(id, userId, position, title, description, banner, icon,
 			stack.isBlank() ? List.of() : List.of(stack.split("\n")), repoUrl, status, parseDiary(diary), html,
 			createdAt, updatedAt);
 	}

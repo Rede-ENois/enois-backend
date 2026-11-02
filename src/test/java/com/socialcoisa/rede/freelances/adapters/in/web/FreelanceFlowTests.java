@@ -138,8 +138,80 @@ class FreelanceFlowTests {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("CLOSED"));
 
+		// A listagem é global (outros testes deixam freelances abertos): afirma só sobre o próprio.
 		mockMvc.perform(get("/freelances"))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.items.length()").value(0));
+			.andExpect(jsonPath("$.items[?(@.id == '" + id + "')]").isEmpty());
+	}
+
+	@Test
+	void proposalGoesFromTheProfessionalIdentityToTheProfessionalInbox() throws Exception {
+		var auth = new TestAuthHelper(mockMvc, objectMapper);
+		var poster = auth.authenticate("free_prop_owner");
+		var proposer = auth.authenticate("free_prop_pro");
+		MvcResult created = mockMvc.perform(post("/freelances")
+				.header("X-Session-Token", poster.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+					"title", "Landing page",
+					"scope", "Uma landing page com formulario e integracao com o CRM.",
+					"budgetMin", 800,
+					"budgetMax", 1200,
+					"deadline", LocalDate.now().plusDays(7).toString()))))
+			.andExpect(status().isOk())
+			.andReturn();
+		String freelanceId = objectMapper.readTree(created.getResponse().getContentAsString()).path("id").asText();
+		String proposalBody = objectMapper.writeValueAsString(Map.of("message", "Entrego em cinco dias."));
+
+		// Sem identidade profissional ativa, nada sai em nome do perfil social.
+		mockMvc.perform(post("/freelances/" + freelanceId + "/proposals")
+				.header("X-Session-Token", proposer.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(proposalBody))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("NO_ACTIVE_CORPORATE_PROFILE"));
+
+		String proUsername = auth.activateProfessional(proposer);
+		MvcResult proposed = mockMvc.perform(post("/freelances/" + freelanceId + "/proposals")
+				.header("X-Session-Token", proposer.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(proposalBody))
+			.andExpect(status().isOk())
+			.andReturn();
+		String conversationId = objectMapper.readTree(proposed.getResponse().getContentAsString())
+			.path("conversationId").asText();
+
+		// Quem publicou recebe na caixa profissional, vendo a identidade profissional.
+		mockMvc.perform(get("/conversations/" + conversationId).header("X-Session-Token", poster.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.kind").value("FREELANCE"))
+			.andExpect(jsonPath("$.context").value("PROFESSIONAL"))
+			.andExpect(jsonPath("$.identities." + proposer.userId() + ".username").value(proUsername));
+		mockMvc.perform(get("/notifications").param("context", "PROFESSIONAL").header("X-Session-Token", poster.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[0].kind").value("NEW_WORK_MESSAGE"))
+			.andExpect(jsonPath("$.items[0].context").value("PROFESSIONAL"))
+			.andExpect(jsonPath("$.items[0].actorUsername").value(proUsername))
+			.andExpect(jsonPath("$.items[0].actorIdentity").value("CORPORATE"));
+		mockMvc.perform(get("/notifications").param("context", "SOCIAL").header("X-Session-Token", poster.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.kind == 'NEW_WORK_MESSAGE')]").isEmpty());
+
+		// Uma segunda proposta para a mesma pessoa continua na mesma conversa (sem duplicar).
+		mockMvc.perform(post("/freelances/" + freelanceId + "/proposals")
+				.header("X-Session-Token", proposer.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("message", "Posso comecar amanha."))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.conversationId").value(conversationId));
+
+		// Quem publicou nao propoe para o proprio freela.
+		auth.activateProfessional(poster);
+		mockMvc.perform(post("/freelances/" + freelanceId + "/proposals")
+				.header("X-Session-Token", poster.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(proposalBody))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("CANNOT_PROPOSE_OWN_FREELANCE"));
 	}
 }

@@ -83,6 +83,7 @@ class JobAbandonPenaltyTests {
 	void deletingWithoutRespondingRecordsThePenaltyAndWarns() throws Exception {
 		var owner = auth.authenticate("penalty_owner");
 		var candidate = auth.authenticate("penalty_candidate");
+		auth.activateProfessional(candidate);
 		String jobId = createJob(owner);
 		apply(candidate, jobId);
 
@@ -99,6 +100,7 @@ class JobAbandonPenaltyTests {
 	void deletingAfterRespondingDoesNotPenalize() throws Exception {
 		var owner = auth.authenticate("penalty_owner_ok");
 		var candidate = auth.authenticate("penalty_candidate_ok");
+		auth.activateProfessional(candidate);
 		String jobId = createJob(owner);
 		String applicationId = apply(candidate, jobId);
 
@@ -123,6 +125,7 @@ class JobAbandonPenaltyTests {
 	void deletingTwiceDoesNotDoubleCount() throws Exception {
 		var owner = auth.authenticate("penalty_owner_dbl");
 		var candidate = auth.authenticate("penalty_candidate_dbl");
+		auth.activateProfessional(candidate);
 		String jobId = createJob(owner);
 		apply(candidate, jobId);
 

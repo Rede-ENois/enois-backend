@@ -197,6 +197,13 @@ jobs:
           GITHUB_CLIENT_ID: ${{ secrets.QA_GITHUB_CLIENT_ID }}
           GITHUB_CLIENT_SECRET: ${{ secrets.QA_GITHUB_CLIENT_SECRET }}
           GITHUB_CONTRIBUTIONS_TOKEN: ${{ secrets.QA_GITHUB_CONTRIBUTIONS_TOKEN }}
+          # Sugestoes da comunidade: issue PUBLICA nos repos de destino, aberta so apos aprovacao
+          # de moderador. Usa o mesmo token do suporte (guardado no banco, painel do admin), entao
+          # nao ha secret novo aqui. Os mesmos repos valem em QA e prod: aprovar na QA tambem
+          # publica de verdade.
+          GITHUB_SUGGESTIONS_REPO_BACKEND: ${{ vars.SUGGESTIONS_REPO_BACKEND }}
+          GITHUB_SUGGESTIONS_REPO_FRONTEND: ${{ vars.SUGGESTIONS_REPO_FRONTEND }}
+          GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM: ${{ vars.SUGGESTIONS_REPO_DESIGN_SYSTEM }}
           # Na QA, issue com a label `bug` (aplicada por mantenedor) ja conta para o selo de
           # issues; em producao o default e vazio (so revisao humana). O worker roda a cada 10
           # minutos para os selos acompanharem o GitHub sozinhos.
@@ -207,6 +214,11 @@ jobs:
           IMAGEKIT_URL_ENDPOINT: ${{ secrets.IMAGEKIT_URL_ENDPOINT }}
           IMAGEKIT_PUBLIC_KEY: ${{ secrets.IMAGEKIT_PUBLIC_KEY }}
           IMAGEKIT_PRIVATE_KEY: ${{ secrets.IMAGEKIT_PRIVATE_KEY }}
+          # Busca de GIF no seletor e triagem por LLM (denuncias/quarentena): sem chave o backend
+          # responde "sem provedor configurado" e a IA fica indisponível — a chave existe como
+          # secret, mas não era injetada no container.
+          REDE_GIFS_GIPHY_KEY: ${{ secrets.REDE_GIFS_GIPHY_KEY }}
+          MODERATION_LLM_API_KEY: ${{ secrets.MODERATION_LLM_API_KEY }}
           PANIC_MODE: ${{ secrets.PANIC_MODE }}
           # Storage da midia na QA. Sem estas variaveis o app sobe em `imagekit` (o default) e o
           # S3StorageConfig nem e criado — o endpoint de upload responde 503 "desativado" mesmo
@@ -227,6 +239,14 @@ jobs:
           REDE_MEDIA_S3_PREFIX: qa/
           AWS_ACCESS_KEY_ID: ${{ secrets.PROD_AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.PROD_AWS_SECRET_ACCESS_KEY }}
+          # Web Push (VAPID), par da QA — independente do de produção. A chave pública é a
+          # identidade do servidor para o serviço de push do navegador: toda inscrição existente
+          # foi criada com ela, então o valor vem de secret e é fixo entre deploys (nunca gerado
+          # no boot). Sem as duas, o backend sobe com o push desligado e GET /push/config responde
+          # enabled:false — as notificações continuam só dentro do app.
+          VAPID_PUBLIC_KEY: ${{ secrets.QA_VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.QA_VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT: "mailto:suporte@enois.ia.br"
         run: |
           set -euo pipefail
           API="${PORTAINER_BASE_URL}/api/endpoints/${PORTAINER_ENDPOINT_ID}/docker"
@@ -282,12 +302,17 @@ jobs:
               "GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}",
               "GITHUB_REDIRECT_URI=https://enois-api-qa.b7cloud.tech/api/auth/oauth/github/callback",
               "GITHUB_CONTRIBUTIONS_TOKEN=${GITHUB_CONTRIBUTIONS_TOKEN}",
+              "GITHUB_SUGGESTIONS_REPO_BACKEND=${GITHUB_SUGGESTIONS_REPO_BACKEND}",
+              "GITHUB_SUGGESTIONS_REPO_FRONTEND=${GITHUB_SUGGESTIONS_REPO_FRONTEND}",
+              "GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM=${GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM}",
               "GITHUB_QUALIFIED_ISSUE_LABELS=${GITHUB_QUALIFIED_ISSUE_LABELS}",
               "GITHUB_SYNC_ENABLED=true",
               "GITHUB_SYNC_CRON=${GITHUB_SYNC_CRON}",
               "IMAGEKIT_URL_ENDPOINT=${IMAGEKIT_URL_ENDPOINT}",
               "IMAGEKIT_PUBLIC_KEY=${IMAGEKIT_PUBLIC_KEY}",
               "IMAGEKIT_PRIVATE_KEY=${IMAGEKIT_PRIVATE_KEY}",
+              "REDE_GIFS_GIPHY_KEY=${REDE_GIFS_GIPHY_KEY}",
+              "MODERATION_LLM_API_KEY=${MODERATION_LLM_API_KEY}",
               "REDE_AUTH_SIGNUP_ENABLED=true",
               "SIGNUP_CAPTCHA_ENABLED=true",
               "REDE_MEDIA_STORAGE=${REDE_MEDIA_STORAGE}",
@@ -299,6 +324,9 @@ jobs:
               "REDE_MEDIA_S3_PREFIX=${REDE_MEDIA_S3_PREFIX}",
               "AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}",
               "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}",
+              "VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY}",
+              "VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY}",
+              "VAPID_SUBJECT=${VAPID_SUBJECT}",
               "TRUSTED_PROXY_IPS=154.12.230.97",
               "JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=60.0 -XX:+ExitOnOutOfMemoryError"
             ],
@@ -427,11 +455,30 @@ jobs:
           GITHUB_CLIENT_ID: ${{ secrets.OAUTH_GITHUB_CLIENT_ID }}
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_CLIENT_SECRET }}
           GITHUB_CONTRIBUTIONS_TOKEN: ${{ secrets.OAUTH_GITHUB_CONTRIBUTIONS_TOKEN }}
+          # Sugestoes da comunidade (issue publica apos aprovacao). Usa o mesmo token do suporte,
+          # guardado no banco (painel do admin): so os repositorios de destino vem daqui.
+          GITHUB_SUGGESTIONS_REPO_BACKEND: ${{ vars.SUGGESTIONS_REPO_BACKEND }}
+          GITHUB_SUGGESTIONS_REPO_FRONTEND: ${{ vars.SUGGESTIONS_REPO_FRONTEND }}
+          GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM: ${{ vars.SUGGESTIONS_REPO_DESIGN_SYSTEM }}
+          # Issue com a label `bug` (aplicada por mantenedor) ja conta para o selo de issues, como na QA.
+          GITHUB_QUALIFIED_ISSUE_LABELS: bug
           # ImageKit aposentado (storage no S3), mas o purge/delete de midia antiga ainda
           # conversa com ele ate a migracao de objetos terminar.
           IMAGEKIT_URL_ENDPOINT: ${{ secrets.IMAGEKIT_URL_ENDPOINT }}
           IMAGEKIT_PUBLIC_KEY: ${{ secrets.IMAGEKIT_PUBLIC_KEY }}
           IMAGEKIT_PRIVATE_KEY: ${{ secrets.IMAGEKIT_PRIVATE_KEY }}
+          # Busca de GIF no seletor e triagem por LLM (denuncias/quarentena): sem chave o backend
+          # responde "sem provedor configurado" e a IA fica indisponível — a chave existe como
+          # secret, mas não era injetada no container.
+          REDE_GIFS_GIPHY_KEY: ${{ secrets.REDE_GIFS_GIPHY_KEY }}
+          MODERATION_LLM_API_KEY: ${{ secrets.MODERATION_LLM_API_KEY }}
+          # Web Push (VAPID), par de PRODUÇÃO — distinto do da QA, para que um teste na QA nunca
+          # valha como inscrição de produção. Fixo entre deploys: a chave pública assina as
+          # inscrições já existentes e trocá-la as invalida. Sem as duas, o push fica desligado
+          # (GET /push/config → enabled:false) e as notificações seguem só dentro do app.
+          VAPID_PUBLIC_KEY: ${{ secrets.PROD_VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.PROD_VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT: "mailto:suporte@enois.ia.br"
         run: |
           set -euo pipefail
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
@@ -508,6 +555,10 @@ jobs:
                 GITHUB_CLIENT_SECRET: "${GITHUB_CLIENT_SECRET}"
                 GITHUB_REDIRECT_URI: "https://api.enois.ia.br/api/auth/oauth/github/callback"
                 GITHUB_CONTRIBUTIONS_TOKEN: "${GITHUB_CONTRIBUTIONS_TOKEN}"
+                GITHUB_SUGGESTIONS_REPO_BACKEND: "${GITHUB_SUGGESTIONS_REPO_BACKEND}"
+                GITHUB_SUGGESTIONS_REPO_FRONTEND: "${GITHUB_SUGGESTIONS_REPO_FRONTEND}"
+                GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM: "${GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM}"
+                GITHUB_QUALIFIED_ISSUE_LABELS: "${GITHUB_QUALIFIED_ISSUE_LABELS}"
                 GITHUB_SYNC_ENABLED: "true"
                 GITHUB_SYNC_CRON: "0 */10 * * * *"
                 MANAGEMENT_ENDPOINTS: ${MANAGEMENT_ENDPOINTS}
@@ -517,6 +568,11 @@ jobs:
                 IMAGEKIT_URL_ENDPOINT: "${IMAGEKIT_URL_ENDPOINT}"
                 IMAGEKIT_PUBLIC_KEY: "${IMAGEKIT_PUBLIC_KEY}"
                 IMAGEKIT_PRIVATE_KEY: "${IMAGEKIT_PRIVATE_KEY}"
+                REDE_GIFS_GIPHY_KEY: "${REDE_GIFS_GIPHY_KEY}"
+                MODERATION_LLM_API_KEY: "${MODERATION_LLM_API_KEY}"
+                VAPID_PUBLIC_KEY: "${VAPID_PUBLIC_KEY}"
+                VAPID_PRIVATE_KEY: "${VAPID_PRIVATE_KEY}"
+                VAPID_SUBJECT: "${VAPID_SUBJECT}"
           EOF
 
           echo "==> Montar payload JSON (python escapa o YAML certo pro body)"

@@ -13,6 +13,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.corporate.application.CorporateProfileService;
 import com.socialcoisa.rede.corporate.domain.CorporateProfile;
+import com.socialcoisa.rede.profile.application.port.in.ManageProfileExtensionUseCase;
+import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
@@ -28,10 +30,15 @@ class CorporateProfileController {
 
 	private final CorporateProfileService service;
 	private final CurrentUserResolver currentUserResolver;
+	private final UserProfileRepository accounts;
+	private final ManageProfileExtensionUseCase portfolio;
 
-	CorporateProfileController(CorporateProfileService service, CurrentUserResolver currentUserResolver) {
+	CorporateProfileController(CorporateProfileService service, CurrentUserResolver currentUserResolver,
+			UserProfileRepository accounts, ManageProfileExtensionUseCase portfolio) {
 		this.service = service;
 		this.currentUserResolver = currentUserResolver;
+		this.accounts = accounts;
+		this.portfolio = portfolio;
 	}
 
 	record CreateRequest(String username, String name) {
@@ -62,7 +69,26 @@ class CorporateProfileController {
 		CorporateProfile profile = service.byUsername(username)
 			.filter(CorporateProfile::active)
 			.orElseThrow(() -> new ApiException(404, "PROFILE_NOT_FOUND", "Perfil profissional não encontrado."));
-		return view(profile);
+		return publicView(profile);
+	}
+
+	/**
+	 * The public work page: the professional presentation plus the public portfolio of the account
+	 * (verification, skills, experiences, education, certifications). Never the social @, name or
+	 * avatar, and no reputation, followers or connections: those are not mixed between identities.
+	 */
+	private Map<String, Object> publicView(CorporateProfile profile) {
+		String userId = profile.userId();
+		var account = accounts.findById(userId).orElse(null);
+		Map<String, Object> result = new java.util.LinkedHashMap<>(view(profile));
+		result.put("userId", userId);
+		result.put("identityVerified", account != null && account.identityVerified());
+		result.put("memberSince", profile.createdAt() == null ? null : profile.createdAt().toString());
+		result.put("skills", account == null || account.skills() == null ? List.of() : account.skills());
+		result.put("experiences", portfolio.publicExperiences(userId));
+		result.put("educations", portfolio.getEducations(userId));
+		result.put("certifications", portfolio.getCertifications(userId));
+		return result;
 	}
 
 	@PostMapping("/me/business-profile")

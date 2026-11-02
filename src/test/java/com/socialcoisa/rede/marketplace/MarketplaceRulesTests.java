@@ -96,7 +96,8 @@ class MarketplaceRulesTests {
 			.andExpect(status().isOk());
 
 		// O catálogo mostra quem publicou (nome e @).
-		String profile = mockMvc.perform(get("/users/by-id/" + owner.userId()))
+		String profile = mockMvc.perform(get("/users/by-id/" + owner.userId())
+				.header("X-Session-Token", owner.token()))
 			.andExpect(status().isOk())
 			.andReturn().getResponse().getContentAsString();
 		String expectedUsername = objectMapper.readTree(profile).get("username").asText();

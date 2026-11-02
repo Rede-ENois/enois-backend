@@ -102,7 +102,8 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 			storageUrlFactory.provider());
 		MediaAsset saved = mediaAssetRepository.save(asset);
 		try {
-			MediaUploadView view = MediaUploadView.fromSigned(saved, signer.sign(objectKey, saved.mimeType()));
+			MediaUploadView view = MediaUploadView.fromSigned(saved,
+				signer.sign(objectKey, saved.mimeType(), saved.size()));
 			// Metadados do upload (nunca o conteúdo): permite no CloudWatch ver quem subiu o quê,
 			// tamanho/tipo e o provedor, e cruzar com o mediaId que aparece nos posts.
 			LOG.info("media_upload_signed mediaId={} ownerId={} mime={} bytes={} purpose={} provider={}",

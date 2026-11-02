@@ -43,14 +43,17 @@ class MediaStorageProxyController {
 	private final MediaAssetRepository assets;
 	private final CurrentUserResolver currentUserResolver;
 	private final com.socialcoisa.rede.media.application.MediaMetadataSanitizer sanitizer;
+	private final com.socialcoisa.rede.media.application.MediaImageModerationService imageModeration;
 
 	MediaStorageProxyController(ObjectProvider<MediaObjectStore> storeProvider, MediaAssetRepository assets,
 			CurrentUserResolver currentUserResolver,
-			com.socialcoisa.rede.media.application.MediaMetadataSanitizer sanitizer) {
+			com.socialcoisa.rede.media.application.MediaMetadataSanitizer sanitizer,
+			com.socialcoisa.rede.media.application.MediaImageModerationService imageModeration) {
 		this.storeProvider = storeProvider;
 		this.assets = assets;
 		this.currentUserResolver = currentUserResolver;
 		this.sanitizer = sanitizer;
+		this.imageModeration = imageModeration;
 	}
 
 	private MediaObjectStore store() {
@@ -131,6 +134,12 @@ class MediaStorageProxyController {
 		if (length <= 0) {
 			throw new ApiException(411, "MEDIA_LENGTH_REQUIRED", "Informe o tamanho do arquivo.");
 		}
+		// O tamanho declarado em POST /media/uploads e o contrato do upload. Sem esta comparacao,
+		// um asset de 68 bytes aceitava um corpo de centenas de MB e ficava servido publicamente.
+		if (length != asset.size()) {
+			throw new ApiException(400, "MEDIA_SIZE_MISMATCH",
+				"O tamanho enviado nao corresponde ao declarado no upload.");
+		}
 		String mime = asset.mimeType();
 		try {
 			if (length > com.socialcoisa.rede.media.application.MediaMetadataSanitizer.MAX_IN_MEMORY) {
@@ -153,6 +162,7 @@ class MediaStorageProxyController {
 				byte[] raw = request.getInputStream().readAllBytes();
 				// LIMPEZA NA ESCRITA: EXIF/GPS/XMP/IPTC não chegam ao bucket.
 				byte[] clean = sanitizer.sanitize(raw, mime, objectKey);
+				imageModeration.verifyBeforeStorage(clean, mime);
 				store().write(objectKey, mime, clean.length, new java.io.ByteArrayInputStream(clean));
 			}
 		}

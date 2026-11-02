@@ -41,7 +41,11 @@ public class ScheduledPostService {
 	private final PublishPostUseCase publishPost;
 	private final Clock clock;
 
-	public ScheduledPostService(ScheduledPostRepository repository, PublishPostUseCase publishPost, Clock clock) {
+	private final com.socialcoisa.rede.coin.application.CoinService coins;
+
+	public ScheduledPostService(ScheduledPostRepository repository, PublishPostUseCase publishPost, Clock clock,
+			com.socialcoisa.rede.coin.application.CoinService coins) {
+		this.coins = coins;
 		this.repository = repository;
 		this.publishPost = publishPost;
 		this.clock = clock;
@@ -103,7 +107,10 @@ public class ScheduledPostService {
 			command.mediaIds() == null ? List.of() : command.mediaIds(),
 			command.mentionedUserIds() == null ? List.of() : command.mentionedUserIds(), command.communityId(),
 			topic, scheduledAt, now, null, 0);
-		return repository.save(post);
+		ScheduledPost saved = repository.save(post);
+		// Scheduling is the person's action today; the later automatic publication is not presence.
+		coins.recordPresence(userId);
+		return saved;
 	}
 
 	@Transactional(readOnly = true)

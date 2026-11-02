@@ -38,6 +38,9 @@ class MicroProjectProposalJpaEntity {
 	@Column(name = "decided_at")
 	private Instant decidedAt;
 
+	@Column(name = "conversation_id")
+	private String conversationId;
+
 	protected MicroProjectProposalJpaEntity() {
 	}
 
@@ -50,10 +53,12 @@ class MicroProjectProposalJpaEntity {
 		e.status = proposal.status();
 		e.proposedAt = proposal.proposedAt();
 		e.decidedAt = proposal.decidedAt();
+		e.conversationId = proposal.conversationId();
 		return e;
 	}
 
 	MicroProjectProposal toDomain() {
-		return MicroProjectProposal.restore(id, projectId, userId, message, status, proposedAt, decidedAt);
+		return MicroProjectProposal.restore(id, projectId, userId, message, status, proposedAt, decidedAt,
+			conversationId);
 	}
 }

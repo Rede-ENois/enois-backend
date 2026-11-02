@@ -21,4 +21,6 @@ interface SpringDataUserSanctionJpaRepository extends JpaRepository<UserSanction
 
 	List<UserSanctionJpaEntity> findByTypeAndStatusAndCreatedAtBeforeOrderByCreatedAtAsc(
 			SanctionType type, SanctionStatus status, Instant cutoff, Pageable pageable);
+
+	List<UserSanctionJpaEntity> findByStatusOrderByCreatedAtDesc(SanctionStatus status, Pageable pageable);
 }

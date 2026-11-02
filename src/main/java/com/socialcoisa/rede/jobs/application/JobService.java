@@ -7,10 +7,14 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import com.socialcoisa.rede.companies.application.CompanyService;
+import com.socialcoisa.rede.companies.domain.Company;
+import com.socialcoisa.rede.companies.domain.CompanyRole;
 import com.socialcoisa.rede.jobs.application.port.out.JobAbandonPenaltyRepository;
 import com.socialcoisa.rede.jobs.application.port.out.JobApplicationDelivery;
 import com.socialcoisa.rede.jobs.application.port.out.JobApplicationStatusNotifier;
@@ -20,6 +24,8 @@ import com.socialcoisa.rede.jobs.domain.JobApplication;
 import com.socialcoisa.rede.jobs.domain.JobApplicationStatus;
 import com.socialcoisa.rede.jobs.domain.JobApplicationField;
 import com.socialcoisa.rede.profile.application.ReputationService;
+import com.socialcoisa.rede.shared.application.CacheConfig;
+import com.socialcoisa.rede.shared.application.CacheInvalidator;
 import com.socialcoisa.rede.shared.security.BehavioralTimingGuard;
 import com.socialcoisa.rede.shared.security.UserRateLimiter;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -51,7 +57,7 @@ public class JobService {
 	private final JobRepository repository;
 	private final ReputationService reputationService;
 	private final com.socialcoisa.rede.profile.application.port.out.UserProfileRepository userProfileRepository;
-	private final com.socialcoisa.rede.corporate.application.port.out.CorporateProfileRepository corporateProfiles;
+	private final com.socialcoisa.rede.corporate.application.CorporateProfileService corporateProfiles;
 	private final com.socialcoisa.rede.profile.application.port.out.ProfileExtensionRepository extensionRepository;
 	private final JobApplicationDelivery delivery;
 	private final JobApplicationStatusNotifier statusNotifier;
@@ -60,15 +66,18 @@ public class JobService {
 	private final Clock clock;
 	private final UserRateLimiter userRateLimiter;
 	private final BehavioralTimingGuard behavioralTimingGuard;
+	private final CompanyService companyService;
+	private final CacheInvalidator cacheInvalidator;
 
 	public JobService(JobRepository repository, ReputationService reputationService,
 			com.socialcoisa.rede.profile.application.port.out.UserProfileRepository userProfileRepository,
-			com.socialcoisa.rede.corporate.application.port.out.CorporateProfileRepository corporateProfiles,
+			com.socialcoisa.rede.corporate.application.CorporateProfileService corporateProfiles,
 			com.socialcoisa.rede.profile.application.port.out.ProfileExtensionRepository extensionRepository,
 			JobApplicationDelivery delivery, JobApplicationStatusNotifier statusNotifier,
 			JobAbandonPenaltyRepository abandonPenalties,
 			tools.jackson.databind.ObjectMapper objectMapper, Clock clock,
-			UserRateLimiter userRateLimiter, BehavioralTimingGuard behavioralTimingGuard) {
+			UserRateLimiter userRateLimiter, BehavioralTimingGuard behavioralTimingGuard,
+			CompanyService companyService, CacheInvalidator cacheInvalidator) {
 		this.repository = repository;
 		this.reputationService = reputationService;
 		this.userProfileRepository = userProfileRepository;
@@ -81,13 +90,24 @@ public class JobService {
 		this.clock = clock;
 		this.userRateLimiter = userRateLimiter;
 		this.behavioralTimingGuard = behavioralTimingGuard;
+		this.companyService = companyService;
+		this.cacheInvalidator = cacheInvalidator;
 	}
 
 	@Transactional
 	public Job create(String title, String company, String logo, String location, String type, String level,
 			String salary, String currency, String salaryMin, String salaryMax, String salaryPeriod,
 			String description, List<String> skills, List<JobFieldInput> fields, String userId,
-			boolean communityAgreement) {
+			boolean communityAgreement, String companyId) {
+		// Posting for a company page takes RECRUITER or above on it; the job then carries the
+		// page's name and logo, so nobody publishes in a page's name without being on its team.
+		Company page = null;
+		if (StringUtils.hasText(companyId)) {
+			page = companyService.company(companyId.trim());
+			companyService.requireRole(page, userId, CompanyRole.RECRUITER);
+			company = page.name();
+			logo = StringUtils.hasText(page.logo()) ? page.logo() : logo;
+		}
 		validate(title, company, type, level);
 		int reputation = reputationService.reputationOf(userId);
 		// Freelance e trabalho pontual: qualquer pessoa com conta verificada publica, sem o
@@ -113,7 +133,14 @@ public class JobService {
 		Job job = Job.create(id, title, company, logo, location, type, level, normalizeSalary(salary),
 			normalizeCurrency(currency), range.min(), range.max(), range.period(), range.description(), skills,
 			normalizeFields(id, fields), userId, clock.instant(), clock.instant());
+		if (page != null) {
+			job = job.withCompany(page.id());
+		}
 		repository.save(job);
+		cacheInvalidator.afterCommit(CacheConfig.JOBS);
+		if (page != null) {
+			companyService.notifyFollowers(page, userId, "Nova vaga", page.name() + " abriu a vaga \"" + job.title() + "\".");
+		}
 		return job;
 	}
 
@@ -127,6 +154,11 @@ public class JobService {
 		if (!existing.postedBy().equals(userId)) {
 			throw new ApiException(403, "NOT_OWNER", "Voce nao pode editar uma vaga que nao criou.");
 		}
+		// A job linked to a page keeps the page's name and logo: editing does not move it out.
+		if (existing.companyId() != null) {
+			company = existing.company();
+			logo = existing.logo();
+		}
 		// A edição segue a mesma regra da criação: valor e descrição obrigatórios.
 		SalaryRange range = validateSalary(description, salaryMin, salaryMax, salaryPeriod);
 		// Editar NAO mexe no ciclo de vida: status e closedAt vem do registro atual, nunca do
@@ -134,8 +166,9 @@ public class JobService {
 		Job updated = Job.restore(jobId, title, company, logo, location, type, level, normalizeSalary(salary),
 			normalizeCurrency(currency), range.min(), range.max(), range.period(), range.description(), skills,
 			normalizeFields(jobId, fields), userId, existing.communityAgreedAt(),
-			existing.status(), existing.closedAt(), existing.postedAt(), clock.instant());
+			existing.status(), existing.closedAt(), existing.postedAt(), clock.instant(), existing.companyId());
 		repository.save(updated);
+		cacheInvalidator.afterCommit(CacheConfig.JOBS);
 		return updated;
 	}
 
@@ -158,6 +191,7 @@ public class JobService {
 		}
 		Job closed = existing.closed(clock.instant());
 		repository.save(closed);
+		cacheInvalidator.afterCommit(CacheConfig.JOBS);
 		return closed;
 	}
 
@@ -170,7 +204,7 @@ public class JobService {
 	 */
 	/** Candidaturas que a pessoa fez, com o estado e o retorno do empregador. */
 	public List<JobApplication> myApplications(String userId, int limit) {
-		return repository.findApplicationsByUser(userId, limit);
+		return repository.findApplicationsByUser(userId, pageLimit(limit));
 	}
 
 	@Transactional
@@ -216,6 +250,7 @@ public class JobService {
 		int unanswered = repository.countUnansweredApplications(jobId);
 		boolean penalized = unanswered > 0 && abandonPenalties.record(jobId, userId, unanswered);
 		repository.deleteById(jobId);
+		cacheInvalidator.afterCommit(CacheConfig.JOBS);
 		return new DeleteResult(jobId, unanswered, penalized);
 	}
 
@@ -242,8 +277,11 @@ public class JobService {
 		if (repository.hasApplied(jobId, userId)) {
 			throw new ApiException(409, "ALREADY_APPLIED", "Voce ja se candidatou a esta vaga.");
 		}
+		// A candidatura e SEMPRE da identidade profissional ativa, resolvida pela sessao aqui no
+		// servidor: sem ela nao ha candidatura (o app oferece criar ou ativar o perfil).
+		var professional = corporateProfiles.requireActive(userId);
 		List<JobApplication.JobApplicationAnswer> normalized = validateAnswers(job, answers);
-		String snapshot = snapshotOf(userId);
+		String snapshot = snapshotOf(userId, professional);
 		JobApplication application = JobApplication.create(null, jobId, userId, trimToNull(message, 2000), snapshot,
 			clock.instant(), normalized);
 		String applicationId = repository.saveApplication(application);
@@ -316,36 +354,24 @@ public class JobService {
 	/**
 	 * Retrato do candidato no momento da inscricao: perfil, tempo de experiencia e credibilidade.
 	 *
-	 * A candidatura usa a IDENTIDADE PROFISSIONAL quando ela existe e esta ativa (nome, headline,
-	 * local, avatar e industria vem do alterego; o resto dos valores da conta — reputacao,
-	 * experiencia, habilidades, curriculo e verificacao — e o mesmo para as duas identidades).
-	 * Sem perfil profissional ativo, o retrato e o social, como sempre foi.
+	 * A apresentacao (nome, @, headline, local, avatar e industria) e a da IDENTIDADE PROFISSIONAL,
+	 * nunca a social: a empresa nao recebe o @ nem a foto do perfil pessoal. O resto sao valores da
+	 * conta, iguais para as duas identidades (reputacao, experiencia, habilidades, curriculo,
+	 * verificacao). O nome social continua: e direito da pessoa, nao dado do perfil social.
 	 */
-	private String snapshotOf(String userId) {
+	private String snapshotOf(String userId, com.socialcoisa.rede.corporate.domain.CorporateProfile professional) {
 		var profile = userProfileRepository.findById(userId).orElse(null);
-		var corporate = corporateProfiles.findByUserId(userId)
-			.filter(com.socialcoisa.rede.corporate.domain.CorporateProfile::active).orElse(null);
-		boolean professional = corporate != null;
 		int reputation = reputationService.reputationOf(userId);
 		int years = yearsOfExperience(userId);
 		Map<String, Object> snapshot = new java.util.LinkedHashMap<>();
-		snapshot.put("identity", professional ? "CORPORATE" : "SOCIAL");
-		snapshot.put("name", professional && StringUtils.hasText(corporate.name()) ? corporate.name()
-			: (profile == null ? "" : profile.name()));
+		snapshot.put("identity", "CORPORATE");
+		snapshot.put("name", professional.name());
 		snapshot.put("socialName", profile == null || profile.socialName() == null ? "" : profile.socialName());
-		snapshot.put("username", profile == null ? "" : profile.username());
-		snapshot.put("headline", professional
-			? (StringUtils.hasText(corporate.headline()) ? corporate.headline() : "")
-			: (profile == null ? "" : StringUtils.hasText(profile.headline()) ? profile.headline() : ""));
-		snapshot.put("location", professional
-			? (StringUtils.hasText(corporate.location()) ? corporate.location()
-				: (profile == null ? "" : profile.location() == null ? "" : profile.location()))
-			: (profile == null ? "" : StringUtils.hasText(profile.location()) ? profile.location() : ""));
-		snapshot.put("avatar", professional
-			? (StringUtils.hasText(corporate.avatar()) ? corporate.avatar()
-				: (profile == null ? "" : profile.avatar() == null ? "" : profile.avatar()))
-			: (profile == null ? "" : StringUtils.hasText(profile.avatar()) ? profile.avatar() : ""));
-		snapshot.put("industry", professional && corporate.industry() != null ? corporate.industry() : "");
+		snapshot.put("username", professional.username());
+		snapshot.put("headline", textOrEmpty(professional.headline()));
+		snapshot.put("location", textOrEmpty(professional.location()));
+		snapshot.put("avatar", textOrEmpty(professional.avatar()));
+		snapshot.put("industry", textOrEmpty(professional.industry()));
 		snapshot.put("skills", profile == null ? List.of() : profile.skills());
 		snapshot.put("experienceYears", years);
 		snapshot.put("experiencesCount", extensionRepository.countExperiencesByUserId(userId));
@@ -361,6 +387,10 @@ public class JobService {
 		catch (Exception exception) {
 			throw new ApiException(500, "SNAPSHOT_FAILURE", "Nao foi possivel montar o seu perfil para o envio.");
 		}
+	}
+
+	private static String textOrEmpty(String value) {
+		return StringUtils.hasText(value) ? value : "";
 	}
 
 	/** Anos de experiencia a partir da primeira experiencia registrada (0 quando nao ha nenhuma). */
@@ -446,9 +476,16 @@ public class JobService {
 		repository.removeBookmark(jobId, userId);
 	}
 
+	/**
+	 * Vitrine de vagas. O resultado e o mesmo para todo mundo — a parte pessoal (ja me candidatei,
+	 * salvei, sou dono) e enriquecida depois, no controller — por isso pode ficar em cache.
+	 */
+	@Cacheable(cacheNames = CacheConfig.JOBS,
+		key = "#query + '|' + #type + '|' + #level + '|' + #location + '|' + #skills + '|' + #before + '|' + #limit",
+		sync = true)
 	public List<Job> list(String query, String type, String level, String location, List<String> skills,
 			java.time.Instant before, int limit) {
-		return repository.findAll(query, type, level, location, skills, before, limit);
+		return repository.findAll(query, type, level, location, skills, before, pageLimit(limit));
 	}
 
 	public Job getById(String id) {
@@ -458,12 +495,17 @@ public class JobService {
 
 	/** Vagas publicadas pelo usuario (com quantas candidaturas receberam). */
 	public List<Job> listMine(String userId, java.time.Instant before, int limit) {
-		return repository.findByPostedBy(userId, before, limit);
+		return repository.findByPostedBy(userId, before, pageLimit(limit));
 	}
 
 	/** Vagas em que o usuario se candidatou. */
 	public List<Job> listApplications(String userId, java.time.Instant before, int limit) {
-		return repository.findAppliedByUser(userId, before, limit);
+		return repository.findAppliedByUser(userId, before, pageLimit(limit));
+	}
+
+	/** Teto de qualquer listagem de vagas: sem ele, `?limit=100000` ia direto ao banco. */
+	private static int pageLimit(int limit) {
+		return Math.clamp(limit, 1, 100);
 	}
 
 	public java.util.Set<String> appliedJobIds(String userId, java.util.List<String> jobIds) {

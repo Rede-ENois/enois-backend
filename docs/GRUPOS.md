@@ -155,6 +155,10 @@ Enquanto houver pendência real, a automação fica viva.
 - [x] Moderação local — o autor apaga o próprio post/comentário; quem modera (`MODERATE_CONTENT`)
       apaga o dos outros. O conteúdo vira REMOVED e some das listagens, e remoção/encerramento vão
       para a auditoria da plataforma (`shared/audit`). `GroupModerationTests` cobre (2026-10-18).
+- [x] Edição de comentário — `PATCH /groups/{id}/posts/{postId}/comments/{commentId}` com
+      `{content}`; só o autor edita (quem modera remove, não reescreve), com os mesmos portões do
+      comentar (ECA, sanção, `INTERACT`, 1.200 caracteres). Comentário removido responde 404 e a
+      edição vai para a auditoria. `GroupModerationTests` cobre (2026-10-31).
 - [x] Estado ENCERRADO com efeito real — o dono encerra (`CLOSE_GROUP`): o grupo sai da descoberta
       e o feed privado responde 404 para leitura (a equipe da plataforma investiga por outro
       caminho) (2026-10-18).

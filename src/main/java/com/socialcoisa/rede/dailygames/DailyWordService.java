@@ -36,7 +36,9 @@ public class DailyWordService {
     private final Clock clock;
     private final SecureRandom random = new SecureRandom();
 
-    public DailyWordService(JdbcTemplate jdbc, Clock clock) { this.jdbc = jdbc; this.clock = clock; }
+    private final com.socialcoisa.rede.coin.application.CoinService coins;
+
+    public DailyWordService(JdbcTemplate jdbc, Clock clock, com.socialcoisa.rede.coin.application.CoinService coins) { this.jdbc = jdbc; this.clock = clock; this.coins = coins; }
     LocalDate today() { return LocalDate.now(clock.withZone(ZONE)); }
     private LocalDate requestedDay(LocalDate requested) {
         LocalDate day = requested == null ? today() : requested;
@@ -92,7 +94,10 @@ public class DailyWordService {
         int attempt = count + 1;
         String marks = String.join(",",WordRules.evaluate(answer,guess));
         jdbc.update("insert into daily_word_guesses (challenge_date,user_id,attempt_no,request_id,guess,marks) values (?,?,?,?,?,?)",date,user,attempt,requestId,guess,marks);
-        if (guess.equals(answer) || attempt == 6) jdbc.update("update daily_word_sessions set status=?, completed_at=? where challenge_date=? and user_id=?",guess.equals(answer)?"WON":"LOST",Timestamp.from(clock.instant()),date,user);
+        if (guess.equals(answer) || attempt == 6) {
+            jdbc.update("update daily_word_sessions set status=?, completed_at=? where challenge_date=? and user_id=?",guess.equals(answer)?"WON":"LOST",Timestamp.from(clock.instant()),date,user);
+            coins.recordPresence(user);
+        }
         return stateFor(day,user);
     }
 

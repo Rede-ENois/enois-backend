@@ -18,3 +18,4 @@
 - [ ] Migração Flyway nova (se houver) e testada
 - [ ] Print/vídeo se mudou tela (mobile e desktop)
 - [ ] Contrato de API/documentação atualizado (se mudou)
+- [ ] AI tools helped write this change (check if yes; no tool name or attribution line needed)

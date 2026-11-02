@@ -66,13 +66,15 @@ public class GitHubContributionSyncService {
 	private final int maxPages;
 	private final int maxDetailsPerRun;
 	private final Set<String> qualifiedIssueLabels;
+	private final String organization;
 
 	public GitHubContributionSyncService(GitHubGateway gateway, GitHubRepositoryRegistry repositories,
 			GitHubIdentityRepository identities, GitHubContributionRepository contributions,
 			ContributionAuditRepository audit, ContributorSealService seals, ObjectMapper json, Clock clock,
 			@Value("${rede.github.max-pages:3}") int maxPages,
 			@Value("${rede.github.max-details-per-run:60}") int maxDetailsPerRun,
-			@Value("${rede.github.qualified-issue-labels:}") String qualifiedIssueLabels) {
+			@Value("${rede.github.qualified-issue-labels:}") String qualifiedIssueLabels,
+			@Value("${rede.github.organization:Rede-ENois}") String organization) {
 		this.gateway = gateway;
 		this.repositories = repositories;
 		this.identities = identities;
@@ -84,6 +86,32 @@ public class GitHubContributionSyncService {
 		this.maxPages = Math.max(1, Math.min(maxPages, 20));
 		this.maxDetailsPerRun = Math.max(1, Math.min(maxDetailsPerRun, 200));
 		this.qualifiedIssueLabels = parseLabels(qualifiedIssueLabels);
+		this.organization = organization == null ? "" : organization.trim();
+	}
+
+	/**
+	 * Todo repositório público da organização é elegível, inclusive os que surgirem depois: ele nasce
+	 * habilitado. Linha já existente nunca é alterada, então o que a administração desligou continua
+	 * desligado. Falha do GitHub não derruba o ciclo — vale a lista que já existe.
+	 */
+	private void discoverOrganizationRepositories(List<String> errors) {
+		if (!StringUtils.hasText(organization)) {
+			return;
+		}
+		try {
+			Set<String> known = repositories.findAll().stream().map(repo -> repo.repository().toLowerCase(Locale.ROOT))
+				.collect(java.util.stream.Collectors.toSet());
+			Instant now = clock.instant();
+			String prefix = organization.toLowerCase(Locale.ROOT) + "/";
+			for (String name : gateway.listOrganizationRepositories(organization, maxPages)) {
+				if (name.toLowerCase(Locale.ROOT).startsWith(prefix) && !known.contains(name.toLowerCase(Locale.ROOT))) {
+					repositories.save(new GitHubRepository(name, true, now, null));
+				}
+			}
+		}
+		catch (RuntimeException ex) {
+			errors.add("organization-discovery: " + ex.getClass().getSimpleName());
+		}
 	}
 
 	public SyncReport sync(boolean dryRun, boolean full, List<String> requestedRepositories) {
@@ -106,6 +134,10 @@ public class GitHubContributionSyncService {
 			Set<String> authorGithubIds) {
 		boolean targeted = !authorGithubIds.isEmpty();
 		Instant started = clock.instant();
+		List<String> errors = new ArrayList<>();
+		if (!dryRun) {
+			discoverOrganizationRepositories(errors);
+		}
 		List<GitHubRepository> all = repositories.findAll();
 		List<GitHubRepository> selected = select(all, requestedRepositories);
 
@@ -121,7 +153,6 @@ public class GitHubContributionSyncService {
 		int sealsRecalculated = 0;
 		int detailBudget = maxDetailsPerRun;
 		boolean rateLimited = false;
-		List<String> errors = new ArrayList<>();
 		List<String> names = new ArrayList<>();
 		Set<String> affectedUsers = new LinkedHashSet<>();
 

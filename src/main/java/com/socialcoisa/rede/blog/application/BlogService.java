@@ -66,12 +66,15 @@ public class BlogService {
 	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
 	private final com.socialcoisa.rede.shared.security.SuspiciousText suspiciousText;
 	private final Clock clock;
+	private final com.socialcoisa.rede.coin.application.CoinService coins;
 
 	public BlogService(BlogRepository blogs, BlogPostRepository posts, BlogSubscriptionRepository subscriptions,
 			PublishPostUseCase publishPost, DeletePostUseCase deletePost, NotificationService notifications,
 			UserProfileRepository profiles, ApplicationEventPublisher events,
 			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate,
-			com.socialcoisa.rede.shared.security.SuspiciousText suspiciousText, Clock clock) {
+			com.socialcoisa.rede.shared.security.SuspiciousText suspiciousText, Clock clock,
+			com.socialcoisa.rede.coin.application.CoinService coins) {
+		this.coins = coins;
 		this.blogs = blogs;
 		this.posts = posts;
 		this.subscriptions = subscriptions;
@@ -87,8 +90,8 @@ public class BlogService {
 
 	/** Vitrine: os blogs criados, mais recentes primeiro. */
 	@Transactional(readOnly = true)
-	public List<BlogSummaryView> directory(int limit) {
-		List<Blog> page = blogs.findAll(limit);
+	public List<BlogSummaryView> directory(String query, int limit) {
+		List<Blog> page = blogs.findAll(query, limit);
 		// Bans, authors and post counts of the page in one query each, instead of one per blog.
 		Set<String> banned = sanctionGate.bannedAmong(page.stream().map(Blog::userId).collect(Collectors.toSet()));
 		List<Blog> listed = page.stream()
@@ -170,6 +173,7 @@ public class BlogService {
 		var pointer = publishPost.publish(new PublishPostCommand(new UserId(userId), PostType.BLOG, cleanTitle, null,
 			null, List.of("blog"), List.of(), null, List.of()));
 		String postId = pointer.id();
+		coins.recordPresence(userId);
 		BlogPost saved = posts.save(BlogPost.publish(postId, blog.id(), userId, cleanTitle, cleanBody, format,
 			Instant.now(clock)));
 		if (notify) {

@@ -20,10 +20,14 @@ import com.socialcoisa.rede.shared.web.ApiException;
  * Fecha o ciclo da triagem: quem passou do teto de risco é banido e tem o conteúdo apagado, sem
  * esperar alguém abrir o painel.
  *
- * Decisão da dona (2026-10-22), depois do ataque de cadastros em série: risco ACIMA do teto
- * (padrão 60) → banimento + sanitização dos posts/comentários. Empate no teto fica para o
- * julgamento humano de propósito — a automação só age no que passou dele. A triagem continua existindo para
- * o que fica ABAIXO do teto e para o que a automação não resolve.
+ * Decisão da dona (2026-10-22), depois do ataque de cadastros em série: risco ACIMA do teto →
+ * banimento + sanitização dos posts/comentários. Empate no teto fica para o julgamento humano de
+ * propósito — a automação só age no que passou dele. A triagem continua existindo para o que fica
+ * ABAIXO do teto e para o que a automação não resolve.
+ *
+ * O teto era 60 e passou a 80 em 2026-10-30 (decisão da dona: a automação estava banindo conta que
+ * só somava sinais fracos — nome repetido, perfil vazio, conta nova). Continua ACIMA do teto, não
+ * "a partir de": 80 exato fica para o humano. Ajustável por `MODERATION_AUTO_BAN_RISK`.
  *
  * Cuidados que a automação NÃO dispensa:
  * - nunca toca em admin ou moderador (o próprio serviço de triagem os exclui);
@@ -67,7 +71,7 @@ public class SuspiciousAutoBanWorker {
 			java.time.Clock clock,
 			@Value("${rede.security.suspicious.name-patterns:probe}") String patternList,
 		@Value("${rede.moderation.auto-ban.enabled:true}") boolean enabled,
-		@Value("${rede.moderation.auto-ban.risk:60}") int threshold,
+		@Value("${rede.moderation.auto-ban.risk:80}") int threshold,
 		@Value("${rede.moderation.auto-ban.max-per-run:50}") int maxPerRun,
 			@Value("${rede.moderation.auto-ban.ips-per-account:3}") int ipsToInspect,
 			@Value("${rede.moderation.auto-ban.accounts-per-ip:3}") int accountsPerIpToBlock) {
@@ -118,12 +122,13 @@ public class SuspiciousAutoBanWorker {
 	public Status status() {
 		Report report = lastReport;
 		java.time.Instant run = lastRunAt;
-		return new Status(enabled, run == null ? null : run.toString(),
+		return new Status(enabled, threshold, run == null ? null : run.toString(),
 			report == null ? 0 : report.banned(), report == null ? 0 : report.failed(),
 			report == null ? java.util.List.of() : report.blockedIps(), lastError);
 	}
 
-	public record Status(boolean enabled, String lastRunAt, int banned, int failed,
+	/** O teto que a automação está usando AGORA (o configurado, já limitado a [1, 200]). */
+	public record Status(boolean enabled, int riskCeiling, String lastRunAt, int banned, int failed,
 			java.util.List<String> blockedIps, String lastError) {
 	}
 

@@ -30,17 +30,55 @@ class CosmeticCatalogTests {
 	@Test
 	void shippedCatalogLoadsWithEveryCollectionAndLook() {
 		CosmeticCatalog catalog = new CosmeticCatalog(JsonMapper.builder().build());
-		assertThat(catalog.items()).hasSize(250);
-		assertThat(catalog.collections()).hasSize(11);
+		assertThat(catalog.items()).hasSize(271);
+		assertThat(catalog.collections()).hasSize(12);
 		assertThat(catalog.item("moldura-ambar").orElseThrow().releaseOrder()).isEqualTo(1);
 		assertThat(catalog.item("moldura-radar").orElseThrow().releaseOrder()).isEqualTo(26);
 		assertThat(catalog.item("emblema-time-saci").orElseThrow().purchasable()).isFalse();
 		assertThat(catalog.look("look-saci").orElseThrow().items()).first().isEqualTo("tema-saci");
+		// Every collection carries its original look plus the theme-inspired ones, in order.
+		assertThat(catalog.looksOf("saci")).extracting(CosmeticCatalog.Look::id)
+			.containsExactly("look-saci", "look-floresta", "look-vale-esmeralda");
+		assertThat(catalog.look("look-vaporwave").orElseThrow().title()).isEqualTo("Vaporwave");
+		assertThat(catalog.look("look-vaporwave").orElseThrow().items()).first().isEqualTo("tema-carnaval");
 		// Original frames are always on sale, whatever the date.
 		assertThat(catalog.available(catalog.item("moldura-ambar").orElseThrow(), Instant.parse("2026-04-01T12:00:00Z")))
 			.isTrue();
 		assertThat(catalog.available(catalog.item("tema-saci").orElseThrow(), Instant.parse("2026-04-01T12:00:00Z")))
 			.isFalse();
+	}
+
+	@Test
+	void essenciaisStaysOnSaleAllYearAndItsLooksAreReadyMade() {
+		CosmeticCatalog catalog = new CosmeticCatalog(JsonMapper.builder().build());
+		CosmeticCatalog.Collection essenciais = catalog.collection("essenciais");
+		assertThat(essenciais).isNotNull();
+		for (String iso : List.of("2026-01-01T12:00:00Z", "2026-04-01T12:00:00Z", "2026-07-15T12:00:00Z",
+				"2026-12-31T12:00:00Z")) {
+			Instant now = Instant.parse(iso);
+			assertThat(catalog.available(essenciais, now)).as(iso).isTrue();
+			assertThat(catalog.available(catalog.item("tema-papel").orElseThrow(), now)).as(iso).isTrue();
+		}
+		assertThat(catalog.looksOf("essenciais")).extracting(CosmeticCatalog.Look::id)
+			.containsExactly("look-papel", "look-noite-limpa", "look-jardim", "look-fim-de-tarde");
+		assertThat(catalog.looksOf("essenciais")).allSatisfy(look -> assertThat(look.items())
+			.allSatisfy(itemId -> assertThat(catalog.item(itemId).orElseThrow().purchasable()).isTrue()));
+		// Listed last so the shop still opens on the collection in season; out of season it is the
+		// only one available, so it becomes the default.
+		assertThat(catalog.collections()).extracting(CosmeticCatalog.Collection::id).last().isEqualTo("essenciais");
+	}
+
+	@Test
+	void gardenStylesAreAlwaysOnSale() {
+		CosmeticCatalog catalog = new CosmeticCatalog(JsonMapper.builder().build());
+		List<Item> gardens = catalog.items().stream().filter(item -> item.kind() == CosmeticKind.GARDEN).toList();
+		assertThat(gardens).extracting(Item::id)
+			.containsExactly("garden-cerrado", "garden-mata-atlantica", "garden-caatinga", "garden-pampa");
+		assertThat(gardens).allSatisfy(item -> {
+			assertThat(item.collection()).isNull();
+			assertThat(item.purchasable()).isTrue();
+			assertThat(catalog.available(item, Instant.parse("2026-04-01T12:00:00Z"))).isTrue();
+		});
 	}
 
 	@Test
@@ -63,8 +101,31 @@ class CosmeticCatalogTests {
 	void lookWithUnknownItemFails() {
 		assertThatThrownBy(() -> new CosmeticCatalog(new CatalogFile(SACI,
 			List.of(item(1, "tema-saci", CosmeticKind.CARD_THEME, "saci")),
-			List.of(new LookFile("saci", "Saci", List.of("tema-saci", "nao-existe"), "pe", "oi")))))
+			List.of(new LookFile(null, "saci", "Saci", List.of("tema-saci", "nao-existe"), "pe", "oi")))))
 			.isInstanceOf(IllegalStateException.class).hasMessageContaining("nao-existe");
+	}
+
+	@Test
+	void aNamedLookKeepsItsIdAndAnUnnamedOneFallsBackToTheCollection() {
+		CosmeticCatalog catalog = new CosmeticCatalog(new CatalogFile(SACI,
+			List.of(item(1, "tema-saci", CosmeticKind.CARD_THEME, "saci")),
+			List.of(new LookFile(null, "saci", "Saci", List.of("tema-saci"), "pe", "oi"),
+				new LookFile("look-floresta", "saci", "Floresta", List.of("tema-saci"), "pe", "oi"))));
+		assertThat(catalog.looksOf("saci")).extracting(CosmeticCatalog.Look::id)
+			.containsExactly("look-saci", "look-floresta");
+	}
+
+	@Test
+	void duplicatedOrUnsafeLookIdFails() {
+		assertThatThrownBy(() -> new CosmeticCatalog(new CatalogFile(SACI,
+			List.of(item(1, "tema-saci", CosmeticKind.CARD_THEME, "saci")),
+			List.of(new LookFile("look-repetido", "saci", "Um", List.of("tema-saci"), "pe", "oi"),
+				new LookFile("look-repetido", "saci", "Dois", List.of("tema-saci"), "pe", "oi")))))
+			.isInstanceOf(IllegalStateException.class).hasMessageContaining("Duplicated look");
+		assertThatThrownBy(() -> new CosmeticCatalog(new CatalogFile(SACI,
+			List.of(item(1, "tema-saci", CosmeticKind.CARD_THEME, "saci")),
+			List.of(new LookFile("Look Saci", "saci", "Saci", List.of("tema-saci"), "pe", "oi")))))
+			.isInstanceOf(IllegalStateException.class).hasMessageContaining("Invalid look id");
 	}
 
 	@Test

@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import com.socialcoisa.rede.profile.domain.UserProfile;
+import com.socialcoisa.rede.shared.geo.CityState;
 
 import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;
@@ -59,6 +60,9 @@ class UserProfileJpaEntity {
 	@Column(name = "profile_effect", length = 64)
 	private String profileEffect;
 
+	@Column(name = "garden_style", length = 64)
+	private String gardenStyle;
+
 	@Column(name = "status_text", length = 60)
 	private String statusText;
 
@@ -73,6 +77,19 @@ class UserProfileJpaEntity {
 
 	@Column(length = 160)
 	private String location;
+
+	@Column(length = 80)
+	private String city;
+
+	@Column(length = 2)
+	private String state;
+
+	/** Cidade sem acento e minuscula (ver CityState.key). */
+	@Column(name = "city_key", length = 80)
+	private String cityKey;
+
+	@Column(name = "show_city", nullable = false)
+	private boolean showCity;
 
 	@Column(length = 500)
 	private String avatar;
@@ -137,6 +154,9 @@ class UserProfileJpaEntity {
 	@Column(name = "email_verified_at")
 	private Instant emailVerifiedAt;
 
+	@Column(name = "onboarding_completed_at")
+	private Instant onboardingCompletedAt;
+
 	@Column(name = "show_ranking", nullable = false)
 	private boolean showRanking = true;
 
@@ -197,11 +217,18 @@ class UserProfileJpaEntity {
 		entity.nameplate = profile.nameplate();
 		entity.bannerItem = profile.bannerItem();
 		entity.profileEffect = profile.profileEffect();
+		entity.gardenStyle = profile.gardenStyle();
 		entity.statusText = profile.statusText();
 		entity.statusIcon = profile.statusIcon();
 		entity.email = profile.email();
 		entity.company = profile.company();
 		entity.location = profile.location();
+		if (profile.place() != null) {
+			entity.city = profile.place().city();
+			entity.state = profile.place().state();
+			entity.cityKey = profile.place().cityKey();
+		}
+		entity.showCity = profile.showCity();
 		entity.avatar = profile.avatar();
 		entity.banner = profile.banner();
 		entity.badge = profile.badge();
@@ -221,6 +248,7 @@ class UserProfileJpaEntity {
 		entity.updatedAt = profile.updatedAt();
 		entity.termsAcceptedAt = profile.termsAcceptedAt();
 		entity.emailVerifiedAt = profile.emailVerifiedAt();
+		entity.onboardingCompletedAt = profile.onboardingCompletedAt();
 		entity.showRanking = profile.showRanking();
 		entity.totpEnabledAt = profile.totpEnabledAt();
 		entity.emailOtpEnabledAt = profile.emailOtpEnabledAt();
@@ -243,6 +271,7 @@ class UserProfileJpaEntity {
 			createdAt, updatedAt, showRanking);
 		profile.setCounts(profile.connectionsCount(), profile.followersCount(), reputation);
 		profile.acceptTerms(termsAcceptedAt);
+		profile.completeOnboarding(onboardingCompletedAt);
 		if (emailVerifiedAt != null) {
 			profile.markEmailVerified(emailVerifiedAt);
 		}
@@ -264,7 +293,9 @@ class UserProfileJpaEntity {
 		profile.hydrateNameStyle(nameTheme, nameFont, nameColor);
 		profile.hydrateContributorTagColor(contributorTagColor);
 		profile.hydrateProfileCosmetics(cardTheme, nameplate, bannerItem, profileEffect);
+		profile.hydrateGardenStyle(gardenStyle);
 		profile.hydrateStatus(statusText, statusIcon);
+		profile.hydratePlace(city == null || state == null ? null : new CityState(city, state, cityKey), showCity);
 		profile.hydrateBadges(badges == null || badges.isBlank() ? List.of() : List.of(badges.split("\n")));
 		return profile;
 	}

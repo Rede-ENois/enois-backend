@@ -21,6 +21,7 @@ import com.socialcoisa.rede.profile.application.port.out.ProfileExtensionReposit
 import com.socialcoisa.rede.profile.application.port.out.RecommendationRepository;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.Recommendation;
+import com.socialcoisa.rede.profile.domain.ReputationGarden;
 import com.socialcoisa.rede.profile.domain.UserProfile;
 
 /**
@@ -102,6 +103,7 @@ class ReputationServiceTests {
 
 		// Uma nota falsa negada desconta 25 dos 86 dos componentes.
 		assertThat(service.countsFor(USER).reputation()).isEqualTo(61);
+		assertThat(service.countsFor(USER).garden().health()).isEqualTo(1);
 	}
 
 	@Test
@@ -141,6 +143,8 @@ class ReputationServiceTests {
 		assertThat(counts.reputation()).isZero();
 		// As conexões continuam sendo contadas: o que zera é a credibilidade, não o perfil.
 		assertThat(counts.connections()).isEqualTo(5);
+		// The garden still grows: T 25.98/195 and K 29.39/120 reach stage 1; R and C stay seeds.
+		assertThat(counts.garden()).isEqualTo(new ReputationGarden(1, 0, 0, 1, 2));
 	}
 
 	@Test

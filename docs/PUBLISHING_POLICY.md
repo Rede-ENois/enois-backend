@@ -5,6 +5,23 @@
 genuína. Automação é bem-vinda para *organizar informação* (importar vagas, sincronizar avisos),
 nunca para *produzir engajamento*.
 
+## Conteúdo humano
+
+A rede é para gente: **quem publica responde pelo que publica**. A diretriz de conteúdo (lida pelo
+modelo de triagem, diretriz 8 em `ModerationAiService.systemPrompt`) proíbe a conta que existe para
+publicar **saída de máquina sem pessoa por trás** — texto que se declara gerado por IA, resposta a
+prompt, postura de assistente, volume e formato de robô, propaganda automática de ferramenta de IA.
+Usar IA como **ferramenta** (revisar um texto, corrigir gramática, tirar dúvida) não é infração.
+
+A regra não depende de denúncia: um post que carrega rastro de gerador e é classificado como
+automatizado **entra em quarentena** — some do feed, do perfil e do detalhe, o autor é avisado e o
+caso vai para a fila de revisão humana. A automação **não apaga e não pune**; liberar ou remover é
+decisão de uma pessoa. Ver `MODERACAO-CONTEUDO.md`.
+
+Conteúdo **sexual explícito é zero tolerância** e não tem versão "soft" aceitável — vale para foto,
+vídeo, desenho e arte gerada por IA (diretriz 9). O que chega confirmado é removido e a conta
+banida; ver `MODERACAO-MIDIA.md` e `MODERACAO-LINKS.md`.
+
 ## Permitido
 - **Criar e agendar posts pela funcionalidade oficial do Énóis**, em fluxo interativo, com o próprio
   usuário no controle (pode editar, reagendar ou cancelar antes da publicação).
@@ -37,7 +54,8 @@ nunca para *produzir engajamento*.
 ## Punição
 Automação proibida (bots/IA/integrações publicando) leva ao **banimento da conta responsável**,
 **após verificação de evidências** e o procedimento de moderação da plataforma. Nunca se pune por
-suspeita: a decisão é auditável e registra o motivo.
+suspeita: a decisão é auditável e registra o motivo. A barreira automática só **esconde o post e
+abre o caso**; a punição é sempre de uma pessoa.
 
 ## Exposição na API
 A API pública **não** expõe operações de criação de post para execução automática. Se um cliente

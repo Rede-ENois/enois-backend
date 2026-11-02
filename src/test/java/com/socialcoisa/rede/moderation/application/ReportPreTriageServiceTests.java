@@ -92,6 +92,26 @@ class ReportPreTriageServiceTests {
 		assertThat(service.shouldCallAi(report)).isFalse();
 	}
 
+	@Test
+	void anAutomationReportAlwaysReachesTheModel() {
+		// Texto de robô costuma ser longo, bem formatado e sem link — justamente o perfil que a
+		// pré-triagem não pontua. Sem peso próprio, a denúncia nunca chegava ao modelo.
+		ReportRepository reports = mock(ReportRepository.class);
+		when(reports.countAgainstTargetSince(anyString(), anyString(), any())).thenReturn(1L);
+		ReportPreTriageService service = service(reports, (type, id) -> Optional.of("texto limpo"),
+			(type, id) -> Optional.of("author_1"), mock(UserProfileRepository.class));
+
+		Report report = Report.create("rep_ia", "user_rep", TargetType.POST, "post_ia",
+			ReportReason.AI_GENERATED, "parece saida de robo", now);
+
+		var score = service.score(report, "texto limpo", null);
+
+		assertThat(score.signals()).contains(ModerationSignalCatalog.REASON_AUTOMATION);
+		assertThat(score.score()).isGreaterThanOrEqualTo(30);
+		report.attachPreTriage(service.toJson(score), score.score(), now);
+		assertThat(service.shouldCallAi(report)).isTrue();
+	}
+
 	private ReportPreTriageService service(ReportRepository reports, ReportedContentReader content,
 			ReportedContentAuthorReader authors, UserProfileRepository profiles) {
 		ModerationLearningRepositoryStub learning = new ModerationLearningRepositoryStub();

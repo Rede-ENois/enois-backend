@@ -57,6 +57,14 @@ class SanctionPersistenceAdapter implements SanctionRepository, ExpiredSuspensio
 	}
 
 	@Override
+	public List<UserSanction> findByStatus(SanctionStatus status, int limit) {
+		return sanctions.findByStatusOrderByCreatedAtDesc(status,
+			PageRequest.of(0, Math.max(1, Math.min(limit, 200)))).stream()
+			.map(UserSanctionJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
 	public List<UserSanction> expiredActive(Instant cutoff, int limit) {
 		return sanctions
 			.findByTypeAndStatusAndCreatedAtBeforeOrderByCreatedAtAsc(SanctionType.SUSPENDED,

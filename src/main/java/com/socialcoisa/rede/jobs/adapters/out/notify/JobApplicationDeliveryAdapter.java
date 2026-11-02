@@ -5,7 +5,10 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
 import com.socialcoisa.rede.identity.application.EmailService;
@@ -30,12 +33,15 @@ class JobApplicationDeliveryAdapter implements JobApplicationDelivery {
 	private final UserProfileRepository userProfileRepository;
 	private final MessagingService messagingService;
 	private final EmailService emailService;
+	private final TransactionTemplate dmTransaction;
 
 	JobApplicationDeliveryAdapter(UserProfileRepository userProfileRepository, MessagingService messagingService,
-			EmailService emailService) {
+			EmailService emailService, PlatformTransactionManager transactionManager) {
 		this.userProfileRepository = userProfileRepository;
 		this.messagingService = messagingService;
 		this.emailService = emailService;
+		this.dmTransaction = new TransactionTemplate(transactionManager);
+		this.dmTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
 	}
 
 	@Override
@@ -45,12 +51,16 @@ class JobApplicationDeliveryAdapter implements JobApplicationDelivery {
 		if (employer == null) {
 			return;
 		}
-		var candidate = userProfileRepository.findById(application.userId()).orElse(null);
-		String summary = summaryText(job, application, candidate == null ? application.userId() : candidate.displayWithNickname());
+		String summary = summaryText(job, application, candidateName(application));
 
+		// Transacao propria: o sendMessage e @Transactional, e uma recusa dele (portao de idade,
+		// sancao, rate limit) marcaria a transacao da candidatura como rollback-only mesmo com o catch
+		// abaixo — o commit viraria UnexpectedRollbackException e a candidatura, 500.
 		try {
-			String conversationId = messagingService.directConversationBetween(application.userId(), job.postedBy(), "JOB");
-			messagingService.sendMessage(conversationId, application.userId(), summary);
+			dmTransaction.executeWithoutResult(status -> {
+				String conversationId = messagingService.directConversationBetween(application.userId(), job.postedBy(), "JOB");
+				messagingService.sendMessage(conversationId, application.userId(), summary);
+			});
 		}
 		catch (RuntimeException exception) {
 			LOG.warn("Candidatura {} registrada, mas a mensagem direta falhou: {}", application.id(),
@@ -61,6 +71,23 @@ class JobApplicationDeliveryAdapter implements JobApplicationDelivery {
 			emailService.sendHtml(employer.email(), "Nova candidatura: " + job.title(),
 				emailBody(job, application, summary));
 		}
+	}
+
+	/**
+	 * Quem se candidatou, como a empresa deve ver: o nome e o @ do retrato (a identidade
+	 * profissional desde a separacao das interfaces), nunca o @ social lido agora do perfil.
+	 */
+	static String candidateName(JobApplication application) {
+		String name = snapshot(application, "name");
+		String username = snapshot(application, "username");
+		String base = StringUtils.hasText(name) ? name : "Candidato(a)";
+		return StringUtils.hasText(username) ? base + " (@" + username + ")" : base;
+	}
+
+	/** Candidaturas antigas (retrato SOCIAL) continuam apontando para o perfil em que foram feitas. */
+	static String profilePath(JobApplication application, String username) {
+		return "CORPORATE".equals(snapshot(application, "identity")) ? "/profissional/" + username
+			: "/perfil/" + username;
 	}
 
 	/** Resumo que vai na DM e no e-mail: e o que o empregador le primeiro. */
@@ -98,7 +125,7 @@ class JobApplicationDeliveryAdapter implements JobApplicationDelivery {
 		}
 		String username = snapshot(application, "username");
 		if (StringUtils.hasText(username)) {
-			text.append("Perfil: /perfil/").append(username).append("\n");
+			text.append("Perfil: ").append(profilePath(application, username)).append("\n");
 		}
 		if (StringUtils.hasText(application.message())) {
 			text.append("\nMensagem do candidato:\n").append(application.message()).append("\n");
@@ -138,11 +165,11 @@ class JobApplicationDeliveryAdapter implements JobApplicationDelivery {
 		}
 	}
 
-	private String snapshot(JobApplication application, String field) {
+	private static String snapshot(JobApplication application, String field) {
 		return snapshotOr(application, field, "");
 	}
 
-	private String snapshotOr(JobApplication application, String field, String fallback) {
+	private static String snapshotOr(JobApplication application, String field, String fallback) {
 		try {
 			var node = new tools.jackson.databind.ObjectMapper()
 				.readTree(application.candidateSnapshot() == null ? "{}" : application.candidateSnapshot())

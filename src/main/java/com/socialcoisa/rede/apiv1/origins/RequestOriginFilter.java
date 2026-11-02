@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.apiv1.origins;
 
 import java.io.IOException;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Set;
 
@@ -55,6 +56,8 @@ class RequestOriginFilter extends OncePerRequestFilter {
 	private final OriginAbuseGuard abuse;
 	private final Set<String> staticOrigins;
 	private final Set<String> trustedPatterns;
+	/** Origens que recebem CORS com credenciais: apenas as explicitas, nunca um curinga. */
+	private final Set<String> credentialedOrigins;
 	private final boolean enforce;
 
 	RequestOriginFilter(DeveloperOriginService origins, OriginAbuseGuard abuse,
@@ -65,6 +68,10 @@ class RequestOriginFilter extends OncePerRequestFilter {
 		this.abuse = abuse;
 		this.staticOrigins = OriginPatterns.parse(allowed);
 		this.trustedPatterns = OriginPatterns.parse(trusted);
+		Set<String> credentialed = new LinkedHashSet<>();
+		staticOrigins.stream().filter(pattern -> !pattern.contains("*")).forEach(credentialed::add);
+		trustedPatterns.stream().filter(pattern -> !pattern.contains("*")).forEach(credentialed::add);
+		this.credentialedOrigins = Set.copyOf(credentialed);
 		this.enforce = enforce;
 	}
 
@@ -72,10 +79,10 @@ class RequestOriginFilter extends OncePerRequestFilter {
 	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
 			throws ServletException, IOException {
 		// Marked even when enforcement is off: filters that answer early reflect only these origins.
-		boolean trustedBrowserOrigin = false;
+		boolean credentialedBrowserOrigin = false;
 		String browserOrigin = request.getHeader("Origin");
-		if (StringUtils.hasText(browserOrigin) && isTrusted(matchForm(browserOrigin))) {
-			trustedBrowserOrigin = true;
+		if (StringUtils.hasText(browserOrigin) && isCredentialed(matchForm(browserOrigin))) {
+			credentialedBrowserOrigin = true;
 			TrustedOriginCors.markTrusted(request, browserOrigin);
 		}
 		if (!enforce) {
@@ -95,9 +102,9 @@ class RequestOriginFilter extends OncePerRequestFilter {
 				setCors(response, preflightOrigin);
 				// O front chama a API cross-origin com o cookie de sessão: sem ecoar a credencial
 				// aqui o navegador descarta o preflight ("Allow-Credentials ... must be 'true'") e a
-				// tela fica sem dados. Só a origem do próprio app recebe isso — origem de terceiro
-				// cadastrada continua saindo sem credencial.
-				if (trustedBrowserOrigin) {
+				// tela fica sem dados. Só a origem explicita do próprio app recebe isso — origem de
+				// terceiro cadastrada e subdominio de curinga continuam saindo sem credencial.
+				if (credentialedBrowserOrigin) {
 					response.setHeader("Access-Control-Allow-Credentials", "true");
 				}
 			}
@@ -128,6 +135,7 @@ class RequestOriginFilter extends OncePerRequestFilter {
 
 		String normalized = matchForm(declared);
 		boolean trusted = isTrusted(normalized);
+		boolean credentialed = isCredentialed(normalized);
 		boolean registered = !trusted && origins.allowedOrigins().contains(normalized);
 
 		// Origin presente + X-Client-Origin diferente: tentativa de declarar outra origem.
@@ -149,8 +157,8 @@ class RequestOriginFilter extends OncePerRequestFilter {
 			return;
 		}
 
-		// Admin e moderação: só a origem do frontend (confiável), nunca origem de terceiro.
-		if (isAdminPath(request) && !trusted) {
+		// Admin e moderação: só a origem explicita do frontend, nunca terceiro nem subdominio de curinga.
+		if (isAdminPath(request) && !credentialed) {
 			if (StringUtils.hasText(origin)) {
 				setCors(response, origin);
 			}
@@ -166,8 +174,10 @@ class RequestOriginFilter extends OncePerRequestFilter {
 			// moderacao nunca abria (`NetworkError` no console). O resto segue no CORS estatico.
 			if ("OPTIONS".equalsIgnoreCase(method) && StringUtils.hasText(origin)) {
 				setCors(response, origin);
-				// Only the app's own origins may send the HttpOnly session cookie.
-				response.setHeader("Access-Control-Allow-Credentials", "true");
+				// Only an explicit app origin may send the HttpOnly session cookie.
+				if (credentialed) {
+					response.setHeader("Access-Control-Allow-Credentials", "true");
+				}
 				if (preflight(request, response)) {
 					return;
 				}
@@ -193,6 +203,11 @@ class RequestOriginFilter extends OncePerRequestFilter {
 	private boolean isTrusted(String normalized) {
 		return OriginPatterns.matches(normalized, staticOrigins)
 				|| OriginPatterns.matches(normalized, trustedPatterns);
+	}
+
+	/** CORS com credenciais: so origem explicita; curinga de subdominio nao entra. */
+	private boolean isCredentialed(String normalized) {
+		return OriginPatterns.matches(normalized, credentialedOrigins);
 	}
 
 	/** Responde o preflight de uma origem de terceiro cadastrada. */
@@ -261,7 +276,8 @@ class RequestOriginFilter extends OncePerRequestFilter {
 		if (path.equals("/auth/email/change/confirm") && "GET".equalsIgnoreCase(method)) {
 			return true;
 		}
-		return path.equals("/blogs/descadastrar");
+		// Links de descadastro (newsletter do blog e resumo semanal): clique no cliente de e-mail.
+		return path.equals("/blogs/descadastrar") || path.equals("/notifications/digest/unsubscribe");
 	}
 
 	/** Rotas do painel: somente a origem confiável do frontend. */

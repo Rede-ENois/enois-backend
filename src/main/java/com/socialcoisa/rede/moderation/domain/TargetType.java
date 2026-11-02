@@ -13,5 +13,7 @@ public enum TargetType {
 	/** Comentário de uma publicação de grupo. */
 	GROUP_COMMENT,
 	/** Mensagem privada (DM ou grupo). */
-	MESSAGE
+	MESSAGE,
+	/** Pagina empresarial (a revisao a REMOVE do diretorio; nao bane o dono). */
+	COMPANY
 }

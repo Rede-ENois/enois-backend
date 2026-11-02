@@ -47,4 +47,12 @@ class SealTypeTests {
 		assertThat(SealType.forCount(ContributionCategory.ISSUES, 1001)).isEqualTo(SealType.GENKIDAMA);
 		assertThat(SealType.forCount(ContributionCategory.DONATION, 10)).isNull();
 	}
+	@Test
+	void everyTierHasItsOwnFixedEmblem() {
+		assertThat(SealType.values()).extracting(SealType::emblem)
+			.doesNotContainNull()
+			.doesNotHaveDuplicates()
+			.containsExactly("ajudante", "contribuinte-serio", "hardcore", "tryhard", "get-a-life",
+				"beta-tester", "exigente", "esforco-maximo", "plus-ultra", "genkidama");
+	}
 }

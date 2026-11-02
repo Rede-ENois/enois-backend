@@ -141,6 +141,88 @@ class RepostFlowTests {
 			.andExpect(jsonPath("$.code").value("NOT_REPOSTABLE"));
 	}
 
+	@Test
+	void articlesCirculateOnlyAsQuotesSavedAsInsight() throws Exception {
+		var author = auth.authenticate("repost_article_" + System.nanoTime());
+		var reposter = auth.authenticate("repost_article_user_" + System.nanoTime());
+		var other = auth.authenticate("repost_article_other_" + System.nanoTime());
+
+		String articleId = publishType(author, Map.of("type", "ARTICLE", "content", "Titulo do artigo citado",
+			"articleBody", "Corpo que mora em outra tabela.", "tags", List.of(), "mediaIds", List.of()));
+
+		// Sem opinião a cópia sairia sem o corpo: a API recusa com código próprio.
+		mockMvc.perform(post("/feed/posts/{id}/repost", articleId)
+				.header("X-Session-Token", reposter.token()))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("OPINION_REQUIRED"));
+
+		String quoteId = quote(reposter, articleId, "Vale a leitura.");
+		mockMvc.perform(get("/feed/posts/{id}", quoteId))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.type").value("INSIGHT"))
+			.andExpect(jsonPath("$.content").value("Vale a leitura."))
+			.andExpect(jsonPath("$.repostOf").value(articleId))
+			.andExpect(jsonPath("$.repostOfContent").value("Titulo do artigo citado"));
+
+		mockMvc.perform(post("/feed/posts/{id}/repost", articleId)
+				.header("X-Session-Token", reposter.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("opinion", "De novo."))))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.code").value("ALREADY_REPOSTED"));
+
+		// A citação é INSIGHT, mas republicá-la vale pela regra do ORIGINAL, que é artigo.
+		mockMvc.perform(post("/feed/posts/{id}/repost", quoteId)
+				.header("X-Session-Token", other.token()))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("OPINION_REQUIRED"));
+	}
+
+	@Test
+	void pagesAndBlogPointersCirculateOnlyAsQuotes() throws Exception {
+		var author = auth.authenticate("repost_page_" + System.nanoTime());
+		var reposter = auth.authenticate("repost_page_user_" + System.nanoTime());
+
+		String pageId = publishType(author, Map.of("type", "PAGE", "content", "",
+			"pageHtml", "<p>Mini pagina</p>", "tags", List.of(), "mediaIds", List.of()));
+		String blogId = publishType(author, Map.of("type", "BLOG", "content", "Post do blog citado",
+			"tags", List.of(), "mediaIds", List.of()));
+
+		for (String id : List.of(pageId, blogId)) {
+			mockMvc.perform(post("/feed/posts/{id}/repost", id)
+					.header("X-Session-Token", reposter.token()))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("OPINION_REQUIRED"));
+
+			String quoteId = quote(reposter, id, "Olha isso aqui " + id);
+			mockMvc.perform(get("/feed/posts/{id}", quoteId))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.type").value("INSIGHT"))
+				.andExpect(jsonPath("$.repostOf").value(id));
+		}
+	}
+
+	private String quote(TestAuthHelper.AuthSession session, String postId, String opinion) throws Exception {
+		MvcResult result = mockMvc.perform(post("/feed/posts/{id}/repost", postId)
+				.header("X-Session-Token", session.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("opinion", opinion))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		return objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asString();
+	}
+
+	private String publishType(TestAuthHelper.AuthSession session, Map<String, Object> body) throws Exception {
+		MvcResult result = mockMvc.perform(post("/feed/posts")
+				.header("X-Session-Token", session.token())
+				.header("Idempotency-Key", "repost-type-" + System.nanoTime())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(body)))
+			.andExpect(status().isCreated())
+			.andReturn();
+		return objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asString();
+	}
+
 	private String publish(TestAuthHelper.AuthSession session, String content) throws Exception {
 		MvcResult result = mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", session.token())

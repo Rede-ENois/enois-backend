@@ -10,6 +10,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
@@ -43,6 +45,9 @@ class GitHubProfileImportTests {
 
 	private static final AtomicReference<List<GitHubUserRepository>> REPOS = new AtomicReference<>(List.of());
 	private static final AtomicReference<GitHubProfileReadme> README = new AtomicReference<>();
+	/** Idas ao GitHub por login: cada teste usa um login próprio, então a contagem é só dele. */
+	private static final Map<String, AtomicInteger> LIST_CALLS = new ConcurrentHashMap<>();
+	private static final Map<String, AtomicInteger> README_CALLS = new ConcurrentHashMap<>();
 
 	@Autowired
 	private MockMvc mockMvc;
@@ -71,13 +76,23 @@ class GitHubProfileImportTests {
 	static class FakeGateway implements GitHubProfileGateway {
 		@Override
 		public List<GitHubUserRepository> listUserRepositories(String login, int maxPages) {
+			LIST_CALLS.computeIfAbsent(login, key -> new AtomicInteger()).incrementAndGet();
 			return REPOS.get();
 		}
 
 		@Override
 		public Optional<GitHubProfileReadme> profileReadme(String login) {
+			README_CALLS.computeIfAbsent(login, key -> new AtomicInteger()).incrementAndGet();
 			return Optional.ofNullable(README.get());
 		}
+	}
+
+	private static int listCalls(String login) {
+		return LIST_CALLS.getOrDefault(login, new AtomicInteger()).get();
+	}
+
+	private static int readmeCalls(String login) {
+		return README_CALLS.getOrDefault(login, new AtomicInteger()).get();
 	}
 
 	@Test
@@ -166,6 +181,48 @@ class GitHubProfileImportTests {
 		String bio = objectMapper.readTree(profile.getResponse().getContentAsString()).path("bioHtml").asText();
 		assertThat(bio).contains("negrito");
 		assertThat(bio).contains("https://raw.githubusercontent.com/" + login + "/" + login + "/main/logo.png");
+	}
+
+	@Test
+	void listingAndImportingShareOneTripToGitHub() throws Exception {
+		String suffix = String.valueOf(System.nanoTime());
+		String login = "cache-dev-" + suffix;
+		var user = new TestAuthHelper(mockMvc, objectMapper).authenticate("cache_" + suffix);
+		identities.remember(user.userId(), "gh-" + login, login);
+		REPOS.set(List.of(repo(login, "alpha", "Projeto Alpha", "https://github.com/" + login + "/alpha", "Java",
+			List.of("java"), 1, 0)));
+
+		mockMvc.perform(get("/me/github/repos").header("X-Session-Token", user.token()))
+			.andExpect(status().isOk());
+		mockMvc.perform(get("/me/github/repos").header("X-Session-Token", user.token()))
+			.andExpect(status().isOk());
+		mockMvc.perform(post("/me/github/import/projects")
+				.header("X-Session-Token", user.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("repos", List.of(login + "/alpha")))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.created").value(1));
+
+		assertThat(listCalls(login)).isEqualTo(1);
+	}
+
+	@Test
+	void readmeIsCachedButMissingReadmeIsNot() throws Exception {
+		String suffix = String.valueOf(System.nanoTime());
+		String login = "readmecache-dev-" + suffix;
+		var user = new TestAuthHelper(mockMvc, objectMapper).authenticate("readmecache_" + suffix);
+		identities.remember(user.userId(), "gh-" + login, login);
+
+		README.set(null);
+		mockMvc.perform(get("/me/github/readme").header("X-Session-Token", user.token()))
+			.andExpect(status().isNotFound());
+		README.set(new GitHubProfileReadme("# Oi", "https://github.com/" + login + "/" + login, "main"));
+		mockMvc.perform(get("/me/github/readme").header("X-Session-Token", user.token()))
+			.andExpect(status().isOk());
+		mockMvc.perform(get("/me/github/readme").header("X-Session-Token", user.token()))
+			.andExpect(status().isOk());
+
+		assertThat(readmeCalls(login)).isEqualTo(2);
 	}
 
 	@Test

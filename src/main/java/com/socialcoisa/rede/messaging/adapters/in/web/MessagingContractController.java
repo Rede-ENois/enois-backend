@@ -17,12 +17,15 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.socialcoisa.rede.corporate.application.CorporateProfileService;
+import com.socialcoisa.rede.corporate.domain.CorporateProfile;
 import com.socialcoisa.rede.feed.domain.ReactionType;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
 import com.socialcoisa.rede.messaging.application.MessagingService;
 import com.socialcoisa.rede.messaging.application.port.out.MessagingRepository;
 import com.socialcoisa.rede.messaging.domain.Conversation;
+import com.socialcoisa.rede.messaging.domain.ConversationContext;
 import com.socialcoisa.rede.messaging.domain.ConversationParticipant;
 import com.socialcoisa.rede.messaging.domain.Message;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -41,23 +44,29 @@ class MessagingContractController {
 	private final MessagingService messagingService;
 	private final CursorCodec cursorCodec;
 	private final com.socialcoisa.rede.shared.blocks.BlockedUsersReader blockedUsersReader;
+	private final CorporateProfileService corporateProfiles;
 
 	MessagingContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
 			MessagingService messagingService, CursorCodec cursorCodec,
-			com.socialcoisa.rede.shared.blocks.BlockedUsersReader blockedUsersReader) {
+			com.socialcoisa.rede.shared.blocks.BlockedUsersReader blockedUsersReader,
+			CorporateProfileService corporateProfiles) {
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.messagingService = messagingService;
 		this.cursorCodec = cursorCodec;
 		this.blockedUsersReader = blockedUsersReader;
+		this.corporateProfiles = corporateProfiles;
 	}
 
 	@GetMapping
 	PageResponse<ConversationView> conversations(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
-			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit) {
+			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit,
+			@RequestParam(required = false) String context) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		limit = Math.clamp(limit, 1, 100);
 		Instant before = cursorCodec.decode(cursor).orElse(null);
-		List<Conversation> conversations = messagingService.listConversations(user.id().value(), before, limit);
+		List<Conversation> conversations = messagingService.listConversations(user.id().value(), before,
+			parseContext(context), limit);
 		var items = conversations.stream()
 			.map(c -> {
 				var participants = messagingService.getParticipants(c.id());
@@ -75,16 +84,20 @@ class MessagingContractController {
 	}
 
 	@GetMapping("/unread-count")
-	Map<String, Integer> unreadCount(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+	Map<String, Integer> unreadCount(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(required = false) String context) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		return Map.of("count", messagingService.countTotalUnread(user.id().value()));
+		return Map.of("count", messagingService.countTotalUnread(user.id().value(), parseContext(context)));
 	}
 
 	@GetMapping("/search")
 	PageResponse<ConversationView> search(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
-			@RequestParam(required = false) String q, @RequestParam(defaultValue = "20") int limit) {
+			@RequestParam(required = false) String q, @RequestParam(defaultValue = "20") int limit,
+			@RequestParam(required = false) String context) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		List<Conversation> conversations = messagingService.listConversations(user.id().value(), null, limit);
+		limit = Math.clamp(limit, 1, 100);
+		List<Conversation> conversations = messagingService.listConversations(user.id().value(), null,
+			parseContext(context), limit);
 		String query = q != null ? q.toLowerCase() : "";
 		var items = conversations.stream()
 			.filter(c -> query.isEmpty() || (c.title() != null && c.title().toLowerCase().contains(query)))
@@ -126,18 +139,34 @@ class MessagingContractController {
 		if (!messagingService.isParticipant(conversationId, user.id().value())) {
 			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
 		}
+		limit = Math.clamp(limit, 1, 100);
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		List<Message> msgs = messagingService.getMessages(conversationId, user.id().value(), before, limit);
 		var summaries = messagingService.reactionSummaries(msgs.stream().map(Message::id).toList(),
 			user.id().value());
+		// Carrega em batch as mensagens citadas (reply) da página, sem N+1.
+		java.util.Set<String> replyIds = msgs.stream()
+			.map(Message::replyToId).filter(java.util.Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+		java.util.Map<String, Message> repliedMessages = replyIds.isEmpty() ? java.util.Map.of()
+			: messagingService.findMessagesByIds(replyIds).stream()
+				.collect(java.util.stream.Collectors.toMap(Message::id, java.util.function.Function.identity()));
 		var items = msgs.stream()
 			.map(m -> {
 				var summary = summaries.get(m.id());
+				ReplyView replyView = null;
+				if (m.replyToId() != null) {
+					Message replied = repliedMessages.get(m.replyToId());
+					if (replied != null) {
+						String replyText = replied.text().length() > 100
+							? replied.text().substring(0, 97) + "..." : replied.text();
+						replyView = new ReplyView(replied.id(), replied.senderId(), replyText, replied.e2e());
+					}
+				}
 				return new MessageView(m.id(), m.conversationId(), m.senderId(), m.text(), m.mediaIds(),
 					m.createdAt() != null ? m.createdAt().toString() : null,
 					summary == null ? java.util.Map.of() : summary.counts(),
 					summary == null ? null : summary.myReaction(), m.mediaSpoiler(),
-					m.e2e(), m.iv());
+					m.e2e(), m.iv(), m.replyToId(), replyView);
 			})
 			.toList();
 		// Pagina cheia => ainda ha mensagens mais antigas: o cursor aponta para a mais antiga desta pagina.
@@ -185,18 +214,20 @@ class MessagingContractController {
 		return idempotency.execute(user.id(), "POST", "/api/conversations/{conversationId}/messages", idempotencyKey,
 			hash, () -> {
 				Message msg;
+				String replyTo = request.replyToId() != null && !request.replyToId().isBlank()
+					? request.replyToId().trim() : null;
 				if (Boolean.TRUE.equals(request.e2e())) {
 					msg = messagingService.sendE2eMessage(conversationId, user.id().value(), request.text(),
-						request.iv(), request.mediaIds(), Boolean.TRUE.equals(request.mediaSpoiler()));
+						request.iv(), request.mediaIds(), Boolean.TRUE.equals(request.mediaSpoiler()), replyTo);
 				}
 				else {
 					msg = messagingService.sendMessage(conversationId, user.id().value(), request.text(),
-						request.mediaIds(), Boolean.TRUE.equals(request.mediaSpoiler()));
+						request.mediaIds(), Boolean.TRUE.equals(request.mediaSpoiler()), replyTo);
 				}
 				return new CommandResponse(201, new MessageView(msg.id(), msg.conversationId(), msg.senderId(),
 					msg.text(), msg.mediaIds(),
 					msg.createdAt() != null ? msg.createdAt().toString() : null, java.util.Map.of(), null,
-					msg.mediaSpoiler(), msg.e2e(), msg.iv()));
+					msg.mediaSpoiler(), msg.e2e(), msg.iv(), msg.replyToId(), null));
 			});
 	}
 
@@ -222,18 +253,7 @@ class MessagingContractController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@RequestBody DirectConversationRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		String otherId = request.userId() == null ? "" : request.userId().trim();
-		if (otherId.isEmpty()) {
-			throw new ApiException(400, "INVALID_RECIPIENT", "Destinatario obrigatorio.");
-		}
-		if (otherId.equals(user.id().value())) {
-			throw new ApiException(400, "INVALID_RECIPIENT", "Nao da para abrir uma conversa consigo mesmo.");
-		}
-		// Bloqueio vale nos dois sentidos: ninguem fala com quem bloqueou (ou foi bloqueado).
-		if (blockedUsersReader.hiddenIdsFor(user.id().value()).contains(otherId)
-				|| blockedUsersReader.hiddenIdsFor(otherId).contains(user.id().value())) {
-			throw new ApiException(403, "USER_BLOCKED", "Nao e possivel conversar com este usuario.");
-		}
+		String otherId = resolveRecipient(user, request.userId());
 		Map<String, Object> payload = Map.of("direct", otherId);
 		String hash = idempotency.hash(payload);
 		return idempotency.execute(user.id(), "POST", "/api/conversations/direct", idempotencyKey, hash, () -> {
@@ -243,6 +263,30 @@ class MessagingContractController {
 				.map(ConversationParticipant::userId)
 				.toList();
 			return new CommandResponse(200, toDetailView(conversationId, "DIRECT", null, pIds,
+				messagingService.countUnread(conversationId, user.id().value()),
+				otherLastReadAt(participants, user.id().value())));
+		});
+	}
+
+	/**
+	 * Abre (ou reaproveita) a DM corporativa com um usuario — o botao "Mensagem" do perfil
+	 * profissional. Exige perfil profissional ativo do iniciador; o destinatario nao precisa ter.
+	 */
+	@PostMapping("/business-direct")
+	ResponseEntity<String> businessDirect(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@RequestBody DirectConversationRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		String otherId = resolveRecipient(user, request.userId());
+		Map<String, Object> payload = Map.of("business-direct", otherId);
+		String hash = idempotency.hash(payload);
+		return idempotency.execute(user.id(), "POST", "/api/conversations/business-direct", idempotencyKey, hash, () -> {
+			String conversationId = messagingService.businessDirectConversation(user.id().value(), otherId);
+			var participants = messagingService.getParticipants(conversationId);
+			List<String> pIds = participants.stream()
+				.map(ConversationParticipant::userId)
+				.toList();
+			return new CommandResponse(200, toDetailView(conversationId, "BUSINESS_DIRECT", null, pIds,
 				messagingService.countUnread(conversationId, user.id().value()),
 				otherLastReadAt(participants, user.id().value())));
 		});
@@ -272,11 +316,13 @@ class MessagingContractController {
 	/** As conversas que a pessoa apagou para si — a tela de arquivadas. */
 	@GetMapping("/archived")
 	PageResponse<ConversationView> archived(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
-			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit) {
+			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit,
+			@RequestParam(required = false) String context) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		limit = Math.clamp(limit, 1, 50);
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		List<Conversation> conversations = messagingService.listArchivedConversations(user.id().value(), before,
-			Math.min(limit, 50));
+			parseContext(context), limit);
 		var items = conversations.stream()
 			.map(c -> {
 				var participants = messagingService.getParticipants(c.id());
@@ -387,30 +433,87 @@ class MessagingContractController {
 	private ConversationView toView(String convId, String userId, String kind, String title,
 			List<String> participantIds, int unread, String otherLastReadAt) {
 		var lm = messagingService.getLastMessagePreview(convId);
-		return new ConversationView(convId, userId, kind, title, participantIds,
-			lm.text(), lm.time() != null ? lm.time().toString() : null, unread, otherLastReadAt,
-			lm.e2e(), lm.iv());
+		ConversationContext context = ConversationContext.of(kind);
+		return new ConversationView(convId, userId, kind, context.name(), title, participantIds,
+			identitiesOf(context, participantIds), lm.text(), lm.time() != null ? lm.time().toString() : null, unread,
+			otherLastReadAt, lm.e2e(), lm.iv());
 	}
 
 	private ConversationDetailView toDetailView(String convId, String kind, String title,
 			List<String> participantIds, int unread, String otherLastReadAt) {
 		var lm = messagingService.getLastMessagePreview(convId);
-		return new ConversationDetailView(convId, kind, title, participantIds,
-			lm.text(), unread, otherLastReadAt, lm.e2e(), lm.iv());
+		ConversationContext context = ConversationContext.of(kind);
+		return new ConversationDetailView(convId, kind, context.name(), title, participantIds,
+			identitiesOf(context, participantIds), lm.text(), unread, otherLastReadAt, lm.e2e(), lm.iv());
 	}
 
-	record ConversationView(String id, String userId, String kind, String title, List<String> participantIds,
-			String lastMessage, String time, int unread, String otherLastReadAt,
-			boolean lastMessageE2e, String lastMessageIv) {
+	/** Valida o destinatario: obrigatorio, nao pode ser voce, nao pode estar bloqueado. */
+	private String resolveRecipient(CurrentUser user, String rawUserId) {
+		String otherId = rawUserId == null ? "" : rawUserId.trim();
+		if (otherId.isEmpty()) {
+			throw new ApiException(400, "INVALID_RECIPIENT", "Destinatario obrigatorio.");
+		}
+		if (otherId.equals(user.id().value())) {
+			throw new ApiException(400, "INVALID_RECIPIENT", "Nao da para abrir uma conversa consigo mesmo.");
+		}
+		if (blockedUsersReader.hiddenIdsFor(user.id().value()).contains(otherId)
+				|| blockedUsersReader.hiddenIdsFor(otherId).contains(user.id().value())) {
+			throw new ApiException(403, "USER_BLOCKED", "Nao e possivel conversar com este usuario.");
+		}
+		return otherId;
 	}
 
-	record ConversationDetailView(String id, String kind, String title, List<String> participantIds, String lastMessage,
+	/**
+	 * Who each participant IS in this conversation. A professional thread (application, hiring)
+	 * shows the active professional identity (name, professional @, avatar), never the social one;
+	 * a participant without an active professional profile is left out and the client falls back
+	 * to the account profile. Social threads carry no entries.
+	 */
+	private Map<String, IdentityView> identitiesOf(ConversationContext context, List<String> participantIds) {
+		if (context != ConversationContext.PROFESSIONAL) {
+			return Map.of();
+		}
+		return corporateProfiles.activeByUserIds(participantIds).values().stream()
+			.collect(Collectors.toMap(CorporateProfile::userId, IdentityView::from));
+	}
+
+	/** Blank keeps every context (older clients); anything else must be SOCIAL or PROFESSIONAL. */
+	private static ConversationContext parseContext(String value) {
+		if (value == null || value.isBlank()) {
+			return null;
+		}
+		try {
+			return ConversationContext.valueOf(value.trim().toUpperCase(java.util.Locale.ROOT));
+		}
+		catch (IllegalArgumentException unknown) {
+			throw new ApiException(400, "INVALID_CONTEXT", "Contexto invalido: use SOCIAL ou PROFESSIONAL.");
+		}
+	}
+
+	record IdentityView(String identity, String username, String name, String avatar) {
+
+		static IdentityView from(CorporateProfile profile) {
+			return new IdentityView("CORPORATE", profile.username(), profile.name(),
+				profile.avatar() == null ? "" : profile.avatar());
+		}
+	}
+
+	record ConversationView(String id, String userId, String kind, String context, String title,
+			List<String> participantIds, Map<String, IdentityView> identities, String lastMessage, String time,
 			int unread, String otherLastReadAt, boolean lastMessageE2e, String lastMessageIv) {
+	}
+
+	record ConversationDetailView(String id, String kind, String context, String title, List<String> participantIds,
+			Map<String, IdentityView> identities, String lastMessage, int unread, String otherLastReadAt,
+			boolean lastMessageE2e, String lastMessageIv) {
 	}
 
 	record MessageView(String id, String conversationId, String from, String text, List<String> mediaIds,
 			String time, java.util.Map<String, Integer> reactions, String myReaction, boolean mediaSpoiler,
-			boolean e2e, String iv) {
+			boolean e2e, String iv, String replyToId, ReplyView replyTo) {
+	}
+
+	record ReplyView(String id, String from, String text, boolean e2e) {
 	}
 
 	record CreateConversationRequest(String kind, String title, List<String> participantIds) {
@@ -423,7 +526,7 @@ class MessagingContractController {
 	}
 
 	record SendMessageRequest(String text, List<String> mediaIds, Boolean mediaSpoiler,
-			Boolean e2e, String iv) {
+			Boolean e2e, String iv, String replyToId) {
 	}
 
 }

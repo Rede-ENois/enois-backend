@@ -30,6 +30,11 @@ public class MentorSlot {
 		return new MentorSlot(id, mentorId, startsAt, endsAt, false);
 	}
 
+	/** Cancelamento com o horário ainda no futuro devolve o horário para a agenda. */
+	public MentorSlot release() {
+		return new MentorSlot(id, mentorId, startsAt, endsAt, true);
+	}
+
 	public String id() { return id; }
 
 	public String mentorId() { return mentorId; }

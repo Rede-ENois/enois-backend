@@ -215,9 +215,11 @@ class DeveloperOriginTests {
 				.header("X-Client-Origin", APP_ORIGIN))
 			.andExpect(status().isUnauthorized());
 
-		// Curinga confiável de subdomínio.
+		// Curinga de subdomínio passa o gate geral, mas NÃO recebe credencial nem entra em /admin:
+		// um subdomínio irmão comprometido não pode ler o painel com a sessão da vítima.
 		mockMvc.perform(get("/admin/support").header("X-Client-Origin", "https://painel.b7cloud.com.br"))
-			.andExpect(status().isUnauthorized());
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("ORIGIN_NOT_TRUSTED"));
 
 		// O domínio "raiz", sem subdomínio, não casa com https://*.b7cloud.com.br.
 		mockMvc.perform(get("/admin/support").header("X-Client-Origin", "https://b7cloud.com.br"))

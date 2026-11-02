@@ -34,6 +34,19 @@ interface SpringDataJobJpaRepository extends JpaRepository<JobJpaEntity, String>
 		"GROUP BY j.company ORDER BY COUNT(j) DESC")
 	List<Object[]> countOpenJobsByCompany();
 
+	@Query("SELECT j.company, COUNT(j) AS total, MAX(j.logo) FROM JobJpaEntity j " +
+		"WHERE j.status = com.socialcoisa.rede.jobs.domain.JobStatus.OPEN AND j.company IS NOT NULL " +
+		"AND j.companyId IS NULL GROUP BY j.company")
+	List<Object[]> countOpenUnlinkedJobsByCompany();
+
+	@Query("SELECT j.companyId, COUNT(j) FROM JobJpaEntity j " +
+		"WHERE j.status = com.socialcoisa.rede.jobs.domain.JobStatus.OPEN AND j.companyId IN :ids GROUP BY j.companyId")
+	List<Object[]> countOpenByCompanyIds(@Param("ids") java.util.Collection<String> ids);
+
+	@Query("SELECT j FROM JobJpaEntity j WHERE j.companyId = :companyId " +
+		"AND j.status = com.socialcoisa.rede.jobs.domain.JobStatus.OPEN ORDER BY j.postedAt DESC")
+	List<JobJpaEntity> findOpenByCompanyId(@Param("companyId") String companyId, Pageable pageable);
+
 	/**
 	 * Le a vaga travando a linha ate o fim da transacao. E o ponto de serializacao entre
 	 * candidatar-se e encerrar: quem pega o lock primeiro decide, e o outro le o estado ja mudado —

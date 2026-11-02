@@ -56,6 +56,48 @@ class DirectConversationTests {
 	}
 
 	@Test
+	void startingADirectMessageFromTheInboxSearchReusesTheSameConversation() throws Exception {
+		var a = auth.authenticate("dm_search_a");
+		var b = auth.authenticate("dm_search_b");
+		String direct = openDirect(a, b.userId(), "dm-search-1");
+
+		// O "nova conversa" da caixa usa POST /conversations: antes criava uma conversa nova a cada vez.
+		mockMvc.perform(post("/conversations")
+				.header("X-Session-Token", a.token())
+				.header("Idempotency-Key", "dm-search-2")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("kind", "DIRECT", "participantIds",
+					java.util.List.of(b.userId())))))
+			.andExpect(jsonPath("$.id").value(direct))
+			.andExpect(jsonPath("$.context").value("SOCIAL"));
+	}
+
+	@Test
+	void inboxFiltersByContextAndRejectsAnUnknownOne() throws Exception {
+		var a = auth.authenticate("dm_ctx_a");
+		var b = auth.authenticate("dm_ctx_b");
+		String direct = openDirect(a, b.userId(), "dm-ctx-1");
+
+		mockMvc.perform(get("/conversations").param("context", "SOCIAL").header("X-Session-Token", a.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.id == '" + direct + "')].context").value(org.hamcrest.Matchers.hasItem("SOCIAL")));
+		mockMvc.perform(get("/conversations").param("context", "PROFESSIONAL").header("X-Session-Token", a.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.id == '" + direct + "')]").isEmpty());
+		// Sem contexto, a lista continua completa (contrato dos clientes antigos).
+		mockMvc.perform(get("/conversations").header("X-Session-Token", a.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.id == '" + direct + "')]").isNotEmpty());
+		mockMvc.perform(get("/conversations/unread-count").param("context", "PROFESSIONAL")
+				.header("X-Session-Token", a.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.count").isNumber());
+		mockMvc.perform(get("/conversations").param("context", "WORK").header("X-Session-Token", a.token()))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("INVALID_CONTEXT"));
+	}
+
+	@Test
 	void rejectsConversationWithSelf() throws Exception {
 		var a = auth.authenticate("dm_self");
 		mockMvc.perform(post("/conversations/direct")

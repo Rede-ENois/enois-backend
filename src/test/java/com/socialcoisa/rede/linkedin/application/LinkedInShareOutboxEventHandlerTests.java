@@ -43,7 +43,21 @@ class LinkedInShareOutboxEventHandlerTests {
 	private final LinkedInShareOutboxEventHandler handler = new LinkedInShareOutboxEventHandler(posts, service);
 
 	@Test
-	void postPublicadoViraShare() {
+	void publicacaoProfissionalViraShare() {
+		connections.save(new LinkedInConnection("u1", "sub-1", cipher.encrypt("token"), NOW.plusSeconds(3600),
+			true, NOW, NOW, null, null));
+		posts.post = Post.publish(new PostId("post_1"), new UserId("u1"), PostType.BUSINESS, "meu texto", null,
+			List.of(), List.of(), null, NOW, com.socialcoisa.rede.feed.domain.AuthorIdentity.CORPORATE);
+
+		handler.handle("PostPublished", "post_1", "{}");
+
+		assertThat(client.calls).hasSize(1);
+		assertThat(client.calls.get(0)).startsWith("token|sub-1|").contains(URL + "post_1");
+	}
+
+	/** Regra de produto: o perfil pessoal nunca compartilha no LinkedIn, mesmo com a sincronizacao ligada. */
+	@Test
+	void publicacaoSocialNaoVaiParaOLinkedIn() {
 		connections.save(new LinkedInConnection("u1", "sub-1", cipher.encrypt("token"), NOW.plusSeconds(3600),
 			true, NOW, NOW, null, null));
 		posts.post = Post.publish(new PostId("post_1"), new UserId("u1"), PostType.INSIGHT, "meu texto", null,
@@ -51,8 +65,7 @@ class LinkedInShareOutboxEventHandlerTests {
 
 		handler.handle("PostPublished", "post_1", "{}");
 
-		assertThat(client.calls).hasSize(1);
-		assertThat(client.calls.get(0)).startsWith("token|sub-1|").contains(URL + "post_1");
+		assertThat(client.calls).isEmpty();
 	}
 
 	@Test
@@ -116,6 +129,10 @@ class LinkedInShareOutboxEventHandlerTests {
 		}
 
 		@Override
+		public List<Post> findActiveWithLinksSince(java.time.Instant since, int limit) {
+			return java.util.List.of();
+		}
+
 		public List<Post> findByMediaId(String mediaId) {
 			return List.of();
 		}
@@ -203,13 +220,29 @@ class LinkedInShareOutboxEventHandlerTests {
 		}
 
 		@Override
-		public List<Post> findTrending(Instant since, int limit) {
+		public List<Post> findTrending(Instant since, Instant until,
+				com.socialcoisa.rede.feed.application.TrendingCursor after, int limit) {
 			return List.of();
 		}
 
 		@Override
-		public List<Post> findActiveByTypes(Set<PostType> types, Instant before, int limit) {
+		public List<Post> findActiveUnseen(UserId reader, Collection<String> blockedTopics, Instant before, int limit) {
+			throw new UnsupportedOperationException();
+		}
+
+		@Override
+		public List<Post> findActiveInteracted(UserId reader, Instant before, int limit) {
+			throw new UnsupportedOperationException();
+		}
+
+		@Override
+		public List<Post> findActiveByTypes(Set<PostType> types, Boolean resolved, Instant before, int limit) {
 			return List.of();
+		}
+
+		@Override
+		public void updateAcceptedAnswer(PostId id, String commentId, Instant resolvedAt) {
+			throw new UnsupportedOperationException();
 		}
 	}
 }

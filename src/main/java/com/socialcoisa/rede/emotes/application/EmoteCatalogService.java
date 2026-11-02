@@ -17,6 +17,7 @@ import com.socialcoisa.rede.emotes.application.port.out.EmoteSource;
 import com.socialcoisa.rede.emotes.application.port.out.LiveEmoteSource;
 import com.socialcoisa.rede.emotes.domain.Emote;
 import com.socialcoisa.rede.emotes.domain.EmoteCatalog;
+import com.socialcoisa.rede.emotes.domain.EmoteNamePolicy;
 import com.socialcoisa.rede.emotes.domain.EmoteProvider;
 
 /**
@@ -49,15 +50,18 @@ public class EmoteCatalogService {
 
 	private volatile EmoteCatalog catalog;
 	private volatile Set<String> artsAnimated = Set.of();
+	private volatile Set<String> artsBarradas = Set.of();
 	private volatile boolean liveLoaded;
 
 	public EmoteCatalogService(List<LiveEmoteSource> liveSources, EmoteSource embedded) {
 		this.liveSources = List.copyOf(liveSources);
 		this.embedded = embedded;
 		// No boot o catalogo ja nasce com o retrato embarcado: nenhuma requisicao encontra seletor vazio.
-		List<Emote> embarcado = loadEmbedded();
+		Barreira barreira = new Barreira();
+		List<Emote> embarcado = barreira.permitidas(loadEmbedded());
 		this.catalog = embarcado.isEmpty() ? EmoteCatalog.empty() : new EmoteCatalog(sort(embarcado), Instant.now());
 		this.artsAnimated = animatedArts(this.catalog.emotes());
+		this.artsBarradas = barreira.artes();
 	}
 
 	public EmoteCatalog catalog() {
@@ -73,6 +77,19 @@ public class EmoteCatalogService {
 	public boolean isAnimated(String providerParam, String id) {
 		EmoteProvider provider = EmoteProvider.parse(providerParam);
 		return provider != null && id != null && artsAnimated.contains(arte(provider, id));
+	}
+
+	/**
+	 * `true` quando esta arte esta BARRADA. O proxy de imagem usa isto como porta: figurinha de nome
+	 * barrado nunca e baixada do CDN de terceiro, nem quando alguem pede a imagem pelo id direto.
+	 *
+	 * A porta e so sobre a arte barrada, e nao sobre "o que esta no catalogo": no boot o catalogo tem
+	 * apenas o retrato embarcado, e travar tudo que ainda nao chegou daria 404 em figurinha legitima
+	 * que ja esta em post antigo.
+	 */
+	public boolean isBlocked(String providerParam, String id) {
+		EmoteProvider provider = EmoteProvider.parse(providerParam);
+		return provider != null && id != null && artsBarradas.contains(arte(provider, id));
 	}
 
 	public EmotePage page(int page, int limit, String query, String provider) {
@@ -110,6 +127,7 @@ public class EmoteCatalogService {
 		Map<String, Emote> porCodigo = new LinkedHashMap<>();
 		Map<String, Integer> posicoes = new HashMap<>();
 		Set<String> artes = new HashSet<>();
+		Barreira barreira = new Barreira();
 
 		List<List<Emote>> rodadas = new ArrayList<>();
 		boolean algumAoVivo = false;
@@ -121,7 +139,8 @@ public class EmoteCatalogService {
 		rodadas.add(loadEmbedded());
 
 		for (List<Emote> rodada : rodadas) {
-			for (Emote emote : rodada) {
+			// Nome barrado e descartado aqui, na entrada: o que nao entra no catalogo nunca e baixado.
+			for (Emote emote : barreira.permitidas(rodada)) {
 				Emote existente = porCodigo.get(emote.code());
 				if (existente != null) {
 					// Mesma figurinha em outra rodada: a listagem popular traz a posicao, a listagem de
@@ -149,7 +168,6 @@ public class EmoteCatalogService {
 			LOG.warn("Nenhuma fonte de figurinhas respondeu; o catalogo continua vazio.");
 			return;
 		}
-
 		List<Emote> montado = new ArrayList<>(porCodigo.size());
 		for (Emote emote : porCodigo.values()) {
 			Integer posicao = posicoes.get(emote.code());
@@ -157,9 +175,39 @@ public class EmoteCatalogService {
 		}
 		catalog = new EmoteCatalog(sort(montado), Instant.now());
 		artsAnimated = animatedArts(catalog.emotes());
+		artsBarradas = barreira.artes();
 		liveLoaded = liveLoaded || algumAoVivo;
-		LOG.info("Catalogo de figurinhas montado: {} (populares {}, animadas {})", catalog.emotes().size(),
-				catalog.emotes().stream().filter(Emote::popular).count(), artsAnimated.size());
+		LOG.info("Catalogo de figurinhas montado: {} (populares {}, animadas {}, barradas {})", catalog.emotes().size(),
+				catalog.emotes().stream().filter(Emote::popular).count(), artsAnimated.size(), artsBarradas.size());
+	}
+
+	/**
+	 * Aplica a politica de nome a uma rodada e guarda a arte de quem caiu.
+	 *
+	 * A arte barrada e guardada justamente para o proxy de imagem poder recusar a figurinha mesmo
+	 * quando pedida pelo id direto — sem isso, o nome sairia do seletor e a imagem continuaria sendo
+	 * buscada no CDN de terceiro por quem tivesse o endereco.
+	 */
+	private static final class Barreira {
+
+		private final Set<String> artes = new HashSet<>();
+
+		List<Emote> permitidas(List<Emote> emotes) {
+			List<Emote> permitidas = new ArrayList<>(emotes.size());
+			for (Emote emote : emotes) {
+				if (EmoteNamePolicy.blocked(emote.code())) {
+					artes.add(arte(emote.provider(), emote.id()));
+					continue;
+				}
+				permitidas.add(emote);
+			}
+			return permitidas;
+		}
+
+		Set<String> artes() {
+			return Set.copyOf(artes);
+		}
+
 	}
 
 	/** A figurinha que veio primeiro manda na arte e no codigo; a segunda so acrescenta a animacao. */

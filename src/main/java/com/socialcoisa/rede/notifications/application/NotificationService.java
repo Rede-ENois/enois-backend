@@ -38,6 +38,34 @@ public class NotificationService {
 		return notification;
 	}
 
+	/**
+	 * A notification that groups with the unread one of the same target: the first person creates it
+	 * (and the push goes out once); everyone after joins it, with {@code groupedBody} writing the text
+	 * for the new count and {@code groupedHref} the destination once it covers several people (e.g. the
+	 * post with the list of who reacted open). Nothing is pushed for those, so 15 reactions are one
+	 * notification and one push.
+	 */
+	@Transactional
+	public Notification createGrouped(String userId, String kind, String groupKey, String actorId, String title,
+			String body, java.util.function.IntFunction<String> groupedBody, String href, String groupedHref,
+			String ctaLabel) {
+		var unread = repository.findUnreadGroup(userId, groupKey);
+		if (unread.isPresent()) {
+			Notification current = unread.get();
+			int count = actorId.equals(current.actorId()) ? current.actorCount() : current.actorCount() + 1;
+			Notification joined = current.joinedBy(actorId, count == 1 ? body : groupedBody.apply(count),
+				count == 1 ? href : groupedHref, clock.instant());
+			repository.save(joined);
+			return joined;
+		}
+		String id = "notification_" + UUID.randomUUID().toString().replace("-", "");
+		Notification notification = Notification.grouped(id, userId, kind, groupKey, actorId, title, body, href,
+			ctaLabel, clock.instant());
+		repository.save(notification);
+		events.publishEvent(new NotificationCreatedEvent(userId, kind, title, body, href));
+		return notification;
+	}
+
 	@Transactional
 	public Notification markRead(String notificationId, String userId) {
 		Notification notification = repository.findById(notificationId)
@@ -55,7 +83,13 @@ public class NotificationService {
 	}
 
 	public List<Notification> list(String userId, java.time.Instant before, int limit) {
-		return repository.findByUserId(userId, before, limit);
+		return list(userId, before, null, limit);
+	}
+
+	/** Notifications of one interface (plus the account-wide ones); a null context keeps all. */
+	public List<Notification> list(String userId, java.time.Instant before,
+			com.socialcoisa.rede.notifications.domain.NotificationContext context, int limit) {
+		return repository.findByUserId(userId, before, context, limit);
 	}
 
 }

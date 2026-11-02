@@ -36,6 +36,10 @@ public class Post {
 	private String repostOfAuthor;
 	/** Repost COM opinião: o content é o comentário do reposter e o original aparece citado. */
 	private boolean repostWithOpinion;
+	/** QUESTION only: the comment the asker accepted as the answer (null = none yet). */
+	private String acceptedCommentId;
+	/** When the question was marked resolved (null = open). */
+	private Instant resolvedAt;
 
 	private Post(PostId id, UserId authorId, PostType type, String content, String pageHtml, List<String> tags,
 			List<String> mediaIds, String communityId, String topic, String channelId, Instant createdAt,
@@ -196,6 +200,34 @@ public class Post {
 		return status == PostStatus.ACTIVE;
 	}
 
+	/** Está em quarentena de moderação (fora do ar, aguardando revisão humana). */
+	public boolean isQuarantined() {
+		return status == PostStatus.QUARANTINED;
+	}
+
+	/**
+	 * Tira o post do ar SEM apagar: quarentena é precaução, não punição. O conteúdo continua no
+	 * banco e {@link #release()} devolve tudo ao normal — por isso não mexe em {@code deletedAt}.
+	 */
+	public boolean quarantine() {
+		if (status != PostStatus.ACTIVE) {
+			return false;
+		}
+		status = PostStatus.QUARANTINED;
+		deletedAt = null;
+		return true;
+	}
+
+	/** Revisão humana concluiu que não havia violação: o post volta ao ar como estava. */
+	public boolean release() {
+		if (status != PostStatus.QUARANTINED) {
+			return false;
+		}
+		status = PostStatus.ACTIVE;
+		deletedAt = null;
+		return true;
+	}
+
 	public Instant expiresAt() {
 		return expiresAt;
 	}
@@ -234,6 +266,24 @@ public class Post {
 		this.repostOfAuthor = originalAuthorUsername;
 		this.repostWithOpinion = withOpinion;
 		return this;
+	}
+
+	/**
+	 * Accepted-answer state as read from storage. Written only by its own targeted update (see
+	 * PostRepository#updateAcceptedAnswer), never by save(), so a counter save cannot undo it.
+	 */
+	public Post markAcceptedAnswer(String commentId, Instant resolvedAt) {
+		this.acceptedCommentId = commentId;
+		this.resolvedAt = resolvedAt;
+		return this;
+	}
+
+	public String acceptedCommentId() {
+		return acceptedCommentId;
+	}
+
+	public Instant resolvedAt() {
+		return resolvedAt;
 	}
 
 	public boolean repostWithOpinion() {
@@ -296,6 +346,14 @@ public class Post {
 
 	public void addShare() {
 		counters = counters.incrementShares();
+	}
+
+	public void repost() {
+		counters = counters.incrementReposts();
+	}
+
+	public void unrepost() {
+		counters = counters.decrementReposts();
 	}
 
 	public PostId id() {

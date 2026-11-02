@@ -77,6 +77,7 @@ class JobApplicationFlowTests {
 	void employerDefinesFieldsAndReceivesTheApplicationWithTheCandidateProfile() throws Exception {
 		var employer = auth.authenticate("cand_employer");
 		var candidate = auth.authenticate("cand_candidate");
+		String proUsername = auth.activateProfessional(candidate);
 		// Duas experiencias: a primeira comeca 6 anos atras (o "tempo de xp" do retrato vem daqui).
 		addExperience(candidate, "Desenvolvedora Back-end", java.time.LocalDate.now().minusYears(6));
 		addExperience(candidate, "Desenvolvedora Junior", java.time.LocalDate.now().minusYears(2));
@@ -129,7 +130,10 @@ class JobApplicationFlowTests {
 		// O empregador recebe por e-mail, com o perfil e as respostas.
 		assertThat(sentSubjects).hasSize(1);
 		assertThat(sentSubjects.get(0)).contains("Nova candidatura");
-		assertThat(sentBodies.get(0)).contains("cand_candidate").contains("Anos de experiência com Java")
+		// Sempre pela identidade profissional: o nome e o @ profissionais, nunca o @ social.
+		assertThat(sentBodies.get(0)).contains("Perfil Profissional (@" + proUsername + ")")
+			.contains("/profissional/" + proUsername).doesNotContain("cand-candidate")
+			.contains("Anos de experiência com Java")
 			.contains("Por que essa vaga?").contains("Reputação: 300").contains("conta verificada")
 			.contains("Experiência: 6 anos (2 experiências)");
 
@@ -147,7 +151,7 @@ class JobApplicationFlowTests {
 			.andReturn();
 		assertThat(messages.getResponse().getContentAsString())
 			.contains("Candidatura para")
-			.contains("cand_candidate")
+			.contains("@" + proUsername)
 			.contains("Experiência: 6 anos (2 experiências)")
 			.contains("Anos de experiência com Java: 6")
 			.contains("Por que essa vaga?: Porque quero crescer");
@@ -155,7 +159,7 @@ class JobApplicationFlowTests {
 		// O empregador ve a lista de candidaturas com o retrato do candidato.
 		mockMvc.perform(get("/jobs/" + jobId + "/applications").header("X-Session-Token", employer.token()))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$[0].candidate.username").value("cand-candidate"))
+			.andExpect(jsonPath("$[0].candidate.username").value(proUsername))
 			.andExpect(jsonPath("$[0].candidate.reputation").value(300))
 			.andExpect(jsonPath("$[0].candidate.experienceYears").value(6))
 			.andExpect(jsonPath("$[0].candidate.experiencesCount").value(2))
@@ -181,6 +185,7 @@ class JobApplicationFlowTests {
 	void ownerCannotApplyToOwnJobAndOptionalFieldsMayBeLeftEmpty() throws Exception {
 		var employer = auth.authenticate("cand_owner");
 		var candidate = auth.authenticate("cand_simple");
+		auth.activateProfessional(candidate);
 
 		String jobId = createJob(employer, """
 				[{"label":"Anos de experiência","type":"NUMBER","required":false}]""");
@@ -200,6 +205,33 @@ class JobApplicationFlowTests {
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("answers", List.of()))))
 			.andExpect(status().isCreated());
+	}
+
+	/**
+	 * Issue 321: a DM ao empregador corre na transacao da candidatura. Se ela for recusada (aqui, o
+	 * portao de idade de quem nao declarou a data de nascimento), a candidatura nao pode cair junto
+	 * com 500 — ela fica registrada e o empregador ainda recebe o e-mail.
+	 */
+	@Test
+	void refusedDirectMessageDoesNotBreakTheApplication() throws Exception {
+		var employer = auth.authenticate("cand_dm_employer");
+		var candidate = auth.authenticate("cand_dm_candidate");
+		auth.activateProfessional(candidate);
+		String jobId = createJob(employer, "[]");
+		com.socialcoisa.rede.shared.web.TestDatabase.clearBirthDate(candidate.userId());
+
+		mockMvc.perform(post("/jobs/" + jobId + "/applications")
+				.header("X-Session-Token", candidate.token())
+				.header("Idempotency-Key", "cand-dm-apply")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"message\":\"Quero muito essa vaga\"}"))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.status").value("APPLIED"));
+
+		mockMvc.perform(get("/jobs/" + jobId + "/applications").header("X-Session-Token", employer.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.length()").value(1));
+		assertThat(sentSubjects).contains("Nova candidatura: Pessoa Desenvolvedora");
 	}
 
 	@Test
@@ -287,6 +319,7 @@ class JobApplicationFlowTests {
 	void closingStopsNewApplicationsAndPreservesTheOnesAlreadyReceived() throws Exception {
 		var employer = auth.authenticate("close_employer");
 		var candidate = auth.authenticate("close_candidate");
+		auth.activateProfessional(candidate);
 		var outsider = auth.authenticate("close_outsider");
 
 		String jobId = createJob(employer, "[]");
@@ -358,6 +391,7 @@ class JobApplicationFlowTests {
 	void employerTriagesTheApplicationAndTheCandidateIsTold() throws Exception {
 		var employer = auth.authenticate("tri_employer");
 		var candidate = auth.authenticate("tri_candidate");
+		auth.activateProfessional(candidate);
 		var outsider = auth.authenticate("tri_outsider");
 
 		String jobId = createJob(employer, "[]");
@@ -403,6 +437,14 @@ class JobApplicationFlowTests {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("IN_REVIEW"));
 
+		// O candidato tambem recebe na caixa de notificacoes, apontando para a vaga.
+		mockMvc.perform(get("/notifications").header("X-Session-Token", candidate.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.kind == 'JOB_APPLICATION_STATUS')].href")
+				.value(org.hamcrest.Matchers.contains("/vagas/" + jobId)))
+			.andExpect(jsonPath("$.items[?(@.kind == 'JOB_APPLICATION_STATUS')].body")
+				.value(org.hamcrest.Matchers.contains(org.hamcrest.Matchers.containsString("em análise"))));
+
 		// Persistiu de verdade: a lista do empregador mostra o novo estado.
 		mockMvc.perform(get("/jobs/" + jobId + "/applications").header("X-Session-Token", employer.token()))
 			.andExpect(status().isOk())
@@ -430,6 +472,7 @@ class JobApplicationFlowTests {
 	void rejectingRequiresAReasonAndTheCandidateReadsIt() throws Exception {
 		var employer = auth.authenticate("job_feedback_owner");
 		var candidate = auth.authenticate("job_feedback_candidate");
+		auth.activateProfessional(candidate);
 		String jobId = createJob(employer, "[]");
 		String applicationId = apply(candidate, jobId);
 

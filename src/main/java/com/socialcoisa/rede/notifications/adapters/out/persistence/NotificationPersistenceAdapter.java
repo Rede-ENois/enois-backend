@@ -9,6 +9,7 @@ import org.springframework.stereotype.Repository;
 
 import com.socialcoisa.rede.notifications.application.port.out.NotificationRepository;
 import com.socialcoisa.rede.notifications.domain.Notification;
+import com.socialcoisa.rede.notifications.domain.NotificationContext;
 
 @Repository
 class NotificationPersistenceAdapter implements NotificationRepository {
@@ -30,10 +31,17 @@ class NotificationPersistenceAdapter implements NotificationRepository {
 	}
 
 	@Override
-	public List<Notification> findByUserId(String userId, java.time.Instant before, int limit) {
-		return springData.findByUserId(userId, before, PageRequest.of(0, limit)).stream()
+	public List<Notification> findByUserId(String userId, java.time.Instant before, NotificationContext context,
+			int limit) {
+		return springData.findByUserId(userId, before, context == null ? null : context.name(), PageRequest.of(0, limit))
+			.stream()
 			.map(NotificationJpaEntity::toDomain)
 			.toList();
+	}
+
+	@Override
+	public Optional<Notification> findUnreadGroup(String userId, String groupKey) {
+		return springData.findFirstByUserIdAndGroupKeyAndReadFalse(userId, groupKey).map(NotificationJpaEntity::toDomain);
 	}
 
 	@Override

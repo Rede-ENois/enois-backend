@@ -32,12 +32,14 @@ public class Job {
 	/** Estado do processo seletivo; comeca OPEN. */
 	private JobStatus status;
 	private Instant closedAt;
+	/** The company page the job belongs to (null = not linked to a page). */
+	private final String companyId;
 
 	private Job(String id, String title, String company, String logo, String location, String type, String level,
 			String salary, String currency, BigDecimal salaryMin, BigDecimal salaryMax, String salaryPeriod,
 			String description, List<String> skills, List<JobApplicationField> applicationFields,
 			String postedBy, Instant communityAgreedAt, JobStatus status, Instant closedAt, Instant postedAt,
-			Instant updatedAt) {
+			Instant updatedAt, String companyId) {
 		this.id = id;
 		this.title = title;
 		this.company = company;
@@ -59,6 +61,7 @@ public class Job {
 		this.updatedAt = updatedAt;
 		this.status = status == null ? JobStatus.OPEN : status;
 		this.closedAt = closedAt;
+		this.companyId = companyId;
 	}
 
 	public static Job create(String id, String title, String company, String logo, String location, String type,
@@ -67,17 +70,17 @@ public class Job {
 			List<JobApplicationField> applicationFields, String postedBy, Instant communityAgreedAt, Instant now) {
 		return new Job(id, title, company, logo, location, type, level, salary, currency, salaryMin, salaryMax,
 			salaryPeriod, description, List.copyOf(skills), applicationFields, postedBy, communityAgreedAt,
-			JobStatus.OPEN, null, now, now);
+			JobStatus.OPEN, null, now, now, null);
 	}
 
 	public static Job restore(String id, String title, String company, String logo, String location, String type,
 			String level, String salary, String currency, BigDecimal salaryMin, BigDecimal salaryMax,
 			String salaryPeriod, String description, List<String> skills,
 			List<JobApplicationField> applicationFields, String postedBy, Instant communityAgreedAt,
-			JobStatus status, Instant closedAt, Instant postedAt, Instant updatedAt) {
+			JobStatus status, Instant closedAt, Instant postedAt, Instant updatedAt, String companyId) {
 		return new Job(id, title, company, logo, location, type, level, salary, currency, salaryMin, salaryMax,
 			salaryPeriod, description, skills, applicationFields, postedBy, communityAgreedAt, status, closedAt,
-			postedAt, updatedAt);
+			postedAt, updatedAt, companyId);
 	}
 
 	public String id() { return id; }
@@ -138,7 +141,16 @@ public class Job {
 	public Job closed(Instant at) {
 		return new Job(id, title, company, logo, location, type, level, salary, currency, salaryMin, salaryMax,
 			salaryPeriod, description, skills, applicationFields, postedBy, communityAgreedAt, JobStatus.CLOSED,
-			at, postedAt, updatedAt);
+			at, postedAt, updatedAt, companyId);
+	}
+
+	public String companyId() { return companyId; }
+
+	/** The same job linked to a company page. */
+	public Job withCompany(String pageId) {
+		return new Job(id, title, company, logo, location, type, level, salary, currency, salaryMin, salaryMax,
+			salaryPeriod, description, skills, applicationFields, postedBy, communityAgreedAt, status, closedAt,
+			postedAt, updatedAt, pageId);
 	}
 
 }

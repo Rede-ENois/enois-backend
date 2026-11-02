@@ -29,12 +29,6 @@ public interface PostInteractionRepository {
 
 	boolean removeReaction(PostId postId, UserId userId);
 
-	/** Reações recebidas por um autor (em posts dele, excluídas as próprias) — recompensa C2. */
-	long countReactionsReceived(String authorId);
-
-	/** Reações recebidas pelo autor desde um instante (teto diário da recompensa). */
-	long countReactionsReceivedSince(String authorId, java.time.Instant since);
-
 	boolean addSave(String id, PostId postId, UserId userId, Instant createdAt);
 
 	boolean removeSave(PostId postId, UserId userId);

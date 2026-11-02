@@ -57,7 +57,12 @@ class S3StorageConfig {
 	}
 
 	@Bean
-	MediaUploadSigner mediaUploadSigner(S3Presigner presigner, S3Properties props) {
+	MediaUploadSigner mediaUploadSigner(S3Presigner presigner, S3Properties props,
+			@org.springframework.beans.factory.annotation.Value("${rede.media.nsfw.enabled:true}") boolean moderationEnabled) {
+		if (moderationEnabled && !props.uploadThroughApi()) {
+			throw new IllegalStateException(
+				"A moderação de imagens exige REDE_MEDIA_S3_UPLOAD_THROUGH_API=true.");
+		}
 		// Gateway S3-compativel (endpoint configurado) normalmente nao responde CORS: o navegador
 		// nao consegue fazer o PUT assinado direto no bucket. Nesse caso a subida passa pelo
 		// proprio app (`PUT /api/storage/{chave}`), que e a mesma origem da API.

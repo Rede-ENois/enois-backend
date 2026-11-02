@@ -45,6 +45,14 @@ Sem vínculo, os quatro respondem `403 GITHUB_NOT_LINKED`. Sem README público, 
   leitura** do serviço (o mesmo da sincronização de contribuições), que eleva o limite de 60 para
   5.000 req/h.
 
+## Cache
+
+A lista de repositórios e o README (dados públicos) ficam em cache em memória por login, por 3
+minutos (`githubRepositories` e `githubReadme` no `CacheConfig`, lidos por `CachedGitHubProfileReader`).
+Abrir o diálogo e importar em seguida fazem uma ida ao GitHub, não duas. Falha e README ausente não
+entram no cache. Consequência: um repositório criado, ou um README editado, aparece em até 3
+minutos.
+
 ## Segurança e privacidade
 
 - A escrita é sempre na própria conta autenticada; não existe importar para o perfil de outra pessoa.
@@ -65,5 +73,5 @@ Sem vínculo, os quatro respondem `403 GITHUB_NOT_LINKED`. Sem README público, 
 
 `GitHubProfileImportTests` cobre: lista de repositórios do vínculo, importação idempotente
 (dedupe), repositório fora da lista rejeitado, README convertido com links/imagens absolutos,
-`<script>` removido, bio salva e visível no perfil público, usuário sem vínculo (403) e perfil sem
-README (404).
+`<script>` removido, bio salva e visível no perfil público, usuário sem vínculo (403), perfil sem
+README (404), uma única ida ao GitHub para listar e importar, e README ausente fora do cache.

@@ -19,6 +19,10 @@ bucket. A saida foi tirar o bucket do caminho do navegador:
   arrasta a barra), `Cache-Control` longo e ETag. Publico, como o `GET /media/{id}`.
 - `PUT /api/storage/{chave}` — recebe o arquivo do navegador e repassa ao bucket. Exige sessao e a
   chave exata registrada para aquele asset (nao da para escrever em qualquer lugar).
+- Quando `REDE_MEDIA_NSFW_ENABLED=true`, toda imagem passa pelo classificador antes da gravação. Por
+  isso `REDE_MEDIA_S3_UPLOAD_THROUGH_API=false` não é aceito: a subida direta ao bucket contornaria
+  a verificação. Veja [MODERACAO-DE-IMAGENS.md](MODERACAO-DE-IMAGENS.md) para o modelo, limites e
+  parâmetros.
 - `S3UploadSigner` devolve a URL do proxy (`publicBaseUrl`) sempre que ha endpoint custom — ou
   seja, em gateway. Na AWS real continua a URL assinada direto no bucket.
 - **`publicBaseUrl` e por ambiente.** Como a subida e a leitura passam pelo app, a base tem de

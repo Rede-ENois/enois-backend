@@ -68,14 +68,20 @@ class CommunityContractController {
 	@GetMapping
 	PageResponse<CommunityView> communities(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(required = false) String topic, @RequestParam(required = false) String q,
+			@RequestParam(required = false) String city, @RequestParam(required = false) String state,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit) {
 		CurrentUser user = resolveSafely(sessionToken);
 		Instant before = cursorCodec.decode(cursor).orElse(null);
-		List<Community> communities = communityService.list(topic, q, before, limit);
+		List<Community> communities = communityService.list(topic, q, city, state, before, limit);
+		// Duas consultas para a pagina inteira (contagem e "sou membro"), nao quatro por item: com 20
+		// comunidades a antiga vitrine disparava ~40 consultas identicas so para desenhar a lista.
+		java.util.Map<String, Integer> memberCounts = communityService
+			.countMembersByCommunityIds(communities.stream().map(Community::id).toList());
+		java.util.Set<String> myCommunities = user == null ? java.util.Set.of()
+			: communityService.memberCommunityIds(user.id().value(),
+				communities.stream().map(Community::id).toList());
 		var items = communities.stream()
-			.map(c -> new CommunityView(c.id(), c.name(), c.description(),
-				communityService.countMembers(c.id()), c.topic(), c.cover(), c.avatar(), c.bannerHtml(),
-				user != null && communityService.isMember(c.id(), user.id().value())))
+			.map(c -> view(c, memberCounts.getOrDefault(c.id(), 0), myCommunities.contains(c.id())))
 			.toList();
 		String nextCursor = communities.size() == limit
 			? cursorCodec.encode(communities.get(communities.size() - 1).createdAt()) : null;
@@ -87,9 +93,17 @@ class CommunityContractController {
 			@PathVariable String communityId) {
 		CurrentUser user = resolveSafely(sessionToken);
 		Community c = communityService.getById(communityId);
-		return new CommunityView(c.id(), c.name(), c.description(),
-			communityService.countMembers(c.id()), c.topic(), c.cover(), c.avatar(), c.bannerHtml(),
-			user != null && communityService.isMember(c.id(), user.id().value()));
+		return view(c, user != null && communityService.isMember(c.id(), user.id().value()));
+	}
+
+	private CommunityView view(Community c, boolean joined) {
+		return view(c, communityService.countMembers(c.id()), joined);
+	}
+
+	private CommunityView view(Community c, int members, boolean joined) {
+		return new CommunityView(c.id(), c.name(), c.description(), members, c.topic(), c.cover(), c.avatar(),
+			c.bannerHtml(), joined, c.place() == null ? null : c.place().city(),
+			c.place() == null ? null : c.place().state());
 	}
 
 	private CurrentUser resolveSafely(String sessionToken) {
@@ -109,9 +123,8 @@ class CommunityContractController {
 		return idempotency.execute(user.id(), "POST", "/api/communities", idempotencyKey, hash,
 			() -> {
 				Community c = communityService.create(request.name(), request.description(), request.topic(),
-					request.cover(), request.avatar(), user.id().value());
-				return new CommandResponse(201, new CommunityView(c.id(), c.name(), c.description(),
-					1, c.topic(), c.cover(), c.avatar(), c.bannerHtml(), true));
+					request.cover(), request.avatar(), request.city(), request.state(), user.id().value());
+				return new CommandResponse(201, view(c, 1, true));
 			});
 	}
 
@@ -124,11 +137,9 @@ class CommunityContractController {
 		return idempotency.execute(user.id(), "PATCH", "/api/communities/{communityId}", idempotencyKey, hash,
 			() -> {
 				Community c = communityService.update(communityId, request.name(), request.description(),
-					request.topic(), request.cover(), request.avatar(), request.bannerHtml(),
-					user.id().value());
-				return new CommandResponse(200, new CommunityView(c.id(), c.name(), c.description(),
-					communityService.countMembers(c.id()), c.topic(), c.cover(), c.avatar(), c.bannerHtml(),
-					communityService.isMember(c.id(), user.id().value())));
+					request.topic(), request.cover(), request.avatar(), request.bannerHtml(), request.city(),
+					request.state(), user.id().value());
+				return new CommandResponse(200, view(c, communityService.isMember(c.id(), user.id().value())));
 			});
 	}
 
@@ -164,8 +175,7 @@ class CommunityContractController {
 			@RequestParam(defaultValue = "50") int limit) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		var items = communityService.listFavorites(user.id().value(), limit).stream()
-			.map(c -> new CommunityView(c.id(), c.name(), c.description(), communityService.countMembers(c.id()),
-				c.topic(), c.cover(), c.avatar(), c.bannerHtml(), communityService.isMember(c.id(), user.id().value())))
+			.map(c -> view(c, communityService.isMember(c.id(), user.id().value())))
 			.toList();
 		return new PageResponse<>(items, null);
 	}
@@ -196,14 +206,28 @@ class CommunityContractController {
 			});
 	}
 
+	/**
+	 * Comunidades perto de quem pede, pela cidade/UF do PROPRIO perfil: mesma cidade primeiro,
+	 * depois o resto do estado, por numero de membros. Perfil sem cidade = lista vazia.
+	 */
+	@GetMapping("/local")
+	PageResponse<CommunityView> local(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(defaultValue = "20") int limit) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		var place = userProfileRepository.findById(user.id().value()).map(UserProfile::place).orElse(null);
+		var items = communityService.listLocal(place, Math.min(Math.max(limit, 1), 50)).stream()
+			.map(c -> view(c, communityService.isMember(c.id(), user.id().value())))
+			.toList();
+		return new PageResponse<>(items, null);
+	}
+
 	/** Comunidades do usuario (menu lateral). Exige sessao: e a lista pessoal, nao o catalogo publico. */
 	@GetMapping("/mine")
 	PageResponse<CommunityView> mine(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(defaultValue = "20") int limit) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		var items = communityService.listMine(user.id().value(), limit).stream()
-			.map(c -> new CommunityView(c.id(), c.name(), c.description(), communityService.countMembers(c.id()),
-				c.topic(), c.cover(), c.avatar(), c.bannerHtml(), true))
+			.map(c -> view(c, true))
 			.toList();
 		return new PageResponse<>(items, null);
 	}
@@ -219,9 +243,7 @@ class CommunityContractController {
 		return idempotency.execute(user.id(), "POST", "/api/communities/{communityId}/transfer", idempotencyKey, hash,
 			() -> {
 				Community c = communityService.transferOwnership(communityId, user.id().value(), request.newOwnerId());
-				return new CommandResponse(200, new CommunityView(c.id(), c.name(), c.description(),
-					communityService.countMembers(c.id()), c.topic(), c.cover(), c.avatar(), c.bannerHtml(),
-					communityService.isMember(c.id(), user.id().value())));
+				return new CommandResponse(200, view(c, communityService.isMember(c.id(), user.id().value())));
 			});
 	}
 
@@ -347,11 +369,11 @@ class CommunityContractController {
 	}
 
 	record CommunityView(String id, String name, String description, int members, String topic, String cover,
-			String avatar, String bannerHtml, boolean joined) {
+			String avatar, String bannerHtml, boolean joined, String city, String state) {
 	}
 
 	record CommunityRequest(String name, String description, String topic, String cover, String avatar,
-			String bannerHtml) {
+			String bannerHtml, String city, String state) {
 	}
 
 	record TransferOwnershipRequest(String newOwnerId) {

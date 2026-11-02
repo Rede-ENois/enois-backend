@@ -64,6 +64,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	private final com.socialcoisa.rede.corporate.application.port.out.CorporateProfileRepository corporateProfiles;
 	private final com.socialcoisa.rede.feed.application.port.out.ReaderPreferencesReader readerPreferences;
 	private final PostNoteService postNotes;
+	private final com.socialcoisa.rede.feed.application.port.out.PollRepository polls;
+	private final com.socialcoisa.rede.feed.application.port.out.PostRepostRepository postReposts;
 	private static final Instant DEFAULT_BEFORE = Instant.parse("9999-12-31T23:59:59Z");
 
 	public GetFeedService(PostRepository postRepository, ArticleRepository articleRepository,
@@ -76,7 +78,9 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			SubscribedBlogAuthorsReader subscribedBlogAuthors,
 			com.socialcoisa.rede.corporate.application.port.out.CorporateProfileRepository corporateProfiles,
 			com.socialcoisa.rede.feed.application.port.out.ReaderPreferencesReader readerPreferences,
-			PostNoteService postNotes) {
+			PostNoteService postNotes,
+			com.socialcoisa.rede.feed.application.port.out.PollRepository polls,
+			com.socialcoisa.rede.feed.application.port.out.PostRepostRepository postReposts) {
 		this.postRepository = postRepository;
 		this.articleRepository = articleRepository;
 		this.feedCacheRepository = feedCacheRepository;
@@ -93,6 +97,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		this.corporateProfiles = corporateProfiles;
 		this.readerPreferences = readerPreferences;
 		this.postNotes = postNotes;
+		this.polls = polls;
+		this.postReposts = postReposts;
 	}
 
 	private static final long TRENDING_WINDOW_HOURS = 24;
@@ -107,59 +113,23 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		if (tab == FeedTab.FOR_YOU) {
 			return forYou(query, before, limit);
 		}
+		if (tab == FeedTab.TRENDING) {
+			return trending(query, limit);
+		}
 		List<Post> posts = switch (tab) {
-			case FOR_YOU -> throw new IllegalStateException();
+			case FOR_YOU, TRENDING -> throw new IllegalStateException();
 			case ALL -> {
 				// Filtro por tipo de post (opcional): se o frontend mandar types, filtra.
 				if (query.types() != null && !query.types().isEmpty()) {
-					yield postRepository.findActiveByTypes(query.types(), before, limit);
+					yield postRepository.findActiveByTypes(query.types(), query.resolved(), before, limit);
 				}
 				Collection<String> blocked = readerPreferences.blockedTopics(query.userId().value());
 				yield blocked.isEmpty() ? postRepository.findActiveAll(before, limit)
 					: postRepository.findActiveAllExcludingTopics(blocked, before, limit);
 			}
-			case UNSEEN -> {
-				Collection<String> bloqueados = readerPreferences.blockedTopics(query.userId().value());
-				int janela = Math.max(limit * 5, 60);
-				List<Post> candidatos = bloqueados.isEmpty()
-					? postRepository.findActiveAll(before, janela)
-					: postRepository.findActiveAllExcludingTopics(bloqueados, before, janela);
-				Set<String> comentados = new LinkedHashSet<>(
-					commentRepository.findPostIdsByAuthor(query.userId().value()));
-				Set<String> reagidos = postInteractionRepository
-					.findReactionsByUserAndPostIds(query.userId(),
-						candidatos.stream().map(Post::id).toList())
-					.keySet().stream().map(PostId::value).collect(Collectors.toSet());
-				yield candidatos.stream()
-					.filter(p -> !p.authorId().value().equals(query.userId().value()))
-					.filter(p -> !comentados.contains(p.id().value()))
-					.filter(p -> !reagidos.contains(p.id().value()))
-					.limit(limit)
-					.toList();
-			}
-			case TRENDING -> {
-				Instant since = java.time.Clock.systemUTC().instant()
-					.minus(java.time.Duration.ofHours(TRENDING_WINDOW_HOURS));
-				yield postRepository.findTrending(since, limit);
-			}
-			case INTERACTED -> {
-				// Post IDs onde o usuario reagiu ou comentou, unificados e ordenados.
-				int cap = limit * 3;
-				Set<String> interacted = new LinkedHashSet<>(
-					postInteractionRepository.findReactedPostIdsByUserId(query.userId(), cap));
-				interacted.addAll(commentRepository.findPostIdsByAuthor(query.userId().value()));
-				if (interacted.isEmpty()) {
-					yield List.<Post>of();
-				}
-				List<PostId> postIds = interacted.stream().map(PostId::new).toList();
-				List<Post> found = postRepository.findByIds(postIds).stream()
-					.filter(Post::isActive)
-					.filter(p -> p.createdAt().isBefore(before))
-					.sorted(Comparator.comparing(Post::createdAt).reversed())
-					.limit(limit)
-					.toList();
-				yield found;
-			}
+			case UNSEEN -> postRepository.findActiveUnseen(query.userId(),
+				readerPreferences.blockedTopics(query.userId().value()), before, limit);
+			case INTERACTED -> postRepository.findActiveInteracted(query.userId(), before, limit);
 			// Legado: tabs por tipo que o frontend antigo ainda pode mandar.
 			case PROJECTS -> postRepository.findActiveByType(PostType.PROJECT, before, limit);
 			case NEWS -> postRepository.findActiveByType(PostType.NEWS, before, limit);
@@ -178,6 +148,20 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		return page(enrich(posts, query.userId()), posts, limit);
 	}
 
+	private FeedPage trending(GetFeedQuery query, int limit) {
+		TrendingCursor after = query.trendingCursor();
+		Instant until = after == null ? java.time.Clock.systemUTC().instant() : after.windowEnd();
+		List<Post> fetched = postRepository.findTrending(
+			until.minus(java.time.Duration.ofHours(TRENDING_WINDOW_HOURS)), until, after, limit + 1);
+		List<Post> posts = fetched.stream().limit(limit).toList();
+		String nextCursor = null;
+		if (fetched.size() > limit) {
+			Post last = posts.getLast();
+			nextCursor = new TrendingCursor(until, last.counters().reactions(), last.createdAt(), last.id().value()).encode();
+		}
+		return new FeedPage(enrich(posts, query.userId()), nextCursor);
+	}
+
 	/** Mapeia tabs legados pros novos. */
 	private static FeedTab normalizeTab(FeedTab tab) {
 		if (tab == null) return FeedTab.FOR_YOU;
@@ -193,13 +177,67 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		String authorId = userProfileRepository.findByUsername(query.username())
 			.map(com.socialcoisa.rede.profile.domain.UserProfile::id)
 			.orElse(query.username());
-		List<Post> posts = postRepository.findActiveByAuthor(new UserId(authorId), before, limit);
-		return page(enrich(posts, query.viewerId()), posts, limit);
+		List<Post> authored = postRepository.findActiveByAuthor(new UserId(authorId), before, limit);
+
+		// Reposts puros: ponteiros na tabela post_reposts. Busca os IDs e depois os posts.
+		List<String> repostedIds = postReposts.findPostIdsByUserId(authorId, limit);
+		List<Post> repostedPosts = repostedIds.isEmpty() ? List.of()
+			: postRepository.findByIds(repostedIds.stream().map(PostId::new).toList()).stream()
+				.filter(Post::isActive)
+				.filter(p -> p.createdAt().isBefore(before))
+				.toList();
+
+		// Mescla posts autorais e repostados, sem duplicatas, ordenados por data.
+		Set<String> authoredIds = authored.stream().map(p -> p.id().value()).collect(Collectors.toSet());
+		List<Post> merged = new ArrayList<>(authored);
+		for (Post rp : repostedPosts) {
+			if (!authoredIds.contains(rp.id().value())) {
+				merged.add(rp);
+			}
+		}
+		merged.sort(Comparator.comparing(Post::createdAt).reversed());
+		List<Post> page = merged.stream().limit(limit).toList();
+
+		// Enriquece e marca os reposts com o badge "X republicou".
+		List<PostView> enriched = enrich(page, query.viewerId());
+		UserProfile ownerProfile = userProfileRepository.findById(authorId).orElse(null);
+		if (ownerProfile != null && !repostedIds.isEmpty()) {
+			Set<String> repostedSet = new java.util.HashSet<>(repostedIds);
+			PostView.RepostedByView badge = new PostView.RepostedByView(
+				ownerProfile.displayWithNickname(), ownerProfile.username(), ownerProfile.avatar());
+			enriched = enriched.stream()
+				.map(v -> repostedSet.contains(v.id()) && !v.authorId().equals(authorId)
+					? v.withRepostedBy(badge) : v)
+				.toList();
+		}
+
+		return page(enriched, page, limit);
 	}
 
 	@Override
 	@Transactional(readOnly = true)
 	public PostView getPost(String postId, UserId viewerId) {
+		Post post = visiblePost(postId, viewerId);
+		List<PostView> enriched = enrich(List.of(post), viewerId);
+		// Unico lugar que devolve o corpo da pagina e o texto do artigo (ver PostView.from): e a
+		// leitura de um post so — a listagem nao carrega nem um nem outro.
+		return (enriched.isEmpty() ? PostView.from(post) : enriched.get(0))
+			.withPageHtml(post.pageHtml())
+			.withArticleBody(articleRepository.findBody(post.id()).orElse(null));
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public void requireVisible(String postId, UserId viewerId) {
+		visiblePost(postId, viewerId);
+	}
+
+	/**
+	 * Carrega o post e aplica as regras de visibilidade. Post de canal privado nao e publico: sem
+	 * sessao, ou com sessao de quem nao participa da comunidade, a resposta e 404 — o mesmo que um
+	 * id inexistente, para nao confirmar a existencia do conteudo.
+	 */
+	private Post visiblePost(String postId, UserId viewerId) {
 		Post post = postRepository.findById(new PostId(postId))
 			.filter(Post::isActive)
 			.orElseThrow(() -> new ApiException(404, "POST_NOT_FOUND", "Post nao encontrado."));
@@ -207,12 +245,14 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		if (viewerId != null && blockedUsersReader.hiddenIdsFor(viewerId.value()).contains(post.authorId().value())) {
 			throw new ApiException(404, "POST_NOT_FOUND", "Post nao encontrado.");
 		}
-		List<PostView> enriched = enrich(List.of(post), viewerId);
-		// Unico lugar que devolve o corpo da pagina e o texto do artigo (ver PostView.from): e a
-		// leitura de um post so — a listagem nao carrega nem um nem outro.
-		return (enriched.isEmpty() ? PostView.from(post) : enriched.get(0))
-			.withPageHtml(post.pageHtml())
-			.withArticleBody(articleRepository.findBody(post.id()).orElse(null));
+		if (post.channelId() != null) {
+			PostCommunityReader.CommunityRef community = post.communityId() == null || viewerId == null ? null
+				: postCommunityReader.byIds(List.of(post.communityId()), viewerId.value()).get(post.communityId());
+			if (community == null || !community.joined()) {
+				throw new ApiException(404, "POST_NOT_FOUND", "Post nao encontrado.");
+			}
+		}
+		return post;
 	}
 
 	@Transactional(readOnly = true)
@@ -345,6 +385,15 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		// Reaction pills for the whole page in one query: the card used to fetch them per post.
 		Map<PostId, Map<ReactionType, Long>> reactionSummaries = postInteractionRepository
 			.countReactionsByPostIds(postIds, hidden);
+		// Enquete: alternativas, contagem e o voto de quem le, em lote para a página inteira.
+		Map<String, List<String>> pollOptions = polls.optionsByPostIds(postIdValues);
+		Map<String, Map<Integer, Long>> pollCounts = pollOptions.isEmpty() ? Map.of()
+			: polls.countsByPostIds(pollOptions.keySet());
+		Map<String, Integer> myVotes = currentUserId == null || pollOptions.isEmpty() ? Map.of()
+			: polls.votesByUserAndPostIds(currentUserId, pollOptions.keySet());
+		// Reposts puros do viewer: batch check para marcar currentUserReposted.
+		Set<String> repostedByViewer = currentUserId == null ? Set.of()
+			: postReposts.findPostIdsRepostedByUser(currentUserId.value(), postIdValues);
 		// Citação do repost com opinião: busca os originais da página em UMA consulta.
 		java.util.Set<String> quotedIds = visible.stream()
 			.filter(p -> p.repostWithOpinion() && p.repostOf() != null)
@@ -383,8 +432,22 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				PostView withCommunity = community == null ? withReaction
 					: withReaction.withCommunity(community.id(),
 						new PostView.CommunityView(community.id(), community.name(), community.joined()));
-				return withCommunity.withNotes(notesByPost.getOrDefault(post.id().value(), List.of()),
-					myNotes.get(post.id().value()));
+				PostView withNotesView = withCommunity.withNotes(
+					notesByPost.getOrDefault(post.id().value(), List.of()), myNotes.get(post.id().value()));
+				boolean userReposted = repostedByViewer.contains(post.id().value());
+				PostView withRepostedFlag = userReposted ? withNotesView.withCurrentUserReposted(true) : withNotesView;
+				List<String> options = pollOptions.get(post.id().value());
+				if (options == null) {
+					return withRepostedFlag;
+				}
+				Map<Integer, Long> counts = pollCounts.getOrDefault(post.id().value(), Map.of());
+				List<Long> perOption = new java.util.ArrayList<>(options.size());
+				for (int position = 0; position < options.size(); position++) {
+					perOption.add(counts.getOrDefault(position, 0L));
+				}
+				long total = perOption.stream().mapToLong(Long::longValue).sum();
+				return withRepostedFlag.withPoll(new PollView(options, perOption,
+					myVotes.get(post.id().value()), total));
 			})
 			.toList();
 	}
@@ -460,11 +523,20 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			? postRepository.findActiveByAuthors(authors, before, limit * 3)
 			: postRepository.findActiveByAuthorsExcludingTopics(authors, blocked, before, limit * 3);
 		Set<String> hiddenCommunities = communityIdsWithoutMembership(fetched, query.userId());
-		List<Post> visible = fetched.stream()
+		List<Post> filtered = fetched.stream()
 			.filter(post -> post.communityId() == null || !hiddenCommunities.contains(post.communityId()))
 			.toList();
-		// "O que quero ver" es AUMENTO DE PRIORIDAD, no filtro: los posts de los asuntos
-		// elegidos van primero, el resto sigue cronológico. Nada se elimina del feed.
+		// The page is a DATE WINDOW: the `limit` newest visible posts, and the cursor is the oldest
+		// of them (or of the raw fetch, when the filter left fewer than `limit`). The relevance boost
+		// below only reorders inside the window, so no post is skipped or repeated across pages, and
+		// a later page never holds a post newer than an earlier one (the front's "voce esta em dia"
+		// section relies on that).
+		List<Post> visible = filtered.stream().limit(limit).toList();
+		String nextCursor = filtered.size() > limit
+			? cursorCodec.encode(visible.get(visible.size() - 1).createdAt())
+			: fetched.size() == limit * 3 ? cursorCodec.encode(fetched.get(fetched.size() - 1).createdAt()) : null;
+		// "O que quero ver" is a priority boost, not a filter: inside the page, posts on the chosen
+		// topics come first and the rest stays newest first. Nothing leaves the feed.
 		Collection<String> liked = readerPreferences.likedTopics(query.userId().value());
 		if (!liked.isEmpty() && visible.size() > 1) {
 			// topic() is null for posts without a topic, and liked is immutable: contains(null) throws.
@@ -475,12 +547,59 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 					.thenComparing(Post::createdAt, java.util.Comparator.reverseOrder()))
 				.toList();
 		}
-		visible = visible.stream().limit(limit).toList();
-		// Cursor pela pagina EXIBIDA (nao pela bruta): repetir post ou pular pedaco seria pior do que
-		// uma pagina mais curta. So ha "proxima pagina" quando a busca bruta veio saturada.
-		String nextCursor = fetched.size() == limit * 3 && !visible.isEmpty()
-			? cursorCodec.encode(visible.get(visible.size() - 1).createdAt()) : null;
-		return new FeedPage(enrich(visible, query.userId()), nextCursor);
+		List<PostView> enriched = enrich(visible, query.userId());
+
+		// Reposts puros dos amigos: uma consulta em batch (todos os amigos de uma vez).
+		// Filtros do "Para você" valem: comunidade sem participacao, topico bloqueado e bloqueio.
+		Set<String> alreadyInFeed = visible.stream().map(p -> p.id().value()).collect(Collectors.toSet());
+		Set<String> hidden = blockedUsersReader.hiddenIdsFor(query.userId().value());
+		List<String> friendIdList = authors.stream().map(UserId::value)
+			.filter(id -> !id.equals(query.userId().value())).toList();
+		// Uma consulta batch: todos os reposts recentes dos amigos.
+		java.util.Map<String, java.util.List<com.socialcoisa.rede.feed.domain.PostRepost>> allReposts =
+			postReposts.findRepostsByUserIds(friendIdList, limit);
+		// Agrupa por post ID, guardando o repost mais recente (determinístico).
+		java.util.Map<String, com.socialcoisa.rede.feed.domain.PostRepost> bestRepost = new java.util.LinkedHashMap<>();
+		for (var entry : allReposts.entrySet()) {
+			for (var repost : entry.getValue()) {
+				if (alreadyInFeed.contains(repost.postId())) continue;
+				if (hidden.contains(repost.userId())) continue;
+				var existing = bestRepost.get(repost.postId());
+				if (existing == null || (repost.createdAt() != null && existing.createdAt() != null
+						&& repost.createdAt().isAfter(existing.createdAt()))) {
+					bestRepost.put(repost.postId(), repost);
+				}
+			}
+		}
+		if (!bestRepost.isEmpty()) {
+			List<Post> repostedPosts = postRepository.findByIds(
+				bestRepost.keySet().stream().map(PostId::new).toList()).stream()
+				.filter(Post::isActive)
+				// Mesmos filtros do "Para você": sem comunidade alheia, sem topico bloqueado.
+				.filter(p -> p.communityId() == null || !hiddenCommunities.contains(p.communityId()))
+				.filter(p -> blocked.isEmpty() || p.topic() == null || !blocked.contains(p.topic()))
+				.toList();
+			List<PostView> repostedViews = enrich(repostedPosts, query.userId());
+			java.util.Map<String, com.socialcoisa.rede.profile.domain.UserProfile> repostProfiles =
+				userProfileRepository.findAllByIds(bestRepost.values().stream()
+					.map(com.socialcoisa.rede.feed.domain.PostRepost::userId).collect(Collectors.toSet()))
+					.stream().collect(Collectors.toMap(
+						com.socialcoisa.rede.profile.domain.UserProfile::id,
+						java.util.function.Function.identity()));
+			enriched = new java.util.ArrayList<>(enriched);
+			for (PostView view : repostedViews) {
+				var repost = bestRepost.get(view.id());
+				if (repost == null) continue;
+				var reposter = repostProfiles.get(repost.userId());
+				if (reposter != null) {
+					enriched.add(view.withRepostedBy(new PostView.RepostedByView(
+						reposter.name(), reposter.username(), reposter.avatar())));
+				}
+			}
+			enriched.sort(java.util.Comparator.comparing(PostView::createdAt).reversed());
+		}
+
+		return new FeedPage(enriched, nextCursor);
 	}
 
 	/** Comunidades da pagina em que o leitor NAO participa (uma consulta em lote, nao uma por post). */

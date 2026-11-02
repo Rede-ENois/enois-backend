@@ -68,9 +68,11 @@ class NotificationOutboxEventHandler implements OutboxEventHandler {
 		if (post.authorId().value().equals(authorId)) return;
 		String actorName = userProfileRepository.findById(authorId)
 			.map(p -> p.name()).orElse("Alguém");
-		notificationService.create(post.authorId().value(), "NEW_REACTION", authorId,
-			"Nova reação", actorName + " reagiu ao seu post.",
-			"/api/feed/posts/" + postId, "Ver");
+		notificationService.createGrouped(post.authorId().value(), "NEW_REACTION", "NEW_REACTION:post:" + postId,
+			authorId, "Nova reação", actorName + " reagiu ao seu post.",
+			count -> othersReacted(actorName, count, "ao seu post"), "/api/feed/posts/" + postId,
+			// Several people: the post opens with the list of who reacted, one by one.
+			"/api/feed/posts/" + postId + "?reacoes=1", "Ver");
 	}
 
 	private void handleCommentReacted(String payload) {
@@ -83,9 +85,17 @@ class NotificationOutboxEventHandler implements OutboxEventHandler {
 		if (comment.authorId().value().equals(authorId)) return;
 		String actorName = userProfileRepository.findById(authorId)
 			.map(p -> p.name()).orElse("Alguém");
-		notificationService.create(comment.authorId().value(), "COMMENT_REACTION", authorId,
-			"Reação no comentário", actorName + " reagiu ao seu comentário.",
-			postId != null ? "/api/feed/posts/" + postId : null, "Ver");
+		notificationService.createGrouped(comment.authorId().value(), "COMMENT_REACTION",
+			"COMMENT_REACTION:comment:" + commentId, authorId, "Reação no comentário",
+			actorName + " reagiu ao seu comentário.", count -> othersReacted(actorName, count, "ao seu comentário"),
+			postId != null ? "/api/feed/posts/" + postId : null, postId != null ? "/api/feed/posts/" + postId : null,
+			"Ver");
+	}
+
+	/** "Ana e mais 1 pessoa reagiram ao seu post." / "Ana e mais 14 pessoas reagiram ao seu post." */
+	static String othersReacted(String actorName, int count, String target) {
+		int others = count - 1;
+		return actorName + " e mais " + others + (others == 1 ? " pessoa" : " pessoas") + " reagiram " + target + ".";
 	}
 
 	private String extractValue(String json, String key) {

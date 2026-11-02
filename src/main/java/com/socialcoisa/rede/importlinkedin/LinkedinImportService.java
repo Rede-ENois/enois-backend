@@ -81,6 +81,12 @@ public class LinkedinImportService {
 			throw new ApiException(400, "FILE_REQUIRED", "Envie o arquivo .zip ou .csv do LinkedIn.");
 		}
 		try {
+			// O multipart aceita centenas de MB; materializar em heap antes de conferir o limite
+			// transformava alguns POSTs em esgotamento de memoria. O tamanho vem do multipart.
+			if (file.getSize() > MAX_ZIP_BYTES) {
+				throw new ApiException(400, "FILE_TOO_LARGE",
+					"O arquivo passa do limite de " + (MAX_ZIP_BYTES / 1024 / 1024) + " MB.");
+			}
 			byte[] bytes = file.getBytes();
 			if (bytes.length > MAX_ZIP_BYTES) {
 				throw new ApiException(400, "FILE_TOO_LARGE",
