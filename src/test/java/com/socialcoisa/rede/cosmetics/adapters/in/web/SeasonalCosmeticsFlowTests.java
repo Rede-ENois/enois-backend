@@ -99,7 +99,7 @@ class SeasonalCosmeticsFlowTests {
 	void catalogListsKindsCollectionsSeasonAndSaleFlags() throws Exception {
 		mockMvc.perform(get("/loja"))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.length()").value(254))
+			.andExpect(jsonPath("$.length()").value(271))
 			.andExpect(jsonPath("$[?(@.id == 'moldura-ambar')].collection").value(org.hamcrest.Matchers.contains(
 				org.hamcrest.Matchers.nullValue())))
 			.andExpect(jsonPath("$[?(@.id == 'moldura-ambar')].available").value(true))
@@ -129,7 +129,12 @@ class SeasonalCosmeticsFlowTests {
 	void collectionsExposeWindowsAvailabilityAndLooks() throws Exception {
 		mockMvc.perform(get("/loja/colecoes"))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.length()").value(11))
+			.andExpect(jsonPath("$.length()").value(12))
+			// Essenciais is permanent: on sale whatever the season.
+			.andExpect(jsonPath("$[?(@.id == 'essenciais')].available").value(true))
+			.andExpect(jsonPath("$[?(@.id == 'essenciais')].looks.length()").value(4))
+			.andExpect(jsonPath("$[?(@.id == 'essenciais')].looks[0].id").value("look-papel"))
+			.andExpect(jsonPath("$[?(@.id == 'essenciais')].looks[0].items[0]").value("tema-papel"))
 			.andExpect(jsonPath("$[?(@.id == 'saci')].name").value("Dia do Saci"))
 			.andExpect(jsonPath("$[?(@.id == 'saci')].available").value(true))
 			.andExpect(jsonPath("$[?(@.id == 'saci')].windows[0].start").value("10-15"))
@@ -181,6 +186,23 @@ class SeasonalCosmeticsFlowTests {
 		assertThatThrownBy(() -> cosmetics.buy(buyer.userId(), "moldura-carapuca"))
 			.hasFieldOrPropertyWithValue("code", "OUT_OF_SEASON");
 		assertThat(cosmetics.equip(buyer.userId(), "tema-saci").cardTheme()).isEqualTo("tema-saci");
+	}
+
+	@Test
+	void permanentLookCanBeBoughtOutsideEverySeason() throws Exception {
+		var buyer = wallet("seasonal_essenciais");
+		clock.set(java.time.Instant.parse("2027-03-15T15:00:00Z"));
+		// March sits outside every seasonal window: only the permanent collection is open.
+		assertThatThrownBy(() -> cosmetics.buy(buyer.userId(), "tema-saci"))
+			.hasFieldOrPropertyWithValue("code", "OUT_OF_SEASON");
+		var purchase = cosmetics.buyLook(buyer.userId(), "look-papel");
+		assertThat(purchase.id()).isEqualTo("look-papel");
+		assertThat(purchase.bought()).containsExactly("tema-papel", "moldura-ambar", "nome-papel", "placa-papel",
+			"emblema-papel");
+		// 13 faíscas of pieces at 75% = 9.75, rounded to 10.
+		assertThat(purchase.priceMf()).isEqualTo(10_000);
+		assertThat(cosmetics.ownedItemIds(buyer.userId())).contains("tema-papel", "moldura-ambar", "nome-papel",
+			"placa-papel", "emblema-papel");
 	}
 
 	@Test

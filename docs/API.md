@@ -791,7 +791,7 @@ A resposta será cacheadada e reutilizada se a mesma chave for reenviada.
 | Method | Route | Description | Authentication |
 |---|---|---|---|
 | GET | `/api/loja?order=oldest\|newest` | Native catalog (default `oldest`) | No; with a session, adds `owned` and `equipped` |
-| GET | `/api/loja/colecoes` | Seasonal collections, sale windows and ready-made looks | No |
+| GET | `/api/loja/colecoes` | Collections (seasonal and permanent), sale windows and ready-made looks | No |
 | POST | `/api/loja/{itemId}/comprar` | Buy one item | Yes |
 | POST | `/api/loja/looks/{lookId}/comprar` | Buy the missing pieces of a look and wear it | Yes |
 | POST | `/api/loja/{itemId}/equipar` / `.../desequipar` | Equip / unequip an owned item (`none` unequips the frame) | Yes |
@@ -808,6 +808,9 @@ are for sale); a broken file stops the boot. Each item has `id`, `kind` (`FRAME`
 
 - `releaseOrder` is the positive, unique order of entry in the catalog. The 26 original frames
   keep 1 to 26, have `collection: null` and are always on sale; the seasonal items follow.
+- `essenciais` is the permanent collection: its window covers the whole year (`01-01` to `12-31`),
+  so its items and its four ready-made looks (`look-papel`, `look-noite-limpa`, `look-jardim`,
+  `look-fim-de-tarde`) stay on sale every day. Its looks reuse the original frames.
 - `GARDEN` items (`garden-cerrado`, `garden-mata-atlantica`, `garden-caatinga`, `garden-pampa`)
   style the profile garden. They have `collection: null`, so they are always on sale; the equipped
   one is `gardenStyle` on the profile (`users.garden_style`), and none equipped is the default garden.
