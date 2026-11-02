@@ -699,7 +699,7 @@ Contrato completo, regras e códigos de erro em [`STUDY_PAIRS.md`](STUDY_PAIRS.m
 
 | Método | Rota | Descrição | Autenticação |
 |---|---|---|---|
-| GET | `/api/conversations` | Listar conversas (`?context=SOCIAL\|PROFESSIONAL`, see SOCIAL_PROFESSIONAL_CONTEXTS.md) | Sim |
+| GET | `/api/conversations` | Listar conversas (`?context=SOCIAL\|PROFESSIONAL`, see SOCIAL_PROFESSIONAL_CONTEXTS.md); `lastMessageFrom` is the account id of whoever sent the preview | Sim |
 | POST | `/api/conversations` | Criar conversa | Sim |
 | GET | `/api/conversations/search` | Buscar conversas | Sim |
 | GET | `/api/conversations/{conversationId}` | Detalhes da conversa | Sim |
