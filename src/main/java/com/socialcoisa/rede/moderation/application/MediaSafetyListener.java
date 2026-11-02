@@ -45,20 +45,35 @@ class MediaSafetyListener {
 		if (!mediaSafety.enabled()) {
 			return;
 		}
-		executor.execute(() -> {
-			try {
-				var post = posts.findById(new PostId(event.postId())).orElse(null);
-				if (post == null || post.mediaIds().isEmpty()) {
-					return;
+		try {
+			executor.execute(() -> {
+				try {
+					var post = posts.findById(new PostId(event.postId())).orElse(null);
+					if (post == null || post.mediaIds().isEmpty()) {
+						return;
+					}
+					for (String mediaId : post.mediaIds()) {
+						try {
+							mediaSafety.check(mediaId);
+						}
+						catch (RuntimeException failure) {
+							// Uma mídia com problema não impede as demais nem afeta o post já publicado.
+							LOG.warn("media_safety_falhou post={} media={} motivo={}", event.postId(), mediaId,
+								failure.getClass().getSimpleName());
+						}
+					}
 				}
-				for (String mediaId : post.mediaIds()) {
-					mediaSafety.check(mediaId);
+				catch (RuntimeException failure) {
+					// A varredura periódica cobre falhas de leitura após a publicação.
+					LOG.warn("media_safety_falhou post={} motivo={}", event.postId(),
+						failure.getClass().getSimpleName());
 				}
-			}
-			catch (RuntimeException failure) {
-				// Melhor esforço: o post já está no ar e a varredura periódica cobre o caso.
-				LOG.warn("media_safety_falhou post={}: {}", event.postId(), failure.getMessage());
-			}
-		});
+			});
+		}
+		catch (RuntimeException failure) {
+			// Até uma fila indisponível não pode transformar uma publicação confirmada em erro HTTP.
+			LOG.warn("media_safety_agendamento_falhou post={} motivo={}", event.postId(),
+				failure.getClass().getSimpleName());
+		}
 	}
 }
