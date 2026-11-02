@@ -708,6 +708,13 @@ Contrato completo, regras e códigos de erro em [`STUDY_PAIRS.md`](STUDY_PAIRS.m
 | POST | `/api/conversations/{conversationId}/read` | Marcar como lida | Sim |
 | POST | `/api/conversations/{conversationId}/messages/{messageId}/reactions` | Reagir a mensagem | Sim |
 | GET | `/api/conversations/{conversationId}/messages/{messageId}/reactions` | Reações da mensagem | Sim |
+| GET | `/api/conversations/stream` | Stream SSE (`text/event-stream`) da caixa de entrada: evento `conversation` com `{"conversationId"}` a cada mensagem nova, leitura ou reação; comentário `ping` a cada 25s | Sim (cookie) |
+
+O stream só avisa **qual** conversa mudou; o conteúdo (cifrado ou não) é buscado pelas rotas acima,
+com a autorização de sempre. O aviso sai depois do commit, então o refetch já enxerga a mudança. Até
+5 streams por usuário (abas/aparelhos); o sexto fecha o mais antigo. Sem sessão a resposta é o status
+puro (401), sem corpo. O registro de streams vive na memória da instância: correto enquanto a
+produção roda um backend só; uma segunda instância exige difusão entre instâncias antes de escalar.
 
 ---
 

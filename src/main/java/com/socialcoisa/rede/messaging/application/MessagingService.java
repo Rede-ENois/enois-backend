@@ -34,6 +34,7 @@ public class MessagingService {
 	private final com.socialcoisa.rede.shared.blocks.BlockedUsersReader blockedUsers;
 	private final com.socialcoisa.rede.corporate.application.CorporateProfileService corporateProfiles;
 	private final com.socialcoisa.rede.coin.application.CoinService coins;
+	private final org.springframework.context.ApplicationEventPublisher events;
 
 	public MessagingService(MessagingRepository repository, NotificationService notificationService, Clock clock,
 			UserRateLimiter userRateLimiter, BehavioralTimingGuard behavioralTimingGuard,
@@ -42,8 +43,10 @@ public class MessagingService {
 			com.socialcoisa.rede.network.application.port.out.ConnectionRepository connections,
 			com.socialcoisa.rede.shared.blocks.BlockedUsersReader blockedUsers,
 			com.socialcoisa.rede.corporate.application.CorporateProfileService corporateProfiles,
-			com.socialcoisa.rede.coin.application.CoinService coins) {
+			com.socialcoisa.rede.coin.application.CoinService coins,
+			org.springframework.context.ApplicationEventPublisher events) {
 		this.coins = coins;
+		this.events = events;
 		this.repository = repository;
 		this.notificationService = notificationService;
 		this.clock = clock;
@@ -255,6 +258,7 @@ public class MessagingService {
 				"Nova mensagem", preview,
 				"/api/conversations/" + conversationId, "Responder");
 		}
+		publishChange(conversationId, participants);
 		coins.recordPresence(senderId);
 		return message;
 	}
@@ -309,8 +313,15 @@ public class MessagingService {
 				"Nova mensagem", "Mensagem cifrada",
 				"/api/conversations/" + conversationId, "Responder");
 		}
+		publishChange(conversationId, participants);
 		coins.recordPresence(senderId);
 		return message;
+	}
+
+	/** Tells every participant's open message streams to refetch this conversation, after commit. */
+	private void publishChange(String conversationId, List<ConversationParticipant> participants) {
+		events.publishEvent(new ConversationChanged(conversationId,
+			participants.stream().map(ConversationParticipant::userId).toList()));
 	}
 
 	/**
@@ -378,6 +389,8 @@ public class MessagingService {
 			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
 		}
 		repository.markRead(conversationId, userId, clock.instant());
+		// Read receipts: the other side sees "visto" without waiting for the next refetch.
+		publishChange(conversationId, repository.findParticipantsByConversation(conversationId));
 	}
 
 	public List<Conversation> listConversations(String userId, java.time.Instant before, ConversationContext context,
@@ -480,6 +493,8 @@ public class MessagingService {
 		boolean added = repository.addMessageReaction(id, messageId, userId, type, clock.instant());
 		if (added) {
 			coins.recordPresence(userId);
+			repository.findMessageById(messageId).ifPresent(message -> publishChange(message.conversationId(),
+				repository.findParticipantsByConversation(message.conversationId())));
 		}
 		return added;
 	}
