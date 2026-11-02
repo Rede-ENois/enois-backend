@@ -88,7 +88,7 @@ class CommunityOnPostTests {
 	@Test
 	void postOutsideCommunityHasNoCommunity() throws Exception {
 		var author = auth.authenticate("user_comm_plain");
-		String payload = objectMapper.writeValueAsString(Map.of(
+		String payload = objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 			"type", "INSIGHT",
 			"content", "Post solto no feed, sem comunidade.",
 			"tags", List.of(),

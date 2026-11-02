@@ -293,7 +293,7 @@ class ModeratorAppointmentAndSanctionTests {
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", idempotencyKey)
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "teste de sanção " + idempotencyKey,
 					"tags", List.of(), "mediaIds", List.of()))))
 			.andReturn().getResponse().getStatus();

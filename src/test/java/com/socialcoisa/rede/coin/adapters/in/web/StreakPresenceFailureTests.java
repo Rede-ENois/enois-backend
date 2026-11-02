@@ -43,7 +43,7 @@ class StreakPresenceFailureTests {
 				.header("X-Session-Token", user.token())
 				.header("Idempotency-Key", "streak-fail-post")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "Post que precisa sair mesmo assim.", "tags", List.of(),
 					"mediaIds", List.of()))))
 			.andExpect(status().isCreated());

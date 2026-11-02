@@ -121,7 +121,7 @@ class BulkBanAndSuspiciousTests {
 					.header("X-Session-Token", author.token())
 					.header("Idempotency-Key", "bulk-posts-pub-1")
 					.contentType(MediaType.APPLICATION_JSON)
-					.content(objectMapper.writeValueAsString(Map.of(
+					.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 						"type", "INSIGHT", "content", "Post que será removido em lote.", "tags", List.of(),
 						"mediaIds", List.of()))))
 				.andExpect(status().isCreated())

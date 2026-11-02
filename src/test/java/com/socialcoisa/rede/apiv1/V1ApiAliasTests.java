@@ -87,7 +87,7 @@ class V1ApiAliasTests {
 	@Test
 	void escritaComSessaoRespondeIgualNaVersao() throws Exception {
 		TestAuthHelper.AuthSession session = auth.authenticate("v1-alias-escrita");
-		String payload = objectMapper.writeValueAsString(Map.of("type", "INSIGHT", "content", "Post do alias v1."));
+		String payload = objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA", "type", "INSIGHT", "content", "Post do alias v1."));
 
 		MvcResult semVersao = mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", session.token())

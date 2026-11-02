@@ -195,7 +195,7 @@ class CosmeticsFlowTests {
 			.andExpect(jsonPath("$[?(@.id == '" + frame + "')].equipped").value(true));
 		MvcResult published = mockMvc.perform(post("/feed/posts")
 			.header("X-Session-Token", buyer.token()).header("Idempotency-Key", "frame-post")
-			.contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(Map.of(
+			.contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 				"type", "INSIGHT", "content", "Uma publicacao com moldura", "tags", List.of(), "mediaIds", List.of()))))
                         .andExpect(status().isCreated()).andExpect(jsonPath("$.authorAvatarFrame").value(frame)).andReturn();
 		String postId = objectMapper.readTree(published.getResponse().getContentAsString()).get("id").asText();

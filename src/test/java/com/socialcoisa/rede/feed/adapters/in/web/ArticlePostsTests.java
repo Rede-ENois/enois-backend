@@ -57,7 +57,7 @@ class ArticlePostsTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "article-1")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "ARTICLE", "content", "Um artigo de verdade", "articleBody", body))))
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "ARTICLE", "content", "Um artigo de verdade", "articleBody", body))))
 			.andExpect(status().isCreated())
 			.andExpect(jsonPath("$.type").value("ARTICLE"))
 			.andExpect(jsonPath("$.content").value("Um artigo de verdade"))
@@ -87,7 +87,7 @@ class ArticlePostsTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "article-limit")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "ARTICLE", "content", "Titulo", "articleBody", "a".repeat(10_001)))))
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "ARTICLE", "content", "Titulo", "articleBody", "a".repeat(10_001)))))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("ARTICLE_BODY_TOO_LONG"));
 	}
@@ -100,7 +100,7 @@ class ArticlePostsTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "article-nobody")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "ARTICLE", "content", "Titulo sem corpo"))))
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "ARTICLE", "content", "Titulo sem corpo"))))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("INVALID_ARTICLE_BODY"));
 	}
@@ -113,7 +113,7 @@ class ArticlePostsTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "article-ignored")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "INSIGHT", "content", "Post comum", "articleBody", "texto que nao deve ser guardado"))))
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "INSIGHT", "content", "Post comum", "articleBody", "texto que nao deve ser guardado"))))
 			.andExpect(status().isCreated())
 			.andReturn();
 
@@ -153,7 +153,7 @@ class ArticlePostsTests {
 					.header("X-Session-Token", author.token())
 					.header("Idempotency-Key", "type-" + type)
 					.contentType(MediaType.APPLICATION_JSON)
-					.content(json(Map.of("type", type, "content", "Publicacao do tipo " + type))))
+					.content(json(Map.of("topic", "TECNOLOGIA", "type", type, "content", "Publicacao do tipo " + type))))
 				.andExpect(status().isCreated())
 				.andExpect(jsonPath("$.type").value(type));
 		}
@@ -165,7 +165,7 @@ class ArticlePostsTests {
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", key)
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "ARTICLE", "content", title, "articleBody", body))))
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "ARTICLE", "content", title, "articleBody", body))))
 			.andExpect(status().isCreated())
 			.andReturn();
 		return objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asText();

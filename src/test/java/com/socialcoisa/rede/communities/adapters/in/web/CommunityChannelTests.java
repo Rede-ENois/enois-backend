@@ -176,7 +176,7 @@ class CommunityChannelTests {
 				.header("X-Session-Token", member.token())
 				.header("Idempotency-Key", "chan-no-community")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "Sem comunidade.", "channelId", channelId))))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("CHANNEL_REQUIRES_COMMUNITY"));

@@ -59,7 +59,7 @@ class InlineMediaTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "inline-ok-" + System.nanoTime())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(java.util.Map.of(
+				.content(objectMapper.writeValueAsString(java.util.Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT",
 					"content", "Explicando a ideia:\n\n{{media:media_autor_1}}\n\nE o resultado.",
 					"tags", List.of(), "mediaIds", List.of("media_autor_1")))))
@@ -76,7 +76,7 @@ class InlineMediaTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "inline-foreign-" + System.nanoTime())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(java.util.Map.of(
+				.content(objectMapper.writeValueAsString(java.util.Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "Usando a mídia dos outros: {{media:media_alheia}}",
 					"tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isBadRequest())
@@ -98,7 +98,7 @@ class InlineMediaTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "inline-post-" + System.nanoTime())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(java.util.Map.of(
+				.content(objectMapper.writeValueAsString(java.util.Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "post para comentário", "tags", List.of(),
 					"mediaIds", List.of()))))
 			.andExpect(status().isCreated())
@@ -131,7 +131,7 @@ class InlineMediaTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "inline-none-" + System.nanoTime())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(java.util.Map.of(
+				.content(objectMapper.writeValueAsString(java.util.Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "post comum sem marcador", "tags", List.of(),
 					"mediaIds", List.of()))))
 			.andExpect(status().isCreated());

@@ -34,7 +34,7 @@ class PostPublishingPolicyTests {
 		mockMvc.perform(post("/feed/posts")
 				.header("Idempotency-Key", "policy-anon")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "tentativa automatica", "tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isUnauthorized());
 	}
@@ -46,7 +46,7 @@ class PostPublishingPolicyTests {
 				.header("X-Integration-Token", "fake-service-token")
 				.header("Idempotency-Key", "policy-service")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "tentativa via integracao", "tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isUnauthorized());
 	}

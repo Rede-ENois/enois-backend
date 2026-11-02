@@ -100,7 +100,7 @@ class PostContentLimitsTests {
 			.header("X-Session-Token", author.token())
 			.header("Idempotency-Key", key)
 			.contentType(MediaType.APPLICATION_JSON)
-			.content(objectMapper.writeValueAsString(Map.of("type", type.name(), "content", content, "tags", List.of(),
+			.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA", "type", type.name(), "content", content, "tags", List.of(),
 				"mediaIds", List.of()))));
 	}
 }
