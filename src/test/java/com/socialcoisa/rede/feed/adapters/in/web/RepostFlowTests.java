@@ -127,7 +127,7 @@ class RepostFlowTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "repost-moment-" + System.nanoTime())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "MOMENT", "content", "Um momento que some em 24h.", "tags", List.of(),
 					"mediaIds", List.of()))))
 			.andExpect(status().isCreated())
@@ -146,7 +146,7 @@ class RepostFlowTests {
 		var reposter = auth.authenticate("repost_article_user_" + System.nanoTime());
 		var other = auth.authenticate("repost_article_other_" + System.nanoTime());
 
-		String articleId = publishType(author, Map.of("type", "ARTICLE", "content", "Titulo do artigo citado",
+		String articleId = publishType(author, Map.of("topic", "TECNOLOGIA", "type", "ARTICLE", "content", "Titulo do artigo citado",
 			"articleBody", "Corpo que mora em outra tabela.", "tags", List.of(), "mediaIds", List.of()));
 
 		// Repost sem opinião é ponteiro para o original, então o artigo circula com o corpo inteiro.
@@ -182,9 +182,9 @@ class RepostFlowTests {
 		var author = auth.authenticate("repost_page_" + System.nanoTime());
 		var reposter = auth.authenticate("repost_page_user_" + System.nanoTime());
 
-		String pageId = publishType(author, Map.of("type", "PAGE", "content", "",
+		String pageId = publishType(author, Map.of("topic", "TECNOLOGIA", "type", "PAGE", "content", "",
 			"pageHtml", "<p>Mini pagina</p>", "tags", List.of(), "mediaIds", List.of()));
-		String blogId = publishType(author, Map.of("type", "BLOG", "content", "Post do blog citado",
+		String blogId = publishType(author, Map.of("topic", "TECNOLOGIA", "type", "BLOG", "content", "Post do blog citado",
 			"tags", List.of(), "mediaIds", List.of()));
 
 		for (String id : List.of(pageId, blogId)) {
@@ -227,7 +227,7 @@ class RepostFlowTests {
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "repost-pub-" + System.nanoTime())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", content, "tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isCreated())
 			.andReturn();

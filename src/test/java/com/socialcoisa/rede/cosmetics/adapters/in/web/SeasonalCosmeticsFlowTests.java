@@ -550,7 +550,7 @@ class SeasonalCosmeticsFlowTests {
 		MvcResult published = mockMvc.perform(post("/feed/posts").header("X-Session-Token", user.token())
 				.header("Idempotency-Key", "seasonal-name-style-post")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "INSIGHT", "content", "Post com nome do Saci", "tags", List.of(),
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "INSIGHT", "content", "Post com nome do Saci", "tags", List.of(),
 					"mediaIds", List.of()))))
 			.andExpect(status().isCreated())
 			.andExpect(jsonPath("$.authorStyle.theme").value("nome-saci"))

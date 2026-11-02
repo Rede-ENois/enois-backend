@@ -81,6 +81,8 @@ class PersonalizationSurfaceAuditTests {
 			"tags", List.of(), "mediaIds", List.of()));
 		if (communityId != null) {
 			body.put("communityId", communityId);
+		} else {
+			body.put("topic", "TECNOLOGIA");
 		}
 		MvcResult result = mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", author.token())

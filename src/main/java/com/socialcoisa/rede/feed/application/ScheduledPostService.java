@@ -88,7 +88,7 @@ public class ScheduledPostService {
 				"Você já tem " + MAX_PENDING + " posts agendados. Cancele algum para criar outro.");
 		}
 		// Mesma regra da publicação direta, aplicada cedo para o erro aparecer no agendamento:
-		// post de comunidade herda o assunto dela; post avulso declara um da taxonomia (ou nenhum).
+		// post de comunidade herda o assunto dela; post avulso declara um da taxonomia (obrigatório).
 		String topic;
 		if (StringUtils.hasText(command.communityId()) && StringUtils.hasText(command.topic())) {
 			throw throwInvalid("TOPIC_FROM_COMMUNITY", "Post em comunidade herda o assunto dela.");
@@ -99,8 +99,10 @@ public class ScheduledPostService {
 				throw throwInvalid("INVALID_TOPIC", "Assunto inválido: escolha um da lista.");
 			}
 			topic = declared;
-		} else {
+		} else if (StringUtils.hasText(command.communityId())) {
 			topic = null;
+		} else {
+			throw throwInvalid("TOPIC_REQUIRED", "Escolha o assunto da publicação.");
 		}
 		ScheduledPost post = new ScheduledPost(newId(), userId, type, command.content(), command.pageHtml(),
 			command.articleBody(), command.tags() == null ? List.of() : command.tags(),

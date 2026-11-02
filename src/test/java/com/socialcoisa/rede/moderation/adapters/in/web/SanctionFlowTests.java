@@ -73,7 +73,7 @@ class SanctionFlowTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "sflow-blocked-post")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "nao deveria passar", "tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isForbidden())
 			.andExpect(jsonPath("$.code").value("ACCOUNT_RESTRICTED"));
@@ -115,7 +115,7 @@ class SanctionFlowTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "sflow-freed-post")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "livre de novo", "tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isCreated());
 	}
@@ -187,7 +187,7 @@ class SanctionFlowTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "sflow-amb-free")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "ainda publicando", "tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isCreated());
 	}
@@ -230,7 +230,7 @@ class SanctionFlowTests {
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", idem)
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", content, "tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isCreated()).andReturn();
 		return objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asText();

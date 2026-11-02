@@ -130,7 +130,7 @@ class MediaControllerTests {
 			.andReturn();
 
 		String mediaId = objectMapper.readTree(mediaResult.getResponse().getContentAsString()).get("id").asText();
-		String postPayload = objectMapper.writeValueAsString(Map.of(
+		String postPayload = objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 			"type", "INSIGHT",
 			"content", "Midia precisa acompanhar o ciclo de vida do post.",
 			"tags", List.of("Media"),

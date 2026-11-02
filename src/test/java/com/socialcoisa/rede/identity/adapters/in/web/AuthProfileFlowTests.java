@@ -120,7 +120,7 @@ class AuthProfileFlowTests {
 			.andExpect(jsonPath("$.headline").value("Product Manager em plataformas de comunidade"))
 			.andExpect(jsonPath("$.skills[0]").value("Produto"));
 
-		String postPayload = objectMapper.writeValueAsString(Map.of(
+		String postPayload = objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 			"type", "INSIGHT",
 			"content", "Sessao real integrada ao feed.",
 			"tags", List.of("Backend"),

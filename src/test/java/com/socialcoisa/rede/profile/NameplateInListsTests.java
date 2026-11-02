@@ -121,7 +121,7 @@ class NameplateInListsTests {
 	void feedCommentsCarryThePlateAndLoadAuthorsInOneQuery() throws Exception {
 		var author = withPlate("plate-feed-author");
 		String postId = send(author, "/feed/posts", "plate-post",
-			Map.of("type", "INSIGHT", "content", "Post do feed com plaquinha"));
+			Map.of("topic", "TECNOLOGIA", "type", "INSIGHT", "content", "Post do feed com plaquinha"));
 		send(author, "/feed/posts/" + postId + "/comments", "plate-comment", Map.of("content", "Comentario"));
 		var other = auth.authenticate("plate-feed-other");
 		send(other, "/feed/posts/" + postId + "/comments", "plate-comment-2", Map.of("content", "Outro comentario"));

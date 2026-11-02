@@ -318,7 +318,7 @@ class QuestionAcceptedAnswerTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "qaa-" + UUID.randomUUID())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("type", type, "content", content, "tags", List.of(),
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA", "type", type, "content", content, "tags", List.of(),
 					"mediaIds", List.of()))))
 			.andExpect(status().isCreated())
 			.andReturn().getResponse().getContentAsString();

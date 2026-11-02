@@ -67,7 +67,7 @@ class CorporateIdentitySecurityTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "corpsec-" + System.nanoTime())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "BUSINESS", "content", content, "tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isCreated())
 			.andReturn();
@@ -99,7 +99,7 @@ class CorporateIdentitySecurityTests {
 				.header("X-Session-Token", stranger.token())
 				.header("Idempotency-Key", "corpsec-stranger-publish")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "BUSINESS", "content", "tentativa de publicar como outro",
 					"tags", List.of(), "mediaIds", List.of(),
 					"username", "corpsec.owner", "authorUsername", "corpsec.owner"))))
@@ -165,7 +165,7 @@ class CorporateIdentitySecurityTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "corpsec-draft-publish")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "BUSINESS", "content", "rascunho publicando", "tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isForbidden())
 			.andExpect(jsonPath("$.code").value("NO_ACTIVE_CORPORATE_PROFILE"));
@@ -184,7 +184,7 @@ class CorporateIdentitySecurityTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "corpsec-pos-desativar")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "BUSINESS", "content", "tentativa pos-desativar", "tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isForbidden())
 			.andExpect(jsonPath("$.code").value("NO_ACTIVE_CORPORATE_PROFILE"));

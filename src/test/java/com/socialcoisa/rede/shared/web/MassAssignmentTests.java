@@ -55,7 +55,7 @@ class MassAssignmentTests {
 
 	/** Campos que o SERVIDOR controla: se vierem no corpo, ninguem pode escolher o autor. */
 	private Map<String, Object> corpoComAutorForjado(String conteudo) {
-		Map<String, Object> corpo = new HashMap<>(Map.of(
+		Map<String, Object> corpo = new HashMap<>(Map.of("topic", "TECNOLOGIA",
 			"type", "INSIGHT",
 			"content", conteudo,
 			"tags", List.of(),
@@ -107,7 +107,7 @@ class MassAssignmentTests {
 				.header("X-Session-Token", terceiro.token())
 				.header("Idempotency-Key", "mass-post-base-" + System.nanoTime())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "Post para receber comentario.", "tags", List.of(),
 					"mediaIds", List.of()))))
 			.andExpect(status().isCreated())
@@ -140,7 +140,7 @@ class MassAssignmentTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "mass-post-react-" + System.nanoTime())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "Post para reagir.", "tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isCreated())
 			.andReturn();
@@ -179,7 +179,7 @@ class MassAssignmentTests {
 		String mediaId = objectMapper.readTree(upload.getResponse().getContentAsString()).get("id").asText();
 
 		// O outro tenta publicar com a midia alheia (e ainda tenta forjar o dono no corpo).
-		Map<String, Object> corpo = new HashMap<>(Map.of(
+		Map<String, Object> corpo = new HashMap<>(Map.of("topic", "TECNOLOGIA",
 			"type", "INSIGHT", "content", "Post com midia de terceiro.", "tags", List.of(),
 			"mediaIds", List.of(mediaId)));
 		corpo.put("ownerId", donoDaMidia.userId());

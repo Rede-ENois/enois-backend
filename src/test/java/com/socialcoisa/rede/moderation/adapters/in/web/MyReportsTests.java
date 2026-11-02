@@ -32,7 +32,7 @@ class MyReportsTests {
 	private ObjectMapper objectMapper;
 
 	private String postAndReport(TestAuthHelper.AuthSession reporter, String content) throws Exception {
-		Map<String, Object> post = Map.of("type", "INSIGHT", "content", content, "tags", List.of(),
+		Map<String, Object> post = Map.of("topic", "TECNOLOGIA", "type", "INSIGHT", "content", content, "tags", List.of(),
 			"mediaIds", List.of());
 		MvcResult created = mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", reporter.token())

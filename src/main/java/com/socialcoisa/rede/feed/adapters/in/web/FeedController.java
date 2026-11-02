@@ -159,6 +159,13 @@ class FeedController {
 			return ResponseEntity.status(201)
 				.body("{\"id\":\"post_" + java.util.UUID.randomUUID().toString().replace("-", "") + "\"}");
 		}
+		// A standalone post a person writes must declare its topic: without one it misses the feed
+		// filters and "O que quero ver". Checked here, at the person's entry point, because system
+		// publishers (blog, games, legacy scheduled posts) go through the same use case without one.
+		if (!StringUtils.hasText(request.communityId())
+				&& !StringUtils.hasText(request.topic())) {
+			throw new ApiException(400, "TOPIC_REQUIRED", "Escolha o assunto da publicação.");
+		}
 		// Imagem no meio do texto: todo marcador {{media:id}} precisa referenciar anexo do autor.
 		com.socialcoisa.rede.shared.text.InlineMedia.validate(request.content(), request.mediaIds());
 		String hash = idempotency.hash(request);

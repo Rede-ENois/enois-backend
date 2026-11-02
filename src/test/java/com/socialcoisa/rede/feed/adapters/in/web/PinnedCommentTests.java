@@ -108,7 +108,7 @@ class PinnedCommentTests {
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "pin-post-" + System.nanoTime())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "Post para testar comentário fixado.",
 					"tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isCreated())
