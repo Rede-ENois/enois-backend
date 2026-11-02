@@ -309,6 +309,7 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId, @RequestBody CommentOnPostRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		if (honeypots.triggered(user.id().value(), request.website(), "comment")) {
 			return ResponseEntity.status(201)
 				.body("{\"id\":\"comment_" + java.util.UUID.randomUUID().toString().replace("-", "") + "\"}");
@@ -333,8 +334,15 @@ class FeedController {
 			@RequestParam(defaultValue = "20") int limit,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		// Sessao opcional: ela so serve para esconder comentarios de quem o visitante bloqueou.
+		UserId viewer = viewerId(sessionToken);
+		requireVisible(postId, viewer);
 		return getCommentsUseCase.getComments(new GetCommentsQuery(new PostId(postId), cursorCodec.decode(cursor), limit,
-			Optional.ofNullable(viewerId(sessionToken))));
+			Optional.ofNullable(viewer)));
+	}
+
+	/** Guarda comum: a rota so age sobre um post que quem pediu pode ver (canal privado incluso). */
+	private void requireVisible(String postId, UserId viewer) {
+		getPostUseCase.requireVisible(postId, viewer);
 	}
 
 	private com.socialcoisa.rede.feed.domain.UserId viewerId(String sessionToken) {
@@ -351,6 +359,7 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId, @RequestBody ReactToPostRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		Map<String, Object> payload = new LinkedHashMap<>();
 		payload.put("postId", postId);
 		payload.put("type", request.type() == null ? "" : request.type());
@@ -365,6 +374,7 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		Map<String, String> payload = Map.of("postId", postId);
 		String hash = idempotency.hash(payload);
 		return idempotency.execute(user.id(), "DELETE", "/api/feed/posts/{postId}/reactions", idempotencyKey, hash,
@@ -377,6 +387,7 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		Map<String, String> payload = Map.of("postId", postId);
 		String hash = idempotency.hash(payload);
 		return idempotency.execute(user.id(), "POST", "/api/feed/posts/{postId}/saves", idempotencyKey, hash,
@@ -388,6 +399,7 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		Map<String, String> payload = Map.of("postId", postId);
 		String hash = idempotency.hash(payload);
 		return idempotency.execute(user.id(), "DELETE", "/api/feed/posts/{postId}/saves", idempotencyKey, hash,
@@ -400,6 +412,7 @@ class FeedController {
 	Object listReactions(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String postId) {
 		UserId viewer = viewerIdOrNull(sessionToken);
+		requireVisible(postId, viewer);
 		Set<String> hidden = blockedUsersReader.hiddenIdsFor(viewer == null ? null : viewer.value());
 		var reactions = postInteractionRepository.findReactionsByPostId(new PostId(postId), null, 50).stream()
 			.filter(reaction -> !hidden.contains(reaction.userId()))
@@ -415,6 +428,7 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId, @PathVariable String commentId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		String hash = idempotency.hash(Map.of("commentId", commentId, "postId", postId));
 		return idempotency.execute(user.id(), "DELETE", "/api/feed/posts/{postId}/comments/{commentId}", idempotencyKey, hash,
 			() -> {
@@ -430,6 +444,7 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId, @PathVariable String commentId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		String hash = idempotency.hash(Map.of("commentId", commentId, "postId", postId, "pinned", true));
 		return idempotency.execute(user.id(), "POST", "/api/feed/posts/{postId}/comments/{commentId}/pin",
 			idempotencyKey, hash, () -> {
@@ -444,6 +459,7 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId, @PathVariable String commentId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		String hash = idempotency.hash(Map.of("commentId", commentId, "postId", postId, "pinned", false));
 		return idempotency.execute(user.id(), "DELETE", "/api/feed/posts/{postId}/comments/{commentId}/pin",
 			idempotencyKey, hash, () -> {
@@ -485,6 +501,7 @@ class FeedController {
 			@PathVariable String postId, @PathVariable String commentId,
 			@RequestBody EditCommentRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		Map<String, Object> payload = new LinkedHashMap<>();
 		payload.put("commentId", commentId);
 		payload.put("content", request.content() == null ? "" : request.content());
@@ -517,6 +534,7 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId, @PathVariable String commentId, @RequestBody ReactToPostRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		Map<String, Object> payload = new LinkedHashMap<>();
 		payload.put("commentId", commentId);
 		payload.put("type", request.type() == null ? "" : request.type());
@@ -541,6 +559,7 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId, @PathVariable String commentId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		String hash = idempotency.hash(Map.of("commentId", commentId));
 		return idempotency.execute(user.id(), "DELETE", "/api/feed/posts/{postId}/comments/{commentId}/reactions",
 			idempotencyKey, hash, () -> new CommandResponse(200, Map.of(
@@ -555,6 +574,7 @@ class FeedController {
 	ResponseEntity<String> votePoll(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String postId, @RequestBody PollVoteRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		var poll = votePoll.vote(new PostId(postId), user.id(), request.option() == null ? -1 : request.option());
 		return ResponseEntity.ok().body(pollJson.writeValueAsString(poll));
 	}
@@ -565,6 +585,7 @@ class FeedController {
 		// Mesma leitura pública das reações do post: o post compartilhado abre sem sessão, e quem
 		// está bloqueado não aparece na lista nem na contagem.
 		UserId viewer = viewerIdOrNull(sessionToken);
+		requireVisible(postId, viewer);
 		Set<String> hidden = blockedUsersReader.hiddenIdsFor(viewer == null ? null : viewer.value());
 		var reactions = postInteractionRepository.findReactionsByCommentId(commentId).stream()
 			.filter(reaction -> !hidden.contains(reaction.userId()))
@@ -585,6 +606,7 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		Map<String, String> payload = Map.of("postId", postId);
 		String hash = idempotency.hash(payload);
 		return idempotency.execute(user.id(), "POST", "/api/feed/posts/{postId}/shares", idempotencyKey, hash,
@@ -600,6 +622,7 @@ class FeedController {
 	PostView repost(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String postId, @RequestBody(required = false) RepostRequest body) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		String opinion = body == null ? null : body.opinion();
 		Post result = repostPostService.repost(user.id().value(), postId, opinion);
 		return PostView.from(result);
@@ -610,6 +633,7 @@ class FeedController {
 	ResponseEntity<String> undoRepost(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String postId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		repostPostService.undoRepost(user.id().value(), postId);
 		return ResponseEntity.ok("{\"status\":\"REMOVED\"}");
 	}
