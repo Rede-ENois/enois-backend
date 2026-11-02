@@ -55,6 +55,29 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ===========================================================================
+  # Full test suite on every PR. The image build skips tests and the schema check only boots the
+  # context, so before this job a broken test could reach qa unnoticed. PR only: never gates a deploy.
+  # ===========================================================================
+  test-suite:
+    name: 🧪 Testes (PR)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: ☕ JDK 25
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: 🧪 mvnw test
+        run: ./mvnw -B -q test
+
+  # ===========================================================================
   # Schema check: boot against MariaDB 11.4 (the production engine) built only from the Flyway
   # migrations (ddl-auto=validate). A migration MariaDB refuses, or an entity without its
   # migration, fails here, not in prod. The SPRING_* env vars override the test profile's H2.
