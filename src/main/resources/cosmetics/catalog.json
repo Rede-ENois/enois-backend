@@ -10,7 +10,8 @@
 {"id": "namorados", "name": "Dia dos Namorados", "windows": [{"start": "06-01", "end": "06-13"}]},
 {"id": "flor", "name": "Brasil em flor", "windows": [{"start": "09-01", "end": "09-30"}]},
 {"id": "dev", "name": "Dia do Programador e Orgulho Nerd", "windows": [{"start": "05-20", "end": "05-31"}, {"start": "09-06", "end": "09-20"}]},
-{"id": "criancas", "name": "Dia das Crianças", "windows": [{"start": "10-01", "end": "10-14"}]}
+{"id": "criancas", "name": "Dia das Crianças", "windows": [{"start": "10-01", "end": "10-14"}]},
+{"id": "essenciais", "name": "Essenciais", "windows": [{"start": "01-01", "end": "12-31"}]}
 ],
 "items": [
 {"releaseOrder": 1, "id": "moldura-ambar", "kind": "FRAME", "collection": null, "name": "Moldura Âmbar", "description": "Um anel quente de fim de tarde.", "priceMf": 2000, "purchasable": true, "cssRing": "ring-2 ring-amber-400"},
@@ -266,7 +267,24 @@
 {"releaseOrder": 251, "id": "garden-cerrado", "kind": "GARDEN", "collection": null, "name": "Jardim do Cerrado", "description": "Ipê, pequizeiro e capim dourado no seu perfil.", "priceMf": 4000, "purchasable": true},
 {"releaseOrder": 252, "id": "garden-mata-atlantica", "kind": "GARDEN", "collection": null, "name": "Jardim da Mata Atlântica", "description": "Bromélias, samambaias e um verde bem fechado.", "priceMf": 4000, "purchasable": true},
 {"releaseOrder": 253, "id": "garden-caatinga", "kind": "GARDEN", "collection": null, "name": "Jardim da Caatinga", "description": "Mandacaru, xique-xique e flores que resistem ao sol.", "priceMf": 4000, "purchasable": true},
-{"releaseOrder": 254, "id": "garden-pampa", "kind": "GARDEN", "collection": null, "name": "Jardim do Pampa", "description": "Campo aberto, macela e o vento do sul.", "priceMf": 4000, "purchasable": true}
+{"releaseOrder": 254, "id": "garden-pampa", "kind": "GARDEN", "collection": null, "name": "Jardim do Pampa", "description": "Campo aberto, macela e o vento do sul.", "priceMf": 4000, "purchasable": true},
+{"releaseOrder": 255, "id": "tema-papel", "kind": "CARD_THEME", "collection": "essenciais", "name": "Papel", "description": "Creme de papel com tinta quente.", "priceMf": 4000, "purchasable": true},
+{"releaseOrder": 256, "id": "tema-noite-limpa", "kind": "CARD_THEME", "collection": "essenciais", "name": "Noite limpa", "description": "Azul-escuro de céu sem nuvem.", "priceMf": 4000, "purchasable": true},
+{"releaseOrder": 257, "id": "tema-jardim", "kind": "CARD_THEME", "collection": "essenciais", "name": "Jardim de casa", "description": "Verde claro de quintal regado.", "priceMf": 4000, "purchasable": true},
+{"releaseOrder": 258, "id": "nome-papel", "kind": "NAME_STYLE", "collection": "essenciais", "name": "Papel", "description": "Tinta séria que termina em âmbar.", "priceMf": 3000, "purchasable": true},
+{"releaseOrder": 259, "id": "nome-noite-limpa", "kind": "NAME_STYLE", "collection": "essenciais", "name": "Noite limpa", "description": "Índigo que clareia até o cinza da lua.", "priceMf": 3000, "purchasable": true},
+{"releaseOrder": 260, "id": "nome-jardim", "kind": "NAME_STYLE", "collection": "essenciais", "name": "Jardim", "description": "Verde de folha nova.", "priceMf": 3000, "purchasable": true},
+{"releaseOrder": 261, "id": "placa-papel", "kind": "NAMEPLATE", "collection": "essenciais", "name": "Papel", "description": "Creme com folha e estrela.", "priceMf": 3000, "purchasable": true},
+{"releaseOrder": 262, "id": "placa-noite-limpa", "kind": "NAMEPLATE", "collection": "essenciais", "name": "Noite limpa", "description": "Azul-escuro com estrela e lua.", "priceMf": 3000, "purchasable": true},
+{"releaseOrder": 263, "id": "placa-jardim", "kind": "NAMEPLATE", "collection": "essenciais", "name": "Jardim", "description": "Verde de mata com duas folhas.", "priceMf": 3000, "purchasable": true},
+{"releaseOrder": 264, "id": "banner-noite-limpa", "kind": "BANNER", "collection": "essenciais", "name": "Céu limpo", "description": "Estrelas e uma lua sobre o telhado.", "priceMf": 4000, "purchasable": true},
+{"releaseOrder": 265, "id": "banner-jardim", "kind": "BANNER", "collection": "essenciais", "name": "Quintal", "description": "Sol, folhas e um pedaço de céu.", "priceMf": 4000, "purchasable": true},
+{"releaseOrder": 266, "id": "efeito-estrelas", "kind": "PROFILE_EFFECT", "collection": "essenciais", "name": "Estrelas", "description": "Estrelas caem devagar pelo banner.", "priceMf": 4000, "purchasable": true, "icon": "estrela"},
+{"releaseOrder": 267, "id": "efeito-folhas-calmas", "kind": "PROFILE_EFFECT", "collection": "essenciais", "name": "Folhas calmas", "description": "Folhas descem sem pressa.", "priceMf": 4000, "purchasable": true, "icon": "folha"},
+{"releaseOrder": 268, "id": "emblema-papel", "kind": "BADGE", "collection": "essenciais", "name": "Carta", "description": "Uma carta dobrada.", "priceMf": 1000, "purchasable": true, "icon": "carta"},
+{"releaseOrder": 269, "id": "emblema-estrela-calma", "kind": "BADGE", "collection": "essenciais", "name": "Estrela calma", "description": "Brilha de leve.", "priceMf": 1000, "purchasable": true, "icon": "estrela"},
+{"releaseOrder": 270, "id": "emblema-lua-calma", "kind": "BADGE", "collection": "essenciais", "name": "Lua calma", "description": "Para quem dorme cedo.", "priceMf": 1000, "purchasable": true, "icon": "lua"},
+{"releaseOrder": 271, "id": "emblema-folha-calma", "kind": "BADGE", "collection": "essenciais", "name": "Folha calma", "description": "Do quintal.", "priceMf": 1000, "purchasable": true, "icon": "folha"}
 ],
 "looks": [
 {"collection": "halloween", "title": "Noite azul", "items": ["tema-halloween", "moldura-asas-morcego", "nome-assombrado", "efeito-morcegos", "banner-halloween", "placa-teia", "emblema-morcego", "emblema-abobora", "emblema-fantasma", "emblema-aranha", "emblema-lua"], "statusIcon": "morcego", "statusText": "Deploy na sexta 13, vai dar bom"},
@@ -309,6 +327,10 @@
 {"id": "look-tubarao", "collection": "criancas", "title": "Tubarão", "items": ["tema-criancas", "moldura-bolhas", "nome-giz", "efeito-bolhas", "banner-pipas", "placa-caderno", "emblema-bolha", "emblema-gude"], "statusIcon": "bolha", "statusText": "O tubarão macio aprova"},
 {"id": "look-aero-glass", "collection": "criancas", "title": "Aero Glass", "items": ["tema-criancas", "moldura-gude", "nome-giz", "efeito-bolhas", "banner-pipas", "placa-caderno", "emblema-figurinha", "emblema-pipa"], "statusIcon": "figurinha", "statusText": "Transparência com brilho de 2007"},
 {"id": "look-frutiger-aero", "collection": "criancas", "title": "Frutiger Aero", "items": ["tema-criancas", "moldura-pipas", "nome-giz", "efeito-pipas", "banner-pipas", "placa-caderno", "emblema-pipa", "emblema-piao"], "statusIcon": "pipa", "statusText": "Grama verde e bolhas no céu"},
-{"id": "look-neumorfismo", "collection": "criancas", "title": "Neumorfismo", "items": ["tema-criancas", "moldura-bolhas", "nome-giz", "efeito-pipas", "banner-pipas", "placa-caderno", "emblema-gude", "emblema-pirulito"], "statusIcon": "pirulito", "statusText": "Tudo macio, tudo apertável"}
+{"id": "look-neumorfismo", "collection": "criancas", "title": "Neumorfismo", "items": ["tema-criancas", "moldura-bolhas", "nome-giz", "efeito-pipas", "banner-pipas", "placa-caderno", "emblema-gude", "emblema-pirulito"], "statusIcon": "pirulito", "statusText": "Tudo macio, tudo apertável"},
+{"id": "look-papel", "collection": "essenciais", "title": "Papel", "items": ["tema-papel", "moldura-ambar", "nome-papel", "placa-papel", "emblema-papel"], "statusIcon": "carta", "statusText": "Tinta, papel e uma xícara"},
+{"id": "look-noite-limpa", "collection": "essenciais", "title": "Noite limpa", "items": ["tema-noite-limpa", "moldura-violeta", "nome-noite-limpa", "placa-noite-limpa", "banner-noite-limpa", "efeito-estrelas", "emblema-estrela-calma", "emblema-lua-calma"], "statusIcon": "estrela", "statusText": "Céu limpo na hora de dormir"},
+{"id": "look-jardim", "collection": "essenciais", "title": "Jardim de casa", "items": ["tema-jardim", "moldura-trepadeira", "nome-jardim", "placa-jardim", "banner-jardim", "efeito-folhas-calmas", "emblema-folha-calma"], "statusIcon": "folha", "statusText": "Regando as plantas do quintal"},
+{"id": "look-fim-de-tarde", "collection": "essenciais", "title": "Fim de tarde", "items": ["tema-papel", "moldura-solar", "nome-papel", "placa-papel", "efeito-estrelas", "emblema-estrela-calma"], "statusIcon": "sol", "statusText": "Fim de tarde, luz de âmbar"}
 ]
 }
