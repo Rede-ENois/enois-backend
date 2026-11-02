@@ -72,7 +72,14 @@ class PushNotificationListenerTests {
 				.header("Idempotency-Key", "push-conn-1"))
 			.andExpect(status().isAccepted());
 
-		verify(pushSender, timeout(5000)).sendToUser(eq(receiver.userId()), any(PushSender.PushMessage.class));
+		var pushed = org.mockito.ArgumentCaptor.forClass(PushSender.PushMessage.class);
+		verify(pushSender, timeout(5000)).sendToUser(eq(receiver.userId()), pushed.capture());
+		// The push carries the id of the notification it mirrors, so opening it can mark it read.
+		var created = notifications.findByUserId(receiver.userId(), null, null, 20).stream()
+			.filter(notification -> requester.userId().equals(notification.actorId()))
+			.findFirst()
+			.orElseThrow();
+		assertThat(pushed.getValue().notificationId()).isEqualTo(created.id());
 	}
 
 	@Test
@@ -105,7 +112,7 @@ class PushNotificationListenerTests {
 			.andExpect(status().isOk());
 
 		transactions.executeWithoutResult(status -> events.publishEvent(
-			new NotificationCreatedEvent(receiver.userId(), "SANCAO", "Sancao", "Corpo", "/notificacoes")));
+			new NotificationCreatedEvent("notification_dnd_always", receiver.userId(), "SANCAO", "Sancao", "Corpo", "/notificacoes")));
 
 		verify(pushSender, timeout(5000)).sendToUser(eq(receiver.userId()), any(PushSender.PushMessage.class));
 	}

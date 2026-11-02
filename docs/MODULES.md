@@ -961,6 +961,7 @@ inválidas são rejeitadas integralmente. A operação exige autenticação e ch
 | `markRead(String notificationId, String userId)` | Marca como lida |
 | `markAllRead(String userId)` | Marca todas como lidas |
 | `list(String userId, int limit)` | Lista notificações |
+| `unreadSummary(userId, context, hiddenActorIds)` | Unread count per area (`NotificationModule`), from one `GROUP BY kind, actor` query over the unread rows; hidden actors are dropped |
 
 ### NotificationOutboxEventHandler
 
@@ -985,9 +986,10 @@ inválidas são rejeitadas integralmente. A operação exige autenticação e ch
 
 | Função | Rota |
 |---|---|
-| `notifications(...)` | GET /api/notifications |
+| `notifications(...)` | GET /api/notifications (each item has `module` from `NotificationModule.of(kind)`) |
 | `read(...)` | POST /api/notifications/{notificationId}/read |
 | `readAll(...)` | POST /api/notifications/read-all |
+| `unreadSummary(...)` | GET /api/notifications/unread-summary |
 
 ### Preferências e resumo semanal
 
@@ -996,6 +998,7 @@ Detalhes em [`DIGEST.md`](DIGEST.md).
 | Classe | Descrição |
 |---|---|
 | `NotificationCategory` | Mapa único kind → categoria de push (`ALWAYS` para segurança/moderação/sanção) |
+| `NotificationModule` | Single kind → interface area mapping (menu indicators); case-insensitive, unknown kinds are `OTHER` |
 | `NotificationPreferenceService` | Lê/grava as preferências (`notification_preferences`); `allowsPush(userId, kind)` |
 | `NotificationPreferenceController` | GET/PUT /api/me/notification-preferences, GET /api/notifications/digest/unsubscribe |
 | `WeeklyDigestService` | Agendamento, conteúdo, envio único por semana ISO e token de descadastro |
@@ -1327,6 +1330,16 @@ Notificações push no navegador (VAPID): inscrição, cancelamento e configura�
 `PushNotificationListener` espelha cada notificação criada como push depois do commit, **exceto** quando
 a pessoa desligou a categoria do kind (`NotificationPreferenceService.allowsPush`). A notificação
 in-app é criada do mesmo jeito; segurança, moderação e sanção sempre viram push. Ver [`DIGEST.md`](DIGEST.md).
+
+Push payload (JSON, encrypted per device by `WebPushSender`):
+
+```json
+{ "title": "...", "body": "...", "url": "/feed", "notificationId": "notification_..." }
+```
+
+`url` falls back to `/feed` when the notification has no `href`. `notificationId` is the notification
+the push mirrors (for a grouped one, the group row; only the first of a group pushes), so the app can
+call `POST /api/notifications/{notificationId}/read` when the push is opened.
 
 ## 27. Gifs (Busca de GIFs)
 

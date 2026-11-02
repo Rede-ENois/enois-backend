@@ -24,6 +24,7 @@ import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationServic
 import com.socialcoisa.rede.notifications.application.NotificationService;
 import com.socialcoisa.rede.notifications.domain.Notification;
 import com.socialcoisa.rede.notifications.domain.NotificationContext;
+import com.socialcoisa.rede.notifications.domain.NotificationModule;
 import com.socialcoisa.rede.profile.application.NameStyleView;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
@@ -83,7 +84,8 @@ class NotificationContractController {
 				CorporateProfile pro = notificationContext == NotificationContext.PROFESSIONAL
 					? professionals.get(n.actorId()) : null;
 				UserProfile p = profiles.get(n.actorId());
-				return new NotificationView(n.id(), n.kind(), notificationContext.name(), n.actorId(),
+				return new NotificationView(n.id(), n.kind(), notificationContext.name(),
+					NotificationModule.of(n.kind()).name(), n.actorId(),
 					pro != null ? pro.name() : p != null ? p.name() : null,
 					pro != null ? pro.username() : p != null ? p.username() : null,
 					pro != null ? (pro.avatar() == null ? "" : pro.avatar()) : p != null ? p.avatar() : null,
@@ -97,6 +99,19 @@ class NotificationContractController {
 		String nextCursor = page.size() == limit
 			? cursorCodec.encode(page.get(page.size() - 1).createdAt()) : null;
 		return new PageResponse<>(items, nextCursor);
+	}
+
+	/**
+	 * Unread notifications per interface area, for the menu indicators: same session, context
+	 * filter and blocked-actor rule as the list. An area clears when its notifications are read.
+	 */
+	@GetMapping("/unread-summary")
+	NotificationService.UnreadSummary unreadSummary(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(required = false) String context) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return notificationService.unreadSummary(user.id().value(), parseContext(context),
+			blockedUsersReader.hiddenIdsFor(user.id().value()));
 	}
 
 	private Map<String, CorporateProfile> professionalActors(List<Notification> notifications) {
@@ -130,7 +145,8 @@ class NotificationContractController {
 			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
 	}
 
-	record NotificationView(String id, String kind, String context, String actorId, String actorName,
+	/** {@code module} is the interface area of the kind ({@link NotificationModule}). */
+	record NotificationView(String id, String kind, String context, String module, String actorId, String actorName,
 			String actorUsername, String actorAvatar, String actorIdentity, NameStyleView actorStyle, String title,
 			String body, String createdAt, boolean read, String href, String ctaLabel, int actorCount) {
 	}
