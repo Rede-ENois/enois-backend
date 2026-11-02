@@ -240,7 +240,8 @@ public class MessagingService {
 			return duplicate.get();
 		}
 		String id = "message_" + UUID.randomUUID().toString().replace("-", "");
-		Message message = Message.create(id, conversationId, senderId, corpo, midias, mediaSpoiler, replyToId, clock.instant());
+		Message message = Message.create(id, conversationId, senderId, corpo, midias, mediaSpoiler, replyToId,
+			nextMessageInstant(conversationId));
 		repository.saveMessage(message);
 		// Ao enviar, a conversa fica lida para QUEM ENVIOU (PR #15) — antes o contador continuava
 		// aceso mesmo com a conversa aberta.
@@ -302,7 +303,7 @@ public class MessagingService {
 			: mediaIds.stream().filter(v -> v != null && !v.isBlank()).map(String::trim).distinct().toList();
 		String id = "message_" + UUID.randomUUID().toString().replace("-", "");
 		Message message = Message.createE2e(id, conversationId, senderId, ciphertext, iv, midias, mediaSpoiler,
-			replyToId, clock.instant());
+			replyToId, nextMessageInstant(conversationId));
 		repository.saveMessage(message);
 		repository.markRead(conversationId, senderId, clock.instant());
 		repository.saveConversation(conversation.touch(clock.instant()));
@@ -485,6 +486,25 @@ public class MessagingService {
 		return repository.findLastMessage(conversationId)
 			.map(m -> new LastMessagePreview(m.text(), m.e2e(), m.iv(), m.createdAt()))
 			.orElse(LastMessagePreview.EMPTY);
+	}
+
+	/**
+	 * Instante da nova mensagem, nunca antes da última da conversa.
+	 *
+	 * `messages.created_at` guarda segundos: duas mensagens enviadas no mesmo segundo empatavam, e
+	 * a consulta da última mensagem (a prévia do chat) devolvia uma delas por acaso — a prévia
+	 * repetia o conteúdo antigo. Avançar 1s quando o segundo empata tira o empate da jogada.
+	 */
+	private java.time.Instant nextMessageInstant(String conversationId) {
+		java.time.Instant now = clock.instant();
+		return repository.findLastMessage(conversationId)
+			.map(Message::createdAt)
+			.map(last -> {
+				var nowSecond = now.truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+				var lastSecond = last.truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+				return nowSecond.isAfter(lastSecond) ? now : lastSecond.plusSeconds(1);
+			})
+			.orElse(now);
 	}
 
 	@Transactional
