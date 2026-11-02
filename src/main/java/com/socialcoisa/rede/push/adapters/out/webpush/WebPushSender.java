@@ -202,10 +202,15 @@ class WebPushSender implements PushSender {
 		}
 	}
 
-	private String toJson(PushMessage message) {
+	String toJson(PushMessage message) {
 		try {
-			return objectMapper.writeValueAsString(Map.of("title", message.title(), "body", message.body(), "url",
-				message.url() == null ? "/feed" : message.url()));
+			Map<String, String> payload = new java.util.LinkedHashMap<>();
+			payload.put("title", message.title());
+			payload.put("body", message.body());
+			payload.put("url", message.url() == null ? "/feed" : message.url());
+			// Lets the service worker mark the notification read when the push is opened.
+			payload.put("notificationId", message.notificationId());
+			return objectMapper.writeValueAsString(payload);
 		}
 		catch (Exception exception) {
 			// A mensagem de um erro de serializacao pode trazer o corpo da notificacao, que tem

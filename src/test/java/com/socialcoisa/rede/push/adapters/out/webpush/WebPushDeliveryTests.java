@@ -86,7 +86,7 @@ class WebPushDeliveryTests {
 		repository.save(subscription("push_a", "user_1", "/ok"));
 		repository.save(subscription("push_b", "user_1", "/rejected"));
 
-		sender.sendToUser("user_1", new PushMessage("Titulo", "Corpo", "/par-de-estudo"));
+		sender.sendToUser("user_1", new PushMessage("notification_1", "Titulo", "Corpo", "/par-de-estudo"));
 
 		assertThat(received).containsExactlyInAnyOrder("/ok", "/rejected");
 		// 413 é recusa pontual do serviço (payload, limite): a inscrição continua valendo.
@@ -97,7 +97,7 @@ class WebPushDeliveryTests {
 	void removesTheDeviceWhenThePushServiceSaysItIsGone() {
 		repository.save(subscription("push_gone", "user_1", "/gone"));
 
-		sender.sendToUser("user_1", new PushMessage("Titulo", "Corpo", "/feed"));
+		sender.sendToUser("user_1", new PushMessage("notification_1", "Titulo", "Corpo", "/feed"));
 
 		assertThat(received).containsExactly("/gone");
 		assertThat(removed).containsExactly("push_gone");
@@ -106,7 +106,7 @@ class WebPushDeliveryTests {
 
 	@Test
 	void doesNothingWithoutDevices() {
-		sender.sendToUser("user_sem_dispositivo", new PushMessage("Titulo", "Corpo", "/feed"));
+		sender.sendToUser("user_sem_dispositivo", new PushMessage("notification_1", "Titulo", "Corpo", "/feed"));
 		assertThat(received).isEmpty();
 	}
 
@@ -118,7 +118,7 @@ class WebPushDeliveryTests {
 			"mailto:teste@enois.test", com.socialcoisa.rede.push.application.PushService::allowedPushEndpoint);
 		repository.save(subscription("push_local", "user_1", "/ok"));
 
-		strict.sendToUser("user_1", new PushMessage("Titulo", "Corpo", "/feed"));
+		strict.sendToUser("user_1", new PushMessage("notification_1", "Titulo", "Corpo", "/feed"));
 
 		assertThat(received).isEmpty();
 	}
@@ -130,9 +130,21 @@ class WebPushDeliveryTests {
 			repository.save(subscription("push_cap_" + index, "user_1", "/ok"));
 		}
 
-		sender.sendToUser("user_1", new PushMessage("Titulo", "Corpo", "/feed"));
+		sender.sendToUser("user_1", new PushMessage("notification_1", "Titulo", "Corpo", "/feed"));
 
 		assertThat(received).hasSize(com.socialcoisa.rede.push.application.PushService.MAX_SUBSCRIPTIONS_PER_USER);
+	}
+
+	@Test
+	void payloadCarriesTheNotificationIdNextToTitleBodyAndUrl() {
+		String json = sender.toJson(new PushMessage("notification_abc", "Titulo", "Corpo", null));
+
+		assertThat(new ObjectMapper().readTree(json).properties())
+			.extracting(Map.Entry::getKey, entry -> entry.getValue().asString())
+			.containsExactly(org.assertj.core.groups.Tuple.tuple("title", "Titulo"),
+				org.assertj.core.groups.Tuple.tuple("body", "Corpo"),
+				org.assertj.core.groups.Tuple.tuple("url", "/feed"),
+				org.assertj.core.groups.Tuple.tuple("notificationId", "notification_abc"));
 	}
 
 	@Test
@@ -140,7 +152,7 @@ class WebPushDeliveryTests {
 		WebPushSender off = new WebPushSender(repository, new ObjectMapper(), "", "", "mailto:teste@enois.test");
 		assertThat(off.isEnabled()).isFalse();
 		assertThat(off.publicKey()).isNull();
-		off.sendToUser("user_1", new PushMessage("Titulo", "Corpo", "/feed"));
+		off.sendToUser("user_1", new PushMessage("notification_1", "Titulo", "Corpo", "/feed"));
 		assertThat(received).isEmpty();
 	}
 

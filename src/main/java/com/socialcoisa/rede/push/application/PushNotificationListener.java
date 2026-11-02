@@ -56,7 +56,7 @@ class PushNotificationListener {
 					return;
 				}
 				pushSender.sendToUser(event.userId(),
-					new PushSender.PushMessage(event.title(), event.body(), event.href()));
+					new PushSender.PushMessage(event.notificationId(), event.title(), event.body(), event.href()));
 			});
 		}
 		catch (RejectedExecutionException queueFull) {

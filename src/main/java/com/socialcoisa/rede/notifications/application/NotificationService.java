@@ -34,7 +34,7 @@ public class NotificationService {
 			clock.instant());
 		repository.save(notification);
 		// Quem entrega fora do app (push no celular) escuta este evento depois do commit.
-		events.publishEvent(new NotificationCreatedEvent(userId, kind, title, body, href));
+		events.publishEvent(new NotificationCreatedEvent(id, userId, kind, title, body, href));
 		return notification;
 	}
 
@@ -87,7 +87,7 @@ public class NotificationService {
 		Notification notification = Notification.grouped(id, userId, kind, groupKey, actorId, title, body, href,
 			ctaLabel, clock.instant());
 		repository.save(notification);
-		events.publishEvent(new NotificationCreatedEvent(userId, kind, title, body, href));
+		events.publishEvent(new NotificationCreatedEvent(id, userId, kind, title, body, href));
 		return notification;
 	}
 

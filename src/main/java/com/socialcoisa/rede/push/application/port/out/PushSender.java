@@ -14,6 +14,7 @@ public interface PushSender {
 	/** Chave publica VAPID que o navegador usa para se inscrever (nula se o push estiver desligado). */
 	String publicKey();
 
-	record PushMessage(String title, String body, String url) {
+	/** {@code notificationId} lets the app mark the notification read when the push is opened. */
+	record PushMessage(String notificationId, String title, String body, String url) {
 	}
 }

@@ -1331,6 +1331,16 @@ in-app é criada do mesmo jeito; segurança, moderação e sanção sempre viram
 ## 27. Gifs (Busca de GIFs)
 
 Busca de GIFs para os comentários, via provedores externos (Tenor/Giphy).
+Push payload (JSON, encrypted per device by `WebPushSender`):
+
+```json
+{ "title": "...", "body": "...", "url": "/feed", "notificationId": "notification_..." }
+```
+
+`url` falls back to `/feed` when the notification has no `href`. `notificationId` is the notification
+the push mirrors (for a grouped one, the group row; only the first of a group pushes), so the app can
+call `POST /api/notifications/{notificationId}/read` when the push is opened.
+
 
 | Rota | Descrição |
 |---|---|
