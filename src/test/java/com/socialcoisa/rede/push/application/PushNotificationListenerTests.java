@@ -80,7 +80,7 @@ class PushNotificationListenerTests {
 				.header("Idempotency-Key", "push-dnd-conn-" + System.nanoTime()))
 			.andExpect(status().isAccepted());
 		verify(pushSender, never()).sendToUser(eq(receiver.userId()), any(PushSender.PushMessage.class));
-		assertThat(notifications.findByUserId(receiver.userId(), null, 20))
+		assertThat(notifications.findByUserId(receiver.userId(), null, null, 20))
 			.anyMatch(notification -> requester.userId().equals(notification.actorId()));
 	}
 }
