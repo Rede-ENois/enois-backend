@@ -264,6 +264,17 @@ the first `FOR_YOU` page means the person never marked anything (do not draw the
 the liked-topics boost only reorders posts inside the page. So no post is skipped or repeated, and a later
 page never holds a post newer than an earlier one.
 
+`UNSEEN` excludes the reader's own posts and posts they reacted to or commented on **before** the
+page limit. `INTERACTED` likewise selects posts with a reaction or comment before applying the limit;
+its history is not capped at three pages. Both keep their existing chronological ISO-8601 cursors.
+
+`TRENDING` orders posts by reaction count, creation time and post ID (all descending). Its opaque
+`nextCursor` carries that ranking position and fixes the 24-hour window from the first request.
+Pass it back unchanged; a null cursor means the query has no next page. Other tabs keep their existing
+cursor format. Malformed or legacy ISO-8601 cursors sent to `TRENDING` return `400 INVALID_CURSOR`;
+restart that tab without a cursor after upgrading. Reactions remain live: a post whose count changes
+between requests can move in the ranking, so this is not a snapshot of reaction counts.
+
 Front contract (`FOR_YOU` only): show the loaded posts with `createdAt` newer than `lastSeenAt` first,
 newest first ("new since your last visit"), then the "Você está em dia" divider, then the remaining posts
 in API order. Draw the divider only when there is at least one new post above it and one older post loaded

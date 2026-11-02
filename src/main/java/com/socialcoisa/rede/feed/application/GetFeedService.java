@@ -113,8 +113,11 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		if (tab == FeedTab.FOR_YOU) {
 			return forYou(query, before, limit);
 		}
+		if (tab == FeedTab.TRENDING) {
+			return trending(query, limit);
+		}
 		List<Post> posts = switch (tab) {
-			case FOR_YOU -> throw new IllegalStateException();
+			case FOR_YOU, TRENDING -> throw new IllegalStateException();
 			case ALL -> {
 				// Filtro por tipo de post (opcional): se o frontend mandar types, filtra.
 				if (query.types() != null && !query.types().isEmpty()) {
@@ -124,48 +127,9 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				yield blocked.isEmpty() ? postRepository.findActiveAll(before, limit)
 					: postRepository.findActiveAllExcludingTopics(blocked, before, limit);
 			}
-			case UNSEEN -> {
-				Collection<String> bloqueados = readerPreferences.blockedTopics(query.userId().value());
-				int janela = Math.max(limit * 5, 60);
-				List<Post> candidatos = bloqueados.isEmpty()
-					? postRepository.findActiveAll(before, janela)
-					: postRepository.findActiveAllExcludingTopics(bloqueados, before, janela);
-				Set<String> comentados = new LinkedHashSet<>(
-					commentRepository.findPostIdsByAuthor(query.userId().value()));
-				Set<String> reagidos = postInteractionRepository
-					.findReactionsByUserAndPostIds(query.userId(),
-						candidatos.stream().map(Post::id).toList())
-					.keySet().stream().map(PostId::value).collect(Collectors.toSet());
-				yield candidatos.stream()
-					.filter(p -> !p.authorId().value().equals(query.userId().value()))
-					.filter(p -> !comentados.contains(p.id().value()))
-					.filter(p -> !reagidos.contains(p.id().value()))
-					.limit(limit)
-					.toList();
-			}
-			case TRENDING -> {
-				Instant since = java.time.Clock.systemUTC().instant()
-					.minus(java.time.Duration.ofHours(TRENDING_WINDOW_HOURS));
-				yield postRepository.findTrending(since, limit);
-			}
-			case INTERACTED -> {
-				// Post IDs onde o usuario reagiu ou comentou, unificados e ordenados.
-				int cap = limit * 3;
-				Set<String> interacted = new LinkedHashSet<>(
-					postInteractionRepository.findReactedPostIdsByUserId(query.userId(), cap));
-				interacted.addAll(commentRepository.findPostIdsByAuthor(query.userId().value()));
-				if (interacted.isEmpty()) {
-					yield List.<Post>of();
-				}
-				List<PostId> postIds = interacted.stream().map(PostId::new).toList();
-				List<Post> found = postRepository.findByIds(postIds).stream()
-					.filter(Post::isActive)
-					.filter(p -> p.createdAt().isBefore(before))
-					.sorted(Comparator.comparing(Post::createdAt).reversed())
-					.limit(limit)
-					.toList();
-				yield found;
-			}
+			case UNSEEN -> postRepository.findActiveUnseen(query.userId(),
+				readerPreferences.blockedTopics(query.userId().value()), before, limit);
+			case INTERACTED -> postRepository.findActiveInteracted(query.userId(), before, limit);
 			// Legado: tabs por tipo que o frontend antigo ainda pode mandar.
 			case PROJECTS -> postRepository.findActiveByType(PostType.PROJECT, before, limit);
 			case NEWS -> postRepository.findActiveByType(PostType.NEWS, before, limit);
@@ -182,6 +146,20 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			}
 		};
 		return page(enrich(posts, query.userId()), posts, limit);
+	}
+
+	private FeedPage trending(GetFeedQuery query, int limit) {
+		TrendingCursor after = query.trendingCursor();
+		Instant until = after == null ? java.time.Clock.systemUTC().instant() : after.windowEnd();
+		List<Post> fetched = postRepository.findTrending(
+			until.minus(java.time.Duration.ofHours(TRENDING_WINDOW_HOURS)), until, after, limit + 1);
+		List<Post> posts = fetched.stream().limit(limit).toList();
+		String nextCursor = null;
+		if (fetched.size() > limit) {
+			Post last = posts.getLast();
+			nextCursor = new TrendingCursor(until, last.counters().reactions(), last.createdAt(), last.id().value()).encode();
+		}
+		return new FeedPage(enrich(posts, query.userId()), nextCursor);
 	}
 
 	/** Mapeia tabs legados pros novos. */

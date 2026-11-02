@@ -21,6 +21,7 @@ import com.socialcoisa.rede.feed.application.FeedPage;
 import com.socialcoisa.rede.feed.application.GetFeedQuery;
 import com.socialcoisa.rede.feed.application.GetFeedService;
 import com.socialcoisa.rede.feed.application.PostView;
+import com.socialcoisa.rede.feed.application.TrendingCursor;
 import com.socialcoisa.rede.feed.domain.Comment;
 import com.socialcoisa.rede.feed.domain.FeedTab;
 import com.socialcoisa.rede.feed.domain.Post;
@@ -100,6 +101,28 @@ class FeedPaginationTests {
 		assertThat(own).containsExactlyElementsOf(expected.stream().map(p -> p.id().value()).toList());
 	}
 
+	@Test
+	void trendingKeepsItsWindowAndExcludesPostsOutsideItsExistingScope() {
+		Instant until = Instant.now().minusSeconds(60);
+		Post eligible = save(0, until.minusSeconds(1));
+		Post afterWindow = save(1, until.plusSeconds(1));
+		Post old = save(2, until.minusSeconds(86_401));
+		Post deleted = newPost(3, until.minusSeconds(2));
+		deleted.delete(until);
+		posts.save(deleted);
+		for (PostType type : List.of(PostType.BLOG, PostType.BUSINESS)) {
+			posts.save(Post.publish(new PostId(prefix + type), reader, type, "Synthetic", null,
+				List.of(), List.of(), null, until.minusSeconds(3)));
+		}
+		Post channel = posts.save(Post.publish(new PostId(prefix + "_channel_post"), reader, PostType.INSIGHT,
+			"Synthetic", null, List.of(), List.of(), null, null, prefix + "_channel", until.minusSeconds(4),
+			com.socialcoisa.rede.feed.domain.AuthorIdentity.SOCIAL));
+		String cursor = new TrendingCursor(until, 1, until, "synthetic_boundary").encode();
+		List<String> ids = readAll(FeedTab.TRENDING, cursor, 20);
+		assertThat(ids).contains(eligible.id().value()).doesNotContain(afterWindow.id().value(), old.id().value(),
+			deleted.id().value(), prefix + PostType.BLOG, prefix + PostType.BUSINESS, channel.id().value());
+	}
+
 	private List<String> readAll(FeedTab tab, String cursor, int limit) {
 		List<String> ids = new ArrayList<>();
 		for (int pageNumber = 0; pageNumber < 10; pageNumber++) {
@@ -117,7 +140,9 @@ class FeedPaginationTests {
 	private FeedPage page(FeedTab tab, String cursor, int limit) {
 		entityManager.flush();
 		entityManager.clear();
-		return feed.getFeed(new GetFeedQuery(reader, Optional.ofNullable(cursor).map(Instant::parse), limit, tab));
+		return feed.getFeed(new GetFeedQuery(reader,
+			tab == FeedTab.TRENDING ? Optional.empty() : Optional.ofNullable(cursor).map(Instant::parse),
+			limit, tab, java.util.Set.of(), null, tab == FeedTab.TRENDING ? TrendingCursor.decode(cursor) : null));
 	}
 
 	private Post newPost(int index, Instant at) {

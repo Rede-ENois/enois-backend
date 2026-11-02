@@ -220,8 +220,19 @@ class LinkedInShareOutboxEventHandlerTests {
 		}
 
 		@Override
-		public List<Post> findTrending(Instant since, int limit) {
+		public List<Post> findTrending(Instant since, Instant until,
+				com.socialcoisa.rede.feed.application.TrendingCursor after, int limit) {
 			return List.of();
+		}
+
+		@Override
+		public List<Post> findActiveUnseen(UserId reader, Collection<String> blockedTopics, Instant before, int limit) {
+			throw new UnsupportedOperationException();
+		}
+
+		@Override
+		public List<Post> findActiveInteracted(UserId reader, Instant before, int limit) {
+			throw new UnsupportedOperationException();
 		}
 
 		@Override

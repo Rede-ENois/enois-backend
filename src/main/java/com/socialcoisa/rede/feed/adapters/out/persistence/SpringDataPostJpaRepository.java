@@ -134,6 +134,27 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 			@Param("excluded") Collection<PostType> excluded, @Param("blocked") Collection<String> blocked,
 			@Param("before") Instant before, Pageable pageable);
 
+	@Query("""
+			SELECT p FROM PostJpaEntity p
+			WHERE p.status = :status AND p.type NOT IN :excluded AND p.channelId IS NULL
+			  AND p.authorId <> :reader AND p.createdAt < :before
+			  AND (p.topic IS NULL OR p.topic NOT IN :blocked)
+			  AND NOT EXISTS (SELECT r.id FROM ReactionJpaEntity r WHERE r.postId = p.id AND r.userId = :reader)
+			  AND NOT EXISTS (SELECT c.id FROM CommentJpaEntity c WHERE c.postId = p.id AND c.authorId = :reader)
+			ORDER BY p.createdAt DESC""")
+	List<PostJpaEntity> findUnseen(@Param("status") PostStatus status,
+			@Param("excluded") Collection<PostType> excluded, @Param("reader") String reader,
+			@Param("blocked") Collection<String> blocked, @Param("before") Instant before, Pageable pageable);
+
+	@Query("""
+			SELECT p FROM PostJpaEntity p
+			WHERE p.status = :status AND p.createdAt < :before
+			  AND (EXISTS (SELECT r.id FROM ReactionJpaEntity r WHERE r.postId = p.id AND r.userId = :reader)
+			    OR EXISTS (SELECT c.id FROM CommentJpaEntity c WHERE c.postId = p.id AND c.authorId = :reader))
+			ORDER BY p.createdAt DESC""")
+	List<PostJpaEntity> findInteracted(@Param("status") PostStatus status, @Param("reader") String reader,
+			@Param("before") Instant before, Pageable pageable);
+
 	/**
 	 * "Para você"/Seguindo com assuntos bloqueados: apenas o que a identidade SOCIAL assinou
 	 * e cujo tópico não está bloqueado (posts sem tópico passam).
@@ -169,10 +190,15 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 	@Query("""
 			SELECT p FROM PostJpaEntity p
 			WHERE p.status = :status AND p.type NOT IN :excluded AND p.channelId IS NULL
-			  AND p.createdAt >= :since
-			ORDER BY p.reactions DESC, p.createdAt DESC""")
+			  AND p.createdAt >= :since AND p.createdAt <= :until
+			  AND (:afterReactions IS NULL OR p.reactions < :afterReactions
+			    OR (p.reactions = :afterReactions AND (p.createdAt < :afterCreatedAt
+			      OR (p.createdAt = :afterCreatedAt AND p.id < :afterId))))
+			ORDER BY p.reactions DESC, p.createdAt DESC, p.id DESC""")
 	List<PostJpaEntity> findTrending(@Param("status") PostStatus status,
-			@Param("excluded") Collection<PostType> excluded, @Param("since") Instant since, Pageable pageable);
+			@Param("excluded") Collection<PostType> excluded, @Param("since") Instant since,
+			@Param("until") Instant until, @Param("afterReactions") Integer afterReactions,
+			@Param("afterCreatedAt") Instant afterCreatedAt, @Param("afterId") String afterId, Pageable pageable);
 
 	/** Feed "Tudo" filtrado por tipos de post; `resolved` (nulo = tanto faz) filtra as dúvidas resolvidas. */
 	@Query("""
