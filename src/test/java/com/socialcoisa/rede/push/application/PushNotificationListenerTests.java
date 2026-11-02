@@ -3,6 +3,7 @@ package com.socialcoisa.rede.push.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -17,9 +18,12 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.MediaType;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.socialcoisa.rede.push.application.port.out.PushSender;
+import com.socialcoisa.rede.notifications.application.NotificationCreatedEvent;
 import com.socialcoisa.rede.notifications.application.port.out.NotificationRepository;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
@@ -44,6 +48,12 @@ class PushNotificationListenerTests {
 
 	@MockitoBean
 	private PushSender pushSender;
+
+	@Autowired
+	private TransactionTemplate transactions;
+
+	@Autowired
+	private ApplicationEventPublisher events;
 
 	private TestAuthHelper auth;
 
@@ -79,8 +89,24 @@ class PushNotificationListenerTests {
 				.header("X-Session-Token", requester.token())
 				.header("Idempotency-Key", "push-dnd-conn-" + System.nanoTime()))
 			.andExpect(status().isAccepted());
-		verify(pushSender, never()).sendToUser(eq(receiver.userId()), any(PushSender.PushMessage.class));
+		// O envio roda num executor: espera a janela antes de afirmar que nao houve push.
+		verify(pushSender, after(1500).never()).sendToUser(eq(receiver.userId()), any(PushSender.PushMessage.class));
 		assertThat(notifications.findByUserId(receiver.userId(), null, null, 20))
 			.anyMatch(notification -> requester.userId().equals(notification.actorId()));
+	}
+
+	@Test
+	void doNotDisturbStillPushesSecurityCategories() throws Exception {
+		var receiver = auth.authenticate("push_dnd_always_" + System.nanoTime());
+		mockMvc.perform(put("/me/presence")
+				.header("X-Session-Token", receiver.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"status\":\"DO_NOT_DISTURB\"}"))
+			.andExpect(status().isOk());
+
+		transactions.executeWithoutResult(status -> events.publishEvent(
+			new NotificationCreatedEvent(receiver.userId(), "SANCAO", "Sancao", "Corpo", "/notificacoes")));
+
+		verify(pushSender, timeout(5000)).sendToUser(eq(receiver.userId()), any(PushSender.PushMessage.class));
 	}
 }

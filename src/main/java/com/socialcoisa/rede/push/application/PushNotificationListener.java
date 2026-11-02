@@ -12,6 +12,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 
 import com.socialcoisa.rede.notifications.application.NotificationCreatedEvent;
 import com.socialcoisa.rede.notifications.application.NotificationPreferenceService;
+import com.socialcoisa.rede.notifications.domain.NotificationCategory;
 import com.socialcoisa.rede.presence.application.PresenceService;
 import com.socialcoisa.rede.push.application.port.out.PushSender;
 
@@ -45,7 +46,10 @@ class PushNotificationListener {
 	void onNotificationCreated(NotificationCreatedEvent event) {
 		try {
 			executor.execute(() -> {
-				if (!presenceService.allowPush(event.userId())) {
+				// "Nao perturbar" cala as categorias configuraveis; seguranca, moderacao e sancao
+				// continuam chegando ao celular (NotificationCategory.ALWAYS).
+				if (NotificationCategory.of(event.kind()) != NotificationCategory.ALWAYS
+						&& !presenceService.allowPush(event.userId())) {
 					return;
 				}
 				if (!preferences.allowsPush(event.userId(), event.kind())) {
