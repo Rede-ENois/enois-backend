@@ -835,8 +835,8 @@ A resposta será cacheadada e reutilizada se a mesma chave for reenviada.
 
 | Method | Route | Description | Authentication |
 |---|---|---|---|
-| GET | `/api/loja?order=oldest\|newest` | Native catalog (default `oldest`) | No; with a session, adds `owned` and `equipped` |
-| GET | `/api/loja/colecoes` | Collections (seasonal and permanent), sale windows and ready-made looks | No |
+| GET | `/api/loja?order=oldest\|newest` | The shop of the day: items on sale (collections in season, classics and the permanent one); with a session, also what the person owns (default `oldest`) | No; with a session, adds `owned` and `equipped` |
+| GET | `/api/loja/colecoes` | Collections in season, their sale windows and ready-made looks | No |
 | POST | `/api/loja/{itemId}/comprar` | Buy one item | Yes |
 | POST | `/api/loja/looks/{lookId}/comprar` | Buy the missing pieces of a look and wear it | Yes |
 | POST | `/api/loja/{itemId}/equipar` / `.../desequipar` | Equip / unequip an owned item (`none` unequips the frame) | Yes |
@@ -852,7 +852,7 @@ are for sale); a broken file stops the boot. Each item has `id`, `kind` (`FRAME`
 `description`, `priceMf`, `cssRing`, `releaseOrder`, `available` and `purchasable`.
 
 - `releaseOrder` is the positive, unique order of entry in the catalog. The 26 original frames
-  keep 1 to 26, have `collection: null` and are always on sale; the seasonal items follow.
+  keep 1 to 26 and have `collection: null` (always on sale); the seasonal items follow.
 - `essenciais` is the permanent collection: its window covers the whole year (`01-01` to `12-31`),
   so its items and its eleven ready-made looks stay on sale every day. The looks are
   `look-papel`, `look-noite-limpa`, `look-jardim`, `look-fim-de-tarde`, `look-manha-de-domingo`,
@@ -862,9 +862,13 @@ are for sale); a broken file stops the boot. Each item has `id`, `kind` (`FRAME`
 - `GARDEN` items (`garden-cerrado`, `garden-mata-atlantica`, `garden-caatinga`, `garden-pampa`)
   style the profile garden. They have `collection: null`, so they are always on sale; the equipped
   one is `gardenStyle` on the profile (`users.garden_style`), and none equipped is the default garden.
-- Seasons are month-day windows in America/Sao_Paulo, inclusive, and may wrap the year. Out of
-  season an item is listed with `available: false` and buying it returns `409 OUT_OF_SEASON`;
-  owned items can always be equipped. Event rewards are never for sale (`403 NOT_FOR_SALE`).
+- Seasons are month-day windows in America/Sao_Paulo, inclusive, and may wrap the year. A
+  collection outside its window is not in either listing — it does not appear before the
+  opening and is gone after the closing, so the shop only ever shows the season it is in. Buying
+  an out-of-season item still answers `409 OUT_OF_SEASON` (the shop no longer offers it, but an
+  old client or a stale page still gets a clear answer). A piece the person already owns stays
+  in their own listing (`available: false`) so it can always be equipped, and event rewards are
+  never for sale (`403 NOT_FOR_SALE`).
 - An equipped `BANNER` draws over the person's own cover. Changing the own cover (`banner` or
   `bannerHtml` on `PATCH /api/me/profile`) unequips it; the item stays owned.
 - Owning = a PURCHASE ledger entry with ref `cosmetico:{userId}:{itemId}` or a row in

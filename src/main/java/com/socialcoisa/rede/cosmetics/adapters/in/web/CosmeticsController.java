@@ -32,18 +32,21 @@ class CosmeticsController {
 		this.currentUserResolver = currentUserResolver;
 	}
 
-	/** O catálogo da loja; com sessão, marca o que a pessoa já tem e o que está equipado. */
+	/**
+	 * A loja de hoje: o que está na temporada, os clássicos e o que a pessoa já tem. Com sessão,
+	 * marca o que é seu e o que está equipado.
+	 */
 	@GetMapping("/loja")
 	List<ShopItemView> catalog(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(required = false) String order) {
 		String me = sessionToken == null ? null : currentUserResolver.resolve(sessionToken).id().value();
-		return cosmetics.shop(me, order == null ? "oldest" : order).stream().map(ShopItemView::from).toList();
+		return cosmetics.onSaleNow(me, order == null ? "oldest" : order).stream().map(ShopItemView::from).toList();
 	}
 
-	/** As coleções sazonais, as janelas de venda e os looks prontos de cada uma. */
+	/** As coleções na temporada, as janelas de venda e os looks prontos de cada uma. */
 	@GetMapping("/loja/colecoes")
 	List<CollectionView> collections() {
-		return cosmetics.collections().stream().map(CollectionView::from).toList();
+		return cosmetics.collectionsInSeason().stream().map(CollectionView::from).toList();
 	}
 
 	@PostMapping("/loja/{itemId}/comprar")
