@@ -92,6 +92,7 @@ class EventContractController {
 			@RequestParam(defaultValue = "false") boolean includePast,
 			@RequestParam(defaultValue = "false") boolean recurring,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		limit = Math.clamp(limit, 1, 100);
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		var page = eventService.list(format, city, state, before, limit, includePast, recurring);
 		String viewer = viewerId(sessionToken);

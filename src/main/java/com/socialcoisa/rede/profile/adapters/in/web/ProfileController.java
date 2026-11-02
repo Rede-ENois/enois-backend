@@ -105,17 +105,20 @@ class ProfileController {
 
 	/** Pessoas ligadas ao perfil visitado; apenas conexoes aceitas entram na leitura publica. */
 	@GetMapping("/users/{username}/connections")
-	List<PublicNetworkUserView> connections(@PathVariable String username) {
-		return networkUsers(username, false);
+	List<PublicNetworkUserView> connections(@PathVariable String username,
+			@RequestParam(defaultValue = "100") int limit) {
+		return networkUsers(username, false, limit);
 	}
 
 	/** Seguidores do perfil visitado: quem enviou uma conexao aceita para ele. */
 	@GetMapping("/users/{username}/followers")
-	List<PublicNetworkUserView> followers(@PathVariable String username) {
-		return networkUsers(username, true);
+	List<PublicNetworkUserView> followers(@PathVariable String username,
+			@RequestParam(defaultValue = "100") int limit) {
+		return networkUsers(username, true, limit);
 	}
 
-	private List<PublicNetworkUserView> networkUsers(String username, boolean followers) {
+	private List<PublicNetworkUserView> networkUsers(String username, boolean followers, int limit) {
+		int cappedLimit = Math.clamp(limit, 1, 100);
 		UserProfile profile = userProfileRepository.findByUsername(username)
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
 		List<String> ids = networkService.getConnections(profile.id()).stream()
@@ -123,6 +126,7 @@ class ProfileController {
 			.map(connection -> profile.id().equals(connection.requesterUserId())
 				? connection.receiverUserId() : connection.requesterUserId())
 			.distinct()
+			.limit(cappedLimit)
 			.toList();
 		Map<String, UserProfile> profiles = userProfileRepository.findAllByIds(ids).stream()
 			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
@@ -145,8 +149,14 @@ class ProfileController {
 	record RankingPreferenceRequest(boolean show) {
 	}
 
+	/**
+	 * Perfil por id interno. A rota exige sessao: o id nao e um identificador publico (o publico e
+	 * o username), e deixa-lo aberto permitia ligar um id visto em outra superficie a uma pessoa.
+	 */
 	@GetMapping("/users/by-id/{userId}")
-	Object userById(@PathVariable String userId) {
+	Object userById(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String userId) {
+		currentUserResolver.resolve(sessionToken);
 		return getUserProfileUseCase.getById(userId);
 	}
 

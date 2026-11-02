@@ -63,6 +63,7 @@ class MessagingContractController {
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit,
 			@RequestParam(required = false) String context) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		limit = Math.clamp(limit, 1, 100);
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		List<Conversation> conversations = messagingService.listConversations(user.id().value(), before,
 			parseContext(context), limit);
@@ -94,6 +95,7 @@ class MessagingContractController {
 			@RequestParam(required = false) String q, @RequestParam(defaultValue = "20") int limit,
 			@RequestParam(required = false) String context) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		limit = Math.clamp(limit, 1, 100);
 		List<Conversation> conversations = messagingService.listConversations(user.id().value(), null,
 			parseContext(context), limit);
 		String query = q != null ? q.toLowerCase() : "";
@@ -137,6 +139,7 @@ class MessagingContractController {
 		if (!messagingService.isParticipant(conversationId, user.id().value())) {
 			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
 		}
+		limit = Math.clamp(limit, 1, 100);
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		List<Message> msgs = messagingService.getMessages(conversationId, user.id().value(), before, limit);
 		var summaries = messagingService.reactionSummaries(msgs.stream().map(Message::id).toList(),
@@ -316,9 +319,10 @@ class MessagingContractController {
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit,
 			@RequestParam(required = false) String context) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		limit = Math.clamp(limit, 1, 50);
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		List<Conversation> conversations = messagingService.listArchivedConversations(user.id().value(), before,
-			parseContext(context), Math.min(limit, 50));
+			parseContext(context), limit);
 		var items = conversations.stream()
 			.map(c -> {
 				var participants = messagingService.getParticipants(c.id());

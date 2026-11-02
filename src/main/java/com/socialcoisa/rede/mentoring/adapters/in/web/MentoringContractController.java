@@ -157,8 +157,12 @@ class MentoringContractController {
 			});
 	}
 
+	/**
+	 * Vitrine publica do mentor. O link da sala NAO entra aqui: ele e privado e so o dono o recebe
+	 * por {@code GET /mentors/{id}/room}. Quem agenda recebe a sala da propria sessao.
+	 */
 	record MentorView(String id, String userId, List<String> expertise, double rating, int sessions, String price,
-			String banner, String meetingUrl, Long sparksPrice, String roomMode, String nextSlot) {
+			String banner, Long sparksPrice, String roomMode, String nextSlot) {
 	}
 
 	/** Inscrições recebidas (agenda do mentor): quem marcou, quando e o recado. Só o dono. */
@@ -382,7 +386,7 @@ class MentoringContractController {
 
 	private MentorView mentorView(Mentor m) {
 		return new MentorView(m.id(), m.userId(), m.expertise(), m.rating(), m.sessionsCount(), m.price(),
-			m.banner(), m.meetingUrl(), m.sparksPrice(), m.roomMode().name(), mentorService.nextAvailableSlot(m.id()));
+			m.banner(), m.sparksPrice(), m.roomMode().name(), mentorService.nextAvailableSlot(m.id()));
 	}
 
 	record CreateSlotRequest(Instant startsAt, Instant endsAt) {

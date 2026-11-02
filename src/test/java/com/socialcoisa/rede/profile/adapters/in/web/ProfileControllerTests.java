@@ -314,6 +314,17 @@ class ProfileControllerTests {
 			.andExpect(jsonPath("$.username").isNotEmpty());
 	}
 
+	/** O id interno nao e identificador publico: sem sessao, a rota nao devolve perfil. */
+	@Test
+	void profileByIdRequiresSession() throws Exception {
+		mockMvc.perform(get("/users/by-id/" + userId))
+			.andExpect(status().isUnauthorized());
+		mockMvc.perform(get("/users/by-id/" + userId)
+				.header("X-Session-Token", sessionToken))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.id").value(userId));
+	}
+
 	/**
 	 * O ranking público virou a vitrine de CHEGADA (2026-10-20): quem entrou por último aparece
 	 * primeiro, e cada item diz desde quando está aqui (`joinedAt`) para a tela deixar isso claro.
