@@ -2,6 +2,7 @@ package com.socialcoisa.rede.notifications.application;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -9,6 +10,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.util.concurrent.ExecutorService;
+
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -45,6 +49,18 @@ class GroupedNotificationTests {
 
 	@MockitoBean
 	private PushSender pushSender;
+
+	/** Push is delivered on a thread pool; inline here so the count sees every delivery finished. */
+	@MockitoBean(name = "pushExecutor")
+	private ExecutorService pushExecutor;
+
+	@BeforeEach
+	void deliverPushInline() {
+		doAnswer(invocation -> {
+			invocation.<Runnable>getArgument(0).run();
+			return null;
+		}).when(pushExecutor).execute(any());
+	}
 
 	@Test
 	void reactionsToTheSameTargetBecomeOneNotification() throws Exception {
