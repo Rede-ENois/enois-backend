@@ -22,7 +22,7 @@ import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 import tools.jackson.databind.ObjectMapper;
 
-/** Republicar: cópia com crédito, sem duplicata, apontando sempre para o original. */
+/** Republicar: ponteiro sem opinião ou citação com opinião, sem duplicata, sempre no original. */
 @SpringBootTest
 @AutoConfigureMockMvc
 class RepostFlowTests {
@@ -41,23 +41,21 @@ class RepostFlowTests {
 	}
 
 	@Test
-	void repostCopiesWithCreditBlocksDuplicatesAndFollowsTheRoot() throws Exception {
+	void pureRepostPointsAtTheOriginalBlocksDuplicatesAndCanBeUndone() throws Exception {
 		var author = auth.authenticate("repost_author_" + System.nanoTime());
 		var reposter = auth.authenticate("repost_user_" + System.nanoTime());
+		var quoter = auth.authenticate("repost_quoter_" + System.nanoTime());
 		var other = auth.authenticate("repost_other_" + System.nanoTime());
 
 		String originalId = publish(author, "Conteúdo original que vale republicar.");
-		String authorUsername = username(author);
 
-		MvcResult created = mockMvc.perform(post("/feed/posts/{id}/repost", originalId)
+		// Sem opinião não nasce post novo: a resposta é o próprio original.
+		mockMvc.perform(post("/feed/posts/{id}/repost", originalId)
 				.header("X-Session-Token", reposter.token()))
 			.andExpect(status().isCreated())
-			.andExpect(jsonPath("$.repostOf").value(originalId))
-			.andExpect(jsonPath("$.repostOfAuthor").value(authorUsername))
-			.andExpect(jsonPath("$.repostWithOpinion").value(false))
-			.andExpect(jsonPath("$.content").value("Conteúdo original que vale republicar."))
-			.andReturn();
-		String repostId = objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asString();
+			.andExpect(jsonPath("$.id").value(originalId))
+			.andExpect(jsonPath("$.repostOf").doesNotExist())
+			.andExpect(jsonPath("$.content").value("Conteúdo original que vale republicar."));
 
 		// A mesma pessoa não republica o mesmo post duas vezes.
 		mockMvc.perform(post("/feed/posts/{id}/repost", originalId)
@@ -65,19 +63,20 @@ class RepostFlowTests {
 			.andExpect(status().isConflict())
 			.andExpect(jsonPath("$.code").value("ALREADY_REPOSTED"));
 
-		// Republicar a republicação aponta para o ORIGINAL (sem corrente de créditos).
-		mockMvc.perform(post("/feed/posts/{id}/repost", repostId)
+		// Republicar uma citação aponta para o ORIGINAL (sem corrente de créditos).
+		String quoteId = quote(quoter, originalId, "Assino embaixo.");
+		mockMvc.perform(post("/feed/posts/{id}/repost", quoteId)
 				.header("X-Session-Token", other.token()))
 			.andExpect(status().isCreated())
-			.andExpect(jsonPath("$.repostOf").value(originalId));
+			.andExpect(jsonPath("$.id").value(originalId));
 
-		// Apagar o original apaga as cópias.
-		mockMvc.perform(delete("/feed/posts/{id}", originalId)
-				.header("X-Session-Token", author.token())
-				.header("Idempotency-Key", "repost-del-" + System.nanoTime()))
+		// Desfazer libera republicar de novo.
+		mockMvc.perform(delete("/feed/posts/{id}/repost", originalId)
+				.header("X-Session-Token", reposter.token()))
 			.andExpect(status().isOk());
-		mockMvc.perform(get("/feed/posts/{id}", repostId))
-			.andExpect(status().isNotFound());
+		mockMvc.perform(post("/feed/posts/{id}/repost", originalId)
+				.header("X-Session-Token", reposter.token()))
+			.andExpect(status().isCreated());
 	}
 
 	@Test
@@ -142,7 +141,7 @@ class RepostFlowTests {
 	}
 
 	@Test
-	void articlesCirculateOnlyAsQuotesSavedAsInsight() throws Exception {
+	void articlesCirculateAsPointersOrAsQuotesSavedAsInsight() throws Exception {
 		var author = auth.authenticate("repost_article_" + System.nanoTime());
 		var reposter = auth.authenticate("repost_article_user_" + System.nanoTime());
 		var other = auth.authenticate("repost_article_other_" + System.nanoTime());
@@ -150,11 +149,11 @@ class RepostFlowTests {
 		String articleId = publishType(author, Map.of("type", "ARTICLE", "content", "Titulo do artigo citado",
 			"articleBody", "Corpo que mora em outra tabela.", "tags", List.of(), "mediaIds", List.of()));
 
-		// Sem opinião a cópia sairia sem o corpo: a API recusa com código próprio.
+		// Repost sem opinião é ponteiro para o original, então o artigo circula com o corpo inteiro.
 		mockMvc.perform(post("/feed/posts/{id}/repost", articleId)
 				.header("X-Session-Token", reposter.token()))
-			.andExpect(status().isBadRequest())
-			.andExpect(jsonPath("$.code").value("OPINION_REQUIRED"));
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.id").value(articleId));
 
 		String quoteId = quote(reposter, articleId, "Vale a leitura.");
 		mockMvc.perform(get("/feed/posts/{id}", quoteId))
@@ -171,15 +170,15 @@ class RepostFlowTests {
 			.andExpect(status().isConflict())
 			.andExpect(jsonPath("$.code").value("ALREADY_REPOSTED"));
 
-		// A citação é INSIGHT, mas republicá-la vale pela regra do ORIGINAL, que é artigo.
+		// A citação é INSIGHT, mas republicá-la sem opinião aponta para o artigo original.
 		mockMvc.perform(post("/feed/posts/{id}/repost", quoteId)
 				.header("X-Session-Token", other.token()))
-			.andExpect(status().isBadRequest())
-			.andExpect(jsonPath("$.code").value("OPINION_REQUIRED"));
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.id").value(articleId));
 	}
 
 	@Test
-	void pagesAndBlogPointersCirculateOnlyAsQuotes() throws Exception {
+	void pagesAndBlogPointersCirculateAsPointersOrAsQuotes() throws Exception {
 		var author = auth.authenticate("repost_page_" + System.nanoTime());
 		var reposter = auth.authenticate("repost_page_user_" + System.nanoTime());
 
@@ -191,8 +190,8 @@ class RepostFlowTests {
 		for (String id : List.of(pageId, blogId)) {
 			mockMvc.perform(post("/feed/posts/{id}/repost", id)
 					.header("X-Session-Token", reposter.token()))
-				.andExpect(status().isBadRequest())
-				.andExpect(jsonPath("$.code").value("OPINION_REQUIRED"));
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.id").value(id));
 
 			String quoteId = quote(reposter, id, "Olha isso aqui " + id);
 			mockMvc.perform(get("/feed/posts/{id}", quoteId))
