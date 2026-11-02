@@ -46,6 +46,12 @@ public interface CommunityRepository {
 
 	int countMembers(String communityId);
 
+	/** Contagem de membros das comunidades da pagina, em UMA consulta (evita N+1 na vitrine). */
+	java.util.Map<String, Integer> countMembersByCommunityIds(java.util.Collection<String> communityIds);
+
+	/** Das comunidades informadas, quais a pessoa participa — em UMA consulta. */
+	java.util.Set<String> memberCommunityIds(String userId, java.util.Collection<String> communityIds);
+
 	List<CommunityMember> findMembersByCommunity(String communityId);
 
 	Optional<CommunityMember> findMember(String communityId, String userId);

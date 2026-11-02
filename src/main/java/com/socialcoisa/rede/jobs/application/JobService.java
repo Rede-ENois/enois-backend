@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -23,6 +24,8 @@ import com.socialcoisa.rede.jobs.domain.JobApplication;
 import com.socialcoisa.rede.jobs.domain.JobApplicationStatus;
 import com.socialcoisa.rede.jobs.domain.JobApplicationField;
 import com.socialcoisa.rede.profile.application.ReputationService;
+import com.socialcoisa.rede.shared.application.CacheConfig;
+import com.socialcoisa.rede.shared.application.CacheInvalidator;
 import com.socialcoisa.rede.shared.security.BehavioralTimingGuard;
 import com.socialcoisa.rede.shared.security.UserRateLimiter;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -64,6 +67,7 @@ public class JobService {
 	private final UserRateLimiter userRateLimiter;
 	private final BehavioralTimingGuard behavioralTimingGuard;
 	private final CompanyService companyService;
+	private final CacheInvalidator cacheInvalidator;
 
 	public JobService(JobRepository repository, ReputationService reputationService,
 			com.socialcoisa.rede.profile.application.port.out.UserProfileRepository userProfileRepository,
@@ -73,7 +77,7 @@ public class JobService {
 			JobAbandonPenaltyRepository abandonPenalties,
 			tools.jackson.databind.ObjectMapper objectMapper, Clock clock,
 			UserRateLimiter userRateLimiter, BehavioralTimingGuard behavioralTimingGuard,
-			CompanyService companyService) {
+			CompanyService companyService, CacheInvalidator cacheInvalidator) {
 		this.repository = repository;
 		this.reputationService = reputationService;
 		this.userProfileRepository = userProfileRepository;
@@ -87,6 +91,7 @@ public class JobService {
 		this.userRateLimiter = userRateLimiter;
 		this.behavioralTimingGuard = behavioralTimingGuard;
 		this.companyService = companyService;
+		this.cacheInvalidator = cacheInvalidator;
 	}
 
 	@Transactional
@@ -132,6 +137,7 @@ public class JobService {
 			job = job.withCompany(page.id());
 		}
 		repository.save(job);
+		cacheInvalidator.afterCommit(CacheConfig.JOBS);
 		if (page != null) {
 			companyService.notifyFollowers(page, userId, "Nova vaga", page.name() + " abriu a vaga \"" + job.title() + "\".");
 		}
@@ -162,6 +168,7 @@ public class JobService {
 			normalizeFields(jobId, fields), userId, existing.communityAgreedAt(),
 			existing.status(), existing.closedAt(), existing.postedAt(), clock.instant(), existing.companyId());
 		repository.save(updated);
+		cacheInvalidator.afterCommit(CacheConfig.JOBS);
 		return updated;
 	}
 
@@ -184,6 +191,7 @@ public class JobService {
 		}
 		Job closed = existing.closed(clock.instant());
 		repository.save(closed);
+		cacheInvalidator.afterCommit(CacheConfig.JOBS);
 		return closed;
 	}
 
@@ -242,6 +250,7 @@ public class JobService {
 		int unanswered = repository.countUnansweredApplications(jobId);
 		boolean penalized = unanswered > 0 && abandonPenalties.record(jobId, userId, unanswered);
 		repository.deleteById(jobId);
+		cacheInvalidator.afterCommit(CacheConfig.JOBS);
 		return new DeleteResult(jobId, unanswered, penalized);
 	}
 
@@ -467,6 +476,13 @@ public class JobService {
 		repository.removeBookmark(jobId, userId);
 	}
 
+	/**
+	 * Vitrine de vagas. O resultado e o mesmo para todo mundo — a parte pessoal (ja me candidatei,
+	 * salvei, sou dono) e enriquecida depois, no controller — por isso pode ficar em cache.
+	 */
+	@Cacheable(cacheNames = CacheConfig.JOBS,
+		key = "#query + '|' + #type + '|' + #level + '|' + #location + '|' + #skills + '|' + #before + '|' + #limit",
+		sync = true)
 	public List<Job> list(String query, String type, String level, String location, List<String> skills,
 			java.time.Instant before, int limit) {
 		return repository.findAll(query, type, level, location, skills, before, limit);

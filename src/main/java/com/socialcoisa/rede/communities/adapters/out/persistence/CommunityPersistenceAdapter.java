@@ -162,6 +162,26 @@ class CommunityPersistenceAdapter implements CommunityRepository {
 	}
 
 	@Override
+	public java.util.Map<String, Integer> countMembersByCommunityIds(java.util.Collection<String> communityIds) {
+		if (communityIds == null || communityIds.isEmpty()) {
+			return java.util.Map.of();
+		}
+		java.util.Map<String, Integer> counts = new java.util.HashMap<>();
+		for (Object[] row : memberRepo.countByCommunityIds(communityIds)) {
+			counts.put((String) row[0], ((Number) row[1]).intValue());
+		}
+		return counts;
+	}
+
+	@Override
+	public java.util.Set<String> memberCommunityIds(String userId, java.util.Collection<String> communityIds) {
+		if (userId == null || communityIds == null || communityIds.isEmpty()) {
+			return java.util.Set.of();
+		}
+		return new java.util.HashSet<>(memberRepo.findCommunityIdsByUserIdAndCommunityIdsIn(userId, communityIds));
+	}
+
+	@Override
 	public List<CommunityMember> findMembersByCommunity(String communityId) {
 		return memberRepo.findByCommunityId(communityId).stream()
 			.map(CommunityMemberJpaEntity::toDomain)

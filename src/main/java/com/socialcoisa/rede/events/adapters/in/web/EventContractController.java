@@ -97,18 +97,27 @@ class EventContractController {
 		String viewer = viewerId(sessionToken);
 		List<String> ids = page.items().stream().map(Event::id).toList();
 		Set<String> attendingIds = viewer != null ? eventService.attendingEventIds(viewer, ids) : Set.of();
-		var items = page.items().stream().map(event -> toView(event, attendingIds.contains(event.id()), viewer)).toList();
+		// Presencas da pagina numa consulta so: um count por card era N+1.
+		java.util.Map<String, Integer> counts = eventService.countAttendeesByEventIds(ids);
+		var items = page.items().stream()
+			.map(event -> toView(event, attendingIds.contains(event.id()), viewer,
+				counts.getOrDefault(event.id(), 0)))
+			.toList();
 		// Cursor pela pagina que veio do banco: esconder evento vencido nao pode encerrar a paginacao.
 		String nextCursor = page.fetched().size() == limit
 			? cursorCodec.encode(page.fetched().get(page.fetched().size() - 1).createdAt()) : null;
 		return new PageResponse<>(items, nextCursor);
 	}
 
-	/** `viewerId` null = anonimo. So o dono gerencia a serie; o id dele nao sai na resposta. */
 	private EventView toView(Event event, boolean attending, String viewerId) {
+		return toView(event, attending, viewerId, eventService.countAttendees(event.id()));
+	}
+
+	/** `viewerId` null = anonimo. So o dono gerencia a serie; o id dele nao sai na resposta. */
+	private EventView toView(Event event, boolean attending, String viewerId, int counted) {
 		// Depois da sanitizacao as presencas somem: o numero guardado sustenta o total.
 		Integer finalCount = event.finalAttendeesCount();
-		int attendees = finalCount != null ? finalCount : eventService.countAttendees(event.id());
+		int attendees = finalCount != null ? finalCount : counted;
 		return new EventView(event.id(), event.title(), event.date(), event.time(), event.format(), event.host(),
 			attendees, event.cover(), event.streamUrl(), event.location(), eventService.hasEnded(event), attending,
 			event.recurrence().name(), event.seriesId(),
