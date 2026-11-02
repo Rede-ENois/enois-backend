@@ -12,6 +12,8 @@ import org.springframework.transaction.event.TransactionalEventListener;
 
 import com.socialcoisa.rede.notifications.application.NotificationCreatedEvent;
 import com.socialcoisa.rede.notifications.application.NotificationPreferenceService;
+import com.socialcoisa.rede.notifications.domain.NotificationCategory;
+import com.socialcoisa.rede.presence.application.PresenceService;
 import com.socialcoisa.rede.push.application.port.out.PushSender;
 
 /**
@@ -19,7 +21,8 @@ import com.socialcoisa.rede.push.application.port.out.PushSender;
  * nao pode segurar nem reverter a transacao que criou a notificacao.
  *
  * So filtra o push: a notificacao in-app ja foi criada (a caixa de entrada e completa). A categoria
- * desligada pela pessoa nao vira push; seguranca, moderacao e sancao sempre viram.
+ * desligada pela pessoa nao vira push; seguranca, moderacao e sancao sempre viram. Em "Nao
+ * perturbar" o push espera, mas a notificacao no app continua.
  */
 @Component
 class PushNotificationListener {
@@ -28,12 +31,14 @@ class PushNotificationListener {
 
 	private final PushSender pushSender;
 	private final NotificationPreferenceService preferences;
+	private final PresenceService presenceService;
 	private final Executor executor;
 
 	PushNotificationListener(PushSender pushSender, NotificationPreferenceService preferences,
-			@Qualifier("pushExecutor") Executor executor) {
+			PresenceService presenceService, @Qualifier("pushExecutor") Executor executor) {
 		this.pushSender = pushSender;
 		this.preferences = preferences;
+		this.presenceService = presenceService;
 		this.executor = executor;
 	}
 
@@ -41,6 +46,12 @@ class PushNotificationListener {
 	void onNotificationCreated(NotificationCreatedEvent event) {
 		try {
 			executor.execute(() -> {
+				// "Nao perturbar" cala as categorias configuraveis; seguranca, moderacao e sancao
+				// continuam chegando ao celular (NotificationCategory.ALWAYS).
+				if (NotificationCategory.of(event.kind()) != NotificationCategory.ALWAYS
+						&& !presenceService.allowPush(event.userId())) {
+					return;
+				}
 				if (!preferences.allowsPush(event.userId(), event.kind())) {
 					return;
 				}

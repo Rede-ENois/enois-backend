@@ -64,6 +64,20 @@ Resposta (signup e login):
 
 ## Perfil
 
+### Presença
+
+| Método | Rota | Resultado | Autenticação |
+|---|---|---|---|
+| GET | `/api/me/presence` | Escolha da própria conta | Sim |
+| PUT | `/api/me/presence` | Salva `{"status":"AVAILABLE|AWAY|DO_NOT_DISTURB|INVISIBLE"}` | Sim |
+| POST | `/api/me/presence/heartbeat` | Atualiza atividade; resposta 204 | Sim |
+| GET | `/api/users/{username}/presence` | Estado público | Não |
+
+As leituras retornam `{"status":"..."}`. Após dois minutos sem atividade, o estado público
+é `OFFLINE`; `INVISIBLE` também aparece como `OFFLINE`. `DO_NOT_DISTURB` impede push,
+mas mantém a notificação no aplicativo. O status de texto/ícone de `PUT /api/me/status`
+é independente.
+
 | Método | Rota | Descrição | Autenticação |
 |---|---|---|---|
 | GET | `/api/me` | Perfil completo do usuário logado | Sim |
