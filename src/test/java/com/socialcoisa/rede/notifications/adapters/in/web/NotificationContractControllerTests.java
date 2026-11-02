@@ -5,6 +5,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.UUID;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -127,6 +134,139 @@ class NotificationContractControllerTests {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.items[?(@.id == 'module_event')].module").value("EVENTS"))
 			.andExpect(jsonPath("$.items[?(@.id == 'module_reaction')].module").value("OTHER"));
+	}
+
+	@Test
+	void everyListedItemCarriesItsPlaceAndEventDateOrNull() throws Exception {
+		var session = auth.authenticate("notif_place_owner");
+		String me = session.userId();
+		String suffix = UUID.randomUUID().toString().substring(0, 8);
+		String community = community("place-community-" + suffix, "Mesa de BH");
+		String post = communityPost(community);
+		String group = "place-group-" + suffix;
+		String closedGroup = "place-closed-" + suffix;
+		group(group, "Grupo da Roda", "ACTIVE");
+		group(closedGroup, "Grupo Fechado", "CLOSED");
+		String today = LocalDate.now(ZoneId.of("America/Sao_Paulo")).toString();
+		String event = event("place-event-" + suffix, today);
+		String brEvent = event("place-br-event-" + suffix, "24/12/2026");
+		unread(me, "place_community", "MENTION", "notif_place_friend", false, "/comunidades/" + community);
+		unread(me, "place_post", "NEW_REACTION", "notif_place_friend", false, "/api/feed/posts/" + post + "?reacoes=1");
+		unread(me, "place_group", "GROUP_NEW_POST", "notif_place_friend", false, "/grupos/" + group);
+		unread(me, "place_event", "EVENT_NEXT_OCCURRENCE", "notif_place_friend", false, "/eventos?evento=" + event);
+		unread(me, "place_br_event", "EVENT_NEXT_OCCURRENCE", "notif_place_friend", false, "/eventos?evento=" + brEvent);
+		unread(me, "place_gone_community", "MENTION", "notif_place_friend", false, "/comunidades/gone-" + suffix);
+		unread(me, "place_closed_group", "GROUP_NEW_POST", "notif_place_friend", false, "/grupos/" + closedGroup);
+		unread(me, "place_gone_event", "EVENT_NEXT_OCCURRENCE", "notif_place_friend", false, "/eventos?evento=gone");
+		unread(me, "place_none", "SEGURANCA", "sistema", false, "/configuracoes/seguranca");
+		unread(me, "place_no_href", "SISTEMA", "sistema", false, null);
+
+		mockMvc.perform(get("/notifications").header("X-Session-Token", session.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.id == 'place_community')].place.type").value("COMMUNITY"))
+			.andExpect(jsonPath("$.items[?(@.id == 'place_community')].place.id").value(community))
+			.andExpect(jsonPath("$.items[?(@.id == 'place_community')].place.name").value("Mesa de BH"))
+			.andExpect(jsonPath("$.items[?(@.id == 'place_community')].place.color").value((Object) null))
+			.andExpect(jsonPath("$.items[?(@.id == 'place_community')].eventDate").value((Object) null))
+			.andExpect(jsonPath("$.items[?(@.id == 'place_post')].place.type").value("COMMUNITY"))
+			.andExpect(jsonPath("$.items[?(@.id == 'place_post')].place.id").value(community))
+			.andExpect(jsonPath("$.items[?(@.id == 'place_group')].place.type").value("GROUP"))
+			.andExpect(jsonPath("$.items[?(@.id == 'place_group')].place.name").value("Grupo da Roda"))
+			.andExpect(jsonPath("$.items[?(@.id == 'place_event')].eventDate").value(today))
+			.andExpect(jsonPath("$.items[?(@.id == 'place_event')].place").value((Object) null))
+			.andExpect(jsonPath("$.items[?(@.id == 'place_br_event')].eventDate").value("2026-12-24"))
+			.andExpect(jsonPath("$.items[?(@.id == 'place_gone_community')].place").value((Object) null))
+			.andExpect(jsonPath("$.items[?(@.id == 'place_closed_group')].place").value((Object) null))
+			.andExpect(jsonPath("$.items[?(@.id == 'place_gone_event')].eventDate").value((Object) null))
+			.andExpect(jsonPath("$.items[?(@.id == 'place_none')].place").value((Object) null))
+			.andExpect(jsonPath("$.items[?(@.id == 'place_none')].eventDate").value((Object) null))
+			.andExpect(jsonPath("$.items[?(@.id == 'place_no_href')].place").value((Object) null));
+	}
+
+	@Test
+	void unreadSummaryCountsPerCommunityAndTheConfirmedEventsOfToday() throws Exception {
+		var session = auth.authenticate("notif_summary_places");
+		String me = session.userId();
+		String suffix = UUID.randomUUID().toString().substring(0, 8);
+		String community = community("summary-community-" + suffix, "Mesa");
+		String other = community("summary-other-" + suffix, "Outra mesa");
+		String post = communityPost(community);
+		unread(me, "summary_place_1", "MENTION", "notif_place_friend", false, "/comunidades/" + community);
+		unread(me, "summary_place_2", "NEW_REACTION", "notif_place_friend", false, "/api/feed/posts/" + post);
+		unread(me, "summary_place_3", "NEW_COMMENT", "notif_place_other", false, "/api/feed/posts/" + post);
+		unread(me, "summary_place_read", "MENTION", "notif_place_friend", true, "/comunidades/" + other);
+		unread(me, "summary_place_gone", "MENTION", "notif_place_friend", false, "/comunidades/gone-" + suffix);
+		LocalDate today = LocalDate.now(ZoneId.of("America/Sao_Paulo"));
+		attend(me, event("summary-today-" + suffix, today.toString()));
+		attend(me, event("summary-today-br-" + suffix,
+			today.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"))));
+		attend(me, event("summary-tomorrow-" + suffix, today.plusDays(1).toString()));
+		event("summary-not-attending-" + suffix, today.toString());
+
+		mockMvc.perform(get("/notifications/unread-summary").header("X-Session-Token", session.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.total").value(4))
+			.andExpect(jsonPath("$.byCommunity.length()").value(1))
+			.andExpect(jsonPath("$.byCommunity['" + community + "']").value(3))
+			.andExpect(jsonPath("$.eventsToday").value(2));
+
+		// Events are social: the professional interface has none, and no community notification.
+		mockMvc.perform(get("/notifications/unread-summary").param("context", "PROFESSIONAL")
+				.header("X-Session-Token", session.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.byCommunity.length()").value(0))
+			.andExpect(jsonPath("$.eventsToday").value(0));
+	}
+
+	@Test
+	void unreadSummaryHasNoCommunitiesNorEventsWhenThereAreNone() throws Exception {
+		var session = auth.authenticate("notif_summary_empty");
+
+		mockMvc.perform(get("/notifications/unread-summary").header("X-Session-Token", session.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.total").value(0))
+			.andExpect(jsonPath("$.byCommunity.length()").value(0))
+			.andExpect(jsonPath("$.eventsToday").value(0));
+	}
+
+	private String community(String id, String name) {
+		Timestamp now = Timestamp.from(Instant.now());
+		jdbc.update("insert into communities (id, name, description, topic, created_by, created_at, updated_at) "
+			+ "values (?, ?, 'desc', 'TECNOLOGIA', 'notif_place_friend', ?, ?)", id, name, now, now);
+		return id;
+	}
+
+	private String communityPost(String communityId) {
+		String id = "place-post-" + UUID.randomUUID();
+		jdbc.update("insert into posts (id, author_id, type, content, created_at, visibility, reactions, comments, "
+			+ "saves, shares, status, community_id) values (?, 'notif_place_friend', 'INSIGHT', 'oi', ?, 'PUBLIC', 0, 0, 0,"
+			+ " 0, 'ACTIVE', ?)", id, Timestamp.from(Instant.now()), communityId);
+		return id;
+	}
+
+	private void group(String slug, String name, String status) {
+		Timestamp now = Timestamp.from(Instant.now());
+		jdbc.update("insert into groups (id, slug, name, owner_id, status, created_at, updated_at) "
+			+ "values (?, ?, ?, 'notif_place_friend', ?, ?, ?)", "id-" + slug, slug, name, status, now, now);
+	}
+
+	private String event(String id, String date) {
+		Timestamp now = Timestamp.from(Instant.now());
+		jdbc.update("insert into events (id, title, date, time, format, host, created_by, created_at, updated_at) "
+			+ "values (?, 'Encontro', ?, '19:00', 'ONLINE', 'Casa', 'notif_place_friend', ?, ?)", id, date, now, now);
+		return id;
+	}
+
+	private void attend(String userId, String eventId) {
+		jdbc.update("insert into event_attendees (event_id, user_id, responded_at) values (?, ?, ?)", eventId, userId,
+			Timestamp.from(Instant.now()));
+	}
+
+	private void unread(String userId, String id, String kind, String actorId, boolean read, String href) {
+		jdbc.update("""
+				insert into notifications (id, user_id, kind, actor_id, title, body, href, is_read, created_at)
+				values (?, ?, ?, ?, 'Aviso', 'corpo', ?, ?, current_timestamp)
+				""", id, userId, kind, actorId, href, read);
 	}
 
 	private void unread(String userId, String id, String kind, String actorId, boolean read) {
