@@ -241,14 +241,15 @@ class MediaStorageProxyTests {
 				.content("intruso".getBytes(StandardCharsets.UTF_8)))
 			.andExpect(status().isForbidden());
 
+		byte[] foto = "foto".repeat(256).getBytes(StandardCharsets.UTF_8);
 		mockMvc.perform(put("/storage/" + objectKey)
 				.header("X-Session-Token", dono.token())
 				.contentType(MediaType.IMAGE_JPEG)
-				.content("foto".getBytes(StandardCharsets.UTF_8)))
+				.content(foto))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("STORED"));
 
 		assertThat(store().chaveEscrita).isEqualTo(objectKey);
-		assertThat(store().escrito).isEqualTo("foto".getBytes(StandardCharsets.UTF_8));
+		assertThat(store().escrito).isEqualTo(foto);
 	}
 }
