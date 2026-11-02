@@ -749,6 +749,10 @@ Preferências (GET e resposta do PUT):
 `updatedAt` é `null` enquanto a pessoa nunca mudou nada (padrão: tudo ligado). Segurança, moderação e
 sanções sempre viram push. Regras e categorias em [`DIGEST.md`](DIGEST.md).
 
+Each item of `GET /api/notifications` carries `module`, the interface area of its kind (same
+`NotificationModule` names as below, e.g. `EVENTS`, `OTHER`), so the app hides or flags notifications
+by area without guessing from the kind.
+
 Unread summary (`GET /api/notifications/unread-summary`): counts the person's unread notifications,
 leaving out those whose actor is blocked (either way) and applying the same `context` filter as the
 list. Only areas with unread notifications appear in `byModule`; an area clears when its

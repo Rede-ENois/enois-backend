@@ -986,7 +986,7 @@ inválidas são rejeitadas integralmente. A operação exige autenticação e ch
 
 | Função | Rota |
 |---|---|
-| `notifications(...)` | GET /api/notifications |
+| `notifications(...)` | GET /api/notifications (each item has `module` from `NotificationModule.of(kind)`) |
 | `read(...)` | POST /api/notifications/{notificationId}/read |
 | `readAll(...)` | POST /api/notifications/read-all |
 | `unreadSummary(...)` | GET /api/notifications/unread-summary |

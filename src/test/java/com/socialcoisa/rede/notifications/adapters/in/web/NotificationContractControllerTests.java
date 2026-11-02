@@ -117,6 +117,18 @@ class NotificationContractControllerTests {
 			.andExpect(status().isBadRequest());
 	}
 
+	@Test
+	void everyListedItemCarriesTheModuleOfItsKind() throws Exception {
+		var session = auth.authenticate("notif_module_owner");
+		unread(session.userId(), "module_event", "EVENT_NEXT_OCCURRENCE", "notif_module_friend", false);
+		unread(session.userId(), "module_reaction", "NEW_REACTION", "notif_module_friend", false);
+
+		mockMvc.perform(get("/notifications").header("X-Session-Token", session.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.id == 'module_event')].module").value("EVENTS"))
+			.andExpect(jsonPath("$.items[?(@.id == 'module_reaction')].module").value("OTHER"));
+	}
+
 	private void unread(String userId, String id, String kind, String actorId, boolean read) {
 		jdbc.update("""
 				insert into notifications (id, user_id, kind, actor_id, title, body, is_read, created_at)

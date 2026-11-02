@@ -24,6 +24,7 @@ import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationServic
 import com.socialcoisa.rede.notifications.application.NotificationService;
 import com.socialcoisa.rede.notifications.domain.Notification;
 import com.socialcoisa.rede.notifications.domain.NotificationContext;
+import com.socialcoisa.rede.notifications.domain.NotificationModule;
 import com.socialcoisa.rede.profile.application.NameStyleView;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
@@ -83,7 +84,8 @@ class NotificationContractController {
 				CorporateProfile pro = notificationContext == NotificationContext.PROFESSIONAL
 					? professionals.get(n.actorId()) : null;
 				UserProfile p = profiles.get(n.actorId());
-				return new NotificationView(n.id(), n.kind(), notificationContext.name(), n.actorId(),
+				return new NotificationView(n.id(), n.kind(), notificationContext.name(),
+					NotificationModule.of(n.kind()).name(), n.actorId(),
 					pro != null ? pro.name() : p != null ? p.name() : null,
 					pro != null ? pro.username() : p != null ? p.username() : null,
 					pro != null ? (pro.avatar() == null ? "" : pro.avatar()) : p != null ? p.avatar() : null,
@@ -143,7 +145,8 @@ class NotificationContractController {
 			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
 	}
 
-	record NotificationView(String id, String kind, String context, String actorId, String actorName,
+	/** {@code module} is the interface area of the kind ({@link NotificationModule}). */
+	record NotificationView(String id, String kind, String context, String module, String actorId, String actorName,
 			String actorUsername, String actorAvatar, String actorIdentity, NameStyleView actorStyle, String title,
 			String body, String createdAt, boolean read, String href, String ctaLabel, int actorCount) {
 	}
