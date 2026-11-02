@@ -838,8 +838,11 @@ are for sale); a broken file stops the boot. Each item has `id`, `kind` (`FRAME`
 - `releaseOrder` is the positive, unique order of entry in the catalog. The 26 original frames
   keep 1 to 26, have `collection: null` and are always on sale; the seasonal items follow.
 - `essenciais` is the permanent collection: its window covers the whole year (`01-01` to `12-31`),
-  so its items and its four ready-made looks (`look-papel`, `look-noite-limpa`, `look-jardim`,
-  `look-fim-de-tarde`) stay on sale every day. Its looks reuse the original frames.
+  so its items and its eleven ready-made looks stay on sale every day. The looks are
+  `look-papel`, `look-noite-limpa`, `look-jardim`, `look-fim-de-tarde`, `look-manha-de-domingo`,
+  `look-carta-na-gaveta`, `look-sombra-fresca`, `look-quintal-ao-meio-dia`, `look-pedra-fria`,
+  `look-nevoeiro` and `look-mar-de-pedra`; each one pairs the Essenciais pieces with a different
+  original frame, so no two looks are the same bundle.
 - `GARDEN` items (`garden-cerrado`, `garden-mata-atlantica`, `garden-caatinga`, `garden-pampa`)
   style the profile garden. They have `collection: null`, so they are always on sale; the equipped
   one is `gardenStyle` on the profile (`users.garden_style`), and none equipped is the default garden.
@@ -854,10 +857,10 @@ are for sale); a broken file stops the boot. Each item has `id`, `kind` (`FRAME`
   under its own ref, so buying the same look twice never charges twice. It equips every piece,
   replaces the badge list with the look badges and sets the look status.
 - A collection may hold several looks. Each look entry takes an optional `id` (a slug such as
-  `look-floresta`); without it the id stays `look-<collection>`, so the original look of every
-  collection keeps its address. The shipped look ids are unique and validated at startup. Looks
-  follow their collection's season, and the theme-inspired looks of each collection are named
-  after the appearance themes with the same palette (`Vaporwave`, `Terminal`, `Vale Esmeralda`…).
+  `look-manha-de-domingo`); without it the id stays `look-<collection>`, so the original look of
+  every collection keeps its address. The shipped look ids are unique and validated at startup.
+  Looks follow their collection's season: the seasonal collections ship one look each, and the
+  ready-made looks live in the permanent `essenciais` collection.
 - Badges equip at the front of the list, deduplicated, up to 5 (`409 MAX_BADGES`). Official badges
   (`emblema-*`) can only be shown by who owns them, also through `PUT /me/badges` and the profile
   edit (`403 NOT_OWNED`).
