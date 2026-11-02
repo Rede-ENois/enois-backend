@@ -40,6 +40,14 @@ class NotificationPersistenceAdapter implements NotificationRepository {
 	}
 
 	@Override
+	public List<UnreadCount> countUnreadByKindAndActor(String userId, NotificationContext context) {
+		return springData.countUnreadByKindAndActor(userId, context == null ? null : context.name())
+			.stream()
+			.map(row -> new UnreadCount((String) row[0], (String) row[1], ((Number) row[2]).longValue()))
+			.toList();
+	}
+
+	@Override
 	public Optional<Notification> findUnreadGroup(String userId, String groupKey) {
 		return springData.findFirstByUserIdAndGroupKeyAndReadFalse(userId, groupKey).map(NotificationJpaEntity::toDomain);
 	}

@@ -99,6 +99,19 @@ class NotificationContractController {
 		return new PageResponse<>(items, nextCursor);
 	}
 
+	/**
+	 * Unread notifications per interface area, for the menu indicators: same session, context
+	 * filter and blocked-actor rule as the list. An area clears when its notifications are read.
+	 */
+	@GetMapping("/unread-summary")
+	NotificationService.UnreadSummary unreadSummary(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(required = false) String context) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return notificationService.unreadSummary(user.id().value(), parseContext(context),
+			blockedUsersReader.hiddenIdsFor(user.id().value()));
+	}
+
 	private Map<String, CorporateProfile> professionalActors(List<Notification> notifications) {
 		Set<String> actorIds = notifications.stream()
 			.filter(n -> NotificationContext.of(n.kind()) == NotificationContext.PROFESSIONAL)

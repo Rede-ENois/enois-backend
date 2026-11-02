@@ -732,6 +732,7 @@ produção roda um backend só; uma segunda instância exige difusão entre inst
 | GET | `/api/notifications` | Listar notificações (`?context=SOCIAL\|PROFESSIONAL`) | Sim |
 | POST | `/api/notifications/{notificationId}/read` | Marcar como lida | Sim |
 | POST | `/api/notifications/read-all` | Marcar todas como lidas | Sim |
+| GET | `/api/notifications/unread-summary` | Unread count per area for menu indicators (`?context=SOCIAL\|PROFESSIONAL`) | Sim |
 | GET | `/api/me/notification-preferences` | Preferências de push e do resumo semanal | Sim |
 | PUT | `/api/me/notification-preferences` | Atualização parcial (campo ausente/nulo mantém o valor) | Sim |
 | GET | `/api/notifications/digest/unsubscribe?token=` | Descadastro do resumo semanal (link do e-mail, HTML) | Não (token) |
@@ -747,6 +748,17 @@ Preferências (GET e resposta do PUT):
 
 `updatedAt` é `null` enquanto a pessoa nunca mudou nada (padrão: tudo ligado). Segurança, moderação e
 sanções sempre viram push. Regras e categorias em [`DIGEST.md`](DIGEST.md).
+
+Unread summary (`GET /api/notifications/unread-summary`): counts the person's unread notifications,
+leaving out those whose actor is blocked (either way) and applying the same `context` filter as the
+list. Only areas with unread notifications appear in `byModule`; an area clears when its
+notifications are read (`/read` or `/read-all`). The kind to area mapping is
+`NotificationModule` (`MESSAGES`, `EVENTS`, `JOBS`, `COMPANIES`, `MENTORING`, `DAILY_GAMES`,
+`COMMUNITY_GAMES`, `GROUPS`, `STUDY_PAIRS`, `BLOGS`, `NETWORK`, `OTHER`).
+
+```json
+{ "total": 5, "byModule": { "MESSAGES": 3, "GROUPS": 1, "OTHER": 1 } }
+```
 
 Mudança de estado da candidatura também gera a notificação `JOB_APPLICATION_STATUS`
 (`href` = `/vagas/{jobId}`), além da mensagem direta e do e-mail.

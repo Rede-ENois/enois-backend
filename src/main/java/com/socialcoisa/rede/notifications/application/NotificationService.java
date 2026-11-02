@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.notifications.application.port.out.NotificationRepository;
 import com.socialcoisa.rede.notifications.domain.Notification;
+import com.socialcoisa.rede.notifications.domain.NotificationModule;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 @Service
@@ -115,6 +116,29 @@ public class NotificationService {
 	public List<Notification> list(String userId, java.time.Instant before,
 			com.socialcoisa.rede.notifications.domain.NotificationContext context, int limit) {
 		return repository.findByUserId(userId, before, context, limit);
+	}
+
+	/**
+	 * Unread notifications per interface area, for the menu indicators. Notifications from
+	 * {@code hiddenActorIds} (blocked either way) are left out, as in the list.
+	 */
+	public UnreadSummary unreadSummary(String userId,
+			com.socialcoisa.rede.notifications.domain.NotificationContext context,
+			java.util.Set<String> hiddenActorIds) {
+		java.util.Map<NotificationModule, Integer> byModule = new java.util.EnumMap<>(NotificationModule.class);
+		int total = 0;
+		for (var row : repository.countUnreadByKindAndActor(userId, context)) {
+			if (row.actorId() != null && hiddenActorIds.contains(row.actorId())) {
+				continue;
+			}
+			int count = Math.toIntExact(row.count());
+			byModule.merge(NotificationModule.of(row.kind()), count, Integer::sum);
+			total += count;
+		}
+		return new UnreadSummary(total, byModule);
+	}
+
+	public record UnreadSummary(int total, java.util.Map<NotificationModule, Integer> byModule) {
 	}
 
 }
