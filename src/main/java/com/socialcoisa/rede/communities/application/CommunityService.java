@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,6 +16,8 @@ import com.socialcoisa.rede.communities.domain.MemberRole;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
+import com.socialcoisa.rede.shared.application.CacheConfig;
+import com.socialcoisa.rede.shared.application.CacheInvalidator;
 import com.socialcoisa.rede.shared.geo.CityState;
 import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.TextFieldLimit;
@@ -28,17 +31,19 @@ public class CommunityService {
 	private final com.socialcoisa.rede.shared.security.SuspiciousText suspiciousText;
 	private final Clock clock;
 	private final com.socialcoisa.rede.coin.application.CoinService coins;
+	private final CacheInvalidator cacheInvalidator;
 
 	public CommunityService(CommunityRepository repository, PostRepository postRepository,
 			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate,
 			com.socialcoisa.rede.shared.security.SuspiciousText suspiciousText, Clock clock,
-			com.socialcoisa.rede.coin.application.CoinService coins) {
+			com.socialcoisa.rede.coin.application.CoinService coins, CacheInvalidator cacheInvalidator) {
 		this.coins = coins;
 		this.repository = repository;
 		this.postRepository = postRepository;
 		this.sanctionGate = sanctionGate;
 		this.suspiciousText = suspiciousText;
 		this.clock = clock;
+		this.cacheInvalidator = cacheInvalidator;
 	}
 
 	@Transactional
@@ -58,6 +63,7 @@ public class CommunityService {
 			clock.instant());
 		repository.save(community);
 		repository.saveMember(CommunityMember.join(id, userId, MemberRole.ADMIN, clock.instant()));
+		cacheInvalidator.afterCommit(CacheConfig.COMMUNITIES);
 		return community;
 	}
 
@@ -87,6 +93,7 @@ public class CommunityService {
 		Community updated = community.update(finalName, finalDesc, finalTopic, finalCover, finalAvatar,
 			finalBannerHtml, finalPlace, clock.instant());
 		repository.save(updated);
+		cacheInvalidator.afterCommit(CacheConfig.COMMUNITIES);
 		return updated;
 	}
 
@@ -101,6 +108,8 @@ public class CommunityService {
 		CommunityMember member = CommunityMember.join(communityId, userId, MemberRole.MEMBER, clock.instant());
 		repository.saveMember(member);
 		coins.recordPresence(userId);
+		// O total de membros aparece na vitrine: a entrada ja conta no proximo pedido.
+		cacheInvalidator.afterCommit(CacheConfig.COMMUNITIES);
 		return member;
 	}
 
@@ -127,6 +136,7 @@ public class CommunityService {
 			repository.removeAllMembers(communityId);
 			repository.delete(communityId);
 		}
+		cacheInvalidator.afterCommit(CacheConfig.COMMUNITIES);
 	}
 
 	/**
@@ -173,6 +183,7 @@ public class CommunityService {
 		}
 		repository.removeAllMembers(communityId);
 		repository.delete(communityId);
+		cacheInvalidator.afterCommit(CacheConfig.COMMUNITIES);
 	}
 
 	/** Comunidades das quais o usuario participa (menu lateral). */
@@ -199,7 +210,13 @@ public class CommunityService {
 	/**
 	 * Vitrine. `state` sozinho filtra pela UF; `city` exige `state` (o mesmo nome de cidade existe em
 	 * varios estados). A cidade compara sem acento e sem caixa ("Sao Paulo" acha "São Paulo").
+	 *
+	 * <p>O resultado NAO depende de quem pede — o "sou membro" de cada leitor e aplicado depois, na
+	 * camada web —, entao pode ficar alguns segundos em cache: abrir a vitrine, trocar de filtro e
+	 * voltar custava a mesma varredura toda vez. A chave e o filtro + a paginacao + o cursor.</p>
 	 */
+	@Cacheable(cacheNames = CacheConfig.COMMUNITIES,
+		key = "#topic + '|' + #query + '|' + #city + '|' + #state + '|' + #before + '|' + #limit", sync = true)
 	public List<Community> list(String topic, String query, String city, String state, java.time.Instant before,
 			int limit) {
 		String uf = null;
@@ -280,6 +297,16 @@ public class CommunityService {
 
 	public int countMembers(String communityId) {
 		return repository.countMembers(communityId);
+	}
+
+	/** Contagem de membros da pagina inteira, numa consulta (a vitrine fazia uma por comunidade). */
+	public java.util.Map<String, Integer> countMembersByCommunityIds(java.util.Collection<String> communityIds) {
+		return repository.countMembersByCommunityIds(communityIds);
+	}
+
+	/** Das comunidades da pagina, quais a pessoa participa — numa consulta. */
+	public java.util.Set<String> memberCommunityIds(String userId, java.util.Collection<String> communityIds) {
+		return repository.memberCommunityIds(userId, communityIds);
 	}
 
 	public List<CommunityMember> findMembers(String communityId) {

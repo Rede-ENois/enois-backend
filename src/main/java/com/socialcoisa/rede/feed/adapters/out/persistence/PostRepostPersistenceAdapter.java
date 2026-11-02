@@ -62,4 +62,12 @@ class PostRepostPersistenceAdapter implements PostRepostRepository {
 		}
 		return result;
 	}
+
+	@Override
+	public java.util.Set<String> findPostIdsRepostedByUser(String userId, java.util.Collection<String> postIds) {
+		if (userId == null || postIds == null || postIds.isEmpty()) return java.util.Set.of();
+		return repository.findByUserIdAndPostIdIn(userId, postIds).stream()
+			.map(PostRepostJpaEntity::getPostId)
+			.collect(java.util.stream.Collectors.toSet());
+	}
 }

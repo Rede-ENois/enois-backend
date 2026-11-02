@@ -38,6 +38,9 @@ public interface EventRepository {
 
 	int countAttendees(String eventId);
 
+	/** Presencas dos eventos da pagina, em UMA consulta (evita N+1 na vitrine). */
+	java.util.Map<String, Integer> countAttendeesByEventIds(java.util.Collection<String> eventIds);
+
 	/** Eventos que ainda nao passaram pela sanitizacao (o vencimento e avaliado no dominio). */
 	List<Event> findNotSanitized();
 

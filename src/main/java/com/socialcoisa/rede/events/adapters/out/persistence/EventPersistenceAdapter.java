@@ -142,4 +142,16 @@ class EventPersistenceAdapter implements EventRepository {
 		return attendeeRepo.countByEventId(eventId);
 	}
 
+	@Override
+	public java.util.Map<String, Integer> countAttendeesByEventIds(java.util.Collection<String> eventIds) {
+		if (eventIds == null || eventIds.isEmpty()) {
+			return java.util.Map.of();
+		}
+		java.util.Map<String, Integer> counts = new java.util.HashMap<>();
+		for (Object[] row : attendeeRepo.countByEventIds(eventIds)) {
+			counts.put((String) row[0], ((Number) row[1]).intValue());
+		}
+		return counts;
+	}
+
 }

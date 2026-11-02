@@ -36,6 +36,11 @@ class CosmeticCatalogTests {
 		assertThat(catalog.item("moldura-radar").orElseThrow().releaseOrder()).isEqualTo(26);
 		assertThat(catalog.item("emblema-time-saci").orElseThrow().purchasable()).isFalse();
 		assertThat(catalog.look("look-saci").orElseThrow().items()).first().isEqualTo("tema-saci");
+		// Every collection carries its original look plus the theme-inspired ones, in order.
+		assertThat(catalog.looksOf("saci")).extracting(CosmeticCatalog.Look::id)
+			.containsExactly("look-saci", "look-floresta", "look-vale-esmeralda");
+		assertThat(catalog.look("look-vaporwave").orElseThrow().title()).isEqualTo("Vaporwave");
+		assertThat(catalog.look("look-vaporwave").orElseThrow().items()).first().isEqualTo("tema-carnaval");
 		// Original frames are always on sale, whatever the date.
 		assertThat(catalog.available(catalog.item("moldura-ambar").orElseThrow(), Instant.parse("2026-04-01T12:00:00Z")))
 			.isTrue();
@@ -76,8 +81,31 @@ class CosmeticCatalogTests {
 	void lookWithUnknownItemFails() {
 		assertThatThrownBy(() -> new CosmeticCatalog(new CatalogFile(SACI,
 			List.of(item(1, "tema-saci", CosmeticKind.CARD_THEME, "saci")),
-			List.of(new LookFile("saci", "Saci", List.of("tema-saci", "nao-existe"), "pe", "oi")))))
+			List.of(new LookFile(null, "saci", "Saci", List.of("tema-saci", "nao-existe"), "pe", "oi")))))
 			.isInstanceOf(IllegalStateException.class).hasMessageContaining("nao-existe");
+	}
+
+	@Test
+	void aNamedLookKeepsItsIdAndAnUnnamedOneFallsBackToTheCollection() {
+		CosmeticCatalog catalog = new CosmeticCatalog(new CatalogFile(SACI,
+			List.of(item(1, "tema-saci", CosmeticKind.CARD_THEME, "saci")),
+			List.of(new LookFile(null, "saci", "Saci", List.of("tema-saci"), "pe", "oi"),
+				new LookFile("look-floresta", "saci", "Floresta", List.of("tema-saci"), "pe", "oi"))));
+		assertThat(catalog.looksOf("saci")).extracting(CosmeticCatalog.Look::id)
+			.containsExactly("look-saci", "look-floresta");
+	}
+
+	@Test
+	void duplicatedOrUnsafeLookIdFails() {
+		assertThatThrownBy(() -> new CosmeticCatalog(new CatalogFile(SACI,
+			List.of(item(1, "tema-saci", CosmeticKind.CARD_THEME, "saci")),
+			List.of(new LookFile("look-repetido", "saci", "Um", List.of("tema-saci"), "pe", "oi"),
+				new LookFile("look-repetido", "saci", "Dois", List.of("tema-saci"), "pe", "oi")))))
+			.isInstanceOf(IllegalStateException.class).hasMessageContaining("Duplicated look");
+		assertThatThrownBy(() -> new CosmeticCatalog(new CatalogFile(SACI,
+			List.of(item(1, "tema-saci", CosmeticKind.CARD_THEME, "saci")),
+			List.of(new LookFile("Look Saci", "saci", "Saci", List.of("tema-saci"), "pe", "oi")))))
+			.isInstanceOf(IllegalStateException.class).hasMessageContaining("Invalid look id");
 	}
 
 	@Test

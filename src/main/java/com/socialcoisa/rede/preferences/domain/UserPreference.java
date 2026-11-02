@@ -12,5 +12,5 @@ import java.util.List;
  */
 public record UserPreference(String userId, String themeId, String likedTopics, String blockedTopics,
 		String disabledModules, boolean nightRestReminder, java.time.LocalDate nightRestDismissedOn,
-		boolean liteMode, Instant updatedAt) {
+		boolean liteMode, boolean batataMode, Instant updatedAt) {
 }
