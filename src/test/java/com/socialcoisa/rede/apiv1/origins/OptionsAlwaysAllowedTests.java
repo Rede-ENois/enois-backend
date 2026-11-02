@@ -69,6 +69,19 @@ class OptionsAlwaysAllowedTests {
 			.andExpect(header().doesNotExist("Access-Control-Allow-Credentials"));
 	}
 
+	/**
+	 * Subdominio que casa com o curinga confiavel passa o gate, mas NAO recebe credencial: um
+	 * subdominio irmao comprometido nao pode chamar a API com o cookie da vitima.
+	 */
+	@Test
+	void wildcardSubdomainPreflightDoesNotCarryCredentials() throws Exception {
+		mockMvc.perform(options("/feed/posts/x/reactions")
+				.header("Origin", "https://outro.b7cloud.tech")
+				.header("Access-Control-Request-Method", "POST"))
+			.andExpect(status().is2xxSuccessful())
+			.andExpect(header().doesNotExist("Access-Control-Allow-Credentials"));
+	}
+
 	@Test
 	void pathThatDoesNotExistAlsoGetsPreflightAnswered() throws Exception {
 		mockMvc.perform(options("/caminho/que/nao/existe")
