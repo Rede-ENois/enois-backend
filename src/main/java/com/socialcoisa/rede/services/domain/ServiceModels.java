@@ -51,6 +51,18 @@ public final class ServiceModels {
 			return new ServiceListing(id, sellerId, category, title, description, deliverables, price, currency,
 				deliveryDays, Status.REMOVED, createdAt, now);
 		}
+
+		/**
+		 * O mesmo serviço com o conteúdo novo. Reaproveita a validação da criação: sem ela, a
+		 * edição era o caminho para gravar texto acima do teto da coluna ou moeda inválida.
+		 */
+		public ServiceListing withContent(String category, String title, String description, String deliverables,
+				long price, String currency, int deliveryDays, Instant now) {
+			ServiceListing edited = create(sellerId, category, title, description, deliverables, price, currency,
+				deliveryDays, now);
+			return new ServiceListing(id, sellerId, edited.category(), edited.title(), edited.description(),
+				edited.deliverables(), edited.price(), edited.currency(), edited.deliveryDays(), status, createdAt, now);
+		}
 	}
 
 	public record ServiceRequest(String id, String requesterId, String category, String title, String description,

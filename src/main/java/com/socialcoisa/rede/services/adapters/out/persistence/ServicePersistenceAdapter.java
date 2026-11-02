@@ -62,6 +62,9 @@ interface SpringDataServiceContractRepository
 	List<ServiceContractJpaEntity> findByBuyerIdOrderByCreatedAtDesc(String buyerId);
 
 	List<ServiceContractJpaEntity> findBySellerIdOrderByCreatedAtDesc(String sellerId);
+
+	@Query("select count(c) from ServiceContractJpaEntity c where c.listingId = :listingId and c.escrowState = 'HELD'")
+	long countHeldByListing(String listingId);
 }
 
 @Repository
@@ -169,5 +172,10 @@ class ServicePersistenceAdapter implements ServiceRepository {
 	public List<ServiceContract> findContractsBySeller(String sellerId) {
 		return contracts.findBySellerIdOrderByCreatedAtDesc(sellerId).stream()
 			.map(ServiceContractJpaEntity::toDomain).toList();
+	}
+
+	@Override
+	public boolean hasOpenContractForListing(String listingId) {
+		return contracts.countHeldByListing(listingId) > 0;
 	}
 }
