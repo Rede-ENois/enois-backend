@@ -961,7 +961,16 @@ inválidas são rejeitadas integralmente. A operação exige autenticação e ch
 | `markRead(String notificationId, String userId)` | Marca como lida |
 | `markAllRead(String userId)` | Marca todas como lidas |
 | `list(String userId, int limit)` | Lista notificações |
-| `unreadSummary(userId, context, hiddenActorIds)` | Unread count per area (`NotificationModule`), from one `GROUP BY kind, actor` query over the unread rows; hidden actors are dropped |
+| `unreadSummary(userId, context, hiddenActorIds)` | Unread count per area (`NotificationModule`) and per community (`byCommunity`), from one `GROUP BY kind, actor, href` query over the unread rows (hidden actors are dropped, hrefs resolved by `NotificationPlaces`), plus `eventsToday` (0 in the professional context) |
+
+### NotificationPlaces
+
+**Arquivo**: `src/main/java/com/socialcoisa/rede/notifications/application/NotificationPlaces.java`
+
+| Função | Descrição |
+|---|---|
+| `resolve(hrefs)` | Read-time enrichment by href: `place` (community or group) and `eventDate`. `NotificationTarget.of(href)` reads `/comunidades/{id}`, `/api/feed/posts/{id}`, `/grupos/{slug}` and `/eventos?evento={id}`; `NotificationPlaceRepository` (plain SQL over the communities, posts, groups and events tables, like the weekly digest) runs one query per kind of target for the whole set. Deleted communities and events and closed groups resolve to null |
+| `eventsToday(userId)` | Confirmed events (`WeeklyDigestRepository.attendingEvents`) whose date is today in America/Sao_Paulo |
 
 ### NotificationOutboxEventHandler
 
@@ -986,7 +995,7 @@ inválidas são rejeitadas integralmente. A operação exige autenticação e ch
 
 | Função | Rota |
 |---|---|
-| `notifications(...)` | GET /api/notifications (each item has `module` from `NotificationModule.of(kind)`) |
+| `notifications(...)` | GET /api/notifications (each item has `module` from `NotificationModule.of(kind)`, plus `place` and `eventDate` from `NotificationPlaces`) |
 | `read(...)` | POST /api/notifications/{notificationId}/read |
 | `readAll(...)` | POST /api/notifications/read-all |
 | `unreadSummary(...)` | GET /api/notifications/unread-summary |

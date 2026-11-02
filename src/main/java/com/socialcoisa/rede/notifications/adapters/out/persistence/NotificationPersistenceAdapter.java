@@ -43,7 +43,7 @@ class NotificationPersistenceAdapter implements NotificationRepository {
 	public List<UnreadCount> countUnreadByKindAndActor(String userId, NotificationContext context) {
 		return springData.countUnreadByKindAndActor(userId, context == null ? null : context.name())
 			.stream()
-			.map(row -> new UnreadCount((String) row[0], (String) row[1], ((Number) row[2]).longValue()))
+			.map(row -> new UnreadCount((String) row[0], (String) row[1], (String) row[2], ((Number) row[3]).longValue()))
 			.toList();
 	}
 

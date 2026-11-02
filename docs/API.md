@@ -753,6 +753,22 @@ Each item of `GET /api/notifications` carries `module`, the interface area of it
 `NotificationModule` names as below, e.g. `EVENTS`, `OTHER`), so the app hides or flags notifications
 by area without guessing from the kind.
 
+Each item also carries `place` and `eventDate`, resolved at read time from its `href` (one query per
+kind of target for the whole page):
+
+- `place`: `{ "type": "COMMUNITY" | "GROUP", "id": string, "name": string, "color": null }` or
+  `null`. `/comunidades/{id}` and `/api/feed/posts/{postId}` of a post published in a community give
+  the community; `/grupos/{slug}` gives the group. A deleted community or a closed group gives
+  `null`. `color` is `null` while communities and groups have no color of their own.
+- `eventDate`: `"YYYY-MM-DD"`, the day of the event occurrence an `/eventos?evento={id}` href points
+  at (each occurrence of a recurring event is its own event), or `null` (other hrefs, deleted event,
+  unreadable date).
+
+```json
+{ "id": "notification_...", "kind": "GROUP_NEW_POST", "module": "GROUPS", "href": "/grupos/roda-bh",
+  "place": { "type": "GROUP", "id": "group_...", "name": "Roda BH", "color": null }, "eventDate": null }
+```
+
 Unread summary (`GET /api/notifications/unread-summary`): counts the person's unread notifications,
 leaving out those whose actor is blocked (either way) and applying the same `context` filter as the
 list. Only areas with unread notifications appear in `byModule`; an area clears when its
@@ -760,8 +776,14 @@ notifications are read (`/read` or `/read-all`). The kind to area mapping is
 `NotificationModule` (`MESSAGES`, `EVENTS`, `JOBS`, `COMPANIES`, `MENTORING`, `DAILY_GAMES`,
 `COMMUNITY_GAMES`, `GROUPS`, `STUDY_PAIRS`, `BLOGS`, `NETWORK`, `OTHER`).
 
+`byCommunity` counts the same unread notifications per community id, for those whose `place` is a
+community (only communities with unread ones appear). `eventsToday` is the number of events happening
+today (America/Sao_Paulo) whose attendance the person confirmed; events are social, so it is `0` with
+`context=PROFESSIONAL`.
+
 ```json
-{ "total": 5, "byModule": { "MESSAGES": 3, "GROUPS": 1, "OTHER": 1 } }
+{ "total": 5, "byModule": { "MESSAGES": 3, "GROUPS": 1, "OTHER": 1 },
+  "byCommunity": { "community_...": 1 }, "eventsToday": 1 }
 ```
 
 Mudança de estado da candidatura também gera a notificação `JOB_APPLICATION_STATUS`

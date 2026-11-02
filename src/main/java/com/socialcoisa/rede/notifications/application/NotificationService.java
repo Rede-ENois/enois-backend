@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.socialcoisa.rede.notifications.application.port.out.NotificationRepository;
 import com.socialcoisa.rede.notifications.domain.Notification;
 import com.socialcoisa.rede.notifications.domain.NotificationModule;
+import com.socialcoisa.rede.notifications.domain.NotificationPlace;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 @Service
@@ -20,11 +21,14 @@ public class NotificationService {
 	private final NotificationRepository repository;
 	private final ApplicationEventPublisher events;
 	private final Clock clock;
+	private final NotificationPlaces places;
 
-	public NotificationService(NotificationRepository repository, ApplicationEventPublisher events, Clock clock) {
+	public NotificationService(NotificationRepository repository, ApplicationEventPublisher events, Clock clock,
+			NotificationPlaces places) {
 		this.repository = repository;
 		this.events = events;
 		this.clock = clock;
+		this.places = places;
 	}
 
 	@Transactional
@@ -119,13 +123,15 @@ public class NotificationService {
 	}
 
 	/**
-	 * Unread notifications per interface area, for the menu indicators. Notifications from
-	 * {@code hiddenActorIds} (blocked either way) are left out, as in the list.
+	 * Unread notifications per interface area and per community, for the menu indicators, plus the
+	 * confirmed events happening today. Notifications from {@code hiddenActorIds} (blocked either
+	 * way) are left out, as in the list. Events are social, so the professional context has none.
 	 */
 	public UnreadSummary unreadSummary(String userId,
 			com.socialcoisa.rede.notifications.domain.NotificationContext context,
 			java.util.Set<String> hiddenActorIds) {
 		java.util.Map<NotificationModule, Integer> byModule = new java.util.EnumMap<>(NotificationModule.class);
+		java.util.Map<String, Integer> countByHref = new java.util.HashMap<>();
 		int total = 0;
 		for (var row : repository.countUnreadByKindAndActor(userId, context)) {
 			if (row.actorId() != null && hiddenActorIds.contains(row.actorId())) {
@@ -133,12 +139,24 @@ public class NotificationService {
 			}
 			int count = Math.toIntExact(row.count());
 			byModule.merge(NotificationModule.of(row.kind()), count, Integer::sum);
+			if (row.href() != null) {
+				countByHref.merge(row.href(), count, Integer::sum);
+			}
 			total += count;
 		}
-		return new UnreadSummary(total, byModule);
+		java.util.Map<String, Integer> byCommunity = new java.util.TreeMap<>();
+		places.resolve(countByHref.keySet()).forEach((href, resolved) -> {
+			if (resolved.place() != null && resolved.place().type() == NotificationPlace.Type.COMMUNITY) {
+				byCommunity.merge(resolved.place().id(), countByHref.get(href), Integer::sum);
+			}
+		});
+		int eventsToday = context == com.socialcoisa.rede.notifications.domain.NotificationContext.PROFESSIONAL ? 0
+			: places.eventsToday(userId);
+		return new UnreadSummary(total, byModule, byCommunity, eventsToday);
 	}
 
-	public record UnreadSummary(int total, java.util.Map<NotificationModule, Integer> byModule) {
+	/** {@code byCommunity}: unread count per community id (only communities with some). */
+	public record UnreadSummary(int total, java.util.Map<NotificationModule, Integer> byModule,
+			java.util.Map<String, Integer> byCommunity, int eventsToday) {
 	}
-
 }
