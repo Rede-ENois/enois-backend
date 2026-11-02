@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
+import com.socialcoisa.rede.feed.application.TrendingCursor;
 import com.socialcoisa.rede.feed.domain.AuthorIdentity;
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
@@ -67,12 +68,16 @@ public interface PostRepository {
 	/** Feed "Tudo" respeitando os assuntos bloqueados do leitor (posts sem tópico passam). */
 	List<Post> findActiveAllExcludingTopics(Collection<String> blockedTopics, Instant before, int limit);
 
+	List<Post> findActiveUnseen(UserId reader, Collection<String> blockedTopics, Instant before, int limit);
+
+	List<Post> findActiveInteracted(UserId reader, Instant before, int limit);
+
 	/** "Para você"/Seguindo respeitando os assuntos bloqueados do leitor. */
 	List<Post> findActiveByAuthorsExcludingTopics(Set<UserId> authorIds, Collection<String> blockedTopics,
 			Instant before, int limit);
 
 	/** Em alta: mais reagidos nas últimas windowHours, ordenados por reações desc. */
-	List<Post> findTrending(Instant since, int limit);
+	List<Post> findTrending(Instant since, Instant until, TrendingCursor after, int limit);
 
 	/** Feed "Tudo" filtrado por tipos de post. */
 	/** `resolved` (QUESTION): true = with an accepted answer, false = open, null = both. */
