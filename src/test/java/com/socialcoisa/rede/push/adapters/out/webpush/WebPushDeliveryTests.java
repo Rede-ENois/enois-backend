@@ -25,7 +25,6 @@ import com.socialcoisa.rede.push.application.port.out.PushSubscriptionRepository
 import com.socialcoisa.rede.push.domain.PushSubscription;
 import com.sun.net.httpserver.HttpServer;
 
-import nl.martijndwars.webpush.Base64Encoder;
 import nl.martijndwars.webpush.Utils;
 
 import tools.jackson.databind.ObjectMapper;
@@ -68,8 +67,8 @@ class WebPushDeliveryTests {
 		server.start();
 
 		KeyPair vapid = keyPair();
-		vapidPublic = Base64Encoder.encodeUrlWithoutPadding(Utils.encode((ECPublicKey) vapid.getPublic()));
-		vapidPrivate = Base64Encoder.encodeUrlWithoutPadding(Utils.encode((ECPrivateKey) vapid.getPrivate()));
+		vapidPublic = base64Url(Utils.encode((ECPublicKey) vapid.getPublic()));
+		vapidPrivate = base64Url(Utils.encode((ECPrivateKey) vapid.getPrivate()));
 		repository = new InMemorySubscriptions();
 		// O servico de push do teste roda em HTTP na loopback; o filtro de allowlist e testado
 		// separadamente com o filtro de producao.
@@ -147,10 +146,15 @@ class WebPushDeliveryTests {
 
 	private PushSubscription subscription(String id, String userId, String path) {
 		KeyPair device = keyPair();
-		String browserPublic = Base64Encoder.encodeUrlWithoutPadding(Utils.encode((ECPublicKey) device.getPublic()));
-		String auth = Base64Encoder.encodeUrlWithoutPadding(randomBytes(16));
+		String browserPublic = base64Url(Utils.encode((ECPublicKey) device.getPublic()));
+		String auth = base64Url(randomBytes(16));
 		String endpoint = "http://127.0.0.1:" + server.getAddress().getPort() + path;
 		return PushSubscription.create(id, userId, endpoint, browserPublic, auth, Instant.now());
+	}
+
+	// O web-push 5.1.2 removeu o Base64Encoder publico; o formato do protocolo e o mesmo.
+	private static String base64Url(byte[] bytes) {
+		return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
 	}
 
 	private static byte[] randomBytes(int size) {
