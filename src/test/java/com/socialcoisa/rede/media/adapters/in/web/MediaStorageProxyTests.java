@@ -251,4 +251,60 @@ class MediaStorageProxyTests {
 		assertThat(store().chaveEscrita).isEqualTo(objectKey);
 		assertThat(store().escrito).isEqualTo("foto".getBytes(StandardCharsets.UTF_8));
 	}
+
+	@Test
+	void donoEnviaVideoMp4PeloProxyEOArquivoChegaAoBucket() throws Exception {
+		var dono = auth.authenticate("media_proxy_video");
+		var criado = mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", dono.token())
+				.header("Idempotency-Key", "media-proxy-video-1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("fileName", "clipe.mp4",
+					"mimeType", "video/mp4", "size", 2048, "purpose", "POST_VIDEO"))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
+			.path("objectKey").asText();
+		assertThat(objectKey).endsWith("/file.mp4");
+
+		// Corpo que o ffmpeg nao consegue ler (ou ffmpeg ausente): a limpeza e best-effort e o
+		// original segue para o bucket — upload de video nunca pode virar 500 por causa dela.
+		byte[] video = "ftypisom-corpo-de-video-de-teste".getBytes(StandardCharsets.UTF_8);
+		mockMvc.perform(put("/storage/" + objectKey)
+				.header("X-Session-Token", dono.token())
+				.contentType("video/mp4")
+				.content(video))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("STORED"));
+
+		assertThat(store().chaveEscrita).isEqualTo(objectKey);
+		assertThat(store().escrito).isEqualTo(video);
+	}
+
+	@Test
+	void videoGrandeAcimaDoLimiteEmMemoriaTambemChegaAoBucket() throws Exception {
+		var dono = auth.authenticate("media_proxy_video_grande");
+		var criado = mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", dono.token())
+				.header("Idempotency-Key", "media-proxy-video-2")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("fileName", "aula.mp4",
+					"mimeType", "video/mp4", "size", 45L * 1024 * 1024, "purpose", "POST_VIDEO"))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
+			.path("objectKey").asText();
+
+		// Acima de MAX_IN_MEMORY o proxy usa arquivo temporario + ffmpeg (sanitizeToFile).
+		byte[] video = new byte[41 * 1024 * 1024];
+		mockMvc.perform(put("/storage/" + objectKey)
+				.header("X-Session-Token", dono.token())
+				.contentType("video/mp4")
+				.content(video))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("STORED"));
+
+		assertThat(store().chaveEscrita).isEqualTo(objectKey);
+		assertThat(store().escrito).hasSize(video.length);
+	}
 }
