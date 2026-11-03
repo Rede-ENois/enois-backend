@@ -646,6 +646,20 @@ encontros não online (`IN_PERSON`, `HYBRID`) daquele lugar, com a cidade compar
 `limit`. Uma busca em branco mantém a listagem sem filtro. Os caracteres `%`, `_` e `!` são
 tratados como texto literal, assim como na busca de mentorias.
 
+## Feed RSS/Atom do blog
+
+`GET /api/blogs/{slug}/feed.xml` devolve o feed Atom 1.0 de um blog (`application/atom+xml`), um
+feed por blog, para quem acompanha por um leitor de RSS. É público e **não exige sessão nem
+`Origin`** (leitor de RSS não é navegador); as demais rotas de dados do blog continuam exigindo
+origem. Mesmas regras de visibilidade da página do blog: conta banida ou título suspeito = `404
+BLOG_NOT_FOUND`.
+
+- Os 20 posts mais recentes, cada um com título, link para `/blog/{slug}/{postId}`, datas e um
+  **resumo em texto puro** (até 300 caracteres). O corpo completo não vai no feed: ele pode ser
+  HTML de tema próprio e o leitor é um cliente que não controlamos.
+- Os links usam `rede.frontend.url` (`FRONTEND_URL`) como base.
+- Resposta com `Cache-Control: public, max-age=300`.
+
 ## Mentoria
 
 | Método | Rota | Descrição | Autenticação |
@@ -858,9 +872,10 @@ A resposta será cacheadada e reutilizada se a mesma chave for reenviada.
 | Method | Route | Description | Authentication |
 |---|---|---|---|
 | GET | `/api/loja?order=oldest\|newest` | The shop of the day: items on sale (collections in season, classics and the permanent one); with a session, also what the person owns (default `oldest`) | No; with a session, adds `owned` and `equipped` |
-| GET | `/api/loja/colecoes` | Collections in season, their sale windows and ready-made looks | No |
+| GET | `/api/loja/colecoes` | Collections in season, their sale windows and ready-made looks | No; with a session, each look also carries `owned` (every piece is the person's) and `equipped` |
 | POST | `/api/loja/{itemId}/comprar` | Buy one item | Yes |
 | POST | `/api/loja/looks/{lookId}/comprar` | Buy the missing pieces of a look and wear it | Yes |
+| POST | `/api/loja/looks/{lookId}/equipar` / `.../desequipar` | Wear / take off a look the person already owns (`403 NOT_OWNED` without every piece); taking it off clears only the slots still holding the look's own pieces and its status | Yes |
 | POST | `/api/loja/{itemId}/equipar` / `.../desequipar` | Equip / unequip an owned item (`none` unequips the frame) | Yes |
 | PUT | `/api/me/status` | Status bubble `{ text, icon }` | Yes |
 | PUT | `/api/cosmetics/profile/name-style` | Name theme (free preset or owned `NAME_STYLE` id), font, color | Yes |

@@ -111,6 +111,7 @@ class SeasonalCosmeticsFlowTests {
 			.andExpect(jsonPath("$[?(@.id == 'moldura-ambar')].available").value(true))
 			.andExpect(jsonPath("$[?(@.id == 'moldura-ambar')].kind").value("FRAME"))
 			.andExpect(jsonPath("$[?(@.id == 'tema-saci')].kind").value("CARD_THEME"))
+			.andExpect(jsonPath("$[?(@.id == 'tema-saci')].releaseOrder").value(27))
 			.andExpect(jsonPath("$[?(@.id == 'tema-saci')].collection").value("saci"))
 			.andExpect(jsonPath("$[?(@.id == 'tema-saci')].priceMf").value(4_000))
 			.andExpect(jsonPath("$[?(@.id == 'tema-saci')].available").value(true))

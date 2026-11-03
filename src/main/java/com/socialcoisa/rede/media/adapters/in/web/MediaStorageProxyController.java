@@ -41,7 +41,7 @@ import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 @RequestMapping("/storage")
 class MediaStorageProxyController {
 
-	private static final Logger LOG = LoggerFactory.getLogger(MediaStorageProxyController.class);
+	private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(MediaStorageProxyController.class);
 
 	/** Vazio quando o storage e o ImageKit (nao ha bucket para servir). */
 	private final ObjectProvider<MediaObjectStore> storeProvider;
@@ -146,6 +146,7 @@ class MediaStorageProxyController {
 				"O tamanho enviado nao corresponde ao declarado no upload.");
 		}
 		String mime = asset.mimeType();
+		long startedAt = System.nanoTime();
 		try {
 			if (length > com.socialcoisa.rede.media.application.MediaMetadataSanitizer.MAX_IN_MEMORY) {
 				if (sanitizer.supportsInMemory(mime)) {
@@ -156,7 +157,7 @@ class MediaStorageProxyController {
 				java.nio.file.Path sanitized = sanitizer.sanitizeToFile(request.getInputStream(), mime, objectKey);
 				try {
 					try (var body = java.nio.file.Files.newInputStream(sanitized)) {
-						writeToStore(objectKey, mime, java.nio.file.Files.size(sanitized), body);
+						writeToBucket(objectKey, mime, java.nio.file.Files.size(sanitized), body, length, startedAt);
 					}
 				}
 				finally {
@@ -168,7 +169,8 @@ class MediaStorageProxyController {
 				// LIMPEZA NA ESCRITA: EXIF/GPS/XMP/IPTC não chegam ao bucket.
 				byte[] clean = sanitizer.sanitize(raw, mime, objectKey);
 				imageModeration.verifyBeforeStorage(clean, mime);
-				writeToStore(objectKey, mime, clean.length, new java.io.ByteArrayInputStream(clean));
+				writeToBucket(objectKey, mime, clean.length, new java.io.ByteArrayInputStream(clean), length,
+					startedAt);
 			}
 		}
 		catch (java.io.IOException failure) {
@@ -178,19 +180,25 @@ class MediaStorageProxyController {
 	}
 
 	/**
-	 * A falha do bucket (fora do ar, credencial sem permissão, gateway recusando) é do servidor:
-	 * vira 503 com código próprio em vez de 500 genérico. O cliente sabe que pode tentar de novo e
-	 * o log identifica a chave/tipo sem expor a credencial.
+	 * Grava no bucket. Falha do storage (gateway fora do ar, recusa, corte de conexao) deixava de ser
+	 * um erro nomeado: virava o "Erro interno inesperado" generico, sem tamanho, tipo nem causa no log.
+	 * Agora sai 502 com codigo proprio e a excecao original anexada — o log e o monitoramento 5xx
+	 * mostram a causa real. A mensagem ao usuario continua sem detalhe de infraestrutura.
 	 */
-	private void writeToStore(String objectKey, String mime, long length, InputStream body) {
+	private void writeToBucket(String objectKey, String mime, long storedBytes, java.io.InputStream body,
+			long receivedBytes, long startedAt) {
 		try {
-			store().write(objectKey, mime, length, body);
+			store().write(objectKey, mime, storedBytes, body);
+		}
+		catch (ApiException failure) {
+			throw failure;
 		}
 		catch (RuntimeException failure) {
-			LOG.error("media_storage_write_failed objectKey={} mime={} bytes={} error={}", objectKey, mime, length,
-				failure.getClass().getSimpleName());
-			throw new ApiException(503, "STORAGE_UNAVAILABLE",
-				"O armazenamento de mídia está indisponível no momento. Tente novamente em instantes.");
+			LOG.error("media_storage_write_failed mime={} receivedBytes={} storedBytes={} elapsedMs={} cause={}",
+				mime, receivedBytes, storedBytes, (System.nanoTime() - startedAt) / 1_000_000L,
+				failure.getClass().getName());
+			throw new ApiException(502, "MEDIA_STORAGE_WRITE_FAILED",
+				"Nao foi possivel gravar a midia agora. Tente novamente em instantes.", failure);
 		}
 	}
 

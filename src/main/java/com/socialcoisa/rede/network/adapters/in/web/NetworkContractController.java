@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -33,6 +34,7 @@ import com.socialcoisa.rede.network.domain.UserConnection;
 import com.socialcoisa.rede.profile.application.NameStyleView;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
+import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 import com.socialcoisa.rede.shared.web.PageResponse;
@@ -222,8 +224,9 @@ class NetworkContractController {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		var state = networkService.getConnectionState(user.id().value(), targetUserId);
 		boolean blocked = blockService.isBlockedBy(user.id().value(), targetUserId);
-		boolean muted = muteService.isMuted(user.id().value(), targetUserId);
-		return new ConnectionStatusView(targetUserId, state.status(), state.requestedByMe(), blocked, muted);
+		var mute = muteService.activeMute(user.id().value(), targetUserId);
+		return new ConnectionStatusView(targetUserId, state.status(), state.requestedByMe(), blocked,
+			mute.isPresent(), mute.map(m -> m.expiresAt() != null ? m.expiresAt().toString() : null).orElse(null));
 	}
 
 	/** Bloqueia um usuario: ele some do feed, dos comentarios, das notificacoes e da busca. */
@@ -274,17 +277,73 @@ class NetworkContractController {
 			.toList();
 	}
 
+	/**
+	 * Silencia alguem. O corpo e opcional: sem ele o silenciamento vale ate reativar (o
+	 * comportamento que ja existia); com `{"duration":"24h"}` (ou `72h`, `7d`, `30d`, `forever`)
+	 * ele vence sozinho.
+	 */
 	@PostMapping("/mutes/{targetUserId}")
 	ResponseEntity<String> mute(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-			@PathVariable String targetUserId) {
+			@PathVariable String targetUserId,
+			@RequestBody(required = false) MuteRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		String hash = idempotency.hash(Map.of("targetUserId", targetUserId));
+		Duration duration = muteDuration(request != null ? request.duration() : null);
+		String hash = idempotency.hash(Map.of("targetUserId", targetUserId,
+			"duration", duration != null ? duration.toString() : "forever"));
 		return idempotency.execute(user.id(), "POST", "/api/network/mutes/{userId}", idempotencyKey, hash,
 			() -> {
-				muteService.mute(user.id().value(), targetUserId);
+				muteService.mute(user.id().value(), targetUserId, duration);
 				return new CommandResponse(201, new StatusResponse(targetUserId, "MUTED"));
 			});
+	}
+
+	/** Teto do prazo: `expires_at` e `timestamp` do MySQL, que nao passa de 2038. */
+	private static final Duration MAX_MUTE_DURATION = Duration.ofDays(365);
+
+	/** Forma curta: `24h`, `7d`, `1w` — qualquer quantidade, o teto vem depois da leitura. */
+	private static final java.util.regex.Pattern MUTE_SHORTHAND =
+			java.util.regex.Pattern.compile("^(\\d{1,5})([mhdw])$");
+
+	/**
+	 * Prazos que a tela oferece (24h, 72h, 1 semana) e o "sempre". Tambem aceita ISO-8601
+	 * (`PT24H`), para quem chama a API direto. Texto desconhecido vira 400 em vez de silenciar
+	 * para sempre por engano.
+	 */
+	private static Duration muteDuration(String raw) {
+		if (raw == null || raw.isBlank()) {
+			return null;
+		}
+		String value = raw.trim().toLowerCase(java.util.Locale.ROOT);
+		if (value.equals("forever") || value.equals("sempre") || value.equals("until-unmute")) {
+			return null;
+		}
+		Duration duration;
+		var shorthand = MUTE_SHORTHAND.matcher(value);
+		if (shorthand.matches()) {
+			long amount = Long.parseLong(shorthand.group(1));
+			duration = switch (shorthand.group(2)) {
+				case "m" -> Duration.ofMinutes(amount);
+				case "h" -> Duration.ofHours(amount);
+				case "d" -> Duration.ofDays(amount);
+				default -> Duration.ofDays(Math.multiplyExact(amount, 7));
+			};
+		}
+		else {
+			try {
+				duration = Duration.parse(raw.trim().toUpperCase(java.util.Locale.ROOT));
+			}
+			catch (java.time.format.DateTimeParseException invalid) {
+				throw new ApiException(400, "MUTE_DURATION_INVALID", "Prazo de silenciamento invalido.");
+			}
+		}
+		if (duration.isNegative() || duration.isZero()) {
+			throw new ApiException(400, "MUTE_DURATION_INVALID", "Prazo de silenciamento invalido.");
+		}
+		if (duration.compareTo(MAX_MUTE_DURATION) > 0) {
+			throw new ApiException(400, "MUTE_DURATION_TOO_LONG", "Prazo de silenciamento longo demais.");
+		}
+		return duration;
 	}
 
 	@DeleteMapping("/mutes/{targetUserId}")
@@ -316,7 +375,8 @@ class NetworkContractController {
 					p != null ? p.username() : null,
 					p != null ? p.name() : null,
 					p != null ? p.avatar() : null,
-					m.createdAt() != null ? m.createdAt().toString() : null);
+					m.createdAt() != null ? m.createdAt().toString() : null,
+					m.expiresAt() != null ? m.expiresAt().toString() : null);
 			})
 			.toList();
 	}
@@ -342,7 +402,13 @@ class NetworkContractController {
 	record BlockedUserView(String userId, String username, String name, String avatar, String blockedAt) {
 	}
 
-	record MutedUserView(String userId, String username, String name, String avatar, String mutedAt) {
+	/** Corpo opcional do `POST /network/mutes/{userId}`: `{"duration":"24h"}`. Ausente = ate reativar. */
+	record MuteRequest(String duration) {
+	}
+
+	/** `expiresAt` nulo = ate reativar (o silenciamento nao tem prazo). */
+	record MutedUserView(String userId, String username, String name, String avatar, String mutedAt,
+			String expiresAt) {
 	}
 
 	record NetworkSummaryView(String userId, int connections, int followers, int pendingRequests) {
@@ -353,7 +419,8 @@ class NetworkContractController {
 			String direction, NetworkUserView peer) {
 	}
 
+	/** `muteExpiresAt` nulo quando nao ha silenciamento ou quando ele vale ate reativar. */
 	record ConnectionStatusView(String targetUserId, String status, boolean requestedByMe, boolean blocked,
-			boolean muted) {
+			boolean muted, String muteExpiresAt) {
 	}
 }

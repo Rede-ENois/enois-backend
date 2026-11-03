@@ -191,9 +191,13 @@ public class Post {
 			? (expiresAt != null ? expiresAt : editedAt.plus(Duration.ofHours(24)))
 			: null;
 		// Editar nunca muda a autoria: tipo, conteúdo, tags e assunto são editáveis.
-		return new Post(id, authorId, newType, newContent, newPageHtml, newTags, mediaIds, communityId, newTopic,
-			channelId, createdAt, visibility, counters, status, deletedAt, editedAt, newExpiresAt, authorIdentity,
-			mediaSpoiler);
+		Post edited = new Post(id, authorId, newType, newContent, newPageHtml, newTags, mediaIds, communityId,
+			newTopic, channelId, createdAt, visibility, counters, status, deletedAt, editedAt, newExpiresAt,
+			authorIdentity, mediaSpoiler);
+		// Estado que mora fora do construtor (setado por mutador) vai junto: sem isso, editar o
+		// comentário de uma republicação soltava a citação do original e o save gravava repost_of nulo.
+		return edited.markRepostOf(repostOf, repostOfAuthor, repostWithOpinion)
+			.markAcceptedAnswer(acceptedCommentId, resolvedAt);
 	}
 
 	public boolean isActive() {

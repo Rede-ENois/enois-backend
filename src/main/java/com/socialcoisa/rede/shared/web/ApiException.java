@@ -12,6 +12,13 @@ public class ApiException extends RuntimeException {
 		this.code = code;
 	}
 
+	/** Mesma resposta, com a causa original anexada: o log e o monitoramento 5xx mostram a exceção real. */
+	public ApiException(int status, String code, String message, Throwable cause) {
+		super(message, cause);
+		this.status = status;
+		this.code = code;
+	}
+
 	public int status() {
 		return status;
 	}

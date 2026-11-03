@@ -1,6 +1,8 @@
 package com.socialcoisa.rede.onboarding.adapters.out.persistence;
 
 import java.sql.Date;
+import java.sql.Timestamp;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -53,16 +55,19 @@ class JdbcStarterPackAdapter implements StarterPackReader {
 		      or (uc2.receiver_user_id = :user and uc2.requester_user_id = u.id)))
 		  and not exists (select 1 from user_blocks b
 		    where (b.blocker_id = :user and b.blocked_id = u.id) or (b.blocker_id = u.id and b.blocked_id = :user))
-		  and not exists (select 1 from user_mutes mu where mu.muter_id = :user and mu.muted_id = u.id)
+		  and not exists (select 1 from user_mutes mu where mu.muter_id = :user and mu.muted_id = u.id
+		    and (mu.expires_at is null or mu.expires_at > :now))
 		order by (select count(*) from user_skills k where k.user_id = u.id and lower(k.skill) in (:skills))
 		  + %s desc, u.reputation desc, u.created_at desc
 		limit :limit
 		""";
 
 	private final NamedParameterJdbcTemplate jdbc;
+	private final Clock clock;
 
-	JdbcStarterPackAdapter(NamedParameterJdbcTemplate jdbc) {
+	JdbcStarterPackAdapter(NamedParameterJdbcTemplate jdbc, Clock clock) {
 		this.jdbc = jdbc;
+		this.clock = clock;
 	}
 
 	@Override
@@ -95,8 +100,9 @@ class JdbcStarterPackAdapter implements StarterPackReader {
 		return jdbc.queryForList(PEOPLE_SQL.formatted(topicScore), params, String.class);
 	}
 
-	private static MapSqlParameterSource params(String userId, int limit) {
-		return new MapSqlParameterSource("user", userId).addValue("limit", limit);
+	private MapSqlParameterSource params(String userId, int limit) {
+		return new MapSqlParameterSource("user", userId).addValue("limit", limit)
+			.addValue("now", Timestamp.from(clock.instant()));
 	}
 
 	private static List<String> orNone(List<String> values) {

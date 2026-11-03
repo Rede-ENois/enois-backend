@@ -1314,7 +1314,7 @@ Temas da galeria (criados pela comunidade, instaláveis com um clique) e cosmét
 | `POST /temas/galeria` / `.../install` / `.../hide` / `.../report` | Publicar, instalar, ocultar, denunciar |
 | `GET /cosmetics/catalog` / `.../mine` | Community cosmetics catalog, my items |
 | `GET /loja` / `/loja/colecoes` | Native shop catalog / collections (seasonal and the permanent `essenciais`) with their looks |
-| `POST /loja/{itemId}/comprar` / `.../equipar` / `.../desequipar`, `POST /loja/looks/{lookId}/comprar` | Buy, equip, unequip, buy a look |
+| `POST /loja/{itemId}/comprar` / `.../equipar` / `.../desequipar`, `POST /loja/looks/{lookId}/comprar` / `.../equipar` / `.../desequipar` | Buy, equip, unequip, buy, wear and take off a look |
 | `PUT /me/status` | Profile status bubble |
 | `GET`/`POST /eventos/saci-halloween`, `/eventos/caca-saci` | Free cosmetic events (duel, hunt) |
 | `PUT /cosmetics/profile/name-style` | Estilo do nome no perfil e em todo lugar onde o nome aparece |
@@ -1491,6 +1491,7 @@ publish.
 | Rota | Descrição |
 |---|---|
 | `GET /blogs/{slug}` | Blog público |
+| `GET /blogs/{slug}/feed.xml` | Feed Atom do blog (público, sem sessão nem `Origin`) |
 | `POST /me/posts` / `PATCH /me/posts/{postId}` / `DELETE /me/posts/{postId}` | Publicar, editar, excluir |
 | `POST /{slug}/subscription` / `DELETE /{slug}/subscription` | Assinar / cancelar assinatura |
 
