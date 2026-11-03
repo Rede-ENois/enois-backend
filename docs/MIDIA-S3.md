@@ -168,6 +168,21 @@ cluster (IRSA no service account). As tarefas de permissão acima são no **role
 | `REDE_MEDIA_S3_REGION` | `sa-east-1` | padrão `us-east-1` |
 | `REDE_MEDIA_S3_PREFIX` | `uploads/` | padrão `uploads/`, a mesma forma dos objetos do ImageKit (facilita a migração). Prefixo `/` significa a **raiz** do bucket |
 | `REDE_MEDIA_S3_PUBLIC_BASE_URL` | `https://cdn.enois.ia.br` | vazio = endereço do bucket na região |
+| `REDE_MEDIA_DIMENSIONS_BACKFILL_ENABLED` | `true` | padrão `true`; `false` desliga o backfill de largura/altura (abaixo) |
+| `REDE_MEDIA_DIMENSIONS_BACKFILL_BATCH_SIZE` | `20` | imagens por rodada (1 a 100) |
+| `REDE_MEDIA_DIMENSIONS_BACKFILL_DELAY_MS` | `60000` | intervalo entre rodadas |
+
+## Largura e altura das imagens (V236)
+
+`media_assets.width`/`height` guardam o tamanho em pixels **como a imagem aparece** (orientação EXIF
+aplicada), para o card do feed reservar a altura final antes de a imagem carregar. O `PUT
+/api/storage/{chave}` mede os bytes já limpos (o sanitizador já girou o JPEG pela EXIF) lendo só o
+cabeçalho; vídeo, áudio e PDF ficam `null`, e falha de leitura nunca derruba o upload.
+
+Imagens antigas são medidas pelo `MediaDimensionsBackfillWorker`: a cada rodada pega até 20 imagens no
+S3 sem `width`, não removidas e com mais de 1h (a janela de upload), lê só o primeiro 1MB do objeto
+(`Range`) e grava o tamanho. Leitura que falha soma `dimension_attempts`; com 3 falhas o asset deixa de
+ser escolhido. Asset ainda no ImageKit não entra (o objeto não está no bucket).
 
 ## Primeira virada, com calma
 

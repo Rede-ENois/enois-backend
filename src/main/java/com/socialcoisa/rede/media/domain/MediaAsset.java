@@ -27,11 +27,17 @@ public class MediaAsset {
 	private Instant s3MigratedAt;
 	private int s3MigrationAttempts;
 	private String s3LastError;
+	/** Pixel size as displayed; null for non-images and for images not measured yet. */
+	private final Integer width;
+	private final Integer height;
+	/** Failed dimension reads by the backfill worker (it gives up after a few). */
+	private final int dimensionAttempts;
 
 	private MediaAsset(String id, UserId ownerId, String fileName, String mimeType, long size, String purpose,
 			String objectKey, String cdnUrl, MediaStatus status, MediaDeleteStatus deleteStatus, Instant createdAt,
 			Instant expiresAt, Instant deletedAt, MediaStorageProvider storageProvider, String s3CdnUrl,
-			Instant s3MigratedAt, int s3MigrationAttempts, String s3LastError) {
+			Instant s3MigratedAt, int s3MigrationAttempts, String s3LastError, Integer width, Integer height,
+			int dimensionAttempts) {
 		this.id = id;
 		this.ownerId = ownerId;
 		this.fileName = fileName;
@@ -50,6 +56,9 @@ public class MediaAsset {
 		this.s3MigratedAt = s3MigratedAt;
 		this.s3MigrationAttempts = s3MigrationAttempts;
 		this.s3LastError = s3LastError;
+		this.width = width;
+		this.height = height;
+		this.dimensionAttempts = dimensionAttempts;
 	}
 
 	public static MediaAsset pending(String id, UserId ownerId, String fileName, String mimeType, long size,
@@ -68,16 +77,17 @@ public class MediaAsset {
 		boolean onS3 = provider == MediaStorageProvider.S3;
 		return new MediaAsset(id, ownerId, fileName, mimeType, size, purpose, objectKey, cdnUrl, MediaStatus.PENDING,
 			MediaDeleteStatus.NONE, createdAt, expiresAt, null, provider, onS3 ? cdnUrl : null,
-			onS3 ? createdAt : null, 0, null);
+			onS3 ? createdAt : null, 0, null, null, null, 0);
 	}
 
 	public static MediaAsset restore(String id, UserId ownerId, String fileName, String mimeType, long size,
 			String purpose, String objectKey, String cdnUrl, MediaStatus status, MediaDeleteStatus deleteStatus,
 			Instant createdAt, Instant expiresAt, Instant deletedAt, MediaStorageProvider storageProvider,
-			String s3CdnUrl, Instant s3MigratedAt, int s3MigrationAttempts, String s3LastError) {
+			String s3CdnUrl, Instant s3MigratedAt, int s3MigrationAttempts, String s3LastError, Integer width,
+			Integer height, int dimensionAttempts) {
 		return new MediaAsset(id, ownerId, fileName, mimeType, size, purpose, objectKey, cdnUrl, status, deleteStatus,
 			createdAt, expiresAt, deletedAt, storageProvider, s3CdnUrl, s3MigratedAt, s3MigrationAttempts,
-			s3LastError);
+			s3LastError, width, height, dimensionAttempts);
 	}
 
 	public boolean belongsTo(UserId userId) {
@@ -216,5 +226,22 @@ public class MediaAsset {
 
 	public String s3LastError() {
 		return s3LastError;
+	}
+
+	public Integer width() {
+		return width;
+	}
+
+	public Integer height() {
+		return height;
+	}
+
+	public int dimensionAttempts() {
+		return dimensionAttempts;
+	}
+
+	/** Not removed and not on its way out: the only assets a post may still show. */
+	public boolean isVisible() {
+		return deleteStatus == MediaDeleteStatus.NONE;
 	}
 }

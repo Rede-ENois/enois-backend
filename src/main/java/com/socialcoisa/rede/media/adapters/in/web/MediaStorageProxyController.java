@@ -46,16 +46,19 @@ class MediaStorageProxyController {
 	private final CurrentUserResolver currentUserResolver;
 	private final com.socialcoisa.rede.media.application.MediaMetadataSanitizer sanitizer;
 	private final com.socialcoisa.rede.media.application.MediaImageModerationService imageModeration;
+	private final com.socialcoisa.rede.media.application.MediaDimensionsService dimensions;
 
 	MediaStorageProxyController(ObjectProvider<MediaObjectStore> storeProvider, MediaAssetRepository assets,
 			CurrentUserResolver currentUserResolver,
 			com.socialcoisa.rede.media.application.MediaMetadataSanitizer sanitizer,
-			com.socialcoisa.rede.media.application.MediaImageModerationService imageModeration) {
+			com.socialcoisa.rede.media.application.MediaImageModerationService imageModeration,
+			com.socialcoisa.rede.media.application.MediaDimensionsService dimensions) {
 		this.storeProvider = storeProvider;
 		this.assets = assets;
 		this.currentUserResolver = currentUserResolver;
 		this.sanitizer = sanitizer;
 		this.imageModeration = imageModeration;
+		this.dimensions = dimensions;
 	}
 
 	private MediaObjectStore store() {
@@ -168,6 +171,7 @@ class MediaStorageProxyController {
 				imageModeration.verifyBeforeStorage(clean, mime);
 				writeToBucket(objectKey, mime, clean.length, new java.io.ByteArrayInputStream(clean), length,
 					startedAt);
+				dimensions.recordUploaded(asset, clean);
 			}
 		}
 		catch (java.io.IOException failure) {

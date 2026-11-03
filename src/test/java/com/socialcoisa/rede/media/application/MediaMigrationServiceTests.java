@@ -246,6 +246,19 @@ class MediaMigrationServiceTests {
 		public long countAll() {
 			return 0;
 		}
+
+		@Override
+		public void recordDimensions(String id, int width, int height) {
+		}
+
+		@Override
+		public void recordDimensionFailure(String id) {
+		}
+
+		@Override
+		public List<MediaAsset> findForDimensionBackfill(int limit, int maxAttempts, java.time.Instant createdBefore) {
+			return List.of();
+		}
 	}
 
 	private static final class FakeDownloader implements MediaSourceDownloader {
