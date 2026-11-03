@@ -3,6 +3,7 @@ package com.socialcoisa.rede.groups.application;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import com.socialcoisa.rede.groups.application.port.out.GroupContentRepository;
 import com.socialcoisa.rede.groups.application.port.out.GroupRepository;
 import com.socialcoisa.rede.groups.domain.Group;
 import com.socialcoisa.rede.groups.domain.GroupMember;
@@ -10,6 +11,7 @@ import com.socialcoisa.rede.groups.domain.GroupPost;
 import com.socialcoisa.rede.groups.domain.GroupRole;
 import com.socialcoisa.rede.notifications.application.NotificationService;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
+import com.socialcoisa.rede.shared.outbox.OutboxEventHandler;
 
 /**
  * Notificações do contexto de Grupos.
@@ -21,16 +23,57 @@ import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
  * Quem administra recebe com kind/cta próprios; o autor de uma ação nunca é notificado dela.
  */
 @Component
-class GroupNotifier {
+class GroupNotifier implements OutboxEventHandler {
+
+	/** Outbox event appended when a post is published; its aggregate id is the post id. */
+	static final String POST_PUBLISHED = "GroupPostPublished";
 
 	private final NotificationService notifications;
 	private final GroupRepository groups;
+	private final GroupContentRepository content;
 	private final UserProfileRepository profiles;
 
-	GroupNotifier(NotificationService notifications, GroupRepository groups, UserProfileRepository profiles) {
+	GroupNotifier(NotificationService notifications, GroupRepository groups, GroupContentRepository content,
+			UserProfileRepository profiles) {
 		this.notifications = notifications;
 		this.groups = groups;
+		this.content = content;
 		this.profiles = profiles;
+	}
+
+	@Override
+	public void handle(String eventType, String aggregateId, String payload) {
+		if (POST_PUBLISHED.equals(eventType)) {
+			content.findPost(aggregateId).ifPresent(this::newPost);
+		}
+	}
+
+	/**
+	 * Every other member hears about a new post, one notification per group: while it is unread the
+	 * next posts update it ("3 novas publicações em X") instead of piling up, and the push goes out
+	 * only for the first. A post removed (or a group closed to its members) before the worker ran notifies nobody.
+	 *
+	 * ponytail: one lookup and one write per member inside the outbox worker transaction; fine for
+	 * groups of a few thousand members, batch the upsert per group if groups grow past that.
+	 */
+	void newPost(GroupPost post) {
+		if (!post.isPublished()) {
+			return;
+		}
+		Group group = groups.findById(post.groupId()).orElse(null);
+		if (group == null || !group.status().readableByMembers()) {
+			return;
+		}
+		String authorName = nameOf(post.authorId());
+		String groupKey = "GROUP_NEW_POST:group:" + group.id();
+		for (GroupMember member : groups.listMembers(group.id())) {
+			if (member.userId().equals(post.authorId())) {
+				continue;
+			}
+			notifications.createCounted(member.userId(), "GROUP_NEW_POST", groupKey, post.authorId(),
+				"Novas publicações em " + group.name(), authorName + " publicou em " + group.name() + ".",
+				count -> count + " novas publicações em " + group.name() + ".", href(group), "Abrir grupo");
+		}
 	}
 
 	/** Entrada aberta: avisa quem administra que a pessoa entrou (o pedido por aprovação já avisa). */

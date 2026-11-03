@@ -30,22 +30,46 @@ class CosmeticCatalogTests {
 	@Test
 	void shippedCatalogLoadsWithEveryCollectionAndLook() {
 		CosmeticCatalog catalog = new CosmeticCatalog(JsonMapper.builder().build());
-		assertThat(catalog.items()).hasSize(254);
-		assertThat(catalog.collections()).hasSize(11);
+		assertThat(catalog.items()).hasSize(271);
+		assertThat(catalog.collections()).hasSize(12);
 		assertThat(catalog.item("moldura-ambar").orElseThrow().releaseOrder()).isEqualTo(1);
 		assertThat(catalog.item("moldura-radar").orElseThrow().releaseOrder()).isEqualTo(26);
 		assertThat(catalog.item("emblema-time-saci").orElseThrow().purchasable()).isFalse();
 		assertThat(catalog.look("look-saci").orElseThrow().items()).first().isEqualTo("tema-saci");
-		// Every collection carries its original look plus the theme-inspired ones, in order.
-		assertThat(catalog.looksOf("saci")).extracting(CosmeticCatalog.Look::id)
-			.containsExactly("look-saci", "look-floresta", "look-vale-esmeralda");
-		assertThat(catalog.look("look-vaporwave").orElseThrow().title()).isEqualTo("Vaporwave");
-		assertThat(catalog.look("look-vaporwave").orElseThrow().items()).first().isEqualTo("tema-carnaval");
+		// A seasonal collection carries just its own look; the ready-made ones live in Essenciais.
+		assertThat(catalog.looksOf("saci")).extracting(CosmeticCatalog.Look::id).containsExactly("look-saci");
+		assertThat(catalog.looksOf("carnaval")).extracting(CosmeticCatalog.Look::id).containsExactly("look-carnaval");
+		assertThat(catalog.look("look-carnaval").orElseThrow().title()).isEqualTo("Destaque");
+		assertThat(catalog.look("look-carnaval").orElseThrow().items()).first().isEqualTo("tema-carnaval");
 		// Original frames are always on sale, whatever the date.
 		assertThat(catalog.available(catalog.item("moldura-ambar").orElseThrow(), Instant.parse("2026-04-01T12:00:00Z")))
 			.isTrue();
 		assertThat(catalog.available(catalog.item("tema-saci").orElseThrow(), Instant.parse("2026-04-01T12:00:00Z")))
 			.isFalse();
+	}
+
+	@Test
+	void essenciaisStaysOnSaleAllYearAndItsLooksAreReadyMade() {
+		CosmeticCatalog catalog = new CosmeticCatalog(JsonMapper.builder().build());
+		CosmeticCatalog.Collection essenciais = catalog.collection("essenciais");
+		assertThat(essenciais).isNotNull();
+		for (String iso : List.of("2026-01-01T12:00:00Z", "2026-04-01T12:00:00Z", "2026-07-15T12:00:00Z",
+				"2026-12-31T12:00:00Z")) {
+			Instant now = Instant.parse(iso);
+			assertThat(catalog.available(essenciais, now)).as(iso).isTrue();
+			assertThat(catalog.available(catalog.item("tema-papel").orElseThrow(), now)).as(iso).isTrue();
+		}
+		assertThat(catalog.looksOf("essenciais")).extracting(CosmeticCatalog.Look::id)
+			.containsExactly("look-papel", "look-noite-limpa", "look-jardim", "look-fim-de-tarde",
+					"look-manha-de-domingo", "look-carta-na-gaveta", "look-sombra-fresca",
+					"look-quintal-ao-meio-dia", "look-pedra-fria", "look-nevoeiro", "look-mar-de-pedra");
+		assertThat(catalog.looksOf("essenciais")).allSatisfy(look -> assertThat(look.items())
+			.allSatisfy(itemId -> assertThat(catalog.item(itemId).orElseThrow().purchasable()).isTrue()));
+		// Each ready-made look has its own combination, so the shop never shows the same bundle twice.
+		assertThat(catalog.looksOf("essenciais")).extracting(CosmeticCatalog.Look::items).doesNotHaveDuplicates();
+		// Listed last so the shop still opens on the collection in season; out of season it is the
+		// only one available, so it becomes the default.
+		assertThat(catalog.collections()).extracting(CosmeticCatalog.Collection::id).last().isEqualTo("essenciais");
 	}
 
 	@Test
@@ -90,9 +114,9 @@ class CosmeticCatalogTests {
 		CosmeticCatalog catalog = new CosmeticCatalog(new CatalogFile(SACI,
 			List.of(item(1, "tema-saci", CosmeticKind.CARD_THEME, "saci")),
 			List.of(new LookFile(null, "saci", "Saci", List.of("tema-saci"), "pe", "oi"),
-				new LookFile("look-floresta", "saci", "Floresta", List.of("tema-saci"), "pe", "oi"))));
+				new LookFile("look-mata-fechada", "saci", "Mata fechada", List.of("tema-saci"), "pe", "oi"))));
 		assertThat(catalog.looksOf("saci")).extracting(CosmeticCatalog.Look::id)
-			.containsExactly("look-saci", "look-floresta");
+			.containsExactly("look-saci", "look-mata-fechada");
 	}
 
 	@Test

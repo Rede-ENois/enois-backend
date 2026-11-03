@@ -20,7 +20,6 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
-import nl.martijndwars.webpush.Base64Encoder;
 import nl.martijndwars.webpush.Utils;
 
 /**
@@ -82,10 +81,15 @@ class PushConfigEnabledTests {
 	}
 
 	private static String publicKeyOf(KeyPair pair) {
-		return Base64Encoder.encodeUrlWithoutPadding(Utils.encode((ECPublicKey) pair.getPublic()));
+		return base64Url(Utils.encode((ECPublicKey) pair.getPublic()));
 	}
 
 	private static String privateKeyOf(KeyPair pair) {
-		return Base64Encoder.encodeUrlWithoutPadding(Utils.encode((ECPrivateKey) pair.getPrivate()));
+		return base64Url(Utils.encode((ECPrivateKey) pair.getPrivate()));
+	}
+
+	// O web-push 5.1.2 removeu o Base64Encoder publico; o formato do protocolo e o mesmo.
+	private static String base64Url(byte[] bytes) {
+		return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
 	}
 }

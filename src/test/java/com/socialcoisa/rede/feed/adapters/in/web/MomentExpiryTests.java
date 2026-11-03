@@ -60,7 +60,7 @@ class MomentExpiryTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "mom-1")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "MOMENT", "content", "Tomando café na varanda ☕", "tags", List.of(),
 					"mediaIds", List.of()))))
 			.andExpect(status().isCreated())
@@ -77,7 +77,7 @@ class MomentExpiryTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "mom-div-long")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("type", "DIVERTIDO",
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA", "type", "DIVERTIDO",
 					"content", "0123456789".repeat(41), "tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("CONTENT_TOO_LONG"));
@@ -85,7 +85,7 @@ class MomentExpiryTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "mom-mom-long")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("type", "MOMENT",
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA", "type", "MOMENT",
 					"content", "0123456789".repeat(51), "tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("CONTENT_TOO_LONG"));

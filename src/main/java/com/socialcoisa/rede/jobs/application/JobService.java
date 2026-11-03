@@ -204,7 +204,7 @@ public class JobService {
 	 */
 	/** Candidaturas que a pessoa fez, com o estado e o retorno do empregador. */
 	public List<JobApplication> myApplications(String userId, int limit) {
-		return repository.findApplicationsByUser(userId, limit);
+		return repository.findApplicationsByUser(userId, pageLimit(limit));
 	}
 
 	@Transactional
@@ -485,7 +485,7 @@ public class JobService {
 		sync = true)
 	public List<Job> list(String query, String type, String level, String location, List<String> skills,
 			java.time.Instant before, int limit) {
-		return repository.findAll(query, type, level, location, skills, before, limit);
+		return repository.findAll(query, type, level, location, skills, before, pageLimit(limit));
 	}
 
 	public Job getById(String id) {
@@ -495,12 +495,17 @@ public class JobService {
 
 	/** Vagas publicadas pelo usuario (com quantas candidaturas receberam). */
 	public List<Job> listMine(String userId, java.time.Instant before, int limit) {
-		return repository.findByPostedBy(userId, before, limit);
+		return repository.findByPostedBy(userId, before, pageLimit(limit));
 	}
 
 	/** Vagas em que o usuario se candidatou. */
 	public List<Job> listApplications(String userId, java.time.Instant before, int limit) {
-		return repository.findAppliedByUser(userId, before, limit);
+		return repository.findAppliedByUser(userId, before, pageLimit(limit));
+	}
+
+	/** Teto de qualquer listagem de vagas: sem ele, `?limit=100000` ia direto ao banco. */
+	private static int pageLimit(int limit) {
+		return Math.clamp(limit, 1, 100);
 	}
 
 	public java.util.Set<String> appliedJobIds(String userId, java.util.List<String> jobIds) {

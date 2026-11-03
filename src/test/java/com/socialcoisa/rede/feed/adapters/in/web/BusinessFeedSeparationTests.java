@@ -70,7 +70,7 @@ class BusinessFeedSeparationTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "biz-" + type + "-" + System.nanoTime())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(java.util.Map.of(
+				.content(objectMapper.writeValueAsString(java.util.Map.of("topic", "TECNOLOGIA",
 					"type", type, "content", content, "tags", java.util.List.of(), "mediaIds", java.util.List.of()))))
 			.andExpect(status().isCreated())
 			.andReturn();
@@ -86,7 +86,7 @@ class BusinessFeedSeparationTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "biz-sem-perfil")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(java.util.Map.of(
+				.content(objectMapper.writeValueAsString(java.util.Map.of("topic", "TECNOLOGIA",
 					"type", "BUSINESS", "content", "Anúncio corporativo.", "tags", java.util.List.of(),
 					"mediaIds", java.util.List.of()))))
 			.andExpect(status().isForbidden())

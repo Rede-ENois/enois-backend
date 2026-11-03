@@ -25,7 +25,6 @@ import com.socialcoisa.rede.push.application.port.out.PushSubscriptionRepository
 import com.socialcoisa.rede.push.domain.PushSubscription;
 import com.sun.net.httpserver.HttpServer;
 
-import nl.martijndwars.webpush.Base64Encoder;
 import nl.martijndwars.webpush.Utils;
 
 import tools.jackson.databind.ObjectMapper;
@@ -52,6 +51,10 @@ class WebPushDeliveryTests {
 
 	private PushSubscriptionRepository repository;
 
+	private String vapidPublic;
+
+	private String vapidPrivate;
+
 	@BeforeEach
 	void setUp() throws Exception {
 		server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -64,11 +67,13 @@ class WebPushDeliveryTests {
 		server.start();
 
 		KeyPair vapid = keyPair();
+		vapidPublic = base64Url(Utils.encode((ECPublicKey) vapid.getPublic()));
+		vapidPrivate = base64Url(Utils.encode((ECPrivateKey) vapid.getPrivate()));
 		repository = new InMemorySubscriptions();
-		sender = new WebPushSender(repository, new ObjectMapper(),
-			Base64Encoder.encodeUrlWithoutPadding(Utils.encode((ECPublicKey) vapid.getPublic())),
-			Base64Encoder.encodeUrlWithoutPadding(Utils.encode((ECPrivateKey) vapid.getPrivate())),
-			"mailto:teste@enois.test");
+		// O servico de push do teste roda em HTTP na loopback; o filtro de allowlist e testado
+		// separadamente com o filtro de producao.
+		sender = new WebPushSender(repository, new ObjectMapper(), vapidPublic, vapidPrivate,
+			"mailto:teste@enois.test", endpoint -> true);
 	}
 
 	@AfterEach
@@ -81,7 +86,7 @@ class WebPushDeliveryTests {
 		repository.save(subscription("push_a", "user_1", "/ok"));
 		repository.save(subscription("push_b", "user_1", "/rejected"));
 
-		sender.sendToUser("user_1", new PushMessage("Titulo", "Corpo", "/par-de-estudo"));
+		sender.sendToUser("user_1", new PushMessage("notification_1", "Titulo", "Corpo", "/par-de-estudo"));
 
 		assertThat(received).containsExactlyInAnyOrder("/ok", "/rejected");
 		// 413 é recusa pontual do serviço (payload, limite): a inscrição continua valendo.
@@ -92,7 +97,7 @@ class WebPushDeliveryTests {
 	void removesTheDeviceWhenThePushServiceSaysItIsGone() {
 		repository.save(subscription("push_gone", "user_1", "/gone"));
 
-		sender.sendToUser("user_1", new PushMessage("Titulo", "Corpo", "/feed"));
+		sender.sendToUser("user_1", new PushMessage("notification_1", "Titulo", "Corpo", "/feed"));
 
 		assertThat(received).containsExactly("/gone");
 		assertThat(removed).containsExactly("push_gone");
@@ -101,8 +106,45 @@ class WebPushDeliveryTests {
 
 	@Test
 	void doesNothingWithoutDevices() {
-		sender.sendToUser("user_sem_dispositivo", new PushMessage("Titulo", "Corpo", "/feed"));
+		sender.sendToUser("user_sem_dispositivo", new PushMessage("notification_1", "Titulo", "Corpo", "/feed"));
 		assertThat(received).isEmpty();
+	}
+
+	@Test
+	void skipsEndpointsOutsideTheAllowlist() {
+		// Com o filtro de producao, um endpoint local (ou qualquer host desconhecido) nao vira
+		// POST server-side: e o que fecha o SSRF cego do registro de push.
+		WebPushSender strict = new WebPushSender(repository, new ObjectMapper(), vapidPublic, vapidPrivate,
+			"mailto:teste@enois.test", com.socialcoisa.rede.push.application.PushService::allowedPushEndpoint);
+		repository.save(subscription("push_local", "user_1", "/ok"));
+
+		strict.sendToUser("user_1", new PushMessage("notification_1", "Titulo", "Corpo", "/feed"));
+
+		assertThat(received).isEmpty();
+	}
+
+	@Test
+	void capsTheNumberOfDevicesPerAccount() {
+		for (int index = 0; index < com.socialcoisa.rede.push.application.PushService.MAX_SUBSCRIPTIONS_PER_USER
+				+ 2; index++) {
+			repository.save(subscription("push_cap_" + index, "user_1", "/ok"));
+		}
+
+		sender.sendToUser("user_1", new PushMessage("notification_1", "Titulo", "Corpo", "/feed"));
+
+		assertThat(received).hasSize(com.socialcoisa.rede.push.application.PushService.MAX_SUBSCRIPTIONS_PER_USER);
+	}
+
+	@Test
+	void payloadCarriesTheNotificationIdNextToTitleBodyAndUrl() {
+		String json = sender.toJson(new PushMessage("notification_abc", "Titulo", "Corpo", null));
+
+		assertThat(new ObjectMapper().readTree(json).properties())
+			.extracting(Map.Entry::getKey, entry -> entry.getValue().asString())
+			.containsExactly(org.assertj.core.groups.Tuple.tuple("title", "Titulo"),
+				org.assertj.core.groups.Tuple.tuple("body", "Corpo"),
+				org.assertj.core.groups.Tuple.tuple("url", "/feed"),
+				org.assertj.core.groups.Tuple.tuple("notificationId", "notification_abc"));
 	}
 
 	@Test
@@ -110,16 +152,21 @@ class WebPushDeliveryTests {
 		WebPushSender off = new WebPushSender(repository, new ObjectMapper(), "", "", "mailto:teste@enois.test");
 		assertThat(off.isEnabled()).isFalse();
 		assertThat(off.publicKey()).isNull();
-		off.sendToUser("user_1", new PushMessage("Titulo", "Corpo", "/feed"));
+		off.sendToUser("user_1", new PushMessage("notification_1", "Titulo", "Corpo", "/feed"));
 		assertThat(received).isEmpty();
 	}
 
 	private PushSubscription subscription(String id, String userId, String path) {
 		KeyPair device = keyPair();
-		String browserPublic = Base64Encoder.encodeUrlWithoutPadding(Utils.encode((ECPublicKey) device.getPublic()));
-		String auth = Base64Encoder.encodeUrlWithoutPadding(randomBytes(16));
+		String browserPublic = base64Url(Utils.encode((ECPublicKey) device.getPublic()));
+		String auth = base64Url(randomBytes(16));
 		String endpoint = "http://127.0.0.1:" + server.getAddress().getPort() + path;
 		return PushSubscription.create(id, userId, endpoint, browserPublic, auth, Instant.now());
+	}
+
+	// O web-push 5.1.2 removeu o Base64Encoder publico; o formato do protocolo e o mesmo.
+	private static String base64Url(byte[] bytes) {
+		return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
 	}
 
 	private static byte[] randomBytes(int size) {

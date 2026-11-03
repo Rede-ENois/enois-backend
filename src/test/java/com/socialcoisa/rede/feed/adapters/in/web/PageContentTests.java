@@ -91,7 +91,7 @@ class PageContentTests {
 	}
 
 	private String publish(String token, String key, String type, String html) throws Exception {
-		Map<String, Object> body = new HashMap<>(Map.of("type", type, "content", "texto", "tags", List.of(),
+		Map<String, Object> body = new HashMap<>(Map.of("topic", "TECNOLOGIA", "type", type, "content", "texto", "tags", List.of(),
 			"mediaIds", List.of()));
 		if ("PAGE".equals(type)) {
 			body.put("pageHtml", html);

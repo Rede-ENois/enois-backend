@@ -61,7 +61,7 @@ class ScheduledPostTests {
 	private String schedule(TestAuthHelper.AuthSession session, String key, String content, Instant quando,
 			String communityId) throws Exception {
 		Map<String, Object> body = communityId == null
-			? Map.of("type", "INSIGHT", "content", content, "scheduledAt", quando.toString())
+			? Map.of("topic", "TECNOLOGIA", "type", "INSIGHT", "content", content, "scheduledAt", quando.toString())
 			: Map.of("type", "INSIGHT", "content", content, "scheduledAt", quando.toString(), "communityId",
 				communityId);
 		MvcResult result = mockMvc.perform(post("/feed/scheduled")
@@ -110,10 +110,24 @@ class ScheduledPostTests {
 				.header("X-Session-Token", owner.token())
 				.header("Idempotency-Key", "sched-past-1")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("type", "INSIGHT", "content", "texto",
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA", "type", "INSIGHT", "content", "texto",
 					"scheduledAt", Instant.now().minusSeconds(60).toString()))))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("DATA_NO_PASSADO"));
+	}
+
+	@Test
+	void standalonePostWithoutTopicIsRejected() throws Exception {
+		var owner = auth.authenticate("user_sched_no_topic");
+
+		mockMvc.perform(post("/feed/scheduled")
+				.header("X-Session-Token", owner.token())
+				.header("Idempotency-Key", "sched-no-topic-1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("type", "INSIGHT", "content", "texto",
+					"scheduledAt", Instant.now().plusSeconds(600).toString()))))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("TOPIC_REQUIRED"));
 	}
 
 	@Test

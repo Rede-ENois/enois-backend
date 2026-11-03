@@ -88,7 +88,7 @@ class UnseenFeedTabTests {
 				.header("X-Session-Token", autor.token())
 				.header("Idempotency-Key", "unseen-post-" + System.nanoTime())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", conteudo, "tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isCreated())
 			.andReturn();

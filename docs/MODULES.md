@@ -957,9 +957,20 @@ inválidas são rejeitadas integralmente. A operação exige autenticação e ch
 |---|---|
 | `create(String userId, String kind, String actorId, String title, String body, String href, String ctaLabel)` | Cria notificação |
 | `createGrouped(userId, kind, groupKey, actorId, title, body, groupedBody, href, ctaLabel)` | Agrupa com a notificação NÃO lida do mesmo alvo (`groupKey`): a pessoa mais recente lidera, `actorCount` cresce (a mesma pessoa não conta duas vezes), o texto vira "Ana e mais 14 pessoas reagiram ao seu post." e ela volta ao topo; com mais de uma pessoa o `href` vira o do agrupado (no post: `?reacoes=1`, que abre a lista de quem reagiu). Só a primeira gera push. Depois de lida, a próxima reação abre outra. Usado em `NEW_REACTION` (`NEW_REACTION:post:{id}`) e `COMMENT_REACTION` (`COMMENT_REACTION:comment:{id}`); colunas `group_key` e `actor_count` (V220). A API devolve `actorCount`. |
+| `createCounted(userId, kind, groupKey, actorId, title, body, countedBody, href, ctaLabel)` | Como `createGrouped`, mas toda chamada conta (não só pessoa nova): a notificação NÃO lida do `groupKey` vira "3 novas publicações em X" (`countedBody` do novo total), volta ao topo e não gera push; `actorCount` guarda o número de eventos. Depois de lida, a próxima abre outra. Usado em `GROUP_NEW_POST` (`GROUP_NEW_POST:group:{id}`). |
 | `markRead(String notificationId, String userId)` | Marca como lida |
 | `markAllRead(String userId)` | Marca todas como lidas |
 | `list(String userId, int limit)` | Lista notificações |
+| `unreadSummary(userId, context, hiddenActorIds)` | Unread count per area (`NotificationModule`) and per community (`byCommunity`), from one `GROUP BY kind, actor, href` query over the unread rows (hidden actors are dropped, hrefs resolved by `NotificationPlaces`), plus `eventsToday` (0 in the professional context) |
+
+### NotificationPlaces
+
+**Arquivo**: `src/main/java/com/socialcoisa/rede/notifications/application/NotificationPlaces.java`
+
+| Função | Descrição |
+|---|---|
+| `resolve(hrefs)` | Read-time enrichment by href: `place` (community or group) and `eventDate`. `NotificationTarget.of(href)` reads `/comunidades/{id}`, `/api/feed/posts/{id}`, `/grupos/{slug}` and `/eventos?evento={id}`; `NotificationPlaceRepository` (plain SQL over the communities, posts, groups and events tables, like the weekly digest) runs one query per kind of target for the whole set. Deleted communities and events and closed groups resolve to null |
+| `eventsToday(userId)` | Confirmed events (`WeeklyDigestRepository.attendingEvents`) whose date is today in America/Sao_Paulo |
 
 ### NotificationOutboxEventHandler
 
@@ -984,9 +995,10 @@ inválidas são rejeitadas integralmente. A operação exige autenticação e ch
 
 | Função | Rota |
 |---|---|
-| `notifications(...)` | GET /api/notifications |
+| `notifications(...)` | GET /api/notifications (each item has `module` from `NotificationModule.of(kind)`, plus `place` and `eventDate` from `NotificationPlaces`) |
 | `read(...)` | POST /api/notifications/{notificationId}/read |
 | `readAll(...)` | POST /api/notifications/read-all |
+| `unreadSummary(...)` | GET /api/notifications/unread-summary |
 
 ### Preferências e resumo semanal
 
@@ -995,6 +1007,7 @@ Detalhes em [`DIGEST.md`](DIGEST.md).
 | Classe | Descrição |
 |---|---|
 | `NotificationCategory` | Mapa único kind → categoria de push (`ALWAYS` para segurança/moderação/sanção) |
+| `NotificationModule` | Single kind → interface area mapping (menu indicators); case-insensitive, unknown kinds are `OTHER` |
 | `NotificationPreferenceService` | Lê/grava as preferências (`notification_preferences`); `allowsPush(userId, kind)` |
 | `NotificationPreferenceController` | GET/PUT /api/me/notification-preferences, GET /api/notifications/digest/unsubscribe |
 | `WeeklyDigestService` | Agendamento, conteúdo, envio único por semana ISO e token de descadastro |
@@ -1300,8 +1313,8 @@ Temas da galeria (criados pela comunidade, instaláveis com um clique) e cosmét
 | `GET /temas/galeria` / `.../mine` / `.../{themeId}` | Galeria pública / meus temas / detalhe |
 | `POST /temas/galeria` / `.../install` / `.../hide` / `.../report` | Publicar, instalar, ocultar, denunciar |
 | `GET /cosmetics/catalog` / `.../mine` | Community cosmetics catalog, my items |
-| `GET /loja` / `/loja/colecoes` | Native shop catalog / seasonal collections and looks |
-| `POST /loja/{itemId}/comprar` / `.../equipar` / `.../desequipar`, `POST /loja/looks/{lookId}/comprar` | Buy, equip, unequip, buy a look |
+| `GET /loja` / `/loja/colecoes` | Native shop catalog / collections (seasonal and the permanent `essenciais`) with their looks |
+| `POST /loja/{itemId}/comprar` / `.../equipar` / `.../desequipar`, `POST /loja/looks/{lookId}/comprar` / `.../equipar` / `.../desequipar` | Buy, equip, unequip, buy, wear and take off a look |
 | `PUT /me/status` | Profile status bubble |
 | `GET`/`POST /eventos/saci-halloween`, `/eventos/caca-saci` | Free cosmetic events (duel, hunt) |
 | `PUT /cosmetics/profile/name-style` | Estilo do nome no perfil e em todo lugar onde o nome aparece |
@@ -1326,6 +1339,16 @@ Notificações push no navegador (VAPID): inscrição, cancelamento e configura�
 `PushNotificationListener` espelha cada notificação criada como push depois do commit, **exceto** quando
 a pessoa desligou a categoria do kind (`NotificationPreferenceService.allowsPush`). A notificação
 in-app é criada do mesmo jeito; segurança, moderação e sanção sempre viram push. Ver [`DIGEST.md`](DIGEST.md).
+
+Push payload (JSON, encrypted per device by `WebPushSender`):
+
+```json
+{ "title": "...", "body": "...", "url": "/feed", "notificationId": "notification_..." }
+```
+
+`url` falls back to `/feed` when the notification has no `href`. `notificationId` is the notification
+the push mirrors (for a grouped one, the group row; only the first of a group pushes), so the app can
+call `POST /api/notifications/{notificationId}/read` when the push is opened.
 
 ## 27. Gifs (Busca de GIFs)
 
@@ -1468,6 +1491,7 @@ publish.
 | Rota | Descrição |
 |---|---|
 | `GET /blogs/{slug}` | Blog público |
+| `GET /blogs/{slug}/feed.xml` | Feed Atom do blog (público, sem sessão nem `Origin`) |
 | `POST /me/posts` / `PATCH /me/posts/{postId}` / `DELETE /me/posts/{postId}` | Publicar, editar, excluir |
 | `POST /{slug}/subscription` / `DELETE /{slug}/subscription` | Assinar / cancelar assinatura |
 

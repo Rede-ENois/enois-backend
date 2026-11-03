@@ -167,7 +167,7 @@ class PollPostTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "poll-few-1")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "POLL", "content", "Uma so", "pollOptions", List.of("A")))))
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "POLL", "content", "Uma so", "pollOptions", List.of("A")))))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("POLL_TOO_FEW_OPTIONS"));
 	}
@@ -179,7 +179,7 @@ class PollPostTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "poll-many-1")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "POLL", "content", "Sete",
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "POLL", "content", "Sete",
 					"pollOptions", List.of("A", "B", "C", "D", "E", "F", "G")))))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("POLL_TOO_MANY_OPTIONS"));
@@ -192,7 +192,7 @@ class PollPostTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "poll-blank-1")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "POLL", "content", "Vazia", "pollOptions", List.of("A", "  ")))))
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "POLL", "content", "Vazia", "pollOptions", List.of("A", "  ")))))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("POLL_EMPTY_OPTION"));
 
@@ -200,7 +200,7 @@ class PollPostTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "poll-repeat-1")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "POLL", "content", "Repetida",
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "POLL", "content", "Repetida",
 					"pollOptions", List.of("Java", "java")))))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("POLL_DUPLICATE_OPTION"));
@@ -216,7 +216,7 @@ class PollPostTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "poll-title-long")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "POLL", "content", "a".repeat(401), "pollOptions", List.of("A", "B")))))
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "POLL", "content", "a".repeat(401), "pollOptions", List.of("A", "B")))))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("CONTENT_TOO_LONG"));
 	}
@@ -228,7 +228,7 @@ class PollPostTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "poll-ignored-1")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "INSIGHT", "content", "Post comum",
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "INSIGHT", "content", "Post comum",
 					"pollOptions", List.of("A", "B")))))
 			.andExpect(status().isCreated())
 			.andReturn();
@@ -246,7 +246,7 @@ class PollPostTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "poll-notpoll-1")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "INSIGHT", "content", "Nao e enquete"))))
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "INSIGHT", "content", "Nao e enquete"))))
 			.andExpect(status().isCreated())
 			.andReturn();
 		String postId = objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asText();
@@ -300,7 +300,7 @@ class PollPostTests {
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", key)
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "POLL", "content", title, "pollOptions", options))))
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "POLL", "content", title, "pollOptions", options))))
 			.andExpect(status().isCreated())
 			.andReturn();
 		return objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asText();

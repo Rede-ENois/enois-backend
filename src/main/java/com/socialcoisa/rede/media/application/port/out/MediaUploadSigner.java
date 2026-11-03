@@ -12,8 +12,13 @@ import java.util.Map;
  */
 public interface MediaUploadSigner {
 
-	/** Metodo, endereco e cabecalhos que o cliente precisa mandar para subir o arquivo. */
-	SignedUpload sign(String objectKey, String mimeType);
+	/**
+	 * Metodo, endereco e cabecalhos que o cliente precisa mandar para subir o arquivo.
+	 *
+	 * @param contentLength tamanho declarado no registro do asset; entra na assinatura para o
+	 *     storage recusar um corpo maior (ou menor) que o combinado
+	 */
+	SignedUpload sign(String objectKey, String mimeType, long contentLength);
 
 	record SignedUpload(String url, String method, Map<String, String> headers, Instant expiresAt) {
 	}

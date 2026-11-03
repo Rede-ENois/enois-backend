@@ -1,7 +1,9 @@
 package com.socialcoisa.rede.services.adapters.in.web;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -276,6 +278,96 @@ class ServicesFlowTests {
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("message", "oi"))))
 			.andExpect(status().isBadRequest());
+	}
+
+	/**
+	 * #358: o prestador edita e remove o próprio serviço. Só o dono; o preço trava com contrato
+	 * aberto; o removido sai do catálogo mas o contrato que já existe continua.
+	 */
+	@Test
+	void oPrestadorEditaERemoveOProprioServico() throws Exception {
+		var seller = auth("edit_seller");
+		var outro = auth("edit_outro");
+		var buyer = auth("edit_buyer");
+		wallet(buyer.token());
+
+		MvcResult created = mockMvc.perform(post("/servicos/ofertas")
+				.header("X-Session-Token", seller.token())
+				.header("Idempotency-Key", "edit-listing-1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+					"category", "Design", "title", "Logo para o seu time",
+					"description", "Um logo limpo com duas rodadas de ajuste e arquivos prontos.",
+					"deliverables", "SVG + PNG", "price", 30_000, "deliveryDays", 5))))
+			.andExpect(status().isOk())
+			.andReturn();
+		String listingId = objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asText();
+
+		// Quem não publica não edita nem remove.
+		mockMvc.perform(put("/servicos/ofertas/" + listingId)
+				.header("X-Session-Token", outro.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+					"category", "Design", "title", "Titulo trocado por outra pessoa",
+					"description", "Descricao longa o bastante para passar da validacao minima.",
+					"deliverables", "Nada", "price", 1_000, "deliveryDays", 1))))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("NOT_THE_SELLER"));
+		mockMvc.perform(delete("/servicos/ofertas/" + listingId).header("X-Session-Token", outro.token()))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("NOT_THE_SELLER"));
+
+		// O dono edita: o catálogo passa a mostrar o conteúdo novo.
+		mockMvc.perform(put("/servicos/ofertas/" + listingId)
+				.header("X-Session-Token", seller.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+					"category", "Design", "title", "Logo e paleta para o seu time",
+					"description", "Um logo limpo com duas rodadas de ajuste e a paleta do time.",
+					"deliverables", "SVG + PNG + paleta", "price", 30_000, "deliveryDays", 7))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("ACTIVE"));
+		mockMvc.perform(get("/servicos"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.ofertas[?(@.id == '" + listingId + "')].title")
+				.value("Logo e paleta para o seu time"))
+			.andExpect(jsonPath("$.ofertas[?(@.id == '" + listingId + "')].deliveryDays").value(7));
+
+		// A edição valida como a criação: texto acima do teto da coluna é recusado com o campo.
+		mockMvc.perform(put("/servicos/ofertas/" + listingId)
+				.header("X-Session-Token", seller.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+					"category", "Design", "title", "x".repeat(200),
+					"description", "Descricao longa o bastante para passar da validacao minima.",
+					"deliverables", "SVG", "price", 30_000, "deliveryDays", 5))))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("SERVICE_FIELD_TOO_LONG"));
+
+		// Com contrato aberto, o preço não muda (as faíscas em escrow são as daquele preço).
+		mockMvc.perform(post("/servicos/ofertas/" + listingId + "/contratar")
+				.header("X-Session-Token", buyer.token()))
+			.andExpect(status().isOk());
+		mockMvc.perform(put("/servicos/ofertas/" + listingId)
+				.header("X-Session-Token", seller.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+					"category", "Design", "title", "Logo e paleta para o seu time",
+					"description", "Um logo limpo com duas rodadas de ajuste e a paleta do time.",
+					"deliverables", "SVG + PNG + paleta", "price", 90_000, "deliveryDays", 7))))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.code").value("SERVICE_HAS_OPEN_CONTRACTS"));
+
+		// O dono remove: sai do catálogo, e o contrato aberto continua no painel do comprador.
+		mockMvc.perform(delete("/servicos/ofertas/" + listingId).header("X-Session-Token", seller.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("REMOVED"));
+		mockMvc.perform(get("/servicos"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.ofertas[?(@.id == '" + listingId + "')]").isEmpty());
+		mockMvc.perform(get("/servicos/minhas").header("X-Session-Token", buyer.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.contratosComoComprador[?(@.listingId == '" + listingId + "')]").isNotEmpty());
 	}
 
 	private TestAuthHelper.AuthSession auth(String name) throws Exception {

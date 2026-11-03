@@ -3,12 +3,15 @@ package com.socialcoisa.rede.notifications.adapters.in.web;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import java.util.concurrent.ExecutorService;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -50,11 +53,19 @@ class NotificationPreferenceTests {
 	@MockitoBean
 	private PushSender pushSender;
 
+	/** Push is delivered on a thread pool; inline here so each verify sees a finished delivery. */
+	@MockitoBean(name = "pushExecutor")
+	private ExecutorService pushExecutor;
+
 	private TestAuthHelper auth;
 
 	@BeforeEach
 	void setUp() {
 		auth = new TestAuthHelper(mockMvc, objectMapper);
+		doAnswer(invocation -> {
+			invocation.<Runnable>getArgument(0).run();
+			return null;
+		}).when(pushExecutor).execute(any());
 	}
 
 	@Test

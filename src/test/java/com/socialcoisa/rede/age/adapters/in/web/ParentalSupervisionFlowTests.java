@@ -62,7 +62,7 @@ class ParentalSupervisionFlowTests {
 				.header("X-Session-Token", sessionToken)
 				.header("Idempotency-Key", key)
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT",
 					"content", "Oi, eu sou jovem e quero aprender com a comunidade."))))
 			.andExpect(status().isCreated());
@@ -81,7 +81,7 @@ class ParentalSupervisionFlowTests {
 				.header("X-Session-Token", minorSession)
 				.header("Idempotency-Key", "parental-post-blocked")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("type", "INSIGHT", "content", "Quero publicar."))))
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA", "type", "INSIGHT", "content", "Quero publicar."))))
 			.andExpect(status().isForbidden())
 			.andExpect(jsonPath("$.code").value("PARENTAL_CONSENT_REQUIRED"));
 
@@ -137,7 +137,7 @@ class ParentalSupervisionFlowTests {
 				.header("X-Session-Token", minorSession)
 				.header("Idempotency-Key", "parental-post-after-revoke")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("type", "INSIGHT", "content", "Quero publicar de novo."))))
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA", "type", "INSIGHT", "content", "Quero publicar de novo."))))
 			.andExpect(status().isForbidden())
 			.andExpect(jsonPath("$.code").value("PARENTAL_CONSENT_REQUIRED"));
 	}

@@ -97,9 +97,15 @@ class SeasonalCosmeticsFlowTests {
 
 	@Test
 	void catalogListsKindsCollectionsSeasonAndSaleFlags() throws Exception {
+		// Só a loja de hoje: os trinta clássicos mais Saci, Halloween e Essenciais, que estão na estação.
 		mockMvc.perform(get("/loja"))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.length()").value(254))
+			.andExpect(jsonPath("$.length()").value(92))
+			.andExpect(jsonPath("$[?(@.collection == 'saci')]").isNotEmpty())
+			.andExpect(jsonPath("$[?(@.collection == 'halloween')]").isNotEmpty())
+			.andExpect(jsonPath("$[?(@.collection == 'essenciais')]").isNotEmpty())
+			.andExpect(jsonPath("$[?(@.collection == 'criancas')]").isEmpty())
+			.andExpect(jsonPath("$[?(@.collection == 'natal')]").isEmpty())
 			.andExpect(jsonPath("$[?(@.id == 'moldura-ambar')].collection").value(org.hamcrest.Matchers.contains(
 				org.hamcrest.Matchers.nullValue())))
 			.andExpect(jsonPath("$[?(@.id == 'moldura-ambar')].available").value(true))
@@ -118,7 +124,7 @@ class SeasonalCosmeticsFlowTests {
 			.andExpect(jsonPath("$[?(@.id == 'efeito-redemoinho')].kind").value("PROFILE_EFFECT"))
 			.andExpect(jsonPath("$[?(@.id == 'garden-cerrado')].kind").value("GARDEN"))
 			.andExpect(jsonPath("$[?(@.id == 'garden-cerrado')].available").value(true))
-			.andExpect(jsonPath("$[?(@.id == 'tema-criancas')].available").value(false))
+			.andExpect(jsonPath("$[?(@.id == 'tema-criancas')]").isEmpty())
 			.andExpect(jsonPath("$[?(@.id == 'emblema-time-saci')].purchasable").value(false))
 			.andExpect(jsonPath("$[?(@.id == 'emblema-time-saci')].collection").value("saci"))
 			.andExpect(jsonPath("$[0].owned").doesNotExist())
@@ -127,9 +133,21 @@ class SeasonalCosmeticsFlowTests {
 
 	@Test
 	void collectionsExposeWindowsAvailabilityAndLooks() throws Exception {
+		// Duel day: só as coleções na temporada aparecem; as outras nem entram na lista.
 		mockMvc.perform(get("/loja/colecoes"))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.length()").value(11))
+			.andExpect(jsonPath("$.length()").value(3))
+			.andExpect(jsonPath("$[*].id").value(org.hamcrest.Matchers.contains("saci", "halloween", "essenciais")))
+			.andExpect(jsonPath("$[?(@.id == 'criancas')]").isEmpty())
+			.andExpect(jsonPath("$[?(@.id == 'natal')]").isEmpty())
+			// Essenciais is permanent: on sale whatever the season.
+			.andExpect(jsonPath("$[?(@.id == 'essenciais')].available").value(true))
+			.andExpect(jsonPath("$[?(@.id == 'essenciais')].looks.length()").value(11))
+			.andExpect(jsonPath("$[?(@.id == 'essenciais')].looks[0].id").value("look-papel"))
+			.andExpect(jsonPath("$[?(@.id == 'essenciais')].looks[0].items[0]").value("tema-papel"))
+			// The ready-made looks beyond the original four are Essenciais-only, so they never leave the shop.
+			.andExpect(jsonPath("$[?(@.id == 'essenciais')].looks[4].id").value("look-manha-de-domingo"))
+			.andExpect(jsonPath("$[?(@.id == 'essenciais')].looks[10].id").value("look-mar-de-pedra"))
 			.andExpect(jsonPath("$[?(@.id == 'saci')].name").value("Dia do Saci"))
 			.andExpect(jsonPath("$[?(@.id == 'saci')].available").value(true))
 			.andExpect(jsonPath("$[?(@.id == 'saci')].windows[0].start").value("10-15"))
@@ -139,18 +157,86 @@ class SeasonalCosmeticsFlowTests {
 			.andExpect(jsonPath("$[?(@.id == 'saci')].looks[0].items[0]").value("tema-saci"))
 			.andExpect(jsonPath("$[?(@.id == 'saci')].looks[0].statusIcon").value("carapuca"))
 			.andExpect(jsonPath("$[?(@.id == 'saci')].looks[0].statusText").value("Procurando minha carapuça"))
-			// The theme-inspired looks follow the collection's original one.
-			.andExpect(jsonPath("$[?(@.id == 'saci')].looks[1].id").value("look-floresta"))
-			.andExpect(jsonPath("$[?(@.id == 'saci')].looks[1].title").value("Floresta"))
-			.andExpect(jsonPath("$[?(@.id == 'saci')].looks[2].id").value("look-vale-esmeralda"))
-			.andExpect(jsonPath("$[?(@.id == 'dev')].looks.length()").value(5))
-			.andExpect(jsonPath("$[?(@.id == 'carnaval')].looks[1].id").value("look-vaporwave"))
+			// A seasonal collection carries only its own look; the ready-made ones live in Essenciais.
+			.andExpect(jsonPath("$[?(@.id == 'saci')].looks.length()").value(1))
+			.andExpect(jsonPath("$[?(@.id == 'halloween')].looks.length()").value(1))
+			.andExpect(jsonPath("$[?(@.id == 'saci')].looks[0].items.length()").value(11));
+	}
+
+	@Test
+	void eachCollectionKeepsItsOwnWindowAndLooksWhenItIsInSeason() throws Exception {
+		// O Dia do Programador tem duas janelas no ano e o Réveillon vira o ano no meio da janela.
+		clock.set(java.time.Instant.parse("2026-09-10T15:00:00Z"));
+		mockMvc.perform(get("/loja/colecoes"))
+			.andExpect(status().isOk())
 			.andExpect(jsonPath("$[?(@.id == 'dev')].windows.length()").value(2))
+			.andExpect(jsonPath("$[?(@.id == 'dev')].looks[0].id").value("look-dev"));
+		clock.set(java.time.Instant.parse("2026-12-28T15:00:00Z"));
+		mockMvc.perform(get("/loja/colecoes"))
+			.andExpect(status().isOk())
 			.andExpect(jsonPath("$[?(@.id == 'reveillon')].windows[0].start").value("12-26"))
 			.andExpect(jsonPath("$[?(@.id == 'reveillon')].windows[0].end").value("01-06"))
-			.andExpect(jsonPath("$[?(@.id == 'criancas')].available").value(false))
-			// Dia dos Namorados has no banner: the look skips it.
-			.andExpect(jsonPath("$[?(@.id == 'namorados')].looks[0].items.length()").value(7));
+			.andExpect(jsonPath("$[?(@.id == 'reveillon')].looks.length()").value(1))
+			.andExpect(jsonPath("$[?(@.id == 'dev')]").isEmpty());
+	}
+
+	@Test
+	void seasonalCollectionsAndTheirItemsLeaveTheShopOutsideTheirWindow() throws Exception {
+		// Duas semanas depois do Dia do Saci: a coleção cai da loja e nenhuma peça dela fica de vitrine.
+		clock.set(java.time.Instant.parse("2026-11-20T15:00:00Z"));
+		mockMvc.perform(get("/loja/colecoes"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[*].id").value(org.hamcrest.Matchers.contains("essenciais")))
+			.andExpect(jsonPath("$[?(@.id == 'saci')]").isEmpty());
+		mockMvc.perform(get("/loja"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[?(@.collection == 'saci')]").isEmpty())
+			.andExpect(jsonPath("$[?(@.collection == 'halloween')]").isEmpty())
+			.andExpect(jsonPath("$[?(@.id == 'tema-saci')]").isEmpty())
+			.andExpect(jsonPath("$[?(@.id == 'moldura-ambar')]").isNotEmpty())
+			.andExpect(jsonPath("$[?(@.collection == 'essenciais')]").isNotEmpty());
+	}
+
+	@Test
+	void aSeasonalCollectionDoesNotAppearBeforeItsWindowOpens() throws Exception {
+		// Outubro começa fora da janela do Saci (15/10): no dia 5 a coleção ainda não existe na loja.
+		clock.set(java.time.Instant.parse("2026-10-05T15:00:00Z"));
+		mockMvc.perform(get("/loja/colecoes"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[?(@.id == 'saci')]").isEmpty())
+			.andExpect(jsonPath("$[?(@.id == 'criancas')]").isNotEmpty());
+		mockMvc.perform(get("/loja"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[?(@.collection == 'saci')]").isEmpty());
+
+		// E no primeiro dia da janela ela já está lá, com as peças à venda.
+		clock.set(java.time.Instant.parse("2026-10-15T15:00:00Z"));
+		mockMvc.perform(get("/loja/colecoes"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[?(@.id == 'saci')].available").value(true));
+		mockMvc.perform(get("/loja"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[?(@.id == 'tema-saci')].available").value(true));
+	}
+
+	@Test
+	void ownedSeasonalPiecesStayInTheShopAfterTheSeasonSoTheyCanBeEquipped() throws Exception {
+		var buyer = wallet("seasonal_after");
+		buy(buyer, "tema-saci");
+		clock.set(java.time.Instant.parse("2026-12-20T15:00:00Z"));
+		// Fora da temporada a peça comprada continua na lista — marcada como sua — mas a que não foi
+		// comprada sai; comprar a que saiu segue recusado.
+		var rows = cosmetics.onSaleNow(buyer.userId(), "oldest");
+		assertThat(rows).anySatisfy(row -> {
+			assertThat(row.item().id()).isEqualTo("tema-saci");
+			assertThat(row.owned()).isTrue();
+			assertThat(row.available()).isFalse();
+		});
+		assertThat(rows).noneMatch(row -> row.item().collection() != null
+			&& row.item().collection().equals("saci") && !"tema-saci".equals(row.item().id()));
+		assertThatThrownBy(() -> cosmetics.buy(buyer.userId(), "moldura-redemoinho"))
+			.hasFieldOrPropertyWithValue("code", "OUT_OF_SEASON");
+		assertThat(cosmetics.equip(buyer.userId(), "tema-saci").cardTheme()).isEqualTo("tema-saci");
 	}
 
 	@Test
@@ -171,16 +257,38 @@ class SeasonalCosmeticsFlowTests {
 			.andExpect(status().isUnauthorized());
 		assertThat(balance(buyer)).isEqualTo(101_000);
 
-		// Out of season the item stays listed but cannot be bought; owned items still equip. The session
-		// would not survive the clock jump, so this part talks to the service directly.
+		// Fora da temporada a peça não aparece mais na loja e não pode ser comprada; a que já é sua
+		// continua na lista (fora de venda) e pode ser equipada. A sessão não sobrevive ao salto do
+		// relógio, então esta parte fala direto com o serviço.
 		clock.set(java.time.Instant.parse("2026-11-03T15:00:00Z"));
 		var row = cosmetics.shop(buyer.userId(), "oldest").stream()
 			.filter(item -> item.item().id().equals("tema-saci")).findFirst().orElseThrow();
 		assertThat(row.available()).isFalse();
 		assertThat(row.owned()).isTrue();
+		var listed = cosmetics.onSaleNow(buyer.userId(), "oldest");
+		assertThat(listed).extracting(item -> item.item().id()).contains("tema-saci").doesNotContain("moldura-carapuca");
+		assertThat(cosmetics.onSaleNow(null, "oldest")).extracting(item -> item.item().id())
+			.doesNotContain("tema-saci", "moldura-carapuca");
 		assertThatThrownBy(() -> cosmetics.buy(buyer.userId(), "moldura-carapuca"))
 			.hasFieldOrPropertyWithValue("code", "OUT_OF_SEASON");
 		assertThat(cosmetics.equip(buyer.userId(), "tema-saci").cardTheme()).isEqualTo("tema-saci");
+	}
+
+	@Test
+	void permanentLookCanBeBoughtOutsideEverySeason() throws Exception {
+		var buyer = wallet("seasonal_essenciais");
+		clock.set(java.time.Instant.parse("2027-03-15T15:00:00Z"));
+		// March sits outside every seasonal window: only the permanent collection is open.
+		assertThatThrownBy(() -> cosmetics.buy(buyer.userId(), "tema-saci"))
+			.hasFieldOrPropertyWithValue("code", "OUT_OF_SEASON");
+		var purchase = cosmetics.buyLook(buyer.userId(), "look-papel");
+		assertThat(purchase.id()).isEqualTo("look-papel");
+		assertThat(purchase.bought()).containsExactly("tema-papel", "moldura-ambar", "nome-papel", "placa-papel",
+			"emblema-papel");
+		// 13 faíscas of pieces at 75% = 9.75, rounded to 10.
+		assertThat(purchase.priceMf()).isEqualTo(10_000);
+		assertThat(cosmetics.ownedItemIds(buyer.userId())).contains("tema-papel", "moldura-ambar", "nome-papel",
+			"placa-papel", "emblema-papel");
 	}
 
 	@Test
@@ -249,34 +357,34 @@ class SeasonalCosmeticsFlowTests {
 	}
 
 	@Test
-	void aThemeLookBuysItsPiecesAndStillRespectsTheCollectionSeason() throws Exception {
+	void aReadyMadeLookBuysItsPiecesAndIsOnSaleWhateverTheSeason() throws Exception {
 		var buyer = wallet("seasonal_look_theme");
 		MvcResult bought = mockMvc
-			.perform(post("/loja/looks/look-floresta/comprar").header("X-Session-Token", buyer.token()))
+			.perform(post("/loja/looks/look-manha-de-domingo/comprar").header("X-Session-Token", buyer.token()))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.id").value("look-floresta"))
-			.andExpect(jsonPath("$.bought.length()").value(9))
-			// 26 faíscas of pieces, 75% = 19.5, rounded to 20.
-			.andExpect(jsonPath("$.priceMf").value(20_000))
+			.andExpect(jsonPath("$.id").value("look-manha-de-domingo"))
+			.andExpect(jsonPath("$.bought.length()").value(7))
+			// 18 faíscas of pieces, 75% = 13.5, rounded to 14.
+			.andExpect(jsonPath("$.priceMf").value(14_000))
 			.andReturn();
 		assertThat(objectMapper.readTree(bought.getResponse().getContentAsString()).get("bought").get(0).asText())
-			.isEqualTo("tema-saci");
-		assertThat(balance(buyer)).isEqualTo(85_000);
+			.isEqualTo("tema-papel");
+		assertThat(balance(buyer)).isEqualTo(91_000);
 
 		JsonNode me = me(buyer);
-		assertThat(me.get("cardTheme").asText()).isEqualTo("tema-saci");
-		assertThat(me.get("avatarFrame").asText()).isEqualTo("moldura-mata");
-		assertThat(me.get("nameTheme").asText()).isEqualTo("nome-fumaca");
-		assertThat(me.get("profileEffect").asText()).isEqualTo("efeito-folhas");
-		assertThat(me.get("bannerItem").asText()).isEqualTo("banner-saci");
-		assertThat(me.get("nameplate").asText()).isEqualTo("placa-mata");
-		assertThat(me.get("statusText").asText()).isEqualTo("Verde até onde a vista alcança");
-		assertThat(me.get("statusIcon").asText()).isEqualTo("folhaSeca");
-		assertThat(objectMapper.convertValue(me.get("badges"), List.class)).containsExactly("emblema-folhaSeca",
-			"emblema-pe", "emblema-carapuca");
+		assertThat(me.get("cardTheme").asText()).isEqualTo("tema-papel");
+		assertThat(me.get("avatarFrame").asText()).isEqualTo("moldura-coral");
+		assertThat(me.get("nameTheme").asText()).isEqualTo("nome-papel");
+		assertThat(me.get("profileEffect").asText()).isEqualTo("efeito-estrelas");
+		assertThat(me.get("bannerItem").isNull()).isTrue();
+		assertThat(me.get("nameplate").asText()).isEqualTo("placa-papel");
+		assertThat(me.get("statusText").asText()).isEqualTo("Café, jornal e nada marcado");
+		assertThat(me.get("statusIcon").asText()).isEqualTo("sol");
+		assertThat(objectMapper.convertValue(me.get("badges"), List.class)).containsExactly("emblema-papel",
+			"emblema-estrela-calma");
 
 		// A look does not bypass the collection season: Carnaval is out on the duel day.
-		mockMvc.perform(post("/loja/looks/look-vaporwave/comprar").header("X-Session-Token", buyer.token()))
+		mockMvc.perform(post("/loja/looks/look-carnaval/comprar").header("X-Session-Token", buyer.token()))
 			.andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("OUT_OF_SEASON"));
 	}
 
@@ -528,7 +636,7 @@ class SeasonalCosmeticsFlowTests {
 		MvcResult published = mockMvc.perform(post("/feed/posts").header("X-Session-Token", user.token())
 				.header("Idempotency-Key", "seasonal-name-style-post")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "INSIGHT", "content", "Post com nome do Saci", "tags", List.of(),
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "INSIGHT", "content", "Post com nome do Saci", "tags", List.of(),
 					"mediaIds", List.of()))))
 			.andExpect(status().isCreated())
 			.andExpect(jsonPath("$.authorStyle.theme").value("nome-saci"))

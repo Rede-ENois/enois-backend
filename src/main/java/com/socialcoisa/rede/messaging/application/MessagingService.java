@@ -34,6 +34,7 @@ public class MessagingService {
 	private final com.socialcoisa.rede.shared.blocks.BlockedUsersReader blockedUsers;
 	private final com.socialcoisa.rede.corporate.application.CorporateProfileService corporateProfiles;
 	private final com.socialcoisa.rede.coin.application.CoinService coins;
+	private final org.springframework.context.ApplicationEventPublisher events;
 
 	public MessagingService(MessagingRepository repository, NotificationService notificationService, Clock clock,
 			UserRateLimiter userRateLimiter, BehavioralTimingGuard behavioralTimingGuard,
@@ -42,8 +43,10 @@ public class MessagingService {
 			com.socialcoisa.rede.network.application.port.out.ConnectionRepository connections,
 			com.socialcoisa.rede.shared.blocks.BlockedUsersReader blockedUsers,
 			com.socialcoisa.rede.corporate.application.CorporateProfileService corporateProfiles,
-			com.socialcoisa.rede.coin.application.CoinService coins) {
+			com.socialcoisa.rede.coin.application.CoinService coins,
+			org.springframework.context.ApplicationEventPublisher events) {
 		this.coins = coins;
+		this.events = events;
 		this.repository = repository;
 		this.notificationService = notificationService;
 		this.clock = clock;
@@ -237,7 +240,8 @@ public class MessagingService {
 			return duplicate.get();
 		}
 		String id = "message_" + UUID.randomUUID().toString().replace("-", "");
-		Message message = Message.create(id, conversationId, senderId, corpo, midias, mediaSpoiler, replyToId, clock.instant());
+		Message message = Message.create(id, conversationId, senderId, corpo, midias, mediaSpoiler, replyToId,
+			nextMessageInstant(conversationId));
 		repository.saveMessage(message);
 		// Ao enviar, a conversa fica lida para QUEM ENVIOU (PR #15) — antes o contador continuava
 		// aceso mesmo com a conversa aberta.
@@ -255,6 +259,7 @@ public class MessagingService {
 				"Nova mensagem", preview,
 				"/api/conversations/" + conversationId, "Responder");
 		}
+		publishChange(conversationId, participants);
 		coins.recordPresence(senderId);
 		return message;
 	}
@@ -298,7 +303,7 @@ public class MessagingService {
 			: mediaIds.stream().filter(v -> v != null && !v.isBlank()).map(String::trim).distinct().toList();
 		String id = "message_" + UUID.randomUUID().toString().replace("-", "");
 		Message message = Message.createE2e(id, conversationId, senderId, ciphertext, iv, midias, mediaSpoiler,
-			replyToId, clock.instant());
+			replyToId, nextMessageInstant(conversationId));
 		repository.saveMessage(message);
 		repository.markRead(conversationId, senderId, clock.instant());
 		repository.saveConversation(conversation.touch(clock.instant()));
@@ -309,8 +314,15 @@ public class MessagingService {
 				"Nova mensagem", "Mensagem cifrada",
 				"/api/conversations/" + conversationId, "Responder");
 		}
+		publishChange(conversationId, participants);
 		coins.recordPresence(senderId);
 		return message;
+	}
+
+	/** Tells every participant's open message streams to refetch this conversation, after commit. */
+	private void publishChange(String conversationId, List<ConversationParticipant> participants) {
+		events.publishEvent(new ConversationChanged(conversationId,
+			participants.stream().map(ConversationParticipant::userId).toList()));
 	}
 
 	/**
@@ -378,11 +390,13 @@ public class MessagingService {
 			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
 		}
 		repository.markRead(conversationId, userId, clock.instant());
+		// Read receipts: the other side sees "visto" without waiting for the next refetch.
+		publishChange(conversationId, repository.findParticipantsByConversation(conversationId));
 	}
 
 	public List<Conversation> listConversations(String userId, java.time.Instant before, ConversationContext context,
 			int limit) {
-		return repository.findConversationsByUserId(userId, before, context, limit);
+		return repository.findConversationsByUserId(userId, before, context, pageLimit(limit));
 	}
 
 	public int hideConversations(String userId, java.util.List<String> ids) {
@@ -392,7 +406,12 @@ public class MessagingService {
 	/** As conversas arquivadas (apagadas so para quem chama). */
 	public List<Conversation> listArchivedConversations(String userId, java.time.Instant before,
 			ConversationContext context, int limit) {
-		return repository.findArchivedConversationsByUserId(userId, before, context, limit);
+		return repository.findArchivedConversationsByUserId(userId, before, context, pageLimit(limit));
+	}
+
+	/** Teto das listagens de conversas e mensagens (o limit ia direto ao PageRequest). */
+	private static int pageLimit(int limit) {
+		return Math.clamp(limit, 1, 100);
 	}
 
 	/** Restaurar: a conversa volta para a caixa de entrada de quem chamou. */
@@ -434,6 +453,7 @@ public class MessagingService {
 	}
 
 	public List<Message> getMessages(String conversationId, String viewerId, java.time.Instant before, int limit) {
+		limit = pageLimit(limit);
 		if (!repository.findConversationById(conversationId).isPresent()) {
 			throw new ApiException(404, "CONVERSATION_NOT_FOUND", "Conversa nao encontrada.");
 		}
@@ -458,14 +478,34 @@ public class MessagingService {
 		return repository.hideMessages(userId, ids, clock.instant());
 	}
 
-	public record LastMessagePreview(String text, boolean e2e, String iv, java.time.Instant time) {
-		static final LastMessagePreview EMPTY = new LastMessagePreview(null, false, null, null);
+	/** {@code from} is the sender's account id: the inbox marks the viewer's own last message. */
+	public record LastMessagePreview(String text, boolean e2e, String iv, java.time.Instant time, String from) {
+		static final LastMessagePreview EMPTY = new LastMessagePreview(null, false, null, null, null);
 	}
 
 	public LastMessagePreview getLastMessagePreview(String conversationId) {
 		return repository.findLastMessage(conversationId)
-			.map(m -> new LastMessagePreview(m.text(), m.e2e(), m.iv(), m.createdAt()))
+			.map(m -> new LastMessagePreview(m.text(), m.e2e(), m.iv(), m.createdAt(), m.senderId()))
 			.orElse(LastMessagePreview.EMPTY);
+	}
+
+	/**
+	 * Instante da nova mensagem, nunca antes da última da conversa.
+	 *
+	 * `messages.created_at` guarda segundos: duas mensagens enviadas no mesmo segundo empatavam, e
+	 * a consulta da última mensagem (a prévia do chat) devolvia uma delas por acaso — a prévia
+	 * repetia o conteúdo antigo. Avançar 1s quando o segundo empata tira o empate da jogada.
+	 */
+	private java.time.Instant nextMessageInstant(String conversationId) {
+		java.time.Instant now = clock.instant();
+		return repository.findLastMessage(conversationId)
+			.map(Message::createdAt)
+			.map(last -> {
+				var nowSecond = now.truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+				var lastSecond = last.truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+				return nowSecond.isAfter(lastSecond) ? now : lastSecond.plusSeconds(1);
+			})
+			.orElse(now);
 	}
 
 	@Transactional
@@ -474,6 +514,8 @@ public class MessagingService {
 		boolean added = repository.addMessageReaction(id, messageId, userId, type, clock.instant());
 		if (added) {
 			coins.recordPresence(userId);
+			repository.findMessageById(messageId).ifPresent(message -> publishChange(message.conversationId(),
+				repository.findParticipantsByConversation(message.conversationId())));
 		}
 		return added;
 	}

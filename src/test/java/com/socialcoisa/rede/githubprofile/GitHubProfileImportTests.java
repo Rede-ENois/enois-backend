@@ -156,6 +156,8 @@ class GitHubProfileImportTests {
 			|---|---|
 			| 1 | 2 |
 
+			riscado: ~~antigo~~
+
 			<script>alert(1)</script>
 			""";
 		README.set(new GitHubProfileReadme(markdown, "https://github.com/" + login + "/" + login, "main"));
@@ -169,6 +171,8 @@ class GitHubProfileImportTests {
 		assertThat(html).contains("https://raw.githubusercontent.com/" + login + "/" + login + "/main/logo.png");
 		assertThat(html).contains("https://github.com/" + login + "/" + login + "/blob/main/docs/guia.md");
 		assertThat(html).contains("<table>");
+		// Riscado (GFM) fica coberto junto com tabela: sao as duas extensoes que a bio usa.
+		assertThat(html).contains("<del>antigo</del>");
 		assertThat(html).doesNotContain("<script");
 
 		mockMvc.perform(post("/me/github/import/readme").header("X-Session-Token", user.token()))

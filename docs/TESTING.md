@@ -23,6 +23,14 @@
 ./mvnw verify
 ```
 
+Na CI, todo PR roda a suíte inteira (job `test-suite` em `.github/workflows/build-and-push.yml`).
+O build da imagem usa `-DskipTests` e o schema check só sobe o contexto, então é esse job que pega
+teste quebrado antes de chegar na `qa`. Ele não roda no push de `qa`/`main` e não segura deploy.
+
+Envio que roda em pool de threads (push) não é verificado de forma síncrona: o teste troca o
+executor por um que roda na hora (`@MockitoBean(name = "pushExecutor")` + `doAnswer`) ou usa
+`verify(..., timeout(...))`. Um `verify` direto passa ou falha conforme a corrida.
+
 ## Estrutura de Testes
 
 Os testes estão em `src/test/java/com/socialcoisa/rede/` e seguem a mesma estrutura de pacotes do código fonte.

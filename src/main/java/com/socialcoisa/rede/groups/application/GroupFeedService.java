@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import com.socialcoisa.rede.feed.application.port.out.AuditLogRepository;
+import com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository;
 import com.socialcoisa.rede.feed.domain.ReactionType;
 import com.socialcoisa.rede.feed.domain.UserId;
 import com.socialcoisa.rede.groups.application.port.out.GroupContentRepository;
@@ -51,17 +52,19 @@ public class GroupFeedService {
 	private final GroupContentRepository content;
 	private final AuditLogRepository audit;
 	private final GroupNotifier notifier;
+	private final OutboxEventRepository outbox;
 	private final com.socialcoisa.rede.shared.age.AgeGate ageGate;
 	private final com.socialcoisa.rede.shared.sanctions.SanctionGate sanctionGate;
 	private final Clock clock;
 
 	public GroupFeedService(GroupRepository groups, GroupContentRepository content, AuditLogRepository audit,
-			GroupNotifier notifier, com.socialcoisa.rede.shared.age.AgeGate ageGate,
+			GroupNotifier notifier, OutboxEventRepository outbox, com.socialcoisa.rede.shared.age.AgeGate ageGate,
 			com.socialcoisa.rede.shared.sanctions.SanctionGate sanctionGate, Clock clock) {
 		this.groups = groups;
 		this.content = content;
 		this.audit = audit;
 		this.notifier = notifier;
+		this.outbox = outbox;
 		this.ageGate = ageGate;
 		this.sanctionGate = sanctionGate;
 		this.clock = clock;
@@ -179,6 +182,8 @@ public class GroupFeedService {
 		GroupPost post = GroupPost.publish(newId("group_post"), groupId, topicId, actorId, clean, mediaIds,
 			clock.instant());
 		content.savePost(post);
+		// The members are told by the outbox worker, off this request: the fan-out grows with the group.
+		outbox.append(GroupNotifier.POST_PUBLISHED, post.id(), "{\"postId\":\"" + post.id() + "\"}");
 		return post;
 	}
 

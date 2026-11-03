@@ -303,7 +303,7 @@ public class MediaMetadataSanitizer {
 	}
 
 	private byte[] rotateJpeg(byte[] data, int orientation) throws IOException {
-		BufferedImage image = ImageIO.read(new ByteArrayInputStream(data));
+		BufferedImage image = ImageDecoding.read(new ByteArrayInputStream(data));
 		if (image == null) {
 			return null;
 		}

@@ -259,6 +259,8 @@ public class EventService {
 		sync = true)
 	public EventPage list(String format, String city, String state, java.time.Instant before, int limit,
 			boolean includePast, boolean recurringOnly) {
+		// Teto da listagem: o limit ia direto ao PageRequest e ?limit=100000 carregava o catalogo.
+		limit = Math.clamp(limit, 1, 100);
 		// Filtro por lugar (so encontros presenciais/hibridos): `state` sozinho filtra a UF; `city`
 		// exige `state`. A cidade compara sem acento e sem caixa.
 		String uf = null;

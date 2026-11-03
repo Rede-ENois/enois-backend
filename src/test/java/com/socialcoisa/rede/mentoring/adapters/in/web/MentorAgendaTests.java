@@ -141,12 +141,16 @@ class MentorAgendaTests {
 					"price", "Gratuito",
 					"meetingUrl", "https://meet.google.com/abc-defg-hij"))))
 			.andExpect(status().isCreated())
-			.andExpect(jsonPath("$.meetingUrl").value("https://meet.google.com/abc-defg-hij"))
 			.andReturn();
 		String mentorId = objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asText();
 
-		// Quem quer agendar vê a sala; link não-https é recusado.
+		// A vitrine pública não anuncia a sala; só o dono a recebe em /room. Quem agenda recebe
+		// o link na própria sessão marcada. Link não-https é recusado.
 		mockMvc.perform(get("/mentors/" + mentorId))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.meetingUrl").doesNotExist());
+		mockMvc.perform(get("/mentors/" + mentorId + "/room")
+				.header("X-Session-Token", owner.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.meetingUrl").value("https://meet.google.com/abc-defg-hij"));
 

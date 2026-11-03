@@ -63,14 +63,13 @@ class CosmeticsFlowTests {
                 int previous = 0;
                 for (var item : items) {
                         int releaseOrder = item.get("releaseOrder").asInt();
-                        org.junit.jupiter.api.Assertions.assertEquals(previous + 1, releaseOrder);
+                        // As peças dos clássicos são as primeiras, em ordem; depois vem cada coleção na
+                        // temporada. Entre coleções a numeração pula, mas dentro de uma nunca volta.
+                        org.junit.jupiter.api.Assertions.assertTrue(releaseOrder > previous);
                         previous = releaseOrder;
                 }
-                // The original frames keep their release order; the seasonal catalog comes after them.
+                // Se hoje cai numa temporada, ela não tira os clássicos do lugar: as primeiras são as da.
                 org.junit.jupiter.api.Assertions.assertEquals("moldura-radar", items.get(25).get("id").asText());
-                org.junit.jupiter.api.Assertions.assertEquals("tema-saci", items.get(26).get("id").asText());
-                org.junit.jupiter.api.Assertions.assertEquals("garden-pampa",
-                                items.get(items.size() - 1).get("id").asText());
                 var explicit = mockMvc.perform(get("/loja").param("order", "oldest"))
                         .andExpect(status().isOk()).andReturn();
                 org.junit.jupiter.api.Assertions.assertEquals(items,
@@ -81,19 +80,18 @@ class CosmeticsFlowTests {
         void catalogListsNewestFirstByReleaseOrder() throws Exception {
                 var result = mockMvc.perform(get("/loja").param("order", "newest"))
                         .andExpect(status().isOk())
-                        .andExpect(jsonPath("$[0].id").value("garden-pampa"))
                         .andExpect(jsonPath("$[?(@.id == 'moldura-radar')].releaseOrder").value(26))
                         .andExpect(jsonPath("$[?(@.id == 'moldura-neon')].releaseOrder").value(25))
                         .andExpect(jsonPath("$[?(@.id == 'tema-saci')].releaseOrder").value(27))
                         .andReturn();
                 var items = objectMapper.readTree(result.getResponse().getContentAsString());
-                // O primeiro da lista "newest" é o de MAIOR releaseOrder do catálogo (o catálogo
-                // cresce a cada lançamento, então o teste não fixa qual item é o mais novo).
-                org.junit.jupiter.api.Assertions.assertEquals(items.size(), items.get(0).get("releaseOrder").asInt());
-                int previous = items.size() + 1;
+                // O primeiro da lista "newest" é o de MAIOR releaseOrder da lista — o catálogo cresce a
+                // cada lançamento e a loja mostra só o que está na temporada, então nada fica fixo aqui.
+                var first = items.get(0);
+                int previous = first.get("releaseOrder").asInt() + 1;
                 for (var item : items) {
                         int releaseOrder = item.get("releaseOrder").asInt();
-                        org.junit.jupiter.api.Assertions.assertEquals(previous - 1, releaseOrder);
+                        org.junit.jupiter.api.Assertions.assertTrue(releaseOrder < previous);
                         previous = releaseOrder;
                 }
                 org.junit.jupiter.api.Assertions.assertEquals("moldura-ambar", items.get(items.size() - 1).get("id").asText());
@@ -198,7 +196,7 @@ class CosmeticsFlowTests {
 			.andExpect(jsonPath("$[?(@.id == '" + frame + "')].equipped").value(true));
 		MvcResult published = mockMvc.perform(post("/feed/posts")
 			.header("X-Session-Token", buyer.token()).header("Idempotency-Key", "frame-post")
-			.contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(Map.of(
+			.contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 				"type", "INSIGHT", "content", "Uma publicacao com moldura", "tags", List.of(), "mediaIds", List.of()))))
                         .andExpect(status().isCreated()).andExpect(jsonPath("$.authorAvatarFrame").value(frame)).andReturn();
 		String postId = objectMapper.readTree(published.getResponse().getContentAsString()).get("id").asText();

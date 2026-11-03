@@ -53,7 +53,7 @@ class PostNoteFlowTests {
 				.header("X-Session-Token", token)
 				.header("Idempotency-Key", key)
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "Post que será corrigido pela comunidade.", "tags", List.of(),
 					"mediaIds", List.of()))))
 			.andExpect(status().isCreated())

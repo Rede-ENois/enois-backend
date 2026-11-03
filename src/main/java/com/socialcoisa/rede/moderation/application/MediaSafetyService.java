@@ -108,6 +108,12 @@ public class MediaSafetyService {
 			return new Outcome("UNKNOWN_MEDIA", MediaSafetyVerdict.UNSURE, 0, 0, null);
 		}
 		String ownerId = asset.get().ownerId().value();
+		if (asset.get().mimeType() == null || !asset.get().mimeType().toLowerCase(java.util.Locale.ROOT)
+				.startsWith("image/")) {
+			record(mediaId, ownerId, MediaSafetyVerdict.UNSURE, "LOW", 0,
+				"tipo de mídia fora da classificação de imagem");
+			return new Outcome("UNSUPPORTED_MEDIA", MediaSafetyVerdict.UNSURE, 0, 0, null);
+		}
 
 		List<byte[]> images = mediaReader.imagesOf("MEDIA", mediaId, 1);
 		Optional<MediaSafetyAnalyzer.Verdict> verdict = images.isEmpty()

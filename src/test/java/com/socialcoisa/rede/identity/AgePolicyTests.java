@@ -129,7 +129,7 @@ class AgePolicyTests {
 				.header("X-Session-Token", user.token())
 				.header("Idempotency-Key", "age-reg-post-1")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("type", "INSIGHT", "content",
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA", "type", "INSIGHT", "content",
 					"texto de teste da regularizacao"))))
 			.andExpect(status().isForbidden())
 			.andExpect(jsonPath("$.code").value("BIRTH_DATE_REQUIRED"));
@@ -147,7 +147,7 @@ class AgePolicyTests {
 				.header("X-Session-Token", user.token())
 				.header("Idempotency-Key", "age-reg-post-2")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("type", "INSIGHT", "content",
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA", "type", "INSIGHT", "content",
 					"depois da regularizacao funciona"))))
 			.andExpect(status().isCreated());
 	}

@@ -50,7 +50,7 @@ class ReportedContentAdapterTests {
 	@Test
 	void readsPostText() throws Exception {
 		var author = auth.authenticate("user_reported_content1");
-		String postId = publishPost(author, Map.of(
+		String postId = publishPost(author, Map.of("topic", "TECNOLOGIA",
 			"type", "INSIGHT", "content", "Compre seguidores barato no meu site", "tags", List.of(),
 			"mediaIds", List.of()), "content-post-1");
 
@@ -61,7 +61,7 @@ class ReportedContentAdapterTests {
 	@Test
 	void readsPageHtmlToo() throws Exception {
 		var author = auth.authenticate("user_reported_content2");
-		String postId = publishPost(author, Map.of(
+		String postId = publishPost(author, Map.of("topic", "TECNOLOGIA",
 			"type", "PAGE", "content", "Titulo da pagina", "pageHtml", "<h1>corpo da pagina denunciada</h1>",
 			"tags", List.of(), "mediaIds", List.of()), "content-post-2");
 
@@ -72,7 +72,7 @@ class ReportedContentAdapterTests {
 	@Test
 	void readsCommentText() throws Exception {
 		var author = auth.authenticate("user_reported_content3");
-		String postId = publishPost(author, Map.of(
+		String postId = publishPost(author, Map.of("topic", "TECNOLOGIA",
 			"type", "INSIGHT", "content", "post com comentario denunciado", "tags", List.of(),
 			"mediaIds", List.of()), "content-post-3");
 

@@ -7,22 +7,27 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import com.socialcoisa.rede.media.application.port.out.ImageContentClassifier;
+import com.socialcoisa.rede.media.application.port.out.ImageContentReviewer;
+import com.socialcoisa.rede.media.application.port.out.ImageContentReviewer.Result;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 /** Enforces the image-content policy before the upload reaches public storage. */
 @Service
 public class MediaImageModerationService {
 	private final ObjectProvider<ImageContentClassifier> classifierProvider;
+	private final ImageContentReviewer reviewer;
 	private final boolean enabled;
 	private final double threshold;
 
 	public MediaImageModerationService(ObjectProvider<ImageContentClassifier> classifierProvider,
+			ImageContentReviewer reviewer,
 			@Value("${rede.media.nsfw.enabled:true}") boolean enabled,
 			@Value("${rede.media.nsfw.threshold:0.70}") double threshold) {
 		if (!Double.isFinite(threshold) || threshold < 0.0 || threshold > 1.0) {
 			throw new IllegalArgumentException("rede.media.nsfw.threshold precisa estar entre 0 e 1.");
 		}
 		this.classifierProvider = classifierProvider;
+		this.reviewer = reviewer;
 		this.enabled = enabled;
 		this.threshold = threshold;
 	}
@@ -43,8 +48,16 @@ public class MediaImageModerationService {
 				throw new IllegalStateException("O classificador retornou uma pontuação inválida.");
 			}
 			if (score >= threshold) {
-				throw new ApiException(422, "IMAGE_CONTENT_NOT_ALLOWED",
-					"Esta imagem parece conter conteúdo pornográfico e não pode ser enviada.");
+				Result result = reviewer.review(imageBytes).orElseThrow(() -> new ApiException(503,
+					"IMAGE_MODERATION_UNAVAILABLE", "Não foi possível confirmar a verificação desta imagem."));
+				if (result == Result.PROHIBITED) {
+					throw new ApiException(422, "IMAGE_CONTENT_NOT_ALLOWED",
+						"Esta imagem parece conter conteúdo pornográfico e não pode ser enviada.");
+				}
+				if (result == Result.UNSURE) {
+					throw new ApiException(503, "IMAGE_MODERATION_UNAVAILABLE",
+						"Não foi possível confirmar a verificação desta imagem.");
+				}
 			}
 		}
 		catch (IOException failure) {
