@@ -89,6 +89,8 @@ class NotificationContractControllerTests {
 		unread(me, "summary_msg_2", "NEW_MESSAGE", "notif_summary_friend", false);
 		unread(me, "summary_work_msg", "NEW_WORK_MESSAGE", "notif_summary_friend", false);
 		unread(me, "summary_group", "GROUP_JOIN_REQUEST", "notif_summary_friend", false);
+		unread(me, "summary_request", "CONNECTION_REQUEST", "notif_summary_friend", false);
+		unread(me, "summary_accepted", "CONNECTION_ACCEPTED", "notif_summary_friend", false);
 		unread(me, "summary_security", "SEGURANCA", "sistema", false);
 		unread(me, "summary_read_group", "GROUP_NEW_POST", "notif_summary_friend", true);
 		unread(me, "summary_blocked_group", "GROUP_NEW_POST", blocked.userId(), false);
@@ -99,8 +101,10 @@ class NotificationContractControllerTests {
 
 		mockMvc.perform(get("/notifications/unread-summary").header("X-Session-Token", session.token()))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.total").value(5))
-			.andExpect(jsonPath("$.byModule.MESSAGES").value(3))
+			// Messages and connection requests have their own signals: only the notices count.
+			.andExpect(jsonPath("$.total").value(3))
+			.andExpect(jsonPath("$.byModule.MESSAGES").doesNotExist())
+			.andExpect(jsonPath("$.byModule.NETWORK").value(1))
 			.andExpect(jsonPath("$.byModule.GROUPS").value(1))
 			.andExpect(jsonPath("$.byModule.OTHER").value(1));
 
@@ -108,16 +112,16 @@ class NotificationContractControllerTests {
 		mockMvc.perform(get("/notifications/unread-summary").param("context", "PROFESSIONAL")
 				.header("X-Session-Token", session.token()))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.total").value(2))
-			.andExpect(jsonPath("$.byModule.MESSAGES").value(1))
+			.andExpect(jsonPath("$.total").value(1))
+			.andExpect(jsonPath("$.byModule.MESSAGES").doesNotExist())
 			.andExpect(jsonPath("$.byModule.OTHER").value(1))
 			.andExpect(jsonPath("$.byModule.GROUPS").doesNotExist());
 
 		mockMvc.perform(get("/notifications/unread-summary").param("context", "SOCIAL")
 				.header("X-Session-Token", session.token()))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.total").value(4))
-			.andExpect(jsonPath("$.byModule.MESSAGES").value(2));
+			.andExpect(jsonPath("$.total").value(3))
+			.andExpect(jsonPath("$.byModule.MESSAGES").doesNotExist());
 
 		mockMvc.perform(get("/notifications/unread-summary").param("context", "OTHER")
 				.header("X-Session-Token", session.token()))

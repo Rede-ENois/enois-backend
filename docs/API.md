@@ -785,7 +785,8 @@ kind of target for the whole page):
 
 Unread summary (`GET /api/notifications/unread-summary`): counts the person's unread notifications,
 leaving out those whose actor is blocked (either way) and applying the same `context` filter as the
-list. Only areas with unread notifications appear in `byModule`; an area clears when its
+list. Messages (`NEW_MESSAGE`, `NEW_WORK_MESSAGE`) and `CONNECTION_REQUEST` are not counted: they have
+their own unread signals and the notices panel does not list them. Only areas with unread notifications appear in `byModule`; an area clears when its
 notifications are read (`/read` or `/read-all`). The kind to area mapping is
 `NotificationModule` (`MESSAGES`, `EVENTS`, `JOBS`, `COMPANIES`, `MENTORING`, `DAILY_GAMES`,
 `COMMUNITY_GAMES`, `GROUPS`, `STUDY_PAIRS`, `BLOGS`, `NETWORK`, `OTHER`).
