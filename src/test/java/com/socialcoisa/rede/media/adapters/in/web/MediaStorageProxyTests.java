@@ -79,6 +79,8 @@ class MediaStorageProxyTests {
 		String ultimoRange;
 		String chaveEscrita;
 		byte[] escrito;
+		/** Quando preenchido, a escrita falha como um gateway S3 fora do ar. */
+		RuntimeException falhaNaEscrita;
 
 		@Override
 		public StoredObject read(String key, String range) {
@@ -90,6 +92,9 @@ class MediaStorageProxyTests {
 
 		@Override
 		public void write(String key, String contentType, long length, InputStream body) {
+			if (falhaNaEscrita != null) {
+				throw falhaNaEscrita;
+			}
 			try {
 				this.chaveEscrita = key;
 				this.escrito = body.readAllBytes();
@@ -279,6 +284,36 @@ class MediaStorageProxyTests {
 
 		assertThat(store().chaveEscrita).isEqualTo(objectKey);
 		assertThat(store().escrito).isEqualTo(video);
+	}
+
+	@Test
+	void falhaDoBucketNaEscritaVira502ComCodigoProprioEnaoErroGenerico() throws Exception {
+		var dono = auth.authenticate("media_proxy_bucket_fora");
+		var criado = mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", dono.token())
+				.header("Idempotency-Key", "media-proxy-bucket-1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("fileName", "clipe.mp4",
+					"mimeType", "video/mp4", "size", 2048, "purpose", "POST_VIDEO"))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
+			.path("objectKey").asText();
+
+		store().falhaNaEscrita = new IllegalStateException("gateway recusou a gravacao");
+		try {
+			mockMvc.perform(put("/storage/" + objectKey)
+					.header("X-Session-Token", dono.token())
+					.contentType("video/mp4")
+					.content("ftypisom-video".getBytes(StandardCharsets.UTF_8)))
+				.andExpect(status().isBadGateway())
+				.andExpect(jsonPath("$.code").value("MEDIA_STORAGE_WRITE_FAILED"))
+				.andExpect(jsonPath("$.message").value(
+					org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("gateway"))));
+		}
+		finally {
+			store().falhaNaEscrita = null;
+		}
 	}
 
 	@Test
