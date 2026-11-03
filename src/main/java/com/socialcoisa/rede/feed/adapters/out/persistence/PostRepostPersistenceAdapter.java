@@ -64,6 +64,13 @@ class PostRepostPersistenceAdapter implements PostRepostRepository {
 	}
 
 	@Override
+	public List<PostRepost> findByUserId(String userId, java.time.Instant before, int limit) {
+		return repository.findByUserIdAndCreatedAtBeforeOrderByCreatedAtDesc(
+			userId, before, PageRequest.of(0, Math.max(1, limit)))
+			.stream().map(PostRepostJpaEntity::toDomain).toList();
+	}
+
+	@Override
 	public java.util.Set<String> findPostIdsRepostedByUser(String userId, java.util.Collection<String> postIds) {
 		if (userId == null || postIds == null || postIds.isEmpty()) return java.util.Set.of();
 		return repository.findByUserIdAndPostIdIn(userId, postIds).stream()

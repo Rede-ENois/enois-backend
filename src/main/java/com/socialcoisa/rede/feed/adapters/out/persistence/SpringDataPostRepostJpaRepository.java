@@ -19,4 +19,7 @@ interface SpringDataPostRepostJpaRepository extends JpaRepository<PostRepostJpaE
 	List<PostRepostJpaEntity> findByUserIdInOrderByCreatedAtDesc(java.util.Collection<String> userIds);
 
 	List<PostRepostJpaEntity> findByUserIdAndPostIdIn(String userId, java.util.Collection<String> postIds);
+
+	List<PostRepostJpaEntity> findByUserIdAndCreatedAtBeforeOrderByCreatedAtDesc(
+		String userId, java.time.Instant before, org.springframework.data.domain.Pageable pageable);
 }
