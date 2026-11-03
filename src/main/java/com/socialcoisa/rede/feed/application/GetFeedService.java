@@ -66,6 +66,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	private final PostNoteService postNotes;
 	private final com.socialcoisa.rede.feed.application.port.out.PollRepository polls;
 	private final com.socialcoisa.rede.feed.application.port.out.PostRepostRepository postReposts;
+	private final com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries;
 	private static final Instant DEFAULT_BEFORE = Instant.parse("9999-12-31T23:59:59Z");
 
 	public GetFeedService(PostRepository postRepository, ArticleRepository articleRepository,
@@ -80,7 +81,9 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			com.socialcoisa.rede.feed.application.port.out.ReaderPreferencesReader readerPreferences,
 			PostNoteService postNotes,
 			com.socialcoisa.rede.feed.application.port.out.PollRepository polls,
-			com.socialcoisa.rede.feed.application.port.out.PostRepostRepository postReposts) {
+			com.socialcoisa.rede.feed.application.port.out.PostRepostRepository postReposts,
+			com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries) {
+		this.mediaSummaries = mediaSummaries;
 		this.postRepository = postRepository;
 		this.articleRepository = articleRepository;
 		this.feedCacheRepository = feedCacheRepository;
@@ -402,6 +405,10 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		Map<String, Post> quotedPosts = quotedIds.isEmpty() ? Map.of()
 			: postRepository.findByIds(quotedIds.stream().map(PostId::new).toList()).stream()
 				.collect(Collectors.toMap(p -> p.id().value(), Function.identity()));
+		// Attachments of the whole page (address, type, pixel size) in ONE query, so the card draws
+		// at its final height instead of fetching each media and growing after it loads.
+		Map<String, com.socialcoisa.rede.media.application.MediaSummaryView> mediaById = mediaSummaries
+			.visibleByIds(visible.stream().flatMap(p -> p.mediaIds().stream()).collect(Collectors.toSet()));
 		return visible.stream()
 			.map(post -> {
 				UserProfile profile = profiles.get(post.authorId().value());
@@ -449,6 +456,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				return withRepostedFlag.withPoll(new PollView(options, perOption,
 					myVotes.get(post.id().value()), total));
 			})
+			.map(view -> view.withMedia(mediaById))
 			.toList();
 	}
 

@@ -42,11 +42,14 @@ public class EditPostService implements EditPostUseCase {
 	private final UserProfileRepository userProfileRepository;
 	private final com.socialcoisa.rede.contributions.application.port.out.UserSealRepository userSeals;
 	private final Clock clock;
+	private final com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries;
 
 	public EditPostService(PostRepository postRepository, ArticleRepository articleRepository,
 			FeedCacheRepository feedCacheRepository,
 			AuditLogRepository auditLogRepository, UserProfileRepository userProfileRepository,
-			com.socialcoisa.rede.contributions.application.port.out.UserSealRepository userSeals, Clock clock) {
+			com.socialcoisa.rede.contributions.application.port.out.UserSealRepository userSeals, Clock clock,
+			com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries) {
+		this.mediaSummaries = mediaSummaries;
 		this.postRepository = postRepository;
 		this.articleRepository = articleRepository;
 		this.feedCacheRepository = feedCacheRepository;
@@ -102,13 +105,14 @@ public class EditPostService implements EditPostUseCase {
 		auditLogRepository.record(command.userId(), "POST_EDITED", saved.id().value(), null);
 
 		var author = userProfileRepository.findById(saved.authorId().value()).orElse(null);
-		return author != null
+		PostView view = author != null
 			? PostView.from(saved, author.username(), author.name(), author.avatar(), author.allBadges())
 				.withAvatarFrame(author.avatarFrame())
 				.withAuthorStyle(saved.authorIdentity() == AuthorIdentity.SOCIAL ? NameStyleView.from(author) : null)
 				.withContributor(saved.authorIdentity() == AuthorIdentity.SOCIAL && userSeals.hasActiveSeal(author.id())
 					? ContributorTagView.from(author) : null)
 			: PostView.from(saved);
+		return view.withMedia(mediaSummaries.visibleByIds(saved.mediaIds()));
 	}
 
 	/**
