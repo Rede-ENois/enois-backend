@@ -36,7 +36,7 @@ class GroupCreationQueryCountTests {
 		mock(com.socialcoisa.rede.shared.sanctions.SanctionGate.class), connections, blockedUsers,
 		mock(com.socialcoisa.rede.corporate.application.CorporateProfileService.class),
 		mock(com.socialcoisa.rede.coin.application.CoinService.class),
-		mock(org.springframework.context.ApplicationEventPublisher.class));
+		mock(org.springframework.context.ApplicationEventPublisher.class), new ConversationViewers(Clock.systemUTC()));
 
 	private final List<String> members = IntStream.range(0, 99).mapToObj(i -> "member-" + i).toList();
 

@@ -86,14 +86,49 @@ public class NotificationService {
 		return createFirstOfGroup(userId, kind, groupKey, actorId, title, body, href, ctaLabel);
 	}
 
+	/**
+	 * Like {@link #createCounted}, but every call is pushed, tagged with {@code groupKey}: the unread
+	 * notification of the group counts the events, and each push replaces the previous one on the
+	 * device instead of piling up (the messages of one conversation). Once read, the next call starts
+	 * over.
+	 */
+	@Transactional
+	public Notification createCountedAndPushed(String userId, String kind, String groupKey, String actorId,
+			String title, String body, java.util.function.IntFunction<String> countedBody, String href,
+			String ctaLabel) {
+		var unread = repository.findUnreadGroup(userId, groupKey);
+		if (unread.isPresent()) {
+			Notification current = unread.get();
+			int count = current.actorCount() + 1;
+			String joinedBody = countedBody.apply(count);
+			Notification joined = current.joinedBy(actorId, count, joinedBody, href, clock.instant());
+			repository.save(joined);
+			events.publishEvent(new NotificationCreatedEvent(current.id(), userId, kind, title, joinedBody, href,
+				groupKey));
+			return joined;
+		}
+		return createFirstOfGroup(userId, kind, groupKey, actorId, title, body, href, ctaLabel, groupKey);
+	}
+
 	private Notification createFirstOfGroup(String userId, String kind, String groupKey, String actorId,
 			String title, String body, String href, String ctaLabel) {
+		return createFirstOfGroup(userId, kind, groupKey, actorId, title, body, href, ctaLabel, null);
+	}
+
+	private Notification createFirstOfGroup(String userId, String kind, String groupKey, String actorId,
+			String title, String body, String href, String ctaLabel, String pushTag) {
 		String id = "notification_" + UUID.randomUUID().toString().replace("-", "");
 		Notification notification = Notification.grouped(id, userId, kind, groupKey, actorId, title, body, href,
 			ctaLabel, clock.instant());
 		repository.save(notification);
-		events.publishEvent(new NotificationCreatedEvent(id, userId, kind, title, body, href));
+		events.publishEvent(new NotificationCreatedEvent(id, userId, kind, title, body, href, pushTag));
 		return notification;
+	}
+
+	/** Marks read every unread notification of the person that points at {@code href}. */
+	@Transactional
+	public void markReadByHref(String userId, String href) {
+		repository.markReadByUserAndHref(userId, href);
 	}
 
 	@Transactional

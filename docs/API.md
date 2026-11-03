@@ -768,7 +768,9 @@ Contrato completo, regras e códigos de erro em [`STUDY_PAIRS.md`](STUDY_PAIRS.m
 | GET | `/api/conversations/{conversationId}` | Detalhes da conversa | Sim |
 | POST | `/api/conversations/{conversationId}/messages` | Enviar mensagem | Sim |
 | GET | `/api/conversations/{conversationId}/messages` | Listar mensagens | Sim |
-| POST | `/api/conversations/{conversationId}/read` | Marcar como lida | Sim |
+| POST | `/api/conversations/{conversationId}/read` | Marcar como lida (as notificações de mensagem da conversa também ficam lidas) | Sim |
+| POST | `/api/conversations/{conversationId}/viewing` | Heartbeat da conversa aberta na tela (a cada ~20s): enquanto vale (45s), mensagens novas dela não notificam nem mandam push para quem está olhando. 204 | Sim |
+| DELETE | `/api/conversations/{conversationId}/viewing` | A conversa saiu da tela: volta a notificar. 204 | Sim |
 | POST | `/api/conversations/{conversationId}/messages/{messageId}/reactions` | Reagir a mensagem | Sim |
 | GET | `/api/conversations/{conversationId}/messages/{messageId}/reactions` | Reações da mensagem | Sim |
 | GET | `/api/conversations/stream` | Stream SSE (`text/event-stream`) da caixa de entrada: evento `conversation` com `{"conversationId"}` a cada mensagem nova, leitura ou reação; comentário `ping` a cada 25s | Sim (cookie) |

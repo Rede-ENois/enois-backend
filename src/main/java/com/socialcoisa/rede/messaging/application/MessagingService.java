@@ -35,6 +35,7 @@ public class MessagingService {
 	private final com.socialcoisa.rede.corporate.application.CorporateProfileService corporateProfiles;
 	private final com.socialcoisa.rede.coin.application.CoinService coins;
 	private final org.springframework.context.ApplicationEventPublisher events;
+	private final ConversationViewers viewers;
 
 	public MessagingService(MessagingRepository repository, NotificationService notificationService, Clock clock,
 			UserRateLimiter userRateLimiter, BehavioralTimingGuard behavioralTimingGuard,
@@ -44,7 +45,8 @@ public class MessagingService {
 			com.socialcoisa.rede.shared.blocks.BlockedUsersReader blockedUsers,
 			com.socialcoisa.rede.corporate.application.CorporateProfileService corporateProfiles,
 			com.socialcoisa.rede.coin.application.CoinService coins,
-			org.springframework.context.ApplicationEventPublisher events) {
+			org.springframework.context.ApplicationEventPublisher events, ConversationViewers viewers) {
+		this.viewers = viewers;
 		this.coins = coins;
 		this.events = events;
 		this.repository = repository;
@@ -246,6 +248,7 @@ public class MessagingService {
 		// Ao enviar, a conversa fica lida para QUEM ENVIOU (PR #15) — antes o contador continuava
 		// aceso mesmo com a conversa aberta.
 		repository.markRead(conversationId, senderId, clock.instant());
+		notificationService.markReadByHref(senderId, conversationHref(conversationId));
 		// A lista de conversas ordena por updatedAt; sem este toque a conversa antiga fica no lugar
 		// mesmo recebendo mensagem nova (#25 dos issues).
 		repository.saveConversation(conversation.touch(clock.instant()));
@@ -253,12 +256,7 @@ public class MessagingService {
 			? (midias.isEmpty() ? "Nova mensagem" : "Enviou uma midia")
 			: (corpo.length() > 80 ? corpo.substring(0, 77) + "..." : corpo);
 		List<ConversationParticipant> participants = repository.findParticipantsByConversation(conversationId);
-		for (ConversationParticipant p : participants) {
-			if (p.userId().equals(senderId)) continue;
-			notificationService.create(p.userId(), messageNotificationKind(conversation), senderId,
-				"Nova mensagem", preview,
-				"/api/conversations/" + conversationId, "Responder");
-		}
+		notifyRecipients(conversation, participants, senderId, preview);
 		publishChange(conversationId, participants);
 		coins.recordPresence(senderId);
 		return message;
@@ -306,14 +304,10 @@ public class MessagingService {
 			replyToId, nextMessageInstant(conversationId));
 		repository.saveMessage(message);
 		repository.markRead(conversationId, senderId, clock.instant());
+		notificationService.markReadByHref(senderId, conversationHref(conversationId));
 		repository.saveConversation(conversation.touch(clock.instant()));
 		List<ConversationParticipant> participants = repository.findParticipantsByConversation(conversationId);
-		for (ConversationParticipant p : participants) {
-			if (p.userId().equals(senderId)) continue;
-			notificationService.create(p.userId(), messageNotificationKind(conversation), senderId,
-				"Nova mensagem", "Mensagem cifrada",
-				"/api/conversations/" + conversationId, "Responder");
-		}
+		notifyRecipients(conversation, participants, senderId, "Mensagem cifrada");
 		publishChange(conversationId, participants);
 		coins.recordPresence(senderId);
 		return message;
@@ -323,6 +317,46 @@ public class MessagingService {
 	private void publishChange(String conversationId, List<ConversationParticipant> participants) {
 		events.publishEvent(new ConversationChanged(conversationId,
 			participants.stream().map(ConversationParticipant::userId).toList()));
+	}
+
+	/**
+	 * One notification per conversation, counted, and one push per message tagged with the
+	 * conversation (the new push replaces the previous one on the device). Nobody is notified about
+	 * the conversation they have open on screen: they are reading the message as it arrives.
+	 */
+	private void notifyRecipients(Conversation conversation, List<ConversationParticipant> participants,
+			String senderId, String preview) {
+		String conversationId = conversation.id();
+		for (ConversationParticipant p : participants) {
+			if (p.userId().equals(senderId) || viewers.isViewing(p.userId(), conversationId)) {
+				continue;
+			}
+			notificationService.createCountedAndPushed(p.userId(), messageNotificationKind(conversation),
+				conversationNoticeGroup(conversationId), senderId, "Nova mensagem", preview,
+				count -> count + " novas mensagens", conversationHref(conversationId), "Responder");
+		}
+	}
+
+	/** Group of the conversation's notification, and the tag of its pushes (the app closes them by it). */
+	static String conversationNoticeGroup(String conversationId) {
+		return "conversation:" + conversationId;
+	}
+
+	static String conversationHref(String conversationId) {
+		return "/api/conversations/" + conversationId;
+	}
+
+	/** Marks that {@code userId} has the conversation open on screen (heartbeat from the app). */
+	public void viewing(String conversationId, String userId) {
+		if (!repository.isParticipant(conversationId, userId)) {
+			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
+		}
+		viewers.viewing(userId, conversationId);
+	}
+
+	/** The app left the conversation (closed, switched, or the tab went to the background). */
+	public void leftConversation(String conversationId, String userId) {
+		viewers.left(userId, conversationId);
 	}
 
 	/**
@@ -390,6 +424,8 @@ public class MessagingService {
 			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
 		}
 		repository.markRead(conversationId, userId, clock.instant());
+		// Read conversation, read notices: its message notifications leave the unread count too.
+		notificationService.markReadByHref(userId, conversationHref(conversationId));
 		// Read receipts: the other side sees "visto" without waiting for the next refetch.
 		publishChange(conversationId, repository.findParticipantsByConversation(conversationId));
 	}

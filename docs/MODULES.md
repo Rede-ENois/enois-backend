@@ -915,8 +915,9 @@ A ocorrência nova herda cidade/UF da anterior (o encontro segue no mesmo lugar 
 | Função | Descrição |
 |---|---|
 | `createConversation(String kind, String title, String createdBy, List<String> participantIds)` | Cria conversa com participantes |
-| `sendMessage(String conversationId, String senderId, String text)` | Envia mensagem, notifica participantes |
-| `markRead(String conversationId, String userId)` | Marca conversa como lida para o usuário |
+| `sendMessage(String conversationId, String senderId, String text)` | Envia mensagem e notifica os participantes que não estão com a conversa aberta: uma notificação contada por conversa (grupo `conversation:{id}`) e um push por mensagem com `tag` = o grupo, que substitui o anterior no aparelho |
+| `markRead(String conversationId, String userId)` | Marca conversa como lida para o usuário, junto com as notificações que apontam para ela |
+| `viewing(String conversationId, String userId)` / `leftConversation(...)` | Conversa aberta na tela / saiu da tela (`ConversationViewers`, em memória, TTL 45s) |
 | `listConversations(String userId)` | Lista conversas do usuário |
 | `isParticipant(String conversationId, String userId)` | Verifica se é participante |
 | `getConversation(String conversationId)` | Busca conversa por ID |
@@ -950,6 +951,8 @@ A ocorrência nova herda cidade/UF da anterior (o encontro segue no mesmo lugar 
 | `hideMessages(...)` | POST /api/conversations/{conversationId}/messages/hide |
 | `send(...)` | POST /api/conversations/{conversationId}/messages |
 | `read(...)` | POST /api/conversations/{conversationId}/read |
+| `viewing(...)` | POST /api/conversations/{conversationId}/viewing |
+| `leftConversation(...)` | DELETE /api/conversations/{conversationId}/viewing |
 | `create(...)` | POST /api/conversations |
 | `reactToMessage(...)` | POST /api/conversations/{conversationId}/messages/{messageId}/reactions |
 | `listMessageReactions(...)` | GET /api/conversations/{conversationId}/messages/{messageId}/reactions |
