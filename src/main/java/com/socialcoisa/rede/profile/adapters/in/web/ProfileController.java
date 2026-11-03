@@ -34,6 +34,7 @@ import com.socialcoisa.rede.profile.application.port.in.ManageProfileExtensionUs
 import com.socialcoisa.rede.profile.application.port.in.UpdateProfileUseCase;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
+import com.socialcoisa.rede.profile.application.ProfileAppearanceService;
 import com.socialcoisa.rede.profile.application.ProfileService;
 import com.socialcoisa.rede.network.application.NetworkService;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
@@ -54,13 +55,15 @@ class ProfileController {
 	private final UserProfileRepository userProfileRepository;
 	private final CurrentUserResolver currentUserResolver;
 	private final IdempotencyApplicationService idempotency;
+	private final ProfileAppearanceService profileAppearanceService;
 
 	ProfileController(GetMeUseCase getMeUseCase, GetUserProfileUseCase getUserProfileUseCase,
 			UpdateProfileUseCase updateProfileUseCase,
 			ManageProfileExtensionUseCase profileExtensionUseCase, ProfileService profileService,
 			NetworkService networkService, UserProfileRepository userProfileRepository,
 			CurrentUserResolver currentUserResolver,
-			IdempotencyApplicationService idempotency) {
+			IdempotencyApplicationService idempotency,
+			ProfileAppearanceService profileAppearanceService) {
 		this.getMeUseCase = getMeUseCase;
 		this.getUserProfileUseCase = getUserProfileUseCase;
 		this.updateProfileUseCase = updateProfileUseCase;
@@ -70,6 +73,7 @@ class ProfileController {
 		this.userProfileRepository = userProfileRepository;
 		this.currentUserResolver = currentUserResolver;
 		this.idempotency = idempotency;
+		this.profileAppearanceService = profileAppearanceService;
 	}
 
 	@GetMapping("/me")
@@ -147,6 +151,42 @@ class ProfileController {
 	}
 
 	record RankingPreferenceRequest(boolean show) {
+	}
+
+	record ProfileLookRequest(String theme, String accent, String font, String header, Boolean textures,
+			String borders, Integer decoration) {
+	}
+
+	/**
+	 * Aparência da vitrine: um visual para o perfil social e outro para o profissional, cada um
+	 * com preset e ajustes finos. Corpo nulo nos dois lados limpa tudo e volta ao padrão.
+	 */
+	record ProfileAppearanceRequest(ProfileLookRequest social, ProfileLookRequest professional) {
+		com.socialcoisa.rede.profile.domain.ProfileAppearance toDomain() {
+			return new com.socialcoisa.rede.profile.domain.ProfileAppearance(look(social), look(professional));
+		}
+
+		private static com.socialcoisa.rede.profile.domain.ProfileLook look(ProfileLookRequest value) {
+			return value == null
+				? com.socialcoisa.rede.profile.domain.ProfileLook.empty()
+				: new com.socialcoisa.rede.profile.domain.ProfileLook(value.theme(), value.accent(), value.font(),
+					value.header(), value.textures(), value.borders(), value.decoration());
+		}
+	}
+
+	/**
+	 * Grava a aparência do perfil (o que quem VISITA vê). Diferente de
+	 * {@code PUT /me/theme}, que é a preferência de quem está olhando.
+	 */
+	@PutMapping("/me/profile-appearance")
+	ResponseEntity<String> profileAppearance(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@RequestBody ProfileAppearanceRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		String hash = idempotency.hash(request);
+		return idempotency.execute(user.id(), "PUT", "/api/me/profile-appearance", idempotencyKey, hash,
+			() -> new CommandResponse(200, profileAppearanceService.update(user.id().value(), request.toDomain())));
 	}
 
 	/**
