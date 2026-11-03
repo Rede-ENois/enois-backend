@@ -46,4 +46,10 @@ interface SpringDataNotificationJpaRepository extends JpaRepository<Notification
 	@Transactional
 	void markAllReadByUserId(@Param("userId") String userId);
 
+	@Modifying
+	@Query(value = "UPDATE NotificationJpaEntity n SET n.read = true"
+		+ " WHERE n.userId = :userId AND n.href = :href AND n.read = false")
+	@Transactional
+	void markReadByUserIdAndHref(@Param("userId") String userId, @Param("href") String href);
+
 }

@@ -210,6 +210,10 @@ class WebPushSender implements PushSender {
 			payload.put("url", message.url() == null ? "/feed" : message.url());
 			// Lets the service worker mark the notification read when the push is opened.
 			payload.put("notificationId", message.notificationId());
+			// Same tag, same entry on the device: the new push replaces the previous one (one per conversation).
+			if (message.tag() != null) {
+				payload.put("tag", message.tag());
+			}
 			return objectMapper.writeValueAsString(payload);
 		}
 		catch (Exception exception) {

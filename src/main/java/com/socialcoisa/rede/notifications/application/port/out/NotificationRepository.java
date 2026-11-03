@@ -29,4 +29,7 @@ public interface NotificationRepository {
 
 	void markAllReadByUser(String userId);
 
+	/** Marks read the unread notifications of the person that point at {@code href}. */
+	void markReadByUserAndHref(String userId, String href);
+
 }
