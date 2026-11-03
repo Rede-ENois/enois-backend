@@ -60,6 +60,10 @@ class UserProfileJpaEntity {
 	@Column(name = "profile_effect", length = 64)
 	private String profileEffect;
 
+	/** Aparência da vitrine (social + profissional) em JSON; null = padrão da plataforma. */
+	@Column(name = "profile_appearance", columnDefinition = "longtext")
+	private String profileAppearance;
+
 	@Column(name = "garden_style", length = 64)
 	private String gardenStyle;
 
@@ -217,6 +221,7 @@ class UserProfileJpaEntity {
 		entity.nameplate = profile.nameplate();
 		entity.bannerItem = profile.bannerItem();
 		entity.profileEffect = profile.profileEffect();
+		entity.profileAppearance = ProfileAppearanceJson.encode(profile.profileAppearance());
 		entity.gardenStyle = profile.gardenStyle();
 		entity.statusText = profile.statusText();
 		entity.statusIcon = profile.statusIcon();
@@ -293,6 +298,7 @@ class UserProfileJpaEntity {
 		profile.hydrateNameStyle(nameTheme, nameFont, nameColor);
 		profile.hydrateContributorTagColor(contributorTagColor);
 		profile.hydrateProfileCosmetics(cardTheme, nameplate, bannerItem, profileEffect);
+		profile.hydrateProfileAppearance(ProfileAppearanceJson.decode(profileAppearance));
 		profile.hydrateGardenStyle(gardenStyle);
 		profile.hydrateStatus(statusText, statusIcon);
 		profile.hydratePlace(city == null || state == null ? null : new CityState(city, state, cityKey), showCity);

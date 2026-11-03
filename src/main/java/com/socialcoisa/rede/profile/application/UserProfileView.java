@@ -2,6 +2,7 @@ package com.socialcoisa.rede.profile.application;
 
 import java.util.List;
 
+import com.socialcoisa.rede.profile.domain.ProfileLook;
 import com.socialcoisa.rede.profile.domain.ReputationGarden;
 import com.socialcoisa.rede.profile.domain.UserProfile;
 
@@ -31,7 +32,12 @@ public record UserProfileView(String id, String username, String name, String he
 		 * Reputation garden stages. Only the single-profile reads ({@code /users/{username}},
 		 * {@code /users/by-id/{id}}) compute it; lists and write responses carry null.
 		 */
-		ReputationGarden garden) {
+		ReputationGarden garden,
+		/**
+		 * Aparência da vitrine SOCIAL escolhida pelo dono. Quem visita recebe o visual do perfil
+		 * visitado, não o tema da própria conta.
+		 */
+		ProfileLook profileLook) {
 
 	public static UserProfileView from(UserProfile profile) {
 		return new UserProfileView(profile.id(), profile.username(), profile.displayWithNickname(), profile.headline(),
@@ -44,7 +50,7 @@ public record UserProfileView(String id, String username, String name, String he
 			profile.profileEffect(), profile.statusText(), profile.statusIcon(), profile.createdAt() == null ? null : profile.createdAt().toString(),
 			profile.publicPlace() == null ? null : profile.publicPlace().city(),
 			profile.publicPlace() == null ? null : profile.publicPlace().state(), profile.gardenStyle(),
-			profile.garden());
+			profile.garden(), profile.profileAppearance().social());
 
 	}
 
@@ -57,7 +63,7 @@ public record UserProfileView(String id, String username, String name, String he
 			bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, connectionsCount,
 			followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme, nameFont, nameColor,
 			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state,
-			gardenStyle, garden);
+			gardenStyle, garden, profileLook);
 	}
 
 	/** Capa em HTML/CSS; so a leitura do perfil anexa (mesmo motivo da bio). */
@@ -66,6 +72,6 @@ public record UserProfileView(String id, String username, String name, String he
 			bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, connectionsCount,
 			followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme, nameFont, nameColor,
 			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state,
-			gardenStyle, garden);
+			gardenStyle, garden, profileLook);
 	}
 }
