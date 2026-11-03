@@ -83,6 +83,14 @@ class DeveloperOriginTests {
 		// Token inválido responde 400 pelo próprio controller — o que importa é não ser o 403 do gate.
 		mockMvc.perform(get("/blogs/descadastrar").param("token", "invalido"))
 			.andExpect(status().isBadRequest());
+		// Feed RSS do blog: leitor de RSS nao manda Origin. So o GET do feed abre; os dados do blog nao.
+		mockMvc.perform(get("/blogs/nao-existe/feed.xml")).andExpect(status().isNotFound());
+		mockMvc.perform(get("/blogs/nao-existe"))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("ORIGIN_REQUIRED"));
+		mockMvc.perform(post("/blogs/nao-existe/feed.xml"))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("ORIGIN_REQUIRED"));
 		mockMvc.perform(get("/media/nao-existe")).andExpect(status().isNotFound());
 		mockMvc.perform(get("/pages/nao-existe")).andExpect(status().isNotFound());
 		// Figurinha: o `<img>` do texto e da grade não manda Origin (provedor inválido = 404, sem rede).

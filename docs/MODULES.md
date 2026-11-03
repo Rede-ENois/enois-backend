@@ -1468,6 +1468,7 @@ publish.
 | Rota | Descrição |
 |---|---|
 | `GET /blogs/{slug}` | Blog público |
+| `GET /blogs/{slug}/feed.xml` | Feed Atom do blog (público, sem sessão nem `Origin`) |
 | `POST /me/posts` / `PATCH /me/posts/{postId}` / `DELETE /me/posts/{postId}` | Publicar, editar, excluir |
 | `POST /{slug}/subscription` / `DELETE /{slug}/subscription` | Assinar / cancelar assinatura |
 
