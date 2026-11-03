@@ -79,6 +79,8 @@ class MediaStorageProxyTests {
 		String ultimoRange;
 		String chaveEscrita;
 		byte[] escrito;
+		/** Quando preenchido, a escrita falha como um gateway S3 fora do ar. */
+		RuntimeException falhaNaEscrita;
 
 		@Override
 		public StoredObject read(String key, String range) {
@@ -90,6 +92,9 @@ class MediaStorageProxyTests {
 
 		@Override
 		public void write(String key, String contentType, long length, InputStream body) {
+			if (falhaNaEscrita != null) {
+				throw falhaNaEscrita;
+			}
 			try {
 				this.chaveEscrita = key;
 				this.escrito = body.readAllBytes();
@@ -251,5 +256,93 @@ class MediaStorageProxyTests {
 
 		assertThat(store().chaveEscrita).isEqualTo(objectKey);
 		assertThat(store().escrito).isEqualTo(foto);
+	}
+
+	@Test
+	void donoEnviaVideoMp4PeloProxyEOArquivoChegaAoBucket() throws Exception {
+		var dono = auth.authenticate("media_proxy_video");
+		// O tamanho declarado no upload e o contrato: o PUT precisa mandar exatamente esse tanto.
+		byte[] video = "ftypisom-corpo-de-video-de-teste".repeat(64).getBytes(StandardCharsets.UTF_8);
+		var criado = mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", dono.token())
+				.header("Idempotency-Key", "media-proxy-video-1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("fileName", "clipe.mp4",
+					"mimeType", "video/mp4", "size", video.length, "purpose", "POST_VIDEO"))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
+			.path("objectKey").asText();
+		assertThat(objectKey).endsWith("/file.mp4");
+
+		// Corpo que o ffmpeg nao consegue ler (ou ffmpeg ausente): a limpeza e best-effort e o
+		// original segue para o bucket — upload de video nunca pode virar 500 por causa dela.
+		mockMvc.perform(put("/storage/" + objectKey)
+				.header("X-Session-Token", dono.token())
+				.contentType("video/mp4")
+				.content(video))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("STORED"));
+
+		assertThat(store().chaveEscrita).isEqualTo(objectKey);
+		assertThat(store().escrito).isEqualTo(video);
+	}
+
+	@Test
+	void falhaDoBucketNaEscritaVira502ComCodigoProprioEnaoErroGenerico() throws Exception {
+		var dono = auth.authenticate("media_proxy_bucket_fora");
+		byte[] video = "ftypisom-video".repeat(32).getBytes(StandardCharsets.UTF_8);
+		var criado = mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", dono.token())
+				.header("Idempotency-Key", "media-proxy-bucket-1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("fileName", "clipe.mp4",
+					"mimeType", "video/mp4", "size", video.length, "purpose", "POST_VIDEO"))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
+			.path("objectKey").asText();
+
+		store().falhaNaEscrita = new IllegalStateException("gateway recusou a gravacao");
+		try {
+			mockMvc.perform(put("/storage/" + objectKey)
+					.header("X-Session-Token", dono.token())
+					.contentType("video/mp4")
+					.content(video))
+				.andExpect(status().isBadGateway())
+				.andExpect(jsonPath("$.code").value("MEDIA_STORAGE_WRITE_FAILED"))
+				.andExpect(jsonPath("$.message").value(
+					org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("gateway"))));
+		}
+		finally {
+			store().falhaNaEscrita = null;
+		}
+	}
+
+	@Test
+	void videoGrandeAcimaDoLimiteEmMemoriaTambemChegaAoBucket() throws Exception {
+		var dono = auth.authenticate("media_proxy_video_grande");
+		// Acima de MAX_IN_MEMORY o proxy usa arquivo temporario + ffmpeg (sanitizeToFile).
+		byte[] video = new byte[41 * 1024 * 1024];
+		var criado = mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", dono.token())
+				.header("Idempotency-Key", "media-proxy-video-2")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("fileName", "aula.mp4",
+					"mimeType", "video/mp4", "size", (long) video.length, "purpose", "POST_VIDEO"))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
+			.path("objectKey").asText();
+
+		mockMvc.perform(put("/storage/" + objectKey)
+				.header("X-Session-Token", dono.token())
+				.contentType("video/mp4")
+				.content(video))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("STORED"));
+
+		assertThat(store().chaveEscrita).isEqualTo(objectKey);
+		assertThat(store().escrito).hasSize(video.length);
 	}
 }

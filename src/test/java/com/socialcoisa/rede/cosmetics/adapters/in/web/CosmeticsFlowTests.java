@@ -82,7 +82,9 @@ class CosmeticsFlowTests {
                         .andExpect(status().isOk())
                         .andExpect(jsonPath("$[?(@.id == 'moldura-radar')].releaseOrder").value(26))
                         .andExpect(jsonPath("$[?(@.id == 'moldura-neon')].releaseOrder").value(25))
-                        .andExpect(jsonPath("$[?(@.id == 'tema-saci')].releaseOrder").value(27))
+                        // Item de coleção sazonal (ex.: tema-saci) não entra aqui: este teste roda com o relógio
+                        // real e o item some do /loja quando a temporada acaba. O releaseOrder dele é conferido
+                        // em SeasonalCosmeticsFlowTests, com o relógio fixo dentro da temporada.
                         .andReturn();
                 var items = objectMapper.readTree(result.getResponse().getContentAsString());
                 // O primeiro da lista "newest" é o de MAIOR releaseOrder da lista — o catálogo cresce a
