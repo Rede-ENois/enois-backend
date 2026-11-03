@@ -259,14 +259,13 @@ class RepostFlowTests {
 			.andExpect(status().isCreated());
 
 		// No perfil do reposter, o post republicado deve vir PRIMEIRO (data do repost > data do post proprio).
-		MvcResult feed = mockMvc.perform(get("/users/{username}/posts", username(reposter))
+		mockMvc.perform(get("/users/{username}/posts", username(reposter))
 				.header("X-Session-Token", reposter.token()))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.posts[0].id").value(oldPostId))
-			.andExpect(jsonPath("$.posts[0].repostedBy").exists())
-			.andExpect(jsonPath("$.posts[0].repostedBy.at").exists())
-			.andExpect(jsonPath("$.posts[1].id").value(ownPostId))
-			.andReturn();
+			.andExpect(jsonPath("$.items[0].id").value(oldPostId))
+			.andExpect(jsonPath("$.items[0].repostedBy").exists())
+			.andExpect(jsonPath("$.items[0].repostedBy.at").exists())
+			.andExpect(jsonPath("$.items[1].id").value(ownPostId));
 	}
 
 	private String publishType(TestAuthHelper.AuthSession session, Map<String, Object> body) throws Exception {
