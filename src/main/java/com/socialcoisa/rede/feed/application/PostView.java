@@ -72,7 +72,7 @@ public record PostView(String id, String authorId, String authorUsername, String
 	public record CommunityView(String id, String name, boolean joined) {
 	}
 
-	public record RepostedByView(String name, String username, String avatar) {
+	public record RepostedByView(String name, String username, String avatar, java.time.Instant at) {
 	}
 
 	public PostView withRepostedBy(RepostedByView by) {
