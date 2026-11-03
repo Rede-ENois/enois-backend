@@ -2,6 +2,7 @@ package com.socialcoisa.rede.feed.adapters.in.web;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -117,6 +118,36 @@ class RepostFlowTests {
 				.content(objectMapper.writeValueAsString(Map.of("opinion", longOpinion))))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("OPINION_TOO_LONG"));
+	}
+
+	@Test
+	void editingARepostWithOpinionKeepsTheQuotedOriginal() throws Exception {
+		var author = auth.authenticate("repost_edit_author_" + System.nanoTime());
+		var reposter = auth.authenticate("repost_edit_user_" + System.nanoTime());
+
+		String originalContent = "Texto original que continua citado depois da edição.";
+		String originalId = publish(author, originalContent);
+		String repostId = quote(reposter, originalId, "Comentário antes de editar.");
+
+		// Editar só o comentário não pode soltar a citação do original.
+		mockMvc.perform(patch("/feed/posts/{id}", repostId)
+				.header("X-Session-Token", reposter.token())
+				.header("Idempotency-Key", "repost-edit-" + System.nanoTime())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("content", "Comentário depois de editar."))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.content").value("Comentário depois de editar."))
+			.andExpect(jsonPath("$.repostOf").value(originalId))
+			.andExpect(jsonPath("$.repostOfAuthor").value(username(author)))
+			.andExpect(jsonPath("$.repostWithOpinion").value(true));
+
+		// E a leitura seguinte (do banco) continua com o original citado.
+		mockMvc.perform(get("/feed/posts/{id}", repostId))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.content").value("Comentário depois de editar."))
+			.andExpect(jsonPath("$.repostOf").value(originalId))
+			.andExpect(jsonPath("$.repostWithOpinion").value(true))
+			.andExpect(jsonPath("$.repostOfContent").value(originalContent));
 	}
 
 	@Test
