@@ -55,6 +55,10 @@ class NotificationJpaEntity {
 	@Column(name = "actor_count", nullable = false)
 	private int actorCount = 1;
 
+	/** Trecho do conteúdo de origem (V239); nulo nas notificações anteriores à coluna. */
+	@Column(length = 300)
+	private String preview;
+
 	protected NotificationJpaEntity() {
 	}
 
@@ -72,6 +76,7 @@ class NotificationJpaEntity {
 		e.createdAt = notification.createdAt();
 		e.groupKey = notification.groupKey();
 		e.actorCount = notification.actorCount();
+		e.preview = notification.preview();
 		return e;
 	}
 
@@ -81,7 +86,7 @@ class NotificationJpaEntity {
 
 	Notification toDomain() {
 		return Notification.restore(id, userId, kind, actorId, title, body, href, ctaLabel, read, createdAt, groupKey,
-			actorCount);
+			actorCount, preview);
 	}
 
 }
