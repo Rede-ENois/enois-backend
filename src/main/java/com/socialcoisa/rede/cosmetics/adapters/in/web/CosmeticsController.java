@@ -43,10 +43,14 @@ class CosmeticsController {
 		return cosmetics.onSaleNow(me, order == null ? "oldest" : order).stream().map(ShopItemView::from).toList();
 	}
 
-	/** As coleções na temporada, as janelas de venda e os looks prontos de cada uma. */
+	/**
+	 * As coleções na temporada, as janelas de venda e os looks prontos de cada uma. Com sessão, cada
+	 * look diz se já é seu (todas as peças) e se está vestido agora.
+	 */
 	@GetMapping("/loja/colecoes")
-	List<CollectionView> collections() {
-		return cosmetics.collectionsInSeason().stream().map(CollectionView::from).toList();
+	List<CollectionView> collections(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		String me = sessionToken == null ? null : currentUserResolver.resolve(sessionToken).id().value();
+		return cosmetics.collectionsInSeason(me).stream().map(CollectionView::from).toList();
 	}
 
 	@PostMapping("/loja/{itemId}/comprar")
@@ -62,6 +66,24 @@ class CosmeticsController {
 			@PathVariable String lookId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		return cosmetics.buyLook(user.id().value(), lookId);
+	}
+
+	/** Veste um look que já é seu, sem comprar nada. */
+	@PostMapping("/loja/looks/{lookId}/equipar")
+	EquippedView equipLook(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String lookId) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		cosmetics.equipLook(user.id().value(), lookId);
+		return new EquippedView(lookId, true);
+	}
+
+	/** Tira o look do perfil, sem mexer no que foi trocado depois dele. */
+	@PostMapping("/loja/looks/{lookId}/desequipar")
+	EquippedView unequipLook(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String lookId) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		cosmetics.unequipLook(user.id().value(), lookId);
+		return new EquippedView(lookId, false);
 	}
 
 	@PostMapping("/loja/{itemId}/equipar")
@@ -110,15 +132,23 @@ class CosmeticsController {
 			var collection = row.collection();
 			return new CollectionView(collection.id(), collection.name(), row.available(),
 				collection.windows().stream().map(window -> new WindowView(window.startText(), window.endText())).toList(),
-				row.looks().stream().map(look -> new LookView(look.id(), look.title(), look.items(), look.statusIcon(),
-					look.statusText())).toList());
+				row.looks().stream().map(LookView::from).toList());
 		}
 	}
 
 	record WindowView(String start, String end) {
 	}
 
-	record LookView(String id, String title, List<String> items, String statusIcon, String statusText) {
+	/** {@code owned}: todas as peças são da pessoa; {@code equipped}: o look está vestido. Null sem sessão. */
+	record LookView(String id, String title, List<String> items, String statusIcon, String statusText,
+			@JsonInclude(JsonInclude.Include.NON_NULL) Boolean owned,
+			@JsonInclude(JsonInclude.Include.NON_NULL) Boolean equipped) {
+
+		static LookView from(CosmeticsService.LookRow row) {
+			var look = row.look();
+			return new LookView(look.id(), look.title(), look.items(), look.statusIcon(), look.statusText(), row.owned(),
+				row.equipped());
+		}
 	}
 
 	record OwnedView(String id, boolean owned) {

@@ -47,8 +47,11 @@ public class CosmeticsService implements OfficialBadgeReader {
 	}
 
 	/** One collection with its season state and looks. */
-	public record CollectionRow(CosmeticCatalog.Collection collection, boolean available,
-			List<CosmeticCatalog.Look> looks) {
+	public record CollectionRow(CosmeticCatalog.Collection collection, boolean available, List<LookRow> looks) {
+	}
+
+	/** One ready-made look with the viewer state: {@code owned}/{@code equipped} are null without a session. */
+	public record LookRow(CosmeticCatalog.Look look, Boolean owned, Boolean equipped) {
 	}
 
 	private final CosmeticCatalog catalog;
@@ -107,12 +110,22 @@ public class CosmeticsService implements OfficialBadgeReader {
 			.toList();
 	}
 
-	/** Só as coleções na temporada: as outras não aparecem, nem antes nem depois da data delas. */
-	public List<CollectionRow> collectionsInSeason() {
+	/**
+	 * Só as coleções na temporada: as outras não aparecem, nem antes nem depois da data delas. Com
+	 * um olhar, cada look diz se já é seu e se está vestido — a loja veste e tira pelo próprio card.
+	 */
+	@Transactional(readOnly = true)
+	public List<CollectionRow> collectionsInSeason(String viewerId) {
 		Instant now = clock.instant();
+		Set<String> owned = viewerId == null ? null : ownedItemIds(viewerId);
+		UserProfile profile = viewerId == null ? null : profiles.findById(viewerId).orElse(null);
 		return catalog.collections().stream()
 			.filter(collection -> catalog.available(collection, now))
-			.map(collection -> new CollectionRow(collection, true, catalog.looksOf(collection.id())))
+			.map(collection -> new CollectionRow(collection, true, catalog.looksOf(collection.id()).stream()
+				.map(look -> owned == null ? new LookRow(look, null, null)
+					: new LookRow(look, owned.containsAll(look.items()),
+						profile != null && lookEquipped(profile, look)))
+				.toList()))
 			.toList();
 	}
 
@@ -190,6 +203,69 @@ public class CosmeticsService implements OfficialBadgeReader {
 		profile.updateStatus(look.statusText(), look.statusIcon(), now);
 		profiles.save(profile);
 		return new LookPurchase(look.id(), missing.stream().map(Item::id).toList(), total);
+	}
+
+	/**
+	 * Veste um look inteiro que a pessoa já tem: cada peça no seu lugar, os emblemas do look e o
+	 * status dele. Não compra nada — quem não tem todas as peças recebe {@code NOT_OWNED}. Repetir
+	 * a chamada deixa o perfil igual, então o clique duplo não muda nada.
+	 */
+	@Transactional
+	public UserProfile equipLook(String userId, String lookId) {
+		CosmeticCatalog.Look look = look(lookId);
+		Set<String> owned = ownedItemIds(userId);
+		List<String> missing = look.items().stream().filter(id -> !owned.contains(id)).toList();
+		if (!missing.isEmpty()) {
+			throw new ApiException(403, "NOT_OWNED", "Você precisa ter todas as peças do look antes de vestir.");
+		}
+		UserProfile profile = profile(userId);
+		Instant now = clock.instant();
+		List<String> badges = new ArrayList<>();
+		for (String id : look.items()) {
+			Item item = item(id);
+			if (item.kind() == CosmeticKind.BADGE) {
+				badges.add(id);
+			}
+			else {
+				applySlot(profile, item, true, now);
+			}
+		}
+		profile.updateBadges(badges.subList(0, Math.min(badges.size(), MAX_BADGES)), now);
+		profile.updateStatus(look.statusText(), look.statusIcon(), now);
+		return profiles.save(profile);
+	}
+
+	/**
+	 * Tira o look do perfil: só os espaços que ainda estão com as peças dele são esvaziados, então
+	 * uma peça trocada depois de vestir o look continua onde está. O status só sai se ainda for o do
+	 * look — um recado escrito depois não é apagado por engano.
+	 */
+	@Transactional
+	public UserProfile unequipLook(String userId, String lookId) {
+		CosmeticCatalog.Look look = look(lookId);
+		UserProfile profile = profile(userId);
+		Instant now = clock.instant();
+		List<String> badges = new ArrayList<>(profile.allBadges());
+		for (String id : look.items()) {
+			Item item = item(id);
+			if (item.kind() == CosmeticKind.BADGE) {
+				badges.remove(id);
+			}
+			else if (equipped(profile, item)) {
+				applySlot(profile, item, false, now);
+			}
+		}
+		profile.updateBadges(badges, now);
+		if (look.statusText() != null && look.statusText().equals(profile.statusText())
+				&& java.util.Objects.equals(look.statusIcon(), profile.statusIcon())) {
+			profile.updateStatus(null, null, now);
+		}
+		return profiles.save(profile);
+	}
+
+	/** O look está vestido? Todas as peças dele ocupam o próprio espaço no perfil. */
+	public boolean lookEquipped(UserProfile profile, CosmeticCatalog.Look look) {
+		return look.items().stream().map(this::item).allMatch(item -> equipped(profile, item));
 	}
 
 	/** Equipa um item que a pessoa tem; "none" desequipa a moldura (contrato antigo). */
@@ -315,6 +391,11 @@ public class CosmeticsService implements OfficialBadgeReader {
 			case PROFILE_EFFECT -> id.equals(profile.profileEffect());
 			case GARDEN -> id.equals(profile.gardenStyle());
 		};
+	}
+
+	private CosmeticCatalog.Look look(String lookId) {
+		return catalog.look(lookId)
+			.orElseThrow(() -> new ApiException(404, "ITEM_NOT_FOUND", "Look não encontrado."));
 	}
 
 	private UserProfile profile(String userId) {
