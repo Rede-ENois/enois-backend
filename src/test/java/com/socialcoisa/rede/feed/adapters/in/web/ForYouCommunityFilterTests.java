@@ -164,7 +164,7 @@ class ForYouCommunityFilterTests {
 	}
 
 	private String publish(TestAuthHelper.AuthSession author, String content, String idem) throws Exception {
-		String payload = objectMapper.writeValueAsString(Map.of(
+		String payload = objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 			"type", "INSIGHT",
 			"content", content,
 			"tags", List.of(),

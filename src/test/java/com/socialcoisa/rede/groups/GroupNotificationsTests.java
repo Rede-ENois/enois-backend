@@ -34,7 +34,9 @@ import tools.jackson.databind.ObjectMapper;
  * - o texto do comentário NUNCA viaja na notificação (a caixa é lida fora do grupo);
  * - o href aponta para a página do grupo, que continua exigindo autorização;
  * - transferência de propriedade avisa o novo dono e a mudança de estado pela plataforma avisa
- *   o dono.
+ *   o dono;
+ * - a new post notifies every other member once per group: while unread, the next posts update the
+ *   same notification (count and text), the author gets nothing, and after reading a new one starts.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -133,6 +135,72 @@ class GroupNotificationsTests {
 			}
 		}
 		return null;
+	}
+
+	private java.util.List<JsonNode> allOfKind(JsonNode items, String kind) {
+		java.util.List<JsonNode> found = new java.util.ArrayList<>();
+		for (JsonNode item : items) {
+			if (kind.equals(item.get("kind").asText())) {
+				found.add(item);
+			}
+		}
+		return found;
+	}
+
+	/** The new-post fan-out runs on the outbox worker, so the test waits for it (bounded). */
+	private java.util.List<JsonNode> awaitNewPosts(TestAuthHelper.AuthSession user,
+			java.util.function.Predicate<java.util.List<JsonNode>> done) throws Exception {
+		long deadline = System.currentTimeMillis() + 20_000;
+		java.util.List<JsonNode> items = allOfKind(notifications(user), "GROUP_NEW_POST");
+		while (!done.test(items)) {
+			assertThat(System.currentTimeMillis()).as("outbox worker did not deliver in time").isLessThan(deadline);
+			Thread.sleep(200);
+			items = allOfKind(notifications(user), "GROUP_NEW_POST");
+		}
+		return items;
+	}
+
+	@Test
+	void newPostsCollapseIntoOneNotificationPerGroupWhileUnread() throws Exception {
+		var owner = authHelper().authenticate("notif-newpost-owner");
+		var author = authHelper().authenticate("notif-newpost-author");
+		var reader = authHelper().authenticate("notif-newpost-reader");
+		String groupId = createGroup(owner, "Notif Novas", "OPEN", "create-notif-newpost");
+		join(author, groupId, "join-notif-newpost-1");
+		join(reader, groupId, "join-notif-newpost-2");
+		String topicId = topic(owner, groupId, "Geral", "topic-notif-newpost");
+
+		publish(author, groupId, topicId, "texto privado do grupo", "post-notif-newpost-1");
+
+		var first = awaitNewPosts(reader, items -> items.size() == 1);
+		assertThat(first.get(0).get("body").asText()).isEqualTo("notif-newpost-author publicou em Notif Novas.")
+			.doesNotContain("texto privado");
+		assertThat(first.get(0).get("title").asText()).isEqualTo("Novas publicações em Notif Novas");
+		assertThat(first.get(0).get("href").asText()).isEqualTo("/grupos/notif-novas");
+		assertThat(awaitNewPosts(owner, items -> items.size() == 1)).hasSize(1);
+
+		publish(author, groupId, topicId, "segunda", "post-notif-newpost-2");
+
+		var collapsed = awaitNewPosts(reader, items -> items.size() == 1
+			&& items.get(0).get("actorCount").asInt() == 2);
+		assertThat(collapsed.get(0).get("id").asText()).isEqualTo(first.get(0).get("id").asText());
+		assertThat(collapsed.get(0).get("body").asText()).isEqualTo("2 novas publicações em Notif Novas.");
+
+		mockMvc.perform(post("/notifications/" + collapsed.get(0).get("id").asText() + "/read")
+				.header("X-Session-Token", reader.token())
+				.header("Idempotency-Key", "read-notif-newpost"))
+			.andExpect(status().isOk());
+		publish(author, groupId, topicId, "terceira", "post-notif-newpost-3");
+
+		var fresh = awaitNewPosts(reader, items -> items.size() == 2);
+		assertThat(fresh.get(0).get("read").asBoolean()).isFalse();
+		assertThat(fresh.get(0).get("actorCount").asInt()).isEqualTo(1);
+		assertThat(fresh.get(0).get("body").asText()).isEqualTo("notif-newpost-author publicou em Notif Novas.");
+		// The owner never read: three posts, still one notification.
+		assertThat(awaitNewPosts(owner, items -> !items.isEmpty() && items.get(0).get("actorCount").asInt() == 3))
+			.hasSize(1);
+		// The author is never told about their own posts.
+		assertThat(allOfKind(notifications(author), "GROUP_NEW_POST")).isEmpty();
 	}
 
 	@Test

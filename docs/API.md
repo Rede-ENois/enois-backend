@@ -64,6 +64,21 @@ Resposta (signup e login):
 
 ## Perfil
 
+### Presença
+
+| Método | Rota | Resultado | Autenticação |
+|---|---|---|---|
+| GET | `/api/me/presence` | Escolha da própria conta | Sim |
+| PUT | `/api/me/presence` | Salva `{"status":"AVAILABLE|AWAY|DO_NOT_DISTURB|INVISIBLE"}` | Sim |
+| POST | `/api/me/presence/heartbeat` | Atualiza atividade; resposta 204 | Sim |
+| GET | `/api/users/{username}/presence` | Estado público | Não |
+
+As leituras retornam `{"status":"..."}`. Após dois minutos sem atividade, o estado público
+é `OFFLINE`; `INVISIBLE` também aparece como `OFFLINE`. `DO_NOT_DISTURB` impede o push das
+categorias configuráveis (segurança, moderação, sanção e recurso continuam), mas mantém a
+notificação no aplicativo. O status de texto/ícone de `PUT /api/me/status`
+é independente.
+
 | Método | Rota | Descrição | Autenticação |
 |---|---|---|---|
 | GET | `/api/me` | Perfil completo do usuário logado | Sim |
@@ -174,6 +189,7 @@ Cidade e UF (`city`, `state`) são estruturadas e separadas do `location` livre,
 {
   "type": "INSIGHT",
   "content": "Conteúdo da postagem",
+  "topic": "TECNOLOGIA",
   "visibility": "PUBLIC",
   "tags": ["java", "spring"],
   "mediaIds": ["media_xxx"]
@@ -182,6 +198,12 @@ Cidade e UF (`city`, `state`) são estruturadas e separadas do `location` livre,
 
 Tipos: `INSIGHT`, `ARTICLE`, `QUESTION`, `PROJECT`, `OPPORTUNITY`, `PAGE`, `NEWS`, `TUTORIAL`,
 `REVIEW`, `DIVERTIDO`, `MOMENT`, `BLOG`, `BUSINESS`, `POLL`
+
+Assunto (`topic`): obrigatório em post avulso, um da taxonomia (`ContentTaxonomy.TOPICS`). Sem ele,
+`400 TOPIC_REQUIRED`; fora da lista, `400 INVALID_TOPIC`. Post de comunidade ou canal herda o assunto
+dela e não manda `topic` (`400 TOPIC_FROM_COMMUNITY` / `TOPIC_FROM_CHANNEL`). A mesma regra vale no
+agendamento (`POST /api/feed/scheduled`). Publicações do sistema (blog, jogos) e posts antigos podem
+seguir sem assunto.
 
 #### Enquete (`type: "POLL"`)
 
@@ -624,6 +646,20 @@ encontros não online (`IN_PERSON`, `HYBRID`) daquele lugar, com a cidade compar
 `limit`. Uma busca em branco mantém a listagem sem filtro. Os caracteres `%`, `_` e `!` são
 tratados como texto literal, assim como na busca de mentorias.
 
+## Feed RSS/Atom do blog
+
+`GET /api/blogs/{slug}/feed.xml` devolve o feed Atom 1.0 de um blog (`application/atom+xml`), um
+feed por blog, para quem acompanha por um leitor de RSS. É público e **não exige sessão nem
+`Origin`** (leitor de RSS não é navegador); as demais rotas de dados do blog continuam exigindo
+origem. Mesmas regras de visibilidade da página do blog: conta banida ou título suspeito = `404
+BLOG_NOT_FOUND`.
+
+- Os 20 posts mais recentes, cada um com título, link para `/blog/{slug}/{postId}`, datas e um
+  **resumo em texto puro** (até 300 caracteres). O corpo completo não vai no feed: ele pode ser
+  HTML de tema próprio e o leitor é um cliente que não controlamos.
+- Os links usam `rede.frontend.url` (`FRONTEND_URL`) como base.
+- Resposta com `Cache-Control: public, max-age=300`.
+
 ## Mentoria
 
 | Método | Rota | Descrição | Autenticação |
@@ -684,7 +720,7 @@ Contrato completo, regras e códigos de erro em [`STUDY_PAIRS.md`](STUDY_PAIRS.m
 
 | Método | Rota | Descrição | Autenticação |
 |---|---|---|---|
-| GET | `/api/conversations` | Listar conversas (`?context=SOCIAL\|PROFESSIONAL`, see SOCIAL_PROFESSIONAL_CONTEXTS.md) | Sim |
+| GET | `/api/conversations` | Listar conversas (`?context=SOCIAL\|PROFESSIONAL`, see SOCIAL_PROFESSIONAL_CONTEXTS.md); `lastMessageFrom` is the account id of whoever sent the preview | Sim |
 | POST | `/api/conversations` | Criar conversa | Sim |
 | GET | `/api/conversations/search` | Buscar conversas | Sim |
 | GET | `/api/conversations/{conversationId}` | Detalhes da conversa | Sim |
@@ -693,6 +729,13 @@ Contrato completo, regras e códigos de erro em [`STUDY_PAIRS.md`](STUDY_PAIRS.m
 | POST | `/api/conversations/{conversationId}/read` | Marcar como lida | Sim |
 | POST | `/api/conversations/{conversationId}/messages/{messageId}/reactions` | Reagir a mensagem | Sim |
 | GET | `/api/conversations/{conversationId}/messages/{messageId}/reactions` | Reações da mensagem | Sim |
+| GET | `/api/conversations/stream` | Stream SSE (`text/event-stream`) da caixa de entrada: evento `conversation` com `{"conversationId"}` a cada mensagem nova, leitura ou reação; comentário `ping` a cada 25s | Sim (cookie) |
+
+O stream só avisa **qual** conversa mudou; o conteúdo (cifrado ou não) é buscado pelas rotas acima,
+com a autorização de sempre. O aviso sai depois do commit, então o refetch já enxerga a mudança. Até
+5 streams por usuário (abas/aparelhos); o sexto fecha o mais antigo. Sem sessão a resposta é o status
+puro (401), sem corpo. O registro de streams vive na memória da instância: correto enquanto a
+produção roda um backend só; uma segunda instância exige difusão entre instâncias antes de escalar.
 
 ---
 
@@ -703,6 +746,7 @@ Contrato completo, regras e códigos de erro em [`STUDY_PAIRS.md`](STUDY_PAIRS.m
 | GET | `/api/notifications` | Listar notificações (`?context=SOCIAL\|PROFESSIONAL`) | Sim |
 | POST | `/api/notifications/{notificationId}/read` | Marcar como lida | Sim |
 | POST | `/api/notifications/read-all` | Marcar todas como lidas | Sim |
+| GET | `/api/notifications/unread-summary` | Unread count per area for menu indicators (`?context=SOCIAL\|PROFESSIONAL`) | Sim |
 | GET | `/api/me/notification-preferences` | Preferências de push e do resumo semanal | Sim |
 | PUT | `/api/me/notification-preferences` | Atualização parcial (campo ausente/nulo mantém o valor) | Sim |
 | GET | `/api/notifications/digest/unsubscribe?token=` | Descadastro do resumo semanal (link do e-mail, HTML) | Não (token) |
@@ -718,6 +762,43 @@ Preferências (GET e resposta do PUT):
 
 `updatedAt` é `null` enquanto a pessoa nunca mudou nada (padrão: tudo ligado). Segurança, moderação e
 sanções sempre viram push. Regras e categorias em [`DIGEST.md`](DIGEST.md).
+
+Each item of `GET /api/notifications` carries `module`, the interface area of its kind (same
+`NotificationModule` names as below, e.g. `EVENTS`, `OTHER`), so the app hides or flags notifications
+by area without guessing from the kind.
+
+Each item also carries `place` and `eventDate`, resolved at read time from its `href` (one query per
+kind of target for the whole page):
+
+- `place`: `{ "type": "COMMUNITY" | "GROUP", "id": string, "name": string, "color": null }` or
+  `null`. `/comunidades/{id}` and `/api/feed/posts/{postId}` of a post published in a community give
+  the community; `/grupos/{slug}` gives the group. A deleted community or a closed group gives
+  `null`. `color` is `null` while communities and groups have no color of their own.
+- `eventDate`: `"YYYY-MM-DD"`, the day of the event occurrence an `/eventos?evento={id}` href points
+  at (each occurrence of a recurring event is its own event), or `null` (other hrefs, deleted event,
+  unreadable date).
+
+```json
+{ "id": "notification_...", "kind": "GROUP_NEW_POST", "module": "GROUPS", "href": "/grupos/roda-bh",
+  "place": { "type": "GROUP", "id": "group_...", "name": "Roda BH", "color": null }, "eventDate": null }
+```
+
+Unread summary (`GET /api/notifications/unread-summary`): counts the person's unread notifications,
+leaving out those whose actor is blocked (either way) and applying the same `context` filter as the
+list. Only areas with unread notifications appear in `byModule`; an area clears when its
+notifications are read (`/read` or `/read-all`). The kind to area mapping is
+`NotificationModule` (`MESSAGES`, `EVENTS`, `JOBS`, `COMPANIES`, `MENTORING`, `DAILY_GAMES`,
+`COMMUNITY_GAMES`, `GROUPS`, `STUDY_PAIRS`, `BLOGS`, `NETWORK`, `OTHER`).
+
+`byCommunity` counts the same unread notifications per community id, for those whose `place` is a
+community (only communities with unread ones appear). `eventsToday` is the number of events happening
+today (America/Sao_Paulo) whose attendance the person confirmed; events are social, so it is `0` with
+`context=PROFESSIONAL`.
+
+```json
+{ "total": 5, "byModule": { "MESSAGES": 3, "GROUPS": 1, "OTHER": 1 },
+  "byCommunity": { "community_...": 1 }, "eventsToday": 1 }
+```
 
 Mudança de estado da candidatura também gera a notificação `JOB_APPLICATION_STATUS`
 (`href` = `/vagas/{jobId}`), além da mensagem direta e do e-mail.
@@ -790,10 +871,11 @@ A resposta será cacheadada e reutilizada se a mesma chave for reenviada.
 
 | Method | Route | Description | Authentication |
 |---|---|---|---|
-| GET | `/api/loja?order=oldest\|newest` | Native catalog (default `oldest`) | No; with a session, adds `owned` and `equipped` |
-| GET | `/api/loja/colecoes` | Seasonal collections, sale windows and ready-made looks | No |
+| GET | `/api/loja?order=oldest\|newest` | The shop of the day: items on sale (collections in season, classics and the permanent one); with a session, also what the person owns (default `oldest`) | No; with a session, adds `owned` and `equipped` |
+| GET | `/api/loja/colecoes` | Collections in season, their sale windows and ready-made looks | No; with a session, each look also carries `owned` (every piece is the person's) and `equipped` |
 | POST | `/api/loja/{itemId}/comprar` | Buy one item | Yes |
 | POST | `/api/loja/looks/{lookId}/comprar` | Buy the missing pieces of a look and wear it | Yes |
+| POST | `/api/loja/looks/{lookId}/equipar` / `.../desequipar` | Wear / take off a look the person already owns (`403 NOT_OWNED` without every piece); taking it off clears only the slots still holding the look's own pieces and its status | Yes |
 | POST | `/api/loja/{itemId}/equipar` / `.../desequipar` | Equip / unequip an owned item (`none` unequips the frame) | Yes |
 | PUT | `/api/me/status` | Status bubble `{ text, icon }` | Yes |
 | PUT | `/api/cosmetics/profile/name-style` | Name theme (free preset or owned `NAME_STYLE` id), font, color | Yes |
@@ -807,13 +889,23 @@ are for sale); a broken file stops the boot. Each item has `id`, `kind` (`FRAME`
 `description`, `priceMf`, `cssRing`, `releaseOrder`, `available` and `purchasable`.
 
 - `releaseOrder` is the positive, unique order of entry in the catalog. The 26 original frames
-  keep 1 to 26, have `collection: null` and are always on sale; the seasonal items follow.
+  keep 1 to 26 and have `collection: null` (always on sale); the seasonal items follow.
+- `essenciais` is the permanent collection: its window covers the whole year (`01-01` to `12-31`),
+  so its items and its eleven ready-made looks stay on sale every day. The looks are
+  `look-papel`, `look-noite-limpa`, `look-jardim`, `look-fim-de-tarde`, `look-manha-de-domingo`,
+  `look-carta-na-gaveta`, `look-sombra-fresca`, `look-quintal-ao-meio-dia`, `look-pedra-fria`,
+  `look-nevoeiro` and `look-mar-de-pedra`; each one pairs the Essenciais pieces with a different
+  original frame, so no two looks are the same bundle.
 - `GARDEN` items (`garden-cerrado`, `garden-mata-atlantica`, `garden-caatinga`, `garden-pampa`)
   style the profile garden. They have `collection: null`, so they are always on sale; the equipped
   one is `gardenStyle` on the profile (`users.garden_style`), and none equipped is the default garden.
-- Seasons are month-day windows in America/Sao_Paulo, inclusive, and may wrap the year. Out of
-  season an item is listed with `available: false` and buying it returns `409 OUT_OF_SEASON`;
-  owned items can always be equipped. Event rewards are never for sale (`403 NOT_FOR_SALE`).
+- Seasons are month-day windows in America/Sao_Paulo, inclusive, and may wrap the year. A
+  collection outside its window is not in either listing — it does not appear before the
+  opening and is gone after the closing, so the shop only ever shows the season it is in. Buying
+  an out-of-season item still answers `409 OUT_OF_SEASON` (the shop no longer offers it, but an
+  old client or a stale page still gets a clear answer). A piece the person already owns stays
+  in their own listing (`available: false`) so it can always be equipped, and event rewards are
+  never for sale (`403 NOT_FOR_SALE`).
 - An equipped `BANNER` draws over the person's own cover. Changing the own cover (`banner` or
   `bannerHtml` on `PATCH /api/me/profile`) unequips it; the item stays owned.
 - Owning = a PURCHASE ledger entry with ref `cosmetico:{userId}:{itemId}` or a row in
@@ -822,10 +914,10 @@ are for sale); a broken file stops the boot. Each item has `id`, `kind` (`FRAME`
   under its own ref, so buying the same look twice never charges twice. It equips every piece,
   replaces the badge list with the look badges and sets the look status.
 - A collection may hold several looks. Each look entry takes an optional `id` (a slug such as
-  `look-floresta`); without it the id stays `look-<collection>`, so the original look of every
-  collection keeps its address. The shipped look ids are unique and validated at startup. Looks
-  follow their collection's season, and the theme-inspired looks of each collection are named
-  after the appearance themes with the same palette (`Vaporwave`, `Terminal`, `Vale Esmeralda`…).
+  `look-manha-de-domingo`); without it the id stays `look-<collection>`, so the original look of
+  every collection keeps its address. The shipped look ids are unique and validated at startup.
+  Looks follow their collection's season: the seasonal collections ship one look each, and the
+  ready-made looks live in the permanent `essenciais` collection.
 - Badges equip at the front of the list, deduplicated, up to 5 (`409 MAX_BADGES`). Official badges
   (`emblema-*`) can only be shown by who owns them, also through `PUT /me/badges` and the profile
   edit (`403 NOT_OWNED`).

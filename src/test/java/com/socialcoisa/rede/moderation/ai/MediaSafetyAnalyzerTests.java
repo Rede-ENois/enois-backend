@@ -80,6 +80,33 @@ class MediaSafetyAnalyzerTests {
 	}
 
 	@Test
+	void parsesJsonInsideAMarkdownFence() {
+		var veredito = analyzer.parse(
+			"```json\n{\"veredito\":\"SAFE\",\"gravidade\":\"LOW\",\"confianca\":0.95,\"motivo\":\"praia\"}\n```");
+
+		assertThat(veredito).isPresent();
+		assertThat(veredito.get().verdict()).isEqualTo(MediaSafetyVerdict.SAFE);
+	}
+
+	@Test
+	void parsesJsonSurroundedByProse() {
+		var veredito = analyzer.parse(
+			"Analisei a imagem.\n{\"veredito\":\"EXPLICIT\",\"gravidade\":\"HIGH\",\"confianca\":0.91,\"motivo\":\"nudez\"}\nFim.");
+
+		assertThat(veredito).isPresent();
+		assertThat(veredito.get().verdict()).isEqualTo(MediaSafetyVerdict.EXPLICIT);
+	}
+
+	@Test
+	void keepsBracesInsideTheReasonFromClosingTheObjectTooEarly() {
+		var veredito = analyzer.parse(
+			"{\"veredito\":\"SAFE\",\"gravidade\":\"LOW\",\"confianca\":0.9,\"motivo\":\"texto com } e { no meio\"}");
+
+		assertThat(veredito).isPresent();
+		assertThat(veredito.get().verdict()).isEqualTo(MediaSafetyVerdict.SAFE);
+	}
+
+	@Test
 	void withoutAnImageThereIsNoGuessEvenWithAKey() {
 		// Sem bytes não há o que olhar: o serviço não inventa veredito.
 		assertThat(analyzer.analyze(new byte[0])).isEmpty();

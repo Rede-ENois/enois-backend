@@ -111,7 +111,7 @@ class CommentReactionStateTests {
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "creact-pub-" + session.userId())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "Post para reacao de comentario.",
 					"tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isCreated())

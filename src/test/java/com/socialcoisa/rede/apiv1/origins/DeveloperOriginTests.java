@@ -83,6 +83,14 @@ class DeveloperOriginTests {
 		// Token inválido responde 400 pelo próprio controller — o que importa é não ser o 403 do gate.
 		mockMvc.perform(get("/blogs/descadastrar").param("token", "invalido"))
 			.andExpect(status().isBadRequest());
+		// Feed RSS do blog: leitor de RSS nao manda Origin. So o GET do feed abre; os dados do blog nao.
+		mockMvc.perform(get("/blogs/nao-existe/feed.xml")).andExpect(status().isNotFound());
+		mockMvc.perform(get("/blogs/nao-existe"))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("ORIGIN_REQUIRED"));
+		mockMvc.perform(post("/blogs/nao-existe/feed.xml"))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("ORIGIN_REQUIRED"));
 		mockMvc.perform(get("/media/nao-existe")).andExpect(status().isNotFound());
 		mockMvc.perform(get("/pages/nao-existe")).andExpect(status().isNotFound());
 		// Figurinha: o `<img>` do texto e da grade não manda Origin (provedor inválido = 404, sem rede).
@@ -215,9 +223,11 @@ class DeveloperOriginTests {
 				.header("X-Client-Origin", APP_ORIGIN))
 			.andExpect(status().isUnauthorized());
 
-		// Curinga confiável de subdomínio.
+		// Curinga de subdomínio passa o gate geral, mas NÃO recebe credencial nem entra em /admin:
+		// um subdomínio irmão comprometido não pode ler o painel com a sessão da vítima.
 		mockMvc.perform(get("/admin/support").header("X-Client-Origin", "https://painel.b7cloud.com.br"))
-			.andExpect(status().isUnauthorized());
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("ORIGIN_NOT_TRUSTED"));
 
 		// O domínio "raiz", sem subdomínio, não casa com https://*.b7cloud.com.br.
 		mockMvc.perform(get("/admin/support").header("X-Client-Origin", "https://b7cloud.com.br"))

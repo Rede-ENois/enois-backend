@@ -71,11 +71,13 @@ varredura segue rodando e registrando `NO_VERDICT`.
 
 ## Limites conhecidos
 
-- **Só imagem.** Vídeo e áudio não passam por esta barreira.
+- **Só imagem.** Vídeo e áudio não passam pelo analisador semântico; a checagem de imagem registra
+  esses tipos como não suportados sem tentar decodificá-los. Falhas ao agendar ou analisar uma mídia
+  não interrompem a publicação nem as checagens dos outros anexos.
 - **Só o que está em `media_assets`.** Imagem embutida em HTML de bio ou em link externo não é
   baixada nem olhada.
-- **Custo por imagem.** Cada classificação é uma chamada ao provedor. O lote da varredura é
-  pequeno (25) justamente por isso.
+- **Custo por imagem.** A checagem de publicação faz uma chamada por imagem; imagens sinalizadas
+  pelo filtro local também recebem uma confirmação no upload. O lote da varredura é pequeno (25).
 - **Formato do pedido multimodal** foi validado contra o contrato do provedor e coberto por teste,
   mas não há teste de integração ao vivo: a chave não existe no ambiente local.
 

@@ -8,20 +8,24 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
+import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 
 import com.socialcoisa.rede.media.application.port.out.ImageContentClassifier;
+import com.socialcoisa.rede.media.application.port.out.ImageContentReviewer;
+import com.socialcoisa.rede.media.application.port.out.ImageContentReviewer.Result;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 class MediaImageModerationServiceTests {
 
 	private final ObjectProvider<ImageContentClassifier> provider = mock();
 	private final ImageContentClassifier classifier = mock();
+	private final ImageContentReviewer reviewer = mock();
 
 	private MediaImageModerationService service(boolean enabled, double threshold) {
-		return new MediaImageModerationService(provider, enabled, threshold);
+		return new MediaImageModerationService(provider, reviewer, enabled, threshold);
 	}
 
 	@Test
@@ -38,6 +42,7 @@ class MediaImageModerationServiceTests {
 	void blocksScoreAtThreshold() throws Exception {
 		when(provider.getIfAvailable()).thenReturn(classifier);
 		when(classifier.pornographicScore(new byte[] { 1 }, "image/png")).thenReturn(0.70);
+		when(reviewer.review(new byte[] { 1 })).thenReturn(Optional.of(Result.PROHIBITED));
 
 		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/png"))
 			.isInstanceOf(ApiException.class)
@@ -45,17 +50,39 @@ class MediaImageModerationServiceTests {
 	}
 
 	@Test
+	void allowsAnImageWhenTheCoarseClassifierFlagsItButSemanticReviewDoesNotConfirmIt() throws Exception {
+		when(provider.getIfAvailable()).thenReturn(classifier);
+		when(classifier.pornographicScore(new byte[] { 1 }, "image/jpeg")).thenReturn(0.95);
+		when(reviewer.review(new byte[] { 1 })).thenReturn(Optional.of(Result.SAFE));
+
+		service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg");
+
+		verify(reviewer).review(new byte[] { 1 });
+	}
+
+	@Test
+	void doesNotApproveAnImageWhenSemanticReviewIsInconclusive() throws Exception {
+		when(provider.getIfAvailable()).thenReturn(classifier);
+		when(classifier.pornographicScore(new byte[] { 1 }, "image/jpeg")).thenReturn(0.95);
+		when(reviewer.review(new byte[] { 1 })).thenReturn(Optional.of(Result.UNSURE));
+
+		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg"))
+			.isInstanceOf(ApiException.class)
+			.extracting("code").isEqualTo("IMAGE_MODERATION_UNAVAILABLE");
+	}
+
+	@Test
 	void doesNotClassifyNonImageMedia() {
 		service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "video/mp4");
 
-		verifyNoInteractions(provider, classifier);
+		verifyNoInteractions(provider, classifier, reviewer);
 	}
 
 	@Test
 	void disabledModerationDoesNotLoadOrCallTheClassifier() {
 		service(false, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg");
 
-		verifyNoInteractions(provider, classifier);
+		verifyNoInteractions(provider, classifier, reviewer);
 	}
 
 	@Test

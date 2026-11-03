@@ -3,9 +3,11 @@ package com.socialcoisa.rede.services.adapters.in.web;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -69,6 +71,26 @@ class ServicesController {
 		ServiceListing listing = services.publishListing(user.id().value(), request.category(), request.title(),
 			request.description(), request.deliverables(), request.price(), request.currency(),
 			request.deliveryDays());
+		return Map.of("id", listing.id(), "status", listing.status().name());
+	}
+
+	/** O prestador edita o próprio serviço (o preço trava com contrato aberto). */
+	@PutMapping("/servicos/ofertas/{listingId}")
+	Map<String, Object> editListing(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String listingId, @RequestBody PublishListingRequest request) {
+		CurrentUser user = user(sessionToken);
+		ServiceListing listing = services.editListing(listingId, user.id().value(), request.category(),
+			request.title(), request.description(), request.deliverables(), request.price(), request.currency(),
+			request.deliveryDays());
+		return Map.of("id", listing.id(), "status", listing.status().name());
+	}
+
+	/** O prestador despublica o próprio serviço; os contratos já abertos continuam valendo. */
+	@DeleteMapping("/servicos/ofertas/{listingId}")
+	Map<String, Object> removeListing(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String listingId) {
+		CurrentUser user = user(sessionToken);
+		ServiceListing listing = services.removeListing(listingId, user.id().value());
 		return Map.of("id", listing.id(), "status", listing.status().name());
 	}
 

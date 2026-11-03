@@ -41,4 +41,7 @@ public interface ServiceRepository {
 	List<ServiceContract> findContractsByBuyer(String buyerId);
 
 	List<ServiceContract> findContractsBySeller(String sellerId);
+
+	/** Há contrato com as faíscas ainda retidas para este serviço (o preço está em uso). */
+	boolean hasOpenContractForListing(String listingId);
 }

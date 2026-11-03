@@ -154,7 +154,7 @@ class PostSealTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "seal-post-" + content.hashCode())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("type", "INSIGHT", "content", content, "tags", List.of(),
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA", "type", "INSIGHT", "content", content, "tags", List.of(),
 					"mediaIds", List.of()))))
 			.andExpect(status().isCreated())
 			.andReturn();

@@ -49,7 +49,7 @@ class S3UploadSigner implements MediaUploadSigner {
 	 * "dava certo" e a midia nunca aparecia (visto num HAR real em 2026-10-23).
 	 */
 	@Override
-	public SignedUpload sign(String objectKey, String mimeType) {
+	public SignedUpload sign(String objectKey, String mimeType, long contentLength) {
 		Duration validade = Duration.ofMinutes(60);
 		// Gateway sem CORS: o navegador nao consegue PUT cross-origin, entao a URL devolvida e a do
 		// nosso proxy (mesma origem da API). O app valida a sessao e repassa o corpo ao bucket.
@@ -61,6 +61,8 @@ class S3UploadSigner implements MediaUploadSigner {
 			.bucket(bucket)
 			.key(objectKey)
 			.contentType(mimeType)
+			// Assinar o tamanho faz o S3 recusar um corpo diferente do declarado no upload.
+			.contentLength(contentLength)
 			.build();
 		PresignedPutObjectRequest presigned = presigner.presignPutObject(PutObjectPresignRequest.builder()
 			.signatureDuration(validade)

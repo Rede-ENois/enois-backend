@@ -26,6 +26,19 @@ interface SpringDataNotificationJpaRepository extends JpaRepository<Notification
 	List<NotificationJpaEntity> findByUserId(@Param("userId") String userId, @Param("before") Instant before,
 			@Param("context") String context, Pageable pageable);
 
+	/**
+	 * Unread count per (kind, actor, href) of the person, with the same context filter as
+	 * {@link #findByUserId}; rows are {@code [kind, actorId, href, count]}. The actor stays in the
+	 * grouping so the caller can drop blocked actors without loading the notifications, and the
+	 * href so it can count per community.
+	 */
+	@Query("SELECT n.kind, n.actorId, n.href, COUNT(n) FROM NotificationJpaEntity n WHERE n.userId = :userId AND n.read = false"
+		+ " AND (:context IS NULL OR n.kind IN " + NotificationContext.SHARED_KINDS_JPQL
+		+ " OR (:context = 'PROFESSIONAL' AND n.kind IN " + NotificationContext.PROFESSIONAL_KINDS_JPQL + ")"
+		+ " OR (:context = 'SOCIAL' AND n.kind NOT IN " + NotificationContext.PROFESSIONAL_KINDS_JPQL + "))"
+		+ " GROUP BY n.kind, n.actorId, n.href")
+	List<Object[]> countUnreadByKindAndActor(@Param("userId") String userId, @Param("context") String context);
+
 	java.util.Optional<NotificationJpaEntity> findFirstByUserIdAndGroupKeyAndReadFalse(String userId, String groupKey);
 
 	@Modifying

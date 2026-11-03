@@ -47,7 +47,7 @@ public class GlobalApiRateLimitFilter extends OncePerRequestFilter {
 	private final int sharedMultiplier;
 
 	public GlobalApiRateLimitFilter(Clock clock, ClientIpResolver clientIpResolver, RateLimitSessions sessions,
-			@Value("${rede.rate.global-per-minute:0}") int perMinute,
+			@Value("${rede.rate.global-per-minute:300}") int perMinute,
 			@Value("${rede.rate.global-shared-multiplier:50}") int sharedMultiplier) {
 		this.clock = clock;
 		this.clientIpResolver = clientIpResolver;

@@ -52,7 +52,7 @@ class PanicModeTests {
 					.header("X-Session-Token", user.token())
 					.header("Idempotency-Key", "panic-post-1")
 					.contentType(MediaType.APPLICATION_JSON)
-					.content(objectMapper.writeValueAsString(Map.of(
+					.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 						"type", "INSIGHT", "content", "Não deveria entrar durante o pânico.",
 						"tags", List.of(), "mediaIds", List.of()))))
 				.andExpect(status().isTooManyRequests())
@@ -74,7 +74,7 @@ class PanicModeTests {
 					.header("X-Session-Token", user.token())
 					.header("Idempotency-Key", "panic-post-2")
 					.contentType(MediaType.APPLICATION_JSON)
-					.content(objectMapper.writeValueAsString(Map.of(
+					.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 						"type", "INSIGHT", "content", "Agora entra normalmente.",
 						"tags", List.of(), "mediaIds", List.of()))))
 				.andExpect(status().isCreated());

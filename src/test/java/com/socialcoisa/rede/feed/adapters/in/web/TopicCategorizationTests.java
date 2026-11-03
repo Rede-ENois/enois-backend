@@ -87,6 +87,18 @@ class TopicCategorizationTests {
 	}
 
 	@Test
+	void standalonePostWithoutTopicIsRejected() throws Exception {
+		mockMvc.perform(post("/feed/posts")
+				.header("X-Session-Token", author().token())
+				.header("Idempotency-Key", "topic-missing")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of(
+					"type", "INSIGHT", "content", "post sem assunto.", "tags", List.of(), "mediaIds", List.of()))))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("TOPIC_REQUIRED"));
+	}
+
+	@Test
 	void invalidTopicIsRejected() throws Exception {
 		mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", author().token())
@@ -174,7 +186,7 @@ class TopicCategorizationTests {
 
 	@Test
 	void newFeedTabsShowOnlyTheirType() throws Exception {
-		publish(null, "notícia do dia.");
+		publish("TECNOLOGIA", "notícia do dia.");
 		String newsId = mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", author().token())
 				.header("Idempotency-Key", "topic-news-" + System.nanoTime())

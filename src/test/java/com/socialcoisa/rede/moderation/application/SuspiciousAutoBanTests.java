@@ -113,7 +113,7 @@ class SuspiciousAutoBanTests {
 				.header("X-Session-Token", target.token())
 				.header("Idempotency-Key", "autoban-post-1")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "Conteúdo de conta em série.", "tags", List.of(),
 					"mediaIds", List.of()))))
 			.andExpect(status().isCreated())

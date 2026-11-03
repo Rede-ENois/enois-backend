@@ -55,7 +55,7 @@ class PostPageTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "page-1")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of(
+				.content(json(Map.of("topic", "TECNOLOGIA",
 					"type", "PAGE",
 					"content", "Minha pagina",
 					"pageHtml", "<h1>Ola</h1><script>fetch('https://malicioso.test')</script>"
@@ -113,7 +113,7 @@ class PostPageTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "page-notext")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "PAGE", "pageHtml", "<h1>So a pagina</h1>"))))
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "PAGE", "pageHtml", "<h1>So a pagina</h1>"))))
 			.andExpect(status().isCreated())
 			.andExpect(jsonPath("$.type").value("PAGE"))
 			.andExpect(jsonPath("$.content").value(""))
@@ -140,7 +140,7 @@ class PostPageTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "post-notext")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "INSIGHT", "content", "   "))))
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "INSIGHT", "content", "   "))))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("INVALID_CONTENT"));
 	}
@@ -153,7 +153,7 @@ class PostPageTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "page-2")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "PAGE", "content", "Pagina sem corpo", "pageHtml", "   "))))
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "PAGE", "content", "Pagina sem corpo", "pageHtml", "   "))))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("INVALID_PAGE_HTML"));
 	}
@@ -166,7 +166,7 @@ class PostPageTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "page-3")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of(
+				.content(json(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT",
 					"content", "Post normal com html na mochila",
 					"pageHtml", "<p>nao deveria ser guardado</p>"))))
@@ -217,14 +217,14 @@ class PostPageTests {
 				.header("X-Session-Token", first.token())
 				.header("Idempotency-Key", "page-5a")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "PAGE", "content", "Pagina grande", "pageHtml", big))))
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "PAGE", "content", "Pagina grande", "pageHtml", big))))
 			.andExpect(status().isCreated());
 
 		mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", second.token())
 				.header("Idempotency-Key", "page-5b")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "PAGE", "content", "Pagina grande", "pageHtml", big))))
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "PAGE", "content", "Pagina grande", "pageHtml", big))))
 			.andExpect(status().isCreated());
 
 		String tooBig = "<p>" + "a".repeat(SafeHtml.MAX_PAGE_HTML) + "</p>";
@@ -233,7 +233,7 @@ class PostPageTests {
 					.header("X-Session-Token", author.token())
 					.header("Idempotency-Key", "page-5-" + author.userId())
 					.contentType(MediaType.APPLICATION_JSON)
-					.content(json(Map.of(
+					.content(json(Map.of("topic", "TECNOLOGIA",
 						"type", "PAGE",
 						"content", "Pagina grande demais",
 						"pageHtml", tooBig))))
@@ -257,7 +257,7 @@ class PostPageTests {
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", key)
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(json(Map.of("type", "PAGE", "content", title, "pageHtml", html))))
+				.content(json(Map.of("topic", "TECNOLOGIA", "type", "PAGE", "content", title, "pageHtml", html))))
 			.andExpect(status().isCreated())
 			.andReturn();
 		return objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asText();

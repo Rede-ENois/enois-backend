@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.notifications.adapters.out.persistence;
 
 import java.sql.Timestamp;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 
@@ -20,17 +21,27 @@ class WeeklyDigestPersistenceAdapter implements WeeklyDigestRepository {
 
 	/**
 	 * Neither side of a block shows up in the other's digest, and someone the reader muted stays
-	 * out of the reader's digest (a mute is one-way, like in the feed).
+	 * out of the reader's digest (a mute is one-way, like in the feed). A mute with a deadline
+	 * stops hiding its target as soon as it passes, so the check reads only the mutes still valid
+	 * at the run time (`now`, bound as the fourth `?`).
 	 */
 	private static final String NOT_HIDDEN = """
 		not exists (select 1 from user_blocks b where (b.blocker_id = ? and b.blocked_id = %1$s)
 		or (b.blocker_id = %1$s and b.blocked_id = ?))
-		and not exists (select 1 from user_mutes mu where mu.muter_id = ? and mu.muted_id = %1$s)""";
+		and not exists (select 1 from user_mutes mu where mu.muter_id = ? and mu.muted_id = %1$s
+		and (mu.expires_at is null or mu.expires_at > ?))""";
 
 	private final JdbcTemplate jdbc;
+	private final Clock clock;
 
-	WeeklyDigestPersistenceAdapter(JdbcTemplate jdbc) {
+	WeeklyDigestPersistenceAdapter(JdbcTemplate jdbc, Clock clock) {
 		this.jdbc = jdbc;
+		this.clock = clock;
+	}
+
+	/** O mesmo instante para todas as secoes da edicao: um prazo nao vence no meio do e-mail. */
+	private Timestamp now() {
+		return Timestamp.from(clock.instant());
 	}
 
 	@Override
@@ -78,7 +89,7 @@ class WeeklyDigestPersistenceAdapter implements WeeklyDigestRepository {
 				and %s
 				order by score desc, p.created_at desc limit ?""".formatted(NOT_HIDDEN.formatted("p.author_id")),
 			(rs, row) -> new DigestItem(rs.getString(2), rs.getString(3), "/post/" + rs.getString(1), rs.getInt(4)),
-			userId, userId, Timestamp.from(since), userId, userId, userId, limit);
+			userId, userId, Timestamp.from(since), userId, userId, userId, now(), limit);
 	}
 
 	@Override
@@ -92,7 +103,7 @@ class WeeklyDigestPersistenceAdapter implements WeeklyDigestRepository {
 				group by g.name, g.slug
 				order by score desc limit ?""".formatted(NOT_HIDDEN.formatted("gp.author_id")),
 			(rs, row) -> new DigestItem("Conversas novas em " + rs.getString(1), null, "/grupos/" + rs.getString(2), rs.getInt(3)),
-			userId, userId, Timestamp.from(since), userId, userId, userId, limit);
+			userId, userId, Timestamp.from(since), userId, userId, userId, now(), limit);
 	}
 
 	@Override

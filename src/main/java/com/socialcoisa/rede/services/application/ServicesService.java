@@ -119,6 +119,38 @@ public class ServicesService {
 			currency, deliveryDays, now));
 	}
 
+	/**
+	 * Edita o serviço do próprio prestador. Recusa a mudança de preço quando há contrato aberto:
+	 * o comprador contratou o que estava publicado, e as faíscas em escrow são as daquele preço.
+	 */
+	@Transactional
+	public ServiceListing editListing(String listingId, String sellerId, String category, String title,
+			String description, String deliverables, long price, String currency, int deliveryDays) {
+		ServiceListing listing = ownedListing(listingId, sellerId);
+		if (listing.status() != ServiceListing.Status.ACTIVE) {
+			throw new ApiException(409, "SERVICE_NOT_ACTIVE", "Este serviço não está mais aberto.");
+		}
+		if (price != listing.price() && services.hasOpenContractForListing(listingId)) {
+			throw new ApiException(409, "SERVICE_HAS_OPEN_CONTRACTS",
+				"Há um contrato em andamento com este preço — finalize antes de mudar o serviço.");
+		}
+		return services.saveListing(listing.withContent(category, title, description, deliverables, price, currency,
+			deliveryDays, clock.instant()));
+	}
+
+	/**
+	 * Remove (despublica) o serviço do próprio prestador. O contrato que já existe continua: ele
+	 * guarda a cópia do que foi contratado.
+	 */
+	@Transactional
+	public ServiceListing removeListing(String listingId, String sellerId) {
+		ServiceListing listing = ownedListing(listingId, sellerId);
+		if (listing.status() == ServiceListing.Status.REMOVED) {
+			return listing;
+		}
+		return services.saveListing(listing.remove(clock.instant()));
+	}
+
 	@Transactional
 	public ServiceContract buyListing(String listingId, String buyerId) {
 		ServiceListing listing = listing(listingId);
@@ -287,6 +319,15 @@ public class ServicesService {
 	private ServiceListing listing(String id) {
 		return services.findListingById(id)
 			.orElseThrow(() -> new ApiException(404, "SERVICE_NOT_FOUND", "Serviço não encontrado."));
+	}
+
+	/** O serviço, exigindo que quem pede seja quem publica: editar e remover são do dono. */
+	private ServiceListing ownedListing(String id, String sellerId) {
+		ServiceListing listing = listing(id);
+		if (!listing.ownedBy(sellerId)) {
+			throw new ApiException(403, "NOT_THE_SELLER", "Só quem publica o serviço pode alterá-lo.");
+		}
+		return listing;
 	}
 
 	private ServiceRequest request(String id) {

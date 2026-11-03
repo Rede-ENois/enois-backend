@@ -38,6 +38,8 @@ import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 @RequestMapping("/storage")
 class MediaStorageProxyController {
 
+	private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(MediaStorageProxyController.class);
+
 	/** Vazio quando o storage e o ImageKit (nao ha bucket para servir). */
 	private final ObjectProvider<MediaObjectStore> storeProvider;
 	private final MediaAssetRepository assets;
@@ -134,7 +136,14 @@ class MediaStorageProxyController {
 		if (length <= 0) {
 			throw new ApiException(411, "MEDIA_LENGTH_REQUIRED", "Informe o tamanho do arquivo.");
 		}
+		// O tamanho declarado em POST /media/uploads e o contrato do upload. Sem esta comparacao,
+		// um asset de 68 bytes aceitava um corpo de centenas de MB e ficava servido publicamente.
+		if (length != asset.size()) {
+			throw new ApiException(400, "MEDIA_SIZE_MISMATCH",
+				"O tamanho enviado nao corresponde ao declarado no upload.");
+		}
 		String mime = asset.mimeType();
+		long startedAt = System.nanoTime();
 		try {
 			if (length > com.socialcoisa.rede.media.application.MediaMetadataSanitizer.MAX_IN_MEMORY) {
 				if (sanitizer.supportsInMemory(mime)) {
@@ -145,7 +154,7 @@ class MediaStorageProxyController {
 				java.nio.file.Path sanitized = sanitizer.sanitizeToFile(request.getInputStream(), mime, objectKey);
 				try {
 					try (var body = java.nio.file.Files.newInputStream(sanitized)) {
-						store().write(objectKey, mime, java.nio.file.Files.size(sanitized), body);
+						writeToBucket(objectKey, mime, java.nio.file.Files.size(sanitized), body, length, startedAt);
 					}
 				}
 				finally {
@@ -157,13 +166,37 @@ class MediaStorageProxyController {
 				// LIMPEZA NA ESCRITA: EXIF/GPS/XMP/IPTC não chegam ao bucket.
 				byte[] clean = sanitizer.sanitize(raw, mime, objectKey);
 				imageModeration.verifyBeforeStorage(clean, mime);
-				store().write(objectKey, mime, clean.length, new java.io.ByteArrayInputStream(clean));
+				writeToBucket(objectKey, mime, clean.length, new java.io.ByteArrayInputStream(clean), length,
+					startedAt);
 			}
 		}
 		catch (java.io.IOException failure) {
 			throw new ApiException(400, "MEDIA_UPLOAD_FAILED", "Nao foi possivel ler o arquivo enviado.");
 		}
 		return ResponseEntity.ok(Map.of("status", "STORED", "objectKey", objectKey));
+	}
+
+	/**
+	 * Grava no bucket. Falha do storage (gateway fora do ar, recusa, corte de conexao) deixava de ser
+	 * um erro nomeado: virava o "Erro interno inesperado" generico, sem tamanho, tipo nem causa no log.
+	 * Agora sai 502 com codigo proprio e a excecao original anexada — o log e o monitoramento 5xx
+	 * mostram a causa real. A mensagem ao usuario continua sem detalhe de infraestrutura.
+	 */
+	private void writeToBucket(String objectKey, String mime, long storedBytes, java.io.InputStream body,
+			long receivedBytes, long startedAt) {
+		try {
+			store().write(objectKey, mime, storedBytes, body);
+		}
+		catch (ApiException failure) {
+			throw failure;
+		}
+		catch (RuntimeException failure) {
+			LOG.error("media_storage_write_failed mime={} receivedBytes={} storedBytes={} elapsedMs={} cause={}",
+				mime, receivedBytes, storedBytes, (System.nanoTime() - startedAt) / 1_000_000L,
+				failure.getClass().getName());
+			throw new ApiException(502, "MEDIA_STORAGE_WRITE_FAILED",
+				"Nao foi possivel gravar a midia agora. Tente novamente em instantes.", failure);
+		}
 	}
 
 	/** O `{*key}` chega com a barra inicial; devolvemos o caminho relativo ao bucket. */

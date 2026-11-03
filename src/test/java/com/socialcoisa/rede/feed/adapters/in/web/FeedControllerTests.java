@@ -58,7 +58,7 @@ class FeedControllerTests {
 	@Test
 	void publishesPostAndReplaysIdempotentResponse() throws Exception {
 		var session = auth.authenticate("user_feed_replay");
-		String payload = objectMapper.writeValueAsString(Map.of(
+		String payload = objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 			"type", "INSIGHT",
 			"content", "Arquitetura hexagonal deixa a regra de negocio respirando melhor.",
 			"tags", List.of("Arquitetura", "Java"),
@@ -87,12 +87,12 @@ class FeedControllerTests {
 	@Test
 	void rejectsSameIdempotencyKeyWithDifferentPayload() throws Exception {
 		var session = auth.authenticate("user_feed_conflict");
-		String first = objectMapper.writeValueAsString(Map.of(
+		String first = objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 			"type", "INSIGHT",
 			"content", "Primeira tentativa",
 			"tags", List.of(),
 			"mediaIds", List.of()));
-		String second = objectMapper.writeValueAsString(Map.of(
+		String second = objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 			"type", "INSIGHT",
 			"content", "Outra tentativa",
 			"tags", List.of(),
@@ -117,7 +117,7 @@ class FeedControllerTests {
 	@Test
 	void deletesPostAndRemovesItFromFeed() throws Exception {
 		var session = auth.authenticate("user_feed_delete");
-		String payload = objectMapper.writeValueAsString(Map.of(
+		String payload = objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 			"type", "QUESTION",
 			"content", "Como voces organizam portas e adaptadores no monolito?",
 			"tags", List.of("Backend"),
@@ -159,7 +159,7 @@ class FeedControllerTests {
 		var reactorSession = auth.authenticate("user_feed_reactor");
 		var saverSession = auth.authenticate("user_feed_saver");
 		var sharerSession = auth.authenticate("user_feed_sharer");
-		String payload = objectMapper.writeValueAsString(Map.of(
+		String payload = objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 			"type", "INSIGHT",
 			"content", "Interacoes precisam ser pequenas, transacionais e repetiveis.",
 			"tags", List.of("Feed"),

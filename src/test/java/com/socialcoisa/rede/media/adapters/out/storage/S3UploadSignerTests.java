@@ -49,7 +49,7 @@ class S3UploadSignerTests {
 			"https://s3.b7cloud.tech/enois-bucket");
 		String objectKey = factory.objectKey("media_50a1", "media/4e66/foto.jpg");
 
-		String caminhoAssinado = URI.create(signer("enois-bucket").sign(objectKey, "image/jpeg").url())
+		String caminhoAssinado = URI.create(signer("enois-bucket").sign(objectKey, "image/jpeg", 1024).url())
 			.getPath();
 		String caminhoPublico = URI.create(factory.cdnUrl(objectKey)).getPath();
 
@@ -63,7 +63,7 @@ class S3UploadSignerTests {
 		var factory = new S3StorageUrlFactory("enois-bucket", "us-east-1", "/", "");
 		String objectKey = factory.objectKey("media_1", "a.png");
 
-		String caminho = URI.create(signer("enois-bucket").sign(objectKey, "image/png").url()).getPath();
+		String caminho = URI.create(signer("enois-bucket").sign(objectKey, "image/png", 512).url()).getPath();
 
 		assertThat(caminho).isEqualTo("/enois-bucket/media_1/a.png");
 	}

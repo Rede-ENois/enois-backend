@@ -120,15 +120,18 @@ class JobContractController {
 			@RequestParam(required = false) String source, @RequestParam(required = false) String platform,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		limit = pageLimit(limit);
 		// As ABAS: EXTERNAL devolve SO as externas (com filtro de agregador); INTERNAL nunca
 		// mistura. Sem `source` mantem o comportamento antigo (internas + externas na 1a pagina).
 		boolean soExternas = "EXTERNAL".equalsIgnoreCase(source);
 		boolean soInternas = "INTERNAL".equalsIgnoreCase(source);
+		String viewer = viewerId(sessionToken);
 		if (soExternas) {
+			boolean showEmail = viewer != null;
 			List<JobView> externas = org.springframework.util.StringUtils.hasText(platform)
 				? externalJobRepository.findByPlatform(platform.trim(), query, limit).stream()
-					.map(this::toExternalView).toList()
-				: externalJobViews(query);
+					.map(job -> toExternalView(job, false, showEmail)).toList()
+				: externalJobViews(query, showEmail);
 			return new PageResponse<>(externas, null);
 		}
 		Instant before = cursorCodec.decode(cursor).orElse(null);
@@ -139,7 +142,7 @@ class JobContractController {
 			|| org.springframework.util.StringUtils.hasText(location)
 			|| (skills != null && !skills.isEmpty());
 		boolean firstPage = cursor == null;
-		return page(jobs, limit, viewerId(sessionToken), PageKind.LIST,
+		return page(jobs, limit, viewer, PageKind.LIST,
 			!soInternas && firstPage && !structuralFilters, query);
 	}
 
@@ -243,6 +246,7 @@ class JobContractController {
 			@RequestParam(defaultValue = "20") int limit,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		limit = pageLimit(limit);
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		List<Job> jobs = jobService.listMine(user.id().value(), before, limit);
 		return page(jobs, limit, user.id().value(), PageKind.MINE, false, null);
@@ -254,6 +258,7 @@ class JobContractController {
 			@RequestParam(defaultValue = "20") int limit,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		limit = pageLimit(limit);
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		List<Job> jobs = jobService.listApplications(user.id().value(), before, limit);
 		return page(jobs, limit, user.id().value(), PageKind.APPLICATIONS, false, null);
@@ -277,13 +282,13 @@ class JobContractController {
 	@GetMapping("/{jobId}")
 	JobView job(@PathVariable String jobId,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		String viewer = viewerId(sessionToken);
 		// A listagem publica inclui vagas externas persistidas em tabela separada.
 		// Seus identificadores pertencem ao namespace ext_; elas nao aceitam candidatura interna.
 		if (externalListingEnabled && jobId.startsWith("ext_")) {
 			var external = externalJobRepository.findById(jobId);
-			if (external.isPresent()) return toExternalView(external.get());
+			if (external.isPresent()) return toExternalView(external.get(), false, viewer != null);
 		}
-		String viewer = viewerId(sessionToken);
 		Job job = jobService.getById(jobId);
 		boolean owner = viewer != null && viewer.equals(job.postedBy());
 		// O dono NUNCA e candidato na propria vaga (o apply bloqueia isso). Se houver uma
@@ -440,6 +445,11 @@ class JobContractController {
 		LIST, MINE, APPLICATIONS
 	}
 
+	/** Teto das listagens de vagas (inclusive a aba de externas). */
+	private static int pageLimit(int limit) {
+		return Math.clamp(limit, 1, 100);
+	}
+
 	private PageResponse<JobView> page(List<Job> jobs, int limit, String viewer, PageKind kind,
 			boolean includeExternal, String externalQuery) {
 		List<String> ids = jobs.stream().map(Job::id).toList();
@@ -474,7 +484,7 @@ class JobContractController {
 			return new PageResponse<>(items, nextCursor);
 		}
 		List<JobView> merged = new java.util.ArrayList<>(items);
-		merged.addAll(externalJobViews(externalQuery));
+		merged.addAll(externalJobViews(externalQuery, authenticated));
 		return new PageResponse<>(merged, nextCursor);
 	}
 
@@ -482,7 +492,7 @@ class JobContractController {
 	 * Vagas externas JA SALVAS no banco (tabela propria, atualizadas pelo worker da meia-noite) —
 	 * nao buscamos a fonte a cada requisicao. Entram DEPOIS das internas.
 	 */
-	private List<JobView> externalJobViews(String query) {
+	private List<JobView> externalJobViews(String query, boolean showApplyEmail) {
 		List<JobView> external = new java.util.ArrayList<>();
 		// A listagem de "externas" (agregadores) NAO mistura as criadas pela comunidade: elas têm
 		// filtro próprio ("Vaga externa criada no Énóis" = plataforma Comunidade).
@@ -494,21 +504,30 @@ class JobContractController {
 				com.socialcoisa.rede.jobs.application.ExternalJobSubmissionService.COMMUNITY_PLATFORM,
 				externalListingLimit);
 		for (ExternalJob job : found) {
-			external.add(toExternalView(job));
+			external.add(toExternalView(job, false, showApplyEmail));
 		}
 		return external;
 	}
 
 	private JobView toExternalView(ExternalJob job) {
-		return toExternalView(job, false);
+		return toExternalView(job, false, true);
 	}
 
 	/** `owner`: a vaga externa foi cadastrada por quem esta vendo (a tela mostra "excluir"). */
 	private JobView toExternalView(ExternalJob job, boolean owner) {
+		return toExternalView(job, owner, true);
+	}
+
+	/**
+	 * `showApplyEmail`: o e-mail de candidatura so vai para quem esta autenticado. A listagem
+	 * publica de vagas externas expunha o endereco para qualquer visitante.
+	 */
+	private JobView toExternalView(ExternalJob job, boolean owner, boolean showApplyEmail) {
 		return new JobView(job.id(), job.title(), job.company(), null, job.location(), null, null,
 			job.salary(), job.currency(), List.of(),
 			job.importedAt() != null ? job.importedAt().toString() : null, 0, false, false, owner, 0, null,
-			List.of(), "OPEN", null, "EXTERNAL", job.url(), job.platform(), job.applyEmail(),
+			List.of(), "OPEN", null, "EXTERNAL", job.url(), job.platform(),
+			showApplyEmail ? job.applyEmail() : null,
 			job.description(), job.salaryMin(), job.salaryMax(), job.salaryPeriod(), externalSalaryLabel(job),
 			job.salaryNotInformed(), null);
 	}

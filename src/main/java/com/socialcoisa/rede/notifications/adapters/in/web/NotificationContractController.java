@@ -21,9 +21,12 @@ import com.socialcoisa.rede.corporate.application.CorporateProfileService;
 import com.socialcoisa.rede.corporate.domain.CorporateProfile;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
+import com.socialcoisa.rede.notifications.application.NotificationPlaces;
 import com.socialcoisa.rede.notifications.application.NotificationService;
 import com.socialcoisa.rede.notifications.domain.Notification;
 import com.socialcoisa.rede.notifications.domain.NotificationContext;
+import com.socialcoisa.rede.notifications.domain.NotificationModule;
+import com.socialcoisa.rede.notifications.domain.NotificationPlace;
 import com.socialcoisa.rede.profile.application.NameStyleView;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
@@ -46,12 +49,14 @@ class NotificationContractController {
 	private final UserProfileRepository userProfileRepository;
 	private final BlockedUsersReader blockedUsersReader;
 	private final CorporateProfileService corporateProfiles;
+	private final NotificationPlaces places;
 
 	NotificationContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
 			NotificationService notificationService, CursorCodec cursorCodec,
 			UserProfileRepository userProfileRepository, BlockedUsersReader blockedUsersReader,
-			CorporateProfileService corporateProfiles) {
+			CorporateProfileService corporateProfiles, NotificationPlaces places) {
 		this.corporateProfiles = corporateProfiles;
+		this.places = places;
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.notificationService = notificationService;
@@ -76,6 +81,8 @@ class NotificationContractController {
 			.toList();
 		Map<String, UserProfile> profiles = resolveActors(notifications);
 		Map<String, CorporateProfile> professionals = professionalActors(notifications);
+		Map<String, NotificationPlaces.Resolved> targets = places.resolve(
+			notifications.stream().map(Notification::href).collect(Collectors.toSet()));
 		var items = notifications.stream()
 			.map(n -> {
 				NotificationContext notificationContext = NotificationContext.of(n.kind());
@@ -83,7 +90,9 @@ class NotificationContractController {
 				CorporateProfile pro = notificationContext == NotificationContext.PROFESSIONAL
 					? professionals.get(n.actorId()) : null;
 				UserProfile p = profiles.get(n.actorId());
-				return new NotificationView(n.id(), n.kind(), notificationContext.name(), n.actorId(),
+				NotificationPlaces.Resolved target = targets.get(n.href());
+				return new NotificationView(n.id(), n.kind(), notificationContext.name(),
+					NotificationModule.of(n.kind()).name(), n.actorId(),
 					pro != null ? pro.name() : p != null ? p.name() : null,
 					pro != null ? pro.username() : p != null ? p.username() : null,
 					pro != null ? (pro.avatar() == null ? "" : pro.avatar()) : p != null ? p.avatar() : null,
@@ -91,12 +100,26 @@ class NotificationContractController {
 					pro == null && p != null ? NameStyleView.from(p) : null,
 					n.title(), n.body(),
 					n.createdAt() != null ? n.createdAt().toString() : null,
-					n.isRead(), n.href(), n.ctaLabel(), n.actorCount());
+					n.isRead(), n.href(), n.ctaLabel(), n.actorCount(), target.place(),
+					target.eventDate() != null ? target.eventDate().toString() : null);
 			})
 			.toList();
 		String nextCursor = page.size() == limit
 			? cursorCodec.encode(page.get(page.size() - 1).createdAt()) : null;
 		return new PageResponse<>(items, nextCursor);
+	}
+
+	/**
+	 * Unread notifications per interface area, for the menu indicators: same session, context
+	 * filter and blocked-actor rule as the list. An area clears when its notifications are read.
+	 */
+	@GetMapping("/unread-summary")
+	NotificationService.UnreadSummary unreadSummary(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(required = false) String context) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return notificationService.unreadSummary(user.id().value(), parseContext(context),
+			blockedUsersReader.hiddenIdsFor(user.id().value()));
 	}
 
 	private Map<String, CorporateProfile> professionalActors(List<Notification> notifications) {
@@ -130,9 +153,15 @@ class NotificationContractController {
 			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
 	}
 
-	record NotificationView(String id, String kind, String context, String actorId, String actorName,
+	/**
+	 * {@code module} is the interface area of the kind ({@link NotificationModule}); {@code place} the
+	 * community or group it came from and {@code eventDate} ("YYYY-MM-DD") the day of the event it is
+	 * about, both resolved from the href and null when there is none.
+	 */
+	record NotificationView(String id, String kind, String context, String module, String actorId, String actorName,
 			String actorUsername, String actorAvatar, String actorIdentity, NameStyleView actorStyle, String title,
-			String body, String createdAt, boolean read, String href, String ctaLabel, int actorCount) {
+			String body, String createdAt, boolean read, String href, String ctaLabel, int actorCount,
+			NotificationPlace place, String eventDate) {
 	}
 
 	@PostMapping("/{notificationId}/read")

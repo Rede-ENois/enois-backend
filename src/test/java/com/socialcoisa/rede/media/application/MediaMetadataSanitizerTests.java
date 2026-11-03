@@ -21,6 +21,22 @@ class MediaMetadataSanitizerTests {
 	private final MediaMetadataSanitizer sanitizer = new MediaMetadataSanitizer("ffmpeg");
 
 	@Test
+	void largeVideoKeepsTheOriginalWhenFfmpegCannotRun() throws Exception {
+		// ffmpeg ausente/nao executavel: a limpeza e melhor-esforco, o upload segue com o original.
+		var semFfmpeg = new MediaMetadataSanitizer("ffmpeg-que-nao-existe-neste-host");
+		byte[] video = "ftypisom-corpo-de-video".getBytes(StandardCharsets.UTF_8);
+
+		java.nio.file.Path resultado = semFfmpeg.sanitizeToFile(new java.io.ByteArrayInputStream(video),
+			"video/mp4", "uploads/media_x/file.mp4");
+		try {
+			assertTrue(java.util.Arrays.equals(video, java.nio.file.Files.readAllBytes(resultado)));
+		}
+		finally {
+			java.nio.file.Files.deleteIfExists(resultado);
+		}
+	}
+
+	@Test
 	void pngTextChunkIsRemoved() throws Exception {
 		BufferedImage image = new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB);
 		ByteArrayOutputStream base = new ByteArrayOutputStream();

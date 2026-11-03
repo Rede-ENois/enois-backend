@@ -102,12 +102,16 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 			storageUrlFactory.provider());
 		MediaAsset saved = mediaAssetRepository.save(asset);
 		try {
-			MediaUploadView view = MediaUploadView.fromSigned(saved, signer.sign(objectKey, saved.mimeType()));
+			MediaUploadView view = MediaUploadView.fromSigned(saved,
+				signer.sign(objectKey, saved.mimeType(), saved.size()));
 			// Metadados do upload (nunca o conteúdo): permite no CloudWatch ver quem subiu o quê,
 			// tamanho/tipo e o provedor, e cruzar com o mediaId que aparece nos posts.
 			LOG.info("media_upload_signed mediaId={} ownerId={} mime={} bytes={} purpose={} provider={}",
 				saved.id(), command.ownerId(), saved.mimeType(), command.size(), saved.purpose(), saved.storageProvider());
 			return view;
+		}
+		catch (ApiException failure) {
+			throw failure;
 		}
 		catch (RuntimeException assinaturaFalhou) {
 			// Credencial do S3 ausente/ruim (IRSA) virava 500 generico — o operador nao tinha o

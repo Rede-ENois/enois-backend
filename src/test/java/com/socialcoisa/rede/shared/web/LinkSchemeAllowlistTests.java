@@ -138,7 +138,7 @@ class LinkSchemeAllowlistTests {
 					.header("X-Session-Token", author.token())
 					.header("Idempotency-Key", "linkscheme-post-" + attempt++)
 					.contentType(MediaType.APPLICATION_JSON)
-					.content(objectMapper.writeValueAsString(Map.of("type", "INSIGHT",
+					.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA", "type", "INSIGHT",
 						"content", "veja [aqui](" + target + ") e ![img](" + target + ")", "tags", List.of(),
 						"mediaIds", List.of()))))
 				.andExpect(status().isBadRequest())
@@ -150,7 +150,7 @@ class LinkSchemeAllowlistTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "linkscheme-post-escaped")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content("{\"type\":\"INSIGHT\",\"content\":\"[x](\\u006aavascript:alert(1))\",\"tags\":[],"
+				.content("{\"topic\":\"TECNOLOGIA\",\"type\":\"INSIGHT\",\"content\":\"[x](\\u006aavascript:alert(1))\",\"tags\":[],"
 					+ "\"mediaIds\":[]}"))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("UNSAFE_LINK"));
@@ -159,7 +159,7 @@ class LinkSchemeAllowlistTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "linkscheme-post-ok")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("type", "INSIGHT",
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA", "type", "INSIGHT",
 					"content", "Data: amanha. Leia [o guia](https://enois.ia.br/guia) ou [escreva](mailto:a@b.test)",
 					"tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isCreated());

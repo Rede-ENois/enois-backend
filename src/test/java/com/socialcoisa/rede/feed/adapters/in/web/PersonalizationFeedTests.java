@@ -146,7 +146,7 @@ class PersonalizationFeedTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "untopic-" + System.nanoTime())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(java.util.Map.of(
+				.content(objectMapper.writeValueAsString(java.util.Map.of("topic", "OUTROS",
 					"type", "INSIGHT", "content", "Post sem assunto (mais novo).", "tags", java.util.List.of(),
 					"mediaIds", java.util.List.of()))))
 			.andExpect(status().isCreated())
@@ -213,7 +213,7 @@ class PersonalizationFeedTests {
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "plain-" + content.hashCode() + "-" + System.nanoTime())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(java.util.Map.of(
+				.content(objectMapper.writeValueAsString(java.util.Map.of("topic", "OUTROS",
 					"type", "INSIGHT", "content", content, "tags", java.util.List.of(),
 					"mediaIds", java.util.List.of()))))
 			.andExpect(status().isCreated())

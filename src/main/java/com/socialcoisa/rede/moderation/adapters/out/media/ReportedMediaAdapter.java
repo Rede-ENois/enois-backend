@@ -20,6 +20,7 @@ import org.springframework.stereotype.Component;
 import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.PostId;
+import com.socialcoisa.rede.media.application.ImageDecoding;
 import com.socialcoisa.rede.media.application.port.out.MediaAssetRepository;
 import com.socialcoisa.rede.media.application.port.out.MediaSourceDownloader;
 import com.socialcoisa.rede.media.domain.MediaAsset;
@@ -112,7 +113,7 @@ class ReportedMediaAdapter implements ReportedMediaReader {
 		Path temp = null;
 		try {
 			temp = source.download(asset.cdnUrl());
-			BufferedImage original = ImageIO.read(temp.toFile());
+			BufferedImage original = ImageDecoding.read(temp.toFile());
 			if (original == null) {
 				return null;
 			}

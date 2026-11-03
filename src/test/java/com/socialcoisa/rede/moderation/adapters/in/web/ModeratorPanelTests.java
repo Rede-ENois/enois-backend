@@ -152,7 +152,7 @@ class ModeratorPanelTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "mp-blocked")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "nao deveria passar", "tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isForbidden())
 			.andExpect(jsonPath("$.code").value("ACCOUNT_RESTRICTED"));
@@ -173,7 +173,7 @@ class ModeratorPanelTests {
 				.header("X-Session-Token", victim.token())
 				.header("Idempotency-Key", "mp-victim-blocked")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "vitima nao publica", "tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isForbidden())
 			.andExpect(jsonPath("$.code").value("ACCOUNT_RESTRICTED"));
@@ -280,7 +280,7 @@ class ModeratorPanelTests {
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", idem)
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", content, "tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isCreated())
 			.andReturn();

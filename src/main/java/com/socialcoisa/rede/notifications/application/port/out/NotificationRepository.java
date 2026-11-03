@@ -15,6 +15,13 @@ public interface NotificationRepository {
 	List<Notification> findByUserId(String userId, java.time.Instant before,
 			com.socialcoisa.rede.notifications.domain.NotificationContext context, int limit);
 
+	/** Unread notifications per kind, actor and href (a null context keeps every kind). */
+	List<UnreadCount> countUnreadByKindAndActor(String userId,
+			com.socialcoisa.rede.notifications.domain.NotificationContext context);
+
+	record UnreadCount(String kind, String actorId, String href, long count) {
+	}
+
 	/** The unread notification of a group, if there is one. */
 	Optional<Notification> findUnreadGroup(String userId, String groupKey);
 

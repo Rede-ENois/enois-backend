@@ -63,6 +63,7 @@ class MessagingContractController {
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit,
 			@RequestParam(required = false) String context) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		limit = Math.clamp(limit, 1, 100);
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		List<Conversation> conversations = messagingService.listConversations(user.id().value(), before,
 			parseContext(context), limit);
@@ -94,6 +95,7 @@ class MessagingContractController {
 			@RequestParam(required = false) String q, @RequestParam(defaultValue = "20") int limit,
 			@RequestParam(required = false) String context) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		limit = Math.clamp(limit, 1, 100);
 		List<Conversation> conversations = messagingService.listConversations(user.id().value(), null,
 			parseContext(context), limit);
 		String query = q != null ? q.toLowerCase() : "";
@@ -137,6 +139,7 @@ class MessagingContractController {
 		if (!messagingService.isParticipant(conversationId, user.id().value())) {
 			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
 		}
+		limit = Math.clamp(limit, 1, 100);
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		List<Message> msgs = messagingService.getMessages(conversationId, user.id().value(), before, limit);
 		var summaries = messagingService.reactionSummaries(msgs.stream().map(Message::id).toList(),
@@ -316,9 +319,10 @@ class MessagingContractController {
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit,
 			@RequestParam(required = false) String context) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		limit = Math.clamp(limit, 1, 50);
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		List<Conversation> conversations = messagingService.listArchivedConversations(user.id().value(), before,
-			parseContext(context), Math.min(limit, 50));
+			parseContext(context), limit);
 		var items = conversations.stream()
 			.map(c -> {
 				var participants = messagingService.getParticipants(c.id());
@@ -432,7 +436,7 @@ class MessagingContractController {
 		ConversationContext context = ConversationContext.of(kind);
 		return new ConversationView(convId, userId, kind, context.name(), title, participantIds,
 			identitiesOf(context, participantIds), lm.text(), lm.time() != null ? lm.time().toString() : null, unread,
-			otherLastReadAt, lm.e2e(), lm.iv());
+			otherLastReadAt, lm.e2e(), lm.iv(), lm.from());
 	}
 
 	private ConversationDetailView toDetailView(String convId, String kind, String title,
@@ -440,7 +444,7 @@ class MessagingContractController {
 		var lm = messagingService.getLastMessagePreview(convId);
 		ConversationContext context = ConversationContext.of(kind);
 		return new ConversationDetailView(convId, kind, context.name(), title, participantIds,
-			identitiesOf(context, participantIds), lm.text(), unread, otherLastReadAt, lm.e2e(), lm.iv());
+			identitiesOf(context, participantIds), lm.text(), unread, otherLastReadAt, lm.e2e(), lm.iv(), lm.from());
 	}
 
 	/** Valida o destinatario: obrigatorio, nao pode ser voce, nao pode estar bloqueado. */
@@ -496,12 +500,12 @@ class MessagingContractController {
 
 	record ConversationView(String id, String userId, String kind, String context, String title,
 			List<String> participantIds, Map<String, IdentityView> identities, String lastMessage, String time,
-			int unread, String otherLastReadAt, boolean lastMessageE2e, String lastMessageIv) {
+			int unread, String otherLastReadAt, boolean lastMessageE2e, String lastMessageIv, String lastMessageFrom) {
 	}
 
 	record ConversationDetailView(String id, String kind, String context, String title, List<String> participantIds,
 			Map<String, IdentityView> identities, String lastMessage, int unread, String otherLastReadAt,
-			boolean lastMessageE2e, String lastMessageIv) {
+			boolean lastMessageE2e, String lastMessageIv, String lastMessageFrom) {
 	}
 
 	record MessageView(String id, String conversationId, String from, String text, List<String> mediaIds,
