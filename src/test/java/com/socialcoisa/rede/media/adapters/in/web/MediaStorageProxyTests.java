@@ -261,12 +261,14 @@ class MediaStorageProxyTests {
 	@Test
 	void donoEnviaVideoMp4PeloProxyEOArquivoChegaAoBucket() throws Exception {
 		var dono = auth.authenticate("media_proxy_video");
+		// O tamanho declarado no upload e o contrato: o PUT precisa mandar exatamente esse tanto.
+		byte[] video = "ftypisom-corpo-de-video-de-teste".repeat(64).getBytes(StandardCharsets.UTF_8);
 		var criado = mockMvc.perform(post("/media/uploads")
 				.header("X-Session-Token", dono.token())
 				.header("Idempotency-Key", "media-proxy-video-1")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("fileName", "clipe.mp4",
-					"mimeType", "video/mp4", "size", 2048, "purpose", "POST_VIDEO"))))
+					"mimeType", "video/mp4", "size", video.length, "purpose", "POST_VIDEO"))))
 			.andExpect(status().isCreated())
 			.andReturn();
 		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
@@ -275,7 +277,6 @@ class MediaStorageProxyTests {
 
 		// Corpo que o ffmpeg nao consegue ler (ou ffmpeg ausente): a limpeza e best-effort e o
 		// original segue para o bucket — upload de video nunca pode virar 500 por causa dela.
-		byte[] video = "ftypisom-corpo-de-video-de-teste".getBytes(StandardCharsets.UTF_8);
 		mockMvc.perform(put("/storage/" + objectKey)
 				.header("X-Session-Token", dono.token())
 				.contentType("video/mp4")
@@ -290,12 +291,13 @@ class MediaStorageProxyTests {
 	@Test
 	void falhaDoBucketNaEscritaVira502ComCodigoProprioEnaoErroGenerico() throws Exception {
 		var dono = auth.authenticate("media_proxy_bucket_fora");
+		byte[] video = "ftypisom-video".repeat(32).getBytes(StandardCharsets.UTF_8);
 		var criado = mockMvc.perform(post("/media/uploads")
 				.header("X-Session-Token", dono.token())
 				.header("Idempotency-Key", "media-proxy-bucket-1")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("fileName", "clipe.mp4",
-					"mimeType", "video/mp4", "size", 2048, "purpose", "POST_VIDEO"))))
+					"mimeType", "video/mp4", "size", video.length, "purpose", "POST_VIDEO"))))
 			.andExpect(status().isCreated())
 			.andReturn();
 		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
@@ -306,7 +308,7 @@ class MediaStorageProxyTests {
 			mockMvc.perform(put("/storage/" + objectKey)
 					.header("X-Session-Token", dono.token())
 					.contentType("video/mp4")
-					.content("ftypisom-video".getBytes(StandardCharsets.UTF_8)))
+					.content(video))
 				.andExpect(status().isBadGateway())
 				.andExpect(jsonPath("$.code").value("MEDIA_STORAGE_WRITE_FAILED"))
 				.andExpect(jsonPath("$.message").value(
@@ -320,19 +322,19 @@ class MediaStorageProxyTests {
 	@Test
 	void videoGrandeAcimaDoLimiteEmMemoriaTambemChegaAoBucket() throws Exception {
 		var dono = auth.authenticate("media_proxy_video_grande");
+		// Acima de MAX_IN_MEMORY o proxy usa arquivo temporario + ffmpeg (sanitizeToFile).
+		byte[] video = new byte[41 * 1024 * 1024];
 		var criado = mockMvc.perform(post("/media/uploads")
 				.header("X-Session-Token", dono.token())
 				.header("Idempotency-Key", "media-proxy-video-2")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("fileName", "aula.mp4",
-					"mimeType", "video/mp4", "size", 45L * 1024 * 1024, "purpose", "POST_VIDEO"))))
+					"mimeType", "video/mp4", "size", (long) video.length, "purpose", "POST_VIDEO"))))
 			.andExpect(status().isCreated())
 			.andReturn();
 		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
 			.path("objectKey").asText();
 
-		// Acima de MAX_IN_MEMORY o proxy usa arquivo temporario + ffmpeg (sanitizeToFile).
-		byte[] video = new byte[41 * 1024 * 1024];
 		mockMvc.perform(put("/storage/" + objectKey)
 				.header("X-Session-Token", dono.token())
 				.contentType("video/mp4")
