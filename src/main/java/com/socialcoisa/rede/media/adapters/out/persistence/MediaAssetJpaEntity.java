@@ -81,6 +81,13 @@ class MediaAssetJpaEntity {
 	@Column(name = "s3_claimed_at")
 	private java.time.Instant s3ClaimedAt;
 
+	private Integer width;
+
+	private Integer height;
+
+	@Column(name = "dimension_attempts", nullable = false)
+	private int dimensionAttempts;
+
 	protected MediaAssetJpaEntity() {
 	}
 
@@ -104,12 +111,15 @@ class MediaAssetJpaEntity {
 		entity.s3MigratedAt = asset.s3MigratedAt();
 		entity.s3MigrationAttempts = asset.s3MigrationAttempts();
 		entity.s3LastError = asset.s3LastError();
+		entity.width = asset.width();
+		entity.height = asset.height();
+		entity.dimensionAttempts = asset.dimensionAttempts();
 		return entity;
 	}
 
 	MediaAsset toDomain() {
 		return MediaAsset.restore(id, new UserId(ownerId), fileName, mimeType, sizeBytes, purpose, objectKey, cdnUrl,
 			status, deleteStatus, createdAt, expiresAt, deletedAt, storageProvider, s3CdnUrl, s3MigratedAt,
-			s3MigrationAttempts, s3LastError);
+			s3MigrationAttempts, s3LastError, width, height, dimensionAttempts);
 	}
 }

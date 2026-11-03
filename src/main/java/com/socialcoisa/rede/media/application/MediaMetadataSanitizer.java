@@ -180,7 +180,7 @@ public class MediaMetadataSanitizer {
 	 * Lê a tag Orientation (0x0112) do bloco APP1/EXIF sem biblioteca externa. Se o JPEG não tiver
 	 * EXIF válido, devolve 1 (sem rotação).
 	 */
-	private int jpegOrientation(byte[] data) {
+	static int jpegOrientation(byte[] data) {
 		if (data.length < 4 || (data[0] & 0xFF) != 0xFF || (data[1] & 0xFF) != 0xD8) {
 			return 1;
 		}
@@ -208,7 +208,7 @@ public class MediaMetadataSanitizer {
 		return 1;
 	}
 
-	private int exifOrientation(byte[] data, int tiff, int end) {
+	private static int exifOrientation(byte[] data, int tiff, int end) {
 		if (tiff + 8 > end) {
 			return 1;
 		}

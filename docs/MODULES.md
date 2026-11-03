@@ -627,18 +627,29 @@ Implementa: `ManageProfileExtensionUseCase`
 
 **Arquivo**: `src/main/java/com/socialcoisa/rede/media/application/MediaService.java`
 
-Implementa: `CreateMediaUploadUseCase`, `GetMediaAssetUseCase`, `RequestMediaDeletionUseCase`, `RequestPostMediaDeletionUseCase`, `ValidateMediaOwnershipUseCase`
+Implementa: `CreateMediaUploadUseCase`, `GetMediaAssetUseCase`, `GetMediaSummariesUseCase`, `RequestMediaDeletionUseCase`, `RequestPostMediaDeletionUseCase`, `ValidateMediaOwnershipUseCase`
 
 | Função | Descrição |
 |---|---|
 | `createUpload(CreateMediaUploadCommand cmd)` | Cria contrato de upload (media_asset com status PENDING) |
-| `getMedia(String mediaId)` | Retorna metadados da mídia (URL do CDN) |
+| `getMedia(String mediaId)` | Retorna metadados da mídia (URL do CDN, `width`/`height`) |
+| `visibleByIds(Collection<String> mediaIds)` | `MediaSummaryView` (id, cdnUrl, mimeType, width, height) das mídias não removidas, por id, em UMA consulta. O feed (`GetFeedService.enrich`), publicar/editar/restaurar post e os posts de grupo chamam uma vez por página e preenchem `media` na ordem de `mediaIds` |
 | `requestDeletion(RequestMediaDeletionCommand cmd)` | Solicita deleção de uma mídia |
 | `requestPostMediaDeletion(UserId ownerId, PostId postId, List<String> mediaIds)` | Solicita deleção de mídias associadas a um post |
 | `validateOwnedBy(UserId userId, List<String> mediaIds)` | Valida que todas as mídias pertencem ao usuário |
 | `requestDeletion(MediaAsset media, PostId postId)` | Cria job de deleção interno |
 | `findMedia(String mediaId)` | Busca mídia ou lança 404 |
 | `validate(CreateMediaUploadCommand cmd)` | Valida parâmetros de upload (fileName, mimeType, sizeBytes) |
+
+### MediaDimensionsService / MediaDimensionsBackfillWorker
+
+**Arquivos**: `media/application/MediaDimensionsService.java`, `media/application/MediaDimensionsBackfillWorker.java`
+
+| Função | Descrição |
+|---|---|
+| `recordUploaded(MediaAsset, byte[])` | Chamado pelo `PUT /storage/{key}` com os bytes já limpos: lê largura/altura só do cabeçalho (`ImageDecoding.displayDimensions`, sem decodificar o bitmap) e grava. Só imagens; falha de leitura não derruba o upload (fica `null`) |
+| `backfill(int batchSize)` | Rodada do backfill: imagens no S3, não removidas, sem `width`, fora da janela de upload (1h) e com menos de 3 tentativas. Lê só o primeiro 1MB do objeto (Range); leitura que falha soma `dimension_attempts` |
+| `MediaDimensionsBackfillWorker.run()` | Agendado (`rede.media.dimensions.backfill.*`, ligado por padrão, lote 20, a cada 60s) |
 
 ### MediaDeletionWorker
 
@@ -652,11 +663,12 @@ Implementa: `CreateMediaUploadUseCase`, `GetMediaAssetUseCase`, `RequestMediaDel
 
 | Classe | Descrição |
 |---|---|
-| `MediaAsset` | Entidade: id, ownerId, fileName, mimeType, sizeBytes, purpose, objectKey, cdnUrl, status, deleteStatus |
-| `MediaStatus` | Enum: `PENDING`, `ACTIVE`, `EXPIRED`, `DELETED` |
+| `MediaAsset` | Entidade: id, ownerId, fileName, mimeType, sizeBytes, purpose, objectKey, cdnUrl, status, deleteStatus, width, height (pixels exibidos; V236), dimensionAttempts |
+| `MediaStatus` | Enum: `PENDING`, `READY`, `FAILED` (hoje todo asset fica `PENDING`: nenhum fluxo grava outro valor) |
 | `MediaDeleteStatus` | Enum: `NONE`, `REQUESTED`, `DELETED` |
 | `MediaDeletionJob` | Entidade: id, mediaId, postId, ownerId, status, attempts |
-| `MediaAssetView` | View: mediaId, cdnUrl, mimeType, status, purpose |
+| `MediaAssetView` | View de `GET /media/{id}`: id, ownerId, fileName, mimeType, size, purpose, objectKey, cdnUrl, status, deleteStatus, createdAt, expiresAt, deletedAt, width, height |
+| `MediaSummaryView` | Anexo embutido no post (`media`): id, cdnUrl, mimeType, width, height |
 | `MediaUploadView` | View: mediaId, cdnUrl, uploadUrl, status |
 
 ### Storage Gateways

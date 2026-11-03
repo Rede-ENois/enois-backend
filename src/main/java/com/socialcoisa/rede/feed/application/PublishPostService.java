@@ -67,6 +67,7 @@ public class PublishPostService implements PublishPostUseCase {
 	/** Detecção comportamental de automação (PR #36). */
 	private final BehavioralTimingGuard behavioralTimingGuard;
 	private final com.socialcoisa.rede.feed.application.port.out.PollRepository polls;
+	private final com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries;
 
 	public PublishPostService(PostRepository postRepository, ArticleRepository articleRepository,
 			IdGenerator idGenerator, Clock clock,
@@ -86,7 +87,9 @@ public class PublishPostService implements PublishPostUseCase {
 			UserRateLimiter userRateLimiter,
 			ContentDuplicationGuard duplicationGuard,
 			BehavioralTimingGuard behavioralTimingGuard,
-			com.socialcoisa.rede.feed.application.port.out.PollRepository polls) {
+			com.socialcoisa.rede.feed.application.port.out.PollRepository polls,
+			com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries) {
+		this.mediaSummaries = mediaSummaries;
 		this.postRepository = postRepository;
 		this.articleRepository = articleRepository;
 		this.idGenerator = idGenerator;
@@ -223,6 +226,10 @@ public class PublishPostService implements PublishPostUseCase {
 		events.publishEvent(new PostPublishedEvent(saved.id().value(), saved.authorId().value()));
 		notifyMentions(command.mentionedUserIds(), command.authorId().value(), saved.id().value(), "post");
 		UserProfile author = userProfileRepository.findById(command.authorId().value()).orElse(null);
+		return withAuthor(saved, author).withMedia(mediaSummaries.visibleByIds(saved.mediaIds()));
+	}
+
+	private PostView withAuthor(Post saved, UserProfile author) {
 		if (author != null) {
 			return PostView.from(saved, author.username(), author.name(), author.avatar(), author.allBadges())
 				.withAvatarFrame(author.avatarFrame())

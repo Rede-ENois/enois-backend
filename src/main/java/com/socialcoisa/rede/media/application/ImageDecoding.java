@@ -25,6 +25,39 @@ public final class ImageDecoding {
 	private ImageDecoding() {
 	}
 
+	/** Pixel size of an image as it is displayed (EXIF orientation applied). */
+	public record Dimensions(int width, int height) {
+	}
+
+	/**
+	 * Reads the size from the image header only, without decoding the bitmap. A JPEG whose EXIF
+	 * orientation rotates by 90 degrees (5 to 8) is displayed with width and height swapped, so the
+	 * result is swapped too. Returns null when no reader understands the bytes.
+	 */
+	public static Dimensions displayDimensions(byte[] data) throws IOException {
+		try (ImageInputStream input = ImageIO.createImageInputStream(new java.io.ByteArrayInputStream(data))) {
+			if (input == null) {
+				return null;
+			}
+			Iterator<ImageReader> readers = ImageIO.getImageReaders(input);
+			if (!readers.hasNext()) {
+				return null;
+			}
+			ImageReader reader = readers.next();
+			try {
+				reader.setInput(input, true, true);
+				int width = reader.getWidth(0);
+				int height = reader.getHeight(0);
+				int orientation = MediaMetadataSanitizer.jpegOrientation(data);
+				return orientation >= 5 && orientation <= 8 ? new Dimensions(height, width)
+					: new Dimensions(width, height);
+			}
+			finally {
+				reader.dispose();
+			}
+		}
+	}
+
 	public static BufferedImage read(File file) throws IOException {
 		try (ImageInputStream input = ImageIO.createImageInputStream(file)) {
 			return read(input);
