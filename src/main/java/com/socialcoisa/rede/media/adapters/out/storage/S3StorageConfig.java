@@ -19,6 +19,7 @@ import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
 import com.socialcoisa.rede.media.application.port.out.MediaUploadSigner;
 import com.socialcoisa.rede.media.application.port.out.StorageUrlFactory;
+import com.socialcoisa.rede.shared.web.ApiException;
 
 /**
  * Storage S3, ligado por `REDE_MEDIA_STORAGE=s3` (ver docs/MIDIA-S3.md).
@@ -74,10 +75,12 @@ class S3StorageConfig {
 			throughApi = true;
 		}
 		if (moderationEnabled && !StringUtils.hasText(props.getPublicBaseUrl())) {
-			// Sem a base pública não há como devolver a URL do proxy e a moderação pré-storage
-			// ficaria inacessível. A varredura pós-publicação continua como rede de segurança.
 			LOG.warn("rede.media.s3.public-base-url vazio com moderação de imagens ativa; "
-				+ "a subida pode ir direto ao bucket e pular a verificação pré-storage.");
+				+ "bloqueando assinatura direta no bucket para impedir que a moderação seja contornada.");
+			return (objectKey, mimeType, contentLength) -> {
+				throw new ApiException(503, "IMAGE_MODERATION_UNAVAILABLE",
+					"O envio de mídia exige moderação pré-storage, mas a URL de proxy da API não está configurada.");
+			};
 		}
 		// Gateway S3-compativel (endpoint configurado) normalmente nao responde CORS: o navegador
 		// nao consegue fazer o PUT assinado direto no bucket. Nesse caso a subida passa pelo

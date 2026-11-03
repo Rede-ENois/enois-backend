@@ -110,6 +110,9 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 				saved.id(), command.ownerId(), saved.mimeType(), command.size(), saved.purpose(), saved.storageProvider());
 			return view;
 		}
+		catch (ApiException failure) {
+			throw failure;
+		}
 		catch (RuntimeException assinaturaFalhou) {
 			// Credencial do S3 ausente/ruim (IRSA) virava 500 generico — o operador nao tinha o
 			// que ler. Aqui a falha fica explicita e o cliente recebe algo acionavel.

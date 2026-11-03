@@ -1,12 +1,9 @@
 package com.socialcoisa.rede.media.adapters.in.web;
 
-import java.io.InputStream;
 import java.util.Map;
 
 import jakarta.servlet.http.HttpServletRequest;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
