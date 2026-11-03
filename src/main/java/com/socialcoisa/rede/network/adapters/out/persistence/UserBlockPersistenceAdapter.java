@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.network.adapters.out.persistence;
 
+import java.time.Clock;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -15,11 +16,13 @@ class UserBlockPersistenceAdapter implements UserBlockRepository, BlockedUsersRe
 
 	private final SpringDataUserBlockJpaRepository repository;
 	private final SpringDataUserMuteJpaRepository muteRepository;
+	private final Clock clock;
 
 	UserBlockPersistenceAdapter(SpringDataUserBlockJpaRepository repository,
-			SpringDataUserMuteJpaRepository muteRepository) {
+			SpringDataUserMuteJpaRepository muteRepository, Clock clock) {
 		this.repository = repository;
 		this.muteRepository = muteRepository;
+		this.clock = clock;
 	}
 
 	@Override
@@ -66,7 +69,8 @@ class UserBlockPersistenceAdapter implements UserBlockRepository, BlockedUsersRe
 			return Set.of();
 		}
 		Set<String> hidden = findHiddenIds(userId);
-		muteRepository.findByMuterIdOrderByCreatedAtDesc(userId).stream()
+		// So mutes ainda validos: o que venceu volta a aparecer no feed sem ninguem desfazer.
+		muteRepository.findActiveByMuterId(userId, clock.instant()).stream()
 			.map(UserMuteJpaEntity::toDomain)
 			.map(com.socialcoisa.rede.network.domain.UserMute::mutedId)
 			.forEach(hidden::add);
