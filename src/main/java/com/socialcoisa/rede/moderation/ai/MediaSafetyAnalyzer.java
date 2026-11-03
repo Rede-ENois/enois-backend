@@ -94,8 +94,12 @@ public class MediaSafetyAnalyzer {
 		if (!StringUtils.hasText(modelOutput)) {
 			return Optional.empty();
 		}
+		String json = extractJsonObject(modelOutput);
+		if (json == null) {
+			return Optional.empty();
+		}
 		try {
-			JsonNode node = objectMapper.readTree(modelOutput);
+			JsonNode node = objectMapper.readTree(json);
 			MediaSafetyVerdict verdict = switch (node.path("veredito").asString()) {
 				case "SAFE" -> MediaSafetyVerdict.SAFE;
 				case "EXPLICIT" -> MediaSafetyVerdict.EXPLICIT;
@@ -119,6 +123,56 @@ public class MediaSafetyAnalyzer {
 		catch (Exception invalid) {
 			return Optional.empty();
 		}
+	}
+
+	/**
+	 * Recorta o primeiro objeto JSON da resposta do modelo.
+	 *
+	 * <p>Mesmo com a instrução "responda SOMENTE o JSON", provedores de visão costumam devolver o
+	 * objeto cercado por cerca de markdown ou por uma frase de introdução. O contrato é o objeto,
+	 * não o envelope: sem este recorte, uma resposta perfeitamente válida era descartada e o upload
+	 * caía no erro de "não foi possível confirmar". O scanner respeita strings e escapes para não
+	 * confundir uma chave dentro do motivo com o fim do objeto.</p>
+	 */
+	static String extractJsonObject(String raw) {
+		if (raw == null) {
+			return null;
+		}
+		int start = raw.indexOf('{');
+		if (start < 0) {
+			return null;
+		}
+		boolean inString = false;
+		boolean escaped = false;
+		int depth = 0;
+		for (int i = start; i < raw.length(); i++) {
+			char current = raw.charAt(i);
+			if (inString) {
+				if (escaped) {
+					escaped = false;
+				}
+				else if (current == '\\') {
+					escaped = true;
+				}
+				else if (current == '"') {
+					inString = false;
+				}
+				continue;
+			}
+			if (current == '"') {
+				inString = true;
+			}
+			else if (current == '{') {
+				depth++;
+			}
+			else if (current == '}') {
+				depth--;
+				if (depth == 0) {
+					return raw.substring(start, i + 1);
+				}
+			}
+		}
+		return null;
 	}
 
 	/**
