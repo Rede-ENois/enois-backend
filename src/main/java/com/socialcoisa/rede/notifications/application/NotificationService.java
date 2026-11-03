@@ -137,6 +137,9 @@ public class NotificationService {
 			if (row.actorId() != null && hiddenActorIds.contains(row.actorId())) {
 				continue;
 			}
+			if (hasOwnChannel(row.kind())) {
+				continue;
+			}
 			int count = Math.toIntExact(row.count());
 			byModule.merge(NotificationModule.of(row.kind()), count, Integer::sum);
 			if (row.href() != null) {
@@ -153,6 +156,15 @@ public class NotificationService {
 		int eventsToday = context == com.socialcoisa.rede.notifications.domain.NotificationContext.PROFESSIONAL ? 0
 			: places.eventsToday(userId);
 		return new UnreadSummary(total, byModule, byCommunity, eventsToday);
+	}
+
+	/**
+	 * Messages and connection requests have their own unread signals (chat balloon, Rede pill) and
+	 * the notices panel leaves them out, so counting them here lit "Avisos" with nothing to read.
+	 */
+	private static boolean hasOwnChannel(String kind) {
+		return NotificationModule.of(kind) == NotificationModule.MESSAGES
+			|| "CONNECTION_REQUEST".equalsIgnoreCase(kind);
 	}
 
 	/** {@code byCommunity}: unread count per community id (only communities with some). */

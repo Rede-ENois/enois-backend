@@ -961,7 +961,7 @@ inválidas são rejeitadas integralmente. A operação exige autenticação e ch
 | `markRead(String notificationId, String userId)` | Marca como lida |
 | `markAllRead(String userId)` | Marca todas como lidas |
 | `list(String userId, int limit)` | Lista notificações |
-| `unreadSummary(userId, context, hiddenActorIds)` | Unread count per area (`NotificationModule`) and per community (`byCommunity`), from one `GROUP BY kind, actor, href` query over the unread rows (hidden actors are dropped, hrefs resolved by `NotificationPlaces`), plus `eventsToday` (0 in the professional context) |
+| `unreadSummary(userId, context, hiddenActorIds)` | Unread count per area (`NotificationModule`) and per community (`byCommunity`), from one `GROUP BY kind, actor, href` query over the unread rows (hidden actors, messages and connection requests are dropped, hrefs resolved by `NotificationPlaces`), plus `eventsToday` (0 in the professional context) |
 
 ### NotificationPlaces
 
