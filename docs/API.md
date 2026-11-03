@@ -156,6 +156,38 @@ Cidade e UF (`city`, `state`) são estruturadas e separadas do `location` livre,
   o perfil público (`/api/users/{username}`, busca, ranking) só devolve `city`/`state` quando
   `showCity` é `true` (senão os campos ficam ausentes do JSON).
 
+### PUT /api/me/profile-appearance
+
+Aparência da vitrine: como o perfil se apresenta a quem visita, separada em **social** e
+**profissional**. Cada lado é independente e carrega as escolhas prontas — nenhum CSS.
+
+```json
+{
+  "social": {
+    "theme": "arcade-8bit",
+    "accent": "#ff7a00",
+    "font": "mono",
+    "header": "gradient",
+    "textures": true,
+    "borders": "square",
+    "decoration": 2
+  },
+  "professional": { "theme": "swing-nimbus", "accent": null, "font": null,
+    "header": "clean", "textures": false, "borders": "rounded", "decoration": 1 }
+}
+```
+
+- `theme` precisa existir em `ThemeIds.ALL` (`400 INVALID_PROFILE_THEME`); `accent` é `#rrggbb`
+  (`400 INVALID_PROFILE_ACCENT`); `font`, `header` e `borders` vêm de listas fechadas e `decoration`
+  vai de 0 a 2 (`400 INVALID_PROFILE_APPEARANCE`). Nulo em qualquer campo significa "não escolheu".
+- `{}` limpa os dois lados; a página volta a usar o tema da plataforma.
+- Exige sessão (é escrita no próprio perfil) e aceita `Idempotency-Key`.
+- O documento fica em `users.profile_appearance` (`V238`), um JSON anulável; leitura tolera chave
+  desconhecida e documento corrompido (vira "não escolheu", nunca 500).
+- `GET /api/me` devolve `profileAppearance` (os dois lados, só para o dono). `GET /api/users/{username}`
+  devolve `profileLook` com o lado social e a página corporativa devolve `profileLook` com o
+  profissional — o visitante nunca vê a escolha do outro lado.
+
 ---
 
 ## Feed
