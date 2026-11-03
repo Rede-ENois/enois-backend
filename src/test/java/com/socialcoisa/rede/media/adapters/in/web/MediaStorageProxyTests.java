@@ -79,6 +79,7 @@ class MediaStorageProxyTests {
 		String ultimoRange;
 		String chaveEscrita;
 		byte[] escrito;
+		boolean falharEscrita;
 
 		@Override
 		public StoredObject read(String key, String range) {
@@ -90,6 +91,9 @@ class MediaStorageProxyTests {
 
 		@Override
 		public void write(String key, String contentType, long length, InputStream body) {
+			if (falharEscrita) {
+				throw new IllegalStateException("bucket indisponivel");
+			}
 			try {
 				this.chaveEscrita = key;
 				this.escrito = body.readAllBytes();
@@ -251,5 +255,34 @@ class MediaStorageProxyTests {
 
 		assertThat(store().chaveEscrita).isEqualTo(objectKey);
 		assertThat(store().escrito).isEqualTo(foto);
+	}
+
+	@Test
+	void falhaDoBucketVira503ComCodigoProprioEmVezDeErroInterno() throws Exception {
+		var dono = auth.authenticate("media_proxy_storage_down");
+		var criado = mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", dono.token())
+				.header("Idempotency-Key", "media-proxy-storage-down-1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("fileName", "foto.jpg",
+					"mimeType", "image/jpeg", "size", 1024, "purpose", "POST_IMAGE"))))
+			.andExpect(status().isCreated())
+			.andReturn();
+
+		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
+			.path("objectKey").asText();
+
+		store().falharEscrita = true;
+		try {
+			mockMvc.perform(put("/storage/" + objectKey)
+					.header("X-Session-Token", dono.token())
+					.contentType(MediaType.IMAGE_JPEG)
+					.content(new byte[1024]))
+				.andExpect(status().isServiceUnavailable())
+				.andExpect(jsonPath("$.code").value("STORAGE_UNAVAILABLE"));
+		}
+		finally {
+			store().falharEscrita = false;
+		}
 	}
 }

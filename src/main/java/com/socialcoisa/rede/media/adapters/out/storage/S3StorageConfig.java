@@ -2,6 +2,8 @@ package com.socialcoisa.rede.media.adapters.out.storage;
 
 import java.net.URI;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -38,6 +40,8 @@ import com.socialcoisa.rede.media.application.port.out.StorageUrlFactory;
 @ConditionalOnProperty(name = "rede.media.storage", havingValue = "s3")
 class S3StorageConfig {
 
+	private static final Logger LOG = LoggerFactory.getLogger(S3StorageConfig.class);
+
 	@Bean
 	StorageUrlFactory s3StorageUrlFactory(S3Properties props) {
 		return new S3StorageUrlFactory(props.getBucket(), props.getRegion(), props.getPrefix(),
@@ -59,14 +63,26 @@ class S3StorageConfig {
 	@Bean
 	MediaUploadSigner mediaUploadSigner(S3Presigner presigner, S3Properties props,
 			@org.springframework.beans.factory.annotation.Value("${rede.media.nsfw.enabled:true}") boolean moderationEnabled) {
-		if (moderationEnabled && !props.uploadThroughApi()) {
-			throw new IllegalStateException(
-				"A moderação de imagens exige REDE_MEDIA_S3_UPLOAD_THROUGH_API=true.");
+		// A verificação de imagem acontece no `PUT /api/storage/{chave}`, antes de o objeto chegar
+		// ao bucket. Com `upload-through-api=false` o navegador sobe direto no S3 e a checagem
+		// seria pulada. Antes isso derrubava o contexto inteiro; uma variável de ambiente errada
+		// virava indisponibilidade total. O caminho seguro é forçar a subida pelo app e avisar.
+		boolean throughApi = props.uploadThroughApi();
+		if (moderationEnabled && !throughApi) {
+			LOG.warn("rede.media.s3.upload-through-api=false com moderação de imagens ativa; "
+				+ "forçando a subida pelo app para que a verificação aconteça.");
+			throughApi = true;
+		}
+		if (moderationEnabled && !StringUtils.hasText(props.getPublicBaseUrl())) {
+			// Sem a base pública não há como devolver a URL do proxy e a moderação pré-storage
+			// ficaria inacessível. A varredura pós-publicação continua como rede de segurança.
+			LOG.warn("rede.media.s3.public-base-url vazio com moderação de imagens ativa; "
+				+ "a subida pode ir direto ao bucket e pular a verificação pré-storage.");
 		}
 		// Gateway S3-compativel (endpoint configurado) normalmente nao responde CORS: o navegador
 		// nao consegue fazer o PUT assinado direto no bucket. Nesse caso a subida passa pelo
 		// proprio app (`PUT /api/storage/{chave}`), que e a mesma origem da API.
-		return new S3UploadSigner(presigner, props.getBucket(), props.uploadThroughApi() ? props.getPublicBaseUrl() : null);
+		return new S3UploadSigner(presigner, props.getBucket(), throughApi ? props.getPublicBaseUrl() : null);
 	}
 
 	@Bean

@@ -1,9 +1,12 @@
 package com.socialcoisa.rede.media.adapters.in.web;
 
+import java.io.InputStream;
 import java.util.Map;
 
 import jakarta.servlet.http.HttpServletRequest;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -37,6 +40,8 @@ import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 @RestController
 @RequestMapping("/storage")
 class MediaStorageProxyController {
+
+	private static final Logger LOG = LoggerFactory.getLogger(MediaStorageProxyController.class);
 
 	/** Vazio quando o storage e o ImageKit (nao ha bucket para servir). */
 	private final ObjectProvider<MediaObjectStore> storeProvider;
@@ -151,7 +156,7 @@ class MediaStorageProxyController {
 				java.nio.file.Path sanitized = sanitizer.sanitizeToFile(request.getInputStream(), mime, objectKey);
 				try {
 					try (var body = java.nio.file.Files.newInputStream(sanitized)) {
-						store().write(objectKey, mime, java.nio.file.Files.size(sanitized), body);
+						writeToStore(objectKey, mime, java.nio.file.Files.size(sanitized), body);
 					}
 				}
 				finally {
@@ -163,13 +168,30 @@ class MediaStorageProxyController {
 				// LIMPEZA NA ESCRITA: EXIF/GPS/XMP/IPTC não chegam ao bucket.
 				byte[] clean = sanitizer.sanitize(raw, mime, objectKey);
 				imageModeration.verifyBeforeStorage(clean, mime);
-				store().write(objectKey, mime, clean.length, new java.io.ByteArrayInputStream(clean));
+				writeToStore(objectKey, mime, clean.length, new java.io.ByteArrayInputStream(clean));
 			}
 		}
 		catch (java.io.IOException failure) {
 			throw new ApiException(400, "MEDIA_UPLOAD_FAILED", "Nao foi possivel ler o arquivo enviado.");
 		}
 		return ResponseEntity.ok(Map.of("status", "STORED", "objectKey", objectKey));
+	}
+
+	/**
+	 * A falha do bucket (fora do ar, credencial sem permissão, gateway recusando) é do servidor:
+	 * vira 503 com código próprio em vez de 500 genérico. O cliente sabe que pode tentar de novo e
+	 * o log identifica a chave/tipo sem expor a credencial.
+	 */
+	private void writeToStore(String objectKey, String mime, long length, InputStream body) {
+		try {
+			store().write(objectKey, mime, length, body);
+		}
+		catch (RuntimeException failure) {
+			LOG.error("media_storage_write_failed objectKey={} mime={} bytes={} error={}", objectKey, mime, length,
+				failure.getClass().getSimpleName());
+			throw new ApiException(503, "STORAGE_UNAVAILABLE",
+				"O armazenamento de mídia está indisponível no momento. Tente novamente em instantes.");
+		}
 	}
 
 	/** O `{*key}` chega com a barra inicial; devolvemos o caminho relativo ao bucket. */
