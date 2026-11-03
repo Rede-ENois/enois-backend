@@ -646,6 +646,20 @@ encontros não online (`IN_PERSON`, `HYBRID`) daquele lugar, com a cidade compar
 `limit`. Uma busca em branco mantém a listagem sem filtro. Os caracteres `%`, `_` e `!` são
 tratados como texto literal, assim como na busca de mentorias.
 
+## Feed RSS/Atom do blog
+
+`GET /api/blogs/{slug}/feed.xml` devolve o feed Atom 1.0 de um blog (`application/atom+xml`), um
+feed por blog, para quem acompanha por um leitor de RSS. É público e **não exige sessão nem
+`Origin`** (leitor de RSS não é navegador); as demais rotas de dados do blog continuam exigindo
+origem. Mesmas regras de visibilidade da página do blog: conta banida ou título suspeito = `404
+BLOG_NOT_FOUND`.
+
+- Os 20 posts mais recentes, cada um com título, link para `/blog/{slug}/{postId}`, datas e um
+  **resumo em texto puro** (até 300 caracteres). O corpo completo não vai no feed: ele pode ser
+  HTML de tema próprio e o leitor é um cliente que não controlamos.
+- Os links usam `rede.frontend.url` (`FRONTEND_URL`) como base.
+- Resposta com `Cache-Control: public, max-age=300`.
+
 ## Mentoria
 
 | Método | Rota | Descrição | Autenticação |

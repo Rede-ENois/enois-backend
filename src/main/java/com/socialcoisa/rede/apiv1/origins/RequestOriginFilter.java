@@ -276,8 +276,20 @@ class RequestOriginFilter extends OncePerRequestFilter {
 		if (path.equals("/auth/email/change/confirm") && "GET".equalsIgnoreCase(method)) {
 			return true;
 		}
+		// Feed RSS/Atom do blog: o leitor de RSS e um cliente sem navegador, logo sem Origin. So a
+		// leitura do feed abre (GET/HEAD, `/blogs/{slug}/feed.xml`); as rotas de DADOS do blog seguem
+		// exigindo origem.
+		if (("GET".equalsIgnoreCase(method) || "HEAD".equalsIgnoreCase(method)) && isBlogFeedPath(path)) {
+			return true;
+		}
 		// Links de descadastro (newsletter do blog e resumo semanal): clique no cliente de e-mail.
 		return path.equals("/blogs/descadastrar") || path.equals("/notifications/digest/unsubscribe");
+	}
+
+	private static boolean isBlogFeedPath(String path) {
+		String[] parts = path.split("/", -1);
+		return parts.length == 4 && parts[0].isEmpty() && parts[1].equals("blogs") && !parts[2].isEmpty()
+			&& parts[3].equals("feed.xml");
 	}
 
 	/** Rotas do painel: somente a origem confiável do frontend. */
