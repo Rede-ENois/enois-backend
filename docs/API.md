@@ -858,9 +858,10 @@ A resposta será cacheadada e reutilizada se a mesma chave for reenviada.
 | Method | Route | Description | Authentication |
 |---|---|---|---|
 | GET | `/api/loja?order=oldest\|newest` | The shop of the day: items on sale (collections in season, classics and the permanent one); with a session, also what the person owns (default `oldest`) | No; with a session, adds `owned` and `equipped` |
-| GET | `/api/loja/colecoes` | Collections in season, their sale windows and ready-made looks | No |
+| GET | `/api/loja/colecoes` | Collections in season, their sale windows and ready-made looks | No; with a session, each look also carries `owned` (every piece is the person's) and `equipped` |
 | POST | `/api/loja/{itemId}/comprar` | Buy one item | Yes |
 | POST | `/api/loja/looks/{lookId}/comprar` | Buy the missing pieces of a look and wear it | Yes |
+| POST | `/api/loja/looks/{lookId}/equipar` / `.../desequipar` | Wear / take off a look the person already owns (`403 NOT_OWNED` without every piece); taking it off clears only the slots still holding the look's own pieces and its status | Yes |
 | POST | `/api/loja/{itemId}/equipar` / `.../desequipar` | Equip / unequip an owned item (`none` unequips the frame) | Yes |
 | PUT | `/api/me/status` | Status bubble `{ text, icon }` | Yes |
 | PUT | `/api/cosmetics/profile/name-style` | Name theme (free preset or owned `NAME_STYLE` id), font, color | Yes |
