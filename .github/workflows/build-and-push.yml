@@ -215,6 +215,11 @@ jobs:
       needs.build-and-push.outputs.branch == 'qa' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: [self-hosted, enois, docker-prod4]
+    # Dois pushes em sequência não podem trocar o container um por cima do outro.
+    concurrency:
+      group: deploy-qa
+      cancel-in-progress: false
+    timeout-minutes: 20
     steps:
       - name: 🚢 Recriar container via Portainer API
         env:
@@ -297,17 +302,111 @@ jobs:
           set -euo pipefail
           API="${PORTAINER_BASE_URL}/api/endpoints/${PORTAINER_ENDPOINT_ID}/docker"
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
+          NEW_NAME="${CONTAINER_NAME}-new"
+          PREV_NAME="${CONTAINER_NAME}-previous"
+          IMG_PATH="${IMAGE_REF%:*}"
+          IMG_TAG="${IMAGE_REF##*:}"
 
+          # Chamada ao proxy Docker do Portainer: imprime o corpo só quando dá certo e, quando
+          # falha, mostra status + começo do corpo (sem despejar o progresso inteiro do pull).
+          call() {
+            local method="$1" path="$2" out status
+            shift 2
+            out="$(mktemp)"
+            status="$(curl -sS -o "${out}" -w '%{http_code}' --connect-timeout 10 --max-time 60 \
+              -X "${method}" "${AUTH[@]}" "$@" "${API}${path}")" || status="000"
+            if [[ "${status}" != 2* ]]; then
+              echo "!! ${method} ${path} -> HTTP ${status}" >&2
+              head -c 600 "${out}" >&2 || true
+              echo >&2
+              rm -f "${out}"
+              return 1
+            fi
+            cat "${out}"
+            rm -f "${out}"
+          }
+
+          status_of() {
+            local method="$1" path="$2"
+            shift 2
+            curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 60 \
+              -X "${method}" "${AUTH[@]}" "$@" "${API}${path}" 2>/dev/null || echo 000
+          }
+
+          # 1) Espaço no Docker do host. Cada deploy baixa uma imagem nova de backend e a antiga
+          #    fica para sempre; a poda do Harbor limpa o REGISTRO, não o disco desta máquina, e
+          #    o runner não tem docker.sock — daí a limpeza passar pelo proxy do Portainer.
+          if call GET /system/df > /tmp/enois-df.json 2>/dev/null; then
+            python3 - <<'PY'
+          import json
+          d = json.load(open("/tmp/enois-df.json"))
+          def mb(n): return f"{(n or 0) / 1048576:.0f} MB"
+          imgs = sum((i.get("Size") or 0) - (i.get("SharedSize") or 0) for i in d.get("Images") or [])
+          vols = sum(((v.get("UsageData") or {}).get("Size") or 0) for v in d.get("Volumes") or [])
+          print(f"==> Docker do host: imagens ~{mb(imgs)} | volumes ~{mb(vols)}")
+          PY
+          else
+            echo "::warning::não consegui ler o uso de disco do Docker (segue o deploy)"
+          fi
+
+          # Só builds de QA aposentados: `main` é o deploy de produção (e o Docker buscaria a
+          # tag de novo no próximo deploy), e uma imagem em uso nunca deve ser apagada.
+          echo "==> Removendo imagens aposentadas de ${IMAGE_NAME}:qa-* (a deste build fica)"
+          if call GET /images/json > /tmp/enois-images.json 2>/dev/null; then
+            python3 - "${IMAGE_REF}" "${IMG_PATH}:qa-" > /tmp/enois-old-tags.txt <<'PY'
+          import json, sys
+          current, prefix = sys.argv[1], sys.argv[2]
+          for img in json.load(open("/tmp/enois-images.json")):
+              if (img.get("Containers") or 0) > 0:
+                  continue
+              for tag in img.get("RepoTags") or []:
+                  if tag.startswith(prefix) and tag != current:
+                      print(tag)
+          PY
+            removed=0
+            kept=0
+            while IFS= read -r tag; do
+              [[ -z "${tag}" ]] && continue
+              if status_of DELETE "/images/${tag}?force=0&noprune=1" | grep -qE '^2'; then
+                removed=$((removed + 1))
+                echo "   removida: ${tag#*/}"
+              else
+                kept=$((kept + 1))
+              fi
+            done < /tmp/enois-old-tags.txt
+            echo "==> ${removed} tag(s) removida(s), ${kept} ainda em uso"
+          else
+            echo "::warning::não consegui listar as imagens (segue o deploy)"
+          fi
+
+          # 2) Pull ANTES de mexer no que está no ar. O Docker devolve 200 mesmo quando a extração
+          #    falha no meio do stream, então o erro é procurado no corpo — sem isso o passo
+          #    seguia, parava e apagava o container bom para depois falhar no create.
           echo "==> Pull ${IMAGE_REF}"
           ENCODED_IMAGE=$(python3 -c "import urllib.parse,os;print(urllib.parse.quote(os.environ['IMAGE_REF'].rsplit(':',1)[0]))")
-          TAG=$(echo "${IMAGE_REF}" | rev | cut -d: -f1 | rev)
           # projeto 'enois' e privado no Harbor -> precisa de X-Registry-Auth no pull via Portainer
           REGISTRY_AUTH=$(python3 -c "import json,base64,os;print(base64.b64encode(json.dumps({'username':os.environ['HARBOR_USER'],'password':os.environ['HARBOR_PASSWORD'],'serveraddress':'${HARBOR_REGISTRY}'}).encode()).decode())")
-          curl -sf -X POST "${AUTH[@]}" -H "X-Registry-Auth: ${REGISTRY_AUTH}" "${API}/images/create?fromImage=${ENCODED_IMAGE}&tag=${TAG}"
+          PULL_OUT=$(mktemp)
+          PULL_STATUS=$(curl -sS -o "${PULL_OUT}" -w '%{http_code}' --connect-timeout 10 --max-time 600 \
+            -X POST "${AUTH[@]}" -H "X-Registry-Auth: ${REGISTRY_AUTH}" \
+            "${API}/images/create?fromImage=${ENCODED_IMAGE}&tag=${IMG_TAG}") || PULL_STATUS="000"
+          if [[ "${PULL_STATUS}" != 2* ]] || grep -q '"error"' "${PULL_OUT}"; then
+            echo "!! pull falhou (HTTP ${PULL_STATUS})"
+            tail -c 800 "${PULL_OUT}" | tr -d '\r'
+            echo
+            echo "==> O container atual NÃO foi tocado."
+            rm -f "${PULL_OUT}"
+            exit 1
+          fi
+          tail -c 200 "${PULL_OUT}" | tr -d '\r'
+          echo
+          rm -f "${PULL_OUT}"
 
-          echo "==> Stop + remove container antigo (ignora erro se não existir)"
-          curl -s -X POST "${AUTH[@]}" "${API}/containers/${CONTAINER_NAME}/stop" || true
-          curl -s -X DELETE "${AUTH[@]}" "${API}/containers/${CONTAINER_NAME}?v=1" || true
+          # 3) Cria o novo SEM parar o atual: a porta só é disputada no start, então uma falha
+          #    aqui deixa o container que está servindo intacto.
+          echo "==> Criando ${NEW_NAME} (o atual segue no ar)"
+          status_of DELETE "/containers/${NEW_NAME}?force=1" >/dev/null || true
+          status_of DELETE "/containers/${PREV_NAME}?force=1" >/dev/null || true
 
           echo "==> Criar container novo"
           # Memoria do container da QA: host vmi935062 tem 7.76GB e e COMPARTILHADO com outros
@@ -392,11 +491,70 @@ jobs:
             }
           }
           EOF
-          curl -sf -X POST "${AUTH[@]}" -H "Content-Type: application/json" \
-            "${API}/containers/create?name=${CONTAINER_NAME}" -d @"$DEPLOY_JSON"
 
-          echo "==> Start"
-          curl -sf -X POST "${AUTH[@]}" "${API}/containers/${CONTAINER_NAME}/start"
+          if ! call POST "/containers/create?name=${NEW_NAME}" \
+              -H "Content-Type: application/json" -d @"$DEPLOY_JSON" > /tmp/enois-create.json; then
+            echo "==> O container atual NÃO foi tocado."
+            exit 1
+          fi
+          echo "   criado: $(python3 -c 'import json;print(json.load(open("/tmp/enois-create.json")).get("Id","?")[:12])')"
+
+          # 4) Troca: para o atual, guarda como `-previous` e promove o novo. Qualquer falha
+          #    devolve o anterior ao nome original e o sobe de novo.
+          echo "==> Trocando para o novo"
+          STOP_STATUS=$(status_of POST "/containers/${CONTAINER_NAME}/stop?t=20")
+          case "${STOP_STATUS}" in
+            204|304|404) ;;
+            *)
+              echo "!! não consegui parar ${CONTAINER_NAME} (HTTP ${STOP_STATUS}); nada foi trocado"
+              status_of DELETE "/containers/${NEW_NAME}?force=1" >/dev/null || true
+              exit 1
+              ;;
+          esac
+
+          PREV_SAVED=0
+          RENAME_STATUS=$(status_of POST "/containers/${CONTAINER_NAME}/rename?name=${PREV_NAME}")
+          case "${RENAME_STATUS}" in
+            204) PREV_SAVED=1 ;;
+            404) echo "   (não havia container anterior)" ;;
+            *)
+              echo "!! não consegui renomear o container atual (HTTP ${RENAME_STATUS})"
+              status_of POST "/containers/${CONTAINER_NAME}/start" >/dev/null || true
+              status_of DELETE "/containers/${NEW_NAME}?force=1" >/dev/null || true
+              exit 1
+              ;;
+          esac
+
+          restaurar() {
+            echo "==> Rollback: devolvendo ${PREV_NAME} para ${CONTAINER_NAME}"
+            status_of DELETE "/containers/${CONTAINER_NAME}?force=1" >/dev/null || true
+            status_of POST "/containers/${PREV_NAME}/rename?name=${CONTAINER_NAME}" >/dev/null || true
+            status_of POST "/containers/${CONTAINER_NAME}/start" >/dev/null || true
+          }
+
+          if [[ "$(status_of POST "/containers/${NEW_NAME}/rename?name=${CONTAINER_NAME}")" != "204" ]]; then
+            echo "!! não consegui promover o novo container"
+            if [[ ${PREV_SAVED} -eq 1 ]]; then
+              restaurar
+            fi
+            exit 1
+          fi
+
+          START_STATUS=$(status_of POST "/containers/${CONTAINER_NAME}/start")
+          case "${START_STATUS}" in
+            204|304) ;;
+            *)
+              echo "!! start do novo container falhou (HTTP ${START_STATUS})"
+              if [[ ${PREV_SAVED} -eq 1 ]]; then
+                restaurar
+              fi
+              exit 1
+              ;;
+          esac
+          echo "==> Container novo no ar com ${IMAGE_REF}"
+          if [[ ${PREV_SAVED} -eq 1 ]]; then
+            echo "   anterior guardado como ${PREV_NAME} até o health check"
+          fi
 
       - name: 🩺 Health check
         env:
@@ -406,10 +564,21 @@ jobs:
           # Boot do Spring (Flyway + Hibernate + Tomcat) na QA roda com lazy-initialization=false e
           # ainda carrega as vagas externas na subida: 75s era curto demais e um boot lento
           # aparecia como deploy quebrado. 30 tentativas de 10s = 5min.
+          API="${PORTAINER_BASE_URL}/api/endpoints/${PORTAINER_ENDPOINT_ID}/docker"
+          AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
+          status_of() {
+            local method="$1" path="$2"
+            shift 2
+            curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 60 \
+              -X "${method}" "${AUTH[@]}" "$@" "${API}${path}" 2>/dev/null || echo 000
+          }
+
           URL=https://enois-api-qa.b7cloud.tech/health
           for i in $(seq 1 30); do
             if curl -sf --max-time 10 "$URL"; then
               echo "OK na tentativa $i"
+              # Subiu: o container anterior guardado deixa de ser necessário.
+              status_of DELETE "/containers/${CONTAINER_NAME}-previous?force=1" >/dev/null || true
               exit 0
             fi
             echo "tentativa $i falhou, aguardando..."
@@ -418,8 +587,6 @@ jobs:
 
           # Ate aqui o deploy falhava "mudo": o CI nao dizia POR QUE o container nao respondeu.
           # O proprio Portainer (endpoint 8 = docker-prod4) tem o estado e o log do container.
-          API="${PORTAINER_BASE_URL}/api/endpoints/${PORTAINER_ENDPOINT_ID}/docker"
-          AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}")
           echo "=== estado do ${CONTAINER_NAME} ==="
           curl -s --max-time 20 "${AUTH[@]}" "${API}/containers/${CONTAINER_NAME}/json" \
             | tr ',' '\n' | grep -E '"(Status|Running|ExitCode|RestartCount|OOMKilled|StartedAt|FinishedAt)"' | head -20
@@ -427,6 +594,14 @@ jobs:
           curl -s --max-time 30 "${AUTH[@]}" \
             "${API}/containers/${CONTAINER_NAME}/logs?tail=200&stdout=1&stderr=1" \
             | tr -cd '\11\12\15\40-\176' | tail -n 120
+
+          # O novo não subiu: devolve o anterior ao nome original em vez de deixar a QA fora.
+          if [[ "$(status_of GET "/containers/${CONTAINER_NAME}-previous/json")" == "200" ]]; then
+            echo "=== rollback para o container anterior ==="
+            status_of DELETE "/containers/${CONTAINER_NAME}?force=1" >/dev/null || true
+            status_of POST "/containers/${CONTAINER_NAME}-previous/rename?name=${CONTAINER_NAME}" >/dev/null || true
+            status_of POST "/containers/${CONTAINER_NAME}/start" >/dev/null || true
+          fi
           echo "health check nao respondeu apos 300s"
           exit 1
 
