@@ -34,9 +34,19 @@ public class NotificationService {
 	@Transactional
 	public Notification create(String userId, String kind, String actorId, String title, String body, String href,
 			String ctaLabel) {
+		return create(userId, kind, actorId, title, body, href, ctaLabel, null);
+	}
+
+	/**
+	 * Como {@link #create}, com {@code preview}: o trecho do post/comentário de origem que a lista
+	 * mostra abaixo do corpo (issue #392). Nulo nas notificações que não têm conteúdo para citar.
+	 */
+	@Transactional
+	public Notification create(String userId, String kind, String actorId, String title, String body, String href,
+			String ctaLabel, String preview) {
 		String id = "notification_" + UUID.randomUUID().toString().replace("-", "");
 		Notification notification = Notification.create(id, userId, kind, actorId, title, body, href, ctaLabel,
-			clock.instant());
+			preview, clock.instant());
 		repository.save(notification);
 		// Quem entrega fora do app (push no celular) escuta este evento depois do commit.
 		events.publishEvent(new NotificationCreatedEvent(id, userId, kind, title, body, href));
@@ -54,6 +64,15 @@ public class NotificationService {
 	public Notification createGrouped(String userId, String kind, String groupKey, String actorId, String title,
 			String body, java.util.function.IntFunction<String> groupedBody, String href, String groupedHref,
 			String ctaLabel) {
+		return createGrouped(userId, kind, groupKey, actorId, title, body, groupedBody, href, groupedHref, ctaLabel,
+			null);
+	}
+
+	/** Como {@link #createGrouped}, com o trecho do conteúdo de origem (issue #392). */
+	@Transactional
+	public Notification createGrouped(String userId, String kind, String groupKey, String actorId, String title,
+			String body, java.util.function.IntFunction<String> groupedBody, String href, String groupedHref,
+			String ctaLabel, String preview) {
 		var unread = repository.findUnreadGroup(userId, groupKey);
 		if (unread.isPresent()) {
 			Notification current = unread.get();
@@ -63,7 +82,7 @@ public class NotificationService {
 			repository.save(joined);
 			return joined;
 		}
-		return createFirstOfGroup(userId, kind, groupKey, actorId, title, body, href, ctaLabel);
+		return createFirstOfGroup(userId, kind, groupKey, actorId, title, body, href, ctaLabel, null, preview);
 	}
 
 	/**
@@ -117,9 +136,14 @@ public class NotificationService {
 
 	private Notification createFirstOfGroup(String userId, String kind, String groupKey, String actorId,
 			String title, String body, String href, String ctaLabel, String pushTag) {
+		return createFirstOfGroup(userId, kind, groupKey, actorId, title, body, href, ctaLabel, pushTag, null);
+	}
+
+	private Notification createFirstOfGroup(String userId, String kind, String groupKey, String actorId,
+			String title, String body, String href, String ctaLabel, String pushTag, String preview) {
 		String id = "notification_" + UUID.randomUUID().toString().replace("-", "");
 		Notification notification = Notification.grouped(id, userId, kind, groupKey, actorId, title, body, href,
-			ctaLabel, clock.instant());
+			ctaLabel, preview, clock.instant());
 		repository.save(notification);
 		events.publishEvent(new NotificationCreatedEvent(id, userId, kind, title, body, href, pushTag));
 		return notification;

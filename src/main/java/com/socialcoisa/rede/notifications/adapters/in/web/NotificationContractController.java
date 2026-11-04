@@ -98,7 +98,7 @@ class NotificationContractController {
 					pro != null ? (pro.avatar() == null ? "" : pro.avatar()) : p != null ? p.avatar() : null,
 					pro != null ? "CORPORATE" : "SOCIAL",
 					pro == null && p != null ? NameStyleView.from(p) : null,
-					n.title(), n.body(),
+					n.title(), n.body(), n.preview(),
 					n.createdAt() != null ? n.createdAt().toString() : null,
 					n.isRead(), n.href(), n.ctaLabel(), n.actorCount(), target.place(),
 					target.eventDate() != null ? target.eventDate().toString() : null);
@@ -160,7 +160,7 @@ class NotificationContractController {
 	 */
 	record NotificationView(String id, String kind, String context, String module, String actorId, String actorName,
 			String actorUsername, String actorAvatar, String actorIdentity, NameStyleView actorStyle, String title,
-			String body, String createdAt, boolean read, String href, String ctaLabel, int actorCount,
+			String body, String preview, String createdAt, boolean read, String href, String ctaLabel, int actorCount,
 			NotificationPlace place, String eventDate) {
 	}
 

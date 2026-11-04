@@ -56,7 +56,7 @@ class NotificationOutboxEventHandler implements OutboxEventHandler {
 			.map(p -> p.name()).orElse("Alguém");
 		notificationService.create(post.authorId().value(), "NEW_COMMENT", authorId,
 			"Novo comentário", actorName + " comentou no seu post.",
-			"/api/feed/posts/" + postId, "Ver");
+			"/api/feed/posts/" + postId, "Ver", previewOfComment(extractValue(payload, "commentId"), post));
 	}
 
 	private void handlePostReacted(String payload) {
@@ -72,7 +72,7 @@ class NotificationOutboxEventHandler implements OutboxEventHandler {
 			authorId, "Nova reação", actorName + " reagiu ao seu post.",
 			count -> othersReacted(actorName, count, "ao seu post"), "/api/feed/posts/" + postId,
 			// Several people: the post opens with the list of who reacted, one by one.
-			"/api/feed/posts/" + postId + "?reacoes=1", "Ver");
+			"/api/feed/posts/" + postId + "?reacoes=1", "Ver", NotificationPreview.of(post.content()));
 	}
 
 	private void handleCommentReacted(String payload) {
@@ -89,7 +89,24 @@ class NotificationOutboxEventHandler implements OutboxEventHandler {
 			"COMMENT_REACTION:comment:" + commentId, authorId, "Reação no comentário",
 			actorName + " reagiu ao seu comentário.", count -> othersReacted(actorName, count, "ao seu comentário"),
 			postId != null ? "/api/feed/posts/" + postId : null, postId != null ? "/api/feed/posts/" + postId : null,
-			"Ver");
+			"Ver", NotificationPreview.of(comment.content()));
+	}
+
+	/**
+	 * Prévia do comentário que gerou o aviso. Cai para o texto do post quando o comentário é só
+	 * mídia (áudio, imagem), e fica nula quando não sobra texto nenhum.
+	 */
+	private String previewOfComment(String commentId, Post post) {
+		if (commentId != null) {
+			Comment comment = commentRepository.findById(commentId).orElse(null);
+			if (comment != null) {
+				String preview = NotificationPreview.of(comment.content());
+				if (preview != null) {
+					return preview;
+				}
+			}
+		}
+		return NotificationPreview.of(post.content());
 	}
 
 	/** "Ana e mais 1 pessoa reagiram ao seu post." / "Ana e mais 14 pessoas reagiram ao seu post." */
