@@ -77,7 +77,11 @@ com comando livre ali entrega essas credenciais para qualquer comando. Este work
 
 ## Limites
 
-- 20 minutos por execução.
+- 20 minutos por execução (teto do job); o comando em si tem **10 minutos** (600 s). O que passar
+  disso não é interrompido no host — o container é removido logo depois, e o log avisa que a saída
+  está incompleta.
+- Saída com teto de **2 MiB**. Passou disso, o log avisa que cortou. Para ler muito texto, redirecione
+  para arquivo no host e traga só o trecho que interessa (`tail -c 200000`, `grep`).
 - Sem TTY de verdade: prefira comandos que terminam sozinhos (`journalctl --no-pager`, `tail -n`,
   `docker logs -n`). `top` e `vim` não funcionam; `ps`, `df`, `du`, `free` funcionam.
 - Comando que reinicia serviços de rede pode cortar a própria saída; rode em dois passos (descobrir,

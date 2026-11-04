@@ -229,6 +229,12 @@ jobs:
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
           COMANDO: ${{ github.event.inputs.comando }}
           SIGILOSO: ${{ inputs.sigiloso }}
+          # Tempo de parede do comando. Todo comando que tem a saida esperada pelo operador cabe
+          # aqui; o que passar e tratado como "nao terminou", com aviso no log.
+          LIMITE_SEGUNDOS: "600"
+          # Teto de saida. Docker em portugues, log rotativo gigante e `tar` de diretorio inteiro
+          # estouram isso rapido, e o excesso vira aviso em vez de arquivo no runner.
+          LIMITE_BYTES: "2097152"
         run: |
           set -uo pipefail
           API="${{ steps.abrir.outputs.api }}"
@@ -249,19 +255,72 @@ jobs:
             exit 1
           fi
 
-          # O stream do Docker e multiplexado: cabecalho de 8 bytes (tipo + tamanho) por quadro.
-          # A saida vai para arquivo local primeiro (some com o runner no fim do job); o log publico
-          # so a recebe quando `sigiloso` esta desligado.
           SAIDA="$RUNNER_TEMP/saida.txt"
+          DESCOD="$RUNNER_TEMP/saida.decodificada"
+          ERRO="$RUNNER_TEMP/transporte.err"
+
+          # Nada de sair daqui sem apagar os arquivos: se a run for cancelada no meio, a saida (que no
+          # modo sigiloso e justamente a que nao pode ficar guardada) nao fica para tras.
+          limpar() {
+            rm -f "$SAIDA" "$SAIDA.corte" "$DESCOD" "$ERRO" "${FIFO:-}"
+          }
+          trap limpar EXIT
+          trap 'exit 130' INT TERM
+
+          # O comando roda no container, nao no runner: o runner nunca o encerra, so para de olhar.
+          # O relogio medido aqui e tempo de parede; o que passar do limite e reportado como nao
+          # concluido, e o container e removido logo depois.
+          INICIO=$(date +%s)
+
+          # `decodificar.py` precisa ler o stream inteiro e o curl precisa ser o processo filho
+          # direto desta shell (para o `wait` valer). Por isso um FIFO: o curl escreve nele, o
+          # decodificador le, e os dois sao esperados com pid.
+          FIFO="$RUNNER_TEMP/stream.fifo"
+          mkfifo "$FIFO"
+          : > "$DESCOD"
+          python3 "$AUX/decodificar.py" < "$FIFO" > "$DESCOD" &
+          FILA=$!
           curl -sS --no-buffer "${HDR[@]}" -H "Content-Type: application/json" \
             -X POST "${API}/exec/${ID_EXEC}/start" -d '{"Detach":false,"Tty":false}' \
-            > "$SAIDA" 2> "$RUNNER_TEMP/transporte.err" || true
-          python3 "$AUX/decodificar.py" < "$SAIDA" > "$SAIDA.txt" || true
-          mv "$SAIDA.txt" "$SAIDA"
-          [ -s "$RUNNER_TEMP/transporte.err" ] && cat "$RUNNER_TEMP/transporte.err"
+            > "$FIFO" 2> "$ERRO" &
+          CURL=$!
+
+          # Enquanto o comando roda: nenhum dos dois passa do teto. Sai do laco quando o curl acaba
+          # (o decodificador ainda drena o que sobrou no FIFO).
+          while kill -0 "$CURL" 2>/dev/null; do
+            if [ $(( $(date +%s) - INICIO )) -ge "${LIMITE_SEGUNDOS}" ]; then
+              kill "$CURL" 2>/dev/null || true
+              echo "estourou" > "$RUNNER_TEMP/limite"
+              break
+            fi
+            if [ "$(wc -c < "$DESCOD" | tr -d ' ')" -ge "${LIMITE_BYTES}" ]; then
+              kill "$CURL" 2>/dev/null || true
+              echo "truncou" > "$RUNNER_TEMP/limite"
+              break
+            fi
+            sleep 1
+          done
+          wait "$CURL" 2>/dev/null || true
+          wait "$FILA" 2>/dev/null || true
+          rm -f "$FIFO"
+          [ -f "$DESCOD" ] && mv "$DESCOD" "$SAIDA"
+          [ -s "$ERRO" ] && cat "$ERRO"
+          # O decodificador leu ate o fim: se o que saiu dele passa do teto, corta aqui e avisa.
+          TAMANHO=$(wc -c < "$SAIDA" | tr -d ' ')
+          if [ "$TAMANHO" -gt "${LIMITE_BYTES}" ]; then
+            head -c "${LIMITE_BYTES}" "$SAIDA" > "$SAIDA.corte"
+            mv "$SAIDA.corte" "$SAIDA"
+            TAMANHO=${LIMITE_BYTES}
+            echo "truncou" > "$RUNNER_TEMP/limite"
+          fi
+          if [ -f "$RUNNER_TEMP/limite" ] && [ "$(cat "$RUNNER_TEMP/limite")" = "estourou" ]; then
+            echo "::warning::o comando passou de ${LIMITE_SEGUNDOS} s e a saida acima esta incompleta; pode ainda estar rodando no host"
+          elif [ -f "$RUNNER_TEMP/limite" ]; then
+            echo "::warning::saida cortada em ${LIMITE_BYTES} bytes; a saida acima esta incompleta"
+          fi
+          rm -f "$RUNNER_TEMP/limite"
 
           if [ "${SIGILOSO}" = "true" ]; then
-            TAMANHO=$(wc -c < "$SAIDA" | tr -d ' ')
             echo "--- saida omitida (sigiloso) ---"
             echo "bytes=${TAMANHO} linhas=$(wc -l < "$SAIDA" | tr -d ' ')"
             echo "O comando nao e mostrado e a saida nao entra no log."
@@ -274,7 +333,6 @@ jobs:
             [ -n "$(tail -c 1 "$SAIDA")" ] && echo
             echo "--- fim ---"
           fi
-          rm -f "$SAIDA"
 
           CODIGO_SAIDA=$(curl -sS --max-time 30 "${HDR[@]}" "${API}/exec/${ID_EXEC}/json" \
             | python3 "$AUX/ler_codigo.py")
