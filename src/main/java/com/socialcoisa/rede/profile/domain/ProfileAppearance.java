@@ -23,6 +23,7 @@ public record ProfileAppearance(ProfileLook social, ProfileLook professional) {
 		return professional == null ? ProfileLook.empty() : professional;
 	}
 
+	@com.fasterxml.jackson.annotation.JsonIgnore
 	public boolean isEmpty() {
 		return social().isEmpty() && professional().isEmpty();
 	}
