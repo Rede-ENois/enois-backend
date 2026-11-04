@@ -941,6 +941,11 @@ are for sale); a broken file stops the boot. Each item has `id`, `kind` (`FRAME`
   `look-carta-na-gaveta`, `look-sombra-fresca`, `look-quintal-ao-meio-dia`, `look-pedra-fria`,
   `look-nevoeiro` and `look-mar-de-pedra`; each one pairs the Essenciais pieces with a different
   original frame, so no two looks are the same bundle.
+- `aparencias` is the second permanent collection: one `CARD_THEME` for each of the 85 appearance
+  themes of the design system (`tema-blahaj` … `tema-neumorfismo`, 4 faíscas each) and one
+  ready-made look for each of them (85 looks). Every look pairs its theme with an original frame
+  and the Essenciais name, plate and effect, so all its pieces are permanent and the look stays on
+  sale every day; it is listed last, after `essenciais`.
 - `GARDEN` items (`garden-cerrado`, `garden-mata-atlantica`, `garden-caatinga`, `garden-pampa`)
   style the profile garden. They have `collection: null`, so they are always on sale; the equipped
   one is `gardenStyle` on the profile (`users.garden_style`), and none equipped is the default garden.
@@ -962,7 +967,7 @@ are for sale); a broken file stops the boot. Each item has `id`, `kind` (`FRAME`
   `look-manha-de-domingo`); without it the id stays `look-<collection>`, so the original look of
   every collection keeps its address. The shipped look ids are unique and validated at startup.
   Looks follow their collection's season: the seasonal collections ship one look each, and the
-  ready-made looks live in the permanent `essenciais` collection.
+  ready-made looks live in the permanent `essenciais` and `aparencias` collections.
 - Badges equip at the front of the list, deduplicated, up to 5 (`409 MAX_BADGES`). Official badges
   (`emblema-*`) can only be shown by who owns them, also through `PUT /me/badges` and the profile
   edit (`403 NOT_OWNED`).
