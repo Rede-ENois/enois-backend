@@ -119,6 +119,12 @@ public class GroupService {
 		return repository.listMembers(groupId);
 	}
 
+	/** Ids dos membros, sem exigir permissão administrativa (uso interno; não é listagem pública). */
+	@Transactional(readOnly = true)
+	public List<String> memberIds(String groupId) {
+		return repository.listMembers(groupId).stream().map(GroupMember::userId).toList();
+	}
+
 	@Transactional(readOnly = true)
 	public long countMembers(String groupId) {
 		return repository.countMembers(groupId);

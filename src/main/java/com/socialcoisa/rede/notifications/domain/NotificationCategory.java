@@ -12,7 +12,7 @@ public enum NotificationCategory {
 	/** Reactions, comments, replies, mentions and connections. */
 	SOCIAL,
 	MESSAGES,
-	/** Groups, blogs and games. */
+	/** Groups, blogs, games and the group call ("Tamo junto"). */
 	GROUPS,
 	JOBS,
 	/** Support, microprojects and platform notices. */
@@ -34,6 +34,10 @@ public enum NotificationCategory {
 		Map.entry("MENTION", SOCIAL),
 		Map.entry("NEW_MESSAGE", MESSAGES),
 		Map.entry("NEW_WORK_MESSAGE", MESSAGES),
+		Map.entry("CALL_INCOMING", MESSAGES),
+		Map.entry("CALL_MISSED", MESSAGES),
+		Map.entry("CALL_ENDED", MESSAGES),
+		Map.entry("CALL_GROUP_LIVE", GROUPS),
 		Map.entry("GROUP_MEMBER_JOINED", GROUPS),
 		Map.entry("GROUP_JOIN_REQUEST", GROUPS),
 		Map.entry("GROUP_JOIN_APPROVED", GROUPS),

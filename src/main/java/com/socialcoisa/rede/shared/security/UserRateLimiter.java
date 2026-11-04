@@ -37,6 +37,7 @@ public class UserRateLimiter {
 	public static final String APPLY_JOB = "apply_job";
 	public static final String SEND_MESSAGE = "send_message";
 	public static final String SYNC_GITHUB = "sync_github";
+	public static final String START_CALL = "start_call";
 
 	private static final int MAX_KEYS = 50_000;
 	static final int REJECTION_THRESHOLD = 3;
@@ -57,6 +58,8 @@ public class UserRateLimiter {
 	private final long messageWindowMs;
 	private final int githubSyncLimit;
 	private final long githubSyncWindowMs;
+	private final int callStartLimit;
+	private final long callStartWindowMs;
 
 	public UserRateLimiter(Clock clock, ApplicationEventPublisher events,
 			@Value("${rede.rate.post-limit:10}") int postLimit,
@@ -68,7 +71,9 @@ public class UserRateLimiter {
 			@Value("${rede.rate.message-limit:60}") int messageLimit,
 			@Value("${rede.rate.message-window-minutes:1}") long messageWindowMinutes,
 			@Value("${rede.rate.github-sync-limit:3}") int githubSyncLimit,
-			@Value("${rede.rate.github-sync-window-minutes:60}") long githubSyncWindowMinutes) {
+			@Value("${rede.rate.github-sync-window-minutes:60}") long githubSyncWindowMinutes,
+			@Value("${rede.rate.call-start-limit:20}") int callStartLimit,
+			@Value("${rede.rate.call-start-window-minutes:60}") long callStartWindowMinutes) {
 		this.clock = clock;
 		this.events = events;
 		this.postLimit = postLimit;
@@ -81,6 +86,8 @@ public class UserRateLimiter {
 		this.messageWindowMs = messageWindowMinutes * 60_000L;
 		this.githubSyncLimit = githubSyncLimit;
 		this.githubSyncWindowMs = githubSyncWindowMinutes * 60_000L;
+		this.callStartLimit = callStartLimit;
+		this.callStartWindowMs = callStartWindowMinutes * 60_000L;
 	}
 
 	/**
@@ -149,6 +156,7 @@ public class UserRateLimiter {
 			case APPLY_JOB -> jobApplyWindowMs;
 			case SEND_MESSAGE -> messageWindowMs;
 			case SYNC_GITHUB -> githubSyncWindowMs;
+			case START_CALL -> callStartWindowMs;
 			default -> 0L;
 		};
 	}
@@ -160,6 +168,7 @@ public class UserRateLimiter {
 			case APPLY_JOB -> jobApplyLimit;
 			case SEND_MESSAGE -> messageLimit;
 			case SYNC_GITHUB -> githubSyncLimit;
+			case START_CALL -> callStartLimit;
 			default -> 0;
 		};
 	}
