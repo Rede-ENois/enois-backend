@@ -155,6 +155,23 @@ jobs:
           username: ${{ secrets.HARBOR_USER }}
           password: ${{ secrets.HARBOR_PASSWORD }}
 
+      # A poda vem ANTES do build: o push é o que esbarra na cota, então limpar depois seria
+      # tarde demais — e, com o registro cheio, o push falha e a poda nunca roda (foi assim que a
+      # QA ficou horas sem receber código). Limpando primeiro, este build tem espaço para subir.
+      #
+      # Mantém prod atual + 1 backup, a tag `main`, a QA mais recente e a tag deste build; apaga
+      # o resto. Não derruba a run: uma falha aqui não pode impedir o deploy de um build válido.
+      - name: 🧹 Podar imagens antigas no Harbor
+        env:
+          HARBOR_USER: ${{ secrets.HARBOR_USER }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+          CURRENT_TAG: ${{ steps.vars.outputs.image_tag }}
+          KEEP_PROD: "2"
+        run: |
+          if ! bash .github/scripts/harbor-retention.sh; then
+            echo "::warning::A poda do Harbor falhou; este build segue, mas o registro não foi limpo."
+          fi
+
       # push:true direto no buildx (buildkit) dá 400 no token service do Harbor com
       # multi-tag num push só (bug conhecido buildkit x Harbor 2.11 — não é bug nosso,
       # não tocar na config do Harbor, que funciona normal pras pipes do GitLab).
@@ -187,18 +204,6 @@ jobs:
             docker tag "${IMG}:${IMAGE_TAG}" "${IMG}:main"
             docker push "${IMG}:main"
           fi
-
-      # O projeto tem cota fixa. Sem poda, cada build deixava uma imagem para trás até o teto
-      # estourar e TODOS os pushes passarem a ser recusados — o que travou a QA por horas.
-      # Roda sempre depois de um push que deu certo: mantém prod atual + 1 backup, a tag `main`,
-      # a QA mais recente e o build recém-publicado; apaga o resto.
-      - name: 🧹 Podar imagens antigas no Harbor
-        env:
-          HARBOR_USER: ${{ secrets.HARBOR_USER }}
-          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
-          CURRENT_TAG: ${{ steps.vars.outputs.image_tag }}
-          KEEP_PROD: "2"
-        run: bash .github/scripts/harbor-retention.sh
 
   # ===========================================================================
   # Deploy QA — SOMENTE branch qa, SOMENTE push/workflow_dispatch, self-hosted
