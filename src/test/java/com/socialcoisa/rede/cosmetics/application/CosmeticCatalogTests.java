@@ -30,8 +30,8 @@ class CosmeticCatalogTests {
 	@Test
 	void shippedCatalogLoadsWithEveryCollectionAndLook() {
 		CosmeticCatalog catalog = new CosmeticCatalog(JsonMapper.builder().build());
-		assertThat(catalog.items()).hasSize(271);
-		assertThat(catalog.collections()).hasSize(12);
+		assertThat(catalog.items()).hasSize(356);
+		assertThat(catalog.collections()).hasSize(13);
 		assertThat(catalog.item("moldura-ambar").orElseThrow().releaseOrder()).isEqualTo(1);
 		assertThat(catalog.item("moldura-radar").orElseThrow().releaseOrder()).isEqualTo(26);
 		assertThat(catalog.item("emblema-time-saci").orElseThrow().purchasable()).isFalse();
@@ -67,9 +67,41 @@ class CosmeticCatalogTests {
 			.allSatisfy(itemId -> assertThat(catalog.item(itemId).orElseThrow().purchasable()).isTrue()));
 		// Each ready-made look has its own combination, so the shop never shows the same bundle twice.
 		assertThat(catalog.looksOf("essenciais")).extracting(CosmeticCatalog.Look::items).doesNotHaveDuplicates();
-		// Listed last so the shop still opens on the collection in season; out of season it is the
-		// only one available, so it becomes the default.
-		assertThat(catalog.collections()).extracting(CosmeticCatalog.Collection::id).last().isEqualTo("essenciais");
+		// The permanent collections are listed last so the shop still opens on the one in season; out
+		// of season they are the only ones available, so the first of them becomes the default.
+		assertThat(catalog.collections()).extracting(CosmeticCatalog.Collection::id)
+			.endsWith("essenciais", "aparencias");
+	}
+
+	@Test
+	void everyAppearanceThemeHasItsOwnLookOnSaleAllYear() {
+		CosmeticCatalog catalog = new CosmeticCatalog(JsonMapper.builder().build());
+		List<CosmeticCatalog.Look> looks = catalog.looksOf("aparencias");
+		assertThat(looks).hasSize(85);
+		assertThat(looks).extracting(CosmeticCatalog.Look::title).doesNotContain("Blahaj");
+		// One look per theme of the appearance gallery: its card theme comes first, the theme of the
+		// screen the look was drawn for.
+		assertThat(looks).allSatisfy(look -> {
+			Item theme = catalog.item(look.items().get(0)).orElseThrow();
+			assertThat(theme.kind()).isEqualTo(CosmeticKind.CARD_THEME);
+			assertThat(theme.collection()).isEqualTo("aparencias");
+		});
+		assertThat(looks).extracting(look -> look.items().get(0)).doesNotHaveDuplicates();
+		assertThat(catalog.items().stream().filter(item -> "aparencias".equals(item.collection())).count()).isEqualTo(85);
+		for (String iso : List.of("2026-01-01T12:00:00Z", "2026-04-01T12:00:00Z", "2026-11-20T12:00:00Z")) {
+			Instant now = Instant.parse(iso);
+			assertThat(looks).as(iso).allSatisfy(look -> assertThat(catalog.available(catalog.collection(look.collection()),
+				now)).isTrue());
+		}
+		// Every piece is permanent, so a look never leaves the shop with a season.
+		assertThat(looks).allSatisfy(look -> assertThat(look.items()).allSatisfy(itemId -> {
+			Item item = catalog.item(itemId).orElseThrow();
+			assertThat(item.purchasable()).isTrue();
+			assertThat(item.collection()).isIn(null, "aparencias", "essenciais");
+		}));
+		// The theme is the look, so no two looks are the same bundle.
+		assertThat(looks).extracting(CosmeticCatalog.Look::items).doesNotHaveDuplicates();
+		assertThat(looks).extracting(CosmeticCatalog.Look::statusText).doesNotHaveDuplicates();
 	}
 
 	@Test
