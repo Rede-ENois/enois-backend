@@ -105,4 +105,20 @@ class FlywayMigrationConfigTests {
 
 		assertThat(sql).contains("modify column html longtext character set utf8mb4 collate utf8mb4_unicode_ci");
 	}
+
+	@Test
+	void projectTextColumnsDeclareUnicodeStorageExplicitly() throws Exception {
+		var resource = Objects.requireNonNull(
+			getClass().getClassLoader().getResource("db/migration/V237__user_projects_text_utf8mb4.sql"));
+		String sql = Files.readString(Path.of(resource.toURI())).replaceAll("\\s+", " ").toLowerCase();
+
+		// Nulidade em comentario executavel: o MariaDB executa, o H2 ignora (ver o comentario da V237).
+		assertThat(sql)
+			.contains("modify column title varchar(120) character set utf8mb4 collate utf8mb4_unicode_ci /*! not null */")
+			.contains("modify column description varchar(500) character set utf8mb4 collate utf8mb4_unicode_ci /*! null */")
+			.contains("modify column stack text character set utf8mb4 collate utf8mb4_unicode_ci /*! not null */")
+			.contains("modify column repo_url varchar(500) character set utf8mb4 collate utf8mb4_unicode_ci /*! null */")
+			.contains("modify column status varchar(40) character set utf8mb4 collate utf8mb4_unicode_ci /*! null */")
+			.contains("modify column diary longtext character set utf8mb4 collate utf8mb4_unicode_ci /*! null */");
+	}
 }

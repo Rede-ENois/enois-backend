@@ -242,6 +242,32 @@ class RepostFlowTests {
 		return objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asString();
 	}
 
+	@Test
+	void pureRepostAppearsAtTheTopOfProfileFeedByRepostDate() throws Exception {
+		var author = auth.authenticate("repost_order_author_" + System.nanoTime());
+		var reposter = auth.authenticate("repost_order_user_" + System.nanoTime());
+
+		// Autor publica um post (mais antigo).
+		String oldPostId = publish(author, "Post antigo que sera republicado.");
+
+		// Reposter publica o proprio post (mais recente que o do autor).
+		String ownPostId = publish(reposter, "Meu post proprio, mais recente.");
+
+		// Reposter republica o post antigo do autor (a data do repost e a mais recente de todas).
+		mockMvc.perform(post("/feed/posts/{id}/repost", oldPostId)
+				.header("X-Session-Token", reposter.token()))
+			.andExpect(status().isCreated());
+
+		// No perfil do reposter, o post republicado deve vir PRIMEIRO (data do repost > data do post proprio).
+		mockMvc.perform(get("/users/{username}/posts", username(reposter))
+				.header("X-Session-Token", reposter.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[0].id").value(oldPostId))
+			.andExpect(jsonPath("$.items[0].repostedBy").exists())
+			.andExpect(jsonPath("$.items[0].repostedBy.at").exists())
+			.andExpect(jsonPath("$.items[1].id").value(ownPostId));
+	}
+
 	private String publishType(TestAuthHelper.AuthSession session, Map<String, Object> body) throws Exception {
 		MvcResult result = mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", session.token())

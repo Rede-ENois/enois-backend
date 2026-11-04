@@ -65,4 +65,9 @@ class NotificationPersistenceAdapter implements NotificationRepository {
 		springData.markAllReadByUserId(userId);
 	}
 
+	@Override
+	public void markReadByUserAndHref(String userId, String href) {
+		springData.markReadByUserIdAndHref(userId, href);
+	}
+
 }

@@ -26,6 +26,11 @@ public class UserProfile {
 	private String nameplate;
 	private String bannerItem;
 	private String profileEffect;
+	/**
+	 * Aparência da vitrine (perfil social e profissional, independentes). Nula enquanto a
+	 * pessoa não escolheu nada — aí o perfil usa o padrão da plataforma.
+	 */
+	private ProfileAppearance profileAppearance;
 	/** Garden style item (GARDEN catalog id); null = the default garden. */
 	private String gardenStyle;
 	/** Reputation garden, computed on read with the counts (never persisted); null when not computed. */
@@ -563,6 +568,16 @@ public class UserProfile {
 		this.profileEffect = profileEffect;
 	}
 
+	/** Escolha visual da vitrine (social e profissional). Vazio limpa e volta ao padrão. */
+	public void updateProfileAppearance(ProfileAppearance appearance, Instant now) {
+		hydrateProfileAppearance(appearance);
+		this.updatedAt = now;
+	}
+
+	public void hydrateProfileAppearance(ProfileAppearance appearance) {
+		this.profileAppearance = appearance == null || appearance.isEmpty() ? null : appearance;
+	}
+
 	/** Equips (or clears, with null) the garden style. */
 	public void updateGardenStyle(String gardenStyle, Instant now) {
 		hydrateGardenStyle(gardenStyle);
@@ -610,6 +625,11 @@ public class UserProfile {
 
 	public String profileEffect() {
 		return profileEffect;
+	}
+
+	/** Nunca nulo: sem escolha, os dois lados vêm vazios e o front usa o padrão. */
+	public ProfileAppearance profileAppearance() {
+		return profileAppearance == null ? ProfileAppearance.empty() : profileAppearance;
 	}
 
 	public String statusText() {

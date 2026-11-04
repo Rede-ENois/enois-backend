@@ -66,6 +66,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	private final PostNoteService postNotes;
 	private final com.socialcoisa.rede.feed.application.port.out.PollRepository polls;
 	private final com.socialcoisa.rede.feed.application.port.out.PostRepostRepository postReposts;
+	private final com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries;
 	private static final Instant DEFAULT_BEFORE = Instant.parse("9999-12-31T23:59:59Z");
 
 	public GetFeedService(PostRepository postRepository, ArticleRepository articleRepository,
@@ -80,7 +81,9 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			com.socialcoisa.rede.feed.application.port.out.ReaderPreferencesReader readerPreferences,
 			PostNoteService postNotes,
 			com.socialcoisa.rede.feed.application.port.out.PollRepository polls,
-			com.socialcoisa.rede.feed.application.port.out.PostRepostRepository postReposts) {
+			com.socialcoisa.rede.feed.application.port.out.PostRepostRepository postReposts,
+			com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries) {
+		this.mediaSummaries = mediaSummaries;
 		this.postRepository = postRepository;
 		this.articleRepository = articleRepository;
 		this.feedCacheRepository = feedCacheRepository;
@@ -179,15 +182,19 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			.orElse(query.username());
 		List<Post> authored = postRepository.findActiveByAuthor(new UserId(authorId), before, limit);
 
-		// Reposts puros: ponteiros na tabela post_reposts. Busca os IDs e depois os posts.
-		List<String> repostedIds = postReposts.findPostIdsByUserId(authorId, limit);
+		// Reposts puros: ponteiros na tabela post_reposts com a data do repost (nao do original).
+		List<com.socialcoisa.rede.feed.domain.PostRepost> reposts = postReposts.findByUserId(authorId, before, limit);
+		java.util.Map<String, Instant> repostDates = reposts.stream()
+			.collect(Collectors.toMap(com.socialcoisa.rede.feed.domain.PostRepost::postId,
+				com.socialcoisa.rede.feed.domain.PostRepost::createdAt));
+		List<String> repostedIds = reposts.stream().map(com.socialcoisa.rede.feed.domain.PostRepost::postId).toList();
 		List<Post> repostedPosts = repostedIds.isEmpty() ? List.of()
 			: postRepository.findByIds(repostedIds.stream().map(PostId::new).toList()).stream()
 				.filter(Post::isActive)
-				.filter(p -> p.createdAt().isBefore(before))
 				.toList();
 
-		// Mescla posts autorais e repostados, sem duplicatas, ordenados por data.
+		// Mescla posts autorais e repostados, sem duplicatas, ordenados pela data efetiva
+		// (data do repost para reposts, data de criacao para posts autorais).
 		Set<String> authoredIds = authored.stream().map(p -> p.id().value()).collect(Collectors.toSet());
 		List<Post> merged = new ArrayList<>(authored);
 		for (Post rp : repostedPosts) {
@@ -195,23 +202,31 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				merged.add(rp);
 			}
 		}
-		merged.sort(Comparator.comparing(Post::createdAt).reversed());
+		merged.sort(Comparator.comparing(
+			(Post p) -> repostDates.getOrDefault(p.id().value(), p.createdAt())).reversed());
 		List<Post> page = merged.stream().limit(limit).toList();
 
-		// Enriquece e marca os reposts com o badge "X republicou".
+		// Enriquece e marca os reposts com o badge "X republicou" e a data do repost.
 		List<PostView> enriched = enrich(page, query.viewerId());
 		UserProfile ownerProfile = userProfileRepository.findById(authorId).orElse(null);
 		if (ownerProfile != null && !repostedIds.isEmpty()) {
 			Set<String> repostedSet = new java.util.HashSet<>(repostedIds);
-			PostView.RepostedByView badge = new PostView.RepostedByView(
-				ownerProfile.displayWithNickname(), ownerProfile.username(), ownerProfile.avatar());
 			enriched = enriched.stream()
 				.map(v -> repostedSet.contains(v.id()) && !v.authorId().equals(authorId)
-					? v.withRepostedBy(badge) : v)
+					? v.withRepostedBy(new PostView.RepostedByView(
+						ownerProfile.displayWithNickname(), ownerProfile.username(), ownerProfile.avatar(),
+						repostDates.get(v.id())))
+					: v)
 				.toList();
 		}
 
-		return page(enriched, page, limit);
+		// Cursor pela data efetiva do ultimo item (repost date ou created date).
+		Instant lastEffective = page.isEmpty() ? null
+			: repostDates.getOrDefault(page.get(page.size() - 1).id().value(),
+				page.get(page.size() - 1).createdAt());
+		String nextCursor = page.size() == limit && lastEffective != null
+			? cursorCodec.encode(lastEffective) : null;
+		return new FeedPage(enriched, nextCursor);
 	}
 
 	@Override
@@ -402,6 +417,10 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		Map<String, Post> quotedPosts = quotedIds.isEmpty() ? Map.of()
 			: postRepository.findByIds(quotedIds.stream().map(PostId::new).toList()).stream()
 				.collect(Collectors.toMap(p -> p.id().value(), Function.identity()));
+		// Attachments of the whole page (address, type, pixel size) in ONE query, so the card draws
+		// at its final height instead of fetching each media and growing after it loads.
+		Map<String, com.socialcoisa.rede.media.application.MediaSummaryView> mediaById = mediaSummaries
+			.visibleByIds(visible.stream().flatMap(p -> p.mediaIds().stream()).collect(Collectors.toSet()));
 		return visible.stream()
 			.map(post -> {
 				UserProfile profile = profiles.get(post.authorId().value());
@@ -449,6 +468,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				return withRepostedFlag.withPoll(new PollView(options, perOption,
 					myVotes.get(post.id().value()), total));
 			})
+			.map(view -> view.withMedia(mediaById))
 			.toList();
 	}
 
@@ -593,10 +613,12 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				var reposter = repostProfiles.get(repost.userId());
 				if (reposter != null) {
 					enriched.add(view.withRepostedBy(new PostView.RepostedByView(
-						reposter.name(), reposter.username(), reposter.avatar())));
+						reposter.name(), reposter.username(), reposter.avatar(), repost.createdAt())));
 				}
 			}
-			enriched.sort(java.util.Comparator.comparing(PostView::createdAt).reversed());
+			enriched.sort(java.util.Comparator.comparing(
+				(PostView v) -> v.repostedBy() != null && v.repostedBy().at() != null
+					? v.repostedBy().at() : v.createdAt()).reversed());
 		}
 
 		return new FeedPage(enriched, nextCursor);

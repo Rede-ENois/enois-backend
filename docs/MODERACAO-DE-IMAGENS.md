@@ -11,7 +11,7 @@ versão reduzida da imagem ao provedor configurado em `rede.moderation.llm.*`. O
 de vídeo, áudio e PDF seguem fora da classificação de imagem.
 
 O processo sanitiza metadados primeiro e classifica depois. Imagem inválida, formato sem decodificador,
-imagem animada, falha do classificador local ou falta do classificador interrompe o upload. Uma
+formato animado que não seja GIF, falha do classificador local ou falta do classificador interrompe o upload. Uma
 imagem acima do limiar só é recusada como conteúdo proibido quando a confirmação semântica retorna
 violação com confiança suficiente. Sem veredito semântico, o upload pode ser repetido mais tarde;
 publicações continuam cobertas pela checagem pós-publicação e pela varredura.
@@ -40,10 +40,14 @@ O OpenNSFW é um filtro preliminar para pornografia em imagens. Não detecta tod
 conteúdo sexual, desenhos, texto ou violência, e o próprio projeto não promete precisão. A
 pontuação de 0,70 é um ponto inicial configurável, não uma medição de precisão da comunidade Énóis.
 A confirmação semântica reduz falsos positivos do filtro preliminar, mas não substitui a avaliação
-de precisão com um conjunto de validação controlado e apropriado. GIFs e outros formatos animados
-são recusados:
-os decodificadores ImageIO podem expor quadros como retângulos parciais, então pontuar os quadros
-isoladamente poderia deixar conteúdo visível sem análise.
+de precisão com um conjunto de validação controlado e apropriado.
+
+GIFs animados são verificados: os decodificadores ImageIO expõem os quadros como retângulos parciais,
+então o classificador refaz a animação como um visualizador faz (posição e método de descarte de cada
+quadro) e pontua a tela inteira em até 8 quadros espaçados, sempre incluindo o primeiro e o último. A
+pontuação da imagem é a maior entre eles. Limites: 1.000 quadros e 400 milhões de pixels decodificados
+(quadros × largura × altura); acima disso o upload é recusado. Outros formatos animados continuam
+recusados, pois não há compositor para eles.
 
 ## Dependências de runtime
 

@@ -93,4 +93,27 @@ class MediaAssetPersistenceAdapter implements MediaAssetRepository {
 	public long countAll() {
 		return repository.count();
 	}
+
+	@Override
+	@org.springframework.transaction.annotation.Transactional
+	public void recordDimensions(String id, int width, int height) {
+		repository.recordDimensions(id, width, height);
+	}
+
+	@Override
+	@org.springframework.transaction.annotation.Transactional
+	public void recordDimensionFailure(String id) {
+		repository.recordDimensionFailure(id);
+	}
+
+	@Override
+	public List<MediaAsset> findForDimensionBackfill(int limit, int maxAttempts, java.time.Instant createdBefore) {
+		// Newest first: recent posts are the ones being scrolled in the feed right now.
+		return repository
+			.findForDimensionBackfill(MediaStorageProvider.S3, com.socialcoisa.rede.media.domain.MediaDeleteStatus.NONE,
+				maxAttempts, createdBefore, PageRequest.of(0, Math.max(1, limit)))
+			.stream()
+			.map(MediaAssetJpaEntity::toDomain)
+			.toList();
+	}
 }

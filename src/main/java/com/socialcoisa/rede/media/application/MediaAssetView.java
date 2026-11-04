@@ -8,11 +8,11 @@ import com.socialcoisa.rede.media.domain.MediaStatus;
 
 public record MediaAssetView(String id, String ownerId, String fileName, String mimeType, long size, String purpose,
 		String objectKey, String cdnUrl, MediaStatus status, MediaDeleteStatus deleteStatus, Instant createdAt,
-		Instant expiresAt, Instant deletedAt) {
+		Instant expiresAt, Instant deletedAt, Integer width, Integer height) {
 
 	public static MediaAssetView from(MediaAsset asset) {
 		return new MediaAssetView(asset.id(), asset.ownerId().value(), asset.fileName(), asset.mimeType(), asset.size(),
 			asset.purpose(), asset.objectKey(), asset.cdnUrl(), asset.status(), asset.deleteStatus(), asset.createdAt(),
-			asset.expiresAt(), asset.deletedAt());
+			asset.expiresAt(), asset.deletedAt(), asset.width(), asset.height());
 	}
 }

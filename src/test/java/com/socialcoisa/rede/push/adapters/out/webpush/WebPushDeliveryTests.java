@@ -148,6 +148,13 @@ class WebPushDeliveryTests {
 	}
 
 	@Test
+	void payloadCarriesTheTagWhenThereIsOne() {
+		String json = sender.toJson(new PushMessage("notification_abc", "Titulo", "Corpo", "/mensagens", "conversation:c1"));
+
+		assertThat(new ObjectMapper().readTree(json).get("tag").asString()).isEqualTo("conversation:c1");
+	}
+
+	@Test
 	void reportsItselfDisabledWithoutKeys() {
 		WebPushSender off = new WebPushSender(repository, new ObjectMapper(), "", "", "mailto:teste@enois.test");
 		assertThat(off.isEnabled()).isFalse();

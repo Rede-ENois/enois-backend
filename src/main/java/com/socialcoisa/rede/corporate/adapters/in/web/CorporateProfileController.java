@@ -88,6 +88,10 @@ class CorporateProfileController {
 		result.put("experiences", portfolio.publicExperiences(userId));
 		result.put("educations", portfolio.getEducations(userId));
 		result.put("certifications", portfolio.getCertifications(userId));
+		// A vitrine profissional tem visual próprio: a escolha é do dono e vale para quem visita.
+		result.put("profileLook", account == null
+			? com.socialcoisa.rede.profile.domain.ProfileLook.empty()
+			: account.profileAppearance().professional());
 		return result;
 	}
 

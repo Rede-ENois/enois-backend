@@ -28,7 +28,8 @@ import com.socialcoisa.rede.shared.web.StatusResponse;
 
 @Service
 public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseCase, RequestMediaDeletionUseCase,
-		RequestPostMediaDeletionUseCase, ValidateMediaOwnershipUseCase {
+		RequestPostMediaDeletionUseCase, ValidateMediaOwnershipUseCase,
+		com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase {
 
 	private static final Logger LOG = LoggerFactory.getLogger(MediaService.class);
 
@@ -131,6 +132,18 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 		// cópia para o S3 sem esperar. Resposta idêntica à de sempre; nada bloqueia.
 		lazyCopy.ifAvailable(trigger -> trigger.copySoon(asset));
 		return MediaAssetView.from(asset);
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public java.util.Map<String, MediaSummaryView> visibleByIds(java.util.Collection<String> mediaIds) {
+		if (mediaIds == null || mediaIds.isEmpty()) {
+			return java.util.Map.of();
+		}
+		List<String> ids = mediaIds.stream().filter(StringUtils::hasText).distinct().toList();
+		return mediaAssetRepository.findByIds(ids).stream()
+			.filter(MediaAsset::isVisible)
+			.collect(java.util.stream.Collectors.toMap(MediaAsset::id, MediaSummaryView::from));
 	}
 
 	@Override

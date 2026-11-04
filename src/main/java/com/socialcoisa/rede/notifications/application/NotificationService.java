@@ -34,9 +34,19 @@ public class NotificationService {
 	@Transactional
 	public Notification create(String userId, String kind, String actorId, String title, String body, String href,
 			String ctaLabel) {
+		return create(userId, kind, actorId, title, body, href, ctaLabel, null);
+	}
+
+	/**
+	 * Como {@link #create}, com {@code preview}: o trecho do post/comentário de origem que a lista
+	 * mostra abaixo do corpo (issue #392). Nulo nas notificações que não têm conteúdo para citar.
+	 */
+	@Transactional
+	public Notification create(String userId, String kind, String actorId, String title, String body, String href,
+			String ctaLabel, String preview) {
 		String id = "notification_" + UUID.randomUUID().toString().replace("-", "");
 		Notification notification = Notification.create(id, userId, kind, actorId, title, body, href, ctaLabel,
-			clock.instant());
+			preview, clock.instant());
 		repository.save(notification);
 		// Quem entrega fora do app (push no celular) escuta este evento depois do commit.
 		events.publishEvent(new NotificationCreatedEvent(id, userId, kind, title, body, href));
@@ -54,6 +64,15 @@ public class NotificationService {
 	public Notification createGrouped(String userId, String kind, String groupKey, String actorId, String title,
 			String body, java.util.function.IntFunction<String> groupedBody, String href, String groupedHref,
 			String ctaLabel) {
+		return createGrouped(userId, kind, groupKey, actorId, title, body, groupedBody, href, groupedHref, ctaLabel,
+			null);
+	}
+
+	/** Como {@link #createGrouped}, com o trecho do conteúdo de origem (issue #392). */
+	@Transactional
+	public Notification createGrouped(String userId, String kind, String groupKey, String actorId, String title,
+			String body, java.util.function.IntFunction<String> groupedBody, String href, String groupedHref,
+			String ctaLabel, String preview) {
 		var unread = repository.findUnreadGroup(userId, groupKey);
 		if (unread.isPresent()) {
 			Notification current = unread.get();
@@ -63,7 +82,7 @@ public class NotificationService {
 			repository.save(joined);
 			return joined;
 		}
-		return createFirstOfGroup(userId, kind, groupKey, actorId, title, body, href, ctaLabel);
+		return createFirstOfGroup(userId, kind, groupKey, actorId, title, body, href, ctaLabel, null, preview);
 	}
 
 	/**
@@ -86,14 +105,54 @@ public class NotificationService {
 		return createFirstOfGroup(userId, kind, groupKey, actorId, title, body, href, ctaLabel);
 	}
 
+	/**
+	 * Like {@link #createCounted}, but every call is pushed, tagged with {@code groupKey}: the unread
+	 * notification of the group counts the events, and each push replaces the previous one on the
+	 * device instead of piling up (the messages of one conversation). Once read, the next call starts
+	 * over.
+	 */
+	@Transactional
+	public Notification createCountedAndPushed(String userId, String kind, String groupKey, String actorId,
+			String title, String body, java.util.function.IntFunction<String> countedBody, String href,
+			String ctaLabel) {
+		var unread = repository.findUnreadGroup(userId, groupKey);
+		if (unread.isPresent()) {
+			Notification current = unread.get();
+			int count = current.actorCount() + 1;
+			String joinedBody = countedBody.apply(count);
+			Notification joined = current.joinedBy(actorId, count, joinedBody, href, clock.instant());
+			repository.save(joined);
+			events.publishEvent(new NotificationCreatedEvent(current.id(), userId, kind, title, joinedBody, href,
+				groupKey));
+			return joined;
+		}
+		return createFirstOfGroup(userId, kind, groupKey, actorId, title, body, href, ctaLabel, groupKey);
+	}
+
 	private Notification createFirstOfGroup(String userId, String kind, String groupKey, String actorId,
 			String title, String body, String href, String ctaLabel) {
+		return createFirstOfGroup(userId, kind, groupKey, actorId, title, body, href, ctaLabel, null);
+	}
+
+	private Notification createFirstOfGroup(String userId, String kind, String groupKey, String actorId,
+			String title, String body, String href, String ctaLabel, String pushTag) {
+		return createFirstOfGroup(userId, kind, groupKey, actorId, title, body, href, ctaLabel, pushTag, null);
+	}
+
+	private Notification createFirstOfGroup(String userId, String kind, String groupKey, String actorId,
+			String title, String body, String href, String ctaLabel, String pushTag, String preview) {
 		String id = "notification_" + UUID.randomUUID().toString().replace("-", "");
 		Notification notification = Notification.grouped(id, userId, kind, groupKey, actorId, title, body, href,
-			ctaLabel, clock.instant());
+			ctaLabel, preview, clock.instant());
 		repository.save(notification);
-		events.publishEvent(new NotificationCreatedEvent(id, userId, kind, title, body, href));
+		events.publishEvent(new NotificationCreatedEvent(id, userId, kind, title, body, href, pushTag));
 		return notification;
+	}
+
+	/** Marks read every unread notification of the person that points at {@code href}. */
+	@Transactional
+	public void markReadByHref(String userId, String href) {
+		repository.markReadByUserAndHref(userId, href);
 	}
 
 	@Transactional
@@ -137,6 +196,9 @@ public class NotificationService {
 			if (row.actorId() != null && hiddenActorIds.contains(row.actorId())) {
 				continue;
 			}
+			if (hasOwnChannel(row.kind())) {
+				continue;
+			}
 			int count = Math.toIntExact(row.count());
 			byModule.merge(NotificationModule.of(row.kind()), count, Integer::sum);
 			if (row.href() != null) {
@@ -153,6 +215,15 @@ public class NotificationService {
 		int eventsToday = context == com.socialcoisa.rede.notifications.domain.NotificationContext.PROFESSIONAL ? 0
 			: places.eventsToday(userId);
 		return new UnreadSummary(total, byModule, byCommunity, eventsToday);
+	}
+
+	/**
+	 * Messages and connection requests have their own unread signals (chat balloon, Rede pill) and
+	 * the notices panel leaves them out, so counting them here lit "Avisos" with nothing to read.
+	 */
+	private static boolean hasOwnChannel(String kind) {
+		return NotificationModule.of(kind) == NotificationModule.MESSAGES
+			|| "CONNECTION_REQUEST".equalsIgnoreCase(kind);
 	}
 
 	/** {@code byCommunity}: unread count per community id (only communities with some). */

@@ -22,9 +22,13 @@ class NotificationCategoryTests {
 
 	private static final Path SOURCES = Path.of("src/main/java");
 
-	/** {@code notifications.create(userId, "KIND", ...)} on the NotificationService. */
+	/**
+	 * {@code notifications.create(userId, "KIND", ...)} on the NotificationService, and the grouped
+	 * variants ({@code createGrouped}, {@code createCounted}, {@code createCountedAndPushed}), whose
+	 * kind is the second argument too.
+	 */
 	private static final Pattern CREATE_CALL = Pattern.compile(
-		"(?:notifications|notificationService)\\s*\\.create\\(\\s*[^,;]+?,\\s*([^,;]+?)\\s*,");
+		"(?:notifications|notificationService)\\s*\\.create(?:Grouped|Counted|CountedAndPushed)?\\(\\s*[^,;]+?,\\s*([^,;]+?)\\s*,");
 
 	private static final Pattern KIND_LITERAL = Pattern.compile("\"([A-Z][A-Z_]+)\"");
 

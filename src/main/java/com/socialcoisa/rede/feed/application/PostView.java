@@ -11,6 +11,7 @@ import com.socialcoisa.rede.feed.domain.Counters;
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostType;
 import com.socialcoisa.rede.feed.domain.ReactionType;
+import com.socialcoisa.rede.media.application.MediaSummaryView;
 import com.socialcoisa.rede.profile.application.ContributorTagView;
 import com.socialcoisa.rede.profile.application.NameStyleView;
 
@@ -60,7 +61,13 @@ public record PostView(String id, String authorId, String authorUsername, String
 		 */
 		PollView poll,
 		RepostedByView repostedBy,
-		boolean currentUserReposted) {
+		boolean currentUserReposted,
+		/**
+		 * The attachments of {@code mediaIds} that the reader may see, in the same order, with address,
+		 * type and pixel size, so the card draws at its final height without fetching each one. Filled
+		 * in one batch per page by the reads; {@code mediaIds} stays for older clients.
+		 */
+		List<MediaSummaryView> media) {
 
 	/** The question has an accepted answer (derived, so it can never disagree with the id). */
 	@JsonProperty
@@ -72,7 +79,7 @@ public record PostView(String id, String authorId, String authorUsername, String
 	public record CommunityView(String id, String name, boolean joined) {
 	}
 
-	public record RepostedByView(String name, String username, String avatar) {
+	public record RepostedByView(String name, String username, String avatar, java.time.Instant at) {
 	}
 
 	public PostView withRepostedBy(RepostedByView by) {
@@ -81,7 +88,7 @@ public record PostView(String id, String authorId, String authorUsername, String
 			counters, currentUserReaction, communityId, community, editedAt, expiresAt,
 			authorIdentity, authorAvatarFrame, topic, repostOf, repostOfAuthor, repostWithOpinion,
 			repostOfContent, repostOfMediaIds, reactionSummary, mediaSpoiler, authorStyle,
-			authorContributor, communityNotes, myNote, acceptedCommentId, poll, by, currentUserReposted);
+			authorContributor, communityNotes, myNote, acceptedCommentId, poll, by, currentUserReposted, media);
 	}
 
 	/**
@@ -99,7 +106,7 @@ public record PostView(String id, String authorId, String authorUsername, String
 			post.type(), post.content(), null, null, post.tags(), post.mediaIds(), post.createdAt(), post.counters(),
 			null, post.communityId(), null, post.editedAt(), post.expiresAt(), post.authorIdentity(), null,
 			post.topic(), post.repostOf(), post.repostOfAuthor(), post.repostWithOpinion(), null, List.of(),
-			null, post.mediaSpoiler(), null, null, List.of(), null, post.acceptedCommentId(), null, null, false);
+			null, post.mediaSpoiler(), null, null, List.of(), null, post.acceptedCommentId(), null, null, false, List.of());
 	}
 
 	public static PostView from(Post post, String authorUsername, String authorName, String authorAvatar) {
@@ -125,7 +132,7 @@ public record PostView(String id, String authorId, String authorUsername, String
 			badges.isEmpty() ? null : badges.get(0), badges, post.type(), post.content(), null, null, post.tags(),
 			post.mediaIds(), post.createdAt(), post.counters(), null, post.communityId(), null, post.editedAt(),
 			post.expiresAt(), authorIdentity, null, post.topic(), post.repostOf(), post.repostOfAuthor(),
-			post.repostWithOpinion(), null, List.of(), null, post.mediaSpoiler(), null, null, List.of(), null, post.acceptedCommentId(), null, null, false);
+			post.repostWithOpinion(), null, List.of(), null, post.mediaSpoiler(), null, null, List.of(), null, post.acceptedCommentId(), null, null, false, List.of());
 	}
 
 	/** Anexa a moldura do avatar do autor (cosmético) depois do enriquecimento do perfil. */
@@ -133,14 +140,14 @@ public record PostView(String id, String authorId, String authorUsername, String
 		return new PostView(id, authorId, authorUsername, authorName, authorAvatar, authorBadge, authorBadges, type,
 			content, pageHtml, articleBody, tags, mediaIds, createdAt, counters, currentUserReaction, communityId,
 			community, editedAt, expiresAt, authorIdentity, frame, topic, repostOf, repostOfAuthor, repostWithOpinion, repostOfContent, repostOfMediaIds,
-			reactionSummary, mediaSpoiler, authorStyle, authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted);
+			reactionSummary, mediaSpoiler, authorStyle, authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted, media);
 	}
 
 	public PostView withCurrentUserReaction(ReactionType reaction) {
 		return new PostView(id, authorId, authorUsername, authorName, authorAvatar, authorBadge, authorBadges, type,
 			content, pageHtml, articleBody, tags, mediaIds, createdAt, counters, reaction, communityId, community,
 			editedAt, expiresAt, authorIdentity, authorAvatarFrame, topic, repostOf, repostOfAuthor, repostWithOpinion, repostOfContent, repostOfMediaIds,
-			reactionSummary, mediaSpoiler, authorStyle, authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted);
+			reactionSummary, mediaSpoiler, authorStyle, authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted, media);
 	}
 
 	/** Anexa o HTML da pagina; so o post unico faz isso (ver {@link #from(Post)}). */
@@ -148,7 +155,7 @@ public record PostView(String id, String authorId, String authorUsername, String
 		return new PostView(id, authorId, authorUsername, authorName, authorAvatar, authorBadge, authorBadges, type,
 			content, pageHtml, articleBody, tags, mediaIds, createdAt, counters, currentUserReaction, communityId,
 			community, editedAt, expiresAt, authorIdentity, authorAvatarFrame, topic, repostOf, repostOfAuthor, repostWithOpinion, repostOfContent, repostOfMediaIds,
-			reactionSummary, mediaSpoiler, authorStyle, authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted);
+			reactionSummary, mediaSpoiler, authorStyle, authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted, media);
 	}
 
 	/** Anexa a comunidade (nome + participacao do leitor) depois do enriquecimento. */
@@ -156,7 +163,7 @@ public record PostView(String id, String authorId, String authorUsername, String
 		return new PostView(id, authorId, authorUsername, authorName, authorAvatar, authorBadge, authorBadges, type,
 			content, pageHtml, articleBody, tags, mediaIds, createdAt, counters, currentUserReaction, communityId,
 			community, editedAt, expiresAt, authorIdentity, authorAvatarFrame, topic, repostOf, repostOfAuthor, repostWithOpinion, repostOfContent, repostOfMediaIds,
-			reactionSummary, mediaSpoiler, authorStyle, authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted);
+			reactionSummary, mediaSpoiler, authorStyle, authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted, media);
 	}
 
 	/** Anexa a citação do original (só reposts com opinião precisam; a listagem busca em lote). */
@@ -165,14 +172,14 @@ public record PostView(String id, String authorId, String authorUsername, String
 			content, pageHtml, articleBody, tags, mediaIds, createdAt, counters, currentUserReaction, communityId,
 			community, editedAt, expiresAt, authorIdentity, authorAvatarFrame, topic, repostOf, repostOfAuthor,
 			repostWithOpinion, originalContent, originalMediaIds == null ? List.of() : originalMediaIds,
-			reactionSummary, mediaSpoiler, authorStyle, authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted);
+			reactionSummary, mediaSpoiler, authorStyle, authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted, media);
 	}
 
 	public PostView withReactionSummary(Map<ReactionType, Long> summary) {
 		return new PostView(id, authorId, authorUsername, authorName, authorAvatar, authorBadge, authorBadges, type,
 			content, pageHtml, articleBody, tags, mediaIds, createdAt, counters, currentUserReaction, communityId,
 			community, editedAt, expiresAt, authorIdentity, authorAvatarFrame, topic, repostOf, repostOfAuthor,
-			repostWithOpinion, repostOfContent, repostOfMediaIds, summary, mediaSpoiler, authorStyle, authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted);
+			repostWithOpinion, repostOfContent, repostOfMediaIds, summary, mediaSpoiler, authorStyle, authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted, media);
 	}
 
 	/** Anexa o corpo do artigo; so a leitura do post unico faz isso (mesma regra da pagina). */
@@ -182,7 +189,7 @@ public record PostView(String id, String authorId, String authorUsername, String
 			content, pageHtml, articleBody, tags, mediaIds, createdAt, counters, currentUserReaction, communityId,
 			community, editedAt, expiresAt, authorIdentity, authorAvatarFrame, topic, repostOf, repostOfAuthor,
 			repostWithOpinion, repostOfContent, repostOfMediaIds, reactionSummary, mediaSpoiler, style,
-			authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted);
+			authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted, media);
 	}
 
 	/** Anexa a tag de contribuinte do autor (cosmetica) depois de conferir os selos ativos. */
@@ -191,7 +198,7 @@ public record PostView(String id, String authorId, String authorUsername, String
 			content, pageHtml, articleBody, tags, mediaIds, createdAt, counters, currentUserReaction, communityId,
 			community, editedAt, expiresAt, authorIdentity, authorAvatarFrame, topic, repostOf, repostOfAuthor,
 			repostWithOpinion, repostOfContent, repostOfMediaIds, reactionSummary, mediaSpoiler, authorStyle, tag,
-			communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted);
+			communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted, media);
 	}
 
 	/** Anexa as notas de rodape aprovadas e a nota do leitor (cosmetico; lote por pagina). */
@@ -200,7 +207,7 @@ public record PostView(String id, String authorId, String authorUsername, String
 			content, pageHtml, articleBody, tags, mediaIds, createdAt, counters, currentUserReaction, communityId,
 			community, editedAt, expiresAt, authorIdentity, authorAvatarFrame, topic, repostOf, repostOfAuthor,
 			repostWithOpinion, repostOfContent, repostOfMediaIds, reactionSummary, mediaSpoiler, authorStyle,
-			authorContributor, notes == null ? List.of() : List.copyOf(notes), mine, acceptedCommentId, poll, repostedBy, currentUserReposted);
+			authorContributor, notes == null ? List.of() : List.copyOf(notes), mine, acceptedCommentId, poll, repostedBy, currentUserReposted, media);
 	}
 
 	/** Anexa o estado da enquete (lote por pagina nas leituras; resposta direta no voto). */
@@ -209,7 +216,7 @@ public record PostView(String id, String authorId, String authorUsername, String
 			content, pageHtml, articleBody, tags, mediaIds, createdAt, counters, currentUserReaction, communityId,
 			community, editedAt, expiresAt, authorIdentity, authorAvatarFrame, topic, repostOf, repostOfAuthor,
 			repostWithOpinion, repostOfContent, repostOfMediaIds, reactionSummary, mediaSpoiler, authorStyle,
-			authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted);
+			authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted, media);
 	}
 
 	/** Marca se o leitor corrente já republicou este post (batch no enrich). */
@@ -217,13 +224,23 @@ public record PostView(String id, String authorId, String authorUsername, String
 		return new PostView(id, authorId, authorUsername, authorName, authorAvatar, authorBadge, authorBadges, type,
 			content, pageHtml, articleBody, tags, mediaIds, createdAt, counters, currentUserReaction, communityId, community,
 			editedAt, expiresAt, authorIdentity, authorAvatarFrame, topic, repostOf, repostOfAuthor, repostWithOpinion, repostOfContent, repostOfMediaIds,
-			reactionSummary, mediaSpoiler, authorStyle, authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, value);
+			reactionSummary, mediaSpoiler, authorStyle, authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, value, media);
+	}
+
+	/** Resolves {@code mediaIds} against a page-wide lookup (see GetMediaSummariesUseCase). */
+	public PostView withMedia(Map<String, MediaSummaryView> byId) {
+		return new PostView(id, authorId, authorUsername, authorName, authorAvatar, authorBadge, authorBadges, type,
+			content, pageHtml, articleBody, tags, mediaIds, createdAt, counters, currentUserReaction, communityId,
+			community, editedAt, expiresAt, authorIdentity, authorAvatarFrame, topic, repostOf, repostOfAuthor,
+			repostWithOpinion, repostOfContent, repostOfMediaIds, reactionSummary, mediaSpoiler, authorStyle,
+			authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted,
+			MediaSummaryView.inOrder(mediaIds, byId));
 	}
 
 	public PostView withArticleBody(String body) {
 		return new PostView(id, authorId, authorUsername, authorName, authorAvatar, authorBadge, authorBadges, type,
 			content, pageHtml, body, tags, mediaIds, createdAt, counters, currentUserReaction, communityId, community,
 			editedAt, expiresAt, authorIdentity, authorAvatarFrame, topic, repostOf, repostOfAuthor, repostWithOpinion, repostOfContent, repostOfMediaIds,
-			reactionSummary, mediaSpoiler, authorStyle, authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted);
+			reactionSummary, mediaSpoiler, authorStyle, authorContributor, communityNotes, myNote, acceptedCommentId, poll, repostedBy, currentUserReposted, media);
 	}
 }

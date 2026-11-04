@@ -269,13 +269,27 @@ Resposta:
       "userReaction": "LIKE",
       "userSaved": true,
       "tags": ["java"],
-      "media": [...]
+      "mediaIds": ["media_b", "media_a"],
+      "media": [
+        { "id": "media_b", "cdnUrl": "https://api.enois.ia.br/api/storage/uploads/media_b/file.mp4",
+          "mimeType": "video/mp4", "width": null, "height": null },
+        { "id": "media_a", "cdnUrl": "https://api.enois.ia.br/api/storage/uploads/media_a/file.jpg",
+          "mimeType": "image/jpeg", "width": 1200, "height": 800 }
+      ]
     }
   ],
   "nextCursor": "base64encodedtimestamp",
   "lastSeenAt": "2025-01-01T00:00:00Z"
 }
 ```
+
+`media`: the attachments of `mediaIds`, in the same order, with what the card needs to draw them at
+their final size before the files load. It holds only attachments the reader can still see (a media whose
+deletion was requested is left out, so `media` can be shorter than `mediaIds`). `width`/`height` are
+pixels as displayed (EXIF orientation applied); `null` for videos, audio, PDFs and images not measured yet.
+Every post response carries it (feed pages, single post, profile, community, channel, saved, corporate,
+publish/edit/restore responses, and group posts under `/api/groups/{id}/posts`), resolved in one query
+per page. `mediaIds` stays for older clients.
 
 `lastSeenAt` (ISO-8601 or `null`): the person's "Você está em dia" marker **as it was before this
 visit**. Only `tab=FOR_YOU` ("Para você") carries it, and only on the first page (no `cursor`); cursor
@@ -446,7 +460,7 @@ Pedir conexão a uma conta que não existe responde `404 USER_NOT_FOUND`.
 | Método | Rota | Descrição | Autenticação |
 |---|---|---|---|
 | POST | `/api/media/uploads` | Criar contrato de upload | Sim |
-| GET | `/api/media/{mediaId}` | Obter metadados da mídia | Sim |
+| GET | `/api/media/{mediaId}` | Obter metadados da mídia | Não |
 | DELETE | `/api/media/{mediaId}` | Solicitar deleção | Sim |
 
 ### POST /api/media/uploads
@@ -471,6 +485,34 @@ Resposta:
   "status": "PENDING"
 }
 ```
+
+### GET /api/media/{mediaId}
+
+Public read (the id only appears in content anyone can already read). Response:
+
+```json
+{
+  "id": "media_xxx",
+  "ownerId": "user_xxx",
+  "fileName": "foto.jpg",
+  "mimeType": "image/jpeg",
+  "size": 1024000,
+  "purpose": "POST_IMAGE",
+  "objectKey": "uploads/media_xxx/file.jpg",
+  "cdnUrl": "https://api.enois.ia.br/api/storage/uploads/media_xxx/file.jpg",
+  "status": "PENDING",
+  "deleteStatus": "NONE",
+  "createdAt": "2026-11-03T12:00:00Z",
+  "expiresAt": "2026-11-03T13:00:00Z",
+  "deletedAt": null,
+  "width": 1200,
+  "height": 800
+}
+```
+
+`width`/`height`: pixels as displayed (EXIF orientation applied). Measured from the sanitized bytes when
+`PUT /api/storage/{key}` stores an image; older images are filled by the dimensions backfill (see
+[`MIDIA-S3.md`](MIDIA-S3.md)). `null` for non-images and for images that could not be measured.
 
 ---
 
@@ -726,7 +768,9 @@ Contrato completo, regras e códigos de erro em [`STUDY_PAIRS.md`](STUDY_PAIRS.m
 | GET | `/api/conversations/{conversationId}` | Detalhes da conversa | Sim |
 | POST | `/api/conversations/{conversationId}/messages` | Enviar mensagem | Sim |
 | GET | `/api/conversations/{conversationId}/messages` | Listar mensagens | Sim |
-| POST | `/api/conversations/{conversationId}/read` | Marcar como lida | Sim |
+| POST | `/api/conversations/{conversationId}/read` | Marcar como lida (as notificações de mensagem da conversa também ficam lidas) | Sim |
+| POST | `/api/conversations/{conversationId}/viewing` | Heartbeat da conversa aberta na tela (a cada ~20s): enquanto vale (45s), mensagens novas dela não notificam nem mandam push para quem está olhando. 204 | Sim |
+| DELETE | `/api/conversations/{conversationId}/viewing` | A conversa saiu da tela: volta a notificar. 204 | Sim |
 | POST | `/api/conversations/{conversationId}/messages/{messageId}/reactions` | Reagir a mensagem | Sim |
 | GET | `/api/conversations/{conversationId}/messages/{messageId}/reactions` | Reações da mensagem | Sim |
 | GET | `/api/conversations/stream` | Stream SSE (`text/event-stream`) da caixa de entrada: evento `conversation` com `{"conversationId"}` a cada mensagem nova, leitura ou reação; comentário `ping` a cada 25s | Sim (cookie) |
@@ -785,7 +829,8 @@ kind of target for the whole page):
 
 Unread summary (`GET /api/notifications/unread-summary`): counts the person's unread notifications,
 leaving out those whose actor is blocked (either way) and applying the same `context` filter as the
-list. Only areas with unread notifications appear in `byModule`; an area clears when its
+list. Messages (`NEW_MESSAGE`, `NEW_WORK_MESSAGE`) and `CONNECTION_REQUEST` are not counted: they have
+their own unread signals and the notices panel does not list them. Only areas with unread notifications appear in `byModule`; an area clears when its
 notifications are read (`/read` or `/read-all`). The kind to area mapping is
 `NotificationModule` (`MESSAGES`, `EVENTS`, `JOBS`, `COMPANIES`, `MENTORING`, `DAILY_GAMES`,
 `COMMUNITY_GAMES`, `GROUPS`, `STUDY_PAIRS`, `BLOGS`, `NETWORK`, `OTHER`).
@@ -896,6 +941,11 @@ are for sale); a broken file stops the boot. Each item has `id`, `kind` (`FRAME`
   `look-carta-na-gaveta`, `look-sombra-fresca`, `look-quintal-ao-meio-dia`, `look-pedra-fria`,
   `look-nevoeiro` and `look-mar-de-pedra`; each one pairs the Essenciais pieces with a different
   original frame, so no two looks are the same bundle.
+- `aparencias` is the second permanent collection: one `CARD_THEME` for each of the 85 appearance
+  themes of the design system (`tema-blahaj` … `tema-neumorfismo`, 4 faíscas each) and one
+  ready-made look for each of them (85 looks). Every look pairs its theme with an original frame
+  and the Essenciais name, plate and effect, so all its pieces are permanent and the look stays on
+  sale every day; it is listed last, after `essenciais`.
 - `GARDEN` items (`garden-cerrado`, `garden-mata-atlantica`, `garden-caatinga`, `garden-pampa`)
   style the profile garden. They have `collection: null`, so they are always on sale; the equipped
   one is `gardenStyle` on the profile (`users.garden_style`), and none equipped is the default garden.
@@ -917,7 +967,7 @@ are for sale); a broken file stops the boot. Each item has `id`, `kind` (`FRAME`
   `look-manha-de-domingo`); without it the id stays `look-<collection>`, so the original look of
   every collection keeps its address. The shipped look ids are unique and validated at startup.
   Looks follow their collection's season: the seasonal collections ship one look each, and the
-  ready-made looks live in the permanent `essenciais` collection.
+  ready-made looks live in the permanent `essenciais` and `aparencias` collections.
 - Badges equip at the front of the list, deduplicated, up to 5 (`409 MAX_BADGES`). Official badges
   (`emblema-*`) can only be shown by who owns them, also through `PUT /me/badges` and the profile
   edit (`403 NOT_OWNED`).

@@ -16,6 +16,9 @@ public interface PostRepostRepository {
 	
 	List<String> findPostIdsByUserId(String userId, int limit);
 
+	/** Reposts de um user com data, paginados pelo created_at do repost (nao do post original). */
+	List<PostRepost> findByUserId(String userId, java.time.Instant before, int limit);
+
 	java.util.Map<String, List<PostRepost>> findRepostsByPostIds(java.util.Collection<String> postIds);
 
 	/** Reposts recentes de varios users em batch (uma query, sem N+1). Chave = post ID. */

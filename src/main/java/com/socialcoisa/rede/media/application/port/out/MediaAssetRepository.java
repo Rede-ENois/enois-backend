@@ -40,4 +40,13 @@ public interface MediaAssetRepository {
 	long countActiveOnS3();
 
 	long countAll();
+
+	/** Stores the measured pixel size with a targeted update, so it never races a full save. */
+	void recordDimensions(String id, int width, int height);
+
+	/** One more failed dimension read; the backfill stops picking the asset at the attempts cap. */
+	void recordDimensionFailure(String id);
+
+	/** Next backfill batch: images on S3, not deleted, not measured yet and under the attempts cap. */
+	List<MediaAsset> findForDimensionBackfill(int limit, int maxAttempts, Instant createdBefore);
 }
