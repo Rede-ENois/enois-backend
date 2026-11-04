@@ -179,8 +179,22 @@ jobs:
         run: |
           set -euo pipefail
           IMG="${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${IMAGE_NAME}"
+          # As duas tags são do MESMO build, então as camadas são as mesmas: o segundo push só
+          # repete o que o primeiro acabou de mandar. Quando o registro já tem o manifesto (a
+          # repetição de um push que falhou no meio, por exemplo), as camadas também já estão lá.
+          # Nos dois casos só as tags são gravadas — sem camada nova —, o que cabe na cota.
+          #
+          # O log diz quais manifestos já existiam antes do push. É ele que explica uma recusa por
+          # cota: o push só de tag chega ao registro mesmo com o armazenamento cheio.
+          echo "Manifestos presentes no registro antes do push:"
+          for TAG in "${IMAGE_TAG}" "${BRANCH_TAG}"; do
+            if docker manifest inspect "${IMG}:${TAG}" >/dev/null 2>&1; then
+              echo "  ${TAG}: sim"
+            else
+              echo "  ${TAG}: não"
+            fi
+          done
           docker push "${IMG}:${IMAGE_TAG}"
-          docker push "${IMG}:${BRANCH_TAG}"
 
   # ===========================================================================
   # Deploy QA — SOMENTE branch qa, SOMENTE push/workflow_dispatch, self-hosted
