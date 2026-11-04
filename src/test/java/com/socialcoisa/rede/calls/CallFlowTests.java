@@ -32,9 +32,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import com.nimbusds.jose.JWSAlgorithm;
-import com.nimbusds.jose.crypto.RSASSAVerifier;
-import com.nimbusds.jose.jwk.RSAKey;
-import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
+import com.nimbusds.jose.crypto.MACVerifier;
 import com.nimbusds.jwt.SignedJWT;
 import com.socialcoisa.rede.calls.application.CallExpiryWorker;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
@@ -53,47 +51,24 @@ import tools.jackson.databind.ObjectMapper;
  * de chamadas a API responde 503 em vez de abrir uma sala sem controle de acesso.
  */
 @SpringBootTest(properties = {
-		"rede.calls.jaas.app-id=app-de-teste",
-		"rede.calls.jaas.key-id=chave-de-teste",
-		"rede.calls.jaas.private-key=${call.test.private-key}",
-		"rede.calls.jaas.host=8x8.vc",
+		"rede.calls.jitsi.url=https://chamadas.example.test",
+		"rede.calls.jitsi.jwt-secret=${call.test.jwt-secret}",
+		"rede.calls.jitsi.jwt-issuer=rede-teste",
 		"spring.task.scheduling.enabled=false"
 })
 @AutoConfigureMockMvc
 @Import(CallFlowTests.MovableClock.class)
 class CallFlowTests {
 
-	/** Chave RSA descartável: assina os tokens para o teste conferir a assinatura de verdade. */
-	static final RSAKey TEST_KEY = generateKey();
-	static final String TEST_KEY_PEM = toPem(TEST_KEY);
-
-	private static RSAKey generateKey() {
-		try {
-			return new RSAKeyGenerator(2048).keyID("chave-de-teste").generate();
-		}
-		catch (Exception broken) {
-			throw new ExceptionInInitializerError(broken);
-		}
-	}
-
-	private static String toPem(RSAKey key) {
-		String base64;
-		try {
-			base64 = java.util.Base64.getMimeEncoder(64, "\n".getBytes(java.nio.charset.StandardCharsets.US_ASCII))
-				.encodeToString(key.toPrivateKey().getEncoded());
-		}
-		catch (Exception broken) {
-			throw new ExceptionInInitializerError(broken);
-		}
-		return "-----BEGIN PRIVATE KEY-----\n" + base64 + "\n-----END PRIVATE KEY-----";
-	}
-
 	/**
-	 * A chave entra no contexto como o ambiente de produção faz: por propriedade, em PEM. Ela é
-	 * gerada na carga da classe (antes do contexto) e nunca vale para sala nenhuma de verdade.
+	 * Segredo descartável do formato do JWT_APP_SECRET dos containers, gerado na carga da classe
+	 * (antes do contexto) e fornecido por propriedade, como no deploy.
 	 */
+	static final String TEST_SECRET = java.util.UUID.randomUUID().toString().replace("-", "")
+		+ java.util.UUID.randomUUID().toString().replace("-", "");
+
 	static {
-		System.setProperty("call.test.private-key", TEST_KEY_PEM);
+		System.setProperty("call.test.jwt-secret", TEST_SECRET);
 	}
 
 	static final class Clock extends java.time.Clock {
@@ -178,25 +153,26 @@ class CallFlowTests {
 		assertThat(answered.get("state").asText()).isEqualTo("CONNECTING");
 		assertThat(answered.get("participantCount").asInt()).isEqualTo(1);
 
-		// Entrar devolve host, sala aleatória, AppID público e token assinado.
+		// Entrar devolve o endereço do Jitsi, a sala aleatória e o token assinado.
 		JsonNode join = body(mockMvc.perform(post("/calls/" + callId + "/join")
 				.header("X-Session-Token", b.token())).andReturn());
-		assertThat(join.get("host").asText()).isEqualTo("8x8.vc");
-		assertThat(join.get("appId").asText()).isEqualTo("app-de-teste");
-		assertThat(join.get("room").asText()).startsWith("app-de-teste/");
+		assertThat(join.get("host").asText()).isEqualTo("https://chamadas.example.test");
+		assertThat(join.get("room").asText()).hasSize(32);
 		assertThat(join.get("room").asText()).doesNotContain("call-b1").doesNotContain("call-a1");
 		assertThat(join.at("/call/state").asText()).isEqualTo("ACTIVE");
 
 		SignedJWT jwt = SignedJWT.parse(join.get("jwt").asText());
-		assertThat(jwt.getHeader().getAlgorithm()).isEqualTo(JWSAlgorithm.RS256);
-		assertThat(jwt.getHeader().getKeyID()).isEqualTo("chave-de-teste");
-		assertThat(jwt.verify(new RSASSAVerifier(TEST_KEY.toPublicJWK()))).isTrue();
-		assertThat(jwt.getJWTClaimsSet().getAudience()).containsExactly("jitsi");
-		assertThat(jwt.getJWTClaimsSet().getIssuer()).isEqualTo("chat");
-		assertThat(jwt.getJWTClaimsSet().getSubject()).isEqualTo("app-de-teste");
+		assertThat(jwt.getHeader().getAlgorithm()).isEqualTo(JWSAlgorithm.HS256);
+		assertThat(jwt.verify(new MACVerifier(
+				new javax.crypto.spec.SecretKeySpec(TEST_SECRET.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+					"HmacSHA256"))))
+			.isTrue();
+		assertThat(jwt.getJWTClaimsSet().getIssuer()).isEqualTo("rede-teste");
+		// Sem "aud" o Prosody recusa a entrada; o valor é o VirtualHost interno, não a URL pública.
+		assertThat(jwt.getJWTClaimsSet().getAudience()).containsExactly("meet.jitsi");
+		// O Jitsi usa a claim "room" para autorizar: trocar a URL do painel leva a uma sala sem token.
 		assertThat(jwt.getJWTClaimsSet().getStringClaim("room")).isEqualTo(join.get("room").asText());
-		assertThat(jwt.getJWTClaimsSet().getJSONObjectClaim("context").get("user"))
-			.asString()
+		assertThat(jwt.getJWTClaimsSet().getJSONObjectClaim("context").get("user")).asString()
 			.contains(b.userId());
 		// Gravação nunca ligada por padrão.
 		assertThat(jwt.getJWTClaimsSet().getJSONObjectClaim("context").get("features").toString())

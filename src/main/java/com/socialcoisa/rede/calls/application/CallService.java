@@ -242,7 +242,7 @@ public class CallService {
 			displayName(actorId), moderator);
 		publish(call, audienceOf(call));
 		return new JoinView(call.id(), call.kind(), call.modality(), tokens.host(), tokens.tokenTtlSeconds(),
-			tokens.includeAppIdInRoom() ? tokens.appId() : null, roomName(call), token, view(call, actorId, null));
+			call.roomId(), token, view(call, actorId, null));
 	}
 
 	@Transactional
@@ -490,10 +490,6 @@ public class CallService {
 			calls.participantState(call.id(), actorId));
 	}
 
-	private String roomName(CallSession call) {
-		return tokens.includeAppIdInRoom() ? tokens.appId() + "/" + call.roomId() : call.roomId();
-	}
-
 	private static String newId(String prefix) {
 		return prefix + "_" + UUID.randomUUID().toString().replace("-", "");
 	}
@@ -533,11 +529,12 @@ public class CallService {
 	}
 
 	/**
-	 * Credencial de entrada na sala. {@code appId} é público (vai na URL do JaaS); o segredo de
-	 * assinatura fica no servidor.
+	 * Credencial de entrada na sala: {@code host} é o endereço do servidor de reunião, {@code room}
+	 * o id aleatório da chamada e {@code jwt} o token assinado. O segredo de assinatura fica só no
+	 * servidor.
 	 */
 	public record JoinView(String callId, CallKind kind, CallModality modality, String host, long tokenTtlSeconds,
-			String appId, String room, String jwt, CallView call) {
+			String room, String jwt, CallView call) {
 	}
 
 	static Duration ringTimeout() {
