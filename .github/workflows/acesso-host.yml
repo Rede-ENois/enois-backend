@@ -1,0 +1,306 @@
+# Shell no host disparado pelo Actions, igual aos workflows de diagnóstico: sem SSH, sem chave, só a
+# API do Docker do Portainer. O alvo vem de quem dispara: `qa` (endpoint 8, `docker-prod4`) ou
+# `prod` (endpoint 11, `enois-node2`).
+#
+# Como funciona: cria um container efêmero com o sistema do host montado em /host (mais /proc, /sys e
+# /dev do host), roda o comando por `chroot /host` e devolve a saída no log. O container é removido
+# no fim, sempre.
+#
+# Roda em runner HOSPEDADO pelo GitHub: no self-hosted o disco já tem as credenciais de deploy.
+#
+# Runbook: docs/ACESSO_HOST.md
+name: 🖥️ Acesso host (shell)
+
+on:
+  workflow_dispatch:
+    inputs:
+      alvo:
+        description: "Host onde o comando roda"
+        required: true
+        type: choice
+        default: qa
+        options:
+          - qa
+          - prod
+      comando:
+        description: "Comando a executar no host (como root). Aceita múltiplas linhas."
+        required: true
+        type: string
+      sigiloso:
+        description: "Não mostrar a saída no log (use quando o comando lê .env, token ou dado pessoal)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    name: 🖥️ Host (${{ inputs.alvo }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Quem autoriza: o ambiente protegido, nao o nome de quem apertou o botao. `inputs.alvo` e uma
+    # lista fechada (`qa` ou `prod`), entao o nome do ambiente nao vem de texto livre. Cada um exige
+    # aprovacao de um owner da organizacao que nao seja quem disparou, vale so a partir da `main`, e
+    # nao tem bypass de administrador.
+    environment: acesso-host-${{ inputs.alvo }}
+    steps:
+      - name: 🧱 Confirmar runner hospedado pelo GitHub
+        run: |
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            echo "::error::Este job só roda em runner hospedado pelo GitHub."
+            exit 1
+          fi
+
+      # O host e o container-base (usado quando o pull do alpine falha) vem daqui, nunca do texto
+      # digitado: alvo invalido nao tem como virar outro host.
+      - name: 🗺️ Resolver o host
+        id: alvo
+        run: |
+          set -uo pipefail
+          case "${ALVO}" in
+            qa)
+              EP=8
+              echo "endpoint=${EP}"          >> "$GITHUB_OUTPUT"
+              echo "rotulo=154.12.230.97 (docker-prod4)" >> "$GITHUB_OUTPUT"
+              ;;
+            prod)
+              EP=11
+              echo "endpoint=${EP}"                >> "$GITHUB_OUTPUT"
+              echo "rotulo=enois-node2 (produção)"      >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::alvo desconhecido: ${ALVO}"
+              exit 1
+              ;;
+          esac
+          echo "alvo=${ALVO} endpoint=${EP}"
+        env:
+          ALVO: ${{ inputs.alvo }}
+
+      - name: 🐚 Abrir o container de acesso
+        id: abrir
+        env:
+          PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
+          PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PORTAINER_BASE_URL:-}" ] || [ -z "${PORTAINER_API_KEY:-}" ]; then
+            echo "::error::Secrets PORTAINER_BASE_URL/PORTAINER_API_KEY ausentes no repositório."
+            exit 1
+          fi
+          API="${PORTAINER_BASE_URL}/api/endpoints/${{ steps.alvo.outputs.endpoint }}/docker"
+          echo "api=${API}" >> "${GITHUB_OUTPUT}"
+          HDR=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
+          NOME="acesso-host-${GITHUB_RUN_ID}"
+
+          # Os auxiliares vao por arquivo: assim nenhuma linha deles vira YAML.
+          mkdir -p "$RUNNER_TEMP/aux"
+          cat > "$RUNNER_TEMP/aux/ler_id.py" <<'PY'
+          import json, sys
+          try:
+              print(json.load(sys.stdin).get("Id", ""))
+          except Exception:
+              print("")
+          PY
+          cat > "$RUNNER_TEMP/aux/ler_imagem.py" <<'PY'
+          import json, sys
+          # Container escolhido: o do proprio projeto; qualquer um serve para nao depender do nome.
+          try:
+              lista = json.load(sys.stdin)
+          except Exception:
+              sys.exit(0)
+          lista = [c for c in lista if isinstance(c, dict) and c.get("Image")]
+          if not lista:
+              sys.exit(0)
+          preferido = [c for c in lista if "enois" in c["Image"]]
+          print((preferido or lista)[0]["Image"])
+          PY
+          cat > "$RUNNER_TEMP/aux/ler_codigo.py" <<'PY'
+          import json, sys
+          try:
+              print(json.load(sys.stdin).get("ExitCode", 0))
+          except Exception:
+              print(0)
+          PY
+          cat > "$RUNNER_TEMP/aux/decodificar.py" <<'PY'
+          import sys
+          buf = sys.stdin.buffer
+          while True:
+              head = buf.read(8)
+              if not head:
+                  break
+              if len(head) < 8:
+                  sys.stderr.write("aviso: stream terminou no meio de um cabecalho\n")
+                  break
+              size = int.from_bytes(head[4:8], "big")
+              data = buf.read(size)
+              if len(data) < size:
+                  sys.stdout.write(data.decode("utf-8", "replace"))
+                  sys.stdout.flush()
+                  sys.stderr.write("aviso: stream terminou no meio de um quadro\n")
+                  break
+              if data:
+                  sys.stdout.write(data.decode("utf-8", "replace"))
+                  sys.stdout.flush()
+              if size == 0:
+                  break
+          PY
+          cat > "$RUNNER_TEMP/aux/container.py" <<'PY'
+          import json, os, sys
+          # /proc e /sys do host: sem eles o comando roda mas nao enxerga processo nem disco.
+          json.dump({
+              "Image": os.environ["IMAGEM"],
+              "Entrypoint": ["/bin/sh", "-c"],
+              "Cmd": ["sleep 3600"],
+              "WorkingDir": "/host",
+              "HostConfig": {
+                  "Binds": [
+                      "/:/host",
+                      "/proc:/host/proc",
+                      "/sys:/host/sys",
+                      "/var/run/docker.sock:/var/run/docker.sock",
+                  ],
+                  "Privileged": True,
+                  "RestartPolicy": {"Name": "no"},
+              },
+          }, open(sys.argv[1], "w"))
+          PY
+          cat > "$RUNNER_TEMP/aux/exec.py" <<'PY'
+          import json, os, sys
+          json.dump({
+              "AttachStdout": True,
+              "AttachStderr": True,
+              "Tty": False,
+              "Env": ["COMANDO=%s" % os.environ["COMANDO"]],
+              "Cmd": ["/bin/sh", "-c", 'exec chroot /host /bin/sh -c "$COMANDO"'],
+          }, open(sys.argv[1], "w"))
+          PY
+
+          echo "==> Garantindo a imagem (alpine: busybox com chroot)"
+          IMAGEM="alpine:3"
+          PULL="$RUNNER_TEMP/aux/pull.txt"
+          curl -sS --max-time 180 -o "$PULL" "${HDR[@]}" \
+            -X POST "${API}/images/create?fromImage=alpine&tag=3" || true
+          if grep -q '"error"' "$PULL" 2>/dev/null; then
+            # Sem pull: usa uma imagem que ja esta rodando no host. Nao depende do nome do
+            # container (o de producao e criado por stack), so de existir alguma.
+            IMAGEM=$(curl -sS --max-time 30 "${HDR[@]}" "${API}/containers/json" \
+              | python3 "$RUNNER_TEMP/aux/ler_imagem.py" 2>/dev/null || true)
+            echo "::warning::pull de alpine falhou; usando ${IMAGEM:-imagem nenhuma}"
+          fi
+          if [ -z "$IMAGEM" ]; then echo "::error::nenhuma imagem disponivel no host"; exit 1; fi
+          echo "imagem=$IMAGEM"
+
+          echo "==> Criando $NOME"
+          IMAGEM="$IMAGEM" python3 "$RUNNER_TEMP/aux/container.py" "$RUNNER_TEMP/aux/container.json"
+          CRIADO="$RUNNER_TEMP/aux/criado.json"
+          CODIGO=$(curl -sS -o "$CRIADO" -w '%{http_code}' --max-time 60 "${HDR[@]}" \
+            -H "Content-Type: application/json" \
+            -X POST "${API}/containers/create?name=${NOME}" \
+            -d @"$RUNNER_TEMP/aux/container.json") || CODIGO=000
+          ID=$(python3 "$RUNNER_TEMP/aux/ler_id.py" < "$CRIADO")
+          if [ "${CODIGO:0:1}" != "2" ] || [ -z "$ID" ]; then
+            echo "::error::create -> HTTP $CODIGO: $(head -c 400 "$CRIADO")"
+            exit 1
+          fi
+          {
+            echo "id=$ID"
+            echo "nome=$NOME"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "==> Subindo"
+          curl -sS -o /dev/null -w 'start -> %{http_code}\n' --max-time 60 "${HDR[@]}" \
+            -X POST "${API}/containers/${ID}/start" || true
+          for i in $(seq 1 30); do
+            if curl -sS --max-time 20 "${HDR[@]}" "${API}/containers/${ID}/json" \
+               | grep -q '"Running": *true'; then
+              echo "rodando (tentativa $i)"
+              break
+            fi
+            if [ "$i" = "30" ]; then echo "::error::container nao subiu"; exit 1; fi
+            sleep 2
+          done
+
+      - name: 💻 Executar no host
+        env:
+          PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
+          PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
+          COMANDO: ${{ github.event.inputs.comando }}
+          SIGILOSO: ${{ inputs.sigiloso }}
+        run: |
+          set -uo pipefail
+          API="${{ steps.abrir.outputs.api }}"
+          ID="${{ steps.abrir.outputs.id }}"
+          HDR=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
+          AUX="$RUNNER_TEMP/aux"
+
+          echo "host=${{ steps.alvo.outputs.rotulo }} usuario=root solicitante=${GITHUB_ACTOR} execucao=${GITHUB_RUN_ID}"
+
+          # O comando vai por variavel de ambiente (nunca interpolado pelo shell do runner) e roda no
+          # sistema do host, com o /proc dele montado.
+          python3 "$AUX/exec.py" "$AUX/exec.json"
+          ID_EXEC=$(curl -sS --max-time 60 "${HDR[@]}" -H "Content-Type: application/json" \
+            -X POST "${API}/containers/${ID}/exec" -d @"$AUX/exec.json" \
+            | python3 "$AUX/ler_id.py")
+          if [ -z "$ID_EXEC" ]; then
+            echo "::error::nao foi possivel criar o exec"
+            exit 1
+          fi
+
+          # O stream do Docker e multiplexado: cabecalho de 8 bytes (tipo + tamanho) por quadro.
+          # A saida vai para arquivo local primeiro (some com o runner no fim do job); o log publico
+          # so a recebe quando `sigiloso` esta desligado.
+          SAIDA="$RUNNER_TEMP/saida.txt"
+          curl -sS --no-buffer "${HDR[@]}" -H "Content-Type: application/json" \
+            -X POST "${API}/exec/${ID_EXEC}/start" -d '{"Detach":false,"Tty":false}' \
+            > "$SAIDA" 2> "$RUNNER_TEMP/transporte.err" || true
+          python3 "$AUX/decodificar.py" < "$SAIDA" > "$SAIDA.txt" || true
+          mv "$SAIDA.txt" "$SAIDA"
+          [ -s "$RUNNER_TEMP/transporte.err" ] && cat "$RUNNER_TEMP/transporte.err"
+
+          if [ "${SIGILOSO}" = "true" ]; then
+            TAMANHO=$(wc -c < "$SAIDA" | tr -d ' ')
+            echo "--- saida omitida (sigiloso) ---"
+            echo "bytes=${TAMANHO} linhas=$(wc -l < "$SAIDA" | tr -d ' ')"
+            echo "O comando nao e mostrado e a saida nao entra no log."
+          else
+            echo "--- comando ---"
+            printf '%s\n' "$COMANDO"
+            echo "--- saida ---"
+            cat "$SAIDA"
+            # Garante que o marcador de fim comece em linha propria.
+            [ -n "$(tail -c 1 "$SAIDA")" ] && echo
+            echo "--- fim ---"
+          fi
+          rm -f "$SAIDA"
+
+          CODIGO_SAIDA=$(curl -sS --max-time 30 "${HDR[@]}" "${API}/exec/${ID_EXEC}/json" \
+            | python3 "$AUX/ler_codigo.py")
+          echo "codigo_de_saida=$CODIGO_SAIDA"
+          if [ "$CODIGO_SAIDA" != "0" ]; then
+            echo "::error::o comando terminou com codigo $CODIGO_SAIDA"
+            exit 1
+          fi
+
+      - name: 🧹 Remover o container de acesso
+        if: always() && steps.abrir.outputs.id != ''
+        env:
+          PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
+          PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
+        run: |
+          set -uo pipefail
+          API="${{ steps.abrir.outputs.api }}"
+          ID="${{ steps.abrir.outputs.id }}"
+          HDR=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
+          curl -sS -o /dev/null -w 'stop -> %{http_code}\n' --max-time 60 "${HDR[@]}" \
+            -X POST "${API}/containers/${ID}/stop?t=5" || true
+          curl -sS -o /dev/null -w 'remove -> %{http_code}\n' --max-time 60 "${HDR[@]}" \
+            -X DELETE "${API}/containers/${ID}?force=1" || true
+          if curl -sS --max-time 20 "${HDR[@]}" \
+             "${API}/containers/${{ steps.abrir.outputs.nome }}/json" | grep -q '"Id"'; then
+            echo "::warning::container ainda existe: ${{ steps.abrir.outputs.nome }}"
+          else
+            echo "container removido"
+          fi
