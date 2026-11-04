@@ -4,6 +4,10 @@ Chamadas dentro do Énóis, sem abrir aba nova nem sair para outro site: o paine
 embutido no próprio app (iframe do Jitsi dentro de um overlay da tela), com minimizar, microfone,
 câmera e encerrar. A conversa da DM chama uma pessoa; o grupo chama **"Tamo junto"**.
 
+A infraestrutura é **Jitsi próprio** (`docker-jitsi-meet`), com autenticação por token: o backend
+assina um JWT HS256 e o Prosody só deixa entrar quem apresenta um token válido para aquela sala.
+Nada de conta em serviço de terceiros, nada de sala pública.
+
 ## Como a sala é protegida
 
 A segurança da chamada não vem do nome da sala. Ela vem de três coisas, todas conferidas no
@@ -11,48 +15,60 @@ servidor a cada pedido:
 
 1. **Vínculo**: quem entra precisa ser participante da conversa ou membro do grupo *naquele
    momento* (lido do banco a cada verificação). Editar a URL ou o corpo do pedido não muda nada.
-2. **Token assinado**: cada entrada recebe um JWT RS256 emitido pelo backend, válido só para aquela
-   sala e por tempo limitado. A chave privada nunca sai do servidor — o navegador recebe o token
-   pronto. O `room` vai dentro do token, então trocar a sala na URL invalida a credencial.
+2. **Token assinado**: cada entrada recebe um JWT HS256 emitido pelo backend, válido só para aquela
+   sala e por tempo limitado. O segredo de assinatura é o mesmo `JWT_APP_SECRET` dos containers e
+   nunca sai do servidor — o navegador recebe o token pronto. O `room` vai dentro do token, então
+   trocar a sala na URL invalida a credencial.
 3. **Nome de sala aleatório**: `room_id` é um UUID gerado no servidor. O @ ou o nome de ninguém
    entra no identificador da sala; adivinhar o apelido de alguém não dá acesso a nada.
 
-Moderador é só quem iniciou a chamada. Gravação, transmissão ao vivo, transcrição e chamada
-externa ficam **desligadas no próprio token** (`context.features`), então ninguém grava áudio ou
-vídeo por padrão, nem por engano.
+O Jitsi roda com `ENABLE_AUTH=1`, `ENABLE_GUESTS=0` e `AUTH_TYPE=jwt`: sem token válido não há
+entrada, nem como convidado. Moderador é só quem iniciou a chamada. Gravação, transmissão ao vivo
+e transcrição ficam **desligadas no próprio token** (`context.features`), então ninguém grava áudio
+ou vídeo por padrão, nem por engano.
 
-Sem `REDE_CALLS_JAAS_APP_ID`, `REDE_CALLS_JAAS_KEY_ID` e `REDE_CALLS_JAAS_PRIVATE_KEY` a API
-responde **503 `CALLS_NOT_CONFIGURED`** — ela nunca cai numa sala pública aberta para "funcionar".
+Sem `REDE_CALLS_JITSI_URL` e `REDE_CALLS_JITSI_JWT_SECRET` a API responde **503
+`CALLS_NOT_CONFIGURED`** — ela nunca aponta o painel para uma instância aberta para "funcionar".
 
-## Infra: serviço gerenciado (JaaS) e o caminho para o Jitsi próprio
+## Infra: Jitsi próprio
 
-Escolhemos o **JaaS (Jitsi as a Service, da 8x8)** em vez de hospedar a infraestrutura.
-
-| | JaaS (escolhido) | Jitsi self-hosted | meet.jit.si público |
+| | Jitsi próprio (escolhido) | JaaS (8x8) | meet.jit.si público |
 |---|---|---|---|
-| Infra para operar | Nenhuma | JVB, Prosody, Jicofo, TURN, TLS, escala | Nenhuma |
-| Autenticação por token | Sim (RS256 por app) | Sim (`AUTH_TYPE=jwt` + plugin) | Não aceita JWT próprio |
-| Custo | Plano por uso | Servidor + banda de mídia | Grátis, sem garantia |
-| Produção | Adequado | Adequado depois de operar | **Não adequado** |
+| Infra para operar | JVB, Prosody, Jicofo, TLS, escala | Nenhuma | Nenhuma |
+| Autenticação por token | Sim (`AUTH_TYPE=jwt`, HS256) | Sim (RS256 por app) | Não aceita JWT próprio |
+| Custo | Servidor + banda de mídia | Plano por uso | Grátis, sem garantia |
+| Dados da chamada | Só nos nossos servidores | Nos servidores do provedor | Em servidores de terceiros |
+| Produção | Adequado | Adequado | **Não adequado** |
 
-Incorporar o Jitsi (iframe) não é hospedar o Jitsi: a mídia trafega pelos servidores do JaaS. Se um
-dia a gente migrar para infraestrutura própria, o caminho é o mesmo `MeetingTokenIssuer`
-(`calls/application/port/out`) apontando para a instância `docker-jitsi-meet` com `AUTH_TYPE=jwt`,
-`ENABLE_AUTH=1` e a chave pública do app no Prosody — o resto do módulo não muda.
+A stack fica em [`deploy/jitsi/`](../deploy/jitsi/README.md): o `docker-compose.yml` oficial do
+`docker-jitsi-meet` com as variáveis de autenticação já fixadas, um `.env.example` com os valores
+que precisam ser gerados e um `gen-secrets.sh` que produz o segredo compartilhado. O backend só
+precisa de duas variáveis para falar com ela.
 
-### Configuração
+### Configuração do backend
 
 | Propriedade | Env | Padrão |
 |---|---|---|
-| `rede.calls.jaas.app-id` | `REDE_CALLS_JAAS_APP_ID` | vazio (chamadas desligadas) |
-| `rede.calls.jaas.key-id` | `REDE_CALLS_JAAS_KEY_ID` | vazio |
-| `rede.calls.jaas.private-key` | `REDE_CALLS_JAAS_PRIVATE_KEY` | vazio (PEM PKCS#8) |
-| `rede.calls.jaas.host` | `REDE_CALLS_JAAS_HOST` | `8x8.vc` |
-| `rede.calls.jaas.token-ttl-minutes` | `REDE_CALLS_JAAS_TOKEN_TTL_MINUTES` | `120` |
+| `rede.calls.jitsi.url` | `REDE_CALLS_JITSI_URL` | vazio (chamadas desligadas) |
+| `rede.calls.jitsi.jwt-secret` | `REDE_CALLS_JITSI_JWT_SECRET` | vazio (mínimo 32 bytes) |
+| `rede.calls.jitsi.jwt-issuer` | `REDE_CALLS_JITSI_JWT_ISSUER` | `rede` |
+| `rede.calls.jitsi.jwt-audience` | `REDE_CALLS_JITSI_JWT_AUDIENCE` | `meet.jitsi` |
+| `rede.calls.jitsi.token-ttl-minutes` | `REDE_CALLS_JITSI_TOKEN_TTL_MINUTES` | `120` |
 | `rede.rate.call-start-limit` | `REDE_CALL_START_LIMIT` | `20` por `REDE_CALL_START_WINDOW_MINUTES` (60) |
 
-A chave é segredo de assinatura: entra por variável de ambiente do deploy, nunca no repositório,
-em log ou em relatório.
+`REDE_CALLS_JITSI_URL` é a origem pública do Jitsi, com `https` e sem barra no fim (por exemplo
+`https://chamadas.enois.ia.br`). O segredo é o mesmo `JWT_APP_SECRET` do `.env` da stack: entra por
+variável de ambiente do deploy, nunca no repositório, em log ou em relatório.
+
+Se `REDE_CALLS_JITSI_JWT_ISSUER` for diferente de `rede`, ajuste `JWT_ACCEPTED_ISSUERS` na stack
+para o mesmo valor.
+
+O `aud` é **obrigatório**: o plugin de token do Prosody recusa (`'aud' claim is missing`) quando a
+lista de audiências aceitas está preenchida e o token não traz `aud`, e o navegador fica preso em
+`passwordRequired` sem entrar na sala. Por isso o backend sempre emite `aud` e o padrão é
+`meet.jitsi` — o `VirtualHost` interno dos containers, não a URL pública. Os dois lados têm que
+dizer o mesmo: `REDE_CALLS_JITSI_JWT_AUDIENCE` no backend e `JWT_ACCEPTED_AUDIENCES` no `.env` da
+stack. Se um dia mudar o `VirtualHost` do Prosody, mude nos dois.
 
 ## Estados
 
@@ -94,7 +110,7 @@ ou dois "entrar") não deixam a chamada em dois estados nem contam a mesma pesso
 | POST | `/calls/{id}/answer` | Atender (só 1:1). Idempotente |
 | POST | `/calls/{id}/decline` | Recusar. Idempotente |
 | POST | `/calls/{id}/cancel` | Quem iniciou desiste. Idempotente |
-| POST | `/calls/{id}/join` | Autoriza a entrada e devolve host, sala, AppID, token e validade |
+| POST | `/calls/{id}/join` | Autoriza a entrada e devolve `host`, `room`, `jwt` e validade |
 | POST | `/calls/{id}/leave` | Sair (grupo segue vivo) |
 | POST | `/calls/{id}/end` | Encerrar para todos |
 | POST | `/calls/{id}/fail` | A tela perdeu a mídia |
@@ -128,7 +144,7 @@ notificação na caixa.
 | `CallService` | Começar, atender, recusar, cancelar, entrar, sair, encerrar, falhar, expirar |
 | `CallAudience` | Autorização pelo vínculo (conversa/grupo) |
 | `CallExpiryWorker` | Fecha o que venceu a cada 5s |
-| `JaasMeetingTokenIssuer` | JWT RS256 do JaaS (chave só no servidor) |
+| `JwtMeetingTokenIssuer` | JWT HS256 do Jitsi próprio; o segredo só existe no servidor |
 | `CallController` | Rotas `/calls/**` |
 | `CallPersistenceAdapter` | Transições condicionais em `call_sessions`/`call_participants` (V240) |
 
@@ -144,3 +160,24 @@ notificação na caixa.
 
 Minimizar mantém o painel montado; reabrir pede uma credencial nova ao servidor em vez de reusar
 o token. Fechar a aba durante a chamada avisa o servidor (`pagehide` → `POST /calls/{id}/leave`).
+
+## Prova de que a mídia passa
+
+Teste de unidade prova a regra, não a mídia. A prova de ponta a ponta usa a stack de
+`deploy/jitsi/` rodando localmente e dois navegadores de verdade:
+
+1. `CallMediaProbe` (em `src/test/java/com/socialcoisa/rede/calls/`) sobe o app apontado para a
+   stack, cria duas contas, abre e atende uma chamada 1:1 pelos mesmos endpoints do app e grava
+   `alex.json`/`bruno.json` com `host`, `room` e `jwt`. Só roda sob demanda:
+   `./mvnw -o -Dtest=CallMediaProbe -Dcall.probe.url=<url pública> -Dcall.probe.secret=<JWT_APP_SECRET> -Dcall.probe.out=/tmp/call-probe test`
+2. Dois Chrome headless com `--use-fake-device-for-media-stream` entram na mesma sala com os dois
+   tokens e ficam conectados.
+3. O que se confere: os dois são vistos na mesma sala com o nome certo, o `jvb` registra
+   `ICE connected`, `DTLS handshake complete` e `SCTP connection is ready` para **cada** endpoint,
+   e o contador de bytes do `jvb` cresce enquanto a chamada está aberta.
+4. O controle negativo: a mesma sala **sem** token e **com** token assinado por outra chave é
+   recusada (`token required` / entrada negada), sem ninguém entrar.
+
+Foi assim que o `aud` obrigatório apareceu: sem ele o Prosody recusa com `'aud' claim is missing`
+e o navegador fica em `passwordRequired`. O teste do backend agora assere o `aud` para isso não
+voltar sem ninguém perceber.

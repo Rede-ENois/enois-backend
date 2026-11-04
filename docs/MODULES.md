@@ -1613,8 +1613,9 @@ Files: `ReleaseNoteController`, `ReleaseNoteService`, `ReleaseNoteRepository`,
 1:1 na conversa e "Tamo junto" no grupo, com o painel embutido no app. O servidor decide tudo:
 quem pode começar (participante da conversa, membro do grupo), quem pode entrar (conferido no
 vínculo a cada pedido e no `POST /calls/{id}/join`), em que estado a chamada está e quando vence.
-O nome da sala é um UUID gerado no servidor; a entrada usa JWT RS256 emitido pelo backend para o
-JaaS (8x8), com gravação/transmissão desligadas no próprio token.
+O nome da sala é um UUID gerado no servidor; a entrada usa JWT HS256 emitido pelo backend para o
+Jitsi que a gente hospeda (`docker-jitsi-meet` com `AUTH_TYPE=jwt`), com gravação/transmissão
+desligadas no próprio token.
 
 | Classe | Papel |
 |---|---|
@@ -1622,7 +1623,7 @@ JaaS (8x8), com gravação/transmissão desligadas no próprio token.
 | `CallSession` / `CallState` | Agregado e máquina de estados fechada |
 | `CallAudience` | Autorização pelo vínculo (conversa/grupo) |
 | `CallExpiryWorker` | 1:1 sem resposta (40s → `MISSED`), grupo vazio (5 min → `FAILED`), abandono (30 min) |
-| `JaasMeetingTokenIssuer` | JWT do JaaS; a chave privada só existe no servidor |
+| `JwtMeetingTokenIssuer` | JWT HS256 do Jitsi próprio; o segredo só existe no servidor |
 | `CallPersistenceAdapter` | Transições condicionais em `call_sessions`/`call_participants` (V240) |
 | `CallController` | Rotas `/calls/**` e `/{conversation,group}/{id}/calls` |
 

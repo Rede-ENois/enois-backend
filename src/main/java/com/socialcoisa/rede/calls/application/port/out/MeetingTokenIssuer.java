@@ -15,7 +15,7 @@ public interface MeetingTokenIssuer {
 	/** Há infraestrutura configurada para abrir salas? */
 	boolean isConfigured();
 
-	/** Origem que hospeda a reunião (o domínio que o cliente embute no painel). */
+	/** Endereço do servidor de reunião (o que o cliente embute no painel), sem barra no fim. */
 	String host();
 
 	/**
@@ -26,10 +26,4 @@ public interface MeetingTokenIssuer {
 
 	/** Tempo de validade do token, em segundos (o cliente não renova sozinho). */
 	long tokenTtlSeconds();
-
-	/** AppID do JaaS: público, vai na URL da sala. Nulo quando não há app configurado. */
-	String appId();
-
-	/** O JaaS monta a sala como AppID/room; o serviço precisa do mesmo formato na URL. */
-	boolean includeAppIdInRoom();
 }
