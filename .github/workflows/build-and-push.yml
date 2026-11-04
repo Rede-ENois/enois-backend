@@ -190,15 +190,21 @@ jobs:
 
       # O projeto tem cota fixa. Sem poda, cada build deixava uma imagem para trás até o teto
       # estourar e TODOS os pushes passarem a ser recusados — o que travou a QA por horas.
-      # Roda sempre depois de um push que deu certo: mantém prod atual + 1 backup, a tag `main`,
-      # a QA mais recente e o build recém-publicado; apaga o resto.
+      # Roda depois de um push que deu certo: mantém prod atual + 1 backup, a tag `main`, a QA
+      # mais recente e o build recém-publicado; apaga o resto.
+      #
+      # Não derruba a run: este job é `needs:` do deploy, e uma falha aqui pararia o deploy de um
+      # build que JÁ está publicado e validado. O aviso de cota não pode virar causa de queda.
       - name: 🧹 Podar imagens antigas no Harbor
         env:
           HARBOR_USER: ${{ secrets.HARBOR_USER }}
           HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
           CURRENT_TAG: ${{ steps.vars.outputs.image_tag }}
           KEEP_PROD: "2"
-        run: bash .github/scripts/harbor-retention.sh
+        run: |
+          if ! bash .github/scripts/harbor-retention.sh; then
+            echo "::warning::A poda do Harbor falhou; a imagem deste build foi publicada, mas o registro não foi limpo."
+          fi
 
   # ===========================================================================
   # Deploy QA — SOMENTE branch qa, SOMENTE push/workflow_dispatch, self-hosted
