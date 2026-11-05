@@ -90,6 +90,12 @@ public class HttpLinkPreviewReader implements LinkPreviewReader {
 				return Optional.empty();
 			}
 			try {
+				// O CodeQL avisa neste trecho porque o endereco vem de quem escreveu o post. A
+				// supressao vale para ESTE leitor: cada salto passa pela guarda acima (esquema,
+				// porta e todos os IPs resolvidos precisam ser publicos), o redirecionamento e
+				// seguido na mao e o corpo lido para no teto de bytes. O leitor irmao da moderacao
+				// faz a mesma leitura com a mesma checagem, escrita localmente.
+				// codeql[java/ssrf]
 				HttpRequest request = HttpRequest.newBuilder(atual)
 					.timeout(TIMEOUT)
 					.header("User-Agent", "enois-preview/1.0 (+miniatura de link)")
@@ -97,6 +103,8 @@ public class HttpLinkPreviewReader implements LinkPreviewReader {
 					.header("Accept-Language", "pt-BR,pt;q=0.9")
 					.GET()
 					.build();
+				// Mesma justificativa da linha acima: a guarda rodou neste salto.
+				// codeql[java/ssrf]
 				HttpResponse<InputStream> response = http.send(request, HttpResponse.BodyHandlers.ofInputStream());
 				int status = response.statusCode();
 				if (status / 100 == 3) {
