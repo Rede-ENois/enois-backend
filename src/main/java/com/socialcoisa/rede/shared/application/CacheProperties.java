@@ -87,6 +87,12 @@ public class CacheProperties {
 
 	private final Category githubReadme = new Category(Duration.ofMinutes(3), 200);
 
+	/**
+	 * Miniatura de link: a leitura externa e a parte cara e o mesmo link aparece em varios posts.
+	 * O teto e maior porque a chave inclui o endereco e o leitor.
+	 */
+	private final Category linkPreviews = new Category(Duration.ofMinutes(30), 2_000);
+
 	public Category getPublicProfiles() {
 		return publicProfiles;
 	}
@@ -129,5 +135,9 @@ public class CacheProperties {
 
 	public Category getGithubReadme() {
 		return githubReadme;
+	}
+
+	public Category getLinkPreviews() {
+		return linkPreviews;
 	}
 }
