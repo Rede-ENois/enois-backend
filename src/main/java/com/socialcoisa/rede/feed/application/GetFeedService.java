@@ -417,6 +417,17 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		Map<String, Post> quotedPosts = quotedIds.isEmpty() ? Map.of()
 			: postRepository.findByIds(quotedIds.stream().map(PostId::new).toList()).stream()
 				.collect(Collectors.toMap(p -> p.id().value(), Function.identity()));
+		// Autores dos posts citados: busca em lote pra exibir o avatar no crédito do repost.
+		java.util.Set<String> quotedAuthorIds = quotedPosts.values().stream()
+			.map(p -> p.authorId().value())
+			.filter(id -> !profiles.containsKey(id))
+			.collect(Collectors.toSet());
+		if (!quotedAuthorIds.isEmpty()) {
+			java.util.Map<String, UserProfile> mutableProfiles = new java.util.HashMap<>(profiles);
+			userProfileRepository.findAllByIds(quotedAuthorIds)
+				.forEach(p -> mutableProfiles.put(p.id(), p));
+			profiles = mutableProfiles;
+		}
 		// Attachments of the whole page (address, type, pixel size) in ONE query, so the card draws
 		// at its final height instead of fetching each media and growing after it loads.
 		Map<String, com.socialcoisa.rede.media.application.MediaSummaryView> mediaById = mediaSummaries
@@ -443,7 +454,9 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				if (post.repostWithOpinion() && post.repostOf() != null) {
 					Post quoted = quotedPosts.get(post.repostOf());
 					if (quoted != null) {
-						withReaction = withReaction.withRepostQuote(quoted.content(), quoted.mediaIds());
+						UserProfile quotedAuthor = profiles.get(quoted.authorId().value());
+						withReaction = withReaction.withRepostQuote(quoted.content(), quoted.mediaIds(),
+							quotedAuthor != null ? quotedAuthor.avatar() : null);
 					}
 				}
 				PostCommunityReader.CommunityRef community = post.communityId() == null ? null
