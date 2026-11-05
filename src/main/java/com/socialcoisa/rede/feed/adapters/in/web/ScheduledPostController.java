@@ -51,7 +51,7 @@ class ScheduledPostController {
 			() -> new CommandResponse(201, view(service.schedule(user.id().value(),
 				new ScheduledPostService.ScheduleCommand(tipo(request.type()), request.content(),
 					request.pageHtml(), request.articleBody(), request.tags(), request.mediaIds(),
-					request.mentionedUserIds(), request.communityId(), request.topic(),
+					request.mentionedUserIds(), request.communityId(), request.topic(), request.pollOptions(),
 					instante(request.scheduledAt()))))));
 	}
 
@@ -101,7 +101,7 @@ class ScheduledPostController {
 
 	record ScheduleRequest(String type, String content, String pageHtml, String articleBody, List<String> tags,
 			List<String> mediaIds, List<String> mentionedUserIds, String communityId, String topic,
-			String scheduledAt) {
+			List<String> pollOptions, String scheduledAt) {
 	}
 
 	record View(String id, String type, String content, String pageHtml, String communityId, String topic,

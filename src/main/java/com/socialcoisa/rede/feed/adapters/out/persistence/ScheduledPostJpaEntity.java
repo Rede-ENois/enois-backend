@@ -46,6 +46,10 @@ class ScheduledPostJpaEntity {
 	@Column(name = "topic", length = 40)
 	String topic;
 
+	/** Alternativas da enquete (POLL), como CSV — é o conteúdo do post que só existe nelas. */
+	@Column(name = "poll_options", columnDefinition = "text")
+	String pollOptions;
+
 	@Column(name = "scheduled_at", nullable = false)
 	Instant scheduledAt;
 

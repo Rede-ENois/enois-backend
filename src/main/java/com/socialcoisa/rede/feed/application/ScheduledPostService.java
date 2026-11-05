@@ -53,7 +53,7 @@ public class ScheduledPostService {
 
 	public record ScheduleCommand(PostType type, String content, String pageHtml, String articleBody,
 			List<String> tags, List<String> mediaIds, List<String> mentionedUserIds, String communityId,
-			String topic, Instant scheduledAt) {
+			String topic, List<String> pollOptions, Instant scheduledAt) {
 	}
 
 	@Transactional
@@ -83,6 +83,9 @@ public class ScheduledPostService {
 		if (!temConteudo) {
 			throw throwInvalid("CONTEUDO_OBRIGATORIO", "O post agendado não tem conteúdo.");
 		}
+		// A enquete é o caso em que conteúdo sem alternativas é um post que falharia na hora
+		// marcada: as mesmas regras da publicação direta valem aqui, para o erro aparecer agora.
+		List<String> pollOptions = type == PostType.POLL ? pollOptions(command.pollOptions()) : List.of();
 		if (repository.findByUser(userId).size() >= MAX_PENDING) {
 			throw new ApiException(409, "TOO_MANY_SCHEDULED",
 				"Você já tem " + MAX_PENDING + " posts agendados. Cancele algum para criar outro.");
@@ -108,7 +111,7 @@ public class ScheduledPostService {
 			command.articleBody(), command.tags() == null ? List.of() : command.tags(),
 			command.mediaIds() == null ? List.of() : command.mediaIds(),
 			command.mentionedUserIds() == null ? List.of() : command.mentionedUserIds(), command.communityId(),
-			topic, scheduledAt, now, null, 0);
+			topic, pollOptions, scheduledAt, now, null, 0);
 		ScheduledPost saved = repository.save(post);
 		// Scheduling is the person's action today; the later automatic publication is not presence.
 		coins.recordPresence(userId);
@@ -147,7 +150,7 @@ public class ScheduledPostService {
 				// post entra no ar, não quando ele foi agendado.
 				publishPost.publish(new PublishPostCommand(new UserId(post.userId()), post.type(), post.content(),
 					post.pageHtml(), post.articleBody(), post.tags(), post.mediaIds(), post.communityId(),
-					post.mentionedUserIds(), post.topic()));
+					post.mentionedUserIds(), post.topic(), null, false, post.pollOptions()));
 				repository.delete(post.id());
 				published++;
 			}
@@ -162,6 +165,35 @@ public class ScheduledPostService {
 			}
 		}
 		return published;
+	}
+
+	/**
+	 * Alternativas da enquete, normalizadas. Mesmas regras e mesmos limites da publicação direta
+	 * ({@link PublishPostService}); as alternativas vazias contam, porque hoje não há como
+	 * preencher uma alternativa vazia na tela.
+	 */
+	private List<String> pollOptions(List<String> options) {
+		List<String> raw = options == null ? List.of()
+			: options.stream().map(value -> value == null ? "" : value.trim()).toList();
+		if (raw.size() < PublishPostService.MIN_POLL_OPTIONS) {
+			throw throwInvalid("POLL_TOO_FEW_OPTIONS",
+				"Enquete precisa de pelo menos " + PublishPostService.MIN_POLL_OPTIONS + " alternativas.");
+		}
+		if (raw.size() > PublishPostService.MAX_POLL_OPTIONS) {
+			throw throwInvalid("POLL_TOO_MANY_OPTIONS",
+				"Enquete aceita no maximo " + PublishPostService.MAX_POLL_OPTIONS + " alternativas.");
+		}
+		if (raw.stream().anyMatch(option -> !StringUtils.hasText(option))) {
+			throw throwInvalid("POLL_EMPTY_OPTION", "Toda alternativa da enquete precisa de texto.");
+		}
+		if (raw.stream().anyMatch(option -> option.length() > PublishPostService.MAX_POLL_OPTION_LENGTH)) {
+			throw throwInvalid("POLL_OPTION_TOO_LONG",
+				"Cada alternativa aceita no maximo " + PublishPostService.MAX_POLL_OPTION_LENGTH + " caracteres.");
+		}
+		if (raw.stream().map(option -> option.toLowerCase(java.util.Locale.ROOT)).distinct().count() != raw.size()) {
+			throw throwInvalid("POLL_DUPLICATE_OPTION", "As alternativas da enquete nao podem se repetir.");
+		}
+		return raw;
 	}
 
 	private String newId() {
