@@ -81,6 +81,17 @@ class GroupController {
 		return new PageResponse<>(items, nextCursor);
 	}
 
+	/** Grupos em que a pessoa participa. Exige sessao: e a lista pessoal, nao o catalogo publico. */
+	@GetMapping("/mine")
+	PageResponse<GroupView> mine(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(defaultValue = "50") int limit) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		var items = groupService.listMine(user.id().value(), limit).stream()
+			.map(group -> view(group, user))
+			.toList();
+		return new PageResponse<>(items, null);
+	}
+
 	@GetMapping("/{slug}")
 	GroupView group(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String slug) {
