@@ -16,6 +16,7 @@ public record ProfileLook(String theme, String accent, String font, String heade
 		return new ProfileLook(null, null, null, null, null, null, null);
 	}
 
+	@com.fasterxml.jackson.annotation.JsonIgnore
 	public boolean isEmpty() {
 		return theme == null && accent == null && font == null && header == null && textures == null
 				&& borders == null && decoration == null;

@@ -15,8 +15,12 @@ import com.socialcoisa.rede.shared.web.ApiException;
  * <p>O Jitsi não tem "criar sala": qualquer nome vira uma sala quando a primeira pessoa entra
  * (documentação em jitsi.org/api — "no API calls are necessary"). Por isso a sala é um link que
  * nós mesmos montamos, com nome derivado da sessão ou fixo por mentor. A base é configurável
- * (`rede.mentoring.jitsi.base-url`) para a plataforma poder apontar para uma instância própria
- * ou para o JaaS quando sair do meet.jit.si público.
+ * (`rede.mentoring.jitsi.base-url`).
+ *
+ * <p>Atenção: esta sala é um link aberto, sem token. O Jitsi das chamadas (ver
+ * {@code docs/CHAMADAS.md}) exige token e não serve para este fluxo; apontar para ele aqui faz a
+ * mentoria pedir senha. Enquanto a mentoria não passar pelo mesmo token, a base continua uma
+ * instância pública.
  */
 @Component
 public class MentoringRooms {

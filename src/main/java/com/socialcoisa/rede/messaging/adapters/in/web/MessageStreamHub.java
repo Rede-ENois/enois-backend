@@ -68,6 +68,33 @@ class MessageStreamHub {
 		}
 	}
 
+	/**
+	 * "A chamada X mudou": mesmo canal do stream de mensagens, evento próprio. O corpo só diz ids e
+	 * estado — quem recebe busca o estado real pelo endpoint de chamadas, que autoriza de novo.
+	 */
+	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+	void onCallChanged(com.socialcoisa.rede.calls.application.CallChanged change) {
+		Map<String, String> data = new java.util.HashMap<>();
+		data.put("callId", change.callId());
+		data.put("state", change.state());
+		if (change.conversationId() != null) {
+			data.put("conversationId", change.conversationId());
+		}
+		if (change.groupId() != null) {
+			data.put("groupId", change.groupId());
+		}
+		Map<String, String> immutable = Map.copyOf(data);
+		for (String userId : change.userIds()) {
+			ConcurrentLinkedDeque<SseEmitter> userStreams = streams.get(userId);
+			if (userStreams == null) {
+				continue;
+			}
+			for (SseEmitter emitter : userStreams) {
+				send(userId, emitter, SseEmitter.event().name("call").data(immutable));
+			}
+		}
+	}
+
 	/** Keeps idle streams alive through proxies that drop silent connections (often at 60s). */
 	@Scheduled(fixedDelay = 25_000, initialDelay = 25_000)
 	void heartbeat() {
