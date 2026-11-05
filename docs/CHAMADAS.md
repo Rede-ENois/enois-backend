@@ -126,13 +126,35 @@ ou dois "entrar") não deixam a chamada em dois estados nem contam a mesma pesso
 | POST | `/calls/{id}/leave` | Sair (grupo segue vivo) |
 | POST | `/calls/{id}/end` | Encerrar para todos |
 | POST | `/calls/{id}/fail` | A tela perdeu a mídia |
+| GET | `/calls/{id}/reportable` | Quem entrou na sala e pode ser denunciado (sem quem denuncia) |
+| POST | `/calls/{id}/reports` | Denúncia da chamada: `reportedUserId`, `reason`, `description`, `mediaId` |
+
+### Denúncia de chamada
+
+Quem está na sala denuncia outra pessoa que **entrou** nela. O servidor não confia na lista que o
+cliente manda: `reportable` sai de `joined_at` (quem atendeu ou passou pelo gateway conta como
+entrada) e o `POST` recusa denunciar quem não entrou (`NOT_IN_CALL`), denunciar a si mesmo
+(`INVALID_REPORTED_USER`) e repetir a mesmo denúncia (`409 ALREADY_REPORTED` — uma por quem
+denuncia × chamada × denunciado).
+
+A denúncia é a mesma das outras (teto `report` por hora, aviso ao suporte, triagem por IA), com
+alvo `CALL`. O contexto gravado em `call_reports` (V241) guarda a sala, o denunciado, quem estava
+na sala no momento, a captura e o horário — é o que a moderação lê na revisão. A captura é uma
+imagem enviada antes com propósito `REPORT_CAPTURE`: ela **não passa pela checagem de imagem
+pública** (a prova mostra a própria violação) e **só é servida a quem modera** (sem sessão `401`,
+sessão sem cargo `403`, `Cache-Control: private, no-store`).
+
+A triagem por IA lê o relato, os participantes e a captura, e **nunca penaliza sozinha** uma
+denúncia de chamada: penalidade e banimento sobre quem foi apontado são decisão humana no painel de
+revisão (`/moderacao/{reportId}`), que mostra a captura.
 
 O stream `/conversations/stream` ganha o evento `call` com `{"callId","state","conversationId"?,`
 `"groupId"?}`; o cliente busca o estado real na rota de chamadas, que autoriza de novo.
 
 Erros são explícitos: `NOT_PARTICIPANT`, `NOT_GROUP_MEMBER`, `CALL_STATE_CONFLICT`,
 `CALL_CANCELLED`, `CALL_DECLINED`, `CALL_MISSED`, `CALL_ENDED`, `NOT_CALL_INITIATOR`,
-`NOT_A_DIRECT_CONVERSATION`, `CALLS_NOT_CONFIGURED`.
+`NOT_A_DIRECT_CONVERSATION`, `CALLS_NOT_CONFIGURED` e, na denúncia, `NOT_IN_CALL`,
+`INVALID_REPORTED_USER`, `INVALID_REASON`, `DESCRIPTION_TOO_LONG`, `ALREADY_REPORTED`.
 
 ## Notificações
 
@@ -161,6 +183,8 @@ notificação na caixa.
 | `CallExpiryWorker` | Fecha o que venceu a cada 5s |
 | `CallController` | Rotas `/calls/**` |
 | `CallPersistenceAdapter` | Transições condicionais em `call_sessions`/`call_participants` (V240) |
+| `CallReportService` / `CallReportController` | Quem pode ser denunciado e a denúncia da sala |
+| `CallReportContext` / `CallReportPersistenceAdapter` | Contexto da denúncia em `call_reports` (V241) |
 
 A rota `/calls/{id}/gateway/entry/{userId}` exige o header `X-Enois-Authorize` com
 `REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN` (comparação em tempo constante; sem segredo configurado, 503
@@ -177,6 +201,13 @@ sessão de usuário — o chamador é o gateway, autenticado pelo segredo, não 
 | Grupo (`/grupos/{slug}`) | Botão "Tamo junto" e banner "🔴 O grupo está ao vivo!" com quantas pessoas estão na chamada |
 | Notificação e push (`/call/{id}`) | A rota pede a entrada ao provider e devolve a pessoa para a conversa de origem |
 | Toque | Sintetizado no navegador (Web Audio), só em 1:1, nunca em modo lite/BATATA |
+| "Denunciar chamada" (painel ao vivo) | Escolhe quem, motivo e relato; pede a captura do momento à sala e envia tudo junto |
+
+A captura do momento é pedida **à própria sala**, por `postMessage`: o painel é uma iframe de outro
+domínio, sem `allow-same-origin`, então o app não lê nada de dentro dela. O Epapo responde uma única
+vez, com uma folha JPEG das telas visíveis (`enois:call-capture-request` →
+`enois:call-capture-response`), e só para a origem registrada em `EPAPO_CAPTURE_ORIGIN`. Sem imagem
+legível (só áudio, câmera desligada) a denúncia segue só com o relato, e a tela diz isso.
 
 Minimizar mantém o painel montado; reabrir pede uma credencial nova ao servidor em vez de reusar
 o token. Fechar a aba durante a chamada avisa o servidor (`pagehide` → `POST /calls/{id}/leave`).

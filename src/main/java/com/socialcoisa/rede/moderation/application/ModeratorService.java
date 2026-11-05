@@ -263,7 +263,7 @@ public class ModeratorService {
 		if (report.reporterId().equals(moderatorId)) {
 			throw new ApiException(403, "REPORT_IS_YOURS", "Você denunciou este conteúdo; outro moderador decide.");
 		}
-		String authorId = contentAuthors.authorOf(report.targetType().name(), report.targetId()).orElse(null);
+		String authorId = contentAuthors.authorOf(report).orElse(null);
 		if (moderatorId.equals(authorId)) {
 			throw new ApiException(403, "AUTHOR_CANNOT_VOTE", "Você é o autor do conteúdo denunciado.");
 		}

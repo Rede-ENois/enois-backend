@@ -345,4 +345,59 @@ class MediaStorageProxyTests {
 		assertThat(store().chaveEscrita).isEqualTo(objectKey);
 		assertThat(store().escrito).hasSize(video.length);
 	}
+
+	/**
+	 * A captura de denúncia é a prova da violação: a checagem de imagem pública recusaria o
+	 * arquivo, e ela não pode ser publicada. Fica guardada e só quem modera consegue abrir.
+	 */
+	@Test
+	void capturaDeDenunciaNaoPassaPelaChecagemPublicaESoModeracaoLe() throws Exception {
+		var dono = auth.authenticate("media_proxy_captura");
+		var outro = auth.authenticate("media_proxy_captura_outro");
+		var admin = auth.authenticate("group-admin");
+		byte[] captura = "captura-da-tela-da-chamada".repeat(64).getBytes(StandardCharsets.UTF_8);
+
+		var criado = mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", dono.token())
+				.header("Idempotency-Key", "media-proxy-captura-1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("fileName", "captura.jpg",
+					"mimeType", "image/jpeg", "size", captura.length, "purpose", "REPORT_CAPTURE"))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
+			.path("objectKey").asText();
+
+		mockMvc.perform(put("/storage/" + objectKey)
+				.header("X-Session-Token", dono.token())
+				.contentType(MediaType.IMAGE_JPEG)
+				.content(captura))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("STORED"));
+
+		// Sem sessão e com sessão comum: a prova não é servida.
+		mockMvc.perform(get("/storage/" + objectKey)).andExpect(status().isUnauthorized());
+		mockMvc.perform(get("/storage/" + objectKey).header("X-Session-Token", outro.token()))
+			.andExpect(status().isForbidden());
+
+		var leitura = mockMvc.perform(get("/storage/" + objectKey).header("X-Session-Token", admin.token()))
+			.andExpect(status().isOk())
+			.andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")))
+			.andReturn();
+		// O bucket falso devolve o conteúdo fixo dele; o que importa aqui é que a leitura passou.
+		assertCorpoEmStreaming(leitura, store().conteudo);
+	}
+
+	@Test
+	void capturaDeDenunciaSoAceitaImagem() throws Exception {
+		var dono = auth.authenticate("media_proxy_captura_tipo");
+		mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", dono.token())
+				.header("Idempotency-Key", "media-proxy-captura-2")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("fileName", "captura.mp4",
+					"mimeType", "video/mp4", "size", 1024, "purpose", "REPORT_CAPTURE"))))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("MEDIA_TYPE_NOT_ALLOWED"));
+	}
 }

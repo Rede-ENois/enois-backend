@@ -16,6 +16,12 @@ public interface MediaAssetRepository {
 
 	List<MediaAsset> findByIds(Collection<String> ids);
 
+	/**
+	 * Existe uma captura de denúncia entre estes assets? A captura é prova para a moderação: sai da
+	 * checagem de imagem pública e fica visível só para moderadores. Nula ou vazia não casa nada.
+	 */
+	boolean hasReportCapture(Collection<String> ids);
+
 	/** Proximo lote da fase 1 (copiar para o S3), priorizando quem errou menos vezes. */
 	List<MediaAsset> findForS3Copy(int limit, Instant before, int maxAttempts);
 

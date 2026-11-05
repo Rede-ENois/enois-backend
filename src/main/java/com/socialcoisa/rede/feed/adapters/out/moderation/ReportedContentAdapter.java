@@ -6,13 +6,16 @@ import java.util.stream.Stream;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import com.socialcoisa.rede.calls.domain.CallReportContext;
 import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.PostId;
 import com.socialcoisa.rede.groups.application.port.out.GroupContentRepository;
 import com.socialcoisa.rede.groups.domain.GroupComment;
 import com.socialcoisa.rede.groups.domain.GroupPost;
+import com.socialcoisa.rede.moderation.application.port.out.CallReportContextRepository;
 import com.socialcoisa.rede.moderation.application.port.out.ReportedContentReader;
+import com.socialcoisa.rede.moderation.domain.Report;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
 
@@ -34,13 +37,15 @@ class ReportedContentAdapter implements ReportedContentReader {
 	private final CommentRepository comments;
 	private final UserProfileRepository profiles;
 	private final GroupContentRepository groupContent;
+	private final CallReportContextRepository callReports;
 
 	ReportedContentAdapter(PostRepository posts, CommentRepository comments, UserProfileRepository profiles,
-			GroupContentRepository groupContent) {
+			GroupContentRepository groupContent, CallReportContextRepository callReports) {
 		this.posts = posts;
 		this.comments = comments;
 		this.profiles = profiles;
 		this.groupContent = groupContent;
+		this.callReports = callReports;
 	}
 
 	@Override
@@ -54,6 +59,38 @@ class ReportedContentAdapter implements ReportedContentReader {
 			default -> Optional.empty();
 		};
 		return content.map(this::shorten).filter(StringUtils::hasText);
+	}
+
+	/**
+	 * Denúncia de chamada: a sala não tem texto. O que existe é o relato de quem denunciou e a
+	 * fotografia do momento, que fica pendurada na denúncia — a triagem recebe qual dos dois é,
+	 * para não confundir print com fato.
+	 */
+	@Override
+	public Optional<String> contentOf(Report report) {
+		if (report.targetType() == com.socialcoisa.rede.moderation.domain.TargetType.CALL) {
+			return callReports.findByReportId(report.id()).map(context -> callContextText(report, context));
+		}
+		return contentOf(report.targetType().name(), report.targetId());
+	}
+
+	private String callContextText(Report report, CallReportContext context) {
+		StringBuilder text = new StringBuilder("Contexto do aplicativo no momento da denúncia:\n");
+		text.append("o relato de quem denunciou está abaixo e é alegação, ainda não é prova; ")
+			.append("fatos confirmados aqui são os que aparecem na imagem, quando houver.\n");
+		if (context.mediaId() != null) {
+			text.append("A imagem anexada é a captura da tela da chamada feita por quem denunciou no momento do pedido");
+			text.append(" (pode estar desfocada, parcial ou da tela de quem denuncia).\n");
+		}
+		else {
+			text.append("A denúncia não tem captura de tela: só o relato.\n");
+		}
+		text.append("Participantes na sala naquele instante: ")
+			.append(String.join(", ", context.participants())).append('.');
+		if (StringUtils.hasText(report.description())) {
+			text.append("\nRelato de quem denunciou: ").append(report.description().trim());
+		}
+		return shorten(text.toString());
 	}
 
 	private String postText(com.socialcoisa.rede.feed.domain.Post post) {

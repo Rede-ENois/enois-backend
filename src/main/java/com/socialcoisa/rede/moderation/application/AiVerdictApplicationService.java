@@ -43,6 +43,12 @@ public class AiVerdictApplicationService {
 			if (!StringUtils.hasText(report.aiTriage())) {
 				continue;
 			}
+			// Denúncia de chamada NUNCA é penalizada automaticamente: a prova é uma captura enviada
+			// por quem denuncia, e uma imagem escolhida pela parte não basta para restringir a outra.
+			// A triagem da IA orienta; a decisão é de uma pessoa.
+			if (report.targetType() == com.socialcoisa.rede.moderation.domain.TargetType.CALL) {
+				continue;
+			}
 			try {
 				JsonNode verdict = objectMapper.readTree(report.aiTriage());
 				if (!"PENALIZAR".equals(verdict.path("acao").asString())

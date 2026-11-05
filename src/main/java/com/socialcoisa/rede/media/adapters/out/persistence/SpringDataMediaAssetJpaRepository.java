@@ -16,6 +16,8 @@ interface SpringDataMediaAssetJpaRepository extends JpaRepository<MediaAssetJpaE
 
 	List<MediaAssetJpaEntity> findByIdIn(Collection<String> ids);
 
+	boolean existsByIdInAndPurpose(Collection<String> ids, String purpose);
+
 	/** Lote da copia: ainda no ImageKit, upload antigo o bastante, nao apagado e sem estourar tentativas. */
 	@Query("select e from MediaAssetJpaEntity e where e.storageProvider = :provider and e.s3MigratedAt is null "
 		+ "and e.deleteStatus = :deleteStatus and e.createdAt < :before and e.s3MigrationAttempts < :maxAttempts "

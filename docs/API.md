@@ -474,7 +474,9 @@ Pedir conexão a uma conta que não existe responde `404 USER_NOT_FOUND`.
 }
 ```
 
-Propósitos: `AVATAR`, `POST_IMAGE`, `COVER`, `BANNER`, `COMMUNITY_AVATAR`, `EVENT_COVER`, `JOB_LOGO`
+Propósitos: `AVATAR`, `POST_IMAGE`, `COVER`, `BANNER`, `COMMUNITY_AVATAR`, `EVENT_COVER`, `JOB_LOGO`,
+`RESUME` (só PDF) e `REPORT_CAPTURE` (só imagem; captura de denúncia de chamada, servida apenas a
+moderadores e nunca publicada).
 
 Resposta:
 ```json
@@ -804,6 +806,12 @@ entrada na sala é autorizada no servidor com token assinado — detalhes em
 | POST | `/api/calls/{callId}/leave` | Sair (no grupo a chamada continua) | Sim |
 | POST | `/api/calls/{callId}/end` | Encerrar para todos | Sim |
 | POST | `/api/calls/{callId}/fail` | A tela perdeu a mídia: falha explícita em vez de sessão pendurada | Sim |
+| GET | `/api/calls/{callId}/reportable` | Quem entrou na sala e pode ser denunciado (`[{userId, displayName}]`, sem quem denuncia) | Sim |
+| POST | `/api/calls/{callId}/reports` | Denúncia da chamada: `{"reportedUserId","reason","description","mediaId"?}` | Sim |
+
+A denúncia de chamada só aceita quem **entrou** na sala (`NOT_IN_CALL`), recusa apontar a si mesmo
+(`INVALID_REPORTED_USER`) e a repetição (`409 ALREADY_REPORTED`). O `mediaId` é a captura do momento,
+enviada antes com propósito `REPORT_CAPTURE`; ela não é publicada e só é servida a moderadores.
 
 Estados: `RINGING` (1:1 tocando), `CONNECTING`, `ACTIVE`, `DECLINED`, `MISSED`, `CANCELLED`,
 `ENDED`, `FAILED`. Repetir `answer`/`decline`/`cancel`/`start` é idempotente; transições inválidas

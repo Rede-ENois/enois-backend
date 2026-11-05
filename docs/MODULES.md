@@ -1629,5 +1629,10 @@ desligadas no próprio token.
 | `CallExpiryWorker` | 1:1 sem resposta (40s → `MISSED`), grupo vazio (5 min → `FAILED`), abandono (30 min) |
 | `CallPersistenceAdapter` | Transições condicionais em `call_sessions`/`call_participants` (V240) |
 | `CallController` | Rotas `/calls/**` e `/{conversation,group}/{id}/calls` |
+| `CallReportService` / `CallReportController` | Denúncia da sala: quem entrou pode ser apontado; contexto em `call_reports` (V241) |
+
+Denúncia de chamada entra na moderação como alvo `CALL`, com a captura do momento (propósito
+`REPORT_CAPTURE`, servida só a moderadores) e o relato. A triagem por IA lê tudo e **não penaliza
+sozinha** esse alvo: penalidade e banimento são decisão humana no painel de revisão.
 
 Detalhes, escolha de infraestrutura e contrato em [`CHAMADAS.md`](CHAMADAS.md).

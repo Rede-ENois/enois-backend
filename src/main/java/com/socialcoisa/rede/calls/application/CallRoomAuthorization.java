@@ -24,9 +24,10 @@ public interface CallRoomAuthorization {
 	CallEntry entry(String callId, String userId);
 
 	/**
-	 * A entrada autorizada. {@code room}, {@code displayName} e {@code moderator} saem daqui para o
-	 * gateway assinar o token — nunca de campos que o navegador mandou.
+	 * A entrada autorizada. {@code room}, {@code userId}, {@code displayName} e {@code moderator}
+	 * saem daqui para o gateway assinar o token — nunca de campos que o navegador mandou.
 	 */
-	record CallEntry(String callId, String room, String state, String displayName, boolean moderator) {
+	record CallEntry(String callId, String room, String userId, String state, String displayName,
+			boolean moderator) {
 	}
 }

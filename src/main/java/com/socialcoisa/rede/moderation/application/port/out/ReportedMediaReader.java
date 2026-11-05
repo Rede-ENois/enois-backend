@@ -15,4 +15,12 @@ public interface ReportedMediaReader {
 
 	/** Até {@code limit} imagens do alvo. Vazio quando não há imagem legível. */
 	List<byte[]> imagesOf(String targetType, String targetId, int limit);
+
+	/**
+	 * Imagens do alvo a partir da denúncia inteira. A denúncia de chamada pendura o print do
+	 * momento no PRÓPRIO registro da denúncia, e é ele que a triagem precisa olhar.
+	 */
+	default List<byte[]> imagesOf(com.socialcoisa.rede.moderation.domain.Report report, int limit) {
+		return imagesOf(report.targetType().name(), report.targetId(), limit);
+	}
 }
