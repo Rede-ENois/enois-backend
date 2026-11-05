@@ -205,8 +205,10 @@ public class GlobalExceptionHandler {
 	private void recordException(int status, String code, String message,
 			jakarta.servlet.http.HttpServletRequest request, Throwable failure) {
 		try {
+			Object route = request.getAttribute(org.springframework.web.servlet.HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
 			monitoring.recordException(status, code, message, request.getMethod(), request.getRequestURI(),
-				org.slf4j.MDC.get("requestId"), org.slf4j.MDC.get("userId"), failure);
+				route == null ? null : route.toString(), org.slf4j.MDC.get("requestId"), org.slf4j.MDC.get("userId"),
+				failure);
 		}
 		catch (RuntimeException ignored) {
 			// Monitoração nunca pode mascarar o erro original.
