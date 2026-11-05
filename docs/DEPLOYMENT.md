@@ -206,6 +206,16 @@ services:
 | `DB_PASSWORD` | `...` |
 | `REDE_CORS_ALLOWED_ORIGINS` | `https://app.exemplo.com` |
 
+## Telegram observability channel (production only)
+
+| Variable | GitHub secret | Example |
+|---|---|---|
+| `KOF_AGENT_API_TOKEN` | `KOF_AGENT_API_TOKEN` | Kof Agent bot token |
+| `KOF_AGENT_CHAT_ID` | `KOF_AGENT_CHAT_ID` | `-1001234567890` (numeric id, not the invite link) |
+
+Only the production stack receives them; without both the channel is inert. Details in
+[`KOF_AGENT.md`](KOF_AGENT.md).
+
 ## Variáveis de Ambiente Obrigatórias (OAuth)
 
 | Variável | Descrição |

@@ -46,6 +46,13 @@ fica `unknown`). O nível da aplicação é ajustável por `LOG_LEVEL` (default 
 - **Uploads**: `media_upload_signed` (mediaId, ownerId, mime, bytes, purpose, provider) e
   `media_upload_signing_failed` — metadados, nunca o conteúdo do arquivo.
 
+## Telegram channel (production)
+
+The monitoring pipeline also feeds a private Telegram channel through the Kof Agent bot: one bulletin
+every 10 s with WARN+ log lines, exceptions, every 5xx, startup/shutdown, health transitions, admin
+audit and application state, each with the request's IP and user id. See
+[`KOF_AGENT.md`](KOF_AGENT.md).
+
 ## Endereço MAC (por que não tem)
 
 O MAC é um endereço de camada 2 (link): ele não atravessa roteadores nem chega em uma requisição

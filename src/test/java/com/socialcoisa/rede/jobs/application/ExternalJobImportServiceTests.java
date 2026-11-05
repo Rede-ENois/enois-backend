@@ -41,7 +41,11 @@ class ExternalJobImportServiceTests {
 							"https://exemplo.test/vaga/2", "https://exemplo.test/vaga/2", name(), null),
 						// Some feeds send HTML-escaped text.
 						new ExternalJob("ext-3", "Dev &amp; Ops", "hims &#038; hers", "Remoto", null, null, null,
-							"https://exemplo.test/vaga/3", "https://exemplo.test/vaga/3", name(), null));
+							"https://exemplo.test/vaga/3", "https://exemplo.test/vaga/3", name(), null),
+						// Remote jobs listing every country: longer than the location column.
+						new ExternalJob("ext-4", "Vaga Global", "Empresa Y", "Argentina, Brazil, Canada, ".repeat(20),
+							null, null, null, "https://exemplo.test/vaga/4", "https://exemplo.test/vaga/4", name(),
+							null));
 				}
 			};
 		}
@@ -55,7 +59,7 @@ class ExternalJobImportServiceTests {
 
 	@Test
 	void importsIntoItsOwnTableAndDoesNotDuplicateOnRerun() {
-		assertThat(importService.refresh()).isGreaterThanOrEqualTo(3);
+		assertThat(importService.refresh()).isGreaterThanOrEqualTo(4);
 
 		var imported = repository.findBySource("StubSource", "ext-1");
 		assertThat(imported).isPresent();
@@ -69,7 +73,7 @@ class ExternalJobImportServiceTests {
 		// O banco de teste e compartilhado: conta so as vagas DESTA fonte (o stub), nao o total.
 		long fromStub = repository.findRecent(200).stream()
 			.filter(j -> "StubSource".equals(j.platform())).count();
-		assertThat(fromStub).isEqualTo(3);
+		assertThat(fromStub).isEqualTo(4);
 	}
 
 	@Test
@@ -79,5 +83,15 @@ class ExternalJobImportServiceTests {
 		var job = repository.findBySource("StubSource", "ext-3").orElseThrow();
 		assertThat(job.company()).isEqualTo("hims & hers");
 		assertThat(job.title()).isEqualTo("Dev & Ops");
+	}
+
+	@Test
+	void oversizedFeedTextIsCutToTheColumnInsteadOfFailingTheChunk() {
+		importService.refresh();
+
+		var job = repository.findBySource("StubSource", "ext-4").orElseThrow();
+		assertThat(job.location()).hasSizeLessThanOrEqualTo(ExternalJobImportService.TEXT_MAX)
+			.startsWith("Argentina, Brazil").endsWith("…");
+		assertThat(repository.findBySource("StubSource", "ext-1")).isPresent();
 	}
 }

@@ -21,6 +21,7 @@ import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
@@ -75,6 +76,7 @@ public class MonitoringService {
 	private volatile List<CountView> levelCounts = List.of();
 	private volatile List<CountView> typeCounts = List.of();
 	private volatile long countsAt;
+	private final List<MonitoringEventListener> listeners = new CopyOnWriteArrayList<>();
 
 	MonitoringService(Clock clock, ObjectProvider<DataSource> dataSource, FileEventSink sink,
 			@Value("${rede.monitoring.max-events-per-minute:1000}") int maxEventsPerMinute) {
@@ -82,6 +84,53 @@ public class MonitoringService {
 		this.dataSource = dataSource;
 		this.sink = sink;
 		this.maxEventsPerMinute = Math.max(1, maxEventsPerMinute);
+	}
+
+	// ------------------------------------------------------------------ listeners
+
+	/** Registers an extra destination (e.g. the Telegram channel). Listeners see every event. */
+	public void addListener(MonitoringEventListener listener) {
+		listeners.add(listener);
+	}
+
+	public void removeListener(MonitoringEventListener listener) {
+		listeners.remove(listener);
+	}
+
+	/** True when some listener wants events of this level and type (lets the log appender skip cheap). */
+	public boolean listenersAccept(String level, String type) {
+		for (MonitoringEventListener listener : listeners) {
+			if (listener.accepts(level, type)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Fans the event out to the listeners and, when {@code panel}, to the panel file. Listeners run
+	 * before the panel's per-minute cap: the cap protects the local file, not the other channels,
+	 * which apply their own grouping and limits.
+	 */
+	private void publish(EventRow row, String logger, Throwable failure, boolean panel) {
+		if (!listeners.isEmpty()) {
+			MonitoringEvent event = new MonitoringEvent(row.id(), row.createdAt(), row.level(), row.type(),
+				row.message(), row.requestId(), row.method(), row.path(), row.route(), row.status(), row.durationMs(),
+				row.clientIp(), row.userId(), logger, failure);
+			for (MonitoringEventListener listener : listeners) {
+				try {
+					if (listener.accepts(event.level(), event.type())) {
+						listener.onEvent(event);
+					}
+				}
+				catch (RuntimeException ignored) {
+					// A broken listener never costs the caller (often a request thread) anything.
+				}
+			}
+		}
+		if (panel) {
+			enqueue(row);
+		}
 	}
 
 	// ------------------------------------------------------------------ ingestão
@@ -139,8 +188,8 @@ public class MonitoringService {
 		// extra não derruba nada.
 		String level = status >= 500 ? "ERROR" : status >= 400 ? "WARN" : "INFO";
 		String message = method + " " + (route == null ? path : route) + " -> " + status;
-		enqueue(new EventRow(id(), clock.instant(), level, "REQUEST", message, requestId, method, path,
-			route, status, durationMs, userId, clientIp, deviceId, null));
+		publish(new EventRow(id(), clock.instant(), level, "REQUEST", message, requestId, method, path,
+			route, status, durationMs, userId, clientIp, deviceId, null), null, null, true);
 	}
 
 	// Exceções gravam com o IP da requisição atual (via MDC do filtro): é o IP de origem
@@ -153,22 +202,39 @@ public class MonitoringService {
 	/** Exceções com pilha: o painel mostra a causa sem expor corpo de requisição nem segredo. */
 	public void recordException(int status, String code, String message, String method, String path,
 			String requestId, String userId, Throwable failure) {
-		enqueue(new EventRow(id(), clock.instant(), status >= 500 ? "ERROR" : "WARN", "EXCEPTION",
-			code + ": " + safe(message), requestId, method, path, null, status, null, userId,
+		recordException(status, code, message, method, path, null, requestId, userId, failure);
+	}
+
+	/** Same as above with the matched route template, so external channels can avoid raw paths. */
+	public void recordException(int status, String code, String message, String method, String path, String route,
+			String requestId, String userId, Throwable failure) {
+		publish(new EventRow(id(), clock.instant(), status >= 500 ? "ERROR" : "WARN", "EXCEPTION",
+			code + ": " + safe(message), requestId, method, path, route, status, null, userId,
 			org.slf4j.MDC.get(RequestObservabilityFilter.MDC_CLIENT_IP), null,
-			safeStackTrace(failure, 4000)));
+			safeStackTrace(failure, 4000)), null, failure, true);
 	}
 
 	public void recordEvent(String level, String type, String message, Map<String, Object> metadata) {
-		enqueue(new EventRow(id(), clock.instant(), normalizeLevel(level), normalizeType(type), safe(message),
-			null, null, null, null, null, null, null, null, null, metadata == null ? null : metadata.toString()));
+		publish(new EventRow(id(), clock.instant(), normalizeLevel(level), normalizeType(type), safe(message),
+			null, null, null, null, null, null, null, null, null,
+			metadata == null ? null : safe(metadata.toString())), null, null, true);
 	}
 
 	public void recordLog(String level, String logger, String message, String requestId, String userId, String path) {
+		recordLog(level, logger, message, requestId, userId, path, null, true);
+	}
+
+	/**
+	 * A log line captured by {@link MonitoringLogAppender}. {@code panel} is false for lines below the
+	 * panel's threshold (they still reach the listeners that asked for that level).
+	 */
+	public void recordLog(String level, String logger, String message, String requestId, String userId, String path,
+			Throwable failure, boolean panel) {
 		String type = logger != null && logger.equals("audit") ? "AUDIT" : "LOG";
-		enqueue(new EventRow(id(), clock.instant(), normalizeLevel(level), type,
-			safe((logger == null ? "" : logger + ": ") + message), requestId, null, path, null, null, null,
-			userId, null, null, null));
+		publish(new EventRow(id(), clock.instant(), normalizeLevel(level), type,
+			safe((logger == null ? "" : logger + ": ") + message), requestId, org.slf4j.MDC.get("http.method"), path,
+			null, null, null, userId, org.slf4j.MDC.get(RequestObservabilityFilter.MDC_CLIENT_IP), null,
+			failure == null ? null : safeStackTrace(failure, 4000)), logger, failure, panel);
 	}
 
 	private synchronized boolean allowEvent() {
@@ -718,7 +784,7 @@ public class MonitoringService {
 		}
 		String value = level.trim().toUpperCase(Locale.ROOT);
 		return switch (value) {
-			case "ERROR", "WARN", "INFO", "DEBUG" -> value;
+			case "FATAL", "ERROR", "WARN", "INFO", "DEBUG", "TRACE" -> value;
 			default -> "INFO";
 		};
 	}
@@ -735,11 +801,7 @@ public class MonitoringService {
 		if (message == null) {
 			return "";
 		}
-		String clean = message
-			.replaceAll("(?i)[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}", "***@***")
-			.replaceAll("(?i)(bearer|authorization|token|refresh_token|senha|password)([=: ]+)[^ ,;]+",
-				"$1$2***")
-			.replaceAll("\\p{Cntrl}", " ");
+		String clean = SensitiveDataRedactor.redactLine(message);
 		return clean.length() > MAX_MESSAGE ? clean.substring(0, MAX_MESSAGE) : clean;
 	}
 
@@ -767,7 +829,8 @@ public class MonitoringService {
 			}
 			atual = atual.getCause();
 		}
-		String limpa = safe(pilha.toString());
+		String limpa = SensitiveDataRedactor.redact(pilha.toString());
+		limpa = limpa.length() > 8000 ? limpa.substring(0, 8000) : limpa;
 		int teto = Math.max(500, Math.min(maxChars, 8000));
 		return limpa.length() > teto ? limpa.substring(0, teto) : limpa;
 	}
