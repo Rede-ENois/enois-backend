@@ -1,8 +1,8 @@
-package com.socialcoisa.rede.messaging.adapters.out.persistence;
+package com.socialcoisa.rede.e2e.adapters.out.persistence;
 
 import java.time.Instant;
 
-import com.socialcoisa.rede.messaging.domain.UserKeypair;
+import com.socialcoisa.rede.e2e.domain.UserKeypair;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;

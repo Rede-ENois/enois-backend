@@ -1,4 +1,4 @@
-package com.socialcoisa.rede.messaging.domain;
+package com.socialcoisa.rede.e2e.domain;
 
 import java.time.Instant;
 

@@ -1,4 +1,4 @@
-package com.socialcoisa.rede.messaging.adapters.out.persistence;
+package com.socialcoisa.rede.e2e.adapters.out.persistence;
 
 import java.util.List;
 import java.util.Optional;
