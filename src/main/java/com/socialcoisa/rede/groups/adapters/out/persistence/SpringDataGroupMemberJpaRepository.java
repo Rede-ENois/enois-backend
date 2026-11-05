@@ -11,6 +11,8 @@ interface SpringDataGroupMemberJpaRepository extends JpaRepository<GroupMemberJp
 
 	List<GroupMemberJpaEntity> findByGroupIdOrderByJoinedAtAsc(String groupId);
 
+	List<GroupMemberJpaEntity> findByUserIdOrderByJoinedAtDesc(String userId);
+
 	long countByGroupId(String groupId);
 
 	void deleteByGroupIdAndUserId(String groupId, String userId);

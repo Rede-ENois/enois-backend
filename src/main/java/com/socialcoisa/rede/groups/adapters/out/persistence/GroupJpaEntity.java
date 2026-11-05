@@ -94,6 +94,10 @@ class GroupJpaEntity {
 			createdAt, updatedAt, suspendedAt);
 	}
 
+	String id() {
+		return id;
+	}
+
 	/** O contador desnormalizado nunca desce de zero, mesmo com remoção repetida. */
 	void adjustMemberCount(int delta) {
 		memberCount = Math.max(0, memberCount + delta);

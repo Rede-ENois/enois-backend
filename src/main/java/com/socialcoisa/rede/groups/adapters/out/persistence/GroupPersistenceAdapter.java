@@ -3,8 +3,12 @@ package com.socialcoisa.rede.groups.adapters.out.persistence;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
@@ -58,6 +62,25 @@ class GroupPersistenceAdapter implements GroupRepository {
 		String like = com.socialcoisa.rede.shared.web.LikePattern.contains(query);
 		return groups.listVisible(DISCOVERABLE, like, before, PageRequest.of(0, limit))
 			.stream()
+			.map(GroupJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public List<Group> findByMember(String userId, int limit) {
+		List<String> groupIds = members.findByUserIdOrderByJoinedAtDesc(userId).stream()
+			.map(GroupMemberJpaEntity::groupId)
+			.limit(limit)
+			.toList();
+		if (groupIds.isEmpty()) {
+			return List.of();
+		}
+		Map<String, GroupJpaEntity> map = groups.findAllById(groupIds).stream()
+			.filter(g -> g.toDomain().status().readableByMembers())
+			.collect(Collectors.toMap(GroupJpaEntity::id, Function.identity()));
+		return groupIds.stream()
+			.map(map::get)
+			.filter(Objects::nonNull)
 			.map(GroupJpaEntity::toDomain)
 			.toList();
 	}
