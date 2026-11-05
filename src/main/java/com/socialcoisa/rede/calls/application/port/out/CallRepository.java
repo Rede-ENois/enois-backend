@@ -24,6 +24,12 @@ public interface CallRepository {
 
 	Optional<CallSession> findById(String callId);
 
+	/**
+	 * Chamada dona de um nome de sala. O servidor de reunião só conhece o nome da sala; é por aqui
+	 * que ele chega à chamada (e, dela, a quem pode entrar).
+	 */
+	Optional<CallSession> findByRoomId(String roomId);
+
 	/** Chamada aberta de uma conversa — evita duas chamadas na mesma DM. */
 	Optional<CallSession> findOpenByConversation(String conversationId);
 

@@ -18,6 +18,7 @@ import com.socialcoisa.rede.calls.application.port.out.CallRepository;
 import com.socialcoisa.rede.calls.application.port.out.MeetingTokenIssuer;
 import com.socialcoisa.rede.calls.domain.CallKind;
 import com.socialcoisa.rede.calls.domain.CallModality;
+import com.socialcoisa.rede.calls.domain.CallParticipant;
 import com.socialcoisa.rede.calls.domain.CallParticipantState;
 import com.socialcoisa.rede.calls.domain.CallSession;
 import com.socialcoisa.rede.calls.domain.CallState;
@@ -43,7 +44,7 @@ import com.socialcoisa.rede.shared.web.ApiException;
  * </ul>
  */
 @Service
-public class CallService {
+public class CallService implements CallRoomAuthorization {
 
 	private static final Logger LOG = LoggerFactory.getLogger(CallService.class);
 
@@ -213,36 +214,69 @@ public class CallService {
 	public JoinView join(String callId, String actorId) {
 		requireConfigured();
 		CallSession call = requireCall(callId, actorId);
+		enter(call, actorId);
+		String token = tokens.tokenFor(call, roomParticipant(call, actorId),
+			displayName(actorId), moderatorOf(call, actorId));
+		return new JoinView(call.id(), call.kind(), call.modality(), tokens.host(), tokens.tokenTtlSeconds(),
+			call.roomId(), token, view(call, actorId, null));
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public Optional<CallSession> callOfRoom(String room) {
+		return room == null || room.isBlank() ? Optional.empty() : calls.findByRoomId(room);
+	}
+
+	/**
+	 * Entrada pedida pelo próprio servidor de reunião (gateway de identidade), que só assina o
+	 * token depois desta resposta. As mesmas regras do {@link #join}: vínculo, estado e idempotência.
+	 */
+	@Override
+	@Transactional
+	public CallEntry entry(String callId, String userId) {
+		requireConfigured();
+		CallSession call = calls.findById(callId)
+			.orElseThrow(() -> new ApiException(404, "CALL_NOT_FOUND", "Chamada nao encontrada ou expirada."));
+		enter(call, userId);
+		return new CallEntry(call.id(), call.roomId(), call.state().name(), displayName(userId), moderatorOf(call, userId));
+	}
+
+	/** Vínculo + estado + registro da entrada. Vale tanto para o painel quanto para o gateway. */
+	private void enter(CallSession call, String actorId) {
 		try {
 			audience.requireCanJoin(call, actorId);
 		}
 		catch (ApiException denied) {
-			calls.logEntry(callId, actorId, false, denied.code());
+			calls.logEntry(call.id(), actorId, false, denied.code());
 			throw denied;
 		}
 		if (!call.state().allowsJoin()) {
-			calls.logEntry(callId, actorId, false, call.state().name());
-			throw new ApiException(409, terminalCode(call.state()),
-				terminalMessage(call.state()));
+			calls.logEntry(call.id(), actorId, false, call.state().name());
+			throw new ApiException(409, terminalCode(call.state()), terminalMessage(call.state()));
 		}
 		Instant now = clock.instant();
 		CallState from = call.state();
 		// Entrar duas vezes (recarregou a página, retry da rede) é a mesma entrada, não um segundo
 		// participante: join é condicional e o que importa é que a pessoa esteja dentro.
-		calls.join(callId, actorId, now);
+		calls.join(call.id(), actorId, now);
 		call.extendTo(now, CallSession.ABANDON_TIMEOUT);
 		if (from == CallState.CONNECTING) {
 			call.moveTo(CallState.ACTIVE, now, null);
 		}
 		calls.persist(call, from);
-		calls.logEntry(callId, actorId, true, call.state().name());
-		boolean moderator = call.initiatorId().equals(actorId);
-		String token = tokens.tokenFor(call, new com.socialcoisa.rede.calls.domain.CallParticipant(
-			callId + ":" + actorId, callId, actorId, CallParticipantState.JOINED, now, now, null, now),
-			displayName(actorId), moderator);
+		calls.logEntry(call.id(), actorId, true, call.state().name());
 		publish(call, audienceOf(call));
-		return new JoinView(call.id(), call.kind(), call.modality(), tokens.host(), tokens.tokenTtlSeconds(),
-			call.roomId(), token, view(call, actorId, null));
+	}
+
+	private CallParticipant roomParticipant(CallSession call, String actorId) {
+		Instant now = clock.instant();
+		return new CallParticipant(call.id() + ":" + actorId, call.id(), actorId, CallParticipantState.JOINED,
+			now, now, null, now);
+	}
+
+	/** Quem iniciou a chamada é moderador; quem entra depois nunca vira moderador por conta própria. */
+	private static boolean moderatorOf(CallSession call, String actorId) {
+		return call.initiatorId().equals(actorId);
 	}
 
 	@Transactional

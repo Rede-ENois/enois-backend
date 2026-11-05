@@ -16,9 +16,13 @@ import com.socialcoisa.rede.shared.web.TestAuthHelper;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Sonda manual da mídia: sobe o app de verdade apontado para uma stack local do
- * {@code deploy/jitsi}, abre uma chamada 1:1 pelos mesmos endpoints do app e grava os tokens de
- * entrada em arquivo para dois navegadores entrarem na mesma sala.
+ * Sonda manual da mídia: sobe o app de verdade apontado para uma stack local do Epapo
+ * ({@code deploy/} do repositório epapo), abre uma chamada 1:1 pelos mesmos endpoints do app e
+ * grava os tokens de entrada em arquivo para dois navegadores entrarem na mesma sala.
+ *
+ * <p>Propriedades: {@code -Dcall.probe.url} (endereço público do servidor de reunião),
+ * {@code -Dcall.probe.gateway} (URL do gateway), {@code -Dcall.probe.internal} e
+ * {@code -Dcall.probe.bridge} (os dois segredos compartilhados da stack).
  *
  * <p>Não roda na suíte: só executa quando {@code -Dcall.probe.url} é passado, porque depende de
  * infraestrutura externa e do navegador. O roteiro está em {@code docs/CHAMADAS.md}.
@@ -26,8 +30,9 @@ import tools.jackson.databind.ObjectMapper;
 @EnabledIfSystemProperty(named = "call.probe.url", matches = ".+")
 @SpringBootTest(properties = {
 		"rede.calls.jitsi.url=${call.probe.url}",
-		"rede.calls.jitsi.jwt-secret=${call.probe.secret}",
-		"rede.calls.jitsi.jwt-issuer=rede",
+		"rede.calls.epapo.gateway-url=${call.probe.gateway}",
+		"rede.calls.epapo.internal-token=${call.probe.internal}",
+		"rede.calls.gateway.authorize-token=${call.probe.bridge}",
 		"spring.task.scheduling.enabled=false"
 })
 @AutoConfigureMockMvc

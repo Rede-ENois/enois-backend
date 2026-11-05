@@ -58,6 +58,11 @@ class CallPersistenceAdapter implements CallRepository {
 	}
 
 	@Override
+	public Optional<CallSession> findByRoomId(String roomId) {
+		return calls.findByRoomId(roomId).map(CallSessionJpaEntity::toDomain);
+	}
+
+	@Override
 	public Optional<CallSession> findOpenByConversation(String conversationId) {
 		return calls.findByConversationIdAndStateIn(conversationId, OPEN).stream()
 			.min(java.util.Comparator.comparing(CallSessionJpaEntity::createdAt))

@@ -1613,8 +1613,9 @@ Files: `ReleaseNoteController`, `ReleaseNoteService`, `ReleaseNoteRepository`,
 1:1 na conversa e "Tamo junto" no grupo, com o painel embutido no app. O servidor decide tudo:
 quem pode começar (participante da conversa, membro do grupo), quem pode entrar (conferido no
 vínculo a cada pedido e no `POST /calls/{id}/join`), em que estado a chamada está e quando vence.
-O nome da sala é um UUID gerado no servidor; a entrada usa JWT HS256 emitido pelo backend para o
-Jitsi que a gente hospeda (`docker-jitsi-meet` com `AUTH_TYPE=jwt`), com gravação/transmissão
+O nome da sala é um UUID gerado no servidor. A entrada usa um JWT HS256 emitido pelo *auth gateway*
+da Epapo (o Jitsi próprio da rede, com `AUTH_TYPE=jwt`), e esse gateway **só assina depois** de o
+Énóis autorizar quem entra em qual chamada. Gravação, transmissão, chamada externa e transcrição vão
 desligadas no próprio token.
 
 | Classe | Papel |
@@ -1622,8 +1623,10 @@ desligadas no próprio token.
 | `CallService` | Começar, atender, recusar, cancelar, entrar, sair, encerrar, falhar, expirar |
 | `CallSession` / `CallState` | Agregado e máquina de estados fechada |
 | `CallAudience` | Autorização pelo vínculo (conversa/grupo) |
+| `CallRoomAuthorization` | Porta do gateway: chamada pela sala e autorização de entrada |
+| `EpapoMeetingTokenIssuer` | Cliente do gateway da Epapo (`POST /auth/token`); não assina JWT |
+| `CallGatewayController` | Rotas internas do gateway (`/calls/rooms/{room}`, `/calls/{id}/gateway/entry/{userId}`) |
 | `CallExpiryWorker` | 1:1 sem resposta (40s → `MISSED`), grupo vazio (5 min → `FAILED`), abandono (30 min) |
-| `JwtMeetingTokenIssuer` | JWT HS256 do Jitsi próprio; o segredo só existe no servidor |
 | `CallPersistenceAdapter` | Transições condicionais em `call_sessions`/`call_participants` (V240) |
 | `CallController` | Rotas `/calls/**` e `/{conversation,group}/{id}/calls` |
 
