@@ -521,13 +521,14 @@ public class MessagingService {
 	}
 
 	/** {@code from} is the sender's account id: the inbox marks the viewer's own last message. */
-	public record LastMessagePreview(String text, boolean e2e, String iv, java.time.Instant time, String from) {
-		static final LastMessagePreview EMPTY = new LastMessagePreview(null, false, null, null, null);
+	public record LastMessagePreview(String text, boolean e2e, String iv, String encryptedKeys,
+			java.time.Instant time, String from) {
+		static final LastMessagePreview EMPTY = new LastMessagePreview(null, false, null, null, null, null);
 	}
 
 	public LastMessagePreview getLastMessagePreview(String conversationId) {
 		return repository.findLastMessage(conversationId)
-			.map(m -> new LastMessagePreview(m.text(), m.e2e(), m.iv(), m.createdAt(), m.senderId()))
+			.map(m -> new LastMessagePreview(m.text(), m.e2e(), m.iv(), m.encryptedKeys(), m.createdAt(), m.senderId()))
 			.orElse(LastMessagePreview.EMPTY);
 	}
 
