@@ -418,15 +418,18 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			: postRepository.findByIds(quotedIds.stream().map(PostId::new).toList()).stream()
 				.collect(Collectors.toMap(p -> p.id().value(), Function.identity()));
 		// Autores dos posts citados: busca em lote pra exibir o avatar no crédito do repost.
+		// Variável final porque o lambda do stream abaixo referencia ela.
 		java.util.Set<String> quotedAuthorIds = quotedPosts.values().stream()
 			.map(p -> p.authorId().value())
 			.filter(id -> !profiles.containsKey(id))
 			.collect(Collectors.toSet());
-		if (!quotedAuthorIds.isEmpty()) {
-			java.util.Map<String, UserProfile> mutableProfiles = new java.util.HashMap<>(profiles);
+		final Map<String, UserProfile> allProfiles;
+		if (quotedAuthorIds.isEmpty()) {
+			allProfiles = profiles;
+		} else {
+			allProfiles = new java.util.HashMap<>(profiles);
 			userProfileRepository.findAllByIds(quotedAuthorIds)
-				.forEach(p -> mutableProfiles.put(p.id(), p));
-			profiles = mutableProfiles;
+				.forEach(p -> allProfiles.put(p.id(), p));
 		}
 		// Attachments of the whole page (address, type, pixel size) in ONE query, so the card draws
 		// at its final height instead of fetching each media and growing after it loads.
@@ -434,7 +437,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			.visibleByIds(visible.stream().flatMap(p -> p.mediaIds().stream()).collect(Collectors.toSet()));
 		return visible.stream()
 			.map(post -> {
-				UserProfile profile = profiles.get(post.authorId().value());
+				UserProfile profile = allProfiles.get(post.authorId().value());
 				var corporateProfile = corporate.get(post.authorId().value());
 				PostView view = PostView.from(post,
 					corporateProfile != null ? corporateProfile.username()
@@ -454,7 +457,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				if (post.repostWithOpinion() && post.repostOf() != null) {
 					Post quoted = quotedPosts.get(post.repostOf());
 					if (quoted != null) {
-						UserProfile quotedAuthor = profiles.get(quoted.authorId().value());
+						UserProfile quotedAuthor = allProfiles.get(quoted.authorId().value());
 						withReaction = withReaction.withRepostQuote(quoted.content(), quoted.mediaIds(),
 							quotedAuthor != null ? quotedAuthor.avatar() : null);
 					}
