@@ -246,7 +246,11 @@ class RequestOriginFilter extends OncePerRequestFilter {
 		if (path.startsWith("/identity/govbr/")) {
 			return true;
 		}
-		// GET de início e callbacks OAuth: navegação/redirect do provedor, sem Origin do app.
+		// Ponte com o servidor de reunião (gateway do Epapo): chamada de servidor, sem Origin, e
+		// com segredo compartilhado próprio conferido no controller.
+		if (path.startsWith("/calls/rooms/") || (path.startsWith("/calls/") && path.contains("/gateway/entry/"))) {
+			return true;
+		}
 		return path.startsWith("/auth/oauth/")
 				&& ("GET".equalsIgnoreCase(method) || path.endsWith("/callback"));
 	}

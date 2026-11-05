@@ -800,7 +800,7 @@ entrada na sala é autorizada no servidor com token assinado — detalhes em
 | POST | `/api/calls/{callId}/answer` | Atender (só 1:1) | Sim |
 | POST | `/api/calls/{callId}/decline` | Recusar | Sim |
 | POST | `/api/calls/{callId}/cancel` | Quem iniciou desiste | Sim |
-| POST | `/api/calls/{callId}/join` | Autoriza e devolve `host`, `room`, `jwt` e `call` | Sim |
+| POST | `/api/calls/{callId}/join` | Autoriza e devolve `host`, `room`, `jwt` (emitido pelo gateway da Epapo) e `call` | Sim |
 | POST | `/api/calls/{callId}/leave` | Sair (no grupo a chamada continua) | Sim |
 | POST | `/api/calls/{callId}/end` | Encerrar para todos | Sim |
 | POST | `/api/calls/{callId}/fail` | A tela perdeu a mídia: falha explícita em vez de sessão pendurada | Sim |
@@ -811,8 +811,16 @@ respondem `409` com `CALL_STATE_CONFLICT` (ou o código específico do estado, c
 O stream `/api/conversations/stream` também emite `event: call` com
 `{"callId","state","conversationId"?,"groupId"?}`.
 
-Sem `REDE_CALLS_JITSI_URL` e `REDE_CALLS_JITSI_JWT_SECRET` a API responde `503 CALLS_NOT_CONFIGURED`
-— nunca abre sala sem controle de acesso.
+Duas rotas internas, para o gateway da Epapo (não são para o app):
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/calls/rooms/{room}` | A qual chamada e a que estado a sala pertence | `X-Enois-Authorize` |
+| POST | `/api/calls/{callId}/gateway/entry/{userId}` | Autoriza (e registra) a entrada de uma pessoa na chamada | `X-Enois-Authorize` |
+
+Sem `REDE_CALLS_JITSI_URL`, ou sem o gateway configurado (`REDE_CALLS_EPAPO_GATEWAY_URL` +
+`REDE_CALLS_EPAPO_INTERNAL_TOKEN`), a API responde `503 CALLS_NOT_CONFIGURED` — nunca abre sala sem
+controle de acesso.
 
 ---
 

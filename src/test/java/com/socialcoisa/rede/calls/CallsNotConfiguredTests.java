@@ -25,7 +25,8 @@ import tools.jackson.databind.ObjectMapper;
  */
 @SpringBootTest(properties = {
 		"rede.calls.jitsi.url=",
-		"rede.calls.jitsi.jwt-secret=",
+		"rede.calls.epapo.gateway-url=",
+		"rede.calls.epapo.internal-token=",
 		"spring.task.scheduling.enabled=false"
 })
 @AutoConfigureMockMvc
