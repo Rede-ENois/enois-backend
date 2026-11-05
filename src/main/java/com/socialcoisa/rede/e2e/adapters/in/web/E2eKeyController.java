@@ -1,11 +1,7 @@
-package com.socialcoisa.rede.messaging.adapters.in.web;
+package com.socialcoisa.rede.e2e.adapters.in.web;
 
-import java.time.Clock;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
-import java.util.stream.Collectors;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -14,55 +10,42 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.socialcoisa.rede.messaging.application.MessagingService;
-import com.socialcoisa.rede.messaging.application.port.out.E2eKeyRepository;
-import com.socialcoisa.rede.messaging.domain.ConversationKey;
-import com.socialcoisa.rede.messaging.domain.UserKeypair;
+import com.socialcoisa.rede.e2e.application.E2eKeyService;
+import com.socialcoisa.rede.e2e.domain.ConversationKey;
+import com.socialcoisa.rede.e2e.domain.UserKeypair;
 import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 
+/**
+ * Endpoints E2E: gestão de keypairs e chaves de conversa.
+ *
+ * Controller fino: valida sessão e delega pro E2eKeyService. Nenhuma regra de negócio aqui.
+ */
 @RestController
 class E2eKeyController {
 
-	private static final int MAX_KEY_SIZE = 8192;
-
-	private final E2eKeyRepository keys;
-	private final MessagingService messaging;
+	private final E2eKeyService e2eKeys;
 	private final CurrentUserResolver currentUserResolver;
-	private final Clock clock;
 
-	E2eKeyController(E2eKeyRepository keys, MessagingService messaging,
-			CurrentUserResolver currentUserResolver, Clock clock) {
-		this.keys = keys;
-		this.messaging = messaging;
+	E2eKeyController(E2eKeyService e2eKeys, CurrentUserResolver currentUserResolver) {
+		this.e2eKeys = e2eKeys;
 		this.currentUserResolver = currentUserResolver;
-		this.clock = clock;
 	}
 
 	@PostMapping("/e2e/keypair")
 	Map<String, String> uploadKeypair(@RequestHeader("X-Session-Token") String sessionToken,
 			@RequestBody KeypairRequest request) {
 		String userId = currentUserResolver.resolve(sessionToken).id().value();
-		if (request.publicKey() == null || request.encryptedPrivateKey() == null) {
-			throw new ApiException(400, "INVALID_KEYPAIR", "Chave publica e privada cifrada sao obrigatorias.");
-		}
-		if (request.publicKey().length() > MAX_KEY_SIZE || request.encryptedPrivateKey().length() > MAX_KEY_SIZE) {
-			throw new ApiException(400, "KEY_TOO_LARGE", "Chave excede o tamanho maximo permitido.");
-		}
-		keys.deactivateKeypairs(userId);
-		String id = UUID.randomUUID().toString();
-		keys.saveKeypair(new UserKeypair(id, userId, request.publicKey(), request.encryptedPrivateKey(),
-			request.algorithm() != null ? request.algorithm() : "RSA-OAEP", true, clock.instant()));
+		String id = e2eKeys.uploadKeypair(userId, request.publicKey(), request.encryptedPrivateKey(),
+			request.algorithm());
 		return Map.of("id", id, "status", "ACTIVE");
 	}
 
 	@GetMapping("/e2e/keypair")
 	KeypairView myKeypair(@RequestHeader("X-Session-Token") String sessionToken) {
 		String userId = currentUserResolver.resolve(sessionToken).id().value();
-		UserKeypair kp = keys.findActiveKeypair(userId).orElse(null);
-		if (kp == null) {
-			throw new ApiException(404, "NO_KEYPAIR", "Nenhum keypair configurado.");
-		}
+		UserKeypair kp = e2eKeys.activeKeypair(userId)
+			.orElseThrow(() -> new ApiException(404, "NO_KEYPAIR", "Nenhum keypair configurado."));
 		return new KeypairView(kp.publicKey(), kp.encryptedPrivateKey(), kp.algorithm());
 	}
 
@@ -70,7 +53,7 @@ class E2eKeyController {
 	PublicKeyView userPublicKey(@RequestHeader("X-Session-Token") String sessionToken,
 			@PathVariable String userId) {
 		currentUserResolver.resolve(sessionToken);
-		return keys.findActiveKeypair(userId)
+		return e2eKeys.activeKeypair(userId)
 			.map(kp -> new PublicKeyView(kp.publicKey(), kp.algorithm()))
 			.orElse(new PublicKeyView(null, null));
 	}
@@ -79,23 +62,10 @@ class E2eKeyController {
 	Map<String, String> distributeKey(@RequestHeader("X-Session-Token") String sessionToken,
 			@PathVariable String conversationId, @RequestBody List<ConversationKeyRequest> participants) {
 		String callerId = currentUserResolver.resolve(sessionToken).id().value();
-		if (!messaging.isParticipant(conversationId, callerId)) {
-			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
-		}
-		Set<String> realParticipants = messaging.getParticipants(conversationId).stream()
-			.map(p -> p.userId())
-			.collect(Collectors.toSet());
-		for (ConversationKeyRequest p : participants) {
-			if (!realParticipants.contains(p.userId())) {
-				throw new ApiException(400, "INVALID_PARTICIPANT",
-					"Usuario " + p.userId() + " nao participa desta conversa.");
-			}
-			if (p.encryptedKey() == null || p.encryptedKey().length() > MAX_KEY_SIZE) {
-				throw new ApiException(400, "INVALID_KEY", "Chave invalida ou excede o tamanho maximo.");
-			}
-			keys.saveConversationKey(new ConversationKey(conversationId, p.userId(),
-				p.encryptedKey(), 1, clock.instant()));
-		}
+		e2eKeys.distributeConversationKey(callerId, conversationId,
+			participants.stream()
+				.map(p -> new E2eKeyService.ConversationKeyEntry(p.userId(), p.encryptedKey()))
+				.toList());
 		return Map.of("status", "DISTRIBUTED", "conversationId", conversationId);
 	}
 
@@ -103,10 +73,7 @@ class E2eKeyController {
 	ConversationKeyView myConversationKey(@RequestHeader("X-Session-Token") String sessionToken,
 			@PathVariable String conversationId) {
 		String userId = currentUserResolver.resolve(sessionToken).id().value();
-		if (!messaging.isParticipant(conversationId, userId)) {
-			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
-		}
-		ConversationKey ck = keys.findConversationKey(conversationId, userId).orElse(null);
+		ConversationKey ck = e2eKeys.conversationKey(conversationId, userId).orElse(null);
 		if (ck == null) {
 			return new ConversationKeyView(null, 0);
 		}
