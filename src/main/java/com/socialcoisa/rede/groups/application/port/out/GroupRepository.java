@@ -26,6 +26,9 @@ public interface GroupRepository {
 	 */
 	List<Group> listVisible(String query, Instant before, int limit);
 
+	/** Grupos em que a pessoa participa. */
+	List<Group> findByMember(String userId, int limit);
+
 	void saveMember(GroupMember member);
 
 	Optional<GroupMember> findMember(String groupId, String userId);

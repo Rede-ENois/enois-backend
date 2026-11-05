@@ -90,6 +90,17 @@ class GroupFlowTests {
 			.andExpect(jsonPath("$.items[0].slug").value("turma-do-cafe"))
 			.andExpect(jsonPath("$.items[0].joined").value(false))
 			.andExpect(jsonPath("$.items[0].viewerRole").doesNotExist());
+
+		// /groups/mine devolve os grupos em que o usuário participa.
+		mockMvc.perform(get("/groups/mine").header("X-Session-Token", dono.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[0].id").value(groupId))
+			.andExpect(jsonPath("$.items[0].joined").value(true))
+			.andExpect(jsonPath("$.items[0].viewerRole").value("OWNER"));
+
+		// /groups/mine sem sessão é 401.
+		mockMvc.perform(get("/groups/mine"))
+			.andExpect(status().isUnauthorized());
 	}
 
 	@Test

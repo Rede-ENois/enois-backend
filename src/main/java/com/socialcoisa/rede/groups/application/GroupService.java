@@ -102,6 +102,11 @@ public class GroupService {
 	}
 
 	@Transactional(readOnly = true)
+	public List<Group> listMine(String userId, int limit) {
+		return repository.findByMember(userId, Math.min(Math.max(limit, 1), MAX_PAGE));
+	}
+
+	@Transactional(readOnly = true)
 	public List<Group> list(String query, Instant before, int limit) {
 		return repository.listVisible(StringUtils.hasText(query) ? query.trim() : null, before,
 			Math.min(Math.max(limit, 1), MAX_PAGE));
