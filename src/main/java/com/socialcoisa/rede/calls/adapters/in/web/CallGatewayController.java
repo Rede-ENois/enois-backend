@@ -71,7 +71,8 @@ class CallGatewayController {
 			@PathVariable String callId, @PathVariable String userId) {
 		requireServer(presented);
 		CallRoomAuthorization.CallEntry entry = rooms.entry(callId, userId);
-		return new EntryView(entry.callId(), entry.room(), entry.state(), entry.displayName(), entry.moderator());
+		return new EntryView(entry.callId(), entry.room(), entry.userId(), entry.state(), entry.displayName(),
+			entry.moderator());
 	}
 
 	private void requireServer(String presented) {
@@ -93,6 +94,7 @@ class CallGatewayController {
 	 * Resposta só para o gateway: sala, nome e moderação vêm do servidor daqui, e ele repassa ao
 	 * gateway que assina o token. Nunca vai para o navegador.
 	 */
-	record EntryView(String callId, String room, String state, String displayName, boolean moderator) {
+	record EntryView(String callId, String room, String userId, String state, String displayName,
+			boolean moderator) {
 	}
 }

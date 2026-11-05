@@ -82,6 +82,13 @@ class CallPersistenceAdapter implements CallRepository {
 	}
 
 	@Override
+	public List<String> participantsWhoJoined(String callId) {
+		return participants.findByCallIdAndJoinedAtIsNotNullOrderByJoinedAtAsc(callId).stream()
+			.map(CallParticipantJpaEntity::userId)
+			.toList();
+	}
+
+	@Override
 	public CallParticipantState participantState(String callId, String userId) {
 		return participants.findByCallIdAndUserId(callId, userId).map(CallParticipantJpaEntity::state).orElse(null);
 	}
@@ -111,10 +118,11 @@ class CallPersistenceAdapter implements CallRepository {
 	@Override
 	@Transactional
 	public boolean join(String callId, String userId, Instant now) {
-		return participants.advance(callId, userId, CallParticipantState.INVITED, CallParticipantState.JOINED, now,
-			null, now) == 1
-			|| participants.advance(callId, userId, CallParticipantState.LEFT, CallParticipantState.JOINED, now,
-				null, now) == 1;
+		// Atender já entra; entrar de novo depois de sair mantém o primeiro horário de entrada.
+		return participants.advanceKeepingJoin(callId, userId, CallParticipantState.INVITED,
+			CallParticipantState.JOINED, now) == 1
+			|| participants.advanceKeepingJoin(callId, userId, CallParticipantState.LEFT,
+				CallParticipantState.JOINED, now) == 1;
 	}
 
 	@Override
@@ -127,7 +135,9 @@ class CallPersistenceAdapter implements CallRepository {
 	@Override
 	@Transactional
 	public boolean decide(String callId, String userId, CallParticipantState next, Instant now) {
-		return participants.advance(callId, userId, CallParticipantState.INVITED, next, null, now, now) == 1;
+		// Atender é entrar: a linha guarda o horário da entrada, que é o que diz quem esteve na sala.
+		Instant joinedAt = next == CallParticipantState.JOINED ? now : null;
+		return participants.advance(callId, userId, CallParticipantState.INVITED, next, joinedAt, now, now) == 1;
 	}
 
 	@Override

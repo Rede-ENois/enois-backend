@@ -39,6 +39,15 @@ class MediaAssetPersistenceAdapter implements MediaAssetRepository {
 	}
 
 	@Override
+	public boolean hasReportCapture(Collection<String> ids) {
+		if (ids == null || ids.isEmpty()) {
+			return false;
+		}
+		return repository.existsByIdInAndPurpose(ids,
+			com.socialcoisa.rede.media.application.MediaService.REPORT_CAPTURE_PURPOSE);
+	}
+
+	@Override
 	public List<MediaAsset> findForS3Copy(int limit, java.time.Instant before, int maxAttempts) {
 		return repository
 			.findForS3Copy(MediaStorageProvider.IMAGEKIT, com.socialcoisa.rede.media.domain.MediaDeleteStatus.NONE,

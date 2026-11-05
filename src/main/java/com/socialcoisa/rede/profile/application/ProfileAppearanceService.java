@@ -6,12 +6,15 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.preferences.domain.ThemeIds;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.ProfileAppearance;
 import com.socialcoisa.rede.profile.domain.ProfileLook;
 import com.socialcoisa.rede.profile.domain.UserProfile;
+import com.socialcoisa.rede.shared.application.CacheConfig;
+import com.socialcoisa.rede.shared.application.CacheInvalidator;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 /**
@@ -41,10 +44,12 @@ public class ProfileAppearanceService {
 	private static final Pattern HEX = Pattern.compile("^#[0-9a-fA-F]{6}$");
 
 	private final UserProfileRepository repository;
+	private final CacheInvalidator cacheInvalidator;
 	private final Clock clock;
 
-	public ProfileAppearanceService(UserProfileRepository repository, Clock clock) {
+	public ProfileAppearanceService(UserProfileRepository repository, CacheInvalidator cacheInvalidator, Clock clock) {
 		this.repository = repository;
+		this.cacheInvalidator = cacheInvalidator;
 		this.clock = clock;
 	}
 
@@ -52,12 +57,31 @@ public class ProfileAppearanceService {
 		return profileOf(userId).profileAppearance();
 	}
 
+	/**
+	 * Grava a aparência e derruba a projeção pública de quem salvou.
+	 *
+	 * <p>A aparência viaja dentro do perfil público, que tem cache próprio. Sem esta limpeza, quem
+	 * visita continuaria recebendo o visual anterior até o TTL vencer — a mudança só apareceria
+	 * para o dono, que lê a própria conta. Só as entradas DESTA pessoa saem (por id e por nome),
+	 * como no resto do perfil.</p>
+	 */
+	@Transactional
 	public ProfileAppearance update(String userId, ProfileAppearance requested) {
 		UserProfile profile = profileOf(userId);
 		ProfileAppearance clean = new ProfileAppearance(sanitize(requested == null ? null : requested.social()),
 			sanitize(requested == null ? null : requested.professional()));
 		profile.updateProfileAppearance(clean, clock.instant());
-		return repository.save(profile).profileAppearance();
+		ProfileAppearance saved = repository.save(profile).profileAppearance();
+		invalidarPerfilPublico(profile);
+		return saved;
+	}
+
+	private void invalidarPerfilPublico(UserProfile profile) {
+		cacheInvalidator.evictAfterCommit(CacheConfig.PUBLIC_PROFILES, "i:" + profile.id());
+		String username = profile.username();
+		if (username != null) {
+			cacheInvalidator.evictAfterCommit(CacheConfig.PUBLIC_PROFILES, "u:" + username.toLowerCase(Locale.ROOT));
+		}
 	}
 
 	private UserProfile profileOf(String userId) {

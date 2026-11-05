@@ -24,7 +24,7 @@ import tools.jackson.databind.ObjectMapper;
  * botão que falha com erro explícito é melhor do que um painel apontando para uma instância aberta.
  */
 @SpringBootTest(properties = {
-		"rede.calls.jitsi.url=",
+		"rede.calls.epapo.url=",
 		"rede.calls.epapo.gateway-url=",
 		"rede.calls.epapo.internal-token=",
 		"spring.task.scheduling.enabled=false"

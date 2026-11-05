@@ -15,5 +15,10 @@ public enum TargetType {
 	/** Mensagem privada (DM ou grupo). */
 	MESSAGE,
 	/** Pagina empresarial (a revisao a REMOVE do diretorio; nao bane o dono). */
-	COMPANY
+	COMPANY,
+	/**
+	 * Chamada de audio/video. O alvo é a SALA; quem foi denunciado é um participante apontado por
+	 * quem denuncia (a denúncia guarda quem estava dentro e o print do momento).
+	 */
+	CALL
 }

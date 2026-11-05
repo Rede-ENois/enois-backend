@@ -29,7 +29,7 @@ import tools.jackson.databind.ObjectMapper;
  */
 @EnabledIfSystemProperty(named = "call.probe.url", matches = ".+")
 @SpringBootTest(properties = {
-		"rede.calls.jitsi.url=${call.probe.url}",
+		"rede.calls.epapo.url=${call.probe.url}",
 		"rede.calls.epapo.gateway-url=${call.probe.gateway}",
 		"rede.calls.epapo.internal-token=${call.probe.internal}",
 		"rede.calls.gateway.authorize-token=${call.probe.bridge}",

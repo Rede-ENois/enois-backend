@@ -33,7 +33,7 @@ public class MentorSession {
 		this.message = message;
 		this.status = status;
 		this.priceSparks = priceSparks;
-		this.roomMode = roomMode == null ? RoomMode.JITSI_SESSION : roomMode;
+		this.roomMode = roomMode == null ? RoomMode.EPAPO_SESSION : roomMode;
 		this.roomUrl = roomUrl;
 		this.settledAt = settledAt;
 		this.createdAt = createdAt;
@@ -46,7 +46,7 @@ public class MentorSession {
 
 	public static MentorSession schedule(String id, String mentorId, String menteeId, String slotId, String message,
 			Long priceSparks, Instant now) {
-		return schedule(id, mentorId, menteeId, slotId, message, priceSparks, RoomMode.JITSI_SESSION, null, now);
+		return schedule(id, mentorId, menteeId, slotId, message, priceSparks, RoomMode.EPAPO_SESSION, null, now);
 	}
 
 	public static MentorSession schedule(String id, String mentorId, String menteeId, String slotId, String message,

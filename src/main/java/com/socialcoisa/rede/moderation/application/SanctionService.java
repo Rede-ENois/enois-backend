@@ -69,10 +69,18 @@ public class SanctionService {
 	 */
 	@Transactional
 	public boolean applyForReport(Report report, String motive) {
+		return applyForReport(report, motive, contentAuthors.authorOf(report).orElse(null));
+	}
+
+	/**
+	 * Mesma penalidade, com o autor já resolvido por quem conhece o alvo (a denúncia de chamada
+	 * acusa um participante apontado por quem denunciou, e o módulo de chamadas valida isso).
+	 */
+	@Transactional
+	public boolean applyForReport(Report report, String motive, String authorId) {
 		if (report.status() != ReportStatus.PENDING) {
 			return false;
 		}
-		String authorId = contentAuthors.authorOf(report.targetType().name(), report.targetId()).orElse(null);
 		if (authorId == null) {
 			return false; // alvo sem autor claro (perfil, vaga): revisao humana decide
 		}

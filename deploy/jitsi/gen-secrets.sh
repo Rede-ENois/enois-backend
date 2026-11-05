@@ -3,9 +3,9 @@
 #
 # Uso:  cp .env.example .env && ./gen-secrets.sh
 #
-# O segredo do JWT é o único valor que precisa ser copiado para o deploy do backend, como
-# REDE_CALLS_JITSI_JWT_SECRET. Ele não é impresso de novo depois: se perder, gere outro e
-# reinicie os containers (as chamadas em andamento caem, as novas usam o novo).
+# Este script é da stack antiga, sem o auth gateway: as chamadas e as salas de mentoria de hoje
+# ficam na Epapo (Rede-ENois/epapo), com os segredos gerados lá. O que este script imprime serve
+# só para a stack antiga continuar de pé; ele não é mais o caminho de instalação.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -37,10 +37,10 @@ chmod 600 .env
 cat <<EOF
 Segredos gerados em .env (permissão 600).
 
-Copie o valor abaixo para o deploy do backend como REDE_CALLS_JITSI_JWT_SECRET:
+Este script imprime o segredo da stack antiga. Na Epapo o segredo de assinatura fica só lá.
 
   ${jwt_secret}
 
 E confira no backend:
-  REDE_CALLS_JITSI_URL=$(grep '^PUBLIC_URL=' .env | cut -d= -f2-)
+  (o nome novo do host no backend é REDE_CALLS_EPAPO_URL)
 EOF

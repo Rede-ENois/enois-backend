@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Clock;
@@ -18,6 +20,8 @@ import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.ProfileAppearance;
 import com.socialcoisa.rede.profile.domain.ProfileLook;
 import com.socialcoisa.rede.profile.domain.UserProfile;
+import com.socialcoisa.rede.shared.application.CacheConfig;
+import com.socialcoisa.rede.shared.application.CacheInvalidator;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 class ProfileAppearanceServiceTests {
@@ -31,10 +35,14 @@ class ProfileAppearanceServiceTests {
 		return repository;
 	}
 
+	private ProfileAppearanceService service(UserProfileRepository repository) {
+		return new ProfileAppearanceService(repository, mock(CacheInvalidator.class), clock);
+	}
+
 	@Test
 	void socialAndProfessionalAreIndependent() {
 		UserProfile profile = TestProfile.of("user_1");
-		ProfileAppearanceService service = new ProfileAppearanceService(repositoryHolding(profile), clock);
+		ProfileAppearanceService service = service(repositoryHolding(profile));
 
 		service.update("user_1", new ProfileAppearance(
 			new ProfileLook("arcade-8bit", "#ff00aa", "mono", "solid", true, "square", 2), ProfileLook.empty()));
@@ -52,7 +60,7 @@ class ProfileAppearanceServiceTests {
 	@Test
 	void emptyRequestClearsBothLooks() {
 		UserProfile profile = TestProfile.of("user_1");
-		ProfileAppearanceService service = new ProfileAppearanceService(repositoryHolding(profile), clock);
+		ProfileAppearanceService service = service(repositoryHolding(profile));
 		service.update("user_1", new ProfileAppearance(new ProfileLook("win95", "#123456", "mono", "solid", true, "square", 2),
 			new ProfileLook("workbench", null, "serif", "clean", false, "rounded", 0)));
 
@@ -64,8 +72,7 @@ class ProfileAppearanceServiceTests {
 
 	@Test
 	void normalizesWhatItCanAndRejectsTheRest() {
-		ProfileAppearanceService service = new ProfileAppearanceService(
-			repositoryHolding(TestProfile.of("user_1")), clock);
+		ProfileAppearanceService service = service(repositoryHolding(TestProfile.of("user_1")));
 
 		ProfileAppearance saved = service.update("user_1",
 			new ProfileAppearance(new ProfileLook(" arcade-8bit ", " #ABCDEF ", " MONO ", " solid ", true, " square ", 1),
@@ -79,8 +86,7 @@ class ProfileAppearanceServiceTests {
 
 	@Test
 	void refusesThemeOutsideTheCatalog() {
-		ProfileAppearanceService service = new ProfileAppearanceService(
-			repositoryHolding(TestProfile.of("user_1")), clock);
+		ProfileAppearanceService service = service(repositoryHolding(TestProfile.of("user_1")));
 
 		assertThatThrownBy(() -> service.update("user_1",
 			new ProfileAppearance(new ProfileLook("tema-inventado", null, null, null, null, null, null), null)))
@@ -92,8 +98,7 @@ class ProfileAppearanceServiceTests {
 
 	@Test
 	void refusesAccentThatIsNotHex() {
-		ProfileAppearanceService service = new ProfileAppearanceService(
-			repositoryHolding(TestProfile.of("user_1")), clock);
+		ProfileAppearanceService service = service(repositoryHolding(TestProfile.of("user_1")));
 
 		assertThatThrownBy(() -> service.update("user_1",
 			new ProfileAppearance(new ProfileLook(null, "red; background:url(x)", null, null, null, null, null), null)))
@@ -105,8 +110,7 @@ class ProfileAppearanceServiceTests {
 
 	@Test
 	void refusesUnknownFontHeaderBorderAndDecorationLevel() {
-		ProfileAppearanceService service = new ProfileAppearanceService(
-			repositoryHolding(TestProfile.of("user_1")), clock);
+		ProfileAppearanceService service = service(repositoryHolding(TestProfile.of("user_1")));
 
 		assertThatThrownBy(() -> service.update("user_1",
 			new ProfileAppearance(new ProfileLook(null, null, "comic-sans", null, null, null, null), null)))
@@ -126,10 +130,26 @@ class ProfileAppearanceServiceTests {
 	void unknownProfileIsNotFound() {
 		UserProfileRepository repository = mock(UserProfileRepository.class);
 		when(repository.findById("sumiu")).thenReturn(Optional.empty());
-		ProfileAppearanceService service = new ProfileAppearanceService(repository, clock);
+		ProfileAppearanceService service = service(repository);
 
 		assertThatThrownBy(() -> service.update("sumiu", ProfileAppearance.empty()))
 			.isInstanceOfSatisfying(ApiException.class, error -> assertThat(error.status()).isEqualTo(404));
+	}
+
+	@Test
+	void savingTheLookDropsThePublicProjectionOfThatPersonOnly() {
+		UserProfile profile = TestProfile.of("user_1");
+		CacheInvalidator cacheInvalidator = mock(CacheInvalidator.class);
+		ProfileAppearanceService service = new ProfileAppearanceService(repositoryHolding(profile), cacheInvalidator, clock);
+
+		service.update("user_1",
+			new ProfileAppearance(new ProfileLook("win95", "#123456", null, null, null, null, null), null));
+
+		verify(cacheInvalidator).evictAfterCommit(CacheConfig.PUBLIC_PROFILES, "i:user_1");
+		verify(cacheInvalidator).evictAfterCommit(CacheConfig.PUBLIC_PROFILES, "u:mel");
+		// Nem a vitrine inteira nem o cache inteiro: a edição custa só as entradas desta pessoa.
+		verify(cacheInvalidator, never()).afterCommit(any(String[].class));
+		verify(cacheInvalidator, never()).clearNow(any(String[].class));
 	}
 
 	/** Perfil mínimo, do jeito que o repositório devolve. */

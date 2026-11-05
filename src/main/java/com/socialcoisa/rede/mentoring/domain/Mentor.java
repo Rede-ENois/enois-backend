@@ -15,15 +15,15 @@ public class Mentor {
 	private final String meetingUrl;
 	/** Preço de uma sessão em milésimos de faísca; null quando o mentor não aceita faíscas. */
 	private final Long sparksPrice;
-	/** De onde vem a sala da sessão; o padrão é uma sala Jitsi criada por sessão. */
+	/** De onde vem a sala da sessão; o padrão é uma sala do Epapo criada por sessão. */
 	private final RoomMode roomMode;
-	/** Slug da sala permanente do Jitsi; só existe em {@link RoomMode#JITSI_PERMANENT}. */
-	private final String jitsiRoom;
+	/** Nome da sala permanente no Epapo; só existe em {@link RoomMode#EPAPO_PERMANENT}. */
+	private final String roomSlug;
 	private final Instant createdAt;
 	private final Instant updatedAt;
 
 	private Mentor(String id, String userId, List<String> expertise, double rating, int sessionsCount, String price,
-			String banner, String meetingUrl, Long sparksPrice, RoomMode roomMode, String jitsiRoom,
+			String banner, String meetingUrl, Long sparksPrice, RoomMode roomMode, String roomSlug,
 			Instant createdAt, Instant updatedAt) {
 		this.id = id;
 		this.userId = userId;
@@ -34,80 +34,80 @@ public class Mentor {
 		this.banner = banner;
 		this.meetingUrl = meetingUrl;
 		this.sparksPrice = sparksPrice;
-		this.roomMode = roomMode == null ? RoomMode.JITSI_SESSION : roomMode;
-		this.jitsiRoom = jitsiRoom;
+		this.roomMode = roomMode == null ? RoomMode.EPAPO_SESSION : roomMode;
+		this.roomSlug = roomSlug;
 		this.createdAt = createdAt;
 		this.updatedAt = updatedAt;
 	}
 
 	public static Mentor create(String id, String userId, List<String> expertise, String price, Instant now) {
-		return create(id, userId, expertise, price, null, null, null, RoomMode.JITSI_SESSION, null, now);
+		return create(id, userId, expertise, price, null, null, null, RoomMode.EPAPO_SESSION, null, now);
 	}
 
 	public static Mentor create(String id, String userId, List<String> expertise, String price, String banner,
 			String meetingUrl, Instant now) {
-		return create(id, userId, expertise, price, banner, meetingUrl, null, RoomMode.JITSI_SESSION, null, now);
+		return create(id, userId, expertise, price, banner, meetingUrl, null, RoomMode.EPAPO_SESSION, null, now);
 	}
 
 	public static Mentor create(String id, String userId, List<String> expertise, String price, String banner,
 			String meetingUrl, Long sparksPrice, Instant now) {
-		return create(id, userId, expertise, price, banner, meetingUrl, sparksPrice, RoomMode.JITSI_SESSION, null, now);
+		return create(id, userId, expertise, price, banner, meetingUrl, sparksPrice, RoomMode.EPAPO_SESSION, null, now);
 	}
 
 	public static Mentor create(String id, String userId, List<String> expertise, String price, String banner,
-			String meetingUrl, Long sparksPrice, RoomMode roomMode, String jitsiRoom, Instant now) {
+			String meetingUrl, Long sparksPrice, RoomMode roomMode, String roomSlug, Instant now) {
 		return new Mentor(id, userId, List.copyOf(expertise), 0.0, 0, price, banner, meetingUrl, sparksPrice, roomMode,
-			jitsiRoom, now, now);
+			roomSlug, now, now);
 	}
 
 	public static Mentor restore(String id, String userId, List<String> expertise, double rating, int sessionsCount,
 			String price, Instant createdAt, Instant updatedAt) {
-		return restore(id, userId, expertise, rating, sessionsCount, price, null, null, null, RoomMode.JITSI_SESSION,
+		return restore(id, userId, expertise, rating, sessionsCount, price, null, null, null, RoomMode.EPAPO_SESSION,
 			null, createdAt, updatedAt);
 	}
 
 	public static Mentor restore(String id, String userId, List<String> expertise, double rating, int sessionsCount,
 			String price, String banner, String meetingUrl, Instant createdAt, Instant updatedAt) {
 		return restore(id, userId, expertise, rating, sessionsCount, price, banner, meetingUrl, null,
-			RoomMode.JITSI_SESSION, null, createdAt, updatedAt);
+			RoomMode.EPAPO_SESSION, null, createdAt, updatedAt);
 	}
 
 	public static Mentor restore(String id, String userId, List<String> expertise, double rating, int sessionsCount,
 			String price, String banner, String meetingUrl, Long sparksPrice, Instant createdAt, Instant updatedAt) {
 		return restore(id, userId, expertise, rating, sessionsCount, price, banner, meetingUrl, sparksPrice,
-			RoomMode.JITSI_SESSION, null, createdAt, updatedAt);
+			RoomMode.EPAPO_SESSION, null, createdAt, updatedAt);
 	}
 
 	public static Mentor restore(String id, String userId, List<String> expertise, double rating, int sessionsCount,
-			String price, String banner, String meetingUrl, Long sparksPrice, RoomMode roomMode, String jitsiRoom,
+			String price, String banner, String meetingUrl, Long sparksPrice, RoomMode roomMode, String roomSlug,
 			Instant createdAt, Instant updatedAt) {
 		return new Mentor(id, userId, expertise, rating, sessionsCount, price, banner, meetingUrl, sparksPrice,
-			roomMode, jitsiRoom, createdAt, updatedAt);
+			roomMode, roomSlug, createdAt, updatedAt);
 	}
 
 	public Mentor update(List<String> expertise, String price, Instant now) {
-		return update(expertise, price, banner, meetingUrl, sparksPrice, roomMode, jitsiRoom, now);
+		return update(expertise, price, banner, meetingUrl, sparksPrice, roomMode, roomSlug, now);
 	}
 
 	public Mentor update(List<String> expertise, String price, String banner, String meetingUrl, Instant now) {
-		return update(expertise, price, banner, meetingUrl, sparksPrice, roomMode, jitsiRoom, now);
+		return update(expertise, price, banner, meetingUrl, sparksPrice, roomMode, roomSlug, now);
 	}
 
 	public Mentor update(List<String> expertise, String price, String banner, String meetingUrl, Long sparksPrice,
 			Instant now) {
-		return update(expertise, price, banner, meetingUrl, sparksPrice, roomMode, jitsiRoom, now);
+		return update(expertise, price, banner, meetingUrl, sparksPrice, roomMode, roomSlug, now);
 	}
 
 	public Mentor update(List<String> expertise, String price, String banner, String meetingUrl, Long sparksPrice,
-			RoomMode roomMode, String jitsiRoom, Instant now) {
+			RoomMode roomMode, String roomSlug, Instant now) {
 		return new Mentor(id, userId, expertise, rating, sessionsCount, price, banner, meetingUrl, sparksPrice,
-			roomMode, jitsiRoom, createdAt, now);
+			roomMode, roomSlug, createdAt, now);
 	}
 
 	/** Sessão concluída conta para o mentor: é o número que a vitrine mostra. */
 	public Mentor withSessionCompleted(Instant now) {
 		return new Mentor(id, userId, expertise, rating, sessionsCount + 1, price, banner, meetingUrl, sparksPrice,
-			roomMode, jitsiRoom, createdAt, now);
+			roomMode, roomSlug, createdAt, now);
 	}
 
 	public String meetingUrl() { return meetingUrl; }
@@ -118,7 +118,7 @@ public class Mentor {
 
 	public RoomMode roomMode() { return roomMode; }
 
-	public String jitsiRoom() { return jitsiRoom; }
+	public String roomSlug() { return roomSlug; }
 
 	public String id() { return id; }
 

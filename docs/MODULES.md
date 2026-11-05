@@ -872,14 +872,38 @@ A ocorrência nova herda cidade/UF da anterior (o encontro segue no mesmo lugar 
 | `list(String expertise, int limit)` | Lista mentores, filtro por expertise |
 | `getById(String mentorId)` | Busca mentor por ID |
 | `getSlots(String mentorId)` | Lista horários do mentor |
+| `roomUrlFor(MentorSession)` | Sala da sessão como link da Epapo (só leitura; sem host configurado o link sai nulo, não derruba a lista) |
+| `mentorRoomSlug(Mentor)` | Slug da sala fixa, para o painel do mentor |
+
+### Salas da mentoria (Epapo)
+
+A sala é da Epapo, a mesma videoconferência das chamadas ([`CHAMADAS.md`](CHAMADAS.md)). O nome é
+derivado do id no servidor (`rede-mentoria-…` por sessão, `rede-mentor-…` na sala fixa), gravado na
+sessão quando ela é agendada e servido só a quem participa. Entrar é `POST /mentors/{id}/sessions/{sessionId}/join`:
+o backend confere o vínculo de mentor ou mentorado e devolve o link e um token emitido pelo gateway
+da Epapo. O gateway só assina depois de `POST /mentoring/{sessionId}/gateway/entry/{userId}`
+autorizar o mesmo participante com o segredo compartilhado — o segredo de assinatura nunca chega ao
+navegador. Gravação, transmissão e transcrição ficam desligadas no token.
+
+| Classe | Papel |
+|---|---|
+| `MentoringRooms` | Deriva as salas dos ids e monta o link (host de `REDE_MENTORING_ROOM_BASE_URL`, caindo no host das chamadas) |
+| `MentoringRoomAuthorization` | Quem entra em qual sala (participante da sessão) e o que o gateway confirma |
+| `MentoringTokenGateway` / `EpapoMentoringTokenGateway` | Porta e cliente do gateway da Epapo (`POST /auth/token`); não assina JWT |
+| `MentoringGatewayController` | Rota interna do gateway (`/mentoring/{id}/gateway/entry/{userId}`) |
+| `RoomMode` | `EPAPO_SESSION` (padrão), `EPAPO_PERMANENT` (sala fixa do mentor) ou `CUSTOM` (link externo do mentor, que abre em outra aba e não recebe token) |
+
+Links antigos do `meet.jit.si` e valores antigos de modo gravados no banco continuam sendo lidos e
+traduzidos (V242 renomeou `jitsi_room` para `room_slug`). O "entrar por telefone" (dial-in) saiu:
+era recurso do Jitsi público e não existe na Epapo.
 
 ### Domain Objects
 
 | Classe | Descrição |
 |---|---|
-| `Mentor` | Entidade: user, expertise, rating, sessionsCount, price, meetingUrl (sala externa https opcional), sparksPrice (milésimos de faísca por sessão; null = não aceita faíscas) |
+| `Mentor` | Entidade: user, expertise, rating, sessionsCount, price, meetingUrl (sala externa https opcional), roomMode + roomSlug (sala fixa da Epapo), sparksPrice (milésimos de faísca por sessão; null = não aceita faíscas) |
 | `MentorSlot` | Entidade: mentor, startsAt, endsAt, available |
-| `MentorSession` | Entidade: mentor, mentee, slot, message, status, priceSparks (valor retido no escrow), settledAt (quando o valor foi pago/devolvido; null = ainda no escrow) |
+| `MentorSession` | Entidade: mentor, mentee, slot, message, status, priceSparks (valor retido no escrow), settledAt (quando o valor foi pago/devolvido; null = ainda no escrow), roomMode + roomSlug congelados no agendamento |
 | `MentorAvailability` | Regra semanal: mentorId, dayOfWeek (1=segunda..7=domingo), timeOfDay ("HH:mm") |
 | `SessionStatus` | Enum: `SCHEDULED`, `COMPLETED`, `CANCELLED` |
 
@@ -903,6 +927,8 @@ A ocorrência nova herda cidade/UF da anterior (o encontro segue no mesmo lugar 
 | `mySessions(...)` | GET /api/mentors/sessions/mine — o que EU agendei: mentor, horário, valor retido, status e sala; sessão cujo horário terminou volta como `COMPLETED` |
 | `completeSession(...)` | POST /api/mentors/{mentorId}/sessions/{sessionId}/complete — só o dono; libera o escrow para o mentor menos os 10% da plataforma |
 | `cancelSession(...)` | POST /api/mentors/{mentorId}/sessions/{sessionId}/cancel — reembolso integral; o mentorado cancela até o horário começar, o mentor até a conclusão; horário futuro volta para a agenda |
+| `room(...)` | GET /api/mentors/{mentorId}/room — modo da sala, link e slug para o painel do mentor |
+| `join(...)` | POST /api/mentors/{mentorId}/sessions/{sessionId}/join — só participante: devolve `roomUrl` + `jwt` (Epapo) ou o link externo sem token (`CUSTOM`); `503` se a Epapo não estiver configurada |
 
 ---
 
@@ -1629,5 +1655,10 @@ desligadas no próprio token.
 | `CallExpiryWorker` | 1:1 sem resposta (40s → `MISSED`), grupo vazio (5 min → `FAILED`), abandono (30 min) |
 | `CallPersistenceAdapter` | Transições condicionais em `call_sessions`/`call_participants` (V240) |
 | `CallController` | Rotas `/calls/**` e `/{conversation,group}/{id}/calls` |
+| `CallReportService` / `CallReportController` | Denúncia da sala: quem entrou pode ser apontado; contexto em `call_reports` (V241) |
+
+Denúncia de chamada entra na moderação como alvo `CALL`, com a captura do momento (propósito
+`REPORT_CAPTURE`, servida só a moderadores) e o relato. A triagem por IA lê tudo e **não penaliza
+sozinha** esse alvo: penalidade e banimento são decisão humana no painel de revisão.
 
 Detalhes, escolha de infraestrutura e contrato em [`CHAMADAS.md`](CHAMADAS.md).
