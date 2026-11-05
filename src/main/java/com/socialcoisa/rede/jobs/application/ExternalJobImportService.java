@@ -66,6 +66,10 @@ public class ExternalJobImportService {
 		return touched;
 	}
 
+	/** Column sizes of external_jobs (V40): title 500, the other free-text columns 255. */
+	static final int TITLE_MAX = 500;
+	static final int TEXT_MAX = 255;
+
 	private int saveChunk(String platform, List<JobImportSource.ExternalJob> chunk) {
 		int saved = 0;
 		for (JobImportSource.ExternalJob external : chunk) {
@@ -74,9 +78,11 @@ public class ExternalJobImportService {
 			}
 			// Some feeds send HTML-escaped text ("hims &#038; hers"): store it as people read it. A job
 			// already imported escaped heals on the next run (same source = upsert below).
-			String title = org.springframework.web.util.HtmlUtils.htmlUnescape(external.title());
+			String title = fit(org.springframework.web.util.HtmlUtils.htmlUnescape(external.title()), TITLE_MAX);
 			String company = external.company() == null ? null
-				: org.springframework.web.util.HtmlUtils.htmlUnescape(external.company());
+				: fit(org.springframework.web.util.HtmlUtils.htmlUnescape(external.company()), TEXT_MAX);
+			String location = fit(external.location(), TEXT_MAX);
+			String salary = fit(external.salary(), TEXT_MAX);
 			String canonicalUrl = com.socialcoisa.rede.jobs.domain.UrlCanonicalizer
 				.canonicalize(external.url());
 			// E-mail de candidatura: sai da descricao que a propria fonte publica (nulo quando nao ha).
@@ -86,7 +92,7 @@ public class ExternalJobImportService {
 				// Mesma fonte e mesmo id: atualiza os dados e a verificacao (upsert).
 				ExternalJob current = sameSource.get();
 				repository.save(new ExternalJob(current.id(), current.platform(), current.externalId(),
-					title, company, external.location(), external.salary(),
+					title, company, location, salary,
 					current.currency(), external.url(), current.importedAt(), clock.instant(),
 					ExternalJob.FOUND, canonicalUrl, applyEmail, current.submittedBy(), current.description(),
 					current.salaryMin(), current.salaryMax(), current.salaryPeriod(), current.salaryNotInformed()));
@@ -114,11 +120,23 @@ public class ExternalJobImportService {
 				continue;
 			}
 			repository.save(new ExternalJob("ext_" + platform + "_" + external.externalId(), platform,
-				external.externalId(), title, company, external.location(),
-				external.salary(), null, external.url(), clock.instant(), clock.instant(), ExternalJob.FOUND,
+				external.externalId(), title, company, location,
+				salary, null, external.url(), clock.instant(), clock.instant(), ExternalJob.FOUND,
 				canonicalUrl, applyEmail, null, null, null, null, null, false));
 			saved++;
 		}
 		return saved;
+	}
+
+	/**
+	 * Feeds are not bound by our column sizes (a "location" listing every country of a remote job
+	 * reached 434 characters): an oversized value would fail the insert and roll back the whole chunk.
+	 * Cut at the column size instead; the full text is still at the source URL.
+	 */
+	static String fit(String value, int max) {
+		if (value == null || value.length() <= max) {
+			return value;
+		}
+		return value.substring(0, max - 1).stripTrailing() + "…";
 	}
 }
