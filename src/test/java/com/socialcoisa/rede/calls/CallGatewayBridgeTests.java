@@ -40,7 +40,7 @@ import tools.jackson.databind.ObjectMapper;
  * do gateway (token, segredo) escapa para o corpo que o navegador recebe.
  */
 @SpringBootTest(properties = {
-		"rede.calls.jitsi.url=https://chamadas.example.test",
+		"rede.calls.epapo.url=https://chamadas.example.test",
 		"spring.task.scheduling.enabled=false"
 })
 @AutoConfigureMockMvc

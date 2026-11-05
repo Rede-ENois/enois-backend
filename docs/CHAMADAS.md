@@ -1,7 +1,7 @@
 # Chamadas de áudio e vídeo (1:1 e "Tamo junto")
 
 Chamadas dentro do Énóis, sem abrir aba nova nem sair para outro site: o painel da chamada é
-embutido no próprio app (iframe do Jitsi dentro de um overlay da tela), com minimizar, microfone,
+embutido no próprio app (iframe do Epapo dentro de um overlay da tela), com minimizar, microfone,
 câmera e encerrar. A conversa da DM chama uma pessoa; o grupo chama **"Tamo junto"**.
 
 A infraestrutura é a **Epapo**, a videoconferência própria da rede (fork do Jitsi Meet). O token de
@@ -32,11 +32,11 @@ quem iniciou a chamada é moderador. Gravação, transmissão ao vivo, chamada e
 ficam **desligadas no próprio token** (`context.features`), então ninguém grava áudio ou vídeo por
 padrão, nem por engano.
 
-Sem `REDE_CALLS_JITSI_URL` **ou** sem o gateway configurado (`REDE_CALLS_EPAPO_GATEWAY_URL` +
+Sem `REDE_CALLS_EPAPO_URL` **ou** sem o gateway configurado (`REDE_CALLS_EPAPO_GATEWAY_URL` +
 `REDE_CALLS_EPAPO_INTERNAL_TOKEN`) a API responde **503 `CALLS_NOT_CONFIGURED`** — ela nunca aponta
 o painel para uma instância aberta para "funcionar".
 
-## Infra: Jitsi próprio
+## Infra: Epapo (fork do Jitsi)
 
 | | Jitsi próprio (escolhido) | JaaS (8x8) | meet.jit.si público |
 |---|---|---|---|
@@ -55,7 +55,7 @@ projetos está em `deploy/INTEGRACAO-ENOIS.md` da Epapo.
 
 | Propriedade | Env | Padrão |
 |---|---|---|
-| `rede.calls.jitsi.url` | `REDE_CALLS_JITSI_URL` | vazio (chamadas desligadas) |
+| `rede.calls.epapo.url` | `REDE_CALLS_EPAPO_URL` (legado: `REDE_CALLS_JITSI_URL`) | vazio (chamadas desligadas) |
 | `rede.calls.epapo.gateway-url` | `REDE_CALLS_EPAPO_GATEWAY_URL` | vazio (chamadas desligadas) |
 | `rede.calls.epapo.internal-token` | `REDE_CALLS_EPAPO_INTERNAL_TOKEN` | vazio |
 | `rede.calls.epapo.timeout-millis` | `REDE_CALLS_EPAPO_TIMEOUT_MILLIS` | `5000` |
@@ -63,8 +63,10 @@ projetos está em `deploy/INTEGRACAO-ENOIS.md` da Epapo.
 | `rede.calls.gateway.authorize-token` | `REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN` | vazio |
 | `rede.rate.call-start-limit` | `REDE_CALL_START_LIMIT` | `20` por `REDE_CALL_START_WINDOW_MINUTES` (60) |
 
-`REDE_CALLS_JITSI_URL` é a origem pública da Epapo, com `https` e sem barra no fim (por exemplo
-`https://meet.enois.ia.br`). `REDE_CALLS_EPAPO_GATEWAY_URL` é o gateway na rede privada
+`REDE_CALLS_EPAPO_URL` é a origem pública da Epapo, com `https` e sem barra no fim (por exemplo
+`https://meet.enois.ia.br`). O nome antigo `REDE_CALLS_JITSI_URL` continua sendo lido quando o novo
+não está definido, então a ordem entre renomear a variável no deploy e subir o binário não importa.
+A mesma origem é o endereço padrão das salas de mentoria. `REDE_CALLS_EPAPO_GATEWAY_URL` é o gateway na rede privada
 (`http://auth-gateway:8090`), **nunca** a URL pública — o gateway não é superfície do navegador.
 
 Três segredos, todos só entre servidores e todos por variável de ambiente do deploy (nunca no

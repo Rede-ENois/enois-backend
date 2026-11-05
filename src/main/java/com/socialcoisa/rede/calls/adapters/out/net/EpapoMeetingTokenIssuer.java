@@ -51,7 +51,7 @@ class EpapoMeetingTokenIssuer implements MeetingTokenIssuer {
 	private final Duration ttl;
 
 	EpapoMeetingTokenIssuer(ObjectMapper json,
-			@Value("${rede.calls.jitsi.url:}") String host,
+			@Value("${rede.calls.epapo.url:}") String host,
 			@Value("${rede.calls.epapo.gateway-url:}") String gatewayUrl,
 			@Value("${rede.calls.epapo.internal-token:}") String internalToken,
 			@Value("${rede.calls.epapo.timeout-millis:5000}") long timeoutMillis,

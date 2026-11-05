@@ -37,7 +37,7 @@ import tools.jackson.databind.ObjectMapper;
  * denúncia de chamada — a captura é de quem acusa, e quem decide é uma pessoa.
  */
 @SpringBootTest(properties = {
-		"rede.calls.jitsi.url=https://chamadas.example.test",
+		"rede.calls.epapo.url=https://chamadas.example.test",
 		"spring.task.scheduling.enabled=false"
 })
 @AutoConfigureMockMvc

@@ -67,7 +67,7 @@ class MentorSessionJpaEntity {
 		e.message = session.message();
 		e.status = session.status();
 		e.priceSparks = session.priceSparks();
-		e.roomMode = session.roomMode() == null ? RoomMode.JITSI_SESSION.name() : session.roomMode().name();
+		e.roomMode = session.roomMode() == null ? RoomMode.EPAPO_SESSION.name() : session.roomMode().name();
 		e.roomUrl = session.roomUrl();
 		e.settledAt = session.settledAt();
 		e.createdAt = session.createdAt();

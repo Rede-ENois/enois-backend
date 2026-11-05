@@ -22,7 +22,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.socialcoisa.rede.coin.application.CoinService;
-import com.socialcoisa.rede.mentoring.application.port.out.JitsiDialInGateway;
 import com.socialcoisa.rede.mentoring.application.port.out.MentorRepository;
 import com.socialcoisa.rede.mentoring.domain.Mentor;
 import com.socialcoisa.rede.mentoring.domain.MentorAvailability;
@@ -58,16 +57,14 @@ public class MentorService {
 	private final Clock clock;
 	private final CoinService coins;
 	private final MentoringRooms rooms;
-	private final JitsiDialInGateway dialInGateway;
 	private final TransactionTemplate settlement;
 
 	public MentorService(MentorRepository repository, Clock clock, CoinService coins, MentoringRooms rooms,
-			JitsiDialInGateway dialInGateway, PlatformTransactionManager transactionManager) {
+			PlatformTransactionManager transactionManager) {
 		this.repository = repository;
 		this.clock = clock;
 		this.coins = coins;
 		this.rooms = rooms;
-		this.dialInGateway = dialInGateway;
 		this.settlement = new TransactionTemplate(transactionManager);
 		this.settlement.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
 	}
@@ -90,12 +87,12 @@ public class MentorService {
 	@Transactional
 	public Mentor create(String userId, List<String> expertise, String price, String banner, String meetingUrl,
 			Long sparksPrice) {
-		return create(userId, expertise, price, banner, meetingUrl, sparksPrice, RoomMode.JITSI_SESSION, null);
+		return create(userId, expertise, price, banner, meetingUrl, sparksPrice, RoomMode.EPAPO_SESSION, null);
 	}
 
 	@Transactional
 	public Mentor create(String userId, List<String> expertise, String price, String banner, String meetingUrl,
-			Long sparksPrice, RoomMode roomMode, String jitsiRoom) {
+			Long sparksPrice, RoomMode roomMode, String roomSlug) {
 		if (repository.findByUserId(userId).isPresent()) {
 			throw new ApiException(409, "ALREADY_MENTOR", "Voce ja esta cadastrado como mentor.");
 		}
@@ -104,7 +101,7 @@ public class MentorService {
 		String cleanUrl = mode == RoomMode.CUSTOM ? candidateUrl : null;
 		String id = "mentor_" + UUID.randomUUID().toString().replace("-", "");
 		Mentor mentor = Mentor.create(id, userId, expertise, price, banner, cleanUrl,
-			validarPrecoEmFaiscas(sparksPrice), mode, validatedJitsiRoom(jitsiRoom), clock.instant());
+			validarPrecoEmFaiscas(sparksPrice), mode, validatedRoomSlug(roomSlug), clock.instant());
 		repository.save(mentor);
 		return mentor;
 	}
@@ -133,7 +130,7 @@ public class MentorService {
 
 	@Transactional
 	public Mentor update(String mentorId, List<String> expertise, String price, String banner, String meetingUrl,
-			Long sparksPrice, RoomMode roomMode, String jitsiRoom, String userId) {
+			Long sparksPrice, RoomMode roomMode, String roomSlug, String userId) {
 		Mentor mentor = requireOwner(mentorId, userId);
 		boolean urlProvided = meetingUrl != null;
 		String candidateUrl = sanitizeMeetingUrl(meetingUrl == null ? mentor.meetingUrl() : meetingUrl);
@@ -144,18 +141,18 @@ public class MentorService {
 			// A tela nao mandou modo nem link: o mentor continua com a sala que ja tinha.
 			mode = mentor.roomMode();
 		} else if (candidateUrl == null) {
-			// O mentor mandou o link vazio: a sala externa sai do perfil e a sessão volta ao Jitsi.
-			mode = RoomMode.JITSI_SESSION;
+			// O mentor mandou o link vazio: a sala externa sai do perfil e a sessão volta ao Epapo.
+			mode = RoomMode.EPAPO_SESSION;
 		} else {
 			mode = validatedRoomMode(mentor.roomMode(), candidateUrl);
 		}
-		// Link externo so vale para sala propria: ao voltar para o Jitsi, o antigo (Meet, Zoom)
+		// Link externo so vale para sala propria: ao voltar para o Epapo, o antigo (Meet, Zoom)
 		// some do perfil em vez de ficar anunciado como se ainda fosse a sala da sessao.
 		String cleanUrl = mode == RoomMode.CUSTOM ? candidateUrl : null;
 		// Sala permanente: mantém a que existe; nome novo só quando o mentor pediu um agora.
-		String room = roomMode == null || roomMode != RoomMode.JITSI_PERMANENT
-			? mentor.jitsiRoom()
-			: validatedJitsiRoom(jitsiRoom == null ? mentor.jitsiRoom() : jitsiRoom);
+		String room = roomMode == null || roomMode != RoomMode.EPAPO_PERMANENT
+			? mentor.roomSlug()
+			: validatedRoomSlug(roomSlug == null ? mentor.roomSlug() : roomSlug);
 		Mentor updated = mentor.update(expertise, price, banner, cleanUrl, validarPrecoEmFaiscas(sparksPrice), mode,
 			room, clock.instant());
 		repository.save(updated);
@@ -163,13 +160,13 @@ public class MentorService {
 	}
 
 	/**
-	 * Modo de sala coerente com os dados: sala própria exige link; Jitsi funciona sem nada. Sem
+	 * Modo de sala coerente com os dados: sala própria exige link; Epapo funciona sem nada. Sem
 	 * modo informado, quem tem link configurado continua com sala própria (mesma regra do backfill
-	 * da migração) — e quem não tem, ganha a sala Jitsi por sessão.
+	 * da migração) — e quem não tem, ganha a sala do Epapo por sessão.
 	 */
 	private RoomMode validatedRoomMode(RoomMode requested, String meetingUrl) {
 		RoomMode mode = requested != null ? requested
-			: (meetingUrl != null && !meetingUrl.isBlank() ? RoomMode.CUSTOM : RoomMode.JITSI_SESSION);
+			: (meetingUrl != null && !meetingUrl.isBlank() ? RoomMode.CUSTOM : RoomMode.EPAPO_SESSION);
 		if (mode == RoomMode.CUSTOM && (meetingUrl == null || meetingUrl.isBlank())) {
 			throw new ApiException(400, "MEETING_URL_REQUIRED",
 				"Para usar uma sala propria, informe o link da sala.");
@@ -177,8 +174,8 @@ public class MentorService {
 		return mode;
 	}
 
-	private String validatedJitsiRoom(String jitsiRoom) {
-		return jitsiRoom == null ? null : rooms.sanitizeRoom(jitsiRoom);
+	private String validatedRoomSlug(String roomSlug) {
+		return roomSlug == null ? null : rooms.sanitizeRoom(roomSlug);
 	}
 
 	/**
@@ -201,7 +198,7 @@ public class MentorService {
 		return sparksPrice;
 	}
 
-	/** Sala externa (Meet/Jitsi...): opcional; se vier, tem que ser um link https de ate 500. */
+	/** Sala externa (Meet, Zoom...): opcional; se vier, tem que ser um link https de ate 500. */
 	private String sanitizeMeetingUrl(String raw) {
 		if (raw == null || raw.isBlank()) {
 			return null;
@@ -450,44 +447,67 @@ public class MentorService {
 
 	/**
 	 * Sala que a próxima sessão vai usar, para o painel do mentor. Em
-	 * {@link RoomMode#JITSI_SESSION} ainda não existe link: a sala nasce no agendamento.
+	 * {@link RoomMode#EPAPO_SESSION} ainda não existe sala: ela nasce no agendamento.
 	 */
 	public String mentorRoomUrl(Mentor mentor) {
-		if (mentor.roomMode() == RoomMode.JITSI_PERMANENT) {
-			return rooms.jitsiUrl(rooms.permanentRoom(mentor));
+		if (mentor.roomMode() == RoomMode.EPAPO_PERMANENT) {
+			return rooms.roomUrlOrNull(rooms.permanentRoom(mentor));
 		}
 		if (mentor.roomMode() == RoomMode.CUSTOM) {
 			return mentor.meetingUrl();
 		}
 		return null;
 	}
-	/** Sala no Jitsi (com dial-in pela API pública) ou sala própria do mentor. */
-	public boolean jitsiRoom(MentorSession session) {
-		return rooms.isJitsi(session.roomMode());
+
+	/**
+	 * Nome da sala permanente do mentor, inclusive quando ele nunca escolheu um (a sala derivada do
+	 * id é a que ele usa). Nos outros modos não há nome fixo: a sala nasce por sessão.
+	 */
+	public String mentorRoomSlug(Mentor mentor) {
+		return mentor.roomMode() == RoomMode.EPAPO_PERMANENT ? rooms.permanentRoom(mentor) : null;
 	}
 
-	public String conferenceName(String roomUrl) {
-		return rooms.conferenceName(roomUrl);
+	/**
+	 * Sala de quem participa da sessão: a do Epapo (endereço montado) ou o link próprio do mentor.
+	 * Sessão antiga com o link de uma instância pública gravado é traduzida para a sala do Epapo de
+	 * mesmo nome — o link antigo não é mais a sala da sessão.
+	 */
+	public RoomView roomOf(String sessionId, String userId) {
+		return viewOf(sessionForParticipant(sessionId, userId));
 	}
 
-	/** Como entrar na conferência por telefone (API pública do Jitsi); vazio quando indisponível. */
-	public record SessionDialIn(String conference, String pin, List<String> numbers) {
+	/**
+	 * Endereço que a tela abre para a sessão: a sala do Epapo montada a partir do nome gravado, ou o
+	 * link próprio do mentor. É o que as listas de sessão devolvem.
+	 */
+	public String roomUrlFor(MentorSession session) {
+		return roomOf(session);
 	}
 
-	public SessionDialIn dialIn(String sessionId, String userId) {
-		MentorSession session = sessionForParticipant(sessionId, userId);
-		if (!rooms.isJitsi(session.roomMode())) {
-			throw new ApiException(400, "NOT_A_JITSI_ROOM",
-				"Esta sessao usa uma sala externa; pergunte ao mentor como entrar.");
-		}
+	/**
+	 * Nome da sala no Epapo, ou o link próprio do mentor — o que o gateway confere. Sem servidor de
+	 * reunião configurado a lista de sessões não quebra: a sala fica sem endereço e só a entrada
+	 * responde 503.
+	 */
+	String roomOf(MentorSession session) {
 		Mentor mentor = mentorOrNull(session.mentorId());
-		String roomUrl = roomUrlOf(session, mentor);
-		if (roomUrl == null) {
-			throw new ApiException(404, "ROOM_NOT_FOUND", "Sessao nao encontrada.");
+		String stored = roomUrlOf(session, mentor);
+		if (stored == null || !rooms.isEpapo(session.roomMode())) {
+			return stored;
 		}
-		String conference = rooms.conferenceName(roomUrl);
-		return new SessionDialIn(conference, dialInGateway.conferencePin(conference).orElse(null),
-			dialInGateway.phoneNumbers(conference));
+		return rooms.epapoRoom(stored).map(rooms::roomUrlOrNull).orElse(stored);
+	}
+
+	RoomView viewOf(MentorSession session) {
+		String stored = roomUrlOf(session, mentorOrNull(session.mentorId()));
+		boolean epapo = rooms.isEpapo(session.roomMode());
+		String url = roomOf(session);
+		String room = epapo && stored != null ? rooms.epapoRoom(stored).orElse(null) : null;
+		return new RoomView(url, room, epapo);
+	}
+
+	/** Onde a sala abre e, quando é do Epapo, qual nome o servidor de reunião autoriza. */
+	public record RoomView(String roomUrl, String room, boolean epapo) {
 	}
 
 	/**

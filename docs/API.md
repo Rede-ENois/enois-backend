@@ -720,27 +720,34 @@ BLOG_NOT_FOUND`.
 | POST | `/api/mentors/{mentorId}/sessions/{sessionId}/complete` | Concluir sessão (libera o escrow) | Sim |
 | POST | `/api/mentors/{mentorId}/sessions/{sessionId}/cancel` | Cancelar sessão (devolve o escrow) | Sim |
 | GET | `/api/mentors/{mentorId}/room` | Sala configurada (só o dono) | Sim |
-| GET | `/api/mentors/{mentorId}/sessions/{sessionId}/dial-in` | Entrar por telefone numa sala Jitsi (participantes) | Sim |
+| POST | `/api/mentors/{mentorId}/sessions/{sessionId}/join` | Entrada na sala da sessão (participantes) | Sim |
+| POST | `/api/mentoring/{sessionId}/gateway/entry/{userId}` | Autorização pedida pelo servidor de reunião | Segredo de servidor |
 
 ### Sala da sessão
 
-`roomMode` no corpo de `POST`/`PATCH /api/mentors` decide de onde vem o link:
+`roomMode` no corpo de `POST`/`PATCH /api/mentors` decide de onde vem a sala:
 
 | `roomMode` | Sala |
 |---|---|
-| `JITSI_SESSION` (padrão) | Uma sala Jitsi por sessão, criada no agendamento; nada a configurar |
-| `JITSI_PERMANENT` | Uma sala Jitsi fixa do mentor (`jitsiRoom` opcional; sem ele o slug vem do id) |
+| `EPAPO_SESSION` (padrão) | Uma sala do Epapo por sessão, criada no agendamento; nada a configurar |
+| `EPAPO_PERMANENT` | Uma sala fixa do Epapo (`roomSlug` opcional; sem ele o nome vem do id) |
 | `CUSTOM` | Sala própria (`meetingUrl`, https) — Meet, Zoom, o que o mentor já usa |
 
 Sem `roomMode`, o campo é deduzido: link presente mantém a sala própria (compatibilidade com quem já
-tinha uma configurada) e nenhum link cai na sala Jitsi por sessão. Ao voltar para um modo Jitsi, o
-`meetingUrl` antigo sai do perfil (e mandar `meetingUrl` vazio também devolve a sessão ao Jitsi).
+tinha uma configurada) e nenhum link cai na sala do Epapo por sessão. Ao voltar para um modo Epapo, o
+`meetingUrl` antigo sai do perfil (e mandar `meetingUrl` vazio também devolve a sessão ao Epapo).
 
-O link é resolvido e gravado na sessão no agendamento (`roomUrl`/`roomMode` em `/mentors/sessions/mine`
-e nas inscrições recebidas), então trocar a sala do perfil não move uma sessão já marcada. A base do
-Jitsi é configurável em `rede.mentoring.jitsi.base-url` (padrão `https://meet.jit.si`) e a API pública
-em `rede.mentoring.jitsi.api-base`. O `dial-in` consulta `phoneNumberList`/`conferenceMapper` do
-`api.jitsi.net` e devolve lista vazia quando a API não responde — a sala no navegador não depende dela.
+A sala é resolvida e gravada na sessão no agendamento (`roomUrl`/`roomMode` em `/mentors/sessions/mine`
+e nas inscrições recebidas), então trocar a sala do perfil não move uma sessão já marcada. A base é
+`rede.mentoring.room.base-url` (`REDE_MENTORING_ROOM_BASE_URL`); sem ela, vale a origem pública do
+Epapo (`rede.calls.epapo.url`). Sem nenhuma das duas a lista de sessões continua respondendo, só a
+entrada na sala responde 503.
+
+`POST .../join` é a entrada da tela: confere que quem pede participa da sessão e devolve
+`{sessionId, roomUrl, jwt, tokenTtlSeconds}`. O `jwt` é emitido pelo gateway do Epapo depois de ele
+perguntar a esta aplicação (`POST /mentoring/{sessionId}/gateway/entry/{userId}`, com o segredo
+compartilhado) se aquela pessoa entra naquela sala; o segredo de assinatura nunca sai do servidor.
+Sala própria do mentor (`CUSTOM`) volta só com o link e `jwt` nulo — o link externo já é a entrada.
 
 ---
 
@@ -826,7 +833,7 @@ Duas rotas internas, para o gateway da Epapo (não são para o app):
 | GET | `/api/calls/rooms/{room}` | A qual chamada e a que estado a sala pertence | `X-Enois-Authorize` |
 | POST | `/api/calls/{callId}/gateway/entry/{userId}` | Autoriza (e registra) a entrada de uma pessoa na chamada | `X-Enois-Authorize` |
 
-Sem `REDE_CALLS_JITSI_URL`, ou sem o gateway configurado (`REDE_CALLS_EPAPO_GATEWAY_URL` +
+Sem `REDE_CALLS_EPAPO_URL`, ou sem o gateway configurado (`REDE_CALLS_EPAPO_GATEWAY_URL` +
 `REDE_CALLS_EPAPO_INTERNAL_TOKEN`), a API responde `503 CALLS_NOT_CONFIGURED` — nunca abre sala sem
 controle de acesso.
 

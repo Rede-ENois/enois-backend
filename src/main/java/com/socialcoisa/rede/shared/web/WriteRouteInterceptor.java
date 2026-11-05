@@ -52,9 +52,11 @@ class WriteRouteInterceptor implements HandlerInterceptor {
 		// token in the URL is the authorization and the only effect is turning e-mails off.
 		"/blogs/descadastrar",
 		"/notifications/digest/unsubscribe",
-		// Servidor de reunião perguntando se alguém pode entrar numa chamada: servidor não tem
-		// sessão de navegador. A credencial é o segredo compartilhado, conferido no controller.
-		"/calls/*/gateway/entry/*");
+		// Servidor de reunião perguntando se alguém pode entrar numa chamada ou numa sessão de
+		// mentoria: servidor não tem sessão de navegador. A credencial é o segredo compartilhado,
+		// conferido no controller.
+		"/calls/*/gateway/entry/*",
+		"/mentoring/*/gateway/entry/*");
 
 	private final AntPathMatcher matcher = new AntPathMatcher();
 	private final CurrentUserResolver currentUserResolver;
