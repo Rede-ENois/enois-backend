@@ -462,7 +462,7 @@ class MessagingContractController {
 		ConversationContext context = ConversationContext.of(kind);
 		return new ConversationView(convId, userId, kind, context.name(), title, participantIds,
 			identitiesOf(context, participantIds), lm.text(), lm.time() != null ? lm.time().toString() : null, unread,
-			otherLastReadAt, lm.e2e(), lm.iv(), lm.from());
+			otherLastReadAt, lm.e2e(), lm.iv(), lm.encryptedKeys(), lm.from());
 	}
 
 	private ConversationDetailView toDetailView(String convId, String kind, String title,
@@ -470,7 +470,8 @@ class MessagingContractController {
 		var lm = messagingService.getLastMessagePreview(convId);
 		ConversationContext context = ConversationContext.of(kind);
 		return new ConversationDetailView(convId, kind, context.name(), title, participantIds,
-			identitiesOf(context, participantIds), lm.text(), unread, otherLastReadAt, lm.e2e(), lm.iv(), lm.from());
+			identitiesOf(context, participantIds), lm.text(), unread, otherLastReadAt, lm.e2e(), lm.iv(),
+			lm.encryptedKeys(), lm.from());
 	}
 
 	/** Valida o destinatario: obrigatorio, nao pode ser voce, nao pode estar bloqueado. */
@@ -526,12 +527,13 @@ class MessagingContractController {
 
 	record ConversationView(String id, String userId, String kind, String context, String title,
 			List<String> participantIds, Map<String, IdentityView> identities, String lastMessage, String time,
-			int unread, String otherLastReadAt, boolean lastMessageE2e, String lastMessageIv, String lastMessageFrom) {
+			int unread, String otherLastReadAt, boolean lastMessageE2e, String lastMessageIv,
+			String lastMessageEncryptedKeys, String lastMessageFrom) {
 	}
 
 	record ConversationDetailView(String id, String kind, String context, String title, List<String> participantIds,
 			Map<String, IdentityView> identities, String lastMessage, int unread, String otherLastReadAt,
-			boolean lastMessageE2e, String lastMessageIv, String lastMessageFrom) {
+			boolean lastMessageE2e, String lastMessageIv, String lastMessageEncryptedKeys, String lastMessageFrom) {
 	}
 
 	record MessageView(String id, String conversationId, String from, String text, List<String> mediaIds,
