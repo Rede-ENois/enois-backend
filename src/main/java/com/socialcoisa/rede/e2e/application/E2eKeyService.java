@@ -1,7 +1,9 @@
 package com.socialcoisa.rede.e2e.application;
 
 import java.time.Clock;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -75,6 +77,15 @@ public class E2eKeyService {
 		if (!participants.isParticipant(conversationId, userId)) {
 			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
 		}
+	}
+
+	/** Retorna a chave publica ativa de cada usuario da lista. Quem nao tem keypair nao aparece. */
+	public Map<String, String> activePublicKeys(List<String> userIds) {
+		Map<String, String> result = new LinkedHashMap<>();
+		for (String userId : userIds) {
+			activeKeypair(userId).ifPresent(kp -> result.put(userId, kp.publicKey()));
+		}
+		return result;
 	}
 
 	public record ConversationKeyEntry(String userId, String encryptedKey) {
