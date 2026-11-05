@@ -23,6 +23,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.socialcoisa.rede.contributions.application.port.out.GitHubGateway;
 import com.socialcoisa.rede.contributions.application.port.out.GitHubIssue;
 import com.socialcoisa.rede.contributions.application.port.out.GitHubPullRequest;
+import com.socialcoisa.rede.contributions.application.port.out.GitHubRepositoryGoneException;
 import com.socialcoisa.rede.githubprofile.application.port.out.GitHubProfileGateway;
 
 /**
@@ -335,6 +336,11 @@ public class GitHubApiClient implements GitHubGateway, GitHubProfileGateway {
 			throw new GitHubRateLimitException("GitHub recusou a chamada (status=" + response.statusCode()
 				+ ", remaining=" + remaining + ")");
 		}
+		// 404 numa listagem de repositório é o repositório sumindo (apagado ou privado), não um
+		// caminho errado nosso: quem chama decide pular, em vez de tratar como falha passageira.
+		if (response.statusCode() == 404 && isRepositoryListing(label)) {
+			throw new GitHubRepositoryGoneException(label);
+		}
 		if (response.statusCode() >= 400) {
 			throw new IllegalStateException("GitHub respondeu " + response.statusCode() + " em " + label);
 		}
@@ -344,6 +350,11 @@ public class GitHubApiClient implements GitHubGateway, GitHubProfileGateway {
 		catch (Exception failure) {
 			throw new IllegalStateException("Falha ao ler a resposta do GitHub: " + failure.getMessage(), failure);
 		}
+	}
+
+	/** Caminhos cujo 404 só pode ser o repositório: listagens de PRs, issues e de um PR. */
+	private static boolean isRepositoryListing(String label) {
+		return label != null && (label.contains("/pulls") || label.contains("/issues"));
 	}
 
 	private String getRaw(String absoluteUrl) {
