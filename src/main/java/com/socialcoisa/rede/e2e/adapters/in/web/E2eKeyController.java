@@ -58,6 +58,16 @@ class E2eKeyController {
 			.orElse(new PublicKeyView(null, null));
 	}
 
+	@PostMapping("/e2e/keypairs/batch")
+	Map<String, String> batchPublicKeys(@RequestHeader("X-Session-Token") String sessionToken,
+			@RequestBody List<String> userIds) {
+		currentUserResolver.resolve(sessionToken);
+		if (userIds == null || userIds.size() > 50) {
+			throw new ApiException(400, "INVALID_REQUEST", "Maximo 50 usuarios por batch.");
+		}
+		return e2eKeys.activePublicKeys(userIds);
+	}
+
 	@PostMapping("/e2e/conversations/{conversationId}/keys")
 	Map<String, String> distributeKey(@RequestHeader("X-Session-Token") String sessionToken,
 			@PathVariable String conversationId, @RequestBody List<ConversationKeyRequest> participants) {

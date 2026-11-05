@@ -169,7 +169,7 @@ class MessagingContractController {
 					m.createdAt() != null ? m.createdAt().toString() : null,
 					summary == null ? java.util.Map.of() : summary.counts(),
 					summary == null ? null : summary.myReaction(), m.mediaSpoiler(),
-					m.e2e(), m.iv(), m.replyToId(), replyView);
+					m.e2e(), m.iv(), m.encryptedKeys(), m.replyToId(), replyView);
 			})
 			.toList();
 		// Pagina cheia => ainda ha mensagens mais antigas: o cursor aponta para a mais antiga desta pagina.
@@ -221,7 +221,8 @@ class MessagingContractController {
 					? request.replyToId().trim() : null;
 				if (Boolean.TRUE.equals(request.e2e())) {
 					msg = messagingService.sendE2eMessage(conversationId, user.id().value(), request.text(),
-						request.iv(), request.mediaIds(), Boolean.TRUE.equals(request.mediaSpoiler()), replyTo);
+						request.iv(), request.encryptedKeys(), request.mediaIds(),
+						Boolean.TRUE.equals(request.mediaSpoiler()), replyTo);
 				}
 				else {
 					msg = messagingService.sendMessage(conversationId, user.id().value(), request.text(),
@@ -230,7 +231,7 @@ class MessagingContractController {
 				return new CommandResponse(201, new MessageView(msg.id(), msg.conversationId(), msg.senderId(),
 					msg.text(), msg.mediaIds(),
 					msg.createdAt() != null ? msg.createdAt().toString() : null, java.util.Map.of(), null,
-					msg.mediaSpoiler(), msg.e2e(), msg.iv(), msg.replyToId(), null));
+					msg.mediaSpoiler(), msg.e2e(), msg.iv(), msg.encryptedKeys(), msg.replyToId(), null));
 			});
 	}
 
@@ -535,7 +536,7 @@ class MessagingContractController {
 
 	record MessageView(String id, String conversationId, String from, String text, List<String> mediaIds,
 			String time, java.util.Map<String, Integer> reactions, String myReaction, boolean mediaSpoiler,
-			boolean e2e, String iv, String replyToId, ReplyView replyTo) {
+			boolean e2e, String iv, String encryptedKeys, String replyToId, ReplyView replyTo) {
 	}
 
 	record ReplyView(String id, String from, String text, boolean e2e) {
@@ -551,7 +552,7 @@ class MessagingContractController {
 	}
 
 	record SendMessageRequest(String text, List<String> mediaIds, Boolean mediaSpoiler,
-			Boolean e2e, String iv, String replyToId) {
+			Boolean e2e, String iv, String encryptedKeys, String replyToId) {
 	}
 
 }
