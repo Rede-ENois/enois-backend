@@ -52,7 +52,7 @@ class DailyGamePayoutTest {
     @Test void wordPayoutRanksByAttemptsAndExcludesThoseWhoMissed() {
 		JdbcTemplate jdbc = jdbc("db/migration/V118__daily_word_games.sql");
         Clock clock = Clock.fixed(T0, ZoneOffset.UTC);
-        DailyWordService service = new DailyWordService(jdbc, clock);
+        DailyWordService service = new DailyWordService(jdbc, clock, org.mockito.Mockito.mock(com.socialcoisa.rede.coin.application.CoinService.class));
         jdbc.update("insert into daily_word_challenges values (?,?)", Date.valueOf(DAY), "AMORA");
         service.start("u1"); service.start("u2"); service.start("u3");
         service.guess("u1", "AMIGO", "request_0001", null);
@@ -71,7 +71,7 @@ class DailyGamePayoutTest {
         jdbc.update("insert into daily_maze_sessions values (?,?,?,4,?,?)", Date.valueOf(DAY), "u1", 63, at(0), at(30));
         jdbc.update("insert into daily_maze_sessions values (?,?,?,6,?,?)", Date.valueOf(DAY), "u2", 63, at(0), at(30));
         jdbc.update("insert into daily_maze_sessions values (?,?,?,2,?,null)", Date.valueOf(DAY), "u3", 10, at(0));
-        assertEquals(List.of("u1", "u2"), new DailyMazeService(jdbc, Clock.fixed(T0, ZoneOffset.UTC)).payoutOrder(DAY));
+        assertEquals(List.of("u1", "u2"), new DailyMazeService(jdbc, Clock.fixed(T0, ZoneOffset.UTC), org.mockito.Mockito.mock(com.socialcoisa.rede.coin.application.CoinService.class)).payoutOrder(DAY));
     }
 
     @Test void blocksPayoutRanksByScoreThenTimeAndExcludesNonWinners() {
@@ -81,6 +81,6 @@ class DailyGamePayoutTest {
         jdbc.update("insert into daily_blocks_sessions values (?,?,?,null,?,'WON',400,3)", Date.valueOf(DAY), "u2", at(90), at(200));
         jdbc.update("insert into daily_blocks_sessions values (?,?,?,null,?,'WON',900,3)", Date.valueOf(DAY), "u3", at(90), at(500));
         jdbc.update("insert into daily_blocks_sessions values (?,?,?,null,?,'LOST',999,2)", Date.valueOf(DAY), "u4", at(90), at(600));
-        assertEquals(List.of("u3", "u2", "u1"), new DailyBlocksService(jdbc, Clock.fixed(T0, ZoneOffset.UTC)).payoutOrder(DAY));
+        assertEquals(List.of("u3", "u2", "u1"), new DailyBlocksService(jdbc, Clock.fixed(T0, ZoneOffset.UTC), org.mockito.Mockito.mock(com.socialcoisa.rede.coin.application.CoinService.class)).payoutOrder(DAY));
     }
 }

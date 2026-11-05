@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Optional;
 
 import com.socialcoisa.rede.messaging.domain.Conversation;
+import com.socialcoisa.rede.messaging.domain.ConversationContext;
 import com.socialcoisa.rede.messaging.domain.ConversationParticipant;
 import com.socialcoisa.rede.messaging.domain.Message;
 
@@ -18,18 +19,18 @@ public interface MessagingRepository {
 
 	Optional<Conversation> findConversationById(String id);
 
-	List<Conversation> findConversationsByUserId(String userId, java.time.Instant before, int limit);
+	/** Inbox page; a null context keeps every conversation. */
+	List<Conversation> findConversationsByUserId(String userId, java.time.Instant before, ConversationContext context,
+			int limit);
 
-	/** As conversas que a pessoa arquivou (apagadas so para ela). */
-	List<Conversation> findArchivedConversationsByUserId(String userId, java.time.Instant before, int limit);
+	/** As conversas que a pessoa arquivou (apagadas so para ela); contexto nulo = todas. */
+	List<Conversation> findArchivedConversationsByUserId(String userId, java.time.Instant before,
+			ConversationContext context, int limit);
 
 	List<ConversationParticipant> findParticipantsByConversation(String conversationId);
 
-	/** Conversa DIRETA (1:1) entre dois usuarios, se existir. */
-	Optional<Conversation> findDirectBetween(String userA, String userB);
-
-	/** A conversa de SERVICO entre as duas pessoas (a que abre o botao de chat do card). */
-	Optional<Conversation> findServiceBetween(String userA, String userB);
+	/** The 1:1 conversation of that kind (DIRECT, JOB, SERVICE) between two people, if any. */
+	Optional<Conversation> findPairByKind(String userA, String userB, String kind);
 
 	Optional<ConversationParticipant> findParticipant(String conversationId, String userId);
 
@@ -45,8 +46,8 @@ public interface MessagingRepository {
 
 	int countUnread(String conversationId, String userId);
 
-	/** Total de mensagens nao lidas em todas as conversas ativas do usuario. */
-	int countTotalUnread(String userId);
+	/** Total de mensagens nao lidas nas conversas ativas do usuario; contexto nulo = todas. */
+	int countTotalUnread(String userId, ConversationContext context);
 
 	void saveMessage(Message message);
 
@@ -60,6 +61,9 @@ public interface MessagingRepository {
 
 	/** A mensagem por id (para conferir de qual conversa ela e antes de mexer nela). */
 	Optional<Message> findMessageById(String messageId);
+
+	/** Mensagens por ids em batch (para montar os previews de reply sem N+1). */
+	List<Message> findMessagesByIds(Collection<String> messageIds);
 
 	long countMessagesInConversation(String conversationId, Collection<String> messageIds);
 

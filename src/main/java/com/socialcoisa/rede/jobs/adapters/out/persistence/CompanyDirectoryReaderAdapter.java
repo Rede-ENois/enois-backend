@@ -63,6 +63,45 @@ class CompanyDirectoryReaderAdapter implements CompanyDirectoryReader {
 		return all.subList(0, Math.min(limit, all.size()));
 	}
 
+	@Override
+	public List<NamedCount> openUnlinkedJobsByName() {
+		return byName(jobs.countOpenUnlinkedJobsByCompany());
+	}
+
+	@Override
+	public List<NamedCount> externalJobsByName() {
+		return byName(externalJobs.countJobsByCompany());
+	}
+
+	@Override
+	public Map<String, Long> openJobsByCompanyIds(java.util.Collection<String> companyIds) {
+		Map<String, Long> counts = new HashMap<>();
+		if (!companyIds.isEmpty()) {
+			for (Object[] row : jobs.countOpenByCompanyIds(companyIds)) {
+				counts.put((String) row[0], ((Number) row[1]).longValue());
+			}
+		}
+		return counts;
+	}
+
+	@Override
+	public List<PageJob> openJobsOf(String companyId, int limit) {
+		return jobs.findOpenByCompanyId(companyId, org.springframework.data.domain.PageRequest.of(0, limit)).stream()
+			.map(JobJpaEntity::toDomain)
+			.map(j -> new PageJob(j.id(), j.title(), j.location(), j.type(), j.level(), j.postedAt()))
+			.toList();
+	}
+
+	private List<NamedCount> byName(List<Object[]> rows) {
+		Map<String, long[]> totals = new HashMap<>();
+		Map<String, String> display = new LinkedHashMap<>();
+		Map<String, String> logos = new HashMap<>();
+		merge(rows, totals, display, logos);
+		return display.entrySet().stream()
+			.map(e -> new NamedCount(e.getValue(), logos.get(e.getKey()), totals.get(e.getKey())[0]))
+			.toList();
+	}
+
 	private boolean aceita(String needle, String key, String display) {
 		return needle.isEmpty() || key.contains(needle) || display.toLowerCase(Locale.ROOT).contains(needle);
 	}

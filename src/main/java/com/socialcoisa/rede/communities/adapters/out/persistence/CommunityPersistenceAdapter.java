@@ -42,16 +42,23 @@ class CommunityPersistenceAdapter implements CommunityRepository {
 	}
 
 	@Override
-	public List<Community> findAll(String topic, String query, Instant before, int limit) {
+	public List<Community> findAll(String topic, String query, String state, String cityKey, Instant before,
+			int limit) {
 		PageRequest page = PageRequest.of(0, limit);
 		String q = com.socialcoisa.rede.shared.web.LikePattern.contains(query);
 		List<CommunityJpaEntity> entities;
 		if (StringUtils.hasText(topic)) {
-			entities = springData.findByTopic(topic, q, before, page);
+			entities = springData.findByTopic(topic, q, state, cityKey, before, page);
 		} else {
-			entities = springData.findAllBefore(q, before, page);
+			entities = springData.findAllBefore(q, state, cityKey, before, page);
 		}
 		return entities.stream().map(CommunityJpaEntity::toDomain).toList();
+	}
+
+	@Override
+	public List<Community> findLocal(String state, String cityKey, int limit) {
+		return springData.findLocal(state, cityKey, PageRequest.of(0, limit)).stream()
+			.map(CommunityJpaEntity::toDomain).toList();
 	}
 
 	@Override
@@ -152,6 +159,26 @@ class CommunityPersistenceAdapter implements CommunityRepository {
 	@Override
 	public int countMembers(String communityId) {
 		return memberRepo.countByCommunityId(communityId);
+	}
+
+	@Override
+	public java.util.Map<String, Integer> countMembersByCommunityIds(java.util.Collection<String> communityIds) {
+		if (communityIds == null || communityIds.isEmpty()) {
+			return java.util.Map.of();
+		}
+		java.util.Map<String, Integer> counts = new java.util.HashMap<>();
+		for (Object[] row : memberRepo.countByCommunityIds(communityIds)) {
+			counts.put((String) row[0], ((Number) row[1]).intValue());
+		}
+		return counts;
+	}
+
+	@Override
+	public java.util.Set<String> memberCommunityIds(String userId, java.util.Collection<String> communityIds) {
+		if (userId == null || communityIds == null || communityIds.isEmpty()) {
+			return java.util.Set.of();
+		}
+		return new java.util.HashSet<>(memberRepo.findCommunityIdsByUserIdAndCommunityIdsIn(userId, communityIds));
 	}
 
 	@Override

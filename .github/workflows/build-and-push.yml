@@ -55,6 +55,29 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ===========================================================================
+  # Full test suite on every PR. The image build skips tests and the schema check only boots the
+  # context, so before this job a broken test could reach qa unnoticed. PR only: never gates a deploy.
+  # ===========================================================================
+  test-suite:
+    name: 🧪 Testes (PR)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: ☕ JDK 25
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: 🧪 mvnw test
+        run: ./mvnw -B -q test
+
+  # ===========================================================================
   # Schema check: boot against MariaDB 11.4 (the production engine) built only from the Flyway
   # migrations (ddl-auto=validate). A migration MariaDB refuses, or an entity without its
   # migration, fails here, not in prod. The SPRING_* env vars override the test profile's H2.
@@ -126,11 +149,28 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: 🔑 Login no Harbor
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ${{ env.HARBOR_REGISTRY }}
           username: ${{ secrets.HARBOR_USER }}
           password: ${{ secrets.HARBOR_PASSWORD }}
+
+      # A poda vem ANTES do build: o push é o que esbarra na cota, então limpar depois seria
+      # tarde demais — e, com o registro cheio, o push falha e a poda nunca roda (foi assim que a
+      # QA ficou horas sem receber código). Limpando primeiro, este build tem espaço para subir.
+      #
+      # Mantém prod atual + 1 backup, a tag `main`, a QA mais recente e a tag deste build; apaga
+      # o resto. Não derruba a run: uma falha aqui não pode impedir o deploy de um build válido.
+      - name: 🧹 Podar imagens antigas no Harbor
+        env:
+          HARBOR_USER: ${{ secrets.HARBOR_USER }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+          CURRENT_TAG: ${{ steps.vars.outputs.image_tag }}
+          KEEP_PROD: "2"
+        run: |
+          if ! bash .github/scripts/harbor-retention.sh; then
+            echo "::warning::A poda do Harbor falhou; este build segue, mas o registro não foi limpo."
+          fi
 
       # push:true direto no buildx (buildkit) dá 400 no token service do Harbor com
       # multi-tag num push só (bug conhecido buildkit x Harbor 2.11 — não é bug nosso,
@@ -152,12 +192,18 @@ jobs:
       - name: 📤 Push para Harbor (docker push classico, tag por tag)
         env:
           IMAGE_TAG: ${{ steps.vars.outputs.image_tag }}
-          BRANCH_TAG: ${{ steps.vars.outputs.branch }}
         run: |
           set -euo pipefail
           IMG="${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${IMAGE_NAME}"
+          # Toda build publica a tag do commit. Produção publica também a flutuante `main`, que é
+          # a única flutuante mantida: serve para apontar sempre para o último build de prod. A
+          # QA não tem flutuante — quem sobe lá é a tag do commit, e a flutuante antiga só ficava
+          # parada ocupando a cota.
           docker push "${IMG}:${IMAGE_TAG}"
-          docker push "${IMG}:${BRANCH_TAG}"
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then
+            docker tag "${IMG}:${IMAGE_TAG}" "${IMG}:main"
+            docker push "${IMG}:main"
+          fi
 
   # ===========================================================================
   # Deploy QA — SOMENTE branch qa, SOMENTE push/workflow_dispatch, self-hosted
@@ -169,6 +215,11 @@ jobs:
       needs.build-and-push.outputs.branch == 'qa' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: [self-hosted, enois, docker-prod4]
+    # Dois pushes em sequência não podem trocar o container um por cima do outro.
+    concurrency:
+      group: deploy-qa
+      cancel-in-progress: false
+    timeout-minutes: 20
     steps:
       - name: 🚢 Recriar container via Portainer API
         env:
@@ -197,6 +248,13 @@ jobs:
           GITHUB_CLIENT_ID: ${{ secrets.QA_GITHUB_CLIENT_ID }}
           GITHUB_CLIENT_SECRET: ${{ secrets.QA_GITHUB_CLIENT_SECRET }}
           GITHUB_CONTRIBUTIONS_TOKEN: ${{ secrets.QA_GITHUB_CONTRIBUTIONS_TOKEN }}
+          # Sugestoes da comunidade: issue PUBLICA nos repos de destino, aberta so apos aprovacao
+          # de moderador. Usa o mesmo token do suporte (guardado no banco, painel do admin), entao
+          # nao ha secret novo aqui. Os mesmos repos valem em QA e prod: aprovar na QA tambem
+          # publica de verdade.
+          GITHUB_SUGGESTIONS_REPO_BACKEND: ${{ vars.SUGGESTIONS_REPO_BACKEND }}
+          GITHUB_SUGGESTIONS_REPO_FRONTEND: ${{ vars.SUGGESTIONS_REPO_FRONTEND }}
+          GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM: ${{ vars.SUGGESTIONS_REPO_DESIGN_SYSTEM }}
           # Na QA, issue com a label `bug` (aplicada por mantenedor) ja conta para o selo de
           # issues; em producao o default e vazio (so revisao humana). O worker roda a cada 10
           # minutos para os selos acompanharem o GitHub sozinhos.
@@ -207,6 +265,11 @@ jobs:
           IMAGEKIT_URL_ENDPOINT: ${{ secrets.IMAGEKIT_URL_ENDPOINT }}
           IMAGEKIT_PUBLIC_KEY: ${{ secrets.IMAGEKIT_PUBLIC_KEY }}
           IMAGEKIT_PRIVATE_KEY: ${{ secrets.IMAGEKIT_PRIVATE_KEY }}
+          # Busca de GIF no seletor e triagem por LLM (denuncias/quarentena): sem chave o backend
+          # responde "sem provedor configurado" e a IA fica indisponível — a chave existe como
+          # secret, mas não era injetada no container.
+          REDE_GIFS_GIPHY_KEY: ${{ secrets.REDE_GIFS_GIPHY_KEY }}
+          MODERATION_LLM_API_KEY: ${{ secrets.MODERATION_LLM_API_KEY }}
           PANIC_MODE: ${{ secrets.PANIC_MODE }}
           # Storage da midia na QA. Sem estas variaveis o app sobe em `imagekit` (o default) e o
           # S3StorageConfig nem e criado — o endpoint de upload responde 503 "desativado" mesmo
@@ -227,21 +290,123 @@ jobs:
           REDE_MEDIA_S3_PREFIX: qa/
           AWS_ACCESS_KEY_ID: ${{ secrets.PROD_AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.PROD_AWS_SECRET_ACCESS_KEY }}
+          # Web Push (VAPID), par da QA — independente do de produção. A chave pública é a
+          # identidade do servidor para o serviço de push do navegador: toda inscrição existente
+          # foi criada com ela, então o valor vem de secret e é fixo entre deploys (nunca gerado
+          # no boot). Sem as duas, o backend sobe com o push desligado e GET /push/config responde
+          # enabled:false — as notificações continuam só dentro do app.
+          VAPID_PUBLIC_KEY: ${{ secrets.QA_VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.QA_VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT: "mailto:suporte@enois.ia.br"
         run: |
           set -euo pipefail
           API="${PORTAINER_BASE_URL}/api/endpoints/${PORTAINER_ENDPOINT_ID}/docker"
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
+          NEW_NAME="${CONTAINER_NAME}-new"
+          PREV_NAME="${CONTAINER_NAME}-previous"
+          IMG_PATH="${IMAGE_REF%:*}"
+          IMG_TAG="${IMAGE_REF##*:}"
 
+          # Chamada ao proxy Docker do Portainer: imprime o corpo só quando dá certo e, quando
+          # falha, mostra status + começo do corpo (sem despejar o progresso inteiro do pull).
+          call() {
+            local method="$1" path="$2" out status
+            shift 2
+            out="$(mktemp)"
+            status="$(curl -sS -o "${out}" -w '%{http_code}' --connect-timeout 10 --max-time 60 \
+              -X "${method}" "${AUTH[@]}" "$@" "${API}${path}")" || status="000"
+            if [[ "${status}" != 2* ]]; then
+              echo "!! ${method} ${path} -> HTTP ${status}" >&2
+              head -c 600 "${out}" >&2 || true
+              echo >&2
+              rm -f "${out}"
+              return 1
+            fi
+            cat "${out}"
+            rm -f "${out}"
+          }
+
+          status_of() {
+            local method="$1" path="$2"
+            shift 2
+            curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 60 \
+              -X "${method}" "${AUTH[@]}" "$@" "${API}${path}" 2>/dev/null || echo 000
+          }
+
+          # 1) Espaço no Docker do host. Cada deploy baixa uma imagem nova de backend e a antiga
+          #    fica para sempre; a poda do Harbor limpa o REGISTRO, não o disco desta máquina, e
+          #    o runner não tem docker.sock — daí a limpeza passar pelo proxy do Portainer.
+          if call GET /system/df > /tmp/enois-df.json 2>/dev/null; then
+            python3 - <<'PY'
+          import json
+          d = json.load(open("/tmp/enois-df.json"))
+          def mb(n): return f"{(n or 0) / 1048576:.0f} MB"
+          imgs = sum((i.get("Size") or 0) - (i.get("SharedSize") or 0) for i in d.get("Images") or [])
+          vols = sum(((v.get("UsageData") or {}).get("Size") or 0) for v in d.get("Volumes") or [])
+          print(f"==> Docker do host: imagens ~{mb(imgs)} | volumes ~{mb(vols)}")
+          PY
+          else
+            echo "::warning::não consegui ler o uso de disco do Docker (segue o deploy)"
+          fi
+
+          # Só builds de QA aposentados: `main` é o deploy de produção (e o Docker buscaria a
+          # tag de novo no próximo deploy), e uma imagem em uso nunca deve ser apagada.
+          echo "==> Removendo imagens aposentadas de ${IMAGE_NAME}:qa-* (a deste build fica)"
+          if call GET /images/json > /tmp/enois-images.json 2>/dev/null; then
+            python3 - "${IMAGE_REF}" "${IMG_PATH}:qa-" > /tmp/enois-old-tags.txt <<'PY'
+          import json, sys
+          current, prefix = sys.argv[1], sys.argv[2]
+          for img in json.load(open("/tmp/enois-images.json")):
+              if (img.get("Containers") or 0) > 0:
+                  continue
+              for tag in img.get("RepoTags") or []:
+                  if tag.startswith(prefix) and tag != current:
+                      print(tag)
+          PY
+            removed=0
+            kept=0
+            while IFS= read -r tag; do
+              [[ -z "${tag}" ]] && continue
+              if status_of DELETE "/images/${tag}?force=0&noprune=1" | grep -qE '^2'; then
+                removed=$((removed + 1))
+                echo "   removida: ${tag#*/}"
+              else
+                kept=$((kept + 1))
+              fi
+            done < /tmp/enois-old-tags.txt
+            echo "==> ${removed} tag(s) removida(s), ${kept} ainda em uso"
+          else
+            echo "::warning::não consegui listar as imagens (segue o deploy)"
+          fi
+
+          # 2) Pull ANTES de mexer no que está no ar. O Docker devolve 200 mesmo quando a extração
+          #    falha no meio do stream, então o erro é procurado no corpo — sem isso o passo
+          #    seguia, parava e apagava o container bom para depois falhar no create.
           echo "==> Pull ${IMAGE_REF}"
           ENCODED_IMAGE=$(python3 -c "import urllib.parse,os;print(urllib.parse.quote(os.environ['IMAGE_REF'].rsplit(':',1)[0]))")
-          TAG=$(echo "${IMAGE_REF}" | rev | cut -d: -f1 | rev)
           # projeto 'enois' e privado no Harbor -> precisa de X-Registry-Auth no pull via Portainer
           REGISTRY_AUTH=$(python3 -c "import json,base64,os;print(base64.b64encode(json.dumps({'username':os.environ['HARBOR_USER'],'password':os.environ['HARBOR_PASSWORD'],'serveraddress':'${HARBOR_REGISTRY}'}).encode()).decode())")
-          curl -sf -X POST "${AUTH[@]}" -H "X-Registry-Auth: ${REGISTRY_AUTH}" "${API}/images/create?fromImage=${ENCODED_IMAGE}&tag=${TAG}"
+          PULL_OUT=$(mktemp)
+          PULL_STATUS=$(curl -sS -o "${PULL_OUT}" -w '%{http_code}' --connect-timeout 10 --max-time 600 \
+            -X POST "${AUTH[@]}" -H "X-Registry-Auth: ${REGISTRY_AUTH}" \
+            "${API}/images/create?fromImage=${ENCODED_IMAGE}&tag=${IMG_TAG}") || PULL_STATUS="000"
+          if [[ "${PULL_STATUS}" != 2* ]] || grep -q '"error"' "${PULL_OUT}"; then
+            echo "!! pull falhou (HTTP ${PULL_STATUS})"
+            tail -c 800 "${PULL_OUT}" | tr -d '\r'
+            echo
+            echo "==> O container atual NÃO foi tocado."
+            rm -f "${PULL_OUT}"
+            exit 1
+          fi
+          tail -c 200 "${PULL_OUT}" | tr -d '\r'
+          echo
+          rm -f "${PULL_OUT}"
 
-          echo "==> Stop + remove container antigo (ignora erro se não existir)"
-          curl -s -X POST "${AUTH[@]}" "${API}/containers/${CONTAINER_NAME}/stop" || true
-          curl -s -X DELETE "${AUTH[@]}" "${API}/containers/${CONTAINER_NAME}?v=1" || true
+          # 3) Cria o novo SEM parar o atual: a porta só é disputada no start, então uma falha
+          #    aqui deixa o container que está servindo intacto.
+          echo "==> Criando ${NEW_NAME} (o atual segue no ar)"
+          status_of DELETE "/containers/${NEW_NAME}?force=1" >/dev/null || true
+          status_of DELETE "/containers/${PREV_NAME}?force=1" >/dev/null || true
 
           echo "==> Criar container novo"
           # Memoria do container da QA: host vmi935062 tem 7.76GB e e COMPARTILHADO com outros
@@ -282,12 +447,17 @@ jobs:
               "GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}",
               "GITHUB_REDIRECT_URI=https://enois-api-qa.b7cloud.tech/api/auth/oauth/github/callback",
               "GITHUB_CONTRIBUTIONS_TOKEN=${GITHUB_CONTRIBUTIONS_TOKEN}",
+              "GITHUB_SUGGESTIONS_REPO_BACKEND=${GITHUB_SUGGESTIONS_REPO_BACKEND}",
+              "GITHUB_SUGGESTIONS_REPO_FRONTEND=${GITHUB_SUGGESTIONS_REPO_FRONTEND}",
+              "GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM=${GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM}",
               "GITHUB_QUALIFIED_ISSUE_LABELS=${GITHUB_QUALIFIED_ISSUE_LABELS}",
               "GITHUB_SYNC_ENABLED=true",
               "GITHUB_SYNC_CRON=${GITHUB_SYNC_CRON}",
               "IMAGEKIT_URL_ENDPOINT=${IMAGEKIT_URL_ENDPOINT}",
               "IMAGEKIT_PUBLIC_KEY=${IMAGEKIT_PUBLIC_KEY}",
               "IMAGEKIT_PRIVATE_KEY=${IMAGEKIT_PRIVATE_KEY}",
+              "REDE_GIFS_GIPHY_KEY=${REDE_GIFS_GIPHY_KEY}",
+              "MODERATION_LLM_API_KEY=${MODERATION_LLM_API_KEY}",
               "REDE_AUTH_SIGNUP_ENABLED=true",
               "SIGNUP_CAPTCHA_ENABLED=true",
               "REDE_MEDIA_STORAGE=${REDE_MEDIA_STORAGE}",
@@ -299,6 +469,9 @@ jobs:
               "REDE_MEDIA_S3_PREFIX=${REDE_MEDIA_S3_PREFIX}",
               "AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}",
               "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}",
+              "VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY}",
+              "VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY}",
+              "VAPID_SUBJECT=${VAPID_SUBJECT}",
               "TRUSTED_PROXY_IPS=154.12.230.97",
               "JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=60.0 -XX:+ExitOnOutOfMemoryError"
             ],
@@ -318,11 +491,70 @@ jobs:
             }
           }
           EOF
-          curl -sf -X POST "${AUTH[@]}" -H "Content-Type: application/json" \
-            "${API}/containers/create?name=${CONTAINER_NAME}" -d @"$DEPLOY_JSON"
 
-          echo "==> Start"
-          curl -sf -X POST "${AUTH[@]}" "${API}/containers/${CONTAINER_NAME}/start"
+          if ! call POST "/containers/create?name=${NEW_NAME}" \
+              -H "Content-Type: application/json" -d @"$DEPLOY_JSON" > /tmp/enois-create.json; then
+            echo "==> O container atual NÃO foi tocado."
+            exit 1
+          fi
+          echo "   criado: $(python3 -c 'import json;print(json.load(open("/tmp/enois-create.json")).get("Id","?")[:12])')"
+
+          # 4) Troca: para o atual, guarda como `-previous` e promove o novo. Qualquer falha
+          #    devolve o anterior ao nome original e o sobe de novo.
+          echo "==> Trocando para o novo"
+          STOP_STATUS=$(status_of POST "/containers/${CONTAINER_NAME}/stop?t=20")
+          case "${STOP_STATUS}" in
+            204|304|404) ;;
+            *)
+              echo "!! não consegui parar ${CONTAINER_NAME} (HTTP ${STOP_STATUS}); nada foi trocado"
+              status_of DELETE "/containers/${NEW_NAME}?force=1" >/dev/null || true
+              exit 1
+              ;;
+          esac
+
+          PREV_SAVED=0
+          RENAME_STATUS=$(status_of POST "/containers/${CONTAINER_NAME}/rename?name=${PREV_NAME}")
+          case "${RENAME_STATUS}" in
+            204) PREV_SAVED=1 ;;
+            404) echo "   (não havia container anterior)" ;;
+            *)
+              echo "!! não consegui renomear o container atual (HTTP ${RENAME_STATUS})"
+              status_of POST "/containers/${CONTAINER_NAME}/start" >/dev/null || true
+              status_of DELETE "/containers/${NEW_NAME}?force=1" >/dev/null || true
+              exit 1
+              ;;
+          esac
+
+          restaurar() {
+            echo "==> Rollback: devolvendo ${PREV_NAME} para ${CONTAINER_NAME}"
+            status_of DELETE "/containers/${CONTAINER_NAME}?force=1" >/dev/null || true
+            status_of POST "/containers/${PREV_NAME}/rename?name=${CONTAINER_NAME}" >/dev/null || true
+            status_of POST "/containers/${CONTAINER_NAME}/start" >/dev/null || true
+          }
+
+          if [[ "$(status_of POST "/containers/${NEW_NAME}/rename?name=${CONTAINER_NAME}")" != "204" ]]; then
+            echo "!! não consegui promover o novo container"
+            if [[ ${PREV_SAVED} -eq 1 ]]; then
+              restaurar
+            fi
+            exit 1
+          fi
+
+          START_STATUS=$(status_of POST "/containers/${CONTAINER_NAME}/start")
+          case "${START_STATUS}" in
+            204|304) ;;
+            *)
+              echo "!! start do novo container falhou (HTTP ${START_STATUS})"
+              if [[ ${PREV_SAVED} -eq 1 ]]; then
+                restaurar
+              fi
+              exit 1
+              ;;
+          esac
+          echo "==> Container novo no ar com ${IMAGE_REF}"
+          if [[ ${PREV_SAVED} -eq 1 ]]; then
+            echo "   anterior guardado como ${PREV_NAME} até o health check"
+          fi
 
       - name: 🩺 Health check
         env:
@@ -332,10 +564,21 @@ jobs:
           # Boot do Spring (Flyway + Hibernate + Tomcat) na QA roda com lazy-initialization=false e
           # ainda carrega as vagas externas na subida: 75s era curto demais e um boot lento
           # aparecia como deploy quebrado. 30 tentativas de 10s = 5min.
+          API="${PORTAINER_BASE_URL}/api/endpoints/${PORTAINER_ENDPOINT_ID}/docker"
+          AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
+          status_of() {
+            local method="$1" path="$2"
+            shift 2
+            curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 60 \
+              -X "${method}" "${AUTH[@]}" "$@" "${API}${path}" 2>/dev/null || echo 000
+          }
+
           URL=https://enois-api-qa.b7cloud.tech/health
           for i in $(seq 1 30); do
             if curl -sf --max-time 10 "$URL"; then
               echo "OK na tentativa $i"
+              # Subiu: o container anterior guardado deixa de ser necessário.
+              status_of DELETE "/containers/${CONTAINER_NAME}-previous?force=1" >/dev/null || true
               exit 0
             fi
             echo "tentativa $i falhou, aguardando..."
@@ -344,8 +587,6 @@ jobs:
 
           # Ate aqui o deploy falhava "mudo": o CI nao dizia POR QUE o container nao respondeu.
           # O proprio Portainer (endpoint 8 = docker-prod4) tem o estado e o log do container.
-          API="${PORTAINER_BASE_URL}/api/endpoints/${PORTAINER_ENDPOINT_ID}/docker"
-          AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}")
           echo "=== estado do ${CONTAINER_NAME} ==="
           curl -s --max-time 20 "${AUTH[@]}" "${API}/containers/${CONTAINER_NAME}/json" \
             | tr ',' '\n' | grep -E '"(Status|Running|ExitCode|RestartCount|OOMKilled|StartedAt|FinishedAt)"' | head -20
@@ -353,6 +594,14 @@ jobs:
           curl -s --max-time 30 "${AUTH[@]}" \
             "${API}/containers/${CONTAINER_NAME}/logs?tail=200&stdout=1&stderr=1" \
             | tr -cd '\11\12\15\40-\176' | tail -n 120
+
+          # O novo não subiu: devolve o anterior ao nome original em vez de deixar a QA fora.
+          if [[ "$(status_of GET "/containers/${CONTAINER_NAME}-previous/json")" == "200" ]]; then
+            echo "=== rollback para o container anterior ==="
+            status_of DELETE "/containers/${CONTAINER_NAME}?force=1" >/dev/null || true
+            status_of POST "/containers/${CONTAINER_NAME}-previous/rename?name=${CONTAINER_NAME}" >/dev/null || true
+            status_of POST "/containers/${CONTAINER_NAME}/start" >/dev/null || true
+          fi
           echo "health check nao respondeu apos 300s"
           exit 1
 
@@ -427,11 +676,30 @@ jobs:
           GITHUB_CLIENT_ID: ${{ secrets.OAUTH_GITHUB_CLIENT_ID }}
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_CLIENT_SECRET }}
           GITHUB_CONTRIBUTIONS_TOKEN: ${{ secrets.OAUTH_GITHUB_CONTRIBUTIONS_TOKEN }}
+          # Sugestoes da comunidade (issue publica apos aprovacao). Usa o mesmo token do suporte,
+          # guardado no banco (painel do admin): so os repositorios de destino vem daqui.
+          GITHUB_SUGGESTIONS_REPO_BACKEND: ${{ vars.SUGGESTIONS_REPO_BACKEND }}
+          GITHUB_SUGGESTIONS_REPO_FRONTEND: ${{ vars.SUGGESTIONS_REPO_FRONTEND }}
+          GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM: ${{ vars.SUGGESTIONS_REPO_DESIGN_SYSTEM }}
+          # Issue com a label `bug` (aplicada por mantenedor) ja conta para o selo de issues, como na QA.
+          GITHUB_QUALIFIED_ISSUE_LABELS: bug
           # ImageKit aposentado (storage no S3), mas o purge/delete de midia antiga ainda
           # conversa com ele ate a migracao de objetos terminar.
           IMAGEKIT_URL_ENDPOINT: ${{ secrets.IMAGEKIT_URL_ENDPOINT }}
           IMAGEKIT_PUBLIC_KEY: ${{ secrets.IMAGEKIT_PUBLIC_KEY }}
           IMAGEKIT_PRIVATE_KEY: ${{ secrets.IMAGEKIT_PRIVATE_KEY }}
+          # Busca de GIF no seletor e triagem por LLM (denuncias/quarentena): sem chave o backend
+          # responde "sem provedor configurado" e a IA fica indisponível — a chave existe como
+          # secret, mas não era injetada no container.
+          REDE_GIFS_GIPHY_KEY: ${{ secrets.REDE_GIFS_GIPHY_KEY }}
+          MODERATION_LLM_API_KEY: ${{ secrets.MODERATION_LLM_API_KEY }}
+          # Web Push (VAPID), par de PRODUÇÃO — distinto do da QA, para que um teste na QA nunca
+          # valha como inscrição de produção. Fixo entre deploys: a chave pública assina as
+          # inscrições já existentes e trocá-la as invalida. Sem as duas, o push fica desligado
+          # (GET /push/config → enabled:false) e as notificações seguem só dentro do app.
+          VAPID_PUBLIC_KEY: ${{ secrets.PROD_VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.PROD_VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT: "mailto:suporte@enois.ia.br"
         run: |
           set -euo pipefail
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
@@ -508,6 +776,10 @@ jobs:
                 GITHUB_CLIENT_SECRET: "${GITHUB_CLIENT_SECRET}"
                 GITHUB_REDIRECT_URI: "https://api.enois.ia.br/api/auth/oauth/github/callback"
                 GITHUB_CONTRIBUTIONS_TOKEN: "${GITHUB_CONTRIBUTIONS_TOKEN}"
+                GITHUB_SUGGESTIONS_REPO_BACKEND: "${GITHUB_SUGGESTIONS_REPO_BACKEND}"
+                GITHUB_SUGGESTIONS_REPO_FRONTEND: "${GITHUB_SUGGESTIONS_REPO_FRONTEND}"
+                GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM: "${GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM}"
+                GITHUB_QUALIFIED_ISSUE_LABELS: "${GITHUB_QUALIFIED_ISSUE_LABELS}"
                 GITHUB_SYNC_ENABLED: "true"
                 GITHUB_SYNC_CRON: "0 */10 * * * *"
                 MANAGEMENT_ENDPOINTS: ${MANAGEMENT_ENDPOINTS}
@@ -517,6 +789,11 @@ jobs:
                 IMAGEKIT_URL_ENDPOINT: "${IMAGEKIT_URL_ENDPOINT}"
                 IMAGEKIT_PUBLIC_KEY: "${IMAGEKIT_PUBLIC_KEY}"
                 IMAGEKIT_PRIVATE_KEY: "${IMAGEKIT_PRIVATE_KEY}"
+                REDE_GIFS_GIPHY_KEY: "${REDE_GIFS_GIPHY_KEY}"
+                MODERATION_LLM_API_KEY: "${MODERATION_LLM_API_KEY}"
+                VAPID_PUBLIC_KEY: "${VAPID_PUBLIC_KEY}"
+                VAPID_PRIVATE_KEY: "${VAPID_PRIVATE_KEY}"
+                VAPID_SUBJECT: "${VAPID_SUBJECT}"
           EOF
 
           echo "==> Montar payload JSON (python escapa o YAML certo pro body)"

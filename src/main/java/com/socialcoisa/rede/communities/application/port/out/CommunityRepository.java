@@ -14,7 +14,11 @@ public interface CommunityRepository {
 
 	Optional<Community> findById(String id);
 
-	List<Community> findAll(String topic, String query, Instant before, int limit);
+	/** `state`/`cityKey` nulos desligam o filtro de lugar. */
+	List<Community> findAll(String topic, String query, String state, String cityKey, Instant before, int limit);
+
+	/** Comunidades da UF: as da cidade primeiro, depois o resto do estado, cada grupo por membros. */
+	List<Community> findLocal(String state, String cityKey, int limit);
 
 	/** Comunidades das quais o usuario participa (menu lateral). */
 	List<Community> findByMember(String userId, int limit);
@@ -41,6 +45,12 @@ public interface CommunityRepository {
 	boolean isMember(String communityId, String userId);
 
 	int countMembers(String communityId);
+
+	/** Contagem de membros das comunidades da pagina, em UMA consulta (evita N+1 na vitrine). */
+	java.util.Map<String, Integer> countMembersByCommunityIds(java.util.Collection<String> communityIds);
+
+	/** Das comunidades informadas, quais a pessoa participa — em UMA consulta. */
+	java.util.Set<String> memberCommunityIds(String userId, java.util.Collection<String> communityIds);
 
 	List<CommunityMember> findMembersByCommunity(String communityId);
 

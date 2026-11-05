@@ -39,6 +39,15 @@ class MediaAssetPersistenceAdapter implements MediaAssetRepository {
 	}
 
 	@Override
+	public boolean hasReportCapture(Collection<String> ids) {
+		if (ids == null || ids.isEmpty()) {
+			return false;
+		}
+		return repository.existsByIdInAndPurpose(ids,
+			com.socialcoisa.rede.media.application.MediaService.REPORT_CAPTURE_PURPOSE);
+	}
+
+	@Override
 	public List<MediaAsset> findForS3Copy(int limit, java.time.Instant before, int maxAttempts) {
 		return repository
 			.findForS3Copy(MediaStorageProvider.IMAGEKIT, com.socialcoisa.rede.media.domain.MediaDeleteStatus.NONE,
@@ -92,5 +101,28 @@ class MediaAssetPersistenceAdapter implements MediaAssetRepository {
 	@Override
 	public long countAll() {
 		return repository.count();
+	}
+
+	@Override
+	@org.springframework.transaction.annotation.Transactional
+	public void recordDimensions(String id, int width, int height) {
+		repository.recordDimensions(id, width, height);
+	}
+
+	@Override
+	@org.springframework.transaction.annotation.Transactional
+	public void recordDimensionFailure(String id) {
+		repository.recordDimensionFailure(id);
+	}
+
+	@Override
+	public List<MediaAsset> findForDimensionBackfill(int limit, int maxAttempts, java.time.Instant createdBefore) {
+		// Newest first: recent posts are the ones being scrolled in the feed right now.
+		return repository
+			.findForDimensionBackfill(MediaStorageProvider.S3, com.socialcoisa.rede.media.domain.MediaDeleteStatus.NONE,
+				maxAttempts, createdBefore, PageRequest.of(0, Math.max(1, limit)))
+			.stream()
+			.map(MediaAssetJpaEntity::toDomain)
+			.toList();
 	}
 }

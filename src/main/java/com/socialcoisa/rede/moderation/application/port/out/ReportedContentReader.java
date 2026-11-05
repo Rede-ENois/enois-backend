@@ -15,4 +15,13 @@ public interface ReportedContentReader {
 
 	/** Conteudo legivel do alvo; vazio quando o alvo nao tem texto (vaga, alvo apagado). */
 	Optional<String> contentOf(String targetType, String targetId);
+
+	/**
+	 * Mesmo conteúdo, a partir da denúncia inteira. Existe porque alguns alvos não têm texto
+	 * próprio e o contexto só é localizável pelo id da DENÚNCIA (denúncia de chamada: a sala não
+	 * tem texto; o que a triagem pode ver é a fotografia do momento, guardada por denúncia).
+	 */
+	default Optional<String> contentOf(com.socialcoisa.rede.moderation.domain.Report report) {
+		return contentOf(report.targetType().name(), report.targetId());
+	}
 }

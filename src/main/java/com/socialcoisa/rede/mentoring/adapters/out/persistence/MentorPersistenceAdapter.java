@@ -10,8 +10,10 @@ import org.springframework.util.StringUtils;
 
 import com.socialcoisa.rede.mentoring.application.port.out.MentorRepository;
 import com.socialcoisa.rede.mentoring.domain.Mentor;
+import com.socialcoisa.rede.mentoring.domain.MentorAvailability;
 import com.socialcoisa.rede.mentoring.domain.MentorSession;
 import com.socialcoisa.rede.mentoring.domain.MentorSlot;
+import com.socialcoisa.rede.mentoring.domain.SessionStatus;
 
 @Repository
 class MentorPersistenceAdapter implements MentorRepository {
@@ -19,13 +21,16 @@ class MentorPersistenceAdapter implements MentorRepository {
 	private final SpringDataMentorJpaRepository springData;
 	private final SpringDataMentorSlotJpaRepository slotRepo;
 	private final SpringDataMentorSessionJpaRepository sessionRepo;
+	private final SpringDataMentorAvailabilityJpaRepository availabilityRepo;
 
 	MentorPersistenceAdapter(SpringDataMentorJpaRepository springData,
 			SpringDataMentorSlotJpaRepository slotRepo,
-			SpringDataMentorSessionJpaRepository sessionRepo) {
+			SpringDataMentorSessionJpaRepository sessionRepo,
+			SpringDataMentorAvailabilityJpaRepository availabilityRepo) {
 		this.springData = springData;
 		this.slotRepo = slotRepo;
 		this.sessionRepo = sessionRepo;
+		this.availabilityRepo = availabilityRepo;
 	}
 
 	@Override
@@ -44,10 +49,13 @@ class MentorPersistenceAdapter implements MentorRepository {
 	}
 
 	@Override
-	public List<Mentor> findAll(String expertise, Instant before, int limit) {
+	public List<Mentor> findAll(String expertise, String query, Instant before, int limit) {
 		PageRequest page = PageRequest.of(0, limit);
 		List<MentorJpaEntity> entities;
-		if (StringUtils.hasText(expertise)) {
+		if (StringUtils.hasText(query)) {
+			entities = springData.findByQuery(com.socialcoisa.rede.shared.web.LikePattern.contains(query),
+				com.socialcoisa.rede.shared.web.LikePattern.contains(expertise), before, page);
+		} else if (StringUtils.hasText(expertise)) {
 			entities = springData.findByExpertise(com.socialcoisa.rede.shared.web.LikePattern.contains(expertise), before, page);
 		} else {
 			entities = springData.findAllBefore(before, page);
@@ -83,7 +91,57 @@ class MentorPersistenceAdapter implements MentorRepository {
 	}
 
 	@Override
+	public List<MentorSession> findSessionsByMentor(String mentorId) {
+		return sessionRepo.findByMentorIdOrderByCreatedAtDesc(mentorId).stream()
+			.map(MentorSessionJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public List<MentorSession> findSessionsByMentee(String menteeId) {
+		return sessionRepo.findByMenteeIdOrderByCreatedAtDesc(menteeId).stream()
+			.map(MentorSessionJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public Optional<MentorSession> findSessionById(String sessionId) {
+		return sessionRepo.findById(sessionId).map(MentorSessionJpaEntity::toDomain);
+	}
+
+	@Override
+	public List<MentorSession> findScheduledSessions() {
+		return sessionRepo.findByStatus(SessionStatus.SCHEDULED).stream()
+			.map(MentorSessionJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public List<MentorSession> findUnsettledPaidSessions() {
+		return sessionRepo.findByPriceSparksIsNotNullAndSettledAtIsNull().stream()
+			.map(MentorSessionJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
 	public void delete(String mentorId) {
 		springData.deleteById(mentorId);
+	}
+
+	@Override
+	public List<MentorAvailability> findAvailabilitiesByMentor(String mentorId) {
+		return availabilityRepo.findByMentorIdOrderByDayOfWeekAscTimeOfDayAsc(mentorId).stream()
+			.map(MentorAvailabilityJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public void saveAvailability(MentorAvailability availability) {
+		availabilityRepo.save(MentorAvailabilityJpaEntity.fromDomain(availability));
+	}
+
+	@Override
+	public void deleteAvailabilitiesByMentor(String mentorId) {
+		availabilityRepo.deleteByMentorId(mentorId);
 	}
 }

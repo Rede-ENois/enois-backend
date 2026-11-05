@@ -32,7 +32,7 @@
 		<jsoup.version>1.23.2</jsoup.version>
 		<!-- O parent do Spring Boot 4 nao gerencia o SDK do AWS, entao a versao e fixada aqui.
 		     Precisa bater com o apache-client que ja esta no cache do Maven (evita baixar duas linhas). -->
-		<awssdk.version>2.57.3</awssdk.version>
+		<awssdk.version>2.57.7</awssdk.version>
 		<!-- Cache em memoria dos agregados da landing (ver CacheConfig). 2.9.x porque e a versao
 		     que ja esta no repositorio local; a API usada e a mesma das 3.x. -->
 		<caffeine.version>3.3.1</caffeine.version>
@@ -53,28 +53,52 @@
 			<dependency>
 				<groupId>org.bitbucket.b_c</groupId>
 				<artifactId>jose4j</artifactId>
-				<version>0.9.6</version>
+				<version>0.9.7</version>
 			</dependency>
 			<!-- Jackson 3: patch com correções de DoS/backtracking. -->
 			<!-- Jackson 2 (validadores OAuth): core/databind no mesmo patch corrigido. -->
 			<dependency>
 				<groupId>com.fasterxml.jackson.core</groupId>
 				<artifactId>jackson-core</artifactId>
-				<version>2.21.7</version>
+				<version>2.22.4</version>
+			</dependency>
+			<!-- As anotacoes sao compartilhadas pelas duas linhagens; o databind 3.2 usa
+			     JsonApplyView, que so existe a partir da 2.22. -->
+			<dependency>
+				<groupId>com.fasterxml.jackson.core</groupId>
+				<artifactId>jackson-annotations</artifactId>
+				<version>2.22</version>
 			</dependency>
 			<dependency>
 				<groupId>tools.jackson.core</groupId>
 				<artifactId>jackson-core</artifactId>
-				<version>3.1.7</version>
+				<version>3.2.4</version>
 			</dependency>
 			<dependency>
 				<groupId>tools.jackson.core</groupId>
 				<artifactId>jackson-databind</artifactId>
-				<version>3.1.7</version>
+				<version>3.2.4</version>
 			</dependency>
 		</dependencies>
 	</dependencyManagement>
 	<dependencies>
+		<!-- Classificação de imagens em CPU, no próprio processo do backend. -->
+		<dependency>
+			<groupId>com.microsoft.onnxruntime</groupId>
+			<artifactId>onnxruntime</artifactId>
+			<version>1.31.1</version>
+	</dependency>
+		<!-- ImageIO do JDK não lê WebP/AVIF por padrão; o scanner precisa cobrir todos os formatos aceitos. -->
+		<dependency>
+			<groupId>com.twelvemonkeys.imageio</groupId>
+			<artifactId>imageio-webp</artifactId>
+			<version>3.15.3</version>
+	</dependency>
+		<dependency>
+			<groupId>com.github.gotson.nightmonkeys</groupId>
+			<artifactId>imageio-heif</artifactId>
+			<version>1.1.0</version>
+	</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-h2console</artifactId>
@@ -137,7 +161,21 @@
 		<dependency>
 			<groupId>nl.martijndwars</groupId>
 			<artifactId>web-push</artifactId>
-			<version>5.1.1</version>
+			<version>5.1.2</version>
+		</dependency>
+		<!-- O web-push 5.1.2 mudou o async-http-client e o jose4j para runtime, mas
+		     WebPushSender usa os dois direto: as dependencias de compilacao sao explicitas. -->
+		<dependency>
+			<groupId>org.asynchttpclient</groupId>
+			<artifactId>async-http-client</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.httpcomponents</groupId>
+			<artifactId>httpasyncclient</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.bitbucket.b_c</groupId>
+			<artifactId>jose4j</artifactId>
 		</dependency>
 
 		<!-- BouncyCastle: exigido em runtime pelo web-push para a criptografia do payload. -->
@@ -203,17 +241,17 @@
 		<dependency>
 			<groupId>org.commonmark</groupId>
 			<artifactId>commonmark</artifactId>
-			<version>0.24.0</version>
+			<version>0.31.0</version>
 		</dependency>
 		<dependency>
 			<groupId>org.commonmark</groupId>
 			<artifactId>commonmark-ext-gfm-tables</artifactId>
-			<version>0.24.0</version>
+			<version>0.31.0</version>
 		</dependency>
 		<dependency>
 			<groupId>org.commonmark</groupId>
 			<artifactId>commonmark-ext-gfm-strikethrough</artifactId>
-			<version>0.24.0</version>
+			<version>0.31.0</version>
 		</dependency>
 		<!-- Leitura do texto de curriculos em PDF (importacao via curriculo). So extracao de
 		     texto — nada de renderizacao nem formulario: o arquivo e tratado como documento. -->

@@ -19,7 +19,8 @@ public class DailyMazeService {
     private final JdbcTemplate jdbc;
     private final Clock clock;
     private final SecureRandom random = new SecureRandom();
-    public DailyMazeService(JdbcTemplate jdbc, Clock clock) { this.jdbc=jdbc; this.clock=clock; }
+    private final com.socialcoisa.rede.coin.application.CoinService coins;
+public DailyMazeService(JdbcTemplate jdbc, Clock clock, com.socialcoisa.rede.coin.application.CoinService coins) { this.coins=coins; this.jdbc=jdbc; this.clock=clock; }
     private LocalDate today() { return LocalDate.now(clock.withZone(ZoneId.of("America/Sao_Paulo"))); }
     private LocalDate requestedDay(LocalDate requested) {
         LocalDate day = requested == null ? today() : requested;
@@ -69,6 +70,7 @@ public class DailyMazeService {
         catch (IllegalArgumentException ex) { throw new ApiException(400,"INVALID_MOVE","Movimento invalido."); }
         jdbc.update("insert into daily_maze_moves (challenge_date,user_id,request_id,direction) values (?,?,?,?)",date,user,requestId,direction);
         jdbc.update("update daily_maze_sessions set position=?,moves=?,completed_at=? where challenge_date=? and user_id=?",next,s.moves()+1,next==MazeRules.SIZE*MazeRules.SIZE-1?Timestamp.from(clock.instant()):null,date,user);
+        if (next==MazeRules.SIZE*MazeRules.SIZE-1) coins.recordPresence(user);
         return stateFor(day,user);
     }
     @Transactional(readOnly=true)

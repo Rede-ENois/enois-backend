@@ -32,6 +32,9 @@ public class SearchService {
 		if (query == null || query.isBlank()) {
 			return List.of();
 		}
+		// O limite era repassado as cinco consultas sem teto; ?limit=1000 virava 1000 linhas de
+		// cada tipo. A busca e uma vitrine: 50 resultados por tipo ja e mais do que a tela usa.
+		limit = Math.clamp(limit, 1, 50);
 		List<String> effectiveTypes = types;
 		if (effectiveTypes == null || effectiveTypes.isEmpty()) {
 			effectiveTypes = VALID_TYPES;

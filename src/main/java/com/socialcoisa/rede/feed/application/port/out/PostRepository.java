@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
+import com.socialcoisa.rede.feed.application.TrendingCursor;
 import com.socialcoisa.rede.feed.domain.AuthorIdentity;
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
@@ -25,6 +26,19 @@ public interface PostRepository {
 
 	/** TODOS os posts do autor, em qualquer status — uso da purga (sanitização por spam). */
 	List<Post> findAllByAuthor(UserId authorId);
+
+	/**
+	 * Posts que anexam uma mídia, em qualquer status. É como a checagem de conteúdo explícito
+	 * encontra tudo o que precisa sair do ar quando a imagem é barrada — a mesma imagem pode ter
+	 * sido publicada mais de uma vez.
+	 */
+	List<Post> findByMediaId(String mediaId);
+
+	/**
+	 * Posts ativos criados desde um instante cujo texto publica algum link. É o que a varredura da
+	 * barreira de links lê — sem este recorte, varrer tudo a cada rodada custaria o banco inteiro.
+	 */
+	List<Post> findActiveWithLinksSince(Instant since, int limit);
 
 	/** "Para você"/Seguindo: o que as identidades sociais assinaram (BUSINESS nunca entra). */
 	List<Post> findActiveByAuthors(Set<UserId> authorIds, Instant before, int limit);
@@ -54,15 +68,23 @@ public interface PostRepository {
 	/** Feed "Tudo" respeitando os assuntos bloqueados do leitor (posts sem tópico passam). */
 	List<Post> findActiveAllExcludingTopics(Collection<String> blockedTopics, Instant before, int limit);
 
+	List<Post> findActiveUnseen(UserId reader, Collection<String> blockedTopics, Instant before, int limit);
+
+	List<Post> findActiveInteracted(UserId reader, Instant before, int limit);
+
 	/** "Para você"/Seguindo respeitando os assuntos bloqueados do leitor. */
 	List<Post> findActiveByAuthorsExcludingTopics(Set<UserId> authorIds, Collection<String> blockedTopics,
 			Instant before, int limit);
 
 	/** Em alta: mais reagidos nas últimas windowHours, ordenados por reações desc. */
-	List<Post> findTrending(Instant since, int limit);
+	List<Post> findTrending(Instant since, Instant until, TrendingCursor after, int limit);
 
 	/** Feed "Tudo" filtrado por tipos de post. */
-	List<Post> findActiveByTypes(Set<PostType> types, Instant before, int limit);
+	/** `resolved` (QUESTION): true = with an accepted answer, false = open, null = both. */
+	List<Post> findActiveByTypes(Set<PostType> types, Boolean resolved, Instant before, int limit);
+
+	/** Sets (or clears, with nulls) the accepted answer of a question; touches nothing else. */
+	void updateAcceptedAnswer(PostId id, String commentId, Instant resolvedAt);
 
 	/** Feed corporativo: só o que a identidade profissional assinou. */
 	List<Post> findActiveCorporate(Instant before, int limit);

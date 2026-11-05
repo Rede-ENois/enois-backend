@@ -2,22 +2,28 @@ package com.socialcoisa.rede.events.domain;
 
 import java.time.Instant;
 
+import com.socialcoisa.rede.shared.geo.CityState;
+
 public class Event {
 
 	private final String id;
-	private final String title;
-	private final String date;
-	private final String time;
-	private final String format;
-	private final String host;
-	private final String cover;
-	private final String streamUrl;
-	private final String location;
+	private String title;
+	private String date;
+	private String time;
+	private String format;
+	private String host;
+	private String cover;
+	private String streamUrl;
+	private String location;
+	/** Cidade + UF estruturados do encontro presencial/hibrido; nulo = sem cidade (ou online). */
+	private CityState place;
 	private final String createdBy;
 	private final Instant createdAt;
-	private final Instant updatedAt;
+	private Instant updatedAt;
 	private Instant sanitizedAt;
 	private Integer finalAttendeesCount;
+	private EventRecurrence recurrence = EventRecurrence.NONE;
+	private String seriesId;
 
 	private Event(String id, String title, String date, String time, String format, String host, String cover,
 			String streamUrl, String location, String createdBy, Instant createdAt, Instant updatedAt) {
@@ -61,7 +67,8 @@ public class Event {
 		return java.util.Optional.of(parsed.atTime(limit).toInstant(java.time.ZoneOffset.UTC));
 	}
 
-	private java.time.LocalDate parseDate(String raw) {
+	/** ISO (what the app sends) or dd/MM/yyyy; null when the free-text date cannot be read. */
+	public static java.time.LocalDate parseDate(String raw) {
 		if (raw == null || raw.isBlank()) {
 			return null;
 		}
@@ -137,6 +144,31 @@ public class Event {
 		return when.isAfter(now.plus(MAX_AHEAD)) || when.isBefore(now.minus(MAX_BEHIND));
 	}
 
+	/** The parsed date, when it is readable (ISO or dd/MM/yyyy). */
+	public java.util.Optional<java.time.LocalDate> scheduledDate() {
+		return java.util.Optional.ofNullable(parseDate(date));
+	}
+
+	/** The time is readable (HH:mm or HH:mm:ss): a ritual needs a fixed time, not only a day. */
+	public boolean hasScheduledTime() {
+		return parseTime(time).isPresent();
+	}
+
+	/** How the series repeats; NONE for a one-off event. */
+	public EventRecurrence recurrence() {
+		return recurrence;
+	}
+
+	/** Id of the series' first occurrence; null for an event that was never recurring. */
+	public String seriesId() {
+		return seriesId;
+	}
+
+	public void changeRecurrence(EventRecurrence recurrence, String seriesId) {
+		this.recurrence = recurrence == null ? EventRecurrence.NONE : recurrence;
+		this.seriesId = seriesId;
+	}
+
 	public boolean isSanitized() {
 		return sanitizedAt != null;
 	}
@@ -149,6 +181,30 @@ public class Event {
 	public Integer finalAttendeesCount() {
 		return finalAttendeesCount;
 	}
+
+	/**
+	 * Edição do ritual pelo dono: troca os campos de conteúdo e a data/hora. A recorrencia fica de
+	 * fora (tem endpoint próprio, porque ligar/desligar mexe na série inteira).
+	 */
+	public void applyUpdate(String title, String date, String time, String format, String host, String cover,
+			String streamUrl, String location, Instant now) {
+		this.title = title;
+		this.date = date;
+		this.time = time;
+		this.format = format;
+		this.host = host;
+		this.cover = cover;
+		this.streamUrl = streamUrl;
+		this.location = location;
+		this.updatedAt = now;
+	}
+
+	/** Cidade/UF: o servico valida (formato presencial/hibrido); o restore hidrata do banco. */
+	public void placeAt(CityState place) {
+		this.place = place;
+	}
+
+	public CityState place() { return place; }
 
 	public void markSanitized(int attendeesCount, Instant now) {
 		this.finalAttendeesCount = attendeesCount;

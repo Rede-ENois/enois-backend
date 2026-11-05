@@ -81,24 +81,51 @@ public class MediaMetadataSanitizer {
 			if (!type.startsWith("video/") && !type.startsWith("audio/")) {
 				return original;
 			}
-			Path output = Files.createTempFile("media-clean-", suffix(fileName));
+			return stripWithFfmpeg(original, fileName);
+		}
+		catch (IOException failure) {
+			// Cliente caiu no meio do envio (ou disco cheio): o temporario nao fica para tras.
+			Files.deleteIfExists(original);
+			throw failure;
+		}
+		catch (RuntimeException failure) {
+			return original;
+		}
+	}
+
+	/**
+	 * Limpa o vídeo/áudio já gravado em disco. Limpeza é melhor-esforço: qualquer falha do ffmpeg
+	 * (ausente, travado, arquivo que ele não lê) devolve o original e fica no log — nunca vira erro
+	 * de upload. A saída do processo é descartada: ninguém a lê, e um ffmpeg verboso encheria o pipe
+	 * e travaria até o timeout.
+	 */
+	private Path stripWithFfmpeg(Path original, String fileName) throws IOException {
+		Path output = Files.createTempFile("media-clean-", suffix(fileName));
+		long startedAt = System.nanoTime();
+		try {
 			Process process = new ProcessBuilder(ffmpegPath, "-hide_banner", "-loglevel", "error", "-y",
 				"-i", original.toString(), "-map_metadata", "-1", "-map_chapters", "-1", "-c", "copy",
-				output.toString()).redirectErrorStream(true).start();
-			if (!process.waitFor(120, TimeUnit.SECONDS) || process.exitValue() != 0
-					|| Files.size(output) == 0) {
+				output.toString()).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+			boolean finished = process.waitFor(120, TimeUnit.SECONDS);
+			if (!finished || process.exitValue() != 0 || Files.size(output) == 0) {
 				process.destroyForcibly();
+				LOG.warn("media_ffmpeg_skipped finished={} exit={} elapsedMs={} originalBytes={}", finished,
+					finished ? process.exitValue() : -1, (System.nanoTime() - startedAt) / 1_000_000L,
+					Files.size(original));
 				Files.deleteIfExists(output);
 				return original;
 			}
 			Files.deleteIfExists(original);
 			return output;
 		}
-		catch (InterruptedException interrupted) {
-			Thread.currentThread().interrupt();
+		catch (IOException failure) {
+			LOG.warn("media_ffmpeg_unavailable error={}", failure.getClass().getSimpleName());
+			Files.deleteIfExists(output);
 			return original;
 		}
-		catch (RuntimeException failure) {
+		catch (InterruptedException interrupted) {
+			Thread.currentThread().interrupt();
+			Files.deleteIfExists(output);
 			return original;
 		}
 	}
@@ -153,7 +180,7 @@ public class MediaMetadataSanitizer {
 	 * Lê a tag Orientation (0x0112) do bloco APP1/EXIF sem biblioteca externa. Se o JPEG não tiver
 	 * EXIF válido, devolve 1 (sem rotação).
 	 */
-	private int jpegOrientation(byte[] data) {
+	static int jpegOrientation(byte[] data) {
 		if (data.length < 4 || (data[0] & 0xFF) != 0xFF || (data[1] & 0xFF) != 0xD8) {
 			return 1;
 		}
@@ -181,7 +208,7 @@ public class MediaMetadataSanitizer {
 		return 1;
 	}
 
-	private int exifOrientation(byte[] data, int tiff, int end) {
+	private static int exifOrientation(byte[] data, int tiff, int end) {
 		if (tiff + 8 > end) {
 			return 1;
 		}
@@ -276,7 +303,7 @@ public class MediaMetadataSanitizer {
 	}
 
 	private byte[] rotateJpeg(byte[] data, int orientation) throws IOException {
-		BufferedImage image = ImageIO.read(new ByteArrayInputStream(data));
+		BufferedImage image = ImageDecoding.read(new ByteArrayInputStream(data));
 		if (image == null) {
 			return null;
 		}
@@ -505,12 +532,15 @@ public class MediaMetadataSanitizer {
 			Files.write(input, data);
 			Process process = new ProcessBuilder(ffmpegPath, "-hide_banner", "-loglevel", "error", "-y",
 				"-i", input.toString(), "-map_metadata", "-1", "-map_chapters", "-1", "-c", "copy",
-				output.toString()).redirectErrorStream(true).start();
+				output.toString()).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
 			if (!process.waitFor(30, TimeUnit.SECONDS)) {
 				process.destroyForcibly();
+				LOG.warn("media_ffmpeg_skipped finished=false elapsedMs=30000 originalBytes={}", data.length);
 				return data;
 			}
 			if (process.exitValue() != 0 || Files.size(output) == 0) {
+				LOG.warn("media_ffmpeg_skipped finished=true exit={} originalBytes={}", process.exitValue(),
+					data.length);
 				return data;
 			}
 			return Files.readAllBytes(output);

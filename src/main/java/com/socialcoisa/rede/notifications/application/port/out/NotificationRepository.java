@@ -11,10 +11,25 @@ public interface NotificationRepository {
 
 	Optional<Notification> findById(String id);
 
-	List<Notification> findByUserId(String userId, java.time.Instant before, int limit);
+	/** A null context keeps every kind. */
+	List<Notification> findByUserId(String userId, java.time.Instant before,
+			com.socialcoisa.rede.notifications.domain.NotificationContext context, int limit);
+
+	/** Unread notifications per kind, actor and href (a null context keeps every kind). */
+	List<UnreadCount> countUnreadByKindAndActor(String userId,
+			com.socialcoisa.rede.notifications.domain.NotificationContext context);
+
+	record UnreadCount(String kind, String actorId, String href, long count) {
+	}
+
+	/** The unread notification of a group, if there is one. */
+	Optional<Notification> findUnreadGroup(String userId, String groupKey);
 
 	void markRead(String notificationId);
 
 	void markAllReadByUser(String userId);
+
+	/** Marks read the unread notifications of the person that point at {@code href}. */
+	void markReadByUserAndHref(String userId, String href);
 
 }

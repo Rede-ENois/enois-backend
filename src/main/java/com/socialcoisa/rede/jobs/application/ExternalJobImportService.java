@@ -72,6 +72,11 @@ public class ExternalJobImportService {
 			if (external.externalId() == null || external.title() == null) {
 				continue; // sem id/titulo nao da para deduplicar nem mostrar: ignora
 			}
+			// Some feeds send HTML-escaped text ("hims &#038; hers"): store it as people read it. A job
+			// already imported escaped heals on the next run (same source = upsert below).
+			String title = org.springframework.web.util.HtmlUtils.htmlUnescape(external.title());
+			String company = external.company() == null ? null
+				: org.springframework.web.util.HtmlUtils.htmlUnescape(external.company());
 			String canonicalUrl = com.socialcoisa.rede.jobs.domain.UrlCanonicalizer
 				.canonicalize(external.url());
 			// E-mail de candidatura: sai da descricao que a propria fonte publica (nulo quando nao ha).
@@ -81,7 +86,7 @@ public class ExternalJobImportService {
 				// Mesma fonte e mesmo id: atualiza os dados e a verificacao (upsert).
 				ExternalJob current = sameSource.get();
 				repository.save(new ExternalJob(current.id(), current.platform(), current.externalId(),
-					external.title(), external.company(), external.location(), external.salary(),
+					title, company, external.location(), external.salary(),
 					current.currency(), external.url(), current.importedAt(), clock.instant(),
 					ExternalJob.FOUND, canonicalUrl, applyEmail, current.submittedBy(), current.description(),
 					current.salaryMin(), current.salaryMax(), current.salaryPeriod(), current.salaryNotInformed()));
@@ -109,7 +114,7 @@ public class ExternalJobImportService {
 				continue;
 			}
 			repository.save(new ExternalJob("ext_" + platform + "_" + external.externalId(), platform,
-				external.externalId(), external.title(), external.company(), external.location(),
+				external.externalId(), title, company, external.location(),
 				external.salary(), null, external.url(), clock.instant(), clock.instant(), ExternalJob.FOUND,
 				canonicalUrl, applyEmail, null, null, null, null, null, false));
 			saved++;

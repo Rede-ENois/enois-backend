@@ -26,6 +26,8 @@ import com.socialcoisa.rede.groups.domain.GroupPost;
 import com.socialcoisa.rede.groups.domain.GroupTopic;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
+import com.socialcoisa.rede.media.application.MediaSummaryView;
+import com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.application.NameStyleView;
 import com.socialcoisa.rede.profile.domain.UserProfile;
@@ -51,9 +53,12 @@ class GroupContentController {
 	private final UserProfileRepository profiles;
 	private final IdempotencyApplicationService idempotency;
 	private final CursorCodec cursorCodec;
+	private final GetMediaSummariesUseCase mediaSummaries;
 
 	GroupContentController(GroupFeedService feed, CurrentUserResolver currentUserResolver,
-			UserProfileRepository profiles, IdempotencyApplicationService idempotency, CursorCodec cursorCodec) {
+			UserProfileRepository profiles, IdempotencyApplicationService idempotency, CursorCodec cursorCodec,
+			GetMediaSummariesUseCase mediaSummaries) {
+		this.mediaSummaries = mediaSummaries;
 		this.feed = feed;
 		this.currentUserResolver = currentUserResolver;
 		this.profiles = profiles;
@@ -146,8 +151,11 @@ class GroupContentController {
 		Map<String, ReactionType> mine = feed.myReactions(groupId, user.id().value(),
 			posts.stream().map(GroupPost::id).toList());
 		Map<String, UserProfile> authors = authorsOf(posts.stream().map(GroupPost::authorId).toList());
+		// Attachments of the whole page in one query, like the main feed.
+		Map<String, MediaSummaryView> media = mediaSummaries
+			.visibleByIds(posts.stream().flatMap(post -> post.mediaIds().stream()).collect(Collectors.toSet()));
 		var items = posts.stream()
-			.map(post -> postView(post, mine.get(post.id()), authors.get(post.authorId())))
+			.map(post -> postView(post, mine.get(post.id()), authors.get(post.authorId()), media))
 			.toList();
 		String nextCursor = posts.size() == limit
 			? cursorCodec.encode(posts.get(posts.size() - 1).createdAt()) : null;
@@ -214,6 +222,22 @@ class GroupContentController {
 		Map<String, UserProfile> authors = authorsOf(comments.stream().map(GroupComment::authorId).toList());
 		var items = comments.stream().map(comment -> commentView(comment, authors.get(comment.authorId()))).toList();
 		return new PageResponse<>(items, null);
+	}
+
+	@PatchMapping("/{groupId}/posts/{postId}/comments/{commentId}")
+	ResponseEntity<String> editComment(@RequestHeader(value = "X-Session-Token", required = false) String token,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@PathVariable String groupId, @PathVariable String postId, @PathVariable String commentId,
+			@RequestBody CommentEditRequest request) {
+		CurrentUser user = currentUserResolver.resolve(token);
+		String hash = idempotency.hash(Map.of("groupId", groupId, "postId", postId, "commentId", commentId,
+			"request", request));
+		return idempotency.execute(user.id(), "PATCH", "/api/groups/{groupId}/posts/{postId}/comments/{commentId}",
+			idempotencyKey, hash, () -> {
+				GroupComment comment = feed.editComment(groupId, postId, commentId, user.id().value(),
+					request.content());
+				return new CommandResponse(200, commentView(comment, author(comment.authorId())));
+			});
 	}
 
 	@PostMapping("/{groupId}/posts/{postId}/reactions")
@@ -289,6 +313,11 @@ class GroupContentController {
 	}
 
 	private GroupPostView postView(GroupPost post, ReactionType myReaction, UserProfile author) {
+		return postView(post, myReaction, author, mediaSummaries.visibleByIds(post.mediaIds()));
+	}
+
+	private GroupPostView postView(GroupPost post, ReactionType myReaction, UserProfile author,
+			Map<String, MediaSummaryView> media) {
 		List<String> badges = author == null ? List.of() : author.allBadges();
 		return new GroupPostView(post.id(), post.groupId(), post.topicId(), post.authorId(),
 			author == null ? null : author.displayWithNickname(),
@@ -296,7 +325,8 @@ class GroupContentController {
 			author == null ? null : author.avatar(),
 			badges,
 			post.content(), post.mediaIds(), post.pinned(), post.reactions(), post.comments(),
-			myReaction == null ? null : myReaction.name(), post.createdAt(), author == null ? null : author.avatarFrame(), NameStyleView.from(author));
+			myReaction == null ? null : myReaction.name(), post.createdAt(), author == null ? null : author.avatarFrame(), NameStyleView.from(author),
+			MediaSummaryView.inOrder(post.mediaIds(), media));
 	}
 
 	private static TopicView topicView(GroupTopic topic) {
@@ -320,10 +350,13 @@ class GroupContentController {
 	record GroupPostView(String id, String groupId, String topicId, String authorId, String authorName,
 			String authorUsername, String authorAvatar, List<String> authorBadges, String content,
 			List<String> mediaIds, boolean pinned, int reactions, int comments, String myReaction,
-			Instant createdAt, String authorAvatarFrame, NameStyleView authorStyle) {
+			Instant createdAt, String authorAvatarFrame, NameStyleView authorStyle, List<MediaSummaryView> media) {
 	}
 
 	record CommentRequest(String content, String parentCommentId) {
+	}
+
+	record CommentEditRequest(String content) {
 	}
 
 	record ReactionRequest(String type) {

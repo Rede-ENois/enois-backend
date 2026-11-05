@@ -25,7 +25,6 @@ import com.socialcoisa.rede.shared.security.AutoReportEvent;
 class AutoReportListener {
 
 	private static final Logger LOG = LoggerFactory.getLogger(AutoReportListener.class);
-	private static final String SYSTEM_REPORTER = "system";
 
 	private final ModerationService moderationService;
 
@@ -37,8 +36,11 @@ class AutoReportListener {
 	@Transactional(propagation = Propagation.REQUIRES_NEW)
 	void onAutoReport(AutoReportEvent event) {
 		try {
-			moderationService.report(SYSTEM_REPORTER, event.targetType(), event.userId(),
-				event.reason(), event.description());
+			// systemReport, não report: o teto de frequência é por CONTA e existe para conter
+			// denúncia em massa de pessoas. Passando pelo caminho de usuário, a partir da 11ª
+			// denúncia automática da hora o guard perdia o registro em silêncio.
+			moderationService.systemReport(event.targetType(), event.userId(), event.reason(),
+				event.description());
 			LOG.info("Auto-report criado para usuario {} (motivo: {})", event.userId(), event.reason());
 		} catch (RuntimeException e) {
 			// Duplicata (409) ou qualquer outra falha: o guard ja fez o trabalho dele,

@@ -11,7 +11,7 @@ Autenticação via header: `Authorization: Bearer <session_token>`
 | POST | `/api/auth/signup` | Cadastro de novo usuário | Não |
 | POST | `/api/auth/login` | Login com email + senha | Não |
 | POST | `/api/auth/logout` | Revogar sessão atual | Sim |
-| GET | `/api/auth/me` | Retorna usuário autenticado | Sim |
+| GET | `/api/auth/me` | Retorna usuário autenticado (inclui `onboardingCompleted`) | Sim |
 | GET | `/api/auth/oauth/{provider}/start` | Iniciar fluxo OAuth | Não |
 | GET | `/api/auth/oauth/{provider}/callback` | Callback OAuth | Não |
 | POST | `/api/auth/oauth/{provider}/token` | Troca de token OAuth | Não |
@@ -64,6 +64,21 @@ Resposta (signup e login):
 
 ## Perfil
 
+### Presença
+
+| Método | Rota | Resultado | Autenticação |
+|---|---|---|---|
+| GET | `/api/me/presence` | Escolha da própria conta | Sim |
+| PUT | `/api/me/presence` | Salva `{"status":"AVAILABLE|AWAY|DO_NOT_DISTURB|INVISIBLE"}` | Sim |
+| POST | `/api/me/presence/heartbeat` | Atualiza atividade; resposta 204 | Sim |
+| GET | `/api/users/{username}/presence` | Estado público | Não |
+
+As leituras retornam `{"status":"..."}`. Após dois minutos sem atividade, o estado público
+é `OFFLINE`; `INVISIBLE` também aparece como `OFFLINE`. `DO_NOT_DISTURB` impede o push das
+categorias configuráveis (segurança, moderação, sanção e recurso continuam), mas mantém a
+notificação no aplicativo. O status de texto/ícone de `PUT /api/me/status`
+é independente.
+
 | Método | Rota | Descrição | Autenticação |
 |---|---|---|---|
 | GET | `/api/me` | Perfil completo do usuário logado | Sim |
@@ -89,6 +104,27 @@ Resposta (signup e login):
 | GET | `/api/recommendations/received/{userId}` | Recomendações recebidas | Sim |
 | GET | `/api/recommendations/given/{userId}` | Recomendações dadas | Sim |
 
+### Profile garden
+
+`GET /api/users/{username}`, `GET /api/users/by-id/{userId}` and `GET /api/me` carry the reputation
+garden next to `reputation`, computed on read in the same pass as the counts (never stored):
+
+```json
+"gardenStyle": "garden-cerrado",
+"garden": { "trajectory": 2, "relations": 1, "contribution": 0, "tenure": 3, "health": 2 }
+```
+
+- `trajectory`, `relations`, `contribution` and `tenure` are stages 0..3 from the fraction of each
+  reputation component's cap (195, 300, 420 and 120): below 10% is 0, below 35% is 1, below 70% is
+  2, otherwise 3.
+- `health` is 0..2 from the integrity penalty: none is 2, up to 150 points is 1, more is 0. It only
+  dims the garden colors.
+- Every account gets a garden, verified or not; the numeric `reputation` keeps its rule (0 without
+  a verified identity).
+- Lists and write responses (search, ranking, status and badge updates, profile edit) carry
+  `garden: null`.
+- `gardenStyle` is the equipped `GARDEN` item id, `null` for the default garden.
+
 ### PATCH /api/me/profile
 
 ```json
@@ -103,9 +139,22 @@ Resposta (signup e login):
   "openToWork": true,
   "skills": ["Java", "Spring"],
   "goals": ["Aprender Kotlin"],
-  "externalLinks": ["https://linkedin.com/in/..."]
+  "externalLinks": ["https://linkedin.com/in/..."],
+  "city": "Belo Horizonte",
+  "state": "MG",
+  "showCity": false
 }
 ```
+
+Cidade e UF (`city`, `state`) são estruturadas e separadas do `location` livre, que continua. Regras:
+
+- Os dois juntos ou nenhum: só um preenchido devolve `400 CITY_STATE_INCOMPLETE`. Os dois ausentes
+  mantêm o valor atual; os dois como `""` limpam.
+- `state` é a sigla de uma das 27 UFs (maiúscula ou minúscula): fora disso, `400 INVALID_STATE`.
+  `city` vem aparada, até 80 caracteres (`400 CITY_TOO_LONG`).
+- Privacidade: `showCity` nasce `false`. `GET /api/me` sempre devolve `city`, `state` e `showCity`;
+  o perfil público (`/api/users/{username}`, busca, ranking) só devolve `city`/`state` quando
+  `showCity` é `true` (senão os campos ficam ausentes do JSON).
 
 ---
 
@@ -115,6 +164,7 @@ Resposta (signup e login):
 |---|---|---|---|
 | POST | `/api/feed/posts` | Publicar post | Sim |
 | GET | `/api/feed` | Feed principal | Sim |
+| POST | `/api/feed/seen` | Avança o marcador "Você está em dia" | Sim |
 | GET | `/api/users/{username}/posts` | Posts do usuário | Sim |
 | DELETE | `/api/feed/posts/{postId}` | Deletar post | Sim |
 | POST | `/api/feed/posts/bulk-delete` | Deletar posts em lote | Sim |
@@ -130,6 +180,8 @@ Resposta (signup e login):
 | GET | `/api/feed/saved` | Posts salvos | Sim |
 | POST | `/api/feed/posts/{postId}/comments/{commentId}/reactions` | Reagir a comentário | Sim |
 | GET | `/api/feed/posts/{postId}/comments/{commentId}/reactions` | Reações do comentário | Sim |
+| POST | `/api/feed/posts/{postId}/accepted-answer` | Aceitar a resposta de uma dúvida | Sim |
+| DELETE | `/api/feed/posts/{postId}/accepted-answer` | Desfazer a resposta aceita | Sim |
 
 ### POST /api/feed/posts
 
@@ -137,17 +189,68 @@ Resposta (signup e login):
 {
   "type": "INSIGHT",
   "content": "Conteúdo da postagem",
+  "topic": "TECNOLOGIA",
   "visibility": "PUBLIC",
   "tags": ["java", "spring"],
   "mediaIds": ["media_xxx"]
 }
 ```
 
-Tipos: `INSIGHT`, `ARTICLE`, `QUESTION`, `PROJECT`, `OPPORTUNITY`
+Tipos: `INSIGHT`, `ARTICLE`, `QUESTION`, `PROJECT`, `OPPORTUNITY`, `PAGE`, `NEWS`, `TUTORIAL`,
+`REVIEW`, `DIVERTIDO`, `MOMENT`, `BLOG`, `BUSINESS`, `POLL`
+
+Assunto (`topic`): obrigatório em post avulso, um da taxonomia (`ContentTaxonomy.TOPICS`). Sem ele,
+`400 TOPIC_REQUIRED`; fora da lista, `400 INVALID_TOPIC`. Post de comunidade ou canal herda o assunto
+dela e não manda `topic` (`400 TOPIC_FROM_COMMUNITY` / `TOPIC_FROM_CHANNEL`). A mesma regra vale no
+agendamento (`POST /api/feed/scheduled`). Publicações do sistema (blog, jogos) e posts antigos podem
+seguir sem assunto.
+
+#### Enquete (`type: "POLL"`)
+
+`content` é o **título da enquete** (até 400 caracteres) e `pollOptions` traz as alternativas: de
+**2 a 6**, cada uma com até 120 caracteres, sem repetição (a comparação ignora maiúsculas).
+
+```json
+{
+  "type": "POLL",
+  "content": "Qual linguagem você usa no trabalho?",
+  "pollOptions": ["Java", "Kotlin", "Go", "TypeScript"]
+}
+```
+
+Fora de `POLL` o campo `pollOptions` é ignorado (não vira linha no banco). O post volta com
+`poll: { options: [...], counts: [0,0,0,0], myVote: null, totalVotes: 0 }`.
+
+### POST /api/feed/posts/{postId}/poll/vote
+
+```json
+{ "option": 2 }
+```
+
+`option` é a **posição** da alternativa (0..5). O voto é **único e definitivo**: uma pessoa, um
+voto, sem troca depois. O segundo voto — na mesma alternativa ou em outra — responde
+**409 `ALREADY_VOTED`**, e a contagem não muda. Alternativa fora do intervalo (ou corpo sem
+`option`) responde 400 `INVALID_POLL_OPTION`; post que não é enquete responde 400 `NOT_A_POLL`.
+Sem sessão: 401. A resposta é o estado atualizado da enquete:
+
+```json
+{ "options": ["Java","Kotlin","Go","TypeScript"], "counts": [1,0,0,0], "myVote": 0, "totalVotes": 1 }
+```
+
+Todo `PostView` de um post `POLL` traz o campo `poll` (nas leituras de feed e de post único); a
+contagem é derivada de `poll_votes`, nunca um contador acumulado.
 
 ### GET /api/feed
 
 Query params: `tab=FOR_YOU|FOLLOWING|ALL|DISCUSSIONS|PROJECTS|RECENT`, `cursor=<base64>`, `limit=<1-50>`
+
+Filtro por tipo (aba `ALL`): `type=QUESTION` (repetível). Com `resolved=true` só vêm as dúvidas com
+resposta aceita; com `resolved=false`, só as abertas; sem o parâmetro, todas. Ex.:
+`GET /api/feed?tab=ALL&type=QUESTION&resolved=false`.
+
+Todo post traz `acceptedCommentId` (string ou `null`) e `resolved` (boolean, `true` quando há
+resposta aceita). Todo comentário de `GET /api/feed/posts/{postId}/comments` traz `accepted`
+(boolean).
 
 Resposta:
 ```json
@@ -166,12 +269,63 @@ Resposta:
       "userReaction": "LIKE",
       "userSaved": true,
       "tags": ["java"],
-      "media": [...]
+      "mediaIds": ["media_b", "media_a"],
+      "media": [
+        { "id": "media_b", "cdnUrl": "https://api.enois.ia.br/api/storage/uploads/media_b/file.mp4",
+          "mimeType": "video/mp4", "width": null, "height": null },
+        { "id": "media_a", "cdnUrl": "https://api.enois.ia.br/api/storage/uploads/media_a/file.jpg",
+          "mimeType": "image/jpeg", "width": 1200, "height": 800 }
+      ]
     }
   ],
-  "nextCursor": "base64encodedtimestamp"
+  "nextCursor": "base64encodedtimestamp",
+  "lastSeenAt": "2025-01-01T00:00:00Z"
 }
 ```
+
+`media`: the attachments of `mediaIds`, in the same order, with what the card needs to draw them at
+their final size before the files load. It holds only attachments the reader can still see (a media whose
+deletion was requested is left out, so `media` can be shorter than `mediaIds`). `width`/`height` are
+pixels as displayed (EXIF orientation applied); `null` for videos, audio, PDFs and images not measured yet.
+Every post response carries it (feed pages, single post, profile, community, channel, saved, corporate,
+publish/edit/restore responses, and group posts under `/api/groups/{id}/posts`), resolved in one query
+per page. `mediaIds` stays for older clients.
+
+`lastSeenAt` (ISO-8601 or `null`): the person's "Você está em dia" marker **as it was before this
+visit**. Only `tab=FOR_YOU` ("Para você") carries it, and only on the first page (no `cursor`); cursor
+pages and every other tab send `null`, and the front keeps the value it got on the first page. `null` on
+the first `FOR_YOU` page means the person never marked anything (do not draw the divider).
+
+`FOR_YOU` pages are date windows: page N holds the `limit` newest visible posts older than the cursor, and
+the liked-topics boost only reorders posts inside the page. So no post is skipped or repeated, and a later
+page never holds a post newer than an earlier one.
+
+`UNSEEN` excludes the reader's own posts and posts they reacted to or commented on **before** the
+page limit. `INTERACTED` likewise selects posts with a reaction or comment before applying the limit;
+its history is not capped at three pages. Both keep their existing chronological ISO-8601 cursors.
+
+`TRENDING` orders posts by reaction count, creation time and post ID (all descending). Its opaque
+`nextCursor` carries that ranking position and fixes the 24-hour window from the first request.
+Pass it back unchanged; a null cursor means the query has no next page. Other tabs keep their existing
+cursor format. Malformed or legacy ISO-8601 cursors sent to `TRENDING` return `400 INVALID_CURSOR`;
+restart that tab without a cursor after upgrading. Reactions remain live: a post whose count changes
+between requests can move in the ranking, so this is not a snapshot of reaction counts.
+
+Front contract (`FOR_YOU` only): show the loaded posts with `createdAt` newer than `lastSeenAt` first,
+newest first ("new since your last visit"), then the "Você está em dia" divider, then the remaining posts
+in API order. Draw the divider only when there is at least one new post above it and one older post loaded
+below it. When the person scrolls past the newest post, call `POST /api/feed/seen` with that post's
+`createdAt` (once per visit is enough), only from `FOR_YOU`.
+
+### POST /api/feed/seen
+
+```json
+{ "seenUntil": "2025-01-01T12:00:00Z" }
+```
+
+Responde `204` sem corpo. O marcador só anda para frente (um valor mais antigo que o atual é ignorado) e
+nunca passa do relógio do servidor (valor no futuro vira "agora"). Sem sessão: `401`. Sem `seenUntil`:
+`400 INVALID_SEEN_UNTIL`.
 
 ### POST /api/feed/posts/{postId}/comments
 
@@ -181,6 +335,33 @@ Resposta:
   "parentCommentId": "comment_yyy" // opcional, para respostas
 }
 ```
+
+### POST /api/feed/posts/{postId}/accepted-answer
+
+Só quem publicou a dúvida (`type=QUESTION`) escolhe a resposta. Pode trocar a resposta quando quiser.
+
+```json
+{ "commentId": "comment_yyy" }
+```
+
+Resposta `200`:
+```json
+{ "postId": "post_xxx", "acceptedCommentId": "comment_yyy", "resolved": true }
+```
+
+O comentário precisa ser desta dúvida (raiz ou resposta), estar ativo e ser de outra pessoa. Quem
+respondeu recebe a notificação `ANSWER_ACCEPTED` e, na primeira resposta aceita da dúvida, a
+recompensa de ajuda (ver `docs/COIN_ECONOMY.md`).
+
+Erros: `400 NOT_A_QUESTION`, `400 INVALID_ANSWER_COMMENT`, `400 OWN_ANSWER`,
+`403 NOT_QUESTION_AUTHOR`, `404 POST_NOT_FOUND`.
+
+Se o comentário aceito for apagado (pelo autor, pela limpeza de banimento ou pela purga de spam), a
+dúvida volta a ficar aberta (`acceptedCommentId: null`, `resolved: false`). A recompensa já paga não
+volta.
+
+`DELETE /api/feed/posts/{postId}/accepted-answer` reabre a dúvida (mesmas regras de autoria e tipo) e
+responde `{ "postId": "post_xxx", "acceptedCommentId": null, "resolved": false }`.
 
 ### POST /api/feed/posts/{postId}/reactions
 
@@ -203,20 +384,74 @@ Tipos de reação: `LIKE`, `LOVE`, `CONGRATS`, `INSIGHTFUL`, `CURIOUS`
 
 ---
 
+## Onboarding (primeira entrada)
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/me/onboarding/starter-pack?topics=A,B&skills=x,y` | Sugestões para começar | Sim |
+| POST | `/api/me/onboarding/complete` | Aplica as escolhas e conclui | Sim |
+| POST | `/api/me/onboarding/skip` | Conclui sem mudar nada | Sim |
+
+`onboardingCompleted` (boolean) vem em `/auth/me` e nas respostas de login/verificação: `false`
+enquanto a conta ainda não concluiu nem pulou. Vale para toda conta, inclusive as anteriores à
+V210 (a V224 desfez o preenchimento que as marcava como concluídas).
+
+`starter-pack` devolve até 6 comunidades (sem as que a pessoa já participa), até 6 grupos ativos
+de entrada aberta (sem os que já participa) e até 8 pessoas (contas ativas, verificadas e adultas,
+sem conexão, pedido pendente ou bloqueio em qualquer direção, e sem quem a pessoa silenciou; nada é sugerido a quem é menor).
+Primeiro o que casa com os assuntos/habilidades, depois o mais popular, então a lista não fica
+vazia quando ninguém casa. `topics` usa a taxonomia de `/me/preferences` (desconhecido = `400`).
+
+```json
+{
+  "communities": [{ "id": "", "name": "", "description": "", "topic": "PETS", "avatar": null, "memberCount": 12 }],
+  "groups": [{ "id": "", "slug": "", "name": "", "description": "", "topic": "PETS", "avatar": null, "memberCount": 4 }],
+  "people": [{ "id": "", "username": "", "name": "", "headline": null, "avatar": null }]
+}
+```
+
+`complete` recebe (todos opcionais):
+
+```json
+{ "topics": ["PETS"], "skills": ["java"], "communityIds": [], "groupIds": [], "connectUserIds": [] }
+```
+
+Assuntos entram em "quero ver" e habilidades no perfil, somando ao que já existe. Entra nas
+comunidades e nos grupos de entrada aberta pelas mesmas regras da ação manual (grupo com aprovação
+é ignorado, sem pedido) e manda pedido de conexão pela rede. Tetos: 6 comunidades, 6 grupos, 8
+pedidos, 20 habilidades de até 60 caracteres; acima disso `400` (`TOO_MANY_COMMUNITIES`,
+`TOO_MANY_GROUPS`, `TOO_MANY_CONNECTIONS`, `TOO_MANY_SKILLS`, `SKILL_TOO_LONG`) e nada muda. Id
+inválido (inexistente, a própria conta, bloqueio) é pulado. Repetir a chamada não duplica nada. A
+resposta lista o que ficou valendo (já existia ou foi feito agora):
+
+```json
+{ "onboardingCompleted": true, "joinedCommunityIds": [], "joinedGroupIds": [], "requestedUserIds": [] }
+```
+
+`skip` devolve o mesmo formato com as listas vazias.
+
+---
+
 ## Rede / Conexões
 
 | Método | Rota | Descrição | Autenticação |
 |---|---|---|---|
 | GET | `/api/network/users` | Listar conexões | Sim |
-| GET | `/api/network/suggestions` | Sugestões de conexão | Sim |
+| GET | `/api/network/suggestions` | Sugestões de conexão. Amigos de amigos primeiro, ordenados por conexões em comum (`mutualConnections`); completa com outras pessoas. Pessoa bloqueada ou conta removida fica de fora | Sim |
 | GET | `/api/network/summary` | Resumo da rede | Sim |
-| GET | `/api/network/requests` | Solicitações pendentes | Sim |
+| GET | `/api/network/requests` | Solicitações pendentes (enviadas e recebidas, mais nova primeiro), cada uma com `direction` (`INCOMING`/`OUTGOING`) e `peer` (a pessoa do outro lado). Pessoa bloqueada ou conta removida fica de fora; o `pendingRequests` do `/summary` conta só as recebidas visíveis | Sim |
 | POST | `/api/network/connections/{targetUserId}` | Solicitar conexão | Sim |
 | PUT | `/api/network/connections/{targetUserId}/accept` | Aceitar conexão | Sim |
 | DELETE | `/api/network/connections/{targetUserId}` | Remover conexão | Sim |
 | GET | `/api/network/connections/{targetUserId}/status` | Status da conexão | Sim |
 
-Status: `PENDING`, `ACCEPTED`, `BLOCKED`, `NONE`
+Status: `PENDING`, `ACCEPTED`, `REMOVED`, `BLOCKED`, `NONE`
+
+`GET .../status` responde também `requestedByMe`: `true` quando o pedido pendente foi enviado por
+quem consulta, `false` quando foi recebido e em qualquer outro status. O `status` é o mesmo para os
+dois lados da conexão; é esse campo que diferencia "cancelar" de "aceitar".
+
+Pedir conexão a uma conta que não existe responde `404 USER_NOT_FOUND`.
 
 ---
 
@@ -225,7 +460,7 @@ Status: `PENDING`, `ACCEPTED`, `BLOCKED`, `NONE`
 | Método | Rota | Descrição | Autenticação |
 |---|---|---|---|
 | POST | `/api/media/uploads` | Criar contrato de upload | Sim |
-| GET | `/api/media/{mediaId}` | Obter metadados da mídia | Sim |
+| GET | `/api/media/{mediaId}` | Obter metadados da mídia | Não |
 | DELETE | `/api/media/{mediaId}` | Solicitar deleção | Sim |
 
 ### POST /api/media/uploads
@@ -239,7 +474,9 @@ Status: `PENDING`, `ACCEPTED`, `BLOCKED`, `NONE`
 }
 ```
 
-Propósitos: `AVATAR`, `POST_IMAGE`, `COVER`, `BANNER`, `COMMUNITY_AVATAR`, `EVENT_COVER`, `JOB_LOGO`
+Propósitos: `AVATAR`, `POST_IMAGE`, `COVER`, `BANNER`, `COMMUNITY_AVATAR`, `EVENT_COVER`, `JOB_LOGO`,
+`RESUME` (só PDF) e `REPORT_CAPTURE` (só imagem; captura de denúncia de chamada, servida apenas a
+moderadores e nunca publicada).
 
 Resposta:
 ```json
@@ -250,6 +487,34 @@ Resposta:
   "status": "PENDING"
 }
 ```
+
+### GET /api/media/{mediaId}
+
+Public read (the id only appears in content anyone can already read). Response:
+
+```json
+{
+  "id": "media_xxx",
+  "ownerId": "user_xxx",
+  "fileName": "foto.jpg",
+  "mimeType": "image/jpeg",
+  "size": 1024000,
+  "purpose": "POST_IMAGE",
+  "objectKey": "uploads/media_xxx/file.jpg",
+  "cdnUrl": "https://api.enois.ia.br/api/storage/uploads/media_xxx/file.jpg",
+  "status": "PENDING",
+  "deleteStatus": "NONE",
+  "createdAt": "2026-11-03T12:00:00Z",
+  "expiresAt": "2026-11-03T13:00:00Z",
+  "deletedAt": null,
+  "width": 1200,
+  "height": 800
+}
+```
+
+`width`/`height`: pixels as displayed (EXIF orientation applied). Measured from the sanitized bytes when
+`PUT /api/storage/{key}` stores an image; older images are filled by the dimensions backfill (see
+[`MIDIA-S3.md`](MIDIA-S3.md)). `null` for non-images and for images that could not be measured.
 
 ---
 
@@ -300,10 +565,24 @@ figurinha com versão em movimento.
 | POST | `/api/communities` | Criar comunidade | Sim |
 | GET | `/api/communities/{communityId}` | Detalhes da comunidade | Sim |
 | PATCH | `/api/communities/{communityId}` | Atualizar comunidade | Sim |
-| POST | `/api/communities/{communityId}/members` | Entrar na comunidade | Sim |
+| POST | `/api/communities/{communityId}/members` | Entrar na comunidade (`404 COMMUNITY_NOT_FOUND` se não existe) | Sim |
 | DELETE | `/api/communities/{communityId}/members` | Sair da comunidade | Sim |
 | GET | `/api/communities/{communityId}/members` | Listar membros | Sim |
 | GET | `/api/communities/{communityId}/feed` | Feed da comunidade | Sim |
+| GET | `/api/communities/local` | Comunidades perto de mim (cidade/UF do perfil) | Sim (sessão obrigatória) |
+
+### Comunidades por cidade
+
+`POST` e `PATCH /api/communities` aceitam `city` e `state` opcionais, com as mesmas regras do
+perfil (os dois ou nenhum, UF válida, `""` nos dois limpa no PATCH, ausentes mantêm). O
+`CommunityView` devolve `city` e `state` (ausentes quando a comunidade não tem lugar).
+
+- `GET /api/communities?city=<cidade>&state=<UF>`: filtra pela cidade sem acento e sem caixa
+  ("sao paulo" acha "São Paulo"). `state` sozinho filtra a UF; `city` sem `state` é
+  `400 CITY_STATE_INCOMPLETE`. Combina com `topic`, `q` e `cursor`.
+- `GET /api/communities/local?limit=20` (máx. 50): usa a cidade/UF do **próprio** perfil. Vêm as
+  comunidades da mesma cidade primeiro, depois as do resto do estado; dentro de cada grupo, por
+  número de membros (desc). Perfil sem cidade devolve `{"items": [], "nextCursor": null}`.
 
 ---
 
@@ -320,7 +599,44 @@ figurinha com versão em movimento.
 | POST | `/api/jobs/{jobId}/saves` | Salvar vaga | Sim |
 | DELETE | `/api/jobs/{jobId}/saves` | Remover vaga salva | Sim |
 
-Nota: Criar vaga requer reputação >= 300.
+Nota: Criar vaga requer reputação > 150.
+
+`POST /api/jobs` accepts an optional `companyId`: the poster must be RECRUITER or above on that
+company page (403 otherwise) and the job takes the page name and logo. Job views (list and detail)
+carry `companySlug` (null when the job is not linked to a page).
+
+---
+
+## Company pages
+
+| Method | Route | Description | Auth |
+|---|---|---|---|
+| GET | `/api/empresas/diretorio?query=&sector=&limit=60` | Directory (limit 1..200): pages first, then names from jobs, each by open jobs + projects | No |
+| GET | `/api/empresas/setores` | Distinct sectors of active pages | No |
+| GET | `/api/empresa/{slug}` | Page with projects, jobs, stats, reviews, viewer state | No (session adds viewer state) |
+
+Página fechada (removida pela moderação ou pela própria empresa) sai do diretório (`GET /api/empresas`)
+e responde `404 COMPANY_NOT_FOUND` em `/api/empresa/{slug}`; operações sobre ela dão `409 COMPANY_CLOSED`.
+| POST / DELETE | `/api/empresas/{companyId}/follow` | Follow / unfollow (idempotent) | Yes |
+| PUT / DELETE | `/api/microprojetos/{id}` | Editar ou remover da vitrine um projeto aberto sem candidaturas | Yes (EDITOR or above) |
+| POST | `/api/microprojetos/{id}/proposals` | Proposal from the active professional profile | Yes |
+| POST | `/api/microprojetos/{id}/complete` | Complete, optionally with a review | Yes (EDITOR or above) |
+
+```text
+PersonView     { id, username, name, headline, avatar, identity: "CORPORATE" | "SOCIAL", href }
+Directory item { kind: "PAGE" | "JOBS" | "EXTERNAL", slug | null, name, logo | null, sector | null,
+                 location | null, openJobs, openProjects, followers }
+Page adds      jobs: [{ id, title, location, type, level, createdAt }] (max 20)
+               stats: { openProjects, completedProjects, openJobs, followers }
+               following: boolean
+               reviews: [{ projectId, projectTitle, rating, text | null, createdAt, person }] (latest 6)
+               canPropose: "OK" | "SIGN_IN" | "PROFESSIONAL_REQUIRED" | "TEAM"
+Follow         -> { following, followers }
+Proposal       -> { id, status, conversationId }   (403 NO_ACTIVE_CORPORATE_PROFILE without an
+                  active professional profile)
+Team proposals { id, userId, message, status, proposedAt, person, conversationId }
+Complete body  { rating?: 1..5, text?: <= 500 }     (400 INVALID_RATING)
+```
 
 ---
 
@@ -333,22 +649,121 @@ Nota: Criar vaga requer reputação >= 300.
 | GET | `/api/events/{eventId}` | Detalhes do evento | Não (viewer opcional) |
 | POST | `/api/events/{eventId}/attendees` | Confirmar presença | Sim |
 | DELETE | `/api/events/{eventId}/attendees` | Cancelar presença | Sim |
+| PATCH | `/api/events/{eventId}/recurrence` | Ligar, trocar ou desligar a recorrência (só quem criou) | Sim |
+| PATCH | `/api/events/{eventId}` | Editar o evento (título, data, hora, formato, host, capa, stream, local; só quem criou) | Sim |
+| DELETE | `/api/events/{eventId}` | Excluir o evento (só quem criou) | Sim |
+
+`PATCH /api/events/{eventId}` valida exatamente igual à criação (`TextFieldLimit`, horário realista,
+`EVENT_CITY_NOT_IN_PERSON`) e devolve o `EventView`. Fora do dono: `403 NOT_EVENT_OWNER`.
+
+`POST /api/events` aceita `city` e `state` opcionais (mesmas regras do perfil). Evento `ONLINE` com
+cidade é `400 EVENT_CITY_NOT_IN_PERSON`. `GET /api/events?city=<cidade>&state=<UF>` lista só
+encontros não online (`IN_PERSON`, `HYBRID`) daquele lugar, com a cidade comparada sem acento;
+`state` sozinho filtra a UF. O `EventView` devolve `city` e `state`.
 
 `EventView` inclui `attending: boolean` — `true` quando o requester autenticado confirmou presença naquele evento; sem sessão, sempre `false`. A listagem permanece pública; com `X-Session-Token` (ou `X-User-Id` + sessão válida) o campo reflete o viewer.
 
+### Rituais (eventos recorrentes)
+
+- `POST /api/events` aceita `recurrence`: `NONE` (padrão, quando ausente), `WEEKLY`, `BIWEEKLY` ou `MONTHLY`.
+  Valor fora da lista: `400 INVALID_RECURRENCE`. Evento recorrente precisa de horário `HH:MM`: `400 INVALID_EVENT_TIME`.
+- `PATCH /api/events/{eventId}/recurrence` com `{"recurrence": "WEEKLY"}` devolve o `EventView`. Só quem criou
+  (`403 NOT_EVENT_OWNER`). A recorrência vale para a série inteira; `NONE` encerra a série.
+- `GET /api/events?recurring=true` lista só eventos com recorrência (combina com `format`, `city`, `state`, `includePast`, `cursor`). A ocorrência nova herda `city`/`state` da anterior.
+- `EventView` ganha `recurrence: string` (`NONE|WEEKLY|BIWEEKLY|MONTHLY`), `seriesId: string|null` (id da primeira
+  ocorrência), `nextOccurrenceDate: string|null` (`AAAA-MM-DD`, calculada; `null` para evento avulso) e
+  `canManageRecurrence: boolean` (`true` só quando o viewer autenticado criou o evento; `false` para anônimo e
+  para os demais). O id de quem criou não é exposto.
+- De hora em hora (`rede.events.recurrence.*`, fuso `America/Sao_Paulo`), a ocorrência mais recente que já terminou
+  agenda a próxima (mesmo título, formato, host, capa, link e local; presenças **não** são copiadas) e quem confirmou
+  presença recebe a notificação `EVENT_NEXT_OCCURRENCE` com `href` `/eventos?evento={id}`. Mensal conta a partir
+  da primeira ocorrência: dia 31 cai no último dia dos meses curtos e volta ao 31 depois.
+- A série para (recorrência volta a `NONE`) quando o dono desliga, quando uma ocorrência é apagada (pelo dono ou
+  pela moderação), quando a conta do dono foi excluída ou está sancionada, ou quando o evento cai no filtro de
+  texto suspeito.
+
 ---
+
+## Busca de blogs
+
+`GET /api/blogs` aceita `query` opcional para buscar por título ou descrição antes de aplicar
+`limit`. Uma busca em branco mantém a listagem sem filtro. Os caracteres `%`, `_` e `!` são
+tratados como texto literal, assim como na busca de mentorias.
+
+## Feed RSS/Atom do blog
+
+`GET /api/blogs/{slug}/feed.xml` devolve o feed Atom 1.0 de um blog (`application/atom+xml`), um
+feed por blog, para quem acompanha por um leitor de RSS. É público e **não exige sessão nem
+`Origin`** (leitor de RSS não é navegador); as demais rotas de dados do blog continuam exigindo
+origem. Mesmas regras de visibilidade da página do blog: conta banida ou título suspeito = `404
+BLOG_NOT_FOUND`.
+
+- Os 20 posts mais recentes, cada um com título, link para `/blog/{slug}/{postId}`, datas e um
+  **resumo em texto puro** (até 300 caracteres). O corpo completo não vai no feed: ele pode ser
+  HTML de tema próprio e o leitor é um cliente que não controlamos.
+- Os links usam `rede.frontend.url` (`FRONTEND_URL`) como base.
+- Resposta com `Cache-Control: public, max-age=300`.
 
 ## Mentoria
 
 | Método | Rota | Descrição | Autenticação |
 |---|---|---|---|
-| GET | `/api/mentors` | Listar mentores | Sim |
+| GET | `/api/mentors` | Listar mentores; `query` opcional busca por nome, username ou especialidade, combinado com `expertise`, `cursor` e `limit` | Sim |
 | POST | `/api/mentors` | Registrar como mentor | Sim |
 | PATCH | `/api/mentors/{mentorId}` | Atualizar perfil de mentor | Sim |
 | DELETE | `/api/mentors/{mentorId}` | Remover perfil de mentor | Sim |
 | GET | `/api/mentors/{mentorId}/slots` | Listar horários | Sim |
 | POST | `/api/mentors/{mentorId}/slots` | Criar horário | Sim |
 | POST | `/api/mentors/{mentorId}/sessions` | Agendar sessão | Sim |
+| GET | `/api/mentors/{mentorId}/sessions` | Inscrições recebidas (só o dono) | Sim |
+| GET | `/api/mentors/sessions/mine` | Minhas sessões como mentorado | Sim |
+| POST | `/api/mentors/{mentorId}/sessions/{sessionId}/complete` | Concluir sessão (libera o escrow) | Sim |
+| POST | `/api/mentors/{mentorId}/sessions/{sessionId}/cancel` | Cancelar sessão (devolve o escrow) | Sim |
+| GET | `/api/mentors/{mentorId}/room` | Sala configurada (só o dono) | Sim |
+| POST | `/api/mentors/{mentorId}/sessions/{sessionId}/join` | Entrada na sala da sessão (participantes) | Sim |
+| POST | `/api/mentoring/{sessionId}/gateway/entry/{userId}` | Autorização pedida pelo servidor de reunião | Segredo de servidor |
+
+### Sala da sessão
+
+`roomMode` no corpo de `POST`/`PATCH /api/mentors` decide de onde vem a sala:
+
+| `roomMode` | Sala |
+|---|---|
+| `EPAPO_SESSION` (padrão) | Uma sala do Epapo por sessão, criada no agendamento; nada a configurar |
+| `EPAPO_PERMANENT` | Uma sala fixa do Epapo (`roomSlug` opcional; sem ele o nome vem do id) |
+| `CUSTOM` | Sala própria (`meetingUrl`, https) — Meet, Zoom, o que o mentor já usa |
+
+Sem `roomMode`, o campo é deduzido: link presente mantém a sala própria (compatibilidade com quem já
+tinha uma configurada) e nenhum link cai na sala do Epapo por sessão. Ao voltar para um modo Epapo, o
+`meetingUrl` antigo sai do perfil (e mandar `meetingUrl` vazio também devolve a sessão ao Epapo).
+
+A sala é resolvida e gravada na sessão no agendamento (`roomUrl`/`roomMode` em `/mentors/sessions/mine`
+e nas inscrições recebidas), então trocar a sala do perfil não move uma sessão já marcada. A base é
+`rede.mentoring.room.base-url` (`REDE_MENTORING_ROOM_BASE_URL`); sem ela, vale a origem pública do
+Epapo (`rede.calls.epapo.url`). Sem nenhuma das duas a lista de sessões continua respondendo, só a
+entrada na sala responde 503.
+
+`POST .../join` é a entrada da tela: confere que quem pede participa da sessão e devolve
+`{sessionId, roomUrl, jwt, tokenTtlSeconds}`. O `jwt` é emitido pelo gateway do Epapo depois de ele
+perguntar a esta aplicação (`POST /mentoring/{sessionId}/gateway/entry/{userId}`, com o segredo
+compartilhado) se aquela pessoa entra naquela sala; o segredo de assinatura nunca sai do servidor.
+Sala própria do mentor (`CUSTOM`) volta só com o link e `jwt` nulo — o link externo já é a entrada.
+
+---
+
+## Par de estudo
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| POST | `/api/study-pairs/requests` | Procurar par para um objetivo (`{goal, topic?}`) | Sim |
+| DELETE | `/api/study-pairs/requests/current` | Cancelar o pedido aberto | Sim |
+| GET | `/api/study-pairs/me` | Pedido aberto, pares ativos e check-ins das últimas 4 semanas | Sim |
+| POST | `/api/study-pairs/{pairId}/checkins` | Check-in da semana (`{note}`, até 500); repetir na semana edita | Sim (membro) |
+| POST | `/api/study-pairs/{pairId}/end` | Encerrar o par | Sim (membro) |
+| GET | `/api/study-pairs/goals/popular` | Objetivos com pedidos abertos (sem dado pessoal) | Sim |
+| GET | `/api/study-pairs/search?q=&limit=` | Buscar objetivos abertos por texto (anônimo, sem revelar quem pediu) | Sim |
+
+Contrato completo, regras e códigos de erro em [`STUDY_PAIRS.md`](STUDY_PAIRS.md).
 
 ---
 
@@ -356,15 +771,71 @@ Nota: Criar vaga requer reputação >= 300.
 
 | Método | Rota | Descrição | Autenticação |
 |---|---|---|---|
-| GET | `/api/conversations` | Listar conversas | Sim |
+| GET | `/api/conversations` | Listar conversas (`?context=SOCIAL\|PROFESSIONAL`, see SOCIAL_PROFESSIONAL_CONTEXTS.md); `lastMessageFrom` is the account id of whoever sent the preview | Sim |
 | POST | `/api/conversations` | Criar conversa | Sim |
 | GET | `/api/conversations/search` | Buscar conversas | Sim |
 | GET | `/api/conversations/{conversationId}` | Detalhes da conversa | Sim |
 | POST | `/api/conversations/{conversationId}/messages` | Enviar mensagem | Sim |
 | GET | `/api/conversations/{conversationId}/messages` | Listar mensagens | Sim |
-| POST | `/api/conversations/{conversationId}/read` | Marcar como lida | Sim |
+| POST | `/api/conversations/{conversationId}/read` | Marcar como lida (as notificações de mensagem da conversa também ficam lidas) | Sim |
+| POST | `/api/conversations/{conversationId}/viewing` | Heartbeat da conversa aberta na tela (a cada ~20s): enquanto vale (45s), mensagens novas dela não notificam nem mandam push para quem está olhando. 204 | Sim |
+| DELETE | `/api/conversations/{conversationId}/viewing` | A conversa saiu da tela: volta a notificar. 204 | Sim |
 | POST | `/api/conversations/{conversationId}/messages/{messageId}/reactions` | Reagir a mensagem | Sim |
 | GET | `/api/conversations/{conversationId}/messages/{messageId}/reactions` | Reações da mensagem | Sim |
+| GET | `/api/conversations/stream` | Stream SSE (`text/event-stream`) da caixa de entrada: evento `conversation` com `{"conversationId"}` a cada mensagem nova, leitura ou reação; comentário `ping` a cada 25s | Sim (cookie) |
+
+O stream só avisa **qual** conversa mudou; o conteúdo (cifrado ou não) é buscado pelas rotas acima,
+com a autorização de sempre. O aviso sai depois do commit, então o refetch já enxerga a mudança. Até
+5 streams por usuário (abas/aparelhos); o sexto fecha o mais antigo. Sem sessão a resposta é o status
+puro (401), sem corpo. O registro de streams vive na memória da instância: correto enquanto a
+produção roda um backend só; uma segunda instância exige difusão entre instâncias antes de escalar.
+
+---
+
+## Chamadas de áudio e vídeo
+
+1:1 na conversa e **"Tamo junto"** no grupo. O painel é embutido no app (sem aba nova), e a
+entrada na sala é autorizada no servidor com token assinado — detalhes em
+[`CHAMADAS.md`](CHAMADAS.md).
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| POST | `/api/conversations/{conversationId}/calls` | Começa (ou devolve) a chamada 1:1. Corpo opcional `{"kind":"AUDIO\|VIDEO"}` (padrão `AUDIO`) | Sim |
+| POST | `/api/groups/{groupId}/calls` | Começa (ou devolve) a chamada "Tamo junto" do grupo | Sim |
+| GET | `/api/conversations/{conversationId}/calls/open` | Chamada aberta da conversa (corpo `null` quando não há) | Sim |
+| GET | `/api/groups/{groupId}/calls/open` | Chamada aberta do grupo | Sim |
+| GET | `/api/calls/open` | Chamadas abertas em que a pessoa está — para voltar de outra tela | Sim |
+| GET | `/api/calls/{callId}` | Estado da chamada | Sim |
+| POST | `/api/calls/{callId}/answer` | Atender (só 1:1) | Sim |
+| POST | `/api/calls/{callId}/decline` | Recusar | Sim |
+| POST | `/api/calls/{callId}/cancel` | Quem iniciou desiste | Sim |
+| POST | `/api/calls/{callId}/join` | Autoriza e devolve `host`, `room`, `jwt` (emitido pelo gateway da Epapo) e `call` | Sim |
+| POST | `/api/calls/{callId}/leave` | Sair (no grupo a chamada continua) | Sim |
+| POST | `/api/calls/{callId}/end` | Encerrar para todos | Sim |
+| POST | `/api/calls/{callId}/fail` | A tela perdeu a mídia: falha explícita em vez de sessão pendurada | Sim |
+| GET | `/api/calls/{callId}/reportable` | Quem entrou na sala e pode ser denunciado (`[{userId, displayName}]`, sem quem denuncia) | Sim |
+| POST | `/api/calls/{callId}/reports` | Denúncia da chamada: `{"reportedUserId","reason","description","mediaId"?}` | Sim |
+
+A denúncia de chamada só aceita quem **entrou** na sala (`NOT_IN_CALL`), recusa apontar a si mesmo
+(`INVALID_REPORTED_USER`) e a repetição (`409 ALREADY_REPORTED`). O `mediaId` é a captura do momento,
+enviada antes com propósito `REPORT_CAPTURE`; ela não é publicada e só é servida a moderadores.
+
+Estados: `RINGING` (1:1 tocando), `CONNECTING`, `ACTIVE`, `DECLINED`, `MISSED`, `CANCELLED`,
+`ENDED`, `FAILED`. Repetir `answer`/`decline`/`cancel`/`start` é idempotente; transições inválidas
+respondem `409` com `CALL_STATE_CONFLICT` (ou o código específico do estado, como `CALL_MISSED`).
+O stream `/api/conversations/stream` também emite `event: call` com
+`{"callId","state","conversationId"?,"groupId"?}`.
+
+Duas rotas internas, para o gateway da Epapo (não são para o app):
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/calls/rooms/{room}` | A qual chamada e a que estado a sala pertence | `X-Enois-Authorize` |
+| POST | `/api/calls/{callId}/gateway/entry/{userId}` | Autoriza (e registra) a entrada de uma pessoa na chamada | `X-Enois-Authorize` |
+
+Sem `REDE_CALLS_EPAPO_URL`, ou sem o gateway configurado (`REDE_CALLS_EPAPO_GATEWAY_URL` +
+`REDE_CALLS_EPAPO_INTERNAL_TOKEN`), a API responde `503 CALLS_NOT_CONFIGURED` — nunca abre sala sem
+controle de acesso.
 
 ---
 
@@ -372,9 +843,66 @@ Nota: Criar vaga requer reputação >= 300.
 
 | Método | Rota | Descrição | Autenticação |
 |---|---|---|---|
-| GET | `/api/notifications` | Listar notificações | Sim |
+| GET | `/api/notifications` | Listar notificações (`?context=SOCIAL\|PROFESSIONAL`) | Sim |
 | POST | `/api/notifications/{notificationId}/read` | Marcar como lida | Sim |
 | POST | `/api/notifications/read-all` | Marcar todas como lidas | Sim |
+| GET | `/api/notifications/unread-summary` | Unread count per area for menu indicators (`?context=SOCIAL\|PROFESSIONAL`) | Sim |
+| GET | `/api/me/notification-preferences` | Preferências de push e do resumo semanal | Sim |
+| PUT | `/api/me/notification-preferences` | Atualização parcial (campo ausente/nulo mantém o valor) | Sim |
+| GET | `/api/notifications/digest/unsubscribe?token=` | Descadastro do resumo semanal (link do e-mail, HTML) | Não (token) |
+| POST | `/api/notifications/digest/unsubscribe?token=` | Descadastro em um clique (RFC 8058, cliente de e-mail): 200/400 sem corpo | Não (token) |
+| POST | `/api/blogs/descadastrar?token=` | Mesmo descadastro em um clique para a newsletter do blog | Não (token) |
+
+Preferências (GET e resposta do PUT):
+
+```json
+{ "weeklyDigest": true, "pushSocial": true, "pushMessages": true, "pushGroups": true,
+  "pushJobs": true, "pushSystem": true, "updatedAt": "2026-10-30T12:00:00Z" }
+```
+
+`updatedAt` é `null` enquanto a pessoa nunca mudou nada (padrão: tudo ligado). Segurança, moderação e
+sanções sempre viram push. Regras e categorias em [`DIGEST.md`](DIGEST.md).
+
+Each item of `GET /api/notifications` carries `module`, the interface area of its kind (same
+`NotificationModule` names as below, e.g. `EVENTS`, `OTHER`), so the app hides or flags notifications
+by area without guessing from the kind.
+
+Each item also carries `place` and `eventDate`, resolved at read time from its `href` (one query per
+kind of target for the whole page):
+
+- `place`: `{ "type": "COMMUNITY" | "GROUP", "id": string, "name": string, "color": null }` or
+  `null`. `/comunidades/{id}` and `/api/feed/posts/{postId}` of a post published in a community give
+  the community; `/grupos/{slug}` gives the group. A deleted community or a closed group gives
+  `null`. `color` is `null` while communities and groups have no color of their own.
+- `eventDate`: `"YYYY-MM-DD"`, the day of the event occurrence an `/eventos?evento={id}` href points
+  at (each occurrence of a recurring event is its own event), or `null` (other hrefs, deleted event,
+  unreadable date).
+
+```json
+{ "id": "notification_...", "kind": "GROUP_NEW_POST", "module": "GROUPS", "href": "/grupos/roda-bh",
+  "place": { "type": "GROUP", "id": "group_...", "name": "Roda BH", "color": null }, "eventDate": null }
+```
+
+Unread summary (`GET /api/notifications/unread-summary`): counts the person's unread notifications,
+leaving out those whose actor is blocked (either way) and applying the same `context` filter as the
+list. Messages (`NEW_MESSAGE`, `NEW_WORK_MESSAGE`) and `CONNECTION_REQUEST` are not counted: they have
+their own unread signals and the notices panel does not list them. Only areas with unread notifications appear in `byModule`; an area clears when its
+notifications are read (`/read` or `/read-all`). The kind to area mapping is
+`NotificationModule` (`MESSAGES`, `EVENTS`, `JOBS`, `COMPANIES`, `MENTORING`, `DAILY_GAMES`,
+`COMMUNITY_GAMES`, `GROUPS`, `STUDY_PAIRS`, `BLOGS`, `NETWORK`, `OTHER`).
+
+`byCommunity` counts the same unread notifications per community id, for those whose `place` is a
+community (only communities with unread ones appear). `eventsToday` is the number of events happening
+today (America/Sao_Paulo) whose attendance the person confirmed; events are social, so it is `0` with
+`context=PROFESSIONAL`.
+
+```json
+{ "total": 5, "byModule": { "MESSAGES": 3, "GROUPS": 1, "OTHER": 1 },
+  "byCommunity": { "community_...": 1 }, "eventsToday": 1 }
+```
+
+Mudança de estado da candidatura também gera a notificação `JOB_APPLICATION_STATUS`
+(`href` = `/vagas/{jobId}`), além da mensagem direta e do e-mail.
 
 ---
 
@@ -394,12 +922,14 @@ Query params: `q=<termo>`, `types=users,communities,jobs,events,mentors`, `limit
 |---|---|---|---|
 | POST | `/api/reports` | Reportar conteúdo | Sim |
 | GET | `/api/admin/reports` | Listar reports pendentes | Sim |
-| POST | `/api/admin/reports/{reportId}/approve` | Aprovar report (deletar alvo) | Sim |
+| POST | `/api/admin/reports/{reportId}/approve` | Aprovar report (remove o alvo quando é post ou comentário do feed) | Sim |
 | POST | `/api/admin/reports/{reportId}/dismiss` | Rejeitar report | Sim |
 
-Razões: `SPAM`, `INAPPROPRIATE`, `ABUSIVE`, `MISINFORMATION`, `COPYRIGHT`, `OTHER`
+Razões: `AI_GENERATED`, `FAKE_CONTENT`, `SCAM`, `DISCRIMINATION`, `PREJUDICE`, `HARASSMENT`, `SPAM`, `VIOLENCE`, `SEXUAL_CONTENT`, `COPYRIGHT`, `OTHER`
 
-Target types: `POST`, `COMMENT`, `USER`, `COMMUNITY`, `JOB`, `EVENT`
+Target types: `POST`, `COMMENT`, `USER`, `JOB`, `GAME`, `GROUP_POST`, `GROUP_COMMENT`, `MESSAGE`, `COMPANY`.
+Alvo `COMPANY` se remove por `POST /api/admin/reports/{reportId}/remove-company` (fecha a página, sem tocar
+na conta do dono); `ban`/`penalize` recusam esse alvo com `400 COMPANY_TARGET`.
 
 ---
 
@@ -442,10 +972,11 @@ A resposta será cacheadada e reutilizada se a mesma chave for reenviada.
 
 | Method | Route | Description | Authentication |
 |---|---|---|---|
-| GET | `/api/loja?order=oldest\|newest` | Native catalog (default `oldest`) | No; with a session, adds `owned` and `equipped` |
-| GET | `/api/loja/colecoes` | Seasonal collections, sale windows and ready-made looks | No |
+| GET | `/api/loja?order=oldest\|newest` | The shop of the day: items on sale (collections in season, classics and the permanent one); with a session, also what the person owns (default `oldest`) | No; with a session, adds `owned` and `equipped` |
+| GET | `/api/loja/colecoes` | Collections in season, their sale windows and ready-made looks | No; with a session, each look also carries `owned` (every piece is the person's) and `equipped` |
 | POST | `/api/loja/{itemId}/comprar` | Buy one item | Yes |
 | POST | `/api/loja/looks/{lookId}/comprar` | Buy the missing pieces of a look and wear it | Yes |
+| POST | `/api/loja/looks/{lookId}/equipar` / `.../desequipar` | Wear / take off a look the person already owns (`403 NOT_OWNED` without every piece); taking it off clears only the slots still holding the look's own pieces and its status | Yes |
 | POST | `/api/loja/{itemId}/equipar` / `.../desequipar` | Equip / unequip an owned item (`none` unequips the frame) | Yes |
 | PUT | `/api/me/status` | Status bubble `{ text, icon }` | Yes |
 | PUT | `/api/cosmetics/profile/name-style` | Name theme (free preset or owned `NAME_STYLE` id), font, color | Yes |
@@ -455,19 +986,44 @@ A resposta será cacheadada e reutilizada se a mesma chave for reenviada.
 The catalog lives in `src/main/resources/cosmetics/catalog.json` and is validated at startup
 (unique ids and release orders, known collections, parseable windows, look items that exist and
 are for sale); a broken file stops the boot. Each item has `id`, `kind` (`FRAME`, `BADGE`,
-`NAME_STYLE`, `NAMEPLATE`, `BANNER`, `CARD_THEME`, `PROFILE_EFFECT`), `collection`, `name`,
+`NAME_STYLE`, `NAMEPLATE`, `BANNER`, `CARD_THEME`, `PROFILE_EFFECT`, `GARDEN`), `collection`, `name`,
 `description`, `priceMf`, `cssRing`, `releaseOrder`, `available` and `purchasable`.
 
 - `releaseOrder` is the positive, unique order of entry in the catalog. The 26 original frames
-  keep 1 to 26, have `collection: null` and are always on sale; the seasonal items follow.
-- Seasons are month-day windows in America/Sao_Paulo, inclusive, and may wrap the year. Out of
-  season an item is listed with `available: false` and buying it returns `409 OUT_OF_SEASON`;
-  owned items can always be equipped. Event rewards are never for sale (`403 NOT_FOR_SALE`).
+  keep 1 to 26 and have `collection: null` (always on sale); the seasonal items follow.
+- `essenciais` is the permanent collection: its window covers the whole year (`01-01` to `12-31`),
+  so its items and its eleven ready-made looks stay on sale every day. The looks are
+  `look-papel`, `look-noite-limpa`, `look-jardim`, `look-fim-de-tarde`, `look-manha-de-domingo`,
+  `look-carta-na-gaveta`, `look-sombra-fresca`, `look-quintal-ao-meio-dia`, `look-pedra-fria`,
+  `look-nevoeiro` and `look-mar-de-pedra`; each one pairs the Essenciais pieces with a different
+  original frame, so no two looks are the same bundle.
+- `aparencias` is the second permanent collection: one `CARD_THEME` for each of the 85 appearance
+  themes of the design system (`tema-blahaj` … `tema-neumorfismo`, 4 faíscas each) and one
+  ready-made look for each of them (85 looks). Every look pairs its theme with an original frame
+  and the Essenciais name, plate and effect, so all its pieces are permanent and the look stays on
+  sale every day; it is listed last, after `essenciais`.
+- `GARDEN` items (`garden-cerrado`, `garden-mata-atlantica`, `garden-caatinga`, `garden-pampa`)
+  style the profile garden. They have `collection: null`, so they are always on sale; the equipped
+  one is `gardenStyle` on the profile (`users.garden_style`), and none equipped is the default garden.
+- Seasons are month-day windows in America/Sao_Paulo, inclusive, and may wrap the year. A
+  collection outside its window is not in either listing — it does not appear before the
+  opening and is gone after the closing, so the shop only ever shows the season it is in. Buying
+  an out-of-season item still answers `409 OUT_OF_SEASON` (the shop no longer offers it, but an
+  old client or a stale page still gets a clear answer). A piece the person already owns stays
+  in their own listing (`available: false`) so it can always be equipped, and event rewards are
+  never for sale (`403 NOT_FOR_SALE`).
+- An equipped `BANNER` draws over the person's own cover. Changing the own cover (`banner` or
+  `bannerHtml` on `PATCH /api/me/profile`) unequips it; the item stays owned.
 - Owning = a PURCHASE ledger entry with ref `cosmetico:{userId}:{itemId}` or a row in
   `cosmetic_grants` (free event rewards). The listing loads ownership in two queries, never per item.
 - A look costs 75% of its missing pieces, rounded to whole faíscas; each piece is still charged
   under its own ref, so buying the same look twice never charges twice. It equips every piece,
   replaces the badge list with the look badges and sets the look status.
+- A collection may hold several looks. Each look entry takes an optional `id` (a slug such as
+  `look-manha-de-domingo`); without it the id stays `look-<collection>`, so the original look of
+  every collection keeps its address. The shipped look ids are unique and validated at startup.
+  Looks follow their collection's season: the seasonal collections ship one look each, and the
+  ready-made looks live in the permanent `essenciais` and `aparencias` collections.
 - Badges equip at the front of the list, deduplicated, up to 5 (`409 MAX_BADGES`). Official badges
   (`emblema-*`) can only be shown by who owns them, also through `PUT /me/badges` and the profile
   edit (`403 NOT_OWNED`).
@@ -536,3 +1092,55 @@ sem alterar o deslocamento entre páginas. Uma última página cheia retorna `ha
 Este endpoint só lê os lançamentos existentes: não cria conta nem credita presença ou
 distribuição inicial. O contrato de `GET /carteira` permanece igual. Sem migração:
 as colunas e o índice por `account_id, created_at` já existem no ledger.
+
+## Sequência de presença
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/me/streak` | Sequência de presença da própria conta | Sim |
+
+Resposta:
+
+```json
+{ "currentDays": 4, "longestDays": 9, "todayDone": true, "freezesAvailable": 0, "lastFrozenDay": "2026-10-28" }
+```
+
+- `currentDays` (int): dias seguidos até hoje; um ontem faltado e coberto pelo congelamento já aparece
+  aplicado, e uma sequência quebrada aparece como `0`.
+- `longestDays` (int): maior sequência registrada.
+- `todayDone` (boolean): a presença de hoje (fuso `America/Sao_Paulo`) já foi contada.
+- `freezesAvailable` (int, 0 ou 1): congelamento ainda disponível na semana ISO atual.
+- `lastFrozenDay` (`YYYY-MM-DD` ou `null`): último dia salvo pelo congelamento.
+
+`GET /api/carteira` traz o mesmo objeto no campo `streak` (aditivo). Ler a sequência não credita
+nada; a presença é contada pelas ações descritas em `docs/COIN_ECONOMY.md`.
+
+## Release notes ("O que há de novo no Énóis")
+
+| Method | Route | Description | Auth |
+|---|---|---|---|
+| GET | `/api/novidades/atual` | Current release notes; `204` with no body when nothing is published | No |
+| PUT | `/api/admin/novidades` | Publishes or replaces the release notes | Admin |
+| DELETE | `/api/admin/novidades` | Takes the release notes down (`204`, idempotent) | Admin |
+
+`PUT` body and `GET`/`PUT` response:
+
+```json
+{ "items": [{ "title": "Enquetes", "description": "Agora dá para criar enquete no feed." }] }
+```
+
+```json
+{
+  "id": "ativo",
+  "items": [{ "title": "Enquetes", "description": "Agora dá para criar enquete no feed." }],
+  "publishedAt": "2026-10-31T13:00:00Z",
+  "updatedAt": "2026-10-31T13:00:00Z"
+}
+```
+
+There is a single release at a time (fixed id `ativo`): publishing replaces it. `publishedAt` is the
+first publication and survives edits; `updatedAt` changes on every publish and is the version key
+the front uses to show the popup once per release. Items are plain text, trimmed and passed through
+the same defense as post content (`PlainText.defuse`). `400` codes: `INVALID_RELEASE_ITEMS` (missing,
+empty or more than 8 items), `RELEASE_ITEM_TITLE_REQUIRED`, `RELEASE_ITEM_TITLE_TOO_LONG` (80),
+`RELEASE_ITEM_DESCRIPTION_REQUIRED`, `RELEASE_ITEM_DESCRIPTION_TOO_LONG` (240).

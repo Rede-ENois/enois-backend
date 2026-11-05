@@ -1,7 +1,9 @@
 package com.socialcoisa.rede.push.application;
 
+import java.net.URI;
 import java.time.Clock;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.stereotype.Service;
@@ -28,6 +30,24 @@ public class PushService {
 	 * "Operacao conflita com o estado atual dos dados" — sem dizer que era o endpoint longo.
 	 */
 	static final int MAX_ENDPOINT_LENGTH = 700;
+
+	/**
+	 * Teto de dispositivos por conta. Sem ele, uma conta podia registrar milhares de endpoints e
+	 * transformar cada notificacao em milhares de POSTs server-side (fan-out).
+	 */
+	public static final int MAX_SUBSCRIPTIONS_PER_USER = 10;
+
+	/**
+	 * Hosts dos servicos de push realmente usados pelos navegadores. O endpoint e informado pelo
+	 * cliente e o servidor faz POST nele, entao aceitar qualquer https transformava o registro em
+	 * um SSRF cego. A comparacao e por host exato ou sufixo de dominio.
+	 */
+	public static final Set<String> ALLOWED_PUSH_HOSTS = Set.of(
+		"fcm.googleapis.com",
+		"updates.push.services.mozilla.com",
+		"push.services.mozilla.com",
+		"web.push.apple.com",
+		"notify.windows.com");
 
 	private final PushSubscriptionRepository repository;
 	private final PushSender sender;
@@ -61,7 +81,17 @@ public class PushService {
 				"Endpoint de push longo demais (maximo " + MAX_ENDPOINT_LENGTH + " caracteres).");
 		}
 		String trimmedEndpoint = endpoint.trim();
-		PushSubscription subscription = repository.findByEndpoint(trimmedEndpoint)
+		if (!allowedPushEndpoint(trimmedEndpoint)) {
+			throw new ApiException(400, "INVALID_PUSH_SUBSCRIPTION",
+				"Endpoint de push de um servico nao suportado.");
+		}
+		var existingSubscription = repository.findByEndpoint(trimmedEndpoint);
+		if (existingSubscription.isEmpty()
+				&& repository.findByUserId(userId).size() >= MAX_SUBSCRIPTIONS_PER_USER) {
+			throw new ApiException(429, "TOO_MANY_PUSH_SUBSCRIPTIONS",
+				"Limite de " + MAX_SUBSCRIPTIONS_PER_USER + " dispositivos por conta atingido.");
+		}
+		PushSubscription subscription = existingSubscription
 			.map(existing -> {
 				// Mesmo dispositivo voltando (ou trocando de conta): atualiza o dono e as chaves.
 				return PushSubscription.restore(existing.id(), userId, trimmedEndpoint, p256dh.trim(), auth.trim(),
@@ -70,6 +100,36 @@ public class PushService {
 			.orElseGet(() -> PushSubscription.create("push_" + UUID.randomUUID().toString().replace("-", ""), userId,
 				trimmedEndpoint, p256dh.trim(), auth.trim(), clock.instant()));
 		return repository.save(subscription);
+	}
+
+	/** Só https, sem credenciais na URL e com host de um servico de push conhecido. */
+	public static boolean allowedPushEndpoint(String endpoint) {
+		return allowedPushEndpoint(endpoint, ALLOWED_PUSH_HOSTS);
+	}
+
+	/** Mesma checagem contra um conjunto de hosts (os testes usam um servico de push local). */
+	public static boolean allowedPushEndpoint(String endpoint, Set<String> allowedHosts) {
+		try {
+			URI uri = URI.create(endpoint);
+			if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getUserInfo() != null
+					|| uri.getHost() == null) {
+				return false;
+			}
+			int port = uri.getPort();
+			if (port != -1 && port != 443) {
+				return false;
+			}
+			String host = uri.getHost().toLowerCase(java.util.Locale.ROOT);
+			for (String allowed : allowedHosts) {
+				if (host.equals(allowed) || host.endsWith("." + allowed)) {
+					return true;
+				}
+			}
+			return false;
+		}
+		catch (RuntimeException invalid) {
+			return false;
+		}
 	}
 
 	@Transactional

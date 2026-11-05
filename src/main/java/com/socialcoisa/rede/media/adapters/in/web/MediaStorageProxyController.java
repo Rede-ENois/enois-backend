@@ -38,19 +38,30 @@ import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 @RequestMapping("/storage")
 class MediaStorageProxyController {
 
+	private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(MediaStorageProxyController.class);
+
 	/** Vazio quando o storage e o ImageKit (nao ha bucket para servir). */
 	private final ObjectProvider<MediaObjectStore> storeProvider;
 	private final MediaAssetRepository assets;
 	private final CurrentUserResolver currentUserResolver;
 	private final com.socialcoisa.rede.media.application.MediaMetadataSanitizer sanitizer;
+	private final com.socialcoisa.rede.media.application.MediaImageModerationService imageModeration;
+	private final com.socialcoisa.rede.media.application.MediaDimensionsService dimensions;
+	private final com.socialcoisa.rede.shared.web.ModeratorGuard moderators;
 
 	MediaStorageProxyController(ObjectProvider<MediaObjectStore> storeProvider, MediaAssetRepository assets,
 			CurrentUserResolver currentUserResolver,
-			com.socialcoisa.rede.media.application.MediaMetadataSanitizer sanitizer) {
+			com.socialcoisa.rede.media.application.MediaMetadataSanitizer sanitizer,
+			com.socialcoisa.rede.media.application.MediaImageModerationService imageModeration,
+			com.socialcoisa.rede.media.application.MediaDimensionsService dimensions,
+			com.socialcoisa.rede.shared.web.ModeratorGuard moderators) {
 		this.storeProvider = storeProvider;
 		this.assets = assets;
 		this.currentUserResolver = currentUserResolver;
 		this.sanitizer = sanitizer;
+		this.imageModeration = imageModeration;
+		this.dimensions = dimensions;
+		this.moderators = moderators;
 	}
 
 	private MediaObjectStore store() {
@@ -73,8 +84,16 @@ class MediaStorageProxyController {
 	 */
 	@GetMapping("/{*key}")
 	ResponseEntity<StreamingResponseBody> read(@PathVariable String key,
-			@RequestHeader(value = HttpHeaders.RANGE, required = false) String range) {
+			@RequestHeader(value = HttpHeaders.RANGE, required = false) String range,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		String objectKey = objectKey(key);
+		MediaAsset asset = assets.findById(mediaIdOf(objectKey)).orElse(null);
+		boolean moderatorOnly = asset != null && com.socialcoisa.rede.media.application.MediaService
+			.REPORT_CAPTURE_PURPOSE.equals(asset.purpose());
+		if (moderatorOnly) {
+			// Captura de denúncia é prova, não conteúdo público: quem vê é quem modera.
+			requireModeratorFor(sessionToken);
+		}
 		MediaObjectStore.StoredObject object;
 		try {
 			object = store().read(objectKey, range);
@@ -82,7 +101,6 @@ class MediaStorageProxyController {
 		catch (RuntimeException missing) {
 			throw new ApiException(404, "MEDIA_NOT_FOUND", "Midia nao encontrada.");
 		}
-		MediaAsset asset = assets.findById(mediaIdOf(objectKey)).orElse(null);
 		String mime = asset != null ? asset.mimeType() : object.contentType();
 		// Only the media types the upload accepts render inline; anything else (legacy objects with an
 		// unexpected type) is served as an opaque download. nosniff comes from SecurityHeadersFilter.
@@ -93,7 +111,9 @@ class MediaStorageProxyController {
 			.header(HttpHeaders.CONTENT_DISPOSITION, inline ? "inline" : "attachment")
 			.header(HttpHeaders.ACCEPT_RANGES, "bytes")
 			// A chave tem uuid: o conteúdo daquele endereço nunca muda, então pode ficar em cache.
-			.header(HttpHeaders.CACHE_CONTROL, "public, max-age=31536000, immutable");
+			// A captura de denúncia é a exceção: prova de moderação não fica em cache público.
+			.header(HttpHeaders.CACHE_CONTROL, moderatorOnly ? "private, no-store"
+				: "public, max-age=31536000, immutable");
 		if (object.contentRange() != null) {
 			response.header(HttpHeaders.CONTENT_RANGE, object.contentRange());
 		}
@@ -105,6 +125,13 @@ class MediaStorageProxyController {
 				body.transferTo(output);
 			}
 		});
+	}
+
+	private void requireModeratorFor(String sessionToken) {
+		if (sessionToken == null || sessionToken.isBlank()) {
+			throw new ApiException(401, "UNAUTHENTICATED", "Entre para ver esta midia.");
+		}
+		moderators.requireModerator(currentUserResolver.resolve(sessionToken));
 	}
 
 	/**
@@ -131,7 +158,14 @@ class MediaStorageProxyController {
 		if (length <= 0) {
 			throw new ApiException(411, "MEDIA_LENGTH_REQUIRED", "Informe o tamanho do arquivo.");
 		}
+		// O tamanho declarado em POST /media/uploads e o contrato do upload. Sem esta comparacao,
+		// um asset de 68 bytes aceitava um corpo de centenas de MB e ficava servido publicamente.
+		if (length != asset.size()) {
+			throw new ApiException(400, "MEDIA_SIZE_MISMATCH",
+				"O tamanho enviado nao corresponde ao declarado no upload.");
+		}
 		String mime = asset.mimeType();
+		long startedAt = System.nanoTime();
 		try {
 			if (length > com.socialcoisa.rede.media.application.MediaMetadataSanitizer.MAX_IN_MEMORY) {
 				if (sanitizer.supportsInMemory(mime)) {
@@ -142,7 +176,7 @@ class MediaStorageProxyController {
 				java.nio.file.Path sanitized = sanitizer.sanitizeToFile(request.getInputStream(), mime, objectKey);
 				try {
 					try (var body = java.nio.file.Files.newInputStream(sanitized)) {
-						store().write(objectKey, mime, java.nio.file.Files.size(sanitized), body);
+						writeToBucket(objectKey, mime, java.nio.file.Files.size(sanitized), body, length, startedAt);
 					}
 				}
 				finally {
@@ -153,13 +187,44 @@ class MediaStorageProxyController {
 				byte[] raw = request.getInputStream().readAllBytes();
 				// LIMPEZA NA ESCRITA: EXIF/GPS/XMP/IPTC não chegam ao bucket.
 				byte[] clean = sanitizer.sanitize(raw, mime, objectKey);
-				store().write(objectKey, mime, clean.length, new java.io.ByteArrayInputStream(clean));
+				// A captura de denúncia mostra a própria violação (é a prova): a checagem de imagem
+				// pública recusaria o arquivo. Ela não é publicada — quem a vê é a moderação.
+				if (!com.socialcoisa.rede.media.application.MediaService.REPORT_CAPTURE_PURPOSE
+					.equals(asset.purpose())) {
+					imageModeration.verifyBeforeStorage(clean, mime);
+				}
+				writeToBucket(objectKey, mime, clean.length, new java.io.ByteArrayInputStream(clean), length,
+					startedAt);
+				dimensions.recordUploaded(asset, clean);
 			}
 		}
 		catch (java.io.IOException failure) {
 			throw new ApiException(400, "MEDIA_UPLOAD_FAILED", "Nao foi possivel ler o arquivo enviado.");
 		}
 		return ResponseEntity.ok(Map.of("status", "STORED", "objectKey", objectKey));
+	}
+
+	/**
+	 * Grava no bucket. Falha do storage (gateway fora do ar, recusa, corte de conexao) deixava de ser
+	 * um erro nomeado: virava o "Erro interno inesperado" generico, sem tamanho, tipo nem causa no log.
+	 * Agora sai 502 com codigo proprio e a excecao original anexada — o log e o monitoramento 5xx
+	 * mostram a causa real. A mensagem ao usuario continua sem detalhe de infraestrutura.
+	 */
+	private void writeToBucket(String objectKey, String mime, long storedBytes, java.io.InputStream body,
+			long receivedBytes, long startedAt) {
+		try {
+			store().write(objectKey, mime, storedBytes, body);
+		}
+		catch (ApiException failure) {
+			throw failure;
+		}
+		catch (RuntimeException failure) {
+			LOG.error("media_storage_write_failed mime={} receivedBytes={} storedBytes={} elapsedMs={} cause={}",
+				mime, receivedBytes, storedBytes, (System.nanoTime() - startedAt) / 1_000_000L,
+				failure.getClass().getName());
+			throw new ApiException(502, "MEDIA_STORAGE_WRITE_FAILED",
+				"Nao foi possivel gravar a midia agora. Tente novamente em instantes.", failure);
+		}
 	}
 
 	/** O `{*key}` chega com a barra inicial; devolvemos o caminho relativo ao bucket. */

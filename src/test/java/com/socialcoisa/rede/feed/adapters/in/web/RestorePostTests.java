@@ -96,7 +96,7 @@ class RestorePostTests {
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "pub-restore-" + session.userId())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "Post que sera excluido e restaurado.",
 					"tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isCreated())

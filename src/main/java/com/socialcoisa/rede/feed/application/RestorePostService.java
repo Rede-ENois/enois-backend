@@ -26,10 +26,13 @@ public class RestorePostService implements RestorePostUseCase {
 	private final AuditLogRepository auditLogRepository;
 	private final UserProfileRepository userProfileRepository;
 	private final com.socialcoisa.rede.contributions.application.port.out.UserSealRepository userSeals;
+	private final com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries;
 
 	public RestorePostService(PostRepository postRepository, FeedDistributionService feedDistributionService,
 			AuditLogRepository auditLogRepository, UserProfileRepository userProfileRepository,
-			com.socialcoisa.rede.contributions.application.port.out.UserSealRepository userSeals) {
+			com.socialcoisa.rede.contributions.application.port.out.UserSealRepository userSeals,
+			com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries) {
+		this.mediaSummaries = mediaSummaries;
 		this.postRepository = postRepository;
 		this.feedDistributionService = feedDistributionService;
 		this.auditLogRepository = auditLogRepository;
@@ -52,12 +55,13 @@ public class RestorePostService implements RestorePostUseCase {
 		feedDistributionService.distribute(saved);
 		auditLogRepository.record(userId, "POST_RESTORED", saved.id().value(), null);
 		var author = userProfileRepository.findById(saved.authorId().value()).orElse(null);
-		return author != null
+		PostView view = author != null
 			? PostView.from(saved, author.username(), author.name(), author.avatar(), author.allBadges())
 				.withAvatarFrame(author.avatarFrame())
 				.withAuthorStyle(saved.authorIdentity() == AuthorIdentity.SOCIAL ? NameStyleView.from(author) : null)
 				.withContributor(saved.authorIdentity() == AuthorIdentity.SOCIAL && userSeals.hasActiveSeal(author.id())
 					? ContributorTagView.from(author) : null)
 			: PostView.from(saved);
+		return view.withMedia(mediaSummaries.visibleByIds(saved.mediaIds()));
 	}
 }

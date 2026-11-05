@@ -274,7 +274,24 @@ class CoinController {
 			"cotacaoBrlCents", wallet.cotacaoBrlCents(),
 			"cotacaoBrlMicros", wallet.cotacaoBrlMicros(),
 			"chave", wallet.chave(),
-			"entries", wallet.entries().stream().map(EntryView::from).toList());
+			"entries", wallet.entries().stream().map(EntryView::from).toList(),
+			"streak", StreakResponse.from(wallet.streak()));
+	}
+
+	/** Presence streak of the signed-in person (also inside `GET /carteira` as `streak`). */
+	@GetMapping("/me/streak")
+	StreakResponse streak(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return StreakResponse.from(coins.streak(user.id().value()));
+	}
+
+	record StreakResponse(int currentDays, int longestDays, boolean todayDone, int freezesAvailable,
+			String lastFrozenDay) {
+
+		static StreakResponse from(CoinService.StreakView v) {
+			return new StreakResponse(v.currentDays(), v.longestDays(), v.todayDone(), v.freezesAvailable(),
+				v.lastFrozenDay() == null ? null : v.lastFrozenDay().toString());
+		}
 	}
 
 	@GetMapping("/carteira/extrato")

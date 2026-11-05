@@ -11,7 +11,8 @@ class PostContentLimitsTests {
 	void divertidoIs400AndMomentIs500() {
 		assertThat(PostContentLimits.of(PostType.DIVERTIDO)).isEqualTo(400);
 		assertThat(PostContentLimits.of(PostType.MOMENT)).isEqualTo(500);
-		assertThat(PostContentLimits.of(PostType.QUESTION)).isEqualTo(400);
+		// Duvida tecnica precisa de espaco para codigo: mesmo limite do post comum.
+		assertThat(PostContentLimits.of(PostType.QUESTION)).isEqualTo(1_200);
 		assertThat(PostContentLimits.of(PostType.TUTORIAL)).isEqualTo(5_000);
 		assertThat(PostContentLimits.of(null)).isEqualTo(1_200);
 	}

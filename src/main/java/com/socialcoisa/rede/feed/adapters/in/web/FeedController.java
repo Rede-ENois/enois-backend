@@ -93,7 +93,13 @@ class FeedController {
 	private final Clock clock;
 	private final com.socialcoisa.rede.media.application.port.in.ValidateMediaOwnershipUseCase mediaOwnershipValidator;
 	private final HoneypotGuard honeypots;
+	private final com.socialcoisa.rede.coin.application.CoinService coins;
 	private final com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository outboxEventRepository;
+	private final com.socialcoisa.rede.feed.application.port.out.FeedSeenMarkerRepository feedSeenMarkers;
+	private final com.socialcoisa.rede.feed.application.port.in.VotePollUseCase votePoll;
+	private final com.socialcoisa.rede.feed.application.DeleteCommentService deleteComment;
+	/** Resposta do voto da enquete (PollView): o endpoint devolve o estado da enquete em JSON. */
+	private final tools.jackson.databind.ObjectMapper pollJson = new tools.jackson.databind.ObjectMapper();
 
 	FeedController(PublishPostUseCase publishPostUseCase, GetFeedUseCase getFeedUseCase, GetPostUseCase getPostUseCase,
 			GetProfilePostsUseCase getProfilePostsUseCase, DeletePostUseCase deletePostUseCase,
@@ -108,7 +114,12 @@ class FeedController {
 			CursorCodec cursorCodec, BlockedUsersReader blockedUsersReader, Clock clock,
 			com.socialcoisa.rede.media.application.port.in.ValidateMediaOwnershipUseCase mediaOwnershipValidator,
 			HoneypotGuard honeypots,
-			com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository outboxEventRepository) {
+			com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository outboxEventRepository,
+			com.socialcoisa.rede.coin.application.CoinService coins,
+			com.socialcoisa.rede.feed.application.port.out.FeedSeenMarkerRepository feedSeenMarkers,
+			com.socialcoisa.rede.feed.application.port.in.VotePollUseCase votePoll,
+			com.socialcoisa.rede.feed.application.DeleteCommentService deleteComment) {
+		this.coins = coins;
 		this.publishPostUseCase = publishPostUseCase;
 		this.getFeedUseCase = getFeedUseCase;
 		this.getPostUseCase = getPostUseCase;
@@ -134,6 +145,9 @@ class FeedController {
 		this.mediaOwnershipValidator = mediaOwnershipValidator;
 		this.honeypots = honeypots;
 		this.outboxEventRepository = outboxEventRepository;
+		this.feedSeenMarkers = feedSeenMarkers;
+		this.votePoll = votePoll;
+		this.deleteComment = deleteComment;
 	}
 
 	@PostMapping("/feed/posts")
@@ -145,23 +159,42 @@ class FeedController {
 			return ResponseEntity.status(201)
 				.body("{\"id\":\"post_" + java.util.UUID.randomUUID().toString().replace("-", "") + "\"}");
 		}
+		// A standalone post a person writes must declare its topic: without one it misses the feed
+		// filters and "O que quero ver". Checked here, at the person's entry point, because system
+		// publishers (blog, games, legacy scheduled posts) go through the same use case without one.
+		if (!StringUtils.hasText(request.communityId())
+				&& !StringUtils.hasText(request.topic())) {
+			throw new ApiException(400, "TOPIC_REQUIRED", "Escolha o assunto da publicação.");
+		}
 		// Imagem no meio do texto: todo marcador {{media:id}} precisa referenciar anexo do autor.
 		com.socialcoisa.rede.shared.text.InlineMedia.validate(request.content(), request.mediaIds());
 		String hash = idempotency.hash(request);
-		return idempotency.execute(user.id(), "POST", "/api/feed/posts", idempotencyKey, hash, () -> new CommandResponse(201,
-			publishPostUseCase.publish(new PublishPostCommand(user.id(), request.type(), request.content(),
+		return idempotency.execute(user.id(), "POST", "/api/feed/posts", idempotencyKey, hash, () -> {
+			var published = publishPostUseCase.publish(new PublishPostCommand(user.id(), request.type(), request.content(),
 				request.pageHtml(), request.articleBody(), request.tags(), request.mediaIds(), request.communityId(),
-				request.mentionedUserIds(), request.topic(), request.channelId(), Boolean.TRUE.equals(request.mediaSpoiler())))));
+				request.mentionedUserIds(), request.topic(), request.channelId(), Boolean.TRUE.equals(request.mediaSpoiler()),
+				request.pollOptions()));
+			// Presence counts here and not inside PublishPostService: the scheduler also publishes
+			// through it, and a scheduled post going live is not the person being here today.
+			coins.recordPresence(user.id().value());
+			return new CommandResponse(201, published);
+		});
 	}
 
 	@GetMapping("/feed")
 	Object feed(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit,
 			@RequestParam(defaultValue = "FOR_YOU") FeedTab tab,
-			@RequestParam(required = false) Set<com.socialcoisa.rede.feed.domain.PostType> type) {
+			@RequestParam(required = false) Set<com.socialcoisa.rede.feed.domain.PostType> type,
+			@RequestParam(required = false) Boolean resolved) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		return getFeedUseCase.getFeed(new GetFeedQuery(user.id(), cursorCodec.decode(cursor), limit, tab,
-			type == null ? Set.of() : type));
+		Optional<Instant> before = tab == FeedTab.TRENDING ? Optional.empty() : cursorCodec.decode(cursor);
+		var page = getFeedUseCase.getFeed(new GetFeedQuery(user.id(), before, limit, tab,
+			type == null ? Set.of() : type, resolved, tab == FeedTab.TRENDING
+				? com.socialcoisa.rede.feed.application.TrendingCursor.decode(cursor) : null));
+		// "Voce esta em dia": only the first page carries the marker (see FeedResponse).
+		boolean withMarker = before.isEmpty() && FeedResponse.carriesMarker(tab);
+		return FeedResponse.of(page, withMarker ? feedSeenMarkers.lastSeenAt(user.id()).orElse(null) : null);
 	}
 
 	/**
@@ -284,6 +317,7 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId, @RequestBody CommentOnPostRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		if (honeypots.triggered(user.id().value(), request.website(), "comment")) {
 			return ResponseEntity.status(201)
 				.body("{\"id\":\"comment_" + java.util.UUID.randomUUID().toString().replace("-", "") + "\"}");
@@ -308,8 +342,15 @@ class FeedController {
 			@RequestParam(defaultValue = "20") int limit,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		// Sessao opcional: ela so serve para esconder comentarios de quem o visitante bloqueou.
+		UserId viewer = viewerId(sessionToken);
+		requireVisible(postId, viewer);
 		return getCommentsUseCase.getComments(new GetCommentsQuery(new PostId(postId), cursorCodec.decode(cursor), limit,
-			Optional.ofNullable(viewerId(sessionToken))));
+			Optional.ofNullable(viewer)));
+	}
+
+	/** Guarda comum: a rota so age sobre um post que quem pediu pode ver (canal privado incluso). */
+	private void requireVisible(String postId, UserId viewer) {
+		getPostUseCase.requireVisible(postId, viewer);
 	}
 
 	private com.socialcoisa.rede.feed.domain.UserId viewerId(String sessionToken) {
@@ -326,6 +367,7 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId, @RequestBody ReactToPostRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		Map<String, Object> payload = new LinkedHashMap<>();
 		payload.put("postId", postId);
 		payload.put("type", request.type() == null ? "" : request.type());
@@ -340,6 +382,7 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		Map<String, String> payload = Map.of("postId", postId);
 		String hash = idempotency.hash(payload);
 		return idempotency.execute(user.id(), "DELETE", "/api/feed/posts/{postId}/reactions", idempotencyKey, hash,
@@ -352,6 +395,7 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		Map<String, String> payload = Map.of("postId", postId);
 		String hash = idempotency.hash(payload);
 		return idempotency.execute(user.id(), "POST", "/api/feed/posts/{postId}/saves", idempotencyKey, hash,
@@ -363,6 +407,7 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		Map<String, String> payload = Map.of("postId", postId);
 		String hash = idempotency.hash(payload);
 		return idempotency.execute(user.id(), "DELETE", "/api/feed/posts/{postId}/saves", idempotencyKey, hash,
@@ -375,6 +420,7 @@ class FeedController {
 	Object listReactions(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String postId) {
 		UserId viewer = viewerIdOrNull(sessionToken);
+		requireVisible(postId, viewer);
 		Set<String> hidden = blockedUsersReader.hiddenIdsFor(viewer == null ? null : viewer.value());
 		var reactions = postInteractionRepository.findReactionsByPostId(new PostId(postId), null, 50).stream()
 			.filter(reaction -> !hidden.contains(reaction.userId()))
@@ -390,24 +436,11 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId, @PathVariable String commentId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		String hash = idempotency.hash(Map.of("commentId", commentId, "postId", postId));
 		return idempotency.execute(user.id(), "DELETE", "/api/feed/posts/{postId}/comments/{commentId}", idempotencyKey, hash,
 			() -> {
-				var comment = commentRepository.findById(commentId)
-					.orElseThrow(() -> new ApiException(404, "COMMENT_NOT_FOUND", "Comentario nao encontrado."));
-				if (!comment.authorId().equals(user.id())) {
-					throw new ApiException(403, "NOT_AUTHORIZED", "Voce nao pode deletar este comentario.");
-				}
-				boolean eraAtivo = comment.status() == com.socialcoisa.rede.feed.domain.CommentStatus.ACTIVE;
-				commentRepository.deleteById(commentId);
-				// O contador do post precisa DEVOLVER o comentário apagado — antes ele só crescia,
-				// e "comentar/apagar" inflava a interação recebida (e a credibilidade) sem limite.
-				if (eraAtivo) {
-					postRepository.findById(comment.postId()).ifPresent(post -> {
-						post.removeComment();
-						postRepository.save(post);
-					});
-				}
+				deleteComment.deleteAsAuthor(user.id(), commentId);
 				return new CommandResponse(200, Map.of("status", "COMMENT_DELETED"));
 			});
 	}
@@ -419,6 +452,7 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId, @PathVariable String commentId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		String hash = idempotency.hash(Map.of("commentId", commentId, "postId", postId, "pinned", true));
 		return idempotency.execute(user.id(), "POST", "/api/feed/posts/{postId}/comments/{commentId}/pin",
 			idempotencyKey, hash, () -> {
@@ -433,6 +467,7 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId, @PathVariable String commentId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		String hash = idempotency.hash(Map.of("commentId", commentId, "postId", postId, "pinned", false));
 		return idempotency.execute(user.id(), "DELETE", "/api/feed/posts/{postId}/comments/{commentId}/pin",
 			idempotencyKey, hash, () -> {
@@ -474,6 +509,7 @@ class FeedController {
 			@PathVariable String postId, @PathVariable String commentId,
 			@RequestBody EditCommentRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		Map<String, Object> payload = new LinkedHashMap<>();
 		payload.put("commentId", commentId);
 		payload.put("content", request.content() == null ? "" : request.content());
@@ -506,6 +542,7 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId, @PathVariable String commentId, @RequestBody ReactToPostRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		Map<String, Object> payload = new LinkedHashMap<>();
 		payload.put("commentId", commentId);
 		payload.put("type", request.type() == null ? "" : request.type());
@@ -519,6 +556,7 @@ class FeedController {
 					outboxEventRepository.append("CommentReacted", commentId,
 						"{\"commentId\":\"" + commentId + "\",\"postId\":\"" + postId
 						+ "\",\"authorId\":\"" + user.id().value() + "\"}");
+					coins.recordPresence(user.id().value());
 				}
 				return new CommandResponse(200, Map.of("status", added ? "REACTED" : "REMOVED"));
 			});
@@ -529,10 +567,24 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId, @PathVariable String commentId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		String hash = idempotency.hash(Map.of("commentId", commentId));
 		return idempotency.execute(user.id(), "DELETE", "/api/feed/posts/{postId}/comments/{commentId}/reactions",
 			idempotencyKey, hash, () -> new CommandResponse(200, Map.of(
 				"status", postInteractionRepository.removeCommentReaction(commentId, user.id()) ? "REMOVED" : "NO_REACTION")));
+	}
+
+	/**
+	 * Voto da enquete: uma alternativa, um voto por pessoa, definitivo. Votar de novo (na mesma ou
+	 * em outra) responde 409 ALREADY_VOTED.
+	 */
+	@PostMapping("/feed/posts/{postId}/poll/vote")
+	ResponseEntity<String> votePoll(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String postId, @RequestBody PollVoteRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
+		var poll = votePoll.vote(new PostId(postId), user.id(), request.option() == null ? -1 : request.option());
+		return ResponseEntity.ok().body(pollJson.writeValueAsString(poll));
 	}
 
 	@GetMapping("/feed/posts/{postId}/comments/{commentId}/reactions")
@@ -541,6 +593,7 @@ class FeedController {
 		// Mesma leitura pública das reações do post: o post compartilhado abre sem sessão, e quem
 		// está bloqueado não aparece na lista nem na contagem.
 		UserId viewer = viewerIdOrNull(sessionToken);
+		requireVisible(postId, viewer);
 		Set<String> hidden = blockedUsersReader.hiddenIdsFor(viewer == null ? null : viewer.value());
 		var reactions = postInteractionRepository.findReactionsByCommentId(commentId).stream()
 			.filter(reaction -> !hidden.contains(reaction.userId()))
@@ -561,20 +614,36 @@ class FeedController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String postId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
 		Map<String, String> payload = Map.of("postId", postId);
 		String hash = idempotency.hash(payload);
 		return idempotency.execute(user.id(), "POST", "/api/feed/posts/{postId}/shares", idempotencyKey, hash,
 			() -> new CommandResponse(200, sharePostUseCase.share(new PostActionCommand(user.id(), new PostId(postId)))));
 	}
 
-	/** Republica um post no feed de quem clicou (cópia com crédito ao autor original). */
+	/**
+	 * Republicar: sem body ou body vazio cria repost puro (ponteiro pro original);
+	 * com opiniao cria post novo do repostador citando o original.
+	 */
 	@PostMapping("/feed/posts/{postId}/repost")
 	@org.springframework.web.bind.annotation.ResponseStatus(org.springframework.http.HttpStatus.CREATED)
 	PostView repost(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String postId, @RequestBody(required = false) RepostRequest body) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		Post copy = repostPostService.repost(user.id().value(), postId, body == null ? null : body.opinion());
-		return PostView.from(copy);
+		requireVisible(postId, user.id());
+		String opinion = body == null ? null : body.opinion();
+		Post result = repostPostService.repost(user.id().value(), postId, opinion);
+		return PostView.from(result);
+	}
+
+	/** Desfaz o repost puro (remove o ponteiro, não o post original). */
+	@DeleteMapping("/feed/posts/{postId}/repost")
+	ResponseEntity<String> undoRepost(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String postId) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		requireVisible(postId, user.id());
+		repostPostService.undoRepost(user.id().value(), postId);
+		return ResponseEntity.ok("{\"status\":\"REMOVED\"}");
 	}
 
 	record RepostRequest(String opinion) {

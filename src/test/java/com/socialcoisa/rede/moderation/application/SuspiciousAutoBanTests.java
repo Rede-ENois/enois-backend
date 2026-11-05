@@ -99,6 +99,13 @@ class SuspiciousAutoBanTests {
 	}
 
 	@Test
+	void theAutomationCeilingIsEightyAndTheTieStaysWithTheHuman() {
+		// Decisão da dona (2026-10-30): o teto subiu de 60 para 80 — conta que só soma sinais fracos
+		// (nome repetido, perfil vazio, conta nova) não pode mais ser banida na mão da automação.
+		assertThat(worker.status().riskCeiling()).isEqualTo(80);
+	}
+
+	@Test
 	void bansAndSanitizesAnAccountAboveTheRiskCeiling() throws Exception {
 		var target = new TestAuthHelper(mockMvc, objectMapper).authenticate("probe_auto_target");
 
@@ -106,7 +113,7 @@ class SuspiciousAutoBanTests {
 				.header("X-Session-Token", target.token())
 				.header("Idempotency-Key", "autoban-post-1")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "Conteúdo de conta em série.", "tags", List.of(),
 					"mediaIds", List.of()))))
 			.andExpect(status().isCreated())

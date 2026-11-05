@@ -40,7 +40,7 @@ class PushControllerTests {
 	@Test
 	void requiresSession() throws Exception {
 		mockMvc.perform(post("/push/subscriptions").contentType(MediaType.APPLICATION_JSON)
-				.content("{\"endpoint\":\"https://push.example/1\",\"keys\":{\"p256dh\":\"a\",\"auth\":\"b\"}}"))
+				.content("{\"endpoint\":\"https://fcm.googleapis.com/fcm/send/1\",\"keys\":{\"p256dh\":\"a\",\"auth\":\"b\"}}"))
 			.andExpect(status().isUnauthorized());
 	}
 
@@ -51,7 +51,7 @@ class PushControllerTests {
 		// do InnoDB sem prefixo). A entidade declarava 1000, entao um endpoint maior passava pela
 		// API e quebrava no INSERT com "Data too long" — que vira 409 "conflita com o estado atual".
 		var session = auth.authenticate("push_longo");
-		String endpoint = "https://push.example/" + "e".repeat(700);
+		String endpoint = "https://fcm.googleapis.com/fcm/send/" + "e".repeat(700);
 
 		String payload = objectMapper.writeValueAsString(
 			Map.of("endpoint", endpoint, "keys", Map.of("p256dh", "p256dh-key", "auth", "auth-key")));
@@ -68,7 +68,7 @@ class PushControllerTests {
 	@Test
 	void registersAndRemovesSubscription() throws Exception {
 		var session = auth.authenticate("push_user");
-		String endpoint = "https://push.example/subscription/push_user";
+		String endpoint = "https://fcm.googleapis.com/fcm/send/push_user";
 
 		String payload = objectMapper.writeValueAsString(
 			Map.of("endpoint", endpoint, "keys", Map.of("p256dh", "p256dh-key", "auth", "auth-key")));
@@ -96,7 +96,7 @@ class PushControllerTests {
 	void rejectsHttpEndpoint() throws Exception {
 		var session = auth.authenticate("push_user_bad");
 		String payload = objectMapper.writeValueAsString(
-			Map.of("endpoint", "http://push.example/1", "keys", Map.of("p256dh", "a", "auth", "b")));
+			Map.of("endpoint", "http://fcm.googleapis.com/fcm/send/1", "keys", Map.of("p256dh", "a", "auth", "b")));
 
 		mockMvc.perform(post("/push/subscriptions").header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "push-sub-bad")
@@ -106,9 +106,34 @@ class PushControllerTests {
 	}
 
 	@Test
+	void rejectsEndpointOutsideThePushAllowlist() throws Exception {
+		var session = auth.authenticate("push_user_host");
+		String payload = objectMapper.writeValueAsString(Map.of(
+			"endpoint", "https://push.example/1", "keys", Map.of("p256dh", "a", "auth", "b")));
+
+		mockMvc.perform(post("/push/subscriptions").header("X-Session-Token", session.token())
+				.header("Idempotency-Key", "push-sub-host")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(payload))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("INVALID_PUSH_SUBSCRIPTION"));
+	}
+
+	@Test
 	void exposesConfig() throws Exception {
 		mockMvc.perform(get("/push/config"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.enabled").isBoolean());
+	}
+
+	@Test
+	void configHasNoKeyWhenVapidIsNotConfigured() throws Exception {
+		// A suíte não define VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY: o push fica desligado e o app não
+		// oferece o botão. Ligar é só preencher as duas variáveis do ambiente (ver PushConfigEnabledTests).
+		String body = mockMvc.perform(get("/push/config"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.enabled").value(false))
+			.andReturn().getResponse().getContentAsString();
+		org.assertj.core.api.Assertions.assertThat(body).doesNotContain("publicKey\":\"");
 	}
 }

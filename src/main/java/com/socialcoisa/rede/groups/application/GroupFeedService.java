@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import com.socialcoisa.rede.feed.application.port.out.AuditLogRepository;
+import com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository;
 import com.socialcoisa.rede.feed.domain.ReactionType;
 import com.socialcoisa.rede.feed.domain.UserId;
 import com.socialcoisa.rede.groups.application.port.out.GroupContentRepository;
@@ -51,17 +52,19 @@ public class GroupFeedService {
 	private final GroupContentRepository content;
 	private final AuditLogRepository audit;
 	private final GroupNotifier notifier;
+	private final OutboxEventRepository outbox;
 	private final com.socialcoisa.rede.shared.age.AgeGate ageGate;
 	private final com.socialcoisa.rede.shared.sanctions.SanctionGate sanctionGate;
 	private final Clock clock;
 
 	public GroupFeedService(GroupRepository groups, GroupContentRepository content, AuditLogRepository audit,
-			GroupNotifier notifier, com.socialcoisa.rede.shared.age.AgeGate ageGate,
+			GroupNotifier notifier, OutboxEventRepository outbox, com.socialcoisa.rede.shared.age.AgeGate ageGate,
 			com.socialcoisa.rede.shared.sanctions.SanctionGate sanctionGate, Clock clock) {
 		this.groups = groups;
 		this.content = content;
 		this.audit = audit;
 		this.notifier = notifier;
+		this.outbox = outbox;
 		this.ageGate = ageGate;
 		this.sanctionGate = sanctionGate;
 		this.clock = clock;
@@ -179,6 +182,8 @@ public class GroupFeedService {
 		GroupPost post = GroupPost.publish(newId("group_post"), groupId, topicId, actorId, clean, mediaIds,
 			clock.instant());
 		content.savePost(post);
+		// The members are told by the outbox worker, off this request: the fan-out grows with the group.
+		outbox.append(GroupNotifier.POST_PUBLISHED, post.id(), "{\"postId\":\"" + post.id() + "\"}");
 		return post;
 	}
 
@@ -299,6 +304,38 @@ public class GroupFeedService {
 		refreshCounters(post);
 		notifier.comment(group, post, authorId, parent != null ? parent.authorId() : null);
 		return comment;
+	}
+
+	/**
+	 * Edição do comentário: só o autor edita (quem modera remove, não reescreve o que o outro disse).
+	 * Passa pelos mesmos portões do comentar — ECA, sanção de moderação e permissão de interagir.
+	 */
+	@Transactional
+	public GroupComment editComment(String groupId, String postId, String commentId, String actorId, String text) {
+		ageGate.requireCanWrite(actorId);
+		sanctionGate.requireNotRestricted(actorId);
+		requireGroup(groupId);
+		requirePost(groupId, postId);
+		GroupComment comment = content.findComment(commentId)
+			.filter(item -> item.postId().equals(postId) && item.isPublished())
+			.orElseThrow(() -> new ApiException(404, "COMMENT_NOT_FOUND",
+				"Comentario nao encontrado nesta publicacao."));
+		if (!comment.authorId().equals(actorId)) {
+			throw new ApiException(403, "FORBIDDEN", "Voce so pode editar o seu proprio comentario.");
+		}
+		require(roleOf(groupId, actorId), GroupCapability.INTERACT);
+		if (!StringUtils.hasText(text)) {
+			throw new ApiException(400, "EMPTY_COMMENT", "Escreva alguma coisa antes de comentar.");
+		}
+		String clean = PlainText.defuse(text.trim());
+		if (clean.length() > GroupComment.MAX_CONTENT) {
+			throw new ApiException(400, "CONTENT_TOO_LONG", "Comentario deve ter ate 1.200 caracteres.");
+		}
+		GroupComment edited = comment.edit(clean, clock.instant());
+		content.saveComment(edited);
+		audit.record(new UserId(actorId), "GROUP_COMMENT_EDITED", commentId,
+			"{\"groupId\":\"" + groupId + "\",\"postId\":\"" + postId + "\"}");
+		return edited;
 	}
 
 	@Transactional(readOnly = true)

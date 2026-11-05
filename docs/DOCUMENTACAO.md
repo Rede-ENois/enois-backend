@@ -61,6 +61,7 @@
 | Superfície da API (rotas conhecidas, resposta padrão fora delas) | `API.md` | ✅ |
 | Contrato do painel de moderador (quem vê o quê) | `MODULES.md` §moderation | ✅ |
 | Agentes de IA (contrato) | `../AGENTS.md` | ✅ |
+| Acesso ao host pelo Actions | `ACESSO_HOST.md` | ✅ |
 
 ## Frontend (repo `enois-frontend`)
 

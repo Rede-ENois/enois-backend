@@ -29,4 +29,5 @@ class FreelancePersistenceAdapter implements FreelanceRepository {
 		return repo.findByUserIdOrderByCreatedAtDesc(userId).stream().map(FreelanceJpaEntity::toDomain).toList();
 	}
 	@Override public long countOpen() { return repo.countByStatus(Freelance.Status.OPEN); }
+	@Override public void deleteById(String id) { repo.deleteById(id); }
 }

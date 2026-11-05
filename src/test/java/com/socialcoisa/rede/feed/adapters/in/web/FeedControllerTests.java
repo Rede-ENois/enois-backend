@@ -41,9 +41,24 @@ class FeedControllerTests {
 	}
 
 	@Test
+	void acceptsRankingCursorsAndPreservesChronologicalCursors() throws Exception {
+		var session = auth.authenticate("user_feed_pagination_cursor");
+		var until = java.time.Instant.now().minusSeconds(60);
+		String cursor = new com.socialcoisa.rede.feed.application.TrendingCursor(
+			until, 0, until.minusSeconds(1), "synthetic_cursor_post").encode();
+		mockMvc.perform(get("/feed").param("tab", "TRENDING").param("cursor", cursor)
+				.header("X-Session-Token", session.token())).andExpect(status().isOk());
+		mockMvc.perform(get("/feed").param("tab", "ALL").param("cursor", until.toString())
+				.header("X-Session-Token", session.token())).andExpect(status().isOk());
+		mockMvc.perform(get("/feed").param("tab", "TRENDING").param("cursor", until.toString())
+				.header("X-Session-Token", session.token())).andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("INVALID_CURSOR"));
+	}
+
+	@Test
 	void publishesPostAndReplaysIdempotentResponse() throws Exception {
 		var session = auth.authenticate("user_feed_replay");
-		String payload = objectMapper.writeValueAsString(Map.of(
+		String payload = objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 			"type", "INSIGHT",
 			"content", "Arquitetura hexagonal deixa a regra de negocio respirando melhor.",
 			"tags", List.of("Arquitetura", "Java"),
@@ -72,12 +87,12 @@ class FeedControllerTests {
 	@Test
 	void rejectsSameIdempotencyKeyWithDifferentPayload() throws Exception {
 		var session = auth.authenticate("user_feed_conflict");
-		String first = objectMapper.writeValueAsString(Map.of(
+		String first = objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 			"type", "INSIGHT",
 			"content", "Primeira tentativa",
 			"tags", List.of(),
 			"mediaIds", List.of()));
-		String second = objectMapper.writeValueAsString(Map.of(
+		String second = objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 			"type", "INSIGHT",
 			"content", "Outra tentativa",
 			"tags", List.of(),
@@ -102,7 +117,7 @@ class FeedControllerTests {
 	@Test
 	void deletesPostAndRemovesItFromFeed() throws Exception {
 		var session = auth.authenticate("user_feed_delete");
-		String payload = objectMapper.writeValueAsString(Map.of(
+		String payload = objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 			"type", "QUESTION",
 			"content", "Como voces organizam portas e adaptadores no monolito?",
 			"tags", List.of("Backend"),
@@ -144,7 +159,7 @@ class FeedControllerTests {
 		var reactorSession = auth.authenticate("user_feed_reactor");
 		var saverSession = auth.authenticate("user_feed_saver");
 		var sharerSession = auth.authenticate("user_feed_sharer");
-		String payload = objectMapper.writeValueAsString(Map.of(
+		String payload = objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 			"type", "INSIGHT",
 			"content", "Interacoes precisam ser pequenas, transacionais e repetiveis.",
 			"tags", List.of("Feed"),

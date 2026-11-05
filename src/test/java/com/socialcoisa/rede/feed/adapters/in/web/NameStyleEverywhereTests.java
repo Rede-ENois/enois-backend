@@ -62,7 +62,7 @@ class NameStyleEverywhereTests {
 				.header("X-Session-Token", token)
 				.header("Idempotency-Key", chave)
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", content, "tags", List.of(),
 					"mediaIds", List.of()))))
 			.andExpect(status().isCreated())
@@ -79,7 +79,7 @@ class NameStyleEverywhereTests {
 				.header("X-Session-Token", autor.token())
 				.header("Idempotency-Key", "name-style-pub-1")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "Post com nome personalizado.", "tags", List.of(),
 					"mediaIds", List.of()))))
 			.andExpect(status().isCreated())
@@ -148,7 +148,7 @@ class NameStyleEverywhereTests {
 				.header("X-Session-Token", autor.token())
 				.header("Idempotency-Key", "name-style-sem-pub")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "Post sem personalizacao.", "tags", List.of(),
 					"mediaIds", List.of()))))
 			.andExpect(status().isCreated())

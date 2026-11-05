@@ -83,6 +83,10 @@ public class UserContentPurgeService implements PurgeAuthorContentUseCase {
 			for (List<String> chunk : chunks(allCommentIds)) {
 				otherRows += purge.deleteCommentReactionsByCommentIds(chunk);
 			}
+			// Duvidas alheias cuja resposta aceita era do spammer voltam a ficar abertas.
+			for (List<String> chunk : chunks(allCommentIds)) {
+				otherRows += purge.clearAcceptedAnswers(chunk);
+			}
 		}
 		int commentCount = 0;
 		for (List<String> chunk : chunks(postIds)) {

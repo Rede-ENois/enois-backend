@@ -211,7 +211,7 @@ public class ContributorSealService {
 				return new PublicSealView(seal.sealType().name(), seal.sealType().displayName(),
 					seal.sealType().description(), seal.category().name(),
 					seal.category().displayName(), seal.grantedAt(), seal.evidenceCount(),
-					seal.sealType().minCount(), max);
+					seal.sealType().minCount(), max, seal.sealType().emblem());
 			}).toList();
 	}
 
@@ -240,7 +240,7 @@ public class ContributorSealService {
 				category.description(), SealType.of(category).stream()
 					.map(tier -> new TierCriteria(tier.name(), tier.displayName(), tier.description(),
 						tier.minCount(),
-						tier.maxCount() == Integer.MAX_VALUE ? null : tier.maxCount()))
+						tier.maxCount() == Integer.MAX_VALUE ? null : tier.maxCount(), tier.emblem()))
 					.toList()))
 			.toList();
 		return new CriteriaView(repos, categories,
@@ -293,7 +293,8 @@ public class ContributorSealService {
 	}
 
 	public record PublicSealView(String type, String name, String description, String category,
-			String categoryName, Instant grantedAt, int evidenceCount, int minCount, Integer maxCount) {
+			String categoryName, Instant grantedAt, int evidenceCount, int minCount, Integer maxCount,
+			String emblem) {
 	}
 
 	public record EvidencePage(List<EvidenceView> items, int total, int page, int size, boolean hasMore) {
@@ -311,7 +312,8 @@ public class ContributorSealService {
 			List<TierCriteria> tiers) {
 	}
 
-	public record TierCriteria(String type, String name, String description, int minCount, Integer maxCount) {
+	public record TierCriteria(String type, String name, String description, int minCount, Integer maxCount,
+			String emblem) {
 	}
 
 	public record AdminContributionView(String id, String userId, String username, String githubLogin,

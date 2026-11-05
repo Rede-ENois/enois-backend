@@ -11,7 +11,9 @@ import jakarta.persistence.Index;
 import jakarta.persistence.Table;
 
 @Entity
-@Table(name = "notifications", indexes = @Index(name = "idx_notifications_user_read_created", columnList = "user_id, is_read, created_at"))
+@Table(name = "notifications", indexes = {
+	@Index(name = "idx_notifications_user_read_created", columnList = "user_id, is_read, created_at"),
+	@Index(name = "idx_notifications_user_group_read", columnList = "user_id, group_key, is_read") })
 class NotificationJpaEntity {
 
 	@Id
@@ -47,6 +49,16 @@ class NotificationJpaEntity {
 	@Column(name = "created_at", nullable = false)
 	private Instant createdAt;
 
+	@Column(name = "group_key", length = 191)
+	private String groupKey;
+
+	@Column(name = "actor_count", nullable = false)
+	private int actorCount = 1;
+
+	/** Trecho do conteúdo de origem (V239); nulo nas notificações anteriores à coluna. */
+	@Column(length = 300)
+	private String preview;
+
 	protected NotificationJpaEntity() {
 	}
 
@@ -62,6 +74,9 @@ class NotificationJpaEntity {
 		e.ctaLabel = notification.ctaLabel();
 		e.read = notification.isRead();
 		e.createdAt = notification.createdAt();
+		e.groupKey = notification.groupKey();
+		e.actorCount = notification.actorCount();
+		e.preview = notification.preview();
 		return e;
 	}
 
@@ -70,7 +85,8 @@ class NotificationJpaEntity {
 	}
 
 	Notification toDomain() {
-		return Notification.restore(id, userId, kind, actorId, title, body, href, ctaLabel, read, createdAt);
+		return Notification.restore(id, userId, kind, actorId, title, body, href, ctaLabel, read, createdAt, groupKey,
+			actorCount, preview);
 	}
 
 }

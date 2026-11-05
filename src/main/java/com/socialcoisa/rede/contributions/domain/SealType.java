@@ -15,38 +15,40 @@ import java.util.List;
  */
 public enum SealType {
 
-	AJUDANTE(ContributionCategory.CODE, "Ajudante", 1, 10,
+	AJUDANTE(ContributionCategory.CODE, "Ajudante", "ajudante", 1, 10,
 		"Reconhece de 1 a 10 pull requests integrados nos repositórios oficiais."),
-	CONTRIBUINTE_SERIO(ContributionCategory.CODE, "Contribuinte sério", 11, 50,
+	CONTRIBUINTE_SERIO(ContributionCategory.CODE, "Contribuinte sério", "contribuinte-serio", 11, 50,
 		"Reconhece de 11 a 50 pull requests integrados nos repositórios oficiais."),
-	HARDCORE(ContributionCategory.CODE, "Hardcore", 51, 100,
+	HARDCORE(ContributionCategory.CODE, "Hardcore", "hardcore", 51, 100,
 		"Reconhece de 51 a 100 pull requests integrados nos repositórios oficiais."),
-	TRYHARD(ContributionCategory.CODE, "Tryhard", 101, 1000,
+	TRYHARD(ContributionCategory.CODE, "Tryhard", "tryhard", 101, 1000,
 		"Reconhece de 101 a 1.000 pull requests integrados nos repositórios oficiais."),
-	GET_A_LIFE(ContributionCategory.CODE, "Get a life", 1001, Integer.MAX_VALUE,
+	GET_A_LIFE(ContributionCategory.CODE, "Get a life", "get-a-life", 1001, Integer.MAX_VALUE,
 		"Reconhece mais de 1.000 pull requests integrados nos repositórios oficiais."),
 
-	BETA_TESTER(ContributionCategory.ISSUES, "Beta tester", 1, 10,
+	BETA_TESTER(ContributionCategory.ISSUES, "Beta tester", "beta-tester", 1, 10,
 		"Reconhece de 1 a 10 issues qualificadas nos repositórios oficiais."),
-	EXIGENTE(ContributionCategory.ISSUES, "Exigente", 11, 20,
+	EXIGENTE(ContributionCategory.ISSUES, "Exigente", "exigente", 11, 20,
 		"Reconhece de 11 a 20 issues qualificadas nos repositórios oficiais."),
-	ESFORCO_MAXIMO(ContributionCategory.ISSUES, "Esforço máximo", 21, 50,
+	ESFORCO_MAXIMO(ContributionCategory.ISSUES, "Esforço máximo", "esforco-maximo", 21, 50,
 		"Reconhece de 21 a 50 issues qualificadas nos repositórios oficiais."),
-	PLUS_ULTRA(ContributionCategory.ISSUES, "Plus ultra", 51, 100,
+	PLUS_ULTRA(ContributionCategory.ISSUES, "Plus ultra", "plus-ultra", 51, 100,
 		"Reconhece de 51 a 100 issues qualificadas nos repositórios oficiais."),
-	GENKIDAMA(ContributionCategory.ISSUES, "Genkidama", 101, Integer.MAX_VALUE,
+	GENKIDAMA(ContributionCategory.ISSUES, "Genkidama", "genkidama", 101, Integer.MAX_VALUE,
 		"Reconhece mais de 100 issues qualificadas nos repositórios oficiais.");
 
 	private final ContributionCategory category;
 	private final String displayName;
+	private final String emblem;
 	private final int minCount;
 	private final int maxCount;
 	private final String description;
 
-	SealType(ContributionCategory category, String displayName, int minCount, int maxCount,
+	SealType(ContributionCategory category, String displayName, String emblem, int minCount, int maxCount,
 			String description) {
 		this.category = category;
 		this.displayName = displayName;
+		this.emblem = emblem;
 		this.minCount = minCount;
 		this.maxCount = maxCount;
 		this.description = description;
@@ -58,6 +60,14 @@ public enum SealType {
 
 	public String displayName() {
 		return displayName;
+	}
+
+	/**
+	 * Emblema fixo do nível: nome do arquivo em public/seals/ do frontend. É função do nível e só
+	 * existe para quem o recebeu pelas regras de contribuição — não há escolha nem outra via.
+	 */
+	public String emblem() {
+		return emblem;
 	}
 
 	public int minCount() {

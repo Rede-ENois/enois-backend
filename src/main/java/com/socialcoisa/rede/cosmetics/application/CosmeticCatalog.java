@@ -36,6 +36,9 @@ public class CosmeticCatalog {
 
 	static final String RESOURCE = "cosmetics/catalog.json";
 
+	/** Look ids travel in the shop URL; a plain slug keeps the route and the logs boring. */
+	private static final java.util.regex.Pattern LOOK_ID = java.util.regex.Pattern.compile("[a-z0-9][a-z0-9-]{2,63}");
+
 	/** One shop item. {@code collection} is null for the original frames, which are always on sale. */
 	public record Item(int releaseOrder, String id, CosmeticKind kind, String collection, String name,
 			String description, long priceMf, String cssRing, boolean purchasable, String icon) {
@@ -61,7 +64,9 @@ public class CosmeticCatalog {
 	record CollectionFile(String id, String name, List<WindowFile> windows) {
 	}
 
-	record LookFile(String collection, String title, List<String> items, String statusIcon, String statusText) {
+	/** {@code id} is optional: without it the look keeps the historical {@code look-<collection>}. */
+	record LookFile(String id, String collection, String title, List<String> items, String statusIcon,
+			String statusText) {
 	}
 
 	record CatalogFile(List<CollectionFile> collections, List<Item> items, List<LookFile> looks) {
@@ -112,9 +117,13 @@ public class CosmeticCatalog {
 		}
 		Map<String, Look> looksById = new LinkedHashMap<>();
 		for (LookFile look : file.looks()) {
-			String id = "look-" + look.collection();
+			boolean named = look.id() != null && !look.id().isBlank();
+			String id = named ? look.id() : "look-" + look.collection();
 			if (!collectionsById.containsKey(look.collection()) || look.items().isEmpty()) {
 				throw new IllegalStateException("Invalid look: " + id);
+			}
+			if (named && !LOOK_ID.matcher(id).matches()) {
+				throw new IllegalStateException("Invalid look id: " + id);
 			}
 			for (String itemId : look.items()) {
 				Item item = byId.get(itemId);

@@ -320,6 +320,27 @@ Implementa: `CommentOnPostUseCase`, `GetCommentsUseCase`, `ReactToPostUseCase`, 
 | `normalizeParentComment(Comment parentComment, Post post)` | Valida parent comment |
 | `normalizeLimit(int limit)` | Normaliza limit entre 1 e 50 |
 
+### QuestionAnswerService
+
+**Arquivo**: `src/main/java/com/socialcoisa/rede/feed/application/QuestionAnswerService.java`
+
+Dúvidas (`QUESTION`) com resposta aceita. Estado em `posts.accepted_comment_id` e `posts.resolved_at`
+(V213), gravado só por `PostRepository.updateAcceptedAnswer` (o `save()` do post não toca essas
+colunas, então salvar contadores nunca desfaz a escolha).
+
+| Função | Descrição |
+|---|---|
+| `accept(PostId, UserId, String commentId)` | Só o autor da dúvida; comentário ativo, da mesma dúvida e de outra pessoa. Notifica `ANSWER_ACCEPTED` e paga a recompensa de ajuda depois do commit (uma vez por dúvida; contas com menos de 7 dias não recebem) |
+| `unaccept(PostId, UserId)` | Reabre a dúvida (zera as duas colunas) |
+
+Comentário aceito apagado reabre a dúvida na mesma transação: `CommentRepository.deleteById` (autor),
+`CommentRepository.markDeleted` (moderação e limpeza de banimento) e a purga de spam (`UserContentPurgeService`) zeram as duas colunas de quem
+apontava para ele. A recompensa já paga fica (a ref é por dúvida).
+
+`PostView` expõe `acceptedCommentId` e `resolved`; `CommentView` expõe `accepted`. O feed `ALL`
+filtrado por tipo aceita `resolved=true|false`. O limite de texto da dúvida é o padrão (1.200),
+o mesmo do post comum: pergunta técnica precisa de espaço para código.
+
 ### FeedDistributionService
 
 **Arquivo**: `src/main/java/com/socialcoisa/rede/feed/application/FeedDistributionService.java`
@@ -338,7 +359,7 @@ Implementa: `CommentOnPostUseCase`, `GetCommentsUseCase`, `ReactToPostUseCase`, 
 | `Post` | Entidade principal: id, authorId, type, content, visibility, counters, status, createdAt |
 | `PostId` | Value object para ID de post (`post_<uuid>`) |
 | `UserId` | Value object para ID de usuário |
-| `PostType` | Enum: `INSIGHT`, `ARTICLE`, `QUESTION`, `PROJECT`, `OPPORTUNITY` |
+| `PostType` | Enum: `INSIGHT`, `ARTICLE`, `QUESTION`, `PROJECT`, `OPPORTUNITY`, `POLL` (enquete), ... |
 | `Visibility` | Enum: `PUBLIC`, `CONNECTIONS`, `COMMUNITY` |
 | `PostStatus` | Enum: `ACTIVE`, `DELETED` |
 | `Comment` | Entidade: id, postId, authorId, parentCommentId, content, status |
@@ -369,11 +390,12 @@ Implementa: `CommentOnPostUseCase`, `GetCommentsUseCase`, `ReactToPostUseCase`, 
 | Interface | Métodos principais |
 |---|---|
 | `PostRepository` | `save`, `findById`, `findByIds`, `findActiveByAuthors`, `findActiveByAuthor`, `findActiveAll`, `findActiveByType`, `findActiveByCommunity` |
-| `CommentRepository` | `save`, `findById`, `deleteById`, `findActiveByPost`, `findPostIdsByAuthor` |
+| `CommentRepository` | `save`, `findById`, `deleteById`, `markDeleted`, `findActiveByPost`, `findPostIdsByAuthor` |
 | `PostInteractionRepository` | `addReaction`, `removeReaction`, `addSave`, `removeSave`, `addShare`, `addCommentReaction`, `removeCommentReaction`, `findReactionsByPostId`, `findReactionsByCommentId`, `findSavedPostIdsByUserId`, `findReactionsByUserAndPostIds` |
 | `IdGenerator` | `generate()` |
 | `ConnectionGraphRepository` | `findFriends`, `findFriendsOfFriends`, `findUserTags` |
 | `FeedCacheRepository` | `prepend`, `get`, `removeEverywhere` |
+| `FeedSeenMarkerRepository` | `lastSeenAt`, `advance` (marcador "Você está em dia") |
 | `AuditLogRepository` | `record` |
 | `OutboxEventRepository` | `append` |
 
@@ -403,6 +425,28 @@ Implementa: `CommentOnPostUseCase`, `GetCommentsUseCase`, `ReactToPostUseCase`, 
 | `reactToComment(...)` | POST /api/feed/posts/{postId}/comments/{commentId}/reactions |
 | `commentReactions(...)` | GET /api/feed/posts/{postId}/comments/{commentId}/reactions |
 
+**FeedSeenController**: `src/main/java/com/socialcoisa/rede/feed/adapters/in/web/FeedSeenController.java`
+
+| Função | Rota |
+|---|---|
+| `seen(...)` | POST /api/feed/seen (avança o marcador "Você está em dia") |
+
+### Marcador "Você está em dia"
+
+Um ponto de parada explícito no feed ("você já viu tudo o que é novo desde a última visita"), em vez de
+rolagem infinita. Uma linha por pessoa em `feed_seen_markers` (V214), lida e gravada por
+`FeedSeenMarkerRepository` (`FeedSeenMarkerJdbcAdapter`).
+
+- `GET /api/feed?tab=FOR_YOU` without `cursor` returns `lastSeenAt`: the marker **before** this visit (or
+  `null`). Cursor pages and every other tab return `null` (maintainer decision: the marker belongs to
+  "Para você" only). The front keeps the first page's value for the whole visit.
+- `FOR_YOU` pages are date windows (`GetFeedService.forYou`): the `limit` newest visible posts, cursor =
+  the oldest of them; the liked-topics boost reorders only inside the page.
+- `POST /api/feed/seen {seenUntil}` é um único upsert com `greatest(...)`: o marcador nunca volta, mesmo
+  com chamadas concorrentes ou fora de ordem, e o valor é limitado ao relógio do servidor (sem futuro).
+- Front: on "Para você", posts newer than `lastSeenAt` go first (newest first), then the divider, then
+  the rest in API order; `POST /api/feed/seen` with the newest `createdAt` once the person scrolls past it.
+
 ---
 
 ## 5. Profile (Perfil)
@@ -421,7 +465,7 @@ Implementa: `GetMeUseCase`, `GetUserProfileUseCase`, `UpdateProfileUseCase`
 | `populateCounts(UserProfile profile)` | Calcula e seta pontuação de reputação |
 | `search(String query)` | Busca perfis |
 | `getRanking(int limit)` | Top usuários por reputação |
-| `update(UpdateProfileCommand cmd)` | Atualiza campos do perfil |
+| `update(UpdateProfileCommand cmd)` | Atualiza campos do perfil, incluindo cidade/UF (`CityState`, os dois ou nenhum) e `showCity` (cidade no perfil público só por opção, padrão desligado) |
 
 ### ProfileExtensionService
 
@@ -527,7 +571,7 @@ Implementa: `ManageProfileExtensionUseCase`
 | `notifyConnectionRequest(String requesterId, String receiverId)` | Envia notificação de solicitação |
 | `acceptConnection(String userId, String requesterId)` | Aceita conexão pendente |
 | `removeConnection(String userId, String targetUserId)` | Remove/soft-delete conexão |
-| `getConnectionStatus(String userId, String targetUserId)` | Retorna status (PENDING, ACCEPTED, BLOCKED, NONE) |
+| `getConnectionState(String userId, String targetUserId)` | Retorna status (PENDING, ACCEPTED, REMOVED, BLOCKED, NONE) e `requestedByMe` (pedido pendente enviado por quem consulta) |
 | `getConnections(String userId)` | Conexões aceitas |
 | `getPendingRequests(String userId)` | Solicitações pendentes |
 | `countConnections(String userId)` | Conta conexões aceitas |
@@ -583,18 +627,29 @@ Implementa: `ManageProfileExtensionUseCase`
 
 **Arquivo**: `src/main/java/com/socialcoisa/rede/media/application/MediaService.java`
 
-Implementa: `CreateMediaUploadUseCase`, `GetMediaAssetUseCase`, `RequestMediaDeletionUseCase`, `RequestPostMediaDeletionUseCase`, `ValidateMediaOwnershipUseCase`
+Implementa: `CreateMediaUploadUseCase`, `GetMediaAssetUseCase`, `GetMediaSummariesUseCase`, `RequestMediaDeletionUseCase`, `RequestPostMediaDeletionUseCase`, `ValidateMediaOwnershipUseCase`
 
 | Função | Descrição |
 |---|---|
 | `createUpload(CreateMediaUploadCommand cmd)` | Cria contrato de upload (media_asset com status PENDING) |
-| `getMedia(String mediaId)` | Retorna metadados da mídia (URL do CDN) |
+| `getMedia(String mediaId)` | Retorna metadados da mídia (URL do CDN, `width`/`height`) |
+| `visibleByIds(Collection<String> mediaIds)` | `MediaSummaryView` (id, cdnUrl, mimeType, width, height) das mídias não removidas, por id, em UMA consulta. O feed (`GetFeedService.enrich`), publicar/editar/restaurar post e os posts de grupo chamam uma vez por página e preenchem `media` na ordem de `mediaIds` |
 | `requestDeletion(RequestMediaDeletionCommand cmd)` | Solicita deleção de uma mídia |
 | `requestPostMediaDeletion(UserId ownerId, PostId postId, List<String> mediaIds)` | Solicita deleção de mídias associadas a um post |
 | `validateOwnedBy(UserId userId, List<String> mediaIds)` | Valida que todas as mídias pertencem ao usuário |
 | `requestDeletion(MediaAsset media, PostId postId)` | Cria job de deleção interno |
 | `findMedia(String mediaId)` | Busca mídia ou lança 404 |
 | `validate(CreateMediaUploadCommand cmd)` | Valida parâmetros de upload (fileName, mimeType, sizeBytes) |
+
+### MediaDimensionsService / MediaDimensionsBackfillWorker
+
+**Arquivos**: `media/application/MediaDimensionsService.java`, `media/application/MediaDimensionsBackfillWorker.java`
+
+| Função | Descrição |
+|---|---|
+| `recordUploaded(MediaAsset, byte[])` | Chamado pelo `PUT /storage/{key}` com os bytes já limpos: lê largura/altura só do cabeçalho (`ImageDecoding.displayDimensions`, sem decodificar o bitmap) e grava. Só imagens; falha de leitura não derruba o upload (fica `null`) |
+| `backfill(int batchSize)` | Rodada do backfill: imagens no S3, não removidas, sem `width`, fora da janela de upload (1h) e com menos de 3 tentativas. Lê só o primeiro 1MB do objeto (Range); leitura que falha soma `dimension_attempts` |
+| `MediaDimensionsBackfillWorker.run()` | Agendado (`rede.media.dimensions.backfill.*`, ligado por padrão, lote 20, a cada 60s) |
 
 ### MediaDeletionWorker
 
@@ -608,11 +663,12 @@ Implementa: `CreateMediaUploadUseCase`, `GetMediaAssetUseCase`, `RequestMediaDel
 
 | Classe | Descrição |
 |---|---|
-| `MediaAsset` | Entidade: id, ownerId, fileName, mimeType, sizeBytes, purpose, objectKey, cdnUrl, status, deleteStatus |
-| `MediaStatus` | Enum: `PENDING`, `ACTIVE`, `EXPIRED`, `DELETED` |
+| `MediaAsset` | Entidade: id, ownerId, fileName, mimeType, sizeBytes, purpose, objectKey, cdnUrl, status, deleteStatus, width, height (pixels exibidos; V236), dimensionAttempts |
+| `MediaStatus` | Enum: `PENDING`, `READY`, `FAILED` (hoje todo asset fica `PENDING`: nenhum fluxo grava outro valor) |
 | `MediaDeleteStatus` | Enum: `NONE`, `REQUESTED`, `DELETED` |
 | `MediaDeletionJob` | Entidade: id, mediaId, postId, ownerId, status, attempts |
-| `MediaAssetView` | View: mediaId, cdnUrl, mimeType, status, purpose |
+| `MediaAssetView` | View de `GET /media/{id}`: id, ownerId, fileName, mimeType, size, purpose, objectKey, cdnUrl, status, deleteStatus, createdAt, expiresAt, deletedAt, width, height |
+| `MediaSummaryView` | Anexo embutido no post (`media`): id, cdnUrl, mimeType, width, height |
 | `MediaUploadView` | View: mediaId, cdnUrl, uploadUrl, status |
 
 ### Storage Gateways
@@ -656,11 +712,12 @@ Implementa: `CreateMediaUploadUseCase`, `GetMediaAssetUseCase`, `RequestMediaDel
 
 | Função | Descrição |
 |---|---|
-| `create(String name, String description, String topic, String cover, String createdBy)` | Cria comunidade com criador como ADMIN |
-| `update(String communityId, String name, String description, String topic, String cover, String userId)` | Atualiza comunidade (apenas ADMIN) |
+| `create(name, description, topic, cover, avatar, city, state, userId)` | Cria comunidade com criador como ADMIN; cidade/UF opcionais (os dois ou nenhum) |
+| `update(communityId, name, description, topic, cover, avatar, bannerHtml, city, state, userId)` | Atualiza comunidade (apenas o dono); cidade/UF ausentes mantêm, vazias limpam |
 | `join(String communityId, String userId)` | Usuário entra na comunidade como MEMBER |
 | `leave(String communityId, String userId)` | Usuário sai da comunidade; se ADMIN, transfere ou deleta |
-| `list(String topic, int limit)` | Lista comunidades, opcional filtro por tópico |
+| `list(topic, query, city, state, before, limit)` | Lista comunidades; filtros por tópico, texto e lugar (cidade sem acento via `city_key`) |
+| `listLocal(CityState viewerPlace, int limit)` | Comunidades da UF do perfil: mesma cidade primeiro, depois o estado, por membros; vazio sem cidade |
 | `getById(String communityId)` | Busca comunidade por ID |
 | `isMember(String communityId, String userId)` | Verifica se é membro |
 | `countMembers(String communityId)` | Conta membros |
@@ -676,7 +733,7 @@ Implementa: `CreateMediaUploadUseCase`, `GetMediaAssetUseCase`, `RequestMediaDel
 
 | Classe | Descrição |
 |---|---|
-| `Community` | Entidade: id, name, description, topic, cover, avatar, createdBy |
+| `Community` | Entidade: id, name, description, topic, cover, avatar, bannerHtml, place (`CityState`, opcional), createdBy |
 | `CommunityMember` | Entidade: communityId, userId, role |
 | `MemberRole` | Enum: `ADMIN`, `MODERATOR`, `MEMBER` |
 
@@ -686,7 +743,8 @@ Implementa: `CreateMediaUploadUseCase`, `GetMediaAssetUseCase`, `RequestMediaDel
 
 | Função | Rota |
 |---|---|
-| `communities(...)` | GET /api/communities |
+| `communities(...)` | GET /api/communities (`topic`, `q`, `city`, `state`, `cursor`) |
+| `local(...)` | GET /api/communities/local (sessão) |
 | `community(...)` | GET /api/communities/{communityId} |
 | `create(...)` | POST /api/communities |
 | `update(...)` | PATCH /api/communities/{communityId} |
@@ -745,18 +803,39 @@ Implementa: `CreateMediaUploadUseCase`, `GetMediaAssetUseCase`, `RequestMediaDel
 
 | Função | Descrição |
 |---|---|
-| `create(String title, String date, String time, String format, String host, String cover, String createdBy)` | Cria evento |
+| `create(title, date, time, format, host, cover, streamUrl, location, recurrence, city, state, userId)` | Cria evento (avulso ou ritual recorrente); cidade/UF opcionais, recusadas em evento `ONLINE` |
+| `changeRecurrence(String eventId, String recurrence, String userId)` | Liga/troca/desliga a recorrência da série (só o dono) |
+| `delete(String eventId, String userId, boolean admin)` | Apaga o evento; se for de uma série, encerra a série |
 | `attend(String eventId, String userId)` | Confirma presença |
 | `cancelAttendance(String eventId, String userId)` | Cancela presença |
-| `list(String format, int limit)` | Lista eventos com filtro de formato |
+| `list(format, city, state, before, limit, includePast, recurringOnly)` | Lista eventos com filtro de formato, de recorrência e de lugar (com `state`/`city`, só os não online daquele lugar) |
 | `getById(String eventId)` | Busca evento por ID |
 | `countAttendees(String eventId)` | Conta participantes |
+
+### EventRecurrenceService
+
+**Arquivo**: `src/main/java/com/socialcoisa/rede/events/application/EventRecurrenceService.java`
+
+Rituais: a ocorrência mais recente de uma série, depois de terminar, agenda a próxima uma única vez
+(`uk_events_series_date` em `(series_id, date)`) e avisa quem confirmou presença
+(`EVENT_NEXT_OCCURRENCE`). Presença não é copiada. A série para quando o dono sai da rede (conta
+excluída ou sancionada) ou o evento cai na moderação de texto. Cron por propriedade
+(`rede.events.recurrence.enabled|cron|zone`, padrão de hora em hora em `America/Sao_Paulo`).
+
+| Função | Descrição |
+|---|---|
+| `scheduledSpawn()` | Execução agendada (respeita `rede.events.recurrence.enabled`) |
+| `spawnNextOccurrences()` | Cria as próximas ocorrências; idempotente, cada série falha sozinha |
+| `nextOccurrenceDate(Event)` | Data da ocorrência seguinte (exposta como `nextOccurrenceDate`) |
+
+A ocorrência nova herda cidade/UF da anterior (o encontro segue no mesmo lugar e no filtro por cidade).
 
 ### Domain Objects
 
 | Classe | Descrição |
 |---|---|
-| `Event` | Entidade: id, title, date, time, format, host, cover, createdBy |
+| `Event` | Entidade: id, title, date, time, format, host, cover, streamUrl, location, place (`CityState`, opcional), createdBy, recurrence, seriesId |
+| `EventRecurrence` | `NONE`, `WEEKLY`, `BIWEEKLY`, `MONTHLY`; calcula a próxima data (mensal ancorada na 1ª ocorrência) |
 | `EventAttendee` | Entidade: eventId, userId |
 
 ### EventContractController
@@ -770,6 +849,7 @@ Implementa: `CreateMediaUploadUseCase`, `GetMediaAssetUseCase`, `RequestMediaDel
 | `create(...)` | POST /api/events |
 | `attend(...)` | POST /api/events/{eventId}/attendees |
 | `cancel(...)` | DELETE /api/events/{eventId}/attendees |
+| `changeRecurrence(...)` | PATCH /api/events/{eventId}/recurrence |
 
 ---
 
@@ -781,22 +861,50 @@ Implementa: `CreateMediaUploadUseCase`, `GetMediaAssetUseCase`, `RequestMediaDel
 
 | Função | Descrição |
 |---|---|
-| `create(String userId, String expertise, double price)` | Registra como mentor |
+| `create(String userId, String expertise, double price)` | Registra como mentor (com `meetingUrl` opcional) |
 | `update(String mentorId, String expertise, Double price)` | Atualiza perfil de mentor |
 | `createSlot(String mentorId, Instant startsAt, Instant endsAt)` | Cria horário disponível |
-| `scheduleSession(String mentorId, String menteeId, String slotId, String message)` | Agenda sessão de mentoria |
+| `scheduleSession(String mentorId, String menteeId, String slotId, String message)` | Agenda sessão; com `sparksPrice` o valor do mentorado vai para o escrow no ato (sem saldo, a inscrição falha e o horário continua livre) |
+| `completeSession(...)` / `cancelSession(...)` | Conclusão libera o escrow (−10% de taxa); cancelamento devolve integral |
+| `completeFinishedSessions()` | Worker de 5 min (e a leitura das duas agendas): sessão cujo horário terminou vira `COMPLETED` e sai das próximas — sem mexer no escrow |
+| `settleExpiredSessions()` | Worker horário: sete dias depois do fim do horário, libera o escrow sem depender da confirmação do mentor (também as sessões que o relógio já concluiu) |
 | `delete(String mentorId, String userId)` | Remove perfil de mentor |
 | `list(String expertise, int limit)` | Lista mentores, filtro por expertise |
 | `getById(String mentorId)` | Busca mentor por ID |
 | `getSlots(String mentorId)` | Lista horários do mentor |
+| `roomUrlFor(MentorSession)` | Sala da sessão como link da Epapo (só leitura; sem host configurado o link sai nulo, não derruba a lista) |
+| `mentorRoomSlug(Mentor)` | Slug da sala fixa, para o painel do mentor |
+
+### Salas da mentoria (Epapo)
+
+A sala é da Epapo, a mesma videoconferência das chamadas ([`CHAMADAS.md`](CHAMADAS.md)). O nome é
+derivado do id no servidor (`rede-mentoria-…` por sessão, `rede-mentor-…` na sala fixa), gravado na
+sessão quando ela é agendada e servido só a quem participa. Entrar é `POST /mentors/{id}/sessions/{sessionId}/join`:
+o backend confere o vínculo de mentor ou mentorado e devolve o link e um token emitido pelo gateway
+da Epapo. O gateway só assina depois de `POST /mentoring/{sessionId}/gateway/entry/{userId}`
+autorizar o mesmo participante com o segredo compartilhado — o segredo de assinatura nunca chega ao
+navegador. Gravação, transmissão e transcrição ficam desligadas no token.
+
+| Classe | Papel |
+|---|---|
+| `MentoringRooms` | Deriva as salas dos ids e monta o link (host de `REDE_MENTORING_ROOM_BASE_URL`, caindo no host das chamadas) |
+| `MentoringRoomAuthorization` | Quem entra em qual sala (participante da sessão) e o que o gateway confirma |
+| `MentoringTokenGateway` / `EpapoMentoringTokenGateway` | Porta e cliente do gateway da Epapo (`POST /auth/token`); não assina JWT |
+| `MentoringGatewayController` | Rota interna do gateway (`/mentoring/{id}/gateway/entry/{userId}`) |
+| `RoomMode` | `EPAPO_SESSION` (padrão), `EPAPO_PERMANENT` (sala fixa do mentor) ou `CUSTOM` (link externo do mentor, que abre em outra aba e não recebe token) |
+
+Links antigos do `meet.jit.si` e valores antigos de modo gravados no banco continuam sendo lidos e
+traduzidos (V242 renomeou `jitsi_room` para `room_slug`). O "entrar por telefone" (dial-in) saiu:
+era recurso do Jitsi público e não existe na Epapo.
 
 ### Domain Objects
 
 | Classe | Descrição |
 |---|---|
-| `Mentor` | Entidade: user, expertise, rating, sessionsCount, price |
+| `Mentor` | Entidade: user, expertise, rating, sessionsCount, price, meetingUrl (sala externa https opcional), roomMode + roomSlug (sala fixa da Epapo), sparksPrice (milésimos de faísca por sessão; null = não aceita faíscas) |
 | `MentorSlot` | Entidade: mentor, startsAt, endsAt, available |
-| `MentorSession` | Entidade: mentor, mentee, slot, message, status |
+| `MentorSession` | Entidade: mentor, mentee, slot, message, status, priceSparks (valor retido no escrow), settledAt (quando o valor foi pago/devolvido; null = ainda no escrow), roomMode + roomSlug congelados no agendamento |
+| `MentorAvailability` | Regra semanal: mentorId, dayOfWeek (1=segunda..7=domingo), timeOfDay ("HH:mm") |
 | `SessionStatus` | Enum: `SCHEDULED`, `COMPLETED`, `CANCELLED` |
 
 ### MentoringContractController
@@ -808,11 +916,19 @@ Implementa: `CreateMediaUploadUseCase`, `GetMediaAssetUseCase`, `RequestMediaDel
 | `mentors(...)` | GET /api/mentors |
 | `mentor(...)` | GET /api/mentors/{mentorId} |
 | `slots(...)` | GET /api/mentors/{mentorId}/slots |
-| `create(...)` | POST /api/mentors |
+| `create(...)` | POST /api/mentors (aceita `sparksPrice` em milésimos de faísca) |
 | `update(...)` | PATCH /api/mentors/{mentorId} |
 | `delete(...)` | DELETE /api/mentors/{mentorId} |
 | `createSlot(...)` | POST /api/mentors/{mentorId}/slots |
 | `session(...)` | POST /api/mentors/{mentorId}/sessions |
+| `sessions(...)` | GET /api/mentors/{mentorId}/sessions — agenda do mentor (só o dono): quem se inscreveu, horário, mensagem e status; sessão cujo horário terminou volta como `COMPLETED` |
+| `availability(...)` | GET /api/mentors/{mentorId}/availability — regras semanais do dono (dia 1..7 + horários HH:mm) |
+| `saveAvailability(...)` | PUT /api/mentors/{mentorId}/availability — substitui as regras, gera horários por 28 dias (fuso America/Sao_Paulo, duração 60 min) e retira horários livres que saíram das regras; horário reservado nunca é tocado |
+| `mySessions(...)` | GET /api/mentors/sessions/mine — o que EU agendei: mentor, horário, valor retido, status e sala; sessão cujo horário terminou volta como `COMPLETED` |
+| `completeSession(...)` | POST /api/mentors/{mentorId}/sessions/{sessionId}/complete — só o dono; libera o escrow para o mentor menos os 10% da plataforma |
+| `cancelSession(...)` | POST /api/mentors/{mentorId}/sessions/{sessionId}/cancel — reembolso integral; o mentorado cancela até o horário começar, o mentor até a conclusão; horário futuro volta para a agenda |
+| `room(...)` | GET /api/mentors/{mentorId}/room — modo da sala, link e slug para o painel do mentor |
+| `join(...)` | POST /api/mentors/{mentorId}/sessions/{sessionId}/join — só participante: devolve `roomUrl` + `jwt` (Epapo) ou o link externo sem token (`CUSTOM`); `503` se a Epapo não estiver configurada |
 
 ---
 
@@ -825,8 +941,9 @@ Implementa: `CreateMediaUploadUseCase`, `GetMediaAssetUseCase`, `RequestMediaDel
 | Função | Descrição |
 |---|---|
 | `createConversation(String kind, String title, String createdBy, List<String> participantIds)` | Cria conversa com participantes |
-| `sendMessage(String conversationId, String senderId, String text)` | Envia mensagem, notifica participantes |
-| `markRead(String conversationId, String userId)` | Marca conversa como lida para o usuário |
+| `sendMessage(String conversationId, String senderId, String text)` | Envia mensagem e notifica os participantes que não estão com a conversa aberta: uma notificação contada por conversa (grupo `conversation:{id}`) e um push por mensagem com `tag` = o grupo, que substitui o anterior no aparelho |
+| `markRead(String conversationId, String userId)` | Marca conversa como lida para o usuário, junto com as notificações que apontam para ela |
+| `viewing(String conversationId, String userId)` / `leftConversation(...)` | Conversa aberta na tela / saiu da tela (`ConversationViewers`, em memória, TTL 45s) |
 | `listConversations(String userId)` | Lista conversas do usuário |
 | `isParticipant(String conversationId, String userId)` | Verifica se é participante |
 | `getConversation(String conversationId)` | Busca conversa por ID |
@@ -860,6 +977,8 @@ Implementa: `CreateMediaUploadUseCase`, `GetMediaAssetUseCase`, `RequestMediaDel
 | `hideMessages(...)` | POST /api/conversations/{conversationId}/messages/hide |
 | `send(...)` | POST /api/conversations/{conversationId}/messages |
 | `read(...)` | POST /api/conversations/{conversationId}/read |
+| `viewing(...)` | POST /api/conversations/{conversationId}/viewing |
+| `leftConversation(...)` | DELETE /api/conversations/{conversationId}/viewing |
 | `create(...)` | POST /api/conversations |
 | `reactToMessage(...)` | POST /api/conversations/{conversationId}/messages/{messageId}/reactions |
 | `listMessageReactions(...)` | GET /api/conversations/{conversationId}/messages/{messageId}/reactions |
@@ -878,9 +997,21 @@ inválidas são rejeitadas integralmente. A operação exige autenticação e ch
 | Função | Descrição |
 |---|---|
 | `create(String userId, String kind, String actorId, String title, String body, String href, String ctaLabel)` | Cria notificação |
+| `createGrouped(userId, kind, groupKey, actorId, title, body, groupedBody, href, ctaLabel)` | Agrupa com a notificação NÃO lida do mesmo alvo (`groupKey`): a pessoa mais recente lidera, `actorCount` cresce (a mesma pessoa não conta duas vezes), o texto vira "Ana e mais 14 pessoas reagiram ao seu post." e ela volta ao topo; com mais de uma pessoa o `href` vira o do agrupado (no post: `?reacoes=1`, que abre a lista de quem reagiu). Só a primeira gera push. Depois de lida, a próxima reação abre outra. Usado em `NEW_REACTION` (`NEW_REACTION:post:{id}`) e `COMMENT_REACTION` (`COMMENT_REACTION:comment:{id}`); colunas `group_key` e `actor_count` (V220). A API devolve `actorCount`. |
+| `createCounted(userId, kind, groupKey, actorId, title, body, countedBody, href, ctaLabel)` | Como `createGrouped`, mas toda chamada conta (não só pessoa nova): a notificação NÃO lida do `groupKey` vira "3 novas publicações em X" (`countedBody` do novo total), volta ao topo e não gera push; `actorCount` guarda o número de eventos. Depois de lida, a próxima abre outra. Usado em `GROUP_NEW_POST` (`GROUP_NEW_POST:group:{id}`). |
 | `markRead(String notificationId, String userId)` | Marca como lida |
 | `markAllRead(String userId)` | Marca todas como lidas |
 | `list(String userId, int limit)` | Lista notificações |
+| `unreadSummary(userId, context, hiddenActorIds)` | Unread count per area (`NotificationModule`) and per community (`byCommunity`), from one `GROUP BY kind, actor, href` query over the unread rows (hidden actors, messages and connection requests are dropped, hrefs resolved by `NotificationPlaces`), plus `eventsToday` (0 in the professional context) |
+
+### NotificationPlaces
+
+**Arquivo**: `src/main/java/com/socialcoisa/rede/notifications/application/NotificationPlaces.java`
+
+| Função | Descrição |
+|---|---|
+| `resolve(hrefs)` | Read-time enrichment by href: `place` (community or group) and `eventDate`. `NotificationTarget.of(href)` reads `/comunidades/{id}`, `/api/feed/posts/{id}`, `/grupos/{slug}` and `/eventos?evento={id}`; `NotificationPlaceRepository` (plain SQL over the communities, posts, groups and events tables, like the weekly digest) runs one query per kind of target for the whole set. Deleted communities and events and closed groups resolve to null |
+| `eventsToday(userId)` | Confirmed events (`WeeklyDigestRepository.attendingEvents`) whose date is today in America/Sao_Paulo |
 
 ### NotificationOutboxEventHandler
 
@@ -905,9 +1036,22 @@ inválidas são rejeitadas integralmente. A operação exige autenticação e ch
 
 | Função | Rota |
 |---|---|
-| `notifications(...)` | GET /api/notifications |
+| `notifications(...)` | GET /api/notifications (each item has `module` from `NotificationModule.of(kind)`, plus `place` and `eventDate` from `NotificationPlaces`) |
 | `read(...)` | POST /api/notifications/{notificationId}/read |
 | `readAll(...)` | POST /api/notifications/read-all |
+| `unreadSummary(...)` | GET /api/notifications/unread-summary |
+
+### Preferências e resumo semanal
+
+Detalhes em [`DIGEST.md`](DIGEST.md).
+
+| Classe | Descrição |
+|---|---|
+| `NotificationCategory` | Mapa único kind → categoria de push (`ALWAYS` para segurança/moderação/sanção) |
+| `NotificationModule` | Single kind → interface area mapping (menu indicators); case-insensitive, unknown kinds are `OTHER` |
+| `NotificationPreferenceService` | Lê/grava as preferências (`notification_preferences`); `allowsPush(userId, kind)` |
+| `NotificationPreferenceController` | GET/PUT /api/me/notification-preferences, GET /api/notifications/digest/unsubscribe |
+| `WeeklyDigestService` | Agendamento, conteúdo, envio único por semana ISO e token de descadastro |
 
 ---
 
@@ -954,18 +1098,30 @@ inválidas são rejeitadas integralmente. A operação exige autenticação e ch
 | Função | Descrição |
 |---|---|
 | `report(String reporterId, String targetType, String targetId, String reason, String description)` | Cria report de conteúdo |
-| `approve(String reportId, String reviewerId)` | Aprova report, deleta post alvo (soft-delete) |
+| `approve(String reportId, String reviewerId, String note)` | Aprova report e remove o alvo quando é post ou comentário do feed (soft-delete) |
+| `ban(String reportId, String reviewerId, AuthSessionRepository sessions)` | Remove o alvo (post ou comentário), bane o autor e revoga as sessões |
 | `dismiss(String reportId, String reviewerId)` | Rejeita report |
 | `listPending(int limit)` | Lista reports pendentes |
+
+**Remoção do alvo confirmado** (`ReportedContentRemover`): aprovar, penalizar (IA ou voto de
+moderadores) e banir removem o conteúdo denunciado pelo mesmo caminho. Post sai por
+`ModerationRemovePostUseCase`; comentário do feed sai por `ModerationRemoveCommentUseCase`
+(`DeleteCommentService.removeAsModerator`): status `DELETED`, some das listas, o contador de
+comentários do post devolve a unidade, o aceite de resposta é desfeito e a ação vai para o audit log
+(`COMMENT_DELETED_BY_MODERATION`). A linha fica (soft-delete) para a revisão da denúncia, o recurso e a
+contagem de fatos confirmados da reputação. Respostas ao comentário removido continuam no ar; o
+front as mostra como comentário de primeiro nível. Os demais alvos (perfil, vaga, jogo, grupo,
+mensagem) não têm remoção automática: o time age no módulo do alvo. A limpeza de banimento
+(`BanCleanupService`) remove os comentários do banido pelo mesmo caso de uso.
 
 ### Domain Objects
 
 | Classe | Descrição |
 |---|---|
 | `Report` | Entidade: id, reporterId, targetType, targetId, reason, description, status |
-| `ReportReason` | Enum: `SPAM`, `INAPPROPRIATE`, `ABUSIVE`, `MISINFORMATION`, `COPYRIGHT`, `OTHER` |
-| `ReportStatus` | Enum: `PENDING`, `APPROVED`, `DISMISSED` |
-| `TargetType` | Enum: `POST`, `COMMENT`, `USER`, `COMMUNITY`, `JOB`, `EVENT` |
+| `ReportReason` | Enum: `AI_GENERATED`, `FAKE_CONTENT`, `SCAM`, `DISCRIMINATION`, `PREJUDICE`, `HARASSMENT`, `SPAM`, `VIOLENCE`, `SEXUAL_CONTENT`, `COPYRIGHT`, `OTHER` |
+| `ReportStatus` | Enum: `PENDING`, `AUTO_PENALIZED`, `APPROVED`, `DISMISSED` |
+| `TargetType` | Enum: `POST`, `COMMENT`, `USER`, `JOB`, `GAME`, `GROUP_POST`, `GROUP_COMMENT`, `MESSAGE` |
 
 ### ReportController
 
@@ -977,6 +1133,33 @@ inválidas são rejeitadas integralmente. A operação exige autenticação e ch
 | `listPending(...)` | GET /api/admin/reports |
 | `approve(...)` | POST /api/admin/reports/{reportId}/approve |
 | `dismiss(...)` | POST /api/admin/reports/{reportId}/dismiss |
+
+### SanctionService (fila de penalidades do admin)
+
+**Arquivo**: `src/main/java/com/socialcoisa/rede/moderation/application/SanctionService.java`
+
+Correção manual de penalidades aplicadas erradas: o admin lista quem está penalizado, remove a
+sanção (conta liberada, denúncia de origem descartada) ou corrige o tipo/motivo sem remover.
+Rebaixar um ban libera o login de volta — o conteúdo purgado pelo ban não volta.
+
+| Função | Rota |
+|---|---|
+| `adminSanctions(status, limit)` | GET /api/admin/sanctions?status=ACTIVE\|REMOVED |
+| `revokeSanction(adminId, sanctionId, reason)` | POST /api/admin/sanctions/{sanctionId}/revoke |
+| `editSanction(adminId, sanctionId, type, reason)` | POST /api/admin/sanctions/{sanctionId}/edit |
+
+### ContentQuarantineReviewService
+
+**Arquivo**: `src/main/java/com/socialcoisa/rede/moderation/application/ContentQuarantineReviewService.java`
+
+Fila de revisão do que a barreira de conteúdo automatizado tirou do ar. Liberar devolve o post ao
+ar; remover apaga o post. Nenhuma das duas pune a conta. Ver `docs/MODERACAO-CONTEUDO.md`.
+
+| Função | Rota |
+|---|---|
+| `pending(limit)` | GET /api/moderation/quarantine |
+| `release(reviewerId, postId)` | POST /api/moderation/quarantine/{postId}/release |
+| `remove(reviewerId, postId)` | POST /api/moderation/quarantine/{postId}/remove |
 
 ---
 
@@ -1100,6 +1283,52 @@ integração com issues do GitHub e log de e-mails no painel.
 | `GET /admin/support/github` / `PUT /admin/support/github` / `POST /webhooks/github` | Integração de issues (espelho, comentários e estado) |
 | `GET /admin/emails` | Log de metadados de e-mails enviados (sem conteúdo de 2FA) |
 
+### 22.1 Suggestions (Sugestões da comunidade)
+
+Separado do suporte. A pessoa escolhe o destino (`BACKEND`, `FRONTEND` ou `DESIGN_SYSTEM`) e envia
+título + texto. A sugestão nasce `PENDING`; um moderador aprova e só então o app abre uma issue
+**pública** no repositório do destino. A issue leva apenas o título e o texto (menções `@` são
+quebradas para não notificar ninguém): nome, e-mail e id de quem sugeriu nunca vão junto, e a tabela
+`suggestions` nem guarda e-mail de contato. Limite de 5 sugestões por pessoa em 24h.
+
+A aprovação é reivindicada de forma atômica (`PENDING` -> `PUBLISHED`) antes de falar com o GitHub:
+duas aprovações simultâneas não abrem duas issues, e falha do GitHub devolve a sugestão para a fila.
+
+#### Configuração e operação
+
+**Token.** As sugestões usam o **mesmo token das issues do suporte**, para a equipe ter um token de
+issues só e uma rotação só. Ele fica cifrado no banco e é trocado em `/admin/support/github` (só
+admin), sem reiniciar o pod; o módulo lê o valor a cada chamada. Não existe secret nem variável de
+token próprios das sugestões. Os outros tokens GitHub do projeto não servem para isso:
+`GITHUB_CONTRIBUTIONS_TOKEN` (selos) é somente leitura e `GITOPS_TOKEN` é do repositório de deploy.
+
+Como esse token também enxerga o repositório privado de suporte, o que sai para a issue pública é
+só título e texto da sugestão (nunca nome, e-mail ou id), e o token **precisa de escrita em Issues
+em cada repositório de destino**. Um token fine-grained limitado ao repositório de suporte devolve
+erro do GitHub e a aprovação responde 502 (a sugestão volta para a fila).
+
+**Repositórios de destino** (variáveis de ambiente; vêm do deploy como `vars` do GitHub Actions
+`SUGGESTIONS_REPO_*`):
+
+| Variável | Descrição |
+|---|---|
+| `GITHUB_SUGGESTIONS_REPO_BACKEND` / `_FRONTEND` / `_DESIGN_SYSTEM` | Repositório de cada destino, no formato `dono/nome` |
+
+Destino sem repositório (ou com formato inválido) fica desligado: a aprovação responde 503 e a
+sugestão continua pendente. Sem token do suporte configurado, todos os destinos ficam desligados.
+
+**QA e produção usam os mesmos repositórios.** Aprovar uma sugestão na QA abre uma issue pública de
+verdade nos repositórios oficiais; aprove na QA só o que pode ficar público.
+
+**Falhas comuns na aprovação:** 503 = destino sem repositório ou token do suporte ausente; 502 = o
+GitHub recusou (token sem escrita em Issues naquele repositório, token expirado ou GitHub fora do ar).
+Em ambos a sugestão continua `PENDING` e pode ser aprovada de novo depois de corrigir.
+
+| Rota | Descrição |
+|---|---|
+| `POST /suggestions` / `GET /suggestions/mine` | Enviar sugestão / minhas sugestões (com o link da issue após aprovação) |
+| `GET /admin/suggestions` / `POST /admin/suggestions/{id}/approve` / `POST /admin/suggestions/{id}/reject` | Fila, aprovar e publicar, rejeitar (equipe de moderação) |
+
 ## 23. Ops (Monitoramento e operação)
 
 Painel de monitorabilidade: KPIs de tráfego, latência, recursos do pod, pool do banco, e a lista de
@@ -1109,6 +1338,7 @@ eventos/logs/erros. Documentação completa em [`MONITORAMENTO.md`](MONITORAMENT
 |---|---|
 | `GET /admin/monitoring/overview` | KPIs, séries por minuto, recursos, eventos recentes |
 | `GET /admin/monitoring/events` | Lista de eventos com filtros (nível, tipo, busca, **intervalo de data/hora**, paginação por cursor) |
+| `GET /admin/monitoring/users` | Contas da comunidade: total, entradas por dia (30 dias), crescimento diário e projeções |
 | `GET /admin/emails` | Log de e-mails enviados |
 
 O painel de log aceita "mostrar mais", cópia individual e cópia completa, e o modo pânico (chave de
@@ -1124,8 +1354,8 @@ Temas da galeria (criados pela comunidade, instaláveis com um clique) e cosmét
 | `GET /temas/galeria` / `.../mine` / `.../{themeId}` | Galeria pública / meus temas / detalhe |
 | `POST /temas/galeria` / `.../install` / `.../hide` / `.../report` | Publicar, instalar, ocultar, denunciar |
 | `GET /cosmetics/catalog` / `.../mine` | Community cosmetics catalog, my items |
-| `GET /loja` / `/loja/colecoes` | Native shop catalog / seasonal collections and looks |
-| `POST /loja/{itemId}/comprar` / `.../equipar` / `.../desequipar`, `POST /loja/looks/{lookId}/comprar` | Buy, equip, unequip, buy a look |
+| `GET /loja` / `/loja/colecoes` | Native shop catalog / collections (seasonal and the permanent `essenciais` and `aparencias`) with their looks |
+| `POST /loja/{itemId}/comprar` / `.../equipar` / `.../desequipar`, `POST /loja/looks/{lookId}/comprar` / `.../equipar` / `.../desequipar` | Buy, equip, unequip, buy, wear and take off a look |
 | `PUT /me/status` | Profile status bubble |
 | `GET`/`POST /eventos/saci-halloween`, `/eventos/caca-saci` | Free cosmetic events (duel, hunt) |
 | `PUT /cosmetics/profile/name-style` | Estilo do nome no perfil e em todo lugar onde o nome aparece |
@@ -1146,6 +1376,20 @@ Notificações push no navegador (VAPID): inscrição, cancelamento e configura�
 |---|---|
 | `GET /push/config` | Chave pública VAPID |
 | `POST /push/subscriptions` / `DELETE /push/subscriptions` | Inscrever / cancelar dispositivo |
+
+`PushNotificationListener` espelha cada notificação criada como push depois do commit, **exceto** quando
+a pessoa desligou a categoria do kind (`NotificationPreferenceService.allowsPush`). A notificação
+in-app é criada do mesmo jeito; segurança, moderação e sanção sempre viram push. Ver [`DIGEST.md`](DIGEST.md).
+
+Push payload (JSON, encrypted per device by `WebPushSender`):
+
+```json
+{ "title": "...", "body": "...", "url": "/feed", "notificationId": "notification_..." }
+```
+
+`url` falls back to `/feed` when the notification has no `href`. `notificationId` is the notification
+the push mirrors (for a grouped one, the group row; only the first of a group pushes), so the app can
+call `POST /api/notifications/{notificationId}/read` when the push is opened.
 
 ## 27. Gifs (Busca de GIFs)
 
@@ -1175,12 +1419,57 @@ corporativo do usuário (importável do LinkedIn).
 
 | Rota | Descrição |
 |---|---|
-| `GET /empresas` / `GET /empresa/{slug}` / `GET /empresas/mine` | Catálogo (derivado de vagas), página, minhas |
-| `POST /empresas` / `PATCH /empresas/{companyId}` / `.../members` | Criar, editar, membros |
+| `GET /empresas` / `GET /empresa/{slug}` / `GET /empresas/mine` | Páginas criadas, página, as páginas de que a pessoa faz parte (qualquer papel) |
+| `POST /empresas` / `PATCH /empresas/{companyId}` / `.../members` | Criar, editar, membros (a lista da equipe só para quem é da equipe; cada membro vem com `person`) |
+| `GET /empresas/diretorio` / `GET /empresas/setores` | Public directory (pages, names on internal jobs, names on external jobs) / sectors of active pages |
+| `POST /empresas/{companyId}/follow` / `DELETE .../follow` | Follow / unfollow a page (idempotent; team members can follow too) |
 | `GET /microprojetos` / `POST /empresas/{companyId}/microprojetos` | Catálogo / criar microprojeto |
 | `POST /microprojetos/{projectId}/proposals` / `.../complete` / `.../select` | Propostas, concluir, selecionar |
+| `PUT /microprojetos/{projectId}` / `DELETE /microprojetos/{projectId}` | Editar ou remover da vitrine projeto aberto sem candidaturas (EDITOR ou superior); remoção preserva o histórico |
+| `GET /microprojetos/{projectId}` | Projeto; as propostas (com `person`) só para quem gerencia a página (EDITOR ou acima) |
 | `POST /me/business-profile` / `.../import` / `.../activate` | Perfil corporativo, importar, ativar |
 | `POST /me/business-profile/username` | Troca o nametag (o `@` e o fim de `/profissional/{nametag}`) |
+
+Na página (`GET /empresa/{slug}`) cada microprojeto traz `myProposal` (o status da proposta de
+quem vê, ou nulo) e, para quem gerencia a página, `proposalCount`.
+
+The page also carries `jobs` (up to 20 open jobs linked to it), `stats` (`openProjects`,
+`completedProjects`, `openJobs`, `followers`), `following` (false for visitors), `reviews` (latest
+6) and `canPropose` (`SIGN_IN`, `TEAM`, `PROFESSIONAL_REQUIRED` or `OK`).
+
+**People.** Members, proposals and reviews carry a `person`
+`{ id, username, name, headline, avatar, identity, href }`: the account's ACTIVE professional
+profile (`identity: CORPORATE`, `href: /profissional/{username}`), or the social profile
+(`SOCIAL`, `/perfil/{username}`) only when the account has no active professional profile.
+
+**Proposals.** Sending one requires an active professional profile (403
+`NO_ACTIVE_CORPORATE_PROFILE`). It opens (or reuses) a professional conversation between the
+proposer and the page owner (kind `FREELANCE`, titled `Microprojeto: {title}`), posts the proposal
+in it and stores the conversation id on the proposal (`conversationId`, in the response and in
+the team's proposal list). Blocked pairs get 403 `USER_BLOCKED`.
+
+**Completing with a review.** `POST /microprojetos/{id}/complete` takes an optional
+`{ rating: 1..5, text?: up to 500 }`; it becomes the page's one review of the selected
+professional (`micro_project_reviews`, one row per project). A rating outside 1..5, or a text
+without a rating, is 400 `INVALID_RATING`.
+
+**Directory.** Entries are `{ kind, slug, name, logo, sector, location, openJobs, openProjects,
+followers }`. `PAGE` = an active page (counts from grouped reads, no per-page query). `JOBS` = open
+internal jobs not linked to a page whose name (case-insensitive) no active page has; `slug` null.
+`EXTERNAL` = external job names that no page has; when the same name also has internal jobs, the
+counts add up in that one `JOBS` entry. Order: `openJobs + openProjects` desc, then pages first,
+then name. `query` matches the name (case-insensitive); `sector` filters pages only, so a sector
+filter returns pages alone.
+
+**Jobs linked to a page.** `jobs.company_id` (V219). `POST /jobs` accepts `companyId`: the poster
+must be RECRUITER or above on that page (403 otherwise) and the job takes the page name and logo.
+Editing keeps the link and the page name. Job views (list and detail) carry `companySlug` (null
+when not linked). V219 linked existing jobs only when the poster is a member of an active page with
+the same name; a name match alone never links.
+
+**Followers are told.** Publishing a microproject or a linked job notifies the page followers
+(except the publisher) with kind `COMPANY_NEW_OPPORTUNITY` (professional context, push category
+JOBS), linking to `/empresa/{slug}`.
 
 O **nametag** do perfil profissional vive em namespace próprio (índice único no banco) e é
 independente do `@` social: a mesma conta pode ser `aminadojava` no social e `melsantos` no
@@ -1243,6 +1532,7 @@ publish.
 | Rota | Descrição |
 |---|---|
 | `GET /blogs/{slug}` | Blog público |
+| `GET /blogs/{slug}/feed.xml` | Feed Atom do blog (público, sem sessão nem `Origin`) |
 | `POST /me/posts` / `PATCH /me/posts/{postId}` / `DELETE /me/posts/{postId}` | Publicar, editar, excluir |
 | `POST /{slug}/subscription` / `DELETE /{slug}/subscription` | Assinar / cancelar assinatura |
 
@@ -1284,3 +1574,91 @@ backend — era o CDN do FFZ que deixava metade da grade vazia (30% de falha, ti
 | `GET /emotes/image/{provider}/{id}?variant=thumb\|full` | Imagem com cache em memória |
 
 Todas são leitura pública. Documentação detalhada em [`FIGURINHAS.md`](FIGURINHAS.md).
+
+## 38. Onboarding (primeira entrada)
+
+Conta nova sai da confirmação de e-mail para um feed vazio; o onboarding sugere por onde começar
+(comunidades, grupos abertos e pessoas) e aplica o que a pessoa escolheu. `users.onboarding_completed_at`
+(V210) marca o fim, concluído ou pulado; contas que já existiam na V210 foram marcadas como
+concluídas. O estado sai em `onboardingCompleted` de `/auth/me`.
+
+O ranking do pacote fica no SQL (`JdbcStarterPackAdapter`): o que casa primeiro, o popular depois.
+As escritas passam pelos serviços da ação manual (`CommunityService.join`, `GroupService.join` só
+para grupo `OPEN`, `NetworkService.requestConnection`), com tetos baixos para ser escolha de pessoa,
+não automação. `complete` não é uma transação única: cada entrada confirma sozinha e a repetição
+pula o que já existe.
+
+| Rota | Descrição |
+|---|---|
+| `GET /me/onboarding/starter-pack` | Sugestões (até 6 comunidades, 6 grupos, 8 pessoas) |
+| `POST /me/onboarding/complete` | Aplica as escolhas e marca como concluído |
+| `POST /me/onboarding/skip` | Marca como concluído sem mudanças |
+
+Arquivos: `OnboardingController`, `OnboardingService`, `StarterPackReader`, `JdbcStarterPackAdapter`.
+
+## 39. StudyPairs (Par de estudo)
+
+Duas pessoas com o mesmo objetivo de estudo e um check-in por semana. O pedido fica aberto até
+aparecer alguém com o mesmo objetivo normalizado (`StudyGoal.key`: minúsculo, sem acento); o mais
+antigo na fila casa primeiro. Só adultos com data de nascimento declarada e e-mail confirmado;
+bloqueio ou silenciamento em qualquer sentido impede o par e, depois do par, o encerra em silêncio. Até 2 pares ativos
+e 1 pedido aberto por pessoa. Desativável pela chave `STUDY_PAIRS` em `disabledModules` (pedido pausado, sem lembrete). Lembrete semanal (quinta, 18h de Brasília) só para quem ainda não fez
+o check-in da semana, reivindicado em `study_pair_reminders` (seguro com várias réplicas).
+
+| Classe | Papel |
+|---|---|
+| `StudyPairService` | Pedido e casamento (reivindicação atômica do pedido da fila), check-in, encerramento, lembrete, objetivos populares |
+| `StudyPairReminderScheduler` | Dispara o lembrete pelo cron `rede.study-pairs.reminder-cron` |
+| `StudyPairPersistenceAdapter` | SQL direto nas tabelas `study_pair_requests`, `study_pairs`, `study_checkins`, `study_pair_reminders` (V216) |
+| `StudyPairController` | Rotas `/study-pairs/**` |
+
+Detalhes e contrato em [`STUDY_PAIRS.md`](STUDY_PAIRS.md).
+
+## 40. ReleaseNotes (Novidades)
+
+The "O que há de novo no Énóis" popup: admins publish a short list of plain text items from the
+panel and the front shows it once per release. Separate from the admin notice (`notices/`), which is
+sanitized HTML for a banner/modal. A single row in `release_note` (V225, fixed id `ativo`) with the
+items as a JSON array; publishing replaces it, keeping `publishedAt` and bumping `updatedAt` (the
+version key the front uses).
+
+| Route | Description |
+|---|---|
+| `GET /novidades/atual` | Public read; `204` when nothing is published |
+| `PUT /admin/novidades` | Publish or replace (admin) |
+| `DELETE /admin/novidades` | Take it down (admin) |
+
+Validation: 1 to 8 items, title up to 80 and description up to 240 characters, both required after
+trim and `PlainText.defuse`. Contract in [`API.md`](API.md#release-notes-o-que-há-de-novo-no-énóis).
+
+Files: `ReleaseNoteController`, `ReleaseNoteService`, `ReleaseNoteRepository`,
+`ReleaseNotePersistenceAdapter`, `ReleaseNoteJpaEntity`.
+
+## 41. Calls (Chamadas de áudio/vídeo)
+
+1:1 na conversa e "Tamo junto" no grupo, com o painel embutido no app. O servidor decide tudo:
+quem pode começar (participante da conversa, membro do grupo), quem pode entrar (conferido no
+vínculo a cada pedido e no `POST /calls/{id}/join`), em que estado a chamada está e quando vence.
+O nome da sala é um UUID gerado no servidor. A entrada usa um JWT HS256 emitido pelo *auth gateway*
+da Epapo (o Jitsi próprio da rede, com `AUTH_TYPE=jwt`), e esse gateway **só assina depois** de o
+Énóis autorizar quem entra em qual chamada. Gravação, transmissão, chamada externa e transcrição vão
+desligadas no próprio token.
+
+| Classe | Papel |
+|---|---|
+| `CallService` | Começar, atender, recusar, cancelar, entrar, sair, encerrar, falhar, expirar |
+| `CallSession` / `CallState` | Agregado e máquina de estados fechada |
+| `CallAudience` | Autorização pelo vínculo (conversa/grupo) |
+| `CallRoomAuthorization` | Porta do gateway: chamada pela sala e autorização de entrada |
+| `EpapoMeetingTokenIssuer` | Cliente do gateway da Epapo (`POST /auth/token`); não assina JWT |
+| `CallGatewayController` | Rotas internas do gateway (`/calls/rooms/{room}`, `/calls/{id}/gateway/entry/{userId}`) |
+| `CallExpiryWorker` | 1:1 sem resposta (40s → `MISSED`), grupo vazio (5 min → `FAILED`), abandono (30 min) |
+| `CallPersistenceAdapter` | Transições condicionais em `call_sessions`/`call_participants` (V240) |
+| `CallController` | Rotas `/calls/**` e `/{conversation,group}/{id}/calls` |
+| `CallReportService` / `CallReportController` | Denúncia da sala: quem entrou pode ser apontado; contexto em `call_reports` (V241) |
+
+Denúncia de chamada entra na moderação como alvo `CALL`, com a captura do momento (propósito
+`REPORT_CAPTURE`, servida só a moderadores) e o relato. A triagem por IA lê tudo e **não penaliza
+sozinha** esse alvo: penalidade e banimento são decisão humana no painel de revisão.
+
+Detalhes, escolha de infraestrutura e contrato em [`CHAMADAS.md`](CHAMADAS.md).

@@ -71,6 +71,16 @@ public class Company {
 			ownerUserId, status, createdAt, now);
 	}
 
+	/** Pagina fechada: sai do diretorio e do perfil; o historico (vagas, projetos) fica ligado. */
+	public Company close(Instant now) {
+		return new Company(id, slug, name, description, sector, size, location, website, logo, cover,
+			ownerUserId, CompanyStatus.CLOSED, createdAt, now);
+	}
+
+	public boolean active() {
+		return status == CompanyStatus.ACTIVE;
+	}
+
 	public Company transferOwnership(String newOwnerId, Instant now) {
 		return new Company(id, slug, name, description, sector, size, location, website, logo, cover, newOwnerId,
 			status, createdAt, now);

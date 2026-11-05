@@ -1,7 +1,11 @@
 package com.socialcoisa.rede.blog.adapters.in.web;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -44,18 +48,24 @@ class BlogController {
 	private final com.socialcoisa.rede.blog.application.BlogNewsletterService newsletter;
 	private final CurrentUserResolver currentUserResolver;
 	private final IdempotencyApplicationService idempotency;
+	private final String frontendUrl;
+	private final Clock clock;
 
 	BlogController(BlogService blogService, com.socialcoisa.rede.blog.application.BlogNewsletterService newsletter,
-			CurrentUserResolver currentUserResolver, IdempotencyApplicationService idempotency) {
+			CurrentUserResolver currentUserResolver, IdempotencyApplicationService idempotency,
+			@Value("${rede.frontend.url}") String frontendUrl, Clock clock) {
 		this.blogService = blogService;
 		this.newsletter = newsletter;
 		this.currentUserResolver = currentUserResolver;
 		this.idempotency = idempotency;
+		this.frontendUrl = frontendUrl.endsWith("/") ? frontendUrl.substring(0, frontendUrl.length() - 1) : frontendUrl;
+		this.clock = clock;
 	}
 
 	@GetMapping
-	List<BlogSummaryView> directory(@RequestParam(defaultValue = "50") int limit) {
-		return blogService.directory(Math.clamp(limit, 1, MAX_LIMIT));
+	List<BlogSummaryView> directory(@RequestParam(defaultValue = "50") int limit,
+			@RequestParam(required = false) String query) {
+		return blogService.directory(query, Math.clamp(limit, 1, MAX_LIMIT));
 	}
 
 	@GetMapping("/{slug}")
@@ -64,6 +74,20 @@ class BlogController {
 		CurrentUser user = resolveSafely(sessionToken);
 		return blogService.blogOf(slug, user == null ? null : user.id().value())
 			.orElseThrow(() -> new ApiException(404, "BLOG_NOT_FOUND", "Blog nao encontrado."));
+	}
+
+	/**
+	 * Feed Atom do blog, para quem acompanha por um leitor de RSS. Publico e sem sessao (o leitor nao
+	 * tem), com as mesmas regras de visibilidade da pagina do blog: conta banida ou titulo suspeito = 404.
+	 */
+	@GetMapping("/{slug}/feed.xml")
+	ResponseEntity<String> feed(@PathVariable String slug) {
+		BlogView blog = blogService.blogOf(slug, null)
+			.orElseThrow(() -> new ApiException(404, "BLOG_NOT_FOUND", "Blog nao encontrado."));
+		return ResponseEntity.ok()
+			.header(HttpHeaders.CONTENT_TYPE, BlogAtomFeed.CONTENT_TYPE)
+			.header(HttpHeaders.CACHE_CONTROL, "public, max-age=300")
+			.body(BlogAtomFeed.render(blog, frontendUrl, Instant.now(clock)));
 	}
 
 	/** O meu blog, para o editor. `null` = ainda nao existe (a tela oferece criar). */
@@ -156,23 +180,13 @@ class BlogController {
 		String mensagem = ok
 			? "Pronto: você não vai mais receber os e-mails deste blog. A inscrição no Énóis segue, e você pode voltar quando quiser."
 			: "Este link de descadastro não é válido (ou já foi usado). Abra o blog no Énóis e cancele por lá.";
-		String html = """
-			<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
-			<meta name="viewport" content="width=device-width, initial-scale=1.0"><title>%s</title></head>
-			<body style="margin:0;background:#f8f7ff;font-family:'Inter',system-ui,sans-serif;display:grid;place-items:center;min-height:100vh">
-			<div style="max-width:440px;background:#fff;border-radius:16px;padding:32px;margin:16px;box-shadow:0 8px 24px -8px rgba(99,102,241,.15);text-align:center">
-			<h1 style="margin:0 0 12px;color:#1a1a2e;font-size:20px">%s</h1>
-			<p style="margin:0 0 20px;color:#4b5563;font-size:14px;line-height:1.6">%s</p>
-			<a href="%s" style="display:inline-block;padding:12px 24px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;text-decoration:none;border-radius:999px;font-weight:600;font-size:14px">Ir para o Énóis</a>
-			</div></body></html>
-			""".formatted(titulo, titulo, mensagem, frontendUrl());
-		return ResponseEntity.status(ok ? 200 : 400)
-			.contentType(org.springframework.http.MediaType.TEXT_HTML)
-			.body(html);
+		return com.socialcoisa.rede.shared.web.ConfirmationPage.of(ok, titulo, mensagem);
 	}
 
-	private String frontendUrl() {
-		return "https://enois.ia.br";
+	/** RFC 8058: o cliente de e-mail faz POST "List-Unsubscribe=One-Click" na URL do List-Unsubscribe. */
+	@org.springframework.web.bind.annotation.PostMapping("/descadastrar")
+	ResponseEntity<Void> descadastrarUmClique(@RequestParam(required = false) String token) {
+		return ResponseEntity.status(newsletter.unsubscribeByToken(token) ? 200 : 400).build();
 	}
 
 	record BlogPostRequest(String title, String body, BlogPostFormat format, Boolean notifySubscribers) {

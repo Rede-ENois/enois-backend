@@ -28,7 +28,8 @@ import com.socialcoisa.rede.shared.web.StatusResponse;
 
 @Service
 public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseCase, RequestMediaDeletionUseCase,
-		RequestPostMediaDeletionUseCase, ValidateMediaOwnershipUseCase {
+		RequestPostMediaDeletionUseCase, ValidateMediaOwnershipUseCase,
+		com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase {
 
 	private static final Logger LOG = LoggerFactory.getLogger(MediaService.class);
 
@@ -57,11 +58,17 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 		java.util.Map.entry("application/pdf", ".pdf"));
 	private static final java.util.Set<String> IMAGE_MIME_TYPES = java.util.Set.of(
 		"image/jpeg", "image/png", "image/gif", "image/webp", "image/avif");
+	/**
+	 * Captura de tela que acompanha uma denúncia de chamada. Prova para a moderação: não passa pela
+	 * checagem de imagem pública e só é servida a quem modera.
+	 */
+	public static final String REPORT_CAPTURE_PURPOSE = "REPORT_CAPTURE";
 	/** Upload kinds narrower than the general list; any other purpose (posts, messages) uses the full list. */
 	private static final java.util.Map<String, java.util.Set<String>> MIME_TYPES_BY_PURPOSE = java.util.Map.of(
 		"AVATAR", IMAGE_MIME_TYPES, "BANNER", IMAGE_MIME_TYPES, "COVER", IMAGE_MIME_TYPES,
 		"BADGE", IMAGE_MIME_TYPES, "GAME_ICON", IMAGE_MIME_TYPES, "GAME_BANNER", IMAGE_MIME_TYPES,
-		"MENTOR_BANNER", IMAGE_MIME_TYPES, "RESUME", java.util.Set.of("application/pdf"));
+		"MENTOR_BANNER", IMAGE_MIME_TYPES, REPORT_CAPTURE_PURPOSE, IMAGE_MIME_TYPES,
+		"RESUME", java.util.Set.of("application/pdf"));
 
 	private final MediaAssetRepository mediaAssetRepository;
 	private final MediaDeletionJobRepository mediaDeletionJobRepository;
@@ -102,12 +109,16 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 			storageUrlFactory.provider());
 		MediaAsset saved = mediaAssetRepository.save(asset);
 		try {
-			MediaUploadView view = MediaUploadView.fromSigned(saved, signer.sign(objectKey, saved.mimeType()));
+			MediaUploadView view = MediaUploadView.fromSigned(saved,
+				signer.sign(objectKey, saved.mimeType(), saved.size()));
 			// Metadados do upload (nunca o conteúdo): permite no CloudWatch ver quem subiu o quê,
 			// tamanho/tipo e o provedor, e cruzar com o mediaId que aparece nos posts.
 			LOG.info("media_upload_signed mediaId={} ownerId={} mime={} bytes={} purpose={} provider={}",
 				saved.id(), command.ownerId(), saved.mimeType(), command.size(), saved.purpose(), saved.storageProvider());
 			return view;
+		}
+		catch (ApiException failure) {
+			throw failure;
 		}
 		catch (RuntimeException assinaturaFalhou) {
 			// Credencial do S3 ausente/ruim (IRSA) virava 500 generico — o operador nao tinha o
@@ -127,6 +138,18 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 		// cópia para o S3 sem esperar. Resposta idêntica à de sempre; nada bloqueia.
 		lazyCopy.ifAvailable(trigger -> trigger.copySoon(asset));
 		return MediaAssetView.from(asset);
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public java.util.Map<String, MediaSummaryView> visibleByIds(java.util.Collection<String> mediaIds) {
+		if (mediaIds == null || mediaIds.isEmpty()) {
+			return java.util.Map.of();
+		}
+		List<String> ids = mediaIds.stream().filter(StringUtils::hasText).distinct().toList();
+		return mediaAssetRepository.findByIds(ids).stream()
+			.filter(MediaAsset::isVisible)
+			.collect(java.util.stream.Collectors.toMap(MediaAsset::id, MediaSummaryView::from));
 	}
 
 	@Override

@@ -52,7 +52,7 @@ class ReportEmailEscapingTests {
 				.header("X-Session-Token", reporter.token())
 				.header("Idempotency-Key", "rep-escape-post")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("type", "INSIGHT", "content", "<b>post</b> text",
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA", "type", "INSIGHT", "content", "<b>post</b> text",
 					"tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isCreated())
 			.andReturn();

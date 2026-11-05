@@ -2,6 +2,12 @@
 
 Migrações Flyway em `src/main/resources/db/migration/`.
 
+## V234 - Presença
+
+`user_presence` guarda a escolha de presença e a última atividade por usuário. A tabela
+é criada por `V234__user_presence.sql`; o heartbeat atualiza apenas a atividade, sem
+alterar a escolha.
+
 ## V1 - Schema Inicial
 
 ### `users`
@@ -75,7 +81,7 @@ Migrações Flyway em `src/main/resources/db/migration/`.
 | id | VARCHAR(36) PK | ID do post (post_<uuid>) |
 | author_id | VARCHAR(36) FK → users.id | |
 | community_id | VARCHAR(36) (nullable) FK → communities.id | Post em comunidade |
-| type | VARCHAR(20) | INSIGHT, ARTICLE, QUESTION, PROJECT, OPPORTUNITY |
+| type | VARCHAR(20) | INSIGHT, ARTICLE, QUESTION, PROJECT, OPPORTUNITY, POLL, ... (ver `PostType`) |
 | content | TEXT | Conteúdo |
 | visibility | VARCHAR(20) | PUBLIC, CONNECTIONS, COMMUNITY |
 | reactions | INT DEFAULT 0 | Contador de reações |
@@ -85,6 +91,30 @@ Migrações Flyway em `src/main/resources/db/migration/`.
 | status | VARCHAR(20) | ACTIVE, DELETED |
 | deleted_at | TIMESTAMP (nullable) | Data de deleção (soft delete) |
 | created_at | TIMESTAMP | |
+
+### `poll_options` (enquete)
+
+| Coluna | Tipo | Descrição |
+|---|---|---|
+| id | VARCHAR(64) PK | `poll_option_<uuid>` |
+| post_id | VARCHAR(64) | Post `POLL` dono da alternativa |
+| position | INT | Ordem (0..5) — é o que o voto guarda |
+| text | VARCHAR(120) | Texto da alternativa |
+
+Unique `(post_id, position)`. Em `posts`, o `content` do post `POLL` é o título da enquete (400).
+
+### `poll_votes` (enquete)
+
+| Coluna | Tipo | Descrição |
+|---|---|---|
+| id | VARCHAR(64) PK | `poll_vote_<uuid>` |
+| post_id | VARCHAR(64) | Post `POLL` |
+| user_id | VARCHAR(64) | Quem votou |
+| option_position | INT | Alternativa escolhida |
+| created_at | TIMESTAMP | |
+
+Unique `(post_id, user_id)`: **um voto por pessoa, imutável** — não existe UPDATE do voto; o
+segundo INSERT é recusado pelo banco.
 
 ### `post_tags`
 
@@ -336,6 +366,8 @@ UNIQUE: (requester_user_id, receiver_user_id)
 | created_by | VARCHAR(36) FK → users.id | |
 | created_at | TIMESTAMP | |
 | updated_at | TIMESTAMP | |
+| recurrence | VARCHAR(16) | NONE (padrão), WEEKLY, BIWEEKLY, MONTHLY (V215) |
+| series_id | VARCHAR(255) NULL | Id da primeira ocorrência da série; único com `date` (V215) |
 
 ### `event_attendees`
 
@@ -356,6 +388,8 @@ UNIQUE: (requester_user_id, receiver_user_id)
 | rating | DOUBLE DEFAULT 0 |
 | sessions_count | INT DEFAULT 0 |
 | price | DECIMAL(10,2) |
+| room_mode | VARCHAR(24) — EPAPO_SESSION (padrão), EPAPO_PERMANENT ou CUSTOM (V223; valores JITSI_* migrados na V242) |
+| room_slug | VARCHAR(120) — slug da sala fixa da Epapo, só em EPAPO_PERMANENT (V223 como `jitsi_room`, renomeada na V242) |
 | created_at | TIMESTAMP |
 | updated_at | TIMESTAMP |
 
@@ -379,6 +413,8 @@ UNIQUE: (requester_user_id, receiver_user_id)
 | slot_id | VARCHAR(36) FK → mentor_slots.id |
 | message | TEXT |
 | status | VARCHAR(20) (SCHEDULED, COMPLETED, CANCELLED) |
+| room_mode | VARCHAR(24) — modo usado no agendamento (V223; valores JITSI_* migrados na V242) |
+| room_url | VARCHAR(500) — link da sala congelado no agendamento (V223) |
 | created_at | TIMESTAMP |
 
 ---
@@ -597,3 +633,5 @@ As migrações estão em `src/main/resources/db/migration/` e seguem a numeraç�
 | V14 | User recommendations |
 | V15 | Comment & message reactions |
 | V16 | Adiciona refresh_token em auth_sessions |
+| V217 | Cidade/UF estruturadas (`city`, `state`, `city_key`) em `communities`, `users` e `events`; `users.show_city` (padrão false). `city_key` é a cidade sem acento e minúscula, gravada pela aplicação (`shared/geo/CityState`) |
+| V226 | `users.garden_style`: equipped `GARDEN` item of the profile garden (null = default garden) |

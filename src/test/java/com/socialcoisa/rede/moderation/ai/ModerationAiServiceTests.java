@@ -31,8 +31,13 @@ class ModerationAiServiceTests {
 	private static final com.socialcoisa.rede.moderation.application.port.out.ReportedContentReader NO_CONTENT =
 		(targetType, targetId) -> Optional.empty();
 
+	/** Sem leitor de midia: nenhuma imagem vai ao modelo (o caso dos testes sem storage). */
+	private static final com.socialcoisa.rede.moderation.application.port.out.ReportedMediaReader NO_MEDIA =
+		(targetType, targetId, limit) -> List.of();
+
 	private ModerationAiService serviceWithOutKey() {
-		return new ModerationAiService(repo, NO_CONTENT, "https://infer.test/v1", "", "beta-llm/qwen3.8-27b", new tools.jackson.databind.ObjectMapper());
+		return new ModerationAiService(repo, NO_CONTENT, NO_MEDIA, "https://infer.test/v1", "",
+			"beta-llm/qwen3.8-27b", new tools.jackson.databind.ObjectMapper());
 	}
 
 	@Test
@@ -43,7 +48,7 @@ class ModerationAiServiceTests {
 			com.socialcoisa.rede.moderation.domain.ReportReason.SPAM, "vende seguidores", Instant.now());
 		com.socialcoisa.rede.moderation.application.port.out.ReportedContentReader reader =
 			(targetType, targetId) -> Optional.of("Compre seguidores barato no meu site");
-		ModerationAiService service = new ModerationAiService(repo, reader, "https://infer.test/v1", "",
+		ModerationAiService service = new ModerationAiService(repo, reader, NO_MEDIA, "https://infer.test/v1", "",
 			"beta-llm/qwen3.8-27b", new tools.jackson.databind.ObjectMapper());
 
 		String prompt = service.reportUserPrompt(report);
@@ -146,5 +151,50 @@ class ModerationAiServiceTests {
 		@Override public long countAgainstTargetSince(String targetType, String targetId,
 				java.time.Instant since) { return 0; }
 		@Override public List<Report> findByReporter(String reporterId, int limit) { return List.of(); }
+	}
+
+	@Test
+	void theReportPromptGetsTheImagesSoTheModelLooksAtThem() {
+		// O texto de um post com foto explícita costuma ser uma linha: sem a imagem, o modelo não
+		// tinha nada para julgar. Aqui a denúncia leva as imagens junto.
+		var report = Report.create("rep_img", "user_rep", TargetType.POST, "post_img",
+			com.socialcoisa.rede.moderation.domain.ReportReason.SEXUAL_CONTENT, "foto", Instant.now());
+		com.socialcoisa.rede.moderation.application.port.out.ReportedMediaReader reader =
+			(targetType, targetId, limit) -> List.of(new byte[] { 9, 8, 7 });
+		ModerationAiService service = new ModerationAiService(repo, NO_CONTENT, reader, "https://infer.test/v1",
+			"", "beta-llm/qwen3.8-27b", new tools.jackson.databind.ObjectMapper());
+
+		List<byte[]> imagens = service.reportImages(report);
+
+		assertThat(imagens).hasSize(1);
+		// O corpo com imagem vira as partes do protocolo de visão, com data URL.
+		var partes = ModerationAiService.contentParts("texto", imagens);
+		assertThat(partes.get(0)).containsEntry("type", "text");
+		assertThat((String) ((java.util.Map<?, ?>) partes.get(1).get("image_url")).get("url"))
+			.startsWith("data:image/jpeg;base64,");
+	}
+
+	@Test
+	void aFailingMediaReaderNeverBreaksTheTriage() {
+		// Leitura de mídia é best-effort: falha vira "sem imagem", nunca denúncia perdida.
+		var report = Report.create("rep_fail", "user_rep", TargetType.POST, "post_fail",
+			com.socialcoisa.rede.moderation.domain.ReportReason.SEXUAL_CONTENT, "foto", Instant.now());
+		com.socialcoisa.rede.moderation.application.port.out.ReportedMediaReader quebrado =
+			(targetType, targetId, limit) -> {
+				throw new IllegalStateException("storage fora do ar");
+			};
+		ModerationAiService service = new ModerationAiService(repo, NO_CONTENT, quebrado,
+			"https://infer.test/v1", "", "beta-llm/qwen3.8-27b", new tools.jackson.databind.ObjectMapper());
+
+		assertThat(service.reportImages(report)).isEmpty();
+	}
+
+	@Test
+	void theSystemPromptNamesSexualContentAndGraphicMaterial() {
+		// A diretriz que faltava: sem ela, nudez não estava na lista de violações do modelo.
+		String prompt = ModerationAiService.systemPrompt();
+
+		assertThat(prompt).contains("NUDEZ").contains("SEXUAL EXPLICITO").contains("menores de idade");
+		assertThat(prompt).contains("Se houver IMAGENS anexadas");
 	}
 }

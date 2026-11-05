@@ -11,6 +11,7 @@ import org.springframework.util.StringUtils;
 
 import com.socialcoisa.rede.events.application.port.out.EventRepository;
 import com.socialcoisa.rede.events.domain.Event;
+import com.socialcoisa.rede.events.domain.EventRecurrence;
 
 @Repository
 class EventPersistenceAdapter implements EventRepository {
@@ -40,15 +41,40 @@ class EventPersistenceAdapter implements EventRepository {
 	}
 
 	@Override
-	public List<Event> findAll(String format, Instant before, int limit) {
+	public List<Event> findAll(String format, String state, String cityKey, Instant before, boolean recurringOnly,
+			int limit) {
 		PageRequest page = PageRequest.of(0, limit);
 		List<EventJpaEntity> entities;
-		if (StringUtils.hasText(format)) {
-			entities = springData.findByFormat(format, before, page);
+		if (state != null) {
+			entities = springData.findByPlace(state, cityKey, StringUtils.hasText(format) ? format : null, before,
+				recurringOnly, page);
+		} else if (StringUtils.hasText(format)) {
+			entities = springData.findByFormat(format, before, recurringOnly, page);
 		} else {
-			entities = springData.findAllBefore(before, page);
+			entities = springData.findAllBefore(before, recurringOnly, page);
 		}
 		return entities.stream().map(EventJpaEntity::toDomain).toList();
+	}
+
+	@Override
+	public List<Event> findRecurring() {
+		return springData.findByRecurrenceNot(EventRecurrence.NONE.name()).stream().map(EventJpaEntity::toDomain).toList();
+	}
+
+	@Override
+	public Optional<Event> findLatestInSeries(String seriesId) {
+		return springData.findFirstBySeriesIdOrderByCreatedAtDesc(seriesId).map(EventJpaEntity::toDomain);
+	}
+
+	@Override
+	public boolean existsInSeries(String seriesId, String date) {
+		return springData.existsBySeriesIdAndDate(seriesId, date);
+	}
+
+	@Override
+	@org.springframework.transaction.annotation.Transactional
+	public void updateSeriesRecurrence(String seriesId, EventRecurrence recurrence) {
+		springData.updateSeriesRecurrence(seriesId, recurrence.name());
 	}
 
 	@Override
@@ -114,6 +140,18 @@ class EventPersistenceAdapter implements EventRepository {
 	@Override
 	public int countAttendees(String eventId) {
 		return attendeeRepo.countByEventId(eventId);
+	}
+
+	@Override
+	public java.util.Map<String, Integer> countAttendeesByEventIds(java.util.Collection<String> eventIds) {
+		if (eventIds == null || eventIds.isEmpty()) {
+			return java.util.Map.of();
+		}
+		java.util.Map<String, Integer> counts = new java.util.HashMap<>();
+		for (Object[] row : attendeeRepo.countByEventIds(eventIds)) {
+			counts.put((String) row[0], ((Number) row[1]).intValue());
+		}
+		return counts;
 	}
 
 }

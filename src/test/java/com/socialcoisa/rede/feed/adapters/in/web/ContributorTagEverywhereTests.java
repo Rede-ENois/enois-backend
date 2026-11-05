@@ -67,7 +67,7 @@ class ContributorTagEverywhereTests {
 				.header("X-Session-Token", autor.token())
 				.header("Idempotency-Key", "contrib-tag-pub-1")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "Post de contribuinte.", "tags", List.of(),
 					"mediaIds", List.of()))))
 			.andExpect(status().isCreated())
@@ -115,7 +115,7 @@ class ContributorTagEverywhereTests {
 				.header("X-Session-Token", autor.token())
 				.header("Idempotency-Key", "contrib-tag-sem-pub")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "Post sem selo.", "tags", List.of(),
 					"mediaIds", List.of()))))
 			.andExpect(status().isCreated())

@@ -3,6 +3,8 @@ package com.socialcoisa.rede.profile.domain;
 import java.time.Instant;
 import java.util.List;
 
+import com.socialcoisa.rede.shared.geo.CityState;
+
 public class UserProfile {
 
 	private final String id;
@@ -24,11 +26,24 @@ public class UserProfile {
 	private String nameplate;
 	private String bannerItem;
 	private String profileEffect;
+	/**
+	 * Aparência da vitrine (perfil social e profissional, independentes). Nula enquanto a
+	 * pessoa não escolheu nada — aí o perfil usa o padrão da plataforma.
+	 */
+	private ProfileAppearance profileAppearance;
+	/** Garden style item (GARDEN catalog id); null = the default garden. */
+	private String gardenStyle;
+	/** Reputation garden, computed on read with the counts (never persisted); null when not computed. */
+	private ReputationGarden garden;
 	/** Recado curto do perfil (texto ja limpo) e o icone de emblema que o acompanha. */
 	private String statusText;
 	private String statusIcon;
 	private String company;
 	private String location;
+	/** Cidade + UF estruturados (comunidades locais); separado do `location` livre, que continua. */
+	private CityState place;
+	/** Mostrar a cidade no perfil publico? Nasce false: lugar e dado pessoal, so aparece por opcao. */
+	private boolean showCity;
 	private String avatar;
 	private String banner;
 	/** Emblema (PNG pequeno) que aparece ao lado do nome; URL da midia, como avatar e banner. */
@@ -72,6 +87,8 @@ public class UserProfile {
 	private Instant updatedAt;
 	private Instant termsAcceptedAt;
 	private Instant emailVerifiedAt;
+	/** Fim (concluido ou pulado) do onboarding da primeira entrada; null = ainda nao passou por ele. */
+	private Instant onboardingCompletedAt;
 
 	/** Mostrar a secao de ranking no perfil? Preferencia de quem LE (pedido via suporte, 19/10). */
 	private boolean showRanking = true;
@@ -144,6 +161,36 @@ public class UserProfile {
 		return showRanking;
 	}
 
+	/** Hidrata cidade/UF e a preferencia de exibir (colunas da V217). */
+	public void hydratePlace(CityState place, boolean showCity) {
+		this.place = place;
+		this.showCity = showCity;
+	}
+
+	/** Cidade/UF ja validados pelo servico; null limpa. */
+	public void updatePlace(CityState place, Instant now) {
+		this.place = place;
+		this.updatedAt = now;
+	}
+
+	public void setShowCity(boolean showCity, Instant now) {
+		this.showCity = showCity;
+		this.updatedAt = now;
+	}
+
+	public CityState place() {
+		return place;
+	}
+
+	public boolean showCity() {
+		return showCity;
+	}
+
+	/** O lugar que terceiros podem ver: so quando a pessoa optou por mostrar. */
+	public CityState publicPlace() {
+		return showCity ? place : null;
+	}
+
 	public void update(String name, String headline, String company, String location, String avatar, String banner,
 			String badge, String bio, List<String> skills, List<String> goals, String availability, String portfolio,
 			List<String> externalLinks, Boolean openToWork, Boolean mentor, String username, String aka, Instant now) {
@@ -152,7 +199,11 @@ public class UserProfile {
 		this.company = keep(company, this.company);
 		this.location = keep(location, this.location);
 		this.avatar = keep(avatar, this.avatar);
-		this.banner = keep(banner, this.banner);
+		String nextBanner = keep(banner, this.banner);
+		if (!java.util.Objects.equals(nextBanner, this.banner)) {
+			this.bannerItem = null;
+		}
+		this.banner = nextBanner;
 		this.badge = keep(badge, this.badge);
 		this.bio = keep(bio, this.bio);
 		this.aka = keep(aka, this.aka);
@@ -184,6 +235,21 @@ public class UserProfile {
 
 	public Instant termsAcceptedAt() {
 		return termsAcceptedAt;
+	}
+
+	/** Marca o onboarding como concluido; a primeira marcacao vale (repetir nao muda o instante). */
+	public void completeOnboarding(Instant at) {
+		if (this.onboardingCompletedAt == null) {
+			this.onboardingCompletedAt = at;
+		}
+	}
+
+	public Instant onboardingCompletedAt() {
+		return onboardingCompletedAt;
+	}
+
+	public boolean onboardingCompleted() {
+		return onboardingCompletedAt != null;
 	}
 
 	/** Conta com e-mail confirmado (ou criada por um provedor que ja confirma o e-mail). */
@@ -289,6 +355,8 @@ public class UserProfile {
 		this.headline = null;
 		this.company = null;
 		this.location = null;
+		this.place = null;
+		this.showCity = false;
 		this.avatar = null;
 		this.banner = null;
 		this.bio = null;
@@ -500,6 +568,38 @@ public class UserProfile {
 		this.profileEffect = profileEffect;
 	}
 
+	/** Escolha visual da vitrine (social e profissional). Vazio limpa e volta ao padrão. */
+	public void updateProfileAppearance(ProfileAppearance appearance, Instant now) {
+		hydrateProfileAppearance(appearance);
+		this.updatedAt = now;
+	}
+
+	public void hydrateProfileAppearance(ProfileAppearance appearance) {
+		this.profileAppearance = appearance == null || appearance.isEmpty() ? null : appearance;
+	}
+
+	/** Equips (or clears, with null) the garden style. */
+	public void updateGardenStyle(String gardenStyle, Instant now) {
+		hydrateGardenStyle(gardenStyle);
+		this.updatedAt = now;
+	}
+
+	public void hydrateGardenStyle(String gardenStyle) {
+		this.gardenStyle = gardenStyle;
+	}
+
+	public String gardenStyle() {
+		return gardenStyle;
+	}
+
+	public void setGarden(ReputationGarden garden) {
+		this.garden = garden;
+	}
+
+	public ReputationGarden garden() {
+		return garden;
+	}
+
 	/** Recado do perfil; texto e icone ja validados no service (null limpa). */
 	public void updateStatus(String text, String icon, Instant now) {
 		hydrateStatus(text, icon);
@@ -525,6 +625,11 @@ public class UserProfile {
 
 	public String profileEffect() {
 		return profileEffect;
+	}
+
+	/** Nunca nulo: sem escolha, os dois lados vêm vazios e o front usa o padrão. */
+	public ProfileAppearance profileAppearance() {
+		return profileAppearance == null ? ProfileAppearance.empty() : profileAppearance;
 	}
 
 	public String statusText() {
@@ -620,7 +725,14 @@ public class UserProfile {
 		return bio;
 	}
 
+	/**
+	 * A person who picks their own cover (photo above, HTML here) wants to see it: an equipped shop
+	 * banner would keep drawing over it, so it comes off. The item stays owned.
+	 */
 	public void updateBannerHtml(String sanitizedHtml, Instant now) {
+		if (!java.util.Objects.equals(sanitizedHtml, this.bannerHtml)) {
+			this.bannerItem = null;
+		}
 		this.bannerHtml = sanitizedHtml;
 		this.updatedAt = now;
 	}

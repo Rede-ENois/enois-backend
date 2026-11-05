@@ -6,6 +6,7 @@ import java.util.Collections;
 import java.util.List;
 
 import com.socialcoisa.rede.mentoring.domain.Mentor;
+import com.socialcoisa.rede.mentoring.domain.RoomMode;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -36,6 +37,18 @@ class MentorJpaEntity {
 	@Column(length = 1000)
 	private String banner;
 
+	@Column(name = "meeting_url", length = 500)
+	private String meetingUrl;
+
+	@Column(name = "sparks_price")
+	private Long sparksPrice;
+
+	@Column(name = "room_mode", nullable = false, length = 24)
+	private String roomMode;
+
+	@Column(name = "room_slug", length = 120)
+	private String roomSlug;
+
 	@Column(name = "created_at", nullable = false)
 	private Instant createdAt;
 
@@ -54,6 +67,10 @@ class MentorJpaEntity {
 		e.sessionsCount = mentor.sessionsCount();
 		e.price = mentor.price();
 		e.banner = mentor.banner();
+		e.meetingUrl = mentor.meetingUrl();
+		e.sparksPrice = mentor.sparksPrice();
+		e.roomMode = mentor.roomMode() == null ? RoomMode.EPAPO_SESSION.name() : mentor.roomMode().name();
+		e.roomSlug = mentor.roomSlug();
 		e.createdAt = mentor.createdAt();
 		e.updatedAt = mentor.updatedAt();
 		return e;
@@ -63,7 +80,8 @@ class MentorJpaEntity {
 		List<String> expertiseList = expertise != null && !expertise.isBlank()
 			? Arrays.asList(expertise.split(","))
 			: Collections.emptyList();
-		return Mentor.restore(id, userId, expertiseList, rating, sessionsCount, price, banner, createdAt, updatedAt);
+		return Mentor.restore(id, userId, expertiseList, rating, sessionsCount, price, banner, meetingUrl,
+			sparksPrice, RoomMode.fromStored(roomMode), roomSlug, createdAt, updatedAt);
 	}
 
 }

@@ -20,12 +20,14 @@ import com.socialcoisa.rede.shared.web.ModeratorGuard;
 class MonitoringAdminController {
 
 	private final MonitoringService monitoring;
+	private final UserMetricsService userMetrics;
 	private final CurrentUserResolver currentUserResolver;
 	private final ModeratorGuard moderatorGuard;
 
-	MonitoringAdminController(MonitoringService monitoring, CurrentUserResolver currentUserResolver,
-			ModeratorGuard moderatorGuard) {
+	MonitoringAdminController(MonitoringService monitoring, UserMetricsService userMetrics,
+			CurrentUserResolver currentUserResolver, ModeratorGuard moderatorGuard) {
 		this.monitoring = monitoring;
+		this.userMetrics = userMetrics;
 		this.currentUserResolver = currentUserResolver;
 		this.moderatorGuard = moderatorGuard;
 	}
@@ -35,6 +37,14 @@ class MonitoringAdminController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		moderatorGuard.requireModerator(currentUserResolver.resolve(sessionToken));
 		return monitoring.overview();
+	}
+
+	/** Contas da comunidade: total, entradas por dia, crescimento e projeção. */
+	@GetMapping("/users")
+	UserMetricsService.UsersView users(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		moderatorGuard.requireModerator(currentUserResolver.resolve(sessionToken));
+		return userMetrics.users();
 	}
 
 	@GetMapping("/events")

@@ -58,8 +58,14 @@ class CorsConfig {
 				// senão o navegador do frontend leva "Invalid CORS request" mesmo com origem válida.
 				patterns.addAll(Arrays.stream(trustedOrigins.split(",")).map(String::trim)
 					.filter(s -> !s.isEmpty()).toList());
-				// Credentials (session cookie) are never offered to every origin.
-				patterns.remove("*");
+				// Credentials (session cookie) are never offered to a wildcard. Subdomain patterns
+				// like https://*.b7cloud.com.br stay valid for the origin gate, but a credentialed
+				// CORS grant needs an explicit origin: any sibling subdomain would otherwise be
+				// allowed to read and write the API with the victim's cookie.
+				patterns.removeIf(pattern -> pattern.contains("*"));
+				if (patterns.isEmpty()) {
+					patterns.addAll(Arrays.asList(DEFAULT_ORIGINS));
+				}
 				registry.addMapping("/**")
 					.allowedOriginPatterns(patterns.toArray(String[]::new))
 					.allowedMethods("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")

@@ -17,14 +17,21 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.socialcoisa.rede.corporate.application.CorporateProfileService;
+import com.socialcoisa.rede.corporate.domain.CorporateProfile;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
+import com.socialcoisa.rede.notifications.application.NotificationPlaces;
 import com.socialcoisa.rede.notifications.application.NotificationService;
 import com.socialcoisa.rede.notifications.domain.Notification;
+import com.socialcoisa.rede.notifications.domain.NotificationContext;
+import com.socialcoisa.rede.notifications.domain.NotificationModule;
+import com.socialcoisa.rede.notifications.domain.NotificationPlace;
 import com.socialcoisa.rede.profile.application.NameStyleView;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
 import com.socialcoisa.rede.shared.blocks.BlockedUsersReader;
+import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 import com.socialcoisa.rede.shared.web.CursorCodec;
@@ -41,10 +48,15 @@ class NotificationContractController {
 	private final CursorCodec cursorCodec;
 	private final UserProfileRepository userProfileRepository;
 	private final BlockedUsersReader blockedUsersReader;
+	private final CorporateProfileService corporateProfiles;
+	private final NotificationPlaces places;
 
 	NotificationContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
 			NotificationService notificationService, CursorCodec cursorCodec,
-			UserProfileRepository userProfileRepository, BlockedUsersReader blockedUsersReader) {
+			UserProfileRepository userProfileRepository, BlockedUsersReader blockedUsersReader,
+			CorporateProfileService corporateProfiles, NotificationPlaces places) {
+		this.corporateProfiles = corporateProfiles;
+		this.places = places;
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.notificationService = notificationService;
@@ -55,31 +67,80 @@ class NotificationContractController {
 
 	@GetMapping
 	PageResponse<NotificationView> notifications(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
-			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit) {
+			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit,
+			@RequestParam(required = false) String context) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		// Bloqueio: notificacao de quem foi bloqueado (ou de quem bloqueou) nao aparece mais.
 		Set<String> hidden = blockedUsersReader.hiddenIdsFor(user.id().value());
-		List<Notification> notifications = notificationService.list(user.id().value(), before, limit).stream()
+		// O cursor sai da pagina LIDA, antes do filtro de bloqueio: senao a pagina que perde itens
+		// para o filtro parecia a ultima e as notificacoes seguintes ficavam inalcancaveis.
+		List<Notification> page = notificationService.list(user.id().value(), before, parseContext(context), limit);
+		List<Notification> notifications = page.stream()
 			.filter(n -> n.actorId() == null || !hidden.contains(n.actorId()))
 			.toList();
 		Map<String, UserProfile> profiles = resolveActors(notifications);
+		Map<String, CorporateProfile> professionals = professionalActors(notifications);
+		Map<String, NotificationPlaces.Resolved> targets = places.resolve(
+			notifications.stream().map(Notification::href).collect(Collectors.toSet()));
 		var items = notifications.stream()
 			.map(n -> {
+				NotificationContext notificationContext = NotificationContext.of(n.kind());
+				// Aviso de trabalho mostra QUEM agiu pela identidade profissional (recrutador, contratante).
+				CorporateProfile pro = notificationContext == NotificationContext.PROFESSIONAL
+					? professionals.get(n.actorId()) : null;
 				UserProfile p = profiles.get(n.actorId());
-				return new NotificationView(n.id(), n.kind(), n.actorId(),
-					p != null ? p.name() : null,
-					p != null ? p.username() : null,
-					p != null ? p.avatar() : null,
-					p != null ? NameStyleView.from(p) : null,
-					n.title(), n.body(),
+				NotificationPlaces.Resolved target = targets.get(n.href());
+				return new NotificationView(n.id(), n.kind(), notificationContext.name(),
+					NotificationModule.of(n.kind()).name(), n.actorId(),
+					pro != null ? pro.name() : p != null ? p.name() : null,
+					pro != null ? pro.username() : p != null ? p.username() : null,
+					pro != null ? (pro.avatar() == null ? "" : pro.avatar()) : p != null ? p.avatar() : null,
+					pro != null ? "CORPORATE" : "SOCIAL",
+					pro == null && p != null ? NameStyleView.from(p) : null,
+					n.title(), n.body(), n.preview(),
 					n.createdAt() != null ? n.createdAt().toString() : null,
-					n.isRead(), n.href(), n.ctaLabel());
+					n.isRead(), n.href(), n.ctaLabel(), n.actorCount(), target.place(),
+					target.eventDate() != null ? target.eventDate().toString() : null);
 			})
 			.toList();
-		String nextCursor = notifications.size() == limit
-			? cursorCodec.encode(notifications.get(notifications.size() - 1).createdAt()) : null;
+		String nextCursor = page.size() == limit
+			? cursorCodec.encode(page.get(page.size() - 1).createdAt()) : null;
 		return new PageResponse<>(items, nextCursor);
+	}
+
+	/**
+	 * Unread notifications per interface area, for the menu indicators: same session, context
+	 * filter and blocked-actor rule as the list. An area clears when its notifications are read.
+	 */
+	@GetMapping("/unread-summary")
+	NotificationService.UnreadSummary unreadSummary(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(required = false) String context) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return notificationService.unreadSummary(user.id().value(), parseContext(context),
+			blockedUsersReader.hiddenIdsFor(user.id().value()));
+	}
+
+	private Map<String, CorporateProfile> professionalActors(List<Notification> notifications) {
+		Set<String> actorIds = notifications.stream()
+			.filter(n -> NotificationContext.of(n.kind()) == NotificationContext.PROFESSIONAL)
+			.map(Notification::actorId)
+			.filter(Objects::nonNull)
+			.collect(Collectors.toSet());
+		return corporateProfiles.activeByUserIds(actorIds);
+	}
+
+	/** Blank keeps every context (older clients); otherwise SOCIAL or PROFESSIONAL. */
+	private static NotificationContext parseContext(String value) {
+		if (value == null || value.isBlank()) {
+			return null;
+		}
+		String normalized = value.trim().toUpperCase(java.util.Locale.ROOT);
+		if (!"SOCIAL".equals(normalized) && !"PROFESSIONAL".equals(normalized)) {
+			throw new ApiException(400, "INVALID_CONTEXT", "Contexto invalido: use SOCIAL ou PROFESSIONAL.");
+		}
+		return NotificationContext.valueOf(normalized);
 	}
 
 	private Map<String, UserProfile> resolveActors(List<Notification> notifications) {
@@ -92,9 +153,15 @@ class NotificationContractController {
 			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
 	}
 
-	record NotificationView(String id, String kind, String actorId, String actorName, String actorUsername,
-			String actorAvatar, NameStyleView actorStyle, String title, String body, String createdAt, boolean read,
-			String href, String ctaLabel) {
+	/**
+	 * {@code module} is the interface area of the kind ({@link NotificationModule}); {@code place} the
+	 * community or group it came from and {@code eventDate} ("YYYY-MM-DD") the day of the event it is
+	 * about, both resolved from the href and null when there is none.
+	 */
+	record NotificationView(String id, String kind, String context, String module, String actorId, String actorName,
+			String actorUsername, String actorAvatar, String actorIdentity, NameStyleView actorStyle, String title,
+			String body, String preview, String createdAt, boolean read, String href, String ctaLabel, int actorCount,
+			NotificationPlace place, String eventDate) {
 	}
 
 	@PostMapping("/{notificationId}/read")

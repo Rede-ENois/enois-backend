@@ -92,6 +92,10 @@ class EmoteController {
 	@GetMapping("/image/{provider}/{id}")
 	ResponseEntity<byte[]> image(@PathVariable("provider") String provider, @PathVariable("id") String id,
 			@RequestParam(value = "variant", defaultValue = "full") String variant) {
+		// Figurinha barrada nem chega ao CDN: o pedido morre aqui, antes do cache e da busca.
+		if (catalogService.isBlocked(provider, id)) {
+			return ResponseEntity.notFound().build();
+		}
 		// Quem sabe se a figurinha tem versao em movimento e o catalogo, nao a URL: pedir o arquivo
 		// animado de uma figurinha estatica no FFZ nao da 404, fica pendurado ate o timeout.
 		boolean animated = catalogService.isAnimated(provider, id);

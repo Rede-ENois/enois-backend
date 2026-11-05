@@ -60,16 +60,6 @@ class PostInteractionPersistenceAdapter implements PostInteractionRepository {
 	}
 
 	@Override
-	public long countReactionsReceived(String authorId) {
-		return reactionRepository.countReceivedExcludingSelf(authorId);
-	}
-
-	@Override
-	public long countReactionsReceivedSince(String authorId, java.time.Instant since) {
-		return reactionRepository.countReceivedSince(authorId, since);
-	}
-
-	@Override
 	public boolean removeReaction(PostId postId, UserId userId) {
 		return reactionRepository.findByPostIdAndUserId(postId.value(), userId.value())
 			.map(reaction -> {

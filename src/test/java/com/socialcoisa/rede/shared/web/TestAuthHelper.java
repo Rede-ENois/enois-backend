@@ -27,6 +27,27 @@ public class TestAuthHelper {
 	}
 
 	/**
+	 * Cria (se preciso) e ativa a identidade profissional da conta pelos MESMOS endpoints do app:
+	 * candidatura e proposta exigem perfil profissional ativo. O @ profissional deriva do id da
+	 * conta, entao chamar de novo para a mesma conta nao falha.
+	 */
+	public String activateProfessional(AuthSession session) throws Exception {
+		String username = "pro" + Integer.toUnsignedString(session.userId().hashCode(), 36);
+		mockMvc.perform(post("/me/business-profile")
+				.header("X-Session-Token", session.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("username", username, "name", "Perfil Profissional"))));
+		mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch("/me/business-profile")
+				.header("X-Session-Token", session.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("headline", "Pessoa desenvolvedora"))))
+			.andExpect(status().isOk());
+		mockMvc.perform(post("/me/business-profile/activate").header("X-Session-Token", session.token()))
+			.andExpect(status().isOk());
+		return username;
+	}
+
+	/**
 	 * Cria a conta e devolve uma sessao valida.
 	 *
 	 * O cadastro e em duas etapas desde 2026-10-21: o POST /auth/signup so guarda o pendente e a

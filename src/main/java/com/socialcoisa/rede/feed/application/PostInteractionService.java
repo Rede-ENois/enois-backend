@@ -126,6 +126,7 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 			+ "\",\"commentId\":\"" + saved.id() + "\",\"authorId\":\"" + command.authorId().value() + "\"}");
 		notifyCommentReply(parentCommentId, post, command.authorId().value());
 		notifyMentions(command.mentionedUserIds(), command.authorId().value(), post.id().value());
+		coins.recordPresence(command.authorId().value());
 		var profile = userProfileRepository.findById(command.authorId().value()).orElse(null);
 		return CommentView.from(saved,
 			profile != null ? profile.displayWithNickname() : null,
@@ -174,7 +175,7 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 	public CommentsPage getComments(GetCommentsQuery query) {
 		int limit = normalizeLimit(query.limit());
 		Instant before = query.before().orElse(DEFAULT_BEFORE);
-		activePost(query.postId());
+		String acceptedCommentId = activePost(query.postId()).acceptedCommentId();
 		Set<String> hidden = query.viewerId()
 			.map(viewer -> blockedUsersReader.hiddenIdsFor(viewer.value()))
 			.orElse(Set.of());
@@ -205,7 +206,8 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 					.withAvatarFrame(p != null ? p.avatarFrame() : null)
 					.withAuthorStyle(NameStyleView.from(p))
 					.withContributor(contributorIds.contains(c.authorId().value())
-						? ContributorTagView.from(p) : null);
+						? ContributorTagView.from(p) : null)
+					.withAccepted(c.id().equals(acceptedCommentId));
 			})
 			.toList();
 		// Reacao do proprio leitor: sem isso o front nao sabe que ele ja reagiu e a reacao
@@ -247,7 +249,7 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 				postRepository.save(post);
 				outboxEventRepository.append("PostReacted", post.id().value(), "{\"postId\":\"" + post.id().value()
 					+ "\",\"authorId\":\"" + command.userId().value() + "\"}");
-				rewardReaction(post.authorId().value(), command.userId().value());
+				coins.recordPresence(command.userId().value());
 			}
 			case REMOVED -> {
 				post.removeReaction();
@@ -265,33 +267,6 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 			case REMOVED -> "REACTION_REMOVED";
 		};
 		return new PostActionResult(post.id().value(), status, post.counters());
-	}
-
-	/**
-	 * Recompensa de reações recebidas (plano C2): 1 faísca a cada 10 reações em conteúdo
-	 * do autor (as próprias não contam), teto de 50/dia. Falha aqui NUNCA derruba a
-	 * reação — a moeda é um efeito colateral, não o caminho crítico.
-	 */
-	private void rewardReaction(String authorId, String reactorId) {
-		try {
-			if (authorId.equals(reactorId)) {
-				return;
-			}
-			long received = postInteractionRepository.countReactionsReceived(authorId);
-			if (received <= 0 || received % 10 != 0) {
-				return;
-			}
-			var startOfDay = java.time.LocalDate.now(clock).atStartOfDay().toInstant(java.time.ZoneOffset.UTC);
-			if (postInteractionRepository.countReactionsReceivedSince(authorId, startOfDay) / 10 >= 50) {
-				return; // teto diário
-			}
-			String ref = "reacoes:" + authorId + ":" + received / 10;
-			if (!coins.hasReward(ref)) {
-				coins.reward(authorId, coins.scaledReward(com.socialcoisa.rede.coin.application.CoinService.FAIS(1)), ref, "Reações recebidas (" + received + " no total)");
-			}
-		} catch (RuntimeException ignored) {
-			// a reação já está gravada; a faísca não pode ser motivo de erro para o usuário
-		}
 	}
 
 	@Override

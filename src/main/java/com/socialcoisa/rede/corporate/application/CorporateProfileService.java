@@ -73,6 +73,31 @@ public class CorporateProfileService {
 		return repository.findByUserId(userId);
 	}
 
+	/**
+	 * The ACTIVE professional identities of these accounts, keyed by account id (one batch read).
+	 * Draft or disabled profiles are left out: they never represent anyone.
+	 */
+	public java.util.Map<String, CorporateProfile> activeByUserIds(java.util.Collection<String> userIds) {
+		if (userIds == null || userIds.isEmpty()) {
+			return java.util.Map.of();
+		}
+		return repository.findByUserIds(userIds).stream()
+			.filter(CorporateProfile::active)
+			.collect(Collectors.toMap(CorporateProfile::userId, java.util.function.Function.identity()));
+	}
+
+	/**
+	 * The account's ACTIVE professional identity, or 403. Every professional operation (applying,
+	 * proposing, publishing BUSINESS) goes through here: the identity is resolved from the session
+	 * on the server, never accepted from the client.
+	 */
+	public CorporateProfile requireActive(String userId) {
+		return repository.findByUserId(userId)
+			.filter(CorporateProfile::active)
+			.orElseThrow(() -> new ApiException(403, "NO_ACTIVE_CORPORATE_PROFILE",
+				"Ative o seu perfil profissional para usar os recursos de trabalho."));
+	}
+
 	public Optional<CorporateProfile> byUsername(String username) {
 		return repository.findByUsername(normalize(username));
 	}

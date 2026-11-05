@@ -71,7 +71,7 @@ class BadgesEverywhereTests {
 				.header("X-Session-Token", autor.token())
 				.header("Idempotency-Key", "badges-pub-1")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "Post com cinco emblemas.", "tags", List.of(),
 					"mediaIds", List.of()))))
 			.andExpect(status().isCreated())
@@ -99,7 +99,7 @@ class BadgesEverywhereTests {
 				.header("X-Session-Token", semEmblema.token())
 				.header("Idempotency-Key", "badges-pub-2")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", "Sem emblema nenhum.", "tags", List.of(),
 					"mediaIds", List.of()))))
 			.andExpect(status().isCreated())

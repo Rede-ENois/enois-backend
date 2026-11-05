@@ -62,12 +62,43 @@ public final class CoinEconomyCalculator {
 	}
 
 	/**
-	 * Um passo da cotação — sempre o passo de UM PERÍODO (o dia). Quem decide se já é hora de
-	 * publicar é o {@code CoinEconomyService}: a conta não olha o relógio nem quantas vezes o
-	 * botão foi clicado, só o movimento medido no ledger.
+	 * O CÁLCULO COMPLETO mensal: o preço sai direto das métricas da janela multiplicando a
+	 * âncora pelo índice — NÃO parte do último valor publicado e NÃO passa pelo limite de passo
+	 * (o passo existe para suavizar o controle diário; a rodada mensal é a validação de
+	 * referência e corrige o preço inteiro de uma vez, com piso/teto como única travas).
+	 */
+	public static Result absoluteEvaluate(long anchorMicros, Metrics metrics, Params params) {
+		Core core = core(metrics, params);
+		long anchor = Math.max(1, anchorMicros);
+		long next = core.circulation() == 0 ? anchor : Math.round(anchor * core.index());
+		return new Result(core.usage(), core.effective(),
+			Math.round(core.scarcity() * 100) / 100.0, core.index(), clamp(next, params));
+	}
+
+	/**
+	 * Um passo da cotação — sempre o passo de UM PERÍODO (3h por padrão). Quem decide se já é
+	 * hora de publicar é o {@code CoinEconomyService}: a conta não olha o relógio nem quantas
+	 * vezes o botão foi clicado, só o movimento medido no ledger.
 	 */
 	public static Result evaluate(long previousMicros, Metrics metrics, Params params) {
 		long previous = Math.max(1, previousMicros);
+		Core core = core(metrics, params);
+		// Sem estoque em circulação não há o que reavaliar: o preço fica onde está.
+		if (core.circulation() == 0) {
+			return new Result(core.usage(), 0, 1.0, 1.0, clamp(previous, params));
+		}
+		double step = params.maxStep();
+		double delta = clamp((core.index() - 1.0) * params.sensitivity(), -step, step);
+		long next = Math.round(previous * (1.0 + delta));
+		return new Result(core.usage(), core.effective(),
+			Math.round(core.scarcity() * 100) / 100.0, core.index(), clamp(next, params));
+	}
+
+	/** O miolo da conta, compartilhado pelo passo e pelo cálculo completo. */
+	private record Core(long usage, long circulation, long effective, double scarcity, double index) {
+	}
+
+	private static Core core(Metrics metrics, Params params) {
 		long circulation = Math.max(0, metrics.circulation());
 		long treasury = Math.max(0, metrics.treasuryBalance());
 		long escrow = Math.max(0, metrics.escrowUsage());
@@ -75,10 +106,8 @@ public final class CoinEconomyCalculator {
 		long inflow = Math.max(0, metrics.treasuryInflow());
 		long issuance = Math.max(0, metrics.issuance());
 		long usage = saturatingAdd(saturatingAdd(escrow, p2p), inflow);
-
-		// Sem estoque em circulação não há o que reavaliar: o preço fica onde está.
 		if (circulation == 0) {
-			return new Result(usage, 0, 1.0, 1.0, clamp(previous, params));
+			return new Core(usage, 0, 0, 1.0, 1.0);
 		}
 
 		// Menos faíscas no cofre (em relação ao total) = mais escassez = mais valor por faísca.
@@ -93,13 +122,7 @@ public final class CoinEconomyCalculator {
 		double target = circulation * params.targetTurnover();
 		double ratio = target <= 0 ? scarcity : (effective / target) * scarcity;
 		double dilution = 1.0 + (double) issuance / circulation;
-		double index = ratio / dilution;
-		double step = params.maxStep();
-		double delta = clamp((index - 1.0) * params.sensitivity(), -step, step);
-		long next = Math.round(previous * (1.0 + delta));
-		return new Result(usage, Math.round(effective), Math.round(scarcity * 100) / 100.0, index,
-			clamp(next, params));
-	}
+		return new Core(usage, circulation, Math.round(effective), scarcity, ratio / dilution);	}
 
 	private static long clamp(long value, Params params) {
 		return Math.max(params.minMicros(), Math.min(value, params.maxMicros()));

@@ -37,7 +37,7 @@ public final class ContentTaxonomy {
 	/** Módulos desativáveis em "O que não quero ver". */
 	public static final List<String> MODULES = List.of(
 		"COMMUNITIES", "GROUPS", "MESSAGES", "BLOGS", "JOBS", "COMPANIES",
-		"MENTORING", "EVENTS", "DAILY_GAMES", "COMMUNITY_GAMES", "COMMUNITY_PROJECTS");
+		"MENTORING", "EVENTS", "DAILY_GAMES", "COMMUNITY_GAMES", "COMMUNITY_PROJECTS", "STUDY_PAIRS");
 
 	public static final Set<String> TOPIC_SET = Set.copyOf(TOPICS);
 	public static final Set<String> MODULE_SET = Set.copyOf(MODULES);

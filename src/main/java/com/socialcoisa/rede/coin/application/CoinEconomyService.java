@@ -24,8 +24,9 @@ import com.socialcoisa.rede.coin.domain.CoinEntry;
  *
  * <p>Salvaguardas: passo máximo por execução, piso/teto de preço, peso menor para P2P e teto de
  * uso por janela (ping-pong entre contas não infla o preço). Se não houver circulação, nada muda.
- * O valor-base da emissão automática continua sendo o da cotação inicial; a conversão fica no
- * {@link CoinService#scaledReward(long)}.</p>
+ * Uma vez por mês a rodada COMPLETA recalcula o preço do zero (âncora × índice, sem partir do
+ * último valor e sem o limite de passo). O valor-base da emissão automática continua sendo o da
+ * cotação inicial; a conversão fica no {@link CoinService#scaledReward(long)}.</p>
  */
 @Service
 public class CoinEconomyService {
@@ -50,12 +51,15 @@ public class CoinEconomyService {
 	private final Clock clock;
 	private final boolean enabled;
 	private final CoinEconomyCalculator.Params params;
-	/** Período de referência de uma reavaliação completa (o cron é diário). */
+	/** Período de referência de uma reavaliação suave (o cron é de 3h em 3h). */
 	private final Duration period;
+	/** Âncora do cálculo completo mensal: o preço de referência multiplicado pelo índice. */
+	private final long anchorMicros;
 
 	public CoinEconomyService(CoinLedgerRepository ledger, CoinRateService rates, CoinService coins, Clock clock,
 			@Value("${rede.coin.economy.enabled:true}") boolean enabled,
-			@Value("${rede.coin.economy.period-hours:24}") int periodHours,
+			@Value("${rede.coin.economy.period-hours:3}") int periodHours,
+			@Value("${rede.coin.economy.anchor-micros:10000}") long anchorMicros,
 			@Value("${rede.coin.economy.window-days:30}") int windowDays,
 			@Value("${rede.coin.economy.target-turnover:0.05}") double targetTurnover,
 			@Value("${rede.coin.economy.p2p-weight:0.5}") double p2pWeight,
@@ -71,12 +75,13 @@ public class CoinEconomyService {
 		this.clock = clock;
 		this.enabled = enabled;
 		this.period = Duration.ofHours(Math.max(1, periodHours));
+		this.anchorMicros = Math.max(1, anchorMicros);
 		this.params = new CoinEconomyCalculator.Params(windowDays, targetTurnover, p2pWeight, maxUsageRatio,
 			scarcityWeight, sensitivity, maxStep, minMicros, maxMicros);
 	}
 
-	/** Execução diária: publica uma nova cotação quando o valor sugerido mudou. */
-	@Scheduled(cron = "${rede.coin.economy.cron:0 10 3 * * *}",
+	/** Execução periódica (a cada 3 horas por padrão): publica a nova cotação quando mudou. */
+	@Scheduled(cron = "${rede.coin.economy.cron:0 10 */3 * * *}",
 		zone = "${rede.coin.economy.zone:America/Sao_Paulo}")
 	public void scheduledRecalculate() {
 		if (!enabled) {
@@ -94,6 +99,61 @@ public class CoinEconomyService {
 		catch (RuntimeException failure) {
 			LOG.warn("coin_economy_failed error={}", failure.getMessage());
 		}
+	}
+
+	/**
+	 * A rodada mensal COMPLETA (1º de cada mês, no fuso configurado): recalcula o preço DO ZERO —
+	 * âncora × índice da janela de 30 dias — sem partir do último valor publicado e sem o limite
+	 * de passo. É a validação de referência da cotação: o controle de passo curto das 3h pode se
+	 * acumular fora do rumo, e a rodada mensal corrige o preço inteiro de uma vez (piso/teto
+	 * continuam valendo). Publica mesmo que o período de 3h não tenha fechado — a trava do
+	 * período é do controle suave, não da validação mensal.
+	 */
+	@Scheduled(cron = "${rede.coin.economy.monthly-cron:0 40 3 1 * *}",
+		zone = "${rede.coin.economy.zone:America/Sao_Paulo}")
+	public void scheduledMonthlyRecalculate() {
+		if (!enabled) {
+			return;
+		}
+		try {
+			Summary summary = monthlyRecalculate();
+			if (summary.published()) {
+				LOG.info("coin_economy_monthly quote_micros={} previous={} index={}",
+					summary.result().suggestedMicros(), summary.previousMicros(),
+					summary.result().index());
+			}
+		}
+		catch (RuntimeException failure) {
+			LOG.warn("coin_economy_monthly_failed error={}", failure.getMessage());
+		}
+	}
+
+	/** A mesma conta da rodada mensal, chamada na mão (testes e administração). */
+	public synchronized Summary monthlyRecalculate() {
+		var latest = rates.latest();
+		long current = latest.brlMicros();
+		CoinEconomyCalculator.Metrics metrics = metrics();
+		CoinEconomyCalculator.Result result = CoinEconomyCalculator.absoluteEvaluate(anchorMicros, metrics,
+			params);
+		boolean published = false;
+		if (enabled && result.suggestedMicros() != current) {
+			rates.publish(result.suggestedMicros(), monthlyNote(metrics, result));
+			published = true;
+		}
+		Instant now = clock.instant();
+		return new Summary(params.windowDays(), metrics, result, current,
+			published ? result.suggestedMicros() : current, published,
+			elapsedFraction(latest.effectiveAt(), now), isOpen(nextEvaluationAt(latest.effectiveAt(), now),
+				now), nextEvaluationAt(latest.effectiveAt(), now));
+	}
+
+	private String monthlyNote(CoinEconomyCalculator.Metrics metrics,
+			CoinEconomyCalculator.Result result) {
+		return "Cotação completa do mês (referência, calculada do zero): giro "
+			+ faiscas(metrics.escrowUsage() + metrics.p2pUsage() + metrics.treasuryInflow())
+			+ ", retorno ao cofre " + faiscas(metrics.treasuryInflow()) + ", emissão "
+			+ faiscas(metrics.issuance()) + ", cofre " + faiscas(metrics.treasuryBalance())
+			+ ", índice " + String.format(java.util.Locale.ROOT, "%.2f", result.index());
 	}
 
 	/**

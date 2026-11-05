@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="pt-BR" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sua semana no Énóis</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f8f7ff; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; -webkit-font-smoothing: antialiased;">
+<table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #f8f7ff;">
+    <tr>
+        <td align="center" style="padding: 40px 16px;">
+            <table role="presentation" style="width: 100%; max-width: 560px; border-collapse: collapse; background-color: #ffffff; border-radius: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+
+                <tr>
+                    <td style="padding: 32px 40px 8px 40px;">
+                        <p style="margin: 0 0 4px 0; color: #8b8ba3; font-size: 13px; font-weight: 600; letter-spacing: 0.04em;">Énóis · resumo da semana</p>
+                        <h1 style="margin: 0 0 12px 0; color: #1a1a2e; font-family: 'Plus Jakarta Sans', 'Inter', sans-serif; font-size: 22px; font-weight: 600; letter-spacing: -0.02em;">
+                            Oi<span th:if="${name != ''}" th:text="', ' + ${name}">, Ana</span>. Foi isso que rolou por perto.
+                        </h1>
+                        <p style="margin: 0; color: #4b5563; font-size: 15px; line-height: 1.6;">
+                            Um resumo curto, uma vez por semana. Leia quando der, sem pressa.
+                        </p>
+                        <p th:if="${unread > 0}" style="margin: 12px 0 0 0; color: #4b5563; font-size: 15px; line-height: 1.6;">
+                            <span th:if="${unread == 1}">Tem 1 notificação esperando por você.</span>
+                            <span th:if="${unread > 1}" th:text="'Tem ' + ${unread} + ' notificações esperando por você.'">Tem 4 notificações esperando por você.</span>
+                        </p>
+                    </td>
+                </tr>
+
+                <tr th:if="${!posts.isEmpty()}">
+                    <td style="padding: 24px 40px 0 40px;">
+                        <h2 style="margin: 0 0 8px 0; color: #1a1a2e; font-size: 16px; font-weight: 600;">Nas suas comunidades e grupos</h2>
+                        <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                            <tr th:each="item : ${posts}">
+                                <td style="padding: 12px 0; border-bottom: 1px solid #ecebf5;">
+                                    <a th:href="${appUrl + item.path()}" style="color: #1a1a2e; text-decoration: none; font-size: 15px; line-height: 1.5;" th:text="${item.title()}">Trecho do post</a>
+                                    <p th:if="${item.context() != null}" style="margin: 4px 0 0 0; color: #8b8ba3; font-size: 13px;" th:text="'em ' + ${item.context()}">em Comunidade</p>
+                                </td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+
+                <tr th:if="${!jobs.isEmpty()}">
+                    <td style="padding: 24px 40px 0 40px;">
+                        <h2 style="margin: 0 0 8px 0; color: #1a1a2e; font-size: 16px; font-weight: 600;">Vagas que combinam com você</h2>
+                        <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                            <tr th:each="item : ${jobs}">
+                                <td style="padding: 12px 0; border-bottom: 1px solid #ecebf5;">
+                                    <a th:href="${appUrl + item.path()}" style="color: #1a1a2e; text-decoration: none; font-size: 15px;" th:text="${item.title()}">Vaga</a>
+                                    <p style="margin: 4px 0 0 0; color: #8b8ba3; font-size: 13px;" th:text="${item.context()}">Empresa</p>
+                                </td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+
+                <tr th:if="${!events.isEmpty()}">
+                    <td style="padding: 24px 40px 0 40px;">
+                        <h2 style="margin: 0 0 8px 0; color: #1a1a2e; font-size: 16px; font-weight: 600;">Seus eventos nos próximos dias</h2>
+                        <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                            <tr th:each="item : ${events}">
+                                <td style="padding: 12px 0; border-bottom: 1px solid #ecebf5;">
+                                    <a th:href="${appUrl + item.path()}" style="color: #1a1a2e; text-decoration: none; font-size: 15px;" th:text="${item.title()}">Evento</a>
+                                    <p style="margin: 4px 0 0 0; color: #8b8ba3; font-size: 13px;" th:text="${item.context()}">segunda-feira, 02/11</p>
+                                </td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+
+                <tr>
+                    <td align="center" style="padding: 32px 40px;">
+                        <a th:href="${appUrl + '/feed'}" style="display: inline-block; padding: 12px 28px; background-color: #6366f1; color: #ffffff; text-decoration: none; border-radius: 999px; font-weight: 600; font-size: 15px;">Abrir o Énóis</a>
+                    </td>
+                </tr>
+
+                <tr>
+                    <td style="padding: 24px 40px 32px 40px; border-top: 1px solid #ecebf5; text-align: center;">
+                        <p style="margin: 0 0 8px 0; color: #8b8ba3; font-size: 12px; line-height: 1.6;">
+                            Você recebe este resumo porque tem uma conta no Énóis.
+                            <a th:href="${unsubscribeLink}" style="color: #6366f1; text-decoration: underline;">Não quero mais receber</a>.
+                        </p>
+                        <p style="margin: 0; color: #b9b8c9; font-size: 11px;">
+                            Énóis · <span th:text="${currentYear}">2026</span>
+                        </p>
+                    </td>
+                </tr>
+
+            </table>
+        </td>
+    </tr>
+</table>
+</body>
+</html>

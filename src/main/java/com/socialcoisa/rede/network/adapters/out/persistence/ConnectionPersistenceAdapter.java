@@ -93,50 +93,65 @@ class ConnectionPersistenceAdapter implements ConnectionRepository {
 		return result;
 	}
 
+	/** People already connected to, or with a pending request with, {@code :userId}. */
+	private static final String ALREADY_LINKED = """
+			SELECT requester_user_id FROM user_connections
+			WHERE receiver_user_id = :userId AND status IN ('PENDING','ACCEPTED')
+			UNION
+			SELECT receiver_user_id FROM user_connections
+			WHERE requester_user_id = :userId AND status IN ('PENDING','ACCEPTED')""";
+
+	/**
+	 * Friends of friends first, ranked by how many connections they share with the user, in one
+	 * query; then other people to fill the list. The ranking used to run on 50 arbitrary users, so
+	 * with a large base the people with friends in common were often not even considered.
+	 */
 	@Override
-	@SuppressWarnings("unchecked")
 	public List<ConnectionSuggestion> findSuggestions(String userId, int limit) {
 		Set<String> friendIds = new HashSet<>(springData.findAcceptedFriendIds(userId));
-		Query candidates = em.createNativeQuery("""
-				SELECT id FROM users
-				WHERE id != :userId
-				  AND id NOT IN (
-				    SELECT requester_user_id FROM user_connections
-				    WHERE receiver_user_id = :userId AND status IN ('PENDING','ACCEPTED')
-				  )
-				  AND id NOT IN (
-				    SELECT receiver_user_id FROM user_connections
-				    WHERE requester_user_id = :userId AND status IN ('PENDING','ACCEPTED')
-				  )
-				LIMIT 50""");
-		candidates.setParameter("userId", userId);
-		List<String> candidateIds = candidates.getResultList();
 		List<ConnectionSuggestion> suggestions = new ArrayList<>();
-		for (String candidateId : candidateIds) {
-			if (candidateId.equals(userId) || friendIds.contains(candidateId)) {
-				continue;
+		if (!friendIds.isEmpty()) {
+			Query mutual = em.createNativeQuery("""
+					SELECT f.other_id, COUNT(*) AS mutual FROM (
+					  SELECT receiver_user_id AS other_id FROM user_connections
+					  WHERE status = 'ACCEPTED' AND requester_user_id IN (:friendIds)
+					  UNION ALL
+					  SELECT requester_user_id AS other_id FROM user_connections
+					  WHERE status = 'ACCEPTED' AND receiver_user_id IN (:friendIds)
+					) f
+					WHERE f.other_id <> :userId AND f.other_id NOT IN (""" + ALREADY_LINKED + """
+					)
+					GROUP BY f.other_id
+					ORDER BY mutual DESC, f.other_id
+					LIMIT :limit""");
+			mutual.setParameter("friendIds", friendIds);
+			mutual.setParameter("userId", userId);
+			mutual.setParameter("limit", limit);
+			for (Object row : mutual.getResultList()) {
+				Object[] columns = (Object[]) row;
+				suggestions.add(new ConnectionSuggestion((String) columns[0], ((Number) columns[1]).intValue()));
 			}
-			int mutual = countMutualConnections(userId, candidateId, friendIds);
-			suggestions.add(new ConnectionSuggestion(candidateId, mutual));
 		}
-		return suggestions.stream()
-			.sorted((a, b) -> Integer.compare(b.mutualConnections(), a.mutualConnections()))
-			.limit(limit)
-			.toList();
-	}
-
-	private int countMutualConnections(String userId, String candidateId, Set<String> friendIds) {
-		if (friendIds.isEmpty()) {
-			return 0;
+		if (suggestions.size() < limit) {
+			Set<String> taken = new HashSet<>();
+			suggestions.forEach(suggestion -> taken.add(suggestion.userId()));
+			Query others = em.createNativeQuery("""
+					SELECT id FROM users
+					WHERE id <> :userId AND id NOT IN (""" + ALREADY_LINKED + """
+					)
+					LIMIT :limit""");
+			others.setParameter("userId", userId);
+			others.setParameter("limit", limit + taken.size());
+			for (Object id : others.getResultList()) {
+				if (suggestions.size() >= limit) {
+					break;
+				}
+				if (taken.add((String) id)) {
+					suggestions.add(new ConnectionSuggestion((String) id, 0));
+				}
+			}
 		}
-		Query q = em.createNativeQuery("""
-				SELECT COUNT(*) FROM user_connections c
-				WHERE c.status = 'ACCEPTED'
-				  AND ((c.requester_user_id IN (:friendIds) AND c.receiver_user_id = :candidateId)
-				    OR (c.requester_user_id = :candidateId AND c.receiver_user_id IN (:friendIds)))""");
-		q.setParameter("friendIds", friendIds);
-		q.setParameter("candidateId", candidateId);
-		return ((Number) q.getSingleResult()).intValue();
+		return suggestions;
 	}
 
 }

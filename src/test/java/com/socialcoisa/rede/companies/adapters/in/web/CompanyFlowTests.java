@@ -38,6 +38,7 @@ class CompanyFlowTests {
 	void companyMicroProjectFlowEndToEnd() throws Exception {
 		var owner = auth("cflow_owner");
 		var pro = auth("cflow_pro");
+		new TestAuthHelper(mockMvc, objectMapper).activateProfessional(pro);
 
 		MvcResult created = mockMvc.perform(post("/empresas")
 				.header("X-Session-Token", owner.token())
@@ -147,6 +148,83 @@ class CompanyFlowTests {
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("userId", other.userId(), "role", "SUPERUSER"))))
 			.andExpect(status().isBadRequest());
+	}
+
+	@Test
+	void eachViewerSeesWhereTheyStand() throws Exception {
+		var owner = auth("cflow_view_owner");
+		var editor = auth("cflow_view_editor");
+		var pro = auth("cflow_view_pro");
+		new TestAuthHelper(mockMvc, objectMapper).activateProfessional(pro);
+		var outsider = auth("cflow_view_out");
+		String name = "Empresa Visao " + java.util.UUID.randomUUID().toString().substring(0, 8);
+		MvcResult created = mockMvc.perform(post("/empresas")
+				.header("X-Session-Token", owner.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("name", name, "description", "Pagina de teste."))))
+			.andExpect(status().isOk())
+			.andReturn();
+		var body = objectMapper.readTree(created.getResponse().getContentAsString());
+		String companyId = body.get("id").asText();
+		String slug = body.get("slug").asText();
+		mockMvc.perform(post("/empresas/" + companyId + "/members")
+				.header("X-Session-Token", owner.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("userId", editor.userId(), "role", "EDITOR"))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.person.id").value(editor.userId()));
+
+		MvcResult project = mockMvc.perform(post("/empresas/" + companyId + "/microprojetos")
+				.header("X-Session-Token", owner.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+					"title", "Landing page da campanha",
+					"problem", "Precisamos de uma landing page simples para a campanha de fim de ano.",
+					"deliverables", "Pagina publicada", "acceptanceCriteria", "Carrega em menos de 2s"))))
+			.andExpect(status().isOk())
+			.andReturn();
+		String projectId = objectMapper.readTree(project.getResponse().getContentAsString()).get("id").asText();
+		mockMvc.perform(post("/microprojetos/" + projectId + "/proposals")
+				.header("X-Session-Token", pro.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+					"message", "Entrego em tres dias, ja fiz landing pages de campanha antes."))))
+			.andExpect(status().isOk());
+
+		// Who sent a proposal sees it on the card; the team sees the count and who sent it.
+		mockMvc.perform(get("/empresa/" + slug).header("X-Session-Token", pro.token()))
+			.andExpect(jsonPath("$.projects[0].myProposal").value("SENT"))
+			.andExpect(jsonPath("$.projects[0].proposalCount").doesNotExist());
+		mockMvc.perform(get("/empresa/" + slug).header("X-Session-Token", owner.token()))
+			.andExpect(jsonPath("$.projects[0].proposalCount").value(1));
+		mockMvc.perform(get("/microprojetos/" + projectId).header("X-Session-Token", owner.token()))
+			.andExpect(jsonPath("$.proposals[0].person.id").value(pro.userId()));
+
+		// Someone logged in but outside the company reads the project, without the proposals.
+		mockMvc.perform(get("/microprojetos/" + projectId).header("X-Session-Token", outsider.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.proposals").isEmpty());
+
+		// A member who is not the owner finds the page among their own; the team stays internal.
+		mockMvc.perform(get("/empresas/mine").header("X-Session-Token", editor.token()))
+			.andExpect(jsonPath("$[?(@.id == '" + companyId + "')].slug").value(slug));
+		mockMvc.perform(get("/empresas/" + companyId + "/members").header("X-Session-Token", outsider.token()))
+			.andExpect(status().isForbidden());
+		mockMvc.perform(get("/empresas/" + companyId + "/members").header("X-Session-Token", editor.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[?(@.userId == '" + owner.userId() + "')].person.username").isNotEmpty());
+	}
+
+	@Test
+	void theAddressKeepsTheLettersOfAnAccentedName() throws Exception {
+		var owner = auth("cflow_slug_owner");
+		String suffix = java.util.UUID.randomUUID().toString().substring(0, 6);
+		mockMvc.perform(post("/empresas")
+				.header("X-Session-Token", owner.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("name", "Estúdio Ação " + suffix))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.slug").value("estudio-acao-" + suffix));
 	}
 
 	private TestAuthHelper.AuthSession auth(String name) throws Exception {

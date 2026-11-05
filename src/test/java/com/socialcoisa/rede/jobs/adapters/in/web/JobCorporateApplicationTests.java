@@ -111,16 +111,82 @@ class JobCorporateApplicationTests {
 	}
 
 	@Test
-	void socialApplicantKeepsTheSocialSnapshot() throws Exception {
-		var owner = auth.authenticate("jobcorp_owner2");
-		var applicant = auth.authenticate("jobcorp_social");
+	void applicationAndItsConversationLiveInTheProfessionalContext() throws Exception {
+		var owner = auth.authenticate("jobcorp_owner3");
+		var applicant = auth.authenticate("jobcorp_ctx");
+		String proUsername = auth.activateProfessional(applicant);
 		String jobId = createJob(owner);
 
 		apply(applicant, jobId);
 
+		// A empresa ve a identidade profissional, com o @ profissional (nunca o social).
 		mockMvc.perform(get("/jobs/" + jobId + "/applications").header("X-Session-Token", owner.token()))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$[0].candidate.identity").value("SOCIAL"))
-			.andExpect(jsonPath("$[0].candidate.name").value("jobcorp_social"));
+			.andExpect(jsonPath("$[0].candidate.identity").value("CORPORATE"))
+			.andExpect(jsonPath("$[0].candidate.username").value(proUsername));
+
+		// A conversa da candidatura esta na caixa profissional, com a identidade profissional.
+		mockMvc.perform(get("/conversations").param("context", "PROFESSIONAL")
+				.header("X-Session-Token", owner.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.kind == 'JOB')].context").value(org.hamcrest.Matchers.hasItem("PROFESSIONAL")))
+			.andExpect(jsonPath("$.items[?(@.kind == 'JOB')].identities." + applicant.userId() + ".username")
+				.value(org.hamcrest.Matchers.hasItem(proUsername)));
+
+		// E NAO aparece na caixa social de nenhum dos dois.
+		mockMvc.perform(get("/conversations").param("context", "SOCIAL").header("X-Session-Token", owner.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.kind == 'JOB')]").isEmpty());
+		mockMvc.perform(get("/conversations").param("context", "SOCIAL").header("X-Session-Token", applicant.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.kind == 'JOB')]").isEmpty());
+	}
+
+	@Test
+	void socialDirectMessageNeverReusesTheApplicationConversation() throws Exception {
+		var owner = auth.authenticate("jobcorp_owner4");
+		var applicant = auth.authenticate("jobcorp_dm");
+		auth.activateProfessional(applicant);
+		String jobId = createJob(owner);
+		apply(applicant, jobId);
+
+		MvcResult professional = mockMvc.perform(get("/conversations").param("context", "PROFESSIONAL")
+				.header("X-Session-Token", applicant.token()))
+			.andExpect(status().isOk())
+			.andReturn();
+		String jobConversation = objectMapper.readTree(professional.getResponse().getContentAsString())
+			.path("items").get(0).path("id").asText();
+
+		MvcResult direct = mockMvc.perform(post("/conversations/direct")
+				.header("X-Session-Token", applicant.token())
+				.header("Idempotency-Key", "jobcorp-dm-" + System.nanoTime())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of("userId", owner.userId()))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.context").value("SOCIAL"))
+			.andReturn();
+		String directConversation = objectMapper.readTree(direct.getResponse().getContentAsString()).path("id").asText();
+
+		org.assertj.core.api.Assertions.assertThat(directConversation).isNotEqualTo(jobConversation);
+	}
+
+	@Test
+	void applicantWithoutAnActiveProfessionalIdentityIsRefused() throws Exception {
+		var owner = auth.authenticate("jobcorp_owner2");
+		var applicant = auth.authenticate("jobcorp_social");
+		String jobId = createJob(owner);
+
+		mockMvc.perform(post("/jobs/" + jobId + "/applications")
+				.header("X-Session-Token", applicant.token())
+				.header("Idempotency-Key", "apply-social-" + System.nanoTime())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of("message", "Quero a vaga."))))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("NO_ACTIVE_CORPORATE_PROFILE"));
+
+		// Nada foi registrado nem entregue em nome da identidade social.
+		mockMvc.perform(get("/jobs/" + jobId + "/applications").header("X-Session-Token", owner.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$").isEmpty());
 	}
 }

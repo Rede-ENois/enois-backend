@@ -48,7 +48,14 @@ public class ProfileExtensionService implements ManageProfileExtensionUseCase {
 	public List<ExperienceView> getExperiencesOf(String username) {
 		var profile = profiles.findByUsername(username == null ? "" : username.trim())
 			.orElseThrow(() -> new ApiException(404, "PROFILE_NOT_FOUND", "Perfil não encontrado."));
-		return repository.findExperiencesByUserId(profile.id()).stream()
+		return publicExperiences(profile.id());
+	}
+
+	/** Same public order, by account id (the professional page has no social @ to look up). */
+	@Override
+	@Transactional(readOnly = true)
+	public List<ExperienceView> publicExperiences(String userId) {
+		return repository.findExperiencesByUserId(userId).stream()
 			.sorted(java.util.Comparator.comparing(Experience::startDate,
 				java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())))
 			.map(this::toExperienceView)

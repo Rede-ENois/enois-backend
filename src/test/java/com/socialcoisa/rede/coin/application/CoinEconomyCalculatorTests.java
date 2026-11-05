@@ -112,4 +112,38 @@ class CoinEconomyCalculatorTests {
 
 		assertThat(result.suggestedMicros()).isEqualTo(12_345);
 	}
+
+	// ===== A rodada COMPLETA mensal (cálculo absoluto): o preço sai da janela, não do último valor.
+
+	@Test
+	void oCalculoCompletoNaoDependeDoUltimoValor() {
+		// Decisão da dona (2026-10-30): a rodada mensal valida o valor do zero — a conta nem recebe
+		// a cotação anterior: só âncora × índice da janela. Duas execuções com as MESMAS métricas
+		// e a MESMA âncora chegam no MESMO preço, venha a cotação de onde vier.
+		var m = metrics(200_000, 0, 0, 0, 1_000_000, 1_000_000);
+		var primeira = CoinEconomyCalculator.absoluteEvaluate(10_000, m, params);
+		var segunda = CoinEconomyCalculator.absoluteEvaluate(10_000, m, params);
+
+		assertThat(primeira.suggestedMicros()).isEqualTo(segunda.suggestedMicros());
+		// Janela: giro 4× a meta e escassez 1,25 → índice 5 → âncora 10.000 × 5.
+		assertThat(primeira.suggestedMicros()).isEqualTo(50_000);
+	}
+
+	@Test
+	void oCalculoCompletoNaoRespeitaOPassoMaximo() {
+		// O passo de 1% é do controle suave de 3h; a validação mensal corrige o preço inteiro.
+		var m = metrics(200_000, 0, 0, 0, 1_000_000, 1_000_000);
+		var result = CoinEconomyCalculator.absoluteEvaluate(50_000, m, params);
+
+		// Índice 5 → 250.000; um passo de 1% nunca deixaria a cotação andar 5× de uma vez.
+		assertThat(result.suggestedMicros()).isEqualTo(250_000);
+	}
+
+	@Test
+	void oCalculoCompletoRespeitaPisoETeto() {
+		var resultNoPiso = CoinEconomyCalculator.absoluteEvaluate(10_000,
+			metrics(0, 0, 0, 0, 1_000_000, 2_000_000), params);
+
+		assertThat(resultNoPiso.suggestedMicros()).isEqualTo(1_000); // piso: 0,1 centavo
+	}
 }

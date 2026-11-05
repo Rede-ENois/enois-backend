@@ -166,4 +166,44 @@ class EmoteCatalogServiceTest {
 		assertThat(catjam.animated()).isTrue();
 		assertThat(catjam.popularRank()).isEqualTo(7);
 	}
+
+	@Test
+	void figurinhaDeNomeBarradoNaoEntraNoCatalogo() {
+		Emote barrada = new Emote("bigbutt", EmoteProvider.FFZ, "999001", true, 1);
+		Emote limpa = new Emote("KEKW", EmoteProvider.BTTV, "999002", true, null);
+		EmoteCatalogService servico = new EmoteCatalogService(List.of(live("FFZ-ANIMADAS", List.of(barrada, limpa))),
+				embarcado(List.of(new Emote("dick", EmoteProvider.FFZ, "999003", false, 2))));
+
+		servico.refresh();
+
+		assertThat(servico.catalog().emotes()).extracting(Emote::code).containsExactly("KEKW");
+		assertThat(servico.index()).extracting(Emote::code).containsExactly("KEKW");
+		assertThat(servico.page(1, 40, "butt", "ALL").total()).isZero();
+	}
+
+	@Test
+	void aArteBarradaTambemERecusadaPeloIdDireto() {
+		Emote barrada = new Emote("booty", EmoteProvider.FFZ, "999010", false, 1);
+		EmoteCatalogService servico = new EmoteCatalogService(List.of(), embarcado(List.of(barrada)));
+
+		// Sai do catalogo...
+		assertThat(servico.catalog().emotes()).isEmpty();
+		// ...e o id continua barrado, que e o que impede o proxy de buscar a arte no CDN.
+		assertThat(servico.isBlocked("FFZ", "999010")).isTrue();
+		assertThat(servico.isBlocked("ffz", "999010")).isTrue();
+		assertThat(servico.isBlocked("BTTV", "999010")).isFalse();
+		assertThat(servico.isBlocked("FFZ", "999011")).isFalse();
+		assertThat(servico.isBlocked("SEILA", "999010")).isFalse();
+		assertThat(servico.isBlocked("FFZ", null)).isFalse();
+	}
+
+	@Test
+	void figurinhaLegitimaContinuaServida() {
+		Emote limpa = new Emote("KEKW", EmoteProvider.BTTV, "999020", false, null);
+		EmoteCatalogService servico = new EmoteCatalogService(List.of(), embarcado(List.of(limpa)));
+
+		assertThat(servico.catalog().emotes()).extracting(Emote::code).containsExactly("KEKW");
+		assertThat(servico.isBlocked("BTTV", "999020")).isFalse();
+	}
+
 }

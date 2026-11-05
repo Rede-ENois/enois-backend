@@ -21,6 +21,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
+import com.socialcoisa.rede.coin.CoinTestSupport;
 import com.socialcoisa.rede.coin.application.CoinService;
 import com.socialcoisa.rede.coin.application.port.out.CoinLedgerRepository;
 import com.socialcoisa.rede.coin.domain.CoinEntry;
@@ -42,7 +43,7 @@ class CoinExtractTests {
 	@BeforeAll
 	void prepareLedger() throws Exception {
 		owner = auth("wallet-extract-owner");
-		coins.wallet(owner.userId(), "wallet-extract-owner");
+		openWallet(owner, "wallet-extract-owner");
 		add("before", "2020-01-15T02:59:59Z");
 		add("start", "2020-01-15T03:00:00Z");
 		add("tie-a", "2020-01-15T15:00:00Z");
@@ -117,8 +118,8 @@ class CoinExtractTests {
 	void transferMessageAndReferenceRemainAvailableForContestation() throws Exception {
 		var sender = auth("wallet-extract-sender");
 		var receiver = auth("wallet-extract-receiver");
-		coins.wallet(sender.userId(), "wallet-extract-sender");
-		coins.wallet(receiver.userId(), "wallet-extract-receiver");
+		openWallet(sender, "wallet-extract-sender");
+		openWallet(receiver, "wallet-extract-receiver");
 		var transfer = coins.transfer(sender.userId(), "wallet-extract-sender", 1_000,
 				"Transferência de demonstração", receiver.userId(), "wallet-extract-receiver");
 		JsonNode entries = read(extract(sender)).get("entries");
@@ -156,6 +157,11 @@ class CoinExtractTests {
 
 	private TestAuthHelper.AuthSession auth(String name) throws Exception {
 		return new TestAuthHelper(mockMvc, mapper).authenticate(name);
+	}
+
+	/** Abrir a carteira nova debita a tesouraria, que é compartilhada: ver {@link CoinTestSupport}. */
+	private void openWallet(TestAuthHelper.AuthSession user, String username) {
+		CoinTestSupport.retryOnCoinConcurrency(() -> coins.wallet(user.userId(), username));
 	}
 
 	private MockHttpServletRequestBuilder extract(TestAuthHelper.AuthSession user) {

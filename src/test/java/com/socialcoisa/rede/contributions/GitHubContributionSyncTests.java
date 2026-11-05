@@ -48,6 +48,7 @@ class GitHubContributionSyncTests {
 
 	private static final AtomicReference<List<GitHubPullRequest>> PULLS = new AtomicReference<>(List.of());
 	private static final AtomicReference<List<GitHubIssue>> ISSUES = new AtomicReference<>(List.of());
+	private static final AtomicReference<List<String>> ORG_REPOS = new AtomicReference<>(List.of());
 	private static final String HEAD = "gh-103";
 
 	@Autowired
@@ -85,6 +86,11 @@ class GitHubContributionSyncTests {
 
 	static class FakeGateway implements GitHubGateway {
 		@Override
+		public List<String> listOrganizationRepositories(String organization, int maxPages) {
+			return ORG_REPOS.get();
+		}
+
+		@Override
 		public List<GitHubPullRequest> listMergedPullRequests(String repository, Instant since, int maxPages) {
 			return PULLS.get();
 		}
@@ -108,6 +114,34 @@ class GitHubContributionSyncTests {
 		public boolean submitReview(String repository, long number, String decision, String body,
 				String tokenOverride) {
 			return true;
+		}
+	}
+
+	@Test
+	void newOrganizationRepositoriesBecomeEligibleButSwitchedOffOnesStayOff() {
+		String suffix = String.valueOf(System.nanoTime());
+		String fresh = "Rede-ENois/novo-" + suffix;
+		String switchedOff = "Rede-ENois/desligado-" + suffix;
+		String foreign = "Outra-Org/estranho-" + suffix;
+		registry.save(new GitHubRepository(switchedOff, false, Instant.now(), null));
+		ORG_REPOS.set(List.of(fresh, switchedOff, foreign));
+		PULLS.set(List.of());
+		ISSUES.set(List.of());
+		try {
+			sync.sync(true, false, List.of());
+			assertThat(registry.findAll().stream().anyMatch(item -> item.repository().equals(fresh)))
+				.as("dry-run nao persiste").isFalse();
+
+			sync.sync(false, false, List.of());
+
+			assertThat(registry.findAll().stream().filter(item -> item.repository().equals(fresh)).findFirst())
+				.hasValueSatisfying(item -> assertThat(item.enabled()).isTrue());
+			assertThat(registry.findAll().stream().filter(item -> item.repository().equals(switchedOff)).findFirst())
+				.hasValueSatisfying(item -> assertThat(item.enabled()).isFalse());
+			assertThat(registry.findAll().stream().anyMatch(item -> item.repository().equals(foreign))).isFalse();
+		}
+		finally {
+			ORG_REPOS.set(List.of());
 		}
 	}
 

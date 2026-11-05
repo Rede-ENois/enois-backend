@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.network.adapters.out.persistence;
 
+import java.time.Clock;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -15,11 +16,13 @@ class UserBlockPersistenceAdapter implements UserBlockRepository, BlockedUsersRe
 
 	private final SpringDataUserBlockJpaRepository repository;
 	private final SpringDataUserMuteJpaRepository muteRepository;
+	private final Clock clock;
 
 	UserBlockPersistenceAdapter(SpringDataUserBlockJpaRepository repository,
-			SpringDataUserMuteJpaRepository muteRepository) {
+			SpringDataUserMuteJpaRepository muteRepository, Clock clock) {
 		this.repository = repository;
 		this.muteRepository = muteRepository;
+		this.clock = clock;
 	}
 
 	@Override
@@ -59,24 +62,28 @@ class UserBlockPersistenceAdapter implements UserBlockRepository, BlockedUsersRe
 			.collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
 	}
 
+	/** Bloqueios + mutes: usado pelo feed, notificacoes e comentarios para filtrar conteudo. */
 	@Override
 	public Set<String> hiddenIdsFor(String userId) {
 		if (userId == null || userId.isBlank()) {
 			return Set.of();
 		}
-		return findHiddenIds(userId);
+		Set<String> hidden = findHiddenIds(userId);
+		// So mutes ainda validos: o que venceu volta a aparecer no feed sem ninguem desfazer.
+		muteRepository.findActiveByMuterId(userId, clock.instant()).stream()
+			.map(UserMuteJpaEntity::toDomain)
+			.map(com.socialcoisa.rede.network.domain.UserMute::mutedId)
+			.forEach(hidden::add);
+		return hidden;
 	}
 
+	/** So bloqueios (duas direcoes): usado pelo modulo de rede para conexoes, sugestoes e requests. */
 	@Override
 	public Set<String> findHiddenIds(String userId) {
 		Set<String> hidden = findBlockedIds(userId);
 		repository.findByBlockedId(userId).stream()
 			.map(UserBlockJpaEntity::toDomain)
 			.map(UserBlock::blockerId)
-			.forEach(hidden::add);
-		muteRepository.findByMuterIdOrderByCreatedAtDesc(userId).stream()
-			.map(UserMuteJpaEntity::toDomain)
-			.map(com.socialcoisa.rede.network.domain.UserMute::mutedId)
 			.forEach(hidden::add);
 		return hidden;
 	}

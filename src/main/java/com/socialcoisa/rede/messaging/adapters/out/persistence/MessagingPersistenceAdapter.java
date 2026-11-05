@@ -14,6 +14,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import com.socialcoisa.rede.feed.domain.ReactionType;
 import com.socialcoisa.rede.messaging.application.port.out.MessagingRepository;
 import com.socialcoisa.rede.messaging.domain.Conversation;
+import com.socialcoisa.rede.messaging.domain.ConversationContext;
 import com.socialcoisa.rede.messaging.domain.ConversationParticipant;
 import com.socialcoisa.rede.messaging.domain.Message;
 import com.socialcoisa.rede.shared.web.CursorCodec;
@@ -50,16 +51,8 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 	}
 
 	@Override
-	public Optional<Conversation> findDirectBetween(String userA, String userB) {
-		return conversationRepo.findDirectBetween(userA, userB, org.springframework.data.domain.PageRequest.of(0, 1))
-			.stream()
-			.findFirst()
-			.map(ConversationJpaEntity::toDomain);
-	}
-
-	@Override
-	public Optional<Conversation> findServiceBetween(String userA, String userB) {
-		return conversationRepo.findServiceBetween(userA, userB, org.springframework.data.domain.PageRequest.of(0, 1))
+	public Optional<Conversation> findPairByKind(String userA, String userB, String kind) {
+		return conversationRepo.findPairByKind(userA, userB, kind, PageRequest.of(0, 1))
 			.stream()
 			.findFirst()
 			.map(ConversationJpaEntity::toDomain);
@@ -71,15 +64,20 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 	}
 
 	@Override
-	public List<Conversation> findConversationsByUserId(String userId, java.time.Instant before, int limit) {
-		return conversationRepo.findByParticipantUserId(userId, before, PageRequest.of(0, limit)).stream()
+	public List<Conversation> findConversationsByUserId(String userId, java.time.Instant before,
+			ConversationContext context, int limit) {
+		return conversationRepo.findByParticipantUserId(userId, before, contextName(context), PageRequest.of(0, limit))
+			.stream()
 			.map(ConversationJpaEntity::toDomain)
 			.toList();
 	}
 
 	@Override
-	public List<Conversation> findArchivedConversationsByUserId(String userId, java.time.Instant before, int limit) {
-		return conversationRepo.findArchivedByParticipantUserId(userId, before, PageRequest.of(0, limit)).stream()
+	public List<Conversation> findArchivedConversationsByUserId(String userId, java.time.Instant before,
+			ConversationContext context, int limit) {
+		return conversationRepo.findArchivedByParticipantUserId(userId, before, contextName(context),
+				PageRequest.of(0, limit))
+			.stream()
 			.map(ConversationJpaEntity::toDomain)
 			.toList();
 	}
@@ -136,8 +134,12 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 	}
 
 	@Override
-	public int countTotalUnread(String userId) {
-		return participantRepo.countTotalUnread(userId);
+	public int countTotalUnread(String userId, ConversationContext context) {
+		return participantRepo.countTotalUnread(userId, contextName(context));
+	}
+
+	private static String contextName(ConversationContext context) {
+		return context == null ? null : context.name();
 	}
 
 	@Override
@@ -204,6 +206,12 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 	@Override
 	public Optional<Message> findMessageById(String messageId) {
 		return messageRepo.findById(messageId).map(MessageJpaEntity::toDomain);
+	}
+
+	@Override
+	public List<Message> findMessagesByIds(java.util.Collection<String> messageIds) {
+		if (messageIds == null || messageIds.isEmpty()) return List.of();
+		return messageRepo.findAllById(messageIds).stream().map(MessageJpaEntity::toDomain).toList();
 	}
 
 	@Override

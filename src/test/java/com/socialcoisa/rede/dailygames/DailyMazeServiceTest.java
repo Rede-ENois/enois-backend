@@ -40,7 +40,7 @@ class DailyMazeServiceTest {
         JdbcTemplate jdbc=new JdbcTemplate(ds);
         jdbc.execute("create table users (id varchar(255), username varchar(80), name varchar(160))");
         var clock=Clock.fixed(Instant.parse("2026-10-18T12:00:00Z"),ZoneOffset.UTC);
-        var service=new DailyMazeService(jdbc,clock);
+        var service=new DailyMazeService(jdbc, clock, org.mockito.Mockito.mock(com.socialcoisa.rede.coin.application.CoinService.class));
         assertEquals("NOT_STARTED",service.state("a",null).status());
         assertThrows(ApiException.class,()->service.move("a","UP","request_0001",null));
         var first=service.start("a"); var second=service.start("b");
@@ -52,7 +52,7 @@ class DailyMazeServiceTest {
         assertEquals(1,moved.moves());
         assertEquals(moved.position(),service.move("a",direction,"request_0002",null).position());
         assertThrows(ApiException.class,()->service.move("a","UP","request_0002",null));
-        var nextDay=new DailyMazeService(jdbc,Clock.fixed(Instant.parse("2026-10-19T12:00:00Z"),ZoneOffset.UTC));
+        var nextDay=new DailyMazeService(jdbc, Clock.fixed(Instant.parse("2026-10-19T12:00:00Z"),ZoneOffset.UTC), org.mockito.Mockito.mock(com.socialcoisa.rede.coin.application.CoinService.class));
         assertEquals(moved.position(),nextDay.state("a",LocalDate.parse("2026-10-18")).position());
         assertThrows(ApiException.class,()->nextDay.state("a",LocalDate.parse("2026-10-17")));
     }

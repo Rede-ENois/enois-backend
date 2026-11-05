@@ -3,8 +3,10 @@ package com.socialcoisa.rede.network.adapters.in.web;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -16,6 +18,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -31,6 +34,7 @@ import com.socialcoisa.rede.network.domain.UserConnection;
 import com.socialcoisa.rede.profile.application.NameStyleView;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
+import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 import com.socialcoisa.rede.shared.web.PageResponse;
@@ -47,6 +51,11 @@ class NetworkContractController {
 	private final com.socialcoisa.rede.network.application.MuteService muteService;
 	private final UserProfileRepository userProfileRepository;
 	private final Clock clock;
+
+	private static final String INCOMING = "INCOMING";
+	private static final String OUTGOING = "OUTGOING";
+	/** Account deletion anonymizes the profile with this username prefix (see AuthService). */
+	private static final String REMOVED_USERNAME_PREFIX = "removed-";
 
 	NetworkContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
 			NetworkService networkService, BlockService blockService,
@@ -92,7 +101,7 @@ class NetworkContractController {
 					p != null ? p.avatar() : null,
 					p != null ? p.connectionsCount() : 0,
 					p != null ? p.followersCount() : 0,
-					true, p != null ? p.avatarFrame() : null, NameStyleView.from(p));
+					true, p != null ? p.avatarFrame() : null, NameStyleView.from(p), null);
 			})
 			.toList();
 		return new PageResponse<>(items, null);
@@ -103,18 +112,26 @@ class NetworkContractController {
 			@RequestParam(defaultValue = "4") int limit) {
 		CurrentUser currentUser = currentUserResolver.resolve(sessionToken);
 		Set<String> hidden = blockService.hiddenIdsFor(currentUser.id().value());
-		List<ConnectionSuggestion> suggestions = networkService.getSuggestions(currentUser.id().value(), limit);
-		Set<String> suggestedIds = suggestions.stream()
-			.map(ConnectionSuggestion::userId)
-			.filter(id -> !hidden.contains(id))
-			.collect(Collectors.toSet());
-		Map<String, UserProfile> profiles = userProfileRepository.findAllByIds(suggestedIds).stream()
+		List<ConnectionSuggestion> suggestions = networkService.getSuggestions(currentUser.id().value(), limit).stream()
+			.filter(suggestion -> !hidden.contains(suggestion.userId()))
+			.toList();
+		Map<String, UserProfile> profiles = userProfileRepository
+			.findAllByIds(suggestions.stream().map(ConnectionSuggestion::userId).toList())
+			.stream()
 			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
-		return suggestedIds.stream()
-			.map(profiles::get)
-			.filter(p -> p != null)
-			.map(p -> new NetworkUserView(p.id(), p.username(), p.name(), p.headline(), p.avatar(),
-				p.connectionsCount(), p.followersCount(), false, p.avatarFrame(), NameStyleView.from(p)))
+		// Walks the ranked list (most mutual connections first): a Set here lost the order. A removed
+		// account is still a row in `users`, so it is left out by its anonymized username.
+		return suggestions.stream()
+			.filter(suggestion -> {
+				UserProfile p = profiles.get(suggestion.userId());
+				return p != null && p.username() != null && !p.username().startsWith(REMOVED_USERNAME_PREFIX);
+			})
+			.map(suggestion -> {
+				UserProfile p = profiles.get(suggestion.userId());
+				return new NetworkUserView(p.id(), p.username(), p.name(), p.headline(), p.avatar(),
+					p.connectionsCount(), p.followersCount(), false, p.avatarFrame(), NameStyleView.from(p),
+					suggestion.mutualConnections());
+			})
 			.toList();
 	}
 
@@ -122,24 +139,57 @@ class NetworkContractController {
 	NetworkSummaryView summary(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		int connections = networkService.countConnections(user.id().value());
-		int pending = networkService.getPendingRequests(user.id().value()).size();
-		return new NetworkSummaryView(user.id().value(), connections, 0, pending);
+		int incoming = (int) visibleRequests(user.id().value()).stream()
+			.filter(r -> INCOMING.equals(r.direction()))
+			.count();
+		return new NetworkSummaryView(user.id().value(), connections, 0, incoming);
 	}
 
 	@GetMapping("/requests")
 	PageResponse<ConnectionRequestView> requests(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		var pending = networkService.getPendingRequests(user.id().value());
-		var items = pending.stream()
-			.map(c -> new ConnectionRequestView(
-				c.id() != null ? c.id().toString() : "",
-				c.requesterUserId(),
-				c.receiverUserId(),
-				c.status().name(),
-				c.createdAt() != null ? c.createdAt().toString() : ""))
+		return new PageResponse<>(visibleRequests(user.id().value()), null);
+	}
+
+	/**
+	 * Pending requests in both directions, newest first, each with the person on the other side. A
+	 * request whose other side is hidden (block) or whose account was removed is left out: it cannot
+	 * be answered, so it would only sit in the list and inflate the count.
+	 */
+	private List<ConnectionRequestView> visibleRequests(String userId) {
+		Set<String> hidden = blockService.hiddenIdsFor(userId);
+		var pending = networkService.getPendingRequests(userId).stream()
+			.filter(c -> !hidden.contains(peerOf(c, userId)))
 			.toList();
-		return new PageResponse<>(items, null);
+		Map<String, UserProfile> profiles = userProfileRepository
+			.findAllByIds(pending.stream().map(c -> peerOf(c, userId)).collect(Collectors.toSet()))
+			.stream()
+			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
+		return pending.stream()
+			.sorted(Comparator.comparing(UserConnection::createdAt,
+				Comparator.nullsLast(Comparator.reverseOrder())))
+			.map(c -> {
+				UserProfile p = profiles.get(peerOf(c, userId));
+				if (p == null || p.username() == null || p.username().startsWith(REMOVED_USERNAME_PREFIX)) {
+					return null;
+				}
+				return new ConnectionRequestView(
+					c.id() != null ? c.id().toString() : "",
+					c.requesterUserId(),
+					c.receiverUserId(),
+					c.status().name(),
+					c.createdAt() != null ? c.createdAt().toString() : "",
+					c.requesterUserId().equals(userId) ? OUTGOING : INCOMING,
+					new NetworkUserView(p.id(), p.username(), p.name(), p.headline(), p.avatar(),
+						p.connectionsCount(), p.followersCount(), false, p.avatarFrame(), NameStyleView.from(p), null));
+			})
+			.filter(Objects::nonNull)
+			.toList();
+	}
+
+	private static String peerOf(UserConnection connection, String userId) {
+		return connection.requesterUserId().equals(userId) ? connection.receiverUserId() : connection.requesterUserId();
 	}
 
 	@PostMapping("/connections/{targetUserId}")
@@ -172,10 +222,11 @@ class NetworkContractController {
 	ConnectionStatusView status(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String targetUserId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		String status = networkService.getConnectionStatus(user.id().value(), targetUserId);
+		var state = networkService.getConnectionState(user.id().value(), targetUserId);
 		boolean blocked = blockService.isBlockedBy(user.id().value(), targetUserId);
-		boolean muted = muteService.isMuted(user.id().value(), targetUserId);
-		return new ConnectionStatusView(targetUserId, status, blocked, muted);
+		var mute = muteService.activeMute(user.id().value(), targetUserId);
+		return new ConnectionStatusView(targetUserId, state.status(), state.requestedByMe(), blocked,
+			mute.isPresent(), mute.map(m -> m.expiresAt() != null ? m.expiresAt().toString() : null).orElse(null));
 	}
 
 	/** Bloqueia um usuario: ele some do feed, dos comentarios, das notificacoes e da busca. */
@@ -226,17 +277,73 @@ class NetworkContractController {
 			.toList();
 	}
 
+	/**
+	 * Silencia alguem. O corpo e opcional: sem ele o silenciamento vale ate reativar (o
+	 * comportamento que ja existia); com `{"duration":"24h"}` (ou `72h`, `7d`, `30d`, `forever`)
+	 * ele vence sozinho.
+	 */
 	@PostMapping("/mutes/{targetUserId}")
 	ResponseEntity<String> mute(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-			@PathVariable String targetUserId) {
+			@PathVariable String targetUserId,
+			@RequestBody(required = false) MuteRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		String hash = idempotency.hash(Map.of("targetUserId", targetUserId));
+		Duration duration = muteDuration(request != null ? request.duration() : null);
+		String hash = idempotency.hash(Map.of("targetUserId", targetUserId,
+			"duration", duration != null ? duration.toString() : "forever"));
 		return idempotency.execute(user.id(), "POST", "/api/network/mutes/{userId}", idempotencyKey, hash,
 			() -> {
-				muteService.mute(user.id().value(), targetUserId);
+				muteService.mute(user.id().value(), targetUserId, duration);
 				return new CommandResponse(201, new StatusResponse(targetUserId, "MUTED"));
 			});
+	}
+
+	/** Teto do prazo: `expires_at` e `timestamp` do MySQL, que nao passa de 2038. */
+	private static final Duration MAX_MUTE_DURATION = Duration.ofDays(365);
+
+	/** Forma curta: `24h`, `7d`, `1w` — qualquer quantidade, o teto vem depois da leitura. */
+	private static final java.util.regex.Pattern MUTE_SHORTHAND =
+			java.util.regex.Pattern.compile("^(\\d{1,5})([mhdw])$");
+
+	/**
+	 * Prazos que a tela oferece (24h, 72h, 1 semana) e o "sempre". Tambem aceita ISO-8601
+	 * (`PT24H`), para quem chama a API direto. Texto desconhecido vira 400 em vez de silenciar
+	 * para sempre por engano.
+	 */
+	private static Duration muteDuration(String raw) {
+		if (raw == null || raw.isBlank()) {
+			return null;
+		}
+		String value = raw.trim().toLowerCase(java.util.Locale.ROOT);
+		if (value.equals("forever") || value.equals("sempre") || value.equals("until-unmute")) {
+			return null;
+		}
+		Duration duration;
+		var shorthand = MUTE_SHORTHAND.matcher(value);
+		if (shorthand.matches()) {
+			long amount = Long.parseLong(shorthand.group(1));
+			duration = switch (shorthand.group(2)) {
+				case "m" -> Duration.ofMinutes(amount);
+				case "h" -> Duration.ofHours(amount);
+				case "d" -> Duration.ofDays(amount);
+				default -> Duration.ofDays(Math.multiplyExact(amount, 7));
+			};
+		}
+		else {
+			try {
+				duration = Duration.parse(raw.trim().toUpperCase(java.util.Locale.ROOT));
+			}
+			catch (java.time.format.DateTimeParseException invalid) {
+				throw new ApiException(400, "MUTE_DURATION_INVALID", "Prazo de silenciamento invalido.");
+			}
+		}
+		if (duration.isNegative() || duration.isZero()) {
+			throw new ApiException(400, "MUTE_DURATION_INVALID", "Prazo de silenciamento invalido.");
+		}
+		if (duration.compareTo(MAX_MUTE_DURATION) > 0) {
+			throw new ApiException(400, "MUTE_DURATION_TOO_LONG", "Prazo de silenciamento longo demais.");
+		}
+		return duration;
 	}
 
 	@DeleteMapping("/mutes/{targetUserId}")
@@ -268,7 +375,8 @@ class NetworkContractController {
 					p != null ? p.username() : null,
 					p != null ? p.name() : null,
 					p != null ? p.avatar() : null,
-					m.createdAt() != null ? m.createdAt().toString() : null);
+					m.createdAt() != null ? m.createdAt().toString() : null,
+					m.expiresAt() != null ? m.expiresAt().toString() : null);
 			})
 			.toList();
 	}
@@ -286,22 +394,33 @@ class NetworkContractController {
 			});
 	}
 
+	/** {@code mutualConnections} is filled only for suggestions; elsewhere it is null. */
 	record NetworkUserView(String id, String username, String name, String headline, String avatar, int connections,
-			int followers, boolean connected, String avatarFrame, NameStyleView nameStyle) {
+			int followers, boolean connected, String avatarFrame, NameStyleView nameStyle, Integer mutualConnections) {
 	}
 
 	record BlockedUserView(String userId, String username, String name, String avatar, String blockedAt) {
 	}
 
-	record MutedUserView(String userId, String username, String name, String avatar, String mutedAt) {
+	/** Corpo opcional do `POST /network/mutes/{userId}`: `{"duration":"24h"}`. Ausente = ate reativar. */
+	record MuteRequest(String duration) {
+	}
+
+	/** `expiresAt` nulo = ate reativar (o silenciamento nao tem prazo). */
+	record MutedUserView(String userId, String username, String name, String avatar, String mutedAt,
+			String expiresAt) {
 	}
 
 	record NetworkSummaryView(String userId, int connections, int followers, int pendingRequests) {
 	}
 
-	record ConnectionRequestView(String id, String fromUserId, String toUserId, String status, String createdAt) {
+	/** {@code direction} is INCOMING (someone asked me) or OUTGOING (I asked); {@code peer} is the other side. */
+	record ConnectionRequestView(String id, String fromUserId, String toUserId, String status, String createdAt,
+			String direction, NetworkUserView peer) {
 	}
 
-	record ConnectionStatusView(String targetUserId, String status, boolean blocked, boolean muted) {
+	/** `muteExpiresAt` nulo quando nao ha silenciamento ou quando ele vale ate reativar. */
+	record ConnectionStatusView(String targetUserId, String status, boolean requestedByMe, boolean blocked,
+			boolean muted, String muteExpiresAt) {
 	}
 }

@@ -87,7 +87,7 @@ class ReputationFairnessTests {
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "pub-fair-" + content.hashCode())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("type", "INSIGHT", "content", content,
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA", "type", "INSIGHT", "content", content,
 					"tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isCreated())
 			.andReturn();

@@ -27,6 +27,11 @@ public interface UserContentPurgeRepository extends Repository<PostJpaEntity, St
 	int detachCommentChildren(@Param("commentIds") List<String> commentIds);
 
 	@Modifying
+	@Query(value = "update posts set accepted_comment_id = null, resolved_at = null"
+		+ " where accepted_comment_id in (:commentIds)", nativeQuery = true)
+	int clearAcceptedAnswers(@Param("commentIds") List<String> commentIds);
+
+	@Modifying
 	@Query(value = "delete from comments where author_id = :authorId", nativeQuery = true)
 	int deleteCommentsByAuthor(@Param("authorId") String authorId);
 

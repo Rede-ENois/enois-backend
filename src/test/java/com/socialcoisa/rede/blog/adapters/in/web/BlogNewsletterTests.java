@@ -163,4 +163,34 @@ class BlogNewsletterTests {
 		mockMvc.perform(get("/blogs/descadastrar").param("token", "nao-e-um-token"))
 			.andExpect(status().isBadRequest());
 	}
+
+	@Test
+	void descadastroUmCliquePorPostDoClienteDeEmail() throws Exception {
+		var autor = auth.authenticate("blognews_oneclick_autor");
+		var assinante = auth.authenticate("blognews_oneclick_assinante");
+		publicar(autor, "Primeiro post um clique", false);
+		Blog blog = blogs.findBySlug(slugDoBlog(autor)).orElseThrow();
+		assinar(blog.slug(), assinante);
+
+		String token = newsletter.unsubscribeToken(blog.id(), assinante.userId());
+		// Adulterar o ULTIMO caractere nao serve para provar nada: o base64 URL-safe vai sem padding,
+		// entao o ultimo grupo carrega bits que o decodificador descarta — trocar 'A' por 'B' ali pode
+		// decodificar para exatamente os mesmos bytes e o token continua valido. O meio sempre cai num
+		// grupo inteiro, e este teste deixa de depender do tamanho do id gerado.
+		int meio = token.length() / 2;
+		char atual = token.charAt(meio);
+		String adulterado = token.substring(0, meio) + (atual == 'A' ? 'B' : 'A')
+				+ token.substring(meio + 1);
+
+		// RFC 8058: sem sessao e sem Origin, corpo "List-Unsubscribe=One-Click", token na URL.
+		mockMvc.perform(post("/blogs/descadastrar").queryParam("token", adulterado)
+				.contentType(MediaType.APPLICATION_FORM_URLENCODED).content("List-Unsubscribe=One-Click"))
+			.andExpect(status().isBadRequest());
+		assertThat(subscriptions.exists(blog.id(), assinante.userId())).isTrue();
+
+		mockMvc.perform(post("/blogs/descadastrar").queryParam("token", token)
+				.contentType(MediaType.APPLICATION_FORM_URLENCODED).content("List-Unsubscribe=One-Click"))
+			.andExpect(status().isOk());
+		assertThat(subscriptions.exists(blog.id(), assinante.userId())).isFalse();
+	}
 }

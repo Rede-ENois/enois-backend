@@ -184,6 +184,13 @@ class MediaMigrationServiceTests {
 		private boolean claimGranted = true;
 
 		@Override
+		public boolean hasReportCapture(java.util.Collection<String> ids) {
+			return ids != null && byId.values().stream()
+				.anyMatch(asset -> ids.contains(asset.id())
+					&& com.socialcoisa.rede.media.application.MediaService.REPORT_CAPTURE_PURPOSE.equals(asset.purpose()));
+		}
+
+		@Override
 		public boolean claimForS3Copy(String id, java.time.Instant now, java.time.Instant staleBefore, int maxAttempts) {
 			claimed.add(id);
 			boolean permitido = claimGranted;
@@ -245,6 +252,19 @@ class MediaMigrationServiceTests {
 		@Override
 		public long countAll() {
 			return 0;
+		}
+
+		@Override
+		public void recordDimensions(String id, int width, int height) {
+		}
+
+		@Override
+		public void recordDimensionFailure(String id) {
+		}
+
+		@Override
+		public List<MediaAsset> findForDimensionBackfill(int limit, int maxAttempts, java.time.Instant createdBefore) {
+			return List.of();
 		}
 	}
 

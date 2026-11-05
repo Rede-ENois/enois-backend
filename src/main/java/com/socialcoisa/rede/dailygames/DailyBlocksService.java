@@ -21,7 +21,8 @@ public class DailyBlocksService {
     private final JdbcTemplate jdbc;
     private final Clock clock;
     private final SecureRandom random=new SecureRandom();
-    public DailyBlocksService(JdbcTemplate jdbc,Clock clock) { this.jdbc=jdbc; this.clock=clock; }
+    private final com.socialcoisa.rede.coin.application.CoinService coins;
+public DailyBlocksService(JdbcTemplate jdbc,Clock clock,com.socialcoisa.rede.coin.application.CoinService coins) { this.coins=coins; this.jdbc=jdbc; this.clock=clock; }
     private LocalDate today() { return LocalDate.now(clock.withZone(ZoneId.of("America/Sao_Paulo"))); }
     private LocalDate day(LocalDate requested) {
         LocalDate result=requested==null?today():requested;
@@ -101,6 +102,7 @@ public class DailyBlocksService {
         BlocksEngine.Result result=replay(d,user);
         Timestamp now=Timestamp.from(clock.instant());
         jdbc.update("update daily_blocks_sessions set last_action_at=?,completed_at=?,status=?,score=?,`lines`=? where challenge_date=? and user_id=?",now,result.status()==BlocksEngine.Status.PLAYING?null:now,result.status().name(),result.score(),result.lines(),d,user);
+        if (result.status()!=BlocksEngine.Status.PLAYING) coins.recordPresence(user);
         return stateFor(day,user);
     }
     @Transactional(readOnly=true) public Ranking leaderboard() {

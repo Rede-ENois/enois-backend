@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -34,6 +35,9 @@ class PostReactionsAndReplyTests {
 
 	@Autowired
 	private ObjectMapper objectMapper;
+
+	@Autowired
+	private JdbcTemplate jdbc;
 
 	private TestAuthHelper auth;
 
@@ -105,6 +109,28 @@ class PostReactionsAndReplyTests {
 			.isZero();
 	}
 
+	/**
+	 * Reactions received pay nothing (#330): paying for popularity invites like-farming. The old
+	 * reward paid the author on every 10th reaction, so 10 reactors would have created an entry.
+	 */
+	@Test
+	void reactionsReceivedDoNotCreateCoinEntriesForTheAuthor() throws Exception {
+		var author = auth.authenticate("user_react_noreward_author");
+		String postId = publish(author, "Reacao nao rende faisca para quem publicou.");
+		long before = coinEntries(author.userId());
+
+		for (int i = 0; i < 10; i++) {
+			var reactor = auth.authenticate("user_react_noreward_r" + i);
+			assertThat(react(reactor, postId, "LIKE", "nr-like-" + i)).isEqualTo(i + 1);
+		}
+
+		assertThat(coinEntries(author.userId())).isEqualTo(before);
+	}
+
+	private long coinEntries(String accountId) {
+		return jdbc.queryForObject("select count(*) from coin_entries where account_id = ?", Long.class, accountId);
+	}
+
 	@Test
 	void secondUserReactionCountsIndependently() throws Exception {
 		var author = auth.authenticate("user_react_author3");
@@ -154,7 +180,7 @@ class PostReactionsAndReplyTests {
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "pub-" + content.hashCode())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of(
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
 					"type", "INSIGHT", "content", content, "tags", List.of(), "mediaIds", List.of()))))
 			.andExpect(status().isCreated())
 			.andReturn();

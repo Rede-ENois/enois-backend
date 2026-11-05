@@ -9,7 +9,7 @@ import java.util.List;
  * (sanitizado na gravação) e a parte estruturada fica de reserva.
  */
 public record UserProject(String id, String userId, int position, String title, String description,
-		List<String> stack, String repoUrl, String status, List<ProjectDiaryEntry> diary, String html,
-		Instant createdAt, Instant updatedAt) {
+		String banner, String icon, List<String> stack, String repoUrl, String status,
+		List<ProjectDiaryEntry> diary, String html, Instant createdAt, Instant updatedAt) {
 
 	}

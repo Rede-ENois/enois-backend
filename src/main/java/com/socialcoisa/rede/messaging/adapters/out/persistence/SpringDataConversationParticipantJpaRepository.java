@@ -29,15 +29,19 @@ interface SpringDataConversationParticipantJpaRepository extends JpaRepository<C
 
 	boolean existsByConversationIdAndUserId(String conversationId, String userId);
 
-	/** Total de mensagens nao lidas em TODAS as conversas ativas do usuario (uma query so). */
-	@org.springframework.data.jpa.repository.Query("""
-			SELECT COALESCE(SUM(
-				(SELECT COUNT(m) FROM MessageJpaEntity m
-				 WHERE m.conversationId = cp.conversationId
-				 AND m.createdAt > COALESCE(cp.lastReadAt, cp.joinedAt))
-			), 0)
-			FROM ConversationParticipantJpaEntity cp
-			WHERE cp.userId = :userId AND cp.hiddenAt IS NULL""")
-	int countTotalUnread(@org.springframework.data.repository.query.Param("userId") String userId);
+	/**
+	 * Total de mensagens nao lidas em TODAS as conversas ativas do usuario (uma query so), opcionalmente
+	 * so as de um contexto (caixa social ou profissional).
+	 */
+	@org.springframework.data.jpa.repository.Query("SELECT COALESCE(SUM("
+		+ " (SELECT COUNT(m) FROM MessageJpaEntity m"
+		+ " WHERE m.conversationId = cp.conversationId"
+		+ " AND m.createdAt > COALESCE(cp.lastReadAt, cp.joinedAt))"
+		+ " ), 0)"
+		+ " FROM ConversationParticipantJpaEntity cp, ConversationJpaEntity c"
+		+ " WHERE c.id = cp.conversationId AND cp.userId = :userId AND cp.hiddenAt IS NULL"
+		+ SpringDataConversationJpaRepository.CONTEXT_FILTER)
+	int countTotalUnread(@org.springframework.data.repository.query.Param("userId") String userId,
+			@org.springframework.data.repository.query.Param("context") String context);
 
 }
