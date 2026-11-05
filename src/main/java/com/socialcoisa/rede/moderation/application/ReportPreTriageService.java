@@ -63,8 +63,8 @@ public class ReportPreTriageService {
 		}
 		int scored = 0;
 		for (Report report : reports.findPendingWithoutPreTriage(limit)) {
-			String content = contentReader.contentOf(report.targetType().name(), report.targetId()).orElse("");
-			String authorId = contentAuthors.authorOf(report.targetType().name(), report.targetId()).orElse(null);
+			String content = contentReader.contentOf(report).orElse("");
+			String authorId = contentAuthors.authorOf(report).orElse(null);
 			UserProfile author = authorId == null ? null : profiles.findById(authorId).orElse(null);
 			Score score = score(report, content, author);
 			Instant now = clock.instant();

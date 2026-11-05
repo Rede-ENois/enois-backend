@@ -1,6 +1,8 @@
 package com.socialcoisa.rede.mentoring.application;
 
 import java.net.URI;
+import java.util.Locale;
+import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -12,36 +14,29 @@ import com.socialcoisa.rede.shared.web.ApiException;
 /**
  * De onde vem a sala de uma sessão de mentoria.
  *
- * <p>O Jitsi não tem "criar sala": qualquer nome vira uma sala quando a primeira pessoa entra
- * (documentação em jitsi.org/api — "no API calls are necessary"). Por isso a sala é um link que
- * nós mesmos montamos, com nome derivado da sessão ou fixo por mentor. A base é configurável
- * (`rede.mentoring.jitsi.base-url`).
+ * <p>A sala roda no Epapo, o mesmo servidor de reunião das chamadas, e é um nome — não um endereço.
+ * O Epapo não tem "criar sala": a primeira pessoa que entra num nome cria a conferência. Por isso a
+ * sala é derivada do id (uma por sessão) ou do mentor (sala fixa), e o que impede alguém de entrar
+ * numa sala conhecida é o token: o gateway do Epapo só o assina depois de perguntar a esta aplicação
+ * quem pode entrar (ver {@link MentoringRoomAuthorization}).
  *
- * <p>Atenção: esta sala é um link aberto, sem token. O Jitsi das chamadas (ver
- * {@code docs/CHAMADAS.md}) exige token e não serve para este fluxo; apontar para ele aqui faz a
- * mentoria pedir senha. Enquanto a mentoria não passar pelo mesmo token, a base continua uma
- * instância pública.
+ * <p>Sessão marcada antes desta troca tem gravado o link de uma instância pública do Jitsi. Esse
+ * link não tem controle de acesso e não é mais a sala da sessão: na leitura, a sala dessas sessões
+ * passa a ser a do Epapo, pelo mesmo nome.
  */
 @Component
 public class MentoringRooms {
 
-	static final String DEFAULT_BASE_URL = "https://meet.jit.si";
-
 	private final String baseUrl;
-	private final String conferenceHost;
+	private final String publicHost;
 
-	public MentoringRooms(
-			@Value("${rede.mentoring.jitsi.base-url:" + MentoringRooms.DEFAULT_BASE_URL + "}") String baseUrl) {
-		String trimmed = baseUrl == null ? "" : baseUrl.trim();
-		while (trimmed.endsWith("/")) {
-			trimmed = trimmed.substring(0, trimmed.length() - 1);
-		}
-		this.baseUrl = trimmed.isEmpty() ? DEFAULT_BASE_URL : trimmed;
-		String host = URI.create(this.baseUrl).getHost();
-		this.conferenceHost = host == null || host.isBlank() ? "meet.jit.si" : host;
+	public MentoringRooms(@Value("${rede.mentoring.room.base-url:}") String baseUrl,
+			@Value("${rede.calls.epapo.url:}") String callHost) {
+		this.baseUrl = trimTrailingSlashes(baseUrl);
+		this.publicHost = trimTrailingSlashes(callHost);
 	}
 
-	/** Link da sala de uma sessão, já resolvido a partir do modo escolhido pelo mentor. */
+	/** Sala de uma sessão, pelo modo escolhido pelo mentor. */
 	public String sessionRoom(Mentor mentor, String sessionId) {
 		if (mentor.roomMode() == RoomMode.CUSTOM) {
 			String url = mentor.meetingUrl();
@@ -51,15 +46,15 @@ public class MentoringRooms {
 			}
 			return url.trim();
 		}
-		if (mentor.roomMode() == RoomMode.JITSI_PERMANENT) {
-			return jitsiUrl(permanentRoom(mentor));
+		if (mentor.roomMode() == RoomMode.EPAPO_PERMANENT) {
+			return permanentRoom(mentor);
 		}
-		return jitsiUrl(ephemeralRoom(sessionId));
+		return ephemeralRoom(sessionId);
 	}
 
-	/** Sala permanente do mentor: a que ele já criou, ou uma derivada do id (estável para sempre). */
+	/** Sala permanente do mentor: a que ele nomeou, ou uma derivada do id (estável para sempre). */
 	public String permanentRoom(Mentor mentor) {
-		String existing = sanitizeRoom(mentor.jitsiRoom());
+		String existing = sanitizeRoom(mentor.roomSlug());
 		return existing != null ? existing : "rede-mentor-" + compact(mentor.id());
 	}
 
@@ -68,31 +63,62 @@ public class MentoringRooms {
 		return "rede-mentoria-" + compact(sessionId);
 	}
 
-	public String jitsiUrl(String room) {
-		return baseUrl + "/" + room;
+	/** true quando a sala é do Epapo (tem token e controle de entrada); false para sala própria. */
+	public boolean isEpapo(RoomMode mode) {
+		return mode == RoomMode.EPAPO_SESSION || mode == RoomMode.EPAPO_PERMANENT;
 	}
 
-	/** true quando a sala roda no Jitsi (tem dial-in pela API pública); false para sala própria. */
-	public boolean isJitsi(RoomMode mode) {
-		return mode == RoomMode.JITSI_SESSION || mode == RoomMode.JITSI_PERMANENT;
-	}
-
-	/** Nome da conferência para a API pública do Jitsi: sala@conference.<host>. */
-	public String conferenceName(String roomUrl) {
-		String room = roomUrl;
-		int slash = roomUrl.lastIndexOf('/');
-		if (slash >= 0 && slash < roomUrl.length() - 1) {
-			room = roomUrl.substring(slash + 1);
+	/**
+	 * Sala do Epapo correspondente a um nome ou a um link. Sessão antiga tem o link da instância
+	 * pública gravado; sessão nova tem o próprio nome. Sala própria do mentor devolve vazio: o link
+	 * externo não é nosso e não passa por aqui.
+	 */
+	public Optional<String> epapoRoom(String stored) {
+		if (stored == null || stored.isBlank()) {
+			return Optional.empty();
 		}
-		return room + "@conference." + conferenceHost;
+		String value = stored.trim();
+		if (!value.contains("://")) {
+			return Optional.of(value);
+		}
+		Optional<String> host = hostOf(value);
+		if (host.isEmpty()) {
+			return Optional.empty();
+		}
+		return host.get().equals("meet.jit.si") || host.get().equals(publicHost)
+			? Optional.of(lastPathSegment(value))
+			: Optional.empty();
 	}
 
-	/** Sala vinda de fora (o mentor pode digitar o próprio nome): só letras, números e traço. */
+	/**
+	 * Endereço que o navegador abre para uma sala: o Epapo publicado ou, sem ele, a base própria.
+	 * {@code null} quando o ambiente ainda não tem servidor de reunião — a lista de sessões continua
+	 * funcionando, só a entrada na sala é que não tem para onde ir.
+	 */
+	public String roomUrlOrNull(String room) {
+		String base = baseUrl != null ? baseUrl : publicHost;
+		if (base == null) {
+			return null;
+		}
+		return base.contains("://") ? base + "/" + room : "https://" + base + "/" + room;
+	}
+
+	/** Endereço da sala exigindo que o ambiente tenha servidor de reunião configurado. */
+	public String roomUrl(String room) {
+		String url = roomUrlOrNull(room);
+		if (url == null) {
+			throw new ApiException(503, "MENTORING_ROOMS_NOT_CONFIGURED",
+				"A sala de mentoria ainda nao esta configurada neste ambiente.");
+		}
+		return url;
+	}
+
+	/** Nome da sala vinda de fora (o mentor escolhe): só letras, números e traço. */
 	public String sanitizeRoom(String raw) {
 		if (raw == null || raw.isBlank()) {
 			return null;
 		}
-		String room = raw.trim().toLowerCase().replaceAll("[^a-z0-9-]", "-").replaceAll("-{2,}", "-");
+		String room = raw.trim().toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9-]", "-").replaceAll("-{2,}", "-");
 		while (room.startsWith("-")) {
 			room = room.substring(1);
 		}
@@ -114,8 +140,39 @@ public class MentoringRooms {
 		if (id == null) {
 			return "";
 		}
-		String cleaned = id.toLowerCase().replaceAll("[^a-z0-9]", "");
+		String cleaned = id.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
 		return cleaned.substring(0, Math.min(64, cleaned.length()));
+	}
+
+	private static Optional<String> hostOf(String url) {
+		try {
+			String host = URI.create(url).getHost();
+			return host == null || host.isBlank() ? Optional.empty() : Optional.of(host.toLowerCase(Locale.ROOT));
+		}
+		catch (IllegalArgumentException malformed) {
+			return Optional.empty();
+		}
+	}
+
+	private static String lastPathSegment(String url) {
+		String path = url;
+		int query = path.indexOf('?');
+		if (query >= 0) {
+			path = path.substring(0, query);
+		}
+		int slash = path.lastIndexOf('/');
+		return slash < 0 || slash == path.length() - 1 ? "" : path.substring(slash + 1);
+	}
+
+	private static String trimTrailingSlashes(String raw) {
+		if (raw == null) {
+			return null;
+		}
+		String trimmed = raw.trim();
+		while (trimmed.endsWith("/")) {
+			trimmed = trimmed.substring(0, trimmed.length() - 1);
+		}
+		return trimmed.isEmpty() ? null : trimmed;
 	}
 
 }

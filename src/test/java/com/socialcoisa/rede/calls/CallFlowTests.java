@@ -51,7 +51,7 @@ import tools.jackson.databind.ObjectMapper;
  * de chamadas a API responde 503 em vez de abrir uma sala sem controle de acesso.
  */
 @SpringBootTest(properties = {
-		"rede.calls.jitsi.url=https://chamadas.example.test",
+		"rede.calls.epapo.url=https://chamadas.example.test",
 		"spring.task.scheduling.enabled=false"
 })
 @AutoConfigureMockMvc

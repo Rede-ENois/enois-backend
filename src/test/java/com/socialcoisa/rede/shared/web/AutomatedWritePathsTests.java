@@ -67,7 +67,8 @@ class AutomatedWritePathsTests {
 		"/webhooks/github",
 		"/blogs/descadastrar",
 		"/notifications/digest/unsubscribe",
-		"/calls/*/gateway/entry/*");
+		"/calls/*/gateway/entry/*",
+		"/mentoring/*/gateway/entry/*");
 
 	private static final Pattern MAPPING = Pattern
 		.compile("@(Get|Post|Put|Patch|Delete)Mapping(?:\\(\\s*(?:value\\s*=\\s*)?\"([^\"]*)\"[^)]*\\))?");

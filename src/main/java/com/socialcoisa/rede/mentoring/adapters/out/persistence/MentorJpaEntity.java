@@ -46,8 +46,8 @@ class MentorJpaEntity {
 	@Column(name = "room_mode", nullable = false, length = 24)
 	private String roomMode;
 
-	@Column(name = "jitsi_room", length = 120)
-	private String jitsiRoom;
+	@Column(name = "room_slug", length = 120)
+	private String roomSlug;
 
 	@Column(name = "created_at", nullable = false)
 	private Instant createdAt;
@@ -69,8 +69,8 @@ class MentorJpaEntity {
 		e.banner = mentor.banner();
 		e.meetingUrl = mentor.meetingUrl();
 		e.sparksPrice = mentor.sparksPrice();
-		e.roomMode = mentor.roomMode() == null ? RoomMode.JITSI_SESSION.name() : mentor.roomMode().name();
-		e.jitsiRoom = mentor.jitsiRoom();
+		e.roomMode = mentor.roomMode() == null ? RoomMode.EPAPO_SESSION.name() : mentor.roomMode().name();
+		e.roomSlug = mentor.roomSlug();
 		e.createdAt = mentor.createdAt();
 		e.updatedAt = mentor.updatedAt();
 		return e;
@@ -81,7 +81,7 @@ class MentorJpaEntity {
 			? Arrays.asList(expertise.split(","))
 			: Collections.emptyList();
 		return Mentor.restore(id, userId, expertiseList, rating, sessionsCount, price, banner, meetingUrl,
-			sparksPrice, RoomMode.fromStored(roomMode), jitsiRoom, createdAt, updatedAt);
+			sparksPrice, RoomMode.fromStored(roomMode), roomSlug, createdAt, updatedAt);
 	}
 
 }

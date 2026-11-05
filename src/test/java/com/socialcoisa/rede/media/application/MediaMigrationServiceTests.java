@@ -184,6 +184,13 @@ class MediaMigrationServiceTests {
 		private boolean claimGranted = true;
 
 		@Override
+		public boolean hasReportCapture(java.util.Collection<String> ids) {
+			return ids != null && byId.values().stream()
+				.anyMatch(asset -> ids.contains(asset.id())
+					&& com.socialcoisa.rede.media.application.MediaService.REPORT_CAPTURE_PURPOSE.equals(asset.purpose()));
+		}
+
+		@Override
 		public boolean claimForS3Copy(String id, java.time.Instant now, java.time.Instant staleBefore, int maxAttempts) {
 			claimed.add(id);
 			boolean permitido = claimGranted;

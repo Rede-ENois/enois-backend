@@ -22,6 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
 import com.socialcoisa.rede.mentoring.application.MentorService;
+import com.socialcoisa.rede.mentoring.application.MentoringRoomAuthorization;
 import com.socialcoisa.rede.mentoring.domain.Mentor;
 import com.socialcoisa.rede.mentoring.domain.MentorAvailability;
 import com.socialcoisa.rede.mentoring.domain.MentorSession;
@@ -43,14 +44,17 @@ class MentoringContractController {
 	private final MentorService mentorService;
 	private final CursorCodec cursorCodec;
 	private final UserProfileRepository profiles;
+	private final MentoringRoomAuthorization roomAccess;
 
 	MentoringContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
-			MentorService mentorService, CursorCodec cursorCodec, UserProfileRepository profiles) {
+			MentorService mentorService, CursorCodec cursorCodec, UserProfileRepository profiles,
+			MentoringRoomAuthorization roomAccess) {
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.mentorService = mentorService;
 		this.cursorCodec = cursorCodec;
 		this.profiles = profiles;
+		this.roomAccess = roomAccess;
 	}
 
 	@GetMapping
@@ -93,7 +97,7 @@ class MentoringContractController {
 		return idempotency.execute(user.id(), "POST", "/api/mentors", idempotencyKey, hash,
 			() -> {
 				Mentor m = mentorService.create(user.id().value(), request.expertise(), request.price(),
-					request.banner(), request.meetingUrl(), request.sparksPrice(), roomMode(request), request.jitsiRoom());
+					request.banner(), request.meetingUrl(), request.sparksPrice(), roomMode(request), request.roomSlug());
 				return new CommandResponse(201, mentorView(m));
 			});
 	}
@@ -107,7 +111,7 @@ class MentoringContractController {
 		return idempotency.execute(user.id(), "PATCH", "/api/mentors/{mentorId}", idempotencyKey, hash,
 			() -> {
 				Mentor m = mentorService.update(mentorId, request.expertise(), request.price(), request.banner(),
-					request.meetingUrl(), request.sparksPrice(), roomMode(request), request.jitsiRoom(),
+					request.meetingUrl(), request.sparksPrice(), roomMode(request), request.roomSlug(),
 					user.id().value());
 				return new CommandResponse(200, mentorView(m));
 			});
@@ -187,7 +191,7 @@ class MentoringContractController {
 				slot != null && slot.startsAt() != null ? slot.startsAt().toString() : null,
 				slot != null && slot.endsAt() != null ? slot.endsAt().toString() : null,
 				session.message(), session.status().name(), session.priceSparks(),
-				mentorService.roomUrlOf(session, mentor), session.roomMode().name(),
+				mentorService.roomUrlFor(session), session.roomMode().name(),
 				session.createdAt().toString()));
 		}
 		views.sort((first, second) -> {
@@ -296,7 +300,7 @@ class MentoringContractController {
 				slot != null && slot.startsAt() != null ? slot.startsAt().toString() : null,
 				slot != null && slot.endsAt() != null ? slot.endsAt().toString() : null,
 				session.message(), session.status().name(), session.priceSparks(),
-				mentorService.roomUrlOf(session, mentor), session.roomMode().name(), session.createdAt().toString()));
+				mentorService.roomUrlFor(session), session.roomMode().name(), session.createdAt().toString()));
 		}
 		return views;
 	}
@@ -334,6 +338,10 @@ class MentoringContractController {
 	record MentorSlotView(String id, String startsAt, String endsAt, boolean available) {
 	}
 
+	/** Entrada na sala: {@code jwt} nulo quando a sala é externa (o link já é a entrada). */
+	record SessionJoinView(String sessionId, String roomUrl, String jwt, long tokenTtlSeconds) {
+	}
+
 	record MySessionView(String id, String mentorId, String mentorUsername, String mentorName, String mentorAvatar,
 			String startsAt, String endsAt, String message, String status, Long priceSparks, String roomUrl,
 			String roomMode, String createdAt) {
@@ -343,15 +351,11 @@ class MentoringContractController {
 	}
 
 	record CreateMentorRequest(List<String> expertise, String price, String banner, String meetingUrl,
-			Long sparksPrice, String roomMode, String jitsiRoom) {
+			Long sparksPrice, String roomMode, String roomSlug) {
 	}
 
 	/** Sala fixa do mentor: só o dono vê — o link permanente não vai para a vitrine pública. */
-	record MentorRoomView(String roomMode, String roomUrl, String meetingUrl, String jitsiRoom) {
-	}
-
-	/** Como entrar por telefone numa sala Jitsi (API pública do Jitsi). */
-	record SessionDialInView(String conference, String pin, List<String> numbers) {
+	record MentorRoomView(String roomMode, String roomUrl, String meetingUrl, String roomSlug) {
 	}
 
 	@GetMapping("/{mentorId}/room")
@@ -360,22 +364,26 @@ class MentoringContractController {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		Mentor mentor = mentorService.ownMentor(mentorId, user.id().value());
 		return new MentorRoomView(mentor.roomMode().name(), mentorService.mentorRoomUrl(mentor), mentor.meetingUrl(),
-			mentor.jitsiRoom());
+			mentorService.mentorRoomSlug(mentor));
 	}
 
-	/** Dial-in (entrar por telefone) de uma sessão Jitsi; só quem participa. */
-	@GetMapping("/{mentorId}/sessions/{sessionId}/dial-in")
-	SessionDialInView dialIn(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+	/**
+	 * Entrada na sala da sessão: só quem participa. Sala do Epapo vem com token curto, emitido
+	 * depois de o servidor de reunião confirmar a autorização; sala própria do mentor vem só com o
+	 * link, porque o link externo já é a entrada.
+	 */
+	@PostMapping("/{mentorId}/sessions/{sessionId}/join")
+	SessionJoinView join(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String mentorId, @PathVariable String sessionId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		MentorService.SessionDialIn dialIn = mentorService.dialIn(sessionId, user.id().value());
-		return new SessionDialInView(dialIn.conference(), dialIn.pin(), dialIn.numbers());
+		MentoringRoomAuthorization.MentoringAccess access = roomAccess.join(sessionId, user.id().value());
+		return new SessionJoinView(access.sessionId(), access.roomUrl(), access.jwt(), access.tokenTtlSeconds());
 	}
 
 	/**
 	 * O modo vem como texto da tela. Ausente (tela antiga ou integração que não manda o campo) fica
 	 * {@code null}: o serviço deduz pelo link informado, para não trocar a sala de quem já tinha uma
-	 * configurada. Valor desconhecido cai no padrão (sala Jitsi por sessão).
+	 * configurada. Valor desconhecido cai no padrão (sala do Epapo por sessão).
 	 */
 	private static com.socialcoisa.rede.mentoring.domain.RoomMode roomMode(CreateMentorRequest request) {
 		if (request == null || request.roomMode() == null || request.roomMode().isBlank()) {

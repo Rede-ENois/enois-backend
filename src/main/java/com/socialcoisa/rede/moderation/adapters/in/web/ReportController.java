@@ -37,13 +37,15 @@ class ReportController {
 	private final com.socialcoisa.rede.moderation.application.ModeratorService moderators;
 	private final com.socialcoisa.rede.moderation.adapters.out.persistence.ReportE2eKeyStore reportE2eKeys;
 	private final com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository sessions;
+	private final com.socialcoisa.rede.media.application.port.in.GetMediaAssetUseCase getMediaAssetUseCase;
 
 	ReportController(ModerationService moderationService, IdempotencyApplicationService idempotency,
 			CurrentUserResolver currentUserResolver, AdminGuard adminGuard, ReportRepository reports,
 			ModerationRemovePostUseCase removePost,
 			com.socialcoisa.rede.moderation.application.ModeratorService moderators,
 			com.socialcoisa.rede.moderation.adapters.out.persistence.ReportE2eKeyStore reportE2eKeys,
-			com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository sessions) {
+			com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository sessions,
+			com.socialcoisa.rede.media.application.port.in.GetMediaAssetUseCase getMediaAssetUseCase) {
 		this.moderationService = moderationService;
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
@@ -53,6 +55,7 @@ class ReportController {
 		this.moderators = moderators;
 		this.reportE2eKeys = reportE2eKeys;
 		this.sessions = sessions;
+		this.getMediaAssetUseCase = getMediaAssetUseCase;
 	}
 
 	@PostMapping("/reports")
@@ -104,12 +107,18 @@ class ReportController {
 	Map<String, Object> review(@RequestHeader("X-Session-Token") String sessionToken, @PathVariable String reportId) {
 		adminGuard.requireAdmin(currentUserResolver.resolve(sessionToken));
 		var review = moderationService.review(reportId);
-		return Map.of(
-			"report", ReportView.from(review.report()),
-			"reporter", review.reporter(),
-			"authorId", review.authorId() == null ? "" : review.authorId(),
-			"author", review.author() == null ? "" : review.author(),
-			"content", review.content() == null ? "" : review.content());
+		Map<String, Object> body = new java.util.LinkedHashMap<>();
+		body.put("report", ReportView.from(review.report()));
+		body.put("reporter", review.reporter());
+		body.put("authorId", review.authorId() == null ? "" : review.authorId());
+		body.put("author", review.author() == null ? "" : review.author());
+		body.put("content", review.content() == null ? "" : review.content());
+		// Denúncia de chamada: quem estava na sala, quem foi apontado e a captura do momento.
+		body.put("call", review.call());
+		String captureId = review.call() == null ? null : review.call().mediaId();
+		body.put("media", captureId == null || captureId.isBlank() ? null
+			: getMediaAssetUseCase.getMedia(captureId));
+		return body;
 	}
 
 	/**

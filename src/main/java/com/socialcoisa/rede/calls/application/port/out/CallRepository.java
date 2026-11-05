@@ -43,6 +43,9 @@ public interface CallRepository {
 
 	List<CallParticipantState> participantStates(String callId);
 
+	/** Quem já esteve na sala (entrou pelo menos uma vez), na ordem em que entrou. */
+	List<String> participantsWhoJoined(String callId);
+
 	/** Quem está na sala agora (JOINED), sem contar a própria pessoa. */
 	int countPresentExcluding(String callId, String excludedUserId);
 
