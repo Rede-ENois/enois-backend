@@ -60,13 +60,51 @@ class ReportedMediaAdapter implements ReportedMediaReader {
 	 * não olha imagem e a denúncia segue para revisão humana — o comportamento antigo, não um erro.
 	 */
 	private final ObjectProvider<MediaSourceDownloader> downloader;
+	/** A captura de uma denúncia de chamada pertence à DENÚNCIA, não à sala. */
+	private final com.socialcoisa.rede.moderation.application.port.out.CallReportContextRepository callReports;
 
 	ReportedMediaAdapter(PostRepository posts, CommentRepository comments, MediaAssetRepository assets,
-			ObjectProvider<MediaSourceDownloader> downloader) {
+			ObjectProvider<MediaSourceDownloader> downloader,
+			com.socialcoisa.rede.moderation.application.port.out.CallReportContextRepository callReports) {
 		this.posts = posts;
 		this.comments = comments;
 		this.assets = assets;
 		this.downloader = downloader;
+		this.callReports = callReports;
+	}
+
+	/**
+	 * Denúncia de chamada: a imagem é o print do momento, pendurado na própria denúncia. Sem print,
+	 * sem armazenamento ou com download que falha, a lista volta vazia e a decisão cai na revisão
+	 * humana — nunca em "olhei e está tudo bem".
+	 */
+	@Override
+	public List<byte[]> imagesOf(com.socialcoisa.rede.moderation.domain.Report report, int limit) {
+		if (report == null || report.targetType() != com.socialcoisa.rede.moderation.domain.TargetType.CALL) {
+			return imagesOf(report == null ? null : report.targetType().name(),
+				report == null ? null : report.targetId(), limit);
+		}
+		if (limit <= 0) {
+			return List.of();
+		}
+		MediaSourceDownloader source = downloader.getIfAvailable();
+		if (source == null) {
+			return List.of();
+		}
+		String mediaId = callReports.findByReportId(report.id()).map(context -> context.mediaId()).orElse(null);
+		if (mediaId == null) {
+			return List.of();
+		}
+		for (MediaAsset asset : assets.findByIds(List.of(mediaId))) {
+			if (!IMAGE_TYPES.contains(asset.mimeType())) {
+				continue;
+			}
+			byte[] image = shrink(source, asset);
+			if (image != null) {
+				return List.of(image);
+			}
+		}
+		return List.of();
 	}
 
 	@Override

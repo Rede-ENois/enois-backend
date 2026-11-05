@@ -49,6 +49,15 @@ public record UserSanction(String id, String userId, String reportId, SanctionTy
 			now, null, null);
 	}
 
+	/**
+	 * Banimento por decisao humana. Nasce BAN: quem foi banido depois de uma revisao humana nao
+	 * ganha recurso nem caminho de "suspensao que vira ban".
+	 */
+	public static UserSanction ban(String id, String userId, String reportId, String reason, Instant now) {
+		return new UserSanction(id, userId, reportId, SanctionType.BAN, reason, SanctionStatus.ACTIVE,
+			now, null, null);
+	}
+
 	/** Recurso aceito: restricao sai e a conta volta ao normal. */
 	public UserSanction remove(String reviewerId, Instant at) {
 		return new UserSanction(id, userId, reportId, type, reason, SanctionStatus.REMOVED, createdAt, at, reviewerId);

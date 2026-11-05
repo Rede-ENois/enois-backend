@@ -1,7 +1,7 @@
 # Chamadas de áudio e vídeo (1:1 e "Tamo junto")
 
 Chamadas dentro do Énóis, sem abrir aba nova nem sair para outro site: o painel da chamada é
-embutido no próprio app (iframe do Jitsi dentro de um overlay da tela), com minimizar, microfone,
+embutido no próprio app (iframe do Epapo dentro de um overlay da tela), com minimizar, microfone,
 câmera e encerrar. A conversa da DM chama uma pessoa; o grupo chama **"Tamo junto"**.
 
 A infraestrutura é a **Epapo**, a videoconferência própria da rede (fork do Jitsi Meet). O token de
@@ -32,11 +32,11 @@ quem iniciou a chamada é moderador. Gravação, transmissão ao vivo, chamada e
 ficam **desligadas no próprio token** (`context.features`), então ninguém grava áudio ou vídeo por
 padrão, nem por engano.
 
-Sem `REDE_CALLS_JITSI_URL` **ou** sem o gateway configurado (`REDE_CALLS_EPAPO_GATEWAY_URL` +
+Sem `REDE_CALLS_EPAPO_URL` **ou** sem o gateway configurado (`REDE_CALLS_EPAPO_GATEWAY_URL` +
 `REDE_CALLS_EPAPO_INTERNAL_TOKEN`) a API responde **503 `CALLS_NOT_CONFIGURED`** — ela nunca aponta
 o painel para uma instância aberta para "funcionar".
 
-## Infra: Jitsi próprio
+## Infra: Epapo (fork do Jitsi)
 
 | | Jitsi próprio (escolhido) | JaaS (8x8) | meet.jit.si público |
 |---|---|---|---|
@@ -55,7 +55,7 @@ projetos está em `deploy/INTEGRACAO-ENOIS.md` da Epapo.
 
 | Propriedade | Env | Padrão |
 |---|---|---|
-| `rede.calls.jitsi.url` | `REDE_CALLS_JITSI_URL` | vazio (chamadas desligadas) |
+| `rede.calls.epapo.url` | `REDE_CALLS_EPAPO_URL` (legado: `REDE_CALLS_JITSI_URL`) | vazio (chamadas desligadas) |
 | `rede.calls.epapo.gateway-url` | `REDE_CALLS_EPAPO_GATEWAY_URL` | vazio (chamadas desligadas) |
 | `rede.calls.epapo.internal-token` | `REDE_CALLS_EPAPO_INTERNAL_TOKEN` | vazio |
 | `rede.calls.epapo.timeout-millis` | `REDE_CALLS_EPAPO_TIMEOUT_MILLIS` | `5000` |
@@ -63,8 +63,10 @@ projetos está em `deploy/INTEGRACAO-ENOIS.md` da Epapo.
 | `rede.calls.gateway.authorize-token` | `REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN` | vazio |
 | `rede.rate.call-start-limit` | `REDE_CALL_START_LIMIT` | `20` por `REDE_CALL_START_WINDOW_MINUTES` (60) |
 
-`REDE_CALLS_JITSI_URL` é a origem pública da Epapo, com `https` e sem barra no fim (por exemplo
-`https://meet.enois.ia.br`). `REDE_CALLS_EPAPO_GATEWAY_URL` é o gateway na rede privada
+`REDE_CALLS_EPAPO_URL` é a origem pública da Epapo, com `https` e sem barra no fim (por exemplo
+`https://meet.enois.ia.br`). O nome antigo `REDE_CALLS_JITSI_URL` continua sendo lido quando o novo
+não está definido, então a ordem entre renomear a variável no deploy e subir o binário não importa.
+A mesma origem é o endereço padrão das salas de mentoria. `REDE_CALLS_EPAPO_GATEWAY_URL` é o gateway na rede privada
 (`http://auth-gateway:8090`), **nunca** a URL pública — o gateway não é superfície do navegador.
 
 Três segredos, todos só entre servidores e todos por variável de ambiente do deploy (nunca no
@@ -126,13 +128,35 @@ ou dois "entrar") não deixam a chamada em dois estados nem contam a mesma pesso
 | POST | `/calls/{id}/leave` | Sair (grupo segue vivo) |
 | POST | `/calls/{id}/end` | Encerrar para todos |
 | POST | `/calls/{id}/fail` | A tela perdeu a mídia |
+| GET | `/calls/{id}/reportable` | Quem entrou na sala e pode ser denunciado (sem quem denuncia) |
+| POST | `/calls/{id}/reports` | Denúncia da chamada: `reportedUserId`, `reason`, `description`, `mediaId` |
+
+### Denúncia de chamada
+
+Quem está na sala denuncia outra pessoa que **entrou** nela. O servidor não confia na lista que o
+cliente manda: `reportable` sai de `joined_at` (quem atendeu ou passou pelo gateway conta como
+entrada) e o `POST` recusa denunciar quem não entrou (`NOT_IN_CALL`), denunciar a si mesmo
+(`INVALID_REPORTED_USER`) e repetir a mesmo denúncia (`409 ALREADY_REPORTED` — uma por quem
+denuncia × chamada × denunciado).
+
+A denúncia é a mesma das outras (teto `report` por hora, aviso ao suporte, triagem por IA), com
+alvo `CALL`. O contexto gravado em `call_reports` (V241) guarda a sala, o denunciado, quem estava
+na sala no momento, a captura e o horário — é o que a moderação lê na revisão. A captura é uma
+imagem enviada antes com propósito `REPORT_CAPTURE`: ela **não passa pela checagem de imagem
+pública** (a prova mostra a própria violação) e **só é servida a quem modera** (sem sessão `401`,
+sessão sem cargo `403`, `Cache-Control: private, no-store`).
+
+A triagem por IA lê o relato, os participantes e a captura, e **nunca penaliza sozinha** uma
+denúncia de chamada: penalidade e banimento sobre quem foi apontado são decisão humana no painel de
+revisão (`/moderacao/{reportId}`), que mostra a captura.
 
 O stream `/conversations/stream` ganha o evento `call` com `{"callId","state","conversationId"?,`
 `"groupId"?}`; o cliente busca o estado real na rota de chamadas, que autoriza de novo.
 
 Erros são explícitos: `NOT_PARTICIPANT`, `NOT_GROUP_MEMBER`, `CALL_STATE_CONFLICT`,
 `CALL_CANCELLED`, `CALL_DECLINED`, `CALL_MISSED`, `CALL_ENDED`, `NOT_CALL_INITIATOR`,
-`NOT_A_DIRECT_CONVERSATION`, `CALLS_NOT_CONFIGURED`.
+`NOT_A_DIRECT_CONVERSATION`, `CALLS_NOT_CONFIGURED` e, na denúncia, `NOT_IN_CALL`,
+`INVALID_REPORTED_USER`, `INVALID_REASON`, `DESCRIPTION_TOO_LONG`, `ALREADY_REPORTED`.
 
 ## Notificações
 
@@ -161,6 +185,8 @@ notificação na caixa.
 | `CallExpiryWorker` | Fecha o que venceu a cada 5s |
 | `CallController` | Rotas `/calls/**` |
 | `CallPersistenceAdapter` | Transições condicionais em `call_sessions`/`call_participants` (V240) |
+| `CallReportService` / `CallReportController` | Quem pode ser denunciado e a denúncia da sala |
+| `CallReportContext` / `CallReportPersistenceAdapter` | Contexto da denúncia em `call_reports` (V241) |
 
 A rota `/calls/{id}/gateway/entry/{userId}` exige o header `X-Enois-Authorize` com
 `REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN` (comparação em tempo constante; sem segredo configurado, 503
@@ -177,6 +203,13 @@ sessão de usuário — o chamador é o gateway, autenticado pelo segredo, não 
 | Grupo (`/grupos/{slug}`) | Botão "Tamo junto" e banner "🔴 O grupo está ao vivo!" com quantas pessoas estão na chamada |
 | Notificação e push (`/call/{id}`) | A rota pede a entrada ao provider e devolve a pessoa para a conversa de origem |
 | Toque | Sintetizado no navegador (Web Audio), só em 1:1, nunca em modo lite/BATATA |
+| "Denunciar chamada" (painel ao vivo) | Escolhe quem, motivo e relato; pede a captura do momento à sala e envia tudo junto |
+
+A captura do momento é pedida **à própria sala**, por `postMessage`: o painel é uma iframe de outro
+domínio, sem `allow-same-origin`, então o app não lê nada de dentro dela. O Epapo responde uma única
+vez, com uma folha JPEG das telas visíveis (`enois:call-capture-request` →
+`enois:call-capture-response`), e só para a origem registrada em `EPAPO_CAPTURE_ORIGIN`. Sem imagem
+legível (só áudio, câmera desligada) a denúncia segue só com o relato, e a tela diz isso.
 
 Minimizar mantém o painel montado; reabrir pede uma credencial nova ao servidor em vez de reusar
 o token. Fechar a aba durante a chamada avisa o servidor (`pagehide` → `POST /calls/{id}/leave`).

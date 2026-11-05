@@ -61,6 +61,7 @@ public class ModeratorService {
 	private final AuthSessionRepository sessions;
 	private final com.socialcoisa.rede.feed.application.port.in.PurgeAuthorContentUseCase contentPurge;
 	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
+	private final IpBlockService ipBlockService;
 	private final Clock clock;
 	private final int minReputation;
 	private final int voteQuorum;
@@ -71,6 +72,7 @@ public class ModeratorService {
 			NotificationService notifications, UserProfileRepository profiles, AuthSessionRepository sessions,
 			com.socialcoisa.rede.feed.application.port.in.PurgeAuthorContentUseCase contentPurge,
 			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate,
+			IpBlockService ipBlockService,
 			Clock clock,
 			@Value("${rede.moderation.moderator-min-reputation:200}") int minReputation,
 			@Value("${rede.moderation.vote-quorum:3}") int voteQuorum) {
@@ -87,6 +89,7 @@ public class ModeratorService {
 		this.sessions = sessions;
 		this.contentPurge = contentPurge;
 		this.sanctionGate = sanctionGate;
+		this.ipBlockService = ipBlockService;
 		this.clock = clock;
 		this.minReputation = minReputation;
 		this.voteQuorum = Math.max(1, voteQuorum);
@@ -263,7 +266,7 @@ public class ModeratorService {
 		if (report.reporterId().equals(moderatorId)) {
 			throw new ApiException(403, "REPORT_IS_YOURS", "Você denunciou este conteúdo; outro moderador decide.");
 		}
-		String authorId = contentAuthors.authorOf(report.targetType().name(), report.targetId()).orElse(null);
+		String authorId = contentAuthors.authorOf(report).orElse(null);
 		if (moderatorId.equals(authorId)) {
 			throw new ApiException(403, "AUTHOR_CANNOT_VOTE", "Você é o autor do conteúdo denunciado.");
 		}
@@ -349,6 +352,35 @@ public class ModeratorService {
 			sanctionService.restrictUser(target.id(), reference, cleanReason);
 		}
 		return new SanctionResult(target.id(), target.username(), type.name(), "ACTIVE");
+	}
+
+	/**
+	 * Banimento com bloqueio de todos os IPs conhecidos do usuario. Aplica PERMABAN (sem recurso)
+	 * e bloqueia cada IP de onde ele entrou, impedindo signup e login daquele endereco. Somente
+	 * admin — o endpoint no controller exige {@code adminGuard}.
+	 */
+	@Transactional
+	public BanWithIpsResult banWithIps(String adminId, String username, String reason) {
+		SanctionResult sanction = sanctionUser(adminId, username, SanctionType.PERMABAN, reason);
+		List<IpBlockService.UserIpView> ips = ipBlockService.ipsOfUser(username);
+		List<String> blocked = new java.util.ArrayList<>();
+		List<String> alreadyBlocked = new java.util.ArrayList<>();
+		for (IpBlockService.UserIpView ip : ips) {
+			try {
+				ipBlockService.block(adminId, ip.ip(), "IP de @" + trim(username) + ": " + trim(reason));
+				blocked.add(ip.ip());
+			}
+			catch (ApiException e) {
+				if ("IP_ALREADY_BLOCKED".equals(e.code())) {
+					alreadyBlocked.add(ip.ip());
+				}
+				// IP invalido ou outro erro: pula sem travar a operacao.
+			}
+		}
+		return new BanWithIpsResult(sanction, blocked, alreadyBlocked);
+	}
+
+	public record BanWithIpsResult(SanctionResult sanction, List<String> blockedIps, List<String> alreadyBlockedIps) {
 	}
 
 	/**

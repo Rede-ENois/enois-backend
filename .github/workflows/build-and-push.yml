@@ -700,6 +700,10 @@ jobs:
           VAPID_PUBLIC_KEY: ${{ secrets.PROD_VAPID_PUBLIC_KEY }}
           VAPID_PRIVATE_KEY: ${{ secrets.PROD_VAPID_PRIVATE_KEY }}
           VAPID_SUBJECT: "mailto:suporte@enois.ia.br"
+          # Observability channel (Telegram via the Kof Agent bot). Production only: QA has no token,
+          # so the channel stays inert there. docs/KOF_AGENT.md
+          KOF_AGENT_API_TOKEN: ${{ secrets.KOF_AGENT_API_TOKEN }}
+          KOF_AGENT_CHAT_ID: ${{ secrets.KOF_AGENT_CHAT_ID }}
         run: |
           set -euo pipefail
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
@@ -794,6 +798,8 @@ jobs:
                 VAPID_PUBLIC_KEY: "${VAPID_PUBLIC_KEY}"
                 VAPID_PRIVATE_KEY: "${VAPID_PRIVATE_KEY}"
                 VAPID_SUBJECT: "${VAPID_SUBJECT}"
+                KOF_AGENT_API_TOKEN: "${KOF_AGENT_API_TOKEN}"
+                KOF_AGENT_CHAT_ID: "${KOF_AGENT_CHAT_ID}"
           EOF
 
           echo "==> Montar payload JSON (python escapa o YAML certo pro body)"

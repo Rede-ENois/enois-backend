@@ -206,6 +206,16 @@ class ModeratorController {
 		return moderators.sanctionUser(user.id().value(), username, request.type(), request.reason());
 	}
 
+	/** Banimento permanente + bloqueio de todos os IPs do usuario. Somente admin. */
+	@PostMapping("/admin/users/{username}/ban-with-ips")
+	ModeratorService.BanWithIpsResult banWithIps(
+			@RequestHeader("X-Session-Token") String sessionToken, @PathVariable String username,
+			@RequestBody SanctionRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		adminGuard.requireAdmin(user);
+		return moderators.banWithIps(user.id().value(), username, request.reason());
+	}
+
 	/** Limpeza por spam: APAGA DO BANCO todos os posts e comentários do usuário. */
 	@PostMapping("/admin/users/{username}/sanitize")
 	ModeratorService.SanitizeResult sanitize(

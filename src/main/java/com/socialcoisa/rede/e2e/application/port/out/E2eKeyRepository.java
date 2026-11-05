@@ -1,10 +1,10 @@
-package com.socialcoisa.rede.messaging.application.port.out;
+package com.socialcoisa.rede.e2e.application.port.out;
 
 import java.util.List;
 import java.util.Optional;
 
-import com.socialcoisa.rede.messaging.domain.ConversationKey;
-import com.socialcoisa.rede.messaging.domain.UserKeypair;
+import com.socialcoisa.rede.e2e.domain.ConversationKey;
+import com.socialcoisa.rede.e2e.domain.UserKeypair;
 
 public interface E2eKeyRepository {
 

@@ -58,11 +58,17 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 		java.util.Map.entry("application/pdf", ".pdf"));
 	private static final java.util.Set<String> IMAGE_MIME_TYPES = java.util.Set.of(
 		"image/jpeg", "image/png", "image/gif", "image/webp", "image/avif");
+	/**
+	 * Captura de tela que acompanha uma denúncia de chamada. Prova para a moderação: não passa pela
+	 * checagem de imagem pública e só é servida a quem modera.
+	 */
+	public static final String REPORT_CAPTURE_PURPOSE = "REPORT_CAPTURE";
 	/** Upload kinds narrower than the general list; any other purpose (posts, messages) uses the full list. */
 	private static final java.util.Map<String, java.util.Set<String>> MIME_TYPES_BY_PURPOSE = java.util.Map.of(
 		"AVATAR", IMAGE_MIME_TYPES, "BANNER", IMAGE_MIME_TYPES, "COVER", IMAGE_MIME_TYPES,
 		"BADGE", IMAGE_MIME_TYPES, "GAME_ICON", IMAGE_MIME_TYPES, "GAME_BANNER", IMAGE_MIME_TYPES,
-		"MENTOR_BANNER", IMAGE_MIME_TYPES, "RESUME", java.util.Set.of("application/pdf"));
+		"MENTOR_BANNER", IMAGE_MIME_TYPES, REPORT_CAPTURE_PURPOSE, IMAGE_MIME_TYPES,
+		"RESUME", java.util.Set.of("application/pdf"));
 
 	private final MediaAssetRepository mediaAssetRepository;
 	private final MediaDeletionJobRepository mediaDeletionJobRepository;

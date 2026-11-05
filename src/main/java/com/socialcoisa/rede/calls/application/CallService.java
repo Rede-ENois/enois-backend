@@ -238,7 +238,8 @@ public class CallService implements CallRoomAuthorization {
 		CallSession call = calls.findById(callId)
 			.orElseThrow(() -> new ApiException(404, "CALL_NOT_FOUND", "Chamada nao encontrada ou expirada."));
 		enter(call, userId);
-		return new CallEntry(call.id(), call.roomId(), call.state().name(), displayName(userId), moderatorOf(call, userId));
+		return new CallEntry(call.id(), call.roomId(), userId, call.state().name(), displayName(userId),
+			moderatorOf(call, userId));
 	}
 
 	/** Vínculo + estado + registro da entrada. Vale tanto para o painel quanto para o gateway. */

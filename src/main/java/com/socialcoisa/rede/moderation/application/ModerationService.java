@@ -43,6 +43,7 @@ public class ModerationService {
 	private final ModerationLearningService learning;
 	private final org.springframework.context.ApplicationEventPublisher events;
 	private final int reportsPerHour;
+	private final com.socialcoisa.rede.moderation.application.port.out.CallReportContextRepository callReports;
 
 	public ModerationService(ReportRepository reportRepository,
 			ReportedContentRemover contentRemover,
@@ -60,6 +61,7 @@ public class ModerationService {
 			ModerationLearningService learning,
 			org.springframework.context.ApplicationEventPublisher events,
 			@org.springframework.beans.factory.annotation.Value("${rede.moderation.reports-per-hour:10}") int reportsPerHour,
+			com.socialcoisa.rede.moderation.application.port.out.CallReportContextRepository callReports,
 			Clock clock) {
 		this.reportRepository = reportRepository;
 		this.contentRemover = contentRemover;
@@ -79,6 +81,7 @@ public class ModerationService {
 		this.learning = learning;
 		this.events = events;
 		this.reportsPerHour = reportsPerHour;
+		this.callReports = callReports;
 	}
 
 	/** Autor do alvo: para pagina empresarial e o DONO da pagina (os demais leitores trazem o perfil). */
@@ -86,7 +89,7 @@ public class ModerationService {
 		if (report.targetType() == TargetType.COMPANY) {
 			return companyReader.ownerOf(report.targetId());
 		}
-		return contentAuthors.authorOf(report.targetType().name(), report.targetId());
+		return contentAuthors.authorOf(report);
 	}
 
 	/** Conteudo do alvo: para pagina empresarial e o que ela diz sobre si. */
@@ -94,7 +97,7 @@ public class ModerationService {
 		if (report.targetType() == TargetType.COMPANY) {
 			return companyReader.contentOf(report.targetId());
 		}
-		return contentReader.contentOf(report.targetType().name(), report.targetId());
+		return contentReader.contentOf(report);
 	}
 
 	/** Aviso ao suporte: best-effort. A denuncia JA ESTA salva; falha de e-mail nao perde nada. */
@@ -171,6 +174,8 @@ public class ModerationService {
 		if (reason == null) {
 			throw new ApiException(400, "INVALID_REASON", "Motivo da denuncia e obrigatorio.");
 		}
+		// A denúncia de chamada é POR PARTICIPANTE: duas pessoas diferentes na mesma sala são dois
+		// casos, e a mesma pessoa não abre um segundo caso contra quem já acusou.
 		if (reportRepository.existsByReporterAndTarget(reporterId, targetType.name(), targetId)) {
 			throw new ApiException(409, "ALREADY_REPORTED", "Voce ja denunciou este conteudo.");
 		}
@@ -181,6 +186,49 @@ public class ModerationService {
 		notifySupport(saved);
 		publishSexualFlow(saved);
 		return saved;
+	}
+
+	/**
+	 * Denúncia de chamada: a denúncia em si é a mesma das outras (teto de frequência, aviso ao
+	 * suporte, triagem por IA), mas o alvo é a sala e quem foi acusado vai no contexto gravado
+	 * pelo módulo de chamadas. O relato de quem denunciou leva junto o nome do denunciado, para a
+	 * triagem saber de quem se trata sem expor id interno.
+	 */
+	@Transactional
+	public Report reportCall(String reporterId, String callId, String reportedUserId, ReportReason reason,
+			String description, List<String> presentParticipants) {
+		actionThrottle.exigePermitido("report", reporterId, reportsPerHour, java.time.Duration.ofHours(1));
+		if (reason == null) {
+			throw new ApiException(400, "INVALID_REASON", "Motivo da denuncia e obrigatorio.");
+		}
+		String id = "report_" + UUID.randomUUID().toString().replace("-", "");
+		StringBuilder text = new StringBuilder();
+		text.append("Denunciado nesta chamada: ").append(describeUser(reportedUserId)).append('.');
+		if (presentParticipants != null && !presentParticipants.isEmpty()) {
+			text.append("\nNa sala no momento: ")
+				.append(String.join(", ", presentParticipants.stream().map(this::describeUser).toList()))
+				.append('.');
+		}
+		if (description != null && !description.isBlank()) {
+			text.append("\nRelato de quem denunciou: ").append(description.trim());
+		}
+		// A coluna de descrição aceita 2000 caracteres; o relato já foi limitado antes de chegar aqui.
+		String stored = text.length() > 2000 ? text.substring(0, 2000) : text.toString();
+		Report saved = reportRepository.save(
+			Report.create(id, reporterId, TargetType.CALL, callId, reason, stored, Instant.now(clock)));
+		notifySupport(saved);
+		return saved;
+	}
+
+	/**
+	 * A mesma pessoa não abre dois casos contra o mesmo participante da mesma chamada. Duas pessoas
+	 * diferentes na mesma sala são dois casos: a denúncia de chamada é por denunciado.
+	 */
+	@Transactional(readOnly = true)
+	public void ensureCallNotReported(String reporterId, String callId, String reportedUserId) {
+		if (callReports.alreadyReported(reporterId, callId, reportedUserId)) {
+			throw new ApiException(409, "ALREADY_REPORTED", "Voce ja denunciou esta pessoa nesta chamada.");
+		}
 	}
 
 	/**
@@ -249,10 +297,31 @@ public class ModerationService {
 		String authorId = authorOf(report).orElse(null);
 		String content = contentOf(report).orElse(null);
 		return new ReportReview(report, describeUser(report.reporterId()), authorId,
-			authorId == null ? null : describeUser(authorId), content);
+			authorId == null ? null : describeUser(authorId), content, callContextOf(report));
 	}
 
-	public record ReportReview(Report report, String reporter, String authorId, String author, String content) {
+	/**
+	 * Contexto da denúncia de chamada para o painel: quem estava na sala, quem foi apontado e a
+	 * captura do momento. Nulo nas denúncias que não são de chamada.
+	 */
+	private CallReviewContext callContextOf(Report report) {
+		if (report.targetType() != TargetType.CALL) {
+			return null;
+		}
+		return callReports.findByReportId(report.id())
+			.map(context -> new CallReviewContext(context.callId(), context.reportedUserId(),
+				context.participants().stream().map(this::describeUser).toList(), context.mediaId(),
+				context.reportedAt().toString()))
+			.orElse(null);
+	}
+
+	public record ReportReview(Report report, String reporter, String authorId, String author, String content,
+			CallReviewContext call) {
+	}
+
+	/** O que o painel mostra de uma denúncia de chamada. */
+	public record CallReviewContext(String callId, String reportedUserId, List<String> participants,
+			String mediaId, String reportedAt) {
 	}
 
 	@Transactional
@@ -310,7 +379,7 @@ public class ModerationService {
 		Report saved = reportRepository.save(report);
 		String id = "sanc_" + java.util.UUID.randomUUID().toString().replace("-", "");
 		var sanction = com.socialcoisa.rede.moderation.domain.UserSanction
-			.suspended(id, authorId, report.id(), "Banimento por decisão humana (denúncia " + report.id() + ")",
+			.ban(id, authorId, report.id(), "Banimento por decisão humana (denúncia " + report.id() + ")",
 				Instant.now(clock));
 		sanctions_save_banned(sanction, authorId, reviewerId, sessions);
 		learning.record(saved, "BAN", "HUMAN", reviewerId);

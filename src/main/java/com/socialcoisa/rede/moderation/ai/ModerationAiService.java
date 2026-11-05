@@ -119,6 +119,12 @@ public class ModerationAiService {
 			antes de decidir. Texto inocente com imagem explicita e violacao; imagem inocente com
 			denuncia falsa nao e. Nunca diga que viu algo que nao esta na imagem.
 
+			Quando o alvo for uma CHAMADA (audio/video), a imagem e uma CAPTURA DE TELA feita por
+			quem denuncia no momento do pedido: ela pode estar desfocada, cortada, mostrar so a tela
+			de quem denunciou ou nao mostrar a pessoa acusada. O relato e alegacao, nao prova. Nesse
+			caso, mesmo que a imagem pareca confirmar a violacao, use "acao": "HUMAN_REVIEW" — a
+			penalidade de uma chamada e sempre decidida por uma pessoa.
+
 			Regras obrigatorias de saida:
 			- "acao" pode ser "PENALIZAR", "HUMAN_REVIEW" ou "NENHUMA".
 			- "PENALIZAR" e para violacao CONFIRMADA das diretrizes: racismo, homofobia, transfobia,
@@ -170,8 +176,7 @@ public class ModerationAiService {
 	 * nao tem o que analisar e manda para revisao humana, em vez de julgar por um identificador.
 	 */
 	String reportUserPrompt(Report report) {
-		String content = contentReader.contentOf(report.targetType().name(), report.targetId())
-			.orElse("(conteudo indisponivel)");
+		String content = contentReader.contentOf(report).orElse("(conteudo indisponivel)");
 		return userPrompt(content, report.reason().name(), report.description());
 	}
 
@@ -184,7 +189,7 @@ public class ModerationAiService {
 			return List.of();
 		}
 		try {
-			return mediaReader.imagesOf(report.targetType().name(), report.targetId(), MAX_REPORT_IMAGES);
+			return mediaReader.imagesOf(report, MAX_REPORT_IMAGES);
 		}
 		catch (RuntimeException failure) {
 			// Leitura de midia e best-effort: falha aqui vira "sem imagem", nunca denuncia perdida.
