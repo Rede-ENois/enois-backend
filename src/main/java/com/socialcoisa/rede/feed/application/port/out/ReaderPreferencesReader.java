@@ -13,4 +13,7 @@ public interface ReaderPreferencesReader {
 
 	/** Assuntos que o leitor quer ver com mais frequência (vazio = sem boost). */
 	Collection<String> likedTopics(String userId);
+
+	/** Verdadeiro quando o leitor escolheu ocultar reposts (puros e com opinião) no feed pessoal. */
+	boolean hideReposts(String userId);
 }

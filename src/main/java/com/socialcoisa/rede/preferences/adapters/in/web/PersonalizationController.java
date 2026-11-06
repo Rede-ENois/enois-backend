@@ -36,7 +36,8 @@ class PersonalizationController {
 
 	record PersonalizationResponse(List<String> likedTopics, List<String> blockedTopics,
 			List<String> disabledModules, boolean nightRestReminder, LocalDate nightRestDismissedOn,
-			boolean liteMode, boolean batataMode, boolean whatsNewEnabled, String whatsNewLastSeen) {
+			boolean liteMode, boolean batataMode, boolean hideReposts, boolean whatsNewEnabled,
+			String whatsNewLastSeen) {
 	}
 
 	record DismissNightRestRequest(String night) {
@@ -46,7 +47,8 @@ class PersonalizationController {
 	}
 
 	record UpdateRequest(List<String> likedTopics, List<String> blockedTopics, List<String> disabledModules,
-			Boolean nightRestReminder, Boolean liteMode, Boolean batataMode, Boolean whatsNewEnabled) {
+			Boolean nightRestReminder, Boolean liteMode, Boolean batataMode, Boolean hideReposts,
+			Boolean whatsNewEnabled) {
 	}
 
 	@GetMapping("/me/preferences")
@@ -67,7 +69,8 @@ class PersonalizationController {
 			request == null ? null : request.nightRestReminder(),
 			request == null ? null : request.liteMode(),
 			request == null ? null : request.batataMode(),
-			request == null ? null : request.whatsNewEnabled());
+			request == null ? null : request.whatsNewEnabled(),
+			request == null ? null : request.hideReposts());
 		return view(updated);
 	}
 
@@ -100,7 +103,7 @@ class PersonalizationController {
 		return new PersonalizationResponse(personalization.likedTopics(), personalization.blockedTopics(),
 			personalization.disabledModules(), personalization.nightRestReminder(),
 			personalization.nightRestDismissedOn(), personalization.liteMode(),
-			personalization.batataMode(), personalization.whatsNewEnabled(),
-			personalization.whatsNewLastSeen());
+			personalization.batataMode(), personalization.hideReposts(),
+			personalization.whatsNewEnabled(), personalization.whatsNewLastSeen());
 	}
 }

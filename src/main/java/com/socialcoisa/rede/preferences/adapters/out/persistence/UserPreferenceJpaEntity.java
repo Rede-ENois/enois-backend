@@ -44,6 +44,10 @@ class UserPreferenceJpaEntity {
 	@Column(name = "batata_mode", nullable = false)
 	private boolean batataMode;
 
+	/** Oculta reposts (puros e com opiniao) nas abas do feed pessoal. */
+	@Column(name = "hide_reposts", nullable = false)
+	private boolean hideReposts;
+
 	/** Se as notificacoes de novas features e design system devem aparecer (true = ativo, false = ignorado). */
 	@Column(name = "whats_new_enabled", nullable = false)
 	private boolean whatsNewEnabled = true;
@@ -74,6 +78,7 @@ class UserPreferenceJpaEntity {
 		entity.nightRestDismissedOn = preference.nightRestDismissedOn();
 		entity.liteMode = preference.liteMode();
 		entity.batataMode = preference.batataMode();
+		entity.hideReposts = preference.hideReposts();
 		entity.whatsNewEnabled = preference.whatsNewEnabled();
 		entity.whatsNewLastSeen = preference.whatsNewLastSeen();
 		return entity;
@@ -81,7 +86,7 @@ class UserPreferenceJpaEntity {
 
 	UserPreference toDomain() {
 		return new UserPreference(userId, themeId, likedTopics, blockedTopics, disabledModules,
-			nightRestReminder, nightRestDismissedOn, liteMode, batataMode, whatsNewEnabled, whatsNewLastSeen,
+			nightRestReminder, nightRestDismissedOn, liteMode, batataMode, hideReposts, whatsNewEnabled, whatsNewLastSeen,
 			updatedAt);
 	}
 }

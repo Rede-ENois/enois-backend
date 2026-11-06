@@ -12,6 +12,6 @@ import java.time.LocalDate;
  */
 public record UserPreference(String userId, String themeId, String likedTopics, String blockedTopics,
 		String disabledModules, boolean nightRestReminder, LocalDate nightRestDismissedOn,
-		boolean liteMode, boolean batataMode, boolean whatsNewEnabled, String whatsNewLastSeen,
-		Instant updatedAt) {
+		boolean liteMode, boolean batataMode, boolean hideReposts, boolean whatsNewEnabled,
+		String whatsNewLastSeen, Instant updatedAt) {
 }
