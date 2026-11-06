@@ -26,6 +26,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import tools.jackson.databind.ObjectMapper;
+import com.socialcoisa.rede.media.application.StubFfmpegRunner;
 import com.socialcoisa.rede.media.application.port.out.MediaObjectStore;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
@@ -58,6 +59,9 @@ class MediaStorageProxyTests {
 	@Autowired
 	private com.socialcoisa.rede.media.application.MediaMetadataSanitizer sanitizer;
 
+	@Autowired
+	private StubFfmpegRunner ffmpeg;
+
 	private TestAuthHelper auth;
 
 	@BeforeEach
@@ -72,6 +76,12 @@ class MediaStorageProxyTests {
 		@Primary
 		FakeObjectStore fakeObjectStore() {
 			return new FakeObjectStore();
+		}
+
+		@Bean
+		@Primary
+		StubFfmpegRunner stubFfmpegRunner() {
+			return new StubFfmpegRunner();
 		}
 	}
 
@@ -278,8 +288,6 @@ class MediaStorageProxyTests {
 			.path("objectKey").asText();
 		assertThat(objectKey).endsWith("/file.mp4");
 
-		// Corpo que o ffmpeg nao consegue ler (ou ffmpeg ausente): a limpeza e best-effort e o
-		// original segue para o bucket — upload de video nunca pode virar 500 por causa dela.
 		mockMvc.perform(put("/storage/" + objectKey)
 				.header("X-Session-Token", dono.token())
 				.contentType("video/mp4")
@@ -289,6 +297,36 @@ class MediaStorageProxyTests {
 
 		assertThat(store().chaveEscrita).isEqualTo(objectKey);
 		assertThat(store().escrito).isEqualTo(video);
+	}
+
+	@Test
+	void videoQueOFfmpegNaoLimpaERecusadoENaoChegaAoBucket() throws Exception {
+		var dono = auth.authenticate("media_proxy_video_sujo");
+		byte[] video = "ftypisom-video-com-metadados".repeat(16).getBytes(StandardCharsets.UTF_8);
+		var criado = mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", dono.token())
+				.header("Idempotency-Key", "media-proxy-video-sujo-1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("fileName", "clipe.mp4",
+					"mimeType", "video/mp4", "size", video.length, "purpose", "POST_VIDEO"))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
+			.path("objectKey").asText();
+
+		ffmpeg.failWith(StubFfmpegRunner.processingFailed());
+		try {
+			mockMvc.perform(put("/storage/" + objectKey)
+					.header("X-Session-Token", dono.token())
+					.contentType("video/mp4")
+					.content(video))
+				.andExpect(status().isUnprocessableEntity())
+				.andExpect(jsonPath("$.code").value("MEDIA_PROCESSING_FAILED"));
+		}
+		finally {
+			ffmpeg.failWith(null);
+		}
+		assertThat(store().chaveEscrita).isNotEqualTo(objectKey);
 	}
 
 	@Test
