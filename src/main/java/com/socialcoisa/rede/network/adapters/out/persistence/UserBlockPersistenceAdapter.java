@@ -48,6 +48,11 @@ class UserBlockPersistenceAdapter implements UserBlockRepository, BlockedUsersRe
 	}
 
 	@Override
+	public boolean blockedBetween(String userA, String userB) {
+		return hiddenBetween(userA, userB);
+	}
+
+	@Override
 	public List<UserBlock> findByBlockerId(String blockerId) {
 		return repository.findByBlockerIdOrderByCreatedAtDesc(blockerId).stream()
 			.map(UserBlockJpaEntity::toDomain)

@@ -40,10 +40,13 @@ public class DeveloperProfileService {
 	private final DeveloperFollowRepository follows;
 	private final GameRepository games;
 	private final UserProfileRepository userProfiles;
+	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
 	private final Clock clock;
 
 	public DeveloperProfileService(DeveloperProfileRepository profiles, DeveloperFollowRepository follows,
-			GameRepository games, UserProfileRepository userProfiles, Clock clock) {
+			GameRepository games, UserProfileRepository userProfiles, com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate,
+			Clock clock) {
+		this.sanctionGate = sanctionGate;
 		this.profiles = profiles;
 		this.follows = follows;
 		this.games = games;
@@ -59,6 +62,7 @@ public class DeveloperProfileService {
 	@Transactional(readOnly = true)
 	public DeveloperPage page(String username, String viewerId) {
 		UserProfile user = userProfiles.findByUsername(username)
+			.filter(found -> !sanctionGate.banned(found.id()))
 			.orElseThrow(() -> new ApiException(404, "DEVELOPER_NOT_FOUND", "Criador não encontrado."));
 		DeveloperProfile profile = profiles.findByUserId(user.id()).orElse(null);
 		List<Game> published = games.findByUserAndStatus(user.id(), GameStatus.PUBLISHED, 60);

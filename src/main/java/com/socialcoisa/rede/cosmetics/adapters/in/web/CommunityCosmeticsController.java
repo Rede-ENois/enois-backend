@@ -116,10 +116,10 @@ class CommunityCosmeticsController {
 	record NameStyleView(String theme, String font, String color) {
 	}
 
-	record CosmeticView(String id, String creatorId, String kind, String name, String description, String manifestJson,
+	record CosmeticView(String id, String kind, String name, String description, String manifestJson,
 		String license, String status, int version, int reported, String createdAt, String updatedAt) {
 		static CosmeticView from(CommunityCosmetic cosmetic) {
-			return new CosmeticView(cosmetic.id(), cosmetic.creatorId(), cosmetic.kind().name(), cosmetic.name(),
+			return new CosmeticView(cosmetic.id(), cosmetic.kind().name(), cosmetic.name(),
 				cosmetic.description() == null ? "" : cosmetic.description(), cosmetic.manifestJson(), cosmetic.license(),
 				cosmetic.status().name(), cosmetic.version(), cosmetic.reported(), cosmetic.createdAt().toString(),
 				cosmetic.updatedAt().toString());

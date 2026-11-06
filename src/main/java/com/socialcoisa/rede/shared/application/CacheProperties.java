@@ -93,6 +93,12 @@ public class CacheProperties {
 	 */
 	private final Category linkPreviews = new Category(Duration.ofMinutes(30), 2_000);
 
+	/**
+	 * Tallies of a rolling 24-hour window, read on every feed open by anyone: two minutes of delay
+	 * do not change what the card means. One entry (the window has no parameters).
+	 */
+	private final Category trendingGames = new Category(Duration.ofMinutes(2), 4);
+
 	public Category getPublicProfiles() {
 		return publicProfiles;
 	}
@@ -139,5 +145,9 @@ public class CacheProperties {
 
 	public Category getLinkPreviews() {
 		return linkPreviews;
+	}
+
+	public Category getTrendingGames() {
+		return trendingGames;
 	}
 }

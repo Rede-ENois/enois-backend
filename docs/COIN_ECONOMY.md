@@ -89,6 +89,13 @@ faíscas = base × 10.000 / cotaçãoAtualEmMicros     (mínimo 1 milésimo, pis
   e a Énóis não é um mercado de atenção. O que se recompensa é ajudar. As entradas antigas
   (`reacoes:*`) continuam no ledger como histórico.
 
+### Jogos diários
+
+Prizes of the daily games (10/5/3/1 by rank) go only to accounts with a verified identity that are
+past the new-account window (7 days) when the challenge day starts, the same window as the accepted
+answer reward below and the sending cap. Runs flagged as faster than a person can play are left out
+of the ranking. Details in [`MODULES.md`](MODULES.md#25-dailygames-jogos-diários).
+
 ### Ajuda: resposta aceita numa dúvida
 
 A recompensa vai para quem **ajudou**, não para o que ficou popular. Quando quem perguntou aceita
