@@ -24,8 +24,14 @@ conta e PR revertido deixa de contar.
 ### Issues (`ISSUES`)
 
 Issues **qualificadas** nos repositórios elegíveis. Abrir issue não conta por si só: a issue precisa
-ter uma label de qualificação (configurável) **ou** ser validada por um mantenedor no painel. Assim
-spam de issues não vira selo.
+ter a label de triagem `seal:qualified` (configurável em `GITHUB_QUALIFIED_ISSUE_LABELS`) **ou** ser
+validada por um mantenedor no painel. Assim spam de issues não vira selo.
+
+A label de qualificação é aplicada **só por quem faz triagem** e nenhum template de issue pode
+aplicá-la: o template de bug aplica `bug` sozinho a toda issue nova, então `bug` (ou qualquer label de
+template) nunca qualifica. `QualifiedIssueLabelConfigTests` falha se a label configurada no deploy
+aparecer em algum template deste repositório; nos outros repositórios elegíveis, quem habilita o
+repositório confere os templates dele.
 
 | Nível | Faixa de issues qualificadas |
 | --- | --- |
@@ -79,7 +85,7 @@ financeiro nunca se mistura com reputação técnica.
    - PRs integrados (`/repos/{repo}/pulls?state=closed`), com arquivos, revisões e sinais;
    - issues (`/repos/{repo}/issues`), descartando pull requests e guardando as labels.
 4. PR integrado nasce como evidência `VALIDATED` (o GitHub é a fonte). Issue nasce `VALIDATED` se
-   tiver label qualificadora; caso contrário `PENDING`, aguardando um mantenedor.
+   tiver a label de triagem `seal:qualified`; caso contrário `PENDING`, aguardando um mantenedor.
 5. Depois de cada ciclo, os níveis das categorias são recalculados a partir da contagem. Promoção,
    rebaixamento, concessão e revogação geram evento de auditoria.
 6. A tela de segurança mostra o estado do vínculo e permite verificar de novo; a página de selos
@@ -92,11 +98,13 @@ financeiro nunca se mistura com reputação técnica.
 
 ## Repositórios elegíveis
 
-Todo repositório **público** da organização conta, inclusive os criados depois: a cada sincronização
-(que não seja dry-run) o sistema lista os repositórios da organização (`GITHUB_ORGANIZATION`) e registra
-os novos já habilitados. Forks, arquivados e privados nunca entram — o título de PR/issue vira evidência
-pública. Uma linha existente nunca é alterada pela descoberta: o que a administração desligou em
-`PATCH /admin/contributors/repositories` continua desligado. Falha ao listar não interrompe o ciclo.
+A cada sincronização (que não seja dry-run) o sistema lista os repositórios **públicos** da organização
+(`GITHUB_ORGANIZATION`) e registra os novos **desligados**: eles aparecem em
+`GET /admin/contributors/repositories` e só passam a contar para selos depois que um admin os habilita
+em `PATCH /admin/contributors/repositories`. Qualquer membro da organização pode criar um repositório
+público, e lá ele mesmo integra PRs e aplica labels; por isso a descoberta não habilita nada sozinha.
+Forks, arquivados e privados nunca entram (o título de PR/issue vira evidência pública). Uma linha
+existente nunca é alterada pela descoberta. Falha ao listar não interrompe o ciclo.
 
 ## Revisão de PRs no painel
 
@@ -136,7 +144,7 @@ pública. Uma linha existente nunca é alterada pela descoberta: o que a adminis
 | Tabela | Papel |
 | --- | --- |
 | `github_identities` | vínculo usuário Énóis ↔ ID imutável do GitHub, login e estado da última sync |
-| `github_repositories` | repositórios elegíveis: os públicos da organização entram sozinhos; o painel pode desligar |
+| `github_repositories` | repositórios elegíveis: os públicos da organização entram sozinhos, desligados; um admin habilita no painel |
 | `github_contributions` | evidência por `(repository, kind, object_number)` — PR **ou** issue |
 | `github_contribution_events` | auditoria de importação, revisão, contestação e revogação |
 | `user_seals` | uma linha por `(user_id, seal_type)`, status ACTIVE/REVOKED |
@@ -219,8 +227,8 @@ O processo é seguro para reexecução: o índice único e o upsert preservam a 
 | `GITHUB_SYNC_CRON` | cadência do worker (default `0 */10 * * * *`, a cada 10 minutos) |
 | `GITHUB_SYNC_MAX_PAGES` | páginas por repositório por ciclo (default 3) |
 | `GITHUB_SYNC_MAX_DETAILS` | PRs com detalhes (arquivos/revisões) por ciclo (default 60) |
-| `GITHUB_ORGANIZATION` | organização cujos repositórios públicos (sem forks nem arquivados) são elegíveis e descobertos a cada sincronização (default `Rede-ENois`; vazio desliga a descoberta) |
-| `GITHUB_QUALIFIED_ISSUE_LABELS` | labels que qualificam issue automaticamente, separadas por vírgula (default vazio = só revisão humana; QA e produção definem `bug`) |
+| `GITHUB_ORGANIZATION` | organização cujos repositórios públicos (sem forks nem arquivados) são descobertos a cada sincronização e registrados desligados até um admin habilitar (default `Rede-ENois`; vazio desliga a descoberta) |
+| `GITHUB_QUALIFIED_ISSUE_LABELS` | labels de triagem que qualificam issue automaticamente, separadas por vírgula (default vazio = só revisão humana; QA e produção definem `seal:qualified`). Nunca use uma label que um template de issue aplica (ex.: `bug`) |
 
 **Nome dos secrets no GitHub:** o GitHub recusa secrets cujo **nome** comece com `GITHUB_`
 (HTTP 422, “Secret names must not start with GITHUB_”). Por isso o deploy usa nomes diferentes do
@@ -252,7 +260,8 @@ nos repositórios elegíveis; sem ele a API pública limita em 60 requisições/
 
 - A detecção de revert é heurística (título/corpo com `Revert` + `#N`), não uma verdade absoluta.
 - Sem token, a API pública do GitHub limita bastante o backfill.
-- Issues sem label qualificadora dependem de revisão humana.
+- Issues sem a label de triagem dependem de revisão humana.
+- A label `seal:qualified` precisa existir em cada repositório habilitado (criada pela administração).
 - Categorias de documentação, segurança, comunidade, apoio e infraestrutura ainda não têm critério.
 - O vínculo não altera a verificação de identidade nem o segundo fator da conta.
 
@@ -262,7 +271,10 @@ nos repositórios elegíveis; sem ele a API pública limita em 60 requisições/
   1.000, 1.001) e um emblema único e fixo por nível.
 - `GitHubContributionSyncTests`: idempotência de PR e issue, mapeamento por ID, qualificação por
   label, perda de qualificação, dry-run e revert.
-- `GitHubContributionSyncTests` também cobre a descoberta de repositórios novos da organização.
+- `GitHubContributionSyncTests` também cobre a descoberta de repositórios novos da organização
+  (registrados desligados).
+- `QualifiedIssueLabelConfigTests`: a label de qualificação do deploy nunca é aplicada por um template
+  de issue.
 - `ContributorSealFlowTests`: promoção/rebaixamento por contagem, qualificação por revisão,
   projeção pública, revogação/concessão manual e critérios.
 - `GitHubIdentityServiceTests`: exclusividade do ID e desvínculo.
