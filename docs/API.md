@@ -108,7 +108,12 @@ notificação no aplicativo. O status de texto/ícone de `PUT /api/me/status`
 | GET | `/api/recommendations/given/{userId}` | Recomendações dadas | Sim |
 
 Conta banida responde 404 no perfil (por username e por id), nas conexões, nos seguidores e nas
-experiências; conta banida ou excluída não aparece na lista de conexões de ninguém. Com sessão, quem lê também não vê
+experiências; conta banida ou excluída não aparece na lista de conexões de ninguém. As páginas
+públicas laterais seguem a mesma regra e respondem 404 para conta banida: `/users/{username}/posts`,
+`/projects`, `/seals` (e evidências), `/games/{username}` (página de criador e jogos),
+`/community-projects/{username}`, `/services/{username}/{slug}`, `/corporate/{username}` (e
+`/posts`) e `/recommendations/received|given/{userId}`; recomendação de ou para conta banida some
+da lista das outras pessoas. Com sessão, quem lê também não vê
 as contas que bloqueou (ou que o bloquearam); o perfil bloqueado responde 404 nas listas.
 
 ### Profile garden
