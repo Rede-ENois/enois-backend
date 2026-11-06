@@ -54,8 +54,6 @@ class NetworkContractController {
 
 	private static final String INCOMING = "INCOMING";
 	private static final String OUTGOING = "OUTGOING";
-	/** Account deletion anonymizes the profile with this username prefix (see AuthService). */
-	private static final String REMOVED_USERNAME_PREFIX = "removed-";
 
 	NetworkContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
 			NetworkService networkService, BlockService blockService,
@@ -124,7 +122,7 @@ class NetworkContractController {
 		return suggestions.stream()
 			.filter(suggestion -> {
 				UserProfile p = profiles.get(suggestion.userId());
-				return p != null && p.username() != null && !p.username().startsWith(REMOVED_USERNAME_PREFIX);
+				return p != null && p.username() != null && !p.removed();
 			})
 			.map(suggestion -> {
 				UserProfile p = profiles.get(suggestion.userId());
@@ -171,7 +169,7 @@ class NetworkContractController {
 				Comparator.nullsLast(Comparator.reverseOrder())))
 			.map(c -> {
 				UserProfile p = profiles.get(peerOf(c, userId));
-				if (p == null || p.username() == null || p.username().startsWith(REMOVED_USERNAME_PREFIX)) {
+				if (p == null || p.username() == null || p.removed()) {
 					return null;
 				}
 				return new ConnectionRequestView(

@@ -84,6 +84,9 @@ notificação no aplicativo. O status de texto/ícone de `PUT /api/me/status`
 | GET | `/api/me` | Perfil completo do usuário logado | Sim |
 | GET | `/api/users/{username}` | Perfil público por username | Sim |
 | GET | `/api/users/by-id/{userId}` | Perfil por ID | Sim |
+| GET | `/api/users/{username}/connections` | Conexões aceitas do perfil (`limit` até 100, mais recentes primeiro) | Opcional |
+| GET | `/api/users/{username}/followers` | Quem enviou conexão aceita ao perfil (mesmo formato) | Opcional |
+| GET | `/api/users/{username}/experiences` | Experiências do perfil público | Não |
 | GET | `/api/users/search` | Buscar usuários | Sim |
 | GET | `/api/ranking` | Ranking por reputação | Sim |
 | PATCH | `/api/me/profile` | Atualizar perfil | Sim |
@@ -103,6 +106,10 @@ notificação no aplicativo. O status de texto/ícone de `PUT /api/me/status`
 | DELETE | `/api/recommendations/{targetId}` | Remover recomendação | Sim |
 | GET | `/api/recommendations/received/{userId}` | Recomendações recebidas | Sim |
 | GET | `/api/recommendations/given/{userId}` | Recomendações dadas | Sim |
+
+Conta banida responde 404 no perfil (por username e por id), nas conexões, nos seguidores e nas
+experiências; conta banida ou excluída não aparece na lista de conexões de ninguém. Com sessão, quem lê também não vê
+as contas que bloqueou (ou que o bloquearam); o perfil bloqueado responde 404 nas listas.
 
 ### Profile garden
 

@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
 
 import com.socialcoisa.rede.feed.domain.UserId;
@@ -14,12 +15,13 @@ import com.socialcoisa.rede.network.application.port.out.ConnectionRepository;
 import com.socialcoisa.rede.network.domain.ConnectionSuggestion;
 import com.socialcoisa.rede.network.domain.ConnectionStatus;
 import com.socialcoisa.rede.network.domain.UserConnection;
+import com.socialcoisa.rede.profile.application.port.out.ProfileNetworkReader;
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
 
 @Repository
-class ConnectionPersistenceAdapter implements ConnectionRepository {
+class ConnectionPersistenceAdapter implements ConnectionRepository, ProfileNetworkReader {
 
 	private final SpringDataUserConnectionJpaRepository springData;
 	private final EntityManager em;
@@ -91,6 +93,19 @@ class ConnectionPersistenceAdapter implements ConnectionRepository {
 			result.add(new UserId(id));
 		}
 		return result;
+	}
+
+	@Override
+	public List<NetworkPeer> acceptedPeers(String userId, boolean followersOnly, Long beforeConnectionId, int limit) {
+		PageRequest page = PageRequest.of(0, limit);
+		var rows = followersOnly
+			? springData.findAcceptedReceivedPage(userId, beforeConnectionId, page)
+			: springData.findAcceptedPage(userId, beforeConnectionId, page);
+		return rows.stream()
+			.map(UserConnectionJpaEntity::toDomain)
+			.map(connection -> new NetworkPeer(connection.id(), userId.equals(connection.requesterUserId())
+				? connection.receiverUserId() : connection.requesterUserId()))
+			.toList();
 	}
 
 	/** People already connected to, or with a pending request with, {@code :userId}. */
