@@ -148,6 +148,11 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				yield postRepository.findActiveByAuthors(authors, before, limit);
 			}
 		};
+		// "Ocultar reposts": fora do feed pessoal (repost puro tem repostOf nulo no post —
+		// o ponteiro mora em post_reposts; já o repost com opinião é um post com repostOf).
+		if (readerPreferences.hideReposts(query.userId().value())) {
+			posts = posts.stream().filter(post -> post.repostOf() == null).toList();
+		}
 		return page(enrich(posts, query.userId()), posts, limit);
 	}
 
@@ -157,6 +162,9 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		List<Post> fetched = postRepository.findTrending(
 			until.minus(java.time.Duration.ofHours(TRENDING_WINDOW_HOURS)), until, after, limit + 1);
 		List<Post> posts = fetched.stream().limit(limit).toList();
+		if (readerPreferences.hideReposts(query.userId().value())) {
+			posts = posts.stream().filter(post -> post.repostOf() == null).toList();
+		}
 		String nextCursor = null;
 		if (fetched.size() > limit) {
 			Post last = posts.getLast();
@@ -545,6 +553,9 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	 * mostrando tudo de quem a pessoa segue; a diferenca entre as abas e exatamente essa.
 	 */
 	private FeedPage forYou(GetFeedQuery query, Instant before, int limit) {
+		// "Ocultar reposts": o repost com opinião sai da janela do "Para você" e a mesclagem
+		// de reposts puros dos amigos (abaixo) é pulada inteira.
+		boolean hideReposts = readerPreferences.hideReposts(query.userId().value());
 		Set<UserId> authors = new LinkedHashSet<>();
 		authors.add(query.userId());
 		authors.addAll(connectionGraphRepository.findFriends(query.userId()));
@@ -568,6 +579,9 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		// a later page never holds a post newer than an earlier one (the front's "voce esta em dia"
 		// section relies on that).
 		List<Post> visible = filtered.stream().limit(limit).toList();
+		if (hideReposts) {
+			visible = visible.stream().filter(post -> post.repostOf() == null).toList();
+		}
 		String nextCursor = filtered.size() > limit
 			? cursorCodec.encode(visible.get(visible.size() - 1).createdAt())
 			: fetched.size() == limit * 3 ? cursorCodec.encode(fetched.get(fetched.size() - 1).createdAt()) : null;
@@ -587,6 +601,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 
 		// Reposts puros dos amigos: uma consulta em batch (todos os amigos de uma vez).
 		// Filtros do "Para você" valem: comunidade sem participacao, topico bloqueado e bloqueio.
+		// "Ocultar reposts" liga os três de uma vez: nem o post repostado entra.
 		Set<String> alreadyInFeed = visible.stream().map(p -> p.id().value()).collect(Collectors.toSet());
 		Set<String> hidden = blockedUsersReader.hiddenIdsFor(query.userId().value());
 		List<String> friendIdList = authors.stream().map(UserId::value)
@@ -607,7 +622,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				}
 			}
 		}
-		if (!bestRepost.isEmpty()) {
+		if (!hideReposts && !bestRepost.isEmpty()) {
 			List<Post> repostedPosts = postRepository.findByIds(
 				bestRepost.keySet().stream().map(PostId::new).toList()).stream()
 				.filter(Post::isActive)

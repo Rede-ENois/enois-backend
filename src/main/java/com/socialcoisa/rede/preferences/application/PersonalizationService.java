@@ -43,20 +43,27 @@ public class PersonalizationService {
 
 	public record Personalization(List<String> likedTopics, List<String> blockedTopics,
 			List<String> disabledModules, boolean nightRestReminder, LocalDate nightRestDismissedOn,
-			boolean liteMode, boolean batataMode, boolean whatsNewEnabled, String whatsNewLastSeen) {
+			boolean liteMode, boolean batataMode, boolean hideReposts, boolean whatsNewEnabled,
+			String whatsNewLastSeen) {
 	}
 
 	public Personalization of(String userId) {
 		return repository.find(userId)
 			.map(p -> new Personalization(parse(p.likedTopics()), parse(p.blockedTopics()),
 				parse(p.disabledModules()), p.nightRestReminder(), p.nightRestDismissedOn(),
-				p.liteMode(), p.batataMode(), p.whatsNewEnabled(), p.whatsNewLastSeen()))
-			.orElseGet(() -> new Personalization(List.of(), List.of(), List.of(), true, null, false, false, true, null));
+				p.liteMode(), p.batataMode(), p.hideReposts(), p.whatsNewEnabled(), p.whatsNewLastSeen()))
+			.orElseGet(() -> new Personalization(List.of(), List.of(), List.of(), true, null, false, false, false, true, null));
 	}
 
 	public Personalization update(String userId, List<String> likedTopics, List<String> blockedTopics,
 			List<String> disabledModules, Boolean nightRestReminder, Boolean liteMode, Boolean batataMode) {
-		return update(userId, likedTopics, blockedTopics, disabledModules, nightRestReminder, liteMode, batataMode, null);
+		return update(userId, likedTopics, blockedTopics, disabledModules, nightRestReminder, liteMode, batataMode, null, null);
+	}
+
+	public Personalization update(String userId, List<String> likedTopics, List<String> blockedTopics,
+			List<String> disabledModules, Boolean nightRestReminder, Boolean liteMode, Boolean batataMode,
+			Boolean whatsNewEnabled) {
+		return update(userId, likedTopics, blockedTopics, disabledModules, nightRestReminder, liteMode, batataMode, whatsNewEnabled, null);
 	}
 
 	/**
@@ -66,7 +73,7 @@ public class PersonalizationService {
 	 */
 	public Personalization update(String userId, List<String> likedTopics, List<String> blockedTopics,
 			List<String> disabledModules, Boolean nightRestReminder, Boolean liteMode, Boolean batataMode,
-			Boolean whatsNewEnabled) {
+			Boolean whatsNewEnabled, Boolean hideReposts) {
 		UserPreference existing = repository.find(userId).orElse(null);
 		String liked = validateAndJoin(likedTopics, ContentTaxonomy.TOPIC_SET, "assunto");
 		String blocked = validateAndJoin(blockedTopics, ContentTaxonomy.TOPIC_SET, "assunto");
@@ -87,9 +94,11 @@ public class PersonalizationService {
 		// (o cliente e que trata BATATA como lite ligado na hora de escolher os efeitos).
 		boolean batata = batataMode != null ? batataMode : (existing != null && existing.batataMode());
 		boolean whatsNew = whatsNewEnabled != null ? whatsNewEnabled : (existing == null || existing.whatsNewEnabled());
+		// Nulo = não altera: o padrão (sem preferência gravada) é mostrar reposts.
+		boolean hide = hideReposts != null ? hideReposts : (existing != null && existing.hideReposts());
 		repository.save(new UserPreference(userId,
 			existing == null ? null : existing.themeId(), liked, blocked, modules, reminder,
-			existing == null ? null : existing.nightRestDismissedOn(), lite, batata, whatsNew,
+			existing == null ? null : existing.nightRestDismissedOn(), lite, batata, hide, whatsNew,
 			existing == null ? null : existing.whatsNewLastSeen(), clock.instant()));
 		return of(userId);
 	}
@@ -117,6 +126,7 @@ public class PersonalizationService {
 			existing == null ? null : existing.disabledModules(),
 			existing == null || existing.nightRestReminder(), date,
 			existing != null && existing.liteMode(), existing != null && existing.batataMode(),
+			existing != null && existing.hideReposts(),
 			existing == null || existing.whatsNewEnabled(),
 			existing == null ? null : existing.whatsNewLastSeen(),
 			clock.instant()));
@@ -144,6 +154,7 @@ public class PersonalizationService {
 			existing == null || existing.nightRestReminder(),
 			existing == null ? null : existing.nightRestDismissedOn(),
 			existing != null && existing.liteMode(), existing != null && existing.batataMode(),
+			existing != null && existing.hideReposts(),
 			existing == null || existing.whatsNewEnabled(),
 			cleanVersion,
 			clock.instant()));

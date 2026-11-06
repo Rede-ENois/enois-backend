@@ -208,6 +208,77 @@ class PersonalizationFeedTests {
 		org.assertj.core.api.Assertions.assertThat(ids).containsExactly(liked2, plain2, liked1, plain1);
 	}
 
+	/**
+	 * "Ocultar reposts" tira do feed pessoal tanto o repost puro (ponteiro, que entra na
+	 * mesclagem do "Para você") quanto o repost com opinião (post com repostOf). O post
+	 * original continua no ar e no feed — a preferência só afeta as republicações.
+	 */
+	@Test
+	void hideRepostsRemovesPureAndOpinionRepostsFromThePersonalFeed() throws Exception {
+		var author = auth.authenticate("persfeed_reposts_author");
+		var reposter = auth.authenticate("persfeed_reposts_friend");
+		var reader = auth.authenticate("persfeed_reposts_reader");
+
+		// Amizade leitor↔reposter: o repost puro DO AMIGO é o que entra na mesclagem do
+		// "Para você" (o autor do post original NÃO é amigo do leitor — o post só chega
+		// ao feed dele pela republicação).
+		mockMvc.perform(post("/network/connections/{target}", reposter.userId())
+				.header("X-Session-Token", reader.token())
+				.header("Idempotency-Key", "reposts-req-" + reader.userId()))
+			.andExpect(status().isAccepted());
+		mockMvc.perform(put("/network/connections/{target}/accept", reader.userId())
+				.header("X-Session-Token", reposter.token())
+				.header("Idempotency-Key", "reposts-acc-" + reposter.userId()))
+			.andExpect(status().isOk());
+
+		String original = publishPlain(author, "Post original que vai ser republicado.");
+
+		// Repost puro (ponteiro) feito pelo amigo.
+		mockMvc.perform(post("/feed/posts/{postId}/repost", original)
+				.header("X-Session-Token", reposter.token()))
+			.andExpect(status().isCreated());
+		// Repost com opinião: cria um post novo do leitor citando o original.
+		MvcResult opinion = mockMvc.perform(post("/feed/posts/{postId}/repost", original)
+				.header("X-Session-Token", reader.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of(
+					"opinion", "Concordo demais!"))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String opinionRepost = objectMapper.readTree(opinion.getResponse().getContentAsString()).get("id").asText();
+
+		// Antes de ligar a preferência: o original (via repost puro) e o repost com opinião aparecem.
+		mockMvc.perform(get("/feed").param("tab", "FOR_YOU").header("X-Session-Token", reader.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.id == '" + original + "')]").isNotEmpty())
+			.andExpect(jsonPath("$.items[?(@.id == '" + opinionRepost + "')]").isNotEmpty());
+
+		mockMvc.perform(put("/me/preferences")
+				.header("X-Session-Token", reader.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of(
+					"hideReposts", true))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.hideReposts").value(true));
+
+		// Depois: nenhum dos dois está no "Para você"...
+		mockMvc.perform(get("/feed").param("tab", "FOR_YOU").header("X-Session-Token", reader.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.id == '" + original + "')]").isEmpty())
+			.andExpect(jsonPath("$.items[?(@.id == '" + opinionRepost + "')]").isEmpty());
+
+		// ...nem o repost com opinião no "Tudo" — mas o post ORIGINAL do autor continua lá
+		// (a preferência do leitor não é censura: o autor continua vendo tudo).
+		mockMvc.perform(get("/feed").param("tab", "ALL").header("X-Session-Token", reader.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.id == '" + original + "')]").isNotEmpty())
+			.andExpect(jsonPath("$.items[?(@.id == '" + opinionRepost + "')]").isEmpty());
+
+		mockMvc.perform(get("/feed").param("tab", "FOR_YOU").header("X-Session-Token", author.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.id == '" + original + "')]").isNotEmpty());
+	}
+
 	private String publishPlain(TestAuthHelper.AuthSession session, String content) throws Exception {
 		MvcResult result = mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", session.token())
