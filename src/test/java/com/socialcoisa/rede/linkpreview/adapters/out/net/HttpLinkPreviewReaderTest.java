@@ -27,6 +27,21 @@ class HttpLinkPreviewReaderTest {
 	private final HttpLinkPreviewReader reader = new HttpLinkPreviewReader(guard);
 
 	@Test
+	void contentAntesDePropertyTambemEEncontrado() {
+		String html = """
+			<html><head>
+			<meta content="Ordem trocada" property="og:title">
+			<meta content="https://exemplo.test/c.png" property="og:image">
+			</head></html>
+			""";
+
+		ExternalLinkPreview preview = HttpLinkPreviewReader.parse(URI.create("https://exemplo.test/a"), html);
+
+		assertThat(preview.title()).isEqualTo("Ordem trocada");
+		assertThat(preview.imageUrl()).isEqualTo("https://exemplo.test/c.png");
+	}
+
+	@Test
 	void enderecoRecusadoPelaGuardaNaoChegaNaInternet() {
 		when(guard.checked(anyString())).thenReturn(Optional.empty());
 

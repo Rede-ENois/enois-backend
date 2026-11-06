@@ -64,19 +64,11 @@ public class HttpLinkPreviewReader implements LinkPreviewReader {
 
 	private static final int MAX_HEADER_BYTES = 32 * 1024;
 
-	private static final Pattern OG_TITLE = metaContent("og:title");
+	private static final Pattern META_TAG = Pattern.compile("<meta[^>]{0,1000}>",
+			Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 
-	private static final Pattern OG_DESCRIPTION = metaContent("og:description");
-
-	private static final Pattern OG_IMAGE = metaContent("og:image");
-
-	private static final Pattern OG_IMAGE_SECURE = metaContent("og:image:secure_url");
-
-	private static final Pattern OG_SITE = metaContent("og:site_name");
-
-	private static final Pattern TWITTER_IMAGE = metaContent("twitter:image");
-
-	private static final Pattern DESCRIPTION = metaContent("description");
+	private static final Pattern ATTRIBUTE = Pattern.compile(
+			"([a-zA-Z:-]{1,40})\\s{0,10}=\\s{0,10}[\"']([^\"']{0,2000})[\"']");
 
 	// Quantificadores com teto: `[^>]*` e `.*?` sem limite voltam atras em pagina cheia de
 	// `<title` sem fechar, e o texto vem de fora. O teto e maior que qualquer titulo real.
@@ -363,23 +355,23 @@ public class HttpLinkPreviewReader implements LinkPreviewReader {
 	 * busca, entao um `javascript:` ou `data:` aqui viraria execucao na pagina.
 	 */
 	static ExternalLinkPreview parse(URI page, String html) {
-		String title = first(OG_TITLE, html);
+		String title = metaValue("og:title", html);
 		if (title == null) {
 			title = first(TITLE, html);
 		}
-		String description = first(OG_DESCRIPTION, html);
+		String description = metaValue("og:description", html);
 		if (description == null) {
-			description = first(DESCRIPTION, html);
+			description = metaValue("description", html);
 		}
-		String image = first(OG_IMAGE_SECURE, html);
+		String image = metaValue("og:image:secure_url", html);
 		if (image == null) {
-			image = first(OG_IMAGE, html);
+			image = metaValue("og:image", html);
 		}
 		if (image == null) {
-			image = first(TWITTER_IMAGE, html);
+			image = metaValue("twitter:image", html);
 		}
 		return new ExternalLinkPreview(page.toString(), decode(title), decode(description),
-			absoluteImage(page, decode(image)), decode(first(OG_SITE, html)));
+			absoluteImage(page, decode(image)), decode(metaValue("og:site_name", html)));
 	}
 
 	private static String absoluteImage(URI page, String image) {
@@ -399,10 +391,35 @@ public class HttpLinkPreviewReader implements LinkPreviewReader {
 		}
 	}
 
-	private static Pattern metaContent(String chave) {
-		return Pattern.compile("<meta[^>]{0,500}(?:property|name)\\s{0,10}=\\s{0,10}[\"']"
-				+ Pattern.quote(chave) + "[\"'][^>]{0,500}content\\s{0,10}=\\s{0,10}[\"']([^\"']{0,2000})[\"']",
-				Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+	/**
+	 * O `content` da primeira tag `meta` cujo `property`/`name` e a chave pedida.
+	 *
+	 * <p>A ordem dos atributos nao e garantida: `content` pode vir antes de `property`. Por isso a
+	 * tag inteira e capturada primeiro e os dois atributos sao procurados dentro dela, em qualquer
+	 * ordem. Os quantificadores tem teto porque o texto vem de fora.</p>
+	 */
+	private static String metaValue(String chave, String html) {
+		Matcher matcher = META_TAG.matcher(html);
+		while (matcher.find()) {
+			String tagText = matcher.group();
+			Matcher attributes = ATTRIBUTE.matcher(tagText);
+			String content = null;
+			boolean matches = false;
+			while (attributes.find()) {
+				String nome = attributes.group(1).toLowerCase(Locale.ROOT);
+				String valor = attributes.group(2);
+				if (("property".equals(nome) || "name".equals(nome)) && chave.equalsIgnoreCase(valor)) {
+					matches = true;
+				}
+				else if ("content".equals(nome)) {
+					content = valor;
+				}
+			}
+			if (matches && content != null) {
+				return content;
+			}
+		}
+		return null;
 	}
 
 	private static String first(Pattern pattern, String html) {
