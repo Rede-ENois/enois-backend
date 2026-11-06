@@ -1,7 +1,7 @@
 package com.socialcoisa.rede.preferences.domain;
 
 import java.time.Instant;
-import java.util.List;
+import java.time.LocalDate;
 
 /**
  * Preferências que acompanham a conta (uma linha por usuário).
@@ -11,6 +11,7 @@ import java.util.List;
  * experiência continua igual à de antes da extensão.
  */
 public record UserPreference(String userId, String themeId, String likedTopics, String blockedTopics,
-		String disabledModules, boolean nightRestReminder, java.time.LocalDate nightRestDismissedOn,
-		boolean liteMode, boolean batataMode, Instant updatedAt) {
+		String disabledModules, boolean nightRestReminder, LocalDate nightRestDismissedOn,
+		boolean liteMode, boolean batataMode, boolean whatsNewEnabled, String whatsNewLastSeen,
+		Instant updatedAt) {
 }
