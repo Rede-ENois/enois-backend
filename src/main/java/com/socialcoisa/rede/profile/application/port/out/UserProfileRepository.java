@@ -10,6 +10,12 @@ public interface UserProfileRepository {
 
 	UserProfile save(UserProfile profile);
 
+	/**
+	 * Writes only the name style columns. The `users` row is written by many flows, and saving the
+	 * whole profile for a style pick rewrote (and raced) all of them.
+	 */
+	void updateNameStyle(String userId, String theme, String font, String color, java.time.Instant at);
+
 	Optional<UserProfile> findById(String id);
 
 	List<UserProfile> findAllByIds(Collection<String> ids);

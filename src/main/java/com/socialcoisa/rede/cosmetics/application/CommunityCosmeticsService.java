@@ -82,7 +82,9 @@ public class CommunityCosmeticsService {
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Perfil não encontrado."));
 		profile.updateNameStyle(normalizedTheme, font, color == null ? null : color.toLowerCase(Locale.ROOT),
 			clock.instant());
-		return profiles.save(profile);
+		profiles.updateNameStyle(userId, profile.nameTheme(), profile.nameFont(), profile.nameColor(),
+			profile.updatedAt());
+		return profile;
 	}
 
 	private String normalizeTheme(String userId, String theme) {
