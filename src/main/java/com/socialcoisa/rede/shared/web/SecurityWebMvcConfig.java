@@ -19,7 +19,7 @@ class SecurityWebMvcConfig implements WebMvcConfigurer {
 
 	@Override
 	public void addInterceptors(InterceptorRegistry registry) {
-		registry.addInterceptor(adminRouteInterceptor).addPathPatterns("/admin/**");
+		registry.addInterceptor(adminRouteInterceptor).addPathPatterns("/admin/**", "/moderation/**");
 		registry.addInterceptor(writeRouteInterceptor).addPathPatterns("/**");
 	}
 }

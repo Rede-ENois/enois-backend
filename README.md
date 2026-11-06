@@ -556,7 +556,8 @@ delete from flyway_schema_history where version = '<versao que falhou>';    # ou
   dígitos e `POST /auth/2fa/email/confirm` ativa. Desativar exige a senha. No login, quem tem 2FA recebe `202`
   com `{twoFactorRequired, challengeId, method}` em vez da sessão e conclui em `POST /auth/2fa/verify`
   (`POST /auth/2fa/resend` reenvia o código por e-mail). O desafio vale 10 minutos, é de uso único e morre
-  depois de 5 tentativas; um código de recuperação também conclui o login. No app: `/seguranca`, alcançável
+  depois de 5 tentativas; um código de recuperação também conclui o login, inclusive quando o segredo TOTP
+  ficou ilegível (`409 TWO_FACTOR_SECRET_UNREADABLE` para qualquer outro código). No app: `/seguranca`, alcançável
   pelo menu da conta e pelo botão "Verificar identidade" no próprio perfil.
 - **Push no celular**: `GET /push/config` (público) informa se o push está ligado e devolve a chave pública
   VAPID; `POST /push/subscriptions` (autenticado) registra o dispositivo (`endpoint` + `keys.p256dh`/`keys.auth`)

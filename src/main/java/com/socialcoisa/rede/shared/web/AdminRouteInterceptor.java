@@ -20,6 +20,9 @@ import jakarta.servlet.http.HttpServletResponse;
  *
  * A checagem do controller continua valendo como defesa em profundidade. O custo é uma consulta
  * de sessão + uma de perfil por requisição admin, aceitável para uma superfície pequena.
+ *
+ * The same lock covers `/moderation/**`: every route there is moderator work (admin or approved
+ * moderator), except the two any signed-in member uses to see and apply for the role.
  */
 @Component
 class AdminRouteInterceptor implements HandlerInterceptor {
@@ -35,6 +38,12 @@ class AdminRouteInterceptor implements HandlerInterceptor {
 	 * moderadores, que nem aparecem nesta lista.
 	 */
 	private static final PathPattern ADMIN_PATH = pattern("/admin/**");
+
+	private static final PathPattern MODERATION_PATH = pattern("/moderation/**");
+
+	/** /moderation routes any signed-in member reaches: their own eligibility and the application. */
+	private static final List<PathPattern> MODERATION_OPEN_TO_MEMBERS = List.of(
+		pattern("/moderation/me"), pattern("/moderation/applications"));
 
 	private static final List<PathPattern> CAMINHOS_DE_MODERADOR = List.of(
 		"/admin/appeals/**", "/admin/support/**", "/admin/suggestions/**", "/admin/emails/**",
@@ -63,6 +72,13 @@ class AdminRouteInterceptor implements HandlerInterceptor {
 			return true;
 		}
 		PathContainer path = RequestPath.segments(request);
+		if (MODERATION_PATH.matches(path)) {
+			CurrentUser user = currentUserResolver.resolve(request.getHeader("X-Session-Token"));
+			if (MODERATION_OPEN_TO_MEMBERS.stream().noneMatch(pattern -> pattern.matches(path))) {
+				moderatorGuard.requireModerator(user);
+			}
+			return true;
+		}
 		if (!ADMIN_PATH.matches(path)) {
 			return true;
 		}

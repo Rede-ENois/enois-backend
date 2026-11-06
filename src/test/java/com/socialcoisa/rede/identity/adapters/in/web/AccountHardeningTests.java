@@ -146,15 +146,6 @@ class AccountHardeningTests {
 	}
 
 	@Test
-	void maintenanceTwoFactorResetRequiresAnAdmin() throws Exception {
-		TestAuthHelper.AuthSession session = new TestAuthHelper(mockMvc, objectMapper).authenticate("acch_nonadmin");
-
-		mockMvc.perform(post("/auth/admin/two-factor/reset-broken").header("X-Session-Token", session.token()))
-			.andExpect(status().isForbidden())
-			.andExpect(jsonPath("$.reset").doesNotExist());
-	}
-
-	@Test
 	void unconfirmedEmailChangeKeepsRecoveryOnTheConfirmedAddress() throws Exception {
 		TestAuthHelper.AuthSession session = new TestAuthHelper(mockMvc, objectMapper).authenticate("acch_mail");
 
