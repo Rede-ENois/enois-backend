@@ -116,7 +116,7 @@ jobs:
           SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver
           SPRING_DATASOURCE_USERNAME: enois
           SPRING_DATASOURCE_PASSWORD: schema-check
-          SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: org.hibernate.dialect.MySQLDialect
+          SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: org.hibernate.dialect.MariaDBDialect
         run: ./mvnw -B -q -Dtest=RedeApplicationTests test
 
   # ===========================================================================

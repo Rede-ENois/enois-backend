@@ -77,7 +77,7 @@ This starts with the `dev` profile using an **H2 in-memory database**. Swagger U
 |---------|-------------|------------------------------------------|
 | `dev`   | H2 (memory) | `SPRING_PROFILES_ACTIVE=dev`             |
 | `hml`   | MariaDB     | `SPRING_PROFILES_ACTIVE=hml`             |
-| `prd`   | MySQL       | `SPRING_PROFILES_ACTIVE=prd`             |
+| `prd`   | MariaDB     | `SPRING_PROFILES_ACTIVE=prd`             |
 
 There is no default profile: the packaged app refuses to boot without `SPRING_PROFILES_ACTIVE`.
 `./mvnw spring-boot:run` runs as `dev`; pick another with `-Dspring-boot.run.profiles=<profile>`.
@@ -97,16 +97,20 @@ docker run -d --name rede-mariadb \
 ./mvnw spring-boot:run -Dspring-boot.run.profiles=hml
 ```
 
-### prd (MySQL 8+)
+### prd (MariaDB 11.4)
+
+Production runs MariaDB, reached through MySQL Connector/J (`jdbc:mysql://`) with Hibernate's
+`MariaDBDialect`. The dialect must stay MariaDB's: `MySQLDialect` renders pessimistic locks as
+`for update of <alias>`, which MariaDB rejects (`PessimisticLockSqlTests` guards it).
 
 ```bash
-# Start MySQL
-docker run -d --name rede-mysql \
-  -e MYSQL_ROOT_PASSWORD=root \
-  -e MYSQL_DATABASE=rede_prd \
-  -e MYSQL_USER=rede_prd \
-  -e MYSQL_PASSWORD=rede_prd \
-  -p 3307:3306 mysql:8
+# Start MariaDB
+docker run -d --name rede-mariadb-prd \
+  -e MARIADB_ROOT_PASSWORD=root \
+  -e MARIADB_DATABASE=rede_prd \
+  -e MARIADB_USER=rede_prd \
+  -e MARIADB_PASSWORD=rede_prd \
+  -p 3306:3306 mariadb:11.4
 
 # Run with prd profile
 ./mvnw spring-boot:run -Dspring-boot.run.profiles=prd
