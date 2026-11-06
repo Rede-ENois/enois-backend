@@ -45,8 +45,23 @@ class KofAgentIntegrationTests {
 	@Autowired
 	private MonitoringService monitoring;
 
+	/** One exception entry for the endpoint, with its optional repeat count. */
+	private static final java.util.regex.Pattern FAILURES = java.util.regex.Pattern.compile(
+		"HTTP 500 · Exceção(?: <b>×(\\d+)</b>)?[^\\n]*\\n<code>GET /stats/community</code>");
+	private static final java.util.regex.Pattern MERGED = java.util.regex.Pattern.compile("(\\d+) 5xx já contados");
+
 	@MockitoBean
 	private StatsService statsService;
+
+	/** Sums the counts matched across every bulletin (a match without a count is one). */
+	private static int sum(String text, java.util.regex.Pattern pattern) {
+		var matcher = pattern.matcher(text);
+		int total = 0;
+		while (matcher.find()) {
+			total += matcher.group(1) == null ? 1 : Integer.parseInt(matcher.group(1));
+		}
+		return total;
+	}
 
 	@TempDir
 	Path spoolDir;
@@ -54,9 +69,11 @@ class KofAgentIntegrationTests {
 	@Test
 	void http500IsDeliveredOnceWithoutBlockingTheRequestWhileTelegramHangs() throws Exception {
 		CountDownLatch release = new CountDownLatch(1);
+		CountDownLatch entered = new CountDownLatch(1);
 		FakeTransport hanging = new FakeTransport() {
 			@Override
 			public synchronized SendResult send(String text, boolean quiet, boolean html) {
+				entered.countDown();
 				try {
 					release.await(15, TimeUnit.SECONDS);
 				}
@@ -75,9 +92,9 @@ class KofAgentIntegrationTests {
 		try {
 			String marker = "stats-" + UUID.randomUUID();
 			given(statsService.community()).willThrow(new IllegalStateException(marker));
-			// The first bulletin (this warm-up) leaves after ~1 s and its send hangs until released.
+			// The first bulletin (this warm-up) leaves after ~1 s; wait until its send is really stuck.
 			monitoring.recordEvent("ERROR", "TEST", "warm-up " + marker, null);
-			Thread.sleep(1800);
+			assertThat(entered.await(15, TimeUnit.SECONDS)).as("sender reached Telegram").isTrue();
 
 			long started = System.nanoTime();
 			for (int i = 0; i < 5; i++) {
@@ -88,17 +105,20 @@ class KofAgentIntegrationTests {
 			assertThat(hanging.sent).isEmpty();
 
 			release.countDown();
-			long deadline = System.currentTimeMillis() + 15_000;
-			while (!hanging.all().contains("HTTP 500") && System.currentTimeMillis() < deadline) {
+			long deadline = System.currentTimeMillis() + 20_000;
+			while (sum(hanging.all(), FAILURES) < 5 && System.currentTimeMillis() < deadline) {
 				Thread.sleep(50);
 			}
 			String all = hanging.all();
 			assertThat(all).contains("warm-up", "HTTP 500", "<code>GET /stats/community</code>",
 				"IllegalStateException", "IP <code>127.0.0.1</code>", "req <code>");
-			// Five identical failures in one window: one entry with x5, and each request's own 5xx event
-			// is merged into the exception entry instead of producing a second alert.
-			assertThat(all).contains("<b>×5</b>", "5 5xx já contados nas exceções");
-			assertThat(all.split("GET /stats/community", -1)).hasSize(2);
+			// Five failures, however the flush windows cut them: repeats inside a window collapse into
+			// one entry (xN) and each request's own 5xx event is merged into its exception entry instead
+			// of producing a second alert.
+			assertThat(sum(all, FAILURES)).isEqualTo(5);
+			assertThat(sum(all, MERGED)).isEqualTo(5);
+			assertThat(java.util.regex.Pattern.compile("HTTP 500(?! · Exceção)[^\\n]*\\n<code>GET /stats/community</code>")
+				.matcher(all).find()).as("no separate request-level 5xx entry").isFalse();
 		}
 		finally {
 			release.countDown();
