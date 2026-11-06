@@ -639,3 +639,4 @@ As migrações estão em `src/main/resources/db/migration/` e seguem a numeraç�
 | V16 | Adiciona refresh_token em auth_sessions |
 | V217 | Cidade/UF estruturadas (`city`, `state`, `city_key`) em `communities`, `users` e `events`; `users.show_city` (padrão false). `city_key` é a cidade sem acento e minúscula, gravada pela aplicação (`shared/geo/CityState`) |
 | V226 | `users.garden_style`: equipped `GARDEN` item of the profile garden (null = default garden) |
+| V247 | `integrity_flag` (null or `TOO_FAST`) in `daily_word_sessions` and `daily_maze_sessions`: a flagged run stays out of the ranking and the prizes |

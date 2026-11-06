@@ -66,6 +66,7 @@ read the same value and both write a result computed from it. The rules below co
 | Name style | `users` | `updateNameStyle` (only its columns) |
 | Daily presence | treasury account | `presenceExecutor`, one thread |
 | Any coin movement | `coin_accounts` (treasury, payer, payee) | `lockAccount` (`for update`) before the balance check |
+| Daily game prizes | treasury account | one transaction per credit, up to 3 attempts on `COIN_CONCURRENCY` or a lock timeout |
 
 ## Testing
 
