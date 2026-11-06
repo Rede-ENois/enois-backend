@@ -28,6 +28,7 @@ import com.socialcoisa.rede.ops.monitoring.kofagent.KofAgentTestSupport.FakeTran
 import com.socialcoisa.rede.ops.monitoring.kofagent.KofAgentTestSupport.MutableClock;
 import com.socialcoisa.rede.ops.monitoring.kofagent.KofAgentTransport.Outcome;
 import com.socialcoisa.rede.ops.monitoring.kofagent.KofAgentTransport.SendResult;
+import com.socialcoisa.rede.shared.web.ApiException;
 
 /** Delivery rules of the Telegram channel, driven tick by tick with a fake transport and clock. */
 class KofAgentDispatcherTests {
@@ -92,8 +93,8 @@ class KofAgentDispatcherTests {
 		nextWindow(dispatcher);
 
 		String bulletin = transport.sent.getFirst();
-		assertThat(bulletin).contains("Serviço iniciado", "Estado da aplicação", "Requisições 31 (4xx 1 · 5xx 0)")
-			.doesNotContain("cache warmed", "cache detail", "/feed", "/nope");
+		assertThat(bulletin).contains("Serviço iniciado", "Estado da aplicação")
+			.doesNotContain("cache warmed", "cache detail", "/feed", "/nope", "Requisições");
 	}
 
 	@Test
@@ -135,8 +136,9 @@ class KofAgentDispatcherTests {
 		nextWindow(dispatcher);
 
 		String bulletin = transport.sent.getFirst();
-		assertThat(bulletin).contains("HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504", "1 5xx já contados nas exceções");
+		assertThat(bulletin).contains("HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504");
 		assertThat(bulletin.split("POST /users", -1)).hasSize(2);
+		assertThat(dispatcher.grouped.get()).as("the request-level 5xx of /users is merged").isEqualTo(1);
 	}
 
 	@Test
@@ -258,7 +260,8 @@ class KofAgentDispatcherTests {
 
 	@Test
 	void aBulletinBiggerThanTelegramAllowsIsSplitIntoNumberedParts() {
-		KofAgentDispatcher dispatcher = dispatcher(properties(dir, 200, 60, 20));
+		KofAgentDispatcher dispatcher = dispatcher(properties(dir, 200, 60, 20,
+			EnumSet.of(Severity.WARN, Severity.ERROR, Severity.FATAL)));
 		for (int i = 0; i < 120; i++) {
 			dispatcher.onEvent(event("WARN", "LOG", "distinct warning kind " + Integer.toString(i, 36).repeat(3)
 				+ " with a longer explanation so the bulletin grows"));
@@ -361,7 +364,8 @@ class KofAgentDispatcherTests {
 	void aFullQueueKeepsCriticalEventsAndReportsTheRestOnTheNextBulletin() {
 		KofAgentProperties base = properties(dir, 40, 60, 20);
 		KofAgentProperties tiny = new KofAgentProperties(true, base.apiToken(), base.chatId(), null, "qa", null,
-			base.levels(), 40, base.flushInterval(), base.retry(), base.rate(), base.circuit(), 100, base.spoolDir(),
+			base.levels(), base.notifyLevels(), 40, base.flushInterval(), base.incidentQuiet(), base.digestInterval(),
+			base.latency(), base.retry(), base.rate(), base.circuit(), 100, base.spoolDir(),
 			1000, null, null, null, null);
 		KofAgentDispatcher dispatcher = dispatcher(tiny);
 		for (int i = 0; i < 150; i++) {
@@ -373,6 +377,125 @@ class KofAgentDispatcherTests {
 		assertThat(dispatcher.droppedQueueFull(Severity.FATAL)).isZero();
 		nextWindow(dispatcher);
 		assertThat(transport.all()).contains("disk full", "<code>QA</code>", "canal: 50 eventos descartados");
+	}
+
+	@Test
+	void aFailureThatKeepsHappeningAlertsOnceAndAgainOnlyAfterGoingQuiet() {
+		KofAgentDispatcher dispatcher = dispatcher();
+		dispatcher.onEvent(exception(500, "req-first", "/feed/posts/{postId}/reactions", deadlock()));
+		nextWindow(dispatcher);
+		for (int i = 0; i < 20; i++) {
+			dispatcher.onEvent(exception(500, "req-repeat-" + i, "/feed/posts/{postId}/reactions", deadlock()));
+			nextWindow(dispatcher);
+		}
+
+		assertThat(transport.sent).as("one alert for the kind; repeats are only counted").hasSize(1);
+		assertThat(dispatcher.suppressed.get()).isEqualTo(20);
+
+		clock.advance(Duration.ofMinutes(31));
+		dispatcher.onEvent(exception(500, "req-back", "/feed/posts/{postId}/reactions", deadlock()));
+		nextWindow(dispatcher);
+
+		assertThat(transport.sent).as("back after the quiet period: alerted again").hasSize(2);
+	}
+
+	@Test
+	void slowRequestsNeverAlertOneByOneAndShowUpInTheHourlyDigest() {
+		KofAgentDispatcher dispatcher = dispatcher();
+		for (int i = 0; i < 30; i++) {
+			dispatcher.onEvent(request(200, "req-slow-" + i, "/feed/posts/{postId}/reactions", 2600 + i));
+		}
+		dispatcher.onEvent(request(200, "req-slowest", "/feed/posts/{postId}/reactions", 66_296));
+		for (int i = 0; i < 60; i++) {
+			dispatcher.onEvent(request(200, "req-fast-" + i, "/feed", 40));
+		}
+		nextWindow(dispatcher);
+		assertThat(transport.sent).as("a slow request is not an alert").isEmpty();
+
+		clock.advance(Duration.ofHours(1));
+		dispatcher.tick();
+
+		assertThat(transport.sent).hasSize(1);
+		assertThat(transport.silent).containsExactly(true);
+		assertThat(transport.sent.getFirst()).startsWith("📊 <b>API Énóis</b> · Produção · <code>PRD</code> · resumo")
+			.contains("2026-11-05 12:00 a 13:00", "Requisições 91 · 4xx 0 · 5xx 0 · lentas 31 (34,1%)",
+				"<b>Rotas lentas</b> (acima de 2,0 s)",
+				"<code>POST /feed/posts/{postId}/reactions</code> ×31 · mediana 2,6 s · máx 66,3 s")
+			.doesNotContain("<code>POST /feed</code>");
+	}
+
+	@Test
+	void periodsWithNothingToReportSendNoDigest() {
+		KofAgentDispatcher dispatcher = dispatcher();
+		for (int i = 0; i < 50; i++) {
+			dispatcher.onEvent(request(i % 5 == 0 ? 404 : 200, "req-" + i, "/feed", 40));
+		}
+		nextWindow(dispatcher);
+		clock.advance(Duration.ofHours(2));
+		dispatcher.tick();
+
+		assertThat(transport.sent).isEmpty();
+	}
+
+	@Test
+	void latencyAlertsOnlyWhenTheApiBecomesSlowAndWhenItRecovers() {
+		KofAgentDispatcher dispatcher = dispatcher();
+		fiveMinutesOfTraffic(dispatcher, 30);
+		assertThat(transport.sent).hasSize(1);
+		assertThat(transport.sent.getFirst()).contains("🟡 <b>WARN</b> 12:05:00 · API lenta · Desempenho",
+			"20,0% das requisições acima de 2,0 s entre 12:00 e 12:05 (30 de 150)",
+			"Mais lentas: <code>POST /feed/posts</code> ×30");
+		assertThat(transport.silent).containsExactly(false);
+
+		fiveMinutesOfTraffic(dispatcher, 40);
+		assertThat(transport.sent).as("still slow: no new alert").hasSize(1);
+
+		fiveMinutesOfTraffic(dispatcher, 3);
+		assertThat(transport.sent).hasSize(2);
+		assertThat(transport.sent.get(1)).contains("🟢 <b>INFO</b> 12:15:00 · Latência normalizada",
+			"2,0% das requisições acima de 2,0 s entre 12:10 e 12:15 (3 de 150)");
+		assertThat(transport.silent).containsExactly(false, true);
+	}
+
+	@Test
+	void aDeliberate5xxGoesToTheDigestWhileAWrappedFailureStillAlerts() {
+		KofAgentDispatcher dispatcher = dispatcher();
+		dispatcher.onEvent(exception(503, "req-calls", "/groups/{groupId}/calls",
+			new ApiException(503, "CALLS_NOT_CONFIGURED", "calls are not configured in this environment")));
+		dispatcher.onEvent(request(503, "req-calls", "/groups/{groupId}/calls", 12));
+		nextWindow(dispatcher);
+		assertThat(transport.sent).as("answered as designed: no alert").isEmpty();
+
+		dispatcher.onEvent(exception(503, "req-moderation", "/storage/{*key}", new ApiException(503,
+			"IMAGE_MODERATION_UNAVAILABLE", "moderation unavailable", new java.net.SocketTimeoutException("timed out"))));
+		nextWindow(dispatcher);
+		assertThat(transport.sent).hasSize(1);
+		assertThat(transport.sent.getFirst()).contains("🟠 <b>ERROR</b>", "<code>POST /storage/{*key}</code>");
+
+		clock.advance(Duration.ofHours(1));
+		dispatcher.tick();
+		assertThat(transport.sent).hasSize(2);
+		assertThat(transport.sent.get(1)).contains("<b>Falhas</b> (2 tipos)",
+			"🟠 <b>×1</b> · HTTP 503 · Integração externa · <code>POST /storage/{*key}</code>",
+			"🟡 <b>×1</b> · HTTP 503 · Exceção · <code>POST /groups/{groupId}/calls</code>",
+			"ApiException: calls are not configured in this environment");
+	}
+
+	/** One latency window: 150 requests, {@code slow} of them over the threshold, then the window closes. */
+	private void fiveMinutesOfTraffic(KofAgentDispatcher dispatcher, int slow) {
+		for (int i = 0; i < 150; i++) {
+			boolean isSlow = i < slow;
+			dispatcher.onEvent(request(200, "req-" + KofAgentTestSupport.id(), isSlow ? "/feed/posts" : "/feed",
+				isSlow ? 4000 : 50));
+		}
+		dispatcher.tick();
+		clock.advance(Duration.ofMinutes(5));
+		dispatcher.tick();
+	}
+
+	/** Always thrown from this line, so every occurrence has the same origin and fingerprint. */
+	private static IllegalStateException deadlock() {
+		return new IllegalStateException("deadlock found when trying to get lock");
 	}
 
 	private List<Path> spoolFiles() throws Exception {

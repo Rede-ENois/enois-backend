@@ -48,9 +48,10 @@ fica `unknown`). O nível da aplicação é ajustável por `LOG_LEVEL` (default 
 
 ## Telegram channel (production)
 
-The monitoring pipeline also feeds a private Telegram channel through the Kof Agent bot: one bulletin
-every 10 s with WARN+ log lines, exceptions, every 5xx, startup/shutdown, health transitions, admin
-audit and application state, each with the request's IP and user id. See
+The monitoring pipeline also feeds a private Telegram channel through the Kof Agent bot: an alert the
+first time a kind of ERROR/FATAL failure shows up (repeats stay quiet), startup/shutdown, health
+transitions, admin audit and application state; one alert when the API becomes slow and one when it
+recovers; and a silent hourly digest with counts, failure kinds and the slowest routes. See
 [`KOF_AGENT.md`](KOF_AGENT.md).
 
 ## Endereço MAC (por que não tem)

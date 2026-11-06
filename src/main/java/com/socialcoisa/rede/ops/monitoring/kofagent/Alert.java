@@ -17,6 +17,7 @@ record Alert(String eventId, Instant at, Severity severity, Category category, S
 	/** What the event is about; the label is shown on the message (pt-BR, user-facing copy). */
 	enum Category {
 		HTTP("Requisição HTTP"),
+		PERFORMANCE("Desempenho"),
 		EXCEPTION("Exceção"),
 		DATABASE("Banco de dados"),
 		EXTERNAL("Integração externa"),

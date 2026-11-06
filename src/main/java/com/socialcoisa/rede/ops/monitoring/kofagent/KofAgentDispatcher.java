@@ -3,6 +3,8 @@ package com.socialcoisa.rede.ops.monitoring.kofagent;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -33,25 +35,36 @@ import com.socialcoisa.rede.ops.monitoring.kofagent.KofAgentTransport.Outcome;
 import com.socialcoisa.rede.ops.monitoring.kofagent.KofAgentTransport.SendResult;
 
 /**
- * Takes monitoring events off the producers' threads and delivers them to the Telegram channel as
- * one bulletin per flush window (10 s by default).
+ * Takes monitoring events off the producers' threads and turns them into a channel people can read:
+ * few messages, each one meaning something.
  *
  * <p><b>Producers</b> ({@link #onEvent}) only offer to a bounded queue: no I/O, no lock, never
  * blocking a request. A full queue keeps ERROR/FATAL in a small reserve queue and counts the rest as
  * dropped; the count is printed on the next bulletin, so nothing is discarded silently.</p>
  *
- * <p><b>What goes in a bulletin</b>: log and exception events at the configured levels (WARN and
- * above by default), every 5xx, slow requests, and the events that change the picture whatever their
- * level (startup/shutdown, health transitions, admin audit, application state). Successful and 4xx
- * requests are only counted. Inside a window the same kind of event (same fingerprint) is one entry
- * with "×N" and the IPs/users that triggered it; an HTTP 5xx already reported by its exception is
- * merged into the exception entry; an event id seen twice is ignored.</p>
+ * <p><b>Three kinds of message.</b></p>
+ * <ul>
+ * <li><b>Alerts</b>, collected for one flush window (10 s) and sent together: a kind of failure
+ * (fingerprint) at the notify levels (ERROR and FATAL by default) the first time it shows up, or when
+ * it comes back after {@code incidentQuiet} without occurrences ({@link IncidentTracker}); plus the
+ * events that change the picture whatever their level (startup/shutdown, health transitions, admin
+ * audit, application state). Repeats are not alerted again, they are counted in the digest.</li>
+ * <li><b>Latency</b>: one alert when the share of slow requests crosses the threshold and one when it
+ * goes back under it ({@link LatencyWatch}). A single slow request is never an alert.</li>
+ * <li><b>Digest</b>, silent, every {@code digestInterval} aligned to the clock, only when the period
+ * had a failure, a slow request or a 5xx ({@link DigestCollector}): request counts, every failure kind
+ * at the collected levels with its count, the slowest routes.</li>
+ * </ul>
+ *
+ * <p>Inside a window the same kind of event is one entry with "×N" and the IPs/users that triggered
+ * it; an HTTP 5xx already reported by its exception is merged into the exception entry; an event id
+ * seen twice is ignored. Successful and 4xx requests only feed the counters.</p>
  *
  * <p><b>One dispatcher thread</b> owns all that state (no locks), and also the sending: the
  * per-minute rate limit, retries with exponential backoff and jitter, Telegram's
  * {@code retry_after}, and the circuit breaker. A single sender is also what Telegram wants.</p>
  *
- * <p><b>Critical bulletins</b> (any ERROR, FATAL, lifecycle or health entry) are written to the
+ * <p><b>Critical alert bulletins</b> (any ERROR, FATAL, lifecycle or health entry) are written to the
  * {@link AlertSpool} before the first attempt and deleted only after Telegram confirms them. During
  * an outage they wait on disk; when the circuit lets a probe through again (or the app restarts)
  * they are replayed oldest first.</p>
@@ -73,8 +86,10 @@ public final class KofAgentDispatcher implements MonitoringEventListener {
 	private final KofAgentTransport transport;
 	private final AlertSpool spool;
 	private final Clock clock;
-	private final AlertClassifier classifier;
+	private final AlertClassifier classifier = new AlertClassifier();
 	private final AlertFormatter formatter;
+	private final long slowRequestMs;
+	private final ZoneId zone;
 	private final BlockingQueue<MonitoringEvent> inbound;
 	private final BlockingQueue<MonitoringEvent> reserve = new ArrayBlockingQueue<>(RESERVE_CAPACITY);
 	private final CircuitBreaker breaker;
@@ -87,11 +102,11 @@ public final class KofAgentDispatcher implements MonitoringEventListener {
 	private final Map<String, Boolean> seenIds = lru(SEEN_IDS);
 	private final Map<String, Boolean> exceptionRequests = lru(SEEN_REQUESTS);
 	private final Map<String, WindowEntry> window = new LinkedHashMap<>();
+	private final IncidentTracker incidents;
+	private LatencyWatch latency;
+	private DigestCollector digest;
+	private Instant nextDigestAt;
 	private Instant windowStart;
-	private long windowRequests;
-	private long window4xx;
-	private long window5xx;
-	private long windowMerged;
 	private long windowOverflow;
 	private long droppedReported;
 	private int parkedInSpool;
@@ -103,8 +118,11 @@ public final class KofAgentDispatcher implements MonitoringEventListener {
 	final AtomicLong accepted = new AtomicLong();
 	final AtomicLong duplicates = new AtomicLong();
 	final AtomicLong grouped = new AtomicLong();
+	final AtomicLong suppressed = new AtomicLong();
 	final AtomicLong countedOnly = new AtomicLong();
 	final AtomicLong bulletins = new AtomicLong();
+	final AtomicLong digests = new AtomicLong();
+	final AtomicLong latencyAlerts = new AtomicLong();
 	final AtomicLong sentMessages = new AtomicLong();
 	final AtomicLong failedAttempts = new AtomicLong();
 	final AtomicLong droppedAfterRetry = new AtomicLong();
@@ -124,9 +142,11 @@ public final class KofAgentDispatcher implements MonitoringEventListener {
 		this.transport = transport;
 		this.spool = spool;
 		this.clock = clock;
-		this.classifier = new AlertClassifier(properties.slowRequest());
-		this.formatter = new AlertFormatter(properties.serviceName(), properties.environment(),
-			java.time.ZoneId.of(properties.zone()));
+		this.zone = ZoneId.of(properties.zone());
+		this.slowRequestMs = properties.slowRequest().toMillis();
+		this.formatter = new AlertFormatter(properties.serviceName(), properties.environment(), zone,
+			properties.slowRequest());
+		this.incidents = new IncidentTracker(properties.incidentQuiet());
 		this.inbound = new ArrayBlockingQueue<>(properties.queueCapacity());
 		this.breaker = new CircuitBreaker(properties.circuit().failureThreshold(), properties.circuit().openDuration(),
 			properties.circuit().maxOpenDuration());
@@ -134,7 +154,22 @@ public final class KofAgentDispatcher implements MonitoringEventListener {
 		for (Severity severity : Severity.values()) {
 			droppedQueueFull.put(severity, new AtomicLong());
 		}
-		this.windowStart = clock.instant();
+		startPeriods(clock.instant());
+	}
+
+	private void startPeriods(Instant now) {
+		windowStart = now;
+		latency = new LatencyWatch(properties.latency(), now);
+		digest = new DigestCollector(now);
+		nextDigestAt = nextDigestBoundary(now);
+	}
+
+	/** Next multiple of the digest interval counted from local midnight, so an hourly digest closes at :00. */
+	Instant nextDigestBoundary(Instant now) {
+		Instant midnight = now.atZone(zone).truncatedTo(ChronoUnit.DAYS).toInstant();
+		long step = properties.digestInterval().toMillis();
+		long elapsed = Duration.between(midnight, now).toMillis();
+		return midnight.plusMillis((elapsed / step + 1) * step);
 	}
 
 	// ------------------------------------------------------------------ producers (any thread)
@@ -171,7 +206,7 @@ public final class KofAgentDispatcher implements MonitoringEventListener {
 	void activate() {
 		parkedInSpool = spool.size();
 		spoolSize = parkedInSpool;
-		windowStart = clock.instant();
+		startPeriods(clock.instant());
 		active = true;
 	}
 
@@ -203,7 +238,12 @@ public final class KofAgentDispatcher implements MonitoringEventListener {
 		long deadlineNanos = System.nanoTime() + properties.shutdownTimeout().toNanos();
 		Instant deadline = clock.instant().plus(properties.shutdownTimeout());
 		drainInbound();
-		closeWindow(clock.instant());
+		Instant stopping = clock.instant();
+		closeWindow(stopping);
+		if (digest.hasNews()) {
+			// A partial digest: the counts of the running period would be lost with the process.
+			closeDigest(stopping);
+		}
 		while (outboxSize() > 0 && System.nanoTime() < deadlineNanos
 				&& breaker.state() != CircuitBreaker.State.OPEN && nextAttemptAt.isBefore(deadline)) {
 			if (!trySend(clock.instant())) {
@@ -246,12 +286,22 @@ public final class KofAgentDispatcher implements MonitoringEventListener {
 		}
 	}
 
-	/** One iteration: ingest, close the window when due, replay, send. Tests call it with a fixed clock. */
+	/** One iteration: ingest, close the periods that are due, replay, send. Tests call it with a fixed clock. */
 	void tick() {
 		Instant now = clock.instant();
 		drainInbound();
 		if (!now.isBefore(windowStart.plus(properties.flushInterval()))) {
 			closeWindow(now);
+		}
+		LatencyWatch.Transition change = latency.roll(now);
+		if (change != null) {
+			enqueue(new Outgoing(null, change.degraded() ? Severity.WARN : Severity.INFO,
+				formatter.formatLatency(change), false, !change.degraded(), now, 1));
+			latencyAlerts.incrementAndGet();
+		}
+		if (!now.isBefore(nextDigestAt)) {
+			closeDigest(nextDigestAt);
+			nextDigestAt = nextDigestBoundary(now);
 		}
 		replayFromSpool(now);
 		trySend(now);
@@ -280,28 +330,37 @@ public final class KofAgentDispatcher implements MonitoringEventListener {
 		}
 		accepted.incrementAndGet();
 		boolean request = "REQUEST".equalsIgnoreCase(event.type());
-		if (request) {
-			windowRequests++;
-			if (event.status() != null && event.status() >= 500) {
-				window5xx++;
-			}
-			else if (event.status() != null && event.status() >= 400) {
-				window4xx++;
-			}
-		}
-		if (request && event.status() != null && event.status() >= 500 && event.requestId() != null
-				&& exceptionRequests.containsKey(event.requestId())) {
-			// The exception entry already carries endpoint, status, IP, user and the stack.
-			windowMerged++;
+		if (request && !serverError(event)) {
+			countRequest(event);
+			countedOnly.incrementAndGet();
 			return;
+		}
+		if (request) {
+			countRequest(event);
+			if (event.requestId() != null && exceptionRequests.containsKey(event.requestId())) {
+				// The exception already carries endpoint, status, IP, user and the stack.
+				grouped.incrementAndGet();
+				return;
+			}
 		}
 		if ("EXCEPTION".equalsIgnoreCase(event.type()) && event.requestId() != null) {
 			exceptionRequests.put(event.requestId(), Boolean.TRUE);
 		}
 		Alert alert = classifier.classify(event);
-		if (!listed(alert, request)) {
+		boolean always = alwaysAlerted(alert.category());
+		if (!always && !properties.levels().contains(alert.severity()) && !request) {
 			countedOnly.incrementAndGet();
 			return;
+		}
+		if (!always) {
+			digest.failure(alert);
+			boolean inWindow = window.containsKey(alert.fingerprint());
+			boolean fresh = properties.notifyLevels().contains(alert.severity())
+				&& incidents.announce(alert.fingerprint(), clock.instant());
+			if (!inWindow && !fresh) {
+				suppressed.incrementAndGet();
+				return;
+			}
 		}
 		WindowEntry entry = window.get(alert.fingerprint());
 		if (entry != null) {
@@ -317,25 +376,33 @@ public final class KofAgentDispatcher implements MonitoringEventListener {
 		}
 	}
 
-	/** Requests are listed only when something went wrong; the important categories always are. */
-	private boolean listed(Alert alert, boolean request) {
-		Category category = alert.category();
-		if (category == Category.LIFECYCLE || category == Category.HEALTH || category == Category.AUDIT
-				|| category == Category.STATE) {
-			return true;
+	private static boolean serverError(MonitoringEvent event) {
+		return event.status() != null && event.status() >= 500;
+	}
+
+	/** Every request feeds the digest counters and the latency watch; slow ones also the route ranking. */
+	private void countRequest(MonitoringEvent event) {
+		String route = event.route() != null && !"UNMATCHED".equals(event.route()) ? event.route()
+			: AlertClassifier.maskIds(event.path());
+		String endpoint = ((event.method() == null ? "" : event.method() + " ")
+			+ (route == null ? "?" : route)).trim();
+		boolean slow = event.status() != null && event.status() < 400 && event.durationMs() != null
+			&& event.durationMs() >= slowRequestMs;
+		digest.request(event.status());
+		latency.record(endpoint, slow);
+		if (slow) {
+			digest.slow(endpoint, event.durationMs());
 		}
-		if (request) {
-			return alert.status() != null && alert.status() >= 500
-				|| alert.severity() == Severity.WARN && alert.status() != null && alert.status() < 400
-					&& properties.levels().contains(Severity.WARN);
-		}
-		return properties.levels().contains(alert.severity());
+	}
+
+	/** Events that change the picture: announced every time, never folded into an incident. */
+	private static boolean alwaysAlerted(Category category) {
+		return category == Category.LIFECYCLE || category == Category.HEALTH || category == Category.AUDIT
+			|| category == Category.STATE;
 	}
 
 	/** Turns the window into a bulletin (if anything worth listing happened) and starts a new one. */
 	private void closeWindow(Instant now) {
-		long dropped = droppedTotal();
-		long newlyDropped = dropped - droppedReported;
 		if (!window.isEmpty()) {
 			List<WindowEntry> entries = new ArrayList<>(window.values());
 			entries.sort(Comparator.comparing((WindowEntry entry) -> entry.alert.severity()).reversed());
@@ -349,23 +416,33 @@ public final class KofAgentDispatcher implements MonitoringEventListener {
 				loud |= entry.alert.severity().atLeast(Severity.ERROR) || entry.alert.category() == Category.HEALTH;
 			}
 			Bulletin bulletin = new Bulletin(windowStart, now, listed, entries.size() - limit + windowOverflow,
-				windowRequests, window4xx, window5xx, windowMerged, channelIssues(newlyDropped));
+				channelIssues());
 			for (String text : formatter.format(bulletin)) {
 				enqueue(new Outgoing(null, entries.getFirst().alert.severity(), text, critical, !loud, now, 1));
 			}
 			bulletins.incrementAndGet();
-			droppedReported = dropped;
 		}
 		window.clear();
 		windowStart = now;
-		windowRequests = 0;
-		window4xx = 0;
-		window5xx = 0;
-		windowMerged = 0;
 		windowOverflow = 0;
 	}
 
-	private String channelIssues(long newlyDropped) {
+	/** Sends the digest of the period ending at {@code to} when it had something to report. */
+	private void closeDigest(Instant to) {
+		boolean news = digest.hasNews();
+		DigestCollector.Digest closed = digest.close(to);
+		if (news) {
+			enqueue(new Outgoing(null, Severity.INFO, formatter.formatDigest(closed, channelIssues()), false, true, to,
+				1));
+			digests.incrementAndGet();
+		}
+	}
+
+	/** Problems of the channel itself since the last message that reported them. */
+	private String channelIssues() {
+		long dropped = droppedTotal();
+		long newlyDropped = dropped - droppedReported;
+		droppedReported = dropped;
 		List<String> issues = new ArrayList<>();
 		if (newlyDropped > 0) {
 			issues.add(newlyDropped + " eventos descartados");
