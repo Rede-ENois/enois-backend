@@ -299,6 +299,21 @@ jobs:
           VAPID_PUBLIC_KEY: ${{ secrets.QA_VAPID_PUBLIC_KEY }}
           VAPID_PRIVATE_KEY: ${{ secrets.QA_VAPID_PRIVATE_KEY }}
           VAPID_SUBJECT: "mailto:suporte@enois.ia.br"
+          # Epapo (videoconferência própria). Sem estas quatro variáveis o backend responde
+          # 503 CALLS_NOT_CONFIGURED / MENTORING_ROOMS_NOT_CONFIGURED e nenhuma sala abre —
+          # é o estado em que a QA estava, com a rota do gateway respondendo
+          # GATEWAY_NOT_CONFIGURED. Os dois segredos são os MESMOS que a stack do Epapo usa,
+          # pareados por nome: REDE_CALLS_EPAPO_INTERNAL_TOKEN = EPAPO_INTERNAL_TOKEN e
+          # REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN = ENOIS_AUTHORIZE_SECRET. Trocar um lado sem o
+          # outro faz o gateway recusar (401) em vez de abrir.
+          #
+          # A URL é a origem pública do Epapo, com https e sem barra no fim. O gateway-url é
+          # o endereço que ESTE backend alcança; hoje é o mesmo host público, porque o
+          # auth-gateway só aceita o IP do backend no ufw.
+          REDE_CALLS_EPAPO_URL: ${{ vars.REDE_CALLS_EPAPO_URL }}
+          REDE_CALLS_EPAPO_GATEWAY_URL: ${{ vars.REDE_CALLS_EPAPO_GATEWAY_URL }}
+          REDE_CALLS_EPAPO_INTERNAL_TOKEN: ${{ secrets.REDE_CALLS_EPAPO_INTERNAL_TOKEN }}
+          REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN: ${{ secrets.REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN }}
         run: |
           set -euo pipefail
           API="${PORTAINER_BASE_URL}/api/endpoints/${PORTAINER_ENDPOINT_ID}/docker"
@@ -307,6 +322,49 @@ jobs:
           PREV_NAME="${CONTAINER_NAME}-previous"
           IMG_PATH="${IMAGE_REF%:*}"
           IMG_TAG="${IMAGE_REF##*:}"
+
+          # Epapo: as quatro variáveis andam juntas. Todas vazias = chamadas desligadas, que é
+          # um estado válido e documentado (o backend responde 503 explícito). Algumas vazias e
+          # outras não = configuração pela metade, e aí o container sobe com a chamada "ligada"
+          # falhando em toda tentativa de entrar numa sala. Falhar aqui é mais barato que
+          # descobrir isso pela tela.
+          epapo_set=0
+          epapo_missing=""
+          for name in REDE_CALLS_EPAPO_URL REDE_CALLS_EPAPO_GATEWAY_URL \
+                      REDE_CALLS_EPAPO_INTERNAL_TOKEN REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN; do
+            if [ -n "${!name:-}" ]; then
+              epapo_set=$((epapo_set + 1))
+            else
+              epapo_missing="${epapo_missing} ${name}"
+            fi
+          done
+          if [ "${epapo_set}" -ne 0 ] && [ "${epapo_set}" -ne 4 ]; then
+            echo "::error::configuração do Epapo pela metade — faltam:${epapo_missing}"
+            echo "Defina as quatro (variáveis de repositório para as URLs, secrets para os tokens) ou nenhuma."
+            exit 1
+          fi
+          if [ "${epapo_set}" -eq 0 ]; then
+            echo "==> Epapo não configurado: chamadas e salas de mentoria ficam desligadas (503 explícito)"
+          else
+            # O gateway recebe dois segredos de servidor (o token interno e, na volta, o JWT
+            # pronto para entrar na sala). O Epapo roda num provedor diferente deste backend,
+            # sem rede privada entre os dois: por isso o salto tem de ser cifrado. http só é
+            # aceito para loopback e faixas privadas — ali o tráfego não sai do host.
+            epapo_gw_host=$(printf '%s' "${REDE_CALLS_EPAPO_GATEWAY_URL}" \
+              | sed -E 's#^[a-z]+://##; s#[:/].*$##')
+            case "${REDE_CALLS_EPAPO_GATEWAY_URL}" in
+              https://*) ;;
+              http://localhost*|http://127.*|http://10.*|http://192.168.*) ;;
+              http://172.1[6-9].*|http://172.2[0-9].*|http://172.3[01].*) ;;
+              *)
+                echo "::error::REDE_CALLS_EPAPO_GATEWAY_URL não é https (host: ${epapo_gw_host})."
+                echo "O gateway carrega segredo de servidor a cada chamada; em texto claro ele"
+                echo "vaza para quem estiver no caminho. Publique-o com TLS e aponte o https para cá."
+                exit 1
+                ;;
+            esac
+            echo "==> Epapo configurado: ${REDE_CALLS_EPAPO_URL}"
+          fi
 
           # Chamada ao proxy Docker do Portainer: imprime o corpo só quando dá certo e, quando
           # falha, mostra status + começo do corpo (sem despejar o progresso inteiro do pull).
@@ -473,6 +531,10 @@ jobs:
               "VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY}",
               "VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY}",
               "VAPID_SUBJECT=${VAPID_SUBJECT}",
+              "REDE_CALLS_EPAPO_URL=${REDE_CALLS_EPAPO_URL}",
+              "REDE_CALLS_EPAPO_GATEWAY_URL=${REDE_CALLS_EPAPO_GATEWAY_URL}",
+              "REDE_CALLS_EPAPO_INTERNAL_TOKEN=${REDE_CALLS_EPAPO_INTERNAL_TOKEN}",
+              "REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN=${REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN}",
               "TRUSTED_PROXY_IPS=154.12.230.97",
               "JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=60.0 -XX:+ExitOnOutOfMemoryError"
             ],
