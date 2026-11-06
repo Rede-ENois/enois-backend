@@ -8,6 +8,7 @@ import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -34,6 +35,9 @@ public class MediaTemporaryFiles {
 	private final String configuredDir;
 	private final List<String> candidates;
 
+	// Obrigatorio: ha dois construtores publicos (este e o das pastas explicitas), e sem a marca
+	// o Spring nao sabe qual usar na injecao.
+	@Autowired
 	public MediaTemporaryFiles(@Value("${rede.media.temp-dir:}") String configuredDir) {
 		this(configuredDir, DEFAULT_DATA_DIR, System.getProperty("java.io.tmpdir"), System.getProperty("user.dir"));
 	}
