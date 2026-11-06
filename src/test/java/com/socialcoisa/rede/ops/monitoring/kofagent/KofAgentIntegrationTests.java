@@ -48,6 +48,9 @@ class KofAgentIntegrationTests {
 	/** One exception entry for the endpoint, with its optional repeat count. */
 	private static final java.util.regex.Pattern FAILURES = java.util.regex.Pattern.compile(
 		"HTTP 500 · Exceção(?: <b>×(\\d+)</b>)?[^\\n]*\\n<code>GET /stats/community</code>");
+	/** The same kind in the digest, which counts every occurrence whether it was alerted or not. */
+	private static final java.util.regex.Pattern DIGEST = java.util.regex.Pattern.compile(
+		"<b>×(\\d+)</b> · HTTP 500 · Exceção · <code>GET /stats/community</code>");
 
 	@MockitoBean
 	private StatsService statsService;
@@ -106,19 +109,21 @@ class KofAgentIntegrationTests {
 
 			release.countDown();
 			long deadline = System.currentTimeMillis() + 20_000;
-			while (sum(hanging.all(), FAILURES) + dispatcher.suppressed.get() < 5
-					&& System.currentTimeMillis() < deadline) {
+			while (sum(hanging.all(), FAILURES) < 1 && System.currentTimeMillis() < deadline) {
 				Thread.sleep(50);
 			}
+			// Shutdown flushes the running period as a partial digest, with the count of every kind.
+			monitoring.removeListener(dispatcher);
+			dispatcher.shutdown();
 			String all = hanging.all();
 			assertThat(all).contains("warm-up", "HTTP 500", "<code>GET /stats/community</code>",
 				"IllegalStateException", "IP <code>127.0.0.1</code>", "req <code>");
-			// Five failures of one kind, however the flush windows cut them: the first window alerts
-			// (repeats inside it collapse into xN), later repeats stay quiet and are only counted, and each
-			// request's own 5xx event is merged into its exception instead of producing a second alert.
-			assertThat(sum(all, FAILURES)).isGreaterThanOrEqualTo(1);
-			assertThat(sum(all, FAILURES) + dispatcher.suppressed.get()).isEqualTo(5);
-			assertThat(dispatcher.grouped.get()).as("request-level 5xx merged").isGreaterThanOrEqualTo(5);
+			// Five failures of one kind, however the flush windows cut them (the shared test context also
+			// logs unrelated events in the background, so no global counter is asserted): the alert shows
+			// the kind at least once, the digest counts all five, and each request's own 5xx event is
+			// merged into its exception instead of becoming a second kind.
+			assertThat(sum(all, FAILURES)).isBetween(1, 5);
+			assertThat(sum(all, DIGEST)).isEqualTo(5);
 			assertThat(java.util.regex.Pattern.compile("HTTP 500(?! · Exceção)[^\\n]*\\n<code>GET /stats/community</code>")
 				.matcher(all).find()).as("no separate request-level 5xx entry").isFalse();
 		}

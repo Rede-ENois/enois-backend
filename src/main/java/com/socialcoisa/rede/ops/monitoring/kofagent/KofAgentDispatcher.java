@@ -354,10 +354,15 @@ public final class KofAgentDispatcher implements MonitoringEventListener {
 		}
 		if (!always) {
 			digest.failure(alert);
+			if (!properties.notifyLevels().contains(alert.severity())) {
+				// Collected level below the notify levels (WARN by default): digest only.
+				countedOnly.incrementAndGet();
+				return;
+			}
 			boolean inWindow = window.containsKey(alert.fingerprint());
-			boolean fresh = properties.notifyLevels().contains(alert.severity())
-				&& incidents.announce(alert.fingerprint(), clock.instant());
+			boolean fresh = incidents.announce(alert.fingerprint(), clock.instant());
 			if (!inWindow && !fresh) {
+				// A repeat of a kind already alerted: counted in the digest, not alerted again.
 				suppressed.incrementAndGet();
 				return;
 			}

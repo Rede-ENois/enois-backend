@@ -386,11 +386,13 @@ class KofAgentDispatcherTests {
 		nextWindow(dispatcher);
 		for (int i = 0; i < 20; i++) {
 			dispatcher.onEvent(exception(500, "req-repeat-" + i, "/feed/posts/{postId}/reactions", deadlock()));
+			dispatcher.onEvent(event("WARN", "LOG", "CDN purge failed for an upload"));
 			nextWindow(dispatcher);
 		}
 
 		assertThat(transport.sent).as("one alert for the kind; repeats are only counted").hasSize(1);
-		assertThat(dispatcher.suppressed.get()).isEqualTo(20);
+		assertThat(dispatcher.suppressed.get()).as("only repeats of the alerted kind; WARN is digest-only")
+			.isEqualTo(20);
 
 		clock.advance(Duration.ofMinutes(31));
 		dispatcher.onEvent(exception(500, "req-back", "/feed/posts/{postId}/reactions", deadlock()));
