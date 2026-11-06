@@ -29,6 +29,9 @@ interface SpringDataCommentJpaRepository extends JpaRepository<CommentJpaEntity,
 
 	List<CommentJpaEntity> findByAuthorId(String authorId);
 
+	@org.springframework.data.jpa.repository.Query("select c.postId from CommentJpaEntity c where c.id = :id")
+	java.util.Optional<String> findPostIdById(@org.springframework.data.repository.query.Param("id") String id);
+
 	List<CommentJpaEntity> findByPostIdIn(Collection<String> postIds);
 
 	/**

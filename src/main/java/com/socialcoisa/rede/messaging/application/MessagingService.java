@@ -233,6 +233,10 @@ public class MessagingService {
 				.filter(m -> m.conversationId().equals(conversationId))
 				.orElseThrow(() -> new ApiException(400, "INVALID_REPLY", "Mensagem citada nao encontrada nesta conversa."));
 		}
+		// The inbox orders by updatedAt (#25), and this is the first write of the send (see
+		// MessagingRepository#touchConversation). It also queues a double click behind the first
+		// send, so the duplicate check below sees the message it created.
+		repository.touchConversation(conversationId, clock.instant());
 		// Duplo clique/retry: a MESMA mensagem (texto + mídias) do mesmo remetente em até 2
 		// minutos devolve a linha já criada em vez de duplicar e notificar de novo.
 		var duplicate = repository.findRecentDuplicate(conversationId, senderId, corpo,
@@ -249,9 +253,6 @@ public class MessagingService {
 		// aceso mesmo com a conversa aberta.
 		repository.markRead(conversationId, senderId, clock.instant());
 		notificationService.markReadByHref(senderId, conversationHref(conversationId));
-		// A lista de conversas ordena por updatedAt; sem este toque a conversa antiga fica no lugar
-		// mesmo recebendo mensagem nova (#25 dos issues).
-		repository.saveConversation(conversation.touch(clock.instant()));
 		String preview = corpo.isEmpty()
 			? (midias.isEmpty() ? "Nova mensagem" : "Enviou uma midia")
 			: (corpo.length() > 80 ? corpo.substring(0, 77) + "..." : corpo);
@@ -302,6 +303,8 @@ public class MessagingService {
 		if (encryptedKeys != null && encryptedKeys.length() > 16000) {
 			throw new ApiException(400, "ENCRYPTED_KEYS_TOO_LONG", "Chaves cifradas excedem o tamanho maximo.");
 		}
+		// First write of the send: see MessagingRepository#touchConversation.
+		repository.touchConversation(conversationId, clock.instant());
 		String id = "message_" + UUID.randomUUID().toString().replace("-", "");
 		Message message = encryptedKeys != null
 			? Message.createE2ePerMessage(id, conversationId, senderId, ciphertext, iv, encryptedKeys,
@@ -311,7 +314,6 @@ public class MessagingService {
 		repository.saveMessage(message);
 		repository.markRead(conversationId, senderId, clock.instant());
 		notificationService.markReadByHref(senderId, conversationHref(conversationId));
-		repository.saveConversation(conversation.touch(clock.instant()));
 		List<ConversationParticipant> participants = repository.findParticipantsByConversation(conversationId);
 		notifyRecipients(conversation, participants, senderId, "Mensagem cifrada");
 		publishChange(conversationId, participants);

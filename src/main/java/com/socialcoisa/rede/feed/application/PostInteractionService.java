@@ -23,7 +23,9 @@ import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.Comment;
 import com.socialcoisa.rede.feed.domain.CommentStatus;
 import com.socialcoisa.rede.feed.domain.Post;
+import com.socialcoisa.rede.feed.domain.PostCounter;
 import com.socialcoisa.rede.feed.domain.PostId;
+import com.socialcoisa.rede.feed.domain.PostStatus;
 import com.socialcoisa.rede.notifications.application.NotificationService;
 import com.socialcoisa.rede.profile.application.ContributorTagView;
 import com.socialcoisa.rede.profile.application.NameStyleView;
@@ -113,15 +115,14 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 		behavioralTimingGuard.record(command.authorId().value());
 		riskEngine.assess(command.authorId().value(), "comment", command.content());
 		duplicationGuard.require(command.authorId().value(), command.content());
-		Post post = activePost(command.postId());
+		Post post = lockActivePost(command.postId());
 		List<String> mediaIds = normalizeCommentMedia(command.mediaIds(), command.authorId());
 		String content = normalizeContent(command.content(), !mediaIds.isEmpty());
 		String parentCommentId = normalizeParentComment(command.parentCommentId(), post.id());
 		Comment comment = Comment.create(newId("comment"), post.id(), command.authorId(), parentCommentId, content,
 			mediaIds, command.mediaSpoiler(), clock.instant());
 		Comment saved = commentRepository.save(comment);
-		post.addComment();
-		postRepository.save(post);
+		postRepository.adjustCounter(post.id(), PostCounter.COMMENTS, 1);
 		outboxEventRepository.append("PostCommented", post.id().value(), "{\"postId\":\"" + post.id().value()
 			+ "\",\"commentId\":\"" + saved.id() + "\",\"authorId\":\"" + command.authorId().value() + "\"}");
 		notifyCommentReply(parentCommentId, post, command.authorId().value());
@@ -238,22 +239,20 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 		if (command.type() == null) {
 			throw new ApiException(400, "INVALID_REACTION_TYPE", "Tipo de reacao obrigatorio.");
 		}
-		Post post = activePost(command.postId());
+		Post post = lockActivePost(command.postId());
 		var outcome = postInteractionRepository.addReaction(newId("reaction"), post.id(), command.userId(),
 			command.type(), clock.instant());
 		// Trocar o tipo da reacao (REPLACED) NAO mexe no total: a pessoa ja estava contada. Antes,
 		// qualquer gravacao incrementava, e a contagem subia quando o usuario so mudava de reacao.
 		switch (outcome) {
 			case ADDED -> {
-				post.addReaction();
-				postRepository.save(post);
+				postRepository.adjustCounter(post.id(), PostCounter.REACTIONS, 1);
 				outboxEventRepository.append("PostReacted", post.id().value(), "{\"postId\":\"" + post.id().value()
 					+ "\",\"authorId\":\"" + command.userId().value() + "\"}");
 				coins.recordPresence(command.userId().value());
 			}
 			case REMOVED -> {
-				post.removeReaction();
-				postRepository.save(post);
+				postRepository.adjustCounter(post.id(), PostCounter.REACTIONS, -1);
 				outboxEventRepository.append("PostReactionRemoved", post.id().value(),
 					"{\"postId\":\"" + post.id().value() + "\"}");
 			}
@@ -266,64 +265,76 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 			case REPLACED -> "REACTION_CHANGED";
 			case REMOVED -> "REACTION_REMOVED";
 		};
-		return new PostActionResult(post.id().value(), status, post.counters());
+		return new PostActionResult(post.id().value(), status, postRepository.counters(post.id()));
 	}
 
 	@Override
 	@Transactional
 	public PostActionResult removeReaction(ReactToPostCommand command) {
-		Post post = activePost(command.postId());
+		Post post = lockActivePost(command.postId());
 		boolean removed = postInteractionRepository.removeReaction(post.id(), command.userId());
 		if (removed) {
-			post.removeReaction();
-			postRepository.save(post);
+			postRepository.adjustCounter(post.id(), PostCounter.REACTIONS, -1);
 			outboxEventRepository.append("PostReactionRemoved", post.id().value(), "{\"postId\":\"" + post.id().value()
 				+ "\"}");
 		}
 		return new PostActionResult(post.id().value(), removed ? "REACTION_REMOVED" : "REACTION_NOT_FOUND",
-			post.counters());
+			postRepository.counters(post.id()));
 	}
 
 	@Override
 	@Transactional
 	public PostActionResult save(PostActionCommand command) {
-		Post post = activePost(command.postId());
+		Post post = lockActivePost(command.postId());
 		boolean added = postInteractionRepository.addSave(newId("saved_post"), post.id(), command.userId(),
 			clock.instant());
 		if (added) {
-			post.addSave();
-			postRepository.save(post);
+			postRepository.adjustCounter(post.id(), PostCounter.SAVES, 1);
 			outboxEventRepository.append("PostSaved", post.id().value(), "{\"postId\":\"" + post.id().value() + "\"}");
 		}
-		return new PostActionResult(post.id().value(), added ? "SAVED" : "ALREADY_SAVED", post.counters());
+		return new PostActionResult(post.id().value(), added ? "SAVED" : "ALREADY_SAVED",
+			postRepository.counters(post.id()));
 	}
 
 	@Override
 	@Transactional
 	public PostActionResult removeSave(PostActionCommand command) {
-		Post post = activePost(command.postId());
+		Post post = lockActivePost(command.postId());
 		boolean removed = postInteractionRepository.removeSave(post.id(), command.userId());
 		if (removed) {
-			post.removeSave();
-			postRepository.save(post);
+			postRepository.adjustCounter(post.id(), PostCounter.SAVES, -1);
 			outboxEventRepository.append("PostSaveRemoved", post.id().value(), "{\"postId\":\"" + post.id().value()
 				+ "\"}");
 		}
-		return new PostActionResult(post.id().value(), removed ? "SAVE_REMOVED" : "SAVE_NOT_FOUND", post.counters());
+		return new PostActionResult(post.id().value(), removed ? "SAVE_REMOVED" : "SAVE_NOT_FOUND",
+			postRepository.counters(post.id()));
 	}
 
 	@Override
 	@Transactional
 	public PostActionResult share(PostActionCommand command) {
-		Post post = activePost(command.postId());
+		Post post = lockActivePost(command.postId());
 		boolean added = postInteractionRepository.addShare(newId("post_share"), post.id(), command.userId(),
 			clock.instant());
 		if (added) {
-			post.addShare();
-			postRepository.save(post);
+			postRepository.adjustCounter(post.id(), PostCounter.SHARES, 1);
 			outboxEventRepository.append("PostShared", post.id().value(), "{\"postId\":\"" + post.id().value() + "\"}");
 		}
-		return new PostActionResult(post.id().value(), added ? "SHARED" : "ALREADY_SHARED", post.counters());
+		return new PostActionResult(post.id().value(), added ? "SHARED" : "ALREADY_SHARED",
+			postRepository.counters(post.id()));
+	}
+
+	/**
+	 * The active post, with its row locked until the transaction ends. Every interaction that moves a
+	 * counter starts here, before writing its own row: see PostRepository#lockForUpdate for why the
+	 * order matters. Under the lock, the interaction tables of this post only change by this
+	 * transaction, so reading "did this person already react/save?" and then writing is safe.
+	 */
+	private Post lockActivePost(PostId postId) {
+		if (postRepository.lockForUpdate(postId).filter(status -> status == PostStatus.ACTIVE).isEmpty()) {
+			throw new ApiException(404, "POST_NOT_FOUND", "Post nao encontrado.");
+		}
+		return activePost(postId);
 	}
 
 	private Post activePost(PostId postId) {

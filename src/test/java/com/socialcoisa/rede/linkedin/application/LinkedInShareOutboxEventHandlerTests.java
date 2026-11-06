@@ -244,5 +244,20 @@ class LinkedInShareOutboxEventHandlerTests {
 		public void updateAcceptedAnswer(PostId id, String commentId, Instant resolvedAt) {
 			throw new UnsupportedOperationException();
 		}
+
+		@Override
+		public Optional<com.socialcoisa.rede.feed.domain.PostStatus> lockForUpdate(PostId id) {
+			throw new UnsupportedOperationException();
+		}
+
+		@Override
+		public void adjustCounter(PostId id, com.socialcoisa.rede.feed.domain.PostCounter counter, int delta) {
+			throw new UnsupportedOperationException();
+		}
+
+		@Override
+		public com.socialcoisa.rede.feed.domain.Counters counters(PostId id) {
+			throw new UnsupportedOperationException();
+		}
 	}
 }

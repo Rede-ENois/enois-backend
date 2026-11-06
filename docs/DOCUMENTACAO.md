@@ -56,6 +56,7 @@
 | Tema | Doc | Estado |
 |------|-----|--------|
 | Gitflow (feature → qa → main) | `GITFLOW.md` | ✅ |
+| Concurrency and hot rows (isolation level, counters, lock order) | `CONCURRENCY.md` | ✅ |
 | Monitoramento (painel, eventos, retenção) | `MONITORAMENTO.md` | ✅ (atualizar com filtro de data/hora e teto de linhas) |
 | Modo pânico (chave de sistema, 429 global) | `MODULES.md` §shared | ✅ |
 | Superfície da API (rotas conhecidas, resposta padrão fora delas) | `API.md` | ✅ |

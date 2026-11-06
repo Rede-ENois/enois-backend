@@ -15,6 +15,14 @@ public interface MessagingRepository {
 
 	void saveConversation(Conversation conversation);
 
+	/**
+	 * Moves the conversation to the top of the inbox in one statement, which also locks its row until
+	 * the transaction ends. Sending a message does this FIRST: inserting the message takes a shared
+	 * lock on the conversation (foreign key), and two senders upgrading it to write the conversation
+	 * afterwards deadlocked each other. Locked first, concurrent sends of one conversation queue.
+	 */
+	void touchConversation(String conversationId, Instant at);
+
 	void saveParticipant(ConversationParticipant participant);
 
 	Optional<Conversation> findConversationById(String id);

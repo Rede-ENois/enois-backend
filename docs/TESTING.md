@@ -31,6 +31,14 @@ Envio que roda em pool de threads (push) não é verificado de forma síncrona: 
 executor por um que roda na hora (`@MockitoBean(name = "pushExecutor")` + `doAnswer`) ou usa
 `verify(..., timeout(...))`. Um `verify` direto passa ou falha conforme a corrida.
 
+The daily presence of an action is also recorded on an executor after the commit
+(`presenceExecutor`). A test that reads the presence right after the action replaces it with an
+inline one (`@MockitoBean(name = "presenceExecutor")`, as `StreakPresenceFlowTests` does); a test
+that counts coin entries of someone who just acted leaves the `presenca:` entries out.
+
+Concurrency tests (several threads sending the same requests at once) follow
+`PostCounterConcurrencyTests`; see [`CONCURRENCY.md`](CONCURRENCY.md) for what H2 cannot reproduce.
+
 ## Estrutura de Testes
 
 Os testes estão em `src/test/java/com/socialcoisa/rede/` e seguem a mesma estrutura de pacotes do código fonte.

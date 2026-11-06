@@ -22,7 +22,7 @@ public interface NotificationRepository {
 	record UnreadCount(String kind, String actorId, String href, long count) {
 	}
 
-	/** The unread notification of a group, if there is one. */
+	/** The unread notification of a group, if there is one, locked for the caller to join it. */
 	Optional<Notification> findUnreadGroup(String userId, String groupKey);
 
 	void markRead(String notificationId);

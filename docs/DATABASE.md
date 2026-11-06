@@ -88,6 +88,10 @@ alterar a escolha.
 | comments | INT DEFAULT 0 | Contador de comentários |
 | saves | INT DEFAULT 0 | Contador de salvos |
 | shares | INT DEFAULT 0 | Contador de compartilhamentos |
+| reposts | INT DEFAULT 0 | Repost counter |
+
+The counters are written on insert and then only by a relative SQL update
+(`PostRepository#adjustCounter`); saving a post never writes them. See [CONCURRENCY.md](CONCURRENCY.md).
 | status | VARCHAR(20) | ACTIVE, DELETED |
 | deleted_at | TIMESTAMP (nullable) | Data de deleção (soft delete) |
 | created_at | TIMESTAMP | |

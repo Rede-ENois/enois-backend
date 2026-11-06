@@ -8,14 +8,35 @@ import java.util.Set;
 
 import com.socialcoisa.rede.feed.application.TrendingCursor;
 import com.socialcoisa.rede.feed.domain.AuthorIdentity;
+import com.socialcoisa.rede.feed.domain.Counters;
 import com.socialcoisa.rede.feed.domain.Post;
+import com.socialcoisa.rede.feed.domain.PostCounter;
 import com.socialcoisa.rede.feed.domain.PostId;
+import com.socialcoisa.rede.feed.domain.PostStatus;
 import com.socialcoisa.rede.feed.domain.PostType;
 import com.socialcoisa.rede.feed.domain.UserId;
 
 public interface PostRepository {
 
+	/**
+	 * Saves the post's own fields. The counters are written only when the post is created: after that
+	 * they belong to {@link #adjustCounter}, so saving a post loaded earlier never rolls them back.
+	 */
 	Post save(Post post);
+
+	/**
+	 * Locks the post row until the transaction ends and returns its current status (empty when it
+	 * does not exist). Every write that also moves a counter takes this lock FIRST: inserting a
+	 * reaction, comment, save, share or repost takes a shared lock on the post (foreign key), and two
+	 * of those upgrading to the counter update deadlock each other. Locked first, they queue instead.
+	 */
+	Optional<PostStatus> lockForUpdate(PostId id);
+
+	/** Adds {@code delta} to one counter in a single SQL update, never going below zero. */
+	void adjustCounter(PostId id, PostCounter counter, int delta);
+
+	/** The counters as stored now (read from the database, not from an already loaded post). */
+	Counters counters(PostId id);
 
 	Optional<Post> findById(PostId id);
 

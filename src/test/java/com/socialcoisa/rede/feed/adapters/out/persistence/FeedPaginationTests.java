@@ -25,6 +25,7 @@ import com.socialcoisa.rede.feed.application.TrendingCursor;
 import com.socialcoisa.rede.feed.domain.Comment;
 import com.socialcoisa.rede.feed.domain.FeedTab;
 import com.socialcoisa.rede.feed.domain.Post;
+import com.socialcoisa.rede.feed.domain.PostCounter;
 import com.socialcoisa.rede.feed.domain.PostId;
 import com.socialcoisa.rede.feed.domain.PostType;
 import com.socialcoisa.rede.feed.domain.ReactionType;
@@ -89,9 +90,10 @@ class FeedPaginationTests {
 		Instant now = Instant.now().minusSeconds(60);
 		List<Post> expected = new ArrayList<>();
 		for (int i = 0; i < 45; i++) {
-			Post post = newPost(i, now.minusSeconds(i / 2));
-			for (int n = 0; n < 100 + (i / 2 % 3); n++) post.addReaction();
-			expected.add(posts.save(post));
+			Post post = posts.save(newPost(i, now.minusSeconds(i / 2)));
+			posts.adjustCounter(post.id(), PostCounter.REACTIONS, 100 + (i / 2 % 3));
+			post.refreshCounters(posts.counters(post.id()));
+			expected.add(post);
 		}
 		expected.sort(Comparator.comparingInt((Post p) -> p.counters().reactions()).reversed()
 			.thenComparing(Post::createdAt, Comparator.reverseOrder())

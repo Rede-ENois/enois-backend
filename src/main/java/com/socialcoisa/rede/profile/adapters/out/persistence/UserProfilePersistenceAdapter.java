@@ -30,6 +30,11 @@ class UserProfilePersistenceAdapter implements UserProfileRepository {
 	}
 
 	@Override
+	public void updateNameStyle(String userId, String theme, String font, String color, java.time.Instant at) {
+		repository.updateNameStyle(userId, theme, font, color, at);
+	}
+
+	@Override
 	public Optional<UserProfile> findById(String id) {
 		return repository.findById(id).map(UserProfileJpaEntity::toDomain);
 	}

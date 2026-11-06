@@ -30,10 +30,6 @@ public class Conversation {
 	}
 
 	/** Mensagem nova move a conversa para o topo: a lista ordena por `updatedAt`. */
-	public Conversation touch(Instant at) {
-		return new Conversation(id, kind, title, createdBy, createdAt, at);
-	}
-
 	public String id() { return id; }
 
 	public String kind() { return kind; }

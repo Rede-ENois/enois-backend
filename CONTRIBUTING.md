@@ -95,6 +95,9 @@ Regras que valem em toda parte:
 - **Limite e validação no servidor.** Tamanho de campo, faixa de valor e propriedade do recurso são
   conferidos aqui, não na tela.
 - **Nada de dado pessoal em log.** Nem e-mail completo, nem token, nem conteúdo privado.
+- **Hot rows and counters:** counters change with a relative SQL update, a read-decide-write on a
+  shared row locks it first, and a parent row is written before its child is inserted. The rules
+  and the READ COMMITTED decision are in [`docs/CONCURRENCY.md`](docs/CONCURRENCY.md).
 
 ## Migrações
 

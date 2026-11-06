@@ -13,6 +13,8 @@ import com.socialcoisa.rede.feed.domain.PostType;
 import com.socialcoisa.rede.feed.domain.UserId;
 import com.socialcoisa.rede.feed.domain.Visibility;
 
+import org.hibernate.annotations.DynamicUpdate;
+
 import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;
 import jakarta.persistence.ElementCollection;
@@ -26,6 +28,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.Table;
 
 @Entity
+@DynamicUpdate
 @Table(name = "posts", indexes = {
 		@Index(name = "idx_posts_author_created", columnList = "author_id, created_at"),
 		@Index(name = "idx_posts_author_status_created", columnList = "author_id, status, created_at"),
@@ -100,19 +103,24 @@ class PostJpaEntity {
 	@Column(nullable = false)
 	private Visibility visibility;
 
-	@Column(nullable = false)
+	/*
+	 * Counters: written on insert, then only by SpringDataPostJpaRepository#addToCounters. Saving a
+	 * post loaded earlier in the request used to write them back as they were read, which lost every
+	 * concurrent reaction/comment/save and made each interaction rewrite the whole hot row.
+	 */
+	@Column(nullable = false, updatable = false)
 	private int reactions;
 
-	@Column(nullable = false)
+	@Column(nullable = false, updatable = false)
 	private int comments;
 
-	@Column(nullable = false)
+	@Column(nullable = false, updatable = false)
 	private int saves;
 
-	@Column(nullable = false)
+	@Column(nullable = false, updatable = false)
 	private int shares;
 
-	@Column(nullable = false)
+	@Column(nullable = false, updatable = false)
 	private int reposts;
 
 	@Enumerated(EnumType.STRING)
