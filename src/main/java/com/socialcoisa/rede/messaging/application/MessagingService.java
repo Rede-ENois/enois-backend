@@ -266,12 +266,12 @@ public class MessagingService {
 	@Transactional
 	public Message sendE2eMessage(String conversationId, String senderId, String ciphertext,
 			String iv, java.util.List<String> mediaIds, boolean mediaSpoiler) {
-		return sendE2eMessage(conversationId, senderId, ciphertext, iv, mediaIds, mediaSpoiler, null);
+		return sendE2eMessage(conversationId, senderId, ciphertext, iv, null, mediaIds, mediaSpoiler, null);
 	}
 
 	@Transactional
 	public Message sendE2eMessage(String conversationId, String senderId, String ciphertext,
-			String iv, java.util.List<String> mediaIds, boolean mediaSpoiler, String replyToId) {
+			String iv, String encryptedKeys, java.util.List<String> mediaIds, boolean mediaSpoiler, String replyToId) {
 		ageGate.requireCanWrite(senderId);
 		sanctionGate.requireNotRestricted(senderId);
 		userRateLimiter.require(senderId, UserRateLimiter.SEND_MESSAGE);
@@ -299,9 +299,15 @@ public class MessagingService {
 		}
 		java.util.List<String> midias = mediaIds == null ? java.util.List.of()
 			: mediaIds.stream().filter(v -> v != null && !v.isBlank()).map(String::trim).distinct().toList();
+		if (encryptedKeys != null && encryptedKeys.length() > 16000) {
+			throw new ApiException(400, "ENCRYPTED_KEYS_TOO_LONG", "Chaves cifradas excedem o tamanho maximo.");
+		}
 		String id = "message_" + UUID.randomUUID().toString().replace("-", "");
-		Message message = Message.createE2e(id, conversationId, senderId, ciphertext, iv, midias, mediaSpoiler,
-			replyToId, nextMessageInstant(conversationId));
+		Message message = encryptedKeys != null
+			? Message.createE2ePerMessage(id, conversationId, senderId, ciphertext, iv, encryptedKeys,
+				midias, mediaSpoiler, replyToId, nextMessageInstant(conversationId))
+			: Message.createE2e(id, conversationId, senderId, ciphertext, iv, midias, mediaSpoiler,
+				replyToId, nextMessageInstant(conversationId));
 		repository.saveMessage(message);
 		repository.markRead(conversationId, senderId, clock.instant());
 		notificationService.markReadByHref(senderId, conversationHref(conversationId));
@@ -515,13 +521,14 @@ public class MessagingService {
 	}
 
 	/** {@code from} is the sender's account id: the inbox marks the viewer's own last message. */
-	public record LastMessagePreview(String text, boolean e2e, String iv, java.time.Instant time, String from) {
-		static final LastMessagePreview EMPTY = new LastMessagePreview(null, false, null, null, null);
+	public record LastMessagePreview(String text, boolean e2e, String iv, String encryptedKeys,
+			java.time.Instant time, String from) {
+		static final LastMessagePreview EMPTY = new LastMessagePreview(null, false, null, null, null, null);
 	}
 
 	public LastMessagePreview getLastMessagePreview(String conversationId) {
 		return repository.findLastMessage(conversationId)
-			.map(m -> new LastMessagePreview(m.text(), m.e2e(), m.iv(), m.createdAt(), m.senderId()))
+			.map(m -> new LastMessagePreview(m.text(), m.e2e(), m.iv(), m.encryptedKeys(), m.createdAt(), m.senderId()))
 			.orElse(LastMessagePreview.EMPTY);
 	}
 

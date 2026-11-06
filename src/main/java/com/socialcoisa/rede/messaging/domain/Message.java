@@ -13,6 +13,7 @@ public class Message {
 	private final boolean mediaSpoiler;
 	private final boolean e2e;
 	private final String iv;
+	private String encryptedKeys;
 	private final String replyToId;
 	private final Instant createdAt;
 
@@ -78,6 +79,13 @@ public class Message {
 		return new Message(id, conversationId, senderId, ciphertext, mediaIds, now, mediaSpoiler, true, iv, replyToId);
 	}
 
+	public static Message createE2ePerMessage(String id, String conversationId, String senderId, String ciphertext,
+			String iv, String encryptedKeys, List<String> mediaIds, boolean mediaSpoiler, String replyToId, Instant now) {
+		Message msg = new Message(id, conversationId, senderId, ciphertext, mediaIds, now, mediaSpoiler, true, iv, replyToId);
+		msg.encryptedKeys = encryptedKeys;
+		return msg;
+	}
+
 	public static Message restoreE2e(String id, String conversationId, String senderId, String ciphertext,
 			String iv, List<String> mediaIds, boolean mediaSpoiler, Instant createdAt) {
 		return new Message(id, conversationId, senderId, ciphertext, mediaIds, createdAt, mediaSpoiler, true, iv, null);
@@ -86,6 +94,13 @@ public class Message {
 	public static Message restoreE2e(String id, String conversationId, String senderId, String ciphertext,
 			String iv, List<String> mediaIds, boolean mediaSpoiler, String replyToId, Instant createdAt) {
 		return new Message(id, conversationId, senderId, ciphertext, mediaIds, createdAt, mediaSpoiler, true, iv, replyToId);
+	}
+
+	public static Message restoreE2e(String id, String conversationId, String senderId, String ciphertext,
+			String iv, String encryptedKeys, List<String> mediaIds, boolean mediaSpoiler, String replyToId, Instant createdAt) {
+		Message msg = new Message(id, conversationId, senderId, ciphertext, mediaIds, createdAt, mediaSpoiler, true, iv, replyToId);
+		msg.encryptedKeys = encryptedKeys;
+		return msg;
 	}
 
 	public String id() { return id; }
@@ -104,6 +119,9 @@ public class Message {
 	public boolean e2e() { return e2e; }
 
 	public String iv() { return iv; }
+
+	/** Chaves AES cifradas por participante (JSON). Null em mensagens antigas (conversation key). */
+	public String encryptedKeys() { return encryptedKeys; }
 
 	public String replyToId() { return replyToId; }
 

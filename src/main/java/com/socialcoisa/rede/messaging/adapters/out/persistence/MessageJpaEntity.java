@@ -40,6 +40,9 @@ class MessageJpaEntity {
 	@Column(length = 44)
 	private String iv;
 
+	@Column(name = "encrypted_keys", columnDefinition = "TEXT")
+	private String encryptedKeys;
+
 	@Column(name = "reply_to_id")
 	private String replyToId;
 
@@ -59,6 +62,7 @@ class MessageJpaEntity {
 		e.mediaSpoiler = message.mediaSpoiler();
 		e.e2e = message.e2e();
 		e.iv = message.iv();
+		e.encryptedKeys = message.encryptedKeys();
 		e.replyToId = message.replyToId();
 		e.createdAt = message.createdAt();
 		return e;
@@ -69,7 +73,7 @@ class MessageJpaEntity {
 			? List.of()
 			: Arrays.stream(mediaIds.split(",")).map(String::trim).filter(v -> !v.isEmpty()).toList();
 		if (e2e) {
-			return Message.restoreE2e(id, conversationId, senderId, text, iv, media, mediaSpoiler, replyToId, createdAt);
+			return Message.restoreE2e(id, conversationId, senderId, text, iv, encryptedKeys, media, mediaSpoiler, replyToId, createdAt);
 		}
 		return Message.restore(id, conversationId, senderId, text, media, mediaSpoiler, replyToId, createdAt);
 	}

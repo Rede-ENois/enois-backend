@@ -42,17 +42,10 @@ class ExternalJobImportServiceTests {
 						// Some feeds send HTML-escaped text.
 						new ExternalJob("ext-3", "Dev &amp; Ops", "hims &#038; hers", "Remoto", null, null, null,
 							"https://exemplo.test/vaga/3", "https://exemplo.test/vaga/3", name(), null),
-						// Agregador manda a lista de paises inteira no campo de localizacao: mais
-						// caracteres do que a coluna aceita.
-						new ExternalJob("ext-4", "Vaga Global", "Empresa Y", "Argentina, Australia, Austria, "
-							+ "Belgium, Brazil, Bulgaria, Canada, China, Colombia, Croatia, Czechia, Denmark, "
-							+ "Egypt, Estonia, Finland, France, Germany, Greece, Hungary, Iceland, India, "
-							+ "Indonesia, Ireland, Israel, Italy, Japan, Kenya, Latvia, Lithuania, Luxembourg, "
-							+ "Malaysia, Mexico, Netherlands, New Zealand, Nigeria, Norway, Pakistan, Peru, "
-							+ "Philippines, Poland, Portugal, Romania, Serbia, Singapore, Slovakia, Slovenia, "
-							+ "South Africa, Spain, Sweden, Switzerland, Thailand, Turkey, Ukraine, Vietnam",
-							null, null, null, "https://exemplo.test/vaga/4", "https://exemplo.test/vaga/4",
-							name(), null));
+						// Remote jobs listing every country: longer than the location column.
+						new ExternalJob("ext-4", "Vaga Global", "Empresa Y", "Argentina, Brazil, Canada, ".repeat(20),
+							null, null, null, "https://exemplo.test/vaga/4", "https://exemplo.test/vaga/4", name(),
+							null));
 				}
 			};
 		}
@@ -66,7 +59,7 @@ class ExternalJobImportServiceTests {
 
 	@Test
 	void importsIntoItsOwnTableAndDoesNotDuplicateOnRerun() {
-		assertThat(importService.refresh()).isGreaterThanOrEqualTo(3);
+		assertThat(importService.refresh()).isGreaterThanOrEqualTo(4);
 
 		var imported = repository.findBySource("StubSource", "ext-1");
 		assertThat(imported).isPresent();
@@ -84,20 +77,21 @@ class ExternalJobImportServiceTests {
 	}
 
 	@Test
-	void localizacaoMaiorQueAColunaNaoDerrubaOLote() {
-		importService.refresh();
-
-		var job = repository.findBySource("StubSource", "ext-4").orElseThrow();
-		assertThat(job.location()).hasSize(255);
-		assertThat(job.location()).startsWith("Argentina, Australia");
-	}
-
-	@Test
 	void storesTheTextAsPeopleReadIt() {
 		importService.refresh();
 
 		var job = repository.findBySource("StubSource", "ext-3").orElseThrow();
 		assertThat(job.company()).isEqualTo("hims & hers");
 		assertThat(job.title()).isEqualTo("Dev & Ops");
+	}
+
+	@Test
+	void oversizedFeedTextIsCutToTheColumnInsteadOfFailingTheChunk() {
+		importService.refresh();
+
+		var job = repository.findBySource("StubSource", "ext-4").orElseThrow();
+		assertThat(job.location()).hasSizeLessThanOrEqualTo(ExternalJobImportService.TEXT_MAX)
+			.startsWith("Argentina, Brazil").endsWith("…");
+		assertThat(repository.findBySource("StubSource", "ext-1")).isPresent();
 	}
 }

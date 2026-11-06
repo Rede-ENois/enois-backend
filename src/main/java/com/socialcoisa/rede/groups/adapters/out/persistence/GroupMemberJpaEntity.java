@@ -49,6 +49,14 @@ class GroupMemberJpaEntity {
 		return GroupMember.restore(groupId, userId, role, joinedAt);
 	}
 
+	String groupId() {
+		return groupId;
+	}
+
+	String userId() {
+		return userId;
+	}
+
 	void changeRole(GroupRole newRole) {
 		this.role = newRole;
 	}

@@ -13,7 +13,7 @@ public interface PostRepostRepository {
 	void delete(String userId, String postId);
 
 	boolean exists(String userId, String postId);
-	
+
 	List<String> findPostIdsByUserId(String userId, int limit);
 
 	/** Reposts de um user com data, paginados pelo created_at do repost (nao do post original). */

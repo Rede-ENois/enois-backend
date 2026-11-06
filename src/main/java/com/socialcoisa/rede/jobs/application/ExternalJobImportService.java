@@ -25,23 +25,6 @@ public class ExternalJobImportService {
 	/** Tamanho do lote: transacao curta por bloco, em vez de uma transacao de milhares de linhas. */
 	private static final int BATCH_SIZE = 200;
 
-	// Teto de cada coluna de `external_jobs`. A fonte externa nao respeita o nosso esquema: o campo
-	// de localizacao de um agregador chega com a lista de paises inteira (centenas de caracteres) e
-	// um unico valor grande derrubava o lote inteiro na gravacao.
-	private static final int MAX_TITULO = 500;
-
-	private static final int MAX_TEXTO_CURTO = 255;
-
-	private static final int MAX_URL = 1000;
-
-	private static final int MAX_EMAIL = 320;
-
-	private static final int MAX_DESCRICAO = 5000;
-
-	private static final int MAX_SALARIO = 50;
-
-	private static final int MAX_PERIODO = 20;
-
 	private final List<JobImportSource> sources;
 	private final ExternalJobRepository repository;
 	private final Clock clock;
@@ -83,6 +66,10 @@ public class ExternalJobImportService {
 		return touched;
 	}
 
+	/** Column sizes of external_jobs (V40): title 500, the other free-text columns 255. */
+	static final int TITLE_MAX = 500;
+	static final int TEXT_MAX = 255;
+
 	private int saveChunk(String platform, List<JobImportSource.ExternalJob> chunk) {
 		int saved = 0;
 		for (JobImportSource.ExternalJob external : chunk) {
@@ -91,23 +78,22 @@ public class ExternalJobImportService {
 			}
 			// Some feeds send HTML-escaped text ("hims &#038; hers"): store it as people read it. A job
 			// already imported escaped heals on the next run (same source = upsert below).
-			String title = fit(org.springframework.web.util.HtmlUtils.htmlUnescape(external.title()), MAX_TITULO);
+			String title = fit(org.springframework.web.util.HtmlUtils.htmlUnescape(external.title()), TITLE_MAX);
 			String company = external.company() == null ? null
-				: fit(org.springframework.web.util.HtmlUtils.htmlUnescape(external.company()), MAX_TEXTO_CURTO);
-			String location = fit(external.location(), MAX_TEXTO_CURTO);
-			String salary = fit(external.salary(), MAX_TEXTO_CURTO);
-			String url = fit(external.url(), MAX_URL);
-			String canonicalUrl = fit(com.socialcoisa.rede.jobs.domain.UrlCanonicalizer
-				.canonicalize(external.url()), MAX_URL);
+				: fit(org.springframework.web.util.HtmlUtils.htmlUnescape(external.company()), TEXT_MAX);
+			String location = fit(external.location(), TEXT_MAX);
+			String salary = fit(external.salary(), TEXT_MAX);
+			String canonicalUrl = com.socialcoisa.rede.jobs.domain.UrlCanonicalizer
+				.canonicalize(external.url());
 			// E-mail de candidatura: sai da descricao que a propria fonte publica (nulo quando nao ha).
-			String applyEmail = fit(ExternalJob.extractApplyEmail(external.description()), MAX_EMAIL);
+			String applyEmail = ExternalJob.extractApplyEmail(external.description());
 			var sameSource = repository.findBySource(platform, external.externalId());
 			if (sameSource.isPresent()) {
 				// Mesma fonte e mesmo id: atualiza os dados e a verificacao (upsert).
 				ExternalJob current = sameSource.get();
 				repository.save(new ExternalJob(current.id(), current.platform(), current.externalId(),
 					title, company, location, salary,
-					current.currency(), url, current.importedAt(), clock.instant(),
+					current.currency(), external.url(), current.importedAt(), clock.instant(),
 					ExternalJob.FOUND, canonicalUrl, applyEmail, current.submittedBy(), current.description(),
 					current.salaryMin(), current.salaryMax(), current.salaryPeriod(), current.salaryNotInformed()));
 				saved++;
@@ -135,7 +121,7 @@ public class ExternalJobImportService {
 			}
 			repository.save(new ExternalJob("ext_" + platform + "_" + external.externalId(), platform,
 				external.externalId(), title, company, location,
-				salary, null, url, clock.instant(), clock.instant(), ExternalJob.FOUND,
+				salary, null, external.url(), clock.instant(), clock.instant(), ExternalJob.FOUND,
 				canonicalUrl, applyEmail, null, null, null, null, null, false));
 			saved++;
 		}
@@ -143,13 +129,16 @@ public class ExternalJobImportService {
 	}
 
 	/**
-	 * O valor que cabe na coluna. Corte por code point: `substring` conta unidades UTF-16 e parte um
-	 * emoji ao meio, o que o banco recusaria de novo.
+	 * Feeds are not bound by our column sizes (a "location" listing every country of a remote job
+	 * reached 434 characters): an oversized value would fail the insert and roll back the whole chunk.
+	 * Cut at the column size instead; the full text is still at the source URL.
 	 */
-	private static String fit(String value, int max) {
+	static String fit(String value, int max) {
 		if (value == null || value.codePointCount(0, value.length()) <= max) {
 			return value;
 		}
-		return value.substring(0, value.offsetByCodePoints(0, max));
+		// Corte por code point: `substring` conta unidades UTF-16 e parte um emoji ao meio.
+		String cortado = value.substring(0, value.offsetByCodePoints(0, max - 1)).stripTrailing();
+		return cortado + "…";
 	}
 }
