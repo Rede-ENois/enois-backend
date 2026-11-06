@@ -16,6 +16,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
+import com.socialcoisa.rede.feed.application.port.out.ReaderPreferencesReader;
 import com.socialcoisa.rede.feed.domain.FeedTab;
 import com.socialcoisa.rede.feed.domain.UserId;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -24,6 +25,7 @@ import com.socialcoisa.rede.shared.web.ApiException;
 class TrendingCursorTests {
 
 	@Mock private PostRepository posts;
+	@Mock private ReaderPreferencesReader readerPreferences;
 	@InjectMocks private GetFeedService feed;
 
 	@Test
