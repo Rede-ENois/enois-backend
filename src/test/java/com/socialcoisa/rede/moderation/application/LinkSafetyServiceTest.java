@@ -85,7 +85,7 @@ class LinkSafetyServiceTest {
 	private LinkSafetyService servico(String vereditoDoModelo, boolean enabled) {
 		ModerationAiService ai = new ModerationAiService(null, (tipo, id) -> Optional.empty(),
 			(tipo, id, limite) -> List.of(), "https://provedor.invalido/v1", "chave-teste", "modelo-teste",
-			objectMapper);
+			objectMapper, 30);
 		LinkSafetyAnalyzer analyzer = new LinkSafetyAnalyzer(ai, objectMapper) {
 			@Override
 			public Optional<Verdict> analyze(PageSummary page) {

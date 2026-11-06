@@ -43,6 +43,18 @@ Resposta que não casa com o contrato esperado é tratada como inconclusiva, nun
 
 Recurso continua disponível pelo fluxo normal de penalidades.
 
+### Porta do upload (fail-open controlado)
+
+A mesma barreira tem uma porta de entrada: o upload (`MediaImageModerationService.verifyBeforeStorage`)
+roda antes do objeto chegar ao storage público. Nela só **bloqueia** o que a IA **confirma** como
+violação (`PROHIBITED` com confiança suficiente). Indisponibilidade do provedor, timeout, resposta
+inválida, imagem sem suporte ao analisador ou veredito inconclusivo **não** são veto: seguem o fluxo
+para as demais camadas de segurança (validações de arquivo, moderação de publicação, revisão
+humana). Falha técnica de classificação não é prova de conteúdo.
+
+A falha segura continua valendo na varredura: conteúdo inconclusivo vai para revisão humana, nunca é
+tratado como seguro nem como proibido.
+
 A ação é, nesta ordem: **remover a mídia de todas as publicações que a usam** (o mesmo arquivo pode
 estar em mais de uma), depois sancionar o dono e sanitizar o perfil. Se a remoção falhar, não há
 sanção — conteúdo no ar e conta banida seria o pior dos dois mundos.
@@ -65,6 +77,7 @@ Falha ao gravar o livro-caixa não bloqueia a barreira: a remoção acontece de 
 | `rede.moderation.media.initial-delay-ms` | `MODERATION_MEDIA_INITIAL_DELAY_MS` | `45000` |
 | `rede.moderation.media.sweep-batch` | `MODERATION_MEDIA_SWEEP_BATCH` | `25` |
 | `rede.moderation.media.lookback-hours` | `MODERATION_MEDIA_LOOKBACK_HOURS` | `72` |
+| `rede.moderation.media.ai-timeout-seconds` | `MODERATION_MEDIA_AI_TIMEOUT_SECONDS` | `30` |
 
 Sem `MODERATION_LLM_API_KEY` o classificador não responde e nada é removido automaticamente — a
 varredura segue rodando e registrando `NO_VERDICT`.

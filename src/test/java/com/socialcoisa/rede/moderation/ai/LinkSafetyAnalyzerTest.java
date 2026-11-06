@@ -19,7 +19,7 @@ class LinkSafetyAnalyzerTest {
 	private LinkSafetyAnalyzer analyzer(String apiKey) {
 		ModerationAiService ai = new ModerationAiService(null, (tipo, id) -> Optional.empty(),
 			(tipo, id, limite) -> java.util.List.of(), "https://provedor.invalido/v1", apiKey,
-			"modelo-teste", objectMapper);
+			"modelo-teste", objectMapper, 30);
 		return new LinkSafetyAnalyzer(ai, objectMapper);
 	}
 

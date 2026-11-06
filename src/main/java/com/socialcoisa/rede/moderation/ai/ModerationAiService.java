@@ -41,13 +41,14 @@ public class ModerationAiService {
 	private final ReportedContentReader contentReader;
 	private final com.socialcoisa.rede.moderation.application.port.out.ReportedMediaReader mediaReader;
 	private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+	private final long aiTimeoutSeconds;
 
 	public ModerationAiService(ReportRepository reportRepository, ReportedContentReader contentReader,
 			com.socialcoisa.rede.moderation.application.port.out.ReportedMediaReader mediaReader,
 			@Value("${rede.moderation.llm.base-url:https://infer.flatt.com.br/v1}") String baseUrl,
 			@Value("${rede.moderation.llm.api-key:}") String apiKey,
-			@Value("${rede.moderation.llm.model:qwen3.8-27b}") String model,
-			ObjectMapper objectMapper) {
+			@Value("${rede.moderation.llm.model:qwen3.8-27b}") String model, ObjectMapper objectMapper,
+			@Value("${rede.moderation.media.ai-timeout-seconds:30}") long aiTimeoutSeconds) {
 		this.reportRepository = reportRepository;
 		this.contentReader = contentReader;
 		this.mediaReader = mediaReader;
@@ -55,6 +56,7 @@ public class ModerationAiService {
 		this.apiKey = apiKey;
 		this.model = model;
 		this.objectMapper = objectMapper;
+		this.aiTimeoutSeconds = aiTimeoutSeconds;
 	}
 
 	public boolean available() {
@@ -235,7 +237,7 @@ public class ModerationAiService {
 					java.util.Map.of("role", "user", "content", userContent)),
 				"temperature", 0.1));
 			HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/chat/completions"))
-				.timeout(Duration.ofSeconds(30))
+				.timeout(Duration.ofSeconds(aiTimeoutSeconds))
 				.header("Content-Type", "application/json")
 				// O endpoint fica atras de Cloudflare: UA de biblioteca (java-http-client) pode
 				// apanhar o bloqueio de assinatura (error 1010) — UA proprio evita.
