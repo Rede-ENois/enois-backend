@@ -19,13 +19,13 @@ import org.junit.jupiter.api.Test;
 class MediaMetadataSanitizerTests {
 
 	private final MediaMetadataSanitizer sanitizer = new MediaMetadataSanitizer("ffmpeg",
-		new MediaTemporaryFiles("", "/app/data/monitoring"));
+		new MediaTemporaryFiles("", MediaTemporaryFiles.DEFAULT_DATA_DIR));
 
 	@Test
 	void largeVideoKeepsTheOriginalWhenFfmpegCannotRun() throws Exception {
 		// ffmpeg ausente/nao executavel: a limpeza e melhor-esforco, o upload segue com o original.
 		var semFfmpeg = new MediaMetadataSanitizer("ffmpeg-que-nao-existe-neste-host",
-			new MediaTemporaryFiles("", "/app/data/monitoring"));
+			new MediaTemporaryFiles("", MediaTemporaryFiles.DEFAULT_DATA_DIR));
 		byte[] video = "ftypisom-corpo-de-video".getBytes(StandardCharsets.UTF_8);
 
 		java.nio.file.Path resultado = semFfmpeg.sanitizeToFile(new java.io.ByteArrayInputStream(video),

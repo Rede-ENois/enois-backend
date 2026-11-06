@@ -34,7 +34,7 @@ class MediaTemporaryFilesTests {
 		Files.createDirectory(semTmp.resolve("arquivo"));
 		System.setProperty("java.io.tmpdir", semTmp.resolve("arquivo").resolve("nao-existe").toString());
 
-		var arquivos = new MediaTemporaryFiles("", dados.resolve("monitoring").toString());
+		var arquivos = new MediaTemporaryFiles("", dados.toString());
 		Path criado = arquivos.create("media-raw-", ".mp4");
 		try {
 			assertThat(criado.getParent()).isEqualTo(dados);
@@ -51,7 +51,7 @@ class MediaTemporaryFilesTests {
 		Path configurada = Files.createTempDirectory("temp-de-midia-");
 		Path dados = Files.createTempDirectory("dados-do-pod-");
 
-		var arquivos = new MediaTemporaryFiles(configurada.toString(), dados.resolve("monitoring").toString());
+		var arquivos = new MediaTemporaryFiles(configurada.toString(), dados.toString());
 		Path criado = arquivos.create("media-clean-", ".mp4");
 		try {
 			assertThat(criado.getParent()).isEqualTo(configurada);

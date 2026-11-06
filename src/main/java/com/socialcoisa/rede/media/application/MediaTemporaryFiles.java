@@ -19,24 +19,31 @@ import org.springframework.stereotype.Component;
  * MB. Quando isso acontece o upload morre com erro genérico, sem dizer que o problema é o
  * temporário.</p>
  *
- * <p>A ordem é: `rede.media.temp-dir` (quando configurado), a pasta de dados do pod (a mesma do
- * monitoramento, que já é gravável em produção) e, por último, o `java.io.tmpdir` do processo, que
- * entra como `File(System.getProperty("java.io.tmpdir", "/tmp"))` — `Path.of` (e `Files.*`) recusam
- * caminho relativo, e o `createTempFile` do JDK trata valor ausente como `/tmp`. A primeira pasta
- * que aceitar a criação do arquivo vence; se nenhuma aceitar, o erro diz quais foram tentadas.</p>
+ * <p>A ordem é: `rede.media.temp-dir` (quando configurado), a pasta de dados da aplicação (o volume
+ * gravável em produção) e, por último, o `java.io.tmpdir` do processo. A primeira que aceitar a
+ * criação do arquivo vence; se nenhuma aceitar, o erro diz quais foram tentadas.</p>
+ *
+ * <p>O `java.io.tmpdir` é lido do sistema a cada chamada, e não por `@Value`: o valor do processo
+ * pode mudar em tempo de execução, e um placeholder que não resolve derrubaria o contexto inteiro.</p>
  */
 @Component
 public class MediaTemporaryFiles {
 
 	private static final Logger LOG = LoggerFactory.getLogger(MediaTemporaryFiles.class);
 
+	/** Pasta de dados da aplicação: o volume gravável do pod (o mesmo que guarda o modelo ONNX). */
+	static final String DEFAULT_DATA_DIR = "/app/data";
+
 	private final String configuredDir;
 	private final String dataDir;
 
-	public MediaTemporaryFiles(@Value("${rede.media.temp-dir:}") String configuredDir,
-			@Value("${rede.monitoring.file-dir:/app/data/monitoring}") String monitoringDir) {
+	public MediaTemporaryFiles(@Value("${rede.media.temp-dir:}") String configuredDir) {
+		this(configuredDir, DEFAULT_DATA_DIR);
+	}
+
+	MediaTemporaryFiles(String configuredDir, String dataDir) {
 		this.configuredDir = configuredDir == null ? "" : configuredDir.trim();
-		this.dataDir = parentOf(monitoringDir);
+		this.dataDir = dataDir == null ? "" : dataDir.trim();
 	}
 
 	/**
@@ -58,7 +65,7 @@ public class MediaTemporaryFiles {
 		for (String candidato : candidates()) {
 			tentados.add(candidato);
 			try {
-				// Mantém a mesma tolerância do `createTempFile` do JDK: valor ausente cai em `/tmp`.
+				// `File` (e não `Path.of`) tolera caminho relativo, como o `createTempFile` do JDK.
 				Path dir = new java.io.File(candidato).toPath();
 				Files.createDirectories(dir);
 				return Files.createTempFile(dir, prefix, suffix);
@@ -81,7 +88,6 @@ public class MediaTemporaryFiles {
 		if (!dataDir.isEmpty() && !dirs.contains(dataDir)) {
 			dirs.add(dataDir);
 		}
-		// Lido a cada chamada: o valor do processo pode mudar (e o teste aponta para um caminho ruim).
 		String tmp = System.getProperty("java.io.tmpdir");
 		if (tmp == null || tmp.isBlank()) {
 			tmp = "/tmp";
@@ -90,13 +96,5 @@ public class MediaTemporaryFiles {
 			dirs.add(tmp);
 		}
 		return dirs;
-	}
-
-	private static String parentOf(String monitoringDir) {
-		if (monitoringDir == null || monitoringDir.isBlank()) {
-			return "";
-		}
-		Path parent = new java.io.File(monitoringDir.trim()).toPath().getParent();
-		return parent == null ? "" : parent.toString();
 	}
 }
