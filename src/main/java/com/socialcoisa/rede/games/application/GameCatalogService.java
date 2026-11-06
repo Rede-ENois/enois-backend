@@ -1,9 +1,8 @@
 package com.socialcoisa.rede.games.application;
 
 import java.time.Clock;
-import java.time.Duration;
-import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,14 +42,16 @@ public class GameCatalogService {
 	private final GameUpdateRepository updates;
 	private final GameFavoriteRepository favorites;
 	private final GameEventRepository events;
+	private final TrendingGameTallies trending;
 	private final Clock clock;
 
 	public GameCatalogService(GameRepository games, GameUpdateRepository updates, GameFavoriteRepository favorites,
-			GameEventRepository events, Clock clock) {
+			GameEventRepository events, TrendingGameTallies trending, Clock clock) {
 		this.games = games;
 		this.updates = updates;
 		this.favorites = favorites;
 		this.events = events;
+		this.trending = trending;
 		this.clock = clock;
 	}
 
@@ -135,12 +136,17 @@ public class GameCatalogService {
 	@Transactional(readOnly = true)
 	public List<TrendingGame> trendingToday(int limit) {
 		int size = Math.max(1, Math.min(limit, MAX_TRENDING));
-		Instant since = clock.instant().minus(Duration.ofHours(24));
+		List<GameTally> tallies = trending.lastDay();
+		Map<String, Game> published = new HashMap<>();
+		games.findAllByIds(tallies.stream().map(GameTally::gameId).toList()).stream()
+			.filter(game -> game.status() == GameStatus.PUBLISHED)
+			.forEach(game -> published.put(game.id(), game));
 		List<TrendingGame> ranked = new ArrayList<>();
-		for (GameTally tally : events.mostPlayedSince(GameEventKind.PLAY_START, since, size * 2)) {
-			games.findById(tally.gameId())
-				.filter(game -> game.status() == GameStatus.PUBLISHED)
-				.ifPresent(game -> ranked.add(new TrendingGame(game, tally.plays(), tally.players())));
+		for (GameTally tally : tallies) {
+			Game game = published.get(tally.gameId());
+			if (game != null) {
+				ranked.add(new TrendingGame(game, tally.plays(), tally.players()));
+			}
 			if (ranked.size() == size) {
 				break;
 			}

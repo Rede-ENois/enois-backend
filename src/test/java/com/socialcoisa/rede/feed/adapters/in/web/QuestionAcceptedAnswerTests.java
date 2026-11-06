@@ -1,9 +1,11 @@
 package com.socialcoisa.rede.feed.adapters.in.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -18,6 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,6 +29,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -58,6 +62,13 @@ class QuestionAcceptedAnswerTests {
 	@MockitoSpyBean
 	private CoinService coins;
 
+	/**
+	 * Presence runs on its own executor and calls back into the CoinService spy. Inline here so no
+	 * background thread touches the spy while a test is stubbing it.
+	 */
+	@MockitoBean(name = "presenceExecutor")
+	private ExecutorService presenceExecutor;
+
 	@Autowired
 	private BanCleanupService banCleanup;
 
@@ -69,6 +80,10 @@ class QuestionAcceptedAnswerTests {
 	@BeforeEach
 	void setUp() {
 		auth = new TestAuthHelper(mockMvc, objectMapper);
+		doAnswer(invocation -> {
+			invocation.<Runnable>getArgument(0).run();
+			return null;
+		}).when(presenceExecutor).execute(any());
 	}
 
 	@Test

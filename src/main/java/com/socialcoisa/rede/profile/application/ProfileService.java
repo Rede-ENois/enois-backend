@@ -121,6 +121,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 			key = "'i:' + #userId", sync = true)
 	public UserProfileView getById(String userId) {
 		UserProfile profile = repository.findById(userId)
+			.filter(found -> !sanctionGate.banned(found.id()))
 			.map(this::populateCounts)
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
 		return UserProfileView.from(profile).withBioHtml(profile.bioHtml()).withBannerHtml(profile.bannerHtml());

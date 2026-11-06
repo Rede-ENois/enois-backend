@@ -44,8 +44,11 @@ public class ServiceOfferService {
 	private final GameUrlGuard urlGuard;
 	private final java.time.Clock clock;
 
+	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
+
 	public ServiceOfferService(ServiceOfferRepository repository, UserProfileRepository profiles,
-			GameUrlGuard urlGuard, java.time.Clock clock) {
+			GameUrlGuard urlGuard, com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate, java.time.Clock clock) {
+		this.sanctionGate = sanctionGate;
 		this.repository = repository;
 		this.profiles = profiles;
 		this.urlGuard = urlGuard;
@@ -97,6 +100,7 @@ public class ServiceOfferService {
 	public Optional<ServiceOffer> byUserAndSlug(String username, String slug, String viewerId) {
 		String userId = profiles.findByUsername(username)
 			.map(UserProfile::id)
+			.filter(id -> !sanctionGate.banned(id))
 			.orElseThrow(() -> new ApiException(404, "SERVICE_NOT_FOUND", "Serviço não encontrado."));
 		return repository.findByUserIdAndSlug(userId, slug)
 			.filter(offer -> offer.status() == ServiceStatus.PUBLISHED

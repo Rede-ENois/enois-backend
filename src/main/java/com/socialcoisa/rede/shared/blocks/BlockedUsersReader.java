@@ -14,8 +14,21 @@ public interface BlockedUsersReader {
 	/** Ids que nao devem aparecer para este usuario. Vazio quando nao ha sessao nem bloqueios. */
 	Set<String> hiddenIdsFor(String userId);
 
+	/** A block between the two, in either direction (mutes do not count). */
+	boolean blockedBetween(String userA, String userB);
+
 	/** Implementacao neutra para quem precisa do tipo sem depender do modulo de rede. */
 	static BlockedUsersReader none() {
-		return userId -> Collections.emptySet();
+		return new BlockedUsersReader() {
+			@Override
+			public Set<String> hiddenIdsFor(String userId) {
+				return Collections.emptySet();
+			}
+
+			@Override
+			public boolean blockedBetween(String userA, String userB) {
+				return false;
+			}
+		};
 	}
 }

@@ -2,6 +2,7 @@ package com.socialcoisa.rede.groups.domain;
 
 import java.text.Normalizer;
 import java.util.Locale;
+import java.util.Set;
 
 /**
  * O endereço do grupo a partir do nome.
@@ -16,7 +17,18 @@ public final class GroupSlug {
 	private static final int MAX_LENGTH = 80;
 	private static final String FALLBACK = "grupo";
 
+	/**
+	 * Palavras que são rotas fixas em {@code /groups/{slugOrId}}: um grupo com esse endereço ficaria
+	 * escondido atrás da rota (o grupo chamado "Mine" virava a lista pessoal de quem abrisse).
+	 */
+	private static final Set<String> RESERVED = Set.of("mine");
+
 	private GroupSlug() {
+	}
+
+	/** O endereço colide com uma rota fixa e precisa de sufixo. */
+	public static boolean isReserved(String slug) {
+		return RESERVED.contains(slug);
 	}
 
 	public static String from(String name) {

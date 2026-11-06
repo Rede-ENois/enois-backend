@@ -18,12 +18,14 @@ public class RecommendationService {
 	private final RecommendationRepository repository;
 	private final com.socialcoisa.rede.shared.security.ActionThrottle actionThrottle;
 	private final int recommendationsPerDay;
+	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
 	private final Clock clock;
 
 	public RecommendationService(RecommendationRepository repository,
 			com.socialcoisa.rede.shared.security.ActionThrottle actionThrottle,
 			@org.springframework.beans.factory.annotation.Value("${rede.profile.recommendations-per-day:20}") int recommendationsPerDay,
-			Clock clock) {
+			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate, Clock clock) {
+		this.sanctionGate = sanctionGate;
 		this.repository = repository;
 		this.actionThrottle = actionThrottle;
 		this.recommendationsPerDay = recommendationsPerDay;
@@ -60,12 +62,25 @@ public class RecommendationService {
 
 	@Transactional(readOnly = true)
 	public List<Recommendation> listReceived(String userId) {
-		return repository.findByRecommendedId(userId);
+		return visible(userId, repository.findByRecommendedId(userId), Recommendation::recommenderId);
 	}
 
 	@Transactional(readOnly = true)
 	public List<Recommendation> listGiven(String userId) {
-		return repository.findByRecommenderId(userId);
+		return visible(userId, repository.findByRecommenderId(userId), Recommendation::recommendedId);
+	}
+
+	/**
+	 * Public read of someone's recommendations: a banned account has no public page, and a banned
+	 * account on the other side of a recommendation is left out (same rule as the profile read).
+	 */
+	private List<Recommendation> visible(String userId, List<Recommendation> recommendations,
+			java.util.function.Function<Recommendation, String> otherSide) {
+		if (sanctionGate.banned(userId)) {
+			throw new com.socialcoisa.rede.shared.web.ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado.");
+		}
+		java.util.Set<String> banned = sanctionGate.bannedAmong(recommendations.stream().map(otherSide).toList());
+		return recommendations.stream().filter(item -> !banned.contains(otherSide.apply(item))).toList();
 	}
 
 	@Transactional(readOnly = true)
