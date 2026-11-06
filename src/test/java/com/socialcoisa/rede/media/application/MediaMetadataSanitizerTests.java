@@ -1,6 +1,8 @@
 package com.socialcoisa.rede.media.application;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.awt.image.BufferedImage;
@@ -18,14 +20,12 @@ import org.junit.jupiter.api.Test;
 /** A limpeza de metadados na escrita/leitura não pode deixar EXIF/texto/autor no arquivo. */
 class MediaMetadataSanitizerTests {
 
-	private final MediaMetadataSanitizer sanitizer = new MediaMetadataSanitizer("ffmpeg",
-		new MediaTemporaryFiles("", MediaTemporaryFiles.DEFAULT_DATA_DIR));
+	private final MediaMetadataSanitizer sanitizer = sanitizer("ffmpeg", temporarios());
 
 	@Test
 	void largeVideoKeepsTheOriginalWhenFfmpegCannotRun() throws Exception {
 		// ffmpeg ausente/nao executavel: a limpeza e melhor-esforco, o upload segue com o original.
-		var semFfmpeg = new MediaMetadataSanitizer("ffmpeg-que-nao-existe-neste-host",
-			new MediaTemporaryFiles("", MediaTemporaryFiles.DEFAULT_DATA_DIR));
+		var semFfmpeg = sanitizer("ffmpeg-que-nao-existe-neste-host", temporarios());
 		byte[] video = "ftypisom-corpo-de-video".getBytes(StandardCharsets.UTF_8);
 
 		java.nio.file.Path resultado = semFfmpeg.sanitizeToFile(new java.io.ByteArrayInputStream(video),
@@ -36,6 +36,20 @@ class MediaMetadataSanitizerTests {
 		finally {
 			java.nio.file.Files.deleteIfExists(resultado);
 		}
+	}
+
+	@Test
+	void videoSemPastaTemporariaNaoSobeComOsMetadados() {
+		// Sem onde gravar o temporario, o video pequeno nao pode voltar "como veio": isso publicaria
+		// os metadados que a limpeza existe para tirar.
+		var semPasta = sanitizer("ffmpeg", new MediaTemporaryFiles("/dev/null/nao-e-pasta", "/dev/null/nao-e-dados",
+			"/dev/null/nao-e-tmp", null));
+		byte[] video = "ftypisom-corpo-de-video".getBytes(StandardCharsets.UTF_8);
+
+		MediaTemporaryFiles.UnavailableException failure = assertThrows(
+			MediaTemporaryFiles.UnavailableException.class,
+			() -> semPasta.sanitize(video, "video/mp4", "uploads/media_x/file.mp4"));
+		assertSame(MediaTemporaryFiles.UnavailableException.class, failure.getClass());
 	}
 
 	@Test
@@ -70,6 +84,15 @@ class MediaMetadataSanitizerTests {
 			String author = document.getDocumentInformation().getAuthor();
 			assertTrue(author == null || author.isBlank());
 		}
+	}
+
+	private static MediaTemporaryFiles temporarios() {
+		return new MediaTemporaryFiles("", MediaTemporaryFiles.DEFAULT_DATA_DIR, System.getProperty("java.io.tmpdir"),
+			System.getProperty("user.dir"));
+	}
+
+	private static MediaMetadataSanitizer sanitizer(String ffmpegPath, MediaTemporaryFiles temporarios) {
+		return new MediaMetadataSanitizer(ffmpegPath, temporarios);
 	}
 
 	/** Insere um chunk tEXt válido antes do IEND (mesmo CRC) para provar que ele some. */

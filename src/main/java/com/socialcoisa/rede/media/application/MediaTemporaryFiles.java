@@ -8,23 +8,21 @@ import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
  * Onde a limpeza de metadados grava o arquivo temporário de vídeo/áudio grande.
  *
- * <p>`Files.createTempFile` sozinho usa `java.io.tmpdir`, que no pod é o `/tmp` da imagem: um
- * diretório que pode não existir, não ser gravável ou não ter espaço para um vídeo de centenas de
- * MB. Quando isso acontece o upload morre com erro genérico, sem dizer que o problema é o
- * temporário.</p>
+ * <p>`Files.createTempFile` sozinho usa `java.io.tmpdir`, que pode ser um diretório que não existe,
+ * não é gravável ou não tem espaço para um vídeo de centenas de MB. Quando isso acontece o upload
+ * morre com erro genérico, sem dizer que o problema é o temporário.</p>
  *
- * <p>A ordem é: `rede.media.temp-dir` (quando configurado), a pasta de dados da aplicação (o volume
- * gravável em produção) e, por último, o `java.io.tmpdir` do processo. A primeira que aceitar a
- * criação do arquivo vence; se nenhuma aceitar, o erro diz quais foram tentadas.</p>
- *
- * <p>O `java.io.tmpdir` é lido do sistema a cada chamada, e não por `@Value`: o valor do processo
- * pode mudar em tempo de execução, e um placeholder que não resolve derrubaria o contexto inteiro.</p>
+ * <p>A ordem é: `rede.media.temp-dir` (quando configurado — ele precisa **existir**, para que um erro
+ * de deploy não vire uma pasta nova dentro do container), a pasta de dados da aplicação e, por
+ * último, o `java.io.tmpdir` do processo. As pastas são resolvidas uma vez, na criação do bean; a
+ * primeira que aceitar o arquivo vence. Se nenhuma aceitar, o erro diz quais foram tentadas.</p>
  */
 @Component
 public class MediaTemporaryFiles {
@@ -35,15 +33,20 @@ public class MediaTemporaryFiles {
 	static final String DEFAULT_DATA_DIR = "/app/data";
 
 	private final String configuredDir;
-	private final String dataDir;
+	private final List<String> candidates;
 
+	@Autowired
 	public MediaTemporaryFiles(@Value("${rede.media.temp-dir:}") String configuredDir) {
-		this(configuredDir, DEFAULT_DATA_DIR);
+		this(configuredDir, DEFAULT_DATA_DIR, System.getProperty("java.io.tmpdir"), System.getProperty("user.dir"));
 	}
 
-	MediaTemporaryFiles(String configuredDir, String dataDir) {
+	/**
+	 * Monta o resolvedor com as pastas explícitas, sem ler o sistema. É o que os testes usam para
+	 * exercitar cada caso sem mexer em `java.io.tmpdir`, que é estado global da JVM.
+	 */
+	public MediaTemporaryFiles(String configuredDir, String dataDir, String systemTmpDir, String workingDir) {
 		this.configuredDir = configuredDir == null ? "" : configuredDir.trim();
-		this.dataDir = dataDir == null ? "" : dataDir.trim();
+		this.candidates = candidatos(this.configuredDir, dataDir, systemTmpDir, workingDir);
 	}
 
 	/**
@@ -53,8 +56,16 @@ public class MediaTemporaryFiles {
 	 */
 	public static class UnavailableException extends IOException {
 
-		UnavailableException(String message, Throwable cause) {
-			super(message, cause);
+		private final List<String> dirs;
+
+		UnavailableException(List<String> dirs, Throwable cause) {
+			super("Nenhum diretorio temporario gravavel: " + String.join(", ", dirs), cause);
+			this.dirs = List.copyOf(dirs);
+		}
+
+		/** Os diretórios tentados, na ordem, para o log e para o teste. */
+		public List<String> dirs() {
+			return dirs;
 		}
 	}
 
@@ -62,13 +73,10 @@ public class MediaTemporaryFiles {
 	public Path create(String prefix, String suffix) throws IOException {
 		List<String> tentados = new ArrayList<>();
 		IOException ultima = null;
-		for (String candidato : candidates()) {
+		for (String candidato : candidates) {
 			tentados.add(candidato);
 			try {
-				// `File` (e não `Path.of`) tolera caminho relativo, como o `createTempFile` do JDK.
-				Path dir = new java.io.File(candidato).toPath();
-				Files.createDirectories(dir);
-				return Files.createTempFile(dir, prefix, suffix);
+				return Files.createTempFile(directory(candidato), prefix, suffix);
 			}
 			catch (IOException | RuntimeException failure) {
 				ultima = failure instanceof IOException io ? io
@@ -76,25 +84,40 @@ public class MediaTemporaryFiles {
 				LOG.warn("media_temp_dir_unusable dir={} error={}", candidato, failure.getClass().getSimpleName());
 			}
 		}
-		throw new UnavailableException("Nenhum diretorio temporario gravavel: " + String.join(", ", tentados),
-			ultima);
+		throw new UnavailableException(tentados, ultima);
 	}
 
-	private List<String> candidates() {
-		List<String> dirs = new ArrayList<>();
-		if (!configuredDir.isEmpty()) {
-			dirs.add(configuredDir);
+	private Path directory(String candidato) throws IOException {
+		// `File` (e não `Path.of`) tolera caminho relativo, que é como o JDK resolve `user.dir`.
+		Path dir = new java.io.File(candidato).toPath();
+		if (candidato.equals(configuredDir)) {
+			// Diretório explícito: existir é pré-requisito. Criar aqui transformaria um caminho
+			// errado em volume novo, e ninguém o acharia depois.
+			if (!Files.isDirectory(dir)) {
+				throw new IOException("diretorio configurado nao existe: " + candidato);
+			}
 		}
-		if (!dataDir.isEmpty() && !dirs.contains(dataDir)) {
+		else {
+			Files.createDirectories(dir);
+		}
+		return dir;
+	}
+
+	private static List<String> candidatos(String configured, String dataDir, String systemTmpDir, String workingDir) {
+		List<String> dirs = new ArrayList<>();
+		if (configured != null && !configured.isEmpty()) {
+			dirs.add(configured);
+		}
+		if (dataDir != null && !dataDir.isBlank() && !dirs.contains(dataDir)) {
 			dirs.add(dataDir);
 		}
-		String tmp = System.getProperty("java.io.tmpdir");
+		String tmp = systemTmpDir;
 		if (tmp == null || tmp.isBlank()) {
-			tmp = "/tmp";
+			tmp = workingDir == null || workingDir.isBlank() ? "/tmp" : workingDir;
 		}
 		if (!dirs.contains(tmp)) {
 			dirs.add(tmp);
 		}
-		return dirs;
+		return List.copyOf(dirs);
 	}
 }

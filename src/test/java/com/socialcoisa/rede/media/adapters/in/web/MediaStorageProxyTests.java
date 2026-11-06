@@ -340,38 +340,6 @@ class MediaStorageProxyTests {
 	}
 
 	/**
-	 * No pod o `/tmp` da imagem não aceita arquivo: o caminho de vídeo grande precisava de dois
-	 * temporários (`mkdir /tmp/tomcat...` no boot e `createTempFile` no envio) e a publicação de
-	 * qualquer vídeo acima de 40 MB morria com erro genérico. O temporário passa a morar na pasta
-	 * de dados da aplicação, que é o volume gravável. A pista do pod é reproduzida apontando o
-	 * `java.io.tmpdir` do processo para uma pasta que não existe (e não pode ser criada).
-	 */
-	@Test
-	void videoGrandeSobeComOTemporarioDaPastaDeDadosDoPod() throws Exception {
-		byte[] video = new byte[41 * 1024 * 1024];
-		String objectKey = assetDeVideoGrande("media_proxy_video_dados", "media-proxy-video-2b", video.length);
-		String token = auth.authenticate("media_proxy_video_dados").token();
-		java.nio.file.Path semTmp = java.nio.file.Files.createTempDirectory("pasta-sem-tmp-");
-		try {
-			java.nio.file.Files.createDirectory(semTmp.resolve("arquivo"));
-			System.setProperty("java.io.tmpdir", semTmp.resolve("arquivo").resolve("nao-existe").toString());
-
-			mockMvc.perform(put("/storage/" + objectKey)
-					.header("X-Session-Token", token)
-					.contentType("video/mp4")
-					.content(video))
-				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.status").value("STORED"));
-
-			assertThat(store().chaveEscrita).isEqualTo(objectKey);
-			assertThat(store().escrito).hasSize(video.length);
-		}
-		finally {
-			System.clearProperty("java.io.tmpdir");
-		}
-	}
-
-	/**
 	 * Arquivo do Enois num campo de imagem: a checagem de conteúdo recusa `video/mp4` com erro do
 	 * classificador e virava 500. Quem tentava trocar a foto por um vídeo lia "erro interno" em
 	 * vez do motivo — a resposta agora é 422 dizendo que o arquivo não pôde ser verificado.
@@ -493,32 +461,17 @@ class MediaStorageProxySemTemporarioTests {
 		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
 			.path("objectKey").asText();
 
-		// O último recurso do resolvedor é o `java.io.tmpdir`; aqui ele aponta para um arquivo comum,
-		// que não é pasta (e não `/dev/null`, onde escrever funciona e o teste passaria pelo motivo
-		// errado).
-		java.nio.file.Path arquivoNoLugarDaPasta = java.nio.file.Files.createTempFile("tmp-que-nao-e-pasta-", ".txt");
-		String tmpAnterior = System.getProperty("java.io.tmpdir");
-		System.setProperty("java.io.tmpdir", arquivoNoLugarDaPasta.toString());
-		try {
-			mockMvc.perform(put("/storage/" + objectKey)
-					.header("X-Session-Token", token)
-					.contentType("video/mp4")
-					.content(video))
-				.andExpect(status().isServiceUnavailable())
-				.andExpect(jsonPath("$.code").value("MEDIA_UPLOAD_UNAVAILABLE"))
-				.andExpect(jsonPath("$.message").value(
-					org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("/dev/null"))));
-			assertThat(((MediaStorageProxyTests.FakeObjectStore) store).chaveEscrita).isNotEqualTo(objectKey);
-		}
-		finally {
-			if (tmpAnterior == null) {
-				System.clearProperty("java.io.tmpdir");
-			}
-			else {
-				System.setProperty("java.io.tmpdir", tmpAnterior);
-			}
-			java.nio.file.Files.deleteIfExists(arquivoNoLugarDaPasta);
-		}
+		// O contexto deste teste injeta um resolvedor sem nenhuma pasta gravável (ver `SemTemporario`),
+		// então nada aqui mexe em `java.io.tmpdir`: a decisão entra pelo bean, não pelo processo.
+		mockMvc.perform(put("/storage/" + objectKey)
+				.header("X-Session-Token", token)
+				.contentType("video/mp4")
+				.content(video))
+			.andExpect(status().isServiceUnavailable())
+			.andExpect(jsonPath("$.code").value("MEDIA_UPLOAD_UNAVAILABLE"))
+			.andExpect(jsonPath("$.message").value(
+				org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("/dev/null"))));
+		assertThat(((MediaStorageProxyTests.FakeObjectStore) store).chaveEscrita).isNotEqualTo(objectKey);
 	}
 
 	@TestConfiguration
@@ -533,8 +486,10 @@ class MediaStorageProxySemTemporarioTests {
 		@Bean
 		@Primary
 		com.socialcoisa.rede.media.application.MediaTemporaryFiles semPastaGravavel() {
+			// Nenhuma das três pastas existe ou aceita arquivo: o tmp do processo é um arquivo comum
+			// (não `/dev/null`, onde escrever funciona e o teste passaria pelo motivo errado).
 			return new com.socialcoisa.rede.media.application.MediaTemporaryFiles("/dev/null/nao-e-pasta",
-				"/dev/null/nao-e-monitoramento");
+				"/dev/null/nao-e-dados", "/dev/null/nao-e-tmp", null);
 		}
 	}
 }

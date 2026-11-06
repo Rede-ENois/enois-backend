@@ -133,8 +133,12 @@ public class MediaMetadataSanitizer {
 		}
 	}
 
-	/** Devolve o conteúdo limpo; em erro/desconhecido, devolve o original. */
-	public byte[] sanitize(byte[] data, String contentType, String fileName) {
+	/**
+	 * Devolve o conteúdo limpo; em erro/desconhecido, devolve o original. A única exceção é não ter
+	 * onde gravar o temporário do vídeo/áudio: aí não há limpeza possível e o chamador precisa saber.
+	 */
+	public byte[] sanitize(byte[] data, String contentType, String fileName)
+			throws MediaTemporaryFiles.UnavailableException {
 		if (data == null || data.length == 0 || data.length > MAX_IN_MEMORY) {
 			return data;
 		}
@@ -158,6 +162,12 @@ public class MediaMetadataSanitizer {
 			if (type.startsWith("video/") || type.startsWith("audio/")) {
 				return ffmpeg(data, fileName);
 			}
+		}
+		catch (MediaTemporaryFiles.UnavailableException failure) {
+			// Sem pasta temporária o vídeo/áudio pequeno subiria com os metadados que a limpeza
+			// existe para tirar. Melhor-esforço vale para ffmpeg ausente, não para "não deu para
+			// limpar".
+			throw failure;
 		}
 		catch (Exception failure) {
 			LOG.warn("media_metadata_sanitize_failed type={} error={}", type,
