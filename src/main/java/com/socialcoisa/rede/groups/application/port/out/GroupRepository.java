@@ -1,12 +1,15 @@
 package com.socialcoisa.rede.groups.application.port.out;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import com.socialcoisa.rede.groups.domain.Group;
 import com.socialcoisa.rede.groups.domain.GroupJoinRequest;
 import com.socialcoisa.rede.groups.domain.GroupMember;
+import com.socialcoisa.rede.groups.domain.GroupMembership;
 import com.socialcoisa.rede.groups.domain.JoinRequestStatus;
 
 /** Persistência dos grupos. Tudo aqui é do domínio de Grupos — nada de comunidades nem de posts. */
@@ -26,8 +29,14 @@ public interface GroupRepository {
 	 */
 	List<Group> listVisible(String query, Instant before, int limit);
 
-	/** Grupos em que a pessoa participa. */
-	List<Group> findByMember(String userId, int limit);
+	/**
+	 * Grupos em que a pessoa participa, com o papel dela, mais recentes primeiro. Grupo encerrado
+	 * fica de fora; o filtro e o limite são da consulta, não da memória.
+	 */
+	List<GroupMembership> findMemberships(String userId, int limit);
+
+	/** Membros de cada grupo, numa consulta só (grupo sem membro não aparece no mapa). */
+	Map<String, Long> countMembers(Collection<String> groupIds);
 
 	void saveMember(GroupMember member);
 

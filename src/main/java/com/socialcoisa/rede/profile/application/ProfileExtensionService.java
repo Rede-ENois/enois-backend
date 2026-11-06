@@ -13,6 +13,7 @@ import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.Certification;
 import com.socialcoisa.rede.profile.domain.Education;
 import com.socialcoisa.rede.profile.domain.Experience;
+import com.socialcoisa.rede.shared.sanctions.SanctionGateReader;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 @Service
@@ -23,11 +24,14 @@ public class ProfileExtensionService implements ManageProfileExtensionUseCase {
 
 	private final ProfileExtensionRepository repository;
 	private final UserProfileRepository profiles;
+	private final SanctionGateReader sanctionGate;
 	private final Clock clock;
 
-	public ProfileExtensionService(ProfileExtensionRepository repository, UserProfileRepository profiles, Clock clock) {
+	public ProfileExtensionService(ProfileExtensionRepository repository, UserProfileRepository profiles,
+			SanctionGateReader sanctionGate, Clock clock) {
 		this.repository = repository;
 		this.profiles = profiles;
+		this.sanctionGate = sanctionGate;
 		this.clock = clock;
 	}
 
@@ -47,6 +51,7 @@ public class ProfileExtensionService implements ManageProfileExtensionUseCase {
 	@Transactional(readOnly = true)
 	public List<ExperienceView> getExperiencesOf(String username) {
 		var profile = profiles.findByUsername(username == null ? "" : username.trim())
+			.filter(found -> !sanctionGate.banned(found.id()))
 			.orElseThrow(() -> new ApiException(404, "PROFILE_NOT_FOUND", "Perfil não encontrado."));
 		return publicExperiences(profile.id());
 	}

@@ -344,6 +344,14 @@ public class UserProfile {
 		this.updatedAt = now;
 	}
 
+	/** Username prefix an account receives when it is deleted (see {@link #anonymize}). */
+	public static final String REMOVED_USERNAME_PREFIX = "removed-";
+
+	/** Deleted account: the row stays for referential integrity, but it is nobody to list. */
+	public boolean removed() {
+		return username != null && username.startsWith(REMOVED_USERNAME_PREFIX);
+	}
+
 	/**
 	 * Anonimiza os dados pessoais apos a exclusao da conta, preservando o id para integridade
 	 * referencial do conteudo ja publicado.

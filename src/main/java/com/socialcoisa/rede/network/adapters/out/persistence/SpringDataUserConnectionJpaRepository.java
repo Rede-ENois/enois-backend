@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -72,6 +73,26 @@ interface SpringDataUserConnectionJpaRepository extends JpaRepository<UserConnec
 			WHERE c.receiverUserId = :userId AND c.status = 'ACCEPTED' AND c.requesterUserId IN :others""")
 	List<String> findAcceptedAmong(@Param("userId") String userId,
 			@Param("others") java.util.Collection<String> others);
+
+	/** One keyset page of accepted connections on either side of {@code userId}, newest first. */
+	@Query("""
+			SELECT c FROM UserConnectionJpaEntity c
+			WHERE (c.requesterUserId = :userId OR c.receiverUserId = :userId)
+			  AND c.status = 'ACCEPTED'
+			  AND (:beforeId IS NULL OR c.id < :beforeId)
+			ORDER BY c.id DESC""")
+	List<UserConnectionJpaEntity> findAcceptedPage(@Param("userId") String userId, @Param("beforeId") Long beforeId,
+			Pageable page);
+
+	/** One keyset page of accepted connections received by {@code userId} (its followers), newest first. */
+	@Query("""
+			SELECT c FROM UserConnectionJpaEntity c
+			WHERE c.receiverUserId = :userId
+			  AND c.status = 'ACCEPTED'
+			  AND (:beforeId IS NULL OR c.id < :beforeId)
+			ORDER BY c.id DESC""")
+	List<UserConnectionJpaEntity> findAcceptedReceivedPage(@Param("userId") String userId,
+			@Param("beforeId") Long beforeId, Pageable page);
 
 	@Query("""
 			SELECT CASE WHEN COUNT(c) > 0 THEN true ELSE false END

@@ -559,7 +559,7 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 		credentialRepository.deleteByUserId(userId);
 		externalIdentityRepository.deleteByUserId(userId);
 		String suffix = userId.startsWith("user_") ? userId.substring("user_".length()) : userId;
-		profile.anonymize("removed+" + suffix + "@enois.invalid", "removed-" + suffix, now);
+		profile.anonymize("removed+" + suffix + "@enois.invalid", UserProfile.REMOVED_USERNAME_PREFIX + suffix, now);
 		userProfileRepository.save(profile);
 	}
 
