@@ -102,11 +102,16 @@ class KofAgentConfiguration {
 			FunctionCounter.builder(events, dispatcher, d -> d.accepted.get()).tag("outcome", "accepted").register(registry);
 			FunctionCounter.builder(events, dispatcher, d -> d.duplicates.get()).tag("outcome", "duplicate").register(registry);
 			FunctionCounter.builder(events, dispatcher, d -> d.grouped.get()).tag("outcome", "grouped").register(registry);
+			FunctionCounter.builder(events, dispatcher, d -> d.suppressed.get()).tag("outcome", "suppressed")
+				.register(registry);
 			FunctionCounter.builder(events, dispatcher, d -> d.countedOnly.get()).tag("outcome", "counted_only").register(registry);
 			FunctionCounter.builder(events, dispatcher, KofAgentDispatcher::droppedTotal).tag("outcome", "dropped")
 				.register(registry);
 			String messages = "rede.kof_agent.messages";
 			FunctionCounter.builder(messages, dispatcher, d -> d.bulletins.get()).tag("outcome", "bulletin")
+				.register(registry);
+			FunctionCounter.builder(messages, dispatcher, d -> d.digests.get()).tag("outcome", "digest").register(registry);
+			FunctionCounter.builder(messages, dispatcher, d -> d.latencyAlerts.get()).tag("outcome", "latency")
 				.register(registry);
 			FunctionCounter.builder(messages, dispatcher, d -> d.sentMessages.get()).tag("outcome", "sent").register(registry);
 			FunctionCounter.builder(messages, dispatcher, d -> d.failedAttempts.get()).tag("outcome", "failed")

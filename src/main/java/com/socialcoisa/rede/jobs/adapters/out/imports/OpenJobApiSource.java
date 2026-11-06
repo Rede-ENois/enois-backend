@@ -90,7 +90,7 @@ public class OpenJobApiSource implements JobImportSource {
 		try {
 			HttpRequest request = HttpRequest.newBuilder(URI.create(spec.url()))
 				.timeout(Duration.ofSeconds(25))
-				.header("User-Agent", "EnóisBot/1.0 (+https://enois.ia.br/developers)")
+				.header("User-Agent", "EnoisBot/1.0 (+https://enois.ia.br/developers)")
 				.header("Accept", "application/json")
 				.GET()
 				.build();

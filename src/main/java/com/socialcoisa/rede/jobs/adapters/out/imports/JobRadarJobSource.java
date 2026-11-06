@@ -42,7 +42,7 @@ public class JobRadarJobSource implements JobImportSource {
 
 	public JobRadarJobSource(
 			@Value("${rede.jobs.import.jobradar.sitemap-url:https://jobradar.com.br/sitemap-vagas.xml}") String sitemapUrl,
-			@Value("${rede.jobs.import.jobradar.user-agent:EnóisBot/1.0 (+https://enois.ia.br/developers)}") String userAgent,
+			@Value("${rede.jobs.import.jobradar.user-agent:EnoisBot/1.0 (+https://enois.ia.br/developers)}") String userAgent,
 			@Value("${rede.jobs.import.jobradar.enabled:true}") boolean enabled) {
 		this.sitemapUrl = sitemapUrl;
 		this.userAgent = userAgent;
