@@ -1,16 +1,28 @@
 package com.socialcoisa.rede.dailygames;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.socialcoisa.rede.coin.application.CoinService;
+import com.socialcoisa.rede.coin.domain.RewardEligibility;
 import com.socialcoisa.rede.notifications.application.NotificationService;
+import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
+import com.socialcoisa.rede.profile.domain.UserProfile;
+import com.socialcoisa.rede.shared.web.ApiException;
 
 /**
  * O prêmio em faísca dos jogos diários.
@@ -24,6 +36,8 @@ import com.socialcoisa.rede.notifications.application.NotificationService;
  */
 @Service
 public class DailyGameRewardsService {
+
+	private static final Logger LOG = LoggerFactory.getLogger(DailyGameRewardsService.class);
 
 	private static final ZoneId ZONE = ZoneId.of("America/Sao_Paulo");
 
@@ -60,16 +74,30 @@ public class DailyGameRewardsService {
 	private record Game(String key, String label, Function<LocalDate, List<String>> order) {
 	}
 
+	/** Attempts per credit when the ledger reports a concurrent movement or a lock timeout. */
+	static final int MAX_ATTEMPTS = 3;
+
+	private static final long RETRY_BACKOFF_MS = 50;
+
 	private final CoinService coins;
 	private final NotificationService notifications;
+	private final UserProfileRepository profiles;
 	private final Clock clock;
+	private final TransactionTemplate creditTransaction;
+	private final TransactionTemplate readTransaction;
 	private final List<Game> games;
 
-	public DailyGameRewardsService(CoinService coins, NotificationService notifications, Clock clock,
-			DailyWordService word, DailyMazeService maze, DailyBlocksService blocks) {
+	public DailyGameRewardsService(CoinService coins, NotificationService notifications, UserProfileRepository profiles,
+			Clock clock, PlatformTransactionManager transactionManager, DailyWordService word, DailyMazeService maze,
+			DailyBlocksService blocks) {
 		this.coins = coins;
 		this.notifications = notifications;
+		this.profiles = profiles;
 		this.clock = clock;
+		this.creditTransaction = new TransactionTemplate(transactionManager);
+		this.creditTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+		this.readTransaction = new TransactionTemplate(transactionManager);
+		this.readTransaction.setReadOnly(true);
 		this.games = List.of(
 			new Game("palavras", "Palavras", word::payoutOrder),
 			new Game("labirinto", "Labirinto", maze::payoutOrder),
@@ -81,11 +109,10 @@ public class DailyGameRewardsService {
 	}
 
 	/**
-	 * Fecha e paga os dias encerrados até `lookbackDays` atrás. O recuo existe para o job pegar
-	 * os dias que venceram com a aplicação fora do ar; a idempotência torna a repetição inofensiva.
-	 * Transacional aqui porque o `settle` é chamado por auto-invocação e não passaria pelo proxy.
+	 * Closes and pays the closed days up to `lookbackDays` ago. The lookback catches days that
+	 * closed while the application was down; idempotency makes the repetition harmless, and a
+	 * credit that failed in one run is paid by the next.
 	 */
-	@Transactional
 	public int settleClosedDays(int lookbackDays) {
 		LocalDate today = today();
 		int paid = 0;
@@ -95,19 +122,72 @@ public class DailyGameRewardsService {
 		return paid;
 	}
 
-	/** Paga o placar de um dia nos três jogos. Devolve quantos créditos novos entraram. */
-	@Transactional
+	/**
+	 * Pays one day's ranking in the three games and returns how many new credits were made.
+	 *
+	 * Each credit (ledger entries + notification) commits on its own: a failure on one account
+	 * leaves everybody else paid. Ranks are counted among the eligible accounts only, so the
+	 * prize of an ineligible account goes to the next person instead of disappearing.
+	 */
 	public int settle(LocalDate day) {
 		int paid = 0;
 		for (Game game : games) {
-			List<String> ranked = game.order().apply(day);
+			List<String> ranked = eligible(game.order().apply(day), day);
 			for (int i = 0; i < ranked.size(); i++) {
-				if (grant(game, day, ranked.get(i), i + 1)) {
+				if (grantWithRetry(game, day, ranked.get(i), i + 1)) {
 					paid++;
 				}
 			}
 		}
 		return paid;
+	}
+
+	/**
+	 * Same rule as the other farmable rewards: verified identity and an account that existed for
+	 * the whole new-account window before the challenge day started, so the answer does not change
+	 * between runs and accounts created on the day never qualify.
+	 */
+	private List<String> eligible(List<String> ranked, LocalDate day) {
+		if (ranked.isEmpty()) {
+			return ranked;
+		}
+		Instant dayStart = day.atStartOfDay(ZONE).toInstant();
+		Set<String> allowed = readTransaction.execute(status -> profiles.findAllByIds(ranked).stream()
+			.filter(profile -> profile.identityVerified()
+				&& RewardEligibility.isEstablished(profile.createdAt(), dayStart))
+			.map(UserProfile::id)
+			.collect(Collectors.toSet()));
+		return ranked.stream().filter(allowed::contains).toList();
+	}
+
+	private boolean grantWithRetry(Game game, LocalDate day, String userId, int rank) {
+		for (int attempt = 1;; attempt++) {
+			try {
+				return Boolean.TRUE.equals(creditTransaction.execute(status -> grant(game, day, userId, rank)));
+			}
+			catch (RuntimeException failure) {
+				if (!isTransient(failure) || attempt >= MAX_ATTEMPTS) {
+					LOG.warn("daily_game_reward_failed game={} day={} rank={} attempts={} error={}", game.key(), day, rank,
+						attempt, failure instanceof ApiException api ? api.code() : failure.getClass().getSimpleName());
+					return false;
+				}
+				pause(RETRY_BACKOFF_MS * attempt);
+			}
+		}
+	}
+
+	private static boolean isTransient(RuntimeException failure) {
+		return failure instanceof ApiException api ? "COIN_CONCURRENCY".equals(api.code())
+			: failure instanceof TransientDataAccessException;
+	}
+
+	private static void pause(long millis) {
+		try {
+			Thread.sleep(millis);
+		}
+		catch (InterruptedException interrupted) {
+			Thread.currentThread().interrupt();
+		}
 	}
 
 	private boolean grant(Game game, LocalDate day, String userId, int rank) {
