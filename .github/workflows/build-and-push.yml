@@ -347,19 +347,31 @@ jobs:
             echo "==> Epapo não configurado: chamadas e salas de mentoria ficam desligadas (503 explícito)"
           else
             # O gateway recebe dois segredos de servidor (o token interno e, na volta, o JWT
-            # pronto para entrar na sala). O Epapo roda num provedor diferente deste backend,
-            # sem rede privada entre os dois: por isso o salto tem de ser cifrado. http só é
-            # aceito para loopback e faixas privadas — ali o tráfego não sai do host.
+            # pronto para entrar na sala). https é sempre aceito; http direto para um IP
+            # literal também, com aviso — é a topologia C do Epapo, onde o gateway não tem
+            # TLS próprio e quem fecha a porta é o ufw do enois-node3, restrito ao IP deste
+            # backend (deploy/README.md §7.2). http para um NOME, não: o DNS pode apontar
+            # aquele nome para outro host, e aí não há firewall nenhum no caminho.
             epapo_gw_host=$(printf '%s' "${REDE_CALLS_EPAPO_GATEWAY_URL}" \
               | sed -E 's#^[a-z]+://##; s#[:/].*$##')
             case "${REDE_CALLS_EPAPO_GATEWAY_URL}" in
               https://*) ;;
               http://localhost*|http://127.*|http://10.*|http://192.168.*) ;;
               http://172.1[6-9].*|http://172.2[0-9].*|http://172.3[01].*) ;;
+              http://*)
+                case "${epapo_gw_host}" in
+                  ""|*[!0-9.]*)
+                    echo "::error::REDE_CALLS_EPAPO_GATEWAY_URL usa http com o nome ${epapo_gw_host}."
+                    echo "Um nome em texto claro pode ser reapontado por DNS para qualquer host."
+                    echo "Use https, um IP literal ou um endereço de rede privada."
+                    exit 1
+                    ;;
+                esac
+                echo "::warning::gateway em http para ${epapo_gw_host}: o token interno vai sem TLS até o Epapo."
+                echo "Só é aceitável enquanto a porta estiver fechada no ufw para todo mundo, exceto o IP deste backend."
+                ;;
               *)
-                echo "::error::REDE_CALLS_EPAPO_GATEWAY_URL não é https (host: ${epapo_gw_host})."
-                echo "O gateway carrega segredo de servidor a cada chamada; em texto claro ele"
-                echo "vaza para quem estiver no caminho. Publique-o com TLS e aponte o https para cá."
+                echo "::error::REDE_CALLS_EPAPO_GATEWAY_URL não é http(s): ${REDE_CALLS_EPAPO_GATEWAY_URL}"
                 exit 1
                 ;;
             esac
