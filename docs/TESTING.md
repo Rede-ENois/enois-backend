@@ -36,6 +36,9 @@ The daily presence of an action is also recorded on an executor after the commit
 inline one (`@MockitoBean(name = "presenceExecutor")`, as `StreakPresenceFlowTests` does); a test
 that counts coin entries of someone who just acted leaves the `presenca:` entries out.
 
+Concurrency tests (several threads sending the same requests at once) follow
+`PostCounterConcurrencyTests`; see [`CONCURRENCY.md`](CONCURRENCY.md) for what H2 cannot reproduce.
+
 ## Estrutura de Testes
 
 Os testes estão em `src/test/java/com/socialcoisa/rede/` e seguem a mesma estrutura de pacotes do código fonte.
