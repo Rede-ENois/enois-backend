@@ -48,12 +48,14 @@ public class ContributorSealService {
 	private final GitHubRepositoryRegistry repositories;
 	private final GitHubIdentityRepository identities;
 	private final UserProfileRepository profiles;
+	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
 	private final Clock clock;
 
 	public ContributorSealService(GitHubContributionRepository contributions, UserSealRepository seals,
 			SealAuditRepository sealAudit, ContributionAuditRepository contributionAudit,
 			GitHubRepositoryRegistry repositories, GitHubIdentityRepository identities,
-			UserProfileRepository profiles, Clock clock) {
+			UserProfileRepository profiles, com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate, Clock clock) {
+		this.sanctionGate = sanctionGate;
 		this.contributions = contributions;
 		this.seals = seals;
 		this.sealAudit = sealAudit;
@@ -201,8 +203,7 @@ public class ContributorSealService {
 	}
 
 	public List<PublicSealView> publicSeals(String username) {
-		UserProfile profile = profiles.findByUsername(username)
-			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuário não encontrado."));
+		UserProfile profile = publicProfile(username);
 		return seals.findActiveByUser(profile.id()).stream()
 			.sorted(Comparator.comparing((UserSeal seal) -> seal.category().ordinal()))
 			.map(seal -> {
@@ -217,8 +218,7 @@ public class ContributorSealService {
 
 	/** Evidências públicas paginadas; o perfil não tem teto fixo de itens. */
 	public EvidencePage publicEvidence(String username, ContributionCategory category, int page, int size) {
-		UserProfile profile = profiles.findByUsername(username)
-			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuário não encontrado."));
+		UserProfile profile = publicProfile(username);
 		int safeSize = Math.max(1, Math.min(size, 100));
 		int safePage = Math.max(0, page);
 		int total = contributions.countCountableByUser(profile.id(), category);
@@ -230,6 +230,13 @@ public class ContributorSealService {
 			.toList();
 		boolean hasMore = (long) (safePage + 1) * safeSize < total;
 		return new EvidencePage(items, total, safePage, safeSize, hasMore);
+	}
+
+	/** The public @ of an account a visitor may see: a banned account is not found. */
+	private UserProfile publicProfile(String username) {
+		return profiles.findByUsername(username)
+			.filter(profile -> !sanctionGate.banned(profile.id()))
+			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuário não encontrado."));
 	}
 
 	public CriteriaView criteria() {

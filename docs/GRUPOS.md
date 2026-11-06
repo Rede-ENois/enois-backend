@@ -281,6 +281,10 @@ existente foi alterada para suportar Grupos.
 `/{id}/transfer`, `/{id}/status` e `/{id}/close`, `/{id}/topics` (criar/editar/reordenar/arquivar),
 `/{id}/posts` (publicar/listar/remover), `/{id}/posts/{postId}/comments` (+ remover) e
 `/{id}/posts/{postId}/reactions`.
+`GET /groups/mine` (com sessão) lista os grupos da pessoa com o papel dela, mais recentes primeiro,
+sem os encerrados: filtro e limite na consulta e a contagem de membros numa consulta só para a
+página inteira. Como `mine` é rota fixa, o nome que geraria esse slug recebe sufixo numérico
+(`mine-2`), do mesmo jeito que um slug já em uso.
 
 **Frontend.** `/grupos` (descoberta pública e criação com logo/banner), `/grupos/$slug` (página
 pública, ingresso, edição com logo/banner foto ou HTML, tópicos, feed, comentários, reações,

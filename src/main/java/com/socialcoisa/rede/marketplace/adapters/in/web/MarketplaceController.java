@@ -199,7 +199,7 @@ class MarketplaceController {
 		}
 		return listings.stream().map(listing -> {
 			var profile = byId.get(listing.sellerId());
-			return new ListingView(listing.id(), listing.sellerId(),
+			return new ListingView(listing.id(),
 				profile == null ? null : profile.name(),
 				profile == null ? null : profile.username(),
 				profile == null ? null : NameStyleView.from(profile),
@@ -208,7 +208,7 @@ class MarketplaceController {
 		}).toList();
 	}
 
-	record ListingView(String id, String sellerId, String sellerName, String sellerUsername,
+	record ListingView(String id, String sellerName, String sellerUsername,
 			NameStyleView sellerStyle, String itemKind, String itemId, String title, String description, long price,
 			String status, String createdAt) {
 	}

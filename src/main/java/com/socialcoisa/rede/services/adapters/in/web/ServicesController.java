@@ -215,10 +215,10 @@ class ServicesController {
 		}
 	}
 
-	record RequestView(String id, String requesterId, String category, String title, String description,
+	record RequestView(String id, String category, String title, String description,
 			String deliverables, long budgetMin, long budgetMax, String deadline, String status, String createdAt) {
 		static RequestView from(ServiceRequest r) {
-			return new RequestView(r.id(), r.requesterId(), r.category(), r.title(), r.description(), r.deliverables(),
+			return new RequestView(r.id(), r.category(), r.title(), r.description(), r.deliverables(),
 				r.budgetMin(), r.budgetMax(), r.deadline() == null ? null : r.deadline().toString(),
 				r.status().name(), r.createdAt().toString());
 		}

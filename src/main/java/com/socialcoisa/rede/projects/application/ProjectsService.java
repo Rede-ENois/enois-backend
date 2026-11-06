@@ -34,12 +34,15 @@ public class ProjectsService {
 
 	private final UserProjectRepository repository;
 	private final com.socialcoisa.rede.profile.application.port.out.UserProfileRepository profiles;
+	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
 	private final Clock clock;
 
 	public ProjectsService(UserProjectRepository repository,
-			com.socialcoisa.rede.profile.application.port.out.UserProfileRepository profiles, Clock clock) {
+			com.socialcoisa.rede.profile.application.port.out.UserProfileRepository profiles,
+			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate, Clock clock) {
 		this.repository = repository;
 		this.profiles = profiles;
+		this.sanctionGate = sanctionGate;
 		this.clock = clock;
 	}
 
@@ -47,6 +50,7 @@ public class ProjectsService {
 	@Transactional(readOnly = true)
 	public List<UserProject> byUsername(String username) {
 		return profiles.findByUsername(username)
+			.filter(profile -> !sanctionGate.banned(profile.id()))
 			.map(profile -> repository.findByUser(profile.id()))
 			.orElseThrow(() -> new ApiException(404, "PROFILE_NOT_FOUND", "Perfil nao encontrado."));
 	}

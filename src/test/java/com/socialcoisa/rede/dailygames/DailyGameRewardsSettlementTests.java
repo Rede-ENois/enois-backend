@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.sql.Date;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
@@ -28,12 +29,17 @@ class DailyGameRewardsSettlementTests {
 	@Autowired
 	JdbcTemplate jdbc;
 
+	/** A verified account created two months ago: eligible for the prizes of any recent day. */
 	private String user(String label) {
+		return user(label, Instant.now().minus(Duration.ofDays(60)));
+	}
+
+	private String user(String label, Instant createdAt) {
 		String id = "faisca-" + label + "-" + UUID.randomUUID().toString().replace("-", "");
 		String handle = label + "-" + id.substring(id.length() - 8);
-		jdbc.update("insert into users (id,username,name,email,open_to_work,is_mentor,created_at,updated_at) "
-			+ "values (?,?,?,?,?,?,?,?)", id, handle, "Teste " + label, handle + "@test.com",
-			false, false, Timestamp.from(Instant.now()), Timestamp.from(Instant.now()));
+		jdbc.update("insert into users (id,username,name,email,open_to_work,is_mentor,created_at,updated_at,"
+			+ "email_verified_at) values (?,?,?,?,?,?,?,?,?)", id, handle, "Teste " + label, handle + "@test.com",
+			false, false, Timestamp.from(createdAt), Timestamp.from(Instant.now()), Timestamp.from(Instant.now()));
 		return id;
 	}
 
@@ -43,12 +49,15 @@ class DailyGameRewardsSettlementTests {
 		String champion = user("campea");
 		String runnerUp = user("vicedia");
 		String gaveUp = user("desistiu");
+		// Ranked first (same attempts, username sorts first), but the account is days old: no prize,
+		// and the prizes below it move up.
+		String newcomer = user("aa-novata", Instant.now().minus(Duration.ofDays(1)));
 
 		jdbc.update("insert into daily_word_challenges (challenge_date,answer) select ?,? "
 			+ "where not exists (select 1 from daily_word_challenges where challenge_date=?)",
 			Date.valueOf(day), "AMORA", Date.valueOf(day));
 		Timestamp started = Timestamp.from(Instant.now().minusSeconds(600));
-		for (String id : new String[] { champion, runnerUp, gaveUp }) {
+		for (String id : new String[] { champion, runnerUp, gaveUp, newcomer }) {
 			jdbc.update("insert into daily_word_sessions (challenge_date,user_id,status,started_at) values (?,?,'WON',?)",
 				Date.valueOf(day), id, started);
 		}
@@ -56,6 +65,8 @@ class DailyGameRewardsSettlementTests {
 			Date.valueOf(day), gaveUp);
 		jdbc.update("insert into daily_word_guesses values (?,?,?,?,?,?)", Date.valueOf(day), champion, 1,
 			"req-c1-" + day, "AMORA", "CORRECT,CORRECT,CORRECT,CORRECT,CORRECT");
+		jdbc.update("insert into daily_word_guesses values (?,?,?,?,?,?)", Date.valueOf(day), newcomer, 1,
+			"req-n1-" + day, "AMORA", "CORRECT,CORRECT,CORRECT,CORRECT,CORRECT");
 		jdbc.update("insert into daily_word_guesses values (?,?,?,?,?,?)", Date.valueOf(day), runnerUp, 1,
 			"req-r1-" + day, "AMIGO", "ABSENT,ABSENT,ABSENT,PRESENT,PRESENT");
 		jdbc.update("insert into daily_word_guesses values (?,?,?,?,?,?)", Date.valueOf(day), runnerUp, 2,
@@ -67,6 +78,8 @@ class DailyGameRewardsSettlementTests {
 		assertThat(prizeOf(day, runnerUp)).isEqualTo(CoinService.FAIS(5L));
 		assertThat(jdbc.queryForObject("select count(*) from coin_entries where ref_id like ?",
 			Integer.class, "jogos:palavras:" + day + ":" + gaveUp + "%")).isZero();
+		assertThat(jdbc.queryForObject("select count(*) from coin_entries where ref_id like ?",
+			Integer.class, "jogos:palavras:" + day + ":" + newcomer + "%")).isZero();
 
 		assertThat(jdbc.queryForObject("select count(*) from notifications where user_id=? and kind=?",
 			Integer.class, champion, "JOGO_DIARIO")).isEqualTo(1);
