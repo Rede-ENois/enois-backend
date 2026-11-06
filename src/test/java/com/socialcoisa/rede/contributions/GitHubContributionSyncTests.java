@@ -127,7 +127,7 @@ class GitHubContributionSyncTests {
 	}
 
 	@Test
-	void newOrganizationRepositoriesBecomeEligibleButSwitchedOffOnesStayOff() {
+	void newOrganizationRepositoriesAreListedSwitchedOffUntilAnAdminEnablesThem() {
 		String suffix = String.valueOf(System.nanoTime());
 		String fresh = "Rede-ENois/novo-" + suffix;
 		String switchedOff = "Rede-ENois/desligado-" + suffix;
@@ -144,7 +144,8 @@ class GitHubContributionSyncTests {
 			sync.sync(false, false, List.of());
 
 			assertThat(registry.findAll().stream().filter(item -> item.repository().equals(fresh)).findFirst())
-				.hasValueSatisfying(item -> assertThat(item.enabled()).isTrue());
+				.as("a repository any member can create does not count before an admin enables it")
+				.hasValueSatisfying(item -> assertThat(item.enabled()).isFalse());
 			assertThat(registry.findAll().stream().filter(item -> item.repository().equals(switchedOff)).findFirst())
 				.hasValueSatisfying(item -> assertThat(item.enabled()).isFalse());
 			assertThat(registry.findAll().stream().anyMatch(item -> item.repository().equals(foreign))).isFalse();

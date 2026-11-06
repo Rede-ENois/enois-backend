@@ -255,10 +255,11 @@ jobs:
           GITHUB_SUGGESTIONS_REPO_BACKEND: ${{ vars.SUGGESTIONS_REPO_BACKEND }}
           GITHUB_SUGGESTIONS_REPO_FRONTEND: ${{ vars.SUGGESTIONS_REPO_FRONTEND }}
           GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM: ${{ vars.SUGGESTIONS_REPO_DESIGN_SYSTEM }}
-          # Na QA, issue com a label `bug` (aplicada por mantenedor) ja conta para o selo de
-          # issues; em producao o default e vazio (so revisao humana). O worker roda a cada 10
-          # minutos para os selos acompanharem o GitHub sozinhos.
-          GITHUB_QUALIFIED_ISSUE_LABELS: bug
+          # Issue so conta para o selo com a label de triagem `seal:qualified`, que nenhum template
+          # de issue aplica (o template de bug aplica `bug` sozinho, entao `bug` nao serve). Sem a
+          # label, a issue espera revisao no painel. O worker roda a cada 10 minutos para os selos
+          # acompanharem o GitHub sozinhos.
+          GITHUB_QUALIFIED_ISSUE_LABELS: "seal:qualified"
           GITHUB_SYNC_CRON: "0 */10 * * * *"
           # panic:yes => somente leitura; vazio/ausente => online (o botão do painel decide).
           # ImageKit aposentado, mas o purge/delete de midia antiga precisa funcionar ate a migracao.
@@ -681,8 +682,9 @@ jobs:
           GITHUB_SUGGESTIONS_REPO_BACKEND: ${{ vars.SUGGESTIONS_REPO_BACKEND }}
           GITHUB_SUGGESTIONS_REPO_FRONTEND: ${{ vars.SUGGESTIONS_REPO_FRONTEND }}
           GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM: ${{ vars.SUGGESTIONS_REPO_DESIGN_SYSTEM }}
-          # Issue com a label `bug` (aplicada por mantenedor) ja conta para o selo de issues, como na QA.
-          GITHUB_QUALIFIED_ISSUE_LABELS: bug
+          # Issue so conta para o selo com a label de triagem `seal:qualified` (nenhum template de
+          # issue a aplica), como na QA.
+          GITHUB_QUALIFIED_ISSUE_LABELS: "seal:qualified"
           # ImageKit aposentado (storage no S3), mas o purge/delete de midia antiga ainda
           # conversa com ele ate a migracao de objetos terminar.
           IMAGEKIT_URL_ENDPOINT: ${{ secrets.IMAGEKIT_URL_ENDPOINT }}
