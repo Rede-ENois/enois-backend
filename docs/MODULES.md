@@ -36,7 +36,9 @@
 
 Os filtros web e o interceptor administrativo usam uma leitura compartilhada do caminho da
 requisição. A leitura considera o contexto da aplicação e não reescreve URI, query ou corpo.
-A seleção de permissões de administrador e moderador permanece no `AdminRouteInterceptor`. A classificação
+A seleção de permissões de administrador e moderador permanece no `AdminRouteInterceptor`. Ele cobre
+`/admin/**` e `/moderation/**`: toda rota de `/moderation` exige moderador (ou admin) antes do controller,
+exceto `GET /moderation/me` e `POST /moderation/applications`, que só exigem sessão. A classificação
 usa os padrões e segmentos do Spring MVC. Entradas com escape inválido que alcancem a cadeia
 de filtros recebem 400 antes do roteamento. Os testes integrados também conferem que uma
 requisição sem permissão não executa o método protegido do controller.
