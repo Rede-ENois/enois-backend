@@ -40,6 +40,8 @@ public class GameService {
 	private final com.socialcoisa.rede.games.application.port.out.GameFavoriteRepository favorites;
 	private final GameIdentityService identities;
 
+	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
+
 	public GameService(GameRepository games,
 			com.socialcoisa.rede.profile.application.port.out.UserProfileRepository profiles, GameUrlGuard urlGuard,
 			com.socialcoisa.rede.games.application.port.out.GameUpdateRepository updates,
@@ -51,7 +53,8 @@ public class GameService {
 			com.socialcoisa.rede.games.application.port.out.GameEventRepository events,
 			com.socialcoisa.rede.feed.application.PublishPostService feed,
 			com.socialcoisa.rede.games.application.port.out.GameFavoriteRepository favorites,
-			GameIdentityService identities) {
+			GameIdentityService identities, com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate) {
+		this.sanctionGate = sanctionGate;
 		this.games = games;
 		this.profiles = profiles;
 		this.urlGuard = urlGuard;
@@ -242,6 +245,7 @@ public class GameService {
 	public String userIdFromUsername(String username) {
 		return profiles.findByUsername(username)
 			.map(com.socialcoisa.rede.profile.domain.UserProfile::id)
+			.filter(userId -> !sanctionGate.banned(userId))
 			.orElseThrow(() -> new ApiException(404, "GAME_NOT_FOUND", "Criador não encontrado."));
 	}
 

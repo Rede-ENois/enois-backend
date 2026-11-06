@@ -30,6 +30,7 @@ As categorias dinâmicas herdam `REDE_CACHE_DYNAMIC_TTL` (padrão **20s**).
 | `pagePreviewCards` | cartão de compartilhamento (PNG) | post | 1 h | 16 |
 | `gifSearch` | busca de GIF | termo + limit | 10 min | 200 |
 | `githubRepositories` / `githubReadme` | importação do perfil | login | 3 min | 200 |
+| `trendingGames` | contagem de PLAY_START das últimas 24 h por jogo ("jogados hoje"); os jogos são lidos a cada requisição, numa consulta só | — | 2 min | 4 |
 
 **Só entra no cache o que é igual para todo mundo.** O que é do leitor — `joined` (sou membro),
 `attending` (vou participar), `applied`/`saved` (já me candidatei, salvei), contagem de candidaturas

@@ -106,7 +106,9 @@ class JobServiceTests {
 		};
 		service = new JobService(repository, reputationService, userProfileRepository,
 			new com.socialcoisa.rede.corporate.application.CorporateProfileService(corporateProfiles,
-				userProfileRepository, Clock.systemUTC()),
+				userProfileRepository,
+				org.mockito.Mockito.mock(com.socialcoisa.rede.shared.sanctions.SanctionGateReader.class),
+				Clock.systemUTC()),
 			extensionRepository, delivery,
 			statusNotifier,
 			new com.socialcoisa.rede.jobs.application.port.out.JobAbandonPenaltyRepository() {

@@ -1,8 +1,6 @@
 package com.socialcoisa.rede.feed.application;
 
 import java.time.Clock;
-import java.time.Duration;
-import java.time.Instant;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,6 +14,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
 import com.socialcoisa.rede.coin.application.CoinService;
+import com.socialcoisa.rede.coin.domain.RewardEligibility;
 import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.Comment;
@@ -111,14 +110,13 @@ public class QuestionAnswerService {
 	}
 
 	/**
-	 * Conta com menos de {@link CoinService#NEW_ACCOUNT_WINDOW} (a mesma regra do teto de envio):
+	 * Conta com menos de {@link RewardEligibility#NEW_ACCOUNT_WINDOW} (a mesma regra do teto de envio):
 	 * nem quem responde nem quem pergunta pode ser conta recem-criada, senao uma conta extra
 	 * perguntando vira torneira de faiscas.
 	 */
 	private boolean isNewAccount(String userId) {
 		return userProfileRepository.findById(userId)
-			.map(profile -> profile.createdAt() == null
-				|| Duration.between(profile.createdAt(), clock.instant()).compareTo(CoinService.NEW_ACCOUNT_WINDOW) < 0)
+			.map(profile -> !RewardEligibility.isEstablished(profile.createdAt(), clock.instant()))
 			.orElse(true);
 	}
 
