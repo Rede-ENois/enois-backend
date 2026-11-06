@@ -167,7 +167,7 @@ services:
       MYSQL_PASSWORD: senha
 ```
 
-**PRD** (MySQL):
+**PRD** (MariaDB, via MySQL Connector/J with `MariaDBDialect`):
 ```yaml
 services:
   app:
@@ -176,22 +176,22 @@ services:
       - "8080:8080"
     environment:
       - SPRING_PROFILES_ACTIVE=prd
-      - DB_HOST=mysql
+      - DB_HOST=mariadb
       - DB_PORT=3306
       - DB_NAME=rede
       - DB_USER=rede
       - DB_PASSWORD=senha
     depends_on:
-      - mysql
+      - mariadb
     profiles: ["prd"]
 
-  mysql:
-    image: mysql:8
+  mariadb:
+    image: mariadb:11.4
     environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: rede
-      MYSQL_USER: rede
-      MYSQL_PASSWORD: senha
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: rede
+      MARIADB_USER: rede
+      MARIADB_PASSWORD: senha
 ```
 
 ## Variáveis de Ambiente Obrigatórias (QA/HML/PRD)
@@ -199,7 +199,7 @@ services:
 | Variável | Exemplo |
 |---|---|
 | `SPRING_PROFILES_ACTIVE` | `prd` |
-| `DB_HOST` | `mysql.internal` |
+| `DB_HOST` | `mariadb.internal` |
 | `DB_PORT` | `3306` |
 | `DB_NAME` | `rede` |
 | `DB_USER` | `rede` |
