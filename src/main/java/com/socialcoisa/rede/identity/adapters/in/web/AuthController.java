@@ -52,8 +52,6 @@ import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 @RequestMapping("/auth")
 class AuthController {
 
-	private static final org.slf4j.Logger AUDIT = org.slf4j.LoggerFactory.getLogger(AuthController.class);
-
 	private final SignupUseCase signupUseCase;
 	private final VerifyEmailUseCase verifyEmailUseCase;
 	private final TwoFactorLoginUseCase twoFactorLoginUseCase;
@@ -74,10 +72,8 @@ class AuthController {
 	private final com.socialcoisa.rede.identity.adapters.out.TurnstileValidator turnstile;
 	private final com.socialcoisa.rede.identity.application.SignupChallengeService signupCaptcha;
 	private final com.socialcoisa.rede.identity.application.NewDeviceNotifier newDeviceNotifier;
-	private final com.socialcoisa.rede.identity.application.TwoFactorService twoFactorService;
 	private final com.socialcoisa.rede.shared.security.IpBlockReader ipBlockReader;
 	private final com.socialcoisa.rede.shared.security.SignupAttackGuard signupAttackGuard;
-	private final com.socialcoisa.rede.profile.application.port.out.UserProfileRepository profiles;
 	private final com.socialcoisa.rede.shared.security.ClientIpResolver ipResolver;
 	private final tools.jackson.databind.ObjectMapper objectMapper;
 	/** Cadastros abertos? Desligado, o POST /auth/signup responde 403 SIGNUP_DISABLED. */
@@ -103,10 +99,8 @@ class AuthController {
 			com.socialcoisa.rede.identity.adapters.out.TurnstileValidator turnstile,
 			com.socialcoisa.rede.identity.application.SignupChallengeService signupCaptcha,
 			com.socialcoisa.rede.identity.application.NewDeviceNotifier newDeviceNotifier,
-			com.socialcoisa.rede.identity.application.TwoFactorService twoFactorService,
 			com.socialcoisa.rede.shared.security.IpBlockReader ipBlockReader,
 			com.socialcoisa.rede.shared.security.SignupAttackGuard signupAttackGuard,
-			com.socialcoisa.rede.profile.application.port.out.UserProfileRepository profiles,
 			com.socialcoisa.rede.shared.security.ClientIpResolver ipResolver,
 			tools.jackson.databind.ObjectMapper objectMapper,
 			@Value("${rede.auth.signup-enabled:true}") boolean signupEnabled,
@@ -132,10 +126,8 @@ class AuthController {
 		this.turnstile = turnstile;
 		this.signupCaptcha = signupCaptcha;
 		this.newDeviceNotifier = newDeviceNotifier;
-		this.twoFactorService = twoFactorService;
 		this.ipBlockReader = ipBlockReader;
 		this.signupAttackGuard = signupAttackGuard;
-		this.profiles = profiles;
 		this.ipResolver = ipResolver;
 		this.objectMapper = objectMapper;
 		this.signupEnabled = signupEnabled;
@@ -432,25 +424,6 @@ class AuthController {
 	}
 
 	/** Provedores vinculados a conta (a tela mostra e permite desvincular). */
-	/**
-	 * Reset emergencial (23/10): limpa os segredos TOTP que a troca de infra deixou ilegiveis, para
-	 * quem tem 2FA por app voltar a logar com e-mail + senha e reativar em /seguranca.
-	 */
-	@PostMapping("/admin/two-factor/reset-broken")
-	Map<String, Boolean> resetBrokenTwoFactor(@RequestHeader("X-Session-Token") String sessionToken) {
-		// Está sob /auth, então o interceptor de /admin não o cobre: exige admin explicitamente,
-		// by the same server-side users.is_admin flag AdminGuard uses.
-		String callerId = requireUserId(sessionToken);
-		boolean admin = profiles.findById(callerId).map(profile -> profile.admin()).orElse(false);
-		if (!admin) {
-			AUDIT.warn("admin_two_factor_reset_denied userId={}", callerId);
-			throw new ApiException(403, "FORBIDDEN", "Acesso restrito a administradores.");
-		}
-		int reset = twoFactorService.resetBrokenTotp();
-		AUDIT.warn("admin_two_factor_reset userId={} accounts={}", callerId, reset);
-		return Map.of("ok", true);
-	}
-
 	@GetMapping("/oauth/providers")
 	Object oauthProviders(@RequestHeader(value = "X-Session-Token", required = false) String token) {
 		return oAuthUseCase.linkedProviders(requireUserId(token));
