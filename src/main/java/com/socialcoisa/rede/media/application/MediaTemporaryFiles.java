@@ -8,7 +8,6 @@ import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -35,7 +34,6 @@ public class MediaTemporaryFiles {
 	private final String configuredDir;
 	private final List<String> candidates;
 
-	@Autowired
 	public MediaTemporaryFiles(@Value("${rede.media.temp-dir:}") String configuredDir) {
 		this(configuredDir, DEFAULT_DATA_DIR, System.getProperty("java.io.tmpdir"), System.getProperty("user.dir"));
 	}
@@ -64,7 +62,7 @@ public class MediaTemporaryFiles {
 		}
 
 		/** Os diretórios tentados, na ordem, para o log e para o teste. */
-		public List<String> dirs() {
+		List<String> dirs() {
 			return dirs;
 		}
 	}
@@ -104,20 +102,30 @@ public class MediaTemporaryFiles {
 	}
 
 	private static List<String> candidatos(String configured, String dataDir, String systemTmpDir, String workingDir) {
+		// Todos trimados: um espaço sobrando vira caminho inválido e some a comparação de duplicata.
 		List<String> dirs = new ArrayList<>();
-		if (configured != null && !configured.isEmpty()) {
-			dirs.add(configured);
+		String configurado = trim(configured);
+		if (!configurado.isEmpty()) {
+			dirs.add(configurado);
 		}
-		if (dataDir != null && !dataDir.isBlank() && !dirs.contains(dataDir)) {
-			dirs.add(dataDir);
+		String dados = trim(dataDir);
+		if (!dados.isEmpty() && !dirs.contains(dados)) {
+			dirs.add(dados);
 		}
-		String tmp = systemTmpDir;
-		if (tmp == null || tmp.isBlank()) {
-			tmp = workingDir == null || workingDir.isBlank() ? "/tmp" : workingDir;
+		String tmp = trim(systemTmpDir);
+		if (tmp.isEmpty()) {
+			tmp = trim(workingDir);
+		}
+		if (tmp.isEmpty()) {
+			tmp = "/tmp";
 		}
 		if (!dirs.contains(tmp)) {
 			dirs.add(tmp);
 		}
 		return List.copyOf(dirs);
+	}
+
+	private static String trim(String value) {
+		return value == null ? "" : value.trim();
 	}
 }
