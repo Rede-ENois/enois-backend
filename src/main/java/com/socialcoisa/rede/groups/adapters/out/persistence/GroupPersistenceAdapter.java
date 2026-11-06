@@ -1,13 +1,11 @@
 package com.socialcoisa.rede.groups.adapters.out.persistence;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.springframework.data.domain.PageRequest;
@@ -17,6 +15,8 @@ import com.socialcoisa.rede.groups.application.port.out.GroupRepository;
 import com.socialcoisa.rede.groups.domain.Group;
 import com.socialcoisa.rede.groups.domain.GroupJoinRequest;
 import com.socialcoisa.rede.groups.domain.GroupMember;
+import com.socialcoisa.rede.groups.domain.GroupMembership;
+import com.socialcoisa.rede.groups.domain.GroupRole;
 import com.socialcoisa.rede.groups.domain.GroupStatus;
 import com.socialcoisa.rede.groups.domain.JoinRequestStatus;
 
@@ -25,6 +25,11 @@ class GroupPersistenceAdapter implements GroupRepository {
 
 	/** O que a descoberta mostra: grupo ativo ou restrito. Suspenso e encerrado não aparecem. */
 	private static final List<GroupStatus> DISCOVERABLE = List.of(GroupStatus.ACTIVE, GroupStatus.RESTRICTED);
+
+	/** Complemento de {@link GroupStatus#readableByMembers()}: o que some da lista de quem participa. */
+	private static final List<GroupStatus> NOT_READABLE_BY_MEMBERS = java.util.Arrays.stream(GroupStatus.values())
+		.filter(status -> !status.readableByMembers())
+		.toList();
 
 	private final SpringDataGroupJpaRepository groups;
 	private final SpringDataGroupMemberJpaRepository members;
@@ -67,22 +72,19 @@ class GroupPersistenceAdapter implements GroupRepository {
 	}
 
 	@Override
-	public List<Group> findByMember(String userId, int limit) {
-		List<String> groupIds = members.findByUserIdOrderByJoinedAtDesc(userId).stream()
-			.map(GroupMemberJpaEntity::groupId)
-			.limit(limit)
+	public List<GroupMembership> findMemberships(String userId, int limit) {
+		return members.findMemberships(userId, NOT_READABLE_BY_MEMBERS, PageRequest.of(0, limit)).stream()
+			.map(row -> new GroupMembership(((GroupJpaEntity) row[0]).toDomain(), (GroupRole) row[1]))
 			.toList();
+	}
+
+	@Override
+	public Map<String, Long> countMembers(Collection<String> groupIds) {
 		if (groupIds.isEmpty()) {
-			return List.of();
+			return Map.of();
 		}
-		Map<String, GroupJpaEntity> map = groups.findAllById(groupIds).stream()
-			.filter(g -> g.toDomain().status().readableByMembers())
-			.collect(Collectors.toMap(GroupJpaEntity::id, Function.identity()));
-		return groupIds.stream()
-			.map(map::get)
-			.filter(Objects::nonNull)
-			.map(GroupJpaEntity::toDomain)
-			.toList();
+		return members.countByGroupIds(groupIds).stream()
+			.collect(Collectors.toMap(row -> (String) row[0], row -> ((Number) row[1]).longValue()));
 	}
 
 	@Override
