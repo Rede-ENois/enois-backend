@@ -455,6 +455,31 @@ Pedir conexão a uma conta que não existe responde `404 USER_NOT_FOUND`.
 
 ---
 
+## Miniatura de link
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/link-preview?url=...` | Cartão de um link publicado (página da casa ou site de fora) | Não (sessão opcional) |
+
+Resposta: `200` com `preview` preenchido ou `preview: null` quando não há o que mostrar. A sessão,
+quando existe, só muda o que uma página interna privada mostra. Detalhes em
+[LINK_PREVIEW.md](LINK_PREVIEW.md).
+
+```json
+{
+  "preview": {
+    "kind": "EXTERNAL",
+    "url": "https://exemplo.com/artigo",
+    "title": "Título do artigo",
+    "description": "Resumo que o site declara para compartilhamento.",
+    "imageUrl": "https://exemplo.com/capa.png",
+    "siteName": "Exemplo"
+  }
+}
+```
+
+---
+
 ## Mídia
 
 | Método | Rota | Descrição | Autenticação |
