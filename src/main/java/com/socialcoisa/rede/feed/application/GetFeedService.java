@@ -150,10 +150,13 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		};
 		// "Ocultar reposts": fora do feed pessoal (repost puro tem repostOf nulo no post —
 		// o ponteiro mora em post_reposts; já o repost com opinião é um post com repostOf).
+		// O cursor continua saindo da janela do banco: filtrar a lista exibida não pode
+		// encerrar a paginação antes da hora.
+		List<Post> window = posts;
 		if (readerPreferences.hideReposts(query.userId().value())) {
 			posts = posts.stream().filter(post -> post.repostOf() == null).toList();
 		}
-		return page(enrich(posts, query.userId()), posts, limit);
+		return page(enrich(posts, query.userId()), window, limit);
 	}
 
 	private FeedPage trending(GetFeedQuery query, int limit) {
@@ -161,13 +164,16 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		Instant until = after == null ? java.time.Clock.systemUTC().instant() : after.windowEnd();
 		List<Post> fetched = postRepository.findTrending(
 			until.minus(java.time.Duration.ofHours(TRENDING_WINDOW_HOURS)), until, after, limit + 1);
-		List<Post> posts = fetched.stream().limit(limit).toList();
+		List<Post> window = fetched.stream().limit(limit).toList();
+		List<Post> posts = window;
 		if (readerPreferences.hideReposts(query.userId().value())) {
 			posts = posts.stream().filter(post -> post.repostOf() == null).toList();
 		}
 		String nextCursor = null;
 		if (fetched.size() > limit) {
-			Post last = posts.getLast();
+			// O cursor sai da última chave da JANELA, não da lista exibida: uma página só de
+			// reposts escondidos fica vazia, mas ainda aponta para a continuação.
+			Post last = window.getLast();
 			nextCursor = new TrendingCursor(until, last.counters().reactions(), last.createdAt(), last.id().value()).encode();
 		}
 		return new FeedPage(enrich(posts, query.userId()), nextCursor);
@@ -582,8 +588,10 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		if (hideReposts) {
 			visible = visible.stream().filter(post -> post.repostOf() == null).toList();
 		}
+		// O cursor sai da janela (posição `limit` de `filtered`), não da lista exibida: uma janela
+		// só de reposts escondidos deixa a página vazia, mas precisa continuar para a próxima.
 		String nextCursor = filtered.size() > limit
-			? cursorCodec.encode(visible.get(visible.size() - 1).createdAt())
+			? cursorCodec.encode(filtered.get(limit - 1).createdAt())
 			: fetched.size() == limit * 3 ? cursorCodec.encode(fetched.get(fetched.size() - 1).createdAt()) : null;
 		// "O que quero ver" is a priority boost, not a filter: inside the page, posts on the chosen
 		// topics come first and the rest stays newest first. Nothing leaves the feed.

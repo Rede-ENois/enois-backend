@@ -265,6 +265,50 @@ class PersonalizationTests {
 			.andExpect(jsonPath("$.hideReposts").value(false));
 	}
 
+	/**
+	 * As três chaves booleanas moram no mesmo construtor: um round-trip de "ocultar reposts" não
+	 * pode trocar a ordem e mexer no lite/BATATA (o compilador não pega).
+	 */
+	@Test
+	void hideRepostsRoundTripDoesNotDisturbThePresentationModes() throws Exception {
+		var session = auth.authenticate("pers_hidereposts_roundtrip");
+
+		mockMvc.perform(put("/me/preferences")
+				.header("X-Session-Token", session.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of(
+					"liteMode", true, "batataMode", true))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.liteMode").value(true))
+			.andExpect(jsonPath("$.batataMode").value(true));
+
+		mockMvc.perform(put("/me/preferences")
+				.header("X-Session-Token", session.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of("hideReposts", true))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.hideReposts").value(true))
+			.andExpect(jsonPath("$.liteMode").value(true))
+			.andExpect(jsonPath("$.batataMode").value(true));
+
+		mockMvc.perform(get("/me/preferences").header("X-Session-Token", session.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.hideReposts").value(true))
+			.andExpect(jsonPath("$.liteMode").value(true))
+			.andExpect(jsonPath("$.batataMode").value(true));
+
+		// Desligar os modos de apresentação não desliga a preferência de feed.
+		mockMvc.perform(put("/me/preferences")
+				.header("X-Session-Token", session.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of(
+					"liteMode", false, "batataMode", false))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.hideReposts").value(true))
+			.andExpect(jsonPath("$.liteMode").value(false))
+			.andExpect(jsonPath("$.batataMode").value(false));
+	}
+
 	@Test
 	void themeIsPreservedWhenPersonalizationChanges() throws Exception {
 		var session = auth.authenticate("pers_theme");
