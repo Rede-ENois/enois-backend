@@ -8,7 +8,13 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,9 +33,13 @@ import tools.jackson.databind.json.JsonMapper;
  */
 class SuggestionIssueClientTests {
 
+	private static final Pattern PAGE = Pattern.compile("(?:^|&)page=(\\d+)");
+
 	private HttpServer server;
 	private final List<String> requests = new CopyOnWriteArrayList<>();
 	private volatile String listResponse = "[]";
+	/** Per-page list bodies keyed by the {@code page} query value; falls back to {@link #listResponse}. */
+	private final Map<String, String> listPages = new ConcurrentHashMap<>();
 	private volatile int listStatus = 200;
 
 	@BeforeEach
@@ -39,8 +49,10 @@ class SuggestionIssueClientTests {
 			requests.add(exchange.getRequestMethod() + " " + exchange.getRequestURI() + " "
 					+ exchange.getRequestHeaders().getFirst("Authorization"));
 			boolean create = "POST".equals(exchange.getRequestMethod());
+			Matcher page = PAGE.matcher(String.valueOf(exchange.getRequestURI().getQuery()));
+			String list = page.find() ? listPages.getOrDefault(page.group(1), listResponse) : listResponse;
 			byte[] body = (create ? "{\"number\":42,\"html_url\":\"https://github.com/org/backend/issues/42\"}"
-					: listResponse).getBytes(StandardCharsets.UTF_8);
+					: list).getBytes(StandardCharsets.UTF_8);
 			exchange.sendResponseHeaders(create ? 201 : listStatus, body.length);
 			exchange.getResponseBody().write(body);
 			exchange.close();
@@ -131,5 +143,35 @@ class SuggestionIssueClientTests {
 
 		assertTrue(issue.isEmpty());
 		assertTrue(requests.stream().noneMatch(request -> request.startsWith("POST")));
+	}
+
+	@Test
+	void retryFindsTheIssueBeyondTheFirstPage() {
+		listPages.put("1", fullPageWithout("sugg_5"));
+		listPages.put("2", "[{\"number\":301,\"body\":\"Texto\\n\\n" + SuggestionIssueClient.marker("sugg_5") + "\"}]");
+
+		var issue = client("suggestions-token", "org/backend", "", "")
+			.publish(SuggestionTarget.BACKEND, "sugg_5", "Título", "Texto", Instant.parse("2026-11-06T10:00:00Z"));
+
+		assertEquals(301, issue.orElseThrow().number());
+		assertTrue(requests.stream().noneMatch(request -> request.startsWith("POST")));
+	}
+
+	@Test
+	void retryNeverCreatesBlindlyWhenThePageBudgetRunsOut() {
+		listResponse = fullPageWithout("sugg_6");
+
+		var issue = client("suggestions-token", "org/backend", "", "")
+			.publish(SuggestionTarget.BACKEND, "sugg_6", "Título", "Texto", Instant.parse("2026-11-06T10:00:00Z"));
+
+		assertTrue(issue.isEmpty());
+		assertEquals(10, requests.size());
+		assertTrue(requests.stream().noneMatch(request -> request.startsWith("POST")));
+	}
+
+	private static String fullPageWithout(String key) {
+		return IntStream.range(0, 100)
+			.mapToObj(i -> "{\"number\":" + (1000 + i) + ",\"body\":\"" + SuggestionIssueClient.marker("other_" + i) + "\"}")
+			.collect(Collectors.joining(",", "[", "]"));
 	}
 }

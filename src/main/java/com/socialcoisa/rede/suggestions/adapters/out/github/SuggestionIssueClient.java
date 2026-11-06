@@ -42,6 +42,9 @@ class SuggestionIssueClient implements SuggestionIssueGateway {
 	private static final String REPOSITORY_FORMAT = "[\\w.-]+/[\\w.-]+";
 	/** Margin for clock skew between this server and GitHub when looking up a previous attempt. */
 	private static final Duration LOOKUP_MARGIN = Duration.ofMinutes(10);
+	private static final int LOOKUP_PAGE_SIZE = 100;
+	/** Past this many full pages the outcome stays unknown: the caller must not create blindly. */
+	private static final int LOOKUP_MAX_PAGES = 10;
 
 	private final ObjectMapper objectMapper;
 	private final HttpClient http;
@@ -134,25 +137,34 @@ class SuggestionIssueClient implements SuggestionIssueGateway {
 	}
 
 	/**
-	 * Lists the issues touched since the previous attempt (newest first) and returns the one carrying
-	 * the marker. The REST list is read-your-writes, unlike the search API. Null when GitHub did not
-	 * answer: the caller must not create blindly then.
+	 * Pages through the issues touched since the previous attempt (newest first) and returns the one
+	 * carrying the marker. The REST list is read-your-writes, unlike the search API. Null when the
+	 * outcome stays unknown (GitHub did not answer, or more issues than the page budget): the caller
+	 * must not create blindly then.
 	 */
 	private Lookup findByMarker(String repository, String marker, Instant since) throws Exception {
-		String query = "?state=all&sort=created&direction=desc&per_page=100&since="
+		String query = "?state=all&sort=created&direction=desc&per_page=" + LOOKUP_PAGE_SIZE + "&since="
 				+ URLEncoder.encode(since.truncatedTo(ChronoUnit.SECONDS).toString(), StandardCharsets.UTF_8);
-		HttpResponse<String> response = http.send(request("/repos/" + repository + "/issues" + query).GET().build(),
-			HttpResponse.BodyHandlers.ofString());
-		if (response.statusCode() / 100 != 2) {
-			LOG.warn("GitHub respondeu {} ao procurar issue de sugestão já aberta", response.statusCode());
-			return null;
-		}
-		for (JsonNode issue : objectMapper.readTree(response.body())) {
-			if (issue.path("body").asString("").contains(marker)) {
-				return new Lookup(issueRef(issue));
+		for (int page = 1; page <= LOOKUP_MAX_PAGES; page++) {
+			HttpResponse<String> response = http.send(
+				request("/repos/" + repository + "/issues" + query + "&page=" + page).GET().build(),
+				HttpResponse.BodyHandlers.ofString());
+			if (response.statusCode() / 100 != 2) {
+				LOG.warn("GitHub respondeu {} ao procurar issue de sugestão já aberta", response.statusCode());
+				return null;
+			}
+			JsonNode issues = objectMapper.readTree(response.body());
+			for (JsonNode issue : issues) {
+				if (issue.path("body").asString("").contains(marker)) {
+					return new Lookup(issueRef(issue));
+				}
+			}
+			if (issues.size() < LOOKUP_PAGE_SIZE) {
+				return new Lookup(null);
 			}
 		}
-		return new Lookup(null);
+		LOG.warn("Issue de sugestão não encontrada em {} páginas; publicação adiada", LOOKUP_MAX_PAGES);
+		return null;
 	}
 
 	private HttpRequest.Builder request(String path) {

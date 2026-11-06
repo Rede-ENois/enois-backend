@@ -1293,9 +1293,9 @@ título + texto. A sugestão nasce `PENDING`; um moderador aprova e só então o
 A aprovação é reivindicada de forma atômica (`PENDING` -> `PUBLISHED`) antes de falar com o GitHub:
 duas aprovações simultâneas não abrem duas issues, e falha do GitHub devolve a sugestão para a fila.
 A publicação é idempotente: a issue leva o id da sugestão num comentário HTML oculto, e a primeira
-tentativa fica registrada (`publish_attempted_at`, V248). Se uma tentativa terminou sem resposta (o
+tentativa fica registrada (`publish_attempted_at`, V250). Se uma tentativa terminou sem resposta (o
 GitHub pode ter aberto a issue), a próxima aprovação procura a issue com aquele id antes de abrir
-outra; se a busca falhar, nada é criado e a sugestão continua pendente.
+outra (paginando até 10 páginas de 100 issues); se a busca falhar ou não terminar, nada é criado e a sugestão continua pendente.
 
 O texto público é neutralizado: menções (`@pessoa`), referências (`#12`, `GH-12`, `dono/repo#12`) e
 links de issue do GitHub recebem um espaço de largura zero, então a issue não notifica ninguém nem
