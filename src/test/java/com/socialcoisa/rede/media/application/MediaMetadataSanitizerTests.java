@@ -18,12 +18,14 @@ import org.junit.jupiter.api.Test;
 /** A limpeza de metadados na escrita/leitura não pode deixar EXIF/texto/autor no arquivo. */
 class MediaMetadataSanitizerTests {
 
-	private final MediaMetadataSanitizer sanitizer = new MediaMetadataSanitizer("ffmpeg");
+	private final MediaMetadataSanitizer sanitizer = new MediaMetadataSanitizer("ffmpeg",
+		new MediaTemporaryFiles("", "/app/data/monitoring"));
 
 	@Test
 	void largeVideoKeepsTheOriginalWhenFfmpegCannotRun() throws Exception {
 		// ffmpeg ausente/nao executavel: a limpeza e melhor-esforco, o upload segue com o original.
-		var semFfmpeg = new MediaMetadataSanitizer("ffmpeg-que-nao-existe-neste-host");
+		var semFfmpeg = new MediaMetadataSanitizer("ffmpeg-que-nao-existe-neste-host",
+			new MediaTemporaryFiles("", "/app/data/monitoring"));
 		byte[] video = "ftypisom-corpo-de-video".getBytes(StandardCharsets.UTF_8);
 
 		java.nio.file.Path resultado = semFfmpeg.sanitizeToFile(new java.io.ByteArrayInputStream(video),

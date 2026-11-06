@@ -51,9 +51,12 @@ public class MediaMetadataSanitizer {
 	private static final Set<String> PNG_DROP = Set.of("tEXt", "zTXt", "iTXt", "eXIf", "tIME");
 
 	private final String ffmpegPath;
+	private final MediaTemporaryFiles temporaryFiles;
 
-	public MediaMetadataSanitizer(@Value("${rede.media.ffmpeg-path:ffmpeg}") String ffmpegPath) {
+	public MediaMetadataSanitizer(@Value("${rede.media.ffmpeg-path:ffmpeg}") String ffmpegPath,
+			MediaTemporaryFiles temporaryFiles) {
 		this.ffmpegPath = ffmpegPath;
+		this.temporaryFiles = temporaryFiles;
 	}
 
 	/** Imagem/PDF: dá para limpar em memória sem perder animação/streaming. */
@@ -74,7 +77,7 @@ public class MediaMetadataSanitizer {
 	 */
 	public Path sanitizeToFile(java.io.InputStream input, String contentType, String fileName)
 			throws IOException {
-		Path original = Files.createTempFile("media-raw-", suffix(fileName));
+		Path original = temporaryFiles.create("media-raw-", suffix(fileName));
 		try {
 			Files.copy(input, original, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
 			String type = normalize(contentType);
@@ -100,7 +103,7 @@ public class MediaMetadataSanitizer {
 	 * e travaria até o timeout.
 	 */
 	private Path stripWithFfmpeg(Path original, String fileName) throws IOException {
-		Path output = Files.createTempFile("media-clean-", suffix(fileName));
+		Path output = temporaryFiles.create("media-clean-", suffix(fileName));
 		long startedAt = System.nanoTime();
 		try {
 			Process process = new ProcessBuilder(ffmpegPath, "-hide_banner", "-loglevel", "error", "-y",
@@ -526,8 +529,8 @@ public class MediaMetadataSanitizer {
 	// ------------------------------------------------------------------ vídeo/áudio
 
 	private byte[] ffmpeg(byte[] data, String fileName) throws IOException, InterruptedException {
-		Path input = Files.createTempFile("media-in-", suffix(fileName));
-		Path output = Files.createTempFile("media-out-", suffix(fileName));
+		Path input = temporaryFiles.create("media-in-", suffix(fileName));
+		Path output = temporaryFiles.create("media-out-", suffix(fileName));
 		try {
 			Files.write(input, data);
 			Process process = new ProcessBuilder(ffmpegPath, "-hide_banner", "-loglevel", "error", "-y",

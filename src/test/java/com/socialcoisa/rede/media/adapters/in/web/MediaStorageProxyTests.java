@@ -55,6 +55,9 @@ class MediaStorageProxyTests {
 	@Autowired
 	private MediaObjectStore store;
 
+	@Autowired
+	private com.socialcoisa.rede.media.application.MediaMetadataSanitizer sanitizer;
+
 	private TestAuthHelper auth;
 
 	@BeforeEach
@@ -321,22 +324,12 @@ class MediaStorageProxyTests {
 
 	@Test
 	void videoGrandeAcimaDoLimiteEmMemoriaTambemChegaAoBucket() throws Exception {
-		var dono = auth.authenticate("media_proxy_video_grande");
 		// Acima de MAX_IN_MEMORY o proxy usa arquivo temporario + ffmpeg (sanitizeToFile).
 		byte[] video = new byte[41 * 1024 * 1024];
-		var criado = mockMvc.perform(post("/media/uploads")
-				.header("X-Session-Token", dono.token())
-				.header("Idempotency-Key", "media-proxy-video-2")
-				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("fileName", "aula.mp4",
-					"mimeType", "video/mp4", "size", (long) video.length, "purpose", "POST_VIDEO"))))
-			.andExpect(status().isCreated())
-			.andReturn();
-		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
-			.path("objectKey").asText();
+		String objectKey = assetDeVideoGrande("media_proxy_video_grande", "media-proxy-video-2", video.length);
 
 		mockMvc.perform(put("/storage/" + objectKey)
-				.header("X-Session-Token", dono.token())
+				.header("X-Session-Token", auth.authenticate("media_proxy_video_grande").token())
 				.contentType("video/mp4")
 				.content(video))
 			.andExpect(status().isOk())
@@ -344,6 +337,60 @@ class MediaStorageProxyTests {
 
 		assertThat(store().chaveEscrita).isEqualTo(objectKey);
 		assertThat(store().escrito).hasSize(video.length);
+	}
+
+	/**
+	 * No pod o `/tmp` da imagem não aceita arquivo: o caminho de vídeo grande precisava de dois
+	 * temporários (`mkdir /tmp/tomcat...` no boot e `createTempFile` no envio) e a publicação de
+	 * qualquer vídeo acima de 40 MB morria com erro genérico. O temporário passa a morar na pasta
+	 * de dados da aplicação, que é o volume gravável. A pista do pod é reproduzida apontando o
+	 * `java.io.tmpdir` do processo para uma pasta que não existe (e não pode ser criada).
+	 */
+	@Test
+	void videoGrandeSobeComOTemporarioDaPastaDeDadosDoPod() throws Exception {
+		byte[] video = new byte[41 * 1024 * 1024];
+		String objectKey = assetDeVideoGrande("media_proxy_video_dados", "media-proxy-video-2b", video.length);
+		String token = auth.authenticate("media_proxy_video_dados").token();
+		java.nio.file.Path semTmp = java.nio.file.Files.createTempDirectory("pasta-sem-tmp-");
+		try {
+			java.nio.file.Files.createDirectory(semTmp.resolve("arquivo"));
+			System.setProperty("java.io.tmpdir", semTmp.resolve("arquivo").resolve("nao-existe").toString());
+
+			mockMvc.perform(put("/storage/" + objectKey)
+					.header("X-Session-Token", token)
+					.contentType("video/mp4")
+					.content(video))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.status").value("STORED"));
+
+			assertThat(store().chaveEscrita).isEqualTo(objectKey);
+			assertThat(store().escrito).hasSize(video.length);
+		}
+		finally {
+			System.clearProperty("java.io.tmpdir");
+		}
+	}
+
+	/**
+	 * Arquivo do Enois num campo de imagem: a checagem de conteúdo recusa `video/mp4` com erro do
+	 * classificador e virava 500. Quem tentava trocar a foto por um vídeo lia "erro interno" em
+	 * vez do motivo — a resposta agora é 422 dizendo que o arquivo não pôde ser verificado.
+	 *
+	 * <p>No perfil de teste a checagem está desligada e não há classificador carregado, então o
+	 * teste roda num contexto com `rede.media.nsfw.enabled=true` e um classificador que se recusa a
+	 * ler o arquivo, que é o que o ONNX faz com bytes de vídeo.</p>
+	 */
+	/** Cadastra a mídia de vídeo grande e devolve a chave, sem repetir o mesmo POST em cada teste. */
+	private String assetDeVideoGrande(String dono, String idempotencia, int tamanho) throws Exception {
+		var criado = mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", auth.authenticate(dono).token())
+				.header("Idempotency-Key", idempotencia)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("fileName", "aula.mp4",
+					"mimeType", "video/mp4", "size", (long) tamanho, "purpose", "POST_VIDEO"))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		return objectMapper.readTree(criado.getResponse().getContentAsString()).path("objectKey").asText();
 	}
 
 	/**
@@ -399,5 +446,95 @@ class MediaStorageProxyTests {
 					"mimeType", "video/mp4", "size", 1024, "purpose", "REPORT_CAPTURE"))))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("MEDIA_TYPE_NOT_ALLOWED"));
+	}
+}
+
+/**
+ * O caminho de vídeo grande guarda o conteúdo em arquivo temporário antes de mandar para o bucket.
+ * Quando o servidor não tem nenhuma pasta gravável (o `/tmp` da imagem recusando, o volume de dados
+ * fora do ar), o envio não pode virar "erro interno inesperado": sai 503 com código próprio e o log
+ * mostra quais pastas foram tentadas.
+ *
+ * <p>A pasta é resolvida no boot, então o `MockMvc` da classe irmã não enxerga a troca — este
+ * contexto carrega o mesmo banco em memória e substitui só o resolvedor do temporário.</p>
+ */
+@SpringBootTest(properties = { "rede.media.storage=s3", "rede.media.s3.bucket=bucket-de-teste",
+		"rede.media.s3.publicBaseUrl=https://enois.exemplo.com/api/storage" })
+@AutoConfigureMockMvc
+class MediaStorageProxySemTemporarioTests {
+
+	static {
+		System.setProperty("aws.accessKeyId", "test");
+		System.setProperty("aws.secretAccessKey", "test");
+	}
+
+	@Autowired
+	private MockMvc mockMvc;
+
+	@Autowired
+	private ObjectMapper objectMapper;
+
+	@Autowired
+	private MediaObjectStore store;
+
+	@Test
+	void videoGrandeSemTemporarioGravavelResponde503Proprio() throws Exception {
+		var auth = new TestAuthHelper(mockMvc, objectMapper);
+		byte[] video = new byte[41 * 1024 * 1024];
+		String token = auth.authenticate("media_proxy_video_sem_tmp").token();
+		var criado = mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", token)
+				.header("Idempotency-Key", "media-proxy-video-3")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("fileName", "aula.mp4",
+					"mimeType", "video/mp4", "size", (long) video.length, "purpose", "POST_VIDEO"))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
+			.path("objectKey").asText();
+
+		// O último recurso do resolvedor é o `java.io.tmpdir`; aqui ele aponta para um arquivo comum,
+		// que não é pasta (e não `/dev/null`, onde escrever funciona e o teste passaria pelo motivo
+		// errado).
+		java.nio.file.Path arquivoNoLugarDaPasta = java.nio.file.Files.createTempFile("tmp-que-nao-e-pasta-", ".txt");
+		String tmpAnterior = System.getProperty("java.io.tmpdir");
+		System.setProperty("java.io.tmpdir", arquivoNoLugarDaPasta.toString());
+		try {
+			mockMvc.perform(put("/storage/" + objectKey)
+					.header("X-Session-Token", token)
+					.contentType("video/mp4")
+					.content(video))
+				.andExpect(status().isServiceUnavailable())
+				.andExpect(jsonPath("$.code").value("MEDIA_UPLOAD_UNAVAILABLE"))
+				.andExpect(jsonPath("$.message").value(
+					org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("/dev/null"))));
+			assertThat(((MediaStorageProxyTests.FakeObjectStore) store).chaveEscrita).isNotEqualTo(objectKey);
+		}
+		finally {
+			if (tmpAnterior == null) {
+				System.clearProperty("java.io.tmpdir");
+			}
+			else {
+				System.setProperty("java.io.tmpdir", tmpAnterior);
+			}
+			java.nio.file.Files.deleteIfExists(arquivoNoLugarDaPasta);
+		}
+	}
+
+	@TestConfiguration
+	static class SemTemporario {
+
+		@Bean
+		@Primary
+		MediaStorageProxyTests.FakeObjectStore fakeObjectStore() {
+			return new MediaStorageProxyTests.FakeObjectStore();
+		}
+
+		@Bean
+		@Primary
+		com.socialcoisa.rede.media.application.MediaTemporaryFiles semPastaGravavel() {
+			return new com.socialcoisa.rede.media.application.MediaTemporaryFiles("/dev/null/nao-e-pasta",
+				"/dev/null/nao-e-monitoramento");
+		}
 	}
 }
