@@ -12,6 +12,10 @@ import com.socialcoisa.rede.messaging.domain.ConversationContext;
 
 interface SpringDataConversationJpaRepository extends JpaRepository<ConversationJpaEntity, String> {
 
+	@org.springframework.data.jpa.repository.Modifying
+	@Query("UPDATE ConversationJpaEntity c SET c.updatedAt = :at WHERE c.id = :id")
+	int touch(@Param("id") String id, @Param("at") Instant at);
+
 	/**
 	 * The 1:1 conversation of one KIND between exactly two people. Each kind is its own thread:
 	 * a social DM (DIRECT) never receives an application (JOB) or a hiring request (SERVICE), so
