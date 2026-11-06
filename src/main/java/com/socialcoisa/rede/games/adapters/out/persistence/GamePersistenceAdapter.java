@@ -36,6 +36,14 @@ class GamePersistenceAdapter implements GameRepository {
 	}
 
 	@Override
+	public List<Game> findAllByIds(List<String> ids) {
+		if (ids.isEmpty()) {
+			return List.of();
+		}
+		return games.findAllById(ids).stream().map(GameJpaEntity::toDomain).toList();
+	}
+
+	@Override
 	public Optional<Game> findByUserAndSlug(String userId, String slug) {
 		return games.findByUserIdAndSlug(userId, slug).map(GameJpaEntity::toDomain);
 	}

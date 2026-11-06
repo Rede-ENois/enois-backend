@@ -2,10 +2,6 @@ package com.socialcoisa.rede.profile.adapters.in.web;
 
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -27,6 +23,8 @@ import org.springframework.util.StringUtils;
 import com.socialcoisa.rede.profile.application.UpdateProfileCommand;
 import com.socialcoisa.rede.profile.application.port.in.GetMeUseCase;
 import com.socialcoisa.rede.profile.application.port.in.GetUserProfileUseCase;
+import com.socialcoisa.rede.profile.application.port.in.ListProfileNetworkUseCase;
+import com.socialcoisa.rede.profile.application.ProfileNetworkUserView;
 import com.socialcoisa.rede.profile.application.port.in.ManageProfileExtensionUseCase;
 import com.socialcoisa.rede.profile.application.port.in.ManageProfileExtensionUseCase.CertificationView;
 import com.socialcoisa.rede.profile.application.port.in.ManageProfileExtensionUseCase.EducationView;
@@ -36,9 +34,6 @@ import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
 import com.socialcoisa.rede.profile.application.ProfileAppearanceService;
 import com.socialcoisa.rede.profile.application.ProfileService;
-import com.socialcoisa.rede.network.application.NetworkService;
-import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
-import com.socialcoisa.rede.profile.domain.UserProfile;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -51,8 +46,7 @@ class ProfileController {
 	private final UpdateProfileUseCase updateProfileUseCase;
 	private final ManageProfileExtensionUseCase profileExtensionUseCase;
 	private final ProfileService profileService;
-	private final NetworkService networkService;
-	private final UserProfileRepository userProfileRepository;
+	private final ListProfileNetworkUseCase listProfileNetwork;
 	private final CurrentUserResolver currentUserResolver;
 	private final IdempotencyApplicationService idempotency;
 	private final ProfileAppearanceService profileAppearanceService;
@@ -60,7 +54,7 @@ class ProfileController {
 	ProfileController(GetMeUseCase getMeUseCase, GetUserProfileUseCase getUserProfileUseCase,
 			UpdateProfileUseCase updateProfileUseCase,
 			ManageProfileExtensionUseCase profileExtensionUseCase, ProfileService profileService,
-			NetworkService networkService, UserProfileRepository userProfileRepository,
+			ListProfileNetworkUseCase listProfileNetwork,
 			CurrentUserResolver currentUserResolver,
 			IdempotencyApplicationService idempotency,
 			ProfileAppearanceService profileAppearanceService) {
@@ -69,8 +63,7 @@ class ProfileController {
 		this.updateProfileUseCase = updateProfileUseCase;
 		this.profileExtensionUseCase = profileExtensionUseCase;
 		this.profileService = profileService;
-		this.networkService = networkService;
-		this.userProfileRepository = userProfileRepository;
+		this.listProfileNetwork = listProfileNetwork;
 		this.currentUserResolver = currentUserResolver;
 		this.idempotency = idempotency;
 		this.profileAppearanceService = profileAppearanceService;
@@ -109,44 +102,30 @@ class ProfileController {
 
 	/** Pessoas ligadas ao perfil visitado; apenas conexoes aceitas entram na leitura publica. */
 	@GetMapping("/users/{username}/connections")
-	List<PublicNetworkUserView> connections(@PathVariable String username,
-			@RequestParam(defaultValue = "100") int limit) {
-		return networkUsers(username, false, limit);
+	List<ProfileNetworkUserView> connections(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String username, @RequestParam(defaultValue = "100") int limit) {
+		return listProfileNetwork.list(username, false, viewerIdOrNull(sessionToken), limit);
 	}
 
 	/** Seguidores do perfil visitado: quem enviou uma conexao aceita para ele. */
 	@GetMapping("/users/{username}/followers")
-	List<PublicNetworkUserView> followers(@PathVariable String username,
-			@RequestParam(defaultValue = "100") int limit) {
-		return networkUsers(username, true, limit);
+	List<ProfileNetworkUserView> followers(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String username, @RequestParam(defaultValue = "100") int limit) {
+		return listProfileNetwork.list(username, true, viewerIdOrNull(sessionToken), limit);
 	}
 
-	private List<PublicNetworkUserView> networkUsers(String username, boolean followers, int limit) {
-		int cappedLimit = Math.clamp(limit, 1, 100);
-		UserProfile profile = userProfileRepository.findByUsername(username)
-			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
-		List<String> ids = networkService.getConnections(profile.id()).stream()
-			.filter(connection -> !followers || profile.id().equals(connection.receiverUserId()))
-			.map(connection -> profile.id().equals(connection.requesterUserId())
-				? connection.receiverUserId() : connection.requesterUserId())
-			.distinct()
-			.limit(cappedLimit)
-			.toList();
-		Map<String, UserProfile> profiles = userProfileRepository.findAllByIds(ids).stream()
-			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
-		return ids.stream()
-			.map(profiles::get)
-			.filter(Objects::nonNull)
-			.map(PublicNetworkUserView::from)
-			.toList();
-	}
-
-	record PublicNetworkUserView(String id, String username, String name, String headline, String avatar,
-		String avatarFrame, com.socialcoisa.rede.profile.application.NameStyleView nameStyle) {
-		static PublicNetworkUserView from(UserProfile profile) {
-			return new PublicNetworkUserView(profile.id(), profile.username(), profile.displayWithNickname(),
-				profile.headline(), profile.avatar(), profile.avatarFrame(),
-				com.socialcoisa.rede.profile.application.NameStyleView.from(profile));
+	/** Leitura publica: sem sessao valida a lista sai sem o filtro de bloqueios de quem le. */
+	private String viewerIdOrNull(String sessionToken) {
+		if (!StringUtils.hasText(sessionToken)) {
+			return null;
+		}
+		try {
+			return currentUserResolver.resolve(sessionToken).id().value();
+		}
+		catch (ApiException exception) {
+			return null;
 		}
 	}
 

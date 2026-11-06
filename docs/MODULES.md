@@ -958,6 +958,17 @@ era recurso do Jitsi público e não existe na Epapo.
 | `addReaction(String messageId, String userId, String reactionType)` | Adiciona/toggle reação em mensagem |
 | `getReactions(String messageId)` | Lista reações da mensagem |
 
+### ConversationReachPolicy
+
+Quem pode alcançar quem numa conversa. As regras olham o estado **atual** das pessoas e rodam ao
+abrir uma conversa, ao reabrir uma existente (DM, candidatura, serviço, freela, DM corporativa) e
+a cada mensagem enviada, não só na criação:
+
+- bloqueio em qualquer sentido entre quem envia e quem recebe: 403 `USER_BLOCKED` (em `GROUP` o
+  bloqueio entre dois membros não silencia o grupo);
+- menor de idade só é alcançado por quem tem conexão aceita com ele: 403 `MINOR_DM_RESTRICTED`
+  (conversas `JOB` e `SERVICE` ficam fora, porque nascem de uma ação do próprio menor).
+
 ### Domain Objects
 
 | Classe | Descrição |
@@ -1369,6 +1380,25 @@ distribuição.
 
 Arquivos: `DailyWordController`, `DailyMazeController`, `DailyBlocksController`,
 `DailyGameRewardsController` + `DailyGameRewardsScheduler`.
+
+Integrity of the ranking and the prizes:
+
+- **Plausible time** (`dailygames/domain/PlayPlausibility`): a Words win faster than 750 ms per guess
+  or a Maze run faster than 50 ms per step of the maze's shortest route ends the game normally for the
+  player, but the session stores `integrity_flag = 'TOO_FAST'` (V247) and stays out of the
+  leaderboard and the prize queue. Blocks is bounded by its own rules: one action per 80 ms and a
+  server-side replay where gravity runs in real time.
+- **Maze moves** are capped at 20 per second per account (`ActionThrottle`, `429 ACTION_THROTTLED`).
+- **Blocks pieces**: `GET /daily-games/blocks/today` returns the next `DailyBlocksService.PIECES_AHEAD`
+  (24, above the client's refill threshold of 20) pieces of the official sequence while the game is `PLAYING`; the client refills from the same
+  endpoint as it plays.
+- **Prizes** (`DailyGameRewardsService`): paid two days after the challenge day, only to accounts with
+  a verified identity (e-mail or second factor) that existed for the whole new-account window (7 days,
+  `RewardEligibility`) before the challenge day started. Ranks are counted among eligible accounts,
+  so an ineligible account does not hold a prize back. Each credit commits in its own transaction
+  with up to 3 attempts on `COIN_CONCURRENCY` or a lock timeout; a credit that still fails is logged
+  (`daily_game_reward_failed`) and paid by the next daily run (the run looks back 7 days; the ledger
+  reference `jogos:<jogo>:<dia>:<conta>` keeps it idempotent).
 
 ## 26. Push (Notificações web push)
 

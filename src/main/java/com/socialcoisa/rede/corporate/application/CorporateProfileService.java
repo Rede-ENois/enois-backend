@@ -49,8 +49,11 @@ public class CorporateProfileService {
 	private final UserProfileRepository profiles;
 	private final Clock clock;
 
+	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
+
 	public CorporateProfileService(CorporateProfileRepository repository, UserProfileRepository profiles,
-			Clock clock) {
+			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate, Clock clock) {
+		this.sanctionGate = sanctionGate;
 		this.repository = repository;
 		this.profiles = profiles;
 		this.clock = clock;
@@ -100,6 +103,13 @@ public class CorporateProfileService {
 
 	public Optional<CorporateProfile> byUsername(String username) {
 		return repository.findByUsername(normalize(username));
+	}
+
+	/** The public work page: active, and not of a banned account (same rule as the social profile). */
+	public Optional<CorporateProfile> publicByUsername(String username) {
+		return byUsername(username)
+			.filter(CorporateProfile::active)
+			.filter(profile -> !sanctionGate.banned(profile.userId()));
 	}
 
 	public CorporateProfile updateDetails(String userId, String headline, String bio, String avatar,
