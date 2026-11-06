@@ -44,6 +44,14 @@ class UserPreferenceJpaEntity {
 	@Column(name = "batata_mode", nullable = false)
 	private boolean batataMode;
 
+	/** Se as notificacoes de novas features e design system devem aparecer (true = ativo, false = ignorado). */
+	@Column(name = "whats_new_enabled", nullable = false)
+	private boolean whatsNewEnabled = true;
+
+	/** Versao da ultima novidade vista pelo usuario na conta. */
+	@Column(name = "whats_new_last_seen", length = 64)
+	private String whatsNewLastSeen;
+
 	@Column(name = "updated_at", nullable = false)
 	private Instant updatedAt;
 
@@ -66,11 +74,14 @@ class UserPreferenceJpaEntity {
 		entity.nightRestDismissedOn = preference.nightRestDismissedOn();
 		entity.liteMode = preference.liteMode();
 		entity.batataMode = preference.batataMode();
+		entity.whatsNewEnabled = preference.whatsNewEnabled();
+		entity.whatsNewLastSeen = preference.whatsNewLastSeen();
 		return entity;
 	}
 
 	UserPreference toDomain() {
 		return new UserPreference(userId, themeId, likedTopics, blockedTopics, disabledModules,
-			nightRestReminder, nightRestDismissedOn, liteMode, batataMode, updatedAt);
+			nightRestReminder, nightRestDismissedOn, liteMode, batataMode, whatsNewEnabled, whatsNewLastSeen,
+			updatedAt);
 	}
 }
