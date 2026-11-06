@@ -11,8 +11,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.feed.domain.AuthorIdentity;
 import com.socialcoisa.rede.feed.domain.Post;
+import com.socialcoisa.rede.feed.domain.PostCounter;
 import com.socialcoisa.rede.feed.domain.PostId;
 import com.socialcoisa.rede.feed.domain.PostRepost;
+import com.socialcoisa.rede.feed.domain.PostStatus;
 import com.socialcoisa.rede.feed.domain.PostType;
 import com.socialcoisa.rede.feed.domain.UserId;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
@@ -69,6 +71,10 @@ public class RepostPostService {
 
 		Post root = resolveRoot(postId);
 		validateRepostable(root);
+		// Lock before reading "already reposted?" and before the insert (see PostRepository#lockForUpdate).
+		if (posts.lockForUpdate(root.id()).filter(status -> status == PostStatus.ACTIVE).isEmpty()) {
+			throw new ApiException(404, "POST_NOT_FOUND", "Post nao encontrado.");
+		}
 
 		if (reposts.exists(userId, root.id().value())) {
 			throw new ApiException(409, "ALREADY_REPOSTED", "Voce ja republicou este post.");
@@ -79,20 +85,19 @@ public class RepostPostService {
 		}
 
 		reposts.save(PostRepost.create(userId, root.id().value(), clock.instant()));
-		root.repost();
-		posts.save(root);
+		posts.adjustCounter(root.id(), PostCounter.REPOSTS, 1);
+		root.refreshCounters(posts.counters(root.id()));
 		return root;
 	}
 
 	/** Remove o repost puro (desfazer). */
 	@Transactional
 	public void undoRepost(String userId, String postId) {
+		PostId id = new PostId(postId);
+		posts.lockForUpdate(id);
 		if (reposts.exists(userId, postId)) {
 			reposts.delete(userId, postId);
-			posts.findById(new PostId(postId)).ifPresent(post -> {
-				post.unrepost();
-				posts.save(post);
-			});
+			posts.adjustCounter(id, PostCounter.REPOSTS, -1);
 		}
 	}
 

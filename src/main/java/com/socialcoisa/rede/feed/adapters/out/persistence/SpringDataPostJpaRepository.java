@@ -218,11 +218,37 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 	int updateAcceptedAnswer(@Param("id") String id, @Param("commentId") String commentId,
 			@Param("resolvedAt") Instant resolvedAt);
 
-	/** A resposta aceita sumiu (apagada pelo autor ou pela moderação): a dúvida volta a ficar aberta. */
-	@org.springframework.transaction.annotation.Transactional
+	/**
+	 * The accepted answer is gone (deleted by its author or by moderation): the question is open again.
+	 * Scoped to the comment's post by primary key: `accepted_comment_id` has no index, and matching
+	 * on it alone scanned (and locked) every row of `posts` on each comment deletion.
+	 */
 	@org.springframework.data.jpa.repository.Modifying(flushAutomatically = true, clearAutomatically = true)
-	@Query("UPDATE PostJpaEntity p SET p.acceptedCommentId = NULL, p.resolvedAt = NULL WHERE p.acceptedCommentId IN :commentIds")
-	int clearAcceptedAnswers(@Param("commentIds") Collection<String> commentIds);
+	@Query("UPDATE PostJpaEntity p SET p.acceptedCommentId = NULL, p.resolvedAt = NULL"
+		+ " WHERE p.id = :postId AND p.acceptedCommentId = :commentId")
+	int clearAcceptedAnswer(@Param("postId") String postId, @Param("commentId") String commentId);
+
+	/** Row lock on the post for the rest of the transaction (see PostRepository#lockForUpdate). */
+	@Query(value = "select p.status from posts p where p.id = :id for update", nativeQuery = true)
+	java.util.Optional<String> lockStatusForUpdate(@Param("id") String id);
+
+	/** One statement, relative to the stored value: concurrent deltas add up instead of overwriting. */
+	@org.springframework.data.jpa.repository.Modifying
+	@Query("""
+		UPDATE PostJpaEntity p SET
+		  p.reactions = greatest(p.reactions + :reactions, 0),
+		  p.comments = greatest(p.comments + :comments, 0),
+		  p.saves = greatest(p.saves + :saves, 0),
+		  p.shares = greatest(p.shares + :shares, 0),
+		  p.reposts = greatest(p.reposts + :reposts, 0)
+		WHERE p.id = :id""")
+	int addToCounters(@Param("id") String id, @Param("reactions") int reactions, @Param("comments") int comments,
+			@Param("saves") int saves, @Param("shares") int shares, @Param("reposts") int reposts);
+
+	@Query("""
+		SELECT new com.socialcoisa.rede.feed.domain.Counters(p.reactions, p.comments, p.saves, p.shares, p.reposts)
+		FROM PostJpaEntity p WHERE p.id = :id""")
+	java.util.Optional<com.socialcoisa.rede.feed.domain.Counters> findCounters(@Param("id") String id);
 
 	/** Todos os posts do autor (sem filtro de status) — ban cleanup, PR #37. */
 }

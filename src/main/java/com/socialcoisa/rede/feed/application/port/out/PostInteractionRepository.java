@@ -9,6 +9,10 @@ import com.socialcoisa.rede.feed.domain.PostId;
 import com.socialcoisa.rede.feed.domain.ReactionType;
 import com.socialcoisa.rede.feed.domain.UserId;
 
+/**
+ * Rows behind the post counters. The writes for a post (reaction, save, share) read before they
+ * write, so the caller must hold the post row lock (PostRepository#lockForUpdate) while calling them.
+ */
 public interface PostInteractionRepository {
 
 	/**

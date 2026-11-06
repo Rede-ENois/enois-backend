@@ -1,5 +1,7 @@
 package com.socialcoisa.rede.feed.application;
 
+import java.util.Optional;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -10,6 +12,7 @@ import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.Comment;
 import com.socialcoisa.rede.feed.domain.CommentStatus;
+import com.socialcoisa.rede.feed.domain.PostCounter;
 import com.socialcoisa.rede.feed.domain.UserId;
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -34,12 +37,12 @@ public class DeleteCommentService implements ModerationRemoveCommentUseCase {
 	/** The author deletes their own comment (hard delete). */
 	@Transactional
 	public void deleteAsAuthor(UserId userId, String commentId) {
-		Comment comment = commentRepository.findById(commentId)
+		Comment comment = lockPostAndLoad(commentId)
 			.orElseThrow(() -> new ApiException(404, "COMMENT_NOT_FOUND", "Comentario nao encontrado."));
 		if (!comment.authorId().equals(userId)) {
 			throw new ApiException(403, "NOT_AUTHORIZED", "Voce nao pode deletar este comentario.");
 		}
-		commentRepository.deleteById(commentId);
+		commentRepository.delete(comment);
 		giveBackToPost(comment);
 	}
 
@@ -50,7 +53,7 @@ public class DeleteCommentService implements ModerationRemoveCommentUseCase {
 	@Override
 	@Transactional
 	public void removeAsModerator(String moderatorId, String commentId, String reason) {
-		Comment comment = commentRepository.findById(commentId).orElse(null);
+		Comment comment = lockPostAndLoad(commentId).orElse(null);
 		if (comment == null || comment.status() != CommentStatus.ACTIVE) {
 			return;
 		}
@@ -61,6 +64,19 @@ public class DeleteCommentService implements ModerationRemoveCommentUseCase {
 	}
 
 	/**
+	 * Locks the comment's post before loading the comment, so the comment is read after any other
+	 * removal of it has committed: two concurrent deletes give the comment back to the counter once,
+	 * and the second one sees it gone instead of failing on a row that no longer exists.
+	 */
+	private Optional<Comment> lockPostAndLoad(String commentId) {
+		return commentRepository.findPostIdOf(commentId)
+			.flatMap(postId -> {
+				postRepository.lockForUpdate(postId);
+				return commentRepository.findById(commentId);
+			});
+	}
+
+	/**
 	 * The post counter gives the removed comment back. Without it, "comment and delete" inflated the
 	 * interaction the post received (and the author's credibility) without limit.
 	 */
@@ -68,9 +84,6 @@ public class DeleteCommentService implements ModerationRemoveCommentUseCase {
 		if (comment.status() != CommentStatus.ACTIVE) {
 			return;
 		}
-		postRepository.findById(comment.postId()).ifPresent(post -> {
-			post.removeComment();
-			postRepository.save(post);
-		});
+		postRepository.adjustCounter(comment.postId(), PostCounter.COMMENTS, -1);
 	}
 }

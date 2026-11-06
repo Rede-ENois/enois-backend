@@ -46,6 +46,7 @@ class CommentReactionJpaEntity {
 		this.createdAt = createdAt;
 	}
 
+	String getId() { return id; }
 	String getCommentId() { return commentId; }
 	String getUserId() { return userId; }
 	ReactionType getReactionType() { return reactionType; }
