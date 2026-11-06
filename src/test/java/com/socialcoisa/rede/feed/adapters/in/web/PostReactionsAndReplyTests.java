@@ -127,8 +127,10 @@ class PostReactionsAndReplyTests {
 		assertThat(coinEntries(author.userId())).isEqualTo(before);
 	}
 
+	/** Entries other than the daily presence, which publishing the post records on its own executor. */
 	private long coinEntries(String accountId) {
-		return jdbc.queryForObject("select count(*) from coin_entries where account_id = ?", Long.class, accountId);
+		return jdbc.queryForObject("select count(*) from coin_entries where account_id = ? and ref_id not like 'presenca:%'",
+			Long.class, accountId);
 	}
 
 	@Test
