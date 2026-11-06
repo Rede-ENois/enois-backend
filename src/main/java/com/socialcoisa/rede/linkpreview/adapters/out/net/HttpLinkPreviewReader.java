@@ -78,7 +78,9 @@ public class HttpLinkPreviewReader implements LinkPreviewReader {
 
 	private static final Pattern DESCRIPTION = metaContent("description");
 
-	private static final Pattern TITLE = Pattern.compile("<title[^>]*>(.*?)</title>",
+	// Quantificadores com teto: `[^>]*` e `.*?` sem limite voltam atras em pagina cheia de
+	// `<title` sem fechar, e o texto vem de fora. O teto e maior que qualquer titulo real.
+	private static final Pattern TITLE = Pattern.compile("<title[^>]{0,200}>(.{0,2000}?)</title>",
 			Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 
 	private static final Pattern NUMERIC_ENTITY = Pattern.compile("&#(x?)([0-9a-fA-F]{1,8});?");
@@ -398,8 +400,8 @@ public class HttpLinkPreviewReader implements LinkPreviewReader {
 	}
 
 	private static Pattern metaContent(String chave) {
-		return Pattern.compile("<meta[^>]*(?:property|name)\\s*=\\s*[\"']" + Pattern.quote(chave)
-				+ "[\"'][^>]*content\\s*=\\s*[\"']([^\"']*)[\"']",
+		return Pattern.compile("<meta[^>]{0,500}(?:property|name)\\s{0,10}=\\s{0,10}[\"']"
+				+ Pattern.quote(chave) + "[\"'][^>]{0,500}content\\s{0,10}=\\s{0,10}[\"']([^\"']{0,2000})[\"']",
 				Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 	}
 
