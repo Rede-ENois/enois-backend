@@ -27,6 +27,7 @@ import com.socialcoisa.rede.contributions.application.port.out.GitHubGateway;
 import com.socialcoisa.rede.contributions.application.port.out.GitHubIdentityRepository;
 import com.socialcoisa.rede.contributions.application.port.out.GitHubIssue;
 import com.socialcoisa.rede.contributions.application.port.out.GitHubPullRequest;
+import com.socialcoisa.rede.contributions.application.port.out.GitHubRepositoryGoneException;
 import com.socialcoisa.rede.contributions.application.port.out.GitHubRepositoryRegistry;
 import com.socialcoisa.rede.contributions.domain.ContributionCategory;
 import com.socialcoisa.rede.contributions.domain.ContributionKind;
@@ -160,6 +161,8 @@ public class GitHubContributionSyncService {
 			names.add(repository.repository());
 			Set<String> seenGithubIds = new LinkedHashSet<>();
 			String failure = null;
+			// Repositório pulado sem ler nada: o vínculo não pode continuar parecendo atualizado.
+			boolean trackedAttempts = false;
 			try {
 				Instant since = full || repository.lastSyncedAt() == null ? null
 					: repository.lastSyncedAt().minus(Duration.ofHours(24));
@@ -327,6 +330,14 @@ public class GitHubContributionSyncService {
 				addError(errors, repository.repository() + ": " + rate.getMessage());
 				break;
 			}
+			catch (GitHubRepositoryGoneException gone) {
+				trackedAttempts = true;
+				// Um repositório apagado (ou virado privado) não é falha de ninguém que está aqui:
+				// antes ele parava a varredura e marcava todos os vínculos como erro, e nenhum
+				// repositório depois dele era lido. Pula, avisa a administração e segue.
+				LOG.warn("github_sync_repository_gone repository={}", repository.repository());
+				addError(errors, repository.repository() + ": repositório não existe mais no GitHub");
+			}
 			catch (RuntimeException failureEx) {
 				failure = failureEx.getMessage();
 				LOG.warn("github_sync_failed repository={} error={}", repository.repository(),
@@ -336,11 +347,12 @@ public class GitHubContributionSyncService {
 			}
 			finally {
 				if (failure != null && !dryRun) {
-					for (String githubId : targeted ? authorGithubIds : seenGithubIds) {
-						if (StringUtils.hasText(githubId)) {
-							identities.markSynced(githubId, GitHubSyncState.ERROR, failure, started);
-						}
-					}
+					markAttempt(identities, targeted ? authorGithubIds : seenGithubIds, GitHubSyncState.ERROR,
+						failure, started);
+				}
+				else if (trackedAttempts && !dryRun) {
+					markAttempt(identities, targeted ? authorGithubIds : seenGithubIds, GitHubSyncState.STALE,
+						null, started);
 				}
 			}
 		}
@@ -456,6 +468,15 @@ public class GitHubContributionSyncService {
 		}
 		Matcher matcher = REVERT_TARGET.matcher(text);
 		return matcher.find() ? Integer.valueOf(matcher.group(1)) : null;
+	}
+
+	private static void markAttempt(GitHubIdentityRepository identities, Set<String> githubIds,
+			GitHubSyncState state, String error, Instant at) {
+		for (String githubId : githubIds) {
+			if (StringUtils.hasText(githubId)) {
+				identities.markSynced(githubId, state, error, at);
+			}
+		}
 	}
 
 	private static void addError(List<String> errors, String message) {

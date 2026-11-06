@@ -24,6 +24,7 @@ import com.socialcoisa.rede.contributions.application.port.out.GitHubContributio
 import com.socialcoisa.rede.contributions.application.port.out.GitHubGateway;
 import com.socialcoisa.rede.contributions.application.port.out.GitHubIssue;
 import com.socialcoisa.rede.contributions.application.port.out.GitHubPullRequest;
+import com.socialcoisa.rede.contributions.application.port.out.GitHubRepositoryGoneException;
 import com.socialcoisa.rede.contributions.application.port.out.GitHubRepositoryRegistry;
 import com.socialcoisa.rede.contributions.application.port.out.UserSealRepository;
 import com.socialcoisa.rede.contributions.domain.ContributionCategory;
@@ -49,6 +50,8 @@ class GitHubContributionSyncTests {
 	private static final AtomicReference<List<GitHubPullRequest>> PULLS = new AtomicReference<>(List.of());
 	private static final AtomicReference<List<GitHubIssue>> ISSUES = new AtomicReference<>(List.of());
 	private static final AtomicReference<List<String>> ORG_REPOS = new AtomicReference<>(List.of());
+	/** Repositórios que o GitHub responde 404: apagados (ou viraram privados) depois de elegíveis. */
+	private static final java.util.Set<String> GONE = java.util.concurrent.ConcurrentHashMap.newKeySet();
 	private static final String HEAD = "gh-103";
 
 	@Autowired
@@ -92,11 +95,17 @@ class GitHubContributionSyncTests {
 
 		@Override
 		public List<GitHubPullRequest> listMergedPullRequests(String repository, Instant since, int maxPages) {
+			if (GONE.contains(repository)) {
+				throw new GitHubRepositoryGoneException(repository);
+			}
 			return PULLS.get();
 		}
 
 		@Override
 		public List<GitHubIssue> listIssues(String repository, Instant since, int maxPages) {
+			if (GONE.contains(repository)) {
+				throw new GitHubRepositoryGoneException(repository);
+			}
 			return ISSUES.get();
 		}
 
@@ -321,6 +330,69 @@ class GitHubContributionSyncTests {
 			.orElseThrow().status()).isEqualTo(ContributionStatus.PENDING);
 		assertThat(seals.findByUserAndType(session.userId(), SealType.BETA_TESTER).orElseThrow().status())
 			.isEqualTo(SealStatus.REVOKED);
+	}
+
+	/**
+	 * Um repositório que sumiu do GitHub não pode derrubar o ciclo: antes a varredura parava nele e
+	 * marcava todos os vínculos como erro, então quem tinha contribuição nos repositórios seguintes
+	 * ficava sem sincronizar — e o botão "Verificar contribuições" voltava como falha.
+	 */
+	@Test
+	void repositoryThatNoLongerExistsIsSkippedAndTheRestStillSyncs() throws Exception {
+		String suffix = String.valueOf(System.nanoTime());
+		String gone = "Rede-ENois/apagado-" + suffix;
+		String alive = "Rede-ENois/vivo-" + suffix;
+		String ignored = "Rede-ENois/depois-" + suffix;
+		registry.save(new GitHubRepository(gone, true, Instant.now(), null));
+		registry.save(new GitHubRepository(alive, true, Instant.now(), null));
+		registry.save(new GitHubRepository(ignored, true, Instant.now(), null));
+
+		var session = new TestAuthHelper(mockMvc, objectMapper).authenticate("gh_gone_" + suffix);
+		String githubId = "gh-gone-" + suffix;
+		identities.remember(session.userId(), githubId, "gone-dev");
+
+		Instant now = Instant.now();
+		GONE.add(gone);
+		ISSUES.set(List.of());
+		PULLS.set(List.of(pull(901, githubId, "gone-dev", "Corrige o saldo", List.of("src/main/Balance.java"),
+			20, 2, 1, 1, now)));
+		try {
+			var report = sync.sync(false, true, List.of(gone, alive));
+
+			// O repositório morto é pulado com aviso...
+			assertThat(report.errors()).anyMatch(error -> error.startsWith(gone + ":"));
+			assertThat(report.rateLimited()).isFalse();
+			// ...e o seguinte é lido normalmente.
+			assertThat(contributions.findByRepositoryAndKindAndNumber(alive, ContributionKind.PULL_REQUEST, 901))
+				.isPresent();
+			assertThat(identities.status(session.userId()).syncState()).isEqualTo(GitHubSyncState.OK);
+		}
+		finally {
+			GONE.remove(gone);
+		}
+	}
+
+	@Test
+	void repositoryThatNoLongerExistsLeavesTheLinkAwaitingAFreshSync() throws Exception {
+		String suffix = String.valueOf(System.nanoTime());
+		String gone = "Rede-ENois/sumiu-" + suffix;
+		registry.save(new GitHubRepository(gone, true, Instant.now(), null));
+
+		var session = new TestAuthHelper(mockMvc, objectMapper).authenticate("gh_gone_link_" + suffix);
+		String githubId = "gh-gone-link-" + suffix;
+		identities.remember(session.userId(), githubId, "gone-link-dev");
+		sync.syncForGithubUser(githubId);
+
+		GONE.add(gone);
+		try {
+			sync.syncForGithubUser(githubId);
+		}
+		finally {
+			GONE.remove(gone);
+		}
+
+		// Nada foi lido: o vínculo não pode continuar com cara de sincronizado.
+		assertThat(identities.status(session.userId()).syncState()).isEqualTo(GitHubSyncState.STALE);
 	}
 
 	private static GitHubPullRequest pull(long number, String authorId, String login, String title,
