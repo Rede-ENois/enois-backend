@@ -11,7 +11,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 
-/** V248: the reward lookup and the 24-hour play tally have an index that starts with their filter. */
+/** V249: the reward lookup and the 24-hour play tally have an index that starts with their filter. */
 class LookupIndexMigrationTests {
 
 	@Test
@@ -22,7 +22,7 @@ class LookupIndexMigrationTests {
 		// game_events as V75 creates it (the rest of V75 needs the earlier games migrations).
 		jdbc.execute("create table game_events (id varchar(255) not null, game_id varchar(255) not null, "
 			+ "kind varchar(24) not null, user_id varchar(255), created_at timestamp not null, primary key (id))");
-		new ResourceDatabasePopulator(new ClassPathResource("db/migration/V248__coin_and_game_event_lookup_indexes.sql"))
+		new ResourceDatabasePopulator(new ClassPathResource("db/migration/V249__coin_and_game_event_lookup_indexes.sql"))
 			.execute(ds);
 
 		assertThat(columns(jdbc, "IDX_COIN_ENTRIES_KIND_REF")).containsExactly("KIND", "REF_ID");
