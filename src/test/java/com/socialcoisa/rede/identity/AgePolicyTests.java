@@ -160,28 +160,28 @@ class AgePolicyTests {
 		// Forçar o alvo a ser menor de 18 (15 anos) direto na base.
 		jdbc.update("UPDATE users SET birth_date = ? WHERE id = ?", minorBirthDate(), minor.userId());
 
-		// Conversa direta de um desconhecido com o menor: a PRIMEIRA mensagem já é barrada.
-		MvcResult conversation = mockMvc.perform(post("/conversations/direct")
+		// Conversa direta de um desconhecido com o menor: nem abre (a conversa vazia já seria um
+		// contato visível na caixa de entrada do menor).
+		mockMvc.perform(post("/conversations/direct")
 				.header("X-Session-Token", stranger.token())
 				.header("Idempotency-Key", "age-dm-create")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("userId", minor.userId()))))
-			.andExpect(status().isOk())
-			.andReturn();
-		String conversationId = objectMapper.readTree(conversation.getResponse().getContentAsString())
-			.get("id").asText();
-
-		mockMvc.perform(post("/conversations/" + conversationId + "/messages")
-				.header("X-Session-Token", stranger.token())
-				.header("Idempotency-Key", "age-dm-msg-1")
-				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("text", "oi, me passa seu whatsapp?"))))
 			.andExpect(status().isForbidden())
 			.andExpect(jsonPath("$.code").value("MINOR_DM_RESTRICTED"));
 
 		// Com conexão ACEITA entre os dois, a mensagem passa (ex.: colega de turma da escola).
 		connections.save(UserConnection.restore(null, minor.userId(), stranger.userId(),
 			ConnectionStatus.ACCEPTED, java.time.Instant.now(), java.time.Instant.now(), null));
+		MvcResult conversation = mockMvc.perform(post("/conversations/direct")
+				.header("X-Session-Token", stranger.token())
+				.header("Idempotency-Key", "age-dm-create-connected")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("userId", minor.userId()))))
+			.andExpect(status().isOk())
+			.andReturn();
+		String conversationId = objectMapper.readTree(conversation.getResponse().getContentAsString())
+			.get("id").asText();
 
 		mockMvc.perform(post("/conversations/" + conversationId + "/messages")
 				.header("X-Session-Token", stranger.token())

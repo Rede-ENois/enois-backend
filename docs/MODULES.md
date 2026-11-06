@@ -956,6 +956,17 @@ era recurso do Jitsi público e não existe na Epapo.
 | `addReaction(String messageId, String userId, String reactionType)` | Adiciona/toggle reação em mensagem |
 | `getReactions(String messageId)` | Lista reações da mensagem |
 
+### ConversationReachPolicy
+
+Quem pode alcançar quem numa conversa. As regras olham o estado **atual** das pessoas e rodam ao
+abrir uma conversa, ao reabrir uma existente (DM, candidatura, serviço, freela, DM corporativa) e
+a cada mensagem enviada, não só na criação:
+
+- bloqueio em qualquer sentido entre quem envia e quem recebe: 403 `USER_BLOCKED` (em `GROUP` o
+  bloqueio entre dois membros não silencia o grupo);
+- menor de idade só é alcançado por quem tem conexão aceita com ele: 403 `MINOR_DM_RESTRICTED`
+  (conversas `JOB` e `SERVICE` ficam fora, porque nascem de uma ação do próprio menor).
+
 ### Domain Objects
 
 | Classe | Descrição |

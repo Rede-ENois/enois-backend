@@ -27,11 +27,9 @@ public class MessagingService {
 	private final Clock clock;
 	private final UserRateLimiter userRateLimiter;
 	private final BehavioralTimingGuard behavioralTimingGuard;
-	private final com.socialcoisa.rede.shared.age.AgePolicyReader agePolicy;
 	private final com.socialcoisa.rede.shared.age.AgeGate ageGate;
 	private final com.socialcoisa.rede.shared.sanctions.SanctionGate sanctionGate;
-	private final com.socialcoisa.rede.network.application.port.out.ConnectionRepository connections;
-	private final com.socialcoisa.rede.shared.blocks.BlockedUsersReader blockedUsers;
+	private final ConversationReachPolicy reach;
 	private final com.socialcoisa.rede.corporate.application.CorporateProfileService corporateProfiles;
 	private final com.socialcoisa.rede.coin.application.CoinService coins;
 	private final org.springframework.context.ApplicationEventPublisher events;
@@ -39,10 +37,8 @@ public class MessagingService {
 
 	public MessagingService(MessagingRepository repository, NotificationService notificationService, Clock clock,
 			UserRateLimiter userRateLimiter, BehavioralTimingGuard behavioralTimingGuard,
-			com.socialcoisa.rede.shared.age.AgePolicyReader agePolicy, com.socialcoisa.rede.shared.age.AgeGate ageGate,
-			com.socialcoisa.rede.shared.sanctions.SanctionGate sanctionGate,
-			com.socialcoisa.rede.network.application.port.out.ConnectionRepository connections,
-			com.socialcoisa.rede.shared.blocks.BlockedUsersReader blockedUsers,
+			com.socialcoisa.rede.shared.age.AgeGate ageGate,
+			com.socialcoisa.rede.shared.sanctions.SanctionGate sanctionGate, ConversationReachPolicy reach,
 			com.socialcoisa.rede.corporate.application.CorporateProfileService corporateProfiles,
 			com.socialcoisa.rede.coin.application.CoinService coins,
 			org.springframework.context.ApplicationEventPublisher events, ConversationViewers viewers) {
@@ -54,11 +50,9 @@ public class MessagingService {
 		this.clock = clock;
 		this.userRateLimiter = userRateLimiter;
 		this.behavioralTimingGuard = behavioralTimingGuard;
-		this.agePolicy = agePolicy;
 		this.ageGate = ageGate;
 		this.sanctionGate = sanctionGate;
-		this.connections = connections;
-		this.blockedUsers = blockedUsers;
+		this.reach = reach;
 		this.corporateProfiles = corporateProfiles;
 	}
 
@@ -92,20 +86,8 @@ public class MessagingService {
 		}
 		ageGate.requireCanWrite(createdBy);
 		unique.add(createdBy);
-		// One read per kind for the whole group (up to 100 people), never one per participant.
-		// hiddenIdsFor covers blocks in both directions.
-		var creatorHidden = blockedUsers.hiddenIdsFor(createdBy);
 		java.util.List<String> others = unique.stream().filter(pid -> !pid.equals(createdBy)).toList();
-		if (others.stream().anyMatch(creatorHidden::contains)) {
-			throw new com.socialcoisa.rede.shared.web.ApiException(403, "USER_BLOCKED",
-				"Nao e possivel conversar com este usuario.");
-		}
-		var minors = agePolicy.minorIds(others);
-		if (!minors.isEmpty()) {
-			if (!connections.findAcceptedAmong(createdBy, minors).containsAll(minors)) {
-				throw minorDmRestricted();
-			}
-		}
+		reach.requireMayOpen(createdBy, others);
 		// A DM 1:1 is one thread per pair: opening it again from the inbox search returns the same
 		// conversation instead of a duplicate (the /direct endpoint already worked this way).
 		if ("DIRECT".equals(normalizedKind) && others.size() == 1) {
@@ -172,6 +154,7 @@ public class MessagingService {
 	}
 
 	private String pairConversation(String userA, String userB, String kind, String title) {
+		reach.requireMayOpenPair(kind, userA, userB);
 		var existing = repository.findPairByKind(userA, userB, kind);
 		if (existing.isPresent()) {
 			return existing.get().id();
@@ -217,7 +200,7 @@ public class MessagingService {
 			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
 		}
 		requireBusinessDirectInitiatorProfile(conversation, senderId);
-		protegeMenorDestinatario(conversationId, senderId);
+		requireMayReachParticipants(conversation, senderId);
 		java.util.List<String> midias = mediaIds == null ? java.util.List.of()
 			: mediaIds.stream().filter(v -> v != null && !v.isBlank()).map(String::trim).distinct().toList();
 		String corpo = text == null ? "" : text.trim();
@@ -283,7 +266,7 @@ public class MessagingService {
 			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
 		}
 		requireBusinessDirectInitiatorProfile(conversation, senderId);
-		protegeMenorDestinatario(conversationId, senderId);
+		requireMayReachParticipants(conversation, senderId);
 		if (ciphertext == null || ciphertext.isBlank()) {
 			throw new ApiException(400, "EMPTY_MESSAGE", "Mensagem cifrada vazia.");
 		}
@@ -376,36 +359,13 @@ public class MessagingService {
 			? "NEW_WORK_MESSAGE" : "NEW_MESSAGE";
 	}
 
-	/**
-	 * ECA Digital: destinatario menor de 18 so recebe mensagem de quem tem conexao ACEITA com ele.
-	 * Desconhecidos nao abrem conversa com menor — o primeiro vetor de contato abusivo fica fechado.
-	 */
-	private void protegeMenorDestinatario(String conversationId, String senderId) {
-		// Applies to every person-to-person conversation, groups included: a minor added to a group
-		// did not choose its other members. JOB and SERVICE conversations are opened by the minor's
-		// own action (applying, hiring) and keep working.
-		String kind = repository.findConversationById(conversationId)
-			.map(conversation -> conversation.kind())
-			.orElse("DIRECT");
-		if ("JOB".equalsIgnoreCase(kind) || "SERVICE".equalsIgnoreCase(kind)) {
-			return;
-		}
-		List<com.socialcoisa.rede.messaging.domain.ConversationParticipant> participants = repository
-			.findParticipantsByConversation(conversationId);
-		for (com.socialcoisa.rede.messaging.domain.ConversationParticipant participant : participants) {
-			String recipientId = participant.userId();
-			if (recipientId.equals(senderId)) {
-				continue;
-			}
-			requireMayContactMinor(senderId, recipientId);
-		}
-	}
-
-	/** ECA Digital: a minor is only reachable by someone with an ACCEPTED connection to them. */
-	private void requireMayContactMinor(String actorId, String recipientId) {
-		if (agePolicy.isMinor(recipientId) && !connections.existsAcceptedConnection(actorId, recipientId)) {
-			throw minorDmRestricted();
-		}
+	/** Blocks and minor protection, with the participants as they are at send time. */
+	private void requireMayReachParticipants(Conversation conversation, String senderId) {
+		List<String> recipients = repository.findParticipantsByConversation(conversation.id()).stream()
+			.map(ConversationParticipant::userId)
+			.filter(userId -> !userId.equals(senderId))
+			.toList();
+		reach.requireMaySend(conversation.kind(), senderId, recipients);
 	}
 
 	/**
@@ -419,10 +379,6 @@ public class MessagingService {
 		}
 	}
 
-	private static ApiException minorDmRestricted() {
-		return new ApiException(403, "MINOR_DM_RESTRICTED",
-			"Para proteger usuarios menores de idade, so e possivel conversar com eles apos uma conexao aceita.");
-	}
 
 
 
