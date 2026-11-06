@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.dailygames;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
 import java.time.Duration;
@@ -27,6 +28,8 @@ class DailyBlocksServiceTest {
 		MutableClock clock = new MutableClock(Instant.parse("2026-10-18T12:00:00Z"));
 		var service = new DailyBlocksService(jdbc, clock, mock(CoinService.class));
 
+		// The design system refills below 20 queued pieces (REFILL_THRESHOLD); the window stays above it.
+		assertTrue(DailyBlocksService.PIECES_AHEAD > 20);
 		var started = service.start("u1");
 		long seed = jdbc.queryForObject("select seed from daily_blocks_challenges", Long.class);
 		assertEquals(DailyBlocksService.PIECES_AHEAD, started.pieces().size());

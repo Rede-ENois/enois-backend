@@ -24,10 +24,11 @@ import com.socialcoisa.rede.shared.web.ApiException;
 public class DailyBlocksService {
 
 	/**
-	 * Upcoming pieces revealed with each state: enough for the client to keep playing between two
-	 * refills (it refills at most every 2 s), never the rest of the day's sequence.
+	 * Upcoming pieces revealed with each state, never the rest of the day's sequence. Kept above the
+	 * design system's REFILL_THRESHOLD (20, blocks-engine.ts): below it the client asks for a refill
+	 * after every piece.
 	 */
-	public static final int PIECES_AHEAD = 12;
+	public static final int PIECES_AHEAD = 24;
 
 	private final JdbcTemplate jdbc;
 	private final Clock clock;

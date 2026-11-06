@@ -1377,7 +1377,7 @@ Integrity of the ranking and the prizes:
   server-side replay where gravity runs in real time.
 - **Maze moves** are capped at 20 per second per account (`ActionThrottle`, `429 ACTION_THROTTLED`).
 - **Blocks pieces**: `GET /daily-games/blocks/today` returns the next `DailyBlocksService.PIECES_AHEAD`
-  (12) pieces of the official sequence while the game is `PLAYING`; the client refills from the same
+  (24, above the client's refill threshold of 20) pieces of the official sequence while the game is `PLAYING`; the client refills from the same
   endpoint as it plays.
 - **Prizes** (`DailyGameRewardsService`): paid two days after the challenge day, only to accounts with
   a verified identity (e-mail or second factor) that existed for the whole new-account window (7 days,
