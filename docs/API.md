@@ -113,7 +113,12 @@ públicas laterais seguem a mesma regra e respondem 404 para conta banida: `/use
 `/projects`, `/seals` (e evidências), `/games/{username}` (página de criador e jogos),
 `/community-projects/{username}`, `/services/{username}/{slug}`, `/corporate/{username}` (e
 `/posts`) e `/recommendations/received|given/{userId}`; recomendação de ou para conta banida some
-da lista das outras pessoas. Com sessão, quem lê também não vê
+da lista das outras pessoas.
+
+Listagens e páginas públicas identificam pessoas pelo @ (`username`), não pelo id interno da conta:
+freelas, página de criador, projetos da comunidade, anúncios do marketplace, pedidos de serviço e
+itens do catálogo comunitário de cosméticos não trazem mais `userId`/`sellerId`/`requesterId`/
+`creatorId`. Com sessão, quem lê também não vê
 as contas que bloqueou (ou que o bloquearam); o perfil bloqueado responde 404 nas listas.
 
 ### Profile garden
