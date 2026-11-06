@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
@@ -77,7 +78,8 @@ public class GlobalExceptionHandler {
 	// InvalidDataAccessApiUsageException cobre, por exemplo, PageRequest com size < 1 (limit=0).
 	@ExceptionHandler({ MethodArgumentNotValidException.class,
 			HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class,
-			IllegalArgumentException.class, InvalidDataAccessApiUsageException.class })
+			MissingServletRequestParameterException.class, IllegalArgumentException.class,
+			InvalidDataAccessApiUsageException.class })
 	ResponseEntity<ErrorResponse> handleBadRequest(Exception exception) {
 		// DEBUG de propósito: um cliente malformado não deve gerar milhares de linhas INFO.
 		LOGGER.debug("bad_request type={}", exception.getClass().getSimpleName());

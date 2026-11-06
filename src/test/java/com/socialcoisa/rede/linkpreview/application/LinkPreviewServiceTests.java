@@ -28,7 +28,8 @@ class LinkPreviewServiceTests {
 
 	private final LinkPreviewReader external = mock(LinkPreviewReader.class);
 
-	private final LinkPreviewService service = new LinkPreviewService(internal, external, "https://enois.ia.br");
+	private final LinkPreviewService service = new LinkPreviewService(new LinkPreviewCache(internal, external),
+		"https://enois.ia.br");
 
 	@Test
 	void enderecoDoProprioSiteNaoSaiParaAInternet() {

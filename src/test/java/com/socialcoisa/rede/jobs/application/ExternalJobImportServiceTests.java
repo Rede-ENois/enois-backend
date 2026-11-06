@@ -41,7 +41,18 @@ class ExternalJobImportServiceTests {
 							"https://exemplo.test/vaga/2", "https://exemplo.test/vaga/2", name(), null),
 						// Some feeds send HTML-escaped text.
 						new ExternalJob("ext-3", "Dev &amp; Ops", "hims &#038; hers", "Remoto", null, null, null,
-							"https://exemplo.test/vaga/3", "https://exemplo.test/vaga/3", name(), null));
+							"https://exemplo.test/vaga/3", "https://exemplo.test/vaga/3", name(), null),
+						// Agregador manda a lista de paises inteira no campo de localizacao: mais
+						// caracteres do que a coluna aceita.
+						new ExternalJob("ext-4", "Vaga Global", "Empresa Y", "Argentina, Australia, Austria, "
+							+ "Belgium, Brazil, Bulgaria, Canada, China, Colombia, Croatia, Czechia, Denmark, "
+							+ "Egypt, Estonia, Finland, France, Germany, Greece, Hungary, Iceland, India, "
+							+ "Indonesia, Ireland, Israel, Italy, Japan, Kenya, Latvia, Lithuania, Luxembourg, "
+							+ "Malaysia, Mexico, Netherlands, New Zealand, Nigeria, Norway, Pakistan, Peru, "
+							+ "Philippines, Poland, Portugal, Romania, Serbia, Singapore, Slovakia, Slovenia, "
+							+ "South Africa, Spain, Sweden, Switzerland, Thailand, Turkey, Ukraine, Vietnam",
+							null, null, null, "https://exemplo.test/vaga/4", "https://exemplo.test/vaga/4",
+							name(), null));
 				}
 			};
 		}
@@ -69,7 +80,16 @@ class ExternalJobImportServiceTests {
 		// O banco de teste e compartilhado: conta so as vagas DESTA fonte (o stub), nao o total.
 		long fromStub = repository.findRecent(200).stream()
 			.filter(j -> "StubSource".equals(j.platform())).count();
-		assertThat(fromStub).isEqualTo(3);
+		assertThat(fromStub).isEqualTo(4);
+	}
+
+	@Test
+	void localizacaoMaiorQueAColunaNaoDerrubaOLote() {
+		importService.refresh();
+
+		var job = repository.findBySource("StubSource", "ext-4").orElseThrow();
+		assertThat(job.location()).hasSize(255);
+		assertThat(job.location()).startsWith("Argentina, Australia");
 	}
 
 	@Test

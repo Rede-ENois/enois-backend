@@ -96,7 +96,8 @@ class FeedPaginationTests {
 		expected.sort(Comparator.comparingInt((Post p) -> p.counters().reactions()).reversed()
 			.thenComparing(Post::createdAt, Comparator.reverseOrder())
 			.thenComparing(p -> p.id().value(), Comparator.reverseOrder()));
-		List<String> own = readAll(FeedTab.TRENDING, null, 20).stream()
+		List<String> own = readAll(FeedTab.TRENDING, null, 20, 40,
+			expected.stream().map(p -> p.id().value()).collect(java.util.stream.Collectors.toSet())).stream()
 			.filter(id -> id.startsWith(prefix)).toList();
 		assertThat(own).containsExactlyElementsOf(expected.stream().map(p -> p.id().value()).toList());
 	}
@@ -124,12 +125,24 @@ class FeedPaginationTests {
 	}
 
 	private List<String> readAll(FeedTab tab, String cursor, int limit) {
+		return readAll(tab, cursor, limit, 10, null);
+	}
+
+	/**
+	 * Le as paginas ate o cursor acabar ou ate todas as ids procuradas aparecerem.
+	 *
+	 * <p>A base H2 e compartilhada entre as classes: outra classe pode ter deixado posts dentro da
+	 * janela do ranking, e o teto de paginas do fixture nao pode depender de quantos posts alheios
+	 * existem. Quem procura ids conhecidas para quando as achou.</p>
+	 */
+	private List<String> readAll(FeedTab tab, String cursor, int limit, int maxPages, java.util.Set<String> wanted) {
 		List<String> ids = new ArrayList<>();
-		for (int pageNumber = 0; pageNumber < 10; pageNumber++) {
+		for (int pageNumber = 0; pageNumber < maxPages; pageNumber++) {
 			FeedPage result = page(tab, cursor, limit);
 			List<String> current = result.items().stream().map(PostView::id).toList();
 			if (!ids.isEmpty()) assertThat(current).doesNotContainAnyElementsOf(ids);
 			ids.addAll(current);
+			if (wanted != null && ids.containsAll(wanted)) return ids;
 			if (result.nextCursor() == null) return ids;
 			assertThat(result.nextCursor()).isNotEqualTo(cursor);
 			cursor = result.nextCursor();

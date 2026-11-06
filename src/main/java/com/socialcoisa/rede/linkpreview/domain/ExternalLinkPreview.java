@@ -31,6 +31,10 @@ public record ExternalLinkPreview(String url, String title, String description, 
 		if (limpo.isEmpty()) {
 			return null;
 		}
-		return limpo.length() <= max ? limpo : limpo.substring(0, max);
+		// Corte por code point: `substring` conta unidades UTF-16 e parte um emoji ao meio.
+		if (limpo.codePointCount(0, limpo.length()) <= max) {
+			return limpo;
+		}
+		return limpo.substring(0, limpo.offsetByCodePoints(0, max));
 	}
 }

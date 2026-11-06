@@ -2,6 +2,8 @@ package com.socialcoisa.rede.shared.security;
 
 import java.net.InetAddress;
 import java.net.URI;
+import java.util.Arrays;
+import java.util.Optional;
 import java.util.Set;
 
 import org.slf4j.Logger;
@@ -16,6 +18,11 @@ import org.springframework.stereotype.Component;
  * Regras: só http/https, só portas padrão (80/443), host que não seja literal de loopback/
  * faixa privada/link-local e cujo DNS resolva apenas para endereços públicos. Falha é negativa:
  * quem chama trata como "não busca".
+ *
+ * <p>{@link #safe(String)} sozinho não basta quando o cliente faz o DNS de novo na hora de
+ * conectar (um registro que muda de IPv4 depois da checagem conecta onde a guarda nunca viu).
+ * Quem busca conteúdo deve usar {@link #checked(String)}, que devolve o endereço já resolvido e
+ * exige que a conexão vá para ELE — sempre pelo último IP validado, de qualquer família.</p>
  */
 @Component
 public class OutboundUrlGuard {
@@ -25,40 +32,86 @@ public class OutboundUrlGuard {
 	private static final Set<String> ALLOWED_PORTS = Set.of("80", "443", "-1", "");
 
 	public boolean safe(String url) {
+		return checked(url).isPresent();
+	}
+
+	/**
+	 * O destino validado, com os IPs públicos para os quais o nome resolveu nesta chamada.
+	 *
+	 * <p>Vazio quando a URL não passa em nenhuma regra ou quando QUALQUER IP resolvido é interno:
+	 * basta um registro privado para o nome inteiro ser recusado.</p>
+	 */
+	public Optional<CheckedUrl> checked(String url) {
 		if (url == null || url.isBlank() || url.length() > 2000) {
-			return false;
+			return Optional.empty();
 		}
 		URI uri;
 		try {
 			uri = URI.create(url.trim());
 		}
 		catch (RuntimeException e) {
-			return false;
+			return Optional.empty();
 		}
 		String scheme = uri.getScheme();
 		if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
-			return false;
+			return Optional.empty();
 		}
 		if (!ALLOWED_PORTS.contains(String.valueOf(uri.getPort()))) {
-			return false;
+			return Optional.empty();
 		}
 		String host = uri.getHost();
 		if (host == null || host.isBlank()) {
-			return false;
+			return Optional.empty();
 		}
 		String lower = host.toLowerCase();
 		if (lower.equals("localhost") || lower.endsWith(".localhost") || lower.endsWith(".internal")
 			|| lower.endsWith(".local") || lower.equals("metadata.google.internal")) {
-			return false;
+			return Optional.empty();
 		}
 		try {
 			// Resolução cobre nome e literal: um IP público escrito direto também passa por aqui.
-			return InetAddress.getAllByName(host).length > 0
-				&& java.util.Arrays.stream(InetAddress.getAllByName(host)).allMatch(OutboundUrlGuard::isPublic);
+			InetAddress[] addresses = InetAddress.getAllByName(host);
+			if (addresses.length == 0 || !Arrays.stream(addresses).allMatch(OutboundUrlGuard::isPublic)) {
+				return Optional.empty();
+			}
+			return Optional.of(new CheckedUrl(uri, host.toLowerCase(), addresses));
 		}
 		catch (Exception e) {
 			LOG.debug("OutboundUrlGuard: host {} nao resolveu: {}", host, e.getMessage());
-			return false;
+			return Optional.empty();
+		}
+	}
+
+	/**
+	 * Destino aprovado e o resultado do DNS que o aprovou. Os IPs estão na ordem em que o DNS
+	 * respondeu; o cliente tenta um por um (IPv4 e IPv6) e nunca resolve o nome de novo.
+	 */
+	public record CheckedUrl(URI uri, String host, InetAddress[] addresses) {
+
+		public boolean secure() {
+			return "https".equalsIgnoreCase(uri.getScheme());
+		}
+
+		/** Porta efetiva do destino (80/443 quando a URL não declara). */
+		public int port() {
+			if (uri.getPort() > 0) {
+				return uri.getPort();
+			}
+			return secure() ? 443 : 80;
+		}
+
+		/** Caminho com a query, como o servidor de destino espera receber. */
+		public String requestTarget() {
+			String path = uri.getRawPath() == null || uri.getRawPath().isEmpty() ? "/" : uri.getRawPath();
+			String query = uri.getRawQuery();
+			return query == null ? path : path + "?" + query;
+		}
+
+		/** O cabeçalho Host leva a porta só quando ela não é a padrão. */
+		public String hostHeader() {
+			int port = uri.getPort();
+			boolean defaultPort = port < 0 || (secure() && port == 443) || (!secure() && port == 80);
+			return defaultPort ? host : host + ":" + port;
 		}
 	}
 

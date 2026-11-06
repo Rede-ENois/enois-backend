@@ -19,13 +19,22 @@ import com.socialcoisa.rede.blog.application.BlogService;
 import com.socialcoisa.rede.communities.application.CommunityService;
 import com.socialcoisa.rede.communities.domain.Community;
 import com.socialcoisa.rede.events.application.EventService;
+import com.socialcoisa.rede.events.domain.Event;
 import com.socialcoisa.rede.feed.application.PostView;
 import com.socialcoisa.rede.feed.application.port.in.GetPostUseCase;
 import com.socialcoisa.rede.games.application.GameService;
+import com.socialcoisa.rede.games.domain.Game;
+import com.socialcoisa.rede.groups.application.GroupService;
+import com.socialcoisa.rede.groups.domain.Group;
+import com.socialcoisa.rede.groups.domain.GroupStatus;
 import com.socialcoisa.rede.jobs.application.JobService;
+import com.socialcoisa.rede.jobs.domain.Job;
+import com.socialcoisa.rede.jobs.domain.JobStatus;
 import com.socialcoisa.rede.linkpreview.domain.LinkPreview;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
+import com.socialcoisa.rede.shared.sanctions.SanctionGateReader;
+import com.socialcoisa.rede.shared.security.SuspiciousText;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 /**
@@ -51,11 +60,18 @@ class InternalPageResolverTests {
 
 	private final GameService games = mock(GameService.class);
 
+	private final GroupService groups = mock(GroupService.class);
+
+	private final SanctionGateReader sanctionGate = mock(SanctionGateReader.class);
+
+	private final SuspiciousText suspiciousText = mock(SuspiciousText.class);
+
 	private InternalPageResolver resolver;
 
 	@BeforeEach
 	void setUp() {
-		resolver = new InternalPageResolver(posts, profiles, blogs, jobs, communities, events, games);
+		resolver = new InternalPageResolver(posts, profiles, blogs, jobs, communities, events, games, groups,
+			sanctionGate, suspiciousText);
 	}
 
 	@Test
@@ -148,6 +164,7 @@ class InternalPageResolverTests {
 		com.socialcoisa.rede.jobs.domain.Job job = mock(com.socialcoisa.rede.jobs.domain.Job.class);
 		when(job.title()).thenReturn("Dev Back-end");
 		when(job.description()).thenReturn("<p>Java <b>e</b> Spring</p>");
+		when(job.status()).thenReturn(JobStatus.OPEN);
 		when(job.logo()).thenReturn("/media/logo.png");
 		when(jobs.getById("j1")).thenReturn(job);
 
@@ -186,6 +203,164 @@ class InternalPageResolverTests {
 		when(communities.getById("c1")).thenThrow(new ApiException(404, "COMMUNITY_NOT_FOUND", "Nao encontrada."));
 
 		assertThat(resolver.resolve("/comunidades/c1", null)).isEmpty();
+	}
+
+	@Test
+	void perfilDeContaBanidaNaoViraCartao() {
+		UserProfile profile = mock(UserProfile.class);
+		when(profile.id()).thenReturn("u_banido");
+		when(profiles.findByUsername("banido")).thenReturn(Optional.of(profile));
+		when(sanctionGate.banned("u_banido")).thenReturn(true);
+
+		assertThat(resolver.resolve("/perfil/banido", null)).isEmpty();
+	}
+
+	@Test
+	void comunidadeDeContaBanidaOuComTextoSinalizadoNaoViraCartao() {
+		Community banida = mock(Community.class);
+		when(banida.createdBy()).thenReturn("u_banido");
+		when(communities.getById("c-banida")).thenReturn(banida);
+		when(sanctionGate.banned("u_banido")).thenReturn(true);
+
+		assertThat(resolver.resolve("/comunidades/c-banida", null)).isEmpty();
+
+		Community isca = mock(Community.class);
+		when(isca.name()).thenReturn("promo");
+		when(communities.getById("c-isca")).thenReturn(isca);
+		when(suspiciousText.matches("promo", null)).thenReturn(true);
+
+		assertThat(resolver.resolve("/comunidades/c-isca", null)).isEmpty();
+	}
+
+	@Test
+	void vagaEncerradaNaoViraCartao() {
+		Job job = mock(Job.class);
+		when(job.status()).thenReturn(JobStatus.CLOSED);
+		when(jobs.getById("j1")).thenReturn(job);
+
+		assertThat(resolver.resolve("/vagas/j1", null)).isEmpty();
+	}
+
+	@Test
+	void vagaDeContaBanidaNaoViraCartao() {
+		Job job = mock(Job.class);
+		when(job.status()).thenReturn(JobStatus.OPEN);
+		when(job.postedBy()).thenReturn("u_banido");
+		when(jobs.getById("j1")).thenReturn(job);
+		when(sanctionGate.banned("u_banido")).thenReturn(true);
+
+		assertThat(resolver.resolve("/vagas/j1", null)).isEmpty();
+	}
+
+	@Test
+	void eventoUsaTituloLocalECapa() {
+		Event event = mock(Event.class);
+		when(event.title()).thenReturn("Encontro de devs");
+		when(event.location()).thenReturn("Belo Horizonte");
+		when(event.cover()).thenReturn("/media/capa.png");
+		when(events.getById("e1")).thenReturn(event);
+
+		LinkPreview preview = resolver.resolve("/eventos/e1", null).orElseThrow();
+
+		assertThat(preview.title()).isEqualTo("Encontro de devs");
+		assertThat(preview.description()).isEqualTo("Belo Horizonte");
+		assertThat(preview.imageUrl()).isEqualTo("/media/capa.png");
+		assertThat(preview.siteName()).isEqualTo("Evento");
+	}
+
+	@Test
+	void eventoDeContaBanidaNaoViraCartao() {
+		Event event = mock(Event.class);
+		when(event.createdBy()).thenReturn("u_banido");
+		when(events.getById("e1")).thenReturn(event);
+		when(sanctionGate.banned("u_banido")).thenReturn(true);
+
+		assertThat(resolver.resolve("/eventos/e1", null)).isEmpty();
+	}
+
+	@Test
+	void eventoQueJaTerminouAindaTemCartao() {
+		Event event = mock(Event.class);
+		when(event.title()).thenReturn("Encontro passado");
+		when(events.getById("e1")).thenReturn(event);
+
+		assertThat(resolver.resolve("/eventos/e1", null)).isPresent();
+	}
+
+	@Test
+	void grupoVisivelUsaNomeDescricaoEBanner() {
+		Group group = mock(Group.class);
+		when(group.status()).thenReturn(GroupStatus.ACTIVE);
+		when(group.name()).thenReturn("Devs de BH");
+		when(group.description()).thenReturn("Grupo local");
+		when(group.banner()).thenReturn("/media/banner.png");
+		when(groups.resolve("devs-bh")).thenReturn(group);
+
+		LinkPreview preview = resolver.resolve("/grupos/devs-bh", null).orElseThrow();
+
+		assertThat(preview.title()).isEqualTo("Devs de BH");
+		assertThat(preview.description()).isEqualTo("Grupo local");
+		assertThat(preview.imageUrl()).isEqualTo("/media/banner.png");
+		assertThat(preview.siteName()).isEqualTo("Grupo");
+	}
+
+	@Test
+	void grupoForaDaDescobertaNaoViraCartao() {
+		Group group = mock(Group.class);
+		when(group.status()).thenReturn(GroupStatus.CLOSED);
+		when(groups.resolve("fechado")).thenReturn(group);
+
+		assertThat(resolver.resolve("/grupos/fechado", null)).isEmpty();
+	}
+
+	@Test
+	void jogoDoPerfilUsaOTituloDoJogo() {
+		Game game = mock(Game.class);
+		when(game.title()).thenReturn("Meu jogo");
+		when(game.description()).thenReturn("Um jogo");
+		when(games.byUserAndSlug("mel", "meu-jogo", null)).thenReturn(game);
+
+		LinkPreview preview = resolver.resolve("/games/mel/meu-jogo", null).orElseThrow();
+
+		assertThat(preview.title()).isEqualTo("Meu jogo");
+		assertThat(preview.siteName()).isEqualTo("Jogo");
+	}
+
+	@Test
+	void jogoNaoPublicadoNaoViraCartao() {
+		when(games.byUserAndSlug(anyString(), anyString(), any()))
+			.thenThrow(new ApiException(404, "GAME_NOT_FOUND", "Jogo nao encontrado."));
+
+		assertThat(resolver.resolve("/games/mel/rascunho", null)).isEmpty();
+	}
+
+	@Test
+	void oMaisNaoViraEspacoNoIdentificadorDoCaminho() {
+		UserProfile profile = mock(UserProfile.class);
+		when(profiles.findByUsername("mel+silva")).thenReturn(Optional.of(profile));
+
+		assertThat(resolver.resolve("/perfil/mel+silva", null)).isPresent();
+		verify(profiles).findByUsername("mel+silva");
+	}
+
+	@Test
+	void oCorteDoCaminhoEONoPrimeiroDeQueryOuFragmento() {
+		assertThat(InternalPageResolverTestable.segments("/perfil/mel#x?y")).containsExactly("perfil", "mel");
+		assertThat(InternalPageResolverTestable.segments("/perfil/mel?x=y#z")).containsExactly("perfil", "mel");
+		assertThat(InternalPageResolverTestable.segments("/post/abc%2Fde")).containsExactly("post", "abc/de");
+		assertThat(InternalPageResolverTestable.segments("/Perfil/MEL")).containsExactly("perfil", "mel");
+	}
+
+	/** Expõe o `segmentsOf` do pacote para o teste de regra do caminho. */
+	static final class InternalPageResolverTestable {
+
+		static List<String> segments(String path) {
+			InternalPageResolver resolver = new InternalPageResolver(mock(GetPostUseCase.class),
+				mock(UserProfileRepository.class), mock(BlogService.class), mock(JobService.class),
+				mock(CommunityService.class), mock(EventService.class), mock(GameService.class),
+				mock(GroupService.class), mock(SanctionGateReader.class), mock(SuspiciousText.class));
+			return resolver.segmentsOf(path);
+		}
 	}
 
 	@Test

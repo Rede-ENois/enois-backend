@@ -5,12 +5,9 @@ import java.util.Locale;
 import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
-import com.socialcoisa.rede.linkpreview.application.port.out.LinkPreviewReader;
 import com.socialcoisa.rede.linkpreview.domain.LinkPreview;
-import com.socialcoisa.rede.shared.application.CacheConfig;
 
 /**
  * A miniatura de um link publicado: pagina do proprio Énóis ou site de fora.
@@ -19,46 +16,48 @@ import com.socialcoisa.rede.shared.application.CacheConfig;
  * pagina da casa, o resumo vem do banco e NADA sai para a internet. So o que sobra e lido como
  * site externo, e essa leitura passa pela guarda de destino (nunca a rede interna).</p>
  *
- * <p>O resultado fica em cache pela chave do endereco: o mesmo link aparece em varios posts e em
- * varios leitores, e a leitura externa e a parte cara. O cache guarda tambem o "nao tem nada" —
- * site que nao responde nao e buscado de novo a cada leitura.</p>
+ * <p>O cache mora em {@link LinkPreviewCache}: uma chave para o site de fora (igual para todos) e
+ * outra para a pagina da casa (que depende de quem le).</p>
  */
 @Service
 public class LinkPreviewService {
 
-	private final InternalPageResolver internal;
-	private final LinkPreviewReader external;
+	private final LinkPreviewCache cache;
 	private final String siteUrl;
 
-	public LinkPreviewService(InternalPageResolver internal, LinkPreviewReader external,
+	public LinkPreviewService(LinkPreviewCache cache,
 			@Value("${rede.site-url:https://enois.ia.br}") String siteUrl) {
-		this.internal = internal;
-		this.external = external;
+		this.cache = cache;
 		this.siteUrl = siteUrl;
 	}
 
 	/**
 	 * A miniatura do endereco, ou vazio quando ele nao tem nada para mostrar.
 	 *
-	 * <p>{@code viewerId} so influencia pagina interna (post de canal privado). O cache e por
-	 * endereco e por leitor: um post privado nao pode ser servido do cache para quem nao e membro.</p>
+	 * <p>{@code viewerId} so influencia pagina interna (post de canal privado, jogo nao publicado).
+	 * A leitura anonima vem primeiro: e a que serve a quase todo mundo e a que o cache guarda para
+	 * todos. A leitura com sessao so acontece quando a anonima nao achou nada, e o vazio dessa
+	 * segunda leitura nao e guardado.</p>
 	 */
-	@Cacheable(cacheNames = CacheConfig.LINK_PREVIEWS, key = "#url + '|' + (#viewerId == null ? 'anon' : #viewerId)")
 	public Optional<LinkPreview> previewOf(String url, String viewerId) {
 		if (url == null || url.isBlank()) {
 			return Optional.empty();
 		}
 		String path = internalPath(url);
-		if (path != null) {
-			Optional<LinkPreview> page = internal.resolve(path, viewerId);
-			if (page.isPresent()) {
-				return page;
-			}
-			// Endereco do site que nao e uma pagina conhecida (ou que nao existe mais): nao ha o que
-			// buscar fora, porque o destino e a propria casa.
-			return Optional.empty();
+		if (path == null) {
+			return Optional.ofNullable(cache.external(url));
 		}
-		return external.read(url).map(LinkPreview::external);
+		LinkPreview publica = cache.internalPublic(path);
+		if (publica != null || viewerId == null) {
+			return Optional.ofNullable(publica);
+		}
+		LinkPreview pessoal = cache.internalForViewer(path, viewerId);
+		if (pessoal != null) {
+			return Optional.of(pessoal);
+		}
+		// Endereco do site que nao e uma pagina conhecida, nao existe mais ou nao e visivel para
+		// quem le: nao ha o que buscar fora, porque o destino e a propria casa.
+		return Optional.empty();
 	}
 
 	/**

@@ -28,20 +28,20 @@ class HttpLinkPreviewReaderTest {
 
 	@Test
 	void enderecoRecusadoPelaGuardaNaoChegaNaInternet() {
-		when(guard.safe(anyString())).thenReturn(false);
+		when(guard.checked(anyString())).thenReturn(Optional.empty());
 
 		Optional<ExternalLinkPreview> preview = reader.read("http://169.254.169.254/latest/meta-data/");
 
 		assertThat(preview).isEmpty();
-		verify(guard).safe("http://169.254.169.254/latest/meta-data/");
-		verify(guard, never()).safe("http://169.254.169.255/latest/meta-data/");
+		verify(guard).checked("http://169.254.169.254/latest/meta-data/");
+		verify(guard, never()).checked("http://169.254.169.255/latest/meta-data/");
 	}
 
 	@Test
 	void enderecoInvalidoNemPassaPelaGuarda() {
 		assertThat(reader.read("nao e um endereco")).isEmpty();
 		assertThat(reader.read(null)).isEmpty();
-		verify(guard, never()).safe(anyString());
+		verify(guard, never()).checked(anyString());
 	}
 
 	@Test

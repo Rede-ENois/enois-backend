@@ -20,11 +20,15 @@ import com.socialcoisa.rede.feed.application.PostView;
 import com.socialcoisa.rede.feed.application.port.in.GetPostUseCase;
 import com.socialcoisa.rede.games.application.GameService;
 import com.socialcoisa.rede.games.domain.Game;
+import com.socialcoisa.rede.groups.application.GroupService;
+import com.socialcoisa.rede.groups.domain.Group;
 import com.socialcoisa.rede.jobs.application.JobService;
 import com.socialcoisa.rede.jobs.domain.Job;
 import com.socialcoisa.rede.linkpreview.domain.LinkPreview;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
+import com.socialcoisa.rede.shared.sanctions.SanctionGateReader;
+import com.socialcoisa.rede.shared.security.SuspiciousText;
 
 /**
  * Transforma um endereco do proprio Énóis na miniatura da pagina que ele abre.
@@ -53,9 +57,13 @@ public class InternalPageResolver {
 	private final CommunityService communities;
 	private final EventService events;
 	private final GameService games;
+	private final GroupService groups;
+	private final SanctionGateReader sanctionGate;
+	private final SuspiciousText suspiciousText;
 
 	public InternalPageResolver(GetPostUseCase posts, UserProfileRepository profiles, BlogService blogs, JobService jobs,
-			CommunityService communities, EventService events, GameService games) {
+			CommunityService communities, EventService events, GameService games, GroupService groups,
+			SanctionGateReader sanctionGate, SuspiciousText suspiciousText) {
 		this.posts = posts;
 		this.profiles = profiles;
 		this.blogs = blogs;
@@ -63,6 +71,9 @@ public class InternalPageResolver {
 		this.communities = communities;
 		this.events = events;
 		this.games = games;
+		this.groups = groups;
+		this.sanctionGate = sanctionGate;
+		this.suspiciousText = suspiciousText;
 	}
 
 	/**
@@ -84,9 +95,9 @@ public class InternalPageResolver {
 				case "blog" -> blog(pagePath, segments, viewerId);
 				case "vagas" -> segments.size() == 2 ? job(pagePath, segments.get(1)) : Optional.empty();
 				case "comunidades" -> segments.size() == 2 ? community(pagePath, segments.get(1)) : Optional.empty();
-				case "games" -> game(pagePath, segments);
-				case "grupos" -> Optional.empty();
-				case "eventos" -> Optional.empty();
+				case "games" -> game(pagePath, segments, viewerId);
+				case "grupos" -> segments.size() == 2 ? group(pagePath, segments.get(1)) : Optional.empty();
+				case "eventos" -> segments.size() == 2 ? event(pagePath, segments.get(1)) : Optional.empty();
 				default -> Optional.empty();
 			};
 		}
@@ -103,14 +114,18 @@ public class InternalPageResolver {
 			return List.of();
 		}
 		String path = pagePath.trim();
+		// Query e fragmento terminam o caminho no PRIMEIRO dos dois: em `/perfil/mel#x?y` o `?`
+		// esta dentro do fragmento e nao pode virar parte do username.
+		int corte = path.length();
 		int query = path.indexOf('?');
 		if (query >= 0) {
-			path = path.substring(0, query);
+			corte = query;
 		}
 		int hash = path.indexOf('#');
-		if (hash >= 0) {
-			path = path.substring(0, hash);
+		if (hash >= 0 && hash < corte) {
+			corte = hash;
 		}
+		path = path.substring(0, corte);
 		if (path.startsWith("/")) {
 			path = path.substring(1);
 		}
@@ -120,8 +135,9 @@ public class InternalPageResolver {
 		return List.of(path.split("/")).stream()
 			.filter(segmento -> !segmento.isBlank())
 			.map(segmento -> segmento.toLowerCase(Locale.ROOT))
-			// O caminho chega com escape de URL; o identificador publicado e o decode.
-			.map(segmento -> java.net.URLDecoder.decode(segmento, java.nio.charset.StandardCharsets.UTF_8))
+			// O caminho chega com escape de URL; o identificador publicado e o decode. `+` NAO e
+			// espaco num caminho (so em formulario), entao o decode e o de percent-encoding.
+			.map(InternalPageResolver::decodeSegment)
 			.toList();
 	}
 
@@ -139,9 +155,31 @@ public class InternalPageResolver {
 			excerpt(texto), firstMedia(post.mediaIds()), "Post"));
 	}
 
+	/**
+	 * Decodifica o percent-encoding de um segmento sem tratar `+` como espaco.
+	 *
+	 * <p>{@code URLDecoder} e o decodificador de formulario: ele troca `+` por espaco, o que num
+	 * caminho esta errado (`/perfil/mel+silva` e o username `mel+silva`). Aqui so `%XX` e
+	 * interpretado.</p>
+	 */
+	static String decodeSegment(String segmento) {
+		if (segmento.indexOf('%') < 0) {
+			return segmento;
+		}
+		try {
+			return java.net.URLDecoder.decode(segmento.replace("+", "%2B"),
+				java.nio.charset.StandardCharsets.UTF_8);
+		}
+		catch (IllegalArgumentException invalido) {
+			return segmento;
+		}
+	}
+
 	private Optional<LinkPreview> profile(String path, String username) {
 		UserProfile profile = profiles.findByUsername(username).orElse(null);
-		if (profile == null) {
+		// A pagina do perfil some para conta banida (link direto incluso); o cartao segue a mesma
+		// regra, senao o link viraria a vitrine de quem a pagina esconde.
+		if (profile == null || sanctionGate.banned(profile.id())) {
 			return Optional.empty();
 		}
 		String description = profile.headline() != null && !profile.headline().isBlank()
@@ -174,30 +212,66 @@ public class InternalPageResolver {
 
 	private Optional<LinkPreview> job(String path, String jobId) {
 		Job job = jobs.getById(jobId);
+		// Vaga encerrada e de conta banida nao viram cartao: a pagina nao as mostra mais.
+		if (job.status() != com.socialcoisa.rede.jobs.domain.JobStatus.OPEN || sanctionGate.banned(job.postedBy())) {
+			return Optional.empty();
+		}
 		return Optional.of(LinkPreview.internal(path, job.title(), excerpt(job.description()), job.logo(), "Vaga"));
 	}
 
 	private Optional<LinkPreview> community(String path, String communityId) {
 		Community community = communities.getById(communityId);
+		// Mesma regra da vitrine: comunidade de conta banida (ou com texto sinalizado) nao aparece.
+		if (sanctionGate.banned(community.createdBy())
+			|| suspiciousText.matches(community.name(), community.description())) {
+			return Optional.empty();
+		}
 		return Optional.of(LinkPreview.internal(path, community.name(), trimmed(community.description()),
 			community.cover() != null ? community.cover() : community.avatar(), "Comunidade"));
 	}
 
-	private Optional<LinkPreview> game(String path, List<String> segments) {
+	private Optional<LinkPreview> game(String path, List<String> segments, String viewerId) {
 		if (segments.size() == 2) {
 			UserProfile creator = profiles.findByUsername(segments.get(1)).orElse(null);
-			if (creator == null) {
+			if (creator == null || sanctionGate.banned(creator.id())) {
 				return Optional.empty();
 			}
 			return Optional.of(LinkPreview.internal(path, creator.name(), trimmed(creator.headline()),
 				creator.banner() != null ? creator.banner() : creator.avatar(), "Jogos"));
 		}
 		if (segments.size() == 3) {
-			Game game = games.byUserAndSlug(segments.get(1), segments.get(2));
+			// A leitura do jogo ja recusa o que nao esta publicado para quem le (404 vira vazio).
+			Game game = games.byUserAndSlug(segments.get(1), segments.get(2), viewerId);
 			return Optional.of(LinkPreview.internal(path, game.title(), trimmed(game.description()), game.cover(),
 				"Jogo"));
 		}
 		return Optional.empty();
+	}
+
+	/**
+	 * A pagina do grupo. Grupo fora da descoberta (suspenso/encerrado) nao vira cartao: o nome e a
+	 * descricao dele nao sao conteudo publico.
+	 */
+	private Optional<LinkPreview> group(String path, String slug) {
+		Group group = groups.resolve(slug);
+		if (!group.status().visibleInDiscovery()) {
+			return Optional.empty();
+		}
+		return Optional.of(LinkPreview.internal(path, group.name(), trimmed(group.description()),
+			group.banner() != null ? group.banner() : group.avatar(), "Grupo"));
+	}
+
+	/**
+	 * A pagina do evento. Evento de conta banida ou com texto sinalizado sai, como sai da vitrine;
+	 * evento que ja terminou continua com cartao (a pagina dele ainda abre).
+	 */
+	private Optional<LinkPreview> event(String path, String eventId) {
+		Event event = events.getById(eventId);
+		if (sanctionGate.banned(event.createdBy()) || suspiciousText.matches(event.title(), event.host())) {
+			return Optional.empty();
+		}
+		return Optional.of(LinkPreview.internal(path, event.title(), trimmed(event.location()), event.cover(),
+			"Evento"));
 	}
 
 	private static String titleOf(BlogView view) {
@@ -232,6 +306,10 @@ public class InternalPageResolver {
 		if (text.isEmpty()) {
 			return null;
 		}
-		return text.length() <= EXCERPT ? text : text.substring(0, EXCERPT) + "…";
+		// Corte por code point: `substring` conta unidades UTF-16 e parte um emoji ao meio.
+		if (text.codePointCount(0, text.length()) <= EXCERPT) {
+			return text;
+		}
+		return text.substring(0, text.offsetByCodePoints(0, EXCERPT)) + "…";
 	}
 }
