@@ -75,7 +75,7 @@ public class CoinService {
 	private static final int STREAK_BONUS_EVERY_DAYS = 7;
 	/** Teto de envio para contas com menos de 7 dias. */
 	private static final long NEW_ACCOUNT_DAILY_CAP = FAIS(500L);
-	public static final Duration NEW_ACCOUNT_WINDOW = Duration.ofDays(7);
+	public static final Duration NEW_ACCOUNT_WINDOW = com.socialcoisa.rede.coin.domain.RewardEligibility.NEW_ACCOUNT_WINDOW;
 
 	private final CoinLedgerRepository ledger;
 	private final CoinRateService rateService;
