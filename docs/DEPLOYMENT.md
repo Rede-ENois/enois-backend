@@ -259,6 +259,18 @@ vídeo/áudio usam `ffmpeg -map_metadata -1 -c copy` (a imagem instala o ffmpeg)
 passam por arquivo temporário. A mídia legada do ImageKit não é reescrita — ela não passa pelo
 proxy do bucket.
 
+Quando a limpeza não dá para acontecer, a resposta depende da causa:
+
+- **Sem pasta temporária gravável** (o pod não tem onde escrever): o envio é recusado com
+  `503 MEDIA_UPLOAD_UNAVAILABLE`. Não há como limpar, e publicar o arquivo com os metadados
+  intactos contraria o motivo de a limpeza existir.
+- **Pasta disponível, mas o ffmpeg ausente ou falhando**: o arquivo sobe como veio e a falha fica
+  no log (`media_ffmpeg_skipped` / `media_ffmpeg_unavailable`). A ausência do ffmpeg é falha de
+  infraestrutura e não deve impedir alguém de publicar um vídeo.
+
+O temporário é criado em `rede.media.temp-dir` quando configurado (o diretório precisa existir),
+depois em `/app/data` (o volume gravável do pod) e por último no temporário do sistema.
+
 | Variável | Descrição |
 |---|---|
 | `REDE_MEDIA_FFMPEG_PATH` | Caminho do ffmpeg (padrão `ffmpeg`) |
