@@ -623,6 +623,8 @@ jobs:
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
+          REDE_CALLS_EPAPO_GATEWAY_URL: ${{ vars.REDE_CALLS_EPAPO_GATEWAY_URL }}
+          REDE_CALLS_EPAPO_INTERNAL_TOKEN: ${{ secrets.REDE_CALLS_EPAPO_INTERNAL_TOKEN }}
         run: |
           # Boot do Spring (Flyway + Hibernate + Tomcat) na QA roda com lazy-initialization=false e
           # ainda carrega as vagas externas na subida: 75s era curto demais e um boot lento
@@ -636,12 +638,52 @@ jobs:
               -X "${method}" "${AUTH[@]}" "$@" "${API}${path}" 2>/dev/null || echo 000
           }
 
+          # O container subiu, mas isso não prova que ele alcança o Epapo: o gateway fica noutro
+          # host e o ufw de lá só libera a porta para o IP de quem chama. Esta sonda roda no
+          # mesmo host do container da QA (o runner é self-hosted na docker-prod4), então mede o
+          # MESMO caminho de rede que o backend usa. Sem isso, "conectado" seria só configuração
+          # desejada: o deploy passaria verde e a primeira entrada numa sala falharia.
+          #
+          # 200/403/404 do Énóis provam que o Epapo atendeu e repassou a pergunta; 401 prova que
+          # ele atendeu e recusou a credencial de servidor — par de segredos trocado, não rede.
+          # Só 000 (nada respondeu) é o firewall no caminho.
+          probe_gateway() {
+            if [ -z "${REDE_CALLS_EPAPO_GATEWAY_URL:-}" ]; then
+              echo "Epapo não configurado: nada a sondar."
+              return 0
+            fi
+            echo "=== alcance do gateway do Epapo a partir do host da QA ==="
+            local probe
+            # `|| true`: o curl já imprime 000 quando não conecta e sai com erro. Com `|| echo 000`
+            # o valor virava 000000 e caía no ramo "resposta inesperada" em vez de "não respondeu".
+            probe=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 \
+              -X POST "${REDE_CALLS_EPAPO_GATEWAY_URL%/}/auth/token" \
+              -H "X-Epapo-Internal: ${REDE_CALLS_EPAPO_INTERNAL_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data '{"callId":"00000000-0000-0000-0000-000000000000","userId":"00000000-0000-0000-0000-000000000000"}' \
+              2>/dev/null || true)
+            probe="${probe:-000}"
+            case "${probe}" in
+              200|401|403|404)
+                echo " gateway respondeu (${probe}) em ${REDE_CALLS_EPAPO_GATEWAY_URL}"
+                ;;
+              000|"")
+                echo "::warning::o Epapo não respondeu em ${REDE_CALLS_EPAPO_GATEWAY_URL} a partir do host da QA."
+                echo "O backend está no ar, mas ninguém entra em sala até essa porta estar liberada para este IP."
+                ;;
+              *)
+                echo "::warning::resposta inesperada do Epapo (${probe}) em ${REDE_CALLS_EPAPO_GATEWAY_URL}"
+                ;;
+            esac
+          }
+
           URL=https://enois-api-qa.b7cloud.tech/health
           for i in $(seq 1 30); do
             if curl -sf --max-time 10 "$URL"; then
               echo "OK na tentativa $i"
               # Subiu: o container anterior guardado deixa de ser necessário.
               status_of DELETE "/containers/${CONTAINER_NAME}-previous?force=1" >/dev/null || true
+              probe_gateway
               exit 0
             fi
             echo "tentativa $i falhou, aguardando..."
