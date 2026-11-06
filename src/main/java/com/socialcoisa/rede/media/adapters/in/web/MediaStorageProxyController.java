@@ -198,6 +198,14 @@ class MediaStorageProxyController {
 				dimensions.recordUploaded(asset, clean);
 			}
 		}
+		catch (com.socialcoisa.rede.media.application.MediaTemporaryFiles.UnavailableException failure) {
+			// Disco do pod recusando o temporario do video grande: nao e erro do arquivo que a pessoa
+			// enviou, e a mensagem nao pode expor o caminho interno.
+			LOG.error("media_upload_temp_unavailable mime={} receivedBytes={} cause={}", mime, length,
+				failure.getClass().getName());
+			throw new ApiException(503, "MEDIA_UPLOAD_UNAVAILABLE",
+				"Nao foi possivel processar o arquivo agora. Tente novamente em instantes.", failure);
+		}
 		catch (java.io.IOException failure) {
 			throw new ApiException(400, "MEDIA_UPLOAD_FAILED", "Nao foi possivel ler o arquivo enviado.");
 		}
