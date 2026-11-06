@@ -49,15 +49,12 @@ class NotificationPersistenceAdapter implements NotificationRepository {
 
 	@Override
 	public Optional<Notification> findUnreadGroup(String userId, String groupKey) {
-		return springData.findFirstByUserIdAndGroupKeyAndReadFalse(userId, groupKey).map(NotificationJpaEntity::toDomain);
+		return springData.lockUnreadGroup(userId, groupKey).map(NotificationJpaEntity::toDomain);
 	}
 
 	@Override
 	public void markRead(String notificationId) {
-		springData.findById(notificationId).ifPresent(entity -> {
-			entity.markRead();
-			springData.save(entity);
-		});
+		springData.markReadById(notificationId);
 	}
 
 	@Override

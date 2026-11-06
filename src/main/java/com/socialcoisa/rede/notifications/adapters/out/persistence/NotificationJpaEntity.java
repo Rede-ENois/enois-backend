@@ -80,10 +80,6 @@ class NotificationJpaEntity {
 		return e;
 	}
 
-	void markRead() {
-		this.read = true;
-	}
-
 	Notification toDomain() {
 		return Notification.restore(id, userId, kind, actorId, title, body, href, ctaLabel, read, createdAt, groupKey,
 			actorCount, preview);
