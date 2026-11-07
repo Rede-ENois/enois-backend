@@ -13,13 +13,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Certificado servido pelo gateway
+      - name: TLS e SAN do gateway
         run: |
-          set -uo pipefail
-          for host in 185.111.156.15 enois3.b7cloud.tech; do
-            echo "=== $host:8122 ==="
-            timeout 15 openssl s_client -connect ${host}:8122 -servername ${host} -showcerts </dev/null 2>&1 | \
-              grep -E "subject=|issuer=|verify|Verification|CN *=" | head -10
-            echo "--- handshake sem SNI ---"
-            timeout 15 openssl s_client -connect ${host}:8122 </dev/null 2>&1 | grep -E "verify|Verification|subject=" | head -5
-          done
+          set +e
+          timeout 8 bash -c "</dev/tcp/185.111.156.15/8122" && echo "8122 aberto" || echo "8122 fechado/sem resposta"
+          python3 - <<PY
+          import ssl, socket
+          host = "185.111.156.15"
+          def probe(check, verify):
+              ctx = ssl.create_default_context()
+              ctx.check_hostname = check
+              ctx.verify_mode = ssl.CERT_REQUIRED if verify else ssl.CERT_NONE
+              try:
+                  with socket.create_connection((host, 8122), timeout=8) as s:
+                      with ctx.wrap_socket(s, server_hostname=host) as t:
+                          return "ok " + str(t.version())
+              except Exception as e:
+                  return type(e).__name__ + ": " + str(e)[:160]
+          print("sem verificacao::", probe(False, False))
+          print("com verificacao::", probe(True, True))
+          print("sem checar host::", probe(False, True))
+          PY
