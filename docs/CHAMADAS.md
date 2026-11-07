@@ -77,6 +77,28 @@ repositório, em log ou em relatório):
 - `JITSI_APP_SECRET` fica **só na Epapo**: quem assina o JWT é o gateway, este backend não tem mais
   essa chave.
 
+### Um par de segredos por ambiente
+
+O gateway da Epapo hospeda as duas instâncias do Énóis e escolhe qual delas consultar pelo token
+apresentado: o token de um ambiente nunca é aceito pelo outro, e um par trocado responde `401` em
+vez de abrir sala. Por isso cada ambiente tem o seu conjunto, com prefixo no repositório, como já
+acontece com `QA_VAPID_*` / `PROD_VAPID_*`:
+
+| Ambiente | URLs (Actions *variables*) | Tokens (Actions *secrets*) |
+|---|---|---|
+| QA | `REDE_CALLS_EPAPO_URL`, `REDE_CALLS_EPAPO_GATEWAY_URL` | `REDE_CALLS_EPAPO_INTERNAL_TOKEN`, `REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN` |
+| Produção | `PROD_REDE_CALLS_EPAPO_URL`, `PROD_REDE_CALLS_EPAPO_GATEWAY_URL` | `PROD_REDE_CALLS_EPAPO_INTERNAL_TOKEN`, `PROD_REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN` |
+
+Cada deploy aplica a mesma regra: as quatro do seu ambiente andam juntas. Todas vazias significam
+chamadas desligadas com `503` explícito, que é um estado válido; algumas preenchidas e outras não
+fazem o deploy falhar antes de subir um container que falharia em toda entrada em sala. A URL do
+gateway precisa ser `https`, aceitando `http` apenas em loopback e faixas privadas — o salto carrega
+segredo de servidor a cada chamada.
+
+Em produção o deploy confere o resultado no próprio backend: a rota de autorização do gateway
+responde `401` quando o segredo de servidor está no container e `503` quando não está. É por essa
+resposta que o health check distingue "configurado" de "variável não chegou".
+
 O `aud` é **obrigatório**: o plugin de token do Prosody recusa (`'aud' claim is missing`) quando a
 lista de audiências aceitas está preenchida e o token não traz `aud`, e o navegador fica preso em
 `passwordRequired` sem entrar na sala. Quem emite é o gateway, com `aud=jitsi` e `iss=epapo`, que
