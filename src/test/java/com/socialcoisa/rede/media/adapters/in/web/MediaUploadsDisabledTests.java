@@ -18,10 +18,12 @@ import com.socialcoisa.rede.shared.web.TestAuthHelper;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * URGENTE (19/10/2026): o ImageKit foi comprometido e nao recebe mais arquivo novo. Sem o S3
- * configurado, o upload responde 503 — nunca cai no caminho de escrita antigo.
+ * URGENTE (19/10/2026): o ImageKit foi comprometido e nao recebe mais arquivo novo. Sem um storage
+ * de upload (S3 ou o modo `local` de dev), o upload responde 503 — nunca cai no caminho de escrita
+ * antigo. O perfil de teste ativa `dev`, que hoje defaulta para `local`; aqui fixamos `imagekit`
+ * justamente para cobrir o ambiente sem upload disponivel.
  */
-@SpringBootTest
+@SpringBootTest(properties = "rede.media.storage=imagekit")
 @AutoConfigureMockMvc
 class MediaUploadsDisabledTests {
 

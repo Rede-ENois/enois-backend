@@ -1,9 +1,29 @@
 # Mídia no S3 — como aplicar
 
-O storage de mídia tem dois provedores e a escolha é **por variável de ambiente**, sem deploy de
-código: `imagekit` (o de sempre) ou `s3` (o padrão novo). O que já está gravado no banco não muda
-nunca — cada asset guarda o próprio endereço, então **asset antigo continua abrindo pelo ImageKit**
-depois da virada. É esse o "fallback": ele é estrutural, não um caminho especial no código.
+O storage de mídia tem dois provedores de produção e a escolha é **por variável de ambiente**, sem
+deploy de código: `imagekit` (o de sempre) ou `s3` (o padrão novo). O que já está gravado no banco
+não muda nunca — cada asset guarda o próprio endereço, então **asset antigo continua abrindo pelo
+ImageKit** depois da virada. É esse o "fallback": ele é estrutural, não um caminho especial no
+código.
+
+## Modo `local` (somente desenvolvimento)
+
+O perfil `dev` liga `rede.media.storage=local` por padrão. É um storage de desenvolvimento, não um
+terceiro provedor de produção: os objetos vão para disco (`rede.media.local.dir`, vazio =
+temporário do sistema) e são servidos pelo **mesmo** `PUT/GET /api/storage/{chave}` usado em
+produção. Consequências:
+
+- upload funciona sem bucket, sem ImageKit e sem configurar S3 (`REDE_MEDIA_STORAGE` continua
+  podendo forçar `s3`/`imagekit` no dev);
+- a sanitização de metadados e a moderação de imagem continuam no caminho — não existe bypass por
+  ser "local";
+- o `cdnUrl` gravado é relativo (`/api/storage/...`), então o navegador carrega da mesma origem do
+  front (proxy do Vite), sem host fixo;
+- o banco do dev é H2 em memória: reiniciar o backend perde os assets e os arquivos ficam órfãos
+  no diretório temporário;
+- qa/prd não são afetados: o default fora do dev continua `imagekit`, e a virada para `s3` segue
+  sendo decisão de operação.
+
 
 > **Estado:** o upload por URL assinada está implementado, mas **não foi testado contra um bucket
 > real** (o S3 só existe em produção). A primeira virada de ambiente é a estreia — vale ler a seção

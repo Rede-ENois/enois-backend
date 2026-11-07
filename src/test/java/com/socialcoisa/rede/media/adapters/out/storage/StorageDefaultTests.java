@@ -9,18 +9,18 @@ import org.springframework.boot.test.context.SpringBootTest;
 import com.socialcoisa.rede.media.application.port.out.StorageUrlFactory;
 
 /**
- * Sem a variavel de ambiente, o app tem de continuar no ImageKit.
- *
- * E o que garante que ligar o S3 e uma decisao de operacao: nenhum deploy muda o storage sozinho.
+ * O default de qa/prd continua o ImageKit — ligar o S3 (ou o modo local de dev) é decisão de
+ * operação, nunca um deploy mudando o storage sozinho. A suíte roda com o perfil `dev`, que agora
+ * opta por `local` para o upload funcionar sem bucket; por isso o modo de produção é fixado aqui.
  */
-@SpringBootTest
+@SpringBootTest(properties = "rede.media.storage=imagekit")
 class StorageDefaultTests {
 
 	@Autowired
 	private StorageUrlFactory storageUrlFactory;
 
 	@Test
-	void staysOnImageKitByDefault() {
+	void imageKitModeUsesTheImageKitUrlFactory() {
 		assertThat(storageUrlFactory).isInstanceOf(ImageKitStorageUrlFactory.class);
 	}
 }
