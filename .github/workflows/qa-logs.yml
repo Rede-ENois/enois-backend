@@ -13,31 +13,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Certificado do gateway (publico, sem chave)
+      - name: Backend de producao, chamadas no log
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
         run: |
           set -euo pipefail
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
-          curl -sS --max-time 30 "${AUTH[@]}" "${PORTAINER_BASE_URL}/api/endpoints/12/docker/containers/epapo-prod-auth-gateway-1/json" -o /tmp/gw.json
-          python3 - <<PY
-          import json, base64
-          d = json.load(open("/tmp/gw.json"))
-          env = dict(e.partition("=")[0::2] for e in d["Config"]["Env"])
-          cert = base64.b64decode(env["EPAPO_AUTH_TLS_CERT"])
-          open("/tmp/gw.crt", "wb").write(cert)
-          print("cert bytes:", len(cert))
-          PY
-          openssl x509 -in /tmp/gw.crt -noout -subject -issuer -dates -ext subjectAltName 2>&1 | head -12
-          echo "=== a chave corresponde ao certificado? (modulus hash) ==="
-          python3 - <<PY
-          import json, base64, hashlib
-          d = json.load(open("/tmp/gw.json"))
-          env = dict(e.partition("=")[0::2] for e in d["Config"]["Env"])
-          key = base64.b64decode(env["EPAPO_AUTH_TLS_KEY"])
-          open("/tmp/gw.key", "wb").write(key)
-          PY
-          echo "pub-cert:  $(openssl x509 -in /tmp/gw.crt -noout -pubkey | openssl sha256)"
-          echo "pub-key:   $(openssl pkey -in /tmp/gw.key -pubout 2>/dev/null | openssl sha256)"
-          rm -f /tmp/gw.key /tmp/gw.crt
+          API="${PORTAINER_BASE_URL}/api/endpoints/11/docker"
+          curl -sS --max-time 60 "${AUTH[@]}" "${API}/containers/enois-prod-backend/logs?stdout=1&stderr=1&timestamps=1" -o /tmp/prod.log || echo "falhou"
+          tr -d "\000" < /tmp/prod.log | wc -l
+          tr -d "\000" < /tmp/prod.log | grep -aE "gateway do Epapo|CALLS_|CALL_ENTRY|/calls/|Epapo" | tail -40 || echo "nada"
