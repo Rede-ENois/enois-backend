@@ -699,19 +699,37 @@ jobs:
               printf '%s' "${EPAPO_GATEWAY_CA_B64}" | base64 -d > "${ca_file}"
               ca_args=(--cacert "${ca_file}")
             fi
+            # A sonda roda logo depois de o container novo subir, e o gateway pergunta a este
+            # MESMO backend para responder: se ela perguntar antes de o backend aquecer, recebe
+            # 502 (o Énóis não soube responder), que é o sintoma de uma falha real e também o de
+            # uma janela de segundos. Por isso repete até vir uma resposta do Énóis: 200, 401, 403
+            # e 404 são definitivas e provam que a cadeia inteira atendeu.
+            #
             # `|| true`: o curl já imprime 000 quando não conecta e sai com erro. Com `|| echo 000`
             # o valor virava 000000 e caía no ramo "resposta inesperada" em vez de "não respondeu".
-            probe=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 \
-              ${ca_args[@]+"${ca_args[@]}"} \
-              -X POST "${REDE_CALLS_EPAPO_GATEWAY_URL%/}/auth/token" \
-              -H "X-Epapo-Internal: ${REDE_CALLS_EPAPO_INTERNAL_TOKEN}" \
-              -H "Content-Type: application/json" \
-              --data '{"callId":"00000000-0000-0000-0000-000000000000","userId":"00000000-0000-0000-0000-000000000000"}' \
-              2>/dev/null || true)
-            probe="${probe:-000}"
+            probe=""
+            for attempt in 1 2 3 4 5; do
+              probe=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 \
+                ${ca_args[@]+"${ca_args[@]}"} \
+                -X POST "${REDE_CALLS_EPAPO_GATEWAY_URL%/}/auth/token" \
+                -H "X-Epapo-Internal: ${REDE_CALLS_EPAPO_INTERNAL_TOKEN}" \
+                -H "Content-Type: application/json" \
+                --data '{"callId":"00000000-0000-0000-0000-000000000000","userId":"00000000-0000-0000-0000-000000000000"}' \
+                2>/dev/null || true)
+              probe="${probe:-000}"
+              case "${probe}" in
+                200|401|403|404) break ;;
+              esac
+              echo "   tentativa ${attempt}: gateway respondeu ${probe}, aguardando..."
+              sleep 5
+            done
             case "${probe}" in
               200|401|403|404)
                 echo " gateway respondeu (${probe}) em ${REDE_CALLS_EPAPO_GATEWAY_URL}"
+                ;;
+              502)
+                echo "::warning::o gateway não conseguiu falar com o backend da QA (502) após 5 tentativas."
+                echo "O container está no ar; isto indica o Énóis recusando ou demorando a responder à autorização."
                 ;;
               000|"")
                 echo "::warning::o Epapo não respondeu em ${REDE_CALLS_EPAPO_GATEWAY_URL} a partir do host da QA."
