@@ -13,20 +13,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Ler logs do container da QA
+      - name: Logs do gateway e do backend
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
         run: |
           set -euo pipefail
-          API="${PORTAINER_BASE_URL}/api/endpoints/8/docker"
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
-          echo "=== tamanho total do log (linhas) ==="
-          curl -sS --max-time 60 "${AUTH[@]}" \
-            "${API}/containers/enois-qa-backend/logs?stdout=1&stderr=1" \
-            | tr -d '\000' | wc -l
-          echo "=== linhas com /calls, 503 ou gateway ==="
-          curl -sS --max-time 60 "${AUTH[@]}" \
-            "${API}/containers/enois-qa-backend/logs?stdout=1&stderr=1" \
-            | tr -d '\000' | grep -aiE "/calls|CALLS_|gateway do epapo|status=5" | tail -40 \
-            || echo "nada"
+
+          echo "=== containers no node3 (endpoint 12) ==="
+          GAPI="${PORTAINER_BASE_URL}/api/endpoints/12/docker"
+          curl -sS --max-time 30 "${AUTH[@]}" "${GAPI}/containers/json?all=1" \
+            | python3 -c 'import json,sys
+for c in json.load(sys.stdin): print(c.get("Names"), c.get("State"))' || echo falhou
+
+          echo "=== varredura TLS/firewall: node3 fala com o backend da QA? ==="
+          curl -sS --max-time 30 "${AUTH[@]}" "${GAPI}/containers/json?all=1&filters=%7B%22name%22%3A%5B%22auth-gateway%22%5D%7D" \
+            | python3 -c 'import json,sys
+print([c["Id"][:12] for c in json.load(sys.stdin)])'
