@@ -259,14 +259,23 @@ vídeo/áudio usam `ffmpeg -map_metadata -1 -c copy` (a imagem instala o ffmpeg)
 passam por arquivo temporário. A mídia legada do ImageKit não é reescrita — ela não passa pelo
 proxy do bucket.
 
-Quando a limpeza não dá para acontecer, a resposta depende da causa:
+Quando a limpeza não dá para acontecer, o envio é recusado: publicar o arquivo com os metadados
+intactos contraria o motivo de a limpeza existir. A resposta depende da causa:
 
-- **Sem pasta temporária gravável** (o pod não tem onde escrever): o envio é recusado com
-  `503 MEDIA_UPLOAD_UNAVAILABLE`. Não há como limpar, e publicar o arquivo com os metadados
-  intactos contraria o motivo de a limpeza existir.
-- **Pasta disponível, mas o ffmpeg ausente ou falhando**: o arquivo sobe como veio e a falha fica
-  no log (`media_ffmpeg_skipped` / `media_ffmpeg_unavailable`). A ausência do ffmpeg é falha de
-  infraestrutura e não deve impedir alguém de publicar um vídeo.
+- **Sem pasta temporária gravável** (o pod não tem onde escrever): `503 MEDIA_UPLOAD_UNAVAILABLE`.
+- **ffmpeg ausente, interrompido ou sem vaga** (todas ocupadas por mais de 30 s):
+  `503 MEDIA_PROCESSING_UNAVAILABLE`. No log: `media_ffmpeg_unavailable`, `media_ffmpeg_interrupted`
+  ou `media_ffmpeg_busy`. A ausência do ffmpeg na imagem bloqueia o envio de vídeo/áudio.
+- **Arquivo que o ffmpeg não consegue limpar** (formato diferente do tipo declarado, arquivo corrompido,
+  tempo esgotado) ou imagem/PDF que não pôde ser lido: `422 MEDIA_PROCESSING_FAILED`. No log:
+  `media_ffmpeg_rejected` ou `media_metadata_sanitize_failed`.
+
+O ffmpeg roda sem shell, com caminhos temporários gerados pelo servidor, demuxer e muxer fixados pelo
+tipo validado no upload (`video/mp4`, `video/quicktime`, `video/webm`, `audio/webm`, `audio/mpeg`,
+`audio/ogg`, `audio/wav`) e só o protocolo `file`. O tempo máximo é 30 s para arquivos em memória e
+120 s para os grandes; o número de processos simultâneos é limitado por
+`REDE_MEDIA_FFMPEG_MAX_CONCURRENT`. JPEG com orientação EXIF grande demais para ser girado (acima de
+16 megapixels) perde todos os metadados e recebe um bloco EXIF só com a orientação.
 
 O temporário é criado em `rede.media.temp-dir` quando configurado (o diretório precisa existir),
 depois em `/app/data` (o volume gravável do pod) e por último no temporário do sistema.
@@ -274,6 +283,7 @@ depois em `/app/data` (o volume gravável do pod) e por último no temporário d
 | Variável | Descrição |
 |---|---|
 | `REDE_MEDIA_FFMPEG_PATH` | Caminho do ffmpeg (padrão `ffmpeg`) |
+| `REDE_MEDIA_FFMPEG_MAX_CONCURRENT` | Processos ffmpeg simultâneos (padrão `2`, mínimo `1`); quem passa do limite espera até 30 s por uma vaga |
 | `TURNSTILE_TEST_KEY_POLICY` | O que fazer com chaves de teste `1x000…`: `degrade` (padrão — sobe com o captcha externo desligado e ERROR no log) ou `fatal` (recusa o boot). Chave de teste nunca conta como captcha ativo |
 | `REDE_VERSION_DETAILS_TOKEN` | Token do header `X-Version-Details` para ver uptime/Flyway/storage em `/version` |
 

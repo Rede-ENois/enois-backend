@@ -91,9 +91,10 @@ public class GitHubContributionSyncService {
 	}
 
 	/**
-	 * Todo repositório público da organização é elegível, inclusive os que surgirem depois: ele nasce
-	 * habilitado. Linha já existente nunca é alterada, então o que a administração desligou continua
-	 * desligado. Falha do GitHub não derruba o ciclo — vale a lista que já existe.
+	 * Registers the organization's new public repositories so the admin panel lists them, switched off:
+	 * any member can create a public repository in the organization and merge or label there, so a
+	 * repository only counts for seals after an admin enables it. Existing rows are never changed. A
+	 * GitHub failure does not stop the cycle; the current list stays.
 	 */
 	private void discoverOrganizationRepositories(List<String> errors) {
 		if (!StringUtils.hasText(organization)) {
@@ -106,7 +107,7 @@ public class GitHubContributionSyncService {
 			String prefix = organization.toLowerCase(Locale.ROOT) + "/";
 			for (String name : gateway.listOrganizationRepositories(organization, maxPages)) {
 				if (name.toLowerCase(Locale.ROOT).startsWith(prefix) && !known.contains(name.toLowerCase(Locale.ROOT))) {
-					repositories.save(new GitHubRepository(name, true, now, null));
+					repositories.save(new GitHubRepository(name, false, now, null));
 				}
 			}
 		}

@@ -42,12 +42,18 @@ pontuação de 0,70 é um ponto inicial configurável, não uma medição de pre
 A confirmação semântica reduz falsos positivos do filtro preliminar, mas não substitui a avaliação
 de precisão com um conjunto de validação controlado e apropriado.
 
-GIFs animados são verificados: os decodificadores ImageIO expõem os quadros como retângulos parciais,
-então o classificador refaz a animação como um visualizador faz (posição e método de descarte de cada
-quadro) e pontua a tela inteira em até 8 quadros espaçados, sempre incluindo o primeiro e o último. A
-pontuação da imagem é a maior entre eles. Limites: 1.000 quadros e 400 milhões de pixels decodificados
-(quadros × largura × altura); acima disso o upload é recusado. Outros formatos animados continuam
-recusados, pois não há compositor para eles.
+GIFs animados são verificados quadro a quadro: os decodificadores ImageIO expõem os quadros como
+retângulos parciais, então o classificador refaz a animação como um visualizador faz (posição e método
+de descarte de cada quadro) e pontua a tela inteira em **todos** os quadros, inclusive os de duração
+zero. Quadros que resultam na mesma entrada do modelo são pontuados uma vez só. A pontuação da imagem
+é a maior entre eles, e a confirmação semântica recebe esse quadro (não o primeiro).
+
+Antes de decodificar qualquer pixel, o classificador lê o cabeçalho de todos os quadros e confere os
+limites: até 300 quadros, até 16 megapixels por quadro e na tela (que cresce para caber quadros
+deslocados) e até 400 milhões de pixels somando os quadros decodificados e uma tela composta por
+quadro. Fora desses limites o upload é recusado com `422 IMAGE_TOO_LARGE_TO_VERIFY`. Imagens paradas
+seguem o mesmo teto de 16 megapixels. Outros formatos animados (PNG animado, WebP animado e sequência
+AVIF) são recusados com `422 IMAGE_CANNOT_BE_VERIFIED`, pois não há compositor para eles.
 
 ## Dependências de runtime
 

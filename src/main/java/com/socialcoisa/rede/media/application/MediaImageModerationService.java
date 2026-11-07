@@ -43,12 +43,15 @@ public class MediaImageModerationService {
 				"A verificação de imagens está indisponível. Tente novamente mais tarde.");
 		}
 		try {
-			double score = classifier.pornographicScore(imageBytes, mimeType);
+			ImageContentClassifier.Assessment assessment = classifier.assess(imageBytes, mimeType);
+			double score = assessment.score();
 			if (!Double.isFinite(score) || score < 0.0 || score > 1.0) {
 				throw new IllegalStateException("O classificador retornou uma pontuação inválida.");
 			}
 			if (score >= threshold) {
-				Result result = reviewer.review(imageBytes).orElseThrow(() -> new ApiException(503,
+				// An animation is reviewed on the frame that was flagged, not on its first frame.
+				byte[] reviewed = assessment.reviewFrame() != null ? assessment.reviewFrame() : imageBytes;
+				Result result = reviewer.review(reviewed).orElseThrow(() -> new ApiException(503,
 					"IMAGE_MODERATION_UNAVAILABLE", "Não foi possível confirmar a verificação desta imagem."));
 				if (result == Result.PROHIBITED) {
 					throw new ApiException(422, "IMAGE_CONTENT_NOT_ALLOWED",
@@ -59,6 +62,10 @@ public class MediaImageModerationService {
 						"Não foi possível confirmar a verificação desta imagem.");
 				}
 			}
+		}
+		catch (ImageContentClassifier.TooLargeToVerifyException failure) {
+			throw new ApiException(422, "IMAGE_TOO_LARGE_TO_VERIFY",
+				"Esta imagem é grande ou longa demais para ser verificada. Envie uma versão menor.");
 		}
 		catch (IOException failure) {
 			throw new ApiException(422, "IMAGE_CANNOT_BE_VERIFIED",

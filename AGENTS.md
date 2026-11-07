@@ -39,6 +39,10 @@ constraint:
 - Design, prioridades e merge para a branch de produção são decisão dos mantenedores.
 - Fluxo de entrega: **feature → `qa` → `main`** (ver [`docs/GITFLOW.md`](docs/GITFLOW.md)). PR precisa
   de aprovação de alguém que não empurrou o código.
+- **Merge é de mantenedor.** Única exceção: o app `kof-agent-worker`, autorizado pelos mantenedores,
+  pode fazer merge, e só com o CI verde e **nenhuma revisão `CHANGES_REQUESTED` em aberto**, de quem
+  quer que seja. Pedido de mudança se resolve com nova revisão de quem pediu ou com dispensa explícita
+  de um mantenedor, nunca passando por cima dele.
 - **Toda mudança relevante tem origem rastreável**: uma issue aberta com o plano de implementação,
   uma tarefa do backlog ou um pedido explícito dos mantenedores. PR sem origem é PR sem destino.
 - **Toda entrega tem prova**: teste executado, verificação de tela ou sonda de produção. Concluído

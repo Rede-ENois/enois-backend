@@ -843,9 +843,11 @@ entrada na sala é autorizada no servidor com token assinado — detalhes em
 | Método | Rota | Descrição | Autenticação |
 |---|---|---|---|
 | POST | `/api/conversations/{conversationId}/calls` | Começa (ou devolve) a chamada 1:1. Corpo opcional `{"kind":"AUDIO\|VIDEO"}` (padrão `AUDIO`) | Sim |
-| POST | `/api/groups/{groupId}/calls` | Começa (ou devolve) a chamada "Tamo junto" do grupo | Sim |
+| POST | `/api/groups/{groupId}/calls` | Começa (ou devolve) a chamada "Tamo junto" do grupo. Quem abre já entra | Sim |
+| POST | `/api/groups/{groupId}/topics/{topicId}/calls` | Começa (ou devolve) o "Tamo junto" do tópico. Corpo opcional `{"kind":"AUDIO\|VIDEO"}` | Sim |
 | GET | `/api/conversations/{conversationId}/calls/open` | Chamada aberta da conversa (corpo `null` quando não há) | Sim |
-| GET | `/api/groups/{groupId}/calls/open` | Chamada aberta do grupo | Sim |
+| GET | `/api/groups/{groupId}/calls/open` | Chamada aberta do grupo (só a sala geral, não as de tópico) | Sim |
+| GET | `/api/groups/{groupId}/topics/{topicId}/calls/open` | Chamada aberta do tópico | Sim |
 | GET | `/api/calls/open` | Chamadas abertas em que a pessoa está — para voltar de outra tela | Sim |
 | GET | `/api/calls/{callId}` | Estado da chamada | Sim |
 | POST | `/api/calls/{callId}/answer` | Atender (só 1:1) | Sim |

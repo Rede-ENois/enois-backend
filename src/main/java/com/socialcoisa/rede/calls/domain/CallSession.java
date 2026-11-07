@@ -17,8 +17,12 @@ public class CallSession {
 
 	/** Quanto tempo o 1:1 toca antes de virar "não atendida". */
 	public static final Duration RING_TIMEOUT = Duration.ofSeconds(40);
-	/** Chamada em grupo sem ninguém dentro por esse tempo é fechada ("ao vivo" acaba sozinho). */
-	public static final Duration EMPTY_GROUP_TIMEOUT = Duration.ofMinutes(5);
+	/**
+	 * Chamada em grupo sem ninguém dentro por esse tempo é fechada ("ao vivo" acaba sozinho). A
+	 * conta começa quando a última pessoa sai, então quem recarrega a página ou cai por um instante
+	 * consegue voltar para a mesma sala.
+	 */
+	public static final Duration EMPTY_GROUP_TIMEOUT = Duration.ofMinutes(1);
 	/** Tempo sem nenhum sinal de vida depois do qual a sessão é dada como abandonada. */
 	public static final Duration ABANDON_TIMEOUT = Duration.ofMinutes(30);
 
@@ -27,6 +31,8 @@ public class CallSession {
 	private final CallModality modality;
 	private final String conversationId;
 	private final String groupId;
+	/** Tópico do grupo quando a sala é do tópico; nulo na sala geral do grupo e em toda 1:1. */
+	private final String topicId;
 	private final String initiatorId;
 	private final String roomId;
 	private final String displayName;
@@ -40,14 +46,15 @@ public class CallSession {
 	private Instant lastActivityAt;
 
 	public CallSession(String id, CallKind kind, CallModality modality, String conversationId, String groupId,
-			String initiatorId, String roomId, String displayName, CallState state, Instant createdAt,
-			Instant answeredAt, Instant endedAt, String endedBy, String endReason, Instant expiresAt,
-			Instant lastActivityAt) {
+			String topicId, String initiatorId, String roomId, String displayName, CallState state,
+			Instant createdAt, Instant answeredAt, Instant endedAt, String endedBy, String endReason,
+			Instant expiresAt, Instant lastActivityAt) {
 		this.id = id;
 		this.kind = kind;
 		this.modality = modality;
 		this.conversationId = conversationId;
 		this.groupId = groupId;
+		this.topicId = topicId;
 		this.initiatorId = initiatorId;
 		this.roomId = roomId;
 		this.displayName = displayName;
@@ -63,11 +70,33 @@ public class CallSession {
 
 	public static CallSession start(String id, CallKind kind, CallModality modality, String conversationId,
 			String groupId, String initiatorId, String roomId, String displayName, Instant now) {
+		return start(id, kind, modality, conversationId, groupId, null, initiatorId, roomId, displayName, now);
+	}
+
+	/** Mesma abertura, com o tópico do grupo quando a sala é de um tópico. */
+	public static CallSession start(String id, CallKind kind, CallModality modality, String conversationId,
+			String groupId, String topicId, String initiatorId, String roomId, String displayName, Instant now) {
 		CallState initial = modality == CallModality.DIRECT ? CallState.RINGING : CallState.CONNECTING;
 		Instant expiresAt = modality == CallModality.DIRECT ? now.plus(RING_TIMEOUT)
 			: now.plus(EMPTY_GROUP_TIMEOUT);
-		return new CallSession(id, kind, modality, conversationId, groupId, initiatorId, roomId, displayName,
-			initial, now, null, null, null, null, expiresAt, now);
+		return new CallSession(id, kind, modality, conversationId, groupId, topicId, initiatorId, roomId,
+			displayName, initial, now, null, null, null, null, expiresAt, now);
+	}
+
+	/**
+	 * A última pessoa saiu: a sala para de contar como "ao vivo" agora, mas continua aberta por
+	 * {@link #EMPTY_GROUP_TIMEOUT} para quem caiu ou recarregou voltar. Devolve o prazo já
+	 * empurrado (o serviço grava na mesma transição de saída).
+	 */
+	public Instant drained(Instant now) {
+		this.expiresAt = now.plus(EMPTY_GROUP_TIMEOUT);
+		this.lastActivityAt = now;
+		return this.expiresAt;
+	}
+
+	/** A última pessoa saiu há mais tempo que a tolerância: pode fechar, se o vazio continuar. */
+	public boolean drainedSince(Instant now) {
+		return expiresAt != null && !now.isBefore(expiresAt);
 	}
 
 	/** Muda o estado só se a máquina permitir; senão responde com o conflito em vez de fingir. */
@@ -157,6 +186,10 @@ public class CallSession {
 
 	public String groupId() {
 		return groupId;
+	}
+
+	public String topicId() {
+		return topicId;
 	}
 
 	public String initiatorId() {

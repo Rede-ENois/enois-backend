@@ -44,12 +44,7 @@
 	</properties>
 	<dependencyManagement>
 		<dependencies>
-			<!-- web-push 5.1.1 traz versões antigas destas duas libs (CVEs críticas/altas). -->
-			<dependency>
-				<groupId>org.asynchttpclient</groupId>
-				<artifactId>async-http-client</artifactId>
-				<version>2.16.1</version>
-			</dependency>
+			<!-- web-push traz uma versão antiga do jose4j (CVEs críticas/altas). -->
 			<dependency>
 				<groupId>org.bitbucket.b_c</groupId>
 				<artifactId>jose4j</artifactId>
@@ -162,13 +157,17 @@
 			<groupId>nl.martijndwars</groupId>
 			<artifactId>web-push</artifactId>
 			<version>5.1.2</version>
+			<exclusions>
+				<!-- Only the library's PushAsyncService uses it; WebPushSender sends through PushService
+				     and the Apache async client below, so the Netty-based client never loads. -->
+				<exclusion>
+					<groupId>org.asynchttpclient</groupId>
+					<artifactId>async-http-client</artifactId>
+				</exclusion>
+			</exclusions>
 		</dependency>
-		<!-- O web-push 5.1.2 mudou o async-http-client e o jose4j para runtime, mas
-		     WebPushSender usa os dois direto: as dependencias de compilacao sao explicitas. -->
-		<dependency>
-			<groupId>org.asynchttpclient</groupId>
-			<artifactId>async-http-client</artifactId>
-		</dependency>
+		<!-- WebPushSender builds the Apache async client itself, and the library's PushService signs
+		     VAPID with jose4j: both are declared here because web-push 5.1.2 ships them as runtime. -->
 		<dependency>
 			<groupId>org.apache.httpcomponents</groupId>
 			<artifactId>httpasyncclient</artifactId>

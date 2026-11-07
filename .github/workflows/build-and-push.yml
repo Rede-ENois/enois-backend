@@ -183,6 +183,11 @@ jobs:
           file: ./Dockerfile
           push: false
           load: true
+          # CA do gateway de chamadas, quando houver: o salto até ele é TLS entre
+          # hosts e o certificado é nosso, não de uma autoridade pública. Vazio
+          # (o padrão) produz a mesma imagem de antes.
+          build-args: |
+            EPAPO_GATEWAY_CA_B64=${{ secrets.EPAPO_GATEWAY_CA_B64 }}
           tags: |
             ${{ env.HARBOR_REGISTRY }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.image_tag }}
             ${{ env.HARBOR_REGISTRY }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.branch }}
@@ -257,10 +262,11 @@ jobs:
           GITHUB_SUGGESTIONS_REPO_BACKEND: ${{ vars.QA_SUGGESTIONS_REPO_BACKEND }}
           GITHUB_SUGGESTIONS_REPO_FRONTEND: ${{ vars.QA_SUGGESTIONS_REPO_FRONTEND }}
           GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM: ${{ vars.QA_SUGGESTIONS_REPO_DESIGN_SYSTEM }}
-          # Na QA, issue com a label `bug` (aplicada por mantenedor) ja conta para o selo de
-          # issues; em producao o default e vazio (so revisao humana). O worker roda a cada 10
-          # minutos para os selos acompanharem o GitHub sozinhos.
-          GITHUB_QUALIFIED_ISSUE_LABELS: bug
+          # Issue so conta para o selo com a label de triagem `seal:qualified`, que nenhum template
+          # de issue aplica (o template de bug aplica `bug` sozinho, entao `bug` nao serve). Sem a
+          # label, a issue espera revisao no painel. O worker roda a cada 10 minutos para os selos
+          # acompanharem o GitHub sozinhos.
+          GITHUB_QUALIFIED_ISSUE_LABELS: "seal:qualified"
           GITHUB_SYNC_CRON: "0 */10 * * * *"
           # panic:yes => somente leitura; vazio/ausente => online (o botão do painel decide).
           # ImageKit aposentado, mas o purge/delete de midia antiga precisa funcionar ate a migracao.
@@ -300,6 +306,21 @@ jobs:
           VAPID_PUBLIC_KEY: ${{ secrets.QA_VAPID_PUBLIC_KEY }}
           VAPID_PRIVATE_KEY: ${{ secrets.QA_VAPID_PRIVATE_KEY }}
           VAPID_SUBJECT: "mailto:suporte@enois.ia.br"
+          # Epapo (videoconferência própria). Sem estas quatro variáveis o backend responde
+          # 503 CALLS_NOT_CONFIGURED / MENTORING_ROOMS_NOT_CONFIGURED e nenhuma sala abre —
+          # é o estado em que a QA estava, com a rota do gateway respondendo
+          # GATEWAY_NOT_CONFIGURED. Os dois segredos são os MESMOS que a stack do Epapo usa,
+          # pareados por nome: REDE_CALLS_EPAPO_INTERNAL_TOKEN = EPAPO_INTERNAL_TOKEN e
+          # REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN = ENOIS_AUTHORIZE_SECRET. Trocar um lado sem o
+          # outro faz o gateway recusar (401) em vez de abrir.
+          #
+          # A URL é a origem pública do Epapo, com https e sem barra no fim. O gateway-url é
+          # o endereço que ESTE backend alcança; hoje é o mesmo host público, porque o
+          # auth-gateway só aceita o IP do backend no ufw.
+          REDE_CALLS_EPAPO_URL: ${{ vars.REDE_CALLS_EPAPO_URL }}
+          REDE_CALLS_EPAPO_GATEWAY_URL: ${{ vars.REDE_CALLS_EPAPO_GATEWAY_URL }}
+          REDE_CALLS_EPAPO_INTERNAL_TOKEN: ${{ secrets.REDE_CALLS_EPAPO_INTERNAL_TOKEN }}
+          REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN: ${{ secrets.REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN }}
         run: |
           set -euo pipefail
           API="${PORTAINER_BASE_URL}/api/endpoints/${PORTAINER_ENDPOINT_ID}/docker"
@@ -308,6 +329,49 @@ jobs:
           PREV_NAME="${CONTAINER_NAME}-previous"
           IMG_PATH="${IMAGE_REF%:*}"
           IMG_TAG="${IMAGE_REF##*:}"
+
+          # Epapo: as quatro variáveis andam juntas. Todas vazias = chamadas desligadas, que é
+          # um estado válido e documentado (o backend responde 503 explícito). Algumas vazias e
+          # outras não = configuração pela metade, e aí o container sobe com a chamada "ligada"
+          # falhando em toda tentativa de entrar numa sala. Falhar aqui é mais barato que
+          # descobrir isso pela tela.
+          epapo_set=0
+          epapo_missing=""
+          for name in REDE_CALLS_EPAPO_URL REDE_CALLS_EPAPO_GATEWAY_URL \
+                      REDE_CALLS_EPAPO_INTERNAL_TOKEN REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN; do
+            if [ -n "${!name:-}" ]; then
+              epapo_set=$((epapo_set + 1))
+            else
+              epapo_missing="${epapo_missing} ${name}"
+            fi
+          done
+          if [ "${epapo_set}" -ne 0 ] && [ "${epapo_set}" -ne 4 ]; then
+            echo "::error::configuração do Epapo pela metade — faltam:${epapo_missing}"
+            echo "Defina as quatro (variáveis de repositório para as URLs, secrets para os tokens) ou nenhuma."
+            exit 1
+          fi
+          if [ "${epapo_set}" -eq 0 ]; then
+            echo "==> Epapo não configurado: chamadas e salas de mentoria ficam desligadas (503 explícito)"
+          else
+            # O gateway recebe dois segredos de servidor (o token interno e, na volta, o JWT
+            # pronto para entrar na sala). O Epapo roda num provedor diferente deste backend,
+            # sem rede privada entre os dois: por isso o salto tem de ser cifrado. http só é
+            # aceito para loopback e faixas privadas — ali o tráfego não sai do host.
+            epapo_gw_host=$(printf '%s' "${REDE_CALLS_EPAPO_GATEWAY_URL}" \
+              | sed -E 's#^[a-z]+://##; s#[:/].*$##')
+            case "${REDE_CALLS_EPAPO_GATEWAY_URL}" in
+              https://*) ;;
+              http://localhost*|http://127.*|http://10.*|http://192.168.*) ;;
+              http://172.1[6-9].*|http://172.2[0-9].*|http://172.3[01].*) ;;
+              *)
+                echo "::error::REDE_CALLS_EPAPO_GATEWAY_URL não é https (host: ${epapo_gw_host})."
+                echo "O gateway carrega segredo de servidor a cada chamada; em texto claro ele"
+                echo "vaza para quem estiver no caminho. Publique-o com TLS e aponte o https para cá."
+                exit 1
+                ;;
+            esac
+            echo "==> Epapo configurado: ${REDE_CALLS_EPAPO_URL}"
+          fi
 
           # Chamada ao proxy Docker do Portainer: imprime o corpo só quando dá certo e, quando
           # falha, mostra status + começo do corpo (sem despejar o progresso inteiro do pull).
@@ -475,6 +539,10 @@ jobs:
               "VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY}",
               "VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY}",
               "VAPID_SUBJECT=${VAPID_SUBJECT}",
+              "REDE_CALLS_EPAPO_URL=${REDE_CALLS_EPAPO_URL}",
+              "REDE_CALLS_EPAPO_GATEWAY_URL=${REDE_CALLS_EPAPO_GATEWAY_URL}",
+              "REDE_CALLS_EPAPO_INTERNAL_TOKEN=${REDE_CALLS_EPAPO_INTERNAL_TOKEN}",
+              "REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN=${REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN}",
               "TRUSTED_PROXY_IPS=154.12.230.97",
               "JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=60.0 -XX:+ExitOnOutOfMemoryError"
             ],
@@ -563,6 +631,9 @@ jobs:
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
+          REDE_CALLS_EPAPO_GATEWAY_URL: ${{ vars.REDE_CALLS_EPAPO_GATEWAY_URL }}
+          REDE_CALLS_EPAPO_INTERNAL_TOKEN: ${{ secrets.REDE_CALLS_EPAPO_INTERNAL_TOKEN }}
+          EPAPO_GATEWAY_CA_B64: ${{ secrets.EPAPO_GATEWAY_CA_B64 }}
         run: |
           # Boot do Spring (Flyway + Hibernate + Tomcat) na QA roda com lazy-initialization=false e
           # ainda carrega as vagas externas na subida: 75s era curto demais e um boot lento
@@ -576,12 +647,63 @@ jobs:
               -X "${method}" "${AUTH[@]}" "$@" "${API}${path}" 2>/dev/null || echo 000
           }
 
+          # O container subiu, mas isso não prova que ele alcança o Epapo: o gateway fica noutro
+          # host e o ufw de lá só libera a porta para o IP de quem chama. Esta sonda roda no
+          # mesmo host do container da QA (o runner é self-hosted na docker-prod4), então mede o
+          # MESMO caminho de rede que o backend usa. Sem isso, "conectado" seria só configuração
+          # desejada: o deploy passaria verde e a primeira entrada numa sala falharia.
+          #
+          # 200/403/404 do Énóis provam que o Epapo atendeu e repassou a pergunta; 401 prova que
+          # ele atendeu e recusou a credencial de servidor — par de segredos trocado, não rede.
+          # Só 000 (nada respondeu) é o firewall no caminho.
+          probe_gateway() {
+            if [ -z "${REDE_CALLS_EPAPO_GATEWAY_URL:-}" ]; then
+              echo "Epapo não configurado: nada a sondar."
+              return 0
+            fi
+            echo "=== alcance do gateway do Epapo a partir do host da QA ==="
+            local probe ca_args=()
+            # O certificado do gateway é emitido pela própria stack: o curl não o conhece e
+            # recusaria o handshake, o que apareceria como "não respondeu" — o mesmo sintoma
+            # do firewall, por um motivo diferente. O CA vem no build da imagem do backend,
+            # então a sonda o usa aqui, medindo o caminho que o backend realmente percorre.
+            if [ -n "${EPAPO_GATEWAY_CA_B64:-}" ]; then
+              local ca_file
+              ca_file="$(mktemp)"
+              printf '%s' "${EPAPO_GATEWAY_CA_B64}" | base64 -d > "${ca_file}"
+              ca_args=(--cacert "${ca_file}")
+            fi
+            # `|| true`: o curl já imprime 000 quando não conecta e sai com erro. Com `|| echo 000`
+            # o valor virava 000000 e caía no ramo "resposta inesperada" em vez de "não respondeu".
+            probe=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 \
+              ${ca_args[@]+"${ca_args[@]}"} \
+              -X POST "${REDE_CALLS_EPAPO_GATEWAY_URL%/}/auth/token" \
+              -H "X-Epapo-Internal: ${REDE_CALLS_EPAPO_INTERNAL_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data '{"callId":"00000000-0000-0000-0000-000000000000","userId":"00000000-0000-0000-0000-000000000000"}' \
+              2>/dev/null || true)
+            probe="${probe:-000}"
+            case "${probe}" in
+              200|401|403|404)
+                echo " gateway respondeu (${probe}) em ${REDE_CALLS_EPAPO_GATEWAY_URL}"
+                ;;
+              000|"")
+                echo "::warning::o Epapo não respondeu em ${REDE_CALLS_EPAPO_GATEWAY_URL} a partir do host da QA."
+                echo "O backend está no ar, mas ninguém entra em sala até essa porta estar liberada para este IP."
+                ;;
+              *)
+                echo "::warning::resposta inesperada do Epapo (${probe}) em ${REDE_CALLS_EPAPO_GATEWAY_URL}"
+                ;;
+            esac
+          }
+
           URL=https://enois-api-qa.b7cloud.tech/health
           for i in $(seq 1 30); do
             if curl -sf --max-time 10 "$URL"; then
               echo "OK na tentativa $i"
               # Subiu: o container anterior guardado deixa de ser necessário.
               status_of DELETE "/containers/${CONTAINER_NAME}-previous?force=1" >/dev/null || true
+              probe_gateway
               exit 0
             fi
             echo "tentativa $i falhou, aguardando..."
@@ -686,8 +808,9 @@ jobs:
           GITHUB_SUGGESTIONS_REPO_BACKEND: ${{ vars.SUGGESTIONS_REPO_BACKEND }}
           GITHUB_SUGGESTIONS_REPO_FRONTEND: ${{ vars.SUGGESTIONS_REPO_FRONTEND }}
           GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM: ${{ vars.SUGGESTIONS_REPO_DESIGN_SYSTEM }}
-          # Issue com a label `bug` (aplicada por mantenedor) ja conta para o selo de issues, como na QA.
-          GITHUB_QUALIFIED_ISSUE_LABELS: bug
+          # Issue so conta para o selo com a label de triagem `seal:qualified` (nenhum template de
+          # issue a aplica), como na QA.
+          GITHUB_QUALIFIED_ISSUE_LABELS: "seal:qualified"
           # ImageKit aposentado (storage no S3), mas o purge/delete de midia antiga ainda
           # conversa com ele ate a migracao de objetos terminar.
           IMAGEKIT_URL_ENDPOINT: ${{ secrets.IMAGEKIT_URL_ENDPOINT }}

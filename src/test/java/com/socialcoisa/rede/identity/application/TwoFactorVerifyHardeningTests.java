@@ -19,7 +19,6 @@ import com.socialcoisa.rede.identity.application.port.out.TwoFactorRepository;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.identity.domain.TwoFactorChallenge;
 import com.socialcoisa.rede.identity.domain.TwoFactorMethod;
-import com.socialcoisa.rede.notifications.application.NotificationService;
 import com.socialcoisa.rede.shared.security.SecretCipher;
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -40,12 +39,11 @@ class TwoFactorVerifyHardeningTests {
 	private final PasswordHasher hasher = mock(PasswordHasher.class);
 	private final SecretCipher cipher = mock(SecretCipher.class);
 	private final EmailService email = mock(EmailService.class);
-	private final NotificationService notifications = mock(NotificationService.class);
 	private final AuthSessionRepository sessions = mock(AuthSessionRepository.class);
 
 	private TwoFactorService service() {
-		return new TwoFactorService(repository, profiles, credentials, hasher, cipher, email, notifications,
-			sessions, Clock.fixed(NOW, ZoneOffset.UTC));
+		return new TwoFactorService(repository, profiles, credentials, hasher, cipher, email, sessions,
+			Clock.fixed(NOW, ZoneOffset.UTC));
 	}
 
 	private static TwoFactorChallenge challenge(TwoFactorMethod method) {
@@ -78,6 +76,22 @@ class TwoFactorVerifyHardeningTests {
 				assertThat(failure.status()).isEqualTo(409);
 				assertThat(failure.code()).isEqualTo("TWO_FACTOR_SECRET_UNREADABLE");
 			});
+	}
+
+	@Test
+	void unreadableTotpSecretStillAcceptsARecoveryCode() {
+		when(repository.findChallenge("challenge_1"))
+			.thenReturn(Optional.of(challenge(TwoFactorMethod.TOTP)));
+		when(repository.claimAttempt("challenge_1")).thenReturn(TwoFactorRepository.AttemptClaim.CLAIMED);
+		when(repository.findActiveSecret("user_1")).thenReturn(Optional.of("segredo-cifrado"));
+		when(cipher.decrypt("segredo-cifrado")).thenThrow(new IllegalStateException("chave trocada"));
+		when(repository.consumeBackupCode(org.mockito.ArgumentMatchers.eq("user_1"),
+				org.mockito.ArgumentMatchers.eq(com.socialcoisa.rede.shared.security.Hashes.sha256Hex("ABCD-1234")),
+				org.mockito.ArgumentMatchers.eq(NOW)))
+			.thenReturn(true);
+		when(repository.consumeChallenge("challenge_1", NOW)).thenReturn(true);
+
+		assertThat(service().verifyChallenge("challenge_1", " abcd-1234 ")).isEqualTo("user_1");
 	}
 
 	@Test
