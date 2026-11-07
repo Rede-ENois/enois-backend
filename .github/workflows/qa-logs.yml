@@ -13,36 +13,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Comparar segredos entre containers (sem imprimir valores)
-        env:
-          PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
-          PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
+      - name: Certificado servido pelo gateway
         run: |
-          set -euo pipefail
-          AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
-          B="${PORTAINER_BASE_URL}/api/endpoints"
-          curl -sS --max-time 30 "${AUTH[@]}" "${B}/11/docker/containers/json?all=1" -o /tmp/list11.json
-          python3 -c "import json;print(*[c['Names'] for c in json.load(open('/tmp/list11.json'))],sep=chr(10))"
-          get() { curl -sS --max-time 30 "${AUTH[@]}" "${B}/$1/docker/containers/$2/json"; }
-          get 12 epapo-prod-auth-gateway-1 > /tmp/gw.json
-          get 8 enois-qa-backend > /tmp/qa.json
-          NAME=$(python3 -c "import json;ns=[c['Names'][0].lstrip('/') for c in json.load(open('/tmp/list11.json')) if 'backend' in c['Names'][0]];print(ns[0] if ns else '')")
-          echo "container de prod: ${NAME}"
-          get 11 "${NAME}" > /tmp/pr.json
-          python3 - <<PY
-          import json
-          def env(p):
-              d=json.load(open(p))
-              return {e.partition("=")[0]: e.partition("=")[2] for e in d.get("Config",{}).get("Env",[])}
-          gw=env("/tmp/gw.json"); qa=env("/tmp/qa.json"); pr=env("/tmp/pr.json")
-          def cmp(name,a,b):
-              print(f"{name}: {'IGUAL' if a and b and a==b else 'DIFERENTE/vazio'} (tam {len(a or '')} vs {len(b or '')})")
-          cmp("QA interno  x gateway prod slot", qa.get("REDE_CALLS_EPAPO_INTERNAL_TOKEN"), gw.get("EPAPO_INTERNAL_TOKEN"))
-          cmp("QA interno  x gateway QA slot", qa.get("REDE_CALLS_EPAPO_INTERNAL_TOKEN"), gw.get("EPAPO_INTERNAL_TOKEN_QA"))
-          cmp("QA authorize x gateway QA slot", qa.get("REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN"), gw.get("ENOIS_AUTHORIZE_SECRET_QA"))
-          cmp("QA authorize x gateway prod slot", qa.get("REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN"), gw.get("ENOIS_AUTHORIZE_SECRET"))
-          cmp("PROD interno  x gateway prod slot", pr.get("REDE_CALLS_EPAPO_INTERNAL_TOKEN"), gw.get("EPAPO_INTERNAL_TOKEN"))
-          cmp("PROD authorize x gateway prod slot", pr.get("REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN"), gw.get("ENOIS_AUTHORIZE_SECRET"))
-          print("QA url:", qa.get("REDE_CALLS_EPAPO_GATEWAY_URL"))
-          print("PROD url:", pr.get("REDE_CALLS_EPAPO_GATEWAY_URL"))
-          PY
+          set -uo pipefail
+          for host in 185.111.156.15 enois3.b7cloud.tech; do
+            echo "=== $host:8122 ==="
+            timeout 15 openssl s_client -connect ${host}:8122 -servername ${host} -showcerts </dev/null 2>&1 | \
+              grep -E "subject=|issuer=|verify|Verification|CN *=" | head -10
+            echo "--- handshake sem SNI ---"
+            timeout 15 openssl s_client -connect ${host}:8122 </dev/null 2>&1 | grep -E "verify|Verification|subject=" | head -5
+          done
