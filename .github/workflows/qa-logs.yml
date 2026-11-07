@@ -1,0 +1,28 @@
+name: QA Logs
+
+on:
+  push:
+    branches: [chore/chamadas-diagnostico]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  logs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Ler logs do container da QA
+        env:
+          PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
+          PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
+        run: |
+          set -euo pipefail
+          API="${PORTAINER_BASE_URL}/api/endpoints/8/docker"
+          AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
+          # Logs recentes do backend da QA, só o que interessa ao diagnóstico.
+          curl -sS --max-time 30 "${AUTH[@]}" \
+            "${API}/containers/enois-qa-backend/logs?tail=2000&stdout=1&stderr=1&timestamps=1" \
+            | tr -d '\000' | grep -aE "gateway do Epapo|Epapo|CALL_" | tail -80 \
+            || echo "nenhuma linha correspondente"
