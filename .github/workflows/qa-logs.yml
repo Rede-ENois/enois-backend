@@ -10,20 +10,26 @@ permissions:
 
 jobs:
   logs:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, enois, docker-prod4]
     timeout-minutes: 10
     steps:
-      - name: Logs do auth-gateway
-        env:
-          PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
-          PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
+      - name: Cadeia do gateway como o backend a chama
         run: |
-          set -euo pipefail
-          AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
-          GAPI="${PORTAINER_BASE_URL}/api/endpoints/12/docker"
-          echo "=== env do gateway (nomes e tamanhos, nunca valores) ==="
-          curl -sS --max-time 30 "${AUTH[@]}" "${GAPI}/containers/epapo-prod-auth-gateway-1/json" -o /tmp/gw.json
-          python3 -c "import json;d=json.load(open('/tmp/gw.json'));print(*sorted([(e.split('=')[0], len(e.split('=',1)[1]) if '=' in e else 0) for e in d['Config']['Env']]),sep=chr(10))"
-          echo "=== logs recentes do gateway ==="
-          curl -sS --max-time 30 "${AUTH[@]}" "${GAPI}/containers/epapo-prod-auth-gateway-1/logs?stdout=1&stderr=1&timestamps=1" -o /tmp/gw.log || true
-          tr -d "\000" < /tmp/gw.log | tail -40
+          set -uo pipefail
+          echo "=== quem sou eu ==="
+          curl -sS --max-time 10 https://ifconfig.me || true
+          echo
+          echo "=== token interno do container (so tamanho) ==="
+          TOKEN=$(docker inspect enois-qa-backend --format "{{range .Config.Env}}{{println .}}{{end}}" | grep "^REDE_CALLS_EPAPO_INTERNAL_TOKEN=" | cut -d= -f2-)
+          echo "tamanho=${#TOKEN}"
+          URL=$(docker inspect enois-qa-backend --format "{{range .Config.Env}}{{println .}}{{end}}" | grep "^REDE_CALLS_EPAPO_GATEWAY_URL=" | cut -d= -f2-)
+          echo "url=${URL}"
+          CA=/etc/ssl/epapo-ca.pem
+          docker exec enois-qa-backend sh -c "openssl version 2>/dev/null | head -1" || echo "sem openssl no container"
+          echo "=== POST /auth/token (chamada inexistente: 403 entry_denied prova a cadeia) ==="
+          curl -sS -o /tmp/out.txt -w "http=%{http_code} tempo=%{time_total}\n" --max-time 15 \
+            --cacert <(docker exec -i enois-qa-backend sh -c "cat /tmp/epapo-gateway.crt 2>/dev/null") \
+            -X POST "${URL%/}/auth/token" \
+            -H "X-Epapo-Internal: ${TOKEN}" -H "Content-Type: application/json" \
+            --data "{\"callId\":\"00000000-0000-0000-0000-000000000000\",\"userId\":\"00000000-0000-0000-0000-000000000000\"}" 2>&1 | tail -3
+          head -c 300 /tmp/out.txt; echo
