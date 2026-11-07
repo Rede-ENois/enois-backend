@@ -46,4 +46,22 @@ interface SpringDataOutboxEventJpaRepository extends JpaRepository<OutboxEventJp
 
 	@Query("select count(e) from OutboxEventJpaEntity e where e.status = :status and e.createdAt < :cutoff")
 	long countByStatusAndCreatedAtBefore(@Param("status") String status, @Param("cutoff") Instant cutoff);
+
+	/**
+	 * Backlog, pressao de falha e total em UMA ida ao banco: a coleta de metricas roda a cada scrape
+	 * do Prometheus e tres consultas separadas por coleta gastariam o pool a toa. Uma linha por
+	 * status existente na tabela.
+	 */
+	@Query("select e.status as status, count(e) as events, sum(e.attempts) as attempts "
+		+ "from OutboxEventJpaEntity e group by e.status")
+	List<StatusCount> countByStatusWithAttempts();
+
+	interface StatusCount {
+
+		String getStatus();
+
+		long getEvents();
+
+		long getAttempts();
+	}
 }
