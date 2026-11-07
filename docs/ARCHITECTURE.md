@@ -117,6 +117,7 @@ Ciclo do worker:
 2. **Execução por handler**: cada handler grava o recibo em `processed_event_handlers` (par evento + handler) na mesma transação dos seus efeitos; recibo existente pula o handler.
 3. **Conclusão**: com todos os recibos, o evento vira `PROCESSED`. Com exceção, o evento permanece `PENDING`, `attempts` sobe e `next_attempt_at` recebe backoff (10s dobrando até 5min) — o efeito não é perdido.
 4. **"Pelo menos uma vez"**: efeitos fora da transação (share no LinkedIn) seguem sujeitos a repetição em queda entre envio e commit; a integração é idempotente do lado dela.
+5. **Retenção**: eventos `PROCESSED` e seus recibos saem da tabela depois da janela (`rede.outbox.retention.days`, 14 dias) por `OutboxRetentionWorker`, em lotes limitados; `PENDING` nunca é removido.
 
 ### Idempotência
 

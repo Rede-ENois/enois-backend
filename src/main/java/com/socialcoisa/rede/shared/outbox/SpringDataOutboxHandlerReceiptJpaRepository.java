@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.shared.outbox;
 
 import java.time.Instant;
+import java.util.List;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -20,4 +21,9 @@ interface SpringDataOutboxHandlerReceiptJpaRepository
 		+ "(select 1 from processed_event_handlers where event_id = :eventId and handler = :handler)")
 	int insertIfAbsent(@Param("eventId") String eventId, @Param("handler") String handler,
 			@Param("processedAt") Instant processedAt);
+
+	/** Apaga os recibos dos eventos que a retencao esta removendo. */
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Query("delete from OutboxHandlerReceiptJpaEntity r where r.eventId in :eventIds")
+	int deleteByEventIdIn(@Param("eventIds") List<String> eventIds);
 }
