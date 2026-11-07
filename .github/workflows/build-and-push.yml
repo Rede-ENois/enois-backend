@@ -630,6 +630,7 @@ jobs:
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
           REDE_CALLS_EPAPO_GATEWAY_URL: ${{ vars.REDE_CALLS_EPAPO_GATEWAY_URL }}
           REDE_CALLS_EPAPO_INTERNAL_TOKEN: ${{ secrets.REDE_CALLS_EPAPO_INTERNAL_TOKEN }}
+          EPAPO_GATEWAY_CA_B64: ${{ secrets.EPAPO_GATEWAY_CA_B64 }}
         run: |
           # Boot do Spring (Flyway + Hibernate + Tomcat) na QA roda com lazy-initialization=false e
           # ainda carrega as vagas externas na subida: 75s era curto demais e um boot lento
@@ -658,10 +659,21 @@ jobs:
               return 0
             fi
             echo "=== alcance do gateway do Epapo a partir do host da QA ==="
-            local probe
+            local probe ca_args=()
+            # O certificado do gateway é emitido pela própria stack: o curl não o conhece e
+            # recusaria o handshake, o que apareceria como "não respondeu" — o mesmo sintoma
+            # do firewall, por um motivo diferente. O CA vem no build da imagem do backend,
+            # então a sonda o usa aqui, medindo o caminho que o backend realmente percorre.
+            if [ -n "${EPAPO_GATEWAY_CA_B64:-}" ]; then
+              local ca_file
+              ca_file="$(mktemp)"
+              printf '%s' "${EPAPO_GATEWAY_CA_B64}" | base64 -d > "${ca_file}"
+              ca_args=(--cacert "${ca_file}")
+            fi
             # `|| true`: o curl já imprime 000 quando não conecta e sai com erro. Com `|| echo 000`
             # o valor virava 000000 e caía no ramo "resposta inesperada" em vez de "não respondeu".
             probe=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 \
+              ${ca_args[@]+"${ca_args[@]}"} \
               -X POST "${REDE_CALLS_EPAPO_GATEWAY_URL%/}/auth/token" \
               -H "X-Epapo-Internal: ${REDE_CALLS_EPAPO_INTERNAL_TOKEN}" \
               -H "Content-Type: application/json" \
