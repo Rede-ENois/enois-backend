@@ -55,6 +55,9 @@ class SuggestionJpaEntity {
 	@Column(name = "github_issue_url", length = 255)
 	private String githubIssueUrl;
 
+	@Column(name = "publish_attempted_at")
+	private Instant publishAttemptedAt;
+
 	protected SuggestionJpaEntity() {
 	}
 
@@ -71,11 +74,12 @@ class SuggestionJpaEntity {
 		entity.reviewedAt = suggestion.reviewedAt();
 		entity.githubIssueNumber = suggestion.githubIssueNumber();
 		entity.githubIssueUrl = suggestion.githubIssueUrl();
+		entity.publishAttemptedAt = suggestion.publishAttemptedAt();
 		return entity;
 	}
 
 	Suggestion toDomain() {
 		return new Suggestion(id, userId, target, title, body, status, createdAt, reviewedBy, reviewedAt,
-			githubIssueNumber, githubIssueUrl);
+			githubIssueNumber, githubIssueUrl, publishAttemptedAt);
 	}
 }

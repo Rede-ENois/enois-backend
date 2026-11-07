@@ -32,6 +32,29 @@ class CoinLedgerPersistenceAdapter implements CoinLedgerRepository {
 	}
 
 	@Override
+	public Optional<CoinAccount> lockAccount(String accountId) {
+		return accounts.lockById(accountId).stream().findFirst()
+			.map(row -> new CoinAccount((String) row[0], ((Number) row[1]).longValue(), ((Number) row[2]).longValue(),
+				toInstant(row[3])));
+	}
+
+	private static java.time.Instant toInstant(Object value) {
+		if (value instanceof java.time.Instant instant) {
+			return instant;
+		}
+		if (value instanceof java.sql.Timestamp timestamp) {
+			return timestamp.toInstant();
+		}
+		if (value instanceof java.time.LocalDateTime local) {
+			return local.toInstant(java.time.ZoneOffset.UTC);
+		}
+		if (value instanceof java.time.OffsetDateTime offset) {
+			return offset.toInstant();
+		}
+		throw new IllegalStateException("Unexpected created_at type: " + value.getClass().getName());
+	}
+
+	@Override
 	public CoinAccount insertAccount(CoinAccount account) {
 		return accounts.save(CoinAccountJpaEntity.fromDomain(account)).toDomain();
 	}

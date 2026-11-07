@@ -84,6 +84,9 @@ notificação no aplicativo. O status de texto/ícone de `PUT /api/me/status`
 | GET | `/api/me` | Perfil completo do usuário logado | Sim |
 | GET | `/api/users/{username}` | Perfil público por username | Sim |
 | GET | `/api/users/by-id/{userId}` | Perfil por ID | Sim |
+| GET | `/api/users/{username}/connections` | Conexões aceitas do perfil (`limit` até 100, mais recentes primeiro) | Opcional |
+| GET | `/api/users/{username}/followers` | Quem enviou conexão aceita ao perfil (mesmo formato) | Opcional |
+| GET | `/api/users/{username}/experiences` | Experiências do perfil público | Não |
 | GET | `/api/users/search` | Buscar usuários | Sim |
 | GET | `/api/ranking` | Ranking por reputação | Sim |
 | PATCH | `/api/me/profile` | Atualizar perfil | Sim |
@@ -103,6 +106,20 @@ notificação no aplicativo. O status de texto/ícone de `PUT /api/me/status`
 | DELETE | `/api/recommendations/{targetId}` | Remover recomendação | Sim |
 | GET | `/api/recommendations/received/{userId}` | Recomendações recebidas | Sim |
 | GET | `/api/recommendations/given/{userId}` | Recomendações dadas | Sim |
+
+Conta banida responde 404 no perfil (por username e por id), nas conexões, nos seguidores e nas
+experiências; conta banida ou excluída não aparece na lista de conexões de ninguém. As páginas
+públicas laterais seguem a mesma regra e respondem 404 para conta banida: `/users/{username}/posts`,
+`/projects`, `/seals` (e evidências), `/games/{username}` (página de criador e jogos),
+`/community-projects/{username}`, `/services/{username}/{slug}`, `/corporate/{username}` (e
+`/posts`) e `/recommendations/received|given/{userId}`; recomendação de ou para conta banida some
+da lista das outras pessoas.
+
+Listagens e páginas públicas identificam pessoas pelo @ (`username`), não pelo id interno da conta:
+freelas, página de criador, projetos da comunidade, anúncios do marketplace, pedidos de serviço e
+itens do catálogo comunitário de cosméticos não trazem mais `userId`/`sellerId`/`requesterId`/
+`creatorId`. Com sessão, quem lê também não vê
+as contas que bloqueou (ou que o bloquearam); o perfil bloqueado responde 404 nas listas.
 
 ### Profile garden
 
@@ -455,6 +472,31 @@ Pedir conexão a uma conta que não existe responde `404 USER_NOT_FOUND`.
 
 ---
 
+## Miniatura de link
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/link-preview?url=...` | Cartão de um link publicado (página da casa ou site de fora) | Não (sessão opcional) |
+
+Resposta: `200` com `preview` preenchido ou `preview: null` quando não há o que mostrar. A sessão,
+quando existe, só muda o que uma página interna privada mostra. Detalhes em
+[LINK_PREVIEW.md](LINK_PREVIEW.md).
+
+```json
+{
+  "preview": {
+    "kind": "EXTERNAL",
+    "url": "https://exemplo.com/artigo",
+    "title": "Título do artigo",
+    "description": "Resumo que o site declara para compartilhamento.",
+    "imageUrl": "https://exemplo.com/capa.png",
+    "siteName": "Exemplo"
+  }
+}
+```
+
+---
+
 ## Mídia
 
 | Método | Rota | Descrição | Autenticação |
@@ -801,9 +843,11 @@ entrada na sala é autorizada no servidor com token assinado — detalhes em
 | Método | Rota | Descrição | Autenticação |
 |---|---|---|---|
 | POST | `/api/conversations/{conversationId}/calls` | Começa (ou devolve) a chamada 1:1. Corpo opcional `{"kind":"AUDIO\|VIDEO"}` (padrão `AUDIO`) | Sim |
-| POST | `/api/groups/{groupId}/calls` | Começa (ou devolve) a chamada "Tamo junto" do grupo | Sim |
+| POST | `/api/groups/{groupId}/calls` | Começa (ou devolve) a chamada "Tamo junto" do grupo. Quem abre já entra | Sim |
+| POST | `/api/groups/{groupId}/topics/{topicId}/calls` | Começa (ou devolve) o "Tamo junto" do tópico. Corpo opcional `{"kind":"AUDIO\|VIDEO"}` | Sim |
 | GET | `/api/conversations/{conversationId}/calls/open` | Chamada aberta da conversa (corpo `null` quando não há) | Sim |
-| GET | `/api/groups/{groupId}/calls/open` | Chamada aberta do grupo | Sim |
+| GET | `/api/groups/{groupId}/calls/open` | Chamada aberta do grupo (só a sala geral, não as de tópico) | Sim |
+| GET | `/api/groups/{groupId}/topics/{topicId}/calls/open` | Chamada aberta do tópico | Sim |
 | GET | `/api/calls/open` | Chamadas abertas em que a pessoa está — para voltar de outra tela | Sim |
 | GET | `/api/calls/{callId}` | Estado da chamada | Sim |
 | POST | `/api/calls/{callId}/answer` | Atender (só 1:1) | Sim |

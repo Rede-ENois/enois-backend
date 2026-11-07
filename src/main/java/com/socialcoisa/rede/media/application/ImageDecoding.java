@@ -48,7 +48,7 @@ public final class ImageDecoding {
 				reader.setInput(input, true, true);
 				int width = reader.getWidth(0);
 				int height = reader.getHeight(0);
-				int orientation = MediaMetadataSanitizer.jpegOrientation(data);
+				int orientation = JpegMetadata.orientation(data);
 				return orientation >= 5 && orientation <= 8 ? new Dimensions(height, width)
 					: new Dimensions(width, height);
 			}

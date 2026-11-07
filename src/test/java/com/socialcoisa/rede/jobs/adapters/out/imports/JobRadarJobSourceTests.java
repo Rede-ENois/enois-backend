@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 class JobRadarJobSourceTests {
 
 	private final JobRadarJobSource source = new JobRadarJobSource(
-		"https://jobradar.com.br/sitemap-vagas.xml", "EnóisBot/1.0", true);
+		"https://jobradar.com.br/sitemap-vagas.xml", "EnoisBot/1.0", true);
 
 	@Test
 	void theSitemapSourceIsPublicAndAvailable() {

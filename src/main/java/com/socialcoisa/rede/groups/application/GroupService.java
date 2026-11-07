@@ -20,6 +20,7 @@ import com.socialcoisa.rede.groups.domain.GroupJoinRequest;
 import com.socialcoisa.rede.groups.domain.GroupMember;
 import com.socialcoisa.rede.groups.domain.GroupPermissions;
 import com.socialcoisa.rede.groups.domain.GroupRole;
+import com.socialcoisa.rede.groups.domain.GroupMembership;
 import com.socialcoisa.rede.groups.domain.GroupSlug;
 import com.socialcoisa.rede.groups.domain.JoinOutcome;
 import com.socialcoisa.rede.groups.domain.JoinRequestStatus;
@@ -99,6 +100,17 @@ public class GroupService {
 		return repository.findBySlug(slugOrId)
 			.or(() -> repository.findById(slugOrId))
 			.orElseThrow(() -> new ApiException(404, "GROUP_NOT_FOUND", "Grupo nao encontrado."));
+	}
+
+	@Transactional(readOnly = true)
+	public List<GroupMembership> listMine(String userId, int limit) {
+		return repository.findMemberships(userId, Math.min(Math.max(limit, 1), MAX_PAGE));
+	}
+
+	/** Membros de cada grupo de uma lista, numa consulta só. */
+	@Transactional(readOnly = true)
+	public java.util.Map<String, Long> countMembers(java.util.Collection<String> groupIds) {
+		return repository.countMembers(groupIds);
 	}
 
 	@Transactional(readOnly = true)
@@ -293,7 +305,7 @@ public class GroupService {
 	}
 
 	private String uniqueSlug(String slug) {
-		if (!repository.existsBySlug(slug)) {
+		if (!GroupSlug.isReserved(slug) && !repository.existsBySlug(slug)) {
 			return slug;
 		}
 		// O sufixo precisa caber no teto da coluna: encurta a base antes de numerar.

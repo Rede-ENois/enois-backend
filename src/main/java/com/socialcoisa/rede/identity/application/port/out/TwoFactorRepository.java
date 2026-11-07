@@ -71,8 +71,5 @@ public interface TwoFactorRepository {
 	/** Consome o codigo de recuperacao: uso unico. Devolve false se nao existir/ja foi usado. */
 	boolean consumeBackupCode(String userId, String codeHash, Instant now);
 
-	/** Usuarios com segredo TOTP ativo (cifrado) — usado pelo reset emergencial de 2FA quebrado. */
-	List<String> findUsersWithActiveTotpSecret();
-
 	void deleteBackupCodes(String userId);
 }

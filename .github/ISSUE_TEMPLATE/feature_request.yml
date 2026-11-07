@@ -22,3 +22,19 @@ body:
       description: Precisa de tabela nova? Muda contrato de API já publicado?
     validations:
       required: false
+  - type: textarea
+    id: plano
+    attributes:
+      label: Plano de implementação
+      description: >
+        Quais arquivos/módulos mudam, quais casos-limite precisam de teste e como a entrega será
+        provada. A PR desta feature referencia esta issue — plano vago vira código vago.
+    validations:
+      required: true
+  - type: textarea
+    id: prova
+    attributes:
+      label: Como vai ser provado
+      description: Qual teste novo, qual teste de regressão, o que será conferido à mão.
+    validations:
+      required: true

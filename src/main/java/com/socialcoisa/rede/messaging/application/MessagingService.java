@@ -27,11 +27,9 @@ public class MessagingService {
 	private final Clock clock;
 	private final UserRateLimiter userRateLimiter;
 	private final BehavioralTimingGuard behavioralTimingGuard;
-	private final com.socialcoisa.rede.shared.age.AgePolicyReader agePolicy;
 	private final com.socialcoisa.rede.shared.age.AgeGate ageGate;
 	private final com.socialcoisa.rede.shared.sanctions.SanctionGate sanctionGate;
-	private final com.socialcoisa.rede.network.application.port.out.ConnectionRepository connections;
-	private final com.socialcoisa.rede.shared.blocks.BlockedUsersReader blockedUsers;
+	private final ConversationReachPolicy reach;
 	private final com.socialcoisa.rede.corporate.application.CorporateProfileService corporateProfiles;
 	private final com.socialcoisa.rede.coin.application.CoinService coins;
 	private final org.springframework.context.ApplicationEventPublisher events;
@@ -39,10 +37,8 @@ public class MessagingService {
 
 	public MessagingService(MessagingRepository repository, NotificationService notificationService, Clock clock,
 			UserRateLimiter userRateLimiter, BehavioralTimingGuard behavioralTimingGuard,
-			com.socialcoisa.rede.shared.age.AgePolicyReader agePolicy, com.socialcoisa.rede.shared.age.AgeGate ageGate,
-			com.socialcoisa.rede.shared.sanctions.SanctionGate sanctionGate,
-			com.socialcoisa.rede.network.application.port.out.ConnectionRepository connections,
-			com.socialcoisa.rede.shared.blocks.BlockedUsersReader blockedUsers,
+			com.socialcoisa.rede.shared.age.AgeGate ageGate,
+			com.socialcoisa.rede.shared.sanctions.SanctionGate sanctionGate, ConversationReachPolicy reach,
 			com.socialcoisa.rede.corporate.application.CorporateProfileService corporateProfiles,
 			com.socialcoisa.rede.coin.application.CoinService coins,
 			org.springframework.context.ApplicationEventPublisher events, ConversationViewers viewers) {
@@ -54,11 +50,9 @@ public class MessagingService {
 		this.clock = clock;
 		this.userRateLimiter = userRateLimiter;
 		this.behavioralTimingGuard = behavioralTimingGuard;
-		this.agePolicy = agePolicy;
 		this.ageGate = ageGate;
 		this.sanctionGate = sanctionGate;
-		this.connections = connections;
-		this.blockedUsers = blockedUsers;
+		this.reach = reach;
 		this.corporateProfiles = corporateProfiles;
 	}
 
@@ -92,20 +86,8 @@ public class MessagingService {
 		}
 		ageGate.requireCanWrite(createdBy);
 		unique.add(createdBy);
-		// One read per kind for the whole group (up to 100 people), never one per participant.
-		// hiddenIdsFor covers blocks in both directions.
-		var creatorHidden = blockedUsers.hiddenIdsFor(createdBy);
 		java.util.List<String> others = unique.stream().filter(pid -> !pid.equals(createdBy)).toList();
-		if (others.stream().anyMatch(creatorHidden::contains)) {
-			throw new com.socialcoisa.rede.shared.web.ApiException(403, "USER_BLOCKED",
-				"Nao e possivel conversar com este usuario.");
-		}
-		var minors = agePolicy.minorIds(others);
-		if (!minors.isEmpty()) {
-			if (!connections.findAcceptedAmong(createdBy, minors).containsAll(minors)) {
-				throw minorDmRestricted();
-			}
-		}
+		reach.requireMayOpen(createdBy, others);
 		// A DM 1:1 is one thread per pair: opening it again from the inbox search returns the same
 		// conversation instead of a duplicate (the /direct endpoint already worked this way).
 		if ("DIRECT".equals(normalizedKind) && others.size() == 1) {
@@ -172,6 +154,7 @@ public class MessagingService {
 	}
 
 	private String pairConversation(String userA, String userB, String kind, String title) {
+		reach.requireMayOpenPair(kind, userA, userB);
 		var existing = repository.findPairByKind(userA, userB, kind);
 		if (existing.isPresent()) {
 			return existing.get().id();
@@ -217,7 +200,7 @@ public class MessagingService {
 			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
 		}
 		requireBusinessDirectInitiatorProfile(conversation, senderId);
-		protegeMenorDestinatario(conversationId, senderId);
+		requireMayReachParticipants(conversation, senderId);
 		java.util.List<String> midias = mediaIds == null ? java.util.List.of()
 			: mediaIds.stream().filter(v -> v != null && !v.isBlank()).map(String::trim).distinct().toList();
 		String corpo = text == null ? "" : text.trim();
@@ -233,6 +216,10 @@ public class MessagingService {
 				.filter(m -> m.conversationId().equals(conversationId))
 				.orElseThrow(() -> new ApiException(400, "INVALID_REPLY", "Mensagem citada nao encontrada nesta conversa."));
 		}
+		// The inbox orders by updatedAt (#25), and this is the first write of the send (see
+		// MessagingRepository#touchConversation). It also queues a double click behind the first
+		// send, so the duplicate check below sees the message it created.
+		repository.touchConversation(conversationId, clock.instant());
 		// Duplo clique/retry: a MESMA mensagem (texto + mídias) do mesmo remetente em até 2
 		// minutos devolve a linha já criada em vez de duplicar e notificar de novo.
 		var duplicate = repository.findRecentDuplicate(conversationId, senderId, corpo,
@@ -249,9 +236,6 @@ public class MessagingService {
 		// aceso mesmo com a conversa aberta.
 		repository.markRead(conversationId, senderId, clock.instant());
 		notificationService.markReadByHref(senderId, conversationHref(conversationId));
-		// A lista de conversas ordena por updatedAt; sem este toque a conversa antiga fica no lugar
-		// mesmo recebendo mensagem nova (#25 dos issues).
-		repository.saveConversation(conversation.touch(clock.instant()));
 		String preview = corpo.isEmpty()
 			? (midias.isEmpty() ? "Nova mensagem" : "Enviou uma midia")
 			: (corpo.length() > 80 ? corpo.substring(0, 77) + "..." : corpo);
@@ -266,12 +250,12 @@ public class MessagingService {
 	@Transactional
 	public Message sendE2eMessage(String conversationId, String senderId, String ciphertext,
 			String iv, java.util.List<String> mediaIds, boolean mediaSpoiler) {
-		return sendE2eMessage(conversationId, senderId, ciphertext, iv, mediaIds, mediaSpoiler, null);
+		return sendE2eMessage(conversationId, senderId, ciphertext, iv, null, mediaIds, mediaSpoiler, null);
 	}
 
 	@Transactional
 	public Message sendE2eMessage(String conversationId, String senderId, String ciphertext,
-			String iv, java.util.List<String> mediaIds, boolean mediaSpoiler, String replyToId) {
+			String iv, String encryptedKeys, java.util.List<String> mediaIds, boolean mediaSpoiler, String replyToId) {
 		ageGate.requireCanWrite(senderId);
 		sanctionGate.requireNotRestricted(senderId);
 		userRateLimiter.require(senderId, UserRateLimiter.SEND_MESSAGE);
@@ -282,7 +266,7 @@ public class MessagingService {
 			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
 		}
 		requireBusinessDirectInitiatorProfile(conversation, senderId);
-		protegeMenorDestinatario(conversationId, senderId);
+		requireMayReachParticipants(conversation, senderId);
 		if (ciphertext == null || ciphertext.isBlank()) {
 			throw new ApiException(400, "EMPTY_MESSAGE", "Mensagem cifrada vazia.");
 		}
@@ -299,13 +283,20 @@ public class MessagingService {
 		}
 		java.util.List<String> midias = mediaIds == null ? java.util.List.of()
 			: mediaIds.stream().filter(v -> v != null && !v.isBlank()).map(String::trim).distinct().toList();
+		if (encryptedKeys != null && encryptedKeys.length() > 16000) {
+			throw new ApiException(400, "ENCRYPTED_KEYS_TOO_LONG", "Chaves cifradas excedem o tamanho maximo.");
+		}
+		// First write of the send: see MessagingRepository#touchConversation.
+		repository.touchConversation(conversationId, clock.instant());
 		String id = "message_" + UUID.randomUUID().toString().replace("-", "");
-		Message message = Message.createE2e(id, conversationId, senderId, ciphertext, iv, midias, mediaSpoiler,
-			replyToId, nextMessageInstant(conversationId));
+		Message message = encryptedKeys != null
+			? Message.createE2ePerMessage(id, conversationId, senderId, ciphertext, iv, encryptedKeys,
+				midias, mediaSpoiler, replyToId, nextMessageInstant(conversationId))
+			: Message.createE2e(id, conversationId, senderId, ciphertext, iv, midias, mediaSpoiler,
+				replyToId, nextMessageInstant(conversationId));
 		repository.saveMessage(message);
 		repository.markRead(conversationId, senderId, clock.instant());
 		notificationService.markReadByHref(senderId, conversationHref(conversationId));
-		repository.saveConversation(conversation.touch(clock.instant()));
 		List<ConversationParticipant> participants = repository.findParticipantsByConversation(conversationId);
 		notifyRecipients(conversation, participants, senderId, "Mensagem cifrada");
 		publishChange(conversationId, participants);
@@ -368,36 +359,13 @@ public class MessagingService {
 			? "NEW_WORK_MESSAGE" : "NEW_MESSAGE";
 	}
 
-	/**
-	 * ECA Digital: destinatario menor de 18 so recebe mensagem de quem tem conexao ACEITA com ele.
-	 * Desconhecidos nao abrem conversa com menor — o primeiro vetor de contato abusivo fica fechado.
-	 */
-	private void protegeMenorDestinatario(String conversationId, String senderId) {
-		// Applies to every person-to-person conversation, groups included: a minor added to a group
-		// did not choose its other members. JOB and SERVICE conversations are opened by the minor's
-		// own action (applying, hiring) and keep working.
-		String kind = repository.findConversationById(conversationId)
-			.map(conversation -> conversation.kind())
-			.orElse("DIRECT");
-		if ("JOB".equalsIgnoreCase(kind) || "SERVICE".equalsIgnoreCase(kind)) {
-			return;
-		}
-		List<com.socialcoisa.rede.messaging.domain.ConversationParticipant> participants = repository
-			.findParticipantsByConversation(conversationId);
-		for (com.socialcoisa.rede.messaging.domain.ConversationParticipant participant : participants) {
-			String recipientId = participant.userId();
-			if (recipientId.equals(senderId)) {
-				continue;
-			}
-			requireMayContactMinor(senderId, recipientId);
-		}
-	}
-
-	/** ECA Digital: a minor is only reachable by someone with an ACCEPTED connection to them. */
-	private void requireMayContactMinor(String actorId, String recipientId) {
-		if (agePolicy.isMinor(recipientId) && !connections.existsAcceptedConnection(actorId, recipientId)) {
-			throw minorDmRestricted();
-		}
+	/** Blocks and minor protection, with the participants as they are at send time. */
+	private void requireMayReachParticipants(Conversation conversation, String senderId) {
+		List<String> recipients = repository.findParticipantsByConversation(conversation.id()).stream()
+			.map(ConversationParticipant::userId)
+			.filter(userId -> !userId.equals(senderId))
+			.toList();
+		reach.requireMaySend(conversation.kind(), senderId, recipients);
 	}
 
 	/**
@@ -411,10 +379,6 @@ public class MessagingService {
 		}
 	}
 
-	private static ApiException minorDmRestricted() {
-		return new ApiException(403, "MINOR_DM_RESTRICTED",
-			"Para proteger usuarios menores de idade, so e possivel conversar com eles apos uma conexao aceita.");
-	}
 
 
 
@@ -515,13 +479,14 @@ public class MessagingService {
 	}
 
 	/** {@code from} is the sender's account id: the inbox marks the viewer's own last message. */
-	public record LastMessagePreview(String text, boolean e2e, String iv, java.time.Instant time, String from) {
-		static final LastMessagePreview EMPTY = new LastMessagePreview(null, false, null, null, null);
+	public record LastMessagePreview(String text, boolean e2e, String iv, String encryptedKeys,
+			java.time.Instant time, String from) {
+		static final LastMessagePreview EMPTY = new LastMessagePreview(null, false, null, null, null, null);
 	}
 
 	public LastMessagePreview getLastMessagePreview(String conversationId) {
 		return repository.findLastMessage(conversationId)
-			.map(m -> new LastMessagePreview(m.text(), m.e2e(), m.iv(), m.createdAt(), m.senderId()))
+			.map(m -> new LastMessagePreview(m.text(), m.e2e(), m.iv(), m.encryptedKeys(), m.createdAt(), m.senderId()))
 			.orElse(LastMessagePreview.EMPTY);
 	}
 

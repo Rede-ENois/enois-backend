@@ -31,17 +31,17 @@ class MediaImageModerationServiceTests {
 	@Test
 	void permitsImagesBelowThreshold() throws Exception {
 		when(provider.getIfAvailable()).thenReturn(classifier);
-		when(classifier.pornographicScore(new byte[] { 1 }, "image/jpeg")).thenReturn(0.69);
+		when(classifier.assess(new byte[] { 1 }, "image/jpeg")).thenReturn(still(0.69));
 
 		service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg");
 
-		verify(classifier).pornographicScore(new byte[] { 1 }, "image/jpeg");
+		verify(classifier).assess(new byte[] { 1 }, "image/jpeg");
 	}
 
 	@Test
 	void blocksScoreAtThreshold() throws Exception {
 		when(provider.getIfAvailable()).thenReturn(classifier);
-		when(classifier.pornographicScore(new byte[] { 1 }, "image/png")).thenReturn(0.70);
+		when(classifier.assess(new byte[] { 1 }, "image/png")).thenReturn(still(0.70));
 		when(reviewer.review(new byte[] { 1 })).thenReturn(Optional.of(Result.PROHIBITED));
 
 		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/png"))
@@ -52,7 +52,7 @@ class MediaImageModerationServiceTests {
 	@Test
 	void allowsAnImageWhenTheCoarseClassifierFlagsItButSemanticReviewDoesNotConfirmIt() throws Exception {
 		when(provider.getIfAvailable()).thenReturn(classifier);
-		when(classifier.pornographicScore(new byte[] { 1 }, "image/jpeg")).thenReturn(0.95);
+		when(classifier.assess(new byte[] { 1 }, "image/jpeg")).thenReturn(still(0.95));
 		when(reviewer.review(new byte[] { 1 })).thenReturn(Optional.of(Result.SAFE));
 
 		service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg");
@@ -61,9 +61,35 @@ class MediaImageModerationServiceTests {
 	}
 
 	@Test
+	void reviewsTheFlaggedFrameOfAnAnimationInsteadOfTheOriginalFile() throws Exception {
+		byte[] flaggedFrame = { 9, 9 };
+		when(provider.getIfAvailable()).thenReturn(classifier);
+		when(classifier.assess(new byte[] { 1 }, "image/gif"))
+			.thenReturn(new ImageContentClassifier.Assessment(0.95, flaggedFrame));
+		when(reviewer.review(flaggedFrame)).thenReturn(Optional.of(Result.PROHIBITED));
+		when(reviewer.review(new byte[] { 1 })).thenReturn(Optional.of(Result.SAFE));
+
+		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/gif"))
+			.isInstanceOf(ApiException.class)
+			.extracting("code").isEqualTo("IMAGE_CONTENT_NOT_ALLOWED");
+	}
+
+	@Test
+	void namesTheRejectionWhenTheImageIsTooLargeToVerify() throws Exception {
+		when(provider.getIfAvailable()).thenReturn(classifier);
+		when(classifier.assess(new byte[] { 1 }, "image/gif"))
+			.thenThrow(new ImageContentClassifier.TooLargeToVerifyException("budget"));
+
+		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/gif"))
+			.isInstanceOf(ApiException.class)
+			.extracting("code").isEqualTo("IMAGE_TOO_LARGE_TO_VERIFY");
+		verifyNoInteractions(reviewer);
+	}
+
+	@Test
 	void doesNotApproveAnImageWhenSemanticReviewIsInconclusive() throws Exception {
 		when(provider.getIfAvailable()).thenReturn(classifier);
-		when(classifier.pornographicScore(new byte[] { 1 }, "image/jpeg")).thenReturn(0.95);
+		when(classifier.assess(new byte[] { 1 }, "image/jpeg")).thenReturn(still(0.95));
 		when(reviewer.review(new byte[] { 1 })).thenReturn(Optional.of(Result.UNSURE));
 
 		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg"))
@@ -95,7 +121,7 @@ class MediaImageModerationServiceTests {
 	@Test
 	void failsClosedWhenClassifierCannotDecodeTheImage() throws Exception {
 		when(provider.getIfAvailable()).thenReturn(classifier);
-		when(classifier.pornographicScore(new byte[] { 1 }, "image/webp"))
+		when(classifier.assess(new byte[] { 1 }, "image/webp"))
 			.thenThrow(new IOException("invalid image"));
 
 		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/webp"))
@@ -106,7 +132,7 @@ class MediaImageModerationServiceTests {
 	@Test
 	void failsClosedWhenClassifierReturnsInvalidScore() throws Exception {
 		when(provider.getIfAvailable()).thenReturn(classifier);
-		when(classifier.pornographicScore(new byte[] { 1 }, "image/jpeg")).thenReturn(Double.NaN);
+		when(classifier.assess(new byte[] { 1 }, "image/jpeg")).thenReturn(still(Double.NaN));
 
 		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg"))
 			.isInstanceOf(ApiException.class)
@@ -118,4 +144,7 @@ class MediaImageModerationServiceTests {
 		assertThatThrownBy(() -> service(true, 1.1)).isInstanceOf(IllegalArgumentException.class);
 	}
 
+	private static ImageContentClassifier.Assessment still(double score) {
+		return new ImageContentClassifier.Assessment(score, null);
+	}
 }

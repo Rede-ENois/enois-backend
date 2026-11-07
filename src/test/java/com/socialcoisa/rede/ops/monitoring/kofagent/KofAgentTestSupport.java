@@ -23,18 +23,27 @@ final class KofAgentTestSupport {
 	private KofAgentTestSupport() {
 	}
 
+	/** Production defaults: WARN and above collected, ERROR and FATAL alerted. */
 	static KofAgentProperties properties(Path spool, int batchMax, int perMinute, int burst) {
-		return properties(spool, batchMax, perMinute, burst, EnumSet.of(Severity.WARN, Severity.ERROR, Severity.FATAL));
+		return properties(spool, batchMax, perMinute, burst, EnumSet.of(Severity.WARN, Severity.ERROR, Severity.FATAL),
+			EnumSet.of(Severity.ERROR, Severity.FATAL), Duration.ofSeconds(10));
 	}
 
+	/** Every level in {@code levels} is collected and alerted. */
 	static KofAgentProperties properties(Path spool, int batchMax, int perMinute, int burst, EnumSet<Severity> levels) {
-		return properties(spool, batchMax, perMinute, burst, levels, Duration.ofSeconds(10));
+		return properties(spool, batchMax, perMinute, burst, levels, levels, Duration.ofSeconds(10));
 	}
 
 	static KofAgentProperties properties(Path spool, int batchMax, int perMinute, int burst, EnumSet<Severity> levels,
-			Duration flushInterval) {
+			EnumSet<Severity> notify, Duration flushInterval) {
+		return properties(spool, batchMax, perMinute, burst, levels, notify, flushInterval,
+			new KofAgentProperties.Latency(Duration.ofMinutes(5), 100, 0.10));
+	}
+
+	static KofAgentProperties properties(Path spool, int batchMax, int perMinute, int burst, EnumSet<Severity> levels,
+			EnumSet<Severity> notify, Duration flushInterval, KofAgentProperties.Latency latency) {
 		return new KofAgentProperties(true, "123456:test-token-not-real", "-1001234567890", null, "prd", null,
-			levels, batchMax, flushInterval,
+			levels, notify, batchMax, flushInterval, Duration.ofMinutes(30), Duration.ofHours(1), latency,
 			new KofAgentProperties.Retry(3, Duration.ofSeconds(1), Duration.ofSeconds(30)),
 			new KofAgentProperties.Rate(perMinute, burst), new KofAgentProperties.Circuit(3, Duration.ofSeconds(30),
 				Duration.ofMinutes(5)), 100_000, spool.toString(), 1000, "America/Sao_Paulo", Duration.ofSeconds(2),

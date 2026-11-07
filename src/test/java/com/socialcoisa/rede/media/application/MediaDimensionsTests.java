@@ -120,7 +120,7 @@ class MediaDimensionsTests {
 
 	@Test
 	void nonImageKeepsNullSize() throws Exception {
-		String mediaId = upload("media_dims_pdf", "application/pdf", "%PDF-1.4 dims".getBytes());
+		String mediaId = upload("media_dims_pdf", "application/pdf", pdf());
 
 		mockMvc.perform(get("/media/" + mediaId))
 			.andExpect(status().isOk())
@@ -195,5 +195,14 @@ class MediaDimensionsTests {
 		System.arraycopy(app1, 0, out, 2, app1.length);
 		System.arraycopy(jpeg, 2, out, 2 + app1.length, jpeg.length - 2);
 		return out;
+	}
+
+	private static byte[] pdf() throws java.io.IOException {
+		try (org.apache.pdfbox.pdmodel.PDDocument document = new org.apache.pdfbox.pdmodel.PDDocument()) {
+			document.addPage(new org.apache.pdfbox.pdmodel.PDPage());
+			java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+			document.save(out);
+			return out.toByteArray();
+		}
 	}
 }

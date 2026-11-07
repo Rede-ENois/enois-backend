@@ -75,7 +75,7 @@ public class CoinService {
 	private static final int STREAK_BONUS_EVERY_DAYS = 7;
 	/** Teto de envio para contas com menos de 7 dias. */
 	private static final long NEW_ACCOUNT_DAILY_CAP = FAIS(500L);
-	public static final Duration NEW_ACCOUNT_WINDOW = Duration.ofDays(7);
+	public static final Duration NEW_ACCOUNT_WINDOW = com.socialcoisa.rede.coin.domain.RewardEligibility.NEW_ACCOUNT_WINDOW;
 
 	private final CoinLedgerRepository ledger;
 	private final CoinRateService rateService;
@@ -87,11 +87,14 @@ public class CoinService {
 	private final Clock clock;
 	private final UserStreakRepository streaks;
 	private final TransactionTemplate presenceTransaction;
+	private final java.util.concurrent.Executor presenceExecutor;
 
 	public CoinService(CoinLedgerRepository ledger, CoinRateService rateService,
 			com.socialcoisa.rede.shared.security.SecretCipher cipher, ActionThrottle throttle,
 			TransferDedupe dedupe, Clock clock, UserStreakRepository streaks,
 			PlatformTransactionManager transactionManager,
+			@org.springframework.beans.factory.annotation.Qualifier("presenceExecutor")
+			java.util.concurrent.Executor presenceExecutor,
 			@Value("${rede.coin.transfer-per-minute:10}") int transfersPerMinute,
 			@Value("${rede.coin.transfer-per-hour:60}") int transfersPerHour) {
 		this.ledger = ledger;
@@ -103,6 +106,7 @@ public class CoinService {
 		this.streaks = streaks;
 		this.presenceTransaction = new TransactionTemplate(transactionManager);
 		this.presenceTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+		this.presenceExecutor = presenceExecutor;
 		this.transfersPerMinute = Math.max(1, Math.min(transfersPerMinute, 1_000));
 		this.transfersPerHour = Math.max(this.transfersPerMinute, Math.min(transfersPerHour, 10_000));
 	}
@@ -168,7 +172,8 @@ public class CoinService {
 	/**
 	 * A meaningful action happened (post, comment, reaction, daily game, message, joining a
 	 * community or group): it counts as today's presence. Called by the application services AFTER
-	 * the action; runs after the caller's commit, in its own transaction, and never throws. The
+	 * the action; once the caller commits, it is handed to the presence executor (see
+	 * PresenceExecutorConfig) and runs in its own transaction there, and it never throws. The
 	 * presence is a side effect, never a reason for the action to fail (or to wait on the treasury
 	 * row the caller's transaction may be holding).
 	 */
@@ -180,12 +185,20 @@ public class CoinService {
 			TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
 				@Override
 				public void afterCommit() {
-					recordPresenceNow(userId);
+					submitPresence(userId);
 				}
 			});
 			return;
 		}
 		recordPresenceNow(userId);
+	}
+
+	private void submitPresence(String userId) {
+		try {
+			presenceExecutor.execute(() -> recordPresenceNow(userId));
+		} catch (java.util.concurrent.RejectedExecutionException full) {
+			LOG.warn("presence_record_dropped reason=queue_full");
+		}
 	}
 
 	private void recordPresenceNow(String userId) {
@@ -297,7 +310,7 @@ public class CoinService {
 	private CoinEntry grant(String accountId, long amount, CoinEntry.Kind kind, String refId, String message,
 			Instant now) {
 		ensureAccount(accountId);
-		CoinAccount account = ledger.findAccount(accountId)
+		CoinAccount account = ledger.lockAccount(accountId)
 			.orElseThrow(() -> new ApiException(500, "COIN_ACCOUNT_MISSING", "Conta da moeda nao encontrada."));
 		if (amount < 0 && account.balance() + amount < 0) {
 			throw new ApiException(400, "INSUFFICIENT_SPARKS", "Faíscas insuficientes.");

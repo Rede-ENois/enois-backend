@@ -46,6 +46,11 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 	}
 
 	@Override
+	public void touchConversation(String conversationId, Instant at) {
+		conversationRepo.touch(conversationId, at);
+	}
+
+	@Override
 	public void saveParticipant(ConversationParticipant participant) {
 		participantRepo.save(ConversationParticipantJpaEntity.fromDomain(participant));
 	}

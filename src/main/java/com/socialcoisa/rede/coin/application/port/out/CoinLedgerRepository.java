@@ -12,6 +12,13 @@ public interface CoinLedgerRepository {
 
 	Optional<CoinAccount> findAccount(String accountId);
 
+	/**
+	 * The account as stored now, row-locked until the transaction ends. A movement reads the balance,
+	 * checks it and writes the next one: locked, concurrent movements on one account (the treasury
+	 * pays every reward) queue instead of failing the version check.
+	 */
+	Optional<CoinAccount> lockAccount(String accountId);
+
 	CoinAccount insertAccount(CoinAccount account);
 
 	/** Atualiza o snapshot com versão otimista; devolve null quando a versão conflitou. */

@@ -24,7 +24,14 @@ public interface CommentRepository {
 	/** Desfixa todos os comentários do post (chamado ao fixar outro). */
 	void unpinAllByPost(PostId postId);
 
-	void deleteById(String id);
+	/**
+	 * Post of a comment, read straight from the database without loading the comment. Lets a
+	 * removal lock the post first and only then load the comment (see PostRepository#lockForUpdate).
+	 */
+	Optional<PostId> findPostIdOf(String commentId);
+
+	/** Hard delete (the author removing their own comment). */
+	void delete(Comment comment);
 
 	/** Soft delete (status DELETED) for moderation: the row stays so a confirmed report keeps its target. */
 	void markDeleted(Comment comment);

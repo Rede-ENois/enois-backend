@@ -15,6 +15,9 @@ public interface GameRepository {
 
 	Optional<Game> findById(String id);
 
+	/** The games that exist among `ids`, in one query (no order guaranteed). */
+	List<Game> findAllByIds(List<String> ids);
+
 	Optional<Game> findByUserAndSlug(String userId, String slug);
 
 	List<Game> findByUser(String userId);

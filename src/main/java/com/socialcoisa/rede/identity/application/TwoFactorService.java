@@ -55,23 +55,19 @@ public class TwoFactorService implements TwoFactorUseCase {
 	private final PasswordHasher passwordHasher;
 	private final SecretCipher secretCipher;
 	private final EmailService emailService;
-	private final com.socialcoisa.rede.notifications.application.NotificationService notifications;
 	private final AuthSessionRepository sessions;
 	private final Clock clock;
 	private final SecureRandom secureRandom = new SecureRandom();
 
 	public TwoFactorService(TwoFactorRepository repository, UserProfileRepository userProfileRepository,
 			CredentialRepository credentialRepository, PasswordHasher passwordHasher, SecretCipher secretCipher,
-			EmailService emailService,
-			com.socialcoisa.rede.notifications.application.NotificationService notifications,
-			AuthSessionRepository sessions, Clock clock) {
+			EmailService emailService, AuthSessionRepository sessions, Clock clock) {
 		this.repository = repository;
 		this.userProfileRepository = userProfileRepository;
 		this.credentialRepository = credentialRepository;
 		this.passwordHasher = passwordHasher;
 		this.secretCipher = secretCipher;
 		this.emailService = emailService;
-		this.notifications = notifications;
 		this.sessions = sessions;
 		this.clock = clock;
 	}
@@ -152,47 +148,6 @@ public class TwoFactorService implements TwoFactorUseCase {
 		repository.markTotpStepUsed(userId, step);
 		sessions.revokeOthersByUser(userId, sessionToken, now);
 		return issueBackupCodes(userId, now);
-	}
-
-	/**
-	 * Reset emergencial (incidente de 23/10): a troca de infra perdeu a chave de criptografia e os
-	 * segredos TOTP viraram ilegiveis — quem tem 2FA por app nao consegue logar.
-	 *
-	 * Para cada segredo que NAO decifra mais: limpa o segundo fator (o perfil volta a logar com
-	 * e-mail + senha), mantem os codigos de recuperacao (que sao hash, nao dependem da chave) e
-	 * avisa o usuario para reativar em /seguranca.
-	 */
-	@Transactional
-	public int resetBrokenTotp() {
-		int reset = 0;
-		for (String userId : repository.findUsersWithActiveTotpSecret()) {
-			Optional<String> secret = repository.findActiveSecret(userId);
-			if (secret.isEmpty()) {
-				continue;
-			}
-			try {
-				secretCipher.decrypt(secret.get());
-				continue; // segredo saudavel: nao mexe
-			}
-			catch (RuntimeException ilegivel) {
-				// e este que a gente veio consertar
-			}
-			try {
-				userProfileRepository.findById(userId).ifPresent(profile -> {
-					profile.disableTotp();
-					userProfileRepository.save(profile);
-				});
-				repository.clearSecrets(userId);
-				notifications.create(userId, "SEGURANCA", "sistema", "Seu 2FA foi redefinido",
-					"Uma troca de infraestrutura invalidou o segundo fator por aplicativo. Reative em Seguranca e verificacao quando entrar.",
-					"/seguranca", "Seguranca");
-				reset++;
-			}
-			catch (RuntimeException failure) {
-				// nao deixa um caso ruim travar os demais
-			}
-		}
-		return reset;
 	}
 
 	@Transactional
@@ -388,6 +343,9 @@ public class TwoFactorService implements TwoFactorUseCase {
 	 * <p>Segredo ilegível (chave de cifragem trocada, linha corrompida) vira erro explícito — antes
 	 * a exceção do decifrador subia crua e o usuário via 500 sem saber que o problema é o segundo
 	 * fator da própria conta.</p>
+	 *
+	 * <p>A recovery code still completes the login in that case: it is stored as a hash and does not
+	 * depend on the cipher key, so it is the self-service way back in to reconfigure the factor.</p>
 	 */
 	private boolean totpMatches(String userId, String code, Instant now) {
 		java.util.Optional<String> secret = repository.findActiveSecret(userId);
@@ -400,8 +358,11 @@ public class TwoFactorService implements TwoFactorUseCase {
 		}
 		catch (RuntimeException failure) {
 			LOG.warn("segredo TOTP ilegivel para {}: {}", userId, failure.getMessage());
+			if (repository.consumeBackupCode(userId, Hashes.sha256Hex(normalizeBackup(code)), now)) {
+				return true;
+			}
 			throw new ApiException(409, "TWO_FACTOR_SECRET_UNREADABLE",
-				"O segundo fator desta conta precisa ser reconfigurado. Fale com o suporte.");
+				"O segundo fator desta conta precisa ser reconfigurado. Entre com um código de recuperação ou fale com o suporte.");
 		}
 		long step = Totp.matchingStep(plain, code, now, Totp.DEFAULT_WINDOW);
 		return step >= 0 && repository.markTotpStepUsed(userId, step);

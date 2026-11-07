@@ -1,10 +1,13 @@
 package com.socialcoisa.rede.suggestions.adapters.in.web;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.ArgumentMatchers.notNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -13,8 +16,14 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -29,6 +38,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 import com.socialcoisa.rede.suggestions.application.port.out.SuggestionIssueGateway;
+import com.socialcoisa.rede.suggestions.application.port.out.SuggestionIssueGateway.Availability;
 import com.socialcoisa.rede.suggestions.domain.SuggestionTarget;
 
 import tools.jackson.databind.ObjectMapper;
@@ -65,7 +75,7 @@ class SuggestionFlowTests {
 			.andExpect(status().isCreated())
 			.andExpect(jsonPath("$.status").value("PENDING"))
 			.andExpect(jsonPath("$.githubIssueUrl").doesNotExist());
-		verify(gateway, never()).createIssue(any(), anyString(), anyString());
+		verify(gateway, never()).publish(any(), anyString(), anyString(), anyString(), any());
 	}
 
 	@Test
@@ -86,8 +96,8 @@ class SuggestionFlowTests {
 	void aprovarAbreIssueSemDadosDoAutorEQuemSugeriuVeOLink() throws Exception {
 		var user = new TestAuthHelper(mockMvc, objectMapper).authenticate("sgg_user3");
 		var admin = new TestAuthHelper(mockMvc, objectMapper).authenticate("sgg_admin");
-		when(gateway.enabled(SuggestionTarget.DESIGN_SYSTEM)).thenReturn(true);
-		when(gateway.createIssue(eq(SuggestionTarget.DESIGN_SYSTEM), anyString(), anyString()))
+		when(gateway.availability(SuggestionTarget.DESIGN_SYSTEM)).thenReturn(Availability.READY);
+		when(gateway.publish(eq(SuggestionTarget.DESIGN_SYSTEM), anyString(), anyString(), anyString(), any()))
 			.thenReturn(Optional.of(new SuggestionIssueGateway.IssueRef(77, "https://github.com/org/ds/issues/77")));
 
 		String id = submit(user.token(), "DESIGN_SYSTEM");
@@ -99,7 +109,7 @@ class SuggestionFlowTests {
 
 		ArgumentCaptor<String> title = ArgumentCaptor.forClass(String.class);
 		ArgumentCaptor<String> issueBody = ArgumentCaptor.forClass(String.class);
-		verify(gateway).createIssue(eq(SuggestionTarget.DESIGN_SYSTEM), title.capture(), issueBody.capture());
+		verify(gateway).publish(eq(SuggestionTarget.DESIGN_SYSTEM), eq(id), title.capture(), issueBody.capture(), isNull());
 		String published = title.getValue() + "\n" + issueBody.getValue();
 		assertFalse(published.contains("sgg_user3"), "a issue pública não pode citar o autor");
 		assertFalse(published.contains(user.userId()), "a issue pública não pode levar o id do autor");
@@ -116,8 +126,8 @@ class SuggestionFlowTests {
 	void aprovarDuasVezesNaoAbreDuasIssues() throws Exception {
 		var user = new TestAuthHelper(mockMvc, objectMapper).authenticate("sgg_user4");
 		var admin = new TestAuthHelper(mockMvc, objectMapper).authenticate("sgg_admin");
-		when(gateway.enabled(SuggestionTarget.FRONTEND)).thenReturn(true);
-		when(gateway.createIssue(eq(SuggestionTarget.FRONTEND), anyString(), anyString()))
+		when(gateway.availability(SuggestionTarget.FRONTEND)).thenReturn(Availability.READY);
+		when(gateway.publish(eq(SuggestionTarget.FRONTEND), anyString(), anyString(), anyString(), any()))
 			.thenReturn(Optional.of(new SuggestionIssueGateway.IssueRef(5, "https://github.com/org/fe/issues/5")));
 		String id = submit(user.token(), "FRONTEND");
 
@@ -125,15 +135,15 @@ class SuggestionFlowTests {
 			.andExpect(status().isOk());
 		mockMvc.perform(post("/admin/suggestions/" + id + "/approve").header("X-Session-Token", admin.token()))
 			.andExpect(status().isConflict());
-		verify(gateway).createIssue(eq(SuggestionTarget.FRONTEND), anyString(), anyString());
+		verify(gateway).publish(eq(SuggestionTarget.FRONTEND), anyString(), anyString(), anyString(), any());
 	}
 
 	@Test
 	void falhaDoGithubDevolveASugestaoParaAFila() throws Exception {
 		var user = new TestAuthHelper(mockMvc, objectMapper).authenticate("sgg_user5");
 		var admin = new TestAuthHelper(mockMvc, objectMapper).authenticate("sgg_admin");
-		when(gateway.enabled(SuggestionTarget.BACKEND)).thenReturn(true);
-		when(gateway.createIssue(eq(SuggestionTarget.BACKEND), anyString(), anyString())).thenReturn(Optional.empty());
+		when(gateway.availability(SuggestionTarget.BACKEND)).thenReturn(Availability.READY);
+		when(gateway.publish(eq(SuggestionTarget.BACKEND), anyString(), anyString(), anyString(), any())).thenReturn(Optional.empty());
 		String id = submit(user.token(), "BACKEND");
 
 		mockMvc.perform(post("/admin/suggestions/" + id + "/approve").header("X-Session-Token", admin.token()))
@@ -146,7 +156,7 @@ class SuggestionFlowTests {
 	void destinoSemRepositorioNaoPublicaENaoMexeNaSugestao() throws Exception {
 		var user = new TestAuthHelper(mockMvc, objectMapper).authenticate("sgg_user6");
 		var admin = new TestAuthHelper(mockMvc, objectMapper).authenticate("sgg_admin");
-		when(gateway.enabled(SuggestionTarget.BACKEND)).thenReturn(false);
+		when(gateway.availability(SuggestionTarget.BACKEND)).thenReturn(Availability.REPOSITORY_MISSING);
 		String id = submit(user.token(), "BACKEND");
 
 		mockMvc.perform(post("/admin/suggestions/" + id + "/approve").header("X-Session-Token", admin.token()))
@@ -169,7 +179,76 @@ class SuggestionFlowTests {
 		mockMvc.perform(post("/admin/suggestions/" + id + "/reject").header("X-Session-Token", admin.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("REJECTED"));
-		verify(gateway, never()).createIssue(eq(SuggestionTarget.FRONTEND), anyString(), anyString());
+		verify(gateway, never()).publish(eq(SuggestionTarget.FRONTEND), anyString(), anyString(), anyString(), any());
+	}
+
+	@Test
+	void missingSuggestionsTokenFailsWithItsOwnCodeAndKeepsTheSuggestionPending() throws Exception {
+		var user = new TestAuthHelper(mockMvc, objectMapper).authenticate("sgg_user8");
+		var admin = new TestAuthHelper(mockMvc, objectMapper).authenticate("sgg_admin");
+		when(gateway.availability(SuggestionTarget.BACKEND)).thenReturn(Availability.TOKEN_MISSING);
+		String id = submit(user.token(), "BACKEND");
+
+		mockMvc.perform(post("/admin/suggestions/" + id + "/approve").header("X-Session-Token", admin.token()))
+			.andExpect(status().isServiceUnavailable())
+			.andExpect(jsonPath("$.code").value("SUGGESTIONS_GITHUB_TOKEN_MISSING"));
+		mockMvc.perform(get("/suggestions/mine").header("X-Session-Token", user.token()))
+			.andExpect(jsonPath("$[?(@.id == '" + id + "')].status").value("PENDING"));
+		verify(gateway, never()).publish(any(), anyString(), anyString(), anyString(), any());
+	}
+
+	@Test
+	void approvalAfterAFailedAttemptPassesTheFirstAttemptSoTheIssueIsNotDuplicated() throws Exception {
+		var user = new TestAuthHelper(mockMvc, objectMapper).authenticate("sgg_user9");
+		var admin = new TestAuthHelper(mockMvc, objectMapper).authenticate("sgg_admin");
+		when(gateway.availability(SuggestionTarget.BACKEND)).thenReturn(Availability.READY);
+		when(gateway.publish(eq(SuggestionTarget.BACKEND), anyString(), anyString(), anyString(), isNull()))
+			.thenReturn(Optional.empty());
+		when(gateway.publish(eq(SuggestionTarget.BACKEND), anyString(), anyString(), anyString(), notNull()))
+			.thenReturn(Optional.of(new SuggestionIssueGateway.IssueRef(11, "https://github.com/org/be/issues/11")));
+		String id = submit(user.token(), "BACKEND");
+
+		mockMvc.perform(post("/admin/suggestions/" + id + "/approve").header("X-Session-Token", admin.token()))
+			.andExpect(status().isBadGateway());
+		mockMvc.perform(post("/admin/suggestions/" + id + "/approve").header("X-Session-Token", admin.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.githubIssueNumber").value("11"));
+
+		verify(gateway).publish(eq(SuggestionTarget.BACKEND), eq(id), anyString(), anyString(), isNull());
+		verify(gateway).publish(eq(SuggestionTarget.BACKEND), eq(id), anyString(), anyString(), notNull());
+	}
+
+	@Test
+	void dailyLimitHoldsUnderConcurrentSubmissions() throws Exception {
+		var user = new TestAuthHelper(mockMvc, objectMapper).authenticate("sgg_user10");
+		int attempts = 12;
+		var pool = Executors.newFixedThreadPool(attempts);
+		var start = new CountDownLatch(1);
+		try {
+			List<Future<Integer>> results = new ArrayList<>();
+			for (int i = 0; i < attempts; i++) {
+				// Distinct bodies: identical in-flight POSTs are collapsed by the duplicate-post filter.
+				String distinct = objectMapper.writeValueAsString(Map.of("target", "BACKEND", "title",
+					"Sugestão concorrente " + i, "body", "Texto distinto da sugestão concorrente número " + i));
+				results.add(pool.submit(() -> {
+					start.await();
+					return mockMvc.perform(post("/suggestions").header("X-Session-Token", user.token())
+						.contentType(MediaType.APPLICATION_JSON).content(distinct))
+						.andReturn().getResponse().getStatus();
+				}));
+			}
+			start.countDown();
+			int created = 0;
+			for (Future<Integer> result : results) {
+				int code = result.get(30, TimeUnit.SECONDS);
+				assertTrue(code == 201 || code == 429, "unexpected status " + code);
+				created += code == 201 ? 1 : 0;
+			}
+			assertEquals(5, created);
+		}
+		finally {
+			pool.shutdownNow();
+		}
 	}
 
 	private String submit(String token, String target) throws Exception {

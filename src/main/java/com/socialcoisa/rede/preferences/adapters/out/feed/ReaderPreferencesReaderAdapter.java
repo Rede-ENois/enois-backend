@@ -26,4 +26,9 @@ public class ReaderPreferencesReaderAdapter implements ReaderPreferencesReader {
 	public Collection<String> likedTopics(String userId) {
 		return personalization.of(userId).likedTopics();
 	}
+
+	@Override
+	public boolean hideReposts(String userId) {
+		return personalization.of(userId).hideReposts();
+	}
 }

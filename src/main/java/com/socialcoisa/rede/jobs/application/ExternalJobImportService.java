@@ -134,9 +134,11 @@ public class ExternalJobImportService {
 	 * Cut at the column size instead; the full text is still at the source URL.
 	 */
 	static String fit(String value, int max) {
-		if (value == null || value.length() <= max) {
+		if (value == null || value.codePointCount(0, value.length()) <= max) {
 			return value;
 		}
-		return value.substring(0, max - 1).stripTrailing() + "…";
+		// Corte por code point: `substring` conta unidades UTF-16 e parte um emoji ao meio.
+		String cortado = value.substring(0, value.offsetByCodePoints(0, max - 1)).stripTrailing();
+		return cortado + "…";
 	}
 }

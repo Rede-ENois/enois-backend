@@ -208,6 +208,196 @@ class PersonalizationFeedTests {
 		org.assertj.core.api.Assertions.assertThat(ids).containsExactly(liked2, plain2, liked1, plain1);
 	}
 
+	/**
+	 * "Ocultar reposts" tira do feed pessoal tanto o repost puro (ponteiro, que entra na
+	 * mesclagem do "Para você") quanto o repost com opinião (post com repostOf). O post
+	 * original continua no ar e no feed — a preferência só afeta as republicações.
+	 */
+	@Test
+	void hideRepostsRemovesPureAndOpinionRepostsFromThePersonalFeed() throws Exception {
+		var author = auth.authenticate("persfeed_reposts_author");
+		var reposter = auth.authenticate("persfeed_reposts_friend");
+		var reader = auth.authenticate("persfeed_reposts_reader");
+
+		// Amizade leitor↔reposter: o repost puro DO AMIGO é o que entra na mesclagem do
+		// "Para você" (o autor do post original NÃO é amigo do leitor — o post só chega
+		// ao feed dele pela republicação).
+		mockMvc.perform(post("/network/connections/{target}", reposter.userId())
+				.header("X-Session-Token", reader.token())
+				.header("Idempotency-Key", "reposts-req-" + reader.userId()))
+			.andExpect(status().isAccepted());
+		mockMvc.perform(put("/network/connections/{target}/accept", reader.userId())
+				.header("X-Session-Token", reposter.token())
+				.header("Idempotency-Key", "reposts-acc-" + reposter.userId()))
+			.andExpect(status().isOk());
+
+		String original = publishPlain(author, "Post original que vai ser republicado.");
+
+		// Repost puro (ponteiro) feito pelo amigo.
+		mockMvc.perform(post("/feed/posts/{postId}/repost", original)
+				.header("X-Session-Token", reposter.token()))
+			.andExpect(status().isCreated());
+		// Repost com opinião: cria um post novo do leitor citando o original.
+		MvcResult opinion = mockMvc.perform(post("/feed/posts/{postId}/repost", original)
+				.header("X-Session-Token", reader.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of(
+					"opinion", "Concordo demais!"))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String opinionRepost = objectMapper.readTree(opinion.getResponse().getContentAsString()).get("id").asText();
+
+		// Antes de ligar a preferência: o original (via repost puro) e o repost com opinião aparecem.
+		mockMvc.perform(get("/feed").param("tab", "FOR_YOU").header("X-Session-Token", reader.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.id == '" + original + "')]").isNotEmpty())
+			.andExpect(jsonPath("$.items[?(@.id == '" + opinionRepost + "')]").isNotEmpty());
+
+		mockMvc.perform(put("/me/preferences")
+				.header("X-Session-Token", reader.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of(
+					"hideReposts", true))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.hideReposts").value(true));
+
+		// Depois: nenhum dos dois está no "Para você"...
+		mockMvc.perform(get("/feed").param("tab", "FOR_YOU").header("X-Session-Token", reader.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.id == '" + original + "')]").isEmpty())
+			.andExpect(jsonPath("$.items[?(@.id == '" + opinionRepost + "')]").isEmpty());
+
+		// ...nem o repost com opinião no "Tudo" — mas o post ORIGINAL do autor continua lá
+		// (a preferência do leitor não é censura: o autor continua vendo tudo).
+		mockMvc.perform(get("/feed").param("tab", "ALL").header("X-Session-Token", reader.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.id == '" + original + "')]").isNotEmpty())
+			.andExpect(jsonPath("$.items[?(@.id == '" + opinionRepost + "')]").isEmpty());
+
+		mockMvc.perform(get("/feed").param("tab", "FOR_YOU").header("X-Session-Token", author.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.id == '" + original + "')]").isNotEmpty());
+	}
+
+	/**
+	 * "Ocultar reposts" vale para as abas legadas também: em FOLLOWING o repost com opinião de quem
+	 * a pessoa segue some, e o post original continua. Em TRENDING o mesmo post republicado sai do
+	 * ranking do leitor sem sumir para os outros.
+	 */
+	@Test
+	void hideRepostsFiltersFollowingAndTrending() throws Exception {
+		var author = auth.authenticate("persfeed_tabs_author");
+		var reader = auth.authenticate("persfeed_tabs_reader");
+
+		// Amizade leitor→autor: o feed FOLLOWING do leitor mostra os posts do autor.
+		mockMvc.perform(post("/network/connections/{target}", author.userId())
+				.header("X-Session-Token", reader.token())
+				.header("Idempotency-Key", "tabs-req-" + reader.userId()))
+			.andExpect(status().isAccepted());
+		mockMvc.perform(put("/network/connections/{target}/accept", reader.userId())
+				.header("X-Session-Token", author.token())
+				.header("Idempotency-Key", "tabs-acc-" + author.userId()))
+			.andExpect(status().isOk());
+
+		String original = publishPlain(author, "Original que o autor republica com opiniao.");
+		String cited = publishPlain(reader, "Post do leitor citado pelo autor.");
+		MvcResult opinion = mockMvc.perform(post("/feed/posts/{postId}/repost", cited)
+				.header("X-Session-Token", author.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of("opinion", "Vale a leitura."))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String opinionRepost = objectMapper.readTree(opinion.getResponse().getContentAsString()).get("id").asText();
+
+		// Sem a preferência, as duas abas mostram o repost com opinião.
+		for (String tab : java.util.List.of("FOLLOWING", "TRENDING")) {
+			mockMvc.perform(get("/feed").param("tab", tab).param("limit", "50")
+					.header("X-Session-Token", reader.token()))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.items[?(@.id == '" + opinionRepost + "')]").isNotEmpty());
+		}
+
+		mockMvc.perform(put("/me/preferences")
+				.header("X-Session-Token", reader.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of("hideReposts", true))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.hideReposts").value(true));
+
+		for (String tab : java.util.List.of("FOLLOWING", "TRENDING")) {
+			mockMvc.perform(get("/feed").param("tab", tab).param("limit", "50")
+					.header("X-Session-Token", reader.token()))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.items[?(@.id == '" + original + "')]").isNotEmpty())
+				.andExpect(jsonPath("$.items[?(@.id == '" + opinionRepost + "')]").isEmpty());
+		}
+
+		// A preferência é do leitor: o autor continua vendo a própria republicação.
+		mockMvc.perform(get("/feed").param("tab", "FOLLOWING").param("limit", "50")
+				.header("X-Session-Token", author.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.id == '" + opinionRepost + "')]").isNotEmpty());
+	}
+
+	/**
+	 * A janela do "Para você" pode conter só reposts escondidos: a página vem vazia, mas o cursor
+	 * precisa continuar — antes o serviço estourava ao pegar o "último" da lista filtrada, e o
+	 * scroll infinito recebia 500 no lugar da próxima página.
+	 */
+	@Test
+	void forYouKeepsPagingThroughAWindowOfHiddenReposts() throws Exception {
+		var author = auth.authenticate("persfeed_window_author");
+		var reader = auth.authenticate("persfeed_window_reader");
+
+		mockMvc.perform(post("/network/connections/{target}", author.userId())
+				.header("X-Session-Token", reader.token())
+				.header("Idempotency-Key", "window-req-" + reader.userId()))
+			.andExpect(status().isAccepted());
+		mockMvc.perform(put("/network/connections/{target}/accept", reader.userId())
+				.header("X-Session-Token", author.token())
+				.header("Idempotency-Key", "window-acc-" + author.userId()))
+			.andExpect(status().isOk());
+
+		String first = publishPlain(author, "Original um da janela.");
+		String second = publishPlain(author, "Original dois da janela.");
+		java.util.List<String> opinions = new java.util.ArrayList<>();
+		for (String postId : java.util.List.of(first, second)) {
+			MvcResult opinion = mockMvc.perform(post("/feed/posts/{postId}/repost", postId)
+					.header("X-Session-Token", reader.token())
+					.contentType(MediaType.APPLICATION_JSON)
+					.content(objectMapper.writeValueAsString(java.util.Map.of("opinion", "Comentario."))))
+				.andExpect(status().isCreated())
+				.andReturn();
+			opinions.add(objectMapper.readTree(opinion.getResponse().getContentAsString()).get("id").asText());
+		}
+
+		mockMvc.perform(put("/me/preferences")
+				.header("X-Session-Token", reader.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of("hideReposts", true))))
+			.andExpect(status().isOk());
+
+		java.util.List<String> seen = new java.util.ArrayList<>();
+		String cursor = null;
+		int pages = 0;
+		do {
+			var request = get("/feed").param("tab", "FOR_YOU").param("limit", "1")
+				.header("X-Session-Token", reader.token());
+			if (cursor != null) {
+				request.param("cursor", cursor);
+			}
+			var body = objectMapper.readTree(mockMvc.perform(request).andExpect(status().isOk())
+				.andReturn().getResponse().getContentAsString());
+			body.path("items").forEach(item -> seen.add(item.path("id").asText()));
+			cursor = body.path("nextCursor").isTextual() ? body.path("nextCursor").asText() : null;
+			pages++;
+		} while (cursor != null && pages < 50);
+
+		org.assertj.core.api.Assertions.assertThat(seen).contains(first, second);
+		org.assertj.core.api.Assertions.assertThat(seen).doesNotContainAnyElementsOf(opinions);
+		org.assertj.core.api.Assertions.assertThat(cursor).isNull();
+	}
+
 	private String publishPlain(TestAuthHelper.AuthSession session, String content) throws Exception {
 		MvcResult result = mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", session.token())

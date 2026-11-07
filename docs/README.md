@@ -12,8 +12,7 @@
 | JPA / Hibernate | - | ORM |
 | Flyway | - | Migrações de banco |
 | H2 | - | Banco dev (in-memory) |
-| MySQL | - | Banco produção |
-| MariaDB | - | Banco QA/HML |
+| MariaDB | 11.4 | Banco produção, QA e HML |
 | Resilience4j | 2.4.0 | Rate limiting, circuit breaker, retry |
 | Nimbus JOSE + JWT | 9.37.3 | Verificação OAuth JWT |
 | Springdoc OpenAPI | 2.8.6 | Documentação Swagger |
@@ -115,7 +114,7 @@ O projeto segue **Arquitetura Hexagonal** (Ports & Adapters), organizada em mód
 | `dev` | H2 in-memory | Desenvolvimento local |
 | `qa` | MariaDB | Testes |
 | `hml` | MariaDB | Homologação |
-| `prd` | MySQL | Produção |
+| `prd` | MariaDB | Produção |
 
 ## Docker Compose
 

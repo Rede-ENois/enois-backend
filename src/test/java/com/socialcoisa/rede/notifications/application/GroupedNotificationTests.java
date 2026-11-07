@@ -47,6 +47,9 @@ class GroupedNotificationTests {
 	@Autowired
 	private TransactionTemplate transactions;
 
+	@Autowired
+	private org.springframework.jdbc.core.JdbcTemplate jdbc;
+
 	@MockitoBean
 	private PushSender pushSender;
 
@@ -92,6 +95,50 @@ class GroupedNotificationTests {
 		mockMvc.perform(get("/notifications").header("X-Session-Token", user.token()))
 			.andExpect(jsonPath("$.items.length()").value(3))
 			.andExpect(jsonPath("$.items[0].body").value("Davi reagiu ao seu post."));
+	}
+
+	/**
+	 * Joining the unread notification is a read-then-write of its count. Concurrent joins (messages of
+	 * one conversation arriving together) all read the same count and the last write won.
+	 */
+	@Test
+	void concurrentJoinsOfOneGroupCountEveryEvent() throws Exception {
+		String userId = new TestAuthHelper(mockMvc, objectMapper).authenticate("ngroup_counted").userId();
+		String group = "conversation:ngroup-" + System.nanoTime();
+		int joins = 8;
+		count(userId, group, "actor_first");
+
+		var pool = java.util.concurrent.Executors.newFixedThreadPool(joins);
+		try {
+			var start = new java.util.concurrent.CountDownLatch(1);
+			var futures = new java.util.ArrayList<java.util.concurrent.Future<?>>();
+			for (int i = 0; i < joins; i++) {
+				String actor = "actor_" + i;
+				futures.add(pool.submit(() -> {
+					start.await();
+					count(userId, group, actor);
+					return null;
+				}));
+			}
+			start.countDown();
+			for (var future : futures) {
+				future.get(60, java.util.concurrent.TimeUnit.SECONDS);
+			}
+		}
+		finally {
+			pool.shutdownNow();
+		}
+
+		var rows = jdbc.queryForList("select actor_count, body from notifications where user_id = ? and group_key = ?",
+			userId, group);
+		org.assertj.core.api.Assertions.assertThat(rows).hasSize(1);
+		org.assertj.core.api.Assertions.assertThat(rows.get(0).get("actor_count")).isEqualTo(joins + 1);
+		org.assertj.core.api.Assertions.assertThat(rows.get(0).get("body")).isEqualTo((joins + 1) + " novas mensagens");
+	}
+
+	private void count(String userId, String group, String actorId) {
+		notifications.createCounted(userId, "NEW_MESSAGE", group, actorId, "Nova mensagem", "Oi",
+			count -> count + " novas mensagens", "/mensagens", "Responder");
 	}
 
 	/** In its own transaction: the push listener runs after commit. */

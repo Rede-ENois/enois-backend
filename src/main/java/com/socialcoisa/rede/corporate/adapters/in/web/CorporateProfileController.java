@@ -66,8 +66,7 @@ class CorporateProfileController {
 	@GetMapping("/corporate/{username}")
 	Map<String, Object> byUsername(@PathVariable String username) {
 		// Leitura pública: só perfis ATIVOS têm página (draft/desativado = 404).
-		CorporateProfile profile = service.byUsername(username)
-			.filter(CorporateProfile::active)
+		CorporateProfile profile = service.publicByUsername(username)
 			.orElseThrow(() -> new ApiException(404, "PROFILE_NOT_FOUND", "Perfil profissional não encontrado."));
 		return publicView(profile);
 	}

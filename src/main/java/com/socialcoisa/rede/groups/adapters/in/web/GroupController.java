@@ -24,6 +24,7 @@ import com.socialcoisa.rede.groups.domain.Group;
 import com.socialcoisa.rede.groups.domain.GroupJoinMode;
 import com.socialcoisa.rede.groups.domain.GroupJoinRequest;
 import com.socialcoisa.rede.groups.domain.GroupMember;
+import com.socialcoisa.rede.groups.domain.GroupMembership;
 import com.socialcoisa.rede.groups.domain.GroupRole;
 import com.socialcoisa.rede.groups.domain.GroupStatus;
 import com.socialcoisa.rede.groups.domain.JoinOutcome;
@@ -79,6 +80,21 @@ class GroupController {
 		String nextCursor = groups.size() == limit
 			? cursorCodec.encode(groups.get(groups.size() - 1).createdAt()) : null;
 		return new PageResponse<>(items, nextCursor);
+	}
+
+	/** Grupos em que a pessoa participa. Exige sessao: e a lista pessoal, nao o catalogo publico. */
+	@GetMapping("/mine")
+	PageResponse<GroupView> mine(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(defaultValue = "50") int limit) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		List<GroupMembership> memberships = groupService.listMine(user.id().value(), limit);
+		Map<String, Long> counts = groupService.countMembers(
+			memberships.stream().map(membership -> membership.group().id()).toList());
+		var items = memberships.stream()
+			.map(membership -> view(membership.group(), counts.getOrDefault(membership.group().id(), 0L),
+				membership.role(), false))
+			.toList();
+		return new PageResponse<>(items, null);
 	}
 
 	@GetMapping("/{slug}")
@@ -245,10 +261,13 @@ class GroupController {
 		GroupRole role = viewer == null ? null : groupService.roleOf(group.id(), viewer.id().value());
 		boolean pending = viewer != null && role == null
 			&& groupService.hasPendingRequest(group.id(), viewer.id().value());
+		return view(group, groupService.countMembers(group.id()), role, pending);
+	}
+
+	private static GroupView view(Group group, long memberCount, GroupRole role, boolean pending) {
 		return new GroupView(group.id(), group.slug(), group.name(), group.description(), group.topic(),
 			group.avatar(), group.banner(), group.bannerHtml(), group.joinMode().name(), group.status().name(),
-			groupService.countMembers(group.id()), role == null ? null : role.name(), role != null, pending,
-			group.createdAt());
+			memberCount, role == null ? null : role.name(), role != null, pending, group.createdAt());
 	}
 
 	/** One query for the whole list instead of one per row. */

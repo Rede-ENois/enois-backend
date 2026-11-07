@@ -4,6 +4,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -35,14 +36,19 @@ class PersonalizationController {
 
 	record PersonalizationResponse(List<String> likedTopics, List<String> blockedTopics,
 			List<String> disabledModules, boolean nightRestReminder, LocalDate nightRestDismissedOn,
-			boolean liteMode, boolean batataMode) {
+			boolean liteMode, boolean batataMode, boolean hideReposts, boolean whatsNewEnabled,
+			String whatsNewLastSeen) {
 	}
 
 	record DismissNightRestRequest(String night) {
 	}
 
+	record DismissWhatsNewRequest(String version) {
+	}
+
 	record UpdateRequest(List<String> likedTopics, List<String> blockedTopics, List<String> disabledModules,
-			Boolean nightRestReminder, Boolean liteMode, Boolean batataMode) {
+			Boolean nightRestReminder, Boolean liteMode, Boolean batataMode, Boolean hideReposts,
+			Boolean whatsNewEnabled) {
 	}
 
 	@GetMapping("/me/preferences")
@@ -62,7 +68,9 @@ class PersonalizationController {
 			request == null ? null : request.disabledModules(),
 			request == null ? null : request.nightRestReminder(),
 			request == null ? null : request.liteMode(),
-			request == null ? null : request.batataMode());
+			request == null ? null : request.batataMode(),
+			request == null ? null : request.whatsNewEnabled(),
+			request == null ? null : request.hideReposts());
 		return view(updated);
 	}
 
@@ -71,7 +79,7 @@ class PersonalizationController {
 	 * no banco é o que impede o popup de voltar a cada reload; a data diferente na madrugada
 	 * seguinte libera o lembrete de novo às 00:00.
 	 */
-	@org.springframework.web.bind.annotation.PostMapping("/me/preferences/night-rest/dismissed")
+	@PostMapping("/me/preferences/night-rest/dismissed")
 	PersonalizationResponse dismissNightRest(
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestBody DismissNightRestRequest request) {
@@ -79,10 +87,23 @@ class PersonalizationController {
 		return view(service.dismissNightRest(user.id().value(), request == null ? null : request.night()));
 	}
 
+	/**
+	 * Marca a versão da novidade/changelog como vista pelo usuário na conta.
+	 * Persiste no banco da conta para valer em todos os aparelhos e navegadores.
+	 */
+	@PostMapping("/me/preferences/whats-new/dismissed")
+	PersonalizationResponse dismissWhatsNew(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestBody DismissWhatsNewRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return view(service.dismissWhatsNew(user.id().value(), request == null ? null : request.version()));
+	}
+
 	private PersonalizationResponse view(PersonalizationService.Personalization personalization) {
 		return new PersonalizationResponse(personalization.likedTopics(), personalization.blockedTopics(),
 			personalization.disabledModules(), personalization.nightRestReminder(),
 			personalization.nightRestDismissedOn(), personalization.liteMode(),
-			personalization.batataMode());
+			personalization.batataMode(), personalization.hideReposts(),
+			personalization.whatsNewEnabled(), personalization.whatsNewLastSeen());
 	}
 }

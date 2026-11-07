@@ -26,6 +26,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import tools.jackson.databind.ObjectMapper;
+import com.socialcoisa.rede.media.application.StubFfmpegRunner;
 import com.socialcoisa.rede.media.application.port.out.MediaObjectStore;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
@@ -55,6 +56,12 @@ class MediaStorageProxyTests {
 	@Autowired
 	private MediaObjectStore store;
 
+	@Autowired
+	private com.socialcoisa.rede.media.application.MediaMetadataSanitizer sanitizer;
+
+	@Autowired
+	private StubFfmpegRunner ffmpeg;
+
 	private TestAuthHelper auth;
 
 	@BeforeEach
@@ -69,6 +76,12 @@ class MediaStorageProxyTests {
 		@Primary
 		FakeObjectStore fakeObjectStore() {
 			return new FakeObjectStore();
+		}
+
+		@Bean
+		@Primary
+		StubFfmpegRunner stubFfmpegRunner() {
+			return new StubFfmpegRunner();
 		}
 	}
 
@@ -275,8 +288,6 @@ class MediaStorageProxyTests {
 			.path("objectKey").asText();
 		assertThat(objectKey).endsWith("/file.mp4");
 
-		// Corpo que o ffmpeg nao consegue ler (ou ffmpeg ausente): a limpeza e best-effort e o
-		// original segue para o bucket — upload de video nunca pode virar 500 por causa dela.
 		mockMvc.perform(put("/storage/" + objectKey)
 				.header("X-Session-Token", dono.token())
 				.contentType("video/mp4")
@@ -286,6 +297,36 @@ class MediaStorageProxyTests {
 
 		assertThat(store().chaveEscrita).isEqualTo(objectKey);
 		assertThat(store().escrito).isEqualTo(video);
+	}
+
+	@Test
+	void videoQueOFfmpegNaoLimpaERecusadoENaoChegaAoBucket() throws Exception {
+		var dono = auth.authenticate("media_proxy_video_sujo");
+		byte[] video = "ftypisom-video-com-metadados".repeat(16).getBytes(StandardCharsets.UTF_8);
+		var criado = mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", dono.token())
+				.header("Idempotency-Key", "media-proxy-video-sujo-1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("fileName", "clipe.mp4",
+					"mimeType", "video/mp4", "size", video.length, "purpose", "POST_VIDEO"))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
+			.path("objectKey").asText();
+
+		ffmpeg.failWith(StubFfmpegRunner.processingFailed());
+		try {
+			mockMvc.perform(put("/storage/" + objectKey)
+					.header("X-Session-Token", dono.token())
+					.contentType("video/mp4")
+					.content(video))
+				.andExpect(status().isUnprocessableEntity())
+				.andExpect(jsonPath("$.code").value("MEDIA_PROCESSING_FAILED"));
+		}
+		finally {
+			ffmpeg.failWith(null);
+		}
+		assertThat(store().chaveEscrita).isNotEqualTo(objectKey);
 	}
 
 	@Test
@@ -321,22 +362,12 @@ class MediaStorageProxyTests {
 
 	@Test
 	void videoGrandeAcimaDoLimiteEmMemoriaTambemChegaAoBucket() throws Exception {
-		var dono = auth.authenticate("media_proxy_video_grande");
 		// Acima de MAX_IN_MEMORY o proxy usa arquivo temporario + ffmpeg (sanitizeToFile).
 		byte[] video = new byte[41 * 1024 * 1024];
-		var criado = mockMvc.perform(post("/media/uploads")
-				.header("X-Session-Token", dono.token())
-				.header("Idempotency-Key", "media-proxy-video-2")
-				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("fileName", "aula.mp4",
-					"mimeType", "video/mp4", "size", (long) video.length, "purpose", "POST_VIDEO"))))
-			.andExpect(status().isCreated())
-			.andReturn();
-		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
-			.path("objectKey").asText();
+		String objectKey = assetDeVideoGrande("media_proxy_video_grande", "media-proxy-video-2", video.length);
 
 		mockMvc.perform(put("/storage/" + objectKey)
-				.header("X-Session-Token", dono.token())
+				.header("X-Session-Token", auth.authenticate("media_proxy_video_grande").token())
 				.contentType("video/mp4")
 				.content(video))
 			.andExpect(status().isOk())
@@ -344,6 +375,28 @@ class MediaStorageProxyTests {
 
 		assertThat(store().chaveEscrita).isEqualTo(objectKey);
 		assertThat(store().escrito).hasSize(video.length);
+	}
+
+	/**
+	 * Arquivo do Enois num campo de imagem: a checagem de conteúdo recusa `video/mp4` com erro do
+	 * classificador e virava 500. Quem tentava trocar a foto por um vídeo lia "erro interno" em
+	 * vez do motivo — a resposta agora é 422 dizendo que o arquivo não pôde ser verificado.
+	 *
+	 * <p>No perfil de teste a checagem está desligada e não há classificador carregado, então o
+	 * teste roda num contexto com `rede.media.nsfw.enabled=true` e um classificador que se recusa a
+	 * ler o arquivo, que é o que o ONNX faz com bytes de vídeo.</p>
+	 */
+	/** Cadastra a mídia de vídeo grande e devolve a chave, sem repetir o mesmo POST em cada teste. */
+	private String assetDeVideoGrande(String dono, String idempotencia, int tamanho) throws Exception {
+		var criado = mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", auth.authenticate(dono).token())
+				.header("Idempotency-Key", idempotencia)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("fileName", "aula.mp4",
+					"mimeType", "video/mp4", "size", (long) tamanho, "purpose", "POST_VIDEO"))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		return objectMapper.readTree(criado.getResponse().getContentAsString()).path("objectKey").asText();
 	}
 
 	/**
@@ -399,5 +452,82 @@ class MediaStorageProxyTests {
 					"mimeType", "video/mp4", "size", 1024, "purpose", "REPORT_CAPTURE"))))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("MEDIA_TYPE_NOT_ALLOWED"));
+	}
+}
+
+/**
+ * O caminho de vídeo grande guarda o conteúdo em arquivo temporário antes de mandar para o bucket.
+ * Quando o servidor não tem nenhuma pasta gravável (o `/tmp` da imagem recusando, o volume de dados
+ * fora do ar), o envio não pode virar "erro interno inesperado": sai 503 com código próprio e o log
+ * mostra quais pastas foram tentadas.
+ *
+ * <p>A pasta é resolvida no boot, então o `MockMvc` da classe irmã não enxerga a troca — este
+ * contexto carrega o mesmo banco em memória e substitui só o resolvedor do temporário.</p>
+ */
+@SpringBootTest(properties = { "rede.media.storage=s3", "rede.media.s3.bucket=bucket-de-teste",
+		"rede.media.s3.publicBaseUrl=https://enois.exemplo.com/api/storage" })
+@AutoConfigureMockMvc
+class MediaStorageProxySemTemporarioTests {
+
+	static {
+		System.setProperty("aws.accessKeyId", "test");
+		System.setProperty("aws.secretAccessKey", "test");
+	}
+
+	@Autowired
+	private MockMvc mockMvc;
+
+	@Autowired
+	private ObjectMapper objectMapper;
+
+	@Autowired
+	private MediaObjectStore store;
+
+	@Test
+	void videoGrandeSemTemporarioGravavelResponde503Proprio() throws Exception {
+		var auth = new TestAuthHelper(mockMvc, objectMapper);
+		byte[] video = new byte[41 * 1024 * 1024];
+		String token = auth.authenticate("media_proxy_video_sem_tmp").token();
+		var criado = mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", token)
+				.header("Idempotency-Key", "media-proxy-video-3")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("fileName", "aula.mp4",
+					"mimeType", "video/mp4", "size", (long) video.length, "purpose", "POST_VIDEO"))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
+			.path("objectKey").asText();
+
+		// O contexto deste teste injeta um resolvedor sem nenhuma pasta gravável (ver `SemTemporario`),
+		// então nada aqui mexe em `java.io.tmpdir`: a decisão entra pelo bean, não pelo processo.
+		mockMvc.perform(put("/storage/" + objectKey)
+				.header("X-Session-Token", token)
+				.contentType("video/mp4")
+				.content(video))
+			.andExpect(status().isServiceUnavailable())
+			.andExpect(jsonPath("$.code").value("MEDIA_UPLOAD_UNAVAILABLE"))
+			.andExpect(jsonPath("$.message").value(
+				org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("/dev/null"))));
+		assertThat(((MediaStorageProxyTests.FakeObjectStore) store).chaveEscrita).isNotEqualTo(objectKey);
+	}
+
+	@TestConfiguration
+	static class SemTemporario {
+
+		@Bean
+		@Primary
+		MediaStorageProxyTests.FakeObjectStore fakeObjectStore() {
+			return new MediaStorageProxyTests.FakeObjectStore();
+		}
+
+		@Bean
+		@Primary
+		com.socialcoisa.rede.media.application.MediaTemporaryFiles semPastaGravavel() {
+			// Nenhuma das três pastas existe ou aceita arquivo: o tmp do processo é um arquivo comum
+			// (não `/dev/null`, onde escrever funciona e o teste passaria pelo motivo errado).
+			return new com.socialcoisa.rede.media.application.MediaTemporaryFiles("/dev/null/nao-e-pasta",
+				"/dev/null/nao-e-dados", "/dev/null/nao-e-tmp", null);
+		}
 	}
 }

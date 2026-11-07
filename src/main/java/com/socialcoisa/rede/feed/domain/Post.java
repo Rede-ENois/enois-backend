@@ -324,40 +324,13 @@ public class Post {
 		return true;
 	}
 
-	public void addReaction() {
-		counters = counters.incrementReactions();
-	}
-
-	public void removeReaction() {
-		counters = counters.decrementReactions();
-	}
-
-	public void addComment() {
-		counters = counters.incrementComments();
-	}
-
-	public void removeComment() {
-		counters = counters.decrementComments();
-	}
-
-	public void addSave() {
-		counters = counters.incrementSaves();
-	}
-
-	public void removeSave() {
-		counters = counters.decrementSaves();
-	}
-
-	public void addShare() {
-		counters = counters.incrementShares();
-	}
-
-	public void repost() {
-		counters = counters.incrementReposts();
-	}
-
-	public void unrepost() {
-		counters = counters.decrementReposts();
+	/**
+	 * Replaces the in-memory counters with the stored ones. The counters are maintained by atomic SQL
+	 * updates (see {@code PostRepository#adjustCounter}), never through this object, so a caller that
+	 * changed them reads them back before answering.
+	 */
+	public void refreshCounters(Counters stored) {
+		this.counters = stored;
 	}
 
 	public PostId id() {

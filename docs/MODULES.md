@@ -36,7 +36,9 @@
 
 Os filtros web e o interceptor administrativo usam uma leitura compartilhada do caminho da
 requisição. A leitura considera o contexto da aplicação e não reescreve URI, query ou corpo.
-A seleção de permissões de administrador e moderador permanece no `AdminRouteInterceptor`. A classificação
+A seleção de permissões de administrador e moderador permanece no `AdminRouteInterceptor`. Ele cobre
+`/admin/**` e `/moderation/**`: toda rota de `/moderation` exige moderador (ou admin) antes do controller,
+exceto `GET /moderation/me` e `POST /moderation/applications`, que só exigem sessão. A classificação
 usa os padrões e segmentos do Spring MVC. Entradas com escape inválido que alcancem a cadeia
 de filtros recebem 400 antes do roteamento. Os testes integrados também conferem que uma
 requisição sem permissão não executa o método protegido do controller.
@@ -956,6 +958,17 @@ era recurso do Jitsi público e não existe na Epapo.
 | `addReaction(String messageId, String userId, String reactionType)` | Adiciona/toggle reação em mensagem |
 | `getReactions(String messageId)` | Lista reações da mensagem |
 
+### ConversationReachPolicy
+
+Quem pode alcançar quem numa conversa. As regras olham o estado **atual** das pessoas e rodam ao
+abrir uma conversa, ao reabrir uma existente (DM, candidatura, serviço, freela, DM corporativa) e
+a cada mensagem enviada, não só na criação:
+
+- bloqueio em qualquer sentido entre quem envia e quem recebe: 403 `USER_BLOCKED` (em `GROUP` o
+  bloqueio entre dois membros não silencia o grupo);
+- menor de idade só é alcançado por quem tem conexão aceita com ele: 403 `MINOR_DM_RESTRICTED`
+  (conversas `JOB` e `SERVICE` ficam fora, porque nascem de uma ação do próprio menor).
+
 ### Domain Objects
 
 | Classe | Descrição |
@@ -1287,42 +1300,49 @@ integração com issues do GitHub e log de e-mails no painel.
 
 Separado do suporte. A pessoa escolhe o destino (`BACKEND`, `FRONTEND` ou `DESIGN_SYSTEM`) e envia
 título + texto. A sugestão nasce `PENDING`; um moderador aprova e só então o app abre uma issue
-**pública** no repositório do destino. A issue leva apenas o título e o texto (menções `@` são
-quebradas para não notificar ninguém): nome, e-mail e id de quem sugeriu nunca vão junto, e a tabela
+**pública** no repositório do destino. A issue leva apenas o título e o texto: nome, e-mail e id de quem sugeriu nunca vão junto, e a tabela
 `suggestions` nem guarda e-mail de contato. Limite de 5 sugestões por pessoa em 24h.
 
 A aprovação é reivindicada de forma atômica (`PENDING` -> `PUBLISHED`) antes de falar com o GitHub:
 duas aprovações simultâneas não abrem duas issues, e falha do GitHub devolve a sugestão para a fila.
+A publicação é idempotente: a issue leva o id da sugestão num comentário HTML oculto, e a primeira
+tentativa fica registrada (`publish_attempted_at`, V251). Se uma tentativa terminou sem resposta (o
+GitHub pode ter aberto a issue), a próxima aprovação procura a issue com aquele id antes de abrir
+outra (paginando até 10 páginas de 100 issues); se a busca falhar ou não terminar, nada é criado e a sugestão continua pendente.
+
+O texto público é neutralizado: menções (`@pessoa`), referências (`#12`, `GH-12`, `dono/repo#12`) e
+links de issue do GitHub recebem um espaço de largura zero, então a issue não notifica ninguém nem
+aparece referenciada em outra issue. O limite diário é contado e gravado sob lock da linha da pessoa
+em `users` (o mesmo handle de `studypairs`), então envios simultâneos não passam de 5.
 
 #### Configuração e operação
 
-**Token.** As sugestões usam o **mesmo token das issues do suporte**, para a equipe ter um token de
-issues só e uma rotação só. Ele fica cifrado no banco e é trocado em `/admin/support/github` (só
-admin), sem reiniciar o pod; o módulo lê o valor a cada chamada. Não existe secret nem variável de
-token próprios das sugestões. Os outros tokens GitHub do projeto não servem para isso:
-`GITHUB_CONTRIBUTIONS_TOKEN` (selos) é somente leitura e `GITOPS_TOKEN` é do repositório de deploy.
+**Token próprio.** As sugestões têm um token só delas (`SUGGESTIONS_GITHUB_TOKEN`), separado do
+token das issues do suporte, que enxerga o repositório privado com dados pessoais. Use um token
+fine-grained com **Issues: write somente nos repositórios públicos de destino**. Ele vem do deploy
+(secret `SUGGESTIONS_GITHUB_TOKEN` em produção, `QA_SUGGESTIONS_GITHUB_TOKEN` na QA); trocar exige
+um novo deploy. Sem token a aprovação responde 503 `SUGGESTIONS_GITHUB_TOKEN_MISSING` e a sugestão
+continua pendente: o módulo nunca usa outro token no lugar.
 
-Como esse token também enxerga o repositório privado de suporte, o que sai para a issue pública é
-só título e texto da sugestão (nunca nome, e-mail ou id), e o token **precisa de escrita em Issues
-em cada repositório de destino**. Um token fine-grained limitado ao repositório de suporte devolve
-erro do GitHub e a aprovação responde 502 (a sugestão volta para a fila).
-
-**Repositórios de destino** (variáveis de ambiente; vêm do deploy como `vars` do GitHub Actions
-`SUGGESTIONS_REPO_*`):
+**Repositórios de destino, por ambiente** (variáveis de ambiente; vêm do deploy como `vars` do GitHub
+Actions `SUGGESTIONS_REPO_*` em produção e `QA_SUGGESTIONS_REPO_*` na QA):
 
 | Variável | Descrição |
 |---|---|
+| `SUGGESTIONS_GITHUB_TOKEN` | Token das sugestões (Issues: write nos repositórios de destino) |
 | `GITHUB_SUGGESTIONS_REPO_BACKEND` / `_FRONTEND` / `_DESIGN_SYSTEM` | Repositório de cada destino, no formato `dono/nome` |
 
-Destino sem repositório (ou com formato inválido) fica desligado: a aprovação responde 503 e a
-sugestão continua pendente. Sem token do suporte configurado, todos os destinos ficam desligados.
+Destino sem repositório (ou com formato inválido) fica desligado: a aprovação responde 503
+`SUGGESTIONS_GITHUB_DISABLED` e a sugestão continua pendente.
 
-**QA e produção usam os mesmos repositórios.** Aprovar uma sugestão na QA abre uma issue pública de
-verdade nos repositórios oficiais; aprove na QA só o que pode ficar público.
+**A QA aponta para um repositório sandbox**, nunca para os oficiais: aprovar uma sugestão na QA abre
+uma issue pública de verdade no repositório configurado. Sem as variáveis `QA_SUGGESTIONS_REPO_*` a
+aprovação na QA fica desligada.
 
-**Falhas comuns na aprovação:** 503 = destino sem repositório ou token do suporte ausente; 502 = o
-GitHub recusou (token sem escrita em Issues naquele repositório, token expirado ou GitHub fora do ar).
-Em ambos a sugestão continua `PENDING` e pode ser aprovada de novo depois de corrigir.
+**Falhas comuns na aprovação:** 503 `SUGGESTIONS_GITHUB_TOKEN_MISSING` = token ausente; 503
+`SUGGESTIONS_GITHUB_DISABLED` = destino sem repositório; 502 `GITHUB_UNAVAILABLE` = o GitHub recusou
+(token sem escrita em Issues naquele repositório, token expirado ou GitHub fora do ar). Em todos a
+sugestão continua `PENDING` e pode ser aprovada de novo depois de corrigir.
 
 | Rota | Descrição |
 |---|---|
@@ -1367,6 +1387,25 @@ distribuição.
 
 Arquivos: `DailyWordController`, `DailyMazeController`, `DailyBlocksController`,
 `DailyGameRewardsController` + `DailyGameRewardsScheduler`.
+
+Integrity of the ranking and the prizes:
+
+- **Plausible time** (`dailygames/domain/PlayPlausibility`): a Words win faster than 750 ms per guess
+  or a Maze run faster than 50 ms per step of the maze's shortest route ends the game normally for the
+  player, but the session stores `integrity_flag = 'TOO_FAST'` (V247) and stays out of the
+  leaderboard and the prize queue. Blocks is bounded by its own rules: one action per 80 ms and a
+  server-side replay where gravity runs in real time.
+- **Maze moves** are capped at 20 per second per account (`ActionThrottle`, `429 ACTION_THROTTLED`).
+- **Blocks pieces**: `GET /daily-games/blocks/today` returns the next `DailyBlocksService.PIECES_AHEAD`
+  (24, above the client's refill threshold of 20) pieces of the official sequence while the game is `PLAYING`; the client refills from the same
+  endpoint as it plays.
+- **Prizes** (`DailyGameRewardsService`): paid two days after the challenge day, only to accounts with
+  a verified identity (e-mail or second factor) that existed for the whole new-account window (7 days,
+  `RewardEligibility`) before the challenge day started. Ranks are counted among eligible accounts,
+  so an ineligible account does not hold a prize back. Each credit commits in its own transaction
+  with up to 3 attempts on `COIN_CONCURRENCY` or a lock timeout; a credit that still fails is logged
+  (`daily_game_reward_failed`) and paid by the next daily run (the run looks back 7 days; the ledger
+  reference `jogos:<jogo>:<dia>:<conta>` keeps it idempotent).
 
 ## 26. Push (Notificações web push)
 
@@ -1636,9 +1675,13 @@ Files: `ReleaseNoteController`, `ReleaseNoteService`, `ReleaseNoteRepository`,
 
 ## 41. Calls (Chamadas de áudio/vídeo)
 
-1:1 na conversa e "Tamo junto" no grupo, com o painel embutido no app. O servidor decide tudo:
+1:1 na conversa e "Tamo junto" no grupo, com o painel embutido no app. Toda chamada de grupo se
+chama "Tamo junto" — "Tamo junto voz" ou "Tamo junto vídeo" conforme a modalidade — e cada tópico
+do grupo tem a sua própria sala, independente da sala geral. O servidor decide tudo:
 quem pode começar (participante da conversa, membro do grupo), quem pode entrar (conferido no
 vínculo a cada pedido e no `POST /calls/{id}/join`), em que estado a chamada está e quando vence.
+Quem abre a sala já entra nela, e a sala de grupo que fica sem ninguém por mais de um minuto é
+encerrada pelo servidor.
 O nome da sala é um UUID gerado no servidor. A entrada usa um JWT HS256 emitido pelo *auth gateway*
 da Epapo (o Jitsi próprio da rede, com `AUTH_TYPE=jwt`), e esse gateway **só assina depois** de o
 Énóis autorizar quem entra em qual chamada. Gravação, transmissão, chamada externa e transcrição vão
@@ -1652,9 +1695,10 @@ desligadas no próprio token.
 | `CallRoomAuthorization` | Porta do gateway: chamada pela sala e autorização de entrada |
 | `EpapoMeetingTokenIssuer` | Cliente do gateway da Epapo (`POST /auth/token`); não assina JWT |
 | `CallGatewayController` | Rotas internas do gateway (`/calls/rooms/{room}`, `/calls/{id}/gateway/entry/{userId}`) |
-| `CallExpiryWorker` | 1:1 sem resposta (40s → `MISSED`), grupo vazio (5 min → `FAILED`), abandono (30 min) |
-| `CallPersistenceAdapter` | Transições condicionais em `call_sessions`/`call_participants` (V240) |
-| `CallController` | Rotas `/calls/**` e `/{conversation,group}/{id}/calls` |
+| `CallExpiryWorker` | 1:1 sem resposta (40s → `MISSED`), sala de grupo vazia (1 min → `ENDED`), abandono (30 min) |
+| `CallPersistenceAdapter` | Transições condicionais em `call_sessions`/`call_participants` (V240, `topic_id` na V250) |
+| `TopicLookup` / `GroupTopicLookup` | Confere que o tópico é daquele grupo antes de abrir a sala |
+| `CallController` | Rotas `/calls/**`, `/{conversation,group}/{id}/calls` e `/groups/{id}/topics/{topicId}/calls` |
 | `CallReportService` / `CallReportController` | Denúncia da sala: quem entrou pode ser apontado; contexto em `call_reports` (V241) |
 
 Denúncia de chamada entra na moderação como alvo `CALL`, com a captura do momento (propósito

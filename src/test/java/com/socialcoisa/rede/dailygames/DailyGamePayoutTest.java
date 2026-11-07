@@ -50,11 +50,13 @@ class DailyGamePayoutTest {
     }
 
     @Test void wordPayoutRanksByAttemptsAndExcludesThoseWhoMissed() {
-		JdbcTemplate jdbc = jdbc("db/migration/V118__daily_word_games.sql");
-        Clock clock = Clock.fixed(T0, ZoneOffset.UTC);
+		JdbcTemplate jdbc = jdbc("db/migration/V118__daily_word_games.sql", "db/migration/V119__daily_maze_games.sql",
+			"db/migration/V247__daily_games_integrity_flag.sql");
+        MutableClock clock = new MutableClock(T0);
         DailyWordService service = new DailyWordService(jdbc, clock, org.mockito.Mockito.mock(com.socialcoisa.rede.coin.application.CoinService.class));
         jdbc.update("insert into daily_word_challenges values (?,?)", Date.valueOf(DAY), "AMORA");
         service.start("u1"); service.start("u2"); service.start("u3");
+        clock.advance(java.time.Duration.ofSeconds(30));
         service.guess("u1", "AMIGO", "request_0001", null);
         service.guess("u1", "AMORA", "request_0002", null);
         service.guess("u2", "AMORA", "request_0003", null);
@@ -66,12 +68,13 @@ class DailyGamePayoutTest {
     }
 
     @Test void mazePayoutRanksByTimeThenMovesAndExcludesTheStillLost() {
-		JdbcTemplate jdbc = jdbc("db/migration/V119__daily_maze_games.sql");
+		JdbcTemplate jdbc = jdbc("db/migration/V118__daily_word_games.sql", "db/migration/V119__daily_maze_games.sql",
+			"db/migration/V247__daily_games_integrity_flag.sql");
         jdbc.update("insert into daily_maze_challenges values (?,12345)", Date.valueOf(DAY));
-        jdbc.update("insert into daily_maze_sessions values (?,?,?,4,?,?)", Date.valueOf(DAY), "u1", 63, at(0), at(30));
-        jdbc.update("insert into daily_maze_sessions values (?,?,?,6,?,?)", Date.valueOf(DAY), "u2", 63, at(0), at(30));
-        jdbc.update("insert into daily_maze_sessions values (?,?,?,2,?,null)", Date.valueOf(DAY), "u3", 10, at(0));
-        assertEquals(List.of("u1", "u2"), new DailyMazeService(jdbc, Clock.fixed(T0, ZoneOffset.UTC), org.mockito.Mockito.mock(com.socialcoisa.rede.coin.application.CoinService.class)).payoutOrder(DAY));
+        jdbc.update("insert into daily_maze_sessions (challenge_date,user_id,position,moves,started_at,completed_at) values (?,?,?,4,?,?)", Date.valueOf(DAY), "u1", 63, at(0), at(30));
+        jdbc.update("insert into daily_maze_sessions (challenge_date,user_id,position,moves,started_at,completed_at) values (?,?,?,6,?,?)", Date.valueOf(DAY), "u2", 63, at(0), at(30));
+        jdbc.update("insert into daily_maze_sessions (challenge_date,user_id,position,moves,started_at,completed_at) values (?,?,?,2,?,null)", Date.valueOf(DAY), "u3", 10, at(0));
+        assertEquals(List.of("u1", "u2"), new DailyMazeService(jdbc, Clock.fixed(T0, ZoneOffset.UTC), org.mockito.Mockito.mock(com.socialcoisa.rede.coin.application.CoinService.class), new com.socialcoisa.rede.shared.security.ActionThrottle()).payoutOrder(DAY));
     }
 
     @Test void blocksPayoutRanksByScoreThenTimeAndExcludesNonWinners() {

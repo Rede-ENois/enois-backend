@@ -226,7 +226,7 @@ class IntelligentCacheTests {
 		assertThat(manager.getCacheNames()).contains(CacheConfig.PUBLIC_PROFILES, CacheConfig.PUBLIC_RANKING,
 			CacheConfig.COMMUNITIES, CacheConfig.EVENTS, CacheConfig.JOBS, CacheConfig.COMMUNITY_STATS,
 			CacheConfig.EXTERNAL_JOBS, CacheConfig.PAGE_PREVIEW_CARDS, CacheConfig.GIF_SEARCH,
-			CacheConfig.GITHUB_REPOSITORIES, CacheConfig.GITHUB_README);
+			CacheConfig.GITHUB_REPOSITORIES, CacheConfig.GITHUB_README, CacheConfig.LINK_PREVIEWS);
 
 		CaffeineCache eventsCache = (CaffeineCache) manager.getCache(CacheConfig.EVENTS);
 		assertThat(ttlOf(eventsCache)).isEqualTo(CacheProperties.defaultDynamicTtl());

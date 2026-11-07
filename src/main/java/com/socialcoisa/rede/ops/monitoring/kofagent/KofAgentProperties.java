@@ -16,18 +16,24 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param apiToken bot token, only from {@code KOF_AGENT_API_TOKEN} (never in code or logs)
  * @param chatId numeric channel id ({@code -100...}), never the invite link
  * @param environment environment key (prd, qa, hml, sandbox, dev); shown on every message
- * @param levels log/exception severities listed in the bulletin; lifecycle, health, audit and
- *        application-state events are always listed, plain successful requests never are (only counted)
- * @param batchMaxEvents distinct entries (after grouping repeats) per bulletin; the rest is counted
- * @param flushInterval the bulletin cadence: everything collected in this window goes out together
+ * @param levels log/exception severities collected at all (they appear in the hourly digest)
+ * @param notifyLevels severities that raise an immediate alert the first time a kind of failure shows
+ *        up; repeats of the same kind stay quiet and are counted in the digest
+ * @param batchMaxEvents distinct entries (after grouping repeats) per alert message; the rest is counted
+ * @param flushInterval how long new alerts are collected before going out together
+ * @param incidentQuiet a kind of failure that has not happened for this long is announced again when it
+ *        comes back
+ * @param digestInterval cadence of the silent digest (aligned to the clock in {@link #zone}); a period
+ *        with nothing to report sends nothing
+ * @param latency when the share of slow requests is high enough to raise an alert
  * @param queueCapacity bounded in-memory queue between the producers and the dispatcher
  * @param spoolDir where critical messages wait on disk until Telegram confirms them
- * @param slowRequest successful requests slower than this are reported as WARN
+ * @param slowRequest successful requests slower than this count as slow (digest and latency alert)
  */
 @ConfigurationProperties(prefix = "rede.kof-agent")
 public record KofAgentProperties(boolean enabled, String apiToken, String chatId, String apiBaseUrl,
-		String environment, String serviceName, Set<Severity> levels, int batchMaxEvents, Duration flushInterval,
-		Retry retry,
+		String environment, String serviceName, Set<Severity> levels, Set<Severity> notifyLevels, int batchMaxEvents,
+		Duration flushInterval, Duration incidentQuiet, Duration digestInterval, Latency latency, Retry retry,
 		Rate rate, Circuit circuit, int queueCapacity, String spoolDir, int spoolMaxFiles, String zone,
 		Duration requestTimeout, Duration slowRequest, Duration shutdownTimeout) {
 
@@ -39,8 +45,13 @@ public record KofAgentProperties(boolean enabled, String apiToken, String chatId
 		serviceName = blank(serviceName) ? "API Énóis" : serviceName.trim();
 		levels = levels == null || levels.isEmpty() ? EnumSet.of(Severity.WARN, Severity.ERROR, Severity.FATAL)
 			: EnumSet.copyOf(levels);
+		notifyLevels = notifyLevels == null || notifyLevels.isEmpty() ? EnumSet.of(Severity.ERROR, Severity.FATAL)
+			: EnumSet.copyOf(notifyLevels);
 		batchMaxEvents = clamp(batchMaxEvents, 1, 500, 40);
 		flushInterval = positive(flushInterval, Duration.ofSeconds(10));
+		incidentQuiet = positive(incidentQuiet, Duration.ofMinutes(30));
+		digestInterval = positive(digestInterval, Duration.ofHours(1));
+		latency = latency == null ? new Latency(null, 0, 0) : latency;
 		retry = retry == null ? new Retry(0, null, null) : retry;
 		rate = rate == null ? new Rate(0, 0) : rate;
 		circuit = circuit == null ? new Circuit(0, null, null) : circuit;
@@ -63,7 +74,21 @@ public record KofAgentProperties(boolean enabled, String apiToken, String chatId
 	public String toString() {
 		return "KofAgentProperties[enabled=" + enabled + ", apiToken=" + (apiToken.isEmpty() ? "<unset>" : "<redacted>")
 			+ ", chatId=" + (chatId.isEmpty() ? "<unset>" : "<set>") + ", environment=" + environment + ", levels="
-			+ levels + ", flushInterval=" + flushInterval + "]";
+			+ levels + ", notifyLevels=" + notifyLevels + ", flushInterval=" + flushInterval + ", digestInterval="
+			+ digestInterval + "]";
+	}
+
+	/**
+	 * The API counts as slow when, inside one {@code window}, at least {@code minRequests} requests were
+	 * served and at least {@code slowRatio} of them took longer than {@link #slowRequest}. Entering and
+	 * leaving that state are the only two latency alerts.
+	 */
+	public record Latency(Duration window, int minRequests, double slowRatio) {
+		public Latency {
+			window = positive(window, Duration.ofMinutes(5));
+			minRequests = clamp(minRequests, 1, 1_000_000, 100);
+			slowRatio = slowRatio <= 0 || slowRatio > 1 ? 0.10 : slowRatio;
+		}
 	}
 
 	/** Exponential backoff between attempts of the same batch. */

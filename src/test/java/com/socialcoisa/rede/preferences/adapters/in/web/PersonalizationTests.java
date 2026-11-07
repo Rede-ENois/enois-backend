@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.preferences.adapters.in.web;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -216,6 +217,98 @@ class PersonalizationTests {
 			.andExpect(jsonPath("$.batataMode").value(false));
 	}
 
+	/**
+	 * "Ocultar reposts" segue o mesmo padrão dos modos de apresentação: default desligado,
+	 * atualização parcial (ausência do campo = não altera) e preservação nas gravações de tema.
+	 */
+	@Test
+	void hideRepostsDefaultsOffPersistsOnPartialUpdatesAndSurvivesThemeWrites() throws Exception {
+		var session = auth.authenticate("pers_hidereposts");
+
+		mockMvc.perform(get("/me/preferences").header("X-Session-Token", session.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.hideReposts").value(false));
+
+		mockMvc.perform(put("/me/preferences")
+				.header("X-Session-Token", session.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of(
+					"hideReposts", true))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.hideReposts").value(true));
+
+		// Atualização parcial que não fala de hideReposts preserva a escolha.
+		mockMvc.perform(put("/me/preferences")
+				.header("X-Session-Token", session.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of(
+					"likedTopics", java.util.List.of("TECNOLOGIA")))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.hideReposts").value(true));
+
+		// Trocar o tema grava a mesma linha: a escolha não pode se perder nisso.
+		mockMvc.perform(put("/me/theme").header("X-Session-Token", session.token())
+				.contentType(MediaType.APPLICATION_JSON).content("{\"theme\":\"terminal\"}"))
+			.andExpect(status().isNoContent());
+
+		mockMvc.perform(get("/me/preferences").header("X-Session-Token", session.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.hideReposts").value(true));
+
+		// Desligar volta ao padrão.
+		mockMvc.perform(put("/me/preferences")
+				.header("X-Session-Token", session.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of(
+					"hideReposts", false))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.hideReposts").value(false));
+	}
+
+	/**
+	 * As três chaves booleanas moram no mesmo construtor: um round-trip de "ocultar reposts" não
+	 * pode trocar a ordem e mexer no lite/BATATA (o compilador não pega).
+	 */
+	@Test
+	void hideRepostsRoundTripDoesNotDisturbThePresentationModes() throws Exception {
+		var session = auth.authenticate("pers_hidereposts_roundtrip");
+
+		mockMvc.perform(put("/me/preferences")
+				.header("X-Session-Token", session.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of(
+					"liteMode", true, "batataMode", true))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.liteMode").value(true))
+			.andExpect(jsonPath("$.batataMode").value(true));
+
+		mockMvc.perform(put("/me/preferences")
+				.header("X-Session-Token", session.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of("hideReposts", true))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.hideReposts").value(true))
+			.andExpect(jsonPath("$.liteMode").value(true))
+			.andExpect(jsonPath("$.batataMode").value(true));
+
+		mockMvc.perform(get("/me/preferences").header("X-Session-Token", session.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.hideReposts").value(true))
+			.andExpect(jsonPath("$.liteMode").value(true))
+			.andExpect(jsonPath("$.batataMode").value(true));
+
+		// Desligar os modos de apresentação não desliga a preferência de feed.
+		mockMvc.perform(put("/me/preferences")
+				.header("X-Session-Token", session.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of(
+					"liteMode", false, "batataMode", false))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.hideReposts").value(true))
+			.andExpect(jsonPath("$.liteMode").value(false))
+			.andExpect(jsonPath("$.batataMode").value(false));
+	}
+
 	@Test
 	void themeIsPreservedWhenPersonalizationChanges() throws Exception {
 		var session = auth.authenticate("pers_theme");
@@ -235,5 +328,41 @@ class PersonalizationTests {
 		mockMvc.perform(get("/me/theme").header("X-Session-Token", session.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.theme").value("terminal"));
+	}
+
+	@Test
+	void whatsNewPreferencesCanBeDismissedAndToggled() throws Exception {
+		var session = auth.authenticate("pers_whats_new");
+
+		// Defaults: whatsNewEnabled = true, whatsNewLastSeen = null
+		mockMvc.perform(get("/me/preferences").header("X-Session-Token", session.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.whatsNewEnabled").value(true))
+			.andExpect(jsonPath("$.whatsNewLastSeen").doesNotExist());
+
+		// Usuario fecha a modal de uma versao especifica
+		mockMvc.perform(post("/me/preferences/whats-new/dismissed")
+				.header("X-Session-Token", session.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"version\":\"2026.11.05\"}"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.whatsNewLastSeen").value("2026.11.05"))
+			.andExpect(jsonPath("$.whatsNewEnabled").value(true));
+
+		// Desativar avisos automaticos nas configuracoes do perfil
+		mockMvc.perform(put("/me/preferences")
+				.header("X-Session-Token", session.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of(
+					"whatsNewEnabled", false))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.whatsNewEnabled").value(false))
+			.andExpect(jsonPath("$.whatsNewLastSeen").value("2026.11.05"));
+
+		// Uma nova leitura preserva tudo na conta
+		mockMvc.perform(get("/me/preferences").header("X-Session-Token", session.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.whatsNewEnabled").value(false))
+			.andExpect(jsonPath("$.whatsNewLastSeen").value("2026.11.05"));
 	}
 }

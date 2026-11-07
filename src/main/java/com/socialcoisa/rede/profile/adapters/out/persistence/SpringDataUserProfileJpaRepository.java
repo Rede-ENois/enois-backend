@@ -17,6 +17,18 @@ interface SpringDataUserProfileJpaRepository extends JpaRepository<UserProfileJp
 
 	boolean existsByEmail(String email);
 
+	@org.springframework.data.jpa.repository.Modifying
+	@org.springframework.data.jpa.repository.Query("""
+		update UserProfileJpaEntity u
+		set u.nameTheme = :theme, u.nameFont = :font, u.nameColor = :color, u.updatedAt = :at
+		where u.id = :id
+		""")
+	int updateNameStyle(@org.springframework.data.repository.query.Param("id") String id,
+		@org.springframework.data.repository.query.Param("theme") String theme,
+		@org.springframework.data.repository.query.Param("font") String font,
+		@org.springframework.data.repository.query.Param("color") String color,
+		@org.springframework.data.repository.query.Param("at") java.time.Instant at);
+
 	List<UserProfileJpaEntity> findByOrderByReputationDesc();
 
 	/**

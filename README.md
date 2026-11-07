@@ -77,7 +77,7 @@ This starts with the `dev` profile using an **H2 in-memory database**. Swagger U
 |---------|-------------|------------------------------------------|
 | `dev`   | H2 (memory) | `SPRING_PROFILES_ACTIVE=dev`             |
 | `hml`   | MariaDB     | `SPRING_PROFILES_ACTIVE=hml`             |
-| `prd`   | MySQL       | `SPRING_PROFILES_ACTIVE=prd`             |
+| `prd`   | MariaDB     | `SPRING_PROFILES_ACTIVE=prd`             |
 
 There is no default profile: the packaged app refuses to boot without `SPRING_PROFILES_ACTIVE`.
 `./mvnw spring-boot:run` runs as `dev`; pick another with `-Dspring-boot.run.profiles=<profile>`.
@@ -97,16 +97,20 @@ docker run -d --name rede-mariadb \
 ./mvnw spring-boot:run -Dspring-boot.run.profiles=hml
 ```
 
-### prd (MySQL 8+)
+### prd (MariaDB 11.4)
+
+Production runs MariaDB, reached through MySQL Connector/J (`jdbc:mysql://`) with Hibernate's
+`MariaDBDialect`. The dialect must stay MariaDB's: `MySQLDialect` renders pessimistic locks as
+`for update of <alias>`, which MariaDB rejects (`PessimisticLockSqlTests` guards it).
 
 ```bash
-# Start MySQL
-docker run -d --name rede-mysql \
-  -e MYSQL_ROOT_PASSWORD=root \
-  -e MYSQL_DATABASE=rede_prd \
-  -e MYSQL_USER=rede_prd \
-  -e MYSQL_PASSWORD=rede_prd \
-  -p 3307:3306 mysql:8
+# Start MariaDB
+docker run -d --name rede-mariadb-prd \
+  -e MARIADB_ROOT_PASSWORD=root \
+  -e MARIADB_DATABASE=rede_prd \
+  -e MARIADB_USER=rede_prd \
+  -e MARIADB_PASSWORD=rede_prd \
+  -p 3306:3306 mariadb:11.4
 
 # Run with prd profile
 ./mvnw spring-boot:run -Dspring-boot.run.profiles=prd
@@ -406,7 +410,8 @@ backend expõe fica público em `https://enois.ia.br/api/...` — inclusive `/ap
 | `SPRINGDOC_ENABLED` | não | padrão `false`. `true` liga `/api/openapi.json` + Swagger UI (use só em dev/VPN) |
 | `MANAGEMENT_ENDPOINTS` | não | padrão `health`. Para métricas use `health,prometheus` **e bloqueie `/api/actuator/*` no gateway** |
 | `SUPPORT_EMAIL` | não | e-mail do time que recebe os pedidos de suporte. Sem ele o pedido ainda fica registrado e visível em `/admin/support` |
-| `GITHUB_SUGGESTIONS_REPO_BACKEND` / `GITHUB_SUGGESTIONS_REPO_FRONTEND` / `GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM` | p/ sugestões | repositório (`dono/nome`) que recebe a issue pública de cada destino depois da aprovação. Sem ele o destino fica desligado (aprovação responde 503). O token é o mesmo do suporte (painel `/admin/support/github`); ver `docs/MODULES.md` 22.1 |
+| `SUGGESTIONS_GITHUB_TOKEN` | p/ sugestões | token próprio das sugestões (fine-grained, Issues: write só nos repositórios públicos de destino), separado do token do suporte. Sem ele a aprovação responde 503 `SUGGESTIONS_GITHUB_TOKEN_MISSING`; ver `docs/MODULES.md` 22.1 |
+| `GITHUB_SUGGESTIONS_REPO_BACKEND` / `GITHUB_SUGGESTIONS_REPO_FRONTEND` / `GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM` | p/ sugestões | repositório (`dono/nome`) que recebe a issue pública de cada destino depois da aprovação, por ambiente (a QA aponta para um sandbox). Sem ele o destino fica desligado (aprovação responde 503); ver `docs/MODULES.md` 22.1 |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | p/ push no celular | par de chaves do Web Push (ver passo 7 abaixo). Sem elas o push fica desligado e só as notificações dentro do app funcionam |
 | `REDE_SECURITY_ENCRYPTION_KEY` | **sim** (fora do `dev`) | chave de 32 bytes em base64 (`openssl rand -base64 32`) que cifra os segredos TOTP em repouso (AES-GCM) e assina o desafio do cadastro. **Fora do perfil `dev` o pod não sobe sem ela** (o mesmo valor em todas as réplicas) |
 | `VAPID_SUBJECT` | não | contato do emissor VAPID, no formato `mailto:contato@dominio` (padrão `mailto:suporte@enois.ia.br`) |
@@ -552,7 +557,8 @@ delete from flyway_schema_history where version = '<versao que falhou>';    # ou
   dígitos e `POST /auth/2fa/email/confirm` ativa. Desativar exige a senha. No login, quem tem 2FA recebe `202`
   com `{twoFactorRequired, challengeId, method}` em vez da sessão e conclui em `POST /auth/2fa/verify`
   (`POST /auth/2fa/resend` reenvia o código por e-mail). O desafio vale 10 minutos, é de uso único e morre
-  depois de 5 tentativas; um código de recuperação também conclui o login. No app: `/seguranca`, alcançável
+  depois de 5 tentativas; um código de recuperação também conclui o login, inclusive quando o segredo TOTP
+  ficou ilegível (`409 TWO_FACTOR_SECRET_UNREADABLE` para qualquer outro código). No app: `/seguranca`, alcançável
   pelo menu da conta e pelo botão "Verificar identidade" no próprio perfil.
 - **Push no celular**: `GET /push/config` (público) informa se o push está ligado e devolve a chave pública
   VAPID; `POST /push/subscriptions` (autenticado) registra o dispositivo (`endpoint` + `keys.p256dh`/`keys.auth`)

@@ -149,13 +149,6 @@ class TwoFactorPersistenceAdapter implements TwoFactorRepository {
 	}
 
 	@Override
-	public List<String> findUsersWithActiveTotpSecret() {
-		return jdbc.queryForList(
-			"select user_id from user_two_factor_secrets where totp_secret_encrypted is not null",
-			String.class);
-	}
-
-	@Override
 	public void saveBackupCodes(String userId, List<String> codeHashes, Instant now) {
 		deleteBackupCodes(userId);
 		java.sql.Timestamp ts = java.sql.Timestamp.from(now);

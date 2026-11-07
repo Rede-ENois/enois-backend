@@ -34,9 +34,9 @@ class KofAgentLiveChannelTests {
 	void deliversATestBulletinToTheRealChannel() throws Exception {
 		String environment = System.getenv().getOrDefault("KOF_AGENT_ENVIRONMENT", "e2e");
 		KofAgentProperties properties = new KofAgentProperties(true, System.getenv("KOF_AGENT_API_TOKEN"),
-			System.getenv("KOF_AGENT_CHAT_ID"), null, environment, null, EnumSet.allOf(Severity.class), 40,
-			Duration.ofSeconds(1), null, null, null, 0, spool.toString(), 0, null, null, null,
-			Duration.ofSeconds(10));
+			System.getenv("KOF_AGENT_CHAT_ID"), null, environment, null, EnumSet.allOf(Severity.class),
+			EnumSet.allOf(Severity.class), 40, Duration.ofSeconds(1), null, null, null, null, null, null, 0,
+			spool.toString(), 0, null, null, null, Duration.ofSeconds(10));
 		TelegramBotTransport transport = new TelegramBotTransport(properties, new ObjectMapper());
 		KofAgentTransport.SendResult check = transport.verify();
 		assertThat(check.outcome()).as(String.valueOf(check.detail())).isEqualTo(KofAgentTransport.Outcome.SENT);

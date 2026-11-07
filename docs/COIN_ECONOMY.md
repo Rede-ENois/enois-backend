@@ -89,6 +89,13 @@ faíscas = base × 10.000 / cotaçãoAtualEmMicros     (mínimo 1 milésimo, pis
   e a Énóis não é um mercado de atenção. O que se recompensa é ajudar. As entradas antigas
   (`reacoes:*`) continuam no ledger como histórico.
 
+### Jogos diários
+
+Prizes of the daily games (10/5/3/1 by rank) go only to accounts with a verified identity that are
+past the new-account window (7 days) when the challenge day starts, the same window as the accepted
+answer reward below and the sending cap. Runs flagged as faster than a person can play are left out
+of the ranking. Details in [`MODULES.md`](MODULES.md#25-dailygames-jogos-diários).
+
 ### Ajuda: resposta aceita numa dúvida
 
 A recompensa vai para quem **ajudou**, não para o que ficou popular. Quando quem perguntou aceita
@@ -123,6 +130,14 @@ pessoa agiu, e a quarentena é revisão posterior, não punição; quem tem san�
 - **Barato e à prova de falha:** `CoinService.recordPresence(userId)` roda depois do commit da ação,
   em transação própria, e nunca lança (só registra um aviso sem dado pessoal). Se a pessoa já foi
   contada hoje, é uma leitura por chave primária e nada mais.
+- **On its own executor:** after the commit the presence is handed to `presenceExecutor` (one
+  thread, bounded queue; a full queue drops it with a `presence_record_dropped` warning). Running it
+  in the action's `afterCommit` took a second pooled connection while the request still held its own
+  (see [`CONCURRENCY.md`](CONCURRENCY.md), rule 7).
+- **Movements lock the account row:** each entry reads the balance with `select ... for update`
+  (`CoinLedgerRepository#lockAccount`) before checking and writing it. The treasury pays every
+  reward, so concurrent rewards used to fail the optimistic version check (`COIN_CONCURRENCY`, or a
+  silently lost reward when the caller swallowed it); now they queue on the row.
 - **Sequência guardada** em `user_streaks` (V212): `current_days`, `longest_days`, `last_day` (último
   dia coberto, ativo ou congelado) e `last_frozen_day`.
 - **Congelamento semanal:** 1 por semana ISO (segunda a domingo), sem acumular. Se faltou

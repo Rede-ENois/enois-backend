@@ -1,13 +1,15 @@
 package com.socialcoisa.rede.media.adapters.out.classification;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatIOException;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.FloatBuffer;
+import java.util.ArrayList;
 import java.util.List;
 
 import javax.imageio.IIOImage;
@@ -23,29 +25,151 @@ import javax.imageio.stream.ImageOutputStream;
 
 import org.junit.jupiter.api.Test;
 
+import com.socialcoisa.rede.media.application.port.out.ImageContentClassifier;
+
 class OnnxImageContentClassifierTests {
 
 	@Test
-	void acceptsAnimatedGifsWithinTheBudgetAndRejectsEveryOtherAnimation() throws Exception {
-		OnnxImageContentClassifier.requireSupportedFrames("jpeg", 1, 320, 320);
-		OnnxImageContentClassifier.requireSupportedFrames("gif", 51, 320, 320);
+	void scoresEveryDistinctFrameAndKeepsTheMostExplicitOne() throws Exception {
+		// 51 frames: only frame 3 is red. Evenly spaced sampling (0, 7, 14, ...) never looked at it.
+		GifFrame[] frames = new GifFrame[51];
+		for (int i = 0; i < frames.length; i++) {
+			frames[i] = i == 3 ? new GifFrame(solid(8, 8, Color.RED), 0, 0, "restoreToPrevious")
+				: new GifFrame(solid(8, 8, Color.BLUE), 0, 0, "doNotDispose");
+		}
+		List<Float> scoredInputs = new ArrayList<>();
 
-		assertThatIOException().isThrownBy(() -> OnnxImageContentClassifier.requireSupportedFrames("tiff", 2, 8, 8))
-				.withMessageContaining("animadas");
-		assertThatIOException().isThrownBy(() -> OnnxImageContentClassifier
-				.requireSupportedFrames("gif", OnnxImageContentClassifier.MAX_ANIMATION_FRAMES + 1, 8, 8))
-				.withMessageContaining("animadas");
-		assertThatIOException().isThrownBy(() -> OnnxImageContentClassifier.requireSupportedFrames("gif", 500, 4000, 4000))
-				.withMessageContaining("animadas");
+		ImageContentClassifier.Assessment assessment = assess(gif(8, 8, frames), input -> {
+			scoredInputs.add(input.get(0));
+			return redScore(input);
+		});
+
+		assertThat(assessment.score()).isEqualTo(1.0);
+		// Identical canvases have the same model input and are scored once: one blue, one red.
+		assertThat(scoredInputs).hasSize(2);
+		BufferedImage flagged = ImageIO.read(new ByteArrayInputStream(assessment.reviewFrame()));
+		assertThat(rgb(flagged, 4, 4)).isEqualTo(Color.RED.getRGB() & 0xFFFFFF);
 	}
 
 	@Test
-	void samplesFramesEvenlyKeepingTheFirstAndTheLast() {
-		assertThat(OnnxImageContentClassifier.sampledFrameIndexes(1, 8)).containsExactly(0);
-		assertThat(OnnxImageContentClassifier.sampledFrameIndexes(3, 8)).containsExactly(0, 1, 2);
-		assertThat(OnnxImageContentClassifier.sampledFrameIndexes(51, 8)).containsExactly(0, 7, 14, 21, 28, 35, 42, 50);
-		assertThat(OnnxImageContentClassifier.sampledFrameIndexes(1000, 8)).hasSize(8).doesNotHaveDuplicates()
-				.startsWith(0).endsWith(999);
+	void scoresAStillImageOnceWithoutAReviewFrame() throws Exception {
+		ByteArrayOutputStream png = new ByteArrayOutputStream();
+		ImageIO.write(solid(8, 8, Color.RED), "png", png);
+
+		ImageContentClassifier.Assessment assessment = assess(png.toByteArray(),
+			OnnxImageContentClassifierTests::redScore);
+
+		assertThat(assessment.score()).isEqualTo(1.0);
+		assertThat(assessment.reviewFrame()).isNull();
+	}
+
+	@Test
+	void rejectsLargeLaterFramesBehindATinyFirstFrameBeforeDecodingAnything() throws Exception {
+		int[][] frames = new int[31][];
+		frames[0] = new int[] { 0, 0, 1, 1 };
+		for (int i = 1; i < frames.length; i++) {
+			frames[i] = new int[] { 0, 0, 4000, 4000 };
+		}
+		byte[] gif = headerOnlyGif(1, 1, frames);
+		int[] scored = { 0 };
+
+		assertThatThrownBy(() -> assess(gif, input -> {
+			scored[0]++;
+			return 0.0;
+		})).isInstanceOf(ImageContentClassifier.TooLargeToVerifyException.class);
+		assertThat(scored[0]).isZero();
+		// The budget is enforced from the frame headers alone: the pixel data here is not even valid.
+		assertThatThrownBy(() -> inspect(gif)).isInstanceOf(ImageContentClassifier.TooLargeToVerifyException.class);
+	}
+
+	@Test
+	void rejectsTooManyFramesAndFramesPlacedOutsideTheBudget() throws Exception {
+		int[][] tooMany = new int[GifAnimation.MAX_FRAMES + 1][];
+		java.util.Arrays.fill(tooMany, new int[] { 0, 0, 1, 1 });
+		assertThatThrownBy(() -> inspect(headerOnlyGif(1, 1, tooMany)))
+			.isInstanceOf(ImageContentClassifier.TooLargeToVerifyException.class);
+
+		// A 1x1 frame far from the origin grows the canvas a viewer may show beyond the pixel cap.
+		assertThatThrownBy(() -> inspect(headerOnlyGif(1, 1, new int[] { 0, 0, 1, 1 },
+			new int[] { 65_000, 65_000, 1, 1 }))).isInstanceOf(ImageContentClassifier.TooLargeToVerifyException.class);
+
+		assertThatCode(() -> inspect(headerOnlyGif(1, 1, new int[] { 0, 0, 1, 1 }, new int[] { 0, 0, 1, 1 })))
+			.doesNotThrowAnyException();
+	}
+
+	@Test
+	void refusesAnimatedFormatsWhoseReaderOnlyExposesTheStillImage() {
+		byte[] apng = { (byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n', 0, 0, 0, 13, 'I', 'H', 'D', 'R', 0, 0, 0, 1, 0,
+			0, 0, 1, 8, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 'a', 'c', 'T', 'L', 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0 };
+		byte[] animatedWebp = { 'R', 'I', 'F', 'F', 30, 0, 0, 0, 'W', 'E', 'B', 'P', 'V', 'P', '8', 'X', 10, 0, 0, 0,
+			0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+		byte[] avifSequence = { 0, 0, 0, 24, 'f', 't', 'y', 'p', 'a', 'v', 'i', 'f', 0, 0, 0, 0, 'a', 'v', 'i', 'f',
+			'a', 'v', 'i', 's' };
+		byte[] stillWebp = animatedWebp.clone();
+		stillWebp[20] = 0;
+
+		assertThat(AnimatedContainers.isAnimated(apng)).isTrue();
+		assertThat(AnimatedContainers.isAnimated(animatedWebp)).isTrue();
+		assertThat(AnimatedContainers.isAnimated(avifSequence)).isTrue();
+		assertThat(AnimatedContainers.isAnimated(stillWebp)).isFalse();
+	}
+
+	private static double redScore(FloatBuffer input) {
+		// First pixel's blue channel minus the training mean: negative only when there is no blue.
+		return input.get(0) < 0 ? 1.0 : 0.0;
+	}
+
+	private static ImageContentClassifier.Assessment assess(byte[] image,
+			OnnxImageContentClassifier.FrameScorer scorer) throws Exception {
+		try (ImageInputStream input = ImageIO.createImageInputStream(new ByteArrayInputStream(image))) {
+			ImageReader reader = ImageIO.getImageReaders(input).next();
+			try {
+				reader.setInput(input, false, false);
+				return OnnxImageContentClassifier.assessFrames(reader, reader.getNumImages(true), scorer);
+			}
+			finally {
+				reader.dispose();
+			}
+		}
+	}
+
+	private static GifAnimation inspect(byte[] gif) throws Exception {
+		try (ImageInputStream input = ImageIO.createImageInputStream(new ByteArrayInputStream(gif))) {
+			ImageReader reader = ImageIO.getImageReadersByFormatName("gif").next();
+			try {
+				reader.setInput(input, false, false);
+				return GifAnimation.inspect(reader, reader.getNumImages(true));
+			}
+			finally {
+				reader.dispose();
+			}
+		}
+	}
+
+	/**
+	 * A structurally valid GIF whose frame descriptors declare {left, top, width, height} while each
+	 * frame carries only a few bytes of image data: enough to be counted and inspected, never decoded.
+	 */
+	private static byte[] headerOnlyGif(int screenWidth, int screenHeight, int[]... frames) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		out.writeBytes("GIF89a".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+		littleEndian(out, screenWidth);
+		littleEndian(out, screenHeight);
+		out.writeBytes(new byte[] { (byte) 0x80, 0, 0, 0, 0, 0, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF });
+		for (int[] frame : frames) {
+			out.write(0x2C);
+			for (int value : frame) {
+				littleEndian(out, value);
+			}
+			out.writeBytes(new byte[] { 0, 2, 2, 0x44, 0x01, 0 });
+		}
+		out.write(0x3B);
+		return out.toByteArray();
+	}
+
+	private static void littleEndian(ByteArrayOutputStream out, int value) {
+		out.write(value & 0xFF);
+		out.write((value >>> 8) & 0xFF);
 	}
 
 	@Test
@@ -85,7 +209,10 @@ class OnnxImageContentClassifierTests {
 			ImageReader reader = ImageIO.getImageReadersByFormatName("gif").next();
 			try {
 				reader.setInput(input, false, false);
-				return OnnxImageContentClassifier.compositeGifFrames(reader, reader.getNumImages(true));
+				List<BufferedImage> frames = new ArrayList<>();
+				GifAnimation.inspect(reader, reader.getNumImages(true))
+					.replay(canvas -> frames.add(GifAnimation.copyOf(canvas)));
+				return frames;
 			}
 			finally {
 				reader.dispose();

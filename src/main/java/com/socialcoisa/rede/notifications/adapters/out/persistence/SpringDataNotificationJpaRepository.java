@@ -39,12 +39,27 @@ interface SpringDataNotificationJpaRepository extends JpaRepository<Notification
 		+ " GROUP BY n.kind, n.actorId, n.href")
 	List<Object[]> countUnreadByKindAndActor(@Param("userId") String userId, @Param("context") String context);
 
-	java.util.Optional<NotificationJpaEntity> findFirstByUserIdAndGroupKeyAndReadFalse(String userId, String groupKey);
+	/**
+	 * The unread notification of a group, row-locked until the transaction ends: joining it is a
+	 * read-then-write of its count, and two messages (or reactions) arriving together must not both
+	 * read the same count.
+	 */
+	@Query(value = "select * from notifications where user_id = :userId and group_key = :groupKey and is_read = false"
+		+ " order by created_at desc limit 1 for update", nativeQuery = true)
+	java.util.Optional<NotificationJpaEntity> lockUnreadGroup(@Param("userId") String userId,
+			@Param("groupKey") String groupKey);
 
+	/** Only the unread rows: rewriting (and locking) every notification the person ever had was the cost. */
 	@Modifying
-	@Query(value = "UPDATE NotificationJpaEntity n SET n.read = true WHERE n.userId = :userId")
+	@Query(value = "UPDATE NotificationJpaEntity n SET n.read = true WHERE n.userId = :userId AND n.read = false")
 	@Transactional
 	void markAllReadByUserId(@Param("userId") String userId);
+
+	/** One statement: does not rewrite the rest of the row (a grouped notification may be joined meanwhile). */
+	@Modifying
+	@Query("UPDATE NotificationJpaEntity n SET n.read = true WHERE n.id = :id AND n.read = false")
+	@Transactional
+	int markReadById(@Param("id") String id);
 
 	@Modifying
 	@Query(value = "UPDATE NotificationJpaEntity n SET n.read = true"

@@ -12,7 +12,9 @@ import org.springframework.stereotype.Repository;
 import com.socialcoisa.rede.feed.application.TrendingCursor;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.AuthorIdentity;
+import com.socialcoisa.rede.feed.domain.Counters;
 import com.socialcoisa.rede.feed.domain.Post;
+import com.socialcoisa.rede.feed.domain.PostCounter;
 import com.socialcoisa.rede.feed.domain.PostId;
 import com.socialcoisa.rede.feed.domain.PostStatus;
 import com.socialcoisa.rede.feed.domain.PostType;
@@ -235,5 +237,28 @@ class PostPersistenceAdapter implements PostRepository, SocialPostCountReader {
 	@Override
 	public void updateAcceptedAnswer(PostId id, String commentId, Instant resolvedAt) {
 		repository.updateAcceptedAnswer(id.value(), commentId, resolvedAt);
+	}
+
+	@Override
+	public Optional<PostStatus> lockForUpdate(PostId id) {
+		return repository.lockStatusForUpdate(id.value()).map(PostStatus::valueOf);
+	}
+
+	@Override
+	public void adjustCounter(PostId id, PostCounter counter, int delta) {
+		if (delta == 0) {
+			return;
+		}
+		repository.addToCounters(id.value(),
+			counter == PostCounter.REACTIONS ? delta : 0,
+			counter == PostCounter.COMMENTS ? delta : 0,
+			counter == PostCounter.SAVES ? delta : 0,
+			counter == PostCounter.SHARES ? delta : 0,
+			counter == PostCounter.REPOSTS ? delta : 0);
+	}
+
+	@Override
+	public Counters counters(PostId id) {
+		return repository.findCounters(id.value()).orElseGet(Counters::zero);
 	}
 }

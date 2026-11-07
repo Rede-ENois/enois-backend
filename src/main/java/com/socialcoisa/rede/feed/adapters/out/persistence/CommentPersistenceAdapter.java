@@ -34,17 +34,22 @@ class CommentPersistenceAdapter implements CommentRepository {
 	}
 
 	@Override
-	public void deleteById(String id) {
-		// Every comment deletion (author, ban cleanup) routes here, so a deleted accepted answer
-		// can never leave its question "resolved" pointing at nothing. Same transaction as the delete.
-		posts.clearAcceptedAnswers(List.of(id));
-		repository.deleteById(id);
+	public Optional<PostId> findPostIdOf(String commentId) {
+		return repository.findPostIdById(commentId).map(PostId::new);
+	}
+
+	@Override
+	public void delete(Comment comment) {
+		// Every comment deletion routes here, so a deleted accepted answer can never leave its
+		// question "resolved" pointing at nothing. Same transaction as the delete.
+		posts.clearAcceptedAnswer(comment.postId().value(), comment.id());
+		repository.deleteById(comment.id());
 	}
 
 	@Override
 	public void markDeleted(Comment comment) {
-		// Same invariant as deleteById: a removed accepted answer cannot keep its question resolved.
-		posts.clearAcceptedAnswers(List.of(comment.id()));
+		// Same invariant as delete: a removed accepted answer cannot keep its question resolved.
+		posts.clearAcceptedAnswer(comment.postId().value(), comment.id());
 		repository.save(CommentJpaEntity.fromDomain(comment.deleted()));
 	}
 

@@ -24,6 +24,20 @@ interface SpringDataSuggestionJpaRepository extends JpaRepository<SuggestionJpaE
 
 	long countByUserIdAndCreatedAtAfter(String userId, Instant since);
 
+	/** The row is only a handle: a session always has a {@code users} row (same lock as study pairs). */
+	@Query(value = "select id from users where id = :userId for update", nativeQuery = true)
+	List<String> lockUser(@Param("userId") String userId);
+
+	@Modifying(flushAutomatically = true, clearAutomatically = true)
+	@Query("""
+		update SuggestionJpaEntity s
+		set s.status = com.socialcoisa.rede.suggestions.domain.SuggestionStatus.PUBLISHED,
+			s.reviewedBy = :reviewedBy, s.reviewedAt = :at,
+			s.publishAttemptedAt = coalesce(s.publishAttemptedAt, :at)
+		where s.id = :id and s.status = com.socialcoisa.rede.suggestions.domain.SuggestionStatus.PENDING
+		""")
+	int claimForPublishing(@Param("id") String id, @Param("reviewedBy") String reviewedBy, @Param("at") Instant at);
+
 	@Modifying(flushAutomatically = true, clearAutomatically = true)
 	@Query("""
 		update SuggestionJpaEntity s

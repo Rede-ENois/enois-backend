@@ -88,6 +88,10 @@ alterar a escolha.
 | comments | INT DEFAULT 0 | Contador de comentários |
 | saves | INT DEFAULT 0 | Contador de salvos |
 | shares | INT DEFAULT 0 | Contador de compartilhamentos |
+| reposts | INT DEFAULT 0 | Repost counter |
+
+The counters are written on insert and then only by a relative SQL update
+(`PostRepository#adjustCounter`); saving a post never writes them. See [CONCURRENCY.md](CONCURRENCY.md).
 | status | VARCHAR(20) | ACTIVE, DELETED |
 | deleted_at | TIMESTAMP (nullable) | Data de deleção (soft delete) |
 | created_at | TIMESTAMP | |
@@ -635,3 +639,5 @@ As migrações estão em `src/main/resources/db/migration/` e seguem a numeraç�
 | V16 | Adiciona refresh_token em auth_sessions |
 | V217 | Cidade/UF estruturadas (`city`, `state`, `city_key`) em `communities`, `users` e `events`; `users.show_city` (padrão false). `city_key` é a cidade sem acento e minúscula, gravada pela aplicação (`shared/geo/CityState`) |
 | V226 | `users.garden_style`: equipped `GARDEN` item of the profile garden (null = default garden) |
+| V247 | `integrity_flag` (null or `TOO_FAST`) in `daily_word_sessions` and `daily_maze_sessions`: a flagged run stays out of the ranking and the prizes |
+| V249 | Indexes `coin_entries (kind, ref_id)` (reward idempotency lookups) and `game_events (kind, created_at)` ("jogados hoje") |

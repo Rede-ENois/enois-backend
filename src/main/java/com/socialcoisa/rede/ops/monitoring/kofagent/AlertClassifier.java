@@ -1,6 +1,5 @@
 package com.socialcoisa.rede.ops.monitoring.kofagent;
 
-import java.time.Duration;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Locale;
@@ -10,6 +9,7 @@ import java.util.regex.Pattern;
 import com.socialcoisa.rede.ops.monitoring.MonitoringEvent;
 import com.socialcoisa.rede.ops.monitoring.SensitiveDataRedactor;
 import com.socialcoisa.rede.ops.monitoring.kofagent.Alert.Category;
+import com.socialcoisa.rede.shared.web.ApiException;
 
 /**
  * Decides what a monitoring event means for the channel: final severity (FATAL is derived here),
@@ -17,6 +17,10 @@ import com.socialcoisa.rede.ops.monitoring.kofagent.Alert.Category;
  *
  * <p>FATAL = the JVM itself failing ({@link VirtualMachineError}), the database unreachable
  * (no connection could be obtained), a health component going DOWN, or a log with the FATAL marker.</p>
+ *
+ * <p>A 5xx the application raised on purpose (an {@link ApiException} without a cause, such as a feature
+ * not configured in this environment or a provider reported unavailable) is WARN, not ERROR: the code
+ * handled it and answered as designed, so it belongs in the digest, not in an alert.</p>
  */
 final class AlertClassifier {
 
@@ -26,12 +30,6 @@ final class AlertClassifier {
 	private static final Pattern NUMBER = Pattern.compile("\\b\\d+\\b");
 	private static final Pattern HEX_ID = Pattern.compile("(?i)\\b[0-9a-f]{8}(?:-?[0-9a-f]{4}){3}-?[0-9a-f]{12}\\b|\\b[0-9a-f]{16,}\\b");
 	private static final Pattern ID_SEGMENT = Pattern.compile("(?i)/(?:\\d+|[0-9a-f]{8}(?:-?[0-9a-f]{4}){3}-?[0-9a-f]{12}|[0-9a-f]{16,})(?=/|$)");
-
-	private final long slowRequestMs;
-
-	AlertClassifier(Duration slowRequest) {
-		this.slowRequestMs = slowRequest.toMillis();
-	}
 
 	Alert classify(MonitoringEvent event) {
 		Severity severity = Severity.of(event.level());
@@ -48,9 +46,7 @@ final class AlertClassifier {
 		else if (category == Category.DATABASE && isConnectionFailure(failure, message)) {
 			severity = Severity.FATAL;
 		}
-		boolean slow = "REQUEST".equals(type) && event.status() != null && event.status() < 400
-			&& event.durationMs() != null && event.durationMs() >= slowRequestMs;
-		if (slow && !severity.atLeast(Severity.WARN)) {
+		else if (severity == Severity.ERROR && isDeliberate(failure)) {
 			severity = Severity.WARN;
 		}
 
@@ -60,7 +56,7 @@ final class AlertClassifier {
 		String errorClass = errorClass(type, failure, message);
 		String origin = failure == null ? null : origin(failure);
 		String stack = failure == null ? null : stackSummary(failure);
-		String title = title(type, category, event.status(), message, slow);
+		String title = title(type, category, event.status(), message);
 		boolean critical = severity.atLeast(Severity.ERROR) || category == Category.LIFECYCLE
 			|| category == Category.HEALTH;
 		String fingerprint = String.join("|", severity.name(), category.name(), type, nz(route),
@@ -110,9 +106,9 @@ final class AlertClassifier {
 		return "EXCEPTION".equals(type) ? Category.EXCEPTION : Category.LOG;
 	}
 
-	private static String title(String type, Category category, Integer status, String message, boolean slow) {
+	private static String title(String type, Category category, Integer status, String message) {
 		return switch (type) {
-			case "REQUEST" -> slow ? "Requisição lenta" : "HTTP " + status;
+			case "REQUEST" -> "HTTP " + status;
 			case "EXCEPTION" -> "HTTP " + (status == null ? 500 : status);
 			case "LIFECYCLE" -> message.startsWith("app_started") ? "Serviço iniciado"
 				: message.startsWith("app_stopping") ? "Serviço encerrando" : "Ciclo de vida";
@@ -183,6 +179,11 @@ final class AlertClassifier {
 			}
 		}
 		return clip(SensitiveDataRedactor.redact(out.toString().trim()), MAX_STACK);
+	}
+
+	/** Raised by the application itself as its answer, not wrapping an unexpected failure. */
+	private static boolean isDeliberate(Throwable failure) {
+		return failure instanceof ApiException && failure.getCause() == null;
 	}
 
 	private static boolean isConnectionFailure(Throwable failure, String message) {

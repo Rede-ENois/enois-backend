@@ -20,6 +20,8 @@ import java.util.concurrent.Future;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -100,7 +102,7 @@ class SeasonalCosmeticsFlowTests {
 		// Só a loja de hoje: os trinta clássicos mais Saci, Halloween, Essenciais e Aparências, na estação.
 		mockMvc.perform(get("/loja"))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.length()").value(177))
+			.andExpect(jsonPath("$.length()").value(182))
 			.andExpect(jsonPath("$[?(@.collection == 'saci')]").isNotEmpty())
 			.andExpect(jsonPath("$[?(@.collection == 'halloween')]").isNotEmpty())
 			.andExpect(jsonPath("$[?(@.collection == 'essenciais')]").isNotEmpty())
@@ -284,6 +286,27 @@ class SeasonalCosmeticsFlowTests {
 		assertThatThrownBy(() -> cosmetics.buy(buyer.userId(), "moldura-carapuca"))
 			.hasFieldOrPropertyWithValue("code", "OUT_OF_SEASON");
 		assertThat(cosmetics.equip(buyer.userId(), "tema-saci").cardTheme()).isEqualTo("tema-saci");
+	}
+
+	@ParameterizedTest
+	@CsvSource({ "moldura-caixao, 357", "moldura-bruxa, 358", "moldura-lanterna, 359", "moldura-uivo, 360",
+		"moldura-lacraia, 361" })
+	void halloweenAnimatedFramesSellInSeasonAndEquip(String frame, int releaseOrder) throws Exception {
+		String item = "$[?(@.id == '" + frame + "')]";
+		mockMvc.perform(get("/loja"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath(item + ".kind").value("FRAME"))
+			.andExpect(jsonPath(item + ".collection").value("halloween"))
+			.andExpect(jsonPath(item + ".releaseOrder").value(releaseOrder))
+			.andExpect(jsonPath(item + ".priceMf").value(10_000))
+			.andExpect(jsonPath(item + ".purchasable").value(true))
+			.andExpect(jsonPath(item + ".available").value(true));
+		var buyer = wallet("hw_" + frame.substring("moldura-".length()));
+		buy(buyer, frame);
+		assertThat(balance(buyer)).isEqualTo(95_000);
+		mockMvc.perform(post("/loja/" + frame + "/equipar").header("X-Session-Token", buyer.token()))
+			.andExpect(status().isOk());
+		assertThat(me(buyer).get("avatarFrame").asText()).isEqualTo(frame);
 	}
 
 	@Test

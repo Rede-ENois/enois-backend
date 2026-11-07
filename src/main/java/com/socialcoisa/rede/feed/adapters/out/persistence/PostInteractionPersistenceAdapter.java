@@ -6,7 +6,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
 
 import com.socialcoisa.rede.feed.application.port.out.PostInteractionRepository;
@@ -48,15 +47,8 @@ class PostInteractionPersistenceAdapter implements PostInteractionRepository {
 			reactionRepository.flush();
 			replacing = true;
 		}
-		try {
-			reactionRepository.saveAndFlush(new ReactionJpaEntity(id, postId.value(), userId.value(), type, createdAt));
-			return replacing ? ReactionOutcome.REPLACED : ReactionOutcome.ADDED;
-		}
-		catch (DataIntegrityViolationException exception) {
-			// Corrida: outra requisicao ja gravou a reacao deste usuario; o total ja a contempla.
-			// Tratar como troca evita incrementar de novo.
-			return ReactionOutcome.REPLACED;
-		}
+		reactionRepository.saveAndFlush(new ReactionJpaEntity(id, postId.value(), userId.value(), type, createdAt));
+		return replacing ? ReactionOutcome.REPLACED : ReactionOutcome.ADDED;
 	}
 
 	@Override
@@ -126,13 +118,8 @@ class PostInteractionPersistenceAdapter implements PostInteractionRepository {
 		if (savedPostRepository.existsByPostIdAndUserId(postId.value(), userId.value())) {
 			return false;
 		}
-		try {
-			savedPostRepository.saveAndFlush(new SavedPostJpaEntity(id, postId.value(), userId.value(), createdAt));
-			return true;
-		}
-		catch (DataIntegrityViolationException exception) {
-			return false;
-		}
+		savedPostRepository.saveAndFlush(new SavedPostJpaEntity(id, postId.value(), userId.value(), createdAt));
+		return true;
 	}
 
 	@Override
@@ -150,44 +137,29 @@ class PostInteractionPersistenceAdapter implements PostInteractionRepository {
 		if (postShareRepository.existsByPostIdAndUserId(postId.value(), userId.value())) {
 			return false;
 		}
-		try {
-			postShareRepository.saveAndFlush(new PostShareJpaEntity(id, postId.value(), userId.value(), createdAt));
-			return true;
-		}
-		catch (DataIntegrityViolationException exception) {
-			return false;
-		}
+		postShareRepository.saveAndFlush(new PostShareJpaEntity(id, postId.value(), userId.value(), createdAt));
+		return true;
 	}
 
 	@Override
 	public boolean addCommentReaction(String id, String commentId, UserId userId, ReactionType type, Instant createdAt) {
+		// No row lock here (a comment has no counter), so a double tap runs these statements
+		// concurrently. Both writes report what they did instead of throwing: catching a failed
+		// insert left the transaction rollback-only and the request ended in a 500 anyway.
 		var existing = commentReactionRepository.findByCommentIdAndUserId(commentId, userId.value());
 		if (existing.isPresent()) {
-			var old = existing.get();
-			if (old.getReactionType() == type) {
-				commentReactionRepository.delete(old);
+			commentReactionRepository.deleteRowById(existing.get().getId());
+			if (existing.get().getReactionType() == type) {
 				return false;
 			}
-			commentReactionRepository.delete(old);
-			commentReactionRepository.flush();
 		}
-		try {
-			commentReactionRepository.saveAndFlush(new CommentReactionJpaEntity(id, commentId, userId.value(), type, createdAt));
-			return true;
-		}
-		catch (DataIntegrityViolationException exception) {
-			return false;
-		}
+		return commentReactionRepository.insertIgnoringDuplicate(id, commentId, userId.value(), type.name(),
+			createdAt) == 1;
 	}
 
 	@Override
 	public boolean removeCommentReaction(String commentId, UserId userId) {
-		return commentReactionRepository.findByCommentIdAndUserId(commentId, userId.value())
-			.map(reaction -> {
-				commentReactionRepository.delete(reaction);
-				return true;
-			})
-			.orElse(false);
+		return commentReactionRepository.deleteByCommentAndUser(commentId, userId.value()) > 0;
 	}
 
 	@Override

@@ -28,7 +28,11 @@ public class CommunityProjectService {
 	private final UserProfileRepository profiles;
 	private final Clock clock;
 
-	public CommunityProjectService(CommunityProjectRepository projects, UserProfileRepository profiles, Clock clock) {
+	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
+
+	public CommunityProjectService(CommunityProjectRepository projects, UserProfileRepository profiles,
+			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate, Clock clock) {
+		this.sanctionGate = sanctionGate;
 		this.projects = projects;
 		this.profiles = profiles;
 		this.clock = clock;
@@ -164,6 +168,7 @@ public class CommunityProjectService {
 
 	private String userIdFromUsername(String username) {
 		return profiles.findByUsername(username).map(p -> p.id())
+			.filter(userId -> !sanctionGate.banned(userId))
 			.orElseThrow(() -> new ApiException(404, "PROJECT_NOT_FOUND", "Criador não encontrado."));
 	}
 

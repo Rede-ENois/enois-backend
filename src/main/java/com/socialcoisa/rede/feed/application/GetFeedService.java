@@ -67,6 +67,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	private final com.socialcoisa.rede.feed.application.port.out.PollRepository polls;
 	private final com.socialcoisa.rede.feed.application.port.out.PostRepostRepository postReposts;
 	private final com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries;
+	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
+
 	private static final Instant DEFAULT_BEFORE = Instant.parse("9999-12-31T23:59:59Z");
 
 	public GetFeedService(PostRepository postRepository, ArticleRepository articleRepository,
@@ -82,8 +84,10 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			PostNoteService postNotes,
 			com.socialcoisa.rede.feed.application.port.out.PollRepository polls,
 			com.socialcoisa.rede.feed.application.port.out.PostRepostRepository postReposts,
-			com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries) {
+			com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries,
+			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate) {
 		this.mediaSummaries = mediaSummaries;
+		this.sanctionGate = sanctionGate;
 		this.postRepository = postRepository;
 		this.articleRepository = articleRepository;
 		this.feedCacheRepository = feedCacheRepository;
@@ -148,7 +152,15 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				yield postRepository.findActiveByAuthors(authors, before, limit);
 			}
 		};
-		return page(enrich(posts, query.userId()), posts, limit);
+		// "Ocultar reposts": fora do feed pessoal (repost puro tem repostOf nulo no post —
+		// o ponteiro mora em post_reposts; já o repost com opinião é um post com repostOf).
+		// O cursor continua saindo da janela do banco: filtrar a lista exibida não pode
+		// encerrar a paginação antes da hora.
+		List<Post> window = posts;
+		if (readerPreferences.hideReposts(query.userId().value())) {
+			posts = posts.stream().filter(post -> post.repostOf() == null).toList();
+		}
+		return page(enrich(posts, query.userId()), window, limit);
 	}
 
 	private FeedPage trending(GetFeedQuery query, int limit) {
@@ -156,10 +168,16 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		Instant until = after == null ? java.time.Clock.systemUTC().instant() : after.windowEnd();
 		List<Post> fetched = postRepository.findTrending(
 			until.minus(java.time.Duration.ofHours(TRENDING_WINDOW_HOURS)), until, after, limit + 1);
-		List<Post> posts = fetched.stream().limit(limit).toList();
+		List<Post> window = fetched.stream().limit(limit).toList();
+		List<Post> posts = window;
+		if (readerPreferences.hideReposts(query.userId().value())) {
+			posts = posts.stream().filter(post -> post.repostOf() == null).toList();
+		}
 		String nextCursor = null;
 		if (fetched.size() > limit) {
-			Post last = posts.getLast();
+			// O cursor sai da última chave da JANELA, não da lista exibida: uma página só de
+			// reposts escondidos fica vazia, mas ainda aponta para a continuação.
+			Post last = window.getLast();
 			nextCursor = new TrendingCursor(until, last.counters().reactions(), last.createdAt(), last.id().value()).encode();
 		}
 		return new FeedPage(enrich(posts, query.userId()), nextCursor);
@@ -180,6 +198,10 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		String authorId = userProfileRepository.findByUsername(query.username())
 			.map(com.socialcoisa.rede.profile.domain.UserProfile::id)
 			.orElse(query.username());
+		// Banned account: its page is gone (same rule as the profile read), and so is its timeline.
+		if (sanctionGate.banned(authorId)) {
+			throw new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado.");
+		}
 		List<Post> authored = postRepository.findActiveByAuthor(new UserId(authorId), before, limit);
 
 		// Reposts puros: ponteiros na tabela post_reposts com a data do repost (nao do original).
@@ -345,6 +367,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		CorporateProfile profile = corporateProfiles
 			.findByUsername(profileUsername == null ? "" : profileUsername.trim().toLowerCase())
 			.filter(p -> p.active())
+			.filter(p -> !sanctionGate.banned(p.userId()))
 			.orElseThrow(() -> new ApiException(404, "PROFILE_NOT_FOUND", "Perfil profissional não encontrado."));
 		List<Post> posts = postRepository.findActiveCorporateByAuthor(
 			new com.socialcoisa.rede.feed.domain.UserId(profile.userId()), before, limit);
@@ -545,6 +568,9 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	 * mostrando tudo de quem a pessoa segue; a diferenca entre as abas e exatamente essa.
 	 */
 	private FeedPage forYou(GetFeedQuery query, Instant before, int limit) {
+		// "Ocultar reposts": o repost com opinião sai da janela do "Para você" e a mesclagem
+		// de reposts puros dos amigos (abaixo) é pulada inteira.
+		boolean hideReposts = readerPreferences.hideReposts(query.userId().value());
 		Set<UserId> authors = new LinkedHashSet<>();
 		authors.add(query.userId());
 		authors.addAll(connectionGraphRepository.findFriends(query.userId()));
@@ -568,8 +594,13 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		// a later page never holds a post newer than an earlier one (the front's "voce esta em dia"
 		// section relies on that).
 		List<Post> visible = filtered.stream().limit(limit).toList();
+		if (hideReposts) {
+			visible = visible.stream().filter(post -> post.repostOf() == null).toList();
+		}
+		// O cursor sai da janela (posição `limit` de `filtered`), não da lista exibida: uma janela
+		// só de reposts escondidos deixa a página vazia, mas precisa continuar para a próxima.
 		String nextCursor = filtered.size() > limit
-			? cursorCodec.encode(visible.get(visible.size() - 1).createdAt())
+			? cursorCodec.encode(filtered.get(limit - 1).createdAt())
 			: fetched.size() == limit * 3 ? cursorCodec.encode(fetched.get(fetched.size() - 1).createdAt()) : null;
 		// "O que quero ver" is a priority boost, not a filter: inside the page, posts on the chosen
 		// topics come first and the rest stays newest first. Nothing leaves the feed.
@@ -587,6 +618,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 
 		// Reposts puros dos amigos: uma consulta em batch (todos os amigos de uma vez).
 		// Filtros do "Para você" valem: comunidade sem participacao, topico bloqueado e bloqueio.
+		// "Ocultar reposts" liga os três de uma vez: nem o post repostado entra.
 		Set<String> alreadyInFeed = visible.stream().map(p -> p.id().value()).collect(Collectors.toSet());
 		Set<String> hidden = blockedUsersReader.hiddenIdsFor(query.userId().value());
 		List<String> friendIdList = authors.stream().map(UserId::value)
@@ -607,7 +639,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				}
 			}
 		}
-		if (!bestRepost.isEmpty()) {
+		if (!hideReposts && !bestRepost.isEmpty()) {
 			List<Post> repostedPosts = postRepository.findByIds(
 				bestRepost.keySet().stream().map(PostId::new).toList()).stream()
 				.filter(Post::isActive)

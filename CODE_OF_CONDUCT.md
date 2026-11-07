@@ -18,6 +18,10 @@ sexual ou condição socioeconômica.
   `CONTRIBUTING.md`) — explique, não humilhe.
 - **Discrição com dados de terceiros.** Nunca publique dados pessoais de usuários, credenciais,
   tokens ou capturas de tela de conversas privadas em issue, PR, print ou comentário.
+- **Ceticismo técnico, não hype.** "A ferramenta funciona" não é argumento; o código que passou nos
+  testes é. Afirmação sem evidência — humana ou gerada por IA — é tratada como rascunho.
+- **Erro documentado, não escondido.** Quando a sua mudança quebrar algo, diga o que quebrou, para
+  quem e como foi corrigido. Esconder regressão é pior que causá-la.
 
 ## O que não é aceito
 
@@ -27,6 +31,11 @@ sexual ou condição socioeconômica.
 - Ataques deliberados à plataforma, a usuários reais ou a infraestrutura de terceiros — inclusive
   "testes de segurança" sem autorização prévia (ver `SECURITY.md`).
 - Uso das ferramentas do projeto para fraudar, enganar ou prejudicar outras pessoas.
+- **Despejo de saída de IA sem revisão.** Abrir PR, issue ou comentário com código, texto ou
+  diagnóstico que quem enviou não leu e não entende é poluição do espaço comum — e é tratado como
+  tal, não como contribuição.
+- **Fabricação de evidência.** Dizer que um teste passou sem tê-lo rodado, inventar saída de
+  comando, citar API que não existe ou atribuir a outra pessoa um trabalho que não é dela.
 
 ## Escopo
 
