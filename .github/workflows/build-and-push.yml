@@ -194,6 +194,32 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # O Dockerfile só instala o CA quando o build-arg vem preenchido: secret vazio,
+      # renomeado ou fora do contexto produz a imagem de antes, sem erro. O sintoma
+      # aparece longe daqui — a primeira entrada em sala falha com erro de certificado
+      # e o log do build estava verde. Quando o secret existe, a imagem tem de tê-lo.
+      - name: 🔐 Conferir o CA do gateway na imagem
+        env:
+          EPAPO_GATEWAY_CA_B64: ${{ secrets.EPAPO_GATEWAY_CA_B64 }}
+          IMAGE_TAG: ${{ steps.vars.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "${EPAPO_GATEWAY_CA_B64:-}" ]; then
+            echo "==> EPAPO_GATEWAY_CA_B64 não configurado: imagem sem CA do gateway (chamadas desligadas ou em http privado)"
+            exit 0
+          fi
+          IMG="${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${IMAGE_NAME}:${IMAGE_TAG}"
+          # `$JAVA_HOME` é resolvido DENTRO da imagem: no runner ele não existe.
+          if docker run --rm --entrypoint sh "${IMG}" -c \
+               'keytool -list -alias epapo-gateway -keystore "$JAVA_HOME/lib/security/cacerts" -storepass changeit' \
+               >/dev/null 2>&1; then
+            echo "==> CA do gateway presente no cacerts da imagem"
+          else
+            echo "::error::EPAPO_GATEWAY_CA_B64 está configurado, mas o CA não está no cacerts da imagem."
+            echo "A chamada ao gateway vai falhar com erro de certificado. Confira o ARG do Dockerfile e o build-args do passo de build."
+            exit 1
+          fi
+
       - name: 📤 Push para Harbor (docker push classico, tag por tag)
         env:
           IMAGE_TAG: ${{ steps.vars.outputs.image_tag }}
