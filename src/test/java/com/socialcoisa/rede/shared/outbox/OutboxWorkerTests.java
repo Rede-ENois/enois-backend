@@ -5,8 +5,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -37,12 +39,47 @@ import com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository;
 		"rede.outbox.claim-stale-seconds=60" })
 class OutboxWorkerTests {
 
+	/** A mesma instancia registrada como bean: o contador tem de ser o do contexto. */
+	private final CountingHandler counter = CountingHandler.instance;
+
 	@TestConfiguration
-	static class FailingHandlerConfig {
+	static class TestHandlersConfig {
+
+		@Bean
+		CountingHandler countingHandler() {
+			return CountingHandler.instance;
+		}
 
 		@Bean
 		FailingHandler failingHandler() {
 			return new FailingHandler();
+		}
+	}
+
+	/** Conta quantas vezes um handler foi executado por evento, para provar "uma vez so". */
+	static class CountingHandler implements OutboxEventHandler {
+
+		static final CountingHandler instance = new CountingHandler();
+
+		private final Map<String, Integer> perAggregate = new ConcurrentHashMap<>();
+
+		@Override
+		public void handle(String eventType, String aggregateId, String payload) {
+			if ("TesteContagem".equals(eventType)) {
+				perAggregate.merge(aggregateId, 1, Integer::sum);
+			}
+		}
+
+		void reset() {
+			perAggregate.clear();
+		}
+
+		int invocations() {
+			return perAggregate.values().stream().mapToInt(Integer::intValue).sum();
+		}
+
+		int maxPerAggregate() {
+			return perAggregate.values().stream().mapToInt(Integer::intValue).max().orElse(0);
 		}
 	}
 
@@ -115,44 +152,57 @@ class OutboxWorkerTests {
 		assertThat(status(eventId)).isEqualTo("PROCESSED");
 	}
 
+	/**
+	 * Duas rodadas sobrepostas no mesmo evento: o claim deixa uma so executar. A prova nao e a
+	 * contagem de claims (a perdedora legitimamente nao faz nada), e sim que, depois de todos os
+	 * ciclos terem convergido, cada evento foi executado exatamente uma vez.
+	 */
 	@Test
 	void duasRodadasNaoExecutamOMesmoEventoDuasVezes() throws Exception {
 		List<String> ids = new ArrayList<>();
 		for (int i = 0; i < 8; i++) {
-			ids.add(append("TesteSempreOk"));
+			ids.add(append("TesteContagem"));
 		}
+		counter.reset();
 
-		List<Callable<Integer>> runs = new ArrayList<>();
+		List<Callable<Boolean>> runs = new ArrayList<>();
 		for (String id : ids) {
-			runs.add(() -> worker.processOne(id) ? 1 : 0);
-			runs.add(() -> worker.processOne(id) ? 1 : 0);
+			runs.add(() -> worker.processOne(id));
+			runs.add(() -> worker.processOne(id));
 		}
 
 		CountDownLatch start = new CountDownLatch(1);
 		ExecutorService pool = Executors.newFixedThreadPool(8);
 		try {
-			List<Future<Integer>> results = new ArrayList<>();
-			for (Callable<Integer> run : runs) {
+			List<Future<Boolean>> results = new ArrayList<>();
+			for (Callable<Boolean> run : runs) {
 				results.add(pool.submit(() -> {
 					start.await(10, TimeUnit.SECONDS);
 					return run.call();
 				}));
 			}
 			start.countDown();
-			int claimed = 0;
-			for (Future<Integer> result : results) {
-				claimed += result.get(60, TimeUnit.SECONDS);
+			for (Future<Boolean> result : results) {
+				result.get(60, TimeUnit.SECONDS);
 			}
-			assertThat(claimed).isEqualTo(ids.size());
 		}
 		finally {
 			pool.shutdownNow();
+		}
+
+		// convergencia: o que ficou para tras (a rodada perdedora nao executa) sai no proximo ciclo
+		for (String id : ids) {
+			if ("PENDING".equals(status(id))) {
+				worker.processOne(id);
+			}
 		}
 
 		for (String id : ids) {
 			assertThat(status(id)).isEqualTo("PROCESSED");
 			assertThat(receiptCount(id)).isEqualTo(worker.handlerCount());
 		}
+		assertThat(counter.invocations()).isEqualTo(ids.size());
+		assertThat(counter.maxPerAggregate()).isEqualTo(1);
 	}
 
 	/** Um evento que falha nao impede o vizinho de concluir, nem duplica o dele. */

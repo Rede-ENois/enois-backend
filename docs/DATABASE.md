@@ -166,6 +166,10 @@ segundo INSERT é recusado pelo banco.
 | last_error | VARCHAR(500) (nullable) | Erro da última falha (V252) |
 | claimed_at | TIMESTAMP (nullable) | Reserva de quem está executando; expira em 60s (V252) |
 
+Linhas `PROCESSED` são removidas depois da janela de retenção (`rede.outbox.retention.days`, 14
+dias) pelo `OutboxRetentionWorker`; `PENDING` nunca é removido. Os recibos do evento saem na mesma
+transação.
+
 ### `processed_events`
 
 Tabela legada (V1). O worker não a usa mais: a linha era gravada antes da execução e não provava

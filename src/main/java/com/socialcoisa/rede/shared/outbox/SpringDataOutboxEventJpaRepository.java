@@ -29,4 +29,21 @@ interface SpringDataOutboxEventJpaRepository extends JpaRepository<OutboxEventJp
 		+ "and (e.claimedAt is null or e.claimedAt < :staleBefore)")
 	int claim(@Param("id") String id, @Param("status") String status, @Param("now") Instant now,
 			@Param("staleBefore") Instant staleBefore);
+
+	/**
+	 * Ids de eventos concluidos antes do corte, para a retencao apagar. A selecao vem antes do delete
+	 * (e nao um {@code delete ... limit}) porque o H2 da suite nao aceita LIMIT em DELETE, e porque
+	 * assim o lote apagado e exatamente o mesmo entre os dois bancos.
+	 */
+	@Query("select e.id from OutboxEventJpaEntity e where e.status = :status and e.createdAt < :cutoff "
+		+ "order by e.createdAt asc")
+	List<String> findIdsByStatusAndCreatedAtBefore(@Param("status") String status, @Param("cutoff") Instant cutoff,
+			Pageable pageable);
+
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Query("delete from OutboxEventJpaEntity e where e.id in :ids")
+	int deleteByIdIn(@Param("ids") List<String> ids);
+
+	@Query("select count(e) from OutboxEventJpaEntity e where e.status = :status and e.createdAt < :cutoff")
+	long countByStatusAndCreatedAtBefore(@Param("status") String status, @Param("cutoff") Instant cutoff);
 }
