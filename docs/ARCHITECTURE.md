@@ -111,6 +111,13 @@ Controller monta resposta HTTP
 
 Eventos de domínio (ex: "post comentado", "post reagido") são escritos na tabela `outbox_events` dentro da mesma transação da operação principal. O `OutboxWorker` (scheduled task) processa eventos pendentes em background, garantindo entrega eventual.
 
+Ciclo do worker:
+
+1. **Claim**: o evento é reservado por atualização atômica de `claimed_at`; duas instâncias disputam e só uma executa. Reserva de instância que caiu expira (`rede.outbox.claim-stale-seconds`, 60s) e o evento volta a ser elegível.
+2. **Execução por handler**: cada handler grava o recibo em `processed_event_handlers` (par evento + handler) na mesma transação dos seus efeitos; recibo existente pula o handler.
+3. **Conclusão**: com todos os recibos, o evento vira `PROCESSED`. Com exceção, o evento permanece `PENDING`, `attempts` sobe e `next_attempt_at` recebe backoff (10s dobrando até 5min) — o efeito não é perdido.
+4. **"Pelo menos uma vez"**: efeitos fora da transação (share no LinkedIn) seguem sujeitos a repetição em queda entre envio e commit; a integração é idempotente do lado dela.
+
 ### Idempotência
 
 Operações críticas (POST, PUT, DELETE) podem usar idempotency key. Se a mesma chave for reenviada, a resposta original é reutilizada, prevenindo duplicatas.

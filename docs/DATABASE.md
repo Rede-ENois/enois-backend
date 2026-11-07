@@ -159,15 +159,27 @@ segundo INSERT é recusado pelo banco.
 | event_type | VARCHAR(100) | Tipo do evento |
 | aggregate_id | VARCHAR(36) | ID do agregado |
 | payload | TEXT | JSON do payload |
-| status | VARCHAR(20) | PENDING, PROCESSED, FAILED |
+| status | VARCHAR(20) | PENDING, PROCESSED (V252) |
 | created_at | TIMESTAMP | |
-| next_attempt_at | TIMESTAMP | Próxima tentativa |
+| next_attempt_at | TIMESTAMP | Próxima tentativa (backoff após falha: 10s a 5min) |
+| attempts | INT | Falhas acumuladas (V252) |
+| last_error | VARCHAR(500) (nullable) | Erro da última falha (V252) |
+| claimed_at | TIMESTAMP (nullable) | Reserva de quem está executando; expira em 60s (V252) |
 
 ### `processed_events`
 
+Tabela legada (V1). O worker não a usa mais: a linha era gravada antes da execução e não provava
+que handler algum rodou. Os dados antigos ficam preservados.
+
+### `processed_event_handlers` (V252)
+
+Recibo por handler: prova de que aquele efeito foi aplicado. A nova tentativa pula o handler com
+recibo e executa só os que faltaram.
+
 | Coluna | Tipo |
 |---|---|
-| event_id | VARCHAR(36) PK |
+| event_id | VARCHAR(255) PK (com handler) |
+| handler | VARCHAR(255) PK (com event_id) |
 | processed_at | TIMESTAMP |
 
 ### `audit_logs`
