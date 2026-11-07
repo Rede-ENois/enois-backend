@@ -858,9 +858,58 @@ jobs:
           # so the channel stays inert there. docs/KOF_AGENT.md
           KOF_AGENT_API_TOKEN: ${{ secrets.KOF_AGENT_API_TOKEN }}
           KOF_AGENT_CHAT_ID: ${{ secrets.KOF_AGENT_CHAT_ID }}
+          # Epapo (videoconferência própria) — par de PRODUÇÃO, separado do par da QA por prefixo,
+          # como VAPID_*/DB_*. As quatro andam juntas: sem elas o backend responde 503 explícito
+          # (CALLS_NOT_CONFIGURED) e as salas não abrem; com as quatro, abrem.
+          PROD_REDE_CALLS_EPAPO_URL: ${{ vars.PROD_REDE_CALLS_EPAPO_URL }}
+          PROD_REDE_CALLS_EPAPO_GATEWAY_URL: ${{ vars.PROD_REDE_CALLS_EPAPO_GATEWAY_URL }}
+          PROD_REDE_CALLS_EPAPO_INTERNAL_TOKEN: ${{ secrets.PROD_REDE_CALLS_EPAPO_INTERNAL_TOKEN }}
+          PROD_REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN: ${{ secrets.PROD_REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN }}
         run: |
           set -euo pipefail
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
+
+          # Epapo: mesma regra da QA — as quatro variáveis ou nenhuma. Aqui o prefixo é PROD_
+          # para não reusar por engano o par da QA (o gateway escolhe o alvo pelo token
+          # apresentado; um token da QA em produção derrubaria toda entrada de sala).
+          REDE_CALLS_EPAPO_URL="${PROD_REDE_CALLS_EPAPO_URL:-}"
+          REDE_CALLS_EPAPO_GATEWAY_URL="${PROD_REDE_CALLS_EPAPO_GATEWAY_URL:-}"
+          REDE_CALLS_EPAPO_INTERNAL_TOKEN="${PROD_REDE_CALLS_EPAPO_INTERNAL_TOKEN:-}"
+          REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN="${PROD_REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN:-}"
+          epapo_set=0
+          epapo_missing=""
+          for name in REDE_CALLS_EPAPO_URL REDE_CALLS_EPAPO_GATEWAY_URL \
+                      REDE_CALLS_EPAPO_INTERNAL_TOKEN REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN; do
+            if [ -n "${!name:-}" ]; then
+              epapo_set=$((epapo_set + 1))
+            else
+              epapo_missing="${epapo_missing} PROD_${name}"
+            fi
+          done
+          if [ "${epapo_set}" -ne 0 ] && [ "${epapo_set}" -ne 4 ]; then
+            echo "::error::configuração do Epapo pela metade — faltam:${epapo_missing}"
+            echo "Defina as quatro (variáveis de repositório para as URLs, secrets para os tokens) ou nenhuma."
+            exit 1
+          fi
+          if [ "${epapo_set}" -eq 0 ]; then
+            echo "==> Epapo não configurado: chamadas e salas de mentoria ficam desligadas (503 explícito)"
+          else
+            # O gateway carrega segredo de servidor a cada chamada; em texto claro ele vaza para
+            # quem estiver no caminho. http só para loopback e faixas privadas.
+            epapo_gw_host=$(printf '%s' "${REDE_CALLS_EPAPO_GATEWAY_URL}" \
+              | sed -E 's#^[a-z]+://##; s#[:/].*$##')
+            case "${REDE_CALLS_EPAPO_GATEWAY_URL}" in
+              https://*) ;;
+              http://localhost*|http://127.*|http://10.*|http://192.168.*) ;;
+              http://172.1[6-9].*|http://172.2[0-9].*|http://172.3[01].*) ;;
+              *)
+                echo "::error::REDE_CALLS_EPAPO_GATEWAY_URL não é https (host: ${epapo_gw_host})."
+                echo "Publique o gateway com TLS e aponte o https para cá."
+                exit 1
+                ;;
+            esac
+            echo "==> Epapo configurado: ${REDE_CALLS_EPAPO_URL}"
+          fi
 
           echo "==> Gerar docker-compose da stack com a imagem/secrets atuais"
           # Stack file and payload carry every secret: private temp files, removed however the step ends.
@@ -955,6 +1004,11 @@ jobs:
                 VAPID_SUBJECT: "${VAPID_SUBJECT}"
                 KOF_AGENT_API_TOKEN: "${KOF_AGENT_API_TOKEN}"
                 KOF_AGENT_CHAT_ID: "${KOF_AGENT_CHAT_ID}"
+                # Chamadas e salas de mentoria (Epapo). Vazio = desligado, com 503 explícito.
+                REDE_CALLS_EPAPO_URL: "${REDE_CALLS_EPAPO_URL}"
+                REDE_CALLS_EPAPO_GATEWAY_URL: "${REDE_CALLS_EPAPO_GATEWAY_URL}"
+                REDE_CALLS_EPAPO_INTERNAL_TOKEN: "${REDE_CALLS_EPAPO_INTERNAL_TOKEN}"
+                REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN: "${REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN}"
           EOF
 
           echo "==> Montar payload JSON (python escapa o YAML certo pro body)"
@@ -973,10 +1027,42 @@ jobs:
             -d @"$STACK_PAYLOAD"
 
       - name: 🩺 Health check
+        env:
+          EPAPO_ESPERADO: ${{ vars.PROD_REDE_CALLS_EPAPO_URL }}
         run: |
+          # Subir não prova que a configuração das chamadas chegou ao container. A rota que o
+          # gateway usa para autorizar entrada distingue os dois casos de forma inequívoca:
+          # 503 GATEWAY_NOT_CONFIGURED = o segredo de servidor NÃO está no container;
+          # 401 GATEWAY_UNAUTHORIZED = está (e recusou o valor de sondagem, como deve).
+          # Uma sonda que só olhasse o host mediria o firewall da QA, porque este runner é a
+          # docker-prod4 — o mesmo host do deploy da QA, não o de produção. Por isso a prova
+          # aqui é a resposta do PRÓPRIO backend de produção.
+          confere_config() {
+            if [ -z "${EPAPO_ESPERADO:-}" ]; then
+              echo "Epapo não configurado em produção: chamadas desligadas (503 explícito)."
+              return 0
+            fi
+            echo "=== configuração das chamadas no container de produção ==="
+            local probe
+            probe=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15 \
+              -X POST "https://api.enois.ia.br/api/calls/probe_inexistente/gateway/entry/probe_inexistente" \
+              -H "X-Enois-Authorize: sonda-de-configuracao" \
+              -H "Content-Type: application/json" 2>/dev/null || true)
+            case "${probe}" in
+              401) echo " configuração presente e ativa (401 do portão de servidor)" ;;
+              000|"") echo "::warning::não foi possível sondar a configuração das chamadas em produção." ;;
+              *)
+                echo "::error::chamadas esperadas em produção, mas a rota respondeu ${probe} (esperado 401)."
+                echo "As variáveis não chegaram ao container: confira PROD_REDE_CALLS_* no deploy."
+                return 1
+                ;;
+            esac
+          }
+
           for i in $(seq 1 15); do
             if curl -sf --max-time 10 https://api.enois.ia.br/health; then
               echo "OK na tentativa $i"
+              confere_config
               exit 0
             fi
             echo "tentativa $i falhou, aguardando..."
