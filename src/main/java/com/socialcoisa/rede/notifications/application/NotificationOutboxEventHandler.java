@@ -30,18 +30,17 @@ class NotificationOutboxEventHandler implements OutboxEventHandler {
 		this.userProfileRepository = userProfileRepository;
 	}
 
+	/**
+	 * A falha sobe para o worker do outbox, que conta a tentativa e agenda a proxima. Antes o erro
+	 * morria aqui e o evento era dado como concluido com a notificacao perdida.
+	 */
 	@Override
 	public void handle(String eventType, String aggregateId, String payload) {
-		try {
-			switch (eventType) {
-				case "PostCommented" -> handlePostCommented(payload);
-				case "PostReacted" -> handlePostReacted(payload);
-				case "CommentReacted" -> handleCommentReacted(payload);
-				default -> {
-				}
-			}
-		} catch (Exception e) {
-			LOG.warn("Erro ao processar evento {}: {}", eventType, e.getMessage());
+		switch (eventType) {
+			case "PostCommented" -> handlePostCommented(payload);
+			case "PostReacted" -> handlePostReacted(payload);
+			case "CommentReacted" -> handleCommentReacted(payload);
+			default -> LOG.debug("Evento {} nao gera notificacao", eventType);
 		}
 	}
 
