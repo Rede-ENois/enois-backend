@@ -13,14 +13,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Logs do gateway e do backend
+      - name: Logs do auth-gateway
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
         run: |
           set -euo pipefail
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
-          echo "=== containers no node3 (endpoint 12) ==="
           GAPI="${PORTAINER_BASE_URL}/api/endpoints/12/docker"
-          curl -sS --max-time 30 "${AUTH[@]}" "${GAPI}/containers/json?all=1" -o /tmp/containers.json || echo "falha na listagem"
-          python3 -c "import json;d=json.load(open('/tmp/containers.json'));print(*[(c.get('Names'),c.get('State'),c.get('Image')) for c in d],sep=chr(10))" || cat /tmp/containers.json | head -5
+          echo "=== env do gateway (nomes e tamanhos, nunca valores) ==="
+          curl -sS --max-time 30 "${AUTH[@]}" "${GAPI}/containers/epapo-prod-auth-gateway-1/json" -o /tmp/gw.json
+          python3 -c "import json;d=json.load(open('/tmp/gw.json'));print(*sorted([(e.split('=')[0], len(e.split('=',1)[1]) if '=' in e else 0) for e in d['Config']['Env']]),sep=chr(10))"
+          echo "=== logs recentes do gateway ==="
+          curl -sS --max-time 30 "${AUTH[@]}" "${GAPI}/containers/epapo-prod-auth-gateway-1/logs?stdout=1&stderr=1&timestamps=1" -o /tmp/gw.log || true
+          tr -d "\000" < /tmp/gw.log | tail -40
