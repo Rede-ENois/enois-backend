@@ -71,9 +71,24 @@ class CallPersistenceAdapter implements CallRepository {
 
 	@Override
 	public Optional<CallSession> findOpenByGroup(String groupId) {
-		return calls.findByGroupIdAndStateIn(groupId, OPEN).stream()
+		return earliest(calls.findGroupWideOpen(groupId, OPEN));
+	}
+
+	@Override
+	public Optional<CallSession> findOpenByTopic(String groupId, String topicId) {
+		return earliest(calls.findByGroupIdAndTopicIdAndStateIn(groupId, topicId, OPEN));
+	}
+
+	private static Optional<CallSession> earliest(List<CallSessionJpaEntity> open) {
+		return open.stream()
 			.min(java.util.Comparator.comparing(CallSessionJpaEntity::createdAt))
 			.map(CallSessionJpaEntity::toDomain);
+	}
+
+	@Override
+	@Transactional
+	public boolean extend(CallSession call, CallState state) {
+		return calls.extend(call.id(), state, call.expiresAt(), call.lastActivityAt()) == 1;
 	}
 
 	@Override

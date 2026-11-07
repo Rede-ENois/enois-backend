@@ -1668,9 +1668,13 @@ Files: `ReleaseNoteController`, `ReleaseNoteService`, `ReleaseNoteRepository`,
 
 ## 41. Calls (Chamadas de áudio/vídeo)
 
-1:1 na conversa e "Tamo junto" no grupo, com o painel embutido no app. O servidor decide tudo:
+1:1 na conversa e "Tamo junto" no grupo, com o painel embutido no app. Toda chamada de grupo se
+chama "Tamo junto" — "Tamo junto voz" ou "Tamo junto vídeo" conforme a modalidade — e cada tópico
+do grupo tem a sua própria sala, independente da sala geral. O servidor decide tudo:
 quem pode começar (participante da conversa, membro do grupo), quem pode entrar (conferido no
 vínculo a cada pedido e no `POST /calls/{id}/join`), em que estado a chamada está e quando vence.
+Quem abre a sala já entra nela, e a sala de grupo que fica sem ninguém por mais de um minuto é
+encerrada pelo servidor.
 O nome da sala é um UUID gerado no servidor. A entrada usa um JWT HS256 emitido pelo *auth gateway*
 da Epapo (o Jitsi próprio da rede, com `AUTH_TYPE=jwt`), e esse gateway **só assina depois** de o
 Énóis autorizar quem entra em qual chamada. Gravação, transmissão, chamada externa e transcrição vão
@@ -1684,9 +1688,10 @@ desligadas no próprio token.
 | `CallRoomAuthorization` | Porta do gateway: chamada pela sala e autorização de entrada |
 | `EpapoMeetingTokenIssuer` | Cliente do gateway da Epapo (`POST /auth/token`); não assina JWT |
 | `CallGatewayController` | Rotas internas do gateway (`/calls/rooms/{room}`, `/calls/{id}/gateway/entry/{userId}`) |
-| `CallExpiryWorker` | 1:1 sem resposta (40s → `MISSED`), grupo vazio (5 min → `FAILED`), abandono (30 min) |
-| `CallPersistenceAdapter` | Transições condicionais em `call_sessions`/`call_participants` (V240) |
-| `CallController` | Rotas `/calls/**` e `/{conversation,group}/{id}/calls` |
+| `CallExpiryWorker` | 1:1 sem resposta (40s → `MISSED`), sala de grupo vazia (1 min → `ENDED`), abandono (30 min) |
+| `CallPersistenceAdapter` | Transições condicionais em `call_sessions`/`call_participants` (V240, `topic_id` na V250) |
+| `TopicLookup` / `GroupTopicLookup` | Confere que o tópico é daquele grupo antes de abrir a sala |
+| `CallController` | Rotas `/calls/**`, `/{conversation,group}/{id}/calls` e `/groups/{id}/topics/{topicId}/calls` |
 | `CallReportService` / `CallReportController` | Denúncia da sala: quem entrou pode ser apontado; contexto em `call_reports` (V241) |
 
 Denúncia de chamada entra na moderação como alvo `CALL`, com a captura do momento (propósito

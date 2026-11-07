@@ -22,6 +22,12 @@ public interface CallRepository {
 	/** Relê a linha e aplica a transição feita no domínio, se a linha ainda estiver em {@code from}. */
 	boolean persist(CallSession call, CallState from);
 
+	/**
+	 * Grava só o prazo e o sinal de vida de uma chamada aberta, sem trocar de estado: é o que
+	 * segura a sala vazia dentro da tolerância. Condicional ao estado lido.
+	 */
+	boolean extend(CallSession call, CallState state);
+
 	Optional<CallSession> findById(String callId);
 
 	/**
@@ -33,8 +39,11 @@ public interface CallRepository {
 	/** Chamada aberta de uma conversa — evita duas chamadas na mesma DM. */
 	Optional<CallSession> findOpenByConversation(String conversationId);
 
-	/** Chamada "ao vivo" (aberta) de um grupo. */
+	/** Chamada "ao vivo" (aberta) da sala geral do grupo (não é de tópico). */
 	Optional<CallSession> findOpenByGroup(String groupId);
+
+	/** Chamada "ao vivo" (aberta) do tópico do grupo. */
+	Optional<CallSession> findOpenByTopic(String groupId, String topicId);
 
 	/** Chamadas abertas em que a pessoa está dentro ou foi convidada — para retomar a tela. */
 	List<CallSession> findOpenByParticipant(String userId);

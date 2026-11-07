@@ -39,12 +39,21 @@ class CallController {
 		return calls.startDirect(conversationId, userId, kindOf(request));
 	}
 
-	/** Começa (ou entra n)a chamada "Tamo junto" do grupo. */
+	/** Abre (ou entra n)a chamada "Tamo junto" da sala geral do grupo: quem abre já está dentro. */
 	@PostMapping("/groups/{groupId}/calls")
 	CallService.CallView startGroup(@RequestHeader("X-Session-Token") String sessionToken,
 			@PathVariable String groupId, @RequestBody(required = false) StartRequest request) {
 		String userId = currentUserResolver.resolve(sessionToken).id().value();
 		return calls.startGroup(groupId, userId, kindOf(request));
+	}
+
+	/** A sala "Tamo junto" de um tópico do grupo: mesma chamada, independente da sala geral. */
+	@PostMapping("/groups/{groupId}/topics/{topicId}/calls")
+	CallService.CallView startTopicCall(@RequestHeader("X-Session-Token") String sessionToken,
+			@PathVariable String groupId, @PathVariable String topicId,
+			@RequestBody(required = false) StartRequest request) {
+		String userId = currentUserResolver.resolve(sessionToken).id().value();
+		return calls.startGroup(groupId, topicId, userId, kindOf(request));
 	}
 
 	/** Chamada aberta do vínculo — é o que a conversa/grupo consulta para mostrar "ao vivo". */
@@ -55,11 +64,19 @@ class CallController {
 		return calls.openOf(conversationId, null, userId).orElse(null);
 	}
 
+	/** Chamada aberta da sala geral do grupo (não é a de tópico). */
 	@GetMapping("/groups/{groupId}/calls/open")
 	CallService.CallView openOfGroup(@RequestHeader("X-Session-Token") String sessionToken,
 			@PathVariable String groupId) {
 		String userId = currentUserResolver.resolve(sessionToken).id().value();
 		return calls.openOf(null, groupId, userId).orElse(null);
+	}
+
+	@GetMapping("/groups/{groupId}/topics/{topicId}/calls/open")
+	CallService.CallView openOfTopic(@RequestHeader("X-Session-Token") String sessionToken,
+			@PathVariable String groupId, @PathVariable String topicId) {
+		String userId = currentUserResolver.resolve(sessionToken).id().value();
+		return calls.openOf(null, groupId, topicId, userId).orElse(null);
 	}
 
 	/** Tudo que está aberto para esta pessoa (voltar de outra tela sem perder a chamada). */

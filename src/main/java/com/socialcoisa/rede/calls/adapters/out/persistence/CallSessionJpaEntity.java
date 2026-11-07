@@ -35,6 +35,9 @@ class CallSessionJpaEntity {
 	@Column(name = "group_id")
 	private String groupId;
 
+	@Column(name = "topic_id")
+	private String topicId;
+
 	@Column(name = "initiator_id", nullable = false)
 	private String initiatorId;
 
@@ -84,6 +87,7 @@ class CallSessionJpaEntity {
 		this.modality = call.modality();
 		this.conversationId = call.conversationId();
 		this.groupId = call.groupId();
+		this.topicId = call.topicId();
 		this.initiatorId = call.initiatorId();
 		this.roomId = call.roomId();
 		this.displayName = call.displayName();
@@ -98,8 +102,8 @@ class CallSessionJpaEntity {
 	}
 
 	CallSession toDomain() {
-		return new CallSession(id, kind, modality, conversationId, groupId, initiatorId, roomId, displayName, state,
-			createdAt, answeredAt, endedAt, endedBy, endReason, expiresAt, lastActivityAt);
+		return new CallSession(id, kind, modality, conversationId, groupId, topicId, initiatorId, roomId,
+			displayName, state, createdAt, answeredAt, endedAt, endedBy, endReason, expiresAt, lastActivityAt);
 	}
 
 	String id() {
@@ -112,6 +116,10 @@ class CallSessionJpaEntity {
 
 	String groupId() {
 		return groupId;
+	}
+
+	String topicId() {
+		return topicId;
 	}
 
 	CallState state() {
