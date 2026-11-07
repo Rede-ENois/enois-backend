@@ -24,6 +24,9 @@ jobs:
           get 12 epapo-prod-auth-gateway-1 > /tmp/gw.json
           get 8 enois-qa-backend > /tmp/qa.json
           get 11 enois-backend > /tmp/pr.json
+          for f in /tmp/gw.json /tmp/qa.json /tmp/pr.json; do
+            echo "$f: $(head -c 120 $f)"; echo
+          done
           python3 - <<PY
           import json
           def env(p):
