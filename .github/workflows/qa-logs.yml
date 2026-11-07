@@ -13,14 +13,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Backend de producao, chamadas no log
+      - name: Join e gateway nos logs de prod e QA
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
         run: |
           set -euo pipefail
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
-          API="${PORTAINER_BASE_URL}/api/endpoints/11/docker"
-          curl -sS --max-time 60 "${AUTH[@]}" "${API}/containers/enois-prod-backend/logs?stdout=1&stderr=1&timestamps=1" -o /tmp/prod.log || echo "falhou"
-          tr -d "\000" < /tmp/prod.log | wc -l
-          tr -d "\000" < /tmp/prod.log | grep -aE "gateway do Epapo|CALLS_|CALL_ENTRY|/calls/|Epapo" | tail -40 || echo "nada"
+          for pair in "11:enois-prod-backend:PROD" "8:enois-qa-backend:QA"; do
+            EP=${pair%%:*}; rest=${pair#*:}; NAME=${rest%%:*}; LABEL=${rest##*:}
+            API="${PORTAINER_BASE_URL}/api/endpoints/${EP}/docker"
+            curl -sS --max-time 60 "${AUTH[@]}" "${API}/containers/${NAME}/logs?stdout=1&stderr=1&timestamps=1" -o /tmp/x.log || true
+            echo "=== ${LABEL}: join ==="
+            tr -d "\000" < /tmp/x.log | grep -a "method=POST path=/calls/" | tail -12 || echo "(nenhum POST em /calls)"
+            echo "=== ${LABEL}: aviso do gateway ==="
+            tr -d "\000" < /tmp/x.log | grep -a "gateway do Epapo" | tail -12 || echo "(nenhum aviso do gateway)"
+            echo "=== ${LABEL}: linhas de chamada (todas) ==="
+            tr -d "\000" < /tmp/x.log | grep -ac "calls" || true
+          done
