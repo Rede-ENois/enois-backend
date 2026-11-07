@@ -65,11 +65,17 @@ os dois repositórios ficarem sob o mesmo regime.
 
 ## Quick Start (dev profile)
 
+API only (no frontend; endpoints at the root):
+
 ```bash
 ./mvnw spring-boot:run
 ```
 
-This starts with the `dev` profile using an **H2 in-memory database**. Swagger UI is available at [http://localhost:8081/swagger-ui.html](http://localhost:8081/swagger-ui.html).
+This starts with the `dev` profile using an **H2 in-memory database**.
+
+With the local frontend (Vite on 5173), start the API with the `/api` context path and the
+sign-up/e-mail variables. The complete walkthrough (Mailpit, encryption key, local media upload and
+troubleshooting) is in [`docs/LOCAL_DEVELOPMENT.md`](docs/LOCAL_DEVELOPMENT.md).
 
 ## Profiles
 
@@ -130,7 +136,8 @@ Produces `target/rede-0.0.1-SNAPSHOT.jar`.
 ./mvnw test
 ```
 
-All 24 integration tests must pass.
+All integration tests must pass. Scope-only runs are fine during development; the pull request must
+carry the full suite green.
 
 ## Docker
 
@@ -148,14 +155,14 @@ docker compose --profile hml up --build
 
 ## API Documentation
 
-- **Swagger UI**: [http://localhost:8081/swagger-ui.html](http://localhost:8081/swagger-ui.html)
-- **OpenAPI JSON**: [http://localhost:8081/api/openapi.json](http://localhost:8081/api/openapi.json)
+Swagger/OpenAPI UI was removed: springdoc is incompatible with Spring Boot 4. The reference lives in
+[`docs/API.md`](docs/API.md); with the app running, `GET /api/version` confirms the process is up.
 
 ## Monitoring
 
-- **Health**: `GET /actuator/health`
-- **Metrics**: `GET /actuator/metrics`
-- **Prometheus**: `GET /actuator/prometheus`
+- **Health**: `GET /actuator/health` (prefix with `/api` when running with `--server.servlet.context-path=/api`)
+- **Metrics**: `GET /actuator/metrics` (same prefix rule)
+- **Prometheus**: `GET /actuator/prometheus` (same prefix rule)
 
 ## Architecture
 
