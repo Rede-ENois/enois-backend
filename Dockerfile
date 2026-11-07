@@ -24,6 +24,22 @@ RUN apt-get update \
     && mkdir -p /app/data \
     && groupadd --system appgroup && useradd --system --gid appgroup --no-create-home appuser \
     && chown -R appuser:appgroup /app
+
+# CA do gateway de chamadas. O salto até ele é entre hosts, sem rede privada, então
+# é TLS — e o certificado é do nosso próprio gateway, não de uma autoridade pública.
+# Vem em base64 porque o build arg não carrega PEM multilinha. Sem o argumento a
+# imagem é a mesma de antes: nenhum CA extra, nenhuma mudança de confiança.
+#
+# Vai no `cacerts` do JDK, não no bundle do sistema: `update-ca-certificates` não
+# toca no truststore do Java, e é o HttpClient do Java que fala com o gateway.
+ARG EPAPO_GATEWAY_CA_B64=""
+RUN if [ -n "${EPAPO_GATEWAY_CA_B64}" ]; then \
+      printf '%s' "${EPAPO_GATEWAY_CA_B64}" | base64 -d > /tmp/epapo-gateway.crt \
+      && keytool -importcert -noprompt -trustcacerts -alias epapo-gateway \
+           -file /tmp/epapo-gateway.crt \
+           -keystore "${JAVA_HOME}/lib/security/cacerts" -storepass changeit \
+      && rm -f /tmp/epapo-gateway.crt; \
+    fi
 USER appuser
 EXPOSE 8081
 ENTRYPOINT ["java", "--enable-native-access=ALL-UNNAMED", "-jar", "app.jar"]
