@@ -21,8 +21,7 @@ jobs:
           set -euo pipefail
           API="${PORTAINER_BASE_URL}/api/endpoints/8/docker"
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
-          # Logs recentes do backend da QA, só o que interessa ao diagnóstico.
           curl -sS --max-time 30 "${AUTH[@]}" \
             "${API}/containers/enois-qa-backend/logs?tail=2000&stdout=1&stderr=1&timestamps=1" \
-            | tr -d '\000' | grep -aE "gateway do Epapo|Epapo|CALL_" | tail -80 \
-            || echo "nenhuma linha correspondente"
+            | tr -d '\000' | grep -a "WARN\|ERROR" | tail -60 \
+            || echo "sem warn/error"
