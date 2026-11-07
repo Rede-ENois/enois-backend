@@ -52,14 +52,25 @@ class SuggestionPersistenceAdapter implements SuggestionRepository {
 	}
 
 	@Override
-	@Transactional(readOnly = true)
-	public long countByUserSince(String userId, Instant since) {
-		return repository.countByUserIdAndCreatedAtAfter(userId, since);
+	@Transactional
+	public boolean insertWithinLimit(Suggestion suggestion, Instant since, int max) {
+		repository.lockUser(suggestion.userId());
+		if (repository.countByUserIdAndCreatedAtAfter(suggestion.userId(), since) >= max) {
+			return false;
+		}
+		repository.save(SuggestionJpaEntity.fromDomain(suggestion));
+		return true;
 	}
 
 	@Override
 	@Transactional
 	public boolean transition(String id, SuggestionStatus from, SuggestionStatus to, String reviewedBy, Instant at) {
 		return repository.transition(id, from, to, reviewedBy, at) == 1;
+	}
+
+	@Override
+	@Transactional
+	public boolean claimForPublishing(String id, String reviewedBy, Instant at) {
+		return repository.claimForPublishing(id, reviewedBy, at) == 1;
 	}
 }

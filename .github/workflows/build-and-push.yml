@@ -279,13 +279,15 @@ jobs:
           GITHUB_CLIENT_ID: ${{ secrets.QA_GITHUB_CLIENT_ID }}
           GITHUB_CLIENT_SECRET: ${{ secrets.QA_GITHUB_CLIENT_SECRET }}
           GITHUB_CONTRIBUTIONS_TOKEN: ${{ secrets.QA_GITHUB_CONTRIBUTIONS_TOKEN }}
-          # Sugestoes da comunidade: issue PUBLICA nos repos de destino, aberta so apos aprovacao
-          # de moderador. Usa o mesmo token do suporte (guardado no banco, painel do admin), entao
-          # nao ha secret novo aqui. Os mesmos repos valem em QA e prod: aprovar na QA tambem
-          # publica de verdade.
-          GITHUB_SUGGESTIONS_REPO_BACKEND: ${{ vars.SUGGESTIONS_REPO_BACKEND }}
-          GITHUB_SUGGESTIONS_REPO_FRONTEND: ${{ vars.SUGGESTIONS_REPO_FRONTEND }}
-          GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM: ${{ vars.SUGGESTIONS_REPO_DESIGN_SYSTEM }}
+          # Sugestoes da comunidade: issue PUBLICA aberta so apos aprovacao de moderador. A QA tem
+          # token e repositorios PROPRIOS (prefixo QA_): os repositorios devem ser um sandbox, nunca
+          # os oficiais, para um teste na QA nao publicar issue de verdade. Sem eles a aprovacao
+          # na QA responde 503 e nada sai. O token e so das sugestoes (Issues: write nos repos de
+          # destino), separado do token do suporte.
+          SUGGESTIONS_GITHUB_TOKEN: ${{ secrets.QA_SUGGESTIONS_GITHUB_TOKEN }}
+          GITHUB_SUGGESTIONS_REPO_BACKEND: ${{ vars.QA_SUGGESTIONS_REPO_BACKEND }}
+          GITHUB_SUGGESTIONS_REPO_FRONTEND: ${{ vars.QA_SUGGESTIONS_REPO_FRONTEND }}
+          GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM: ${{ vars.QA_SUGGESTIONS_REPO_DESIGN_SYSTEM }}
           # Issue so conta para o selo com a label de triagem `seal:qualified`, que nenhum template
           # de issue aplica (o template de bug aplica `bug` sozinho, entao `bug` nao serve). Sem a
           # label, a issue espera revisao no painel. O worker roda a cada 10 minutos para os selos
@@ -537,6 +539,7 @@ jobs:
               "GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}",
               "GITHUB_REDIRECT_URI=https://enois-api-qa.b7cloud.tech/api/auth/oauth/github/callback",
               "GITHUB_CONTRIBUTIONS_TOKEN=${GITHUB_CONTRIBUTIONS_TOKEN}",
+              "SUGGESTIONS_GITHUB_TOKEN=${SUGGESTIONS_GITHUB_TOKEN}",
               "GITHUB_SUGGESTIONS_REPO_BACKEND=${GITHUB_SUGGESTIONS_REPO_BACKEND}",
               "GITHUB_SUGGESTIONS_REPO_FRONTEND=${GITHUB_SUGGESTIONS_REPO_FRONTEND}",
               "GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM=${GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM}",
@@ -824,8 +827,10 @@ jobs:
           GITHUB_CLIENT_ID: ${{ secrets.OAUTH_GITHUB_CLIENT_ID }}
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_CLIENT_SECRET }}
           GITHUB_CONTRIBUTIONS_TOKEN: ${{ secrets.OAUTH_GITHUB_CONTRIBUTIONS_TOKEN }}
-          # Sugestoes da comunidade (issue publica apos aprovacao). Usa o mesmo token do suporte,
-          # guardado no banco (painel do admin): so os repositorios de destino vem daqui.
+          # Sugestoes da comunidade (issue publica apos aprovacao). Token proprio, separado do
+          # token do suporte (que enxerga o repositorio privado): fine-grained, Issues: write so nos
+          # repositorios publicos de destino abaixo.
+          SUGGESTIONS_GITHUB_TOKEN: ${{ secrets.SUGGESTIONS_GITHUB_TOKEN }}
           GITHUB_SUGGESTIONS_REPO_BACKEND: ${{ vars.SUGGESTIONS_REPO_BACKEND }}
           GITHUB_SUGGESTIONS_REPO_FRONTEND: ${{ vars.SUGGESTIONS_REPO_FRONTEND }}
           GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM: ${{ vars.SUGGESTIONS_REPO_DESIGN_SYSTEM }}
@@ -929,6 +934,7 @@ jobs:
                 GITHUB_CLIENT_SECRET: "${GITHUB_CLIENT_SECRET}"
                 GITHUB_REDIRECT_URI: "https://api.enois.ia.br/api/auth/oauth/github/callback"
                 GITHUB_CONTRIBUTIONS_TOKEN: "${GITHUB_CONTRIBUTIONS_TOKEN}"
+                SUGGESTIONS_GITHUB_TOKEN: "${SUGGESTIONS_GITHUB_TOKEN}"
                 GITHUB_SUGGESTIONS_REPO_BACKEND: "${GITHUB_SUGGESTIONS_REPO_BACKEND}"
                 GITHUB_SUGGESTIONS_REPO_FRONTEND: "${GITHUB_SUGGESTIONS_REPO_FRONTEND}"
                 GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM: "${GITHUB_SUGGESTIONS_REPO_DESIGN_SYSTEM}"

@@ -1300,42 +1300,49 @@ integração com issues do GitHub e log de e-mails no painel.
 
 Separado do suporte. A pessoa escolhe o destino (`BACKEND`, `FRONTEND` ou `DESIGN_SYSTEM`) e envia
 título + texto. A sugestão nasce `PENDING`; um moderador aprova e só então o app abre uma issue
-**pública** no repositório do destino. A issue leva apenas o título e o texto (menções `@` são
-quebradas para não notificar ninguém): nome, e-mail e id de quem sugeriu nunca vão junto, e a tabela
+**pública** no repositório do destino. A issue leva apenas o título e o texto: nome, e-mail e id de quem sugeriu nunca vão junto, e a tabela
 `suggestions` nem guarda e-mail de contato. Limite de 5 sugestões por pessoa em 24h.
 
 A aprovação é reivindicada de forma atômica (`PENDING` -> `PUBLISHED`) antes de falar com o GitHub:
 duas aprovações simultâneas não abrem duas issues, e falha do GitHub devolve a sugestão para a fila.
+A publicação é idempotente: a issue leva o id da sugestão num comentário HTML oculto, e a primeira
+tentativa fica registrada (`publish_attempted_at`, V251). Se uma tentativa terminou sem resposta (o
+GitHub pode ter aberto a issue), a próxima aprovação procura a issue com aquele id antes de abrir
+outra (paginando até 10 páginas de 100 issues); se a busca falhar ou não terminar, nada é criado e a sugestão continua pendente.
+
+O texto público é neutralizado: menções (`@pessoa`), referências (`#12`, `GH-12`, `dono/repo#12`) e
+links de issue do GitHub recebem um espaço de largura zero, então a issue não notifica ninguém nem
+aparece referenciada em outra issue. O limite diário é contado e gravado sob lock da linha da pessoa
+em `users` (o mesmo handle de `studypairs`), então envios simultâneos não passam de 5.
 
 #### Configuração e operação
 
-**Token.** As sugestões usam o **mesmo token das issues do suporte**, para a equipe ter um token de
-issues só e uma rotação só. Ele fica cifrado no banco e é trocado em `/admin/support/github` (só
-admin), sem reiniciar o pod; o módulo lê o valor a cada chamada. Não existe secret nem variável de
-token próprios das sugestões. Os outros tokens GitHub do projeto não servem para isso:
-`GITHUB_CONTRIBUTIONS_TOKEN` (selos) é somente leitura e `GITOPS_TOKEN` é do repositório de deploy.
+**Token próprio.** As sugestões têm um token só delas (`SUGGESTIONS_GITHUB_TOKEN`), separado do
+token das issues do suporte, que enxerga o repositório privado com dados pessoais. Use um token
+fine-grained com **Issues: write somente nos repositórios públicos de destino**. Ele vem do deploy
+(secret `SUGGESTIONS_GITHUB_TOKEN` em produção, `QA_SUGGESTIONS_GITHUB_TOKEN` na QA); trocar exige
+um novo deploy. Sem token a aprovação responde 503 `SUGGESTIONS_GITHUB_TOKEN_MISSING` e a sugestão
+continua pendente: o módulo nunca usa outro token no lugar.
 
-Como esse token também enxerga o repositório privado de suporte, o que sai para a issue pública é
-só título e texto da sugestão (nunca nome, e-mail ou id), e o token **precisa de escrita em Issues
-em cada repositório de destino**. Um token fine-grained limitado ao repositório de suporte devolve
-erro do GitHub e a aprovação responde 502 (a sugestão volta para a fila).
-
-**Repositórios de destino** (variáveis de ambiente; vêm do deploy como `vars` do GitHub Actions
-`SUGGESTIONS_REPO_*`):
+**Repositórios de destino, por ambiente** (variáveis de ambiente; vêm do deploy como `vars` do GitHub
+Actions `SUGGESTIONS_REPO_*` em produção e `QA_SUGGESTIONS_REPO_*` na QA):
 
 | Variável | Descrição |
 |---|---|
+| `SUGGESTIONS_GITHUB_TOKEN` | Token das sugestões (Issues: write nos repositórios de destino) |
 | `GITHUB_SUGGESTIONS_REPO_BACKEND` / `_FRONTEND` / `_DESIGN_SYSTEM` | Repositório de cada destino, no formato `dono/nome` |
 
-Destino sem repositório (ou com formato inválido) fica desligado: a aprovação responde 503 e a
-sugestão continua pendente. Sem token do suporte configurado, todos os destinos ficam desligados.
+Destino sem repositório (ou com formato inválido) fica desligado: a aprovação responde 503
+`SUGGESTIONS_GITHUB_DISABLED` e a sugestão continua pendente.
 
-**QA e produção usam os mesmos repositórios.** Aprovar uma sugestão na QA abre uma issue pública de
-verdade nos repositórios oficiais; aprove na QA só o que pode ficar público.
+**A QA aponta para um repositório sandbox**, nunca para os oficiais: aprovar uma sugestão na QA abre
+uma issue pública de verdade no repositório configurado. Sem as variáveis `QA_SUGGESTIONS_REPO_*` a
+aprovação na QA fica desligada.
 
-**Falhas comuns na aprovação:** 503 = destino sem repositório ou token do suporte ausente; 502 = o
-GitHub recusou (token sem escrita em Issues naquele repositório, token expirado ou GitHub fora do ar).
-Em ambos a sugestão continua `PENDING` e pode ser aprovada de novo depois de corrigir.
+**Falhas comuns na aprovação:** 503 `SUGGESTIONS_GITHUB_TOKEN_MISSING` = token ausente; 503
+`SUGGESTIONS_GITHUB_DISABLED` = destino sem repositório; 502 `GITHUB_UNAVAILABLE` = o GitHub recusou
+(token sem escrita em Issues naquele repositório, token expirado ou GitHub fora do ar). Em todos a
+sugestão continua `PENDING` e pode ser aprovada de novo depois de corrigir.
 
 | Rota | Descrição |
 |---|---|

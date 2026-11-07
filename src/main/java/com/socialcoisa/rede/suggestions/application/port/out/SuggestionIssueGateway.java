@@ -1,19 +1,35 @@
 package com.socialcoisa.rede.suggestions.application.port.out;
 
+import java.time.Instant;
 import java.util.Optional;
 
 import com.socialcoisa.rede.suggestions.domain.SuggestionTarget;
 
 /**
- * Abre a issue pública de uma sugestão aprovada. Sem token/repositório do destino o gateway fica
- * desligado para aquele destino e a sugestão continua pendente.
+ * Opens the public issue of an approved suggestion. The credentials and target repositories belong to
+ * the suggestions module alone: nothing here borrows another module's token.
  */
 public interface SuggestionIssueGateway {
 
-	boolean enabled(SuggestionTarget target);
+	/** Whether {@code target} can publish now, and if not, which piece of configuration is missing. */
+	Availability availability(SuggestionTarget target);
 
-	/** Vazio quando o GitHub não respondeu; quem chama devolve a sugestão para a fila. */
-	Optional<IssueRef> createIssue(SuggestionTarget target, String title, String body);
+	/**
+	 * Publishes the issue idempotently. {@code key} is a stable id carried by the issue; when
+	 * {@code previousAttempt} is set, an issue with that key created since then is returned instead of
+	 * opening a second one. Empty when GitHub did not answer (the caller puts the suggestion back in the
+	 * queue and a later approval retries safely).
+	 */
+	Optional<IssueRef> publish(SuggestionTarget target, String key, String title, String body,
+			Instant previousAttempt);
+
+	enum Availability {
+		READY,
+		/** No dedicated suggestions token: every target is off. */
+		TOKEN_MISSING,
+		/** No (or malformed) repository for this target in this environment. */
+		REPOSITORY_MISSING
+	}
 
 	record IssueRef(int number, String url) {
 	}
