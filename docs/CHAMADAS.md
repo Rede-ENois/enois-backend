@@ -90,12 +90,12 @@ o domínio.
 |---|---|---|
 | `RINGING` | 1:1 tocando para quem foi chamado | atender, recusar, cancelar, prazo de 40s |
 | `CONNECTING` | Alguém vai entrar (1:1 atendido, ou grupo aberto) | primeira entrada → `ACTIVE` |
-| `ACTIVE` | Tem gente na sala | encerrar, sair (grupo), falha, abandono (30 min sem sinal) |
+| `ACTIVE` | Tem gente na sala | encerrar, sair (grupo), falha, sala de grupo vazia por 1 min, abandono (30 min sem sinal) |
 | `DECLINED` | Quem foi chamado recusou | — |
 | `MISSED` | Ninguém atendeu a tempo | — |
 | `CANCELLED` | Quem ligou desistiu antes de atender | — |
 | `ENDED` | Terminou normalmente | — |
-| `FAILED` | Falha de conexão, ou grupo aberto que ninguém entrou em 5 min | — |
+| `FAILED` | Falha de conexão, ou grupo aberto que ninguém entrou em 1 min | — |
 
 Transições são conferidas no domínio (`CallState.canMoveTo`) e gravadas com **compare-and-set**:
 a linha só muda se ainda estiver no estado esperado. Dois pedidos simultâneos (atender e recusar,
@@ -105,20 +105,40 @@ ou dois "entrar") não deixam a chamada em dois estados nem contam a mesma pesso
 
 | | 1:1 | "Tamo junto" (grupo) |
 |---|---|---|
+| Nome | "Ligação" | **"Tamo junto"**, sempre — "Tamo junto voz" (áudio) e "Tamo junto vídeo" |
 | Toca no aparelho | Sim (toque sintetizado no cliente) | **Nunca** |
 | Aviso | `CALL_INCOMING` | `CALL_GROUP_LIVE`, uma vez por chamada ("🔴 O grupo esta ao vivo! Entre na chamada quando quiser.") |
-| Sair da sala | Encerra a chamada | Só a pessoa sai; encerra quando a última sair |
-| Prazo | 40s tocando | 5 min sem ninguém entrar |
-| Repetir "começar" | Devolve a chamada já aberta | Devolve a chamada já aberta |
+| Quem abre | Fica tocando até alguém atender | **Já entra**: a sala nasce ao vivo com quem a abriu dentro |
+| Sair da sala | Encerra a chamada | Só a pessoa sai; sem ninguém por 1 min, encerra |
+| Prazo | 40s tocando | 1 min sem ninguém dentro (contado da última saída) |
+| Repetir "começar" | Devolve a chamada já aberta | Devolve a chamada já aberta e entra nela |
+
+### Sala por tópico
+
+Cada tópico do grupo tem a **própria** sala "Tamo junto", independente da sala geral e das dos
+outros tópicos: são chamadas diferentes, com `topic_id` preenchido. Abrir a sala de um tópico não
+aparece na sala geral, e vice-versa. O tópico precisa ser daquele grupo (404 `TOPIC_NOT_FOUND` se
+não for) e não pode estar arquivado (409 `TOPIC_ARCHIVED`).
+
+### Sala vazia
+
+Quando a última pessoa sai, a chamada **não** fecha na hora: o prazo vira a tolerância de 1 minuto
+e ela continua aberta (com zero participantes) para quem caiu, trocou de aba ou recarregou a página
+voltar à mesma sala. Passado o minuto sem ninguém, o worker fecha com `NO_CONNECTION`.
+
+Uma sala com gente dentro **nunca** fecha por prazo de abertura: o worker só considera o prazo de
+abandono (30 min) quando a contagem de participantes está zerada.
 
 ## Rotas
 
 | Método | Rota | Descrição |
 |---|---|---|
 | POST | `/conversations/{id}/calls` | Começa (ou devolve) a chamada 1:1. Corpo opcional `{"kind":"AUDIO"\|"VIDEO"}` |
-| POST | `/groups/{id}/calls` | Começa (ou devolve) o "Tamo junto" |
+| POST | `/groups/{id}/calls` | Abre (ou entra n)o "Tamo junto" da sala geral do grupo |
+| POST | `/groups/{id}/topics/{topicId}/calls` | Abre (ou entra n)o "Tamo junto" do tópico — sala própria |
 | GET | `/conversations/{id}/calls/open` | Chamada aberta da conversa (ou `null`) |
-| GET | `/groups/{id}/calls/open` | Chamada aberta do grupo (ou `null`) |
+| GET | `/groups/{id}/calls/open` | Chamada aberta da sala geral do grupo (ou `null`) |
+| GET | `/groups/{id}/topics/{topicId}/calls/open` | Chamada aberta do tópico (ou `null`) |
 | GET | `/calls/open` | Tudo que está aberto para a pessoa (voltar de outra tela) |
 | GET | `/calls/{id}` | Estado da chamada |
 | POST | `/calls/{id}/answer` | Atender (só 1:1). Idempotente |
@@ -200,7 +220,8 @@ sessão de usuário — o chamador é o gateway, autenticado pelo segredo, não 
 |---|---|
 | `CallsProvider` (raiz) | Escuta o evento `call` do stream, confere o estado pelas rotas e desenha o painel — overlay interno, minimizável, sem aba nova |
 | `ConversationThread` | Ligações de áudio/vídeo e "entrar" na conversa 1:1 (só conversa de duas pessoas) |
-| Grupo (`/grupos/{slug}`) | Botão "Tamo junto" e banner "🔴 O grupo está ao vivo!" com quantas pessoas estão na chamada |
+| Grupo (`/grupos/{slug}`) | Botões "Tamo junto voz" / "Tamo junto vídeo" e banner com quantas pessoas estão na chamada |
+| Tópico do grupo | Os mesmos botões dentro do tópico, apontando para a sala daquele tópico |
 | Notificação e push (`/call/{id}`) | A rota pede a entrada ao provider e devolve a pessoa para a conversa de origem |
 | Toque | Sintetizado no navegador (Web Audio), só em 1:1, nunca em modo lite/BATATA |
 | "Denunciar chamada" (painel ao vivo) | Escolhe quem, motivo e relato; pede a captura do momento à sala e envia tudo junto |

@@ -19,6 +19,15 @@ interface SpringDataCallSessionJpaRepository extends JpaRepository<CallSessionJp
 
 	List<CallSessionJpaEntity> findByGroupIdAndStateIn(String groupId, Collection<CallState> states);
 
+	List<CallSessionJpaEntity> findByGroupIdAndTopicIdAndStateIn(String groupId, String topicId,
+			Collection<CallState> states);
+
+	/** Salas abertas do grupo que NÃO são de tópico (sala geral, e as de antes do tópico existir). */
+	@Query("SELECT c FROM CallSessionJpaEntity c WHERE c.groupId = :groupId AND c.topicId IS NULL "
+			+ "AND c.state IN :states")
+	List<CallSessionJpaEntity> findGroupWideOpen(@Param("groupId") String groupId,
+			@Param("states") Collection<CallState> states);
+
 	@Query("SELECT c FROM CallSessionJpaEntity c WHERE c.state IN :states AND c.expiresAt < :now ORDER BY c.expiresAt")
 	List<CallSessionJpaEntity> expired(@Param("states") Collection<CallState> states, @Param("now") Instant now,
 			Pageable pageable);
@@ -39,4 +48,14 @@ interface SpringDataCallSessionJpaRepository extends JpaRepository<CallSessionJp
 			@Param("now") Instant now, @Param("answeredAt") Instant answeredAt, @Param("endedAt") Instant endedAt,
 			@Param("endedBy") String endedBy, @Param("endReason") String endReason,
 			@Param("expiresAt") Instant expiresAt);
+
+	/**
+	 * Chamada que fica aberta sem mudar de estado: só o prazo (e o sinal de vida) muda. É o que
+	 * segura a sala vazia na tolerância e o que adia o abandono quando alguém entra.
+	 */
+	@Modifying(clearAutomatically = true)
+	@Query("UPDATE CallSessionJpaEntity c SET c.expiresAt = :expiresAt, c.lastActivityAt = :now "
+			+ "WHERE c.id = :id AND c.state = :state")
+	int extend(@Param("id") String id, @Param("state") CallState state, @Param("expiresAt") Instant expiresAt,
+			@Param("now") Instant now);
 }

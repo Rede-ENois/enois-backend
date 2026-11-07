@@ -357,9 +357,10 @@ class CallFlowTests {
 				.contentType(MediaType.APPLICATION_JSON)
 				.content("{\"kind\":\"AUDIO\"}")).andReturn());
 		String callId = call.get("id").asText();
-		// Grupo nasce "conectando", não "tocando": ninguém recebe toque.
-		assertThat(call.get("state").asText()).isEqualTo("CONNECTING");
+		// Grupo não toca e quem abre já entra, então nasce ao vivo ("ACTIVE"), não "CONNECTING".
+		assertThat(call.get("state").asText()).isEqualTo("ACTIVE");
 		assertThat(call.get("modality").asText()).isEqualTo("GROUP");
+		assertThat(call.get("participantCount").asInt()).isEqualTo(1);
 
 		// Um aviso por pessoa, mesmo com a mesma chamada consultada várias vezes.
 		Map<String, Object> notice = notificationOf(member, "CALL_GROUP_LIVE", "call_live:" + callId);
@@ -373,7 +374,7 @@ class CallFlowTests {
 				.header("X-Session-Token", member.token())).andReturn());
 		assertThat(open.get("id").asText()).isEqualTo(callId);
 
-		// Dono e membro entram; a contagem reflete quem está na sala.
+		// Quem abriu entra pedindo a credencial da sala; o membro também.
 		mockMvc.perform(post("/calls/" + callId + "/join").header("X-Session-Token", owner.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.call.state").value("ACTIVE"));
@@ -387,13 +388,148 @@ class CallFlowTests {
 			.andExpect(jsonPath("$.state").value("ACTIVE"))
 			.andExpect(jsonPath("$.participantCount").value(1));
 
-		// Sai o último: a chamada fecha e o "ao vivo" some.
+		// Sai o último: a sala fica vazia mas continua aberta pela tolerância, e o "ao vivo" segue.
 		mockMvc.perform(post("/calls/" + callId + "/leave").header("X-Session-Token", member.token()))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.state").value("ENDED"))
-			.andExpect(jsonPath("$.endReason").value("GROUP_EMPTY"));
-		mockMvc.perform(get("/groups/" + groupId + "/calls/open").header("X-Session-Token", member.token()))
-			.andReturn();
+			.andExpect(jsonPath("$.state").value("ACTIVE"))
+			.andExpect(jsonPath("$.participantCount").value(0));
+		JsonNode stillOpen = body(mockMvc.perform(get("/groups/" + groupId + "/calls/open")
+				.header("X-Session-Token", member.token())).andReturn());
+		assertThat(stillOpen.get("id").asText()).isEqualTo(callId);
+
+		// Passado mais de um minuto sem ninguém, o worker fecha.
+		clock.advance(java.time.Duration.ofSeconds(61));
+		expireNow();
+		JsonNode closed = body(mockMvc.perform(get("/calls/" + callId).header("X-Session-Token", member.token()))
+			.andReturn());
+		assertThat(closed.get("state").asText()).isEqualTo("ENDED");
+		assertThat(closed.get("endReason").asText()).isEqualTo("NO_CONNECTION");
+		assertThat(isBlank(mockMvc.perform(get("/groups/" + groupId + "/calls/open")
+			.header("X-Session-Token", member.token())).andReturn())).isTrue();
+	}
+
+	@Test
+	void quemAbreOTamoJuntoJaEntraNaSala() throws Exception {
+		var owner = auth().authenticate("call-g12-owner");
+		String groupId = createGroup(owner, "Tamo Junto 12", "OPEN", "call-tamo-12");
+
+		JsonNode call = body(mockMvc.perform(post("/groups/" + groupId + "/calls")
+				.header("X-Session-Token", owner.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"kind\":\"VIDEO\"}")).andReturn());
+		String callId = call.get("id").asText();
+		assertThat(call.get("participantCount").asInt()).isEqualTo(1);
+		assertThat(call.get("myState").asText()).isEqualTo("JOINED");
+
+		// Abrir de novo devolve a MESMA sala, sem contar a pessoa duas vezes.
+		JsonNode again = body(mockMvc.perform(post("/groups/" + groupId + "/calls")
+				.header("X-Session-Token", owner.token())).andReturn());
+		assertThat(again.get("id").asText()).isEqualTo(callId);
+		assertThat(again.get("state").asText()).isEqualTo("ACTIVE");
+		assertThat(again.get("participantCount").asInt()).isEqualTo(1);
+	}
+
+	@Test
+	void salaVaziaSobreviveAoRecarregamentoDentroDaTolerancia() throws Exception {
+		var owner = auth().authenticate("call-g13-owner");
+		String groupId = createGroup(owner, "Tamo Junto 13", "OPEN", "call-tamo-13");
+		String callId = body(mockMvc.perform(post("/groups/" + groupId + "/calls")
+				.header("X-Session-Token", owner.token())).andReturn()).get("id").asText();
+
+		mockMvc.perform(post("/calls/" + callId + "/leave").header("X-Session-Token", owner.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.state").value("ACTIVE"));
+
+		// Meio minuto depois ainda é a mesma sala, e ela volta a ficar viva por dentro.
+		clock.advance(java.time.Duration.ofSeconds(30));
+		expireNow();
+		mockMvc.perform(post("/calls/" + callId + "/join").header("X-Session-Token", owner.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.call.participantCount").value(1));
+	}
+
+	@Test
+	void salaComGenteDentroNaoFechaPeloPrazo() throws Exception {
+		// Contas próprias deste teste: a sessão de outra classe de teste compartilha o banco.
+		var owner = auth().authenticate("call-g20-owner");
+		var member = auth().authenticate("call-g20-member");
+		String groupId = createGroup(owner, "Tamo Junto 20", "OPEN", "call-tamo-20");
+		joinGroup(member, groupId, "call-tamo-20-member");
+		String callId = body(mockMvc.perform(post("/groups/" + groupId + "/calls")
+				.header("X-Session-Token", owner.token())).andReturn()).get("id").asText();
+		mockMvc.perform(post("/calls/" + callId + "/join").header("X-Session-Token", member.token()))
+			.andExpect(status().isOk());
+
+		// Bem mais que o prazo de abandono (30 min) e que a tolerância de sala vazia. O token de
+		// sessão também vence com o relógio movido, então a leitura usa uma sessão nova.
+		clock.advance(java.time.Duration.ofMinutes(45));
+		var late = auth().authenticate("call-g20-member");
+		expireNow();
+		mockMvc.perform(get("/calls/" + callId).header("X-Session-Token", late.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.state").value("ACTIVE"))
+			.andExpect(jsonPath("$.participantCount").value(2));
+	}
+
+	@Test
+	void cadaTopicoTemASuaSalaTamoJunto() throws Exception {
+		var owner = auth().authenticate("call-g15-owner");
+		var member = auth().authenticate("call-g15-member");
+		String groupId = createGroup(owner, "Tamo Junto 15", "OPEN", "call-tamo-15");
+		joinGroup(member, groupId, "call-tamo-15-member");
+		String topicA = createTopic(owner, groupId, "Avisos", "call-tamo-15-topic-a");
+		String topicB = createTopic(owner, groupId, "Estudos", "call-tamo-15-topic-b");
+
+		JsonNode topicCall = body(mockMvc.perform(post("/groups/" + groupId + "/topics/" + topicA + "/calls")
+				.header("X-Session-Token", owner.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"kind\":\"VIDEO\"}")).andReturn());
+		assertThat(topicCall.get("topicId").asText()).isEqualTo(topicA);
+		assertThat(topicCall.get("modality").asText()).isEqualTo("GROUP");
+		assertThat(topicCall.get("kind").asText()).isEqualTo("VIDEO");
+
+		// A sala do tópico não aparece na sala geral nem na de outro tópico.
+		assertThat(isBlank(mockMvc.perform(get("/groups/" + groupId + "/calls/open")
+			.header("X-Session-Token", member.token())).andReturn())).isTrue();
+		assertThat(isBlank(mockMvc.perform(get("/groups/" + groupId + "/topics/" + topicB + "/calls/open")
+			.header("X-Session-Token", member.token())).andReturn())).isTrue();
+		JsonNode openOfTopic = body(mockMvc.perform(get("/groups/" + groupId + "/topics/" + topicA + "/calls/open")
+				.header("X-Session-Token", member.token())).andReturn());
+		assertThat(openOfTopic.get("id").asText()).isEqualTo(topicCall.get("id").asText());
+
+		// O tópico também tem a sua e o aviso diz de qual tópico é.
+		JsonNode otherTopic = body(mockMvc.perform(post("/groups/" + groupId + "/topics/" + topicB + "/calls")
+				.header("X-Session-Token", member.token())).andReturn());
+		assertThat(otherTopic.get("id").asText()).isNotEqualTo(topicCall.get("id").asText());
+		Map<String, Object> notice = notificationOf(owner, "CALL_GROUP_LIVE", "call_live:" + otherTopic.get("id").asText());
+		assertThat((String) notice.get("body")).contains("Estudos");
+
+		// A sala geral é outra, independente das de tópico.
+		JsonNode general = body(mockMvc.perform(post("/groups/" + groupId + "/calls")
+				.header("X-Session-Token", owner.token())).andReturn());
+		assertThat(general.get("topicId").isNull()).isTrue();
+		assertThat(general.get("id").asText())
+			.isNotIn(topicCall.get("id").asText(), otherTopic.get("id").asText());
+	}
+
+	@Test
+	void topicoDeOutroGrupoNaoAbreSala() throws Exception {
+		var owner = auth().authenticate("call-g16-owner");
+		String groupId = createGroup(owner, "Tamo Junto 16", "OPEN", "call-tamo-16");
+		String otherGroup = createGroup(owner, "Tamo Junto 17", "OPEN", "call-tamo-17");
+		String foreignTopic = createTopic(owner, otherGroup, "Avisos", "call-tamo-17-topic");
+
+		mockMvc.perform(post("/groups/" + groupId + "/topics/" + foreignTopic + "/calls")
+				.header("X-Session-Token", owner.token()))
+			.andExpect(status().isNotFound())
+			.andExpect(jsonPath("$.code").value("TOPIC_NOT_FOUND"));
+
+		var outsider = auth().authenticate("call-g16-outsider");
+		String topic = createTopic(owner, groupId, "Avisos", "call-tamo-16-topic");
+		mockMvc.perform(post("/groups/" + groupId + "/topics/" + topic + "/calls")
+				.header("X-Session-Token", outsider.token()))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("NOT_GROUP_MEMBER"));
 	}
 
 	@Test
@@ -419,10 +555,16 @@ class CallFlowTests {
 		String callId = body(mockMvc.perform(post("/groups/" + groupId + "/calls")
 				.header("X-Session-Token", owner.token())).andReturn()).get("id").asText();
 
-		clock.advance(java.time.Duration.ofMinutes(6));
+		// Quem abriu já entrou de verdade: saiu antes do prazo, então a sala fica vazia.
+		mockMvc.perform(post("/calls/" + callId + "/leave").header("X-Session-Token", owner.token()))
+			.andExpect(status().isOk());
+		// Ninguém voltou: passado o minuto, fecha.
+		clock.advance(java.time.Duration.ofSeconds(61));
 		expireNow();
+		// Quem abriu entrou e saiu: a sala já estava ao vivo quando esvaziou, então termina ENDED.
 		JsonNode closed = body(mockMvc.perform(get("/calls/" + callId).header("X-Session-Token", owner.token())).andReturn());
-		assertThat(closed.get("state").asText()).isEqualTo("FAILED");
+		assertThat(closed.get("state").asText()).isEqualTo("ENDED");
+		assertThat(closed.get("endReason").asText()).isEqualTo("NO_CONNECTION");
 	}
 
 	// ------------------------------------------------------------------ utilidades
@@ -448,6 +590,11 @@ class CallFlowTests {
 	/** Mesma porta do worker, sem esperar o agendador (desligado no teste). */
 	private void expireNow() {
 		worker.sweepOnce();
+	}
+
+	private static boolean isBlank(MvcResult result) throws Exception {
+		String content = result.getResponse().getContentAsString();
+		return content == null || content.isBlank();
 	}
 
 	private JsonNode body(MvcResult result) throws Exception {
@@ -480,6 +627,18 @@ class CallFlowTests {
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("name", name, "description", "tamo junto",
 					"joinMode", joinMode))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		return parse(result).get("id").asText();
+	}
+
+	private String createTopic(TestAuthHelper.AuthSession user, String groupId, String name, String key)
+			throws Exception {
+		MvcResult result = mockMvc.perform(post("/groups/" + groupId + "/topics")
+				.header("X-Session-Token", user.token())
+				.header("Idempotency-Key", key)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("name", name))))
 			.andExpect(status().isCreated())
 			.andReturn();
 		return parse(result).get("id").asText();
