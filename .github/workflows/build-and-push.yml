@@ -183,6 +183,11 @@ jobs:
           file: ./Dockerfile
           push: false
           load: true
+          # CA do gateway de chamadas, quando houver: o salto até ele é TLS entre
+          # hosts e o certificado é nosso, não de uma autoridade pública. Vazio
+          # (o padrão) produz a mesma imagem de antes.
+          build-args: |
+            EPAPO_GATEWAY_CA_B64=${{ secrets.EPAPO_GATEWAY_CA_B64 }}
           tags: |
             ${{ env.HARBOR_REGISTRY }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.image_tag }}
             ${{ env.HARBOR_REGISTRY }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.branch }}
