@@ -10,26 +10,40 @@ permissions:
 
 jobs:
   logs:
-    runs-on: [self-hosted, enois, docker-prod4]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Cadeia do gateway como o backend a chama
+      - name: Comparar segredos entre containers (sem imprimir valores)
+        env:
+          PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
+          PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
         run: |
-          set -uo pipefail
-          echo "=== quem sou eu ==="
-          curl -sS --max-time 10 https://ifconfig.me || true
-          echo
-          echo "=== token interno do container (so tamanho) ==="
-          TOKEN=$(docker inspect enois-qa-backend --format "{{range .Config.Env}}{{println .}}{{end}}" | grep "^REDE_CALLS_EPAPO_INTERNAL_TOKEN=" | cut -d= -f2-)
-          echo "tamanho=${#TOKEN}"
-          URL=$(docker inspect enois-qa-backend --format "{{range .Config.Env}}{{println .}}{{end}}" | grep "^REDE_CALLS_EPAPO_GATEWAY_URL=" | cut -d= -f2-)
-          echo "url=${URL}"
-          CA=/etc/ssl/epapo-ca.pem
-          docker exec enois-qa-backend sh -c "openssl version 2>/dev/null | head -1" || echo "sem openssl no container"
-          echo "=== POST /auth/token (chamada inexistente: 403 entry_denied prova a cadeia) ==="
-          curl -sS -o /tmp/out.txt -w "http=%{http_code} tempo=%{time_total}\n" --max-time 15 \
-            --cacert <(docker exec -i enois-qa-backend sh -c "cat /tmp/epapo-gateway.crt 2>/dev/null") \
-            -X POST "${URL%/}/auth/token" \
-            -H "X-Epapo-Internal: ${TOKEN}" -H "Content-Type: application/json" \
-            --data "{\"callId\":\"00000000-0000-0000-0000-000000000000\",\"userId\":\"00000000-0000-0000-0000-000000000000\"}" 2>&1 | tail -3
-          head -c 300 /tmp/out.txt; echo
+          set -euo pipefail
+          AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
+          get() { curl -sS --max-time 30 "${AUTH[@]}" "${PORTAINER_BASE_URL}/api/endpoints/$1/docker/containers/$2/json"; }
+          get 12 epapo-prod-auth-gateway-1 > /tmp/gw.json
+          get 8 enois-qa-backend > /tmp/qa.json
+          get 11 enois-backend > /tmp/pr.json
+          python3 - <<PY
+          import json
+          def env(p):
+              d=json.load(open(p))
+              out={}
+              for e in d["Config"]["Env"]:
+                  k,_,v=e.partition("=")
+                  out[k]=v
+              return out
+          gw=env("/tmp/gw.json"); qa=env("/tmp/qa.json"); pr=env("/tmp/pr.json")
+          pairs=[
+              ("QA interno  == gateway prod slot", qa.get("REDE_CALLS_EPAPO_INTERNAL_TOKEN"), gw.get("EPAPO_INTERNAL_TOKEN")),
+              ("QA interno  == gateway QA slot", qa.get("REDE_CALLS_EPAPO_INTERNAL_TOKEN"), gw.get("EPAPO_INTERNAL_TOKEN_QA")),
+              ("QA authorize== gateway QA slot", qa.get("REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN"), gw.get("ENOIS_AUTHORIZE_SECRET_QA")),
+              ("QA authorize== gateway prod slot", qa.get("REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN"), gw.get("ENOIS_AUTHORIZE_SECRET")),
+              ("PROD interno == gateway prod slot", pr.get("REDE_CALLS_EPAPO_INTERNAL_TOKEN"), gw.get("EPAPO_INTERNAL_TOKEN")),
+              ("PROD authorize== gateway prod slot", pr.get("REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN"), gw.get("ENOIS_AUTHORIZE_SECRET")),
+          ]
+          for name,a,b in pairs:
+              print(f"{name}: {'IGUAL' if a and b and a==b else 'DIFERENTE/vazio'} (tam {len(a or '')} vs {len(b or '')})")
+          print("QA url:", qa.get("REDE_CALLS_EPAPO_GATEWAY_URL"), "| host:", qa.get("REDE_CALLS_EPAPO_URL"))
+          print("PROD url:", pr.get("REDE_CALLS_EPAPO_GATEWAY_URL"), "| host:", pr.get("REDE_CALLS_EPAPO_URL"))
+          PY
