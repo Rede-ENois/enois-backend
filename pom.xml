@@ -38,6 +38,14 @@
 		<caffeine.version>3.3.1</caffeine.version>
 		<!-- 3 CVEs críticas em 11.0.24 corrigidas em 11.0.25 (relatório Trivy de 23/10). -->
 		<tomcat.version>11.0.25</tomcat.version>
+		<!-- O H2 2.4.240 (a versao que o Boot 4.1.2 gerencia) invalida as check constraints quando
+		     a conexao que as criou e fechada: na sessao seguinte todo insert falha com
+		     "Check constraint invalid ... [23514]" mesmo com valor valido. Na suite isso aparecia
+		     quando o cache de contextos do Spring descartava o contexto mais antigo, o Hikari dele
+		     fechava as conexoes do H2 compartilhado (jdbc:h2:mem:rede) e os testes de calendario que
+		     rodavam depois caíam em 409. Corrigido no H2 2.5.x; fixado aqui ate o Boot gerenciar
+		     essa linha (upstream: h2database/h2database#4308, #4320, #4342). -->
+		<h2.version>2.5.252</h2.version>
 		<!-- The app has no default profile; `./mvnw spring-boot:run` runs as dev unless
 		     -Dspring-boot.run.profiles=... says otherwise. Packaged jars must set SPRING_PROFILES_ACTIVE. -->
 		<spring-boot.run.profiles>dev</spring-boot.run.profiles>
