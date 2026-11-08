@@ -13,15 +13,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Logs do gateway
+      - name: Logs dos backends
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
         run: |
           set +e
-          curl -sS --max-time 90 \
-            -H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}" \
-            "${PORTAINER_BASE_URL}/api/endpoints/12/docker/containers/epapo-prod-auth-gateway-1/logs?stdout=1&stderr=1&timestamps=1&tail=4000" \
-            -o /tmp/gw.log
-          ls -l /tmp/gw.log
-          tr -d "\000" < /tmp/gw.log | grep -a -i -E "authorize|502|timeout|entry_denied|error" | tail -40
+          show() {
+            curl -sS --max-time 90 \
+              -H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}" \
+              "${PORTAINER_BASE_URL}/api/endpoints/$1/docker/containers/$2/logs?stdout=1&stderr=1&timestamps=1&tail=$3" \
+              -o /tmp/b.log
+            tr -d "\000" < /tmp/b.log
+          }
+          echo "=== QA issuer ==="
+          show 8 enois-qa-backend 8000 | grep -a -E "EpapoMeetingTokenIssuer|CALLS_UNAVAILABLE|CALLS_NOT_CONFIGURED|emissao do token" | tail -15
+          echo "=== PROD issuer ==="
+          show 11 enois-prod-backend 4000 | grep -a -E "EpapoMeetingTokenIssuer|CALLS_UNAVAILABLE|emissao do token" | tail -15
