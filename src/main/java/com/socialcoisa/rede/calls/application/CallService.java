@@ -13,7 +13,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.socialcoisa.rede.calls.application.port.out.CallRepository;
@@ -27,6 +30,9 @@ import com.socialcoisa.rede.calls.domain.CallState;
 import com.socialcoisa.rede.groups.domain.GroupTopic;
 import com.socialcoisa.rede.groups.domain.GroupTopicStatus;
 import com.socialcoisa.rede.notifications.application.NotificationService;
+import com.socialcoisa.rede.presence.application.PresenceChanged;
+import com.socialcoisa.rede.presence.application.PresenceService;
+import com.socialcoisa.rede.presence.domain.PresenceStatus;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.shared.security.UserRateLimiter;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -61,6 +67,7 @@ public class CallService implements CallRoomAuthorization {
 	private final NotificationService notifications;
 	private final UserProfileRepository profiles;
 	private final UserRateLimiter rateLimiter;
+	private final PresenceService presence;
 	private final ApplicationEventPublisher events;
 	private final Clock clock;
 	/**
@@ -68,11 +75,21 @@ public class CallService implements CallRoomAuthorization {
 	 * antes de pedir o token: o gateway responde à pergunta de autorização gravando a mesma linha.
 	 */
 	private final TransactionTemplate entrance;
+	/**
+	 * Transação própria do encerramento do toque. O listener de presença roda na fase depois do
+	 * commit, quando a transação original já foi confirmada mas ainda conta como ativa: uma
+	 * transação REQUIRED entraria nela e as gravações não teriam onde acontecer. Por isso
+	 * {@code REQUIRES_NEW}, que abre uma transação nova de verdade.
+	 */
+	private final TransactionTemplate ringing;
 
 	public CallService(CallRepository calls, CallAudience audience, TopicLookup topics, MeetingTokenIssuer tokens,
 			NotificationService notifications, UserProfileRepository profiles, UserRateLimiter rateLimiter,
-			ApplicationEventPublisher events, Clock clock, PlatformTransactionManager transactionManager) {
+			PresenceService presence, ApplicationEventPublisher events, Clock clock,
+			PlatformTransactionManager transactionManager) {
 		this.entrance = new TransactionTemplate(transactionManager);
+		this.ringing = new TransactionTemplate(transactionManager);
+		this.ringing.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
 		this.calls = calls;
 		this.audience = audience;
 		this.topics = topics;
@@ -80,6 +97,7 @@ public class CallService implements CallRoomAuthorization {
 		this.notifications = notifications;
 		this.profiles = profiles;
 		this.rateLimiter = rateLimiter;
+		this.presence = presence;
 		this.events = events;
 		this.clock = clock;
 	}
@@ -97,6 +115,7 @@ public class CallService implements CallRoomAuthorization {
 			throw new ApiException(409, "NOT_A_DIRECT_CONVERSATION",
 				"Esta conversa tem mais de duas pessoas: use a chamada do grupo.");
 		}
+		List<String> audienceIds = participants.stream().filter(id -> !id.equals(actorId)).toList();
 		rateLimiter.require(actorId, UserRateLimiter.START_CALL);
 		Instant now = clock.instant();
 		// A chamada existente do vínculo é devolvida em vez de criar outra: repetir o pedido (dois
@@ -105,10 +124,13 @@ public class CallService implements CallRoomAuthorization {
 		if (open.isPresent()) {
 			return existing(open.get(), actorId);
 		}
-		List<String> audienceIds = participants.stream().filter(id -> !id.equals(actorId)).toList();
 		CallSession call = CallSession.start(newId("call"), kind, CallModality.DIRECT, conversationId, null,
 			actorId, newRoomId(), displayName(actorId), now);
 		calls.create(call, participants, now);
+		// A presença é conferida no último instante antes do toque, e não só na entrada do pedido: se
+		// a pessoa mudou para "não perturbar" no meio do caminho, a chamada não chega a existir (a
+		// transação inteira volta atrás) em vez de tocar e ser recusada depois.
+		requireAvailableForDirectCall(audienceIds);
 		notifyIncoming(call, actorId, audienceIds);
 		publish(call, participants);
 		return view(call, actorId, null);
@@ -453,6 +475,57 @@ public class CallService implements CallRoomAuthorization {
 		return open.filter(call -> isAudience(call, actorId)).map(call -> view(call, actorId, null));
 	}
 
+	// ------------------------------------------------------------------ presença
+
+	/**
+	 * A pessoa escolheu não ser incomodada com uma chamada já tocando. O toque não pode continuar:
+	 * encerra os 1:1 pendentes contra ela, como se ela tivesse recusado, e quem ligou vê a chamada
+	 * terminar em vez de tocar num vazio.
+	 *
+	 * <p>Depois do commit da escolha, e sem lançar: se outra ação (atender, cancelar) decidiu antes,
+	 * a transição condicional não grava e nada muda.
+	 */
+	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+	public void onPresenceChanged(PresenceChanged changed) {
+		if (changed.status() != PresenceStatus.DO_NOT_DISTURB && changed.status() != PresenceStatus.INVISIBLE) {
+			return;
+		}
+		try {
+			endRingingAgainst(changed.userId());
+		}
+		catch (RuntimeException failure) {
+			// A escolha da pessoa já está gravada; derrubar o toque é o efeito colateral, não a regra.
+			LOG.warn("nao foi possivel encerrar chamadas pendentes de um estado indisponivel: {}: {}",
+				failure.getClass().getSimpleName(), failure.getMessage());
+		}
+	}
+
+	/** Mesma limpeza numa transação própria: o listener roda depois do commit, sem transação aberta. */
+	private void endRingingAgainst(String userId) {
+		ringing.execute(status -> {
+			for (CallSession call : calls.findOpenByParticipant(userId)) {
+				if (call.modality() == CallModality.DIRECT && !call.initiatorId().equals(userId)
+						&& !call.state().allowsJoin()) {
+					stopRingingFor(call, userId);
+				}
+			}
+			return null;
+		});
+	}
+
+	private void stopRingingFor(CallSession call, String userId) {
+		Instant now = clock.instant();
+		CallState from = call.state();
+		call.closeBy(userId, CallState.DECLINED, now, "DO_NOT_DISTURB");
+		if (!calls.persist(call, from)) {
+			return;
+		}
+		calls.decide(call.id(), userId, CallParticipantState.DECLINED, now);
+		calls.settleInvites(call.id(), CallParticipantState.MISSED, now);
+		notifyEnded(call, userId);
+		publish(call, audienceOf(call));
+	}
+
 	// ------------------------------------------------------------------ worker
 
 	/** Fecha o que venceu (1:1 sem resposta, grupo vazio, sessão abandonada). Idempotente. */
@@ -544,6 +617,20 @@ public class CallService implements CallRoomAuthorization {
 			.orElseThrow(() -> new ApiException(404, "CALL_NOT_FOUND", "Chamada nao encontrada ou expirada."));
 		audience.requireMember(call, actorId);
 		return call;
+	}
+
+	/**
+	 * Chamada direta não toca para quem escolheu não ser incomodado. A recusa é a mesma para
+	 * "não perturbar" e "invisível", e não diz qual dos dois é: quem liga não descobre o estado de
+	 * presença de ninguém por tentativa e erro.
+	 */
+	private void requireAvailableForDirectCall(List<String> recipients) {
+		for (String userId : recipients) {
+			if (!presence.acceptsDirectCall(userId)) {
+				throw new ApiException(409, "CALL_RECIPIENT_UNAVAILABLE",
+					"Esta pessoa nao esta recebendo chamadas agora. Tente mais tarde.");
+			}
+		}
 	}
 
 	private void requireConfigured() {
