@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Metodos por rota de chamada
+      - name: Duracao das perguntas de autorizacao
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
@@ -22,7 +22,7 @@ jobs:
           dump() {
             curl -sS --max-time 180 \
               -H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}" \
-              "${PORTAINER_BASE_URL}/api/endpoints/$1/docker/containers/$2/logs?stdout=1&stderr=1&timestamps=1&tail=200000" \
+              "${PORTAINER_BASE_URL}/api/endpoints/$1/docker/containers/$2/logs?stdout=1&stderr=1&timestamps=1&tail=400000" \
               -o /tmp/b.log
             tr -d "\000" < /tmp/b.log
           }
@@ -30,10 +30,10 @@ jobs:
             set -- $env
             echo "===== $3 ====="
             dump $1 $2 > /tmp/c.log
-            grep -a -oE '"method":"[A-Z]+","path":"/calls[^"]*"' /tmp/c.log | sort | uniq -c | sort -rn | head -20
-            echo "-- join (qualquer metodo):"
-            grep -a -oE '"method":"[A-Z]+","path":"/calls/[^"]*/join"' /tmp/c.log | sort | uniq -c
-            echo "-- primeira e ultima linha:"
-            head -c 300 /tmp/c.log | grep -aoE '"@timestamp":"[^"]*"' | head -1
-            tail -c 2000 /tmp/c.log | grep -aoE '"@timestamp":"[^"]*"' | tail -1
+            echo "-- TODAS as linhas com gateway/entry (ultimas 15):"
+            grep -a "gateway/entry" /tmp/c.log | tail -15 | grep -aoE '"@timestamp":"[^"]*"|"method":"[A-Z]+"|"path":"[^"]*"|"status":[0-9]+|"durationMs":[0-9]+|status=[0-9]+|durationMs=[0-9]+' | paste -sd' ' - | tr ' ' '\n' | paste - - - - - - 2>/dev/null | tail -15
+            echo "-- contagem por status:"
+            grep -a "gateway/entry" /tmp/c.log | grep -aoE '"status":[0-9]+|status=[0-9]+' | sort | uniq -c
+            echo "-- contagem por method:"
+            grep -a "gateway/entry" /tmp/c.log | grep -aoE '"method":"[A-Z]+"|method=[A-Z]+' | sort | uniq -c
           done
