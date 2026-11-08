@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Rastro da entrada na chamada
+      - name: Metodos por rota de chamada
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
@@ -30,10 +30,10 @@ jobs:
             set -- $env
             echo "===== $3 ====="
             dump $1 $2 > /tmp/c.log
-            echo "bytes=$(wc -c < /tmp/c.log)"
-            echo "-- call-entry:"; grep -a -oE '"message":"call-entry[^"]*"' /tmp/c.log | tail -6
-            echo "-- gateway/entry requests:"; grep -a -oE '"path":"/calls/[^"]*gateway/entry[^"]*".{0,300}' /tmp/c.log | grep -aoE '"path":"[^"]*"|"status":[0-9]+|"durationMs":[0-9]+' | paste - - - 2>/dev/null | tail -8
-            echo "-- POST /calls/{id}/join:"; grep -a -oE '"path":"/calls/call_[^"]*/join".{0,300}' /tmp/c.log | grep -aoE '"path":"[^"]*"|"status":[0-9]+|"durationMs":[0-9]+' | paste - - - 2>/dev/null | tail -8
-            echo "-- 503 CALLS_UNAVAILABLE:"; grep -a -c 'CALLS_UNAVAILABLE' /tmp/c.log
-            echo "-- HttpTimeoutException:"; grep -a -c 'HttpTimeoutException' /tmp/c.log
+            grep -a -oE '"method":"[A-Z]+","path":"/calls[^"]*"' /tmp/c.log | sort | uniq -c | sort -rn | head -20
+            echo "-- join (qualquer metodo):"
+            grep -a -oE '"method":"[A-Z]+","path":"/calls/[^"]*/join"' /tmp/c.log | sort | uniq -c
+            echo "-- primeira e ultima linha:"
+            head -c 300 /tmp/c.log | grep -aoE '"@timestamp":"[^"]*"' | head -1
+            tail -c 2000 /tmp/c.log | grep -aoE '"@timestamp":"[^"]*"' | tail -1
           done
