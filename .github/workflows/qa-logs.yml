@@ -13,21 +13,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Logs crus dos backends
+      - name: Rotas de chamada nos logs
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
         run: |
           set +e
           show() {
-            curl -sS --max-time 90 \
+            curl -sS --max-time 120 \
               -H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}" \
-              "${PORTAINER_BASE_URL}/api/endpoints/$1/docker/containers/$2/logs?stdout=1&stderr=1&timestamps=1&tail=$3" \
+              "${PORTAINER_BASE_URL}/api/endpoints/$1/docker/containers/$2/logs?stdout=1&stderr=1&timestamps=1&tail=60000" \
               -o /tmp/b.log
             echo "bytes=$(wc -c < /tmp/b.log)"
-            tr -d "\000" < /tmp/b.log | tail -25
+            tr -d "\000" < /tmp/b.log
           }
-          echo "=== QA raw ==="
-          show 8 enois-qa-backend 300
-          echo "=== PROD raw ==="
-          show 11 enois-prod-backend 300
+          echo "=== QA calls ==="
+          show 8 enois-qa-backend | grep -a -oE '"path":"/calls[^"]*"|"status":[0-9]+|"message":"[^"]{0,120}"' | grep -a -B1 -A1 "calls" | tail -40
+          echo "=== QA issuer ==="
+          show 8 enois-qa-backend | grep -a -c "EpapoMeetingTokenIssuer"
+          echo "=== PROD issuer count ==="
+          show 11 enois-prod-backend | grep -a -c "EpapoMeetingTokenIssuer"
