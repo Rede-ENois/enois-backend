@@ -47,6 +47,8 @@ public class GroupFeedService {
 	private static final int TOPIC_NAME_MAX = 80;
 	private static final int TOPIC_DESCRIPTION_MAX = 300;
 	private static final int MAX_PAGE = 50;
+	/** Mesmo teto do feed: a grade fica legivel e a coluna `media_ids` comporta os ids. */
+	private static final int MAX_MEDIA = 5;
 
 	private final GroupRepository groups;
 	private final GroupContentRepository content;
@@ -55,11 +57,14 @@ public class GroupFeedService {
 	private final OutboxEventRepository outbox;
 	private final com.socialcoisa.rede.shared.age.AgeGate ageGate;
 	private final com.socialcoisa.rede.shared.sanctions.SanctionGate sanctionGate;
+	private final com.socialcoisa.rede.media.application.port.in.ValidateMediaOwnershipUseCase mediaOwnership;
 	private final Clock clock;
 
 	public GroupFeedService(GroupRepository groups, GroupContentRepository content, AuditLogRepository audit,
 			GroupNotifier notifier, OutboxEventRepository outbox, com.socialcoisa.rede.shared.age.AgeGate ageGate,
-			com.socialcoisa.rede.shared.sanctions.SanctionGate sanctionGate, Clock clock) {
+			com.socialcoisa.rede.shared.sanctions.SanctionGate sanctionGate,
+			com.socialcoisa.rede.media.application.port.in.ValidateMediaOwnershipUseCase mediaOwnership,
+			Clock clock) {
 		this.groups = groups;
 		this.content = content;
 		this.audit = audit;
@@ -67,6 +72,7 @@ public class GroupFeedService {
 		this.outbox = outbox;
 		this.ageGate = ageGate;
 		this.sanctionGate = sanctionGate;
+		this.mediaOwnership = mediaOwnership;
 		this.clock = clock;
 	}
 
@@ -171,15 +177,24 @@ public class GroupFeedService {
 		if (!topic.acceptsPosts()) {
 			throw new ApiException(409, "TOPIC_ARCHIVED", "Este topico esta arquivado.");
 		}
-		if (!StringUtils.hasText(text)) {
+		// Mesmas regras do feed para midia: sem isso o id de um arquivo alheio (ou inventado) entrava
+		// na publicacao, e o grupo virava um caminho paralelo ao feed para anexar o que nao e seu.
+		List<String> cleanMedia = mediaIds == null ? List.of()
+			: mediaIds.stream().filter(StringUtils::hasText).map(String::trim).distinct().toList();
+		if (cleanMedia.size() > MAX_MEDIA) {
+			throw new ApiException(400, "TOO_MANY_MEDIA",
+				"Publicacao de grupo aceita no maximo " + MAX_MEDIA + " midias.");
+		}
+		if (!StringUtils.hasText(text) && cleanMedia.isEmpty()) {
 			throw new ApiException(400, "EMPTY_CONTENT", "Escreva alguma coisa antes de publicar.");
 		}
-		String clean = PlainText.defuse(text.trim());
+		String clean = StringUtils.hasText(text) ? PlainText.defuse(text.trim()) : "";
 		if (clean.length() > GroupPost.MAX_CONTENT) {
 			throw new ApiException(400, "CONTENT_TOO_LONG",
 				"Publicacao de grupo deve ter ate 1.200 caracteres.");
 		}
-		GroupPost post = GroupPost.publish(newId("group_post"), groupId, topicId, actorId, clean, mediaIds,
+		mediaOwnership.validateOwnedBy(new UserId(actorId), cleanMedia);
+		GroupPost post = GroupPost.publish(newId("group_post"), groupId, topicId, actorId, clean, cleanMedia,
 			clock.instant());
 		content.savePost(post);
 		// The members are told by the outbox worker, off this request: the fan-out grows with the group.
