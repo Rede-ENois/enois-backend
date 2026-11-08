@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Callback do gateway com o segredo real
+      - name: Callback do gateway com o segredo real (node)
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
@@ -22,10 +22,10 @@ jobs:
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
           API="${PORTAINER_BASE_URL}/api/endpoints/12/docker"
 
-          run_in() {
+          run_node() {
             id=$(curl -sS --max-time 30 "${AUTH[@]}" -H "Content-Type: application/json" \
               -X POST "${API}/containers/epapo-prod-auth-gateway-1/exec" \
-              -d "$(python3 -c "import json,sys;print(json.dumps({'AttachStdout':True,'AttachStderr':True,'Cmd':['sh','-c',sys.argv[1]]}))" "$1")" \
+              -d "$(python3 -c "import json,sys;print(json.dumps({'AttachStdout':True,'AttachStderr':True,'Cmd':['node','-e',sys.argv[1]]}))" "$1")" \
               | python3 -c "import sys,json;print(json.load(sys.stdin).get('Id',''))")
             curl -sS --max-time 200 "${AUTH[@]}" -H "Content-Type: application/json" \
               -X POST "${API}/exec/${id}/start" -d '{"Detach":false,"Tty":false}' -o /tmp/ex.out
@@ -33,11 +33,5 @@ jobs:
             echo
           }
 
-          echo "=== callback com o segredo real, 3x (id inexistente) ==="
-          run_in 'for i in 1 2 3; do S=$(date +%s%N); C=$(curl -sS -o /tmp/c -w "%{http_code}" --connect-timeout 5 --max-time 40 -X POST "$ENOIS_BACKEND_URL/calls/00000000-0000-0000-0000-000000000000/gateway/entry/00000000-0000-0000-0000-000000000000" -H "X-Enois-Authorize: $ENOIS_AUTHORIZE_SECRET" -H "Content-Length: 0"); E=$(date +%s%N); echo "code=$C ms=$(( (E-S)/1000000 )) body=$(head -c 100 /tmp/c)"; done'
-
-          echo "=== o mesmo pela URL publica (Cloudflare) ==="
-          run_in 'for i in 1 2; do S=$(date +%s%N); C=$(curl -sS -o /tmp/c -w "%{http_code}" --connect-timeout 5 --max-time 40 -X POST "https://api.enois.ia.br/api/calls/00000000-0000-0000-0000-000000000000/gateway/entry/00000000-0000-0000-0000-000000000000" -H "X-Enois-Authorize: $ENOIS_AUTHORIZE_SECRET" -H "Content-Length: 0"); E=$(date +%s%N); echo "code=$C ms=$(( (E-S)/1000000 )) body=$(head -c 100 /tmp/c)"; done'
-
-          echo "=== DNS do container do gateway ==="
-          run_in 'getent ahostsv4 api.enois.ia.br | head -2; echo ---; getent ahostsv4 enois-api-qa.b7cloud.tech | head -2'
+          echo "=== callback real (interna e publica) ==="
+          run_node 'const https=require("https");const u=process.env.ENOIS_BACKEND_URL.replace(/\/$/,"")+"/calls/00000000-0000-0000-0000-000000000000/gateway/entry/00000000-0000-0000-0000-000000000000";const urls=[u,"https://api.enois.ia.br/api/calls/00000000-0000-0000-0000-000000000000/gateway/entry/00000000-0000-0000-0000-000000000000"];(async()=>{for(const url of urls){for(let i=0;i<3;i++){const t=Date.now();await new Promise(r=>{const q=https.request(url,{method:"POST",headers:{Accept:"application/json","Content-Length":0,"X-Enois-Authorize":process.env.ENOIS_AUTHORIZE_SECRET},timeout:20000},res=>{let b="";res.on("data",c=>b+=c);res.on("end",()=>{console.log(url.includes("api.enois.ia.br")?"publica":"interna","status",res.statusCode,"ms",Date.now()-t,b.slice(0,90));r()})});q.on("timeout",()=>{console.log("TIMEOUT ms",Date.now()-t);q.destroy();r()});q.on("error",e=>{console.log("ERRO",e.code||e.message,"ms",Date.now()-t);r()});q.end()})}}})()'
