@@ -28,6 +28,11 @@ interface SpringDataCallSessionJpaRepository extends JpaRepository<CallSessionJp
 	List<CallSessionJpaEntity> findGroupWideOpen(@Param("groupId") String groupId,
 			@Param("states") Collection<CallState> states);
 
+	/** Salas abertas do encontro. O evento tem uma sala só: a primeira aberta é a sala dele. */
+	@Query("SELECT c FROM CallSessionJpaEntity c WHERE c.eventId = :eventId AND c.state IN :states")
+	List<CallSessionJpaEntity> findOpenByEvent(@Param("eventId") String eventId,
+			@Param("states") Collection<CallState> states);
+
 	@Query("SELECT c FROM CallSessionJpaEntity c WHERE c.state IN :states AND c.expiresAt < :now ORDER BY c.expiresAt")
 	List<CallSessionJpaEntity> expired(@Param("states") Collection<CallState> states, @Param("now") Instant now,
 			Pageable pageable);
