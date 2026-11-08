@@ -20,7 +20,7 @@ jobs:
         run: |
           set +e
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
-          SCRIPT="{ tail -c 300000 /proc/1/fd/1 2>/dev/null; } > /tmp/l.out 2>&1; echo '== issuer'; grep -a 'EpapoMeetingTokenIssuer\|emissao do token' /tmp/l.out | tail -20; echo '== gateway entry'; grep -a 'gateway/entry\|GATEWAY\|call_gateway' /tmp/l.out | tail -20"
+          SCRIPT="echo '== gateway log tail'; tail -c 200000 /proc/1/fd/1 2>/dev/null | grep -a -i 'authorize\|502\|timeout\|entry' | tail -25; echo '== end'"
           run_in() {
             EP="$1"; NAME="$2"
             id=$(curl -sS --max-time 30 "${AUTH[@]}" -H "Content-Type: application/json" \
@@ -33,6 +33,6 @@ jobs:
             echo
           }
           echo "=== QA ==="
-          run_in 8 enois-qa-backend
+          run_in 12 epapo-prod-auth-gateway-1
           echo "=== PROD ==="
-          run_in 11 enois-prod-backend
+          run_in 12 epapo-prod-auth-gateway-1
