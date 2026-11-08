@@ -26,7 +26,7 @@ import com.socialcoisa.rede.feed.domain.UserId;
  * O indice de {@code comments (author_id, post_id)} existe para as abas UNSEEN e INTERACTED
  * (issue #521) e NAO pode mudar o que elas devolvem: e otimizacao pura.
  *
- * <p>Este teste trava as duas coisas: o indice esta no schema (a migracao V255 rodou — o
+ * <p>Este teste trava as duas coisas: o indice esta no schema (a migracao V256 rodou — o
  * schema-check do CI valida contra MariaDB real) e as consultas que ele serve continuam
  * devolvendo o mesmo conjunto, com os mesmos filtros. Se alguem trocar a ordem das colunas do
  * indice ou a forma da consulta, o teste avisa.</p>

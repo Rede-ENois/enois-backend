@@ -214,7 +214,7 @@ recibo e executa só os que faltaram.
 | status | VARCHAR(20) | ACTIVE, DELETED |
 
 Índices: `(post_id, created_at)`, `(parent_comment_id, created_at)`, `(post_id, pinned)` e
-`(author_id, post_id)` (V255) — o último serve às abas UNSEEN/INTERACTED do feed, que filtram posts
+`(author_id, post_id)` (V256) — o último serve às abas UNSEEN/INTERACTED do feed, que filtram posts
 por "a pessoa já comentou" com EXISTS sobre o par; sem ele a varredura passava pela tabela inteira
 (126 ms → 0,9 ms medidos com 500 mil comentários).
 
