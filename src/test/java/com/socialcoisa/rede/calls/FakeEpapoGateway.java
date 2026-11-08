@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -36,6 +37,7 @@ final class FakeEpapoGateway {
 	private final Map<String, Received> received = new ConcurrentHashMap<>();
 	private final Map<String, String> responses = new ConcurrentHashMap<>();
 	private final AtomicInteger tokens = new AtomicInteger();
+	private final AtomicReference<Runnable> tokenWork = new AtomicReference<>();
 
 	FakeEpapoGateway(int port) throws IOException {
 		server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
@@ -71,6 +73,20 @@ final class FakeEpapoGateway {
 		responses.remove(path);
 	}
 
+	/**
+	 * Guarda um trabalho para rodar quando um pedido de token chegar — e o pedido só é respondido
+	 * depois que o trabalho termina. O gateway real pergunta ao backend se a pessoa pode entrar
+	 * antes de assinar; os testes que recriam esse vaivém (a resposta do backend escreve no banco
+	 * enquanto outra transação está aberta) usam isto para fazer o vaivém acontecer na hora certa.
+	 */
+	void onToken(Runnable work) {
+		tokenWork.set(work);
+	}
+
+	void clearTokenWork() {
+		tokenWork.set(null);
+	}
+
 	private void handle(HttpExchange exchange) throws IOException {
 		String path = exchange.getRequestURI().getPath();
 		String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
@@ -80,6 +96,10 @@ final class FakeEpapoGateway {
 
 		if (path.equals("/auth/token")) {
 			tokens.incrementAndGet();
+			Runnable work = tokenWork.getAndSet(null);
+			if (work != null) {
+				work.run();
+			}
 		}
 
 		String forced = responses.get(path);
