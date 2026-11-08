@@ -363,6 +363,9 @@ class GitHubContributionSyncTests {
 			// O repositório morto é pulado com aviso...
 			assertThat(report.errors()).anyMatch(error -> error.startsWith(gone + ":"));
 			assertThat(report.rateLimited()).isFalse();
+			// ...e desligado no registro: a proxima varredura nao paga 404 por ele de novo.
+			assertThat(registry.findAll()).filteredOn(repo -> repo.repository().equals(gone))
+				.allSatisfy(repo -> assertThat(repo.enabled()).isFalse());
 			// ...e o seguinte é lido normalmente.
 			assertThat(contributions.findByRepositoryAndKindAndNumber(alive, ContributionKind.PULL_REQUEST, 901))
 				.isPresent();

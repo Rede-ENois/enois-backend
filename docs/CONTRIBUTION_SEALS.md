@@ -106,6 +106,12 @@ público, e lá ele mesmo integra PRs e aplica labels; por isso a descoberta nã
 Forks, arquivados e privados nunca entram (o título de PR/issue vira evidência pública). Uma linha
 existente nunca é alterada pela descoberta. Falha ao listar não interrompe o ciclo.
 
+**Repositório que deixou de existir** (apagado ou virado privado) responde 404 na leitura de PRs e
+issues. Ele é pulado com aviso, sem interromper os demais, e a linha dele é **desligada** no registro:
+a próxima varredura não paga o 404 de novo. O que já foi importado fica; se o repositório voltar, um
+admin o reabilita pelo painel. Rate limit continua interrompendo o ciclo, porque ali o problema é o
+orçamento da API, não o repositório.
+
 ## Revisão de PRs no painel
 
 - A aba **Pull requests** lista os PRs abertos dos repositórios elegíveis (`GET /admin/github/pulls`,

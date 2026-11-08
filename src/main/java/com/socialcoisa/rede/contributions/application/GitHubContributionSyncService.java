@@ -338,6 +338,12 @@ public class GitHubContributionSyncService {
 				// repositório depois dele era lido. Pula, avisa a administração e segue.
 				LOG.warn("github_sync_repository_gone repository={}", repository.repository());
 				addError(errors, repository.repository() + ": repositório não existe mais no GitHub");
+				// Desliga a linha para a varredura não pagar 404 por ela em toda rodada. O que já
+				// foi importado fica; se o repositório voltar, a administração o reabilita.
+				if (!dryRun && repository.enabled()) {
+					repositories.save(repository.withEnabled(false));
+					LOG.info("github_sync_repository_disabled repository={}", repository.repository());
+				}
 			}
 			catch (RuntimeException failureEx) {
 				failure = failureEx.getMessage();
