@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.mentoring.adapters.out.persistence;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -15,6 +16,9 @@ interface SpringDataMentorJpaRepository extends JpaRepository<MentorJpaEntity, S
 	List<MentorJpaEntity> findAllBefore(@Param("before") Instant before, Pageable pageable);
 
 	Optional<MentorJpaEntity> findByUserId(String userId);
+
+	/** Mentores de várias sessões numa consulta só (a lista de sessões do mentorado). */
+	List<MentorJpaEntity> findByIdIn(Collection<String> ids);
 
 	@Query("""
 		SELECT m FROM MentorJpaEntity m

@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -191,7 +192,9 @@ class MentoringContractController {
 				slot != null && slot.startsAt() != null ? slot.startsAt().toString() : null,
 				slot != null && slot.endsAt() != null ? slot.endsAt().toString() : null,
 				session.message(), session.status().name(), session.priceSparks(),
-				mentorService.roomUrlFor(session), session.roomMode().name(),
+				// O mentor desta agenda já está carregado: sem a sobrecarga, cada linha consultava
+				// o mesmo mentor de novo só para montar a sala.
+				mentorService.roomUrlFor(session, mentor), session.roomMode().name(),
 				session.createdAt().toString()));
 		}
 		views.sort((first, second) -> {
@@ -269,26 +272,15 @@ class MentoringContractController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		List<MentorSession> sessions = mentorService.sessionsByMentee(user.id().value());
-		Map<String, Mentor> mentors = new HashMap<>();
-		for (MentorSession session : sessions) {
-			Mentor mentor = mentorService.mentorOrNull(session.mentorId());
-			if (mentor != null) {
-				mentors.put(session.mentorId(), mentor);
-			}
-		}
+		// Uma consulta por LOTE, não por sessão: antes cada linha buscava o mentor, o horário e o
+		// mentor outra vez (dentro do endereço da sala) — três SELECTs por sessão na tela.
+		Map<String, Mentor> mentors = mentorService
+			.mentorsByIds(sessions.stream().map(MentorSession::mentorId).distinct().toList());
 		Map<String, UserProfile> owners = new HashMap<>();
 		profiles.findAllByIds(mentors.values().stream().map(Mentor::userId).distinct().toList())
 			.forEach(profile -> owners.put(profile.id(), profile));
-		Map<String, MentorSlot> slots = new HashMap<>();
-		for (MentorSession session : sessions) {
-			if (session.slotId() == null || slots.containsKey(session.slotId())) {
-				continue;
-			}
-			MentorSlot slot = mentorService.slotOf(session.slotId());
-			if (slot != null) {
-				slots.put(session.slotId(), slot);
-			}
-		}
+		Map<String, MentorSlot> slots = mentorService.slotsByIds(sessions.stream()
+			.map(MentorSession::slotId).filter(Objects::nonNull).distinct().toList());
 		List<MySessionView> views = new ArrayList<>();
 		for (MentorSession session : sessions) {
 			Mentor mentor = mentors.get(session.mentorId());
@@ -300,7 +292,8 @@ class MentoringContractController {
 				slot != null && slot.startsAt() != null ? slot.startsAt().toString() : null,
 				slot != null && slot.endsAt() != null ? slot.endsAt().toString() : null,
 				session.message(), session.status().name(), session.priceSparks(),
-				mentorService.roomUrlFor(session), session.roomMode().name(), session.createdAt().toString()));
+				mentorService.roomUrlFor(session, mentor), session.roomMode().name(),
+				session.createdAt().toString()));
 		}
 		return views;
 	}

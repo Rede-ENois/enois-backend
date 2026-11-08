@@ -8,9 +8,13 @@ import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -355,20 +359,23 @@ public class MentorService {
 	 */
 	private List<MentorSession> withTheClock(List<MentorSession> sessions) {
 		Instant now = clock.instant();
+		// Os horários vêm numa consulta só: antes cada sessão agendada consultava o próprio horário
+		// para saber se já terminou, e a lista de sessões pagava uma consulta por linha.
+		Map<String, MentorSlot> slots = slotsByIds(sessions.stream()
+			.map(MentorSession::slotId).filter(Objects::nonNull).distinct().toList());
 		List<MentorSession> applied = new ArrayList<>(sessions.size());
 		for (MentorSession session : sessions) {
-			applied.add(finished(session, now) ? finish(session, now) : session);
+			applied.add(finished(session, now, slots) ? finish(session, now) : session);
 		}
 		return applied;
 	}
 
 	/** O horário da sessão já terminou? Vale o fim do horário; o início só quando não há fim. */
-	private boolean finished(MentorSession session, Instant now) {
+	private boolean finished(MentorSession session, Instant now, Map<String, MentorSlot> slots) {
 		if (session.status() != SessionStatus.SCHEDULED) {
 			return false;
 		}
-		MentorSlot slot = session.slotId() == null ? null
-			: repository.findSlotById(session.slotId()).orElse(null);
+		MentorSlot slot = session.slotId() == null ? null : slots.get(session.slotId());
 		Instant endsAt = slot == null ? null : (slot.endsAt() != null ? slot.endsAt() : slot.startsAt());
 		return endsAt != null && !endsAt.isAfter(now);
 	}
@@ -383,7 +390,8 @@ public class MentorService {
 		try {
 			settlement.executeWithoutResult(status -> {
 				MentorSession session = repository.findSessionById(candidate.id()).orElse(null);
-				if (session == null || !finished(session, now)) {
+				if (session == null || !finished(session, now, slotsByIds(
+						session.slotId() == null ? List.of() : List.of(session.slotId())))) {
 					return;
 				}
 				MentorSession done = session.complete();
@@ -409,8 +417,11 @@ public class MentorService {
 		initialDelayString = "${rede.mentoring.session-completion-initial-delay-ms:120000}")
 	public void completeFinishedSessions() {
 		Instant now = clock.instant();
-		for (MentorSession candidate : repository.findScheduledSessions()) {
-			if (finished(candidate, now)) {
+		List<MentorSession> scheduled = repository.findScheduledSessions();
+		Map<String, MentorSlot> slots = slotsByIds(scheduled.stream()
+			.map(MentorSession::slotId).filter(Objects::nonNull).distinct().toList());
+		for (MentorSession candidate : scheduled) {
+			if (finished(candidate, now, slots)) {
 				finish(candidate, now);
 			}
 		}
@@ -482,6 +493,33 @@ public class MentorService {
 	 */
 	public String roomUrlFor(MentorSession session) {
 		return roomOf(session);
+	}
+
+	/**
+	 * O mesmo endereço, com o mentor já carregado pela lista. Sem isto, cada linha da lista de
+	 * sessões consultava o mentor de novo só para montar a sala — o mesmo mentor, uma vez por
+	 * sessão. O resultado é idêntico ao de {@link #roomUrlFor(MentorSession)}.
+	 */
+	public String roomUrlFor(MentorSession session, Mentor mentor) {
+		String stored = roomUrlOf(session, mentor);
+		if (stored == null || !rooms.isEpapo(session.roomMode())) {
+			return stored;
+		}
+		return rooms.epapoRoom(stored).map(rooms::roomUrlOrNull).orElse(stored);
+	}
+
+	/** Mentores de várias sessões numa consulta só, indexados por id. */
+	public Map<String, Mentor> mentorsByIds(Collection<String> mentorIds) {
+		Map<String, Mentor> byId = new HashMap<>();
+		repository.findByIds(mentorIds).forEach(mentor -> byId.put(mentor.id(), mentor));
+		return byId;
+	}
+
+	/** Horários de várias sessões numa consulta só, indexados por id. */
+	public Map<String, MentorSlot> slotsByIds(Collection<String> slotIds) {
+		Map<String, MentorSlot> byId = new HashMap<>();
+		repository.findSlotsByIds(slotIds).forEach(slot -> byId.put(slot.id(), slot));
+		return byId;
 	}
 
 	/**
