@@ -35,9 +35,11 @@ jobs:
           }
 
           BODY=$(cat <<'EOF'
-          java -version 2>&1 | head -2
-          mkdir -p /tmp/p && echo "$PROBE" | base64 -d > /tmp/p/Probe.class
-          cd /tmp/p && java Probe "$REDE_CALLS_EPAPO_GATEWAY_URL/auth/token" "$REDE_CALLS_EPAPO_INTERNAL_TOKEN" 2>&1 | tail -6
+java -version 2>&1 | head -1
+mkdir -p /tmp/p
+echo "$PROBE" | tr -d '\n' | base64 -d > /tmp/p/Probe.class
+ls -l /tmp/p/Probe.class
+cd /tmp/p && java Probe "$REDE_CALLS_EPAPO_GATEWAY_URL/auth/token" "$REDE_CALLS_EPAPO_INTERNAL_TOKEN" 2>&1 | tail -6
           EOF
           )
 
