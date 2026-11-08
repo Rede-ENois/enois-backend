@@ -965,7 +965,8 @@ jobs:
                 REDE_FRONTEND_URL: https://enois.ia.br
                 REDE_BACKEND_URL: https://api.enois.ia.br
                 FRONTEND_URL: https://enois.ia.br
-                CORS_ALLOWED_ORIGINS: https://enois.ia.br
+                CORS_ALLOWED_ORIGINS: https://enois.ia.br,https://isweee.com
+                SITE_DOMAINS: enois.ia.br,isweee.com
                 REDE_SECURITY_ENCRYPTION_KEY: ${REDE_SECURITY_ENCRYPTION_KEY}
                 TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY}
                 TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY}

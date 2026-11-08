@@ -204,7 +204,29 @@ services:
 | `DB_NAME` | `rede` |
 | `DB_USER` | `rede` |
 | `DB_PASSWORD` | `...` |
-| `REDE_CORS_ALLOWED_ORIGINS` | `https://app.exemplo.com` |
+| `CORS_ALLOWED_ORIGINS` | `https://app.exemplo.com` |
+
+## Domínio espelho (isweee.com)
+
+O app responde em dois domínios: `enois.ia.br` (principal: canonical, e-mails e URLs configuradas) e
+o espelho `isweee.com`. `SITE_DOMAINS` lista os dois, o principal primeiro.
+
+- **Sessão.** Os cookies de sessão pertencem ao host da API do site (`api.enois.ia.br` ou
+  `api.isweee.com`). O front no espelho chama `api.isweee.com` (`VITE_SITE_DOMAINS` no front); as duas
+  origens estão em `CORS_ALLOWED_ORIGINS`.
+- **Login social.** O `/oauth/{provider}/start` guarda junto do `state` o domínio de onde o pedido
+  veio (`Origin`, ou `X-Client-Origin` sem navegador; V253). O `redirect_uri` enviado ao provedor, o
+  repetido na troca do código e o retorno ao app trocam `enois.ia.br` por esse domínio. Por isso cada
+  provedor precisa ter cadastrados os callbacks dos dois domínios
+  (`https://isweee.com/auth/callback?provider=GOOGLE`, `...LINKEDIN`,
+  `https://api.isweee.com/api/auth/oauth/github/callback`).
+- **Páginas.** O `frame-ancestors` das páginas publicadas libera todos os domínios de `SITE_DOMAINS`.
+- **Gateway.** O Traefik precisa de roteadores e certificado para `isweee.com` e `api.isweee.com`,
+  incluindo o bloqueio de `/api/actuator` que já existe para `api.enois.ia.br`.
+- **Turnstile.** O widget da Cloudflare precisa ter `isweee.com` na lista de hostnames, senão o
+  cadastro no espelho falha no captcha.
+- Fora do espelho por enquanto: os links dos e-mails e o retorno da verificação gov.br usam o domínio
+  principal.
 
 ## Telegram observability channel (production only)
 

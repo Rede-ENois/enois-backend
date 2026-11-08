@@ -45,7 +45,8 @@ class GoogleTokenValidator implements TokenValidator {
 	}
 
 	@Override
-	public Optional<TokenValidationResult> validate(OAuthProvider provider, String credential, String expectedNonce) {
+	public Optional<TokenValidationResult> validate(OAuthProvider provider, String credential, String expectedNonce,
+			String redirectUri) {
 		if (provider != OAuthProvider.GOOGLE || !StringUtils.hasText(credential)) {
 			return Optional.empty();
 		}
@@ -58,7 +59,7 @@ class GoogleTokenValidator implements TokenValidator {
 			return verifyIdToken(credential, expectedNonce);
 		}
 
-		return exchangeCodeForTokens(credential, expectedNonce);
+		return exchangeCodeForTokens(credential, expectedNonce, redirectUri);
 	}
 
 	private boolean isJwt(String value) {
@@ -116,14 +117,15 @@ class GoogleTokenValidator implements TokenValidator {
 		return Boolean.TRUE.equals(claim) || "true".equalsIgnoreCase(String.valueOf(claim));
 	}
 
-	private Optional<TokenValidationResult> exchangeCodeForTokens(String code, String expectedNonce) {
+	private Optional<TokenValidationResult> exchangeCodeForTokens(String code, String expectedNonce,
+			String redirectUri) {
 		try {
 			OAuthProperties.GoogleConfig config = properties.getGoogle();
 			Map<String, String> params = new LinkedHashMap<>();
 			params.put("code", code);
 			params.put("client_id", config.getClientId());
 			params.put("client_secret", config.getClientSecret());
-			params.put("redirect_uri", config.getRedirectUri());
+			params.put("redirect_uri", redirectUri);
 			params.put("grant_type", "authorization_code");
 
 			String body = params.entrySet().stream()
