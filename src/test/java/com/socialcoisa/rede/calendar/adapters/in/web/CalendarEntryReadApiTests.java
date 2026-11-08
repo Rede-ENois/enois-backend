@@ -152,7 +152,8 @@ class CalendarEntryReadApiTests {
 
 		mockMvc.perform(get("/calendar/entries/{entryId}", id).header("X-Session-Token", owner.token()))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.id").value(id));
+			.andExpect(jsonPath("$.entry.id").value(id))
+			.andExpect(jsonPath("$.owner").value(true));
 	}
 
 	@Test
@@ -163,16 +164,19 @@ class CalendarEntryReadApiTests {
 
 		mockMvc.perform(get("/calendar/entries/{entryId}", id).header("X-Session-Token", owner.token()))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.id").value(id))
-			.andExpect(jsonPath("$.scope").value("SOCIAL"))
-			.andExpect(jsonPath("$.kind").value("PERSONAL"))
-			.andExpect(jsonPath("$.title").value("Aniversario"))
-			.andExpect(jsonPath("$.startsAt").value(FROM.plusSeconds(3_600).toString()))
-			.andExpect(jsonPath("$.endsAt").value(FROM.plusSeconds(10_800).toString()))
-			.andExpect(jsonPath("$.timeZoneId").value("America/Sao_Paulo"))
-			.andExpect(jsonPath("$.allDay").value(false))
-			.andExpect(jsonPath("$.state").value("ACTIVE"))
-			.andExpect(jsonPath("$.ownerId").doesNotExist());
+			.andExpect(jsonPath("$.entry.id").value(id))
+			.andExpect(jsonPath("$.entry.scope").value("SOCIAL"))
+			.andExpect(jsonPath("$.entry.kind").value("PERSONAL"))
+			.andExpect(jsonPath("$.entry.title").value("Aniversario"))
+			.andExpect(jsonPath("$.entry.startsAt").value(FROM.plusSeconds(3_600).toString()))
+			.andExpect(jsonPath("$.entry.endsAt").value(FROM.plusSeconds(10_800).toString()))
+			.andExpect(jsonPath("$.entry.timeZoneId").value("America/Sao_Paulo"))
+			.andExpect(jsonPath("$.entry.allDay").value(false))
+			.andExpect(jsonPath("$.entry.state").value("ACTIVE"))
+			.andExpect(jsonPath("$.entry.ownerId").doesNotExist())
+			.andExpect(jsonPath("$.owner").value(true))
+			.andExpect(jsonPath("$.participation").value(nullValue()))
+			.andExpect(jsonPath("$.participants", hasSize(0)));
 	}
 
 	@Test
@@ -225,6 +229,6 @@ class CalendarEntryReadApiTests {
 
 		mockMvc.perform(get("/v1/calendar/entries/{entryId}", id).header("X-Session-Token", owner.token()))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.id").value(id));
+			.andExpect(jsonPath("$.entry.id").value(id));
 	}
 }
