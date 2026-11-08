@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Chamadas por ambiente
+      - name: Rastro da entrada na chamada
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
@@ -24,16 +24,16 @@ jobs:
               -H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}" \
               "${PORTAINER_BASE_URL}/api/endpoints/$1/docker/containers/$2/logs?stdout=1&stderr=1&timestamps=1&tail=200000" \
               -o /tmp/b.log
-            echo "bytes=$(wc -c < /tmp/b.log)"
             tr -d "\000" < /tmp/b.log
           }
-          report() {
-            L=/tmp/c.log; dump "$1" "$2" > $L
-            echo "--- total calls paths: $(grep -ac '/calls/' $L)"
-            echo "--- status por rota de chamada:"
-            grep -a -oE '"path":"/calls[^"]*".{0,400}' $L | grep -aoE '"path":"/calls[^"]*"|"status":[0-9]+' | paste - - 2>/dev/null | sort | uniq -c | sort -rn | head -25
-            echo "--- mensagens de erro de chamada:"
-            grep -a -oE '"message":"[^"]{0,160}"' $L | grep -aiE "call|epapo" | sort | uniq -c | sort -rn | head -20
-          }
-          echo "=== QA ==="; report 8 enois-qa-backend
-          echo "=== PROD ==="; report 11 enois-prod-backend
+          for env in "8 enois-qa-backend QA" "11 enois-prod-backend PROD"; do
+            set -- $env
+            echo "===== $3 ====="
+            dump $1 $2 > /tmp/c.log
+            echo "bytes=$(wc -c < /tmp/c.log)"
+            echo "-- call-entry:"; grep -a -oE '"message":"call-entry[^"]*"' /tmp/c.log | tail -6
+            echo "-- gateway/entry requests:"; grep -a -oE '"path":"/calls/[^"]*gateway/entry[^"]*".{0,300}' /tmp/c.log | grep -aoE '"path":"[^"]*"|"status":[0-9]+|"durationMs":[0-9]+' | paste - - - 2>/dev/null | tail -8
+            echo "-- POST /calls/{id}/join:"; grep -a -oE '"path":"/calls/call_[^"]*/join".{0,300}' /tmp/c.log | grep -aoE '"path":"[^"]*"|"status":[0-9]+|"durationMs":[0-9]+' | paste - - - 2>/dev/null | tail -8
+            echo "-- 503 CALLS_UNAVAILABLE:"; grep -a -c 'CALLS_UNAVAILABLE' /tmp/c.log
+            echo "-- HttpTimeoutException:"; grep -a -c 'HttpTimeoutException' /tmp/c.log
+          done
