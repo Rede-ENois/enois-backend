@@ -13,56 +13,64 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Diagnóstico das chamadas
+      - name: Diagnostico das chamadas
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
         run: |
-          set -uo pipefail
+          set +e
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
+          BASE="${PORTAINER_BASE_URL}/api/endpoints"
 
           list_containers() {
-            curl -sS --max-time 60 "${AUTH[@]}" \
-              "" \
-              | python3 -c "
+            curl -sS --max-time 60 "${AUTH[@]}" "${BASE}/$1/docker/containers/json?all=1" \
+              | python3 -c '
           import sys, json
           try:
               data = json.load(sys.stdin)
           except Exception as e:
-              print('(falhou)', e); raise SystemExit
+              print("(falhou)", e); sys.exit(0)
           for c in data:
-              print((c.get('Names') or [''])[0].lstrip('/'), c.get('State'))
-          "
+              print((c.get("Names") or [""])[0].lstrip("/"), c.get("State"))
+          '
           }
 
-          echo "=== endpoint 8 (QA) containers ==="
+          logs_of() {
+            curl -sS --max-time 120 -o "$3" "${AUTH[@]}" \
+              "${BASE}/$1/docker/containers/$2/logs?stdout=1&stderr=1&timestamps=1"
+          }
+
+          show() {
+            # $1 = arquivo, $2 = rotulo, $3 = limite de linhas
+            echo "--- $2 ---"
+            tr -d "\000" < "$1" | grep -a -E "EpapoMeetingTokenIssuer|CALLS_UNAVAILABLE|CALLS_NOT_CONFIGURED|CALL_ENTRY_DENIED|GATEWAY_UNAUTHORIZED|gateway do Epapo" | tail -n "${3:-12}" | cut -c1-280
+            echo "    (total de linhas casadas: $(tr -d "\000" < "$1" | grep -a -c -E "EpapoMeetingTokenIssuer|CALLS_UNAVAILABLE" ))"
+          }
+
+          echo "=== endpoint 8 (QA) ==="
           list_containers 8
-          echo "=== endpoint 11 (prod) containers ==="
+          echo "=== endpoint 11 (prod) ==="
           list_containers 11
-          echo "=== endpoint 12 (node3/gateway) containers ==="
+          echo "=== endpoint 12 (node3) ==="
           list_containers 12
 
-          fetch_logs() {
-            EP="$1"; NAME="$2"; OUT="$3"
-            code=$(curl -sS --max-time 90 -o "${OUT}" -w '%{http_code}' "${AUTH[@]}" \
-              "${PORTAINER_BASE_URL}/api/endpoints/${EP}/docker/containers/${NAME}/logs?stdout=1&stderr=1&timestamps=1&tail=3000")
-            echo "http=${code} bytes=$(wc -c < "${OUT}") ${NAME} (ep ${EP})"
-          }
-
-          echo "=== logs do gateway (node3) ==="
-          for NAME in $(list_containers 12 | grep -i "gateway" | cut -d' ' -f1 || true); do
-            fetch_logs 12 "${NAME}" /tmp/gw.log
-            tr -d "\000" < /tmp/gw.log | tail -25 | cut -c1-300 || true
+          echo "=== gateway (node3) ==="
+          for NAME in $(list_containers 12 | awk '/gateway/ {print $1}'); do
+            logs_of 12 "$NAME" /tmp/gw.log
+            echo "bytes=$(wc -c < /tmp/gw.log) de $NAME"
+            tr -d "\000" < /tmp/gw.log | tail -40 | cut -c1-300
           done
 
-          echo "=== logs do backend QA ==="
-          for NAME in $(list_containers 8 | grep -i backend | cut -d' ' -f1 || true); do
-            fetch_logs 8 "${NAME}" /tmp/qa.log
-            ( tr -d "\000" < /tmp/qa.log | grep -a "EpapoMeetingTokenIssuer\|CALLS_UNAVAILABLE\|api_error" | tail -8 | cut -c1-300 ) || echo "(sem linha)"
+          echo "=== backend QA ==="
+          for NAME in $(list_containers 8 | awk '/backend/ {print $1}'); do
+            logs_of 8 "$NAME" /tmp/qa.log
+            echo "bytes=$(wc -c < /tmp/qa.log) de $NAME"
+            show /tmp/qa.log "chamadas na QA"
           done
 
-          echo "=== logs do backend prod ==="
-          for NAME in $(list_containers 11 | grep -i backend | cut -d' ' -f1 || true); do
-            fetch_logs 11 "${NAME}" /tmp/prod.log
-            ( tr -d "\000" < /tmp/prod.log | grep -a "EpapoMeetingTokenIssuer\|CALLS_UNAVAILABLE\|api_error" | tail -8 | cut -c1-300 ) || echo "(sem linha)"
+          echo "=== backend prod ==="
+          for NAME in $(list_containers 11 | awk '/backend/ {print $1}'); do
+            logs_of 11 "$NAME" /tmp/prod.log
+            echo "bytes=$(wc -c < /tmp/prod.log) de $NAME"
+            show /tmp/prod.log "chamadas em producao"
           done
