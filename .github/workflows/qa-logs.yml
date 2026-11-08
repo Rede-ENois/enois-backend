@@ -9,74 +9,39 @@ permissions:
   contents: read
 
 jobs:
-  diag:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+  diag-no-host-de-producao:
+    runs-on: [self-hosted, enois]
+    timeout-minutes: 15
     steps:
-      - name: Inspecao das chamadas
+      - name: Caminho do backend ate o gateway
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
         run: |
           set +e
+          echo "host=$(hostname) ip=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -o 'src [0-9.]*' | head -1)"
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
-          BASE="${PORTAINER_BASE_URL}/api/endpoints"
-
-          echo "=== PROD container enois-prod-backend ==="
-          curl -sS --max-time 60 "${AUTH[@]}" "${BASE}/11/docker/containers/enois-prod-backend/json" -o /tmp/pj.json
-          python3 - <<'PY'
+          API="${PORTAINER_BASE_URL}/api/endpoints/11/docker"
+          curl -sS --max-time 60 "${AUTH[@]}" "${API}/containers/enois-prod-backend/json" -o /tmp/pj.json
+          python3 - <<'PY' > /tmp/gwurl.txt
           import json
           d = json.load(open('/tmp/pj.json'))
-          print("id", d.get('Id','')[:12])
-          print("image", d.get('Config',{}).get('Image'))
-          print("created", d.get('Created'))
-          print("started", d.get('State',{}).get('StartedAt'))
-          print("health", d.get('State',{}).get('Health'))
-          print("network", d.get('HostConfig',{}).get('NetworkMode'))
-          envs = {}
           for e in d.get('Config',{}).get('Env') or []:
-              k, _, v = e.partition('=')
-              envs[k] = v
-          for k in sorted(envs):
-              if any(s in k.upper() for s in ('CALL','EPAPO','JAVA_OPTS','JAVA_TOOL')):
-                  print(k, '=', ('<vazio>' if envs[k] == '' else '<definido len=%d>' % len(envs[k])))
+              if e.startswith('REDE_CALLS_EPAPO_GATEWAY_URL='):
+                  print(e.split('=',1)[1])
           PY
-
-          echo "=== PROD: msgs completas de chamadas (log do container atual) ==="
-          curl -sS --max-time 180 -o /tmp/prod.log "${AUTH[@]}" \
-            "${BASE}/11/docker/containers/enois-prod-backend/logs?stdout=1&stderr=1&timestamps=1"
-          echo "bytes=$(wc -c < /tmp/prod.log)"
-          tr -d "\000" < /tmp/prod.log | grep -a "EpapoMeetingTokenIssuer\|CALLS_UNAVAILABLE" | tail -n 6 | python3 -c '
-          import sys, json
-          for line in sys.stdin:
-              i = line.find("{")
-              if i < 0: continue
-              try: d = json.loads(line[i:])
-              except Exception: continue
-              print(d.get("@timestamp"), d.get("log",{}).get("level"), "|", d.get("message"))
-          '
-
-          echo "=== PROD: /version publico ==="
-          curl -sS --max-time 20 https://api.enois.ia.br/api/version; echo
-          echo "=== PROD: /health publico ==="
-          curl -sS --max-time 20 https://api.enois.ia.br/health; echo
-          echo "=== QA: /version publico ==="
-          curl -sS --max-time 20 https://enois-api-qa.b7cloud.tech/api/version; echo
-
-          echo "=== QA container enois-qa-backend ==="
-          curl -sS --max-time 60 "${AUTH[@]}" "${BASE}/8/docker/containers/enois-qa-backend/json" -o /tmp/qj.json
-          python3 - <<'PY'
-          import json
-          d = json.load(open('/tmp/qj.json'))
-          print("id", d.get('Id','')[:12])
-          print("image", d.get('Config',{}).get('Image'))
-          print("created", d.get('Created'))
-          print("started", d.get('State',{}).get('StartedAt'))
-          envs = {}
-          for e in d.get('Config',{}).get('Env') or []:
-              k, _, v = e.partition('=')
-              envs[k] = v
-          for k in sorted(envs):
-              if any(s in k.upper() for s in ('CALL','EPAPO')):
-                  print(k, '=', ('<vazio>' if envs[k] == '' else '<definido len=%d>' % len(envs[k])))
-          PY
+          GW=$(cat /tmp/gwurl.txt)
+          echo "gateway url (host/porta): $(printf '%s' "$GW" | sed -E 's#^(https?://[^/:]+(:[0-9]+)?).*#\1#')"
+          HOSTPORT=$(printf '%s' "$GW" | sed -E 's#^https?://##; s#/.*$##')
+          echo "=== TCP 8122/GW ==="
+          timeout 8 bash -c "cat < /dev/null > /dev/tcp/${HOSTPORT%:*}/${HOSTPORT##*:}" && echo "tcp ok" || echo "tcp falhou/expirou"
+          echo "=== curl sem TLS (handshake) ==="
+          curl -sS -o /dev/null -w 'code=%{http_code} dns=%{time_namelookup} connect=%{time_connect} tls=%{time_appconnect} total=%{time_total}\n' \
+            --connect-timeout 5 --max-time 15 -X POST "${GW%/}/auth/token" \
+            -H "Content-Type: application/json" --data '{}' 2>&1 | tail -3
+          echo "=== TLS detalhe ==="
+          echo | timeout 12 openssl s_client -connect "${HOSTPORT}" -brief 2>&1 | tail -12
+          echo "=== rota ==="
+          ip route get "${HOSTPORT%:*}" 2>/dev/null | head -2
+          echo "=== containers epapo vistos do host (se houver docker) ==="
+          docker ps --format '{{.Names}} {{.Status}}' 2>&1 | head -20
