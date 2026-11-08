@@ -13,27 +13,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Duracao das perguntas de autorizacao
+      - name: Erros 500 na rota de autorizacao
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
         run: |
           set +e
-          dump() {
-            curl -sS --max-time 180 \
-              -H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}" \
-              "${PORTAINER_BASE_URL}/api/endpoints/$1/docker/containers/$2/logs?stdout=1&stderr=1&timestamps=1&tail=400000" \
-              -o /tmp/b.log
-            tr -d "\000" < /tmp/b.log
-          }
-          for env in "8 enois-qa-backend QA" "11 enois-prod-backend PROD"; do
-            set -- $env
-            echo "===== $3 ====="
-            dump $1 $2 > /tmp/c.log
-            echo "-- TODAS as linhas com gateway/entry (ultimas 15):"
-            grep -a "gateway/entry" /tmp/c.log | tail -15 | grep -aoE '"@timestamp":"[^"]*"|"method":"[A-Z]+"|"path":"[^"]*"|"status":[0-9]+|"durationMs":[0-9]+|status=[0-9]+|durationMs=[0-9]+' | paste -sd' ' - | tr ' ' '\n' | paste - - - - - - 2>/dev/null | tail -15
-            echo "-- contagem por status:"
-            grep -a "gateway/entry" /tmp/c.log | grep -aoE '"status":[0-9]+|status=[0-9]+' | sort | uniq -c
-            echo "-- contagem por method:"
-            grep -a "gateway/entry" /tmp/c.log | grep -aoE '"method":"[A-Z]+"|method=[A-Z]+' | sort | uniq -c
-          done
+          curl -sS --max-time 180 \
+            -H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}" \
+            "${PORTAINER_BASE_URL}/api/endpoints/11/docker/containers/enois-prod-backend/logs?stdout=1&stderr=1&timestamps=1&tail=400000" \
+            -o /tmp/b.log
+          tr -d "\000" < /tmp/b.log > /tmp/c.log
+          echo "-- mensagens de erro (api_error) com codigo:"
+          grep -a -oE '"message":"api_error[^"]{0,200}"' /tmp/c.log | sed -E 's/requestId=[a-f0-9]+//' | sort | uniq -c | sort -rn | head -20
+          echo "-- linhas de excecao:"
+          grep -a -oE '"(message|error)":"[^"]{0,200}"' /tmp/c.log | grep -aiE "lock|deadlock|timeout|wait|jdbc|sql" | sort | uniq -c | sort -rn | head -20
+          echo "-- stacktrace de lock:"
+          grep -a -iE "Lock wait timeout|Deadlock found|CannotAcquireLock|PessimisticLock" /tmp/c.log | head -5 | cut -c1-300
