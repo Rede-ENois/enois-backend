@@ -9,29 +9,38 @@ permissions:
   contents: read
 
 jobs:
-  host:
-    runs-on: [self-hosted, enois]
+  diag:
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Handshake em granularidade fina do host de producao
+      - name: Egress e handshake do host de producao
+        env:
+          PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
+          PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
         run: |
           set +e
-          echo "host=$(hostname)"
-          echo "=== IPv4 do host ==="
-          ip -4 -o addr show scope global | awk '{print $2, $4}'
-          echo "=== IPv6 default ==="
-          ip -6 route | head -5
-          echo "=== getent ==="
-          getent ahostsv4 api.enois.ia.br | head -3
-          getent hosts api.enois.ia.br | head -3
-          echo "=== TCP 8122 (IPv4, 10 tentativas) ==="
-          for i in $(seq 1 10); do
-            timeout 3 bash -c 'cat < /dev/null > /dev/tcp/185.111.156.15/8122' && echo "  $i ok" || echo "  $i falhou"
+          AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
+          EP="${PORTAINER_BASE_URL}/api/endpoints/11/docker"
+
+          echo "=== app py dentro do backend (bash?) ==="
+          curl -sS --max-time 60 "${AUTH[@]}" "${PORTAINER_BASE_URL}/api/endpoints/11/docker/containers/enois-prod-backend/json" -o /tmp/pj.json
+          AUTOSTART=$(python3 -c "import json;print(json.load(open('/tmp/pj.json'))['Config']['Entrypoint'] if json.load(open('/tmp/pj.json'))['Config'].get('Entrypoint') else 'none')" 2>/dev/null)
+          echo "entrypoint=$AUTOSTART"
+
+          echo "=== IP publico visto pelo host de producao ==="
+          curl -sS --max-time 15 https://api.ipify.org 2>&1; echo
+          curl -sS --max-time 15 https://api.enois.ia.br/api/version 2>&1 | head -c 120; echo
+
+          echo "=== node3 visto de fora (TCP 8122) a partir do runner hosted ==="
+          for i in 1 2 3; do
+            timeout 4 bash -c 'cat < /dev/null > /dev/tcp/185.111.156.15/8122' && echo "  $i tcp ok" || echo "  $i tcp falhou"
           done
-          echo "=== curl -4 com verbose do connect ==="
-          curl -4 -v -o /dev/null --connect-timeout 6 --max-time 10 -X POST https://185.111.156.15:8122/auth/token -H 'Content-Type: application/json' --data '{}' 2>&1 | grep -E "Trying|Connected|TLS|SSL|error|timed|timed out" | head -12
-          echo "=== porta de origem usada (ss) ==="
-          ss -tnp 2>/dev/null | grep 8122 | head -5
-          echo "=== ip route get 185.111.156.15 ==="
-          ip route get 185.111.156.15 | head -3
-          echo "=== rota dentro do container do backend ==="
+
+          echo "=== ufw do node3 (via exec no container do gateway, se tiver tooling) ==="
+          E=$(curl -sS --max-time 30 "${AUTH[@]}" -H "Content-Type: application/json" \
+            -X POST "${PORTAINER_BASE_URL}/api/endpoints/12/docker/containers/epapo-prod-auth-gateway-1/exec" \
+            -d '{"AttachStdout":true,"AttachStderr":true,"Cmd":["sh","-c","hostname -i 2>/dev/null; cat /proc/net/tcp 2>/dev/null | head -5; echo ---; ss -ltn 2>/dev/null | head -5"]}' \
+            | python3 -c "import sys,json;print(json.load(sys.stdin).get('Id',''))")
+          curl -sS --max-time 60 "${AUTH[@]}" -H "Content-Type: application/json" \
+            -X POST "${PORTAINER_BASE_URL}/api/endpoints/12/docker/exec/${E}/start" -d '{"Detach":false,"Tty":false}' -o /tmp/e1 2>/dev/null
+          tr -d "\000" < /tmp/e1 | head -c 600; echo
