@@ -4,8 +4,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
@@ -38,6 +40,20 @@ public class MediaFfmpegRunner {
 	private record Formats(String demuxer, String muxer) {
 	}
 
+	/**
+	 * Tipos em que o {@code moov} vai para o começo do arquivo ({@code -movflags +faststart}).
+	 *
+	 * <p>O arquivo cru do celular tem o {@code moov} no fim: o player precisa baixar dezenas de MB
+	 * até achar a duração, e um card de vídeo no feed fica sem quadro e sem tempo. Com o
+	 * {@code moov} na frente, a resposta de 200 com o corpo inteiro basta — o player já sabe a
+	 * duração e desenha o primeiro quadro. Só remuxa o índice: {@code -c copy} continua valendo e o
+	 * bitstream não muda (ver {@code MediaFfmpegRunnerTests}).</p>
+	 *
+	 * <p>Fica só no mp4 porque a flag é dele: nos demais contêineres o ffmpeg a ignora sem aviso,
+	 * e depender disso seria depender de um comportamento não documentado.</p>
+	 */
+	private static final Set<String> FASTSTART_TYPES = Set.of("video/mp4");
+
 	/** Keys are the video/audio types {@code MediaService} accepts. */
 	private static final Map<String, Formats> FORMATS = Map.of(
 		"video/mp4", new Formats("mov", "mp4"),
@@ -69,18 +85,28 @@ public class MediaFfmpegRunner {
 		}
 		acquirePermit(mimeType);
 		try {
-			run(command(formats, input, output), output, mimeType, timeout);
+			run(command(formats, input, output, FASTSTART_TYPES.contains(mimeType)), output, mimeType, timeout);
 		}
 		finally {
 			permits.release();
 		}
 	}
 
-	private List<String> command(Formats formats, Path input, Path output) {
-		return List.of(ffmpegPath, "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+	private List<String> command(Formats formats, Path input, Path output, boolean faststart) {
+		List<String> base = List.of(ffmpegPath, "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
 			"-protocol_whitelist", "file", "-f", formats.demuxer(), "-i", "file:" + input.toAbsolutePath(),
-			"-map_metadata", "-1", "-map_chapters", "-1", "-c", "copy",
-			"-f", formats.muxer(), "file:" + output.toAbsolutePath());
+			"-map_metadata", "-1", "-map_chapters", "-1", "-c", "copy");
+		List<String> tail = faststart
+			? List.of("-movflags", "+faststart", "-f", formats.muxer(), "file:" + output.toAbsolutePath())
+			: List.of("-f", formats.muxer(), "file:" + output.toAbsolutePath());
+		return concat(base, tail);
+	}
+
+	private static List<String> concat(List<String> first, List<String> second) {
+		List<String> all = new ArrayList<>(first.size() + second.size());
+		all.addAll(first);
+		all.addAll(second);
+		return List.copyOf(all);
 	}
 
 	private void acquirePermit(String mimeType) {
