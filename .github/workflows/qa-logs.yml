@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Requisicao Java de dentro do container de producao
+      - name: Tempo de TLS do container de producao ate o gateway
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
@@ -28,31 +28,20 @@ jobs:
               -X POST "${EP}/containers/enois-prod-backend/exec" \
               -d "$(python3 -c "import json,sys;print(json.dumps({'AttachStdout':True,'AttachStderr':True,'Cmd':['sh','-c',sys.argv[1]]}))" "$1")" \
               | python3 -c "import sys,json;print(json.load(sys.stdin).get('Id',''))")
-            curl -sS --max-time 150 "${AUTH[@]}" -H "Content-Type: application/json" \
+            curl -sS --max-time 200 "${AUTH[@]}" -H "Content-Type: application/json" \
               -X POST "${EP}/exec/${id}/start" -d '{"Detach":false,"Tty":false}' -o /tmp/ex.out
             tr -d "\000" < /tmp/ex.out | head -c 2000
             echo
           }
 
-          echo "=== jshell? ==="
-          run_in 'command -v jshell || echo sem-jshell'
+          echo "=== JVM startup sozinho (3x) ==="
+          run_in 'for i in 1 2 3; do S=$(date +%s%N); java -version >/dev/null 2>&1; E=$(date +%s%N); echo "java -version ms=$(( (E-S)/1000000 ))"; done'
 
-          echo "=== TLS com keytool (tempo do handshake) ==="
-          run_in 'S=$(date +%s%N); keytool -printcert -sslserver 185.111.156.15:8122 2>&1 | head -4; E=$(date +%s%N); echo "ms=$(( (E-S)/1000000 ))"'
+          echo "=== TLS ate o gateway (3x) ==="
+          run_in 'for i in 1 2 3; do S=$(date +%s%N); keytool -printcert -sslserver 185.111.156.15:8122 >/dev/null 2>&1; E=$(date +%s%N); echo "tls ms=$(( (E-S)/1000000 ))"; done'
 
-          echo "=== JVM: GET https://api.enois.ia.br/api/version e POST no gateway ==="
-          run_in 'cat > /tmp/P.java <<EOF
-          public class P {
-            public static void main(String[] a) throws Exception {
-              var c = java.net.http.HttpClient.newBuilder().connectTimeout(java.time.Duration.ofSeconds(5)).build();
-              long t = System.nanoTime();
-              try {
-                var r = c.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(a[0])).timeout(java.time.Duration.ofSeconds(20)).POST(java.net.http.HttpRequest.BodyPublishers.ofString(a[2])).header("Content-Type","application/json").header("X-Epapo-Internal", a[1]).build(), java.net.http.HttpResponse.BodyHandlers.ofString());
-                System.out.println("status=" + r.statusCode() + " ms=" + (System.nanoTime()-t)/1000000 + " body=" + r.body().substring(0, Math.min(120, r.body().length())));
-              } catch (Exception e) {
-                System.out.println("ERRO " + e.getClass().getName() + " ms=" + (System.nanoTime()-t)/1000000 + " causa=" + (e.getCause()==null?"-":e.getCause().getClass().getName()));
-              }
-            }
-          }
-          EOF
-          java /tmp/P.java "$REDE_CALLS_EPAPO_GATEWAY_URL/auth/token" "$REDE_CALLS_EPAPO_INTERNAL_TOKEN" "{\"callId\":\"00000000-0000-0000-0000-000000000000\",\"userId\":\"00000000-0000-0000-0000-000000000000\"}" 2>&1 | tail -5'
+          echo "=== TCP puro (3x) ==="
+          run_in 'for i in 1 2 3; do S=$(date +%s%N); timeout 8 bash -c "exec 3<>/dev/tcp/185.111.156.15/8122" 2>/dev/null; R=$?; E=$(date +%s%N); echo "tcp r=$R ms=$(( (E-S)/1000000 ))"; done'
+
+          echo "=== comparacao: TLS ate o proprio gateway pela porta do web (8120) ==="
+          run_in 'S=$(date +%s%N); keytool -printcert -sslserver 185.111.156.15:8120 >/dev/null 2>&1; E=$(date +%s%N); echo "web8120 ms=$(( (E-S)/1000000 ))"'
