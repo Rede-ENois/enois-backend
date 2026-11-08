@@ -13,43 +13,36 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Callback visto de dentro do gateway
+      - name: Emissao real do token, com o token do container
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
         run: |
           set +e
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
-          API="${PORTAINER_BASE_URL}/api/endpoints/12/docker"
-
-          echo "=== env do gateway (nomes e tamanhos) ==="
-          curl -sS --max-time 60 "${AUTH[@]}" "${API}/containers/epapo-prod-auth-gateway-1/json" -o /tmp/gw.json
-          python3 - <<'PY'
+          EP="${PORTAINER_BASE_URL}/api/endpoints/11/docker"
+          curl -sS --max-time 60 "${AUTH[@]}" "${EP}/containers/enois-prod-backend/json" -o /tmp/pj.json
+          curl -sS --max-time 60 "${AUTH[@]}" "${PORTAINER_BASE_URL}/api/endpoints/12/docker/containers/epapo-prod-auth-gateway-1/json" -o /tmp/gw.json
+          python3 - <<'PY' > /tmp/env.txt
           import json
-          d = json.load(open('/tmp/gw.json'))
-          for e in d.get('Config',{}).get('Env') or []:
-              k, _, v = e.partition('=')
-              if any(s in k.upper() for s in ('ENOIS','EPAPO','TIMEOUT','NODE_TLS')):
-                  print(k, '=', ('<vazio>' if v == '' else '<definido len=%d>' % len(v)))
-          print('image', d.get('Config',{}).get('Image'))
+          def env(p):
+              d = json.load(open(p)); out = {}
+              for e in d.get('Config',{}).get('Env') or []:
+                  k, _, v = e.partition('='); out[k] = v
+              return out
+          b = env('/tmp/pj.json'); g = env('/tmp/gw.json')
+          print(b.get('REDE_CALLS_EPAPO_GATEWAY_URL',''))
+          print(b.get('REDE_CALLS_EPAPO_INTERNAL_TOKEN',''))
+          print('iguais' if b.get('REDE_CALLS_EPAPO_INTERNAL_TOKEN') == g.get('EPAPO_INTERNAL_TOKEN') else 'DIFERENTES')
+          print('iguais' if b.get('REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN') == g.get('ENOIS_AUTHORIZE_SECRET') else 'DIFERENTES')
           PY
-
-          echo "=== exec: mede o callback de dentro do container ==="
-          CMD='node -e "const https=require(\"https\");const t0=Date.now();const r=https.request(process.env.URL,{method:\"POST\",headers:{\"Content-Length\":0,\"X-Enois-Authorize\":\"probe-invalido\"},timeout:20000},res=>{let b=\"\";res.on(\"data\",c=>b+=c);res.on(\"end\",()=>{console.log(\"status\",res.statusCode,\"ms\",Date.now()-t0,\"body\",b.slice(0,120))})});r.on(\"timeout\",()=>{console.log(\"TIMEOUT ms\",Date.now()-t0);r.destroy()});r.on(\"error\",e=>console.log(\"ERRO\",e.code||e.message,\"ms\",Date.now()-t0));r.end()"'
-          EXEC=$(curl -sS --max-time 30 "${AUTH[@]}" -H "Content-Type: application/json" \
-            -X POST "${API}/containers/epapo-prod-auth-gateway-1/exec" \
-            -d "{\"AttachStdout\":true,\"AttachStderr\":true,\"Env\":[\"URL=https://api.enois.ia.br/api/calls/00000000-0000-0000-0000-000000000000/gateway/entry/00000000-0000-0000-0000-000000000000\"],\"Cmd\":[\"sh\",\"-c\",$(python3 -c "import json,sys;print(json.dumps(sys.argv[1]))" "$CMD")]}" \
-            | python3 -c "import sys,json;print(json.load(sys.stdin).get('Id',''))")
-          echo "exec id: ${EXEC:0:12}"
-          curl -sS --max-time 60 "${AUTH[@]}" -H "Content-Type: application/json" \
-            -X POST "${API}/exec/${EXEC}/start" -d '{"Detach":false,"Tty":false}' -o /tmp/exec.out
-          tr -d "\000" < /tmp/exec.out | head -c 1200; echo
-
-          echo "=== exec: DNS e rota do container ==="
-          EXEC2=$(curl -sS --max-time 30 "${AUTH[@]}" -H "Content-Type: application/json" \
-            -X POST "${API}/containers/epapo-prod-auth-gateway-1/exec" \
-            -d '{"AttachStdout":true,"AttachStderr":true,"Cmd":["sh","-c","getent hosts api.enois.ia.br; echo ---; cat /etc/resolv.conf"]}' \
-            | python3 -c "import sys,json;print(json.load(sys.stdin).get('Id',''))")
-          curl -sS --max-time 60 "${AUTH[@]}" -H "Content-Type: application/json" \
-            -X POST "${API}/exec/${EXEC2}/start" -d '{"Detach":false,"Tty":false}' -o /tmp/exec2.out
-          tr -d "\000" < /tmp/exec2.out | head -c 800; echo
+          GW=$(sed -n 1p /tmp/env.txt); TOK=$(sed -n 2p /tmp/env.txt)
+          echo "token interno: $(sed -n 3p /tmp/env.txt); authorize: $(sed -n 4p /tmp/env.txt)"
+          echo "=== /auth/token chamado do runner (id inexistente) ==="
+          for i in 1 2; do
+            curl -sS -o /tmp/tk.out -w "  code=%{http_code} connect=%{time_connect} tls=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total}\n" \
+              --connect-timeout 5 --max-time 40 -X POST "${GW%/}/auth/token" \
+              -H "X-Epapo-Internal: ${TOK}" -H "Content-Type: application/json" \
+              --data '{"callId":"00000000-0000-0000-0000-000000000000","userId":"00000000-0000-0000-0000-000000000000"}'
+            head -c 160 /tmp/tk.out; echo
+          done
