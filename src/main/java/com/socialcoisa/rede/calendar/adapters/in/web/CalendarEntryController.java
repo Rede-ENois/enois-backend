@@ -78,11 +78,20 @@ class CalendarEntryController {
 			scope(scope)).stream().map(AgendaItemView::from).toList();
 	}
 
+	/**
+	 * Detalhe com o lugar de quem lê. O organizador recebe a lista de participantes; o convidado
+	 * recebe o mesmo compromisso com a própria resposta e a lista vem nula, porque quem foi
+	 * convidado não precisa ver os outros convidados da agenda de alguém.
+	 */
 	@GetMapping("/{entryId}")
-	CalendarEntryView entry(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+	AgendaDetailView entry(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String entryId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		return CalendarEntryView.from(calendarQueryService.get(user.id().value(), entryId));
+		CalendarAgendaItem item = calendarQueryService.detail(user.id().value(), entryId);
+		List<ParticipantView> participants = item.owner()
+			? views(calendarInvitationService.participants(user.id().value(), entryId))
+			: null;
+		return AgendaDetailView.from(item, participants);
 	}
 
 	/**
@@ -241,9 +250,22 @@ class CalendarEntryController {
 	record AgendaItemView(CalendarEntryView entry, boolean owner, String participation) {
 
 		static AgendaItemView from(CalendarAgendaItem item) {
-			return new AgendaItemView(CalendarEntryView.from(item.entry()), item.owner(),
-				item.participation() == null ? null : item.participation().name());
+			return new AgendaItemView(CalendarEntryView.from(item.entry()), item.owner(), participationOf(item));
 		}
+	}
+
+	/** Detalhe: o item da agenda mais os participantes quando quem lê é o organizador. */
+	record AgendaDetailView(CalendarEntryView entry, boolean owner, String participation,
+			List<ParticipantView> participants) {
+
+		static AgendaDetailView from(CalendarAgendaItem item, List<ParticipantView> participants) {
+			return new AgendaDetailView(CalendarEntryView.from(item.entry()), item.owner(),
+				participationOf(item), participants);
+		}
+	}
+
+	private static String participationOf(CalendarAgendaItem item) {
+		return item.participation() == null ? null : item.participation().name();
 	}
 
 	/**

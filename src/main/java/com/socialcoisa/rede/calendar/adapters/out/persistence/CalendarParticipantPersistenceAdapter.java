@@ -7,6 +7,7 @@ import org.springframework.stereotype.Repository;
 
 import com.socialcoisa.rede.calendar.application.port.out.CalendarParticipantRepository;
 import com.socialcoisa.rede.calendar.domain.CalendarParticipant;
+import com.socialcoisa.rede.calendar.domain.CalendarParticipantState;
 
 @Repository
 class CalendarParticipantPersistenceAdapter implements CalendarParticipantRepository {
@@ -50,6 +51,15 @@ class CalendarParticipantPersistenceAdapter implements CalendarParticipantReposi
 	@Override
 	public List<CalendarParticipant> findByEntry(String entryId) {
 		return springData.findByEntryIdOrderByInvitedAtAsc(entryId).stream()
+			.map(CalendarParticipantJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public List<CalendarParticipant> findPendingByUser(String userId) {
+		return springData
+			.findByUserIdAndStateOrderByInvitedAtAsc(userId, CalendarParticipantState.INVITED.name())
+			.stream()
 			.map(CalendarParticipantJpaEntity::toDomain)
 			.toList();
 	}

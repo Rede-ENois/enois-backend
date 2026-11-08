@@ -106,16 +106,17 @@ class CalendarEntryWriteApiTests {
 
 		mockMvc.perform(get("/calendar/entries/{entryId}", id).header("X-Session-Token", owner.token()))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.id").value(id))
-			.andExpect(jsonPath("$.title").value("Retrospectiva"))
-			.andExpect(jsonPath("$.scope").value("PROFESSIONAL"))
-			.andExpect(jsonPath("$.kind").value("MEETING"))
-			.andExpect(jsonPath("$.state").value("ACTIVE"))
-			.andExpect(jsonPath("$.startsAt").value(STARTS_AT))
-			.andExpect(jsonPath("$.endsAt").value(ENDS_AT))
-			.andExpect(jsonPath("$.timeZoneId").value("America/Sao_Paulo"))
-			.andExpect(jsonPath("$.sourceType").value(nullValue()))
-			.andExpect(jsonPath("$.ownerId").doesNotExist());
+			.andExpect(jsonPath("$.entry.id").value(id))
+			.andExpect(jsonPath("$.entry.title").value("Retrospectiva"))
+			.andExpect(jsonPath("$.entry.scope").value("PROFESSIONAL"))
+			.andExpect(jsonPath("$.entry.kind").value("MEETING"))
+			.andExpect(jsonPath("$.entry.state").value("ACTIVE"))
+			.andExpect(jsonPath("$.entry.startsAt").value(STARTS_AT))
+			.andExpect(jsonPath("$.entry.endsAt").value(ENDS_AT))
+			.andExpect(jsonPath("$.entry.timeZoneId").value("America/Sao_Paulo"))
+			.andExpect(jsonPath("$.entry.sourceType").value(nullValue()))
+			.andExpect(jsonPath("$.entry.ownerId").doesNotExist())
+			.andExpect(jsonPath("$.owner").value(true));
 
 		assertEquals("Retrospectiva", entries.findById(id).orElseThrow().title());
 	}

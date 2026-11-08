@@ -90,4 +90,22 @@ public class CalendarQueryService {
 			.filter(entry -> entry.ownerId().equals(ownerId))
 			.orElseThrow(() -> new ApiException(404, "CALENDAR_ENTRY_NOT_FOUND", "Compromisso nao encontrado."));
 	}
+
+	/**
+	 * Detalhe para quem está lendo, com o lugar dela: o organizador vê o compromisso como dona; o
+	 * convidado vê o mesmo compromisso com `owner=false` e a própria resposta.
+	 *
+	 * <p>Quem não organiza nem foi convidado responde o mesmo 404 de um id que não existe, porque um
+	 * 403 confirmaria que aquele compromisso existe na agenda de alguém.
+	 */
+	public CalendarAgendaItem detail(String userId, String entryId) {
+		CalendarEntry entry = entries.findById(entryId)
+			.orElseThrow(() -> new ApiException(404, "CALENDAR_ENTRY_NOT_FOUND", "Compromisso nao encontrado."));
+		if (entry.ownerId().equals(userId)) {
+			return CalendarAgendaItem.owned(entry);
+		}
+		return participants.findByEntryAndUser(entry.id(), userId)
+			.map(participant -> CalendarAgendaItem.invited(entry, participant.state()))
+			.orElseThrow(() -> new ApiException(404, "CALENDAR_ENTRY_NOT_FOUND", "Compromisso nao encontrado."));
+	}
 }

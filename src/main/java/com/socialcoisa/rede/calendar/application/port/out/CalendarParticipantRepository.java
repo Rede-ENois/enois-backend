@@ -28,4 +28,7 @@ public interface CalendarParticipantRepository {
 	 */
 	List<String> findEntryIdsByUser(String userId);
 
+	/** Convites de uma pessoa com a resposta que ela ainda não deu, do convite mais antigo ao mais novo. */
+	List<CalendarParticipant> findPendingByUser(String userId);
+
 }
