@@ -25,6 +25,35 @@ class SecurityHeadersFilter extends OncePerRequestFilter {
 
 	private static final String STRICT_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
+	/**
+	 * Câmera e microfone ficam abertos para a própria página e para o servidor de reunião que a
+	 * gente hospeda — é de onde a pessoa entra na chamada. Nenhum outro domínio entra na lista: a
+	 * política continua fechando a mídia para terceiros.
+	 */
+	private final String permissionsPolicy;
+
+	SecurityHeadersFilter() {
+		this("");
+	}
+
+	SecurityHeadersFilter(@org.springframework.beans.factory.annotation.Value("${rede.calls.epapo.url:}") String callUrl) {
+		String hosts = "";
+		if (callUrl != null && !callUrl.isBlank()) {
+			try {
+				java.net.URI uri = java.net.URI.create(callUrl.trim());
+				if (uri.getScheme() != null && uri.getHost() != null) {
+					hosts = " " + uri.getScheme() + "://" + uri.getHost()
+						+ (uri.getPort() > 0 ? ":" + uri.getPort() : "");
+				}
+			}
+			catch (IllegalArgumentException malformed) {
+				// URL inválida não abre nada: a política fica só com `self`.
+			}
+		}
+		this.permissionsPolicy = "geolocation=(), microphone=(self" + hosts + "), camera=(self" + hosts
+			+ "), display-capture=(self)";
+	}
+
 	@Override
 	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
 			throws ServletException, IOException {
@@ -39,7 +68,7 @@ class SecurityHeadersFilter extends OncePerRequestFilter {
 		response.setHeader("Cross-Origin-Opener-Policy", "same-origin");
 		response.setHeader("Cross-Origin-Resource-Policy", "same-site");
 		response.setHeader("Referrer-Policy", "no-referrer");
-		response.setHeader("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
+		response.setHeader("Permissions-Policy", permissionsPolicy);
 		// O trafego chega pelo ALB (HTTPS); includeSubDomains protege os subdominios do mesmo host.
 		response.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
 		if (isAuthenticated(request)) {
