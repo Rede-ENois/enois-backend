@@ -9,39 +9,61 @@ permissions:
   contents: read
 
 jobs:
-  diag-no-host-de-producao:
+  diag:
     runs-on: [self-hosted, enois]
     timeout-minutes: 15
     steps:
-      - name: Caminho do backend ate o gateway
+      - name: Reproduz a chamada do backend ao gateway e mede o callback
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
         run: |
           set +e
-          echo "host=$(hostname) ip=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -o 'src [0-9.]*' | head -1)"
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
           API="${PORTAINER_BASE_URL}/api/endpoints/11/docker"
           curl -sS --max-time 60 "${AUTH[@]}" "${API}/containers/enois-prod-backend/json" -o /tmp/pj.json
-          python3 - <<'PY' > /tmp/gwurl.txt
+
+          GW=$(python3 -c "
           import json
           d = json.load(open('/tmp/pj.json'))
           for e in d.get('Config',{}).get('Env') or []:
               if e.startswith('REDE_CALLS_EPAPO_GATEWAY_URL='):
                   print(e.split('=',1)[1])
-          PY
-          GW=$(cat /tmp/gwurl.txt)
-          echo "gateway url (host/porta): $(printf '%s' "$GW" | sed -E 's#^(https?://[^/:]+(:[0-9]+)?).*#\1#')"
-          HOSTPORT=$(printf '%s' "$GW" | sed -E 's#^https?://##; s#/.*$##')
-          echo "=== TCP 8122/GW ==="
-          timeout 8 bash -c "cat < /dev/null > /dev/tcp/${HOSTPORT%:*}/${HOSTPORT##*:}" && echo "tcp ok" || echo "tcp falhou/expirou"
-          echo "=== curl sem TLS (handshake) ==="
-          curl -sS -o /dev/null -w 'code=%{http_code} dns=%{time_namelookup} connect=%{time_connect} tls=%{time_appconnect} total=%{time_total}\n' \
-            --connect-timeout 5 --max-time 15 -X POST "${GW%/}/auth/token" \
-            -H "Content-Type: application/json" --data '{}' 2>&1 | tail -3
-          echo "=== TLS detalhe ==="
-          echo | timeout 12 openssl s_client -connect "${HOSTPORT}" -brief 2>&1 | tail -12
-          echo "=== rota ==="
-          ip route get "${HOSTPORT%:*}" 2>/dev/null | head -2
-          echo "=== containers epapo vistos do host (se houver docker) ==="
-          docker ps --format '{{.Names}} {{.Status}}' 2>&1 | head -20
+          ")
+          TOK=$(python3 -c "
+          import json
+          d = json.load(open('/tmp/pj.json'))
+          for e in d.get('Config',{}).get('Env') or []:
+              if e.startswith('REDE_CALLS_EPAPO_INTERNAL_TOKEN='):
+                  print(e.split('=',1)[1])
+          ")
+          echo "token presente: $([ -n "$TOK" ] && echo sim || echo nao)"
+
+          echo "=== callback do gateway: POST https://api.enois.ia.br/api/calls/.../gateway/entry/... ==="
+          for i in 1 2 3; do
+            curl -sS -o /tmp/cb.out -w "  tentativa $i: code=%{http_code} connect=%{time_connect} tls=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total}\n" \
+              --connect-timeout 5 --max-time 30 -X POST \
+              "https://api.enois.ia.br/api/calls/00000000-0000-0000-0000-000000000000/gateway/entry/00000000-0000-0000-0000-000000000000" \
+              -H "X-Enois-Authorize: invalid-probe" 2>&1 | tail -2
+            head -c 120 /tmp/cb.out; echo
+          done
+
+          echo "=== a mesma coisa pelo endereco do gateway (sem Cloudflare) ==="
+          curl -sS -o /dev/null -w "  code=%{http_code} total=%{time_total}\n" --max-time 20 https://api.enois.ia.br/api/version 2>&1 | tail -2
+
+          echo "=== chamada real ao gateway com o token do proprio container (so codigo e tempo) ==="
+          curl -sS -o /tmp/tk.out -w "  code=%{http_code} connect=%{time_connect} tls=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total}\n" \
+            --connect-timeout 5 --max-time 60 -X POST "${GW%/}/auth/token" \
+            -H "X-Epapo-Internal: ${TOK}" -H "Content-Type: application/json" \
+            --data '{"callId":"00000000-0000-0000-0000-000000000000","userId":"00000000-0000-0000-0000-000000000000"}' 2>&1 | tail -2
+          echo "  corpo: $(python3 -c "
+          import json
+          try:
+              d = json.load(open('/tmp/tk.out'))
+              print({k: ('<oculto>' if k == 'jwt' else v) for k, v in d.items()})
+          except Exception:
+              print(open('/tmp/tk.out').read()[:120])
+          ")"
+
+          echo "=== DNS de api.enois.ia.br visto do host ==="
+          getent hosts api.enois.ia.br | head -3
