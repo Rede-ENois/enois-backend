@@ -38,6 +38,8 @@ public enum NotificationCategory {
 		Map.entry("CALL_MISSED", MESSAGES),
 		Map.entry("CALL_ENDED", MESSAGES),
 		Map.entry("CALL_GROUP_LIVE", GROUPS),
+		// Sala "Tamo junto" de um encontro: mesmo aviso do grupo, no canal de grupos.
+		Map.entry("CALL_EVENT_LIVE", GROUPS),
 		Map.entry("GROUP_MEMBER_JOINED", GROUPS),
 		Map.entry("GROUP_JOIN_REQUEST", GROUPS),
 		Map.entry("GROUP_JOIN_APPROVED", GROUPS),
