@@ -11,9 +11,9 @@ permissions:
 jobs:
   diag:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
-      - name: Alcance do gateway de dentro do container de producao
+      - name: Emissao real a partir do container de producao
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
@@ -23,23 +23,22 @@ jobs:
           EP="${PORTAINER_BASE_URL}/api/endpoints/11/docker"
 
           run_in() {
-            local cmd="$1"
             local id
             id=$(curl -sS --max-time 30 "${AUTH[@]}" -H "Content-Type: application/json" \
               -X POST "${EP}/containers/enois-prod-backend/exec" \
-              -d "$(python3 -c "import json,sys;print(json.dumps({'AttachStdout':True,'AttachStderr':True,'Cmd':['sh','-c',sys.argv[1]]}))" "$cmd")" \
+              -d "$(python3 -c "import json,sys;print(json.dumps({'AttachStdout':True,'AttachStderr':True,'Cmd':['sh','-c',sys.argv[1]]}))" "$1")" \
               | python3 -c "import sys,json;print(json.load(sys.stdin).get('Id',''))")
-            curl -sS --max-time 60 "${AUTH[@]}" -H "Content-Type: application/json" \
+            curl -sS --max-time 120 "${AUTH[@]}" -H "Content-Type: application/json" \
               -X POST "${EP}/exec/${id}/start" -d '{"Detach":false,"Tty":false}' -o /tmp/ex.out
-            tr -d "\000" < /tmp/ex.out | head -c 900
+            tr -d "\000" < /tmp/ex.out | head -c 1200
             echo
           }
 
-          echo "=== ferramentas disponiveis ==="
-          run_in 'for b in bash sh curl wget nc openssl java keytool; do command -v $b >/dev/null && echo "tem $b"; done'
+          echo "=== handshake TLS cru do container de producao ==="
+          run_in 'timeout 20 java -version 2>&1 | head -1; time (echo | keytool -printcert -sslserver 185.111.156.15:8122 2>&1 | head -6)'
 
-          echo "=== TCP 8122 a partir do container de producao ==="
-          run_in 'if command -v bash >/dev/null; then for i in 1 2 3; do timeout 4 bash -c "cat < /dev/null > /dev/tcp/185.111.156.15/8122" && echo "$i ok" || echo "$i falhou"; done; else echo "sem bash"; fi'
+          echo "=== emissao com o token e a URL do proprio container ==="
+          run_in 'curl -sS -o /tmp/o -w "code=%{http_code} connect=%{time_connect} verify=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total}\n" --connect-timeout 5 --max-time 30 -X POST "$REDE_CALLS_EPAPO_GATEWAY_URL/auth/token" -H "X-Epapo-Internal: $REDE_CALLS_EPAPO_INTERNAL_TOKEN" -H "Content-Type: application/json" --data "{\"callId\":\"00000000-0000-0000-0000-000000000000\",\"userId\":\"00000000-0000-0000-0000-000000000000\"}"; head -c 160 /tmp/o; echo'
 
-          echo "=== CA do gateway no cacerts da imagem de producao ==="
-          run_in 'keytool -list -alias epapo-gateway -keystore "$JAVA_HOME/lib/security/cacerts" -storepass changeit 2>&1 | head -4'
+          echo "=== metade 1: so o callback (rota do gateway ja testada) ==="
+          run_in 'timeout 20 bash -c "exec 3<>/dev/tcp/185.111.156.15/8122; head -c 0 <&3" ; echo "abriu: $?"'
