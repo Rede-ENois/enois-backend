@@ -95,6 +95,16 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 	}
 
 	@Override
+	public List<ConversationParticipant> findParticipantsByConversations(java.util.Collection<String> conversationIds) {
+		if (conversationIds == null || conversationIds.isEmpty()) {
+			return List.of();
+		}
+		return participantRepo.findByConversationIdIn(conversationIds).stream()
+			.map(ConversationParticipantJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
 	public Optional<ConversationParticipant> findParticipant(String conversationId, String userId) {
 		return participantRepo.findByConversationIdAndUserId(conversationId, userId)
 			.map(ConversationParticipantJpaEntity::toDomain);
@@ -139,6 +149,20 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 	}
 
 	@Override
+	public java.util.Map<String, Integer> countUnreadByConversations(java.util.Collection<String> conversationIds,
+			String userId) {
+		if (conversationIds == null || conversationIds.isEmpty()) {
+			return java.util.Map.of();
+		}
+		java.util.Map<String, Integer> unread = new java.util.HashMap<>();
+		for (SpringDataMessageJpaRepository.UnreadCountByConversation row : messageRepo
+				.countUnreadByConversations(conversationIds, userId)) {
+			unread.put(row.getConversationId(), (int) row.getUnread());
+		}
+		return unread;
+	}
+
+	@Override
 	public int countTotalUnread(String userId, ConversationContext context) {
 		return participantRepo.countTotalUnread(userId, contextName(context));
 	}
@@ -169,6 +193,19 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 			.findFirstByConversationIdAndSenderIdAndTextAndCreatedAtAfterOrderByCreatedAtDesc(
 				conversationId, senderId, text, since)
 			.map(MessageJpaEntity::toDomain);
+	}
+
+	@Override
+	public java.util.Map<String, Message> findLastMessagesByConversations(java.util.Collection<String> conversationIds) {
+		if (conversationIds == null || conversationIds.isEmpty()) {
+			return java.util.Map.of();
+		}
+		java.util.Map<String, Message> lastMessages = new java.util.HashMap<>();
+		for (MessageJpaEntity entity : messageRepo.findLastMessagesOfConversations(conversationIds)) {
+			Message mensagem = entity.toDomain();
+			lastMessages.put(mensagem.conversationId(), mensagem);
+		}
+		return lastMessages;
 	}
 
 	@Override

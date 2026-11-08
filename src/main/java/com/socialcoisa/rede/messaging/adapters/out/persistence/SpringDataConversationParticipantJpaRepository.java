@@ -27,6 +27,9 @@ interface SpringDataConversationParticipantJpaRepository extends JpaRepository<C
 
 	Optional<ConversationParticipantJpaEntity> findByConversationIdAndUserId(String conversationId, String userId);
 
+	/** Participantes de VARIAS conversas em UMA consulta (lista de conversas do app). */
+	List<ConversationParticipantJpaEntity> findByConversationIdIn(java.util.Collection<String> conversationIds);
+
 	boolean existsByConversationIdAndUserId(String conversationId, String userId);
 
 	/**
