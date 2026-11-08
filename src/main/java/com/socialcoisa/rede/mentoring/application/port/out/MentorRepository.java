@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.mentoring.application.port.out;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -16,6 +17,9 @@ public interface MentorRepository {
 
 	Optional<Mentor> findByUserId(String userId);
 
+	/** Mentores de várias sessões numa consulta só; ids desconhecidos simplesmente não voltam. */
+	List<Mentor> findByIds(Collection<String> mentorIds);
+
 	List<Mentor> findAll(String expertise, String query, java.time.Instant before, int limit);
 
 	void saveSlot(MentorSlot slot);
@@ -23,6 +27,9 @@ public interface MentorRepository {
 	List<MentorSlot> findSlotsByMentor(String mentorId);
 
 	Optional<MentorSlot> findSlotById(String slotId);
+
+	/** Horários de várias sessões numa consulta só; ids desconhecidos simplesmente não voltam. */
+	List<MentorSlot> findSlotsByIds(Collection<String> slotIds);
 
 	void deleteSlot(String slotId);
 
