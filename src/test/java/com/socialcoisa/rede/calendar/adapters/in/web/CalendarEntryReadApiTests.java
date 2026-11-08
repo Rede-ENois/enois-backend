@@ -2,6 +2,7 @@ package com.socialcoisa.rede.calendar.adapters.in.web;
 
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -80,12 +81,12 @@ class CalendarEntryReadApiTests {
 		mockMvc.perform(listAs(owner.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$", hasSize(2)))
-			.andExpect(jsonPath("$[*].id", containsInAnyOrder(first, second)));
+			.andExpect(jsonPath("$[*].entry.id", containsInAnyOrder(first, second)));
 
 		mockMvc.perform(listAs(stranger.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$", hasSize(1)))
-			.andExpect(jsonPath("$[0].id").value(foreign));
+			.andExpect(jsonPath("$[0].entry.id").value(foreign));
 	}
 
 	@Test
@@ -99,18 +100,20 @@ class CalendarEntryReadApiTests {
 		mockMvc.perform(listAs(owner.token()).param("scope", "SOCIAL"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$", hasSize(1)))
-			.andExpect(jsonPath("$[0].id").value(social))
-			.andExpect(jsonPath("$[0].scope").value("SOCIAL"));
+			.andExpect(jsonPath("$[0].entry.id").value(social))
+			.andExpect(jsonPath("$[0].entry.scope").value("SOCIAL"))
+			.andExpect(jsonPath("$[0].owner").value(true))
+			.andExpect(jsonPath("$[0].participation").value(nullValue()));
 
 		mockMvc.perform(listAs(owner.token()).param("scope", "PROFESSIONAL"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$", hasSize(1)))
-			.andExpect(jsonPath("$[0].id").value(professional));
+			.andExpect(jsonPath("$[0].entry.id").value(professional));
 
 		mockMvc.perform(listAs(owner.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$", hasSize(2)))
-			.andExpect(jsonPath("$[*].id", containsInAnyOrder(social, professional)));
+			.andExpect(jsonPath("$[*].entry.id", containsInAnyOrder(social, professional)));
 	}
 
 	@Test
@@ -128,7 +131,7 @@ class CalendarEntryReadApiTests {
 		mockMvc.perform(listAs(owner.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$", hasSize(2)))
-			.andExpect(jsonPath("$[*].id", containsInAnyOrder(inside, spanning)));
+			.andExpect(jsonPath("$[*].entry.id", containsInAnyOrder(inside, spanning)));
 	}
 
 	@Test
@@ -209,9 +212,9 @@ class CalendarEntryReadApiTests {
 		mockMvc.perform(listAs(owner.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$", hasSize(1)))
-			.andExpect(jsonPath("$[0].id").value(id))
-			.andExpect(jsonPath("$[0].state").value("CANCELLED"))
-			.andExpect(jsonPath("$[0].cancelledAt").value("2026-11-09T00:00:00Z"));
+			.andExpect(jsonPath("$[0].entry.id").value(id))
+			.andExpect(jsonPath("$[0].entry.state").value("CANCELLED"))
+			.andExpect(jsonPath("$[0].entry.cancelledAt").value("2026-11-09T00:00:00Z"));
 	}
 
 	@Test
