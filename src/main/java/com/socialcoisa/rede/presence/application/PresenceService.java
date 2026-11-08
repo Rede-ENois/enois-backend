@@ -3,6 +3,7 @@ package com.socialcoisa.rede.presence.application;
 import java.time.Clock;
 import java.time.Duration;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,10 +16,12 @@ public class PresenceService {
 	private static final Duration ONLINE_WINDOW = Duration.ofMinutes(2);
 
 	private final PresenceRepository repository;
+	private final ApplicationEventPublisher events;
 	private final Clock clock;
 
-	PresenceService(PresenceRepository repository, Clock clock) {
+	PresenceService(PresenceRepository repository, ApplicationEventPublisher events, Clock clock) {
 		this.repository = repository;
+		this.events = events;
 		this.clock = clock;
 	}
 
@@ -30,6 +33,8 @@ public class PresenceService {
 	@Transactional
 	public PresenceStatus setStatus(String userId, PresenceStatus status) {
 		repository.setStatus(userId, status, clock.instant());
+		// Quem depende da presença (o toque da chamada direta) escuta depois do commit.
+		events.publishEvent(new PresenceChanged(userId, status));
 		return status;
 	}
 
@@ -52,5 +57,16 @@ public class PresenceService {
 	@Transactional(readOnly = true)
 	public boolean allowPush(String userId) {
 		return ownStatus(userId) != PresenceStatus.DO_NOT_DISTURB;
+	}
+
+	/**
+	 * Chamada direta depende de a pessoa aceitar ser incomodada na hora: "não perturbar" e
+	 * "invisível" não recebem toque. A chamada em si (como notificação interna) continua possível
+	 * por outros caminhos; este portão vale só para o toque do 1:1.
+	 */
+	@Transactional(readOnly = true)
+	public boolean acceptsDirectCall(String userId) {
+		PresenceStatus status = ownStatus(userId);
+		return status != PresenceStatus.DO_NOT_DISTURB && status != PresenceStatus.INVISIBLE;
 	}
 }
