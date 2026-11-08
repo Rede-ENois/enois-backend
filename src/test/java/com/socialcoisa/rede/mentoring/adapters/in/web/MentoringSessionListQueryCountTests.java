@@ -118,6 +118,39 @@ class MentoringSessionListQueryCountTests {
 			.isEqualTo(comDuas);
 	}
 
+	/**
+	 * A rota irmã (agenda do mentor) tinha o mesmo defeito por outro caminho: o mentor já estava
+	 * carregado, mas o endereço da sala consultava o mesmo mentor de novo, uma vez por sessão.
+	 */
+	@Test
+	void agendaDoMentorNaoCresceComONumeroDeSessoes() throws Exception {
+		var mentor = new TestAuthHelper(mockMvc, objectMapper).authenticate("mqs_agenda_mentor_" + sufixo);
+		String mentorId = createMentor(mentor);
+		putAvailability(mentor, mentorId,
+			List.of(Map.of("dayOfWeek", 1, "times", List.of("19:00", "20:00", "21:00"))));
+		List<String> slots = slotIds(mentorId);
+		assertThat(slots.size()).as("o teste precisa de pelo menos três horários").isGreaterThanOrEqualTo(3);
+
+		var mentee = new TestAuthHelper(mockMvc, objectMapper).authenticate("mqs_agenda_mentee_" + sufixo);
+		book(mentee, mentorId, slots.get(0)).andExpect(status().isCreated());
+		book(mentee, mentorId, slots.get(1)).andExpect(status().isCreated());
+		long comDuas = selectsOfMentorAgenda(mentor, mentorId);
+
+		book(mentee, mentorId, slots.get(2)).andExpect(status().isCreated());
+		long comTres = selectsOfMentorAgenda(mentor, mentorId);
+
+		assertThat(comTres)
+			.as("SELECTs com 2 sessões: " + comDuas + "; com 3: " + comTres + " — " + inspector.sql())
+			.isEqualTo(comDuas);
+	}
+
+	private long selectsOfMentorAgenda(TestAuthHelper.AuthSession mentor, String mentorId) throws Exception {
+		inspector.reset();
+		mockMvc.perform(get("/mentors/" + mentorId + "/sessions").header("X-Session-Token", mentor.token()))
+			.andExpect(status().isOk());
+		return inspector.selects();
+	}
+
 	private long selectsOfMySessions(TestAuthHelper.AuthSession mentee) throws Exception {
 		inspector.reset();
 		mockMvc.perform(get("/mentors/sessions/mine").header("X-Session-Token", mentee.token()))

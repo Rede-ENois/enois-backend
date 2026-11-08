@@ -192,7 +192,9 @@ class MentoringContractController {
 				slot != null && slot.startsAt() != null ? slot.startsAt().toString() : null,
 				slot != null && slot.endsAt() != null ? slot.endsAt().toString() : null,
 				session.message(), session.status().name(), session.priceSparks(),
-				mentorService.roomUrlFor(session), session.roomMode().name(),
+				// O mentor desta agenda já está carregado: sem a sobrecarga, cada linha consultava
+				// o mesmo mentor de novo só para montar a sala.
+				mentorService.roomUrlFor(session, mentor), session.roomMode().name(),
 				session.createdAt().toString()));
 		}
 		views.sort((first, second) -> {
