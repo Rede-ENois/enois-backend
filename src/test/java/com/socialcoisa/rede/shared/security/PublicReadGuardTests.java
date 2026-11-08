@@ -32,12 +32,6 @@ class PublicReadGuardTests {
 	@DynamicPropertySource
 	static void props(DynamicPropertyRegistry registry) {
 		registry.add("rede.rate.public-read-per-minute", () -> "20");
-		// Este contexto e descartado antes de CADA teste (@DirtiesContext), e fechar o pool fecha o
-		// banco junto. Com o H2 nomeado compartilhado (jdbc:h2:mem:rede) isso derrubava a base de
-		// TODOS os testes seguintes ("The database has been closed", mascarado como 409 CONFLICT).
-		// Banco proprio por contexto: fechar este nao toca no dos outros.
-		registry.add("spring.datasource.url",
-			() -> "jdbc:h2:mem:public-read-guard;MODE=MySQL;DB_CLOSE_DELAY=-1");
 	}
 
 	@Test
