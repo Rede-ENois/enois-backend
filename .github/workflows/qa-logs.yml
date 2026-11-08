@@ -9,40 +9,29 @@ permissions:
   contents: read
 
 jobs:
-  diag:
-    runs-on: ubuntu-latest
+  host:
+    runs-on: [self-hosted, enois]
     timeout-minutes: 15
     steps:
-      - name: Emissao real do token, com o token do container
-        env:
-          PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
-          PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
+      - name: Handshake em granularidade fina do host de producao
         run: |
           set +e
-          AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
-          EP="${PORTAINER_BASE_URL}/api/endpoints/11/docker"
-          curl -sS --max-time 60 "${AUTH[@]}" "${EP}/containers/enois-prod-backend/json" -o /tmp/pj.json
-          curl -sS --max-time 60 "${AUTH[@]}" "${PORTAINER_BASE_URL}/api/endpoints/12/docker/containers/epapo-prod-auth-gateway-1/json" -o /tmp/gw.json
-          python3 - <<'PY' > /tmp/env.txt
-          import json
-          def env(p):
-              d = json.load(open(p)); out = {}
-              for e in d.get('Config',{}).get('Env') or []:
-                  k, _, v = e.partition('='); out[k] = v
-              return out
-          b = env('/tmp/pj.json'); g = env('/tmp/gw.json')
-          print(b.get('REDE_CALLS_EPAPO_GATEWAY_URL',''))
-          print(b.get('REDE_CALLS_EPAPO_INTERNAL_TOKEN',''))
-          print('iguais' if b.get('REDE_CALLS_EPAPO_INTERNAL_TOKEN') == g.get('EPAPO_INTERNAL_TOKEN') else 'DIFERENTES')
-          print('iguais' if b.get('REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN') == g.get('ENOIS_AUTHORIZE_SECRET') else 'DIFERENTES')
-          PY
-          GW=$(sed -n 1p /tmp/env.txt); TOK=$(sed -n 2p /tmp/env.txt)
-          echo "token interno: $(sed -n 3p /tmp/env.txt); authorize: $(sed -n 4p /tmp/env.txt)"
-          echo "=== /auth/token chamado do runner (id inexistente) ==="
-          for i in 1 2; do
-            curl -sS -o /tmp/tk.out -w "  code=%{http_code} connect=%{time_connect} tls=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total}\n" \
-              --connect-timeout 5 --max-time 40 -X POST "${GW%/}/auth/token" \
-              -H "X-Epapo-Internal: ${TOK}" -H "Content-Type: application/json" \
-              --data '{"callId":"00000000-0000-0000-0000-000000000000","userId":"00000000-0000-0000-0000-000000000000"}'
-            head -c 160 /tmp/tk.out; echo
+          echo "host=$(hostname)"
+          echo "=== IPv4 do host ==="
+          ip -4 -o addr show scope global | awk '{print $2, $4}'
+          echo "=== IPv6 default ==="
+          ip -6 route | head -5
+          echo "=== getent ==="
+          getent ahostsv4 api.enois.ia.br | head -3
+          getent hosts api.enois.ia.br | head -3
+          echo "=== TCP 8122 (IPv4, 10 tentativas) ==="
+          for i in $(seq 1 10); do
+            timeout 3 bash -c 'cat < /dev/null > /dev/tcp/185.111.156.15/8122' && echo "  $i ok" || echo "  $i falhou"
           done
+          echo "=== curl -4 com verbose do connect ==="
+          curl -4 -v -o /dev/null --connect-timeout 6 --max-time 10 -X POST https://185.111.156.15:8122/auth/token -H 'Content-Type: application/json' --data '{}' 2>&1 | grep -E "Trying|Connected|TLS|SSL|error|timed|timed out" | head -12
+          echo "=== porta de origem usada (ss) ==="
+          ss -tnp 2>/dev/null | grep 8122 | head -5
+          echo "=== ip route get 185.111.156.15 ==="
+          ip route get 185.111.156.15 | head -3
+          echo "=== rota dentro do container do backend ==="
