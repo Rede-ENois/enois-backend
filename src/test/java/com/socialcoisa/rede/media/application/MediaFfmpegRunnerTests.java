@@ -43,6 +43,40 @@ class MediaFfmpegRunnerTests {
 		assertThat(Files.readString(output)).isEqualTo("clean");
 	}
 
+	/**
+	 * O {@code moov} no fim do arquivo é o que trava o player: o navegador precisa baixar dezenas de
+	 * MB até achar a duração, e o card do feed fica sem quadro e sem tempo (issue #537). O
+	 * {@code +faststart} move o índice para o começo sem tocar no bitstream — é remux, não
+	 * transcodificação, e o {@code -c copy} continua no comando.
+	 */
+	@Test
+	void movesTheMp4IndexToTheFrontWithoutTouchingTheBitstream() throws Exception {
+		Path args = dir.resolve("args.txt");
+		Path ffmpeg = script("printf '%s\\n' \"$@\" > '" + args + "'\nfor last; do :; done\n"
+			+ "printf clean > \"${last#file:}\"\n");
+		Path input = Files.writeString(dir.resolve("in.bin"), "video");
+		Path output = Files.createFile(dir.resolve("out.bin"));
+
+		new MediaFfmpegRunner(ffmpeg.toString(), 1).strip(input, output, "video/mp4", Duration.ofSeconds(10));
+
+		assertThat(String.join(" ", Files.readAllLines(args)))
+			.contains("-c copy -movflags +faststart -f mp4")
+			.as("o faststart vem depois do -c copy e antes do muxer");
+	}
+
+	@Test
+	void leavesTheOtherContainersWithoutTheMp4OnlyFlag() throws Exception {
+		Path args = dir.resolve("args.txt");
+		Path ffmpeg = script("printf '%s\\n' \"$@\" > '" + args + "'\nfor last; do :; done\n"
+			+ "printf clean > \"${last#file:}\"\n");
+		Path input = Files.writeString(dir.resolve("in.bin"), "video");
+		Path output = Files.createFile(dir.resolve("out.bin"));
+
+		new MediaFfmpegRunner(ffmpeg.toString(), 1).strip(input, output, "video/webm", Duration.ofSeconds(10));
+
+		assertThat(String.join(" ", Files.readAllLines(args))).doesNotContain("-movflags");
+	}
+
 	@Test
 	void rejectsAFailedRunInsteadOfKeepingTheOriginal() throws Exception {
 		Path ffmpeg = script("exit 1\n");
