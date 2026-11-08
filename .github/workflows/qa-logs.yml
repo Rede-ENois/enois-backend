@@ -13,23 +13,32 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Motivo real da recusa
+      - name: QA, motivo do erro na entrada
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
         run: |
           set -euo pipefail
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
-          API="${PORTAINER_BASE_URL}/api/endpoints/11/docker"
-          curl -sS --max-time 60 "${AUTH[@]}" "${API}/containers/enois-prod-backend/logs?stdout=1&stderr=1&timestamps=1" -o /tmp/p.log || true
-          tr -d "\000" < /tmp/p.log | grep -a "EpapoMeetingTokenIssuer" | tail -14 | python3 -c "
+          API="${PORTAINER_BASE_URL}/api/endpoints/8/docker"
+          curl -sS --max-time 60 "${AUTH[@]}" "${API}/containers/enois-qa-backend/logs?stdout=1&stderr=1&timestamps=1" -o /tmp/q.log || true
+          echo "=== aviso do gateway na QA ==="
+          tr -d "\000" < /tmp/q.log | grep -a "EpapoMeetingTokenIssuer" | tail -10 | python3 -c "
           import sys, json
           for line in sys.stdin:
               i = line.find('{')
               if i < 0: continue
-              try:
-                  d = json.loads(line[i:])
-              except Exception:
-                  continue
+              try: d = json.loads(line[i:])
+              except Exception: continue
               print(d.get('@timestamp'), d.get('log',{}).get('level'), '|', d.get('message'))
-          "
+          " || echo "(nenhum)"
+          echo "=== 5xx na QA ==="
+          tr -d "\000" < /tmp/q.log | grep -a "api_error status=5" | tail -8 | python3 -c "
+          import sys, json
+          for line in sys.stdin:
+              i = line.find('{')
+              if i < 0: continue
+              try: d = json.loads(line[i:])
+              except Exception: continue
+              print(d.get('@timestamp'), '|', d.get('message'))
+          " || echo "(nenhum)"
