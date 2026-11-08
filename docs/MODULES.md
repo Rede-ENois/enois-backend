@@ -108,6 +108,9 @@ As rotas públicas e o comportamento de caminhos fora da superfície continuam c
 | Função | Descrição |
 |---|---|
 | `processPendingEvents()` | Scheduled task que processa eventos pendentes da outbox |
+| `processOne(String eventId)` | Reserva (claim) e executa um evento; retorna false se outra rodada já reservou |
+
+Tabela de recibos: `processed_event_handlers` (par evento + handler), gravada na mesma transação dos efeitos do handler. Estado de falha: `attempts`, `last_error` e `next_attempt_at` na própria linha da outbox.
 
 **Arquivo**: `src/main/java/com/socialcoisa/rede/shared/outbox/OutboxEventPersistenceAdapter.java`
 

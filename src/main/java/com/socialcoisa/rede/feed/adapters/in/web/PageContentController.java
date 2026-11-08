@@ -1,11 +1,13 @@
 package com.socialcoisa.rede.feed.adapters.in.web;
 
 import java.nio.charset.StandardCharsets;
+import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
@@ -14,6 +16,7 @@ import com.socialcoisa.rede.feed.application.GetPageDocumentUseCase;
 import com.socialcoisa.rede.feed.application.PagePreviewCardService;
 import com.socialcoisa.rede.feed.domain.PostId;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
+import com.socialcoisa.rede.shared.web.SiteDomains;
 
 /**
  * Documento HTML de uma pagina publicada — a origem de conteudo.
@@ -45,11 +48,13 @@ class PageContentController {
 	PageContentController(GetPageDocumentUseCase getPageDocumentUseCase,
 			PagePreviewCardService pagePreviewCardService,
 			UserProfileRepository userProfileRepository,
-			@Value("${rede.pages.content-security-policy:" + DEFAULT_CSP + "}") String contentSecurityPolicy) {
+			SiteDomains siteDomains,
+			@Value("${rede.pages.content-security-policy:}") String contentSecurityPolicy) {
 		this.getPageDocumentUseCase = getPageDocumentUseCase;
 		this.pagePreviewCardService = pagePreviewCardService;
 		this.userProfileRepository = userProfileRepository;
-		this.contentSecurityPolicy = contentSecurityPolicy;
+		this.contentSecurityPolicy = StringUtils.hasText(contentSecurityPolicy) ? contentSecurityPolicy
+			: defaultCsp(siteDomains);
 	}
 
 	@GetMapping(value = "/pages/{postId}", produces = MediaType.TEXT_HTML_VALUE)
@@ -88,14 +93,20 @@ class PageContentController {
 
 	/**
 	 * Politica padrao. `frame-src` lista so provedores conhecidos (player), `script-src` fica
-	 * `'none'` para o documento da pagina e `frame-ancestors` libera apenas o app — ajustavel por
-	 * `REDE_PAGES_FRAME_ANCESTORS`/propriedade, porque a origem muda por ambiente.
+	 * `'none'` para o documento da pagina e `frame-ancestors` libera apenas o app, em cada dominio
+	 * do site (principal e espelhos, `rede.site.domains`) — a politica inteira e ajustavel pela
+	 * propriedade `rede.pages.content-security-policy`, porque a origem muda por ambiente.
 	 */
-	static final String DEFAULT_CSP = "default-src 'none'; "
+	static String defaultCsp(SiteDomains siteDomains) {
+		String ancestors = siteDomains.all().stream().map(d -> "https://" + d + " https://*." + d)
+			.collect(Collectors.joining(" "));
+		return BASE_CSP + "frame-ancestors 'self' " + ancestors;
+	}
+
+	private static final String BASE_CSP = "default-src 'none'; "
 		+ "img-src https: data:; media-src https: data:; font-src data:; style-src 'unsafe-inline'; "
 		+ "frame-src https://www.youtube-nocookie.com https://www.youtube.com https://player.vimeo.com "
 		+ "https://www.dailymotion.com https://player.twitch.tv https://open.spotify.com "
 		+ "https://w.soundcloud.com; "
-		+ "script-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'; "
-		+ "frame-ancestors 'self' https://enois.ia.br https://*.enois.ia.br";
+		+ "script-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'; ";
 }

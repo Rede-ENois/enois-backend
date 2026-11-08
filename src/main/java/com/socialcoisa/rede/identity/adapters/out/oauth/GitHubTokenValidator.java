@@ -42,13 +42,14 @@ class GitHubTokenValidator implements TokenValidator {
 	}
 
 	@Override
-	public Optional<TokenValidationResult> validate(OAuthProvider provider, String credential, String expectedNonce) {
+	public Optional<TokenValidationResult> validate(OAuthProvider provider, String credential, String expectedNonce,
+			String redirectUri) {
 		if (provider != OAuthProvider.GITHUB || !StringUtils.hasText(credential)
 				|| !properties.isGithubConfigured()) {
 			return Optional.empty();
 		}
 		try {
-			TokenExchange exchanged = exchange(credential.trim());
+			TokenExchange exchanged = exchange(credential.trim(), redirectUri);
 			if (!StringUtils.hasText(exchanged.accessToken())) {
 				return Optional.empty();
 			}
@@ -62,12 +63,12 @@ class GitHubTokenValidator implements TokenValidator {
 	private record TokenExchange(String accessToken, String scope) {
 	}
 
-	private TokenExchange exchange(String code) throws Exception {
+	private TokenExchange exchange(String code, String redirectUri) throws Exception {
 		var config = properties.getGithub();
 		String body = "client_id=" + enc(config.getClientId())
 			+ "&client_secret=" + enc(config.getClientSecret())
 			+ "&code=" + enc(code)
-			+ "&redirect_uri=" + enc(config.getRedirectUri());
+			+ "&redirect_uri=" + enc(redirectUri);
 		HttpRequest request = HttpRequest.newBuilder(URI.create(TOKEN_URL))
 			.timeout(Duration.ofSeconds(10))
 			.header("Accept", "application/json")

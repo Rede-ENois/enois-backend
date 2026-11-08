@@ -34,6 +34,15 @@ class OutboxEventJpaEntity {
 	@Column(name = "next_attempt_at", nullable = false)
 	private Instant nextAttemptAt;
 
+	@Column(nullable = false)
+	private int attempts;
+
+	@Column(name = "last_error", length = 500)
+	private String lastError;
+
+	@Column(name = "claimed_at")
+	private Instant claimedAt;
+
 	protected OutboxEventJpaEntity() {
 	}
 
@@ -71,7 +80,31 @@ class OutboxEventJpaEntity {
 		return nextAttemptAt;
 	}
 
+	int attempts() {
+		return attempts;
+	}
+
+	String lastError() {
+		return lastError;
+	}
+
+	Instant claimedAt() {
+		return claimedAt;
+	}
+
 	void markProcessed() {
 		this.status = "PROCESSED";
+		this.claimedAt = null;
+	}
+
+	/**
+	 * Falha do handler: o evento continua pendente e so volta na proxima tentativa, depois do
+	 * backoff. O erro fica na linha para o diagnostico nao depender do log do pod.
+	 */
+	void markFailed(String error, Instant nextAttemptAt) {
+		this.attempts++;
+		this.lastError = error;
+		this.nextAttemptAt = nextAttemptAt;
+		this.claimedAt = null;
 	}
 }

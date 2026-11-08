@@ -65,7 +65,8 @@ class AppleTokenValidator implements TokenValidator {
 	}
 
 	@Override
-	public Optional<TokenValidationResult> validate(OAuthProvider provider, String credential, String expectedNonce) {
+	public Optional<TokenValidationResult> validate(OAuthProvider provider, String credential, String expectedNonce,
+			String redirectUri) {
 		if (provider != OAuthProvider.APPLE || !StringUtils.hasText(credential)) {
 			return Optional.empty();
 		}
@@ -78,7 +79,7 @@ class AppleTokenValidator implements TokenValidator {
 			return verifyIdentityToken(credential, expectedNonce);
 		}
 
-		return exchangeCodeForTokens(credential, expectedNonce);
+		return exchangeCodeForTokens(credential, expectedNonce, redirectUri);
 	}
 
 	private boolean isJwt(String value) {
@@ -86,7 +87,8 @@ class AppleTokenValidator implements TokenValidator {
 	}
 
 	/** Troca o code de autorizacao por tokens usando o client_secret gerado na hora. */
-	private Optional<TokenValidationResult> exchangeCodeForTokens(String code, String expectedNonce) {
+	private Optional<TokenValidationResult> exchangeCodeForTokens(String code, String expectedNonce,
+			String redirectUri) {
 		try {
 			String clientSecret = buildClientSecret();
 			if (!StringUtils.hasText(clientSecret)) {
@@ -99,8 +101,8 @@ class AppleTokenValidator implements TokenValidator {
 			params.put("client_id", config.getClientId());
 			params.put("client_secret", clientSecret);
 			params.put("grant_type", "authorization_code");
-			if (StringUtils.hasText(config.getRedirectUri())) {
-				params.put("redirect_uri", config.getRedirectUri());
+			if (StringUtils.hasText(redirectUri)) {
+				params.put("redirect_uri", redirectUri);
 			}
 
 			String body = params.entrySet().stream()

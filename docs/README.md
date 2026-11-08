@@ -143,7 +143,7 @@ docker compose --profile prd up
 | `REDE_STORAGE_IMAGEKIT_PRIVATE_KEY` | Sim (se storage ImageKit) | ImageKit private key |
 | `REDE_STORAGE_IMAGEKIT_PUBLIC_KEY` | Sim (se storage ImageKit) | ImageKit public key |
 | `REDE_STORAGE_IMAGEKIT_URL_ENDPOINT` | Sim (se storage ImageKit) | ImageKit URL endpoint |
-| `REDE_CORS_ALLOWED_ORIGINS` | Não | Origens do app liberadas em todas as rotas (navegador: `Origin`; servidor: `X-Client-Origin`) |
+| `CORS_ALLOWED_ORIGINS` | Não | Origens do app liberadas em todas as rotas (navegador: `Origin`; servidor: `X-Client-Origin`) |
 | `REDE_ORIGINS_ENFORCE` | Não | Gate de origem global (padrão `true`); `false` só para diagnóstico local |
 | `REDE_TRUSTED_ORIGINS` | Não | Padrões confiáveis do frontend, inclusive curinga (`https://*.b7cloud.com.br`); aceitos também em `/admin` e `/moderation` |
 | `REDE_ORIGINS_MAX_FAILURES` | Não | Recusas (401/403/429) que derrubam uma origem de terceiro (padrão `60`; `0` desliga) |

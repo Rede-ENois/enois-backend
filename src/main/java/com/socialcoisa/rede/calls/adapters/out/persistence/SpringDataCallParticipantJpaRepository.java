@@ -47,6 +47,19 @@ interface SpringDataCallParticipantJpaRepository extends JpaRepository<CallParti
 			@Param("from") CallParticipantState from, @Param("to") CallParticipantState to,
 			@Param("now") Instant now);
 
+	/**
+	 * Entrada numa sala aberta, onde não existe lista de convidados: cria a linha na primeira vez e,
+	 * se ela já existir, só a coloca em JOINED preservando o primeiro horário de entrada. Um
+	 * comando só, para duas abas ao mesmo tempo não brigarem pela chave única.
+	 */
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Query(value = "INSERT INTO call_participants (id, call_id, user_id, state, invited_at, joined_at, "
+			+ "left_at, last_seen_at) VALUES (:id, :callId, :userId, 'JOINED', :now, :now, NULL, :now) "
+			+ "ON DUPLICATE KEY UPDATE state = 'JOINED', joined_at = COALESCE(joined_at, :now), "
+			+ "left_at = NULL, last_seen_at = :now", nativeQuery = true)
+	int upsertJoined(@Param("id") String id, @Param("callId") String callId, @Param("userId") String userId,
+			@Param("now") Instant now);
+
 	@Modifying(clearAutomatically = true)
 	@Query("UPDATE CallParticipantJpaEntity p SET p.state = :to, p.leftAt = :now, p.lastSeenAt = :now "
 			+ "WHERE p.callId = :callId AND p.state = :from")

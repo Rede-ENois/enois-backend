@@ -375,10 +375,20 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	}
 
 	private List<PostView> enrich(List<Post> posts, UserId currentUserId) {
+		return enrich(posts, currentUserId, null);
+	}
+
+	/**
+	 * Versão com o conjunto de bloqueios já em mão: o "Para você" busca o conjunto uma vez e o
+	 * reusa no enrich da página e no enrich dos reposts mesclados — sem repetir as consultas de
+	 * bloqueio/mute a cada chamada. Null busca por conta própria (todos os outros caminhos).
+	 */
+	private List<PostView> enrich(List<Post> posts, UserId currentUserId, Set<String> knownHidden) {
 		if (posts.isEmpty()) {
 			return List.of();
 		}
-		Set<String> hidden = blockedUsersReader.hiddenIdsFor(currentUserId != null ? currentUserId.value() : null);
+		Set<String> hidden = knownHidden != null ? knownHidden
+			: blockedUsersReader.hiddenIdsFor(currentUserId != null ? currentUserId.value() : null);
 		List<Post> visible = hidden.isEmpty() ? posts
 			: posts.stream().filter(post -> !hidden.contains(post.authorId().value())).toList();
 		if (visible.isEmpty()) {
@@ -571,6 +581,10 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		// "Ocultar reposts": o repost com opinião sai da janela do "Para você" e a mesclagem
 		// de reposts puros dos amigos (abaixo) é pulada inteira.
 		boolean hideReposts = readerPreferences.hideReposts(query.userId().value());
+		// O conjunto de bloqueios + mutes vale a requisição inteira: o enrich() das duas listas
+		// (página e reposts mesclados) e a mesclagem leem dele. Antes eram duas leituras por rodada
+		// (3 consultas cada) na rota mais aberta do app (#517).
+		Set<String> hiddenForRequest = blockedUsersReader.hiddenIdsFor(query.userId().value());
 		Set<UserId> authors = new LinkedHashSet<>();
 		authors.add(query.userId());
 		authors.addAll(connectionGraphRepository.findFriends(query.userId()));
@@ -614,13 +628,13 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 					.thenComparing(Post::createdAt, java.util.Comparator.reverseOrder()))
 				.toList();
 		}
-		List<PostView> enriched = enrich(visible, query.userId());
+		List<PostView> enriched = enrich(visible, query.userId(), hiddenForRequest);
 
 		// Reposts puros dos amigos: uma consulta em batch (todos os amigos de uma vez).
 		// Filtros do "Para você" valem: comunidade sem participacao, topico bloqueado e bloqueio.
 		// "Ocultar reposts" liga os três de uma vez: nem o post repostado entra.
 		Set<String> alreadyInFeed = visible.stream().map(p -> p.id().value()).collect(Collectors.toSet());
-		Set<String> hidden = blockedUsersReader.hiddenIdsFor(query.userId().value());
+		Set<String> hidden = hiddenForRequest;
 		List<String> friendIdList = authors.stream().map(UserId::value)
 			.filter(id -> !id.equals(query.userId().value())).toList();
 		// Uma consulta batch: todos os reposts recentes dos amigos.
@@ -647,7 +661,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				.filter(p -> p.communityId() == null || !hiddenCommunities.contains(p.communityId()))
 				.filter(p -> blocked.isEmpty() || p.topic() == null || !blocked.contains(p.topic()))
 				.toList();
-			List<PostView> repostedViews = enrich(repostedPosts, query.userId());
+			List<PostView> repostedViews = enrich(repostedPosts, query.userId(), hiddenForRequest);
 			java.util.Map<String, com.socialcoisa.rede.profile.domain.UserProfile> repostProfiles =
 				userProfileRepository.findAllByIds(bestRepost.values().stream()
 					.map(com.socialcoisa.rede.feed.domain.PostRepost::userId).collect(Collectors.toSet()))

@@ -18,6 +18,16 @@ encontrado e o que foi feito. Uma linha por ciclo, sem inventar o que não foi l
 - **Nada de**: teste de carga contra a produção, bloqueio manual de IP sem ordem, mexer em
   infraestrutura.
 
+## Métricas da plataforma (Prometheus)
+
+Com o `micrometer-registry-prometheus` ligado, a outbox assíncrona aparece como três gauges de
+cardinalidade fixa (`shared/outbox/OutboxMetrics`):
+
+- `rede_outbox_pending` — backlog: eventos esperando processamento. Subida contínua sem descida =
+  worker parado ou handler quebrando sistematicamente (o `last_error` da linha mais antiga diz qual).
+- `rede_outbox_failed_attempts` — soma das tentativas falhadas dos pendentes: pressão de falha.
+- `rede_outbox_events_total` — linhas na outbox, hoje limitadas pela janela de retenção (14 dias).
+
 ## Ciclos
 
 - **2026-10-22 17:20** — app saudável: `/api/stats/community` 200 em 0,92s/0,91s/0,91s, home 200,

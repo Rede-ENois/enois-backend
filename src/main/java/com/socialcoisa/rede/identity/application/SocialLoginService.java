@@ -38,6 +38,7 @@ import com.socialcoisa.rede.identity.domain.UsernameSlug;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
 import com.socialcoisa.rede.shared.web.ApiException;
+import com.socialcoisa.rede.shared.web.SiteDomains;
 
 /**
  * Login e vinculacao por Google/Apple.
@@ -66,6 +67,7 @@ public class SocialLoginService implements OAuthUseCase {
 	private final AuthSessionRepository authSessionRepository;
 	private final PasswordHasher passwordHasher;
 	private final OAuthProperties oAuthProperties;
+	private final SiteDomains siteDomains;
 	private final com.socialcoisa.rede.linkedin.application.LinkedInIntegrationService linkedin;
 	private final GitHubIdentityService githubIdentity;
 	private final GitHubUserTokenService githubTokens;
@@ -84,7 +86,7 @@ public class SocialLoginService implements OAuthUseCase {
 			CredentialRepository credentialRepository,
 			AuthSessionRepository authSessionRepository,
 			PasswordHasher passwordHasher,
-			OAuthProperties oAuthProperties,
+			OAuthProperties oAuthProperties, SiteDomains siteDomains,
 			com.socialcoisa.rede.linkedin.application.LinkedInIntegrationService linkedin,
 			GitHubIdentityService githubIdentity, GitHubUserTokenService githubTokens,
 			ApplicationEventPublisher events, Clock clock,
@@ -99,6 +101,7 @@ public class SocialLoginService implements OAuthUseCase {
 		this.authSessionRepository = authSessionRepository;
 		this.passwordHasher = passwordHasher;
 		this.oAuthProperties = oAuthProperties;
+		this.siteDomains = siteDomains;
 		this.linkedin = linkedin;
 		this.githubIdentity = githubIdentity;
 		this.githubTokens = githubTokens;
@@ -109,22 +112,22 @@ public class SocialLoginService implements OAuthUseCase {
 
 	@Override
 	@Transactional
-	public OAuthStartResponse start(OAuthProvider provider) {
-		return startRequest(provider, null);
+	public OAuthStartResponse start(OAuthProvider provider, String siteDomain) {
+		return startRequest(provider, null, false, siteDomain);
 	}
 
 	@Override
 	@Transactional
-	public OAuthStartResponse startLink(String userId, OAuthProvider provider) {
+	public OAuthStartResponse startLink(String userId, OAuthProvider provider, String siteDomain) {
 		if (!StringUtils.hasText(userId)) {
 			throw new ApiException(401, "UNAUTHENTICATED", "Sessao invalida ou expirada.");
 		}
-		return startRequest(provider, userId);
+		return startRequest(provider, userId, false, siteDomain);
 	}
 
 	@Override
 	@Transactional
-	public OAuthStartResponse startLinkWithWrite(String userId, OAuthProvider provider) {
+	public OAuthStartResponse startLinkWithWrite(String userId, OAuthProvider provider, String siteDomain) {
 		if (!StringUtils.hasText(userId)) {
 			throw new ApiException(401, "UNAUTHENTICATED", "Sessao invalida ou expirada.");
 		}
@@ -132,14 +135,11 @@ public class SocialLoginService implements OAuthUseCase {
 			throw new ApiException(400, "WRITE_SCOPE_NOT_SUPPORTED",
 				"Somente o GitHub tem vínculo com permissão de escrita.");
 		}
-		return startRequest(provider, userId, true);
+		return startRequest(provider, userId, true, siteDomain);
 	}
 
-	private OAuthStartResponse startRequest(OAuthProvider provider, String linkUserId) {
-		return startRequest(provider, linkUserId, false);
-	}
-
-	private OAuthStartResponse startRequest(OAuthProvider provider, String linkUserId, boolean writeScope) {
+	private OAuthStartResponse startRequest(OAuthProvider provider, String linkUserId, boolean writeScope,
+			String siteDomain) {
 		// O GitHub só serve para VINCULAR: não criamos conta nova por ele (o e-mail público do
 		// GitHub não é prova de posse e o fluxo de login não é o objetivo desta fase).
 		if (provider == OAuthProvider.GITHUB && linkUserId == null) {
@@ -149,16 +149,28 @@ public class SocialLoginService implements OAuthUseCase {
 		String state = randomToken();
 		String nonce = randomToken();
 		Instant now = clock.instant();
+		String site = siteDomains.all().contains(siteDomain) ? siteDomain : siteDomains.primary();
 		authorizationRequestRepository.save(OAuthAuthorizationRequest.create(state, provider, nonce, linkUserId,
-			now.plus(STATE_TTL), now));
+			site, now.plus(STATE_TTL), now));
 		// Faxina oportunista: o state nao precisa sobreviver no banco depois de vencer.
 		authorizationRequestRepository.deleteExpired(now);
 		return new OAuthStartResponse(provider, state,
-			buildAuthorizationUrl(provider, state, nonce, linkUserId != null, writeScope));
+			buildAuthorizationUrl(provider, state, nonce, linkUserId != null, writeScope, redirectUri(provider, site)));
+	}
+
+	/** redirect_uri do provedor no dominio do fluxo: o configurado e o do dominio principal. */
+	private String redirectUri(OAuthProvider provider, String siteDomain) {
+		String configured = switch (provider) {
+			case GOOGLE -> oAuthProperties.getGoogle().getRedirectUri();
+			case APPLE -> oAuthProperties.getApple().getRedirectUri();
+			case GITHUB -> oAuthProperties.getGithub().getRedirectUri();
+			case LINKEDIN -> oAuthProperties.getLinkedin().getRedirectUri();
+		};
+		return siteDomains.localize(configured, siteDomain);
 	}
 
 	private String buildAuthorizationUrl(OAuthProvider provider, String state, String nonce,
-			boolean includePosting, boolean writeScope) {
+			boolean includePosting, boolean writeScope, String redirectUri) {
 		return switch (provider) {
 			case GOOGLE -> {
 				var config = oAuthProperties.getGoogle();
@@ -167,7 +179,7 @@ public class SocialLoginService implements OAuthUseCase {
 						"Login com Google nao configurado. Configure GOOGLE_CLIENT_ID.");
 				}
 				yield "https://accounts.google.com/o/oauth2/v2/auth?client_id=" + urlEncode(config.getClientId())
-					+ "&redirect_uri=" + urlEncode(config.getRedirectUri())
+					+ "&redirect_uri=" + urlEncode(redirectUri)
 					+ "&response_type=code&scope=openid+email+profile"
 					+ "&state=" + urlEncode(state) + "&nonce=" + urlEncode(nonce);
 			}
@@ -178,7 +190,7 @@ public class SocialLoginService implements OAuthUseCase {
 						"Login com Apple nao configurado. Configure APPLE_CLIENT_ID.");
 				}
 				yield "https://appleid.apple.com/auth/authorize?client_id=" + urlEncode(config.getClientId())
-					+ "&redirect_uri=" + urlEncode(config.getRedirectUri())
+					+ "&redirect_uri=" + urlEncode(redirectUri)
 					+ "&response_type=code&scope=name+email&response_mode=form_post"
 					+ "&state=" + urlEncode(state) + "&nonce=" + urlEncode(nonce);
 			}
@@ -189,7 +201,7 @@ public class SocialLoginService implements OAuthUseCase {
 						"Vinculo com GitHub nao configurado. Configure GITHUB_CLIENT_ID.");
 				}
 				yield "https://github.com/login/oauth/authorize?client_id=" + urlEncode(config.getClientId())
-					+ "&redirect_uri=" + urlEncode(config.getRedirectUri())
+					+ "&redirect_uri=" + urlEncode(redirectUri)
 					+ "&response_type=code&scope=" + (writeScope ? "repo" : "read:user")
 					+ "&state=" + urlEncode(state);
 			}
@@ -205,7 +217,7 @@ public class SocialLoginService implements OAuthUseCase {
 				// autoriza publicar em nome da pessoa; o login puro nao pede esse escopo para nao
 				// assustar quem so quer entrar. Se o app ainda nao tem o produto, so o vinculo falha.
 				yield "https://www.linkedin.com/oauth/v2/authorization?client_id=" + urlEncode(config.getClientId())
-					+ "&redirect_uri=" + urlEncode(config.getRedirectUri())
+					+ "&redirect_uri=" + urlEncode(redirectUri)
 					+ "&response_type=code&scope=openid+profile+email"
 					+ (includePosting ? "+w_member_social" : "")
 					+ "&state=" + urlEncode(state) + "&nonce=" + urlEncode(nonce);
@@ -224,7 +236,7 @@ public class SocialLoginService implements OAuthUseCase {
 			throw new ApiException(400, "INVALID_OAUTH_CODE", "Codigo de autorizacao obrigatorio.");
 		}
 		OAuthAuthorizationRequest request = consumeAuthorizationRequest(provider, state);
-		TokenValidationResult validation = validate(provider, code, request.nonce());
+		TokenValidationResult validation = validate(provider, code, request);
 		AuthResponse response = request.isLinkRequest()
 			? attachIdentity(request.userId(), provider, validation)
 			: login(provider, validation, appleUserPayload);
@@ -241,7 +253,7 @@ public class SocialLoginService implements OAuthUseCase {
 		// Sem state nao ha como conferir o nonce: um id_token solto pode ter sido emitido para outro
 		// pedido. Aceitamos o login por id_token apenas quando ele veio do nosso /start.
 		OAuthAuthorizationRequest request = consumeAuthorizationRequest(provider, state);
-		TokenValidationResult validation = validate(provider, idToken, request.nonce());
+		TokenValidationResult validation = validate(provider, idToken, request);
 		AuthResponse response = request.isLinkRequest()
 			? attachIdentity(request.userId(), provider, validation)
 			: login(provider, validation, null);
@@ -292,9 +304,23 @@ public class SocialLoginService implements OAuthUseCase {
 		return request;
 	}
 
-	private TokenValidationResult validate(OAuthProvider provider, String credential, String expectedNonce) {
+	@Override
+	@Transactional(readOnly = true)
+	public String siteDomainOf(String state) {
+		if (!StringUtils.hasText(state)) {
+			return siteDomains.primary();
+		}
+		return authorizationRequestRepository.findByState(state.trim()).map(this::siteOf).orElse(siteDomains.primary());
+	}
+
+	private String siteOf(OAuthAuthorizationRequest request) {
+		return StringUtils.hasText(request.siteDomain()) ? request.siteDomain() : siteDomains.primary();
+	}
+
+	private TokenValidationResult validate(OAuthProvider provider, String credential, OAuthAuthorizationRequest request) {
+		String redirectUri = redirectUri(provider, siteOf(request));
 		return tokenValidators.stream()
-			.map(validator -> validator.validate(provider, credential, expectedNonce))
+			.map(validator -> validator.validate(provider, credential, request.nonce(), redirectUri))
 			.filter(Optional::isPresent)
 			.map(Optional::get)
 			.findFirst()

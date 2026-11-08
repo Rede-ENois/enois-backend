@@ -79,6 +79,11 @@ class CallPersistenceAdapter implements CallRepository {
 		return earliest(calls.findByGroupIdAndTopicIdAndStateIn(groupId, topicId, OPEN));
 	}
 
+	@Override
+	public Optional<CallSession> findOpenByEvent(String eventId) {
+		return earliest(calls.findOpenByEvent(eventId, OPEN));
+	}
+
 	private static Optional<CallSession> earliest(List<CallSessionJpaEntity> open) {
 		return open.stream()
 			.min(java.util.Comparator.comparing(CallSessionJpaEntity::createdAt))
@@ -138,6 +143,15 @@ class CallPersistenceAdapter implements CallRepository {
 			CallParticipantState.JOINED, now) == 1
 			|| participants.advanceKeepingJoin(callId, userId, CallParticipantState.LEFT,
 				CallParticipantState.JOINED, now) == 1;
+	}
+
+	@Override
+	@Transactional
+	public boolean joinOpenRoom(String callId, String userId, Instant now) {
+		// Sala sem lista de convidados (encontro): a linha nasce na entrada. O upsert resolve a
+		// corrida entre duas abas na própria chave única (chamada, pessoa) — sem erro e sem duplicar.
+		return participants.upsertJoined("call_participant_" + java.util.UUID.randomUUID().toString().replace("-", ""),
+			callId, userId, now) >= 1;
 	}
 
 	@Override

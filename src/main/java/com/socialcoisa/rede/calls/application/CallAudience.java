@@ -28,11 +28,13 @@ public class CallAudience {
 
 	private final MessagingService messaging;
 	private final GroupService groups;
+	private final EventLookup events;
 	private final CallRepository calls;
 
-	public CallAudience(MessagingService messaging, GroupService groups, CallRepository calls) {
+	public CallAudience(MessagingService messaging, GroupService groups, EventLookup events, CallRepository calls) {
 		this.messaging = messaging;
 		this.groups = groups;
+		this.events = events;
 		this.calls = calls;
 	}
 
@@ -84,8 +86,14 @@ public class CallAudience {
 			}
 			return;
 		}
+		if (call.eventId() != null) {
+			// A sala do encontro é aberta a quem quiser entrar: o vínculo é o evento existir, e não
+			// uma lista de convidados. Ainda assim o evento é conferido no banco a cada entrada.
+			events.requireExists(call.eventId());
+			return;
+		}
 		// Sem vínculo não há como provar nada: nega, em vez de abrir.
-		throw new ApiException(403, "CALL_NOT_ALLOWED", "Chamada sem vinculo de conversa ou grupo.");
+		throw new ApiException(403, "CALL_NOT_ALLOWED", "Chamada sem vinculo de conversa, grupo ou evento.");
 	}
 
 	/**
@@ -103,7 +111,8 @@ public class CallAudience {
 	/** Participantes que a chamada deve notificar (todos menos quem criou). */
 	public List<String> audienceOf(CallSession call) {
 		List<String> all = call.conversationId() != null ? participantsOf(call.conversationId())
-			: call.groupId() != null ? groupMembers(call.groupId()) : List.of();
+			: call.groupId() != null ? groupMembers(call.groupId())
+			: call.eventId() != null ? events.interestedIn(call.eventId()) : List.of();
 		return all.stream().filter(id -> !id.equals(call.initiatorId())).toList();
 	}
 }
