@@ -83,6 +83,9 @@ class MessageStreamHub {
 		if (change.groupId() != null) {
 			data.put("groupId", change.groupId());
 		}
+		if (change.eventId() != null) {
+			data.put("eventId", change.eventId());
+		}
 		Map<String, String> immutable = Map.copyOf(data);
 		for (String userId : change.userIds()) {
 			ConcurrentLinkedDeque<SseEmitter> userStreams = streams.get(userId);

@@ -56,6 +56,25 @@ class CallController {
 		return calls.startGroup(groupId, topicId, userId, kindOf(request));
 	}
 
+	/**
+	 * Abre (ou entra n)a sala "Tamo junto" do encontro. Como no grupo, a sala não toca ninguém: fica
+	 * ao vivo e quem quiser entra. O evento é conferido no servidor — id inventado não abre sala.
+	 */
+	@PostMapping("/events/{eventId}/calls")
+	CallService.CallView startEventCall(@RequestHeader("X-Session-Token") String sessionToken,
+			@PathVariable String eventId, @RequestBody(required = false) StartRequest request) {
+		String userId = currentUserResolver.resolve(sessionToken).id().value();
+		return calls.startEvent(eventId, userId, kindOf(request));
+	}
+
+	/** Sala "Tamo junto" aberta do encontro, se houver — é o "ao vivo" da página do evento. */
+	@GetMapping("/events/{eventId}/calls/open")
+	CallService.CallView openOfEvent(@RequestHeader("X-Session-Token") String sessionToken,
+			@PathVariable String eventId) {
+		String userId = currentUserResolver.resolve(sessionToken).id().value();
+		return calls.openOfEvent(eventId, userId).orElse(null);
+	}
+
 	/** Chamada aberta do vínculo — é o que a conversa/grupo consulta para mostrar "ao vivo". */
 	@GetMapping("/conversations/{conversationId}/calls/open")
 	CallService.CallView openOfConversation(@RequestHeader("X-Session-Token") String sessionToken,

@@ -57,6 +57,7 @@ public class CallService implements CallRoomAuthorization {
 	private final CallRepository calls;
 	private final CallAudience audience;
 	private final TopicLookup topics;
+	private final EventLookup eventLookup;
 	private final MeetingTokenIssuer tokens;
 	private final NotificationService notifications;
 	private final UserProfileRepository profiles;
@@ -69,13 +70,15 @@ public class CallService implements CallRoomAuthorization {
 	 */
 	private final TransactionTemplate entrance;
 
-	public CallService(CallRepository calls, CallAudience audience, TopicLookup topics, MeetingTokenIssuer tokens,
-			NotificationService notifications, UserProfileRepository profiles, UserRateLimiter rateLimiter,
-			ApplicationEventPublisher events, Clock clock, PlatformTransactionManager transactionManager) {
+	public CallService(CallRepository calls, CallAudience audience, TopicLookup topics, EventLookup eventLookup,
+			MeetingTokenIssuer tokens, NotificationService notifications, UserProfileRepository profiles,
+			UserRateLimiter rateLimiter, ApplicationEventPublisher events, Clock clock,
+			PlatformTransactionManager transactionManager) {
 		this.entrance = new TransactionTemplate(transactionManager);
 		this.calls = calls;
 		this.audience = audience;
 		this.topics = topics;
+		this.eventLookup = eventLookup;
 		this.tokens = tokens;
 		this.notifications = notifications;
 		this.profiles = profiles;
@@ -155,6 +158,36 @@ public class CallService implements CallRoomAuthorization {
 		// Nada de toque em grupo: só o aviso "o grupo está ao vivo", uma vez por chamada.
 		notifyGroupLive(call, actorId, members);
 		publish(call, members);
+		return view(call, actorId, null);
+	}
+
+	/**
+	 * Abre (ou devolve) o "Tamo junto" do encontro. Mesma regra do grupo — nasce "ao vivo" com quem
+	 * abriu já dentro, sem toque — mas a sala é do evento, e não de um grupo: quem tem sessão e chega
+	 * com o id do evento pode entrar. É o desejo da pessoa que criou o encontro e de quem vai aparecer:
+	 * abrir a sala é chamar quem estava pensando em ir.
+	 *
+	 * <p>O aviso "está ao vivo" vai para quem criou o evento e para quem confirmou presença — a
+	 * entrada continua livre.
+	 */
+	@Transactional
+	public CallView startEvent(String eventId, String actorId, CallKind kind) {
+		requireConfigured();
+		eventLookup.requireExists(eventId);
+		rateLimiter.require(actorId, UserRateLimiter.START_CALL);
+		Instant now = clock.instant();
+		List<String> interested = eventLookup.interestedIn(eventId);
+		Optional<CallSession> open = calls.findOpenByEvent(eventId);
+		if (open.isPresent()) {
+			enter(open.get(), actorId);
+			return view(open.get(), actorId, null);
+		}
+		CallSession call = CallSession.forEvent(newId("call"), kind, eventId, actorId, newRoomId(),
+			displayName(actorId), now);
+		calls.create(call, interested, now);
+		enter(call, actorId);
+		notifyEventLive(call, actorId, interested);
+		publish(call, interested);
 		return view(call, actorId, null);
 	}
 
@@ -314,7 +347,13 @@ public class CallService implements CallRoomAuthorization {
 		CallState from = call.state();
 		// Entrar duas vezes (recarregou a página, retry da rede) é a mesma entrada, não um segundo
 		// participante: join é condicional e o que importa é que a pessoa esteja dentro.
-		calls.join(call.id(), actorId, now);
+		if (call.eventId() != null) {
+			// Sala do encontro não tem convidados: a presença nasce na entrada.
+			calls.joinOpenRoom(call.id(), actorId, now);
+		}
+		else {
+			calls.join(call.id(), actorId, now);
+		}
 		call.extendTo(now, CallSession.ABANDON_TIMEOUT);
 		if (from == CallState.CONNECTING) {
 			call.moveTo(CallState.ACTIVE, now, null);
@@ -453,6 +492,15 @@ public class CallService implements CallRoomAuthorization {
 		return open.filter(call -> isAudience(call, actorId)).map(call -> view(call, actorId, null));
 	}
 
+	/** Sala "Tamo junto" aberta do encontro, se houver. O evento é conferido antes de olhar a sala. */
+	@Transactional(readOnly = true)
+	public Optional<CallView> openOfEvent(String eventId, String actorId) {
+		eventLookup.requireExists(eventId);
+		return calls.findOpenByEvent(eventId)
+			.filter(call -> isAudience(call, actorId))
+			.map(call -> view(call, actorId, null));
+	}
+
 	// ------------------------------------------------------------------ worker
 
 	/** Fecha o que venceu (1:1 sem resposta, grupo vazio, sessão abandonada). Idempotente. */
@@ -536,7 +584,10 @@ public class CallService implements CallRoomAuthorization {
 		if (call.conversationId() != null) {
 			return audience.isParticipant(call.conversationId(), actorId);
 		}
-		return call.groupId() != null && audience.roleIn(call.groupId(), actorId) != null;
+		if (call.groupId() != null) {
+			return audience.roleIn(call.groupId(), actorId) != null;
+		}
+		return call.eventId() != null;
 	}
 
 	private CallSession requireCall(String callId, String actorId) {
@@ -559,11 +610,12 @@ public class CallService implements CallRoomAuthorization {
 
 	private List<String> audienceOf(CallSession call) {
 		return call.conversationId() != null ? audience.participantsOf(call.conversationId())
-			: call.groupId() != null ? audience.groupMembers(call.groupId()) : List.of();
+			: call.groupId() != null ? audience.groupMembers(call.groupId())
+			: call.eventId() != null ? eventLookup.interestedIn(call.eventId()) : List.of();
 	}
 
 	private void publish(CallSession call, List<String> userIds) {
-		events.publishEvent(new CallChanged(call.id(), call.conversationId(), call.groupId(),
+		events.publishEvent(new CallChanged(call.id(), call.conversationId(), call.groupId(), call.eventId(),
 			call.state().name(), userIds));
 	}
 
@@ -588,6 +640,17 @@ public class CallService implements CallRoomAuthorization {
 			}
 			// Uma notificação por chamada (a chave é a própria chamada): não repete a cada entrada.
 			notifications.createCounted(userId, "CALL_GROUP_LIVE", "call_live:" + call.id(), actorId,
+				"Tamo junto ao vivo", body, count -> body, callHref(call.id()), "Entrar");
+		}
+	}
+
+	private void notifyEventLive(CallSession call, String actorId, List<String> interested) {
+		String body = "🔴 O encontro esta ao vivo! Entre na chamada quando quiser.";
+		for (String userId : interested) {
+			if (userId.equals(actorId)) {
+				continue;
+			}
+			notifications.createCounted(userId, "CALL_EVENT_LIVE", "call_live:" + call.id(), actorId,
 				"Tamo junto ao vivo", body, count -> body, callHref(call.id()), "Entrar");
 		}
 	}
@@ -627,7 +690,7 @@ public class CallService implements CallRoomAuthorization {
 	private CallView view(CallSession call, String actorId, Integer participantCount) {
 		int present = participantCount != null ? participantCount : calls.countPresentExcluding(call.id(), null);
 		return new CallView(call.id(), call.kind(), call.modality(), call.conversationId(), call.groupId(),
-			call.topicId(), call.initiatorId(), call.displayName(), call.state(), call.createdAt(),
+			call.topicId(), call.eventId(), call.initiatorId(), call.displayName(), call.state(), call.createdAt(),
 			call.answeredAt(), call.endedAt(), call.endReason(), call.expiresAt(), present,
 			call.initiatorId().equals(actorId), calls.participantState(call.id(), actorId));
 	}
@@ -665,7 +728,7 @@ public class CallService implements CallRoomAuthorization {
 
 	/** Visão da chamada para uma pessoa. Nunca carrega token nem nome de sala. */
 	public record CallView(String id, CallKind kind, CallModality modality, String conversationId, String groupId,
-			String topicId, String initiatorId, String displayName, CallState state, Instant createdAt,
+			String topicId, String eventId, String initiatorId, String displayName, CallState state, Instant createdAt,
 			Instant answeredAt, Instant endedAt, String endReason, Instant expiresAt, int participantCount,
 			boolean isInitiator, CallParticipantState myState) {
 	}

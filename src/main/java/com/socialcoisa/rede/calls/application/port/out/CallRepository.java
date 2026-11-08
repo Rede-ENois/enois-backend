@@ -45,6 +45,9 @@ public interface CallRepository {
 	/** Chamada "ao vivo" (aberta) do tópico do grupo. */
 	Optional<CallSession> findOpenByTopic(String groupId, String topicId);
 
+	/** Chamada "ao vivo" (aberta) do encontro. */
+	Optional<CallSession> findOpenByEvent(String eventId);
+
 	/** Chamadas abertas em que a pessoa está dentro ou foi convidada — para retomar a tela. */
 	List<CallSession> findOpenByParticipant(String userId);
 
@@ -62,6 +65,12 @@ public interface CallRepository {
 
 	/** Entra na sala, se ainda não estiver dentro. Falso = já estava (repetição idempotente). */
 	boolean join(String callId, String userId, Instant now);
+
+	/**
+	 * Entrada numa sala aberta (encontro), onde não há lista de convidados: a linha de presença nasce
+	 * aqui. Idempotente — entrar de novo mantém o primeiro horário.
+	 */
+	boolean joinOpenRoom(String callId, String userId, Instant now);
 
 	/** Sai da sala; falso quando não estava dentro. */
 	boolean leave(String callId, String userId, Instant now);
