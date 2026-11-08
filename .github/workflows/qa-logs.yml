@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Logs dos backends
+      - name: Logs crus dos backends
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
@@ -24,9 +24,10 @@ jobs:
               -H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}" \
               "${PORTAINER_BASE_URL}/api/endpoints/$1/docker/containers/$2/logs?stdout=1&stderr=1&timestamps=1&tail=$3" \
               -o /tmp/b.log
-            tr -d "\000" < /tmp/b.log
+            echo "bytes=$(wc -c < /tmp/b.log)"
+            tr -d "\000" < /tmp/b.log | tail -25
           }
-          echo "=== QA issuer ==="
-          show 8 enois-qa-backend 8000 | grep -a -E "EpapoMeetingTokenIssuer|CALLS_UNAVAILABLE|CALLS_NOT_CONFIGURED|emissao do token" | tail -15
-          echo "=== PROD issuer ==="
-          show 11 enois-prod-backend 4000 | grep -a -E "EpapoMeetingTokenIssuer|CALLS_UNAVAILABLE|emissao do token" | tail -15
+          echo "=== QA raw ==="
+          show 8 enois-qa-backend 300
+          echo "=== PROD raw ==="
+          show 11 enois-prod-backend 300
