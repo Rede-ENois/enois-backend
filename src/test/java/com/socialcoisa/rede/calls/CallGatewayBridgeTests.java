@@ -11,6 +11,8 @@ import java.net.ServerSocket;
 import java.security.SecureRandom;
 import java.util.HexFormat;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterAll;
@@ -223,6 +225,46 @@ class CallGatewayBridgeTests {
 		finally {
 			GATEWAY.reset("/auth/token");
 		}
+	}
+
+	/**
+	 * O gateway real só assina o token depois de perguntar a este backend se a pessoa pode entrar,
+	 * e essa pergunta grava a mesma linha que a entrada acabou de gravar. Se o pedido de token sair
+	 * de dentro da transação da entrada, este backend fica esperando o gateway que está esperando
+	 * este backend: a chamada morre no prazo do pedido e a tela mostra "chamadas indisponíveis".
+	 *
+	 * <p>Este teste faz o vaivém de verdade — o gateway falso chama a rota interna no meio do pedido
+	 * de token — e exige que a entrada termine.
+	 */
+	@Test
+	void entradaTerminaQuandoOGatewayPerguntaDeVoltaNoMeioDoPedidoDeToken() throws Exception {
+		var a = auth("bridge-a7");
+		var b = auth("bridge-b7");
+		String callId = directCall(a, b, "bridge-a7-b7");
+
+		AtomicReference<Throwable> callbackFailure = new AtomicReference<>();
+		AtomicInteger callbackStatus = new AtomicInteger();
+		GATEWAY.onToken(() -> {
+			// Mesma pergunta que o gateway real faz antes de assinar, com o segredo da ponte.
+			try {
+				callbackStatus.set(mockMvc.perform(post("/calls/" + callId + "/gateway/entry/" + b.userId())
+						.header("X-Enois-Authorize", PONTE))
+					.andReturn().getResponse().getStatus());
+			}
+			catch (Throwable failure) {
+				callbackFailure.set(failure);
+			}
+		});
+		try {
+			JsonNode join = join(b, callId);
+			assertThat(join.get("jwt").asText()).startsWith("epapo-token-");
+		}
+		finally {
+			GATEWAY.clearTokenWork();
+		}
+
+		assertThat(callbackFailure.get()).isNull();
+		assertThat(callbackStatus.get()).isEqualTo(200);
 	}
 
 	// ------------------------------------------------------------------ utilidades

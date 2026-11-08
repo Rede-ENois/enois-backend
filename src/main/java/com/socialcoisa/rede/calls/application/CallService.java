@@ -12,7 +12,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.socialcoisa.rede.calls.application.port.out.CallRepository;
 import com.socialcoisa.rede.calls.application.port.out.MeetingTokenIssuer;
@@ -61,10 +63,16 @@ public class CallService implements CallRoomAuthorization {
 	private final UserRateLimiter rateLimiter;
 	private final ApplicationEventPublisher events;
 	private final Clock clock;
+	/**
+	 * Transação só da entrada. O {@link #join} precisa que a gravação de presença esteja confirmada
+	 * antes de pedir o token: o gateway responde à pergunta de autorização gravando a mesma linha.
+	 */
+	private final TransactionTemplate entrance;
 
 	public CallService(CallRepository calls, CallAudience audience, TopicLookup topics, MeetingTokenIssuer tokens,
 			NotificationService notifications, UserProfileRepository profiles, UserRateLimiter rateLimiter,
-			ApplicationEventPublisher events, Clock clock) {
+			ApplicationEventPublisher events, Clock clock, PlatformTransactionManager transactionManager) {
+		this.entrance = new TransactionTemplate(transactionManager);
 		this.calls = calls;
 		this.audience = audience;
 		this.topics = topics;
@@ -238,16 +246,34 @@ public class CallService implements CallRoomAuthorization {
 	/**
 	 * Autoriza a entrada e emite um token curto para ESTA sala. O token nunca é armazenado no
 	 * cliente nem no servidor: ele vale para esta entrada e expira sozinho.
+	 *
+	 * <p>Entrar (gravar a presença) e pedir o token são dois passos separados de propósito. O
+	 * gateway só assina o token depois de perguntar a este backend, em
+	 * {@code /calls/{id}/gateway/entry/{user}}, se a pessoa pode entrar — e essa pergunta grava a
+	 * mesma linha que a entrada acabou de gravar. Pedir o token dentro da transação da entrada
+	 * deixava este backend esperando o gateway, que esperava este backend: a chamada morria no
+	 * prazo do pedido (5 s) e a tela mostrava "chamadas indisponíveis". Por isso a entrada é
+	 * confirmada antes e o token sai fora dela, sem lock aberto.
 	 */
-	@Transactional
 	public JoinView join(String callId, String actorId) {
 		requireConfigured();
-		CallSession call = requireCall(callId, actorId);
-		enter(call, actorId);
+		CallSession call = enterStandalone(callId, actorId);
 		String token = tokens.tokenFor(call, roomParticipant(call, actorId),
 			displayName(actorId), moderatorOf(call, actorId));
 		return new JoinView(call.id(), call.kind(), call.modality(), tokens.host(), tokens.tokenTtlSeconds(),
 			call.roomId(), token, view(call, actorId, null));
+	}
+
+	/**
+	 * Entrada numa transação própria, que termina antes do pedido de token. Mesmas regras do
+	 * {@link #enter}, só que a transação é do passo, e não do método inteiro.
+	 */
+	private CallSession enterStandalone(String callId, String actorId) {
+		return entrance.execute(status -> {
+			CallSession call = requireCall(callId, actorId);
+			enter(call, actorId);
+			return call;
+		});
 	}
 
 	@Override
