@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Egress e handshake do host de producao
+      - name: Alcance do gateway de dentro do container de producao
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
@@ -22,25 +22,24 @@ jobs:
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
           EP="${PORTAINER_BASE_URL}/api/endpoints/11/docker"
 
-          echo "=== app py dentro do backend (bash?) ==="
-          curl -sS --max-time 60 "${AUTH[@]}" "${PORTAINER_BASE_URL}/api/endpoints/11/docker/containers/enois-prod-backend/json" -o /tmp/pj.json
-          AUTOSTART=$(python3 -c "import json;print(json.load(open('/tmp/pj.json'))['Config']['Entrypoint'] if json.load(open('/tmp/pj.json'))['Config'].get('Entrypoint') else 'none')" 2>/dev/null)
-          echo "entrypoint=$AUTOSTART"
+          run_in() {
+            local cmd="$1"
+            local id
+            id=$(curl -sS --max-time 30 "${AUTH[@]}" -H "Content-Type: application/json" \
+              -X POST "${EP}/containers/enois-prod-backend/exec" \
+              -d "$(python3 -c "import json,sys;print(json.dumps({'AttachStdout':True,'AttachStderr':True,'Cmd':['sh','-c',sys.argv[1]]}))" "$cmd")" \
+              | python3 -c "import sys,json;print(json.load(sys.stdin).get('Id',''))")
+            curl -sS --max-time 60 "${AUTH[@]}" -H "Content-Type: application/json" \
+              -X POST "${EP}/exec/${id}/start" -d '{"Detach":false,"Tty":false}' -o /tmp/ex.out
+            tr -d "\000" < /tmp/ex.out | head -c 900
+            echo
+          }
 
-          echo "=== IP publico visto pelo host de producao ==="
-          curl -sS --max-time 15 https://api.ipify.org 2>&1; echo
-          curl -sS --max-time 15 https://api.enois.ia.br/api/version 2>&1 | head -c 120; echo
+          echo "=== ferramentas disponiveis ==="
+          run_in 'for b in bash sh curl wget nc openssl java keytool; do command -v $b >/dev/null && echo "tem $b"; done'
 
-          echo "=== node3 visto de fora (TCP 8122) a partir do runner hosted ==="
-          for i in 1 2 3; do
-            timeout 4 bash -c 'cat < /dev/null > /dev/tcp/185.111.156.15/8122' && echo "  $i tcp ok" || echo "  $i tcp falhou"
-          done
+          echo "=== TCP 8122 a partir do container de producao ==="
+          run_in 'if command -v bash >/dev/null; then for i in 1 2 3; do timeout 4 bash -c "cat < /dev/null > /dev/tcp/185.111.156.15/8122" && echo "$i ok" || echo "$i falhou"; done; else echo "sem bash"; fi'
 
-          echo "=== ufw do node3 (via exec no container do gateway, se tiver tooling) ==="
-          E=$(curl -sS --max-time 30 "${AUTH[@]}" -H "Content-Type: application/json" \
-            -X POST "${PORTAINER_BASE_URL}/api/endpoints/12/docker/containers/epapo-prod-auth-gateway-1/exec" \
-            -d '{"AttachStdout":true,"AttachStderr":true,"Cmd":["sh","-c","hostname -i 2>/dev/null; cat /proc/net/tcp 2>/dev/null | head -5; echo ---; ss -ltn 2>/dev/null | head -5"]}' \
-            | python3 -c "import sys,json;print(json.load(sys.stdin).get('Id',''))")
-          curl -sS --max-time 60 "${AUTH[@]}" -H "Content-Type: application/json" \
-            -X POST "${PORTAINER_BASE_URL}/api/endpoints/12/docker/exec/${E}/start" -d '{"Detach":false,"Tty":false}' -o /tmp/e1 2>/dev/null
-          tr -d "\000" < /tmp/e1 | head -c 600; echo
+          echo "=== CA do gateway no cacerts da imagem de producao ==="
+          run_in 'keytool -list -alias epapo-gateway -keystore "$JAVA_HOME/lib/security/cacerts" -storepass changeit 2>&1 | head -4'
