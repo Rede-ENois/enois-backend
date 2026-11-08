@@ -31,6 +31,9 @@ class OAuthAuthorizationRequestJpaEntity {
 	@Column(name = "user_id")
 	private String userId;
 
+	@Column(name = "site_domain", length = 253)
+	private String siteDomain;
+
 	@Column(name = "expires_at", nullable = false)
 	private Instant expiresAt;
 
@@ -46,12 +49,13 @@ class OAuthAuthorizationRequestJpaEntity {
 		entity.provider = domain.provider();
 		entity.nonce = domain.nonce();
 		entity.userId = domain.userId();
+		entity.siteDomain = domain.siteDomain();
 		entity.expiresAt = domain.expiresAt();
 		entity.createdAt = domain.createdAt();
 		return entity;
 	}
 
 	OAuthAuthorizationRequest toDomain() {
-		return OAuthAuthorizationRequest.restore(state, provider, nonce, userId, expiresAt, createdAt);
+		return OAuthAuthorizationRequest.restore(state, provider, nonce, userId, siteDomain, expiresAt, createdAt);
 	}
 }

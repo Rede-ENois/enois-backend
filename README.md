@@ -406,7 +406,8 @@ backend expõe fica público em `https://enois.ia.br/api/...` — inclusive `/ap
 | `APPLE_CLIENT_ID` / `APPLE_TEAM_ID` / `APPLE_KEY_ID` / `APPLE_PRIVATE_KEY` | p/ login Apple | `APPLE_PRIVATE_KEY` é o **conteúdo** da chave `.p8` (PEM PKCS#8), com `\n` ou quebras reais. Ela é usada para montar o `client_secret` (JWT ES256) exigido na troca do `code`. |
 | `IMAGEKIT_URL_ENDPOINT` / `IMAGEKIT_PUBLIC_KEY` / `IMAGEKIT_PRIVATE_KEY` | p/ mídia | |
 | `REDE_GIFS_TENOR_KEY` / `REDE_GIFS_GIPHY_KEY` | p/ busca de GIF | chave de um dos provedores (Tenor ou GIPHY). Sem nenhuma, o seletor de GIF do comentário avisa que a busca está indisponível — colar link continua funcionando. Como obter: seção "Busca de GIF" |
-| `CORS_ALLOWED_ORIGINS` | não | padrão `*` |
+| `CORS_ALLOWED_ORIGINS` | não | origens do app, separadas por vírgula (prd: `https://enois.ia.br,https://isweee.com`). `*` é recusado no boot |
+| `SITE_DOMAINS` | não | domínios que servem o app, o principal primeiro (prd: `enois.ia.br,isweee.com`). O login social começado no espelho volta para ele (ver `docs/DEPLOYMENT.md`) |
 | `SPRINGDOC_ENABLED` | não | padrão `false`. `true` liga `/api/openapi.json` + Swagger UI (use só em dev/VPN) |
 | `MANAGEMENT_ENDPOINTS` | não | padrão `health`. Para métricas use `health,prometheus` **e bloqueie `/api/actuator/*` no gateway** |
 | `SUPPORT_EMAIL` | não | e-mail do time que recebe os pedidos de suporte. Sem ele o pedido ainda fica registrado e visível em `/admin/support` |

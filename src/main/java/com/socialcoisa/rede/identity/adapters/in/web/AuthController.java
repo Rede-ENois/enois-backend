@@ -1,12 +1,10 @@
 package com.socialcoisa.rede.identity.adapters.in.web;
 
-import java.net.URI;
 import java.util.List;
 import java.util.Map;
 import java.util.Locale;
 
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -19,7 +17,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.socialcoisa.rede.identity.adapters.out.oauth.OAuthProperties;
 import com.socialcoisa.rede.identity.application.AuthResponse;
 import com.socialcoisa.rede.identity.application.LoginCommand;
 import com.socialcoisa.rede.identity.application.SignupChallengeService;
@@ -42,6 +39,7 @@ import com.socialcoisa.rede.identity.application.port.in.TwoFactorUseCase;
 import com.socialcoisa.rede.identity.application.port.in.VerifyEmailUseCase;
 import com.socialcoisa.rede.identity.domain.OAuthProvider;
 import com.socialcoisa.rede.shared.web.ApiException;
+import com.socialcoisa.rede.shared.web.SiteDomains;
 import com.socialcoisa.rede.shared.web.StatusResponse;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
@@ -68,7 +66,8 @@ class AuthController {
 	private final DeleteAccountUseCase deleteAccountUseCase;
 	private final IdempotencyApplicationService idempotency;
 	private final com.socialcoisa.rede.identity.application.AuthThrottle throttle;
-	private final OAuthProperties oAuthProperties;
+	private final OAuthBrowserReturn oAuthReturn;
+	private final SiteDomains siteDomains;
 	private final com.socialcoisa.rede.identity.adapters.out.TurnstileValidator turnstile;
 	private final com.socialcoisa.rede.identity.application.SignupChallengeService signupCaptcha;
 	private final com.socialcoisa.rede.identity.application.NewDeviceNotifier newDeviceNotifier;
@@ -94,7 +93,7 @@ class AuthController {
 			ChangePasswordUseCase changePasswordUseCase,
 			DeleteAccountUseCase deleteAccountUseCase,
 			IdempotencyApplicationService idempotency,
-			OAuthProperties oAuthProperties,
+			OAuthBrowserReturn oAuthReturn, SiteDomains siteDomains,
 			com.socialcoisa.rede.identity.application.AuthThrottle throttle,
 			com.socialcoisa.rede.identity.adapters.out.TurnstileValidator turnstile,
 			com.socialcoisa.rede.identity.application.SignupChallengeService signupCaptcha,
@@ -122,7 +121,8 @@ class AuthController {
 		this.deleteAccountUseCase = deleteAccountUseCase;
 		this.idempotency = idempotency;
 		this.throttle = throttle;
-		this.oAuthProperties = oAuthProperties;
+		this.oAuthReturn = oAuthReturn;
+		this.siteDomains = siteDomains;
 		this.turnstile = turnstile;
 		this.signupCaptcha = signupCaptcha;
 		this.newDeviceNotifier = newDeviceNotifier;
@@ -330,13 +330,14 @@ class AuthController {
 
 	@GetMapping("/oauth/{provider}/start")
 	@RateLimiter(name = "auth")
-	Object oauthStart(@PathVariable String provider) {
+	Object oauthStart(@PathVariable String provider, @RequestHeader(value = "Origin", required = false) String origin,
+			@RequestHeader(value = "X-Client-Origin", required = false) String clientOrigin) {
 		OAuthProvider oauthProvider = parseProvider(provider);
 		if (oauthProvider == OAuthProvider.GOOGLE && !googleLoginEnabled) {
 			throw new ApiException(403, "OAUTH_PROVIDER_DISABLED",
 				"Login com Google indisponivel neste ambiente.");
 		}
-		return oAuthUseCase.start(oauthProvider);
+		return oAuthUseCase.start(oauthProvider, siteOf(origin, clientOrigin));
 	}
 
 	/**
@@ -345,10 +346,12 @@ class AuthController {
 	 */
 	@PostMapping("/oauth/{provider}/link")
 	@RateLimiter(name = "auth")
-	Object oauthStartLink(@PathVariable String provider, @RequestHeader(value = "X-Session-Token", required = false) String token) {
+	Object oauthStartLink(@PathVariable String provider, @RequestHeader(value = "X-Session-Token", required = false) String token,
+			@RequestHeader(value = "Origin", required = false) String origin,
+			@RequestHeader(value = "X-Client-Origin", required = false) String clientOrigin) {
 		OAuthProvider oauthProvider = parseProvider(provider);
 		String userId = requireUserId(token);
-		return oAuthUseCase.startLink(userId, oauthProvider);
+		return oAuthUseCase.startLink(userId, oauthProvider, siteOf(origin, clientOrigin));
 	}
 
 	/**
@@ -358,10 +361,12 @@ class AuthController {
 	@PostMapping("/oauth/{provider}/write-link")
 	@RateLimiter(name = "auth")
 	Object oauthStartWriteLink(@PathVariable String provider,
-			@RequestHeader(value = "X-Session-Token", required = false) String token) {
+			@RequestHeader(value = "X-Session-Token", required = false) String token,
+			@RequestHeader(value = "Origin", required = false) String origin,
+			@RequestHeader(value = "X-Client-Origin", required = false) String clientOrigin) {
 		OAuthProvider oauthProvider = parseProvider(provider);
 		String userId = requireUserId(token);
-		return oAuthUseCase.startLinkWithWrite(userId, oauthProvider);
+		return oAuthUseCase.startLinkWithWrite(userId, oauthProvider, siteOf(origin, clientOrigin));
 	}
 
 	// ------------------------------------------------------------------ segundo fator (gestao)
@@ -450,15 +455,16 @@ class AuthController {
 		// falha vira redirect para a tela de callback do app com mensagem legivel — JSON cru
 		// aqui deixa a pessoa olhando um erro sem saida (relato de suporte: "Requisicao
 		// invalida" ao importar o perfil do LinkedIn).
+		String site = oAuthUseCase.siteDomainOf(state);
 		try {
 			OAuthProvider oauthProvider = parseProvider(provider);
 			if (StringUtils.hasText(error) || !StringUtils.hasText(code)) {
-				return finishOAuthError(oauthProvider, error);
+				return oAuthReturn.failure(oauthProvider, error, site);
 			}
-			return finishOAuth(oAuthUseCase.callback(oauthProvider, code, state, null));
+			return oAuthReturn.success(oAuthUseCase.callback(oauthProvider, code, state, null), site);
 		}
 		catch (ApiException e) {
-			return finishOAuthError(parseProvider(provider), e.code());
+			return oAuthReturn.failure(parseProvider(provider), e.code(), site);
 		}
 	}
 
@@ -473,15 +479,16 @@ class AuthController {
 			@RequestParam(required = false, name = "user") String userPayload,
 			@RequestParam(required = false) String error) {
 		OAuthProvider oauthProvider = parseProvider(provider);
+		String site = oAuthUseCase.siteDomainOf(state);
 		if (StringUtils.hasText(error)) {
-			return finishOAuthError(oauthProvider, error);
+			return oAuthReturn.failure(oauthProvider, error, site);
 		}
 		// Preferimos o code: a troca comprova que o token veio para este cliente, e o `nonce` do
 		// id_token resultante e conferido contra o state.
 		AuthResponse auth = StringUtils.hasText(code)
 			? oAuthUseCase.callback(oauthProvider, code, state, userPayload)
 			: oAuthUseCase.tokenLogin(oauthProvider, idToken, state);
-		return finishOAuth(auth);
+		return oAuthReturn.success(auth, site);
 	}
 
 	private String requireUserId(String token) {
@@ -491,35 +498,9 @@ class AuthController {
 		return getAuthenticatedUserUseCase.getAuthenticatedUser(token).id();
 	}
 
-	private Object finishOAuth(AuthResponse auth) {
-		String redirectUrl = oAuthProperties.getFrontendRedirectUrl();
-		if (StringUtils.hasText(redirectUrl)) {
-			// No credential in the URL (history, logs, Referer): the session rides on the 302 cookies.
-			return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(redirectUrl + "?status=ok"))
-				.header(org.springframework.http.HttpHeaders.SET_COOKIE, sessionCookies.issue(auth.token(),
-					auth.expiresAt(), auth.refreshToken(), auth.refreshExpiresAt()).toArray(String[]::new))
-				.build();
-		}
-		return auth;
-	}
-
-	/**
-	 * Cancelamento ou falha na tela do provedor volta para o app com um codigo legivel, em vez de
-	 * estourar um erro tecnico no meio do redirect.
-	 */
-	private Object finishOAuthError(OAuthProvider provider, String error) {
-		String code = StringUtils.hasText(error) ? error.trim().toUpperCase(Locale.ROOT) : "OAUTH_FAILED";
-		String redirectUrl = oAuthProperties.getFrontendRedirectUrl();
-		if (StringUtils.hasText(redirectUrl)) {
-			return ResponseEntity.status(HttpStatus.FOUND)
-				.location(URI.create(redirectUrl + "?error=" + urlEncode(code) + "&provider=" + provider.name()))
-				.build();
-		}
-		throw new ApiException(401, "OAUTH_" + code, "Nao foi possivel concluir o login com " + provider.name() + ".");
-	}
-
-	private String urlEncode(String value) {
-		return java.net.URLEncoder.encode(value, java.nio.charset.StandardCharsets.UTF_8);
+	/** Site (primary or mirror) the browser is on; the front declares it, the browser adds Origin. */
+	private String siteOf(String origin, String clientOrigin) {
+		return siteDomains.siteOf(StringUtils.hasText(origin) ? origin : clientOrigin);
 	}
 
 	@PostMapping("/refresh")

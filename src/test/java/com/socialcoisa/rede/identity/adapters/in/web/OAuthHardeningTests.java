@@ -118,7 +118,7 @@ class OAuthHardeningTests {
 	void linksAnExistingAccountWhenTheProviderConfirmsTheEmail() throws Exception {
 		// Conta criada com senha; o Google confirma que o e-mail e dela.
 		var existing = auth.authenticate("ja.existe");
-		when(googleValidator.validate(eq(OAuthProvider.GOOGLE), anyString(), anyString()))
+		when(googleValidator.validate(eq(OAuthProvider.GOOGLE), anyString(), anyString(), anyString()))
 			.thenReturn(Optional.of(new TokenValidationResult("google-sub-existente", "ja.existe@test.com",
 				"Ja Existe", true)));
 
@@ -152,7 +152,7 @@ class OAuthHardeningTests {
 	void refusesToLinkWhenTheProviderDoesNotConfirmTheEmail() throws Exception {
 		// Sem a garantia do provedor, o e-mail declarado nao entrega a conta para ninguem.
 		var existing = auth.authenticate("nao.confirmado");
-		when(googleValidator.validate(eq(OAuthProvider.GOOGLE), anyString(), anyString()))
+		when(googleValidator.validate(eq(OAuthProvider.GOOGLE), anyString(), anyString(), anyString()))
 			.thenReturn(Optional.of(new TokenValidationResult("google-sub-nao-confirmado", "nao.confirmado@test.com",
 				"Nao Confirmado", false)));
 
@@ -171,7 +171,7 @@ class OAuthHardeningTests {
 
 	@Test
 	void createsAProviderAccountAlreadyVerifiedAndProtectsUnlink() throws Exception {
-		when(googleValidator.validate(eq(OAuthProvider.GOOGLE), anyString(), anyString()))
+		when(googleValidator.validate(eq(OAuthProvider.GOOGLE), anyString(), anyString(), anyString()))
 			.thenReturn(Optional.of(new TokenValidationResult("google-sub-novo", "nova.pessoa@example.com",
 				"Nova Pessoa", true)));
 
