@@ -35,9 +35,15 @@ import tools.jackson.databind.ObjectMapper;
  * - tópico arquivado não recebe publicação;
  * - **isolamento**: a publicação de grupo NÃO aparece no feed principal.
  */
-@SpringBootTest
+@SpringBootTest(properties = {"rede.media.storage=s3", "rede.media.s3.bucket=bucket-de-teste",
+		"rede.media.s3.publicBaseUrl=https://cdn.exemplo.com"})
 @AutoConfigureMockMvc
 class GroupFeedTests {
+
+	static {
+		System.setProperty("aws.accessKeyId", "test");
+		System.setProperty("aws.secretAccessKey", "test");
+	}
 
 	@Autowired
 	private MockMvc mockMvc;
@@ -263,5 +269,85 @@ class GroupFeedTests {
 				.content(objectMapper.writeValueAsString(Map.of("name", "Segundo"))))
 			.andExpect(status().isConflict())
 			.andExpect(jsonPath("$.code").value("TOPIC_EXISTS"));
+	}
+
+	private String uploadMedia(TestAuthHelper.AuthSession owner, String key) throws Exception {
+		MvcResult result = mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", owner.token())
+				.header("Idempotency-Key", key)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+					"fileName", "grupo.png", "mimeType", "image/png", "size", 2048, "purpose", "POST_IMAGE"))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		return objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asText();
+	}
+
+	private org.springframework.test.web.servlet.ResultActions publishWithMedia(TestAuthHelper.AuthSession author,
+			String groupId, String topicId, String content, List<String> mediaIds, String key) throws Exception {
+		return mockMvc.perform(post("/groups/" + groupId + "/posts")
+				.header("X-Session-Token", author.token())
+				.header("Idempotency-Key", key)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+					"topicId", topicId, "content", content, "mediaIds", mediaIds))));
+	}
+
+	@Test
+	void publicacaoDeGrupoLevaImagemDoProprioAutor() throws Exception {
+		var dono = authHelper().authenticate("gfeed-media-dono");
+		String groupId = createGroup(dono, "Grupo Com Imagem", "gfeed-media-create");
+		String topicId = objectMapper.readTree(
+				createTopic(dono, groupId, "Fotos", "gfeed-media-topic").getResponse().getContentAsString())
+			.get("id").asText();
+		String mediaId = uploadMedia(dono, "gfeed-media-upload");
+
+		// Só imagem, sem texto: quem manda a foto não precisa escrever nada para publicar.
+		publishWithMedia(dono, groupId, topicId, "", List.of(mediaId), "gfeed-media-post")
+			.andExpect(status().isCreated());
+
+		MvcResult lista = mockMvc.perform(get("/groups/" + groupId + "/posts")
+				.header("X-Session-Token", dono.token()))
+			.andExpect(status().isOk())
+			.andReturn();
+		JsonNode post = objectMapper.readTree(lista.getResponse().getContentAsString()).get("items").get(0);
+		assertThat(post.get("mediaIds").get(0).asText()).isEqualTo(mediaId);
+	}
+
+	@Test
+	void publicacaoDeGrupoRecusaImagemDeOutraConta() throws Exception {
+		var dono = authHelper().authenticate("gfeed-media-dono2");
+		var intruso = authHelper().authenticate("gfeed-media-intruso");
+		String groupId = createGroup(dono, "Grupo Alheio", "gfeed-media-create2");
+		join(intruso, groupId, "gfeed-media-join2");
+		String topicId = objectMapper.readTree(
+				createTopic(dono, groupId, "Geral", "gfeed-media-topic2").getResponse().getContentAsString())
+			.get("id").asText();
+		String mediaDoDono = uploadMedia(dono, "gfeed-media-upload2");
+
+		// O grupo não pode virar atalho para anexar arquivo que não é de quem publica.
+		publishWithMedia(intruso, groupId, topicId, "olha essa foto", List.of(mediaDoDono),
+				"gfeed-media-post2")
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("MEDIA_OWNER_MISMATCH"));
+	}
+
+	@Test
+	void publicacaoDeGrupoSemTextoNemImagemERecusadaEMuitasMidiasTambem() throws Exception {
+		var dono = authHelper().authenticate("gfeed-media-dono3");
+		String groupId = createGroup(dono, "Grupo Vazio", "gfeed-media-create3");
+		String topicId = objectMapper.readTree(
+				createTopic(dono, groupId, "Geral", "gfeed-media-topic3").getResponse().getContentAsString())
+			.get("id").asText();
+
+		publishWithMedia(dono, groupId, topicId, "", List.of(), "gfeed-media-empty")
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("EMPTY_CONTENT"));
+
+		List<String> seis = java.util.stream.IntStream.rangeClosed(1, 6)
+			.mapToObj(i -> "media_teste_" + i).toList();
+		publishWithMedia(dono, groupId, topicId, "seis", seis, "gfeed-media-seis")
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("TOO_MANY_MEDIA"));
 	}
 }
