@@ -13,28 +13,28 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: HTTP cru ao gateway a partir dos dois containers
+      - name: HTTP cru ao gateway a partir do container de producao
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
         run: |
           set +e
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
+          EP="${PORTAINER_BASE_URL}/api/endpoints/11/docker"
 
           run_in() {
-            local ep="$1" name="$2" cmd="$3"
             id=$(curl -sS --max-time 30 "${AUTH[@]}" -H "Content-Type: application/json" \
-              -X POST "${PORTAINER_BASE_URL}/api/endpoints/${ep}/docker/containers/${name}/exec" \
-              -d "$(python3 -c "import json,sys;print(json.dumps({'AttachStdout':True,'AttachStderr':True,'Cmd':['sh','-c',sys.argv[1]]}))" "$cmd")" \
+              -X POST "${EP}/containers/enois-prod-backend/exec" \
+              -d "$(python3 -c "import json,sys;print(json.dumps({'AttachStdout':True,'AttachStderr':True,'Cmd':['sh','-c',sys.argv[1]]}))" "$1")" \
               | python3 -c "import sys,json;print(json.load(sys.stdin).get('Id',''))")
             curl -sS --max-time 200 "${AUTH[@]}" -H "Content-Type: application/json" \
-              -X POST "${PORTAINER_BASE_URL}/api/endpoints/${ep}/docker/exec/${id}/start" -d '{"Detach":false,"Tty":false}' -o /tmp/ex.out
+              -X POST "${EP}/exec/${id}/start" -d '{"Detach":false,"Tty":false}' -o /tmp/ex.out
             tr -d "\000" < /tmp/ex.out | head -c 1500
             echo
           }
 
-          echo "=== QA: TCP e HTTP cru ao gateway ==="
-          run_in 8 enois-qa-backend 'S=$(date +%s%N); timeout 8 bash -c "exec 3<>/dev/tcp/185.111.156.15/8122" 2>/dev/null; echo "tcp r=$? ms=$(( ($(date +%s%N)-S)/1000000 ))"; S=$(date +%s%N); printf "POST /auth/token HTTP/1.1\r\nHost: 185.111.156.15\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}" | timeout 25 openssl s_client -quiet -connect 185.111.156.15:8122 2>/dev/null | head -c 300; echo; echo "http ms=$(( ($(date +%s%N)-S)/1000000 ))"'
+          echo "=== PROD: TCP + TLS + HTTP cru ==="
+          run_in 'for i in 1 2; do S=$(date +%s%N); timeout 8 bash -c "exec 3<>/dev/tcp/185.111.156.15/8122" 2>/dev/null; echo "tcp r=$? ms=$(( ($(date +%s%N)-S)/1000000 ))"; done; S=$(date +%s%N); printf "POST /auth/token HTTP/1.1\r\nHost: 185.111.156.15\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}" | timeout 30 openssl s_client -quiet -connect 185.111.156.15:8122 2>/dev/null | head -c 300; echo; echo "http ms=$(( ($(date +%s%N)-S)/1000000 ))"'
 
-          echo "=== PROD: HTTP cru ao gateway (sem openssl, usa java keytool ja provou TLS) ==="
-          run_in 11 enois-prod-backend 'S=$(date +%s%N); timeout 8 bash -c "exec 3<>/dev/tcp/185.111.156.15/8122" 2>/dev/null; echo "tcp r=$? ms=$(( ($(date +%s%N)-S)/1000000 ))"; command -v openssl || echo sem-openssl'
+          echo "=== PROD: o mesmo com o token real do container ==="
+          run_in 'S=$(date +%s%N); B="{\"callId\":\"00000000-0000-0000-0000-000000000000\",\"userId\":\"00000000-0000-0000-0000-000000000000\"}"; printf "POST /auth/token HTTP/1.1\r\nHost: 185.111.156.15\r\nX-Epapo-Internal: $REDE_CALLS_EPAPO_INTERNAL_TOKEN\r\nContent-Type: application/json\r\nContent-Length: ${#B}\r\nConnection: close\r\n\r\n$B" | timeout 30 openssl s_client -quiet -connect 185.111.156.15:8122 2>/dev/null | head -c 400; echo; echo "http ms=$(( ($(date +%s%N)-S)/1000000 ))"'
