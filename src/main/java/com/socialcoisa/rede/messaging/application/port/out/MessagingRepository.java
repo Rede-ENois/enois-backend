@@ -37,6 +37,9 @@ public interface MessagingRepository {
 
 	List<ConversationParticipant> findParticipantsByConversation(String conversationId);
 
+	/** Participantes de varias conversas em uma consulta (lista de conversas do app). */
+	List<ConversationParticipant> findParticipantsByConversations(java.util.Collection<String> conversationIds);
+
 	/** The 1:1 conversation of that kind (DIRECT, JOB, SERVICE) between two people, if any. */
 	Optional<Conversation> findPairByKind(String userA, String userB, String kind);
 
@@ -54,6 +57,13 @@ public interface MessagingRepository {
 
 	int countUnread(String conversationId, String userId);
 
+	/**
+	 * Nao-lidas de varias conversas do leitor em uma consulta. Conversa sem registro de leitura
+	 * conta tudo, como o {@link #countUnread(String, String)} faz para uma.
+	 */
+	java.util.Map<String, Integer> countUnreadByConversations(java.util.Collection<String> conversationIds,
+			String userId);
+
 	/** Total de mensagens nao lidas nas conversas ativas do usuario; contexto nulo = todas. */
 	int countTotalUnread(String userId, ConversationContext context);
 
@@ -63,6 +73,9 @@ public interface MessagingRepository {
 			int limit);
 
 	Optional<Message> findLastMessage(String conversationId);
+
+	/** A ultima mensagem de cada conversa do lote, em uma consulta (lista de conversas do app). */
+	java.util.Map<String, Message> findLastMessagesByConversations(java.util.Collection<String> conversationIds);
 
 	/** Mensagem idêntica do mesmo remetente na conversa desde um instante (duplo clique/retry). */
 	Optional<Message> findRecentDuplicate(String conversationId, String senderId, String text, java.time.Instant since);

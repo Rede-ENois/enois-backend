@@ -55,4 +55,38 @@ interface SpringDataMessageJpaRepository extends JpaRepository<MessageJpaEntity,
 	int countByConversationId(String conversationId);
 
 	List<MessageJpaEntity> findBySenderId(String senderId);
+
+	/**
+	 * A última mensagem de cada conversa do lote, em UMA consulta: a lista de conversas do app
+	 * mostra a prévia de todas elas e não pode disparar uma consulta por conversa.
+	 */
+	@Query("""
+			SELECT m FROM MessageJpaEntity m
+			WHERE m.id IN (SELECT max(m2.id) FROM MessageJpaEntity m2
+				WHERE m2.conversationId IN :conversationIds GROUP BY m2.conversationId)
+			""")
+	List<MessageJpaEntity> findLastMessagesOfConversations(
+			@Param("conversationIds") java.util.Collection<String> conversationIds);
+
+	/**
+	 * Nao-lidas de VARIAS conversas em UMA consulta: para cada participante do leitor, o total de
+	 * mensagens da conversa posteriores ao ultimo read (o que o countUnreadAfter calcula por uma).
+	 */
+	@Query("""
+			SELECT m.conversationId AS conversationId, COUNT(m) AS unread FROM MessageJpaEntity m
+			WHERE m.conversationId IN :conversationIds
+			AND m.createdAt > COALESCE((SELECT p.lastReadAt FROM ConversationParticipantJpaEntity p
+				WHERE p.conversationId = m.conversationId AND p.userId = :userId), CAST('1970-01-01T00:00:00Z' AS Instant))
+			GROUP BY m.conversationId
+			""")
+	List<UnreadCountByConversation> countUnreadByConversations(
+			@Param("conversationIds") java.util.Collection<String> conversationIds,
+			@Param("userId") String userId);
+
+	interface UnreadCountByConversation {
+
+		String getConversationId();
+
+		long getUnread();
+	}
 }
