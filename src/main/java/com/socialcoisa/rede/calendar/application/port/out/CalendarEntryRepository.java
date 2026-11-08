@@ -26,4 +26,11 @@ public interface CalendarEntryRepository {
 
 	Optional<CalendarEntry> findBySource(String ownerId, CalendarEntrySource source);
 
+	/** Entradas que outra pessoa organizou e convidou este usuário, dentro da janela meia-aberta. */
+	List<CalendarEntry> findInvitedInWindow(String userId, CalendarScope scope, Instant windowStart,
+			Instant windowEnd);
+
+	/** Busca por conjunto de ids (a leitura da agenda do participante carrega o dono de uma vez). */
+	List<CalendarEntry> findAllByIds(java.util.Collection<String> ids);
+
 }

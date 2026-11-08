@@ -279,8 +279,8 @@ class CalendarEntryWriteApiTests {
 				.param("from", "2026-12-01T00:00:00Z")
 				.param("to", "2026-12-08T00:00:00Z"))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$[*].id", containsInAnyOrder(id)))
-			.andExpect(jsonPath("$[0].state").value("CANCELLED"));
+			.andExpect(jsonPath("$[*].entry.id", containsInAnyOrder(id)))
+			.andExpect(jsonPath("$[0].entry.state").value("CANCELLED"));
 
 		Instant cancelledAt = entries.findById(id).orElseThrow().cancelledAt();
 		mockMvc.perform(delete("/calendar/entries/{entryId}", id).header("X-Session-Token", owner.token())

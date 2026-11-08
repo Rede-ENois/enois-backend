@@ -17,12 +17,16 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.socialcoisa.rede.calendar.application.CalendarAgendaItem;
 import com.socialcoisa.rede.calendar.application.CalendarCommandService;
+import com.socialcoisa.rede.calendar.application.CalendarInvitationService;
 import com.socialcoisa.rede.calendar.application.CalendarQueryService;
 import com.socialcoisa.rede.calendar.domain.CalendarEntry;
+import com.socialcoisa.rede.calendar.domain.CalendarParticipant;
 import com.socialcoisa.rede.calendar.domain.CalendarScope;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
+import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
@@ -44,27 +48,34 @@ class CalendarEntryController {
 	private final CurrentUserResolver currentUserResolver;
 	private final CalendarQueryService calendarQueryService;
 	private final CalendarCommandService calendarCommandService;
+	private final CalendarInvitationService calendarInvitationService;
+	private final UserProfileRepository profiles;
 	private final IdempotencyApplicationService idempotency;
 
 	CalendarEntryController(CurrentUserResolver currentUserResolver, CalendarQueryService calendarQueryService,
-			CalendarCommandService calendarCommandService, IdempotencyApplicationService idempotency) {
+			CalendarCommandService calendarCommandService, CalendarInvitationService calendarInvitationService,
+			UserProfileRepository profiles, IdempotencyApplicationService idempotency) {
 		this.currentUserResolver = currentUserResolver;
 		this.calendarQueryService = calendarQueryService;
 		this.calendarCommandService = calendarCommandService;
+		this.calendarInvitationService = calendarInvitationService;
+		this.profiles = profiles;
 		this.idempotency = idempotency;
 	}
 
+	/**
+	 * Agenda de quem está lendo: o que organiza mais o que foi convidada a participar, cada item com
+	 * o lugar dela. Sem `includeInvited=false` não existe filtro de "só o que eu organizo": a tela
+	 * filtra pelo campo `owner` do item, e o backend devolve a agenda inteira da pessoa.
+	 */
 	@GetMapping
-	List<CalendarEntryView> entries(
+	List<AgendaItemView> entries(
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(required = false) String from, @RequestParam(required = false) String to,
 			@RequestParam(required = false) String scope) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		return calendarQueryService
-			.inWindow(user.id().value(), instant(from, "from"), instant(to, "to"), scope(scope))
-			.stream()
-			.map(CalendarEntryView::from)
-			.toList();
+		return calendarQueryService.agenda(user.id().value(), instant(from, "from"), instant(to, "to"),
+			scope(scope)).stream().map(AgendaItemView::from).toList();
 	}
 
 	@GetMapping("/{entryId}")
@@ -125,6 +136,71 @@ class CalendarEntryController {
 				CalendarEntryView.from(calendarCommandService.cancel(user.id().value(), entryId))));
 	}
 
+	/** Convida pelo @. Só o organizador; a resposta é de quem foi convidado, em outra rota. */
+	@PostMapping("/{entryId}/participants")
+	ResponseEntity<String> invite(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@PathVariable String entryId, @RequestBody(required = false) ParticipantRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		if (request == null) {
+			throw new ApiException(400, "INVITE_USERNAME_REQUIRED", "Informe o @ de quem convidar.");
+		}
+		String hash = idempotency.hash(Map.of("entryId", entryId, "request", request));
+		return idempotency.execute(user.id().value(), "POST", "/api/calendar/entries/{entryId}/participants",
+			idempotencyKey, hash, () -> new CommandResponse(201,
+				views(List.of(calendarInvitationService.invite(user.id().value(), entryId,
+					request.username()))).get(0)));
+	}
+
+	@GetMapping("/{entryId}/participants")
+	List<ParticipantView> participants(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String entryId) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return views(calendarInvitationService.participants(user.id().value(), entryId));
+	}
+
+	/**
+	 * Resposta do convidado. A pessoa é tirada da sessão, nunca do caminho: assim ninguém responde
+	 * convite alheio nem precisa mandar o próprio id.
+	 */
+	@PatchMapping("/{entryId}/participants/me")
+	ResponseEntity<String> respond(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@PathVariable String entryId, @RequestBody(required = false) ResponseRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		if (request == null) {
+			throw new ApiException(400, "INVALID_INVITE_RESPONSE",
+				"Informe a resposta: ACCEPTED, DECLINED ou TENTATIVE.");
+		}
+		String hash = idempotency.hash(Map.of("entryId", entryId, "request", request));
+		return idempotency.execute(user.id().value(), "PATCH",
+			"/api/calendar/entries/{entryId}/participants/me", idempotencyKey, hash,
+			() -> new CommandResponse(200, views(List.of(
+				calendarInvitationService.respond(user.id().value(), entryId, request.state()))).get(0)));
+	}
+
+	@DeleteMapping("/{entryId}/participants/{participantId}")
+	ResponseEntity<Void> removeParticipant(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String entryId, @PathVariable String participantId) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		calendarInvitationService.remove(user.id().value(), entryId, participantId);
+		return ResponseEntity.noContent().build();
+	}
+
+	/** O @ vem do perfil, em uma consulta só; a tela mostra @ e nunca o id da pessoa. */
+	private List<ParticipantView> views(List<CalendarParticipant> participants) {
+		List<String> userIds = participants.stream().map(CalendarParticipant::userId).distinct().toList();
+		Map<String, String> usernames = new java.util.HashMap<>();
+		for (var profile : profiles.findAllByIds(userIds)) {
+			usernames.put(profile.id(), profile.username());
+		}
+		return participants.stream()
+			.map(participant -> ParticipantView.from(participant, usernames.get(participant.userId())))
+			.toList();
+	}
+
 	private static Instant instant(String raw, String field) {
 		if (raw == null || raw.isBlank()) {
 			throw new ApiException(400, "INVALID_WINDOW", "Informe " + field + " em ISO-8601.");
@@ -159,6 +235,35 @@ class CalendarEntryController {
 				entry.createdAt().toString(), entry.updatedAt().toString(),
 				entry.cancelledAt() == null ? null : entry.cancelledAt().toString());
 		}
+	}
+
+	/** Item da agenda: o compromisso mais o lugar de quem está lendo nele. */
+	record AgendaItemView(CalendarEntryView entry, boolean owner, String participation) {
+
+		static AgendaItemView from(CalendarAgendaItem item) {
+			return new AgendaItemView(CalendarEntryView.from(item.entry()), item.owner(),
+				item.participation() == null ? null : item.participation().name());
+		}
+	}
+
+	/**
+	 * O convite como o organizador o vê. `userId` fica de fora: a tela mostra @, não id, e o
+	 * respondente é tirado da sessão em `/participants/me`.
+	 */
+	record ParticipantView(String id, String entryId, String username, String state, String invitedAt,
+			String respondedAt) {
+
+		static ParticipantView from(CalendarParticipant participant, String username) {
+			return new ParticipantView(participant.id(), participant.entryId(), username,
+				participant.state().name(), participant.invitedAt().toString(),
+				participant.respondedAt() == null ? null : participant.respondedAt().toString());
+		}
+	}
+
+	record ParticipantRequest(String username) {
+	}
+
+	record ResponseRequest(String state) {
 	}
 
 	/** Corpo da criação: `scope` e `kind` têm padrão (SOCIAL e PERSONAL) para o app não mandar sempre. */

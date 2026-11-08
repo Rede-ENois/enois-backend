@@ -1,12 +1,19 @@
 package com.socialcoisa.rede.calendar.application;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.stereotype.Service;
 
 import com.socialcoisa.rede.calendar.application.port.out.CalendarEntryRepository;
+import com.socialcoisa.rede.calendar.application.port.out.CalendarParticipantRepository;
 import com.socialcoisa.rede.calendar.domain.CalendarEntry;
+import com.socialcoisa.rede.calendar.domain.CalendarParticipant;
+import com.socialcoisa.rede.calendar.domain.CalendarParticipantState;
 import com.socialcoisa.rede.calendar.domain.CalendarScope;
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -18,9 +25,11 @@ import com.socialcoisa.rede.shared.web.ApiException;
 public class CalendarQueryService {
 
 	private final CalendarEntryRepository entries;
+	private final CalendarParticipantRepository participants;
 
-	public CalendarQueryService(CalendarEntryRepository entries) {
+	public CalendarQueryService(CalendarEntryRepository entries, CalendarParticipantRepository participants) {
 		this.entries = entries;
+		this.participants = participants;
 	}
 
 	/**
@@ -28,13 +37,48 @@ public class CalendarQueryService {
 	 * visão consolidada — uma composição na consulta, não uma terceira agenda.
 	 */
 	public List<CalendarEntry> inWindow(String ownerId, Instant from, Instant to, CalendarScope scope) {
+		validateWindow(from, to);
+		return entries.findInWindow(ownerId, scope, from, to);
+	}
+
+	private static void validateWindow(Instant from, Instant to) {
 		if (from == null || to == null) {
 			throw new ApiException(400, "INVALID_WINDOW", "Informe from e to para consultar a agenda.");
 		}
 		if (!to.isAfter(from)) {
 			throw new ApiException(400, "INVALID_WINDOW", "to precisa ser depois de from.");
 		}
-		return entries.findInWindow(ownerId, scope, from, to);
+	}
+
+	/**
+	 * A agenda que a pessoa enxerga: o que ela organiza mais o que foi convidada a participar.
+	 * Ordenada por início, e o compromisso em que ela é convidada vem com a resposta dela junto.
+	 *
+	 * <p>Um convite recusado continua aparecendo: a pessoa já respondeu, e o compromisso continua
+	 * no histórico da agenda dela mesmo que ela não vá. Filtro de "só o que vou" é da tela.
+	 */
+	public List<CalendarAgendaItem> agenda(String userId, Instant from, Instant to, CalendarScope scope) {
+		validateWindow(from, to);
+		List<CalendarAgendaItem> items = new ArrayList<>();
+		for (CalendarEntry entry : entries.findInWindow(userId, scope, from, to)) {
+			items.add(CalendarAgendaItem.owned(entry));
+		}
+		List<CalendarEntry> invited = entries.findInvitedInWindow(userId, scope, from, to);
+		if (!invited.isEmpty()) {
+			Map<String, CalendarParticipantState> mine = new HashMap<>();
+			for (CalendarParticipant participant : participants
+				.findByUserAndEntryIds(userId, invited.stream().map(CalendarEntry::id).toList())) {
+				mine.put(participant.entryId(), participant.state());
+			}
+			for (CalendarEntry entry : invited) {
+				CalendarParticipantState myState = mine.get(entry.id());
+				if (myState != null) {
+					items.add(CalendarAgendaItem.invited(entry, myState));
+				}
+			}
+		}
+		items.sort(Comparator.comparing(item -> item.entry().startsAt()));
+		return items;
 	}
 
 	/**
