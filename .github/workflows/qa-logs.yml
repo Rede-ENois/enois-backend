@@ -23,7 +23,7 @@ jobs:
 
           list_containers() {
             curl -sS --max-time 60 "${AUTH[@]}" \
-              "${PORTAINER_BASE_URL}/api/endpoints/$1/docker/containers/json?all=1" \
+              "" \
               | python3 -c "
           import sys, json
           try:
@@ -50,19 +50,19 @@ jobs:
           }
 
           echo "=== logs do gateway (node3) ==="
-          for NAME in $(list_containers 12 | grep -i "gateway" | cut -d' ' -f1); do
+          for NAME in $(list_containers 12 | grep -i "gateway" | cut -d' ' -f1 || true); do
             fetch_logs 12 "${NAME}" /tmp/gw.log
-            tr -d "\000" < /tmp/gw.log | tail -25 | cut -c1-300
+            tr -d "\000" < /tmp/gw.log | tail -25 | cut -c1-300 || true
           done
 
           echo "=== logs do backend QA ==="
-          for NAME in $(list_containers 8 | grep -i backend | cut -d' ' -f1); do
+          for NAME in $(list_containers 8 | grep -i backend | cut -d' ' -f1 || true); do
             fetch_logs 8 "${NAME}" /tmp/qa.log
-            tr -d "\000" < /tmp/qa.log | grep -a "EpapoMeetingTokenIssuer\|CALLS_UNAVAILABLE\|api_error" | tail -8 | cut -c1-300
+            ( tr -d "\000" < /tmp/qa.log | grep -a "EpapoMeetingTokenIssuer\|CALLS_UNAVAILABLE\|api_error" | tail -8 | cut -c1-300 ) || echo "(sem linha)"
           done
 
           echo "=== logs do backend prod ==="
-          for NAME in $(list_containers 11 | grep -i backend | cut -d' ' -f1); do
+          for NAME in $(list_containers 11 | grep -i backend | cut -d' ' -f1 || true); do
             fetch_logs 11 "${NAME}" /tmp/prod.log
-            tr -d "\000" < /tmp/prod.log | grep -a "EpapoMeetingTokenIssuer\|CALLS_UNAVAILABLE\|api_error" | tail -8 | cut -c1-300
+            ( tr -d "\000" < /tmp/prod.log | grep -a "EpapoMeetingTokenIssuer\|CALLS_UNAVAILABLE\|api_error" | tail -8 | cut -c1-300 ) || echo "(sem linha)"
           done
