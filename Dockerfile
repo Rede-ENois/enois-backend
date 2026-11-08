@@ -13,7 +13,7 @@ RUN ./mvnw dependency:go-offline -q || true
 COPY src src
 RUN ./mvnw package -DskipTests -q
 
-FROM eclipse-temurin:25-jre-noble@sha256:b4c93a50fc67612798db73d68ca3b0ee4ebdd51736e59cca370e689b9797037e
+FROM eclipse-temurin:25-jre-noble@sha256:a98128a57de944a72bd31fbc79b898edd5a5864d3652071d5bbd2160ab7d7dce
 WORKDIR /app
 COPY --from=builder /app/target/rede-0.0.1-SNAPSHOT.jar app.jar
 COPY --from=builder /app/model/open-nsfw.onnx /app/data/open-nsfw.onnx
