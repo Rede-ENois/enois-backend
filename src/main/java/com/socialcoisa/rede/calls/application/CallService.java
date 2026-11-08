@@ -672,7 +672,11 @@ public class CallService implements CallRoomAuthorization {
 		if (call.state() != CallState.ENDED && call.state() != CallState.DECLINED) {
 			return;
 		}
-		for (String userId : audienceOf(call)) {
+		// Quem foi para esta chamada, lido das linhas da própria chamada. Perguntar de novo "quem é
+		// do grupo" alcançaria gente que entrou depois de a chamada começar — e avisar quem nunca
+		// foi chamado é justamente o vazamento que este caminho não pode ter.
+		List<String> recipients = calls.recipientsOf(call.id());
+		for (String userId : recipients) {
 			if (userId.equals(actorId)) {
 				continue;
 			}

@@ -58,6 +58,13 @@ public interface CallRepository {
 	/** Quem já esteve na sala (entrou pelo menos uma vez), na ordem em que entrou. */
 	List<String> participantsWhoJoined(String callId);
 
+	/**
+	 * Quem recebeu esta chamada: as pessoas convidadas na criação mais quem entrou depois. A lista
+	 * vem das linhas de presença da própria chamada, e não do vínculo (conversa, grupo, encontro) —
+	 * quem entra no grupo depois não herda o aviso de uma chamada que nunca foi dele.
+	 */
+	List<String> recipientsOf(String callId);
+
 	/** Quem está na sala agora (JOINED), sem contar a própria pessoa. */
 	int countPresentExcluding(String callId, String excludedUserId);
 

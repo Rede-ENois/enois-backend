@@ -109,6 +109,11 @@ class CallPersistenceAdapter implements CallRepository {
 	}
 
 	@Override
+	public List<String> recipientsOf(String callId) {
+		return participants.findByCallId(callId).stream().map(CallParticipantJpaEntity::userId).toList();
+	}
+
+	@Override
 	public CallParticipantState participantState(String callId, String userId) {
 		return participants.findByCallIdAndUserId(callId, userId).map(CallParticipantJpaEntity::state).orElse(null);
 	}
