@@ -59,11 +59,19 @@ interface SpringDataMessageJpaRepository extends JpaRepository<MessageJpaEntity,
 	/**
 	 * A última mensagem de cada conversa do lote, em UMA consulta: a lista de conversas do app
 	 * mostra a prévia de todas elas e não pode disparar uma consulta por conversa.
+	 *
+	 * <p>A ordem é a MESMA do método individual ({@code createdAt desc}), não o id máximo: o id é
+	 * gerado, e a prévia tem de ser a mensagem mais recente, como era antes. O desempate por id
+	 * garante UMA linha por conversa quando duas mensagens compartilham o mesmo instante.</p>
 	 */
 	@Query("""
 			SELECT m FROM MessageJpaEntity m
-			WHERE m.id IN (SELECT max(m2.id) FROM MessageJpaEntity m2
-				WHERE m2.conversationId IN :conversationIds GROUP BY m2.conversationId)
+			WHERE m.id IN (
+				SELECT ult.id FROM (
+					SELECT m2.id AS id, ROW_NUMBER() OVER (
+						PARTITION BY m2.conversationId ORDER BY m2.createdAt DESC, m2.id DESC) AS rn
+					FROM MessageJpaEntity m2 WHERE m2.conversationId IN :conversationIds
+				) ult WHERE ult.rn = 1)
 			""")
 	List<MessageJpaEntity> findLastMessagesOfConversations(
 			@Param("conversationIds") java.util.Collection<String> conversationIds);
