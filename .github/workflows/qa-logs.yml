@@ -11,38 +11,58 @@ permissions:
 jobs:
   logs:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - name: QA, containers e logs de chamadas
+      - name: Diagnóstico das chamadas
         env:
           PORTAINER_BASE_URL: ${{ secrets.PORTAINER_BASE_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
         run: |
           set -uo pipefail
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
-          API="${PORTAINER_BASE_URL}/api/endpoints/8/docker"
-          echo "=== containers QA ==="
-          curl -sS --max-time 60 "${AUTH[@]}" "${API}/containers/json?all=1" \
-            | python3 -c "
+
+          list_containers() {
+            curl -sS --max-time 60 "${AUTH[@]}" \
+              "${PORTAINER_BASE_URL}/api/endpoints/$1/docker/containers/json?all=1" \
+              | python3 -c "
           import sys, json
-          for c in json.load(sys.stdin):
-              print(c.get('Names'), c.get('State'), c.get('Id')[:12])
-          " || echo "(falhou listar)"
-          for NAME in $(curl -sS --max-time 60 "${AUTH[@]}" "${API}/containers/json?all=1" \
-            | python3 -c "
-          import sys, json
-          for c in json.load(sys.stdin):
-              n = (c.get('Names') or [''])[0]
-              if 'backend' in n or 'api' in n:
-                  print(n.lstrip('/'))
-          "); do
-            echo "=== logs de ${NAME} ==="
-            code=$(curl -sS --max-time 90 -o /tmp/q.log -w '%{http_code}' "${AUTH[@]}" \
-              "${API}/containers/${NAME}/logs?stdout=1&stderr=1&timestamps=1&tail=4000")
-            echo "http=${code} bytes=$(wc -c < /tmp/q.log)"
-            echo "--- linhas com Epapo/CALLS ---"
-            tr -d "\000" < /tmp/q.log | grep -a -c "EpapoMeetingTokenIssuer\|CALLS_UNAVAILABLE" || true
-            tr -d "\000" < /tmp/q.log | grep -a "EpapoMeetingTokenIssuer\|CALLS_UNAVAILABLE" | tail -6 | cut -c1-260
-            echo "--- ultimo api_error ---"
-            tr -d "\000" < /tmp/q.log | grep -a "api_error" | tail -3 | cut -c1-260
+          try:
+              data = json.load(sys.stdin)
+          except Exception as e:
+              print('(falhou)', e); raise SystemExit
+          for c in data:
+              print((c.get('Names') or [''])[0].lstrip('/'), c.get('State'))
+          "
+          }
+
+          echo "=== endpoint 8 (QA) containers ==="
+          list_containers 8
+          echo "=== endpoint 11 (prod) containers ==="
+          list_containers 11
+          echo "=== endpoint 12 (node3/gateway) containers ==="
+          list_containers 12
+
+          fetch_logs() {
+            EP="$1"; NAME="$2"; OUT="$3"
+            code=$(curl -sS --max-time 90 -o "${OUT}" -w '%{http_code}' "${AUTH[@]}" \
+              "${PORTAINER_BASE_URL}/api/endpoints/${EP}/docker/containers/${NAME}/logs?stdout=1&stderr=1&timestamps=1&tail=3000")
+            echo "http=${code} bytes=$(wc -c < "${OUT}") ${NAME} (ep ${EP})"
+          }
+
+          echo "=== logs do gateway (node3) ==="
+          for NAME in $(list_containers 12 | grep -i "gateway" | cut -d' ' -f1); do
+            fetch_logs 12 "${NAME}" /tmp/gw.log
+            tr -d "\000" < /tmp/gw.log | tail -25 | cut -c1-300
+          done
+
+          echo "=== logs do backend QA ==="
+          for NAME in $(list_containers 8 | grep -i backend | cut -d' ' -f1); do
+            fetch_logs 8 "${NAME}" /tmp/qa.log
+            tr -d "\000" < /tmp/qa.log | grep -a "EpapoMeetingTokenIssuer\|CALLS_UNAVAILABLE\|api_error" | tail -8 | cut -c1-300
+          done
+
+          echo "=== logs do backend prod ==="
+          for NAME in $(list_containers 11 | grep -i backend | cut -d' ' -f1); do
+            fetch_logs 11 "${NAME}" /tmp/prod.log
+            tr -d "\000" < /tmp/prod.log | grep -a "EpapoMeetingTokenIssuer\|CALLS_UNAVAILABLE\|api_error" | tail -8 | cut -c1-300
           done
