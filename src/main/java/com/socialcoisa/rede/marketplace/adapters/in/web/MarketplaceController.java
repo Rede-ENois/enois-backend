@@ -191,12 +191,17 @@ class MarketplaceController {
 
 	/** Listagens com o nome de quem publicou (o card mostra "por @fulano"). */
 	private List<ListingView> views(List<MarketplaceListing> listings) {
-		java.util.Map<String, com.socialcoisa.rede.profile.domain.UserProfile> byId = new java.util.HashMap<>();
-		for (MarketplaceListing listing : listings) {
-			if (listing.sellerId() != null && !byId.containsKey(listing.sellerId())) {
-				profiles.findById(listing.sellerId()).ifPresent(profile -> byId.put(listing.sellerId(), profile));
-			}
-		}
+		// Perfis dos vendedores numa consulta so: antes era uma por vendedor distinto, entao uma
+		// pagina de 20 anuncios de 20 pessoas custava 20 idas ao banco.
+		java.util.Set<String> sellerIds = listings.stream()
+			.map(MarketplaceListing::sellerId)
+			.filter(java.util.Objects::nonNull)
+			.collect(java.util.stream.Collectors.toSet());
+		java.util.Map<String, com.socialcoisa.rede.profile.domain.UserProfile> byId = sellerIds.isEmpty()
+			? java.util.Map.of()
+			: profiles.findAllByIds(sellerIds).stream()
+				.collect(java.util.stream.Collectors.toMap(
+					com.socialcoisa.rede.profile.domain.UserProfile::id, java.util.function.Function.identity()));
 		return listings.stream().map(listing -> {
 			var profile = byId.get(listing.sellerId());
 			return new ListingView(listing.id(),
