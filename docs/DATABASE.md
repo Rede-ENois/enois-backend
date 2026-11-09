@@ -144,12 +144,19 @@ segundo INSERT é recusado pelo banco.
 | route | VARCHAR(255) | Rota |
 | idempotency_key | VARCHAR(255) | Chave de idempotência |
 | request_hash | VARCHAR(64) | SHA-256 do corpo |
-| status | VARCHAR(20) | IN_PROGRESS, COMPLETED, CONFLICT |
+| status | VARCHAR(20) | PROCESSING, COMPLETED, FAILED |
 | response_status | INT | Status HTTP da resposta |
 | response_body | TEXT | Corpo da resposta |
 | created_at | TIMESTAMP | |
 | expires_at | TIMESTAMP | |
-| completed_at | TIMESTAMP (nullable) | |
+| completed_at | TIMESTAMP (nullable) |
+
+A chave vale por 24 horas (`expires_at`, gravado na escrita) e é removida pelo
+`IdempotencyRetentionWorker` depois da janela de retenção
+(`rede.idempotency.retention.hours`, 48 horas a partir do vencimento — o dobro da vida útil da
+chave, para nenhum replay legítimo ser surpreendido pela limpeza). Qualquer estado expira:
+`PROCESSING` abandonado não é replay pendente, e reapresentar a mesma chave depois de vencida
+executa como comando novo. Antes deste worker nada removia linhas desta tabela.
 
 ### `outbox_events`
 
