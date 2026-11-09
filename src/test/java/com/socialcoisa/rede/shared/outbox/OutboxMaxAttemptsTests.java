@@ -5,8 +5,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.time.Instant;
 import java.util.UUID;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
@@ -30,8 +32,7 @@ import com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository;
 @SpringBootTest
 @TestPropertySource(properties = {
 		"rede.outbox.worker-delay-ms=3600000",
-		"rede.outbox.claim-stale-seconds=60",
-		"rede.outbox.max-attempts=3" })
+		"rede.outbox.claim-stale-seconds=60" })
 class OutboxMaxAttemptsTests {
 
 	@TestConfiguration
@@ -57,6 +58,16 @@ class OutboxMaxAttemptsTests {
 	@Autowired private JdbcTemplate jdbc;
 
 	private final String prefix = "outbox_max_" + UUID.randomUUID().toString().substring(0, 8);
+
+	/**
+	 * O limite entra por campo, nao por property: uma property a mais no {@code @TestPropertySource}
+	 * cria outro contexto do Spring (fork de ~3s e pool proprio) e desloca o timing das outras
+	 * classes da suite. Este teste precisa de limite 3 e nao de outro contexto.
+	 */
+	@BeforeEach
+	void limiteDeTresTentativas() {
+		ReflectionTestUtils.setField(worker, "maxAttempts", 3);
+	}
 
 	@Test
 	void eventoQueFalhaDemaisVaiParaEstadoTerminalELiberaOLote() {
