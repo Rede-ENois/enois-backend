@@ -35,11 +35,17 @@ interface SpringDataConversationParticipantJpaRepository extends JpaRepository<C
 	/**
 	 * Total de mensagens nao lidas em TODAS as conversas ativas do usuario (uma query so), opcionalmente
 	 * so as de um contexto (caixa social ou profissional).
+	 *
+	 * <p>A mensagem que o proprio leitor apagou para si ({@code message_hidden}) fica de fora: ela
+	 * ja nao aparece na conversa, logo nao pode continuar no selo. Sem o filtro, a pessoa apagava a
+	 * mensagem, abria a conversa e o badge continuava aceso por causa do que ela mesma escondeu.</p>
 	 */
 	@org.springframework.data.jpa.repository.Query("SELECT COALESCE(SUM("
 		+ " (SELECT COUNT(m) FROM MessageJpaEntity m"
 		+ " WHERE m.conversationId = cp.conversationId"
-		+ " AND m.createdAt > COALESCE(cp.lastReadAt, cp.joinedAt))"
+		+ " AND m.createdAt > COALESCE(cp.lastReadAt, cp.joinedAt)"
+		+ " AND NOT EXISTS (SELECT h FROM MessageHiddenJpaEntity h"
+		+ " WHERE h.messageId = m.id AND h.userId = :userId))"
 		+ " ), 0)"
 		+ " FROM ConversationParticipantJpaEntity cp, ConversationJpaEntity c"
 		+ " WHERE c.id = cp.conversationId AND cp.userId = :userId AND cp.hiddenAt IS NULL"
