@@ -529,6 +529,11 @@ UNIQUE: (requester_user_id, receiver_user_id)
 | read | BOOLEAN DEFAULT FALSE | |
 | created_at | TIMESTAMP | |
 
+Índices: `(user_id, is_read, created_at)` serve a contagem de não lidas; `(user_id, created_at)`
+(V260) serve a lista, que filtra só pela pessoa e ordena pelo tempo — com o `is_read` no meio o
+MariaDB não consegue entregar a ordem e ordena em disco (medido: 200.020 leituras de linha para
+devolver 20; com o índice novo, 19).
+
 ---
 
 ## V8 - Profile Extensions
