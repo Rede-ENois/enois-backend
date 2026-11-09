@@ -18,14 +18,14 @@ import com.socialcoisa.rede.notifications.domain.NotificationContext;
 
 /**
  * O indice de {@code notifications (user_id, created_at)} existe para a lista de notificacoes
- * (issue #521 da mesma familia; V259) e nao pode mudar o que ela devolve: e otimizacao pura.
+ * (issue #521 da mesma familia; V260) e nao pode mudar o que ela devolve: e otimizacao pura.
  *
  * <p>O indice que ja existia (user_id, is_read, created_at) tem o is_read NO MEIO: serve para a
  * contagem de nao lidas, mas a lista filtra so por user_id e ordena por created_at — com ele o
  * MariaDB varria tudo da pessoa e ordenava em disco (medido em MariaDB 11.4 com 200 mil linhas:
  * 200.020 leituras de linha para devolver 20; com o indice novo, 19).</p>
  *
- * <p>Este teste trava as duas coisas: o indice esta no schema (a migracao V259 rodou — o
+ * <p>Este teste trava as duas coisas: o indice esta no schema (a migracao V260 rodou — o
  * schema-check do CI valida contra MariaDB real) e a lista continua devolvendo o mesmo conjunto
  * na mesma ordem.</p>
  */
