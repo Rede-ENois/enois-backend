@@ -68,6 +68,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	private final com.socialcoisa.rede.feed.application.port.out.PostRepostRepository postReposts;
 	private final com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries;
 	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
+	private final com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications;
 
 	private static final Instant DEFAULT_BEFORE = Instant.parse("9999-12-31T23:59:59Z");
 
@@ -85,9 +86,11 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			com.socialcoisa.rede.feed.application.port.out.PollRepository polls,
 			com.socialcoisa.rede.feed.application.port.out.PostRepostRepository postReposts,
 			com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries,
-			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate) {
+			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate,
+			com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications) {
 		this.mediaSummaries = mediaSummaries;
 		this.sanctionGate = sanctionGate;
+		this.identityVerifications = identityVerifications;
 		this.postRepository = postRepository;
 		this.articleRepository = articleRepository;
 		this.feedCacheRepository = feedCacheRepository;
@@ -401,6 +404,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
 		// Quem tem selo ativo ganha a tag "Contribuinte" junto do nome, em lote.
 		Set<String> contributorIds = userSeals.findActiveUserIds(profiles.keySet());
+		// Selo "Humanidade Comprovada": também em lote (uma consulta por página).
+		Set<String> humanityVerified = identityVerifications.verifiedAmong(profiles.keySet());
 		// A apresentação de quem assinou: post CORPORATE mostra o perfil profissional (nome, @,
 		// avatar), nunca a identidade pessoal. Uma consulta em lote para a página inteira.
 		Set<String> corporateAuthorIds = visible.stream()
@@ -483,7 +488,9 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 					.withAvatarFrame(profile != null ? profile.avatarFrame() : null)
 					.withAuthorStyle(corporateProfile == null ? NameStyleView.from(profile) : null)
 					.withContributor(corporateProfile == null && contributorIds.contains(post.authorId().value())
-						? ContributorTagView.from(profile) : null);
+						? ContributorTagView.from(profile) : null)
+					.withAuthorHumanityVerified(corporateProfile == null
+						&& humanityVerified.contains(post.authorId().value()));
 				ReactionType reaction = currentUserReactions.get(post.id());
 				PostView withReaction = (reaction != null ? view.withCurrentUserReaction(reaction) : view)
 					.withReactionSummary(reactionSummaries.getOrDefault(post.id(), Map.of()));

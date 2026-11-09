@@ -57,7 +57,8 @@ class HideRepostsCursorTests {
 
 	private final GetFeedService feed = new GetFeedService(posts, null, null, connections, profiles, seals,
 		interactions, null, new CursorCodec(), blockedUsers, communities, null, blogs, null, preferences, notes,
-		polls, reposts, media, mock(com.socialcoisa.rede.shared.sanctions.SanctionGateReader.class));
+		polls, reposts, media, mock(com.socialcoisa.rede.shared.sanctions.SanctionGateReader.class),
+		mock(com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository.class));
 
 	private static final UserId READER = new UserId("synthetic_reader");
 	private static final Instant NEWEST = Instant.parse("2030-01-01T12:00:00Z");

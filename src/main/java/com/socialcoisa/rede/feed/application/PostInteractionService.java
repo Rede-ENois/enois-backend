@@ -59,6 +59,7 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 	private final com.socialcoisa.rede.shared.sanctions.SanctionGate sanctionGate;
 	private final com.socialcoisa.rede.shared.risk.RiskEngine riskEngine;
 	private final com.socialcoisa.rede.shared.age.AgeGate agePolicy;
+	private final com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications;
 	private final com.socialcoisa.rede.coin.application.CoinService coins;
 	private final NewAccountCooldown newAccountCooldown;
 	/** Rate limit por usuário e dedup de conteúdo (PR #28). */
@@ -82,7 +83,8 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 			UserRateLimiter userRateLimiter,
 			ContentDuplicationGuard duplicationGuard,
 			BehavioralTimingGuard behavioralTimingGuard,
-			com.socialcoisa.rede.shared.age.AgeGate agePolicy) {
+			com.socialcoisa.rede.shared.age.AgeGate agePolicy,
+			com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications) {
 		this.postRepository = postRepository;
 		this.commentRepository = commentRepository;
 		this.postInteractionRepository = postInteractionRepository;
@@ -97,6 +99,7 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 		this.sanctionGate = sanctionGate;
 		this.riskEngine = riskEngine;
 		this.agePolicy = agePolicy;
+		this.identityVerifications = identityVerifications;
 		this.coins = coins;
 		this.newAccountCooldown = newAccountCooldown;
 		this.userRateLimiter = userRateLimiter;
@@ -137,7 +140,8 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 			.withAvatarFrame(profile != null ? profile.avatarFrame() : null)
 			.withAuthorStyle(NameStyleView.from(profile))
 			.withContributor(userSeals.hasActiveSeal(command.authorId().value())
-				? ContributorTagView.from(profile) : null);
+				? ContributorTagView.from(profile) : null)
+			.withAuthorHumanityVerified(identityVerifications.isVerified(command.authorId().value()));
 	}
 
 	/**
@@ -192,6 +196,7 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 			.filter(id -> !hidden.contains(id))
 			.collect(java.util.stream.Collectors.toSet());
 		Set<String> contributorIds = userSeals.findActiveUserIds(commentAuthorIds);
+		Set<String> humanityVerified = identityVerifications.verifiedAmong(commentAuthorIds);
 		// One query for the page's authors instead of one per comment.
 		var authors = userProfileRepository.findAllByIds(commentAuthorIds).stream()
 			.collect(java.util.stream.Collectors.toMap(UserProfile::id, java.util.function.Function.identity()));
@@ -208,6 +213,7 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 					.withAuthorStyle(NameStyleView.from(p))
 					.withContributor(contributorIds.contains(c.authorId().value())
 						? ContributorTagView.from(p) : null)
+					.withAuthorHumanityVerified(humanityVerified.contains(c.authorId().value()))
 					.withAccepted(c.id().equals(acceptedCommentId));
 			})
 			.toList();

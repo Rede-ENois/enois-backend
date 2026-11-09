@@ -13,6 +13,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.identity.adapters.out.provider.IdentityVerificationProviderRegistry;
+import com.socialcoisa.rede.identity.application.port.out.IdentityReleaseGate;
 import com.socialcoisa.rede.identity.application.port.out.IdentityVerificationProvider;
 import com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository;
 import com.socialcoisa.rede.identity.domain.IdentityVerification;
@@ -31,8 +32,16 @@ class IdentityVerificationServiceTests {
 	private final InMemoryRepo repo = new InMemoryRepo();
 
 	private IdentityVerificationService serviceWith(IdentityVerificationProvider... providers) {
-		return new IdentityVerificationService(repo, new IdentityVerificationProviderRegistry(List.of(providers)), clock);
+		return new IdentityVerificationService(repo, new IdentityVerificationProviderRegistry(List.of(providers)),
+			ALWAYS_RELEASED, clock);
 	}
+
+	/** Provedor de teste nao exige liberacao; a porta nunca e consultada. */
+	private static final IdentityReleaseGate ALWAYS_RELEASED = new IdentityReleaseGate() {
+		@Override public boolean granted(String userId) { return true; }
+		@Override public void consume(String userId) { }
+		@Override public void requireCapacity() { }
+	};
 
 	@Test
 	void providerUnavailableFailsSafeAndDoesNotVerify() {
@@ -160,6 +169,16 @@ class IdentityVerificationServiceTests {
 		}
 		@Override public void save(IdentityVerification verification) {
 			this.stored = verification;
+		}
+		@Override public int countStartedSince(String provider, Instant since) {
+			return stored != null && provider != null && provider.equals(stored.provider()) ? 1 : 0;
+		}
+		@Override public boolean isVerified(String userId) {
+			return stored != null && stored.userId().equals(userId)
+				&& stored.state().name().equals("VERIFIED");
+		}
+		@Override public java.util.Set<String> verifiedAmong(java.util.Collection<String> userIds) {
+			return java.util.Set.of();
 		}
 	}
 
