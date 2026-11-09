@@ -36,6 +36,24 @@ Sem `REDE_CALLS_EPAPO_URL` **ou** sem o gateway configurado (`REDE_CALLS_EPAPO_G
 `REDE_CALLS_EPAPO_INTERNAL_TOKEN`) a API responde **503 `CALLS_NOT_CONFIGURED`** — ela nunca aponta
 o painel para uma instância aberta para "funcionar".
 
+## O que a Epapo vê (e o que não vê)
+
+Transparência técnica, para que ninguém precise acreditar em promessa: a documentação oficial do
+produto (Termos, Diretrizes e Política de Privacidade) só pode afirmar o que está implementado.
+
+| | O que acontece |
+|---|---|
+| **Quem administra a sessão** | A Epapo é a própria videoconferência da rede (fork do Jitsi Meet), hospedada e operada pelo projeto. O TLS é encerrado no proxy de borda da Epapo; o proxy web tem `access_log off` (sem log de acesso HTTP), mas os contêineres (Prosody, Jicofo, JVB) registram logs técnicos de operação |
+| **Quem estabelece a comunicação** | O Énóis **não** implementa WebRTC: a chamada é um iframe da Epapo (Jitsi) dentro do app, e a mídia trafega entre o navegador e os servidores da Epapo |
+| **O que cada serviço recebe** | O Énóis envia ao gateway da Epapo apenas `{callId, userId}` + o segredo interno, e recebe o JWT assinado (HS256, `JITSI_APP_SECRET`, que nunca sai da Epapo). A Epapo recebe nome e papel do participante no token; o proxy de mídia do JVB recebe as mídias para retransmiti-las |
+| **Alguém pode acessar áudio/vídeo?** | **Sim, no trecho do SFU.** O JVB (o retransmissor) recebe o áudio e o vídeo para repassá-los aos demais participantes. **Não existe criptografia ponta a ponta entre participantes**: o modelo é SFU, com o JVB no caminho. O TLS protege cada trecho (app↔proxy, proxy↔componentes), e o SRTP protege a mídia no trânsito de cada trecho — isso não equivale a E2EE |
+| **A mídia é armazenada?** | Não há gravação: `ENABLE_RECORDING=0` e `context.features.recording=false` no token. Não há banco nem volume persistente na stack da Epapo (`docker-compose.yml` da Epapo). A única imagem que a plataforma guarda é a captura estática de uma denúncia (ver "Denúncia de chamada") |
+| **Registros e metadados** | Duração da chamada, participantes e horários ficam em `call_sessions`/`call_participants` no banco do Énóis. O `CallExpiryWorker` encerra chamadas abandonadas a cada 5 s. Não há purge temporal dessas tabelas. Registros técnicos de infraestrutura (ex.: IP) podem existir nos logs dos contêineres da Epapo |
+| **STUN/TURN** | Só **STUN** (`stun:meet-jit-si-turnrelay.jitsi.net:443`); **não há servidor TURN/coturn** na stack. Sem TURN, quem está atrás de NAT restritivo pode não conseguir mídia — é limitação conhecida e independente da documentação oficial |
+
+Independência operacional da Epapo não é independência de toda a infraestrutura: o serviço roda em
+provedores de hospedagem, rede e container, e o STUN apontado é um serviço público do Jitsi.
+
 ## Infra: Epapo (fork do Jitsi)
 
 | | Jitsi próprio (escolhido) | JaaS (8x8) | meet.jit.si público |
@@ -191,6 +209,34 @@ sessão sem cargo `403`, `Cache-Control: private, no-store`).
 A triagem por IA lê o relato, os participantes e a captura, e **nunca penaliza sozinha** uma
 denúncia de chamada: penalidade e banimento sobre quem foi apontado são decisão humana no painel de
 revisão (`/moderacao/{reportId}`), que mostra a captura.
+
+O que a denúncia **não** aciona — e o que a documentação oficial precisa dizer do mesmo jeito:
+
+- **Sem gravação.** A captura é uma folha JPEG das telas visíveis no momento da denúncia (`custom.js`
+  do Epapo: até 4 vídeos, lado maior 1280 px, JPEG 0.85). Não há áudio nem vídeo gravado — o Epapo
+  sobe com `ENABLE_RECORDING=0` e o token de entrada traz `context.features.recording=false`.
+- **Sem aviso.** A captura é pedida por `postMessage` à iframe, sem aviso visível para os demais
+  participantes, e o Epapo **não registra** esse pedido em log nem em trilha de auditoria. A pessoa
+  denunciada também não é avisada de que a denúncia foi aberta contra ela: o `notifySupport` da
+  `ModerationService` manda e-mail só para o suporte.
+- **Sem retenção automática.** Não existe worker que apague `REPORT_CAPTURE` por tempo: o
+  `MediaDeletionWorker` só purge o que tem `media_deletion_job`, e esse job só nasce por pedido de
+  exclusão do **dono** do arquivo. Não há, hoje, `media_deletion_job` para `REPORT_CAPTURE`, então
+  **a evidência fica armazenada** enquanto o registro existir. Também não há purge temporal de
+  `reports`, `call_reports` ou `call_sessions`.
+- **Com destino externo.** A imagem da denúncia e o relato saem da plataforma para o endpoint de
+  análise de conteúdo usado pela triagem (`ModerationAiService.reportImages`, no máximo 2 imagens).
+  Para alvo `CALL`, a imagem devolvida é a captura da própria denúncia.
+
+Lacunas conhecidas (verificadas no código em 2026-11-09; não corrigidas nesta tarefa, porque o
+escopo é documentação):
+
+| Lacuna | Onde está |
+|---|---|
+| `GET /media/{mediaId}` é público e devolve `objectKey`/`cdnUrl` de um asset `REPORT_CAPTURE` a quem souber o id; o binário em `/storage/{key}` é de moderador, mas o identificador do objeto não é | `MediaContractController` × `MediaStorageProxyController` |
+| Não existe trilha de auditoria de quem abriu a evidência (nem de quem registrou a denúncia) | `MediaStorageProxyController.read` |
+| A captura sai do navegador para o provedor externo de análise sem aviso ao participante | `ModerationAiService.reportImages` |
+| `AgeGate` (`PARENTAL_CONSENT_REQUIRED`) não é aplicado no módulo de chamadas | `shared/age/AgeGate` |
 
 O stream `/conversations/stream` ganha o evento `call` com `{"callId","state","conversationId"?,`
 `"groupId"?}`; o cliente busca o estado real na rota de chamadas, que autoriza de novo.
