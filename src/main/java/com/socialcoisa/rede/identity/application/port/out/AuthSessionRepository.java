@@ -25,4 +25,10 @@ public interface AuthSessionRepository {
 
 	/** IPs recentes de onde o usuario entrou (V115), mais recentes primeiro. Nulos filtrados fora. */
 	List<String> findRecentIpsByUser(String userId, int limit);
+
+	/** Remove um lote de sessoes cujo refresh (ou access, sem refresh) venceu antes do corte. */
+	int deleteExpiredBefore(Instant cutoff, int batchSize);
+
+	/** Quantas sessoes estao elegiveis agora, sem apagar nada (diagnostico e teste). */
+	long countExpiredBefore(Instant cutoff);
 }

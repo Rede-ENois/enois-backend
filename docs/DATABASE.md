@@ -73,6 +73,14 @@ alterar a escolha.
 | created_at | TIMESTAMP | |
 | expires_at | TIMESTAMP | |
 | revoked_at | TIMESTAMP (nullable) | Se preenchido, sessão revogada |
+| refresh_expires_at | TIMESTAMP (nullable) | Validade do refresh (30 dias); nulo em sessões antigas |
+| ip | VARCHAR(64) (nullable) | IP de origem (V131) |
+
+Sessões cujo refresh (ou o access, quando não há refresh) venceu há mais que a janela de retenção
+(`rede.auth.session-retention.days`, 14 dias) saem pelo `AuthSessionRetentionWorker`, em lotes por
+rodada. Revogar não apaga: a linha só sai quando a validade acaba. Os usos que existem olham
+janelas curtas — a contagem de ativos filtra por `refresh_expires_at`, e a moderação olha os
+últimos IPs de uma conta —, nunca o histórico completo de logins.
 
 ### `posts`
 

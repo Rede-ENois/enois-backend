@@ -99,6 +99,22 @@ class AuthSessionPersistenceAdapter implements AuthSessionRepository {
 	}
 
 	@Override
+	public int deleteExpiredBefore(Instant cutoff, int batchSize) {
+		java.util.List<String> tokens = repository.findTokensExpiredBefore(cutoff,
+			org.springframework.data.domain.PageRequest.ofSize(batchSize));
+		if (tokens.isEmpty()) {
+			return 0;
+		}
+		repository.deleteByTokenIn(tokens);
+		return tokens.size();
+	}
+
+	@Override
+	public long countExpiredBefore(Instant cutoff) {
+		return repository.countExpiredBefore(cutoff);
+	}
+
+	@Override
 	public java.util.List<String> findRecentIpsByUser(String userId, int limit) {
 		return repository.findRecentIpsByUser(userId, org.springframework.data.domain.PageRequest.of(0,
 			Math.max(1, limit)));
