@@ -219,6 +219,16 @@ recibo e executa só os que faltaram.
 | metadata | TEXT (nullable) |
 | created_at | TIMESTAMP |
 
+Trilha das ações de moderação e de dono de conteúdo (remoção de post, comentário e grupo,
+restauração, mudança de status). O `metadata` guarda o **motivo escrito à mão** por quem agiu.
+
+**Retenção:** 180 dias (`rede.audit.retention.*`), a mais longa da plataforma de propósito — é
+trilha de auditoria, não telemetria: serve para reconstruir uma decisão de moderação recente.
+Nenhum endpoint ou painel lê esta tabela (só escrita), então a janela não apaga dado em uso. O
+índice `idx_audit_created (created_at)` existe para a varredura da retenção: sem ele, medido em
+MariaDB 11.4 com 400 mil linhas, a rodada lia 400.001 linhas com filesort para achar as 500 mais
+antigas; com ele, 499 leituras por faixa.
+
 ### `email_log`
 
 Metadado de cada e-mail enviado (o corpo não é gravado). Alimenta o painel de operações.
