@@ -87,20 +87,22 @@ evento (o `boolean tamoJunto` no evento apenas indica que o evento terá a sala 
 
 ## 7. Pontos que precisam de validação jurídica humana
 
-1. **Idade mínima inconsistente**: os Termos dizem 18+, a Política de Privacidade diz 16+, e o
-   cadastro pede confirmação de 18+. O backend aceita uma idade plausível (0–120) e `AgeGate` não é
-   aplicado nas chamadas. **Corrigir o texto exige decidir a regra**, o que não é papel da
-   documentação — fica para revisão humana.
-2. **Base legal da denúncia**: o texto adota cumprimento de obrigação legal/exercício regular de
+1. **Base legal da denúncia**: o texto adota cumprimento de obrigação legal/exercício regular de
    direitos (art. 7º, LGPD). **Confirmar** se o enquadramento escolhido é o desejado, considerando
    que a imagem vem de captura sem aviso ao participante.
-3. **Retenção**: como não há retenção automática da evidência nem purge temporal dos registros de
+2. **Retenção**: como não há retenção automática da evidência nem purge temporal dos registros de
    moderação, o texto diz que o material permanece enquanto necessário. **Definir prazo** é decisão
    jurídica/produto.
-4. **Fluxo de requisição de autoridades**: o texto diz "requisição judicial ou pedido formal de
+3. **Fluxo de requisição de autoridades**: o texto diz "requisição judicial ou pedido formal de
    autoridade competente". **Validar** a formulação e o procedimento interno de atendimento.
-5. **Compartilhamento com provedor externo de análise**: confirmar contrato/ZDR com o provedor e a
+4. **Compartilhamento com provedor externo de análise**: confirmar contrato/ZDR com o provedor e a
    redação do compartilhamento (operador × controlador conjunto).
+5. **Regra de idade (16+, supervisão até os 18)**: implementada no backend e refletida nos textos
+   oficiais (Termos 1 e 3, Privacidade 9, Diretrizes). **Validar** a redação do consentimento do
+   responsável e o alcance da supervisão — em especial a afirmação "de 16 a 17 anos a conta é
+   somente leitura": no código, o bloqueio vale para as escritas (publicar, comentar, mensagem,
+   entrar em chamada) e para as demais áreas com portão de idade, mas a leitura do feed e de
+   demais áreas sem portão permanece liberada.
 
 ## 8. Funcionalidades que NÃO puderam ser provadas / divergências com a documentação anterior
 

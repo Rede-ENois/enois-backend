@@ -73,7 +73,7 @@ class ParentalSupervisionFlowTests {
 		String minorEmail = "jovem.supervisao@example.com";
 		String guardianEmail = "responsavel.supervisao@example.com";
 
-		String minorSession = createUser("Jovem Supervisionado", minorEmail, "2012-05-10");
+		String minorSession = createUser("Jovem Supervisionado", minorEmail, "2009-05-10");
 		String guardianSession = createUser("Responsavel Adulto", guardianEmail, "1988-02-20");
 
 		// 1. Menor sem responsável: escrita bloqueada com o código próprio.
@@ -148,7 +148,7 @@ class ParentalSupervisionFlowTests {
 		String guardianEmail = "responsavel.idor@example.com";
 		String strangerEmail = "estranho.idor@example.com";
 
-		String minorSession = createUser("Jovem IDOR", minorEmail, "2013-03-03");
+		String minorSession = createUser("Jovem IDOR", minorEmail, "2009-03-03");
 		String guardianSession = createUser("Responsavel IDOR", guardianEmail, "1985-07-07");
 		String strangerSession = createUser("Estranho IDOR", strangerEmail, "1990-01-01");
 

@@ -18,6 +18,7 @@ import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
 import com.socialcoisa.rede.shared.application.CacheConfig;
 import com.socialcoisa.rede.shared.application.CacheInvalidator;
+import com.socialcoisa.rede.shared.age.AgePolicy;
 import com.socialcoisa.rede.shared.html.SafeHtml;
 import com.socialcoisa.rede.shared.sanctions.SanctionGateReader;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -227,14 +228,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 		if (date == null) {
 			throw new ApiException(400, "BIRTH_DATE_REQUIRED", "Informe a data de nascimento.");
 		}
-		LocalDate today = LocalDate.now(clock.withZone(java.time.ZoneId.of("America/Sao_Paulo")));
-		if (date.isAfter(today)) {
-			throw new ApiException(400, "INVALID_BIRTH_DATE", "A data de nascimento nao pode ser no futuro.");
-		}
-		int age = java.time.Period.between(date, today).getYears();
-		if (age < 0 || age > 120) {
-			throw new ApiException(400, "INVALID_BIRTH_DATE", "A data de nascimento nao parece real.");
-		}
+		int age = validateBirthDate(date);
 		UserProfile profile = repository.findById(userId)
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
 		profile.declareBirthDate(date, java.time.Instant.now(clock));
@@ -244,6 +238,27 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 		boolean supervised = minor && parentalLinks.findActiveByMinor(userId).isPresent();
 		return new AgeStateView(minor ? (supervised ? "MINOR_SUPERVISED" : "MINOR_CONSENT_PENDING")
 			: "ADULT_DECLARED", minor, true, supervised);
+	}
+
+	/**
+	 * Plausibilidade e piso de idade da data declarada — a mesma regua do cadastro. Devolve a
+	 * idade em anos para quem precisa do estado (menor ou adulto).
+	 */
+	private int validateBirthDate(LocalDate date) {
+		LocalDate today = LocalDate.now(clock.withZone(java.time.ZoneId.of("America/Sao_Paulo")));
+		if (date.isAfter(today)) {
+			throw new ApiException(400, "INVALID_BIRTH_DATE", "A data de nascimento nao pode ser no futuro.");
+		}
+		int age = java.time.Period.between(date, today).getYears();
+		if (age < 0 || age > 120) {
+			throw new ApiException(400, "INVALID_BIRTH_DATE", "A data de nascimento nao parece real.");
+		}
+		// Mesmo piso do cadastro: corrigir a data nao pode virar porteira dos 16 anos.
+		if (age < AgePolicy.MIN_AGE) {
+			throw new ApiException(400, "INVALID_BIRTH_DATE",
+				"A idade minima para usar a plataforma e " + AgePolicy.MIN_AGE + " anos.");
+		}
+		return age;
 	}
 
 	/** Estado de idade para o front decidir se mostra a tela de regularizacao (sem expor a data). */
@@ -351,6 +366,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 					throw new ApiException(400, "INVALID_BIRTH_DATE",
 						"Data de nascimento invalida (use aaaa-mm-dd).");
 				}
+				validateBirthDate(date);
 				profile.declareBirthDate(date, clock.instant());
 			}
 		}
