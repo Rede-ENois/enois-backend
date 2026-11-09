@@ -97,11 +97,10 @@ public class SupportService {
 			"support_" + UUID.randomUUID().toString().replace("-", ""), userId, cleanSubject, cleanMessage, cleanEmail,
 			cleanImage, category, clock.instant()));
 
-		if (StringUtils.hasText(supportEmail)) {
-			emailService.sendSupportRequestEmail(supportEmail, request.subject(), request.message(), cleanEmail);
-		}
-		// O espelho no GitHub nasce depois do commit (ver SupportGithubSync).
-		events.publishEvent(new SupportRequestOpenedEvent(request.id()));
+		// O aviso por e-mail e o espelho no GitHub nascem DEPOIS do commit (ver SupportEmailNotifier e
+		// SupportGithubSync): o envio e SMTP sincrono e nao pode segurar a conexao do banco.
+		events.publishEvent(new SupportRequestOpenedEvent(request.id(), request.subject(), request.message(),
+			cleanEmail));
 		return request;
 	}
 
@@ -166,12 +165,14 @@ public class SupportService {
 		SupportRequest saved = repository.save(
 			withReply.status() == SupportStatus.OPEN ? withReply.withStatus(SupportStatus.IN_PROGRESS) : withReply);
 		var threadMessage = thread.addFromPanel(saved.id(), clean);
-		emailService.sendSupportReplyEmail(saved.contactEmail(), saved.subject(), clean);
 		if (StringUtils.hasText(saved.userId())) {
 			notifications.create(saved.userId(), "SUPORTE", adminId, "Resposta do suporte", clean,
 				"/suporte", "Ver");
 		}
-		events.publishEvent(new SupportReplyEvent(saved.id(), threadMessage.id(), adminId, clean));
+		// O e-mail de resposta sai DEPOIS do commit (SupportEmailNotifier): SMTP sincrono nao pode
+		// segurar a conexao do banco.
+		events.publishEvent(new SupportReplyEvent(saved.id(), threadMessage.id(), adminId, clean,
+			saved.contactEmail(), saved.subject()));
 		return saved;
 	}
 
