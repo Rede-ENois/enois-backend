@@ -39,4 +39,21 @@ interface SpringDataAuthSessionJpaRepository extends JpaRepository<AuthSessionJp
 			+ "ORDER BY s.createdAt DESC")
 	List<String> findRecentIpsByUser(@Param("userId") String userId,
 			org.springframework.data.domain.Pageable page);
+
+	/**
+	 * Sessoes que ja nao valem para nada: o refresh venceu (ou, sem refresh, o access venceu) antes
+	 * do corte. Revogada ou nao, a linha nao autentica mais ninguem.
+	 */
+	@Query("SELECT s.token FROM AuthSessionJpaEntity s WHERE "
+		+ "COALESCE(s.refreshExpiresAt, s.expiresAt) < :cutoff")
+	List<String> findTokensExpiredBefore(@Param("cutoff") Instant cutoff,
+			org.springframework.data.domain.Pageable page);
+
+	@Modifying
+	int deleteByTokenIn(List<String> tokens);
+
+	/** Quantas sessoes estao elegiveis agora, sem apagar nada (diagnostico e teste). */
+	@Query("SELECT count(s) FROM AuthSessionJpaEntity s WHERE "
+		+ "COALESCE(s.refreshExpiresAt, s.expiresAt) < :cutoff")
+	long countExpiredBefore(@Param("cutoff") Instant cutoff);
 }
