@@ -70,7 +70,7 @@ class MessagingContractController {
 		List<String> conversationIds = conversations.stream().map(Conversation::id).toList();
 		var participantsByConversation = messagingService.getParticipantsByConversation(conversationIds);
 		var unreadByConversation = messagingService.countUnreadByConversation(conversationIds, userId);
-		var lastMessages = messagingService.getLastMessagePreviewByConversation(conversationIds);
+		var lastMessages = messagingService.getLastMessagePreviewByConversation(conversationIds, userId);
 		return conversations.stream()
 			.map(c -> {
 				var participants = participantsByConversation.getOrDefault(c.id(), List.of());
@@ -138,7 +138,7 @@ class MessagingContractController {
 			.toList();
 		return toDetailView(c.id(), c.kind(), c.title(), pIds,
 			messagingService.countUnread(c.id(), user.id().value()),
-			otherLastReadAt(participants, user.id().value()));
+			otherLastReadAt(participants, user.id().value()), user.id().value());
 	}
 
 	@GetMapping("/{conversationId}/messages")
@@ -297,7 +297,7 @@ class MessagingContractController {
 				.toList();
 			return new CommandResponse(200, toDetailView(conversationId, "DIRECT", null, pIds,
 				messagingService.countUnread(conversationId, user.id().value()),
-				otherLastReadAt(participants, user.id().value())));
+				otherLastReadAt(participants, user.id().value()), user.id().value()));
 		});
 	}
 
@@ -321,7 +321,7 @@ class MessagingContractController {
 				.toList();
 			return new CommandResponse(200, toDetailView(conversationId, "BUSINESS_DIRECT", null, pIds,
 				messagingService.countUnread(conversationId, user.id().value()),
-				otherLastReadAt(participants, user.id().value())));
+				otherLastReadAt(participants, user.id().value()), user.id().value()));
 		});
 	}
 
@@ -396,7 +396,7 @@ class MessagingContractController {
 					.toList();
 				return new CommandResponse(201, toDetailView(c.id(), c.kind(), c.title(), pIds,
 					messagingService.countUnread(c.id(), user.id().value()),
-					otherLastReadAt(participants, user.id().value())));
+					otherLastReadAt(participants, user.id().value()), user.id().value()));
 			});
 	}
 
@@ -454,12 +454,6 @@ class MessagingContractController {
 	}
 
 	private ConversationView toView(String convId, String userId, String kind, String title,
-			List<String> participantIds, int unread, String otherLastReadAt) {
-		return toView(convId, userId, kind, title, participantIds, unread, otherLastReadAt,
-			messagingService.getLastMessagePreview(convId));
-	}
-
-	private ConversationView toView(String convId, String userId, String kind, String title,
 			List<String> participantIds, int unread, String otherLastReadAt,
 			MessagingService.LastMessagePreview preview) {
 		ConversationContext context = ConversationContext.of(kind);
@@ -470,8 +464,8 @@ class MessagingContractController {
 	}
 
 	private ConversationDetailView toDetailView(String convId, String kind, String title,
-			List<String> participantIds, int unread, String otherLastReadAt) {
-		var lm = messagingService.getLastMessagePreview(convId);
+			List<String> participantIds, int unread, String otherLastReadAt, String viewerId) {
+		var lm = messagingService.getVisibleLastMessagePreview(convId, viewerId);
 		ConversationContext context = ConversationContext.of(kind);
 		return new ConversationDetailView(convId, kind, context.name(), title, participantIds,
 			identitiesOf(context, participantIds), lm.text(), unread, otherLastReadAt, lm.e2e(), lm.iv(),

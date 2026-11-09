@@ -510,18 +510,25 @@ public class MessagingService {
 	/**
 	 * A ultima mensagem de cada conversa do lote em uma consulta; conversa sem mensagem recebe
 	 * {@link LastMessagePreview#EMPTY}, como {@link #getLastMessagePreview(String)} devolveria.
+	 *
+	 * <p>{@code viewerId} entra na consulta para a previa respeitar "apagar para mim": o texto que
+	 * a pessoa escondeu nao pode reaparecer na caixa de entrada.</p>
 	 */
 	public java.util.Map<String, LastMessagePreview> getLastMessagePreviewByConversation(
-			java.util.Collection<String> conversationIds) {
+			java.util.Collection<String> conversationIds, String viewerId) {
 		java.util.Map<String, LastMessagePreview> previas = new java.util.HashMap<>();
-		repository.findLastMessagesByConversations(conversationIds).forEach((conversationId, mensagem) ->
+		repository.findLastMessagesByConversations(conversationIds, viewerId).forEach((conversationId, mensagem) ->
 			previas.put(conversationId, new LastMessagePreview(mensagem.text(), mensagem.e2e(), mensagem.iv(),
 				mensagem.encryptedKeys(), mensagem.createdAt(), mensagem.senderId())));
 		return previas;
 	}
 
-	public LastMessagePreview getLastMessagePreview(String conversationId) {
-		return repository.findLastMessage(conversationId)
+	/**
+	 * A previa que {@code viewerId} ve: a mensagem que ele apagou para si nao serve. Usado no
+	 * detalhe da conversa, para a tela nao mostrar o texto que a pessoa limitou.
+	 */
+	public LastMessagePreview getVisibleLastMessagePreview(String conversationId, String viewerId) {
+		return repository.findLastVisibleMessage(conversationId, viewerId)
 			.map(m -> new LastMessagePreview(m.text(), m.e2e(), m.iv(), m.encryptedKeys(), m.createdAt(), m.senderId()))
 			.orElse(LastMessagePreview.EMPTY);
 	}

@@ -143,9 +143,9 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 	public int countUnread(String conversationId, String userId) {
 		var participant = participantRepo.findByConversationIdAndUserId(conversationId, userId).orElse(null);
 		if (participant == null || participant.getLastReadAt() == null) {
-			return messageRepo.countByConversationId(conversationId);
+			return messageRepo.countVisibleByConversationId(conversationId, userId);
 		}
-		return messageRepo.countUnreadAfter(conversationId, participant.getLastReadAt());
+		return messageRepo.countUnreadAfter(conversationId, participant.getLastReadAt(), userId);
 	}
 
 	@Override
@@ -196,12 +196,13 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 	}
 
 	@Override
-	public java.util.Map<String, Message> findLastMessagesByConversations(java.util.Collection<String> conversationIds) {
+	public java.util.Map<String, Message> findLastMessagesByConversations(java.util.Collection<String> conversationIds,
+			String viewerId) {
 		if (conversationIds == null || conversationIds.isEmpty()) {
 			return java.util.Map.of();
 		}
 		java.util.Map<String, Message> lastMessages = new java.util.HashMap<>();
-		for (MessageJpaEntity entity : messageRepo.findLastMessagesOfConversations(conversationIds)) {
+		for (MessageJpaEntity entity : messageRepo.findLastMessagesOfConversations(conversationIds, viewerId)) {
 			Message mensagem = entity.toDomain();
 			lastMessages.put(mensagem.conversationId(), mensagem);
 		}
@@ -211,6 +212,13 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 	@Override
 	public Optional<Message> findLastMessage(String conversationId) {
 		return messageRepo.findTopByConversationIdOrderByCreatedAtDesc(conversationId)
+			.map(MessageJpaEntity::toDomain);
+	}
+
+	@Override
+	public Optional<Message> findLastVisibleMessage(String conversationId, String viewerId) {
+		return messageRepo.visibleLastMessages(conversationId, viewerId, PageRequest.of(0, 1)).stream()
+			.findFirst()
 			.map(MessageJpaEntity::toDomain);
 	}
 
