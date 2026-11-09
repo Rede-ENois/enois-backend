@@ -71,6 +71,9 @@ class CallEventRoomTests {
 	@Autowired
 	private ObjectMapper objectMapper;
 
+	@Autowired
+	private org.springframework.jdbc.core.JdbcTemplate jdbc;
+
 	@Test
 	void salaDoEncontroNasceAoVivoComQuemAbriuDentroESemToque() throws Exception {
 		var host = auth("event-call-host1");
@@ -175,6 +178,24 @@ class CallEventRoomTests {
 		assertThat(callNotifications(attending)).anyMatch(item -> "CALL_EVENT_LIVE".equals(item.get("kind").asText()));
 		// Quem não tem vínculo com o encontro não recebe nada: o aviso não é um broadcast.
 		assertThat(callNotifications(stranger)).noneMatch(item -> "CALL_EVENT_LIVE".equals(item.get("kind").asText()));
+	}
+
+	@Test
+	void menorSemSupervisaoNaoEntraNaSala() throws Exception {
+		var host = auth("event-call-host-menor");
+		var minor = auth("event-call-menor");
+		String eventId = createEvent(host, "event-call-menor");
+		String callId = startEventCall(host, eventId, "event-call-menor").get("id").asText();
+
+		// A conta passa a ser de 16 anos sem responsável autorizado: a escrita barra a entrada,
+		// porque entrar numa chamada é escrita (ECA Digital).
+		jdbc.update("UPDATE users SET birth_date = ? WHERE id = ?",
+			LocalDate.now().minusYears(16).minusMonths(1).toString(), minor.userId());
+
+		mockMvc.perform(post("/calls/" + callId + "/join")
+				.header("X-Session-Token", minor.token()))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("PARENTAL_CONSENT_REQUIRED"));
 	}
 
 	// ------------------------------------------------------------------ apoio

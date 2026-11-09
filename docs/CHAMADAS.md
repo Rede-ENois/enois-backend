@@ -236,7 +236,12 @@ escopo é documentação):
 | `GET /media/{mediaId}` é público e devolve `objectKey`/`cdnUrl` de um asset `REPORT_CAPTURE` a quem souber o id; o binário em `/storage/{key}` é de moderador, mas o identificador do objeto não é | `MediaContractController` × `MediaStorageProxyController` |
 | Não existe trilha de auditoria de quem abriu a evidência (nem de quem registrou a denúncia) | `MediaStorageProxyController.read` |
 | A captura sai do navegador para o provedor externo de análise sem aviso ao participante | `ModerationAiService.reportImages` |
-| `AgeGate` (`PARENTAL_CONSENT_REQUIRED`) não é aplicado no módulo de chamadas | `shared/age/AgeGate` |
+
+O `AgeGate` da plataforma (`PARENTAL_CONSENT_REQUIRED`) passou a valer para chamadas em
+2026-11-09: entrar (abrir, atender ou entrar em sala) e o caminho do gateway exigem data de
+nascimento declarada e, para menor de 18, autorização parental ativa — a mesma regra das demais
+escritas (regra de idade: cadastro a partir de 16, supervisão obrigatória até os 18, ver
+`shared/age/AgePolicy`). A lacuna abaixo foi registrada antes da correção e está fechada.
 
 O stream `/conversations/stream` ganha o evento `call` com `{"callId","state","conversationId"?,`
 `"groupId"?}`; o cliente busca o estado real na rota de chamadas, que autoriza de novo.

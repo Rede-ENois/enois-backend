@@ -48,8 +48,13 @@ class AgePolicyTests {
 	@Autowired
 	private org.springframework.jdbc.core.JdbcTemplate jdbc;
 
-	/** Data que faz a pessoa ter 15 anos hoje (menor de teste). */
+	/** Data que faz a pessoa ter 16 anos e ainda não 18: menor supervisionado, cadastro liberado. */
 	private static String minorBirthDate() {
+		return LocalDate.now(BRAZIL).minusYears(16).minusMonths(1).toString();
+	}
+
+	/** Data que faz a pessoa ter 15 anos hoje: abaixo do piso de cadastro. */
+	private static String underMinimumBirthDate() {
 		return LocalDate.now(BRAZIL).minusYears(15).toString();
 	}
 
@@ -92,6 +97,27 @@ class AgePolicyTests {
 
 		String ancient = signup("age_antigo", "1800-01-01");
 		org.assertj.core.api.Assertions.assertThat(ancient).contains("INVALID_BIRTH_DATE");
+	}
+
+	@Test
+	void signupBelowSixteenIsRejectedWithTheMinimumAge() throws Exception {
+		// A plataforma e 16+: abaixo disso nao existe cadastro, e o codigo diz o motivo.
+		String response = signup("age_quizeanos", underMinimumBirthDate());
+		org.assertj.core.api.Assertions.assertThat(response).contains("INVALID_BIRTH_DATE");
+		org.assertj.core.api.Assertions.assertThat(response).contains("16 anos");
+	}
+
+	@Test
+	void sixteenYearOldSignsUpButStaysSupervised() throws Exception {
+		// 16 e 17 anos entram, mas como menor supervisionado: cadastro passa, escrita nao.
+		String response = signup("age_dezesseis", minorBirthDate());
+		org.assertj.core.api.Assertions.assertThat(response).contains("verificationRequired");
+
+		String token = login("age_dezesseis");
+		mockMvc.perform(get("/me/age-state").header("X-Session-Token", token))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.state").value("MINOR_CONSENT_PENDING"))
+			.andExpect(jsonPath("$.minor").value(true));
 	}
 
 	@Test

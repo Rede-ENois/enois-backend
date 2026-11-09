@@ -28,6 +28,7 @@ import com.socialcoisa.rede.groups.domain.GroupTopic;
 import com.socialcoisa.rede.groups.domain.GroupTopicStatus;
 import com.socialcoisa.rede.notifications.application.NotificationService;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
+import com.socialcoisa.rede.shared.age.AgeGate;
 import com.socialcoisa.rede.shared.security.UserRateLimiter;
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -62,6 +63,7 @@ public class CallService implements CallRoomAuthorization {
 	private final NotificationService notifications;
 	private final UserProfileRepository profiles;
 	private final UserRateLimiter rateLimiter;
+	private final AgeGate ageGate;
 	private final ApplicationEventPublisher events;
 	private final Clock clock;
 	/**
@@ -72,7 +74,7 @@ public class CallService implements CallRoomAuthorization {
 
 	public CallService(CallRepository calls, CallAudience audience, TopicLookup topics, EventLookup eventLookup,
 			MeetingTokenIssuer tokens, NotificationService notifications, UserProfileRepository profiles,
-			UserRateLimiter rateLimiter, ApplicationEventPublisher events, Clock clock,
+			UserRateLimiter rateLimiter, AgeGate ageGate, ApplicationEventPublisher events, Clock clock,
 			PlatformTransactionManager transactionManager) {
 		this.entrance = new TransactionTemplate(transactionManager);
 		this.calls = calls;
@@ -83,6 +85,7 @@ public class CallService implements CallRoomAuthorization {
 		this.notifications = notifications;
 		this.profiles = profiles;
 		this.rateLimiter = rateLimiter;
+		this.ageGate = ageGate;
 		this.events = events;
 		this.clock = clock;
 	}
@@ -92,6 +95,7 @@ public class CallService implements CallRoomAuthorization {
 	@Transactional
 	public CallView startDirect(String conversationId, String actorId, CallKind kind) {
 		requireConfigured();
+		ageGate.requireCanWrite(actorId);
 		if (!audience.isParticipant(conversationId, actorId)) {
 			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
 		}
@@ -135,6 +139,7 @@ public class CallService implements CallRoomAuthorization {
 	@Transactional
 	public CallView startGroup(String groupId, String topicId, String actorId, CallKind kind) {
 		requireConfigured();
+		ageGate.requireCanWrite(actorId);
 		if (audience.roleIn(groupId, actorId) == null) {
 			throw new ApiException(403, "NOT_GROUP_MEMBER", "Voce nao e membro deste grupo.");
 		}
@@ -173,6 +178,7 @@ public class CallService implements CallRoomAuthorization {
 	@Transactional
 	public CallView startEvent(String eventId, String actorId, CallKind kind) {
 		requireConfigured();
+		ageGate.requireCanWrite(actorId);
 		// A sala e escolha do evento: sem a caixinha ligada, nao ha "Tamo junto" para abrir.
 		eventLookup.requireTamoJunto(eventId);
 		rateLimiter.require(actorId, UserRateLimiter.START_CALL);
@@ -196,6 +202,7 @@ public class CallService implements CallRoomAuthorization {
 
 	@Transactional
 	public CallView answer(String callId, String actorId) {
+		ageGate.requireCanWrite(actorId);
 		CallSession call = requireCall(callId, actorId);
 		if (call.modality() != CallModality.DIRECT) {
 			throw new ApiException(409, "NOT_A_DIRECT_CALL", "Chamadas de grupo sao atendidas entrando na sala.");
@@ -334,6 +341,9 @@ public class CallService implements CallRoomAuthorization {
 	/** Vínculo + estado + registro da entrada. Vale tanto para o painel quanto para o gateway. */
 	private void enter(CallSession call, String actorId) {
 		try {
+			// ECA Digital: entrar em chamada (1:1, grupo ou sala aberta) é escrita. Menor sem a
+			// autorização do responsável não entra; a recusa é registrada como qualquer outra.
+			ageGate.requireCanWrite(actorId);
 			audience.requireCanJoin(call, actorId);
 		}
 		catch (ApiException denied) {
