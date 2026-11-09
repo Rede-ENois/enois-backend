@@ -17,6 +17,7 @@ arquivo primeiro e siga a ordem das fases.
 | Faísca | `coin/` (V69) | `coin_accounts` com `version` (concorrência otimista) + `coin_entries` (razão com `Kind`) |
 | Rate limiting | resilience4j, `instances.auth` (20/periodo) e `instances.search` | **só nesses dois** — não há limiter global por IP |
 | Validação de URL externa | `games/application/GameUrlGuard` (2026-10-18) | https, sem credencial, host público (loopback/privado/link-local/IPv6 local) |
+| Anti-enumeração e scraping | `shared/security/Enumeration*` + [`ANTI-ENUMERACAO.md`](ANTI-ENUMERACAO.md) (2026-11-09) | filtro central, pontua comportamento (identificadores distintos, sequência, 404), shadow mode por padrão, bloqueio temporário progressivo |
 
 ## 0.1 Fase B — o que já estava de pé e o que foi provado (2026-10-18)
 
