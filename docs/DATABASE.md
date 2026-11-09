@@ -204,6 +204,24 @@ recibo e executa só os que faltaram.
 | metadata | TEXT (nullable) |
 | created_at | TIMESTAMP |
 
+### `email_log`
+
+Metadado de cada e-mail enviado (o corpo não é gravado). Alimenta o painel de operações.
+
+| Coluna | Tipo |
+|---|---|
+| id | VARCHAR(64) PK |
+| to_email | VARCHAR(180) |
+| subject | VARCHAR(200) |
+| kind | VARCHAR(40) — SIGNUP, PASSWORD_RESET, DIGEST, TWO_FACTOR… |
+| status | VARCHAR(16) — SENT, FAILED |
+| error | VARCHAR(500) (nullable) |
+| created_at | TIMESTAMP |
+
+Linhas mais velhas que a janela de retenção (`rede.email-log.retention.days`, 30 dias) saem pelo
+`EmailLogRetentionWorker`, em lotes por rodada. O painel só mostra as mais recentes; guardar o
+destinatário além desse prazo não tem função operacional e é dado pessoal sem uso.
+
 ---
 
 ## V2 - Feed Interactions
