@@ -1,5 +1,11 @@
 -- Origem única por dono (projeto Énóis Calendar, Fase 1).
 --
+-- RENUMERADA de V260 para V262: entrou na qa com o mesmo número da
+-- V260__notifications_user_created_index (que o merge do #579 já tinha levado para a qa e o
+-- banco da QA aplicou), e o Flyway recusa o boot com "Found more than one migration with
+-- version 260" — o CI da qa falhou nas duas rodadas seguintes com esse erro. O conteúdo é o
+-- mesmo, só o número muda.
+--
 -- A D3 promete que criar a entrada de uma mentoria duas vezes não gera dois compromissos, e o
 -- mecanismo é o banco recusando o duplicado. A V257 criou um índice COMUM em (source_type,
 -- source_id), que acelera a busca mas não impede nada: dois cliques, ou o retry de um cliente,
