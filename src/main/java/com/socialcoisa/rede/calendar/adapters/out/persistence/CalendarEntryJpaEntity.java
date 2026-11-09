@@ -17,7 +17,8 @@ import jakarta.persistence.Table;
 @Entity
 @Table(name = "calendar_entries", indexes = {
 		@Index(name = "idx_calendar_entries_owner_start", columnList = "owner_id, starts_at, state"),
-		@Index(name = "idx_calendar_entries_source", columnList = "source_type, source_id")})
+		@Index(name = "uq_calendar_entries_source", columnList = "owner_id, source_type, source_id",
+				unique = true)})
 class CalendarEntryJpaEntity {
 
 	@Id

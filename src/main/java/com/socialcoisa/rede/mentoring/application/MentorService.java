@@ -25,6 +25,9 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import com.socialcoisa.rede.calendar.application.CalendarSourceService;
+import com.socialcoisa.rede.calendar.domain.CalendarKind;
+import com.socialcoisa.rede.calendar.domain.CalendarScope;
 import com.socialcoisa.rede.coin.application.CoinService;
 import com.socialcoisa.rede.mentoring.application.port.out.MentorRepository;
 import com.socialcoisa.rede.mentoring.domain.Mentor;
@@ -57,18 +60,23 @@ public class MentorService {
 	public record AvailabilityRule(int dayOfWeek, List<String> times) {
 	}
 
+	/** Prefixo da origem na agenda: a sessão de mentoria ocupa uma entrada com este tipo. */
+	static final String CALENDAR_SOURCE = "MENTORING";
+
 	private final MentorRepository repository;
 	private final Clock clock;
 	private final CoinService coins;
 	private final MentoringRooms rooms;
+	private final CalendarSourceService calendar;
 	private final TransactionTemplate settlement;
 
 	public MentorService(MentorRepository repository, Clock clock, CoinService coins, MentoringRooms rooms,
-			PlatformTransactionManager transactionManager) {
+			CalendarSourceService calendar, PlatformTransactionManager transactionManager) {
 		this.repository = repository;
 		this.clock = clock;
 		this.coins = coins;
 		this.rooms = rooms;
+		this.calendar = calendar;
 		this.settlement = new TransactionTemplate(transactionManager);
 		this.settlement.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
 	}
@@ -280,7 +288,26 @@ public class MentorService {
 				"Mentoria: " + String.join(", ", mentor.expertise()));
 		}
 		repository.saveSession(session);
+		syncCalendar(session, mentor, slot);
 		return session;
+	}
+
+	/**
+	 * Põe a sessão na agenda do mentorado. O dono da entrada é quem paga e vai comparecer; o mentor
+	 * tem a própria agenda, e não é o organizador dela.
+	 *
+	 * <p>A sessão paga já saiu do escrow quando chega aqui, então uma falha na agenda desfaz tudo
+	 * (é a mesma transação). É o certo: sessão marcada e cobrada sem aparecer na agenda seria pior
+	 * do que a pessoa tentar de novo.
+	 */
+	private void syncCalendar(MentorSession session, Mentor mentor, MentorSlot slot) {
+		if (slot.startsAt() == null || slot.endsAt() == null) {
+			return;
+		}
+		calendar.upsert(new CalendarSourceService.UpsertInput(session.menteeId(), CALENDAR_SOURCE, session.id(),
+			CalendarScope.PROFESSIONAL, CalendarKind.MENTORING,
+			"Mentoria: " + String.join(", ", mentor.expertise()), session.message(), slot.startsAt(),
+			slot.endsAt(), AGENDA_ZONE.getId()));
 	}
 
 	@Transactional
@@ -594,6 +621,9 @@ public class MentorService {
 		}
 		MentorSession cancelled = session.cancel().settled(clock.instant());
 		repository.saveSession(cancelled);
+		// Cancelar a sessão cancela o compromisso, não o apaga: a agenda de quem marcou continua
+		// mostrando que aquele horário foi cancelado.
+		calendar.cancel(cancelled.menteeId(), CALENDAR_SOURCE, cancelled.id());
 		if (slot != null && !slot.available() && slot.startsAt() != null
 				&& slot.startsAt().isAfter(clock.instant())) {
 			repository.saveSlot(slot.release());
