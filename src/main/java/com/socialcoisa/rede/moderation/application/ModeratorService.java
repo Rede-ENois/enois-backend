@@ -336,13 +336,23 @@ public class ModeratorService {
 				return new SanctionResult(target.id(), target.username(), type.name(), "ALREADY_BANNED");
 			}
 			// Reaproveita a restrição ativa (mesmo id) em vez de criar uma segunda sanção ACTIVE.
+			//
+			// O tipo nasce CERTO: BAN é BAN (sem recurso), SUSPENDED é suspensão com prazo, e
+			// PERMABAN é o definitivo. Antes, o tipo BAN caía no "suspended" — que é suspensão com
+			// prazo e volta sozinha. Pior: a suspensão não levava o conteúdo embora, então o post
+			// banido continuava no ar.
 			UserSanction sanction = active
 				.map(existing -> existing.escalateTo(type, cleanReason))
-				.orElseGet(() -> type == SanctionType.PERMABAN
-					? UserSanction.permaBan("sanc_" + randomId(), target.id(), reference, cleanReason,
-						Instant.now(clock))
-					: UserSanction.suspended("sanc_" + randomId(), target.id(), reference, cleanReason,
-						Instant.now(clock)));
+				.orElseGet(() -> switch (type) {
+					case PERMABAN -> UserSanction.permaBan("sanc_" + randomId(), target.id(), reference,
+						cleanReason, Instant.now(clock));
+					case BAN -> UserSanction.ban("sanc_" + randomId(), target.id(), reference, cleanReason,
+						Instant.now(clock));
+					case SUSPENDED -> UserSanction.suspended("sanc_" + randomId(), target.id(), reference,
+						cleanReason, Instant.now(clock));
+					case RESTRICTION -> UserSanction.create("sanc_" + randomId(), target.id(), reference,
+						cleanReason, Instant.now(clock));
+				});
 			sanctionService.banAuthor(sanction, target.id(), adminId, sessions);
 		}
 		else {

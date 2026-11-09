@@ -173,6 +173,38 @@ class ReportController {
 		return new BulkDeletePostsResult(items.size(), items);
 	}
 
+	/**
+	 * Remove QUALQUER publicação pelo id, sem depender de denúncia.
+	 *
+	 * <p>Antes só existia a remoção em lote dos posts que já estavam na fila de suspeitos: um admin
+	 * que visse um post problemático no feed não tinha por onde agir. Aqui o alvo é o id do post,
+	 * e a resposta DIZ o que aconteceu — {@code REMOVED}, {@code NOT_FOUND} ou
+	 * {@code ALREADY_OFFLINE} — em vez de devolver sucesso para uma remoção que não aconteceu.</p>
+	 *
+	 * <p>É soft delete com auditoria (o mesmo caminho da moderação): o post sai do feed, as
+	 * republicações caem junto, a mídia entra na fila de remoção e o registro fica em
+	 * {@code audit_logs}. Só admin.</p>
+	 */
+	@PostMapping("/admin/posts/{postId}/remove")
+	ResponseEntity<Map<String, Object>> removeAnyPost(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String postId, @RequestBody(required = false) RemovePostRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		adminGuard.requireAdmin(user);
+		String reason = request == null || request.note() == null || request.note().trim().length() < 10
+			? "Remocao administrativa (motivo nao informado)"
+			: request.note().trim();
+		var outcome = removePost.removeAsModeratorWithOutcome(user.id().value(), postId, "ADMIN:" + reason);
+		return switch (outcome) {
+			case REMOVED -> ResponseEntity.ok(Map.of("postId", postId, "status", "REMOVED"));
+			case NOT_FOUND -> ResponseEntity.status(404)
+				.body(Map.of("postId", postId, "status", "NOT_FOUND",
+					"message", "Publicacao nao encontrada."));
+			case ALREADY_OFFLINE -> ResponseEntity.ok(Map.of("postId", postId, "status", "ALREADY_OFFLINE",
+				"message", "Esta publicacao ja estava fora do ar."));
+		};
+	}
+
 	@PostMapping("/admin/reports/{reportId}/penalize")
 	ResponseEntity<String> penalize(@RequestHeader("X-Session-Token") String sessionToken, @PathVariable String reportId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
@@ -275,5 +307,9 @@ class ReportController {
 			throw new com.socialcoisa.rede.shared.web.ApiException(403, "FORBIDDEN",
 				"Acesso restrito a moderadores.");
 		}
+	}
+
+	/** Motivo da remoção administrativa (o painel manda o que o admin digitou). */
+	record RemovePostRequest(String note) {
 	}
 }

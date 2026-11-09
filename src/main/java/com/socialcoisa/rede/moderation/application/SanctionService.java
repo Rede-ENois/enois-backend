@@ -128,6 +128,10 @@ public class SanctionService {
 		if (sanction.type() == com.socialcoisa.rede.moderation.domain.SanctionType.SUSPENDED) {
 			UserSanction saved = sanctions.save(sanction);
 			sessions.revokeAllByUser(authorId, Instant.now(clock));
+			// A suspensão bloqueia a conta como o ban: o conteúdo dela também sai do ar agora.
+			// Sem isto, "banir" pelo painel deixava os posts da pessoa publicados — que é
+			// exatamente o que o painel promete fazer.
+			banCleanup.cleanup(saved.id(), authorId);
 			return saved;
 		}
 		UserSanction saved = sanctions.save(sanction);
