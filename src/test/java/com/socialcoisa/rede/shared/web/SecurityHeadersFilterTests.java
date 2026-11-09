@@ -52,9 +52,19 @@ class SecurityHeadersFilterTests {
 		new SecurityHeadersFilter("https://meet.example.test/").doFilter(new MockHttpServletRequest("GET", "/version"),
 			response, new MockFilterChain());
 		String policy = response.getHeader("Permissions-Policy");
-		assertThat(policy).contains("microphone=(self https://meet.example.test)");
-		assertThat(policy).contains("camera=(self https://meet.example.test)");
+		assertThat(policy).contains("microphone=(self \"https://meet.example.test\")");
+		assertThat(policy).contains("camera=(self \"https://meet.example.test\")");
+		assertThat(policy).contains("display-capture=(self \"https://meet.example.test\")");
 		assertThat(policy).doesNotContain("microphone=()").doesNotContain("camera=()");
+	}
+
+	@Test
+	void aOrigemDoServidorDeReuniaoVaiEntreAspas() throws Exception {
+		MockHttpServletResponse response = new MockHttpServletResponse();
+		new SecurityHeadersFilter("https://meet.example.test").doFilter(new MockHttpServletRequest("GET", "/version"),
+			response, new MockFilterChain());
+		// Sem as aspas o navegador descarta o item e a sala abre sem mídia.
+		assertThat(response.getHeader("Permissions-Policy")).doesNotContain("(self https://");
 	}
 
 	@Test
@@ -62,7 +72,7 @@ class SecurityHeadersFilterTests {
 		MockHttpServletResponse response = new MockHttpServletResponse();
 		new SecurityHeadersFilter("http://127.0.0.1:8443").doFilter(new MockHttpServletRequest("GET", "/version"),
 			response, new MockFilterChain());
-		assertThat(response.getHeader("Permissions-Policy")).contains("camera=(self http://127.0.0.1:8443)");
+		assertThat(response.getHeader("Permissions-Policy")).contains("camera=(self \"http://127.0.0.1:8443\")");
 	}
 
 	@Test

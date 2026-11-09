@@ -29,6 +29,9 @@ class SecurityHeadersFilter extends OncePerRequestFilter {
 	 * Câmera e microfone ficam abertos para a própria página e para o servidor de reunião que a
 	 * gente hospeda — é de onde a pessoa entra na chamada. Nenhum outro domínio entra na lista: a
 	 * política continua fechando a mídia para terceiros.
+	 *
+	 * A origem vai entre aspas porque a gramática da política exige: sem elas o navegador descarta
+	 * o item e a lista fica só com `self`. `self` é palavra-chave e não se cita.
 	 */
 	private final String permissionsPolicy;
 
@@ -42,16 +45,17 @@ class SecurityHeadersFilter extends OncePerRequestFilter {
 			try {
 				java.net.URI uri = java.net.URI.create(callUrl.trim());
 				if (uri.getScheme() != null && uri.getHost() != null) {
-					hosts = " " + uri.getScheme() + "://" + uri.getHost()
-						+ (uri.getPort() > 0 ? ":" + uri.getPort() : "");
+					hosts = " \"" + uri.getScheme() + "://" + uri.getHost()
+						+ (uri.getPort() > 0 ? ":" + uri.getPort() : "") + "\"";
 				}
 			}
 			catch (IllegalArgumentException malformed) {
 				// URL inválida não abre nada: a política fica só com `self`.
 			}
 		}
-		this.permissionsPolicy = "geolocation=(), microphone=(self" + hosts + "), camera=(self" + hosts
-			+ "), display-capture=(self)";
+		String media = "(self" + hosts + ")";
+		this.permissionsPolicy = "geolocation=(), microphone=" + media + ", camera=" + media
+			+ ", display-capture=" + media;
 	}
 
 	@Override
