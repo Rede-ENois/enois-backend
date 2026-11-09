@@ -27,6 +27,9 @@ cardinalidade fixa (`shared/outbox/OutboxMetrics`):
   worker parado ou handler quebrando sistematicamente (o `last_error` da linha mais antiga diz qual).
 - `rede_outbox_failed_attempts` — soma das tentativas falhadas dos pendentes: pressão de falha.
 - `rede_outbox_events_total` — linhas na outbox, hoje limitadas pela janela de retenção (14 dias).
+- `rede_outbox_failed_terminal_total` — **eventos que esgotaram as tentativas e precisam de
+  intervenção humana**. O efeito deles não foi aplicado; a linha continua na tabela com o
+  `last_error`. Qualquer valor acima de zero é chamado para alguém olhar.
 - `rede_media_upload_bytes` — tamanho efetivo gravado por upload de mídia, por tipo (`image`,
   `video`, `audio`). Hoje o valor gravado é o próprio arquivo recebido: **não há compressão** (#546).
   A série existe para mostrar o crescimento e para a diferença entre "recebido" e "gravado" aparecer

@@ -185,6 +185,13 @@ Linhas `PROCESSED` são removidas depois da janela de retenção (`rede.outbox.r
 dias) pelo `OutboxRetentionWorker`; `PENDING` nunca é removido. Os recibos do evento saem na mesma
 transação.
 
+**`FAILED` é terminal.** Um evento que esgota as tentativas (`rede.outbox.max-attempts`, 20) sai de
+`PENDING` e não volta à fila: reprocessar para sempre não conserta handler quebrado, só queima CPU
+e — como o lote sai pelos 50 mais antigos — empurra os eventos novos para fora da leitura. A linha
+continua na tabela (o efeito **não** foi aplicado e o `last_error` diz por quê), o contador
+`rede_outbox_failed_terminal_total` avisa, e a intervenção é humana. `FAILED` não é removido pela
+retenção: sair da fila não é sumir do banco.
+
 ### `processed_events`
 
 Tabela legada (V1). O worker não a usa mais: a linha era gravada antes da execução e não provava
