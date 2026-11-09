@@ -31,6 +31,87 @@ permissions:
 
 jobs:
   # ===========================================================================
+  # Migrações duplicadas (PR e push).
+  #
+  # O boot e o schema-check rodam contra as migrações do PR isolado, então uma versão repetida
+  # só aparece no merge: duas V260 (#579/#568) e antes duas V255 (#527/#529) passaram verdes no
+  # próprio PR e quebraram a qa. Este job compara os números do branch com os da branch base e
+  # reprova a versão que já existe no destino com outro nome — o caso de quem renumerou por cima.
+  # ===========================================================================
+  migrations-unique:
+    name: 🧪 Migrações sem versão duplicada
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 📥 Checkout (com a branch base)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: 🔍 Comparar versões do branch com a base
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          DIR=src/main/resources/db/migration
+
+          versions() {
+            ls "$1" | sed -nE 's/^V([0-9]+)__([A-Za-z0-9_]+)\.sql$/\1 \2/p' | sort -n
+          }
+
+          echo "::group::Versões do branch ($HEAD_REF)"
+          versions "$DIR"
+          echo "::endgroup::"
+
+          dup=$(versions "$DIR" | awk '{print $1}' | uniq -d)
+          if [ -n "$dup" ]; then
+            echo "::error::Versão de migração repetida no próprio branch: $dup"
+            exit 1
+          fi
+
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "Push/workflow_dispatch: sem branch base para comparar."
+            exit 0
+          fi
+
+          if [ -z "${BASE_REF:-}" ] || [ "$BASE_REF" = "null" ]; then
+            echo "::error::Não foi possível resolver a branch base do PR."
+            exit 1
+          fi
+
+          base="refs/remotes/origin/${BASE_REF}"
+          if ! git rev-parse --verify --quiet "$base" >/dev/null; then
+            git fetch --no-tags origin "+refs/heads/${BASE_REF}:${base}"
+          fi
+
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          git archive "$base" "$DIR" | tar -x -C "$tmp"
+          base_dir="$tmp/$DIR"
+
+          echo "::group::Versões da base ($BASE_REF)"
+          versions "$base_dir"
+          echo "::endgroup::"
+
+          # Mesma versão, arquivo diferente: o destino já aplicou (ou vai aplicar) uma migração
+          # com esse número e o Flyway recusa o boot com "Found more than one migration".
+          conflict=0
+          while read -r v name; do
+            bname=$(versions "$base_dir" | awk -v v="$v" '$1==v {print $2}')
+            if [ -n "$bname" ] && [ "$bname" != "$name" ]; then
+              echo "::error::V$v existe como V${v}__${bname}.sql na $BASE_REF e como V${v}__${name}.sql no branch — renumere a migração nova."
+              conflict=1
+            fi
+          done < <(versions "$DIR")
+
+          if [ "$conflict" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Sem colisão com a $BASE_REF."
+
+  # ===========================================================================
   # Validação de build em PR (sempre hosted, nunca self-hosted, sem credenciais)
   # ===========================================================================
   validate-pr-build:
