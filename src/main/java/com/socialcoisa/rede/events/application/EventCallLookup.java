@@ -32,6 +32,21 @@ public class EventCallLookup implements EventLookup {
 	}
 
 	/**
+	 * A sala so existe se quem criou o evento a ligou: o card sem a caixinha nao ganha lugar de
+	 * conversa. O 409 diz o motivo — o 404 seria mentira, porque o evento esta ali.
+	 */
+	@Override
+	public void requireTamoJunto(String eventId) {
+		Event event = repository.findById(eventId)
+			.orElseThrow(() -> new com.socialcoisa.rede.shared.web.ApiException(404, "EVENT_NOT_FOUND",
+				"Evento nao encontrado."));
+		if (!event.tamoJunto()) {
+			throw new com.socialcoisa.rede.shared.web.ApiException(409, "EVENT_TAMO_JUNTO_DISABLED",
+				"Este evento nao tem a sala Tamo junto.");
+		}
+	}
+
+	/**
 	 * Quem criou mais quem confirmou presença, sem repetir. A lista é só para o aviso "está ao vivo":
 	 * ela não limita quem pode entrar, e por isso não precisa ser exata — precisa ser curta.
 	 */

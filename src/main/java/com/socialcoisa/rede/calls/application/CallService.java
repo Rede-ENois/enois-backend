@@ -173,7 +173,8 @@ public class CallService implements CallRoomAuthorization {
 	@Transactional
 	public CallView startEvent(String eventId, String actorId, CallKind kind) {
 		requireConfigured();
-		eventLookup.requireExists(eventId);
+		// A sala e escolha do evento: sem a caixinha ligada, nao ha "Tamo junto" para abrir.
+		eventLookup.requireTamoJunto(eventId);
 		rateLimiter.require(actorId, UserRateLimiter.START_CALL);
 		Instant now = clock.instant();
 		List<String> interested = eventLookup.interestedIn(eventId);

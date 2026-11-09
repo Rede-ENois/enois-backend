@@ -6,6 +6,13 @@ import com.socialcoisa.rede.shared.geo.CityState;
 
 public class Event {
 
+	/**
+	 * O fuso que a rede usa para o dia (streaks, onboarding): a data e a hora do evento são o que o
+	 * relógio de quem participa mostra, e no Brasil isso é -03:00 (com horário de verão, a regra
+	 * regional cuida).
+	 */
+	public static final java.time.ZoneId NETWORK_ZONE = java.time.ZoneId.of("America/Sao_Paulo");
+
 	private final String id;
 	private String title;
 	private String date;
@@ -24,6 +31,8 @@ public class Event {
 	private Integer finalAttendeesCount;
 	private EventRecurrence recurrence = EventRecurrence.NONE;
 	private String seriesId;
+	/** Quem criou quer a sala "Tamo junto" no card deste evento. */
+	private boolean tamoJunto;
 
 	private Event(String id, String title, String date, String time, String format, String host, String cover,
 			String streamUrl, String location, String createdBy, Instant createdAt, Instant updatedAt) {
@@ -52,11 +61,15 @@ public class Event {
 	}
 
 	/**
-	 * Fim do evento (23:59:59 do dia informado, em UTC).
+	 * Fim do evento (a hora informada, no fuso da rede).
 	 *
 	 * A data e texto livre no schema, entao o parser aceita o formato ISO (o que o app envia) e o
 	 * brasileiro dd/MM/yyyy. Quando nenhum dos dois casa, devolve vazio: sem data confiavel o evento
 	 * NAO e considerado vencido — apagar dado pessoal por causa de um palpite seria pior.
+	 *
+	 * A hora que a pessoa digitou e a hora local dela: "20:00" tem que valer as 20h no relógio de
+	 * quem vai, nao as 20h de UTC (que no Brasil chegam as 17h e encerravam o evento tres horas
+	 * antes). O fuso e o mesmo que o resto do app usa para o dia (streaks, onboarding).
 	 */
 	public java.util.Optional<Instant> expiresAt() {
 		java.time.LocalDate parsed = parseDate(date);
@@ -64,7 +77,7 @@ public class Event {
 			return java.util.Optional.empty();
 		}
 		java.time.LocalTime limit = parseTime(time).orElse(java.time.LocalTime.of(23, 59, 59));
-		return java.util.Optional.of(parsed.atTime(limit).toInstant(java.time.ZoneOffset.UTC));
+		return java.util.Optional.of(parsed.atTime(limit).atZone(NETWORK_ZONE).toInstant());
 	}
 
 	/** ISO (what the app sends) or dd/MM/yyyy; null when the free-text date cannot be read. */
@@ -140,7 +153,7 @@ public class Event {
 			java.util.regex.Matcher digits = java.util.regex.Pattern.compile("(\\d{5,})").matcher(date == null ? "" : date);
 			return digits.find();
 		}
-		Instant when = parsed.atStartOfDay().toInstant(java.time.ZoneOffset.UTC);
+		Instant when = parsed.atStartOfDay(NETWORK_ZONE).toInstant();
 		return when.isAfter(now.plus(MAX_AHEAD)) || when.isBefore(now.minus(MAX_BEHIND));
 	}
 
@@ -167,6 +180,16 @@ public class Event {
 	public void changeRecurrence(EventRecurrence recurrence, String seriesId) {
 		this.recurrence = recurrence == null ? EventRecurrence.NONE : recurrence;
 		this.seriesId = seriesId;
+	}
+
+	/** Liga/desliga a sala "Tamo junto" deste evento (escolha de quem cria ou edita). */
+	public void changeTamoJunto(boolean tamoJunto) {
+		this.tamoJunto = tamoJunto;
+	}
+
+	/** O card deste evento tem a sala "Tamo junto"? Sem isso, a sala nao existe nem pode ser aberta. */
+	public boolean tamoJunto() {
+		return tamoJunto;
 	}
 
 	public boolean isSanitized() {

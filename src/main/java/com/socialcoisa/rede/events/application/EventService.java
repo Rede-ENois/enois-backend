@@ -52,7 +52,8 @@ public class EventService {
 
 	@Transactional
 	public Event update(String eventId, String title, String date, String time, String format, String host,
-			String cover, String streamUrl, String location, String city, String state, String userId) {
+			String cover, String streamUrl, String location, Boolean tamoJunto, String city, String state,
+			String userId) {
 		Event event = getById(eventId);
 		if (!event.createdBy().equals(userId)) {
 			throw new ApiException(403, "NOT_EVENT_OWNER", "Este evento nao e seu.");
@@ -70,6 +71,11 @@ public class EventService {
 				"Cidade e estado so valem para evento presencial ou hibrido.");
 		}
 		event.placeAt(place);
+		// Ausente na requisicao = nao mexer: um cliente antigo (ou a edicao de outro campo) nao pode
+		// apagar a escolha de quem criou.
+		if (tamoJunto != null) {
+			event.changeTamoJunto(tamoJunto);
+		}
 		// Serie continua precisa de horario fixo mesmo depois da edicao de data.
 		if (event.recurrence() != EventRecurrence.NONE) {
 			requireScheduledTime(event);
@@ -81,7 +87,8 @@ public class EventService {
 
 	@Transactional
 	public Event create(String title, String date, String time, String format, String host, String cover,
-			String streamUrl, String location, String recurrence, String city, String state, String userId) {
+			String streamUrl, String location, String recurrence, boolean tamoJunto, String city, String state,
+			String userId) {
 		// Os mesmos tetos das colunas (`events.title varchar(255)`...): sem esta checagem o banco
 		// recusava a gravacao com "Data too long" e a pessoa recebia 409 "Operacao conflita com o
 		// estado atual dos dados" — que nao diz qual campo passou do limite.
@@ -100,6 +107,7 @@ public class EventService {
 				"Cidade e estado so valem para evento presencial ou hibrido.");
 		}
 		event.placeAt(place);
+		event.changeTamoJunto(tamoJunto);
 		EventRecurrence parsed = parseRecurrence(recurrence);
 		if (parsed != EventRecurrence.NONE) {
 			requireScheduledTime(event);

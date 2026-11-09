@@ -15,15 +15,15 @@ import com.socialcoisa.rede.events.domain.Event;
 /**
  * A janela de folga de 24h antes de a sanitizacao apagar as presencas, com relogio fixo.
  *
- * Existe por causa de um CI vermelho sem causa no codigo: a data do evento e texto livre e o
- * {@code Event.expiresAt()} a interpreta em UTC, enquanto o teste ponta a ponta montava o cenario
- * com {@code LocalDate.now()} (fuso local, UTC-3). Depois das 21h locais o UTC ja virou o dia, a
- * folga de 24h vencia e o evento era sanitizado — a asserta via 0 presencas onde esperava 1.
- * Verde de manha, vermelho de noite. Aqui o instante e explicito, entao o contrato fica pinado.
+ * A data/hora do evento e texto livre e {@code Event.expiresAt()} a interpreta no fuso da rede
+ * (America/Sao_Paulo) — antes era UTC, e o teste ponta a ponta montava o cenario com
+ * {@code LocalDate.now()} (fuso local, UTC-3): depois das 21h locais o UTC ja virou o dia, a folga
+ * de 24h vencia e o evento era sanitizado. Verde de manha, vermelho de noite. Aqui o instante e
+ * explicito, entao o contrato fica pinado: 00:01 do evento vale 03:01 em UTC.
  */
 class EventSanitizationWindowTests {
 
-	/** Evento que terminou as 00:01 UTC do dia informado. */
+	/** Evento que terminou as 00:01 no fuso da rede (= 03:01 UTC). */
 	private Event eventEndingAt(String date) {
 		return Event.create("e1", "Meetup", date, "00:01", "ONLINE", "Dona", null, null, null, "user",
 			Instant.parse("2026-10-01T00:00:00Z"));
@@ -40,17 +40,16 @@ class EventSanitizationWindowTests {
 
 	@Test
 	void keepsTheAttendanceWhileInsideTheGraceWindow() {
-		// Terminou 00:01 UTC; as 23:30 UTC do MESMO dia ainda esta dentro das 24h de folga.
-		EventService service = serviceAt("2026-10-15T23:30:00Z");
+		// Terminou 00:01 (= 03:01 UTC); as 02:30 UTC do MESMO dia ainda esta dentro das 24h de folga.
+		EventService service = serviceAt("2026-10-15T02:30:00Z");
 
 		assertThat(service.isReadyForSanitization(eventEndingAt("2026-10-15"))).isFalse();
 	}
 
 	@Test
 	void sanitizesOnceTheGraceWindowHasPassed() {
-		// 01:05 UTC do dia seguinte: a folga venceu as 00:01. Era exatamente esta a janela que fazia
-		// o teste ponta a ponta falhar quando rodava depois das 21h no fuso local.
-		EventService service = serviceAt("2026-10-16T01:05:00Z");
+		// 04:05 UTC do dia seguinte (= 01:05 no fuso da rede): a folga venceu as 03:01 UTC.
+		EventService service = serviceAt("2026-10-16T04:05:00Z");
 
 		assertThat(service.isReadyForSanitization(eventEndingAt("2026-10-15"))).isTrue();
 	}
@@ -58,7 +57,7 @@ class EventSanitizationWindowTests {
 	@Test
 	void theBoundaryItselfIsStillProtected() {
 		// No instante exato do fim da folga nada e apagado: a comparacao e "estritamente depois".
-		EventService service = serviceAt("2026-10-16T00:01:00Z");
+		EventService service = serviceAt("2026-10-16T03:01:00Z");
 
 		assertThat(service.isReadyForSanitization(eventEndingAt("2026-10-15"))).isFalse();
 	}

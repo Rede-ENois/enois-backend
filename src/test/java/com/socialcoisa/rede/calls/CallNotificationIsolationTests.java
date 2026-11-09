@@ -266,7 +266,9 @@ class CallNotificationIsolationTests {
 	private String createEvent(TestAuthHelper.AuthSession who, String key) throws Exception {
 		Map<String, Object> payload = new HashMap<>(Map.of("title", "Encontro " + key,
 			"date", java.time.LocalDate.now().plusMonths(2).toString(), "time", "19:00", "format", "ONLINE",
-			"host", "Enois"));
+			"host", "Enois",
+			// A sala do encontro agora e escolha de quem cria: estes cenarios testam o aviso, nao o opt-in.
+			"tamoJunto", true));
 		MvcResult result = mockMvc.perform(post("/events")
 				.header("X-Session-Token", who.token())
 				.header("Idempotency-Key", key)
