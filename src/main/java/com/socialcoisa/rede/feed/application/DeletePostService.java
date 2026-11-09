@@ -129,11 +129,20 @@ public class DeletePostService
 	@Override
 	@Transactional
 	public void removeAsModerator(String moderatorId, String postId, String reason) {
+		removeAsModeratorWithOutcome(moderatorId, postId, reason);
+	}
+
+	@Override
+	@Transactional
+	public RemovalOutcome removeAsModeratorWithOutcome(String moderatorId, String postId, String reason) {
 		Post post = postRepository.findById(new PostId(postId)).orElse(null);
+		if (post == null) {
+			return RemovalOutcome.NOT_FOUND;
+		}
 		// Post em quarentena também pode ser removido: é o desfecho de "violação confirmada" na
 		// revisão humana, e ele não está ACTIVE.
-		if (post == null || (!post.isActive() && !post.isQuarantined())) {
-			return;
+		if (!post.isActive() && !post.isQuarantined()) {
+			return RemovalOutcome.ALREADY_OFFLINE;
 		}
 		post.delete(clock.instant());
 		postRepository.save(post);
@@ -144,6 +153,7 @@ public class DeletePostService
 		requestMediaDeletion(post);
 		auditLogRepository.record(new com.socialcoisa.rede.feed.domain.UserId(moderatorId),
 			"POST_DELETED_BY_MODERATION", post.id().value(), normalizeReason(reason));
+		return RemovalOutcome.REMOVED;
 	}
 
 	@Override

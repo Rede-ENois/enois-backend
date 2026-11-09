@@ -89,12 +89,51 @@ public class GlobalExceptionHandler {
 
 	@ExceptionHandler(DataIntegrityViolationException.class)
 	ResponseEntity<ErrorResponse> handleConflict(DataIntegrityViolationException exception) {
-		// A resposta e generica de proposito (nao vaza detalhe de banco para quem chamou), mas o log
-		// guarda a causa raiz. Foi um "Data too long for column 'page_html'" invisivel que virou
-		// horas de investigacao: o 409 sozinho nao diz se foi coluna pequena, chave duplicada ou FK.
-		LOGGER.warn("data_integrity_violation: {}", rootMessage(exception));
-		return ResponseEntity.status(409)
-			.body(new ErrorResponse("CONFLICT", "Operacao conflita com o estado atual dos dados.", Instant.now()));
+		// A resposta NAO vaza detalhe de banco (a causa raiz fica no log), mas o CÓDIGO diz o que
+		// aconteceu. A mensagem única "Operacao conflita com o estado atual dos dados" era o que o
+		// painel mostrava quando algo falhava — sem dizer o quê, e a pessoa acabava achando que
+		// tinha feito algo errado. O código é estável (o front pode reagir a ele) e a mensagem é
+		// escrita para quem lê.
+		String cause = rootMessage(exception);
+		LOGGER.warn("data_integrity_violation: {}", cause);
+		String code = conflictCode(cause);
+		return ResponseEntity.status(409).body(new ErrorResponse(code, conflictMessage(code), Instant.now()));
+	}
+
+	/**
+	 * O código do conflito, a partir da causa que o banco devolveu. O texto original (em inglês,
+	 * do driver) fica no log; aqui vira o par (código estável, mensagem para quem lê).
+	 */
+	private static String conflictCode(String cause) {
+		String text = cause == null ? "" : cause.toLowerCase(java.util.Locale.ROOT);
+		if (text.contains("duplicate") || text.contains("unique")) {
+			return "CONFLICT_DUPLICATE";
+		}
+		if (text.contains("foreign key") || text.contains("referential")) {
+			return "CONFLICT_REFERENCE";
+		}
+		if (text.contains("too long") || text.contains("value too large") || text.contains("out of range")) {
+			return "CONFLICT_VALUE_TOO_LARGE";
+		}
+		if (text.contains("cannot be null") || text.contains("null value")) {
+			return "CONFLICT_MISSING_VALUE";
+		}
+		if (text.contains("check constraint")) {
+			return "CONFLICT_CHECK_CONSTRAINT";
+		}
+		return "CONFLICT";
+	}
+
+	/** A mensagem para quem lê: diz o que aconteceu, sem revelar estrutura do banco. */
+	private static String conflictMessage(String code) {
+		return switch (code) {
+			case "CONFLICT_DUPLICATE" -> "Este registro ja existe.";
+			case "CONFLICT_REFERENCE" -> "Operacao conflita com outro registro que depende deste.";
+			case "CONFLICT_VALUE_TOO_LARGE" -> "Valor maior do que o permitido.";
+			case "CONFLICT_MISSING_VALUE" -> "Faltou um dado obrigatorio.";
+			case "CONFLICT_CHECK_CONSTRAINT" -> "Valor fora das regras aceitas.";
+			default -> "Operacao conflita com o estado atual dos dados.";
+		};
 	}
 
 	/** A mensagem mais especifica da cadeia: o "Data too long for column ..." mora no fim dela. */

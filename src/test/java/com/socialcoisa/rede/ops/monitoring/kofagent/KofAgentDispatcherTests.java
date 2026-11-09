@@ -318,7 +318,12 @@ class KofAgentDispatcherTests {
 				dispatcher.onEvent(event("ERROR", "LOG", "burst " + i));
 			}
 			long elapsedMs = (System.nanoTime() - started) / 1_000_000;
-			assertThat(elapsedMs).as("20k events handed off while the sender is stuck").isLessThan(1500);
+			// O que este teste prova é que o produtor NÃO BLOQUEIA no envio: o remetente está preso
+			// por 10 s, então se a entrega bloqueasse o laço levaria ~10 s. O teto é metade disso —
+			// folgado o bastante para não depender da velocidade da máquina (o CI já reprovou este
+			// teste com 1,6 s num runner carregado, sem nenhuma regressão) e apertado o bastante
+			// para falhar se alguém trocar a entrega assíncrona por uma chamada direta.
+			assertThat(elapsedMs).as("20k events handed off while the sender is stuck").isLessThan(5_000);
 		}
 		finally {
 			release.countDown();
