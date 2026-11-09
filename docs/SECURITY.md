@@ -60,6 +60,29 @@ latência/custo da IA (Fase F).
    olha violação confirmada da conta. Nada a corrigir aqui, e o critério está escrito para não
    aparecer depois.
 
+## 2.1 Chamadas e denúncia de chamada — fatos de segurança verificados (2026-11-09)
+
+Auditoria feita para sustentar a documentação oficial (Termos, Diretrizes e Política de Privacidade).
+O detalhamento está em [`CHAMADAS.md`](CHAMADAS.md); aqui fica o resumo para o plano de segurança.
+
+| Item | Estado real | Onde |
+| --- | --- | --- |
+| Entrada na sala | Token JWT (HS256) emitido pelo gateway da Epapo **só** após autorização do Énóis; `ENABLE_AUTH=1`, `ENABLE_GUESTS=0`, `JWT_ALLOW_EMPTY=0` | `EpapoMeetingTokenIssuer`, `deploy/auth-gateway/server.js` |
+| Criptografia | TLS no proxy de borda + SRTP no trecho de mídia. **Sem E2EE**: o JVB (SFU) recebe as mídias para retransmitir | `deploy/docker-compose.yml`, `deploy/runtime/config.js` |
+| Gravação | Desligada por configuração e por token (`ENABLE_RECORDING=0`, `context.features.recording=false`) | `deploy/docker-compose.yml` |
+| STUN/TURN | Só STUN; **sem TURN/coturn** | `deploy/runtime/config.js` |
+| Evidência da denúncia | Uma imagem JPEG estática (até 4 vídeos, lado maior 1280 px), gerada no momento da denúncia | `custom.js` do Epapo, `call-report-dialog.tsx` |
+| Aviso ao participante | **Nenhum**: a captura é silenciosa e o Epapo não a registra em log | `custom.js` |
+| Triagem por IA | A triagem recebe o relato e a imagem (no máximo 2) no endpoint externo configurado em `MODERATION_LLM_*` | `ModerationAiService.reportImages` |
+| Decisão | **Humana**: `AiVerdictApplicationService` ignora alvo `CALL` na penalidade automática | `AiVerdictApplicationService` |
+| Retenção da evidência | **Não há retenção automática**: `REPORT_CAPTURE` não gera `media_deletion_job`, e não há purge temporal de `reports`/`call_reports`/`call_sessions` | `MediaDeletionWorker`, `ModerationCleanupWorker` |
+| Acesso à evidência | Binário servido só a moderador (`private, no-store`), **mas** `GET /media/{mediaId}` é público e expõe `objectKey`/`cdnUrl` do asset | `MediaStorageProxyController`, `MediaContractController` |
+| Trilha de auditoria | Não há registro de quem abriu a evidência nem de quem registrou a denúncia | `MediaStorageProxyController.read` |
+| Consentimento de menor | `AgeGate`/`PARENTAL_CONSENT_REQUIRED` não é aplicado no módulo de chamadas | `shared/age/AgeGate` |
+
+As quatro últimas linhas são **lacunas**, não documentação: elas entram no plano (Fases C e E)
+quando a priorização sair da documentação.
+
 ## 3. Fases propostas (ordem por risco × esforço)
 
 1. **Fase A — contenção determinística**: limiter por IP nos endpoints de identidade, teto de
