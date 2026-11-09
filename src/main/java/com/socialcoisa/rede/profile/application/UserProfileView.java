@@ -37,7 +37,12 @@ public record UserProfileView(String id, String username, String name, String he
 		 * Aparência da vitrine SOCIAL escolhida pelo dono. Quem visita recebe o visual do perfil
 		 * visitado, não o tema da própria conta.
 		 */
-		ProfileLook profileLook) {
+		ProfileLook profileLook,
+		/**
+		 * Selo "Humanidade Comprovada": verdadeiro só depois de aprovação confirmada pelo provedor
+		 * de identidade. Substitui a forma pública posterior no record.
+		 */
+		boolean humanityVerified) {
 
 	public static UserProfileView from(UserProfile profile) {
 		return new UserProfileView(profile.id(), profile.username(), profile.displayWithNickname(), profile.headline(),
@@ -50,7 +55,7 @@ public record UserProfileView(String id, String username, String name, String he
 			profile.profileEffect(), profile.statusText(), profile.statusIcon(), profile.createdAt() == null ? null : profile.createdAt().toString(),
 			profile.publicPlace() == null ? null : profile.publicPlace().city(),
 			profile.publicPlace() == null ? null : profile.publicPlace().state(), profile.gardenStyle(),
-			profile.garden(), profile.profileAppearance().social());
+			profile.garden(), profile.profileAppearance().social(), false);
 
 	}
 
@@ -63,7 +68,19 @@ public record UserProfileView(String id, String username, String name, String he
 			bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, connectionsCount,
 			followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme, nameFont, nameColor,
 			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state,
-			gardenStyle, garden, profileLook);
+			gardenStyle, garden, profileLook, humanityVerified);
+	}
+
+	/**
+	 * Selo lido de {@code identity_verifications}: expõe apenas o booleano — a verificação em si
+	 * nunca vira dado público.
+	 */
+	public UserProfileView withHumanityVerified(boolean verified) {
+		return new UserProfileView(id, username, name, headline, company, location, avatar, banner, badge, bio, bioHtml,
+			bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, connectionsCount,
+			followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme, nameFont, nameColor,
+			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state,
+			gardenStyle, garden, profileLook, verified);
 	}
 
 	/** Capa em HTML/CSS; so a leitura do perfil anexa (mesmo motivo da bio). */
@@ -72,6 +89,6 @@ public record UserProfileView(String id, String username, String name, String he
 			bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, connectionsCount,
 			followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme, nameFont, nameColor,
 			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state,
-			gardenStyle, garden, profileLook);
+			gardenStyle, garden, profileLook, humanityVerified);
 	}
 }
