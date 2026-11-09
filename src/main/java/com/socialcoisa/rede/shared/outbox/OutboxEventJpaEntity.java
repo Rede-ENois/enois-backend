@@ -107,4 +107,19 @@ class OutboxEventJpaEntity {
 		this.nextAttemptAt = nextAttemptAt;
 		this.claimedAt = null;
 	}
+
+	/**
+	 * Estado terminal: o evento esgotou as tentativas e sai da fila.
+	 *
+	 * <p>Reprocessar para sempre nao conserta evento quebrado — so queima CPU e, como o lote sai
+	 * pelos mais antigos, empurra os eventos novos para fora da leitura. O evento fica na tabela
+	 * (o efeito nao se perde: ha o que inspecionar e o que reprocessar a mao) e para de ser
+	 * escolhido pela fila.</p>
+	 */
+	void markFailedTerminal(String error) {
+		this.attempts++;
+		this.lastError = error;
+		this.status = "FAILED";
+		this.claimedAt = null;
+	}
 }
