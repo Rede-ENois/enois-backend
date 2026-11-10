@@ -548,7 +548,12 @@ public final class SafeHtml {
 				"main", "mark", "ol", "p", "picture", "pre", "q", "s", "samp", "section", "small", "source",
 				"span", "strong", "sub", "summary", "sup", "table", "tbody", "td", "tfoot", "th", "thead", "time",
 				"tr", "track", "u", "ul", "video", "wbr");
-			addAttributes(":all", "class", "style", "title", "dir", "lang", "align", "width", "height",
+			// `id` entra porque e ALVO de estilizacao: `#hero{...}` no <style>, `url(#grad)` no SVG e
+			// `href="#secao"` nos links. Sem ele o CSS e as referencias sobreviviam apontando para um
+			// elemento que nao existia mais — a bio saia sem o estilo que a pessoa escreveu, e o
+			// gradiente do SVG perdia o preenchimento. O jsoup reserializa o valor como atributo entre
+			// aspas, entao ele nao escapa do atributo.
+			addAttributes(":all", "class", "id", "style", "title", "dir", "lang", "align", "width", "height",
 				EMBED_MARKER_ATTRIBUTE);
 			addAttributes("a", "href");
 			addAttributes("img", "src", "alt", "loading");

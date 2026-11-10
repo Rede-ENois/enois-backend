@@ -444,6 +444,29 @@ public class MessagingService {
 		return repository.findParticipantsByConversation(conversationId);
 	}
 
+	/**
+	 * Participantes de VARIAS conversas, agrupados por conversa, em uma consulta: a lista de
+	 * conversas do app monta todas as linhas da caixa de entrada e nao pode consultar por item.
+	 */
+	public java.util.Map<String, List<ConversationParticipant>> getParticipantsByConversation(
+			java.util.Collection<String> conversationIds) {
+		java.util.Map<String, List<ConversationParticipant>> porConversa = new java.util.HashMap<>();
+		for (ConversationParticipant participante : repository.findParticipantsByConversations(conversationIds)) {
+			porConversa.computeIfAbsent(participante.conversationId(), chave -> new java.util.ArrayList<>())
+				.add(participante);
+		}
+		return porConversa;
+	}
+
+	/**
+	 * Nao-lidas de varias conversas do leitor em uma consulta. Conversa sem registro de leitura
+	 * (ou sem mensagem) repete o contrato do {@link #countUnread(String, String)}: total ou zero.
+	 */
+	public java.util.Map<String, Integer> countUnreadByConversation(java.util.Collection<String> conversationIds,
+			String userId) {
+		return repository.countUnreadByConversations(conversationIds, userId);
+	}
+
 	public int countUnread(String conversationId, String userId) {
 		return repository.countUnread(conversationId, userId);
 	}
@@ -481,11 +504,31 @@ public class MessagingService {
 	/** {@code from} is the sender's account id: the inbox marks the viewer's own last message. */
 	public record LastMessagePreview(String text, boolean e2e, String iv, String encryptedKeys,
 			java.time.Instant time, String from) {
-		static final LastMessagePreview EMPTY = new LastMessagePreview(null, false, null, null, null, null);
+		public static final LastMessagePreview EMPTY = new LastMessagePreview(null, false, null, null, null, null);
 	}
 
-	public LastMessagePreview getLastMessagePreview(String conversationId) {
-		return repository.findLastMessage(conversationId)
+	/**
+	 * A ultima mensagem de cada conversa do lote em uma consulta; conversa sem mensagem recebe
+	 * {@link LastMessagePreview#EMPTY}, como {@link #getLastMessagePreview(String)} devolveria.
+	 *
+	 * <p>{@code viewerId} entra na consulta para a previa respeitar "apagar para mim": o texto que
+	 * a pessoa escondeu nao pode reaparecer na caixa de entrada.</p>
+	 */
+	public java.util.Map<String, LastMessagePreview> getLastMessagePreviewByConversation(
+			java.util.Collection<String> conversationIds, String viewerId) {
+		java.util.Map<String, LastMessagePreview> previas = new java.util.HashMap<>();
+		repository.findLastMessagesByConversations(conversationIds, viewerId).forEach((conversationId, mensagem) ->
+			previas.put(conversationId, new LastMessagePreview(mensagem.text(), mensagem.e2e(), mensagem.iv(),
+				mensagem.encryptedKeys(), mensagem.createdAt(), mensagem.senderId())));
+		return previas;
+	}
+
+	/**
+	 * A previa que {@code viewerId} ve: a mensagem que ele apagou para si nao serve. Usado no
+	 * detalhe da conversa, para a tela nao mostrar o texto que a pessoa limitou.
+	 */
+	public LastMessagePreview getVisibleLastMessagePreview(String conversationId, String viewerId) {
+		return repository.findLastVisibleMessage(conversationId, viewerId)
 			.map(m -> new LastMessagePreview(m.text(), m.e2e(), m.iv(), m.encryptedKeys(), m.createdAt(), m.senderId()))
 			.orElse(LastMessagePreview.EMPTY);
 	}

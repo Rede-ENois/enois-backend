@@ -40,10 +40,17 @@ public class ModerationAiService {
 	private final ReportRepository reportRepository;
 	private final ReportedContentReader contentReader;
 	private final com.socialcoisa.rede.moderation.application.port.out.ReportedMediaReader mediaReader;
+	private final org.springframework.transaction.support.TransactionTemplate transaction;
 	private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
+	/**
+	 * O manager de transação é opcional: presente em produção (cada palpite é gravado numa
+	 * transação curta própria, com releitura) e nulo nos testes de unidade, que não têm banco —
+	 * ali a gravação é direta. Um só construtor: dois confundem o Spring na hora de escolher.
+	 */
 	public ModerationAiService(ReportRepository reportRepository, ReportedContentReader contentReader,
 			com.socialcoisa.rede.moderation.application.port.out.ReportedMediaReader mediaReader,
+			@org.springframework.lang.Nullable org.springframework.transaction.PlatformTransactionManager transactionManager,
 			@Value("${rede.moderation.llm.base-url:https://infer.flatt.com.br/v1}") String baseUrl,
 			@Value("${rede.moderation.llm.api-key:}") String apiKey,
 			@Value("${rede.moderation.llm.model:qwen3.8-27b}") String model,
@@ -51,6 +58,8 @@ public class ModerationAiService {
 		this.reportRepository = reportRepository;
 		this.contentReader = contentReader;
 		this.mediaReader = mediaReader;
+		this.transaction = transactionManager == null ? null
+			: new org.springframework.transaction.support.TransactionTemplate(transactionManager);
 		this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
 		this.apiKey = apiKey;
 		this.model = model;
@@ -336,7 +345,6 @@ public class ModerationAiService {
 	 * (AiVerdictApplicationService), e so quando a acao e PENALIZAR e passa no gate. O modelo nunca
 	 * executa nada. Retorna quantas denuncias foram triadas.
 	 */
-	@org.springframework.transaction.annotation.Transactional
 	public int triagePendingReports(int limit) {
 		return triagePendingReports(limit, report -> true);
 	}
@@ -360,11 +368,42 @@ public class ModerationAiService {
 			if (parsed.isEmpty()) {
 				continue; // sem palpite valido: segue PENDING para revisao humana
 			}
-			report.attachAiTriage(objectMapper.writeValueAsString(parsed.get()), Instant.now());
-			reportRepository.save(report);
-			triaged++;
+			// O I/O de rede (imagens + LLM, ate 30s cada) ficou FORA de transação: a gravação é uma
+			// transação curta própria, e relê a denúncia antes de gravar. Sem a releitura, o save
+			// gravava o objeto lido ANTES da chamada — e o adaptador grava todos os campos (a
+			// entidade não tem @Version), então um humano que revisasse a denúncia durante os 30s
+			// via a revisão apagada: a denúncia voltava a PENDING. A decisão humana vence sempre.
+			String palpite = objectMapper.writeValueAsString(parsed.get());
+			if (gravarPalpite(report.id(), palpite)) {
+				triaged++;
+			}
 		}
 		return triaged;
+	}
+
+	/** Anexa o palpite se a denúncia ainda está PENDING e sem palpite. Devolve se gravou. */
+	private boolean gravarPalpite(String reportId, String palpite) {
+		if (transaction == null) {
+			// Teste de unidade sem banco: sem releitura possível, grava direto (o laço já tem o
+			// objeto; não há revisor concorrente nesse cenário).
+			Report report = reportRepository.findById(reportId).orElse(null);
+			if (report == null) {
+				return false;
+			}
+			report.attachAiTriage(palpite, Instant.now());
+			reportRepository.save(report);
+			return true;
+		}
+		Boolean gravado = transaction.execute(status -> {
+			Report atual = reportRepository.findById(reportId).orElse(null);
+			if (atual == null || atual.aiTriage() != null || atual.status() != ReportStatus.PENDING) {
+				return Boolean.FALSE;
+			}
+			atual.attachAiTriage(palpite, Instant.now());
+			reportRepository.save(atual);
+			return Boolean.TRUE;
+		});
+		return Boolean.TRUE.equals(gravado);
 	}
 
 	public static boolean isActionAllowed(JsonNode verdict) {

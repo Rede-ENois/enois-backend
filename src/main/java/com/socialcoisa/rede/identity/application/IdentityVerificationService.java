@@ -7,6 +7,7 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialcoisa.rede.identity.application.port.out.IdentityReleaseGate;
 import com.socialcoisa.rede.identity.application.port.out.IdentityVerificationProvider;
 import com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository;
 import com.socialcoisa.rede.identity.adapters.out.provider.IdentityVerificationProviderRegistry;
@@ -24,12 +25,14 @@ public class IdentityVerificationService {
 
 	private final IdentityVerificationRepository repository;
 	private final IdentityVerificationProviderRegistry providers;
+	private final IdentityReleaseGate release;
 	private final Clock clock;
 
 	public IdentityVerificationService(IdentityVerificationRepository repository,
-			IdentityVerificationProviderRegistry providers, Clock clock) {
+			IdentityVerificationProviderRegistry providers, IdentityReleaseGate release, Clock clock) {
 		this.repository = repository;
 		this.providers = providers;
+		this.release = release;
 		this.clock = clock;
 	}
 
@@ -67,11 +70,23 @@ public class IdentityVerificationService {
 		IdentityVerificationProvider provider = providers.active()
 			.orElseThrow(() -> new ApiException(503, "IDENTITY_PROVIDER_UNAVAILABLE",
 				"A verificacao de identidade ainda nao esta disponivel."));
+		// Provedor pago: so quem foi liberado pela rodada pode iniciar, e so se houver capacidade
+		// no ciclo. As duas checagens vem ANTES da chamada externa, para nao gerar cobranca.
+		if (provider.requiresRelease()) {
+			if (!release.granted(userId)) {
+				throw new ApiException(403, "IDENTITY_NOT_RELEASED",
+					"A verificacao de identidade ainda nao esta liberada para esta conta.");
+			}
+			release.requireCapacity();
+		}
 		IdentityVerification verification = current(userId);
 		IdentityVerificationProvider.Start started = provider.start(userId, consentVersion);
 		IdentityVerification pending = verification.transitionTo(IdentityVerificationStatus.PENDING, provider.name(),
 			started.attemptId(), clock.instant());
 		repository.save(pending);
+		if (provider.requiresRelease()) {
+			release.consume(userId);
+		}
 		return started;
 	}
 
@@ -136,5 +151,34 @@ public class IdentityVerificationService {
 			clock.instant());
 		repository.save(revoked);
 		return revoked;
+	}
+
+	/**
+	 * Aplica o desfecho anunciado por webhook. O status recebido NAO e usado como prova: ele so
+	 * identifica a tentativa, e o desfecho e relido no servidor do provedor. Webhook duplicado ou
+	 * fora de ordem nao muda nada, porque o estado alvo sai do provedor, nao do evento.
+	 */
+	@Transactional
+	public IdentityVerification applyProviderOutcome(String attemptId) {
+		IdentityVerification verification = repository.findByAttemptId(attemptId)
+			.orElseThrow(() -> new ApiException(404, "IDENTITY_ATTEMPT_NOT_FOUND",
+				"Verificacao nao encontrada."));
+		if (verification.state() != IdentityVerificationStatus.PENDING) {
+			// Ja concluida: releitura nao pode reprocessar nem reverter.
+			return verification;
+		}
+		IdentityVerificationProvider provider = providers.active().orElse(null);
+		if (provider == null) {
+			return verification;
+		}
+		var outcome = provider.fetchOutcome(attemptId);
+		if (outcome.isEmpty()) {
+			return verification;
+		}
+		IdentityVerification updated = verification
+			.transitionTo(outcome.get().status(), null, null, clock.instant())
+			.withReason(outcome.get().reasonCode(), clock.instant());
+		repository.save(updated);
+		return updated;
 	}
 }

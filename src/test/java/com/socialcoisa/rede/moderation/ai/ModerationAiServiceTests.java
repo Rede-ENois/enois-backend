@@ -36,7 +36,7 @@ class ModerationAiServiceTests {
 		(targetType, targetId, limit) -> List.of();
 
 	private ModerationAiService serviceWithOutKey() {
-		return new ModerationAiService(repo, NO_CONTENT, NO_MEDIA, "https://infer.test/v1", "",
+		return new ModerationAiService(repo, NO_CONTENT, NO_MEDIA, null, "https://infer.test/v1", "",
 			"beta-llm/qwen3.8-27b", new tools.jackson.databind.ObjectMapper());
 	}
 
@@ -48,7 +48,7 @@ class ModerationAiServiceTests {
 			com.socialcoisa.rede.moderation.domain.ReportReason.SPAM, "vende seguidores", Instant.now());
 		com.socialcoisa.rede.moderation.application.port.out.ReportedContentReader reader =
 			(targetType, targetId) -> Optional.of("Compre seguidores barato no meu site");
-		ModerationAiService service = new ModerationAiService(repo, reader, NO_MEDIA, "https://infer.test/v1", "",
+		ModerationAiService service = new ModerationAiService(repo, reader, NO_MEDIA, null, "https://infer.test/v1", "",
 			"beta-llm/qwen3.8-27b", new tools.jackson.databind.ObjectMapper());
 
 		String prompt = service.reportUserPrompt(report);
@@ -161,7 +161,7 @@ class ModerationAiServiceTests {
 			com.socialcoisa.rede.moderation.domain.ReportReason.SEXUAL_CONTENT, "foto", Instant.now());
 		com.socialcoisa.rede.moderation.application.port.out.ReportedMediaReader reader =
 			(targetType, targetId, limit) -> List.of(new byte[] { 9, 8, 7 });
-		ModerationAiService service = new ModerationAiService(repo, NO_CONTENT, reader, "https://infer.test/v1",
+		ModerationAiService service = new ModerationAiService(repo, NO_CONTENT, reader, null, "https://infer.test/v1",
 			"", "beta-llm/qwen3.8-27b", new tools.jackson.databind.ObjectMapper());
 
 		List<byte[]> imagens = service.reportImages(report);
@@ -184,7 +184,7 @@ class ModerationAiServiceTests {
 				throw new IllegalStateException("storage fora do ar");
 			};
 		ModerationAiService service = new ModerationAiService(repo, NO_CONTENT, quebrado,
-			"https://infer.test/v1", "", "beta-llm/qwen3.8-27b", new tools.jackson.databind.ObjectMapper());
+			null, "https://infer.test/v1", "", "beta-llm/qwen3.8-27b", new tools.jackson.databind.ObjectMapper());
 
 		assertThat(service.reportImages(report)).isEmpty();
 	}

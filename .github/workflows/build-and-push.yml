@@ -31,6 +31,87 @@ permissions:
 
 jobs:
   # ===========================================================================
+  # Migrações duplicadas (PR e push).
+  #
+  # O boot e o schema-check rodam contra as migrações do PR isolado, então uma versão repetida
+  # só aparece no merge: duas V260 (#579/#568) e antes duas V255 (#527/#529) passaram verdes no
+  # próprio PR e quebraram a qa. Este job compara os números do branch com os da branch base e
+  # reprova a versão que já existe no destino com outro nome — o caso de quem renumerou por cima.
+  # ===========================================================================
+  migrations-unique:
+    name: 🧪 Migrações sem versão duplicada
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 📥 Checkout (com a branch base)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: 🔍 Comparar versões do branch com a base
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          DIR=src/main/resources/db/migration
+
+          versions() {
+            ls "$1" | sed -nE 's/^V([0-9]+)__([A-Za-z0-9_]+)\.sql$/\1 \2/p' | sort -n
+          }
+
+          echo "::group::Versões do branch ($HEAD_REF)"
+          versions "$DIR"
+          echo "::endgroup::"
+
+          dup=$(versions "$DIR" | awk '{print $1}' | uniq -d)
+          if [ -n "$dup" ]; then
+            echo "::error::Versão de migração repetida no próprio branch: $dup"
+            exit 1
+          fi
+
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "Push/workflow_dispatch: sem branch base para comparar."
+            exit 0
+          fi
+
+          if [ -z "${BASE_REF:-}" ] || [ "$BASE_REF" = "null" ]; then
+            echo "::error::Não foi possível resolver a branch base do PR."
+            exit 1
+          fi
+
+          base="refs/remotes/origin/${BASE_REF}"
+          if ! git rev-parse --verify --quiet "$base" >/dev/null; then
+            git fetch --no-tags origin "+refs/heads/${BASE_REF}:${base}"
+          fi
+
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          git archive "$base" "$DIR" | tar -x -C "$tmp"
+          base_dir="$tmp/$DIR"
+
+          echo "::group::Versões da base ($BASE_REF)"
+          versions "$base_dir"
+          echo "::endgroup::"
+
+          # Mesma versão, arquivo diferente: o destino já aplicou (ou vai aplicar) uma migração
+          # com esse número e o Flyway recusa o boot com "Found more than one migration".
+          conflict=0
+          while read -r v name; do
+            bname=$(versions "$base_dir" | awk -v v="$v" '$1==v {print $2}')
+            if [ -n "$bname" ] && [ "$bname" != "$name" ]; then
+              echo "::error::V$v existe como V${v}__${bname}.sql na $BASE_REF e como V${v}__${name}.sql no branch — renumere a migração nova."
+              conflict=1
+            fi
+          done < <(versions "$DIR")
+
+          if [ "$conflict" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Sem colisão com a $BASE_REF."
+
+  # ===========================================================================
   # Validação de build em PR (sempre hosted, nunca self-hosted, sem credenciais)
   # ===========================================================================
   validate-pr-build:
@@ -332,6 +413,18 @@ jobs:
           VAPID_PUBLIC_KEY: ${{ secrets.QA_VAPID_PUBLIC_KEY }}
           VAPID_PRIVATE_KEY: ${{ secrets.QA_VAPID_PRIVATE_KEY }}
           VAPID_SUBJECT: "mailto:suporte@enois.ia.br"
+          # Didit (verificacao de identidade / selo Humanidade Comprovada). A QA usa a API de
+          # SANDBOX da Didit (chave sk_test_): nenhuma verificacao cobrada, nenhum documento
+          # real. O webhook tem segredo proprio porque o backend so aceita confirmacao assinada
+          # por HMAC — sem ele as sessoes sao criadas mas nunca confirmam. Sem as duas variaveis
+          # a integracao fica desligada (fail-closed) e o painel mostra a rodada pausada por
+          # falta de credenciais.
+          DIDIT_API_KEY: ${{ secrets.QA_DIDIT_SANDBOX_API_KEY }}
+          DIDIT_WORKFLOW_ID: ${{ secrets.QA_DIDIT_WORKFLOW_ID }}
+          DIDIT_WEBHOOK_SECRET: ${{ secrets.QA_DIDIT_WEBHOOK_SECRET }}
+          DIDIT_MONTHLY_VERIFICATION_LIMIT: "25"
+          DIDIT_MONTHLY_BUDGET_USD: "10.00"
+          DIDIT_AUTO_TOPUP: "false"
           # Epapo (videoconferência própria). Sem estas quatro variáveis o backend responde
           # 503 CALLS_NOT_CONFIGURED / MENTORING_ROOMS_NOT_CONFIGURED e nenhuma sala abre —
           # é o estado em que a QA estava, com a rota do gateway respondendo
@@ -565,6 +658,12 @@ jobs:
               "VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY}",
               "VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY}",
               "VAPID_SUBJECT=${VAPID_SUBJECT}",
+              "DIDIT_API_KEY=${DIDIT_API_KEY}",
+              "DIDIT_WORKFLOW_ID=${DIDIT_WORKFLOW_ID}",
+              "DIDIT_WEBHOOK_SECRET=${DIDIT_WEBHOOK_SECRET}",
+              "DIDIT_MONTHLY_VERIFICATION_LIMIT=${DIDIT_MONTHLY_VERIFICATION_LIMIT}",
+              "DIDIT_MONTHLY_BUDGET_USD=${DIDIT_MONTHLY_BUDGET_USD}",
+              "DIDIT_AUTO_TOPUP=${DIDIT_AUTO_TOPUP}",
               "REDE_CALLS_EPAPO_URL=${REDE_CALLS_EPAPO_URL}",
               "REDE_CALLS_EPAPO_GATEWAY_URL=${REDE_CALLS_EPAPO_GATEWAY_URL}",
               "REDE_CALLS_EPAPO_INTERNAL_TOKEN=${REDE_CALLS_EPAPO_INTERNAL_TOKEN}",
@@ -883,6 +982,10 @@ jobs:
           PROD_REDE_CALLS_EPAPO_GATEWAY_URL: ${{ vars.PROD_REDE_CALLS_EPAPO_GATEWAY_URL }}
           PROD_REDE_CALLS_EPAPO_INTERNAL_TOKEN: ${{ secrets.PROD_REDE_CALLS_EPAPO_INTERNAL_TOKEN }}
           PROD_REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN: ${{ secrets.PROD_REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN }}
+          # Token de servico que publica as "Novidades" no deploy (issue #622). Sem ele o backend
+          # sobe com a rota interna desligada (503) e o passo de publicacao avisa, sem derrubar
+          # o deploy. Precisa ser o mesmo valor nos dois lugares: no container e no passo do curl.
+          REDE_RELEASE_NOTES_DEPLOY_TOKEN: ${{ secrets.REDE_RELEASE_NOTES_DEPLOY_TOKEN }}
         run: |
           set -euo pipefail
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
@@ -1028,6 +1131,9 @@ jobs:
                 REDE_CALLS_EPAPO_GATEWAY_URL: "${REDE_CALLS_EPAPO_GATEWAY_URL}"
                 REDE_CALLS_EPAPO_INTERNAL_TOKEN: "${REDE_CALLS_EPAPO_INTERNAL_TOKEN}"
                 REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN: "${REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN}"
+                # "Novidades" automaticas do deploy (issue #622): mesmo valor que o passo de
+                # publicacao usa. Vazio = rota interna desligada (fail-closed, 503).
+                REDE_RELEASE_NOTES_DEPLOY_TOKEN: "${REDE_RELEASE_NOTES_DEPLOY_TOKEN}"
           EOF
 
           echo "==> Montar payload JSON (python escapa o YAML certo pro body)"
@@ -1089,3 +1195,115 @@ jobs:
           done
           echo "health check nao respondeu apos 75s"
           exit 1
+
+      # =======================================================================
+      # "Novidades" (O que há de novo) automáticas: publica o changelog feat/fix
+      # deste deploy no endpoint interno do backend (issue #622).
+      #
+      # Depois do health check, o CI pede ao backend qual foi o último SHA
+      # publicado (GET /internal/novidades-deploy/ultimo), monta os itens a partir
+      # dos commits feat/fix desde esse SHA e publica (POST /internal/novidades-deploy,
+      # X-Deploy-Token). O backend valida os itens com a MESMA regra do painel e
+      # recusa SHA repetido com 409 — reexecução do workflow não republica nem
+      # reabre o popup.
+      #
+      # FALHA AQUI NÃO DERRUBA O DEPLOY: o build já está no ar e saudável. Qualquer
+      # problema vira ::warning:: e o changelog continua publicável à mão no painel.
+      # =======================================================================
+      - name: 📣 Publicar "Novidades" do deploy
+        env:
+          DEPLOY_TOKEN: ${{ secrets.REDE_RELEASE_NOTES_DEPLOY_TOKEN }}
+          HEAD_SHA: ${{ github.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          API_BASE: https://api.enois.ia.br/api
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DEPLOY_TOKEN}" ]; then
+            echo "::warning::REDE_RELEASE_NOTES_DEPLOY_TOKEN nao configurado: a rota no backend esta desligada (503) e as novidades deste deploy nao serao publicadas automaticamente."
+            exit 0
+          fi
+
+          # 1) Base do changelog: o SHA do ultimo deploy que publicou.
+          ULTIMO=$(curl -sf --max-time 15 -H "X-Deploy-Token: ${DEPLOY_TOKEN}" \
+            "${API_BASE}/internal/novidades-deploy/ultimo" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin).get("commitSha") or "")' || true)
+
+          if [ -z "${ULTIMO}" ]; then
+            echo "::warning::Estreia: nenhum deploy publicado antes, entao nao ha base para o changelog entre versoes. Nada e publicado (o painel segue manual)."
+            exit 0
+          fi
+          if [ "${ULTIMO}" = "${HEAD_SHA}" ]; then
+            echo "==> Este SHA ja e a ultima versao publicada: nada a fazer."
+            exit 0
+          fi
+          echo "==> Changelog ${ULTIMO:0:7}..${HEAD_SHA:0:7}"
+
+          # 2) Itens: um por commit feat/fix entre as duas versoes. A API de comparacao evita
+          # clonar o repositorio no runner self-hosted (este job nao faz checkout).
+          python3 - "$ULTIMO" "$HEAD_SHA" <<'PYEOF' > /tmp/novidades-items.json
+          import json, os, sys, urllib.request
+
+          base, head = sys.argv[1], sys.argv[2]
+          url = f"https://api.github.com/repos/{os.environ['REPO']}/compare/{base}...{head}"
+          request = urllib.request.Request(url, headers={
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+              "User-Agent": "enois-deploy-notes",
+          })
+          with urllib.request.urlopen(request, timeout=20) as response:
+              data = json.load(response)
+
+          items = []
+          # O repo usa Conventional Commits com escopo opcional ("feat(calendar): ..."), entao o
+          # tipo e lido ate o primeiro ":" e o escopo sai do titulo. Merge e commit de chore nao
+          # viram novidade: o popup e para o que a pessoa percebe no app.
+          for commit in data.get("commits", []):
+              subject = commit["commit"]["message"].splitlines()[0].strip()
+              tipo, _, resto = subject.partition(":")
+              tipo = tipo.strip().lower()
+              label = resto.strip()
+              if tipo.startswith("feat"):
+                  kind = "Novidade"
+              elif tipo.startswith("fix"):
+                  kind = "Correcao"
+              else:
+                  continue
+              # "feat(calendar): disponibilidade" -> "disponibilidade (calendar)"
+              escopo = ""
+              if "(" in tipo and tipo.endswith(")"):
+                  escopo = tipo[tipo.index("(") + 1:-1]
+              if not label:
+                  continue
+              titulo = f"{kind}: {label}" + (f" ({escopo})" if escopo else "")
+              items.append({
+                  "title": titulo[:80],
+                  "description": f"Entrou no deploy {head[:7]}."[:240],
+              })
+              if len(items) == 8:
+                  break
+
+          print(json.dumps({"commitSha": head, "items": items}))
+          PYEOF
+
+          N_ITENS=$(python3 -c 'import json; print(len(json.load(open("/tmp/novidades-items.json"))["items"]))')
+          if [ "${N_ITENS}" -eq 0 ]; then
+            echo "==> Nenhum commit feat/fix no intervalo: nada de novo para o popup (o que esta no ar permanece)."
+            exit 0
+          fi
+          echo "==> Publicando ${N_ITENS} novidade(s)"
+
+          # 3) Publica. 409 = este deploy ja publicou (reexecucao): nao e erro.
+          HTTP=$(curl -sS -o /tmp/novidades-resp.json -w '%{http_code}' --max-time 15 \
+            -X POST "${API_BASE}/internal/novidades-deploy" \
+            -H "X-Deploy-Token: ${DEPLOY_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data @/tmp/novidades-items.json 2>/dev/null || echo 000)
+          case "${HTTP}" in
+            200) echo "==> Novidades publicadas: $(cat /tmp/novidades-resp.json)" ;;
+            409) echo "==> Este deploy ja havia publicado as novidades (409): nada reaberto." ;;
+            000) echo "::warning::Nao foi possivel falar com a API de producao para publicar as novidades (rede/timeout). Publique a mao no painel se for preciso." ;;
+            *) echo "::warning::Publicacao das novidades recusada (HTTP ${HTTP}). O deploy segue; publique a mao no painel se for preciso." ;;
+          esac
+          rm -f /tmp/novidades-items.json /tmp/novidades-resp.json

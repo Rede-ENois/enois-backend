@@ -48,6 +48,9 @@ class WriteRouteInterceptor implements HandlerInterceptor {
 		"/games/tokens/validate",
 		// GitHub não tem sessão no app: a autenticação é o HMAC X-Hub-Signature-256 do webhook.
 		"/webhooks/github",
+		// Didit idem: sem sessão, autenticação por HMAC X-Signature sobre o corpo cru. O webhook
+		// não aprova ninguém — só sinaliza para o backend reler o desfecho no provedor.
+		"/webhooks/didit",
 		// RFC 8058 one-click unsubscribe: the mail client POSTs without a session. The encrypted
 		// token in the URL is the authorization and the only effect is turning e-mails off.
 		"/blogs/descadastrar",
@@ -56,7 +59,10 @@ class WriteRouteInterceptor implements HandlerInterceptor {
 		// mentoria: servidor não tem sessão de navegador. A credencial é o segredo compartilhado,
 		// conferido no controller.
 		"/calls/*/gateway/entry/*",
-		"/mentoring/*/gateway/entry/*");
+		"/mentoring/*/gateway/entry/*",
+		// CI de produção publicando as "Novidades" do deploy: servidor não tem sessão; a
+		// credencial é o token de serviço X-Deploy-Token, conferido no controller (fail-closed).
+		"/internal/novidades-deploy");
 
 	private final AntPathMatcher matcher = new AntPathMatcher();
 	private final CurrentUserResolver currentUserResolver;

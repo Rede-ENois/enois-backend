@@ -52,10 +52,11 @@ class OutboxWorker {
 	private final TransactionTemplate transaction;
 	private final Duration claimStaleAfter;
 	private final int maxAttempts;
+	private final OutboxMetrics metrics;
 
 	OutboxWorker(SpringDataOutboxEventJpaRepository outboxRepository,
 			SpringDataOutboxHandlerReceiptJpaRepository receiptRepository, List<OutboxEventHandler> handlers,
-			Clock clock, PlatformTransactionManager transactionManager,
+			Clock clock, PlatformTransactionManager transactionManager, OutboxMetrics metrics,
 			@Value("${rede.outbox.claim-stale-seconds:60}") long claimStaleSeconds,
 			@Value("${rede.outbox.max-attempts:20}") int maxAttempts) {
 		this.outboxRepository = outboxRepository;
@@ -65,6 +66,7 @@ class OutboxWorker {
 		this.transaction = new TransactionTemplate(transactionManager);
 		this.claimStaleAfter = Duration.ofSeconds(claimStaleSeconds);
 		this.maxAttempts = maxAttempts;
+		this.metrics = metrics;
 	}
 
 	@Scheduled(fixedDelayString = "${rede.outbox.worker-delay-ms:5000}")
@@ -153,12 +155,20 @@ class OutboxWorker {
 				if (event == null) {
 					return;
 				}
+				// O limite fecha a fila: o evento envenenado sai de PENDING e para de ser
+				// escolhido. Antes ele voltava para sempre, gastando CPU e empurrando os eventos
+				// novos para fora do lote de 50 mais antigos.
+				if (event.attempts() + 1 >= maxAttempts) {
+					event.markFailedTerminal(error);
+					outboxRepository.save(event);
+					LOG.error("Evento {} ({}) esgotou {} tentativas e virou FAILED; o efeito NAO foi "
+						+ "aplicado e precisara de intervencao manual: {}", event.id(), event.eventType(),
+						maxAttempts, error);
+					metrics.increaseFailedTerminal();
+					return;
+				}
 				event.markFailed(error, now.plus(backoff(event.attempts() + 1)));
 				outboxRepository.save(event);
-				if (event.attempts() >= maxAttempts) {
-					LOG.error("Evento {} ({}) falhou {} vezes; segue pendente para nao perder o efeito: {}",
-						event.id(), event.eventType(), event.attempts(), event.lastError());
-				}
 			});
 		}
 		catch (RuntimeException secondFailure) {

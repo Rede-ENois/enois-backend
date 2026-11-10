@@ -174,8 +174,14 @@ class CommunityContractController {
 	PageResponse<CommunityView> favorites(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(defaultValue = "50") int limit) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		var items = communityService.listFavorites(user.id().value(), limit).stream()
-			.map(c -> view(c, communityService.isMember(c.id(), user.id().value())))
+		// Mesmas duas consultas da vitrine: contagem e "sou membro" da pagina inteira, nao por card.
+		List<Community> favorites = communityService.listFavorites(user.id().value(), limit);
+		var memberCounts = communityService.countMembersByCommunityIds(
+			favorites.stream().map(Community::id).toList());
+		var memberIds = communityService.memberCommunityIds(user.id().value(),
+			favorites.stream().map(Community::id).toList());
+		var items = favorites.stream()
+			.map(c -> view(c, memberCounts.getOrDefault(c.id(), 0), memberIds.contains(c.id())))
 			.toList();
 		return new PageResponse<>(items, null);
 	}
@@ -215,8 +221,14 @@ class CommunityContractController {
 			@RequestParam(defaultValue = "20") int limit) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		var place = userProfileRepository.findById(user.id().value()).map(UserProfile::place).orElse(null);
-		var items = communityService.listLocal(place, Math.min(Math.max(limit, 1), 50)).stream()
-			.map(c -> view(c, communityService.isMember(c.id(), user.id().value())))
+		List<Community> local = communityService.listLocal(place, Math.min(Math.max(limit, 1), 50));
+		// Mesmas duas consultas da vitrine: contagem e "sou membro" da pagina inteira, nao por card.
+		var memberCounts = communityService.countMembersByCommunityIds(
+			local.stream().map(Community::id).toList());
+		var memberIds = communityService.memberCommunityIds(user.id().value(),
+			local.stream().map(Community::id).toList());
+		var items = local.stream()
+			.map(c -> view(c, memberCounts.getOrDefault(c.id(), 0), memberIds.contains(c.id())))
 			.toList();
 		return new PageResponse<>(items, null);
 	}

@@ -73,6 +73,14 @@ alterar a escolha.
 | created_at | TIMESTAMP | |
 | expires_at | TIMESTAMP | |
 | revoked_at | TIMESTAMP (nullable) | Se preenchido, sessão revogada |
+| refresh_expires_at | TIMESTAMP (nullable) | Validade do refresh (30 dias); nulo em sessões antigas |
+| ip | VARCHAR(64) (nullable) | IP de origem (V131) |
+
+Sessões cujo refresh (ou o access, quando não há refresh) venceu há mais que a janela de retenção
+(`rede.auth.session-retention.days`, 14 dias) saem pelo `AuthSessionRetentionWorker`, em lotes por
+rodada. Revogar não apaga: a linha só sai quando a validade acaba. Os usos que existem olham
+janelas curtas — a contagem de ativos filtra por `refresh_expires_at`, e a moderação olha os
+últimos IPs de uma conta —, nunca o histórico completo de logins.
 
 ### `posts`
 
@@ -144,12 +152,19 @@ segundo INSERT é recusado pelo banco.
 | route | VARCHAR(255) | Rota |
 | idempotency_key | VARCHAR(255) | Chave de idempotência |
 | request_hash | VARCHAR(64) | SHA-256 do corpo |
-| status | VARCHAR(20) | IN_PROGRESS, COMPLETED, CONFLICT |
+| status | VARCHAR(20) | PROCESSING, COMPLETED, FAILED |
 | response_status | INT | Status HTTP da resposta |
 | response_body | TEXT | Corpo da resposta |
 | created_at | TIMESTAMP | |
 | expires_at | TIMESTAMP | |
-| completed_at | TIMESTAMP (nullable) | |
+| completed_at | TIMESTAMP (nullable) |
+
+A chave vale por 24 horas (`expires_at`, gravado na escrita) e é removida pelo
+`IdempotencyRetentionWorker` depois da janela de retenção
+(`rede.idempotency.retention.hours`, 48 horas a partir do vencimento — o dobro da vida útil da
+chave, para nenhum replay legítimo ser surpreendido pela limpeza). Qualquer estado expira:
+`PROCESSING` abandonado não é replay pendente, e reapresentar a mesma chave depois de vencida
+executa como comando novo. Antes deste worker nada removia linhas desta tabela.
 
 ### `outbox_events`
 
@@ -169,6 +184,13 @@ segundo INSERT é recusado pelo banco.
 Linhas `PROCESSED` são removidas depois da janela de retenção (`rede.outbox.retention.days`, 14
 dias) pelo `OutboxRetentionWorker`; `PENDING` nunca é removido. Os recibos do evento saem na mesma
 transação.
+
+**`FAILED` é terminal.** Um evento que esgota as tentativas (`rede.outbox.max-attempts`, 20) sai de
+`PENDING` e não volta à fila: reprocessar para sempre não conserta handler quebrado, só queima CPU
+e — como o lote sai pelos 50 mais antigos — empurra os eventos novos para fora da leitura. A linha
+continua na tabela (o efeito **não** foi aplicado e o `last_error` diz por quê), o contador
+`rede_outbox_failed_terminal_total` avisa, e a intervenção é humana. `FAILED` não é removido pela
+retenção: sair da fila não é sumir do banco.
 
 ### `processed_events`
 
@@ -196,6 +218,34 @@ recibo e executa só os que faltaram.
 | target_id | VARCHAR(255) (nullable) |
 | metadata | TEXT (nullable) |
 | created_at | TIMESTAMP |
+
+Trilha das ações de moderação e de dono de conteúdo (remoção de post, comentário e grupo,
+restauração, mudança de status). O `metadata` guarda o **motivo escrito à mão** por quem agiu.
+
+**Retenção:** 180 dias (`rede.audit.retention.*`), a mais longa da plataforma de propósito — é
+trilha de auditoria, não telemetria: serve para reconstruir uma decisão de moderação recente.
+Nenhum endpoint ou painel lê esta tabela (só escrita), então a janela não apaga dado em uso. O
+índice `idx_audit_created (created_at)` existe para a varredura da retenção: sem ele, medido em
+MariaDB 11.4 com 400 mil linhas, a rodada lia 400.001 linhas com filesort para achar as 500 mais
+antigas; com ele, 499 leituras por faixa.
+
+### `email_log`
+
+Metadado de cada e-mail enviado (o corpo não é gravado). Alimenta o painel de operações.
+
+| Coluna | Tipo |
+|---|---|
+| id | VARCHAR(64) PK |
+| to_email | VARCHAR(180) |
+| subject | VARCHAR(200) |
+| kind | VARCHAR(40) — SIGNUP, PASSWORD_RESET, DIGEST, TWO_FACTOR… |
+| status | VARCHAR(16) — SENT, FAILED |
+| error | VARCHAR(500) (nullable) |
+| created_at | TIMESTAMP |
+
+Linhas mais velhas que a janela de retenção (`rede.email-log.retention.days`, 30 dias) saem pelo
+`EmailLogRetentionWorker`, em lotes por rodada. O painel só mostra as mais recentes; guardar o
+destinatário além desse prazo não tem função operacional e é dado pessoal sem uso.
 
 ---
 
@@ -495,6 +545,11 @@ UNIQUE: (requester_user_id, receiver_user_id)
 | cta_label | VARCHAR(100) (nullable) | Texto do CTA |
 | read | BOOLEAN DEFAULT FALSE | |
 | created_at | TIMESTAMP | |
+
+Índices: `(user_id, is_read, created_at)` serve a contagem de não lidas; `(user_id, created_at)`
+(V260) serve a lista, que filtra só pela pessoa e ordena pelo tempo — com o `is_read` no meio o
+MariaDB não consegue entregar a ordem e ordena em disco (medido: 200.020 leituras de linha para
+devolver 20; com o índice novo, 19).
 
 ---
 

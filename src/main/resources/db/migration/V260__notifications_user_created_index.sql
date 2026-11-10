@@ -1,0 +1,19 @@
+-- Indice para a lista de notificacoes da pessoa.
+--
+-- A lista e a tela que mais abre na plataforma: mostra as notificacoes mais recentes de quem
+-- le, paginadas. A consulta filtra por user_id e ordena por created_at desc. O indice que
+-- existia (user_id, is_read, created_at) tem o is_read NO MEIO: ele serve para a contagem de
+-- nao lidas (que filtra tambem por is_read), mas para a lista ele nao serve — o MariaDB filtra
+-- pelo user_id e depois ordena tudo em disco (filesort).
+--
+-- Medido em MariaDB 11.4 com 200 mil notificacoes de uma pessoa e 20 na ultima pagina:
+-- EXPLAIN dava "Using where; Using index; Using filesort" sobre 225.550 linhas, e o contador
+-- do servidor mostrava 200.020 leituras de linha para devolver 20. Com este indice o EXPLAIN
+-- perde o filesort e as leituras caem para 19 — o resultado e o mesmo, so o custo interno muda.
+--
+-- A contagem de nao lidas continua usando o indice antigo (le 20 linhas, como antes): os dois
+-- indices convivem, cada um no seu caminho.
+--
+-- Custo de escrita: medido num lote de 5.000 insercoes, o mesmo numero de escritas com e sem
+-- este indice. Nenhum dado muda.
+create index if not exists idx_notifications_user_created on notifications (user_id, created_at);

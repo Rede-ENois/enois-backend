@@ -54,11 +54,14 @@ class GroupContentController {
 	private final IdempotencyApplicationService idempotency;
 	private final CursorCodec cursorCodec;
 	private final GetMediaSummariesUseCase mediaSummaries;
+	private final com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications;
 
 	GroupContentController(GroupFeedService feed, CurrentUserResolver currentUserResolver,
 			UserProfileRepository profiles, IdempotencyApplicationService idempotency, CursorCodec cursorCodec,
-			GetMediaSummariesUseCase mediaSummaries) {
+			GetMediaSummariesUseCase mediaSummaries,
+			com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications) {
 		this.mediaSummaries = mediaSummaries;
+		this.identityVerifications = identityVerifications;
 		this.feed = feed;
 		this.currentUserResolver = currentUserResolver;
 		this.profiles = profiles;
@@ -154,8 +157,10 @@ class GroupContentController {
 		// Attachments of the whole page in one query, like the main feed.
 		Map<String, MediaSummaryView> media = mediaSummaries
 			.visibleByIds(posts.stream().flatMap(post -> post.mediaIds().stream()).collect(Collectors.toSet()));
+		Set<String> humanityVerified = identityVerifications
+			.verifiedAmong(posts.stream().map(GroupPost::authorId).collect(Collectors.toSet()));
 		var items = posts.stream()
-			.map(post -> postView(post, mine.get(post.id()), authors.get(post.authorId()), media))
+			.map(post -> postView(post, mine.get(post.id()), authors.get(post.authorId()), media, humanityVerified))
 			.toList();
 		String nextCursor = posts.size() == limit
 			? cursorCodec.encode(posts.get(posts.size() - 1).createdAt()) : null;
@@ -220,7 +225,12 @@ class GroupContentController {
 		CurrentUser user = currentUserResolver.resolve(token);
 		List<GroupComment> comments = feed.listComments(groupId, postId, user.id().value(), limit);
 		Map<String, UserProfile> authors = authorsOf(comments.stream().map(GroupComment::authorId).toList());
-		var items = comments.stream().map(comment -> commentView(comment, authors.get(comment.authorId()))).toList();
+		Set<String> humanityVerified = identityVerifications
+			.verifiedAmong(comments.stream().map(GroupComment::authorId).collect(Collectors.toSet()));
+		var items = comments.stream()
+			.map(comment -> commentView(comment, authors.get(comment.authorId()),
+				humanityVerified.contains(comment.authorId())))
+			.toList();
 		return new PageResponse<>(items, null);
 	}
 
@@ -304,12 +314,17 @@ class GroupContentController {
 	}
 
 	private CommentView commentView(GroupComment comment, UserProfile author) {
+		return commentView(comment, author, identityVerifications.isVerified(comment.authorId()));
+	}
+
+	private CommentView commentView(GroupComment comment, UserProfile author, boolean humanityVerified) {
 		return new CommentView(comment.id(), comment.postId(), comment.authorId(),
 			author == null ? null : author.displayWithNickname(),
 			author == null ? null : author.username(),
 			author == null ? null : author.avatar(),
 			author == null ? List.of() : author.allBadges(),
-			comment.parentId(), comment.content(), comment.createdAt(), author == null ? null : author.avatarFrame(), NameStyleView.from(author));
+			comment.parentId(), comment.content(), comment.createdAt(), author == null ? null : author.avatarFrame(), NameStyleView.from(author),
+			humanityVerified);
 	}
 
 	private GroupPostView postView(GroupPost post, ReactionType myReaction, UserProfile author) {
@@ -318,6 +333,12 @@ class GroupContentController {
 
 	private GroupPostView postView(GroupPost post, ReactionType myReaction, UserProfile author,
 			Map<String, MediaSummaryView> media) {
+		return postView(post, myReaction, author, media, Set.of());
+	}
+
+	/** Com o conjunto de autores selados da pagina (uma consulta por pagina, nunca uma por post). */
+	private GroupPostView postView(GroupPost post, ReactionType myReaction, UserProfile author,
+			Map<String, MediaSummaryView> media, Set<String> humanityVerified) {
 		List<String> badges = author == null ? List.of() : author.allBadges();
 		return new GroupPostView(post.id(), post.groupId(), post.topicId(), post.authorId(),
 			author == null ? null : author.displayWithNickname(),
@@ -326,7 +347,7 @@ class GroupContentController {
 			badges,
 			post.content(), post.mediaIds(), post.pinned(), post.reactions(), post.comments(),
 			myReaction == null ? null : myReaction.name(), post.createdAt(), author == null ? null : author.avatarFrame(), NameStyleView.from(author),
-			MediaSummaryView.inOrder(post.mediaIds(), media));
+			MediaSummaryView.inOrder(post.mediaIds(), media), humanityVerified.contains(post.authorId()));
 	}
 
 	private static TopicView topicView(GroupTopic topic) {
@@ -350,7 +371,8 @@ class GroupContentController {
 	record GroupPostView(String id, String groupId, String topicId, String authorId, String authorName,
 			String authorUsername, String authorAvatar, List<String> authorBadges, String content,
 			List<String> mediaIds, boolean pinned, int reactions, int comments, String myReaction,
-			Instant createdAt, String authorAvatarFrame, NameStyleView authorStyle, List<MediaSummaryView> media) {
+			Instant createdAt, String authorAvatarFrame, NameStyleView authorStyle, List<MediaSummaryView> media,
+			boolean authorHumanityVerified) {
 	}
 
 	record CommentRequest(String content, String parentCommentId) {
@@ -364,6 +386,6 @@ class GroupContentController {
 
 	record CommentView(String id, String postId, String authorId, String authorName, String authorUsername,
 			String authorAvatar, List<String> authorBadges, String parentCommentId, String content,
-			Instant createdAt, String authorAvatarFrame, NameStyleView authorStyle) {
+			Instant createdAt, String authorAvatarFrame, NameStyleView authorStyle, boolean authorHumanityVerified) {
 	}
 }

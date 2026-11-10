@@ -24,7 +24,10 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param incidentQuiet a kind of failure that has not happened for this long is announced again when it
  *        comes back
  * @param digestInterval cadence of the silent digest (aligned to the clock in {@link #zone}); a period
- *        with nothing to report sends nothing
+ *        with nothing at the digest minimum sends nothing
+ * @param digestMinLevel lowest severity a period must contain (a failure kind, a 5xx or slow requests
+ *        above the latency threshold) for the digest of that period to go out; periods with only
+ *        lower-severity noise (4xx, slow requests on a fast API) send nothing
  * @param latency when the share of slow requests is high enough to raise an alert
  * @param queueCapacity bounded in-memory queue between the producers and the dispatcher
  * @param spoolDir where critical messages wait on disk until Telegram confirms them
@@ -33,7 +36,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "rede.kof-agent")
 public record KofAgentProperties(boolean enabled, String apiToken, String chatId, String apiBaseUrl,
 		String environment, String serviceName, Set<Severity> levels, Set<Severity> notifyLevels, int batchMaxEvents,
-		Duration flushInterval, Duration incidentQuiet, Duration digestInterval, Latency latency, Retry retry,
+		Duration flushInterval, Duration incidentQuiet, Duration digestInterval, Severity digestMinLevel,
+		Latency latency, Retry retry,
 		Rate rate, Circuit circuit, int queueCapacity, String spoolDir, int spoolMaxFiles, String zone,
 		Duration requestTimeout, Duration slowRequest, Duration shutdownTimeout) {
 
@@ -51,6 +55,7 @@ public record KofAgentProperties(boolean enabled, String apiToken, String chatId
 		flushInterval = positive(flushInterval, Duration.ofSeconds(10));
 		incidentQuiet = positive(incidentQuiet, Duration.ofMinutes(30));
 		digestInterval = positive(digestInterval, Duration.ofHours(1));
+		digestMinLevel = digestMinLevel == null ? Severity.WARN : digestMinLevel;
 		latency = latency == null ? new Latency(null, 0, 0) : latency;
 		retry = retry == null ? new Retry(0, null, null) : retry;
 		rate = rate == null ? new Rate(0, 0) : rate;
@@ -75,7 +80,7 @@ public record KofAgentProperties(boolean enabled, String apiToken, String chatId
 		return "KofAgentProperties[enabled=" + enabled + ", apiToken=" + (apiToken.isEmpty() ? "<unset>" : "<redacted>")
 			+ ", chatId=" + (chatId.isEmpty() ? "<unset>" : "<set>") + ", environment=" + environment + ", levels="
 			+ levels + ", notifyLevels=" + notifyLevels + ", flushInterval=" + flushInterval + ", digestInterval="
-			+ digestInterval + "]";
+			+ digestInterval + ", digestMinLevel=" + digestMinLevel + "]";
 	}
 
 	/**

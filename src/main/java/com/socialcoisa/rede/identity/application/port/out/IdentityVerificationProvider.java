@@ -18,6 +18,15 @@ public interface IdentityVerificationProvider {
 
 	String name();
 
+	/**
+	 * Se este provedor so aceita quem foi liberado pela rodada progressiva. Provedor publico
+	 * (gov.br) responde falso; provedor contratado responde verdadeiro, para que a liberacao seja
+	 * conferida antes de qualquer chamada externa.
+	 */
+	default boolean requiresRelease() {
+		return false;
+	}
+
 	/** Inicia uma verificacao e devolve a tentativa e o destino para o usuario concluir no provedor. */
 	Start start(String userId, String consentVersion);
 

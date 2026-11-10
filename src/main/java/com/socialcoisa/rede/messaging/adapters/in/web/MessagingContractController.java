@@ -61,6 +61,30 @@ class MessagingContractController {
 		this.corporateProfiles = corporateProfiles;
 	}
 
+	/**
+	 * Monta as linhas da caixa de entrada em consultas EM LOTE (participantes, nao-lidas e ultima
+	 * mensagem de todas as conversas de uma vez). Antes cada conversa pagava 4 consultas: uma
+	 * pagina de 20 conversas virava ~80 idas ao banco na rota que o app mais abre.
+	 */
+	private List<ConversationView> inbox(List<Conversation> conversations, String userId) {
+		List<String> conversationIds = conversations.stream().map(Conversation::id).toList();
+		var participantsByConversation = messagingService.getParticipantsByConversation(conversationIds);
+		var unreadByConversation = messagingService.countUnreadByConversation(conversationIds, userId);
+		var lastMessages = messagingService.getLastMessagePreviewByConversation(conversationIds, userId);
+		return conversations.stream()
+			.map(c -> {
+				var participants = participantsByConversation.getOrDefault(c.id(), List.of());
+				List<String> pIds = participants.stream()
+					.map(ConversationParticipant::userId)
+					.toList();
+				return toView(c.id(), userId, c.kind(), c.title(), pIds,
+					unreadByConversation.getOrDefault(c.id(), 0),
+					otherLastReadAt(participants, userId),
+					lastMessages.getOrDefault(c.id(), MessagingService.LastMessagePreview.EMPTY));
+			})
+			.toList();
+	}
+
 	@GetMapping
 	PageResponse<ConversationView> conversations(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit,
@@ -70,17 +94,7 @@ class MessagingContractController {
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		List<Conversation> conversations = messagingService.listConversations(user.id().value(), before,
 			parseContext(context), limit);
-		var items = conversations.stream()
-			.map(c -> {
-				var participants = messagingService.getParticipants(c.id());
-				List<String> pIds = participants.stream()
-					.map(ConversationParticipant::userId)
-					.toList();
-				return toView(c.id(), user.id().value(), c.kind(), c.title(), pIds,
-					messagingService.countUnread(c.id(), user.id().value()),
-					otherLastReadAt(participants, user.id().value()));
-			})
-			.toList();
+		List<ConversationView> items = inbox(conversations, user.id().value());
 		String nextCursor = conversations.size() == limit
 			? cursorCodec.encode(conversations.get(conversations.size() - 1).updatedAt()) : null;
 		return new PageResponse<>(items, nextCursor);
@@ -102,18 +116,11 @@ class MessagingContractController {
 		List<Conversation> conversations = messagingService.listConversations(user.id().value(), null,
 			parseContext(context), limit);
 		String query = q != null ? q.toLowerCase() : "";
-		var items = conversations.stream()
-			.filter(c -> query.isEmpty() || (c.title() != null && c.title().toLowerCase().contains(query)))
-			.map(c -> {
-				var participants = messagingService.getParticipants(c.id());
-				List<String> pIds = participants.stream()
-					.map(ConversationParticipant::userId)
-					.toList();
-				return toView(c.id(), user.id().value(), c.kind(), c.title(), pIds,
-					messagingService.countUnread(c.id(), user.id().value()),
-					otherLastReadAt(participants, user.id().value()));
-			})
-			.toList();
+		List<ConversationView> items = inbox(
+			conversations.stream()
+				.filter(c -> query.isEmpty() || (c.title() != null && c.title().toLowerCase().contains(query)))
+				.toList(),
+			user.id().value());
 		return new PageResponse<>(items, null);
 	}
 
@@ -131,7 +138,7 @@ class MessagingContractController {
 			.toList();
 		return toDetailView(c.id(), c.kind(), c.title(), pIds,
 			messagingService.countUnread(c.id(), user.id().value()),
-			otherLastReadAt(participants, user.id().value()));
+			otherLastReadAt(participants, user.id().value()), user.id().value());
 	}
 
 	@GetMapping("/{conversationId}/messages")
@@ -290,7 +297,7 @@ class MessagingContractController {
 				.toList();
 			return new CommandResponse(200, toDetailView(conversationId, "DIRECT", null, pIds,
 				messagingService.countUnread(conversationId, user.id().value()),
-				otherLastReadAt(participants, user.id().value())));
+				otherLastReadAt(participants, user.id().value()), user.id().value()));
 		});
 	}
 
@@ -314,7 +321,7 @@ class MessagingContractController {
 				.toList();
 			return new CommandResponse(200, toDetailView(conversationId, "BUSINESS_DIRECT", null, pIds,
 				messagingService.countUnread(conversationId, user.id().value()),
-				otherLastReadAt(participants, user.id().value())));
+				otherLastReadAt(participants, user.id().value()), user.id().value()));
 		});
 	}
 
@@ -349,17 +356,7 @@ class MessagingContractController {
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		List<Conversation> conversations = messagingService.listArchivedConversations(user.id().value(), before,
 			parseContext(context), limit);
-		var items = conversations.stream()
-			.map(c -> {
-				var participants = messagingService.getParticipants(c.id());
-				List<String> pIds = participants.stream()
-					.map(ConversationParticipant::userId)
-					.toList();
-				return toView(c.id(), user.id().value(), c.kind(), c.title(), pIds,
-					messagingService.countUnread(c.id(), user.id().value()),
-					otherLastReadAt(participants, user.id().value()));
-			})
-			.toList();
+		List<ConversationView> items = inbox(conversations, user.id().value());
 		String nextCursor = conversations.size() == limit
 			? cursorCodec.encode(conversations.get(conversations.size() - 1).updatedAt()) : null;
 		return new PageResponse<>(items, nextCursor);
@@ -399,7 +396,7 @@ class MessagingContractController {
 					.toList();
 				return new CommandResponse(201, toDetailView(c.id(), c.kind(), c.title(), pIds,
 					messagingService.countUnread(c.id(), user.id().value()),
-					otherLastReadAt(participants, user.id().value())));
+					otherLastReadAt(participants, user.id().value()), user.id().value()));
 			});
 	}
 
@@ -457,17 +454,18 @@ class MessagingContractController {
 	}
 
 	private ConversationView toView(String convId, String userId, String kind, String title,
-			List<String> participantIds, int unread, String otherLastReadAt) {
-		var lm = messagingService.getLastMessagePreview(convId);
+			List<String> participantIds, int unread, String otherLastReadAt,
+			MessagingService.LastMessagePreview preview) {
 		ConversationContext context = ConversationContext.of(kind);
 		return new ConversationView(convId, userId, kind, context.name(), title, participantIds,
-			identitiesOf(context, participantIds), lm.text(), lm.time() != null ? lm.time().toString() : null, unread,
-			otherLastReadAt, lm.e2e(), lm.iv(), lm.encryptedKeys(), lm.from());
+			identitiesOf(context, participantIds), preview.text(),
+			preview.time() != null ? preview.time().toString() : null, unread,
+			otherLastReadAt, preview.e2e(), preview.iv(), preview.encryptedKeys(), preview.from());
 	}
 
 	private ConversationDetailView toDetailView(String convId, String kind, String title,
-			List<String> participantIds, int unread, String otherLastReadAt) {
-		var lm = messagingService.getLastMessagePreview(convId);
+			List<String> participantIds, int unread, String otherLastReadAt, String viewerId) {
+		var lm = messagingService.getVisibleLastMessagePreview(convId, viewerId);
 		ConversationContext context = ConversationContext.of(kind);
 		return new ConversationDetailView(convId, kind, context.name(), title, participantIds,
 			identitiesOf(context, participantIds), lm.text(), unread, otherLastReadAt, lm.e2e(), lm.iv(),

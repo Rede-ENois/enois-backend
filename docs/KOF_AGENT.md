@@ -78,8 +78,10 @@ Mais lentas: POST /feed/posts ×30
 ### 3. Digest: what happened in the period
 
 Every `KOF_AGENT_DIGEST_INTERVAL` (1 h, aligned to the clock: 13:00, 14:00...), silently, and **only
-when the period had a failure, a slow request or a 5xx**. A quiet hour sends nothing. On shutdown the
-running period is sent as a partial digest so its counts are not lost.
+when the period had something at `KOF_AGENT_DIGEST_MIN_LEVEL` (WARN by default): a failure kind at
+that severity or above, a 5xx, or the API entering the slow state**. An hour with only lower-severity
+noise (4xx, a few slow requests on a healthy API) sends nothing. On shutdown the running period is
+sent as a partial digest under the same rule.
 
 ```
 📊 API Énóis · Produção · PRD · resumo
@@ -179,6 +181,7 @@ All under `rede.kof-agent.*` in `application.properties`; environment variables:
 | `KOF_AGENT_NOTIFY_LEVELS` | `ERROR,FATAL` | levels alerted the first time a kind of failure shows up |
 | `KOF_AGENT_INCIDENT_QUIET` | `30m` | a kind quiet for this long is alerted again when it comes back |
 | `KOF_AGENT_DIGEST_INTERVAL` | `1h` | digest cadence, aligned to the clock |
+| `KOF_AGENT_DIGEST_MIN_LEVEL` | `WARN` | lowest severity a period needs for its digest to go out |
 | `KOF_AGENT_LATENCY_WINDOW` / `_MIN_REQUESTS` / `_SLOW_RATIO` | `5m` / `100` / `0.10` | when the API counts as slow |
 | `KOF_AGENT_FLUSH_INTERVAL` | `10s` | new alerts collected this long go out together |
 | `KOF_AGENT_BATCH_MAX_EVENTS` | `40` | distinct entries per alert message; the rest is counted |

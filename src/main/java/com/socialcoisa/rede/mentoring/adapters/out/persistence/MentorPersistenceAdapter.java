@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.mentoring.adapters.out.persistence;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -49,6 +50,14 @@ class MentorPersistenceAdapter implements MentorRepository {
 	}
 
 	@Override
+	public List<Mentor> findByIds(Collection<String> mentorIds) {
+		if (mentorIds.isEmpty()) {
+			return List.of();
+		}
+		return springData.findByIdIn(mentorIds).stream().map(MentorJpaEntity::toDomain).toList();
+	}
+
+	@Override
 	public List<Mentor> findAll(String expertise, String query, Instant before, int limit) {
 		PageRequest page = PageRequest.of(0, limit);
 		List<MentorJpaEntity> entities;
@@ -78,6 +87,14 @@ class MentorPersistenceAdapter implements MentorRepository {
 	@Override
 	public Optional<MentorSlot> findSlotById(String slotId) {
 		return slotRepo.findById(slotId).map(MentorSlotJpaEntity::toDomain);
+	}
+
+	@Override
+	public List<MentorSlot> findSlotsByIds(Collection<String> slotIds) {
+		if (slotIds.isEmpty()) {
+			return List.of();
+		}
+		return slotRepo.findByIdIn(slotIds).stream().map(MentorSlotJpaEntity::toDomain).toList();
 	}
 
 	@Override

@@ -10,6 +10,7 @@ import java.util.stream.Collectors;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.groups.application.port.out.GroupRepository;
 import com.socialcoisa.rede.groups.domain.Group;
@@ -116,11 +117,11 @@ class GroupPersistenceAdapter implements GroupRepository {
 	}
 
 	@Override
+	@Transactional
 	public void adjustMemberCount(String groupId, int delta) {
-		groups.findById(groupId).ifPresent(entity -> {
-			entity.adjustMemberCount(delta);
-			groups.save(entity);
-		});
+		// UPDATE atomico no banco: ler-mutar-gravar perdia incremento quando duas entradas corriam
+		// juntas (24 simultaneas deixavam o contador em 1). O piso zero vive no proprio UPDATE.
+		groups.adjustMemberCount(groupId, delta);
 	}
 
 	@Override

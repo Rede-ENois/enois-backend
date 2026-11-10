@@ -318,7 +318,12 @@ class KofAgentDispatcherTests {
 				dispatcher.onEvent(event("ERROR", "LOG", "burst " + i));
 			}
 			long elapsedMs = (System.nanoTime() - started) / 1_000_000;
-			assertThat(elapsedMs).as("20k events handed off while the sender is stuck").isLessThan(1500);
+			// O que este teste prova é que o produtor NÃO BLOQUEIA no envio: o remetente está preso
+			// por 10 s, então se a entrega bloqueasse o laço levaria ~10 s. O teto é metade disso —
+			// folgado o bastante para não depender da velocidade da máquina (o CI já reprovou este
+			// teste com 1,6 s num runner carregado, sem nenhuma regressão) e apertado o bastante
+			// para falhar se alguém trocar a entrega assíncrona por uma chamada direta.
+			assertThat(elapsedMs).as("20k events handed off while the sender is stuck").isLessThan(5_000);
 		}
 		finally {
 			release.countDown();
@@ -365,7 +370,7 @@ class KofAgentDispatcherTests {
 		KofAgentProperties base = properties(dir, 40, 60, 20);
 		KofAgentProperties tiny = new KofAgentProperties(true, base.apiToken(), base.chatId(), null, "qa", null,
 			base.levels(), base.notifyLevels(), 40, base.flushInterval(), base.incidentQuiet(), base.digestInterval(),
-			base.latency(), base.retry(), base.rate(), base.circuit(), 100, base.spoolDir(),
+			Severity.TRACE, base.latency(), base.retry(), base.rate(), base.circuit(), 100, base.spoolDir(),
 			1000, null, null, null, null);
 		KofAgentDispatcher dispatcher = dispatcher(tiny);
 		for (int i = 0; i < 150; i++) {
@@ -402,7 +407,7 @@ class KofAgentDispatcherTests {
 	}
 
 	@Test
-	void slowRequestsNeverAlertOneByOneAndShowUpInTheHourlyDigest() {
+	void slowRequestsAloneDoNotSendTheHourlyDigest() {
 		KofAgentDispatcher dispatcher = dispatcher();
 		for (int i = 0; i < 30; i++) {
 			dispatcher.onEvent(request(200, "req-slow-" + i, "/feed/posts/{postId}/reactions", 2600 + i));
@@ -417,13 +422,50 @@ class KofAgentDispatcherTests {
 		clock.advance(Duration.ofHours(1));
 		dispatcher.tick();
 
+		// Slow requests on an API that never entered the slow state are noise, not news: the channel
+		// only speaks up for medium risk and above (KOF_AGENT_DIGEST_MIN_LEVEL, WARN by default).
+		assertThat(transport.sent).as("requests, 4xx and slow routes alone are not worth a message").isEmpty();
+	}
+
+	@Test
+	void slowRoutesStillShowUpInTheDigestOfAPeriodThatAlsoHadAWarnFailure() {
+		KofAgentDispatcher dispatcher = dispatcher();
+		for (int i = 0; i < 30; i++) {
+			dispatcher.onEvent(request(200, "req-slow-" + i, "/feed/posts/{postId}/reactions", 2600 + i));
+		}
+		dispatcher.onEvent(request(200, "req-slowest", "/feed/posts/{postId}/reactions", 66_296));
+		for (int i = 0; i < 60; i++) {
+			dispatcher.onEvent(request(200, "req-fast-" + i, "/feed", 40));
+		}
+		dispatcher.onEvent(event("WARN", "LOG", "pool almost full"));
+		nextWindow(dispatcher);
+		assertThat(transport.sent).as("WARN is digest-only, never an alert").isEmpty();
+
+		clock.advance(Duration.ofHours(1));
+		dispatcher.tick();
+
 		assertThat(transport.sent).hasSize(1);
 		assertThat(transport.silent).containsExactly(true);
 		assertThat(transport.sent.getFirst()).startsWith("📊 <b>API Énóis</b> · Produção · <code>PRD</code> · resumo")
 			.contains("2026-11-05 12:00 a 13:00", "Requisições 91 · 4xx 0 · 5xx 0 · lentas 31 (34,1%)",
+				"<b>Falhas</b> (1 tipo)", "🟡 <b>×1</b> · Log", "pool almost full",
 				"<b>Rotas lentas</b> (acima de 2,0 s)",
 				"<code>POST /feed/posts/{postId}/reactions</code> ×31 · mediana 2,6 s · máx 66,3 s")
 			.doesNotContain("<code>POST /feed</code>");
+	}
+
+	@Test
+	void slowRequestsNeverAlertOneByOne() {
+		KofAgentDispatcher dispatcher = dispatcher();
+		for (int i = 0; i < 30; i++) {
+			dispatcher.onEvent(request(200, "req-slow-" + i, "/feed/posts/{postId}/reactions", 2600 + i));
+		}
+		dispatcher.onEvent(request(200, "req-slowest", "/feed/posts/{postId}/reactions", 66_296));
+		for (int i = 0; i < 60; i++) {
+			dispatcher.onEvent(request(200, "req-fast-" + i, "/feed", 40));
+		}
+		nextWindow(dispatcher);
+		assertThat(transport.sent).as("a slow request is not an alert").isEmpty();
 	}
 
 	@Test

@@ -17,6 +17,7 @@ arquivo primeiro e siga a ordem das fases.
 | Faísca | `coin/` (V69) | `coin_accounts` com `version` (concorrência otimista) + `coin_entries` (razão com `Kind`) |
 | Rate limiting | resilience4j, `instances.auth` (20/periodo) e `instances.search` | **só nesses dois** — não há limiter global por IP |
 | Validação de URL externa | `games/application/GameUrlGuard` (2026-10-18) | https, sem credencial, host público (loopback/privado/link-local/IPv6 local) |
+| Anti-enumeração e scraping | `shared/security/Enumeration*` + [`ANTI-ENUMERACAO.md`](ANTI-ENUMERACAO.md) (2026-11-09) | filtro central, pontua comportamento (identificadores distintos, sequência, 404), shadow mode por padrão, bloqueio temporário progressivo |
 
 ## 0.1 Fase B — o que já estava de pé e o que foi provado (2026-10-18)
 
@@ -58,6 +59,31 @@ latência/custo da IA (Fase F).
 9. **Reincidência** — não existe (nem existia) banimento em cadeia por IP/dispositivo; a punição só
    olha violação confirmada da conta. Nada a corrigir aqui, e o critério está escrito para não
    aparecer depois.
+
+## 2.1 Chamadas e denúncia de chamada — fatos de segurança verificados (2026-11-09)
+
+Auditoria feita para sustentar a documentação oficial (Termos, Diretrizes e Política de Privacidade).
+O detalhamento está em [`CHAMADAS.md`](CHAMADAS.md); aqui fica o resumo para o plano de segurança.
+
+| Item | Estado real | Onde |
+| --- | --- | --- |
+| Entrada na sala | Token JWT (HS256) emitido pelo gateway da Epapo **só** após autorização do Énóis; `ENABLE_AUTH=1`, `ENABLE_GUESTS=0`, `JWT_ALLOW_EMPTY=0` | `EpapoMeetingTokenIssuer`, `deploy/auth-gateway/server.js` |
+| Criptografia | TLS no proxy de borda + SRTP no trecho de mídia. **Sem E2EE**: o JVB (SFU) recebe as mídias para retransmitir | `deploy/docker-compose.yml`, `deploy/runtime/config.js` |
+| Gravação | Desligada por configuração e por token (`ENABLE_RECORDING=0`, `context.features.recording=false`) | `deploy/docker-compose.yml` |
+| STUN/TURN | Só STUN; **sem TURN/coturn** | `deploy/runtime/config.js` |
+| Evidência da denúncia | Uma imagem JPEG estática (até 4 vídeos, lado maior 1280 px), gerada no momento da denúncia | `custom.js` do Epapo, `call-report-dialog.tsx` |
+| Aviso ao participante | **Nenhum**: a captura é silenciosa e o Epapo não a registra em log | `custom.js` |
+| Triagem por IA | A triagem recebe o relato e a imagem (no máximo 2) no endpoint externo configurado em `MODERATION_LLM_*` | `ModerationAiService.reportImages` |
+| Decisão | **Humana**: `AiVerdictApplicationService` ignora alvo `CALL` na penalidade automática | `AiVerdictApplicationService` |
+| Retenção da evidência | **Não há retenção automática**: `REPORT_CAPTURE` não gera `media_deletion_job`, e não há purge temporal de `reports`/`call_reports`/`call_sessions` | `MediaDeletionWorker`, `ModerationCleanupWorker` |
+| Acesso à evidência | Binário servido só a moderador (`private, no-store`), **mas** `GET /media/{mediaId}` é público e expõe `objectKey`/`cdnUrl` do asset | `MediaStorageProxyController`, `MediaContractController` |
+| Trilha de auditoria | Não há registro de quem abriu a evidência nem de quem registrou a denúncia | `MediaStorageProxyController.read` |
+| Consentimento de menor | **Aplicado desde 2026-11-09**: `AgeGate.requireCanWrite` nas entradas de chamada (abrir, atender, entrar, caminho do gateway) — menor de 18 sem autorização parental ativa recebe `PARENTAL_CONSENT_REQUIRED`. Regra de idade: cadastro a partir de 16, supervisão até os 18 (`shared/age/AgePolicy`) | `CallService` |
+
+A linha "Consentimento de menor" era uma lacuna registrada na auditoria original; foi fechada.
+As outras três linhas de lacuna (metadados públicos de mídia, sem trilha de auditoria de acesso,
+captura sem aviso) continuam em aberto: elas entram no plano (Fases C e E)
+quando a priorização sair da documentação.
 
 ## 3. Fases propostas (ordem por risco × esforço)
 

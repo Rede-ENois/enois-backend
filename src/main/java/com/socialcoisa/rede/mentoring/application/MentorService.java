@@ -8,9 +8,13 @@ import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -21,6 +25,9 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import com.socialcoisa.rede.calendar.application.CalendarSourceService;
+import com.socialcoisa.rede.calendar.domain.CalendarKind;
+import com.socialcoisa.rede.calendar.domain.CalendarScope;
 import com.socialcoisa.rede.coin.application.CoinService;
 import com.socialcoisa.rede.mentoring.application.port.out.MentorRepository;
 import com.socialcoisa.rede.mentoring.domain.Mentor;
@@ -53,18 +60,23 @@ public class MentorService {
 	public record AvailabilityRule(int dayOfWeek, List<String> times) {
 	}
 
+	/** Prefixo da origem na agenda: a sessão de mentoria ocupa uma entrada com este tipo. */
+	static final String CALENDAR_SOURCE = "MENTORING";
+
 	private final MentorRepository repository;
 	private final Clock clock;
 	private final CoinService coins;
 	private final MentoringRooms rooms;
+	private final CalendarSourceService calendar;
 	private final TransactionTemplate settlement;
 
 	public MentorService(MentorRepository repository, Clock clock, CoinService coins, MentoringRooms rooms,
-			PlatformTransactionManager transactionManager) {
+			CalendarSourceService calendar, PlatformTransactionManager transactionManager) {
 		this.repository = repository;
 		this.clock = clock;
 		this.coins = coins;
 		this.rooms = rooms;
+		this.calendar = calendar;
 		this.settlement = new TransactionTemplate(transactionManager);
 		this.settlement.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
 	}
@@ -276,7 +288,26 @@ public class MentorService {
 				"Mentoria: " + String.join(", ", mentor.expertise()));
 		}
 		repository.saveSession(session);
+		syncCalendar(session, mentor, slot);
 		return session;
+	}
+
+	/**
+	 * Põe a sessão na agenda do mentorado. O dono da entrada é quem paga e vai comparecer; o mentor
+	 * tem a própria agenda, e não é o organizador dela.
+	 *
+	 * <p>A sessão paga já saiu do escrow quando chega aqui, então uma falha na agenda desfaz tudo
+	 * (é a mesma transação). É o certo: sessão marcada e cobrada sem aparecer na agenda seria pior
+	 * do que a pessoa tentar de novo.
+	 */
+	private void syncCalendar(MentorSession session, Mentor mentor, MentorSlot slot) {
+		if (slot.startsAt() == null || slot.endsAt() == null) {
+			return;
+		}
+		calendar.upsert(new CalendarSourceService.UpsertInput(session.menteeId(), CALENDAR_SOURCE, session.id(),
+			CalendarScope.PROFESSIONAL, CalendarKind.MENTORING,
+			"Mentoria: " + String.join(", ", mentor.expertise()), session.message(), slot.startsAt(),
+			slot.endsAt(), AGENDA_ZONE.getId()));
 	}
 
 	@Transactional
@@ -355,20 +386,23 @@ public class MentorService {
 	 */
 	private List<MentorSession> withTheClock(List<MentorSession> sessions) {
 		Instant now = clock.instant();
+		// Os horários vêm numa consulta só: antes cada sessão agendada consultava o próprio horário
+		// para saber se já terminou, e a lista de sessões pagava uma consulta por linha.
+		Map<String, MentorSlot> slots = slotsByIds(sessions.stream()
+			.map(MentorSession::slotId).filter(Objects::nonNull).distinct().toList());
 		List<MentorSession> applied = new ArrayList<>(sessions.size());
 		for (MentorSession session : sessions) {
-			applied.add(finished(session, now) ? finish(session, now) : session);
+			applied.add(finished(session, now, slots) ? finish(session, now) : session);
 		}
 		return applied;
 	}
 
 	/** O horário da sessão já terminou? Vale o fim do horário; o início só quando não há fim. */
-	private boolean finished(MentorSession session, Instant now) {
+	private boolean finished(MentorSession session, Instant now, Map<String, MentorSlot> slots) {
 		if (session.status() != SessionStatus.SCHEDULED) {
 			return false;
 		}
-		MentorSlot slot = session.slotId() == null ? null
-			: repository.findSlotById(session.slotId()).orElse(null);
+		MentorSlot slot = session.slotId() == null ? null : slots.get(session.slotId());
 		Instant endsAt = slot == null ? null : (slot.endsAt() != null ? slot.endsAt() : slot.startsAt());
 		return endsAt != null && !endsAt.isAfter(now);
 	}
@@ -383,7 +417,8 @@ public class MentorService {
 		try {
 			settlement.executeWithoutResult(status -> {
 				MentorSession session = repository.findSessionById(candidate.id()).orElse(null);
-				if (session == null || !finished(session, now)) {
+				if (session == null || !finished(session, now, slotsByIds(
+						session.slotId() == null ? List.of() : List.of(session.slotId())))) {
 					return;
 				}
 				MentorSession done = session.complete();
@@ -409,8 +444,11 @@ public class MentorService {
 		initialDelayString = "${rede.mentoring.session-completion-initial-delay-ms:120000}")
 	public void completeFinishedSessions() {
 		Instant now = clock.instant();
-		for (MentorSession candidate : repository.findScheduledSessions()) {
-			if (finished(candidate, now)) {
+		List<MentorSession> scheduled = repository.findScheduledSessions();
+		Map<String, MentorSlot> slots = slotsByIds(scheduled.stream()
+			.map(MentorSession::slotId).filter(Objects::nonNull).distinct().toList());
+		for (MentorSession candidate : scheduled) {
+			if (finished(candidate, now, slots)) {
 				finish(candidate, now);
 			}
 		}
@@ -485,6 +523,33 @@ public class MentorService {
 	}
 
 	/**
+	 * O mesmo endereço, com o mentor já carregado pela lista. Sem isto, cada linha da lista de
+	 * sessões consultava o mentor de novo só para montar a sala — o mesmo mentor, uma vez por
+	 * sessão. O resultado é idêntico ao de {@link #roomUrlFor(MentorSession)}.
+	 */
+	public String roomUrlFor(MentorSession session, Mentor mentor) {
+		String stored = roomUrlOf(session, mentor);
+		if (stored == null || !rooms.isEpapo(session.roomMode())) {
+			return stored;
+		}
+		return rooms.epapoRoom(stored).map(rooms::roomUrlOrNull).orElse(stored);
+	}
+
+	/** Mentores de várias sessões numa consulta só, indexados por id. */
+	public Map<String, Mentor> mentorsByIds(Collection<String> mentorIds) {
+		Map<String, Mentor> byId = new HashMap<>();
+		repository.findByIds(mentorIds).forEach(mentor -> byId.put(mentor.id(), mentor));
+		return byId;
+	}
+
+	/** Horários de várias sessões numa consulta só, indexados por id. */
+	public Map<String, MentorSlot> slotsByIds(Collection<String> slotIds) {
+		Map<String, MentorSlot> byId = new HashMap<>();
+		repository.findSlotsByIds(slotIds).forEach(slot -> byId.put(slot.id(), slot));
+		return byId;
+	}
+
+	/**
 	 * Nome da sala no Epapo, ou o link próprio do mentor — o que o gateway confere. Sem servidor de
 	 * reunião configurado a lista de sessões não quebra: a sala fica sem endereço e só a entrada
 	 * responde 503.
@@ -556,6 +621,9 @@ public class MentorService {
 		}
 		MentorSession cancelled = session.cancel().settled(clock.instant());
 		repository.saveSession(cancelled);
+		// Cancelar a sessão cancela o compromisso, não o apaga: a agenda de quem marcou continua
+		// mostrando que aquele horário foi cancelado.
+		calendar.cancel(cancelled.menteeId(), CALENDAR_SOURCE, cancelled.id());
 		if (slot != null && !slot.available() && slot.startsAt() != null
 				&& slot.startsAt().isAfter(clock.instant())) {
 			repository.saveSlot(slot.release());

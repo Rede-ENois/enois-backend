@@ -138,8 +138,12 @@ class ExternalJobsListingTests {
 	@Test
 	void externalJobsComeAfterInternalOnes() throws Exception {
 		String internalId = "job_ext_listing_internal";
+		// A listagem ordena por posted_at desc e o banco de teste e compartilhado: outros testes
+		// criam vagas "agora" e as 6 vagas zq-* de JobSearchContractTests entram com posted_at
+		// futuro (+1h). Com posted_at passado, esta vaga caia fora do limit=20 e o indice saia -1
+		// no CI. +2h garante o primeiro lugar acima de qualquer acervo existente.
 		TestDatabase.insertJob(internalId, "Vaga Interna", "Coiso", "Remoto", "FULL_TIME", "MID",
-			List.of("Java"), Instant.now().minusSeconds(30));
+			List.of("Java"), Instant.now().plusSeconds(7200));
 
 		externalJobs.save(new ExternalJob("ext_listing_1", "ListagemExterna", "ext-1", "Vaga Externa de Teste",
 			null, null, null, null, "https://exemplo.test/vaga/1", Instant.now(), Instant.now(),

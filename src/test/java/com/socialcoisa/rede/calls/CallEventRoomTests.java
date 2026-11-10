@@ -71,6 +71,9 @@ class CallEventRoomTests {
 	@Autowired
 	private ObjectMapper objectMapper;
 
+	@Autowired
+	private org.springframework.jdbc.core.JdbcTemplate jdbc;
+
 	@Test
 	void salaDoEncontroNasceAoVivoComQuemAbriuDentroESemToque() throws Exception {
 		var host = auth("event-call-host1");
@@ -116,6 +119,35 @@ class CallEventRoomTests {
 	}
 
 	@Test
+	void eventoSemACaixinhaTamoJuntoNaoAbreSala() throws Exception {
+		var host = auth("event-call-host-optout");
+		Map<String, Object> body = new HashMap<>(Map.of("title", "Encontro sem sala",
+			"date", LocalDate.now().plusMonths(2).toString(), "time", "19:00", "format", "ONLINE",
+			"host", "Enois"));
+		MvcResult created = mockMvc.perform(post("/events")
+				.header("X-Session-Token", host.token())
+				.header("Idempotency-Key", "event-call-optout")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(body)))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String eventId = objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asText();
+
+		mockMvc.perform(post("/events/" + eventId + "/calls")
+				.header("X-Session-Token", host.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"kind\":\"AUDIO\"}"))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.code").value("EVENT_TAMO_JUNTO_DISABLED"));
+
+		// A sala de outro evento nao vaza para este: ler a sala aberta daqui nao devolve nada.
+		mockMvc.perform(get("/events/" + eventId + "/calls/open")
+				.header("X-Session-Token", host.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.id").doesNotExist());
+	}
+
+	@Test
 	void salaDeUmEncontroNaoApareceNoOutro() throws Exception {
 		var host = auth("event-call-host4");
 		String first = createEvent(host, "event-call-4a");
@@ -148,6 +180,24 @@ class CallEventRoomTests {
 		assertThat(callNotifications(stranger)).noneMatch(item -> "CALL_EVENT_LIVE".equals(item.get("kind").asText()));
 	}
 
+	@Test
+	void menorSemSupervisaoNaoEntraNaSala() throws Exception {
+		var host = auth("event-call-host-menor");
+		var minor = auth("event-call-menor");
+		String eventId = createEvent(host, "event-call-menor");
+		String callId = startEventCall(host, eventId, "event-call-menor").get("id").asText();
+
+		// A conta passa a ser de 16 anos sem responsável autorizado: a escrita barra a entrada,
+		// porque entrar numa chamada é escrita (ECA Digital).
+		jdbc.update("UPDATE users SET birth_date = ? WHERE id = ?",
+			LocalDate.now().minusYears(16).minusMonths(1).toString(), minor.userId());
+
+		mockMvc.perform(post("/calls/" + callId + "/join")
+				.header("X-Session-Token", minor.token()))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("PARENTAL_CONSENT_REQUIRED"));
+	}
+
 	// ------------------------------------------------------------------ apoio
 
 	private TestAuthHelper.AuthSession auth(String who) throws Exception {
@@ -157,7 +207,7 @@ class CallEventRoomTests {
 	private String createEvent(TestAuthHelper.AuthSession who, String key) throws Exception {
 		Map<String, Object> body = new HashMap<>(Map.of("title", "Encontro " + key,
 			"date", LocalDate.now().plusMonths(2).toString(), "time", "19:00", "format", "ONLINE",
-			"host", "Enois"));
+			"host", "Enois", "tamoJunto", true));
 		MvcResult result = mockMvc.perform(post("/events")
 				.header("X-Session-Token", who.token())
 				.header("Idempotency-Key", key)

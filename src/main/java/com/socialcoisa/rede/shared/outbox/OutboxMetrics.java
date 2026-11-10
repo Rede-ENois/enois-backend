@@ -1,7 +1,9 @@
 package com.socialcoisa.rede.shared.outbox;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.binder.MeterBinder;
@@ -18,6 +20,7 @@ import io.micrometer.core.instrument.binder.MeterBinder;
 class OutboxMetrics implements MeterBinder {
 
 	private final SpringDataOutboxEventJpaRepository outboxRepository;
+	private final AtomicLong failedTerminal = new AtomicLong();
 
 	OutboxMetrics(SpringDataOutboxEventJpaRepository outboxRepository) {
 		this.outboxRepository = outboxRepository;
@@ -34,13 +37,31 @@ class OutboxMetrics implements MeterBinder {
 		Gauge.builder("rede_outbox_events_total", this, metrics -> metrics.counts().total())
 			.description("Linhas na outbox (limitadas pela janela de retencao)")
 			.register(registry);
+		// Evento que esgotou as tentativas: o efeito dele NAO foi aplicado e uma pessoa precisa
+		// olhar. E contador, nao gauge, porque o evento continua FAILED na tabela e reprocessar o
+		// mesmo alarme a cada scrape esconderia o que importa: quantos chegaram la.
+		Counter.builder("rede_outbox_failed_terminal_total")
+			.description("Eventos que esgotaram as tentativas e precisam de intervencao manual")
+			.register(registry)
+			.increment(failedTerminal.get());
+	}
+
+	/** Chamado pelo worker quando um evento vira FAILED. */
+	void increaseFailedTerminal() {
+		failedTerminal.incrementAndGet();
 	}
 
 	Counts counts() {
 		return aggregate(outboxRepository.countByStatusWithAttempts());
 	}
 
-	/** Backlog e pressao vem so do status PENDING; o total soma todos os status. */
+	/**
+	 * Backlog e pressao vem so do status PENDING; o total soma todos os status.
+	 *
+	 * <p>Os eventos FAILED (que esgotaram as tentativas) entram no total e nao no backlog: eles
+	 * nao estao mais na fila, mas continuam na tabela ate uma pessoa olhar. O contador
+	 * {@code rede_outbox_failed_terminal_total} e quem diz quantos existem.</p>
+	 */
 	static Counts aggregate(List<SpringDataOutboxEventJpaRepository.StatusCount> rows) {
 		long pending = 0;
 		long attempts = 0;

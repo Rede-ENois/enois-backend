@@ -75,6 +75,10 @@ class EventJpaEntity {
 	@Column(name = "series_id")
 	private String seriesId;
 
+	/** A sala "Tamo junto" existe no card deste evento: escolha de quem cria, nao algo sempre la. */
+	@Column(name = "tamo_junto", nullable = false)
+	private boolean tamoJunto;
+
 	protected EventJpaEntity() {
 	}
 
@@ -101,6 +105,7 @@ class EventJpaEntity {
 		e.finalAttendeesCount = event.finalAttendeesCount();
 		e.recurrence = event.recurrence().name();
 		e.seriesId = event.seriesId();
+		e.tamoJunto = event.tamoJunto();
 		return e;
 	}
 
@@ -114,6 +119,7 @@ class EventJpaEntity {
 			event.markSanitized(finalAttendeesCount == null ? 0 : finalAttendeesCount, sanitizedAt);
 		}
 		event.changeRecurrence(EventRecurrence.valueOf(recurrence), seriesId);
+		event.changeTamoJunto(tamoJunto);
 		return event;
 	}
 

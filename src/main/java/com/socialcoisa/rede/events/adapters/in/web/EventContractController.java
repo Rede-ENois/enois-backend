@@ -124,7 +124,8 @@ class EventContractController {
 			event.recurrence().name(), event.seriesId(),
 			recurrenceService.nextOccurrenceDate(event).map(java.time.LocalDate::toString).orElse(null),
 			event.createdBy().equals(viewerId),
-			event.place() == null ? null : event.place().city(), event.place() == null ? null : event.place().state());
+			event.place() == null ? null : event.place().city(), event.place() == null ? null : event.place().state(),
+			event.tamoJunto());
 	}
 
 	@GetMapping("/{eventId}")
@@ -147,7 +148,7 @@ class EventContractController {
 			() -> {
 				Event e = eventService.create(request.title(), request.date(), request.time(), request.format(),
 					request.host(), request.cover(), request.streamUrl(), request.location(), request.recurrence(),
-					request.city(), request.state(), user.id().value());
+					Boolean.TRUE.equals(request.tamoJunto()), request.city(), request.state(), user.id().value());
 				return new CommandResponse(201, toView(e, false, user.id().value()));
 			});
 	}
@@ -163,7 +164,7 @@ class EventContractController {
 			() -> {
 				Event e = eventService.update(eventId, request.title(), request.date(), request.time(),
 					request.format(), request.host(), request.cover(), request.streamUrl(), request.location(),
-					request.city(), request.state(), user.id().value());
+					request.tamoJunto(), request.city(), request.state(), user.id().value());
 				return new CommandResponse(200, toView(e, false, user.id().value()));
 			});
 	}
@@ -221,15 +222,18 @@ class EventContractController {
 
 	record EventView(String id, String title, String date, String time, String format, String host, int attendees,
 			String cover, String streamUrl, String location, boolean expired, boolean attending, String recurrence,
-			String seriesId, String nextOccurrenceDate, boolean canManageRecurrence, String city, String state) {
+			String seriesId, String nextOccurrenceDate, boolean canManageRecurrence, String city, String state,
+			boolean tamoJunto) {
 	}
 
+	/** `tamoJunto` ausente = falso: quem cria escolhe a sala; sem a escolha, o card nao a tem. */
 	record CreateEventRequest(String title, String date, String time, String format, String host, String cover,
-			String streamUrl, String location, String recurrence, String city, String state) {
+			String streamUrl, String location, String recurrence, Boolean tamoJunto, String city, String state) {
 	}
 
+	/** `tamoJunto` null = nao mexer (cliente antigo ou edicao de outro campo). */
 	record UpdateEventRequest(String title, String date, String time, String format, String host, String cover,
-			String streamUrl, String location, String city, String state) {
+			String streamUrl, String location, Boolean tamoJunto, String city, String state) {
 	}
 
 	record RecurrenceRequest(String recurrence) {

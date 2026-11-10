@@ -24,7 +24,7 @@ class MediaSafetyAnalyzerTests {
 	private static ModerationAiService servicoSemChave() {
 		ReportedContentReader semTexto = (targetType, targetId) -> Optional.empty();
 		ReportedMediaReader semMidia = (targetType, targetId, limit) -> List.of();
-		return new ModerationAiService(null, semTexto, semMidia, "https://provedor.invalido/v1", "",
+		return new ModerationAiService(null, semTexto, semMidia, null, "https://provedor.invalido/v1", "",
 			"modelo-de-teste", MAPPER);
 	}
 

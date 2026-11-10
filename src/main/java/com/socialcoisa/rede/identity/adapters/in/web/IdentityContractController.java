@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
+import com.socialcoisa.rede.identity.application.IdentityReleaseService;
 import com.socialcoisa.rede.identity.application.IdentityVerificationService;
 import com.socialcoisa.rede.identity.domain.IdentityVerification;
 import com.socialcoisa.rede.jobs.application.JobPublishingPolicy;
@@ -36,13 +37,16 @@ class IdentityContractController {
 	private final JobPublishingPolicy jobPublishingPolicy;
 	private final CurrentUserResolver currentUserResolver;
 	private final IdempotencyApplicationService idempotency;
+	private final IdentityReleaseService release;
 
 	IdentityContractController(IdentityVerificationService identityService, JobPublishingPolicy jobPublishingPolicy,
-			CurrentUserResolver currentUserResolver, IdempotencyApplicationService idempotency) {
+			CurrentUserResolver currentUserResolver, IdempotencyApplicationService idempotency,
+			IdentityReleaseService release) {
 		this.identityService = identityService;
 		this.jobPublishingPolicy = jobPublishingPolicy;
 		this.currentUserResolver = currentUserResolver;
 		this.idempotency = idempotency;
+		this.release = release;
 	}
 
 	@GetMapping
@@ -91,9 +95,14 @@ class IdentityContractController {
 	}
 
 	private IdentityStatusView view(IdentityVerification verification) {
+		// A liberacao progressiva e do provedor pago; sem convite, o app mostra a mensagem de
+		// "esta chegando" e nunca um erro. Nao expoe nota de credibilidade nem posicao.
+		IdentityReleaseService.Eligibility eligibility = release.eligibility(verification.userId());
 		return new IdentityStatusView(verification.state().name(), verification.state().isVerified(),
-			identityService.providerAvailable(), verification.provider(), verification.reasonCode(),
-			verification.completedAt() != null ? verification.completedAt().toString() : null);
+			verification.state().isVerified() || identityService.providerAvailable(), verification.provider(),
+			verification.reasonCode(),
+			verification.completedAt() != null ? verification.completedAt().toString() : null,
+			eligibility.released(), eligibility.status());
 	}
 
 	/**
@@ -119,7 +128,7 @@ class IdentityContractController {
 	}
 
 	record IdentityStatusView(String state, boolean verified, boolean providerAvailable, String provider,
-			String reasonCode, String completedAt) {
+			String reasonCode, String completedAt, boolean released, String releaseStatus) {
 	}
 
 	record StartVerificationRequest(String consentVersion) {

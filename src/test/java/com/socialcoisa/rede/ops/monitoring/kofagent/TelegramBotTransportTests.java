@@ -55,7 +55,7 @@ class TelegramBotTransportTests {
 
 	private TelegramBotTransport transport(String baseUrl) {
 		return new TelegramBotTransport(new KofAgentProperties(true, TOKEN, "-1001234567890", baseUrl, "qa", null,
-			EnumSet.allOf(Severity.class), null, 0, null, null, null, null, null, null, null, 0, Path.of("unused").toString(), 0, null,
+			EnumSet.allOf(Severity.class), null, 0, null, null, null, null, null, null, null, null, 0, Path.of("unused").toString(), 0, null,
 			Duration.ofSeconds(2), null, null), new ObjectMapper());
 	}
 
@@ -125,7 +125,7 @@ class TelegramBotTransportTests {
 	@Test
 	void propertiesNeverPrintTheToken() {
 		assertThat(transport().toString()).doesNotContain(TOKEN);
-		assertThat(new KofAgentProperties(true, TOKEN, "-100", null, null, null, null, null, 0, null, null, null, null, null,
+		assertThat(new KofAgentProperties(true, TOKEN, "-100", null, null, null, null, null, 0, null, null, null, null, null, null,
 			null, null, 0,
 			null, 0, null, null, null, null).toString()).doesNotContain(TOKEN).contains("<redacted>");
 	}

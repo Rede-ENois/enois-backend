@@ -44,7 +44,10 @@ class SessionTokenHashMigration implements ApplicationRunner {
 
 	private void rehashLegacyRows() {
 		int migrated = 0;
-		for (AuthSessionJpaEntity session : repository.findAll()) {
+		// Só as linhas ainda cruas voltam do banco: hash tem sempre 64 caracteres, então a
+		// consulta dirigida devolve vazio numa frota saudável. O findAll antigo carregava TODA a
+		// auth_sessions (uma linha por login) a cada rodada só para descartar tudo em Java.
+		for (AuthSessionJpaEntity session : repository.findLegacyRawSessions()) {
 			String token = session.token();
 			if (token == null || HASH.matcher(token).matches()) {
 				continue;

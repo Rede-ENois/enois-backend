@@ -48,13 +48,16 @@ class MediaStorageProxyController {
 	private final com.socialcoisa.rede.media.application.MediaImageModerationService imageModeration;
 	private final com.socialcoisa.rede.media.application.MediaDimensionsService dimensions;
 	private final com.socialcoisa.rede.shared.web.ModeratorGuard moderators;
+	/** Opcional: sem registry (testes que montam o controller na mao) nada e registrado. */
+	private final ObjectProvider<io.micrometer.core.instrument.MeterRegistry> meters;
 
 	MediaStorageProxyController(ObjectProvider<MediaObjectStore> storeProvider, MediaAssetRepository assets,
 			CurrentUserResolver currentUserResolver,
 			com.socialcoisa.rede.media.application.MediaMetadataSanitizer sanitizer,
 			com.socialcoisa.rede.media.application.MediaImageModerationService imageModeration,
 			com.socialcoisa.rede.media.application.MediaDimensionsService dimensions,
-			com.socialcoisa.rede.shared.web.ModeratorGuard moderators) {
+			com.socialcoisa.rede.shared.web.ModeratorGuard moderators,
+			ObjectProvider<io.micrometer.core.instrument.MeterRegistry> meters) {
 		this.storeProvider = storeProvider;
 		this.assets = assets;
 		this.currentUserResolver = currentUserResolver;
@@ -62,6 +65,7 @@ class MediaStorageProxyController {
 		this.imageModeration = imageModeration;
 		this.dimensions = dimensions;
 		this.moderators = moderators;
+		this.meters = meters;
 	}
 
 	private MediaObjectStore store() {
@@ -110,6 +114,7 @@ class MediaStorageProxyController {
 			.header(HttpHeaders.CONTENT_TYPE, inline ? mime : "application/octet-stream")
 			.header(HttpHeaders.CONTENT_DISPOSITION, inline ? "inline" : "attachment")
 			.header(HttpHeaders.ACCEPT_RANGES, "bytes")
+			.contentLength(object.length())
 			// A chave tem uuid: o conteúdo daquele endereço nunca muda, então pode ficar em cache.
 			// A captura de denúncia é a exceção: prova de moderação não fica em cache público.
 			.header(HttpHeaders.CACHE_CONTROL, moderatorOnly ? "private, no-store"
@@ -222,6 +227,7 @@ class MediaStorageProxyController {
 			long receivedBytes, long startedAt) {
 		try {
 			store().write(objectKey, mime, storedBytes, body);
+			recordStoredSize(mime, storedBytes, receivedBytes, startedAt);
 		}
 		catch (ApiException failure) {
 			throw failure;
@@ -233,6 +239,30 @@ class MediaStorageProxyController {
 			throw new ApiException(502, "MEDIA_STORAGE_WRITE_FAILED",
 				"Nao foi possivel gravar a midia agora. Tente novamente em instantes.", failure);
 		}
+	}
+
+	/**
+	 * O tamanho EFETIVO gravado, por tipo de midia. Sem compressao hoje o valor e o proprio arquivo
+	 * recebido (issue #546); a serie existe para mostrar o crescimento antes de decidir se comprime,
+	 * e para a diferença entre recebido e gravado aparecer quando uma compressão for adicionada.
+	 * So observa: nao muda resposta, arquivo nem fluxo.
+	 */
+	private void recordStoredSize(String mime, long storedBytes, long receivedBytes, long startedAt) {
+		String kind = mime != null && mime.contains("/") ? mime.substring(0, mime.indexOf('/')) : "unknown";
+		LOG.info("media_upload_stored mime={} kind={} receivedBytes={} storedBytes={} elapsedMs={}", mime, kind,
+			receivedBytes, storedBytes, (System.nanoTime() - startedAt) / 1_000_000L);
+		var registry = meters.getIfAvailable();
+		if (registry == null) {
+			return;
+		}
+		// Cardinalidade fixa: o tipo (image/video/audio) e o resultado; sem tag por mimetype nem id.
+		io.micrometer.core.instrument.DistributionSummary
+			.builder("rede_media_upload_bytes")
+			.tag("kind", kind)
+			.description("Tamanho efetivo gravado por upload de midia")
+			.publishPercentiles(0.5, 0.95)
+			.register(registry)
+			.record(storedBytes);
 	}
 
 	/** O `{*key}` chega com a barra inicial; devolvemos o caminho relativo ao bucket. */

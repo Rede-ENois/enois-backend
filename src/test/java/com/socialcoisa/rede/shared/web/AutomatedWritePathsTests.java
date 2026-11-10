@@ -65,10 +65,12 @@ class AutomatedWritePathsTests {
 		"/auth/oauth/*/token",
 		"/games/tokens/validate",
 		"/webhooks/github",
+		"/webhooks/didit",
 		"/blogs/descadastrar",
 		"/notifications/digest/unsubscribe",
 		"/calls/*/gateway/entry/*",
-		"/mentoring/*/gateway/entry/*");
+		"/mentoring/*/gateway/entry/*",
+		"/internal/novidades-deploy");
 
 	private static final Pattern MAPPING = Pattern
 		.compile("@(Get|Post|Put|Patch|Delete)Mapping(?:\\(\\s*(?:value\\s*=\\s*)?\"([^\"]*)\"[^)]*\\))?");

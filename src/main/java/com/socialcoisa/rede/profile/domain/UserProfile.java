@@ -7,6 +7,9 @@ import com.socialcoisa.rede.shared.geo.CityState;
 
 public class UserProfile {
 
+	/** Teto de emblemas por perfil: uma regra só, usada por perfil, loja e histórico de kits. */
+	public static final int MAX_BADGES = 5;
+
 	private final String id;
 	private String username;
 	private String email;
@@ -443,7 +446,7 @@ public class UserProfile {
 			this.updatedAt = now;
 			return;
 		}
-		if (badges.size() > 5) {
+		if (badges.size() > MAX_BADGES) {
 			throw new IllegalStateException("MAX_BADGES");
 		}
 		this.badges = List.copyOf(badges);

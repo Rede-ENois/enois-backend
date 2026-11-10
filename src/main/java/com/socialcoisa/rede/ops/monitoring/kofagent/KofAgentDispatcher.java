@@ -240,7 +240,7 @@ public final class KofAgentDispatcher implements MonitoringEventListener {
 		drainInbound();
 		Instant stopping = clock.instant();
 		closeWindow(stopping);
-		if (digest.hasNews()) {
+		if (digest.reaches(properties.digestMinLevel())) {
 			// A partial digest: the counts of the running period would be lost with the process.
 			closeDigest(stopping);
 		}
@@ -295,6 +295,10 @@ public final class KofAgentDispatcher implements MonitoringEventListener {
 		}
 		LatencyWatch.Transition change = latency.roll(now);
 		if (change != null) {
+			if (change.degraded()) {
+				// The degradation is itself digest news at WARN level, even after its alert went out.
+				digest.slowEntered();
+			}
 			enqueue(new Outgoing(null, change.degraded() ? Severity.WARN : Severity.INFO,
 				formatter.formatLatency(change), false, !change.degraded(), now, 1));
 			latencyAlerts.incrementAndGet();
@@ -432,9 +436,13 @@ public final class KofAgentDispatcher implements MonitoringEventListener {
 		windowOverflow = 0;
 	}
 
-	/** Sends the digest of the period ending at {@code to} when it had something to report. */
+	/**
+	 * Sends the digest of the period ending at {@code to} when the period reached the digest minimum
+	 * ({@code digestMinLevel}, WARN by default): only lower-severity noise (4xx, a few slow requests on
+	 * a healthy API) means nothing to tell and sends nothing.
+	 */
 	private void closeDigest(Instant to) {
-		boolean news = digest.hasNews();
+		boolean news = digest.reaches(properties.digestMinLevel());
 		DigestCollector.Digest closed = digest.close(to);
 		if (news) {
 			enqueue(new Outgoing(null, Severity.INFO, formatter.formatDigest(closed, channelIssues()), false, true, to,
