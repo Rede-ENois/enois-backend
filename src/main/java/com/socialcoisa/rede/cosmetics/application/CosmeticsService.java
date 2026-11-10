@@ -35,7 +35,7 @@ public class CosmeticsService implements OfficialBadgeReader {
 
 	private static final String OWNERSHIP_PREFIX = "cosmetico:";
 	private static final String OFFICIAL_BADGE_PREFIX = "emblema-";
-	private static final int MAX_BADGES = 5;
+	private static final int MAX_BADGES = com.socialcoisa.rede.profile.domain.UserProfile.MAX_BADGES;
 	private static final int MAX_STATUS_CHARS = 60;
 	private static final Set<String> FREE_STATUS_ICONS = Set.of("cafe", "estrela", "coracao", "chip");
 

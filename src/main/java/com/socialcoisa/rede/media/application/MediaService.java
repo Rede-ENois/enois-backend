@@ -40,6 +40,14 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 	 * transporte. Quem recusar e o proprio servico, com mensagem clara.
 	 */
 	public static final long MAX_MEDIA_BYTES = 500L * 1024L * 1024L;
+	/**
+	 * Emblema é um ícone que acompanha o nome: 2MB é folgado até para GIF animado. Sem este teto
+	 * próprio ele herdaria os 500MB da mídia comum — e o bucket guardaria um "favicon" de 400MB.
+	 */
+	public static final long MAX_BADGE_BYTES = 2L * 1024L * 1024L;
+	/** Teto por propósito de upload; ausente = o teto geral. */
+	private static final java.util.Map<String, Long> MAX_BYTES_BY_PURPOSE =
+		java.util.Map.of("BADGE", MAX_BADGE_BYTES);
 	/** Janela do upload direto ao S3 e da limpeza do asset pendente (arquivos de ate 500MB). */
 	private static final Duration UPLOAD_WINDOW = Duration.ofMinutes(60);
 
@@ -239,9 +247,10 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 		if (command.size() <= 0) {
 			throw new ApiException(400, "INVALID_MEDIA_SIZE", "Tamanho da midia deve ser maior que zero.");
 		}
-		if (command.size() > MAX_MEDIA_BYTES) {
+		long maxBytes = MAX_BYTES_BY_PURPOSE.getOrDefault(purpose, MAX_MEDIA_BYTES);
+		if (command.size() > maxBytes) {
 			throw new ApiException(400, "MEDIA_TOO_LARGE",
-				"Mídia deve ter no máximo " + (MAX_MEDIA_BYTES / (1024L * 1024L)) + "MB.");
+				"Mídia deve ter no máximo " + (maxBytes / (1024L * 1024L)) + "MB.");
 		}
 		return mime;
 	}
