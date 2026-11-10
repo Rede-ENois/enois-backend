@@ -15,6 +15,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 
 import com.socialcoisa.rede.calendar.application.CalendarCommandService;
 import com.socialcoisa.rede.calendar.application.CalendarReminderService;
+import com.socialcoisa.rede.calendar.application.CalendarSourceService;
 import com.socialcoisa.rede.calendar.application.port.out.CalendarEntryRepository;
 import com.socialcoisa.rede.calendar.application.port.out.CalendarParticipantRepository;
 import com.socialcoisa.rede.calendar.application.port.out.CalendarReminderRepository;
@@ -43,6 +44,7 @@ class CalendarReminderServiceTests {
 	@Autowired CalendarEntryRepository entries;
 	@Autowired CalendarParticipantRepository participants;
 	@Autowired CalendarCommandService commands;
+	@Autowired CalendarSourceService sources;
 
 	@Test
 	void settingTheSameReminderTwiceKeepsOneRow() {
@@ -144,6 +146,44 @@ class CalendarReminderServiceTests {
 
 		assertThat(reminderRepository.findByEntry(entryId).get(0).sentAt())
 			.as("o aviso do horário antigo não pode sair")
+			.isNotNull();
+	}
+
+	@Test
+	void reschedulingThroughTheSourcePortAlsoEndsTheOldReminder() {
+		// O reagendamento que chega pela origem (mentoria, evento) segue a mesma regra da edição
+		// direta: o lembrete pendente do horário antigo não pode tocar.
+		String owner = owner();
+		Instant startsAt = Instant.now().plus(Duration.ofDays(4));
+		String sourceId = "event_" + UUID.randomUUID();
+		CalendarEntry entry = sources.upsert(new CalendarSourceService.UpsertInput(owner, "EVENT", sourceId,
+			CalendarScope.SOCIAL, CalendarKind.EVENT, "Encontro", null, startsAt,
+			startsAt.plus(Duration.ofHours(1)), SAO_PAULO.getId())).entry();
+		reminders.setForReader(owner, entry.id(), 60);
+
+		sources.upsert(new CalendarSourceService.UpsertInput(owner, "EVENT", sourceId, CalendarScope.SOCIAL,
+			CalendarKind.EVENT, "Encontro", null, startsAt.plus(Duration.ofDays(2)),
+			startsAt.plus(Duration.ofDays(2)).plus(Duration.ofHours(1)), SAO_PAULO.getId()));
+
+		assertThat(reminderRepository.findByEntry(entry.id()).get(0).sentAt())
+			.as("o aviso do horário antigo não pode sair")
+			.isNotNull();
+	}
+
+	@Test
+	void cancellingThroughTheSourcePortEndsThePendingReminder() {
+		String owner = owner();
+		Instant startsAt = Instant.now().plus(Duration.ofDays(4));
+		String sourceId = "event_" + UUID.randomUUID();
+		CalendarEntry entry = sources.upsert(new CalendarSourceService.UpsertInput(owner, "EVENT", sourceId,
+			CalendarScope.SOCIAL, CalendarKind.EVENT, "Encontro", null, startsAt,
+			startsAt.plus(Duration.ofHours(1)), SAO_PAULO.getId())).entry();
+		reminders.setForReader(owner, entry.id(), 15);
+
+		sources.cancel(owner, "EVENT", sourceId);
+
+		assertThat(reminderRepository.findByEntry(entry.id()).get(0).sentAt())
+			.as("compromisso cancelado não avisa")
 			.isNotNull();
 	}
 

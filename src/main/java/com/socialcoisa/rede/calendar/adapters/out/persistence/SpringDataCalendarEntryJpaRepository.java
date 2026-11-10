@@ -39,4 +39,6 @@ interface SpringDataCalendarEntryJpaRepository extends JpaRepository<CalendarEnt
 	Optional<CalendarEntryJpaEntity> findByOwnerIdAndSourceTypeAndSourceId(String ownerId, String sourceType,
 			String sourceId);
 
+	void deleteByOwnerIdAndSourceTypeAndSourceId(String ownerId, String sourceType, String sourceId);
+
 }
