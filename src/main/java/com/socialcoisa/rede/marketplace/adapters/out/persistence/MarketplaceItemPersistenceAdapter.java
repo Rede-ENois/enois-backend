@@ -1,6 +1,8 @@
 package com.socialcoisa.rede.marketplace.adapters.out.persistence;
 
+import java.util.Collection;
 import java.util.Optional;
+import java.util.Set;
 
 import org.springframework.stereotype.Repository;
 
@@ -24,5 +26,10 @@ class MarketplaceItemPersistenceAdapter implements MarketplaceItemRepository {
 	@Override
 	public Optional<MarketplaceItem> findById(String id) {
 		return repository.findById(id).map(MarketplaceItemJpaEntity::toDomain);
+	}
+
+	@Override
+	public Set<String> existingIds(Collection<String> ids) {
+		return Set.copyOf(repository.findExistingIds(ids));
 	}
 }

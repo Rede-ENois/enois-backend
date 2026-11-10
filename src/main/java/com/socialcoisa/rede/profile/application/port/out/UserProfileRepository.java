@@ -20,6 +20,12 @@ public interface UserProfileRepository {
 
 	List<UserProfile> findAllByIds(Collection<String> ids);
 
+	/**
+	 * Existência + nome + @ de várias contas, em uma consulta e sem as coleções do perfil — o
+	 * suficiente para as rotinas de triagem/limpeza (nome suspeito, conta excluída).
+	 */
+	List<AccountIdentity> identitiesOf(Collection<String> ids);
+
 	Optional<UserProfile> findByUsername(String username);
 
 	Optional<UserProfile> findByEmail(String email);
