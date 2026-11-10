@@ -63,23 +63,29 @@ class OnnxImageContentClassifierTests {
 		assertThat(assessment.reviewFrame()).isNull();
 	}
 
+	/**
+	 * Quadros 4000x4000 (16 MP cada, 31 deles = 496 MP brutos) EXCEDEM o orcamento no fator 1, mas
+	 * o leitor SUBAMOSTRA (fator 8: 500x500 por quadro ~ 7,75 MP) e a animacao e verificada em vez
+	 * de recusada. O orcamento continua sendo respeitado — na escala reduzida, e o pixel data aqui
+	 * nem precisa ser valido porque a inspecao e so pelos cabecalhos.
+	 */
 	@Test
-	void rejectsLargeLaterFramesBehindATinyFirstFrameBeforeDecodingAnything() throws Exception {
+	void oversizeLaterFramesAreSubsampledBehindATinyFirstFrame() throws Exception {
 		int[][] frames = new int[31][];
 		frames[0] = new int[] { 0, 0, 1, 1 };
 		for (int i = 1; i < frames.length; i++) {
 			frames[i] = new int[] { 0, 0, 4000, 4000 };
 		}
 		byte[] gif = headerOnlyGif(1, 1, frames);
-		int[] scored = { 0 };
 
-		assertThatThrownBy(() -> assess(gif, input -> {
-			scored[0]++;
-			return 0.0;
-		})).isInstanceOf(ImageContentClassifier.TooLargeToVerifyException.class);
-		assertThat(scored[0]).isZero();
-		// The budget is enforced from the frame headers alone: the pixel data here is not even valid.
-		assertThatThrownBy(() -> inspect(gif)).isInstanceOf(ImageContentClassifier.TooLargeToVerifyException.class);
+		assertThatCode(() -> inspect(gif)).doesNotThrowAnyException();
+
+		// Ainda ha recusa quando NEM subamostrando cabe: 31 quadros 6000x6000 no fator maximo (8)
+		// continuam fora do orcamento (750x750 por quadro ~ 17 MP somados, e o canvas junto estoura).
+		int[][] impossiveis = new int[31][];
+		java.util.Arrays.fill(impossiveis, new int[] { 0, 0, 60_000, 60_000 });
+		assertThatThrownBy(() -> inspect(headerOnlyGif(1, 1, impossiveis)))
+			.isInstanceOf(ImageContentClassifier.TooLargeToVerifyException.class);
 	}
 
 	@Test
@@ -95,6 +101,36 @@ class OnnxImageContentClassifierTests {
 
 		assertThatCode(() -> inspect(headerOnlyGif(1, 1, new int[] { 0, 0, 1, 1 }, new int[] { 0, 0, 1, 1 })))
 			.doesNotThrowAnyException();
+	}
+
+	/**
+	 * Um quadro de 6000x6000 (36 MP) passa do teto de decode de 16 MP: ANTES o upload inteiro era
+	 * recusado com "grande demais para verificar" — mesmo o classificador trabalhando em 256x256,
+	 * onde a resolucao original nao muda nada. AGORA o leitor subamostra (fator 2 -> 9 MP) e a
+	 * animacao e verificada, com o quadro vermelho ainda encontrado.
+	 */
+	@Test
+	void oversizeFramesAreSubsampledInsteadOfRefused() throws Exception {
+		GifFrame[] frames = new GifFrame[4];
+		for (int i = 0; i < frames.length; i++) {
+			frames[i] = i == 2 ? new GifFrame(solid(6000, 6000, Color.RED), 0, 0, "restoreToPrevious")
+				: new GifFrame(solid(6000, 6000, Color.BLUE), 0, 0, "doNotDispose");
+		}
+		List<Float> primeiroPixel = new ArrayList<>();
+
+		ImageContentClassifier.Assessment assessment = assess(gif(6000, 6000, frames), input -> {
+			primeiroPixel.add(input.get(0));
+			return redScore(input);
+		});
+
+		assertThat(assessment.score()).as("o quadro vermelho precisa ser encontrado na versao reduzida")
+			.isEqualTo(1.0);
+		// Azul e vermelho: as duas telas distintas, provando que os quadros reduzidos foram pontuados.
+		assertThat(primeiroPixel.stream().distinct().count()).isEqualTo(2);
+		BufferedImage flagged = ImageIO.read(new ByteArrayInputStream(assessment.reviewFrame()));
+		assertThat(flagged.getWidth()).as("o canvas vem da versao subamostrada").isLessThan(6000);
+		assertThat(rgb(flagged, flagged.getWidth() / 2, flagged.getHeight() / 2))
+			.isEqualTo(Color.RED.getRGB() & 0xFFFFFF);
 	}
 
 	@Test
