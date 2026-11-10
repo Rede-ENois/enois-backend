@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.calendar.application.CalendarAgendaItem;
 import com.socialcoisa.rede.calendar.application.CalendarCommandService;
+import com.socialcoisa.rede.calendar.application.CalendarConflictService;
 import com.socialcoisa.rede.calendar.application.CalendarInvitationService;
 import com.socialcoisa.rede.calendar.application.CalendarQueryService;
 import com.socialcoisa.rede.calendar.application.CalendarReminderService;
@@ -55,11 +56,12 @@ class CalendarEntryController {
 	private final UserProfileRepository profiles;
 	private final IdempotencyApplicationService idempotency;
 	private final CalendarReminderService calendarReminderService;
+	private final CalendarConflictService calendarConflictService;
 
 	CalendarEntryController(CurrentUserResolver currentUserResolver, CalendarQueryService calendarQueryService,
 			CalendarCommandService calendarCommandService, CalendarInvitationService calendarInvitationService,
 			UserProfileRepository profiles, IdempotencyApplicationService idempotency,
-			CalendarReminderService calendarReminderService) {
+			CalendarReminderService calendarReminderService, CalendarConflictService calendarConflictService) {
 		this.currentUserResolver = currentUserResolver;
 		this.calendarQueryService = calendarQueryService;
 		this.calendarCommandService = calendarCommandService;
@@ -67,6 +69,7 @@ class CalendarEntryController {
 		this.profiles = profiles;
 		this.idempotency = idempotency;
 		this.calendarReminderService = calendarReminderService;
+		this.calendarConflictService = calendarConflictService;
 	}
 
 	/**
@@ -82,6 +85,25 @@ class CalendarEntryController {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		return calendarQueryService.agenda(user.id().value(), instant(from, "from"), instant(to, "to"),
 			scope(scope)).stream().map(AgendaItemView::from).toList();
+	}
+
+	/**
+	 * O que já ocupa o intervalo que a pessoa está tentando usar. É leitura, não bloqueio: a agenda
+	 * permite sobreposição de propósito, e a tela usa a lista para avisar antes de salvar. A consulta
+	 * é sempre a agenda de quem está lendo — nunca a de outra pessoa.
+	 *
+	 * <p>`entryId` sai da lista para editar um compromisso existente não acusar conflito com ele
+	 * mesmo.
+	 */
+	@GetMapping("/conflicts")
+	List<AgendaItemView> conflicts(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(required = false) String from, @RequestParam(required = false) String to,
+			@RequestParam(required = false) String scope,
+			@RequestParam(required = false) String entryId) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return calendarConflictService.conflicts(user.id().value(), instant(from, "from"), instant(to, "to"),
+			scope(scope), entryId).stream().map(AgendaItemView::from).toList();
 	}
 
 	/**
