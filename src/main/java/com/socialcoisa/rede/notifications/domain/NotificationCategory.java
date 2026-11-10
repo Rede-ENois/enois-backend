@@ -58,6 +58,9 @@ public enum NotificationCategory {
 		Map.entry("SUPORTE", SYSTEM),
 		Map.entry("MICROPROJETO", SYSTEM),
 		Map.entry("SISTEMA", SYSTEM),
+		// Lembrete da agenda: o compromisso que a própria pessoa criou ou aceitou. SYSTEM porque não
+		// é convivência social (o toque de "reações e comentários" não desliga um compromisso).
+		Map.entry("CALENDAR_REMINDER", SYSTEM),
 		// Kinds from sibling PRs, mapped ahead so the merge order does not matter:
 		// ANSWER_ACCEPTED (#336), EVENT_NEXT_OCCURRENCE (#337), STUDY_PAIR_* (#338).
 		Map.entry("ANSWER_ACCEPTED", SOCIAL),
