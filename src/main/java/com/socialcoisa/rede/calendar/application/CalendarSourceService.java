@@ -70,7 +70,8 @@ public class CalendarSourceService {
 		}
 
 		CalendarEntry created = CalendarEntry.create(nextId(), input.ownerId(), input.scope(), input.kind(),
-			source, input.title(), input.description(), input.startsAt(), input.endsAt(), zone, false, now);
+			source, input.title(), input.description(), input.startsAt(), input.endsAt(), zone, input.allDay(),
+			now);
 		entries.save(created);
 		return new UpsertResult(created, true, false);
 	}
@@ -97,7 +98,15 @@ public class CalendarSourceService {
 	/** O que o módulo dono manda. `scope` e `kind` vêm de quem sabe o tipo; aqui não há padrão. */
 	public record UpsertInput(String ownerId, String sourceType, String sourceId, CalendarScope scope,
 			CalendarKind kind, String title, String description, Instant startsAt, Instant endsAt,
-			String timeZoneId) {
+			String timeZoneId, boolean allDay) {
+
+		/** Origem de mentoria e evento nunca é de dia inteiro; o import de `.ics` pode ser. */
+		public UpsertInput(String ownerId, String sourceType, String sourceId, CalendarScope scope,
+				CalendarKind kind, String title, String description, Instant startsAt, Instant endsAt,
+				String timeZoneId) {
+			this(ownerId, sourceType, sourceId, scope, kind, title, description, startsAt, endsAt, timeZoneId,
+				false);
+		}
 	}
 
 	/**
