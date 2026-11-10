@@ -26,11 +26,14 @@ public class CalendarCommandService {
 	private final CalendarEntryRepository entries;
 	private final CalendarQueryService query;
 	private final Clock clock;
+	private final CalendarReminderService reminders;
 
-	public CalendarCommandService(CalendarEntryRepository entries, CalendarQueryService query, Clock clock) {
+	public CalendarCommandService(CalendarEntryRepository entries, CalendarQueryService query, Clock clock,
+			CalendarReminderService reminders) {
 		this.entries = entries;
 		this.query = query;
 		this.clock = clock;
+		this.reminders = reminders;
 	}
 
 	public CalendarEntry create(String ownerId, String scope, String kind, String title, String description,
@@ -60,6 +63,7 @@ public class CalendarCommandService {
 			throw new ApiException(400, "INVALID_CALENDAR_ENTRY",
 				"Para trocar o fuso, informe também startsAt e endsAt.");
 		}
+		boolean moved = start != null;
 		translate(() -> {
 			Instant now = clock.instant();
 			if (title != null) {
@@ -74,6 +78,11 @@ public class CalendarCommandService {
 			return entry;
 		});
 		entries.save(entry);
+		if (moved) {
+			// Um aviso para o horário antigo é pior que aviso nenhum: a pessoa receberia "começa em
+			// 5 min" de um compromisso que já foi para semana que vem.
+			reminders.clearPendingForEntry(entry.id());
+		}
 		return entry;
 	}
 
@@ -89,6 +98,7 @@ public class CalendarCommandService {
 			return entry;
 		});
 		entries.save(entry);
+		reminders.clearPendingForEntry(entry.id());
 		return entry;
 	}
 

@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -21,8 +22,10 @@ import com.socialcoisa.rede.calendar.application.CalendarAgendaItem;
 import com.socialcoisa.rede.calendar.application.CalendarCommandService;
 import com.socialcoisa.rede.calendar.application.CalendarInvitationService;
 import com.socialcoisa.rede.calendar.application.CalendarQueryService;
+import com.socialcoisa.rede.calendar.application.CalendarReminderService;
 import com.socialcoisa.rede.calendar.domain.CalendarEntry;
 import com.socialcoisa.rede.calendar.domain.CalendarParticipant;
+import com.socialcoisa.rede.calendar.domain.CalendarReminder;
 import com.socialcoisa.rede.calendar.domain.CalendarScope;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
@@ -51,16 +54,19 @@ class CalendarEntryController {
 	private final CalendarInvitationService calendarInvitationService;
 	private final UserProfileRepository profiles;
 	private final IdempotencyApplicationService idempotency;
+	private final CalendarReminderService calendarReminderService;
 
 	CalendarEntryController(CurrentUserResolver currentUserResolver, CalendarQueryService calendarQueryService,
 			CalendarCommandService calendarCommandService, CalendarInvitationService calendarInvitationService,
-			UserProfileRepository profiles, IdempotencyApplicationService idempotency) {
+			UserProfileRepository profiles, IdempotencyApplicationService idempotency,
+			CalendarReminderService calendarReminderService) {
 		this.currentUserResolver = currentUserResolver;
 		this.calendarQueryService = calendarQueryService;
 		this.calendarCommandService = calendarCommandService;
 		this.calendarInvitationService = calendarInvitationService;
 		this.profiles = profiles;
 		this.idempotency = idempotency;
+		this.calendarReminderService = calendarReminderService;
 	}
 
 	/**
@@ -187,6 +193,63 @@ class CalendarEntryController {
 			"/api/calendar/entries/{entryId}/participants/me", idempotencyKey, hash,
 			() -> new CommandResponse(200, views(List.of(
 				calendarInvitationService.respond(user.id().value(), entryId, request.state()))).get(0)));
+	}
+
+	/**
+	 * Lembretes do compromisso para quem está lendo. A pessoa vem da sessão, nunca do caminho, e o
+	 * compromisso de outra pessoa responde 404 igual a um que não existe (D10).
+	 */
+	@GetMapping("/{entryId}/reminders")
+	List<ReminderView> reminders(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String entryId) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return calendarReminderService.ofReader(user.id().value(), entryId).stream()
+			.map(ReminderView::from)
+			.toList();
+	}
+
+	/**
+	 * Põe o lembrete que a pessoa escolheu. Idempotente: repetir a mesma antecedência devolve a
+	 * linha que já existe, porque o botão pode ter sido apertado duas vezes.
+	 */
+	@PutMapping("/{entryId}/reminders")
+	ReminderView setReminder(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String entryId, @RequestParam(required = false) Integer minutesBefore) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		if (minutesBefore == null) {
+			throw new ApiException(400, "INVALID_REMINDER", "Informe minutesBefore (5, 15, 30, 60 ou 1440).");
+		}
+		try {
+			return ReminderView.from(
+				calendarReminderService.setForReader(user.id().value(), entryId, minutesBefore));
+		}
+		catch (IllegalArgumentException error) {
+			throw new ApiException(400, "INVALID_REMINDER", error.getMessage());
+		}
+	}
+
+	@DeleteMapping("/{entryId}/reminders")
+	void clearReminder(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String entryId, @RequestParam(required = false) Integer minutesBefore) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		if (minutesBefore != null) {
+			try {
+				calendarReminderService.clearForReader(user.id().value(), entryId, minutesBefore);
+			}
+			catch (IllegalArgumentException error) {
+				throw new ApiException(400, "INVALID_REMINDER", error.getMessage());
+			}
+		}
+	}
+
+	record ReminderView(String id, String entryId, int minutesBefore, String dueAt, boolean sent) {
+
+		static ReminderView from(CalendarReminder reminder) {
+			return new ReminderView(reminder.id(), reminder.entryId(), reminder.minutesBefore(),
+				reminder.dueAt().toString(), reminder.sentAt() != null);
+		}
 	}
 
 	@DeleteMapping("/{entryId}/participants/{participantId}")
