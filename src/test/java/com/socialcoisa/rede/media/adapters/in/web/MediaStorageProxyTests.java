@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Map;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -21,6 +22,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.http.HttpRange;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -98,9 +100,16 @@ class MediaStorageProxyTests {
 		@Override
 		public StoredObject read(String key, String range) {
 			this.ultimoRange = range;
-			boolean parcial = range != null;
-			return new StoredObject(new ByteArrayInputStream(conteudo), conteudo.length, tipo,
-				parcial ? "bytes 0-4/" + conteudo.length : null, "\"etag-teste\"");
+			if (range == null) {
+				return new StoredObject(new ByteArrayInputStream(conteudo), conteudo.length, tipo, null,
+					"\"etag-teste\"");
+			}
+			HttpRange intervalo = HttpRange.parseRanges(range).getFirst();
+			int inicio = (int) intervalo.getRangeStart(conteudo.length);
+			int fim = (int) intervalo.getRangeEnd(conteudo.length);
+			byte[] trecho = Arrays.copyOfRange(conteudo, inicio, fim + 1);
+			return new StoredObject(new ByteArrayInputStream(trecho), trecho.length, tipo,
+				"bytes " + inicio + "-" + fim + "/" + conteudo.length, "\"etag-teste\"");
 		}
 
 		@Override
@@ -147,6 +156,7 @@ class MediaStorageProxyTests {
 			.andExpect(status().isOk())
 			.andExpect(header().string("Content-Type", "image/jpeg"))
 			.andExpect(header().string("Accept-Ranges", "bytes"))
+			.andExpect(header().longValue("Content-Length", store().conteudo.length))
 			.andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("immutable")))
 			.andReturn();
 
@@ -215,11 +225,61 @@ class MediaStorageProxyTests {
 
 	@Test
 	void pedidoParcialDevolve206ComContentRange() throws Exception {
-		mockMvc.perform(get("/storage/uploads/media_abc/media/x/video.mp4").header("Range", "bytes=0-4"))
+		var resultado = mockMvc.perform(get("/storage/uploads/media_abc/media/x/video.mp4")
+				.header("Range", "bytes=0-4"))
 			.andExpect(status().isPartialContent())
-			.andExpect(header().string("Content-Range", org.hamcrest.Matchers.startsWith("bytes 0-4/")));
+			.andExpect(header().string("Content-Range", "bytes 0-4/" + store().conteudo.length))
+			.andExpect(header().longValue("Content-Length", 5))
+			.andReturn();
 
 		assertThat(store().ultimoRange).isEqualTo("bytes=0-4");
+		assertCorpoEmStreaming(resultado, Arrays.copyOfRange(store().conteudo, 0, 5));
+	}
+
+	@Test
+	void sondagemInicialDoSafariRecebeSomenteDoisBytes() throws Exception {
+		var resultado = mockMvc.perform(get("/storage/uploads/media_abc/media/x/video.mp4")
+				.header("Range", "bytes=0-1"))
+			.andExpect(status().isPartialContent())
+			.andExpect(header().string("Accept-Ranges", "bytes"))
+			.andExpect(header().string("Content-Range", "bytes 0-1/" + store().conteudo.length))
+			.andExpect(header().longValue("Content-Length", 2))
+			.andReturn();
+
+		assertThat(store().ultimoRange).isEqualTo("bytes=0-1");
+		assertCorpoEmStreaming(resultado, Arrays.copyOfRange(store().conteudo, 0, 2));
+	}
+
+	@Test
+	void intervaloFinalPreservaTamanhoDoTrecho() throws Exception {
+		int tamanho = store().conteudo.length;
+		var resultado = mockMvc.perform(get("/storage/uploads/media_abc/media/x/video.mp4")
+				.header("Range", "bytes=-4"))
+			.andExpect(status().isPartialContent())
+			.andExpect(header().string("Content-Range",
+				"bytes " + (tamanho - 4) + "-" + (tamanho - 1) + "/" + tamanho))
+			.andExpect(header().longValue("Content-Length", 4))
+			.andReturn();
+
+		assertThat(store().ultimoRange).isEqualTo("bytes=-4");
+		assertCorpoEmStreaming(resultado, Arrays.copyOfRange(store().conteudo, tamanho - 4, tamanho));
+	}
+
+	@Test
+	void objetoVazioInformaComprimentoZero() throws Exception {
+		byte[] original = store().conteudo;
+		try {
+			store().conteudo = new byte[0];
+			var resultado = mockMvc.perform(get("/storage/uploads/media_abc/media/x/vazio.mp4"))
+				.andExpect(status().isOk())
+				.andExpect(header().longValue("Content-Length", 0))
+				.andReturn();
+
+			assertCorpoEmStreaming(resultado, new byte[0]);
+		}
+		finally {
+			store().conteudo = original;
+		}
 	}
 
 	@Test
