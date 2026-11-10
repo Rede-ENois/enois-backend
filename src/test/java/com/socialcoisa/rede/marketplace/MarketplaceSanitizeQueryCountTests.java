@@ -65,19 +65,29 @@ class MarketplaceSanitizeQueryCountTests {
 		}
 	}
 
-	/** Guarda as instruções SQL que o Hibernate mandou ao banco. */
+	/**
+	 * Guarda as instruções SQL que o Hibernate mandou ao banco, mas só as da thread que estiver
+	 * medindo: o gatilho @Scheduled da própria rotina dispara nos 90 segundos de vida do contexto
+	 * e, no CI, pode correr em paralelo com a medição — sem esse filtro, o job concorrente suja a
+	 * contagem (e até remove listagens no meio dela).
+	 */
 	static class CountingInspector implements StatementInspector {
 
 		private final AtomicReference<List<String>> captured =
 			new AtomicReference<>(Collections.synchronizedList(new ArrayList<>()));
 
+		private final AtomicReference<String> recordingThread = new AtomicReference<>();
+
 		@Override
 		public String inspect(String sql) {
-			captured.get().add(sql);
+			if (Thread.currentThread().getName().equals(recordingThread.get())) {
+				captured.get().add(sql);
+			}
 			return sql;
 		}
 
 		void reset() {
+			recordingThread.set(Thread.currentThread().getName());
 			captured.set(Collections.synchronizedList(new ArrayList<>()));
 		}
 
