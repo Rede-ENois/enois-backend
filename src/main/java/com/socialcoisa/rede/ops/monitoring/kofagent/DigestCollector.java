@@ -27,6 +27,7 @@ final class DigestCollector {
 	private long requests5xx;
 	private long slow;
 	private long otherKinds;
+	private Severity worst;
 	private final Map<String, Failure> failures = new LinkedHashMap<>();
 	private final Map<String, SlowRoute> slowRoutes = new LinkedHashMap<>();
 
@@ -38,6 +39,7 @@ final class DigestCollector {
 		requests++;
 		if (status != null && status >= 500) {
 			requests5xx++;
+			note(Severity.ERROR);
 		}
 		else if (status != null && status >= 400) {
 			requests4xx++;
@@ -57,6 +59,11 @@ final class DigestCollector {
 		}
 	}
 
+	void slowEntered() {
+		// The latency alert itself is a WARN; a period that only got slow counts as WARN news.
+		note(Severity.WARN);
+	}
+
 	void failure(Alert alert) {
 		Failure entry = failures.get(alert.fingerprint());
 		if (entry != null) {
@@ -69,11 +76,12 @@ final class DigestCollector {
 		else {
 			otherKinds++;
 		}
+		note(alert.severity());
 	}
 
-	/** Something worth a message: a failure, a slow request or a 5xx in the period. */
-	boolean hasNews() {
-		return !failures.isEmpty() || otherKinds > 0 || slow > 0 || requests5xx > 0;
+	/** Whether the period reached the digest minimum and so deserves its digest message. */
+	boolean reaches(Severity digestMinLevel) {
+		return worst != null && worst.atLeast(digestMinLevel);
 	}
 
 	/** Snapshot of the period ending at {@code to}; the collector starts the next period from there. */
@@ -94,9 +102,16 @@ final class DigestCollector {
 		requests5xx = 0;
 		slow = 0;
 		otherKinds = 0;
+		worst = null;
 		failures.clear();
 		slowRoutes.clear();
 		return digest;
+	}
+
+	private void note(Severity severity) {
+		if (worst == null || severity.atLeast(worst)) {
+			worst = severity;
+		}
 	}
 
 	private static final class Failure {

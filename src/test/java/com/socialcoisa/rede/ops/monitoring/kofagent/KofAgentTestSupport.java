@@ -42,8 +42,14 @@ final class KofAgentTestSupport {
 
 	static KofAgentProperties properties(Path spool, int batchMax, int perMinute, int burst, EnumSet<Severity> levels,
 			EnumSet<Severity> notify, Duration flushInterval, KofAgentProperties.Latency latency) {
+		return properties(spool, batchMax, perMinute, burst, levels, notify, flushInterval, Severity.WARN, latency);
+	}
+
+	/** {@code digestMin} below WARN lets digest-only tests see noise-only periods; TRACE means everything. */
+	static KofAgentProperties properties(Path spool, int batchMax, int perMinute, int burst, EnumSet<Severity> levels,
+			EnumSet<Severity> notify, Duration flushInterval, Severity digestMin, KofAgentProperties.Latency latency) {
 		return new KofAgentProperties(true, "123456:test-token-not-real", "-1001234567890", null, "prd", null,
-			levels, notify, batchMax, flushInterval, Duration.ofMinutes(30), Duration.ofHours(1), latency,
+			levels, notify, batchMax, flushInterval, Duration.ofMinutes(30), Duration.ofHours(1), digestMin, latency,
 			new KofAgentProperties.Retry(3, Duration.ofSeconds(1), Duration.ofSeconds(30)),
 			new KofAgentProperties.Rate(perMinute, burst), new KofAgentProperties.Circuit(3, Duration.ofSeconds(30),
 				Duration.ofMinutes(5)), 100_000, spool.toString(), 1000, "America/Sao_Paulo", Duration.ofSeconds(2),
