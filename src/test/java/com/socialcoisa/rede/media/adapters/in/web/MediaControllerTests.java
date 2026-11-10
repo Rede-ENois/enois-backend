@@ -81,6 +81,53 @@ class MediaControllerTests {
 	}
 
 	@Test
+	void badgeAcceptsGifUpToTwoMbAndRejectsAboveIt() throws Exception {
+		var session = auth.authenticate("user_media_badge_gif");
+
+		// GIF animado entra (o proposito BADGE aceita image/gif e o sanitizador preserva a animacao).
+		String gifAtLimit = objectMapper.writeValueAsString(Map.of(
+			"fileName", "emblema-animado.gif",
+			"mimeType", "image/gif",
+			"size", 2L * 1024L * 1024L,
+			"purpose", "BADGE"));
+		mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", session.token())
+				.header("Idempotency-Key", "badge-gif-at-limit")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(gifAtLimit))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.uploadUrl").exists());
+
+		// Emblema tem teto PROPRIO (2MB), bem abaixo do teto geral de midia: um "favicon" de 500MB
+		// nao passa mais.
+		String gifAboveLimit = objectMapper.writeValueAsString(Map.of(
+			"fileName", "emblema-pesado.gif",
+			"mimeType", "image/gif",
+			"size", 2L * 1024L * 1024L + 1,
+			"purpose", "BADGE"));
+		mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", session.token())
+				.header("Idempotency-Key", "badge-gif-above-limit")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(gifAboveLimit))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("MEDIA_TOO_LARGE"));
+
+		// O mesmo tamanho que e aceito como POST_VIDEO segue valendo: o teto e por proposito.
+		String videoSameSize = objectMapper.writeValueAsString(Map.of(
+			"fileName", "outro.mp4",
+			"mimeType", "video/mp4",
+			"size", 3L * 1024L * 1024L,
+			"purpose", "POST_VIDEO"));
+		mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", session.token())
+				.header("Idempotency-Key", "badge-gif-video-3mb")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(videoSameSize))
+			.andExpect(status().isCreated());
+	}
+
+	@Test
 	void createsMediaUploadAndReplaysIdempotentResponse() throws Exception {
 		var session = auth.authenticate("user_media_upload");
 		String payload = objectMapper.writeValueAsString(Map.of(
