@@ -19,6 +19,15 @@ interface SpringDataAuthSessionJpaRepository extends JpaRepository<AuthSessionJp
 	int rehash(@Param("rawToken") String rawToken, @Param("tokenHash") String tokenHash,
 			@Param("refreshHash") String refreshHash);
 
+	/**
+	 * Sessoes gravadas em claro por um pod antigo durante o rolling update. Um hash tem sempre 64
+	 * caracteres (SHA-256 em hex); token cru do AuthService tem 43 (base64url de 32 bytes) e
+	 * nenhum outro token guardado aqui chega a 64 hex — o tamanho sozinho separa as duas
+	 * populacoes sem hidratar a tabela inteira em Java.
+	 */
+	@Query("select s from AuthSessionJpaEntity s where length(s.token) <> 64")
+	List<AuthSessionJpaEntity> findLegacyRawSessions();
+
 	@Modifying
 	@Query("UPDATE AuthSessionJpaEntity s SET s.revokedAt = :now WHERE s.userId = :userId AND s.revokedAt IS NULL")
 	void revokeAllByUser(@Param("userId") String userId, @Param("now") Instant now);
