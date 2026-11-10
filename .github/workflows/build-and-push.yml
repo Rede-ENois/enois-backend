@@ -982,6 +982,10 @@ jobs:
           PROD_REDE_CALLS_EPAPO_GATEWAY_URL: ${{ vars.PROD_REDE_CALLS_EPAPO_GATEWAY_URL }}
           PROD_REDE_CALLS_EPAPO_INTERNAL_TOKEN: ${{ secrets.PROD_REDE_CALLS_EPAPO_INTERNAL_TOKEN }}
           PROD_REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN: ${{ secrets.PROD_REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN }}
+          # Token de servico que publica as "Novidades" no deploy (issue #622). Sem ele o backend
+          # sobe com a rota interna desligada (503) e o passo de publicacao avisa, sem derrubar
+          # o deploy. Precisa ser o mesmo valor nos dois lugares: no container e no passo do curl.
+          REDE_RELEASE_NOTES_DEPLOY_TOKEN: ${{ secrets.REDE_RELEASE_NOTES_DEPLOY_TOKEN }}
         run: |
           set -euo pipefail
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
@@ -1127,6 +1131,9 @@ jobs:
                 REDE_CALLS_EPAPO_GATEWAY_URL: "${REDE_CALLS_EPAPO_GATEWAY_URL}"
                 REDE_CALLS_EPAPO_INTERNAL_TOKEN: "${REDE_CALLS_EPAPO_INTERNAL_TOKEN}"
                 REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN: "${REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN}"
+                # "Novidades" automaticas do deploy (issue #622): mesmo valor que o passo de
+                # publicacao usa. Vazio = rota interna desligada (fail-closed, 503).
+                REDE_RELEASE_NOTES_DEPLOY_TOKEN: "${REDE_RELEASE_NOTES_DEPLOY_TOKEN}"
           EOF
 
           echo "==> Montar payload JSON (python escapa o YAML certo pro body)"
@@ -1188,3 +1195,115 @@ jobs:
           done
           echo "health check nao respondeu apos 75s"
           exit 1
+
+      # =======================================================================
+      # "Novidades" (O que há de novo) automáticas: publica o changelog feat/fix
+      # deste deploy no endpoint interno do backend (issue #622).
+      #
+      # Depois do health check, o CI pede ao backend qual foi o último SHA
+      # publicado (GET /internal/novidades-deploy/ultimo), monta os itens a partir
+      # dos commits feat/fix desde esse SHA e publica (POST /internal/novidades-deploy,
+      # X-Deploy-Token). O backend valida os itens com a MESMA regra do painel e
+      # recusa SHA repetido com 409 — reexecução do workflow não republica nem
+      # reabre o popup.
+      #
+      # FALHA AQUI NÃO DERRUBA O DEPLOY: o build já está no ar e saudável. Qualquer
+      # problema vira ::warning:: e o changelog continua publicável à mão no painel.
+      # =======================================================================
+      - name: 📣 Publicar "Novidades" do deploy
+        env:
+          DEPLOY_TOKEN: ${{ secrets.REDE_RELEASE_NOTES_DEPLOY_TOKEN }}
+          HEAD_SHA: ${{ github.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          API_BASE: https://api.enois.ia.br/api
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DEPLOY_TOKEN}" ]; then
+            echo "::warning::REDE_RELEASE_NOTES_DEPLOY_TOKEN nao configurado: a rota no backend esta desligada (503) e as novidades deste deploy nao serao publicadas automaticamente."
+            exit 0
+          fi
+
+          # 1) Base do changelog: o SHA do ultimo deploy que publicou.
+          ULTIMO=$(curl -sf --max-time 15 -H "X-Deploy-Token: ${DEPLOY_TOKEN}" \
+            "${API_BASE}/internal/novidades-deploy/ultimo" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin).get("commitSha") or "")' || true)
+
+          if [ -z "${ULTIMO}" ]; then
+            echo "::warning::Estreia: nenhum deploy publicado antes, entao nao ha base para o changelog entre versoes. Nada e publicado (o painel segue manual)."
+            exit 0
+          fi
+          if [ "${ULTIMO}" = "${HEAD_SHA}" ]; then
+            echo "==> Este SHA ja e a ultima versao publicada: nada a fazer."
+            exit 0
+          fi
+          echo "==> Changelog ${ULTIMO:0:7}..${HEAD_SHA:0:7}"
+
+          # 2) Itens: um por commit feat/fix entre as duas versoes. A API de comparacao evita
+          # clonar o repositorio no runner self-hosted (este job nao faz checkout).
+          python3 - "$ULTIMO" "$HEAD_SHA" <<'PYEOF' > /tmp/novidades-items.json
+          import json, os, sys, urllib.request
+
+          base, head = sys.argv[1], sys.argv[2]
+          url = f"https://api.github.com/repos/{os.environ['REPO']}/compare/{base}...{head}"
+          request = urllib.request.Request(url, headers={
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+              "User-Agent": "enois-deploy-notes",
+          })
+          with urllib.request.urlopen(request, timeout=20) as response:
+              data = json.load(response)
+
+          items = []
+          # O repo usa Conventional Commits com escopo opcional ("feat(calendar): ..."), entao o
+          # tipo e lido ate o primeiro ":" e o escopo sai do titulo. Merge e commit de chore nao
+          # viram novidade: o popup e para o que a pessoa percebe no app.
+          for commit in data.get("commits", []):
+              subject = commit["commit"]["message"].splitlines()[0].strip()
+              tipo, _, resto = subject.partition(":")
+              tipo = tipo.strip().lower()
+              label = resto.strip()
+              if tipo.startswith("feat"):
+                  kind = "Novidade"
+              elif tipo.startswith("fix"):
+                  kind = "Correcao"
+              else:
+                  continue
+              # "feat(calendar): disponibilidade" -> "disponibilidade (calendar)"
+              escopo = ""
+              if "(" in tipo and tipo.endswith(")"):
+                  escopo = tipo[tipo.index("(") + 1:-1]
+              if not label:
+                  continue
+              titulo = f"{kind}: {label}" + (f" ({escopo})" if escopo else "")
+              items.append({
+                  "title": titulo[:80],
+                  "description": f"Entrou no deploy {head[:7]}."[:240],
+              })
+              if len(items) == 8:
+                  break
+
+          print(json.dumps({"commitSha": head, "items": items}))
+          PYEOF
+
+          N_ITENS=$(python3 -c 'import json; print(len(json.load(open("/tmp/novidades-items.json"))["items"]))')
+          if [ "${N_ITENS}" -eq 0 ]; then
+            echo "==> Nenhum commit feat/fix no intervalo: nada de novo para o popup (o que esta no ar permanece)."
+            exit 0
+          fi
+          echo "==> Publicando ${N_ITENS} novidade(s)"
+
+          # 3) Publica. 409 = este deploy ja publicou (reexecucao): nao e erro.
+          HTTP=$(curl -sS -o /tmp/novidades-resp.json -w '%{http_code}' --max-time 15 \
+            -X POST "${API_BASE}/internal/novidades-deploy" \
+            -H "X-Deploy-Token: ${DEPLOY_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data @/tmp/novidades-items.json 2>/dev/null || echo 000)
+          case "${HTTP}" in
+            200) echo "==> Novidades publicadas: $(cat /tmp/novidades-resp.json)" ;;
+            409) echo "==> Este deploy ja havia publicado as novidades (409): nada reaberto." ;;
+            000) echo "::warning::Nao foi possivel falar com a API de producao para publicar as novidades (rede/timeout). Publique a mao no painel se for preciso." ;;
+            *) echo "::warning::Publicacao das novidades recusada (HTTP ${HTTP}). O deploy segue; publique a mao no painel se for preciso." ;;
+          esac
+          rm -f /tmp/novidades-items.json /tmp/novidades-resp.json
