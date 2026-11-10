@@ -33,6 +33,7 @@ import com.socialcoisa.rede.contributions.domain.ContributionCategory;
 import com.socialcoisa.rede.contributions.domain.ContributionKind;
 import com.socialcoisa.rede.contributions.domain.ContributionStatus;
 import com.socialcoisa.rede.contributions.domain.GitHubContribution;
+import com.socialcoisa.rede.contributions.domain.GitHubIdentity;
 import com.socialcoisa.rede.contributions.domain.GitHubRepository;
 import com.socialcoisa.rede.contributions.domain.GitHubSyncState;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -157,6 +158,8 @@ public class GitHubContributionSyncService {
 		boolean rateLimited = false;
 		List<String> names = new ArrayList<>();
 		Set<String> affectedUsers = new LinkedHashSet<>();
+		// Mapa autor GitHub → conta Énóis: uma consulta por página, não uma por objeto importado.
+		java.util.Map<String, GitHubIdentity> identityByGithubId = java.util.Map.of();
 
 		for (GitHubRepository repository : selected) {
 			names.add(repository.repository());
@@ -171,12 +174,13 @@ public class GitHubContributionSyncService {
 				List<GitHubPullRequest> pullRequests = gateway.listMergedPullRequests(repository.repository(),
 					since, maxPages);
 				fetched += pullRequests.size();
+				pullRequests.forEach(pull -> seenGithubIds.add(pull.authorId()));
+				identityByGithubId = identityIndexOf(seenGithubIds);
 				for (GitHubPullRequest pull : pullRequests) {
-					seenGithubIds.add(pull.authorId());
 					if (targeted && !authorGithubIds.contains(pull.authorId())) {
 						continue;
 					}
-					String userId = userIdOf(pull.authorId());
+					String userId = userIdOf(identityByGithubId, pull.authorId());
 					var existing = contributions.findByRepositoryAndKindAndNumber(repository.repository(),
 						ContributionKind.PULL_REQUEST, (int) pull.number());
 					boolean needsDetails = existing.isEmpty() || !existing.get().detailsFetched()
@@ -267,12 +271,24 @@ public class GitHubContributionSyncService {
 
 				List<GitHubIssue> issues = gateway.listIssues(repository.repository(), since, maxPages);
 				issuesFetched += issues.size();
+				var mapaAtual = identityByGithubId;
+				var novosAutores = issues.stream().map(GitHubIssue::authorId)
+					.filter(id -> !mapaAtual.containsKey(id))
+					.collect(java.util.stream.Collectors.toSet());
+				if (!novosAutores.isEmpty()) {
+					// Autores que só apareceram na página de issues: complementa o mapa (1 consulta).
+					identityByGithubId = new java.util.HashMap<>(identityByGithubId);
+					identityByGithubId.putAll(identityIndexOf(novosAutores));
+					issues.forEach(issue -> seenGithubIds.add(issue.authorId()));
+				}
+				else {
+					issues.forEach(issue -> seenGithubIds.add(issue.authorId()));
+				}
 				for (GitHubIssue issue : issues) {
-					seenGithubIds.add(issue.authorId());
 					if (targeted && !authorGithubIds.contains(issue.authorId())) {
 						continue;
 					}
-					String userId = userIdOf(issue.authorId());
+					String userId = userIdOf(identityByGithubId, issue.authorId());
 					var existing = contributions.findByRepositoryAndKindAndNumber(repository.repository(),
 						ContributionKind.ISSUE, (int) issue.number());
 					boolean manual = existing.isPresent() && existing.get().reviewedBy() != null;
@@ -311,17 +327,11 @@ public class GitHubContributionSyncService {
 
 				if (!dryRun) {
 					if (targeted) {
-						for (String githubId : authorGithubIds) {
-							identities.markSynced(githubId, GitHubSyncState.OK, null, started);
-						}
+						markAttempt(identities, authorGithubIds, GitHubSyncState.OK, null, started);
 					}
 					else {
 						repositories.save(repository.withLastSyncedAt(started));
-						for (String githubId : seenGithubIds) {
-							if (StringUtils.hasText(githubId)) {
-								identities.markSynced(githubId, GitHubSyncState.OK, null, started);
-							}
-						}
+						markAttempt(identities, seenGithubIds, GitHubSyncState.OK, null, started);
 					}
 				}
 			}
@@ -377,10 +387,26 @@ public class GitHubContributionSyncService {
 			List.copyOf(errors), started, finished);
 	}
 
-	private String userIdOf(String githubUserId) {
-		return StringUtils.hasText(githubUserId)
-			? identities.findByGithubUserId(githubUserId).map(identity -> identity.userId()).orElse(null)
-			: null;
+	private String userIdOf(java.util.Map<String, GitHubIdentity> identityByGithubId, String githubUserId) {
+		if (!StringUtils.hasText(githubUserId)) {
+			return null;
+		}
+		var identity = identityByGithubId.get(githubUserId);
+		return identity != null ? identity.userId() : null;
+	}
+
+	/**
+	 * O mapa autor → conta Énóis dos IDs que a página trouxe, em UMA consulta. O laço antigo
+	 * consultava o vínculo por PR/issue importado (uma ida ao banco por linha da página); os
+	 * IDs de autor só existem depois que a página chega, então o mapa é recarregado por
+	 * repositório. Vale também na sincronização de um vínculo só: o corte já filtra o que é
+	 * importado, mas a conta do autor ainda precisa ser resolvida para o vínculo importado.
+	 */
+	private java.util.Map<String, GitHubIdentity> identityIndexOf(java.util.Set<String> seenGithubIds) {
+		if (seenGithubIds.isEmpty()) {
+			return java.util.Map.of();
+		}
+		return identities.findByGithubUserIds(seenGithubIds);
 	}
 
 	private boolean qualified(List<String> labels) {
@@ -479,10 +505,11 @@ public class GitHubContributionSyncService {
 
 	private static void markAttempt(GitHubIdentityRepository identities, Set<String> githubIds,
 			GitHubSyncState state, String error, Instant at) {
-		for (String githubId : githubIds) {
-			if (StringUtils.hasText(githubId)) {
-				identities.markSynced(githubId, state, error, at);
-			}
+		// Um UPDATE só para a página: antes era um SELECT + um UPDATE por autor visto.
+		Set<String> ids = githubIds.stream().filter(StringUtils::hasText)
+			.collect(java.util.stream.Collectors.toSet());
+		if (!ids.isEmpty()) {
+			identities.markSyncedInBatch(ids, state, error, at);
 		}
 	}
 

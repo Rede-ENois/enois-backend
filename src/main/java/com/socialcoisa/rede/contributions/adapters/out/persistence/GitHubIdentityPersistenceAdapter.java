@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.contributions.adapters.out.persistence;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.Optional;
 
 import org.springframework.stereotype.Repository;
@@ -39,6 +40,16 @@ class GitHubIdentityPersistenceAdapter implements GitHubIdentityRepository {
 	}
 
 	@Override
+	public java.util.Map<String, GitHubIdentity> findByGithubUserIds(java.util.Collection<String> githubUserIds) {
+		if (githubUserIds.isEmpty()) {
+			return java.util.Map.of();
+		}
+		return repository.findByGithubUserIdIn(githubUserIds).stream()
+			.map(GitHubIdentityJpaEntity::toDomain)
+			.collect(java.util.stream.Collectors.toMap(GitHubIdentity::githubUserId, identity -> identity));
+	}
+
+	@Override
 	public void deleteByUserId(String userId) {
 		repository.deleteByUserId(userId);
 	}
@@ -47,5 +58,17 @@ class GitHubIdentityPersistenceAdapter implements GitHubIdentityRepository {
 	public void markSynced(String githubUserId, GitHubSyncState state, String error, Instant at) {
 		repository.findByGithubUserId(githubUserId).ifPresent(entity -> repository
 			.save(GitHubIdentityJpaEntity.fromDomain(entity.toDomain().withSync(state, error, at))));
+	}
+
+	// A sincronização roda fora de transação (cada save abre a sua); o UPDATE em lote precisa da
+	// dele para o flush do Hibernate valer.
+	@Override
+	@org.springframework.transaction.annotation.Transactional
+	public int markSyncedInBatch(java.util.Collection<String> githubUserIds, GitHubSyncState state, String error,
+			Instant at) {
+		if (githubUserIds.isEmpty()) {
+			return 0;
+		}
+		return repository.markSyncedInBatch(githubUserIds, state, error, at);
 	}
 }
