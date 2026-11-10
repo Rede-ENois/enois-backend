@@ -232,6 +232,53 @@ class RepostFlowTests {
 		}
 	}
 
+	/**
+	 * Republicar avisa quem escreveu o original — nos dois caminhos, nunca a si mesmo. Antes, o
+	 * contador de reposts subia em silêncio e o autor não ficava sabendo.
+	 */
+	@Test
+	void repostingNotifiesTheOriginalAuthor() throws Exception {
+		var author = auth.authenticate("repost_notify_author_" + System.nanoTime());
+		var reposter = auth.authenticate("repost_notify_user_" + System.nanoTime());
+		String originalId = publish(author, "Conteúdo que será republicado e avisado ao autor.");
+
+		mockMvc.perform(post("/feed/posts/{id}/repost", originalId)
+				.header("X-Session-Token", reposter.token()))
+			.andExpect(status().isCreated());
+
+		mockMvc.perform(get("/notifications")
+				.header("X-Session-Token", author.token())
+				.param("limit", "10"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[0].kind").value("POST_REPOSTED"))
+			.andExpect(jsonPath("$.items[0].actorId").value(reposter.userId()))
+			.andExpect(jsonPath("$.items[0].href").value("/api/feed/posts/" + originalId))
+			.andExpect(jsonPath("$.items[0].read").value(false));
+
+		// Repost com opinião avisa também, e o link leva à citação (o que aparece no feed).
+		var quoter = auth.authenticate("repost_notify_quoter_" + System.nanoTime());
+		String quoteId = quote(quoter, originalId, "Concordo com o autor.");
+
+		mockMvc.perform(get("/notifications")
+				.header("X-Session-Token", author.token())
+				.param("limit", "10"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[0].kind").value("POST_REPOSTED"))
+			.andExpect(jsonPath("$.items[0].actorId").value(quoter.userId()))
+			.andExpect(jsonPath("$.items[0].href").value("/api/feed/posts/" + quoteId))
+			.andExpect(jsonPath("$.items[1].kind").value("POST_REPOSTED"));
+
+		// Citar o próprio post não gera aviso para si mesmo.
+		var selfQuoter = auth.authenticate("repost_notify_self_" + System.nanoTime());
+		String ownId = publish(selfQuoter, "Post que eu mesmo vou citar.");
+		quote(selfQuoter, ownId, "Comentando o meu.");
+		mockMvc.perform(get("/notifications")
+				.header("X-Session-Token", selfQuoter.token())
+				.param("limit", "10"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.kind == 'POST_REPOSTED')]").isEmpty());
+	}
+
 	private String quote(TestAuthHelper.AuthSession session, String postId, String opinion) throws Exception {
 		MvcResult result = mockMvc.perform(post("/feed/posts/{id}/repost", postId)
 				.header("X-Session-Token", session.token())
