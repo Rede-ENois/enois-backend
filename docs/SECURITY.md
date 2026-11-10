@@ -78,9 +78,11 @@ O detalhamento está em [`CHAMADAS.md`](CHAMADAS.md); aqui fica o resumo para o 
 | Retenção da evidência | **Não há retenção automática**: `REPORT_CAPTURE` não gera `media_deletion_job`, e não há purge temporal de `reports`/`call_reports`/`call_sessions` | `MediaDeletionWorker`, `ModerationCleanupWorker` |
 | Acesso à evidência | Binário servido só a moderador (`private, no-store`), **mas** `GET /media/{mediaId}` é público e expõe `objectKey`/`cdnUrl` do asset | `MediaStorageProxyController`, `MediaContractController` |
 | Trilha de auditoria | Não há registro de quem abriu a evidência nem de quem registrou a denúncia | `MediaStorageProxyController.read` |
-| Consentimento de menor | `AgeGate`/`PARENTAL_CONSENT_REQUIRED` não é aplicado no módulo de chamadas | `shared/age/AgeGate` |
+| Consentimento de menor | **Aplicado desde 2026-11-09**: `AgeGate.requireCanWrite` nas entradas de chamada (abrir, atender, entrar, caminho do gateway) — menor de 18 sem autorização parental ativa recebe `PARENTAL_CONSENT_REQUIRED`. Regra de idade: cadastro a partir de 16, supervisão até os 18 (`shared/age/AgePolicy`) | `CallService` |
 
-As quatro últimas linhas são **lacunas**, não documentação: elas entram no plano (Fases C e E)
+A linha "Consentimento de menor" era uma lacuna registrada na auditoria original; foi fechada.
+As outras três linhas de lacuna (metadados públicos de mídia, sem trilha de auditoria de acesso,
+captura sem aviso) continuam em aberto: elas entram no plano (Fases C e E)
 quando a priorização sair da documentação.
 
 ## 3. Fases propostas (ordem por risco × esforço)

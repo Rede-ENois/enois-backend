@@ -347,4 +347,49 @@ class SafeHtmlTests {
 			.doesNotContain("onload").doesNotContain("onclick").doesNotContain("<foreignObject")
 			.doesNotContain("javascript:");
 	}
+
+	/**
+	 * O atributo `id` e ALVO de estilizacao, nao decoracao: `#hero{...}` no <style>, `url(#grad)` no
+	 * SVG e `href="#secao"` nos links apontam para ele.
+	 *
+	 * <p>Sem `id` na allowlist, o sanitizador apagava o atributo e mantinha o CSS/referencia — a bio
+	 * saia sem o estilo que a pessoa escreveu, e o gradiente do SVG perdia o preenchimento (o
+	 * `fill="url(#g)"` ficava apontando para um id que nao existia mais). E o mesmo tipo de quebra do
+	 * relato do SVG animado (2026-10-20): previa certa, perfil errado.</p>
+	 */
+	@Test
+	void idAttributeSurvivesBecauseCssAndSvgReferenceIt() {
+		String clean = SafeHtml.sanitizeProfileHtml("""
+			<style>#hero{background:linear-gradient(45deg,#7c38ee,#ff0080);border-radius:16px}</style>
+			<div id="hero">Meu perfil</div>
+			""");
+
+		assertThat(clean).as("o id e o alvo do seletor #hero").contains("id=\"hero\"");
+		assertThat(clean).contains("#hero{");
+	}
+
+	@Test
+	void svgGradientKeepsTheIdItsReferencesUse() {
+		String clean = SafeHtml.sanitizeProfileHtml("""
+			<svg viewBox="0 0 100 100">
+			  <defs><linearGradient id="g"><stop offset="0" stop-color="#7c3aed"/></linearGradient></defs>
+			  <circle cx="50" cy="50" r="40" fill="url(#g)"/>
+			</svg>
+			""");
+
+		assertThat(clean).as("o gradiente precisa do id para o fill url(#g) resolver")
+			.contains("id=\"g\"").contains("url(#g)");
+	}
+
+	/** `id` e atributo de valor: permiti-lo nao pode abrir a porta de escrever markup. */
+	@Test
+	void idValueCannotEscapeTheAttribute() {
+		String clean = SafeHtml.sanitizeProfileHtml("""
+			<div id="x&quot; onclick=&quot;alert(1)">a</div>
+			<div id="a><script>alert(2)</script>">b</div>
+			""");
+
+		assertThat(clean).as("o jsoup reserializa o valor, nao o interpreta")
+			.doesNotContain("<script").doesNotContain("onclick=\"alert");
+	}
 }

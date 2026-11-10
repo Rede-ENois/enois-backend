@@ -43,6 +43,7 @@ import com.socialcoisa.rede.identity.domain.TwoFactorChallenge;
 import com.socialcoisa.rede.identity.domain.UsernameSlug;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
+import com.socialcoisa.rede.shared.age.AgePolicy;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 @Service
@@ -159,7 +160,11 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 
 	/**
 	 * Valida a data de nascimento declarada (ECA Digital): formato ISO, data real, nao-futura e
-	 * idade plausivel (0 a 120 anos). Recusa null — cadastro sem data nao existe mais.
+	 * idade plausivel. Recusa null — cadastro sem data nao existe mais.
+	 *
+	 * <p>A idade minima da plataforma e 16 anos: quem tem de 16 a 17 anos pode criar a conta, mas
+	 * fica como menor supervisionado e so escreve (publicar, comentar, mensagem) depois da
+	 * autorizacao de um responsavel adulto. Abaixo de 16 nao ha cadastro.
 	 */
 	static LocalDate parseBirthDate(String value) {
 		if (value == null || value.isBlank()) {
@@ -175,11 +180,15 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 		}
 		LocalDate today = LocalDate.now(java.time.ZoneId.of("America/Sao_Paulo"));
 		if (date.isAfter(today)) {
-			throw new ApiException(400, "INVALID_BIRTH_DATE", "A data de nascimento nao pode ser no futuro.");
+			throw new ApiException(400, "INVALID_BIRTH_DATE", "A data de nascimento nao pode estar no futuro.");
 		}
 		int age = java.time.Period.between(date, today).getYears();
 		if (age < 0 || age > 120) {
 			throw new ApiException(400, "INVALID_BIRTH_DATE", "A data de nascimento nao parece real.");
+		}
+		if (age < AgePolicy.MIN_AGE) {
+			throw new ApiException(400, "INVALID_BIRTH_DATE",
+				"A idade minima para criar conta e " + AgePolicy.MIN_AGE + " anos.");
 		}
 		return date;
 	}

@@ -104,10 +104,7 @@ class OnnxImageContentClassifier implements ImageContentClassifier {
 	 */
 	static Assessment assessFrames(ImageReader reader, int frames, FrameScorer scorer) throws IOException {
 		if (frames == 1) {
-			if ((long) reader.getWidth(0) * reader.getHeight(0) > ImageDecoding.MAX_PIXELS) {
-				throw new TooLargeToVerifyException("A imagem excede o limite de resolução para verificação.");
-			}
-			BufferedImage image = reader.read(0);
+			BufferedImage image = readScaled(reader, 0);
 			if (image == null) {
 				throw new IOException("Não foi possível decodificar a imagem.");
 			}
@@ -133,6 +130,29 @@ class OnnxImageContentClassifier implements ImageContentClassifier {
 			}
 		});
 		return new Assessment(worstScore[0], png(worstFrame[0]));
+	}
+
+	/**
+	 * Decodifica um quadro, REDUZINDO quando passa do teto de pixels em vez de recusar.
+	 *
+	 * <p>O classificador trabalha em {@code 256x256}: uma foto de celular de 48 MP e um thumbnail
+	 * de 2 MP produzem a mesma entrada, entao reduzir nao perde poder de moderacao — antes o upload
+	 * de qualquer foto de camera moderna era recusado ("quadros demais ou grande demais") porque o
+	 * decode estourava o teto de 16 MP. A subamostragem do proprio {@code ImageReader} decodifica
+	 * direto na escala menor, sem alocar o bitmap completo.</p>
+	 */
+	private static BufferedImage readScaled(ImageReader reader, int index) throws IOException {
+		int width = reader.getWidth(index);
+		int height = reader.getHeight(index);
+		javax.imageio.ImageReadParam params = reader.getDefaultReadParam();
+		int source = 1;
+		while ((long) (width / source + 1) * (height / source + 1) > ImageDecoding.MAX_PIXELS) {
+			source++;
+		}
+		if (source > 1) {
+			params.setSourceSubsampling(source, source, 0, 0);
+		}
+		return reader.read(index, params);
 	}
 
 	private static ByteBuffer digest(FloatBuffer input) {

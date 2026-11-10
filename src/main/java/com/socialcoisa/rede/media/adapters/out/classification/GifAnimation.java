@@ -45,18 +45,21 @@ final class GifAnimation {
 	private final List<Frame> frames;
 	private final int canvasWidth;
 	private final int canvasHeight;
+	private final int subsampling;
 
-	private GifAnimation(ImageReader reader, List<Frame> frames, int canvasWidth, int canvasHeight) {
+	private GifAnimation(ImageReader reader, List<Frame> frames, int canvasWidth, int canvasHeight, int subsampling) {
 		this.reader = reader;
 		this.frames = frames;
 		this.canvasWidth = canvasWidth;
 		this.canvasHeight = canvasHeight;
+		this.subsampling = subsampling;
 	}
 
 	static GifAnimation inspect(ImageReader reader, int frameCount) throws IOException {
 		if (frameCount > MAX_FRAMES) {
 			throw new TooLargeToVerifyException("A animação tem quadros demais para ser verificada.");
 		}
+		int subsampling = subsamplingFor(reader, frameCount);
 		int canvasWidth = 0;
 		int canvasHeight = 0;
 		IIOMetadata stream = reader.getStreamMetadata();
@@ -78,34 +81,79 @@ final class GifAnimation {
 				throw new IOException("Quadro de GIF inválido.");
 			}
 			long pixels = (long) frame.width() * frame.height();
-			framePixels += pixels;
-			if (pixels > ImageDecoding.MAX_PIXELS || framePixels > MAX_DECODED_PIXELS) {
-				throw new TooLargeToVerifyException("A animação excede o limite de resolução para verificação.");
-			}
+			framePixels += pixels / (long) subsampling * subsampling;
 			// Viewers that grow the canvas to fit a frame show all of it, so all of it is scored.
 			canvasWidth = Math.max(canvasWidth, frame.left() + frame.width());
 			canvasHeight = Math.max(canvasHeight, frame.top() + frame.height());
 			frames.add(frame);
 		}
-		long canvasPixels = (long) canvasWidth * canvasHeight;
-		if (canvasPixels > ImageDecoding.MAX_PIXELS || framePixels + canvasPixels * frameCount > MAX_DECODED_PIXELS) {
-			throw new TooLargeToVerifyException("A animação excede o limite de resolução para verificação.");
+		return new GifAnimation(reader, List.copyOf(frames), canvasWidth, canvasHeight, subsampling);
+	}
+
+	/**
+	 * Fator de subamostragem que traz o orcamento de decode para dentro do teto, em vez de recusar
+	 * a animacao. O classificador trabalha em {@code 256x256} por quadro: reduzir NAO perde poder de
+	 * moderacao, e antes qualquer GIF longo (ex.: 301 quadros de tela de celular) era recusado com
+	 * "quadros demais". Um fator por animacao mantem a contagem de pixels previsivel.
+	 */
+	private static int subsamplingFor(ImageReader reader, int frameCount) throws IOException {
+		int source = 1;
+		while (source <= 8) {
+			long framePixels = 0;
+			long canvasPixels = 0;
+			int canvasWidth = 0;
+			int canvasHeight = 0;
+			boolean overFrame = false;
+			for (int index = 0; index < frameCount; index++) {
+				Node root = reader.getImageMetadata(index).getAsTree(GIF_IMAGE_FORMAT);
+				Node descriptor = child(root, "ImageDescriptor");
+				// Divisao inteira pode zerar um quadro pequeno (1/8 = 0): o piso de 1 mantem o
+				// pixel contabilizado, que e o conservador para o orcamento.
+				int w = Math.max(1, attribute(descriptor, "imageWidth", 0) / source);
+				int h = Math.max(1, attribute(descriptor, "imageHeight", 0) / source);
+				if (w <= 0 || h <= 0) {
+					continue;
+				}
+				long pixels = (long) w * h;
+				if (pixels > ImageDecoding.MAX_PIXELS) {
+					overFrame = true;
+					break;
+				}
+				framePixels += pixels;
+				canvasWidth = Math.max(canvasWidth, attribute(descriptor, "imageLeftPosition", 0) / source + w);
+				canvasHeight = Math.max(canvasHeight, attribute(descriptor, "imageTopPosition", 0) / source + h);
+			}
+			if (!overFrame) {
+				canvasPixels = (long) canvasWidth * canvasHeight;
+				if (framePixels <= MAX_DECODED_PIXELS
+						&& canvasPixels <= ImageDecoding.MAX_PIXELS
+						&& framePixels + canvasPixels * frameCount <= MAX_DECODED_PIXELS) {
+					return source;
+				}
+			}
+			source++;
 		}
-		return new GifAnimation(reader, List.copyOf(frames), canvasWidth, canvasHeight);
+		// Ate no fator maximo nao cabe: ai sim recusa, com a mensagem antiga.
+		throw new TooLargeToVerifyException("A animação excede o limite de resolução para verificação.");
 	}
 
 	void replay(CanvasVisitor visitor) throws IOException {
-		BufferedImage canvas = new BufferedImage(canvasWidth, canvasHeight, BufferedImage.TYPE_INT_ARGB);
+		BufferedImage canvas = new BufferedImage((canvasWidth + subsampling - 1) / subsampling,
+			(canvasHeight + subsampling - 1) / subsampling, BufferedImage.TYPE_INT_ARGB);
 		for (int index = 0; index < frames.size(); index++) {
 			Frame frame = frames.get(index);
-			BufferedImage pixels = reader.read(index);
+			javax.imageio.ImageReadParam params = reader.getDefaultReadParam();
+			if (subsampling > 1) {
+				params.setSourceSubsampling(subsampling, subsampling, 0, 0);
+			}
+			BufferedImage pixels = reader.read(index, params);
 			if (pixels == null) {
 				throw new IOException("Não foi possível decodificar a imagem.");
 			}
 			BufferedImage before = "restoreToPrevious".equals(frame.disposal()) ? copyOf(canvas) : null;
 			Graphics2D graphics = canvas.createGraphics();
 			try {
-				graphics.drawImage(pixels, frame.left(), frame.top(), null);
+				graphics.drawImage(pixels, frame.left() / subsampling, frame.top() / subsampling, null);
 			}
 			finally {
 				graphics.dispose();
@@ -115,7 +163,8 @@ final class GifAnimation {
 				Graphics2D clear = canvas.createGraphics();
 				try {
 					clear.setComposite(AlphaComposite.Clear);
-					clear.fillRect(frame.left(), frame.top(), frame.width(), frame.height());
+					clear.fillRect(frame.left() / subsampling, frame.top() / subsampling,
+						frame.width() / subsampling, frame.height() / subsampling);
 				}
 				finally {
 					clear.dispose();
