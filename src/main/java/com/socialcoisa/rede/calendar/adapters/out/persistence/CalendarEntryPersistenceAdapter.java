@@ -85,4 +85,12 @@ class CalendarEntryPersistenceAdapter implements CalendarEntryRepository {
 			.map(CalendarEntryJpaEntity::toDomain);
 	}
 
+	@Override
+	public void deleteBySource(String ownerId, CalendarEntrySource source) {
+		if (!source.present()) {
+			return;
+		}
+		springData.deleteByOwnerIdAndSourceTypeAndSourceId(ownerId, source.type(), source.id());
+	}
+
 }

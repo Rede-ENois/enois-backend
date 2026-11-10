@@ -61,6 +61,19 @@ public class Event {
 	}
 
 	/**
+	 * Comeco do evento no fuso da rede. Sem hora legivel, o dia inteiro comeca a meia-noite: o
+	 * evento sem horario ocupa o dia, e nao "nao existe" — a agenda precisa do comeco para desenhar.
+	 */
+	public java.util.Optional<Instant> startsAt() {
+		java.time.LocalDate parsed = parseDate(date);
+		if (parsed == null) {
+			return java.util.Optional.empty();
+		}
+		java.time.LocalTime start = parseTime(time).orElse(java.time.LocalTime.MIDNIGHT);
+		return java.util.Optional.of(parsed.atTime(start).atZone(NETWORK_ZONE).toInstant());
+	}
+
+	/**
 	 * Fim do evento (a hora informada, no fuso da rede).
 	 *
 	 * A data e texto livre no schema, entao o parser aceita o formato ISO (o que o app envia) e o

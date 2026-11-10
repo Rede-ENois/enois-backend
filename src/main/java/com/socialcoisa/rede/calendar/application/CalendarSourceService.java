@@ -31,10 +31,12 @@ public class CalendarSourceService {
 	private static final String DEFAULT_ZONE = "America/Sao_Paulo";
 
 	private final CalendarEntryRepository entries;
+	private final CalendarReminderService reminders;
 	private final Clock clock;
 
-	public CalendarSourceService(CalendarEntryRepository entries, Clock clock) {
+	public CalendarSourceService(CalendarEntryRepository entries, CalendarReminderService reminders, Clock clock) {
 		this.entries = entries;
+		this.reminders = reminders;
 		this.clock = clock;
 	}
 
@@ -65,6 +67,10 @@ public class CalendarSourceService {
 				entry.describe(input.description(), now);
 				moved = !before.equals(entry.startsAt()) || !beforeEnd.equals(entry.endsAt());
 				entries.save(entry);
+				if (moved) {
+					// Mesma regra da edição direta: aviso do horário antigo é pior que aviso nenhum.
+					reminders.clearPendingForEntry(entry.id());
+				}
 			}
 			return new UpsertResult(entry, false, moved);
 		}
@@ -73,6 +79,17 @@ public class CalendarSourceService {
 			source, input.title(), input.description(), input.startsAt(), input.endsAt(), zone, false, now);
 		entries.save(created);
 		return new UpsertResult(created, true, false);
+	}
+
+	/**
+	 * Remove a entrada da origem. Sem entrada para a origem não é erro, e repetir também não.
+	 *
+	 * <p>É para quando o fato que gerou o compromisso deixou de valer — a pessoa saiu do evento —,
+	 * não para cancelar: cancelar é estado, e a entrada cancelada continua publicando o cancelamento
+	 * (D10/D26). Aqui o compromisso não existe mais, então não há o que publicar.
+	 */
+	public void delete(String ownerId, String sourceType, String sourceId) {
+		entries.deleteBySource(ownerId, new CalendarEntrySource(sourceType, sourceId));
 	}
 
 	/**
@@ -85,6 +102,7 @@ public class CalendarSourceService {
 			if (entry.active()) {
 				entry.cancel(clock.instant());
 				entries.save(entry);
+				reminders.clearPendingForEntry(entry.id());
 			}
 			return entry;
 		});
