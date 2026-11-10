@@ -413,6 +413,18 @@ jobs:
           VAPID_PUBLIC_KEY: ${{ secrets.QA_VAPID_PUBLIC_KEY }}
           VAPID_PRIVATE_KEY: ${{ secrets.QA_VAPID_PRIVATE_KEY }}
           VAPID_SUBJECT: "mailto:suporte@enois.ia.br"
+          # Didit (verificacao de identidade / selo Humanidade Comprovada). A QA usa a API de
+          # SANDBOX da Didit (chave sk_test_): nenhuma verificacao cobrada, nenhum documento
+          # real. O webhook tem segredo proprio porque o backend so aceita confirmacao assinada
+          # por HMAC — sem ele as sessoes sao criadas mas nunca confirmam. Sem as duas variaveis
+          # a integracao fica desligada (fail-closed) e o painel mostra a rodada pausada por
+          # falta de credenciais.
+          DIDIT_API_KEY: ${{ secrets.QA_DIDIT_SANDBOX_API_KEY }}
+          DIDIT_WORKFLOW_ID: ${{ secrets.QA_DIDIT_WORKFLOW_ID }}
+          DIDIT_WEBHOOK_SECRET: ${{ secrets.QA_DIDIT_WEBHOOK_SECRET }}
+          DIDIT_MONTHLY_VERIFICATION_LIMIT: "25"
+          DIDIT_MONTHLY_BUDGET_USD: "10.00"
+          DIDIT_AUTO_TOPUP: "false"
           # Epapo (videoconferência própria). Sem estas quatro variáveis o backend responde
           # 503 CALLS_NOT_CONFIGURED / MENTORING_ROOMS_NOT_CONFIGURED e nenhuma sala abre —
           # é o estado em que a QA estava, com a rota do gateway respondendo
@@ -646,6 +658,12 @@ jobs:
               "VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY}",
               "VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY}",
               "VAPID_SUBJECT=${VAPID_SUBJECT}",
+              "DIDIT_API_KEY=${DIDIT_API_KEY}",
+              "DIDIT_WORKFLOW_ID=${DIDIT_WORKFLOW_ID}",
+              "DIDIT_WEBHOOK_SECRET=${DIDIT_WEBHOOK_SECRET}",
+              "DIDIT_MONTHLY_VERIFICATION_LIMIT=${DIDIT_MONTHLY_VERIFICATION_LIMIT}",
+              "DIDIT_MONTHLY_BUDGET_USD=${DIDIT_MONTHLY_BUDGET_USD}",
+              "DIDIT_AUTO_TOPUP=${DIDIT_AUTO_TOPUP}",
               "REDE_CALLS_EPAPO_URL=${REDE_CALLS_EPAPO_URL}",
               "REDE_CALLS_EPAPO_GATEWAY_URL=${REDE_CALLS_EPAPO_GATEWAY_URL}",
               "REDE_CALLS_EPAPO_INTERNAL_TOKEN=${REDE_CALLS_EPAPO_INTERNAL_TOKEN}",
