@@ -90,7 +90,7 @@ class AiTriageGuardTests {
 	 */
 	private ModerationAiService serviceSemDependencias() {
 		return new ModerationAiService(null, (targetType, targetId) -> java.util.Optional.empty(),
-			(targetType, targetId, limit) -> java.util.List.of(),
+			(targetType, targetId, limit) -> java.util.List.of(), null,
 			"https://provedor.invalido/v1", "", "modelo-de-teste", MAPPER);
 	}
 
