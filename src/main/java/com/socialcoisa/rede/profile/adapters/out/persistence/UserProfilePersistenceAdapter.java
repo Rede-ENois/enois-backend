@@ -47,6 +47,12 @@ class UserProfilePersistenceAdapter implements UserProfileRepository {
 	}
 
 	@Override
+	public List<com.socialcoisa.rede.profile.application.port.out.AccountIdentity> identitiesOf(
+			Collection<String> ids) {
+		return repository.identitiesOf(ids);
+	}
+
+	@Override
 	public Optional<UserProfile> findByUsername(String username) {
 		return repository.findByUsername(username).map(UserProfileJpaEntity::toDomain);
 	}

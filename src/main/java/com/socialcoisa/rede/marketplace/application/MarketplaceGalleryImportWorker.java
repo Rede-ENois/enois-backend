@@ -1,7 +1,10 @@
 package com.socialcoisa.rede.marketplace.application;
 
 import java.util.List;
-import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -9,9 +12,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import com.socialcoisa.rede.profile.application.port.out.AccountIdentity;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.shared.sanctions.SanctionGateReader;
 import com.socialcoisa.rede.themes.application.port.out.ThemeGalleryRepository;
+import com.socialcoisa.rede.themes.domain.ThemePackage;
 
 /**
  * Migração dos temas da comunidade para o marketplace.
@@ -20,6 +25,10 @@ import com.socialcoisa.rede.themes.application.port.out.ThemeGalleryRepository;
  * uma listagem do marketplace, no preço mínimo (50 faíscas), com o autor como vendedor. É
  * idempotente (só cria quando não existe listagem ativa), então roda no boot e de hora em hora
  * sem duplicar nada — inclusive para temas publicados antes desta mudança.</p>
+ *
+ * <p>Quem vai ser pulado é decidido em LOTE (sanções e nomes dos autores em uma consulta cada).
+ * A criação da listagem em si continua uma a uma, porque cada uma é uma escrita própria — só a
+ * leitura que antecede a decisão deixou de ser por tema.</p>
  */
 @Component
 public class MarketplaceGalleryImportWorker {
@@ -32,7 +41,7 @@ public class MarketplaceGalleryImportWorker {
 	private final MarketplaceService marketplace;
 	private final SanctionGateReader sanctionGate;
 	private final UserProfileRepository profiles;
-	private final List<String> suspiciousPatterns;
+	private final SuspiciousNames suspicious;
 
 	public MarketplaceGalleryImportWorker(ThemeGalleryRepository themes, MarketplaceService marketplace,
 			SanctionGateReader sanctionGate, UserProfileRepository profiles,
@@ -41,21 +50,25 @@ public class MarketplaceGalleryImportWorker {
 		this.marketplace = marketplace;
 		this.sanctionGate = sanctionGate;
 		this.profiles = profiles;
-		this.suspiciousPatterns = java.util.Arrays.stream(patterns.split(","))
-			.map(String::trim)
-			.filter(pattern -> !pattern.isEmpty())
-			.map(pattern -> pattern.toLowerCase(Locale.ROOT))
-			.toList();
+		this.suspicious = new SuspiciousNames(patterns);
 	}
 
 	@Scheduled(initialDelayString = "${rede.marketplace.gallery-import-initial-delay-ms:90000}",
 		fixedDelayString = "${rede.marketplace.gallery-import-delay-ms:3600000}")
 	public void importPublishedThemes() {
+		List<ThemePackage> published = themes.findPublished(MAX_THEMES);
+		if (published.isEmpty()) {
+			return;
+		}
+		List<String> authorIds = published.stream().map(ThemePackage::authorId).distinct().toList();
+		Set<String> banned = sanctionGate.bannedAmong(authorIds);
+		Map<String, AccountIdentity> authors = profiles.identitiesOf(authorIds).stream()
+			.collect(Collectors.toMap(AccountIdentity::id, Function.identity(), (first, duplicate) -> first));
 		int created = 0;
-		for (var theme : themes.findPublished(MAX_THEMES)) {
+		for (ThemePackage theme : published) {
 			// Tema de conta banida, excluída ou de teste não volta a ser listado — senão o
 			// saneamento remove e este import recria na mesma rodada.
-			if (shouldSkip(theme)) {
+			if (shouldSkip(theme, banned, authors)) {
 				continue;
 			}
 			try {
@@ -75,17 +88,13 @@ public class MarketplaceGalleryImportWorker {
 		}
 	}
 
-	private boolean shouldSkip(com.socialcoisa.rede.themes.domain.ThemePackage theme) {
-		if (sanctionGate.banned(theme.authorId())) {
+	private boolean shouldSkip(ThemePackage theme, Set<String> banned, Map<String, AccountIdentity> authors) {
+		if (banned.contains(theme.authorId())) {
 			return true;
 		}
-		var profile = profiles.findById(theme.authorId());
-		if (profile.isEmpty()) {
+		if (!authors.containsKey(theme.authorId())) {
 			return true;
 		}
-		String typed = (profile.get().name() + " " + profile.get().username()).toLowerCase(Locale.ROOT);
-		String title = theme.name().toLowerCase(Locale.ROOT);
-		return suspiciousPatterns.stream()
-			.anyMatch(pattern -> typed.contains(pattern) || title.contains(pattern));
+		return suspicious.in(authors.get(theme.authorId())) || suspicious.in(theme.name());
 	}
 }
