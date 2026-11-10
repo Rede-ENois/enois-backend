@@ -6,8 +6,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.hibernate.resource.jdbc.spi.StatementInspector;
@@ -24,6 +26,8 @@ import org.springframework.test.web.servlet.MvcResult;
 
 import com.socialcoisa.rede.coin.application.CoinService;
 import com.socialcoisa.rede.marketplace.application.MarketplaceSanitizeWorker;
+import com.socialcoisa.rede.marketplace.application.port.out.MarketplaceRepository;
+import com.socialcoisa.rede.marketplace.domain.MarketplaceListing;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 import tools.jackson.databind.ObjectMapper;
@@ -94,10 +98,17 @@ class MarketplaceSanitizeQueryCountTests {
 	@Autowired
 	private CountingInspector inspector;
 
+	@Autowired
+	private MarketplaceRepository listings;
+
+	/** Listagens ativas criadas por ESTE teste, pelas quais a rotina é responsável. */
+	private Set<String> myListingIds = new HashSet<>();
+
 	private int sanitizeCountingSelects() {
 		inspector.reset();
-		int removed = worker.sanitizeNow();
-		assertThat(removed).as("nenhuma listagem saudável pode sair").isZero();
+		// Aquecimento: o banco de testes é compartilhado entre classes; resquícios de outros
+		// testes podem ser removidos neste primeiro passe e não contam para a medição.
+		worker.sanitizeNow();
 		List<String> sql = List.copyOf(inspector.statements());
 		return (int) sql.stream()
 			.filter(statement -> statement.strip().toUpperCase().startsWith("SELECT"))
@@ -147,17 +158,29 @@ class MarketplaceSanitizeQueryCountTests {
 			publishTemplate(seller, "Template saudável " + i);
 		}
 		publishTheme(seller, "Tema saudável");
+		collectMyListings(seller);
 
 		int withTwelve = sanitizeCountingSelects();
 
 		for (int i = 0; i < 12; i++) {
 			publishTemplate(seller, "Template extra " + i);
 		}
+		collectMyListings(seller);
 
 		int withTwentyFour = sanitizeCountingSelects();
 
 		assertThat(withTwentyFour)
 			.as("a limpeza não pode consultar mais o banco por ter o dobro de listagens")
 			.isEqualTo(withTwelve);
+		assertThat(listings.findAll(500).stream().map(MarketplaceListing::id).toList())
+			.as("as listagens saudáveis deste teste têm de continuar no catálogo")
+			.containsAll(myListingIds);
+	}
+
+	private void collectMyListings(TestAuthHelper.AuthSession seller) {
+		listings.findAll(500).stream()
+			.filter(listing -> seller.userId().equals(listing.sellerId()))
+			.map(MarketplaceListing::id)
+			.forEach(myListingIds::add);
 	}
 }
