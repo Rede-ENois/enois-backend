@@ -2,6 +2,7 @@ package com.socialcoisa.rede.ops.monitoring;
 
 import java.sql.Timestamp;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -31,6 +32,7 @@ public class UserMetricsService {
 	private static final int WINDOW_DAYS = 30;
 	private static final long CACHE_MS = 60_000;
 	private static final int[] PROJECTION_DAYS = { 7, 30, 90 };
+	private static final Duration ACTIVE_WINDOW = Duration.ofHours(24);
 
 	private final JdbcTemplate jdbc;
 	private final Clock clock;
@@ -63,6 +65,13 @@ public class UserMetricsService {
 		long total = jdbc.queryForObject("select count(*) from users", Long.class);
 		List<Timestamp> criados = jdbc.queryForList("select created_at from users where created_at >= ?",
 			Timestamp.class, Timestamp.from(inicioJanela));
+
+		// Ativos nas ultimas 24h: o heartbeat de presenca grava last_seen_at a cada 45s em qualquer
+		// tela autenticada, entao quem abandonou o app para de aparecer na janela sozinho — nao ha
+		// logout para depender. `user_presence` e uma linha por usuario, logo o count ja e distinto.
+		long ativos24h = jdbc.queryForObject(
+			"select count(*) from user_presence where last_seen_at >= ?", Long.class,
+			Timestamp.from(agora.minus(ACTIVE_WINDOW)));
 
 		Map<LocalDate, Long> porDia = new HashMap<>();
 		for (Timestamp ts : criados) {
@@ -109,7 +118,7 @@ public class UserMetricsService {
 			projecoes.add(new Projection(dias, projetado, percentual(projetado - total, total)));
 		}
 
-		return new UsersView(agora.toString(), total, novosHoje, novosSeteDias, novosTrintaDias,
+		return new UsersView(agora.toString(), total, ativos24h, novosHoje, novosSeteDias, novosTrintaDias,
 			percentual(novosHoje, total - novosHoje), composto(total, total - novosSeteDias, 7),
 			composto(total, total - novosTrintaDias, WINDOW_DAYS), arredonda(mediaDiariaSete),
 			arredonda(mediaDiariaTrinta), serie, projecoes);
@@ -139,7 +148,7 @@ public class UserMetricsService {
 	public record Projection(int days, long total, double growthPercent) {
 	}
 
-	public record UsersView(String generatedAt, long total, long newToday, long newLast7Days,
+	public record UsersView(String generatedAt, long total, long activeLast24Hours, long newToday, long newLast7Days,
 			long newLast30Days, double growthTodayPercent, double growth7DaysPercent,
 			double growth30DaysPercent, double averageDailyNew7Days, double averageDailyNew30Days,
 			List<DailyPoint> series, List<Projection> projections) {
