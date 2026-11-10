@@ -115,14 +115,34 @@ class MarketplaceSanitizeQueryCountTests {
 	private Set<String> myListingIds = new HashSet<>();
 
 	private int sanitizeCountingSelects() {
+		// Aquecimento: o banco de testes é compartilhado entre classes e a rotina também importa
+		// temas da galeria — a primeira passada pode remover resquícios e (re)listar temas,
+		// mudando o estado que a medição enxerga. Aquece até o catálogo convergir e só então mede.
+		String before = activeListingSignature();
+		for (int warmup = 0; warmup < 10; warmup++) {
+			worker.sanitizeNow();
+			String after = activeListingSignature();
+			if (after.equals(before)) {
+				break;
+			}
+			before = after;
+		}
 		inspector.reset();
-		// Aquecimento: o banco de testes é compartilhado entre classes; resquícios de outros
-		// testes podem ser removidos neste primeiro passe e não contam para a medição.
-		worker.sanitizeNow();
+		int removed = worker.sanitizeNow();
+		assertThat(removed).as("a medição tem de rodar sobre um catálogo já estável").isZero();
 		List<String> sql = List.copyOf(inspector.statements());
 		return (int) sql.stream()
 			.filter(statement -> statement.strip().toUpperCase().startsWith("SELECT"))
 			.count();
+	}
+
+	/** impressão dos ids ativos, ordem estável: é o estado que o custo da rotina depende. */
+	private String activeListingSignature() {
+		return listings.findAll(500).stream()
+			.filter(listing -> listing.status() == MarketplaceListing.Status.ACTIVE)
+			.map(MarketplaceListing::id)
+			.sorted()
+			.reduce("", (joined, id) -> joined + id + ",");
 	}
 
 	private void publishTemplate(TestAuthHelper.AuthSession seller, String title) throws Exception {
