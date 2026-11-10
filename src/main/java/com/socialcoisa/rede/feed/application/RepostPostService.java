@@ -19,6 +19,7 @@ import com.socialcoisa.rede.feed.domain.PostType;
 import com.socialcoisa.rede.feed.domain.UserId;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepostRepository;
+import com.socialcoisa.rede.notifications.application.NotificationService;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.shared.age.AgeGate;
 import com.socialcoisa.rede.shared.security.ActionThrottle;
@@ -45,16 +46,18 @@ public class RepostPostService {
 	private final PostRepository posts;
 	private final PostRepostRepository reposts;
 	private final UserProfileRepository profiles;
+	private final NotificationService notifications;
 	private final ActionThrottle throttle;
 	private final AgeGate ageGate;
 	private final Clock clock;
 
 	public RepostPostService(PostRepository posts, PostRepostRepository reposts,
-			UserProfileRepository profiles, ActionThrottle throttle,
+			UserProfileRepository profiles, NotificationService notifications, ActionThrottle throttle,
 			AgeGate ageGate, Clock clock) {
 		this.posts = posts;
 		this.reposts = reposts;
 		this.profiles = profiles;
+		this.notifications = notifications;
 		this.throttle = throttle;
 		this.ageGate = ageGate;
 		this.clock = clock;
@@ -87,6 +90,7 @@ public class RepostPostService {
 		reposts.save(PostRepost.create(userId, root.id().value(), clock.instant()));
 		posts.adjustCounter(root.id(), PostCounter.REPOSTS, 1);
 		root.refreshCounters(posts.counters(root.id()));
+		notifyOriginalAuthor(root, userId, "/api/feed/posts/" + root.id().value());
 		return root;
 	}
 
@@ -132,7 +136,27 @@ public class RepostPostService {
 			cleanOpinion, null, List.of(), List.of(), null,
 			null, clock.instant(), AuthorIdentity.SOCIAL)
 			.markRepostOf(root.id().value(), username, true);
-		return posts.save(copy);
+		Post saved = posts.save(copy);
+		notifyOriginalAuthor(root, userId, "/api/feed/posts/" + saved.id().value());
+		return saved;
+	}
+
+	/**
+	 * Quem escreveu o original fica sabendo que ele circulou. Antes, republicar não avisava ninguém:
+	 * o autor via o contador de reposts subir sem saber de quem nem onde. O próprio autor não é
+	 * avisado de si mesmo, e o aviso aponta para o post que a pessoa vê no feed (o ponteiro, no
+	 * repost puro; a citação, no repost com opinião).
+	 */
+	private void notifyOriginalAuthor(Post root, String reposterId, String href) {
+		String authorId = root.authorId().value();
+		if (authorId.equals(reposterId)) {
+			return;
+		}
+		String actorName = profiles.findById(reposterId)
+			.map(profile -> profile.displayWithNickname() != null ? profile.displayWithNickname() : profile.name())
+			.orElse("Alguém");
+		notifications.create(authorId, "POST_REPOSTED", reposterId, "Seu post foi republicado",
+			actorName + " republicou seu post.", href, "Ver");
 	}
 
 	/** Compatibilidade: o endpoint antigo chama aqui. */
