@@ -579,8 +579,11 @@ public class CoinService {
 	@Scheduled(cron = "0 17 4 * * *")
 	@Transactional(readOnly = true)
 	public void reconcile() {
+		// Um SUM agrupado reconstrói o ledger INTEIRO em uma consulta; o laço antigo dava uma
+		// ida ao banco por carteira (findAll + um SUM por conta) numa tabela append-only.
+		var rebuiltByAccount = ledger.balancesFromLedger();
 		for (CoinAccount account : ledger.allAccounts()) {
-			long rebuilt = ledger.balanceFromLedger(account.accountId());
+			long rebuilt = rebuiltByAccount.getOrDefault(account.accountId(), 0L);
 			if (rebuilt != account.balance()) {
 				LOG.error("coin_reconciliation_divergence accountId={} snapshot={} ledger={}", account.accountId(),
 					account.balance(), rebuilt);

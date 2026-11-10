@@ -155,6 +155,12 @@ class CoinLedgerPersistenceAdapter implements CoinLedgerRepository {
 	}
 
 	@Override
+	public java.util.Map<String, Long> balancesFromLedger() {
+		return entries.sumAmountsByAccount().stream()
+			.collect(java.util.stream.Collectors.toMap(row -> (String) row[0], row -> ((Number) row[1]).longValue()));
+	}
+
+	@Override
 	public long totalBalance() {
 		return accounts.sumBalances();
 	}

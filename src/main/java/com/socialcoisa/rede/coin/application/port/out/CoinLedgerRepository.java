@@ -56,6 +56,14 @@ public interface CoinLedgerRepository {
 	/** O LEDGER é a verdade: a soma dos lançamentos reconstrói o saldo da conta. */
 	long balanceFromLedger(String accountId);
 
+	/**
+	 * O LEDGER é a verdade para TODAS as contas de uma vez: um SUM agrupado por conta, em uma
+	 * consulta. A conciliação noturna usa isto — um SUM por conta (N+1) dava uma ida ao banco
+	 * por carteira, sobre um ledger append-only sem retenção. Conta sem lançamento não vem no
+	 * mapa: o saldo reconstruído dela é 0.
+	 */
+	java.util.Map<String, Long> balancesFromLedger();
+
 	/** Recompensas (kind=REWARD) com refId começando com o prefixo — tetos mensais do earned. */
 	long countRewardsByRefPrefix(String prefix);
 
