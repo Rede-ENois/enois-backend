@@ -17,6 +17,12 @@ bucket. A saida foi tirar o bucket do caminho do navegador:
 
 - `GET /api/storage/{chave}` — le o objeto do bucket com a credencial do pod, com `Range` (video
   arrasta a barra), `Cache-Control` longo e ETag. Publico, como o `GET /media/{id}`.
+- O proxy manda `Content-Length` com o tamanho que veio do storage.. o arquivo inteiro no
+  `200`, ou só o trecho no `206`, junto com `Content-Range`. O Safari começa pedindo
+  `bytes=0-1`... sem o tamanho na resposta, o vídeo pode ficar preto e nao tocar. O envio continua
+  por streaming, sem carregar o arquivo inteiro na memoria.
+  Depois do deploy, vale conferir as URLs que já estavam no cache da CDN. Elas podem continuar
+  com os headers antigos ate o cache expirar ou o time de infra invalidar essas entradas.
 - `PUT /api/storage/{chave}` — recebe o arquivo do navegador e repassa ao bucket. Exige sessao e a
   chave exata registrada para aquele asset (nao da para escrever em qualquer lugar).
 - Quando `REDE_MEDIA_NSFW_ENABLED=true`, toda imagem passa pelo classificador antes da gravação. Por

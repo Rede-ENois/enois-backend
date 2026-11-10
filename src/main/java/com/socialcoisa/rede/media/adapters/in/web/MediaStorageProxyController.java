@@ -114,6 +114,7 @@ class MediaStorageProxyController {
 			.header(HttpHeaders.CONTENT_TYPE, inline ? mime : "application/octet-stream")
 			.header(HttpHeaders.CONTENT_DISPOSITION, inline ? "inline" : "attachment")
 			.header(HttpHeaders.ACCEPT_RANGES, "bytes")
+			.contentLength(object.length())
 			// A chave tem uuid: o conteúdo daquele endereço nunca muda, então pode ficar em cache.
 			// A captura de denúncia é a exceção: prova de moderação não fica em cache público.
 			.header(HttpHeaders.CACHE_CONTROL, moderatorOnly ? "private, no-store"
