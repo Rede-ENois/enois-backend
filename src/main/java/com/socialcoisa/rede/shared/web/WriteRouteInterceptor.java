@@ -62,7 +62,12 @@ class WriteRouteInterceptor implements HandlerInterceptor {
 		"/mentoring/*/gateway/entry/*",
 		// CI de produção publicando as "Novidades" do deploy: servidor não tem sessão; a
 		// credencial é o token de serviço X-Deploy-Token, conferido no controller (fail-closed).
-		"/internal/novidades-deploy");
+		"/internal/novidades-deploy",
+		// Rede cooperativa: um nó não tem sessão de navegador. O enroll é autenticado pelo token de
+		// provisionamento de uso único e o heartbeat pela API key do nó (X-Node-Id + X-Node-Key),
+		// conferidos no controller — fail-closed como as rotas internas.
+		"/network/nodes/enroll",
+		"/network/nodes/heartbeat");
 
 	private final AntPathMatcher matcher = new AntPathMatcher();
 	private final CurrentUserResolver currentUserResolver;
