@@ -108,6 +108,16 @@ public class ExternalJobImportService {
 	/** Column sizes of external_jobs (V40): title 500, the other free-text columns 255. */
 	static final int TITLE_MAX = 500;
 	static final int TEXT_MAX = 255;
+	/** Column sizes of the structured details (V269 of external_jobs). */
+	static final int EMPLOYMENT_TYPE_MAX = 40;
+	static final int LEVEL_MAX = 20;
+	static final int WORK_MODEL_MAX = 20;
+	static final int CITY_MAX = 120;
+	static final int STATE_MAX = 60;
+	static final int COUNTRY_MAX = 60;
+	static final int SALARY_CURRENCY_MAX = 8;
+	static final int SALARY_PERIOD_CODE_MAX = 10;
+	static final int ATTRIBUTION_URL_MAX = 1000;
 
 	private int saveChunk(String platform, List<JobImportSource.ExternalJob> chunk) {
 		int saved = 0;
@@ -176,9 +186,17 @@ public class ExternalJobImportService {
 	 */
 	private com.socialcoisa.rede.jobs.domain.ExternalJobDetails detailsOf(JobImportSource.ExternalJob external) {
 		JobImportSource.Meta meta = external.meta() == null ? JobImportSource.Meta.empty() : external.meta();
-		return new com.socialcoisa.rede.jobs.domain.ExternalJobDetails(external.publishedAt(), external.employmentType(),
-			meta.level(), meta.workModel(), meta.city(), meta.state(), meta.country(), meta.salaryMinAmount(),
-			meta.salaryMaxAmount(), meta.salaryCurrency(), meta.salaryPeriodCode(), meta.attributionUrl(),
+		// As colunas de detalhe têm teto próprio, e a fonte não respeita: o Arbeitnow manda
+		// "Unbefristeter arbeitsvertrag, berufserfahren" (44) num varchar(40). Sem o corte, um
+		// valor grande derruba o chunk inteiro — e as vagas boas do lote junto.
+		return new com.socialcoisa.rede.jobs.domain.ExternalJobDetails(external.publishedAt(),
+			fit(external.employmentType(), EMPLOYMENT_TYPE_MAX),
+			fit(meta.level(), LEVEL_MAX), fit(meta.workModel(), WORK_MODEL_MAX),
+			fit(meta.city(), CITY_MAX), fit(meta.state(), STATE_MAX), fit(meta.country(), COUNTRY_MAX),
+			meta.salaryMinAmount(), meta.salaryMaxAmount(),
+			fit(meta.salaryCurrency(), SALARY_CURRENCY_MAX),
+			fit(meta.salaryPeriodCode(), SALARY_PERIOD_CODE_MAX),
+			fit(meta.attributionUrl(), ATTRIBUTION_URL_MAX),
 			clock.instant(), meta.expiresAt(), null);
 	}
 

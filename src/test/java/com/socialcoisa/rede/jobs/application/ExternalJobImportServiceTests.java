@@ -45,7 +45,11 @@ class ExternalJobImportServiceTests {
 						// Remote jobs listing every country: longer than the location column.
 						new ExternalJob("ext-4", "Vaga Global", "Empresa Y", "Argentina, Brazil, Canada, ".repeat(20),
 							null, null, null, "https://exemplo.test/vaga/4", "https://exemplo.test/vaga/4", name(),
-							null));
+							null),
+						// Arbeitnow manda o vínculo em alemão, maior que o varchar(40) da coluna.
+						new ExternalJob("ext-5", "Vaga Alemã", "Empresa Z", "Berlin", null, null,
+							"Unbefristeter arbeitsvertrag, berufserfahren",
+							"https://exemplo.test/vaga/5", "https://exemplo.test/vaga/5", name(), null));
 				}
 			};
 		}
@@ -73,7 +77,7 @@ class ExternalJobImportServiceTests {
 		// O banco de teste e compartilhado: conta so as vagas DESTA fonte (o stub), nao o total.
 		long fromStub = repository.findRecent(200).stream()
 			.filter(j -> "StubSource".equals(j.platform())).count();
-		assertThat(fromStub).isEqualTo(4);
+		assertThat(fromStub).isEqualTo(5);
 	}
 
 	@Test
@@ -92,6 +96,19 @@ class ExternalJobImportServiceTests {
 		var job = repository.findBySource("StubSource", "ext-4").orElseThrow();
 		assertThat(job.location()).hasSizeLessThanOrEqualTo(ExternalJobImportService.TEXT_MAX)
 			.startsWith("Argentina, Brazil").endsWith("…");
+		assertThat(repository.findBySource("StubSource", "ext-1")).isPresent();
+	}
+
+	@Test
+	void oversizedEmploymentTypeIsCutToTheColumnInsteadOfFailingTheChunk() {
+		importService.refresh();
+
+		// O vínculo vem da fonte e não respeita o varchar(40): sem o corte, o insert estoura e
+		// derruba o chunk inteiro — inclusive as vagas boas que vieram junto.
+		var job = repository.findBySource("StubSource", "ext-5").orElseThrow();
+		assertThat(job.details().employmentType())
+			.hasSizeLessThanOrEqualTo(ExternalJobImportService.EMPLOYMENT_TYPE_MAX)
+			.startsWith("Unbefristeter").endsWith("…");
 		assertThat(repository.findBySource("StubSource", "ext-1")).isPresent();
 	}
 }
