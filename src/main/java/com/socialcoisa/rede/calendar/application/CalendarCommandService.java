@@ -54,6 +54,7 @@ public class CalendarCommandService {
 	public CalendarEntry update(String ownerId, String entryId, String title, String description, String startsAt,
 			String endsAt, String timeZoneId) {
 		CalendarEntry entry = query.get(ownerId, entryId);
+		requireOwnedByTheCalendar(entry, "editar");
 		Instant start = nullableInstant(startsAt, "startsAt");
 		Instant end = nullableInstant(endsAt, "endsAt");
 		if ((start == null) != (end == null)) {
@@ -89,6 +90,7 @@ public class CalendarCommandService {
 	/** Cancelar não apaga a linha: o `.ics` precisa do mesmo `UID` com `STATUS:CANCELLED`. */
 	public CalendarEntry cancel(String ownerId, String entryId) {
 		CalendarEntry entry = query.get(ownerId, entryId);
+		requireOwnedByTheCalendar(entry, "cancelar");
 		if (!entry.active()) {
 			// Repetir o cancelamento é o que o botão pode fazer depois de um timeout; não é erro.
 			return entry;
@@ -100,6 +102,19 @@ public class CalendarCommandService {
 		entries.save(entry);
 		reminders.clearPendingForEntry(entry.id());
 		return entry;
+	}
+
+	/**
+	 * Entrada com origem pertence ao módulo que a criou: editar ou cancelar por aqui deixaria a
+	 * agenda e o módulo dono contando histórias diferentes (a sessão de mentoria seguiria marcada
+	 * com outro horário). Quem muda o fato é o módulo dono, que chama o serviço de origem.
+	 */
+	private static void requireOwnedByTheCalendar(CalendarEntry entry, String action) {
+		if (entry.source().present()) {
+			throw new ApiException(409, "CALENDAR_ENTRY_SOURCE_OWNED",
+				"Nao da para " + action + " um compromisso criado por outro recurso; "
+					+ "altere no modulo de origem.");
+		}
 	}
 
 	private static CalendarScope scope(String raw) {
