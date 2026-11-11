@@ -69,6 +69,18 @@ class WeeklyDigestPersistenceAdapter implements WeeklyDigestRepository {
 	}
 
 	@Override
+	public List<String> weekKeysBefore(String before, int limit) {
+		return jdbc.queryForList(
+			"select distinct week_key from digest_deliveries where week_key < ? order by week_key limit ?",
+			String.class, before, limit);
+	}
+
+	@Override
+	public int deleteWeek(String weekKey) {
+		return jdbc.update("delete from digest_deliveries where week_key = ?", weekKey);
+	}
+
+	@Override
 	public int unreadNotifications(String userId, Instant since) {
 		Integer count = jdbc.queryForObject(
 			"select count(*) from notifications where user_id = ? and is_read = false and created_at >= ?",

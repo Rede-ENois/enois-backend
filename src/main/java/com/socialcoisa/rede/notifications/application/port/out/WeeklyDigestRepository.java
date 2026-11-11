@@ -31,6 +31,15 @@ public interface WeeklyDigestRepository {
 	/** Events the person confirmed presence in; the date is free text, so the caller filters by date. */
 	List<AttendingEvent> attendingEvents(String userId);
 
+	/**
+	 * As semanas mais antigas que {@code before}, em ordem cronológica, no máximo {@code limit} —
+	 * o lote da retenção. A chave ISO ordena como texto na mesma ordem do calendário.
+	 */
+	List<String> weekKeysBefore(String before, int limit);
+
+	/** Apaga todas as linhas de uma semana. Devolve quantas saíram (log e teste). */
+	int deleteWeek(String weekKey);
+
 	record AttendingEvent(String id, String title, String date, String time) {
 	}
 }
