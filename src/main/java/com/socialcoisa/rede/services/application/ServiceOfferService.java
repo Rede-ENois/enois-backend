@@ -176,6 +176,27 @@ public class ServiceOfferService {
 		return profiles.findById(offer.userId()).map(UserProfile::username).orElse(null);
 	}
 
+	/**
+	 * O @ de cada prestador da lista, em UMA consulta.
+	 *
+	 * <p>O catálogo mostra até 100 serviços e o {@code usernameOf} por linha carregava o perfil
+	 * inteiro (com as três coleções EAGER) para ler um único campo. A conta que não existe mais
+	 * fica de fora do mapa — quem chama trata a ausência como null.</p>
+	 */
+	public java.util.Map<String, String> usernamesOf(List<ServiceOffer> offers) {
+		java.util.Set<String> ids = new java.util.LinkedHashSet<>();
+		for (ServiceOffer offer : offers) {
+			ids.add(offer.userId());
+		}
+		if (ids.isEmpty()) {
+			return java.util.Map.of();
+		}
+		return profiles.identitiesOf(ids).stream()
+			.collect(java.util.stream.Collectors.toMap(
+				com.socialcoisa.rede.profile.application.port.out.AccountIdentity::id,
+				com.socialcoisa.rede.profile.application.port.out.AccountIdentity::username));
+	}
+
 	private boolean matches(ServiceOffer offer, String query) {
 		if (!StringUtils.hasText(query)) {
 			return true;

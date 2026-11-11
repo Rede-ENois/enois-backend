@@ -46,8 +46,10 @@ class ServiceOfferController {
 			@RequestParam(defaultValue = "30") int limit,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		String viewerId = viewerIdOrNull(sessionToken);
-		return services.catalog(category, q, limit).stream()
-			.map(offer -> ServiceView.of(offer, services.usernameOf(offer), viewerId))
+		var ofertas = services.catalog(category, q, limit);
+		var handles = services.usernamesOf(ofertas);
+		return ofertas.stream()
+			.map(offer -> ServiceView.of(offer, handles.get(offer.userId()), viewerId))
 			.toList();
 	}
 
@@ -64,8 +66,10 @@ class ServiceOfferController {
 	@GetMapping("/mine")
 	List<ServiceView> mine(@RequestHeader("X-Session-Token") String sessionToken) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		return services.mine(user.id().value()).stream()
-			.map(offer -> ServiceView.of(offer, services.usernameOf(offer), user.id().value()))
+		var ofertas = services.mine(user.id().value());
+		var handles = services.usernamesOf(ofertas);
+		return ofertas.stream()
+			.map(offer -> ServiceView.of(offer, handles.get(offer.userId()), user.id().value()))
 			.toList();
 	}
 
