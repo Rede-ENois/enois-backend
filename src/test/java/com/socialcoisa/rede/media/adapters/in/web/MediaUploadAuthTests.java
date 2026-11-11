@@ -58,17 +58,33 @@ class MediaUploadAuthTests {
 	@Test
 	void fileAboveTheLimitIsRejectedWithAClearMessage() throws Exception {
 		var session = auth.authenticate("media_upload_grande");
-		// 501MB: passa do teto de 500MB do serviço.
+		// 501MB de IMAGEM: passa do teto geral de 500MB do serviço (vídeo tem o teto próprio de 10MB).
 		mockMvc.perform(post("/media/uploads")
 				.header("X-Session-Token", session.token())
 				.header("Idempotency-Key", "media-up-grande")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of(
-					"fileName", "media/abc/video.mp4", "mimeType", "video/mp4",
-					"size", 501L * 1024L * 1024L, "purpose", "POST_VIDEO"))))
+					"fileName", "media/abc/imagem.png", "mimeType", "image/png",
+					"size", 501L * 1024L * 1024L, "purpose", "POST_IMAGE"))))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("MEDIA_TOO_LARGE"))
 			.andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("500MB")));
+	}
+
+	@Test
+	void videoAboveItsOwnLimitIsRejected() throws Exception {
+		var session = auth.authenticate("media_video_grande");
+		// 10MB + 1 byte de vídeo: o teto por tipo (issue #656) é mais estreito que o geral.
+		mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", session.token())
+				.header("Idempotency-Key", "media-up-video-grande")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+					"fileName", "media/abc/video.mp4", "mimeType", "video/mp4",
+					"size", 10L * 1024L * 1024L + 1, "purpose", "POST_VIDEO"))))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("MEDIA_TOO_LARGE"))
+			.andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("10MB")));
 	}
 
 	@Test
@@ -80,7 +96,7 @@ class MediaUploadAuthTests {
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of(
 					"fileName", "media/abc/video.mp4", "mimeType", "video/mp4",
-					"size", 500L * 1024L * 1024L, "purpose", "POST_VIDEO"))))
+					"size", 10L * 1024L * 1024L, "purpose", "POST_VIDEO"))))
 			.andExpect(status().isCreated());
 	}
 
