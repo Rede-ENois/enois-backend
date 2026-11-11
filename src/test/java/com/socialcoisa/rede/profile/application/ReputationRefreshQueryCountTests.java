@@ -26,6 +26,12 @@ import org.springframework.context.annotation.Import;
  * <p>A prova é a CONTAGEM das instruções SQL executadas de verdade: dobra-se o número de contas
  * e o número de consultas tem de continuar IDÊNTICO — a leitura em lote é uma consulta por
  * métrica por página, não por conta.</p>
+ *
+ * <p>O custo é constante POR PÁGINA, não por passada: o worker pagina de 500 em 500, e a base H2 é
+ * compartilhada entre as classes da suíte. Quando o total de contas cruza um múltiplo de 500 entre
+ * duas medições, a passada faz uma página a mais e a contagem sobe em 17 (1 varredura de ids + 16
+ * métricas) — sem que o custo por conta tenha mudado. Por isso a asserção normaliza pelo número de
+ * páginas que a passada realmente percorreu.</p>
  */
 @SpringBootTest
 @Import(ReputationRefreshQueryCountTests.InspectorConfig.class)
@@ -90,14 +96,32 @@ class ReputationRefreshQueryCountTests {
 	@Autowired
 	private org.springframework.jdbc.core.JdbcTemplate jdbc;
 
-	private int refreshCountingSelects() {
+	/** Quantas contas existem agora: é o que decide quantas páginas a passada vai percorrer. */
+	private int accountCount() {
+		Integer total = jdbc.queryForObject("select count(*) from users", Integer.class);
+		return total == null ? 0 : total;
+	}
+
+	/** Páginas de 500 que a passada percorre com o total de contas informado. */
+	private static int pagesFor(int accounts) {
+		return Math.max(1, (accounts + 499) / 500);
+	}
+
+	/**
+	 * SELECTs da passada, normalizados por página. O custo por página é o que a leitura em lote
+	 * promete: uma varredura de ids e uma consulta por métrica, independentemente de quantas contas
+	 * a página tem.
+	 */
+	private double selectsPerPage() {
+		int accounts = accountCount();
 		inspector.reset();
 		// A porta de entrada é a MESMA passada do @Scheduled — o teste roda o que roda em produção.
 		worker.refreshRankingColumn();
 		List<String> sql = List.copyOf(inspector.statements());
-		return (int) sql.stream()
+		long selects = sql.stream()
 			.filter(statement -> statement.strip().toUpperCase().startsWith("SELECT"))
 			.count();
+		return (double) selects / pagesFor(accounts);
 	}
 
 	/**
@@ -123,19 +147,19 @@ class ReputationRefreshQueryCountTests {
 		// O banco H2 dos testes nasce vazio por execução, mas outras classes desta suíte podem ter
 		// criado contas: mede-se o estado REAL varrendo tudo que existe, semeando o lote de cima.
 		seedUsers(BASE_USERS, 0);
-		int withBase = refreshCountingSelects();
+		double withBase = selectsPerPage();
 
 		seedUsers(BASE_USERS, 1);
-		int withDouble = refreshCountingSelects();
+		double withDouble = selectsPerPage();
 
 		seedUsers(BASE_USERS, 2);
-		int withTriple = refreshCountingSelects();
+		double withTriple = selectsPerPage();
 
 		assertThat(withDouble)
-			.as("a passada não pode consultar mais o banco por ter o dobro de contas")
+			.as("a passada não pode consultar mais o banco por conta: o custo por página é fixo")
 			.isEqualTo(withBase);
 		assertThat(withTriple)
-			.as("a passada não pode consultar mais o banco por ter o triplo de contas")
+			.as("a passada não pode consultar mais o banco por conta: o custo por página é fixo")
 			.isEqualTo(withBase);
 
 		// E a coluna do ranking tem de ter sido escrita de verdade para as contas semeadas: elas
