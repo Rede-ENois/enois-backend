@@ -109,6 +109,19 @@ public class ExternalJobImportService {
 	static final int TITLE_MAX = 500;
 	static final int TEXT_MAX = 255;
 
+	// Tamanhos das colunas estruturadas (V269). A fonte não é obrigada a respeitá-los: o GitHub
+	// manda o "regime de contratação" inteiro, com quebras de linha, e um feed alemão manda
+	// "Unbefristeter arbeitsvertrag, berufserfahren" (44 caracteres) num campo de 40.
+	static final int EMPLOYMENT_TYPE_MAX = 40;
+	static final int LEVEL_MAX = 20;
+	static final int WORK_MODEL_MAX = 20;
+	static final int CITY_MAX = 120;
+	static final int STATE_MAX = 60;
+	static final int COUNTRY_MAX = 60;
+	static final int CURRENCY_MAX = 8;
+	static final int SALARY_PERIOD_MAX = 10;
+	static final int ATTRIBUTION_URL_MAX = 1000;
+
 	private int saveChunk(String platform, List<JobImportSource.ExternalJob> chunk) {
 		int saved = 0;
 		for (JobImportSource.ExternalJob external : chunk) {
@@ -176,9 +189,17 @@ public class ExternalJobImportService {
 	 */
 	private com.socialcoisa.rede.jobs.domain.ExternalJobDetails detailsOf(JobImportSource.ExternalJob external) {
 		JobImportSource.Meta meta = external.meta() == null ? JobImportSource.Meta.empty() : external.meta();
-		return new com.socialcoisa.rede.jobs.domain.ExternalJobDetails(external.publishedAt(), external.employmentType(),
-			meta.level(), meta.workModel(), meta.city(), meta.state(), meta.country(), meta.salaryMinAmount(),
-			meta.salaryMaxAmount(), meta.salaryCurrency(), meta.salaryPeriodCode(), meta.attributionUrl(),
+		// O vínculo passa pela taxonomia: "PJ, Contrato, Freelance\n\nPreferência por ME/CNPJ…" vira
+		// PJ, e o que a taxonomia não reconhece é cortado no tamanho da coluna em vez de derrubar o
+		// lote inteiro. Os demais campos vêm de caminhos fixos da fonte, mas o corte vale para todos:
+		// nenhum feed é obrigado a respeitar o nosso schema.
+		return new com.socialcoisa.rede.jobs.domain.ExternalJobDetails(external.publishedAt(),
+			fit(com.socialcoisa.rede.jobs.domain.JobTaxonomy.employmentType(external.employmentType()),
+				EMPLOYMENT_TYPE_MAX),
+			fit(meta.level(), LEVEL_MAX), fit(meta.workModel(), WORK_MODEL_MAX), fit(meta.city(), CITY_MAX),
+			fit(meta.state(), STATE_MAX), fit(meta.country(), COUNTRY_MAX), meta.salaryMinAmount(),
+			meta.salaryMaxAmount(), fit(meta.salaryCurrency(), CURRENCY_MAX),
+			fit(meta.salaryPeriodCode(), SALARY_PERIOD_MAX), fit(meta.attributionUrl(), ATTRIBUTION_URL_MAX),
 			clock.instant(), meta.expiresAt(), null);
 	}
 
