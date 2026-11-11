@@ -74,7 +74,10 @@ class WriteRouteInterceptor implements HandlerInterceptor {
 		// Fase 3: o nó de borda confirma o que sincronizou e pede a reconciliação. Mesma credencial
 		// de nó; as leituras de conteúdo são GET e não passam por aqui.
 		"/network/content/*/*/synced",
-		"/network/content/reconcile");
+		"/network/content/reconcile",
+		// Fase 3: o nó de mídia devolve o arquivo transcodificado. Mesma credencial de nó; além
+		// dela o controller exige o perfil NODE_MEDIA e a tarefa designada a este nó.
+		"/network/media/*/result");
 
 	private final AntPathMatcher matcher = new AntPathMatcher();
 	private final CurrentUserResolver currentUserResolver;

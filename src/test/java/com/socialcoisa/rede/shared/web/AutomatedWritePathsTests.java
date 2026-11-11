@@ -79,7 +79,9 @@ class AutomatedWritePathsTests {
 		"/network/tasks/*/result",
 		// Fase 3: nó de borda confirmando o que sincronizou e pedindo reconciliação.
 		"/network/content/*/*/synced",
-		"/network/content/reconcile");
+		"/network/content/reconcile",
+		// Fase 3: entrega do arquivo transcodificado pelo nó de mídia.
+		"/network/media/*/result");
 
 	private static final Pattern MAPPING = Pattern
 		.compile("@(Get|Post|Put|Patch|Delete)Mapping(?:\\(\\s*(?:value\\s*=\\s*)?\"([^\"]*)\"[^)]*\\))?");

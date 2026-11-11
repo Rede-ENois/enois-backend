@@ -300,14 +300,36 @@ public class MediaFfmpegRunner {
 	 */
 	private List<String> transcodeCommand(Formats formats, Encoders encoders, Path input, Path output,
 			boolean faststart) {
+		return transcodeArgs(ffmpegPath, formats.demuxer(), formats.muxer(), encoders.video(), encoders.audio(),
+			input, output, faststart);
+	}
+
+	/**
+	 * A receita do transcode, sem o estado do runner. É a mesma lista que o nó {@code NODE_MEDIA}
+	 * executa (fase 3): o arquivo que o nó produz tem de ser o que o pod produziria, e a única forma
+	 * de garantir isso é os dois lados montarem os argumentos pelo mesmo código.
+	 */
+	static List<String> transcodeArgs(String ffmpegPath, String demuxer, String muxer, List<String> video,
+			List<String> audio, Path input, Path output, boolean faststart) {
 		List<String> base = List.of(ffmpegPath, "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-			"-protocol_whitelist", "file", "-f", formats.demuxer(), "-i", "file:" + input.toAbsolutePath(),
+			"-protocol_whitelist", "file", "-f", demuxer, "-i", "file:" + input.toAbsolutePath(),
 			"-map", "0:v:0", "-map", "0:a?", "-sn", "-dn",
 			"-map_metadata", "-1", "-map_chapters", "-1", "-vf", SCALE_FILTER);
 		List<String> tail = faststart
-			? List.of("-movflags", "+faststart", "-f", formats.muxer(), "file:" + output.toAbsolutePath())
-			: List.of("-f", formats.muxer(), "file:" + output.toAbsolutePath());
-		return concat(concat(concat(base, encoders.video()), encoders.audio()), tail);
+			? List.of("-movflags", "+faststart", "-f", muxer, "file:" + output.toAbsolutePath())
+			: List.of("-f", muxer, "file:" + output.toAbsolutePath());
+		return concat(concat(concat(base, video), audio), tail);
+	}
+
+	/** A receita para um tipo, como o runner a monta. Usada pelo teste de paridade com o nó. */
+	public static List<String> transcodeArgsFor(String ffmpegPath, String mimeType, Path input, Path output) {
+		Formats formats = FORMATS.get(mimeType);
+		Encoders encoders = ENCODERS.get(mimeType);
+		if (formats == null || encoders == null) {
+			throw new IllegalArgumentException("Tipo sem receita de transcode: " + mimeType);
+		}
+		return transcodeArgs(ffmpegPath, formats.demuxer(), formats.muxer(), encoders.video(), encoders.audio(),
+			input, output, FASTSTART_TYPES.contains(mimeType));
 	}
 
 	private static List<String> concat(List<String> first, List<String> second) {

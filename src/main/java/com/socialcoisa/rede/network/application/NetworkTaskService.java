@@ -51,6 +51,12 @@ public class NetworkTaskService {
 
 	private final NetworkTaskRepository tasks;
 	private final NetworkNodeRepository nodes;
+	/*
+	 * ObjectProvider e nao injecao direta: o verificador de midia enfileira tarefas por este
+	 * servico, entao a dependencia direta fecharia um ciclo. Ausente, a tarefa de midia NAO conclui
+	 * (fail-closed) — nunca "aceita porque nao deu para conferir".
+	 */
+	private final org.springframework.beans.factory.ObjectProvider<MediaResultVerifier> mediaResults;
 	private final AuditTrail audit;
 	private final Clock clock;
 	private final Duration claimTtl;
@@ -58,13 +64,15 @@ public class NetworkTaskService {
 	private final int maxAttempts;
 	private final Duration defaultDeadline;
 
-	NetworkTaskService(NetworkTaskRepository tasks, NetworkNodeRepository nodes, AuditTrail audit, Clock clock,
+	NetworkTaskService(NetworkTaskRepository tasks, NetworkNodeRepository nodes, org.springframework.beans.factory.ObjectProvider<MediaResultVerifier> mediaResults,
+			AuditTrail audit, Clock clock,
 			@Value("${rede.network.task.claim-ttl-seconds:120}") long claimTtlSeconds,
 			@Value("${rede.network.task.node-stale-seconds:180}") long nodeStaleSeconds,
 			@Value("${rede.network.task.max-attempts:5}") int maxAttempts,
 			@Value("${rede.network.task.default-deadline-seconds:900}") long defaultDeadlineSeconds) {
 		this.tasks = tasks;
 		this.nodes = nodes;
+		this.mediaResults = mediaResults;
 		this.audit = audit;
 		this.clock = clock;
 		this.claimTtl = Duration.ofSeconds(Math.max(10, claimTtlSeconds));
@@ -212,6 +220,27 @@ public class NetworkTaskService {
 			throw new ApiException(403, "TASK_NOT_ALLOWED", "Tarefa nao designada a este no.");
 		}
 		if (command.done()) {
+			// Mídia não se aceita pela declaração do nó: o arquivo entregue é medido e comparado com
+			// o tamanho e o hash que o nó declarou. Os demais tipos não passam por aqui, e por isso
+			// continuam exatamente como estavam.
+			if (task.taskType() == TaskType.MEDIA_TRANSCODE) {
+				MediaResultVerifier verifier = mediaResults.getIfAvailable();
+				MediaResultVerifier.Verification verification = verifier == null
+					? MediaResultVerifier.Verification.refused("MEDIA_VERIFIER_UNAVAILABLE",
+						"Conferencia de midia indisponivel.", true)
+					: verifier.verify(task, command.output());
+				if (!verification.ok()) {
+					audit.record(node.id(), "NETWORK_TASK_RESULT_REFUSED", task.id(),
+						"{\"status\":\"" + verification.status() + "\"}");
+					if (verification.retryable() && task.attempt() < maxAttempts) {
+						Instant next = now.plus(backoff(task.attempt()));
+						tasks.requeue(task.id(), command.attempt(), verification.status(), next, now);
+						return new ResultOutcome(task.id(), TaskStatus.PENDING.name(), false, verification.status());
+					}
+					tasks.fail(task.id(), command.attempt(), verification.status(), now);
+					return new ResultOutcome(task.id(), TaskStatus.FAILED.name(), false, verification.status());
+				}
+			}
 			if (tasks.complete(task.id(), command.attempt(), command.output(), now) == 1) {
 				return new ResultOutcome(task.id(), TaskStatus.DONE.name(), true, null);
 			}
@@ -219,6 +248,12 @@ public class NetworkTaskService {
 		}
 		// Falha reportada pelo nó: retentável volta para a fila com backoff; não retentável morre.
 		String error = truncate(command.error() == null ? "TASK_FAILED" : command.error());
+		if (task.taskType() == TaskType.MEDIA_TRANSCODE) {
+			MediaResultVerifier verifier = mediaResults.getIfAvailable();
+			if (verifier != null) {
+				verifier.recordFailure(task, error, command.retryable());
+			}
+		}
 		if (command.retryable() && task.attempt() < maxAttempts) {
 			Instant next = now.plus(backoff(task.attempt()));
 			tasks.requeue(task.id(), command.attempt(), error, next, now);
