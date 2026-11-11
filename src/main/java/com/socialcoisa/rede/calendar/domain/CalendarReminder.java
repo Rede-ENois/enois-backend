@@ -88,7 +88,11 @@ public class CalendarReminder {
 		return sentAt == null && attempts >= MAX_ATTEMPTS;
 	}
 
-	private static int requireAllowedMinutes(int value) {
+	/**
+	 * A antecedência que a tela oferece. Público porque a remoção também precisa recusar um valor
+	 * fora da lista: apagar "7 minutos antes" não tira lembrete nenhum, é um pedido inválido.
+	 */
+	public static int requireAllowedMinutes(int value) {
 		for (int allowed : ALLOWED_MINUTES) {
 			if (allowed == value) {
 				return value;

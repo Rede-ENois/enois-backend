@@ -253,17 +253,22 @@ class CalendarEntryController {
 		}
 	}
 
+	/**
+	 * Tira o lembrete de uma antecedência. Sem `minutesBefore` não há o que tirar: responder 200
+	 * faria a tela acreditar que apagou algo, então o pedido incompleto é 400 com código.
+	 */
 	@DeleteMapping("/{entryId}/reminders")
 	void clearReminder(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String entryId, @RequestParam(required = false) Integer minutesBefore) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		if (minutesBefore != null) {
-			try {
-				calendarReminderService.clearForReader(user.id().value(), entryId, minutesBefore);
-			}
-			catch (IllegalArgumentException error) {
-				throw new ApiException(400, "INVALID_REMINDER", error.getMessage());
-			}
+		if (minutesBefore == null) {
+			throw new ApiException(400, "INVALID_REMINDER", "Informe minutesBefore (5, 15, 30, 60 ou 1440).");
+		}
+		try {
+			calendarReminderService.clearForReader(user.id().value(), entryId, minutesBefore);
+		}
+		catch (IllegalArgumentException error) {
+			throw new ApiException(400, "INVALID_REMINDER", error.getMessage());
 		}
 	}
 
