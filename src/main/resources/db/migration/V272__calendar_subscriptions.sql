@@ -17,7 +17,7 @@ create table if not exists calendar_subscriptions (
   id varchar(255) not null,
   user_id varchar(255) not null,
   scope varchar(32) null,
-  token_hash char(64) not null,
+  token_hash varchar(64) not null,
   created_at timestamp not null,
   revoked_at timestamp null,
   primary key (id),
