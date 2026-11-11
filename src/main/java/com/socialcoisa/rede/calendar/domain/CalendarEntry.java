@@ -24,8 +24,8 @@ public class CalendarEntry {
 
 	private final String id;
 	private final String ownerId;
-	private final CalendarScope scope;
-	private final CalendarKind kind;
+	private CalendarScope scope;
+	private CalendarKind kind;
 	private final CalendarEntrySource source;
 	private final Instant createdAt;
 	private String title;
@@ -82,6 +82,25 @@ public class CalendarEntry {
 		startsAt = start;
 		endsAt = end;
 		zone = newZoneId;
+		updatedAt = Objects.requireNonNull(now, "atualização");
+	}
+
+	/**
+	 * Reclassificação: a pessoa troca a agenda (social/profissional), o tipo ou marca o dia inteiro.
+	 * Não mexe no intervalo nem na origem — quem muda o fato continua sendo o módulo dono, e a
+	 * agenda só reclassifica o que é dela. Reclassificar para o mesmo valor não mexe em `updatedAt`.
+	 */
+	public void reclassify(CalendarScope newScope, CalendarKind newKind, Boolean newAllDay, Instant now) {
+		requireActive("reclassificar");
+		CalendarScope nextScope = newScope == null ? scope : Objects.requireNonNull(newScope, "agenda");
+		CalendarKind nextKind = newKind == null ? kind : Objects.requireNonNull(newKind, "tipo");
+		boolean nextAllDay = newAllDay == null ? allDay : newAllDay;
+		if (nextScope == scope && nextKind == kind && nextAllDay == allDay) {
+			return;
+		}
+		scope = nextScope;
+		kind = nextKind;
+		allDay = nextAllDay;
 		updatedAt = Objects.requireNonNull(now, "atualização");
 	}
 
