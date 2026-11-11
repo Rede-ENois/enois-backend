@@ -98,7 +98,8 @@ class NetworkNodeJpaEntity {
 
 	NetworkNode toDomain() {
 		return new NetworkNode(id, displayName, ownerUserId, NodeStatus.valueOf(status),
-			NodeProfilesCsv.parse(profiles), region, runtimeVersion, lastSeenAt);
+			NodeProfilesCsv.parse(profiles), region, country, runtimeVersion, lastSeenAt, declaredCpuCores,
+			declaredMemoryMb, observedCpuPercent, observedMemoryMb, observedRunningTasks);
 	}
 
 	String status() {

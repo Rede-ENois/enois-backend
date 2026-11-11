@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.network.domain;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Set;
 
@@ -9,17 +10,32 @@ import java.util.Set;
  * <p>A identidade é do nó, não do dono — o dono não herda permissão nenhuma. Permissão é dado do
  * Control Plane (esta tabela), e o nó só lê a própria configuração.</p>
  *
+ * <p>Capacidade declarada é o que o participante diz ter; observada é o que o heartbeat mediu. O
+ * scheduler usa a observada, porque é a única que não depende da boa-fé de quem declara. As duas
+ * existem porque a declarada é o teto que o participante aceitou ceder.</p>
+ *
  * @param id identificador estável do nó (nd_…)
  * @param displayName nome legível para o painel
  * @param ownerUserId conta responsável pelo participante (auditoria e contato)
  * @param status estado atual; REVOKED é terminal
  * @param profiles perfis autorizados; vazio = nenhum tipo de tarefa
  * @param region região declarada pelo participante
+ * @param country país declarado (ISO-2), usado na restrição de dado
  * @param runtimeVersion versão do runtime reportada no último heartbeat
  * @param lastSeenAt último heartbeat; null = nunca conectou
+ * @param declaredCpuCores núcleos que o participante cedeu
+ * @param declaredMemoryMb memória que o participante cedeu
+ * @param observedCpuPercent uso de CPU no último heartbeat; null = não reportado
+ * @param observedMemoryMb memória em uso no último heartbeat; null = não reportado
+ * @param observedRunningTasks tarefas em execução no último heartbeat; null = não reportado
  */
 public record NetworkNode(String id, String displayName, String ownerUserId, NodeStatus status,
-		Set<NodeProfile> profiles, String region, String runtimeVersion, Instant lastSeenAt) {
+		Set<NodeProfile> profiles, String region, String country, String runtimeVersion, Instant lastSeenAt,
+		int declaredCpuCores, int declaredMemoryMb, Double observedCpuPercent, Integer observedMemoryMb,
+		Integer observedRunningTasks) {
+
+	/** Acima disto o nó está ocupado demais para receber tarefa nova, mesmo com vaga declarada. */
+	public static final double SATURATED_CPU_PERCENT = 85.0;
 
 	public NetworkNode {
 		if (id == null || id.isBlank()) {
@@ -39,5 +55,46 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 
 	public boolean canOperate() {
 		return status.canOperate() && !profiles.isEmpty();
+	}
+
+	/**
+	 * Quantas tarefas este nó aceita ao mesmo tempo. O piso é 1 (um nó que declarou zero núcleos
+	 * ainda pode executar uma tarefa — senão um cadastro mal preenchido viraria nó inútil), e o
+	 * teto é o que ele declarou ceder.
+	 */
+	public int concurrencyLimit() {
+		return Math.max(1, declaredCpuCores);
+	}
+
+	/** Tarefas em execução segundo o último heartbeat; sem reporte, assume zero. */
+	public int runningTasks() {
+		return observedRunningTasks == null ? 0 : Math.max(0, observedRunningTasks);
+	}
+
+	/** Tem vaga para mais uma tarefa, pelo que ele mesmo reportou? */
+	public boolean hasCapacity() {
+		return runningTasks() < concurrencyLimit();
+	}
+
+	/** CPU observada acima do limiar: o nó está saturado mesmo que ainda tenha vaga declarada. */
+	public boolean saturated() {
+		return observedCpuPercent != null && observedCpuPercent >= SATURATED_CPU_PERCENT;
+	}
+
+	/**
+	 * O nó está vivo? Um nó que parou de mandar heartbeat não recebe tarefa nova: a tarefa ficaria
+	 * parada até o claim expirar, e o certo é escolher outro.
+	 */
+	public boolean alive(Instant now, Duration staleAfter) {
+		return lastSeenAt != null && lastSeenAt.isAfter(now.minus(staleAfter));
+	}
+
+	/** Pode receber tarefa deste tipo e desta classe de dado? */
+	public boolean accepts(TaskType type, DataClass dataClass) {
+		if (!canOperate() || !type.allowedFor(profiles)) {
+			return false;
+		}
+		// Dado que não pode sair da infraestrutura autorizada só vai para nó próprio.
+		return dataClass.mayLeaveAuthorizedInfra() || profiles.contains(NodeProfile.NODE_LOCAL);
 	}
 }

@@ -74,7 +74,9 @@ class AutomatedWritePathsTests {
 		// Nó da rede cooperativa não tem sessão: o enroll usa o token de provisionamento e o
 		// heartbeat a API key do nó, ambos conferidos no controller (fase 1 da rede distribuída).
 		"/network/nodes/enroll",
-		"/network/nodes/heartbeat");
+		"/network/nodes/heartbeat",
+		// Fase 2: resultado de tarefa devolvido pelo nó, com a mesma credencial de nó.
+		"/network/tasks/*/result");
 
 	private static final Pattern MAPPING = Pattern
 		.compile("@(Get|Post|Put|Patch|Delete)Mapping(?:\\(\\s*(?:value\\s*=\\s*)?\"([^\"]*)\"[^)]*\\))?");

@@ -1,0 +1,318 @@
+package com.socialcoisa.rede.network.application;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.ThreadLocalRandom;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
+import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
+import com.socialcoisa.rede.network.domain.DataClass;
+import com.socialcoisa.rede.network.domain.NetworkNode;
+import com.socialcoisa.rede.network.domain.NetworkTask;
+import com.socialcoisa.rede.network.domain.TaskStatus;
+import com.socialcoisa.rede.network.domain.TaskType;
+import com.socialcoisa.rede.shared.audit.AuditTrail;
+import com.socialcoisa.rede.shared.web.ApiException;
+
+/**
+ * Scheduler distribuído: escolhe o nó, designa a tarefa, aceita o resultado e devolve à fila o que
+ * ficou órfão.
+ *
+ * <p>O desenho é <b>pull</b>: o Control Plane designa a tarefa a um nó e o nó busca o que é dele em
+ * {@code GET /network/tasks/next}. Nenhuma conexão sai do Control Plane para o nó. Três motivos, e
+ * os três são de segurança: (1) um participante atrás de NAT não precisa abrir porta de entrada;
+ * (2) não existe URL fornecida por terceiro virando requisição nossa, então não há superfície de
+ * SSRF no despacho; (3) o nó só recebe o que ele mesmo pediu, com a credencial dele.</p>
+ *
+ * <p>O que garante "sem duplicar efeito" não é o nó: é o {@code attempt}. A tarefa tem id estável e
+ * a tentativa sobe a cada designação; o resultado carrega a tentativa que o nó executou, e resultado
+ * de tentativa antiga é descartado. Um nó que caiu no meio e voltou tarde não sobrescreve o
+ * resultado de quem terminou.</p>
+ */
+@Service
+public class NetworkTaskService {
+
+	private static final Logger LOG = LoggerFactory.getLogger(NetworkTaskService.class);
+
+	/** Teto de tarefas por varredura: uma rodada não pode segurar a tabela. */
+	private static final int SCAN_LIMIT = 50;
+	private static final int MAX_LIST = 200;
+	private static final int MAX_ERROR = 500;
+
+	private final NetworkTaskRepository tasks;
+	private final NetworkNodeRepository nodes;
+	private final AuditTrail audit;
+	private final Clock clock;
+	private final Duration claimTtl;
+	private final Duration nodeStaleAfter;
+	private final int maxAttempts;
+	private final Duration defaultDeadline;
+
+	NetworkTaskService(NetworkTaskRepository tasks, NetworkNodeRepository nodes, AuditTrail audit, Clock clock,
+			@Value("${rede.network.task.claim-ttl-seconds:120}") long claimTtlSeconds,
+			@Value("${rede.network.task.node-stale-seconds:180}") long nodeStaleSeconds,
+			@Value("${rede.network.task.max-attempts:5}") int maxAttempts,
+			@Value("${rede.network.task.default-deadline-seconds:900}") long defaultDeadlineSeconds) {
+		this.tasks = tasks;
+		this.nodes = nodes;
+		this.audit = audit;
+		this.clock = clock;
+		this.claimTtl = Duration.ofSeconds(Math.max(10, claimTtlSeconds));
+		this.nodeStaleAfter = Duration.ofSeconds(Math.max(30, nodeStaleSeconds));
+		this.maxAttempts = Math.max(1, maxAttempts);
+		this.defaultDeadline = Duration.ofSeconds(Math.max(60, defaultDeadlineSeconds));
+	}
+
+	/**
+	 * Cria a tarefa na fila. A chave de idempotência é única: a mesma chave não cria duas tarefas,
+	 * então um evento de outbox reprocessado não duplica trabalho.
+	 */
+	@Transactional
+	public NetworkTask enqueue(EnqueueCommand command) {
+		if (command == null || command.taskType() == null) {
+			throw new ApiException(400, "TASK_TYPE_REQUIRED", "Informe o tipo da tarefa.");
+		}
+		if (command.idempotencyKey() == null || command.idempotencyKey().isBlank()) {
+			throw new ApiException(400, "TASK_IDEMPOTENCY_REQUIRED", "Informe a chave de idempotencia.");
+		}
+		Instant now = clock.instant();
+		Instant deadline = command.deadline() != null ? command.deadline() : now.plus(defaultDeadline);
+		if (!deadline.isAfter(now)) {
+			throw new ApiException(400, "TASK_EXPIRED", "Prazo da tarefa ja venceu.");
+		}
+		// A chave de idempotência é a trava contra duplicar trabalho: o mesmo evento reprocessado
+		// devolve a tarefa que já existe em vez de criar outra.
+		Optional<NetworkTask> existing = tasks.findByIdempotencyKey(command.idempotencyKey().trim());
+		if (existing.isPresent()) {
+			return existing.get();
+		}
+		String id = NodeIds.next("tk");
+		tasks.create(id, command.taskType(), command.idempotencyKey().trim(),
+			command.payload() == null ? "{}" : command.payload(),
+			command.dataClass() == null ? DataClass.PUBLIC : command.dataClass(), deadline, now, now);
+		return tasks.findById(id)
+			.orElseThrow(() -> new IllegalStateException("Tarefa recem-criada nao encontrada: " + id));
+	}
+
+	/**
+	 * Uma rodada do scheduler: devolve à fila o que ficou órfão e designa o que está na fila.
+	 *
+	 * <p>Chamado pelo handler do outbox e pela varredura periódica. É idempotente por construção: as
+	 * transições são condicionais, então duas instâncias rodando ao mesmo tempo não designam a mesma
+	 * tarefa duas vezes.</p>
+	 *
+	 * @return quantas tarefas foram designadas nesta rodada
+	 */
+	@Transactional
+	public int dispatchPending() {
+		Instant now = clock.instant();
+		reclaimAbandoned(now);
+		List<NetworkTask> pending = tasks.findDispatchable(now, SCAN_LIMIT);
+		if (pending.isEmpty()) {
+			return 0;
+		}
+		List<NetworkNode> candidates = nodes.findCandidates(now.minus(nodeStaleAfter), MAX_LIST);
+		int dispatched = 0;
+		for (NetworkTask task : pending) {
+			Optional<NetworkNode> chosen = choose(task, candidates, now);
+			if (chosen.isEmpty()) {
+				// Sem nó elegível a tarefa fica na fila: o próximo ciclo tenta de novo. Não é erro —
+				// é a rede sem capacidade agora, e matar a tarefa seria perder trabalho.
+				LOG.debug("Tarefa {} sem no elegivel agora", task.id());
+				continue;
+			}
+			NetworkNode node = chosen.get();
+			if (tasks.claim(task.id(), node.id(), task.attempt(), now.plus(claimTtl), now) == 1) {
+				dispatched++;
+			}
+		}
+		return dispatched;
+	}
+
+	/**
+	 * Devolve à fila as tarefas cujo claim venceu: o nó caiu no meio. A tentativa sobe, então o
+	 * resultado que chegar depois é descartado.
+	 */
+	@Transactional
+	public int reclaimAbandoned(Instant now) {
+		int reclaimed = 0;
+		for (NetworkTask task : tasks.findAbandoned(now, SCAN_LIMIT)) {
+			if (task.expired(now)) {
+				tasks.kill(task.id(), task.attempt(), "TASK_EXPIRED: prazo vencido com o no designado",
+					now);
+				audit.record("system", "NETWORK_TASK_EXPIRED", task.id(), "{\"attempt\":" + task.attempt() + "}");
+				continue;
+			}
+			if (task.attempt() >= maxAttempts) {
+				tasks.kill(task.id(), task.attempt(), "TASK_ABANDONED: no nao devolveu resultado em "
+					+ maxAttempts + " tentativas", now);
+				audit.record("system", "NETWORK_TASK_DEAD", task.id(), "{\"attempt\":" + task.attempt() + "}");
+				continue;
+			}
+			if (tasks.requeue(task.id(), task.attempt(), "TASK_ABANDONED: claim vencido", now, now) == 1) {
+				reclaimed++;
+				audit.record("system", "NETWORK_TASK_REQUEUED", task.id(),
+					"{\"attempt\":" + task.attempt() + ",\"reason\":\"claim_expired\"}");
+			}
+		}
+		return reclaimed;
+	}
+
+	/**
+	 * O que este nó deve executar agora. Só devolve tarefa designada a ele e com claim vigente; o nó
+	 * não escolhe tarefa, ele recebe a que o Control Plane designou.
+	 */
+	@Transactional
+	public List<NetworkTask> nextFor(NetworkNode node) {
+		requireOperable(node);
+		return tasks.findAssignedTo(node.id(), clock.instant(), SCAN_LIMIT);
+	}
+
+	/**
+	 * Aceita o resultado de uma tarefa.
+	 *
+	 * <p>Descarta, sem erro para o nó, o resultado que não é da tentativa vigente: o nó pode ter
+	 * terminado depois de o claim vencer e a tarefa já ter sido redistribuída. Aceitar esse resultado
+	 * seria aplicar duas vezes o efeito de uma tarefa.</p>
+	 */
+	@Transactional
+	public ResultOutcome acceptResult(NetworkNode node, ResultCommand command) {
+		requireOperable(node);
+		if (command == null || command.taskId() == null || command.taskId().isBlank()) {
+			throw new ApiException(400, "TASK_ID_REQUIRED", "Informe a tarefa.");
+		}
+		NetworkTask task = tasks.findById(command.taskId())
+			.orElseThrow(() -> new ApiException(404, "TASK_UNKNOWN", "Tarefa nao encontrada."));
+		Instant now = clock.instant();
+		if (task.status().terminal()) {
+			// Já concluída: o nó está reenviando. Não é erro do nó, e não muda nada.
+			return new ResultOutcome(task.id(), task.status().name(), false, "TASK_ALREADY_CLAIMED");
+		}
+		// A tentativa é conferida ANTES do dono da tarefa. O nó que caiu no meio e voltou tarde já
+		// não é o designado — a tarefa foi redistribuída —, e o resultado dele tem de ser descartado
+		// com auditoria, não recusado como se fosse um nó estranho tentando executar tarefa alheia.
+		if (task.status() == TaskStatus.PENDING || !task.matchesAttempt(command.attempt())) {
+			// Claim venceu (a tarefa voltou para a fila) ou a tentativa é antiga: a tarefa já foi
+			// redistribuída. Descartar é o que impede o efeito duplo.
+			audit.record(node.id(), "NETWORK_TASK_RESULT_DISCARDED", task.id(),
+				"{\"reportedAttempt\":" + command.attempt() + ",\"currentAttempt\":" + task.attempt() + "}");
+			return new ResultOutcome(task.id(), task.status().name(), false, "TASK_ATTEMPT_STALE");
+		}
+		if (!task.assignedTo(node.id())) {
+			throw new ApiException(403, "TASK_NOT_ALLOWED", "Tarefa nao designada a este no.");
+		}
+		if (command.done()) {
+			if (tasks.complete(task.id(), command.attempt(), command.output(), now) == 1) {
+				return new ResultOutcome(task.id(), TaskStatus.DONE.name(), true, null);
+			}
+			return new ResultOutcome(task.id(), task.status().name(), false, "TASK_ALREADY_CLAIMED");
+		}
+		// Falha reportada pelo nó: retentável volta para a fila com backoff; não retentável morre.
+		String error = truncate(command.error() == null ? "TASK_FAILED" : command.error());
+		if (command.retryable() && task.attempt() < maxAttempts) {
+			Instant next = now.plus(backoff(task.attempt()));
+			tasks.requeue(task.id(), command.attempt(), error, next, now);
+			return new ResultOutcome(task.id(), TaskStatus.PENDING.name(), true, null);
+		}
+		tasks.fail(task.id(), command.attempt(), error, now);
+		return new ResultOutcome(task.id(), TaskStatus.FAILED.name(), true, null);
+	}
+
+	/** Cancela uma tarefa que ainda não terminou. Cancelar o que já terminou é 409 confesso. */
+	@Transactional
+	public NetworkTask cancel(String taskId, String actorId) {
+		NetworkTask task = tasks.findById(taskId)
+			.orElseThrow(() -> new ApiException(404, "TASK_UNKNOWN", "Tarefa nao encontrada."));
+		if (task.status().terminal()) {
+			throw new ApiException(409, "TASK_ALREADY_FINISHED", "Tarefa ja terminou.");
+		}
+		if (tasks.cancel(taskId, actorId, clock.instant()) == 0) {
+			throw new ApiException(409, "TASK_ALREADY_FINISHED", "Tarefa ja terminou.");
+		}
+		audit.record(actorId, "NETWORK_TASK_CANCELLED", taskId, "{}");
+		return tasks.findById(taskId).orElseThrow();
+	}
+
+	@Transactional(readOnly = true)
+	public NetworkTask require(String taskId) {
+		return tasks.findById(taskId)
+			.orElseThrow(() -> new ApiException(404, "TASK_UNKNOWN", "Tarefa nao encontrada."));
+	}
+
+	@Transactional(readOnly = true)
+	public List<NetworkTask> list(int limit) {
+		return tasks.listRecent(Math.min(Math.max(limit, 1), MAX_LIST));
+	}
+
+	@Transactional(readOnly = true)
+	public long countByStatus(TaskStatus status) {
+		return tasks.countByStatus(status);
+	}
+
+	/**
+	 * Escolhe o nó para a tarefa.
+	 *
+	 * <p>Filtro primeiro (perfil cobre o tipo, classe de dado pode ir para este nó, tem vaga, não
+	 * está saturado), depois ordenação por folga: quem tem mais vaga proporcional recebe. Empate é
+	 * resolvido por jitter — sem ele, todos os nós empatados receberiam sempre na mesma ordem e o
+	 * primeiro da lista viraria gargalo.</p>
+	 */
+	private Optional<NetworkNode> choose(NetworkTask task, List<NetworkNode> candidates, Instant now) {
+		List<NetworkNode> eligible = candidates.stream()
+			.filter(node -> node.alive(now, nodeStaleAfter))
+			.filter(node -> node.accepts(task.taskType(), task.dataClass()))
+			.filter(NetworkNode::hasCapacity)
+			.filter(node -> !node.saturated())
+			.sorted(Comparator.comparingDouble(NetworkTaskService::slack).reversed()
+				.thenComparingDouble(node -> ThreadLocalRandom.current().nextDouble()))
+			.toList();
+		return eligible.stream().findFirst();
+	}
+
+	/** Folga do nó: vagas livres sobre o limite. Quem tem mais folga recebe a próxima tarefa. */
+	private static double slack(NetworkNode node) {
+		return (double) (node.concurrencyLimit() - node.runningTasks()) / node.concurrencyLimit();
+	}
+
+	/**
+	 * Backoff exponencial com jitter: 10s, 20s, 40s... até 5 min, mais até 20% de ruído. O jitter
+	 * evita que todas as tarefas que falharam juntas voltem juntas.
+	 */
+	static Duration backoff(int attempt) {
+		long base = Math.min(300L, 10L * (1L << Math.min(attempt, 5)));
+		long jitter = (long) (base * 0.2 * ThreadLocalRandom.current().nextDouble());
+		return Duration.ofSeconds(base + jitter);
+	}
+
+	private static void requireOperable(NetworkNode node) {
+		if (!node.status().canOperate()) {
+			throw new ApiException(403, "NODE_" + node.status().name(), "No nao esta ativo.");
+		}
+	}
+
+	private static String truncate(String text) {
+		return text.length() > MAX_ERROR ? text.substring(0, MAX_ERROR) : text;
+	}
+
+	public record EnqueueCommand(TaskType taskType, String idempotencyKey, String payload, DataClass dataClass,
+			Instant deadline) {
+	}
+
+	public record ResultCommand(String taskId, int attempt, boolean done, String output, String error,
+			boolean retryable) {
+	}
+
+	/** O que aconteceu com o resultado: aceito ou descartado, e por quê. */
+	public record ResultOutcome(String taskId, String status, boolean applied, String reason) {
+	}
+}

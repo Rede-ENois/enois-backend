@@ -65,4 +65,12 @@ class NetworkNodePersistenceAdapter implements NetworkNodeRepository {
 	public long countByStatus(NodeStatus status) {
 		return repository.countByStatus(status.name());
 	}
+
+	@Override
+	public List<NetworkNode> findCandidates(Instant seenAfter, int limit) {
+		return repository.findCandidates(seenAfter, PageRequest.ofSize(limit))
+			.stream()
+			.map(NetworkNodeJpaEntity::toDomain)
+			.toList();
+	}
 }

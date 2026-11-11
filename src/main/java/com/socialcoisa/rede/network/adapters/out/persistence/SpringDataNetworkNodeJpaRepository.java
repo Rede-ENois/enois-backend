@@ -36,4 +36,8 @@ interface SpringDataNetworkNodeJpaRepository extends JpaRepository<NetworkNodeJp
 			+ "n.observedMemoryMb = :memory, n.observedRunningTasks = :tasks, n.lastSeenAt = :now where n.id = :id")
 	int heartbeat(@Param("id") String id, @Param("version") String version, @Param("cpu") Double cpu,
 			@Param("memory") Integer memory, @Param("tasks") Integer tasks, @Param("now") Instant now);
+
+	@Query("select n from NetworkNodeJpaEntity n where n.status = 'ACTIVE' and n.lastSeenAt >= :seenAfter "
+			+ "order by n.lastSeenAt desc")
+	List<NetworkNodeJpaEntity> findCandidates(@Param("seenAfter") Instant seenAfter, PageRequest page);
 }

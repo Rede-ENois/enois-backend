@@ -26,4 +26,10 @@ public interface NetworkNodeRepository {
 			Instant now);
 
 	long countByStatus(NodeStatus status);
+
+	/**
+	 * Nós que podem receber tarefa agora: ACTIVE, com heartbeat recente e com vaga. A filtragem por
+	 * perfil e classe de dado é do domínio — o banco não sabe o que é {@code NODE_MEDIA}.
+	 */
+	List<NetworkNode> findCandidates(Instant seenAfter, int limit);
 }
