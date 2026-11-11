@@ -42,7 +42,30 @@ public class OpenJobApiSource implements JobImportSource {
 			String titlePath, String companyPath, String locationPath, String salaryTextPath, String salaryMinPath,
 			String salaryMaxPath, String currencyPath, String typePath, String urlPath, String applyPath,
 			String publishedAtPath, boolean publishedAtEpochSeconds, String dateFormat, String attribution,
-			String descriptionPath) {
+			String descriptionPath, MetaPaths meta) {
+
+		/** Fonte que só entrega o básico: nenhum caminho de metadado estruturado. */
+		public Spec(String name, String url, boolean rootIsArray, String rootPath, String idPath,
+				String titlePath, String companyPath, String locationPath, String salaryTextPath,
+				String salaryMinPath, String salaryMaxPath, String currencyPath, String typePath, String urlPath,
+				String applyPath, String publishedAtPath, boolean publishedAtEpochSeconds, String dateFormat,
+				String attribution, String descriptionPath) {
+			this(name, url, rootIsArray, rootPath, idPath, titlePath, companyPath, locationPath, salaryTextPath,
+				salaryMinPath, salaryMaxPath, currencyPath, typePath, urlPath, applyPath, publishedAtPath,
+				publishedAtEpochSeconds, dateFormat, attribution, descriptionPath, MetaPaths.empty());
+		}
+	}
+
+	/**
+	 * Caminhos dos metadados estruturados. Todos opcionais: caminho nulo = a fonte não informa
+	 * aquele campo, e ele fica nulo na vaga (nada é inferido).
+	 */
+	public record MetaPaths(String levelPath, String workModelPath, String cityPath, String statePath,
+			String countryPath, String salaryPeriodPath, String expiresAtPath) {
+
+		public static MetaPaths empty() {
+			return new MetaPaths(null, null, null, null, null, null, null);
+		}
 	}
 
 	@Override
@@ -81,9 +104,65 @@ public class OpenJobApiSource implements JobImportSource {
 			jobs.add(new ExternalJob(StringUtils.hasText(id) ? id : stableId(url), title,
 				value(node, spec.companyPath()), value(node, spec.locationPath()), description,
 				salary(node), value(node, spec.typePath()), url,
-				StringUtils.hasText(apply) ? apply : url, spec.name(), publishedAt(node)));
+				StringUtils.hasText(apply) ? apply : url, spec.name(), publishedAt(node), meta(node)));
 		}
 		return jobs;
+	}
+
+	/**
+	 * Metadados estruturados da vaga. O que a fonte não informa fica nulo; o que ela informa em
+	 * texto livre (senioridade, modelo, vínculo) passa pela taxonomia, que só traduz sinônimos.
+	 */
+	private JobImportSource.Meta meta(JsonNode node) {
+		MetaPaths paths = spec.meta() == null ? MetaPaths.empty() : spec.meta();
+		String location = value(node, spec.locationPath());
+		String city = value(node, paths.cityPath());
+		String state = value(node, paths.statePath());
+		String country = value(node, paths.countryPath());
+		// Sem campos separados, a localidade inteira vira `city` só quando é um único lugar —
+		// "São Paulo, SP" não é cidade, e gravar assim faria o filtro de cidade errar.
+		if (city == null && location != null && !location.contains(",") && !location.contains("/")) {
+			city = location;
+		}
+		return new JobImportSource.Meta(
+			com.socialcoisa.rede.jobs.domain.JobTaxonomy.level(value(node, paths.levelPath())),
+			com.socialcoisa.rede.jobs.domain.JobTaxonomy.workModel(
+				firstNonBlank(value(node, paths.workModelPath()), location)),
+			city, state, country,
+			amount(value(node, spec.salaryMinPath())), amount(value(node, spec.salaryMaxPath())),
+			value(node, spec.currencyPath()),
+			com.socialcoisa.rede.jobs.domain.JobTaxonomy.salaryPeriod(value(node, paths.salaryPeriodPath())),
+			spec.attribution(), expiresAt(node, paths));
+	}
+
+	private static String firstNonBlank(String first, String second) {
+		return StringUtils.hasText(first) ? first : second;
+	}
+
+	/** Valor numérico da faixa; "0" (usado por algumas APIs para "não informado") vira nulo. */
+	private static java.math.BigDecimal amount(String raw) {
+		if (!StringUtils.hasText(raw) || "0".equals(raw) || "0.0".equals(raw)) {
+			return null;
+		}
+		try {
+			return new java.math.BigDecimal(raw.replaceAll("[^0-9.]", ""));
+		}
+		catch (NumberFormatException notANumber) {
+			return null;
+		}
+	}
+
+	private Instant expiresAt(JsonNode node, MetaPaths paths) {
+		String raw = value(node, paths.expiresAtPath());
+		if (!StringUtils.hasText(raw)) {
+			return null;
+		}
+		try {
+			return Instant.parse(raw.trim().length() == 10 ? raw.trim() + "T00:00:00Z" : raw.trim());
+		}
+		catch (DateTimeParseException badDate) {
+			return null;
+		}
 	}
 
 	private JsonNode fetch() {

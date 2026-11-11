@@ -3,6 +3,7 @@ package com.socialcoisa.rede.jobs.adapters.out.persistence;
 import java.time.Instant;
 
 import com.socialcoisa.rede.jobs.domain.ExternalJob;
+import com.socialcoisa.rede.jobs.domain.ExternalJobDetails;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -78,6 +79,54 @@ class ExternalJobJpaEntity {
 	@Column(name = "salary_not_informed", nullable = false)
 	private boolean salaryNotInformed;
 
+	// --- Detalhes estruturados (V269). Nulo = a fonte não informou; nada é deduzido. ---
+
+	@Column(name = "published_at")
+	private Instant publishedAt;
+
+	@Column(name = "employment_type", length = 40)
+	private String employmentType;
+
+	@Column(length = 20)
+	private String level;
+
+	@Column(name = "work_model", length = 20)
+	private String workModel;
+
+	@Column(length = 120)
+	private String city;
+
+	@Column(length = 60)
+	private String state;
+
+	@Column(length = 60)
+	private String country;
+
+	@Column(name = "salary_min_amount", precision = 12, scale = 2)
+	private java.math.BigDecimal salaryMinAmount;
+
+	@Column(name = "salary_max_amount", precision = 12, scale = 2)
+	private java.math.BigDecimal salaryMaxAmount;
+
+	@Column(name = "salary_currency", length = 8)
+	private String salaryCurrency;
+
+	@Column(name = "salary_period_code", length = 10)
+	private String salaryPeriodCode;
+
+	/** Link de atribuição exigido pelos termos da fonte (crédito com link de volta). */
+	@Column(name = "attribution_url", length = 1000)
+	private String attributionUrl;
+
+	@Column(name = "last_seen_at")
+	private Instant lastSeenAt;
+
+	@Column(name = "expires_at")
+	private Instant expiresAt;
+
+	@Column(name = "removed_at")
+	private Instant removedAt;
+
 	protected ExternalJobJpaEntity() {
 	}
 
@@ -103,12 +152,31 @@ class ExternalJobJpaEntity {
 		e.salaryMax = job.salaryMax();
 		e.salaryPeriod = job.salaryPeriod();
 		e.salaryNotInformed = job.salaryNotInformed();
+		ExternalJobDetails details = job.details() == null ? ExternalJobDetails.empty() : job.details();
+		e.publishedAt = details.publishedAt();
+		e.employmentType = details.employmentType();
+		e.level = details.level();
+		e.workModel = details.workModel();
+		e.city = details.city();
+		e.state = details.state();
+		e.country = details.country();
+		e.salaryMinAmount = details.salaryMinAmount();
+		e.salaryMaxAmount = details.salaryMaxAmount();
+		e.salaryCurrency = details.salaryCurrency();
+		e.salaryPeriodCode = details.salaryPeriodCode();
+		e.attributionUrl = details.attributionUrl();
+		e.lastSeenAt = details.lastSeenAt();
+		e.expiresAt = details.expiresAt();
+		e.removedAt = details.removedAt();
 		return e;
 	}
 
 	ExternalJob toDomain() {
 		return new ExternalJob(id, platform, externalId, title, company, location, salary, currency, url,
 			importedAt, lastCheckedAt, externalStatus, canonicalUrl, applyEmail, submittedBy, description,
-			salaryMin, salaryMax, salaryPeriod, salaryNotInformed);
+			salaryMin, salaryMax, salaryPeriod, salaryNotInformed,
+			new ExternalJobDetails(publishedAt, employmentType, level, workModel, city, state, country,
+				salaryMinAmount, salaryMaxAmount, salaryCurrency, salaryPeriodCode, attributionUrl, lastSeenAt,
+				expiresAt, removedAt));
 	}
 }

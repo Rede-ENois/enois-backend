@@ -118,6 +118,14 @@ class JobContractController {
 			@RequestParam(required = false) String location,
 			@RequestParam(required = false) List<String> skills,
 			@RequestParam(required = false) String source, @RequestParam(required = false) String platform,
+			@RequestParam(required = false) String workModel,
+			@RequestParam(required = false) String employmentType,
+			@RequestParam(required = false) String city, @RequestParam(required = false) String state,
+			@RequestParam(required = false) String country,
+			@RequestParam(required = false) java.math.BigDecimal salaryMin,
+			@RequestParam(required = false) Boolean remoteOnly,
+			@RequestParam(required = false) String publishedAfter,
+			@RequestParam(required = false) String sort,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		limit = pageLimit(limit);
@@ -127,12 +135,8 @@ class JobContractController {
 		boolean soInternas = "INTERNAL".equalsIgnoreCase(source);
 		String viewer = viewerId(sessionToken);
 		if (soExternas) {
-			boolean showEmail = viewer != null;
-			List<JobView> externas = org.springframework.util.StringUtils.hasText(platform)
-				? externalJobRepository.findByPlatform(platform.trim(), query, limit).stream()
-					.map(job -> toExternalView(job, false, showEmail)).toList()
-				: externalJobViews(query, showEmail);
-			return new PageResponse<>(externas, null);
+			return externalPage(query, platform, level, workModel, employmentType, city, state, country,
+				salaryMin, remoteOnly, publishedAfter, sort, cursor, limit, viewer != null);
 		}
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		List<Job> jobs = jobService.list(query, type, level, location, skills, before, limit);
@@ -182,7 +186,8 @@ class JobContractController {
 					base.applicationsCount(), base.applied(), true, false, 0, null, base.applicationFields(),
 					base.status(), base.closedAt(), base.sourceType(), base.sourceUrl(), base.sourcePlatform(),
 					base.applyEmail(), base.description(), base.salaryMin(), base.salaryMax(),
-					base.salaryPeriod(), base.salaryLabel(), base.salaryNotInformed(), null));
+					base.salaryPeriod(), base.salaryLabel(), base.salaryNotInformed(), null,
+					base.externalDetails()));
 			}
 		}
 		return new PageResponse<>(views, null);
@@ -473,7 +478,7 @@ class JobContractController {
 					job.status().name(), job.closedAt() != null ? job.closedAt().toString() : null,
 					"INTERNAL", null, null, null,
 					job.description(), formatAmount(job.salaryMin()), formatAmount(job.salaryMax()),
-					job.salaryPeriod(), salaryLabel(job), false, slugs.get(job.companyId()));
+					job.salaryPeriod(), salaryLabel(job), false, slugs.get(job.companyId()), null);
 			})
 			.toList();
 		String nextCursor = jobs.size() == limit
@@ -489,24 +494,102 @@ class JobContractController {
 	}
 
 	/**
+	 * Aba de vagas externas: busca com filtros combinados, ordenação e cursor.
+	 *
+	 * A listagem geral (sem `source`) continua usando {@link #externalJobViews} — ela é um
+	 * complemento da primeira página das internas, não uma busca própria.
+	 */
+	private PageResponse<JobView> externalPage(String query, String platform, String level, String workModel,
+			String employmentType, String city, String state, String country, java.math.BigDecimal salaryMin,
+			Boolean remoteOnly, String publishedAfter, String sort, String cursor, int limit,
+			boolean showApplyEmail) {
+		Instant before = cursorCodec.decode(cursor).orElse(null);
+		Instant after = null;
+		if (org.springframework.util.StringUtils.hasText(publishedAfter)) {
+			try {
+				after = Instant.parse(publishedAfter.trim());
+			}
+			catch (RuntimeException exception) {
+				throw new ApiException(400, "INVALID_DATE", "Data de publicação inválida.");
+			}
+		}
+		String normalizedSort = normalizeSort(sort);
+		String requestedPlatform = blankToNull(platform);
+		// A aba de externas não mistura as vagas cadastradas pela comunidade (têm aba própria) —
+		// MAS, quando a própria comunidade é a plataforma pedida, excluí-la daria lista vazia.
+		String excludedPlatform = requestedPlatform == null
+			? com.socialcoisa.rede.jobs.application.ExternalJobSubmissionService.COMMUNITY_PLATFORM
+			: null;
+		var search = new com.socialcoisa.rede.jobs.application.port.out.ExternalJobSearch(
+			org.springframework.util.StringUtils.hasText(query) ? query.trim() : null,
+			requestedPlatform, excludedPlatform,
+			normalizeLevel(level), normalizeWorkModel(workModel),
+			org.springframework.util.StringUtils.hasText(employmentType) ? employmentType.trim().toUpperCase() : null,
+			blankToNull(city), blankToNull(state), blankToNull(country), salaryMin, remoteOnly, after,
+			normalizedSort, before, limit);
+		List<ExternalJob> found = externalJobRepository.search(search);
+		List<JobView> items = found.stream()
+			.map(job -> toExternalView(job, false, showApplyEmail)).toList();
+		// Cursor só na ordenação por data: nas outras, a posição não é estável entre páginas.
+		String nextCursor = null;
+		if (found.size() == limit
+				&& com.socialcoisa.rede.jobs.application.port.out.ExternalJobSearch.SORT_RECENT
+					.equals(normalizedSort)) {
+			var last = found.getLast();
+			nextCursor = last.details() == null ? null : cursorCodec.encode(last.details().publishedAt());
+		}
+		return new PageResponse<>(items, nextCursor);
+	}
+
+	private static String blankToNull(String value) {
+		return org.springframework.util.StringUtils.hasText(value) ? value.trim() : null;
+	}
+
+	/** Ordenação desconhecida cai no padrão em vez de dar 400: é preferência, não filtro. */
+	private static String normalizeSort(String sort) {
+		if (!org.springframework.util.StringUtils.hasText(sort)) {
+			return com.socialcoisa.rede.jobs.application.port.out.ExternalJobSearch.SORT_RECENT;
+		}
+		String value = sort.trim().toLowerCase(java.util.Locale.ROOT);
+		return switch (value) {
+			case com.socialcoisa.rede.jobs.application.port.out.ExternalJobSearch.SORT_SALARY,
+				com.socialcoisa.rede.jobs.application.port.out.ExternalJobSearch.SORT_RELEVANCE -> value;
+			default -> com.socialcoisa.rede.jobs.application.port.out.ExternalJobSearch.SORT_RECENT;
+		};
+	}
+
+	/** Nível fora do conjunto aceito é ignorado (não é erro do usuário, é filtro sem efeito). */
+	private static String normalizeLevel(String level) {
+		if (!org.springframework.util.StringUtils.hasText(level)) {
+			return null;
+		}
+		String value = level.trim().toUpperCase(java.util.Locale.ROOT);
+		return com.socialcoisa.rede.jobs.application.port.out.ExternalJobSearch.LEVELS.contains(value) ? value : null;
+	}
+
+	private static String normalizeWorkModel(String workModel) {
+		if (!org.springframework.util.StringUtils.hasText(workModel)) {
+			return null;
+		}
+		String value = workModel.trim().toUpperCase(java.util.Locale.ROOT);
+		return com.socialcoisa.rede.jobs.application.port.out.ExternalJobSearch.WORK_MODELS.contains(value)
+			? value : null;
+	}
+
+	/**
 	 * Vagas externas JA SALVAS no banco (tabela propria, atualizadas pelo worker da meia-noite) —
 	 * nao buscamos a fonte a cada requisicao. Entram DEPOIS das internas.
 	 */
 	private List<JobView> externalJobViews(String query, boolean showApplyEmail) {
-		List<JobView> external = new java.util.ArrayList<>();
 		// A listagem de "externas" (agregadores) NAO mistura as criadas pela comunidade: elas têm
-		// filtro próprio ("Vaga externa criada no Énóis" = plataforma Comunidade).
-		var found = org.springframework.util.StringUtils.hasText(query)
-			? externalJobRepository.searchExcludingPlatform(
-				com.socialcoisa.rede.jobs.application.ExternalJobSubmissionService.COMMUNITY_PLATFORM,
-				query.trim(), externalListingLimit)
-			: externalJobRepository.findRecentExcludingPlatform(
-				com.socialcoisa.rede.jobs.application.ExternalJobSubmissionService.COMMUNITY_PLATFORM,
-				externalListingLimit);
-		for (ExternalJob job : found) {
-			external.add(toExternalView(job, false, showApplyEmail));
-		}
-		return external;
+		// filtro próprio ("Vaga externa criada no Énóis" = plataforma Comunidade). A busca já
+		// filtra as removidas/expiradas — o complemento da primeira página não pode mostrá-las.
+		var search = com.socialcoisa.rede.jobs.application.port.out.ExternalJobSearch.recent(
+			org.springframework.util.StringUtils.hasText(query) ? query.trim() : null, null,
+			com.socialcoisa.rede.jobs.application.ExternalJobSubmissionService.COMMUNITY_PLATFORM,
+			externalListingLimit);
+		return externalJobRepository.search(search).stream()
+			.map(job -> toExternalView(job, false, showApplyEmail)).toList();
 	}
 
 	private JobView toExternalView(ExternalJob job) {
@@ -529,7 +612,7 @@ class JobContractController {
 			List.of(), "OPEN", null, "EXTERNAL", job.url(), job.platform(),
 			showApplyEmail ? job.applyEmail() : null,
 			job.description(), job.salaryMin(), job.salaryMax(), job.salaryPeriod(), externalSalaryLabel(job),
-			job.salaryNotInformed(), null);
+			job.salaryNotInformed(), null, ExternalDetailsView.of(job));
 	}
 
 	private JobView toView(Job job, String viewer, boolean applied, boolean saved, int applicationsCount) {
@@ -539,7 +622,7 @@ class JobContractController {
 			fieldViews(job), job.status().name(), job.closedAt() != null ? job.closedAt().toString() : null,
 			"INTERNAL", null, null, null,
 			job.description(), formatAmount(job.salaryMin()), formatAmount(job.salaryMax()),
-			job.salaryPeriod(), salaryLabel(job), false, companySlugs(List.of(job)).get(job.companyId()));
+			job.salaryPeriod(), salaryLabel(job), false, companySlugs(List.of(job)).get(job.companyId()), null);
 	}
 
 	/** Slug of the company page each job is linked to, in one read (jobs without a page are left out). */
@@ -663,7 +746,35 @@ class JobContractController {
 			String description, String salaryMin, String salaryMax, String salaryPeriod, String salaryLabel,
 			boolean salaryNotInformed,
 			// The company page the job is linked to (null when it is not linked).
-			String companySlug) {
+			String companySlug,
+			// Metadados estruturados das vagas externas (nulo nas internas): publicação, modelo de
+			// trabalho, localidade, faixa numérica, atribuição e ciclo de vida.
+			ExternalDetailsView externalDetails) {
+	}
+
+	/**
+	 * O que a fonte externa informou de estruturado. Campo nulo = a fonte não informou; nada aqui
+	 * é inferido. `lastSeenAt` é a última verificação de que a vaga ainda existe na origem.
+	 */
+	record ExternalDetailsView(String publishedAt, String lastSeenAt, String employmentType, String level,
+			String workModel, String city, String state, String country, java.math.BigDecimal salaryMinAmount,
+			java.math.BigDecimal salaryMaxAmount, String salaryCurrency, String salaryPeriodCode,
+			String attributionUrl, String expiresAt, String removedAt) {
+
+		static ExternalDetailsView of(ExternalJob job) {
+			var details = job.details();
+			if (details == null) {
+				return null;
+			}
+			return new ExternalDetailsView(
+				details.publishedAt() != null ? details.publishedAt().toString() : null,
+				details.lastSeenAt() != null ? details.lastSeenAt().toString() : null,
+				details.employmentType(), details.level(), details.workModel(), details.city(), details.state(),
+				details.country(), details.salaryMinAmount(), details.salaryMaxAmount(), details.salaryCurrency(),
+				details.salaryPeriodCode(), details.attributionUrl(),
+				details.expiresAt() != null ? details.expiresAt().toString() : null,
+				details.removedAt() != null ? details.removedAt().toString() : null);
+		}
 	}
 
 	/** Quem publicou a vaga, com o que sustenta a credibilidade dele. */
