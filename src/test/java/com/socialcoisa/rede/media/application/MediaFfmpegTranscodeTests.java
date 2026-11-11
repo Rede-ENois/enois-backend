@@ -12,6 +12,8 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.socialcoisa.rede.shared.web.ApiException;
+
 /**
  * O que a issue #652 tranca: o vídeo subia no tamanho original porque o ffmpeg só remuxava
  * ({@code -c copy}). Depois desta etapa ele é reencodado no tamanho que o feed mostra, e o arquivo
@@ -193,9 +195,9 @@ class MediaFfmpegTranscodeTests {
 	@Test
 	void theScaleFilterKeepsTheAspectRatioAndNeverUpscales() {
 		assertThat(MediaFfmpegRunner.SCALE_FILTER)
-			.contains("min(1280,iw)")
-			.contains("min(1280,ih)")
-			.isEqualTo("scale=w='if(gt(iw,ih),min(1280,iw),-2)':h='if(gt(iw,ih),-2,min(1280,ih))'");
+			.contains("min(854,iw)")
+			.contains("min(854,ih)")
+			.isEqualTo("scale=w='if(gt(iw,ih),min(854,iw),-2)':h='if(gt(iw,ih),-2,min(854,ih))'");
 	}
 
 	/** O teto de tempo reserva o remux: um transcode que estoura o orçamento não pode zerar o fallback. */
@@ -226,8 +228,99 @@ class MediaFfmpegTranscodeTests {
 			.isLessThan(20_000L);
 	}
 
-	private static MediaFfmpegRunner runner(Path ffmpeg, long transcodeMaxBytes) {
-		return new MediaFfmpegRunner(ffmpeg.toString(), 1, transcodeMaxBytes, Duration.ofSeconds(90));
+	private static MediaFfmpegRunner runner(Path ffmpeg, long transcodeMaxBytes) throws Exception {
+		// O probe lê a duração de um arquivo fixo (60s); os testes de duração usam o outro overload.
+		Path probeOutput = Files.createTempFile("probe-", ".txt");
+		Files.writeString(probeOutput, "60.0");
+		probeOutput.toFile().deleteOnExit();
+		return runner(ffmpeg, probeOutput, transcodeMaxBytes);
+	}
+
+	/**
+	 * Runner com o ffprobe apontando para {@code probeOutput}: o script {@code cat} devolve a
+	 * duração que o teste escreveu lá, simulando o ffprobe real sem depender de binário.
+	 */
+	private static MediaFfmpegRunner runner(Path ffmpeg, Path probeOutput, long transcodeMaxBytes) throws Exception {
+		Path probe = Files.createTempFile("ffprobe-", ".sh");
+		Files.writeString(probe, "#!/bin/sh\ncat '%s'\n".formatted(probeOutput.toAbsolutePath()),
+			StandardCharsets.UTF_8);
+		Files.setPosixFilePermissions(probe, PosixFilePermissions.fromString("rwx------"));
+		probe.toFile().deleteOnExit();
+		return new MediaFfmpegRunner(ffmpeg.toString(), probe.toString(), 1, transcodeMaxBytes,
+			Duration.ofSeconds(90));
+	}
+
+	/**
+	 * Vídeo acima de 3 minutos é recusado com erro nomeado antes de qualquer processamento (issue
+	 * #656): o ffprobe roda primeiro, o ffmpeg nem chega a ser chamado.
+	 */
+	@Test
+	void rejectsAVideoLongerThanThreeMinutesBeforeProcessing() throws Exception {
+		Path args = dir.resolve("args-too-long.txt");
+		Path probeOutput = dir.resolve("probe-too-long.txt");
+		Files.writeString(probeOutput, "181.0");
+		Path ffmpeg = script("""
+			printf '%%s\\n' "$@" > '%s'
+			for last; do :; done
+			head -c 7000000 /dev/zero > "${last#file:}"
+			""".formatted(args));
+		Path input = Files.write(dir.resolve("in-too-long.bin"), new byte[INPUT_BYTES]);
+		Path output = Files.createFile(dir.resolve("out-too-long.bin"));
+
+		org.assertj.core.api.Assertions.assertThatThrownBy(
+				() -> runner(ffmpeg, probeOutput, MediaFfmpegRunner.DEFAULT_TRANSCODE_MAX_BYTES).clean(input, output,
+					"video/mp4", Duration.ofSeconds(120)))
+			.isInstanceOf(ApiException.class)
+			.hasFieldOrPropertyWithValue("code", "MEDIA_VIDEO_TOO_LONG");
+		assertThat(Files.exists(args)).as("o ffmpeg nem rodou: a recusa vem antes do processamento").isFalse();
+	}
+
+	/** Exatamente 3 minutos passa; a margem de meio segundo cobre só o arredondamento do contêiner. */
+	@Test
+	void acceptsAVideoAtExactlyThreeMinutes() throws Exception {
+		Path probeOutput = dir.resolve("probe-at-limit.txt");
+		Files.writeString(probeOutput, "180.0");
+		Path input = Files.write(dir.resolve("in-at-limit.bin"), new byte[INPUT_BYTES]);
+		Path output = Files.createFile(dir.resolve("out-at-limit.bin"));
+
+		runner(script(), probeOutput, MediaFfmpegRunner.DEFAULT_TRANSCODE_MAX_BYTES).clean(input, output, "video/mp4",
+			Duration.ofSeconds(120));
+
+		assertThat(Files.size(output)).isGreaterThan(0);
+	}
+
+	/** Um probe que falha não pode recusar arquivo bom: duração desconhecida segue o fluxo antigo. */
+	@Test
+	void aFailingProbeDoesNotRejectTheUpload() throws Exception {
+		Path probeOutput = dir.resolve("probe-broken.txt");
+		Files.writeString(probeOutput, "nao-e-numero");
+		Path input = Files.write(dir.resolve("in-broken.bin"), new byte[INPUT_BYTES]);
+		Path output = Files.createFile(dir.resolve("out-broken.bin"));
+
+		runner(script(), probeOutput, MediaFfmpegRunner.DEFAULT_TRANSCODE_MAX_BYTES).clean(input, output, "video/mp4",
+			Duration.ofSeconds(120));
+
+		assertThat(Files.size(output)).isGreaterThan(0);
+	}
+
+	/** Áudio não é vídeo: o probe de duração nem roda para ele. */
+	@Test
+	void audioIsNeverProbedForDuration() throws Exception {
+		Path probeArgs = dir.resolve("probe-args.txt");
+		Path probeOutput = dir.resolve("probe-audio.txt");
+		Files.writeString(probeOutput, "99999.0");
+		Path probe = Files.createTempFile("ffprobe-", ".sh");
+		Files.writeString(probe, "#!/bin/sh\nprintf '%%s\\n' \"$@\" > '%s'\ncat '%s'\n"
+			.formatted(probeArgs.toAbsolutePath(), probeOutput.toAbsolutePath()), StandardCharsets.UTF_8);
+		Files.setPosixFilePermissions(probe, PosixFilePermissions.fromString("rwx------"));
+		probe.toFile().deleteOnExit();
+		Path input = Files.write(dir.resolve("in-audio.bin"), new byte[INPUT_BYTES]);
+		Path output = Files.createFile(dir.resolve("out-audio.bin"));
+
+		new MediaFfmpegRunner(script().toString(), probe.toString(), 1, MediaFfmpegRunner.DEFAULT_TRANSCODE_MAX_BYTES,
+			Duration.ofSeconds(90)).clean(input, output, "audio/mpeg", Duration.ofSeconds(120));
+
+		assertThat(Files.exists(probeArgs)).as("o probe não roda para áudio").isFalse();
 	}
 
 	private Path script(String body) throws Exception {
@@ -235,5 +328,10 @@ class MediaFfmpegTranscodeTests {
 		Files.writeString(script, "#!/bin/sh\n" + body, StandardCharsets.UTF_8);
 		Files.setPosixFilePermissions(script, PosixFilePermissions.fromString("rwx------"));
 		return script;
+	}
+
+	/** ffmpeg dos testes de fluxo: grava 7MB no último argumento, como o remux faria. */
+	private Path script() throws Exception {
+		return script("for last; do :; done\nhead -c 7000000 /dev/zero > \"${last#file:}\"\n");
 	}
 }

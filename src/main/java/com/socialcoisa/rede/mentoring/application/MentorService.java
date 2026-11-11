@@ -312,11 +312,19 @@ public class MentorService {
 
 	@Transactional
 	public void delete(String mentorId, String userId) {
-		Mentor mentor = repository.findById(mentorId)
-			.orElseThrow(() -> new ApiException(404, "MENTOR_NOT_FOUND", "Mentor nao encontrado."));
-		if (!mentor.userId().equals(userId)) {
-			throw new ApiException(403, "FORBIDDEN", "Voce nao e o dono deste perfil de mentor.");
+		Mentor mentor = requireOwner(mentorId, userId);
+		// Sessão agendada não pode ficar pendurada num perfil que não existe mais: cancelar devolve o
+		// escrow e cancela o compromisso na agenda de quem marcou, a mesma regra do cancelamento
+		// normal. As concluídas ficam como histórico (a FK de sessão sai na V275).
+		for (MentorSession session : repository.findSessionsByMentor(mentor.id())) {
+			if (session.status() == SessionStatus.SCHEDULED) {
+				cancelSession(mentor.id(), session.id(), userId);
+			}
 		}
+		for (MentorSlot slot : repository.findSlotsByMentor(mentor.id())) {
+			repository.deleteSlot(slot.id());
+		}
+		repository.deleteAvailabilitiesByMentor(mentor.id());
 		repository.delete(mentorId);
 	}
 

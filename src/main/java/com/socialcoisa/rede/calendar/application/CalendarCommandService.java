@@ -50,10 +50,14 @@ public class CalendarCommandService {
 	 * Edição parcial: campo ausente não muda. Descrição vazia limpa o campo, porque no JSON uma
 	 * string em branco é a única forma de dizer "tirar o texto" que não se confunde com "não mexi".
 	 * Reagendar exige início e fim juntos: meio intervalo novo não tem significado.
+	 *
+	 * <p>Escopo, tipo e "dia inteiro" também são editáveis: o formulário da tela mostra os três, e
+	 * descartá-los em silêncio fazia a pessoa salvar uma mudança que não acontecia.
 	 */
-	public CalendarEntry update(String ownerId, String entryId, String title, String description, String startsAt,
-			String endsAt, String timeZoneId) {
+	public CalendarEntry update(String ownerId, String entryId, String scope, String kind, String title,
+			String description, String startsAt, String endsAt, String timeZoneId, Boolean allDay) {
 		CalendarEntry entry = query.get(ownerId, entryId);
+		requireOwnedByTheCalendar(entry, "editar");
 		Instant start = nullableInstant(startsAt, "startsAt");
 		Instant end = nullableInstant(endsAt, "endsAt");
 		if ((start == null) != (end == null)) {
@@ -63,9 +67,14 @@ public class CalendarCommandService {
 			throw new ApiException(400, "INVALID_CALENDAR_ENTRY",
 				"Para trocar o fuso, informe também startsAt e endsAt.");
 		}
+		CalendarScope newScope = scope == null ? null : scope(scope);
+		CalendarKind newKind = kind == null ? null : kind(kind);
 		boolean moved = start != null;
 		translate(() -> {
 			Instant now = clock.instant();
+			if (newScope != null || newKind != null || allDay != null) {
+				entry.reclassify(newScope, newKind, allDay, now);
+			}
 			if (title != null) {
 				entry.rename(title, now);
 			}
@@ -89,6 +98,7 @@ public class CalendarCommandService {
 	/** Cancelar não apaga a linha: o `.ics` precisa do mesmo `UID` com `STATUS:CANCELLED`. */
 	public CalendarEntry cancel(String ownerId, String entryId) {
 		CalendarEntry entry = query.get(ownerId, entryId);
+		requireOwnedByTheCalendar(entry, "cancelar");
 		if (!entry.active()) {
 			// Repetir o cancelamento é o que o botão pode fazer depois de um timeout; não é erro.
 			return entry;
@@ -100,6 +110,19 @@ public class CalendarCommandService {
 		entries.save(entry);
 		reminders.clearPendingForEntry(entry.id());
 		return entry;
+	}
+
+	/**
+	 * Entrada com origem pertence ao módulo que a criou: editar ou cancelar por aqui deixaria a
+	 * agenda e o módulo dono contando histórias diferentes (a sessão de mentoria seguiria marcada
+	 * com outro horário). Quem muda o fato é o módulo dono, que chama o serviço de origem.
+	 */
+	private static void requireOwnedByTheCalendar(CalendarEntry entry, String action) {
+		if (entry.source().present()) {
+			throw new ApiException(409, "CALENDAR_ENTRY_SOURCE_OWNED",
+				"Nao da para " + action + " um compromisso criado por outro recurso; "
+					+ "altere no modulo de origem.");
+		}
 	}
 
 	private static CalendarScope scope(String raw) {

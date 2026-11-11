@@ -30,7 +30,7 @@ import tools.jackson.databind.ObjectMapper;
  * <p>O registro é em memória, por processo. Com mais de uma instância do backend, a aba aberta na
  * instância B não recebia o aviso de uma escrita atendida na instância A — o evento era entregue só
  * no processo que o publicou. Por isso cada aviso local também vira um sinal em
- * {@code network_instance_signals} (V276), e cada instância entrega no próprio registro o que as
+ * {@code network_instance_signals} (V278), e cada instância entrega no próprio registro o que as
  * outras emitiram. O sinal carrega só ids, como o evento local: conteúdo continua vindo dos
  * endpoints autorizados.</p>
  */

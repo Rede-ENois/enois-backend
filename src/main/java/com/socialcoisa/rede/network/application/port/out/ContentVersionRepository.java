@@ -6,7 +6,7 @@ import java.util.Optional;
 import com.socialcoisa.rede.network.domain.ContentKind;
 import com.socialcoisa.rede.network.domain.ContentVersion;
 
-/** Versão do conteúdo público (V277) e o que cada nó de borda já sincronizou. */
+/** Versão do conteúdo público (V279) e o que cada nó de borda já sincronizou. */
 public interface ContentVersionRepository {
 
 	Optional<ContentVersion> find(ContentKind kind, String contentId);

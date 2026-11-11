@@ -8,7 +8,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * Tabela de sinais entre instâncias (V276). JDBC direto, como o resto do fan-out.
+ * Tabela de sinais entre instâncias (V278). JDBC direto, como o resto do fan-out.
  *
  * <p>O desenho tem três detalhes que não são acaso:</p>
  * <ul>

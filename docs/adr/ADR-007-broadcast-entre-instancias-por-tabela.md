@@ -19,7 +19,7 @@ tabela de eventos com polling?**
 ## Decisão
 
 **Tabela de sinais com polling por instância** (`network_instance_signals` + `network_instance_readers`,
-V276). Sem Redis, sem broker — o que mantém a decisão do [ADR-004](ADR-004-scheduler-como-handler-do-outbox.md).
+V278). Sem Redis, sem broker — o que mantém a decisão do [ADR-004](ADR-004-scheduler-como-handler-do-outbox.md).
 
 Por que **não** o outbox, que já existe: o `OutboxWorker` reserva cada evento com claim atômico e
 grava o recibo do handler na mesma transação dos efeitos. Isso garante que o evento execute em

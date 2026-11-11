@@ -12,7 +12,7 @@ import com.socialcoisa.rede.network.domain.ContentKind;
 import com.socialcoisa.rede.network.domain.ContentVersion;
 
 /**
- * Versões de conteúdo público e snapshots de nó (V277), em JDBC direto.
+ * Versões de conteúdo público e snapshots de nó (V279), em JDBC direto.
  *
  * <p>JDBC e não JPA porque as duas escritas são condicionais por natureza: a versão só sobe se a
  * linha ainda estiver na versão esperada, e o snapshot é um upsert. Em JPA isso viraria leitura +

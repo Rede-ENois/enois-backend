@@ -58,6 +58,15 @@ class CalendarEntryWriteApiTests {
 		return id;
 	}
 
+	/** Entrada como o módulo dono grava: origem preenchida, dono sendo quem vai comparecer. */
+	private String saveSourcedEntry(String ownerId, String sourceType, String sourceId) {
+		String id = UUID.randomUUID().toString();
+		entries.save(CalendarEntry.create(id, ownerId, CalendarScope.PROFESSIONAL, CalendarKind.MENTORING,
+			new CalendarEntrySource(sourceType, sourceId), "Mentoria: Java", null, Instant.parse(STARTS_AT),
+			Instant.parse(ENDS_AT), ZONE, false, CREATED_AT));
+		return id;
+	}
+
 	private String body(Map<String, Object> fields) {
 		return objectMapper.writeValueAsString(fields);
 	}
@@ -242,6 +251,46 @@ class CalendarEntryWriteApiTests {
 	}
 
 	@Test
+	void edicaoParcialTrocaEscopoTipoEDiaInteiro() throws Exception {
+		var owner = account("cal_write_reclassify");
+		String id = objectMapper.readTree(createAs(owner, "reclass-1", validBody("Reclassificar")))
+			.get("id").asString();
+
+		// O formulário da tela mostra os três campos; antes desta correção o PATCH os descartava em
+		// silêncio e a pessoa salvava uma mudança que não acontecia.
+		mockMvc
+			.perform(patch("/calendar/entries/{entryId}", id).header("X-Session-Token", owner.token())
+				.header("Idempotency-Key", "reclass-2")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(body(Map.of("scope", "SOCIAL", "kind", "PERSONAL", "allDay", true))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.scope").value("SOCIAL"))
+			.andExpect(jsonPath("$.kind").value("PERSONAL"))
+			.andExpect(jsonPath("$.allDay").value(true))
+			.andExpect(jsonPath("$.title").value("Reclassificar"));
+
+		// Ausente não muda: editar só o título não desmarca o dia inteiro nem volta o tipo.
+		mockMvc
+			.perform(patch("/calendar/entries/{entryId}", id).header("X-Session-Token", owner.token())
+				.header("Idempotency-Key", "reclass-3")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(body(Map.of("title", "Só o título"))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.title").value("Só o título"))
+			.andExpect(jsonPath("$.scope").value("SOCIAL"))
+			.andExpect(jsonPath("$.kind").value("PERSONAL"))
+			.andExpect(jsonPath("$.allDay").value(true));
+
+		mockMvc
+			.perform(patch("/calendar/entries/{entryId}", id).header("X-Session-Token", owner.token())
+				.header("Idempotency-Key", "reclass-4")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(body(Map.of("scope", "PESSOAL"))))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("INVALID_SCOPE"));
+	}
+
+	@Test
 	void entradaAlheiaRespondeO4o4DeUmaQueNaoExiste() throws Exception {
 		var owner = account("cal_write_owner");
 		var stranger = account("cal_write_stranger");
@@ -297,6 +346,31 @@ class CalendarEntryWriteApiTests {
 				.content(body(Map.of("title", "Reabrir"))))
 			.andExpect(status().isConflict())
 			.andExpect(jsonPath("$.code").value("CALENDAR_ENTRY_CANCELLED"));
+	}
+
+	@Test
+	void entradaComOrigemNaoPodeSerEditadaNemCanceladaPelaAgenda() throws Exception {
+		var owner = account("cal_write_sourced");
+		String id = saveSourcedEntry(owner.userId(), "MENTORING", "mentor_session_1");
+
+		mockMvc
+			.perform(patch("/calendar/entries/{entryId}", id).header("X-Session-Token", owner.token())
+				.header("Idempotency-Key", "sourced-patch")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(body(Map.of("title", "Outro titulo"))))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.code").value("CALENDAR_ENTRY_SOURCE_OWNED"));
+
+		mockMvc
+			.perform(delete("/calendar/entries/{entryId}", id).header("X-Session-Token", owner.token())
+				.header("Idempotency-Key", "sourced-cancel"))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.code").value("CALENDAR_ENTRY_SOURCE_OWNED"));
+
+		// Nada mudou: o módulo dono continua sendo a única fonte da verdade.
+		CalendarEntry entry = entries.findById(id).orElseThrow();
+		assertEquals("Mentoria: Java", entry.title());
+		assertEquals(true, entry.active());
 	}
 
 	@Test

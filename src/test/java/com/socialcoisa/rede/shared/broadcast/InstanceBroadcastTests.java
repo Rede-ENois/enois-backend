@@ -63,7 +63,7 @@ class InstanceBroadcastTests {
 	private JdbcTemplate jdbc;
 
 	/**
-	 * A aba aberta nesta instância recebe o aviso de uma escrita atendida em outra. Antes do V276 o
+	 * A aba aberta nesta instância recebe o aviso de uma escrita atendida em outra. Antes do V278 o
 	 * evento morria no processo que o publicou e a aba só via a mudança no próximo carregamento.
 	 */
 	@Test

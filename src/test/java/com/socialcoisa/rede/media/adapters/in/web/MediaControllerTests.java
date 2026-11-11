@@ -51,31 +51,62 @@ class MediaControllerTests {
 	void acceptsMediaUpTo500MbAndRejectsAboveIt() throws Exception {
 		var session = auth.authenticate("user_media_500mb");
 
-		String atLimit = objectMapper.writeValueAsString(Map.of(
-			"fileName", "video-grande.mp4",
+		// Teto por tipo: vídeo de qualquer propósito é 10MB (issue #656) — o front manda vídeo de
+		// post até como POST_IMAGE, então o corte tem de ser pelo MIME, não pelo propósito.
+		String videoAtLimit = objectMapper.writeValueAsString(Map.of(
+			"fileName", "video-limite.mp4",
 			"mimeType", "video/mp4",
-			"size", 500L * 1024L * 1024L,
+			"size", 10L * 1024L * 1024L,
 			"purpose", "POST_VIDEO"));
 
 		mockMvc.perform(post("/media/uploads")
 				.header("X-Session-Token", session.token())
-				.header("Idempotency-Key", "media-upload-500mb")
+				.header("Idempotency-Key", "media-upload-video-10mb")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(atLimit))
+				.content(videoAtLimit))
 			.andExpect(status().isCreated())
 			.andExpect(jsonPath("$.uploadUrl").exists());
 
-		String aboveLimit = objectMapper.writeValueAsString(Map.of(
+		String videoAboveLimit = objectMapper.writeValueAsString(Map.of(
 			"fileName", "video-grande-demais.mp4",
 			"mimeType", "video/mp4",
-			"size", 500L * 1024L * 1024L + 1,
+			"size", 10L * 1024L * 1024L + 1,
 			"purpose", "POST_VIDEO"));
 
 		mockMvc.perform(post("/media/uploads")
 				.header("X-Session-Token", session.token())
-				.header("Idempotency-Key", "media-upload-500mb-plus")
+				.header("Idempotency-Key", "media-upload-video-10mb-plus")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(aboveLimit))
+				.content(videoAboveLimit))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("MEDIA_TOO_LARGE"));
+
+		// O teto geral de 500MB continua valendo para o que não é vídeo.
+		String imageAtLimit = objectMapper.writeValueAsString(Map.of(
+			"fileName", "imagem-grande.png",
+			"mimeType", "image/png",
+			"size", 500L * 1024L * 1024L,
+			"purpose", "POST_IMAGE"));
+
+		mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", session.token())
+				.header("Idempotency-Key", "media-upload-image-500mb")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(imageAtLimit))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.uploadUrl").exists());
+
+		String imageAboveLimit = objectMapper.writeValueAsString(Map.of(
+			"fileName", "imagem-grande-demais.png",
+			"mimeType", "image/png",
+			"size", 500L * 1024L * 1024L + 1,
+			"purpose", "POST_IMAGE"));
+
+		mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", session.token())
+				.header("Idempotency-Key", "media-upload-image-500mb-plus")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(imageAboveLimit))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("MEDIA_TOO_LARGE"));
 	}
@@ -113,7 +144,7 @@ class MediaControllerTests {
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("MEDIA_TOO_LARGE"));
 
-		// O mesmo tamanho que e aceito como POST_VIDEO segue valendo: o teto e por proposito.
+		// O mesmo tamanho que e aceito como video (abaixo do teto de 10MB por MIME) segue valendo.
 		String videoSameSize = objectMapper.writeValueAsString(Map.of(
 			"fileName", "outro.mp4",
 			"mimeType", "video/mp4",

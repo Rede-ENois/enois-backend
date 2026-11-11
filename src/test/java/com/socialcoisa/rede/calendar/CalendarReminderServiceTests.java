@@ -141,8 +141,8 @@ class CalendarReminderServiceTests {
 		String entryId = entry(owner, "Vai mudar de hora", startsAt);
 		reminders.setForReader(owner, entryId, 60);
 
-		commands.update(owner, entryId, null, null, startsAt.plus(Duration.ofDays(5)).toString(),
-			startsAt.plus(Duration.ofDays(5)).plus(Duration.ofHours(1)).toString(), SAO_PAULO.getId());
+		commands.update(owner, entryId, null, null, null, null, startsAt.plus(Duration.ofDays(5)).toString(),
+			startsAt.plus(Duration.ofDays(5)).plus(Duration.ofHours(1)).toString(), SAO_PAULO.getId(), null);
 
 		assertThat(reminderRepository.findByEntry(entryId).get(0).sentAt())
 			.as("o aviso do horário antigo não pode sair")

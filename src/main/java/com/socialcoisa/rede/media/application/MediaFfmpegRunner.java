@@ -73,20 +73,29 @@ public class MediaFfmpegRunner {
 		"audio/wav", new Formats("wav", "wav"));
 
 	/**
-	 * Long side of the compressed video. 1280 is the width a feed card and a full-screen phone both
-	 * render at; above that the extra pixels are thrown away by the screen, not by the player.
+	 * Long side of the compressed video: 854 (480p). Decisão de produto (issue #656): o feed não
+	 * tem superfície que renda mais que 480p, e cada linha de pixel é CPU do pod e bytes do leitor.
 	 *
-	 * <p>The filter keeps the aspect ratio and never upscales: {@code min(1280, iw)} on the long side
+	 * <p>The filter keeps the aspect ratio and never upscales: {@code min(854, iw)} on the long side
 	 * and {@code -2} (even, same ratio) on the short one. The quotes are part of the argument — the
 	 * commas inside {@code if(...)} would otherwise split the filter into separate options, and
 	 * {@link ProcessBuilder} passes the string through untouched, so ffmpeg is the one that strips
 	 * them.</p>
 	 */
 	static final String SCALE_FILTER =
-		"scale=w='if(gt(iw,ih),min(1280,iw),-2)':h='if(gt(iw,ih),-2,min(1280,ih))'";
+		"scale=w='if(gt(iw,ih),min(854,iw),-2)':h='if(gt(iw,ih),-2,min(854,ih))'";
 
 	/** A transcode that saves less than this is thrown away and the remux is used instead. */
 	static final double MIN_SAVING = 0.10;
+
+	/** Duração máxima de um vídeo aceito no upload (issue #656), verificada com ffprobe. */
+	static final Duration MAX_VIDEO_DURATION = Duration.ofMinutes(3);
+
+	/** Time the duration probe may take; a slow probe must not become a failed upload. */
+	private static final Duration PROBE_TIMEOUT = Duration.ofSeconds(15);
+
+	/** Tipos que passam pela checagem de duração: os mesmos vídeos que {@code MediaService} aceita. */
+	private static final Set<String> VIDEO_TYPES = Set.of("video/mp4", "video/quicktime", "video/webm");
 
 	/** Below this the file is already small; the remux is enough and the CPU is spared. */
 	static final long COMPRESS_MIN_BYTES = 4L * 1024 * 1024;
@@ -116,6 +125,7 @@ public class MediaFfmpegRunner {
 			List.of("-c:a", "libopus", "-b:a", "96k")));
 
 	private final String ffmpegPath;
+	private final String ffprobePath;
 	private final Semaphore permits;
 	/** Above this the transcode is skipped (too long for an upload request); 0 disables it. */
 	private final long transcodeMaxBytes;
@@ -123,25 +133,37 @@ public class MediaFfmpegRunner {
 
 	@Autowired
 	public MediaFfmpegRunner(@Value("${rede.media.ffmpeg-path:ffmpeg}") String ffmpegPath,
+			@Value("${rede.media.ffprobe-path:ffprobe}") String ffprobePath,
 			@Value("${rede.media.ffmpeg.max-concurrent:2}") int maxConcurrent,
 			@Value("${rede.media.ffmpeg.transcode-max-bytes:157286400}") long transcodeMaxBytes,
 			@Value("${rede.media.ffmpeg.transcode-timeout-ms:90000}") long transcodeTimeoutMs) {
-		this(ffmpegPath, maxConcurrent, transcodeMaxBytes, Duration.ofMillis(transcodeTimeoutMs));
+		this(ffmpegPath, ffprobePath, maxConcurrent, transcodeMaxBytes, Duration.ofMillis(transcodeTimeoutMs));
 	}
 
 	/** Same limits as the bean, for tests and call sites that do not need to tune them. */
 	MediaFfmpegRunner(String ffmpegPath, int maxConcurrent) {
-		this(ffmpegPath, maxConcurrent, DEFAULT_TRANSCODE_MAX_BYTES, DEFAULT_TRANSCODE_TIMEOUT);
+		this(ffmpegPath, siblingProbe(ffmpegPath), maxConcurrent, DEFAULT_TRANSCODE_MAX_BYTES,
+			DEFAULT_TRANSCODE_TIMEOUT);
 	}
 
-	MediaFfmpegRunner(String ffmpegPath, int maxConcurrent, long transcodeMaxBytes, Duration transcodeTimeout) {
+	MediaFfmpegRunner(String ffmpegPath, String ffprobePath, int maxConcurrent, long transcodeMaxBytes,
+			Duration transcodeTimeout) {
 		if (maxConcurrent < 1) {
 			throw new IllegalArgumentException("rede.media.ffmpeg.max-concurrent precisa ser pelo menos 1.");
 		}
 		this.ffmpegPath = ffmpegPath;
+		this.ffprobePath = ffprobePath;
 		this.permits = new Semaphore(maxConcurrent, true);
 		this.transcodeMaxBytes = Math.max(0, transcodeMaxBytes);
 		this.transcodeTimeout = transcodeTimeout == null ? Duration.ZERO : transcodeTimeout;
+	}
+
+	/** ffmpeg e ffprobe costumam viver lado a lado; um caminho customizado herda o vizinho. */
+	private static String siblingProbe(String ffmpegPath) {
+		if (ffmpegPath.endsWith("ffmpeg")) {
+			return ffmpegPath.substring(0, ffmpegPath.length() - "ffmpeg".length()) + "ffprobe";
+		}
+		return "ffprobe";
 	}
 
 	/**
@@ -158,6 +180,10 @@ public class MediaFfmpegRunner {
 		if (formats == null) {
 			LOG.warn("media_ffmpeg_rejected reason=unsupported_type mime={}", mimeType);
 			throw rejected(null);
+		}
+		if (isVideo(mimeType) && durationExceedsLimit(input, mimeType)) {
+			LOG.info("media_ffmpeg_rejected reason=too_long mime={}", mimeType);
+			throw new ApiException(400, "MEDIA_VIDEO_TOO_LONG", "A rede aceita até 3 minutos de vídeo.");
 		}
 		long deadline = System.nanoTime() + timeout.toNanos();
 		acquirePermit(mimeType);
@@ -289,6 +315,65 @@ public class MediaFfmpegRunner {
 		all.addAll(first);
 		all.addAll(second);
 		return List.copyOf(all);
+	}
+
+	/**
+	 * Duração do vídeo em segundos, lida do contêiner com ffprobe. Só a primeira faixa de vídeo:
+	 * áudio embutido pode ser mais longo sem que o player estoure o teto. Retorna vazio quando o
+	 * probe não responde — a checagem de duração não pode transformar um arquivo bom em upload
+	 * recusado.
+	 */
+	private java.util.Optional<Double> probeVideoSeconds(Path input, String mimeType) {
+		Formats formats = FORMATS.get(mimeType);
+		List<String> command = List.of(ffprobePath, "-hide_banner", "-loglevel", "error", "-select_streams",
+			"v:0", "-show_entries", "stream=duration", "-of", "csv=p=0", "file:" + input.toAbsolutePath());
+		Process process;
+		try {
+			// Aqui a saída É o produto: a duração vem do stdout, então nada de descartá-lo.
+			process = new ProcessBuilder(command).redirectErrorStream(false).start();
+		}
+		catch (IOException failure) {
+			LOG.warn("media_ffprobe_unavailable mime={} error={}", mimeType, failure.getClass().getSimpleName());
+			return java.util.Optional.empty();
+		}
+		try (java.io.BufferedReader out = new java.io.BufferedReader(
+				new java.io.InputStreamReader(process.getInputStream(), java.nio.charset.StandardCharsets.US_ASCII))) {
+			if (!process.waitFor(PROBE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+				process.destroyForcibly();
+				LOG.warn("media_ffprobe_timeout mime={}", mimeType);
+				return java.util.Optional.empty();
+			}
+			if (process.exitValue() != 0) {
+				LOG.warn("media_ffprobe_rejected mime={} exit={}", mimeType, process.exitValue());
+				return java.util.Optional.empty();
+			}
+			String line = out.readLine();
+			if (line == null || line.isBlank()) {
+				LOG.warn("media_ffprobe_empty mime={}", mimeType);
+				return java.util.Optional.empty();
+			}
+			return java.util.Optional.of(Double.parseDouble(line.trim()));
+		}
+		catch (InterruptedException interrupted) {
+			process.destroyForcibly();
+			Thread.currentThread().interrupt();
+			return java.util.Optional.empty();
+		}
+		catch (IOException | NumberFormatException unreadable) {
+			LOG.warn("media_ffprobe_unreadable mime={} error={}", mimeType, unreadable.getClass().getSimpleName());
+			return java.util.Optional.empty();
+		}
+	}
+
+	/** {@code true} quando a duração é conhecida e passa do teto; desconhecida não recusa. */
+	private boolean isVideo(String mimeType) {
+		return VIDEO_TYPES.contains(mimeType);
+	}
+
+	private boolean durationExceedsLimit(Path input, String mimeType) {
+		return probeVideoSeconds(input, mimeType)
+			.map(seconds -> seconds > MAX_VIDEO_DURATION.toSeconds() + 0.5)
+			.orElse(false);
 	}
 
 	private void acquirePermit(String mimeType) {
