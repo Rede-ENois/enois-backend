@@ -61,7 +61,7 @@ de execução igual a 1 por efeito.
 | cache distribuído | só conteúdo público; mutável com TTL curto e invalidação por evento |
 | balanceamento | nó com latência/erro perde prioridade; remoção temporária |
 | réplicas de leitura | projeção com `sourceVersion`; allowlist explícita; nunca tabela crua |
-| reconciliação | divergência vira alerta `SYNC_DIVERGENCE` |
+| reconciliação | divergência vira alerta `SYNC_DIVERGENCE` — **entregue**, inclusive sem depender de o nó pedir (varredura periódica) |
 
 **Prova:** transcode real em nó; comparação do resultado com o local; teste de balanceamento
 removendo nó doente; teste de broadcast com duas instâncias.

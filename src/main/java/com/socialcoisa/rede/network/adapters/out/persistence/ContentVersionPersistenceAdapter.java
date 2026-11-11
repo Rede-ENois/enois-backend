@@ -2,6 +2,7 @@ package com.socialcoisa.rede.network.adapters.out.persistence;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -37,10 +38,15 @@ class ContentVersionPersistenceAdapter implements ContentVersionRepository {
 		where content_type = ? and content_id = ? and version = ?
 		""";
 
-	private static final String SELECT_SNAPSHOT = """
-		select node_id, content_type, content_id, source_version, content_hash, synced_at
-		from network_content_snapshots where node_id = ? and content_type = ? and content_id = ?
-		""";
+	private static final String SNAPSHOT_COLUMNS = "node_id, content_type, content_id, source_version, content_hash, "
+		+ "synced_at, checked_at, divergence_reason, divergence_at";
+
+	/** As mesmas colunas qualificadas, para as consultas que fazem join. */
+	private static final String SNAPSHOT_COLUMNS_S = "s.node_id, s.content_type, s.content_id, s.source_version, "
+		+ "s.content_hash, s.synced_at, s.checked_at, s.divergence_reason, s.divergence_at";
+
+	private static final String SELECT_SNAPSHOT = "select " + SNAPSHOT_COLUMNS
+		+ " from network_content_snapshots where node_id = ? and content_type = ? and content_id = ?";
 
 	private static final String UPSERT_SNAPSHOT = """
 		insert into network_content_snapshots
@@ -49,6 +55,52 @@ class ContentVersionPersistenceAdapter implements ContentVersionRepository {
 		on duplicate key update source_version = values(source_version),
 			content_hash = values(content_hash), synced_at = values(synced_at)
 		""";
+
+	/**
+	 * A fila da varredura. {@code checked_at is null} primeiro porque snapshot nunca conferido é o
+	 * que mais precisa de conferência; depois o mais antigo. O desempate por chave deixa a ordem
+	 * estável entre rodadas — sem ele, duas linhas com a mesma hora poderiam alternar e uma delas
+	 * nunca seria alcançada.
+	 *
+	 * <p>O join com {@code network_nodes} não é otimização: é o que impede a fila de travar. Um nó
+	 * suspenso ou revogado não é conferido, e sem o filtro as linhas dele (nunca conferidas, logo
+	 * no começo da ordem) ocupariam o lote em toda rodada e os nós ativos nunca seriam alcançados.</p>
+	 */
+	private static final String SELECT_DUE = "select " + SNAPSHOT_COLUMNS_S + """
+		 from network_content_snapshots s
+		join network_nodes n on n.id = s.node_id
+		where n.status = 'ACTIVE'
+		order by s.checked_at is not null, s.checked_at, s.node_id, s.content_type, s.content_id
+		limit ?
+		""";
+
+	/**
+	 * A conferência, condicionada ao motivo anterior.
+	 *
+	 * <p>A comparação precisa tratar nulo como valor: {@code divergence_reason = ?} nunca casa com
+	 * nulo, e a linha que estava em dia (motivo nulo) jamais seria atualizada — a varredura rodaria
+	 * para sempre sem gravar nada. O igual-nulo do MySQL é {@code <=>}, mas o H2 dos testes não o
+	 * conhece; {@code coalesce(..., '')} faz o mesmo em dialeto portátil. O motivo é sempre um dos
+	 * códigos fixos desta classe, nunca vazio, então o sentinela não colide com nada.</p>
+	 */
+	private static final String MARK_CHECKED = """
+		update network_content_snapshots
+		set checked_at = ?, divergence_reason = ?, divergence_at = ?
+		where node_id = ? and content_type = ? and content_id = ? and coalesce(divergence_reason, '') = ?
+		""";
+
+	private static final String SELECT_DIVERGENT = "select " + SNAPSHOT_COLUMNS + """
+		 from network_content_snapshots
+		where divergence_reason is not null
+		order by divergence_at desc, node_id, content_type, content_id
+		limit ?
+		""";
+
+	private static final String COUNT_DIVERGENT = """
+		select count(*) from network_content_snapshots where divergence_reason is not null
+		""";
+
+	private static final String COUNT_ALL = "select count(*) from network_content_snapshots";
 
 	/**
 	 * Atraso do nó: agregados que a origem tem e o nó não tem na mesma versão. O {@code left join}
@@ -92,11 +144,9 @@ class ContentVersionPersistenceAdapter implements ContentVersionRepository {
 
 	@Override
 	public Optional<NodeSnapshot> snapshot(String nodeId, ContentKind kind, String contentId) {
-		return jdbc.query(SELECT_SNAPSHOT,
-			(rs, row) -> new NodeSnapshot(rs.getString("node_id"), ContentKind.valueOf(rs.getString("content_type")),
-				rs.getString("content_id"), rs.getLong("source_version"), rs.getString("content_hash"),
-				rs.getTimestamp("synced_at").toInstant()),
-			nodeId, kind.name(), contentId).stream().findFirst();
+		return jdbc.query(SELECT_SNAPSHOT, (rs, row) -> mapSnapshot(rs), nodeId, kind.name(), contentId)
+			.stream()
+			.findFirst();
 	}
 
 	@Override
@@ -110,6 +160,45 @@ class ContentVersionPersistenceAdapter implements ContentVersionRepository {
 	public long countBehind(String nodeId, ContentKind kind) {
 		Long count = jdbc.queryForObject(COUNT_BEHIND, Long.class, nodeId, kind.name());
 		return count == null ? 0 : count;
+	}
+
+	@Override
+	public List<NodeSnapshot> dueForCheck(int limit) {
+		return jdbc.query(SELECT_DUE, (rs, row) -> mapSnapshot(rs), limit);
+	}
+
+	@Override
+	public int markChecked(String nodeId, ContentKind kind, String contentId, String previousReason, String newReason,
+			Instant divergenceAt, Instant now) {
+		return jdbc.update(MARK_CHECKED, Timestamp.from(now), newReason,
+			divergenceAt == null ? null : Timestamp.from(divergenceAt), nodeId, kind.name(), contentId,
+			previousReason == null ? "" : previousReason);
+	}
+
+	@Override
+	public List<NodeSnapshot> divergent(int limit) {
+		return jdbc.query(SELECT_DIVERGENT, (rs, row) -> mapSnapshot(rs), limit);
+	}
+
+	@Override
+	public long countDivergent() {
+		Long count = jdbc.queryForObject(COUNT_DIVERGENT, Long.class);
+		return count == null ? 0 : count;
+	}
+
+	@Override
+	public long countAll() {
+		Long count = jdbc.queryForObject(COUNT_ALL, Long.class);
+		return count == null ? 0 : count;
+	}
+
+	private static NodeSnapshot mapSnapshot(java.sql.ResultSet rs) throws java.sql.SQLException {
+		Timestamp checkedAt = rs.getTimestamp("checked_at");
+		Timestamp divergenceAt = rs.getTimestamp("divergence_at");
+		return new NodeSnapshot(rs.getString("node_id"), ContentKind.valueOf(rs.getString("content_type")),
+			rs.getString("content_id"), rs.getLong("source_version"), rs.getString("content_hash"),
+			rs.getTimestamp("synced_at").toInstant(), checkedAt == null ? null : checkedAt.toInstant(),
+			rs.getString("divergence_reason"), divergenceAt == null ? null : divergenceAt.toInstant());
 	}
 
 	private static ContentVersion map(java.sql.ResultSet rs) throws java.sql.SQLException {

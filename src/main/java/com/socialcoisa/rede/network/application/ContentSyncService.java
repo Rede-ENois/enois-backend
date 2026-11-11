@@ -22,7 +22,6 @@ import com.socialcoisa.rede.network.domain.NodeProfile;
 import com.socialcoisa.rede.network.domain.UserProfileProjection;
 import com.socialcoisa.rede.profile.application.ProfileService;
 import com.socialcoisa.rede.profile.application.UserProfileView;
-import com.socialcoisa.rede.shared.audit.AuditTrail;
 import com.socialcoisa.rede.shared.security.Hashes;
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -57,16 +56,14 @@ public class ContentSyncService {
 	private final ProfileService profiles;
 	private final CommunityService communities;
 	private final ObjectMapper objectMapper;
-	private final AuditTrail audit;
 	private final Clock clock;
 
 	ContentSyncService(ContentVersionRepository versions, ProfileService profiles, CommunityService communities,
-			ObjectMapper objectMapper, AuditTrail audit, Clock clock) {
+			ObjectMapper objectMapper, Clock clock) {
 		this.versions = versions;
 		this.profiles = profiles;
 		this.communities = communities;
 		this.objectMapper = objectMapper;
-		this.audit = audit;
 		this.clock = clock;
 	}
 
@@ -158,46 +155,6 @@ public class ContentSyncService {
 		return result;
 	}
 
-	/**
-	 * Reconciliação: para cada agregado que o nó diz ter, recalcula a versão da origem e compara o
-	 * hash. Divergência vira auditoria {@code SYNC_DIVERGENCE} — o alerta que o painel lê.
-	 *
-	 * <p>Compara hash e não versão porque versão igual com corpo diferente seria o pior caso: o nó
-	 * acharia que está em dia. E o agregado que sumiu da origem (perfil banido, comunidade
-	 * excluída) também é divergência: o nó está servindo o que não existe mais.</p>
-	 */
-	@Transactional
-	public List<Divergence> reconcile(NetworkNode node, List<SnapshotRef> snapshots) {
-		List<Divergence> divergences = new ArrayList<>();
-		for (SnapshotRef ref : snapshots) {
-			Optional<ContentVersionRepository.NodeSnapshot> stored = versions.snapshot(node.id(), ref.kind(),
-				ref.contentId());
-			if (stored.isEmpty()) {
-				continue;
-			}
-			ContentVersionRepository.NodeSnapshot snapshot = stored.get();
-			ContentVersion current;
-			try {
-				current = publish(ref.kind(), ref.contentId());
-			}
-			catch (ApiException gone) {
-				divergences.add(new Divergence(ref.kind(), ref.contentId(), snapshot.sourceVersion(), null,
-					"CONTENT_GONE"));
-				audit.record(node.id(), "SYNC_DIVERGENCE", ref.contentId(),
-					"{\"kind\":\"" + ref.kind().name() + "\",\"reason\":\"CONTENT_GONE\"}");
-				continue;
-			}
-			if (!current.contentHash().equals(snapshot.contentHash())) {
-				divergences.add(new Divergence(ref.kind(), ref.contentId(), snapshot.sourceVersion(),
-					current.version(), "CONTENT_STALE"));
-				audit.record(node.id(), "SYNC_DIVERGENCE", ref.contentId(),
-					"{\"kind\":\"" + ref.kind().name() + "\",\"nodeVersion\":" + snapshot.sourceVersion()
-						+ ",\"reason\":\"CONTENT_STALE\"}");
-			}
-		}
-		return divergences;
-	}
-
 	/** O corpo público do agregado, já serializado. É a única fonte do hash e da resposta. */
 	private String body(ContentKind kind, String contentId) {
 		Object projection = switch (kind) {
@@ -264,13 +221,5 @@ public class ContentSyncService {
 
 	/** Atraso de um tipo: quantos agregados o nó não tem na versão da origem. */
 	public record KindLag(ContentKind kind, long behind) {
-	}
-
-	/** Um agregado que o nó diz ter, para a reconciliação conferir. */
-	public record SnapshotRef(ContentKind kind, String contentId) {
-	}
-
-	/** Divergência encontrada: o nó está atrás ou servindo o que não existe mais. */
-	public record Divergence(ContentKind kind, String contentId, long nodeVersion, Long sourceVersion, String reason) {
 	}
 }

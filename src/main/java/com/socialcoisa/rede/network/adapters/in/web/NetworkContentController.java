@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.network.adapters.in.web;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import org.springframework.web.bind.annotation.GetMapping;
@@ -11,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.socialcoisa.rede.network.application.ContentReconcileService;
 import com.socialcoisa.rede.network.application.ContentSyncService;
 import com.socialcoisa.rede.network.application.NodeKeyService;
 import com.socialcoisa.rede.network.domain.ContentKind;
@@ -33,10 +35,12 @@ import com.socialcoisa.rede.shared.web.ApiException;
 class NetworkContentController {
 
 	private final ContentSyncService content;
+	private final ContentReconcileService reconcile;
 	private final NodeKeyService keys;
 
-	NetworkContentController(ContentSyncService content, NodeKeyService keys) {
+	NetworkContentController(ContentSyncService content, ContentReconcileService reconcile, NodeKeyService keys) {
 		this.content = content;
+		this.reconcile = reconcile;
 		this.keys = keys;
 	}
 
@@ -101,6 +105,9 @@ class NetworkContentController {
 	/**
 	 * Reconciliação: o nó manda o que diz ter e recebe o que divergiu. Divergência também vira
 	 * auditoria {@code SYNC_DIVERGENCE}, que é o alerta do painel.
+	 *
+	 * <p>O nó só pode pedir a conferência do que ele mesmo declarou ter: o snapshot é lido pelo id
+	 * autenticado, nunca pelo que o corpo da requisição disser. Um nó não confere o cache de outro.</p>
 	 */
 	@PostMapping("/reconcile")
 	List<DivergenceView> reconcile(@RequestHeader(value = "X-Node-Id", required = false) String nodeId,
@@ -110,16 +117,16 @@ class NetworkContentController {
 		if (request == null || request.snapshots() == null) {
 			return List.of();
 		}
-		List<ContentSyncService.SnapshotRef> refs = request.snapshots().stream()
-			.map(ref -> ContentKind.parse(ref.kind())
-				.map(kind -> new ContentSyncService.SnapshotRef(kind, ref.contentId()))
-				.orElseThrow(() -> new ApiException(404, "CONTENT_KIND_UNKNOWN",
-					"Tipo de conteudo desconhecido.")))
-			.toList();
-		return content.reconcile(node, refs).stream()
-			.map(d -> new DivergenceView(d.kind().name(), d.contentId(), d.nodeVersion(), d.sourceVersion(),
-				d.reason()))
-			.toList();
+		List<DivergenceView> divergences = new ArrayList<>();
+		for (Ref ref : request.snapshots()) {
+			ContentKind kind = ContentKind.parse(ref.kind())
+				.orElseThrow(() -> new ApiException(404, "CONTENT_KIND_UNKNOWN", "Tipo de conteudo desconhecido."));
+			reconcile.snapshot(node.id(), kind, ref.contentId())
+				.flatMap(reconcile::check)
+				.ifPresent(found -> divergences.add(new DivergenceView(found.kind().name(), found.contentId(),
+					found.nodeVersion(), found.sourceVersion(), found.reason())));
+		}
+		return divergences;
 	}
 
 	record StatusResponse(String contentId, String status) {

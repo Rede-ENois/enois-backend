@@ -76,11 +76,39 @@ o TTL continua sendo a garantia, o sinal é a aceleração. Para a rede:
 
 ## 7. Reconciliação
 
-Job periódico compara, por agregado replicado, o `sourceVersion` da origem com o do nó:
+O job periódico (`ContentReconcileWorker`) compara, por agregado replicado, o que o nó declarou
+ter em `network_content_snapshots` com o que a origem serve agora:
 
-- igual → nada;
-- nó atrás → reenvia a projeção;
-- nó à frente (impossível por desenho) → nó é colocado em quarentena e o caso vai para auditoria.
+- **hash igual** → nada registrado além de `checked_at` (o nó foi conferido);
+- **hash diferente** → `CONTENT_STALE`. É hash e não `sourceVersion` porque versão igual com corpo
+  diferente seria o pior caso: o nó acharia que está em dia;
+- **agregado sumiu da origem** (404 — perfil banido, comunidade excluída) → `CONTENT_GONE`;
+- **origem não respondeu** por outro motivo → `CONTENT_UNREADABLE`. Não é culpa do nó, e chamar
+  isso de "sumiu" faria o painel acusar o nó por um problema do Control Plane.
+
+A varredura **não depende de o nó cooperar**: ela usa o que o Control Plane já registrou no sync. Um
+nó que nunca chama `POST /network/content/reconcile` — por bug, por comprometimento ou por não ter
+implementado — é conferido igual. Se o nó mentiu sobre o que guardou, a varredura não tem como
+saber; mas mentir sobre o próprio cache não dá poder, e a divergência aparece assim que a origem
+muda.
+
+A trilha de auditoria registra a **transição**, não a rodada: `SYNC_DIVERGENCE` na entrada em
+divergência e `SYNC_RECOVERED` na volta ao estado em dia. Um nó parado por uma hora gera uma linha,
+não doze. O estado vigente e a hora em que divergiu ficam na linha do snapshot, que é o que o
+painel `/admin/network/content/divergences` lê.
+
+A fila é ordenada por "nunca conferido, depois o mais antigo" e limitada por lote, então rodadas
+sucessivas cobrem todos os agregados de um nó grande sem segurar o banco. Nós que não estão `ACTIVE`
+ficam fora da fila (join com `network_nodes`): suas linhas nunca conferidas ocupariam o lote em toda
+rodada e os nós ativos nunca seriam alcançados.
+
+O estado é gravado por uma condição no motivo anterior (`coalesce(divergence_reason, '') = ?`), então
+duas instâncias do Control Plane rodando a varredura ao mesmo tempo não duplicam auditoria: só a que
+encontra a linha no estado esperado grava.
+
+**Fora do escopo atual:** "nó à frente" não é caso deste desenho — a versão é cunhada pelo Control
+Plane, não pelo nó, e o nó não escreve versão. Colocar nó em quarentena por divergência continua
+sendo decisão administrativa (a rede alerta, não pune sozinha).
 
 ## 8. O que fica de fora, e por quê
 
