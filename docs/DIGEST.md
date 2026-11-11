@@ -47,6 +47,10 @@ obedecendo a um botão da pessoa).
   envia e não grava nada (a próxima semana tenta de novo).
 - **No máximo um por semana**: a linha de `digest_deliveries` é reservada antes do envio. Se o SMTP
   falhar, a semana não é reenviada (preferimos perder um resumo a mandar dois).
+- **Retenção**: a tabela guarda uma linha por pessoa por semana, e só a semana corrente participa
+  de alguma decisão. Semanas mais velhas que `rede.digest.retention.weeks` (padrão 8) saem pelo
+  `WeeklyDigestDeliveryRetentionWorker`, em lotes de `rede.digest.retention.batch-size` semanas
+  (padrão 4) por rodada. Nada dentro da janela é tocado.
 
 ## Descadastro
 

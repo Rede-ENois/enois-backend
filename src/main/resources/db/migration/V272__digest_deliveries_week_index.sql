@@ -1,0 +1,18 @@
+-- Indice para a retencao do resumo semanal.
+--
+-- digest_deliveries guarda uma linha por pessoa por semana ISO ("2026-W44") e nunca era limpa: a
+-- chave primaria e (user_id, week_key), entao descobrir "quais semanas ja passaram" lia a tabela
+-- inteira. Medido em MariaDB 11.4 com 2,08 milhoes de linhas (20 mil pessoas x 104 semanas,
+-- inseridas na ordem real de producao, semana a semana):
+--
+--   select distinct week_key from digest_deliveries where week_key < '2025-W01' order by week_key limit 8;
+--   sem indice: type=ALL, Using temporary; Using filesort, Handler_read_rnd_next = 2.080.054
+--   com este indice: type=range, Using index for group-by, Handler_read_rnd_next = 0
+--
+-- A varredura e por week_key, nao por sent_at: a semana e a chave natural da tabela e o lote da
+-- retencao e uma semana inteira (uma rodada de envio). A comparacao lexicografica da chave
+-- respeita a ordem cronologica ("2024-W09" < "2024-W10", "2025-W52" < "2026-W01"), conferida no
+-- mesmo servidor.
+--
+-- Aditivo e idempotente: nao toca dado nem a tabela existente.
+create index if not exists idx_digest_deliveries_week on digest_deliveries (week_key);
