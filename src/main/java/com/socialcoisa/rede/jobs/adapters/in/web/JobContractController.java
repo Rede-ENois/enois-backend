@@ -24,8 +24,10 @@ import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationServic
 import com.socialcoisa.rede.jobs.application.port.out.CompanyDirectoryReader;
 import com.socialcoisa.rede.jobs.application.port.out.ExternalJobRepository;
 import com.socialcoisa.rede.jobs.domain.ExternalJob;
+import com.socialcoisa.rede.jobs.application.JobInterviewService;
 import com.socialcoisa.rede.jobs.application.JobService;
 import com.socialcoisa.rede.jobs.domain.Job;
+import com.socialcoisa.rede.jobs.domain.JobInterview;
 import com.socialcoisa.rede.jobs.domain.JobApplicationStatus;
 import com.socialcoisa.rede.jobs.domain.JobApplication;
 import com.socialcoisa.rede.profile.application.NameStyleView;
@@ -55,6 +57,7 @@ class JobContractController {
 	private final int externalListingLimit;
 	private final tools.jackson.databind.ObjectMapper objectMapper;
 	private final com.socialcoisa.rede.companies.application.CompanyService companyService;
+	private final JobInterviewService interviewService;
 
 	JobContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
 			JobService jobService, CursorCodec cursorCodec,
@@ -68,8 +71,10 @@ class JobContractController {
 			com.socialcoisa.rede.jobs.application.port.out.CompanyDirectoryReader companyDirectory,
 			com.socialcoisa.rede.jobs.application.ExternalJobSubmissionService externalJobSubmission,
 			com.socialcoisa.rede.jobs.application.ExternalJobApplicationService externalJobApplication,
-			com.socialcoisa.rede.companies.application.CompanyService companyService) {
+			com.socialcoisa.rede.companies.application.CompanyService companyService,
+			JobInterviewService interviewService) {
 		this.companyService = companyService;
+		this.interviewService = interviewService;
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.jobService = jobService;
@@ -92,6 +97,7 @@ class JobContractController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(defaultValue = "50") int limit) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		java.util.Map<String, JobInterview> interviews = interviewService.scheduledByApplication(jobId, user.id().value());
 		return jobService.applicationsOf(jobId, user.id().value(), limit).stream()
 			.map(application -> new ApplicationView(application.id(), application.jobId(), application.status().name(),
 				application.appliedAt().toString(), application.answers().size(),
@@ -100,7 +106,8 @@ class JobContractController {
 					.map(answer -> new AnswerView(answer.label(), answer.value()))
 					.toList(),
 				application.feedback(),
-				application.reviewedAt() != null ? application.reviewedAt().toString() : null))
+				application.reviewedAt() != null ? application.reviewedAt().toString() : null,
+				interviews.containsKey(application.id()) ? InterviewView.of(interviews.get(application.id())) : null))
 			.toList();
 	}
 
@@ -416,6 +423,70 @@ class JobContractController {
 		return ResponseEntity.ok(new ApplicationView(updated.id(), updated.jobId(), updated.status().name(),
 			updated.appliedAt().toString(), updated.answers().size(), updated.feedback(),
 			updated.reviewedAt() != null ? updated.reviewedAt().toString() : null));
+	}
+
+	/**
+	 * Marca a entrevista da candidatura (ou reagenda a que já está valendo). Só quem publicou a vaga.
+	 * A entrevista vira compromisso na agenda dos dois lados pela porta de origem do calendário.
+	 */
+	@PostMapping("/{jobId}/applications/{applicationId}/interview")
+	ResponseEntity<InterviewView> scheduleInterview(@PathVariable String jobId,
+			@PathVariable String applicationId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestBody InterviewRequest body) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		JobInterview interview = interviewService.schedule(jobId, applicationId, user.id().value(),
+			parseInstant(body == null ? null : body.startsAt(), "startsAt"),
+			parseInstant(body == null ? null : body.endsAt(), "endsAt"),
+			body == null ? null : body.timeZoneId(), body == null ? null : body.notes());
+		return ResponseEntity.status(HttpStatus.CREATED).body(InterviewView.of(interview));
+	}
+
+	/** Reagenda uma entrevista existente. A origem não muda, então as duas entradas da agenda movem. */
+	@PatchMapping("/{jobId}/applications/{applicationId}/interview/{interviewId}")
+	ResponseEntity<InterviewView> rescheduleInterview(@PathVariable String jobId,
+			@PathVariable String applicationId, @PathVariable String interviewId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestBody InterviewRequest body) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		JobInterview interview = interviewService.reschedule(jobId, applicationId, interviewId, user.id().value(),
+			parseInstant(body == null ? null : body.startsAt(), "startsAt"),
+			parseInstant(body == null ? null : body.endsAt(), "endsAt"),
+			body == null ? null : body.timeZoneId(), body == null ? null : body.notes());
+		return ResponseEntity.ok(InterviewView.of(interview));
+	}
+
+	/** Desmarca a entrevista e cancela os dois compromissos da agenda. */
+	@DeleteMapping("/{jobId}/applications/{applicationId}/interview/{interviewId}")
+	ResponseEntity<InterviewView> cancelInterview(@PathVariable String jobId,
+			@PathVariable String applicationId, @PathVariable String interviewId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		JobInterview interview = interviewService.cancel(jobId, applicationId, interviewId, user.id().value());
+		return ResponseEntity.ok(InterviewView.of(interview));
+	}
+
+	/** Entrevistas da candidatura: o empregador e o candidato veem; mais ninguém. */
+	@GetMapping("/{jobId}/applications/{applicationId}/interview")
+	List<InterviewView> interviews(@PathVariable String jobId, @PathVariable String applicationId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return interviewService.ofApplication(jobId, applicationId, user.id().value()).stream()
+			.map(InterviewView::of)
+			.toList();
+	}
+
+	/** Instante ISO-8601; ausente ou inválido é erro do cliente (422), não erro interno. */
+	private static Instant parseInstant(String raw, String field) {
+		if (raw == null || raw.isBlank()) {
+			throw new ApiException(422, "INVALID_INTERVIEW_WINDOW", "Informe " + field + " da entrevista.");
+		}
+		try {
+			return Instant.parse(raw.trim());
+		}
+		catch (java.time.format.DateTimeParseException exception) {
+			throw new ApiException(422, "INVALID_INTERVIEW_WINDOW", "Data/hora inválida em " + field + ": " + raw);
+		}
 	}
 
 	/** Estado desconhecido e erro do cliente (422), nao erro interno. */
@@ -880,20 +951,38 @@ class JobContractController {
 	record UpdateApplicationStatusRequest(String status, String feedback) {
 	}
 
+	record InterviewRequest(String startsAt, String endsAt, String timeZoneId, String notes) {
+	}
+
+	/** Entrevista como a API devolve: instantes em ISO-8601 UTC e o fuso de quem marcou. */
+	record InterviewView(String id, String applicationId, String jobId, String candidateId, String status,
+			String startsAt, String endsAt, String timeZoneId, String notes, String createdAt, String updatedAt,
+			String cancelledAt) {
+
+		static InterviewView of(JobInterview interview) {
+			return new InterviewView(interview.id(), interview.applicationId(), interview.jobId(),
+				interview.candidateId(), interview.status().name(), interview.startsAt().toString(),
+				interview.endsAt().toString(), interview.zone().getId(), interview.notes(),
+				interview.createdAt().toString(), interview.updatedAt().toString(),
+				interview.cancelledAt() == null ? null : interview.cancelledAt().toString());
+		}
+	}
+
 	record AnswerRequest(String fieldId, String value) {
 	}
 
 	/** Candidatura como o empregador ve: o retrato do candidato + as respostas. */
 	record ApplicationView(String id, String jobId, String status, String appliedAt, int answersCount,
-			CandidateView candidate, String message, List<AnswerView> answers, String feedback, String reviewedAt) {
+			CandidateView candidate, String message, List<AnswerView> answers, String feedback, String reviewedAt,
+			InterviewView interview) {
 
 		ApplicationView(String id, String jobId, String status, String appliedAt, int answersCount) {
-			this(id, jobId, status, appliedAt, answersCount, null, null, List.of(), null, null);
+			this(id, jobId, status, appliedAt, answersCount, null, null, List.of(), null, null, null);
 		}
 
 		ApplicationView(String id, String jobId, String status, String appliedAt, int answersCount,
 				String feedback, String reviewedAt) {
-			this(id, jobId, status, appliedAt, answersCount, null, null, List.of(), feedback, reviewedAt);
+			this(id, jobId, status, appliedAt, answersCount, null, null, List.of(), feedback, reviewedAt, null);
 		}
 	}
 
