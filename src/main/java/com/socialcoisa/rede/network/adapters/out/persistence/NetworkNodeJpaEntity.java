@@ -52,6 +52,18 @@ class NetworkNodeJpaEntity {
 	@Column(name = "observed_running_tasks")
 	private Integer observedRunningTasks;
 
+	@Column(name = "observed_latency_ms")
+	private Integer observedLatencyMs;
+
+	@Column(name = "consecutive_failures", nullable = false)
+	private int consecutiveFailures;
+
+	@Column(name = "quarantined_until")
+	private Instant quarantinedUntil;
+
+	@Column(name = "quarantine_reason", length = 40)
+	private String quarantineReason;
+
 	@Column(length = 64)
 	private String region;
 
@@ -99,7 +111,8 @@ class NetworkNodeJpaEntity {
 	NetworkNode toDomain() {
 		return new NetworkNode(id, displayName, ownerUserId, NodeStatus.valueOf(status),
 			NodeProfilesCsv.parse(profiles), region, country, runtimeVersion, lastSeenAt, declaredCpuCores,
-			declaredMemoryMb, observedCpuPercent, observedMemoryMb, observedRunningTasks);
+			declaredMemoryMb, observedCpuPercent, observedMemoryMb, observedRunningTasks, observedLatencyMs,
+			consecutiveFailures, quarantinedUntil, quarantineReason);
 	}
 
 	String status() {

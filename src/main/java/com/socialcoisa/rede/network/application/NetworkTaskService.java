@@ -63,13 +63,15 @@ public class NetworkTaskService {
 	private final Duration nodeStaleAfter;
 	private final int maxAttempts;
 	private final Duration defaultDeadline;
+	private final Duration quarantineWindow;
 
 	NetworkTaskService(NetworkTaskRepository tasks, NetworkNodeRepository nodes, org.springframework.beans.factory.ObjectProvider<MediaResultVerifier> mediaResults,
 			AuditTrail audit, Clock clock,
 			@Value("${rede.network.task.claim-ttl-seconds:120}") long claimTtlSeconds,
 			@Value("${rede.network.task.node-stale-seconds:180}") long nodeStaleSeconds,
 			@Value("${rede.network.task.max-attempts:5}") int maxAttempts,
-			@Value("${rede.network.task.default-deadline-seconds:900}") long defaultDeadlineSeconds) {
+			@Value("${rede.network.task.default-deadline-seconds:900}") long defaultDeadlineSeconds,
+			@Value("${rede.network.balancing.quarantine-seconds:600}") long quarantineSeconds) {
 		this.tasks = tasks;
 		this.nodes = nodes;
 		this.mediaResults = mediaResults;
@@ -79,6 +81,7 @@ public class NetworkTaskService {
 		this.nodeStaleAfter = Duration.ofSeconds(Math.max(30, nodeStaleSeconds));
 		this.maxAttempts = Math.max(1, maxAttempts);
 		this.defaultDeadline = Duration.ofSeconds(Math.max(60, defaultDeadlineSeconds));
+		this.quarantineWindow = Duration.ofSeconds(Math.max(30, quarantineSeconds));
 	}
 
 	/**
@@ -242,11 +245,17 @@ public class NetworkTaskService {
 				}
 			}
 			if (tasks.complete(task.id(), command.attempt(), command.output(), now) == 1) {
+				// Só o resultado APLICADO conta como saúde: um resultado descartado não é prova de que
+				// o nó entregou nada.
+				recordOutcome(node, true, task.dispatchedAt(), now);
 				return new ResultOutcome(task.id(), TaskStatus.DONE.name(), true, null);
 			}
 			return new ResultOutcome(task.id(), task.status().name(), false, "TASK_ALREADY_CLAIMED");
 		}
 		// Falha reportada pelo nó: retentável volta para a fila com backoff; não retentável morre.
+		// É aqui que a saúde é medida: o nó declarou que a execução falhou. Refusão de verificação
+		// (acima) também indica defeito, mas o motivo é outro e é auditado no próprio fluxo.
+		recordOutcome(node, false, null, now);
 		String error = truncate(command.error() == null ? "TASK_FAILED" : command.error());
 		if (task.taskType() == TaskType.MEDIA_TRANSCODE) {
 			MediaResultVerifier verifier = mediaResults.getIfAvailable();
@@ -297,26 +306,70 @@ public class NetworkTaskService {
 	/**
 	 * Escolhe o nó para a tarefa.
 	 *
-	 * <p>Filtro primeiro (perfil cobre o tipo, classe de dado pode ir para este nó, tem vaga, não
-	 * está saturado), depois ordenação por folga: quem tem mais vaga proporcional recebe. Empate é
-	 * resolvido por jitter — sem ele, todos os nós empatados receberiam sempre na mesma ordem e o
-	 * primeiro da lista viraria gargalo.</p>
+	 * <p>Filtro primeiro (vivo, fora da janela de remoção, perfil cobre o tipo, classe de dado pode
+	 * ir para este nó, tem vaga, não está saturado), depois ordenação por saúde e por folga: nó
+	 * degradado (lento ou errando recentemente) perde prioridade para todos os saudáveis, e entre os
+	 * do mesmo grupo quem tem mais vaga proporcional recebe. Empate é resolvido por jitter — sem ele,
+	 * todos os nós empatados receberiam sempre na mesma ordem e o primeiro da lista viraria
+	 * gargalo.</p>
+	 *
+	 * <p>A remoção temporária é filtro, não penalidade: um nó que falhou
+	 * {@link NetworkNode#FAILURE_STREAK_LIMIT} vezes seguidas fica fora da lista até a janela vencer.
+	 * Penalizá-lo só o colocaria no fim da fila — e com um único nó na rede ele continuaria
+	 * recebendo trabalho, esgotando as tentativas de cada tarefa depois da última.</p>
 	 */
 	private Optional<NetworkNode> choose(NetworkTask task, List<NetworkNode> candidates, Instant now) {
 		List<NetworkNode> eligible = candidates.stream()
 			.filter(node -> node.alive(now, nodeStaleAfter))
+			.filter(node -> !node.quarantined(now))
 			.filter(node -> node.accepts(task.taskType(), task.dataClass()))
 			.filter(NetworkNode::hasCapacity)
 			.filter(node -> !node.saturated())
-			.sorted(Comparator.comparingDouble(NetworkTaskService::slack).reversed()
+			.sorted(Comparator.comparing(NetworkTaskService::degraded)
+				.thenComparing(Comparator.comparingDouble(NetworkTaskService::slack).reversed())
 				.thenComparingDouble(node -> ThreadLocalRandom.current().nextDouble()))
 			.toList();
 		return eligible.stream().findFirst();
 	}
 
+	/** Nó degradado: lento medido, ou errando recentemente sem ter chegado ao limite da janela. */
+	private static boolean degraded(NetworkNode node) {
+		return node.slow() || node.failing();
+	}
+
 	/** Folga do nó: vagas livres sobre o limite. Quem tem mais folga recebe a próxima tarefa. */
 	private static double slack(NetworkNode node) {
 		return (double) (node.concurrencyLimit() - node.runningTasks()) / node.concurrencyLimit();
+	}
+
+	/**
+	 * Registra o desfecho na saúde do nó e, se o streak chegou ao limite, tira o nó do
+	 * balanceamento por uma janela.
+	 *
+	 * <p>Depois de gravar o streak, a linha é relida: o UPDATE é relativo (o banco soma), então o
+	 * valor em memória não serve para decidir a janela — duas falhas simultâneas chegariam aqui com
+	 * o mesmo streak antigo e as duas abririam janela. A releitura é uma consulta por desfecho, e
+	 * desfecho é uma vez por tarefa, não por requisição de heartbeat.</p>
+	 */
+	private void recordOutcome(NetworkNode node, boolean success, Instant dispatchedAt, Instant now) {
+		Long latency = success && dispatchedAt != null ? Math.max(0, Duration.between(dispatchedAt, now).toMillis())
+			: null;
+		nodes.recordOutcome(node.id(), success, latency);
+		if (success) {
+			return;
+		}
+		nodes.findById(node.id()).ifPresent(updated -> {
+			if (!updated.failing() || updated.quarantined(now)) {
+				return;
+			}
+			Instant until = now.plus(quarantineWindow);
+			nodes.quarantine(updated.id(), "FAILURE_STREAK", until);
+			audit.record("system", "NETWORK_NODE_QUARANTINED", updated.id(),
+				"{\"reason\":\"FAILURE_STREAK\",\"failures\":" + updated.consecutiveFailures() + ",\"until\":\""
+					+ until + "\"}");
+			LOG.warn("No {} removido do balanceamento ate {} ({} falhas seguidas)", updated.id(), until,
+				updated.consecutiveFailures());
+		});
 	}
 
 	/**

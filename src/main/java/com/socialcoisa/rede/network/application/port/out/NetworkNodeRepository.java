@@ -32,4 +32,22 @@ public interface NetworkNodeRepository {
 	 * perfil e classe de dado é do domínio — o banco não sabe o que é {@code NODE_MEDIA}.
 	 */
 	List<NetworkNode> findCandidates(Instant seenAfter, int limit);
+
+	/**
+	 * Grava o desfecho de uma tarefa no histórico de saúde do nó.
+	 *
+	 * <p>O streak de falha zera no sucesso e o de sucesso zera na falha: o que caracteriza nó doente
+	 * é erro <b>seguido</b>, e um nó que acertou agora não pode carregar erro velho. A latência
+	 * também entra aqui — é o instante da conclusão, e quem tem o instante é este fluxo.</p>
+	 */
+	void recordOutcome(String id, boolean success, Long latencyMs);
+
+	/** Tira o nó do balanceamento até {@code until}. */
+	void quarantine(String id, String reason, Instant until);
+
+	/** Devolve o nó ao balanceamento: limpa a janela e o streak de falha. */
+	void release(String id);
+
+	/** Nós cuja janela de remoção venceu, mais antigos primeiro, para a varredura de volta. */
+	List<NetworkNode> findQuarantineExpired(Instant now, int limit);
 }

@@ -28,14 +28,29 @@ import java.util.Set;
  * @param observedCpuPercent uso de CPU no último heartbeat; null = não reportado
  * @param observedMemoryMb memória em uso no último heartbeat; null = não reportado
  * @param observedRunningTasks tarefas em execução no último heartbeat; null = não reportado
+ * @param observedLatencyMs mediana do tempo de conclusão das últimas tarefas; null = sem amostra
+ * @param consecutiveFailures resultados falhos seguidos; um sucesso zera a contagem
+ * @param quarantinedUntil fora do balanceamento até este instante; null = em balanceamento
+ * @param quarantineReason por que o nó foi tirado do balanceamento; null = nunca foi
  */
 public record NetworkNode(String id, String displayName, String ownerUserId, NodeStatus status,
 		Set<NodeProfile> profiles, String region, String country, String runtimeVersion, Instant lastSeenAt,
 		int declaredCpuCores, int declaredMemoryMb, Double observedCpuPercent, Integer observedMemoryMb,
-		Integer observedRunningTasks) {
+		Integer observedRunningTasks, Integer observedLatencyMs, int consecutiveFailures, Instant quarantinedUntil,
+		String quarantineReason) {
 
 	/** Acima disto o nó está ocupado demais para receber tarefa nova, mesmo com vaga declarada. */
 	public static final double SATURATED_CPU_PERCENT = 85.0;
+
+	/**
+	 * Acima desta latência o nó é <b>lento</b>: continua recebendo trabalho, mas só depois dos nós
+	 * dentro da faixa. Remover um nó lento seria desproporcional — ele ainda entrega —, e tratá-lo
+	 * igual a um nó rápido concentraria a fila nele.
+	 */
+	public static final int SLOW_LATENCY_MS = 30_000;
+
+	/** Falhas seguidas que tiram o nó do balanceamento por uma janela. */
+	public static final int FAILURE_STREAK_LIMIT = 3;
 
 	public NetworkNode {
 		if (id == null || id.isBlank()) {
@@ -87,6 +102,24 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 	 */
 	public boolean alive(Instant now, Duration staleAfter) {
 		return lastSeenAt != null && lastSeenAt.isAfter(now.minus(staleAfter));
+	}
+
+	/**
+	 * O nó está fora do balanceamento agora? Janela vencida não conta: o nó volta sozinho ao
+	 * balanceamento quando o prazo passa, sem ninguém precisar religar nada.
+	 */
+	public boolean quarantined(Instant now) {
+		return quarantinedUntil != null && quarantinedUntil.isAfter(now);
+	}
+
+	/** Está falhando a ponto de sair do balanceamento? O streak é o sinal, não o erro isolado. */
+	public boolean failing() {
+		return consecutiveFailures >= FAILURE_STREAK_LIMIT;
+	}
+
+	/** Tem amostra de latência acima da faixa considerada normal? Sem amostra não é lento. */
+	public boolean slow() {
+		return observedLatencyMs != null && observedLatencyMs > SLOW_LATENCY_MS;
 	}
 
 	/** Pode receber tarefa deste tipo e desta classe de dado? */

@@ -86,7 +86,11 @@ public class NetworkModeService {
 			next = NetworkMode.NORMAL;
 		}
 		if (next != current) {
-			String reason = "fila=" + pending + " vagas=" + capacity + " razao=" + String.format("%.2f", ratio);
+			// Sem capacidade a razão é infinita, e formatar Double.MAX_VALUE com duas casas gera mais
+			// de 300 caracteres — a coluna reason é varchar(200) e a transição falharia exatamente no
+			// caso de rede sem vaga. O texto diz o que importa sem inventar número.
+			String reason = "fila=" + pending + " vagas=" + capacity + " razao="
+				+ (capacity == 0 ? "sem-vagas" : String.format("%.2f", ratio));
 			state.setMode(next, reason, now);
 			audit.record("system", "NETWORK_MODE_" + next.name(), "global",
 				"{\"pending\":" + pending + ",\"capacity\":" + capacity + "}");
@@ -95,12 +99,17 @@ public class NetworkModeService {
 		return next;
 	}
 
-	/** Vagas livres somadas dos nós vivos. Nó saturado não conta vaga. */
+	/**
+	 * Vagas livres somadas dos nós vivos. Nó saturado não conta vaga, e nó fora do balanceamento
+	 * também não: contar a vaga de quem não vai receber a próxima tarefa faria a razão fila/vagas
+	 * parecer folgada e a rede nunca entrar em {@code HIGH_LOAD} justamente quando está com menos
+	 * capacidade do que aparenta.
+	 */
 	private long availableCapacity(Instant now) {
 		List<NetworkNode> candidates = nodes.findCandidates(now.minusSeconds(180), 200);
 		long total = 0;
 		for (NetworkNode node : candidates) {
-			if (node.saturated()) {
+			if (node.saturated() || node.quarantined(now)) {
 				continue;
 			}
 			total += Math.max(0, node.concurrencyLimit() - node.runningTasks());

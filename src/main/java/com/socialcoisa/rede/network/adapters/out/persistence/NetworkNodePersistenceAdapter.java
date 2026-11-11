@@ -73,4 +73,27 @@ class NetworkNodePersistenceAdapter implements NetworkNodeRepository {
 			.map(NetworkNodeJpaEntity::toDomain)
 			.toList();
 	}
+
+	@Override
+	public void recordOutcome(String id, boolean success, Long latencyMs) {
+		repository.recordOutcome(id, success, latencyMs);
+	}
+
+	@Override
+	public void quarantine(String id, String reason, Instant until) {
+		repository.quarantine(id, reason, until);
+	}
+
+	@Override
+	public void release(String id) {
+		repository.release(id);
+	}
+
+	@Override
+	public List<NetworkNode> findQuarantineExpired(Instant now, int limit) {
+		return repository.findQuarantineExpired(now, PageRequest.ofSize(limit))
+			.stream()
+			.map(NetworkNodeJpaEntity::toDomain)
+			.toList();
+	}
 }

@@ -110,6 +110,46 @@ encontra a linha no estado esperado grava.
 Plane, não pelo nó, e o nó não escreve versão. Colocar nó em quarentena por divergência continua
 sendo decisão administrativa (a rede alerta, não pune sozinha).
 
+## 7.1 Balanceamento por saúde medida
+
+O scheduler escolhe o nó em duas etapas: **filtro** e **ordem**.
+
+O filtro exclui quem não pode receber a tarefa agora: nó morto (heartbeat velho), nó **fora do
+balanceamento** (janela de remoção vigente), perfil que não cobre o tipo, classe de dado que não pode
+sair da infra autorizada, sem vaga e CPU saturada.
+
+A ordem é por **saúde e depois por folga**: nó saudável antes de nó degradado; dentro do mesmo grupo,
+quem tem mais vagas livres proporcionalmente. Empate é resolvido por jitter, senão o primeiro da
+lista viraria gargalo.
+
+Saúde é **medida**, não declarada, e mora em quatro colunas de `network_nodes` (V282):
+
+| coluna | o que é | quem escreve |
+|---|---|---|
+| `observed_latency_ms` | média móvel do tempo entre designação e conclusão | o Control Plane, ao aceitar um resultado DONE |
+| `consecutive_failures` | resultados falhos seguidos; um sucesso zera | o Control Plane, ao aceitar um resultado |
+| `quarantined_until` | fim da janela de remoção temporária | o Control Plane, ao atingir o streak |
+| `quarantine_reason` | por que saiu (`FAILURE_STREAK`) | idem |
+
+**Degradado ≠ removido.** Nó lento (acima de `SLOW_LATENCY_MS`) ou com falhas abaixo do limite é
+degradado: perde prioridade, mas continua recebendo quando é o que sobrou — ele ainda entrega, e
+tirá-lo do ar seria desproporcional. Nó com `FAILURE_STREAK_LIMIT` falhas seguidas é removido: sai da
+lista por uma janela. Removido é filtro, não penalidade, porque com um único nó na rede uma
+penalidade só o colocaria no fim da fila e ele continuaria recebendo até esgotar as tentativas de
+cada tarefa.
+
+**A remoção expira sozinha.** O filtro já considera a janela vencida como "em balanceamento"; a
+varredura `NodeHealthWorker` limpa a linha e o streak e audita `NETWORK_NODE_RELEASED`. Sem ela, o
+primeiro erro depois da volta tiraria o nó de novo na hora, porque o streak continuaria no limite.
+
+**Estado de saúde não é `status`.** `SUSPENDED` é decisão humana e não expira; quarentena é
+operacional e expira. Misturar os dois faria o painel dizer "suspenso" para um nó que ninguém
+suspendeu, e o admin teria de "religar" o que nunca desligou.
+
+Consequência no modo da rede: nó removido **não conta vaga** em `availableCapacity`. Contar faria a
+razão fila/vagas parecer folgada e a rede não entraria em `HIGH_LOAD` justamente quando tem menos
+capacidade do que aparenta.
+
 ## 8. O que fica de fora, e por quê
 
 | tentação | por que não |

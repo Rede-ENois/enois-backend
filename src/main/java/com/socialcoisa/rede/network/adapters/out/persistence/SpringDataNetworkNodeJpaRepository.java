@@ -40,4 +40,36 @@ interface SpringDataNetworkNodeJpaRepository extends JpaRepository<NetworkNodeJp
 	@Query("select n from NetworkNodeJpaEntity n where n.status = 'ACTIVE' and n.lastSeenAt >= :seenAfter "
 			+ "order by n.lastSeenAt desc")
 	List<NetworkNodeJpaEntity> findCandidates(@Param("seenAfter") Instant seenAfter, PageRequest page);
+
+	/*
+	 * Desfecho de tarefa, em uma instrução só. Concorrência: dois resultados do mesmo nó chegam por
+	 * requisições distintas e o streak é lido-modificado-escrito. Um UPDATE relativo (o próprio banco
+	 * calcula o próximo valor) evita a leitura seguida de escrita, que perderia uma das duas.
+	 *
+	 * clearAutomatically: o chamador relê o nó logo depois para decidir a janela de remoção; sem
+	 * limpar, a releitura viria do contexto de persistência e traria o streak ANTERIOR, então a
+	 * decisão usaria um número que já não existe.
+	 */
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Query("update NetworkNodeJpaEntity n set n.consecutiveFailures = case when :success = true then 0 "
+			+ "else n.consecutiveFailures + 1 end, "
+			+ "n.observedLatencyMs = case when :latency is null then n.observedLatencyMs "
+			+ "when n.observedLatencyMs is null then :latency "
+			+ "else (n.observedLatencyMs * 3 + :latency) / 4 end "
+			+ "where n.id = :id")
+	int recordOutcome(@Param("id") String id, @Param("success") boolean success, @Param("latency") Long latency);
+
+	@Modifying
+	@Query("update NetworkNodeJpaEntity n set n.quarantinedUntil = :until, n.quarantineReason = :reason "
+			+ "where n.id = :id")
+	int quarantine(@Param("id") String id, @Param("reason") String reason, @Param("until") Instant until);
+
+	@Modifying
+	@Query("update NetworkNodeJpaEntity n set n.quarantinedUntil = null, n.quarantineReason = null, "
+			+ "n.consecutiveFailures = 0 where n.id = :id")
+	int release(@Param("id") String id);
+
+	@Query("select n from NetworkNodeJpaEntity n where n.status = 'ACTIVE' and n.quarantinedUntil is not null "
+			+ "and n.quarantinedUntil <= :now order by n.quarantinedUntil asc")
+	List<NetworkNodeJpaEntity> findQuarantineExpired(@Param("now") Instant now, PageRequest page);
 }

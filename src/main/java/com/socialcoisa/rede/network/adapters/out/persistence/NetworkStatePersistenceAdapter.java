@@ -26,10 +26,23 @@ class NetworkStatePersistenceAdapter implements NetworkStateRepository {
 			.map(entity -> new StateRecord(entity.toMode(), entity.reason(), entity.since()));
 	}
 
+	/**
+	 * Grava o modo vigente.
+	 *
+	 * <p>Antes: sem linha em {@code network_state}, a entidade era criada já com o modo novo e a
+	 * comparação "o modo mudou?" saía antes do {@code save}. A primeira transição nunca era gravada e
+	 * {@code current()} respondia {@code NORMAL} para sempre num banco recém-migrado — a V277 cria a
+	 * tabela e não insere a linha. Agora: sem linha, insere direto; com linha, só grava se o modo
+	 * mudou, como antes.</p>
+	 */
 	@Override
 	public void setMode(NetworkMode mode, String reason, Instant now) {
-		NetworkStateJpaEntity entity = repository.findById(GLOBAL)
-			.orElseGet(() -> new NetworkStateJpaEntity(GLOBAL, mode.name(), reason, now));
+		Optional<NetworkStateJpaEntity> found = repository.findById(GLOBAL);
+		if (found.isEmpty()) {
+			repository.save(new NetworkStateJpaEntity(GLOBAL, mode.name(), reason, now));
+			return;
+		}
+		NetworkStateJpaEntity entity = found.get();
 		if (entity.toMode() == mode) {
 			return;
 		}
