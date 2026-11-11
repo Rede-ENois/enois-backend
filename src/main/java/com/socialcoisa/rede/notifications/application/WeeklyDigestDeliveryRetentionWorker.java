@@ -33,7 +33,7 @@ import com.socialcoisa.rede.notifications.application.port.out.WeeklyDigestRepos
  * {@code hoje - semanas}, e a comparação é estritamente menor.</li>
  * <li>Cada rodada apaga um lote limitado de semanas e o próximo ciclo continua, para não segurar a
  * tabela numa transação longa (mesmo formato das outras retenções). O índice
- * {@code (week_key)} (V272) transforma a varredura em faixa: medido em MariaDB 11.4 com 2,08
+ * {@code (week_key)} (V273) transforma a varredura em faixa: medido em MariaDB 11.4 com 2,08
  * milhões de linhas, de 2.080.054 leituras de linha com filesort para nenhuma leitura de tabela.</li>
  * </ul>
  */

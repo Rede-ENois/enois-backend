@@ -565,7 +565,7 @@ que garante no máximo um resumo por semana). Ver `docs/DIGEST.md`.
 **Retenção:** 8 semanas (`rede.digest.retention.weeks`), pelo `WeeklyDigestDeliveryRetentionWorker`,
 em lotes de 4 semanas por rodada. Só a semana corrente participa de alguma decisão — a consulta de
 elegibilidade sempre pergunta pela semana atual —, então a janela não apaga dado em uso. O índice
-`idx_digest_deliveries_week (week_key)` (V272) existe para a varredura da retenção: medido em
+`idx_digest_deliveries_week (week_key)` (V273) existe para a varredura da retenção: medido em
 MariaDB 11.4 com 2,08 milhões de linhas, sem ele a rodada lia 2.080.054 linhas com temporary e
 filesort para achar as semanas antigas; com ele, `Using index for group-by`, sem leitura de tabela.
 
@@ -735,4 +735,4 @@ As migrações estão em `src/main/resources/db/migration/` e seguem a numeraç�
 | V226 | `users.garden_style`: equipped `GARDEN` item of the profile garden (null = default garden) |
 | V247 | `integrity_flag` (null or `TOO_FAST`) in `daily_word_sessions` and `daily_maze_sessions`: a flagged run stays out of the ranking and the prizes |
 | V249 | Indexes `coin_entries (kind, ref_id)` (reward idempotency lookups) and `game_events (kind, created_at)` ("jogados hoje") |
-| V272 | Index `digest_deliveries (week_key)` for the weekly-digest retention sweep |
+| V273 | Index `digest_deliveries (week_key)` for the weekly-digest retention sweep |
