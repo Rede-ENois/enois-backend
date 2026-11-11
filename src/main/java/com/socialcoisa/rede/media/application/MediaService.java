@@ -45,9 +45,25 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 	 * próprio ele herdaria os 500MB da mídia comum — e o bucket guardaria um "favicon" de 400MB.
 	 */
 	public static final long MAX_BADGE_BYTES = 2L * 1024L * 1024L;
+	/**
+	 * Teto de um vídeo (feed, comentário, mensagem): 10MB. Um clipe de 3min em 480p cabe nele com
+	 * folga depois da compressão do upload, e o tamanho é o que mais pesa no pod — no transporte
+	 * (PUT passa pelo proxy), no processamento (ffmpeg) e no leitor do feed, que baixa o vídeo
+	 * aos poucos pelo Range. Decisão de produto (issue #656): rígida, sem degradação.
+	 */
+	public static final long MAX_VIDEO_BYTES = 10L * 1024L * 1024L;
 	/** Teto por propósito de upload; ausente = o teto geral. */
 	private static final java.util.Map<String, Long> MAX_BYTES_BY_PURPOSE =
 		java.util.Map.of("BADGE", MAX_BADGE_BYTES);
+	/**
+	 * Teto por tipo quando o tipo é mais estreito que qualquer propósito: vídeo de qualquer
+	 * propósito cai aqui (o front manda vídeo de post até como POST_IMAGE, então o corte tem de
+	 * ser pelo MIME, não pelo propósito).
+	 */
+	private static final java.util.Map<String, Long> MAX_BYTES_BY_TYPE = java.util.Map.ofEntries(
+		java.util.Map.entry("video/mp4", MAX_VIDEO_BYTES),
+		java.util.Map.entry("video/webm", MAX_VIDEO_BYTES),
+		java.util.Map.entry("video/quicktime", MAX_VIDEO_BYTES));
 	/** Janela do upload direto ao S3 e da limpeza do asset pendente (arquivos de ate 500MB). */
 	private static final Duration UPLOAD_WINDOW = Duration.ofMinutes(60);
 
@@ -247,10 +263,21 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 		if (command.size() <= 0) {
 			throw new ApiException(400, "INVALID_MEDIA_SIZE", "Tamanho da midia deve ser maior que zero.");
 		}
-		long maxBytes = MAX_BYTES_BY_PURPOSE.getOrDefault(purpose, MAX_MEDIA_BYTES);
-		if (command.size() > maxBytes) {
-			throw new ApiException(400, "MEDIA_TOO_LARGE",
-				"Mídia deve ter no máximo " + (maxBytes / (1024L * 1024L)) + "MB.");
+		// O teto do tipo vem primeiro: vídeo é 10MB em qualquer propósito (o front manda vídeo de
+		// post até como POST_IMAGE, então corte por propósito deixaria o vídeo passar).
+		Long maxBytesByType = MAX_BYTES_BY_TYPE.get(mime);
+		if (maxBytesByType != null) {
+			if (command.size() > maxBytesByType) {
+				throw new ApiException(400, "MEDIA_TOO_LARGE",
+					"O vídeo deve ter no máximo " + (maxBytesByType / (1024L * 1024L)) + "MB.");
+			}
+		}
+		else {
+			long maxBytes = MAX_BYTES_BY_PURPOSE.getOrDefault(purpose, MAX_MEDIA_BYTES);
+			if (command.size() > maxBytes) {
+				throw new ApiException(400, "MEDIA_TOO_LARGE",
+					"Mídia deve ter no máximo " + (maxBytes / (1024L * 1024L)) + "MB.");
+			}
 		}
 		return mime;
 	}
