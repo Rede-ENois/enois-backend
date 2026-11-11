@@ -153,6 +153,105 @@ class CalendarIcsServiceTests {
 	}
 
 	@Test
+	void aCancelledEventInTheFileDoesNotBecomeAnActiveEntry() {
+		String owner = owner();
+		String ics = """
+			BEGIN:VCALENDAR\r
+			BEGIN:VEVENT\r
+			UID:desmarcado-1\r
+			DTSTART;TZID=America/Sao_Paulo:20261201T190000\r
+			DTEND;TZID=America/Sao_Paulo:20261201T200000\r
+			SUMMARY:Desmarcado\r
+			STATUS:CANCELLED\r
+			END:VEVENT\r
+			END:VCALENDAR\r
+			""";
+
+		CalendarIcsService.ImportResult result = service.importCalendar(owner, ics, null);
+
+		assertThat(result.received()).isEqualTo(1);
+		assertThat(result.created()).isZero();
+		assertThat(result.cancelled()).isZero();
+		assertThat(result.skipped()).isEqualTo(1);
+		assertThat(entries.findInWindow(owner, null, STARTS_AT.minus(Duration.ofDays(1)),
+			STARTS_AT.plus(Duration.ofDays(1)))).isEmpty();
+	}
+
+	@Test
+	void aCancelledEventCancelsTheLocalEntryWithTheSameUid() {
+		String owner = owner();
+		String active = """
+			BEGIN:VCALENDAR\r
+			BEGIN:VEVENT\r
+			UID:desmarcado-2\r
+			DTSTART;TZID=America/Sao_Paulo:20261201T190000\r
+			DTEND;TZID=America/Sao_Paulo:20261201T200000\r
+			SUMMARY:Consulta\r
+			STATUS:CONFIRMED\r
+			END:VEVENT\r
+			END:VCALENDAR\r
+			""";
+		assertThat(service.importCalendar(owner, active, null).created()).isEqualTo(1);
+
+		String cancelled = active.replace("STATUS:CONFIRMED", "STATUS:CANCELLED");
+		CalendarIcsService.ImportResult result = service.importCalendar(owner, cancelled, null);
+
+		assertThat(result.created()).isZero();
+		assertThat(result.cancelled()).isEqualTo(1);
+		assertThat(result.skipped()).isZero();
+		List<CalendarEntry> saved = entries.findInWindow(owner, null, STARTS_AT.minus(Duration.ofDays(1)),
+			STARTS_AT.plus(Duration.ofDays(1)));
+		assertThat(saved).hasSize(1);
+		assertThat(saved.get(0).active()).isFalse();
+	}
+
+	@Test
+	void importingTheCancellationAgainKeepsTheEntryCancelledAndDoesNotDuplicate() {
+		String owner = owner();
+		String cancelled = """
+			BEGIN:VCALENDAR\r
+			BEGIN:VEVENT\r
+			UID:desmarcado-3\r
+			DTSTART;TZID=America/Sao_Paulo:20261201T190000\r
+			DTEND;TZID=America/Sao_Paulo:20261201T200000\r
+			SUMMARY:Consulta\r
+			STATUS:CANCELLED\r
+			END:VEVENT\r
+			END:VCALENDAR\r
+			""";
+		service.importCalendar(owner, cancelled.replace("STATUS:CANCELLED", "STATUS:CONFIRMED"), null);
+
+		CalendarIcsService.ImportResult first = service.importCalendar(owner, cancelled, null);
+		CalendarIcsService.ImportResult second = service.importCalendar(owner, cancelled, null);
+
+		assertThat(first.cancelled()).isEqualTo(1);
+		assertThat(second.cancelled()).isEqualTo(1);
+		assertThat(second.created()).isZero();
+		assertThat(entries.findInWindow(owner, null, STARTS_AT.minus(Duration.ofDays(1)),
+			STARTS_AT.plus(Duration.ofDays(1)))).hasSize(1);
+	}
+
+	@Test
+	void exportingACancelledEntryAndImportingItElsewhereDoesNotCreateIt() {
+		String source = owner();
+		CalendarEntry entry = save(source, "cal_" + UUID.randomUUID(), STARTS_AT,
+			STARTS_AT.plus(Duration.ofHours(1)), "Cancelada na origem");
+		entry.cancel(Instant.now());
+		entries.save(entry);
+		String ics = service.export(source, STARTS_AT.minus(Duration.ofDays(1)),
+			STARTS_AT.plus(Duration.ofDays(1)), null);
+
+		String target = owner();
+		CalendarIcsService.ImportResult result = service.importCalendar(target, ics, null);
+
+		assertThat(result.received()).isEqualTo(1);
+		assertThat(result.created()).isZero();
+		assertThat(result.skipped()).isEqualTo(1);
+		assertThat(entries.findInWindow(target, null, STARTS_AT.minus(Duration.ofDays(1)),
+			STARTS_AT.plus(Duration.ofDays(1)))).isEmpty();
+	}
+
+	@Test
 	void importedEventKeepsTheWallClockOfItsTzid() {
 		String owner = owner();
 		String ics = """
