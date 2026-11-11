@@ -161,7 +161,9 @@ Decisões-chave:
    com `externalDetails`. **Implementada.**
 2. **Fase 2 — fontes novas**: adaptadores Arbeitnow, GitHub comunitárias (MIT), Adzuna (com
    credencial de avaliação), Jooble (condicional), ATS por configuração. Cada uma com teste de
-   contrato offline (JSON fixo) + toggle de configuração.
+   contrato offline (JSON fixo) + toggle de configuração. **Implementadas: Arbeitnow, GitHub
+   comunitárias (backend-br/frontendbr) e Adzuna** — Jooble segue condicional (só com chave) e os
+   ATS (Greenhouse/Ashby) ficam para uma fase própria, por orgão de parceiro.
 3. **Fase 3 — candidatura externa por e-mail real** (backend): endpoint autenticado que envia o
    e-mail pelo SMTP da plataforma com o currículo anexado (o `mailto:` continua existindo como
    alternativa, sem fingir anexo), histórico e rate limit.
