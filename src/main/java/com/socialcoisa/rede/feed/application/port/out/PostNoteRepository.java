@@ -2,6 +2,7 @@ package com.socialcoisa.rede.feed.application.port.out;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import com.socialcoisa.rede.feed.domain.PostNote;
@@ -30,4 +31,7 @@ public interface PostNoteRepository {
 	List<PostNote> findByStatus(PostNoteStatus status, int limit);
 
 	int countByAuthorAndStatus(String authorId, PostNoteStatus status);
+
+	/** Notas de cada autor do conjunto num estado, em uma consulta (GROUP BY no autor). */
+	Map<String, Integer> countByAuthorsAndStatus(Collection<String> authorIds, PostNoteStatus status);
 }

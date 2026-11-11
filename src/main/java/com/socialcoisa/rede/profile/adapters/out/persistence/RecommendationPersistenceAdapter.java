@@ -1,9 +1,13 @@
 package com.socialcoisa.rede.profile.adapters.out.persistence;
 
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.stereotype.Repository;
+
+import jakarta.persistence.EntityManager;
 
 import com.socialcoisa.rede.profile.application.port.out.RecommendationRepository;
 import com.socialcoisa.rede.profile.domain.Recommendation;
@@ -12,9 +16,11 @@ import com.socialcoisa.rede.profile.domain.Recommendation;
 class RecommendationPersistenceAdapter implements RecommendationRepository {
 
 	private final SpringDataRecommendationJpaRepository repo;
+	private final EntityManager em;
 
-	RecommendationPersistenceAdapter(SpringDataRecommendationJpaRepository repo) {
+	RecommendationPersistenceAdapter(SpringDataRecommendationJpaRepository repo, EntityManager em) {
 		this.repo = repo;
+		this.em = em;
 	}
 
 	@Override
@@ -57,5 +63,33 @@ class RecommendationPersistenceAdapter implements RecommendationRepository {
 	@Override
 	public void delete(String id) {
 		repo.deleteById(id);
+	}
+
+	@Override
+	public Map<String, Integer> receivedCounts(Collection<String> ids) {
+		return grouped(ids, "select recommended_id, count(*) from user_recommendations"
+			+ " where recommended_id in (:ids) group by recommended_id");
+	}
+
+	@Override
+	public Map<String, Integer> reciprocalCounts(Collection<String> ids) {
+		// Recebidas que têm a volta (eu recomendei quem me recomendou): par mútuo = troca.
+		return grouped(ids, "select r.recommended_id, count(*) from user_recommendations r"
+			+ " where r.recommended_id in (:ids) and exists (select 1 from user_recommendations x"
+			+ " where x.recommender_id = r.recommended_id and x.recommended_id = r.recommender_id)"
+			+ " group by r.recommended_id");
+	}
+
+	private Map<String, Integer> grouped(Collection<String> ids, String sql) {
+		if (ids.isEmpty()) {
+			return Map.of();
+		}
+		@SuppressWarnings("unchecked")
+		List<Object[]> rows = em.createNativeQuery(sql).setParameter("ids", ids).getResultList();
+		var counts = new java.util.HashMap<String, Integer>();
+		for (Object[] row : rows) {
+			counts.put((String) row[0], ((Number) row[1]).intValue());
+		}
+		return counts;
 	}
 }
