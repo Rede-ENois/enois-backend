@@ -277,6 +277,57 @@ public class EmailService {
         }
     }
 
+    /**
+     * HTML com ANEXO de verdade — o único caminho em que um arquivo chega junto.
+     *
+     * <p>Existe para a candidatura a vaga externa: o `mailto:` abre o app de e-mail com o texto, mas
+     * não tem como carregar o currículo. Aqui o arquivo é anexado à mensagem que o SMTP da
+     * plataforma envia, e o retorno diz se o envio saiu — quem chamou registra o resultado em vez de
+     * supor que o anexo foi junto.</p>
+     *
+     * <p>`replyTo` é o e-mail do candidato: a empresa responde direto para ele, não para o suporte.
+     * O remetente continua sendo a plataforma (o domínio do Énóis é o que tem SPF/DKIM).</p>
+     *
+     * @return false quando o envio falha; o anexo nunca é "dado como enviado" sem esta confirmação
+     */
+    public boolean sendHtmlWithAttachment(String toEmail, String subject, String htmlBody, String fromName,
+            String replyTo, byte[] attachmentBytes, String attachmentName, String attachmentContentType,
+            String kind) {
+        try {
+            MimeMessage message = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
+            if (org.springframework.util.StringUtils.hasText(fromName)) {
+                helper.setFrom(new InternetAddress(fromEmail, fromName, "UTF-8"));
+            } else {
+                helper.setFrom(fromEmail);
+            }
+            helper.setTo(toEmail);
+            if (org.springframework.util.StringUtils.hasText(replyTo)) {
+                helper.setReplyTo(replyTo);
+            }
+            helper.setSubject(subject);
+            helper.setText(htmlBody, true);
+            if (attachmentBytes != null && attachmentBytes.length > 0) {
+                String name = org.springframework.util.StringUtils.hasText(attachmentName)
+                        ? attachmentName : "curriculo.pdf";
+                if (org.springframework.util.StringUtils.hasText(attachmentContentType)) {
+                    helper.addAttachment(name, new org.springframework.core.io.ByteArrayResource(attachmentBytes),
+                        attachmentContentType);
+                } else {
+                    helper.addAttachment(name, new org.springframework.core.io.ByteArrayResource(attachmentBytes));
+                }
+            }
+            mailSender.send(message);
+            recordEmail(toEmail, subject, kind, true, null);
+            return true;
+        } catch (Exception e) {
+            recordEmail(toEmail, subject, kind, false, e.getMessage());
+            LOG.error("Falha ao enviar email com anexo para {}: {} ({})", PiiMask.email(toEmail),
+                PiiMask.text(e.getMessage()), e.getClass().getSimpleName());
+            return false;
+        }
+    }
+
     private String buildResetLink(String resetToken) {
         return frontendUrl + "/auth/reset?token=" + resetToken;
     }

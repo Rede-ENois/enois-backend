@@ -50,6 +50,7 @@ class JobContractController {
 	private final ExternalJobRepository externalJobRepository;
 	private final com.socialcoisa.rede.jobs.application.port.out.CompanyDirectoryReader companyDirectory;
 	private final com.socialcoisa.rede.jobs.application.ExternalJobSubmissionService externalJobSubmission;
+	private final com.socialcoisa.rede.jobs.application.ExternalJobApplicationService externalJobApplication;
 	private final boolean externalListingEnabled;
 	private final int externalListingLimit;
 	private final tools.jackson.databind.ObjectMapper objectMapper;
@@ -66,6 +67,7 @@ class JobContractController {
 			@org.springframework.beans.factory.annotation.Value("${rede.jobs.import.external-listing-limit:20}") int externalListingLimit,
 			com.socialcoisa.rede.jobs.application.port.out.CompanyDirectoryReader companyDirectory,
 			com.socialcoisa.rede.jobs.application.ExternalJobSubmissionService externalJobSubmission,
+			com.socialcoisa.rede.jobs.application.ExternalJobApplicationService externalJobApplication,
 			com.socialcoisa.rede.companies.application.CompanyService companyService) {
 		this.companyService = companyService;
 		this.idempotency = idempotency;
@@ -81,6 +83,7 @@ class JobContractController {
 		this.externalListingEnabled = externalListingEnabled;
 		this.externalListingLimit = externalListingLimit;
 		this.externalJobSubmission = externalJobSubmission;
+		this.externalJobApplication = externalJobApplication;
 	}
 
 	/** Candidaturas recebidas (somente quem publicou a vaga). */
@@ -233,6 +236,60 @@ class JobContractController {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		return externalJobSubmission.mine(user.id().value()).stream()
 			.map(job -> toExternalView(job, true))
+			.toList();
+	}
+
+	/**
+	 * Prévia do e-mail de candidatura a uma vaga externa: destinatário, assunto, corpo e se há
+	 * currículo para anexar. Nada é enviado — é o que a pessoa revisa antes de confirmar.
+	 */
+	@GetMapping("/external/{externalJobId}/application")
+	ExternalApplicationDraftView externalApplicationDraft(@PathVariable String externalJobId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		var draft = externalJobApplication.draft(externalJobId, user.id().value());
+		return new ExternalApplicationDraftView(draft.recipientEmail(), draft.subject(), draft.body(),
+			draft.resumeAvailable(), draft.resumeName(), draft.jobTitle(), draft.company(), draft.jobUrl());
+	}
+
+	/**
+	 * Envia a candidatura pelo Énóis, com o currículo anexado de verdade.
+	 *
+	 * O corpo exige `confirmed = true`: sem confirmação explícita nada sai. O retorno diz se o
+	 * anexo foi junto — quando o download do currículo falha, o e-mail sai sem ele e a resposta
+	 * informa `resumeAttached = false` (nunca o contrário).
+	 */
+	@PostMapping("/external/{externalJobId}/application")
+	ResponseEntity<String> applyExternal(@PathVariable String externalJobId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@RequestBody(required = false) ExternalApplyRequest body) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		String hash = idempotency.hash(Map.of("externalJobId", externalJobId,
+			"confirmed", body != null && Boolean.TRUE.equals(body.confirmed()),
+			"message", body == null || body.message() == null ? "" : body.message()));
+		return idempotency.execute(user.id(), "POST", "/api/jobs/external/{externalJobId}/application",
+			idempotencyKey, hash, () -> {
+				var application = externalJobApplication.apply(externalJobId, user.id().value(),
+					body != null && Boolean.TRUE.equals(body.confirmed()),
+					body == null ? null : body.message());
+				return new CommandResponse(201, new ExternalApplicationView(application.id(),
+					application.externalJobId(), application.recipientEmail(), application.subject(),
+					application.resumeAttached(), application.resumeName(), application.status(),
+					application.appliedAt().toString()));
+			});
+	}
+
+	/** Histórico das candidaturas externas enviadas pelo Énóis. */
+	@GetMapping("/external/applications/mine")
+	List<ExternalApplicationView> myExternalApplications(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(defaultValue = "50") int limit) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return externalJobApplication.mine(user.id().value(), limit).stream()
+			.map(application -> new ExternalApplicationView(application.id(), application.externalJobId(),
+				application.recipientEmail(), application.subject(), application.resumeAttached(),
+				application.resumeName(), application.status(), application.appliedAt().toString()))
 			.toList();
 	}
 
@@ -797,6 +854,20 @@ class JobContractController {
 	record CreateExternalJobRequest(String title, String company, String location, String url,
 			String description, String salaryMin, String salaryMax, String salaryPeriod, String applyEmail,
 			boolean communityAgreement, Boolean salaryNotInformed) {
+	}
+
+	/** O e-mail de candidatura pronto para revisão (nada foi enviado ainda). */
+	record ExternalApplicationDraftView(String recipientEmail, String subject, String body,
+			boolean resumeAvailable, String resumeName, String jobTitle, String company, String jobUrl) {
+	}
+
+	/** Corpo do envio: a confirmação é obrigatória e o texto extra é opcional. */
+	record ExternalApplyRequest(Boolean confirmed, String message) {
+	}
+
+	/** Comprovante da candidatura enviada: para onde foi, com que assunto e se o anexo foi junto. */
+	record ExternalApplicationView(String id, String externalJobId, String recipientEmail, String subject,
+			boolean resumeAttached, String resumeName, String status, String appliedAt) {
 	}
 
 	record ApplicationFieldRequest(String label, String type, boolean required) {
