@@ -42,7 +42,7 @@ public final class JobTaxonomy {
 		}
 		String value = raw.toLowerCase(Locale.ROOT);
 		if (value.contains("intern") || value.contains("estágio") || value.contains("estagio")
-				|| value.contains("trainee") || value.contains("aprendiz")) {
+				|| value.contains("trainee") || value.contains("aprendiz") || value.contains("praktikum")) {
 			return "JUNIOR";
 		}
 		if (value.contains("junior") || value.contains("júnior") || value.contains("entry")) {
