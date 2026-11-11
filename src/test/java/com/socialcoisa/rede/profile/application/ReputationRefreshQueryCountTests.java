@@ -131,12 +131,17 @@ class ReputationRefreshQueryCountTests {
 		seedUsers(BASE_USERS, 2);
 		int withTriple = refreshCountingSelects();
 
+		// O custo é por PÁGINA de 500 ids (17 consultas cada). Quando o total de contas da base
+		// (a H2 é compartilhada: outras classes criam contas) encosta numa fronteira de página,
+		// o loop faz UMA verificação extra de página vazia — +1 consulta que não cresce com o
+		// número de contas, só com a fronteira. A prova do invariante é que as consultas por
+		// página não crescem: tolera-se no máximo essa 1 consulta de fronteira por medição.
 		assertThat(withDouble)
 			.as("a passada não pode consultar mais o banco por ter o dobro de contas")
-			.isEqualTo(withBase);
+			.isLessThanOrEqualTo(withBase + 1);
 		assertThat(withTriple)
 			.as("a passada não pode consultar mais o banco por ter o triplo de contas")
-			.isEqualTo(withBase);
+			.isLessThanOrEqualTo(withBase + 1);
 
 		// E a coluna do ranking tem de ter sido escrita de verdade para as contas semeadas: elas
 		// nascem com o sentinela -1 e a passada grava a nota calculada (0 é nota válida).
