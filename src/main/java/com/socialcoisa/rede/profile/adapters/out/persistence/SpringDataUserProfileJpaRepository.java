@@ -16,6 +16,14 @@ interface SpringDataUserProfileJpaRepository extends JpaRepository<UserProfileJp
 	List<com.socialcoisa.rede.profile.application.port.out.AccountIdentity> identitiesOf(
 		@org.springframework.data.repository.query.Param("ids") java.util.Collection<String> ids);
 
+	@org.springframework.data.jpa.repository.Query("""
+		select new com.socialcoisa.rede.profile.application.port.out.SellerIdentity(
+			u.id, u.name, u.avatar, u.nameTheme, u.nameFont, u.nameColor, u.nameplate)
+		from UserProfileJpaEntity u where u.id in :ids
+		""")
+	List<com.socialcoisa.rede.profile.application.port.out.SellerIdentity> sellersOf(
+		@org.springframework.data.repository.query.Param("ids") java.util.Collection<String> ids);
+
 	Optional<UserProfileJpaEntity> findByUsername(String username);
 
 	Optional<UserProfileJpaEntity> findByEmail(String email);

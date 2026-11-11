@@ -28,6 +28,12 @@ public interface UserProfileRepository {
 	List<AccountIdentity> identitiesOf(Collection<String> ids);
 
 	/**
+	 * Nome, foto e personalização do nome de várias contas, em uma consulta e sem as coleções do
+	 * perfil — o suficiente para as vitrines de serviços mostrarem quem presta.
+	 */
+	List<SellerIdentity> sellersOf(Collection<String> ids);
+
+	/**
 	 * Nascimento + verificação de identidade de várias contas, em uma consulta e sem as coleções
 	 * do perfil — o suficiente para o cálculo da credibilidade em lote (job do ranking).
 	 */
