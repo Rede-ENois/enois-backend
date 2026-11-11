@@ -251,6 +251,46 @@ class CalendarEntryWriteApiTests {
 	}
 
 	@Test
+	void edicaoParcialTrocaEscopoTipoEDiaInteiro() throws Exception {
+		var owner = account("cal_write_reclassify");
+		String id = objectMapper.readTree(createAs(owner, "reclass-1", validBody("Reclassificar")))
+			.get("id").asString();
+
+		// O formulário da tela mostra os três campos; antes desta correção o PATCH os descartava em
+		// silêncio e a pessoa salvava uma mudança que não acontecia.
+		mockMvc
+			.perform(patch("/calendar/entries/{entryId}", id).header("X-Session-Token", owner.token())
+				.header("Idempotency-Key", "reclass-2")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(body(Map.of("scope", "SOCIAL", "kind", "PERSONAL", "allDay", true))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.scope").value("SOCIAL"))
+			.andExpect(jsonPath("$.kind").value("PERSONAL"))
+			.andExpect(jsonPath("$.allDay").value(true))
+			.andExpect(jsonPath("$.title").value("Reclassificar"));
+
+		// Ausente não muda: editar só o título não desmarca o dia inteiro nem volta o tipo.
+		mockMvc
+			.perform(patch("/calendar/entries/{entryId}", id).header("X-Session-Token", owner.token())
+				.header("Idempotency-Key", "reclass-3")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(body(Map.of("title", "Só o título"))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.title").value("Só o título"))
+			.andExpect(jsonPath("$.scope").value("SOCIAL"))
+			.andExpect(jsonPath("$.kind").value("PERSONAL"))
+			.andExpect(jsonPath("$.allDay").value(true));
+
+		mockMvc
+			.perform(patch("/calendar/entries/{entryId}", id).header("X-Session-Token", owner.token())
+				.header("Idempotency-Key", "reclass-4")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(body(Map.of("scope", "PESSOAL"))))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("INVALID_SCOPE"));
+	}
+
+	@Test
 	void entradaAlheiaRespondeO4o4DeUmaQueNaoExiste() throws Exception {
 		var owner = account("cal_write_owner");
 		var stranger = account("cal_write_stranger");

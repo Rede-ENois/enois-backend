@@ -155,8 +155,9 @@ class CalendarEntryController {
 		String hash = idempotency.hash(Map.of("entryId", entryId, "request", request));
 		return idempotency.execute(user.id().value(), "PATCH", "/api/calendar/entries/{entryId}", idempotencyKey,
 			hash, () -> {
-				CalendarEntry entry = calendarCommandService.update(user.id().value(), entryId, request.title(),
-					request.description(), request.startsAt(), request.endsAt(), request.timeZoneId());
+				CalendarEntry entry = calendarCommandService.update(user.id().value(), entryId, request.scope(),
+					request.kind(), request.title(), request.description(), request.startsAt(), request.endsAt(),
+					request.timeZoneId(), request.allDay());
 				return new CommandResponse(200, CalendarEntryView.from(entry));
 			});
 	}
@@ -378,8 +379,12 @@ class CalendarEntryController {
 			String endsAt, String timeZoneId, boolean allDay) {
 	}
 
-	/** Corpo da edição parcial: campo nulo ou ausente não muda; `description` vazia limpa o texto. */
-	record CalendarEntryPatchRequest(String title, String description, String startsAt, String endsAt,
-			String timeZoneId) {
+	/**
+	 * Corpo da edição parcial: campo nulo ou ausente não muda; `description` vazia limpa o texto.
+	 * `allDay` é `Boolean` e não `boolean` porque ausente precisa significar "não mexi" — um
+	 * primitivo chegaria como `false` e desmarcaria o dia inteiro a cada edição de título.
+	 */
+	record CalendarEntryPatchRequest(String scope, String kind, String title, String description,
+			String startsAt, String endsAt, String timeZoneId, Boolean allDay) {
 	}
 }
