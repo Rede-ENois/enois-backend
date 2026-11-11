@@ -70,7 +70,11 @@ class WriteRouteInterceptor implements HandlerInterceptor {
 		"/network/nodes/heartbeat",
 		// Fase 2: o nó devolve o resultado da tarefa. Mesma credencial de nó (X-Node-Id + X-Node-Key),
 		// conferida no controller. O GET /network/tasks/next não entra aqui: só escrita exige sessão.
-		"/network/tasks/*/result");
+		"/network/tasks/*/result",
+		// Fase 3: o nó de borda confirma o que sincronizou e pede a reconciliação. Mesma credencial
+		// de nó; as leituras de conteúdo são GET e não passam por aqui.
+		"/network/content/*/*/synced",
+		"/network/content/reconcile");
 
 	private final AntPathMatcher matcher = new AntPathMatcher();
 	private final CurrentUserResolver currentUserResolver;
