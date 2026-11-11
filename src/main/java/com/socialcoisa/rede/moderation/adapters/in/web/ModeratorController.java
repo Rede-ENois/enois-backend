@@ -430,8 +430,10 @@ class ModeratorController {
 			@RequestParam(defaultValue = "30") int limit) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		moderatorGuard.requireModerator(user);
-		return serviceOffers.pending(limit).stream()
-			.map(offer -> ServiceView.of(offer, serviceOffers.usernameOf(offer), user.id().value()))
+		var ofertas = serviceOffers.pending(limit);
+		var handles = serviceOffers.usernamesOf(ofertas);
+		return ofertas.stream()
+			.map(offer -> ServiceView.of(offer, handles.get(offer.userId()), user.id().value()))
 			.toList();
 	}
 

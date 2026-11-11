@@ -49,20 +49,27 @@ public class ServicesService {
 	/**
 	 * Quem oferece os servicos (nome e foto), uma vez por prestador.
 	 *
-	 * <p>Uma consulta por prestador, nao uma por servico: o catalogo mostra dezenas de ofertas e
-	 * o mesmo prestador pode ter varias. A conta que nao existe mais devolve null (a oferta orfa
+	 * <p>Uma consulta para a pagina inteira, nao uma por prestador: o catalogo mostra dezenas de
+	 * ofertas e cada {@code findById} carregava o perfil completo com as tres colecoes EAGER —
+	 * quatro idas ao banco por prestador. A conta que nao existe mais devolve null (a oferta orfa
 	 * e removida pela migracao de limpeza).
 	 */
 	public Map<String, Seller> sellersOf(List<ServiceListing> listings) {
-		Map<String, Seller> sellers = new java.util.LinkedHashMap<>();
+		java.util.Set<String> ids = new java.util.LinkedHashSet<>();
 		for (ServiceListing listing : listings) {
-			if (sellers.containsKey(listing.sellerId())) {
-				continue;
-			}
-			profiles.findById(listing.sellerId()).ifPresentOrElse(
-				profile -> sellers.put(listing.sellerId(), new Seller(profile.name(), profile.avatar(),
-					com.socialcoisa.rede.profile.application.NameStyleView.from(profile))),
-				() -> sellers.put(listing.sellerId(), new Seller(null, null, null)));
+			ids.add(listing.sellerId());
+		}
+		Map<String, com.socialcoisa.rede.profile.application.port.out.SellerIdentity> encontrados =
+			profiles.sellersOf(ids).stream()
+				.collect(java.util.stream.Collectors.toMap(
+					com.socialcoisa.rede.profile.application.port.out.SellerIdentity::id, s -> s));
+		Map<String, Seller> sellers = new java.util.LinkedHashMap<>();
+		for (String id : ids) {
+			var seller = encontrados.get(id);
+			sellers.put(id, seller == null
+				? new Seller(null, null, null)
+				: new Seller(seller.name(), seller.avatar(),
+					com.socialcoisa.rede.profile.application.NameStyleView.from(seller)));
 		}
 		return sellers;
 	}

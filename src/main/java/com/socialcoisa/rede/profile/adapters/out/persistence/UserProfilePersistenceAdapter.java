@@ -54,6 +54,15 @@ class UserProfilePersistenceAdapter implements UserProfileRepository {
 	}
 
 	@Override
+	public List<com.socialcoisa.rede.profile.application.port.out.SellerIdentity> sellersOf(
+			Collection<String> ids) {
+		if (ids.isEmpty()) {
+			return List.of();
+		}
+		return repository.sellersOf(ids);
+	}
+
+	@Override
 	public List<com.socialcoisa.rede.profile.application.port.out.ReputationSeed> seedsOf(
 			Collection<String> ids) {
 		if (ids.isEmpty()) {
