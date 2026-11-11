@@ -109,6 +109,9 @@ public class ExternalJobImportService {
 	static final int TITLE_MAX = 500;
 	static final int TEXT_MAX = 255;
 
+	/** `description` é varchar(5000) desde a V112. */
+	static final int DESCRIPTION_MAX = 5000;
+
 	// Tamanhos das colunas estruturadas (V269). A fonte não é obrigada a respeitá-los: o GitHub
 	// manda o "regime de contratação" inteiro, com quebras de linha, e um feed alemão manda
 	// "Unbefristeter arbeitsvertrag, berufserfahren" (44 caracteres) num campo de 40.
@@ -139,6 +142,11 @@ public class ExternalJobImportService {
 				.canonicalize(external.url());
 			// E-mail de candidatura: sai da descricao que a propria fonte publica (nulo quando nao ha).
 			String applyEmail = ExternalJob.extractApplyEmail(external.description());
+			// A descrição é o que a fonte publica, em texto legível. Antes ficava nula na importação e a
+			// vaga aparecia sem descrição mesmo quando a fonte tinha uma.
+			String description = fit(
+				com.socialcoisa.rede.jobs.domain.JobDescriptionText.fromHtml(external.description()),
+				DESCRIPTION_MAX);
 			com.socialcoisa.rede.jobs.domain.ExternalJobDetails details = detailsOf(external);
 			var sameSource = repository.findBySource(platform, external.externalId());
 			if (sameSource.isPresent()) {
@@ -147,7 +155,9 @@ public class ExternalJobImportService {
 				repository.save(new ExternalJob(current.id(), current.platform(), current.externalId(),
 					title, company, location, salary,
 					current.currency(), external.url(), current.importedAt(), clock.instant(),
-					ExternalJob.FOUND, canonicalUrl, applyEmail, current.submittedBy(), current.description(),
+					ExternalJob.FOUND, canonicalUrl, applyEmail, current.submittedBy(),
+					// Cadastro da comunidade é do autor: a importação não reescreve o texto dele.
+					current.isCommunitySubmission() ? current.description() : description,
 					current.salaryMin(), current.salaryMax(), current.salaryPeriod(), current.salaryNotInformed(),
 					details));
 				saved++;
@@ -164,12 +174,16 @@ public class ExternalJobImportService {
 				if (original.isCommunitySubmission()) {
 					continue;
 				}
-				// A procedência continua a do registro original; só a verificação avança.
+				// A procedência continua a do registro original; só a verificação avança. A descrição
+				// só é preenchida quando o original não tem: as linhas importadas antes de a descrição
+				// ser guardada se curam na próxima passada, sem trocar texto que já existe.
+				String originalDescription = original.description() == null || original.description().isBlank()
+					? description : original.description();
 				repository.save(new ExternalJob(original.id(), original.platform(), original.externalId(),
 					original.title(), original.company(), original.location(), original.salary(),
 					original.currency(), original.url(), original.importedAt(), clock.instant(),
 					original.status(), original.canonicalUrl(), original.applyEmail(), original.submittedBy(),
-					original.description(), original.salaryMin(), original.salaryMax(), original.salaryPeriod(),
+					originalDescription, original.salaryMin(), original.salaryMax(), original.salaryPeriod(),
 					original.salaryNotInformed(), original.details().seenAt(clock.instant())));
 				saved++;
 				continue;
@@ -177,7 +191,7 @@ public class ExternalJobImportService {
 			repository.save(new ExternalJob("ext_" + platform + "_" + external.externalId(), platform,
 				external.externalId(), title, company, location,
 				salary, null, external.url(), clock.instant(), clock.instant(), ExternalJob.FOUND,
-				canonicalUrl, applyEmail, null, null, null, null, null, false, details));
+				canonicalUrl, applyEmail, null, description, null, null, null, false, details));
 			saved++;
 		}
 		return saved;

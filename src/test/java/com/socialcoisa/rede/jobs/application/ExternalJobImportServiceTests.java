@@ -45,7 +45,11 @@ class ExternalJobImportServiceTests {
 						// Remote jobs listing every country: longer than the location column.
 						new ExternalJob("ext-4", "Vaga Global", "Empresa Y", "Argentina, Brazil, Canada, ".repeat(20),
 							null, null, null, "https://exemplo.test/vaga/4", "https://exemplo.test/vaga/4", name(),
-							null));
+							null),
+						// A fonte publica a descrição em HTML: ela é guardada como texto legível.
+						new ExternalJob("ext-5", "Vaga Com Descrição", "Empresa Z", "Remoto",
+							"<p>Buscamos <b>dev</b> backend.</p><ul><li>Java</li><li>Spring</li></ul>",
+							null, null, "https://exemplo.test/vaga/5", "https://exemplo.test/vaga/5", name(), null));
 				}
 			};
 		}
@@ -59,7 +63,7 @@ class ExternalJobImportServiceTests {
 
 	@Test
 	void importsIntoItsOwnTableAndDoesNotDuplicateOnRerun() {
-		assertThat(importService.refresh()).isGreaterThanOrEqualTo(4);
+		assertThat(importService.refresh()).isGreaterThanOrEqualTo(5);
 
 		var imported = repository.findBySource("StubSource", "ext-1");
 		assertThat(imported).isPresent();
@@ -73,7 +77,23 @@ class ExternalJobImportServiceTests {
 		// O banco de teste e compartilhado: conta so as vagas DESTA fonte (o stub), nao o total.
 		long fromStub = repository.findRecent(200).stream()
 			.filter(j -> "StubSource".equals(j.platform())).count();
-		assertThat(fromStub).isEqualTo(4);
+		assertThat(fromStub).isEqualTo(5);
+	}
+
+	@Test
+	void storesTheDescriptionTheSourcePublished() {
+		importService.refresh();
+
+		var job = repository.findBySource("StubSource", "ext-5").orElseThrow();
+		assertThat(job.description()).isEqualTo("Buscamos dev backend.\nJava\nSpring");
+	}
+
+	@Test
+	void leavesTheDescriptionNullWhenTheSourcePublishedNone() {
+		importService.refresh();
+
+		var job = repository.findBySource("StubSource", "ext-1").orElseThrow();
+		assertThat(job.description()).isNull();
 	}
 
 	@Test

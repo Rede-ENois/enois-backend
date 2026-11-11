@@ -84,6 +84,31 @@ plataforma (o requisito "páginas de carreira de empresas") — nunca uma varred
 - **Scraping de SPA** — proibido pela política do módulo (`docs/JOB_IMPORT_SCRAPING.md`) e pelos
   termos das fontes (Cloudflare/anti-bot do Jooble, por exemplo).
 
+### Mapeamento de campos por fonte (conferido contra a resposta real, 2026-11-11)
+
+O `OpenJobApiSource` é genérico, mas cada fonte publica os campos com nome próprio. Um caminho
+errado não quebra a importação: o campo simplesmente fica nulo, e o filtro correspondente passa a
+devolver zero sem erro visível. Por isso o mapeamento é fixado em teste (`OpenJobApiSourceTests`)
+contra o JSON real de cada API.
+
+| Fonte | data | salário | moeda | período | vínculo | nível | localidade |
+|---|---|---|---|---|---|---|---|
+| Remotive | `publication_date` **sem fuso** | `salary` (texto) | — | — | `job_type` | — | `candidate_required_location` (região) |
+| Jobicy | `pubDate` (ISO com offset) | `salaryMin`/`salaryMax` | `salaryCurrency` | `salaryPeriod` | `jobType[0]` | `jobLevel` | `jobGeo` (região) |
+| RemoteOK | `date` (ISO com offset) | `salary_min`/`salary_max` | — | — | — | — | `location` (região) |
+| Himalayas | `pubDate` (epoch s) | `minSalary`/`maxSalary` | `currency` | `salaryPeriod` | `employmentType` | `seniority[0]` | `locationRestrictions[0]` (região) |
+
+Três regras que valem para todas:
+
+- **Data sem fuso é UTC.** Remotive publica `2026-11-08T21:47:58`; `Instant.parse` exige offset e
+  devolvia nulo, então a vaga entrava sem data de publicação (ordenada por último e fora do filtro
+  por data). O parser aceita ISO com e sem offset, e epoch em segundos.
+- **Agregador de vaga remota publica vaga remota.** As quatro fontes acima só listam vagas remotas;
+  quando o item não diz o modelo, vale o modelo que a própria fonte declara (`defaultWorkModel`).
+  Se o item disser outra coisa ("Hybrid - Lisbon"), o item vence. Nada é inferido do título.
+- **Região não é cidade.** `jobGeo`, `location` do RemoteOK e `locationRestrictions` são onde a
+  pessoa pode morar, não onde a vaga fica: não viram `city` (o filtro de cidade erraria).
+
 ## Viabilidade jurídica — regras que a implementação precisa cumprir
 
 1. **Atribuição visível por fonte** — cada vaga exibe o selo `Vaga externa · {fonte}` com link para
