@@ -502,6 +502,44 @@ class JobApplicationFlowTests {
 			.andExpect(jsonPath("$[0].feedback").value(reason));
 	}
 
+	@Test
+	void candidateSeesTheScheduledInterviewInTheirOwnList() throws Exception {
+		var employer = auth.authenticate("cand_view_employer");
+		var candidate = auth.authenticate("cand_view_candidate");
+		auth.activateProfessional(candidate);
+		String jobId = createJob(employer, "[]");
+		String applicationId = apply(candidate, jobId);
+
+		String url = "/jobs/" + jobId + "/applications/" + applicationId;
+
+		// Sem entrevista, o campo vem nulo na lista do candidato.
+		mockMvc.perform(get("/jobs/applications/mine").header("X-Session-Token", candidate.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[0].interview").value(org.hamcrest.Matchers.nullValue()));
+
+		// O empregador marca a entrevista; a hora viaja em UTC e o fuso junto.
+		mockMvc.perform(post(url + "/interview").header("X-Session-Token", employer.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("startsAt", "2027-03-10T13:00:00Z",
+					"endsAt", "2027-03-10T14:00:00Z", "timeZoneId", "America/Sao_Paulo",
+					"notes", "Traga perguntas sobre o projeto."))))
+			.andExpect(status().isCreated());
+
+		// O candidato ve a entrevista na PROPRIA lista, sem depender da conversa ou do e-mail.
+		mockMvc.perform(get("/jobs/applications/mine").header("X-Session-Token", candidate.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[0].interview.status").value("SCHEDULED"))
+			.andExpect(jsonPath("$[0].interview.startsAt").value("2027-03-10T13:00:00Z"))
+			.andExpect(jsonPath("$[0].interview.timeZoneId").value("America/Sao_Paulo"))
+			.andExpect(jsonPath("$[0].interview.notes").value("Traga perguntas sobre o projeto."));
+
+		// Quem não se candidatou a nada não recebe entrevista de ninguém na própria lista.
+		var outsider = auth.authenticate("cand_view_outsider");
+		mockMvc.perform(get("/jobs/applications/mine").header("X-Session-Token", outsider.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$").value(org.hamcrest.Matchers.hasSize(0)));
+	}
+
 	private String apply(TestAuthHelper.AuthSession candidate, String jobId) throws Exception {
 		MvcResult applied = mockMvc.perform(post("/jobs/" + jobId + "/applications")
 				.header("X-Session-Token", candidate.token())

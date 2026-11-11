@@ -19,4 +19,7 @@ public interface JobInterviewRepository {
 
 	/** As entrevistas valendo nas candidaturas de uma vaga (a lista do empregador). */
 	List<JobInterview> findScheduledByJob(String jobId);
+
+	/** As entrevistas valendo num lote de candidaturas (a lista do candidato), numa consulta só. */
+	List<JobInterview> findScheduledByApplications(java.util.Collection<String> applicationIds);
 }

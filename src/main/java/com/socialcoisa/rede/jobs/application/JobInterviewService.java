@@ -110,6 +110,16 @@ public class JobInterviewService {
 			.collect(java.util.stream.Collectors.toMap(JobInterview::applicationId, interview -> interview));
 	}
 
+	/**
+	 * As entrevistas valendo nas candidaturas DO USUÁRIO, por id de candidatura, numa consulta só —
+	 * é o que "minhas candidaturas" usa para o candidato ver o horário marcado na própria lista.
+	 */
+	public java.util.Map<String, JobInterview> scheduledForCandidate(java.util.List<JobApplication> applications) {
+		return interviews.findScheduledByApplications(applications.stream().map(JobApplication::id).toList())
+			.stream()
+			.collect(java.util.stream.Collectors.toMap(JobInterview::applicationId, interview -> interview));
+	}
+
 	/** As entrevistas da candidatura, visíveis ao empregador ou ao candidato — a ninguém mais. */
 	public List<JobInterview> ofApplication(String jobId, String applicationId, String requesterId) {
 		Job job = jobs.findById(jobId)

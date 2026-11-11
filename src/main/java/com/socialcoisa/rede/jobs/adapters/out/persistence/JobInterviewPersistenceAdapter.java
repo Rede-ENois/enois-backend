@@ -47,4 +47,17 @@ class JobInterviewPersistenceAdapter implements JobInterviewRepository {
 			.map(JobInterviewJpaEntity::toDomain)
 			.toList();
 	}
+
+	@Override
+	public List<JobInterview> findScheduledByApplications(java.util.Collection<String> applicationIds) {
+		if (applicationIds.isEmpty()) {
+			return List.of();
+		}
+		return springData
+			.findByApplicationIdInAndStatus(applicationIds.stream().map(Long::valueOf).toList(),
+				JobInterviewStatus.SCHEDULED)
+			.stream()
+			.map(JobInterviewJpaEntity::toDomain)
+			.toList();
+	}
 }

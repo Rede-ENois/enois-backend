@@ -14,4 +14,7 @@ interface SpringDataJobInterviewJpaRepository extends JpaRepository<JobInterview
 
 	List<JobInterviewJpaEntity> findByJobIdAndStatus(String jobId,
 			com.socialcoisa.rede.jobs.domain.JobInterviewStatus status);
+
+	List<JobInterviewJpaEntity> findByApplicationIdInAndStatus(java.util.Collection<Long> applicationIds,
+			com.socialcoisa.rede.jobs.domain.JobInterviewStatus status);
 }

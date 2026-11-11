@@ -395,20 +395,24 @@ class JobContractController {
 	List<MyApplicationView> myApplications(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(defaultValue = "50") int limit) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		return jobService.myApplications(user.id().value(), Math.min(limit, 100)).stream()
+		var applications = jobService.myApplications(user.id().value(), Math.min(limit, 100));
+		java.util.Map<String, JobInterview> interviews = interviewService.scheduledForCandidate(applications);
+		return applications.stream()
 			.map(application -> {
 				Job job = jobService.getById(application.jobId());
+				JobInterview interview = interviews.get(application.id());
 				return new MyApplicationView(application.id(), application.jobId(), job.title(), job.company(),
 					application.status().name(), application.feedback(),
 					application.reviewedAt() != null ? application.reviewedAt().toString() : null,
-					application.appliedAt().toString());
+					application.appliedAt().toString(),
+					interview != null ? InterviewView.of(interview) : null);
 			})
 			.toList();
 	}
 
-	/** Uma candidatura como o CANDIDATO a ve. */
+	/** Uma candidatura como o CANDIDATO a ve, com a entrevista marcada quando houver. */
 	record MyApplicationView(String id, String jobId, String jobTitle, String jobCompany, String status,
-			String feedback, String reviewedAt, String appliedAt) {
+			String feedback, String reviewedAt, String appliedAt, InterviewView interview) {
 	}
 
 	@PatchMapping("/{jobId}/applications/{applicationId}")
