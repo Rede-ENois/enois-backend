@@ -137,6 +137,35 @@ class CalendarIcsApiTests {
 			.andExpect(jsonPath("$.created").value(1));
 	}
 
+	@Test
+	void importingACancellationAnswersTheCancelledCount() throws Exception {
+		TestAuthHelper.AuthSession user = account();
+		String active = """
+			BEGIN:VCALENDAR\r
+			BEGIN:VEVENT\r
+			UID:api-desmarcado\r
+			DTSTART;TZID=America/Sao_Paulo:20270201T190000\r
+			DTEND;TZID=America/Sao_Paulo:20270201T200000\r
+			SUMMARY:Consulta\r
+			STATUS:CONFIRMED\r
+			END:VEVENT\r
+			END:VCALENDAR\r
+			""";
+		mockMvc.perform(withKey(multipart("/calendar/entries/import")
+			.header("X-Session-Token", user.token())
+			.file(icsFile(active))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.created").value(1));
+
+		mockMvc.perform(withKey(multipart("/calendar/entries/import")
+			.header("X-Session-Token", user.token())
+			.file(icsFile(active.replace("STATUS:CONFIRMED", "STATUS:CANCELLED")))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.created").value(0))
+			.andExpect(jsonPath("$.cancelled").value(1))
+			.andExpect(jsonPath("$.skipped").value(0));
+	}
+
 	private String exportOf(TestAuthHelper.AuthSession user) throws Exception {
 		return mockMvc.perform(get("/calendar/entries/export.ics")
 			.header("X-Session-Token", user.token())

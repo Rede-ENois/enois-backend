@@ -227,12 +227,25 @@ public class CalendarIcsService {
 		CalendarScope target = scope == null ? CalendarScope.SOCIAL : scope;
 		int created = 0;
 		int moved = 0;
+		int cancelled = 0;
 		int skipped = 0;
 		for (Vevent event : events) {
 			Instant start = instantOf(event.start(), event.startZone());
 			Instant end = instantOf(event.end(), event.endZone() != null ? event.endZone() : event.startZone());
 			if (event.uid() == null || event.uid().isBlank() || start == null) {
 				skipped++;
+				continue;
+			}
+			// Cancelamento é estado, não ausência (D10/D26): o `STATUS:CANCELLED` do arquivo cancela
+			// a entrada local com o mesmo UID e nunca cria uma nova. Sem entrada local não há o que
+			// cancelar, e criar um compromisso já cancelado só poluiria a agenda.
+			if (event.cancelled()) {
+				if (source.cancel(userId, SOURCE_TYPE, event.uid()).isPresent()) {
+					cancelled++;
+				}
+				else {
+					skipped++;
+				}
 				continue;
 			}
 			boolean dateOnly = isDateOnly(event.start());
@@ -256,7 +269,7 @@ public class CalendarIcsService {
 				moved++;
 			}
 		}
-		return new ImportResult(events.size(), created, moved, skipped);
+		return new ImportResult(events.size(), created, moved, cancelled, skipped);
 	}
 
 	private static ZoneId zoneOf(String raw) {
@@ -313,7 +326,7 @@ public class CalendarIcsService {
 				if (current != null) {
 					events.add(new Vevent(current.get("UID"), current.get("SUMMARY"), current.get("DESCRIPTION"),
 						current.get("DTSTART"), current.get("DTSTART.TZID"), current.get("DTEND"),
-						current.get("DTEND.TZID")));
+						current.get("DTEND.TZID"), "CANCELLED".equalsIgnoreCase(current.get("STATUS"))));
 				}
 				current = null;
 				continue;
@@ -325,7 +338,7 @@ public class CalendarIcsService {
 			String left = line.substring(0, at);
 			String value = unescape(line.substring(at + 1));
 			String name = left.split(";")[0].toUpperCase();
-			if (!List.of("UID", "SUMMARY", "DESCRIPTION", "DTSTART", "DTEND").contains(name)) {
+			if (!List.of("UID", "SUMMARY", "DESCRIPTION", "DTSTART", "DTEND", "STATUS").contains(name)) {
 				continue;
 			}
 			current.put(name, value);
@@ -360,15 +373,16 @@ public class CalendarIcsService {
 	}
 
 	private record Vevent(String uid, String summary, String description, String start, String startZone,
-			String end, String endZone) {
+			String end, String endZone, boolean cancelled) {
 	}
 
 	/**
 	 * `received` é quantos `VEVENT` o arquivo trazia; `created` quantos nasceram agora; `moved`
-	 * quantos já existiam e mudaram de horário; `skipped` quantos não tinham o mínimo para virar
-	 * compromisso.
+	 * quantos já existiam e mudaram de horário; `cancelled` quantos cancelaram uma entrada local
+	 * pelo mesmo UID; `skipped` quantos não tinham o mínimo para virar compromisso (ou eram
+	 * cancelamentos de algo que não existe aqui).
 	 */
-	public record ImportResult(int received, int created, int moved, int skipped) {
+	public record ImportResult(int received, int created, int moved, int cancelled, int skipped) {
 	}
 
 	private static void validateWindow(Instant from, Instant to) {
