@@ -55,6 +55,7 @@ public enum NotificationCategory {
 		Map.entry("NEW_GAME", GROUPS),
 		Map.entry("JOGO_DIARIO", GROUPS),
 		Map.entry("JOB_APPLICATION_STATUS", JOBS),
+		Map.entry("JOB_INTERVIEW", JOBS),
 		Map.entry("COMPANY_NEW_OPPORTUNITY", JOBS),
 		Map.entry("SUPORTE", SYSTEM),
 		Map.entry("MICROPROJETO", SYSTEM),
