@@ -1,5 +1,7 @@
 package com.socialcoisa.rede.shared.application;
 
+import java.util.List;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cache.Cache;
@@ -8,6 +10,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import com.socialcoisa.rede.shared.broadcast.InstanceBroadcaster;
+import com.socialcoisa.rede.shared.broadcast.InstanceSignals;
+
 /**
  * Invalidacao de cache amarrada ao fim da transacao.
  *
@@ -15,11 +20,12 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * passar a servir o resultado de uma transacao que nao commitou. Com transacao aberta a limpeza e
  * registrada para {@code afterCommit}; sem transacao (leitura, script) ela acontece na hora.</p>
  *
- * <p><b>Uma ressalva de arquitetura, de proposito:</b> o cache e por pod
- * ({@link CacheConfig}). Limpar aqui limpa o pod que atendeu a escrita; os outros servem a versao
- * anterior ate o TTL vencer — no pior caso, os 20 segundos de `rede.cache.dynamic-ttl`. Resolver
- * isso exigiria cache compartilhado (Redis), que nao se justifica para dado recalculavel e de
- * frescor curto. O TTL e, por isso, a garantia; a invalidacao e a aceleracao.</p>
+ * <p><b>O cache e por pod</b> ({@link CacheConfig}). Limpar aqui limpa o pod que atendeu a escrita;
+ * os outros serviam a versao anterior ate o TTL vencer — no pior caso, os 20 segundos de
+ * `rede.cache.dynamic-ttl`. Por isso cada limpeza local tambem vira um sinal
+ * ({@code CacheInvalidated}) que as outras instancias leem e aplicam no proprio cache: a limpeza
+ * chega em ~1 segundo em vez de esperar o TTL. O TTL continua sendo a garantia (sinal perdido nao
+ * deixa dado velho para sempre); o sinal e a aceleracao.</p>
  */
 @Component
 public class CacheInvalidator {
@@ -27,9 +33,11 @@ public class CacheInvalidator {
 	private static final Logger LOG = LoggerFactory.getLogger(CacheInvalidator.class);
 
 	private final CacheManager cacheManager;
+	private final InstanceBroadcaster broadcaster;
 
-	public CacheInvalidator(CacheManager cacheManager) {
+	public CacheInvalidator(CacheManager cacheManager, InstanceBroadcaster broadcaster) {
 		this.cacheManager = cacheManager;
+		this.broadcaster = broadcaster;
 	}
 
 	/** Limpa os caches nomeados quando (e se) a transacao atual commitar. */
@@ -63,6 +71,9 @@ public class CacheInvalidator {
 			catch (RuntimeException failure) {
 				LOG.warn("falha ao limpar o cache {} ({})", cacheName, failure.getClass().getSimpleName());
 			}
+			// Avisa as outras instancias depois de limpar aqui: o pod que atendeu a escrita nao
+			// espera o proximo ciclo de leitura para ver o proprio efeito.
+			broadcaster.publishNow(InstanceSignals.CACHE_INVALIDATED, List.of(cacheName), "{}");
 		}
 	}
 
@@ -80,6 +91,7 @@ public class CacheInvalidator {
 			catch (RuntimeException failure) {
 				LOG.warn("falha ao remover {} de {} ({})", key, cacheName, failure.getClass().getSimpleName());
 			}
+			broadcaster.publishNow(InstanceSignals.CACHE_INVALIDATED, List.of(cacheName + "/" + key), "{}");
 		};
 		if (TransactionSynchronizationManager.isSynchronizationActive()) {
 			TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {

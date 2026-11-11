@@ -92,7 +92,8 @@ class ProfilePublicCacheTests {
 
 		AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext();
 		ctx.register(TestCacheConfig.class);
-		ctx.registerBean(CacheInvalidator.class, () -> new CacheInvalidator(ctx.getBean(CacheManager.class)));
+		ctx.registerBean(CacheInvalidator.class, () -> new CacheInvalidator(ctx.getBean(CacheManager.class),
+			mock(com.socialcoisa.rede.shared.broadcast.InstanceBroadcaster.class)));
 		ctx.registerBean(ProfileService.class, () -> new ProfileService(repository, reputation, lazyMedia,
 			mock(com.socialcoisa.rede.age.application.port.out.ParentalLinkRepository.class), postCounts,
 			sanctionGate, mock(OfficialBadgeReader.class),

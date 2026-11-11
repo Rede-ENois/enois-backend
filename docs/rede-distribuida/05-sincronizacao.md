@@ -28,7 +28,7 @@ no escopo.
 | ordem quando importa | `aggregate_id` + `created_at` no outbox | **sim** |
 | réplica divergente | reconciliação por hash de versão | Fase 3 |
 | evento duplicado na borda | dedupe por `taskId` + `attempt` | Fase 2 |
-| leitura desatualizada | TTL + invalidação por evento | parcial (Caffeine local) |
+| leitura desatualizada | TTL + invalidação por evento | **sim** (Caffeine local + sinal entre instâncias, ADR-007) |
 
 ## 4. Fluxo de evento para nó
 
@@ -63,8 +63,10 @@ graça: claim entre instâncias, backoff, DLQ por `max-attempts`, métrica de ba
 
 ## 6. Cache distribuído
 
-Hoje o cache é Caffeine por processo (`CacheConfig`), e o próprio código avisa que invalidar num pod
-não invalida os outros. Para a rede:
+O cache é Caffeine por processo (`CacheConfig`). Invalidar num pod não invalidava os outros; desde a
+Fase 3, cada limpeza também vira sinal em `network_instance_signals` e as outras instâncias limpam o
+próprio cache em ~1 segundo ([ADR-007](../adr/ADR-007-broadcast-entre-instancias-por-tabela.md)) —
+o TTL continua sendo a garantia, o sinal é a aceleração. Para a rede:
 
 1. **Fase 3, passo 1:** cache de borda só para conteúdo **público e imutável por versão** (ex.: objeto
    de mídia já publicado). Imutável não precisa de invalidação.

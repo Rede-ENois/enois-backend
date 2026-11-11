@@ -44,8 +44,8 @@ continuam valendo; as rotas novas entram nas regras que já existem.
 ## 5. Impacto em deploy
 
 - Fase 1–2: nenhuma mudança no pipeline. Migrações Flyway normais.
-- Fase 3: precisa de decisão sobre broadcast entre instâncias (ADR-004). Se a escolha for Redis, é
-  **dependência de infra nova** e precisa de justificativa explícita.
+- Fase 3: broadcast entre instâncias resolvido por tabela de sinais com polling (ADR-007), sem
+  Redis e sem broker. Nenhuma dependência de infra nova: a mesma MariaDB, duas tabelas novas.
 - Fase 5: novo artefato (imagem do runtime) e novo pipeline de publicação assinada.
 
 ## 6. Impacto em observabilidade
@@ -72,8 +72,9 @@ carga sem comprar mais uma máquina no mesmo provedor, na mesma região.
 
 ## 9. O que precisa de decisão humana antes de codar
 
-1. **Broadcast entre instâncias** (Fase 3): Redis, ou tabela de eventos com polling? A escolha muda
-   a dependência de infra.
+1. ~~**Broadcast entre instâncias** (Fase 3): Redis, ou tabela de eventos com polling?~~ Decidido:
+   tabela de sinais com polling ([ADR-007](../adr/ADR-007-broadcast-entre-instancias-por-tabela.md)).
+   Redis seria dependência de infra nova sem ganho para um aviso que dura segundos.
 2. **Autoridade de certificado** (Fase 1): CA própria do Énóis, ou certificado público por nó?
 3. **Política de aprovação** (Fase 1): todo nó exige aprovação manual, ou existe política automática
    para `NODE_LOCAL`?

@@ -2,10 +2,13 @@ package com.socialcoisa.rede.messaging.adapters.in.web;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.Collection;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
@@ -14,17 +17,27 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.socialcoisa.rede.messaging.application.ConversationChanged;
 import com.socialcoisa.rede.notifications.application.NotificationCreatedEvent;
+import com.socialcoisa.rede.shared.broadcast.InstanceBroadcaster;
+import com.socialcoisa.rede.shared.broadcast.InstanceSignals;
+
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Open message streams, one per browser tab, keyed by user. The stream only carries "conversation X
  * changed"; the client refetches through the regular endpoints, so message content (E2E or not)
  * never travels here and every read keeps its usual authorization.
  *
- * <p>ponytail: in-memory registry, correct while production runs a single backend instance. A
- * second instance needs a broadcast between instances (Redis pub/sub or similar) before scaling out.
+ * <p>O registro é em memória, por processo. Com mais de uma instância do backend, a aba aberta na
+ * instância B não recebia o aviso de uma escrita atendida na instância A — o evento era entregue só
+ * no processo que o publicou. Por isso cada aviso local também vira um sinal em
+ * {@code network_instance_signals} (V276), e cada instância entrega no próprio registro o que as
+ * outras emitiram. O sinal carrega só ids, como o evento local: conteúdo continua vindo dos
+ * endpoints autorizados.</p>
  */
 @Component
 class MessageStreamHub {
+
+	private static final Logger LOG = LoggerFactory.getLogger(MessageStreamHub.class);
 
 	/** Long enough to be cheap, short enough that a dead tab is dropped; EventSource reconnects. */
 	static final Duration TIMEOUT = Duration.ofMinutes(30);
@@ -33,6 +46,13 @@ class MessageStreamHub {
 	private static final long RECONNECT_MS = 5_000;
 
 	private final Map<String, ConcurrentLinkedDeque<SseEmitter>> streams = new ConcurrentHashMap<>();
+	private final InstanceBroadcaster broadcaster;
+	private final ObjectMapper objectMapper;
+
+	MessageStreamHub(InstanceBroadcaster broadcaster, ObjectMapper objectMapper) {
+		this.broadcaster = broadcaster;
+		this.objectMapper = objectMapper;
+	}
 
 	SseEmitter open(String userId) {
 		SseEmitter emitter = new SseEmitter(TIMEOUT.toMillis());
@@ -58,15 +78,7 @@ class MessageStreamHub {
 	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
 	void onConversationChanged(ConversationChanged change) {
 		Map<String, String> data = Map.of("conversationId", change.conversationId());
-		for (String userId : change.userIds()) {
-			ConcurrentLinkedDeque<SseEmitter> userStreams = streams.get(userId);
-			if (userStreams == null) {
-				continue;
-			}
-			for (SseEmitter emitter : userStreams) {
-				send(userId, emitter, SseEmitter.event().name("conversation").data(data));
-			}
-		}
+		deliver(change.userIds(), "conversation", data);
 	}
 
 	/**
@@ -77,14 +89,8 @@ class MessageStreamHub {
 	 */
 	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
 	void onNotificationCreated(NotificationCreatedEvent event) {
-		ConcurrentLinkedDeque<SseEmitter> userStreams = streams.get(event.userId());
-		if (userStreams == null) {
-			return;
-		}
 		Map<String, String> data = Map.of("notificationId", event.notificationId(), "kind", event.kind());
-		for (SseEmitter emitter : userStreams) {
-			send(event.userId(), emitter, SseEmitter.event().name("notification").data(data));
-		}
+		deliver(java.util.List.of(event.userId()), "notification", data);
 	}
 
 	/**
@@ -105,15 +111,44 @@ class MessageStreamHub {
 		if (change.eventId() != null) {
 			data.put("eventId", change.eventId());
 		}
-		Map<String, String> immutable = Map.copyOf(data);
-		for (String userId : change.userIds()) {
-			ConcurrentLinkedDeque<SseEmitter> userStreams = streams.get(userId);
-			if (userStreams == null) {
-				continue;
-			}
-			for (SseEmitter emitter : userStreams) {
-				send(userId, emitter, SseEmitter.event().name("call").data(immutable));
-			}
+		deliver(change.userIds(), "call", Map.copyOf(data));
+	}
+
+	/**
+	 * Entrega local e, depois, sinal para as outras instâncias.
+	 *
+	 * <p>A ordem importa: o stream deste processo recebe primeiro, porque o efeito já commitou
+	 * aqui. O sinal é emitido na hora (não no commit) porque este método só é chamado de
+	 * {@code AFTER_COMMIT} — registrar outra sincronização aqui nunca rodaria.</p>
+	 */
+	private void deliver(Collection<String> userIds, String eventName, Map<String, String> data) {
+		for (String userId : userIds) {
+			deliverLocal(userId, eventName, data);
+		}
+		String payload = payload(eventName, data);
+		broadcaster.publishNow(InstanceSignals.USER_EVENT, userIds, payload);
+	}
+
+	/** Entrega no registro deste processo. Usado pelo caminho local e pelo sinal de outra instância. */
+	void deliverLocal(String userId, String eventName, Map<String, String> data) {
+		ConcurrentLinkedDeque<SseEmitter> userStreams = streams.get(userId);
+		if (userStreams == null) {
+			return;
+		}
+		for (SseEmitter emitter : userStreams) {
+			send(userId, emitter, SseEmitter.event().name(eventName).data(data));
+		}
+	}
+
+	private String payload(String eventName, Map<String, String> data) {
+		try {
+			return objectMapper.writeValueAsString(new StreamSignalPayload(eventName, data));
+		}
+		catch (RuntimeException failure) {
+			// Sem payload não há sinal; o stream local já foi entregue e o reconnect cobre o resto.
+			LOG.warn("Nao foi possivel serializar o sinal de stream {} ({})", eventName,
+				failure.getClass().getSimpleName());
+			return null;
 		}
 	}
 
