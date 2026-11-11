@@ -1,9 +1,13 @@
 package com.socialcoisa.rede.profile.adapters.out.persistence;
 
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.stereotype.Repository;
+
+import jakarta.persistence.EntityManager;
 
 import com.socialcoisa.rede.profile.application.port.out.ProfileExtensionRepository;
 import com.socialcoisa.rede.profile.domain.Certification;
@@ -16,13 +20,15 @@ class ProfileExtensionPersistenceAdapter implements ProfileExtensionRepository {
 	private final SpringDataProfileExtensionJpaRepository experienceRepo;
 	private final SpringDataEducationJpaRepository educationRepo;
 	private final SpringDataCertificationJpaRepository certificationRepo;
+	private final EntityManager em;
 
 	ProfileExtensionPersistenceAdapter(SpringDataProfileExtensionJpaRepository experienceRepo,
 			SpringDataEducationJpaRepository educationRepo,
-			SpringDataCertificationJpaRepository certificationRepo) {
+			SpringDataCertificationJpaRepository certificationRepo, EntityManager em) {
 		this.experienceRepo = experienceRepo;
 		this.educationRepo = educationRepo;
 		this.certificationRepo = certificationRepo;
+		this.em = em;
 	}
 
 	@Override
@@ -106,4 +112,38 @@ class ProfileExtensionPersistenceAdapter implements ProfileExtensionRepository {
 		return (int) certificationRepo.findByUserIdOrderByIssueDateDesc(userId).size();
 	}
 
+	@Override
+	public Map<String, Integer> experienceCounts(Collection<String> ids) {
+		return countsByOwner(ids, "user_experiences");
+	}
+
+	@Override
+	public Map<String, Integer> educationCounts(Collection<String> ids) {
+		return countsByOwner(ids, "user_education");
+	}
+
+	@Override
+	public Map<String, Integer> certificationCounts(Collection<String> ids) {
+		return countsByOwner(ids, "user_certifications");
+	}
+
+	/**
+	 * Uma consulta por conjunto: o COUNT é feito no banco, não carregando as entidades inteiras
+	 * (com descrição e datas) só para chamar `.size()` em memória.
+	 */
+	private Map<String, Integer> countsByOwner(Collection<String> ids, String table) {
+		if (ids.isEmpty()) {
+			return Map.of();
+		}
+		@SuppressWarnings("unchecked")
+		List<Object[]> rows = em.createNativeQuery(
+				"select user_id, count(*) from " + table + " where user_id in (:ids) group by user_id")
+			.setParameter("ids", ids)
+			.getResultList();
+		var counts = new java.util.HashMap<String, Integer>();
+		for (Object[] row : rows) {
+			counts.put((String) row[0], ((Number) row[1]).intValue());
+		}
+		return counts;
+	}
 }

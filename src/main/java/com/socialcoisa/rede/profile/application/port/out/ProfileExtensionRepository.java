@@ -1,6 +1,8 @@
 package com.socialcoisa.rede.profile.application.port.out;
 
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import com.socialcoisa.rede.profile.domain.Certification;
@@ -39,4 +41,12 @@ public interface ProfileExtensionRepository {
 
 	int countCertificationsByUserId(String userId);
 
+	/** Experiências de cada conta do conjunto, em uma consulta (GROUP BY no dono). */
+	Map<String, Integer> experienceCounts(Collection<String> ids);
+
+	/** Formações de cada conta do conjunto, em uma consulta. */
+	Map<String, Integer> educationCounts(Collection<String> ids);
+
+	/** Certificações de cada conta do conjunto, em uma consulta. */
+	Map<String, Integer> certificationCounts(Collection<String> ids);
 }

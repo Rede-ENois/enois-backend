@@ -3,6 +3,9 @@ package com.socialcoisa.rede.profile.application;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
 
 import org.springframework.stereotype.Service;
 
@@ -86,6 +89,82 @@ public class ReputationService {
 		int reciprocal = recommendationRepository.countReciprocal(userId);
 		long months = profile.map(user -> monthsSince(user.createdAt())).orElse(0L);
 
+		boolean identityVerified = profile.map(UserProfile::identityVerified).orElse(false);
+		return score(new Inputs(connections, followers, experiences, educations, certifications, uniqueEngagers,
+			communities, events, mentoring, confirmedFacts, recommendations, reciprocal, months,
+			jobAbandonPenalties.countByUser(userId), noteCredibility.countDeniedByUser(userId),
+			noteCredibility.countApprovedByUser(userId), identityVerified));
+	}
+
+	/**
+	 * A mesma nota de {@link #countsFor}, para um CONJUNTO de contas, com uma consulta por métrica
+	 * em vez de dezessete por conta. É o caminho do job do ranking, que recalcula todas as contas
+	 * periodicamente: o custo dele não pode crescer com o número de contas.
+	 *
+	 * <p>A fórmula é a MESMA — {@link #score} é a fonte única dos dois caminhos. O que muda é só a
+	 * origem dos números: aqui eles vêm agrupados por dono, uma consulta por métrica.</p>
+	 */
+	public Map<String, Integer> reputationsOf(Collection<String> userIds) {
+		if (userIds.isEmpty()) {
+			return Map.of();
+		}
+		var seeds = profileRepository.seedsOf(userIds);
+		var connections = profileRepository.connectionCounts(userIds);
+		var followers = profileRepository.followerCounts(userIds);
+		var experiences = extensionRepository.experienceCounts(userIds);
+		var educations = extensionRepository.educationCounts(userIds);
+		var certifications = extensionRepository.certificationCounts(userIds);
+		var engagers = profileRepository.uniqueEngagerCounts(userIds);
+		var communities = profileRepository.communitiesJoinedCounts(userIds);
+		var events = profileRepository.eventsAttendedTotalCounts(userIds);
+		var mentoring = profileRepository.mentoringSessionCounts(userIds);
+		var confirmedFacts = profileRepository.confirmedReportFactCounts(userIds);
+		var recommendations = recommendationRepository.receivedCounts(userIds);
+		var reciprocal = recommendationRepository.reciprocalCounts(userIds);
+		var jobAbandons = jobAbandonPenalties.countsByUsers(userIds);
+		var deniedNotes = noteCredibility.deniedCountsByUsers(userIds);
+		var approvedNotes = noteCredibility.approvedCountsByUsers(userIds);
+
+		var reputations = new HashMap<String, Integer>(seeds.size());
+		for (var seed : seeds) {
+			String id = seed.id();
+			reputations.put(id, score(new Inputs(
+				connections.getOrDefault(id, 0), followers.getOrDefault(id, 0),
+				experiences.getOrDefault(id, 0), educations.getOrDefault(id, 0),
+				certifications.getOrDefault(id, 0), engagers.getOrDefault(id, 0),
+				communities.getOrDefault(id, 0), events.getOrDefault(id, 0),
+				mentoring.getOrDefault(id, 0), confirmedFacts.getOrDefault(id, 0),
+				recommendations.getOrDefault(id, 0), reciprocal.getOrDefault(id, 0),
+				monthsSince(seed.createdAt()), jobAbandons.getOrDefault(id, 0),
+				deniedNotes.getOrDefault(id, 0), approvedNotes.getOrDefault(id, 0),
+				seed.identityVerified())).reputation());
+		}
+		return reputations;
+	}
+
+	/** Os números de uma conta, já coletados — o que a fórmula precisa, e nada mais. */
+	private record Inputs(int connections, int followers, int experiences, int educations, int certifications,
+			int uniqueEngagers, int communities, int events, int mentoring, int confirmedFacts,
+			int recommendations, int reciprocal, long months, int jobAbandons, int deniedNotes,
+			int approvedNotes, boolean identityVerified) {
+	}
+
+	/** A fórmula da credibilidade — fonte única do caminho individual e do caminho em lote. */
+	private Counts score(Inputs in) {
+		int connections = in.connections();
+		int followers = in.followers();
+		int experiences = in.experiences();
+		int educations = in.educations();
+		int certifications = in.certifications();
+		int uniqueEngagers = in.uniqueEngagers();
+		int communities = in.communities();
+		int events = in.events();
+		int mentoring = in.mentoring();
+		int confirmedFacts = in.confirmedFacts();
+		int recommendations = in.recommendations();
+		int reciprocal = in.reciprocal();
+		long months = in.months();
+
 		// T — trajetória profissional.
 		double trajectory = Math.min(90, 15 * Math.sqrt(experiences))
 			+ Math.min(60, 12 * Math.sqrt(educations))
@@ -110,23 +189,20 @@ public class ReputationService {
 		// teto próprio de 150, porque excluir vaga é infração leve comparada a fraude confirmada)
 		// e uma por nota de rodapé NEGADA pela moderação (informação falsa; teto próprio de 150).
 		// Nota aprovada — ou em análise — não muda a credibilidade: corrigir o post é o objetivo.
-		int jobAbandons = jobAbandonPenalties.countByUser(userId);
-		int abandonPenalty = Math.min(150, 25 * jobAbandons * (jobAbandons + 1) / 2);
+		int abandonPenalty = Math.min(150, 25 * in.jobAbandons() * (in.jobAbandons() + 1) / 2);
 		// Nota de rodapé: negada é informação falsa (25/75/150, teto 150); aprovada é fact-check da
 		// comunidade e soma +5 por nota, contando no máximo 5 notas (teto +25).
-		int deniedNotes = noteCredibility.countDeniedByUser(userId);
-		int notePenalty = Math.min(150, 25 * deniedNotes * (deniedNotes + 1) / 2);
-		int approvedNotes = noteCredibility.countApprovedByUser(userId);
-		int noteBonus = 5 * Math.min(approvedNotes, 5);
+		int notePenalty = Math.min(150, 25 * in.deniedNotes() * (in.deniedNotes() + 1) / 2);
+		int noteBonus = 5 * Math.min(in.approvedNotes(), 5);
 		int penalty = Math.min(MAX_PENALTY,
-			60 * confirmedFacts * (confirmedFacts + 1) / 2 + abandonPenalty + notePenalty);
+			60 * in.confirmedFacts() * (in.confirmedFacts() + 1) / 2 + abandonPenalty + notePenalty);
 
 		int raw = (int) Math.round(trajectory + relations + contribution + consistency) + noteBonus - penalty;
 		int capped = Math.max(0, Math.min(MAX_REPUTATION, raw));
 
-		boolean identityVerified = profile.map(UserProfile::identityVerified).orElse(false);
 		ReputationGarden garden = ReputationGarden.of(trajectory, relations, contribution, consistency, penalty);
-		return new Counts(connections, followers, identityVerified ? capped : 0, identityVerified, garden);
+		return new Counts(in.connections(), in.followers(), in.identityVerified() ? capped : 0,
+			in.identityVerified(), garden);
 	}
 
 	public int reputationOf(String userId) {

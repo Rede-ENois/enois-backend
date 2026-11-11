@@ -14,4 +14,10 @@ public interface NoteCredibilityReader {
 	int countDeniedByUser(String userId);
 
 	int countApprovedByUser(String userId);
+
+	/** Notas negadas de cada conta do conjunto, em uma consulta (GROUP BY no autor). */
+	java.util.Map<String, Integer> deniedCountsByUsers(java.util.Collection<String> userIds);
+
+	/** Notas aprovadas de cada conta do conjunto, em uma consulta. */
+	java.util.Map<String, Integer> approvedCountsByUsers(java.util.Collection<String> userIds);
 }

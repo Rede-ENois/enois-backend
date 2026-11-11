@@ -2,6 +2,7 @@ package com.socialcoisa.rede.profile.adapters.out.persistence;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.data.domain.PageRequest;
@@ -50,6 +51,139 @@ class UserProfilePersistenceAdapter implements UserProfileRepository {
 	public List<com.socialcoisa.rede.profile.application.port.out.AccountIdentity> identitiesOf(
 			Collection<String> ids) {
 		return repository.identitiesOf(ids);
+	}
+
+	@Override
+	public List<com.socialcoisa.rede.profile.application.port.out.ReputationSeed> seedsOf(
+			Collection<String> ids) {
+		if (ids.isEmpty()) {
+			return List.of();
+		}
+		@SuppressWarnings("unchecked")
+		List<Object[]> rows = em.createNativeQuery("""
+				select id, created_at,
+					case when email_verified_at is not null or totp_enabled_at is not null
+						or email_otp_enabled_at is not null or federated_second_factor_at is not null
+					then 1 else 0 end
+				from users where id in (:ids)""")
+			.setParameter("ids", ids)
+			.getResultList();
+		return rows.stream()
+			.map(row -> new com.socialcoisa.rede.profile.application.port.out.ReputationSeed(
+				(String) row[0], instantOf(row[1]), ((Number) row[2]).intValue() == 1))
+			.toList();
+	}
+
+	/** O driver devolve `timestamp` como Timestamp (MariaDB) ou LocalDateTime (H2); aceita os dois. */
+	private static java.time.Instant instantOf(Object value) {
+		if (value == null) {
+			return null;
+		}
+		if (value instanceof java.time.Instant instant) {
+			return instant;
+		}
+		if (value instanceof java.sql.Timestamp timestamp) {
+			return timestamp.toInstant();
+		}
+		if (value instanceof java.time.LocalDateTime local) {
+			return local.toInstant(java.time.ZoneOffset.UTC);
+		}
+		throw new IllegalStateException("Data inesperada na projeção de credibilidade: " + value.getClass());
+	}
+
+	/** Uma consulta por conjunto: o SQL agrupa pelo dono e devolve (dono, contagem). */
+	private Map<String, Integer> groupedCounts(Collection<String> ids, String sql) {
+		if (ids.isEmpty()) {
+			return Map.of();
+		}
+		@SuppressWarnings("unchecked")
+		List<Object[]> rows = em.createNativeQuery(sql).setParameter("ids", ids).getResultList();
+		var counts = new java.util.HashMap<String, Integer>();
+		for (Object[] row : rows) {
+			counts.put((String) row[0], ((Number) row[1]).intValue());
+		}
+		return counts;
+	}
+
+	@Override
+	public Map<String, Integer> connectionCounts(Collection<String> ids) {
+		// A conexão aceita é UMA linha com dois lados: o dono pode estar em qualquer um deles, e
+		// quando os dois estão na página a linha conta para ambos — por isso o UNION ALL.
+		return groupedCounts(ids, """
+			select owner_id, count(*) from (
+				select requester_user_id as owner_id from user_connections
+					where status = 'ACCEPTED' and requester_user_id in (:ids)
+				union all
+				select receiver_user_id from user_connections
+					where status = 'ACCEPTED' and receiver_user_id in (:ids)
+			) sides group by owner_id""");
+	}
+
+	@Override
+	public Map<String, Integer> followerCounts(Collection<String> ids) {
+		return groupedCounts(ids, """
+			select receiver_user_id, count(*) from user_connections
+			where status = 'ACCEPTED' and receiver_user_id in (:ids)
+			group by receiver_user_id""");
+	}
+
+	@Override
+	public Map<String, Integer> uniqueEngagerCounts(Collection<String> ids) {
+		// Pessoas DISTINTAS que reagiram ou comentaram posts do autor — o autor não conta.
+		return groupedCounts(ids, """
+			select author_id, count(distinct actor) from (
+				select p.author_id as author_id, r.user_id as actor from reactions r
+					join posts p on p.id = r.post_id
+					where p.status not in ('DELETED', 'QUARANTINED') and p.author_id in (:ids)
+				union
+				select p2.author_id, c.author_id from comments c
+					join posts p2 on p2.id = c.post_id
+					where p2.status not in ('DELETED', 'QUARANTINED') and c.status <> 'DELETED'
+						and p2.author_id in (:ids)
+			) engagers where engagers.actor <> engagers.author_id
+			group by author_id""");
+	}
+
+	@Override
+	public Map<String, Integer> communitiesJoinedCounts(Collection<String> ids) {
+		return groupedCounts(ids, """
+			select user_id, count(*) from community_members
+			where user_id in (:ids) group by user_id""");
+	}
+
+	@Override
+	public Map<String, Integer> eventsAttendedTotalCounts(Collection<String> ids) {
+		// Presenças vivas + agregado guardado antes da purga, em uma consulta só.
+		return groupedCounts(ids, """
+			select u.id, count(a.id) + coalesce(max(t.total), 0)
+			from users u
+			left join event_attendees a on a.user_id = u.id
+			left join user_event_attendance_totals t on t.user_id = u.id
+			where u.id in (:ids) group by u.id""");
+	}
+
+	@Override
+	public Map<String, Integer> mentoringSessionCounts(Collection<String> ids) {
+		return groupedCounts(ids, """
+			select mentee_id, count(*) from mentor_sessions
+			where status = 'COMPLETED' and mentee_id in (:ids) group by mentee_id""");
+	}
+
+	@Override
+	public Map<String, Integer> confirmedReportFactCounts(Collection<String> ids) {
+		// Fatos CONFIRMADOS e deduplicados por conteúdo — a mesma regra do caminho individual.
+		return groupedCounts(ids, """
+			select owners.owner_id, count(distinct r.target_id)
+			from reports r
+			join (
+				select p.id as target_id, p.author_id as owner_id from posts p where p.author_id in (:ids)
+				union all
+				select c.id, c.author_id from comments c where c.author_id in (:ids)
+				union all
+				select j.id, j.posted_by from jobs j where j.posted_by in (:ids)
+			) owners on owners.target_id = r.target_id
+			where r.status in ('APPROVED', 'AUTO_PENALIZED')
+			group by owners.owner_id""");
 	}
 
 	@Override
