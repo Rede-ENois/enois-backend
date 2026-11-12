@@ -183,10 +183,12 @@ public class CalendarReminderService {
 
 	private void notify(CalendarReminder reminder, CalendarEntry entry) {
 		String when = textOfMinutes(reminder.minutesBefore());
+		// O aviso abre o compromisso que o originou: a pessoa que tocou no lembrete quer ver quem
+		// convidou, onde é e o que responder. Levar só à agenda deixava a tarefa pela metade.
 		// O lembrete é do sistema: ninguém "fez" isso para a pessoa. `actor_id` é obrigatório na
 		// tabela de notificações (a coluna não aceita nulo), então o autor é o próprio relógio.
 		notifications.create(reminder.userId(), "CALENDAR_REMINDER", SYSTEM_ACTOR, "Compromisso chegando",
-			"«" + entry.title() + "» começa " + when + ".", "/agenda?period=day", "Ver agenda");
+			"«" + entry.title() + "» começa " + when + ".", "/agenda/" + entry.id(), "Ver compromisso");
 	}
 
 	private static String textOfMinutes(int minutes) {

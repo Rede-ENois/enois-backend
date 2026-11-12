@@ -26,6 +26,8 @@ import com.socialcoisa.rede.calendar.domain.CalendarParticipant;
 import com.socialcoisa.rede.calendar.domain.CalendarParticipantState;
 import com.socialcoisa.rede.calendar.domain.CalendarReminder;
 import com.socialcoisa.rede.calendar.domain.CalendarScope;
+import com.socialcoisa.rede.notifications.application.port.out.NotificationRepository;
+import com.socialcoisa.rede.notifications.domain.Notification;
 
 /**
  * Lembretes de compromisso contra o banco de verdade.
@@ -45,6 +47,7 @@ class CalendarReminderServiceTests {
 	@Autowired CalendarParticipantRepository participants;
 	@Autowired CalendarCommandService commands;
 	@Autowired CalendarSourceService sources;
+	@Autowired NotificationRepository notifications;
 
 	@Test
 	void settingTheSameReminderTwiceKeepsOneRow() {
@@ -87,6 +90,25 @@ class CalendarReminderServiceTests {
 		List<CalendarReminder> stored = reminderRepository.findByEntry(entryId);
 		assertThat(stored).hasSize(1);
 		assertThat(stored.get(0).sentAt()).isNotNull();
+	}
+
+	@Test
+	void theReminderNotificationOpensTheEntryItIsAbout() {
+		String owner = owner();
+		String entryId = entry(owner, "Revisão com a equipe", Instant.now().plus(Duration.ofMinutes(5)));
+		reminders.setForReader(owner, entryId, 5);
+
+		reminders.deliverDue();
+
+		Notification sent = notifications.findByUserId(owner, Instant.now().plus(Duration.ofMinutes(1)),
+			null, 10)
+			.stream()
+			.filter(notification -> "CALENDAR_REMINDER".equals(notification.kind()))
+			.findFirst()
+			.orElseThrow();
+		// "Ver agenda" levava à agenda sem o compromisso; o aviso tem de abrir o que ele avisa.
+		assertThat(sent.href()).isEqualTo("/agenda/" + entryId);
+		assertThat(sent.ctaLabel()).isEqualTo("Ver compromisso");
 	}
 
 	@Test
