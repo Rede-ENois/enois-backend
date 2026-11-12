@@ -130,6 +130,16 @@ Regras:
 
 Status terminal: `DONE` ou `FAILED` (com `error.code`, `error.message`, `retryable`).
 Resultado de tarefa cujo nó foi revogado no meio é **descartado** e registrado em auditoria.
+Resultado de tarefa **drenada** (voltou para a fila porque o nó foi suspenso, posto em quarentena ou
+revogado) cai no mesmo descarte: status `PENDING` ou `attempt` diferente.
+
+### Drenagem (interno do Control Plane)
+
+Não é contrato de nó — o nó que perdeu o direito de operar não é consultado. A varredura do
+scheduler devolve à fila o que estiver designado a nó com `status <> 'ACTIVE'` e claim ainda
+vigente, audita cada devolução como `NETWORK_TASK_DRAINED` e designa de novo no mesmo ciclo. O
+painel (`GET /admin/network/tasks/overview`) expõe `awaitingDrain`: quantas do `dispatched` estão
+presas a nó fora de operação entre a suspensão e a varredura seguinte.
 
 ## 4. Catálogo de erros estável
 

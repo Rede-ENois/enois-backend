@@ -79,7 +79,19 @@ modo.
 
 O que o modo muda de fato é o **volume** despachado (`HIGH_LOAD` no teto da varredura, `RECOVERY`
 pela metade), não a ordem. A drenagem completa — devolver trabalho ao participante sem derrubar o
-que está em andamento — é o item "recuperação gradual" da fase 4, ainda aberto.
+que está em andamento — está entregue na forma abaixo.
+
+### Drenagem de nó fora de operação
+
+Quando um nó é suspenso, entra em quarentena ou é revogado, o que estava designado a ele volta para
+a fila **na hora**: a varredura compara as tarefas `DISPATCHED` com o status do nó e devolve as que
+estão presas a quem já não autentica. Antes disso, a única porta de saída era o claim vencer — dois
+minutos no padrão —, e o nó suspenso não ia responder nesse intervalo.
+
+Drenar não é executar diferente: a tarefa volta como `PENDING`, e o resultado do nó drenado, se
+chegar, encontra status `PENDING` ou `attempt` diferente e cai no descarte que já existe. Por isso
+a drenagem não precisa de regra nova de idempotência — ela reaproveita a que protege a
+redistribuição desde a fase 2.
 
 O local continua sujeito a todos os filtros: vivo, fora da janela de remoção, com vaga, não
 saturado. Ele não ganha tipo de tarefa nem classe de dado que os outros não tenham — a permissão

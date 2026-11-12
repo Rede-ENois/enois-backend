@@ -54,7 +54,7 @@ class AdminNetworkTaskController {
 	}
 
 	record OverviewView(String mode, long pending, long dispatched, long done, long failed, long dead,
-			long cancelled) {
+			long cancelled, long awaitingDrain) {
 	}
 
 	@GetMapping
@@ -64,14 +64,20 @@ class AdminNetworkTaskController {
 		return tasks.list(limit).stream().map(TaskView::of).toList();
 	}
 
-	/** Contadores por estado e o modo vigente: é o que a tela mostra no topo. */
+	/**
+	 * Contadores por estado e o modo vigente: é o que a tela mostra no topo.
+	 *
+	 * <p>{@code awaitingDrain} é quanto do {@code dispatched} está preso a nó fora de operação. É
+	 * aditivo: a tela antiga ignora o campo, e o número existe porque a drenagem só roda na
+	 * varredura — entre a suspensão e o ciclo seguinte o admin precisa ver que há trabalho parado.</p>
+	 */
 	@GetMapping("/overview")
 	OverviewView overview(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		admin(sessionToken);
 		return new OverviewView(modes.current().name(), tasks.countByStatus(TaskStatus.PENDING),
 			tasks.countByStatus(TaskStatus.DISPATCHED), tasks.countByStatus(TaskStatus.DONE),
 			tasks.countByStatus(TaskStatus.FAILED), tasks.countByStatus(TaskStatus.DEAD),
-			tasks.countByStatus(TaskStatus.CANCELLED));
+			tasks.countByStatus(TaskStatus.CANCELLED), tasks.countOnNonOperatingNodes());
 	}
 
 	@GetMapping("/{id}")

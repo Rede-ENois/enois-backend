@@ -38,6 +38,18 @@ public interface NetworkTaskRepository {
 	List<NetworkTask> findAssignedTo(String nodeId, Instant now, int limit);
 
 	/**
+	 * Tarefas designadas a nós que perderam o direito de operar (suspenso, em quarentena, revogado),
+	 * com claim ainda vigente.
+	 *
+	 * <p>É o insumo da drenagem: ler só o claim vencido deixaria a tarefa esperando um nó que já não
+	 * autentica, e ela só sairia quando o prazo vencesse — dois minutos por padrão.</p>
+	 */
+	List<NetworkTask> findOnNonOperatingNodes(Instant now, int limit);
+
+	/** Quantas tarefas estão nessa situação — o número do painel, sem paginar. */
+	long countOnNonOperatingNodes(Instant now);
+
+	/**
 	 * Designa a tarefa a um nó, subindo a tentativa. Condicional: só muda se a tarefa ainda estiver
 	 * PENDING e a tentativa esperada for a atual.
 	 *

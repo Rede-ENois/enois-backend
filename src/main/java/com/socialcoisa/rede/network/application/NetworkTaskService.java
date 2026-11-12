@@ -201,6 +201,46 @@ public class NetworkTaskService {
 	}
 
 	/**
+	 * Drenagem: devolve à fila, na hora, o que estava designado a nós que perderam o direito de
+	 * operar (suspenso, em quarentena, revogado).
+	 *
+	 * <p>Sem esta rodada a tarefa ficava retida até o claim vencer — dois minutos no padrão — por um
+	 * nó que já não autentica: {@code reclaimAbandoned} só olha claim <b>vencido</b>, e o nó suspenso
+	 * não vai bater heartbeat nem devolver resultado nesse intervalo. Suspender um nó para manutenção
+	 * passava a custar uma pausa de claim TTL na fila inteira daquele nó.</p>
+	 *
+	 * <p>A devolução é segura porque o {@code attempt} sobe: o resultado do nó drenado, se um dia
+	 * chegar, é de tentativa antiga e cai na regra de descarte que já existe. Drenar não é executar
+	 * diferente — é só parar de esperar por quem não pode responder.</p>
+	 */
+	@Transactional
+	public int drainSuspendedNodes() {
+		Instant now = clock.instant();
+		int drained = 0;
+		for (NetworkTask task : tasks.findOnNonOperatingNodes(now, SCAN_LIMIT)) {
+			if (task.expired(now)) {
+				tasks.kill(task.id(), task.attempt(), "TASK_EXPIRED: prazo vencido no no drenado", now);
+				audit.record("system", "NETWORK_TASK_EXPIRED", task.id(), "{\"attempt\":" + task.attempt() + "}");
+				continue;
+			}
+			// Volta para a fila para já: o nó de origem está fora, então não há motivo para esperar o
+			// backoff de falha — quem falhou foi a capacidade, não a tarefa.
+			if (tasks.requeue(task.id(), task.attempt(), "TASK_DRAINED: no fora de operacao", now, now) == 1) {
+				drained++;
+				audit.record("system", "NETWORK_TASK_DRAINED", task.id(),
+					"{\"attempt\":" + task.attempt() + ",\"node\":\"" + escape(task.assignedNodeId()) + "\"}");
+			}
+		}
+		return drained;
+	}
+
+	/** Quantas tarefas estão presas a nó fora de operação — o painel mostra sem paginar. */
+	@Transactional(readOnly = true)
+	public long countOnNonOperatingNodes() {
+		return tasks.countOnNonOperatingNodes(clock.instant());
+	}
+
+	/**
 	 * O que este nó deve executar agora. Só devolve tarefa designada a ele e com claim vigente; o nó
 	 * não escolhe tarefa, ele recebe a que o Control Plane designou.
 	 */
@@ -372,6 +412,14 @@ public class NetworkTaskService {
 	/** Nó degradado: lento medido, ou errando recentemente sem ter chegado ao limite da janela. */
 	private static boolean degraded(NetworkNode node) {
 		return node.slow() || node.failing();
+	}
+
+	/** Escapa o texto para caber em provedor JSON de auditoria, mesmo sendo id gerado por nós. */
+	private static String escape(String text) {
+		if (text == null) {
+			return "";
+		}
+		return text.replace("\\", "\\\\").replace("\"", "\\\"");
 	}
 
 	/**

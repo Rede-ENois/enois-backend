@@ -33,6 +33,27 @@ interface SpringDataNetworkTaskJpaRepository extends JpaRepository<NetworkTaskJp
 	List<NetworkTaskJpaEntity> findAssignedTo(@Param("nodeId") String nodeId, @Param("now") Instant now,
 			PageRequest page);
 
+	/**
+	 * Tarefas de nós que perderam o direito de operar (suspenso, em quarentena, revogado), com claim
+	 * ainda vigente.
+	 *
+	 * <p>O join com {@code network_nodes} é o que define o que drenar: o critério é o status do nó,
+	 * não o tempo. {@code findAbandoned} só vê claim <b>vencido</b>, e o nó suspenso não vai responder
+	 * heartbeat até lá — a tarefa esperaria o prazo inteiro por um resultado que não vem.</p>
+	 *
+	 * <p>{@code status <> 'ACTIVE'} também pega {@code PENDING_APPROVAL}, o que é correto: nó não
+	 * aprovado não executa, e uma tarefa designada a ele (possível se ele foi suspenso depois da
+	 * designação e voltou a pendente) também precisa sair.</p>
+	 */
+	@Query("select t from NetworkTaskJpaEntity t join NetworkNodeJpaEntity n on n.id = t.assignedNodeId "
+			+ "where t.status = 'DISPATCHED' and t.claimExpiresAt > :now and n.status <> 'ACTIVE' "
+			+ "order by t.createdAt asc")
+	List<NetworkTaskJpaEntity> findOnNonOperatingNodes(@Param("now") Instant now, PageRequest page);
+
+	@Query("select count(*) from NetworkTaskJpaEntity t join NetworkNodeJpaEntity n on n.id = t.assignedNodeId "
+			+ "where t.status = 'DISPATCHED' and t.claimExpiresAt > :now and n.status <> 'ACTIVE'")
+	long countOnNonOperatingNodes(@Param("now") Instant now);
+
 	@Query("select t from NetworkTaskJpaEntity t order by t.createdAt desc")
 	List<NetworkTaskJpaEntity> listRecent(PageRequest page);
 

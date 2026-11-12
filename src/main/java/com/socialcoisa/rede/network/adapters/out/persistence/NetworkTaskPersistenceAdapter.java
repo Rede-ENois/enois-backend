@@ -64,6 +64,19 @@ class NetworkTaskPersistenceAdapter implements NetworkTaskRepository {
 	}
 
 	@Override
+	public List<NetworkTask> findOnNonOperatingNodes(Instant now, int limit) {
+		return repository.findOnNonOperatingNodes(now, PageRequest.ofSize(limit))
+			.stream()
+			.map(NetworkTaskJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public long countOnNonOperatingNodes(Instant now) {
+		return repository.countOnNonOperatingNodes(now);
+	}
+
+	@Override
 	public int claim(String id, String nodeId, int expectedAttempt, Instant claimExpiresAt, Instant now) {
 		return repository.claim(id, nodeId, expectedAttempt, claimExpiresAt, now);
 	}
