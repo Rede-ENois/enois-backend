@@ -367,9 +367,31 @@ public class CalendarIcsService {
 		return lines;
 	}
 
+	/**
+	 * Desfaz o escape do RFC 5545 numa passada só. A versão em cadeia de `replace` errava o caso
+	 * mais comum de texto com barra invertida: em `\\n` (barra escapada seguida de "n") o primeiro
+	 * `replace` casava a segunda barra com o "n" e produzia barra + quebra de linha, em vez do
+	 * literal `\n` que o arquivo dizia. Uma passada respeita o par barra+caractere de cada vez.
+	 */
 	private static String unescape(String text) {
-		return text.replace("\\n", "\n").replace("\\N", "\n").replace("\\,", ",").replace("\\;", ";")
-			.replace("\\\\", "\\");
+		if (text.indexOf('\\') < 0) {
+			return text;
+		}
+		StringBuilder out = new StringBuilder(text.length());
+		for (int index = 0; index < text.length(); index++) {
+			char current = text.charAt(index);
+			if (current != '\\' || index + 1 >= text.length()) {
+				out.append(current);
+				continue;
+			}
+			char next = text.charAt(++index);
+			switch (next) {
+				case 'n', 'N' -> out.append('\n');
+				case ',', ';', '\\' -> out.append(next);
+				default -> out.append('\\').append(next);
+			}
+		}
+		return out.toString();
 	}
 
 	private record Vevent(String uid, String summary, String description, String start, String startZone,
