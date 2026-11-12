@@ -331,6 +331,51 @@ class CalendarIcsServiceTests {
 	}
 
 	@Test
+	void aBackslashInTheTextSurvivesTheRoundTrip() {
+		String source = owner();
+		// Barra invertida não tem escape próprio no RFC 5545 além de `\\`: este texto exportado
+		// vira `C:\\pasta\\novo`, e o import tem de devolver exatamente o que entrou.
+		String title = "Revisar C:\\pasta\\novo";
+		save(source, "cal_" + UUID.randomUUID(), STARTS_AT, STARTS_AT.plus(Duration.ofHours(1)), title);
+		String ics = service.export(source, STARTS_AT.minus(Duration.ofDays(1)),
+			STARTS_AT.plus(Duration.ofDays(1)), null);
+		assertThat(ics).contains("SUMMARY:Revisar C:\\\\pasta\\\\novo");
+
+		String target = owner();
+		service.importCalendar(target, ics, null);
+
+		List<CalendarEntry> imported = entries.findInWindow(target, null, STARTS_AT.minus(Duration.ofDays(1)),
+			STARTS_AT.plus(Duration.ofDays(1)));
+		assertThat(imported).hasSize(1);
+		assertThat(imported.get(0).title()).isEqualTo(title);
+	}
+
+	@Test
+	void escapedBackslashFollowedByLetterIsNotTurnedIntoALineBreak() {
+		String owner = owner();
+		String ics = """
+			BEGIN:VCALENDAR\r
+			BEGIN:VEVENT\r
+			UID:barra-1\r
+			DTSTART;TZID=America/Sao_Paulo:20261201T190000\r
+			DTEND;TZID=America/Sao_Paulo:20261201T200000\r
+			SUMMARY:Revisar C:\\\\pasta\\\\novo\r
+			DESCRIPTION:linha um\\nlinha dois\r
+			END:VEVENT\r
+			END:VCALENDAR\r
+			""";
+
+		service.importCalendar(owner, ics, null);
+
+		List<CalendarEntry> imported = entries.findInWindow(owner, null, STARTS_AT.minus(Duration.ofDays(1)),
+			STARTS_AT.plus(Duration.ofDays(1)));
+		assertThat(imported).hasSize(1);
+		assertThat(imported.get(0).title()).isEqualTo("Revisar C:\\pasta\\novo");
+		// `\n` de verdade continua virando quebra de linha; só a barra escapada é literal.
+		assertThat(imported.get(0).description()).isEqualTo("linha um\nlinha dois");
+	}
+
+	@Test
 	void anImportCannotBecomeADump() {
 		String owner = owner();
 		StringBuilder huge = new StringBuilder("BEGIN:VCALENDAR\r\n");
