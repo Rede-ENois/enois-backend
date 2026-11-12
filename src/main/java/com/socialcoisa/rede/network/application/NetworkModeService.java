@@ -142,16 +142,16 @@ public class NetworkModeService {
 	}
 
 	/**
-	 * Vagas livres somadas dos nós vivos. Nó saturado não conta vaga, e nó fora do balanceamento
-	 * também não: contar a vaga de quem não vai receber a próxima tarefa faria a razão fila/vagas
-	 * parecer folgada e a rede nunca entrar em {@code HIGH_LOAD} justamente quando está com menos
-	 * capacidade do que aparenta.
+	 * Vagas livres somadas dos nós vivos. Nó saturado não conta vaga, nó no teto de memória
+	 * declarado também não, e nó fora do balanceamento também não: contar a vaga de quem não vai
+	 * receber a próxima tarefa faria a razão fila/vagas parecer folgada e a rede nunca entrar em
+	 * {@code HIGH_LOAD} justamente quando está com menos capacidade do que aparenta.
 	 */
 	private long availableCapacity(Instant now) {
 		List<NetworkNode> candidates = nodes.findCandidates(now.minusSeconds(180), 200);
 		long total = 0;
 		for (NetworkNode node : candidates) {
-			if (node.saturated() || node.quarantined(now)) {
+			if (node.saturated() || node.memoryExhausted() || node.quarantined(now)) {
 				continue;
 			}
 			total += Math.max(0, node.concurrencyLimit() - node.runningTasks());

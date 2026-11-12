@@ -90,7 +90,7 @@ o teste exige a ordem das transições.
 | onboarding externo | fluxo completo do token de provisionamento até `ACTIVE` |
 | instalador | Docker Compose + script Linux; health check; atualização; rollback; backup de config; diagnóstico |
 | imagens OCI assinadas | assinatura verificada no pull |
-| gestão de permissões | participante define limites; a rede respeita |
+| gestão de permissões | participante define limites; a rede respeita — **parcial**: CPU (concorrência) e memória declarada respeitadas; disco e banda dependem de não haver tarefa que os consuma hoje |
 | painel "Énóis Network" | todos os agregados e a página por nó com as ações administrativas |
 | interface do participante | solicitar, instalar, consultar estado e contribuição, desconectar |
 | distribuição geográfica | região declarada e considerada no escalonamento |

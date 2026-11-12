@@ -97,6 +97,20 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 	}
 
 	/**
+	 * A memória observada já bateu o teto que o participante declarou ceder? É o limite dele, não
+	 * uma estimativa nossa: o nó aceitou ceder até {@code declaredMemoryMb}, e designar tarefa nova
+	 * a partir daí é passar por cima do combinado — o container dele estoura e a tarefa morre com
+	 * ele.
+	 *
+	 * <p>Sem teto declarado não há limite a respeitar (mesmo raciocínio do piso 1 em
+	 * {@link #concurrencyLimit()}), e sem reporte não há o que comparar: não medir não é estar
+	 * cheio. Nos dois casos o nó continua elegível.</p>
+	 */
+	public boolean memoryExhausted() {
+		return declaredMemoryMb > 0 && observedMemoryMb != null && observedMemoryMb >= declaredMemoryMb;
+	}
+
+	/**
 	 * O nó está vivo? Um nó que parou de mandar heartbeat não recebe tarefa nova: a tarefa ficaria
 	 * parada até o claim expirar, e o certo é escolher outro.
 	 */

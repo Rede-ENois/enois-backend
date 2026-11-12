@@ -261,6 +261,28 @@ class NetworkModesTests {
 
 	// ---------------------------------------------------------------- o nó sabe o modo
 
+	/**
+	 * O nó no teto de memória declarado não é só excluído do despacho: ele também não conta vaga. Se
+	 * contasse, a razão fila/vagas pareceria folgada e a rede demoraria a entrar em {@code HIGH_LOAD}
+	 * com metade da capacidade de fato indisponível.
+	 */
+	@Test
+	void noNoTetoDeMemoriaNaoContaVagaNaCapacidade() throws Exception {
+		var admin = adminSession();
+		Node node = activeNode(admin.token(), "no-cheio", List.of("NODE_LOCAL"), 1);
+		// Um núcleo, uma vaga. O nó reporta 8192 MB de 8192 MB declarados: a vaga não existe.
+		mockMvc
+			.perform(post("/network/nodes/heartbeat").header("X-Node-Id", node.id())
+				.header("X-Node-Key", node.key()).contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0", "observed",
+					Map.of("cpuPercent", 5.0, "memoryMb", 8192, "runningTasks", 0)))))
+			.andExpect(status().isOk());
+
+		enqueue("mem", 2);
+		assertThat(tasks.dispatchPending()).isZero();
+		assertThat(modes.evaluate()).isEqualTo(NetworkMode.HIGH_LOAD);
+	}
+
 	@Test
 	void heartbeatDevolveOModoEOFreioDoDespacho() throws Exception {
 		var admin = adminSession();

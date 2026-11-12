@@ -294,6 +294,39 @@ class NetworkTasksTests {
 	}
 
 	@Test
+	void noNoTetoDeMemoriaNaoRecebeTarefaNova() throws Exception {
+		String admin = adminToken();
+		Node node = activeNode(admin, "no-a", List.of("NODE_WORKER"));
+		// Declarou ceder 8192 MB e reporta 8192 MB em uso: o teto que o participante aceitou já foi
+		// atingido. CPU baixa e vaga declarada não autorizam passar por cima do limite dele.
+		heartbeatWithMemory(node, 10.0, 8192, 0);
+		tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "job-mem-1", "{}",
+			DataClass.PUBLIC, null));
+		assertThat(tasks.dispatchPending()).isZero();
+	}
+
+	@Test
+	void noAbaixoDoTetoDeMemoriaRecebeTarefa() throws Exception {
+		String admin = adminToken();
+		Node node = activeNode(admin, "no-a", List.of("NODE_WORKER"));
+		heartbeatWithMemory(node, 10.0, 6144, 0);
+		tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "job-mem-2", "{}",
+			DataClass.PUBLIC, null));
+		assertThat(tasks.dispatchPending()).isEqualTo(1);
+	}
+
+	@Test
+	void noSemReporteDeMemoriaContinuaElegivel() throws Exception {
+		String admin = adminToken();
+		Node node = activeNode(admin, "no-a", List.of("NODE_WORKER"));
+		// Não medir não é o mesmo que estar cheio: sem reporte, o teto declarado não é comparável.
+		heartbeat(node, 10.0, 0);
+		tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "job-mem-3", "{}",
+			DataClass.PUBLIC, null));
+		assertThat(tasks.dispatchPending()).isEqualTo(1);
+	}
+
+	@Test
 	void noSemVagaNaoRecebeTarefaNova() throws Exception {
 		String admin = adminToken();
 		Node node = activeNode(admin, "no-a", List.of("NODE_WORKER"));
@@ -486,6 +519,16 @@ class NetworkTasksTests {
 				.header("X-Node-Key", node.key()).contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0", "observed",
 					Map.of("cpuPercent", cpuPercent, "memoryMb", 1024, "runningTasks", runningTasks)))))
+			.andExpect(status().isOk());
+	}
+
+	private void heartbeatWithMemory(Node node, double cpuPercent, int memoryMb, int runningTasks)
+			throws Exception {
+		mockMvc
+			.perform(post("/network/nodes/heartbeat").header("X-Node-Id", node.id())
+				.header("X-Node-Key", node.key()).contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0", "observed",
+					Map.of("cpuPercent", cpuPercent, "memoryMb", memoryMb, "runningTasks", runningTasks)))))
 			.andExpect(status().isOk());
 	}
 

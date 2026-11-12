@@ -148,7 +148,7 @@ O scheduler escolhe o nó em duas etapas: **filtro** e **ordem**.
 
 O filtro exclui quem não pode receber a tarefa agora: nó morto (heartbeat velho), nó **fora do
 balanceamento** (janela de remoção vigente), perfil que não cobre o tipo, classe de dado que não pode
-sair da infra autorizada, sem vaga e CPU saturada.
+sair da infra autorizada, sem vaga, CPU saturada e **memória declarada esgotada**.
 
 A ordem é por **saúde e depois por folga**: nó saudável antes de nó degradado; dentro do mesmo grupo,
 quem tem mais vagas livres proporcionalmente. Empate é resolvido por jitter, senão o primeiro da
@@ -180,7 +180,25 @@ suspendeu, e o admin teria de "religar" o que nunca desligou.
 
 Consequência no modo da rede: nó removido **não conta vaga** em `availableCapacity`. Contar faria a
 razão fila/vagas parecer folgada e a rede não entraria em `HIGH_LOAD` justamente quando tem menos
-capacidade do que aparenta.
+capacidade do que aparenta. Nó saturado e nó no teto de memória declarada seguem a mesma regra.
+
+### 7.2 Limites que o participante declara
+
+O nó declara no enroll quanto cede de CPU, memória, disco e banda. Declarado é **teto**, não
+estimativa: é o que o participante aceitou ceder, e designar tarefa a partir dele é passar por cima
+do combinado — o container do nó estoura e a tarefa morre com ele.
+
+| limite declarado | como a rede respeita |
+|---|---|
+| `cpuCores` | vira `concurrencyLimit()`; o despacho desconta o que a rodada já entregou |
+| `memoryMb` | `memoryExhausted()`: memória observada ≥ teto declarado tira o nó do filtro e da conta de vagas |
+| `diskMb` | sem consumidor hoje: nenhum tipo de tarefa atual escreve volume que o Control Plane meça |
+| `bandwidthMbps` | sem consumidor hoje: nenhuma transferência de tarefa é medida por nó |
+
+**Sem reporte, o nó continua elegível.** Não medir não é estar cheio: um nó que não manda
+`memoryMb` no heartbeat não tem o que comparar com o teto, e excluí-lo puniria o runtime antigo por
+um dado que ele nunca prometeu mandar. Teto zero segue a mesma lógica do piso 1 em
+`concurrencyLimit()`: cadastro mal preenchido não pode virar nó inútil.
 
 ## 8. O que fica de fora, e por quê
 

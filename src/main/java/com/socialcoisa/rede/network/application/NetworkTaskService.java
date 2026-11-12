@@ -368,12 +368,12 @@ public class NetworkTaskService {
 	 * Escolhe o nó para a tarefa.
 	 *
 	 * <p>Filtro primeiro (vivo, fora da janela de remoção, perfil cobre o tipo, classe de dado pode
-	 * ir para este nó, tem vaga, não está saturado), depois ordenação por saúde, origem e folga: nó
-	 * degradado (lento ou errando recentemente) perde prioridade para todos os saudáveis; entre os
-	 * saudáveis, o nó da infraestrutura do Énóis ({@code NODE_LOCAL}) vem antes dos demais; e dentro
-	 * do mesmo grupo quem tem mais vaga proporcional recebe. Empate é resolvido por jitter — sem ele,
-	 * todos os nós empatados receberiam sempre na mesma ordem e o primeiro da lista viraria
-	 * gargalo.</p>
+	 * ir para este nó, tem vaga, não está saturado, não esgotou a memória declarada), depois ordenação
+	 * por saúde, origem e folga: nó degradado (lento ou errando recentemente) perde prioridade para
+	 * todos os saudáveis; entre os saudáveis, o nó da infraestrutura do Énóis ({@code NODE_LOCAL}) vem
+	 * antes dos demais; e dentro do mesmo grupo quem tem mais vaga proporcional recebe. Empate é
+	 * resolvido por jitter — sem ele, todos os nós empatados receberiam sempre na mesma ordem e o
+	 * primeiro da lista viraria gargalo.</p>
 	 *
 	 * <p>A remoção temporária é filtro, não penalidade: um nó que falhou
 	 * {@link NetworkNode#FAILURE_STREAK_LIMIT} vezes seguidas fica fora da lista até a janela vencer.
@@ -392,6 +392,7 @@ public class NetworkTaskService {
 			.filter(node -> node.accepts(task.taskType(), task.dataClass()))
 			.filter(node -> hasRoom(node, reserved))
 			.filter(node -> !node.saturated())
+			.filter(node -> !node.memoryExhausted())
 			.sorted(Comparator.comparing(NetworkTaskService::degraded)
 				.thenComparing(NetworkTaskService::localPriority)
 				.thenComparing(Comparator.<NetworkNode>comparingDouble(node -> slack(node, reserved)).reversed())

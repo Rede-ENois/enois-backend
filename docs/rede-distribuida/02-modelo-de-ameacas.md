@@ -77,6 +77,8 @@ prioridade de escalonamento, não permissão extra.
 | Control Plane fora do ar | autoridade redundante com promoção controlada (Fase 6) |
 | dois controladores ao mesmo tempo | eleição com termo/epoch; nó recusa config de termo antigo |
 | nó envenenando o scheduler | capacidade **observada** pesa mais que a **declarada** |
+| nó declarando 1 núcleo e recebendo 12 tarefas | a vaga vem do declarado, mas a rodada desconta o que já entregou — **entregue** ([05 §7.1](05-sincronizacao.md)) |
+| nó passando do teto de memória que aceitou ceder | memória observada ≥ declarada tira o nó do filtro e da conta de vagas — **entregue** ([05 §7.2](05-sincronizacao.md)) |
 | nó lento derrubando o balanceamento | circuit breaker + remoção temporária por saúde real — **entregue**: latência medida e streak de falha em `network_nodes`, degradado perde prioridade, `FAILURE_STREAK_LIMIT` falhas seguidas tiram o nó por uma janela que expira sozinha ([05 §7.1](05-sincronizacao.md)) |
 | revogação durante processamento | revogação é checada no despacho e no resultado; tarefa de nó revogado é descartada |
 
