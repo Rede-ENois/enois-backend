@@ -200,6 +200,36 @@ Três propriedades que o contrato fixa:
 No painel, `GET /admin/network/tasks` devolve `region` por tarefa: é a única explicação visível de
 por que uma tarefa foi para um nó distante.
 
+## 3a. Interface do participante (`/network/participant`)
+
+Rotas autenticadas por **sessão de navegador** (`X-Session-Token`), não por chave de nó: quem fala
+aqui é a pessoa dona do servidor, não o runtime. A fronteira é `owner_user_id` — nenhuma rota
+devolve nó de outro participante, e nó alheio (mesmo com o id na mão) é `404 NODE_UNKNOWN`, não
+403, para não confirmar existência. A chave de API **nunca** aparece aqui: ela é emitida pelo
+admin, exibida uma única vez a ele.
+
+### `GET /network/participant/nodes`
+
+Lista de nós do participante (limite 200, mais novos primeiro), cada um com: `id`, `displayName`,
+`status`, `profiles`, `region`, `country`, `runtimeVersion`, `lastSeenAt`, capacidade **declarada**
+(`declaredCpuCores`, `declaredMemoryMb`, `declaredDiskMb`, `declaredBandwidthMbps`) ao lado da
+**observada** (`observedCpuPercent`, `observedMemoryMb`, `observedRunningTasks`, `latencyMs`),
+`tasksDone` (tarefas com desfecho `DONE` designadas ao nó — designada não é contribuição, é
+promessa), `operable` e `quarantineReason`.
+
+### `GET /network/participant/nodes/{id}`
+
+Um nó, com o mesmo corpo; nó de outro dono é `404 NODE_UNKNOWN`.
+
+### `POST /network/participant/nodes/{id}/disconnect`
+
+Desconexão voluntária. O nó vai para `SUSPENDED` — **reversível pelo admin**: religar o servidor
+do participante é decisão humana, não do runtime que voltou a ligar — e as chaves vigentes caem na
+mesma transação, como na revogação. A ação é auditada como `NODE_DISCONNECTED` com
+`{"voluntary":true}` e o ator é o próprio participante. Idempotente: nó já suspenso não reaudita
+nem revoga de novo. Revogado é `409 NODE_REVOKED`. O participante **não** revoga sozinho;
+revogação continua sendo decisão administrativa.
+
 ## 4. Catálogo de erros estável
 
 | código | HTTP | significado |

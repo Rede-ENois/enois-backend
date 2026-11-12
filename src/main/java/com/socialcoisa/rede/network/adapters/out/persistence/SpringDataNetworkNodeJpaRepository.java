@@ -14,6 +14,9 @@ interface SpringDataNetworkNodeJpaRepository extends JpaRepository<NetworkNodeJp
 	@Query("select n from NetworkNodeJpaEntity n order by n.createdAt desc")
 	List<NetworkNodeJpaEntity> listRecent(PageRequest page);
 
+	@Query("select n from NetworkNodeJpaEntity n where n.ownerUserId = :owner order by n.createdAt desc")
+	List<NetworkNodeJpaEntity> listByOwner(@Param("owner") String owner, PageRequest page);
+
 	long countByStatus(String status);
 
 	/*

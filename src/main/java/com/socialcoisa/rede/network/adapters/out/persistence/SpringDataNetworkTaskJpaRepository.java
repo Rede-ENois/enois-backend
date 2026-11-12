@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.network.adapters.out.persistence;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 
 import org.springframework.data.domain.PageRequest;
@@ -49,6 +50,14 @@ interface SpringDataNetworkTaskJpaRepository extends JpaRepository<NetworkTaskJp
 			+ "where t.status = 'DISPATCHED' and t.claimExpiresAt > :now and n.status <> 'ACTIVE' "
 			+ "order by t.createdAt asc")
 	List<NetworkTaskJpaEntity> findOnNonOperatingNodes(@Param("now") Instant now, PageRequest page);
+
+	/**
+	 * Concluídas por nó, numa consulta só. O agregador do JPQL devolve {@code Object[]} —
+	 * {@code [0] = assignedNodeId}, {@code [1] = count}.
+	 */
+	@Query("select t.assignedNodeId, count(*) from NetworkTaskJpaEntity t where t.status = 'DONE' "
+			+ "and t.assignedNodeId in :nodeIds group by t.assignedNodeId")
+	List<Object[]> countDoneByNode(@Param("nodeIds") Collection<String> nodeIds);
 
 	@Query("select count(*) from NetworkTaskJpaEntity t join NetworkNodeJpaEntity n on n.id = t.assignedNodeId "
 			+ "where t.status = 'DISPATCHED' and t.claimExpiresAt > :now and n.status <> 'ACTIVE'")

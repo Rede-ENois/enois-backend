@@ -1,7 +1,9 @@
 package com.socialcoisa.rede.network.adapters.out.persistence;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.data.domain.PageRequest;
@@ -118,6 +120,16 @@ class NetworkTaskPersistenceAdapter implements NetworkTaskRepository {
 	@Override
 	public long countByStatus(TaskStatus status) {
 		return repository.countByStatus(status.name());
+	}
+
+	@Override
+	public Map<String, Long> countDoneByNode(Collection<String> nodeIds) {
+		if (nodeIds.isEmpty()) {
+			return Map.of();
+		}
+		return repository.countDoneByNode(nodeIds)
+			.stream()
+			.collect(java.util.stream.Collectors.toMap(row -> (String) row[0], row -> (Long) row[1]));
 	}
 
 	@Override

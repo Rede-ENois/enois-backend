@@ -35,6 +35,14 @@ class NetworkNodePersistenceAdapter implements NetworkNodeRepository {
 	}
 
 	@Override
+	public List<NetworkNode> listByOwner(String ownerUserId, int limit) {
+		return repository.listByOwner(ownerUserId, PageRequest.ofSize(limit))
+			.stream()
+			.map(NetworkNodeJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
 	public void create(String id, String displayName, String ownerUserId, List<NodeProfile> profiles, String region,
 			String country, int cpuCores, int memoryMb, int diskMb, int bandwidthMbps, Instant now) {
 		repository.save(new NetworkNodeJpaEntity(id, displayName, ownerUserId, NodeStatus.PENDING_APPROVAL.name(),

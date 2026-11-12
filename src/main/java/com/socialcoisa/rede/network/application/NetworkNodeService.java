@@ -161,6 +161,30 @@ public class NetworkNodeService {
 	}
 
 	/**
+	 * Desconexão voluntária do participante (interface do participante, não o painel). Suspensão
+	 * reversível — revogação continua sendo decisão administrativa —, com as chaves vigentes caindo
+	 * na mesma transação, como na revogação: servidor desligado a próprio pedido não pode continuar
+	 * autenticando até alguém do admin notar. O ator da auditoria é o próprio participante.
+	 */
+	@Transactional
+	public NetworkNode disconnectVoluntarily(String nodeId, String ownerUserId) {
+		NetworkNode node = require(nodeId);
+		if (!node.ownerUserId().equals(ownerUserId)) {
+			// Nó de outro participante é 404, não 403: 403 confirmaria que o id existe.
+			throw new ApiException(404, "NODE_UNKNOWN", "No nao encontrado.");
+		}
+		if (node.status() == NodeStatus.REVOKED) {
+			throw new ApiException(409, "NODE_REVOKED", "No revogado nao muda.");
+		}
+		if (node.status() != NodeStatus.SUSPENDED) {
+			nodes.updateStatus(nodeId, NodeStatus.SUSPENDED, ownerUserId, clock.instant());
+			keyService.revokeAllForNode(nodeId, ownerUserId);
+			audit.record(ownerUserId, "NODE_DISCONNECTED", nodeId, "{\"voluntary\":true}");
+		}
+		return require(nodeId);
+	}
+
+	/**
 	 * Redefine o que o participante cede. A rede respeita o limite declarado (concorrência é o
 	 * teto de CPU; memória observada contra o declarado tira o nó do balanceamento), e mudar o que
 	 * foi combinado é mudança de permissão: a config assinada carrega os limites, então o contrato

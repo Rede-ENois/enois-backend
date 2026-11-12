@@ -186,6 +186,11 @@ class NetworkConfigServiceTests {
 		}
 
 		@Override
+		public List<NetworkNode> listByOwner(String ownerUserId, int limit) {
+			throw new AssertionError("nao usado");
+		}
+
+		@Override
 		public void create(String id, String displayName, String ownerUserId, List<NodeProfile> profiles,
 				String region, String country, int cpuCores, int memoryMb, int diskMb, int bandwidthMbps,
 				Instant now) {

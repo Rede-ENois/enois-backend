@@ -1,7 +1,9 @@
 package com.socialcoisa.rede.network.application.port.out;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import com.socialcoisa.rede.network.domain.DataClass;
@@ -53,6 +55,18 @@ public interface NetworkTaskRepository {
 
 	/** Quantas tarefas estão nessa situação — o número do painel, sem paginar. */
 	long countOnNonOperatingNodes(Instant now);
+
+	/**
+	 * Trabalho concluído por nó — a contribuição que a interface do participante mostra.
+	 *
+	 * <p>Conta o que <b>acabou</b> ({@code DONE}): tarefa designada não é contribuição, é promessa;
+	 * falha e cancelamento não somam. Uma consulta com {@code IN} para a lista inteira de nós, não
+	 * uma por nó — a tela lista até 200. {@code idx_network_tasks_node (assigned_node_id, status)}
+	 * já responde a esta pergunta.</p>
+	 *
+	 * @return contagem por id de nó; nó sem tarefa concluída simplesmente não vem no mapa
+	 */
+	Map<String, Long> countDoneByNode(Collection<String> nodeIds);
 
 	/**
 	 * Designa a tarefa a um nó, subindo a tentativa. Condicional: só muda se a tarefa ainda estiver

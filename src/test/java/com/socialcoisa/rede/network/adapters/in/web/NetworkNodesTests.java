@@ -68,14 +68,28 @@ class NetworkNodesTests {
 	}
 
 	private String issueToken(String admin, String name, List<String> profiles) throws Exception {
+		return issueTokenFor(admin, name, "owner-net", profiles);
+	}
+
+	/** Token provisionado para um dono específico — a interface do participante é por owner_user_id. */
+	private String issueTokenFor(String admin, String name, String ownerUserId, List<String> profiles)
+			throws Exception {
 		var result = mockMvc
 			.perform(post("/admin/network/nodes/provision-token").header("X-Session-Token", admin)
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(
-					Map.of("displayName", name, "ownerUserId", "owner-net", "profiles", profiles))))
+					Map.of("displayName", name, "ownerUserId", ownerUserId, "profiles", profiles))))
 			.andExpect(status().isOk())
 			.andReturn();
 		return objectMapper.readTree(result.getResponse().getContentAsString()).get("token").asString();
+	}
+
+	/** Nó de um dono específico, criado e aprovado, sem chave ainda. */
+	private String newNodeOwner(String admin, String ownerUserId) throws Exception {
+		String token = issueTokenFor(admin, "no-do-participante", ownerUserId, List.of("NODE_WORKER"));
+		String nodeId = enroll(token);
+		activate(admin, nodeId);
+		return nodeId;
 	}
 
 	private String enroll(String provisionToken) throws Exception {
@@ -596,8 +610,105 @@ class NetworkNodesTests {
 		mockMvc
 			.perform(post("/admin/network/nodes/provision-token").header("X-Session-Token", member.token())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(
-					Map.of("displayName", "x", "ownerUserId", "y", "profiles", List.of("NODE_EDGE")))))
-			.andExpect(status().isForbidden());
+			.content(objectMapper.writeValueAsString(
+				Map.of("displayName", "x", "ownerUserId", "y", "profiles", List.of("NODE_EDGE")))))
+		.andExpect(status().isForbidden());
+	}
+
+	// ---------------------------------------------------------------- interface do participante
+
+	/**
+	 * O participante vê os próprios nós com estado, o que cedeu, o que foi observado e a contribuição
+	 * medida — e não vê nó de outro participante nem com o id na mão (404, não 403: 403 confirmaria
+	 * que o id existe).
+	 */
+	@Test
+	void participanteVeOsPropriosNosENuncaOsDosOutros() throws Exception {
+		String admin = adminToken();
+		var dono = auth.authenticate("net_owner");
+		String nodeId = newNodeOwner(admin, dono.userId());
+		String key = issueKey(admin, nodeId);
+		activate(admin, nodeId);
+		heartbeat(admin, nodeId, key, 42.0, 2048, 1);
+
+		mockMvc.perform(get("/network/participant/nodes").header("X-Session-Token", dono.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[0].id").value(nodeId))
+			.andExpect(jsonPath("$[0].status").value("ACTIVE"))
+			.andExpect(jsonPath("$[0].declaredCpuCores").value(4))
+			.andExpect(jsonPath("$[0].observedCpuPercent").value(42.0))
+			.andExpect(jsonPath("$[0].observedMemoryMb").value(2048))
+			.andExpect(jsonPath("$[0].runtimeVersion").value("0.1.0"))
+			.andExpect(jsonPath("$[0].lastSeenAt").isNotEmpty());
+
+		// Nó de outro dono, visível só pelo admin, é 404 para o participante.
+		String otherNode = newNode(admin);
+		mockMvc.perform(get("/network/participant/nodes/" + otherNode).header("X-Session-Token", dono.token()))
+			.andExpect(status().isNotFound())
+			.andExpect(jsonPath("$.code").value("NODE_UNKNOWN"));
+
+		// Sem sessão não há interface do participante.
+		mockMvc.perform(get("/network/participant/nodes")).andExpect(status().isUnauthorized());
+	}
+
+	/**
+	 * Desconexão voluntária: o nó sai para SUSPENDED, a chave para de autenticar na hora e a ação é
+	 * auditada com o participante como ator. Sem chave vigente o runtime desligado não continua
+	 * falando com o Control Plane.
+	 */
+	@Test
+	void desconectarVoluntariamenteSuspendeERevogaAChave() throws Exception {
+		String admin = adminToken();
+		var dono = auth.authenticate("net_owner_disc");
+		String nodeId = newNodeOwner(admin, dono.userId());
+		String key = issueKey(admin, nodeId);
+		activate(admin, nodeId);
+
+		mockMvc.perform(post("/network/participant/nodes/" + nodeId + "/disconnect")
+			.header("X-Session-Token", dono.token())).andExpect(status().isOk());
+
+		assertThat(jdbc.queryForObject(
+			"select count(*) from network_node_keys where node_id = ? and revoked_at is null", Integer.class,
+			nodeId)).isZero();
+		mockMvc.perform(post("/network/nodes/heartbeat").header("X-Node-Id", nodeId).header("X-Node-Key", key)
+			.contentType(MediaType.APPLICATION_JSON).content("{}"))
+			// A chave caiu junto: credencial revogada é 401, o mesmo critério da revogação admin.
+			.andExpect(status().isUnauthorized());
+		assertThat(jdbc.queryForObject(
+			"select count(*) from audit_logs where action = 'NODE_DISCONNECTED' and target_id = ?",
+			Integer.class, nodeId)).isEqualTo(1);
+
+		// Desconectar de novo é idempotente: já suspenso não reaudita nem revoga de novo.
+		mockMvc.perform(post("/network/participant/nodes/" + nodeId + "/disconnect")
+			.header("X-Session-Token", dono.token())).andExpect(status().isOk());
+		assertThat(jdbc.queryForObject(
+			"select count(*) from audit_logs where action = 'NODE_DISCONNECTED' and target_id = ?",
+			Integer.class, nodeId)).isEqualTo(1);
+	}
+
+	/**
+	 * A contribuição é medida em tarefas concluídas: designada não conta (é promessa), concluída
+	 * conta. É o número da tela do participante.
+	 */
+	@Test
+	void contribuicaoDoNoContaTarefasConcluidas() throws Exception {
+		String admin = adminToken();
+		var dono = auth.authenticate("net_owner_contrib");
+		String nodeId = newNodeOwner(admin, dono.userId());
+		String key = issueKey(admin, nodeId);
+		activate(admin, nodeId);
+
+		java.sql.Timestamp deadline = java.sql.Timestamp.from(java.time.Instant.now().plusSeconds(3600));
+		java.sql.Timestamp now = java.sql.Timestamp.from(java.time.Instant.now());
+		jdbc.update("insert into network_tasks (id, task_type, status, attempt, idempotency_key, payload, "
+			+ "data_class, assigned_node_id, deadline, next_attempt_at, created_at, updated_at) values "
+			+ "('tk_done1', 'ASYNC_JOB', 'DONE', 1, 'contrib-done-1', '{}', 'PUBLIC', ?, ?, ?, ?, ?), "
+			+ "('tk_disp1', 'ASYNC_JOB', 'DISPATCHED', 1, 'contrib-disp-1', '{}', 'PUBLIC', ?, ?, ?, ?, ?), "
+			+ "('tk_fail1', 'ASYNC_JOB', 'FAILED', 1, 'contrib-fail-1', '{}', 'PUBLIC', ?, ?, ?, ?, ?)",
+			nodeId, deadline, now, now, now, nodeId, deadline, now, now, now, nodeId, deadline, now, now, now);
+
+		mockMvc.perform(get("/network/participant/nodes").header("X-Session-Token", dono.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[0].tasksDone").value(1));
 	}
 }

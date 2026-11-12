@@ -15,6 +15,15 @@ public interface NetworkNodeRepository {
 
 	List<NetworkNode> list(int limit);
 
+	/**
+	 * Nós de um participante, mais novos primeiro — a visão dele na interface do participante.
+	 *
+	 * <p>É a única leitura do módulo que consulta por {@code owner_user_id}, e por isso é também a
+	 * fronteira de exposição: o participante não vê nó de outro participante, nem por id. O índice
+	 * {@code idx_network_nodes_owner} (V275) já existe para esta pergunta.</p>
+	 */
+	List<NetworkNode> listByOwner(String ownerUserId, int limit);
+
 	/** Cria o nó em PENDING_APPROVAL. */
 	void create(String id, String displayName, String ownerUserId, List<NodeProfile> profiles, String region,
 			String country, int cpuCores, int memoryMb, int diskMb, int bandwidthMbps, Instant now);
