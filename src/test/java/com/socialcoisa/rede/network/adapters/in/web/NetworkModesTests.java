@@ -206,19 +206,23 @@ class NetworkModesTests {
 	@Test
 	void recuperacaoDespachaPelaMetadeEDepoisONumeroDevolveNormal() throws Exception {
 		var admin = adminSession();
-		activeNode(admin.token(), "no-local-1", List.of("NODE_LOCAL"));
-		enqueue("rec", NetworkTaskService.SCAN_LIMIT);
+		// Capacidade escolhida para o tema deste teste ser o freio do modo, e não a vaga do nó: com
+		// quatro núcleos a fila esbarraria no limite de concorrência (quatro por rodada) e nunca se
+		// mediria a metade do teto. Sessenta e quatro vagas ficam acima do teto de varredura, então
+		// quem limita cada rodada é o modo.
+		activeNode(admin.token(), "no-local-1", List.of("NODE_LOCAL"), 64);
+		enqueue("rec", 60);
 
 		modes.declare(admin.userId(), NetworkMode.RECOVERY, "voltando do incidente");
 		// RECOVERY despacha metade do teto: retomar com a fila inteira é repetir o pico.
 		assertThat(tasks.dispatchPending()).isEqualTo(NetworkTaskService.SCAN_LIMIT / 2);
 
-		// Com fila ainda acima da folga do nó, a recuperação continua: sair cedo seria repetir o pico
-		// no meio dele.
+		// Com a fila ainda acima do limiar de saída, a recuperação continua: sair cedo seria repetir
+		// o pico no meio dele.
 		assertThat(modes.evaluate()).isEqualTo(NetworkMode.RECOVERY);
 
-		// Segunda rodada de RECOVERY esvazia a fila (metade do teto outra vez), e aí o número fecha o
-		// ciclo sozinho — sem ninguém declarar NORMAL, que aliás não é acionável à mão.
+		// Segunda rodada de RECOVERY, e aí o número fecha o ciclo sozinho — sem ninguém declarar
+		// NORMAL, que aliás não é acionável à mão.
 		assertThat(tasks.dispatchPending()).isEqualTo(NetworkTaskService.SCAN_LIMIT / 2);
 		assertThat(modes.evaluate()).isEqualTo(NetworkMode.NORMAL);
 
@@ -230,7 +234,7 @@ class NetworkModesTests {
 	@Test
 	void normalDespachaOTetoInteiroDaVarredura() throws Exception {
 		var admin = adminSession();
-		activeNode(admin.token(), "no-normal", List.of("NODE_LOCAL"));
+		activeNode(admin.token(), "no-normal", List.of("NODE_LOCAL"), NetworkTaskService.SCAN_LIMIT * 2);
 		enqueue("nrm", NetworkTaskService.SCAN_LIMIT);
 		// Sem linha de estado o modo é NORMAL: o freio só existe em RECOVERY/DEGRADED/EMERGENCY.
 		assertThat(tasks.dispatchPending()).isEqualTo(NetworkTaskService.SCAN_LIMIT);
@@ -296,6 +300,10 @@ class NetworkModesTests {
 	}
 
 	private Node activeNode(String admin, String name, List<String> profiles) throws Exception {
+		return activeNode(admin, name, profiles, 4);
+	}
+
+	private Node activeNode(String admin, String name, List<String> profiles, int cpuCores) throws Exception {
 		var tokenResult = mockMvc
 			.perform(post("/admin/network/nodes/provision-token").header("X-Session-Token", admin)
 				.contentType(MediaType.APPLICATION_JSON)
@@ -310,7 +318,7 @@ class NetworkModesTests {
 		var enrollResult = mockMvc
 			.perform(post("/network/nodes/enroll").contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("provisionToken", provisionToken, "declared",
-					Map.of("cpuCores", 4, "memoryMb", 8192, "diskMb", 51200, "bandwidthMbps", 100)))))
+					Map.of("cpuCores", cpuCores, "memoryMb", 8192, "diskMb", 51200, "bandwidthMbps", 100)))))
 			.andExpect(status().isOk())
 			.andReturn();
 		String nodeId = objectMapper.readTree(enrollResult.getResponse().getContentAsString()).get("nodeId")

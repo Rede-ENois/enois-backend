@@ -41,7 +41,7 @@ duas vezes com dado antigo preservado.
 | `taskId` estável + `attempt` | mesma tarefa redistribuída não duplica efeito no destino |
 | retry com backoff exponencial + jitter | teste com falha programada mostra o intervalo crescente |
 | DLQ | tarefa que esgota tentativas fica visível no painel com o erro |
-| limites de concorrência por nó | nó não recebe mais do que declarou/observou |
+| limites de concorrência por nó | nó não recebe mais do que declarou/observou — **entregue** (a rodada desconta o que já designou; antes, doze tarefas iam todas para um nó de quatro núcleos, porque cada escolha relia o heartbeat) |
 | cancelamento e timeout | tarefa vencida não executa; resultado tardio é descartado |
 | detecção de tarefa abandonada | claim expirado volta para a fila |
 | controle de sobrecarga | sobrecarga vira `HIGH_LOAD`, medido |

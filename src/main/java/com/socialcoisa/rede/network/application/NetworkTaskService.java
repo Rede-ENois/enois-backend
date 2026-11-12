@@ -4,7 +4,9 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -144,9 +146,15 @@ public class NetworkTaskService {
 			return 0;
 		}
 		List<NetworkNode> candidates = nodes.findCandidates(now.minus(nodeStaleAfter), MAX_LIST);
+		// As vagas lidas do heartbeat valem para o instante da leitura, não para a rodada inteira. Sem
+		// este contador, dez tarefas na fila iam todas para o mesmo nó de quatro núcleos: cada escolha
+		// relia a lista de candidatos, que ainda dizia "zero rodando", e a concorrência declarada pelo
+		// participante era ignorada justamente quando havia trabalho para distribuir. O mapa é local da
+		// rodada — quem de fato executa continua sendo o nó, e o próximo heartbeat dele corrige a conta.
+		Map<String, Integer> reserved = new HashMap<>();
 		int dispatched = 0;
 		for (NetworkTask task : pending) {
-			Optional<NetworkNode> chosen = choose(task, candidates, now);
+			Optional<NetworkNode> chosen = choose(task, candidates, now, reserved);
 			if (chosen.isEmpty()) {
 				// Sem nó elegível a tarefa fica na fila: o próximo ciclo tenta de novo. Não é erro —
 				// é a rede sem capacidade agora, e matar a tarefa seria perder trabalho.
@@ -155,6 +163,7 @@ public class NetworkTaskService {
 			}
 			NetworkNode node = chosen.get();
 			if (tasks.claim(task.id(), node.id(), task.attempt(), now.plus(claimTtl), now) == 1) {
+				reserved.merge(node.id(), 1, Integer::sum);
 				dispatched++;
 			}
 		}
@@ -328,19 +337,33 @@ public class NetworkTaskService {
 	 * {@link NetworkNode#FAILURE_STREAK_LIMIT} vezes seguidas fica fora da lista até a janela vencer.
 	 * Penalizá-lo só o colocaria no fim da fila — e com um único nó na rede ele continuaria
 	 * recebendo trabalho, esgotando as tentativas de cada tarefa depois da última.</p>
+	 *
+	 * <p>{@code reserved} é quantas tarefas esta rodada já designou a cada nó. A folga e a vaga de um
+	 * candidato são do último heartbeat; sem descontar o que a própria rodada entregou, a designação
+	 * passa por cima do limite de concorrência que o participante declarou.</p>
 	 */
-	private Optional<NetworkNode> choose(NetworkTask task, List<NetworkNode> candidates, Instant now) {
+	private Optional<NetworkNode> choose(NetworkTask task, List<NetworkNode> candidates, Instant now,
+			Map<String, Integer> reserved) {
 		List<NetworkNode> eligible = candidates.stream()
 			.filter(node -> node.alive(now, nodeStaleAfter))
 			.filter(node -> !node.quarantined(now))
 			.filter(node -> node.accepts(task.taskType(), task.dataClass()))
-			.filter(NetworkNode::hasCapacity)
+			.filter(node -> hasRoom(node, reserved))
 			.filter(node -> !node.saturated())
 			.sorted(Comparator.comparing(NetworkTaskService::degraded)
-				.thenComparing(Comparator.comparingDouble(NetworkTaskService::slack).reversed())
+				.thenComparing(Comparator.<NetworkNode>comparingDouble(node -> slack(node, reserved)).reversed())
 				.thenComparingDouble(node -> ThreadLocalRandom.current().nextDouble()))
 			.toList();
 		return eligible.stream().findFirst();
+	}
+
+	/**
+	 * O nó ainda tem vaga depois do que esta rodada já reservou. O nó que reporta em execução e o
+	 * que já recebeu nesta rodada são o mesmo tipo de ocupação — contá-los juntos é o que mantém a
+	 * designação dentro do limite declarado.
+	 */
+	private static boolean hasRoom(NetworkNode node, Map<String, Integer> reserved) {
+		return node.runningTasks() + reserved.getOrDefault(node.id(), 0) < node.concurrencyLimit();
 	}
 
 	/** Nó degradado: lento medido, ou errando recentemente sem ter chegado ao limite da janela. */
@@ -348,9 +371,14 @@ public class NetworkTaskService {
 		return node.slow() || node.failing();
 	}
 
-	/** Folga do nó: vagas livres sobre o limite. Quem tem mais folga recebe a próxima tarefa. */
-	private static double slack(NetworkNode node) {
-		return (double) (node.concurrencyLimit() - node.runningTasks()) / node.concurrencyLimit();
+	/**
+	 * Folga do nó: vagas livres sobre o limite, descontando o que esta rodada já entregou. Quem tem
+	 * mais folga recebe a próxima tarefa — e quem recebeu nesta rodada vai perdendo a preferência,
+	 * que é o que espalha a fila em vez de empilhar tudo no primeiro nó da ordem.
+	 */
+	private static double slack(NetworkNode node, Map<String, Integer> reserved) {
+		int free = node.concurrencyLimit() - node.runningTasks() - reserved.getOrDefault(node.id(), 0);
+		return (double) Math.max(0, free) / node.concurrencyLimit();
 	}
 
 	/**

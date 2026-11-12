@@ -304,9 +304,88 @@ class NetworkBalancingTests {
 			.andExpect(jsonPath("$[0].quarantinedUntil").isNotEmpty());
 	}
 
+
+	// ---------------------------------------------------------------- limite de concorrência na rodada
+
+	/**
+	 * O limite de concorrência declarado pelo participante vale para a rodada, não só para o
+	 * heartbeat.
+	 *
+	 * <p>Antes desta rodada, doze tarefas na fila com um único nó de quatro núcleos eram designadas
+	 * <b>todas</b> para ele: cada escolha relia a lista de candidatos do último heartbeat, que ainda
+	 * dizia "zero rodando", e o limite era conferido contra um número que a própria rodada já tinha
+	 * invalidado. O comportamento correto é quatro — a capacidade que ele aceitou ceder.</p>
+	 */
+	@Test
+	void rodadaNaoDesignaMaisQueALimiteDeConcorrenciaDoNo() throws Exception {
+		String admin = adminToken();
+		Node only = activeNode(admin, "no-unico", List.of("NODE_WORKER"));
+		for (int i = 0; i < 12; i++) {
+			tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "conc-" + i, "{}",
+				DataClass.PUBLIC, null));
+		}
+
+		// 4 núcleos declarados, 0 em execução: no máximo quatro nesta rodada.
+		assertThat(tasks.dispatchPending()).isEqualTo(4);
+		assertThat(assignedCount(only.id())).isEqualTo(4);
+		// O resto continua na fila, intacto: não é erro, é falta de vaga agora.
+		assertThat(tasks.countByStatus(com.socialcoisa.rede.network.domain.TaskStatus.PENDING)).isEqualTo(8);
+	}
+
+	/**
+	 * A rodada seguinte só entrega a vaga que o heartbeat abriu. É o que prova que o contador é do
+	 * ciclo: se ele vazasse entre rodadas, o nó ficaria travado para sempre; se não existisse, a
+	 * segunda rodada entregaria outras quatro com as quatro primeiras ainda em execução.
+	 */
+	@Test
+	void segundaRodadaSoUsaAsVagasQueOHeartbeatAbriu() throws Exception {
+		String admin = adminToken();
+		Node only = activeNode(admin, "no-ciclo", List.of("NODE_WORKER"));
+		for (int i = 0; i < 12; i++) {
+			tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "ciclo-" + i, "{}",
+				DataClass.PUBLIC, null));
+		}
+		assertThat(tasks.dispatchPending()).isEqualTo(4);
+
+		// O nó reporta que terminou uma e está com três em execução: abre exatamente uma vaga.
+		heartbeat(only, 5.0, 3);
+		assertThat(tasks.dispatchPending()).isEqualTo(1);
+		assertThat(assignedCount(only.id())).isEqualTo(5);
+
+		// O nó passa a reportar as quatro em execução: a vaga some, e a rodada não entrega nada.
+		heartbeat(only, 5.0, 4);
+		assertThat(tasks.dispatchPending()).isZero();
+		assertThat(assignedCount(only.id())).isEqualTo(5);
+	}
+
+	/**
+	 * A designação espalha em vez de empilhar: dois nós com a mesma capacidade recebem a metade cada.
+	 * Sem descontar o que a rodada já entregou, o primeiro da ordenação levaria tudo — a folga
+	 * calculada continuava cheia para ele.
+	 */
+	@Test
+	void aRodadaEspalhaEntreNosDeMesmaCapacidade() throws Exception {
+		String admin = adminToken();
+		Node first = activeNode(admin, "no-a", List.of("NODE_WORKER"));
+		Node second = activeNode(admin, "no-b", List.of("NODE_WORKER"));
+		for (int i = 0; i < 8; i++) {
+			tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "spread-" + i, "{}",
+				DataClass.PUBLIC, null));
+		}
+
+		assertThat(tasks.dispatchPending()).isEqualTo(8);
+		assertThat(assignedCount(first.id())).isEqualTo(4);
+		assertThat(assignedCount(second.id())).isEqualTo(4);
+	}
+
 	// ---------------------------------------------------------------- helpers
 
 	private record Node(String id, String key) {
+	}
+
+	private int assignedCount(String nodeId) {
+		return jdbc.queryForObject("select count(*) from network_tasks where assigned_node_id = ?", Integer.class,
+			nodeId);
 	}
 
 	private String adminToken() throws Exception {

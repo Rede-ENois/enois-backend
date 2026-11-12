@@ -121,6 +121,7 @@ sequenceDiagram
   CORE->>O: evento (transação local)
   S->>O: lê pendentes elegíveis
   S->>S: escolhe nó por capacidade, latência, saúde, restrição de dado
+  Note over S: a capacidade é descontada dos despachos da própria rodada
   S->>W: despacha tarefa (id único, deadline, tentativa)
   W->>W: executa com idempotência
   W->>O: resultado + recibo do handler
