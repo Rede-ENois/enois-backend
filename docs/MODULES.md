@@ -1532,6 +1532,18 @@ Projetos da comunidade (páginas públicas com moderação própria) e projetos 
 | `POST /admin/.../suspend` / `.../unsuspend` | Suspender (admin) |
 | `GET /me/projects` / `POST /me/projects` / `PUT /me/projects/{projectId}` | Projetos do perfil |
 
+O HTML dos projetos passa pelo `SafeHtml` e tem teto de 200.000 caracteres depois da limpeza.
+A coluna `user_projects.html` é `LONGTEXT` com charset `utf8mb4`, inclusive em bancos legados:
+a V287 aplica essa conversão em uma versão nova, sem depender da alteração histórica da V117.
+Conteúdo existente e nulidade são preservados; ids e referências não mudam. Não há alteração
+de contrato HTTP, sanitização ou limite de entrada.
+
+O teste `scripts/tests/user-project-html-migration-test.py` monta uma coluna legada Latin-1
+em MariaDB isolado e verifica conversão, criação/edição Unicode, HTML acima de 64 KiB e
+preservação de registros e nulos. Ele roda no job `schema-check`, sem publicar porta e sem rede;
+a imagem fixada de MariaDB usada pela CI precisa estar presente localmente antes da execução.
+Para executar: `python3 scripts/tests/user-project-html-migration-test.py`.
+
 ## 31. Preferences (Preferências)
 
 Preferências do usuário: tema, modo de exibição, notificações e toggles de experiência.
