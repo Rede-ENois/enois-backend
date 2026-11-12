@@ -58,7 +58,7 @@ de execução igual a 1 por efeito.
 | **broadcast entre instâncias** (pré-requisito) | `MessageStreamHub` funciona com duas instâncias; cache invalida em todas |
 | `NODE_EDGE` | entrega conteúdo público com versão; nunca decide autorização de usuário |
 | `NODE_MEDIA` | transcode executa no nó; resultado verificado por hash e tamanho |
-| cache distribuído | só conteúdo público; mutável com TTL curto e invalidação por evento |
+| cache distribuído | só conteúdo público; mutável com TTL curto e invalidação por evento — **entregue** (feed de mudanças V283: `GET /network/content/changes` com cursor `seq` monotônico, linha gravada na mesma transação da versão, poda em lote, cursor atrás da janela recebe `reset=true`) |
 | balanceamento | nó com latência/erro perde prioridade; remoção temporária — **entregue** (saúde medida em `network_nodes`, filtro + ordem no scheduler, janela que expira sozinha, `NETWORK_NODE_QUARANTINED`/`RELEASED` na auditoria) |
 | réplicas de leitura | projeção com `sourceVersion`; allowlist explícita; nunca tabela crua |
 | reconciliação | divergência vira alerta `SYNC_DIVERGENCE` — **entregue**, inclusive sem depender de o nó pedir (varredura periódica) |

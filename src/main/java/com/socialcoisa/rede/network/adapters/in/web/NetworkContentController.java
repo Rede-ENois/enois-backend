@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.network.adapters.in.web;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -130,5 +131,33 @@ class NetworkContentController {
 	}
 
 	record StatusResponse(String contentId, String status) {
+	}
+
+	record ChangeView(long seq, String kind, String contentId, long version, String contentHash, Instant changedAt) {
+	}
+
+	record ChangesResponse(boolean reset, long cursor, long nextSeq, boolean hasMore, List<ChangeView> changes) {
+	}
+
+	/**
+	 * O feed de mudanças do conteúdo público, depois do cursor do nó.
+	 *
+	 * <p>É o que permite ao nó de borda descobrir o que revalidar sem perguntar agregado por
+	 * agregado. Só ids, versão e hash: o corpo continua vindo de {@code GET /network/content/...},
+	 * pelo mesmo caminho autorizado.</p>
+	 *
+	 * <p>Um cursor atrás da janela retida recebe {@code reset=true} e nenhuma mudança — o único caso
+	 * em que a rota não diz o que mudou, e ela diz isso explicitamente. Responder "nada mudou" ali
+	 * deixaria o nó servindo conteúdo velho para sempre achando que está em dia.</p>
+	 */
+	@GetMapping("/changes")
+	ChangesResponse changes(@RequestHeader(value = "X-Node-Id", required = false) String nodeId,
+			@RequestHeader(value = "X-Node-Key", required = false) String nodeKey,
+			@RequestParam(defaultValue = "0") long cursor, @RequestParam(defaultValue = "200") int limit) {
+		NetworkNode node = keys.authenticate(nodeId, nodeKey);
+		var feed = content.changes(node, cursor, limit);
+		return new ChangesResponse(feed.reset(), feed.cursor(), feed.nextSeq(), feed.hasMore(),
+			feed.changes().stream().map(change -> new ChangeView(change.seq(), change.kind().name(),
+				change.contentId(), change.version(), change.contentHash(), change.changedAt())).toList());
 	}
 }

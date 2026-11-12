@@ -15,6 +15,7 @@ import com.socialcoisa.rede.communities.application.CommunityService;
 import com.socialcoisa.rede.communities.domain.Community;
 import com.socialcoisa.rede.network.application.port.out.ContentVersionRepository;
 import com.socialcoisa.rede.network.domain.CommunityProjection;
+import com.socialcoisa.rede.network.domain.ContentChange;
 import com.socialcoisa.rede.network.domain.ContentKind;
 import com.socialcoisa.rede.network.domain.ContentVersion;
 import com.socialcoisa.rede.network.domain.NetworkNode;
@@ -51,6 +52,9 @@ import tools.jackson.databind.ObjectMapper;
 public class ContentSyncService {
 
 	private static final Logger LOG = LoggerFactory.getLogger(ContentSyncService.class);
+
+	/** Teto de uma página do feed: o nó pagina, não pede "tudo" de uma vez. */
+	private static final int MAX_CHANGES_PAGE = 500;
 
 	private final ContentVersionRepository versions;
 	private final ProfileService profiles;
@@ -126,6 +130,7 @@ public class ContentSyncService {
 			ContentVersion first = new ContentVersion(kind, contentId, 1, hash, now);
 			// Duas instâncias cunhando a versão 1 ao mesmo tempo: a segunda não grava e relê.
 			if (versions.save(first, 0)) {
+				versions.recordChange(first);
 				return first;
 			}
 			return versions.find(kind, contentId).orElse(first);
@@ -136,14 +141,58 @@ public class ContentSyncService {
 		}
 		ContentVersion next = current.next(hash, now);
 		if (versions.save(next, current.version())) {
+			// O feed é gravado na MESMA transação da versão: mudança sem linha no feed é mudança que
+			// nenhum nó de borda descobre, e o cache dele ficaria velho até o TTL — ou para sempre,
+			// se o agregado nunca mais for editado.
+			versions.recordChange(next);
 			return next;
 		}
-		// Outra instância cunhou a versão seguinte entre a leitura e a escrita: a versão dela vale.
+		// Outra instância cunhou a versão seguinte entre a leitura e a escrita: a versão dela vale,
+		// e o feed dela também — esta chamada não grava nada.
 		return versions.find(kind, contentId).orElse(next);
 	}
 
 	/**
-	 * O que o nó tem em atraso, por tipo. É a leitura do painel e a base do alerta
+	 * O feed de mudanças depois do cursor do nó (V283).
+	 *
+	 * <p>É o que faltava para o cache de borda: sem o feed, o nó só descobria mudança perguntando
+	 * agregado por agregado, então quem guardava mil entradas não tinha como saber quais revalidar e
+	 * o que ninguém perguntava nunca convergia. O feed não carrega corpo — só o que mudou, para o nó
+	 * revalidar o que ele tem.</p>
+	 *
+	 * <p><b>A poda precisa ser visível.</b> O feed é janela, não histórico. Um cursor que ficou atrás
+	 * do que já foi apagado não pode receber "nada mudou": isso deixaria o nó servindo conteúdo velho
+	 * para sempre achando que está em dia. Nesse caso a resposta vem com {@code reset=true} e o nó
+	 * recarrega do zero.</p>
+	 */
+	@Transactional(readOnly = true)
+	public Feed changes(NetworkNode node, long afterSeq, int limit) {
+		requireEdge(node);
+		int page = Math.clamp(limit, 1, MAX_CHANGES_PAGE);
+		long cursor = Math.max(0, afterSeq);
+		boolean reset = resetNeeded(cursor);
+		List<ContentChange> changes = reset ? List.of() : versions.changesAfter(cursor, page + 1);
+		boolean hasMore = changes.size() > page;
+		List<ContentChange> slice = hasMore ? changes.subList(0, page) : changes;
+		long nextSeq = slice.isEmpty() ? cursor : slice.get(slice.size() - 1).seq();
+		return new Feed(reset, cursor, nextSeq, hasMore, List.copyOf(slice));
+	}
+
+	/**
+	 * O cursor ficou atrás da janela retida?
+	 *
+	 * <p>Só quem <b>tinha</b> posição pode ter perdido alguma: {@code cursor == 0} é o nó que nunca
+	 * sincronizou, e para ele a carga completa é o caminho normal, não um reset. Já um cursor atrás
+	 * do menor retido perdeu mudanças que não existem mais para reler — esse precisa recarregar.</p>
+	 *
+	 * <p>A condição é {@code cursor < menor - 1} e não {@code cursor < menor}: com o cursor
+	 * exatamente uma posição antes do menor, a próxima linha é justamente a menor, sem buraco.</p>
+	 */
+	private boolean resetNeeded(long cursor) {
+		return cursor > 0 && versions.oldestRetainedSeq().filter(oldest -> cursor < oldest - 1).isPresent();
+	}
+
+	/** O que o nó tem em atraso, por tipo. É a leitura do painel e a base do alerta
 	 * {@code SYNC_DIVERGENCE} da reconciliação.
 	 */
 	@Transactional(readOnly = true)
@@ -221,5 +270,16 @@ public class ContentSyncService {
 
 	/** Atraso de um tipo: quantos agregados o nó não tem na versão da origem. */
 	public record KindLag(ContentKind kind, long behind) {
+	}
+
+	/**
+	 * Uma página do feed de mudanças.
+	 *
+	 * @param reset o cursor do nó ficou atrás da janela retida: ele precisa recarregar tudo
+	 * @param cursor o cursor que o nó mandou
+	 * @param nextSeq onde o nó deve continuar da próxima vez
+	 * @param hasMore há mais mudanças além desta página
+	 */
+	public record Feed(boolean reset, long cursor, long nextSeq, boolean hasMore, List<ContentChange> changes) {
 	}
 }

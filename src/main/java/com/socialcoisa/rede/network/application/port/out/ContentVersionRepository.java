@@ -4,10 +4,11 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
+import com.socialcoisa.rede.network.domain.ContentChange;
 import com.socialcoisa.rede.network.domain.ContentKind;
 import com.socialcoisa.rede.network.domain.ContentVersion;
 
-/** Versão do conteúdo público (V279) e o que cada nó de borda já sincronizou. */
+/** Versão do conteúdo público (V279), o feed de mudanças (V283) e o que cada nó já sincronizou. */
 public interface ContentVersionRepository {
 
 	Optional<ContentVersion> find(ContentKind kind, String contentId);
@@ -61,6 +62,36 @@ public interface ContentVersionRepository {
 
 	/** Quantos snapshots existem (o denominador do painel). */
 	long countAll();
+
+	/**
+	 * Registra no feed que esta versão foi cunhada (V283).
+	 *
+	 * <p>Chamado na MESMA transação da cunhagem: versão nova sem linha no feed seria uma mudança que
+	 * nenhum nó descobre, e o cache de borda ficaria velho até o TTL — no pior caso, para sempre, se
+	 * o agregado nunca mais for editado.</p>
+	 */
+	void recordChange(ContentVersion version);
+
+	/** O feed depois de {@code afterSeq}, em ordem de {@code seq}. Vazio = o nó está em dia. */
+	List<ContentChange> changesAfter(long afterSeq, int limit);
+
+	/** A posição mais alta já gravada no feed; 0 quando o feed está vazio. */
+	long maxSeq();
+
+	/**
+	 * A menor posição ainda retida no feed; vazio = feed vazio.
+	 *
+	 * <p>É a fronteira da poda. Um nó que parou num {@code seq} menor do que este perdeu mudanças que
+	 * já não existem para reler, e responder "nada mudou" o deixaria servindo conteúdo velho para
+	 * sempre. Quem chama precisa poder pedir recarga completa nesse caso.</p>
+	 */
+	Optional<Long> oldestRetainedSeq();
+
+	/** Poda o feed: as posições mais antigas que {@code before}, no máximo {@code limit}. */
+	List<Long> expiredChangeSeqs(Instant before, int limit);
+
+	/** Remove as posições informadas. Devolve quantas saíram. */
+	int deleteChanges(List<Long> seqs);
 
 	/**
 	 * @param contentHash sha-256 hex do corpo servido, para a reconciliação comparar byte a byte

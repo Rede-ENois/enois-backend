@@ -68,10 +68,27 @@ Fase 3, cada limpeza também vira sinal em `network_instance_signals` e as outra
 próprio cache em ~1 segundo ([ADR-007](../adr/ADR-007-broadcast-entre-instancias-por-tabela.md)) —
 o TTL continua sendo a garantia, o sinal é a aceleração. Para a rede:
 
-1. **Fase 3, passo 1:** cache de borda só para conteúdo **público e imutável por versão** (ex.: objeto
-   de mídia já publicado). Imutável não precisa de invalidação.
-2. **Fase 3, passo 2:** conteúdo mutável entra com TTL curto e invalidação por evento de outbox
-   (`CacheInvalidated`), com o nó descartando a entrada ao receber.
+1. **Fase 3, passo 1 — entregue:** cache de borda só para conteúdo **público e imutável por versão**
+   (ex.: objeto de mídia já publicado). Imutável não precisa de invalidação.
+2. **Fase 3, passo 2 — entregue (V283):** conteúdo mutável entra com TTL curto e um **feed de
+   mudanças** que diz ao nó o que revalidar. O feed (`GET /network/content/changes`) devolve, para o
+   cursor `seq` que o nó informa, as versões cunhadas depois dele — `kind`, `contentId`, `version`,
+   `contentHash`, `seq` — e nunca o corpo: quem entrega corpo continua sendo `GET /network/content/{kind}/{id}`,
+   com a credencial de nó. A linha do feed é gravada **na mesma transação** da versão (V279), senão
+   uma mudança cunhada sem linha ficaria invisível para todo nó até o TTL — ou para sempre, se o
+   agregado nunca mais fosse editado.
+   - **Por que cursor e não "lista de ids mudados desde X":** `seq` é monotônica e estritamente
+     crescente; `updated_at` empata no milissegundo e o nó pularia ou releria a linha do empate. A
+     posição pertence ao leitor (o mesmo padrão da V278): não há coluna de consumo por nó.
+   - **Poda e `reset`:** o feed é janela, não histórico. `ContentChangeRetentionWorker` apaga em lotes
+     o que passou de `rede.network.content.changes.retention-hours` (72 h por padrão). Um cursor que
+     ficou atrás da menor posição retida recebe `reset=true` e lista vazia — **nunca** "nada mudou",
+     que deixaria o nó servindo conteúdo velho achando que está em dia. Cursor `0` é "nunca
+     sincronizei", não "perdi posição": recebe a página normal, sem reset.
+   - **Remoção de agregado não vira linha no feed.** O feed só carrega versão cunhada, e versão só é
+     cunhada sobre corpo existente. O nó descobre que um agregado sumiu ao revalidar e receber 404; a
+     reconciliação (V281) fecha o ciclo pelo outro lado. Um tombstone por nó multiplicaria linhas para
+     dizer a mesma coisa.
 3. **Nunca:** cache de dado pessoal em nó externo.
 
 ## 7. Reconciliação

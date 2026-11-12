@@ -9,11 +9,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import com.socialcoisa.rede.network.application.port.out.ContentVersionRepository;
+import com.socialcoisa.rede.network.domain.ContentChange;
 import com.socialcoisa.rede.network.domain.ContentKind;
 import com.socialcoisa.rede.network.domain.ContentVersion;
 
 /**
- * Versões de conteúdo público e snapshots de nó (V279), em JDBC direto.
+ * Versões de conteúdo público, feed de mudanças e snapshots de nó (V279, V283), em JDBC direto.
  *
  * <p>JDBC e não JPA porque as duas escritas são condicionais por natureza: a versão só sobe se a
  * linha ainda estiver na versão esperada, e o snapshot é um upsert. Em JPA isso viraria leitura +
@@ -103,6 +104,31 @@ class ContentVersionPersistenceAdapter implements ContentVersionRepository {
 	private static final String COUNT_ALL = "select count(*) from network_content_snapshots";
 
 	/**
+	 * O feed de mudanças (V283). A posição é do cliente, não da linha: a tabela é uma fila
+	 * compartilhada e cada nó guarda o próprio cursor, então não existe coluna de consumo aqui.
+	 */
+	private static final String INSERT_CHANGE = """
+		insert into network_content_changes (content_type, content_id, version, content_hash, changed_at)
+		values (?, ?, ?, ?, ?)
+		""";
+
+	private static final String SELECT_CHANGES_AFTER = """
+		select seq, content_type, content_id, version, content_hash, changed_at
+		from network_content_changes where seq > ? order by seq
+		limit ?
+		""";
+
+	private static final String SELECT_OLDEST_SEQ = "select min(seq) from network_content_changes";
+
+	private static final String SELECT_MAX_SEQ = "select max(seq) from network_content_changes";
+
+	private static final String SELECT_EXPIRED_CHANGE_SEQS = """
+		select seq from network_content_changes where changed_at < ? order by seq limit ?
+		""";
+
+	private static final String DELETE_CHANGES_BY_SEQ = "delete from network_content_changes where seq in (%s)";
+
+	/**
 	 * Atraso do nó: agregados que a origem tem e o nó não tem na mesma versão. O {@code left join}
 	 * conta também o que o nó nunca baixou — "nunca sincronizou" é o maior atraso possível.
 	 */
@@ -190,6 +216,47 @@ class ContentVersionPersistenceAdapter implements ContentVersionRepository {
 	public long countAll() {
 		Long count = jdbc.queryForObject(COUNT_ALL, Long.class);
 		return count == null ? 0 : count;
+	}
+
+	@Override
+	public void recordChange(ContentVersion version) {
+		jdbc.update(INSERT_CHANGE, version.kind().name(), version.contentId(), version.version(),
+			version.contentHash(), Timestamp.from(version.updatedAt()));
+	}
+
+	@Override
+	public List<ContentChange> changesAfter(long afterSeq, int limit) {
+		return jdbc.query(SELECT_CHANGES_AFTER, (rs, row) -> new ContentChange(rs.getLong("seq"),
+			ContentKind.valueOf(rs.getString("content_type")), rs.getString("content_id"), rs.getLong("version"),
+			rs.getString("content_hash"), rs.getTimestamp("changed_at").toInstant()), afterSeq, limit);
+	}
+
+	@Override
+	public Optional<Long> oldestRetainedSeq() {
+		Long oldest = jdbc.queryForObject(SELECT_OLDEST_SEQ, Long.class);
+		return Optional.ofNullable(oldest);
+	}
+
+	@Override
+	public long maxSeq() {
+		Long max = jdbc.queryForObject(SELECT_MAX_SEQ, Long.class);
+		return max == null ? 0 : max;
+	}
+
+	@Override
+	public List<Long> expiredChangeSeqs(Instant before, int limit) {
+		return jdbc.queryForList(SELECT_EXPIRED_CHANGE_SEQS, Long.class, Timestamp.from(before), limit);
+	}
+
+	@Override
+	public int deleteChanges(List<Long> seqs) {
+		if (seqs.isEmpty()) {
+			return 0;
+		}
+		// Placeholders montados a partir do tamanho da lista — o lote é limitado, então a cláusula
+		// tem tamanho fixo e não vira SQL gigante.
+		String placeholders = String.join(",", java.util.Collections.nCopies(seqs.size(), "?"));
+		return jdbc.update(DELETE_CHANGES_BY_SEQ.formatted(placeholders), seqs.toArray());
 	}
 
 	private static NodeSnapshot mapSnapshot(java.sql.ResultSet rs) throws java.sql.SQLException {
