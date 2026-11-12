@@ -378,6 +378,55 @@ class NetworkBalancingTests {
 		assertThat(assignedCount(second.id())).isEqualTo(4);
 	}
 
+	// ---------------------------------------------------------------- prioridade do nó local
+
+	/**
+	 * {@code NODE_LOCAL} tem prioridade de escalonamento, não permissão extra (ADR-02): entre nós
+	 * saudáveis, o da casa recebe antes — é ele que absorve o pico para poupar a máquina do
+	 * participante.
+	 *
+	 * <p>O cenário é montado para o código ANTIGO escolher de forma determinística o nó externo: ele
+	 * tem folga cheia (4/4) contra 1/4 do local, e a ordenação antiga por folga o colocava em
+	 * primeiro. A prioridade nova inverte isso — sem tocar em nenhum filtro.</p>
+	 */
+	@Test
+	void noLocalRecebeAntesDoExternoEntreSaudaveis() throws Exception {
+		String admin = adminToken();
+		Node local = activeNode(admin, "no-local", List.of("NODE_WORKER", "NODE_LOCAL"));
+		Node external = activeNode(admin, "no-externo", List.of("NODE_WORKER"));
+		heartbeat(local, 5.0, 3);
+
+		NetworkTask first = tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "local-1",
+			"{}", DataClass.PUBLIC, null));
+		assertThat(tasks.dispatchPending()).isEqualTo(1);
+		assertThat(assignedNode(first.id())).isEqualTo(local.id());
+
+		// A prioridade não passa por cima do limite: o local ficou cheio, o resto vai ao externo.
+		heartbeat(local, 5.0, 4);
+		NetworkTask second = tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "local-2",
+			"{}", DataClass.PUBLIC, null));
+		assertThat(tasks.dispatchPending()).isEqualTo(1);
+		assertThat(assignedNode(second.id())).isEqualTo(external.id());
+	}
+
+	/**
+	 * Prioridade é ordenação entre saudáveis, não privilégio: o nó local degradado perde para o
+	 * externo saudável, do mesmo jeito que qualquer nó degradado perde.
+	 */
+	@Test
+	void noLocalDegradadoPerdeParaOExternoSaudavel() throws Exception {
+		String admin = adminToken();
+		Node slowLocal = activeNode(admin, "no-local-lento", List.of("NODE_WORKER", "NODE_LOCAL"));
+		Node healthyExternal = activeNode(admin, "no-externo-saudavel", List.of("NODE_WORKER"));
+		jdbc.update("update network_nodes set observed_latency_ms = ? where id = ?",
+			NetworkNode.SLOW_LATENCY_MS + 30_000, slowLocal.id());
+
+		NetworkTask task = tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "local-3",
+			"{}", DataClass.PUBLIC, null));
+		tasks.dispatchPending();
+		assertThat(assignedNode(task.id())).isEqualTo(healthyExternal.id());
+	}
+
 	// ---------------------------------------------------------------- helpers
 
 	private record Node(String id, String key) {

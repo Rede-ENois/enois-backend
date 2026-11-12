@@ -72,7 +72,7 @@ removendo nó doente; teste de broadcast com duas instâncias.
 
 | item | critério de aceite |
 |---|---|
-| `NODE_LOCAL` | perfil próprio, prioridade de escalonamento |
+| `NODE_LOCAL` | perfil próprio, prioridade de escalonamento — **entregue**: o perfil já aceitava todo tipo e toda classe de dado (permissão existia); o que faltava era o ordenador, que ignorava a origem. Agora `choose()` prefere o nó local **entre os saudáveis**, depois do filtro de degradação e antes da folga: aplicada depois da folga, a prioridade só valeria quando o local já fosse o mais vago, ou seja, nunca no caso que importa (todos com vaga). O local continua sujeito a todos os filtros — vivo, não removido, com vaga, não saturado — e não ganha tipo de tarefa nenhum |
 | modos operacionais | `NORMAL`/`HIGH_LOAD`/`DEGRADED`/`EMERGENCY`/`RECOVERY` com critérios medidos — **entregue**: `GET`/`POST /admin/network/mode`, motivo obrigatório, auditoria com ator/modo anterior/motivo, `RECOVERY` termina por número, despacho obedece ao modo e o heartbeat devolve `mode`/`acceptTasks` |
 | escalonamento automático | transição registrada em auditoria com o número que a motivou — **entregue** (já existia para `NORMAL`/`HIGH_LOAD`; a saída de `RECOVERY` usa o mesmo número) |
 | failover | função preparada assume quando a principal cai |

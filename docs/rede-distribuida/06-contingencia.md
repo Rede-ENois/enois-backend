@@ -60,15 +60,32 @@ sequenceDiagram
 
   M->>CP: latência e fila acima do limiar
   CP->>CP: entra em HIGH_LOAD
-  CP->>L: despacha tarefas compatíveis
-  CP->>LB: aumenta peso dos nós locais
+  CP->>LB: ordena por origem (local antes dos saudáveis)
+  CP->>L: despacha tarefas compatíveis primeiro
   Note over M,CP: normalizou
   M->>CP: métricas voltam ao normal
   CP->>CP: entra em RECOVERY
-  CP->>LB: reduz peso gradualmente
-  CP->>L: drena tarefas
+  CP->>CP: despacho pela metade
+  CP->>L: drena conforme as tarefas terminam
   CP->>CP: volta a NORMAL
 ```
+
+**A prioridade do `NODE_LOCAL` é de ordenação, não de peso variável.** O escolhedor prefere o nó da
+casa entre os saudáveis — depois do filtro de degradação, antes da folga. É constante e não depende
+do modo: um pico não muda o critério, só aumenta o número de tarefas que passam por ele. Peso que
+subisse e descesse traria um segundo conjunto de limiares para calibrar sem ganho observável — o
+local já recebe primeiro até encher, e daí em diante a fila vai para os participantes de qualquer
+modo.
+
+O que o modo muda de fato é o **volume** despachado (`HIGH_LOAD` no teto da varredura, `RECOVERY`
+pela metade), não a ordem. A drenagem completa — devolver trabalho ao participante sem derrubar o
+que está em andamento — é o item "recuperação gradual" da fase 4, ainda aberto.
+
+O local continua sujeito a todos os filtros: vivo, fora da janela de remoção, com vaga, não
+saturado. Ele não ganha tipo de tarefa nem classe de dado que os outros não tenham — a permissão
+dele vem do perfil, que já aceitava todos os tipos e é a única origem autorizada a receber dado que
+não pode sair da infra autorizada. Prioridade de escalonamento é onde ele entra na ordem, não o que
+ele pode tocar.
 
 Critérios de entrada e saída são **medidos**, não intuídos: latência p95, profundidade de fila,
 taxa de erro e uso de CPU/memória. Cada transição automática é registrada em auditoria com o número

@@ -78,7 +78,7 @@ Executa. Cada perfil é um contrato de permissão, não um binário diferente.
 | `NODE_MEDIA` | transcode, otimização, conversão | ler dado pessoal fora do objeto de mídia |
 | `NODE_READ_REPLICA` | leitura de dados autorizados | qualquer escrita |
 | `NODE_API` | instâncias auxiliares de API | emitir sessão própria |
-| `NODE_LOCAL` | infra do Énóis, absorver pico | — |
+| `NODE_LOCAL` | infra do Énóis, absorver pico | qualquer tipo/classe de dado; **escolhido antes** dos demais entre os saudáveis ([ADR-010](../adr/ADR-010-node-local-prioridade-de-ordem.md)) | — |
 | `NODE_EMERGENCY` | funções preparadas para incidente | assumir função não preparada |
 
 Um servidor pode executar mais de um perfil se capacidade e permissões permitirem.

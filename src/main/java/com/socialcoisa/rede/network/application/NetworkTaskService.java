@@ -22,6 +22,7 @@ import com.socialcoisa.rede.network.domain.DataClass;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NetworkMode;
 import com.socialcoisa.rede.network.domain.NetworkTask;
+import com.socialcoisa.rede.network.domain.NodeProfile;
 import com.socialcoisa.rede.network.domain.TaskStatus;
 import com.socialcoisa.rede.network.domain.TaskType;
 import com.socialcoisa.rede.shared.audit.AuditTrail;
@@ -327,8 +328,9 @@ public class NetworkTaskService {
 	 * Escolhe o nó para a tarefa.
 	 *
 	 * <p>Filtro primeiro (vivo, fora da janela de remoção, perfil cobre o tipo, classe de dado pode
-	 * ir para este nó, tem vaga, não está saturado), depois ordenação por saúde e por folga: nó
-	 * degradado (lento ou errando recentemente) perde prioridade para todos os saudáveis, e entre os
+	 * ir para este nó, tem vaga, não está saturado), depois ordenação por saúde, origem e folga: nó
+	 * degradado (lento ou errando recentemente) perde prioridade para todos os saudáveis; entre os
+	 * saudáveis, o nó da infraestrutura do Énóis ({@code NODE_LOCAL}) vem antes dos demais; e dentro
 	 * do mesmo grupo quem tem mais vaga proporcional recebe. Empate é resolvido por jitter — sem ele,
 	 * todos os nós empatados receberiam sempre na mesma ordem e o primeiro da lista viraria
 	 * gargalo.</p>
@@ -351,6 +353,7 @@ public class NetworkTaskService {
 			.filter(node -> hasRoom(node, reserved))
 			.filter(node -> !node.saturated())
 			.sorted(Comparator.comparing(NetworkTaskService::degraded)
+				.thenComparing(NetworkTaskService::localPriority)
 				.thenComparing(Comparator.<NetworkNode>comparingDouble(node -> slack(node, reserved)).reversed())
 				.thenComparingDouble(node -> ThreadLocalRandom.current().nextDouble()))
 			.toList();
@@ -369,6 +372,23 @@ public class NetworkTaskService {
 	/** Nó degradado: lento medido, ou errando recentemente sem ter chegado ao limite da janela. */
 	private static boolean degraded(NetworkNode node) {
 		return node.slow() || node.failing();
+	}
+
+	/**
+	 * Ordenação por origem: nó da própria infraestrutura do Énóis recebe antes dos demais.
+	 *
+	 * <p>É <b>prioridade de escalonamento, não permissão extra</b> (ADR-02). O perfil não abre tipo de
+	 * tarefa nem classe de dado que outro nó não tenha, e não passa por cima de nenhum filtro: um nó
+	 * local lento, errando ou sem vaga continua fora como qualquer outro. O que ele ganha é escolha
+	 * primeiro entre os saudáveis — para que o pico seja absorvido na máquina da casa em vez de na
+	 * máquina do participante.</p>
+	 *
+	 * <p>Fica <b>antes</b> da folga porque o critério de escalonamento é de origem, não de ocupação:
+	 * aplicado depois, o local só seria preferido quando já fosse o mais folgado, e a prioridade não
+	 * existiria justamente no momento em que ela importa (todos os nós com vaga).</p>
+	 */
+	private static boolean localPriority(NetworkNode node) {
+		return !node.profiles().contains(NodeProfile.NODE_LOCAL);
 	}
 
 	/**
