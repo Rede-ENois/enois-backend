@@ -262,6 +262,28 @@ class CalendarReminderServiceTests {
 		return "rem_owner_" + UUID.randomUUID();
 	}
 
+	/**
+	 * O worker manda um lote por ciclo: se o `deliverDue` carregasse a fila inteira, um acumulo de
+	 * vencidos (fim de semana, queda do envio) virava um ciclo longo preso a um pico e o laço de 30 s
+	 * perdia o ritmo. O lote é aplicado na consulta da porta, e este teste tranca que um ciclo
+	 * entrega no máximo o lote declarado; o resto fica na fila para o próximo.
+	 */
+	@Test
+	void oneCycleDeliversAtMostTheBatchCeiling() {
+		String sender = owner();
+		Instant soon = Instant.now().plus(Duration.ofMinutes(10));
+		int moreThanTheBatch = CalendarReminderService.BATCH + 5;
+		for (int i = 0; i < moreThanTheBatch; i++) {
+			String entryId = entry(sender, "Lote " + i, soon);
+			// Antecedência de um dia: com o compromisso a 10 min, o lembrete já nasce vencido.
+			reminders.setForReader(sender, entryId, 1440);
+		}
+
+		int delivered = reminders.deliverDue();
+
+		assertThat(delivered).isEqualTo(CalendarReminderService.BATCH);
+	}
+
 	private String entry(String owner, String title, Instant startsAt) {
 		return commands.create(owner, "SOCIAL", "PERSONAL", title, null, startsAt.toString(),
 			startsAt.plus(Duration.ofMinutes(30)).toString(), SAO_PAULO.getId(), false).id();

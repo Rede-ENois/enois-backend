@@ -22,13 +22,4 @@ public interface CalendarParticipantRepository {
 	/** Todos os participantes de um compromisso, na ordem em que foram convidados. */
 	List<CalendarParticipant> findByEntry(String entryId);
 
-	/**
-	 * Ids dos compromissos em que a pessoa foi convidada, para a leitura incluir o que ela não
-	 * organiza. Devolve id de compromisso, não de convite.
-	 */
-	List<String> findEntryIdsByUser(String userId);
-
-	/** Convites de uma pessoa com a resposta que ela ainda não deu, do convite mais antigo ao mais novo. */
-	List<CalendarParticipant> findPendingByUser(String userId);
-
 }
