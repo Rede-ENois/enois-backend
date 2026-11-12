@@ -87,8 +87,8 @@ o teste exige a ordem das transições.
 
 | item | critério de aceite |
 |---|---|
-| onboarding externo | fluxo completo do token de provisionamento até `ACTIVE` — **parcial**: `provision-token` → `enroll` → aprovação → `GET /network/nodes/me/config` assinado (Ed25519, com pino da chave pública e `configVersion` do ciclo de vida) estão entregues; falta o instalador (próxima linha) e a solicitação de ingresso pela interface do participante |
-| instalador | Docker Compose + script Linux; health check; atualização; rollback; backup de config; diagnóstico |
+| onboarding externo | fluxo completo do token de provisionamento até `ACTIVE` — **parcial**: `provision-token` → `enroll` → aprovação → `GET /network/nodes/me/config` assinado (Ed25519, com pino da chave pública e `configVersion` do ciclo de vida) estão entregues; o instalador está em `deploy/node-runtime/` (linha seguinte) e falta a solicitação de ingresso pela interface do participante |
+| instalador | Docker Compose + script Linux; health check; atualização; rollback; backup de config; diagnóstico — **parcial**: enrol de três passos (`deploy/node-runtime/`: enroll → `--set-key` → `--start`), compose endurecido (`read_only`, `cap_drop: ALL`, `no-new-privileges`, limites, sem porta/socket), diagnóstico `node-doctor.sh` (PASS/WARN/FAIL, 14 cenários em `scripts/tests/node-runtime-test.sh`); falta executores por perfil, atualização/rollback com assinatura OCI e backup de identidade |
 | imagens OCI assinadas | assinatura verificada no pull |
 | gestão de permissões | participante define limites; a rede respeita — **parcial**: CPU (concorrência) e memória declarada respeitadas; disco e banda dependem de não haver tarefa que os consuma hoje |
 | painel "Énóis Network" | todos os agregados e a página por nó com as ações administrativas |

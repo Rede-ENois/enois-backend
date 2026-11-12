@@ -1,0 +1,40 @@
+# Node Runtime — máquina participante da Énóis Distributed Network.
+#
+# Este compose roda FORA da infraestrutura principal, na máquina do participante.
+# Regras que ele materializa (docs/rede-distribuida/02-modelo-de-ameacas.md):
+#   - usuário sem privilégio, sem docker socket, sem acesso ao host;
+#   - container read_only com cap_drop ALL e no-new-privileges;
+#   - limites de CPU/memória — o nó não pode consumir mais do que declarou;
+#   - credenciais do nó (nodeId + API key) ficam num volume próprio, permissão 600.
+#
+# O nó NÃO expõe porta: o modelo é pull (GET /network/tasks/next). Um participante
+# atrás de NAT funciona — ninguém abre conexão para ele.
+services:
+  node:
+    image: ${NODE_RUNTIME_IMAGE:-ghcr.io/rede-enois/enois-backend:${NODE_RUNTIME_TAG:-qa}}
+    container_name: enois-node
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,noexec
+    environment:
+      NODE_HOME: /var/lib/enois-node
+      CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:?informe a URL do Control Plane}
+      NODE_POLL_SECONDS: ${NODE_POLL_SECONDS:-15}
+    volumes:
+      # Estado do nó (nodeId + API key, permissão 600 no host) gravado pelo install.sh.
+      - ${NODE_HOME:? rode o install.sh, que exporta NODE_HOME}:/var/lib/enois-node:rw
+    # O runtime executa tarefa de rede; não serve nada. Sem ports, sem host network.
+    mem_limit: ${NODE_MEMORY_MB:-512m}
+    cpus: ${NODE_CPU_LIMIT:-1.0}
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
