@@ -57,12 +57,21 @@ public class CalendarSubscriptionService {
 	/**
 	 * A assinatura ativa ou uma nova. Devolve o token em claro, que só existe aqui — quem já tinha
 	 * uma recebe {@code null} e a tela mostra que o link antigo continua valendo.
+	 *
+	 * <p>Pedir um recorte diferente do que a assinatura ativa tem é recusado: devolver a existente
+	 * em silêncio faria a pessoa achar que acabou de assinar a agenda profissional e receber um
+	 * arquivo com a social. O recorte é congelado no token; trocá-lo é regenerar o link (D7).
 	 */
 	@Transactional
 	public Issued issue(String userId, CalendarScope scope) {
 		Optional<CalendarSubscription> existing = subscriptions.findActiveByUser(userId);
 		if (existing.isPresent()) {
-			return new Issued(existing.get(), null);
+			CalendarSubscription current = existing.get();
+			if (scope != null && scope != current.scope()) {
+				throw new ApiException(409, "CALENDAR_SUBSCRIPTION_SCOPE_CONFLICT",
+					"A assinatura ativa cobre outra agenda; regenere o link para trocar o recorte.");
+			}
+			return new Issued(current, null);
 		}
 		String token = CalendarSubscription.newToken();
 		CalendarSubscription created = CalendarSubscription.create(UUID.randomUUID().toString(), userId, scope,
