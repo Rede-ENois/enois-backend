@@ -208,6 +208,19 @@ devolve nó de outro participante, e nó alheio (mesmo com o id na mão) é `404
 403, para não confirmar existência. A chave de API **nunca** aparece aqui: ela é emitida pelo
 admin, exibida uma única vez a ele.
 
+### `POST /network/participant/join`
+
+Solicitação de ingresso — abre o onboarding sem passar pelo painel do admin. Corpo:
+`{"displayName":"vps-da-casa"}`. Resposta: `{"token", "expiresAt", "nextStep"}` — o token de
+provisionamento de uso único (ADR-003) que o participante leva ao instalador (`deploy/node-runtime`).
+
+O que a rota **não** aceita do corpo: dono (é sempre a conta da sessão) e perfis (o participante
+declara o servidor; o que ele executa é negociado com o admin na aprovação — o nó nasce sem
+perfil, e `allowTasks` vazio até o admin atribuir). Limite de **3 tokens vivos** por conta
+(não usados e não vencidos): o quarto pedido é `429 NODE_JOIN_LIMIT`. Consumir ou deixar vencer
+um token abre a vaga. Auditada como `NODE_JOIN_REQUESTED` com o participante como ator —
+distinta do `NODE_PROVISION_TOKEN_ISSUED` do painel, para o histórico dizer quem pediu o quê.
+
 ### `GET /network/participant/nodes`
 
 Lista de nós do participante (limite 200, mais novos primeiro), cada um com: `id`, `displayName`,
@@ -248,6 +261,7 @@ revogação continua sendo decisão administrativa.
 | `NETWORK_MODE_NOT_MANUAL` | 400 | `NORMAL`/`HIGH_LOAD` não são declarados à mão |
 | `NETWORK_MODE_REASON_REQUIRED` | 400 | transição manual sem motivo |
 | `NETWORK_MODE_UNKNOWN` | 400 | modo inexistente em `POST /admin/network/mode` |
+| `NODE_JOIN_LIMIT` | 429 | três tokens de ingresso vivos por conta |
 
 ## 5. Versionamento
 

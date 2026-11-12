@@ -34,6 +34,13 @@ public class NetworkNodeService {
 	private static final int MAX_DISPLAY_NAME = 120;
 	private static final int MAX_LIST = 200;
 
+	/**
+	 * Tokens vivos por conta na solicitação de auto-serviço. O token é de uso único e curto (30 min
+	 * por padrão), mas um loop de cliente abriria linhas até o fim do TTL; três em aberto cobre
+	 * "um servidor por perfil" com folga e ainda freia abuso.
+	 */
+	private static final int MAX_ALIVE_TOKENS_PER_OWNER = 3;
+
 	private final NetworkNodeRepository nodes;
 	private final ProvisionTokenRepository tokens;
 	private final NodeKeyService keyService;
@@ -75,6 +82,30 @@ public class NetworkNodeService {
 			now.plus(tokenTtl), actorId, now);
 		audit.record(actorId, "NODE_PROVISION_TOKEN_ISSUED", displayName.trim(),
 			"{\"owner\":\"" + ownerUserId.trim() + "\"}");
+		return new IssuedToken(plain, now.plus(tokenTtl));
+	}
+
+	/**
+	 * Solicitação de ingresso pelo próprio participante (interface do participante, ADR-003): o
+	 * dono do token é SEMPRE a conta da sessão — o corpo do pedido não escolhe dono, senão a rota
+	 * de auto-serviço emitiria credencial para conta alheia. Perfis também não: o participante
+	 * declara o servidor; os perfis autorizados são negociados com o admin (que aprova o nó e
+	 * emite a chave). A auditoria distingue a origem: NODE_JOIN_REQUESTED, com quem pediu.
+	 */
+	@Transactional
+	public IssuedToken requestJoin(String ownerUserId, String displayName) {
+		if (tokens.countAliveForOwner(ownerUserId, clock.instant()) >= MAX_ALIVE_TOKENS_PER_OWNER) {
+			throw new ApiException(429, "NODE_JOIN_LIMIT",
+				"Voce ja tem solicitacoes de ingresso em aberto: aguarde a aprovacao ou o vencimento.");
+		}
+		if (displayName == null || displayName.isBlank() || displayName.length() > MAX_DISPLAY_NAME) {
+			throw new ApiException(400, "NODE_NAME_INVALID", "Nome do no ausente ou longo demais.");
+		}
+		String plain = NodeIds.next("npt");
+		Instant now = clock.instant();
+		tokens.insert(Hashes.sha256Hex(plain), displayName.trim(), ownerUserId, "", now.plus(tokenTtl), ownerUserId,
+			now);
+		audit.record(ownerUserId, "NODE_JOIN_REQUESTED", displayName.trim(), "{\"owner\":\"" + ownerUserId + "\"}");
 		return new IssuedToken(plain, now.plus(tokenTtl));
 	}
 

@@ -711,4 +711,84 @@ class NetworkNodesTests {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$[0].tasksDone").value(1));
 	}
+
+	/**
+	 * Solicitação de ingresso: o token nasce com o PRÓPRIO participante como dono e criador — o
+	 * corpo do pedido não escolhe dono nem perfis — e o token funciona no enroll como qualquer
+	 * outro, criando o nó em PENDING_APPROVAL para a conta dele.
+	 */
+	@Test
+	void participanteSolicitaIngressoETokenCriaONoDele() throws Exception {
+		var dono = auth.authenticate("net_join");
+
+		var result = mockMvc
+			.perform(post("/network/participant/join").header("X-Session-Token", dono.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("displayName", "vps-da-casa"))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.expiresAt").isNotEmpty())
+			.andExpect(jsonPath("$.nextStep").isNotEmpty())
+			.andReturn();
+		String token = objectMapper.readTree(result.getResponse().getContentAsString()).get("token").asString();
+
+		// O token não escolhe dono: quem pediu é o dono, e o enroll cria o nó para a conta dele.
+		String nodeId = enroll(token);
+		assertThat(jdbc.queryForObject("select owner_user_id from network_nodes where id = ?", String.class,
+				nodeId))
+			.isEqualTo(dono.userId());
+		assertThat(jdbc.queryForObject("select created_by from network_provision_tokens", String.class))
+			.isEqualTo(dono.userId());
+		// Sem perfis na solicitação: o que o nó executa é negociado com o admin na aprovação.
+		assertThat(jdbc.queryForObject("select profiles from network_nodes where id = ?", String.class, nodeId))
+			.isEqualTo("");
+		assertThat(jdbc.queryForObject(
+			"select count(*) from audit_logs where action = 'NODE_JOIN_REQUESTED' and actor_id = ?",
+			Integer.class, dono.userId())).isEqualTo(1);
+	}
+
+	/** O freio do auto-serviço: três tokens vivos por conta, o quarto pedido é 429. */
+	@Test
+	void solicitacaoDeIngressoTemLimiteDeTokensVivos() throws Exception {
+		var dono = auth.authenticate("net_join_limit");
+
+		var first = mockMvc
+			.perform(post("/network/participant/join").header("X-Session-Token", dono.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("displayName", "vps-1"))))
+			.andExpect(status().isOk())
+			.andReturn();
+		String plain = objectMapper.readTree(first.getResponse().getContentAsString()).get("token").asString();
+		for (int i = 2; i <= 3; i++) {
+			mockMvc.perform(post("/network/participant/join").header("X-Session-Token", dono.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("displayName", "vps-" + i))))
+				.andExpect(status().isOk());
+		}
+		mockMvc.perform(post("/network/participant/join").header("X-Session-Token", dono.token())
+			.contentType(MediaType.APPLICATION_JSON)
+			.content(objectMapper.writeValueAsString(Map.of("displayName", "vps-4"))))
+			.andExpect(status().isTooManyRequests())
+			.andExpect(jsonPath("$.code").value("NODE_JOIN_LIMIT"));
+
+		// Consumir um token (uso único) abre a vaga: o pedido seguinte volta a passar.
+		enroll(plain);
+		mockMvc.perform(post("/network/participant/join").header("X-Session-Token", dono.token())
+			.contentType(MediaType.APPLICATION_JSON)
+			.content(objectMapper.writeValueAsString(Map.of("displayName", "vps-5"))))
+			.andExpect(status().isOk());
+	}
+
+	/** Sem sessão não há solicitação; nome de nó vale as mesmas regras do painel. */
+	@Test
+	void solicitacaoSemSessaoOuSemNomeERecusada() throws Exception {
+		mockMvc.perform(post("/network/participant/join").contentType(MediaType.APPLICATION_JSON)
+			.content(objectMapper.writeValueAsString(Map.of("displayName", "x"))))
+			.andExpect(status().isUnauthorized());
+
+		var dono = auth.authenticate("net_join_nome");
+		mockMvc.perform(post("/network/participant/join").header("X-Session-Token", dono.token())
+			.contentType(MediaType.APPLICATION_JSON).content("{}"))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("NODE_NAME_INVALID"));
+	}
 }

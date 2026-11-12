@@ -15,4 +15,8 @@ interface SpringDataProvisionTokenJpaRepository extends JpaRepository<ProvisionT
 	int markUsed(@Param("hash") String hash, @Param("now") Instant now);
 
 	Optional<ProvisionTokenJpaEntity> findByTokenHash(String tokenHash);
+
+	@Query("select count(t) from ProvisionTokenJpaEntity t where t.ownerUserId = :owner and t.usedAt is null "
+			+ "and t.expiresAt > :now")
+	long countAliveForOwner(@Param("owner") String owner, @Param("now") Instant now);
 }

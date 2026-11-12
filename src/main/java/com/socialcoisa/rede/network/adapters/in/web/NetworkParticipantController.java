@@ -6,10 +6,12 @@ import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.socialcoisa.rede.network.application.NetworkNodeService;
 import com.socialcoisa.rede.network.application.NetworkParticipantService;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.shared.web.CurrentUser;
@@ -85,5 +87,27 @@ class NetworkParticipantController {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		return MyNodeView.of(new NetworkParticipantService.NodeWithContribution(
 			participant.disconnect(user.id().value(), id), 0));
+	}
+
+	/**
+	 * Solicitação de ingresso: a rota que abre o onboarding sem passar pelo painel do admin. O
+	 * token devolvido é de uso único e curto — o participante o leva ao instalador
+	 * (deploy/node-runtime), que faz o enroll. Perfis não são escolhidos aqui: o participante
+	 * declara o servidor, e o que ele pode executar é negociado com o admin na aprovação.
+	 */
+	record JoinRequest(String displayName) {
+	}
+
+	record JoinResponse(String token, Instant expiresAt, String nextStep) {
+	}
+
+	@PostMapping("/join")
+	JoinResponse requestJoin(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestBody(required = false) JoinRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		NetworkNodeService.IssuedToken issued = participant.requestJoin(user.id().value(),
+			request == null ? null : request.displayName());
+		return new JoinResponse(issued.token(), issued.expiresAt(),
+			"Use o token no instalador do runtime (deploy/node-runtime). O no nasce em PENDING_APPROVAL.");
 	}
 }

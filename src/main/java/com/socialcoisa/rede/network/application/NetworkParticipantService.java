@@ -66,6 +66,12 @@ public class NetworkParticipantService {
 		return lifecycle.disconnectVoluntarily(nodeId, ownerUserId);
 	}
 
+	/** Solicitação de ingresso: o token nasce com o próprio participante como dono e criador. */
+	@Transactional
+	public NetworkNodeService.IssuedToken requestJoin(String ownerUserId, String displayName) {
+		return lifecycle.requestJoin(ownerUserId, displayName);
+	}
+
 	/** O nó do participante com a contribuição medida — o número que a tela dele mostra. */
 	public record NodeWithContribution(NetworkNode node, long tasksDone) {
 	}
