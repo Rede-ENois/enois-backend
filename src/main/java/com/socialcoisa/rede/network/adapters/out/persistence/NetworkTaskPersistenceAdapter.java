@@ -34,9 +34,18 @@ class NetworkTaskPersistenceAdapter implements NetworkTaskRepository {
 
 	@Override
 	public void create(String id, TaskType type, String idempotencyKey, String payload, DataClass dataClass,
-			Instant deadline, Instant nextAttemptAt, Instant now) {
-		repository.save(new NetworkTaskJpaEntity(id, type.name(), idempotencyKey, payload, dataClass.name(), deadline,
-			nextAttemptAt, now));
+			String region, Instant deadline, Instant nextAttemptAt, Instant now) {
+		repository.save(new NetworkTaskJpaEntity(id, type.name(), idempotencyKey, payload, dataClass.name(),
+			normalizeRegion(region), deadline, nextAttemptAt, now));
+	}
+
+	/**
+	 * Região vazia e região nula são a mesma coisa ("sem preferência"). Guardar {@code ""} criaria um
+	 * valor que não casa com nó nenhum e que ninguém distingue de null na leitura — dois jeitos de
+	 * dizer a mesma ausência viram bug de comparação mais tarde.
+	 */
+	private static String normalizeRegion(String region) {
+		return region == null || region.isBlank() ? null : region.trim();
 	}
 
 	@Override

@@ -43,13 +43,20 @@ class AdminNetworkTaskController {
 		this.adminGuard = adminGuard;
 	}
 
-	record TaskView(String id, String type, String status, int attempt, String dataClass, String assignedNodeId,
-			Instant deadline, Instant nextAttemptAt, Instant finishedAt, String lastError, Instant createdAt) {
+	/**
+	 * A tarefa como o painel a vê. {@code region} é a preferência de origem do pedido (null =
+	 * sem preferência); ela aparece porque é a única explicação visível de por que uma tarefa foi
+	 * para um nó distante — e porque o admin precisa poder conferir que uma tarefa regional não
+	 * está presa esperando a região.
+	 */
+	record TaskView(String id, String type, String status, int attempt, String dataClass, String region,
+			String assignedNodeId, Instant deadline, Instant nextAttemptAt, Instant finishedAt, String lastError,
+			Instant createdAt) {
 
 		static TaskView of(NetworkTask task) {
 			return new TaskView(task.id(), task.taskType().name(), task.status().name(), task.attempt(),
-				task.dataClass().name(), task.assignedNodeId(), task.deadline(), task.nextAttemptAt(),
-				task.finishedAt(), task.lastError(), task.createdAt());
+				task.dataClass().name(), task.region(), task.assignedNodeId(), task.deadline(),
+				task.nextAttemptAt(), task.finishedAt(), task.lastError(), task.createdAt());
 		}
 	}
 

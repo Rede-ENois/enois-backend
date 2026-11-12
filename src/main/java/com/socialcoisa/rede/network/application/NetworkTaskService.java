@@ -116,7 +116,8 @@ public class NetworkTaskService {
 		String id = NodeIds.next("tk");
 		tasks.create(id, command.taskType(), command.idempotencyKey().trim(),
 			command.payload() == null ? "{}" : command.payload(),
-			command.dataClass() == null ? DataClass.PUBLIC : command.dataClass(), deadline, now, now);
+			command.dataClass() == null ? DataClass.PUBLIC : command.dataClass(), command.region(), deadline, now,
+			now);
 		return tasks.findById(id)
 			.orElseThrow(() -> new IllegalStateException("Tarefa recem-criada nao encontrada: " + id));
 	}
@@ -369,11 +370,12 @@ public class NetworkTaskService {
 	 *
 	 * <p>Filtro primeiro (vivo, fora da janela de remoção, perfil cobre o tipo, classe de dado pode
 	 * ir para este nó, tem vaga, não está saturado, não esgotou a memória declarada), depois ordenação
-	 * por saúde, origem e folga: nó degradado (lento ou errando recentemente) perde prioridade para
-	 * todos os saudáveis; entre os saudáveis, o nó da infraestrutura do Énóis ({@code NODE_LOCAL}) vem
-	 * antes dos demais; e dentro do mesmo grupo quem tem mais vaga proporcional recebe. Empate é
-	 * resolvido por jitter — sem ele, todos os nós empatados receberiam sempre na mesma ordem e o
-	 * primeiro da lista viraria gargalo.</p>
+	 * por saúde, origem, região e folga: nó degradado (lento ou errando recentemente) perde prioridade
+	 * para todos os saudáveis; entre os saudáveis, o nó da infraestrutura do Énóis ({@code NODE_LOCAL})
+	 * vem antes dos demais; dentro do mesmo grupo de origem, o nó da região do pedido vem antes de nós
+	 * de outras regiões; e dentro do mesmo grupo de região quem tem mais vaga proporcional recebe.
+	 * Empate é resolvido por jitter — sem ele, todos os nós empatados receberiam sempre na mesma ordem
+	 * e o primeiro da lista viraria gargalo.</p>
 	 *
 	 * <p>A remoção temporária é filtro, não penalidade: um nó que falhou
 	 * {@link NetworkNode#FAILURE_STREAK_LIMIT} vezes seguidas fica fora da lista até a janela vencer.
@@ -395,6 +397,7 @@ public class NetworkTaskService {
 			.filter(node -> !node.memoryExhausted())
 			.sorted(Comparator.comparing(NetworkTaskService::degraded)
 				.thenComparing(NetworkTaskService::localPriority)
+				.thenComparing(Comparator.comparingInt(node -> regionPenalty(task.region(), node)))
 				.thenComparing(Comparator.<NetworkNode>comparingDouble(node -> slack(node, reserved)).reversed())
 				.thenComparingDouble(node -> ThreadLocalRandom.current().nextDouble()))
 			.toList();
@@ -438,6 +441,26 @@ public class NetworkTaskService {
 	 */
 	private static boolean localPriority(NetworkNode node) {
 		return !node.profiles().contains(NodeProfile.NODE_LOCAL);
+	}
+
+	/**
+	 * Afinidade de região: 0 para o nó da região do pedido, 1 para os demais.
+	 *
+	 * <p>É <b>ordenação</b>, nunca filtro (ADR-012). Filtrar esvaziaria a fila sempre que a região do
+	 * pedido não tivesse nó elegível — a tarefa esperaria a região voltar em vez de rodar no vizinho,
+	 * e a rede cooperativa existe justamente para não ter esse ponto único. Sem região no pedido, ou
+	 * sem região declarada no nó, todos empatam em 0 e o escalonamento é o de antes.</p>
+	 *
+	 * <p>Fica <b>depois</b> da origem ({@code NODE_LOCAL}): a casa continua absorvendo o pico antes
+	 * de chegar ao participante, como em ADR-010. Quando há local com vaga, ele recebe; a região
+	 * decide entre os demais. Antes da folga, porque afinidade aplicada depois só valeria no empate
+	 * exato de vagas — e é no caso normal (todos com vaga parecida) que ela precisa existir.</p>
+	 */
+	private static int regionPenalty(String taskRegion, NetworkNode node) {
+		if (taskRegion == null || node.region() == null) {
+			return 0;
+		}
+		return taskRegion.equalsIgnoreCase(node.region()) ? 0 : 1;
 	}
 
 	/**
@@ -500,8 +523,19 @@ public class NetworkTaskService {
 		return text.length() > MAX_ERROR ? text.substring(0, MAX_ERROR) : text;
 	}
 
+	/**
+	 * Pedido de tarefa. {@code region} é opcional e a sobrecarga de cinco argumentos existe para não
+	 * obrigar quem não tem preferência a dizer "sem preferência" — o valor antigo de quatro campos
+	 * mais deadline produz exatamente o mesmo comportamento de antes desta rodada.
+	 */
 	public record EnqueueCommand(TaskType taskType, String idempotencyKey, String payload, DataClass dataClass,
-			Instant deadline) {
+			String region, Instant deadline) {
+
+		/** Pedido sem preferência de região: o escalonamento é o mesmo de antes de a região existir. */
+		public EnqueueCommand(TaskType taskType, String idempotencyKey, String payload, DataClass dataClass,
+				Instant deadline) {
+			this(taskType, idempotencyKey, payload, dataClass, null, deadline);
+		}
 	}
 
 	public record ResultCommand(String taskId, int attempt, boolean done, String output, String error,

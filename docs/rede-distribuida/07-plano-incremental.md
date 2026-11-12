@@ -93,7 +93,7 @@ o teste exige a ordem das transições.
 | gestão de permissões | participante define limites; a rede respeita — **parcial**: CPU (concorrência) e memória declarada respeitadas; disco e banda dependem de não haver tarefa que os consuma hoje |
 | painel "Énóis Network" | todos os agregados e a página por nó com as ações administrativas |
 | interface do participante | solicitar, instalar, consultar estado e contribuição, desconectar |
-| distribuição geográfica | região declarada e considerada no escalonamento |
+| distribuição geográfica | região declarada e considerada no escalonamento — **parcial**: região no enroll (duas formas aceitas, como a doc documenta) e `region` opcional na tarefa (V285) entram como **afinidade de ordenação** (degradação → origem → região → folga → jitter, ADR-012), nunca filtro; falta recuperação regional da fase 6 |
 
 **Prova:** instalação limpa em máquina nova, do zero, sem conhecer a arquitetura interna.
 

@@ -42,8 +42,29 @@ class NetworkNodeController {
 		this.configs = configs;
 	}
 
+	/**
+	 * A região pode vir aninhada em {@code location} — como o contrato em 03-contratos.md sempre
+	 * documentou — ou solta em {@code region}/{@code country}. Antes desta rodada só a forma solta
+	 * era lida: um instalador que seguia a doc gravava o nó sem região, e o enroll aceitava em
+	 * silêncio.
+	 */
 	record EnrollRequest(String provisionToken, String runtimeVersion, Declared declared, String region,
-			String country) {
+			String country, Location location) {
+
+		String effectiveRegion() {
+			return firstNonBlank(region, location == null ? null : location.region());
+		}
+
+		String effectiveCountry() {
+			return firstNonBlank(country, location == null ? null : location.country());
+		}
+
+		private static String firstNonBlank(String a, String b) {
+			return a != null && !a.isBlank() ? a : b;
+		}
+	}
+
+	record Location(String region, String country) {
 	}
 
 	record Declared(int cpuCores, int memoryMb, int diskMb, int bandwidthMbps) {
@@ -79,7 +100,7 @@ class NetworkNodeController {
 		}
 		Declared declared = request.declared();
 		NetworkNode node = nodes.enroll(new NetworkNodeService.EnrollCommand(request.provisionToken(),
-			request.region(), request.country(), declared == null ? 0 : declared.cpuCores(),
+			request.effectiveRegion(), request.effectiveCountry(), declared == null ? 0 : declared.cpuCores(),
 			declared == null ? 0 : declared.memoryMb(), declared == null ? 0 : declared.diskMb(),
 			declared == null ? 0 : declared.bandwidthMbps()));
 		return new EnrollResponse(node.id(), node.status().name(), "1",

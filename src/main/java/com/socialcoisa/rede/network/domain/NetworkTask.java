@@ -14,11 +14,15 @@ import java.time.Instant;
  * <p>O estado de retentativa vive aqui, não no evento do outbox: o worker do outbox grava o recibo
  * do handler antes de chamá-lo, então quando o nó falha o evento já está concluído. Quem sabe que a
  * tarefa falhou é esta linha (ADR-006).</p>
+ *
+ * @param region região de origem declarada por quem pediu a tarefa; {@code null} = sem preferência.
+ * O scheduler a usa como <b>desempate de ordenação</b>, nunca como filtro (ADR-012): pedido feito na
+ * região X roda primeiro em nó de X, e roda em qualquer nó saudável se não houver X vivo.
  */
 public record NetworkTask(String id, TaskType taskType, TaskStatus status, int attempt, String idempotencyKey,
-		String payload, DataClass dataClass, String assignedNodeId, Instant deadline, Instant nextAttemptAt,
-		Instant dispatchedAt, Instant claimExpiresAt, Instant finishedAt, String output, String lastError,
-		Instant createdAt, Instant updatedAt) {
+		String payload, DataClass dataClass, String region, String assignedNodeId, Instant deadline,
+		Instant nextAttemptAt, Instant dispatchedAt, Instant claimExpiresAt, Instant finishedAt, String output,
+		String lastError, Instant createdAt, Instant updatedAt) {
 
 	/** Erro guardado na linha: o suficiente para o painel dizer o que houve, sem payload. */
 	public static final int MAX_ERROR_LENGTH = 500;

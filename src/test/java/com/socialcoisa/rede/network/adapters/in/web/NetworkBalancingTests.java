@@ -377,7 +377,6 @@ class NetworkBalancingTests {
 		assertThat(assignedCount(first.id())).isEqualTo(4);
 		assertThat(assignedCount(second.id())).isEqualTo(4);
 	}
-
 	// ---------------------------------------------------------------- prioridade do nó local
 
 	/**
@@ -427,6 +426,81 @@ class NetworkBalancingTests {
 		assertThat(assignedNode(task.id())).isEqualTo(healthyExternal.id());
 	}
 
+		// ---------------------------------------------------------------- afinidade de região
+
+	/**
+	 * Afinidade de região (fase 5): tarefa que declara região nasce na região declarada e o nó de lá
+	 * recebe antes — sem virar filtro.
+	 *
+	 * <p>Q0: o cenário é montado para o código ANTIGO escolher de forma determinística o nó de outra
+	 * região — o local tem folga cheia (4/4) contra 1/4 do nó da região do pedido, e a ordenação
+	 * antiga por folga o colocava em primeiro. A afinidade nova inverte isso; o filtro novo não
+	 * existe. A tarefa SEM região continua idêntica ao comportamento de antes (teste seguinte).</p>
+	 */
+	@Test
+	void tarefaDaRegiaoRecebeONoDaRegiaoSemVirarFiltro() throws Exception {
+		String admin = adminToken();
+		Node nearby = activeNodeInRegion(admin, "no-proximo", List.of("NODE_WORKER"), "sa-east-1");
+		Node far = activeNodeInRegion(admin, "no-distante", List.of("NODE_WORKER"), "us-east-1");
+		// O nó de outra região tem folga cheia: sem o termo novo, a folga o escolheria sempre.
+		heartbeat(far, 5.0, 0);
+		heartbeat(nearby, 5.0, 3);
+
+		NetworkTask task = tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "geo-1", "{}",
+			DataClass.PUBLIC, "sa-east-1", null));
+		assertThat(tasks.dispatchPending()).isEqualTo(1);
+		assertThat(assignedNode(task.id())).isEqualTo(nearby.id());
+
+		// Afinidade não é filtro: o nó da região enche e a tarefa da MESMA região vai para o de fora,
+		// em vez de esperar na fila por um nó que não existe lá.
+		heartbeat(nearby, 5.0, 4);
+		NetworkTask overflow = tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "geo-2",
+			"{}", DataClass.PUBLIC, "sa-east-1", null));
+		assertThat(tasks.dispatchPending()).isEqualTo(1);
+		assertThat(assignedNode(overflow.id())).isEqualTo(far.id());
+	}
+
+	/**
+	 * Tarefa sem região não muda de comportamento: todos empatam no termo novo e a ordenação é
+	 * exatamente a de antes — folga decide. As duas tarefas entram na MESMA rodada de propósito:
+	 * em rodadas separadas o jitter decide de novo e poderia dar as duas ao mesmo nó, o que é o
+	 * comportamento antigo, não um sinal de região. Numa rodada só, o contador de reservas espalha.
+	 */
+	@Test
+	void tarefaSemRegiaoSegueOEscalonamentoDeAntes() throws Exception {
+		String admin = adminToken();
+		Node nearby = activeNodeInRegion(admin, "no-proximo", List.of("NODE_WORKER"), "sa-east-1");
+		Node far = activeNodeInRegion(admin, "no-distante", List.of("NODE_WORKER"), "us-east-1");
+
+		NetworkTask first = tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "geo-3", "{}",
+			DataClass.PUBLIC, null));
+		NetworkTask second = tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "geo-4", "{}",
+			DataClass.PUBLIC, null));
+		assertThat(tasks.dispatchPending()).isEqualTo(2);
+
+		assertThat(assignedNode(first.id())).isIn(nearby.id(), far.id());
+		assertThat(assignedNode(second.id())).isEqualTo(assignedNode(first.id()).equals(nearby.id()) ? far.id()
+			: nearby.id());
+	}
+
+	/**
+	 * A afinidade não passa por cima da saúde nem da origem: nó da região correto mas degradado
+	 * perde para o nó distante saudável, do mesmo jeito que qualquer degradado perde em ADR-010.
+	 */
+	@Test
+	void noDaRegiaoDegradadoPerdeParaODistanteSaudavel() throws Exception {
+		String admin = adminToken();
+		Node slowNearby = activeNodeInRegion(admin, "no-proximo-lento", List.of("NODE_WORKER"), "sa-east-1");
+		Node healthyFar = activeNodeInRegion(admin, "no-distante-saudavel", List.of("NODE_WORKER"), "us-east-1");
+		jdbc.update("update network_nodes set observed_latency_ms = ? where id = ?",
+			NetworkNode.SLOW_LATENCY_MS + 30_000, slowNearby.id());
+
+		NetworkTask task = tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "geo-5", "{}",
+			DataClass.PUBLIC, "sa-east-1", null));
+		tasks.dispatchPending();
+		assertThat(assignedNode(task.id())).isEqualTo(healthyFar.id());
+	}
+
 	// ---------------------------------------------------------------- helpers
 
 	private record Node(String id, String key) {
@@ -444,6 +518,16 @@ class NetworkBalancingTests {
 	}
 
 	private Node activeNode(String admin, String name, List<String> profiles) throws Exception {
+		return activeNode(admin, name, profiles, null);
+	}
+
+	/** Nó ativo que declarou a região no enroll, no formato que o contrato documenta. */
+	private Node activeNodeInRegion(String admin, String name, List<String> profiles, String region)
+			throws Exception {
+		return activeNode(admin, name, profiles, region);
+	}
+
+	private Node activeNode(String admin, String name, List<String> profiles, String region) throws Exception {
 		var tokenResult = mockMvc
 			.perform(post("/admin/network/nodes/provision-token").header("X-Session-Token", admin)
 				.contentType(MediaType.APPLICATION_JSON)
@@ -455,10 +539,18 @@ class NetworkBalancingTests {
 			.get("token")
 			.asString();
 
+		Map<String, Object> enrollBody = new java.util.HashMap<>();
+		enrollBody.put("provisionToken", provisionToken);
+		enrollBody.put("declared",
+			Map.of("cpuCores", 4, "memoryMb", 8192, "diskMb", 51200, "bandwidthMbps", 100));
+		if (region != null) {
+			// Na forma aninhada do contrato, de propósito: é a que a doc sempre mostrou e a que o
+			// DTO antigo ignorava em silêncio.
+			enrollBody.put("location", Map.of("region", region, "country", "BR"));
+		}
 		var enrollResult = mockMvc
 			.perform(post("/network/nodes/enroll").contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("provisionToken", provisionToken, "declared",
-					Map.of("cpuCores", 4, "memoryMb", 8192, "diskMb", 51200, "bandwidthMbps", 100)))))
+				.content(objectMapper.writeValueAsString(enrollBody)))
 			.andExpect(status().isOk())
 			.andReturn();
 		String nodeId = objectMapper.readTree(enrollResult.getResponse().getContentAsString()).get("nodeId")

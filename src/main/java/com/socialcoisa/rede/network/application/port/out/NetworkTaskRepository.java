@@ -24,9 +24,14 @@ public interface NetworkTaskRepository {
 	/** Tarefa já criada com esta chave de idempotência, se houver. */
 	Optional<NetworkTask> findByIdempotencyKey(String idempotencyKey);
 
-	/** Cria a tarefa em PENDING. Idempotente pela chave: a mesma chave não cria duas tarefas. */
+	/**
+	 * Cria a tarefa em PENDING. Idempotente pela chave: a mesma chave não cria duas tarefas.
+	 *
+	 * <p>{@code region} é a preferência de origem do pedido e pode ser null (sem preferência); ela
+	 * não restringe quem pode executar, só a ordem entre os elegíveis (ADR-012).</p>
+	 */
 	void create(String id, TaskType type, String idempotencyKey, String payload, DataClass dataClass,
-			Instant deadline, Instant nextAttemptAt, Instant now);
+			String region, Instant deadline, Instant nextAttemptAt, Instant now);
 
 	/** Tarefas na fila, elegíveis agora, mais antigas primeiro. */
 	List<NetworkTask> findDispatchable(Instant now, int limit);

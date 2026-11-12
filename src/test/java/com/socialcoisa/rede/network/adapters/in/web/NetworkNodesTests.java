@@ -101,6 +101,17 @@ class NetworkNodesTests {
 		return enroll(issueToken(admin, "no-teste", List.of("NODE_MEDIA")));
 	}
 
+	private String enrollComLocation(String provisionToken, String region, String country) throws Exception {
+		var result = mockMvc
+			.perform(post("/network/nodes/enroll").contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("provisionToken", provisionToken, "declared",
+					Map.of("cpuCores", 4, "memoryMb", 8192, "diskMb", 51200, "bandwidthMbps", 100),
+					"location", Map.of("region", region, "country", country)))))
+			.andExpect(status().isOk())
+			.andReturn();
+		return objectMapper.readTree(result.getResponse().getContentAsString()).get("nodeId").asString();
+	}
+
 	private void activate(String admin, String nodeId) throws Exception {
 		mockMvc.perform(post("/admin/network/nodes/" + nodeId + "/approve").header("X-Session-Token", admin))
 			.andExpect(status().isOk());
@@ -216,6 +227,24 @@ class NetworkNodesTests {
 			.contentType(MediaType.APPLICATION_JSON).content("{}"))
 			.andExpect(status().isForbidden())
 			.andExpect(jsonPath("$.code").value("NODE_PENDING_APPROVAL"));
+	}
+
+	/**
+	 * A região vem no corpo exatamente como o contrato documenta — aninhada em {@code location}. O
+	 * Q0 aqui é o enrol de enrolar: antes desta rodada o DTO só lia região solta no topo, então um
+	 * instalador que seguia a doc gravava o nó com região nula e o enroll aceitava em silêncio.
+	 */
+	@Test
+	void enrollComLocationDaDocGravaARegiao() throws Exception {
+		String admin = adminToken();
+		String token = issueToken(admin, "no-geo", List.of("NODE_WORKER"));
+
+		String nodeId = enrollComLocation(token, "sa-east-1", "BR");
+
+		assertThat(jdbc.queryForObject("select region from network_nodes where id = ?", String.class, nodeId))
+			.isEqualTo("sa-east-1");
+		assertThat(jdbc.queryForObject("select country from network_nodes where id = ?", String.class, nodeId))
+			.isEqualTo("BR");
 	}
 
 	// ---------------------------------------------------------------- config assinada

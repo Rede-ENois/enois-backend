@@ -35,6 +35,10 @@ Sem `X-Session-Token`. A credencial é o **token de provisionamento de uso únic
 }
 ```
 
+A região também é aceita solta no topo (`"region": "…", "country": "…"`); se as duas formas
+vierem, a solta vence. A região declarada aqui é o que o escalonador usa como **afinidade** quando
+uma tarefa declara origem — ver §3.
+
 Resposta (única vez que a API key em claro aparece):
 
 ```json
@@ -177,6 +181,24 @@ scheduler devolve à fila o que estiver designado a nó com `status <> 'ACTIVE'`
 vigente, audita cada devolução como `NETWORK_TASK_DRAINED` e designa de novo no mesmo ciclo. O
 painel (`GET /admin/network/tasks/overview`) expõe `awaitingDrain`: quantas do `dispatched` estão
 presas a nó fora de operação entre a suspensão e a varredura seguinte.
+
+### Região no escalonamento (ADR-012)
+
+A ordem de escolha do nó é **degradação → origem (`NODE_LOCAL`, ADR-010) → região → folga →
+jitter**. Região significa: quem enfileirou a tarefa pode declarar uma região de origem, e o nó
+daquela região vem antes **dentro do mesmo grupo de saúde e de origem**.
+
+Três propriedades que o contrato fixa:
+
+- **É ordenação, nunca filtro.** Tarefa com região `sa-east-1` roda em nó de `us-east-1` quando não
+  há `sa-east-1` vivo com vaga — a rede cooperativa existe para não ter ponto único regional.
+- **Sem região no pedido, nada muda.** Toda tarefa sem `region` (e é o valor de todas as que
+  existem antes desta fase) escala exatamente como antes.
+- **Região compara por igualdade sem diferenciar maiúscula; nó sem região declarada empatA** no
+  termo — não é punido por não ter declarado.
+
+No painel, `GET /admin/network/tasks` devolve `region` por tarefa: é a única explicação visível de
+por que uma tarefa foi para um nó distante.
 
 ## 4. Catálogo de erros estável
 
