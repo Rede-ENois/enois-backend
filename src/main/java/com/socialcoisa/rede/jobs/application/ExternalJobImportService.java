@@ -41,6 +41,12 @@ public class ExternalJobImportService {
 		this.transactionTemplate = new TransactionTemplate(transactionManager);
 	}
 
+	/**
+	 * Janela de tolerância antes de considerar uma vaga desaparecida. A fonte pode falhar um ciclo
+	 * ou publicar em lotes; marcar como removida no primeiro ciclo sem a vaga apagaria vaga viva.
+	 */
+	private static final java.time.Duration STALE_GRACE = java.time.Duration.ofDays(3);
+
 	/** Retorna quantas vagas externas foram importadas/atualizadas nesta passada. */
 	public int refresh() {
 		int touched = 0;
@@ -62,13 +68,62 @@ public class ExternalJobImportService {
 				Integer saved = transactionTemplate.execute(status -> saveChunk(source.name(), chunk));
 				touched += saved == null ? 0 : saved;
 			}
+			// Só expira quando a fonte entregou algo: lista vazia pode ser falha silenciosa, e
+			// apagar tudo por causa dela seria pior do que manter vaga que talvez tenha saído.
+			if (!found.isEmpty()) {
+				expireStale(source.name());
+			}
 		}
 		return touched;
+	}
+
+	/**
+	 * Marca como removidas as vagas da fonte que não apareceram no ciclo atual. Não apaga a linha:
+	 * o histórico de candidaturas e o link original continuam válidos, e a vaga some das buscas
+	 * porque toda consulta filtra `removed_at is null`.
+	 */
+	private void expireStale(String platform) {
+		java.time.Instant cutoff = clock.instant().minus(STALE_GRACE);
+		List<ExternalJob> stale = repository.findStaleByPlatform(platform, cutoff, BATCH_SIZE);
+		while (!stale.isEmpty()) {
+			List<ExternalJob> batch = stale;
+			transactionTemplate.executeWithoutResult(status -> {
+				for (ExternalJob job : batch) {
+					repository.save(withDetails(job, job.details().removedAt(clock.instant())));
+				}
+			});
+			stale = repository.findStaleByPlatform(platform, cutoff, BATCH_SIZE);
+		}
+	}
+
+	/** Copia a vaga trocando só os detalhes (o resto do registro fica como está). */
+	private static ExternalJob withDetails(ExternalJob job,
+			com.socialcoisa.rede.jobs.domain.ExternalJobDetails details) {
+		return new ExternalJob(job.id(), job.platform(), job.externalId(), job.title(), job.company(),
+			job.location(), job.salary(), job.currency(), job.url(), job.importedAt(), job.lastCheckedAt(),
+			job.status(), job.canonicalUrl(), job.applyEmail(), job.submittedBy(), job.description(),
+			job.salaryMin(), job.salaryMax(), job.salaryPeriod(), job.salaryNotInformed(), details);
 	}
 
 	/** Column sizes of external_jobs (V40): title 500, the other free-text columns 255. */
 	static final int TITLE_MAX = 500;
 	static final int TEXT_MAX = 255;
+
+	/** `description` é varchar(5000) desde a V112. */
+	static final int DESCRIPTION_MAX = 5000;
+
+	// Tamanhos das colunas estruturadas (V269). A fonte não é obrigada a respeitá-los: o GitHub
+	// manda o "regime de contratação" inteiro, com quebras de linha, e um feed alemão manda
+	// "Unbefristeter arbeitsvertrag, berufserfahren" (44 caracteres) num campo de 40.
+	static final int EMPLOYMENT_TYPE_MAX = 40;
+	static final int LEVEL_MAX = 20;
+	static final int WORK_MODEL_MAX = 20;
+	static final int CITY_MAX = 120;
+	static final int STATE_MAX = 60;
+	static final int COUNTRY_MAX = 60;
+	static final int CURRENCY_MAX = 8;
+	static final int SALARY_PERIOD_MAX = 10;
+	static final int ATTRIBUTION_URL_MAX = 1000;
 
 	private int saveChunk(String platform, List<JobImportSource.ExternalJob> chunk) {
 		int saved = 0;
@@ -87,6 +142,12 @@ public class ExternalJobImportService {
 				.canonicalize(external.url());
 			// E-mail de candidatura: sai da descricao que a propria fonte publica (nulo quando nao ha).
 			String applyEmail = ExternalJob.extractApplyEmail(external.description());
+			// A descrição é o que a fonte publica, em texto legível. Antes ficava nula na importação e a
+			// vaga aparecia sem descrição mesmo quando a fonte tinha uma.
+			String description = fit(
+				com.socialcoisa.rede.jobs.domain.JobDescriptionText.fromHtml(external.description()),
+				DESCRIPTION_MAX);
+			com.socialcoisa.rede.jobs.domain.ExternalJobDetails details = detailsOf(external);
 			var sameSource = repository.findBySource(platform, external.externalId());
 			if (sameSource.isPresent()) {
 				// Mesma fonte e mesmo id: atualiza os dados e a verificacao (upsert).
@@ -94,8 +155,11 @@ public class ExternalJobImportService {
 				repository.save(new ExternalJob(current.id(), current.platform(), current.externalId(),
 					title, company, location, salary,
 					current.currency(), external.url(), current.importedAt(), clock.instant(),
-					ExternalJob.FOUND, canonicalUrl, applyEmail, current.submittedBy(), current.description(),
-					current.salaryMin(), current.salaryMax(), current.salaryPeriod(), current.salaryNotInformed()));
+					ExternalJob.FOUND, canonicalUrl, applyEmail, current.submittedBy(),
+					// Cadastro da comunidade é do autor: a importação não reescreve o texto dele.
+					current.isCommunitySubmission() ? current.description() : description,
+					current.salaryMin(), current.salaryMax(), current.salaryPeriod(), current.salaryNotInformed(),
+					details));
 				saved++;
 				continue;
 			}
@@ -110,22 +174,47 @@ public class ExternalJobImportService {
 				if (original.isCommunitySubmission()) {
 					continue;
 				}
+				// A procedência continua a do registro original; só a verificação avança. A descrição
+				// só é preenchida quando o original não tem: as linhas importadas antes de a descrição
+				// ser guardada se curam na próxima passada, sem trocar texto que já existe.
+				String originalDescription = original.description() == null || original.description().isBlank()
+					? description : original.description();
 				repository.save(new ExternalJob(original.id(), original.platform(), original.externalId(),
 					original.title(), original.company(), original.location(), original.salary(),
 					original.currency(), original.url(), original.importedAt(), clock.instant(),
 					original.status(), original.canonicalUrl(), original.applyEmail(), original.submittedBy(),
-					original.description(), original.salaryMin(), original.salaryMax(), original.salaryPeriod(),
-					original.salaryNotInformed()));
+					originalDescription, original.salaryMin(), original.salaryMax(), original.salaryPeriod(),
+					original.salaryNotInformed(), original.details().seenAt(clock.instant())));
 				saved++;
 				continue;
 			}
 			repository.save(new ExternalJob("ext_" + platform + "_" + external.externalId(), platform,
 				external.externalId(), title, company, location,
 				salary, null, external.url(), clock.instant(), clock.instant(), ExternalJob.FOUND,
-				canonicalUrl, applyEmail, null, null, null, null, null, false));
+				canonicalUrl, applyEmail, null, description, null, null, null, false, details));
 			saved++;
 		}
 		return saved;
+	}
+
+	/**
+	 * Traduz os metadados da fonte para o modelo interno. `lastSeenAt` é agora: a vaga acabou de
+	 * ser vista nesta passada, e é isso que a expiração usa como sinal de vida.
+	 */
+	private com.socialcoisa.rede.jobs.domain.ExternalJobDetails detailsOf(JobImportSource.ExternalJob external) {
+		JobImportSource.Meta meta = external.meta() == null ? JobImportSource.Meta.empty() : external.meta();
+		// O vínculo passa pela taxonomia: "PJ, Contrato, Freelance\n\nPreferência por ME/CNPJ…" vira
+		// PJ, e o que a taxonomia não reconhece é cortado no tamanho da coluna em vez de derrubar o
+		// lote inteiro. Os demais campos vêm de caminhos fixos da fonte, mas o corte vale para todos:
+		// nenhum feed é obrigado a respeitar o nosso schema.
+		return new com.socialcoisa.rede.jobs.domain.ExternalJobDetails(external.publishedAt(),
+			fit(com.socialcoisa.rede.jobs.domain.JobTaxonomy.employmentType(external.employmentType()),
+				EMPLOYMENT_TYPE_MAX),
+			fit(meta.level(), LEVEL_MAX), fit(meta.workModel(), WORK_MODEL_MAX), fit(meta.city(), CITY_MAX),
+			fit(meta.state(), STATE_MAX), fit(meta.country(), COUNTRY_MAX), meta.salaryMinAmount(),
+			meta.salaryMaxAmount(), fit(meta.salaryCurrency(), CURRENCY_MAX),
+			fit(meta.salaryPeriodCode(), SALARY_PERIOD_MAX), fit(meta.attributionUrl(), ATTRIBUTION_URL_MAX),
+			clock.instant(), meta.expiresAt(), null);
 	}
 
 	/**

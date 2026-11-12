@@ -9,4 +9,7 @@ public interface JobAbandonPenaltyReader {
 
 	/** Quantas exclusões de vaga sem resposta o usuário tem (com teto aplicado no serviço). */
 	int countByUser(String userId);
+
+	/** Exclusões de vaga sem resposta de cada conta do conjunto, em uma consulta. */
+	java.util.Map<String, Integer> countsByUsers(java.util.Collection<String> userIds);
 }

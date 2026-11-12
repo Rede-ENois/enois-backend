@@ -421,20 +421,32 @@ class MediaStorageProxyTests {
 	}
 
 	@Test
-	void videoGrandeAcimaDoLimiteEmMemoriaTambemChegaAoBucket() throws Exception {
-		// Acima de MAX_IN_MEMORY o proxy usa arquivo temporario + ffmpeg (sanitizeToFile).
-		byte[] video = new byte[41 * 1024 * 1024];
-		String objectKey = assetDeVideoGrande("media_proxy_video_grande", "media-proxy-video-2", video.length);
+	void arquivoGrandeAcimaDoLimiteEmMemoriaTambemChegaAoBucket() throws Exception {
+		// Acima de MAX_IN_MEMORY o proxy usa arquivo temporário + ffmpeg (sanitizeToFile). Áudio,
+		// não vídeo: vídeo tem o teto próprio de 10MB (issue #656), abaixo de MAX_IN_MEMORY, então
+		// o caminho de arquivo temporário de vídeo ficou inalcançável de propósito; o caminho é por
+		// TAMANHO e continua coberto por áudio (que não tem teto por tipo).
+		byte[] audio = new byte[41 * 1024 * 1024];
+		var criado = mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", auth.authenticate("media_proxy_video_grande").token())
+				.header("Idempotency-Key", "media-proxy-video-2")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("fileName", "aula.mp3",
+					"mimeType", "audio/mpeg", "size", (long) audio.length, "purpose", "POST_IMAGE"))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
+			.path("objectKey").asText();
 
 		mockMvc.perform(put("/storage/" + objectKey)
 				.header("X-Session-Token", auth.authenticate("media_proxy_video_grande").token())
-				.contentType("video/mp4")
-				.content(video))
+				.contentType("audio/mpeg")
+				.content(audio))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("STORED"));
 
 		assertThat(store().chaveEscrita).isEqualTo(objectKey);
-		assertThat(store().escrito).hasSize(video.length);
+		assertThat(store().escrito).hasSize(audio.length);
 	}
 
 	/**
@@ -546,14 +558,16 @@ class MediaStorageProxySemTemporarioTests {
 	@Test
 	void videoGrandeSemTemporarioGravavelResponde503Proprio() throws Exception {
 		var auth = new TestAuthHelper(mockMvc, objectMapper);
-		byte[] video = new byte[41 * 1024 * 1024];
+		// Áudio, não vídeo: vídeo tem o teto próprio de 10MB (issue #656), abaixo de MAX_IN_MEMORY;
+		// o caminho de arquivo temporário é por TAMANHO e continua coberto por áudio.
+		byte[] audio = new byte[41 * 1024 * 1024];
 		String token = auth.authenticate("media_proxy_video_sem_tmp").token();
 		var criado = mockMvc.perform(post("/media/uploads")
 				.header("X-Session-Token", token)
 				.header("Idempotency-Key", "media-proxy-video-3")
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("fileName", "aula.mp4",
-					"mimeType", "video/mp4", "size", (long) video.length, "purpose", "POST_VIDEO"))))
+				.content(objectMapper.writeValueAsString(Map.of("fileName", "aula.mp3",
+					"mimeType", "audio/mpeg", "size", (long) audio.length, "purpose", "POST_IMAGE"))))
 			.andExpect(status().isCreated())
 			.andReturn();
 		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
@@ -563,8 +577,8 @@ class MediaStorageProxySemTemporarioTests {
 		// então nada aqui mexe em `java.io.tmpdir`: a decisão entra pelo bean, não pelo processo.
 		mockMvc.perform(put("/storage/" + objectKey)
 				.header("X-Session-Token", token)
-				.contentType("video/mp4")
-				.content(video))
+				.contentType("audio/mpeg")
+				.content(audio))
 			.andExpect(status().isServiceUnavailable())
 			.andExpect(jsonPath("$.code").value("MEDIA_UPLOAD_UNAVAILABLE"))
 			.andExpect(jsonPath("$.message").value(

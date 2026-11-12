@@ -78,7 +78,8 @@ public class MediaMetadataSanitizer {
 			}
 			Path output = temporaryFiles.create("media-clean-", suffix(fileName));
 			try {
-				ffmpeg.strip(original, output, type, FILE_FFMPEG_TIMEOUT);
+				// Limpa e, quando vale a pena, comprime: o vídeo do feed não precisa subir em 1080p.
+				ffmpeg.clean(original, output, type, FILE_FFMPEG_TIMEOUT);
 			}
 			catch (RuntimeException failure) {
 				Files.deleteIfExists(output);
@@ -291,7 +292,7 @@ public class MediaMetadataSanitizer {
 		Path output = temporaryFiles.create("media-out-", suffix(fileName));
 		try {
 			Files.write(input, data);
-			ffmpeg.strip(input, output, type, IN_MEMORY_FFMPEG_TIMEOUT);
+			ffmpeg.clean(input, output, type, IN_MEMORY_FFMPEG_TIMEOUT);
 			return Files.readAllBytes(output);
 		}
 		finally {

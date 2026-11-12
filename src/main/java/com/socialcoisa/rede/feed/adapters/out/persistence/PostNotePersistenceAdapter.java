@@ -2,6 +2,7 @@ package com.socialcoisa.rede.feed.adapters.out.persistence;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.data.domain.PageRequest;
@@ -74,5 +75,15 @@ class PostNotePersistenceAdapter implements PostNoteRepository {
 	@Override
 	public int countByAuthorAndStatus(String authorId, PostNoteStatus status) {
 		return repository.countByAuthorIdAndStatus(authorId, status);
+	}
+
+	@Override
+	public Map<String, Integer> countByAuthorsAndStatus(Collection<String> authorIds, PostNoteStatus status) {
+		if (authorIds.isEmpty()) {
+			return Map.of();
+		}
+		return repository.countByAuthorIdInAndStatus(authorIds, status).stream()
+			.collect(java.util.stream.Collectors.toMap(
+				row -> (String) row[0], row -> ((Number) row[1]).intValue()));
 	}
 }

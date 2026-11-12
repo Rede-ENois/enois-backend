@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
@@ -74,6 +75,40 @@ class MessageStreamTests {
 			.andExpect(status().is2xxSuccessful());
 
 		assertThat(senderStream.getResponse().getContentAsString()).contains(conversationId);
+	}
+
+	/**
+	 * O sino recarrega sozinho: o aviso criado com a aba aberta chega pelo stream. Antes o stream só
+	 * falava de conversa e chamada, então a notificação só aparecia no próximo carregamento.
+	 */
+	@Test
+	void newNotificationIsSignalledToItsOwnersStreamOnly() throws Exception {
+		var author = new TestAuthHelper(mockMvc, objectMapper).authenticate("msg_stream_notice_author");
+		var reposter = new TestAuthHelper(mockMvc, objectMapper).authenticate("msg_stream_notice_reposter");
+		var outsider = new TestAuthHelper(mockMvc, objectMapper).authenticate("msg_stream_notice_outsider");
+
+		MvcResult created = mockMvc.perform(post("/feed/posts")
+				.header("X-Session-Token", author.token())
+				.header("Idempotency-Key", "msg-stream-notice-" + System.nanoTime())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA", "type", "INSIGHT",
+					"content", "Post que será republicado para gerar o aviso.", "tags", List.of(),
+					"mediaIds", List.of()))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String postId = objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asString();
+
+		MvcResult authorStream = openStream(author.token());
+		MvcResult outsiderStream = openStream(outsider.token());
+
+		mockMvc.perform(post("/feed/posts/{id}/repost", postId)
+				.header("X-Session-Token", reposter.token()))
+			.andExpect(status().isCreated());
+
+		String signal = authorStream.getResponse().getContentAsString();
+		assertThat(signal).contains("event:notification").contains("notificationId").contains("POST_REPOSTED");
+		// O aviso é só de quem recebeu: o stream alheio não fica sabendo.
+		assertThat(outsiderStream.getResponse().getContentAsString()).doesNotContain("event:notification");
 	}
 
 	@Test

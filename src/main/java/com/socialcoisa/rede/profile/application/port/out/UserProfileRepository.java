@@ -2,6 +2,7 @@ package com.socialcoisa.rede.profile.application.port.out;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import com.socialcoisa.rede.profile.domain.UserProfile;
@@ -19,6 +20,51 @@ public interface UserProfileRepository {
 	Optional<UserProfile> findById(String id);
 
 	List<UserProfile> findAllByIds(Collection<String> ids);
+
+	/**
+	 * Existência + nome + @ de várias contas, em uma consulta e sem as coleções do perfil — o
+	 * suficiente para as rotinas de triagem/limpeza (nome suspeito, conta excluída).
+	 */
+	List<AccountIdentity> identitiesOf(Collection<String> ids);
+
+	/**
+	 * Nome, foto e personalização do nome de várias contas, em uma consulta e sem as coleções do
+	 * perfil — o suficiente para as vitrines de serviços mostrarem quem presta.
+	 */
+	List<SellerIdentity> sellersOf(Collection<String> ids);
+
+	/**
+	 * Nascimento + verificação de identidade de várias contas, em uma consulta e sem as coleções
+	 * do perfil — o suficiente para o cálculo da credibilidade em lote (job do ranking).
+	 */
+	List<ReputationSeed> seedsOf(Collection<String> ids);
+
+	/** Conexões aceitas de cada conta do conjunto, em uma consulta (GROUP BY no dono). */
+	Map<String, Integer> connectionCounts(Collection<String> ids);
+
+	/** Seguidores aceitos de cada conta do conjunto, em uma consulta. */
+	Map<String, Integer> followerCounts(Collection<String> ids);
+
+	/** Pessoas DISTINTAS (sem o autor) que reagiram ou comentaram posts de cada conta do conjunto. */
+	Map<String, Integer> uniqueEngagerCounts(Collection<String> ids);
+
+	/** Comunidades de que cada conta do conjunto participa, em uma consulta. */
+	Map<String, Integer> communitiesJoinedCounts(Collection<String> ids);
+
+	/**
+	 * Presenças em eventos de cada conta do conjunto: as ainda existentes + o agregado guardado
+	 * antes da purga, em uma consulta.
+	 */
+	Map<String, Integer> eventsAttendedTotalCounts(Collection<String> ids);
+
+	/** Mentorias concluídas como aprendiz de cada conta do conjunto, em uma consulta. */
+	Map<String, Integer> mentoringSessionCounts(Collection<String> ids);
+
+	/**
+	 * Fatos CONFIRMADOS contra cada conta do conjunto (denúncias APPROVED/AUTO_PENALIZED,
+	 * deduplicadas por conteúdo), em uma consulta. Pendente não é fato; descartada não existe.
+	 */
+	Map<String, Integer> confirmedReportFactCounts(Collection<String> ids);
 
 	Optional<UserProfile> findByUsername(String username);
 

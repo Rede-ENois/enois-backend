@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.themes.adapters.out.persistence;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -27,6 +28,16 @@ class ThemeGalleryPersistenceAdapter implements ThemeGalleryRepository {
 	@Override
 	public Optional<ThemePackage> findById(String id) {
 		return themes.findById(id).map(ThemePackageJpaEntity::toDomain);
+	}
+
+	@Override
+	public List<ThemePackage> findAllByIds(Collection<String> ids) {
+		return themes.findAllById(ids).stream().map(ThemePackageJpaEntity::toDomain).toList();
+	}
+
+	@Override
+	public List<com.socialcoisa.rede.themes.application.port.out.ThemeIdentity> authorsOf(Collection<String> ids) {
+		return themes.authorsOf(ids);
 	}
 
 	@Override

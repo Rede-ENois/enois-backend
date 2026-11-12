@@ -24,8 +24,10 @@ import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationServic
 import com.socialcoisa.rede.jobs.application.port.out.CompanyDirectoryReader;
 import com.socialcoisa.rede.jobs.application.port.out.ExternalJobRepository;
 import com.socialcoisa.rede.jobs.domain.ExternalJob;
+import com.socialcoisa.rede.jobs.application.JobInterviewService;
 import com.socialcoisa.rede.jobs.application.JobService;
 import com.socialcoisa.rede.jobs.domain.Job;
+import com.socialcoisa.rede.jobs.domain.JobInterview;
 import com.socialcoisa.rede.jobs.domain.JobApplicationStatus;
 import com.socialcoisa.rede.jobs.domain.JobApplication;
 import com.socialcoisa.rede.profile.application.NameStyleView;
@@ -50,10 +52,13 @@ class JobContractController {
 	private final ExternalJobRepository externalJobRepository;
 	private final com.socialcoisa.rede.jobs.application.port.out.CompanyDirectoryReader companyDirectory;
 	private final com.socialcoisa.rede.jobs.application.ExternalJobSubmissionService externalJobSubmission;
+	private final com.socialcoisa.rede.jobs.application.ExternalJobApplicationService externalJobApplication;
 	private final boolean externalListingEnabled;
 	private final int externalListingLimit;
 	private final tools.jackson.databind.ObjectMapper objectMapper;
 	private final com.socialcoisa.rede.companies.application.CompanyService companyService;
+	private final JobInterviewService interviewService;
+	private final com.socialcoisa.rede.jobs.application.JobCompatibilityService compatibility;
 
 	JobContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
 			JobService jobService, CursorCodec cursorCodec,
@@ -66,8 +71,13 @@ class JobContractController {
 			@org.springframework.beans.factory.annotation.Value("${rede.jobs.import.external-listing-limit:20}") int externalListingLimit,
 			com.socialcoisa.rede.jobs.application.port.out.CompanyDirectoryReader companyDirectory,
 			com.socialcoisa.rede.jobs.application.ExternalJobSubmissionService externalJobSubmission,
-			com.socialcoisa.rede.companies.application.CompanyService companyService) {
+			com.socialcoisa.rede.jobs.application.ExternalJobApplicationService externalJobApplication,
+			com.socialcoisa.rede.companies.application.CompanyService companyService,
+			JobInterviewService interviewService,
+			com.socialcoisa.rede.jobs.application.JobCompatibilityService compatibility) {
 		this.companyService = companyService;
+		this.interviewService = interviewService;
+		this.compatibility = compatibility;
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.jobService = jobService;
@@ -81,6 +91,7 @@ class JobContractController {
 		this.externalListingEnabled = externalListingEnabled;
 		this.externalListingLimit = externalListingLimit;
 		this.externalJobSubmission = externalJobSubmission;
+		this.externalJobApplication = externalJobApplication;
 	}
 
 	/** Candidaturas recebidas (somente quem publicou a vaga). */
@@ -89,6 +100,7 @@ class JobContractController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(defaultValue = "50") int limit) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		java.util.Map<String, JobInterview> interviews = interviewService.scheduledByApplication(jobId, user.id().value());
 		return jobService.applicationsOf(jobId, user.id().value(), limit).stream()
 			.map(application -> new ApplicationView(application.id(), application.jobId(), application.status().name(),
 				application.appliedAt().toString(), application.answers().size(),
@@ -97,7 +109,8 @@ class JobContractController {
 					.map(answer -> new AnswerView(answer.label(), answer.value()))
 					.toList(),
 				application.feedback(),
-				application.reviewedAt() != null ? application.reviewedAt().toString() : null))
+				application.reviewedAt() != null ? application.reviewedAt().toString() : null,
+				interviews.containsKey(application.id()) ? InterviewView.of(interviews.get(application.id())) : null))
 			.toList();
 	}
 
@@ -118,6 +131,14 @@ class JobContractController {
 			@RequestParam(required = false) String location,
 			@RequestParam(required = false) List<String> skills,
 			@RequestParam(required = false) String source, @RequestParam(required = false) String platform,
+			@RequestParam(required = false) String workModel,
+			@RequestParam(required = false) String employmentType,
+			@RequestParam(required = false) String city, @RequestParam(required = false) String state,
+			@RequestParam(required = false) String country,
+			@RequestParam(required = false) java.math.BigDecimal salaryMin,
+			@RequestParam(required = false) Boolean remoteOnly,
+			@RequestParam(required = false) String publishedAfter,
+			@RequestParam(required = false) String sort,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		limit = pageLimit(limit);
@@ -127,12 +148,8 @@ class JobContractController {
 		boolean soInternas = "INTERNAL".equalsIgnoreCase(source);
 		String viewer = viewerId(sessionToken);
 		if (soExternas) {
-			boolean showEmail = viewer != null;
-			List<JobView> externas = org.springframework.util.StringUtils.hasText(platform)
-				? externalJobRepository.findByPlatform(platform.trim(), query, limit).stream()
-					.map(job -> toExternalView(job, false, showEmail)).toList()
-				: externalJobViews(query, showEmail);
-			return new PageResponse<>(externas, null);
+			return externalPage(query, platform, level, workModel, employmentType, city, state, country,
+				salaryMin, remoteOnly, publishedAfter, sort, cursor, limit, viewer);
 		}
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		List<Job> jobs = jobService.list(query, type, level, location, skills, before, limit);
@@ -182,7 +199,8 @@ class JobContractController {
 					base.applicationsCount(), base.applied(), true, false, 0, null, base.applicationFields(),
 					base.status(), base.closedAt(), base.sourceType(), base.sourceUrl(), base.sourcePlatform(),
 					base.applyEmail(), base.description(), base.salaryMin(), base.salaryMax(),
-					base.salaryPeriod(), base.salaryLabel(), base.salaryNotInformed(), null));
+					base.salaryPeriod(), base.salaryLabel(), base.salaryNotInformed(), null,
+					base.externalDetails()));
 			}
 		}
 		return new PageResponse<>(views, null);
@@ -228,6 +246,60 @@ class JobContractController {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		return externalJobSubmission.mine(user.id().value()).stream()
 			.map(job -> toExternalView(job, true))
+			.toList();
+	}
+
+	/**
+	 * Prévia do e-mail de candidatura a uma vaga externa: destinatário, assunto, corpo e se há
+	 * currículo para anexar. Nada é enviado — é o que a pessoa revisa antes de confirmar.
+	 */
+	@GetMapping("/external/{externalJobId}/application")
+	ExternalApplicationDraftView externalApplicationDraft(@PathVariable String externalJobId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		var draft = externalJobApplication.draft(externalJobId, user.id().value());
+		return new ExternalApplicationDraftView(draft.recipientEmail(), draft.subject(), draft.body(),
+			draft.resumeAvailable(), draft.resumeName(), draft.jobTitle(), draft.company(), draft.jobUrl());
+	}
+
+	/**
+	 * Envia a candidatura pelo Énóis, com o currículo anexado de verdade.
+	 *
+	 * O corpo exige `confirmed = true`: sem confirmação explícita nada sai. O retorno diz se o
+	 * anexo foi junto — quando o download do currículo falha, o e-mail sai sem ele e a resposta
+	 * informa `resumeAttached = false` (nunca o contrário).
+	 */
+	@PostMapping("/external/{externalJobId}/application")
+	ResponseEntity<String> applyExternal(@PathVariable String externalJobId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@RequestBody(required = false) ExternalApplyRequest body) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		String hash = idempotency.hash(Map.of("externalJobId", externalJobId,
+			"confirmed", body != null && Boolean.TRUE.equals(body.confirmed()),
+			"message", body == null || body.message() == null ? "" : body.message()));
+		return idempotency.execute(user.id(), "POST", "/api/jobs/external/{externalJobId}/application",
+			idempotencyKey, hash, () -> {
+				var application = externalJobApplication.apply(externalJobId, user.id().value(),
+					body != null && Boolean.TRUE.equals(body.confirmed()),
+					body == null ? null : body.message());
+				return new CommandResponse(201, new ExternalApplicationView(application.id(),
+					application.externalJobId(), application.recipientEmail(), application.subject(),
+					application.resumeAttached(), application.resumeName(), application.status(),
+					application.appliedAt().toString()));
+			});
+	}
+
+	/** Histórico das candidaturas externas enviadas pelo Énóis. */
+	@GetMapping("/external/applications/mine")
+	List<ExternalApplicationView> myExternalApplications(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(defaultValue = "50") int limit) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return externalJobApplication.mine(user.id().value(), limit).stream()
+			.map(application -> new ExternalApplicationView(application.id(), application.externalJobId(),
+				application.recipientEmail(), application.subject(), application.resumeAttached(),
+				application.resumeName(), application.status(), application.appliedAt().toString()))
 			.toList();
 	}
 
@@ -326,20 +398,24 @@ class JobContractController {
 	List<MyApplicationView> myApplications(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(defaultValue = "50") int limit) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		return jobService.myApplications(user.id().value(), Math.min(limit, 100)).stream()
+		var applications = jobService.myApplications(user.id().value(), Math.min(limit, 100));
+		java.util.Map<String, JobInterview> interviews = interviewService.scheduledForCandidate(applications);
+		return applications.stream()
 			.map(application -> {
 				Job job = jobService.getById(application.jobId());
+				JobInterview interview = interviews.get(application.id());
 				return new MyApplicationView(application.id(), application.jobId(), job.title(), job.company(),
 					application.status().name(), application.feedback(),
 					application.reviewedAt() != null ? application.reviewedAt().toString() : null,
-					application.appliedAt().toString());
+					application.appliedAt().toString(),
+					interview != null ? InterviewView.of(interview) : null);
 			})
 			.toList();
 	}
 
-	/** Uma candidatura como o CANDIDATO a ve. */
+	/** Uma candidatura como o CANDIDATO a ve, com a entrevista marcada quando houver. */
 	record MyApplicationView(String id, String jobId, String jobTitle, String jobCompany, String status,
-			String feedback, String reviewedAt, String appliedAt) {
+			String feedback, String reviewedAt, String appliedAt, InterviewView interview) {
 	}
 
 	@PatchMapping("/{jobId}/applications/{applicationId}")
@@ -354,6 +430,70 @@ class JobContractController {
 		return ResponseEntity.ok(new ApplicationView(updated.id(), updated.jobId(), updated.status().name(),
 			updated.appliedAt().toString(), updated.answers().size(), updated.feedback(),
 			updated.reviewedAt() != null ? updated.reviewedAt().toString() : null));
+	}
+
+	/**
+	 * Marca a entrevista da candidatura (ou reagenda a que já está valendo). Só quem publicou a vaga.
+	 * A entrevista vira compromisso na agenda dos dois lados pela porta de origem do calendário.
+	 */
+	@PostMapping("/{jobId}/applications/{applicationId}/interview")
+	ResponseEntity<InterviewView> scheduleInterview(@PathVariable String jobId,
+			@PathVariable String applicationId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestBody InterviewRequest body) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		JobInterview interview = interviewService.schedule(jobId, applicationId, user.id().value(),
+			parseInstant(body == null ? null : body.startsAt(), "startsAt"),
+			parseInstant(body == null ? null : body.endsAt(), "endsAt"),
+			body == null ? null : body.timeZoneId(), body == null ? null : body.notes());
+		return ResponseEntity.status(HttpStatus.CREATED).body(InterviewView.of(interview));
+	}
+
+	/** Reagenda uma entrevista existente. A origem não muda, então as duas entradas da agenda movem. */
+	@PatchMapping("/{jobId}/applications/{applicationId}/interview/{interviewId}")
+	ResponseEntity<InterviewView> rescheduleInterview(@PathVariable String jobId,
+			@PathVariable String applicationId, @PathVariable String interviewId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestBody InterviewRequest body) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		JobInterview interview = interviewService.reschedule(jobId, applicationId, interviewId, user.id().value(),
+			parseInstant(body == null ? null : body.startsAt(), "startsAt"),
+			parseInstant(body == null ? null : body.endsAt(), "endsAt"),
+			body == null ? null : body.timeZoneId(), body == null ? null : body.notes());
+		return ResponseEntity.ok(InterviewView.of(interview));
+	}
+
+	/** Desmarca a entrevista e cancela os dois compromissos da agenda. */
+	@DeleteMapping("/{jobId}/applications/{applicationId}/interview/{interviewId}")
+	ResponseEntity<InterviewView> cancelInterview(@PathVariable String jobId,
+			@PathVariable String applicationId, @PathVariable String interviewId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		JobInterview interview = interviewService.cancel(jobId, applicationId, interviewId, user.id().value());
+		return ResponseEntity.ok(InterviewView.of(interview));
+	}
+
+	/** Entrevistas da candidatura: o empregador e o candidato veem; mais ninguém. */
+	@GetMapping("/{jobId}/applications/{applicationId}/interview")
+	List<InterviewView> interviews(@PathVariable String jobId, @PathVariable String applicationId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return interviewService.ofApplication(jobId, applicationId, user.id().value()).stream()
+			.map(InterviewView::of)
+			.toList();
+	}
+
+	/** Instante ISO-8601; ausente ou inválido é erro do cliente (422), não erro interno. */
+	private static Instant parseInstant(String raw, String field) {
+		if (raw == null || raw.isBlank()) {
+			throw new ApiException(422, "INVALID_INTERVIEW_WINDOW", "Informe " + field + " da entrevista.");
+		}
+		try {
+			return Instant.parse(raw.trim());
+		}
+		catch (java.time.format.DateTimeParseException exception) {
+			throw new ApiException(422, "INVALID_INTERVIEW_WINDOW", "Data/hora inválida em " + field + ": " + raw);
+		}
 	}
 
 	/** Estado desconhecido e erro do cliente (422), nao erro interno. */
@@ -462,18 +602,24 @@ class JobContractController {
 		Set<String> savedIds = authenticated ? jobService.savedJobIds(viewer, ids) : Set.of();
 		Map<String, Integer> counts = authenticated ? jobService.applicationsCountByJobIds(ids) : Map.of();
 		Map<String, String> slugs = companySlugs(jobs);
+		// O perfil é lido UMA vez para a página inteira: o score é o mesmo cálculo em cada linha.
+		var compat = compatibility.forViewer(viewer);
 		List<JobView> items = jobs.stream()
 			.map(job -> {
 				boolean owner = authenticated && viewer.equals(job.postedBy());
+				int matchScore = owner ? 0
+					: compat.scoreOf(job.skills(),
+						job.title() + " " + (job.description() == null ? "" : job.description()),
+						job.location(), null, null);
 				return new JobView(job.id(), job.title(), job.company(), job.logo(), job.location(), job.type(),
 					job.level(), job.salary(), job.currency(), job.skills(),
-					job.postedAt() != null ? job.postedAt().toString() : null, 0,
+					job.postedAt() != null ? job.postedAt().toString() : null, matchScore,
 					!owner && appliedIds.contains(job.id()), savedIds.contains(job.id()), owner,
 					owner ? counts.getOrDefault(job.id(), 0) : 0, authorOf(job), fieldViews(job),
 					job.status().name(), job.closedAt() != null ? job.closedAt().toString() : null,
 					"INTERNAL", null, null, null,
 					job.description(), formatAmount(job.salaryMin()), formatAmount(job.salaryMax()),
-					job.salaryPeriod(), salaryLabel(job), false, slugs.get(job.companyId()));
+					job.salaryPeriod(), salaryLabel(job), false, slugs.get(job.companyId()), null);
 			})
 			.toList();
 		String nextCursor = jobs.size() == limit
@@ -484,29 +630,111 @@ class JobContractController {
 			return new PageResponse<>(items, nextCursor);
 		}
 		List<JobView> merged = new java.util.ArrayList<>(items);
-		merged.addAll(externalJobViews(externalQuery, authenticated));
+		merged.addAll(externalJobViews(externalQuery, viewer));
 		return new PageResponse<>(merged, nextCursor);
+	}
+
+	/**
+	 * Aba de vagas externas: busca com filtros combinados, ordenação e cursor.
+	 *
+	 * A listagem geral (sem `source`) continua usando {@link #externalJobViews} — ela é um
+	 * complemento da primeira página das internas, não uma busca própria.
+	 */
+	private PageResponse<JobView> externalPage(String query, String platform, String level, String workModel,
+			String employmentType, String city, String state, String country, java.math.BigDecimal salaryMin,
+			Boolean remoteOnly, String publishedAfter, String sort, String cursor, int limit,
+			String viewer) {
+		Instant before = cursorCodec.decode(cursor).orElse(null);
+		Instant after = null;
+		if (org.springframework.util.StringUtils.hasText(publishedAfter)) {
+			try {
+				after = Instant.parse(publishedAfter.trim());
+			}
+			catch (RuntimeException exception) {
+				throw new ApiException(400, "INVALID_DATE", "Data de publicação inválida.");
+			}
+		}
+		String normalizedSort = normalizeSort(sort);
+		String requestedPlatform = blankToNull(platform);
+		// A aba de externas não mistura as vagas cadastradas pela comunidade (têm aba própria) —
+		// MAS, quando a própria comunidade é a plataforma pedida, excluí-la daria lista vazia.
+		String excludedPlatform = requestedPlatform == null
+			? com.socialcoisa.rede.jobs.application.ExternalJobSubmissionService.COMMUNITY_PLATFORM
+			: null;
+		var search = new com.socialcoisa.rede.jobs.application.port.out.ExternalJobSearch(
+			org.springframework.util.StringUtils.hasText(query) ? query.trim() : null,
+			requestedPlatform, excludedPlatform,
+			normalizeLevel(level), normalizeWorkModel(workModel),
+			org.springframework.util.StringUtils.hasText(employmentType) ? employmentType.trim().toUpperCase() : null,
+			blankToNull(city), blankToNull(state), blankToNull(country), salaryMin, remoteOnly, after,
+			normalizedSort, before, limit);
+		List<ExternalJob> found = externalJobRepository.search(search);
+		boolean showApplyEmail = viewer != null;
+		var compat = compatibility.forViewer(viewer);
+		List<JobView> items = found.stream()
+			.map(job -> toExternalView(job, false, showApplyEmail, compat)).toList();
+		// Cursor só na ordenação por data: nas outras, a posição não é estável entre páginas.
+		String nextCursor = null;
+		if (found.size() == limit
+				&& com.socialcoisa.rede.jobs.application.port.out.ExternalJobSearch.SORT_RECENT
+					.equals(normalizedSort)) {
+			var last = found.getLast();
+			nextCursor = last.details() == null ? null : cursorCodec.encode(last.details().publishedAt());
+		}
+		return new PageResponse<>(items, nextCursor);
+	}
+
+	private static String blankToNull(String value) {
+		return org.springframework.util.StringUtils.hasText(value) ? value.trim() : null;
+	}
+
+	/** Ordenação desconhecida cai no padrão em vez de dar 400: é preferência, não filtro. */
+	private static String normalizeSort(String sort) {
+		if (!org.springframework.util.StringUtils.hasText(sort)) {
+			return com.socialcoisa.rede.jobs.application.port.out.ExternalJobSearch.SORT_RECENT;
+		}
+		String value = sort.trim().toLowerCase(java.util.Locale.ROOT);
+		return switch (value) {
+			case com.socialcoisa.rede.jobs.application.port.out.ExternalJobSearch.SORT_SALARY,
+				com.socialcoisa.rede.jobs.application.port.out.ExternalJobSearch.SORT_RELEVANCE -> value;
+			default -> com.socialcoisa.rede.jobs.application.port.out.ExternalJobSearch.SORT_RECENT;
+		};
+	}
+
+	/** Nível fora do conjunto aceito é ignorado (não é erro do usuário, é filtro sem efeito). */
+	private static String normalizeLevel(String level) {
+		if (!org.springframework.util.StringUtils.hasText(level)) {
+			return null;
+		}
+		String value = level.trim().toUpperCase(java.util.Locale.ROOT);
+		return com.socialcoisa.rede.jobs.application.port.out.ExternalJobSearch.LEVELS.contains(value) ? value : null;
+	}
+
+	private static String normalizeWorkModel(String workModel) {
+		if (!org.springframework.util.StringUtils.hasText(workModel)) {
+			return null;
+		}
+		String value = workModel.trim().toUpperCase(java.util.Locale.ROOT);
+		return com.socialcoisa.rede.jobs.application.port.out.ExternalJobSearch.WORK_MODELS.contains(value)
+			? value : null;
 	}
 
 	/**
 	 * Vagas externas JA SALVAS no banco (tabela propria, atualizadas pelo worker da meia-noite) —
 	 * nao buscamos a fonte a cada requisicao. Entram DEPOIS das internas.
 	 */
-	private List<JobView> externalJobViews(String query, boolean showApplyEmail) {
-		List<JobView> external = new java.util.ArrayList<>();
+	private List<JobView> externalJobViews(String query, String viewer) {
 		// A listagem de "externas" (agregadores) NAO mistura as criadas pela comunidade: elas têm
-		// filtro próprio ("Vaga externa criada no Énóis" = plataforma Comunidade).
-		var found = org.springframework.util.StringUtils.hasText(query)
-			? externalJobRepository.searchExcludingPlatform(
-				com.socialcoisa.rede.jobs.application.ExternalJobSubmissionService.COMMUNITY_PLATFORM,
-				query.trim(), externalListingLimit)
-			: externalJobRepository.findRecentExcludingPlatform(
-				com.socialcoisa.rede.jobs.application.ExternalJobSubmissionService.COMMUNITY_PLATFORM,
-				externalListingLimit);
-		for (ExternalJob job : found) {
-			external.add(toExternalView(job, false, showApplyEmail));
-		}
-		return external;
+		// filtro próprio ("Vaga externa criada no Énóis" = plataforma Comunidade). A busca já
+		// filtra as removidas/expiradas — o complemento da primeira página não pode mostrá-las.
+		var search = com.socialcoisa.rede.jobs.application.port.out.ExternalJobSearch.recent(
+			org.springframework.util.StringUtils.hasText(query) ? query.trim() : null, null,
+			com.socialcoisa.rede.jobs.application.ExternalJobSubmissionService.COMMUNITY_PLATFORM,
+			externalListingLimit);
+		var compat = compatibility.forViewer(viewer);
+		boolean showApplyEmail = viewer != null;
+		return externalJobRepository.search(search).stream()
+			.map(job -> toExternalView(job, false, showApplyEmail, compat)).toList();
 	}
 
 	private JobView toExternalView(ExternalJob job) {
@@ -523,23 +751,50 @@ class JobContractController {
 	 * publica de vagas externas expunha o endereco para qualquer visitante.
 	 */
 	private JobView toExternalView(ExternalJob job, boolean owner, boolean showApplyEmail) {
+		return toExternalView(job, owner, showApplyEmail, null);
+	}
+
+	/**
+	 * `compat` nulo = visitante (sem perfil): o score fica 0 e a tela não mostra o selo. A vaga
+	 * externa raramente lista requisitos, então o sinal de tecnologia vem do texto do anúncio.
+	 */
+	private JobView toExternalView(ExternalJob job, boolean owner, boolean showApplyEmail,
+			com.socialcoisa.rede.jobs.domain.JobCompatibility compat) {
+		var details = job.details();
+		int matchScore = compat == null ? 0
+			: compat.scoreOf(List.of(), job.title() + " " + (job.description() == null ? "" : job.description()),
+				details == null ? null : details.city(), details == null ? null : details.state(),
+				details == null ? null : details.workModel());
 		return new JobView(job.id(), job.title(), job.company(), null, job.location(), null, null,
 			job.salary(), job.currency(), List.of(),
-			job.importedAt() != null ? job.importedAt().toString() : null, 0, false, false, owner, 0, null,
+			job.importedAt() != null ? job.importedAt().toString() : null, matchScore, false, false, owner, 0, null,
 			List.of(), "OPEN", null, "EXTERNAL", job.url(), job.platform(),
 			showApplyEmail ? job.applyEmail() : null,
 			job.description(), job.salaryMin(), job.salaryMax(), job.salaryPeriod(), externalSalaryLabel(job),
-			job.salaryNotInformed(), null);
+			job.salaryNotInformed(), null, ExternalDetailsView.of(job));
 	}
 
 	private JobView toView(Job job, String viewer, boolean applied, boolean saved, int applicationsCount) {
+		return toView(job, viewer, applied, saved, applicationsCount, compatibility.forViewer(viewer));
+	}
+
+	/**
+	 * `compat` já resolvido: a listagem lê o perfil uma vez e reaproveita em todas as linhas.
+	 * O dono da vaga não recebe score — ele não é candidato na própria vaga.
+	 */
+	private JobView toView(Job job, String viewer, boolean applied, boolean saved, int applicationsCount,
+			com.socialcoisa.rede.jobs.domain.JobCompatibility compat) {
+		boolean owner = viewer != null && viewer.equals(job.postedBy());
+		int matchScore = owner || compat == null ? 0
+			: compat.scoreOf(job.skills(), job.title() + " " + (job.description() == null ? "" : job.description()),
+				job.location(), null, null);
 		return new JobView(job.id(), job.title(), job.company(), job.logo(), job.location(), job.type(), job.level(),
-			job.salary(), job.currency(), job.skills(), job.postedAt() != null ? job.postedAt().toString() : null, 0,
-			applied, saved, viewer != null && viewer.equals(job.postedBy()), applicationsCount, authorOf(job),
+			job.salary(), job.currency(), job.skills(), job.postedAt() != null ? job.postedAt().toString() : null,
+			matchScore, applied, saved, owner, applicationsCount, authorOf(job),
 			fieldViews(job), job.status().name(), job.closedAt() != null ? job.closedAt().toString() : null,
 			"INTERNAL", null, null, null,
 			job.description(), formatAmount(job.salaryMin()), formatAmount(job.salaryMax()),
-			job.salaryPeriod(), salaryLabel(job), false, companySlugs(List.of(job)).get(job.companyId()));
+			job.salaryPeriod(), salaryLabel(job), false, companySlugs(List.of(job)).get(job.companyId()), null);
 	}
 
 	/** Slug of the company page each job is linked to, in one read (jobs without a page are left out). */
@@ -663,7 +918,35 @@ class JobContractController {
 			String description, String salaryMin, String salaryMax, String salaryPeriod, String salaryLabel,
 			boolean salaryNotInformed,
 			// The company page the job is linked to (null when it is not linked).
-			String companySlug) {
+			String companySlug,
+			// Metadados estruturados das vagas externas (nulo nas internas): publicação, modelo de
+			// trabalho, localidade, faixa numérica, atribuição e ciclo de vida.
+			ExternalDetailsView externalDetails) {
+	}
+
+	/**
+	 * O que a fonte externa informou de estruturado. Campo nulo = a fonte não informou; nada aqui
+	 * é inferido. `lastSeenAt` é a última verificação de que a vaga ainda existe na origem.
+	 */
+	record ExternalDetailsView(String publishedAt, String lastSeenAt, String employmentType, String level,
+			String workModel, String city, String state, String country, java.math.BigDecimal salaryMinAmount,
+			java.math.BigDecimal salaryMaxAmount, String salaryCurrency, String salaryPeriodCode,
+			String attributionUrl, String expiresAt, String removedAt) {
+
+		static ExternalDetailsView of(ExternalJob job) {
+			var details = job.details();
+			if (details == null) {
+				return null;
+			}
+			return new ExternalDetailsView(
+				details.publishedAt() != null ? details.publishedAt().toString() : null,
+				details.lastSeenAt() != null ? details.lastSeenAt().toString() : null,
+				details.employmentType(), details.level(), details.workModel(), details.city(), details.state(),
+				details.country(), details.salaryMinAmount(), details.salaryMaxAmount(), details.salaryCurrency(),
+				details.salaryPeriodCode(), details.attributionUrl(),
+				details.expiresAt() != null ? details.expiresAt().toString() : null,
+				details.removedAt() != null ? details.removedAt().toString() : null);
+		}
 	}
 
 	/** Quem publicou a vaga, com o que sustenta a credibilidade dele. */
@@ -688,6 +971,20 @@ class JobContractController {
 			boolean communityAgreement, Boolean salaryNotInformed) {
 	}
 
+	/** O e-mail de candidatura pronto para revisão (nada foi enviado ainda). */
+	record ExternalApplicationDraftView(String recipientEmail, String subject, String body,
+			boolean resumeAvailable, String resumeName, String jobTitle, String company, String jobUrl) {
+	}
+
+	/** Corpo do envio: a confirmação é obrigatória e o texto extra é opcional. */
+	record ExternalApplyRequest(Boolean confirmed, String message) {
+	}
+
+	/** Comprovante da candidatura enviada: para onde foi, com que assunto e se o anexo foi junto. */
+	record ExternalApplicationView(String id, String externalJobId, String recipientEmail, String subject,
+			boolean resumeAttached, String resumeName, String status, String appliedAt) {
+	}
+
 	record ApplicationFieldRequest(String label, String type, boolean required) {
 	}
 
@@ -698,20 +995,38 @@ class JobContractController {
 	record UpdateApplicationStatusRequest(String status, String feedback) {
 	}
 
+	record InterviewRequest(String startsAt, String endsAt, String timeZoneId, String notes) {
+	}
+
+	/** Entrevista como a API devolve: instantes em ISO-8601 UTC e o fuso de quem marcou. */
+	record InterviewView(String id, String applicationId, String jobId, String candidateId, String status,
+			String startsAt, String endsAt, String timeZoneId, String notes, String createdAt, String updatedAt,
+			String cancelledAt) {
+
+		static InterviewView of(JobInterview interview) {
+			return new InterviewView(interview.id(), interview.applicationId(), interview.jobId(),
+				interview.candidateId(), interview.status().name(), interview.startsAt().toString(),
+				interview.endsAt().toString(), interview.zone().getId(), interview.notes(),
+				interview.createdAt().toString(), interview.updatedAt().toString(),
+				interview.cancelledAt() == null ? null : interview.cancelledAt().toString());
+		}
+	}
+
 	record AnswerRequest(String fieldId, String value) {
 	}
 
 	/** Candidatura como o empregador ve: o retrato do candidato + as respostas. */
 	record ApplicationView(String id, String jobId, String status, String appliedAt, int answersCount,
-			CandidateView candidate, String message, List<AnswerView> answers, String feedback, String reviewedAt) {
+			CandidateView candidate, String message, List<AnswerView> answers, String feedback, String reviewedAt,
+			InterviewView interview) {
 
 		ApplicationView(String id, String jobId, String status, String appliedAt, int answersCount) {
-			this(id, jobId, status, appliedAt, answersCount, null, null, List.of(), null, null);
+			this(id, jobId, status, appliedAt, answersCount, null, null, List.of(), null, null, null);
 		}
 
 		ApplicationView(String id, String jobId, String status, String appliedAt, int answersCount,
 				String feedback, String reviewedAt) {
-			this(id, jobId, status, appliedAt, answersCount, null, null, List.of(), feedback, reviewedAt);
+			this(id, jobId, status, appliedAt, answersCount, null, null, List.of(), feedback, reviewedAt, null);
 		}
 	}
 

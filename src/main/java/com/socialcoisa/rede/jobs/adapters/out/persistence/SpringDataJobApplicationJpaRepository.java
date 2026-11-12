@@ -35,4 +35,11 @@ interface SpringDataJobApplicationJpaRepository extends JpaRepository<JobApplica
 	@Query("SELECT a.jobId, COUNT(a) FROM JobApplicationJpaEntity a WHERE a.jobId IN :jobIds GROUP BY a.jobId")
 	List<Object[]> countByJobIdGrouped(@Param("jobIds") java.util.Collection<String> jobIds);
 
+	@Query("""
+			SELECT a.jobId, COUNT(a) FROM JobApplicationJpaEntity a
+			WHERE a.jobId IN :jobIds AND a.status = :status GROUP BY a.jobId
+			""")
+	List<Object[]> countByJobIdAndStatusGrouped(@Param("jobIds") java.util.Collection<String> jobIds,
+			@Param("status") com.socialcoisa.rede.jobs.domain.JobApplicationStatus status);
+
 }

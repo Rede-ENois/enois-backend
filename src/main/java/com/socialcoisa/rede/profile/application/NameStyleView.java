@@ -13,10 +13,18 @@ public record NameStyleView(String theme, String font, String color, String name
 		if (profile == null) {
 			return null;
 		}
-		String theme = profile.nameTheme();
-		String font = profile.nameFont();
-		String color = profile.nameColor();
-		String nameplate = profile.nameplate();
+		return of(profile.nameTheme(), profile.nameFont(), profile.nameColor(), profile.nameplate());
+	}
+
+	/** Mesma regra, a partir da projeção em lote (as vitrines não carregam o perfil inteiro). */
+	public static NameStyleView from(com.socialcoisa.rede.profile.application.port.out.SellerIdentity seller) {
+		if (seller == null) {
+			return null;
+		}
+		return of(seller.nameTheme(), seller.nameFont(), seller.nameColor(), seller.nameplate());
+	}
+
+	private static NameStyleView of(String theme, String font, String color, String nameplate) {
 		if (theme == null && font == null && color == null && nameplate == null) {
 			return null;
 		}

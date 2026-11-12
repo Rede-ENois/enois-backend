@@ -35,6 +35,8 @@ public class UserRateLimiter {
 	public static final String CREATE_POST = "create_post";
 	public static final String CREATE_COMMENT = "create_comment";
 	public static final String APPLY_JOB = "apply_job";
+	/** Candidatura a vaga EXTERNA: dispara e-mail real para uma caixa de terceiro. */
+	public static final String EXTERNAL_APPLY = "external_apply";
 	public static final String SEND_MESSAGE = "send_message";
 	public static final String SYNC_GITHUB = "sync_github";
 	public static final String START_CALL = "start_call";
@@ -54,6 +56,8 @@ public class UserRateLimiter {
 	private final long commentWindowMs;
 	private final int jobApplyLimit;
 	private final long jobApplyWindowMs;
+	private final int externalApplyLimit;
+	private final long externalApplyWindowMs;
 	private final int messageLimit;
 	private final long messageWindowMs;
 	private final int githubSyncLimit;
@@ -68,6 +72,8 @@ public class UserRateLimiter {
 			@Value("${rede.rate.comment-window-minutes:60}") long commentWindowMinutes,
 			@Value("${rede.rate.job-apply-limit:100}") int jobApplyLimit,
 			@Value("${rede.rate.job-apply-window-minutes:30}") long jobApplyWindowMinutes,
+			@Value("${rede.rate.external-apply-limit:10}") int externalApplyLimit,
+			@Value("${rede.rate.external-apply-window-minutes:60}") long externalApplyWindowMinutes,
 			@Value("${rede.rate.message-limit:60}") int messageLimit,
 			@Value("${rede.rate.message-window-minutes:1}") long messageWindowMinutes,
 			@Value("${rede.rate.github-sync-limit:3}") int githubSyncLimit,
@@ -82,6 +88,8 @@ public class UserRateLimiter {
 		this.commentWindowMs = commentWindowMinutes * 60_000L;
 		this.jobApplyLimit = jobApplyLimit;
 		this.jobApplyWindowMs = jobApplyWindowMinutes * 60_000L;
+		this.externalApplyLimit = externalApplyLimit;
+		this.externalApplyWindowMs = externalApplyWindowMinutes * 60_000L;
 		this.messageLimit = messageLimit;
 		this.messageWindowMs = messageWindowMinutes * 60_000L;
 		this.githubSyncLimit = githubSyncLimit;
@@ -154,6 +162,7 @@ public class UserRateLimiter {
 			case CREATE_POST -> postWindowMs;
 			case CREATE_COMMENT -> commentWindowMs;
 			case APPLY_JOB -> jobApplyWindowMs;
+			case EXTERNAL_APPLY -> externalApplyWindowMs;
 			case SEND_MESSAGE -> messageWindowMs;
 			case SYNC_GITHUB -> githubSyncWindowMs;
 			case START_CALL -> callStartWindowMs;
@@ -166,6 +175,7 @@ public class UserRateLimiter {
 			case CREATE_POST -> postLimit;
 			case CREATE_COMMENT -> commentLimit;
 			case APPLY_JOB -> jobApplyLimit;
+			case EXTERNAL_APPLY -> externalApplyLimit;
 			case SEND_MESSAGE -> messageLimit;
 			case SYNC_GITHUB -> githubSyncLimit;
 			case START_CALL -> callStartLimit;

@@ -26,6 +26,13 @@ public interface CalendarEntryRepository {
 
 	Optional<CalendarEntry> findBySource(String ownerId, CalendarEntrySource source);
 
+	/**
+	 * Apaga a entrada da origem. É o oposto de {@link #save}: existe para o caso em que o fato que
+	 * gerou o compromisso deixou de valer (a pessoa saiu do evento), e não para "cancelar" — o
+	 * cancelamento é estado, não remoção.
+	 */
+	void deleteBySource(String ownerId, CalendarEntrySource source);
+
 	/** Entradas que outra pessoa organizou e convidou este usuário, dentro da janela meia-aberta. */
 	List<CalendarEntry> findInvitedInWindow(String userId, CalendarScope scope, Instant windowStart,
 			Instant windowEnd);

@@ -43,4 +43,15 @@ public interface ExternalJobRepository {
 
 	/** Exclusao definitiva (somente para as cadastradas pela comunidade). */
 	void delete(String id);
+
+	/**
+	 * Busca das vagas externas com os filtros do buscador — o mesmo formulário da busca interna,
+	 * aplicado ao que a fonte externa informa de estruturado.
+	 *
+	 * Só devolve vagas ATIVAS: removida (sumiu da fonte) ou vencida (`expires_at`) não aparece.
+	 */
+	List<ExternalJob> search(ExternalJobSearch search);
+
+	/** Vagas de UMA fonte que o refresh ainda não viu (candidatas a removidas). */
+	List<ExternalJob> findStaleByPlatform(String platform, java.time.Instant seenBefore, int limit);
 }

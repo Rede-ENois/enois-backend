@@ -29,6 +29,16 @@ public class StubFfmpegRunner extends MediaFfmpegRunner {
 
 	@Override
 	void strip(Path input, Path output, String mimeType, Duration timeout) {
+		copyOrFail(input, output);
+	}
+
+	/** The sanitizer calls this one; the stub has no encoder, so it behaves like the remux. */
+	@Override
+	void clean(Path input, Path output, String mimeType, Duration timeout) {
+		copyOrFail(input, output);
+	}
+
+	private void copyOrFail(Path input, Path output) {
 		if (failure != null) {
 			throw failure;
 		}

@@ -12,6 +12,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import com.socialcoisa.rede.calendar.application.CalendarSourceService;
+import com.socialcoisa.rede.calendar.domain.CalendarKind;
+import com.socialcoisa.rede.calendar.domain.CalendarScope;
 import com.socialcoisa.rede.events.application.port.out.EventRepository;
 import com.socialcoisa.rede.events.domain.Event;
 import com.socialcoisa.rede.events.domain.EventAttendee;
@@ -33,21 +36,29 @@ public class EventService {
 	/** Depois de sanitizado, o evento ainda fica visivel por este tempo antes do expurgo final. */
 	private static final java.time.Duration RETENTION = java.time.Duration.ofDays(365);
 
+	/** Prefixo da origem na agenda: a presenca confirmada ocupa uma entrada com este tipo. */
+	static final String CALENDAR_SOURCE = "EVENT";
+
+	/** O evento nao guarda hora de fim; na agenda ele ocupa esta duracao a partir do comeco. */
+	private static final java.time.Duration DEFAULT_EVENT_DURATION = java.time.Duration.ofHours(1);
+
 	private final EventRepository repository;
 	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
 	private final com.socialcoisa.rede.shared.security.SuspiciousText suspiciousText;
 	private final Clock clock;
 	private final CacheInvalidator cacheInvalidator;
+	private final CalendarSourceService calendar;
 
 	public EventService(EventRepository repository,
 			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate,
 			com.socialcoisa.rede.shared.security.SuspiciousText suspiciousText, Clock clock,
-			CacheInvalidator cacheInvalidator) {
+			CacheInvalidator cacheInvalidator, CalendarSourceService calendar) {
 		this.repository = repository;
 		this.sanctionGate = sanctionGate;
 		this.suspiciousText = suspiciousText;
 		this.clock = clock;
 		this.cacheInvalidator = cacheInvalidator;
+		this.calendar = calendar;
 	}
 
 	@Transactional
@@ -81,6 +92,9 @@ public class EventService {
 			requireScheduledTime(event);
 		}
 		repository.save(event);
+		// Quem ja confirmou presenca acompanha a edicao: o compromisso na agenda e o mesmo evento,
+		// e deixar o horario antigo la seria pior do que nao ter agenda nenhuma.
+		syncCalendarForAttendees(event);
 		cacheInvalidator.afterCommit(CacheConfig.EVENTS);
 		return event;
 	}
@@ -197,6 +211,9 @@ public class EventService {
 		if (event.seriesId() != null) {
 			repository.updateSeriesRecurrence(event.seriesId(), EventRecurrence.NONE);
 		}
+		// O evento deixou de existir: a entrada derivada dele sai da agenda de quem ia. Diferente do
+		// cancelamento de um compromisso, nao ha o que "publicar" — o evento nao foi desmarcado, sumiu.
+		removeCalendarForAttendees(eventId);
 		repository.deleteAttendees(eventId);
 		repository.deleteById(eventId);
 		cacheInvalidator.afterCommit(CacheConfig.EVENTS);
@@ -230,6 +247,9 @@ public class EventService {
 			throw new ApiException(409, "ALREADY_ATTENDING", "Voce ja confirmou presenca.");
 		}
 		repository.saveAttendee(EventAttendee.attend(eventId, userId, clock.instant()));
+		// Confirmar presenca e o que poe o evento na agenda de quem vai; o organizador nao ganha a
+		// entrada so por ter criado o evento.
+		syncCalendar(event, userId);
 		// O total de presencas aparece em cada card da lista.
 		cacheInvalidator.afterCommit(CacheConfig.EVENTS);
 		// userId ja vem do MDC (CurrentUserResolver); nao repetir em addKeyValue — structured log rejeita.
@@ -245,6 +265,9 @@ public class EventService {
 			throw new ApiException(404, "NOT_ATTENDING", "Voce nao esta inscrito neste evento.");
 		}
 		repository.removeAttendee(eventId, userId);
+		// Sair do evento remove o compromisso: a pessoa nao desmarcou um compromisso dela, so deixou
+		// de ir a um evento que continua existindo. Confirmar de novo recria a entrada.
+		calendar.delete(userId, CALENDAR_SOURCE, eventId);
 		cacheInvalidator.afterCommit(CacheConfig.EVENTS);
 		LOG.atInfo()
 			.addKeyValue("eventId", eventId)
@@ -322,6 +345,9 @@ public class EventService {
 			for (String userId : repository.findAttendeeIds(event.id())) {
 				repository.addAttendanceToTotal(userId);
 			}
+			// A presenca some junto com a PII; o compromisso derivado dela nao pode ficar orfao na
+			// agenda de quem foi.
+			removeCalendarForAttendees(event.id());
 			repository.deleteAttendees(event.id());
 			event.markSanitized(attendees, now);
 			repository.save(event);
@@ -361,6 +387,44 @@ public class EventService {
 	/** Events among {@code eventIds} where the user confirmed attendance (one query). */
 	public java.util.Set<String> attendingEventIds(String userId, java.util.List<String> eventIds) {
 		return repository.findAttendingEventIds(userId, eventIds);
+	}
+
+	/**
+	 * Poe o evento na agenda de quem confirmou presenca, pela porta de origem (D12): a entrada e
+	 * derivada do evento, e o dono e quem vai — nao quem criou.
+	 *
+	 * <p>Evento sem data legivel nao entra: a agenda trabalha com instantes, e inventar um horario
+	 * seria pior do que a pessoa nao ver o compromisso. O evento continua na vitrine normalmente.
+	 */
+	private void syncCalendar(Event event, String userId) {
+		java.time.Instant start = event.startsAt().orElse(null);
+		java.time.Instant end = event.expiresAt().orElse(null);
+		if (start == null || end == null) {
+			return;
+		}
+		// O evento guarda só o começo. Sem hora de fim, o compromisso ocupa uma hora — duração zero
+		// não existe na agenda (a constraint exige fim depois do início) e "o dia inteiro" mentiria
+		// sobre um encontro que tem hora marcada.
+		if (!end.isAfter(start)) {
+			end = start.plus(DEFAULT_EVENT_DURATION);
+		}
+		calendar.upsert(new CalendarSourceService.UpsertInput(userId, CALENDAR_SOURCE, event.id(),
+			CalendarScope.SOCIAL, CalendarKind.EVENT, event.title(), event.location(), start, end,
+			Event.NETWORK_ZONE.getId()));
+	}
+
+	/** Edicao do evento chega a agenda de todo mundo que ja confirmou presenca. */
+	private void syncCalendarForAttendees(Event event) {
+		for (String userId : repository.findAttendeeIds(event.id())) {
+			syncCalendar(event, userId);
+		}
+	}
+
+	/** Remove a entrada derivada do evento da agenda de cada pessoa que estava indo. */
+	private void removeCalendarForAttendees(String eventId) {
+		for (String userId : repository.findAttendeeIds(eventId)) {
+			calendar.delete(userId, CALENDAR_SOURCE, eventId);
+		}
 	}
 
 }

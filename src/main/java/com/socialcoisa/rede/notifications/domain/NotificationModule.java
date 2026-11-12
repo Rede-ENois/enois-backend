@@ -35,6 +35,7 @@ public enum NotificationModule {
 		Map.entry("EVENT_NEXT_OCCURRENCE", EVENTS),
 		Map.entry("JOB", JOBS),
 		Map.entry("JOB_APPLICATION_STATUS", JOBS),
+		Map.entry("JOB_INTERVIEW", JOBS),
 		Map.entry("COMPANY_NEW_OPPORTUNITY", JOBS),
 		Map.entry("MICROPROJETO", COMPANIES),
 		Map.entry("MENTORING", MENTORING),

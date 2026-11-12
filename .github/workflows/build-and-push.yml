@@ -97,11 +97,19 @@ jobs:
 
           # Mesma versão, arquivo diferente: o destino já aplicou (ou vai aplicar) uma migração
           # com esse número e o Flyway recusa o boot com "Found more than one migration".
+          #
+          # A base pode ter MAIS DE UM nome para a mesma versão (foi assim que a qa quebrou: duas
+          # V269). Comparar com um único nome reprovava até o PR que conserta a duplicata, porque
+          # o nome do branch nunca é igual à lista inteira. O teste é de pertinência: o nome do
+          # branch já existe na base com esse número?
           conflict=0
           while read -r v name; do
-            bname=$(versions "$base_dir" | awk -v v="$v" '$1==v {print $2}')
-            if [ -n "$bname" ] && [ "$bname" != "$name" ]; then
-              echo "::error::V$v existe como V${v}__${bname}.sql na $BASE_REF e como V${v}__${name}.sql no branch — renumere a migração nova."
+            if versions "$base_dir" | awk -v v="$v" '$1==v {print $2}' | grep -qxF "$name"; then
+              continue
+            fi
+            bnames=$(versions "$base_dir" | awk -v v="$v" '$1==v {print $2}' | paste -sd, -)
+            if [ -n "$bnames" ]; then
+              echo "::error::V$v existe como V${v}__${bnames}.sql na $BASE_REF e como V${v}__${name}.sql no branch — renumere a migração nova."
               conflict=1
             fi
           done < <(versions "$DIR")

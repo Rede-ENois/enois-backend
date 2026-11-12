@@ -155,8 +155,9 @@ class CalendarEntryController {
 		String hash = idempotency.hash(Map.of("entryId", entryId, "request", request));
 		return idempotency.execute(user.id().value(), "PATCH", "/api/calendar/entries/{entryId}", idempotencyKey,
 			hash, () -> {
-				CalendarEntry entry = calendarCommandService.update(user.id().value(), entryId, request.title(),
-					request.description(), request.startsAt(), request.endsAt(), request.timeZoneId());
+				CalendarEntry entry = calendarCommandService.update(user.id().value(), entryId, request.scope(),
+					request.kind(), request.title(), request.description(), request.startsAt(), request.endsAt(),
+					request.timeZoneId(), request.allDay());
 				return new CommandResponse(200, CalendarEntryView.from(entry));
 			});
 	}
@@ -252,17 +253,22 @@ class CalendarEntryController {
 		}
 	}
 
+	/**
+	 * Tira o lembrete de uma antecedência. Sem `minutesBefore` não há o que tirar: responder 200
+	 * faria a tela acreditar que apagou algo, então o pedido incompleto é 400 com código.
+	 */
 	@DeleteMapping("/{entryId}/reminders")
 	void clearReminder(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String entryId, @RequestParam(required = false) Integer minutesBefore) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		if (minutesBefore != null) {
-			try {
-				calendarReminderService.clearForReader(user.id().value(), entryId, minutesBefore);
-			}
-			catch (IllegalArgumentException error) {
-				throw new ApiException(400, "INVALID_REMINDER", error.getMessage());
-			}
+		if (minutesBefore == null) {
+			throw new ApiException(400, "INVALID_REMINDER", "Informe minutesBefore (5, 15, 30, 60 ou 1440).");
+		}
+		try {
+			calendarReminderService.clearForReader(user.id().value(), entryId, minutesBefore);
+		}
+		catch (IllegalArgumentException error) {
+			throw new ApiException(400, "INVALID_REMINDER", error.getMessage());
 		}
 	}
 
@@ -295,7 +301,7 @@ class CalendarEntryController {
 			.toList();
 	}
 
-	private static Instant instant(String raw, String field) {
+	static Instant instant(String raw, String field) {
 		if (raw == null || raw.isBlank()) {
 			throw new ApiException(400, "INVALID_WINDOW", "Informe " + field + " em ISO-8601.");
 		}
@@ -378,8 +384,12 @@ class CalendarEntryController {
 			String endsAt, String timeZoneId, boolean allDay) {
 	}
 
-	/** Corpo da edição parcial: campo nulo ou ausente não muda; `description` vazia limpa o texto. */
-	record CalendarEntryPatchRequest(String title, String description, String startsAt, String endsAt,
-			String timeZoneId) {
+	/**
+	 * Corpo da edição parcial: campo nulo ou ausente não muda; `description` vazia limpa o texto.
+	 * `allDay` é `Boolean` e não `boolean` porque ausente precisa significar "não mexi" — um
+	 * primitivo chegaria como `false` e desmarcaria o dia inteiro a cada edição de título.
+	 */
+	record CalendarEntryPatchRequest(String scope, String kind, String title, String description,
+			String startsAt, String endsAt, String timeZoneId, Boolean allDay) {
 	}
 }

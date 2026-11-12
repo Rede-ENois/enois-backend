@@ -13,6 +13,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.socialcoisa.rede.messaging.application.ConversationChanged;
+import com.socialcoisa.rede.notifications.application.NotificationCreatedEvent;
 
 /**
  * Open message streams, one per browser tab, keyed by user. The stream only carries "conversation X
@@ -65,6 +66,24 @@ class MessageStreamHub {
 			for (SseEmitter emitter : userStreams) {
 				send(userId, emitter, SseEmitter.event().name("conversation").data(data));
 			}
+		}
+	}
+
+	/**
+	 * "Chegou aviso para você": o sino e a lista de notificações recarregam na hora, sem esperar a
+	 * pessoa trocar de página. Antes o stream só falava de conversa e chamada, então o aviso criado
+	 * com a aba aberta só aparecia no próximo carregamento. O corpo leva só o id e o tipo: o texto
+	 * e o resto continuam vindo do endpoint de notificações, que autoriza de novo.
+	 */
+	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+	void onNotificationCreated(NotificationCreatedEvent event) {
+		ConcurrentLinkedDeque<SseEmitter> userStreams = streams.get(event.userId());
+		if (userStreams == null) {
+			return;
+		}
+		Map<String, String> data = Map.of("notificationId", event.notificationId(), "kind", event.kind());
+		for (SseEmitter emitter : userStreams) {
+			send(event.userId(), emitter, SseEmitter.event().name("notification").data(data));
 		}
 	}
 

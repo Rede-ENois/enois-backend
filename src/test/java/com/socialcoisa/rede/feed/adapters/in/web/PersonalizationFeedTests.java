@@ -248,10 +248,8 @@ class PersonalizationFeedTests {
 		String opinionRepost = objectMapper.readTree(opinion.getResponse().getContentAsString()).get("id").asText();
 
 		// Antes de ligar a preferência: o original (via repost puro) e o repost com opinião aparecem.
-		mockMvc.perform(get("/feed").param("tab", "FOR_YOU").header("X-Session-Token", reader.token()))
-			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.items[?(@.id == '" + original + "')]").isNotEmpty())
-			.andExpect(jsonPath("$.items[?(@.id == '" + opinionRepost + "')]").isNotEmpty());
+		var beforePreference = feedIds("FOR_YOU", reader);
+		org.assertj.core.api.Assertions.assertThat(beforePreference).contains(original, opinionRepost);
 
 		mockMvc.perform(put("/me/preferences")
 				.header("X-Session-Token", reader.token())
@@ -262,21 +260,15 @@ class PersonalizationFeedTests {
 			.andExpect(jsonPath("$.hideReposts").value(true));
 
 		// Depois: nenhum dos dois está no "Para você"...
-		mockMvc.perform(get("/feed").param("tab", "FOR_YOU").header("X-Session-Token", reader.token()))
-			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.items[?(@.id == '" + original + "')]").isEmpty())
-			.andExpect(jsonPath("$.items[?(@.id == '" + opinionRepost + "')]").isEmpty());
+		org.assertj.core.api.Assertions.assertThat(feedIds("FOR_YOU", reader))
+			.doesNotContain(original, opinionRepost);
 
 		// ...nem o repost com opinião no "Tudo" — mas o post ORIGINAL do autor continua lá
 		// (a preferência do leitor não é censura: o autor continua vendo tudo).
-		mockMvc.perform(get("/feed").param("tab", "ALL").header("X-Session-Token", reader.token()))
-			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.items[?(@.id == '" + original + "')]").isNotEmpty())
-			.andExpect(jsonPath("$.items[?(@.id == '" + opinionRepost + "')]").isEmpty());
+		org.assertj.core.api.Assertions.assertThat(feedIds("ALL", reader))
+			.contains(original).doesNotContain(opinionRepost);
 
-		mockMvc.perform(get("/feed").param("tab", "FOR_YOU").header("X-Session-Token", author.token()))
-			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.items[?(@.id == '" + original + "')]").isNotEmpty());
+		org.assertj.core.api.Assertions.assertThat(feedIds("FOR_YOU", author)).contains(original);
 	}
 
 	/**
@@ -311,10 +303,7 @@ class PersonalizationFeedTests {
 
 		// Sem a preferência, as duas abas mostram o repost com opinião.
 		for (String tab : java.util.List.of("FOLLOWING", "TRENDING")) {
-			mockMvc.perform(get("/feed").param("tab", tab).param("limit", "50")
-					.header("X-Session-Token", reader.token()))
-				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.items[?(@.id == '" + opinionRepost + "')]").isNotEmpty());
+			org.assertj.core.api.Assertions.assertThat(feedIds(tab, reader)).contains(opinionRepost);
 		}
 
 		mockMvc.perform(put("/me/preferences")
@@ -325,18 +314,12 @@ class PersonalizationFeedTests {
 			.andExpect(jsonPath("$.hideReposts").value(true));
 
 		for (String tab : java.util.List.of("FOLLOWING", "TRENDING")) {
-			mockMvc.perform(get("/feed").param("tab", tab).param("limit", "50")
-					.header("X-Session-Token", reader.token()))
-				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.items[?(@.id == '" + original + "')]").isNotEmpty())
-				.andExpect(jsonPath("$.items[?(@.id == '" + opinionRepost + "')]").isEmpty());
+			java.util.Set<String> ids = feedIds(tab, reader);
+			org.assertj.core.api.Assertions.assertThat(ids).contains(original).doesNotContain(opinionRepost);
 		}
 
 		// A preferência é do leitor: o autor continua vendo a própria republicação.
-		mockMvc.perform(get("/feed").param("tab", "FOLLOWING").param("limit", "50")
-				.header("X-Session-Token", author.token()))
-			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.items[?(@.id == '" + opinionRepost + "')]").isNotEmpty());
+		org.assertj.core.api.Assertions.assertThat(feedIds("FOLLOWING", author)).contains(opinionRepost);
 	}
 
 	/**
@@ -396,6 +379,30 @@ class PersonalizationFeedTests {
 		org.assertj.core.api.Assertions.assertThat(seen).contains(first, second);
 		org.assertj.core.api.Assertions.assertThat(seen).doesNotContainAnyElementsOf(opinions);
 		org.assertj.core.api.Assertions.assertThat(cursor).isNull();
+	}
+
+
+	/**
+	 * Ids que aparecem no feed da pessoa, pagina a pagina. O servico devolve no maximo 10 posts
+	 * por pagina, e a janela do ranking/do dia na base H2 compartilhada pode passar de uma pagina.
+	 */
+	private java.util.Set<String> feedIds(String tab, TestAuthHelper.AuthSession session) throws Exception {
+		java.util.Set<String> ids = new java.util.LinkedHashSet<>();
+		String cursor = null;
+		for (int pages = 0; pages < 120; pages++) {
+			var request = get("/feed").param("tab", tab).header("X-Session-Token", session.token());
+			if (cursor != null) {
+				request.param("cursor", cursor);
+			}
+			var body = objectMapper.readTree(mockMvc.perform(request).andExpect(status().isOk())
+				.andReturn().getResponse().getContentAsString());
+			body.path("items").forEach(item -> ids.add(item.path("id").asText()));
+			cursor = body.path("nextCursor").isTextual() ? body.path("nextCursor").asText() : null;
+			if (cursor == null) {
+				return ids;
+			}
+		}
+		throw new AssertionError("o feed nao terminou de paginar no teto do teste");
 	}
 
 	private String publishPlain(TestAuthHelper.AuthSession session, String content) throws Exception {

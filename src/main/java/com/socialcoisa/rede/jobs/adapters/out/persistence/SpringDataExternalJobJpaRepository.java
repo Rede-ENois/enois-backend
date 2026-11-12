@@ -66,4 +66,16 @@ interface SpringDataExternalJobJpaRepository extends JpaRepository<ExternalJobJp
 			ORDER BY e.lastCheckedAt DESC""")
 	List<ExternalJobJpaEntity> search(@org.springframework.data.repository.query.Param("pattern") String pattern,
 			Pageable pageable);
+
+	/**
+	 * Vagas de uma fonte que não apareceram no último ciclo dela (`lastSeenAt` antes do corte) e
+	 * que ainda não foram marcadas como removidas — candidatas a expiração.
+	 */
+	@Query("""
+			SELECT e FROM ExternalJobJpaEntity e
+			WHERE e.platform = :platform
+			  AND e.lastSeenAt IS NOT NULL AND e.lastSeenAt < :seenBefore
+			  AND e.removedAt IS NULL""")
+	List<ExternalJobJpaEntity> findStaleNotRemoved(@Param("platform") String platform,
+			@Param("seenBefore") java.time.Instant seenBefore, Pageable pageable);
 }

@@ -93,6 +93,32 @@ class CalendarEntryTests {
 	}
 
 	@Test
+	void reclassifyChangesOnlyWhatCameAndLeavesTheRest() {
+		CalendarEntry entry = entry(Instant.parse("2026-11-09T22:00:00Z"), Instant.parse("2026-11-09T23:00:00Z"));
+
+		// Só o escopo veio: tipo e dia inteiro continuam os que estavam.
+		entry.reclassify(CalendarScope.PROFESSIONAL, null, null, NOW.plus(Duration.ofMinutes(1)));
+		assertThat(entry.scope()).isEqualTo(CalendarScope.PROFESSIONAL);
+		assertThat(entry.kind()).isEqualTo(CalendarKind.PERSONAL);
+		assertThat(entry.allDay()).isFalse();
+		assertThat(entry.updatedAt()).isEqualTo(NOW.plus(Duration.ofMinutes(1)));
+
+		// Mesmo valor não é mudança: `updatedAt` fica onde estava (o `SEQUENCE` do `.ics` também).
+		Instant afterScope = entry.updatedAt();
+		entry.reclassify(CalendarScope.PROFESSIONAL, CalendarKind.PERSONAL, false, NOW.plus(Duration.ofHours(1)));
+		assertThat(entry.updatedAt()).isEqualTo(afterScope);
+	}
+
+	@Test
+	void aCancelledEntryCannotBeReclassified() {
+		CalendarEntry entry = entry(Instant.parse("2026-11-09T22:00:00Z"), Instant.parse("2026-11-09T23:00:00Z"));
+		entry.cancel(NOW);
+
+		assertThatThrownBy(() -> entry.reclassify(CalendarScope.PROFESSIONAL, CalendarKind.MEETING, true, NOW))
+			.isInstanceOf(IllegalStateException.class);
+	}
+
+	@Test
 	void overlapIsHalfOpenOnBothSides() {
 		CalendarEntry entry = entry(Instant.parse("2026-11-09T22:00:00Z"), Instant.parse("2026-11-09T23:00:00Z"));
 		Instant start = entry.startsAt();

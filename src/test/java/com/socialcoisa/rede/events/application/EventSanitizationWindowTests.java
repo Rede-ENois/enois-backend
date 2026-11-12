@@ -35,7 +35,8 @@ class EventSanitizationWindowTests {
 		return new EventService(mock(EventRepository.class), sanctions,
 			new com.socialcoisa.rede.shared.security.SuspiciousText("probe"),
 			Clock.fixed(Instant.parse(instant), ZoneOffset.UTC),
-			mock(com.socialcoisa.rede.shared.application.CacheInvalidator.class));
+			mock(com.socialcoisa.rede.shared.application.CacheInvalidator.class),
+			mock(com.socialcoisa.rede.calendar.application.CalendarSourceService.class));
 	}
 
 	@Test
