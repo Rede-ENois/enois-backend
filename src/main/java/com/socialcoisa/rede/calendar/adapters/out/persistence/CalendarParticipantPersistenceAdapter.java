@@ -54,4 +54,9 @@ class CalendarParticipantPersistenceAdapter implements CalendarParticipantReposi
 			.toList();
 	}
 
+	@Override
+	public long countByEntry(String entryId) {
+		return springData.countByEntryId(entryId);
+	}
+
 }
