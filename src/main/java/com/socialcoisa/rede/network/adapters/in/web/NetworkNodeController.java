@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.socialcoisa.rede.network.application.NetworkModeService;
 import com.socialcoisa.rede.network.application.NetworkNodeService;
 import com.socialcoisa.rede.network.application.NodeKeyService;
 import com.socialcoisa.rede.network.domain.NetworkNode;
@@ -29,10 +30,12 @@ class NetworkNodeController {
 
 	private final NetworkNodeService nodes;
 	private final NodeKeyService keys;
+	private final NetworkModeService modes;
 
-	NetworkNodeController(NetworkNodeService nodes, NodeKeyService keys) {
+	NetworkNodeController(NetworkNodeService nodes, NodeKeyService keys, NetworkModeService modes) {
 		this.nodes = nodes;
 		this.keys = keys;
+		this.modes = modes;
 	}
 
 	record EnrollRequest(String provisionToken, String runtimeVersion, Declared declared, String region,
@@ -51,7 +54,14 @@ class NetworkNodeController {
 	record Observed(Double cpuPercent, Integer memoryMb, Integer runningTasks) {
 	}
 
-	record HeartbeatResponse(String nodeId, String status, List<String> profiles, String serverTime) {
+	/**
+	 * O modo vigente vai no heartbeat porque é assim que o nó sabe drenar: em {@code DEGRADED} e
+	 * {@code EMERGENCY} ele para de pedir tarefa nova e termina o que tem na mão; em {@code RECOVERY}
+	 * sabe que está voltando. Sem isso o nó executaria no escuro e a contingência existiria só no
+	 * painel.
+	 */
+	record HeartbeatResponse(String nodeId, String status, List<String> profiles, String serverTime,
+			String mode, boolean acceptTasks) {
 	}
 
 	/**
@@ -82,6 +92,7 @@ class NetworkNodeController {
 			request == null ? null : request.runtimeVersion(), observed == null ? null : observed.cpuPercent(),
 			observed == null ? null : observed.memoryMb(), observed == null ? null : observed.runningTasks()));
 		return new HeartbeatResponse(updated.id(), updated.status().name(),
-			updated.profiles().stream().map(Enum::name).sorted().toList(), Instant.now().toString());
+			updated.profiles().stream().map(Enum::name).sorted().toList(), Instant.now().toString(),
+			modes.current().name(), modes.current().dispatchAllowed());
 	}
 }

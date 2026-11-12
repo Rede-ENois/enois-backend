@@ -73,8 +73,8 @@ removendo nó doente; teste de broadcast com duas instâncias.
 | item | critério de aceite |
 |---|---|
 | `NODE_LOCAL` | perfil próprio, prioridade de escalonamento |
-| modos operacionais | `NORMAL`/`HIGH_LOAD`/`DEGRADED`/`EMERGENCY`/`RECOVERY` com critérios medidos |
-| escalonamento automático | transição registrada em auditoria com o número que a motivou |
+| modos operacionais | `NORMAL`/`HIGH_LOAD`/`DEGRADED`/`EMERGENCY`/`RECOVERY` com critérios medidos — **entregue**: `GET`/`POST /admin/network/mode`, motivo obrigatório, auditoria com ator/modo anterior/motivo, `RECOVERY` termina por número, despacho obedece ao modo e o heartbeat devolve `mode`/`acceptTasks` |
+| escalonamento automático | transição registrada em auditoria com o número que a motivou — **entregue** (já existia para `NORMAL`/`HIGH_LOAD`; a saída de `RECOVERY` usa o mesmo número) |
 | failover | função preparada assume quando a principal cai |
 | recuperação gradual | drenagem sem derrubar o que está em andamento |
 

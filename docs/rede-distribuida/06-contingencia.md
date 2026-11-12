@@ -2,16 +2,36 @@
 
 ## 1. Modos operacionais
 
-O modo é **dado do Control Plane**, não decisão de nó. Todo nó recebe o modo vigente no heartbeat e
-na config assinada.
+O modo é **dado do Control Plane**, não decisão de nó. Todo nó recebe o modo vigente no heartbeat
+(campo `mode`) e, quando a config assinada existir, também nela.
 
-| modo | quando | o que muda |
-|---|---|---|
-| `NORMAL` | operação padrão | tudo como hoje |
-| `HIGH_LOAD` | tráfego acima do esperado | distribuição ampliada; nós auxiliares recebem mais tarefas |
-| `DEGRADED` | dependência crítica instável | funcionalidades não essenciais desligadas, declaradas |
-| `EMERGENCY` | infra principal indisponível ou sobrecarregada | nós de contingência assumem funções preparadas |
-| `RECOVERY` | voltando ao normal | retorno gradual, com drenagem dos nós auxiliares |
+| modo | quando | quem entra | o que muda |
+|---|---|---|---|
+| `NORMAL` | operação padrão | cálculo medido | tudo como hoje; despacho no teto da varredura |
+| `HIGH_LOAD` | fila acima da capacidade | cálculo medido | **não** bloqueia nada: distribuição ampliada |
+| `DEGRADED` | dependência crítica instável | admin, com motivo | **despacho novo parado**; trabalho em curso continua |
+| `EMERGENCY` | infra principal indisponível | admin, com motivo | **despacho novo parado**; trabalho em curso continua |
+| `RECOVERY` | voltando ao normal | admin, com motivo | **despacho pela metade**; sai sozinho quando a fila normaliza |
+
+Duas origens de transição, e a diferença é o que impede o sistema de mentir para si mesmo:
+
+- **Medido** (`NORMAL`, `HIGH_LOAD`): a razão fila/vagas cruza o limiar com histerese (entra em 1.0,
+  sai em 0.5). Ninguém declara esses modos à mão — `POST /admin/network/mode` recusa com
+  `NETWORK_MODE_NOT_MANUAL`, porque uma decisão "forçar NORMAL" seria desfeita na varredura seguinte.
+- **Humano** (`DEGRADED`, `EMERGENCY`, `RECOVERY`): `POST /admin/network/mode` com motivo
+  obrigatório, auditado em `NETWORK_MODE_<NOVO>` com ator, modo anterior e motivo. A automação
+  **nunca** desfaz `DEGRADED`/`EMERGENCY` — ela não mede dependência externa, e encerrar o incidente
+  de quem olhou é como o incidente volta.
+
+`RECOVERY` é híbrido de propósito: começa por decisão humana e **termina por número**, quando a
+fila volta abaixo do limiar de saída. Recuperação que depende de alguém lembrar de desligar vira
+modo esquecido, com o despacho pela metade para sempre.
+
+**O que exatamente muda no despacho:** `DEGRADED`/`EMERGENCY` designam zero tarefas na rodada;
+`RECOVERY` designa metade do teto. O que já está designado continua com o nó — parar o despacho adia
+trabalho novo, não cancela o que está na mão. A recuperação de tarefa órfã (claim vencido) roda em
+**qualquer** modo: devolver à fila não é designar, e a órfã parada perderia o prazo esperando o modo
+voltar.
 
 ### O que continua disponível em cada modo
 
@@ -51,8 +71,13 @@ sequenceDiagram
 ```
 
 Critérios de entrada e saída são **medidos**, não intuídos: latência p95, profundidade de fila,
-taxa de erro e uso de CPU/memória. Cada transição é registrada em auditoria com o número que a
-motivou.
+taxa de erro e uso de CPU/memória. Cada transição automática é registrada em auditoria com o número
+que a motivou (`NETWORK_MODE_HIGH_LOAD` com `pending` e `capacity`; `NETWORK_MODE_NORMAL` na saída de
+`RECOVERY`); cada transição manual guarda o motivo declarado.
+
+O nó descobre o freio pelo heartbeat: `mode` e `acceptTasks` (falso em `DEGRADED`/`EMERGENCY`). Sem
+esses dois campos a contingência existiria só no painel — o nó pediria tarefa no escuro e o
+`EMERGENCY` não teria efeito nenhum em quem está executando.
 
 ## 3. Contingência distribuída
 

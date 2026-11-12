@@ -17,6 +17,7 @@ import com.socialcoisa.rede.network.domain.NetworkMode;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.TaskStatus;
 import com.socialcoisa.rede.shared.audit.AuditTrail;
+import com.socialcoisa.rede.shared.web.ApiException;
 
 /**
  * Modo operacional da rede, calculado a partir de números medidos.
@@ -26,9 +27,11 @@ import com.socialcoisa.rede.shared.audit.AuditTrail;
  * volta abaixo do limiar de saída, volta a {@code NORMAL}. Os dois limiares são diferentes de
  * propósito — um limiar só faria o modo piscar a cada tarefa que entra e sai.</p>
  *
- * <p>O cálculo automático só mexe em {@code NORMAL} e {@code HIGH_LOAD}. {@code DEGRADED},
- * {@code EMERGENCY} e {@code RECOVERY} são decisão humana da fase 4, e sobrescrevê-los aqui seria a
- * automação desfazendo uma decisão de incidente.</p>
+ * <p>{@code DEGRADED} e {@code EMERGENCY} são decisão humana: dependência crítica instável não é
+ * algo que o Control Plane mede, e o cálculo automático nunca os desfaz — automação desfazendo uma
+ * decisão de incidente é como o incidente volta. {@code RECOVERY} começa por decisão humana (ou por
+ * saída de {@code HIGH_LOAD}, quando configurado) e <b>termina por número</b>: fila abaixo do
+ * limiar de saída devolve {@code NORMAL}, senão a recuperação viraria um modo esquecido.</p>
  */
 @Service
 public class NetworkModeService {
@@ -62,6 +65,35 @@ public class NetworkModeService {
 	}
 
 	/**
+	 * Transição por decisão humana. Só os modos de incidente e de recuperação são acionáveis à mão —
+	 * {@code NORMAL} e {@code HIGH_LOAD} pertencem ao cálculo medido, e um admin "forçando NORMAL"
+	 * com a fila cheia seria a automação readmitindo na próxima varredura com aparência de decisão.
+	 *
+	 * <p>A transição é auditada com o ator, o modo anterior e o motivo declarado; exigir motivo é o
+	 * que impede "ativei EMERGENCY para ver o que acontece" sem registro.</p>
+	 */
+	@Transactional
+	public NetworkMode declare(String actorId, NetworkMode next, String declaredReason) {
+		if (next == null || !next.manual()) {
+			throw new ApiException(400, "NETWORK_MODE_NOT_MANUAL",
+				"Modo sem acionamento manual: NORMAL e HIGH_LOAD seguem o calculo medido.");
+		}
+		if (declaredReason == null || declaredReason.isBlank()) {
+			throw new ApiException(400, "NETWORK_MODE_REASON_REQUIRED", "Declare o motivo da transicao.");
+		}
+		NetworkMode current = current();
+		if (current == next) {
+			return current;
+		}
+		String reason = "manual por " + actorId + ": " + declaredReason.trim();
+		state.setMode(next, reason, clock.instant());
+		audit.record(actorId, "NETWORK_MODE_" + next.name(), "global",
+			"{\"from\":\"" + current.name() + "\",\"reason\":\"" + escape(declaredReason.trim()) + "\"}");
+		LOG.info("Modo da rede {} -> {} ({})", current, next, reason);
+		return next;
+	}
+
+	/**
 	 * Recalcula o modo. Devolve o modo vigente depois do cálculo.
 	 *
 	 * <p>A transição é auditada com o número que a motivou: sem isso, "entrou em HIGH_LOAD" não diz
@@ -72,7 +104,7 @@ public class NetworkModeService {
 		Instant now = clock.instant();
 		NetworkMode current = current();
 		if (!current.automatic()) {
-			// Modo de incidente: a automação não desfaz decisão humana.
+			// Modo de incidente humano: a automação não desfaz decisão.
 			return current;
 		}
 		long pending = tasks.countByStatus(TaskStatus.PENDING);
@@ -83,6 +115,11 @@ public class NetworkModeService {
 			next = NetworkMode.HIGH_LOAD;
 		}
 		else if (current == NetworkMode.HIGH_LOAD && ratio <= exitRatio) {
+			next = NetworkMode.NORMAL;
+		}
+		else if (current == NetworkMode.RECOVERY && ratio <= exitRatio) {
+			// RECOVERY termina por número: recuperação que ninguém encerra vira modo esquecido, com o
+			// despacho pela metade para sempre.
 			next = NetworkMode.NORMAL;
 		}
 		if (next != current) {
@@ -97,6 +134,11 @@ public class NetworkModeService {
 			LOG.info("Modo da rede {} -> {} ({})", current, next, reason);
 		}
 		return next;
+	}
+
+	/** Motivo entra em metadata JSON: aspas e barra do texto humano não podem quebrar o JSON. */
+	private static String escape(String text) {
+		return text.replace("\\", "\\\\").replace("\"", "\\\"");
 	}
 
 	/**

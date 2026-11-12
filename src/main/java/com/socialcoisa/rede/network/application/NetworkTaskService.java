@@ -18,6 +18,7 @@ import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
 import com.socialcoisa.rede.network.domain.DataClass;
 import com.socialcoisa.rede.network.domain.NetworkNode;
+import com.socialcoisa.rede.network.domain.NetworkMode;
 import com.socialcoisa.rede.network.domain.NetworkTask;
 import com.socialcoisa.rede.network.domain.TaskStatus;
 import com.socialcoisa.rede.network.domain.TaskType;
@@ -45,7 +46,7 @@ public class NetworkTaskService {
 	private static final Logger LOG = LoggerFactory.getLogger(NetworkTaskService.class);
 
 	/** Teto de tarefas por varredura: uma rodada não pode segurar a tabela. */
-	private static final int SCAN_LIMIT = 50;
+	public static final int SCAN_LIMIT = 50;
 	private static final int MAX_LIST = 200;
 	private static final int MAX_ERROR = 500;
 
@@ -57,6 +58,7 @@ public class NetworkTaskService {
 	 * (fail-closed) — nunca "aceita porque nao deu para conferir".
 	 */
 	private final org.springframework.beans.factory.ObjectProvider<MediaResultVerifier> mediaResults;
+	private final NetworkModeService modes;
 	private final AuditTrail audit;
 	private final Clock clock;
 	private final Duration claimTtl;
@@ -66,7 +68,7 @@ public class NetworkTaskService {
 	private final Duration quarantineWindow;
 
 	NetworkTaskService(NetworkTaskRepository tasks, NetworkNodeRepository nodes, org.springframework.beans.factory.ObjectProvider<MediaResultVerifier> mediaResults,
-			AuditTrail audit, Clock clock,
+			NetworkModeService modes, AuditTrail audit, Clock clock,
 			@Value("${rede.network.task.claim-ttl-seconds:120}") long claimTtlSeconds,
 			@Value("${rede.network.task.node-stale-seconds:180}") long nodeStaleSeconds,
 			@Value("${rede.network.task.max-attempts:5}") int maxAttempts,
@@ -75,6 +77,7 @@ public class NetworkTaskService {
 		this.tasks = tasks;
 		this.nodes = nodes;
 		this.mediaResults = mediaResults;
+		this.modes = modes;
 		this.audit = audit;
 		this.clock = clock;
 		this.claimTtl = Duration.ofSeconds(Math.max(10, claimTtlSeconds));
@@ -127,8 +130,16 @@ public class NetworkTaskService {
 	@Transactional
 	public int dispatchPending() {
 		Instant now = clock.instant();
+		// Recuperar órfã roda SEMPRE, inclusive em DEGRADED/EMERGENCY: devolver à fila a tarefa cujo
+		// claim venceu não é designar trabalho novo, e deixá-la parada em DISPATCHED para sempre
+		// perderia a tarefa no prazo em vez de esperar o modo voltar.
 		reclaimAbandoned(now);
-		List<NetworkTask> pending = tasks.findDispatchable(now, SCAN_LIMIT);
+		NetworkMode mode = modes.current();
+		int limit = mode.dispatchLimit(SCAN_LIMIT);
+		if (limit == 0) {
+			return 0;
+		}
+		List<NetworkTask> pending = tasks.findDispatchable(now, limit);
 		if (pending.isEmpty()) {
 			return 0;
 		}

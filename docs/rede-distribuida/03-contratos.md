@@ -62,11 +62,22 @@ Autenticado. Envia capacidade **observada** e versão.
 }
 ```
 
-Resposta: estado do nó, config version e modos operacionais vigentes.
+Resposta: estado do nó, perfis e modo operacional vigente.
 
 ```json
-{ "status": "ACTIVE", "configVersion": 7, "mode": "NORMAL", "serverTime": "2026-11-11T12:00:00Z" }
+{
+  "nodeId": "nd_1a2b3c",
+  "status": "ACTIVE",
+  "profiles": ["NODE_MEDIA"],
+  "serverTime": "2026-11-11T12:00:00Z",
+  "mode": "NORMAL",
+  "acceptTasks": true
+}
 ```
+
+`acceptTasks` acompanha o `mode` porque o nó precisa do freio em booleano, não de interpretar a
+tabela de contingência: falso em `DEGRADED`/`EMERGENCY`. O campo é aditivo — nó que o ignora
+continua funcionando e ainda recebe tarefas do Control Plane, que já não designa nada nesses modos.
 
 ### `GET /network/nodes/me/config`
 Devolve a configuração **assinada**. O nó confere a assinatura antes de aplicar.
@@ -135,6 +146,9 @@ Resultado de tarefa cujo nó foi revogado no meio é **descartado** e registrado
 | `TASK_EXPIRED` | 400 | deadline vencido |
 | `TASK_ALREADY_CLAIMED` | 409 | outra tentativa já concluiu |
 | `NETWORK_DISABLED` | 503 | rede desligada por config (fail-closed) |
+| `NETWORK_MODE_NOT_MANUAL` | 400 | `NORMAL`/`HIGH_LOAD` não são declarados à mão |
+| `NETWORK_MODE_REASON_REQUIRED` | 400 | transição manual sem motivo |
+| `NETWORK_MODE_UNKNOWN` | 400 | modo inexistente em `POST /admin/network/mode` |
 
 ## 5. Versionamento
 
