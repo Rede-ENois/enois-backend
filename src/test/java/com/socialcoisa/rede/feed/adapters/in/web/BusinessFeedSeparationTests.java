@@ -231,4 +231,28 @@ class BusinessFeedSeparationTests {
 			.andExpect(status().isNotFound())
 			.andExpect(jsonPath("$.code").value("PROFILE_NOT_FOUND"));
 	}
+
+	@Test
+	void oFeedCorporativoEPublicoComoAPaginaDoPerfil() throws Exception {
+		var author = auth.authenticate("bizpub_author");
+		createAndActivate(author, "bizpub.pro", "Perfil Público");
+		String businessId = publish(author, "BUSINESS", "Post corporativo visível sem sessão.");
+
+		// Sem sessão: 200 com conteúdo — a página pública do perfil mostra o mesmo post, então o
+		// feed agregado não pode exigir mais que ela.
+		mockMvc.perform(get("/feed/corporate"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.id == '" + businessId + "')]").isNotEmpty());
+
+		// Sessão inválida é tratado como visitante, não como erro de autenticação.
+		mockMvc.perform(get("/feed/corporate").header("X-Session-Token", "token-inexistente"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.id == '" + businessId + "')]").isNotEmpty());
+
+		// Com sessão, continua funcionando como sempre.
+		mockMvc.perform(get("/feed/corporate").header("X-Session-Token", author.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.id == '" + businessId + "')].content")
+				.value("Post corporativo visível sem sessão."));
+	}
 }
