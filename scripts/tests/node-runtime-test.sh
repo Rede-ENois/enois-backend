@@ -9,7 +9,7 @@ NODE_DIR="$ROOT/deploy/node-runtime"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-for tool in bash head sed grep dirname pwd mkdir stat chmod read nproc awk; do
+for tool in bash head sed grep dirname pwd mkdir stat chmod read nproc awk date tar gzip; do
   location="$(command -v "$tool")"
   ln -s "$location" "$TMP/$tool" 2>/dev/null || true
 done
@@ -96,6 +96,39 @@ make_command curl 'exit 0'
 out=$(NODE_HOME="$TMP/node-home-vazio" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" --start --control-plane https://cp.test 2>&1) &&
   { printf '[FAIL] --start passou sem node.json:\n%s\n' "$out" >&2; exit 1; }
 assert_contains 'start sem enroll recusa' "$out" 'rode o enroll primeiro'
+
+# ------------------------------------------------- --backup / --restore
+# Backup de identidade completa: arquivo nasce 600, e o nome carrega o nodeId.
+# O --backup grava no diretório corrente: o teste roda dentro de $TMP/cwd.
+mkdir -p "$TMP/cwd"
+backup_file=$(cd "$TMP/cwd" && NODE_HOME="$NH" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" --backup >/dev/null; find . -maxdepth 1 -name 'enois-node-nd_teste123-*.tar.gz' | head -n 1)
+[[ -n "$backup_file" ]] || { printf '[FAIL] backup não encontrado em %s\n' "$TMP/cwd" >&2; exit 1; }
+backup_file="$TMP/cwd/$backup_file"
+assert_eq 'backup da identidade nasce com 600' '600' "$(stat -c '%a' "$backup_file")"
+
+# Backup sem identidade completa falha antes de qualquer rede (curl nem existe aqui).
+rm -rf "$TMP/node-home-metade"; mkdir -p "$TMP/node-home-metade"
+printf '%s\n' "$ENROLL_BODY" > "$TMP/node-home-metade/node.json"
+out=$(NODE_HOME="$TMP/node-home-metade" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" --backup 2>&1) &&
+  { printf '[FAIL] --backup passou sem api-key:\n%s\n' "$out" >&2; exit 1; }
+assert_contains 'backup sem api-key recusa' "$out" 'rode --set-key primeiro'
+
+# Restore não pisa identidade existente — trocar de nó por engano é defeito grave.
+out=$(NODE_HOME="$NH" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" --restore "$backup_file" 2>&1) &&
+  { printf '[FAIL] --restore passou com nó já registrado:\n%s\n' "$out" >&2; exit 1; }
+assert_contains 'restore com identidade presente recusa' "$out" 'restaurar por cima trocaria a identidade'
+
+# Restore limpo devolve a mesma identidade (mesmo nodeId) com permissões corretas,
+# e o heartbeat subsequente autentica — a identidade é a mesma, não uma nova.
+rm -rf "$NH"; mkdir -p "$NH"; chmod 700 "$NH"
+out=$(NODE_HOME="$NH" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" --restore "$backup_file" 2>&1)
+assert_contains 'restore devolve o mesmo nodeId' "$out" 'nd_teste123'
+assert_eq 'node.json restaurado com 600' '600' "$(stat -c '%a' "$NH/node.json")"
+assert_eq 'api-key restaurada com 600' '600' "$(stat -c '%a' "$NH/api-key")"
+make_command curl "case \"\${@: -1}\" in */network/nodes/heartbeat) printf '%s' '$HB_BODY' ;; *) exit 22 ;; esac"
+make_command docker 'case "$*" in *"ps --format"*) exit 1 ;; esac; exit 0'
+out=$(NODE_HOME="$NH" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" --start --control-plane https://cp.test 2>&1)
+assert_contains 'nó restaurado autentica com a mesma identidade' "$out" 'Estado do nó no Control Plane: ACTIVE'
 
 # ---------------------------------------------------------------- node-doctor.sh
 

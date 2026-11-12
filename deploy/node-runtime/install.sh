@@ -5,6 +5,8 @@
 #   ./install.sh --control-plane https://control.enois.ia.br --token <provision-token> \
 #                [--region sa-east-1] [--country BR] [--cpu 2] [--memory 1024]
 #   ./install.sh --set-key              # cola a API key que o admin gerou
+#   ./install.sh --backup               # arquiva a identidade (node.json + api-key)
+#   ./install.sh --restore <arquivo>    # restaura a identidade de um backup
 #   ./install.sh --start                # sobe o container
 #
 # O que faz (docs/rede-distribuida/01-arquitetura.md §4):
@@ -25,10 +27,10 @@ die() { printf 'Erro: %s\n' "$*" >&2; exit 1; }
 info() { printf '[install] %s\n' "$*"; }
 
 usage() {
-  grep '^#' "$0" | sed -n '3,16p' | sed 's/^# \{0,1\}//'
+  grep '^#' "$0" | sed -n '3,18p' | sed 's/^# \{0,1\}//'
 }
 
-CONTROL_PLANE='' TOKEN='' REGION='' COUNTRY='' CPU='' MEMORY='' MODE=''
+CONTROL_PLANE='' TOKEN='' REGION='' COUNTRY='' CPU='' MEMORY='' MODE='' BACKUP_FILE=''
 while (($#)); do
   case "$1" in
     --control-plane) CONTROL_PLANE="$2"; shift 2 ;;
@@ -38,6 +40,8 @@ while (($#)); do
     --cpu) CPU="$2"; shift 2 ;;
     --memory) MEMORY="$2"; shift 2 ;;
     --set-key|--start) MODE="$1"; shift ;;
+    --backup) MODE="--backup"; shift ;;
+    --restore) MODE="--restore"; BACKUP_FILE="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "Opção desconhecida: $1 (veja --help)" ;;
   esac
@@ -45,6 +49,42 @@ done
 
 mkdir -p "$NODE_HOME"
 chmod 700 "$NODE_HOME"
+
+# ------------------------------------------------- --backup / --restore
+# O par node.json + api-key é a identidade do nó (04-identidade-e-autorizacao.md):
+# perdidos, o re-enroll cria um nó NOVO e a aprovação humana se repete. O backup
+# existe para reinstalar a mesma identidade em máquina reformada ou migrada.
+if [[ "$MODE" == "--backup" ]]; then
+  [[ -s "$NODE_HOME/node.json" ]] || die "sem $NODE_HOME/node.json — rode o enroll primeiro"
+  [[ -s "$NODE_HOME/api-key" ]] || die "sem $NODE_HOME/api-key — rode --set-key primeiro"
+  for tool in tar; do command -v "$tool" >/dev/null 2>&1 || die "Comando ausente: $tool"; done
+
+  node_id=$(sed -n 's/.*"nodeId":"\([^"]*\)".*/\1/p' "$NODE_HOME/node.json")
+  out="enois-node-${node_id:-identidade}-$(date +%Y%m%d-%H%M%S).tar.gz"
+  umask 077
+  tar -C "$NODE_HOME" -czf "$out" node.json api-key
+  umask 022
+  info "Backup da identidade em ./$out (permissão 600)."
+  info "Guarde com o mesmo cuidado da chave: quem tem o backup opera como o nó."
+  exit 0
+fi
+
+if [[ "$MODE" == "--restore" ]]; then
+  [[ -n "$BACKUP_FILE" ]] || die '--restore precisa do caminho do arquivo (ex.: ./install.sh --restore enois-node-nd_x.tar.gz)'
+  [[ -f "$BACKUP_FILE" ]] || die "backup não encontrado: $BACKUP_FILE"
+  for tool in tar; do command -v "$tool" >/dev/null 2>&1 || die "Comando ausente: $tool"; done
+
+  if [[ -s "$NODE_HOME/node.json" ]]; then
+    die "já existe um nó registrado em $NODE_HOME/node.json — restaurar por cima trocaria a identidade; remova-a primeiro se tem certeza"
+  fi
+  tar -C "$NODE_HOME" -xzf "$BACKUP_FILE"
+  chmod 600 "$NODE_HOME/node.json" "$NODE_HOME/api-key" 2>/dev/null || true
+  node_id=$(sed -n 's/.*"nodeId":"\([^"]*\)".*/\1/p' "$NODE_HOME/node.json")
+  [[ -n "$node_id" ]] || die "backup sem nodeId válido dentro — arquivo truncado ou não é um backup de nó"
+  info "Identidade de $node_id restaurada em $NODE_HOME."
+  info "Rode --start para confirmar o heartbeat e subir o container."
+  exit 0
+fi
 
 # ---------------------------------------------------------------- --set-key
 if [[ "$MODE" == "--set-key" ]]; then

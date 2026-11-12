@@ -70,7 +70,27 @@ Sai 0 quando não há FAIL; WARN não impede a operação. Nunca imprime a API k
 nada — a revogação é decisão do admin, e voltar após revogação exige cadastro
 novo (identidade nova, chave nova).
 
-## 5. O que ainda não está aqui
+## 5. Backup da identidade
+
+A config assinada se recupera do Control Plane (`GET /network/nodes/me/config`);
+a identidade, não — ela só existe em `$NODE_HOME`. Perdida, o re-enroll cria um
+nó **novo** e a aprovação humana se repete. Para máquina reformada ou migrada:
+
+```bash
+# Na máquina atual: arquiva node.json + api-key num tar.gz com permissão 600.
+./install.sh --backup              # → enois-node-<nodeId>-<data>.tar.gz
+
+# Na máquina nova (sem node.json existente): restaura e sobe.
+./install.sh --restore enois-node-nd_x-20261112-150000.tar.gz
+./install.sh --start --control-plane https://<control-plane>
+```
+
+O `--restore` se recusa a pisa uma identidade já registrada — trocar o nó em
+operação por engano seria pior que refazer o onboarding. O backup vale como a
+chave: quem tem o arquivo opera como o nó; guarde com o mesmo cuidado e descarte
+junto com a revogação (a retenção acompanha o ciclo de vida da identidade).
+
+## 6. O que ainda não está aqui
 
 - **Executores por perfil** (fase 6 do plano): a imagem hoje prova
   conectividade, credencial e ciclo de vida; executar transcode/cache de verdade
@@ -78,6 +98,3 @@ novo (identidade nova, chave nova).
 - **Atualização e rollback com verificação de assinatura OCI** (item próprio do
   plano): o compose pina tag, e a verificação de assinatura no pull entra com a
   publicação das imagens do runtime.
-- **Backup de config:** a config é recuperável do Control Plane (`GET
-  /network/nodes/me/config`, assinada); o que precisa de backup local é só o par
-  de identidade, e a política de retenção dele acompanha a revogação.
