@@ -37,7 +37,10 @@ public interface CalendarEntryRepository {
 	List<CalendarEntry> findInvitedInWindow(String userId, CalendarScope scope, Instant windowStart,
 			Instant windowEnd);
 
-	/** Busca por conjunto de ids (a leitura da agenda do participante carrega o dono de uma vez). */
-	List<CalendarEntry> findAllByIds(java.util.Collection<String> ids);
+	/**
+	 * Os compromissos com convite dessa pessoa ainda sem resposta, do convite mais antigo ao mais
+	 * novo. Cancelado ou já respondido não volta: a consulta cruza convite e compromisso no banco.
+	 */
+	List<CalendarEntry> findPendingInvitations(String userId);
 
 }

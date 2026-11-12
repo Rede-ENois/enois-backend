@@ -36,6 +36,18 @@ interface SpringDataCalendarEntryJpaRepository extends JpaRepository<CalendarEnt
 			@Param("scope") String scope, @Param("windowStart") Instant windowStart,
 			@Param("windowEnd") Instant windowEnd);
 
+	/**
+	 * Os compromissos com convite ainda sem resposta, direto na tabela de participantes: o banco
+	 * cruza convite com compromisso numa consulta só, sem primeiro carregar a lista de convites
+	 * pendentes para então mandar os ids de volta num `in`. Ativo e `INVITED` filtrados aqui: a
+	 * resposta (ou o cancelamento) tira o convite da fila, e a ordem segue a idade do convite.
+	 */
+	@Query("select e from CalendarEntryJpaEntity e join CalendarParticipantJpaEntity p "
+		+ "on p.entryId = e.id and p.userId = :userId and p.state = 'INVITED' "
+		+ "where e.state = 'ACTIVE' "
+		+ "order by p.invitedAt asc")
+	List<CalendarEntryJpaEntity> findPendingInvitations(@Param("userId") String userId);
+
 	Optional<CalendarEntryJpaEntity> findByOwnerIdAndSourceTypeAndSourceId(String ownerId, String sourceType,
 			String sourceId);
 

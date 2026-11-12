@@ -32,7 +32,7 @@
 		<jsoup.version>1.23.2</jsoup.version>
 		<!-- O parent do Spring Boot 4 nao gerencia o SDK do AWS, entao a versao e fixada aqui.
 		     Precisa bater com o apache-client que ja esta no cache do Maven (evita baixar duas linhas). -->
-		<awssdk.version>2.57.7</awssdk.version>
+		<awssdk.version>2.57.10</awssdk.version>
 		<!-- Cache em memoria dos agregados da landing (ver CacheConfig). 2.9.x porque e a versao
 		     que ja esta no repositorio local; a API usada e a mesma das 3.x. -->
 		<caffeine.version>3.3.1</caffeine.version>
@@ -258,7 +258,7 @@
 		<dependency>
 			<groupId>org.commonmark</groupId>
 			<artifactId>commonmark-ext-gfm-strikethrough</artifactId>
-			<version>0.31.0</version>
+			<version>0.32.0</version>
 		</dependency>
 		<!-- Leitura do texto de curriculos em PDF (importacao via curriculo). So extracao de
 		     texto — nada de renderizacao nem formulario: o arquivo e tratado como documento. -->

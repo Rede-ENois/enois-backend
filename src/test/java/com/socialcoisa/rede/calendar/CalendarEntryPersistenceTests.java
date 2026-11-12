@@ -17,6 +17,7 @@ import com.socialcoisa.rede.calendar.domain.CalendarEntry;
 import com.socialcoisa.rede.calendar.domain.CalendarEntrySource;
 import com.socialcoisa.rede.calendar.domain.CalendarKind;
 import com.socialcoisa.rede.calendar.domain.CalendarParticipant;
+import com.socialcoisa.rede.calendar.domain.CalendarParticipantState;
 import com.socialcoisa.rede.calendar.domain.CalendarScope;
 
 /**
@@ -167,6 +168,57 @@ class CalendarEntryPersistenceTests {
 		assertThat(repository.findInvitedInWindow(stranger, null, windowStart, windowEnd)).isEmpty();
 		// O dono não vê o próprio compromisso pela via do convite: ele já vem pela consulta de dono.
 		assertThat(repository.findInvitedInWindow(owner, null, windowStart, windowEnd)).isEmpty();
+	}
+
+	/**
+	 * A fila de convites a responder sai do mesmo cruzamento: só o convite sem resposta para um
+	 * compromisso ativo, na ordem em que os convites foram feitos. Este teste falharia no código
+	 * anterior, que carregava a lista de pendentes para então devolver os ids num `in` sem teto.
+	 */
+	@Test
+	void pendingInvitationsComeFromTheParticipantJoin() {
+		String owner = "cal_owner_" + UUID.randomUUID();
+		String guest = "cal_guest_" + UUID.randomUUID();
+		String other = "cal_other_" + UUID.randomUUID();
+
+		Instant firstInvite = NOW.minus(Duration.ofHours(3));
+		Instant secondInvite = NOW.minus(Duration.ofHours(1));
+		CalendarEntry older = entry(owner, CalendarScope.SOCIAL, CalendarKind.PERSONAL,
+			new CalendarEntrySource(null, null), NOW.plus(Duration.ofHours(10)), Duration.ofMinutes(30));
+		CalendarEntry newer = entry(owner, CalendarScope.PROFESSIONAL, CalendarKind.MEETING,
+			new CalendarEntrySource(null, null), NOW.plus(Duration.ofHours(12)), Duration.ofMinutes(30));
+		// Convite respondido e entrada cancelada existem como linhas, mas não voltam na fila.
+		CalendarEntry answered = entry(owner, CalendarScope.SOCIAL, CalendarKind.PERSONAL,
+			new CalendarEntrySource(null, null), NOW.plus(Duration.ofHours(14)), Duration.ofMinutes(30));
+		CalendarEntry cancelled = entry(owner, CalendarScope.SOCIAL, CalendarKind.PERSONAL,
+			new CalendarEntrySource(null, null), NOW.plus(Duration.ofHours(16)), Duration.ofMinutes(30));
+		cancelled.cancel(NOW);
+		repository.save(older);
+		repository.save(newer);
+		repository.save(answered);
+		repository.save(cancelled);
+		participants.save(CalendarParticipant.invite("cal_p_" + UUID.randomUUID(), older.id(), owner, guest,
+			firstInvite));
+		participants.save(CalendarParticipant.invite("cal_p_" + UUID.randomUUID(), newer.id(), owner, guest,
+			secondInvite));
+		CalendarParticipant replied = CalendarParticipant.invite("cal_p_" + UUID.randomUUID(), answered.id(),
+			owner, guest, secondInvite);
+		replied.respond(CalendarParticipantState.ACCEPTED, NOW);
+		participants.save(replied);
+		participants.save(CalendarParticipant.invite("cal_p_" + UUID.randomUUID(), cancelled.id(), owner, guest,
+			secondInvite));
+		// Convite do mesmo compromisso para outra pessoa: entra na fila dela, não nesta.
+		participants.save(CalendarParticipant.invite("cal_p_" + UUID.randomUUID(), older.id(), owner, other,
+			secondInvite));
+
+		assertThat(repository.findPendingInvitations(guest))
+			.extracting(CalendarEntry::id)
+			.containsExactly(older.id(), newer.id());
+		assertThat(repository.findPendingInvitations(other))
+			.extracting(CalendarEntry::id)
+			.containsExactly(older.id());
+		// Quem organizou não tem convite pendente na própria agenda.
+		assertThat(repository.findPendingInvitations(owner)).isEmpty();
 	}
 
 	private static CalendarEntry entry(String owner, CalendarScope scope, CalendarKind kind,

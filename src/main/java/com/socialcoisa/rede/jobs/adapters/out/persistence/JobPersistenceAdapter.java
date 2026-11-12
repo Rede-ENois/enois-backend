@@ -300,4 +300,14 @@ class JobPersistenceAdapter implements JobRepository {
 			.collect(java.util.stream.Collectors.toMap(row -> (String) row[0], row -> ((Number) row[1]).intValue()));
 	}
 
+	@Override
+	public java.util.Map<String, Integer> countApplicationsByJobIdsAndStatus(java.util.Collection<String> jobIds,
+			com.socialcoisa.rede.jobs.domain.JobApplicationStatus status) {
+		if (jobIds == null || jobIds.isEmpty()) {
+			return java.util.Map.of();
+		}
+		return applicationRepo.countByJobIdAndStatusGrouped(jobIds, status).stream()
+			.collect(java.util.stream.Collectors.toMap(row -> (String) row[0], row -> ((Number) row[1]).intValue()));
+	}
+
 }

@@ -56,11 +56,10 @@ class CalendarEntryPersistenceAdapter implements CalendarEntryRepository {
 	}
 
 	@Override
-	public List<CalendarEntry> findAllByIds(java.util.Collection<String> ids) {
-		if (ids.isEmpty()) {
-			return List.of();
-		}
-		return springData.findAllById(ids).stream().map(CalendarEntryJpaEntity::toDomain).toList();
+	public List<CalendarEntry> findPendingInvitations(String userId) {
+		return springData.findPendingInvitations(userId).stream()
+			.map(CalendarEntryJpaEntity::toDomain)
+			.toList();
 	}
 
 	@Override
