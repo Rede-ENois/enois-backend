@@ -46,6 +46,10 @@ public interface JobRepository {
 
 	java.util.Map<String, Integer> countApplicationsByJobIds(java.util.Collection<String> jobIds);
 
+	/** Quantas candidaturas de cada vaga estão no estado dado, numa consulta só. */
+	java.util.Map<String, Integer> countApplicationsByJobIdsAndStatus(java.util.Collection<String> jobIds,
+			com.socialcoisa.rede.jobs.domain.JobApplicationStatus status);
+
 	/** Grava a candidatura (com respostas e retrato do perfil) e devolve o id gerado. */
 	String saveApplication(com.socialcoisa.rede.jobs.domain.JobApplication application);
 

@@ -122,8 +122,11 @@ class MarketplaceSanitizeBehaviorTests {
 
 		int removed = worker.sanitizeNow();
 
-		assertThat(removed).as("um por item apagado, um por tema apagado, um pela conta de teste, um pelo banido")
-			.isEqualTo(4);
+		// A base H2 é compartilhada entre classes: outra classe pode ter deixado resquício que
+		// esta mesma passagem também remove. O número GLOBAL não é deste teste para afirmar; o
+		// que é nosso é o destino dos quatro casos criados aqui, verificado abaixo.
+		assertThat(removed).as("a passagem removeu ao menos os quatro resquícios deste teste")
+			.isGreaterThanOrEqualTo(4);
 		assertThat(activeItemIds())
 			.as("as listagens saudáveis continuam à venda")
 			.contains(healthyTemplate, healthyTheme)
