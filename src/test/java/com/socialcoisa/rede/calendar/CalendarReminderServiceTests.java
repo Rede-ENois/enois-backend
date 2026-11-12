@@ -210,6 +210,24 @@ class CalendarReminderServiceTests {
 	}
 
 	@Test
+	void theNotificationSaysTheTimeThatIsActuallyLeft() {
+		// Um lembrete de 1 dia criado em cima da hora vence na hora, e o compromisso começa em 10
+		// minutos. O texto antigo dizia "em 1 dia" — mentira sobre o horário.
+		String owner = owner();
+		String entryId = entry(owner, "Começa já", Instant.now().plus(Duration.ofMinutes(10)));
+		reminders.setForReader(owner, entryId, 1440);
+
+		reminders.deliverDue();
+
+		String body = notifications.findByUserId(owner, null, null, 20).stream()
+			.filter(n -> "CALENDAR_REMINDER".equals(n.kind()))
+			.map(n -> n.body())
+			.findFirst()
+			.orElseThrow();
+		assertThat(body).contains("«Começa já»").contains("min").doesNotContain("1 dia");
+	}
+
+	@Test
 	void aStrangerCannotSetAReminderOnSomeoneElsesEntry() {
 		String host = owner();
 		String stranger = owner();
