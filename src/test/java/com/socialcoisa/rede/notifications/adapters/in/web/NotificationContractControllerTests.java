@@ -128,6 +128,29 @@ class NotificationContractControllerTests {
 			.andExpect(status().isBadRequest());
 	}
 
+	/**
+	 * O `limit` vinha do cliente sem teto: uma aba aberta pedia a lista inteira de uma vez. A lista
+	 * carrega aos poucos, como o feed e as mensagens, e o servidor nao confia no tamanho pedido.
+	 */
+	@Test
+	void capsTheNotificationPageAtTwentyEvenWhenTheClientAsksForMore() throws Exception {
+		var session = auth.authenticate("notif_page_cap");
+		for (int index = 0; index < 25; index++) {
+			unread(session.userId(), "cap_notif_" + index, "SISTEMA", "sistema", false);
+		}
+
+		mockMvc.perform(get("/notifications").param("limit", "100")
+				.header("X-Session-Token", session.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items.length()").value(20));
+
+		// Pedido invalido nao vira pagina vazia: cai no piso de um.
+		mockMvc.perform(get("/notifications").param("limit", "0")
+				.header("X-Session-Token", session.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items.length()").value(1));
+	}
+
 	@Test
 	void everyListedItemCarriesTheModuleOfItsKind() throws Exception {
 		var session = auth.authenticate("notif_module_owner");

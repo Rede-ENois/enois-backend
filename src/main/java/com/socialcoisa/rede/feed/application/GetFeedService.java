@@ -72,6 +72,16 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 
 	private static final Instant DEFAULT_BEFORE = Instant.parse("9999-12-31T23:59:59Z");
 
+	/**
+	 * Teto de posts por página em qualquer feed. Cada página é uma consulta pesada — o
+	 * enriquecimento busca autor, mídia, enquete, contadores e selos em lote para a página inteira —
+	 * e a lista carrega aos poucos. Pedir mais que isso de uma vez é o que deixava o feed lento.
+	 */
+	private static final int MAX_PAGE_SIZE = 10;
+
+	/** Página padrão quando o cliente não manda `limit` ou manda um valor inválido. */
+	private static final int DEFAULT_PAGE_SIZE = 10;
+
 	public GetFeedService(PostRepository postRepository, ArticleRepository articleRepository,
 			FeedCacheRepository feedCacheRepository,
 			ConnectionGraphRepository connectionGraphRepository, UserProfileRepository userProfileRepository,
@@ -716,8 +726,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 
 	private int normalizeLimit(int limit) {
 		if (limit < 1) {
-			return 20;
+			return DEFAULT_PAGE_SIZE;
 		}
-		return Math.min(limit, 50);
+		return Math.min(limit, MAX_PAGE_SIZE);
 	}
 }

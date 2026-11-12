@@ -151,6 +151,30 @@ class FeedControllerTests {
 			.andExpect(jsonPath("$.items").isEmpty());
 	}
 
+	/**
+	 * Cada pagina do feed e uma consulta pesada (autor, midia, enquete, contadores e selos em lote
+	 * para a pagina inteira). O teto de dez e o que impede uma aba aberta de pedir a lista toda de
+	 * uma vez; antes, `limit=50` era aceito e a pagina vinha com cinquenta posts.
+	 */
+	@Test
+	void capsEveryFeedPageAtTenPostsEvenWhenTheClientAsksForMore() throws Exception {
+		var session = auth.authenticate("user_feed_page_cap");
+		for (int index = 0; index < 12; index++) {
+			publishPlain(session, "Post de prova do teto de pagina numero " + index);
+		}
+
+		mockMvc.perform(get("/feed").param("tab", "ALL").param("limit", "50")
+				.header("X-Session-Token", session.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items.length()").value(10));
+
+		// Sem `limit`, a pagina padrao tambem e de dez.
+		mockMvc.perform(get("/feed").param("tab", "ALL")
+				.header("X-Session-Token", session.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items.length()").value(10));
+	}
+
 	@Test
 	void handlesPostInteractionsWithCountersAndIdempotency() throws Exception {
 		var session = auth.authenticate("user_feed_interactions");
@@ -248,5 +272,18 @@ class FeedControllerTests {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("SAVE_REMOVED"))
 			.andExpect(jsonPath("$.counters.saves").value(0));
+	}
+
+	private String publishPlain(TestAuthHelper.AuthSession session, String content) throws Exception {
+		MvcResult result = mockMvc.perform(post("/feed/posts")
+				.header("X-Session-Token", session.token())
+				.header("Idempotency-Key", "cap-" + content.hashCode() + "-" + System.nanoTime())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
+					"type", "INSIGHT", "content", content, "tags", List.of(),
+					"mediaIds", List.of()))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		return objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asText();
 	}
 }
