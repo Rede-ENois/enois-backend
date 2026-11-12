@@ -40,6 +40,9 @@ class ReputationRefreshQueryCountTests {
 	/** Volume semeado em cada medição (e o dobro na segunda). Longe do PAGE=500 do worker. */
 	private static final int BASE_USERS = 8;
 
+	/** A varredura de ids de uma página — a única consulta da passada que não lê métrica. */
+	private static final String ID_SCAN = "SELECT ID FROM USERS ORDER BY ID LIMIT ? OFFSET ?";
+
 	@TestConfiguration
 	static class InspectorConfig {
 
@@ -96,21 +99,24 @@ class ReputationRefreshQueryCountTests {
 	@Autowired
 	private org.springframework.jdbc.core.JdbcTemplate jdbc;
 
-	/** Quantas contas existem agora: é o que decide quantas páginas a passada vai percorrer. */
+	/** Quantas contas existem agora: é o que decide quantas páginas de dados a passada percorre. */
 	private int accountCount() {
 		Integer total = jdbc.queryForObject("select count(*) from users", Integer.class);
 		return total == null ? 0 : total;
 	}
 
-	/** Páginas de 500 que a passada percorre com o total de contas informado. */
+	/** Páginas de 500 com contas de verdade. A sondagem vazia do fim não entra nesta conta. */
 	private static int pagesFor(int accounts) {
 		return Math.max(1, (accounts + 499) / 500);
 	}
 
 	/**
-	 * SELECTs da passada, normalizados por página. O custo por página é o que a leitura em lote
-	 * promete: uma varredura de ids e uma consulta por métrica, independentemente de quantas contas
-	 * a página tem.
+	 * Consultas de MÉTRICA por página de dados. A varredura de ids fica de fora do numerador: o
+	 * worker pagina com `limit/offset` e só para quando uma página volta com menos de 500 ids,
+	 * então quando o total de contas é múltiplo de 500 ele faz uma varredura a mais só para
+	 * descobrir que acabou. Essa sondagem não é custo por conta, e contá-la fazia a razão depender
+	 * de o total cair ou não num múltiplo de 500 — a base H2 é compartilhada e o total varia entre
+	 * medições, então o teste oscilava sem nada ter mudado.
 	 */
 	private double selectsPerPage() {
 		int accounts = accountCount();
@@ -118,10 +124,24 @@ class ReputationRefreshQueryCountTests {
 		// A porta de entrada é a MESMA passada do @Scheduled — o teste roda o que roda em produção.
 		worker.refreshRankingColumn();
 		List<String> sql = List.copyOf(inspector.statements());
-		long selects = sql.stream()
-			.filter(statement -> statement.strip().toUpperCase().startsWith("SELECT"))
-			.count();
-		return (double) selects / pagesFor(accounts);
+		long idScans = 0;
+		long metricQueries = 0;
+		for (String statement : sql) {
+			String normalized = statement.strip().toUpperCase();
+			if (!normalized.startsWith("SELECT")) {
+				continue;
+			}
+			if (ID_SCAN.equals(normalized)) {
+				idScans++;
+			}
+			else {
+				metricQueries++;
+			}
+		}
+		assertThat(idScans)
+			.as("a passada varre os ids página a página, sem paginação própria")
+			.isGreaterThanOrEqualTo(pagesFor(accounts));
+		return (double) metricQueries / pagesFor(accounts);
 	}
 
 	/**
