@@ -42,12 +42,7 @@ public class CalendarQueryService {
 	}
 
 	private static void validateWindow(Instant from, Instant to) {
-		if (from == null || to == null) {
-			throw new ApiException(400, "INVALID_WINDOW", "Informe from e to para consultar a agenda.");
-		}
-		if (!to.isAfter(from)) {
-			throw new ApiException(400, "INVALID_WINDOW", "to precisa ser depois de from.");
-		}
+		CalendarWindows.validate(from, to, "consultar a agenda");
 	}
 
 	/**
