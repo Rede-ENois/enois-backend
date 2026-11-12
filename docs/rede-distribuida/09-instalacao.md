@@ -6,8 +6,9 @@ participante precise conhecer a arquitetura interna. Está em
 
 | arquivo | papel |
 |---|---|
-| `docker-compose.yml` | o container do nó: `read_only`, `cap_drop: ALL`, `no-new-privileges`, limites de CPU/memória/PIDs, sem porta exposta e sem docker socket |
-| `install.sh` | o fluxo de instalação em três passos (abaixo) |
+| `docker-compose.yml` | o container do nó: `read_only`, `cap_drop: ALL`, `no-new-privileges`, limites de CPU/memória/PIDs, sem porta exposta e sem docker socket; `entrypoint` roda o loop do nó, não o jar |
+| `install.sh` | o fluxo de instalação em três passos (abaixo), mais backup e restauração da identidade |
+| `node-runtime.sh` | o loop de execução: heartbeat → config assinada → poll → executa o que a config autoriza → resultado |
 | `node-doctor.sh` | diagnóstico PASS/WARN/FAIL — mesmo formato do `scripts/dev-doctor.sh` do backend |
 
 ## 1. Os três passos
@@ -57,12 +58,34 @@ Checa dependências, identidade registrada, permissão da chave (600) e do
 diretório (700), estado do container e conectividade com o Control Plane.
 Sai 0 quando não há FAIL; WARN não impede a operação. Nunca imprime a API key.
 
+## 3.1 O loop de execução (`node-runtime.sh`)
+
+O container roda o loop do nó, não o jar (o jar é o Control Plane). Cada ciclo:
+
+1. **heartbeat** com capacidade observada — a resposta traz o modo operacional e
+   `acceptTasks`;
+2. **drenar é não pedir**: `acceptTasks:false` (DEGRADED/EMERGENCY) encerra o ciclo
+   sem consultar a fila;
+3. **config assinada**: recusa config sem assinatura (padrão do runtime) e confere
+   `publicKey` contra o pino gravado no enroll (`$NODE_HOME/pinning-key`);
+4. **poll** (`GET /network/tasks/next`) — uma tarefa por ciclo;
+5. **executa só o que a config assinada autoriza** (`allowedTasks`): autorizada vira
+   `DONE` com output; fora da lista vira `FAILED` com `TASK_NOT_ALLOWED` — o
+   Control Plane decide sozinho se redistribui;
+6. **resultado** (`POST /network/tasks/{id}/result`) com a tentativa vigente.
+
+A tarefa executada hoje é de prova de ciclo de vida (eco do `idempotencyKey`):
+conteúdo de usuário (HTML, CSS, KofScript) **nunca** executa no nó — continua nos
+sandboxes próprios (02-modelo-de-ameacas.md). O script é montado no container
+(`/node-runtime.sh:ro`): atualizar o runtime é `git pull` + `docker compose restart`.
+
 ## 4. Estado local
 
 | caminho | conteúdo | permissão |
 |---|---|---|
 | `$NODE_HOME/node.json` | resposta do enroll (`nodeId`, estado) | 600 |
 | `$NODE_HOME/api-key` | a API key do nó em claro — único lugar | 600 |
+| `$NODE_HOME/pinning-key` | a chave pública do Control Plane, pinada no enroll | 600 |
 | volume `enois-node` | workspace do runtime no container | — |
 
 `NODE_HOME` padrão é `/var/lib/enois-node`; sobrescreva por ambiente. O par
@@ -92,9 +115,10 @@ junto com a revogação (a retenção acompanha o ciclo de vida da identidade).
 
 ## 6. O que ainda não está aqui
 
-- **Executores por perfil** (fase 6 do plano): a imagem hoje prova
-  conectividade, credencial e ciclo de vida; executar transcode/cache de verdade
-  é o que falta para o nó receber tarefa e devolver resultado.
-- **Atualização e rollback com verificação de assinatura OCI** (item próprio do
-  plano): o compose pina tag, e a verificação de assinatura no pull entra com a
-  publicação das imagens do runtime.
+- **Executores de trabalho real por perfil**: o loop já executa por perfil com a
+  permissão da config assinada; o que a tarefa faz hoje é prova de ciclo de vida
+  (eco do `idempotencyKey`). Transcode/cache de verdade entra com a publicação das
+  filas de trabalho por perfil e das imagens dedicadas.
+- **Atualização e rollback com verificação de assinatura OCI**: o compose pina
+  tag, e a verificação de assinatura no pull entra com a publicação das imagens
+  do runtime.

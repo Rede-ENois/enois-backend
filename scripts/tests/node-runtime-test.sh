@@ -47,6 +47,7 @@ assert_contains() {
 # curl simulado: primeiro call é o enroll, devolve nodeId; heartbeat devolve ACTIVE.
 ENROLL_BODY='{"nodeId":"nd_teste123","status":"PENDING_APPROVAL","contract":"1","message":"ok"}'
 HB_BODY='{"nodeId":"nd_teste123","status":"ACTIVE","profiles":["NODE_WORKER"],"serverTime":"now","mode":"NORMAL","acceptTasks":true}'
+CONFIG_PIN='{"nodeId":"nd_teste123","operable":false,"signed":true,"signature":"x","algorithm":"Ed25519","publicKey":"CP-PUBLIC-KEY-PINNED","allowedTasks":[]}'
 cat > "$TMP/curl" <<MOCK
 #!/bin/bash
 printf '%s\n' "\$*" >> "$TMP/curl-calls"
@@ -54,6 +55,7 @@ url="\${@: -1}"
 case "\$url" in
   */network/nodes/enroll) printf '%s' '$ENROLL_BODY' ;;
   */network/nodes/heartbeat) printf '%s' '$HB_BODY' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_PIN' ;;
   *) exit 22 ;;
 esac
 MOCK
@@ -69,6 +71,10 @@ assert_eq 'enroll grava node.json com 600' '600' "$(stat -c '%a' "$NH/node.json"
 assert_contains 'enroll pede a API key' "$out" '--set-key'
 assert_contains 'região vai aninhada em location, como o contrato documenta' \
   "$(cat "$TMP/curl-calls")" '"location":{"region":"sa-east-1","country":"BR"}'
+
+# O pino da config assinada é gravado no enroll: o executor confere toda config contra ele.
+assert_eq 'pinning-key gravada com 600' '600' "$(stat -c '%a' "$NH/pinning-key")"
+assert_eq 'pinning-key tem a publicKey da config' 'CP-PUBLIC-KEY-PINNED' "$(cat "$NH/pinning-key")"
 
 # Enroll repetido é idempotente: não reenrolla (token é de uso único) e não refaz request.
 make_command curl 'echo "CHAMADA-INESPERADA" ; exit 1'

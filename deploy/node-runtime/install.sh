@@ -61,8 +61,9 @@ if [[ "$MODE" == "--backup" ]]; then
 
   node_id=$(sed -n 's/.*"nodeId":"\([^"]*\)".*/\1/p' "$NODE_HOME/node.json")
   out="enois-node-${node_id:-identidade}-$(date +%Y%m%d-%H%M%S).tar.gz"
+  # O pino vai junto: restaurar sem ele deixa o runtime sem como conferir a config.
   umask 077
-  tar -C "$NODE_HOME" -czf "$out" node.json api-key
+  tar -C "$NODE_HOME" -czf "$out" node.json api-key pinning-key
   umask 022
   info "Backup da identidade em ./$out (permissão 600)."
   info "Guarde com o mesmo cuidado da chave: quem tem o backup opera como o nó."
@@ -78,7 +79,7 @@ if [[ "$MODE" == "--restore" ]]; then
     die "já existe um nó registrado em $NODE_HOME/node.json — restaurar por cima trocaria a identidade; remova-a primeiro se tem certeza"
   fi
   tar -C "$NODE_HOME" -xzf "$BACKUP_FILE"
-  chmod 600 "$NODE_HOME/node.json" "$NODE_HOME/api-key" 2>/dev/null || true
+  chmod 600 "$NODE_HOME/node.json" "$NODE_HOME/api-key" "$NODE_HOME/pinning-key" 2>/dev/null || true
   node_id=$(sed -n 's/.*"nodeId":"\([^"]*\)".*/\1/p' "$NODE_HOME/node.json")
   [[ -n "$node_id" ]] || die "backup sem nodeId válido dentro — arquivo truncado ou não é um backup de nó"
   info "Identidade de $node_id restaurada em $NODE_HOME."
@@ -128,6 +129,18 @@ if [[ "$MODE" != "--start" ]]; then
 
     umask 177
     printf '%s\n' "$enroll" > "$NODE_HOME/node.json"
+    # Pino da config assinada (03-contratos.md §2): a chave pública lida AGORA na config é
+    # a que todas as configs seguintes têm de carregar — o runtime recusa as outras.
+    pin=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+      -H "X-Node-Id: $node_id" -H "X-Node-Key: $(head -n 1 "$NODE_HOME/api-key" 2>/dev/null || echo sem-chave)" \
+      "$CONTROL_PLANE/network/nodes/me/config" 2>/dev/null \
+      | sed -n 's/.*"publicKey":"\([^"]*\)".*/\1/p') || pin=''
+    if [[ -n "$pin" ]]; then
+      printf '%s' "$pin" > "$NODE_HOME/pinning-key"
+      info "Chave pública do Control Plane pinada (config assinada será verificada contra ela)."
+    else
+      info "Sem publicKey na config agora (nó sem chave); o pinning fica para o primeiro --start com config assinada."
+    fi
     umask 022
     info "Nó $node_id registrado — pendente de aprovação."
   fi
