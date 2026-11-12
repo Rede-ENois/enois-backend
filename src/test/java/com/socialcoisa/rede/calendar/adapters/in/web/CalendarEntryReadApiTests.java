@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.UUID;
@@ -201,6 +202,28 @@ class CalendarEntryReadApiTests {
 		mockMvc.perform(listAs(owner.token()).param("scope", "HOBBY"))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("INVALID_SCOPE"));
+	}
+
+	@Test
+	void janelaMaiorQueUmAnoResponde400NasLeiturasPorIntervalo() throws Exception {
+		var owner = account("cal_read_long_window");
+		String wide = FROM.minus(Duration.ofDays(400)).toString();
+
+		mockMvc.perform(get("/calendar/entries").header("X-Session-Token", owner.token())
+				.param("from", wide).param("to", TO.toString()))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("WINDOW_TOO_LONG"));
+
+		mockMvc.perform(get("/calendar/entries/conflicts").header("X-Session-Token", owner.token())
+				.param("from", wide).param("to", TO.toString()))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("WINDOW_TOO_LONG"));
+
+		// O teto é o mesmo da assinatura: a janela de um ano da assinatura continua cabendo.
+		mockMvc.perform(get("/calendar/entries").header("X-Session-Token", owner.token())
+				.param("from", FROM.minus(Duration.ofDays(30)).toString())
+				.param("to", TO.plus(Duration.ofDays(329)).toString()))
+			.andExpect(status().isOk());
 	}
 
 	@Test

@@ -301,7 +301,7 @@ class CalendarEntryController {
 			.toList();
 	}
 
-	private static Instant instant(String raw, String field) {
+	static Instant instant(String raw, String field) {
 		if (raw == null || raw.isBlank()) {
 			throw new ApiException(400, "INVALID_WINDOW", "Informe " + field + " em ISO-8601.");
 		}
