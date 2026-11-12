@@ -59,12 +59,15 @@ class AdminNetworkController {
 	/**
 	 * O nó como o painel o vê. `keyId`, `keyPrefix` e `keyUsed` vêm da chave vigente: sem eles o
 	 * admin não sabe se o nó já tem chave, se ela já foi usada, nem qual revogar. A chave em claro
-	 * nunca aparece aqui.
+	 * nunca aparece aqui. A capacidade declarada (`declared*`) também vai: é o valor vigente que a
+	 * tela de capacidade edita — sem ele o admin muda de capacidade sem ver o que o participante
+	 * cedeu hoje.
 	 */
 	record NodeView(String id, String displayName, String ownerUserId, String status, List<String> profiles,
 			String region, String runtimeVersion, Instant lastSeenAt, boolean operable, String keyId,
 			String keyPrefix, boolean keyUsed, Integer latencyMs, int failureStreak, boolean degraded,
-			String quarantineReason, Instant quarantinedUntil) {
+			String quarantineReason, Instant quarantinedUntil, int declaredCpuCores, int declaredMemoryMb,
+			int declaredDiskMb, int declaredBandwidthMbps) {
 
 		/**
 		 * O nó como o painel o vê. {@code degraded} e {@code quarantinedUntil} vêm da saúde medida, que
@@ -78,7 +81,9 @@ class AdminNetworkController {
 				node.lastSeenAt(), node.canOperate(), key == null ? null : key.id(),
 				key == null ? null : key.keyPrefix(), key != null && key.lastUsedAt() != null,
 				node.observedLatencyMs(), node.consecutiveFailures(), quarantined || node.slow() || node.failing(),
-				quarantined ? node.quarantineReason() : null, quarantined ? node.quarantinedUntil() : null);
+				quarantined ? node.quarantineReason() : null, quarantined ? node.quarantinedUntil() : null,
+				node.declaredCpuCores(), node.declaredMemoryMb(), node.declaredDiskMb(),
+				node.declaredBandwidthMbps());
 		}
 	}
 

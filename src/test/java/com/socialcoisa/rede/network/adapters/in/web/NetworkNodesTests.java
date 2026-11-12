@@ -582,6 +582,24 @@ class NetworkNodesTests {
 			.andExpect(status().isNotFound());
 	}
 
+	/**
+	 * A tela de capacidade edita o que o participante cede — e precisa ver o valor vigente para
+	 * editar. Antes o NodeView do painel não trazia a capacidade declarada: o admin mudava de
+	 * capacidade sem ver o que estava lá (declarado * 4096 foi substituído por zeros na tela).
+	 */
+	@Test
+	void listagemDoPainelExpoeACapacidadeDeclarada() throws Exception {
+		String admin = adminToken();
+		newNode(admin);
+
+		mockMvc.perform(get("/admin/network/nodes").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[0].declaredCpuCores").value(4))
+			.andExpect(jsonPath("$[0].declaredMemoryMb").value(8192))
+			.andExpect(jsonPath("$[0].declaredDiskMb").value(51200))
+			.andExpect(jsonPath("$[0].declaredBandwidthMbps").value(100));
+	}
+
 	private tools.jackson.databind.JsonNode configOf(String nodeId, String key) throws Exception {
 		return objectMapper.readTree(mockMvc
 			.perform(get("/network/nodes/me/config").header("X-Node-Id", nodeId).header("X-Node-Key", key))
