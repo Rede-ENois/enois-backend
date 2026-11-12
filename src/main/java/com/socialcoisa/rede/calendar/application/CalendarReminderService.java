@@ -184,14 +184,16 @@ public class CalendarReminderService {
 		if (entry.ownerId().equals(userId)) {
 			return true;
 		}
-		return participants.findByEntry(entry.id()).stream()
-			.filter(p -> p.userId().equals(userId))
-			.anyMatch(p -> p.state() == CalendarParticipantState.ACCEPTED
-				|| p.state() == CalendarParticipantState.TENTATIVE);
+		// A pergunta é sobre uma pessoa só: buscar o convite dela evita carregar a lista inteira
+		// de participantes a cada lembrete que o worker vence.
+		return participants.findByEntryAndUser(entry.id(), userId)
+			.map(p -> p.state() == CalendarParticipantState.ACCEPTED
+				|| p.state() == CalendarParticipantState.TENTATIVE)
+			.orElse(false);
 	}
 
 	private boolean participates(String userId, CalendarEntry entry) {
-		return participants.findByEntry(entry.id()).stream().anyMatch(p -> p.userId().equals(userId));
+		return participants.findByEntryAndUser(entry.id(), userId).isPresent();
 	}
 
 	private void notify(CalendarReminder reminder, CalendarEntry entry, Instant now) {

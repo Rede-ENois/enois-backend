@@ -13,4 +13,6 @@ interface SpringDataCalendarParticipantJpaRepository extends JpaRepository<Calen
 
 	List<CalendarParticipantJpaEntity> findByUserIdAndEntryIdIn(String userId, List<String> entryIds);
 
+	long countByEntryId(String entryId);
+
 }
