@@ -20,6 +20,7 @@ import com.socialcoisa.rede.network.application.port.out.NodeKeyRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NodeProfile;
 import com.socialcoisa.rede.network.domain.NodeStatus;
+import com.socialcoisa.rede.shared.audit.AuditTrail;
 import com.socialcoisa.rede.shared.web.AdminGuard;
 import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.CurrentUser;
@@ -41,14 +42,16 @@ class AdminNetworkController {
 	private final NetworkNodeService nodes;
 	private final NodeKeyService keys;
 	private final NetworkDashboardService dashboard;
+	private final AuditTrail audit;
 	private final CurrentUserResolver currentUserResolver;
 	private final AdminGuard adminGuard;
 
 	AdminNetworkController(NetworkNodeService nodes, NodeKeyService keys, NetworkDashboardService dashboard,
-			CurrentUserResolver currentUserResolver, AdminGuard adminGuard) {
+			AuditTrail audit, CurrentUserResolver currentUserResolver, AdminGuard adminGuard) {
 		this.nodes = nodes;
 		this.keys = keys;
 		this.dashboard = dashboard;
+		this.audit = audit;
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
 	}
@@ -200,6 +203,26 @@ class AdminNetworkController {
 		CurrentUser admin = admin(sessionToken);
 		List<NodeProfile> next = parseProfilesOptional(request == null ? null : request.profiles());
 		return view(nodes.profiles(id, next, admin.id().value()));
+	}
+
+	/**
+	 * O histórico administrativo do nó: a trilha de auditoria que cada ação desta tela já grava,
+	 * lida de volta mais nova primeiro. A página por nó mostra "histórico" sem uma tabela própria —
+	 * a trilha que prova as ações é a mesma que as conta.
+	 */
+	@GetMapping("/{id}/history")
+	List<AuditRecordView> history(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String id, @RequestParam(defaultValue = "50") int limit) {
+		admin(sessionToken);
+		nodes.require(id); // Nó desconhecido é 404, não histórico vazio.
+		int capped = Math.min(Math.max(limit, 1), 200);
+		return audit.recentForTarget(id, capped).stream()
+			.map(record -> new AuditRecordView(record.id(), record.actorId(), record.action(), record.metadata(),
+				record.createdAt()))
+			.toList();
+	}
+
+	record AuditRecordView(String id, String actorId, String action, String metadata, Instant createdAt) {
 	}
 
 	/** Um nó com a chave vigente dele: a tela precisa dos dois para desenhar a linha. */

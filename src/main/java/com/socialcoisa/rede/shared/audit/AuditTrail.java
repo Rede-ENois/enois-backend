@@ -25,4 +25,9 @@ public class AuditTrail {
 	public void record(String actorId, String action, String targetId, String metadataJson) {
 		repository.record(new UserId(actorId), action, targetId, metadataJson);
 	}
+
+	/** O histórico do alvo, mais novo primeiro — o que a página por nó do painel mostra. */
+	public java.util.List<AuditLogRepository.AuditRecord> recentForTarget(String targetId, int limit) {
+		return repository.recentForTarget(targetId, limit);
+	}
 }

@@ -521,6 +521,53 @@ class NetworkNodesTests {
 			.andExpect(jsonPath("$.code").value("NODE_REVOKED"));
 	}
 
+	// ---------------------------------------------------------------- histórico por nó
+
+	/**
+	 * A página por nó mostra "histórico", e a fonte é a trilha de auditoria que cada ação desta
+	 * tela já grava — não uma tabela própria. O cenário faz três ações reais (aprovar, gerar
+	 * chave, mudar capacidade) e confere que a leitura as devolve mais novas primeiro, com o ator;
+	 * nó desconhecido é 404, não lista vazia.
+	 */
+	@Test
+	void historicoDoNoLeDeVoltaAsAcoesGravadas() throws Exception {
+		String admin = adminToken();
+		String nodeId = newNode(admin);
+		activate(admin, nodeId);
+		issueKey(admin, nodeId);
+		mockMvc
+			.perform(post("/admin/network/nodes/" + nodeId + "/capacity").header("X-Session-Token", admin)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("cpuCores", 2))))
+			.andExpect(status().isOk());
+
+		var result = mockMvc
+			.perform(get("/admin/network/nodes/" + nodeId + "/history").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andReturn();
+		var body = objectMapper.readTree(result.getResponse().getContentAsString());
+
+		assertThat(body.size()).isEqualTo(4);
+		// Mais nova primeiro: a última ação (capacity) abre a lista.
+		assertThat(body.get(0).get("action").asString()).isEqualTo("NODE_CAPACITY_CHANGED");
+		// O enroll (feito pelo dono do token, não pelo admin) fecha a lista.
+		assertThat(body.get(3).get("action").asString()).isEqualTo("NODE_ENROLLED");
+		for (var record : body) {
+			assertThat(record.get("actorId").asString()).isNotBlank();
+			assertThat(record.get("createdAt").asString()).isNotBlank();
+		}
+
+		// Limite respeitado: com 1, só o registro mais novo.
+		mockMvc
+			.perform(get("/admin/network/nodes/" + nodeId + "/history?limit=1").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.length()").value(1))
+			.andExpect(jsonPath("$[0].action").value("NODE_CAPACITY_CHANGED"));
+
+		mockMvc.perform(get("/admin/network/nodes/nd_nao_existe/history").header("X-Session-Token", admin))
+			.andExpect(status().isNotFound());
+	}
+
 	private tools.jackson.databind.JsonNode configOf(String nodeId, String key) throws Exception {
 		return objectMapper.readTree(mockMvc
 			.perform(get("/network/nodes/me/config").header("X-Node-Id", nodeId).header("X-Node-Key", key))
