@@ -104,6 +104,13 @@ o TTL continua sendo a garantia, o sinal é a aceleração. Para a rede:
      cunhada sobre corpo existente. O nó descobre que um agregado sumiu ao revalidar e receber 404; a
      reconciliação (V281) fecha o ciclo pelo outro lado. Um tombstone por nó multiplicaria linhas para
      dizer a mesma coisa.
+   - **O consumidor do feed está entregue no nó.** `node-runtime.sh` executa `EDGE_CACHE`: lê
+     `?cursor=<seq guardado>` do arquivo `$NODE_HOME/edge/cursor`, baixa só o que mudou pelo mesmo
+     `GET /network/content/{kind}/{id}` (com `?version=` quando já tem o corpo — `changed=false` não
+     reescreve nem reconfirma), guarda corpo e versão em `$NODE_HOME/edge/<kind>/` e confirma
+     `/synced`. O cursor **só avança com a entrada em disco**: consumir a mudança sem baixar o corpo
+     deixaria a entrada velha até o TTL. `reset=true` apaga o cache e recomeça do zero; 404 apaga a
+     entrada. Falha no meio devolve `complete=false` com o cursor, e a próxima tarefa retoma.
 3. **Nunca:** cache de dado pessoal em nó externo.
 
 ## 7. Reconciliação

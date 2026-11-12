@@ -349,4 +349,118 @@ assert_eq 'agregado que sumiu é descartado' '0' "$(find "$NR/replica/PROFILE" -
 assert_contains 'remoção é reportada no resultado' "$(cat "$TMP/curl-calls")" '"removed":1'
 assert_not_contains 'agregado removido não é confirmado como sincronizado' "$(cat "$TMP/curl-calls")" 'dora/synced'
 
+# ------------------------------------------------- cenário 13: EDGE_CACHE (feed de mudanças)
+# O nó lê o feed pelo cursor que guardou, baixa só o que mudou pelo mesmo caminho
+# autorizado da borda, guarda corpo+versão e confirma /synced. O feed não carrega
+# corpo: sem baixar, a entrada ficaria velha até o TTL.
+NE="$TMP/node-edge"; rm -rf "$NE"; mkdir -p "$NE"; chmod 700 "$NE"
+cp "$NH/node.json" "$NE/node.json"; cp "$NH/api-key" "$NE/api-key"
+cp "$NH/pinning-key" "$NE/pinning-key"
+
+CONFIG_EDGE='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":1,"configVersion":6,"profiles":["NODE_EDGE"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":200},"allowedTasks":["EDGE_CACHE","EDGE_DELIVER"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","signed":true,"signature":"c2ln","algorithm":"Ed25519","publicKey":"PINNED-PUBLIC-KEY-BASE64"}'
+TASK_EDGE='{"tasks":[{"taskId":"tk_e1","type":"EDGE_CACHE","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"edge:cache","payload":"{}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
+
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_EDGE' ;;
+  */network/tasks/next) printf '%s' '$TASK_EDGE' ;;
+  */network/content/changes?cursor=0\&limit=200)
+    printf '%s' '{"reset":false,"cursor":0,"nextSeq":2,"hasMore":false,"changes":[{"seq":1,"kind":"PROFILE","contentId":"ana","version":3,"contentHash":"h-ana","changedAt":"2026-11-11T10:00:00Z"},{"seq":2,"kind":"COMMUNITY","contentId":"cm_1","version":1,"contentHash":"h-cm","changedAt":"2026-11-11T10:01:00Z"}]}' ;;
+  */network/content/PROFILE/ana/synced) printf '%s' '{"contentId":"ana","status":"SYNCED"}' ;;
+  */network/content/COMMUNITY/cm_1/synced) printf '%s' '{"contentId":"cm_1","status":"SYNCED"}' ;;
+  */network/content/PROFILE/ana*)
+    printf '%s' '{"kind":"PROFILE","contentId":"ana","version":3,"contentHash":"h-ana","changed":true,"body":"{\\"username\\":\\"ana\\"}"}'
+    [[ "\$*" == *"-w"* ]] && printf '\n200' ;;
+  */network/content/COMMUNITY/cm_1*)
+    printf '%s' '{"kind":"COMMUNITY","contentId":"cm_1","version":1,"contentHash":"h-cm","changed":true,"body":"{\\"id\\":\\"cm_1\\"}"}'
+    [[ "\$*" == *"-w"* ]] && printf '\n200' ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NE")
+assert_contains 'borda lê o feed pelo cursor do nó' "$(cat "$TMP/curl-calls")" '/network/content/changes?cursor=0&limit=200'
+assert_contains 'borda baixa o corpo da mudança' "$(cat "$TMP/curl-calls")" '/network/content/PROFILE/ana'
+assert_contains 'borda confirma o que guardou' "$(cat "$TMP/curl-calls")" '/network/content/PROFILE/ana/synced'
+assert_contains 'confirmação leva versão e hash' "$(cat "$TMP/curl-calls")" '{"sourceVersion":3,"contentHash":"h-ana"}'
+assert_eq 'corpo do perfil guardado no cache' '{"username":"ana"}' "$(cat "$NE/edge/PROFILE/ana.json")"
+assert_eq 'versão guardada ao lado do corpo' '3' "$(cat "$NE/edge/PROFILE/ana.version")"
+assert_eq 'corpo da comunidade guardado no cache' '{"id":"cm_1"}' "$(cat "$NE/edge/COMMUNITY/cm_1.json")"
+assert_eq 'cursor avançou para a última mudança' '2' "$(cat "$NE/edge/cursor")"
+assert_contains 'resultado declara complete=true' "$(cat "$TMP/curl-calls")" '"complete":true'
+assert_eq 'um único resultado postado' '1' "$(results_posted)"
+
+# ------------------------------------------------- cenário 14: feed podado (reset)
+# Cursor atrás da janela retida: o que não foi lido já não existe para reler.
+# Descartar o cache e recomeçar do zero é o único caminho que não deixa o nó
+# servindo conteúdo velho achando que está em dia.
+mkdir -p "$NE/edge/PROFILE"
+printf '%s' '{"username":"velho"}' > "$NE/edge/PROFILE/velho.json"
+printf '9\n' > "$NE/edge/PROFILE/velho.version"
+printf '4\n' > "$NE/edge/cursor"
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_EDGE' ;;
+  */network/tasks/next) printf '%s' '$TASK_EDGE' ;;
+  */network/content/changes?cursor=4\&limit=200)
+    printf '%s' '{"reset":true,"cursor":4,"nextSeq":4,"hasMore":false,"changes":[]}' ;;
+  */network/content/changes?cursor=0\&limit=200)
+    printf '%s' '{"reset":false,"cursor":0,"nextSeq":7,"hasMore":false,"changes":[{"seq":7,"kind":"PROFILE","contentId":"novo","version":1,"contentHash":"h-novo","changedAt":"2026-11-11T11:00:00Z"}]}' ;;
+  */network/content/PROFILE/novo/synced) printf '%s' '{"contentId":"novo","status":"SYNCED"}' ;;
+  */network/content/PROFILE/novo*)
+    printf '%s' '{"kind":"PROFILE","contentId":"novo","version":1,"contentHash":"h-novo","changed":true,"body":"{\\"username\\":\\"novo\\"}"}'
+    [[ "\$*" == *"-w"* ]] && printf '\n200' ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NE")
+assert_contains 'reset é reconhecido como recarga, não como "nada mudou"' "$out" 'cache descartado'
+assert_eq 'cache antigo descartado no reset' '0' "$(find "$NE/edge/PROFILE" -name 'velho*' | wc -l | tr -d ' ')"
+assert_eq 'recarga grava o que veio depois do reset' '{"username":"novo"}' "$(cat "$NE/edge/PROFILE/novo.json")"
+assert_eq 'cursor final é o da mudança processada' '7' "$(cat "$NE/edge/cursor")"
+assert_contains 'reset não gira: feed é pedido duas vezes (4 e 0)' "$(cat "$TMP/curl-calls")" 'changes?cursor=0&limit=200'
+
+# ------------------------------------------------- cenário 15: agregado removido na borda
+# Remoção não vira linha no feed: o nó descobre revalidando e recebe 404. Manter o
+# corpo guardado faria a borda servir o que a vitrine esconde.
+mkdir -p "$NE/edge/PROFILE"
+printf '%s' '{"username":"gone"}' > "$NE/edge/PROFILE/gone.json"
+printf '2\n' > "$NE/edge/PROFILE/gone.version"
+printf '5\n' > "$NE/edge/cursor"
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_EDGE' ;;
+  */network/tasks/next) printf '%s' '$TASK_EDGE' ;;
+  */network/content/changes?*)
+    printf '%s' '{"reset":false,"cursor":5,"nextSeq":6,"hasMore":false,"changes":[{"seq":6,"kind":"PROFILE","contentId":"gone","version":3,"contentHash":"h-gone","changedAt":"2026-11-11T12:00:00Z"}]}' ;;
+  */network/content/PROFILE/gone*)
+    [[ "\$*" == *"-w"* ]] && printf '\n404' || exit 22 ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NE")
+assert_eq 'entrada removida é descartada da borda' '0' "$(find "$NE/edge/PROFILE" -name 'gone*' | wc -l | tr -d ' ')"
+assert_contains 'remoção é contada no resultado' "$(cat "$TMP/curl-calls")" '"removed":1'
+assert_not_contains 'agregado removido não é confirmado como sincronizado' "$(cat "$TMP/curl-calls")" 'gone/synced'
+
 printf '\nTodos os cenarios passaram (%d assercoes).\n' "$PASS"

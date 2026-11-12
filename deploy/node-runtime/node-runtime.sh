@@ -329,6 +329,169 @@ exec_read_query() {
     "{\"kind\":\"$kind\",\"pages\":$pages,\"synced\":$synced,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"complete\":false,\"afterAt\":\"$after_at\",\"afterId\":\"$after_id\"}" ''
 }
 
+# ---------------- executor real: EDGE_CACHE (cache de borda) ----------------
+# O cache de borda é alimentado pelo feed de mudanças (V283): GET
+# /network/content/changes devolve, depois do cursor do nó, só o que ganhou versão
+# nova — kind, contentId, version, contentHash — e nunca o corpo. O corpo continua
+# vindo de GET /network/content/{kind}/{id}, o mesmo caminho autorizado da borda.
+#
+# O cache é descartável, o cursor não: consumir a mudança sem baixar o corpo
+# deixaria a entrada velha até o TTL — ou para sempre, se o agregado nunca mais for
+# editado. Por isso o cursor só avança depois de a entrada estar em disco; falha no
+# meio devolve complete=false e a próxima tarefa retoma daqui.
+EDGE_CHANGES_PER_TASK="${EDGE_CHANGES_PER_TASK:-200}"
+EDGE_PAGES_PER_TASK="${EDGE_PAGES_PER_TASK:-5}"
+
+json_changes() {
+  # json_changes <feed>: uma mudança por linha, como seq|kind|contentId|version|hash.
+  # "changes" é o último campo do objeto do feed, então o recorte vai da abertura do
+  # array até o fecho do objeto; os itens são separados por "},{".
+  local body obj
+  body=$(sed -n 's/.*"changes":\[\(.*\)\]}.*/\1/p' <<<"$1" | head -n 1)
+  [[ -n "$body" ]] || return 0
+  while IFS= read -r obj; do
+    [[ -n "$obj" ]] || continue
+    printf '%s|%s|%s|%s|%s\n' \
+      "$(json_number "$obj" seq)" "$(json_field "$obj" kind)" \
+      "$(json_field "$obj" contentId)" "$(json_number "$obj" version)" \
+      "$(json_field "$obj" contentHash)"
+  # O newline final importa: sem ele, `read` devolve fim de arquivo no último item e
+  # a última mudança do feed nunca seria processada.
+  done < <(printf '%s\n' "$body" | sed 's/},{/\n/g')
+}
+
+exec_edge_cache() {
+  local next="$1" task_id="$2" attempt="$3"
+  local payload cursor_dir cursor limit feed reset_done=false stalled=false
+  local pages=0 stored=0 skipped=0 removed=0 failed=0
+  local entries entry seq kind content_id safe_id stored_version content_url raw code content body version hash
+  local has_more before
+
+  payload=$(task_payload "$next")
+  # O cursor vive no nó, como o da réplica: o payload pode adiantar um, mas sem ele
+  # a tarefa retoma do ponto em que a anterior parou. 0 = nunca sincronizou.
+  cursor_dir="$NODE_HOME/edge"
+  mkdir -p "$cursor_dir"
+  cursor=$(json_number "$payload" cursor)
+  if [[ -z "$cursor" && -s "$cursor_dir/cursor" ]]; then
+    cursor=$(head -n 1 "$cursor_dir/cursor")
+  fi
+  [[ -n "$cursor" ]] || cursor=0
+  limit=$(json_number "$payload" limit)
+  [[ -n "$limit" ]] || limit=$EDGE_CHANGES_PER_TASK
+
+  while :; do
+    before="$cursor"
+    feed=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 60 \
+      "${auth[@]}" "$CONTROL_PLANE/network/content/changes?cursor=$cursor&limit=$limit") || {
+      fail_task "$task_id" "$attempt" EDGE_FEED_FAILED 'feed de mudancas indisponivel'; return 0; }
+    pages=$((pages + 1))
+
+    if [[ "$(json_flag "$feed" reset)" == true ]]; then
+      # Cursor atrás da janela retida: o que o nó não leu já não existe para reler,
+      # e responder "nada mudou" o deixaria servindo conteúdo velho para sempre.
+      # Descartar o cache é barato — é cache — e recomeçar do zero é cursor 0, que o
+      # Control Plane trata como carga normal (0 nunca é reset).
+      rm -f "$cursor_dir"/*/*.json "$cursor_dir"/*/*.version
+      cursor=0
+      printf '0\n' > "$cursor_dir/cursor"
+      printf '[executor] borda: feed podado — cache descartado, recomecando do zero\n' >&2
+      # 0 nunca é reset, então a segunda volta não repete; o guarda é contra giro infinito.
+      [[ "$reset_done" == true ]] && break
+      reset_done=true
+      continue
+    fi
+
+    has_more=$(json_flag "$feed" hasMore)
+    entries=$(json_changes "$feed")
+    while IFS='|' read -r seq kind content_id version hash; do
+      [[ -n "$seq" && -n "$kind" && -n "$content_id" ]] || continue
+      safe_id=$(printf '%s' "$content_id" | sed 's/ /%20/g')
+      mkdir -p "$cursor_dir/$kind"
+      stored_version=''
+      [[ -f "$cursor_dir/$kind/$safe_id.version" ]] && \
+        stored_version=$(head -n 1 "$cursor_dir/$kind/$safe_id.version")
+      # Versão conhecida é perguntada: em dia, o Control Plane devolve changed=false
+      # sem corpo — o nó não rebaixa o cache inteiro a cada mudança do feed.
+      content_url="$CONTROL_PLANE/network/content/$kind/$safe_id"
+      [[ -n "$stored_version" ]] && content_url="$content_url?version=$stored_version"
+      # Uma requisição só, com o status no fim: --fail engoliria o corpo do 404.
+      if ! raw=$(curl --silent --show-error --connect-timeout 10 --max-time 60 \
+          -w '\n%{http_code}' "${auth[@]}" "$content_url"); then
+        failed=$((failed + 1)); stalled=true; break
+      fi
+      code=$(sed -n '$p' <<<"$raw")
+      content=$(sed '$d' <<<"$raw")
+      if [[ "$code" == 404 ]]; then
+        # Remoção não vira linha no feed: o nó descobre revalidando. Manter o corpo
+        # faria a borda servir o que a vitrine esconde.
+        rm -f "$cursor_dir/$kind/$safe_id.json" "$cursor_dir/$kind/$safe_id.version"
+        removed=$((removed + 1)); cursor=$seq
+        printf '%s\n' "$cursor" > "$cursor_dir/cursor"
+        continue
+      fi
+      if [[ "$code" != 200 ]]; then
+        failed=$((failed + 1)); stalled=true; break
+      fi
+      if [[ "$(json_flag "$content" changed)" == false ]]; then
+        skipped=$((skipped + 1)); cursor=$seq
+        printf '%s\n' "$cursor" > "$cursor_dir/cursor"
+        continue
+      fi
+      body=$(json_last_string "$content" body)
+      if [[ -z "$body" ]]; then
+        failed=$((failed + 1)); stalled=true; break
+      fi
+      version=$(json_number "$content" version)
+      hash=$(json_field "$content" contentHash)
+      # Grava antes de confirmar: confirmar o que não está em disco faria a
+      # reconciliação acusar o nó por um arquivo que ele nunca teve.
+      if ! printf '%s' "$body" > "$cursor_dir/$kind/$safe_id.json"; then
+        failed=$((failed + 1)); stalled=true; break
+      fi
+      printf '%s\n' "$version" > "$cursor_dir/$kind/$safe_id.version"
+      if curl --fail --silent --show-error --connect-timeout 10 --max-time 60 \
+          "${auth[@]}" -d "{\"sourceVersion\":$version,\"contentHash\":\"$hash\"}" \
+          "$CONTROL_PLANE/network/content/$kind/$safe_id/synced" >/dev/null; then
+        stored=$((stored + 1))
+      else
+        failed=$((failed + 1))
+        printf '[executor] borda: confirmacao de %s/%s falhou\n' "$kind" "$content_id" >&2
+      fi
+      cursor=$seq
+      printf '%s\n' "$cursor" > "$cursor_dir/cursor"
+    done <<<"$entries"
+
+    if [[ "$stalled" == true ]]; then
+      printf '[executor] borda: parada em seq=%s (%s falhas)\n' "$cursor" "$failed" >&2
+      result "$task_id" "$attempt" DONE \
+        "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"complete\":false,\"cursor\":$cursor}" ''
+      return 0
+    fi
+    if [[ "$has_more" != true ]]; then
+      printf '[executor] borda: em dia em seq=%s (%s guardados, %s em dia, %s removidos)\n' \
+        "$cursor" "$stored" "$skipped" "$removed"
+      result "$task_id" "$attempt" DONE \
+        "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"complete\":true,\"cursor\":$cursor}" ''
+      return 0
+    fi
+    # Sem avanço não há o que pedir de novo: girar sobre a mesma página não converge.
+    if [[ "$cursor" == "$before" ]]; then
+      break
+    fi
+    if (( pages >= EDGE_PAGES_PER_TASK )); then
+      printf '[executor] borda: orcamento de %s paginas, retomando em seq=%s\n' \
+        "$pages" "$cursor"
+      result "$task_id" "$attempt" DONE \
+        "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"complete\":false,\"cursor\":$cursor}" ''
+      return 0
+    fi
+  done
+
+  result "$task_id" "$attempt" DONE \
+    "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"complete\":false,\"cursor\":$cursor}" ''
+}
+
 cycle() {
   # 1. heartbeat: estado, modo e se pode pedir tarefa.
   local hb mode accept_tasks observed_cpu observed_mem
@@ -368,6 +531,7 @@ cycle() {
     case "$task_type" in
       MEDIA_TRANSCODE) exec_media_transcode "$next" "$task_id" "${attempt:-1}" ;;
       READ_QUERY) exec_read_query "$next" "$task_id" "${attempt:-1}" ;;
+      EDGE_CACHE) exec_edge_cache "$next" "$task_id" "${attempt:-1}" ;;
       *)
         # Prova de ciclo de vida: eco do idempotencyKey como output. Conteúdo de usuário
         # (HTML, CSS, KofScript) NUNCA executa aqui — continua nos sandboxes próprios.

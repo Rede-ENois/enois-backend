@@ -132,7 +132,35 @@ e a versão guardados (senão serviria o que a vitrine esconde) e conta em
 `removed`. Falha de rede e 5xx mantêm o corpo — descartar por erro transitório
 seria pior que reter por uma rodada.
 
-Os demais tipos (`EDGE_CACHE`, `EDGE_DELIVER`, `API_REQUEST`) continuam em prova
+**Executor de cache de borda (`EDGE_CACHE`).** O nó consome o **feed de mudanças**
+(V283): `GET /network/content/changes?cursor=<seq>&limit=<n>` devolve, depois do
+cursor que o nó guardou, só o que ganhou versão nova — `kind`, `contentId`,
+`version`, `contentHash` — e **nunca o corpo**. Para cada mudança, o corpo vem de
+`GET /network/content/{kind}/{id}` (o mesmo caminho autorizado da borda), é
+guardado e confirmado em `POST .../synced` com versão e hash.
+
+O cache é descartável; o **cursor não**. Ele só avança depois de a entrada estar
+em disco: consumir a mudança sem baixar o corpo deixaria a entrada velha até o
+TTL — ou para sempre, se o agregado nunca mais fosse editado. Falha no meio
+devolve `complete=false` com o cursor de onde parou, e a próxima tarefa retoma.
+
+- **`reset=true` é recarga, não "nada mudou":** o cursor ficou atrás da janela
+  retida (o feed é janela, não histórico). O nó apaga o cache inteiro e recomeça
+  do cursor 0, que o Control Plane trata como carga normal — e o guarda de
+  "reset já feito" impede giro infinito se o segundo pedido também voltasse
+  `reset`.
+- **404 na origem é remoção:** o nó apaga o corpo e a versão guardados e conta em
+  `removed`. Remoção não vira linha no feed, então é revalidando que ele descobre.
+- **Em dia não rebaixa:** a versão guardada vai como `?version=`; `changed=false`
+  volta sem corpo e a entrada não é reescrita nem reconfirmada.
+
+O estado fica em `$NODE_HOME/edge/`: `cursor` guarda o último `seq` processado,
+`<kind>/<id>.json` o corpo serve à borda e `<kind>/<id>.version` a versão
+guardada. Por ciclo: `EDGE_CHANGES_PER_TASK` (200) mudanças por página e
+`EDGE_PAGES_PER_TASK` (5) páginas; esgotado o orçamento, devolve `complete=false`
+com o cursor.
+
+Os demais tipos (`EDGE_DELIVER`, `API_REQUEST`) continuam em prova
 de ciclo de vida (eco do `idempotencyKey`).
 Conteúdo de usuário (HTML, CSS, KofScript) **nunca** executa no nó — continua nos
 sandboxes próprios (02-modelo-de-ameacas.md). O script é montado no container
@@ -152,6 +180,8 @@ verificada.
 | `$NODE_HOME/runtime-image.previous` | o digest anterior, para `--rollback` | 600 |
 | `$NODE_HOME/replica/cursor-<kind>` | onde a travessia do catálogo parou (`<criado em>|<id>`) | 600 |
 | `$NODE_HOME/replica/<kind>/<id>.json` + `.version` | conteúdo público guardado e a versão confirmada | 600 |
+| `$NODE_HOME/edge/cursor` | o último `seq` do feed de mudanças já aplicado no cache | 600 |
+| `$NODE_HOME/edge/<kind>/<id>.json` + `.version` | conteúdo público em cache de borda e a versão confirmada | 600 |
 | volume `enois-node` | workspace do runtime no container | — |
 
 `NODE_HOME` padrão é `/var/lib/enois-node`; sobrescreva por ambiente. O par
@@ -212,11 +242,12 @@ e preserva o atual; digest não verificável é recusado.
 
 ## 7. O que ainda não está aqui
 
-- **Executores de trabalho real por perfil**: dois já executam de verdade no nó —
+- **Executores de trabalho real por perfil**: três já executam de verdade no nó —
   `MEDIA_TRANSCODE` (receita do Control Plane, resultado verificado por tamanho e
-  hash) e `READ_QUERY` (travessia do catálogo da réplica com corpo e confirmação),
-  50 asserções em `scripts/tests/node-executor-test.sh`. Faltam
-  `EDGE_CACHE`/`EDGE_DELIVER` (NODE_EDGE) e `API_REQUEST` (NODE_API), que hoje caem
+  hash), `READ_QUERY` (travessia do catálogo da réplica com corpo e confirmação) e
+  `EDGE_CACHE` (consumo do feed de mudanças com corpo baixado e confirmado),
+  68 asserções em `scripts/tests/node-executor-test.sh`. Faltam
+  `EDGE_DELIVER` (NODE_EDGE) e `API_REQUEST` (NODE_API), que hoje caem
   no eco de ciclo de vida.
 - **Publicação das imagens assinadas**: o verificador está pronto e testado; o
   pipeline que constrói e assina as imagens do runtime (`cosign sign`) entra com
