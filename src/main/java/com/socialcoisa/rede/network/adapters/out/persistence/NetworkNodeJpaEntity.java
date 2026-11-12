@@ -88,6 +88,14 @@ class NetworkNodeJpaEntity {
 	@Column(name = "last_seen_at")
 	private Instant lastSeenAt;
 
+	/** Versão da permissão: 1 no enroll, +1 em cada transição administrativa (V284). */
+	@Column(name = "config_version", nullable = false)
+	private int configVersion = 1;
+
+	/** Instante em que a permissão vigente passou a valer; null em linha anterior à V284. */
+	@Column(name = "config_issued_at")
+	private Instant configIssuedAt;
+
 	protected NetworkNodeJpaEntity() {
 	}
 
@@ -106,17 +114,34 @@ class NetworkNodeJpaEntity {
 		this.region = region;
 		this.country = country;
 		this.createdAt = createdAt;
+		// O enroll é a primeira permissão do nó: versão 1 já nasce carimbada com o instante em que
+		// ele entrou. Sem isso a leitura seguinte teria de inventar um instante, e inventar é o que
+		// faz a config parecer nova sem ter mudado.
+		this.configVersion = 1;
+		this.configIssuedAt = createdAt;
 	}
 
 	NetworkNode toDomain() {
 		return new NetworkNode(id, displayName, ownerUserId, NodeStatus.valueOf(status),
 			NodeProfilesCsv.parse(profiles), region, country, runtimeVersion, lastSeenAt, declaredCpuCores,
-			declaredMemoryMb, observedCpuPercent, observedMemoryMb, observedRunningTasks, observedLatencyMs,
-			consecutiveFailures, quarantinedUntil, quarantineReason);
+			declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent, observedMemoryMb,
+			observedRunningTasks, observedLatencyMs, consecutiveFailures, quarantinedUntil, quarantineReason);
 	}
 
 	String status() {
 		return status;
+	}
+
+	int configVersion() {
+		return configVersion;
+	}
+
+	Instant configIssuedAt() {
+		return configIssuedAt;
+	}
+
+	Instant createdAt() {
+		return createdAt;
 	}
 
 	/** CSV de perfis: o domínio recebe o conjunto, o banco guarda texto. */

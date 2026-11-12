@@ -54,4 +54,13 @@ public enum TaskType {
 		}
 		return profiles.contains(requiredProfile) || profiles.contains(NodeProfile.NODE_LOCAL);
 	}
+
+	/**
+	 * Os tipos que um conjunto de perfis permite, em ordem estável (a da declaração do enum). É a
+	 * lista que vai na config assinada do nó: mesma regra do predicado {@link #allowedFor(Set)},
+	 * para que a config não possa dizer uma coisa e o despacho fazer outra.
+	 */
+	public static java.util.List<TaskType> allowedTypesFor(Set<NodeProfile> profiles) {
+		return java.util.Arrays.stream(values()).filter(type -> type.allowedFor(profiles)).toList();
+	}
 }

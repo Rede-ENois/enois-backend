@@ -87,7 +87,7 @@ o teste exige a ordem das transições.
 
 | item | critério de aceite |
 |---|---|
-| onboarding externo | fluxo completo do token de provisionamento até `ACTIVE` |
+| onboarding externo | fluxo completo do token de provisionamento até `ACTIVE` — **parcial**: `provision-token` → `enroll` → aprovação → `GET /network/nodes/me/config` assinado (Ed25519, com pino da chave pública e `configVersion` do ciclo de vida) estão entregues; falta o instalador (próxima linha) e a solicitação de ingresso pela interface do participante |
 | instalador | Docker Compose + script Linux; health check; atualização; rollback; backup de config; diagnóstico |
 | imagens OCI assinadas | assinatura verificada no pull |
 | gestão de permissões | participante define limites; a rede respeita — **parcial**: CPU (concorrência) e memória declarada respeitadas; disco e banda dependem de não haver tarefa que os consuma hoje |

@@ -16,20 +16,30 @@ interface SpringDataNetworkNodeJpaRepository extends JpaRepository<NetworkNodeJp
 
 	long countByStatus(String status);
 
+	/*
+	 * Toda transição administrativa soma 1 em `configVersion` e carimba `configIssuedAt`. A versão é
+	 * derivada do ciclo de vida dentro do próprio UPDATE: um contador que o chamador incrementasse
+	 * dependeria de ele lembrar, e a primeira transição esquecida deixaria o nó aplicando permissão
+	 * velha para sempre.
+	 */
+
 	@Modifying
-	@Query("update NetworkNodeJpaEntity n set n.status = :status, n.approvedBy = :actor, n.approvedAt = :now "
+	@Query("update NetworkNodeJpaEntity n set n.status = :status, n.approvedBy = :actor, n.approvedAt = :now, "
+			+ "n.configVersion = n.configVersion + 1, n.configIssuedAt = :now "
 			+ "where n.id = :id and n.status <> 'REVOKED'")
 	int approve(@Param("id") String id, @Param("status") String status, @Param("actor") String actor,
 			@Param("now") Instant now);
 
 	@Modifying
-	@Query("update NetworkNodeJpaEntity n set n.status = :status, n.revokedAt = :now "
+	@Query("update NetworkNodeJpaEntity n set n.status = :status, n.revokedAt = :now, "
+			+ "n.configVersion = n.configVersion + 1, n.configIssuedAt = :now "
 			+ "where n.id = :id and n.status <> 'REVOKED'")
 	int revoke(@Param("id") String id, @Param("status") String status, @Param("now") Instant now);
 
 	@Modifying
-	@Query("update NetworkNodeJpaEntity n set n.status = :status where n.id = :id and n.status <> 'REVOKED'")
-	int changeStatus(@Param("id") String id, @Param("status") String status);
+	@Query("update NetworkNodeJpaEntity n set n.status = :status, n.configVersion = n.configVersion + 1, "
+			+ "n.configIssuedAt = :now where n.id = :id and n.status <> 'REVOKED'")
+	int changeStatus(@Param("id") String id, @Param("status") String status, @Param("now") Instant now);
 
 	@Modifying
 	@Query("update NetworkNodeJpaEntity n set n.runtimeVersion = :version, n.observedCpuPercent = :cpu, "

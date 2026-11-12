@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.socialcoisa.rede.network.application.NetworkConfigService;
 import com.socialcoisa.rede.network.application.NetworkModeService;
 import com.socialcoisa.rede.network.application.NetworkNodeService;
 import com.socialcoisa.rede.network.application.NodeKeyService;
@@ -31,11 +32,14 @@ class NetworkNodeController {
 	private final NetworkNodeService nodes;
 	private final NodeKeyService keys;
 	private final NetworkModeService modes;
+	private final NetworkConfigService configs;
 
-	NetworkNodeController(NetworkNodeService nodes, NodeKeyService keys, NetworkModeService modes) {
+	NetworkNodeController(NetworkNodeService nodes, NodeKeyService keys, NetworkModeService modes,
+			NetworkConfigService configs) {
 		this.nodes = nodes;
 		this.keys = keys;
 		this.modes = modes;
+		this.configs = configs;
 	}
 
 	record EnrollRequest(String provisionToken, String runtimeVersion, Declared declared, String region,
@@ -94,5 +98,17 @@ class NetworkNodeController {
 		return new HeartbeatResponse(updated.id(), updated.status().name(),
 			updated.profiles().stream().map(Enum::name).sorted().toList(), Instant.now().toString(),
 			modes.current().name(), modes.current().dispatchAllowed());
+	}
+
+	/**
+	 * A permissão do nó, assinada. Lê com a chave vigente mesmo em {@code PENDING_APPROVAL}: o
+	 * runtime precisa saber que ainda não pode operar, e 403 aqui deixaria o instalador sem
+	 * resposta justamente enquanto ele espera a aprovação humana. A config diz isso em
+	 * {@code operable:false} e lista de tarefas vazia — o mesmo critério do scheduler, dito ao nó.
+	 */
+	@GetMapping("/nodes/me/config")
+	NetworkConfigService.NodeConfigView myConfig(@RequestHeader(value = "X-Node-Id", required = false) String nodeId,
+			@RequestHeader(value = "X-Node-Key", required = false) String nodeKey) {
+		return configs.forNode(keys.authenticate(nodeId, nodeKey));
 	}
 }

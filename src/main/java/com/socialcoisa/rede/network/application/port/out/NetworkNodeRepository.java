@@ -50,4 +50,17 @@ public interface NetworkNodeRepository {
 
 	/** Nós cuja janela de remoção venceu, mais antigos primeiro, para a varredura de volta. */
 	List<NetworkNode> findQuarantineExpired(Instant now, int limit);
+
+	/**
+	 * A versão e o instante da permissão vigente do nó — o que a config assinada devolve ao runtime.
+	 *
+	 * <p>Não é {@code status} disfarçado: é o carimbo que o nó compara para saber que a permissão
+	 * mudou. Fica fora do agregado {@link NetworkNode} porque nenhuma decisão de despacho olha para
+	 * ele; só a leitura da config.</p>
+	 */
+	Optional<ConfigStamp> configStamp(String id);
+
+	/** Versão monotônica da permissão e o instante em que ela passou a valer. */
+	record ConfigStamp(int version, Instant issuedAt) {
+	}
 }

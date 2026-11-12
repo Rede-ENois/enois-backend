@@ -162,11 +162,36 @@ revogação que pode ser desfeita não é revogação.
 | ponto | checagem |
 |---|---|
 | handshake | certificado válido e não revogado |
-| toda requisição de nó | `X-Node-Id` + hash da `X-Node-Key` + estado `ACTIVE` |
+| toda requisição de nó | `X-Node-Id` + hash da `X-Node-Key`; revogado = 401 |
+| leitura da própria config | a mesma credencial, e **não** exige `status = ACTIVE` — o nó pendente precisa ler que não pode operar |
 | despacho de tarefa | perfil cobre o `type` e o `dataClass` |
 | resultado de tarefa | nó ainda `ACTIVE`; se revogado no meio, resultado descartado |
 | rota admin | `AdminRouteInterceptor` + `AdminGuard` no controller |
 | escrita sem sessão | `WriteRouteInterceptor` com lista branca explícita |
+
+## 6.1 A config assinada
+
+Implementada na fase 5 (`GET /network/nodes/me/config`, contrato em `03-contratos.md`).
+
+- **Assinatura Ed25519** sobre uma linha canônica, não sobre o JSON: reordenar chaves do corpo não
+  muda a assinatura, e a verificação não depende do serializador de uma biblioteca.
+- **Pino**: a resposta carrega a chave pública do Control Plane. O instalador grava no enroll;
+  toda config seguinte é conferida contra ela, sem confiar no transporte.
+- **`configVersion` vem do ciclo de vida**, não de um contador em memória: `1` no enroll, `+1` em
+  cada transição administrativa (V284). Sem isso, o `issuedAt` teria de ser o relógio da requisição
+  e o runtime veria "config nova" a cada segundo.
+- **`signed:false` quando não há chave configurada** — o Control Plane não inventa assinatura, e
+  quem decide aceitar config sem assinatura é o runtime (padrão: recusar).
+- **Nó pendente lê a própria config** (200, `operable:false`, `allowedTasks` vazio). Recusar com 403
+  deixaria o instalador sem resposta no passo em que ele espera aprovação humana.
+
+Ainda **não** implementado nesta fase: mTLS por certificado individual, CSR e rotação automática de
+certificado. O modelo acima é o que existe hoje — a autoridade é a API key por nó, e a config
+assinada protege o que o nó **aplica**, não o canal.
+
+As decisões de desenho estão em [ADR-011](../adr/ADR-011-config-assinada-canonico-e-versao.md):
+canônico em vez de JSON, versão da permissão vinda do ciclo de vida em vez do relógio da requisição,
+e `signed:false` em vez de assinatura vazia quando não há chave.
 
 ## 7. O que nunca acontece
 

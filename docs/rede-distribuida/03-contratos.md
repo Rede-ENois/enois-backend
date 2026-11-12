@@ -80,18 +80,55 @@ tabela de contingência: falso em `DEGRADED`/`EMERGENCY`. O campo é aditivo —
 continua funcionando e ainda recebe tarefas do Control Plane, que já não designa nada nesses modos.
 
 ### `GET /network/nodes/me/config`
-Devolve a configuração **assinada**. O nó confere a assinatura antes de aplicar.
+Devolve a configuração **assinada** (credencial de nó: `X-Node-Id` + `X-Node-Key`). O nó confere a
+assinatura antes de aplicar. Implementada (fase 5): o payload real está abaixo.
 
 ```json
 {
-  "configVersion": 7,
+  "nodeId": "nd_…",
+  "status": "ACTIVE",
+  "operable": true,
+  "formatVersion": 1,
+  "configVersion": 3,
   "profiles": ["NODE_MEDIA"],
-  "limits": { "cpuPercent": 60, "memoryMb": 4096, "bandwidthMbps": 50 },
-  "allowedTasks": ["MEDIA_TRANSCODE"],
-  "issuedAt": "2026-11-11T11:00:00Z",
-  "signature": "base64(ed25519(configVersion|profiles|limits|allowedTasks|issuedAt))"
+  "limits": { "cpuCores": 4, "memoryMb": 8192, "diskMb": 51200, "bandwidthMbps": 100 },
+  "allowedTasks": ["MEDIA_TRANSCODE", "MEDIA_THUMBNAIL"],
+  "region": "sudeste", "country": "BR",
+  "issuedAt": "2026-11-12T10:00:00Z",
+  "signed": true,
+  "signature": "base64(ed25519(linha canônica))",
+  "algorithm": "Ed25519",
+  "publicKey": "base64(X.509 da chave pública do Control Plane)"
 }
 ```
+
+Duas versões, de propósito:
+
+- `formatVersion` é a versão do **formato** do documento — sobe quando o runtime antigo não
+  entenderia o payload novo. Hoje é `1`.
+- `configVersion` é a versão da **permissão** do nó — nasce `1` no enroll e soma `1` a cada
+  transição administrativa (aprovar, suspender, quarentenar, revogar). É o número que o runtime
+  compara para saber que a permissão mudou.
+
+`issuedAt` é o instante em que a permissão vigente passou a valer, **não** o instante da consulta:
+duas leituras seguidas sem mudança devolvem o mesmo documento (e a mesma assinatura — Ed25519 é
+determinística). A config é um evento, não um relógio.
+
+A **linha canônica** assinada junta os campos na ordem do contrato:
+`formatVersion|configVersion|nodeId|profiles|cpuCores|memoryMb|diskMb|bandwidthMbps|allowedTasks|issuedAt`,
+com listas ordenadas em JSON compacto. Assina-se o canônico, não o JSON — reordenar chaves do corpo
+não muda a assinatura.
+
+`publicKey` é o **pino**: o instalador grava esta chave no install e toda config seguinte é conferida
+contra ela, sem depender do transporte desta resposta.
+
+`signed` diz a verdade sobre `signature`: sem chave de assinatura configurada no Control Plane a
+resposta sai `signed:false` e `signature:null` — nunca `true` com campo vazio. Quem decide aceitar
+config não assinada é o runtime, e o padrão dele é recusar.
+
+O nó **pendente de aprovação também lê a própria config** (200, com `operable:false` e
+`allowedTasks` vazio): 403 aqui deixaria o instalador sem resposta justamente enquanto ele espera a
+aprovação humana.
 
 ## 3. Tarefas
 

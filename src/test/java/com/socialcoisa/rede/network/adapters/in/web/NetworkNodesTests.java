@@ -218,6 +218,140 @@ class NetworkNodesTests {
 			.andExpect(jsonPath("$.code").value("NODE_PENDING_APPROVAL"));
 	}
 
+	// ---------------------------------------------------------------- config assinada
+
+	/**
+	 * O passo que fecha o onboarding: depois de aprovado, o nó lê a própria permissão numa
+	 * configuração assinada. Sem esta rota, o runtime teria de confiar no que o painel disse, e
+	 * permissão deixaria de ser dado do Control Plane.
+	 */
+	@Test
+	void configAssinadaDizOPerfilEOsLimitesDoNo() throws Exception {
+		String admin = adminToken();
+		String nodeId = newNode(admin);
+		activate(admin, nodeId);
+		String key = issueKey(admin, nodeId);
+
+		var result = mockMvc
+			.perform(get("/network/nodes/me/config").header("X-Node-Id", nodeId).header("X-Node-Key", key))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.nodeId").value(nodeId))
+			.andExpect(jsonPath("$.formatVersion").value(1))
+			// Versão da permissão: 1 do enroll + 1 da aprovação feita acima.
+			.andExpect(jsonPath("$.configVersion").value(2))
+			.andExpect(jsonPath("$.profiles[0]").value("NODE_MEDIA"))
+			.andExpect(jsonPath("$.limits.cpuCores").value(4))
+			.andExpect(jsonPath("$.limits.memoryMb").value(8192))
+			.andExpect(jsonPath("$.limits.diskMb").value(51200))
+			.andExpect(jsonPath("$.limits.bandwidthMbps").value(100))
+			.andExpect(jsonPath("$.allowedTasks[0]").value("MEDIA_TRANSCODE"))
+			.andExpect(jsonPath("$.allowedTasks[1]").value("MEDIA_THUMBNAIL"))
+			.andExpect(jsonPath("$.signed").value(false))
+			.andReturn();
+
+		var body = objectMapper.readTree(result.getResponse().getContentAsString());
+		// Sem chave de assinatura configurada o payload vai sem assinatura e diz isso — um
+		// `signed:true` sem assinatura seria mentira que o nó não teria como perceber.
+		assertThat(body.get("signature").isNull()).isTrue();
+	}
+
+	/**
+	 * Duas leituras do mesmo nó sem nada mudar devolvem exatamente o mesmo documento.
+	 *
+	 * <p>{@code issuedAt} aqui é o instante em que a <b>permissão</b> foi emitida — o enroll no caso
+	 * desta primeira leitura —, não o instante da consulta: se fosse o relógio da requisição, duas
+	 * leituras seguidas dariam documentos diferentes para a mesma permissão, e o runtime, que trata
+	 * config nova como evento, aplicaria config nova de segundo em segundo sem nada ter mudado.</p>
+	 */
+	@Test
+	void duasLeiturasSemMudancaDevolvemOMesmoDocumento() throws Exception {
+		String admin = adminToken();
+		String nodeId = newNode(admin);
+		activate(admin, nodeId);
+		String key = issueKey(admin, nodeId);
+
+		var before = configOf(nodeId, key);
+		var again = configOf(nodeId, key);
+
+		assertThat(again.get("configVersion").asInt()).isEqualTo(before.get("configVersion").asInt());
+		assertThat(again.get("issuedAt").asString()).isEqualTo(before.get("issuedAt").asString());
+		assertThat(again.get("profiles").toString()).isEqualTo(before.get("profiles").toString());
+		assertThat(again.get("allowedTasks").toString()).isEqualTo(before.get("allowedTasks").toString());
+	}
+
+	/**
+	 * O nó sabe que a config velha não vale mais: aprovar, suspender, quarentenar ou revogar muda o
+	 * {@code configVersion} e o {@code issuedAt} — a versão nasce do ciclo de vida, não de um contador
+	 * que alguém precisa lembrar de incrementar em cada transição.
+	 */
+	@Test
+	void transicaoDeStatusCompoeVersaoENovoInstante() throws Exception {
+		String admin = adminToken();
+		String nodeId = newNode(admin);
+		String key = issueKey(admin, nodeId);
+
+		var pending = configOf(nodeId, key);
+		assertThat(pending.get("status").asString()).isEqualTo("PENDING_APPROVAL");
+
+		activate(admin, nodeId);
+		var active = configOf(nodeId, key);
+		assertThat(active.get("status").asString()).isEqualTo("ACTIVE");
+		assertThat(active.get("configVersion").asInt()).isGreaterThan(pending.get("configVersion").asInt());
+		assertThat(active.get("issuedAt").asString()).isNotEqualTo(pending.get("issuedAt").asString());
+
+		suspend(admin, nodeId);
+		var suspended = configOf(nodeId, key);
+		assertThat(suspended.get("operable").asBoolean()).isFalse();
+		assertThat(suspended.get("allowedTasks").isEmpty()).isTrue();
+		assertThat(suspended.get("configVersion").asInt()).isGreaterThan(active.get("configVersion").asInt());
+
+		// A versão cresce a cada transição, então a última é a maior de todas — é a assinatura de que a
+		// ordem das mudanças está impressa no número.
+		assertThat(suspended.get("configVersion").asInt()).isGreaterThanOrEqualTo(3);
+	}
+
+	@Test
+	void configExigeCredencialDoNo() throws Exception {
+		mockMvc.perform(get("/network/nodes/me/config")).andExpect(status().isUnauthorized());
+		String admin = adminToken();
+		String nodeId = newNode(admin);
+		activate(admin, nodeId);
+		mockMvc.perform(get("/network/nodes/me/config").header("X-Node-Id", nodeId).header("X-Node-Key", "enk_x"))
+			.andExpect(status().isUnauthorized());
+	}
+
+	@Test
+	void noPendenteLeAPropriaConfigMasSemTarefas() throws Exception {
+		String admin = adminToken();
+		String nodeId = newNode(admin);
+		String key = issueKey(admin, nodeId);
+
+		// O enroll termina em PENDING_APPROVAL; o runtime precisa conseguir ler a própria config
+		// para saber que ainda não pode operar — 403 aqui deixaria o instalador sem resposta.
+		mockMvc.perform(get("/network/nodes/me/config").header("X-Node-Id", nodeId).header("X-Node-Key", key))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("PENDING_APPROVAL"))
+			.andExpect(jsonPath("$.operable").value(false))
+			.andExpect(jsonPath("$.allowedTasks").isEmpty());
+	}
+
+	private tools.jackson.databind.JsonNode configOf(String nodeId, String key) throws Exception {
+		return objectMapper.readTree(mockMvc
+			.perform(get("/network/nodes/me/config").header("X-Node-Id", nodeId).header("X-Node-Key", key))
+			.andExpect(status().isOk())
+			.andReturn()
+			.getResponse()
+			.getContentAsString());
+	}
+
+	private void suspend(String admin, String nodeId) throws Exception {
+		mockMvc
+			.perform(post("/admin/network/nodes/" + nodeId + "/status").header("X-Session-Token", admin)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("status", "SUSPENDED"))))
+			.andExpect(status().isOk());
+	}
+
 	@Test
 	void apenasAdminGerenciaANetwork() throws Exception {
 		var member = auth.authenticate("net_member");

@@ -25,6 +25,8 @@ import java.util.Set;
  * @param lastSeenAt último heartbeat; null = nunca conectou
  * @param declaredCpuCores núcleos que o participante cedeu
  * @param declaredMemoryMb memória que o participante cedeu
+ * @param declaredDiskMb disco que o participante cedeu; sem consumidor hoje, vai na config assinada
+ * @param declaredBandwidthMbps banda que o participante cedeu; sem consumidor hoje, vai na config
  * @param observedCpuPercent uso de CPU no último heartbeat; null = não reportado
  * @param observedMemoryMb memória em uso no último heartbeat; null = não reportado
  * @param observedRunningTasks tarefas em execução no último heartbeat; null = não reportado
@@ -35,9 +37,9 @@ import java.util.Set;
  */
 public record NetworkNode(String id, String displayName, String ownerUserId, NodeStatus status,
 		Set<NodeProfile> profiles, String region, String country, String runtimeVersion, Instant lastSeenAt,
-		int declaredCpuCores, int declaredMemoryMb, Double observedCpuPercent, Integer observedMemoryMb,
-		Integer observedRunningTasks, Integer observedLatencyMs, int consecutiveFailures, Instant quarantinedUntil,
-		String quarantineReason) {
+		int declaredCpuCores, int declaredMemoryMb, int declaredDiskMb, int declaredBandwidthMbps,
+		Double observedCpuPercent, Integer observedMemoryMb, Integer observedRunningTasks, Integer observedLatencyMs,
+		int consecutiveFailures, Instant quarantinedUntil, String quarantineReason) {
 
 	/** Acima disto o nó está ocupado demais para receber tarefa nova, mesmo com vaga declarada. */
 	public static final double SATURATED_CPU_PERCENT = 85.0;

@@ -52,7 +52,7 @@ class NetworkNodePersistenceAdapter implements NetworkNodeRepository {
 			repository.revoke(id, status.name(), now);
 			return;
 		}
-		repository.changeStatus(id, status.name());
+		repository.changeStatus(id, status.name(), now);
 	}
 
 	@Override
@@ -87,6 +87,15 @@ class NetworkNodePersistenceAdapter implements NetworkNodeRepository {
 	@Override
 	public void release(String id) {
 		repository.release(id);
+	}
+
+	@Override
+	public Optional<NetworkNodeRepository.ConfigStamp> configStamp(String id) {
+		// Linha anterior à V284 pode estar sem o carimbo: o instante em que o nó passou a existir de
+		// fato é a melhor resposta que não inventa data — a permissão vale desde que ele entrou.
+		return repository.findById(id)
+			.map(entity -> new NetworkNodeRepository.ConfigStamp(entity.configVersion(),
+				entity.configIssuedAt() != null ? entity.configIssuedAt() : entity.createdAt()));
 	}
 
 	@Override
