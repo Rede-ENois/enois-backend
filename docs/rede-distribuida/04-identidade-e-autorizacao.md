@@ -129,7 +129,7 @@ Permissão é dado do Control Plane. O nó lê a config assinada e obedece; ele 
 | `NODE_EDGE` | `EDGE_CACHE`, `EDGE_DELIVER` | conteúdo público |
 | `NODE_WORKER` | `ASYNC_JOB` | conforme `dataClass` da tarefa |
 | `NODE_MEDIA` | `MEDIA_TRANSCODE`, `MEDIA_THUMBNAIL` | objeto de mídia da tarefa |
-| `NODE_READ_REPLICA` | `READ_QUERY` | só tabelas da allowlist |
+| `NODE_READ_REPLICA` | `READ_QUERY` | só as projeções da allowlist (`PROFILE`, `COMMUNITY`) — nunca tabela |
 | `NODE_API` | `API_REQUEST` | só o que a rota autoriza |
 | `NODE_LOCAL` | qualquer uma das acima | conforme perfil efetivo |
 | `NODE_EMERGENCY` | só as funções preparadas | conforme preparação |

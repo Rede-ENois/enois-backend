@@ -42,6 +42,19 @@ class CommunityPersistenceAdapter implements CommunityRepository {
 	}
 
 	@Override
+	public java.util.Map<String, Community> findByIds(java.util.Collection<String> ids) {
+		if (ids == null || ids.isEmpty()) {
+			return java.util.Map.of();
+		}
+		java.util.Map<String, Community> byId = new java.util.HashMap<>();
+		for (CommunityJpaEntity entity : springData.findAllById(ids)) {
+			Community community = entity.toDomain();
+			byId.put(community.id(), community);
+		}
+		return byId;
+	}
+
+	@Override
 	public List<Community> findAll(String topic, String query, String state, String cityKey, Instant before,
 			int limit) {
 		PageRequest page = PageRequest.of(0, limit);
@@ -71,6 +84,14 @@ class CommunityPersistenceAdapter implements CommunityRepository {
 			return List.of();
 		}
 		return springData.findAllById(communityIds).stream().map(CommunityJpaEntity::toDomain).toList();
+	}
+
+	@Override
+	public List<com.socialcoisa.rede.communities.application.port.out.ReplicaCommunityKey> replicaPage(
+			Instant afterCreatedAt, String afterId, int limit) {
+		boolean fromStart = afterCreatedAt == null || afterId == null;
+		return springData.replicaPage(fromStart ? null : afterCreatedAt, fromStart ? null : afterId,
+				PageRequest.of(0, Math.max(1, limit)));
 	}
 
 	@Override

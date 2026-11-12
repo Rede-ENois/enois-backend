@@ -60,7 +60,7 @@ de execução igual a 1 por efeito.
 | `NODE_MEDIA` | transcode executa no nó; resultado verificado por hash e tamanho |
 | cache distribuído | só conteúdo público; mutável com TTL curto e invalidação por evento — **entregue** (feed de mudanças V283: `GET /network/content/changes` com cursor `seq` monotônico, linha gravada na mesma transação da versão, poda em lote, cursor atrás da janela recebe `reset=true`) |
 | balanceamento | nó com latência/erro perde prioridade; remoção temporária — **entregue** (saúde medida em `network_nodes`, filtro + ordem no scheduler, janela que expira sozinha, `NETWORK_NODE_QUARANTINED`/`RELEASED` na auditoria) |
-| réplicas de leitura | projeção com `sourceVersion`; allowlist explícita; nunca tabela crua |
+| réplicas de leitura | projeção com `sourceVersion`; allowlist explícita; nunca tabela crua — **entregue** (`GET /network/replica/{kind}` enumera por chave `(criado em, id)`, devolve o @ do perfil e o id da comunidade; o corpo vem do mesmo `/network/content/{kind}/{id}`; allowlist `PROFILE`+`COMMUNITY` versionada no código; filtro da vitrine aplicado em lote; `NODE_READ_REPLICA` e `NODE_LOCAL` leem, `NODE_EDGE` não enumera) |
 | reconciliação | divergência vira alerta `SYNC_DIVERGENCE` — **entregue**, inclusive sem depender de o nó pedir (varredura periódica) |
 
 **Prova:** transcode real em nó; comparação do resultado com o local; teste de balanceamento

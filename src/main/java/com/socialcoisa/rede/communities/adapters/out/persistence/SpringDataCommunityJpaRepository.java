@@ -27,6 +27,18 @@ interface SpringDataCommunityJpaRepository extends JpaRepository<CommunityJpaEnt
 			@Param("state") String state, @Param("cityKey") String cityKey, @Param("before") Instant before,
 			Pageable pageable);
 
+	/**
+	 * Uma página da réplica de leitura, por chave (criado em, id) — nunca por posição, porque a
+	 * réplica percorre o catálogo enquanto comunidades nascem e são apagadas.
+	 */
+	@Query("SELECT new com.socialcoisa.rede.communities.application.port.out.ReplicaCommunityKey("
+			+ "c.id, c.createdAt, c.createdBy) FROM CommunityJpaEntity c "
+			+ "WHERE (:afterCreatedAt IS NULL OR c.createdAt > :afterCreatedAt "
+			+ "OR (c.createdAt = :afterCreatedAt AND c.id > :afterId)) "
+			+ "ORDER BY c.createdAt, c.id")
+	List<com.socialcoisa.rede.communities.application.port.out.ReplicaCommunityKey> replicaPage(
+			@Param("afterCreatedAt") Instant afterCreatedAt, @Param("afterId") String afterId, Pageable pageable);
+
 	// Local communities: same city first, then the rest of the state, each by member count.
 	@Query("SELECT c FROM CommunityJpaEntity c WHERE c.state = :state "
 			+ "ORDER BY CASE WHEN c.cityKey = :cityKey THEN 0 ELSE 1 END, "

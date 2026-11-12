@@ -46,6 +46,8 @@ continuam valendo; as rotas novas entram nas regras que já existem.
 - Fase 1–2: nenhuma mudança no pipeline. Migrações Flyway normais.
 - Fase 3: broadcast entre instâncias resolvido por tabela de sinais com polling (ADR-007), sem
   Redis e sem broker. Nenhuma dependência de infra nova: a mesma MariaDB, duas tabelas novas.
+  Réplicas de leitura por catálogo de chave `(criado em, id)`, sem migração nova e sem tabela
+  paralela ([ADR-008](../adr/ADR-008-replica-de-leitura-por-chave.md)).
 - Fase 5: novo artefato (imagem do runtime) e novo pipeline de publicação assinada.
 
 ## 6. Impacto em observabilidade
@@ -78,7 +80,11 @@ carga sem comprar mais uma máquina no mesmo provedor, na mesma região.
 2. **Autoridade de certificado** (Fase 1): CA própria do Énóis, ou certificado público por nó?
 3. **Política de aprovação** (Fase 1): todo nó exige aprovação manual, ou existe política automática
    para `NODE_LOCAL`?
-4. **Escopo de `NODE_READ_REPLICA`** (Fase 3): qual allowlist de projeções no dia 1?
+4. ~~**Escopo de `NODE_READ_REPLICA`** (Fase 3): qual allowlist de projeções no dia 1?~~ Decidido e
+   entregue: `PROFILE` e `COMMUNITY` — as duas projeções públicas que a borda já serve, por @ e por
+   id. Post, comentário, mensagem e qualquer coisa que dependa de quem lê continuam de fora, porque a
+   réplica não decide autorização de usuário. Ampliar a allowlist é decisão de contrato com versão
+   nova, não parâmetro de requisição.
 
 Nenhuma dessas decisões bloqueia a Fase 1 no que diz respeito a tabelas, API key e heartbeat — que é
 onde a implementação começa.

@@ -54,7 +54,22 @@ graça: claim entre instâncias, backoff, DLQ por `max-attempts`, métrica de ba
 
 ## 5. Consistência de leitura
 
-- `NODE_READ_REPLICA` recebe **projeções**, não tabelas cruas. A allowlist é explícita e versionada.
+- `NODE_READ_REPLICA` recebe **projeções**, não tabelas cruas. A allowlist é explícita e versionada
+  (`ReplicaCatalogService.ALLOWLIST`): no dia 1 são `PROFILE` e `COMMUNITY`, as mesmas projeções que a
+  borda entrega. O catálogo (`GET /network/replica/{kind}`) só diz **o que existe**; o corpo de cada
+  item continua vindo de `GET /network/content/{kind}/{id}`, com a versão vigente e o hash do corpo —
+  não há um segundo caminho de serialização para o mesmo agregado.
+- A travessia é **por chave** — `(criado em, id)` — e nunca por posição. A réplica leva horas para
+  percorrer o catálogo de um sistema vivo; com `offset`, apagar um item entre duas páginas puxa os
+  seguintes para trás e um deles nunca é lido, e criar um empurra os seguintes para frente e outro é
+  lido duas vezes. Com chave, "continua depois de (at, id)" não depende de quantos itens existem antes.
+- O fim da travessia devolve `hasMore=false` **e** o cursor preenchido: `hasMore` é "há mais agora",
+  o cursor é "li até aqui". Devolver cursor nulo junto com a última página faria a réplica recomeçar do
+  início e rebaixar o catálogo inteiro na rodada seguinte.
+- O catálogo nunca é mais largo que a vitrine. Conta suspensa, conta removida, comunidade de conta
+  suspensa e comunidade com o texto do ataque ficam fora pelo **mesmo critério** da lista pública —
+  decidido no módulo dono (`ProfileService.accountsVisible`, `CommunityService.communitiesVisible`) e
+  aplicado em lote: uma consulta de sanção por página, não uma por item.
 - Toda projeção carrega `sourceVersion` (contador monotônico por agregado). O nó serve a versão que
   tem; o cliente que exige frescor vai na infra principal.
 - Divergência entre `sourceVersion` do nó e da origem vira alerta `SYNC_DIVERGENCE` no painel.

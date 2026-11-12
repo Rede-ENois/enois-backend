@@ -78,7 +78,7 @@ public class ContentSyncService {
 	 */
 	@Transactional
 	public EdgeContent serve(NetworkNode node, ContentKind kind, String contentId, Long knownVersion) {
-		requireEdge(node);
+		requireContentReader(node);
 		String id = normalize(kind, contentId);
 		// O corpo é montado UMA vez e é o mesmo que o hash/versiona: serializar de novo para a
 		// resposta abriria a janela em que o conteúdo muda entre a versão cunhada e o corpo
@@ -99,7 +99,7 @@ public class ContentSyncService {
 	@Transactional
 	public void recordSynced(NetworkNode node, ContentKind kind, String contentId, long sourceVersion,
 			String contentHash) {
-		requireEdge(node);
+		requireContentReader(node);
 		if (sourceVersion < 1) {
 			throw new ApiException(400, "CONTENT_VERSION_INVALID", "Versao de conteudo invalida.");
 		}
@@ -167,7 +167,7 @@ public class ContentSyncService {
 	 */
 	@Transactional(readOnly = true)
 	public Feed changes(NetworkNode node, long afterSeq, int limit) {
-		requireEdge(node);
+		requireContentReader(node);
 		int page = Math.clamp(limit, 1, MAX_CHANGES_PAGE);
 		long cursor = Math.max(0, afterSeq);
 		boolean reset = resetNeeded(cursor);
@@ -242,15 +242,20 @@ public class ContentSyncService {
 	}
 
 	/**
-	 * Só nó de borda ativo serve conteúdo. O perfil é a permissão: um nó {@code NODE_MEDIA} com a
-	 * chave certa continua sem poder pedir projeção de perfil — capacidade não dá permissão.
+	 * Quem pode ler e confirmar conteúdo público: borda, contingência local e réplica de leitura.
+	 *
+	 * <p>O perfil é a permissão, e a permissão é sobre <b>o que</b> se lê: a projeção pública. Um nó
+	 * {@code NODE_MEDIA} com a chave certa continua sem poder pedir projeção de perfil — capacidade
+	 * não dá permissão. A réplica entra porque precisa ler exatamente a projeção que enumerou e
+	 * confirmar o que guardou; sem isso a reconciliação dela não teria contra o que comparar.</p>
 	 */
-	private static void requireEdge(NetworkNode node) {
+	private static void requireContentReader(NetworkNode node) {
 		if (!node.status().canOperate()) {
 			throw new ApiException(403, "NODE_" + node.status().name(), "No nao esta ativo.");
 		}
-		if (!node.profiles().contains(NodeProfile.NODE_EDGE) && !node.profiles().contains(NodeProfile.NODE_LOCAL)) {
-			throw new ApiException(403, "NODE_PROFILE_REQUIRED", "No sem perfil de borda.");
+		if (!node.profiles().contains(NodeProfile.NODE_EDGE) && !node.profiles().contains(NodeProfile.NODE_LOCAL)
+				&& !node.profiles().contains(NodeProfile.NODE_READ_REPLICA)) {
+			throw new ApiException(403, "NODE_PROFILE_REQUIRED", "No sem perfil de leitura de conteudo.");
 		}
 	}
 

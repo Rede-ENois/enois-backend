@@ -14,6 +14,9 @@ public interface CommunityRepository {
 
 	Optional<Community> findById(String id);
 
+	/** Várias comunidades por id, em UMA consulta, como mapa id → comunidade (a réplica filtra página cheia). */
+	java.util.Map<String, Community> findByIds(java.util.Collection<String> ids);
+
 	/** `state`/`cityKey` nulos desligam o filtro de lugar. */
 	List<Community> findAll(String topic, String query, String state, String cityKey, Instant before, int limit);
 
@@ -22,6 +25,19 @@ public interface CommunityRepository {
 
 	/** Comunidades das quais o usuario participa (menu lateral). */
 	List<Community> findByMember(String userId, int limit);
+
+	/**
+	 * Uma página de comunidades para a réplica de leitura, por chave (criado em, id) — nunca posição.
+	 *
+	 * <p>As páginas da vitrine usam {@code before} (rolagem para trás, mais novas primeiro) e
+	 * esgotam quando o `limit` vem incompleto; a réplica percorre o catálogo inteiro em direção
+	 * única, então precisa da chave explícita para saber onde parou sem depender de quantos itens
+	 * a página trouxe.</p>
+	 *
+	 * @param afterCreatedAt exclusive; nulo começa do início
+	 * @param afterId exclusive, desempate; nulo com {@code afterCreatedAt} nulo começa do início
+	 */
+	List<ReplicaCommunityKey> replicaPage(Instant afterCreatedAt, String afterId, int limit);
 
 	void saveMember(CommunityMember member);
 
