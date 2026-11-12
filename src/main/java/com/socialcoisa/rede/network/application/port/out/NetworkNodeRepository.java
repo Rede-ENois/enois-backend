@@ -21,6 +21,17 @@ public interface NetworkNodeRepository {
 
 	void updateStatus(String id, NodeStatus status, String actorId, Instant now);
 
+	/**
+	 * Redefine o que o participante cede (cpu/memória/disco/banda) e os perfis autorizados.
+	 *
+	 * <p>É mudança de permissão, não de estado: a config assinada do nó carrega limites e perfis,
+	 * então a leitura seguinte só é aplicável se vier com versão nova — por isso a implementação
+	 * soma 1 em {@code configVersion} e carimba {@code configIssuedAt}, como toda transição
+	 * administrativa.</p>
+	 */
+	void updateContract(String id, int cpuCores, int memoryMb, int diskMb, int bandwidthMbps,
+			List<NodeProfile> profiles, Instant now);
+
 	/** Heartbeat: capacidade observada, versão do runtime e último contato. */
 	void touch(String id, String runtimeVersion, Double cpuPercent, Integer memoryMb, Integer runningTasks,
 			Instant now);

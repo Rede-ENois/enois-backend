@@ -56,6 +56,13 @@ class NetworkNodePersistenceAdapter implements NetworkNodeRepository {
 	}
 
 	@Override
+	public void updateContract(String id, int cpuCores, int memoryMb, int diskMb, int bandwidthMbps,
+			List<NodeProfile> profiles, Instant now) {
+		repository.updateContract(id, cpuCores, memoryMb, diskMb, bandwidthMbps,
+			NetworkNodeJpaEntity.NodeProfilesCsv.join(profiles), now);
+	}
+
+	@Override
 	public void touch(String id, String runtimeVersion, Double cpuPercent, Integer memoryMb, Integer runningTasks,
 			Instant now) {
 		repository.heartbeat(id, runtimeVersion, cpuPercent, memoryMb, runningTasks, now);

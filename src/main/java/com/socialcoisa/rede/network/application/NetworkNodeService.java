@@ -160,6 +160,62 @@ public class NetworkNodeService {
 		return require(nodeId);
 	}
 
+	/**
+	 * Redefine o que o participante cede. A rede respeita o limite declarado (concorrência é o
+	 * teto de CPU; memória observada contra o declarado tira o nó do balanceamento), e mudar o que
+	 * foi combinado é mudança de permissão: a config assinada carrega os limites, então o contrato
+	 * novo só vale com versão nova — o UPDATE soma 1 em {@code configVersion}.
+	 */
+	@Transactional
+	public NetworkNode capacity(String nodeId, Integer cpuCores, Integer memoryMb, Integer diskMb,
+			Integer bandwidthMbps, String actorId) {
+		if (anyNegative(cpuCores, memoryMb, diskMb, bandwidthMbps)) {
+			throw new ApiException(400, "NODE_CAPACITY_INVALID", "Capacidade nao pode ser negativa.");
+		}
+		NetworkNode node = require(nodeId);
+		requireNotRevoked(node);
+		nodes.updateContract(nodeId,
+			cpuCores != null ? cpuCores : node.declaredCpuCores(),
+			memoryMb != null ? memoryMb : node.declaredMemoryMb(),
+			diskMb != null ? diskMb : node.declaredDiskMb(),
+			bandwidthMbps != null ? bandwidthMbps : node.declaredBandwidthMbps(),
+			node.profiles().stream().toList(), clock.instant());
+		audit.record(actorId, "NODE_CAPACITY_CHANGED", nodeId, "{\"cpuCores\":" + (cpuCores == null ? "null"
+			: cpuCores) + ",\"memoryMb\":" + (memoryMb == null ? "null" : memoryMb) + "}");
+		return require(nodeId);
+	}
+
+	/**
+	 * Redefine os perfis autorizados. Perfis decidem quais tipos de tarefa o nó recebe e o que vai
+	 * na config assinada, então a mudança também compõe versão, e o runtime aplica na próxima
+	 * leitura. Uma lista vazia não é erro: é como se tira tarefa de um nó sem suspendê-lo.
+	 */
+	@Transactional
+	public NetworkNode profiles(String nodeId, List<NodeProfile> next, String actorId) {
+		NetworkNode node = require(nodeId);
+		requireNotRevoked(node);
+		nodes.updateContract(nodeId, node.declaredCpuCores(), node.declaredMemoryMb(), node.declaredDiskMb(),
+			node.declaredBandwidthMbps(), next, clock.instant());
+		audit.record(actorId, "NODE_PROFILES_CHANGED", nodeId,
+			next.stream().map(Enum::name).sorted().collect(java.util.stream.Collectors.joining(",", "[", "]")));
+		return require(nodeId);
+	}
+
+	private static void requireNotRevoked(NetworkNode node) {
+		if (node.status() == NodeStatus.REVOKED) {
+			throw new ApiException(409, "NODE_REVOKED", "No revogado nao muda: cadastre outro.");
+		}
+	}
+
+	private static boolean anyNegative(Integer... values) {
+		for (Integer value : values) {
+			if (value != null && value < 0) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private static void requireOperable(NetworkNode node) {
 		if (node.status() == NodeStatus.REVOKED) {
 			throw new ApiException(403, "NODE_REVOKED", "No revogado.");

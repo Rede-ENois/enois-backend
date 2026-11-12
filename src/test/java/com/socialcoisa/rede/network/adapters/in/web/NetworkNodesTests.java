@@ -439,6 +439,88 @@ class NetworkNodesTests {
 			.andExpect(status().isOk());
 	}
 
+	// ---------------------------------------------------------------- contrato do nó
+
+	/**
+	 * Alterar capacidade e perfis na página por nó: antes destas rotas o que o participante
+	 * declarou no enroll era imutável — reduzir a cedência ou tirar um perfil exigia revogar o nó e
+	 * recadastrá-lo. São mudanças de permissão: a config assinada carrega limites e perfis, então
+	 * cada uma soma 1 em {@code configVersion}, e o runtime aplica na próxima leitura.
+	 */
+	@Test
+	void alterarCapacidadeEPerfisCompoeVersaoENovaConfig() throws Exception {
+		String admin = adminToken();
+		String nodeId = newNode(admin);
+		activate(admin, nodeId);
+		String key = issueKey(admin, nodeId);
+		int versionNaAprovacao = configOf(nodeId, key).get("configVersion").asInt();
+
+		// Reduz a cedência: só o que mudou vai no corpo; o resto se mantém (memória 8192 do enroll).
+		mockMvc
+			.perform(post("/admin/network/nodes/" + nodeId + "/capacity").header("X-Session-Token", admin)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("cpuCores", 2))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.operable").value(true));
+
+		var depoisCapacidade = configOf(nodeId, key);
+		assertThat(depoisCapacidade.get("configVersion").asInt()).isGreaterThan(versionNaAprovacao);
+		assertThat(depoisCapacidade.get("limits").get("cpuCores").asInt()).isEqualTo(2);
+		assertThat(depoisCapacidade.get("limits").get("memoryMb").asInt()).isEqualTo(8192);
+
+		// Tira o perfil: nó fica sem tarefa nenhuma sem precisar de suspensão.
+		mockMvc
+			.perform(post("/admin/network/nodes/" + nodeId + "/profiles").header("X-Session-Token", admin)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("profiles", List.of()))))
+			.andExpect(status().isOk());
+		var semPerfis = configOf(nodeId, key);
+		assertThat(semPerfis.get("configVersion").asInt()).isGreaterThan(depoisCapacidade.get("configVersion").asInt());
+		assertThat(semPerfis.get("allowedTasks").isEmpty()).isTrue();
+
+		// Devolve o perfil com outro nome: a config volta a permitir MEDIA_TRANSCODE.
+		mockMvc
+			.perform(post("/admin/network/nodes/" + nodeId + "/profiles").header("X-Session-Token", admin)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("profiles", List.of("NODE_MEDIA")))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.profiles[0]").value("NODE_MEDIA"));
+		assertThat(configOf(nodeId, key).get("allowedTasks").size()).isEqualTo(2);
+	}
+
+	/** Capacidade negativa recusa; nó revogado é terminal para contrato novo também. */
+	@Test
+	void contratoNovoRecusaNegativoERevogado() throws Exception {
+		String admin = adminToken();
+		String nodeId = newNode(admin);
+
+		mockMvc
+			.perform(post("/admin/network/nodes/" + nodeId + "/capacity").header("X-Session-Token", admin)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("cpuCores", -1))))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("NODE_CAPACITY_INVALID"));
+
+		mockMvc
+			.perform(post("/admin/network/nodes/" + nodeId + "/profiles").header("X-Session-Token", admin)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("profiles", List.of("NAO_EXISTE")))))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("NODE_PROFILES_INVALID"));
+
+		activate(admin, nodeId);
+		mockMvc
+			.perform(post("/admin/network/nodes/" + nodeId + "/status").header("X-Session-Token", admin)
+				.contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"REVOKED\"}"))
+			.andExpect(status().isOk());
+		mockMvc
+			.perform(post("/admin/network/nodes/" + nodeId + "/capacity").header("X-Session-Token", admin)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("cpuCores", 8))))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.code").value("NODE_REVOKED"));
+	}
+
 	private tools.jackson.databind.JsonNode configOf(String nodeId, String key) throws Exception {
 		return objectMapper.readTree(mockMvc
 			.perform(get("/network/nodes/me/config").header("X-Node-Id", nodeId).header("X-Node-Key", key))

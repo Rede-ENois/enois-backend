@@ -198,6 +198,12 @@ class NetworkConfigServiceTests {
 		}
 
 		@Override
+		public void updateContract(String id, int cpuCores, int memoryMb, int diskMb, int bandwidthMbps,
+				List<NodeProfile> profiles, Instant now) {
+			throw new AssertionError("nao usado");
+		}
+
+		@Override
 		public void touch(String id, String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Instant now) {
 			throw new AssertionError("nao usado");

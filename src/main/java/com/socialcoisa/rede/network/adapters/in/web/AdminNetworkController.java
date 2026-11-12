@@ -91,6 +91,13 @@ class AdminNetworkController {
 	record StatusRequest(String status) {
 	}
 
+	/** Campos ausentes mantêm o valor vigente: o painel envia só o que o admin mudou. */
+	record CapacityRequest(Integer cpuCores, Integer memoryMb, Integer diskMb, Integer bandwidthMbps) {
+	}
+
+	record ProfilesRequest(List<String> profiles) {
+	}
+
 	@GetMapping
 	List<NodeView> list(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(defaultValue = "200") int limit) {
@@ -174,6 +181,27 @@ class AdminNetworkController {
 		return view(nodes.transitions(id, next, admin.id().value()));
 	}
 
+	/** Redefine o que o participante cede (campo ausente = mantém). Mudança de permissão: compõe versão. */
+	@PostMapping("/{id}/capacity")
+	NodeView capacity(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String id, @RequestBody(required = false) CapacityRequest request) {
+		CurrentUser admin = admin(sessionToken);
+		if (request == null) {
+			throw new ApiException(400, "NODE_CAPACITY_REQUIRED", "Informe a capacidade.");
+		}
+		return view(nodes.capacity(id, request.cpuCores(), request.memoryMb(), request.diskMb(),
+			request.bandwidthMbps(), admin.id().value()));
+	}
+
+	/** Redefine os perfis autorizados (lista vazia = nó sem tarefa, sem precisar suspendê-lo). */
+	@PostMapping("/{id}/profiles")
+	NodeView profiles(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String id, @RequestBody(required = false) ProfilesRequest request) {
+		CurrentUser admin = admin(sessionToken);
+		List<NodeProfile> next = parseProfilesOptional(request == null ? null : request.profiles());
+		return view(nodes.profiles(id, next, admin.id().value()));
+	}
+
 	/** Um nó com a chave vigente dele: a tela precisa dos dois para desenhar a linha. */
 	private NodeView view(NetworkNode node) {
 		return NodeView.of(node, keys.activeKeyFor(node.id()), Instant.now());
@@ -189,10 +217,19 @@ class AdminNetworkController {
 		if (raw == null || raw.isEmpty()) {
 			throw new ApiException(400, "NODE_PROFILES_REQUIRED", "Escolha ao menos um perfil.");
 		}
+		return parseProfilesOptional(raw);
+	}
+
+	/** Aqui lista vazia é legítima (tirar tarefa do nó); só nomes desconhecidos recusam. */
+	private static List<NodeProfile> parseProfilesOptional(List<String> raw) {
+		if (raw == null) {
+			return List.of();
+		}
 		try {
 			return raw.stream()
 				.filter(item -> item != null && !item.isBlank())
 				.map(item -> NodeProfile.valueOf(item.trim().toUpperCase(java.util.Locale.ROOT)))
+				.distinct()
 				.toList();
 		}
 		catch (IllegalArgumentException unknown) {
