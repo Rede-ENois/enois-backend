@@ -364,6 +364,81 @@ class NetworkNodesTests {
 			.andExpect(jsonPath("$.allowedTasks").isEmpty());
 	}
 
+	// ---------------------------------------------------------------- dashboard do painel
+
+	/**
+	 * O topo do painel "Énóis Network" em números: antes desta rota o admin lia a lista de nós e
+	 * contava ativos, degradados e quarentena de cabeça. O cenário planta os cinco estados que o
+	 * painel precisa distinguir e afixa cada número: ACTIVE vivo, em quarentena, saturado,
+	 * suspenso (decisão administrativa conta como indisponível, não como degradado) e pendente
+	 * (nunca operou — não é indisponível).
+	 */
+	@Test
+	void dashboardAgregaARedeEmNumeros() throws Exception {
+		String admin = adminToken();
+
+		String sano = newNode(admin);
+		activate(admin, sano);
+		String keySano = issueKey(admin, sano);
+		heartbeat(admin, sano, keySano, 20.0, 1024, 1);
+
+		String emQuarentena = newNode(admin);
+		activate(admin, emQuarentena);
+		String keyQuar = issueKey(admin, emQuarentena);
+		heartbeat(admin, emQuarentena, keyQuar, 95.0, 8192, 4);
+		jdbc.update("update network_nodes set quarantined_until = timestampadd(second, 600, current_timestamp), "
+			+ "quarantine_reason = 'testes' where id = ?", emQuarentena);
+
+		String saturado = newNode(admin);
+		activate(admin, saturado);
+		String keySat = issueKey(admin, saturado);
+		heartbeat(admin, saturado, keySat, 95.0, 2048, 2);
+
+		String suspenso = newNode(admin);
+		activate(admin, suspenso);
+		suspend(admin, suspenso);
+
+		String pendente = newNode(admin);
+
+		var result = mockMvc.perform(get("/admin/network/nodes/dashboard").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andReturn();
+		var body = objectMapper.readTree(result.getResponse().getContentAsString());
+
+		assertThat(body.get("total").asInt()).isEqualTo(5);
+		assertThat(body.get("active").asInt()).isEqualTo(3);
+		assertThat(body.get("quarantined").asInt()).isEqualTo(1);
+		// Suspenso é indisponível (decisão administrativa); pendente não — nunca chegou a operar.
+		assertThat(body.get("unavailable").asInt()).isEqualTo(1);
+		// Um degradado: o em quarentena. Saturado não é degradado (é carga momentânea, e a mesma
+		// definição da listagem — quarentena, lento ou falhando) — o que ele perde é a vaga, abaixo.
+		assertThat(body.get("degraded").asInt()).isEqualTo(1);
+		assertThat(body.get("alive").asInt()).isEqualTo(3);
+		// Saturado e em quarentena não prometem vaga; só o sano (limite 4 − 1 rodando) conta.
+		assertThat(body.get("freeSlots").asInt()).isEqualTo(3);
+		// Declarado soma os cinco nós, inclusive pendente e suspenso: é o que foi cedido.
+		assertThat(body.get("declaredCpuCores").asInt()).isEqualTo(20);
+		assertThat(body.get("declaredMemoryMb").asInt()).isEqualTo(40960);
+		// Média de CPU sobre os três reportes (20, 95, 95), com a contagem de amostras ao lado.
+		assertThat(body.get("cpuSamples").asInt()).isEqualTo(3);
+		assertThat(body.get("avgCpuPercent").asDouble()).isEqualTo(70.0);
+		// Nó sem heartbeat não inventa versão: só os três que reportaram contam.
+		assertThat(body.get("runtimeVersions").size()).isEqualTo(1);
+		assertThat(body.get("runtimeVersions").get("0.1.0").asInt()).isEqualTo(3);
+	}
+
+	/** Heartbeat com credencial de nó real, como o runtime manda. */
+	private void heartbeat(String admin, String nodeId, String key, double cpu, int memoryMb, int tasks)
+			throws Exception {
+		activate(admin, nodeId);
+		mockMvc
+			.perform(post("/network/nodes/heartbeat").header("X-Node-Id", nodeId).header("X-Node-Key", key)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0", "observed",
+					Map.of("cpuPercent", cpu, "memoryMb", memoryMb, "runningTasks", tasks)))))
+			.andExpect(status().isOk());
+	}
+
 	private tools.jackson.databind.JsonNode configOf(String nodeId, String key) throws Exception {
 		return objectMapper.readTree(mockMvc
 			.perform(get("/network/nodes/me/config").header("X-Node-Id", nodeId).header("X-Node-Key", key))
@@ -386,6 +461,8 @@ class NetworkNodesTests {
 		var member = auth.authenticate("net_member");
 
 		mockMvc.perform(get("/admin/network/nodes").header("X-Session-Token", member.token()))
+			.andExpect(status().isForbidden());
+		mockMvc.perform(get("/admin/network/nodes/dashboard").header("X-Session-Token", member.token()))
 			.andExpect(status().isForbidden());
 		mockMvc
 			.perform(post("/admin/network/nodes/provision-token").header("X-Session-Token", member.token())

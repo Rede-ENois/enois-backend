@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.socialcoisa.rede.network.application.NetworkDashboardService;
 import com.socialcoisa.rede.network.application.NetworkNodeService;
 import com.socialcoisa.rede.network.application.NodeKeyService;
 import com.socialcoisa.rede.network.application.port.out.NodeKeyRepository;
@@ -39,13 +40,15 @@ class AdminNetworkController {
 
 	private final NetworkNodeService nodes;
 	private final NodeKeyService keys;
+	private final NetworkDashboardService dashboard;
 	private final CurrentUserResolver currentUserResolver;
 	private final AdminGuard adminGuard;
 
-	AdminNetworkController(NetworkNodeService nodes, NodeKeyService keys, CurrentUserResolver currentUserResolver,
-			AdminGuard adminGuard) {
+	AdminNetworkController(NetworkNodeService nodes, NodeKeyService keys, NetworkDashboardService dashboard,
+			CurrentUserResolver currentUserResolver, AdminGuard adminGuard) {
 		this.nodes = nodes;
 		this.keys = keys;
+		this.dashboard = dashboard;
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
 	}
@@ -98,6 +101,18 @@ class AdminNetworkController {
 			found.stream().map(NetworkNode::id).toList());
 		Instant now = Instant.now();
 		return found.stream().map(node -> NodeView.of(node, activeKeys.get(node.id()), now)).toList();
+	}
+
+	/**
+	 * Agregados do topo do painel: a rede em números, calculados sobre a mesma lista que {@code GET
+	 * /} devolve linha a linha. A tela não precisa mais contar de cabeça quantos nós estão ativos,
+	 * degradados ou em quarentena, nem somar capacidade e médias de CPU/memória.
+	 */
+	@GetMapping("/dashboard")
+	NetworkDashboardService.Dashboard dashboard(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		admin(sessionToken);
+		return dashboard.dashboard();
 	}
 
 	@GetMapping("/{id}")
