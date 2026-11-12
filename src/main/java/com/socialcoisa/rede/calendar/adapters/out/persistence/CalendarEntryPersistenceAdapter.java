@@ -7,7 +7,6 @@ import java.util.Optional;
 import org.springframework.stereotype.Repository;
 
 import com.socialcoisa.rede.calendar.application.port.out.CalendarEntryRepository;
-import com.socialcoisa.rede.calendar.application.port.out.CalendarParticipantRepository;
 import com.socialcoisa.rede.calendar.domain.CalendarEntry;
 import com.socialcoisa.rede.calendar.domain.CalendarEntrySource;
 import com.socialcoisa.rede.calendar.domain.CalendarScope;
@@ -16,12 +15,9 @@ import com.socialcoisa.rede.calendar.domain.CalendarScope;
 class CalendarEntryPersistenceAdapter implements CalendarEntryRepository {
 
 	private final SpringDataCalendarEntryJpaRepository springData;
-	private final CalendarParticipantRepository participants;
 
-	CalendarEntryPersistenceAdapter(SpringDataCalendarEntryJpaRepository springData,
-			CalendarParticipantRepository participants) {
+	CalendarEntryPersistenceAdapter(SpringDataCalendarEntryJpaRepository springData) {
 		this.springData = springData;
-		this.participants = participants;
 	}
 
 	@Override
@@ -47,33 +43,23 @@ class CalendarEntryPersistenceAdapter implements CalendarEntryRepository {
 			.toList();
 	}
 
-	private List<CalendarEntry> findWindow(List<String> ids, CalendarScope scope, Instant windowStart,
+	@Override
+	public List<CalendarEntry> findInvitedInWindow(String userId, CalendarScope scope, Instant windowStart,
 			Instant windowEnd) {
 		if (!windowEnd.isAfter(windowStart)) {
 			return List.of();
 		}
 		String scopeName = scope == null ? null : scope.name();
-		return springData.findInWindowByIds(ids, scopeName, windowStart, windowEnd).stream()
+		return springData.findInWindowByParticipant(userId, scopeName, windowStart, windowEnd).stream()
 			.map(CalendarEntryJpaEntity::toDomain)
 			.toList();
 	}
 
 	@Override
-	public List<CalendarEntry> findInvitedInWindow(String userId, CalendarScope scope, Instant windowStart,
-			Instant windowEnd) {
-		List<String> ids = participants.findEntryIdsByUser(userId);
-		if (ids.isEmpty()) {
-			return List.of();
-		}
-		return findWindow(ids, scope, windowStart, windowEnd);
-	}
-
-	@Override
-	public List<CalendarEntry> findAllByIds(java.util.Collection<String> ids) {
-		if (ids.isEmpty()) {
-			return List.of();
-		}
-		return springData.findAllById(ids).stream().map(CalendarEntryJpaEntity::toDomain).toList();
+	public List<CalendarEntry> findPendingInvitations(String userId) {
+		return springData.findPendingInvitations(userId).stream()
+			.map(CalendarEntryJpaEntity::toDomain)
+			.toList();
 	}
 
 	@Override

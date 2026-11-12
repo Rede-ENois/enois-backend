@@ -39,7 +39,7 @@ public class CalendarReminderService {
 	private static final Logger LOG = LoggerFactory.getLogger(CalendarReminderService.class);
 
 	/** Quantos vencidos o worker envia por ciclo: um lote pequeno evita prender o laço num pico. */
-	static final int BATCH = 20;
+	public static final int BATCH = 20;
 
 	/**
 	 * Autor das notificações automáticas. `notifications.actor_id` é `not null`, e um lembrete não

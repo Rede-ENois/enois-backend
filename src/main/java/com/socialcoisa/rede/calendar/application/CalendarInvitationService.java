@@ -1,10 +1,7 @@
 package com.socialcoisa.rede.calendar.application;
 
 import java.time.Clock;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.stereotype.Service;
@@ -71,26 +68,12 @@ public class CalendarInvitationService {
 
 	/**
 	 * Convites que a pessoa ainda não respondeu, de todas as agendas, do mais antigo ao mais novo.
-	 * Entrada cancelada fica de fora: ela existe na linha, mas não é mais convite a responder.
+	 * Entrada cancelada fica de fora: ela existe na linha, mas não é mais convite a responder. O
+	 * banco cruza convite e compromisso numa consulta só; quem respondeu (ou o compromisso que
+	 * cancelou) não volta, então não há segundo passo filtrando em memória.
 	 */
 	public List<CalendarEntry> pendingInvitations(String userId) {
-		List<CalendarParticipant> pending = participants.findPendingByUser(userId);
-		if (pending.isEmpty()) {
-			return List.of();
-		}
-		List<String> ids = pending.stream().map(CalendarParticipant::entryId).toList();
-		Map<String, CalendarEntry> byId = new HashMap<>();
-		for (CalendarEntry entry : entries.findAllByIds(ids)) {
-			byId.put(entry.id(), entry);
-		}
-		List<CalendarEntry> open = new ArrayList<>();
-		for (String id : ids) {
-			CalendarEntry entry = byId.get(id);
-			if (entry != null && entry.active()) {
-				open.add(entry);
-			}
-		}
-		return open;
+		return entries.findPendingInvitations(userId);
 	}
 
 	/**
