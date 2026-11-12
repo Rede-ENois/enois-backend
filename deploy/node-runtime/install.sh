@@ -61,9 +61,14 @@ if [[ "$MODE" == "--backup" ]]; then
 
   node_id=$(sed -n 's/.*"nodeId":"\([^"]*\)".*/\1/p' "$NODE_HOME/node.json")
   out="enois-node-${node_id:-identidade}-$(date +%Y%m%d-%H%M%S).tar.gz"
-  # O pino vai junto: restaurar sem ele deixa o runtime sem como conferir a config.
+  # O pino vai junto quando existir: restaurar sem ele deixa o runtime sem como
+  # conferir a config (tar reclama de arquivo ausente e sai != 0 com set -e).
   umask 077
-  tar -C "$NODE_HOME" -czf "$out" node.json api-key pinning-key
+  local_files=(node.json api-key)
+  if [[ -s "$NODE_HOME/pinning-key" ]]; then
+    local_files+=(pinning-key)
+  fi
+  tar -C "$NODE_HOME" -czf "$out" "${local_files[@]}"
   umask 022
   info "Backup da identidade em ./$out (permissão 600)."
   info "Guarde com o mesmo cuidado da chave: quem tem o backup opera como o nó."
@@ -166,6 +171,26 @@ hb=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
   "$CONTROL_PLANE/network/nodes/heartbeat") || die "heartbeat falhou — diagnostique com ./node-doctor.sh"
 status=$(printf '%s' "$hb" | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')
 info "Estado do nó no Control Plane: ${status:-desconhecido}"
+
+# Pino da config assinada quando o enroll não conseguiu gravá-lo (o nó ainda não
+# tinha chave naquela hora). Confiar na chave pública é legítimo SÓ aqui: a credencial
+# do nó acabou de ser provada pelo heartbeat (TOFU). Depois disso o pino nunca muda
+# sozinho — trocar a chave do Control Plane é decisão manual do participante.
+if [[ ! -s "$NODE_HOME/pinning-key" ]]; then
+  info "Sem pino da config assinada — pinando agora (primeiro start com credencial válida)..."
+  pin=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+    -H "X-Node-Id: $node_id" -H "X-Node-Key: $node_key" \
+    "$CONTROL_PLANE/network/nodes/me/config" 2>/dev/null \
+    | sed -n 's/.*"publicKey":"\([^"]*\)".*/\1/p') || pin=''
+  if [[ -n "$pin" ]]; then
+    umask 177
+    printf '%s' "$pin" > "$NODE_HOME/pinning-key"
+    umask 022
+    info "Chave pública do Control Plane pinada; o executor recusará configs com outra chave."
+  else
+    info "Aviso: config sem publicKey (assinatura ainda não configurada?) — o executor recusará tarefas até existir pino; rode --start de novo depois."
+  fi
+fi
 
 for tool in docker; do command -v "$tool" >/dev/null 2>&1 || die "Comando ausente: $tool"; done
 export CONTROL_PLANE_URL

@@ -42,24 +42,45 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local name="$1" haystack="$2" needle="$3"
+  if /bin/grep -Fq -- "$needle" <<<"$haystack"; then
+    printf '[FAIL] %s — <%s> não deveria estar:\n%s\n' "$name" "$needle" "$haystack" >&2
+    exit 1
+  fi
+  PASS=$((PASS + 1)); printf '[PASS] %s\n' "$name"
+}
+
 # ---------------------------------------------------------------- install.sh
 
 # curl simulado: primeiro call é o enroll, devolve nodeId; heartbeat devolve ACTIVE.
 ENROLL_BODY='{"nodeId":"nd_teste123","status":"PENDING_APPROVAL","contract":"1","message":"ok"}'
 HB_BODY='{"nodeId":"nd_teste123","status":"ACTIVE","profiles":["NODE_WORKER"],"serverTime":"now","mode":"NORMAL","acceptTasks":true}'
 CONFIG_PIN='{"nodeId":"nd_teste123","operable":false,"signed":true,"signature":"x","algorithm":"Ed25519","publicKey":"CP-PUBLIC-KEY-PINNED","allowedTasks":[]}'
-cat > "$TMP/curl" <<MOCK
+CONFIG_NOKEY='{"nodeId":"nd_teste123","operable":false,"signed":false,"signature":null,"publicKey":null,"allowedTasks":[]}'
+CONFIG_ROTATED='{"nodeId":"nd_teste123","operable":true,"signed":true,"signature":"x","algorithm":"Ed25519","publicKey":"CHAVE-ROTACIONADA-DEPOIS","allowedTasks":[]}'
+# curl dirigido por cenário: CENARIO escolhe o que /me/config devolve.
+make_curl() {
+  cat > "$TMP/curl" <<MOCK
 #!/bin/bash
 printf '%s\n' "\$*" >> "$TMP/curl-calls"
 url="\${@: -1}"
 case "\$url" in
   */network/nodes/enroll) printf '%s' '$ENROLL_BODY' ;;
   */network/nodes/heartbeat) printf '%s' '$HB_BODY' ;;
-  */network/nodes/me/config) printf '%s' '$CONFIG_PIN' ;;
+  */network/nodes/me/config)
+    case '${CENARIO:-PIN}' in
+      PIN) printf '%s' '$CONFIG_PIN' ;;
+      NOKEY) printf '%s' '$CONFIG_NOKEY' ;;
+      ROTATED) printf '%s' '$CONFIG_ROTATED' ;;
+    esac ;;
+  */health) printf '%s' '{"status":"UP"}' ;;
   *) exit 22 ;;
 esac
 MOCK
-chmod +x "$TMP/curl"
+  chmod +x "$TMP/curl"
+}
+make_curl
 
 NH="$TMP/node-home"
 
@@ -95,6 +116,38 @@ make_command curl 'exit 7'
 out=$(NODE_HOME="$NH" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" --start --control-plane https://cp.test 2>&1) &&
   { printf '[FAIL] --start passou sem heartbeat:\n%s\n' "$out" >&2; exit 1; }
 assert_contains 'start falha sem heartbeat' "$out" 'heartbeat falhou'
+
+# ------------------------------------------------- TOFU do pino no --start
+# Caminho padrão: enroll sem pino (nó ainda sem chave, config sem publicKey) →
+# o primeiro --start pina a chave pública DEPOIS de provar a credencial no heartbeat.
+rm -rf "$TMP/node-home-tofu"; mkdir -p "$TMP/node-home-tofu"; chmod 700 "$TMP/node-home-tofu"
+printf '%s\n' "$ENROLL_BODY" > "$TMP/node-home-tofu/node.json"; chmod 600 "$TMP/node-home-tofu/node.json"
+printf 'enk_tofu0123456789ab\n' > "$TMP/node-home-tofu/api-key"; chmod 600 "$TMP/node-home-tofu/api-key"
+make_curl
+make_command docker 'case "$*" in *"ps --format"*) exit 1 ;; esac; exit 0'
+out=$(NODE_HOME="$TMP/node-home-tofu" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" --start --control-plane https://cp.test 2>&1)
+assert_contains 'start sem pino pina a chave pública (TOFU)' "$out" 'pinada; o executor recusará configs com outra chave'
+assert_eq 'pino gravado com 600' '600' "$(stat -c '%a' "$TMP/node-home-tofu/pinning-key")"
+assert_eq 'pino contém a publicKey da config' 'CP-PUBLIC-KEY-PINNED' "$(cat "$TMP/node-home-tofu/pinning-key")"
+
+# Segundo --start NÃO re-pina: o pino sobrevive, mesmo que o CP devolva outra chave.
+: > "$TMP/curl-calls"
+CENARIO=ROTATED make_curl
+out=$(NODE_HOME="$TMP/node-home-tofu" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" --start --control-plane https://cp.test 2>&1)
+assert_not_contains 'start com pino existente não re-pina' "$out" 'pinada'
+assert_eq 'pino original sobrevive à rotação do CP' 'CP-PUBLIC-KEY-PINNED' "$(cat "$TMP/node-home-tofu/pinning-key")"
+assert_contains 'segundo start ainda autentica' "$out" 'Estado do nó no Control Plane: ACTIVE'
+
+# --start quando nem o enroll nem a config têm publicKey: aviso claro, sem pino gravado.
+rm -rf "$TMP/node-home-nokey"; mkdir -p "$TMP/node-home-nokey"; chmod 700 "$TMP/node-home-nokey"
+printf '%s\n' "$ENROLL_BODY" > "$TMP/node-home-nokey/node.json"; chmod 600 "$TMP/node-home-nokey/node.json"
+printf 'enk_tofu0123456789cd\n' > "$TMP/node-home-nokey/api-key"; chmod 600 "$TMP/node-home-nokey/api-key"
+CENARIO=NOKEY make_curl
+out=$(NODE_HOME="$TMP/node-home-nokey" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" --start --control-plane https://cp.test 2>&1)
+assert_contains 'sem publicKey na config o start avisa e segue' "$out" 'config sem publicKey'
+[[ -e "$TMP/node-home-nokey/pinning-key" ]] && {
+  printf '[FAIL] pino gravado vazio ou lixo:\n' >&2; exit 1; }
+PASS=$((PASS + 1)); printf '[PASS] %s\n' 'sem publicKey na config nenhum pino é gravado'
 
 # --start sem credencial prévia falha antes de qualquer rede.
 rm -rf "$TMP/node-home-vazio"; mkdir -p "$TMP/node-home-vazio"
@@ -159,6 +212,13 @@ exit_code="$doctor_rc"
 printf '%s\n' "$out" > "$TMP/doctor-out"
 assert_eq 'doctor sem node.json sai 1' '1' "$exit_code"
 assert_contains 'doctor explica o que falta' "$out" 'install.sh'
+
+# Doctor aceita --control-plane documentado e checa conectividade contra a URL.
+printf '%s\n' "$ENROLL_BODY" > "$NH2/node.json"
+make_curl
+out=$(NODE_HOME="$NH2" PATH="$TMP" /bin/bash "$NODE_DIR/node-doctor.sh" --control-plane https://cp.test 2>&1) && doctor_rc=0 || doctor_rc=$?
+assert_eq 'doctor com --control-plane sai 0' '0' "$doctor_rc"
+assert_contains 'doctor checa conectividade da URL passada' "$out" 'Control Plane acessível'
 
 # Doctor nunca imprime a chave em claro.
 /bin/grep -Fq 'enk_abcdef0123456789' <<<"$out" && {

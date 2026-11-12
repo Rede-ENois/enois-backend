@@ -84,11 +84,11 @@ make_command() {
 make_command sleep 'exit 0'  # sem espera: o teste controla quantos ciclos rodam
 
 run_one_cycle() {
-  local scenario_next="${1:-}"
+  local scenario_next="${1:-}" home="${2:-$NH}"
   : > "$TMP/curl-calls"
   TASK_NEXT_BODY="$scenario_next" make_curl
   # Um ciclo só: carrega o script até antes do loop infinito e chama cycle().
-  CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SECONDS=1 \
+  CONTROL_PLANE_URL=https://cp.test NODE_HOME="$home" PATH="$TMP" NODE_POLL_SECONDS=1 \
     /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true
 }
 
@@ -172,5 +172,15 @@ assert_not_contains 'sem config confiável não há poll' "$(cat "$TMP/curl-call
 # ------------------------------------------------- cenário 6: credencial nunca em log
 out=$(run_one_cycle "$TASK_ASSIGNED")
 assert_not_contains 'executor não imprime a API key' "$out" 'enk_echoteste0123'
+
+# ------------------------------------------------- cenário 7: sem pino, sem config confiável
+# Nó enrolado antes do pinning existir (fluxo antigo): a recusa é explícita e não há poll.
+rm -rf "$TMP/node-home-sempino"; mkdir -p "$TMP/node-home-sempino"; chmod 700 "$TMP/node-home-sempino"
+printf '%s\n' '{"nodeId":"nd_exec1","status":"ACTIVE"}' > "$TMP/node-home-sempino/node.json"
+printf 'enk_echoteste0123\n' > "$TMP/node-home-sempino/api-key"; chmod 600 "$TMP/node-home-sempino/api-key"
+: > "$TMP/curl-calls"
+out=$(run_one_cycle '' "$TMP/node-home-sempino")
+assert_contains 'sem pino a config é recusada com instrução' "$out" 'sem pinning-key'
+assert_not_contains 'sem pino não há poll' "$(cat "$TMP/curl-calls")" '/network/tasks/next'
 
 printf '\nTodos os cenários passaram (%d asserções).\n' "$PASS"

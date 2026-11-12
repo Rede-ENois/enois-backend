@@ -29,6 +29,22 @@ participante precise conhecer a arquitetura interna. Está em
 O `--start` valida a credencial contra o Control Plane **antes** de subir
 qualquer container: subir um nó com chave revogada só criaria um loop de erro.
 
+### 1.1 O pino da config assinada (TOFU)
+
+A chave pública que assina a config é pinada em `$NODE_HOME/pinning-key` e o
+runtime recusa qualquer config assinada com outra chave — inclusive depois de uma
+rotação silenciosa no Control Plane. O pino é gravado **uma única vez**:
+
+- **no enroll**, quando a config já traz `publicKey` (nó com chave de configuração
+  ativa do lado do Control Plane);
+- **no primeiro `--start`**, quando o enroll não conseguiu (nó recém-criado ainda
+  sem chave): é o momento TOFU — a credencial do nó acabou de ser provada pelo
+  heartbeat, que é a única circunstância em que confiar na chave devolvida é
+  legítimo;
+- **nunca depois**: um `--start` com pino existente não re-pina, mesmo que o
+  Control Plane passe a devolver outra chave. Trocar a chave é decisão consciente
+  do participante (remover o arquivo e pinar de novo), não um efeito colateral.
+
 ## 2. O que o instalador materializa das regras da rede
 
 - **Token de uso único.** Rodar o enroll de novo com o mesmo token falha com
@@ -55,7 +71,9 @@ NODE_HOME=/var/lib/enois-node ./node-doctor.sh --control-plane https://<control-
 ```
 
 Checa dependências, identidade registrada, permissão da chave (600) e do
-diretório (700), estado do container e conectividade com o Control Plane.
+diretório (700), **presença e permissão do pino da config** (sem pino o runtime
+recusa toda config — o doctor aponta o `--start` que resolve), estado do
+container e conectividade com o Control Plane.
 Sai 0 quando não há FAIL; WARN não impede a operação. Nunca imprime a API key.
 
 ## 3.1 O loop de execução (`node-runtime.sh`)
@@ -67,7 +85,8 @@ O container roda o loop do nó, não o jar (o jar é o Control Plane). Cada cicl
 2. **drenar é não pedir**: `acceptTasks:false` (DEGRADED/EMERGENCY) encerra o ciclo
    sem consultar a fila;
 3. **config assinada**: recusa config sem assinatura (padrão do runtime) e confere
-   `publicKey` contra o pino gravado no enroll (`$NODE_HOME/pinning-key`);
+   `publicKey` contra o pino gravado no enroll ou no primeiro `--start`
+   (`$NODE_HOME/pinning-key`); sem pino, recusa toda config;
 4. **poll** (`GET /network/tasks/next`) — uma tarefa por ciclo;
 5. **executa só o que a config assinada autoriza** (`allowedTasks`): autorizada vira
    `DONE` com output; fora da lista vira `FAILED` com `TASK_NOT_ALLOWED` — o
@@ -85,7 +104,7 @@ sandboxes próprios (02-modelo-de-ameacas.md). O script é montado no container
 |---|---|---|
 | `$NODE_HOME/node.json` | resposta do enroll (`nodeId`, estado) | 600 |
 | `$NODE_HOME/api-key` | a API key do nó em claro — único lugar | 600 |
-| `$NODE_HOME/pinning-key` | a chave pública do Control Plane, pinada no enroll | 600 |
+| `$NODE_HOME/pinning-key` | a chave pública do Control Plane, pinada no enroll ou no primeiro `--start` | 600 |
 | volume `enois-node` | workspace do runtime no container | — |
 
 `NODE_HOME` padrão é `/var/lib/enois-node`; sobrescreva por ambiente. O par

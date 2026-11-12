@@ -22,7 +22,7 @@ RUNTIME_VERSION="${RUNTIME_VERSION:-0.1.0}"
 
 [[ -s "$NODE_HOME/node.json" ]] || { printf '[executor] sem node.json\n' >&2; exit 1; }
 [[ -s "$NODE_HOME/api-key" ]] || { printf '[executor] sem api-key\n' >&2; exit 1; }
-[[ -s "$NODE_HOME/pinning-key" ]] || { printf '[executor] sem pinning-key — config não será verificável\n' >&2; }
+[[ -s "$NODE_HOME/pinning-key" ]] || printf '[executor] aviso: sem pinning-key — toda config será recusada até o pino existir\n' >&2
 
 node_id=$(sed -n 's/.*"nodeId":"\([^"]*\)".*/\1/p' "$NODE_HOME/node.json")
 node_key=$(head -n 1 "$NODE_HOME/api-key")
@@ -36,6 +36,10 @@ json_field() {
 # allowedTasks da config assinada — a ÚNICA fonte de permissão de execução.
 allowed_tasks() {
   local config
+  if [[ ! -s "$NODE_HOME/pinning-key" ]]; then
+    printf '[executor] sem pinning-key — config não verificável; rode --start para pinar a chave\n' >&2
+    return 1
+  fi
   config=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
     "${auth[@]}" "$CONTROL_PLANE/network/nodes/me/config") || return 1
   if grep -q '"signed":true' <<<"$config"; then

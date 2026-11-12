@@ -7,7 +7,15 @@
 set -u
 
 NODE_HOME="${NODE_HOME:-/var/lib/enois-node}"
-CONTROL_PLANE="${ENOCIS_CONTROL_PLANE:-}"
+CONTROL_PLANE="${ENOIS_CONTROL_PLANE:-}"
+
+while (($#)); do
+  case "$1" in
+    --control-plane) CONTROL_PLANE="$2"; shift 2 ;;
+    -h|--help) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) printf 'Erro: opção desconhecida: %s\n' "$1" >&2; exit 2 ;;
+  esac
+done
 
 PASS=0
 WARN=0
@@ -55,7 +63,19 @@ else
   warn "Sem API key ainda — o admin precisa gerá-la; rode install.sh --set-key depois"
 fi
 
-# 4. Permissões do diretório de estado
+# 4. Pino da config assinada
+if [[ -s "$NODE_HOME/pinning-key" ]]; then
+  perms=$(stat -c '%a' "$NODE_HOME/pinning-key" 2>/dev/null || stat -f '%Lp' "$NODE_HOME/pinning-key" 2>/dev/null)
+  if [[ "$perms" == "600" ]]; then
+    pass "Pino da config assinada presente com permissão 600"
+  else
+    warn "Pino com permissão $perms — rode: chmod 600 $NODE_HOME/pinning-key"
+  fi
+else
+  warn "Sem pino da config assinada — o executor recusa toda config; rode install.sh --start para pinar"
+fi
+
+# 5. Permissões do diretório de estado
 dir_perms=$(stat -c '%a' "$NODE_HOME" 2>/dev/null || echo '?')
 if [[ "$dir_perms" == "700" ]]; then
   pass "NODE_HOME com permissão 700"
@@ -63,7 +83,7 @@ else
   warn "NODE_HOME com permissão $dir_perms — recomendação: chmod 700 $NODE_HOME"
 fi
 
-# 5. Container
+# 6. Container
 if command -v docker >/dev/null 2>&1; then
   if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'enois-node'; then
     pass "Container enois-node em execução"
@@ -72,7 +92,7 @@ if command -v docker >/dev/null 2>&1; then
   fi
 fi
 
-# 6. Conectividade com o Control Plane
+# 7. Conectividade com o Control Plane
 if [[ -n "$CONTROL_PLANE" ]] && command -v curl >/dev/null 2>&1; then
   if curl --fail --silent --output /dev/null --connect-timeout 5 --max-time 10 "$CONTROL_PLANE/health" 2>/dev/null; then
     pass "Control Plane acessível em $CONTROL_PLANE"
