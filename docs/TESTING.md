@@ -81,6 +81,9 @@ um cenário seguinte. O worker real e as regras de produção permanecem intacto
 
 ## Padrões de Teste
 
+O [fluxo de marketplace com cotação explícita](TESTING_MARKETPLACE_COTACAO.md) descreve os valores,
+as fronteiras de commit HTTP e o isolamento das fixtures financeiras.
+
 ### TestAuthHelper
 
 ```java
