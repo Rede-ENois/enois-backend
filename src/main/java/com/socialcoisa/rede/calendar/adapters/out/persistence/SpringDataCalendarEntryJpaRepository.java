@@ -1,7 +1,6 @@
 package com.socialcoisa.rede.calendar.adapters.out.persistence;
 
 import java.time.Instant;
-import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -24,15 +23,16 @@ interface SpringDataCalendarEntryJpaRepository extends JpaRepository<CalendarEnt
 			@Param("windowStart") Instant windowStart, @Param("windowEnd") Instant windowEnd);
 
 	/**
-	 * Mesma janela meia-aberta, mas por conjunto de ids: são os compromissos que outra pessoa
-	 * organizou e convidou quem está lendo. Lista vazia nunca chega aqui (o adaptador devolve nada
-	 * antes), porque `in ()` não é SQL válido em toda versão.
+	 * Os compromissos em que a pessoa foi convidada, direto na tabela de participantes: o banco
+	 * cruza convite com compromisso e já aplica a janela, sem primeiro carregar toda a lista de
+	 * convites da pessoa para então mandar os ids de volta num `in`.
 	 */
-	@Query("select e from CalendarEntryJpaEntity e where e.id in :ids "
-		+ "and (:scope is null or e.scope = :scope) "
+	@Query("select e from CalendarEntryJpaEntity e join CalendarParticipantJpaEntity p "
+		+ "on p.entryId = e.id and p.userId = :userId "
+		+ "where (:scope is null or e.scope = :scope) "
 		+ "and e.startsAt < :windowEnd and e.endsAt > :windowStart "
 		+ "order by e.startsAt asc")
-	List<CalendarEntryJpaEntity> findInWindowByIds(@Param("ids") Collection<String> ids,
+	List<CalendarEntryJpaEntity> findInWindowByParticipant(@Param("userId") String userId,
 			@Param("scope") String scope, @Param("windowStart") Instant windowStart,
 			@Param("windowEnd") Instant windowEnd);
 

@@ -12,9 +12,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
 import com.socialcoisa.rede.calendar.application.port.out.CalendarEntryRepository;
+import com.socialcoisa.rede.calendar.application.port.out.CalendarParticipantRepository;
 import com.socialcoisa.rede.calendar.domain.CalendarEntry;
 import com.socialcoisa.rede.calendar.domain.CalendarEntrySource;
 import com.socialcoisa.rede.calendar.domain.CalendarKind;
+import com.socialcoisa.rede.calendar.domain.CalendarParticipant;
 import com.socialcoisa.rede.calendar.domain.CalendarScope;
 
 /**
@@ -33,6 +35,9 @@ class CalendarEntryPersistenceTests {
 
 	@Autowired
 	private CalendarEntryRepository repository;
+
+	@Autowired
+	private CalendarParticipantRepository participants;
 
 	@Test
 	void storesAndReadsBackInstantZoneAndSource() {
@@ -124,6 +129,44 @@ class CalendarEntryPersistenceTests {
 
 		assertThat(repository.findInWindow("cal_owner_outro_" + UUID.randomUUID(), null, NOW,
 				NOW.plus(Duration.ofDays(1)))).isEmpty();
+	}
+
+	/**
+	 * A agenda de quem foi convidado sai do cruzamento entre convite e compromisso, não de uma
+	 * lista de ids carregada antes. O que este teste tranca: o convite traz o compromisso do dono
+	 * para a janela de quem foi convidado, respeita a janela meia-aberta e o filtro de agenda, e
+	 * não traz compromisso de quem não convidou a pessoa.
+	 */
+	@Test
+	void invitedEntriesComeFromTheParticipantJoin() {
+		String owner = "cal_owner_" + UUID.randomUUID();
+		String guest = "cal_guest_" + UUID.randomUUID();
+		String stranger = "cal_stranger_" + UUID.randomUUID();
+		Instant windowStart = NOW.plus(Duration.ofHours(10));
+		Instant windowEnd = windowStart.plus(Duration.ofHours(1));
+
+		CalendarEntry social = entry(owner, CalendarScope.SOCIAL, CalendarKind.PERSONAL,
+			new CalendarEntrySource(null, null), windowStart.plus(Duration.ofMinutes(15)), Duration.ofMinutes(30));
+		CalendarEntry professional = entry(owner, CalendarScope.PROFESSIONAL, CalendarKind.MEETING,
+			new CalendarEntrySource(null, null), windowStart.plus(Duration.ofMinutes(20)), Duration.ofMinutes(30));
+		// Fora da janela: o convite existe, mas o compromisso não toca o intervalo pedido.
+		CalendarEntry outside = entry(owner, CalendarScope.SOCIAL, CalendarKind.PERSONAL,
+			new CalendarEntrySource(null, null), windowEnd.plus(Duration.ofHours(2)), Duration.ofMinutes(30));
+		for (CalendarEntry e : new CalendarEntry[] { social, professional, outside }) {
+			repository.save(e);
+			participants.save(CalendarParticipant.invite("cal_p_" + UUID.randomUUID(), e.id(), owner, guest, NOW));
+		}
+
+		assertThat(repository.findInvitedInWindow(guest, null, windowStart, windowEnd))
+			.extracting(CalendarEntry::id)
+			.containsExactly(social.id(), professional.id());
+		assertThat(repository.findInvitedInWindow(guest, CalendarScope.PROFESSIONAL, windowStart, windowEnd))
+			.extracting(CalendarEntry::id)
+			.containsExactly(professional.id());
+		// Quem não foi convidado não herda a agenda de ninguém.
+		assertThat(repository.findInvitedInWindow(stranger, null, windowStart, windowEnd)).isEmpty();
+		// O dono não vê o próprio compromisso pela via do convite: ele já vem pela consulta de dono.
+		assertThat(repository.findInvitedInWindow(owner, null, windowStart, windowEnd)).isEmpty();
 	}
 
 	private static CalendarEntry entry(String owner, CalendarScope scope, CalendarKind kind,
