@@ -9,7 +9,7 @@ NODE_DIR="$ROOT/deploy/node-runtime"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-for tool in bash head sed grep dirname pwd mkdir stat chmod read nproc awk date tar gzip; do
+for tool in bash head sed grep dirname pwd mkdir stat chmod read nproc awk date tar gzip cat; do
   location="$(command -v "$tool")"
   ln -s "$location" "$TMP/$tool" 2>/dev/null || true
 done
@@ -188,6 +188,63 @@ make_command curl "case \"\${@: -1}\" in */network/nodes/heartbeat) printf '%s' 
 make_command docker 'case "$*" in *"ps --format"*) exit 1 ;; esac; exit 0'
 out=$(NODE_HOME="$NH" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" --start --control-plane https://cp.test 2>&1)
 assert_contains 'nó restaurado autentica com a mesma identidade' "$out" 'Estado do nó no Control Plane: ACTIVE'
+
+# ------------------------------------------------- --update / --rollback
+# Precisa de identidade + chave da imagem; cosign e docker são stubs.
+NHU="$TMP/node-update"; rm -rf "$NHU"; mkdir -p "$NHU"; chmod 700 "$NHU"
+printf '%s\n' "$ENROLL_BODY" > "$NHU/node.json"; chmod 600 "$NHU/node.json"
+printf 'enk_update0123456789\n' > "$NHU/api-key"; chmod 600 "$NHU/api-key"
+printf '%s' 'IMAGE-PUBKEY' > "$NHU/image-pubkey"; chmod 600 "$NHU/image-pubkey"
+
+make_command docker 'case "$*" in
+  "pull "*) exit 0 ;;
+  image\ inspect*) printf "%s\n" "${FAKE_DIGEST:-}" ;;
+  compose*) printf "%s | imagem=%s\n" "$*" "${NODE_RUNTIME_IMAGE:-}" >> "$COMPOSE_CALLS"; exit 0 ;;
+esac; exit 0'
+
+# Update sem chave da imagem não roda (nada de verificação, nada de troca).
+make_command cosign 'exit 1'
+rm "$NHU/image-pubkey"
+out=$(NODE_HOME="$NHU" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" --update 2>&1) &&
+  { printf '[FAIL] update passou sem chave de imagem:\n%s\n' "$out" >&2; exit 1; }
+assert_contains 'update recusa sem chave da imagem' "$out" 'update sem verificação não roda'
+printf '%s' 'IMAGE-PUBKEY' > "$NHU/image-pubkey"
+
+# Update com assinatura válida: resolve o DIGEST e grava o que rodou.
+: > "$TMP/compose-calls"; export COMPOSE_CALLS="$TMP/compose-calls"
+make_command cosign 'case "$1" in verify) exit 0 ;; esac; exit 1'
+FAKE_DIGEST='ghcr.io/rede-enois/enois-backend@sha256:aaa111'
+out=$(NODE_HOME="$NHU" PATH="$TMP" FAKE_DIGEST="$FAKE_DIGEST" /bin/bash "$NODE_DIR/install.sh" --update --version v1.2.3 2>&1)
+assert_contains 'update verifica e aplica' "$out" 'atualizando'
+assert_eq 'runtime-image guarda o digest verificado' "$FAKE_DIGEST" "$(cat "$NHU/runtime-image")"
+assert_contains 'compose sobe com o digest verificado' "$(cat "$TMP/compose-calls")" "$FAKE_DIGEST"
+
+# Update recusado quando a assinatura não confere: runtime atual não muda.
+make_command cosign 'exit 1'
+FAKE_DIGEST='ghcr.io/rede-enois/enois-backend@sha256:bbb222'
+out=$(NODE_HOME="$NHU" PATH="$TMP" FAKE_DIGEST="$FAKE_DIGEST" /bin/bash "$NODE_DIR/install.sh" --update --version v2.0.0 2>&1) &&
+  { printf '[FAIL] update aceitou assinatura inválida:\n%s\n' "$out" >&2; exit 1; }
+assert_contains 'assinatura inválida recusa o update' "$out" 'atualização recusada, o runtime atual continua'
+assert_eq 'runtime atual sobrevive à assinatura inválida' 'ghcr.io/rede-enois/enois-backend@sha256:aaa111' "$(cat "$NHU/runtime-image")"
+
+# Rollback volta ao digest anterior — e também verifica a assinatura.
+make_command cosign 'case "$1" in verify) exit 0 ;; esac; exit 1'
+out=$(NODE_HOME="$NHU" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" --rollback 2>&1) &&
+  { printf '[FAIL] rollback sem anterior deveria falhar:\n%s\n' "$out" >&2; exit 1; }
+assert_contains 'rollback sem anterior recusa' "$out" 'não há para onde voltar'
+
+# Com um anterior gravado, o rollback volta e guarda o atual como anterior.
+printf '%s\n' 'ghcr.io/rede-enois/enois-backend@sha256:old000' > "$NHU/runtime-image.previous"
+out=$(NODE_HOME="$NHU" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" --rollback 2>&1)
+assert_eq 'rollback aplica o digest anterior' 'ghcr.io/rede-enois/enois-backend@sha256:old000' "$(cat "$NHU/runtime-image")"
+assert_eq 'rollback guarda o atual como novo anterior' 'ghcr.io/rede-enois/enois-backend@sha256:aaa111' "$(cat "$NHU/runtime-image.previous")"
+
+# Rollback com anterior que não verifica mais é recusado.
+make_command cosign 'exit 1'
+printf '%s\n' 'ghcr.io/rede-enois/enois-backend@sha256:aaa111' > "$NHU/runtime-image.previous"
+out=$(NODE_HOME="$NHU" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" --rollback 2>&1) &&
+  { printf '[FAIL] rollback aceitou digest não verificado:\n%s\n' "$out" >&2; exit 1; }
+assert_contains 'rollback recusa digest que não verifica' "$out" 'rollback recusado'
 
 # ---------------------------------------------------------------- node-doctor.sh
 

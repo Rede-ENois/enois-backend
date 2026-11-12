@@ -8,6 +8,8 @@
 #   ./install.sh --backup               # arquiva a identidade (node.json + api-key)
 #   ./install.sh --restore <arquivo>    # restaura a identidade de um backup
 #   ./install.sh --start                # sobe o container
+#   ./install.sh --update [--version v] # atualiza o runtime (exige assinatura OCI)
+#   ./install.sh --rollback             # volta para o runtime anterior (último assinado)
 #
 # O que faz (docs/rede-distribuida/01-arquitetura.md §4):
 #   1. grava o estado do nó em $NODE_HOME com permissão restrita;
@@ -22,15 +24,16 @@ set -euo pipefail
 NODE_HOME="${NODE_HOME:-/var/lib/enois-node}"
 COMPOSE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 RUNTIME_VERSION="0.1.0"
+IMAGE_REPO="${NODE_RUNTIME_IMAGE_REPO:-ghcr.io/rede-enois/enois-backend}"
 
 die() { printf 'Erro: %s\n' "$*" >&2; exit 1; }
 info() { printf '[install] %s\n' "$*"; }
 
 usage() {
-  grep '^#' "$0" | sed -n '3,18p' | sed 's/^# \{0,1\}//'
+  sed -n '/^# Uso:/,/^# O que faz/p' "$0" | sed -e 's/^# \{0,1\}//' -e '/^O que faz/d'
 }
 
-CONTROL_PLANE='' TOKEN='' REGION='' COUNTRY='' CPU='' MEMORY='' MODE='' BACKUP_FILE=''
+CONTROL_PLANE='' TOKEN='' REGION='' COUNTRY='' CPU='' MEMORY='' MODE='' BACKUP_FILE='' VERSION='' IMAGE_PUBKEY=''
 while (($#)); do
   case "$1" in
     --control-plane) CONTROL_PLANE="$2"; shift 2 ;;
@@ -39,7 +42,9 @@ while (($#)); do
     --country) COUNTRY="$2"; shift 2 ;;
     --cpu) CPU="$2"; shift 2 ;;
     --memory) MEMORY="$2"; shift 2 ;;
-    --set-key|--start) MODE="$1"; shift ;;
+    --set-key|--start|--update|--rollback) MODE="$1"; shift ;;
+    --version) VERSION="$2"; shift 2 ;;
+    --image-pubkey) IMAGE_PUBKEY="$2"; shift 2 ;;
     --backup) MODE="--backup"; shift ;;
     --restore) MODE="--restore"; BACKUP_FILE="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -105,7 +110,7 @@ if [[ "$MODE" == "--set-key" ]]; then
 fi
 
 # ---------------------------------------------------------------- enroll
-if [[ "$MODE" != "--start" ]]; then
+if [[ -z "$MODE" ]]; then
   [[ -n "$CONTROL_PLANE" ]] || die '--control-plane é obrigatório'
   [[ -n "$TOKEN" ]] || die '--token é obrigatório'
   for tool in curl; do command -v "$tool" >/dev/null 2>&1 || die "Comando ausente: $tool"; done
@@ -153,6 +158,64 @@ if [[ "$MODE" != "--start" ]]; then
   exit 0
 fi
 
+# ------------------------------------------------- --update / --rollback
+# Nada roda sem assinatura verificada: o digest é conferido com cosign contra a
+# chave pública distribuída fora de banda (image-pubkey). Uma imagem sem
+# assinatura válida NÃO substitui a que está rodando — o nó continua no runtime
+# anterior, que é o comportamento fail-secure esperado.
+if [[ "$MODE" == "--update" || "$MODE" == "--rollback" ]]; then
+  [[ -s "$NODE_HOME/node.json" ]] || die "sem $NODE_HOME/node.json — rode o enroll primeiro"
+  for tool in docker cosign; do command -v "$tool" >/dev/null 2>&1 || die "Comando ausente: $tool"; done
+
+  image_key=''
+  if [[ -n "$IMAGE_PUBKEY" && -s "$IMAGE_PUBKEY" ]]; then
+    image_key="$IMAGE_PUBKEY"
+  elif [[ -s "$NODE_HOME/image-pubkey" ]]; then
+    image_key="$NODE_HOME/image-pubkey"
+  fi
+  [[ -n "$image_key" ]] || die "sem chave das imagens — coloque-a em $NODE_HOME/image-pubkey ou passe --image-pubkey; update sem verificação não roda"
+
+  current=$(cat "$NODE_HOME/runtime-image" 2>/dev/null || echo '')
+
+  if [[ "$MODE" == "--rollback" ]]; then
+    target=$(cat "$NODE_HOME/runtime-image.previous" 2>/dev/null || echo '')
+    [[ -n "$target" ]] || die "nenhum runtime anterior gravado — não há para onde voltar"
+    cosign verify --key "$image_key" "$target" >/dev/null 2>&1 ||
+      die "o runtime anterior ($target) não verifica mais com a chave atual — rollback recusado"
+    info "Voltando para $target"
+  else
+    tag="${VERSION:-${NODE_RUNTIME_TAG:-qa}}"
+    ref="$IMAGE_REPO:$tag"
+    info "Baixando $ref..."
+    docker pull "$ref" >/dev/null || die "pull falhou: $ref"
+    # O digest amarra a assinatura ao conteúdo exato: a verificação é sobre ele,
+    # nunca sobre a tag (tag pode ser reescrita no registry).
+    target=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$ref" 2>/dev/null |
+      grep -m1 '@sha256:' || true)
+    [[ -n "$target" ]] || die "não consegui resolver o digest de $ref (imagem local sem RepoDigest?)"
+    cosign verify --key "$image_key" "$target" >/dev/null 2>&1 ||
+      die "assinatura inválida ou ausente em $target — atualização recusada, o runtime atual continua"
+    if [[ "$target" == "$current" ]]; then
+      info "Já está rodando $target — nada a fazer."
+      exit 0
+    fi
+    info "Assinatura válida; atualizando para $target"
+  fi
+
+  umask 177
+  # Guarda o atual como anterior ANTES de sobrescrever; no rollback o "anterior"
+  # passa a ser o runtime de onde estamos saindo (permite voltar e avançar de novo).
+  if [[ -n "$current" ]]; then
+    printf '%s\n' "$current" > "$NODE_HOME/runtime-image.previous"
+  fi
+  printf '%s\n' "$target" > "$NODE_HOME/runtime-image"
+  umask 022
+
+  NODE_RUNTIME_IMAGE="$target" docker compose -f "$COMPOSE_DIR/docker-compose.yml" up -d
+  info "Runtime agora em $target. Diagnóstico: NODE_HOME=$NODE_HOME ./node-doctor.sh"
+  exit 0
+fi
+
 # ---------------------------------------------------------------- --start
 [[ -s "$NODE_HOME/node.json" ]] || die "sem $NODE_HOME/node.json — rode o enroll primeiro"
 [[ -s "$NODE_HOME/api-key" ]] || die "sem $NODE_HOME/api-key — rode --set-key primeiro"
@@ -194,5 +257,12 @@ fi
 
 for tool in docker; do command -v "$tool" >/dev/null 2>&1 || die "Comando ausente: $tool"; done
 export CONTROL_PLANE_URL
+# Se um --update já pinou um digest verificado, o start usa esse digest — não a tag,
+# que pode ter sido reescrita no registry desde a verificação.
+if [[ -s "$NODE_HOME/runtime-image" ]]; then
+  NODE_RUNTIME_IMAGE=$(head -n 1 "$NODE_HOME/runtime-image")
+  export NODE_RUNTIME_IMAGE
+  info "Usando o runtime verificado: $NODE_RUNTIME_IMAGE"
+fi
 docker compose -f "$COMPOSE_DIR/docker-compose.yml" up -d
 info "Container subido. Diagnóstico: NODE_HOME=$NODE_HOME ./node-doctor.sh"

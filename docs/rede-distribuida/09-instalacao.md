@@ -96,7 +96,9 @@ O container roda o loop do nó, não o jar (o jar é o Control Plane). Cada cicl
 A tarefa executada hoje é de prova de ciclo de vida (eco do `idempotencyKey`):
 conteúdo de usuário (HTML, CSS, KofScript) **nunca** executa no nó — continua nos
 sandboxes próprios (02-modelo-de-ameacas.md). O script é montado no container
-(`/node-runtime.sh:ro`): atualizar o runtime é `git pull` + `docker compose restart`.
+(`/node-runtime.sh:ro`); a imagem do runtime se troca por `install.sh --update`
+(§6), nunca por `docker pull` manual — a troca só acontece com assinatura OCI
+verificada.
 
 ## 4. Estado local
 
@@ -105,6 +107,9 @@ sandboxes próprios (02-modelo-de-ameacas.md). O script é montado no container
 | `$NODE_HOME/node.json` | resposta do enroll (`nodeId`, estado) | 600 |
 | `$NODE_HOME/api-key` | a API key do nó em claro — único lugar | 600 |
 | `$NODE_HOME/pinning-key` | a chave pública do Control Plane, pinada no enroll ou no primeiro `--start` | 600 |
+| `$NODE_HOME/image-pubkey` | a chave pública que assina as imagens do runtime (cosign) — sem ela não há `--update` | 600 |
+| `$NODE_HOME/runtime-image` | o digest verificado em uso (`repo@sha256:…`), não a tag | 600 |
+| `$NODE_HOME/runtime-image.previous` | o digest anterior, para `--rollback` | 600 |
 | volume `enois-node` | workspace do runtime no container | — |
 
 `NODE_HOME` padrão é `/var/lib/enois-node`; sobrescreva por ambiente. O par
@@ -132,12 +137,43 @@ operação por engano seria pior que refazer o onboarding. O backup vale como a
 chave: quem tem o arquivo opera como o nó; guarde com o mesmo cuidado e descarte
 junto com a revogação (a retenção acompanha o ciclo de vida da identidade).
 
-## 6. O que ainda não está aqui
+## 6. Atualização e rollback (assinatura OCI)
+
+Trocar a imagem do runtime não é `docker pull`: é substituir o que roda no nó.
+Por isso a troca exige três coisas — a chave pública que assina as imagens, o
+**digest** da imagem nova (nunca a tag, que o registry reescreve) e a verificação
+`cosign` sobre esse digest.
+
+```bash
+./install.sh --update                 # resolve o digest da tag qa, verifica e sobe
+./install.sh --update --version v1.2.3   # mesma coisa, para uma versão publicada
+./install.sh --rollback               # volta ao digest anterior (verificado de novo)
+```
+
+A chave sai de `--image-pubkey <arquivo>` ou de `$NODE_HOME/image-pubkey`. Sem
+chave, o `--update` **recusa**: atualizar sem verificação é justamente o que a
+assinatura existe para impedir. O fluxo é fail-secure — assinatura inválida,
+ausente ou digest não resolvido abortam a troca e o runtime atual continua
+rodando; nada é gravado em `runtime-image` antes da verificação passar.
+
+O digest verificado fica em `$NODE_HOME/runtime-image` e o `--start` passa a
+usá-lo (`NODE_RUNTIME_IMAGE=<digest>`), de modo que um restart não volte à tag
+que o registry possa ter reescrito. O `--rollback` relê
+`runtime-image.previous`, **verifica a assinatura de novo** com a chave atual
+(uma imagem que não verifica mais não volta) e grava o digest que estava em uso
+como novo anterior — rollback repetido alterna entre os dois, não perde o outro.
+
+Comportamento fixado em `scripts/tests/node-runtime-test.sh` (43 asserções): sem
+chave recusa; update grava e sobe o digest; assinatura inválida recusa e o
+runtime atual sobrevive; rollback sem anterior recusa; rollback aplica o anterior
+e preserva o atual; digest não verificável é recusado.
+
+## 7. O que ainda não está aqui
 
 - **Executores de trabalho real por perfil**: o loop já executa por perfil com a
   permissão da config assinada; o que a tarefa faz hoje é prova de ciclo de vida
   (eco do `idempotencyKey`). Transcode/cache de verdade entra com a publicação das
   filas de trabalho por perfil e das imagens dedicadas.
-- **Atualização e rollback com verificação de assinatura OCI**: o compose pina
-  tag, e a verificação de assinatura no pull entra com a publicação das imagens
-  do runtime.
+- **Publicação das imagens assinadas**: o verificador está pronto e testado; o
+  pipeline que constrói e assina as imagens do runtime (`cosign sign`) entra com
+  o registro de imagens da rede.

@@ -11,6 +11,9 @@
 # atrás de NAT funciona — ninguém abre conexão para ele.
 services:
   node:
+    # NODE_RUNTIME_IMAGE aceita repo:tag ou repo@sha256:<digest>. É o que o
+    # --update/--rollback exporta depois de verificar a assinatura do digest, e o
+    # que o --start reusa: restart nunca volta silenciosamente para uma tag reescrita.
     image: ${NODE_RUNTIME_IMAGE:-ghcr.io/rede-enois/enois-backend:${NODE_RUNTIME_TAG:-qa}}
     container_name: enois-node
     restart: unless-stopped
