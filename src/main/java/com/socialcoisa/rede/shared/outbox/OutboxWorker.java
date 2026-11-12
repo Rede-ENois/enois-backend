@@ -69,7 +69,8 @@ class OutboxWorker {
 		this.metrics = metrics;
 	}
 
-	@Scheduled(fixedDelayString = "${rede.outbox.worker-delay-ms:5000}")
+	@Scheduled(fixedDelayString = "${rede.outbox.worker-delay-ms:5000}",
+			initialDelayString = "${rede.outbox.worker-initial-delay-ms:0}")
 	void processPendingEvents() {
 		List<OutboxEventJpaEntity> pending = outboxRepository
 			.findByStatusAndNextAttemptAtLessThanEqualOrderByCreatedAtAsc("PENDING", clock.instant(),

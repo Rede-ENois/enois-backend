@@ -71,9 +71,9 @@ class InstanceBroadcastTests {
 		var user = new TestAuthHelper(mockMvc, objectMapper).authenticate("broadcast_stream_user");
 		MvcResult stream = openStream(user.token());
 
+		readFromTail();
 		emitFromOtherInstance(InstanceSignals.USER_EVENT, user.userId(),
 			"{\"event\":\"conversation\",\"data\":{\"conversationId\":\"conv_de_outra_instancia\"}}");
-		poller.rewind();
 		assertThat(poller.runOnce()).isGreaterThanOrEqualTo(1);
 
 		String body = stream.getResponse().getContentAsString();
@@ -87,9 +87,9 @@ class InstanceBroadcastTests {
 		var outsider = new TestAuthHelper(mockMvc, objectMapper).authenticate("broadcast_outsider_user");
 		MvcResult outsiderStream = openStream(outsider.token());
 
+		readFromTail();
 		emitFromOtherInstance(InstanceSignals.USER_EVENT, target.userId(),
 			"{\"event\":\"notification\",\"data\":{\"notificationId\":\"n_de_outra\",\"kind\":\"POST_REPOSTED\"}}");
-		poller.rewind();
 		poller.runOnce();
 
 		assertThat(outsiderStream.getResponse().getContentAsString()).doesNotContain("n_de_outra");
@@ -110,8 +110,8 @@ class InstanceBroadcastTests {
 		cache.put("broadcast:alguem", "versao-antiga");
 		assertThat(cache.get("broadcast:alguem")).isNotNull();
 
+		readFromTail();
 		emitFromOtherInstance(InstanceSignals.CACHE_INVALIDATED, CacheConfig.LINK_PREVIEWS, "{}");
-		poller.rewind();
 		poller.runOnce();
 
 		assertThat(cache.get("broadcast:alguem")).isNull();
@@ -125,9 +125,9 @@ class InstanceBroadcastTests {
 		cache.put("broadcast:alvo", "versao-antiga");
 		cache.put("broadcast:outro", "continua");
 
+		readFromTail();
 		emitFromOtherInstance(InstanceSignals.CACHE_INVALIDATED, CacheConfig.LINK_PREVIEWS + "/broadcast:alvo",
 			"{}");
-		poller.rewind();
 		poller.runOnce();
 
 		assertThat(cache.get("broadcast:alvo")).isNull();
@@ -145,6 +145,7 @@ class InstanceBroadcastTests {
 		var recipient = auth.authenticate("broadcast_local_recipient");
 		String conversationId = directConversation(sender.token(), recipient.userId());
 		MvcResult recipientStream = openStream(recipient.token());
+		readFromTail();
 
 		mockMvc.perform(post("/conversations/" + conversationId + "/messages")
 				.header("X-Session-Token", sender.token())
@@ -160,10 +161,24 @@ class InstanceBroadcastTests {
 		assertThat(origins).contains(broadcaster.instanceId());
 
 		// A varredura não reentrega o próprio sinal: o corpo tem o evento uma vez.
-		poller.rewind();
+		readFromTail();
 		poller.runOnce();
 		String body = recipientStream.getResponse().getContentAsString();
 		assertThat(countOccurrences(body, "event:conversation")).isEqualTo(1);
+	}
+
+	/**
+	 * Posiciona o leitor no fim da tabela antes de emitir, em vez de voltar ao inicio.
+	 *
+	 * <p>O banco H2 da suíte é compartilhado por todas as classes, e cada escrita de teste grava um
+	 * sinal em {@code network_instance_signals}. {@code rewind()} relia a tabela inteira desde a
+	 * posição 0 e o lote de 200 traz o sinal antigo dos vizinhos ANTES do que este teste acabou de
+	 * emitir — a varredura consome o lote no sinal errado e o teste falha vendo a entrega que não
+	 * aconteceu. {@code seek(maxSeq())} lê a partir do fim: o que interessa é exatamente o sinal
+	 * emitido daqui para a frente, com o backlog dos outros fora do caminho.</p>
+	 */
+	private void readFromTail() {
+		poller.seek(store.maxSeq());
 	}
 
 	private void emitFromOtherInstance(String type, String target, String payload) {
