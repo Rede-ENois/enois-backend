@@ -88,13 +88,30 @@ O container roda o loop do nó, não o jar (o jar é o Control Plane). Cada cicl
    `publicKey` contra o pino gravado no enroll ou no primeiro `--start`
    (`$NODE_HOME/pinning-key`); sem pino, recusa toda config;
 4. **poll** (`GET /network/tasks/next`) — uma tarefa por ciclo;
-5. **executa só o que a config assinada autoriza** (`allowedTasks`): autorizada vira
-   `DONE` com output; fora da lista vira `FAILED` com `TASK_NOT_ALLOWED` — o
+5. **executa só o que a config assinada autoriza** (`allowedTasks`): autorizada vai
+   para o executor do tipo; fora da lista vira `FAILED` com `TASK_NOT_ALLOWED` — o
    Control Plane decide sozinho se redistribui;
 6. **resultado** (`POST /network/tasks/{id}/result`) com a tentativa vigente.
 
-A tarefa executada hoje é de prova de ciclo de vida (eco do `idempotencyKey`):
-conteúdo de usuário (HTML, CSS, KofScript) **nunca** executa no nó — continua nos
+**Executor de mídia (`MEDIA_TRANSCODE`).** O nó baixa o objeto em
+`GET /network/media/{id}/source` (a permissão é perfil `NODE_MEDIA` **e** designação
+vigente), roda a receita do `MediaTranscodeSpec` — escala de 854px, mesmos encoders
+e limite de 2 threads por tipo, `-protocol_whitelist file`, `-movflags +faststart`
+no mp4 — e envia o arquivo em `PUT /network/media/{id}/result`. A receita é do
+Control Plane, não do nó: um nó que invente a própria receita produz um arquivo que
+o pod não produziria. O nó declara no resultado as medidas que o Control Plane
+devolveu **ao medir o arquivo recebido** (tamanho e sha-256); se a resposta não
+trouxer as medidas, ele declara as suas e o Control Plane confere contra as dele.
+
+Falha é código próprio, não silêncio: sem `ffmpeg` no runtime → `TASK_EXECUTOR_MISSING`;
+payload sem `mediaId`/`mimeType` ou tipo fora do contrato → `TASK_PAYLOAD_INVALID`;
+download, ffmpeg ou upload que falham → `TRANSCODE_FAILED`. O rascunho do arquivo
+fica no volume do nó (`$NODE_HOME/work-task-*`, apagado ao fim do ciclo) e **não**
+em `/tmp`, que o compose monta como tmpfs de 64 MB — menor que o teto de 150 MB do
+transcode.
+
+Os outros tipos continuam em prova de ciclo de vida (eco do `idempotencyKey`).
+Conteúdo de usuário (HTML, CSS, KofScript) **nunca** executa no nó — continua nos
 sandboxes próprios (02-modelo-de-ameacas.md). O script é montado no container
 (`/node-runtime.sh:ro`); a imagem do runtime se troca por `install.sh --update`
 (§6), nunca por `docker pull` manual — a troca só acontece com assinatura OCI
@@ -170,10 +187,12 @@ e preserva o atual; digest não verificável é recusado.
 
 ## 7. O que ainda não está aqui
 
-- **Executores de trabalho real por perfil**: o loop já executa por perfil com a
-  permissão da config assinada; o que a tarefa faz hoje é prova de ciclo de vida
-  (eco do `idempotencyKey`). Transcode/cache de verdade entra com a publicação das
-  filas de trabalho por perfil e das imagens dedicadas.
+- **Executores de trabalho real por perfil**: `MEDIA_TRANSCODE` já executa de
+  verdade no nó (transcode com a receita do Control Plane, resultado verificado
+  por tamanho e hash, 32 asserções em `scripts/tests/node-executor-test.sh`).
+  Faltam os demais perfis: `EDGE_CACHE`/`EDGE_DELIVER` (NODE_EDGE),
+  `READ_QUERY` (NODE_READ_REPLICA) e `API_REQUEST` (NODE_API), que hoje caem no
+  eco de ciclo de vida.
 - **Publicação das imagens assinadas**: o verificador está pronto e testado; o
   pipeline que constrói e assina as imagens do runtime (`cosign sign`) entra com
   o registro de imagens da rede.
