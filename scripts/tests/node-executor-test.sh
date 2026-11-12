@@ -9,7 +9,7 @@ NODE_DIR="$ROOT/deploy/node-runtime"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-for tool in bash head sed grep dirname pwd mkdir stat chmod awk printf cat rm mktemp wc sha256sum; do
+for tool in bash head sed grep dirname pwd mkdir stat chmod awk printf cat rm mktemp wc sha256sum tr; do
   location="$(command -v "$tool")"
   ln -s "$location" "$TMP/$tool" 2>/dev/null || true
 done
@@ -115,8 +115,9 @@ assert_eq 'resultado (da recusa) postado uma vez' '1' "$(results_posted)"
 # ------------------------------------------------- cenário 3: drenar é não pedir
 # Stub dedicado (sem run_one_cycle, que recriaria o stub padrão).
 run_custom() {
+  local home="${1:-$NH}"
   : > "$TMP/curl-calls"
-  CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SECONDS=1 \
+  CONTROL_PLANE_URL=https://cp.test NODE_HOME="$home" PATH="$TMP" NODE_POLL_SECONDS=1 \
     /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true
 }
 
@@ -236,5 +237,116 @@ rm -f "$TMP/ffmpeg"
 out=$(run_custom)
 assert_contains 'sem ffmpeg a tarefa falha com código próprio' "$(cat "$TMP/curl-calls")" 'TASK_EXECUTOR_MISSING'
 assert_not_contains 'sem ffmpeg não baixa a origem' "$(cat "$TMP/curl-calls")" '/network/media/md_1/source'
+
+
+# ------------------------------------------------- cenário 10: READ_QUERY (réplica de leitura)
+# O nó percorre o catálogo por cursor, lê o corpo de cada item, guarda e confirma
+# com versão+hash. Item já em dia (version conhecida) volta changed=false e não é
+# rebaixado — nem reenviado.
+NR="$TMP/node-replica"; rm -rf "$NR"; mkdir -p "$NR"; chmod 700 "$NR"
+cp "$NH/node.json" "$NR/node.json"; cp "$NH/api-key" "$NR/api-key"
+cp "$NH/pinning-key" "$NR/pinning-key"
+
+CONFIG_REPLICA='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":1,"configVersion":5,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":2,"memoryMb":4096,"diskMb":20480,"bandwidthMbps":50},"allowedTasks":["READ_QUERY"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","signed":true,"signature":"c2ln","algorithm":"Ed25519","publicKey":"PINNED-PUBLIC-KEY-BASE64"}'
+TASK_REPLICA='{"tasks":[{"taskId":"tk_r1","type":"READ_QUERY","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"replica:PROFILE","payload":"{\"kind\":\"PROFILE\"}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
+
+# Duas páginas: a primeira tem 2 perfis (um já em dia), a segunda fecha o catálogo.
+# O stub de conteúdo responde changed=false quando a query traz version=igual.
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_REPLICA' ;;
+  */network/tasks/next) printf '%s' '$TASK_REPLICA' ;;
+  */network/replica/PROFILE\?limit=100)
+    printf '%s' '{"kind":"PROFILE","items":["ana","bia"],"hasMore":true,"nextAfterAt":"2026-11-10T10:00:00Z","nextAfterId":"u2"}' ;;
+  */network/replica/PROFILE*afterAt=*)
+    printf '%s' '{"kind":"PROFILE","items":["caio"],"hasMore":false,"nextAfterAt":"2026-11-11T10:00:00Z","nextAfterId":"u3"}' ;;
+  */network/content/PROFILE/ana)
+    printf '%s' '{"kind":"PROFILE","contentId":"ana","version":3,"contentHash":"h-ana","changed":true,"body":"{\\"username\\":\\"ana\\"}"}'
+    [[ "\$*" == *"-w"* ]] && printf '\n200' ;;
+  */network/content/PROFILE/bia)
+    printf '%s' '{"kind":"PROFILE","contentId":"bia","version":4,"contentHash":"h-bia","changed":true,"body":"{\\"username\\":\\"bia\\"}"}'
+    [[ "\$*" == *"-w"* ]] && printf '\n200' ;;
+  */network/content/PROFILE/caio)
+    printf '%s' '{"kind":"PROFILE","contentId":"caio","version":1,"contentHash":"h-caio","changed":true,"body":"{\\"username\\":\\"caio\\"}"}'
+    [[ "\$*" == *"-w"* ]] && printf '\n200' ;;
+  */network/content/PROFILE/*/synced) printf '%s' '{"contentId":"x","status":"SYNCED"}' ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NR")
+assert_contains 'réplica percorre o catálogo' "$(cat "$TMP/curl-calls")" '/network/replica/PROFILE?limit=100'
+assert_contains 'réplica usa o cursor devolvido (nunca offset)' "$(cat "$TMP/curl-calls")" 'afterAt=2026-11-10T10:00:00Z'
+assert_contains 'réplica lê o corpo de cada id' "$(cat "$TMP/curl-calls")" '/network/content/PROFILE/ana'
+assert_contains 'réplica confirma o que guardou' "$(cat "$TMP/curl-calls")" '/network/content/PROFILE/ana/synced'
+assert_contains 'confirmação leva versão e hash' "$(cat "$TMP/curl-calls")" '{"sourceVersion":3,"contentHash":"h-ana"}'
+assert_eq 'corpo guardado no disco do nó' '{"username":"ana"}' "$(cat "$NR/replica/PROFILE/ana.json")"
+assert_eq 'versão guardada ao lado do corpo' '3' "$(cat "$NR/replica/PROFILE/ana.version")"
+assert_contains 'travessia concluída é reportada' "$out" 'travessia concluída'
+assert_contains 'resultado declara complete=true' "$(cat "$TMP/curl-calls")" '"complete":true'
+assert_eq 'cursor limpo ao concluir' '' "$(cat "$NR/replica/cursor-PROFILE")"
+
+# Segunda rodada: com a versão guardada, o nó pergunta version= e o Control Plane
+# responde changed=false — nada é rebaixado nem reconfirmado.
+: > "$TMP/curl-calls"
+out=$(run_custom "$NR")
+assert_contains 'nó pergunta a versão que já tem' "$(cat "$TMP/curl-calls")" '/network/content/PROFILE/ana?version=3'
+assert_not_contains 'item em dia não é reconfirmado' "$(cat "$TMP/curl-calls")" 'ana/synced'
+assert_eq 'corpo em dia permanece intacto' '{"username":"ana"}' "$(cat "$NR/replica/PROFILE/ana.json")"
+
+# ------------------------------------------------- cenário 11: réplica sem kind no payload
+TASK_REPLICA_BAD='{"tasks":[{"taskId":"tk_r2","type":"READ_QUERY","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"replica:x","payload":"{}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_REPLICA' ;;
+  */network/tasks/next) printf '%s' '$TASK_REPLICA_BAD' ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"FAILED","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NR")
+assert_contains 'réplica sem kind falha com código próprio' "$(cat "$TMP/curl-calls")" 'TASK_PAYLOAD_INVALID'
+assert_not_contains 'sem kind não consulta catálogo' "$(cat "$TMP/curl-calls")" '/network/replica/'
+
+
+# ------------------------------------------------- cenário 12: agregado que sumiu da origem
+# 404 na origem (perfil banido / comunidade excluída) NÃO é falha de leitura: o nó
+# descarta o corpo guardado. Manter faria o nó servir o que a vitrine esconde.
+printf '%s' '{"username":"dora"}' > "$NR/replica/PROFILE/dora.json"
+printf '2\n' > "$NR/replica/PROFILE/dora.version"
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_REPLICA' ;;
+  */network/tasks/next) printf '%s' '$TASK_REPLICA' ;;
+  */network/replica/PROFILE*)
+    printf '%s' '{"kind":"PROFILE","items":["dora"],"hasMore":false,"nextAfterAt":"2026-11-11T10:00:00Z","nextAfterId":"u3"}' ;;
+  */network/content/PROFILE/dora*)
+    [[ "\$*" == *"-w"* ]] && printf '\n404' || exit 22 ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NR")
+assert_eq 'agregado que sumiu é descartado' '0' "$(find "$NR/replica/PROFILE" -name 'dora*' | wc -l | tr -d ' ')"
+assert_contains 'remoção é reportada no resultado' "$(cat "$TMP/curl-calls")" '"removed":1'
+assert_not_contains 'agregado removido não é confirmado como sincronizado' "$(cat "$TMP/curl-calls")" 'dora/synced'
 
 printf '\nTodos os cenarios passaram (%d assercoes).\n' "$PASS"

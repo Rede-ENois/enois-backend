@@ -49,6 +49,16 @@ json_number() {
   sed -n 's/.*"'"$2"'":\([0-9][0-9]*\).*/\1/p' <<<"$1" | head -n 1
 }
 
+json_string_array() {
+  # json_string_array <json> <chave>: um item por linha, sem as aspas.
+  sed -n 's/.*"'"$2"'":\[\([^]]*\)\].*/\1/p' <<<"$1" | head -n 1 | tr ',' '\n' | tr -d '"' | sed '/^$/d'
+}
+
+json_flag() {
+  # json_flag <json> <chave>: true/false; vazio quando a chave não existe.
+  grep -q '"'"$2"'":true' <<<"$1" && echo true || echo false
+}
+
 # allowedTasks da config assinada — a ÚNICA fonte de permissão de execução.
 allowed_tasks() {
   local config
@@ -182,6 +192,143 @@ exec_media_transcode() {
   printf '[executor] transcode DONE %s (%s bytes)\n' "$task_id" "$bytes"
 }
 
+json_last_string() {
+  # json_last_string <json> <chave>: valor da ÚLTIMA chave do objeto, mesmo com
+  # aspas escapadas dentro (o body do conteúdo é uma string JSON). Desfaz o escape.
+  sed -n 's/.*"'"$2"'":"\(.*\)"}$/\1/p' <<<"$1" | head -n 1 | sed 's/\\"/"/g' | sed 's/\\\\/\\/g'
+}
+
+# ---------------- executor real: READ_QUERY (réplica de leitura) ----------------
+# A réplica percorre o catálogo do Control Plane (GET /network/replica/{kind}) por
+# cursor (criado em, id) — nunca por offset — e, para cada id, lê o corpo em
+# GET /network/content/{kind}/{id} e confirma o que guardou em POST .../synced com
+# versão e hash. O catálogo só diz o que existe; o corpo vem do mesmo caminho que a
+# borda lê, então não há segunda serialização do mesmo agregado.
+#
+# O que o nó guarda é o corpo público (perfil por @, vitrine de comunidade). Nunca
+# dado pessoal de outro participante: a allowlist é do Control Plane e um tipo fora
+# dela recebe 403 de lá — o nó não inventa catálogo.
+REPLICA_PAGES_PER_TASK="${REPLICA_PAGES_PER_TASK:-20}"
+
+exec_read_query() {
+  local next="$1" task_id="$2" attempt="$3"
+  local payload kind after_at after_id pages=0 synced=0 skipped=0 failed=0 removed=0
+  local page items has_more next_at next_id id stored_version content version hash body
+  payload=$(task_payload "$next")
+  kind=$(json_field "$payload" kind)
+  [[ -n "$kind" ]] || {
+    fail_task "$task_id" "$attempt" TASK_PAYLOAD_INVALID 'payload de réplica sem kind'; return 0; }
+  # O cursor vive no nó: a travessia é longa e continua na próxima tarefa. O
+  # payload pode adiantar um cursor explícito; sem ele, retoma de onde parou.
+  local cursor_dir="$NODE_HOME/replica"
+  mkdir -p "$cursor_dir"
+  after_at=$(json_field "$payload" afterAt)
+  after_id=$(json_field "$payload" afterId)
+  if [[ -z "$after_at" && -f "$cursor_dir/cursor-$kind" ]]; then
+    IFS='|' read -r after_at after_id < "$cursor_dir/cursor-$kind"
+  fi
+  mkdir -p "$cursor_dir/$kind"
+
+  while (( pages < REPLICA_PAGES_PER_TASK )); do
+    local url="$CONTROL_PLANE/network/replica/$kind?limit=100"
+    [[ -n "$after_at" && -n "$after_id" ]] && \
+      url="$url&afterAt=$(printf '%s' "$after_at" | sed 's/ /%20/g')&afterId=$after_id"
+    page=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 60 \
+      "${auth[@]}" "$url") || {
+      fail_task "$task_id" "$attempt" REPLICA_CATALOG_FAILED 'catálogo da réplica indisponível'; return 0; }
+    pages=$((pages + 1))
+    items=$(json_string_array "$page" items)
+    has_more=$(json_flag "$page" hasMore)
+    next_at=$(json_field "$page" nextAfterAt)
+    next_id=$(json_field "$page" nextAfterId)
+
+    while IFS= read -r id; do
+      [[ -n "$id" ]] || continue
+      # O @ de perfil pode vir com caracteres que precisam ir na URL como estão no
+      # contrato (o id é a chave, não um slug): só espaço é codificado.
+      local safe_id
+      safe_id=$(printf '%s' "$id" | sed 's/ /%20/g')
+      stored_version=''
+      [[ -f "$cursor_dir/$kind/$safe_id.version" ]] && stored_version=$(head -n 1 "$cursor_dir/$kind/$safe_id.version")
+      local content_url="$CONTROL_PLANE/network/content/$kind/$safe_id"
+      # Versão conhecida é perguntada: em dia, o Control Plane devolve changed=false
+      # sem corpo — o nó não rebaixa o catálogo inteiro a cada rodada.
+      [[ -n "$stored_version" ]] && content_url="$content_url?version=$stored_version"
+      # Uma requisição só, com o status no fim: --fail engoliria o corpo do 404, e
+      # uma segunda chamada só para ler o código dobraria a carga justamente no
+      # caso em que o agregado já não existe mais.
+      local raw code
+      if ! raw=$(curl --silent --show-error --connect-timeout 10 --max-time 60 \
+          -w '\n%{http_code}' "${auth[@]}" "$content_url"); then
+        failed=$((failed + 1))
+        printf '[executor] réplica: item %s/%s ilegível\n' "$kind" "$id" >&2
+        continue
+      fi
+      code=$(sed -n '$p' <<<"$raw")
+      content=$(sed '$d' <<<"$raw")
+      if [[ "$code" == 404 ]]; then
+        # O agregado sumiu da origem (perfil banido, comunidade excluída). Manter o
+        # corpo guardado faria o nó servir o que a vitrine esconde — e remoção não
+        # vira linha no feed, então é aqui que o nó descobre.
+        rm -f "$cursor_dir/$kind/$safe_id.json" "$cursor_dir/$kind/$safe_id.version"
+        removed=$((removed + 1))
+        printf '[executor] réplica: %s/%s sumiu da origem — descartado\n' "$kind" "$id" >&2
+        continue
+      fi
+      if [[ "$code" != 200 ]]; then
+        failed=$((failed + 1))
+        printf '[executor] réplica: item %s/%s ilegível (%s)\n' "$kind" "$id" "$code" >&2
+        continue
+      fi
+      if [[ "$(json_flag "$content" changed)" == false ]]; then
+        skipped=$((skipped + 1))
+        continue
+      fi
+      body=$(json_last_string "$content" body)
+      if [[ -z "$body" ]]; then
+        failed=$((failed + 1))
+        printf '[executor] réplica: item %s/%s sem corpo\n' "$kind" "$id" >&2
+        continue
+      fi
+      version=$(json_number "$content" version)
+      hash=$(json_field "$content" contentHash)
+      # Guarda o corpo e a versão ANTES de confirmar: confirmar o que não está em
+      # disco faria a reconciliação acusar o nó por um arquivo que ele nunca teve.
+      if ! printf '%s' "$body" > "$cursor_dir/$kind/$safe_id.json"; then
+        failed=$((failed + 1)); continue
+      fi
+      printf '%s\n' "$version" > "$cursor_dir/$kind/$safe_id.version"
+      if curl --fail --silent --show-error --connect-timeout 10 --max-time 60 \
+          "${auth[@]}" -d "{\"sourceVersion\":$version,\"contentHash\":\"$hash\"}" \
+          "$CONTROL_PLANE/network/content/$kind/$safe_id/synced" >/dev/null; then
+        synced=$((synced + 1))
+      else
+        failed=$((failed + 1))
+        printf '[executor] réplica: confirmação de %s/%s falhou\n' "$kind" "$id" >&2
+      fi
+    done <<<"$items"
+
+    if [[ "$has_more" != true || -z "$next_at" || -z "$next_id" ]]; then
+      after_at=''; after_id=''
+      : > "$cursor_dir/cursor-$kind"
+      printf '[executor] réplica %s: travessia concluída (%s sincronizados, %s em dia, %s removidos)\n' \
+        "$kind" "$synced" "$skipped" "$removed"
+      result "$task_id" "$attempt" DONE \
+        "{\"kind\":\"$kind\",\"pages\":$pages,\"synced\":$synced,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"complete\":true}" ''
+      return 0
+    fi
+    after_at="$next_at"; after_id="$next_id"
+    printf '%s|%s\n' "$after_at" "$after_id" > "$cursor_dir/cursor-$kind"
+  done
+
+  # Orçamento de páginas deste ciclo esgotado: devolve o cursor e conclui. A
+  # próxima tarefa retoma daqui — drenar metade do catálogo não é erro.
+  printf '[executor] réplica %s: %s páginas, retomando em %s|%s\n' \
+    "$kind" "$pages" "$after_at" "$after_id"
+  result "$task_id" "$attempt" DONE \
+    "{\"kind\":\"$kind\",\"pages\":$pages,\"synced\":$synced,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"complete\":false,\"afterAt\":\"$after_at\",\"afterId\":\"$after_id\"}" ''
+}
+
 cycle() {
   # 1. heartbeat: estado, modo e se pode pedir tarefa.
   local hb mode accept_tasks observed_cpu observed_mem
@@ -220,6 +367,7 @@ cycle() {
   if grep -q "\"$task_type\"" <<<"[$allowed]"; then
     case "$task_type" in
       MEDIA_TRANSCODE) exec_media_transcode "$next" "$task_id" "${attempt:-1}" ;;
+      READ_QUERY) exec_read_query "$next" "$task_id" "${attempt:-1}" ;;
       *)
         # Prova de ciclo de vida: eco do idempotencyKey como output. Conteúdo de usuário
         # (HTML, CSS, KofScript) NUNCA executa aqui — continua nos sandboxes próprios.

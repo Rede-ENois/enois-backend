@@ -110,7 +110,30 @@ fica no volume do nó (`$NODE_HOME/work-task-*`, apagado ao fim do ciclo) e **n�
 em `/tmp`, que o compose monta como tmpfs de 64 MB — menor que o teto de 150 MB do
 transcode.
 
-Os outros tipos continuam em prova de ciclo de vida (eco do `idempotencyKey`).
+**Executor de réplica (`READ_QUERY`).** O nó percorre o catálogo em
+`GET /network/replica/{kind}` — `kind` vem no payload, a allowlist (`PROFILE`,
+`COMMUNITY`) é do Control Plane — e, para cada id, lê o corpo em
+`GET /network/content/{kind}/{id}` e confirma o que guardou em
+`POST .../synced` com **versão e hash**. A travessia é por cursor
+`(criado em, id)`, nunca por offset: percorrer um catálogo vivo por posição pula
+item quando algo é apagado e relê quando algo nasce.
+
+O estado da réplica fica em `$NODE_HOME/replica/`: `cursor-<kind>` guarda onde a
+travessia parou, `<kind>/<id>.json` o corpo e `<kind>/<id>.version` a versão
+guardada. Na rodada seguinte o nó pergunta `?version=<guardada>` — item em dia
+volta `changed=false` sem corpo, então o catálogo inteiro não é rebaixado a cada
+ciclo. A travessia é limitada por ciclo (`REPLICA_PAGES_PER_TASK`, 20 páginas) e,
+se acabar antes do fim, devolve o cursor e conclui `complete=false`; a próxima
+tarefa retoma de onde parou — drenar metade do catálogo não é erro.
+
+**404 na origem é remoção, não falha:** perfil banido ou comunidade excluída não
+vira linha no feed de mudanças, então é aqui que o nó descobre. Ele apaga o corpo
+e a versão guardados (senão serviria o que a vitrine esconde) e conta em
+`removed`. Falha de rede e 5xx mantêm o corpo — descartar por erro transitório
+seria pior que reter por uma rodada.
+
+Os demais tipos (`EDGE_CACHE`, `EDGE_DELIVER`, `API_REQUEST`) continuam em prova
+de ciclo de vida (eco do `idempotencyKey`).
 Conteúdo de usuário (HTML, CSS, KofScript) **nunca** executa no nó — continua nos
 sandboxes próprios (02-modelo-de-ameacas.md). O script é montado no container
 (`/node-runtime.sh:ro`); a imagem do runtime se troca por `install.sh --update`
@@ -127,6 +150,8 @@ verificada.
 | `$NODE_HOME/image-pubkey` | a chave pública que assina as imagens do runtime (cosign) — sem ela não há `--update` | 600 |
 | `$NODE_HOME/runtime-image` | o digest verificado em uso (`repo@sha256:…`), não a tag | 600 |
 | `$NODE_HOME/runtime-image.previous` | o digest anterior, para `--rollback` | 600 |
+| `$NODE_HOME/replica/cursor-<kind>` | onde a travessia do catálogo parou (`<criado em>|<id>`) | 600 |
+| `$NODE_HOME/replica/<kind>/<id>.json` + `.version` | conteúdo público guardado e a versão confirmada | 600 |
 | volume `enois-node` | workspace do runtime no container | — |
 
 `NODE_HOME` padrão é `/var/lib/enois-node`; sobrescreva por ambiente. O par
@@ -187,12 +212,12 @@ e preserva o atual; digest não verificável é recusado.
 
 ## 7. O que ainda não está aqui
 
-- **Executores de trabalho real por perfil**: `MEDIA_TRANSCODE` já executa de
-  verdade no nó (transcode com a receita do Control Plane, resultado verificado
-  por tamanho e hash, 32 asserções em `scripts/tests/node-executor-test.sh`).
-  Faltam os demais perfis: `EDGE_CACHE`/`EDGE_DELIVER` (NODE_EDGE),
-  `READ_QUERY` (NODE_READ_REPLICA) e `API_REQUEST` (NODE_API), que hoje caem no
-  eco de ciclo de vida.
+- **Executores de trabalho real por perfil**: dois já executam de verdade no nó —
+  `MEDIA_TRANSCODE` (receita do Control Plane, resultado verificado por tamanho e
+  hash) e `READ_QUERY` (travessia do catálogo da réplica com corpo e confirmação),
+  50 asserções em `scripts/tests/node-executor-test.sh`. Faltam
+  `EDGE_CACHE`/`EDGE_DELIVER` (NODE_EDGE) e `API_REQUEST` (NODE_API), que hoje caem
+  no eco de ciclo de vida.
 - **Publicação das imagens assinadas**: o verificador está pronto e testado; o
   pipeline que constrói e assina as imagens do runtime (`cosign sign`) entra com
   o registro de imagens da rede.
