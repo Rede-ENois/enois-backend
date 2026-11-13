@@ -332,6 +332,32 @@ public class NetworkTaskService {
 	}
 
 	/**
+	 * Descarta, com auditoria, o resultado que um nó revogado no meio da tarefa mandou depois
+	 * (doc 06 §5).
+	 *
+	 * <p>A tarefa já saiu dele: a drenagem a devolveu à fila quando o status virou {@code REVOKED},
+	 * então o resultado é de tentativa antiga e não pode ser aplicado. O que faltava era o registro —
+	 * a autenticação recusava a chave revogada antes de chegar aqui, e o descarte prometido em
+	 * auditoria nunca era gravado. O nó perdia o resultado e a operação perdia a explicação.</p>
+	 *
+	 * <p>Aqui nada é aplicado, em nenhum caso: a resposta é sempre {@code applied=false}. Revogação é
+	 * terminal, e o resultado de um nó revogado não volta a mover tarefa — só documenta o que
+	 * aconteceu.</p>
+	 */
+	@Transactional
+	public ResultOutcome discardRevokedResult(NetworkNode node, ResultCommand command) {
+		if (command == null || command.taskId() == null || command.taskId().isBlank()) {
+			throw new ApiException(400, "TASK_ID_REQUIRED", "Informe a tarefa.");
+		}
+		NetworkTask task = tasks.findById(command.taskId())
+			.orElseThrow(() -> new ApiException(404, "TASK_UNKNOWN", "Tarefa nao encontrada."));
+		audit.record(node.id(), "NETWORK_TASK_RESULT_DISCARDED", task.id(), "{\"reason\":\"NODE_REVOKED\","
+			+ "\"reportedAttempt\":" + command.attempt() + ",\"currentAttempt\":" + task.attempt()
+			+ ",\"node\":\"" + escape(node.id()) + "\"}");
+		return new ResultOutcome(task.id(), task.status().name(), false, "NODE_REVOKED");
+	}
+
+	/**
 	 * Aceita o resultado de uma tarefa.
 	 *
 	 * <p>Descarta, sem erro para o nó, o resultado que não é da tentativa vigente: o nó pode ter

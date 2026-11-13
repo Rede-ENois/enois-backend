@@ -196,7 +196,9 @@ Regras:
 ```
 
 Status terminal: `DONE` ou `FAILED` (com `error.code`, `error.message`, `retryable`).
-Resultado de tarefa cujo nó foi revogado no meio é **descartado** e registrado em auditoria.
+Resultado de tarefa cujo nó foi revogado no meio é **descartado** e registrado em auditoria. A
+resposta é `200 { "applied": false, "reason": "NODE_REVOKED" }` — não é erro de credencial: a chave
+revogada prova a origem do resultado, e a única coisa que ela autoriza é o próprio descarte (ADR-017).
 Resultado de tarefa **drenada** (voltou para a fila porque o nó foi suspenso, posto em quarentena ou
 revogado) cai no mesmo descarte: status `PENDING` ou `attempt` diferente.
 

@@ -263,14 +263,20 @@ Três decisões que o desenho fixa:
 - **`acceptTasks` considera o próprio nó**: antes vinha só do modo da rede; agora é falso também para
   nó fora de operação. O heartbeat do nó em conflito é o que o faz drenar sem precisar de 403.
 
-O que ainda falta nesta seção: os testes de desastre (§3.1 e §3.2 entregues em R103/R104).
+O que ainda falta nesta seção: Control Plane fora por mais que o TTL de config (§6 — a config
+assinada não tem expiração). O cenário de revogação (§5) está entregue e testado
+(`NetworkDisasterTests`, ADR-017).
 
 ## 5. Revogação durante processamento
 
 Cenário: o nó está executando uma tarefa e é revogado.
 
-1. Revogação grava `revoked_at` imediatamente.
-2. O resultado que chegar depois é **descartado** (`NODE_REVOKED`), com registro em auditoria.
+1. Revogação grava `revoked_at` imediatamente — nas chaves do nó junto com o status, na mesma
+   transação.
+2. O resultado que chegar depois é **descartado** (`NODE_REVOKED`), com registro em auditoria
+   (`NETWORK_TASK_RESULT_DISCARDED`, com nó de origem e as duas tentativas). A chave revogada ainda
+   **prova de quem** veio o resultado — por isso o descarte existe —, mas não abre mais porta
+   nenhuma: só esta rota a aceita, e apenas para descartar (ADR-017).
 3. A tarefa volta para a fila e é redistribuída, com `attempt` incrementado.
 4. Se a tarefa tinha efeito externo, a idempotência do handler impede duplicação.
 
@@ -287,9 +293,15 @@ Nó **nunca** inventa permissão quando o Control Plane está fora. Fail secure.
 
 ## 7. Testes obrigatórios de contingência
 
-- nó indisponível no meio de uma tarefa → redistribuição sem duplicar efeito;
-- revogação durante processamento → resultado descartado, tarefa redistribuída;
-- Control Plane fora → nós drenam e param, sem aceitar tarefa nova;
-- dois controladores com termos diferentes → nó entra em quarentena;
-- sobrecarga simultânea → `HIGH_LOAD` entra e sai pelos números medidos;
-- recuperação → `RECOVERY` drena sem derrubar o que está em andamento.
+| cenário | teste | estado |
+|---|---|---|
+| nó indisponível no meio de uma tarefa → redistribuição sem duplicar efeito | `NetworkTasksTests.noQueCaiNoMeioEhRedistribuidoSemDuplicarEfeito` | entregue (F2) |
+| revogação durante processamento → resultado descartado, tarefa redistribuída | `NetworkDisasterTests.revogacaoNoMeioDaTarefaDescartaOResultadoEAudita` | entregue (R105) |
+| Control Plane fora → nós drenam e param, sem aceitar tarefa nova | — | **aberto** (§6) |
+| dois controladores com termos diferentes → nó entra em quarentena | `NetworkTermConflictTests` | entregue (R102) |
+| sobrecarga simultânea → `HIGH_LOAD` entra e sai pelos números medidos | `NetworkModesTests` | entregue (F4) |
+| recuperação → `RECOVERY` drena sem derrubar o que está em andamento | `NetworkModesTests` | entregue (F4) |
+
+Os cenários de desastre que dependem de estado declarado e sobrevivem a reinício vivem em
+`NetworkDisasterTests`, que é onde os novos entram: um arquivo por vez de cenário cruzado, um método
+por item desta tabela.

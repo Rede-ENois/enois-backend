@@ -79,13 +79,18 @@ class NetworkTaskController {
 
 	/**
 	 * Resultado de uma tarefa. {@code applied=false} com {@code reason} diz que o resultado foi
-	 * descartado (tentativa antiga, tarefa já concluída) — o nó não deve reenviar.
+	 * descartado (tentativa antiga, tarefa já concluída, nó revogado no meio) — o nó não deve
+	 * reenviar.
+	 *
+	 * <p>É a única rota que aceita a chave de um nó <b>revogado</b>, e só para descartar: o resultado
+	 * que chega depois da revogação é registrado em auditoria com o nó de origem e nunca aplicado
+	 * (doc 06 §5). Sem isso o descarte prometido sumia num 401 sem rastro.</p>
 	 */
 	@PostMapping("/{taskId}/result")
 	ResultResponse result(@RequestHeader(value = "X-Node-Id", required = false) String nodeId,
 			@RequestHeader(value = "X-Node-Key", required = false) String nodeKey, @PathVariable String taskId,
 			@RequestBody(required = false) ResultRequest request) {
-		NetworkNode node = keys.authenticate(nodeId, nodeKey);
+		NodeKeyService.ResultCredential credential = keys.authenticateForResult(nodeId, nodeKey);
 		if (request == null) {
 			throw new ApiException(400, "TASK_RESULT_REQUIRED", "Corpo do resultado ausente.");
 		}
@@ -95,9 +100,10 @@ class NetworkTaskController {
 			throw new ApiException(400, "TASK_STATUS_INVALID", "Status do resultado invalido.");
 		}
 		ErrorBody error = request.error();
-		var outcome = tasks.acceptResult(node, new NetworkTaskService.ResultCommand(taskId, request.attempt(), done,
-			request.output(), error == null ? null : error.message(),
-			error != null && Boolean.TRUE.equals(error.retryable())));
+		var command = new NetworkTaskService.ResultCommand(taskId, request.attempt(), done, request.output(),
+			error == null ? null : error.message(), error != null && Boolean.TRUE.equals(error.retryable()));
+		var outcome = credential.revoked() ? tasks.discardRevokedResult(credential.node(), command)
+				: tasks.acceptResult(credential.node(), command);
 		return new ResultResponse(outcome.taskId(), outcome.status(), outcome.applied(), outcome.reason());
 	}
 

@@ -165,7 +165,7 @@ revogação que pode ser desfeita não é revogação.
 | toda requisição de nó | `X-Node-Id` + hash da `X-Node-Key`; revogado = 401 |
 | leitura da própria config | a mesma credencial, e **não** exige `status = ACTIVE` — o nó pendente precisa ler que não pode operar |
 | despacho de tarefa | perfil cobre o `type` e o `dataClass` |
-| resultado de tarefa | nó ainda `ACTIVE`; se revogado no meio, resultado descartado |
+| resultado de tarefa | nó ainda `ACTIVE`; se revogado no meio, resultado descartado — a chave revogada ainda **prova de quem** veio o resultado (`authenticateForResult`, ADR-017), e a única porta que ela abre é o descarte auditado; toda outra rota segue 401 |
 | rota admin | `AdminRouteInterceptor` + `AdminGuard` no controller |
 | escrita sem sessão | `WriteRouteInterceptor` com lista branca explícita |
 
