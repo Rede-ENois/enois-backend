@@ -83,6 +83,24 @@ Resposta: estado do nó, perfis e modo operacional vigente.
 tabela de contingência: falso em `DEGRADED`/`EMERGENCY`. O campo é aditivo — nó que o ignora
 continua funcionando e ainda recebe tarefas do Control Plane, que já não designa nada nesses modos.
 
+Regra 5 da contingência (06 §4.2, R102): o nó também reporta o **termo aceito** como
+`observedTerm` — o mesmo número que `term_regressao` guarda em `$NODE_HOME/term`. Nó que nunca
+aceitou config não manda o campo.
+
+```json
+{
+  "runtimeVersion": "0.1.0",
+  "observed": { "cpuPercent": 12.4, "memoryMb": 1024, "runningTasks": 2 },
+  "observedTerm": 4
+}
+```
+
+Termo reportado MAIOR que o vigente da autoridade significa que o nó viu um controlador que o
+Control Plane não conhece (dois mandos): o nó entra em `QUARANTINED` com motivo `TERM_CONFLICT` e a
+MESMA resposta vem com `status: "QUARANTINED"` e `acceptTasks: false` — 200, não 403, porque o
+heartbeat é o canal pelo qual o nó continua reportando o termo. A quarentena não expira por relógio;
+o caminho de volta é a reaprovação administrativa. Termo igual ou menor é normal e não muda nada.
+
 ### `GET /network/nodes/me/config`
 Devolve a configuração **assinada** (credencial de nó: `X-Node-Id` + `X-Node-Key`). O nó confere a
 assinatura antes de aplicar. Implementada (fase 5): o payload real está abaixo.

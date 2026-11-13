@@ -78,8 +78,8 @@ Cinco propriedades:
   efeito colateral.
 - Promoção não toca o modo: `EMERGENCY` declarado continua valendo depois da troca de autoridade,
   porque `since` é do modo e `promoted_at` é da autoridade.
-- A regra 5 do doc 06 (nó que vê dois controladores entra em `QUARANTINED`) continua aberta: exige o
-  nó observar mais de uma autoridade, o que só existe quando houver mais de um Control Plane de pé.
+- A regra 5 do doc 06 (nó que vê dois controladores entra em `QUARANTINED`) ficou **fechada na
+  R102**: ver ADR-014, que usa o termo aceito reportado no heartbeat como canal de detecção.
 
 ## Provas
 

@@ -73,15 +73,21 @@ class AdminNetworkController {
 		 * O nó como o painel o vê. {@code degraded} e {@code quarantinedUntil} vêm da saúde medida, que
 		 * não é {@code status}: um nó ACTIVE pode estar fora do balanceamento por falha, e sem esses
 		 * campos o admin veria "ativo" sem entender por que a fila não anda.
+		 *
+		 * <p>Motivo de quarentena de STATUS com janela vencida segue visível: a de termo divergente
+		 * não sai sozinha, e esconder o motivo depois do prazo de revisão deixaria o painel mostrando
+		 * um nó parado sem dizer por quê.</p>
 		 */
 		static NodeView of(NetworkNode node, NodeKeyRepository.NodeKeyRecord key, Instant now) {
 			boolean quarantined = node.quarantined(now);
+			boolean showQuarantine = quarantined
+				|| (node.status() == NodeStatus.QUARANTINED && node.quarantineReason() != null);
 			return new NodeView(node.id(), node.displayName(), node.ownerUserId(), node.status().name(),
 				node.profiles().stream().map(Enum::name).sorted().toList(), node.region(), node.runtimeVersion(),
 				node.lastSeenAt(), node.canOperate(), key == null ? null : key.id(),
 				key == null ? null : key.keyPrefix(), key != null && key.lastUsedAt() != null,
-				node.observedLatencyMs(), node.consecutiveFailures(), quarantined || node.slow() || node.failing(),
-				quarantined ? node.quarantineReason() : null, quarantined ? node.quarantinedUntil() : null,
+				node.observedLatencyMs(), node.consecutiveFailures(), showQuarantine || node.slow() || node.failing(),
+				showQuarantine ? node.quarantineReason() : null, showQuarantine ? node.quarantinedUntil() : null,
 				node.declaredCpuCores(), node.declaredMemoryMb(), node.declaredDiskMb(),
 				node.declaredBandwidthMbps());
 		}

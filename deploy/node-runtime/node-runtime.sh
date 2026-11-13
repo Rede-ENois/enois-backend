@@ -812,11 +812,19 @@ exec_edge_deliver() {
 
 cycle() {
   # 1. heartbeat: estado, modo e se pode pedir tarefa.
-  local hb mode accept_tasks observed_cpu observed_mem
+  local hb mode accept_tasks observed_cpu observed_mem observed_term term_part
   observed_cpu=$(awk 'NR==1 {printf "%.1f", $1}' /proc/loadavg 2>/dev/null || echo 0)
   observed_mem=$(awk '/MemAvailable/ {printf "%d", ($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+  # O termo aceito vai no heartbeat (doc 06 §4, regra 5): é assim que o Control Plane
+  # descobre que este nó viu um controlador de mando maior que o dele. Nó que ainda não
+  # aceitou config nenhuma não reporta termo — zero afirmaria "vi o termo zero", que é
+  # diferente de não ter visto termo nenhum.
+  observed_term=''
+  [[ -s "$NODE_HOME/term" ]] && observed_term=$(head -n 1 "$NODE_HOME/term")
+  term_part=''
+  [[ -n "$observed_term" ]] && term_part=",\"observedTerm\":$observed_term"
   hb=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
-    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"memoryMb\":$observed_mem,\"runningTasks\":0}}" \
+    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"memoryMb\":$observed_mem,\"runningTasks\":0}$term_part}" \
     "$CONTROL_PLANE/network/nodes/heartbeat") || { printf '[executor] heartbeat falhou\n' >&2; return 1; }
   mode=$(json_field "$hb" mode)
   accept_tasks=$(grep -q '"acceptTasks":true' <<<"$hb" && echo true || echo false)

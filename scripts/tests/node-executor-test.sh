@@ -291,6 +291,28 @@ out=$(run_custom "$NH_TERM")
 assert_contains 'config de termo maior é aceita e a tarefa roda' "$out" 'DONE tk_1'
 assert_eq 'termo aceito sobe o registro local' '3' "$(head -n 1 "$NH_TERM/term")"
 
+# ------------------------------------------------- cenário 5f: o termo aceito sobe no heartbeat
+# Regra 5 do doc 06 §4: o Control Plane só descobre que este nó viu um mando MAIOR que o dele
+# se o nó contar o termo. Quem pergunta é o heartbeat, então o termo vai no corpo dele — a
+# config é resposta do servidor, não canal de subida. E nó sem termo aceito não manda o campo:
+# mandar zero afirmaria "vi o termo zero", que não é a mesma coisa que não ter visto nada.
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  *) printf 'CHAMADA-INESPERADA %s' "\$url" >> "$TMP/curl-calls" ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+printf '4\n' > "$NH_TERM/term"
+out=$(run_custom "$NH_TERM")
+assert_contains 'heartbeat reporta o termo aceito' "$(cat "$TMP/curl-calls")" '"observedTerm":4'
+rm -f "$NH_TERM/term"
+out=$(run_custom "$NH_TERM")
+assert_not_contains 'nó sem termo aceito não inventa termo no heartbeat' "$(cat "$TMP/curl-calls")" 'observedTerm'
+
 # ------------------------------------------------- cenário 6: credencial nunca em log
 out=$(run_one_cycle "$TASK_ASSIGNED")
 assert_not_contains 'executor não imprime a API key' "$out" 'enk_echoteste0123'

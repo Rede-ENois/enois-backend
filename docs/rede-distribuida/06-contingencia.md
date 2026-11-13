@@ -138,7 +138,7 @@ O Control Plane não pode ser ponto único de falha sem estratégia de recupera�
 5. Nó que detecta dois controladores com termos diferentes entra em `QUARANTINED` e para de aceitar
    tarefas até a situação resolver.
 
-### 4.1 O que está entregue (V288, R101)
+### 4.1 O que está entregue (V288, R101 — regra 5 na R102)
 
 | regra | onde vive | como é provado |
 |---|---|---|
@@ -146,7 +146,7 @@ O Control Plane não pode ser ponto único de falha sem estratégia de recupera�
 | 2. nó recusa termo menor | `term_regressao` em `deploy/node-runtime/node-runtime.sh`, estado em `$NODE_HOME/term` | `scripts/tests/node-executor-test.sh` cenários 5d/5e; Q0 removendo a checagem |
 | 3. quórum explícito, fail secure | `NetworkAuthorityService.promote` → `NETWORK_AUTHORITY_NO_QUORUM` | `NetworkAuthorityTests.semQuorumNinguemPromove`, `semEleitoradoNinguemPromove` |
 | 4. mesmo termo impossível | CAS `update network_state … where term = <lido>` | `NetworkAuthorityPersistenceTests`, e o `row_count` conferido no MariaDB 11.4 real |
-| 5. nó em `QUARANTINED` | **aberto** — próxima rodada |
+| 5. nó em `QUARANTINED` | `NetworkNodeService.heartbeat` → `quarantineOnTermConflict` (motivo `TERM_CONFLICT`), runtime reporta o termo aceito no heartbeat | `NetworkTermConflictTests` (Q0 desligando a detecção: 3 testes falham); `node-executor-test.sh` cenários 5d/5e/5f |
 
 Decisões que o desenho fixa, e por quê:
 
@@ -166,8 +166,43 @@ Decisões que o desenho fixa, e por quê:
 - **O termo entra na linha assinada** (`formatVersion` 2, termo por último), não só no JSON: é o que
   deixa o nó recusar um termo que regride conferindo contra o pino, em vez de confiar no transporte.
 
-O que ainda falta nesta seção: regra 5 (quarentena de nó que vê dois controladores), recuperação
-regional, replicação geográfica e os testes de desastre.
+#### 4.2 Regra 5 na prática (R102)
+
+O canal de detecção é o próprio heartbeat: o runtime reporta o **termo aceito** (o de
+`$NODE_HOME/term`, o mesmo registro que a `term_regressao` mantém) no corpo do
+`POST /network/nodes/heartbeat` como `observedTerm`. Nó que nunca aceitou config não manda o campo —
+mandar zero afirmaria "vi o termo zero", que não é a ausência de um termo.
+
+O Control Plane compara o termo reportado com o vigente em `network_state`:
+
+- **termo reportado MAIOR**: o nó viu um controlador que esta autoridade não conhece — há dois
+  mandos. O nó entra em `QUARANTINED` com motivo `TERM_CONFLICT`, com auditoria
+  `NETWORK_NODE_QUARANTINED` carregando `observedTerm` e `authorityTerm`. A resposta do heartbeat
+  continua 200, com `status: "QUARANTINED"` e `acceptTasks: false` — o nó drena na hora. Nó em
+  `PENDING_APPROVAL`/`SUSPENDED`/`REVOKED` não entra em conflito por termo: não tem tarefa a perder,
+  e trocar o status apagaria a fila de aprovação humana.
+- **termo igual ou menor**: normal. Menor o próprio nó já recusa (regra 2); punir quem está atrasado
+  tiraria nós de circulação a cada reconexão de uma autoridade deposta e esconderia o conflito real.
+- **sem termo reportado**: nada muda — a regra existe para o nó que FALOU com dois controladores, e
+  quem não reporta termo não provou nada.
+
+Três decisões que o desenho fixa:
+
+- **A quarentena de termo não expira por relógio.** A de saúde (V282) tem janela porque falha se
+  resolve sozinha; divergência de termo não — liberar com o relógio devolveria o nó a operar ainda
+  dividido entre dois mandos. `findQuarantineExpired` só enxerga nós `ACTIVE`, então o status
+  `QUARANTINED` já basta; a janela gravada em `quarantinedUntil` é horizonte de revisão para o
+  painel, não prazo de volta. Nó em conflito continua batendo coração (200), porque é pelo heartbeat
+  que ele reporta o termo — 403 fecharia o único canal de detecção. A exceção vale só para
+  `TERM_CONFLICT`: quarentena manual do admin continua respondendo 403 no heartbeat, como sempre.
+- **O caminho de volta é humano**: reaprovação administrativa (`POST /admin/network/nodes/{id}/approve`)
+  devolve o `ACTIVE` e limpa a janela — aprovar sem limpar deixaria o nó "liberado no papel, fora do
+  balanceamento na prática". A limpeza é restrita ao motivo `TERM_CONFLICT`; a quarentena de saúde
+  continua sob o worker de recuperação, como antes.
+- **`acceptTasks` considera o próprio nó**: antes vinha só do modo da rede; agora é falso também para
+  nó fora de operação. O heartbeat do nó em conflito é o que o faz drenar sem precisar de 403.
+
+O que ainda falta nesta seção: recuperação regional, replicação geográfica e os testes de desastre.
 
 ## 5. Revogação durante processamento
 

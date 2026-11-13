@@ -103,10 +103,10 @@ o teste exige a ordem das transições.
 
 | item | critério de aceite |
 |---|---|
-| Control Plane redundante | promoção controlada com term; sem quórum, ninguém promove — **entregue (R101)**: `term`/`authority_id`/`promoted_at` em `network_state` e eleitorado em `network_authorities` (V288), CAS na promoção, quórum de maioria do DECLARADO com vivacidade de `network_instance_readers`, `POST /admin/network/authority/promote` auditado, e `term` na linha assinada do formato 2 (`executor` recusa termo menor). Falta a regra 5 (nó em `QUARANTINED` ao ver dois controladores) |
+| Control Plane redundante | promoção controlada com term; sem quórum, ninguém promove — **entregue (R101)**: `term`/`authority_id`/`promoted_at` em `network_state` e eleitorado em `network_authorities` (V288), CAS na promoção, quórum de maioria do DECLARADO com vivacidade de `network_instance_readers`, `POST /admin/network/authority/promote` auditado, e `term` na linha assinada do formato 2 (`executor` recusa termo menor) |
 | recuperação regional | região afetada sai; nós de outras regiões atendem o que podem |
 | replicação geográfica | só o que pode replicar; divergência detectada |
-| anti split-brain | dois controladores → nó em quarentena |
+| anti split-brain | dois controladores → nó em quarentena — **entregue (R102)**: o nó reporta o termo aceito no heartbeat (`observedTerm`); termo MAIOR que o da autoridade vigente põe o nó em `QUARANTINED` com motivo `TERM_CONFLICT`, auditoria com os dois termos, `acceptTasks=false` na mesma resposta. Sem prazo de relógio (divergência não se resolve esperando): a volta é reaprovação administrativa. Depois de `QUARANTINED` o heartbeat segue 200 para o termo continuar subindo; quarentena manual segue 403 |
 | testes de desastre | cada cenário da lista de testes obrigatórios |
 | chaos engineering | falha injetada com resultado previsível |
 

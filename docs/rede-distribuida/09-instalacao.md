@@ -82,9 +82,12 @@ Sai 0 quando não há FAIL; WARN não impede a operação. Nunca imprime a API k
 O container roda o loop do nó, não o jar (o jar é o Control Plane). Cada ciclo:
 
 1. **heartbeat** com capacidade observada — a resposta traz o modo operacional e
-   `acceptTasks`;
-2. **drenar é não pedir**: `acceptTasks:false` (DEGRADED/EMERGENCY) encerra o ciclo
-   sem consultar a fila;
+   `acceptTasks`. O corpo leva também `observedTerm`, o último termo de autoridade
+   aceito (`$NODE_HOME/term`): é por ele que o Control Plane detecta que este nó viu
+   um mando maior que o vigente e o põe em quarentena (doc 06 §4.2). Nó que nunca
+   aceitou config não manda o campo;
+2. **drenar é não pedir**: `acceptTasks:false` (DEGRADED/EMERGENCY, ou o próprio nó
+   fora de operação) encerra o ciclo sem consultar a fila;
 3. **config assinada**: recusa config sem assinatura (padrão do runtime) e confere
    o campo `publicKey` contra o pino gravado no enroll ou no primeiro `--start`
    (`$NODE_HOME/pinning-key`); sem pino, recusa toda config. Depois **verifica a
