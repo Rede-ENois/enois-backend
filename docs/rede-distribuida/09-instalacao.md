@@ -218,8 +218,44 @@ veredicto positivo sem confirmação é recusado (`EDGE_DELIVER_UNCONFIRMED`), e
 versão ou hash diferentes do confirmado também (`EDGE_DELIVER_MISMATCH`,
 retentável). A declaração do nó nunca é aceita por si só.
 
-O único tipo ainda em prova de ciclo de vida (eco do `idempotencyKey`) é
-`API_REQUEST`.
+**`API_REQUEST`: o destino não vem do payload.** O payload carrega só o
+**nome** da rota (`{"route":"catalogo","method":"GET"}`); para onde ir está na
+lista `allowedRoutes` da config **assinada** (formato 4). O executor resolve o
+nome contra essa lista e, se não achar, falha com `API_ROUTE_NOT_ALLOWED` — sem
+requisição nenhuma. Não existe "se não achar, usa a URL do payload": essa
+alternativa é um SSRF apontado para dentro da rede do participante, e é
+exatamente o que a assinatura impede (doc 02 §4.2, ADR-020).
+
+O executor chama a rota **sem `-L`** (o destino não escolhe outro por
+redirect), **sem a credencial do nó** (o `X-Node-Key` é do Control Plane, não
+do destino), com teto de tempo (30 s) e de tamanho (1 MiB). O `--max-filesize`
+do curl só confia no `Content-Length`, então o executor **mede** o arquivo
+baixado e recusa acima do teto — servidor que não declara o tamanho não escapa
+do limite. O que volta ao Control Plane é **evidência**, não conteúdo:
+`{"route":…,"status":…,"bytes":…,"digest":…}`. O corpo da rota externa não
+entra na rede.
+
+A lista de rotas vem de `rede.network.config.allowed-routes`
+(`NETWORK_CONFIG_ALLOWED_ROUTES`) e é **vazia por padrão**: sem rota
+declarada, o nó não tem para onde ir e a task é recusada. Entrada malformada
+(sem `=`, ou com nome/URL vazio) é descartada com aviso e nunca entra na
+assinatura.
+
+Quem declara a rota escreve `nome=url` e obedece a quatro regras, porque cada
+uma protege uma propriedade de que o runtime depende: nome em `[A-Za-z0-9._-]`
+(o mesmo conjunto que o runtime aceita no payload), destino `http://` ou
+`https://`, destino só em ASCII imprimível sem `"`, `\` nem `]` (o primeiro vira
+escape no JSON e o último fecha o array — o destino seria lido em pedaços), e
+nome único (duas URLs para o mesmo nome significam um destino que nunca será
+chamado).
+
+**A vírgula da query string não corta o destino.**
+`https://api.exemplo/x?ids=1,2` é **um** destino. A lista é lida quebrando os
+itens pelo trecho `","` — o que separa dois elementos do array — e não por
+qualquer vírgula: cortar ali daria ao nó um caminho **diferente** do assinado,
+e a chamada iria para um lugar que ninguém autorizou. Quem precisar de uma
+vírgula literal na query escreve `%2C`.
+
 Conteúdo de usuário (HTML, CSS, KofScript) **nunca** executa no nó — continua nos
 sandboxes próprios (02-modelo-de-ameacas.md). O script é montado no container
 (`/node-runtime.sh:ro`); a imagem do runtime se troca por `install.sh --update`
@@ -301,13 +337,16 @@ e preserva o atual; digest não verificável é recusado.
 
 ## 7. O que ainda não está aqui
 
-- **Executores de trabalho real por perfil**: quatro já executam de verdade no nó —
+- **Executores de trabalho real por perfil**: cinco já executam de verdade no nó —
   `MEDIA_TRANSCODE` (receita do Control Plane, resultado verificado por tamanho e
   hash), `READ_QUERY` (travessia do catálogo da réplica com corpo e confirmação),
-  `EDGE_CACHE` (consumo do feed de mudanças com corpo baixado e confirmado) e
+  `EDGE_CACHE` (consumo do feed de mudanças com corpo baixado e confirmado),
   `EDGE_DELIVER` (revalidação da entrada e veredicto de entrega conferido contra
-  o snapshot do nó), 112 asserções em `scripts/tests/node-executor-test.sh`.
-  Falta `API_REQUEST` (NODE_API), que hoje cai no eco de ciclo de vida.
+  o snapshot do nó) e `API_REQUEST` (chamada à rota da lista **assinada**
+  `allowedRoutes`, com o destino fora do payload e o resultado como evidência),
+  163 asserções em `scripts/tests/node-executor-test.sh`.
+  Falta o **produtor** de `API_REQUEST` no lado do Control Plane: o executor e a
+  lista assinada existem, mas nenhuma rota de admin enfileira essa task ainda.
 - **Banda compartilhada entre execuções concorrentes**: o teto declarado
   (`limits.bandwidthMbps`) já vale como `curl --limit-rate` em cada transferência de
   corpo do runtime. Hoje o runtime executa uma tarefa por ciclo, então limitar cada

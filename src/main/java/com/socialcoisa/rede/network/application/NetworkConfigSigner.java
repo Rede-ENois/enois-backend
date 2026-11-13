@@ -49,8 +49,8 @@ final class NetworkConfigSigner {
 	 * resposta — e a regra de recusa seria decorativa.</p>
 	 */
 	record SignedFields(int formatVersion, int configVersion, String nodeId, List<String> profiles, int cpuCores,
-			int memoryMb, int diskMb, int bandwidthMbps, List<String> allowedTasks, String issuedAt, int ttlSeconds,
-			int term) {
+			int memoryMb, int diskMb, int bandwidthMbps, List<String> allowedTasks, List<String> allowedRoutes,
+			String issuedAt, int ttlSeconds, int term) {
 
 		/**
 		 * A linha assinada. Listas vão ordenadas e em JSON compacto: a ordem do banco não é
@@ -58,12 +58,15 @@ final class NetworkConfigSigner {
 		 * diferentes para a mesma permissão. {@code term} entra no FIM — o formato 1 não o tinha, e
 		 * quem reconstrói a linha sempre o acrescenta por último. {@code ttlSeconds} entrou no
 		 * formato 3 e fica logo antes do termo, pelo mesmo motivo: campo novo nunca desloca o último.
+		 * {@code allowedRoutes} entrou no formato 4 e fica logo depois de {@code allowedTasks}: é a
+		 * lista de rotas que o nó pode chamar, e ela é assinada — sem assinatura, um intermediário
+		 * trocaria a rota autorizada por outra e o nó obedeceria (doc 02, linha SSRF).
 		 */
 		String canonical() {
 			return String.join("|", String.valueOf(formatVersion), String.valueOf(configVersion), nodeId,
 				jsonList(profiles), String.valueOf(cpuCores), String.valueOf(memoryMb), String.valueOf(diskMb),
-				String.valueOf(bandwidthMbps), jsonList(allowedTasks), issuedAt, String.valueOf(ttlSeconds),
-				String.valueOf(term));
+				String.valueOf(bandwidthMbps), jsonList(allowedTasks), jsonList(allowedRoutes), issuedAt,
+				String.valueOf(ttlSeconds), String.valueOf(term));
 		}
 
 		private static String jsonList(List<String> values) {

@@ -110,11 +110,12 @@ assinatura antes de aplicar. Implementada (fase 5): o payload real está abaixo.
   "nodeId": "nd_…",
   "status": "ACTIVE",
   "operable": true,
-  "formatVersion": 3,
+  "formatVersion": 4,
   "configVersion": 3,
   "profiles": ["NODE_MEDIA"],
   "limits": { "cpuCores": 4, "memoryMb": 8192, "diskMb": 51200, "bandwidthMbps": 100 },
   "allowedTasks": ["MEDIA_TRANSCODE", "MEDIA_THUMBNAIL"],
+  "allowedRoutes": ["catalogo=https://catalogo.exemplo/api"],
   "region": "sudeste", "country": "BR",
   "issuedAt": "2026-11-12T10:00:00Z",
   "ttlSeconds": 300,
@@ -129,9 +130,10 @@ assinatura antes de aplicar. Implementada (fase 5): o payload real está abaixo.
 Três números, de propósito:
 
 - `formatVersion` é a versão do **formato** do documento — sobe quando o runtime antigo não
-  entenderia o payload novo. Hoje é `3`: o formato 2 acrescentou `term` (fase 6) e o formato 3
-  acrescentou `ttlSeconds` (doc 06 §6). Runtime de formato 1 não lê o termo; o de formato 2
-  reconstrói a linha sem o TTL; o de formato 3 reconstrói a linha com os dois.
+  entenderia o payload novo. Hoje é `4`: o formato 2 acrescentou `term` (fase 6), o formato 3
+  acrescentou `ttlSeconds` (doc 06 §6) e o formato 4 acrescentou `allowedRoutes`. Runtime de
+  formato 1 não lê o termo; o de formato 2 reconstrói a linha sem o TTL; o de formato 3 reconstrói
+  a linha com os dois; o de formato 4 reconstrói com a lista de rotas.
 - `term` é o **termo da autoridade** que assinou (V288, doc 06 §4). Só sobe na promoção de Control
   Plane e o nó recusa config de termo menor que o último aceito — config de termo velho é uma
   autoridade deposta tentando voltar a mandar.
@@ -153,13 +155,46 @@ instante em que ela nasce). Sem esse campo, a última permissão valeria para se
 sob um mando que talvez não exista mais — é o que separa "blip de rede" de "Control Plane fora".
 
 A **linha canônica** assinada junta os campos na ordem do contrato:
-`formatVersion|configVersion|nodeId|profiles|cpuCores|memoryMb|diskMb|bandwidthMbps|allowedTasks|issuedAt|ttlSeconds|term`,
+`formatVersion|configVersion|nodeId|profiles|cpuCores|memoryMb|diskMb|bandwidthMbps|allowedTasks|allowedRoutes|issuedAt|ttlSeconds|term`,
 com listas ordenadas em JSON compacto. Assina-se o canônico, não o JSON — reordenar chaves do corpo
 não muda a assinatura. O `term` continua fechando a linha, e por isso o formato 3 inseriu
 `ttlSeconds` **antes** dele, não depois: runtime antigo que só sabe ler até o termo vê um documento
-de formato 3 e recusa, em vez de ler um `ttl` no lugar do termo. É por estar dentro da assinatura
-que o nó consegue recusar termo que regride e TTL que o Control Plane não emitiu, conferindo contra
-o pino em vez de confiar no transporte.
+de formato 3 e recusa, em vez de ler um `ttl` no lugar do termo. O formato 4 seguiu a mesma regra e
+inseriu `allowedRoutes` logo depois de `allowedTasks` — o campo novo nunca desloca o último. É por
+estar dentro da assinatura que o nó consegue recusar termo que regride e TTL que o Control Plane
+não emitiu, conferindo contra o pino em vez de confiar no transporte.
+
+`allowedRoutes` é a lista de **destinos que o nó pode chamar**, no formato `nome=url`
+(`["catalogo=https://catalogo.exemplo/api"]`). Ela entra no payload e **na assinatura**, e é o que
+fecha o SSRF (doc 02 §4.2): a task `API_REQUEST` diz apenas o **nome** da rota, e o runtime resolve
+esse nome contra a lista assinada para descobrir para onde ir. Se o destino viesse do payload, o nó
+externo seria um SSRF apontado para dentro da rede do participante — metadata do hypervisor,
+serviços internos, o painel do roteador. Assinar a lista significa que um intermediário que
+troque a rota por outra produz um documento cuja assinatura não confere com o pino, e o nó recusa
+antes de sair na rede. A lista vem de `rede.network.config.allowed-routes`
+(`NETWORK_CONFIG_ALLOWED_ROUTES`), é ordenada e sem repetição, e é **vazia por padrão**: sem rota
+declarada, o nó não tem para onde ir e a task é recusada.
+
+A entrada só entra na assinatura se passar em quatro regras, e cada uma delas protege uma
+propriedade que o runtime depende:
+
+| regra | por que |
+|---|---|
+| `nome=url`, com nome e URL não vazios | entrada sem `=` não é rota |
+| nome só em `[A-Za-z0-9._-]` (ASCII) | é o mesmo conjunto que o runtime aceita no payload; um nome fora dele entraria assinado e nunca seria resolvido |
+| destino `http://` ou `https://` | o executor rejeita outro esquema; a rota entraria assinada para ser sempre recusada |
+| destino só ASCII imprimível, sem `"`, `\` nem `]` | `"` e `\` viram escape no JSON e `]` fecha o array — o destino seria lido em pedaços; e fora do ASCII o signer (ordem UTF-16) e o runtime (`sort` por byte) ordenariam a lista de jeitos diferentes, e a linha reconstruída pelo nó deixaria de conferir com a assinatura |
+
+Nome repetido com outro destino também é descartado: o runtime resolve por nome, e duas URLs para
+o mesmo nome significam um destino que nunca será chamado, sem que ninguém perceba.
+
+A vírgula é separador de entradas **só quando introduz uma entrada nova** (`nome=url` válido). A
+vírgula é caractere legítimo de URL — `https://api.exemplo/x?ids=1,2` é **um** destino — e um
+separador que não distinguisse as duas cortaria o destino no meio: o nó chamaria um caminho
+diferente do declarado. Quem precisar de uma vírgula literal na query escreve `%2C`, que é a forma
+canônica de URL e não deixa a ambiguidade para trás.
+
+Entrada malformada é descartada com aviso — ela nunca entra na assinatura.
 
 `publicKey` é o **pino**: o instalador grava esta chave no install e toda config seguinte é conferida
 contra ela, sem depender do transporte desta resposta.
@@ -296,6 +331,75 @@ existe (`USER_NOT_FOUND` para perfil). Idempotência por
 caracteres (id de nó até 40, de conteúdo até 64), e o digest preserva a propriedade que importa —
 mesma combinação na mesma janela é a mesma chave.
 
+## 3b-bis. `API_REQUEST` — chamada a rota autorizada
+
+`API_REQUEST` é o tipo de task do perfil `NODE_API`: o nó **chama uma rota HTTP** em nome da rede.
+O contrato é deliberadamente estreito, porque é o único caminho em que o nó sai do seu próprio
+host para o mundo.
+
+O **destino nunca vem do payload.** O payload carrega só o **nome** da rota:
+
+```json
+{"route": "catalogo", "method": "GET"}
+```
+
+O nome é resolvido pelo runtime contra `allowedRoutes`, a lista **assinada** que vem na config
+(formato 4, ver §2). Se o nome não estiver na lista, a task falha com `API_ROUTE_NOT_ALLOWED` — e
+não há "se não achar, usa o que o payload mandou": essa alternativa é exatamente o SSRF que a
+assinatura existe para fechar (doc 02 §4.2).
+
+Regras do executor (`deploy/node-runtime/node-runtime.sh`, `exec_api_request`):
+
+- **Método**: só `GET` e `HEAD`. Qualquer outro (`POST`, `PUT`, `DELETE`) é `TASK_PAYLOAD_INVALID` —
+  esta fase é de leitura; escrita em API externa é outro desenho, com o seu próprio contrato.
+- **Nome da rota**: só letras, dígitos, `.`, `_` e `-`. Qualquer outra coisa é
+  `TASK_PAYLOAD_INVALID` — o nome nunca é interpolado em comando, mas a checagem mantém o
+  contrato explícito e o log legível. É o mesmo conjunto que o Control Plane exige ao declarar a
+  rota (§2), então nome que o payload traz e nome que está assinado são sempre o mesmo
+  identificador.
+- **Destino com vírgula na query**: `https://api.exemplo/x?ids=1,2` é um destino só. A leitura da
+  lista assinada quebra os itens pelo trecho `","` (o que separa dois elementos do array), e não
+  por qualquer vírgula — cortar ali daria ao nó um destino **diferente** do assinado, e a chamada
+  iria para um caminho que ninguém autorizou.
+- **Destino**: precisa ser `http://` ou `https://`. URL de outro esquema é `API_ROUTE_NOT_ALLOWED`.
+- **Sem credencial do nó no destino**: o `X-Node-Key` do nó é para o Control Plane, nunca para a
+  rota externa. O nó fala com o destino como cliente anônimo.
+- **Sem redirect**: `curl` é chamado **sem** `-L`. A rota autorizada aponta para o destino
+  declarado; seguir `Location` seria deixar o destino escolher outro — o allowlist deixaria de
+  valer no primeiro redirecionamento.
+- **Teto de tempo e de tamanho**: `--connect-timeout 10`, `--max-time 30` (ajustável por
+  `API_REQUEST_TIMEOUT`) e `--max-filesize 1 MiB` (ajustável por `API_REQUEST_MAX_BYTES`). O
+  `--max-filesize` do curl só confia no `Content-Length`, então o executor **mede o arquivo
+  baixado** e recusa acima do teto: um servidor que não declara o tamanho não escapa do limite.
+- **Banda do participante**: a transferência respeita `limits.bandwidthMbps` da config assinada,
+  como as demais.
+
+O resultado é **evidência, nunca o corpo da rota**:
+
+```json
+{"route": "catalogo", "status": 200, "bytes": 16, "digest": "sha256…"}
+```
+
+O corpo de resposta da rota externa **não volta** para o Control Plane — devolver conteúdo de
+terceiro para dentro da rede é o que a separação de ambientes (doc 02) não permite; o que fica é o
+status, o tamanho e o digest, que bastam para provar que a chamada aconteceu e o que ela devolveu.
+
+Erros:
+
+| código | quando | retenta |
+|---|---|---|
+| `TASK_PAYLOAD_INVALID` | payload sem `route`, nome de rota inválido ou método fora de `GET`/`HEAD` | não |
+| `API_ROUTE_NOT_ALLOWED` | rota fora da lista assinada, ou destino que não é http(s) | não |
+| `API_REQUEST_FAILED` | a chamada falhou, ou a resposta passou do teto | sim |
+
+`API_ROUTE_NOT_ALLOWED` **não** é retenta: repetir daria o mesmo resultado, porque a lista assinada
+não muda dentro da tentativa. Já `API_REQUEST_FAILED` é retenta — rede caiu, destino instável.
+
+Do lado do Control Plane, a task é enfileirada como qualquer outra (`POST /network/tasks` interno,
+idempotência por `idempotencyKey`). **A produção do lado do servidor (`POST /admin/network/...`)
+ainda não existe** — esta entrega é o executor do nó e a lista assinada. Sem um produtor, nada
+enfileira `API_REQUEST`; quando ele vier, ele só pode escolher o **nome** da rota, nunca a URL.
+
 ## 3a. Interface do participante (`/network/participant`)
 
 Rotas autenticadas por **sessão de navegador** (`X-Session-Token`), não por chave de nó: quem fala
@@ -385,6 +489,7 @@ split-brain que a fase 6 existe para impedir.
 | `NODE_REVOKED` | 403 | nó revogado |
 | `NODE_PENDING_APPROVAL` | 403 | aprovado ainda não |
 | `TASK_NOT_ALLOWED` | 403 | perfil não cobre o tipo |
+| `API_ROUTE_NOT_ALLOWED` | 403 | rota fora da lista assinada, ou destino que não é http(s) |
 | `TASK_EXPIRED` | 400 | deadline vencido |
 | `TASK_ALREADY_CLAIMED` | 409 | outra tentativa já concluiu |
 | `NETWORK_DISABLED` | 503 | rede desligada por config (fail-closed) |

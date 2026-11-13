@@ -70,6 +70,11 @@ prioridade de escalonamento, não permissão extra.
 | servir conteúdo adulterado | verificação de integridade do objeto; hash conferido na origem |
 | ficar com dado de usuário | a tarefa recebe o mínimo; retenção e expiração no contrato |
 | se passar por outro participante | identidade é do nó, não do dono; o dono não herda permissão |
+| usar o nó como SSRF contra a rede do participante | o destino da task `API_REQUEST` **nunca** vem do payload: o payload só nomeia a rota, e o nome é resolvido contra a lista `allowedRoutes` **assinada** na config. Destino fora da lista é recusado com `API_ROUTE_NOT_ALLOWED`, sem requisição nenhuma. A lista vai dentro da assinatura, então trocar a rota por outra quebra a verificação contra o pino — **entregue** ([03 §3b-bis](03-contratos.md), ADR-020) |
+| seguir redirect para dentro da rede | o executor chama a rota sem `-L`: a rota autorizada aponta para o destino declarado, e o destino não escolhe outro |
+| vazar a credencial do nó para o destino | o `X-Node-Key` é para o Control Plane; a chamada de rota é anônima |
+| chamar um caminho **diferente** do que foi assinado | o destino é lido da lista assinada sem cortar a vírgula da query string: `https://api.exemplo/x?ids=1,2` é um destino só. Cortar ali daria ao nó um caminho que ninguém autorizou — o SSRF voltaria por um corte de texto |
+| aceitar rota que o Control Plane não assinou | a lista só é montada com nome em `[A-Za-z0-9._-]`, destino `http(s)` em ASCII sem `"`, `\` nem `]`, e nome único: entrada fora disso é descartada com aviso e nunca entra na assinatura |
 
 ### 4.3 Ataque à rede inteira
 
