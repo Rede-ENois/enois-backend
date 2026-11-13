@@ -1,6 +1,7 @@
 # Processo seletivo (ATS) — pipeline de recrutamento por vaga
 
-Estado: implementado em 2026-11-12 e na `qa` (PR #677 mergeado).
+Estado: implementado em 2026-11-12 e na `qa` (PR #677 mergeado); declaração de recrutador
+acrescentada em 2026-11-13.
 
 Complementa `docs/JOB_AGGREGATOR.md` (vagas internas e externas) e
 `docs/SOCIAL_PROFESSIONAL_CONTEXTS.md` (identidade profissional). Não cria um segundo sistema
@@ -54,6 +55,20 @@ reprovada não se move mais.
 "Todo o fluxo de etapas" é configurável: criar, renomear, apagar (respeitando candidatos na
 etapa), reordenar. Renomear preserva o id, então o histórico dos candidatos continua válido.
 
+### Declaração de recrutador
+
+O perfil profissional ganhou `isRecruiter` (`users.is_recruiter`, V290) — o "Sou recrutador/a"
+da edição de perfil, aceito por `PATCH /me/profile` e devolvido no perfil próprio.
+
+Ler a Central (`GET /jobs/recruitment`) exige **uma das duas coisas**: a declaração ligada ou
+pelo menos uma vaga publicada por quem está na sessão. Quem publica vaga é recrutador por
+definição, então o fluxo que já existia continua funcionando sem nenhuma tela nova; quem não
+recruta e não tem vaga recebe 403 `RECRUITER_REQUIRED` em vez de uma lista vazia que fingiria
+um recurso que não é dela.
+
+Desligar a declaração não apaga vaga, candidatura, etapa nem histórico: só fecha a Central para
+quem não tem vaga. Reativar devolve o acesso ao que já estava lá.
+
 ## Autorização (no backend)
 
 - Toda rota de processo exige sessão e **o autor da vaga**; terceiro recebe 403 `NOT_OWNER`.
@@ -88,10 +103,17 @@ etapa), reordenar. Renomear preserva o id, então o histórico dos candidatos co
 - exclusão de etapa ocupada (409) e de etapa vazia com posições recontadas; renomear preserva
   o vínculo dos candidatos;
 - espécie de movimento desconhecida é 400, não avanço silencioso;
-- Central: funil por vaga, isolamento entre recrutadores, 401 sem sessão.
+- Central: funil por vaga, isolamento entre recrutadores, 401 sem sessão;
+- declaração de recrutador: conta sem vaga e sem a declaração recebe 403 `RECRUITER_REQUIRED`,
+  ligar a declaração abre a Central vazia e desligar volta a fechar; quem tem vaga continua
+  entrando sem a declaração (o fluxo antigo não quebra).
 
 ## Fora deste escopo (próximos passos)
 
 Questionários, avaliações por critério, slot de entrevista escolhido pelo candidato, banco de
 talentos, papéis de equipe (Administrador/Recrutador/Entrevistador/Observador) e a UI no
 design system. A fundação acima é a que esses itens vão usar — não há segunda base a criar.
+
+A UI do "Sou recrutador/a" no front (`@rede-enois/design-system`) ainda não foi entregue: o
+backend já aceita, guarda e aplica a declaração, mas a tela que a liga vem no incremento do
+frontend.

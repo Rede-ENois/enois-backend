@@ -33,7 +33,7 @@ class ProfileUpdateThrottleTests {
 	private static UpdateProfileCommand comando() {
 		return new UpdateProfileCommand("u1", "Nome", null, null, null, null, null, null, null, null, null,
 			java.util.List.of(), java.util.List.of(), null, null, java.util.List.of(), null, null, null, null, null,
-			null, null, null, null, null);
+			null, null, null, null, null, null);
 	}
 
 	private static ApiException recusa(ProfileService service) {
@@ -74,7 +74,7 @@ class ProfileUpdateThrottleTests {
 		try {
 			service.update(new UpdateProfileCommand("u2", null, null, null, null, null, null, null, null, null, null,
 				java.util.List.of(), java.util.List.of(), null, null, java.util.List.of(), null, null, null, null, null,
-				null, null, null, null, null));
+				null, null, null, null, null, null));
 		}
 		catch (ApiException recusa) {
 			outraConta = recusa;
