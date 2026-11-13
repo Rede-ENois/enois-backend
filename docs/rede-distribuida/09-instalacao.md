@@ -241,6 +241,13 @@ declarada, o nó não tem para onde ir e a task é recusada. Entrada malformada
 (sem `=`, ou com nome/URL vazio) é descartada com aviso e nunca entra na
 assinatura.
 
+A lista é também o que o **produtor** consulta: `POST
+/admin/network/nodes/{nodeId}/api-request?route=<nome>` enfileira a task com
+alvo, e o nome pedido é conferido contra a mesma lista assinada que o nó
+recebe. Nome fora da lista é recusado **antes** de a task nascer
+(`API_ROUTE_NOT_ALLOWED`, 422), para que a fila não encha de trabalho fadado a
+falhar no nó. O painel lista os nomes assinados em `GET /admin/network/api-routes`.
+
 Quem declara a rota escreve `nome=url` e obedece a quatro regras, porque cada
 uma protege uma propriedade de que o runtime depende: nome em `[A-Za-z0-9._-]`
 (o mesmo conjunto que o runtime aceita no payload), destino `http://` ou
@@ -345,8 +352,11 @@ e preserva o atual; digest não verificável é recusado.
   o snapshot do nó) e `API_REQUEST` (chamada à rota da lista **assinada**
   `allowedRoutes`, com o destino fora do payload e o resultado como evidência),
   163 asserções em `scripts/tests/node-executor-test.sh`.
-  Falta o **produtor** de `API_REQUEST` no lado do Control Plane: o executor e a
-  lista assinada existem, mas nenhuma rota de admin enfileira essa task ainda.
+  O **produtor** de `API_REQUEST` no lado do Control Plane também existe:
+  `POST /admin/network/nodes/{nodeId}/api-request?route=<nome>` enfileira a task
+  com alvo, conferindo o nome contra a mesma lista assinada que o nó recebe
+  (`NetworkConfigService.allowedRouteNames()`), de modo que nenhuma task nasce
+  fadada a `API_ROUTE_NOT_ALLOWED`.
 - **Banda compartilhada entre execuções concorrentes**: o teto declarado
   (`limits.bandwidthMbps`) já vale como `curl --limit-rate` em cada transferência de
   corpo do runtime. Hoje o runtime executa uma tarefa por ciclo, então limitar cada

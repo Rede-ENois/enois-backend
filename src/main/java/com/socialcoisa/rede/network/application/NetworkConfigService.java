@@ -184,6 +184,39 @@ public class NetworkConfigService {
 	}
 
 	/**
+	 * Os nomes das rotas que a config assinada autoriza.
+	 *
+	 * <p>É a <b>mesma</b> lista que vai para o nó, lida do <b>mesmo</b> parser: quem pergunta não
+	 * reinterpreta a propriedade, senão as duas leituras divergiriam — e a divergência seria
+	 * silenciosa, porque o produtor acharia que a rota existe enquanto o nó não a tem na
+	 * assinatura (e recusaria a rota no meio do trabalho, como "não autorizada").</p>
+	 */
+	public List<String> allowedRouteNames() {
+		return allowedRoutes.stream().map(NetworkConfigService::routeName).toList();
+	}
+
+	/**
+	 * A rota pedida está na lista assinada?
+	 *
+	 * <p>O nome vem do pedido do admin e é conferido contra o que o nó vai receber assinado. É o
+	 * filtro que impede a task de nascer fadada a {@code API_ROUTE_NOT_ALLOWED}: o produtor não
+	 * escolhe o destino, ele escolhe o <b>nome</b> — e só o nome que a assinatura contém.</p>
+	 */
+	public boolean allowsRoute(String name) {
+		if (name == null || name.isBlank()) {
+			return false;
+		}
+		String trimmed = name.trim();
+		return allowedRoutes.stream().map(NetworkConfigService::routeName).anyMatch(trimmed::equals);
+	}
+
+	/** O nome da entrada {@code nome=url}: é o que vem antes do primeiro {@code =}. */
+	private static String routeName(String entry) {
+		int separator = entry.indexOf('=');
+		return separator < 0 ? entry : entry.substring(0, separator);
+	}
+
+	/**
 	 * Separa as entradas da propriedade de rotas. Separadores: {@code ;}, quebra de linha e a
 	 * vírgula que introduz uma entrada nova ({@code nome=url} válido). Uma vírgula que não
 	 * introduz entrada nova pertence ao destino e fica nele.

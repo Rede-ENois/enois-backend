@@ -196,6 +196,12 @@ canônica de URL e não deixa a ambiguidade para trás.
 
 Entrada malformada é descartada com aviso — ela nunca entra na assinatura.
 
+A mesma lista é o que o produtor de `API_REQUEST` consulta: `NetworkConfigService.allowsRoute(nome)`
+lê a lista já parseada, a mesma que `forNode` publica no documento. O produtor **não** tem leitura
+própria da propriedade — duas leituras divergiriam em silêncio, e a divergência apareceria como
+task fadada (o produtor aceita uma rota que o nó não tem assinado) ou como pedido legítimo barrado
+(§3b-bis).
+
 `publicKey` é o **pino**: o instalador grava esta chave no install e toda config seguinte é conferida
 contra ela, sem depender do transporte desta resposta.
 
@@ -395,10 +401,35 @@ Erros:
 `API_ROUTE_NOT_ALLOWED` **não** é retenta: repetir daria o mesmo resultado, porque a lista assinada
 não muda dentro da tentativa. Já `API_REQUEST_FAILED` é retenta — rede caiu, destino instável.
 
-Do lado do Control Plane, a task é enfileirada como qualquer outra (`POST /network/tasks` interno,
-idempotência por `idempotencyKey`). **A produção do lado do servidor (`POST /admin/network/...`)
-ainda não existe** — esta entrega é o executor do nó e a lista assinada. Sem um produtor, nada
-enfileira `API_REQUEST`; quando ele vier, ele só pode escolher o **nome** da rota, nunca a URL.
+Do lado do Control Plane, a task é enfileirada como qualquer outra. O **produtor** existe desde a
+fase 5: `POST /admin/network/nodes/{nodeId}/api-request?route=<nome>`, e ele só pode escolher o
+**nome** da rota, nunca a URL.
+
+O produtor (`ApiRequestService`) confere o nome pedido contra a **mesma lista assinada** que o nó
+vai receber — a leitura é a do `NetworkConfigService`, o mesmo parser, não uma segunda
+interpretação da propriedade de configuração. As duas leituras não podem divergir: se divergissem,
+o produtor deixaria passar um nome que o nó não tem na assinatura (task fadada ao
+`API_ROUTE_NOT_ALLOWED`, ou seja, trabalho morto ocupando a fila até o prazo) ou barraria um nome
+que o nó executaria.
+
+Recusas, todas **antes** de a task nascer:
+
+| código | status | quando |
+|---|---|---|
+| `NODE_ID_REQUIRED` | 400 | nó não informado |
+| `API_ROUTE_REQUIRED` | 400 | nome de rota não informado |
+| `NODE_UNKNOWN` | 404 | nó inexistente |
+| `NODE_PROFILE_REQUIRED` | 422 | nó sem `NODE_API` (e sem `NODE_LOCAL`, que cobre todos os tipos) |
+| `NODE_NOT_OPERABLE` | 409 | nó fora de operação |
+| `NODE_REGION_OUT_OF_SERVICE` | 409 | região do nó evacuada |
+| `API_ROUTE_NOT_ALLOWED` | 422 | rota fora da lista assinada |
+
+O payload produzido é `{"route":"<nome>","method":"GET"}` — só o nome e o método. A task leva
+alvo (`targetNodeId`), porque o pedido é sobre aquele nó; e a idempotência é por nó, por rota e
+por janela de 5 minutos (`api:` + sha-256 de `<nó>:<rota>:<janela>` = 68 caracteres, dentro dos
+80 da coluna), para que o duplo clique do admin não vire duas tasks. O painel lista as rotas
+assinadas em `GET /admin/network/api-routes` e as requisições em aberto de um nó em
+`GET /admin/network/nodes/{nodeId}/api-request`.
 
 ## 3a. Interface do participante (`/network/participant`)
 

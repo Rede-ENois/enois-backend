@@ -86,6 +86,13 @@ estar no documento que o Control Plane assina.
    `API_REQUEST`. A entrega é o executor e a lista assinada; o produtor, quando vier, só pode
    escolher o **nome** da rota — ele não tem onde escrever uma URL.
 
+   > **Atualizado no R109 (ADR-021).** O produtor foi entregue: `POST
+   > /admin/network/nodes/{nodeId}/api-request?route=<nome>`. Ele escolhe o **nome**, como esta
+   > decisão previa, e o nome é conferido contra a **mesma** lista assinada que o nó recebe, de
+   > modo que nenhuma task nasce fadada a `API_ROUTE_NOT_ALLOWED`. O "quando vier" abaixo está
+   > cumprido; o que a decisão previa — que o produtor não tem onde escrever uma URL — continua
+   > valendo.
+
 ## O corte da vírgula: o defeito que a assinatura sozinha não pegava
 
 Assinar a lista resolve o SSRF, mas não resolve o **corte de texto**. A leitura da lista no runtime
@@ -149,10 +156,12 @@ config.
 
 ## Consequências
 
-- **A task `API_REQUEST` continua sem produtor.** O executor existe e está provado, mas nada a
-  enfileira. Isso é deliberado e está registrado na doc 09 §7: o produtor é trabalho de fase 5
-  (gestão de permissões), e ele precisa de uma decisão de produto — *quais* rotas a rede oferece —
-  que não é do runtime.
+- ~~**A task `API_REQUEST` continua sem produtor.**~~ **Resolvido no R109 (ADR-021).** O produtor
+  existe: `POST /admin/network/nodes/{nodeId}/api-request?route=<nome>`, que enfileira a task com
+  alvo e confere o nome contra a mesma lista assinada que o nó recebe. A decisão de produto que
+  esta entrega adiou — *quais* rotas a rede oferece — estava pronta: a lista vem de
+  `rede.network.config.allowed-routes`, que o Control Plane assina. O que o produtor **não** faz é
+  escolher o destino: ele escolhe o nome, e o nome só vale se estiver assinado.
 - **Quem declare a rota declara uma URL de terceiro.** A lista é um allowlist de destinos
   externos que a rede aceita chamar. Um destino mal configurado (ou malicioso) é um problema de
   configuração, e por isso a lista é dada por propriedade do Control Plane e não pelo painel de

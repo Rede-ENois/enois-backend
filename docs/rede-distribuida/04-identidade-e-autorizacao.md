@@ -130,7 +130,7 @@ Permissão é dado do Control Plane. O nó lê a config assinada e obedece; ele 
 | `NODE_WORKER` | `ASYNC_JOB` | conforme `dataClass` da tarefa |
 | `NODE_MEDIA` | `MEDIA_TRANSCODE`, `MEDIA_THUMBNAIL` | objeto de mídia da tarefa |
 | `NODE_READ_REPLICA` | `READ_QUERY` | só as projeções da allowlist (`PROFILE`, `COMMUNITY`) — nunca tabela |
-| `NODE_API` | `API_REQUEST` | só o que a rota autoriza — e a rota é a **lista assinada** `allowedRoutes` da config, nunca a URL do payload. O nome da rota no payload resolve contra essa lista; o destino é o que foi assinado, na íntegra (a vírgula de uma query string não corta o destino) |
+| `NODE_API` | `API_REQUEST` | só o que a rota autoriza — e a rota é a **lista assinada** `allowedRoutes` da config, nunca a URL do payload. O nome da rota no payload resolve contra essa lista; o destino é o que foi assinado, na íntegra (a vírgula de uma query string não corta o destino). O produtor no Control Plane confere o nome pedido contra a **mesma** lista e recusa o que não estiver nela, antes de a task nascer (ADR-021) |
 | `NODE_LOCAL` | qualquer uma das acima | conforme perfil efetivo |
 | `NODE_EMERGENCY` | só as funções preparadas | conforme preparação |
 
