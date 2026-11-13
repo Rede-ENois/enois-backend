@@ -16,6 +16,9 @@ import com.socialcoisa.rede.jobs.domain.JobStatus;
 import com.socialcoisa.rede.jobs.domain.SelectionStage;
 import com.socialcoisa.rede.jobs.domain.StageMovement;
 import com.socialcoisa.rede.jobs.domain.StageMovementKind;
+import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
+import com.socialcoisa.rede.profile.domain.UserProfile;
+import com.socialcoisa.rede.shared.web.ApiException;
 
 /**
  * Central de recrutamento: as vagas de quem recruta, com os números que decidem o dia —
@@ -30,10 +33,13 @@ public class RecruitmentHubService {
 
 	private final JobRepository jobs;
 	private final SelectionProcessRepository pipeline;
+	private final UserProfileRepository profiles;
 
-	public RecruitmentHubService(JobRepository jobs, SelectionProcessRepository pipeline) {
+	public RecruitmentHubService(JobRepository jobs, SelectionProcessRepository pipeline,
+			UserProfileRepository profiles) {
 		this.jobs = jobs;
 		this.pipeline = pipeline;
+		this.profiles = profiles;
 	}
 
 	public record JobSummary(String jobId, String title, String company, String status, int total,
@@ -47,9 +53,19 @@ public class RecruitmentHubService {
 			int rejected) {
 	}
 
+	/**
+	 * A central é de quem recruta. Entrar nela exige a declaração do perfil OU pelo menos uma vaga
+	 * publicada — quem publica vaga é recrutador por definição, e o fluxo antigo não pode quebrar.
+	 * Conta sem nenhum dos dois recebe recusa explícita em vez de uma central vazia: lista vazia
+	 * esconderia que o recurso não é dela.
+	 */
 	public HubView hubOf(String recruiterId, int limit) {
 		List<Job> mine = jobs.findByPostedBy(recruiterId, java.time.Instant.parse("9999-12-31T23:59:59Z"),
 			Math.clamp(limit, 1, 100));
+		if (mine.isEmpty() && !isRecruiter(recruiterId)) {
+			throw new ApiException(403, "RECRUITER_REQUIRED",
+				"A central de recrutamento e para quem recruta. Ative \"Sou recrutador/a\" no perfil.");
+		}
 		Set<String> jobIds = mine.stream().map(Job::id).collect(java.util.stream.Collectors.toSet());
 		if (jobIds.isEmpty()) {
 			return new HubView(List.of(), new Totals(0, 0, 0, 0, 0, 0));
@@ -94,6 +110,10 @@ public class RecruitmentHubService {
 			.thenComparing(JobSummary::jobId));
 		return new HubView(summaries, new Totals(summaries.size(), openJobs, totalCandidates, totalAwaiting,
 			totalInProcess, totalRejected));
+	}
+
+	private boolean isRecruiter(String userId) {
+		return profiles.findById(userId).map(UserProfile::recruiter).orElse(false);
 	}
 
 }
