@@ -25,7 +25,7 @@ import java.util.Set;
  * @param lastSeenAt último heartbeat; null = nunca conectou
  * @param declaredCpuCores núcleos que o participante cedeu
  * @param declaredMemoryMb memória que o participante cedeu
- * @param declaredDiskMb disco que o participante cedeu; sem consumidor hoje, vai na config assinada
+ * @param declaredDiskMb disco que o participante cedeu; vai na config assinada e é o runtime do nó quem faz valer (teto do conteúdo no volume)
  * @param declaredBandwidthMbps banda que o participante cedeu; sem consumidor hoje, vai na config
  * @param observedCpuPercent uso de CPU no último heartbeat; null = não reportado
  * @param observedMemoryMb memória em uso no último heartbeat; null = não reportado

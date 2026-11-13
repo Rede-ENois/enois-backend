@@ -292,8 +292,12 @@ e preserva o atual; digest não verificável é recusado.
   hash), `READ_QUERY` (travessia do catálogo da réplica com corpo e confirmação),
   `EDGE_CACHE` (consumo do feed de mudanças com corpo baixado e confirmado) e
   `EDGE_DELIVER` (revalidação da entrada e veredicto de entrega conferido contra
-  o snapshot do nó), 85 asserções em `scripts/tests/node-executor-test.sh`.
+  o snapshot do nó), 102 asserções em `scripts/tests/node-executor-test.sh`.
   Falta `API_REQUEST` (NODE_API), que hoje cai no eco de ciclo de vida.
+- **Banda declarada sem consumidor**: o disco declarado (`limits.diskMb`) já é teto
+  aplicado pelo runtime ao estado de conteúdo (borda evicta a entrada mais antiga,
+  réplica para a travessia com `diskFull`); a banda (`limits.bandwidthMbps`) segue
+  sem nada que a consuma.
 - **Publicação das imagens assinadas**: o verificador está pronto e testado; o
   pipeline que constrói e assina as imagens do runtime (`cosign sign`) entra com
   o registro de imagens da rede.

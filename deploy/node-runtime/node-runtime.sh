@@ -214,7 +214,12 @@ exec_read_query() {
   local next="$1" task_id="$2" attempt="$3"
   local payload kind after_at after_id pages=0 synced=0 skipped=0 failed=0 removed=0
   local page items has_more next_at next_id id stored_version content version hash body
+  local config="$4" disk_mb disk_cap_bytes
   payload=$(task_payload "$next")
+  # Mesmo teto da borda (limits.diskMb da config assinada): réplica e cache dividem
+  # o disco que o participante cedeu — o contador é um só (edge/ + replica/).
+  disk_mb=$(config_disk_mb "$config")
+  disk_cap_bytes=$((disk_mb * 1024 * 1024))
   kind=$(json_field "$payload" kind)
   [[ -n "$kind" ]] || {
     fail_task "$task_id" "$attempt" TASK_PAYLOAD_INVALID 'payload de réplica sem kind'; return 0; }
@@ -294,6 +299,18 @@ exec_read_query() {
       hash=$(json_field "$content" contentHash)
       # Guarda o corpo e a versão ANTES de confirmar: confirmar o que não está em
       # disco faria a reconciliação acusar o nó por um arquivo que ele nunca teve.
+      # Teto de disco (limits.diskMb): a réplica é catálogo, não cache — evictar
+      # item dela é apagar dado que o nó prometeu ter. Se o corpo não cabe, a
+      # travessia para aqui, o cursor NÃO avança sobre o item não gravado e o
+      # resultado diz por quê: retomar de onde parou é o único jeito de não pular
+      # um agregado em silêncio.
+      if ! disk_make_room "$disk_cap_bytes" "${#body}" ""; then
+        failed=$((failed + 1))
+        printf '[executor] réplica: %s/%s nao cabe no teto de disco declarado\n' "$kind" "$id" >&2
+        result "$task_id" "$attempt" DONE \
+          "{\"kind\":\"$kind\",\"pages\":$pages,\"synced\":$synced,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"complete\":false,\"diskFull\":true}" ''
+        return 0
+      fi
       if ! printf '%s' "$body" > "$cursor_dir/$kind/$safe_id.json"; then
         failed=$((failed + 1)); continue
       fi
@@ -342,6 +359,71 @@ exec_read_query() {
 EDGE_CHANGES_PER_TASK="${EDGE_CHANGES_PER_TASK:-200}"
 EDGE_PAGES_PER_TASK="${EDGE_PAGES_PER_TASK:-5}"
 
+# ---------------- limite de disco declarado (fase 5, gestão de permissões) ----------------
+# O participante declara quantos MB de disco cede (declared/limits.diskMb) e a rede
+# respeita (07-plano-incremental.md, fase 5). O runtime é quem escreve no volume, então
+# é quem faz valer: o teto vale para o ESTADO DE CONTEÚDO (edge/ + replica/), não para
+# a identidade do nó (node.json, api-key, pino) — perder credencial por estouro de
+# conteúdo seria o nó se desligar sozinho.
+config_disk_mb() {
+  # config_disk_mb <config-json>: MB de disco que o participante cedeu; 0 = sem teto.
+  local mb
+  mb=$(json_number "$1" diskMb)
+  [[ -n "$mb" ]] || mb=0
+  printf '%s' "$mb"
+}
+
+content_bytes() {
+  # content_bytes: bytes guardados no ESTADO DE CONTEÚDO do nó (edge/ + replica/).
+  # Contar $NODE_HOME inteiro incluiria node.json, api-key e o pino — credencial não
+  # é conteúdo e não pode ser apagada por estouro de cache.
+  local total=0 size f
+  for f in "$NODE_HOME"/edge/*/*.json "$NODE_HOME"/edge/*/*.version \
+           "$NODE_HOME"/replica/*/*.json "$NODE_HOME"/replica/*/*.version; do
+    [[ -f "$f" ]] || continue
+    size=$(stat -c %s "$f") || continue
+    total=$((total + size))
+  done
+  printf '%s' "$total"
+}
+
+disk_make_room() {
+  # disk_make_room <cap-bytes> <bytes-da-nova-entrada> <arquivo-alvo|"">
+  #
+  # 0 = cabe; 1 = não cabe nem esvaziando o conteúdo. O teto conta o estado de
+  # conteúdo (edge/ + replica/), não a identidade do nó. A entrada alvo (que vai ser
+  # substituída) não entra na conta do que está ocupado: os bytes dela saem quando o
+  # corpo novo entra.
+  #
+  # Só a BORDA é evictável. A réplica é catálogo: o nó prometeu ter aquele agregado,
+  # então apagá-lo para caber conteúdo novo quebraria a promessa em silêncio. Sob
+  # pressão sai cache — a borda se recompõe da origem, a réplica não.
+  # Evicta a mais antiga primeiro (mtime, desempate por nome) porque num cache o que
+  # foi tocado por último é o que tem mais chance de ser pedido de novo.
+  local cap="$1" need="$2" keep="$3" current=0 used f oldest oldest_time time
+  DISK_EVICTED=0
+  (( cap > 0 )) || return 0
+  [[ -n "$keep" && -f "$keep" ]] && current=$(stat -c %s "$keep")
+  used=$(( $(content_bytes) - current ))
+  (( used + need <= cap )) && return 0
+  while (( used + need > cap )); do
+    oldest=''; oldest_time=''
+    for f in "$NODE_HOME"/edge/*/*.json; do
+      [[ -f "$f" && "$f" != "$keep" ]] || continue
+      time=$(stat -c %Y "$f") || continue
+      if [[ -z "$oldest" || "$time" -lt "$oldest_time" \
+          || ( "$time" -eq "$oldest_time" && "$f" < "$oldest" ) ]]; then
+        oldest="$f"; oldest_time="$time"
+      fi
+    done
+    [[ -n "$oldest" ]] || return 1
+    used=$((used - $(stat -c %s "$oldest")))
+    rm -f "$oldest" "${oldest%.json}.version"
+    DISK_EVICTED=$((DISK_EVICTED + 1))
+  done
+  return 0
+}
+
 json_changes() {
   # json_changes <feed>: uma mudança por linha, como seq|kind|contentId|version|hash.
   # "changes" é o último campo do objeto do feed, então o recorte vai da abertura do
@@ -363,11 +445,17 @@ json_changes() {
 exec_edge_cache() {
   local next="$1" task_id="$2" attempt="$3"
   local payload cursor_dir cursor limit feed reset_done=false stalled=false
-  local pages=0 stored=0 skipped=0 removed=0 failed=0
+  local pages=0 stored=0 skipped=0 removed=0 failed=0 evicted=0 dropped=0
   local entries entry seq kind content_id safe_id stored_version content_url raw code content body version hash
   local has_more before
+  local config="$4" disk_mb disk_cap_bytes
 
   payload=$(task_payload "$next")
+  # O teto de disco vem da config assinada (limits.diskMb) — a permissão que o
+  # participante cedeu e que a rede respeita. 0 = sem teto declarado (nó sem limite
+  # grava; é o comportamento de quem não declarou restrição, não de quem declarou).
+  disk_mb=$(config_disk_mb "$config")
+  disk_cap_bytes=$((disk_mb * 1024 * 1024))
   # O cursor vive no nó, como o da réplica: o payload pode adiantar um, mas sem ele
   # a tarefa retoma do ponto em que a anterior parou. 0 = nunca sincronizou.
   cursor_dir="$NODE_HOME/edge"
@@ -446,6 +534,19 @@ exec_edge_cache() {
       hash=$(json_field "$content" contentHash)
       # Grava antes de confirmar: confirmar o que não está em disco faria a
       # reconciliação acusar o nó por um arquivo que ele nunca teve.
+      # Teto de disco (limits.diskMb): num cache, evictar o mais antigo para caber o
+      # novo é o comportamento correto — cache completo é cache útil. Se nem vazio o
+      # corpo cabe, aí sim não é cache: a entrada fica fora e o resultado conta isso
+      # como `dropped`, não como `unchanged` — dizer "em dia" sobre o que não está
+      # guardado seria mentira no painel.
+      if ! disk_make_room "$disk_cap_bytes" "${#body}" "$cursor_dir/$kind/$safe_id.json"; then
+        evicted=$((evicted + DISK_EVICTED))
+        dropped=$((dropped + 1)); cursor=$seq
+        printf '%s\n' "$cursor" > "$cursor_dir/cursor"
+        printf '[executor] borda: %s/%s nao cabe no teto de disco declarado\n' "$kind" "$content_id" >&2
+        continue
+      fi
+      evicted=$((evicted + DISK_EVICTED))
       if ! printf '%s' "$body" > "$cursor_dir/$kind/$safe_id.json"; then
         failed=$((failed + 1)); stalled=true; break
       fi
@@ -465,14 +566,14 @@ exec_edge_cache() {
     if [[ "$stalled" == true ]]; then
       printf '[executor] borda: parada em seq=%s (%s falhas)\n' "$cursor" "$failed" >&2
       result "$task_id" "$attempt" DONE \
-        "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"complete\":false,\"cursor\":$cursor}" ''
+        "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"evicted\":$evicted,\"dropped\":$dropped,\"complete\":false,\"cursor\":$cursor}" ''
       return 0
     fi
     if [[ "$has_more" != true ]]; then
       printf '[executor] borda: em dia em seq=%s (%s guardados, %s em dia, %s removidos)\n' \
         "$cursor" "$stored" "$skipped" "$removed"
       result "$task_id" "$attempt" DONE \
-        "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"complete\":true,\"cursor\":$cursor}" ''
+        "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"evicted\":$evicted,\"dropped\":$dropped,\"complete\":true,\"cursor\":$cursor}" ''
       return 0
     fi
     # Sem avanço não há o que pedir de novo: girar sobre a mesma página não converge.
@@ -483,13 +584,13 @@ exec_edge_cache() {
       printf '[executor] borda: orcamento de %s paginas, retomando em seq=%s\n' \
         "$pages" "$cursor"
       result "$task_id" "$attempt" DONE \
-        "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"complete\":false,\"cursor\":$cursor}" ''
+        "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"evicted\":$evicted,\"dropped\":$dropped,\"complete\":false,\"cursor\":$cursor}" ''
       return 0
     fi
   done
 
   result "$task_id" "$attempt" DONE \
-    "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"complete\":false,\"cursor\":$cursor}" ''
+    "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"evicted\":$evicted,\"dropped\":$dropped,\"complete\":false,\"cursor\":$cursor}" ''
 }
 
 # ---------------- executor real: EDGE_DELIVER (entrega verificada) ----------------
@@ -504,8 +605,13 @@ exec_edge_deliver() {
   local next="$1" task_id="$2" attempt="$3"
   local payload kind content_id safe_id entry_dir stored_version
   local content_url raw code content version hash body source verdict
+  local config="$4" disk_mb disk_cap_bytes
 
   payload=$(task_payload "$next")
+  # O teto é o mesmo da borda: entrega rebaixa corpo quando a origem está à frente,
+  # e o que ela grava conta no disco que o participante cedeu.
+  disk_mb=$(config_disk_mb "$config")
+  disk_cap_bytes=$((disk_mb * 1024 * 1024))
   kind=$(json_field "$payload" kind)
   content_id=$(json_field "$payload" contentId)
   [[ -n "$kind" && -n "$content_id" ]] || {
@@ -558,7 +664,13 @@ exec_edge_deliver() {
     version=$(json_number "$content" version)
     hash=$(json_field "$content" contentHash)
     # Grava antes de confirmar, como no EDGE_CACHE: atestar o que não está em disco
-    # é declaração sem lastro.
+    # é declaração sem lastro. O teto de disco vale aqui igual: entrada de borda é
+    # cache, então evictar o mais antigo para caber o novo é o certo.
+    if ! disk_make_room "$disk_cap_bytes" "${#body}" "$entry_dir/$safe_id.json"; then
+      verdict="{\"kind\":\"$kind\",\"contentId\":\"$content_id\",\"deliverable\":false,\"reason\":\"EDGE_DISK_FAILED\"}"
+      result "$task_id" "$attempt" DONE "$verdict" ''
+      return 0
+    fi
     if ! printf '%s' "$body" > "$entry_dir/$safe_id.json"; then
       verdict="{\"kind\":\"$kind\",\"contentId\":\"$content_id\",\"deliverable\":false,\"reason\":\"EDGE_DISK_FAILED\"}"
       result "$task_id" "$attempt" DONE "$verdict" ''
@@ -617,9 +729,9 @@ cycle() {
   if grep -q "\"$task_type\"" <<<"[$allowed]"; then
     case "$task_type" in
       MEDIA_TRANSCODE) exec_media_transcode "$next" "$task_id" "${attempt:-1}" ;;
-      READ_QUERY) exec_read_query "$next" "$task_id" "${attempt:-1}" ;;
-      EDGE_CACHE) exec_edge_cache "$next" "$task_id" "${attempt:-1}" ;;
-      EDGE_DELIVER) exec_edge_deliver "$next" "$task_id" "${attempt:-1}" ;;
+      READ_QUERY) exec_read_query "$next" "$task_id" "${attempt:-1}" "$config" ;;
+      EDGE_CACHE) exec_edge_cache "$next" "$task_id" "${attempt:-1}" "$config" ;;
+      EDGE_DELIVER) exec_edge_deliver "$next" "$task_id" "${attempt:-1}" "$config" ;;
       *)
         # Prova de ciclo de vida: eco do idempotencyKey como output. Conteúdo de usuário
         # (HTML, CSS, KofScript) NUNCA executa aqui — continua nos sandboxes próprios.

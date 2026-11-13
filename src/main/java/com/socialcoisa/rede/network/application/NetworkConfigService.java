@@ -123,8 +123,9 @@ public class NetworkConfigService {
 	}
 
 	/**
-	 * Os limites que o participante cedeu, ditos ao nó. Disco e banda ainda não têm consumidor no
-	 * despacho — vão aqui para que o runtime, que é quem sabe medir, possa se autorregular.
+	 * Os limites que o participante cedeu, ditos ao nó. Banda ainda não tem consumidor no despacho.
+	 * {@code diskMb} é aplicado pelo runtime do nó, que é quem escreve no volume: teto do estado de
+	 * conteúdo (borda e réplica), com a identidade do nó fora da conta.
 	 */
 	public record LimitsView(int cpuCores, int memoryMb, int diskMb, int bandwidthMbps) {
 	}

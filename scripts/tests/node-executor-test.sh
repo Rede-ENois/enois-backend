@@ -581,4 +581,163 @@ assert_contains 'entrega sem alvo no payload falha com código próprio' "$(cat 
 assert_not_contains 'payload inválido não consulta a origem' "$(cat "$TMP/curl-calls")" '/network/content/PROFILE'
 assert_not_contains 'payload inválido não vira eco de ciclo de vida' "$(cat "$TMP/curl-calls")" '"echo":"deliver:z"'
 
+
+# ------------------------------------------------- cenário 20: teto de disco declarado na borda
+# O participante declara 1 MB (limits.diskMb) e a rede respeita: o cache de borda
+# evicta a entrada mais antiga para caber a nova, em vez de crescer sem limite. O
+# que foi evictado sai do disco E da contagem; o resto continua servindo.
+ND="$TMP/node-disk"; rm -rf "$ND"; mkdir -p "$ND"; chmod 700 "$ND"
+cp "$NH/node.json" "$ND/node.json"; cp "$NH/api-key" "$ND/api-key"
+cp "$NH/pinning-key" "$ND/pinning-key"
+# 1 MB de teto. O corpo novo tem ~1.3 KB; as duas entradas antigas somam ~2 KB.
+CONFIG_DISK='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":1,"configVersion":7,"profiles":["NODE_EDGE"],"limits":{"cpuCores":2,"memoryMb":2048,"diskMb":1,"bandwidthMbps":50},"allowedTasks":["EDGE_CACHE"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","signed":true,"signature":"c2ln","algorithm":"Ed25519","publicKey":"PINNED-PUBLIC-KEY-BASE64"}'
+TASK_EDGE_DISK='{"tasks":[{"taskId":"tk_e2","type":"EDGE_CACHE","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"edge:disk","payload":"{}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
+# Enche o cache até passar de 1 MB: 3 entradas de 400 KB cada.
+BIG=$(printf 'x%.0s' $(seq 1 409600))
+mkdir -p "$ND/edge/PROFILE"
+printf '%s' "$BIG" > "$ND/edge/PROFILE/velho1.json"; printf '1\n' > "$ND/edge/PROFILE/velho1.version"
+printf '%s' "$BIG" > "$ND/edge/PROFILE/velho2.json"; printf '2\n' > "$ND/edge/PROFILE/velho2.version"
+printf '%s' "$BIG" > "$ND/edge/PROFILE/velho3.json"; printf '3\n' > "$ND/edge/PROFILE/velho3.version"
+# Idades distintas: velho1 é o mais antigo e deve sair primeiro.
+touch -d '2026-01-01 00:00:00' "$ND/edge/PROFILE/velho1.json"
+touch -d '2026-01-02 00:00:00' "$ND/edge/PROFILE/velho2.json"
+touch -d '2026-01-03 00:00:00' "$ND/edge/PROFILE/velho3.json"
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_DISK' ;;
+  */network/tasks/next) printf '%s' '$TASK_EDGE_DISK' ;;
+  */network/content/changes?*)
+    printf '%s' '{"reset":false,"cursor":0,"nextSeq":1,"hasMore":false,"changes":[{"seq":1,"kind":"PROFILE","contentId":"novo","version":1,"contentHash":"h-novo","changedAt":"2026-11-11T12:00:00Z"}]}' ;;
+  */network/content/PROFILE/novo/synced) printf '%s' '{"contentId":"novo","status":"SYNCED"}' ;;
+  */network/content/PROFILE/novo*)
+    printf '%s' '{"kind":"PROFILE","contentId":"novo","version":1,"contentHash":"h-novo","changed":true,"body":"{\\"username\\":\\"novo\\"}"}'
+    [[ "\$*" == *"-w"* ]] && printf '\n200' ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$ND")
+assert_eq 'entrada mais antiga evictada (mtime) para caber a nova' '0' "$(find "$ND/edge/PROFILE" -name 'velho1*' | wc -l | tr -d ' ')"
+assert_eq 'entrada mais nova do cache sobrevive' '1' "$(find "$ND/edge/PROFILE" -name 'velho3.json' | wc -l | tr -d ' ')"
+assert_eq 'entrada nova é gravada depois de abrir espaço' '{"username":"novo"}' "$(cat "$ND/edge/PROFILE/novo.json")"
+assert_contains 'resultado declara a evicção' "$(cat "$TMP/curl-calls")" '"evicted":1'
+assert_not_contains 'entrada que coube não é contada como perdida' "$(cat "$TMP/curl-calls")" '"dropped":1'
+assert_eq 'conteúdo guardado cabe no teto declarado' '1' "$(if (( $(stat -c %s "$ND/edge/PROFILE"/*.json | awk '{s+=$1} END {print s}') <= 1048576 )); then echo 1; else echo 0; fi)"
+
+# ------------------------------------------------- cenário 21: sem teto declarado, nó não recusa gravar
+# diskMb=0 é "não declarou limite", não "não pode gravar nada": o nó não pode parar
+# de servir por causa de um campo ausente na config.
+NC="$TMP/node-nocap"; rm -rf "$NC"; mkdir -p "$NC"; chmod 700 "$NC"
+cp "$NH/node.json" "$NC/node.json"; cp "$NH/api-key" "$NC/api-key"
+cp "$NH/pinning-key" "$NC/pinning-key"
+CONFIG_NOCAP='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":1,"configVersion":8,"profiles":["NODE_EDGE"],"limits":{"cpuCores":2,"memoryMb":2048,"diskMb":0,"bandwidthMbps":50},"allowedTasks":["EDGE_CACHE"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","signed":true,"signature":"c2ln","algorithm":"Ed25519","publicKey":"PINNED-PUBLIC-KEY-BASE64"}'
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_NOCAP' ;;
+  */network/tasks/next) printf '%s' '$TASK_EDGE_DISK' ;;
+  */network/content/changes?*)
+    printf '%s' '{"reset":false,"cursor":0,"nextSeq":1,"hasMore":false,"changes":[{"seq":1,"kind":"PROFILE","contentId":"semteto","version":1,"contentHash":"h-st","changedAt":"2026-11-11T12:00:00Z"}]}' ;;
+  */network/content/PROFILE/semteto/synced) printf '%s' '{"contentId":"semteto","status":"SYNCED"}' ;;
+  */network/content/PROFILE/semteto*)
+    printf '%s' '{"kind":"PROFILE","contentId":"semteto","version":1,"contentHash":"h-st","changed":true,"body":"{\\"username\\":\\"st\\"}"}'
+    [[ "\$*" == *"-w"* ]] && printf '\n200' ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NC")
+assert_eq 'sem teto declarado o conteúdo é gravado' '{"username":"st"}' "$(cat "$NC/edge/PROFILE/semteto.json")"
+assert_not_contains 'sem teto não há evicção' "$(cat "$TMP/curl-calls")" 'nao cabe no teto'
+assert_not_contains 'sem teto não há queda de entrada' "$(cat "$TMP/curl-calls")" '"dropped":1'
+
+# ------------------------------------------------- cenário 22: réplica para no teto em vez de pular item
+# Réplica é catálogo, não cache: evictar item dela é apagar dado que o nó prometeu
+# ter. No teto, a travessia para incompleta e o cursor NÃO avança sobre o item que
+# não coube — retomar de onde parou é o único jeito de não pular agregado em silêncio.
+NRT="$TMP/node-replica-teto"; rm -rf "$NRT"; mkdir -p "$NRT"; chmod 700 "$NRT"
+cp "$NH/node.json" "$NRT/node.json"; cp "$NH/api-key" "$NRT/api-key"
+cp "$NH/pinning-key" "$NRT/pinning-key"
+CONFIG_REPLICA_TETO='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":1,"configVersion":9,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":1,"bandwidthMbps":10},"allowedTasks":["READ_QUERY"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","signed":true,"signature":"c2ln","algorithm":"Ed25519","publicKey":"PINNED-PUBLIC-KEY-BASE64"}'
+# 1 MB de teto; um corpo de 1,5 MB não cabe sozinho.
+HUGE=$(printf 'y%.0s' $(seq 1 1572864))
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_REPLICA_TETO' ;;
+  */network/tasks/next)
+    printf '%s' '{"tasks":[{"taskId":"tk_rt","type":"READ_QUERY","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"replica:teto","payload":"{\\"kind\\":\\"PROFILE\\"}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}' ;;
+  */network/replica/PROFILE*)
+    printf '%s' '{"kind":"PROFILE","items":["gigante"],"hasMore":false,"nextAfterAt":"2026-11-11T10:00:00Z","nextAfterId":"u9"}' ;;
+  */network/content/PROFILE/gigante*)
+    printf '%s' '{"kind":"PROFILE","contentId":"gigante","version":1,"contentHash":"h-g","changed":true,"body":"'$HUGE'"}'
+    [[ "\$*" == *"-w"* ]] && printf '\n200' ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NRT")
+assert_eq 'réplica não grava item que passa do teto' '0' "$(find "$NRT/replica/PROFILE" -name 'gigante.json' 2>/dev/null | wc -l | tr -d ' ')"
+assert_contains 'resultado declara disco cheio' "$(cat "$TMP/curl-calls")" '"diskFull":true'
+assert_contains 'travessia conclui incompleta' "$(cat "$TMP/curl-calls")" '"complete":false'
+assert_not_contains 'item que não coube não é confirmado como sincronizado' "$(cat "$TMP/curl-calls")" 'gigante/synced'
+
+# ------------------------------------------------- cenário 23: a réplica abre espaço evictando CACHE, nunca a si mesma
+# Sob pressão o que sai é borda: cache se recompõe da origem, réplica não — o nó
+# prometeu aquele agregado. A entrada de réplica mais antiga (mtime 2020) tem de
+# sobreviver justamente porque é a mais antiga; se a evicção a pegasse, teria
+# escolhido o alvo errado.
+NRC="$TMP/node-replica-cache"; rm -rf "$NRC"; mkdir -p "$NRC"; chmod 700 "$NRC"
+cp "$NH/node.json" "$NRC/node.json"; cp "$NH/api-key" "$NRC/api-key"
+cp "$NH/pinning-key" "$NRC/pinning-key"
+CONFIG_RC='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":1,"configVersion":10,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":1,"bandwidthMbps":10},"allowedTasks":["READ_QUERY"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","signed":true,"signature":"c2ln","algorithm":"Ed25519","publicKey":"PINNED-PUBLIC-KEY-BASE64"}'
+MED=$(printf 'z%.0s' $(seq 1 409600))
+mkdir -p "$NRC/edge/PROFILE" "$NRC/replica/COMMUNITY"
+printf '%s' "$MED" > "$NRC/edge/PROFILE/velho.json"; printf '7\n' > "$NRC/edge/PROFILE/velho.version"
+printf '%s' "$MED" > "$NRC/replica/COMMUNITY/antigo.json"; printf '3\n' > "$NRC/replica/COMMUNITY/antigo.version"
+touch -d '2026-03-01 00:00:00' "$NRC/edge/PROFILE/velho.json"
+touch -d '2020-01-01 00:00:00' "$NRC/replica/COMMUNITY/antigo.json"
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_RC' ;;
+  */network/tasks/next)
+    printf '%s' '{"tasks":[{"taskId":"tk_rc","type":"READ_QUERY","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"replica:cache","payload":"{\\"kind\\":\\"PROFILE\\"}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}' ;;
+  */network/replica/PROFILE*)
+    printf '%s' '{"kind":"PROFILE","items":["novoreplica"],"hasMore":false,"nextAfterAt":"2026-11-11T10:00:00Z","nextAfterId":"u1"}' ;;
+  */network/content/PROFILE/novoreplica/synced) printf '%s' '{"contentId":"novoreplica","status":"SYNCED"}' ;;
+  */network/content/PROFILE/novoreplica*)
+    printf '%s' '{"kind":"PROFILE","contentId":"novoreplica","version":1,"contentHash":"h-nr","changed":true,"body":"'$MED'"}'
+    [[ "\$*" == -*w* ]] && printf '\n200' ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NRC")
+assert_eq 'réplica grava o item depois de abrir espaço no cache' '1' "$(find "$NRC/replica/PROFILE" -name 'novoreplica.json' 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq 'entrada de réplica antiga sobrevive (não é evictável)' '1' "$(find "$NRC/replica/COMMUNITY" -name 'antigo.json' | wc -l | tr -d ' ')"
+assert_eq 'quem cede espaço é o cache de borda' '0' "$(find "$NRC/edge/PROFILE" -name 'velho.json' | wc -l | tr -d ' ')"
+assert_contains 'a réplica confirma o que guardou' "$(cat "$TMP/curl-calls")" 'novoreplica/synced'
+
 printf '\nTodos os cenarios passaram (%d assercoes).\n' "$PASS"

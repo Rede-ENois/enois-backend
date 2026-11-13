@@ -216,13 +216,34 @@ do combinado — o container do nó estoura e a tarefa morre com ele.
 |---|---|
 | `cpuCores` | vira `concurrencyLimit()`; o despacho desconta o que a rodada já entregou |
 | `memoryMb` | `memoryExhausted()`: memória observada ≥ teto declarado tira o nó do filtro e da conta de vagas |
-| `diskMb` | sem consumidor hoje: nenhum tipo de tarefa atual escreve volume que o Control Plane meça |
+| `diskMb` | teto do estado de conteúdo no volume do nó (`edge/` + `replica/`); o runtime mede antes de gravar — ver a seção seguinte |
 | `bandwidthMbps` | sem consumidor hoje: nenhuma transferência de tarefa é medida por nó |
 
 **Sem reporte, o nó continua elegível.** Não medir não é estar cheio: um nó que não manda
 `memoryMb` no heartbeat não tem o que comparar com o teto, e excluí-lo puniria o runtime antigo por
 um dado que ele nunca prometeu mandar. Teto zero segue a mesma lógica do piso 1 em
 `concurrencyLimit()`: cadastro mal preenchido não pode virar nó inútil.
+
+### 7.1 O teto de disco é aplicado por quem escreve
+
+`limits.diskMb` viaja assinado na config (`NetworkConfigService.forNode`), mas quem escreve no
+volume é o runtime do nó, e é lá que o teto vale. Duas regras porque os dois estados de conteúdo
+têm promessas diferentes:
+
+- **Borda é cache.** `EDGE_CACHE` e a releitura do `EDGE_DELIVER` gravam `edge/<kind>/<id>.json`.
+  No teto, a entrada mais antiga (mtime) é evictada até a nova caber: cache completo é cache útil,
+  e a borda se recompõe da origem. Se o corpo novo não cabe nem com o cache vazio, a entrada fica
+  fora e o resultado conta em `dropped` — nunca em `unchanged`, porque dizer "em dia" sobre o que
+  não está guardado seria mentira no painel.
+- **Réplica é catálogo.** Apagar um agregado que o nó prometeu ter é quebrar a promessa em
+  silêncio. No teto, a travessia para com `complete:false` e `diskFull:true`, e o cursor **não
+  avança** sobre o item não gravado — retomar de onde parou é o único jeito de não pular um
+  agregado. Sob pressão, a réplica pode evictar **cache da borda**, nunca a si mesma.
+- **Identidade não entra na conta.** `node.json`, `api-key` e `pinning-key` não são conteúdo:
+  contá-los deixaria um estouro de cache apagar a credencial e desligar o nó sozinho.
+
+`diskMb: 0` continua significando "não declarou limite" — o nó grava, porque ausência de campo não
+é ordem de parar de servir.
 
 ## 8. O que fica de fora, e por quê
 
