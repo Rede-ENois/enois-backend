@@ -33,6 +33,18 @@ public class E2eKeyService {
 		this.clock = clock;
 	}
 
+	/**
+	 * Grava o keypair do usuário.
+	 *
+	 * Reenviar o MESMO par de chaves (mesma chave publica) so reescreve a copia cifrada da privada —
+	 * e o que acontece quando a senha da conta muda e o cliente recifra a privada com a senha nova.
+	 * Nesse caso a chave publica continua a mesma, entao toda conversa e toda mensagem continuam
+	 * decifraveis.
+	 *
+	 * Um par de chaves NOVO desativa o anterior, mas nao o apaga: as chaves de conversa e as chaves
+	 * por mensagem foram cifradas com a publica antiga e so a privada antiga abre. O cliente busca
+	 * esse historico em {@link #keypairHistory} e continua lendo as mensagens antigas.
+	 */
 	public String uploadKeypair(String userId, String publicKey, String encryptedPrivateKey, String algorithm) {
 		if (publicKey == null || encryptedPrivateKey == null) {
 			throw new ApiException(400, "INVALID_KEYPAIR", "Chave publica e privada cifrada sao obrigatorias.");
@@ -40,15 +52,34 @@ public class E2eKeyService {
 		if (publicKey.length() > MAX_KEY_SIZE || encryptedPrivateKey.length() > MAX_KEY_SIZE) {
 			throw new ApiException(400, "KEY_TOO_LARGE", "Chave excede o tamanho maximo permitido.");
 		}
+		String alg = algorithm != null ? algorithm : "RSA-OAEP";
+		Optional<UserKeypair> active = keys.findActiveKeypair(userId);
+		if (active.isPresent() && active.get().publicKey().equals(publicKey)) {
+			String id = active.get().id();
+			keys.saveKeypair(new UserKeypair(id, userId, publicKey, encryptedPrivateKey, alg, true,
+				active.get().createdAt()));
+			return id;
+		}
 		keys.deactivateKeypairs(userId);
 		String id = UUID.randomUUID().toString();
-		keys.saveKeypair(new UserKeypair(id, userId, publicKey, encryptedPrivateKey,
-			algorithm != null ? algorithm : "RSA-OAEP", true, clock.instant()));
+		keys.saveKeypair(new UserKeypair(id, userId, publicKey, encryptedPrivateKey, alg, true, clock.instant()));
 		return id;
 	}
 
 	public Optional<UserKeypair> activeKeypair(String userId) {
 		return keys.findActiveKeypair(userId);
+	}
+
+	/**
+	 * Historico de keypairs do usuario, do mais recente pro mais antigo.
+	 *
+	 * O cliente usa a chave publica de cada item pra saber a qual keypair uma chave de conversa ou
+	 * uma chave por mensagem pertence, e tenta decifrar com a privada correspondente.
+	 */
+	public List<UserKeypair> keypairHistory(String userId) {
+		return keys.findKeypairsByUser(userId).stream()
+			.sorted((a, b) -> b.createdAt().compareTo(a.createdAt()))
+			.toList();
 	}
 
 	public void distributeConversationKey(String callerId, String conversationId,

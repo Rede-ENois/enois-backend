@@ -17,6 +17,12 @@ public interface BlockedUsersReader {
 	/** A block between the two, in either direction (mutes do not count). */
 	boolean blockedBetween(String userA, String userB);
 
+	/**
+	 * Everyone with a block against this user, in either direction (mutes do not count). One read
+	 * answers "can this person reach any of these people?" without a lookup per recipient.
+	 */
+	Set<String> blockedIdsFor(String userId);
+
 	/** Implementacao neutra para quem precisa do tipo sem depender do modulo de rede. */
 	static BlockedUsersReader none() {
 		return new BlockedUsersReader() {
@@ -28,6 +34,11 @@ public interface BlockedUsersReader {
 			@Override
 			public boolean blockedBetween(String userA, String userB) {
 				return false;
+			}
+
+			@Override
+			public Set<String> blockedIdsFor(String userId) {
+				return Collections.emptySet();
 			}
 		};
 	}

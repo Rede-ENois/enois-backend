@@ -133,10 +133,7 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 
 	@Override
 	public void markRead(String conversationId, String userId, Instant now) {
-		participantRepo.findByConversationIdAndUserId(conversationId, userId).ifPresent(entity -> {
-			entity.markRead(now);
-			participantRepo.save(entity);
-		});
+		participantRepo.markRead(conversationId, userId, now);
 	}
 
 	@Override
@@ -178,11 +175,11 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 
 	@Override
 	public List<Message> findMessagesByConversation(String conversationId, String viewerId,
-			java.time.Instant before, int limit) {
+			java.time.Instant before, String beforeId, int limit) {
 		var page = PageRequest.of(0, limit);
 		var messages = before == null
 			? messageRepo.visibleMessages(conversationId, viewerId, page)
-			: messageRepo.visibleMessagesBefore(conversationId, viewerId, before, page);
+			: messageRepo.visibleMessagesBefore(conversationId, viewerId, before, beforeId, page);
 		return messages.stream().map(MessageJpaEntity::toDomain).toList();
 	}
 

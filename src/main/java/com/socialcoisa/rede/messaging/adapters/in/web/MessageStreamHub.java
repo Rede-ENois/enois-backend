@@ -140,6 +140,12 @@ class MessageStreamHub {
 			// The tab went away; the container completes the emitter, here it only leaves the registry.
 			remove(userId, emitter);
 		}
+		catch (RuntimeException failure) {
+			// O aviso sai DEPOIS do commit: deixar a excecao subir transformaria em 500 uma mensagem
+			// que ja esta gravada, e o cliente tentaria reenviar o que nao falhou. O stream e
+			// best-effort por definicao — a tela busca o estado real nos endpoints autorizados.
+			remove(userId, emitter);
+		}
 	}
 
 	private void remove(String userId, SseEmitter emitter) {
