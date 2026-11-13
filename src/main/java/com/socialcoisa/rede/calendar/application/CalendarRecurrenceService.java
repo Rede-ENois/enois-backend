@@ -11,6 +11,7 @@ import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.stereotype.Service;
@@ -43,10 +44,13 @@ public class CalendarRecurrenceService {
 
 	private final CalendarEntryRepository entries;
 	private final Clock clock;
+	private final boolean workerEnabled;
 
-	public CalendarRecurrenceService(CalendarEntryRepository entries, Clock clock) {
+	public CalendarRecurrenceService(CalendarEntryRepository entries, Clock clock,
+			@Value("${rede.calendar.recurrence.enabled:true}") boolean workerEnabled) {
 		this.entries = entries;
 		this.clock = clock;
+		this.workerEnabled = workerEnabled;
 	}
 
 	/**
@@ -271,6 +275,9 @@ public class CalendarRecurrenceService {
 	 */
 	@Scheduled(fixedDelayString = "${rede.calendar.recurrence-delay-ms:300000}")
 	public void extendDue() {
+		if (!workerEnabled) {
+			return;
+		}
 		for (CalendarEntry tail : entries.findSeriesTails()) {
 			try {
 				int created = extend(tail, clock.instant());
