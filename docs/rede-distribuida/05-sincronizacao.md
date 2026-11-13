@@ -265,6 +265,48 @@ resultado do transcode (`MEDIA_TRANSCODE`, nas duas pontas) passam pelo mesmo te
   ele que paga a conta de rede que declarou, e é o único ponto onde o número declarado vira
   comportamento observável.
 
+## 7.4 Replicação geográfica
+
+Tudo até aqui é medida **por nó**: cada nó tem versão e hash, e a reconciliação diz se ele está em
+dia. Isso responde "o nó X está servindo o corpo certo?", nunca "a rede sobrevive à queda de uma
+região?" — e as duas perguntas divergem. Doze nós de borda no mesmo rack são doze cópias e **uma**
+região: a contagem por nó chama isso de redundância total.
+
+### 7.4.1 A varredura não acusa nó de região evacuada
+
+A fila da reconciliação filtrava só `n.status = 'ACTIVE'`. O nó de uma região declarada fora de
+operação continua `ACTIVE` (a região é que saiu, em V289/ADR-015), então a varredura o conferia e
+gravava `CONTENT_STALE`. O nó não divergiu: desde a declaração o Control Plane **parou de lhe
+servir** — o despacho não o escolhe, o heartbeat responde `acceptTasks=false` e o `sweep` do cache o
+pula. Acusá-lo é acusar o nó por uma decisão do Control Plane, e no meio do incidente o painel
+passa a mostrar divergência de saúde onde o problema é evacuação.
+
+A guarda é a declaração vigente, comparada **normalizada** (`NetworkRegions.normalize`): `" Sudeste "`
+no nó é a mesma região de `"sudeste"` na declaração. Quando a região volta, o nó volta à fila
+sozinho — não há marca no snapshot a limpar.
+
+### 7.4.2 Cobertura por região
+
+`GET /admin/network/content/coverage` devolve, por tipo de conteúdo da allowlist, três números:
+
+| campo | o que conta |
+|---|---|
+| `regionsWithCopy` | regiões distintas com pelo menos um nó **operável** que confirmou ter o tipo |
+| `totalRegions` | regiões distintas com pelo menos um nó operável (o mesmo universo, para comparar) |
+| `copies` | quantos nós confirmaram ter o tipo — a redundância dentro da cobertura |
+
+"Operável" é `ACTIVE`, com heartbeat recente (o mesmo corte de 180 s do scheduler — "vivo" no painel
+é o mesmo vivo que recebe tarefa) e de região que não foi declarada fora de operação. A cópia de um
+nó parado ou de uma região evacuada existe no banco e não atende ninguém; contá-la prometeria
+contingência que a rede não tem.
+
+Nó **sem região** conta como uma região própria identificada por `""`. Ele tem a cópia e atende;
+ignorá-lo subnotificaria a cobertura de uma rede que não usa o campo. É leitura de painel, não
+decisão de despacho: nada aqui entra em `choose()` nem na conta de capacidade.
+
+O tipo sem cópia nenhuma aparece **com zero** em vez de sumir da resposta — omitir a linha esconderia
+exatamente o buraco que o painel existe para mostrar.
+
 ## 8. O que fica de fora, e por quê
 
 | tentação | por que não |

@@ -160,6 +160,30 @@ parado".
 **Prova:** `NetworkRegionTests` (13 testes; Q0 neutralizando as quatro portas falha em 6) e V289
 aplicada duas vezes em MariaDB 11.4 real com `network_nodes`/`network_tasks` povoados antes.
 
+### 3.2 Replicação geográfica (R104)
+
+A replicação existia **por nó** — versão, hash, reconciliação (05 §7) — e isso respondia "o nó X
+está em dia?", nunca "a rede sobrevive à queda de uma região?". Duas metades faltavam, ambas sobre
+a dimensão que o nome já prometia:
+
+**A varredura não confere nó de região evacuada.** A fila filtrava só `n.status = 'ACTIVE'`, e o nó
+da região declarada fora de operação continua `ACTIVE` — a região é que saiu. Conferi-lo gravava
+`CONTENT_STALE` num nó que não divergiu: é o Control Plane que parou de lhe servir. O painel enchia
+de divergência de saúde no meio de um incidente que já estava declarado e auditado. Quando a região
+volta, o nó volta à fila sozinho (a guarda é a declaração vigente, não uma marca no snapshot).
+
+**Cobertura por região** (`GET /admin/network/content/coverage`): por tipo de conteúdo, quantas
+regiões **distintas** têm cópia utilizável (`regionsWithCopy`), contra quantas regiões a rede tem
+(`totalRegions`) e quantas cópias no total (`copies`). Doze nós no mesmo rack são doze cópias e uma
+região — a contagem por nó chamaria isso de redundância total, e é justamente o que a contingência
+precisa enxergar. "Operável" é `ACTIVE` + heartbeat recente (mesmo corte de 180 s do scheduler) +
+região não evacuada: cópia de nó que não atende ninguém não cobre região. É leitura de painel, não
+decisão de despacho.
+
+**Prova:** `NetworkReplicationGeographicTests` (10 testes; Q0: sem a guarda regional a varredura
+acusa o nó evacuado — 4 falhas; contando nós em vez de regiões, 1 falha; ignorando o corte de
+heartbeat, 1 falha).
+
 ## 4. Anti split-brain
 
 O Control Plane não pode ser ponto único de falha sem estratégia de recuperação. A estratégia é
@@ -239,7 +263,7 @@ Três decisões que o desenho fixa:
 - **`acceptTasks` considera o próprio nó**: antes vinha só do modo da rede; agora é falso também para
   nó fora de operação. O heartbeat do nó em conflito é o que o faz drenar sem precisar de 403.
 
-O que ainda falta nesta seção: recuperação regional, replicação geográfica e os testes de desastre.
+O que ainda falta nesta seção: os testes de desastre (§3.1 e §3.2 entregues em R103/R104).
 
 ## 5. Revogação durante processamento
 

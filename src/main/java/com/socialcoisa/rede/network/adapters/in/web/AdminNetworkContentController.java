@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.network.application.ContentReconcileService;
 import com.socialcoisa.rede.network.application.ContentReconcileWorker;
+import com.socialcoisa.rede.network.application.NetworkReplicationCoverageService;
 import com.socialcoisa.rede.network.application.port.out.ContentVersionRepository;
 import com.socialcoisa.rede.shared.web.AdminGuard;
 import com.socialcoisa.rede.shared.web.CurrentUser;
@@ -30,13 +31,16 @@ class AdminNetworkContentController {
 
 	private final ContentReconcileService reconcile;
 	private final ContentReconcileWorker worker;
+	private final NetworkReplicationCoverageService coverage;
 	private final CurrentUserResolver currentUserResolver;
 	private final AdminGuard adminGuard;
 
 	AdminNetworkContentController(ContentReconcileService reconcile, ContentReconcileWorker worker,
-			CurrentUserResolver currentUserResolver, AdminGuard adminGuard) {
+			NetworkReplicationCoverageService coverage, CurrentUserResolver currentUserResolver,
+			AdminGuard adminGuard) {
 		this.reconcile = reconcile;
 		this.worker = worker;
+		this.coverage = coverage;
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
 	}
@@ -53,6 +57,20 @@ class AdminNetworkContentController {
 	record ReconcileOverview(long snapshots, long divergent) {
 	}
 
+	/**
+	 * Uma linha por tipo de conteúdo: em quantas regiões ele tem cópia utilizável, quantas regiões
+	 * a rede tem para comparar e quantos nós confirmaram tê-lo.
+	 *
+	 * <p>É a resposta a "a rede sobrevive à queda de uma região?" — a pergunta que a contagem por nó
+	 * nunca respondeu, porque dez nós no mesmo rack são dez cópias e uma região.</p>
+	 */
+	record CoverageView(String kind, long regionsWithCopy, long totalRegions, long copies) {
+
+		static CoverageView of(ContentVersionRepository.RegionCoverage row) {
+			return new CoverageView(row.kind().name(), row.regionsWithCopy(), row.totalRegions(), row.copies());
+		}
+	}
+
 	@GetMapping("/divergences")
 	List<DivergenceView> divergences(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(defaultValue = "200") int limit) {
@@ -64,6 +82,17 @@ class AdminNetworkContentController {
 	ReconcileOverview overview(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		admin(sessionToken);
 		return new ReconcileOverview(reconcile.countAll(), reconcile.countDivergent());
+	}
+
+	/**
+	 * Cobertura geográfica por tipo de conteúdo. Nó de região fora de operação não conta para
+	 * cobertura: o cache dele pode estar completo, mas ele não atende ninguém enquanto a região
+	 * estiver declarada fora — contá-lo prometeria contingência que a rede não tem.
+	 */
+	@GetMapping("/coverage")
+	List<CoverageView> coverage(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		admin(sessionToken);
+		return coverage.coverage().stream().map(CoverageView::of).toList();
 	}
 
 	/**
