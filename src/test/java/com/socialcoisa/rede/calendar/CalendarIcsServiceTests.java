@@ -19,6 +19,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 
 import com.socialcoisa.rede.calendar.application.CalendarIcsService;
 import com.socialcoisa.rede.calendar.application.port.out.CalendarEntryRepository;
+import com.socialcoisa.rede.calendar.application.port.out.CalendarParticipantRepository;
 import com.socialcoisa.rede.calendar.domain.CalendarEntry;
 import com.socialcoisa.rede.calendar.domain.CalendarEntrySource;
 import com.socialcoisa.rede.calendar.domain.CalendarKind;
@@ -44,6 +45,9 @@ class CalendarIcsServiceTests {
 
 	@Autowired
 	private CalendarEntryRepository entries;
+
+	@Autowired
+	private CalendarParticipantRepository participants;
 
 	private static String owner() {
 		return "ics_" + UUID.randomUUID();
@@ -147,6 +151,35 @@ class CalendarIcsServiceTests {
 		assertThat(ics).contains("UID:enois-" + id);
 		assertThat(ics).contains("STATUS:CANCELLED");
 		assertThat(ics).doesNotContain("STATUS:CONFIRMED");
+	}
+
+	/**
+	 * O compromisso que o leitor organiza e o que foi convidado saem no mesmo arquivo, e o
+	 * cancelamento publica `STATUS:CANCELLED` também no convidado: o calendário externo de quem
+	 * aceitou precisa saber que o evento acabou (D6). Um filtro de estado no cruzamento de convite
+	 * esconderia esta linha, e o evento ficaria para sempre na agenda de quem assina.
+	 */
+	@Test
+	void invitedEntriesExportTooAndTheirCancellationKeepsTheSameUid() {
+		String owner = owner();
+		String guest = "ics_guest_" + UUID.randomUUID();
+		String id = "cal_" + UUID.randomUUID();
+		save(owner, id, STARTS_AT, STARTS_AT.plus(Duration.ofHours(1)), "Festa do time");
+		participants.save(com.socialcoisa.rede.calendar.domain.CalendarParticipant.invite(
+			"p_" + UUID.randomUUID(), id, owner, guest, Instant.now()));
+
+		String before = service.export(guest, STARTS_AT.minus(Duration.ofDays(1)),
+			STARTS_AT.plus(Duration.ofDays(1)), null);
+		assertThat(before).contains("SUMMARY:Festa do time");
+
+		CalendarEntry cancelled = entries.findById(id).orElseThrow();
+		cancelled.cancel(Instant.now());
+		entries.save(cancelled);
+
+		String after = service.export(guest, STARTS_AT.minus(Duration.ofDays(1)),
+			STARTS_AT.plus(Duration.ofDays(1)), null);
+		assertThat(after).contains("UID:enois-" + id);
+		assertThat(after).contains("STATUS:CANCELLED");
 	}
 
 	@Test

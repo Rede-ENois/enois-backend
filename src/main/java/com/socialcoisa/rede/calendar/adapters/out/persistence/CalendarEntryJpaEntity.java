@@ -19,7 +19,7 @@ import jakarta.persistence.Table;
 		@Index(name = "idx_calendar_entries_owner_start", columnList = "owner_id, starts_at, state"),
 		@Index(name = "uq_calendar_entries_source", columnList = "owner_id, source_type, source_id",
 				unique = true)})
-class CalendarEntryJpaEntity {
+public class CalendarEntryJpaEntity {
 
 	@Id
 	private String id;
@@ -93,7 +93,7 @@ class CalendarEntryJpaEntity {
 		return e;
 	}
 
-	CalendarEntry toDomain() {
+	public CalendarEntry toDomain() {
 		return new CalendarEntry(id, ownerId, CalendarScope.parse(scope), CalendarKind.parse(kind),
 			new CalendarEntrySource(sourceType, sourceId), title, description, startsAt, endsAt,
 			CalendarEntry.zoneOf(timeZoneId), allDay, CalendarEntryState.parse(state), createdAt, updatedAt,

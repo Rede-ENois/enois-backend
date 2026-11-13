@@ -24,6 +24,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import com.socialcoisa.rede.calendar.application.port.out.CalendarEntryRepository;
+import com.socialcoisa.rede.calendar.application.port.out.CalendarInvitationRepository;
 import com.socialcoisa.rede.calendar.domain.CalendarEntry;
 import com.socialcoisa.rede.calendar.domain.CalendarEntrySource;
 import com.socialcoisa.rede.calendar.domain.CalendarKind;
@@ -63,12 +64,15 @@ public class CalendarIcsService {
 	private static final String SOURCE_TYPE = "ICS";
 
 	private final CalendarEntryRepository entries;
+	private final CalendarInvitationRepository invitations;
 	private final CalendarSourceService source;
 	private final int maxImportBytes;
 
-	public CalendarIcsService(CalendarEntryRepository entries, CalendarSourceService source,
+	public CalendarIcsService(CalendarEntryRepository entries, CalendarInvitationRepository invitations,
+			CalendarSourceService source,
 			@Value("${rede.calendar.ics-max-import-bytes:524288}") int maxImportBytes) {
 		this.entries = entries;
+		this.invitations = invitations;
 		this.source = source;
 		this.maxImportBytes = maxImportBytes;
 	}
@@ -77,7 +81,9 @@ public class CalendarIcsService {
 
 	/**
 	 * O `.ics` da agenda de quem está lendo na janela pedida. Cancelado entra com
-	 * `STATUS:CANCELLED` e o `UID` que sempre foi dele.
+	 * `STATUS:CANCELLED` e o `UID` que sempre foi dele. O convite exportado é todo convite com
+	 * linha de participante, aceito ou recusado: o arquivo é o histórico da agenda, e o
+	 * `PARTSTAT` do leitor externo resolve o que ele faz com quem recusou.
 	 *
 	 * <p>Um `VTIMEZONE` por fuso que a janela realmente usa, e cada um só com as transições da
 	 * janela — o export de um mês não carrega décadas de mudança de regra.
@@ -85,7 +91,9 @@ public class CalendarIcsService {
 	public String export(String userId, Instant from, Instant to, CalendarScope scope) {
 		validateWindow(from, to);
 		List<CalendarEntry> agenda = new ArrayList<>(entries.findInWindow(userId, scope, from, to));
-		agenda.addAll(entries.findInvitedInWindow(userId, scope, from, to));
+		for (CalendarInvitationRepository.InvitedEntry invited : invitations.findInvited(userId, scope, from, to)) {
+			agenda.add(invited.entry());
+		}
 		agenda.sort((left, right) -> left.startsAt().compareTo(right.startsAt()));
 
 		Map<String, ZoneId> zones = new LinkedHashMap<>();

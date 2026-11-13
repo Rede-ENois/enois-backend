@@ -33,10 +33,6 @@ public interface CalendarEntryRepository {
 	 */
 	void deleteBySource(String ownerId, CalendarEntrySource source);
 
-	/** Entradas que outra pessoa organizou e convidou este usuário, dentro da janela meia-aberta. */
-	List<CalendarEntry> findInvitedInWindow(String userId, CalendarScope scope, Instant windowStart,
-			Instant windowEnd);
-
 	/**
 	 * Os compromissos com convite dessa pessoa ainda sem resposta, do convite mais antigo ao mais
 	 * novo. Cancelado ou já respondido não volta: a consulta cruza convite e compromisso no banco.

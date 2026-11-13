@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
 import com.socialcoisa.rede.calendar.application.port.out.CalendarEntryRepository;
+import com.socialcoisa.rede.calendar.application.port.out.CalendarInvitationRepository;
 import com.socialcoisa.rede.calendar.application.port.out.CalendarParticipantRepository;
 import com.socialcoisa.rede.calendar.domain.CalendarEntry;
 import com.socialcoisa.rede.calendar.domain.CalendarEntrySource;
@@ -19,6 +20,8 @@ import com.socialcoisa.rede.calendar.domain.CalendarKind;
 import com.socialcoisa.rede.calendar.domain.CalendarParticipant;
 import com.socialcoisa.rede.calendar.domain.CalendarParticipantState;
 import com.socialcoisa.rede.calendar.domain.CalendarScope;
+
+import static org.assertj.core.api.Assertions.tuple;
 
 /**
  * A entrada central contra o banco de verdade: o que a V257 criou tem de ser lido como o domínio
@@ -39,6 +42,9 @@ class CalendarEntryPersistenceTests {
 
 	@Autowired
 	private CalendarParticipantRepository participants;
+
+	@Autowired
+	private CalendarInvitationRepository invitations;
 
 	@Test
 	void storesAndReadsBackInstantZoneAndSource() {
@@ -132,14 +138,18 @@ class CalendarEntryPersistenceTests {
 				NOW.plus(Duration.ofDays(1)))).isEmpty();
 	}
 
-	/**
+/**
 	 * A agenda de quem foi convidado sai do cruzamento entre convite e compromisso, não de uma
 	 * lista de ids carregada antes. O que este teste tranca: o convite traz o compromisso do dono
-	 * para a janela de quem foi convidado, respeita a janela meia-aberta e o filtro de agenda, e
-	 * não traz compromisso de quem não convidou a pessoa.
+	 * com a resposta junto, respeita a janela meia-aberta e o filtro de agenda, e não traz
+	 * compromisso de quem não convidou a pessoa.
+	 *
+	 * <p>O pendente e o cancelado continuam aparecendo: a tela mostra o convite esperando resposta
+	 * e o export publica o cancelamento no mesmo `UID` (D6/D13). Esse detalhe é o que este teste
+	 * protege contra um filtro de estado colocado no cruzamento por engano.
 	 */
 	@Test
-	void invitedEntriesComeFromTheParticipantJoin() {
+	void invitedEntriesComeFromTheParticipantJoinWithTheirAnswer() {
 		String owner = "cal_owner_" + UUID.randomUUID();
 		String guest = "cal_guest_" + UUID.randomUUID();
 		String stranger = "cal_stranger_" + UUID.randomUUID();
@@ -153,21 +163,31 @@ class CalendarEntryPersistenceTests {
 		// Fora da janela: o convite existe, mas o compromisso não toca o intervalo pedido.
 		CalendarEntry outside = entry(owner, CalendarScope.SOCIAL, CalendarKind.PERSONAL,
 			new CalendarEntrySource(null, null), windowEnd.plus(Duration.ofHours(2)), Duration.ofMinutes(30));
-		for (CalendarEntry e : new CalendarEntry[] { social, professional, outside }) {
+		// Cancelado depois do convite: continua na leitura, com a resposta que a pessoa deu.
+		CalendarEntry cancelled = entry(owner, CalendarScope.SOCIAL, CalendarKind.PERSONAL,
+			new CalendarEntrySource(null, null), windowStart.plus(Duration.ofMinutes(25)), Duration.ofMinutes(30));
+		cancelled.cancel(NOW);
+		for (CalendarEntry e : new CalendarEntry[] { social, professional, outside, cancelled }) {
 			repository.save(e);
 			participants.save(CalendarParticipant.invite("cal_p_" + UUID.randomUUID(), e.id(), owner, guest, NOW));
 		}
+		CalendarParticipant accepted = participants.findByEntryAndUser(social.id(), guest).orElseThrow();
+		accepted.respond(CalendarParticipantState.ACCEPTED, NOW);
+		participants.save(accepted);
 
-		assertThat(repository.findInvitedInWindow(guest, null, windowStart, windowEnd))
-			.extracting(CalendarEntry::id)
-			.containsExactly(social.id(), professional.id());
-		assertThat(repository.findInvitedInWindow(guest, CalendarScope.PROFESSIONAL, windowStart, windowEnd))
-			.extracting(CalendarEntry::id)
+		assertThat(invitations.findInvited(guest, null, windowStart, windowEnd))
+			.extracting(invited -> invited.entry().id(), CalendarInvitationRepository.InvitedEntry::answer)
+			.containsExactly(
+				tuple(social.id(), CalendarParticipantState.ACCEPTED),
+				tuple(professional.id(), CalendarParticipantState.INVITED),
+				tuple(cancelled.id(), CalendarParticipantState.INVITED));
+		assertThat(invitations.findInvited(guest, CalendarScope.PROFESSIONAL, windowStart, windowEnd))
+			.extracting(invited -> invited.entry().id())
 			.containsExactly(professional.id());
 		// Quem não foi convidado não herda a agenda de ninguém.
-		assertThat(repository.findInvitedInWindow(stranger, null, windowStart, windowEnd)).isEmpty();
+		assertThat(invitations.findInvited(stranger, null, windowStart, windowEnd)).isEmpty();
 		// O dono não vê o próprio compromisso pela via do convite: ele já vem pela consulta de dono.
-		assertThat(repository.findInvitedInWindow(owner, null, windowStart, windowEnd)).isEmpty();
+		assertThat(invitations.findInvited(owner, null, windowStart, windowEnd)).isEmpty();
 	}
 
 	/**
