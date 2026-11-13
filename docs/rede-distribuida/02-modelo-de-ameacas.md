@@ -54,6 +54,7 @@ prioridade de escalonamento, não permissão extra.
 | ler credencial do banco | o nó nunca recebe uma; não existe caminho de rede para o banco |
 | forjar identidade de outro nó | certificado individual + mTLS; a chave de um nó não autentica outro |
 | alterar as próprias permissões | permissão é dado do Control Plane; o nó só lê a config assinada |
+| seguir executando depois de revogado, sem falar com o Control Plane | a config assinada tem validade (`ttlSeconds`, ADR-018); passado o prazo sem revalidar, o nó para de pedir tarefa e drena |
 | reutilizar token de provisionamento | token é de uso único e consumido no enroll |
 | replay de requisição capturada | nonce + timestamp + request id, janela curta |
 | executar tarefa de outro nó | tarefa é endereçada ao nó designado e assinada |

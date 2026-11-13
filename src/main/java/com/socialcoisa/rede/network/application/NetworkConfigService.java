@@ -51,23 +51,38 @@ public class NetworkConfigService {
 	 * <p>2 (fase 6): {@code term} entrou no payload e na linha canônica — o nó passa a recusar config
 	 * de termo menor que o último visto (doc 06 §4, regra 2). Runtime do formato 1 não leria o termo;
 	 * runtime do formato 2 reconstrói a linha com ele.</p>
+	 *
+	 * <p>3 (fase 6): {@code ttlSeconds} entrou no payload e na linha canônica — a config passa a
+	 * <b>vencer</b>. Sem prazo assinado, "Control Plane fora" e "Control Plane dizendo que tudo está
+	 * bem" eram indistinguíveis para o nó, que seguia com a última permissão para sempre (doc 06 §6).</p>
 	 */
-	static final int FORMAT_VERSION = 2;
+	static final int FORMAT_VERSION = 3;
 
 	private final Clock clock;
 	private final NetworkNodeRepository nodes;
 	private final NetworkAuthorityRepository authorities;
 	private final Optional<PrivateKey> signingKey;
 	private final Optional<PublicKey> pinningKey;
+	private final int ttlSeconds;
 
 	NetworkConfigService(Clock clock, NetworkNodeRepository nodes, NetworkAuthorityRepository authorities,
 			@Value("${rede.network.config.signing-key:}") String signingKey,
-			@Value("${rede.network.config.signing-public-key:}") String publicKey) {
+			@Value("${rede.network.config.signing-public-key:}") String publicKey,
+			@Value("${rede.network.config.ttl-seconds:300}") int ttlSeconds) {
 		this.clock = clock;
 		this.nodes = nodes;
 		this.authorities = authorities;
 		this.signingKey = NetworkConfigSigner.privateKey(signingKey);
 		this.pinningKey = NetworkConfigSigner.publicKey(publicKey);
+		// TTL zero ou negativo venceria a config no mesmo instante em que ela nasce: o nó recusaria
+		// operar sem nenhuma pista de por quê. Um piso explícito transforma config errada em aviso.
+		if (ttlSeconds <= 0) {
+			LOG.warn("rede.network.config.ttl-seconds={} invalido; usando 300s", ttlSeconds);
+			this.ttlSeconds = 300;
+		}
+		else {
+			this.ttlSeconds = ttlSeconds;
+		}
 		if (signingKey != null && !signingKey.isBlank() && this.signingKey.isEmpty()) {
 			// Chave presente e inválida é configuração quebrada: o nó receberia config sem assinatura e
 			// recusaria operar. Melhor gritar no log do que descobrir no install.
@@ -102,12 +117,12 @@ public class NetworkConfigService {
 			.orElseGet(() -> new NetworkAuthorityRepository.AuthorityRecord(0, null, null));
 		var fields = new NetworkConfigSigner.SignedFields(FORMAT_VERSION, stamp.version(), node.id(), profiles,
 			limits.cpuCores(), limits.memoryMb(), limits.diskMb(), limits.bandwidthMbps(), allowedTasks,
-			stamp.issuedAt().toString(), authority.term());
+			stamp.issuedAt().toString(), ttlSeconds, authority.term());
 		String signature = sign(fields.canonical());
 		return new NodeConfigView(node.id(), node.status().name(), operable, FORMAT_VERSION, stamp.version(),
 			profiles, limits, allowedTasks, node.region(), node.country(), stamp.issuedAt().toString(),
 			signature != null, signature, signature == null ? null : NetworkConfigSigner.ALGORITHM,
-			pinningKey.map(NetworkConfigService::encode).orElse(null), authority.term());
+			pinningKey.map(NetworkConfigService::encode).orElse(null), ttlSeconds, authority.term());
 	}
 
 	private String sign(String canonical) {
@@ -152,10 +167,15 @@ public class NetworkConfigService {
 	 * <b>permissão</b> (muda a cada transição administrativa). {@code term} é a terceira coisa
 	 * diferente: é a versão da <b>autoridade</b> que assinou (fase 6) — só sobe na promoção, e o nó
 	 * recusa documento de termo menor que o último que aceitou.</p>
+	 *
+	 * <p>{@code ttlSeconds} é há quanto tempo <b>esta</b> config deixa de valer, contado do instante em
+	 * que o nó a recebeu — não uma data absoluta. Prazo absoluto faria a leitura depender do relógio de
+	 * quem serve: relógio adiantado no Control Plane encurtaria a config de todo mundo, e atrasado a
+	 * prolongaria. O nó mede com o próprio relógio, que é o único que ele pode conferir.</p>
 	 */
 	public record NodeConfigView(String nodeId, String status, boolean operable, int formatVersion,
 			int configVersion, List<String> profiles, LimitsView limits, List<String> allowedTasks, String region,
 			String country, String issuedAt, boolean signed, String signature, String algorithm, String publicKey,
-			int term) {
+			int ttlSeconds, int term) {
 	}
 }

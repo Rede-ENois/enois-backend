@@ -83,6 +83,24 @@ else
   warn "NODE_HOME com permissão $dir_perms — recomendação: chmod 700 $NODE_HOME"
 fi
 
+# 5b. Frescor da config guardada (doc 06 §6)
+# A config vale por ttlSeconds contados da verificação. Vencida, o nó drena mesmo com o Control
+# Plane de pé — é aviso, não falha: ele volta a operar no primeiro ciclo em que conseguir revalidar.
+if [[ -s "$NODE_HOME/config.json" && -s "$NODE_HOME/config-verified-at" ]]; then
+  verified_at=$(head -n 1 "$NODE_HOME/config-verified-at")
+  ttl=$(sed -n 's/.*"ttlSeconds":\([0-9][0-9]*\).*/\1/p' "$NODE_HOME/config.json" | head -n 1)
+  if [[ "$verified_at" =~ ^[0-9]+$ && -n "$ttl" ]]; then
+    age=$(( $(date +%s) - verified_at ))
+    if (( age < ttl )); then
+      pass "Config verificada há ${age}s (válida por ${ttl}s)"
+    else
+      warn "Config vencida há $(( age - ttl ))s (TTL de ${ttl}s) — o nó drena até revalidar; confira a conectividade"
+    fi
+  else
+    warn "Cache de config ilegível — o nó vai reverificar no próximo ciclo"
+  fi
+fi
+
 # 6. Container
 if command -v docker >/dev/null 2>&1; then
   if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'enois-node'; then

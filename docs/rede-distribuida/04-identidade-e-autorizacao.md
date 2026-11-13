@@ -191,6 +191,10 @@ Implementada na fase 5 (`GET /network/nodes/me/config`, contrato em `03-contrato
   e o runtime veria "config nova" a cada segundo.
 - **`signed:false` quando não há chave configurada** — o Control Plane não inventa assinatura, e
   quem decide aceitar config sem assinatura é o runtime (padrão: recusar).
+- **`ttlSeconds` assinado (formato 3, fase 6)**: a validade da permissão é medida a partir do
+  instante em que o nó verificou a config, não por prazo absoluto. Sem isso a última permissão
+  valeria para sempre e um nó que nunca mais falasse com o Control Plane continuaria executando
+  (doc 06 §6, [ADR-018](../adr/ADR-018-validade-da-config-assinada.md)).
 - **Nó pendente lê a própria config** (200, `operable:false`, `allowedTasks` vazio). Recusar com 403
   deixaria o instalador sem resposta no passo em que ele espera aprovação humana.
 

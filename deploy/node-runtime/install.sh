@@ -70,6 +70,11 @@ if [[ "$MODE" == "--backup" ]]; then
   # conferir a config (tar reclama de arquivo ausente e sai != 0 com set -e). O
   # termo aceito vai também: restaurar a identidade sem ele deixaria o nó aceitar
   # de volta config de uma autoridade que já caiu (regra do termo, fase 6).
+  # A config guardada (config.json/config-verified-at) NÃO vai: ela é cache derivável e a
+  # validade é medida pelo relógio da máquina. Restaurada noutra máquina, ela chegaria com
+  # instante de verificação de outra máquina — ou seja, mentiria sobre o próprio frescor, e o
+  # TTL do §6 ficaria sem sentido. Sem o cache, o nó simplesmente verifica de novo no próximo
+  # ciclo, que é o que ele faria de qualquer jeito.
   umask 077
   local_files=(node.json api-key)
   if [[ -s "$NODE_HOME/pinning-key" ]]; then

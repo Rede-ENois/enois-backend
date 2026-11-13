@@ -208,7 +208,7 @@ class NetworkAuthorityTests {
 			.perform(get("/network/nodes/me/config").header("X-Node-Id", node.id()).header("X-Node-Key", node.key()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.term").value(1))
-			.andExpect(jsonPath("$.formatVersion").value(2));
+			.andExpect(jsonPath("$.formatVersion").value(3));
 	}
 
 	// ---------------------------------------------------------------- painel

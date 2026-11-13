@@ -48,8 +48,8 @@ class NetworkConfigSignerTests {
 	}
 
 	private NetworkConfigSigner.SignedFields fields(List<String> profiles) {
-		return new NetworkConfigSigner.SignedFields(2, 7, "nd_1", profiles, 4, 8192, 51200, 100,
-			List.of("MEDIA_TRANSCODE"), "2026-11-12T12:00:00Z", 4);
+		return new NetworkConfigSigner.SignedFields(3, 7, "nd_1", profiles, 4, 8192, 51200, 100,
+			List.of("MEDIA_TRANSCODE"), "2026-11-12T12:00:00Z", 300, 4);
 	}
 
 	@Test
@@ -64,22 +64,22 @@ class NetworkConfigSignerTests {
 		var fields = fields(List.of("NODE_MEDIA"));
 		String signature = sign(fields.canonical());
 		// O ataque: mais perfis do que o Control Plane aprovou.
-		var forged = new NetworkConfigSigner.SignedFields(2, 7, "nd_1", List.of("NODE_MEDIA", "NODE_WORKER"), 4, 8192,
-			51200, 100, List.of("MEDIA_TRANSCODE"), "2026-11-12T12:00:00Z", 4);
+		var forged = new NetworkConfigSigner.SignedFields(3, 7, "nd_1", List.of("NODE_MEDIA", "NODE_WORKER"), 4, 8192,
+			51200, 100, List.of("MEDIA_TRANSCODE"), "2026-11-12T12:00:00Z", 300, 4);
 		assertThat(NetworkConfigSigner.verify(pair.getPublic(), forged.canonical(), signature)).isFalse();
 		// E a variante mais sorrateira: mesma permissão, número de versão maior — o nó aceitaria uma
 		// config que nunca foi emitida só porque "parece mais nova".
-		var bumped = new NetworkConfigSigner.SignedFields(2, 8, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
-			List.of("MEDIA_TRANSCODE"), "2026-11-12T12:00:00Z", 4);
+		var bumped = new NetworkConfigSigner.SignedFields(3, 8, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
+			List.of("MEDIA_TRANSCODE"), "2026-11-12T12:00:00Z", 300, 4);
 		assertThat(NetworkConfigSigner.verify(pair.getPublic(), bumped.canonical(), signature)).isFalse();
 	}
 
 	@Test
 	void mesmaPermissaoEmOrdemDiferreProduzAMesmaLinhaCanonica() {
-		var first = new NetworkConfigSigner.SignedFields(2, 7, "nd_1", List.of("NODE_MEDIA", "NODE_WORKER"), 4, 8192,
-			51200, 100, List.of("ASYNC_JOB", "MEDIA_TRANSCODE"), "2026-11-12T12:00:00Z", 4);
-		var second = new NetworkConfigSigner.SignedFields(2, 7, "nd_1", List.of("NODE_WORKER", "NODE_MEDIA"), 4, 8192,
-			51200, 100, List.of("MEDIA_TRANSCODE", "ASYNC_JOB"), "2026-11-12T12:00:00Z", 4);
+		var first = new NetworkConfigSigner.SignedFields(3, 7, "nd_1", List.of("NODE_MEDIA", "NODE_WORKER"), 4, 8192,
+			51200, 100, List.of("ASYNC_JOB", "MEDIA_TRANSCODE"), "2026-11-12T12:00:00Z", 300, 4);
+		var second = new NetworkConfigSigner.SignedFields(3, 7, "nd_1", List.of("NODE_WORKER", "NODE_MEDIA"), 4, 8192,
+			51200, 100, List.of("MEDIA_TRANSCODE", "ASYNC_JOB"), "2026-11-12T12:00:00Z", 300, 4);
 		assertThat(first.canonical()).isEqualTo(second.canonical());
 		String signature = sign(first.canonical());
 		assertThat(NetworkConfigSigner.verify(pair.getPublic(), second.canonical(), signature)).isTrue();

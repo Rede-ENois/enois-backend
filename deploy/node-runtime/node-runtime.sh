@@ -61,13 +61,36 @@ json_flag() {
 
 # allowedTasks da config assinada — a ÚNICA fonte de permissão de execução.
 allowed_tasks() {
-  local config
+  local config rc
   if [[ ! -s "$NODE_HOME/pinning-key" ]]; then
     printf '[executor] sem pinning-key — config não verificável; rode --start para pinar a chave\n' >&2
     return 1
   fi
   config=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
-    "${auth[@]}" "$CONTROL_PLANE/network/nodes/me/config") || return 1
+    "${auth[@]}" "$CONTROL_PLANE/network/nodes/me/config")
+  rc=$?
+  if (( rc != 0 )); then
+    # Recusa HTTP (código 22 do --fail) NÃO é queda: é o Control Plane respondendo que esta
+    # config não vale mais — revogação, chave inválida, nó desconhecido. Cai aqui e o cache não
+    # pode falar por cima: ressuscitar permissão recém-negada é o oposto de fail secure.
+    if (( rc == 22 )); then
+      printf '[executor] Control Plane recusou a config (HTTP de erro) — drenando\n' >&2
+      return 1
+    fi
+    # Queda de transporte: o Control Plane não respondeu. A permissão que ele assinou continua
+    # valendo enquanto o TTL dela não vence (doc 06 §6) — blip de rede não derruba nó sadio.
+    allowed_tasks_da_cache
+    return $?
+  fi
+  config_valida "$config" || return 1
+  config_cache_guardar "$config"
+  printf '%s' "$config"
+}
+
+# config_valida <config-json>: 0 quando a config é do pino, está assinada por ele e não regride
+# o termo. É a checagem inteira, e vale igual para a que chegou agora e para a guardada.
+config_valida() {
+  local config="$1"
   if grep -q '"signed":true' <<<"$config"; then
     printf '%s' "$config" | grep -q '"publicKey":"'"$(cat "$NODE_HOME/pinning-key")"'"' || {
       printf '[executor] config com publicKey diferente do pino — recusada\n' >&2
@@ -89,6 +112,53 @@ allowed_tasks() {
     printf '[executor] config com term menor que o último aceito — autoridade deposta, recusada\n' >&2
     return 1
   }
+  return 0
+}
+
+config_cache_guardar() {
+  # Guarda a config JÁ verificada e o instante da verificação. O rename é o que impede um
+  # desligamento no meio da escrita de deixar config truncada: ou o arquivo antigo, ou o novo.
+  if printf '%s' "$1" > "$NODE_HOME/config.json.tmp" 2>/dev/null &&
+    printf '%s\n' "$(date +%s)" > "$NODE_HOME/config-verified-at.tmp" 2>/dev/null &&
+    mv -f "$NODE_HOME/config.json.tmp" "$NODE_HOME/config.json" 2>/dev/null &&
+    mv -f "$NODE_HOME/config-verified-at.tmp" "$NODE_HOME/config-verified-at" 2>/dev/null; then
+    rm -f "$NODE_HOME/config.json.tmp" "$NODE_HOME/config-verified-at.tmp" 2>/dev/null
+    return 0
+  fi
+  rm -f "$NODE_HOME/config.json.tmp" "$NODE_HOME/config-verified-at.tmp" 2>/dev/null
+  printf '[executor] aviso: não consegui guardar a config verificada — próxima queda será sem cache\n' >&2
+  return 1
+}
+
+allowed_tasks_da_cache() {
+  # A config guardada serve SÓ dentro do TTL que ela mesma declara, e SÓ se continuar conferindo
+  # com o pino. Reler e reverificar não é desconfiança decorativa: o cache vive no mesmo volume
+  # que a identidade do nó, e um arquivo trocado ali viraria permissão sem assinatura.
+  local config at ttl now
+  if [[ ! -s "$NODE_HOME/config.json" || ! -s "$NODE_HOME/config-verified-at" ]]; then
+    printf '[executor] Control Plane sem resposta e nenhuma config verificada guardada — drenando\n' >&2
+    return 1
+  fi
+  config=$(cat "$NODE_HOME/config.json")
+  at=$(head -n 1 "$NODE_HOME/config-verified-at")
+  ttl=$(json_number "$config" ttlSeconds)
+  if [[ ! "$at" =~ ^[0-9]+$ || ! "$ttl" =~ ^[0-9]+$ ]]; then
+    printf '[executor] cache de config ilegível — drenando\n' >&2
+    return 1
+  fi
+  now=$(date +%s)
+  if (( now - at >= ttl )); then
+    # Venceu: o Control Plane está fora há mais tempo que a permissão vale. Parar de aceitar
+    # tarefa nova é a única resposta honesta — ninguém pode renovar o mando que ninguém assinou.
+    printf '[executor] Control Plane sem resposta e config vencida (TTL de %ss) — drenando\n' "$ttl" >&2
+    return 1
+  fi
+  config_valida "$config" || {
+    printf '[executor] config guardada não confere mais com o pino — drenando\n' >&2
+    return 1
+  }
+  printf '[executor] Control Plane sem resposta — seguindo com a última config verificada (%ss de %ss)\n' \
+    "$((now - at))" "$ttl" >&2
   printf '%s' "$config"
 }
 
@@ -113,7 +183,7 @@ term_regressao() {
 # recortar e ordenar, não reinterpretar o documento.
 config_signature() {
   # config_signature <config-json>: imprime "canonical<TAB>assinatura"; 1 se faltar campo.
-  local format_version config_version node_id profiles cpu memory disk bandwidth tasks issued_at term signature
+  local format_version config_version node_id profiles cpu memory disk bandwidth tasks issued_at ttl term signature
   format_version=$(json_number "$1" formatVersion)
   config_version=$(json_number "$1" configVersion)
   node_id=$(json_field "$1" nodeId)
@@ -124,16 +194,19 @@ config_signature() {
   bandwidth=$(json_number "$1" bandwidthMbps)
   tasks=$(json_list_sorted "$1" allowedTasks)
   issued_at=$(json_field "$1" issuedAt)
+  # ttlSeconds entrou no formato 3 e fica logo antes do termo: campo novo nunca desloca o
+  # último, que é a regra que deixou o formato 2 legível por quem reconstruía o formato 1.
+  ttl=$(json_number "$1" ttlSeconds)
   # O termo da autoridade entrou no formato 2 (fase 6): vem por último na linha.
   # Formato 1 não o tinha e não é mais servido pelo Control Plane.
   term=$(json_number "$1" term)
   signature=$(json_field "$1" signature)
   [[ -n "$format_version" && -n "$config_version" && -n "$node_id" && -n "$cpu" \
       && -n "$memory" && -n "$disk" && -n "$bandwidth" && -n "$issued_at" \
-      && -n "$term" && -n "$signature" ]] || return 1
-  printf '%s|%s|%s|[%s]|%s|%s|%s|%s|[%s]|%s|%s\t%s' \
+      && -n "$ttl" && -n "$term" && -n "$signature" ]] || return 1
+  printf '%s|%s|%s|[%s]|%s|%s|%s|%s|[%s]|%s|%s|%s\t%s' \
     "$format_version" "$config_version" "$node_id" "$profiles" "$cpu" "$memory" "$disk" \
-    "$bandwidth" "$tasks" "$issued_at" "$term" "$signature"
+    "$bandwidth" "$tasks" "$issued_at" "$ttl" "$term" "$signature"
 }
 
 json_list_sorted() {

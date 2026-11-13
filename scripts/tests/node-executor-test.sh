@@ -10,7 +10,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 for tool in bash head sed grep dirname pwd mkdir stat chmod awk printf cat rm mktemp wc sha256sum tr \
-            openssl sort paste base64; do
+            openssl sort paste base64 date mv; do
   location="$(command -v "$tool")"
   ln -s "$location" "$TMP/$tool" 2>/dev/null || true
 done
@@ -33,11 +33,11 @@ sign_config() {
 }
 
 sign_limits_config() {
-  # sign_limits_config <configVersion> <profiles-json> <cpu> <mem> <disk> <bw> <tasks-json> [term]:
-  # assina os campos que o signer cobre, na ordem de SignedFields.canonical() — o termo entrou no
-  # formato 2 e vai por último.
-  local cv="$1" profiles="$2" cpu="$3" mem="$4" disk="$5" bw="$6" tasks="$7" term="${8:-0}"
-  sign_config "2|$cv|nd_exec1|$profiles|$cpu|$mem|$disk|$bw|$tasks|2026-11-12T12:00:00Z|$term"
+  # sign_limits_config <configVersion> <profiles-json> <cpu> <mem> <disk> <bw> <tasks-json> [term] [ttl]:
+  # assina os campos que o signer cobre, na ordem de SignedFields.canonical() — o ttlSeconds entrou
+  # no formato 3 logo antes do termo, e o termo continua por último.
+  local cv="$1" profiles="$2" cpu="$3" mem="$4" disk="$5" bw="$6" tasks="$7" term="${8:-0}" ttl="${9:-300}"
+  sign_config "3|$cv|nd_exec1|$profiles|$cpu|$mem|$disk|$bw|$tasks|2026-11-12T12:00:00Z|$ttl|$term"
 }
 
 PASS=0
@@ -79,7 +79,7 @@ printf 'enk_echoteste0123\n' > "$NH/api-key"; chmod 600 "$NH/api-key"
 # verdade — antes eram `c2ln` (base64 de "sig") e passavam porque a verificação não existia.
 printf '%s' "$CP_PUB" > "$NH/pinning-key"; chmod 600 "$NH/pinning-key"
 
-CONFIG_SIGNED='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":2,"configVersion":3,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 3 '["NODE_WORKER"]' 4 8192 51200 100 '["ASYNC_JOB"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_SIGNED='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":3,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 3 '["NODE_WORKER"]' 4 8192 51200 100 '["ASYNC_JOB"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 HEARTBEAT_OK='{"nodeId":"nd_exec1","status":"ACTIVE","profiles":["NODE_WORKER"],"serverTime":"now","mode":"NORMAL","acceptTasks":true}'
 HEARTBEAT_DRAIN='{"nodeId":"nd_exec1","status":"ACTIVE","profiles":["NODE_WORKER"],"serverTime":"now","mode":"DEGRADED","acceptTasks":false}'
 TASK_ASSIGNED='{"tasks":[{"taskId":"tk_1","type":"ASYNC_JOB","attempt":2,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"idem-42","payload":"{\"job\":\"x\"}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
@@ -210,7 +210,7 @@ printf '%s\n' "\$*" >> "$TMP/curl-calls"
 url="\${@: -1}"
 case "\$url" in
   */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
-  */network/nodes/me/config) printf '%s' '{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":2,"configVersion":11,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"c2ln","algorithm":"Ed25519","publicKey":"$CP_PUB"}' ;;
+  */network/nodes/me/config) printf '%s' '{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":11,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"c2ln","algorithm":"Ed25519","publicKey":"$CP_PUB"}' ;;
   *) printf 'CHAMADA-INESPERADA %s' "\$url" >> "$TMP/curl-calls" ;;
 esac
 MOCK
@@ -232,7 +232,7 @@ printf '%s\n' "\$*" >> "$TMP/curl-calls"
 url="\${@: -1}"
 case "\$url" in
   */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
-  */network/nodes/me/config) printf '%s' '{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":2,"configVersion":12,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB","MEDIA_TRANSCODE"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"$TAMPERED_SIG","algorithm":"Ed25519","publicKey":"$CP_PUB"}' ;;
+  */network/nodes/me/config) printf '%s' '{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":12,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB","MEDIA_TRANSCODE"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"$TAMPERED_SIG","algorithm":"Ed25519","publicKey":"$CP_PUB"}' ;;
   *) printf 'CHAMADA-INESPERADA %s' "\$url" >> "$TMP/curl-calls" ;;
 esac
 MOCK
@@ -250,7 +250,7 @@ printf '%s\n' '{"nodeId":"nd_exec1","status":"ACTIVE"}' > "$NH_TERM/node.json"
 printf 'enk_echoteste0123\n' > "$NH_TERM/api-key"; chmod 600 "$NH_TERM/api-key"
 printf '%s' "$CP_PUB" > "$NH_TERM/pinning-key"; chmod 600 "$NH_TERM/pinning-key"
 printf '5\n' > "$NH_TERM/term"
-CONFIG_TERM_BAIXO='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":2,"configVersion":9,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 9 '["NODE_WORKER"]' 4 8192 51200 100 '["ASYNC_JOB"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_TERM_BAIXO='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":9,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 9 '["NODE_WORKER"]' 4 8192 51200 100 '["ASYNC_JOB"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 : > "$TMP/curl-calls"
 cat > "$TMP/curl" <<MOCK
 #!/bin/bash
@@ -272,7 +272,7 @@ assert_eq 'termo recusado não rebaixa o último aceito' '5' "$(head -n 1 "$NH_T
 # O mesmo nó, agora com uma config do termo 3 sobre o último aceito (1): assinatura confere e
 # o termo sobe, então o ciclo segue e a tarefa roda. O registro local acompanha o termo novo.
 printf '1\n' > "$NH_TERM/term"
-CONFIG_TERM_ALTO='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":2,"configVersion":10,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":3,"signed":true,"signature":"'"$(sign_limits_config 10 '["NODE_WORKER"]' 4 8192 51200 100 '["ASYNC_JOB"]' 3)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_TERM_ALTO='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":10,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":3,"signed":true,"signature":"'"$(sign_limits_config 10 '["NODE_WORKER"]' 4 8192 51200 100 '["ASYNC_JOB"]' 3)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 : > "$TMP/curl-calls"
 cat > "$TMP/curl" <<MOCK
 #!/bin/bash
@@ -337,7 +337,7 @@ printf '%s' 'FAKE-MP4-BYTES' > "$MP/out.bin"
 
 TASK_MEDIA='{"tasks":[{"taskId":"tk_9","type":"MEDIA_TRANSCODE","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"media:abc","payload":"{\"mediaId\":\"md_1\",\"sourceKey\":\"u/md_1/file.mp4\",\"mimeType\":\"video/mp4\",\"sourceBytes\":1234,\"sourceSha256\":\"aa11\",\"resultKey\":\"md_1/file.transcoded.mp4\",\"resultBudgetBytes\":9999}","dataClass":"PUBLIC_MEDIA"}],"mode":"NORMAL","serverTime":"now"}'
 
-CONFIG_MEDIA='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":2,"configVersion":4,"profiles":["NODE_MEDIA"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["MEDIA_TRANSCODE"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 4 '["NODE_MEDIA"]' 4 8192 51200 100 '["MEDIA_TRANSCODE"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_MEDIA='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":4,"profiles":["NODE_MEDIA"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["MEDIA_TRANSCODE"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 4 '["NODE_MEDIA"]' 4 8192 51200 100 '["MEDIA_TRANSCODE"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 
 # ffmpeg de prova: registra argv e escreve o "arquivo transcodificado".
 make_command ffmpeg "printf '%s\n' \"\$*\" >> '$MP/ffmpeg-args'
@@ -390,7 +390,7 @@ NR="$TMP/node-replica"; rm -rf "$NR"; mkdir -p "$NR"; chmod 700 "$NR"
 cp "$NH/node.json" "$NR/node.json"; cp "$NH/api-key" "$NR/api-key"
 cp "$NH/pinning-key" "$NR/pinning-key"
 
-CONFIG_REPLICA='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":2,"configVersion":5,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":2,"memoryMb":4096,"diskMb":20480,"bandwidthMbps":50},"allowedTasks":["READ_QUERY"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 5 '["NODE_READ_REPLICA"]' 2 4096 20480 50 '["READ_QUERY"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_REPLICA='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":5,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":2,"memoryMb":4096,"diskMb":20480,"bandwidthMbps":50},"allowedTasks":["READ_QUERY"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 5 '["NODE_READ_REPLICA"]' 2 4096 20480 50 '["READ_QUERY"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 TASK_REPLICA='{"tasks":[{"taskId":"tk_r1","type":"READ_QUERY","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"replica:PROFILE","payload":"{\"kind\":\"PROFILE\"}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
 
 # Duas páginas: a primeira tem 2 perfis (um já em dia), a segunda fecha o catálogo.
@@ -500,7 +500,7 @@ NE="$TMP/node-edge"; rm -rf "$NE"; mkdir -p "$NE"; chmod 700 "$NE"
 cp "$NH/node.json" "$NE/node.json"; cp "$NH/api-key" "$NE/api-key"
 cp "$NH/pinning-key" "$NE/pinning-key"
 
-CONFIG_EDGE='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":2,"configVersion":6,"profiles":["NODE_EDGE"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":200},"allowedTasks":["EDGE_CACHE","EDGE_DELIVER"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 6 '["NODE_EDGE"]' 4 8192 51200 200 '["EDGE_CACHE","EDGE_DELIVER"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_EDGE='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":6,"profiles":["NODE_EDGE"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":200},"allowedTasks":["EDGE_CACHE","EDGE_DELIVER"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 6 '["NODE_EDGE"]' 4 8192 51200 200 '["EDGE_CACHE","EDGE_DELIVER"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 TASK_EDGE='{"tasks":[{"taskId":"tk_e1","type":"EDGE_CACHE","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"edge:cache","payload":"{}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
 
 : > "$TMP/curl-calls"
@@ -733,7 +733,7 @@ ND="$TMP/node-disk"; rm -rf "$ND"; mkdir -p "$ND"; chmod 700 "$ND"
 cp "$NH/node.json" "$ND/node.json"; cp "$NH/api-key" "$ND/api-key"
 cp "$NH/pinning-key" "$ND/pinning-key"
 # 1 MB de teto. O corpo novo tem ~1.3 KB; as duas entradas antigas somam ~2 KB.
-CONFIG_DISK='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":2,"configVersion":7,"profiles":["NODE_EDGE"],"limits":{"cpuCores":2,"memoryMb":2048,"diskMb":1,"bandwidthMbps":50},"allowedTasks":["EDGE_CACHE"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 7 '["NODE_EDGE"]' 2 2048 1 50 '["EDGE_CACHE"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_DISK='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":7,"profiles":["NODE_EDGE"],"limits":{"cpuCores":2,"memoryMb":2048,"diskMb":1,"bandwidthMbps":50},"allowedTasks":["EDGE_CACHE"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 7 '["NODE_EDGE"]' 2 2048 1 50 '["EDGE_CACHE"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 TASK_EDGE_DISK='{"tasks":[{"taskId":"tk_e2","type":"EDGE_CACHE","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"edge:disk","payload":"{}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
 # Enche o cache até passar de 1 MB: 3 entradas de 400 KB cada.
 BIG=$(printf 'x%.0s' $(seq 1 409600))
@@ -779,7 +779,7 @@ assert_eq 'conteúdo guardado cabe no teto declarado' '1' "$(if (( $(stat -c %s 
 NC="$TMP/node-nocap"; rm -rf "$NC"; mkdir -p "$NC"; chmod 700 "$NC"
 cp "$NH/node.json" "$NC/node.json"; cp "$NH/api-key" "$NC/api-key"
 cp "$NH/pinning-key" "$NC/pinning-key"
-CONFIG_NOCAP='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":2,"configVersion":8,"profiles":["NODE_EDGE"],"limits":{"cpuCores":2,"memoryMb":2048,"diskMb":0,"bandwidthMbps":50},"allowedTasks":["EDGE_CACHE"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 8 '["NODE_EDGE"]' 2 2048 0 50 '["EDGE_CACHE"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_NOCAP='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":8,"profiles":["NODE_EDGE"],"limits":{"cpuCores":2,"memoryMb":2048,"diskMb":0,"bandwidthMbps":50},"allowedTasks":["EDGE_CACHE"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 8 '["NODE_EDGE"]' 2 2048 0 50 '["EDGE_CACHE"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 : > "$TMP/curl-calls"
 cat > "$TMP/curl" <<MOCK
 #!/bin/bash
@@ -812,7 +812,7 @@ assert_not_contains 'sem teto não há queda de entrada' "$(cat "$TMP/curl-calls
 NRT="$TMP/node-replica-teto"; rm -rf "$NRT"; mkdir -p "$NRT"; chmod 700 "$NRT"
 cp "$NH/node.json" "$NRT/node.json"; cp "$NH/api-key" "$NRT/api-key"
 cp "$NH/pinning-key" "$NRT/pinning-key"
-CONFIG_REPLICA_TETO='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":2,"configVersion":9,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":1,"bandwidthMbps":10},"allowedTasks":["READ_QUERY"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 9 '["NODE_READ_REPLICA"]' 1 1024 1 10 '["READ_QUERY"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_REPLICA_TETO='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":9,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":1,"bandwidthMbps":10},"allowedTasks":["READ_QUERY"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 9 '["NODE_READ_REPLICA"]' 1 1024 1 10 '["READ_QUERY"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 # 1 MB de teto; um corpo de 1,5 MB não cabe sozinho.
 HUGE=$(printf 'y%.0s' $(seq 1 1572864))
 : > "$TMP/curl-calls"
@@ -849,7 +849,7 @@ assert_not_contains 'item que não coube não é confirmado como sincronizado' "
 NRC="$TMP/node-replica-cache"; rm -rf "$NRC"; mkdir -p "$NRC"; chmod 700 "$NRC"
 cp "$NH/node.json" "$NRC/node.json"; cp "$NH/api-key" "$NRC/api-key"
 cp "$NH/pinning-key" "$NRC/pinning-key"
-CONFIG_RC='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":2,"configVersion":10,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":1,"bandwidthMbps":10},"allowedTasks":["READ_QUERY"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 10 '["NODE_READ_REPLICA"]' 1 1024 1 10 '["READ_QUERY"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_RC='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":10,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":1,"bandwidthMbps":10},"allowedTasks":["READ_QUERY"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 10 '["NODE_READ_REPLICA"]' 1 1024 1 10 '["READ_QUERY"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 MED=$(printf 'z%.0s' $(seq 1 409600))
 mkdir -p "$NRC/edge/PROFILE" "$NRC/replica/COMMUNITY"
 printf '%s' "$MED" > "$NRC/edge/PROFILE/velho.json"; printf '7\n' > "$NRC/edge/PROFILE/velho.version"
@@ -892,7 +892,7 @@ assert_contains 'a réplica confirma o que guardou' "$(cat "$TMP/curl-calls")" '
 NBW="$TMP/node-bw"; rm -rf "$NBW"; mkdir -p "$NBW"; chmod 700 "$NBW"
 cp "$NH/node.json" "$NBW/node.json"; cp "$NH/api-key" "$NBW/api-key"
 cp "$NH/pinning-key" "$NBW/pinning-key"
-CONFIG_BW='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":2,"configVersion":13,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":20480,"bandwidthMbps":8},"allowedTasks":["READ_QUERY"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 13 '["NODE_READ_REPLICA"]' 1 1024 20480 8 '["READ_QUERY"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_BW='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":13,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":20480,"bandwidthMbps":8},"allowedTasks":["READ_QUERY"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 13 '["NODE_READ_REPLICA"]' 1 1024 20480 8 '["READ_QUERY"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 : > "$TMP/curl-calls"
 cat > "$TMP/curl" <<MOCK
 #!/bin/bash
@@ -924,7 +924,7 @@ assert_contains 'confirmação sai — o limite não bloqueia a sincronização'
 NCBW="$TMP/node-nobw"; rm -rf "$NCBW"; mkdir -p "$NCBW"; chmod 700 "$NCBW"
 cp "$NH/node.json" "$NCBW/node.json"; cp "$NH/api-key" "$NCBW/api-key"
 cp "$NH/pinning-key" "$NCBW/pinning-key"
-CONFIG_NOBW='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":2,"configVersion":14,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":20480,"bandwidthMbps":0},"allowedTasks":["READ_QUERY"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 14 '["NODE_READ_REPLICA"]' 1 1024 20480 0 '["READ_QUERY"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_NOBW='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":14,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":20480,"bandwidthMbps":0},"allowedTasks":["READ_QUERY"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 14 '["NODE_READ_REPLICA"]' 1 1024 20480 0 '["READ_QUERY"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 : > "$TMP/curl-calls"
 cat > "$TMP/curl" <<MOCK
 #!/bin/bash
@@ -948,5 +948,143 @@ out=$(run_custom "$NCBW")
 assert_contains 'nó sem banda declarada baixa sem --limit-rate' "$(cat "$TMP/curl-calls")" 'content/PROFILE/nobw'
 assert_not_contains 'banda 0 não injeta limite' "$(cat "$TMP/curl-calls")" '--limit-rate'
 assert_contains 'sincronização segue completa sem teto' "$(cat "$TMP/curl-calls")" 'nobw/synced'
+
+# ------------------------------------------------- cenário 26: Control Plane fora dentro do TTL
+# Doc 06 §6, primeira linha: "Control Plane fora por < TTL de config → nós continuam com a última
+# config assinada". Antes do TTL não existia: bastava o GET da config falhar uma vez e o nó parava,
+# mesmo com o heartbeat respondendo — um soluço de rede derrubava nó sadio.
+# O nó primeiro verifica a config (com o Control Plane de pé) e depois o endpoint cai.
+NTTL="$TMP/node-ttl"; rm -rf "$NTTL"; mkdir -p "$NTTL"; chmod 700 "$NTTL"
+printf '%s\n' '{"nodeId":"nd_exec1","status":"ACTIVE"}' > "$NTTL/node.json"
+printf 'enk_echoteste0123\n' > "$NTTL/api-key"; chmod 600 "$NTTL/api-key"
+printf '%s' "$CP_PUB" > "$NTTL/pinning-key"; chmod 600 "$NTTL/pinning-key"
+CONFIG_TTL_OK='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":30,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 30 '["NODE_WORKER"]' 4 8192 51200 100 '["ASYNC_JOB"]' 2 300)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+
+# Ciclo 1: Control Plane de pé. A config fica guardada com o instante da verificação.
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_TTL_OK' ;;
+  */network/tasks/next) printf '%s' '{"tasks":[],"mode":"NORMAL","serverTime":"now"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+run_custom "$NTTL" >/dev/null
+assert_eq 'config verificada fica guardada para a queda' '1' "$([[ -s "$NTTL/config.json" ]] && echo 1 || echo 0)"
+assert_eq 'instante da verificação é gravado' '1' "$([[ -s "$NTTL/config-verified-at" ]] && echo 1 || echo 0)"
+
+# Ciclo 2: o endpoint de config cai (curl sai != 0, sem HTTP de erro), o heartbeat continua.
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) exit 7 ;;
+  */network/tasks/next) printf '%s' '{"tasks":[{"taskId":"tk_ttl","type":"ASYNC_JOB","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"idem-ttl","payload":"{}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}' ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NTTL")
+assert_contains 'dentro do TTL o nó segue com a última config verificada' "$out" 'seguindo com a última config verificada'
+assert_contains 'e continua trabalhando (não drenou)' "$out" 'DONE tk_ttl'
+
+# ------------------------------------------------- cenário 27: Control Plane fora ALÉM do TTL
+# Segunda linha da tabela do §6: "fora por > TTL → nós param de aceitar tarefa nova e drenam".
+# O instante da verificação é recuado além do TTL: a config guardada perdeu validade e o nó não
+# pode inventar permissão. Para de pedir tarefa — drenar é não pedir.
+printf '%s\n' "$(( $(date +%s) - 400 ))" > "$NTTL/config-verified-at"
+: > "$TMP/curl-calls"
+out=$(run_custom "$NTTL")
+assert_contains 'passado o TTL o nó drena e diz por quê' "$out" 'config vencida (TTL de 300s) — drenando'
+assert_not_contains 'vencida a config, não há poll' "$(cat "$TMP/curl-calls")" '/network/tasks/next'
+
+# ------------------------------------------------- cenário 28: TTL maior que o recuo continua valendo
+# A fronteira é o número ASSINADO, não um padrão do runtime: a mesma config com ttl de 3600s e o
+# mesmo recuo de 400s continua valendo. Sem isso, um TTL curto fixo no código faria o teste do
+# cenário 27 passar sem o campo ser lido do documento.
+CONFIG_TTL_LONGO='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":3600,"configVersion":31,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 31 '["NODE_WORKER"]' 4 8192 51200 100 '["ASYNC_JOB"]' 2 3600)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+printf '%s' "$CONFIG_TTL_LONGO" > "$NTTL/config.json"
+printf '%s\n' "$(( $(date +%s) - 400 ))" > "$NTTL/config-verified-at"
+: > "$TMP/curl-calls"
+out=$(run_custom "$NTTL")
+assert_contains 'TTL de 3600s aceita um recuo de 400s' "$out" 'de 3600s'
+assert_contains 'e o nó trabalha' "$out" 'DONE tk_ttl'
+
+# ------------------------------------------------- cenário 29: recusa HTTP não é queda
+# O Control Plane RESPONDEU que a config não vale mais (401/403/404 — revogação, chave inválida).
+# Isso não é queda de rede: cair no cache aqui ressuscitaria a permissão que o Control Plane acabou
+# de negar. O nó drena mesmo com cache fresco e dentro do TTL.
+printf '%s' "$CONFIG_TTL_OK" > "$NTTL/config.json"
+printf '%s\n' "$(date +%s)" > "$NTTL/config-verified-at"
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) exit 22 ;;
+  */network/tasks/next) printf '%s' '{"tasks":[],"mode":"NORMAL","serverTime":"now"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NTTL")
+assert_contains 'recusa HTTP vira drenagem, não cache' "$out" 'Control Plane recusou a config (HTTP de erro) — drenando'
+assert_not_contains 'recusa HTTP não habilita poll' "$(cat "$TMP/curl-calls")" '/network/tasks/next'
+
+# ------------------------------------------------- cenário 30: cache adulterado não é permissão
+# O cache vive no mesmo volume da identidade. Um arquivo trocado ali dentro (ou um backup restaurado
+# de outra máquina) não pode virar permissão: o nó reverifica a assinatura da config guardada contra
+# o pino antes de usá-la. Aqui a permissão guardada foi trocada por MEDIA_TRANSCODE sem reassinar.
+CONFIG_ADULTERADA="${CONFIG_TTL_OK/\[\"ASYNC_JOB\"\]/[\"MEDIA_TRANSCODE\"]}"
+printf '%s' "$CONFIG_ADULTERADA" > "$NTTL/config.json"
+printf '%s\n' "$(date +%s)" > "$NTTL/config-verified-at"
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) exit 7 ;;
+  */network/tasks/next) printf '%s' '{"tasks":[],"mode":"NORMAL","serverTime":"now"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NTTL")
+assert_contains 'config guardada que não confere mais é recusada' "$out" 'config guardada não confere mais com o pino — drenando'
+assert_not_contains 'cache adulterado não habilita poll' "$(cat "$TMP/curl-calls")" '/network/tasks/next'
+
+# ------------------------------------------------- cenário 31: sem cache, queda drena
+# Nó que nunca verificou config com sucesso não tem o que reusar: a queda drena, como antes.
+NNOCACHE="$TMP/node-sem-cache"; rm -rf "$NNOCACHE"; mkdir -p "$NNOCACHE"; chmod 700 "$NNOCACHE"
+cp "$NH/node.json" "$NNOCACHE/node.json"; cp "$NH/api-key" "$NNOCACHE/api-key"
+cp "$NH/pinning-key" "$NNOCACHE/pinning-key"
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) exit 7 ;;
+  *) printf 'CHAMADA-INESPERADA %s' "\$url" >> "$TMP/curl-calls" ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NNOCACHE")
+assert_contains 'sem cache a queda drena' "$out" 'nenhuma config verificada guardada — drenando'
+assert_not_contains 'sem cache não há poll' "$(cat "$TMP/curl-calls")" '/network/tasks/next'
 
 printf '\nTodos os cenarios passaram (%d assercoes).\n' "$PASS"

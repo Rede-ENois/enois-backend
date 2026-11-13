@@ -110,13 +110,14 @@ assinatura antes de aplicar. Implementada (fase 5): o payload real está abaixo.
   "nodeId": "nd_…",
   "status": "ACTIVE",
   "operable": true,
-  "formatVersion": 2,
+  "formatVersion": 3,
   "configVersion": 3,
   "profiles": ["NODE_MEDIA"],
   "limits": { "cpuCores": 4, "memoryMb": 8192, "diskMb": 51200, "bandwidthMbps": 100 },
   "allowedTasks": ["MEDIA_TRANSCODE", "MEDIA_THUMBNAIL"],
   "region": "sudeste", "country": "BR",
   "issuedAt": "2026-11-12T10:00:00Z",
+  "ttlSeconds": 300,
   "signed": true,
   "signature": "base64(ed25519(linha canônica))",
   "algorithm": "Ed25519",
@@ -128,9 +129,9 @@ assinatura antes de aplicar. Implementada (fase 5): o payload real está abaixo.
 Três números, de propósito:
 
 - `formatVersion` é a versão do **formato** do documento — sobe quando o runtime antigo não
-  entenderia o payload novo. Hoje é `2`: o formato 2 acrescentou `term` ao payload e à linha
-  canônica (fase 6). Runtime de formato 1 não lê o termo; runtime de formato 2 reconstrói a linha
-  com ele.
+  entenderia o payload novo. Hoje é `3`: o formato 2 acrescentou `term` (fase 6) e o formato 3
+  acrescentou `ttlSeconds` (doc 06 §6). Runtime de formato 1 não lê o termo; o de formato 2
+  reconstrói a linha sem o TTL; o de formato 3 reconstrói a linha com os dois.
 - `term` é o **termo da autoridade** que assinou (V288, doc 06 §4). Só sobe na promoção de Control
   Plane e o nó recusa config de termo menor que o último aceito — config de termo velho é uma
   autoridade deposta tentando voltar a mandar.
@@ -142,12 +143,23 @@ Três números, de propósito:
 duas leituras seguidas sem mudança devolvem o mesmo documento (e a mesma assinatura — Ed25519 é
 determinística). A config é um evento, não um relógio.
 
+`ttlSeconds` é a **validade relativa** da config, contada a partir do instante em que o nó a
+verificou — não um prazo absoluto. Prazo absoluto faria o documento mudar com o relógio e quebraria
+a regra acima ("duas leituras devolvem o mesmo documento"); relativo, o mesmo documento assinado
+serve a todos os nós e cada um mede a própria frescura. Depois do TTL o nó para de aceitar tarefa
+nova e drena as em andamento, mesmo sem conseguir revalidar (doc 06 §6). O valor vem de
+`rede.network.config.ttl-seconds` (padrão 300s, piso 300s: zero ou negativo venceria a config no
+instante em que ela nasce). Sem esse campo, a última permissão valeria para sempre e a rede seguiria
+sob um mando que talvez não exista mais — é o que separa "blip de rede" de "Control Plane fora".
+
 A **linha canônica** assinada junta os campos na ordem do contrato:
-`formatVersion|configVersion|nodeId|profiles|cpuCores|memoryMb|diskMb|bandwidthMbps|allowedTasks|issuedAt|term`,
+`formatVersion|configVersion|nodeId|profiles|cpuCores|memoryMb|diskMb|bandwidthMbps|allowedTasks|issuedAt|ttlSeconds|term`,
 com listas ordenadas em JSON compacto. Assina-se o canônico, não o JSON — reordenar chaves do corpo
-não muda a assinatura. O `term` fecha a linha: o formato 1 não o tinha, e quem reconstrói a linha do
-formato 2 sempre o acrescenta por último. É por estar dentro da assinatura que o nó consegue recusar
-termo que regride conferindo contra o pino, em vez de confiar no transporte.
+não muda a assinatura. O `term` continua fechando a linha, e por isso o formato 3 inseriu
+`ttlSeconds` **antes** dele, não depois: runtime antigo que só sabe ler até o termo vê um documento
+de formato 3 e recusa, em vez de ler um `ttl` no lugar do termo. É por estar dentro da assinatura
+que o nó consegue recusar termo que regride e TTL que o Control Plane não emitiu, conferindo contra
+o pino em vez de confiar no transporte.
 
 `publicKey` é o **pino**: o instalador grava esta chave no install e toda config seguinte é conferida
 contra ela, sem depender do transporte desta resposta.

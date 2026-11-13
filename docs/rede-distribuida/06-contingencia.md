@@ -263,9 +263,10 @@ Três decisões que o desenho fixa:
 - **`acceptTasks` considera o próprio nó**: antes vinha só do modo da rede; agora é falso também para
   nó fora de operação. O heartbeat do nó em conflito é o que o faz drenar sem precisar de 403.
 
-O que ainda falta nesta seção: Control Plane fora por mais que o TTL de config (§6 — a config
-assinada não tem expiração). O cenário de revogação (§5) está entregue e testado
-(`NetworkDisasterTests`, ADR-017).
+O cenário de revogação (§5) está entregue e testado (`NetworkDisasterTests`, ADR-017). O cenário
+"Control Plane fora por mais que o TTL de config" (§6) também: o formato 3 da config assinada
+carrega `ttlSeconds` (ADR-018), e o runtime guarda a última config **verificada** com o instante da
+verificação para poder continuar dentro do prazo sem falar com o Control Plane.
 
 ## 5. Revogação durante processamento
 
@@ -291,13 +292,42 @@ Cenário: o nó está executando uma tarefa e é revogado.
 
 Nó **nunca** inventa permissão quando o Control Plane está fora. Fail secure.
 
+### Como cada linha da tabela vira comportamento
+
+`ttlSeconds` entra na **linha assinada** (formato 3, doc 03), não só no payload: sem isso um
+intermediário trocaria `300` por `86400` e a config continuaria "válida". É a assinatura que impede
+o nó de aceitar um prazo que o Control Plane não emitiu.
+
+O runtime (`deploy/node-runtime/node-runtime.sh`) separa duas falhas que antes eram a mesma:
+
+- **transporte falhou** (curl sem resposta: exit 7, 28, 56…) → usa a última config verificada, se
+  existir e se `agora - verificado_em < ttlSeconds`. Dentro do prazo é blip: o nó segue. Fora do
+  prazo é "Control Plane fora": drena, não pede tarefa nova, e diz no log qual TTL venceu.
+- **Control Plane recusou** (HTTP de erro, curl exit 22) → **nunca** cai no cache. Recusa é o
+  Control Plane vivo dizendo que esta config não vale mais (revogação, chave inválida, nó
+  desconhecido); ressuscitar permissão recém-negada com um arquivo local seria o oposto de fail
+  secure. Drena na hora.
+
+O cache guarda **a config e o instante em que ela foi verificada**, em `$NODE_HOME/config.json` e
+`$NODE_HOME/config-verified-at`. Antes de usar, a config guardada é conferida **de novo contra o
+pino**: o cache vive no mesmo volume da identidade do nó, e um arquivo trocado ali não pode virar
+permissão só porque o Control Plane está inalcançável para contradizê-lo.
+
+A idade é medida pelo relógio **da máquina do nó**, e por isso o cache fica fora do
+`install.sh --backup`: restaurado noutra máquina, ele chegaria com o instante de verificação de
+outra máquina — mentindo sobre o próprio frescor e esvaziando o TTL. Melhor voltar sem cache (o nó
+espera a primeira config verificada) do que voltar com uma frescura emprestada.
+
+Sem cache nenhum e Control Plane fora, o nó drena. `node-doctor.sh` reporta WARN quando o cache
+está vencido ou ilegível, para o operador ver a causa antes de o nó parar de pedir trabalho.
+
 ## 7. Testes obrigatórios de contingência
 
 | cenário | teste | estado |
 |---|---|---|
 | nó indisponível no meio de uma tarefa → redistribuição sem duplicar efeito | `NetworkTasksTests.noQueCaiNoMeioEhRedistribuidoSemDuplicarEfeito` | entregue (F2) |
 | revogação durante processamento → resultado descartado, tarefa redistribuída | `NetworkDisasterTests.revogacaoNoMeioDaTarefaDescartaOResultadoEAudita` | entregue (R105) |
-| Control Plane fora → nós drenam e param, sem aceitar tarefa nova | — | **aberto** (§6) |
+| Control Plane fora → nós drenam e param, sem aceitar tarefa nova | `node-executor-test.sh` cenários 26–31 (dentro do TTL segue; fora do TTL drena; TTL lido do documento; recusa HTTP ≠ queda; cache adulterado recusado; sem cache drena) | entregue (R106, ADR-018) |
 | dois controladores com termos diferentes → nó entra em quarentena | `NetworkTermConflictTests` | entregue (R102) |
 | sobrecarga simultânea → `HIGH_LOAD` entra e sai pelos números medidos | `NetworkModesTests` | entregue (F4) |
 | recuperação → `RECOVERY` drena sem derrubar o que está em andamento | `NetworkModesTests` | entregue (F4) |

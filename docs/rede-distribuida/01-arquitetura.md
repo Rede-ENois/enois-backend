@@ -59,7 +59,7 @@ declara-se confiável ou se promove a controlador.
 | API key por nó | tabela `network_node_keys` (nova), só hash |
 | autorização e perfis | `network_nodes.profiles` + `AdminGuard` |
 | certificados | emissão no onboarding, rotação por job |
-| configuração assinada | endpoint `GET /network/nodes/me/config` — **entregue**: payload com perfis, limites, tarefas permitidas, `formatVersion`, `configVersion` (versão da permissão, no nó desde a V284) e assinatura Ed25519 sobre linha canônica, com a chave pública de pinagem publicada |
+| configuração assinada | endpoint `GET /network/nodes/me/config` — **entregue**: payload com perfis, limites, tarefas permitidas, `formatVersion`, `configVersion` (versão da permissão, no nó desde a V284), `ttlSeconds` (validade relativa, formato 3) e assinatura Ed25519 sobre linha canônica, com a chave pública de pinagem publicada |
 | descoberta e saúde | heartbeat + `last_seen_at` |
 | capacidade | declarada no cadastro, observada no heartbeat |
 | scheduler | Fase 2 |
