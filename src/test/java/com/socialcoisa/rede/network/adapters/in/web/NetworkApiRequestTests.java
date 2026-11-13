@@ -92,6 +92,7 @@ class NetworkApiRequestTests {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.nodeId").value(target.id()))
 			.andExpect(jsonPath("$.status").value("PENDING"))
+			.andExpect(jsonPath("$.route").value("catalogo"))
 			.andReturn();
 		String taskId = objectMapper.readTree(requested.getResponse().getContentAsString()).get("taskId")
 			.asString();
@@ -136,6 +137,10 @@ class NetworkApiRequestTests {
 		JsonNode open = openOf(admin, node);
 		assertThat(open.size()).isEqualTo(1);
 		assertThat(open.get(0).get("taskId").asString()).isEqualTo(taskId);
+		// O painel precisa dizer QUAL rota esta pendente. O nome vem do payload da task; a URL
+		// continua inexistente aqui, porque ela so existe na config assinada que o no recebe.
+		assertThat(open.get(0).get("route").asString()).isEqualTo("catalogo");
+		assertThat(open.get(0).toString()).doesNotContain("https://");
 
 		assertThat(tasks.dispatchPending()).isEqualTo(1);
 		mockMvc

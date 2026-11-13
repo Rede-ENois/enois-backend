@@ -17,6 +17,9 @@ import com.socialcoisa.rede.shared.web.AdminGuard;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+
 /**
  * Requisição a API auxiliar no painel. Admin, como o resto de {@code /admin/network}.
  *
@@ -35,19 +38,21 @@ class AdminNetworkApiRequestController {
 	private final ApiRequestService api;
 	private final CurrentUserResolver currentUserResolver;
 	private final AdminGuard adminGuard;
+	private final ObjectMapper objectMapper;
 
 	AdminNetworkApiRequestController(ApiRequestService api, CurrentUserResolver currentUserResolver,
-			AdminGuard adminGuard) {
+			AdminGuard adminGuard, ObjectMapper objectMapper) {
 		this.api = api;
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
+		this.objectMapper = objectMapper;
 	}
 
-	record ApiRequestView(String taskId, String nodeId, String status, int attempt, Instant deadline,
+	record ApiRequestView(String taskId, String nodeId, String route, String status, int attempt, Instant deadline,
 			Instant createdAt) {
 
-		static ApiRequestView of(NetworkTask task) {
-			return new ApiRequestView(task.id(), task.targetNodeId(), task.status().name(), task.attempt(),
+		static ApiRequestView of(NetworkTask task, String route) {
+			return new ApiRequestView(task.id(), task.targetNodeId(), route, task.status().name(), task.attempt(),
 				task.deadline(), task.createdAt());
 		}
 	}
@@ -61,7 +66,8 @@ class AdminNetworkApiRequestController {
 			@PathVariable String nodeId,
 			@RequestParam("route") String route) {
 		CurrentUser admin = admin(sessionToken);
-		return ApiRequestView.of(api.request(nodeId, route, admin.id().value()));
+		NetworkTask task = api.request(nodeId, route, admin.id().value());
+		return ApiRequestView.of(task, routeOf(task.payload()));
 	}
 
 	/** As requisições em aberto do nó — o que ainda está na fila ou executando. */
@@ -69,7 +75,9 @@ class AdminNetworkApiRequestController {
 	List<ApiRequestView> open(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String nodeId) {
 		admin(sessionToken);
-		return api.openFor(nodeId).stream().map(ApiRequestView::of).toList();
+		return api.openFor(nodeId).stream()
+			.map(task -> ApiRequestView.of(task, routeOf(task.payload())))
+			.toList();
 	}
 
 	/** As rotas que a rede oferece — o painel pede um nome que exista na lista assinada. */
@@ -77,6 +85,25 @@ class AdminNetworkApiRequestController {
 	List<String> routes(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		admin(sessionToken);
 		return api.availableRoutes();
+	}
+
+	/**
+	 * O nome da rota que a task carrega. O painel mostra o nome — nunca a URL, que só existe na
+	 * config assinada que o nó recebe. Payload ilegível devolve {@code null}: a linha continua
+	 * listada com o que se sabe (estado, tentativa, prazo), e o painel não inventa rota.
+	 */
+	private String routeOf(String payload) {
+		if (payload == null) {
+			return null;
+		}
+		try {
+			JsonNode root = objectMapper.readTree(payload);
+			JsonNode route = root == null ? null : root.get("route");
+			return route != null && route.isString() && !route.asString().isBlank() ? route.asString() : null;
+		}
+		catch (RuntimeException malformed) {
+			return null;
+		}
 	}
 
 	private CurrentUser admin(String sessionToken) {
