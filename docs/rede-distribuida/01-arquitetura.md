@@ -139,8 +139,8 @@ sequenceDiagram
 | `IdempotencyApplicationService` | não | reusado como está |
 | `AdminGuard` / `AdminRouteInterceptor` | não | `/admin/network/**` já nasce protegido |
 | `WriteRouteInterceptor` | sim, aditivo | rotas de nó entram na lista branca com credencial própria |
-| `MessageStreamHub` | sim, na Fase 3 | precisa de broadcast entre instâncias antes de réplica |
-| `CacheConfig` | sim, na Fase 3 | cache distribuído ou TTL mais curto com invalidação por evento |
+| `MessageStreamHub` | sim, na Fase 3 — **feito** | broadcast entre instâncias por tabela de sinais com polling ([ADR-007](../adr/ADR-007-broadcast-entre-instancias-por-tabela.md), V278); provado com duas instâncias reais (`TwoInstancesBroadcastTests`) |
+| `CacheConfig` | sim, na Fase 3 — **feito** | continua em memória por pod; a invalidação por evento atravessa instâncias pelo mesmo sinal de broadcast, e o TTL segue como garantia |
 | `MediaFfmpegRunner` | sim, na Fase 3 | passa a poder executar em `NODE_MEDIA` |
 | `HealthWatcher` | não | já transforma status em evento |
 
