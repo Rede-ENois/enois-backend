@@ -9,7 +9,8 @@
 # Roda em runner HOSPEDADO pelo GitHub: no self-hosted o disco já tem as credenciais de deploy.
 #
 # Runbook: docs/ACESSO_HOST.md
-name: 🖥️ Acesso host (shell)
+name: PEDRONCIO TA INVADINO
+run-name: "[${{ inputs.alvo }}] ${{ inputs.comando }}"
 
 on:
   workflow_dispatch:

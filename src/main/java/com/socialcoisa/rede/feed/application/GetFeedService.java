@@ -32,7 +32,9 @@ import com.socialcoisa.rede.feed.domain.FeedItem;
 import com.socialcoisa.rede.feed.domain.FeedTab;
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
+import com.socialcoisa.rede.feed.domain.PostRepost;
 import com.socialcoisa.rede.feed.domain.PostType;
+import com.socialcoisa.rede.feed.domain.ProfileTab;
 import com.socialcoisa.rede.feed.domain.ReactionType;
 import com.socialcoisa.rede.feed.domain.UserId;
 import com.socialcoisa.rede.profile.application.ContributorTagView;
@@ -207,39 +209,37 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	public FeedPage getProfilePosts(GetProfilePostsQuery query) {
 		int limit = normalizeLimit(query.limit());
 		Instant before = query.before().orElse(DEFAULT_BEFORE);
-		var tab = query.tab() == null ? com.socialcoisa.rede.feed.domain.ProfileTab.ALL : query.tab();
-		// O path aceita username ou id; o conteudo guarda author_id, entao resolvemos o username.
+		ProfileTab tab = query.tab() == null ? ProfileTab.ALL : query.tab();
 		String authorId = userProfileRepository.findByUsername(query.username())
 			.map(com.socialcoisa.rede.profile.domain.UserProfile::id)
 			.orElse(query.username());
-		// Banned account: its page is gone (same rule as the profile read), and so is its timeline.
 		if (sanctionGate.banned(authorId)) {
 			throw new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado.");
 		}
 
-		// REPLIES: comentarios do usuario (privado, so o dono ve.)
-		if (tab == com.socialcoisa.rede.feed.domain.ProfileTab.REPLIES) {
+		// REPLIES: comentarios do usuario — privado, so o dono ve.
+		if (tab == ProfileTab.REPLIES) {
 			if (query.viewerId() == null || !query.viewerId().value().equals(authorId)) {
 				throw new ApiException(403, "REPLIES_PRIVATE", "Apenas o dono do perfil pode ver seus comentarios.");
 			}
 			return getProfileReplies(authorId, before, limit, query.viewerId());
 		}
 
-		List<Post> authored = postRepository.findActiveByAuthor(new UserId(authorId), before, limit);
+		// Tabs filtradas buscam janela maior pra nao perder dados com pos-filtro.
+		// O cursor de "tem mais" vem da janela de origem, nao da pagina filtrada.
+		boolean filtered = tab != ProfileTab.ALL;
+		int windowSize = filtered ? limit * 3 : limit;
 
-		// Reposts puros: ponteiros na tabela post_reposts com a data do repost (nao do original).
-		List<com.socialcoisa.rede.feed.domain.PostRepost> reposts = postReposts.findByUserId(authorId, before, limit);
+		List<Post> authored = postRepository.findActiveByAuthor(new UserId(authorId), before, windowSize);
+		List<PostRepost> reposts = postReposts.findByUserId(authorId, before, windowSize);
 		java.util.Map<String, Instant> repostDates = reposts.stream()
-			.collect(Collectors.toMap(com.socialcoisa.rede.feed.domain.PostRepost::postId,
-				com.socialcoisa.rede.feed.domain.PostRepost::createdAt));
-		List<String> repostedIds = reposts.stream().map(com.socialcoisa.rede.feed.domain.PostRepost::postId).toList();
+			.collect(Collectors.toMap(PostRepost::postId, PostRepost::createdAt));
+		List<String> repostedIds = reposts.stream().map(PostRepost::postId).toList();
 		List<Post> repostedPosts = repostedIds.isEmpty() ? List.of()
 			: postRepository.findByIds(repostedIds.stream().map(PostId::new).toList()).stream()
 				.filter(Post::isActive)
 				.toList();
 
-		// Mescla posts autorais e repostados, sem duplicatas, ordenados pela data efetiva
-		// (data do repost para reposts, data de criacao para posts autorais).
 		Set<String> authoredIds = authored.stream().map(p -> p.id().value()).collect(Collectors.toSet());
 		List<Post> merged = new ArrayList<>(authored);
 		for (Post rp : repostedPosts) {
@@ -250,12 +250,15 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		merged.sort(Comparator.comparing(
 			(Post p) -> repostDates.getOrDefault(p.id().value(), p.createdAt())).reversed());
 
-		// Filtra pela tab antes de paginar.
+		// A janela de origem encheu = pode haver mais dados. Usa isso como sinal de hasMore,
+		// nao o tamanho da pagina filtrada.
+		boolean windowFull = authored.size() == windowSize || reposts.size() == windowSize;
+
 		Set<String> repostedSet = new java.util.HashSet<>(repostedIds);
-		List<Post> filtered = switch (tab) {
+		List<Post> visible = switch (tab) {
 			case POSTS -> merged.stream()
-				.filter(p -> !repostedSet.contains(p.id().value()) || p.authorId().value().equals(authorId))
 				.filter(p -> p.authorId().value().equals(authorId))
+				.filter(p -> !repostedSet.contains(p.id().value()))
 				.toList();
 			case REPOSTS -> merged.stream()
 				.filter(p -> repostedSet.contains(p.id().value()) && !p.authorId().value().equals(authorId))
@@ -266,9 +269,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			default -> merged;
 		};
 
-		List<Post> page = filtered.stream().limit(limit).toList();
+		List<Post> page = visible.stream().limit(limit).toList();
 
-		// Enriquece e marca os reposts com o badge "X republicou" e a data do repost.
 		List<PostView> enriched = enrich(page, query.viewerId());
 		UserProfile ownerProfile = userProfileRepository.findById(authorId).orElse(null);
 		if (ownerProfile != null && !repostedIds.isEmpty()) {
@@ -281,12 +283,13 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				.toList();
 		}
 
-		// Cursor pela data efetiva do ultimo item (repost date ou created date).
 		Instant lastEffective = page.isEmpty() ? null
 			: repostDates.getOrDefault(page.get(page.size() - 1).id().value(),
 				page.get(page.size() - 1).createdAt());
-		String nextCursor = page.size() == limit && lastEffective != null
-			? cursorCodec.encode(lastEffective) : null;
+		// Cursor: tabs filtradas usam a janela de origem pra decidir hasMore.
+		String nextCursor = page.isEmpty() ? null
+			: (filtered ? windowFull : page.size() == limit) && lastEffective != null
+				? cursorCodec.encode(lastEffective) : null;
 		return new FeedPage(enriched, nextCursor);
 	}
 
