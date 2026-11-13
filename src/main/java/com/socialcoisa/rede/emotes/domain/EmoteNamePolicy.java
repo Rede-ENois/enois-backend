@@ -22,7 +22,7 @@ public final class EmoteNamePolicy {
 	private static final List<String> FORTES = List.of("dick", "porn", "nude", "nudes", "boob", "titt", "titty",
 			"pussy", "vagina", "penis", "anal", "orgasm", "handjob", "blowjob", "jerkoff", "hentai", "cumshot",
 			"jizz", "cumm", "sexy", "booty", "butt", "eggplant", "poggies", "peitos", "punheta", "buceta",
-			"transar");
+			"transar", "pantsgrab");
 
 	/** So como palavra inteira: sem eles, nomes como "showdown" ou "plantfood" cairiam sem motivo. */
 	private static final List<String> FRACOS = List.of("egg", "plant", "show", "sex", "naked", "pelada", "pelado");

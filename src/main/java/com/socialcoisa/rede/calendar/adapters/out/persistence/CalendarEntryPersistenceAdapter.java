@@ -51,6 +51,26 @@ class CalendarEntryPersistenceAdapter implements CalendarEntryRepository {
 	}
 
 	@Override
+	public List<CalendarEntry> findBySeries(String seriesId) {
+		return springData.findBySeriesIdOrderByStartsAtAsc(seriesId).stream()
+			.map(CalendarEntryJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public Optional<CalendarEntry> findBySeriesAndStart(String seriesId, Instant startsAt) {
+		return springData.findBySeriesIdAndStartsAt(seriesId, startsAt)
+			.map(CalendarEntryJpaEntity::toDomain);
+	}
+
+	@Override
+	public List<CalendarEntry> findSeriesTails() {
+		return springData.findByTailTrue().stream()
+			.map(CalendarEntryJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
 	public Optional<CalendarEntry> findBySource(String ownerId, CalendarEntrySource source) {
 		if (!source.present()) {
 			return Optional.empty();

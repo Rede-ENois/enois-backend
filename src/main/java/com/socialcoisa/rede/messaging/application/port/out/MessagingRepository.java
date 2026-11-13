@@ -75,8 +75,13 @@ public interface MessagingRepository {
 
 	void saveMessage(Message message);
 
+	/**
+	 * Uma pagina de mensagens anteriores a {@code (before, beforeId)}. O par e o criterio porque o
+	 * instante sozinho empata entre mensagens do mesmo segundo, e a pagina seguinte pularia a que
+	 * empatou. {@code before} nulo comeca pela mais recente.
+	 */
 	List<Message> findMessagesByConversation(String conversationId, String viewerId, java.time.Instant before,
-			int limit);
+			String beforeId, int limit);
 
 	Optional<Message> findLastMessage(String conversationId);
 

@@ -34,6 +34,18 @@ interface SpringDataCalendarEntryJpaRepository extends JpaRepository<CalendarEnt
 		+ "order by p.invitedAt asc")
 	List<CalendarEntryJpaEntity> findPendingInvitations(@Param("userId") String userId);
 
+	/** Todas as irmãs de uma série, do mais antigo ao mais novo — histórico incluído. */
+	@Query("select e from CalendarEntryJpaEntity e where e.seriesId = :seriesId order by e.startsAt asc")
+	List<CalendarEntryJpaEntity> findBySeriesIdOrderByStartsAtAsc(@Param("seriesId") String seriesId);
+
+	Optional<CalendarEntryJpaEntity> findBySeriesIdAndStartsAt(String seriesId, Instant startsAt);
+
+	/**
+	 * As pontas de série, de qualquer situação: cancelar uma ocorrência não encerra a série, e a
+	 * ponta cancelada continua orientando a extensão até o dono encerrar por `stop`.
+	 */
+	List<CalendarEntryJpaEntity> findByTailTrue();
+
 	Optional<CalendarEntryJpaEntity> findByOwnerIdAndSourceTypeAndSourceId(String ownerId, String sourceType,
 			String sourceId);
 

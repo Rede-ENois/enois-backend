@@ -30,6 +30,7 @@ import com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository;
 		"rede.outbox.retention.batch-size=2",
 		"rede.outbox.retention.initial-delay-ms=3600000",
 		"rede.outbox.retention.interval-ms=3600000",
+		"rede.outbox.worker-initial-delay-ms=3600000",
 		"rede.outbox.worker-delay-ms=3600000" })
 class OutboxRetentionWorkerTests {
 

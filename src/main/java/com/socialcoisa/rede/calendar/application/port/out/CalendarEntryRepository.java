@@ -39,4 +39,17 @@ public interface CalendarEntryRepository {
 	 */
 	List<CalendarEntry> findPendingInvitations(String userId);
 
+	/** Todas as irmãs de uma série, do mais antigo ao mais novo, ativas ou não. */
+	List<CalendarEntry> findBySeries(String seriesId);
+
+	/** A irmã da série que começa no instante exato — é a que o índice único protege. */
+	Optional<CalendarEntry> findBySeriesAndStart(String seriesId, Instant startsAt);
+
+	/**
+	 * As pontas de série, de qualquer situação: cancelar uma ocorrência não encerra a série, então a
+	 * ponta cancelada continua orientando a extensão — quem encerra é o dono, por `stop`, que remove
+	 * a marca de todas.
+	 */
+	List<CalendarEntry> findSeriesTails();
+
 }
