@@ -798,6 +798,22 @@ Implementa: `CreateMediaUploadUseCase`, `GetMediaAssetUseCase`, `GetMediaSummari
 | `save(...)` | POST /api/jobs/{jobId}/saves |
 | `removeSave(...)` | DELETE /api/jobs/{jobId}/saves |
 
+### Processo seletivo (ATS)
+
+Etapas configuráveis por vaga (`selection_stages`), histórico de movimentos
+(`stage_movements` — a etapa atual é o destino do último movimento), notas internas
+(`stage_notes`, nunca expostas ao candidato) e board por etapa. Entrevistas entram na agenda
+central pela origem `JOB_INTERVIEW`.
+
+| Classe | Papel |
+|---|---|
+| `SelectionProcessController` | `/jobs/{jobId}/process/**` — etapas, board, movimentos e notas |
+| `SelectionProcessService` | Etapas, movimentos, notas e board; autoriza pelo autor da vaga |
+| `RecruitmentHubController` / `RecruitmentHubService` | `GET /jobs/recruitment` — minhas vagas com o funil |
+| `JobInterviewService` | Agenda a entrevista e escreve nas duas agendas pela origem |
+
+Detalhes em [`SELECTION_PROCESS.md`](SELECTION_PROCESS.md).
+
 ---
 
 ## 10. Events (Eventos)
@@ -1721,3 +1737,33 @@ Denúncia de chamada entra na moderação como alvo `CALL`, com a captura do mom
 sozinha** esse alvo: penalidade e banimento são decisão humana no painel de revisão.
 
 Detalhes, escolha de infraestrutura e contrato em [`CHAMADAS.md`](CHAMADAS.md).
+
+## 42. Calendar (Agenda central)
+
+Fonte temporal única do app. Todo compromisso é uma linha de `calendar_entries` com dois escopos
+independentes (`SOCIAL`, `PROFESSIONAL`), tipo só para a tela, fuso do organizador ao lado do
+instante e uma origem opcional (`source_type` + `source_id`) que diz qual módulo o criou. Convites
+com resposta, disponibilidade semanal, lembretes, recorrência materializada e `.ics` (export,
+import e assinatura privada) vivem no mesmo módulo.
+
+Entrada **com origem é somente leitura** na rota da agenda (409 `CALENDAR_ENTRY_SOURCE_OWNED`): quem
+muda o fato é o módulo dono, por `CalendarSourceService.upsert`, que é idempotente pela origem.
+Mentoria, evento e entrevista de vaga já escrevem aí; não existe segunda agenda.
+
+| Classe | Papel |
+|---|---|
+| `CalendarEntry` / `CalendarEntryState` | Agregado e máquina de estados (ativo/cancelado) |
+| `CalendarEntrySource` | Origem: nula ou tipo + id, nunca meio par |
+| `CalendarCommandService` | Criar, editar, cancelar; recusa escrita em entrada com origem |
+| `CalendarQueryService` | Agenda lida pelo dono, com o lugar dele em cada item |
+| `CalendarConflictService` | O que ocupa o intervalo (leitura; sobrepor é permitido) |
+| `CalendarSourceService` | Upsert idempotente por origem, para os módulos donos |
+| `CalendarInvitationService` | Convites e respostas (teto de 100 participantes) |
+| `CalendarAvailabilityService` | Semana substitutiva, sem janelas sobrepostas |
+| `CalendarReminderService` / `CalendarReminderWorker` | Criação pela tela; envio a cada 30 s |
+| `CalendarRecurrenceService` / `CalendarRecurrence` | Série materializada por relógio de parede |
+| `CalendarIcsService` | Export/import com `UID` estável, `TZID` e cancelamento |
+| `CalendarSubscriptionService` | Assinatura `.ics` por token (hash no banco) |
+| `CalendarWindows` | Teto de um ano em toda leitura por intervalo |
+
+Contrato completo em [`CALENDAR.md`](CALENDAR.md).

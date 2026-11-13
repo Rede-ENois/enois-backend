@@ -1,6 +1,6 @@
 # Processo seletivo (ATS) — pipeline de recrutamento por vaga
 
-Estado: implementado em 2026-11-12, aguardando revisão humana (PR aberto para `qa`).
+Estado: implementado em 2026-11-12 e na `qa` (PR #677 mergeado).
 
 Complementa `docs/JOB_AGGREGATOR.md` (vagas internas e externas) e
 `docs/SOCIAL_PROFESSIONAL_CONTEXTS.md` (identidade profissional). Não cria um segundo sistema
