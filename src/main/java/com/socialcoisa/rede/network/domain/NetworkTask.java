@@ -18,11 +18,15 @@ import java.time.Instant;
  * @param region região de origem declarada por quem pediu a tarefa; {@code null} = sem preferência.
  * O scheduler a usa como <b>desempate de ordenação</b>, nunca como filtro (ADR-012): pedido feito na
  * região X roda primeiro em nó de X, e roda em qualquer nó saudável se não houver X vivo.
+ * @param targetNodeId nó a que a tarefa pertence; {@code null} = qualquer nó elegível. É <b>filtro</b>,
+ * ao contrário de {@code region}, porque o trabalho pode depender do estado local daquele nó (o
+ * cursor do cache de borda vive nele). Alvo fora dos candidatos deixa a tarefa na fila: executar no
+ * nó errado não é executar pior, é não executar.
  */
 public record NetworkTask(String id, TaskType taskType, TaskStatus status, int attempt, String idempotencyKey,
 		String payload, DataClass dataClass, String region, String assignedNodeId, Instant deadline,
 		Instant nextAttemptAt, Instant dispatchedAt, Instant claimExpiresAt, Instant finishedAt, String output,
-		String lastError, Instant createdAt, Instant updatedAt) {
+		String lastError, Instant createdAt, Instant updatedAt, String targetNodeId) {
 
 	/** Erro guardado na linha: o suficiente para o painel dizer o que houve, sem payload. */
 	public static final int MAX_ERROR_LENGTH = 500;
@@ -68,6 +72,11 @@ public record NetworkTask(String id, TaskType taskType, TaskStatus status, int a
 	/** O nó que devolveu o resultado é o que estava designado? */
 	public boolean assignedTo(String nodeId) {
 		return assignedNodeId != null && assignedNodeId.equals(nodeId);
+	}
+
+	/** A tarefa pertence a este nó e a nenhum outro? */
+	public boolean targetedAt(String nodeId) {
+		return targetNodeId != null && targetNodeId.equals(nodeId);
 	}
 
 	/** Quanto falta para o prazo; negativo quando já venceu. */

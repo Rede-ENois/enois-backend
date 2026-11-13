@@ -51,12 +51,12 @@ class AdminNetworkTaskController {
 	 */
 	record TaskView(String id, String type, String status, int attempt, String dataClass, String region,
 			String assignedNodeId, Instant deadline, Instant nextAttemptAt, Instant finishedAt, String lastError,
-			Instant createdAt) {
+			Instant createdAt, String targetNodeId) {
 
 		static TaskView of(NetworkTask task) {
 			return new TaskView(task.id(), task.taskType().name(), task.status().name(), task.attempt(),
 				task.dataClass().name(), task.region(), task.assignedNodeId(), task.deadline(),
-				task.nextAttemptAt(), task.finishedAt(), task.lastError(), task.createdAt());
+				task.nextAttemptAt(), task.finishedAt(), task.lastError(), task.createdAt(), task.targetNodeId());
 		}
 	}
 

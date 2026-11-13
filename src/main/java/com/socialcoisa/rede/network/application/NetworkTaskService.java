@@ -116,8 +116,8 @@ public class NetworkTaskService {
 		String id = NodeIds.next("tk");
 		tasks.create(id, command.taskType(), command.idempotencyKey().trim(),
 			command.payload() == null ? "{}" : command.payload(),
-			command.dataClass() == null ? DataClass.PUBLIC : command.dataClass(), command.region(), deadline, now,
-			now);
+			command.dataClass() == null ? DataClass.PUBLIC : command.dataClass(), command.region(),
+			command.targetNodeId(), deadline, now, now);
 		return tasks.findById(id)
 			.orElseThrow(() -> new IllegalStateException("Tarefa recem-criada nao encontrada: " + id));
 	}
@@ -389,6 +389,9 @@ public class NetworkTaskService {
 	private Optional<NetworkNode> choose(NetworkTask task, List<NetworkNode> candidates, Instant now,
 			Map<String, Integer> reserved) {
 		List<NetworkNode> eligible = candidates.stream()
+			// Alvo vem antes de todo critério de mérito: é vínculo, não desempate. Filtrar depois do
+			// jitter seria mandar ao nó errado um trabalho que o nó errado não sabe continuar.
+			.filter(node -> task.targetNodeId() == null || node.id().equals(task.targetNodeId()))
 			.filter(node -> node.alive(now, nodeStaleAfter))
 			.filter(node -> !node.quarantined(now))
 			.filter(node -> node.accepts(task.taskType(), task.dataClass()))
@@ -528,13 +531,23 @@ public class NetworkTaskService {
 	 * obrigar quem não tem preferência a dizer "sem preferência" — o valor antigo de quatro campos
 	 * mais deadline produz exatamente o mesmo comportamento de antes desta rodada.
 	 */
+	/**
+	 * @param targetNodeId nó a que a tarefa pertence; {@code null} = qualquer nó elegível. Não confundir
+	 * com {@code region}: região ordena entre elegíveis, alvo restringe quem é elegível.
+	 */
 	public record EnqueueCommand(TaskType taskType, String idempotencyKey, String payload, DataClass dataClass,
-			String region, Instant deadline) {
+			String region, Instant deadline, String targetNodeId) {
 
 		/** Pedido sem preferência de região: o escalonamento é o mesmo de antes de a região existir. */
 		public EnqueueCommand(TaskType taskType, String idempotencyKey, String payload, DataClass dataClass,
 				Instant deadline) {
-			this(taskType, idempotencyKey, payload, dataClass, null, deadline);
+			this(taskType, idempotencyKey, payload, dataClass, null, deadline, null);
+		}
+
+		/** Pedido com alvo (trabalho que depende do estado local daquele nó). */
+		public EnqueueCommand(TaskType taskType, String idempotencyKey, String payload, DataClass dataClass,
+				String region, Instant deadline) {
+			this(taskType, idempotencyKey, payload, dataClass, region, deadline, null);
 		}
 	}
 

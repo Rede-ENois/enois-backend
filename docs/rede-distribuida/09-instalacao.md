@@ -160,6 +160,30 @@ guardada. Por ciclo: `EDGE_CHANGES_PER_TASK` (200) mudanças por página e
 `EDGE_PAGES_PER_TASK` (5) páginas; esgotado o orçamento, devolve `complete=false`
 com o cursor.
 
+**Quem enfileira `EDGE_CACHE` — e por que a tarefa tem alvo.** O executor sozinho
+não bastava: nenhuma tarefa chegava até ele. Toda tarefa de borda nasce **com
+alvo** (`network_tasks.target_node_id`, V287), e não para "a rede", porque o
+cursor e os corpos do cache vivem em `$NODE_HOME/edge/` **daquele** nó: uma
+tarefa sem alvo seria designada por mérito a um nó sorteado, que avançaria só o
+próprio cursor enquanto os outros de borda continuam frios. Alvo é filtro, ao
+contrário de `region` (que ordena entre elegíveis): se o nó alvo está offline,
+suspenso ou sem perfil, a tarefa permanece na fila em vez de ir para outro nó.
+Dois caminhos criam a tarefa:
+
+- **Pedido explícito** — `POST /admin/network/nodes/{nodeId}/edge-cache` (admin).
+  É o caso imediato: nó recém-aprovado, ou cache descartado por `reset`, precisa
+  buscar o conteúdo agora, sem esperar o ciclo. `GET` na mesma rota lista os
+  pedidos em aberto do nó;
+- **Aquisição periódica** — `EdgeCacheWorker` a cada 2 min dá uma tarefa a cada
+  nó de borda ativo e vivo **que não tenha pedido em aberto**. Sem a condição de
+  parada, cada ciclo empilharia uma tarefa que executaria as mesmas páginas sem
+  avançar o cursor.
+
+A chave de idempotência é `edge:<nó>:<janela de 10 min>`: por nó, porque dois nós
+têm cursores diferentes; por janela, porque o mesmo nó precisa de trabalho novo
+depois de consumir o feed. Um pedido repetido na mesma janela devolve a tarefa
+existente.
+
 Os demais tipos (`EDGE_DELIVER`, `API_REQUEST`) continuam em prova
 de ciclo de vida (eco do `idempotencyKey`).
 Conteúdo de usuário (HTML, CSS, KofScript) **nunca** executa no nó — continua nos

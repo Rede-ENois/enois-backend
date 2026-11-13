@@ -36,9 +36,14 @@ class NetworkTaskPersistenceAdapter implements NetworkTaskRepository {
 
 	@Override
 	public void create(String id, TaskType type, String idempotencyKey, String payload, DataClass dataClass,
-			String region, Instant deadline, Instant nextAttemptAt, Instant now) {
+			String region, String targetNodeId, Instant deadline, Instant nextAttemptAt, Instant now) {
 		repository.save(new NetworkTaskJpaEntity(id, type.name(), idempotencyKey, payload, dataClass.name(),
-			normalizeRegion(region), deadline, nextAttemptAt, now));
+			normalizeRegion(region), normalizeTarget(targetNodeId), deadline, nextAttemptAt, now));
+	}
+
+	/** Alvo vazio é a mesma coisa que sem alvo: dois jeitos de dizer a mesma ausência viram bug. */
+	private static String normalizeTarget(String targetNodeId) {
+		return targetNodeId == null || targetNodeId.isBlank() ? null : targetNodeId.trim();
 	}
 
 	/**
@@ -72,6 +77,19 @@ class NetworkTaskPersistenceAdapter implements NetworkTaskRepository {
 			.stream()
 			.map(NetworkTaskJpaEntity::toDomain)
 			.toList();
+	}
+
+	@Override
+	public List<NetworkTask> findPendingTargeted(String targetNodeId, Instant now, int limit) {
+		return repository.findPendingTargeted(targetNodeId, now, PageRequest.ofSize(limit))
+			.stream()
+			.map(NetworkTaskJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public long countOpenTargeted(String targetNodeId, Instant now) {
+		return repository.countOpenTargeted(targetNodeId, now);
 	}
 
 	@Override

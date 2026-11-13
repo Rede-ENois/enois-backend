@@ -33,7 +33,7 @@ public interface NetworkTaskRepository {
 	 * não restringe quem pode executar, só a ordem entre os elegíveis (ADR-012).</p>
 	 */
 	void create(String id, TaskType type, String idempotencyKey, String payload, DataClass dataClass,
-			String region, Instant deadline, Instant nextAttemptAt, Instant now);
+			String region, String targetNodeId, Instant deadline, Instant nextAttemptAt, Instant now);
 
 	/** Tarefas na fila, elegíveis agora, mais antigas primeiro. */
 	List<NetworkTask> findDispatchable(Instant now, int limit);
@@ -43,6 +43,17 @@ public interface NetworkTaskRepository {
 
 	/** Tarefas designadas e ainda dentro do claim, para o nó buscar o que é dele. */
 	List<NetworkTask> findAssignedTo(String nodeId, Instant now, int limit);
+
+	/**
+	 * Tarefas com alvo que ainda podem ser designadas — a leitura que rearma a aquisição periódica.
+	 *
+	 * <p>Existe para responder "já existe pedido em aberto para este nó?" sem varrer a fila: o alvo
+	 * é do nó, e um nó de borda novo não tem pedido nenhum até alguém pedir.</p>
+	 */
+	List<NetworkTask> findPendingTargeted(String targetNodeId, Instant now, int limit);
+
+	/** Quantos pedidos em aberto o nó tem — a conta que decide se vale enfileirar outro. */
+	long countOpenTargeted(String targetNodeId, Instant now);
 
 	/**
 	 * Tarefas designadas a nós que perderam o direito de operar (suspenso, em quarentena, revogado),

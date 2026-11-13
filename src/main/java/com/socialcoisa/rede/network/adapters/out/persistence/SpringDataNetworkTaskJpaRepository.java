@@ -35,6 +35,22 @@ interface SpringDataNetworkTaskJpaRepository extends JpaRepository<NetworkTaskJp
 			PageRequest page);
 
 	/**
+	 * Pedidos em aberto para este nó. "Aberta" é PENDING ou DISPATCHED com claim vigente: as duas
+	 * significam que ainda há trabalho por fazer ali. O índice {@code idx_network_tasks_target}
+	 * (V287) responde a esta faixa e a de {@code countOpenTargeted}.
+	 */
+	@Query("select t from NetworkTaskJpaEntity t where t.targetNodeId = :targetNodeId and "
+			+ "(t.status = 'PENDING' or (t.status = 'DISPATCHED' and t.claimExpiresAt > :now)) "
+			+ "and t.deadline > :now order by t.createdAt asc")
+	List<NetworkTaskJpaEntity> findPendingTargeted(@Param("targetNodeId") String targetNodeId,
+			@Param("now") Instant now, PageRequest page);
+
+	@Query("select count(*) from NetworkTaskJpaEntity t where t.targetNodeId = :targetNodeId and "
+			+ "(t.status = 'PENDING' or (t.status = 'DISPATCHED' and t.claimExpiresAt > :now)) "
+			+ "and t.deadline > :now")
+	long countOpenTargeted(@Param("targetNodeId") String targetNodeId, @Param("now") Instant now);
+
+	/**
 	 * Tarefas de nós que perderam o direito de operar (suspenso, em quarentena, revogado), com claim
 	 * ainda vigente.
 	 *

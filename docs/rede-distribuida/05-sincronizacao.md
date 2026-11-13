@@ -111,6 +111,12 @@ o TTL continua sendo a garantia, o sinal é a aceleração. Para a rede:
      `/synced`. O cursor **só avança com a entrada em disco**: consumir a mudança sem baixar o corpo
      deixaria a entrada velha até o TTL. `reset=true` apaga o cache e recomeça do zero; 404 apaga a
      entrada. Falha no meio devolve `complete=false` com o cursor, e a próxima tarefa retoma.
+   - **A tarefa que alimenta o consumidor é por nó.** O cursor é do disco do nó, então `EDGE_CACHE`
+     nasce com alvo (`network_tasks.target_node_id`, V287) e o despacho a trata como filtro: só o nó
+     alvo a recebe. Sem alvo, a designação por mérito mandaria a tarefa a um nó sorteado, que
+     avançaria só o próprio cursor — os outros de borda nunca sairiam do frio. Quem cria a tarefa é
+     `EdgeCacheService`: pedido explícito do admin (`POST /admin/network/nodes/{id}/edge-cache`) ou
+     aquisição periódica (`EdgeCacheWorker`, 2 min) para cada nó de borda vivo sem pedido em aberto.
 3. **Nunca:** cache de dado pessoal em nó externo.
 
 ## 7. Reconciliação

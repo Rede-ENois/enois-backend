@@ -45,6 +45,10 @@ class NetworkTaskJpaEntity {
 	@Column(name = "assigned_node_id", length = 40)
 	private String assignedNodeId;
 
+	/** Nó a que a tarefa pertence; null = qualquer nó elegível (V287). */
+	@Column(name = "target_node_id", length = 40)
+	private String targetNodeId;
+
 	@Column(nullable = false)
 	private Instant deadline;
 
@@ -76,7 +80,7 @@ class NetworkTaskJpaEntity {
 	}
 
 	NetworkTaskJpaEntity(String id, String taskType, String idempotencyKey, String payload, String dataClass,
-			String region, Instant deadline, Instant nextAttemptAt, Instant now) {
+			String region, String targetNodeId, Instant deadline, Instant nextAttemptAt, Instant now) {
 		this.id = id;
 		this.taskType = taskType;
 		this.status = TaskStatus.PENDING.name();
@@ -85,6 +89,7 @@ class NetworkTaskJpaEntity {
 		this.payload = payload;
 		this.dataClass = dataClass;
 		this.region = region;
+		this.targetNodeId = targetNodeId;
 		this.deadline = deadline;
 		this.nextAttemptAt = nextAttemptAt;
 		this.createdAt = now;
@@ -94,7 +99,7 @@ class NetworkTaskJpaEntity {
 	NetworkTask toDomain() {
 		return new NetworkTask(id, TaskType.valueOf(taskType), TaskStatus.valueOf(status), attempt, idempotencyKey,
 			payload, DataClass.valueOf(dataClass), region, assignedNodeId, deadline, nextAttemptAt, dispatchedAt,
-			claimExpiresAt, finishedAt, output, lastError, createdAt, updatedAt);
+			claimExpiresAt, finishedAt, output, lastError, createdAt, updatedAt, targetNodeId);
 	}
 
 	String status() {

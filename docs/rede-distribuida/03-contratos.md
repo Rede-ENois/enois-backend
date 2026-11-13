@@ -200,6 +200,26 @@ Três propriedades que o contrato fixa:
 No painel, `GET /admin/network/tasks` devolve `region` por tarefa: é a única explicação visível de
 por que uma tarefa foi para um nó distante.
 
+## 3b. Tarefa com alvo (`targetNodeId`)
+
+`POST /admin/network/nodes/{nodeId}/edge-cache` enfileira a aquisição de cache de borda **daquele**
+nó; `GET` na mesma rota lista os pedidos em aberto. Resposta: `{"taskId","nodeId","status","attempt",
+"deadline","createdAt"}`.
+
+O alvo é o oposto da região: **filtro, nunca ordenação.** A tarefa só é designada ao nó alvo, e se
+ele não está entre os candidatos (offline, suspenso, sem perfil, sem vaga) a tarefa permanece na
+fila — mandá-la a outro nó não seria executar pior, seria concluir sem ter feito o trabalho, porque
+o estado que ela continua (o cursor do cache) vive no disco daquele nó.
+
+| código | status | quando |
+|---|---|---|
+| `NODE_UNKNOWN` | 404 | id não existe |
+| `NODE_PROFILE_REQUIRED` | 422 | nó sem `NODE_EDGE` nem `NODE_LOCAL` |
+| `NODE_NOT_OPERABLE` | 409 | nó suspenso, pendente ou revogado |
+
+Idempotência por `edge:<nó>:<janela de 10 min>`: pedido repetido na mesma janela devolve a tarefa
+existente. Tarefa sem alvo continua exatamente como antes: qualquer nó elegível.
+
 ## 3a. Interface do participante (`/network/participant`)
 
 Rotas autenticadas por **sessão de navegador** (`X-Session-Token`), não por chave de nó: quem fala
