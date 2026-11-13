@@ -117,6 +117,17 @@ o TTL continua sendo a garantia, o sinal é a aceleração. Para a rede:
      avançaria só o próprio cursor — os outros de borda nunca sairiam do frio. Quem cria a tarefa é
      `EdgeCacheService`: pedido explícito do admin (`POST /admin/network/nodes/{id}/edge-cache`) ou
      aquisição periódica (`EdgeCacheWorker`, 2 min) para cada nó de borda vivo sem pedido em aberto.
+   - **A entrega é verificada, não declarada.** `node-runtime.sh` executa também `EDGE_DELIVER`: o
+     nó revalida a entrada com `?version=`, baixa o corpo quando a origem está à frente, **grava
+     antes de confirmar** e reconfirma `/synced` — sem isso o veredicto atestaria o cache antigo, não
+     o estado atual. O veredicto é `{"kind","contentId","version","contentHash","deliverable",
+     "source":"cache|refetched"}`; 404 na origem vira `deliverable:false` com `CONTENT_GONE` e a
+     entrada local é descartada. Quem pede é `EdgeDeliverService`
+     (`POST /admin/network/nodes/{id}/edge-deliver`), sempre **com alvo**: a entrega é do nó
+     específico, e o snapshot que a comprova é o daquele nó. O Control Plane não aceita o veredicto
+     pela declaração — compara versão e hash com o que o próprio nó registrou em
+     `network_content_snapshots` (`EDGE_DELIVER_UNCONFIRMED`/`EDGE_DELIVER_MISMATCH`). O nó não abre
+     porta: entrega aqui é "consigo entregar isto agora", e o modelo continua pull.
 3. **Nunca:** cache de dado pessoal em nó externo.
 
 ## 7. Reconciliação

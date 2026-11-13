@@ -184,8 +184,29 @@ têm cursores diferentes; por janela, porque o mesmo nó precisa de trabalho nov
 depois de consumir o feed. Um pedido repetido na mesma janela devolve a tarefa
 existente.
 
-Os demais tipos (`EDGE_DELIVER`, `API_REQUEST`) continuam em prova
-de ciclo de vida (eco do `idempotencyKey`).
+**`EDGE_DELIVER`: entrega verificada, não ouvinte HTTP.** O nó não expõe porta
+(§2), então "entregar" não é servir: é o Control Plane perguntar a um nó de
+borda específico *"você entrega este conteúdo agora?"* e receber um veredicto
+sobre o que aquele nó **tem**. O executor lê `kind` e `contentId` do payload,
+revalida a entrada do cache com `GET /network/content/{kind}/{id}?version=`,
+guarda o corpo novo (quando há) **antes** de confirmar, reconfirma em
+`/synced` e conclui com
+`{"kind":…,"contentId":…,"version":…,"contentHash":…,"deliverable":true,"source":"cache|refetched"}`.
+A reconfirmação é obrigatória nos dois caminhos: sem ela o veredicto atestaria
+o cache de antes, não o estado agora. 404 vira veredicto negativo
+(`CONTENT_GONE`) e descarta a entrada local — entregar o que a origem esconde é
+impossível em qualquer nó, e veredicto negativo por remoção alheia não é falha
+do executor.
+
+Do lado do Control Plane, `POST /admin/network/nodes/{nodeId}/edge-deliver?kind=&contentId=`
+enfileira a tarefa **com alvo** (o corpo verificado é o do cache daquele nó) e
+o veredicto é conferido contra o snapshot que o próprio nó gravou em `/synced`:
+veredicto positivo sem confirmação é recusado (`EDGE_DELIVER_UNCONFIRMED`), e
+versão ou hash diferentes do confirmado também (`EDGE_DELIVER_MISMATCH`,
+retentável). A declaração do nó nunca é aceita por si só.
+
+O único tipo ainda em prova de ciclo de vida (eco do `idempotencyKey`) é
+`API_REQUEST`.
 Conteúdo de usuário (HTML, CSS, KofScript) **nunca** executa no nó — continua nos
 sandboxes próprios (02-modelo-de-ameacas.md). O script é montado no container
 (`/node-runtime.sh:ro`); a imagem do runtime se troca por `install.sh --update`
@@ -266,13 +287,13 @@ e preserva o atual; digest não verificável é recusado.
 
 ## 7. O que ainda não está aqui
 
-- **Executores de trabalho real por perfil**: três já executam de verdade no nó —
+- **Executores de trabalho real por perfil**: quatro já executam de verdade no nó —
   `MEDIA_TRANSCODE` (receita do Control Plane, resultado verificado por tamanho e
-  hash), `READ_QUERY` (travessia do catálogo da réplica com corpo e confirmação) e
-  `EDGE_CACHE` (consumo do feed de mudanças com corpo baixado e confirmado),
-  68 asserções em `scripts/tests/node-executor-test.sh`. Faltam
-  `EDGE_DELIVER` (NODE_EDGE) e `API_REQUEST` (NODE_API), que hoje caem
-  no eco de ciclo de vida.
+  hash), `READ_QUERY` (travessia do catálogo da réplica com corpo e confirmação),
+  `EDGE_CACHE` (consumo do feed de mudanças com corpo baixado e confirmado) e
+  `EDGE_DELIVER` (revalidação da entrada e veredicto de entrega conferido contra
+  o snapshot do nó), 85 asserções em `scripts/tests/node-executor-test.sh`.
+  Falta `API_REQUEST` (NODE_API), que hoje cai no eco de ciclo de vida.
 - **Publicação das imagens assinadas**: o verificador está pronto e testado; o
   pipeline que constrói e assina as imagens do runtime (`cosign sign`) entra com
   o registro de imagens da rede.

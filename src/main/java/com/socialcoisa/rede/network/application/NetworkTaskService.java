@@ -61,6 +61,11 @@ public class NetworkTaskService {
 	 * (fail-closed) — nunca "aceita porque nao deu para conferir".
 	 */
 	private final org.springframework.beans.factory.ObjectProvider<MediaResultVerifier> mediaResults;
+	/*
+	 * Mesmo padrao da midia: a conferencia so vale para EDGE_DELIVER, e o provider permite que a
+	 * implementacao nao exista sem quebrar o scheduler. Ausente, a entrega NAO conclui.
+	 */
+	private final org.springframework.beans.factory.ObjectProvider<com.socialcoisa.rede.network.application.port.out.EdgeDeliverVerifier> edgeDeliveries;
 	private final NetworkModeService modes;
 	private final AuditTrail audit;
 	private final Clock clock;
@@ -71,6 +76,7 @@ public class NetworkTaskService {
 	private final Duration quarantineWindow;
 
 	NetworkTaskService(NetworkTaskRepository tasks, NetworkNodeRepository nodes, org.springframework.beans.factory.ObjectProvider<MediaResultVerifier> mediaResults,
+			org.springframework.beans.factory.ObjectProvider<com.socialcoisa.rede.network.application.port.out.EdgeDeliverVerifier> edgeDeliveries,
 			NetworkModeService modes, AuditTrail audit, Clock clock,
 			@Value("${rede.network.task.claim-ttl-seconds:120}") long claimTtlSeconds,
 			@Value("${rede.network.task.node-stale-seconds:180}") long nodeStaleSeconds,
@@ -80,6 +86,7 @@ public class NetworkTaskService {
 		this.tasks = tasks;
 		this.nodes = nodes;
 		this.mediaResults = mediaResults;
+		this.edgeDeliveries = edgeDeliveries;
 		this.modes = modes;
 		this.audit = audit;
 		this.clock = clock;
@@ -293,6 +300,27 @@ public class NetworkTaskService {
 				MediaResultVerifier.Verification verification = verifier == null
 					? MediaResultVerifier.Verification.refused("MEDIA_VERIFIER_UNAVAILABLE",
 						"Conferencia de midia indisponivel.", true)
+					: verifier.verify(task, command.output());
+				if (!verification.ok()) {
+					audit.record(node.id(), "NETWORK_TASK_RESULT_REFUSED", task.id(),
+						"{\"status\":\"" + verification.status() + "\"}");
+					if (verification.retryable() && task.attempt() < maxAttempts) {
+						Instant next = now.plus(backoff(task.attempt()));
+						tasks.requeue(task.id(), command.attempt(), verification.status(), next, now);
+						return new ResultOutcome(task.id(), TaskStatus.PENDING.name(), false, verification.status());
+					}
+					tasks.fail(task.id(), command.attempt(), verification.status(), now);
+					return new ResultOutcome(task.id(), TaskStatus.FAILED.name(), false, verification.status());
+				}
+			}
+			// Entrega de borda tambem nao se aceita pela declaracao do no: o veredicto e conferido
+			// contra o que ele mesmo confirmou na origem (snapshot de /synced).
+			if (task.taskType() == TaskType.EDGE_DELIVER) {
+				com.socialcoisa.rede.network.application.port.out.EdgeDeliverVerifier verifier = edgeDeliveries
+					.getIfAvailable();
+				com.socialcoisa.rede.network.application.port.out.EdgeDeliverVerifier.Verification verification = verifier == null
+					? com.socialcoisa.rede.network.application.port.out.EdgeDeliverVerifier.Verification
+						.refused("EDGE_DELIVER_VERIFIER_UNAVAILABLE", "Conferencia de entrega indisponivel.", true)
 					: verifier.verify(task, command.output());
 				if (!verification.ok()) {
 					audit.record(node.id(), "NETWORK_TASK_RESULT_REFUSED", task.id(),

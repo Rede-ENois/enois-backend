@@ -220,6 +220,42 @@ o estado que ela continua (o cursor do cache) vive no disco daquele nó.
 Idempotência por `edge:<nó>:<janela de 10 min>`: pedido repetido na mesma janela devolve a tarefa
 existente. Tarefa sem alvo continua exatamente como antes: qualquer nó elegível.
 
+### `EDGE_DELIVER` — entrega verificada
+
+`POST /admin/network/nodes/{nodeId}/edge-deliver?kind=PROFILE&contentId=<id>` enfileira, **com
+alvo**, a prova de que aquele nó entrega aquele conteúdo agora; `GET` na mesma rota lista os
+pedidos de entrega em aberto. Resposta: `{"taskId","nodeId","kind","contentId","status","attempt",
+"deadline","createdAt"}`.
+
+Não é ouvinte HTTP: o nó não expõe porta e o modelo é pull, então a tarefa pede que o nó
+**revalide** a entrada do cache contra `GET /network/content/{kind}/{id}?version=`, baixe o corpo
+quando estiver velho, reconfirme em `/synced` e responda um veredicto:
+
+```json
+{"kind":"PROFILE","contentId":"ana","version":4,"contentHash":"…","deliverable":true,"source":"refetched"}
+```
+
+Negativo: `{"kind":…,"contentId":…,"deliverable":false,"reason":"CONTENT_GONE|EDGE_ORIGIN_UNREADABLE|EDGE_CONFIRM_FAILED|EDGE_DISK_FAILED"}`.
+Payload da tarefa: só `{"kind":…,"contentId":…}` — campo que o executor não lê não é mandado.
+
+O resultado não é aceito pela declaração do nó. O Control Plane compara o veredicto com o
+snapshot que o **próprio nó** gravou em `/synced` (`network_content_snapshots`):
+
+| status | quando | retenta |
+|---|---|---|
+| `EDGE_DELIVER_INVALID` | veredicto sem `kind`/`contentId`/`version`/`contentHash`/`deliverable` | sim |
+| `EDGE_DELIVER_NOT_DELIVERED` | `deliverable=false` — concluir afirmando "não entreguei" seria contar entrega que não houve | não |
+| `EDGE_DELIVER_UNCONFIRMED` | o nó nunca confirmou ter o conteúdo | não |
+| `EDGE_DELIVER_MISMATCH` | versão ou hash diferentes do confirmado | sim |
+| `EDGE_DELIVER_VERIFIER_UNAVAILABLE` | conferência ausente no processo | sim |
+
+Erros do pedido: os mesmos `NODE_*` do cache, mais `400 CONTENT_ID_REQUIRED`, `400
+CONTENT_KIND_UNKNOWN` (allowlist `PROFILE`/`COMMUNITY`) e o 404 da projeção quando o agregado não
+existe (`USER_NOT_FOUND` para perfil). Idempotência por
+`deliver:` + sha-256 de `<nó>:<tipo>:<id>:<janela de 5 min>`: concatenar estouraria a coluna de 80
+caracteres (id de nó até 40, de conteúdo até 64), e o digest preserva a propriedade que importa —
+mesma combinação na mesma janela é a mesma chave.
+
 ## 3a. Interface do participante (`/network/participant`)
 
 Rotas autenticadas por **sessão de navegador** (`X-Session-Token`), não por chave de nó: quem fala

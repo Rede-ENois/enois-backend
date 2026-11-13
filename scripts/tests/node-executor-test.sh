@@ -463,4 +463,122 @@ assert_eq 'entrada removida é descartada da borda' '0' "$(find "$NE/edge/PROFIL
 assert_contains 'remoção é contada no resultado' "$(cat "$TMP/curl-calls")" '"removed":1'
 assert_not_contains 'agregado removido não é confirmado como sincronizado' "$(cat "$TMP/curl-calls")" 'gone/synced'
 
+# ------------------------------------------------- cenário 16: EDGE_DELIVER em dia (cache)
+# A entrega NÃO é servir HTTP (o nó não expõe porta): é o nó atestar que a entrada do
+# cache dele está na versão da origem agora — revalida por ?version=, reconfirma /synced
+# e responde com veredicto. Em dia, nenhum corpo é rebaixado: o que se prova é o estado.
+TASK_DELIVER='{"tasks":[{"taskId":"tk_d1","type":"EDGE_DELIVER","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"deliver:x","payload":"{\"kind\":\"PROFILE\",\"contentId\":\"ana\"}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
+
+mkdir -p "$NE/edge/PROFILE"
+printf '%s' '{"username":"ana"}' > "$NE/edge/PROFILE/ana.json"
+printf '3\n' > "$NE/edge/PROFILE/ana.version"
+printf '9\n' > "$NE/edge/cursor"
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_EDGE' ;;
+  */network/tasks/next) printf '%s' '$TASK_DELIVER' ;;
+  */network/content/PROFILE/ana/synced) printf '%s' '{"contentId":"ana","status":"SYNCED"}' ;;
+  */network/content/PROFILE/ana*)
+    printf '%s' '{"kind":"PROFILE","contentId":"ana","version":3,"contentHash":"h-ana","changed":false,"body":null}'
+    [[ "\$*" == *"-w"* ]] && printf '\n200' ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NE")
+assert_contains 'entrega pergunta pela versão que o nó tem' "$(cat "$TMP/curl-calls")" '/network/content/PROFILE/ana?version=3'
+assert_contains 'entrega em dia reconfirma o que tem' "$(cat "$TMP/curl-calls")" '/network/content/PROFILE/ana/synced'
+assert_contains 'veredicto positivo declara versão e hash' "$(cat "$TMP/curl-calls")" '"version":3,"contentHash":"h-ana","deliverable":true'
+assert_contains 'veredicto declara que veio do cache' "$(cat "$TMP/curl-calls")" '"source":"cache"'
+assert_eq 'corpo em dia não é rebaixado' '{"username":"ana"}' "$(cat "$NE/edge/PROFILE/ana.json")"
+
+# ------------------------------------------------- cenário 17: EDGE_DELIVER rebaixa quando o cache ficou velho
+# Versão diferente da guardada: o nó baixa o corpo novo, guarda ANTES de confirmar e
+# só então responde o veredicto — atestar o que não está em disco é declaração sem lastro.
+mkdir -p "$NE/edge/PROFILE"
+printf '%s' '{"username":"ana","old":true}' > "$NE/edge/PROFILE/ana.json"
+printf '3\n' > "$NE/edge/PROFILE/ana.version"
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_EDGE' ;;
+  */network/tasks/next) printf '%s' '$TASK_DELIVER' ;;
+  */network/content/PROFILE/ana/synced) printf '%s' '{"contentId":"ana","status":"SYNCED"}' ;;
+  */network/content/PROFILE/ana*)
+    printf '%s' '{"kind":"PROFILE","contentId":"ana","version":4,"contentHash":"h-ana4","changed":true,"body":"{\\"username\\":\\"ana\\",\\"new\\":true}"}'
+    [[ "\$*" == *"-w"* ]] && printf '\n200' ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NE")
+assert_contains 'cache velho é rebaixado da origem' "$(cat "$TMP/curl-calls")" '/network/content/PROFILE/ana?version=3'
+assert_contains 'confirmação da versão nova leva o hash novo' "$(cat "$TMP/curl-calls")" '{"sourceVersion":4,"contentHash":"h-ana4"}'
+assert_eq 'corpo novo guardado antes do veredicto' '{"username":"ana","new":true}' "$(cat "$NE/edge/PROFILE/ana.json")"
+assert_eq 'versão nova guardada ao lado do corpo' '4' "$(cat "$NE/edge/PROFILE/ana.version")"
+assert_contains 'veredicto declara a origem do corpo (refetched)' "$(cat "$TMP/curl-calls")" '"source":"refetched"'
+assert_contains 'veredicto positivo carrega a versão rebaixada' "$(cat "$TMP/curl-calls")" '"version":4,"contentHash":"h-ana4","deliverable":true'
+
+# ------------------------------------------------- cenário 18: EDGE_DELIVER de agregado removido
+# 404 na origem: entregar é impossível em qualquer nó. Descartar a entrada local e
+# responder veredicto negativo é verdade de capacidade — não é falha do executor.
+mkdir -p "$NE/edge/PROFILE"
+printf '%s' '{"username":"sumido"}' > "$NE/edge/PROFILE/sumido.json"
+printf '2\n' > "$NE/edge/PROFILE/sumido.version"
+TASK_DELIVER_GONE='{"tasks":[{"taskId":"tk_d2","type":"EDGE_DELIVER","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"deliver:y","payload":"{\"kind\":\"PROFILE\",\"contentId\":\"sumido\"}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_EDGE' ;;
+  */network/tasks/next) printf '%s' '$TASK_DELIVER_GONE' ;;
+  */network/content/PROFILE/sumido*)
+    [[ "\$*" == *"-w"* ]] && printf '\n404' || exit 22 ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NE")
+assert_eq 'entrega de agregado removido descarta a entrada' '0' "$(find "$NE/edge/PROFILE" -name 'sumido*' | wc -l | tr -d ' ')"
+assert_contains 'veredicto negativo por remoção da origem' "$(cat "$TMP/curl-calls")" '"deliverable":false,"reason":"CONTENT_GONE"'
+assert_not_contains 'agregado removido não é confirmado como sincronizado' "$(cat "$TMP/curl-calls")" 'sumido/synced'
+
+# ------------------------------------------------- cenário 19: EDGE_DELIVER não é mais eco de ciclo
+# O payload sem kind/contentId falha com código próprio — prova de que o tipo saiu do
+# `*)` que ecoava o idempotencyKey e passou a ter executor de verdade.
+TASK_DELIVER_BAD='{"tasks":[{"taskId":"tk_d3","type":"EDGE_DELIVER","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"deliver:z","payload":"{}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_EDGE' ;;
+  */network/tasks/next) printf '%s' '$TASK_DELIVER_BAD' ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"FAILED","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NE")
+assert_contains 'entrega sem alvo no payload falha com código próprio' "$(cat "$TMP/curl-calls")" 'TASK_PAYLOAD_INVALID'
+assert_not_contains 'payload inválido não consulta a origem' "$(cat "$TMP/curl-calls")" '/network/content/PROFILE'
+assert_not_contains 'payload inválido não vira eco de ciclo de vida' "$(cat "$TMP/curl-calls")" '"echo":"deliver:z"'
+
 printf '\nTodos os cenarios passaram (%d assercoes).\n' "$PASS"

@@ -492,6 +492,93 @@ exec_edge_cache() {
     "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"complete\":false,\"cursor\":$cursor}" ''
 }
 
+# ---------------- executor real: EDGE_DELIVER (entrega verificada) ----------------
+# Pergunta do Control Plane a um nó de borda específico: "você consegue entregar este
+# conteúdo AGORA?". O modelo é pull e o nó NÃO expõe porta — ninguém abre conexão para
+# ele —, então entrega não é servir HTTP: é provar que a entrada do cache existe, está
+# na versão da origem e está reconfirmada em /synced. O veredicto é sobre o que o nó
+# TEM, não sobre o que ele promete: revalidar com ?version= sem reconfirmar atestaria
+# o cache de antes, não o estado agora — por isso /synced é obrigatório nos dois
+# caminhos. Autorização de usuário continua no Control Plane; o nó só atesta capacidade.
+exec_edge_deliver() {
+  local next="$1" task_id="$2" attempt="$3"
+  local payload kind content_id safe_id entry_dir stored_version
+  local content_url raw code content version hash body source verdict
+
+  payload=$(task_payload "$next")
+  kind=$(json_field "$payload" kind)
+  content_id=$(json_field "$payload" contentId)
+  [[ -n "$kind" && -n "$content_id" ]] || {
+    fail_task "$task_id" "$attempt" TASK_PAYLOAD_INVALID 'payload de entrega sem kind ou contentId'; return 0; }
+  safe_id=$(printf '%s' "$content_id" | sed 's/ /%20/g')
+  entry_dir="$NODE_HOME/edge/$kind"
+  mkdir -p "$entry_dir"
+
+  stored_version=''
+  [[ -f "$entry_dir/$safe_id.version" ]] && stored_version=$(head -n 1 "$entry_dir/$safe_id.version")
+  content_url="$CONTROL_PLANE/network/content/$kind/$safe_id"
+  [[ -n "$stored_version" ]] && content_url="$content_url?version=$stored_version"
+  # Uma requisição só, com o status no fim: --fail engoliria o corpo do 404.
+  if ! raw=$(curl --silent --show-error --connect-timeout 10 --max-time 60 \
+      -w '\n%{http_code}' "${auth[@]}" "$content_url"); then
+    verdict="{\"kind\":\"$kind\",\"contentId\":\"$content_id\",\"deliverable\":false,\"reason\":\"EDGE_ORIGIN_UNREADABLE\"}"
+    result "$task_id" "$attempt" DONE "$verdict" ''
+    return 0
+  fi
+  code=$(sed -n '$p' <<<"$raw")
+  content=$(sed '$d' <<<"$raw")
+  if [[ "$code" == 404 ]]; then
+    # O agregado sumiu da origem: entregar é impossível e manter o corpo guardado
+    # faria a borda servir o que a vitrine esconde. Veredicto negativo por remoção
+    # alheia é verdade de capacidade, não falha do nó — o nó não é punido por ele.
+    rm -f "$entry_dir/$safe_id.json" "$entry_dir/$safe_id.version"
+    verdict="{\"kind\":\"$kind\",\"contentId\":\"$content_id\",\"deliverable\":false,\"reason\":\"CONTENT_GONE\"}"
+    result "$task_id" "$attempt" DONE "$verdict" ''
+    return 0
+  fi
+  if [[ "$code" != 200 ]]; then
+    verdict="{\"kind\":\"$kind\",\"contentId\":\"$content_id\",\"deliverable\":false,\"reason\":\"EDGE_ORIGIN_UNREADABLE\"}"
+    result "$task_id" "$attempt" DONE "$verdict" ''
+    return 0
+  fi
+
+  if [[ "$(json_flag "$content" changed)" == false ]]; then
+    # Em dia: a entrada que o nó tem É a versão da origem. A confirmação ainda vai —
+    # é ela que deixa o veredicto conferível pelo Control Plane (snapshot do lado de lá).
+    version="$stored_version"
+    hash=$(json_field "$content" contentHash)
+    source="cache"
+  else
+    body=$(json_last_string "$content" body)
+    if [[ -z "$body" ]]; then
+      verdict="{\"kind\":\"$kind\",\"contentId\":\"$content_id\",\"deliverable\":false,\"reason\":\"EDGE_ORIGIN_UNREADABLE\"}"
+      result "$task_id" "$attempt" DONE "$verdict" ''
+      return 0
+    fi
+    version=$(json_number "$content" version)
+    hash=$(json_field "$content" contentHash)
+    # Grava antes de confirmar, como no EDGE_CACHE: atestar o que não está em disco
+    # é declaração sem lastro.
+    if ! printf '%s' "$body" > "$entry_dir/$safe_id.json"; then
+      verdict="{\"kind\":\"$kind\",\"contentId\":\"$content_id\",\"deliverable\":false,\"reason\":\"EDGE_DISK_FAILED\"}"
+      result "$task_id" "$attempt" DONE "$verdict" ''
+      return 0
+    fi
+    printf '%s\n' "$version" > "$entry_dir/$safe_id.version"
+    source="refetched"
+  fi
+  if ! curl --fail --silent --show-error --connect-timeout 10 --max-time 60 \
+      "${auth[@]}" -d "{\"sourceVersion\":$version,\"contentHash\":\"$hash\"}" \
+      "$CONTROL_PLANE/network/content/$kind/$safe_id/synced" >/dev/null; then
+    verdict="{\"kind\":\"$kind\",\"contentId\":\"$content_id\",\"deliverable\":false,\"reason\":\"EDGE_CONFIRM_FAILED\"}"
+    result "$task_id" "$attempt" DONE "$verdict" ''
+    return 0
+  fi
+  verdict="{\"kind\":\"$kind\",\"contentId\":\"$content_id\",\"version\":$version,\"contentHash\":\"$hash\",\"deliverable\":true,\"source\":\"$source\"}"
+  result "$task_id" "$attempt" DONE "$verdict" ''
+  printf '[executor] entrega %s/%s v%s verificada (%s)\n' "$kind" "$content_id" "$version" "$source"
+}
+
 cycle() {
   # 1. heartbeat: estado, modo e se pode pedir tarefa.
   local hb mode accept_tasks observed_cpu observed_mem
@@ -532,6 +619,7 @@ cycle() {
       MEDIA_TRANSCODE) exec_media_transcode "$next" "$task_id" "${attempt:-1}" ;;
       READ_QUERY) exec_read_query "$next" "$task_id" "${attempt:-1}" ;;
       EDGE_CACHE) exec_edge_cache "$next" "$task_id" "${attempt:-1}" ;;
+      EDGE_DELIVER) exec_edge_deliver "$next" "$task_id" "${attempt:-1}" ;;
       *)
         # Prova de ciclo de vida: eco do idempotencyKey como output. Conteúdo de usuário
         # (HTML, CSS, KofScript) NUNCA executa aqui — continua nos sandboxes próprios.
