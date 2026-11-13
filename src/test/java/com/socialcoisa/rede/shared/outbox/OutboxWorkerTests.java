@@ -35,6 +35,7 @@ import com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository;
  */
 @SpringBootTest
 @TestPropertySource(properties = {
+		"rede.outbox.worker-initial-delay-ms=3600000",
 		"rede.outbox.worker-delay-ms=3600000",
 		"rede.outbox.claim-stale-seconds=60" })
 class OutboxWorkerTests {
