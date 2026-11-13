@@ -123,6 +123,67 @@ Pré-requisitos, todos obrigatórios:
 - procedimentos de recuperação de dados documentados;
 - **prevenção de split-brain**.
 
+### 3.1 Recuperação regional (V289, R103)
+
+A região afetada sai, e os nós das outras atendem o que podem. A saída é **declaração humana com
+motivo obrigatório** (`POST /admin/network/regions`), pela mesma razão do modo operacional
+(ADR-009): nenhum número que o Control Plane meça distingue "região em desastre" de "região com a
+rede lenta", e a declaração é o que deixa o incidente auditado — quem declarou, por quê, desde
+quando. A volta também é humana (`DELETE /admin/network/regions/{region}`), sem prazo de relógio:
+readmitir por conta própria seria a automação desfazendo decisão de incidente.
+
+Declarada a região, **quatro portas** fecham para os nós dela, e fechar três deixaria a quarta
+aberta (ADR-015):
+
+| porta | antes | agora |
+|---|---|---|
+| despacho (`choose`) | designava para o nó da região caída | região evacuada é **filtro**, antes de qualquer critério de mérito |
+| capacidade (`availableCapacity`, painel) | contava a vaga de quem não executa | a vaga não é contada; `freeSlots` cai e `outOfServiceRegions` explica por quê |
+| heartbeat | respondia `acceptTasks=true` | `false` — o nó drena sem 403; `nextFor` devolve lista vazia como segunda porta |
+| drenagem (`drainEvacuatedRegions`) | só via status (`n.status <> 'ACTIVE'`), que não cobre o caso | o que estava na mão dos nós volta à fila **na hora** |
+
+A comparação é **normalizada** (trim e lower-case, `NetworkRegions`): "Sudeste" no nó e "sudeste" na
+declaração são a mesma região, como já eram para o balanceador (ADR-012). Região ausente nunca é
+evacuada.
+
+O defeito que isso rompe, em uma frase: com a região declarada, o nó continuava `ACTIVE` e elegível,
+então a tarefa presa voltava por claim vencido e era designada **ao mesmo nó**, em loop, até morrer
+de tentativas.
+
+Tarefa com **alvo** num nó evacuado volta para a fila e **não** roda em outro nó: alvo é vínculo
+(V287), não preferência. Ela espera o prazo ou a região voltar.
+
+`GET /admin/network/tasks/overview` mostra `awaitingEvacuation` enquanto a drenagem regional não
+rodou — entre a declaração e o ciclo seguinte, é a diferença entre "nada aconteceu" e "há trabalho
+parado".
+
+**Prova:** `NetworkRegionTests` (13 testes; Q0 neutralizando as quatro portas falha em 6) e V289
+aplicada duas vezes em MariaDB 11.4 real com `network_nodes`/`network_tasks` povoados antes.
+
+### 3.2 Replicação geográfica (R104)
+
+A replicação existia **por nó** — versão, hash, reconciliação (05 §7) — e isso respondia "o nó X
+está em dia?", nunca "a rede sobrevive à queda de uma região?". Duas metades faltavam, ambas sobre
+a dimensão que o nome já prometia:
+
+**A varredura não confere nó de região evacuada.** A fila filtrava só `n.status = 'ACTIVE'`, e o nó
+da região declarada fora de operação continua `ACTIVE` — a região é que saiu. Conferi-lo gravava
+`CONTENT_STALE` num nó que não divergiu: é o Control Plane que parou de lhe servir. O painel enchia
+de divergência de saúde no meio de um incidente que já estava declarado e auditado. Quando a região
+volta, o nó volta à fila sozinho (a guarda é a declaração vigente, não uma marca no snapshot).
+
+**Cobertura por região** (`GET /admin/network/content/coverage`): por tipo de conteúdo, quantas
+regiões **distintas** têm cópia utilizável (`regionsWithCopy`), contra quantas regiões a rede tem
+(`totalRegions`) e quantas cópias no total (`copies`). Doze nós no mesmo rack são doze cópias e uma
+região — a contagem por nó chamaria isso de redundância total, e é justamente o que a contingência
+precisa enxergar. "Operável" é `ACTIVE` + heartbeat recente (mesmo corte de 180 s do scheduler) +
+região não evacuada: cópia de nó que não atende ninguém não cobre região. É leitura de painel, não
+decisão de despacho.
+
+**Prova:** `NetworkReplicationGeographicTests` (10 testes; Q0: sem a guarda regional a varredura
+acusa o nó evacuado — 4 falhas; contando nós em vez de regiões, 1 falha; ignorando o corte de
+heartbeat, 1 falha).
+
 ## 4. Anti split-brain
 
 O Control Plane não pode ser ponto único de falha sem estratégia de recuperação. A estratégia é
@@ -138,12 +199,85 @@ O Control Plane não pode ser ponto único de falha sem estratégia de recupera�
 5. Nó que detecta dois controladores com termos diferentes entra em `QUARANTINED` e para de aceitar
    tarefas até a situação resolver.
 
+### 4.1 O que está entregue (V288, R101 — regra 5 na R102)
+
+| regra | onde vive | como é provado |
+|---|---|---|
+| 1. termo monotônico | `network_state.term` (V288), `NetworkAuthorityRepository.promote` | só sobe por `promote`; `NetworkAuthorityPersistenceTests` |
+| 2. nó recusa termo menor | `term_regressao` em `deploy/node-runtime/node-runtime.sh`, estado em `$NODE_HOME/term` | `scripts/tests/node-executor-test.sh` cenários 5d/5e; Q0 removendo a checagem |
+| 3. quórum explícito, fail secure | `NetworkAuthorityService.promote` → `NETWORK_AUTHORITY_NO_QUORUM` | `NetworkAuthorityTests.semQuorumNinguemPromove`, `semEleitoradoNinguemPromove` |
+| 4. mesmo termo impossível | CAS `update network_state … where term = <lido>` | `NetworkAuthorityPersistenceTests`, e o `row_count` conferido no MariaDB 11.4 real |
+| 5. nó em `QUARANTINED` | `NetworkNodeService.heartbeat` → `quarantineOnTermConflict` (motivo `TERM_CONFLICT`), runtime reporta o termo aceito no heartbeat | `NetworkTermConflictTests` (Q0 desligando a detecção: 3 testes falham); `node-executor-test.sh` cenários 5d/5e/5f |
+
+Decisões que o desenho fixa, e por quê:
+
+- **O termo mora na linha global de `network_state`**, que já era "a autoridade" do modo. O
+  `authority_id` diz de quem é o termo e `promoted_at` desde quando — `since` continua sendo do
+  MODO, que muda dentro do mesmo termo (`DEGRADED`, `EMERGENCY`).
+- **O eleitorado é o DECLARADO** (`network_authorities`), não "quem está respondendo". Se fosse
+  derivado da vivacidade, a metade isolada de uma partição se acharia 100% dos vivos e se
+  promoveria sozinha. Declarar é decisão humana e auditada; a vivacidade de cada declarada vem de
+  `network_instance_readers` (V278), a mesma tabela que o painel já usa para dizer quantas
+  instâncias estão lendo.
+- **Quórum é sobre o eleitorado inteiro**: `vivos * 2 > declarados`. Com 2 declaradas, uma viva não
+  promove (empate não é maioria) — é o cenário `semQuorumNinguemPromove`.
+- **A linha global é invariante do deploy**: a V288 faz seed dela (`term = 0`), porque até aqui
+  `NetworkStatePersistenceAdapter` a criava preguiçosamente na primeira transição de modo. Sem ela,
+  o CAS da primeira promoção de um banco novo atualizaria zero linhas e falharia sempre.
+- **O termo entra na linha assinada** (`formatVersion` 2, termo por último), não só no JSON: é o que
+  deixa o nó recusar um termo que regride conferindo contra o pino, em vez de confiar no transporte.
+
+#### 4.2 Regra 5 na prática (R102)
+
+O canal de detecção é o próprio heartbeat: o runtime reporta o **termo aceito** (o de
+`$NODE_HOME/term`, o mesmo registro que a `term_regressao` mantém) no corpo do
+`POST /network/nodes/heartbeat` como `observedTerm`. Nó que nunca aceitou config não manda o campo —
+mandar zero afirmaria "vi o termo zero", que não é a ausência de um termo.
+
+O Control Plane compara o termo reportado com o vigente em `network_state`:
+
+- **termo reportado MAIOR**: o nó viu um controlador que esta autoridade não conhece — há dois
+  mandos. O nó entra em `QUARANTINED` com motivo `TERM_CONFLICT`, com auditoria
+  `NETWORK_NODE_QUARANTINED` carregando `observedTerm` e `authorityTerm`. A resposta do heartbeat
+  continua 200, com `status: "QUARANTINED"` e `acceptTasks: false` — o nó drena na hora. Nó em
+  `PENDING_APPROVAL`/`SUSPENDED`/`REVOKED` não entra em conflito por termo: não tem tarefa a perder,
+  e trocar o status apagaria a fila de aprovação humana.
+- **termo igual ou menor**: normal. Menor o próprio nó já recusa (regra 2); punir quem está atrasado
+  tiraria nós de circulação a cada reconexão de uma autoridade deposta e esconderia o conflito real.
+- **sem termo reportado**: nada muda — a regra existe para o nó que FALOU com dois controladores, e
+  quem não reporta termo não provou nada.
+
+Três decisões que o desenho fixa:
+
+- **A quarentena de termo não expira por relógio.** A de saúde (V282) tem janela porque falha se
+  resolve sozinha; divergência de termo não — liberar com o relógio devolveria o nó a operar ainda
+  dividido entre dois mandos. `findQuarantineExpired` só enxerga nós `ACTIVE`, então o status
+  `QUARANTINED` já basta; a janela gravada em `quarantinedUntil` é horizonte de revisão para o
+  painel, não prazo de volta. Nó em conflito continua batendo coração (200), porque é pelo heartbeat
+  que ele reporta o termo — 403 fecharia o único canal de detecção. A exceção vale só para
+  `TERM_CONFLICT`: quarentena manual do admin continua respondendo 403 no heartbeat, como sempre.
+- **O caminho de volta é humano**: reaprovação administrativa (`POST /admin/network/nodes/{id}/approve`)
+  devolve o `ACTIVE` e limpa a janela — aprovar sem limpar deixaria o nó "liberado no papel, fora do
+  balanceamento na prática". A limpeza é restrita ao motivo `TERM_CONFLICT`; a quarentena de saúde
+  continua sob o worker de recuperação, como antes.
+- **`acceptTasks` considera o próprio nó**: antes vinha só do modo da rede; agora é falso também para
+  nó fora de operação. O heartbeat do nó em conflito é o que o faz drenar sem precisar de 403.
+
+O cenário de revogação (§5) está entregue e testado (`NetworkDisasterTests`, ADR-017). O cenário
+"Control Plane fora por mais que o TTL de config" (§6) também: o formato 3 da config assinada
+carrega `ttlSeconds` (ADR-018), e o runtime guarda a última config **verificada** com o instante da
+verificação para poder continuar dentro do prazo sem falar com o Control Plane.
+
 ## 5. Revogação durante processamento
 
 Cenário: o nó está executando uma tarefa e é revogado.
 
-1. Revogação grava `revoked_at` imediatamente.
-2. O resultado que chegar depois é **descartado** (`NODE_REVOKED`), com registro em auditoria.
+1. Revogação grava `revoked_at` imediatamente — nas chaves do nó junto com o status, na mesma
+   transação.
+2. O resultado que chegar depois é **descartado** (`NODE_REVOKED`), com registro em auditoria
+   (`NETWORK_TASK_RESULT_DISCARDED`, com nó de origem e as duas tentativas). A chave revogada ainda
+   **prova de quem** veio o resultado — por isso o descarte existe —, mas não abre mais porta
+   nenhuma: só esta rota a aceita, e apenas para descartar (ADR-017).
 3. A tarefa volta para a fila e é redistribuída, com `attempt` incrementado.
 4. Se a tarefa tinha efeito externo, a idempotência do handler impede duplicação.
 
@@ -158,11 +292,67 @@ Cenário: o nó está executando uma tarefa e é revogado.
 
 Nó **nunca** inventa permissão quando o Control Plane está fora. Fail secure.
 
+### Como cada linha da tabela vira comportamento
+
+`ttlSeconds` entra na **linha assinada** (formato 3, doc 03), não só no payload: sem isso um
+intermediário trocaria `300` por `86400` e a config continuaria "válida". É a assinatura que impede
+o nó de aceitar um prazo que o Control Plane não emitiu.
+
+O runtime (`deploy/node-runtime/node-runtime.sh`) separa duas falhas que antes eram a mesma:
+
+- **transporte falhou** (curl sem resposta: exit 7, 28, 56…) → usa a última config verificada, se
+  existir e se `agora - verificado_em < ttlSeconds`. Dentro do prazo é blip: o nó segue. Fora do
+  prazo é "Control Plane fora": drena, não pede tarefa nova, e diz no log qual TTL venceu.
+- **Control Plane recusou** (HTTP de erro, curl exit 22) → **nunca** cai no cache. Recusa é o
+  Control Plane vivo dizendo que esta config não vale mais (revogação, chave inválida, nó
+  desconhecido); ressuscitar permissão recém-negada com um arquivo local seria o oposto de fail
+  secure. Drena na hora.
+
+O cache guarda **a config e o instante em que ela foi verificada**, em `$NODE_HOME/config.json` e
+`$NODE_HOME/config-verified-at`. Antes de usar, a config guardada é conferida **de novo contra o
+pino**: o cache vive no mesmo volume da identidade do nó, e um arquivo trocado ali não pode virar
+permissão só porque o Control Plane está inalcançável para contradizê-lo.
+
+A idade é medida pelo relógio **da máquina do nó**, e por isso o cache fica fora do
+`install.sh --backup`: restaurado noutra máquina, ele chegaria com o instante de verificação de
+outra máquina — mentindo sobre o próprio frescor e esvaziando o TTL. Melhor voltar sem cache (o nó
+espera a primeira config verificada) do que voltar com uma frescura emprestada.
+
+Sem cache nenhum e Control Plane fora, o nó drena. `node-doctor.sh` reporta WARN quando o cache
+está vencido ou ilegível, para o operador ver a causa antes de o nó parar de pedir trabalho.
+
+### A idade pode não ser medível: relógio para trás
+
+O TTL inteiro apoia-se no relógio da máquina do nó, e o container só conhece a hora que o kernel
+diz. Quando o relógio **volta** para antes do instante de verificação — VPS sem RTC que reinicia,
+máquina suspensa e retomada, correção de NTP para trás —, `agora - verificado_em` fica **negativo**,
+e negativo é menor que qualquer TTL: o prazo desapareceria e a permissão voltaria a valer por tempo
+indeterminado. O TTL inteiro se anularia justamente na máquina que acabou de reiniciar.
+
+A decisão é conservadora e explícita: **idade que não se consegue medir é idade não provada**, e
+permissão não provada não se usa. Com `agora < verificado_em` o nó drena, registra há quantos
+segundos o relógio está atrás, e volta a operar no primeiro ciclo em que conseguir revalidar com o
+Control Plane. O `node-doctor.sh` ganhou o mesmo caso com diagnóstico próprio ("Relógio atrás do
+instante da verificação", mandando conferir NTP) — "config vencida" mandaria o operador investigar
+a rede quando o problema é a hora da máquina.
+
+O sentido contrário (relógio à frente) não precisa de guarda nova: a idade sai maior que o TTL e o
+caminho de "config vencida" já drena. Os dois sentidos estão fixados no harness (cenários 32–34),
+inclusive o de que a falha injetada não vira modo permanente: com o Control Plane de pé, o nó
+revalida no próprio ciclo e trabalha.
+
 ## 7. Testes obrigatórios de contingência
 
-- nó indisponível no meio de uma tarefa → redistribuição sem duplicar efeito;
-- revogação durante processamento → resultado descartado, tarefa redistribuída;
-- Control Plane fora → nós drenam e param, sem aceitar tarefa nova;
-- dois controladores com termos diferentes → nó entra em quarentena;
-- sobrecarga simultânea → `HIGH_LOAD` entra e sai pelos números medidos;
-- recuperação → `RECOVERY` drena sem derrubar o que está em andamento.
+| cenário | teste | estado |
+|---|---|---|
+| nó indisponível no meio de uma tarefa → redistribuição sem duplicar efeito | `NetworkTasksTests.noQueCaiNoMeioEhRedistribuidoSemDuplicarEfeito` | entregue (F2) |
+| revogação durante processamento → resultado descartado, tarefa redistribuída | `NetworkDisasterTests.revogacaoNoMeioDaTarefaDescartaOResultadoEAudita` | entregue (R105) |
+| Control Plane fora → nós drenam e param, sem aceitar tarefa nova | `node-executor-test.sh` cenários 26–31 (dentro do TTL segue; fora do TTL drena; TTL lido do documento; recusa HTTP ≠ queda; cache adulterado recusado; sem cache drena) | entregue (R106, ADR-018) |
+| chaos: relógio da máquina atrás do instante da verificação → idade não medível não vira permissão | `node-executor-test.sh` cenários 32–34 e `node-runtime-test.sh` (doctor aponta NTP) | entregue (R107, ADR-019) |
+| dois controladores com termos diferentes → nó entra em quarentena | `NetworkTermConflictTests` | entregue (R102) |
+| sobrecarga simultânea → `HIGH_LOAD` entra e sai pelos números medidos | `NetworkModesTests` | entregue (F4) |
+| recuperação → `RECOVERY` drena sem derrubar o que está em andamento | `NetworkModesTests` | entregue (F4) |
+
+Os cenários de desastre que dependem de estado declarado e sobrevivem a reinício vivem em
+`NetworkDisasterTests`, que é onde os novos entram: um arquivo por vez de cenário cruzado, um método
+por item desta tabela.

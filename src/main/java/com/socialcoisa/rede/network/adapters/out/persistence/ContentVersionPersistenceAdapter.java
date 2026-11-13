@@ -2,6 +2,7 @@ package com.socialcoisa.rede.network.adapters.out.persistence;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -66,14 +67,36 @@ class ContentVersionPersistenceAdapter implements ContentVersionRepository {
 	 * <p>O join com {@code network_nodes} não é otimização: é o que impede a fila de travar. Um nó
 	 * suspenso ou revogado não é conferido, e sem o filtro as linhas dele (nunca conferidas, logo
 	 * no começo da ordem) ocupariam o lote em toda rodada e os nós ativos nunca seriam alcançados.</p>
+	 *
+	 * <p>O {@code %s} é o recorte geográfico: {@code in ()} não existe em JPQL, então a cláusula só
+	 * entra no SQL quando há região evacuada para excluir.</p>
 	 */
 	private static final String SELECT_DUE = "select " + SNAPSHOT_COLUMNS_S + """
 		 from network_content_snapshots s
 		join network_nodes n on n.id = s.node_id
-		where n.status = 'ACTIVE'
+		where n.status = 'ACTIVE' and %s
 		order by s.checked_at is not null, s.checked_at, s.node_id, s.content_type, s.content_id
 		limit ?
 		""";
+
+	/**
+	 * Nó de região fora de operação fica fora da fila de conferência.
+	 *
+	 * <p>A região sai de operação por decisão humana (V289) e o nó dela PARA de receber trabalho: o
+	 * despacho não o escolhe, o heartbeat responde {@code acceptTasks=false} e a drenagem regional
+	 * devolve o que estava na mão dele. O snapshot dele, então, fica velho sozinho — não porque o nó
+	 * divergiu, mas porque o Control Plane parou de lhe servir conteúdo. Conferir esse snapshot
+	 * acusaria o nó por uma decisão do Control Plane e encheria o painel de {@code SYNC_DIVERGENCE}
+	 * no meio do incidente, quando o alerta menos serve.</p>
+	 *
+	 * <p>É o espelho do que a drenagem regional faz com tarefa ({@code findOnEvacuatedRegions}): nó
+	 * de região fora não é culpa nem trabalho. Quando a região volta, o nó sincroniza de novo e o
+	 * snapshot dele volta à fila pela própria regra — não há nada a desfazer aqui.</p>
+	 */
+	private static final String DUE_REGION_GUARD = "(n.region is null or lower(trim(n.region)) not in (:regions))";
+
+	/** Sem região evacuada não há o que excluir; constante para o SQL ficar com uma forma só. */
+	private static final String DUE_NO_REGION_GUARD = "1 = 1";
 
 	/**
 	 * A conferência, condicionada ao motivo anterior.
@@ -127,6 +150,40 @@ class ContentVersionPersistenceAdapter implements ContentVersionRepository {
 		""";
 
 	private static final String DELETE_CHANGES_BY_SEQ = "delete from network_content_changes where seq in (%s)";
+
+	/**
+	 * Cobertura geográfica de um tipo: em quantas regiões o tipo tem cópia <b>utilizável</b>.
+	 *
+	 * <p>Os três predicados de "utilizável" são os mesmos do scheduler, de propósito: nó ACTIVE, com
+	 * heartbeat recente, de região que não está fora de operação. A cópia de um nó morto ou de uma
+	 * região evacuada não atende ninguém — contá-la faria o painel mostrar cobertura que não existe
+	 * justamente no cenário em que a cobertura importa.</p>
+	 *
+	 * <p>{@code coalesce(n.region, '')} põe o nó sem região declarada como uma região própria: ele
+	 * tem cópia, e ignorá-lo subnotificaria a rede que não usa o campo. O {@code group by} é sobre a
+	 * região normalizada, porque "Sudeste" e "sudeste" são a mesma região desde a V289.</p>
+	 */
+	private static final String COUNT_REGIONS_WITH_COPY = """
+		select count(distinct coalesce(lower(trim(n.region)), ''))
+		from network_content_snapshots s
+		join network_nodes n on n.id = s.node_id
+		where s.content_type = ? and n.status = 'ACTIVE' and n.last_seen_at >= ? and %s
+		""";
+
+	/** O universo da cobertura: as regiões que a rede tem agora com nó operável. */
+	private static final String COUNT_TOTAL_REGIONS = """
+		select count(distinct coalesce(lower(trim(n.region)), ''))
+		from network_nodes n
+		where n.status = 'ACTIVE' and n.last_seen_at >= ? and %s
+		""";
+
+	/** Redundância dentro da cobertura: quantos nós operáveis confirmaram ter o tipo. */
+	private static final String COUNT_COPIES = """
+		select count(*)
+		from network_content_snapshots s
+		join network_nodes n on n.id = s.node_id
+		where s.content_type = ? and n.status = 'ACTIVE' and n.last_seen_at >= ? and %s
+		""";
 
 	/**
 	 * Atraso do nó: agregados que a origem tem e o nó não tem na mesma versão. O {@code left join}
@@ -189,8 +246,67 @@ class ContentVersionPersistenceAdapter implements ContentVersionRepository {
 	}
 
 	@Override
-	public List<NodeSnapshot> dueForCheck(int limit) {
-		return jdbc.query(SELECT_DUE, (rs, row) -> mapSnapshot(rs), limit);
+	public List<NodeSnapshot> dueForCheck(Collection<String> evacuatedRegions, int limit) {
+		List<String> evacuated = normalizeRegions(evacuatedRegions);
+		if (evacuated.isEmpty()) {
+			return jdbc.query(SELECT_DUE.formatted(DUE_NO_REGION_GUARD), (rs, row) -> mapSnapshot(rs), limit);
+		}
+		// O `in` é montado com um placeholder por região: JDBC não expande coleção, e o tamanho é o
+		// número de regiões evacuadas — não o número de nós —, então a cláusula é pequena.
+		String placeholders = String.join(",", java.util.Collections.nCopies(evacuated.size(), "?"));
+		String sql = SELECT_DUE.formatted(DUE_REGION_GUARD.replace(":regions", placeholders));
+		Object[] args = new Object[evacuated.size() + 1];
+		for (int i = 0; i < evacuated.size(); i++) {
+			args[i] = evacuated.get(i);
+		}
+		args[evacuated.size()] = limit;
+		return jdbc.query(sql, (rs, row) -> mapSnapshot(rs), args);
+	}
+
+	@Override
+	public List<RegionCoverage> coverage(Collection<String> evacuatedRegions, Instant aliveSince) {
+		List<String> evacuated = normalizeRegions(evacuatedRegions);
+		String guard = evacuated.isEmpty() ? DUE_NO_REGION_GUARD
+			: DUE_REGION_GUARD.replace(":regions",
+				String.join(",", java.util.Collections.nCopies(evacuated.size(), "?")));
+		Timestamp alive = Timestamp.from(aliveSince);
+		// A ordem dos parâmetros é a do SQL: o universo é (heartbeat, regiões) e cada contagem por
+		// tipo é (tipo, heartbeat, regiões).
+		long total = count(joinParams(new Object[] {alive}, evacuated), COUNT_TOTAL_REGIONS.formatted(guard));
+		List<RegionCoverage> result = new java.util.ArrayList<>();
+		for (ContentKind kind : ContentKind.values()) {
+			Object[] args = joinParams(new Object[] {kind.name(), alive}, evacuated);
+			long regions = count(args, COUNT_REGIONS_WITH_COPY.formatted(guard));
+			long copies = count(args, COUNT_COPIES.formatted(guard));
+			result.add(new RegionCoverage(kind, regions, total, copies));
+		}
+		return List.copyOf(result);
+	}
+
+	/** Os parâmetros fixos seguidos das regiões evacuadas, que fecham toda cláusula {@code in}. */
+	private static Object[] joinParams(Object[] fixed, List<String> regions) {
+		Object[] args = java.util.Arrays.copyOf(fixed, fixed.length + regions.size());
+		for (int i = 0; i < regions.size(); i++) {
+			args[fixed.length + i] = regions.get(i);
+		}
+		return args;
+	}
+
+	private long count(Object[] args, String sql) {
+		Long count = jdbc.queryForObject(sql, Long.class, args);
+		return count == null ? 0 : count;
+	}
+
+	/** Regiões como a declaração as guarda: minúsculas, sem espaços; vazio não entra na cláusula. */
+	private static List<String> normalizeRegions(Collection<String> regions) {
+		if (regions == null || regions.isEmpty()) {
+			return List.of();
+		}
+		return regions.stream()
+			.map(com.socialcoisa.rede.network.domain.NetworkRegions::normalize)
+			.filter(region -> !region.isEmpty())
+			.distinct()
+			.toList();
 	}
 
 	@Override

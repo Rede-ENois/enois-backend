@@ -111,9 +111,8 @@ public class NodeKeyService {
 		if (nodeId == null || nodeId.isBlank() || presentedKey == null || presentedKey.isBlank()) {
 			throw new ApiException(401, "NODE_KEY_INVALID", "Credencial de no ausente.");
 		}
-		Optional<NodeKeyRepository.NodeKeyRecord> match = keys.findByHash(Hashes.sha256Hex(presentedKey.trim()))
-			.filter(NodeKeyRepository.NodeKeyRecord::active)
-			.filter(record -> record.nodeId().equals(nodeId.trim()));
+		Optional<NodeKeyRepository.NodeKeyRecord> match = keyMatching(nodeId, presentedKey)
+			.filter(NodeKeyRepository.NodeKeyRecord::active);
 		if (match.isEmpty()) {
 			throw new ApiException(401, "NODE_KEY_INVALID", "Credencial de no invalida.");
 		}
@@ -123,6 +122,42 @@ public class NodeKeyService {
 		}
 		keys.touchLastUsed(match.get().id(), clock.instant());
 		return node;
+	}
+
+	/**
+	 * Identidade para o resultado tardio de um nó revogado no meio da tarefa (doc 06 §5).
+	 *
+	 * <p>Revogar o nó revoga as chaves dele na mesma transação, e {@link #authenticate} recusa as
+	 * duas. Sem este caminho, o resultado que chega depois morre em {@code 401} na porta de entrada
+	 * e nunca vira descarte auditado: a tarefa é redistribuída, mas fica sem rastro de que o nó
+	 * anterior reportou resultado para ela.</p>
+	 *
+	 * <p>A chave apresentada prova <b>de quem</b> veio o pedido — é o hash de uma chave que este nó
+	 * recebeu —, e nada mais. O que o chamador ganha é o direito de ser descartado com o nome certo
+	 * na auditoria, nunca o de operar: as demais rotas continuam em {@link #authenticate}. É por isso
+	 * que a revogação não devolve tarefa, não aceita resultado e não atualiza {@code last_used}.</p>
+	 */
+	@Transactional
+	public ResultCredential authenticateForResult(String nodeId, String presentedKey) {
+		if (nodeId == null || nodeId.isBlank() || presentedKey == null || presentedKey.isBlank()) {
+			throw new ApiException(401, "NODE_KEY_INVALID", "Credencial de no ausente.");
+		}
+		if (keyMatching(nodeId, presentedKey).isEmpty()) {
+			throw new ApiException(401, "NODE_KEY_INVALID", "Credencial de no invalida.");
+		}
+		NetworkNode node = requireNode(nodeId.trim());
+		if (node.status() == NodeStatus.REVOKED) {
+			return new ResultCredential(node, true);
+		}
+		// Fora a revogação, o resultado passa exatamente pela porta de sempre: chave rotacionada
+		// continua 401, nó suspenso ou em quarentena continua 403 pela checagem de operação.
+		return new ResultCredential(authenticate(nodeId, presentedKey), false);
+	}
+
+	/** A chave que confere com o hash apresentado e pertence ao nó informado. Não olha revogação. */
+	private Optional<NodeKeyRepository.NodeKeyRecord> keyMatching(String nodeId, String presentedKey) {
+		return keys.findByHash(Hashes.sha256Hex(presentedKey.trim()))
+			.filter(record -> record.nodeId().equals(nodeId.trim()));
 	}
 
 	private NetworkNode requireNode(String nodeId) {
@@ -147,5 +182,15 @@ public class NodeKeyService {
 
 	/** A chave em claro, uma única vez. Quem recebe precisa copiar antes de fechar a tela. */
 	public record IssuedKey(String keyId, String plainTextKey, String prefix) {
+	}
+
+	/**
+	 * Quem apresentou a credencial e se ele ainda pode operar.
+	 *
+	 * <p>{@code revoked} separa "este nó foi revogado" de "esta credencial não vale". O primeiro
+	 * ainda é prova de identidade e serve para registrar o descarte; o segundo é anônimo e vira 401.
+	 * O nó vem junto para o chamador não reconsultar o banco para saber o status.</p>
+	 */
+	public record ResultCredential(NetworkNode node, boolean revoked) {
 	}
 }

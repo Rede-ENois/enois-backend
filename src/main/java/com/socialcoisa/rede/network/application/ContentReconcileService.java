@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.network.application.port.out.ContentVersionRepository;
+import com.socialcoisa.rede.network.application.port.out.NetworkRegionRepository;
 import com.socialcoisa.rede.network.domain.ContentKind;
 import com.socialcoisa.rede.network.domain.ContentVersion;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -45,18 +46,27 @@ public class ContentReconcileService {
 	private final ContentVersionRepository versions;
 	private final ContentSyncService content;
 	private final ContentDivergenceRecorder recorder;
+	private final NetworkRegionRepository regions;
 
 	ContentReconcileService(ContentVersionRepository versions, ContentSyncService content,
-			ContentDivergenceRecorder recorder) {
+			ContentDivergenceRecorder recorder, NetworkRegionRepository regions) {
 		this.versions = versions;
 		this.content = content;
 		this.recorder = recorder;
+		this.regions = regions;
 	}
 
-	/** A fila da varredura: nunca conferidos primeiro, depois os conferidos há mais tempo. */
+	/**
+	 * A fila da varredura: nunca conferidos primeiro, depois os conferidos há mais tempo.
+	 *
+	 * <p>Nó de região fora de operação (V289) fica fora: ele não recebe conteúdo desde a declaração
+	 * — é a rede que parou de lhe servir, não o cache dele que divergiu. Conferir agora acusaria o nó
+	 * por uma decisão do Control Plane, e quando a região voltar o nó sincroniza de novo e a fila o
+	 * alcança sozinha.</p>
+	 */
 	@Transactional(readOnly = true)
 	public List<ContentVersionRepository.NodeSnapshot> due(int limit) {
-		return versions.dueForCheck(limit);
+		return versions.dueForCheck(regions.outOfService(), limit);
 	}
 
 	/**

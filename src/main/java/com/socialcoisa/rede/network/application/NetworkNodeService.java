@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialcoisa.rede.network.application.port.out.NetworkAuthorityRepository;
 import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.ProvisionTokenRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
@@ -41,22 +42,30 @@ public class NetworkNodeService {
 	 */
 	private static final int MAX_ALIVE_TOKENS_PER_OWNER = 3;
 
+	/** Motivo de quarentena para nó que reportou termo maior que o da autoridade vigente. */
+	static final String TERM_CONFLICT = "TERM_CONFLICT";
+
 	private final NetworkNodeRepository nodes;
+	private final NetworkAuthorityRepository authorities;
 	private final ProvisionTokenRepository tokens;
 	private final NodeKeyService keyService;
 	private final AuditTrail audit;
 	private final Clock clock;
 	private final Duration tokenTtl;
+	private final Duration conflictWindow;
 
-	NetworkNodeService(NetworkNodeRepository nodes, ProvisionTokenRepository tokens, NodeKeyService keyService,
-			AuditTrail audit, Clock clock,
-			@Value("${rede.network.provision-token-ttl-minutes:30}") long tokenTtlMinutes) {
+	NetworkNodeService(NetworkNodeRepository nodes, NetworkAuthorityRepository authorities,
+			ProvisionTokenRepository tokens, NodeKeyService keyService, AuditTrail audit, Clock clock,
+			@Value("${rede.network.provision-token-ttl-minutes:30}") long tokenTtlMinutes,
+			@Value("${rede.network.authority.conflict-quarantine-seconds:600}") long conflictSeconds) {
 		this.nodes = nodes;
+		this.authorities = authorities;
 		this.tokens = tokens;
 		this.keyService = keyService;
 		this.audit = audit;
 		this.clock = clock;
 		this.tokenTtl = tokenTtlMinutes > 0 ? Duration.ofMinutes(tokenTtlMinutes) : DEFAULT_TOKEN_TTL;
+		this.conflictWindow = Duration.ofSeconds(Math.max(30, conflictSeconds));
 	}
 
 	/**
@@ -155,10 +164,56 @@ public class NetworkNodeService {
 
 	@Transactional
 	public NetworkNode heartbeat(NetworkNode authenticated, HeartbeatCommand beat) {
-		requireOperable(authenticated);
+		// QUARANTINED por TERM_CONFLICT continua batendo coração: é pelo heartbeat que ele reporta
+		// o termo que viu — 403 aqui fecharia o único canal de onde o conflito é detectado. Os
+		// outros status não-operáveis seguem barrados como antes, inclusive quarentena manual.
+		if (!termConflictQuarantined(authenticated)) {
+			requireOperable(authenticated);
+		}
+		Instant now = clock.instant();
 		nodes.touch(authenticated.id(), beat.runtimeVersion(), beat.cpuPercent(), beat.memoryMb(),
-			beat.runningTasks(), clock.instant());
+			beat.runningTasks(), now);
+		NetworkNode updated = require(authenticated.id());
+		quarantineOnTermConflict(updated, beat.observedTerm(), now);
 		return require(authenticated.id());
+	}
+
+	/**
+	 * Regra 5 da contingência (06-contingencia.md §4): nó que reporta termo MAIOR que o da
+	 * autoridade vigente viu um controlador que este Control Plane não conhece — há dois mandos.
+	 * O nó entra em {@code QUARANTINED} e para de receber tarefa na hora. Termo igual ou menor é
+	 * normal: menor o próprio nó já recusa (term_regressao), e quem está atrasado não é culpado.
+	 *
+	 * <p>A quarentena de status não é liberada por relógio — o {@code findQuarantineExpired} só
+	 * escolhe nós {@code ACTIVE} —, porque divergência de termo não se resolve esperando: só
+	 * decisão humana (investigar qual controlador está errado) reativa o nó. A janela gravada em
+	 * {@code quarantinedUntil} é só o horizonte de revisão que aparece no painel.</p>
+	 */
+	private static boolean termConflictQuarantined(NetworkNode node) {
+		return node.status() == NodeStatus.QUARANTINED && TERM_CONFLICT.equals(node.quarantineReason());
+	}
+
+	private void quarantineOnTermConflict(NetworkNode node, Integer observedTerm, Instant now) {
+		if (observedTerm == null || node.status() == NodeStatus.QUARANTINED) {
+			return;
+		}
+		if (node.status() != NodeStatus.ACTIVE) {
+			// Só nó operante pode entrar em conflito de termo: um PENDING_APPROVAL não tem tarefa a
+			// perder, e trocar o status dele por QUARANTINED apagaria a fila de aprovação humana.
+			return;
+		}
+		NetworkAuthorityRepository.AuthorityRecord current = authorities.current().orElse(null);
+		if (current == null || observedTerm <= current.term()) {
+			return;
+		}
+		Instant reviewBy = now.plus(conflictWindow);
+		// changeStatus bumpa configVersion: a config assinada que o nó busca na próxima leva o
+		// termo vigente, e o runtime dele para de operar com termo que ele mesmo viu ser maior.
+		nodes.updateStatus(node.id(), NodeStatus.QUARANTINED, "system", now);
+		nodes.quarantine(node.id(), TERM_CONFLICT, reviewBy);
+		audit.record("system", "NETWORK_NODE_QUARANTINED", node.id(), "{\"reason\":\"" + TERM_CONFLICT
+			+ "\",\"observedTerm\":" + observedTerm + ",\"authorityTerm\":" + current.term()
+			+ ",\"reviewBy\":\"" + reviewBy + "\"}");
 	}
 
 	@Transactional
@@ -168,6 +223,13 @@ public class NetworkNodeService {
 			throw new ApiException(409, "NODE_REVOKED", "No revogado nao volta: cadastre outro.");
 		}
 		nodes.updateStatus(nodeId, NodeStatus.ACTIVE, actorId, clock.instant());
+		// Divergência de termo não expira por relógio: o único caminho de volta é decisão humana, e
+		// é esta reaprovação. Sem limpar a janela, o nó ficaria ACTIVE e ainda assim fora do
+		// balanceamento — liberado no papel, inútil na prática. A quarentena de saúde não é tocada
+		// aqui: ela tem o próprio relógio e quem a encerra é o worker.
+		if (TERM_CONFLICT.equals(node.quarantineReason())) {
+			nodes.release(nodeId);
+		}
 		audit.record(actorId, "NODE_APPROVED", nodeId, "{}");
 		return require(nodeId);
 	}
@@ -310,6 +372,6 @@ public class NetworkNodeService {
 	}
 
 	public record HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
-			Integer runningTasks) {
+			Integer runningTasks, Integer observedTerm) {
 	}
 }

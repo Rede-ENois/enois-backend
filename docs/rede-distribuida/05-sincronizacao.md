@@ -117,6 +117,17 @@ o TTL continua sendo a garantia, o sinal é a aceleração. Para a rede:
      avançaria só o próprio cursor — os outros de borda nunca sairiam do frio. Quem cria a tarefa é
      `EdgeCacheService`: pedido explícito do admin (`POST /admin/network/nodes/{id}/edge-cache`) ou
      aquisição periódica (`EdgeCacheWorker`, 2 min) para cada nó de borda vivo sem pedido em aberto.
+   - **A entrega é verificada, não declarada.** `node-runtime.sh` executa também `EDGE_DELIVER`: o
+     nó revalida a entrada com `?version=`, baixa o corpo quando a origem está à frente, **grava
+     antes de confirmar** e reconfirma `/synced` — sem isso o veredicto atestaria o cache antigo, não
+     o estado atual. O veredicto é `{"kind","contentId","version","contentHash","deliverable",
+     "source":"cache|refetched"}`; 404 na origem vira `deliverable:false` com `CONTENT_GONE` e a
+     entrada local é descartada. Quem pede é `EdgeDeliverService`
+     (`POST /admin/network/nodes/{id}/edge-deliver`), sempre **com alvo**: a entrega é do nó
+     específico, e o snapshot que a comprova é o daquele nó. O Control Plane não aceita o veredicto
+     pela declaração — compara versão e hash com o que o próprio nó registrou em
+     `network_content_snapshots` (`EDGE_DELIVER_UNCONFIRMED`/`EDGE_DELIVER_MISMATCH`). O nó não abre
+     porta: entrega aqui é "consigo entregar isto agora", e o modelo continua pull.
 3. **Nunca:** cache de dado pessoal em nó externo.
 
 ## 7. Reconciliação
@@ -205,13 +216,96 @@ do combinado — o container do nó estoura e a tarefa morre com ele.
 |---|---|
 | `cpuCores` | vira `concurrencyLimit()`; o despacho desconta o que a rodada já entregou |
 | `memoryMb` | `memoryExhausted()`: memória observada ≥ teto declarado tira o nó do filtro e da conta de vagas |
-| `diskMb` | sem consumidor hoje: nenhum tipo de tarefa atual escreve volume que o Control Plane meça |
-| `bandwidthMbps` | sem consumidor hoje: nenhuma transferência de tarefa é medida por nó |
+| `diskMb` | teto do estado de conteúdo no volume do nó (`edge/` + `replica/`); o runtime mede antes de gravar — ver a seção seguinte |
+| `bandwidthMbps` | teto de taxa das transferências de corpo do runtime (`--limit-rate` no curl, `Mbps × 125` kB/s) — ver §7.3 |
 
 **Sem reporte, o nó continua elegível.** Não medir não é estar cheio: um nó que não manda
 `memoryMb` no heartbeat não tem o que comparar com o teto, e excluí-lo puniria o runtime antigo por
 um dado que ele nunca prometeu mandar. Teto zero segue a mesma lógica do piso 1 em
 `concurrencyLimit()`: cadastro mal preenchido não pode virar nó inútil.
+
+### 7.1 O teto de disco é aplicado por quem escreve
+
+`limits.diskMb` viaja assinado na config (`NetworkConfigService.forNode`), mas quem escreve no
+volume é o runtime do nó, e é lá que o teto vale. Duas regras porque os dois estados de conteúdo
+têm promessas diferentes:
+
+- **Borda é cache.** `EDGE_CACHE` e a releitura do `EDGE_DELIVER` gravam `edge/<kind>/<id>.json`.
+  No teto, a entrada mais antiga (mtime) é evictada até a nova caber: cache completo é cache útil,
+  e a borda se recompõe da origem. Se o corpo novo não cabe nem com o cache vazio, a entrada fica
+  fora e o resultado conta em `dropped` — nunca em `unchanged`, porque dizer "em dia" sobre o que
+  não está guardado seria mentira no painel.
+- **Réplica é catálogo.** Apagar um agregado que o nó prometeu ter é quebrar a promessa em
+  silêncio. No teto, a travessia para com `complete:false` e `diskFull:true`, e o cursor **não
+  avança** sobre o item não gravado — retomar de onde parou é o único jeito de não pular um
+  agregado. Sob pressão, a réplica pode evictar **cache da borda**, nunca a si mesma.
+- **Identidade não entra na conta.** `node.json`, `api-key` e `pinning-key` não são conteúdo:
+  contá-los deixaria um estouro de cache apagar a credencial e desligar o nó sozinho.
+
+`diskMb: 0` continua significando "não declarou limite" — o nó grava, porque ausência de campo não
+é ordem de parar de servir.
+
+### 7.3 O teto de banda é aplicado por quem transfere
+
+`limits.bandwidthMbps` é o que o participante aceitou ceder de **rede**, e o runtime é quem
+transfere: baixar corpo de conteúdo (`READ_QUERY`, `EDGE_CACHE`, `EDGE_DELIVER`) e subir o
+resultado do transcode (`MEDIA_TRANSCODE`, nas duas pontas) passam pelo mesmo teto, aplicado como
+`curl --limit-rate`, com `Mbps × 125` kB/s (1 Mbps = 1000/8 kbit-s = 125 kB/s).
+
+- **Um limite por transferência é o agregado que importa.** O runtime executa uma tarefa por
+  ciclo, então não há duas transferências concorrentes do mesmo nó competindo pelo mesmo teto;
+  limitar cada uma é limitar o nó. Se o modelo mudar para execução concorrente, o teto precisa
+  virar taxa compartilhada — está registrado aqui para não ser esquecido.
+- **A chamada de controle não é limitada.** Heartbeat, config, poll, catálogo de réplica e
+  confirmação `/synced` são metadados pequenos; limitá-los atrasaria a própria operação do nó sem
+  economizar banda de verdade.
+- **`0` é "não declarei", não "zero de banda".** Quem não declarou transfere sem `--limit-rate`:
+  inventar limite que o participante nunca aceitou puniria o runtime que só não mandou o campo.
+- **O limite é da saída do nó.** O conteúdo vem do Control Plane, mas a taxa é medida no nó — é
+  ele que paga a conta de rede que declarou, e é o único ponto onde o número declarado vira
+  comportamento observável.
+
+## 7.4 Replicação geográfica
+
+Tudo até aqui é medida **por nó**: cada nó tem versão e hash, e a reconciliação diz se ele está em
+dia. Isso responde "o nó X está servindo o corpo certo?", nunca "a rede sobrevive à queda de uma
+região?" — e as duas perguntas divergem. Doze nós de borda no mesmo rack são doze cópias e **uma**
+região: a contagem por nó chama isso de redundância total.
+
+### 7.4.1 A varredura não acusa nó de região evacuada
+
+A fila da reconciliação filtrava só `n.status = 'ACTIVE'`. O nó de uma região declarada fora de
+operação continua `ACTIVE` (a região é que saiu, em V289/ADR-015), então a varredura o conferia e
+gravava `CONTENT_STALE`. O nó não divergiu: desde a declaração o Control Plane **parou de lhe
+servir** — o despacho não o escolhe, o heartbeat responde `acceptTasks=false` e o `sweep` do cache o
+pula. Acusá-lo é acusar o nó por uma decisão do Control Plane, e no meio do incidente o painel
+passa a mostrar divergência de saúde onde o problema é evacuação.
+
+A guarda é a declaração vigente, comparada **normalizada** (`NetworkRegions.normalize`): `" Sudeste "`
+no nó é a mesma região de `"sudeste"` na declaração. Quando a região volta, o nó volta à fila
+sozinho — não há marca no snapshot a limpar.
+
+### 7.4.2 Cobertura por região
+
+`GET /admin/network/content/coverage` devolve, por tipo de conteúdo da allowlist, três números:
+
+| campo | o que conta |
+|---|---|
+| `regionsWithCopy` | regiões distintas com pelo menos um nó **operável** que confirmou ter o tipo |
+| `totalRegions` | regiões distintas com pelo menos um nó operável (o mesmo universo, para comparar) |
+| `copies` | quantos nós confirmaram ter o tipo — a redundância dentro da cobertura |
+
+"Operável" é `ACTIVE`, com heartbeat recente (o mesmo corte de 180 s do scheduler — "vivo" no painel
+é o mesmo vivo que recebe tarefa) e de região que não foi declarada fora de operação. A cópia de um
+nó parado ou de uma região evacuada existe no banco e não atende ninguém; contá-la prometeria
+contingência que a rede não tem.
+
+Nó **sem região** conta como uma região própria identificada por `""`. Ele tem a cópia e atende;
+ignorá-lo subnotificaria a cobertura de uma rede que não usa o campo. É leitura de painel, não
+decisão de despacho: nada aqui entra em `choose()` nem na conta de capacidade.
+
+O tipo sem cópia nenhuma aparece **com zero** em vez de sumir da resposta — omitir a linha esconderia
+exatamente o buraco que o painel existe para mostrar.
 
 ## 8. O que fica de fora, e por quê
 

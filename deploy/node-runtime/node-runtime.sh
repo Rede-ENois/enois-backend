@@ -61,13 +61,36 @@ json_flag() {
 
 # allowedTasks da config assinada — a ÚNICA fonte de permissão de execução.
 allowed_tasks() {
-  local config
+  local config rc
   if [[ ! -s "$NODE_HOME/pinning-key" ]]; then
     printf '[executor] sem pinning-key — config não verificável; rode --start para pinar a chave\n' >&2
     return 1
   fi
   config=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
-    "${auth[@]}" "$CONTROL_PLANE/network/nodes/me/config") || return 1
+    "${auth[@]}" "$CONTROL_PLANE/network/nodes/me/config")
+  rc=$?
+  if (( rc != 0 )); then
+    # Recusa HTTP (código 22 do --fail) NÃO é queda: é o Control Plane respondendo que esta
+    # config não vale mais — revogação, chave inválida, nó desconhecido. Cai aqui e o cache não
+    # pode falar por cima: ressuscitar permissão recém-negada é o oposto de fail secure.
+    if (( rc == 22 )); then
+      printf '[executor] Control Plane recusou a config (HTTP de erro) — drenando\n' >&2
+      return 1
+    fi
+    # Queda de transporte: o Control Plane não respondeu. A permissão que ele assinou continua
+    # valendo enquanto o TTL dela não vence (doc 06 §6) — blip de rede não derruba nó sadio.
+    allowed_tasks_da_cache
+    return $?
+  fi
+  config_valida "$config" || return 1
+  config_cache_guardar "$config"
+  printf '%s' "$config"
+}
+
+# config_valida <config-json>: 0 quando a config é do pino, está assinada por ele e não regride
+# o termo. É a checagem inteira, e vale igual para a que chegou agora e para a guardada.
+config_valida() {
+  local config="$1"
   if grep -q '"signed":true' <<<"$config"; then
     printf '%s' "$config" | grep -q '"publicKey":"'"$(cat "$NODE_HOME/pinning-key")"'"' || {
       printf '[executor] config com publicKey diferente do pino — recusada\n' >&2
@@ -77,7 +100,162 @@ allowed_tasks() {
     printf '[executor] config sem assinatura — recusada por padrão\n' >&2
     return 1
   fi
+  config_verify_signature "$config" || {
+    printf '[executor] assinatura da config não confere com o pino — recusada\n' >&2
+    return 1
+  }
+  # Regra de termo (fase 6, doc 06 §4): config só sobe. Termo menor que o último aceito
+  # é uma autoridade DEPOSTA tentando voltar a mandar — exatamente o cenário de split-brain
+  # que o termo existe para impedir. Recusa com registro e NÃO grava o termo recusado: gravar
+  # número menor reabriria a porta para a autoridade de termo intermediário voltar.
+  term_regressao "$config" && {
+    printf '[executor] config com term menor que o último aceito — autoridade deposta, recusada\n' >&2
+    return 1
+  }
+  return 0
+}
+
+config_cache_guardar() {
+  # Guarda a config JÁ verificada e o instante da verificação. O rename é o que impede um
+  # desligamento no meio da escrita de deixar config truncada: ou o arquivo antigo, ou o novo.
+  if printf '%s' "$1" > "$NODE_HOME/config.json.tmp" 2>/dev/null &&
+    printf '%s\n' "$(date +%s)" > "$NODE_HOME/config-verified-at.tmp" 2>/dev/null &&
+    mv -f "$NODE_HOME/config.json.tmp" "$NODE_HOME/config.json" 2>/dev/null &&
+    mv -f "$NODE_HOME/config-verified-at.tmp" "$NODE_HOME/config-verified-at" 2>/dev/null; then
+    rm -f "$NODE_HOME/config.json.tmp" "$NODE_HOME/config-verified-at.tmp" 2>/dev/null
+    return 0
+  fi
+  rm -f "$NODE_HOME/config.json.tmp" "$NODE_HOME/config-verified-at.tmp" 2>/dev/null
+  printf '[executor] aviso: não consegui guardar a config verificada — próxima queda será sem cache\n' >&2
+  return 1
+}
+
+allowed_tasks_da_cache() {
+  # A config guardada serve SÓ dentro do TTL que ela mesma declara, e SÓ se continuar conferindo
+  # com o pino. Reler e reverificar não é desconfiança decorativa: o cache vive no mesmo volume
+  # que a identidade do nó, e um arquivo trocado ali viraria permissão sem assinatura.
+  local config at ttl now
+  if [[ ! -s "$NODE_HOME/config.json" || ! -s "$NODE_HOME/config-verified-at" ]]; then
+    printf '[executor] Control Plane sem resposta e nenhuma config verificada guardada — drenando\n' >&2
+    return 1
+  fi
+  config=$(cat "$NODE_HOME/config.json")
+  at=$(head -n 1 "$NODE_HOME/config-verified-at")
+  ttl=$(json_number "$config" ttlSeconds)
+  if [[ ! "$at" =~ ^[0-9]+$ || ! "$ttl" =~ ^[0-9]+$ ]]; then
+    printf '[executor] cache de config ilegível — drenando\n' >&2
+    return 1
+  fi
+  now=$(date +%s)
+  # Relógio atrás do instante da verificação não prova frescor: `agora - verificado_em` fica
+  # negativo, e negativo é menor que qualquer TTL — o prazo sumiria e a permissão valeria de novo
+  # por tempo indeterminado. Acontece em VPS sem RTC (relógio volta ao boot), máquina
+  # suspensa/retomada e correção de NTP para trás. Idade que não se consegue medir é idade não
+  # provada, e permissão não provada não se usa (doc 06 §6, fail secure).
+  if (( now < at )); then
+    printf '[executor] relógio atrás do instante da verificação (%ss) — idade não provável, drenando\n' \
+      "$(( at - now ))" >&2
+    return 1
+  fi
+  if (( now - at >= ttl )); then
+    # Venceu: o Control Plane está fora há mais tempo que a permissão vale. Parar de aceitar
+    # tarefa nova é a única resposta honesta — ninguém pode renovar o mando que ninguém assinou.
+    printf '[executor] Control Plane sem resposta e config vencida (TTL de %ss) — drenando\n' "$ttl" >&2
+    return 1
+  fi
+  config_valida "$config" || {
+    printf '[executor] config guardada não confere mais com o pino — drenando\n' >&2
+    return 1
+  }
+  printf '[executor] Control Plane sem resposta — seguindo com a última config verificada (%ss de %ss)\n' \
+    "$((now - at))" "$ttl" >&2
   printf '%s' "$config"
+}
+
+term_regressao() {
+  # term_regressao <config-json>: 0 (verdadeiro) quando term < último aceito; grava o termo
+  # aceito quando sobe ou empata. O estado vive no volume do nó ($NODE_HOME/term), igual ao pino.
+  local term last
+  term=$(json_number "$1" term)
+  [[ -n "$term" ]] || return 1
+  last=0
+  [[ -s "$NODE_HOME/term" ]] && last=$(head -n 1 "$NODE_HOME/term")
+  if (( term < last )); then
+    return 0
+  fi
+  printf '%s\n' "$term" > "$NODE_HOME/term"
+  return 1
+}
+
+# A assinatura cobre o DOCUMENTO CANÔNICO, não o JSON: a mesma linha que
+# NetworkConfigSigner.SignedFields.canonical() monta no Control Plane, campo por campo
+# na ordem do contrato, listas ordenadas e em JSON compacto. Reconstruir essa linha é
+# recortar e ordenar, não reinterpretar o documento.
+config_signature() {
+  # config_signature <config-json>: imprime "canonical<TAB>assinatura"; 1 se faltar campo.
+  local format_version config_version node_id profiles cpu memory disk bandwidth tasks issued_at ttl term signature
+  format_version=$(json_number "$1" formatVersion)
+  config_version=$(json_number "$1" configVersion)
+  node_id=$(json_field "$1" nodeId)
+  profiles=$(json_list_sorted "$1" profiles)
+  cpu=$(json_number "$1" cpuCores)
+  memory=$(json_number "$1" memoryMb)
+  disk=$(json_number "$1" diskMb)
+  bandwidth=$(json_number "$1" bandwidthMbps)
+  tasks=$(json_list_sorted "$1" allowedTasks)
+  issued_at=$(json_field "$1" issuedAt)
+  # ttlSeconds entrou no formato 3 e fica logo antes do termo: campo novo nunca desloca o
+  # último, que é a regra que deixou o formato 2 legível por quem reconstruía o formato 1.
+  ttl=$(json_number "$1" ttlSeconds)
+  # O termo da autoridade entrou no formato 2 (fase 6): vem por último na linha.
+  # Formato 1 não o tinha e não é mais servido pelo Control Plane.
+  term=$(json_number "$1" term)
+  signature=$(json_field "$1" signature)
+  [[ -n "$format_version" && -n "$config_version" && -n "$node_id" && -n "$cpu" \
+      && -n "$memory" && -n "$disk" && -n "$bandwidth" && -n "$issued_at" \
+      && -n "$ttl" && -n "$term" && -n "$signature" ]] || return 1
+  printf '%s|%s|%s|[%s]|%s|%s|%s|%s|[%s]|%s|%s|%s\t%s' \
+    "$format_version" "$config_version" "$node_id" "$profiles" "$cpu" "$memory" "$disk" \
+    "$bandwidth" "$tasks" "$issued_at" "$ttl" "$term" "$signature"
+}
+
+json_list_sorted() {
+  # json_list_sorted <json> <chave>: itens em JSON compacto, ordenados por byte (C),
+  # como o jsonList() do signer — a ordem do banco não é contrato e duas ordens dariam
+  # assinaturas diferentes para a mesma permissão. Os itens já chegam com aspas (o
+  # array é um blob recortado, não parseado); as aspas saem, o conjunto vazio vira []
+  # como no signer, e o sort é por byte porque os itens são nomes de perfil/tarefa em
+  # ASCII — o ordenamento do Java e o do `sort` batem nesse domínio, e um nome fora
+  # dele quebraria a igualdade em vez de passar batido.
+  local items
+  items=$(sed -n 's/.*"'"$2"'":\[\([^]]*\)\].*/\1/p' <<<"$1" | head -n 1 \
+    | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//; s/\\"/"/g' | sed '/^$/d')
+  [[ -n "$items" ]] || { printf '[]'; return; }
+  printf '%s' "$items" | LC_ALL=C sort | sed 's/^/"/; s/$/"/' | paste -sd ',' -
+}
+
+config_verify_signature() {
+  # config_verify_signature <config-json>: confere a assinatura Ed25519 contra o PINO
+  # (o X.509 base64 gravado no install/primeiro start), não contra o publicKey que veio
+  # no corpo. Essa é a diferença que importa: a config chega pela rede e pode vir de um
+  # Control Plane comprometido ou de um proxy no caminho. Os limites e o allowedTasks do
+  # corpo podem ser alterados, mas a assinatura do pino não pode ser forjada — e é ela
+  # que o nó verifica aqui. Comparar só o campo publicKey com o pino provaria que o
+  # atacante sabe copiar uma string.
+  local config="$1" canonical signature dir rc
+  local pair
+  pair=$(config_signature "$config") || return 1
+  canonical=${pair%%$'\t'*}
+  signature=${pair#*$'\t'}
+  dir=$(mktemp -d) || return 1
+  printf '%s' "$(cat "$NODE_HOME/pinning-key")" | base64 -d > "$dir/pin.der" 2>/dev/null &&
+    printf '%s' "$canonical" > "$dir/msg" &&
+    printf '%s' "$signature" | base64 -d > "$dir/sig" 2>/dev/null &&
+    openssl pkeyutl -verify -pubin -inkey "$dir/pin.der" -keyform DER -rawin \
+      -in "$dir/msg" -sigfile "$dir/sig" >/dev/null 2>&1
+  rc=$?
+  rm -f "$dir/pin.der" "$dir/msg" "$dir/sig"; rmdir "$dir" 2>/dev/null
+  return $rc
 }
 
 # O array allowedTasks da config — a única fonte de permissão de execução.
@@ -129,8 +307,10 @@ transcode_formats() {
 }
 
 exec_media_transcode() {
-  local next="$1" task_id="$2" attempt="$3"
+  local next="$1" task_id="$2" attempt="$3" config="${4:-}"
   local payload media_id mime work src dst args a demux mux resp
+  local -a bw=()
+  mapfile -t bw < <(bandwidth_args "$config")
   command -v ffmpeg >/dev/null 2>&1 || {
     fail_task "$task_id" "$attempt" TASK_EXECUTOR_MISSING 'ffmpeg ausente no runtime'; return 0; }
   # O payload chega como string JSON escapada dentro da tarefa: desfaz o escape
@@ -152,7 +332,7 @@ exec_media_transcode() {
   src="$work/source"
   dst="$work/result"
   if ! curl --fail --silent --show-error --connect-timeout 10 --max-time 300 \
-      "${auth_bin[@]}" --output "$src" \
+      "${bw[@]}" "${auth_bin[@]}" --output "$src" \
       "$CONTROL_PLANE/network/media/$media_id/source"; then
     fail_task "$task_id" "$attempt" TRANSCODE_FAILED 'origem não baixada'; return 0
   fi
@@ -169,7 +349,7 @@ exec_media_transcode() {
   # Quem decide é o Control Plane: ele mede o arquivo ENQUANTO grava. O nó declara
   # o que ele devolveu (as medidas dele) — o próprio hash é só fallback de rede.
   if ! resp=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 300 \
-      "${auth_bin[@]}" -H "Content-Type: $mime" --data-binary @"$dst" \
+      "${bw[@]}" "${auth_bin[@]}" -H "Content-Type: $mime" --data-binary @"$dst" \
       -X PUT "$CONTROL_PLANE/network/media/$media_id/result"); then
     fail_task "$task_id" "$attempt" TRANSCODE_FAILED 'upload do resultado falhou'; return 0
   fi
@@ -214,7 +394,14 @@ exec_read_query() {
   local next="$1" task_id="$2" attempt="$3"
   local payload kind after_at after_id pages=0 synced=0 skipped=0 failed=0 removed=0
   local page items has_more next_at next_id id stored_version content version hash body
+  local config="$4" disk_mb disk_cap_bytes
+  local -a bw=()
+  mapfile -t bw < <(bandwidth_args "$config")
   payload=$(task_payload "$next")
+  # Mesmo teto da borda (limits.diskMb da config assinada): réplica e cache dividem
+  # o disco que o participante cedeu — o contador é um só (edge/ + replica/).
+  disk_mb=$(config_disk_mb "$config")
+  disk_cap_bytes=$((disk_mb * 1024 * 1024))
   kind=$(json_field "$payload" kind)
   [[ -n "$kind" ]] || {
     fail_task "$task_id" "$attempt" TASK_PAYLOAD_INVALID 'payload de réplica sem kind'; return 0; }
@@ -259,7 +446,7 @@ exec_read_query() {
       # caso em que o agregado já não existe mais.
       local raw code
       if ! raw=$(curl --silent --show-error --connect-timeout 10 --max-time 60 \
-          -w '\n%{http_code}' "${auth[@]}" "$content_url"); then
+          "${bw[@]}" -w '\n%{http_code}' "${auth[@]}" "$content_url"); then
         failed=$((failed + 1))
         printf '[executor] réplica: item %s/%s ilegível\n' "$kind" "$id" >&2
         continue
@@ -294,6 +481,18 @@ exec_read_query() {
       hash=$(json_field "$content" contentHash)
       # Guarda o corpo e a versão ANTES de confirmar: confirmar o que não está em
       # disco faria a reconciliação acusar o nó por um arquivo que ele nunca teve.
+      # Teto de disco (limits.diskMb): a réplica é catálogo, não cache — evictar
+      # item dela é apagar dado que o nó prometeu ter. Se o corpo não cabe, a
+      # travessia para aqui, o cursor NÃO avança sobre o item não gravado e o
+      # resultado diz por quê: retomar de onde parou é o único jeito de não pular
+      # um agregado em silêncio.
+      if ! disk_make_room "$disk_cap_bytes" "${#body}" ""; then
+        failed=$((failed + 1))
+        printf '[executor] réplica: %s/%s nao cabe no teto de disco declarado\n' "$kind" "$id" >&2
+        result "$task_id" "$attempt" DONE \
+          "{\"kind\":\"$kind\",\"pages\":$pages,\"synced\":$synced,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"complete\":false,\"diskFull\":true}" ''
+        return 0
+      fi
       if ! printf '%s' "$body" > "$cursor_dir/$kind/$safe_id.json"; then
         failed=$((failed + 1)); continue
       fi
@@ -342,6 +541,87 @@ exec_read_query() {
 EDGE_CHANGES_PER_TASK="${EDGE_CHANGES_PER_TASK:-200}"
 EDGE_PAGES_PER_TASK="${EDGE_PAGES_PER_TASK:-5}"
 
+# ---------------- limite de disco declarado (fase 5, gestão de permissões) ----------------
+# O participante declara quantos MB de disco cede (declared/limits.diskMb) e a rede
+# respeita (07-plano-incremental.md, fase 5). O runtime é quem escreve no volume, então
+# é quem faz valer: o teto vale para o ESTADO DE CONTEÚDO (edge/ + replica/), não para
+# a identidade do nó (node.json, api-key, pino) — perder credencial por estouro de
+# conteúdo seria o nó se desligar sozinho.
+config_disk_mb() {
+  # config_disk_mb <config-json>: MB de disco que o participante cedeu; 0 = sem teto.
+  local mb
+  mb=$(json_number "$1" diskMb)
+  [[ -n "$mb" ]] || mb=0
+  printf '%s' "$mb"
+}
+
+bandwidth_args() {
+  # bandwidth_args <config-json>: argumento de limite de taxa do curl, um por linha;
+  # vazio quando o participante não declarou banda (0 = sem teto). O limite declarado
+  # é o que ele aceitou ceder de REDE, e o runtime é quem transfere: baixar corpo de
+  # conteúdo e subir resultado de mídia passam todos pelo mesmo teto, em
+  # --limit-rate. Mbps declarado vira kbytes/s (1 Mbps = 1000/8 = 125 kB/s, o mesmo
+  # que o curl chama de k). Um limite por transferência é o agregado que importa
+  # aqui: o runtime executa UMA tarefa por ciclo, então não há duas transferências
+  # concorrentes competindo pelo mesmo teto.
+  local mbps kbps
+  mbps=$(json_number "$1" bandwidthMbps)
+  [[ -n "$mbps" && "$mbps" != 0 ]] || return 0
+  kbps=$((mbps * 125))
+  printf '%s\n%s\n' --limit-rate "${kbps}k"
+}
+
+content_bytes() {
+  # content_bytes: bytes guardados no ESTADO DE CONTEÚDO do nó (edge/ + replica/).
+  # Contar $NODE_HOME inteiro incluiria node.json, api-key e o pino — credencial não
+  # é conteúdo e não pode ser apagada por estouro de cache.
+  local total=0 size f
+  for f in "$NODE_HOME"/edge/*/*.json "$NODE_HOME"/edge/*/*.version \
+           "$NODE_HOME"/replica/*/*.json "$NODE_HOME"/replica/*/*.version; do
+    [[ -f "$f" ]] || continue
+    size=$(stat -c %s "$f") || continue
+    total=$((total + size))
+  done
+  printf '%s' "$total"
+}
+
+disk_make_room() {
+  # disk_make_room <cap-bytes> <bytes-da-nova-entrada> <arquivo-alvo|"">
+  #
+  # 0 = cabe; 1 = não cabe nem esvaziando o conteúdo. O teto conta o estado de
+  # conteúdo (edge/ + replica/), não a identidade do nó. A entrada alvo (que vai ser
+  # substituída) não entra na conta do que está ocupado: os bytes dela saem quando o
+  # corpo novo entra.
+  #
+  # Só a BORDA é evictável. A réplica é catálogo: o nó prometeu ter aquele agregado,
+  # então apagá-lo para caber conteúdo novo quebraria a promessa em silêncio. Sob
+  # pressão sai cache — a borda se recompõe da origem, a réplica não.
+  # Evicta a mais antiga primeiro (mtime, desempate por nome) porque num cache o que
+  # foi tocado por último é o que tem mais chance de ser pedido de novo.
+  local cap="$1" need="$2" keep="$3" current=0 used f oldest oldest_time time
+  DISK_EVICTED=0
+  (( cap > 0 )) || return 0
+  [[ -n "$keep" && -f "$keep" ]] && current=$(stat -c %s "$keep")
+  used=$(( $(content_bytes) - current ))
+  (( used + need <= cap )) && return 0
+  while (( used + need > cap )); do
+    oldest=''; oldest_time=''
+    for f in "$NODE_HOME"/edge/*/*.json; do
+      [[ -f "$f" && "$f" != "$keep" ]] || continue
+      time=$(stat -c %Y "$f") || continue
+      if [[ -z "$oldest" || "$time" -lt "$oldest_time" \
+          || ( "$time" -eq "$oldest_time" && "$f" < "$oldest" ) ]]; then
+        oldest="$f"; oldest_time="$time"
+      fi
+    done
+    [[ -n "$oldest" ]] || return 1
+    used=$((used - $(stat -c %s "$oldest")))
+    rm -f "$oldest" "${oldest%.json}.version"
+    DISK_EVICTED=$((DISK_EVICTED + 1))
+  done
+  return 0
+}
+
 json_changes() {
   # json_changes <feed>: uma mudança por linha, como seq|kind|contentId|version|hash.
   # "changes" é o último campo do objeto do feed, então o recorte vai da abertura do
@@ -363,11 +643,19 @@ json_changes() {
 exec_edge_cache() {
   local next="$1" task_id="$2" attempt="$3"
   local payload cursor_dir cursor limit feed reset_done=false stalled=false
-  local pages=0 stored=0 skipped=0 removed=0 failed=0
+  local pages=0 stored=0 skipped=0 removed=0 failed=0 evicted=0 dropped=0
   local entries entry seq kind content_id safe_id stored_version content_url raw code content body version hash
   local has_more before
+  local config="$4" disk_mb disk_cap_bytes
+  local -a bw=()
+  mapfile -t bw < <(bandwidth_args "$config")
 
   payload=$(task_payload "$next")
+  # O teto de disco vem da config assinada (limits.diskMb) — a permissão que o
+  # participante cedeu e que a rede respeita. 0 = sem teto declarado (nó sem limite
+  # grava; é o comportamento de quem não declarou restrição, não de quem declarou).
+  disk_mb=$(config_disk_mb "$config")
+  disk_cap_bytes=$((disk_mb * 1024 * 1024))
   # O cursor vive no nó, como o da réplica: o payload pode adiantar um, mas sem ele
   # a tarefa retoma do ponto em que a anterior parou. 0 = nunca sincronizou.
   cursor_dir="$NODE_HOME/edge"
@@ -417,7 +705,7 @@ exec_edge_cache() {
       [[ -n "$stored_version" ]] && content_url="$content_url?version=$stored_version"
       # Uma requisição só, com o status no fim: --fail engoliria o corpo do 404.
       if ! raw=$(curl --silent --show-error --connect-timeout 10 --max-time 60 \
-          -w '\n%{http_code}' "${auth[@]}" "$content_url"); then
+          "${bw[@]}" -w '\n%{http_code}' "${auth[@]}" "$content_url"); then
         failed=$((failed + 1)); stalled=true; break
       fi
       code=$(sed -n '$p' <<<"$raw")
@@ -446,6 +734,19 @@ exec_edge_cache() {
       hash=$(json_field "$content" contentHash)
       # Grava antes de confirmar: confirmar o que não está em disco faria a
       # reconciliação acusar o nó por um arquivo que ele nunca teve.
+      # Teto de disco (limits.diskMb): num cache, evictar o mais antigo para caber o
+      # novo é o comportamento correto — cache completo é cache útil. Se nem vazio o
+      # corpo cabe, aí sim não é cache: a entrada fica fora e o resultado conta isso
+      # como `dropped`, não como `unchanged` — dizer "em dia" sobre o que não está
+      # guardado seria mentira no painel.
+      if ! disk_make_room "$disk_cap_bytes" "${#body}" "$cursor_dir/$kind/$safe_id.json"; then
+        evicted=$((evicted + DISK_EVICTED))
+        dropped=$((dropped + 1)); cursor=$seq
+        printf '%s\n' "$cursor" > "$cursor_dir/cursor"
+        printf '[executor] borda: %s/%s nao cabe no teto de disco declarado\n' "$kind" "$content_id" >&2
+        continue
+      fi
+      evicted=$((evicted + DISK_EVICTED))
       if ! printf '%s' "$body" > "$cursor_dir/$kind/$safe_id.json"; then
         failed=$((failed + 1)); stalled=true; break
       fi
@@ -465,14 +766,14 @@ exec_edge_cache() {
     if [[ "$stalled" == true ]]; then
       printf '[executor] borda: parada em seq=%s (%s falhas)\n' "$cursor" "$failed" >&2
       result "$task_id" "$attempt" DONE \
-        "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"complete\":false,\"cursor\":$cursor}" ''
+        "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"evicted\":$evicted,\"dropped\":$dropped,\"complete\":false,\"cursor\":$cursor}" ''
       return 0
     fi
     if [[ "$has_more" != true ]]; then
       printf '[executor] borda: em dia em seq=%s (%s guardados, %s em dia, %s removidos)\n' \
         "$cursor" "$stored" "$skipped" "$removed"
       result "$task_id" "$attempt" DONE \
-        "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"complete\":true,\"cursor\":$cursor}" ''
+        "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"evicted\":$evicted,\"dropped\":$dropped,\"complete\":true,\"cursor\":$cursor}" ''
       return 0
     fi
     # Sem avanço não há o que pedir de novo: girar sobre a mesma página não converge.
@@ -483,22 +784,130 @@ exec_edge_cache() {
       printf '[executor] borda: orcamento de %s paginas, retomando em seq=%s\n' \
         "$pages" "$cursor"
       result "$task_id" "$attempt" DONE \
-        "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"complete\":false,\"cursor\":$cursor}" ''
+        "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"evicted\":$evicted,\"dropped\":$dropped,\"complete\":false,\"cursor\":$cursor}" ''
       return 0
     fi
   done
 
   result "$task_id" "$attempt" DONE \
-    "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"complete\":false,\"cursor\":$cursor}" ''
+    "{\"pages\":$pages,\"stored\":$stored,\"unchanged\":$skipped,\"removed\":$removed,\"failed\":$failed,\"evicted\":$evicted,\"dropped\":$dropped,\"complete\":false,\"cursor\":$cursor}" ''
+}
+
+# ---------------- executor real: EDGE_DELIVER (entrega verificada) ----------------
+# Pergunta do Control Plane a um nó de borda específico: "você consegue entregar este
+# conteúdo AGORA?". O modelo é pull e o nó NÃO expõe porta — ninguém abre conexão para
+# ele —, então entrega não é servir HTTP: é provar que a entrada do cache existe, está
+# na versão da origem e está reconfirmada em /synced. O veredicto é sobre o que o nó
+# TEM, não sobre o que ele promete: revalidar com ?version= sem reconfirmar atestaria
+# o cache de antes, não o estado agora — por isso /synced é obrigatório nos dois
+# caminhos. Autorização de usuário continua no Control Plane; o nó só atesta capacidade.
+exec_edge_deliver() {
+  local next="$1" task_id="$2" attempt="$3"
+  local payload kind content_id safe_id entry_dir stored_version
+  local content_url raw code content version hash body source verdict
+  local config="$4" disk_mb disk_cap_bytes
+  local -a bw=()
+  mapfile -t bw < <(bandwidth_args "$config")
+
+  payload=$(task_payload "$next")
+  # O teto é o mesmo da borda: entrega rebaixa corpo quando a origem está à frente,
+  # e o que ela grava conta no disco que o participante cedeu.
+  disk_mb=$(config_disk_mb "$config")
+  disk_cap_bytes=$((disk_mb * 1024 * 1024))
+  kind=$(json_field "$payload" kind)
+  content_id=$(json_field "$payload" contentId)
+  [[ -n "$kind" && -n "$content_id" ]] || {
+    fail_task "$task_id" "$attempt" TASK_PAYLOAD_INVALID 'payload de entrega sem kind ou contentId'; return 0; }
+  safe_id=$(printf '%s' "$content_id" | sed 's/ /%20/g')
+  entry_dir="$NODE_HOME/edge/$kind"
+  mkdir -p "$entry_dir"
+
+  stored_version=''
+  [[ -f "$entry_dir/$safe_id.version" ]] && stored_version=$(head -n 1 "$entry_dir/$safe_id.version")
+  content_url="$CONTROL_PLANE/network/content/$kind/$safe_id"
+  [[ -n "$stored_version" ]] && content_url="$content_url?version=$stored_version"
+  # Uma requisição só, com o status no fim: --fail engoliria o corpo do 404.
+  if ! raw=$(curl --silent --show-error --connect-timeout 10 --max-time 60 \
+      "${bw[@]}" -w '\n%{http_code}' "${auth[@]}" "$content_url"); then
+    verdict="{\"kind\":\"$kind\",\"contentId\":\"$content_id\",\"deliverable\":false,\"reason\":\"EDGE_ORIGIN_UNREADABLE\"}"
+    result "$task_id" "$attempt" DONE "$verdict" ''
+    return 0
+  fi
+  code=$(sed -n '$p' <<<"$raw")
+  content=$(sed '$d' <<<"$raw")
+  if [[ "$code" == 404 ]]; then
+    # O agregado sumiu da origem: entregar é impossível e manter o corpo guardado
+    # faria a borda servir o que a vitrine esconde. Veredicto negativo por remoção
+    # alheia é verdade de capacidade, não falha do nó — o nó não é punido por ele.
+    rm -f "$entry_dir/$safe_id.json" "$entry_dir/$safe_id.version"
+    verdict="{\"kind\":\"$kind\",\"contentId\":\"$content_id\",\"deliverable\":false,\"reason\":\"CONTENT_GONE\"}"
+    result "$task_id" "$attempt" DONE "$verdict" ''
+    return 0
+  fi
+  if [[ "$code" != 200 ]]; then
+    verdict="{\"kind\":\"$kind\",\"contentId\":\"$content_id\",\"deliverable\":false,\"reason\":\"EDGE_ORIGIN_UNREADABLE\"}"
+    result "$task_id" "$attempt" DONE "$verdict" ''
+    return 0
+  fi
+
+  if [[ "$(json_flag "$content" changed)" == false ]]; then
+    # Em dia: a entrada que o nó tem É a versão da origem. A confirmação ainda vai —
+    # é ela que deixa o veredicto conferível pelo Control Plane (snapshot do lado de lá).
+    version="$stored_version"
+    hash=$(json_field "$content" contentHash)
+    source="cache"
+  else
+    body=$(json_last_string "$content" body)
+    if [[ -z "$body" ]]; then
+      verdict="{\"kind\":\"$kind\",\"contentId\":\"$content_id\",\"deliverable\":false,\"reason\":\"EDGE_ORIGIN_UNREADABLE\"}"
+      result "$task_id" "$attempt" DONE "$verdict" ''
+      return 0
+    fi
+    version=$(json_number "$content" version)
+    hash=$(json_field "$content" contentHash)
+    # Grava antes de confirmar, como no EDGE_CACHE: atestar o que não está em disco
+    # é declaração sem lastro. O teto de disco vale aqui igual: entrada de borda é
+    # cache, então evictar o mais antigo para caber o novo é o certo.
+    if ! disk_make_room "$disk_cap_bytes" "${#body}" "$entry_dir/$safe_id.json"; then
+      verdict="{\"kind\":\"$kind\",\"contentId\":\"$content_id\",\"deliverable\":false,\"reason\":\"EDGE_DISK_FAILED\"}"
+      result "$task_id" "$attempt" DONE "$verdict" ''
+      return 0
+    fi
+    if ! printf '%s' "$body" > "$entry_dir/$safe_id.json"; then
+      verdict="{\"kind\":\"$kind\",\"contentId\":\"$content_id\",\"deliverable\":false,\"reason\":\"EDGE_DISK_FAILED\"}"
+      result "$task_id" "$attempt" DONE "$verdict" ''
+      return 0
+    fi
+    printf '%s\n' "$version" > "$entry_dir/$safe_id.version"
+    source="refetched"
+  fi
+  if ! curl --fail --silent --show-error --connect-timeout 10 --max-time 60 \
+      "${auth[@]}" -d "{\"sourceVersion\":$version,\"contentHash\":\"$hash\"}" \
+      "$CONTROL_PLANE/network/content/$kind/$safe_id/synced" >/dev/null; then
+    verdict="{\"kind\":\"$kind\",\"contentId\":\"$content_id\",\"deliverable\":false,\"reason\":\"EDGE_CONFIRM_FAILED\"}"
+    result "$task_id" "$attempt" DONE "$verdict" ''
+    return 0
+  fi
+  verdict="{\"kind\":\"$kind\",\"contentId\":\"$content_id\",\"version\":$version,\"contentHash\":\"$hash\",\"deliverable\":true,\"source\":\"$source\"}"
+  result "$task_id" "$attempt" DONE "$verdict" ''
+  printf '[executor] entrega %s/%s v%s verificada (%s)\n' "$kind" "$content_id" "$version" "$source"
 }
 
 cycle() {
   # 1. heartbeat: estado, modo e se pode pedir tarefa.
-  local hb mode accept_tasks observed_cpu observed_mem
+  local hb mode accept_tasks observed_cpu observed_mem observed_term term_part
   observed_cpu=$(awk 'NR==1 {printf "%.1f", $1}' /proc/loadavg 2>/dev/null || echo 0)
   observed_mem=$(awk '/MemAvailable/ {printf "%d", ($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+  # O termo aceito vai no heartbeat (doc 06 §4, regra 5): é assim que o Control Plane
+  # descobre que este nó viu um controlador de mando maior que o dele. Nó que ainda não
+  # aceitou config nenhuma não reporta termo — zero afirmaria "vi o termo zero", que é
+  # diferente de não ter visto termo nenhum.
+  observed_term=''
+  [[ -s "$NODE_HOME/term" ]] && observed_term=$(head -n 1 "$NODE_HOME/term")
+  term_part=''
+  [[ -n "$observed_term" ]] && term_part=",\"observedTerm\":$observed_term"
   hb=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
-    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"memoryMb\":$observed_mem,\"runningTasks\":0}}" \
+    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"memoryMb\":$observed_mem,\"runningTasks\":0}$term_part}" \
     "$CONTROL_PLANE/network/nodes/heartbeat") || { printf '[executor] heartbeat falhou\n' >&2; return 1; }
   mode=$(json_field "$hb" mode)
   accept_tasks=$(grep -q '"acceptTasks":true' <<<"$hb" && echo true || echo false)
@@ -529,9 +938,10 @@ cycle() {
   # 5. executor por perfil: a config assinada autoriza; o que não está nela é recusado.
   if grep -q "\"$task_type\"" <<<"[$allowed]"; then
     case "$task_type" in
-      MEDIA_TRANSCODE) exec_media_transcode "$next" "$task_id" "${attempt:-1}" ;;
-      READ_QUERY) exec_read_query "$next" "$task_id" "${attempt:-1}" ;;
-      EDGE_CACHE) exec_edge_cache "$next" "$task_id" "${attempt:-1}" ;;
+      MEDIA_TRANSCODE) exec_media_transcode "$next" "$task_id" "${attempt:-1}" "$config" ;;
+      READ_QUERY) exec_read_query "$next" "$task_id" "${attempt:-1}" "$config" ;;
+      EDGE_CACHE) exec_edge_cache "$next" "$task_id" "${attempt:-1}" "$config" ;;
+      EDGE_DELIVER) exec_edge_deliver "$next" "$task_id" "${attempt:-1}" "$config" ;;
       *)
         # Prova de ciclo de vida: eco do idempotencyKey como output. Conteúdo de usuário
         # (HTML, CSS, KofScript) NUNCA executa aqui — continua nos sandboxes próprios.

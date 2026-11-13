@@ -17,6 +17,7 @@ import java.util.Set;
 
 import org.junit.jupiter.api.Test;
 
+import com.socialcoisa.rede.network.application.port.out.NetworkAuthorityRepository;
 import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NodeProfile;
@@ -56,8 +57,50 @@ class NetworkConfigServiceTests {
 
 	private static NetworkConfigService service(String signingKey, String publicKey,
 			NetworkNodeRepository.ConfigStamp stamp) {
+		return service(signingKey, publicKey, stamp, 0, 300);
+	}
+
+	private static NetworkConfigService service(String signingKey, String publicKey,
+			NetworkNodeRepository.ConfigStamp stamp, int term) {
+		return service(signingKey, publicKey, stamp, term, 300);
+	}
+
+	private static NetworkConfigService service(String signingKey, String publicKey,
+			NetworkNodeRepository.ConfigStamp stamp, int term, int ttlSeconds) {
 		var repository = new StubRepository(stamp);
-		return new NetworkConfigService(Clock.systemUTC(), repository, signingKey, publicKey);
+		NetworkAuthorityRepository authorities = new NetworkAuthorityRepository() {
+			@Override
+			public java.util.Optional<AuthorityRecord> current() {
+				return java.util.Optional.of(new AuthorityRecord(term, term == 0 ? null : "cp-" + term, null));
+			}
+
+			@Override
+			public boolean promote(String authorityId, int expectedTerm, int nextTerm, Instant now) {
+				throw new UnsupportedOperationException("leitura de config nao promove");
+			}
+
+			@Override
+			public java.util.List<String> declared() {
+				return java.util.List.of();
+			}
+
+			@Override
+			public void declare(String instanceId, String actorId, Instant now) {
+				throw new UnsupportedOperationException("leitura de config nao declara autoridade");
+			}
+
+			@Override
+			public boolean revoke(String instanceId) {
+				throw new UnsupportedOperationException("leitura de config nao revoga autoridade");
+			}
+
+			@Override
+			public java.util.Set<String> aliveSince(Instant threshold) {
+				return java.util.Set.of();
+			}
+		};
+		return new NetworkConfigService(Clock.systemUTC(), repository, authorities, signingKey, publicKey,
+			ttlSeconds);
 	}
 
 	private static NetworkNode node(NodeStatus status, Set<NodeProfile> profiles) {
@@ -85,11 +128,31 @@ class NetworkConfigServiceTests {
 			.generatePublic(new java.security.spec.X509EncodedKeySpec(Base64.getDecoder().decode(view.publicKey())));
 		var fields = new NetworkConfigSigner.SignedFields(view.formatVersion(), view.configVersion(), view.nodeId(),
 			view.profiles(), view.limits().cpuCores(), view.limits().memoryMb(), view.limits().diskMb(),
-			view.limits().bandwidthMbps(), view.allowedTasks(), view.issuedAt());
+			view.limits().bandwidthMbps(), view.allowedTasks(), view.issuedAt(), view.ttlSeconds(), view.term());
 		Signature verifier = Signature.getInstance("Ed25519");
 		verifier.initVerify(pin);
 		verifier.update(fields.canonical().getBytes(StandardCharsets.UTF_8));
 		assertThat(verifier.verify(Base64.getDecoder().decode(view.signature()))).isTrue();
+	}
+
+	/**
+	 * O termo está DENTRO da linha assinada: promover muda o documento e muda a assinatura. Se ele
+	 * ficasse só no JSON, quem forjasse a resposta trocaria o número e a regra do nó ("termo só sobe")
+	 * viraria decoração — o nó não teria como saber qual termo a autoridade de fato assinou.
+	 */
+	@Test
+	void termoEntraNaLinhaAssinadaENaoSoNoPayload() {
+		String signatureKey = base64(pair.getPrivate().getEncoded());
+		String publicKey = base64(pair.getPublic().getEncoded());
+		var stamp = new NetworkNodeRepository.ConfigStamp(3, Instant.parse("2026-11-12T10:00:00Z"));
+
+		var termo1 = service(signatureKey, publicKey, stamp, 1).forNode(node(NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_MEDIA)));
+		var termo2 = service(signatureKey, publicKey, stamp, 2).forNode(node(NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_MEDIA)));
+
+		assertThat(termo1.term()).isEqualTo(1);
+		assertThat(termo2.term()).isEqualTo(2);
+		// Mesmo carimbo, mesmas permissões, mesmo relógio: só o termo difere, e a assinatura difere.
+		assertThat(termo2.signature()).isNotEqualTo(termo1.signature());
 	}
 
 	@Test
@@ -159,6 +222,40 @@ class NetworkConfigServiceTests {
 		// NODE_LOCAL cobre todos; a ordem é a da declaração do enum, estável para o runtime comparar.
 		assertThat(view.allowedTasks()).containsExactly("EDGE_CACHE", "EDGE_DELIVER", "ASYNC_JOB", "MEDIA_TRANSCODE",
 			"MEDIA_THUMBNAIL", "READ_QUERY", "API_REQUEST");
+	}
+
+	/**
+	 * O prazo de validade está DENTRO da linha assinada, no formato 3. Se ficasse só no payload, quem
+	 * forjasse a resposta prolongaria indefinidamente uma config velha — e o cenário "Control Plane
+	 * fora por mais que o TTL" (doc 06 §6) viraria decoração: o nó seguiria com a permissão para
+	 * sempre sem nunca saber que o mando venceu.
+	 */
+	@Test
+	void ttlEntraNaLinhaAssinadaENaoSoNoPayload() {
+		String signatureKey = base64(pair.getPrivate().getEncoded());
+		String publicKey = base64(pair.getPublic().getEncoded());
+		var stamp = new NetworkNodeRepository.ConfigStamp(3, Instant.parse("2026-11-12T10:00:00Z"));
+
+		var curto = service(signatureKey, publicKey, stamp, 1, 300).forNode(node(NodeStatus.ACTIVE,
+			Set.of(NodeProfile.NODE_MEDIA)));
+		var longo = service(signatureKey, publicKey, stamp, 1, 3600).forNode(node(NodeStatus.ACTIVE,
+			Set.of(NodeProfile.NODE_MEDIA)));
+
+		assertThat(curto.ttlSeconds()).isEqualTo(300);
+		assertThat(longo.ttlSeconds()).isEqualTo(3600);
+		// Mesmo carimbo, mesmas permissões, mesmo termo: só o TTL difere, e a assinatura difere.
+		assertThat(longo.signature()).isNotEqualTo(curto.signature());
+	}
+
+	/** TTL configurado zero ou negativo venceria a config no instante do nascimento: piso em 300s. */
+	@Test
+	void ttlInvalidoRecaiNoPisoDeTrezentosSegundos() {
+		var service = service("", "", new NetworkNodeRepository.ConfigStamp(1, Instant.parse("2026-11-12T10:00:00Z")),
+			0, 0);
+
+		var view = service.forNode(node(NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_MEDIA)));
+
+		assertThat(view.ttlSeconds()).isEqualTo(300);
 	}
 
 	/** Só o que o serviço usa: o carimbo. Qualquer outra consulta é defeito, não conveniência. */

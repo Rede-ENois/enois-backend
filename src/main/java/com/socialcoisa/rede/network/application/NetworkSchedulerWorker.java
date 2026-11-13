@@ -49,11 +49,15 @@ class NetworkSchedulerWorker {
 			// Drenar vem antes de designar: tarefa presa a nó suspenso tem de voltar para a fila nesta
 			// rodada, senão espera o claim TTL inteiro por um resultado que não vem.
 			int drained = tasks.drainSuspendedNodes();
+			// Drenagem regional vem junto e antes de designar: é a outra metade da evacuação — a
+			// primeira impede a tarefa NOVA, esta devolve a que já estava na mão dos nós da região.
+			int evacuated = tasks.drainEvacuatedRegions();
 			int reclaimed = tasks.reclaimAbandoned(clock.instant());
 			int dispatched = tasks.dispatchPending();
 			modes.evaluate();
-			if (drained > 0 || reclaimed > 0 || dispatched > 0) {
-				LOG.debug("Scheduler: {} drenadas, {} recuperadas, {} designadas", drained, reclaimed, dispatched);
+			if (drained > 0 || evacuated > 0 || reclaimed > 0 || dispatched > 0) {
+				LOG.debug("Scheduler: {} drenadas, {} evacuadas, {} recuperadas, {} designadas", drained,
+					evacuated, reclaimed, dispatched);
 			}
 		}
 		catch (RuntimeException exception) {

@@ -26,20 +26,27 @@ interface SpringDataNetworkNodeJpaRepository extends JpaRepository<NetworkNodeJp
 	 * velha para sempre.
 	 */
 
-	@Modifying
+	/*
+	 * clearAutomatically nas transições e nas duas operações de quarentena: o chamador SEMPRE relê o
+	 * nó logo depois — o heartbeat devolve o estado, a aprovação devolve a view, o despacho lê a
+	 * saúde. Sem limpar, a releitura vem do contexto de persistência e traz a linha ANTERIOR ao
+	 * UPDATE: um nó recém-quarentenado continuaria lendo como ACTIVE dentro da mesma transação e
+	 * receberia tarefa justamente no ciclo em que o conflito foi detectado.
+	 */
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
 	@Query("update NetworkNodeJpaEntity n set n.status = :status, n.approvedBy = :actor, n.approvedAt = :now, "
 			+ "n.configVersion = n.configVersion + 1, n.configIssuedAt = :now "
 			+ "where n.id = :id and n.status <> 'REVOKED'")
 	int approve(@Param("id") String id, @Param("status") String status, @Param("actor") String actor,
 			@Param("now") Instant now);
 
-	@Modifying
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
 	@Query("update NetworkNodeJpaEntity n set n.status = :status, n.revokedAt = :now, "
 			+ "n.configVersion = n.configVersion + 1, n.configIssuedAt = :now "
 			+ "where n.id = :id and n.status <> 'REVOKED'")
 	int revoke(@Param("id") String id, @Param("status") String status, @Param("now") Instant now);
 
-	@Modifying
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
 	@Query("update NetworkNodeJpaEntity n set n.status = :status, n.configVersion = n.configVersion + 1, "
 			+ "n.configIssuedAt = :now where n.id = :id and n.status <> 'REVOKED'")
 	int changeStatus(@Param("id") String id, @Param("status") String status, @Param("now") Instant now);
@@ -87,12 +94,12 @@ interface SpringDataNetworkNodeJpaRepository extends JpaRepository<NetworkNodeJp
 			+ "where n.id = :id")
 	int recordOutcome(@Param("id") String id, @Param("success") boolean success, @Param("latency") Long latency);
 
-	@Modifying
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
 	@Query("update NetworkNodeJpaEntity n set n.quarantinedUntil = :until, n.quarantineReason = :reason "
 			+ "where n.id = :id")
 	int quarantine(@Param("id") String id, @Param("reason") String reason, @Param("until") Instant until);
 
-	@Modifying
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
 	@Query("update NetworkNodeJpaEntity n set n.quarantinedUntil = null, n.quarantineReason = null, "
 			+ "n.consecutiveFailures = 0 where n.id = :id")
 	int release(@Param("id") String id);

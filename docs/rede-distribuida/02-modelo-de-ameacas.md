@@ -54,6 +54,7 @@ prioridade de escalonamento, não permissão extra.
 | ler credencial do banco | o nó nunca recebe uma; não existe caminho de rede para o banco |
 | forjar identidade de outro nó | certificado individual + mTLS; a chave de um nó não autentica outro |
 | alterar as próprias permissões | permissão é dado do Control Plane; o nó só lê a config assinada |
+| seguir executando depois de revogado, sem falar com o Control Plane | a config assinada tem validade (`ttlSeconds`, ADR-018); passado o prazo sem revalidar, o nó para de pedir tarefa e drena |
 | reutilizar token de provisionamento | token é de uso único e consumido no enroll |
 | replay de requisição capturada | nonce + timestamp + request id, janela curta |
 | executar tarefa de outro nó | tarefa é endereçada ao nó designado e assinada |
@@ -87,7 +88,12 @@ prioridade de escalonamento, não permissão extra.
 ### Identidade e comunicação
 - mTLS entre nó e Control Plane; certificado individual por nó.
 - Rotação automática; revogação imediata (negação no próximo handshake).
-- Configuração distribuída **assinada**; nó recusa config sem assinatura válida.
+- Configuração distribuída **assinada**; nó recusa config sem assinatura válida — e a recusa é
+  **verificada**, não declarada: o runtime reconstrói a linha canônica e confere a assinatura
+  Ed25519 com openssl contra o X.509 **pinado** no enroll. Um Control Plane comprometido ou um
+  proxy no caminho pode alterar `limits`/`allowedTasks` e copiar o campo `publicKey` do pino
+  (a string viaja no mesmo corpo), mas não produz assinatura válida do pino — **entregue**
+  ([04 §6.1](04-identidade-e-autorizacao.md)).
 - Anti-replay: nonce, timestamp, request id.
 
 ### Isolamento

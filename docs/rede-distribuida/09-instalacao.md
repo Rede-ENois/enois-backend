@@ -31,9 +31,10 @@ qualquer container: subir um nó com chave revogada só criaria um loop de erro.
 
 ### 1.1 O pino da config assinada (TOFU)
 
-A chave pública que assina a config é pinada em `$NODE_HOME/pinning-key` e o
-runtime recusa qualquer config assinada com outra chave — inclusive depois de uma
-rotação silenciosa no Control Plane. O pino é gravado **uma única vez**:
+A chave pública que assina a config é pinada em `$NODE_HOME/pinning-key`, e é
+**contra ela** que o runtime verifica a assinatura de cada config (não contra o
+campo `publicKey` do corpo); config assinada por outra chave é recusada, inclusive
+depois de uma rotação silenciosa no Control Plane. O pino é gravado **uma única vez**:
 
 - **no enroll**, quando a config já traz `publicKey` (nó com chave de configuração
   ativa do lado do Control Plane);
@@ -81,12 +82,24 @@ Sai 0 quando não há FAIL; WARN não impede a operação. Nunca imprime a API k
 O container roda o loop do nó, não o jar (o jar é o Control Plane). Cada ciclo:
 
 1. **heartbeat** com capacidade observada — a resposta traz o modo operacional e
-   `acceptTasks`;
-2. **drenar é não pedir**: `acceptTasks:false` (DEGRADED/EMERGENCY) encerra o ciclo
-   sem consultar a fila;
+   `acceptTasks`. O corpo leva também `observedTerm`, o último termo de autoridade
+   aceito (`$NODE_HOME/term`): é por ele que o Control Plane detecta que este nó viu
+   um mando maior que o vigente e o põe em quarentena (doc 06 §4.2). Nó que nunca
+   aceitou config não manda o campo;
+2. **drenar é não pedir**: `acceptTasks:false` (DEGRADED/EMERGENCY, ou o próprio nó
+   fora de operação) encerra o ciclo sem consultar a fila;
 3. **config assinada**: recusa config sem assinatura (padrão do runtime) e confere
-   `publicKey` contra o pino gravado no enroll ou no primeiro `--start`
-   (`$NODE_HOME/pinning-key`); sem pino, recusa toda config;
+   o campo `publicKey` contra o pino gravado no enroll ou no primeiro `--start`
+   (`$NODE_HOME/pinning-key`); sem pino, recusa toda config. Depois **verifica a
+   assinatura Ed25519**: reconstrói a linha canônica do corpo recebido e roda
+   `openssl pkeyutl -verify -rawin` contra o X.509 do pino (base64 → DER). O campo
+   `publicKey` viaja no mesmo corpo que a permissão, então comparar só ele provaria
+   que quem mandou sabe copiar uma string; a assinatura é a prova. Falha fechada:
+   openssl ausente, pino ilegível, campo assinado faltando ou assinatura que não
+   confere — o ciclo termina sem pedir tarefa. O **termo da autoridade** entra na
+   mesma linha assinada (formato 2) e o runtime guarda o maior já aceito em
+   `$NODE_HOME/term`: config de termo menor é recusada como autoridade deposta
+   (doc 06 §4), e o termo recusado não rebaixa o registro local;
 4. **poll** (`GET /network/tasks/next`) — uma tarefa por ciclo;
 5. **executa só o que a config assinada autoriza** (`allowedTasks`): autorizada vai
    para o executor do tipo; fora da lista vira `FAILED` com `TASK_NOT_ALLOWED` — o
@@ -184,8 +197,29 @@ têm cursores diferentes; por janela, porque o mesmo nó precisa de trabalho nov
 depois de consumir o feed. Um pedido repetido na mesma janela devolve a tarefa
 existente.
 
-Os demais tipos (`EDGE_DELIVER`, `API_REQUEST`) continuam em prova
-de ciclo de vida (eco do `idempotencyKey`).
+**`EDGE_DELIVER`: entrega verificada, não ouvinte HTTP.** O nó não expõe porta
+(§2), então "entregar" não é servir: é o Control Plane perguntar a um nó de
+borda específico *"você entrega este conteúdo agora?"* e receber um veredicto
+sobre o que aquele nó **tem**. O executor lê `kind` e `contentId` do payload,
+revalida a entrada do cache com `GET /network/content/{kind}/{id}?version=`,
+guarda o corpo novo (quando há) **antes** de confirmar, reconfirma em
+`/synced` e conclui com
+`{"kind":…,"contentId":…,"version":…,"contentHash":…,"deliverable":true,"source":"cache|refetched"}`.
+A reconfirmação é obrigatória nos dois caminhos: sem ela o veredicto atestaria
+o cache de antes, não o estado agora. 404 vira veredicto negativo
+(`CONTENT_GONE`) e descarta a entrada local — entregar o que a origem esconde é
+impossível em qualquer nó, e veredicto negativo por remoção alheia não é falha
+do executor.
+
+Do lado do Control Plane, `POST /admin/network/nodes/{nodeId}/edge-deliver?kind=&contentId=`
+enfileira a tarefa **com alvo** (o corpo verificado é o do cache daquele nó) e
+o veredicto é conferido contra o snapshot que o próprio nó gravou em `/synced`:
+veredicto positivo sem confirmação é recusado (`EDGE_DELIVER_UNCONFIRMED`), e
+versão ou hash diferentes do confirmado também (`EDGE_DELIVER_MISMATCH`,
+retentável). A declaração do nó nunca é aceita por si só.
+
+O único tipo ainda em prova de ciclo de vida (eco do `idempotencyKey`) é
+`API_REQUEST`.
 Conteúdo de usuário (HTML, CSS, KofScript) **nunca** executa no nó — continua nos
 sandboxes próprios (02-modelo-de-ameacas.md). O script é montado no container
 (`/node-runtime.sh:ro`); a imagem do runtime se troca por `install.sh --update`
@@ -199,6 +233,7 @@ verificada.
 | `$NODE_HOME/node.json` | resposta do enroll (`nodeId`, estado) | 600 |
 | `$NODE_HOME/api-key` | a API key do nó em claro — único lugar | 600 |
 | `$NODE_HOME/pinning-key` | a chave pública do Control Plane, pinada no enroll ou no primeiro `--start` | 600 |
+| `$NODE_HOME/term` | o maior `term` de autoridade já aceito — config de termo menor é recusada | 600 |
 | `$NODE_HOME/image-pubkey` | a chave pública que assina as imagens do runtime (cosign) — sem ela não há `--update` | 600 |
 | `$NODE_HOME/runtime-image` | o digest verificado em uso (`repo@sha256:…`), não a tag | 600 |
 | `$NODE_HOME/runtime-image.previous` | o digest anterior, para `--rollback` | 600 |
@@ -266,13 +301,19 @@ e preserva o atual; digest não verificável é recusado.
 
 ## 7. O que ainda não está aqui
 
-- **Executores de trabalho real por perfil**: três já executam de verdade no nó —
+- **Executores de trabalho real por perfil**: quatro já executam de verdade no nó —
   `MEDIA_TRANSCODE` (receita do Control Plane, resultado verificado por tamanho e
-  hash), `READ_QUERY` (travessia do catálogo da réplica com corpo e confirmação) e
-  `EDGE_CACHE` (consumo do feed de mudanças com corpo baixado e confirmado),
-  68 asserções em `scripts/tests/node-executor-test.sh`. Faltam
-  `EDGE_DELIVER` (NODE_EDGE) e `API_REQUEST` (NODE_API), que hoje caem
-  no eco de ciclo de vida.
+  hash), `READ_QUERY` (travessia do catálogo da réplica com corpo e confirmação),
+  `EDGE_CACHE` (consumo do feed de mudanças com corpo baixado e confirmado) e
+  `EDGE_DELIVER` (revalidação da entrada e veredicto de entrega conferido contra
+  o snapshot do nó), 112 asserções em `scripts/tests/node-executor-test.sh`.
+  Falta `API_REQUEST` (NODE_API), que hoje cai no eco de ciclo de vida.
+- **Banda compartilhada entre execuções concorrentes**: o teto declarado
+  (`limits.bandwidthMbps`) já vale como `curl --limit-rate` em cada transferência de
+  corpo do runtime. Hoje o runtime executa uma tarefa por ciclo, então limitar cada
+  transferência limita o nó; se o ciclo passar a executar em paralelo, o limite tem
+  de virar taxa compartilhada — senão N tarefas concorrentes multiplicariam a banda
+  que o participante cedeu por N.
 - **Publicação das imagens assinadas**: o verificador está pronto e testado; o
   pipeline que constrói e assina as imagens do runtime (`cosign sign`) entra com
   o registro de imagens da rede.

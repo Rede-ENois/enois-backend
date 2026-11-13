@@ -15,6 +15,7 @@ import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
 import com.socialcoisa.rede.network.domain.DataClass;
 import com.socialcoisa.rede.network.domain.NetworkNode;
+import com.socialcoisa.rede.network.domain.NetworkRegions;
 import com.socialcoisa.rede.network.domain.NetworkTask;
 import com.socialcoisa.rede.network.domain.NodeProfile;
 import com.socialcoisa.rede.network.domain.TaskType;
@@ -57,18 +58,20 @@ public class EdgeCacheService {
 	private final NetworkTaskService tasks;
 	private final NetworkTaskRepository taskRepository;
 	private final NetworkNodeRepository nodes;
+	private final NetworkRegionService regions;
 	private final AuditTrail audit;
 	private final Clock clock;
 	private final int windowMinutes;
 	private final int deadlineMinutes;
 
 	EdgeCacheService(NetworkTaskService tasks, NetworkTaskRepository taskRepository, NetworkNodeRepository nodes,
-			AuditTrail audit, Clock clock,
+			NetworkRegionService regions, AuditTrail audit, Clock clock,
 			@Value("${rede.network.edge.cache.window-minutes:10}") int windowMinutes,
 			@Value("${rede.network.edge.cache.deadline-minutes:30}") int deadlineMinutes) {
 		this.tasks = tasks;
 		this.taskRepository = taskRepository;
 		this.nodes = nodes;
+		this.regions = regions;
 		this.audit = audit;
 		this.clock = clock;
 		this.windowMinutes = Math.max(1, windowMinutes);
@@ -96,6 +99,13 @@ public class EdgeCacheService {
 		if (!node.status().canOperate()) {
 			throw new ApiException(409, "NODE_NOT_OPERABLE", "No fora de operacao nao executa tarefa.");
 		}
+		// Região evacuada: o nó está ACTIVE e autentica, mas a região não opera. Enfileirar aqui
+		// criaria trabalho com alvo que só sai da fila no prazo — a tarefa não pode rodar em outro nó
+		// (o cursor do cache é dele) e não vai rodar no dele enquanto a região estiver fora.
+		if (NetworkRegions.outOfService(regions.outOfService(), node.region())) {
+			throw new ApiException(409, "NODE_REGION_OUT_OF_SERVICE",
+				"Regiao do no fora de operacao: o cache volta quando a regiao voltar.");
+		}
 		NetworkTask task = enqueueFor(node, clock.instant(), "admin");
 		audit.record(actorId, "NETWORK_EDGE_CACHE_REQUESTED", node.id(),
 			"{\"taskId\":\"" + task.id() + "\",\"limit\":" + DEFAULT_LIMIT + "}");
@@ -115,8 +125,13 @@ public class EdgeCacheService {
 	public int sweep() {
 		Instant now = clock.instant();
 		int created = 0;
+		List<String> evacuated = regions.outOfService();
 		for (NetworkNode node : nodes.findCandidates(now.minus(java.time.Duration.ofMinutes(5)), 200)) {
 			if (!node.profiles().contains(NodeProfile.NODE_EDGE) && !node.profiles().contains(NodeProfile.NODE_LOCAL)) {
+				continue;
+			}
+			// Região evacuada não recebe pedido novo: a tarefa tem alvo e ficaria na fila até o prazo.
+			if (NetworkRegions.outOfService(evacuated, node.region())) {
 				continue;
 			}
 			if (taskRepository.countOpenTargeted(node.id(), now) > 0) {

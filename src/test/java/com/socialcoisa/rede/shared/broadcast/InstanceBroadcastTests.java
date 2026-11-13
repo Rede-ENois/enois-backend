@@ -31,9 +31,10 @@ import tools.jackson.databind.ObjectMapper;
  * Broadcast entre instâncias: o que uma instância emite chega no estado local das outras.
  *
  * <p>Aqui a "outra instância" é simulada pelo que ela deixa no banco — um sinal com
- * {@code origin_instance} diferente do id desta. É o mesmo contrato que duas instâncias reais
- * cumprem: quem emite grava, quem lê entrega no próprio estado. Testar com dois contextos Spring
- * custaria a suíte inteira duas vezes e não provaria nada além disso.</p>
+ * {@code origin_instance} diferente do id desta. Isso isola o <b>consumidor</b>: stream, cache por
+ * chave, isolamento entre usuários e a regra de não reentregar o próprio sinal. O <b>emissor</b>
+ * não é exercitado aqui — quem cobre o caminho de produção completo, com emissor, poller e cache
+ * de uma segunda instância real sobre a mesma tabela, é {@code TwoInstancesBroadcastTests}.</p>
  */
 @SpringBootTest
 @AutoConfigureMockMvc

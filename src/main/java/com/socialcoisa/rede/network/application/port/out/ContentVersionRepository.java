@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.network.application.port.out;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -36,8 +37,12 @@ public interface ContentVersionRepository {
 	 * Os snapshots que a varredura deve conferir agora, de todos os nós: os nunca conferidos
 	 * primeiro, depois os conferidos há mais tempo. É o que faz a cobertura ser justa — um nó com
 	 * milhares de agregados é coberto em rodadas, e não sempre os mesmos primeiros.
+	 *
+	 * @param evacuatedRegions regiões declaradas fora de operação; o snapshot de nó delas fica fora
+	 * da fila, porque conferir um nó que a própria rede tirou de operação acusaria o nó por uma
+	 * decisão do Control Plane (a região saiu, o nó não divergiu)
 	 */
-	List<NodeSnapshot> dueForCheck(int limit);
+	List<NodeSnapshot> dueForCheck(Collection<String> evacuatedRegions, int limit);
 
 	/**
 	 * Grava o resultado da conferência, condicionado ao motivo anterior.
@@ -92,6 +97,35 @@ public interface ContentVersionRepository {
 
 	/** Remove as posições informadas. Devolve quantas saíram. */
 	int deleteChanges(List<Long> seqs);
+
+	/**
+	 * Quantas regiões distintas têm, agora, uma cópia utilizável de cada tipo de conteúdo.
+	 *
+	 * <p>É a medida que separa "replicado" de "replicado <b>geograficamente</b>": uma dúzia de nós de
+	 * borda no mesmo rack tem doze cópias e uma região só. A conta olha apenas nó operável — ACTIVE,
+	 * com heartbeat recente e <b>não</b> de região fora de operação —, porque a cópia de um nó que a
+	 * rede tirou de operação não cobre nada.</p>
+	 *
+	 * <p>Nó sem região declarada conta como uma região própria identificada por {@code ""}: ele tem
+	 * cópia, e ignorá-lo faria o painel subnotificar cobertura em rede que não usa o campo. É leitura
+	 * de painel, não decisão de despacho.</p>
+	 *
+	 * @param evacuatedRegions regiões declaradas fora de operação; o nó delas não conta
+	 * @param aliveSince corte de heartbeat: nó que parou de bater não cobre região nenhuma
+	 */
+	List<RegionCoverage> coverage(Collection<String> evacuatedRegions, Instant aliveSince);
+
+	/**
+	 * Cobertura de um tipo de conteúdo: em quantas regiões ele tem cópia, e quantas regiões a rede
+	 * tem ao todo para comparar.
+	 *
+	 * @param kind tipo do conteúdo (a allowlist)
+	 * @param regionsWithCopy regiões com pelo menos um nó operável que confirmou ter este tipo
+	 * @param totalRegions regiões com pelo menos um nó operável, do mesmo universo usado acima
+	 * @param copies quantos nós confirmaram ter este tipo (a redundância dentro da cobertura)
+	 */
+	record RegionCoverage(ContentKind kind, long regionsWithCopy, long totalRegions, long copies) {
+	}
 
 	/**
 	 * @param contentHash sha-256 hex do corpo servido, para a reconciliação comparar byte a byte

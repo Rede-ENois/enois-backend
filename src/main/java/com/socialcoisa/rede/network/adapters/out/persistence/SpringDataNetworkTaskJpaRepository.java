@@ -79,6 +79,29 @@ interface SpringDataNetworkTaskJpaRepository extends JpaRepository<NetworkTaskJp
 			+ "where t.status = 'DISPATCHED' and t.claimExpiresAt > :now and n.status <> 'ACTIVE'")
 	long countOnNonOperatingNodes(@Param("now") Instant now);
 
+	/**
+	 * Tarefas designadas a nós de regiões declaradas fora de operação (V289), com claim vigente.
+	 *
+	 * <p>A diferença em relação a {@link #findOnNonOperatingNodes} é o critério, e é a razão de a
+	 * consulta existir: lá o nó está fora porque o STATUS dele diz isso; aqui o nó está
+	 * {@code ACTIVE} e quem caiu foi a região inteira. Sem esta leitura, a evacuação só impediria
+	 * tarefa NOVA — o que já estava na mão dos nós da região esperaria o claim vencer.</p>
+	 *
+	 * <p>{@code lower(trim(...))} porque o banco guarda a grafia que o participante declarou e a
+	 * declaração é normalizada na aplicação; a comparação precisa acontecer na mesma forma dos dois
+	 * lados.</p>
+	 */
+	@Query("select t from NetworkTaskJpaEntity t join NetworkNodeJpaEntity n on n.id = t.assignedNodeId "
+			+ "where t.status = 'DISPATCHED' and t.claimExpiresAt > :now "
+			+ "and lower(trim(n.region)) in :regions order by t.createdAt asc")
+	List<NetworkTaskJpaEntity> findOnEvacuatedRegions(@Param("regions") Collection<String> regions,
+			@Param("now") Instant now, PageRequest page);
+
+	@Query("select count(*) from NetworkTaskJpaEntity t join NetworkNodeJpaEntity n on n.id = t.assignedNodeId "
+			+ "where t.status = 'DISPATCHED' and t.claimExpiresAt > :now "
+			+ "and lower(trim(n.region)) in :regions")
+	long countOnEvacuatedRegions(@Param("regions") Collection<String> regions, @Param("now") Instant now);
+
 	@Query("select t from NetworkTaskJpaEntity t order by t.createdAt desc")
 	List<NetworkTaskJpaEntity> listRecent(PageRequest page);
 
