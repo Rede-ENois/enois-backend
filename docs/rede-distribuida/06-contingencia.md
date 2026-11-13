@@ -321,6 +321,26 @@ espera a primeira config verificada) do que voltar com uma frescura emprestada.
 Sem cache nenhum e Control Plane fora, o nó drena. `node-doctor.sh` reporta WARN quando o cache
 está vencido ou ilegível, para o operador ver a causa antes de o nó parar de pedir trabalho.
 
+### A idade pode não ser medível: relógio para trás
+
+O TTL inteiro apoia-se no relógio da máquina do nó, e o container só conhece a hora que o kernel
+diz. Quando o relógio **volta** para antes do instante de verificação — VPS sem RTC que reinicia,
+máquina suspensa e retomada, correção de NTP para trás —, `agora - verificado_em` fica **negativo**,
+e negativo é menor que qualquer TTL: o prazo desapareceria e a permissão voltaria a valer por tempo
+indeterminado. O TTL inteiro se anularia justamente na máquina que acabou de reiniciar.
+
+A decisão é conservadora e explícita: **idade que não se consegue medir é idade não provada**, e
+permissão não provada não se usa. Com `agora < verificado_em` o nó drena, registra há quantos
+segundos o relógio está atrás, e volta a operar no primeiro ciclo em que conseguir revalidar com o
+Control Plane. O `node-doctor.sh` ganhou o mesmo caso com diagnóstico próprio ("Relógio atrás do
+instante da verificação", mandando conferir NTP) — "config vencida" mandaria o operador investigar
+a rede quando o problema é a hora da máquina.
+
+O sentido contrário (relógio à frente) não precisa de guarda nova: a idade sai maior que o TTL e o
+caminho de "config vencida" já drena. Os dois sentidos estão fixados no harness (cenários 32–34),
+inclusive o de que a falha injetada não vira modo permanente: com o Control Plane de pé, o nó
+revalida no próprio ciclo e trabalha.
+
 ## 7. Testes obrigatórios de contingência
 
 | cenário | teste | estado |
@@ -328,6 +348,7 @@ está vencido ou ilegível, para o operador ver a causa antes de o nó parar de 
 | nó indisponível no meio de uma tarefa → redistribuição sem duplicar efeito | `NetworkTasksTests.noQueCaiNoMeioEhRedistribuidoSemDuplicarEfeito` | entregue (F2) |
 | revogação durante processamento → resultado descartado, tarefa redistribuída | `NetworkDisasterTests.revogacaoNoMeioDaTarefaDescartaOResultadoEAudita` | entregue (R105) |
 | Control Plane fora → nós drenam e param, sem aceitar tarefa nova | `node-executor-test.sh` cenários 26–31 (dentro do TTL segue; fora do TTL drena; TTL lido do documento; recusa HTTP ≠ queda; cache adulterado recusado; sem cache drena) | entregue (R106, ADR-018) |
+| chaos: relógio da máquina atrás do instante da verificação → idade não medível não vira permissão | `node-executor-test.sh` cenários 32–34 e `node-runtime-test.sh` (doctor aponta NTP) | entregue (R107, ADR-019) |
 | dois controladores com termos diferentes → nó entra em quarentena | `NetworkTermConflictTests` | entregue (R102) |
 | sobrecarga simultânea → `HIGH_LOAD` entra e sai pelos números medidos | `NetworkModesTests` | entregue (F4) |
 | recuperação → `RECOVERY` drena sem derrubar o que está em andamento | `NetworkModesTests` | entregue (F4) |

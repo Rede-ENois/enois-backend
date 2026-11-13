@@ -91,7 +91,12 @@ if [[ -s "$NODE_HOME/config.json" && -s "$NODE_HOME/config-verified-at" ]]; then
   ttl=$(sed -n 's/.*"ttlSeconds":\([0-9][0-9]*\).*/\1/p' "$NODE_HOME/config.json" | head -n 1)
   if [[ "$verified_at" =~ ^[0-9]+$ && -n "$ttl" ]]; then
     age=$(( $(date +%s) - verified_at ))
-    if (( age < ttl )); then
+    if (( age < 0 )); then
+      # Mesmo caso do runtime: o relógio andou para trás depois da verificação, então a idade da
+      # config não é medível. O nó drena até revalidar; o operador precisa ver a causa, que não é
+      # "config velha" e sim o relógio da máquina.
+      warn "Relógio atrás do instante da verificação há $(( -age ))s — o nó drena até revalidar; confira NTP/hora da máquina"
+    elif (( age < ttl )); then
       pass "Config verificada há ${age}s (válida por ${ttl}s)"
     else
       warn "Config vencida há $(( age - ttl ))s (TTL de ${ttl}s) — o nó drena até revalidar; confira a conectividade"

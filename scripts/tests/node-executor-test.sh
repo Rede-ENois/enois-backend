@@ -1087,4 +1087,81 @@ out=$(run_custom "$NNOCACHE")
 assert_contains 'sem cache a queda drena' "$out" 'nenhuma config verificada guardada — drenando'
 assert_not_contains 'sem cache não há poll' "$(cat "$TMP/curl-calls")" '/network/tasks/next'
 
+# ------------------------------------------------- cenário 32: chaos — relógio da máquina andou para trás
+# Falha injetada: `date` devolve um instante ANTERIOR ao da verificação do cache. É o que acontece
+# em VPS sem RTC (relógio volta ao boot), em máquina suspensa/retomada e em correção de NTP para
+# trás — e o container não tem como saber a hora "certa", só a que o kernel diz.
+#
+# O resultado tem de ser previsível e conservador: a idade da config deixa de ser PROVÁVEL (não dá
+# para afirmar que está dentro do TTL), e permissão que não se consegue provar válida não se usa.
+# Antes deste cenário o nó seguia trabalhando com uma config possivelmente vencida, porque
+# `agora - verificado_em` ficava negativo e negativo é menor que qualquer TTL: o TTL sumia.
+REAL_DATE="$(command -v date)"
+# O $TMP/date é SYMLINK para o binário real: é preciso desfazê-lo antes de escrever o stub,
+# senão o redirecionamento tenta gravar por cima do /usr/bin/date.
+rm -f "$TMP/date"
+printf '#!/bin/bash\ncat "%s"\n' "$TMP/fake-now" > "$TMP/date"
+chmod +x "$TMP/date"
+# Cache VÁLIDO de novo: o cenário 30 deixou o adulterado, e aqui o que está sob teste é o relógio,
+# não a assinatura — misturar as duas coisas faria o teste passar pelo motivo errado.
+printf '%s' "$CONFIG_TTL_OK" > "$NTTL/config.json"
+printf '%s\n' "$(date +%s)" > "$NTTL/config-verified-at"
+printf '%s\n' "$(( $(date +%s) - 400 ))" > "$TMP/fake-now"
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) exit 7 ;;
+  */network/tasks/next) printf '%s' '{"tasks":[{"taskId":"tk_clock","type":"ASYNC_JOB","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"idem-clock","payload":"{}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}' ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NTTL")
+assert_contains 'relógio atrás da verificação: idade não provável — drena' "$out" 'relógio atrás do instante da verificação'
+assert_not_contains 'relógio atrás não habilita poll' "$(cat "$TMP/curl-calls")" '/network/tasks/next'
+
+# ------------------------------------------------- cenário 33: chaos — relógio saltou para frente
+# O outro sentido do mesmo salto. Aqui a idade fica MAIOR que o TTL: o nó drena e diz que venceu.
+# O par 32/33 fixa que a decisão é sobre a idade medida e nos dois sentidos — não sobre "relógio
+# estranho" em geral (que faria o nó drenar para sempre e esconder a causa).
+printf '%s\n' "$(date +%s)" > "$NTTL/config-verified-at"
+printf '%s\n' "$(( $(date +%s) + 600 ))" > "$TMP/fake-now"
+: > "$TMP/curl-calls"
+out=$(run_custom "$NTTL")
+assert_contains 'relógio à frente da verificação: config vencida' "$out" 'config vencida (TTL de 300s) — drenando'
+assert_not_contains 'relógio à frente não habilita poll' "$(cat "$TMP/curl-calls")" '/network/tasks/next'
+
+# Restaura o `date` real: os cenários seguintes (e o próprio harness) medem tempo de verdade.
+rm -f "$TMP/date"; ln -s "$REAL_DATE" "$TMP/date"
+
+# ------------------------------------------------- cenário 34: chaos — relógio torto não trava o nó sadio
+# A falha injetada não pode virar um modo permanente: com o Control Plane de pé, o nó revalida a
+# config no próprio ciclo e volta a trabalhar mesmo com o cache imprestável. Sem esta asserção, a
+# correção do cenário 32 poderia "consertar" drenando para sempre.
+printf '%s\n' "$(( $(date +%s) - 400 ))" > "$TMP/fake-now"
+rm -f "$TMP/date"; printf '#!/bin/bash\ncat "%s"\n' "$TMP/fake-now" > "$TMP/date"; chmod +x "$TMP/date"
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_TTL_OK' ;;
+  */network/tasks/next) printf '%s' '{"tasks":[{"taskId":"tk_relogio","type":"ASYNC_JOB","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"idem-relogio","payload":"{}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}' ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NTTL")
+assert_contains 'com Control Plane de pé o nó revalida e trabalha' "$out" 'DONE tk_relogio'
+assert_not_contains 'e não drena com a config fresca' "$out" 'config vencida'
+rm -f "$TMP/date"; ln -s "$REAL_DATE" "$TMP/date"
+
 printf '\nTodos os cenarios passaram (%d assercoes).\n' "$PASS"

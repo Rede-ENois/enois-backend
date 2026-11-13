@@ -147,6 +147,16 @@ allowed_tasks_da_cache() {
     return 1
   fi
   now=$(date +%s)
+  # Relógio atrás do instante da verificação não prova frescor: `agora - verificado_em` fica
+  # negativo, e negativo é menor que qualquer TTL — o prazo sumiria e a permissão valeria de novo
+  # por tempo indeterminado. Acontece em VPS sem RTC (relógio volta ao boot), máquina
+  # suspensa/retomada e correção de NTP para trás. Idade que não se consegue medir é idade não
+  # provada, e permissão não provada não se usa (doc 06 §6, fail secure).
+  if (( now < at )); then
+    printf '[executor] relógio atrás do instante da verificação (%ss) — idade não provável, drenando\n' \
+      "$(( at - now ))" >&2
+    return 1
+  fi
   if (( now - at >= ttl )); then
     # Venceu: o Control Plane está fora há mais tempo que a permissão vale. Parar de aceitar
     # tarefa nova é a única resposta honesta — ninguém pode renovar o mando que ninguém assinou.

@@ -282,4 +282,22 @@ assert_contains 'doctor checa conectividade da URL passada' "$out" 'Control Plan
   printf '[FAIL] doctor vazou a API key\n' >&2; exit 1; }
 PASS=$((PASS + 1)); printf '[PASS] %s\n' 'doctor não imprime a API key'
 
+# 5b: cache de config vencido é WARN com idade e TTL — e o doctor tem de DIZER que o nó drena,
+# porque senão o operador lê "vencida" e conclui que o nó está quebrado em vez de esperando.
+printf '%s' '{"nodeId":"nd_teste123","formatVersion":3,"ttlSeconds":300}' > "$NH2/config.json"
+printf '%s\n' "$(( $(date +%s) - 900 ))" > "$NH2/config-verified-at"
+out=$(NODE_HOME="$NH2" PATH="$TMP" /bin/bash "$NODE_DIR/node-doctor.sh" 2>&1) && doctor_rc=0 || doctor_rc=$?
+assert_eq 'doctor com cache vencido não falha (nó drena, não quebrou)' '0' "$doctor_rc"
+assert_contains 'doctor reporta a config vencida com o TTL' "$out" 'Config vencida há 600s (TTL de 300s)'
+assert_contains 'doctor diz o que o nó faz com isso' "$out" 'o nó drena até revalidar'
+
+# Chaos: relógio atrás da verificação. A idade não é medível, e "vencida" seria diagnóstico errado:
+# a causa é a hora da máquina, e o doctor tem de apontar para ela.
+printf '%s\n' "$(( $(date +%s) + 600 ))" > "$NH2/config-verified-at"
+out=$(NODE_HOME="$NH2" PATH="$TMP" /bin/bash "$NODE_DIR/node-doctor.sh" 2>&1) && doctor_rc=0 || doctor_rc=$?
+assert_eq 'doctor com relógio atrás não falha' '0' "$doctor_rc"
+assert_contains 'doctor aponta o relógio, não a config' "$out" 'Relógio atrás do instante da verificação'
+assert_contains 'e manda conferir NTP' "$out" 'confira NTP/hora da máquina'
+rm -f "$NH2/config.json" "$NH2/config-verified-at"
+
 printf '\nTodos os cenários passaram (%d asserções).\n' "$PASS"
