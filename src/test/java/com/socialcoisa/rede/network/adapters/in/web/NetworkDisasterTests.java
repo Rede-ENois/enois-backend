@@ -179,13 +179,19 @@ class NetworkDisasterTests {
 	@Test
 	void chaveDeOutroNoNaoProduzDescarteAuditado() throws Exception {
 		String admin = adminToken();
-		Node revoked = activeNode(admin, "no-revogado-b", List.of("NODE_WORKER"));
-		Node other = activeNode(admin, "no-intruso", List.of("NODE_WORKER"));
+		Node primeiro = activeNode(admin, "no-revogado-b", List.of("NODE_WORKER"));
+		Node segundo = activeNode(admin, "no-intruso", List.of("NODE_WORKER"));
 
 		NetworkTask task = tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "desastre-2",
 			"{}", DataClass.PUBLIC, null));
 		tasks.dispatchPending();
-		assertThat(assignedNode(task.id())).isEqualTo(revoked.id());
+		// Os dois nós são idênticos para o escalonamento, e o último critério da ordenação é
+		// aleatório de propósito (para não concentrar carga). Fixar "o primeiro" aqui seria fixar
+		// um sorteio: o teste passaria ou falharia conforme a roleta. O que o teste precisa é de UM
+		// nó revogado e de UM intruso com a chave de outro — qualquer par serve.
+		String designado = assignedNode(task.id());
+		Node revoked = primeiro.id().equals(designado) ? primeiro : segundo;
+		Node other = revoked == primeiro ? segundo : primeiro;
 		revoke(admin, revoked.id());
 
 		// A chave do outro nó, apresentada com o id do revogado: 401, e nenhuma auditoria.

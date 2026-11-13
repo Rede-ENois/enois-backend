@@ -67,6 +67,11 @@ class NetworkConfigServiceTests {
 
 	private static NetworkConfigService service(String signingKey, String publicKey,
 			NetworkNodeRepository.ConfigStamp stamp, int term, int ttlSeconds) {
+		return service(signingKey, publicKey, stamp, term, ttlSeconds, "");
+	}
+
+	private static NetworkConfigService service(String signingKey, String publicKey,
+			NetworkNodeRepository.ConfigStamp stamp, int term, int ttlSeconds, String allowedRoutes) {
 		var repository = new StubRepository(stamp);
 		NetworkAuthorityRepository authorities = new NetworkAuthorityRepository() {
 			@Override
@@ -100,7 +105,7 @@ class NetworkConfigServiceTests {
 			}
 		};
 		return new NetworkConfigService(Clock.systemUTC(), repository, authorities, signingKey, publicKey,
-			ttlSeconds);
+			ttlSeconds, allowedRoutes);
 	}
 
 	private static NetworkNode node(NodeStatus status, Set<NodeProfile> profiles) {
@@ -127,8 +132,9 @@ class NetworkConfigServiceTests {
 		PublicKey pin = java.security.KeyFactory.getInstance("Ed25519")
 			.generatePublic(new java.security.spec.X509EncodedKeySpec(Base64.getDecoder().decode(view.publicKey())));
 		var fields = new NetworkConfigSigner.SignedFields(view.formatVersion(), view.configVersion(), view.nodeId(),
-			view.profiles(), view.limits().cpuCores(), view.limits().memoryMb(), view.limits().diskMb(),
-			view.limits().bandwidthMbps(), view.allowedTasks(), view.issuedAt(), view.ttlSeconds(), view.term());
+				view.profiles(), view.limits().cpuCores(), view.limits().memoryMb(), view.limits().diskMb(),
+				view.limits().bandwidthMbps(), view.allowedTasks(), view.allowedRoutes(), view.issuedAt(),
+				view.ttlSeconds(), view.term());
 		Signature verifier = Signature.getInstance("Ed25519");
 		verifier.initVerify(pin);
 		verifier.update(fields.canonical().getBytes(StandardCharsets.UTF_8));
@@ -256,6 +262,138 @@ class NetworkConfigServiceTests {
 		var view = service.forNode(node(NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_MEDIA)));
 
 		assertThat(view.ttlSeconds()).isEqualTo(300);
+	}
+
+	/**
+	 * A rota autorizada é permissão, e permissão vai na ASSINATURA. Uma config sem rota declarada
+	 * não muda o comportamento de ninguém: a lista sai vazia e a task {@code API_REQUEST} é recusada
+	 * pelo runtime, porque destino que não está na lista não é destino autorizado.
+	 */
+	@Test
+	void rotaDeclaradaVaiNoPayloadENaAssinatura() throws Exception {
+		String signatureKey = base64(pair.getPrivate().getEncoded());
+		String publicKey = base64(pair.getPublic().getEncoded());
+		var stamp = new NetworkNodeRepository.ConfigStamp(3, Instant.parse("2026-11-12T10:00:00Z"));
+
+		var view = service(signatureKey, publicKey, stamp, 1, 300,
+				"catalogo=https://catalogo.exemplo/api,acervo=https://acervo.exemplo/api")
+			.forNode(node(NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_MEDIA)));
+
+		assertThat(view.allowedRoutes()).containsExactly("acervo=https://acervo.exemplo/api",
+			"catalogo=https://catalogo.exemplo/api");
+
+		// A rota está DENTRO da linha assinada: trocar o destino na resposta quebraria a assinatura.
+		PublicKey pin = java.security.KeyFactory.getInstance("Ed25519")
+			.generatePublic(new java.security.spec.X509EncodedKeySpec(Base64.getDecoder().decode(view.publicKey())));
+		var fields = new NetworkConfigSigner.SignedFields(view.formatVersion(), view.configVersion(), view.nodeId(),
+			view.profiles(), view.limits().cpuCores(), view.limits().memoryMb(), view.limits().diskMb(),
+			view.limits().bandwidthMbps(), view.allowedTasks(), view.allowedRoutes(), view.issuedAt(),
+			view.ttlSeconds(), view.term());
+		Signature verifier = Signature.getInstance("Ed25519");
+		verifier.initVerify(pin);
+		verifier.update(fields.canonical().getBytes(StandardCharsets.UTF_8));
+		assertThat(verifier.verify(Base64.getDecoder().decode(view.signature()))).isTrue();
+
+		// E o destino trocado não confere: é a assinatura que impede o SSRF.
+		var trocada = new NetworkConfigSigner.SignedFields(view.formatVersion(), view.configVersion(), view.nodeId(),
+			view.profiles(), view.limits().cpuCores(), view.limits().memoryMb(), view.limits().diskMb(),
+			view.limits().bandwidthMbps(), view.allowedTasks(),
+			List.of("catalogo=http://169.254.169.254/latest/meta-data"), view.issuedAt(), view.ttlSeconds(),
+			view.term());
+		Signature outra = Signature.getInstance("Ed25519");
+		outra.initVerify(pin);
+		outra.update(trocada.canonical().getBytes(StandardCharsets.UTF_8));
+		assertThat(outra.verify(Base64.getDecoder().decode(view.signature()))).isFalse();
+	}
+
+	/** Sem rota declarada, a lista é vazia — o nó não tem para onde ir e a task é recusada. */
+	@Test
+	void semRotaDeclaradaAListaVazia() {
+		var service = service("", "", new NetworkNodeRepository.ConfigStamp(1, Instant.parse("2026-11-12T10:00:00Z")));
+
+		var view = service.forNode(node(NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_MEDIA)));
+
+		assertThat(view.allowedRoutes()).isEmpty();
+	}
+
+	/** Rota malformada é descartada: uma entrada sem "=" entraria na assinatura e o runtime não
+	 * conseguiria resolver o nome — o nó falharia no meio do trabalho por causa de config errada. */
+	@Test
+	void rotaMalformadaEDescartada() {
+		var service = service("", "", new NetworkNodeRepository.ConfigStamp(1, Instant.parse("2026-11-12T10:00:00Z")),
+				0, 300, "semSeparador,=https://sem-nome.exemplo/,nome-sem-url=");
+
+		var view = service.forNode(node(NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_MEDIA)));
+
+        assertThat(view.allowedRoutes()).isEmpty();
+    }
+
+	/** A vírgula é caractere legítimo de URL (query string): ela NÃO pode cortar a entrada.
+	 * Cortar ali daria ao nó um destino diferente do assinado — a chamada iria para um
+	 * caminho que ninguém autorizou, que é exatamente o que a lista assinada existe para
+	 * impedir. Aqui o parser só abre entrada nova quando a vírgula é seguida de {@code nome=};
+	 * então a vírgula da query fica, e {@code catalogo=https://api.exemplo/x?ids=1,2} continua
+	 * uma rota só. O {@code acervo=} logo depois prova que a quebra de entradas segue viva. */
+	@Test
+	void virgulaNaUrlNaoCortaARota() {
+		var service = service("", "", new NetworkNodeRepository.ConfigStamp(1, Instant.parse("2026-11-12T10:00:00Z")),
+				0, 300, "catalogo=https://api.exemplo/x?ids=1,2,acervo=https://acervo.exemplo/api");
+
+		var view = service.forNode(node(NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_MEDIA)));
+
+		assertThat(view.allowedRoutes()).containsExactly(
+				"acervo=https://acervo.exemplo/api",
+				"catalogo=https://api.exemplo/x?ids=1,2");
+	}
+
+	/** O nome da rota é o que o payload traz: um nome fora do conjunto que o runtime aceita
+	 * entraria assinado e nunca seria resolvido — a task morreria como "rota não autorizada"
+	 * no meio do trabalho, sem que ninguém entendesse por quê. */
+	@Test
+	void nomeDeRotaForaDoConjuntoEDescartado() {
+		var service = service("", "", new NetworkNodeRepository.ConfigStamp(1, Instant.parse("2026-11-12T10:00:00Z")),
+				0, 300, "nome com espaco=https://a.exemplo/api,ok=https://b.exemplo/api");
+
+		var view = service.forNode(node(NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_MEDIA)));
+
+		assertThat(view.allowedRoutes()).containsExactly("ok=https://b.exemplo/api");
+	}
+
+	/** Destino que não é http(s) não é rota de API: o executor rejeita esquema outro que
+	 * http/https, e a rota entraria assinada para ser sempre recusada. */
+	@Test
+	void destinoNaoHttpEDescartado() {
+		var service = service("", "", new NetworkNodeRepository.ConfigStamp(1, Instant.parse("2026-11-12T10:00:00Z")),
+				0, 300, "arquivo=file:///etc/passwd,ok=https://b.exemplo/api");
+
+		var view = service.forNode(node(NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_MEDIA)));
+
+		assertThat(view.allowedRoutes()).containsExactly("ok=https://b.exemplo/api");
+	}
+
+	/** Aspas e barra invertida viram escape no JSON e o "]" fecha o array: um destino com
+	 * esses caracteres entraria assinado e a leitura da lista no runtime a recortaria — a
+	 * rota poderia virar duas, ou a config inteira ser recusada. */
+	@Test
+	void destinoComCaractereQueBracaJsonEDescartado() {
+		var service = service("", "", new NetworkNodeRepository.ConfigStamp(1, Instant.parse("2026-11-12T10:00:00Z")),
+				0, 300, "quebra=https://a.exemplo/x\"y,fecha=https://a.exemplo/x]z,ok=https://b.exemplo/api");
+
+		var view = service.forNode(node(NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_MEDIA)));
+
+		assertThat(view.allowedRoutes()).containsExactly("ok=https://b.exemplo/api");
+	}
+
+	/** Dois destinos com o mesmo nome não podem coexistir: o runtime resolve por nome, e
+	 * uma das duas URLs nunca seria chamada — sem que ninguém perceba. */
+	@Test
+	void nomeRepetidoComOutroDestinoDescartaODuplicado() {
+		var service = service("", "", new NetworkNodeRepository.ConfigStamp(1, Instant.parse("2026-11-12T10:00:00Z")),
+				0, 300, "catalogo=https://a.exemplo/api,catalogo=https://b.exemplo/api");
+
+		var view = service.forNode(node(NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_MEDIA)));
+
+		assertThat(view.allowedRoutes()).containsExactly("catalogo=https://a.exemplo/api");
 	}
 
 	/** Só o que o serviço usa: o carimbo. Qualquer outra consulta é defeito, não conveniência. */

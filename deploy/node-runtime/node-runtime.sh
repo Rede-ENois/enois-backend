@@ -193,7 +193,7 @@ term_regressao() {
 # recortar e ordenar, não reinterpretar o documento.
 config_signature() {
   # config_signature <config-json>: imprime "canonical<TAB>assinatura"; 1 se faltar campo.
-  local format_version config_version node_id profiles cpu memory disk bandwidth tasks issued_at ttl term signature
+  local format_version config_version node_id profiles cpu memory disk bandwidth tasks routes issued_at ttl term signature
   format_version=$(json_number "$1" formatVersion)
   config_version=$(json_number "$1" configVersion)
   node_id=$(json_field "$1" nodeId)
@@ -203,6 +203,9 @@ config_signature() {
   disk=$(json_number "$1" diskMb)
   bandwidth=$(json_number "$1" bandwidthMbps)
   tasks=$(json_list_sorted "$1" allowedTasks)
+  # allowedRoutes entrou no formato 4 e fica logo DEPOIS de allowedTasks: campo novo nunca
+  # desloca o último, e a rota é a lista que diz ao nó quais destinos ele pode chamar.
+  routes=$(json_list_sorted "$1" allowedRoutes)
   issued_at=$(json_field "$1" issuedAt)
   # ttlSeconds entrou no formato 3 e fica logo antes do termo: campo novo nunca desloca o
   # último, que é a regra que deixou o formato 2 legível por quem reconstruía o formato 1.
@@ -214,9 +217,9 @@ config_signature() {
   [[ -n "$format_version" && -n "$config_version" && -n "$node_id" && -n "$cpu" \
       && -n "$memory" && -n "$disk" && -n "$bandwidth" && -n "$issued_at" \
       && -n "$ttl" && -n "$term" && -n "$signature" ]] || return 1
-  printf '%s|%s|%s|[%s]|%s|%s|%s|%s|[%s]|%s|%s|%s\t%s' \
+  printf '%s|%s|%s|[%s]|%s|%s|%s|%s|[%s]|[%s]|%s|%s|%s\t%s' \
     "$format_version" "$config_version" "$node_id" "$profiles" "$cpu" "$memory" "$disk" \
-    "$bandwidth" "$tasks" "$issued_at" "$ttl" "$term" "$signature"
+    "$bandwidth" "$tasks" "$routes" "$issued_at" "$ttl" "$term" "$signature"
 }
 
 json_list_sorted() {
@@ -227,10 +230,26 @@ json_list_sorted() {
   # como no signer, e o sort é por byte porque os itens são nomes de perfil/tarefa em
   # ASCII — o ordenamento do Java e o do `sort` batem nesse domínio, e um nome fora
   # dele quebraria a igualdade em vez de passar batido.
-  local items
-  items=$(sed -n 's/.*"'"$2"'":\[\([^]]*\)\].*/\1/p' <<<"$1" | head -n 1 \
-    | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//; s/\\"/"/g' | sed '/^$/d')
-  [[ -n "$items" ]] || { printf '[]'; return; }
+  #
+  # O recorte vai do "[" até o "]" DEPOIS da chave pedida: o ".*" é guloso, então
+  # "allowedTasks" pegaria o array inteiro se a chave pedida estivesse antes dele na
+  # linha. Por isso a âncora é a chave + a sua abertura de array, e o fecho é o
+  # primeiro "]" que vem depois.
+  #
+  # Devolve os ITENS SEM COLCHETE (o chamador põe os colchetes, como na linha
+  # canônica), e nada quando a lista é vazia — assim a lista vazia vira "[]" na
+  # linha, igual ao jsonList() do signer. Devolver "[]" aqui viraria "[[]]" na
+  # linha assinada, e a assinatura não conferiria com a do Control Plane.
+  #
+  # A quebra dos itens é pela VÍRGULA QUE SEPARA ELEMENTOS do array (o trecho
+  # '","'), não por qualquer vírgula: dentro de uma URL a vírgula é legítima (query
+  # string) e cortar ali daria um item diferente do que o signer assinou — a linha
+  # reconstruída não conferiria, e o nó recusaria a config por uma rota com
+  # query string.
+  local key="$2" items
+  items=$(sed -n "s/.*\"$key\":\[\([^]]*\)\].*/\1/p" <<<"$1" | head -n 1 \
+    | sed 's/","/\n/g' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//; s/\\"/"/g' | sed '/^$/d')
+  [[ -n "$items" ]] || return 0
   printf '%s' "$items" | LC_ALL=C sort | sed 's/^/"/; s/$/"/' | paste -sd ',' -
 }
 
@@ -893,6 +912,125 @@ exec_edge_deliver() {
   printf '[executor] entrega %s/%s v%s verificada (%s)\n' "$kind" "$content_id" "$version" "$source"
 }
 
+# ---------------- executor real: API_REQUEST (rota autorizada) ----------------
+# O nó pode chamar um destino PREVISTO — nunca um destino que venha no payload. Um nó
+# que aceita URL de quem pede é um SSRF para dentro da rede do participante (o alvo
+# clássico é o endereço de metadados da nuvem, mas o mesmo caminho alcança o roteador,
+# o banco e o painel do hypervisor). Por isso o destino mora na CONFIG ASSINADA
+# (allowedRoutes, formato 4): o payload só diz o NOME da rota, e o nome é resolvido
+# contra a lista assinada. Destino fora da lista não existe.
+#
+# O que o nó NÃO faz aqui:
+#   - não repassa a credencial dele (X-Node-Key) para o destino: a rota é terceiro, e
+#     a chave do nó é identidade — mandá-la seria entregar credencial a quem não
+#     autorizou (doc 02, linha "distribuir credencial do banco");
+#   - não segue redirecionamento: um 302 para dentro da rede repetiria o SSRF com a
+#     autorização do dono da rota;
+#   - não devolve o corpo da resposta. O resultado é EVIDÊNCIA (status, bytes,
+#     digest), não o conteúdo — a resposta pode ser dado que o Control Plane não
+#     pediu para transportar.
+API_REQUEST_MAX_BYTES="${API_REQUEST_MAX_BYTES:-1048576}"
+API_REQUEST_TIMEOUT="${API_REQUEST_TIMEOUT:-30}"
+
+route_lookup() {
+  # route_lookup <config-json> <nome>: imprime a URL da rota; 1 se o nome não estiver
+  # na lista assinada. A lista vem da config VERIFICADA (a assinatura já foi conferida
+  # contra o pino quando a config chegou), então o que está aqui é o que o Control
+  # Plane autorizou — e só.
+  #
+  # A lista é lida do array JSON inteiro, e NÃO item a item pelo json_string_array: aquele
+  # helper corta a vírgula como separador, e a vírgula é caractere legítimo de URL (query
+  # string) — cortar ali daria um destino DIFERENTE do assinado, e a chamada iria para um
+  # caminho que ninguém autorizou. Aqui a quebra é pela vírgula QUE SEPARA ITENS do array
+  # (o padrão ""," entre dois elementos), que só aparece entre dois elementos — uma vírgula
+  # dentro da URL não é seguida de aspas.
+  local config="$1" name="$2" array item
+  [[ -n "$name" ]] || return 1
+  # O fecho do array é o PRIMEIRO "]" depois da abertura: o Control Plane não aceita
+  # destino com "]" (ele fecharia a lista), e um "(.*)" guloso pegaria até o último
+  # "]" da linha — que seria o de outra lista, se alguma viesse depois.
+  array=$(sed -n 's/.*"allowedRoutes":\[\([^]]*\)\].*/\1/p' <<<"$config" | head -n 1)
+  [[ -n "$array" ]] || return 1
+  while IFS= read -r item; do
+    [[ -n "$item" ]] || continue
+    item=${item#\"}
+    item=${item%\"}
+    # Entrada sem "=" não tem nome nem destino: não é rota, é lixo na config.
+    [[ "$item" == *=* ]] || continue
+    [[ "${item%%=*}" == "$name" ]] || continue
+    printf '%s' "${item#*=}"
+    return 0
+  done < <(printf '%s\n' "$array" | sed 's/","/\n/g')
+  return 1
+}
+
+exec_api_request() {
+  local next="$1" task_id="$2" attempt="$3"
+  local config="${4:-}"
+  local payload route method url raw code work file bytes digest status
+  local -a bw=()
+  mapfile -t bw < <(bandwidth_args "$config")
+
+  payload=$(task_payload "$next")
+  route=$(json_field "$payload" route)
+  if [[ -z "$route" ]]; then
+    fail_task "$task_id" "$attempt" TASK_PAYLOAD_INVALID 'payload sem route'; return 0
+  fi
+  # O nome da rota é um identificador, não texto livre: ele volta no resultado, e um nome
+  # com aspas ou barra inverteria o JSON do resultado — ou pior, apareceria como campo.
+  [[ "$route" =~ ^[A-Za-z0-9._-]+$ ]] || {
+    fail_task "$task_id" "$attempt" TASK_PAYLOAD_INVALID 'nome de rota inválido'; return 0; }
+  # Só GET e HEAD: qualquer método que escreva no destino muda o mundo de quem
+  # assinou a rota, e a rota foi assinada para ser consultada.
+  method=$(json_field "$payload" method)
+  [[ -n "$method" ]] || method='GET'
+  case "$method" in
+    GET|HEAD) ;;
+    *) fail_task "$task_id" "$attempt" TASK_PAYLOAD_INVALID 'método não permitido na rota'; return 0 ;;
+  esac
+
+  # Destino: só da lista assinada. Não há fallback, não há "se não achar, usa o que veio".
+  if ! url=$(route_lookup "$config" "$route"); then
+    fail_task "$task_id" "$attempt" API_ROUTE_NOT_ALLOWED "rota não autorizada: $route"; return 0
+  fi
+  # http/https e nada mais: um destino com outro esquema não é rota de API.
+  case "$url" in
+    http://*|https://*) ;;
+    *) fail_task "$task_id" "$attempt" API_ROUTE_NOT_ALLOWED 'destino da rota não é http(s)'; return 0 ;;
+  esac
+
+  work=$(mktemp -d "$NODE_HOME/work-api-XXXXXX") || {
+    fail_task "$task_id" "$attempt" API_REQUEST_FAILED 'sem espaço de trabalho'; return 0; }
+  trap "rm -rf '$work'" RETURN
+  file="$work/body"
+  # Sem "${auth[@]}": a credencial do nó não vai para o destino. Sem -L: um
+  # redirecionamento seria um destino novo, e destino novo não está autorizado.
+  # Com --max-filesize, o curl aborta quando o tamanho declarado é grande demais.
+  if ! raw=$(curl --silent --show-error --connect-timeout 10 --max-time "$API_REQUEST_TIMEOUT" \
+      "${bw[@]}" --max-filesize "$API_REQUEST_MAX_BYTES" -X "$method" \
+      -o "$file" -w '%{http_code}' "$url"); then
+    fail_task "$task_id" "$attempt" API_REQUEST_FAILED 'requisição à rota falhou'; return 0
+  fi
+  code="$raw"
+  status="${code:-0}"
+  bytes=0
+  digest=''
+  if [[ -f "$file" ]]; then
+    bytes=$(stat -c %s "$file" 2>/dev/null || echo 0)
+    digest=$(sha256sum "$file" 2>/dev/null | awk '{print $1}')
+  fi
+  # Teto conferido no corpo real: --max-filesize só olha o Content-Length declarado,
+  # e um servidor que não declara nada passa por ele.
+  if (( bytes > API_REQUEST_MAX_BYTES )); then
+    fail_task "$task_id" "$attempt" API_REQUEST_FAILED 'resposta da rota acima do teto'; return 0
+  fi
+  # Status e medida são evidência; o corpo NÃO volta. Um 404 é resposta válida da
+  # rota — o nó cumpriu o contrato e o Control Plane decide o que fazer com isso.
+  result "$task_id" "$attempt" DONE \
+    "{\"route\":\"$route\",\"status\":$status,\"bytes\":$bytes,\"digest\":\"$digest\"}" ''
+  printf '[executor] rota %s status=%s bytes=%s\n' "$route" "$status" "$bytes"
+}
+
 cycle() {
   # 1. heartbeat: estado, modo e se pode pedir tarefa.
   local hb mode accept_tasks observed_cpu observed_mem observed_term term_part
@@ -942,6 +1080,7 @@ cycle() {
       READ_QUERY) exec_read_query "$next" "$task_id" "${attempt:-1}" "$config" ;;
       EDGE_CACHE) exec_edge_cache "$next" "$task_id" "${attempt:-1}" "$config" ;;
       EDGE_DELIVER) exec_edge_deliver "$next" "$task_id" "${attempt:-1}" "$config" ;;
+      API_REQUEST) exec_api_request "$next" "$task_id" "${attempt:-1}" "$config" ;;
       *)
         # Prova de ciclo de vida: eco do idempotencyKey como output. Conteúdo de usuário
         # (HTML, CSS, KofScript) NUNCA executa aqui — continua nos sandboxes próprios.

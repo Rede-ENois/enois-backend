@@ -33,11 +33,12 @@ sign_config() {
 }
 
 sign_limits_config() {
-  # sign_limits_config <configVersion> <profiles-json> <cpu> <mem> <disk> <bw> <tasks-json> [term] [ttl]:
-  # assina os campos que o signer cobre, na ordem de SignedFields.canonical() — o ttlSeconds entrou
-  # no formato 3 logo antes do termo, e o termo continua por último.
-  local cv="$1" profiles="$2" cpu="$3" mem="$4" disk="$5" bw="$6" tasks="$7" term="${8:-0}" ttl="${9:-300}"
-  sign_config "3|$cv|nd_exec1|$profiles|$cpu|$mem|$disk|$bw|$tasks|2026-11-12T12:00:00Z|$ttl|$term"
+  # sign_limits_config <configVersion> <profiles-json> <cpu> <mem> <disk> <bw> <tasks-json> [term] [ttl] [routes-json]:
+  # assina os campos que o signer cobre, na ordem de SignedFields.canonical() — as rotas
+  # entraram no formato 4 logo depois das tarefas, o ttlSeconds no formato 3 logo antes do
+  # termo, e o termo continua por último. Campo novo nunca desloca o último.
+  local cv="$1" profiles="$2" cpu="$3" mem="$4" disk="$5" bw="$6" tasks="$7" term="${8:-0}" ttl="${9:-300}" routes="${10:-[]}"
+  sign_config "4|$cv|nd_exec1|$profiles|$cpu|$mem|$disk|$bw|$tasks|$routes|2026-11-12T12:00:00Z|$ttl|$term"
 }
 
 PASS=0
@@ -79,7 +80,7 @@ printf 'enk_echoteste0123\n' > "$NH/api-key"; chmod 600 "$NH/api-key"
 # verdade — antes eram `c2ln` (base64 de "sig") e passavam porque a verificação não existia.
 printf '%s' "$CP_PUB" > "$NH/pinning-key"; chmod 600 "$NH/pinning-key"
 
-CONFIG_SIGNED='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":3,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 3 '["NODE_WORKER"]' 4 8192 51200 100 '["ASYNC_JOB"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_SIGNED='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":300,"configVersion":3,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 3 '["NODE_WORKER"]' 4 8192 51200 100 '["ASYNC_JOB"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 HEARTBEAT_OK='{"nodeId":"nd_exec1","status":"ACTIVE","profiles":["NODE_WORKER"],"serverTime":"now","mode":"NORMAL","acceptTasks":true}'
 HEARTBEAT_DRAIN='{"nodeId":"nd_exec1","status":"ACTIVE","profiles":["NODE_WORKER"],"serverTime":"now","mode":"DEGRADED","acceptTasks":false}'
 TASK_ASSIGNED='{"tasks":[{"taskId":"tk_1","type":"ASYNC_JOB","attempt":2,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"idem-42","payload":"{\"job\":\"x\"}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
@@ -172,7 +173,7 @@ printf '%s\n' "\$*" >> "$TMP/curl-calls"
 url="\${@: -1}"
 case "\$url" in
   */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
-  */network/nodes/me/config) printf '%s' '{"nodeId":"nd_exec1","operable":true,"signed":false,"signature":null,"publicKey":null,"allowedTasks":["ASYNC_JOB"]}' ;;
+  */network/nodes/me/config) printf '%s' '{"nodeId":"nd_exec1","operable":true,"signed":false,"signature":null,"publicKey":null,"allowedTasks":["ASYNC_JOB"],"allowedRoutes":[]}' ;;
   *) printf 'CHAMADA-INESPERADA %s' "\$url" >> "$TMP/curl-calls" ;;
 esac
 MOCK
@@ -189,7 +190,7 @@ printf '%s\n' "\$*" >> "$TMP/curl-calls"
 url="\${@: -1}"
 case "\$url" in
   */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
-  */network/nodes/me/config) printf '%s' '{"nodeId":"nd_exec1","operable":true,"signed":true,"signature":"x","algorithm":"Ed25519","publicKey":"OUTRA-CHAVE","allowedTasks":["ASYNC_JOB"]}' ;;
+  */network/nodes/me/config) printf '%s' '{"nodeId":"nd_exec1","operable":true,"signed":true,"signature":"x","algorithm":"Ed25519","publicKey":"OUTRA-CHAVE","allowedTasks":["ASYNC_JOB"],"allowedRoutes":[]}' ;;
   *) printf 'CHAMADA-INESPERADA %s' "\$url" >> "$TMP/curl-calls" ;;
 esac
 MOCK
@@ -210,7 +211,7 @@ printf '%s\n' "\$*" >> "$TMP/curl-calls"
 url="\${@: -1}"
 case "\$url" in
   */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
-  */network/nodes/me/config) printf '%s' '{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":11,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"c2ln","algorithm":"Ed25519","publicKey":"$CP_PUB"}' ;;
+  */network/nodes/me/config) printf '%s' '{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":300,"configVersion":11,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"c2ln","algorithm":"Ed25519","publicKey":"$CP_PUB"}' ;;
   *) printf 'CHAMADA-INESPERADA %s' "\$url" >> "$TMP/curl-calls" ;;
 esac
 MOCK
@@ -232,7 +233,7 @@ printf '%s\n' "\$*" >> "$TMP/curl-calls"
 url="\${@: -1}"
 case "\$url" in
   */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
-  */network/nodes/me/config) printf '%s' '{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":12,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB","MEDIA_TRANSCODE"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"$TAMPERED_SIG","algorithm":"Ed25519","publicKey":"$CP_PUB"}' ;;
+  */network/nodes/me/config) printf '%s' '{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":300,"configVersion":12,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB","MEDIA_TRANSCODE"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"$TAMPERED_SIG","algorithm":"Ed25519","publicKey":"$CP_PUB"}' ;;
   *) printf 'CHAMADA-INESPERADA %s' "\$url" >> "$TMP/curl-calls" ;;
 esac
 MOCK
@@ -250,7 +251,7 @@ printf '%s\n' '{"nodeId":"nd_exec1","status":"ACTIVE"}' > "$NH_TERM/node.json"
 printf 'enk_echoteste0123\n' > "$NH_TERM/api-key"; chmod 600 "$NH_TERM/api-key"
 printf '%s' "$CP_PUB" > "$NH_TERM/pinning-key"; chmod 600 "$NH_TERM/pinning-key"
 printf '5\n' > "$NH_TERM/term"
-CONFIG_TERM_BAIXO='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":9,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 9 '["NODE_WORKER"]' 4 8192 51200 100 '["ASYNC_JOB"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_TERM_BAIXO='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":300,"configVersion":9,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 9 '["NODE_WORKER"]' 4 8192 51200 100 '["ASYNC_JOB"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 : > "$TMP/curl-calls"
 cat > "$TMP/curl" <<MOCK
 #!/bin/bash
@@ -272,7 +273,7 @@ assert_eq 'termo recusado não rebaixa o último aceito' '5' "$(head -n 1 "$NH_T
 # O mesmo nó, agora com uma config do termo 3 sobre o último aceito (1): assinatura confere e
 # o termo sobe, então o ciclo segue e a tarefa roda. O registro local acompanha o termo novo.
 printf '1\n' > "$NH_TERM/term"
-CONFIG_TERM_ALTO='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":10,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":3,"signed":true,"signature":"'"$(sign_limits_config 10 '["NODE_WORKER"]' 4 8192 51200 100 '["ASYNC_JOB"]' 3)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_TERM_ALTO='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":300,"configVersion":10,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":3,"signed":true,"signature":"'"$(sign_limits_config 10 '["NODE_WORKER"]' 4 8192 51200 100 '["ASYNC_JOB"]' 3)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 : > "$TMP/curl-calls"
 cat > "$TMP/curl" <<MOCK
 #!/bin/bash
@@ -337,7 +338,7 @@ printf '%s' 'FAKE-MP4-BYTES' > "$MP/out.bin"
 
 TASK_MEDIA='{"tasks":[{"taskId":"tk_9","type":"MEDIA_TRANSCODE","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"media:abc","payload":"{\"mediaId\":\"md_1\",\"sourceKey\":\"u/md_1/file.mp4\",\"mimeType\":\"video/mp4\",\"sourceBytes\":1234,\"sourceSha256\":\"aa11\",\"resultKey\":\"md_1/file.transcoded.mp4\",\"resultBudgetBytes\":9999}","dataClass":"PUBLIC_MEDIA"}],"mode":"NORMAL","serverTime":"now"}'
 
-CONFIG_MEDIA='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":4,"profiles":["NODE_MEDIA"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["MEDIA_TRANSCODE"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 4 '["NODE_MEDIA"]' 4 8192 51200 100 '["MEDIA_TRANSCODE"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_MEDIA='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":300,"configVersion":4,"profiles":["NODE_MEDIA"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["MEDIA_TRANSCODE"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 4 '["NODE_MEDIA"]' 4 8192 51200 100 '["MEDIA_TRANSCODE"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 
 # ffmpeg de prova: registra argv e escreve o "arquivo transcodificado".
 make_command ffmpeg "printf '%s\n' \"\$*\" >> '$MP/ffmpeg-args'
@@ -390,7 +391,7 @@ NR="$TMP/node-replica"; rm -rf "$NR"; mkdir -p "$NR"; chmod 700 "$NR"
 cp "$NH/node.json" "$NR/node.json"; cp "$NH/api-key" "$NR/api-key"
 cp "$NH/pinning-key" "$NR/pinning-key"
 
-CONFIG_REPLICA='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":5,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":2,"memoryMb":4096,"diskMb":20480,"bandwidthMbps":50},"allowedTasks":["READ_QUERY"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 5 '["NODE_READ_REPLICA"]' 2 4096 20480 50 '["READ_QUERY"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_REPLICA='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":300,"configVersion":5,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":2,"memoryMb":4096,"diskMb":20480,"bandwidthMbps":50},"allowedTasks":["READ_QUERY"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 5 '["NODE_READ_REPLICA"]' 2 4096 20480 50 '["READ_QUERY"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 TASK_REPLICA='{"tasks":[{"taskId":"tk_r1","type":"READ_QUERY","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"replica:PROFILE","payload":"{\"kind\":\"PROFILE\"}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
 
 # Duas páginas: a primeira tem 2 perfis (um já em dia), a segunda fecha o catálogo.
@@ -500,7 +501,7 @@ NE="$TMP/node-edge"; rm -rf "$NE"; mkdir -p "$NE"; chmod 700 "$NE"
 cp "$NH/node.json" "$NE/node.json"; cp "$NH/api-key" "$NE/api-key"
 cp "$NH/pinning-key" "$NE/pinning-key"
 
-CONFIG_EDGE='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":6,"profiles":["NODE_EDGE"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":200},"allowedTasks":["EDGE_CACHE","EDGE_DELIVER"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 6 '["NODE_EDGE"]' 4 8192 51200 200 '["EDGE_CACHE","EDGE_DELIVER"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_EDGE='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":300,"configVersion":6,"profiles":["NODE_EDGE"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":200},"allowedTasks":["EDGE_CACHE","EDGE_DELIVER"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 6 '["NODE_EDGE"]' 4 8192 51200 200 '["EDGE_CACHE","EDGE_DELIVER"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 TASK_EDGE='{"tasks":[{"taskId":"tk_e1","type":"EDGE_CACHE","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"edge:cache","payload":"{}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
 
 : > "$TMP/curl-calls"
@@ -733,7 +734,7 @@ ND="$TMP/node-disk"; rm -rf "$ND"; mkdir -p "$ND"; chmod 700 "$ND"
 cp "$NH/node.json" "$ND/node.json"; cp "$NH/api-key" "$ND/api-key"
 cp "$NH/pinning-key" "$ND/pinning-key"
 # 1 MB de teto. O corpo novo tem ~1.3 KB; as duas entradas antigas somam ~2 KB.
-CONFIG_DISK='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":7,"profiles":["NODE_EDGE"],"limits":{"cpuCores":2,"memoryMb":2048,"diskMb":1,"bandwidthMbps":50},"allowedTasks":["EDGE_CACHE"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 7 '["NODE_EDGE"]' 2 2048 1 50 '["EDGE_CACHE"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_DISK='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":300,"configVersion":7,"profiles":["NODE_EDGE"],"limits":{"cpuCores":2,"memoryMb":2048,"diskMb":1,"bandwidthMbps":50},"allowedTasks":["EDGE_CACHE"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 7 '["NODE_EDGE"]' 2 2048 1 50 '["EDGE_CACHE"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 TASK_EDGE_DISK='{"tasks":[{"taskId":"tk_e2","type":"EDGE_CACHE","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"edge:disk","payload":"{}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
 # Enche o cache até passar de 1 MB: 3 entradas de 400 KB cada.
 BIG=$(printf 'x%.0s' $(seq 1 409600))
@@ -779,7 +780,7 @@ assert_eq 'conteúdo guardado cabe no teto declarado' '1' "$(if (( $(stat -c %s 
 NC="$TMP/node-nocap"; rm -rf "$NC"; mkdir -p "$NC"; chmod 700 "$NC"
 cp "$NH/node.json" "$NC/node.json"; cp "$NH/api-key" "$NC/api-key"
 cp "$NH/pinning-key" "$NC/pinning-key"
-CONFIG_NOCAP='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":8,"profiles":["NODE_EDGE"],"limits":{"cpuCores":2,"memoryMb":2048,"diskMb":0,"bandwidthMbps":50},"allowedTasks":["EDGE_CACHE"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 8 '["NODE_EDGE"]' 2 2048 0 50 '["EDGE_CACHE"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_NOCAP='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":300,"configVersion":8,"profiles":["NODE_EDGE"],"limits":{"cpuCores":2,"memoryMb":2048,"diskMb":0,"bandwidthMbps":50},"allowedTasks":["EDGE_CACHE"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 8 '["NODE_EDGE"]' 2 2048 0 50 '["EDGE_CACHE"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 : > "$TMP/curl-calls"
 cat > "$TMP/curl" <<MOCK
 #!/bin/bash
@@ -812,7 +813,7 @@ assert_not_contains 'sem teto não há queda de entrada' "$(cat "$TMP/curl-calls
 NRT="$TMP/node-replica-teto"; rm -rf "$NRT"; mkdir -p "$NRT"; chmod 700 "$NRT"
 cp "$NH/node.json" "$NRT/node.json"; cp "$NH/api-key" "$NRT/api-key"
 cp "$NH/pinning-key" "$NRT/pinning-key"
-CONFIG_REPLICA_TETO='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":9,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":1,"bandwidthMbps":10},"allowedTasks":["READ_QUERY"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 9 '["NODE_READ_REPLICA"]' 1 1024 1 10 '["READ_QUERY"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_REPLICA_TETO='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":300,"configVersion":9,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":1,"bandwidthMbps":10},"allowedTasks":["READ_QUERY"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 9 '["NODE_READ_REPLICA"]' 1 1024 1 10 '["READ_QUERY"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 # 1 MB de teto; um corpo de 1,5 MB não cabe sozinho.
 HUGE=$(printf 'y%.0s' $(seq 1 1572864))
 : > "$TMP/curl-calls"
@@ -849,7 +850,7 @@ assert_not_contains 'item que não coube não é confirmado como sincronizado' "
 NRC="$TMP/node-replica-cache"; rm -rf "$NRC"; mkdir -p "$NRC"; chmod 700 "$NRC"
 cp "$NH/node.json" "$NRC/node.json"; cp "$NH/api-key" "$NRC/api-key"
 cp "$NH/pinning-key" "$NRC/pinning-key"
-CONFIG_RC='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":10,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":1,"bandwidthMbps":10},"allowedTasks":["READ_QUERY"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 10 '["NODE_READ_REPLICA"]' 1 1024 1 10 '["READ_QUERY"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_RC='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":300,"configVersion":10,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":1,"bandwidthMbps":10},"allowedTasks":["READ_QUERY"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 10 '["NODE_READ_REPLICA"]' 1 1024 1 10 '["READ_QUERY"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 MED=$(printf 'z%.0s' $(seq 1 409600))
 mkdir -p "$NRC/edge/PROFILE" "$NRC/replica/COMMUNITY"
 printf '%s' "$MED" > "$NRC/edge/PROFILE/velho.json"; printf '7\n' > "$NRC/edge/PROFILE/velho.version"
@@ -892,7 +893,7 @@ assert_contains 'a réplica confirma o que guardou' "$(cat "$TMP/curl-calls")" '
 NBW="$TMP/node-bw"; rm -rf "$NBW"; mkdir -p "$NBW"; chmod 700 "$NBW"
 cp "$NH/node.json" "$NBW/node.json"; cp "$NH/api-key" "$NBW/api-key"
 cp "$NH/pinning-key" "$NBW/pinning-key"
-CONFIG_BW='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":13,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":20480,"bandwidthMbps":8},"allowedTasks":["READ_QUERY"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 13 '["NODE_READ_REPLICA"]' 1 1024 20480 8 '["READ_QUERY"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_BW='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":300,"configVersion":13,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":20480,"bandwidthMbps":8},"allowedTasks":["READ_QUERY"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 13 '["NODE_READ_REPLICA"]' 1 1024 20480 8 '["READ_QUERY"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 : > "$TMP/curl-calls"
 cat > "$TMP/curl" <<MOCK
 #!/bin/bash
@@ -924,7 +925,7 @@ assert_contains 'confirmação sai — o limite não bloqueia a sincronização'
 NCBW="$TMP/node-nobw"; rm -rf "$NCBW"; mkdir -p "$NCBW"; chmod 700 "$NCBW"
 cp "$NH/node.json" "$NCBW/node.json"; cp "$NH/api-key" "$NCBW/api-key"
 cp "$NH/pinning-key" "$NCBW/pinning-key"
-CONFIG_NOBW='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":14,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":20480,"bandwidthMbps":0},"allowedTasks":["READ_QUERY"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 14 '["NODE_READ_REPLICA"]' 1 1024 20480 0 '["READ_QUERY"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_NOBW='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":300,"configVersion":14,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":20480,"bandwidthMbps":0},"allowedTasks":["READ_QUERY"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 14 '["NODE_READ_REPLICA"]' 1 1024 20480 0 '["READ_QUERY"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 : > "$TMP/curl-calls"
 cat > "$TMP/curl" <<MOCK
 #!/bin/bash
@@ -958,7 +959,7 @@ NTTL="$TMP/node-ttl"; rm -rf "$NTTL"; mkdir -p "$NTTL"; chmod 700 "$NTTL"
 printf '%s\n' '{"nodeId":"nd_exec1","status":"ACTIVE"}' > "$NTTL/node.json"
 printf 'enk_echoteste0123\n' > "$NTTL/api-key"; chmod 600 "$NTTL/api-key"
 printf '%s' "$CP_PUB" > "$NTTL/pinning-key"; chmod 600 "$NTTL/pinning-key"
-CONFIG_TTL_OK='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":300,"configVersion":30,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 30 '["NODE_WORKER"]' 4 8192 51200 100 '["ASYNC_JOB"]' 2 300)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_TTL_OK='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":300,"configVersion":30,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 30 '["NODE_WORKER"]' 4 8192 51200 100 '["ASYNC_JOB"]' 2 300)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 
 # Ciclo 1: Control Plane de pé. A config fica guardada com o instante da verificação.
 : > "$TMP/curl-calls"
@@ -1011,7 +1012,7 @@ assert_not_contains 'vencida a config, não há poll' "$(cat "$TMP/curl-calls")"
 # A fronteira é o número ASSINADO, não um padrão do runtime: a mesma config com ttl de 3600s e o
 # mesmo recuo de 400s continua valendo. Sem isso, um TTL curto fixo no código faria o teste do
 # cenário 27 passar sem o campo ser lido do documento.
-CONFIG_TTL_LONGO='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":3,"ttlSeconds":3600,"configVersion":31,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 31 '["NODE_WORKER"]' 4 8192 51200 100 '["ASYNC_JOB"]' 2 3600)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_TTL_LONGO='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":3600,"configVersion":31,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 31 '["NODE_WORKER"]' 4 8192 51200 100 '["ASYNC_JOB"]' 2 3600)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 printf '%s' "$CONFIG_TTL_LONGO" > "$NTTL/config.json"
 printf '%s\n' "$(( $(date +%s) - 400 ))" > "$NTTL/config-verified-at"
 : > "$TMP/curl-calls"
@@ -1163,5 +1164,133 @@ out=$(run_custom "$NTTL")
 assert_contains 'com Control Plane de pé o nó revalida e trabalha' "$out" 'DONE tk_relogio'
 assert_not_contains 'e não drena com a config fresca' "$out" 'config vencida'
 rm -f "$TMP/date"; ln -s "$REAL_DATE" "$TMP/date"
+
+# ------------------------------------------------- cenário 35: API_REQUEST chama a rota ASSINADA
+# O destino da chamada NÃO vem do payload: vem da lista allowedRoutes que está na
+# config ASSINADA (formato 4). O payload só diz o NOME da rota. Se o destino viesse do
+# payload, um nó externo seria um SSRF para dentro da rede do participante.
+NA="$TMP/node-api"; rm -rf "$NA"; mkdir -p "$NA"; chmod 700 "$NA"
+cp "$NH/node.json" "$NA/node.json"; cp "$NH/api-key" "$NA/api-key"
+cp "$NH/pinning-key" "$NA/pinning-key"
+CONFIG_API='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":300,"configVersion":40,"profiles":["NODE_API"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":1024,"bandwidthMbps":10},"allowedTasks":["API_REQUEST"],"allowedRoutes":["catalogo=https://catalogo.exemplo/api","acervo=https://acervo.exemplo/api"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 40 '["NODE_API"]' 1 1024 1024 10 '["API_REQUEST"]' 2 300 '["acervo=https://acervo.exemplo/api","catalogo=https://catalogo.exemplo/api"]')"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+TASK_API='{"tasks":[{"taskId":"tk_api1","type":"API_REQUEST","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"api:1","payload":"{\"route\":\"catalogo\"}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
+
+# Stub de curl que entende o executor de rota: a chamada de rota usa -o (corpo em
+# arquivo) e -w %{http_code} (status na saída), então o mock precisa escrever no
+# arquivo e imprimir o status — como o curl de verdade.
+make_curl_api() {
+  local config="$1" task_body="$2"
+  cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+out=''
+prev=''
+for a in "\$@"; do
+  if [[ "\$prev" == '-o' ]]; then out="\$a"; fi
+  prev="\$a"
+done
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$config' ;;
+  */network/tasks/next) printf '%s' '$task_body' ;;
+  https://catalogo.exemplo/api)
+    [[ -n "\$out" ]] && printf '%s' 'CONTEUDO-DA-ROTA' > "\$out"
+    printf '200' ;;
+  https://api.exemplo/x\?ids=1,2)
+    [[ -n "\$out" ]] && printf '%s' 'CONTEUDO-DA-BUSCA' > "\$out"
+    printf '200' ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) printf 'CHAMADA-INESPERADA %s' "\$url" >> "$TMP/curl-calls"; exit 22 ;;
+esac
+MOCK
+  chmod +x "$TMP/curl"
+}
+: > "$TMP/curl-calls"
+make_curl_api "$CONFIG_API" "$TASK_API"
+out=$(run_custom "$NA")
+assert_contains 'a rota autorizada é chamada' "$(cat "$TMP/curl-calls")" 'https://catalogo.exemplo/api'
+assert_contains 'o resultado declara o status da rota' "$(cat "$TMP/curl-calls")" '"status":200'
+assert_contains 'o resultado declara o tamanho do corpo' "$(cat "$TMP/curl-calls")" '"bytes":16'
+assert_contains 'o resultado declara o digest do corpo' "$(cat "$TMP/curl-calls")" '"digest":"'
+assert_not_contains 'o corpo da rota não volta no resultado' "$(cat "$TMP/curl-calls")" 'CONTEUDO-DA-ROTA'
+assert_not_contains 'a credencial do nó não vai para o destino' "$(cat "$TMP/curl-calls")" 'X-Node-Key: enk_echoteste0123 https://catalogo'
+assert_contains 'task concluída' "$out" 'rota catalogo status=200'
+
+# ------------------------------------------------- cenário 36: rota fora da lista assinada é recusada
+# O payload pede uma rota que ninguém autorizou. O nó NÃO tem para onde ir: destino fora
+# da lista assinada não existe, e não há "se não achar, usa o que o payload mandou".
+TASK_API_FORA='{"tasks":[{"taskId":"tk_api2","type":"API_REQUEST","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"api:2","payload":"{\"route\":\"interno\"}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
+: > "$TMP/curl-calls"
+make_curl_api "$CONFIG_API" "$TASK_API_FORA"
+out=$(run_custom "$NA")
+assert_contains 'rota fora da lista assinada falha com código próprio' "$(cat "$TMP/curl-calls")" 'API_ROUTE_NOT_ALLOWED'
+assert_not_contains 'rota não autorizada não vira requisição' "$(cat "$TMP/curl-calls")" 'https://interno'
+assert_not_contains 'rota não autorizada não toca o destino' "$(cat "$TMP/curl-calls")" 'https://catalogo.exemplo/api'
+
+# ------------------------------------------------- cenário 37: URL no payload é ignorada
+# O payload traz a URL junto. O nó resolve o NOME e ignora a URL: se a URL do payload
+# valesse, o SSRF voltaria pela porta dos fundos.
+TASK_API_URL='{"tasks":[{"taskId":"tk_api3","type":"API_REQUEST","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"api:3","payload":"{\"route\":\"catalogo\",\"url\":\"http://169.254.169.254/latest/meta-data/\"}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
+: > "$TMP/curl-calls"
+make_curl_api "$CONFIG_API" "$TASK_API_URL"
+out=$(run_custom "$NA")
+assert_not_contains 'a URL do payload é ignorada' "$(cat "$TMP/curl-calls")" '169.254.169.254'
+assert_contains 'e a rota assinada é chamada' "$(cat "$TMP/curl-calls")" 'https://catalogo.exemplo/api'
+
+# ------------------------------------------------- cenário 38: lista de rotas vazia recusa tudo
+# Nó sem rota declarada: a config assinada traz a lista vazia, e a task é recusada
+# sem nenhuma requisição. É o estado de todo nó que não recebeu rota.
+CONFIG_API_SEM_ROTA='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":300,"configVersion":41,"profiles":["NODE_API"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":1024,"bandwidthMbps":10},"allowedTasks":["API_REQUEST"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 41 '["NODE_API"]' 1 1024 1024 10 '["API_REQUEST"]' 2 300 '[]')"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+: > "$TMP/curl-calls"
+make_curl_api "$CONFIG_API_SEM_ROTA" "$TASK_API"
+out=$(run_custom "$NA")
+assert_contains 'sem rota declarada a task é recusada' "$(cat "$TMP/curl-calls")" 'API_ROUTE_NOT_ALLOWED'
+assert_not_contains 'sem rota declarada não há requisição nenhuma' "$(cat "$TMP/curl-calls")" 'https://catalogo.exemplo/api'
+
+# ------------------------------------------------- cenário 39: rota adulterada invalida a assinatura
+# A lista de rotas no corpo foi trocada DEPOIS de assinada: o destino agora é o de
+# metadados da nuvem. A assinatura é a da lista ORIGINAL (é o que o Control Plane
+# assinou), então a conferência da linha canônica do corpo tem de falhar — e a config
+# inteira é recusada. O nó nem chega a resolver a rota, porque nem chegou a ter uma
+# config confiável.
+ROTA_ORIGINAL_SIG="$(sign_limits_config 40 '["NODE_API"]' 1 1024 1024 10 '["API_REQUEST"]' 2 300 '["acervo=https://acervo.exemplo/api","catalogo=https://catalogo.exemplo/api"]')"
+CONFIG_API_ADULTERADA='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":300,"configVersion":40,"profiles":["NODE_API"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":1024,"bandwidthMbps":10},"allowedTasks":["API_REQUEST"],"allowedRoutes":["catalogo=http://169.254.169.254/latest/meta-data/"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$ROTA_ORIGINAL_SIG"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+: > "$TMP/curl-calls"
+make_curl_api "$CONFIG_API_ADULTERADA" "$TASK_API"
+out=$(run_custom "$NA")
+assert_contains 'rota trocada depois de assinada invalida a assinatura' "$out" 'assinatura da config não confere com o pino'
+assert_not_contains 'config com rota adulterada não habilita poll' "$(cat "$TMP/curl-calls")" '/network/tasks/next'
+assert_not_contains 'e não chama o destino adulterado' "$(cat "$TMP/curl-calls")" '169.254.169.254'
+
+# ------------------------------------------------- cenário 40: payload sem rota, e método proibido
+# Payload sem "route" não tem o que resolver; método que escreve (POST) não é consulta
+# de rota. Ambos recusam com código próprio, sem tocar a rede.
+TASK_API_SEM_ROTA='{"tasks":[{"taskId":"tk_api4","type":"API_REQUEST","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"api:4","payload":"{}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
+TASK_API_POST='{"tasks":[{"taskId":"tk_api5","type":"API_REQUEST","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"api:5","payload":"{\"route\":\"catalogo\",\"method\":\"POST\"}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
+for task_body in "$TASK_API_SEM_ROTA" "$TASK_API_POST"; do
+  : > "$TMP/curl-calls"
+  make_curl_api "$CONFIG_API" "$task_body"
+  out=$(run_custom "$NA")
+  assert_contains 'payload inválido falha com código próprio' "$(cat "$TMP/curl-calls")" 'TASK_PAYLOAD_INVALID'
+  assert_not_contains 'payload inválido não chama a rota' "$(cat "$TMP/curl-calls")" 'https://catalogo.exemplo/api'
+done
+
+# ------------------------------------------------- cenário 41: rota com vírgula na query
+# A vírgula é caractere legítimo de URL: "https://api.exemplo/x?ids=1,2" é UM destino.
+# Se a leitura da lista de rotas tratar a vírgula como separador, o nó chamaria
+# "https://api.exemplo/x?ids=1" — um caminho que ninguém assinou — e a linha canônica
+# reconstruída também não conferiria com a assinatura (a lista reordenada/cortada muda a
+# linha). As duas metades são verificadas aqui: a chamada vai ao destino inteiro e a
+# config é aceita.
+ROTA_COMMA='["acervo=https://acervo.exemplo/api","busca=https://api.exemplo/x?ids=1,2"]'
+CONFIG_API_COMMA='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":300,"configVersion":42,"profiles":["NODE_API"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":1024,"bandwidthMbps":10},"allowedTasks":["API_REQUEST"],"allowedRoutes":["acervo=https://acervo.exemplo/api","busca=https://api.exemplo/x?ids=1,2"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 42 '["NODE_API"]' 1 1024 1024 10 '["API_REQUEST"]' 2 300 "$ROTA_COMMA")"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+TASK_API_COMMA='{"tasks":[{"taskId":"tk_api6","type":"API_REQUEST","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"api:6","payload":"{\"route\":\"busca\"}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
+: > "$TMP/curl-calls"
+make_curl_api "$CONFIG_API_COMMA" "$TASK_API_COMMA"
+out=$(run_custom "$NA")
+assert_contains 'rota com vírgula na query é chamada com a query inteira' "$(cat "$TMP/curl-calls")" 'https://api.exemplo/x?ids=1,2'
+assert_contains 'a config com rota de query-string é aceita (linha canônica confere)' "$out" 'rota busca status=200'
+assert_not_contains 'e a config não é recusada por assinatura' "$out" 'assinatura da config não confere com o pino'
 
 printf '\nTodos os cenarios passaram (%d assercoes).\n' "$PASS"

@@ -279,7 +279,7 @@ class NetworkNodesTests {
 			.perform(get("/network/nodes/me/config").header("X-Node-Id", nodeId).header("X-Node-Key", key))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.nodeId").value(nodeId))
-			.andExpect(jsonPath("$.formatVersion").value(3))
+			.andExpect(jsonPath("$.formatVersion").value(4))
 			// Versão da permissão: 1 do enroll + 1 da aprovação feita acima.
 			.andExpect(jsonPath("$.configVersion").value(2))
 			.andExpect(jsonPath("$.profiles[0]").value("NODE_MEDIA"))
@@ -289,6 +289,10 @@ class NetworkNodesTests {
 			.andExpect(jsonPath("$.limits.bandwidthMbps").value(100))
 			.andExpect(jsonPath("$.allowedTasks[0]").value("MEDIA_TRANSCODE"))
 			.andExpect(jsonPath("$.allowedTasks[1]").value("MEDIA_THUMBNAIL"))
+			// A lista de rotas vai no payload mesmo vazia: é ela que diz ao nó quais destinos ele
+			// pode chamar, e uma lista ausente seria indistinguível de uma lista esquecida.
+			.andExpect(jsonPath("$.allowedRoutes").isArray())
+			.andExpect(jsonPath("$.allowedRoutes").isEmpty())
 			// O prazo vai no payload e é o que o nó usa para saber que a permissão venceu: sem ele
 			// o runtime seguiria com a última config para sempre e "Control Plane fora" nunca seria
 			// detectado (doc 06 §6).
