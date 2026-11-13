@@ -60,8 +60,13 @@ class AdminNetworkTaskController {
 		}
 	}
 
+	/**
+	 * {@code awaitingEvacuation} é aditivo, como {@code awaitingDrain}: conta o que está preso a
+	 * região evacuada e ainda não passou pela rodada de drenagem regional. Sem ele o admin declara a
+	 * evacuação e não vê que havia trabalho na mão da região até o scheduler rodar.
+	 */
 	record OverviewView(String mode, long pending, long dispatched, long done, long failed, long dead,
-			long cancelled, long awaitingDrain) {
+			long cancelled, long awaitingDrain, long awaitingEvacuation) {
 	}
 
 	@GetMapping
@@ -84,7 +89,8 @@ class AdminNetworkTaskController {
 		return new OverviewView(modes.current().name(), tasks.countByStatus(TaskStatus.PENDING),
 			tasks.countByStatus(TaskStatus.DISPATCHED), tasks.countByStatus(TaskStatus.DONE),
 			tasks.countByStatus(TaskStatus.FAILED), tasks.countByStatus(TaskStatus.DEAD),
-			tasks.countByStatus(TaskStatus.CANCELLED), tasks.countOnNonOperatingNodes());
+			tasks.countByStatus(TaskStatus.CANCELLED), tasks.countOnNonOperatingNodes(),
+			tasks.countOnEvacuatedRegions());
 	}
 
 	@GetMapping("/{id}")

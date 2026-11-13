@@ -15,6 +15,7 @@ import com.socialcoisa.rede.network.application.port.out.NetworkStateRepository;
 import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
 import com.socialcoisa.rede.network.domain.NetworkMode;
 import com.socialcoisa.rede.network.domain.NetworkNode;
+import com.socialcoisa.rede.network.domain.NetworkRegions;
 import com.socialcoisa.rede.network.domain.TaskStatus;
 import com.socialcoisa.rede.shared.audit.AuditTrail;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -41,18 +42,20 @@ public class NetworkModeService {
 	private final NetworkStateRepository state;
 	private final NetworkTaskRepository tasks;
 	private final NetworkNodeRepository nodes;
+	private final NetworkRegionService regions;
 	private final AuditTrail audit;
 	private final Clock clock;
 	private final double enterRatio;
 	private final double exitRatio;
 
 	NetworkModeService(NetworkStateRepository state, NetworkTaskRepository tasks, NetworkNodeRepository nodes,
-			AuditTrail audit, Clock clock,
+			NetworkRegionService regions, AuditTrail audit, Clock clock,
 			@Value("${rede.network.mode.high-load-enter-ratio:1.0}") double enterRatio,
 			@Value("${rede.network.mode.high-load-exit-ratio:0.5}") double exitRatio) {
 		this.state = state;
 		this.tasks = tasks;
 		this.nodes = nodes;
+		this.regions = regions;
 		this.audit = audit;
 		this.clock = clock;
 		this.enterRatio = enterRatio;
@@ -149,9 +152,14 @@ public class NetworkModeService {
 	 */
 	private long availableCapacity(Instant now) {
 		List<NetworkNode> candidates = nodes.findCandidates(now.minusSeconds(180), 200);
+		// Região evacuada não promete vaga: o nó dela está ACTIVE e manda heartbeat, mas não executa
+		// enquanto a região estiver fora. Contá-lo faria a razão fila/vagas parecer folgada justamente
+		// durante o incidente — o mesmo defeito que excluir nó saturado e em quarentena já corrigiu.
+		List<String> evacuated = regions.outOfService();
 		long total = 0;
 		for (NetworkNode node : candidates) {
-			if (node.saturated() || node.memoryExhausted() || node.quarantined(now)) {
+			if (node.saturated() || node.memoryExhausted() || node.quarantined(now)
+					|| NetworkRegions.outOfService(evacuated, node.region())) {
 				continue;
 			}
 			total += Math.max(0, node.concurrencyLimit() - node.runningTasks());

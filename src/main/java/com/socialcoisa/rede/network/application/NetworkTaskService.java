@@ -21,6 +21,7 @@ import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
 import com.socialcoisa.rede.network.domain.DataClass;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NetworkMode;
+import com.socialcoisa.rede.network.domain.NetworkRegions;
 import com.socialcoisa.rede.network.domain.NetworkTask;
 import com.socialcoisa.rede.network.domain.NodeProfile;
 import com.socialcoisa.rede.network.domain.TaskStatus;
@@ -67,6 +68,7 @@ public class NetworkTaskService {
 	 */
 	private final org.springframework.beans.factory.ObjectProvider<com.socialcoisa.rede.network.application.port.out.EdgeDeliverVerifier> edgeDeliveries;
 	private final NetworkModeService modes;
+	private final NetworkRegionService regions;
 	private final AuditTrail audit;
 	private final Clock clock;
 	private final Duration claimTtl;
@@ -77,7 +79,7 @@ public class NetworkTaskService {
 
 	NetworkTaskService(NetworkTaskRepository tasks, NetworkNodeRepository nodes, org.springframework.beans.factory.ObjectProvider<MediaResultVerifier> mediaResults,
 			org.springframework.beans.factory.ObjectProvider<com.socialcoisa.rede.network.application.port.out.EdgeDeliverVerifier> edgeDeliveries,
-			NetworkModeService modes, AuditTrail audit, Clock clock,
+			NetworkModeService modes, NetworkRegionService regions, AuditTrail audit, Clock clock,
 			@Value("${rede.network.task.claim-ttl-seconds:120}") long claimTtlSeconds,
 			@Value("${rede.network.task.node-stale-seconds:180}") long nodeStaleSeconds,
 			@Value("${rede.network.task.max-attempts:5}") int maxAttempts,
@@ -88,6 +90,7 @@ public class NetworkTaskService {
 		this.mediaResults = mediaResults;
 		this.edgeDeliveries = edgeDeliveries;
 		this.modes = modes;
+		this.regions = regions;
 		this.audit = audit;
 		this.clock = clock;
 		this.claimTtl = Duration.ofSeconds(Math.max(10, claimTtlSeconds));
@@ -155,6 +158,9 @@ public class NetworkTaskService {
 			return 0;
 		}
 		List<NetworkNode> candidates = nodes.findCandidates(now.minus(nodeStaleAfter), MAX_LIST);
+		// Regiões evacuadas são lidas UMA vez por rodada, como os candidatos: a escolha de cada tarefa
+		// consulta a mesma resposta, e uma declaração que chegue no meio da rodada vale na próxima.
+		List<String> evacuated = regions.outOfService();
 		// As vagas lidas do heartbeat valem para o instante da leitura, não para a rodada inteira. Sem
 		// este contador, dez tarefas na fila iam todas para o mesmo nó de quatro núcleos: cada escolha
 		// relia a lista de candidatos, que ainda dizia "zero rodando", e a concorrência declarada pelo
@@ -163,7 +169,7 @@ public class NetworkTaskService {
 		Map<String, Integer> reserved = new HashMap<>();
 		int dispatched = 0;
 		for (NetworkTask task : pending) {
-			Optional<NetworkNode> chosen = choose(task, candidates, now, reserved);
+			Optional<NetworkNode> chosen = choose(task, candidates, evacuated, now, reserved);
 			if (chosen.isEmpty()) {
 				// Sem nó elegível a tarefa fica na fila: o próximo ciclo tenta de novo. Não é erro —
 				// é a rede sem capacidade agora, e matar a tarefa seria perder trabalho.
@@ -242,10 +248,70 @@ public class NetworkTaskService {
 		return drained;
 	}
 
+	/**
+	 * Drenagem regional: devolve à fila, na hora, o que estava designado a nós de regiões evacuadas
+	 * (V289).
+	 *
+	 * <p>Antes desta rodada, evacuar uma região não devolvia nada: a drenagem existente pergunta
+	 * pelo <b>status do nó</b> ({@code n.status <> 'ACTIVE'}), e o nó da região caída continua
+	 * {@code ACTIVE} — ele não foi suspenso, a região é que saiu. O resultado era a tarefa presa até
+	 * o claim vencer (dois minutos no padrão), devolvida por {@code reclaimAbandoned}, e então
+	 * designada de novo... ao mesmo nó, porque ele seguia elegível. A evacuação impede a designação
+	 * nova; esta rodada impede a espera pela que já estava na mão dele.</p>
+	 *
+	 * <p>A devolução é segura pelo mesmo motivo da drenagem por status: o {@code attempt} sobe na
+	 * próxima designação, e o resultado do nó evacuado, se um dia chegar, é de tentativa antiga e cai
+	 * na regra de descarte que já existe.</p>
+	 *
+	 * <p>Tarefa com <b>alvo</b> num nó evacuado volta para a fila mas não é designada a outro: alvo é
+	 * vínculo (V287), não preferência — o estado daquele trabalho vive naquele nó. Ela espera o
+	 * prazo ou a região voltar, o que é o comportamento certo: executar no nó errado não é executar
+	 * pior, é não executar.</p>
+	 */
+	@Transactional
+	public int drainEvacuatedRegions() {
+		List<String> evacuated = regions.outOfService();
+		if (evacuated.isEmpty()) {
+			return 0;
+		}
+		Instant now = clock.instant();
+		int drained = 0;
+		for (NetworkTask task : tasks.findOnEvacuatedRegions(evacuated, now, SCAN_LIMIT)) {
+			if (task.expired(now)) {
+				tasks.kill(task.id(), task.attempt(), "TASK_EXPIRED: prazo vencido em regiao evacuada", now);
+				audit.record("system", "NETWORK_TASK_EXPIRED", task.id(), "{\"attempt\":" + task.attempt() + "}");
+				continue;
+			}
+			// Volta para já: a capacidade daquela região não vai responder, e esperar o claim não
+			// muda isso. Quem pode executar é outra região, e ela está pronta agora.
+			if (tasks.requeue(task.id(), task.attempt(), "TASK_DRAINED: regiao fora de operacao", now, now) == 1) {
+				drained++;
+				audit.record("system", "NETWORK_TASK_REGION_EVACUATED", task.id(),
+					"{\"attempt\":" + task.attempt() + ",\"node\":\"" + escape(task.assignedNodeId())
+						+ "\",\"region\":\"" + escape(regionOf(task.assignedNodeId())) + "\"}");
+			}
+		}
+		return drained;
+	}
+
+	/** A região do nó designado, para a auditoria dizer QUAL região drenou a tarefa. */
+	private String regionOf(String nodeId) {
+		if (nodeId == null) {
+			return "";
+		}
+		return nodes.findById(nodeId).map(NetworkNode::region).orElse("");
+	}
+
 	/** Quantas tarefas estão presas a nó fora de operação — o painel mostra sem paginar. */
 	@Transactional(readOnly = true)
 	public long countOnNonOperatingNodes() {
 		return tasks.countOnNonOperatingNodes(clock.instant());
+	}
+
+	/** Quantas tarefas estão presas a região evacuada — o painel mostra sem paginar. */
+	@Transactional(readOnly = true)
+	public long countOnEvacuatedRegions() {
+		return tasks.countOnEvacuatedRegions(regions.outOfService(), clock.instant());
 	}
 
 	/**
@@ -255,6 +321,13 @@ public class NetworkTaskService {
 	@Transactional
 	public List<NetworkTask> nextFor(NetworkNode node) {
 		requireOperable(node);
+		// Região evacuada não começa trabalho novo. O heartbeat já responde `acceptTasks=false` e é o
+		// canal principal (drenar é não pedir, sem 403 que encerraria o reporte); esta checagem é a
+		// segunda porta: um runtime que insista em pedir — ou que tenha o heartbeat em cache — não
+		// recebe tarefa. Devolver lista vazia, e não 403, mantém o mesmo contrato da rota.
+		if (NetworkRegions.outOfService(regions.outOfService(), node.region())) {
+			return List.of();
+		}
 		return tasks.findAssignedTo(node.id(), clock.instant(), SCAN_LIMIT);
 	}
 
@@ -414,9 +487,15 @@ public class NetworkTaskService {
 	 * candidato são do último heartbeat; sem descontar o que a própria rodada entregou, a designação
 	 * passa por cima do limite de concorrência que o participante declarou.</p>
 	 */
-	private Optional<NetworkNode> choose(NetworkTask task, List<NetworkNode> candidates, Instant now,
-			Map<String, Integer> reserved) {
+	private Optional<NetworkNode> choose(NetworkTask task, List<NetworkNode> candidates, List<String> evacuated,
+			Instant now, Map<String, Integer> reserved) {
 		List<NetworkNode> eligible = candidates.stream()
+			// Região evacuada é FILTRO, ao contrário da afinidade (ADR-012), e a diferença é o que
+			// "evacuar" significa: afinidade é preferência entre nós que podem executar; evacuação é
+			// a afirmação de que este nó NÃO pode executar agora. Designar para ele seria o loop que
+			// a evacuação existe para romper — tarefa presa, claim vencido, devolvida, designada ao
+			// mesmo nó da região caída de novo, até morrer de tentativas.
+			.filter(node -> !NetworkRegions.outOfService(evacuated, node.region()))
 			// Alvo vem antes de todo critério de mérito: é vínculo, não desempate. Filtrar depois do
 			// jitter seria mandar ao nó errado um trabalho que o nó errado não sabe continuar.
 			.filter(node -> task.targetNodeId() == null || node.id().equals(task.targetNodeId()))

@@ -13,8 +13,10 @@ import org.springframework.web.bind.annotation.RestController;
 import com.socialcoisa.rede.network.application.NetworkConfigService;
 import com.socialcoisa.rede.network.application.NetworkModeService;
 import com.socialcoisa.rede.network.application.NetworkNodeService;
+import com.socialcoisa.rede.network.application.NetworkRegionService;
 import com.socialcoisa.rede.network.application.NodeKeyService;
 import com.socialcoisa.rede.network.domain.NetworkNode;
+import com.socialcoisa.rede.network.domain.NetworkRegions;
 import com.socialcoisa.rede.network.domain.NodeStatus;
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -34,13 +36,15 @@ class NetworkNodeController {
 	private final NodeKeyService keys;
 	private final NetworkModeService modes;
 	private final NetworkConfigService configs;
+	private final NetworkRegionService regions;
 
 	NetworkNodeController(NetworkNodeService nodes, NodeKeyService keys, NetworkModeService modes,
-			NetworkConfigService configs) {
+			NetworkConfigService configs, NetworkRegionService regions) {
 		this.nodes = nodes;
 		this.keys = keys;
 		this.modes = modes;
 		this.configs = configs;
+		this.regions = regions;
 	}
 
 	/**
@@ -121,7 +125,13 @@ class NetworkNodeController {
 		// acceptTasks também é falso quando o PRÓPRIO nó está em quarentena de status: é assim que
 		// o nó de TERM_CONFLICT drena na hora, sem precisar de 403 — 403 no heartbeat encerraria o
 		// canal pelo qual ele reporta o termo que viu.
-		boolean acceptTasks = modes.current().dispatchAllowed() && updated.status() == NodeStatus.ACTIVE;
+		//
+		// E falso quando a REGIÃO do nó foi evacuada: o nó está ACTIVE e continua autenticando, mas a
+		// região não opera. Dizer `true` a ele seria a evacuação existindo só no painel — o nó
+		// pediria tarefa e receberia lista vazia em loop, em vez de drenar e parar de perguntar.
+		boolean regionEvacuated = NetworkRegions.outOfService(regions.outOfService(), updated.region());
+		boolean acceptTasks = modes.current().dispatchAllowed() && updated.status() == NodeStatus.ACTIVE
+				&& !regionEvacuated;
 		return new HeartbeatResponse(updated.id(), updated.status().name(),
 			updated.profiles().stream().map(Enum::name).sorted().toList(), Instant.now().toString(),
 			modes.current().name(), acceptTasks);

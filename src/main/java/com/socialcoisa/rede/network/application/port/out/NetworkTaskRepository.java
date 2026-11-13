@@ -68,6 +68,22 @@ public interface NetworkTaskRepository {
 	long countOnNonOperatingNodes(Instant now);
 
 	/**
+	 * Tarefas designadas a nós de regiões declaradas fora de operação (V289), com claim vigente.
+	 *
+	 * <p>Complementa {@link #findOnNonOperatingNodes} e não repete: lá o critério é o <b>status do
+	 * nó</b>, aqui é a <b>região ter sido evacuada</b> — o nó continua {@code ACTIVE} e a drenagem
+	 * existente não o vê. Sem esta leitura, evacuar uma região deixaria as tarefas na mão dos nós
+	 * dela até o claim vencer, e a fila do desastre custaria dois minutos por tarefa.</p>
+	 *
+	 * <p>A coleção é a lista de regiões já normalizada (minúsculas, sem espaços), como o port de
+	 * região devolve; a comparação é no banco e é exata, para o índice não ser ignorado.</p>
+	 */
+	List<NetworkTask> findOnEvacuatedRegions(Collection<String> regions, Instant now, int limit);
+
+	/** Quantas tarefas estão presas a regiões evacuadas — o número do painel. */
+	long countOnEvacuatedRegions(Collection<String> regions, Instant now);
+
+	/**
 	 * Trabalho concluído por nó — a contribuição que a interface do participante mostra.
 	 *
 	 * <p>Conta o que <b>acabou</b> ({@code DONE}): tarefa designada não é contribuição, é promessa;

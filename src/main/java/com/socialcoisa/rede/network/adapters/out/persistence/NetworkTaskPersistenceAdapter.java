@@ -106,6 +106,27 @@ class NetworkTaskPersistenceAdapter implements NetworkTaskRepository {
 	}
 
 	@Override
+	public List<NetworkTask> findOnEvacuatedRegions(Collection<String> regions, Instant now, int limit) {
+		// Coleção vazia vira `in ()`, que o JPQL/Hibernate não aceita: nada a drenar é a resposta
+		// correta quando não há região evacuada, e a consulta nem precisa ir ao banco.
+		if (regions == null || regions.isEmpty()) {
+			return List.of();
+		}
+		return repository.findOnEvacuatedRegions(regions, now, PageRequest.ofSize(limit))
+			.stream()
+			.map(NetworkTaskJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public long countOnEvacuatedRegions(Collection<String> regions, Instant now) {
+		if (regions == null || regions.isEmpty()) {
+			return 0;
+		}
+		return repository.countOnEvacuatedRegions(regions, now);
+	}
+
+	@Override
 	public int claim(String id, String nodeId, int expectedAttempt, Instant claimExpiresAt, Instant now) {
 		return repository.claim(id, nodeId, expectedAttempt, claimExpiresAt, now);
 	}

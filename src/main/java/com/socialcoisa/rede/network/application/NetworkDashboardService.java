@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
+import com.socialcoisa.rede.network.domain.NetworkRegions;
 import com.socialcoisa.rede.network.domain.NodeProfile;
 import com.socialcoisa.rede.network.domain.NodeStatus;
 
@@ -40,10 +41,12 @@ public class NetworkDashboardService {
 	private static final long STALE_SECONDS = 180;
 
 	private final NetworkNodeRepository nodes;
+	private final NetworkRegionService regions;
 	private final Clock clock;
 
-	NetworkDashboardService(NetworkNodeRepository nodes, Clock clock) {
+	NetworkDashboardService(NetworkNodeRepository nodes, NetworkRegionService regions, Clock clock) {
 		this.nodes = nodes;
+		this.regions = regions;
 		this.clock = clock;
 	}
 
@@ -51,6 +54,7 @@ public class NetworkDashboardService {
 	public Dashboard dashboard() {
 		Instant now = clock.instant();
 		List<NetworkNode> all = nodes.list(MAX_LIST);
+		List<String> evacuated = regions.outOfService();
 
 		int total = all.size();
 		int active = 0;
@@ -85,7 +89,7 @@ public class NetworkDashboardService {
 				// ou fora do balanceamento não promete vaga que não vai cumprir. Saturado continua
 				// fora de "degradado": carga momentânea não é saúde.
 				if (node.hasCapacity() && !node.saturated() && !node.memoryExhausted()
-						&& !node.quarantined(now)) {
+						&& !node.quarantined(now) && !NetworkRegions.outOfService(evacuated, node.region())) {
 					freeSlots += Math.max(0, node.concurrencyLimit() - node.runningTasks());
 				}
 			}
@@ -122,7 +126,7 @@ public class NetworkDashboardService {
 		return new Dashboard(total, active, unavailable, quarantined, alive, degraded, declaredCores,
 			declaredMemoryMb, freeSlots, cpuSamples == 0 ? null : cpuSum / cpuSamples,
 			cpuSamples, memorySamples == 0 ? null : memorySumMb / memorySamples, memorySamples,
-			byRegion, byProfile, topRuntimes);
+			byRegion, byProfile, topRuntimes, evacuated);
 	}
 
 	/**
@@ -133,11 +137,16 @@ public class NetworkDashboardService {
 	 * <p>{@code avgCpuPercent}/{@code avgMemoryMb} são médias dos reportes recentes com a contagem
 	 * de amostras ao lado: média sem amostras é {@code null}, e média sem saber de quantos nós é
 	 * média não diz nada. Capacidade livre é a mesma conta conservadora do modo: nó saturado,
-	 * esgotado de memória ou em quarentena não promete vaga que não vai cumprir.</p>
+	 * esgotado de memória, em quarentena ou de região evacuada não promete vaga que não vai
+	 * cumprir.</p>
+	 *
+	 * <p>{@code outOfServiceRegions} é aditivo e é o que a tela precisa para explicar por que a
+	 * capacidade livre caiu sem nenhum nó ter saído: a região está fora por decisão humana, e a
+	 * lista das que estão é a diferença entre "o painel está errado" e "houve incidente".</p>
 	 */
 	public record Dashboard(int total, int active, int unavailable, int quarantined, int alive, int degraded,
 			int declaredCpuCores, int declaredMemoryMb, int freeSlots, Double avgCpuPercent, int cpuSamples,
 			Integer avgMemoryMb, int memorySamples, Map<String, Integer> byRegion, Map<String, Integer> byProfile,
-			Map<String, Integer> runtimeVersions) {
+			Map<String, Integer> runtimeVersions, List<String> outOfServiceRegions) {
 	}
 }

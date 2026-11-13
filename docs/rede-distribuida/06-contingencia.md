@@ -123,6 +123,43 @@ Pré-requisitos, todos obrigatórios:
 - procedimentos de recuperação de dados documentados;
 - **prevenção de split-brain**.
 
+### 3.1 Recuperação regional (V289, R103)
+
+A região afetada sai, e os nós das outras atendem o que podem. A saída é **declaração humana com
+motivo obrigatório** (`POST /admin/network/regions`), pela mesma razão do modo operacional
+(ADR-009): nenhum número que o Control Plane meça distingue "região em desastre" de "região com a
+rede lenta", e a declaração é o que deixa o incidente auditado — quem declarou, por quê, desde
+quando. A volta também é humana (`DELETE /admin/network/regions/{region}`), sem prazo de relógio:
+readmitir por conta própria seria a automação desfazendo decisão de incidente.
+
+Declarada a região, **quatro portas** fecham para os nós dela, e fechar três deixaria a quarta
+aberta (ADR-015):
+
+| porta | antes | agora |
+|---|---|---|
+| despacho (`choose`) | designava para o nó da região caída | região evacuada é **filtro**, antes de qualquer critério de mérito |
+| capacidade (`availableCapacity`, painel) | contava a vaga de quem não executa | a vaga não é contada; `freeSlots` cai e `outOfServiceRegions` explica por quê |
+| heartbeat | respondia `acceptTasks=true` | `false` — o nó drena sem 403; `nextFor` devolve lista vazia como segunda porta |
+| drenagem (`drainEvacuatedRegions`) | só via status (`n.status <> 'ACTIVE'`), que não cobre o caso | o que estava na mão dos nós volta à fila **na hora** |
+
+A comparação é **normalizada** (trim e lower-case, `NetworkRegions`): "Sudeste" no nó e "sudeste" na
+declaração são a mesma região, como já eram para o balanceador (ADR-012). Região ausente nunca é
+evacuada.
+
+O defeito que isso rompe, em uma frase: com a região declarada, o nó continuava `ACTIVE` e elegível,
+então a tarefa presa voltava por claim vencido e era designada **ao mesmo nó**, em loop, até morrer
+de tentativas.
+
+Tarefa com **alvo** num nó evacuado volta para a fila e **não** roda em outro nó: alvo é vínculo
+(V287), não preferência. Ela espera o prazo ou a região voltar.
+
+`GET /admin/network/tasks/overview` mostra `awaitingEvacuation` enquanto a drenagem regional não
+rodou — entre a declaração e o ciclo seguinte, é a diferença entre "nada aconteceu" e "há trabalho
+parado".
+
+**Prova:** `NetworkRegionTests` (13 testes; Q0 neutralizando as quatro portas falha em 6) e V289
+aplicada duas vezes em MariaDB 11.4 real com `network_nodes`/`network_tasks` povoados antes.
+
 ## 4. Anti split-brain
 
 O Control Plane não pode ser ponto único de falha sem estratégia de recuperação. A estratégia é
