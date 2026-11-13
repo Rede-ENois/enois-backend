@@ -31,9 +31,10 @@ qualquer container: subir um nó com chave revogada só criaria um loop de erro.
 
 ### 1.1 O pino da config assinada (TOFU)
 
-A chave pública que assina a config é pinada em `$NODE_HOME/pinning-key` e o
-runtime recusa qualquer config assinada com outra chave — inclusive depois de uma
-rotação silenciosa no Control Plane. O pino é gravado **uma única vez**:
+A chave pública que assina a config é pinada em `$NODE_HOME/pinning-key`, e é
+**contra ela** que o runtime verifica a assinatura de cada config (não contra o
+campo `publicKey` do corpo); config assinada por outra chave é recusada, inclusive
+depois de uma rotação silenciosa no Control Plane. O pino é gravado **uma única vez**:
 
 - **no enroll**, quando a config já traz `publicKey` (nó com chave de configuração
   ativa do lado do Control Plane);
@@ -85,8 +86,14 @@ O container roda o loop do nó, não o jar (o jar é o Control Plane). Cada cicl
 2. **drenar é não pedir**: `acceptTasks:false` (DEGRADED/EMERGENCY) encerra o ciclo
    sem consultar a fila;
 3. **config assinada**: recusa config sem assinatura (padrão do runtime) e confere
-   `publicKey` contra o pino gravado no enroll ou no primeiro `--start`
-   (`$NODE_HOME/pinning-key`); sem pino, recusa toda config;
+   o campo `publicKey` contra o pino gravado no enroll ou no primeiro `--start`
+   (`$NODE_HOME/pinning-key`); sem pino, recusa toda config. Depois **verifica a
+   assinatura Ed25519**: reconstrói a linha canônica do corpo recebido e roda
+   `openssl pkeyutl -verify -rawin` contra o X.509 do pino (base64 → DER). O campo
+   `publicKey` viaja no mesmo corpo que a permissão, então comparar só ele provaria
+   que quem mandou sabe copiar uma string; a assinatura é a prova. Falha fechada:
+   openssl ausente, pino ilegível, campo assinado faltando ou assinatura que não
+   confere — o ciclo termina sem pedir tarefa;
 4. **poll** (`GET /network/tasks/next`) — uma tarefa por ciclo;
 5. **executa só o que a config assinada autoriza** (`allowedTasks`): autorizada vai
    para o executor do tipo; fora da lista vira `FAILED` com `TASK_NOT_ALLOWED` — o
@@ -292,7 +299,7 @@ e preserva o atual; digest não verificável é recusado.
   hash), `READ_QUERY` (travessia do catálogo da réplica com corpo e confirmação),
   `EDGE_CACHE` (consumo do feed de mudanças com corpo baixado e confirmado) e
   `EDGE_DELIVER` (revalidação da entrada e veredicto de entrega conferido contra
-  o snapshot do nó), 102 asserções em `scripts/tests/node-executor-test.sh`.
+  o snapshot do nó), 106 asserções em `scripts/tests/node-executor-test.sh`.
   Falta `API_REQUEST` (NODE_API), que hoje cai no eco de ciclo de vida.
 - **Banda declarada sem consumidor**: o disco declarado (`limits.diskMb`) já é teto
   aplicado pelo runtime ao estado de conteúdo (borda evicta a entrada mais antiga,

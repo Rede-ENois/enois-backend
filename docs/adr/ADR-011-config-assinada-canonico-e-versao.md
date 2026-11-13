@@ -58,6 +58,13 @@ válida é `ERROR` e `signed:false`, nunca exceção que derruba a rota.
 - **`publicKey` vai em toda resposta.** É o pino que o instalador grava no enroll; o runtime confere
   toda config seguinte contra ele sem depender do transporte desta resposta. A chave pública não é
   segredo, então publicá-la não abre nada.
+- **A verificação do nó é da assinatura, não da string.** O runtime reconstrói a linha canônica do
+  corpo recebido e verifica o Ed25519 com `openssl` contra o X.509 do pino. Comparar o campo
+  `publicKey` com o pino só provaria que quem escreveu o corpo sabe copiar uma string — e esse campo
+  viaja junto com `limits`/`allowedTasks`, que é exatamente o que um Control Plane comprometido ou
+  um proxy no caminho quereria reescrever. A comparação de string continua existindo como recusa
+  rápida com mensagem clara; a prova é a assinatura. Divergência entre a ordem de `sort` do shell e a
+  do signer Java quebraria a igualdade (recusa), nunca aceitaria um documento alterado.
 - **Nó pendente de aprovação lê a própria config** (200, `operable:false`, `allowedTasks` vazio). É o
   mesmo critério do scheduler (`accepts` exige `canOperate`) dito ao runtime: 403 aqui deixaria o
   instalador sem resposta justamente no passo em que ele espera aprovação humana.
@@ -77,3 +84,7 @@ válida é `ERROR` e `signed:false`, nunca exceção que derruba a rota.
   transição de status compondo versão, 401 sem credencial, nó pendente lendo a própria config.
 - Migração V284 aplicada duas vezes em MariaDB 11.4.13 real, com linha anterior preservada
   (`config_version = 1`, `config_issued_at` nulo) e transição simulada (`+1` e carimbo).
+- `scripts/tests/node-executor-test.sh` (106 asserções): o nó recusa config cuja assinatura não é do
+  pino mesmo com `publicKey` copiado do pino, e recusa corpo adulterado depois de assinado (a
+  assinatura é válida sobre outra lista de `allowedTasks`). Q0: neutralizando a chamada de
+  verificação no runtime, exatamente o primeiro desses cenários falha; restaurando, 106/106.

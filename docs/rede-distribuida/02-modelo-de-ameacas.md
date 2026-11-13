@@ -87,7 +87,12 @@ prioridade de escalonamento, não permissão extra.
 ### Identidade e comunicação
 - mTLS entre nó e Control Plane; certificado individual por nó.
 - Rotação automática; revogação imediata (negação no próximo handshake).
-- Configuração distribuída **assinada**; nó recusa config sem assinatura válida.
+- Configuração distribuída **assinada**; nó recusa config sem assinatura válida — e a recusa é
+  **verificada**, não declarada: o runtime reconstrói a linha canônica e confere a assinatura
+  Ed25519 com openssl contra o X.509 **pinado** no enroll. Um Control Plane comprometido ou um
+  proxy no caminho pode alterar `limits`/`allowedTasks` e copiar o campo `publicKey` do pino
+  (a string viaja no mesmo corpo), mas não produz assinatura válida do pino — **entregue**
+  ([04 §6.1](04-identidade-e-autorizacao.md)).
 - Anti-replay: nonce, timestamp, request id.
 
 ### Isolamento

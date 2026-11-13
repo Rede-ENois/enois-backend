@@ -77,7 +77,76 @@ allowed_tasks() {
     printf '[executor] config sem assinatura — recusada por padrão\n' >&2
     return 1
   fi
+  config_verify_signature "$config" || {
+    printf '[executor] assinatura da config não confere com o pino — recusada\n' >&2
+    return 1
+  }
   printf '%s' "$config"
+}
+
+# A assinatura cobre o DOCUMENTO CANÔNICO, não o JSON: a mesma linha que
+# NetworkConfigSigner.SignedFields.canonical() monta no Control Plane, campo por campo
+# na ordem do contrato, listas ordenadas e em JSON compacto. Reconstruir essa linha é
+# recortar e ordenar, não reinterpretar o documento.
+config_signature() {
+  # config_signature <config-json>: imprime "canonical<TAB>assinatura"; 1 se faltar campo.
+  local format_version config_version node_id profiles cpu memory disk bandwidth tasks issued_at signature
+  format_version=$(json_number "$1" formatVersion)
+  config_version=$(json_number "$1" configVersion)
+  node_id=$(json_field "$1" nodeId)
+  profiles=$(json_list_sorted "$1" profiles)
+  cpu=$(json_number "$1" cpuCores)
+  memory=$(json_number "$1" memoryMb)
+  disk=$(json_number "$1" diskMb)
+  bandwidth=$(json_number "$1" bandwidthMbps)
+  tasks=$(json_list_sorted "$1" allowedTasks)
+  issued_at=$(json_field "$1" issuedAt)
+  signature=$(json_field "$1" signature)
+  [[ -n "$format_version" && -n "$config_version" && -n "$node_id" && -n "$cpu" \
+      && -n "$memory" && -n "$disk" && -n "$bandwidth" && -n "$issued_at" \
+      && -n "$signature" ]] || return 1
+  printf '%s|%s|%s|[%s]|%s|%s|%s|%s|[%s]|%s\t%s' \
+    "$format_version" "$config_version" "$node_id" "$profiles" "$cpu" "$memory" "$disk" \
+    "$bandwidth" "$tasks" "$issued_at" "$signature"
+}
+
+json_list_sorted() {
+  # json_list_sorted <json> <chave>: itens em JSON compacto, ordenados por byte (C),
+  # como o jsonList() do signer — a ordem do banco não é contrato e duas ordens dariam
+  # assinaturas diferentes para a mesma permissão. Os itens já chegam com aspas (o
+  # array é um blob recortado, não parseado); as aspas saem, o conjunto vazio vira []
+  # como no signer, e o sort é por byte porque os itens são nomes de perfil/tarefa em
+  # ASCII — o ordenamento do Java e o do `sort` batem nesse domínio, e um nome fora
+  # dele quebraria a igualdade em vez de passar batido.
+  local items
+  items=$(sed -n 's/.*"'"$2"'":\[\([^]]*\)\].*/\1/p' <<<"$1" | head -n 1 \
+    | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//; s/\\"/"/g' | sed '/^$/d')
+  [[ -n "$items" ]] || { printf '[]'; return; }
+  printf '%s' "$items" | LC_ALL=C sort | sed 's/^/"/; s/$/"/' | paste -sd ',' -
+}
+
+config_verify_signature() {
+  # config_verify_signature <config-json>: confere a assinatura Ed25519 contra o PINO
+  # (o X.509 base64 gravado no install/primeiro start), não contra o publicKey que veio
+  # no corpo. Essa é a diferença que importa: a config chega pela rede e pode vir de um
+  # Control Plane comprometido ou de um proxy no caminho. Os limites e o allowedTasks do
+  # corpo podem ser alterados, mas a assinatura do pino não pode ser forjada — e é ela
+  # que o nó verifica aqui. Comparar só o campo publicKey com o pino provaria que o
+  # atacante sabe copiar uma string.
+  local config="$1" canonical signature dir rc
+  local pair
+  pair=$(config_signature "$config") || return 1
+  canonical=${pair%%$'\t'*}
+  signature=${pair#*$'\t'}
+  dir=$(mktemp -d) || return 1
+  printf '%s' "$(cat "$NODE_HOME/pinning-key")" | base64 -d > "$dir/pin.der" 2>/dev/null &&
+    printf '%s' "$canonical" > "$dir/msg" &&
+    printf '%s' "$signature" | base64 -d > "$dir/sig" 2>/dev/null &&
+    openssl pkeyutl -verify -pubin -inkey "$dir/pin.der" -keyform DER -rawin \
+      -in "$dir/msg" -sigfile "$dir/sig" >/dev/null 2>&1
+  rc=$?
+  rm -f "$dir/pin.der" "$dir/msg" "$dir/sig"; rmdir "$dir" 2>/dev/null
+  return $rc
 }
 
 # O array allowedTasks da config — a única fonte de permissão de execução.

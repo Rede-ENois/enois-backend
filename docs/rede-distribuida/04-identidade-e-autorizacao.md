@@ -177,6 +177,15 @@ Implementada na fase 5 (`GET /network/nodes/me/config`, contrato em `03-contrato
   muda a assinatura, e a verificação não depende do serializador de uma biblioteca.
 - **Pino**: a resposta carrega a chave pública do Control Plane. O instalador grava no enroll;
   toda config seguinte é conferida contra ela, sem confiar no transporte.
+- **O nó VERIFICA a assinatura, não compara a string**: o runtime reconstrói a linha canônica do
+  corpo recebido e confere a assinatura com `openssl pkeyutl -verify -rawin` contra o X.509 do
+  **pino** (base64 → DER), não contra o campo `publicKey` que veio no mesmo corpo — esse campo
+  viaja pela rede como o resto. Comparar `publicKey` com o pino só provaria que quem mandou sabe
+  copiar uma string: um Control Plane comprometido ou um proxy no caminho poderia entregar
+  `publicKey` do pino com `limits`/`allowedTasks` novos e assinatura própria. Hoje o campo
+  divergente é recusado antes (recusa rápida com mensagem clara) e a assinatura é a prova real;
+  a verificação falha fechada: sem openssl, sem pino legível ou com qualquer campo assinado
+  ausente, a config é recusada e o nó não pede tarefa.
 - **`configVersion` vem do ciclo de vida**, não de um contador em memória: `1` no enroll, `+1` em
   cada transição administrativa (V284). Sem isso, o `issuedAt` teria de ser o relógio da requisição
   e o runtime veria "config nova" a cada segundo.
