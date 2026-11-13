@@ -99,21 +99,33 @@ class ProfileTabsTests {
 	}
 
 	@Test
-	void repliesExigemViewerDono() throws Exception {
+	void repliesTabNoEndpointAntigoRetorna400() throws Exception {
 		var owner = auth.authenticate("proftabs_dono");
-		var visitor = auth.authenticate("proftabs_visitante");
 		String ownerUsername = usernameOf(owner);
 
 		mockMvc.perform(get("/users/" + ownerUsername + "/posts?tab=REPLIES")
 				.header("X-Session-Token", owner.token()))
-			.andExpect(status().isOk());
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("USE_REPLIES_ENDPOINT"));
+	}
 
-		mockMvc.perform(get("/users/" + ownerUsername + "/posts?tab=REPLIES")
+	@Test
+	void repliesEndpointExigemViewerDono() throws Exception {
+		var owner = auth.authenticate("proftabs_dono2");
+		var visitor = auth.authenticate("proftabs_visit2");
+		String ownerUsername = usernameOf(owner);
+
+		mockMvc.perform(get("/users/" + ownerUsername + "/replies")
+				.header("X-Session-Token", owner.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items").isArray());
+
+		mockMvc.perform(get("/users/" + ownerUsername + "/replies")
 				.header("X-Session-Token", visitor.token()))
 			.andExpect(status().isForbidden())
 			.andExpect(jsonPath("$.code").value("REPLIES_PRIVATE"));
 
-		mockMvc.perform(get("/users/" + ownerUsername + "/posts?tab=REPLIES"))
+		mockMvc.perform(get("/users/" + ownerUsername + "/replies"))
 			.andExpect(status().isForbidden())
 			.andExpect(jsonPath("$.code").value("REPLIES_PRIVATE"));
 	}
