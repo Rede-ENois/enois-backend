@@ -230,6 +230,15 @@ class FeedController {
 			viewerIdOrNull(sessionToken), username, cursorCodec.decode(cursor), limit, tab));
 	}
 
+	@GetMapping("/users/{username}/replies")
+	Object profileReplies(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String username,
+			@RequestParam(required = false) String cursor,
+			@RequestParam(defaultValue = "20") int limit) {
+		return getProfilePostsUseCase.getProfileReplies(
+			viewerIdOrNull(sessionToken), username, cursorCodec.decode(cursor), limit);
+	}
+
 	@DeleteMapping("/feed/posts/{postId}")
 	ResponseEntity<String> delete(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
