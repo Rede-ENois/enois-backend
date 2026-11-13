@@ -207,6 +207,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	public FeedPage getProfilePosts(GetProfilePostsQuery query) {
 		int limit = normalizeLimit(query.limit());
 		Instant before = query.before().orElse(DEFAULT_BEFORE);
+		var tab = query.tab() == null ? com.socialcoisa.rede.feed.domain.ProfileTab.ALL : query.tab();
 		// O path aceita username ou id; o conteudo guarda author_id, entao resolvemos o username.
 		String authorId = userProfileRepository.findByUsername(query.username())
 			.map(com.socialcoisa.rede.profile.domain.UserProfile::id)
@@ -215,6 +216,15 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		if (sanctionGate.banned(authorId)) {
 			throw new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado.");
 		}
+
+		// REPLIES: comentarios do usuario (privado, so o dono ve.)
+		if (tab == com.socialcoisa.rede.feed.domain.ProfileTab.REPLIES) {
+			if (query.viewerId() == null || !query.viewerId().value().equals(authorId)) {
+				throw new ApiException(403, "REPLIES_PRIVATE", "Apenas o dono do perfil pode ver seus comentarios.");
+			}
+			return getProfileReplies(authorId, before, limit, query.viewerId());
+		}
+
 		List<Post> authored = postRepository.findActiveByAuthor(new UserId(authorId), before, limit);
 
 		// Reposts puros: ponteiros na tabela post_reposts com a data do repost (nao do original).
@@ -239,13 +249,29 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		}
 		merged.sort(Comparator.comparing(
 			(Post p) -> repostDates.getOrDefault(p.id().value(), p.createdAt())).reversed());
-		List<Post> page = merged.stream().limit(limit).toList();
+
+		// Filtra pela tab antes de paginar.
+		Set<String> repostedSet = new java.util.HashSet<>(repostedIds);
+		List<Post> filtered = switch (tab) {
+			case POSTS -> merged.stream()
+				.filter(p -> !repostedSet.contains(p.id().value()) || p.authorId().value().equals(authorId))
+				.filter(p -> p.authorId().value().equals(authorId))
+				.toList();
+			case REPOSTS -> merged.stream()
+				.filter(p -> repostedSet.contains(p.id().value()) && !p.authorId().value().equals(authorId))
+				.toList();
+			case MEDIA -> merged.stream()
+				.filter(p -> !p.mediaIds().isEmpty())
+				.toList();
+			default -> merged;
+		};
+
+		List<Post> page = filtered.stream().limit(limit).toList();
 
 		// Enriquece e marca os reposts com o badge "X republicou" e a data do repost.
 		List<PostView> enriched = enrich(page, query.viewerId());
 		UserProfile ownerProfile = userProfileRepository.findById(authorId).orElse(null);
 		if (ownerProfile != null && !repostedIds.isEmpty()) {
-			Set<String> repostedSet = new java.util.HashSet<>(repostedIds);
 			enriched = enriched.stream()
 				.map(v -> repostedSet.contains(v.id()) && !v.authorId().equals(authorId)
 					? v.withRepostedBy(new PostView.RepostedByView(
@@ -261,6 +287,31 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				page.get(page.size() - 1).createdAt());
 		String nextCursor = page.size() == limit && lastEffective != null
 			? cursorCodec.encode(lastEffective) : null;
+		return new FeedPage(enriched, nextCursor);
+	}
+
+	/** Comentarios do usuario em posts de outros, paginados por data. Privado. */
+	private FeedPage getProfileReplies(String authorId, Instant before, int limit, UserId viewerId) {
+		var comments = commentRepository.findByAuthorPaged(authorId, before, limit);
+		if (comments.isEmpty()) {
+			return new FeedPage(List.of(), null);
+		}
+		// Busca os posts originais pra contexto.
+		List<String> postIds = comments.stream()
+			.map(c -> c.postId().value())
+			.distinct()
+			.toList();
+		var posts = postRepository.findByIds(postIds.stream().map(PostId::new).toList());
+		var postMap = posts.stream().collect(Collectors.toMap(p -> p.id().value(), p -> p));
+		// Monta a resposta como PostView dos posts originais com o comentario como contexto.
+		// Reutiliza o enrich pra consistencia.
+		List<Post> replyPosts = comments.stream()
+			.map(c -> postMap.get(c.postId().value()))
+			.filter(java.util.Objects::nonNull)
+			.toList();
+		List<PostView> enriched = enrich(replyPosts, viewerId);
+		Instant lastDate = comments.get(comments.size() - 1).createdAt();
+		String nextCursor = comments.size() == limit ? cursorCodec.encode(lastDate) : null;
 		return new FeedPage(enriched, nextCursor);
 	}
 

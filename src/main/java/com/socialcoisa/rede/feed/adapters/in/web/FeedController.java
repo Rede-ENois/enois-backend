@@ -222,11 +222,12 @@ class FeedController {
 	@GetMapping("/users/{username}/posts")
 	Object profilePosts(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken, @PathVariable String username,
 			@RequestParam(required = false) String cursor,
-			@RequestParam(defaultValue = "20") int limit) {
+			@RequestParam(defaultValue = "20") int limit,
+			@RequestParam(defaultValue = "ALL") com.socialcoisa.rede.feed.domain.ProfileTab tab) {
 		// Leitura publica: sem sessao valida o visitante e NINGUEM (nunca o username do perfil, que
 		// virava um "leitor" inventado e desligava o filtro de bloqueio).
 		return getProfilePostsUseCase.getProfilePosts(new GetProfilePostsQuery(
-			viewerIdOrNull(sessionToken), username, cursorCodec.decode(cursor), limit));
+			viewerIdOrNull(sessionToken), username, cursorCodec.decode(cursor), limit, tab));
 	}
 
 	@DeleteMapping("/feed/posts/{postId}")
