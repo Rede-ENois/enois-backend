@@ -77,8 +77,8 @@ class ProfileTabsTests {
 				.header("X-Client-Origin", "https://enois.ia.br")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(
-					java.util.Map.of("type", "INSIGHT", "content", content,
-						"tags", List.of("Tecnologia"), "mediaIds", mediaIds))))
+					java.util.Map.of("topic", "TECNOLOGIA", "type", "INSIGHT", "content", content,
+						"tags", List.of(), "mediaIds", mediaIds))))
 			.andExpect(status().isCreated());
 	}
 
