@@ -279,7 +279,7 @@ class NetworkNodesTests {
 			.perform(get("/network/nodes/me/config").header("X-Node-Id", nodeId).header("X-Node-Key", key))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.nodeId").value(nodeId))
-			.andExpect(jsonPath("$.formatVersion").value(1))
+			.andExpect(jsonPath("$.formatVersion").value(2))
 			// Versão da permissão: 1 do enroll + 1 da aprovação feita acima.
 			.andExpect(jsonPath("$.configVersion").value(2))
 			.andExpect(jsonPath("$.profiles[0]").value("NODE_MEDIA"))

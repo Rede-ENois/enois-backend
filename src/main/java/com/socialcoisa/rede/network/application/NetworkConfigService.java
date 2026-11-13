@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import com.socialcoisa.rede.network.application.port.out.NetworkAuthorityRepository;
 import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.TaskType;
@@ -46,19 +47,25 @@ public class NetworkConfigService {
 	/**
 	 * Versão do <b>formato</b> do documento. Sobe quando o formato muda de um jeito que o runtime
 	 * antigo não entende; a versão da <b>permissão</b> é outra coisa e vem do nó ({@code configVersion}).
+	 *
+	 * <p>2 (fase 6): {@code term} entrou no payload e na linha canônica — o nó passa a recusar config
+	 * de termo menor que o último visto (doc 06 §4, regra 2). Runtime do formato 1 não leria o termo;
+	 * runtime do formato 2 reconstrói a linha com ele.</p>
 	 */
-	static final int FORMAT_VERSION = 1;
+	static final int FORMAT_VERSION = 2;
 
 	private final Clock clock;
 	private final NetworkNodeRepository nodes;
+	private final NetworkAuthorityRepository authorities;
 	private final Optional<PrivateKey> signingKey;
 	private final Optional<PublicKey> pinningKey;
 
-	NetworkConfigService(Clock clock, NetworkNodeRepository nodes,
+	NetworkConfigService(Clock clock, NetworkNodeRepository nodes, NetworkAuthorityRepository authorities,
 			@Value("${rede.network.config.signing-key:}") String signingKey,
 			@Value("${rede.network.config.signing-public-key:}") String publicKey) {
 		this.clock = clock;
 		this.nodes = nodes;
+		this.authorities = authorities;
 		this.signingKey = NetworkConfigSigner.privateKey(signingKey);
 		this.pinningKey = NetworkConfigSigner.publicKey(publicKey);
 		if (signingKey != null && !signingKey.isBlank() && this.signingKey.isEmpty()) {
@@ -89,14 +96,18 @@ public class NetworkConfigService {
 			.orElseGet(() -> new NetworkNodeRepository.ConfigStamp(FORMAT_VERSION, Instant.now(clock)));
 		var limits = new LimitsView(node.declaredCpuCores(), node.declaredMemoryMb(), node.declaredDiskMb(),
 			node.declaredBandwidthMbps());
+		// O termo vai no documento e na assinatura: é o que deixa a regra do nó ("termo só sobe")
+		// verificável contra quem assinou, não contra o transporte.
+		var authority = authorities.current()
+			.orElseGet(() -> new NetworkAuthorityRepository.AuthorityRecord(0, null, null));
 		var fields = new NetworkConfigSigner.SignedFields(FORMAT_VERSION, stamp.version(), node.id(), profiles,
 			limits.cpuCores(), limits.memoryMb(), limits.diskMb(), limits.bandwidthMbps(), allowedTasks,
-			stamp.issuedAt().toString());
+			stamp.issuedAt().toString(), authority.term());
 		String signature = sign(fields.canonical());
 		return new NodeConfigView(node.id(), node.status().name(), operable, FORMAT_VERSION, stamp.version(),
 			profiles, limits, allowedTasks, node.region(), node.country(), stamp.issuedAt().toString(),
 			signature != null, signature, signature == null ? null : NetworkConfigSigner.ALGORITHM,
-			pinningKey.map(NetworkConfigService::encode).orElse(null));
+			pinningKey.map(NetworkConfigService::encode).orElse(null), authority.term());
 	}
 
 	private String sign(String canonical) {
@@ -138,10 +149,13 @@ public class NetworkConfigService {
 	 *
 	 * <p>{@code formatVersion} e {@code configVersion} são coisas diferentes de propósito: o primeiro
 	 * é o formato do documento (muda quando nós antigos não entenderiam), o segundo é versão da
-	 * <b>permissão</b> (muda a cada transição administrativa).</p>
+	 * <b>permissão</b> (muda a cada transição administrativa). {@code term} é a terceira coisa
+	 * diferente: é a versão da <b>autoridade</b> que assinou (fase 6) — só sobe na promoção, e o nó
+	 * recusa documento de termo menor que o último que aceitou.</p>
 	 */
 	public record NodeConfigView(String nodeId, String status, boolean operable, int formatVersion,
 			int configVersion, List<String> profiles, LimitsView limits, List<String> allowedTasks, String region,
-			String country, String issuedAt, boolean signed, String signature, String algorithm, String publicKey) {
+			String country, String issuedAt, boolean signed, String signature, String algorithm, String publicKey,
+			int term) {
 	}
 }

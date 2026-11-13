@@ -92,7 +92,7 @@ assinatura antes de aplicar. Implementada (fase 5): o payload real está abaixo.
   "nodeId": "nd_…",
   "status": "ACTIVE",
   "operable": true,
-  "formatVersion": 1,
+  "formatVersion": 2,
   "configVersion": 3,
   "profiles": ["NODE_MEDIA"],
   "limits": { "cpuCores": 4, "memoryMb": 8192, "diskMb": 51200, "bandwidthMbps": 100 },
@@ -102,14 +102,20 @@ assinatura antes de aplicar. Implementada (fase 5): o payload real está abaixo.
   "signed": true,
   "signature": "base64(ed25519(linha canônica))",
   "algorithm": "Ed25519",
-  "publicKey": "base64(X.509 da chave pública do Control Plane)"
+  "publicKey": "base64(X.509 da chave pública do Control Plane)",
+  "term": 4
 }
 ```
 
-Duas versões, de propósito:
+Três números, de propósito:
 
 - `formatVersion` é a versão do **formato** do documento — sobe quando o runtime antigo não
-  entenderia o payload novo. Hoje é `1`.
+  entenderia o payload novo. Hoje é `2`: o formato 2 acrescentou `term` ao payload e à linha
+  canônica (fase 6). Runtime de formato 1 não lê o termo; runtime de formato 2 reconstrói a linha
+  com ele.
+- `term` é o **termo da autoridade** que assinou (V288, doc 06 §4). Só sobe na promoção de Control
+  Plane e o nó recusa config de termo menor que o último aceito — config de termo velho é uma
+  autoridade deposta tentando voltar a mandar.
 - `configVersion` é a versão da **permissão** do nó — nasce `1` no enroll e soma `1` a cada
   transição administrativa (aprovar, suspender, quarentenar, revogar). É o número que o runtime
   compara para saber que a permissão mudou.
@@ -119,9 +125,11 @@ duas leituras seguidas sem mudança devolvem o mesmo documento (e a mesma assina
 determinística). A config é um evento, não um relógio.
 
 A **linha canônica** assinada junta os campos na ordem do contrato:
-`formatVersion|configVersion|nodeId|profiles|cpuCores|memoryMb|diskMb|bandwidthMbps|allowedTasks|issuedAt`,
+`formatVersion|configVersion|nodeId|profiles|cpuCores|memoryMb|diskMb|bandwidthMbps|allowedTasks|issuedAt|term`,
 com listas ordenadas em JSON compacto. Assina-se o canônico, não o JSON — reordenar chaves do corpo
-não muda a assinatura.
+não muda a assinatura. O `term` fecha a linha: o formato 1 não o tinha, e quem reconstrói a linha do
+formato 2 sempre o acrescenta por último. É por estar dentro da assinatura que o nó consegue recusar
+termo que regride conferindo contra o pino, em vez de confiar no transporte.
 
 `publicKey` é o **pino**: o instalador grava esta chave no install e toda config seguinte é conferida
 contra ela, sem depender do transporte desta resposta.
@@ -299,6 +307,40 @@ mesma transação, como na revogação. A ação é auditada como `NODE_DISCONNE
 nem revoga de novo. Revogado é `409 NODE_REVOKED`. O participante **não** revoga sozinho;
 revogação continua sendo decisão administrativa.
 
+## 3c. Autoridade do Control Plane (`/admin/network/authority`)
+
+Promoção controlada de Control Plane (fase 6, doc 06 §4). Todos os endpoints exigem sessão de
+admin. O termo vigente vive na linha global de `network_state` (V288) e o eleitorado em
+`network_authorities`.
+
+```json
+GET /admin/network/authority
+{ "term": 4, "authorityId": "cp-1", "promotedAt": "2026-11-12T10:00:00Z", "declared": ["cp-1", "cp-2", "cp-3"] }
+```
+
+```json
+POST /admin/network/authority/declared   { "instanceId": "cp-2" }
+DELETE /admin/network/authority/declared/cp-2
+POST /admin/network/authority/promote    { "instanceId": "cp-2", "reason": "cp-1 perdeu a região" }
+```
+
+A promoção só acontece quando, e só quando:
+
+1. a instância pedinte está **declarada** no eleitorado (`network_authorities`, decisão humana);
+2. ela **deu sinal** dentro da janela de vivacidade (`network_instance_readers.last_seen_at`,
+   `rede.network.authority.liveness-seconds`, padrão 30 s);
+3. a maioria do **eleitorado inteiro** está viva (`vivos * 2 > declarados`). Sem maioria, ninguém
+   promove: melhor ficar sem controlador novo do que ter dois;
+4. o compare-and-set `update ... where term = <lido>` ganha a corrida. Quem lê o mesmo termo e grava
+   depois atualiza zero linhas e recebe `NETWORK_AUTHORITY_PROMOTION_LOST`.
+
+Auditoria: `NETWORK_AUTHORITY_DECLARED`, `NETWORK_AUTHORITY_REVOKED` e
+`NETWORK_AUTHORITY_PROMOTED` (metadata `{"term": N, "from": M, "reason": "…"}`).
+
+O eleitorado é o **declarado**, nunca "quem está respondendo agora": derivar de quem responde faria
+a metade isolada de uma partição se achar 100% dos vivos e promover a si mesma — exatamente o
+split-brain que a fase 6 existe para impedir.
+
 ## 4. Catálogo de erros estável
 
 | código | HTTP | significado |
@@ -318,6 +360,12 @@ revogação continua sendo decisão administrativa.
 | `NETWORK_MODE_REASON_REQUIRED` | 400 | transição manual sem motivo |
 | `NETWORK_MODE_UNKNOWN` | 400 | modo inexistente em `POST /admin/network/mode` |
 | `NODE_JOIN_LIMIT` | 429 | três tokens de ingresso vivos por conta |
+| `NETWORK_AUTHORITY_INSTANCE_REQUIRED` | 400 | declaração de autoridade sem `instanceId` |
+| `NETWORK_AUTHORITY_REASON_REQUIRED` | 400 | promoção sem motivo — promover muda quem manda na rede |
+| `NETWORK_AUTHORITY_NOT_ALIVE` | 400 | instância pedinte não está declarada no eleitorado ou não deu sinal na janela |
+| `NETWORK_AUTHORITY_NO_QUORUM` | 409 | maioria viva do eleitorado declarado não foi atingida: ninguém promove |
+| `NETWORK_AUTHORITY_PROMOTION_LOST` | 409 | outra promoção gravou o termo primeiro (compare-and-set perdeu) |
+| `NETWORK_AUTHORITY_NOT_DECLARED` | 404 | revogar instância que não está no eleitorado |
 
 ## 5. Versionamento
 

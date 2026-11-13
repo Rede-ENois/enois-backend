@@ -93,7 +93,10 @@ O container roda o loop do nó, não o jar (o jar é o Control Plane). Cada cicl
    `publicKey` viaja no mesmo corpo que a permissão, então comparar só ele provaria
    que quem mandou sabe copiar uma string; a assinatura é a prova. Falha fechada:
    openssl ausente, pino ilegível, campo assinado faltando ou assinatura que não
-   confere — o ciclo termina sem pedir tarefa;
+   confere — o ciclo termina sem pedir tarefa. O **termo da autoridade** entra na
+   mesma linha assinada (formato 2) e o runtime guarda o maior já aceito em
+   `$NODE_HOME/term`: config de termo menor é recusada como autoridade deposta
+   (doc 06 §4), e o termo recusado não rebaixa o registro local;
 4. **poll** (`GET /network/tasks/next`) — uma tarefa por ciclo;
 5. **executa só o que a config assinada autoriza** (`allowedTasks`): autorizada vai
    para o executor do tipo; fora da lista vira `FAILED` com `TASK_NOT_ALLOWED` — o
@@ -227,6 +230,7 @@ verificada.
 | `$NODE_HOME/node.json` | resposta do enroll (`nodeId`, estado) | 600 |
 | `$NODE_HOME/api-key` | a API key do nó em claro — único lugar | 600 |
 | `$NODE_HOME/pinning-key` | a chave pública do Control Plane, pinada no enroll ou no primeiro `--start` | 600 |
+| `$NODE_HOME/term` | o maior `term` de autoridade já aceito — config de termo menor é recusada | 600 |
 | `$NODE_HOME/image-pubkey` | a chave pública que assina as imagens do runtime (cosign) — sem ela não há `--update` | 600 |
 | `$NODE_HOME/runtime-image` | o digest verificado em uso (`repo@sha256:…`), não a tag | 600 |
 | `$NODE_HOME/runtime-image.previous` | o digest anterior, para `--rollback` | 600 |

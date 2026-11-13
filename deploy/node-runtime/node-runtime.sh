@@ -81,7 +81,30 @@ allowed_tasks() {
     printf '[executor] assinatura da config não confere com o pino — recusada\n' >&2
     return 1
   }
+  # Regra de termo (fase 6, doc 06 §4): config só sobe. Termo menor que o último aceito
+  # é uma autoridade DEPOSTA tentando voltar a mandar — exatamente o cenário de split-brain
+  # que o termo existe para impedir. Recusa com registro e NÃO grava o termo recusado: gravar
+  # número menor reabriria a porta para a autoridade de termo intermediário voltar.
+  term_regressao "$config" && {
+    printf '[executor] config com term menor que o último aceito — autoridade deposta, recusada\n' >&2
+    return 1
+  }
   printf '%s' "$config"
+}
+
+term_regressao() {
+  # term_regressao <config-json>: 0 (verdadeiro) quando term < último aceito; grava o termo
+  # aceito quando sobe ou empata. O estado vive no volume do nó ($NODE_HOME/term), igual ao pino.
+  local term last
+  term=$(json_number "$1" term)
+  [[ -n "$term" ]] || return 1
+  last=0
+  [[ -s "$NODE_HOME/term" ]] && last=$(head -n 1 "$NODE_HOME/term")
+  if (( term < last )); then
+    return 0
+  fi
+  printf '%s\n' "$term" > "$NODE_HOME/term"
+  return 1
 }
 
 # A assinatura cobre o DOCUMENTO CANÔNICO, não o JSON: a mesma linha que
@@ -90,7 +113,7 @@ allowed_tasks() {
 # recortar e ordenar, não reinterpretar o documento.
 config_signature() {
   # config_signature <config-json>: imprime "canonical<TAB>assinatura"; 1 se faltar campo.
-  local format_version config_version node_id profiles cpu memory disk bandwidth tasks issued_at signature
+  local format_version config_version node_id profiles cpu memory disk bandwidth tasks issued_at term signature
   format_version=$(json_number "$1" formatVersion)
   config_version=$(json_number "$1" configVersion)
   node_id=$(json_field "$1" nodeId)
@@ -101,13 +124,16 @@ config_signature() {
   bandwidth=$(json_number "$1" bandwidthMbps)
   tasks=$(json_list_sorted "$1" allowedTasks)
   issued_at=$(json_field "$1" issuedAt)
+  # O termo da autoridade entrou no formato 2 (fase 6): vem por último na linha.
+  # Formato 1 não o tinha e não é mais servido pelo Control Plane.
+  term=$(json_number "$1" term)
   signature=$(json_field "$1" signature)
   [[ -n "$format_version" && -n "$config_version" && -n "$node_id" && -n "$cpu" \
       && -n "$memory" && -n "$disk" && -n "$bandwidth" && -n "$issued_at" \
-      && -n "$signature" ]] || return 1
-  printf '%s|%s|%s|[%s]|%s|%s|%s|%s|[%s]|%s\t%s' \
+      && -n "$term" && -n "$signature" ]] || return 1
+  printf '%s|%s|%s|[%s]|%s|%s|%s|%s|[%s]|%s|%s\t%s' \
     "$format_version" "$config_version" "$node_id" "$profiles" "$cpu" "$memory" "$disk" \
-    "$bandwidth" "$tasks" "$issued_at" "$signature"
+    "$bandwidth" "$tasks" "$issued_at" "$term" "$signature"
 }
 
 json_list_sorted() {

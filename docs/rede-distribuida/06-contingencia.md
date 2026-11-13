@@ -138,6 +138,37 @@ O Control Plane não pode ser ponto único de falha sem estratégia de recupera�
 5. Nó que detecta dois controladores com termos diferentes entra em `QUARANTINED` e para de aceitar
    tarefas até a situação resolver.
 
+### 4.1 O que está entregue (V288, R101)
+
+| regra | onde vive | como é provado |
+|---|---|---|
+| 1. termo monotônico | `network_state.term` (V288), `NetworkAuthorityRepository.promote` | só sobe por `promote`; `NetworkAuthorityPersistenceTests` |
+| 2. nó recusa termo menor | `term_regressao` em `deploy/node-runtime/node-runtime.sh`, estado em `$NODE_HOME/term` | `scripts/tests/node-executor-test.sh` cenários 5d/5e; Q0 removendo a checagem |
+| 3. quórum explícito, fail secure | `NetworkAuthorityService.promote` → `NETWORK_AUTHORITY_NO_QUORUM` | `NetworkAuthorityTests.semQuorumNinguemPromove`, `semEleitoradoNinguemPromove` |
+| 4. mesmo termo impossível | CAS `update network_state … where term = <lido>` | `NetworkAuthorityPersistenceTests`, e o `row_count` conferido no MariaDB 11.4 real |
+| 5. nó em `QUARANTINED` | **aberto** — próxima rodada |
+
+Decisões que o desenho fixa, e por quê:
+
+- **O termo mora na linha global de `network_state`**, que já era "a autoridade" do modo. O
+  `authority_id` diz de quem é o termo e `promoted_at` desde quando — `since` continua sendo do
+  MODO, que muda dentro do mesmo termo (`DEGRADED`, `EMERGENCY`).
+- **O eleitorado é o DECLARADO** (`network_authorities`), não "quem está respondendo". Se fosse
+  derivado da vivacidade, a metade isolada de uma partição se acharia 100% dos vivos e se
+  promoveria sozinha. Declarar é decisão humana e auditada; a vivacidade de cada declarada vem de
+  `network_instance_readers` (V278), a mesma tabela que o painel já usa para dizer quantas
+  instâncias estão lendo.
+- **Quórum é sobre o eleitorado inteiro**: `vivos * 2 > declarados`. Com 2 declaradas, uma viva não
+  promove (empate não é maioria) — é o cenário `semQuorumNinguemPromove`.
+- **A linha global é invariante do deploy**: a V288 faz seed dela (`term = 0`), porque até aqui
+  `NetworkStatePersistenceAdapter` a criava preguiçosamente na primeira transição de modo. Sem ela,
+  o CAS da primeira promoção de um banco novo atualizaria zero linhas e falharia sempre.
+- **O termo entra na linha assinada** (`formatVersion` 2, termo por último), não só no JSON: é o que
+  deixa o nó recusar um termo que regride conferindo contra o pino, em vez de confiar no transporte.
+
+O que ainda falta nesta seção: regra 5 (quarentena de nó que vê dois controladores), recuperação
+regional, replicação geográfica e os testes de desastre.
+
 ## 5. Revogação durante processamento
 
 Cenário: o nó está executando uma tarefa e é revogado.

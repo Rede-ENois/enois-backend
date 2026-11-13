@@ -42,19 +42,25 @@ final class NetworkConfigSigner {
 	 * A parte assinada: formato, versão da permissão, identidade, perfis, limites, tarefas permitidas
 	 * e o instante em que a permissão passou a valer. O nó sabe se a config envelheceu comparando
 	 * {@code issuedAt} com o próprio relógio e sabe se ela mudou comparando {@code configVersion}.
+	 *
+	 * <p>{@code term} é o termo da autoridade que assinou (fase 6, doc 06 §4): o nó recusa config de
+	 * termo menor que o último visto, porque config de termo velho é uma autoridade DEPOSTA tentando
+	 * voltar a mandar. Sem o termo na linha assinada, esse número seria editável por quem forja a
+	 * resposta — e a regra de recusa seria decorativa.</p>
 	 */
 	record SignedFields(int formatVersion, int configVersion, String nodeId, List<String> profiles, int cpuCores,
-			int memoryMb, int diskMb, int bandwidthMbps, List<String> allowedTasks, String issuedAt) {
+			int memoryMb, int diskMb, int bandwidthMbps, List<String> allowedTasks, String issuedAt, int term) {
 
 		/**
 		 * A linha assinada. Listas vão ordenadas e em JSON compacto: a ordem do banco não é
 		 * contrato, e duas ordens distintas para o mesmo conjunto de perfis dariam assinaturas
-		 * diferentes para a mesma permissão.
+		 * diferentes para a mesma permissão. {@code term} entra no FIM — o formato 1 não o tinha, e
+		 * quem reconstrói a linha do formato 2 sempre o acrescenta por último.
 		 */
 		String canonical() {
 			return String.join("|", String.valueOf(formatVersion), String.valueOf(configVersion), nodeId,
 				jsonList(profiles), String.valueOf(cpuCores), String.valueOf(memoryMb), String.valueOf(diskMb),
-				String.valueOf(bandwidthMbps), jsonList(allowedTasks), issuedAt);
+				String.valueOf(bandwidthMbps), jsonList(allowedTasks), issuedAt, String.valueOf(term));
 		}
 
 		private static String jsonList(List<String> values) {

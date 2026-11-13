@@ -51,7 +51,9 @@ válida é `ERROR` e `signed:false`, nunca exceção que derruba a rota.
 
 - **Duas versões no payload, de propósito.** `formatVersion` describe o formato do documento (sobe
   quando um runtime antigo não entenderia); `configVersion` descreve a permissão daquele nó. Confundir
-  as duas faria o nó recusar config nova por "formato" quando a permissão só mudou de estado.
+  as duas faria o nó recusar config nova por "formato" quando a permissão só mudou de estado. A
+  **fase 6 acrescentou o `term`** à linha canônica e subiu o `formatVersion` para 2 (ADR-013): o
+  número da autoridade precisa estar assinado, ou a regra de o termo nunca regredir seria editável.
 - **Transição administrativa é o único produtor de versão nova.** Não há contador em memória nem job
   que precise lembrar de incrementar: a versão é derivada do `UPDATE` que já existe. A migração V284
   é aditiva e idempotente, e linha anterior a ela cai no `created_at` para não inventar data.
@@ -84,7 +86,7 @@ válida é `ERROR` e `signed:false`, nunca exceção que derruba a rota.
   transição de status compondo versão, 401 sem credencial, nó pendente lendo a própria config.
 - Migração V284 aplicada duas vezes em MariaDB 11.4.13 real, com linha anterior preservada
   (`config_version = 1`, `config_issued_at` nulo) e transição simulada (`+1` e carimbo).
-- `scripts/tests/node-executor-test.sh` (106 asserções): o nó recusa config cuja assinatura não é do
+- `scripts/tests/node-executor-test.sh` (117 asserções): o nó recusa config cuja assinatura não é do
   pino mesmo com `publicKey` copiado do pino, e recusa corpo adulterado depois de assinado (a
   assinatura é válida sobre outra lista de `allowedTasks`). Q0: neutralizando a chamada de
-  verificação no runtime, exatamente o primeiro desses cenários falha; restaurando, 106/106.
+  verificação no runtime, exatamente o primeiro desses cenários falha; restaurando, 117/117.

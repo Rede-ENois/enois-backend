@@ -67,11 +67,16 @@ if [[ "$MODE" == "--backup" ]]; then
   node_id=$(sed -n 's/.*"nodeId":"\([^"]*\)".*/\1/p' "$NODE_HOME/node.json")
   out="enois-node-${node_id:-identidade}-$(date +%Y%m%d-%H%M%S).tar.gz"
   # O pino vai junto quando existir: restaurar sem ele deixa o runtime sem como
-  # conferir a config (tar reclama de arquivo ausente e sai != 0 com set -e).
+  # conferir a config (tar reclama de arquivo ausente e sai != 0 com set -e). O
+  # termo aceito vai também: restaurar a identidade sem ele deixaria o nó aceitar
+  # de volta config de uma autoridade que já caiu (regra do termo, fase 6).
   umask 077
   local_files=(node.json api-key)
   if [[ -s "$NODE_HOME/pinning-key" ]]; then
     local_files+=(pinning-key)
+  fi
+  if [[ -s "$NODE_HOME/term" ]]; then
+    local_files+=(term)
   fi
   tar -C "$NODE_HOME" -czf "$out" "${local_files[@]}"
   umask 022
@@ -89,7 +94,7 @@ if [[ "$MODE" == "--restore" ]]; then
     die "já existe um nó registrado em $NODE_HOME/node.json — restaurar por cima trocaria a identidade; remova-a primeiro se tem certeza"
   fi
   tar -C "$NODE_HOME" -xzf "$BACKUP_FILE"
-  chmod 600 "$NODE_HOME/node.json" "$NODE_HOME/api-key" "$NODE_HOME/pinning-key" 2>/dev/null || true
+  chmod 600 "$NODE_HOME/node.json" "$NODE_HOME/api-key" "$NODE_HOME/pinning-key" "$NODE_HOME/term" 2>/dev/null || true
   node_id=$(sed -n 's/.*"nodeId":"\([^"]*\)".*/\1/p' "$NODE_HOME/node.json")
   [[ -n "$node_id" ]] || die "backup sem nodeId válido dentro — arquivo truncado ou não é um backup de nó"
   info "Identidade de $node_id restaurada em $NODE_HOME."
