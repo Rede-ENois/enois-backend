@@ -14,22 +14,50 @@ interface SpringDataNetworkNodeJpaRepository extends JpaRepository<NetworkNodeJp
 	@Query("select n from NetworkNodeJpaEntity n order by n.createdAt desc")
 	List<NetworkNodeJpaEntity> listRecent(PageRequest page);
 
+	@Query("select n from NetworkNodeJpaEntity n where n.ownerUserId = :owner order by n.createdAt desc")
+	List<NetworkNodeJpaEntity> listByOwner(@Param("owner") String owner, PageRequest page);
+
 	long countByStatus(String status);
 
+	/*
+	 * Toda transição administrativa soma 1 em `configVersion` e carimba `configIssuedAt`. A versão é
+	 * derivada do ciclo de vida dentro do próprio UPDATE: um contador que o chamador incrementasse
+	 * dependeria de ele lembrar, e a primeira transição esquecida deixaria o nó aplicando permissão
+	 * velha para sempre.
+	 */
+
 	@Modifying
-	@Query("update NetworkNodeJpaEntity n set n.status = :status, n.approvedBy = :actor, n.approvedAt = :now "
+	@Query("update NetworkNodeJpaEntity n set n.status = :status, n.approvedBy = :actor, n.approvedAt = :now, "
+			+ "n.configVersion = n.configVersion + 1, n.configIssuedAt = :now "
 			+ "where n.id = :id and n.status <> 'REVOKED'")
 	int approve(@Param("id") String id, @Param("status") String status, @Param("actor") String actor,
 			@Param("now") Instant now);
 
 	@Modifying
-	@Query("update NetworkNodeJpaEntity n set n.status = :status, n.revokedAt = :now "
+	@Query("update NetworkNodeJpaEntity n set n.status = :status, n.revokedAt = :now, "
+			+ "n.configVersion = n.configVersion + 1, n.configIssuedAt = :now "
 			+ "where n.id = :id and n.status <> 'REVOKED'")
 	int revoke(@Param("id") String id, @Param("status") String status, @Param("now") Instant now);
 
 	@Modifying
-	@Query("update NetworkNodeJpaEntity n set n.status = :status where n.id = :id and n.status <> 'REVOKED'")
-	int changeStatus(@Param("id") String id, @Param("status") String status);
+	@Query("update NetworkNodeJpaEntity n set n.status = :status, n.configVersion = n.configVersion + 1, "
+			+ "n.configIssuedAt = :now where n.id = :id and n.status <> 'REVOKED'")
+	int changeStatus(@Param("id") String id, @Param("status") String status, @Param("now") Instant now);
+
+	/*
+	 * Mudança de contrato (limites declarados + perfis) numa instrução só, com a mesma regra de
+	 * versão das transições de status: a config assinada do nó carrega limites e perfis, então um
+	 * contrato novo sem versão nova seria permissão nova que o runtime nunca aplicaria. Nó revogado
+	 * não recebe contrato novo — é terminal.
+	 */
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Query("update NetworkNodeJpaEntity n set n.declaredCpuCores = :cpu, n.declaredMemoryMb = :memory, "
+			+ "n.declaredDiskMb = :disk, n.declaredBandwidthMbps = :bandwidth, n.profiles = :profiles, "
+			+ "n.configVersion = n.configVersion + 1, n.configIssuedAt = :now "
+			+ "where n.id = :id and n.status <> 'REVOKED'")
+	int updateContract(@Param("id") String id, @Param("cpu") int cpu, @Param("memory") int memory,
+			@Param("disk") int disk, @Param("bandwidth") int bandwidth, @Param("profiles") String profiles,
+			@Param("now") Instant now);
 
 	@Modifying
 	@Query("update NetworkNodeJpaEntity n set n.runtimeVersion = :version, n.observedCpuPercent = :cpu, "

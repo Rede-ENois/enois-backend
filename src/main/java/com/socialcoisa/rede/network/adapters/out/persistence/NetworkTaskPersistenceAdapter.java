@@ -1,7 +1,9 @@
 package com.socialcoisa.rede.network.adapters.out.persistence;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.data.domain.PageRequest;
@@ -34,9 +36,23 @@ class NetworkTaskPersistenceAdapter implements NetworkTaskRepository {
 
 	@Override
 	public void create(String id, TaskType type, String idempotencyKey, String payload, DataClass dataClass,
-			Instant deadline, Instant nextAttemptAt, Instant now) {
-		repository.save(new NetworkTaskJpaEntity(id, type.name(), idempotencyKey, payload, dataClass.name(), deadline,
-			nextAttemptAt, now));
+			String region, String targetNodeId, Instant deadline, Instant nextAttemptAt, Instant now) {
+		repository.save(new NetworkTaskJpaEntity(id, type.name(), idempotencyKey, payload, dataClass.name(),
+			normalizeRegion(region), normalizeTarget(targetNodeId), deadline, nextAttemptAt, now));
+	}
+
+	/** Alvo vazio é a mesma coisa que sem alvo: dois jeitos de dizer a mesma ausência viram bug. */
+	private static String normalizeTarget(String targetNodeId) {
+		return targetNodeId == null || targetNodeId.isBlank() ? null : targetNodeId.trim();
+	}
+
+	/**
+	 * Região vazia e região nula são a mesma coisa ("sem preferência"). Guardar {@code ""} criaria um
+	 * valor que não casa com nó nenhum e que ninguém distingue de null na leitura — dois jeitos de
+	 * dizer a mesma ausência viram bug de comparação mais tarde.
+	 */
+	private static String normalizeRegion(String region) {
+		return region == null || region.isBlank() ? null : region.trim();
 	}
 
 	@Override
@@ -61,6 +77,32 @@ class NetworkTaskPersistenceAdapter implements NetworkTaskRepository {
 			.stream()
 			.map(NetworkTaskJpaEntity::toDomain)
 			.toList();
+	}
+
+	@Override
+	public List<NetworkTask> findPendingTargeted(String targetNodeId, Instant now, int limit) {
+		return repository.findPendingTargeted(targetNodeId, now, PageRequest.ofSize(limit))
+			.stream()
+			.map(NetworkTaskJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public long countOpenTargeted(String targetNodeId, Instant now) {
+		return repository.countOpenTargeted(targetNodeId, now);
+	}
+
+	@Override
+	public List<NetworkTask> findOnNonOperatingNodes(Instant now, int limit) {
+		return repository.findOnNonOperatingNodes(now, PageRequest.ofSize(limit))
+			.stream()
+			.map(NetworkTaskJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public long countOnNonOperatingNodes(Instant now) {
+		return repository.countOnNonOperatingNodes(now);
 	}
 
 	@Override
@@ -96,6 +138,16 @@ class NetworkTaskPersistenceAdapter implements NetworkTaskRepository {
 	@Override
 	public long countByStatus(TaskStatus status) {
 		return repository.countByStatus(status.name());
+	}
+
+	@Override
+	public Map<String, Long> countDoneByNode(Collection<String> nodeIds) {
+		if (nodeIds.isEmpty()) {
+			return Map.of();
+		}
+		return repository.countDoneByNode(nodeIds)
+			.stream()
+			.collect(java.util.stream.Collectors.toMap(row -> (String) row[0], row -> (Long) row[1]));
 	}
 
 	@Override

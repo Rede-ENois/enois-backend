@@ -54,7 +54,22 @@ graça: claim entre instâncias, backoff, DLQ por `max-attempts`, métrica de ba
 
 ## 5. Consistência de leitura
 
-- `NODE_READ_REPLICA` recebe **projeções**, não tabelas cruas. A allowlist é explícita e versionada.
+- `NODE_READ_REPLICA` recebe **projeções**, não tabelas cruas. A allowlist é explícita e versionada
+  (`ReplicaCatalogService.ALLOWLIST`): no dia 1 são `PROFILE` e `COMMUNITY`, as mesmas projeções que a
+  borda entrega. O catálogo (`GET /network/replica/{kind}`) só diz **o que existe**; o corpo de cada
+  item continua vindo de `GET /network/content/{kind}/{id}`, com a versão vigente e o hash do corpo —
+  não há um segundo caminho de serialização para o mesmo agregado.
+- A travessia é **por chave** — `(criado em, id)` — e nunca por posição. A réplica leva horas para
+  percorrer o catálogo de um sistema vivo; com `offset`, apagar um item entre duas páginas puxa os
+  seguintes para trás e um deles nunca é lido, e criar um empurra os seguintes para frente e outro é
+  lido duas vezes. Com chave, "continua depois de (at, id)" não depende de quantos itens existem antes.
+- O fim da travessia devolve `hasMore=false` **e** o cursor preenchido: `hasMore` é "há mais agora",
+  o cursor é "li até aqui". Devolver cursor nulo junto com a última página faria a réplica recomeçar do
+  início e rebaixar o catálogo inteiro na rodada seguinte.
+- O catálogo nunca é mais largo que a vitrine. Conta suspensa, conta removida, comunidade de conta
+  suspensa e comunidade com o texto do ataque ficam fora pelo **mesmo critério** da lista pública —
+  decidido no módulo dono (`ProfileService.accountsVisible`, `CommunityService.communitiesVisible`) e
+  aplicado em lote: uma consulta de sanção por página, não uma por item.
 - Toda projeção carrega `sourceVersion` (contador monotônico por agregado). O nó serve a versão que
   tem; o cliente que exige frescor vai na infra principal.
 - Divergência entre `sourceVersion` do nó e da origem vira alerta `SYNC_DIVERGENCE` no painel.
@@ -89,6 +104,19 @@ o TTL continua sendo a garantia, o sinal é a aceleração. Para a rede:
      cunhada sobre corpo existente. O nó descobre que um agregado sumiu ao revalidar e receber 404; a
      reconciliação (V281) fecha o ciclo pelo outro lado. Um tombstone por nó multiplicaria linhas para
      dizer a mesma coisa.
+   - **O consumidor do feed está entregue no nó.** `node-runtime.sh` executa `EDGE_CACHE`: lê
+     `?cursor=<seq guardado>` do arquivo `$NODE_HOME/edge/cursor`, baixa só o que mudou pelo mesmo
+     `GET /network/content/{kind}/{id}` (com `?version=` quando já tem o corpo — `changed=false` não
+     reescreve nem reconfirma), guarda corpo e versão em `$NODE_HOME/edge/<kind>/` e confirma
+     `/synced`. O cursor **só avança com a entrada em disco**: consumir a mudança sem baixar o corpo
+     deixaria a entrada velha até o TTL. `reset=true` apaga o cache e recomeça do zero; 404 apaga a
+     entrada. Falha no meio devolve `complete=false` com o cursor, e a próxima tarefa retoma.
+   - **A tarefa que alimenta o consumidor é por nó.** O cursor é do disco do nó, então `EDGE_CACHE`
+     nasce com alvo (`network_tasks.target_node_id`, V287) e o despacho a trata como filtro: só o nó
+     alvo a recebe. Sem alvo, a designação por mérito mandaria a tarefa a um nó sorteado, que
+     avançaria só o próprio cursor — os outros de borda nunca sairiam do frio. Quem cria a tarefa é
+     `EdgeCacheService`: pedido explícito do admin (`POST /admin/network/nodes/{id}/edge-cache`) ou
+     aquisição periódica (`EdgeCacheWorker`, 2 min) para cada nó de borda vivo sem pedido em aberto.
 3. **Nunca:** cache de dado pessoal em nó externo.
 
 ## 7. Reconciliação
@@ -133,7 +161,7 @@ O scheduler escolhe o nó em duas etapas: **filtro** e **ordem**.
 
 O filtro exclui quem não pode receber a tarefa agora: nó morto (heartbeat velho), nó **fora do
 balanceamento** (janela de remoção vigente), perfil que não cobre o tipo, classe de dado que não pode
-sair da infra autorizada, sem vaga e CPU saturada.
+sair da infra autorizada, sem vaga, CPU saturada e **memória declarada esgotada**.
 
 A ordem é por **saúde e depois por folga**: nó saudável antes de nó degradado; dentro do mesmo grupo,
 quem tem mais vagas livres proporcionalmente. Empate é resolvido por jitter, senão o primeiro da
@@ -165,7 +193,25 @@ suspendeu, e o admin teria de "religar" o que nunca desligou.
 
 Consequência no modo da rede: nó removido **não conta vaga** em `availableCapacity`. Contar faria a
 razão fila/vagas parecer folgada e a rede não entraria em `HIGH_LOAD` justamente quando tem menos
-capacidade do que aparenta.
+capacidade do que aparenta. Nó saturado e nó no teto de memória declarada seguem a mesma regra.
+
+### 7.2 Limites que o participante declara
+
+O nó declara no enroll quanto cede de CPU, memória, disco e banda. Declarado é **teto**, não
+estimativa: é o que o participante aceitou ceder, e designar tarefa a partir dele é passar por cima
+do combinado — o container do nó estoura e a tarefa morre com ele.
+
+| limite declarado | como a rede respeita |
+|---|---|
+| `cpuCores` | vira `concurrencyLimit()`; o despacho desconta o que a rodada já entregou |
+| `memoryMb` | `memoryExhausted()`: memória observada ≥ teto declarado tira o nó do filtro e da conta de vagas |
+| `diskMb` | sem consumidor hoje: nenhum tipo de tarefa atual escreve volume que o Control Plane meça |
+| `bandwidthMbps` | sem consumidor hoje: nenhuma transferência de tarefa é medida por nó |
+
+**Sem reporte, o nó continua elegível.** Não medir não é estar cheio: um nó que não manda
+`memoryMb` no heartbeat não tem o que comparar com o teto, e excluí-lo puniria o runtime antigo por
+um dado que ele nunca prometeu mandar. Teto zero segue a mesma lógica do piso 1 em
+`concurrencyLimit()`: cadastro mal preenchido não pode virar nó inútil.
 
 ## 8. O que fica de fora, e por quê
 

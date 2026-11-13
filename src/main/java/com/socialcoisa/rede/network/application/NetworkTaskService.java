@@ -4,7 +4,9 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -18,7 +20,9 @@ import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
 import com.socialcoisa.rede.network.domain.DataClass;
 import com.socialcoisa.rede.network.domain.NetworkNode;
+import com.socialcoisa.rede.network.domain.NetworkMode;
 import com.socialcoisa.rede.network.domain.NetworkTask;
+import com.socialcoisa.rede.network.domain.NodeProfile;
 import com.socialcoisa.rede.network.domain.TaskStatus;
 import com.socialcoisa.rede.network.domain.TaskType;
 import com.socialcoisa.rede.shared.audit.AuditTrail;
@@ -45,7 +49,7 @@ public class NetworkTaskService {
 	private static final Logger LOG = LoggerFactory.getLogger(NetworkTaskService.class);
 
 	/** Teto de tarefas por varredura: uma rodada não pode segurar a tabela. */
-	private static final int SCAN_LIMIT = 50;
+	public static final int SCAN_LIMIT = 50;
 	private static final int MAX_LIST = 200;
 	private static final int MAX_ERROR = 500;
 
@@ -57,6 +61,7 @@ public class NetworkTaskService {
 	 * (fail-closed) — nunca "aceita porque nao deu para conferir".
 	 */
 	private final org.springframework.beans.factory.ObjectProvider<MediaResultVerifier> mediaResults;
+	private final NetworkModeService modes;
 	private final AuditTrail audit;
 	private final Clock clock;
 	private final Duration claimTtl;
@@ -66,7 +71,7 @@ public class NetworkTaskService {
 	private final Duration quarantineWindow;
 
 	NetworkTaskService(NetworkTaskRepository tasks, NetworkNodeRepository nodes, org.springframework.beans.factory.ObjectProvider<MediaResultVerifier> mediaResults,
-			AuditTrail audit, Clock clock,
+			NetworkModeService modes, AuditTrail audit, Clock clock,
 			@Value("${rede.network.task.claim-ttl-seconds:120}") long claimTtlSeconds,
 			@Value("${rede.network.task.node-stale-seconds:180}") long nodeStaleSeconds,
 			@Value("${rede.network.task.max-attempts:5}") int maxAttempts,
@@ -75,6 +80,7 @@ public class NetworkTaskService {
 		this.tasks = tasks;
 		this.nodes = nodes;
 		this.mediaResults = mediaResults;
+		this.modes = modes;
 		this.audit = audit;
 		this.clock = clock;
 		this.claimTtl = Duration.ofSeconds(Math.max(10, claimTtlSeconds));
@@ -110,7 +116,8 @@ public class NetworkTaskService {
 		String id = NodeIds.next("tk");
 		tasks.create(id, command.taskType(), command.idempotencyKey().trim(),
 			command.payload() == null ? "{}" : command.payload(),
-			command.dataClass() == null ? DataClass.PUBLIC : command.dataClass(), deadline, now, now);
+			command.dataClass() == null ? DataClass.PUBLIC : command.dataClass(), command.region(),
+			command.targetNodeId(), deadline, now, now);
 		return tasks.findById(id)
 			.orElseThrow(() -> new IllegalStateException("Tarefa recem-criada nao encontrada: " + id));
 	}
@@ -127,15 +134,29 @@ public class NetworkTaskService {
 	@Transactional
 	public int dispatchPending() {
 		Instant now = clock.instant();
+		// Recuperar órfã roda SEMPRE, inclusive em DEGRADED/EMERGENCY: devolver à fila a tarefa cujo
+		// claim venceu não é designar trabalho novo, e deixá-la parada em DISPATCHED para sempre
+		// perderia a tarefa no prazo em vez de esperar o modo voltar.
 		reclaimAbandoned(now);
-		List<NetworkTask> pending = tasks.findDispatchable(now, SCAN_LIMIT);
+		NetworkMode mode = modes.current();
+		int limit = mode.dispatchLimit(SCAN_LIMIT);
+		if (limit == 0) {
+			return 0;
+		}
+		List<NetworkTask> pending = tasks.findDispatchable(now, limit);
 		if (pending.isEmpty()) {
 			return 0;
 		}
 		List<NetworkNode> candidates = nodes.findCandidates(now.minus(nodeStaleAfter), MAX_LIST);
+		// As vagas lidas do heartbeat valem para o instante da leitura, não para a rodada inteira. Sem
+		// este contador, dez tarefas na fila iam todas para o mesmo nó de quatro núcleos: cada escolha
+		// relia a lista de candidatos, que ainda dizia "zero rodando", e a concorrência declarada pelo
+		// participante era ignorada justamente quando havia trabalho para distribuir. O mapa é local da
+		// rodada — quem de fato executa continua sendo o nó, e o próximo heartbeat dele corrige a conta.
+		Map<String, Integer> reserved = new HashMap<>();
 		int dispatched = 0;
 		for (NetworkTask task : pending) {
-			Optional<NetworkNode> chosen = choose(task, candidates, now);
+			Optional<NetworkNode> chosen = choose(task, candidates, now, reserved);
 			if (chosen.isEmpty()) {
 				// Sem nó elegível a tarefa fica na fila: o próximo ciclo tenta de novo. Não é erro —
 				// é a rede sem capacidade agora, e matar a tarefa seria perder trabalho.
@@ -144,6 +165,7 @@ public class NetworkTaskService {
 			}
 			NetworkNode node = chosen.get();
 			if (tasks.claim(task.id(), node.id(), task.attempt(), now.plus(claimTtl), now) == 1) {
+				reserved.merge(node.id(), 1, Integer::sum);
 				dispatched++;
 			}
 		}
@@ -177,6 +199,46 @@ public class NetworkTaskService {
 			}
 		}
 		return reclaimed;
+	}
+
+	/**
+	 * Drenagem: devolve à fila, na hora, o que estava designado a nós que perderam o direito de
+	 * operar (suspenso, em quarentena, revogado).
+	 *
+	 * <p>Sem esta rodada a tarefa ficava retida até o claim vencer — dois minutos no padrão — por um
+	 * nó que já não autentica: {@code reclaimAbandoned} só olha claim <b>vencido</b>, e o nó suspenso
+	 * não vai bater heartbeat nem devolver resultado nesse intervalo. Suspender um nó para manutenção
+	 * passava a custar uma pausa de claim TTL na fila inteira daquele nó.</p>
+	 *
+	 * <p>A devolução é segura porque o {@code attempt} sobe: o resultado do nó drenado, se um dia
+	 * chegar, é de tentativa antiga e cai na regra de descarte que já existe. Drenar não é executar
+	 * diferente — é só parar de esperar por quem não pode responder.</p>
+	 */
+	@Transactional
+	public int drainSuspendedNodes() {
+		Instant now = clock.instant();
+		int drained = 0;
+		for (NetworkTask task : tasks.findOnNonOperatingNodes(now, SCAN_LIMIT)) {
+			if (task.expired(now)) {
+				tasks.kill(task.id(), task.attempt(), "TASK_EXPIRED: prazo vencido no no drenado", now);
+				audit.record("system", "NETWORK_TASK_EXPIRED", task.id(), "{\"attempt\":" + task.attempt() + "}");
+				continue;
+			}
+			// Volta para a fila para já: o nó de origem está fora, então não há motivo para esperar o
+			// backoff de falha — quem falhou foi a capacidade, não a tarefa.
+			if (tasks.requeue(task.id(), task.attempt(), "TASK_DRAINED: no fora de operacao", now, now) == 1) {
+				drained++;
+				audit.record("system", "NETWORK_TASK_DRAINED", task.id(),
+					"{\"attempt\":" + task.attempt() + ",\"node\":\"" + escape(task.assignedNodeId()) + "\"}");
+			}
+		}
+		return drained;
+	}
+
+	/** Quantas tarefas estão presas a nó fora de operação — o painel mostra sem paginar. */
+	@Transactional(readOnly = true)
+	public long countOnNonOperatingNodes() {
+		return tasks.countOnNonOperatingNodes(clock.instant());
 	}
 
 	/**
@@ -307,29 +369,51 @@ public class NetworkTaskService {
 	 * Escolhe o nó para a tarefa.
 	 *
 	 * <p>Filtro primeiro (vivo, fora da janela de remoção, perfil cobre o tipo, classe de dado pode
-	 * ir para este nó, tem vaga, não está saturado), depois ordenação por saúde e por folga: nó
-	 * degradado (lento ou errando recentemente) perde prioridade para todos os saudáveis, e entre os
-	 * do mesmo grupo quem tem mais vaga proporcional recebe. Empate é resolvido por jitter — sem ele,
-	 * todos os nós empatados receberiam sempre na mesma ordem e o primeiro da lista viraria
-	 * gargalo.</p>
+	 * ir para este nó, tem vaga, não está saturado, não esgotou a memória declarada), depois ordenação
+	 * por saúde, origem, região e folga: nó degradado (lento ou errando recentemente) perde prioridade
+	 * para todos os saudáveis; entre os saudáveis, o nó da infraestrutura do Énóis ({@code NODE_LOCAL})
+	 * vem antes dos demais; dentro do mesmo grupo de origem, o nó da região do pedido vem antes de nós
+	 * de outras regiões; e dentro do mesmo grupo de região quem tem mais vaga proporcional recebe.
+	 * Empate é resolvido por jitter — sem ele, todos os nós empatados receberiam sempre na mesma ordem
+	 * e o primeiro da lista viraria gargalo.</p>
 	 *
 	 * <p>A remoção temporária é filtro, não penalidade: um nó que falhou
 	 * {@link NetworkNode#FAILURE_STREAK_LIMIT} vezes seguidas fica fora da lista até a janela vencer.
 	 * Penalizá-lo só o colocaria no fim da fila — e com um único nó na rede ele continuaria
 	 * recebendo trabalho, esgotando as tentativas de cada tarefa depois da última.</p>
+	 *
+	 * <p>{@code reserved} é quantas tarefas esta rodada já designou a cada nó. A folga e a vaga de um
+	 * candidato são do último heartbeat; sem descontar o que a própria rodada entregou, a designação
+	 * passa por cima do limite de concorrência que o participante declarou.</p>
 	 */
-	private Optional<NetworkNode> choose(NetworkTask task, List<NetworkNode> candidates, Instant now) {
+	private Optional<NetworkNode> choose(NetworkTask task, List<NetworkNode> candidates, Instant now,
+			Map<String, Integer> reserved) {
 		List<NetworkNode> eligible = candidates.stream()
+			// Alvo vem antes de todo critério de mérito: é vínculo, não desempate. Filtrar depois do
+			// jitter seria mandar ao nó errado um trabalho que o nó errado não sabe continuar.
+			.filter(node -> task.targetNodeId() == null || node.id().equals(task.targetNodeId()))
 			.filter(node -> node.alive(now, nodeStaleAfter))
 			.filter(node -> !node.quarantined(now))
 			.filter(node -> node.accepts(task.taskType(), task.dataClass()))
-			.filter(NetworkNode::hasCapacity)
+			.filter(node -> hasRoom(node, reserved))
 			.filter(node -> !node.saturated())
+			.filter(node -> !node.memoryExhausted())
 			.sorted(Comparator.comparing(NetworkTaskService::degraded)
-				.thenComparing(Comparator.comparingDouble(NetworkTaskService::slack).reversed())
+				.thenComparing(NetworkTaskService::localPriority)
+				.thenComparing(Comparator.comparingInt(node -> regionPenalty(task.region(), node)))
+				.thenComparing(Comparator.<NetworkNode>comparingDouble(node -> slack(node, reserved)).reversed())
 				.thenComparingDouble(node -> ThreadLocalRandom.current().nextDouble()))
 			.toList();
 		return eligible.stream().findFirst();
+	}
+
+	/**
+	 * O nó ainda tem vaga depois do que esta rodada já reservou. O nó que reporta em execução e o
+	 * que já recebeu nesta rodada são o mesmo tipo de ocupação — contá-los juntos é o que mantém a
+	 * designação dentro do limite declarado.
+	 */
+	private static boolean hasRoom(NetworkNode node, Map<String, Integer> reserved) {
+		return node.runningTasks() + reserved.getOrDefault(node.id(), 0) < node.concurrencyLimit();
 	}
 
 	/** Nó degradado: lento medido, ou errando recentemente sem ter chegado ao limite da janela. */
@@ -337,9 +421,59 @@ public class NetworkTaskService {
 		return node.slow() || node.failing();
 	}
 
-	/** Folga do nó: vagas livres sobre o limite. Quem tem mais folga recebe a próxima tarefa. */
-	private static double slack(NetworkNode node) {
-		return (double) (node.concurrencyLimit() - node.runningTasks()) / node.concurrencyLimit();
+	/** Escapa o texto para caber em provedor JSON de auditoria, mesmo sendo id gerado por nós. */
+	private static String escape(String text) {
+		if (text == null) {
+			return "";
+		}
+		return text.replace("\\", "\\\\").replace("\"", "\\\"");
+	}
+
+	/**
+	 * Ordenação por origem: nó da própria infraestrutura do Énóis recebe antes dos demais.
+	 *
+	 * <p>É <b>prioridade de escalonamento, não permissão extra</b> (ADR-02). O perfil não abre tipo de
+	 * tarefa nem classe de dado que outro nó não tenha, e não passa por cima de nenhum filtro: um nó
+	 * local lento, errando ou sem vaga continua fora como qualquer outro. O que ele ganha é escolha
+	 * primeiro entre os saudáveis — para que o pico seja absorvido na máquina da casa em vez de na
+	 * máquina do participante.</p>
+	 *
+	 * <p>Fica <b>antes</b> da folga porque o critério de escalonamento é de origem, não de ocupação:
+	 * aplicado depois, o local só seria preferido quando já fosse o mais folgado, e a prioridade não
+	 * existiria justamente no momento em que ela importa (todos os nós com vaga).</p>
+	 */
+	private static boolean localPriority(NetworkNode node) {
+		return !node.profiles().contains(NodeProfile.NODE_LOCAL);
+	}
+
+	/**
+	 * Afinidade de região: 0 para o nó da região do pedido, 1 para os demais.
+	 *
+	 * <p>É <b>ordenação</b>, nunca filtro (ADR-012). Filtrar esvaziaria a fila sempre que a região do
+	 * pedido não tivesse nó elegível — a tarefa esperaria a região voltar em vez de rodar no vizinho,
+	 * e a rede cooperativa existe justamente para não ter esse ponto único. Sem região no pedido, ou
+	 * sem região declarada no nó, todos empatam em 0 e o escalonamento é o de antes.</p>
+	 *
+	 * <p>Fica <b>depois</b> da origem ({@code NODE_LOCAL}): a casa continua absorvendo o pico antes
+	 * de chegar ao participante, como em ADR-010. Quando há local com vaga, ele recebe; a região
+	 * decide entre os demais. Antes da folga, porque afinidade aplicada depois só valeria no empate
+	 * exato de vagas — e é no caso normal (todos com vaga parecida) que ela precisa existir.</p>
+	 */
+	private static int regionPenalty(String taskRegion, NetworkNode node) {
+		if (taskRegion == null || node.region() == null) {
+			return 0;
+		}
+		return taskRegion.equalsIgnoreCase(node.region()) ? 0 : 1;
+	}
+
+	/**
+	 * Folga do nó: vagas livres sobre o limite, descontando o que esta rodada já entregou. Quem tem
+	 * mais folga recebe a próxima tarefa — e quem recebeu nesta rodada vai perdendo a preferência,
+	 * que é o que espalha a fila em vez de empilhar tudo no primeiro nó da ordem.
+	 */
+	private static double slack(NetworkNode node, Map<String, Integer> reserved) {
+		int free = node.concurrencyLimit() - node.runningTasks() - reserved.getOrDefault(node.id(), 0);
+		return (double) Math.max(0, free) / node.concurrencyLimit();
 	}
 
 	/**
@@ -392,8 +526,29 @@ public class NetworkTaskService {
 		return text.length() > MAX_ERROR ? text.substring(0, MAX_ERROR) : text;
 	}
 
+	/**
+	 * Pedido de tarefa. {@code region} é opcional e a sobrecarga de cinco argumentos existe para não
+	 * obrigar quem não tem preferência a dizer "sem preferência" — o valor antigo de quatro campos
+	 * mais deadline produz exatamente o mesmo comportamento de antes desta rodada.
+	 */
+	/**
+	 * @param targetNodeId nó a que a tarefa pertence; {@code null} = qualquer nó elegível. Não confundir
+	 * com {@code region}: região ordena entre elegíveis, alvo restringe quem é elegível.
+	 */
 	public record EnqueueCommand(TaskType taskType, String idempotencyKey, String payload, DataClass dataClass,
-			Instant deadline) {
+			String region, Instant deadline, String targetNodeId) {
+
+		/** Pedido sem preferência de região: o escalonamento é o mesmo de antes de a região existir. */
+		public EnqueueCommand(TaskType taskType, String idempotencyKey, String payload, DataClass dataClass,
+				Instant deadline) {
+			this(taskType, idempotencyKey, payload, dataClass, null, deadline, null);
+		}
+
+		/** Pedido com alvo (trabalho que depende do estado local daquele nó). */
+		public EnqueueCommand(TaskType taskType, String idempotencyKey, String payload, DataClass dataClass,
+				String region, Instant deadline) {
+			this(taskType, idempotencyKey, payload, dataClass, region, deadline, null);
+		}
 	}
 
 	public record ResultCommand(String taskId, int attempt, boolean done, String output, String error,

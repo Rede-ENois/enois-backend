@@ -23,6 +23,7 @@ testadas). O trabalho vive na branch de longa duração `feat/rede-distribuida`,
 | 06 | [Contingência](06-contingencia.md) | Modos operacionais, contingência local e distribuída, anti split-brain. |
 | 07 | [Plano incremental](07-plano-incremental.md) | Fases 1–6, cada uma com entrega funcional e critério de aceite. |
 | 08 | [Impacto na infraestrutura atual](08-impacto.md) | O que muda no que já está no ar, e o que não muda. |
+| 09 | [Instalação do Node Runtime](09-instalacao.md) | Como um participante instala, registra e diagnostica um nó com `deploy/node-runtime/`. |
 
 Decisões arquiteturais ficam em [`docs/adr/`](../adr/).
 

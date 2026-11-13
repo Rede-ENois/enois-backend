@@ -42,4 +42,28 @@ class AuditLogJpaEntity {
 		this.metadata = metadata;
 		this.createdAt = createdAt;
 	}
+
+	String id() {
+		return id;
+	}
+
+	String actorId() {
+		return actorId;
+	}
+
+	String action() {
+		return action;
+	}
+
+	String targetId() {
+		return targetId;
+	}
+
+	String metadata() {
+		return metadata;
+	}
+
+	Instant createdAt() {
+		return createdAt;
+	}
 }

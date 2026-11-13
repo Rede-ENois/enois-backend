@@ -25,6 +25,8 @@ import java.util.Set;
  * @param lastSeenAt último heartbeat; null = nunca conectou
  * @param declaredCpuCores núcleos que o participante cedeu
  * @param declaredMemoryMb memória que o participante cedeu
+ * @param declaredDiskMb disco que o participante cedeu; sem consumidor hoje, vai na config assinada
+ * @param declaredBandwidthMbps banda que o participante cedeu; sem consumidor hoje, vai na config
  * @param observedCpuPercent uso de CPU no último heartbeat; null = não reportado
  * @param observedMemoryMb memória em uso no último heartbeat; null = não reportado
  * @param observedRunningTasks tarefas em execução no último heartbeat; null = não reportado
@@ -35,9 +37,9 @@ import java.util.Set;
  */
 public record NetworkNode(String id, String displayName, String ownerUserId, NodeStatus status,
 		Set<NodeProfile> profiles, String region, String country, String runtimeVersion, Instant lastSeenAt,
-		int declaredCpuCores, int declaredMemoryMb, Double observedCpuPercent, Integer observedMemoryMb,
-		Integer observedRunningTasks, Integer observedLatencyMs, int consecutiveFailures, Instant quarantinedUntil,
-		String quarantineReason) {
+		int declaredCpuCores, int declaredMemoryMb, int declaredDiskMb, int declaredBandwidthMbps,
+		Double observedCpuPercent, Integer observedMemoryMb, Integer observedRunningTasks, Integer observedLatencyMs,
+		int consecutiveFailures, Instant quarantinedUntil, String quarantineReason) {
 
 	/** Acima disto o nó está ocupado demais para receber tarefa nova, mesmo com vaga declarada. */
 	public static final double SATURATED_CPU_PERCENT = 85.0;
@@ -94,6 +96,20 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 	/** CPU observada acima do limiar: o nó está saturado mesmo que ainda tenha vaga declarada. */
 	public boolean saturated() {
 		return observedCpuPercent != null && observedCpuPercent >= SATURATED_CPU_PERCENT;
+	}
+
+	/**
+	 * A memória observada já bateu o teto que o participante declarou ceder? É o limite dele, não
+	 * uma estimativa nossa: o nó aceitou ceder até {@code declaredMemoryMb}, e designar tarefa nova
+	 * a partir daí é passar por cima do combinado — o container dele estoura e a tarefa morre com
+	 * ele.
+	 *
+	 * <p>Sem teto declarado não há limite a respeitar (mesmo raciocínio do piso 1 em
+	 * {@link #concurrencyLimit()}), e sem reporte não há o que comparar: não medir não é estar
+	 * cheio. Nos dois casos o nó continua elegível.</p>
+	 */
+	public boolean memoryExhausted() {
+		return declaredMemoryMb > 0 && observedMemoryMb != null && observedMemoryMb >= declaredMemoryMb;
 	}
 
 	/**

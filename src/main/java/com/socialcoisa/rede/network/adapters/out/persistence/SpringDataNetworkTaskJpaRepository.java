@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.network.adapters.out.persistence;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 
 import org.springframework.data.domain.PageRequest;
@@ -32,6 +33,51 @@ interface SpringDataNetworkTaskJpaRepository extends JpaRepository<NetworkTaskJp
 			+ "and t.claimExpiresAt > :now order by t.createdAt asc")
 	List<NetworkTaskJpaEntity> findAssignedTo(@Param("nodeId") String nodeId, @Param("now") Instant now,
 			PageRequest page);
+
+	/**
+	 * Pedidos em aberto para este nó. "Aberta" é PENDING ou DISPATCHED com claim vigente: as duas
+	 * significam que ainda há trabalho por fazer ali. O índice {@code idx_network_tasks_target}
+	 * (V287) responde a esta faixa e a de {@code countOpenTargeted}.
+	 */
+	@Query("select t from NetworkTaskJpaEntity t where t.targetNodeId = :targetNodeId and "
+			+ "(t.status = 'PENDING' or (t.status = 'DISPATCHED' and t.claimExpiresAt > :now)) "
+			+ "and t.deadline > :now order by t.createdAt asc")
+	List<NetworkTaskJpaEntity> findPendingTargeted(@Param("targetNodeId") String targetNodeId,
+			@Param("now") Instant now, PageRequest page);
+
+	@Query("select count(*) from NetworkTaskJpaEntity t where t.targetNodeId = :targetNodeId and "
+			+ "(t.status = 'PENDING' or (t.status = 'DISPATCHED' and t.claimExpiresAt > :now)) "
+			+ "and t.deadline > :now")
+	long countOpenTargeted(@Param("targetNodeId") String targetNodeId, @Param("now") Instant now);
+
+	/**
+	 * Tarefas de nós que perderam o direito de operar (suspenso, em quarentena, revogado), com claim
+	 * ainda vigente.
+	 *
+	 * <p>O join com {@code network_nodes} é o que define o que drenar: o critério é o status do nó,
+	 * não o tempo. {@code findAbandoned} só vê claim <b>vencido</b>, e o nó suspenso não vai responder
+	 * heartbeat até lá — a tarefa esperaria o prazo inteiro por um resultado que não vem.</p>
+	 *
+	 * <p>{@code status <> 'ACTIVE'} também pega {@code PENDING_APPROVAL}, o que é correto: nó não
+	 * aprovado não executa, e uma tarefa designada a ele (possível se ele foi suspenso depois da
+	 * designação e voltou a pendente) também precisa sair.</p>
+	 */
+	@Query("select t from NetworkTaskJpaEntity t join NetworkNodeJpaEntity n on n.id = t.assignedNodeId "
+			+ "where t.status = 'DISPATCHED' and t.claimExpiresAt > :now and n.status <> 'ACTIVE' "
+			+ "order by t.createdAt asc")
+	List<NetworkTaskJpaEntity> findOnNonOperatingNodes(@Param("now") Instant now, PageRequest page);
+
+	/**
+	 * Concluídas por nó, numa consulta só. O agregador do JPQL devolve {@code Object[]} —
+	 * {@code [0] = assignedNodeId}, {@code [1] = count}.
+	 */
+	@Query("select t.assignedNodeId, count(*) from NetworkTaskJpaEntity t where t.status = 'DONE' "
+			+ "and t.assignedNodeId in :nodeIds group by t.assignedNodeId")
+	List<Object[]> countDoneByNode(@Param("nodeIds") Collection<String> nodeIds);
+
+	@Query("select count(*) from NetworkTaskJpaEntity t join NetworkNodeJpaEntity n on n.id = t.assignedNodeId "
+			+ "where t.status = 'DISPATCHED' and t.claimExpiresAt > :now and n.status <> 'ACTIVE'")
+	long countOnNonOperatingNodes(@Param("now") Instant now);
 
 	@Query("select t from NetworkTaskJpaEntity t order by t.createdAt desc")
 	List<NetworkTaskJpaEntity> listRecent(PageRequest page);

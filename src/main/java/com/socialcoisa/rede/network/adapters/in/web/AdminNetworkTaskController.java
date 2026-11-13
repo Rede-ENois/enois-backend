@@ -43,18 +43,25 @@ class AdminNetworkTaskController {
 		this.adminGuard = adminGuard;
 	}
 
-	record TaskView(String id, String type, String status, int attempt, String dataClass, String assignedNodeId,
-			Instant deadline, Instant nextAttemptAt, Instant finishedAt, String lastError, Instant createdAt) {
+	/**
+	 * A tarefa como o painel a vê. {@code region} é a preferência de origem do pedido (null =
+	 * sem preferência); ela aparece porque é a única explicação visível de por que uma tarefa foi
+	 * para um nó distante — e porque o admin precisa poder conferir que uma tarefa regional não
+	 * está presa esperando a região.
+	 */
+	record TaskView(String id, String type, String status, int attempt, String dataClass, String region,
+			String assignedNodeId, Instant deadline, Instant nextAttemptAt, Instant finishedAt, String lastError,
+			Instant createdAt, String targetNodeId) {
 
 		static TaskView of(NetworkTask task) {
 			return new TaskView(task.id(), task.taskType().name(), task.status().name(), task.attempt(),
-				task.dataClass().name(), task.assignedNodeId(), task.deadline(), task.nextAttemptAt(),
-				task.finishedAt(), task.lastError(), task.createdAt());
+				task.dataClass().name(), task.region(), task.assignedNodeId(), task.deadline(),
+				task.nextAttemptAt(), task.finishedAt(), task.lastError(), task.createdAt(), task.targetNodeId());
 		}
 	}
 
 	record OverviewView(String mode, long pending, long dispatched, long done, long failed, long dead,
-			long cancelled) {
+			long cancelled, long awaitingDrain) {
 	}
 
 	@GetMapping
@@ -64,14 +71,20 @@ class AdminNetworkTaskController {
 		return tasks.list(limit).stream().map(TaskView::of).toList();
 	}
 
-	/** Contadores por estado e o modo vigente: é o que a tela mostra no topo. */
+	/**
+	 * Contadores por estado e o modo vigente: é o que a tela mostra no topo.
+	 *
+	 * <p>{@code awaitingDrain} é quanto do {@code dispatched} está preso a nó fora de operação. É
+	 * aditivo: a tela antiga ignora o campo, e o número existe porque a drenagem só roda na
+	 * varredura — entre a suspensão e o ciclo seguinte o admin precisa ver que há trabalho parado.</p>
+	 */
 	@GetMapping("/overview")
 	OverviewView overview(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		admin(sessionToken);
 		return new OverviewView(modes.current().name(), tasks.countByStatus(TaskStatus.PENDING),
 			tasks.countByStatus(TaskStatus.DISPATCHED), tasks.countByStatus(TaskStatus.DONE),
 			tasks.countByStatus(TaskStatus.FAILED), tasks.countByStatus(TaskStatus.DEAD),
-			tasks.countByStatus(TaskStatus.CANCELLED));
+			tasks.countByStatus(TaskStatus.CANCELLED), tasks.countOnNonOperatingNodes());
 	}
 
 	@GetMapping("/{id}")

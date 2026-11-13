@@ -34,6 +34,13 @@ public class NetworkNodeService {
 	private static final int MAX_DISPLAY_NAME = 120;
 	private static final int MAX_LIST = 200;
 
+	/**
+	 * Tokens vivos por conta na solicitação de auto-serviço. O token é de uso único e curto (30 min
+	 * por padrão), mas um loop de cliente abriria linhas até o fim do TTL; três em aberto cobre
+	 * "um servidor por perfil" com folga e ainda freia abuso.
+	 */
+	private static final int MAX_ALIVE_TOKENS_PER_OWNER = 3;
+
 	private final NetworkNodeRepository nodes;
 	private final ProvisionTokenRepository tokens;
 	private final NodeKeyService keyService;
@@ -75,6 +82,30 @@ public class NetworkNodeService {
 			now.plus(tokenTtl), actorId, now);
 		audit.record(actorId, "NODE_PROVISION_TOKEN_ISSUED", displayName.trim(),
 			"{\"owner\":\"" + ownerUserId.trim() + "\"}");
+		return new IssuedToken(plain, now.plus(tokenTtl));
+	}
+
+	/**
+	 * Solicitação de ingresso pelo próprio participante (interface do participante, ADR-003): o
+	 * dono do token é SEMPRE a conta da sessão — o corpo do pedido não escolhe dono, senão a rota
+	 * de auto-serviço emitiria credencial para conta alheia. Perfis também não: o participante
+	 * declara o servidor; os perfis autorizados são negociados com o admin (que aprova o nó e
+	 * emite a chave). A auditoria distingue a origem: NODE_JOIN_REQUESTED, com quem pediu.
+	 */
+	@Transactional
+	public IssuedToken requestJoin(String ownerUserId, String displayName) {
+		if (tokens.countAliveForOwner(ownerUserId, clock.instant()) >= MAX_ALIVE_TOKENS_PER_OWNER) {
+			throw new ApiException(429, "NODE_JOIN_LIMIT",
+				"Voce ja tem solicitacoes de ingresso em aberto: aguarde a aprovacao ou o vencimento.");
+		}
+		if (displayName == null || displayName.isBlank() || displayName.length() > MAX_DISPLAY_NAME) {
+			throw new ApiException(400, "NODE_NAME_INVALID", "Nome do no ausente ou longo demais.");
+		}
+		String plain = NodeIds.next("npt");
+		Instant now = clock.instant();
+		tokens.insert(Hashes.sha256Hex(plain), displayName.trim(), ownerUserId, "", now.plus(tokenTtl), ownerUserId,
+			now);
+		audit.record(ownerUserId, "NODE_JOIN_REQUESTED", displayName.trim(), "{\"owner\":\"" + ownerUserId + "\"}");
 		return new IssuedToken(plain, now.plus(tokenTtl));
 	}
 
@@ -158,6 +189,86 @@ public class NetworkNodeService {
 		}
 		audit.record(actorId, "NODE_" + next.name(), nodeId, "{}");
 		return require(nodeId);
+	}
+
+	/**
+	 * Desconexão voluntária do participante (interface do participante, não o painel). Suspensão
+	 * reversível — revogação continua sendo decisão administrativa —, com as chaves vigentes caindo
+	 * na mesma transação, como na revogação: servidor desligado a próprio pedido não pode continuar
+	 * autenticando até alguém do admin notar. O ator da auditoria é o próprio participante.
+	 */
+	@Transactional
+	public NetworkNode disconnectVoluntarily(String nodeId, String ownerUserId) {
+		NetworkNode node = require(nodeId);
+		if (!node.ownerUserId().equals(ownerUserId)) {
+			// Nó de outro participante é 404, não 403: 403 confirmaria que o id existe.
+			throw new ApiException(404, "NODE_UNKNOWN", "No nao encontrado.");
+		}
+		if (node.status() == NodeStatus.REVOKED) {
+			throw new ApiException(409, "NODE_REVOKED", "No revogado nao muda.");
+		}
+		if (node.status() != NodeStatus.SUSPENDED) {
+			nodes.updateStatus(nodeId, NodeStatus.SUSPENDED, ownerUserId, clock.instant());
+			keyService.revokeAllForNode(nodeId, ownerUserId);
+			audit.record(ownerUserId, "NODE_DISCONNECTED", nodeId, "{\"voluntary\":true}");
+		}
+		return require(nodeId);
+	}
+
+	/**
+	 * Redefine o que o participante cede. A rede respeita o limite declarado (concorrência é o
+	 * teto de CPU; memória observada contra o declarado tira o nó do balanceamento), e mudar o que
+	 * foi combinado é mudança de permissão: a config assinada carrega os limites, então o contrato
+	 * novo só vale com versão nova — o UPDATE soma 1 em {@code configVersion}.
+	 */
+	@Transactional
+	public NetworkNode capacity(String nodeId, Integer cpuCores, Integer memoryMb, Integer diskMb,
+			Integer bandwidthMbps, String actorId) {
+		if (anyNegative(cpuCores, memoryMb, diskMb, bandwidthMbps)) {
+			throw new ApiException(400, "NODE_CAPACITY_INVALID", "Capacidade nao pode ser negativa.");
+		}
+		NetworkNode node = require(nodeId);
+		requireNotRevoked(node);
+		nodes.updateContract(nodeId,
+			cpuCores != null ? cpuCores : node.declaredCpuCores(),
+			memoryMb != null ? memoryMb : node.declaredMemoryMb(),
+			diskMb != null ? diskMb : node.declaredDiskMb(),
+			bandwidthMbps != null ? bandwidthMbps : node.declaredBandwidthMbps(),
+			node.profiles().stream().toList(), clock.instant());
+		audit.record(actorId, "NODE_CAPACITY_CHANGED", nodeId, "{\"cpuCores\":" + (cpuCores == null ? "null"
+			: cpuCores) + ",\"memoryMb\":" + (memoryMb == null ? "null" : memoryMb) + "}");
+		return require(nodeId);
+	}
+
+	/**
+	 * Redefine os perfis autorizados. Perfis decidem quais tipos de tarefa o nó recebe e o que vai
+	 * na config assinada, então a mudança também compõe versão, e o runtime aplica na próxima
+	 * leitura. Uma lista vazia não é erro: é como se tira tarefa de um nó sem suspendê-lo.
+	 */
+	@Transactional
+	public NetworkNode profiles(String nodeId, List<NodeProfile> next, String actorId) {
+		NetworkNode node = require(nodeId);
+		requireNotRevoked(node);
+		nodes.updateContract(nodeId, node.declaredCpuCores(), node.declaredMemoryMb(), node.declaredDiskMb(),
+			node.declaredBandwidthMbps(), next, clock.instant());
+		audit.record(actorId, "NODE_PROFILES_CHANGED", nodeId,
+			next.stream().map(Enum::name).sorted().collect(java.util.stream.Collectors.joining(",", "[", "]")));
+		return require(nodeId);
+	}
+
+	private static void requireNotRevoked(NetworkNode node) {
+		if (node.status() == NodeStatus.REVOKED) {
+			throw new ApiException(409, "NODE_REVOKED", "No revogado nao muda: cadastre outro.");
+		}
+	}
+
+	private static boolean anyNegative(Integer... values) {
+		for (Integer value : values) {
+			if (value != null && value < 0) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static void requireOperable(NetworkNode node) {

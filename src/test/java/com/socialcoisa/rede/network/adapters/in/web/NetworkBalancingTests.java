@@ -304,9 +304,211 @@ class NetworkBalancingTests {
 			.andExpect(jsonPath("$[0].quarantinedUntil").isNotEmpty());
 	}
 
+
+	// ---------------------------------------------------------------- limite de concorrência na rodada
+
+	/**
+	 * O limite de concorrência declarado pelo participante vale para a rodada, não só para o
+	 * heartbeat.
+	 *
+	 * <p>Antes desta rodada, doze tarefas na fila com um único nó de quatro núcleos eram designadas
+	 * <b>todas</b> para ele: cada escolha relia a lista de candidatos do último heartbeat, que ainda
+	 * dizia "zero rodando", e o limite era conferido contra um número que a própria rodada já tinha
+	 * invalidado. O comportamento correto é quatro — a capacidade que ele aceitou ceder.</p>
+	 */
+	@Test
+	void rodadaNaoDesignaMaisQueALimiteDeConcorrenciaDoNo() throws Exception {
+		String admin = adminToken();
+		Node only = activeNode(admin, "no-unico", List.of("NODE_WORKER"));
+		for (int i = 0; i < 12; i++) {
+			tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "conc-" + i, "{}",
+				DataClass.PUBLIC, null));
+		}
+
+		// 4 núcleos declarados, 0 em execução: no máximo quatro nesta rodada.
+		assertThat(tasks.dispatchPending()).isEqualTo(4);
+		assertThat(assignedCount(only.id())).isEqualTo(4);
+		// O resto continua na fila, intacto: não é erro, é falta de vaga agora.
+		assertThat(tasks.countByStatus(com.socialcoisa.rede.network.domain.TaskStatus.PENDING)).isEqualTo(8);
+	}
+
+	/**
+	 * A rodada seguinte só entrega a vaga que o heartbeat abriu. É o que prova que o contador é do
+	 * ciclo: se ele vazasse entre rodadas, o nó ficaria travado para sempre; se não existisse, a
+	 * segunda rodada entregaria outras quatro com as quatro primeiras ainda em execução.
+	 */
+	@Test
+	void segundaRodadaSoUsaAsVagasQueOHeartbeatAbriu() throws Exception {
+		String admin = adminToken();
+		Node only = activeNode(admin, "no-ciclo", List.of("NODE_WORKER"));
+		for (int i = 0; i < 12; i++) {
+			tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "ciclo-" + i, "{}",
+				DataClass.PUBLIC, null));
+		}
+		assertThat(tasks.dispatchPending()).isEqualTo(4);
+
+		// O nó reporta que terminou uma e está com três em execução: abre exatamente uma vaga.
+		heartbeat(only, 5.0, 3);
+		assertThat(tasks.dispatchPending()).isEqualTo(1);
+		assertThat(assignedCount(only.id())).isEqualTo(5);
+
+		// O nó passa a reportar as quatro em execução: a vaga some, e a rodada não entrega nada.
+		heartbeat(only, 5.0, 4);
+		assertThat(tasks.dispatchPending()).isZero();
+		assertThat(assignedCount(only.id())).isEqualTo(5);
+	}
+
+	/**
+	 * A designação espalha em vez de empilhar: dois nós com a mesma capacidade recebem a metade cada.
+	 * Sem descontar o que a rodada já entregou, o primeiro da ordenação levaria tudo — a folga
+	 * calculada continuava cheia para ele.
+	 */
+	@Test
+	void aRodadaEspalhaEntreNosDeMesmaCapacidade() throws Exception {
+		String admin = adminToken();
+		Node first = activeNode(admin, "no-a", List.of("NODE_WORKER"));
+		Node second = activeNode(admin, "no-b", List.of("NODE_WORKER"));
+		for (int i = 0; i < 8; i++) {
+			tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "spread-" + i, "{}",
+				DataClass.PUBLIC, null));
+		}
+
+		assertThat(tasks.dispatchPending()).isEqualTo(8);
+		assertThat(assignedCount(first.id())).isEqualTo(4);
+		assertThat(assignedCount(second.id())).isEqualTo(4);
+	}
+	// ---------------------------------------------------------------- prioridade do nó local
+
+	/**
+	 * {@code NODE_LOCAL} tem prioridade de escalonamento, não permissão extra (ADR-02): entre nós
+	 * saudáveis, o da casa recebe antes — é ele que absorve o pico para poupar a máquina do
+	 * participante.
+	 *
+	 * <p>O cenário é montado para o código ANTIGO escolher de forma determinística o nó externo: ele
+	 * tem folga cheia (4/4) contra 1/4 do local, e a ordenação antiga por folga o colocava em
+	 * primeiro. A prioridade nova inverte isso — sem tocar em nenhum filtro.</p>
+	 */
+	@Test
+	void noLocalRecebeAntesDoExternoEntreSaudaveis() throws Exception {
+		String admin = adminToken();
+		Node local = activeNode(admin, "no-local", List.of("NODE_WORKER", "NODE_LOCAL"));
+		Node external = activeNode(admin, "no-externo", List.of("NODE_WORKER"));
+		heartbeat(local, 5.0, 3);
+
+		NetworkTask first = tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "local-1",
+			"{}", DataClass.PUBLIC, null));
+		assertThat(tasks.dispatchPending()).isEqualTo(1);
+		assertThat(assignedNode(first.id())).isEqualTo(local.id());
+
+		// A prioridade não passa por cima do limite: o local ficou cheio, o resto vai ao externo.
+		heartbeat(local, 5.0, 4);
+		NetworkTask second = tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "local-2",
+			"{}", DataClass.PUBLIC, null));
+		assertThat(tasks.dispatchPending()).isEqualTo(1);
+		assertThat(assignedNode(second.id())).isEqualTo(external.id());
+	}
+
+	/**
+	 * Prioridade é ordenação entre saudáveis, não privilégio: o nó local degradado perde para o
+	 * externo saudável, do mesmo jeito que qualquer nó degradado perde.
+	 */
+	@Test
+	void noLocalDegradadoPerdeParaOExternoSaudavel() throws Exception {
+		String admin = adminToken();
+		Node slowLocal = activeNode(admin, "no-local-lento", List.of("NODE_WORKER", "NODE_LOCAL"));
+		Node healthyExternal = activeNode(admin, "no-externo-saudavel", List.of("NODE_WORKER"));
+		jdbc.update("update network_nodes set observed_latency_ms = ? where id = ?",
+			NetworkNode.SLOW_LATENCY_MS + 30_000, slowLocal.id());
+
+		NetworkTask task = tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "local-3",
+			"{}", DataClass.PUBLIC, null));
+		tasks.dispatchPending();
+		assertThat(assignedNode(task.id())).isEqualTo(healthyExternal.id());
+	}
+
+		// ---------------------------------------------------------------- afinidade de região
+
+	/**
+	 * Afinidade de região (fase 5): tarefa que declara região nasce na região declarada e o nó de lá
+	 * recebe antes — sem virar filtro.
+	 *
+	 * <p>Q0: o cenário é montado para o código ANTIGO escolher de forma determinística o nó de outra
+	 * região — o local tem folga cheia (4/4) contra 1/4 do nó da região do pedido, e a ordenação
+	 * antiga por folga o colocava em primeiro. A afinidade nova inverte isso; o filtro novo não
+	 * existe. A tarefa SEM região continua idêntica ao comportamento de antes (teste seguinte).</p>
+	 */
+	@Test
+	void tarefaDaRegiaoRecebeONoDaRegiaoSemVirarFiltro() throws Exception {
+		String admin = adminToken();
+		Node nearby = activeNodeInRegion(admin, "no-proximo", List.of("NODE_WORKER"), "sa-east-1");
+		Node far = activeNodeInRegion(admin, "no-distante", List.of("NODE_WORKER"), "us-east-1");
+		// O nó de outra região tem folga cheia: sem o termo novo, a folga o escolheria sempre.
+		heartbeat(far, 5.0, 0);
+		heartbeat(nearby, 5.0, 3);
+
+		NetworkTask task = tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "geo-1", "{}",
+			DataClass.PUBLIC, "sa-east-1", null));
+		assertThat(tasks.dispatchPending()).isEqualTo(1);
+		assertThat(assignedNode(task.id())).isEqualTo(nearby.id());
+
+		// Afinidade não é filtro: o nó da região enche e a tarefa da MESMA região vai para o de fora,
+		// em vez de esperar na fila por um nó que não existe lá.
+		heartbeat(nearby, 5.0, 4);
+		NetworkTask overflow = tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "geo-2",
+			"{}", DataClass.PUBLIC, "sa-east-1", null));
+		assertThat(tasks.dispatchPending()).isEqualTo(1);
+		assertThat(assignedNode(overflow.id())).isEqualTo(far.id());
+	}
+
+	/**
+	 * Tarefa sem região não muda de comportamento: todos empatam no termo novo e a ordenação é
+	 * exatamente a de antes — folga decide. As duas tarefas entram na MESMA rodada de propósito:
+	 * em rodadas separadas o jitter decide de novo e poderia dar as duas ao mesmo nó, o que é o
+	 * comportamento antigo, não um sinal de região. Numa rodada só, o contador de reservas espalha.
+	 */
+	@Test
+	void tarefaSemRegiaoSegueOEscalonamentoDeAntes() throws Exception {
+		String admin = adminToken();
+		Node nearby = activeNodeInRegion(admin, "no-proximo", List.of("NODE_WORKER"), "sa-east-1");
+		Node far = activeNodeInRegion(admin, "no-distante", List.of("NODE_WORKER"), "us-east-1");
+
+		NetworkTask first = tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "geo-3", "{}",
+			DataClass.PUBLIC, null));
+		NetworkTask second = tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "geo-4", "{}",
+			DataClass.PUBLIC, null));
+		assertThat(tasks.dispatchPending()).isEqualTo(2);
+
+		assertThat(assignedNode(first.id())).isIn(nearby.id(), far.id());
+		assertThat(assignedNode(second.id())).isEqualTo(assignedNode(first.id()).equals(nearby.id()) ? far.id()
+			: nearby.id());
+	}
+
+	/**
+	 * A afinidade não passa por cima da saúde nem da origem: nó da região correto mas degradado
+	 * perde para o nó distante saudável, do mesmo jeito que qualquer degradado perde em ADR-010.
+	 */
+	@Test
+	void noDaRegiaoDegradadoPerdeParaODistanteSaudavel() throws Exception {
+		String admin = adminToken();
+		Node slowNearby = activeNodeInRegion(admin, "no-proximo-lento", List.of("NODE_WORKER"), "sa-east-1");
+		Node healthyFar = activeNodeInRegion(admin, "no-distante-saudavel", List.of("NODE_WORKER"), "us-east-1");
+		jdbc.update("update network_nodes set observed_latency_ms = ? where id = ?",
+			NetworkNode.SLOW_LATENCY_MS + 30_000, slowNearby.id());
+
+		NetworkTask task = tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "geo-5", "{}",
+			DataClass.PUBLIC, "sa-east-1", null));
+		tasks.dispatchPending();
+		assertThat(assignedNode(task.id())).isEqualTo(healthyFar.id());
+	}
+
 	// ---------------------------------------------------------------- helpers
 
 	private record Node(String id, String key) {
+	}
+
+	private int assignedCount(String nodeId) {
+		return jdbc.queryForObject("select count(*) from network_tasks where assigned_node_id = ?", Integer.class,
+			nodeId);
 	}
 
 	private String adminToken() throws Exception {
@@ -316,6 +518,16 @@ class NetworkBalancingTests {
 	}
 
 	private Node activeNode(String admin, String name, List<String> profiles) throws Exception {
+		return activeNode(admin, name, profiles, null);
+	}
+
+	/** Nó ativo que declarou a região no enroll, no formato que o contrato documenta. */
+	private Node activeNodeInRegion(String admin, String name, List<String> profiles, String region)
+			throws Exception {
+		return activeNode(admin, name, profiles, region);
+	}
+
+	private Node activeNode(String admin, String name, List<String> profiles, String region) throws Exception {
 		var tokenResult = mockMvc
 			.perform(post("/admin/network/nodes/provision-token").header("X-Session-Token", admin)
 				.contentType(MediaType.APPLICATION_JSON)
@@ -327,10 +539,18 @@ class NetworkBalancingTests {
 			.get("token")
 			.asString();
 
+		Map<String, Object> enrollBody = new java.util.HashMap<>();
+		enrollBody.put("provisionToken", provisionToken);
+		enrollBody.put("declared",
+			Map.of("cpuCores", 4, "memoryMb", 8192, "diskMb", 51200, "bandwidthMbps", 100));
+		if (region != null) {
+			// Na forma aninhada do contrato, de propósito: é a que a doc sempre mostrou e a que o
+			// DTO antigo ignorava em silêncio.
+			enrollBody.put("location", Map.of("region", region, "country", "BR"));
+		}
 		var enrollResult = mockMvc
 			.perform(post("/network/nodes/enroll").contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("provisionToken", provisionToken, "declared",
-					Map.of("cpuCores", 4, "memoryMb", 8192, "diskMb", 51200, "bandwidthMbps", 100)))))
+				.content(objectMapper.writeValueAsString(enrollBody)))
 			.andExpect(status().isOk())
 			.andReturn();
 		String nodeId = objectMapper.readTree(enrollResult.getResponse().getContentAsString()).get("nodeId")
@@ -405,7 +625,8 @@ class NetworkBalancingTests {
 			java.util.Set.of(com.socialcoisa.rede.network.domain.NodeProfile.NODE_WORKER), rs.getString("region"),
 			rs.getString("country"), rs.getString("runtime_version"),
 			rs.getTimestamp("last_seen_at") == null ? null : rs.getTimestamp("last_seen_at").toInstant(),
-			rs.getInt("declared_cpu_cores"), rs.getInt("declared_memory_mb"),
+			rs.getInt("declared_cpu_cores"), rs.getInt("declared_memory_mb"), rs.getInt("declared_disk_mb"),
+			rs.getInt("declared_bandwidth_mbps"),
 			rs.getObject("observed_cpu_percent") == null ? null : rs.getDouble("observed_cpu_percent"),
 			rs.getObject("observed_memory_mb") == null ? null : rs.getInt("observed_memory_mb"),
 			rs.getObject("observed_running_tasks") == null ? null : rs.getInt("observed_running_tasks"),

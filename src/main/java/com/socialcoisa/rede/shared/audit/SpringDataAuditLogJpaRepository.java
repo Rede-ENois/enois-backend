@@ -26,5 +26,14 @@ interface SpringDataAuditLogJpaRepository extends JpaRepository<AuditLogJpaEntit
 	@Query("delete from AuditLogJpaEntity a where a.id in :ids")
 	int deleteByIdIn(@Param("ids") List<String> ids);
 
+	/**
+	 * As ações contra um alvo, mais novas primeiro — o histórico que a página por nó do painel
+	 * abre. Vai pelo índice {@code (target_id, created_at)} da V286: sem ele, cada abertura de
+	 * página varreria a maior tabela de trilha do sistema com filtro em coluna sem índice.
+	 */
+	@Query("select a from AuditLogJpaEntity a where a.targetId = :targetId order by a.createdAt desc")
+	List<AuditLogJpaEntity> findByTargetIdOrderByCreatedAtDesc(@Param("targetId") String targetId,
+			Pageable pageable);
+
 	long countByCreatedAtBefore(Instant cutoff);
 }

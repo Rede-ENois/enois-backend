@@ -34,4 +34,9 @@ class ProvisionTokenPersistenceAdapter implements ProvisionTokenRepository {
 	public boolean markUsed(String tokenHash, Instant now) {
 		return repository.markUsed(tokenHash, now) == 1;
 	}
+
+	@Override
+	public long countAliveForOwner(String ownerUserId, Instant now) {
+		return repository.countAliveForOwner(ownerUserId, now);
+	}
 }

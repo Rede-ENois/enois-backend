@@ -1,7 +1,9 @@
 package com.socialcoisa.rede.network.application.port.out;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import com.socialcoisa.rede.network.domain.DataClass;
@@ -24,9 +26,14 @@ public interface NetworkTaskRepository {
 	/** Tarefa já criada com esta chave de idempotência, se houver. */
 	Optional<NetworkTask> findByIdempotencyKey(String idempotencyKey);
 
-	/** Cria a tarefa em PENDING. Idempotente pela chave: a mesma chave não cria duas tarefas. */
+	/**
+	 * Cria a tarefa em PENDING. Idempotente pela chave: a mesma chave não cria duas tarefas.
+	 *
+	 * <p>{@code region} é a preferência de origem do pedido e pode ser null (sem preferência); ela
+	 * não restringe quem pode executar, só a ordem entre os elegíveis (ADR-012).</p>
+	 */
 	void create(String id, TaskType type, String idempotencyKey, String payload, DataClass dataClass,
-			Instant deadline, Instant nextAttemptAt, Instant now);
+			String region, String targetNodeId, Instant deadline, Instant nextAttemptAt, Instant now);
 
 	/** Tarefas na fila, elegíveis agora, mais antigas primeiro. */
 	List<NetworkTask> findDispatchable(Instant now, int limit);
@@ -36,6 +43,41 @@ public interface NetworkTaskRepository {
 
 	/** Tarefas designadas e ainda dentro do claim, para o nó buscar o que é dele. */
 	List<NetworkTask> findAssignedTo(String nodeId, Instant now, int limit);
+
+	/**
+	 * Tarefas com alvo que ainda podem ser designadas — a leitura que rearma a aquisição periódica.
+	 *
+	 * <p>Existe para responder "já existe pedido em aberto para este nó?" sem varrer a fila: o alvo
+	 * é do nó, e um nó de borda novo não tem pedido nenhum até alguém pedir.</p>
+	 */
+	List<NetworkTask> findPendingTargeted(String targetNodeId, Instant now, int limit);
+
+	/** Quantos pedidos em aberto o nó tem — a conta que decide se vale enfileirar outro. */
+	long countOpenTargeted(String targetNodeId, Instant now);
+
+	/**
+	 * Tarefas designadas a nós que perderam o direito de operar (suspenso, em quarentena, revogado),
+	 * com claim ainda vigente.
+	 *
+	 * <p>É o insumo da drenagem: ler só o claim vencido deixaria a tarefa esperando um nó que já não
+	 * autentica, e ela só sairia quando o prazo vencesse — dois minutos por padrão.</p>
+	 */
+	List<NetworkTask> findOnNonOperatingNodes(Instant now, int limit);
+
+	/** Quantas tarefas estão nessa situação — o número do painel, sem paginar. */
+	long countOnNonOperatingNodes(Instant now);
+
+	/**
+	 * Trabalho concluído por nó — a contribuição que a interface do participante mostra.
+	 *
+	 * <p>Conta o que <b>acabou</b> ({@code DONE}): tarefa designada não é contribuição, é promessa;
+	 * falha e cancelamento não somam. Uma consulta com {@code IN} para a lista inteira de nós, não
+	 * uma por nó — a tela lista até 200. {@code idx_network_tasks_node (assigned_node_id, status)}
+	 * já responde a esta pergunta.</p>
+	 *
+	 * @return contagem por id de nó; nó sem tarefa concluída simplesmente não vem no mapa
+	 */
+	Map<String, Long> countDoneByNode(Collection<String> nodeIds);
 
 	/**
 	 * Designa a tarefa a um nó, subindo a tentativa. Condicional: só muda se a tarefa ainda estiver

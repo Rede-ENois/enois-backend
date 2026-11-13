@@ -35,6 +35,10 @@ Sem `X-Session-Token`. A credencial é o **token de provisionamento de uso únic
 }
 ```
 
+A região também é aceita solta no topo (`"region": "…", "country": "…"`); se as duas formas
+vierem, a solta vence. A região declarada aqui é o que o escalonador usa como **afinidade** quando
+uma tarefa declara origem — ver §3.
+
 Resposta (única vez que a API key em claro aparece):
 
 ```json
@@ -62,25 +66,73 @@ Autenticado. Envia capacidade **observada** e versão.
 }
 ```
 
-Resposta: estado do nó, config version e modos operacionais vigentes.
-
-```json
-{ "status": "ACTIVE", "configVersion": 7, "mode": "NORMAL", "serverTime": "2026-11-11T12:00:00Z" }
-```
-
-### `GET /network/nodes/me/config`
-Devolve a configuração **assinada**. O nó confere a assinatura antes de aplicar.
+Resposta: estado do nó, perfis e modo operacional vigente.
 
 ```json
 {
-  "configVersion": 7,
+  "nodeId": "nd_1a2b3c",
+  "status": "ACTIVE",
   "profiles": ["NODE_MEDIA"],
-  "limits": { "cpuPercent": 60, "memoryMb": 4096, "bandwidthMbps": 50 },
-  "allowedTasks": ["MEDIA_TRANSCODE"],
-  "issuedAt": "2026-11-11T11:00:00Z",
-  "signature": "base64(ed25519(configVersion|profiles|limits|allowedTasks|issuedAt))"
+  "serverTime": "2026-11-11T12:00:00Z",
+  "mode": "NORMAL",
+  "acceptTasks": true
 }
 ```
+
+`acceptTasks` acompanha o `mode` porque o nó precisa do freio em booleano, não de interpretar a
+tabela de contingência: falso em `DEGRADED`/`EMERGENCY`. O campo é aditivo — nó que o ignora
+continua funcionando e ainda recebe tarefas do Control Plane, que já não designa nada nesses modos.
+
+### `GET /network/nodes/me/config`
+Devolve a configuração **assinada** (credencial de nó: `X-Node-Id` + `X-Node-Key`). O nó confere a
+assinatura antes de aplicar. Implementada (fase 5): o payload real está abaixo.
+
+```json
+{
+  "nodeId": "nd_…",
+  "status": "ACTIVE",
+  "operable": true,
+  "formatVersion": 1,
+  "configVersion": 3,
+  "profiles": ["NODE_MEDIA"],
+  "limits": { "cpuCores": 4, "memoryMb": 8192, "diskMb": 51200, "bandwidthMbps": 100 },
+  "allowedTasks": ["MEDIA_TRANSCODE", "MEDIA_THUMBNAIL"],
+  "region": "sudeste", "country": "BR",
+  "issuedAt": "2026-11-12T10:00:00Z",
+  "signed": true,
+  "signature": "base64(ed25519(linha canônica))",
+  "algorithm": "Ed25519",
+  "publicKey": "base64(X.509 da chave pública do Control Plane)"
+}
+```
+
+Duas versões, de propósito:
+
+- `formatVersion` é a versão do **formato** do documento — sobe quando o runtime antigo não
+  entenderia o payload novo. Hoje é `1`.
+- `configVersion` é a versão da **permissão** do nó — nasce `1` no enroll e soma `1` a cada
+  transição administrativa (aprovar, suspender, quarentenar, revogar). É o número que o runtime
+  compara para saber que a permissão mudou.
+
+`issuedAt` é o instante em que a permissão vigente passou a valer, **não** o instante da consulta:
+duas leituras seguidas sem mudança devolvem o mesmo documento (e a mesma assinatura — Ed25519 é
+determinística). A config é um evento, não um relógio.
+
+A **linha canônica** assinada junta os campos na ordem do contrato:
+`formatVersion|configVersion|nodeId|profiles|cpuCores|memoryMb|diskMb|bandwidthMbps|allowedTasks|issuedAt`,
+com listas ordenadas em JSON compacto. Assina-se o canônico, não o JSON — reordenar chaves do corpo
+não muda a assinatura.
+
+`publicKey` é o **pino**: o instalador grava esta chave no install e toda config seguinte é conferida
+contra ela, sem depender do transporte desta resposta.
+
+`signed` diz a verdade sobre `signature`: sem chave de assinatura configurada no Control Plane a
+resposta sai `signed:false` e `signature:null` — nunca `true` com campo vazio. Quem decide aceitar
+config não assinada é o runtime, e o padrão dele é recusar.
+
+O nó **pendente de aprovação também lê a própria config** (200, com `operable:false` e
+`allowedTasks` vazio): 403 aqui deixaria o instalador sem resposta justamente enquanto ele espera a
+aprovação humana.
 
 ## 3. Tarefas
 
@@ -119,6 +171,97 @@ Regras:
 
 Status terminal: `DONE` ou `FAILED` (com `error.code`, `error.message`, `retryable`).
 Resultado de tarefa cujo nó foi revogado no meio é **descartado** e registrado em auditoria.
+Resultado de tarefa **drenada** (voltou para a fila porque o nó foi suspenso, posto em quarentena ou
+revogado) cai no mesmo descarte: status `PENDING` ou `attempt` diferente.
+
+### Drenagem (interno do Control Plane)
+
+Não é contrato de nó — o nó que perdeu o direito de operar não é consultado. A varredura do
+scheduler devolve à fila o que estiver designado a nó com `status <> 'ACTIVE'` e claim ainda
+vigente, audita cada devolução como `NETWORK_TASK_DRAINED` e designa de novo no mesmo ciclo. O
+painel (`GET /admin/network/tasks/overview`) expõe `awaitingDrain`: quantas do `dispatched` estão
+presas a nó fora de operação entre a suspensão e a varredura seguinte.
+
+### Região no escalonamento (ADR-012)
+
+A ordem de escolha do nó é **degradação → origem (`NODE_LOCAL`, ADR-010) → região → folga →
+jitter**. Região significa: quem enfileirou a tarefa pode declarar uma região de origem, e o nó
+daquela região vem antes **dentro do mesmo grupo de saúde e de origem**.
+
+Três propriedades que o contrato fixa:
+
+- **É ordenação, nunca filtro.** Tarefa com região `sa-east-1` roda em nó de `us-east-1` quando não
+  há `sa-east-1` vivo com vaga — a rede cooperativa existe para não ter ponto único regional.
+- **Sem região no pedido, nada muda.** Toda tarefa sem `region` (e é o valor de todas as que
+  existem antes desta fase) escala exatamente como antes.
+- **Região compara por igualdade sem diferenciar maiúscula; nó sem região declarada empatA** no
+  termo — não é punido por não ter declarado.
+
+No painel, `GET /admin/network/tasks` devolve `region` por tarefa: é a única explicação visível de
+por que uma tarefa foi para um nó distante.
+
+## 3b. Tarefa com alvo (`targetNodeId`)
+
+`POST /admin/network/nodes/{nodeId}/edge-cache` enfileira a aquisição de cache de borda **daquele**
+nó; `GET` na mesma rota lista os pedidos em aberto. Resposta: `{"taskId","nodeId","status","attempt",
+"deadline","createdAt"}`.
+
+O alvo é o oposto da região: **filtro, nunca ordenação.** A tarefa só é designada ao nó alvo, e se
+ele não está entre os candidatos (offline, suspenso, sem perfil, sem vaga) a tarefa permanece na
+fila — mandá-la a outro nó não seria executar pior, seria concluir sem ter feito o trabalho, porque
+o estado que ela continua (o cursor do cache) vive no disco daquele nó.
+
+| código | status | quando |
+|---|---|---|
+| `NODE_UNKNOWN` | 404 | id não existe |
+| `NODE_PROFILE_REQUIRED` | 422 | nó sem `NODE_EDGE` nem `NODE_LOCAL` |
+| `NODE_NOT_OPERABLE` | 409 | nó suspenso, pendente ou revogado |
+
+Idempotência por `edge:<nó>:<janela de 10 min>`: pedido repetido na mesma janela devolve a tarefa
+existente. Tarefa sem alvo continua exatamente como antes: qualquer nó elegível.
+
+## 3a. Interface do participante (`/network/participant`)
+
+Rotas autenticadas por **sessão de navegador** (`X-Session-Token`), não por chave de nó: quem fala
+aqui é a pessoa dona do servidor, não o runtime. A fronteira é `owner_user_id` — nenhuma rota
+devolve nó de outro participante, e nó alheio (mesmo com o id na mão) é `404 NODE_UNKNOWN`, não
+403, para não confirmar existência. A chave de API **nunca** aparece aqui: ela é emitida pelo
+admin, exibida uma única vez a ele.
+
+### `POST /network/participant/join`
+
+Solicitação de ingresso — abre o onboarding sem passar pelo painel do admin. Corpo:
+`{"displayName":"vps-da-casa"}`. Resposta: `{"token", "expiresAt", "nextStep"}` — o token de
+provisionamento de uso único (ADR-003) que o participante leva ao instalador (`deploy/node-runtime`).
+
+O que a rota **não** aceita do corpo: dono (é sempre a conta da sessão) e perfis (o participante
+declara o servidor; o que ele executa é negociado com o admin na aprovação — o nó nasce sem
+perfil, e `allowTasks` vazio até o admin atribuir). Limite de **3 tokens vivos** por conta
+(não usados e não vencidos): o quarto pedido é `429 NODE_JOIN_LIMIT`. Consumir ou deixar vencer
+um token abre a vaga. Auditada como `NODE_JOIN_REQUESTED` com o participante como ator —
+distinta do `NODE_PROVISION_TOKEN_ISSUED` do painel, para o histórico dizer quem pediu o quê.
+
+### `GET /network/participant/nodes`
+
+Lista de nós do participante (limite 200, mais novos primeiro), cada um com: `id`, `displayName`,
+`status`, `profiles`, `region`, `country`, `runtimeVersion`, `lastSeenAt`, capacidade **declarada**
+(`declaredCpuCores`, `declaredMemoryMb`, `declaredDiskMb`, `declaredBandwidthMbps`) ao lado da
+**observada** (`observedCpuPercent`, `observedMemoryMb`, `observedRunningTasks`, `latencyMs`),
+`tasksDone` (tarefas com desfecho `DONE` designadas ao nó — designada não é contribuição, é
+promessa), `operable` e `quarantineReason`.
+
+### `GET /network/participant/nodes/{id}`
+
+Um nó, com o mesmo corpo; nó de outro dono é `404 NODE_UNKNOWN`.
+
+### `POST /network/participant/nodes/{id}/disconnect`
+
+Desconexão voluntária. O nó vai para `SUSPENDED` — **reversível pelo admin**: religar o servidor
+do participante é decisão humana, não do runtime que voltou a ligar — e as chaves vigentes caem na
+mesma transação, como na revogação. A ação é auditada como `NODE_DISCONNECTED` com
+`{"voluntary":true}` e o ator é o próprio participante. Idempotente: nó já suspenso não reaudita
+nem revoga de novo. Revogado é `409 NODE_REVOKED`. O participante **não** revoga sozinho;
+revogação continua sendo decisão administrativa.
 
 ## 4. Catálogo de erros estável
 
@@ -135,6 +278,10 @@ Resultado de tarefa cujo nó foi revogado no meio é **descartado** e registrado
 | `TASK_EXPIRED` | 400 | deadline vencido |
 | `TASK_ALREADY_CLAIMED` | 409 | outra tentativa já concluiu |
 | `NETWORK_DISABLED` | 503 | rede desligada por config (fail-closed) |
+| `NETWORK_MODE_NOT_MANUAL` | 400 | `NORMAL`/`HIGH_LOAD` não são declarados à mão |
+| `NETWORK_MODE_REASON_REQUIRED` | 400 | transição manual sem motivo |
+| `NETWORK_MODE_UNKNOWN` | 400 | modo inexistente em `POST /admin/network/mode` |
+| `NODE_JOIN_LIMIT` | 429 | três tokens de ingresso vivos por conta |
 
 ## 5. Versionamento
 

@@ -59,7 +59,7 @@ declara-se confiável ou se promove a controlador.
 | API key por nó | tabela `network_node_keys` (nova), só hash |
 | autorização e perfis | `network_nodes.profiles` + `AdminGuard` |
 | certificados | emissão no onboarding, rotação por job |
-| configuração assinada | endpoint `GET /network/nodes/me/config` |
+| configuração assinada | endpoint `GET /network/nodes/me/config` — **entregue**: payload com perfis, limites, tarefas permitidas, `formatVersion`, `configVersion` (versão da permissão, no nó desde a V284) e assinatura Ed25519 sobre linha canônica, com a chave pública de pinagem publicada |
 | descoberta e saúde | heartbeat + `last_seen_at` |
 | capacidade | declarada no cadastro, observada no heartbeat |
 | scheduler | Fase 2 |
@@ -78,7 +78,7 @@ Executa. Cada perfil é um contrato de permissão, não um binário diferente.
 | `NODE_MEDIA` | transcode, otimização, conversão | ler dado pessoal fora do objeto de mídia |
 | `NODE_READ_REPLICA` | leitura de dados autorizados | qualquer escrita |
 | `NODE_API` | instâncias auxiliares de API | emitir sessão própria |
-| `NODE_LOCAL` | infra do Énóis, absorver pico | — |
+| `NODE_LOCAL` | infra do Énóis, absorver pico | qualquer tipo/classe de dado; **escolhido antes** dos demais entre os saudáveis ([ADR-010](../adr/ADR-010-node-local-prioridade-de-ordem.md)) | — |
 | `NODE_EMERGENCY` | funções preparadas para incidente | assumir função não preparada |
 
 Um servidor pode executar mais de um perfil se capacidade e permissões permitirem.
@@ -121,6 +121,7 @@ sequenceDiagram
   CORE->>O: evento (transação local)
   S->>O: lê pendentes elegíveis
   S->>S: escolhe nó por capacidade, latência, saúde, restrição de dado
+  Note over S: a capacidade é descontada dos despachos da própria rodada
   S->>W: despacha tarefa (id único, deadline, tentativa)
   W->>W: executa com idempotência
   W->>O: resultado + recibo do handler
