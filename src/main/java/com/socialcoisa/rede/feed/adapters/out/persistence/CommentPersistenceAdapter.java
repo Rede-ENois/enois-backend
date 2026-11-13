@@ -69,6 +69,16 @@ class CommentPersistenceAdapter implements CommentRepository {
 	}
 
 	@Override
+	public List<Comment> findByAuthorPaged(String authorId, Instant before, int limit) {
+		return repository.findByAuthorIdAndStatusAndCreatedAtBeforeOrderByCreatedAtDesc(
+				authorId, com.socialcoisa.rede.feed.domain.CommentStatus.ACTIVE, before,
+				org.springframework.data.domain.PageRequest.of(0, limit))
+			.stream()
+			.map(CommentJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
 	public List<Comment> findActiveByPost(PostId postId, Instant before, int limit) {
 		return repository.findByPostIdAndStatusAndCreatedAtBeforeOrderByCreatedAtDesc(postId.value(),
 			CommentStatus.ACTIVE, before, PageRequest.of(0, limit)).stream()

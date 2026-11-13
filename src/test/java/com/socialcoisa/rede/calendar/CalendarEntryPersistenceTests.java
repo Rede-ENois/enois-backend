@@ -12,10 +12,16 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
 import com.socialcoisa.rede.calendar.application.port.out.CalendarEntryRepository;
+import com.socialcoisa.rede.calendar.application.port.out.CalendarInvitationRepository;
+import com.socialcoisa.rede.calendar.application.port.out.CalendarParticipantRepository;
 import com.socialcoisa.rede.calendar.domain.CalendarEntry;
 import com.socialcoisa.rede.calendar.domain.CalendarEntrySource;
 import com.socialcoisa.rede.calendar.domain.CalendarKind;
+import com.socialcoisa.rede.calendar.domain.CalendarParticipant;
+import com.socialcoisa.rede.calendar.domain.CalendarParticipantState;
 import com.socialcoisa.rede.calendar.domain.CalendarScope;
+
+import static org.assertj.core.api.Assertions.tuple;
 
 /**
  * A entrada central contra o banco de verdade: o que a V257 criou tem de ser lido como o domínio
@@ -33,6 +39,12 @@ class CalendarEntryPersistenceTests {
 
 	@Autowired
 	private CalendarEntryRepository repository;
+
+	@Autowired
+	private CalendarParticipantRepository participants;
+
+	@Autowired
+	private CalendarInvitationRepository invitations;
 
 	@Test
 	void storesAndReadsBackInstantZoneAndSource() {
@@ -124,6 +136,109 @@ class CalendarEntryPersistenceTests {
 
 		assertThat(repository.findInWindow("cal_owner_outro_" + UUID.randomUUID(), null, NOW,
 				NOW.plus(Duration.ofDays(1)))).isEmpty();
+	}
+
+/**
+	 * A agenda de quem foi convidado sai do cruzamento entre convite e compromisso, não de uma
+	 * lista de ids carregada antes. O que este teste tranca: o convite traz o compromisso do dono
+	 * com a resposta junto, respeita a janela meia-aberta e o filtro de agenda, e não traz
+	 * compromisso de quem não convidou a pessoa.
+	 *
+	 * <p>O pendente e o cancelado continuam aparecendo: a tela mostra o convite esperando resposta
+	 * e o export publica o cancelamento no mesmo `UID` (D6/D13). Esse detalhe é o que este teste
+	 * protege contra um filtro de estado colocado no cruzamento por engano.
+	 */
+	@Test
+	void invitedEntriesComeFromTheParticipantJoinWithTheirAnswer() {
+		String owner = "cal_owner_" + UUID.randomUUID();
+		String guest = "cal_guest_" + UUID.randomUUID();
+		String stranger = "cal_stranger_" + UUID.randomUUID();
+		Instant windowStart = NOW.plus(Duration.ofHours(10));
+		Instant windowEnd = windowStart.plus(Duration.ofHours(1));
+
+		CalendarEntry social = entry(owner, CalendarScope.SOCIAL, CalendarKind.PERSONAL,
+			new CalendarEntrySource(null, null), windowStart.plus(Duration.ofMinutes(15)), Duration.ofMinutes(30));
+		CalendarEntry professional = entry(owner, CalendarScope.PROFESSIONAL, CalendarKind.MEETING,
+			new CalendarEntrySource(null, null), windowStart.plus(Duration.ofMinutes(20)), Duration.ofMinutes(30));
+		// Fora da janela: o convite existe, mas o compromisso não toca o intervalo pedido.
+		CalendarEntry outside = entry(owner, CalendarScope.SOCIAL, CalendarKind.PERSONAL,
+			new CalendarEntrySource(null, null), windowEnd.plus(Duration.ofHours(2)), Duration.ofMinutes(30));
+		// Cancelado depois do convite: continua na leitura, com a resposta que a pessoa deu.
+		CalendarEntry cancelled = entry(owner, CalendarScope.SOCIAL, CalendarKind.PERSONAL,
+			new CalendarEntrySource(null, null), windowStart.plus(Duration.ofMinutes(25)), Duration.ofMinutes(30));
+		cancelled.cancel(NOW);
+		for (CalendarEntry e : new CalendarEntry[] { social, professional, outside, cancelled }) {
+			repository.save(e);
+			participants.save(CalendarParticipant.invite("cal_p_" + UUID.randomUUID(), e.id(), owner, guest, NOW));
+		}
+		CalendarParticipant accepted = participants.findByEntryAndUser(social.id(), guest).orElseThrow();
+		accepted.respond(CalendarParticipantState.ACCEPTED, NOW);
+		participants.save(accepted);
+
+		assertThat(invitations.findInvited(guest, null, windowStart, windowEnd))
+			.extracting(invited -> invited.entry().id(), CalendarInvitationRepository.InvitedEntry::answer)
+			.containsExactly(
+				tuple(social.id(), CalendarParticipantState.ACCEPTED),
+				tuple(professional.id(), CalendarParticipantState.INVITED),
+				tuple(cancelled.id(), CalendarParticipantState.INVITED));
+		assertThat(invitations.findInvited(guest, CalendarScope.PROFESSIONAL, windowStart, windowEnd))
+			.extracting(invited -> invited.entry().id())
+			.containsExactly(professional.id());
+		// Quem não foi convidado não herda a agenda de ninguém.
+		assertThat(invitations.findInvited(stranger, null, windowStart, windowEnd)).isEmpty();
+		// O dono não vê o próprio compromisso pela via do convite: ele já vem pela consulta de dono.
+		assertThat(invitations.findInvited(owner, null, windowStart, windowEnd)).isEmpty();
+	}
+
+	/**
+	 * A fila de convites a responder sai do mesmo cruzamento: só o convite sem resposta para um
+	 * compromisso ativo, na ordem em que os convites foram feitos. Este teste falharia no código
+	 * anterior, que carregava a lista de pendentes para então devolver os ids num `in` sem teto.
+	 */
+	@Test
+	void pendingInvitationsComeFromTheParticipantJoin() {
+		String owner = "cal_owner_" + UUID.randomUUID();
+		String guest = "cal_guest_" + UUID.randomUUID();
+		String other = "cal_other_" + UUID.randomUUID();
+
+		Instant firstInvite = NOW.minus(Duration.ofHours(3));
+		Instant secondInvite = NOW.minus(Duration.ofHours(1));
+		CalendarEntry older = entry(owner, CalendarScope.SOCIAL, CalendarKind.PERSONAL,
+			new CalendarEntrySource(null, null), NOW.plus(Duration.ofHours(10)), Duration.ofMinutes(30));
+		CalendarEntry newer = entry(owner, CalendarScope.PROFESSIONAL, CalendarKind.MEETING,
+			new CalendarEntrySource(null, null), NOW.plus(Duration.ofHours(12)), Duration.ofMinutes(30));
+		// Convite respondido e entrada cancelada existem como linhas, mas não voltam na fila.
+		CalendarEntry answered = entry(owner, CalendarScope.SOCIAL, CalendarKind.PERSONAL,
+			new CalendarEntrySource(null, null), NOW.plus(Duration.ofHours(14)), Duration.ofMinutes(30));
+		CalendarEntry cancelled = entry(owner, CalendarScope.SOCIAL, CalendarKind.PERSONAL,
+			new CalendarEntrySource(null, null), NOW.plus(Duration.ofHours(16)), Duration.ofMinutes(30));
+		cancelled.cancel(NOW);
+		repository.save(older);
+		repository.save(newer);
+		repository.save(answered);
+		repository.save(cancelled);
+		participants.save(CalendarParticipant.invite("cal_p_" + UUID.randomUUID(), older.id(), owner, guest,
+			firstInvite));
+		participants.save(CalendarParticipant.invite("cal_p_" + UUID.randomUUID(), newer.id(), owner, guest,
+			secondInvite));
+		CalendarParticipant replied = CalendarParticipant.invite("cal_p_" + UUID.randomUUID(), answered.id(),
+			owner, guest, secondInvite);
+		replied.respond(CalendarParticipantState.ACCEPTED, NOW);
+		participants.save(replied);
+		participants.save(CalendarParticipant.invite("cal_p_" + UUID.randomUUID(), cancelled.id(), owner, guest,
+			secondInvite));
+		// Convite do mesmo compromisso para outra pessoa: entra na fila dela, não nesta.
+		participants.save(CalendarParticipant.invite("cal_p_" + UUID.randomUUID(), older.id(), owner, other,
+			secondInvite));
+
+		assertThat(repository.findPendingInvitations(guest))
+			.extracting(CalendarEntry::id)
+			.containsExactly(older.id(), newer.id());
+		assertThat(repository.findPendingInvitations(other))
+			.extracting(CalendarEntry::id)
+			.containsExactly(older.id());
+		// Quem organizou não tem convite pendente na própria agenda.
+		assertThat(repository.findPendingInvitations(owner)).isEmpty();
 	}
 
 	private static CalendarEntry entry(String owner, CalendarScope scope, CalendarKind kind,

@@ -33,11 +33,23 @@ public interface CalendarEntryRepository {
 	 */
 	void deleteBySource(String ownerId, CalendarEntrySource source);
 
-	/** Entradas que outra pessoa organizou e convidou este usuário, dentro da janela meia-aberta. */
-	List<CalendarEntry> findInvitedInWindow(String userId, CalendarScope scope, Instant windowStart,
-			Instant windowEnd);
+	/**
+	 * Os compromissos com convite dessa pessoa ainda sem resposta, do convite mais antigo ao mais
+	 * novo. Cancelado ou já respondido não volta: a consulta cruza convite e compromisso no banco.
+	 */
+	List<CalendarEntry> findPendingInvitations(String userId);
 
-	/** Busca por conjunto de ids (a leitura da agenda do participante carrega o dono de uma vez). */
-	List<CalendarEntry> findAllByIds(java.util.Collection<String> ids);
+	/** Todas as irmãs de uma série, do mais antigo ao mais novo, ativas ou não. */
+	List<CalendarEntry> findBySeries(String seriesId);
+
+	/** A irmã da série que começa no instante exato — é a que o índice único protege. */
+	Optional<CalendarEntry> findBySeriesAndStart(String seriesId, Instant startsAt);
+
+	/**
+	 * As pontas de série, de qualquer situação: cancelar uma ocorrência não encerra a série, então a
+	 * ponta cancelada continua orientando a extensão — quem encerra é o dono, por `stop`, que remove
+	 * a marca de todas.
+	 */
+	List<CalendarEntry> findSeriesTails();
 
 }

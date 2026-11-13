@@ -33,24 +33,33 @@ interface SpringDataMessageJpaRepository extends JpaRepository<MessageJpaEntity,
 			String conversationId, String senderId, String text, java.time.Instant since);
 
 	/** Mensagens da conversa SEM as que este leitor apagou para si (filtro no banco: a paginacao
-	 *  continua coerente, e nao sobra buraco na pagina). */
+	 *  continua coerente, e nao sobra buraco na pagina).
+	 *
+	 *  <p>O desempate por id existe porque `created_at` guarda segundos: sem ele, duas mensagens do
+	 *  mesmo instante tinham ordem indefinida e a pagina seguinte podia pular uma delas.</p> */
 	@Query("""
 			SELECT m FROM MessageJpaEntity m
 			WHERE m.conversationId = :conversationId
 			AND NOT EXISTS (SELECT h FROM MessageHiddenJpaEntity h
 				WHERE h.messageId = m.id AND h.userId = :viewerId)
-			ORDER BY m.createdAt DESC""")
+			ORDER BY m.createdAt DESC, m.id DESC""")
 	List<MessageJpaEntity> visibleMessages(@Param("conversationId") String conversationId,
 			@Param("viewerId") String viewerId, Pageable pageable);
 
+	/**
+	 * Pagina anterior a {@code (before, beforeId)}: o instante estrito perderia as mensagens que
+	 * empataram com ele, entao o par completo e o criterio.
+	 */
 	@Query("""
 			SELECT m FROM MessageJpaEntity m
-			WHERE m.conversationId = :conversationId AND m.createdAt < :before
+			WHERE m.conversationId = :conversationId
+			AND (m.createdAt < :before OR (m.createdAt = :before AND m.id < :beforeId))
 			AND NOT EXISTS (SELECT h FROM MessageHiddenJpaEntity h
 				WHERE h.messageId = m.id AND h.userId = :viewerId)
-			ORDER BY m.createdAt DESC""")
+			ORDER BY m.createdAt DESC, m.id DESC""")
 	List<MessageJpaEntity> visibleMessagesBefore(@Param("conversationId") String conversationId,
-			@Param("viewerId") String viewerId, @Param("before") java.time.Instant before, Pageable pageable);
+			@Param("viewerId") String viewerId, @Param("before") java.time.Instant before,
+			@Param("beforeId") String beforeId, Pageable pageable);
 
 	/**
 	 * Nao-lidas de UMA conversa depois do ultimo read. A mensagem que o leitor apagou para si nao

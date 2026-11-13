@@ -39,7 +39,7 @@ public class CalendarReminderService {
 	private static final Logger LOG = LoggerFactory.getLogger(CalendarReminderService.class);
 
 	/** Quantos vencidos o worker envia por ciclo: um lote pequeno evita prender o laço num pico. */
-	static final int BATCH = 20;
+	public static final int BATCH = 20;
 
 	/**
 	 * Autor das notificações automáticas. `notifications.actor_id` é `not null`, e um lembrete não
@@ -184,14 +184,16 @@ public class CalendarReminderService {
 		if (entry.ownerId().equals(userId)) {
 			return true;
 		}
-		return participants.findByEntry(entry.id()).stream()
-			.filter(p -> p.userId().equals(userId))
-			.anyMatch(p -> p.state() == CalendarParticipantState.ACCEPTED
-				|| p.state() == CalendarParticipantState.TENTATIVE);
+		// A pergunta é sobre uma pessoa só: buscar o convite dela evita carregar a lista inteira
+		// de participantes a cada lembrete que o worker vence.
+		return participants.findByEntryAndUser(entry.id(), userId)
+			.map(p -> p.state() == CalendarParticipantState.ACCEPTED
+				|| p.state() == CalendarParticipantState.TENTATIVE)
+			.orElse(false);
 	}
 
 	private boolean participates(String userId, CalendarEntry entry) {
-		return participants.findByEntry(entry.id()).stream().anyMatch(p -> p.userId().equals(userId));
+		return participants.findByEntryAndUser(entry.id(), userId).isPresent();
 	}
 
 	private void notify(CalendarReminder reminder, CalendarEntry entry, Instant now) {

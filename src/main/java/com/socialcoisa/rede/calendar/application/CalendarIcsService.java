@@ -16,17 +16,22 @@ import java.time.zone.ZoneRules;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import com.socialcoisa.rede.calendar.application.port.out.CalendarEntryRepository;
+import com.socialcoisa.rede.calendar.application.port.out.CalendarInvitationRepository;
 import com.socialcoisa.rede.calendar.domain.CalendarEntry;
 import com.socialcoisa.rede.calendar.domain.CalendarEntrySource;
 import com.socialcoisa.rede.calendar.domain.CalendarKind;
+import com.socialcoisa.rede.calendar.domain.CalendarRecurrence;
 import com.socialcoisa.rede.calendar.domain.CalendarScope;
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -63,13 +68,18 @@ public class CalendarIcsService {
 	private static final String SOURCE_TYPE = "ICS";
 
 	private final CalendarEntryRepository entries;
+	private final CalendarInvitationRepository invitations;
 	private final CalendarSourceService source;
+	private final CalendarRecurrenceService recurrences;
 	private final int maxImportBytes;
 
-	public CalendarIcsService(CalendarEntryRepository entries, CalendarSourceService source,
+	public CalendarIcsService(CalendarEntryRepository entries, CalendarInvitationRepository invitations,
+			CalendarSourceService source, CalendarRecurrenceService recurrences,
 			@Value("${rede.calendar.ics-max-import-bytes:524288}") int maxImportBytes) {
 		this.entries = entries;
+		this.invitations = invitations;
 		this.source = source;
+		this.recurrences = recurrences;
 		this.maxImportBytes = maxImportBytes;
 	}
 
@@ -77,7 +87,9 @@ public class CalendarIcsService {
 
 	/**
 	 * O `.ics` da agenda de quem está lendo na janela pedida. Cancelado entra com
-	 * `STATUS:CANCELLED` e o `UID` que sempre foi dele.
+	 * `STATUS:CANCELLED` e o `UID` que sempre foi dele. O convite exportado é todo convite com
+	 * linha de participante, aceito ou recusado: o arquivo é o histórico da agenda, e o
+	 * `PARTSTAT` do leitor externo resolve o que ele faz com quem recusou.
 	 *
 	 * <p>Um `VTIMEZONE` por fuso que a janela realmente usa, e cada um só com as transições da
 	 * janela — o export de um mês não carrega décadas de mudança de regra.
@@ -85,7 +97,9 @@ public class CalendarIcsService {
 	public String export(String userId, Instant from, Instant to, CalendarScope scope) {
 		validateWindow(from, to);
 		List<CalendarEntry> agenda = new ArrayList<>(entries.findInWindow(userId, scope, from, to));
-		agenda.addAll(entries.findInvitedInWindow(userId, scope, from, to));
+		for (CalendarInvitationRepository.InvitedEntry invited : invitations.findInvited(userId, scope, from, to)) {
+			agenda.add(invited.entry());
+		}
 		agenda.sort((left, right) -> left.startsAt().compareTo(right.startsAt()));
 
 		Map<String, ZoneId> zones = new LinkedHashMap<>();
@@ -296,8 +310,38 @@ public class CalendarIcsService {
 			else if (result.moved()) {
 				moved++;
 			}
+			importRule(userId, result.entry(), event, start, zone);
 		}
 		return new ImportResult(events.size(), created, moved, cancelled, skipped);
+	}
+
+	/**
+	 * A repetição do arquivo vira série de verdade, em vez de ser descartada em silêncio.
+	 *
+	 * <p>O `RRULE` do iCalendar é uma regra; aqui a série é materializada como todas as outras, e cada
+	 * ocorrência é um compromisso completo na agenda. Só cadências que o app representa viram série —
+	 * diária ou por dia da semana ficam de fora, e a ocorrência original continua única.
+	 *
+	 * <p>`COUNT` e `UNTIL` limitam a série como no arquivo; `EXDATE` remove as datas que a origem
+	 * pulou. O `BYDAY`/`INTERVAL` só é aceito quando descreve exatamente uma das cadências do app.
+	 */
+	private void importRule(String userId, CalendarEntry entry, Vevent event, Instant start, ZoneId zone) {
+		CalendarRule rule = CalendarRule.parse(event.rrule());
+		if (rule == null) {
+			return;
+		}
+		Set<Instant> excluded = new HashSet<>();
+		if (event.exdate() != null) {
+			for (String raw : event.exdate().split(",")) {
+				Instant when = instantOf(raw, zone.getId());
+				if (when != null) {
+					excluded.add(when);
+				}
+			}
+		}
+		int anchorDay = start.atZone(zone).getDayOfMonth();
+		recurrences.materializeImported(userId, entry.id(), rule.recurrence(), excluded, anchorDay,
+			rule.until(), rule.count());
 	}
 
 	private String readLimited(InputStream content) {
@@ -384,7 +428,8 @@ public class CalendarIcsService {
 				if (current != null) {
 					events.add(new Vevent(current.get("UID"), current.get("SUMMARY"), current.get("DESCRIPTION"),
 						current.get("DTSTART"), current.get("DTSTART.TZID"), current.get("DTEND"),
-						current.get("DTEND.TZID"), "CANCELLED".equalsIgnoreCase(current.get("STATUS"))));
+						current.get("DTEND.TZID"), "CANCELLED".equalsIgnoreCase(current.get("STATUS")),
+						current.get("RRULE"), current.get("EXDATE")));
 				}
 				current = null;
 				continue;
@@ -396,11 +441,13 @@ public class CalendarIcsService {
 			String left = line.substring(0, at);
 			String value = unescape(line.substring(at + 1));
 			String name = left.split(";")[0].toUpperCase();
-			if (!List.of("UID", "SUMMARY", "DESCRIPTION", "DTSTART", "DTEND", "STATUS").contains(name)) {
+			if (!List.of("UID", "SUMMARY", "DESCRIPTION", "DTSTART", "DTEND", "STATUS", "RRULE", "EXDATE")
+					.contains(name)) {
 				continue;
 			}
-			current.put(name, value);
-			if (name.equals("DTSTART") || name.equals("DTEND")) {
+			// EXDATE pode repetir: a série cancelada uma vez tem uma linha por data excluída.
+			current.merge(name, value, (before, extra) -> before + "," + extra);
+			if (name.equals("DTSTART") || name.equals("DTEND") || name.equals("EXDATE")) {
 				int tzid = left.indexOf("TZID=");
 				if (tzid >= 0) {
 					String zone = left.substring(tzid + 5);
@@ -453,7 +500,7 @@ public class CalendarIcsService {
 	}
 
 	private record Vevent(String uid, String summary, String description, String start, String startZone,
-			String end, String endZone, boolean cancelled) {
+			String end, String endZone, boolean cancelled, String rrule, String exdate) {
 	}
 
 	/**

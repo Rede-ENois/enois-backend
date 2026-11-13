@@ -58,6 +58,12 @@ public class TestAuthHelper {
 	 * mesma conta duas vezes), nao ha pendente para confirmar: entra-se pelo login normal.
 	 */
 	public AuthSession authenticate(String userId) throws Exception {
+		return authenticate(userId, request -> request);
+	}
+
+	/** Aplica a mesma origem de cliente ao cadastro, à confirmação e ao login do cenário. */
+	public AuthSession authenticate(String userId,
+			org.springframework.test.web.servlet.request.RequestPostProcessor cliente) throws Exception {
 		String email = userId + "@test.com";
 
 		// Idempotente: a mesma conta pode ser pedida por varios testes da mesma classe. O
@@ -74,6 +80,7 @@ public class TestAuthHelper {
 			));
 
 				mockMvc.perform(post("/auth/signup")
+						.with(cliente)
 						.header("X-Client-Origin", APP_ORIGIN)
 						.header("Idempotency-Key", "signup-" + userId)
 					.contentType(MediaType.APPLICATION_JSON)
@@ -86,6 +93,7 @@ public class TestAuthHelper {
 			TestDatabase.setPendingSignupToken(email, confirmToken);
 
 				MvcResult verified = mockMvc.perform(post("/auth/email/verify")
+						.with(cliente)
 						.header("X-Client-Origin", APP_ORIGIN)
 						.header("Idempotency-Key", "verify-" + userId)
 					.contentType(MediaType.APPLICATION_JSON)
@@ -101,6 +109,7 @@ public class TestAuthHelper {
 
 		// A conta ja existia (replay do cadastro): entra pelo login normal.
 			MvcResult login = mockMvc.perform(post("/auth/login")
+					.with(cliente)
 					.header("X-Client-Origin", APP_ORIGIN)
 					.header("Idempotency-Key", "login-" + userId)
 				.contentType(MediaType.APPLICATION_JSON)

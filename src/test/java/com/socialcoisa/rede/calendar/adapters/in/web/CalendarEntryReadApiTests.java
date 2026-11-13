@@ -19,6 +19,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.socialcoisa.rede.calendar.application.port.out.CalendarEntryRepository;
+import com.socialcoisa.rede.calendar.application.port.out.CalendarParticipantRepository;
 import com.socialcoisa.rede.calendar.domain.CalendarEntry;
 import com.socialcoisa.rede.calendar.domain.CalendarEntrySource;
 import com.socialcoisa.rede.calendar.domain.CalendarKind;
@@ -39,6 +40,7 @@ class CalendarEntryReadApiTests {
 	@Autowired MockMvc mockMvc;
 	@Autowired ObjectMapper objectMapper;
 	@Autowired CalendarEntryRepository entries;
+	@Autowired CalendarParticipantRepository participants;
 
 	private TestAuthHelper.AuthSession account(String userId) throws Exception {
 		return new TestAuthHelper(mockMvc, objectMapper).authenticate(userId);
@@ -242,6 +244,54 @@ class CalendarEntryReadApiTests {
 			.andExpect(jsonPath("$[0].entry.id").value(id))
 			.andExpect(jsonPath("$[0].entry.state").value("CANCELLED"))
 			.andExpect(jsonPath("$[0].entry.cancelledAt").value("2026-11-09T00:00:00Z"));
+	}
+
+	/**
+	 * O convidado enxerga o compromisso alheio na própria lista, com o estado do convite dele e o
+	 * estado do compromisso. Cancelado continua na lista: a agenda é o histórico de respostas
+	 * (D13), e esconder a linha esconderia também o cancelamento que o organizador publicou.
+	 */
+	@Test
+	void convidadoVeoCompromissoNaPropriaListaComARespostaDele() throws Exception {
+		var owner = account("cal_read_inv_owner");
+		var guest = account("cal_read_inv_guest");
+		var other = account("cal_read_inv_other");
+		String entryId = saveEntry(owner.userId(), CalendarScope.SOCIAL, "Festa", FROM.plusSeconds(3_600),
+			FROM.plusSeconds(7_200));
+		inviteDirectly(owner.userId(), entryId, guest.userId());
+		respondDirectly(entryId, guest.userId(), com.socialcoisa.rede.calendar.domain.CalendarParticipantState.ACCEPTED);
+		saveEntry(owner.userId(), CalendarScope.SOCIAL, "Cancelada", FROM.plusSeconds(10_800),
+			FROM.plusSeconds(14_400));
+		String cancelledId = saveEntry(owner.userId(), CalendarScope.SOCIAL, "Cancelada pós convite",
+			FROM.plusSeconds(10_800), FROM.plusSeconds(14_400));
+		inviteDirectly(owner.userId(), cancelledId, guest.userId());
+		CalendarEntry cancelled = entries.findById(cancelledId).orElseThrow();
+		cancelled.cancel(Instant.parse("2026-11-09T00:00:00Z"));
+		entries.save(cancelled);
+
+		mockMvc.perform(listAs(guest.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$", hasSize(2)))
+			.andExpect(jsonPath("$[?(@.entry.id == '%s')].owner".formatted(entryId)).value(false))
+			.andExpect(jsonPath("$[?(@.entry.id == '%s')].participation".formatted(entryId)).value("ACCEPTED"))
+			.andExpect(jsonPath("$[?(@.entry.id == '%s')].entry.state".formatted(cancelledId)).value("CANCELLED"));
+
+		// Quem não foi convidado não vê nada do compromisso alheio na lista.
+		mockMvc.perform(listAs(other.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$", hasSize(0)));
+	}
+
+	private void inviteDirectly(String ownerId, String entryId, String guestId) {
+		participants.save(com.socialcoisa.rede.calendar.domain.CalendarParticipant
+			.invite("p_" + UUID.randomUUID(), entryId, ownerId, guestId, CREATED_AT));
+	}
+
+	private void respondDirectly(String entryId, String guestId,
+			com.socialcoisa.rede.calendar.domain.CalendarParticipantState state) {
+		var participant = participants.findByEntryAndUser(entryId, guestId).orElseThrow();
+		participant.respond(state, CREATED_AT);
+		participants.save(participant);
 	}
 
 	@Test

@@ -37,11 +37,24 @@ public class CalendarEntry {
 	private CalendarEntryState state;
 	private Instant updatedAt;
 	private Instant cancelledAt;
+	/** Série a que a entrada pertence; nulo é compromisso único. */
+	private String seriesId;
+	private CalendarRecurrence recurrence;
+	/** Marca de ponta da série: a extensão cria as próximas ocorrências a partir daqui. */
+	private boolean tail;
 
 	public CalendarEntry(String id, String ownerId, CalendarScope scope, CalendarKind kind,
 			CalendarEntrySource source, String title, String description, Instant startsAt, Instant endsAt,
 			ZoneId zone, boolean allDay, CalendarEntryState state, Instant createdAt, Instant updatedAt,
 			Instant cancelledAt) {
+		this(id, ownerId, scope, kind, source, title, description, startsAt, endsAt, zone, allDay, state,
+			createdAt, updatedAt, cancelledAt, null, null, false);
+	}
+
+	public CalendarEntry(String id, String ownerId, CalendarScope scope, CalendarKind kind,
+			CalendarEntrySource source, String title, String description, Instant startsAt, Instant endsAt,
+			ZoneId zone, boolean allDay, CalendarEntryState state, Instant createdAt, Instant updatedAt,
+			Instant cancelledAt, String seriesId, CalendarRecurrence recurrence, boolean tail) {
 		this.id = Objects.requireNonNull(id, "id");
 		this.ownerId = requireText(ownerId, "dono do compromisso");
 		this.scope = Objects.requireNonNull(scope, "agenda");
@@ -55,6 +68,17 @@ public class CalendarEntry {
 		this.description = description;
 		this.zone = Objects.requireNonNull(zone, "fuso");
 		this.allDay = allDay;
+		this.seriesId = seriesId == null || seriesId.isBlank() ? null : seriesId;
+		if (this.seriesId != null) {
+			this.recurrence = Objects.requireNonNull(recurrence, "cadência da série");
+			if (this.recurrence == CalendarRecurrence.NONE) {
+				throw new IllegalArgumentException("série não pode ter cadência NONE");
+			}
+		}
+		else {
+			this.recurrence = null;
+		}
+		this.tail = tail && this.seriesId != null;
 		applyInterval(startsAt, endsAt);
 		checkLengths();
 	}
@@ -136,6 +160,58 @@ public class CalendarEntry {
 		state = CalendarEntryState.CANCELLED;
 		cancelledAt = at;
 		updatedAt = at;
+	}
+
+	/**
+	 * Entra numa série como fundadora: ganha o id da série e a cadência. Reunir cadência e série na
+	 * mesma chamada evita o estado impossível de série sem cadência, que o construtor já recusa.
+	 */
+	public void joinSeries(String seriesId, CalendarRecurrence recurrence, Instant now) {
+		requireActive("entrar numa série");
+		Objects.requireNonNull(seriesId, "id da série");
+		CalendarRecurrence checked = Objects.requireNonNull(recurrence, "cadência");
+		if (checked == CalendarRecurrence.NONE) {
+			throw new IllegalArgumentException("série não pode ter cadência NONE");
+		}
+		if (source().present()) {
+			throw new IllegalStateException("compromisso com origem não funda série; quem muda o fato é o módulo dono");
+		}
+		if (this.seriesId != null && !this.seriesId.equals(seriesId)) {
+			throw new IllegalStateException("compromisso já pertence a outra série");
+		}
+		this.seriesId = seriesId;
+		this.recurrence = checked;
+		this.tail = true;
+		updatedAt = Objects.requireNonNull(now, "atualização");
+	}
+
+	/** Sai da série: vira compromisso único de novo, sem cadência nem marca de ponta. */
+	public void leaveSeries(Instant now) {
+		this.seriesId = null;
+		this.recurrence = null;
+		this.tail = false;
+		updatedAt = Objects.requireNonNull(now, "atualização");
+	}
+
+	/** Entra na série como ocorrência gerada: herda série e cadência, sem tocar em `updatedAt` — a marca de ponta é escrita pela extensão. */
+	public void joinSeriesQuietly(String seriesId, CalendarRecurrence recurrence) {
+		Objects.requireNonNull(seriesId, "id da série");
+		CalendarRecurrence checked = Objects.requireNonNull(recurrence, "cadência");
+		if (checked == CalendarRecurrence.NONE) {
+			throw new IllegalArgumentException("série não pode ter cadência NONE");
+		}
+		this.seriesId = seriesId;
+		this.recurrence = checked;
+	}
+
+	/** A extensão cria as próximas ocorrências a partir daqui. */
+	public void openTail() {
+		this.tail = true;
+	}
+
+	/** Deixou de ser a ponta: outra ocorrência passou dela. */
+	public void closeTail() {
+		this.tail = false;
 	}
 
 	/** Meia-aberto como toda consulta de intervalo: fim igual a início do outro ainda colide. */
@@ -236,5 +312,11 @@ public class CalendarEntry {
 	public Instant updatedAt() { return updatedAt; }
 
 	public Instant cancelledAt() { return cancelledAt; }
+
+	public String seriesId() { return seriesId; }
+
+	public CalendarRecurrence recurrence() { return recurrence; }
+
+	public boolean tail() { return tail; }
 
 }

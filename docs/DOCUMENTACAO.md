@@ -50,11 +50,14 @@
 | 33 | apiv1 (API versionada /v1) | ✅ |
 | 34 | blog | ✅ |
 | 35 | importlinkedin + importresume + linkedin | ✅ |
+| 36 | calendar (agenda central) | ✅ |
 
 ## Backend — features recentes
 
 | Tema | Doc | Estado |
 |------|-----|--------|
+| Agenda central (compromissos, convites, recorrência, `.ics`, lembretes) | `CALENDAR.md` | ✅ |
+| Processo seletivo (etapas, board, notas internas) | `SELECTION_PROCESS.md` | ✅ |
 | Gitflow (feature → qa → main) | `GITFLOW.md` | ✅ |
 | Concurrency and hot rows (isolation level, counters, lock order) | `CONCURRENCY.md` | ✅ |
 | Monitoramento (painel, eventos, retenção) | `MONITORAMENTO.md` | ✅ (atualizar com filtro de data/hora e teto de linhas) |
