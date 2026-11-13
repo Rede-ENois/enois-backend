@@ -283,13 +283,24 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				.toList();
 		}
 
-		Instant lastEffective = page.isEmpty() ? null
+		// Cursor: quando a pagina filtrada esvazia mas a janela encheu, usa o ultimo
+		// item da janela de origem como cursor pra continuar buscando na proxima pagina.
+		Instant lastPageDate = page.isEmpty() ? null
 			: repostDates.getOrDefault(page.get(page.size() - 1).id().value(),
 				page.get(page.size() - 1).createdAt());
-		// Cursor: tabs filtradas usam a janela de origem pra decidir hasMore.
-		String nextCursor = page.isEmpty() ? null
-			: (filtered ? windowFull : page.size() == limit) && lastEffective != null
-				? cursorCodec.encode(lastEffective) : null;
+		Instant lastWindowDate = merged.isEmpty() ? null
+			: repostDates.getOrDefault(merged.get(merged.size() - 1).id().value(),
+				merged.get(merged.size() - 1).createdAt());
+		String nextCursor;
+		if (filtered) {
+			// Tabs filtradas: tem mais se a janela encheu, cursor pelo ultimo da janela.
+			nextCursor = windowFull && lastWindowDate != null
+				? cursorCodec.encode(lastWindowDate) : null;
+		} else {
+			// ALL: comportamento original.
+			nextCursor = page.size() == limit && lastPageDate != null
+				? cursorCodec.encode(lastPageDate) : null;
+		}
 		return new FeedPage(enriched, nextCursor);
 	}
 
