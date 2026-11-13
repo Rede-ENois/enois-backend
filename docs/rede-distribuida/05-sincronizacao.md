@@ -217,7 +217,7 @@ do combinado — o container do nó estoura e a tarefa morre com ele.
 | `cpuCores` | vira `concurrencyLimit()`; o despacho desconta o que a rodada já entregou |
 | `memoryMb` | `memoryExhausted()`: memória observada ≥ teto declarado tira o nó do filtro e da conta de vagas |
 | `diskMb` | teto do estado de conteúdo no volume do nó (`edge/` + `replica/`); o runtime mede antes de gravar — ver a seção seguinte |
-| `bandwidthMbps` | sem consumidor hoje: nenhuma transferência de tarefa é medida por nó |
+| `bandwidthMbps` | teto de taxa das transferências de corpo do runtime (`--limit-rate` no curl, `Mbps × 125` kB/s) — ver §7.3 |
 
 **Sem reporte, o nó continua elegível.** Não medir não é estar cheio: um nó que não manda
 `memoryMb` no heartbeat não tem o que comparar com o teto, e excluí-lo puniria o runtime antigo por
@@ -244,6 +244,26 @@ têm promessas diferentes:
 
 `diskMb: 0` continua significando "não declarou limite" — o nó grava, porque ausência de campo não
 é ordem de parar de servir.
+
+### 7.3 O teto de banda é aplicado por quem transfere
+
+`limits.bandwidthMbps` é o que o participante aceitou ceder de **rede**, e o runtime é quem
+transfere: baixar corpo de conteúdo (`READ_QUERY`, `EDGE_CACHE`, `EDGE_DELIVER`) e subir o
+resultado do transcode (`MEDIA_TRANSCODE`, nas duas pontas) passam pelo mesmo teto, aplicado como
+`curl --limit-rate`, com `Mbps × 125` kB/s (1 Mbps = 1000/8 kbit-s = 125 kB/s).
+
+- **Um limite por transferência é o agregado que importa.** O runtime executa uma tarefa por
+  ciclo, então não há duas transferências concorrentes do mesmo nó competindo pelo mesmo teto;
+  limitar cada uma é limitar o nó. Se o modelo mudar para execução concorrente, o teto precisa
+  virar taxa compartilhada — está registrado aqui para não ser esquecido.
+- **A chamada de controle não é limitada.** Heartbeat, config, poll, catálogo de réplica e
+  confirmação `/synced` são metadados pequenos; limitá-los atrasaria a própria operação do nó sem
+  economizar banda de verdade.
+- **`0` é "não declarei", não "zero de banda".** Quem não declarou transfere sem `--limit-rate`:
+  inventar limite que o participante nunca aceitou puniria o runtime que só não mandou o campo.
+- **O limite é da saída do nó.** O conteúdo vem do Control Plane, mas a taxa é medida no nó — é
+  ele que paga a conta de rede que declarou, e é o único ponto onde o número declarado vira
+  comportamento observável.
 
 ## 8. O que fica de fora, e por quê
 

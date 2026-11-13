@@ -123,9 +123,11 @@ public class NetworkConfigService {
 	}
 
 	/**
-	 * Os limites que o participante cedeu, ditos ao nó. Banda ainda não tem consumidor no despacho.
-	 * {@code diskMb} é aplicado pelo runtime do nó, que é quem escreve no volume: teto do estado de
-	 * conteúdo (borda e réplica), com a identidade do nó fora da conta.
+	 * Os limites que o participante cedeu, ditos ao nó. {@code diskMb} é aplicado pelo runtime do
+	 * nó, que é quem escreve no volume: teto do estado de conteúdo (borda e réplica), com a
+	 * identidade do nó fora da conta. {@code bandwidthMbps} também é do runtime, que é quem
+	 * transfere: teto de taxa ({@code --limit-rate}) das transferências de corpo. Nenhum dos dois
+	 * entra no despacho — o Control Plane não mede banda nem disco de nó remoto.
 	 */
 	public record LimitsView(int cpuCores, int memoryMb, int diskMb, int bandwidthMbps) {
 	}

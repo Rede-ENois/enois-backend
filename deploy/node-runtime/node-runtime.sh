@@ -198,8 +198,10 @@ transcode_formats() {
 }
 
 exec_media_transcode() {
-  local next="$1" task_id="$2" attempt="$3"
+  local next="$1" task_id="$2" attempt="$3" config="${4:-}"
   local payload media_id mime work src dst args a demux mux resp
+  local -a bw=()
+  mapfile -t bw < <(bandwidth_args "$config")
   command -v ffmpeg >/dev/null 2>&1 || {
     fail_task "$task_id" "$attempt" TASK_EXECUTOR_MISSING 'ffmpeg ausente no runtime'; return 0; }
   # O payload chega como string JSON escapada dentro da tarefa: desfaz o escape
@@ -221,7 +223,7 @@ exec_media_transcode() {
   src="$work/source"
   dst="$work/result"
   if ! curl --fail --silent --show-error --connect-timeout 10 --max-time 300 \
-      "${auth_bin[@]}" --output "$src" \
+      "${bw[@]}" "${auth_bin[@]}" --output "$src" \
       "$CONTROL_PLANE/network/media/$media_id/source"; then
     fail_task "$task_id" "$attempt" TRANSCODE_FAILED 'origem não baixada'; return 0
   fi
@@ -238,7 +240,7 @@ exec_media_transcode() {
   # Quem decide é o Control Plane: ele mede o arquivo ENQUANTO grava. O nó declara
   # o que ele devolveu (as medidas dele) — o próprio hash é só fallback de rede.
   if ! resp=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 300 \
-      "${auth_bin[@]}" -H "Content-Type: $mime" --data-binary @"$dst" \
+      "${bw[@]}" "${auth_bin[@]}" -H "Content-Type: $mime" --data-binary @"$dst" \
       -X PUT "$CONTROL_PLANE/network/media/$media_id/result"); then
     fail_task "$task_id" "$attempt" TRANSCODE_FAILED 'upload do resultado falhou'; return 0
   fi
@@ -284,6 +286,8 @@ exec_read_query() {
   local payload kind after_at after_id pages=0 synced=0 skipped=0 failed=0 removed=0
   local page items has_more next_at next_id id stored_version content version hash body
   local config="$4" disk_mb disk_cap_bytes
+  local -a bw=()
+  mapfile -t bw < <(bandwidth_args "$config")
   payload=$(task_payload "$next")
   # Mesmo teto da borda (limits.diskMb da config assinada): réplica e cache dividem
   # o disco que o participante cedeu — o contador é um só (edge/ + replica/).
@@ -333,7 +337,7 @@ exec_read_query() {
       # caso em que o agregado já não existe mais.
       local raw code
       if ! raw=$(curl --silent --show-error --connect-timeout 10 --max-time 60 \
-          -w '\n%{http_code}' "${auth[@]}" "$content_url"); then
+          "${bw[@]}" -w '\n%{http_code}' "${auth[@]}" "$content_url"); then
         failed=$((failed + 1))
         printf '[executor] réplica: item %s/%s ilegível\n' "$kind" "$id" >&2
         continue
@@ -442,6 +446,22 @@ config_disk_mb() {
   printf '%s' "$mb"
 }
 
+bandwidth_args() {
+  # bandwidth_args <config-json>: argumento de limite de taxa do curl, um por linha;
+  # vazio quando o participante não declarou banda (0 = sem teto). O limite declarado
+  # é o que ele aceitou ceder de REDE, e o runtime é quem transfere: baixar corpo de
+  # conteúdo e subir resultado de mídia passam todos pelo mesmo teto, em
+  # --limit-rate. Mbps declarado vira kbytes/s (1 Mbps = 1000/8 = 125 kB/s, o mesmo
+  # que o curl chama de k). Um limite por transferência é o agregado que importa
+  # aqui: o runtime executa UMA tarefa por ciclo, então não há duas transferências
+  # concorrentes competindo pelo mesmo teto.
+  local mbps kbps
+  mbps=$(json_number "$1" bandwidthMbps)
+  [[ -n "$mbps" && "$mbps" != 0 ]] || return 0
+  kbps=$((mbps * 125))
+  printf '%s\n%s\n' --limit-rate "${kbps}k"
+}
+
 content_bytes() {
   # content_bytes: bytes guardados no ESTADO DE CONTEÚDO do nó (edge/ + replica/).
   # Contar $NODE_HOME inteiro incluiria node.json, api-key e o pino — credencial não
@@ -518,6 +538,8 @@ exec_edge_cache() {
   local entries entry seq kind content_id safe_id stored_version content_url raw code content body version hash
   local has_more before
   local config="$4" disk_mb disk_cap_bytes
+  local -a bw=()
+  mapfile -t bw < <(bandwidth_args "$config")
 
   payload=$(task_payload "$next")
   # O teto de disco vem da config assinada (limits.diskMb) — a permissão que o
@@ -574,7 +596,7 @@ exec_edge_cache() {
       [[ -n "$stored_version" ]] && content_url="$content_url?version=$stored_version"
       # Uma requisição só, com o status no fim: --fail engoliria o corpo do 404.
       if ! raw=$(curl --silent --show-error --connect-timeout 10 --max-time 60 \
-          -w '\n%{http_code}' "${auth[@]}" "$content_url"); then
+          "${bw[@]}" -w '\n%{http_code}' "${auth[@]}" "$content_url"); then
         failed=$((failed + 1)); stalled=true; break
       fi
       code=$(sed -n '$p' <<<"$raw")
@@ -675,6 +697,8 @@ exec_edge_deliver() {
   local payload kind content_id safe_id entry_dir stored_version
   local content_url raw code content version hash body source verdict
   local config="$4" disk_mb disk_cap_bytes
+  local -a bw=()
+  mapfile -t bw < <(bandwidth_args "$config")
 
   payload=$(task_payload "$next")
   # O teto é o mesmo da borda: entrega rebaixa corpo quando a origem está à frente,
@@ -695,7 +719,7 @@ exec_edge_deliver() {
   [[ -n "$stored_version" ]] && content_url="$content_url?version=$stored_version"
   # Uma requisição só, com o status no fim: --fail engoliria o corpo do 404.
   if ! raw=$(curl --silent --show-error --connect-timeout 10 --max-time 60 \
-      -w '\n%{http_code}' "${auth[@]}" "$content_url"); then
+      "${bw[@]}" -w '\n%{http_code}' "${auth[@]}" "$content_url"); then
     verdict="{\"kind\":\"$kind\",\"contentId\":\"$content_id\",\"deliverable\":false,\"reason\":\"EDGE_ORIGIN_UNREADABLE\"}"
     result "$task_id" "$attempt" DONE "$verdict" ''
     return 0
@@ -797,7 +821,7 @@ cycle() {
   # 5. executor por perfil: a config assinada autoriza; o que não está nela é recusado.
   if grep -q "\"$task_type\"" <<<"[$allowed]"; then
     case "$task_type" in
-      MEDIA_TRANSCODE) exec_media_transcode "$next" "$task_id" "${attempt:-1}" ;;
+      MEDIA_TRANSCODE) exec_media_transcode "$next" "$task_id" "${attempt:-1}" "$config" ;;
       READ_QUERY) exec_read_query "$next" "$task_id" "${attempt:-1}" "$config" ;;
       EDGE_CACHE) exec_edge_cache "$next" "$task_id" "${attempt:-1}" "$config" ;;
       EDGE_DELIVER) exec_edge_deliver "$next" "$task_id" "${attempt:-1}" "$config" ;;

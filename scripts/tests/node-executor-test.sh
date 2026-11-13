@@ -810,4 +810,70 @@ assert_eq 'entrada de réplica antiga sobrevive (não é evictável)' '1' "$(fin
 assert_eq 'quem cede espaço é o cache de borda' '0' "$(find "$NRC/edge/PROFILE" -name 'velho.json' | wc -l | tr -d ' ')"
 assert_contains 'a réplica confirma o que guardou' "$(cat "$TMP/curl-calls")" 'novoreplica/synced'
 
+# ------------------------------------------------- cenário 24: banda declarada vira teto de taxa
+# A banda que o participante cedeu (limits.bandwidthMbps assinado) chega ao curl como
+# --limit-rate: cada transferência de corpo do nó respeita o teto. 8 Mbps = 1000 kB/s.
+# O stub do curl registra o próprio argumento — a prova de comportamento de rede
+# (bytes/s medidos com cronômetro) não cabe num teste determinístico, mas o argumento
+# que o runtime passa é o contrato entre o limite declarado e a taxa efetiva.
+NBW="$TMP/node-bw"; rm -rf "$NBW"; mkdir -p "$NBW"; chmod 700 "$NBW"
+cp "$NH/node.json" "$NBW/node.json"; cp "$NH/api-key" "$NBW/api-key"
+cp "$NH/pinning-key" "$NBW/pinning-key"
+CONFIG_BW='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":1,"configVersion":13,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":20480,"bandwidthMbps":8},"allowedTasks":["READ_QUERY"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","signed":true,"signature":"'"$(sign_limits_config 13 '["NODE_READ_REPLICA"]' 1 1024 20480 8 '["READ_QUERY"]')"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_BW' ;;
+  */network/tasks/next) printf '%s' '{"tasks":[{"taskId":"tk_bw","type":"READ_QUERY","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"replica:bw","payload":"{\\"kind\\":\\"PROFILE\\"}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}' ;;
+  */network/replica/PROFILE*) printf '%s' '{"kind":"PROFILE","items":["bwuser"],"hasMore":false,"nextAfterAt":"2026-11-11T10:00:00Z","nextAfterId":"u1"}' ;;
+  */network/content/PROFILE/bwuser/synced) printf '%s' '{"contentId":"bwuser","status":"SYNCED"}' ;;
+  */network/content/PROFILE/bwuser*)
+    printf '%s' '{"kind":"PROFILE","contentId":"bwuser","version":1,"contentHash":"h-bw","changed":true,"body":"{\\"username\":\"bw\"}"}'
+    [[ "\$*" == *"-w"* ]] && printf '\n200' ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NBW")
+assert_contains 'corpo da réplica baixa sob o teto declarado' "$(cat "$TMP/curl-calls")" 'content/PROFILE/bwuser'
+assert_contains '8 Mbps declarados viram 1000 kB/s no curl' "$(cat "$TMP/curl-calls")" '--limit-rate 1000k'
+assert_contains 'confirmação sai — o limite não bloqueia a sincronização' "$(cat "$TMP/curl-calls")" 'bwuser/synced'
+
+# ------------------------------------------------- cenário 25: banda 0 = sem teto
+# `0` é "não declarei restrição", não "zero de banda": quem não declarou transfere
+# sem --limit-rate, como sempre — punir o não declarado inventaria limite que o
+# participante nunca aceitou.
+NCBW="$TMP/node-nobw"; rm -rf "$NCBW"; mkdir -p "$NCBW"; chmod 700 "$NCBW"
+cp "$NH/node.json" "$NCBW/node.json"; cp "$NH/api-key" "$NCBW/api-key"
+cp "$NH/pinning-key" "$NCBW/pinning-key"
+CONFIG_NOBW='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":1,"configVersion":14,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":20480,"bandwidthMbps":0},"allowedTasks":["READ_QUERY"],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","signed":true,"signature":"'"$(sign_limits_config 14 '["NODE_READ_REPLICA"]' 1 1024 20480 0 '["READ_QUERY"]')"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_NOBW' ;;
+  */network/tasks/next) printf '%s' '{"tasks":[{"taskId":"tk_nbw","type":"READ_QUERY","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"replica:nbw","payload":"{\\"kind\\":\\"PROFILE\\"}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}' ;;
+  */network/replica/PROFILE*) printf '%s' '{"kind":"PROFILE","items":["nobw"],"hasMore":false,"nextAfterAt":"2026-11-11T10:00:00Z","nextAfterId":"u1"}' ;;
+  */network/content/PROFILE/nobw/synced) printf '%s' '{"contentId":"nobw","status":"SYNCED"}' ;;
+  */network/content/PROFILE/nobw*)
+    printf '%s' '{"kind":"PROFILE","contentId":"nobw","version":1,"contentHash":"h-nb","changed":true,"body":"{\\"username\":\"nb\"}"}'
+    [[ "\$*" == *"-w"* ]] && printf '\n200' ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NCBW")
+assert_contains 'nó sem banda declarada baixa sem --limit-rate' "$(cat "$TMP/curl-calls")" 'content/PROFILE/nobw'
+assert_not_contains 'banda 0 não injeta limite' "$(cat "$TMP/curl-calls")" '--limit-rate'
+assert_contains 'sincronização segue completa sem teto' "$(cat "$TMP/curl-calls")" 'nobw/synced'
+
 printf '\nTodos os cenarios passaram (%d assercoes).\n' "$PASS"
