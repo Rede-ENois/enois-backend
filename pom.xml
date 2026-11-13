@@ -29,7 +29,7 @@
 	<properties>
 		<java.version>25</java.version>
 		<resilience4j.version>2.4.0</resilience4j.version>
-		<jsoup.version>1.23.2</jsoup.version>
+		<jsoup.version>1.24.1</jsoup.version>
 		<!-- O parent do Spring Boot 4 nao gerencia o SDK do AWS, entao a versao e fixada aqui.
 		     Precisa bater com o apache-client que ja esta no cache do Maven (evita baixar duas linhas). -->
 		<awssdk.version>2.57.10</awssdk.version>
