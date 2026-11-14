@@ -62,7 +62,22 @@ class WriteRouteInterceptor implements HandlerInterceptor {
 		"/mentoring/*/gateway/entry/*",
 		// CI de produção publicando as "Novidades" do deploy: servidor não tem sessão; a
 		// credencial é o token de serviço X-Deploy-Token, conferido no controller (fail-closed).
-		"/internal/novidades-deploy");
+		"/internal/novidades-deploy",
+		// Rede cooperativa: um nó não tem sessão de navegador. O enroll é autenticado pelo token de
+		// provisionamento de uso único e o heartbeat pela API key do nó (X-Node-Id + X-Node-Key),
+		// conferidos no controller — fail-closed como as rotas internas.
+		"/network/nodes/enroll",
+		"/network/nodes/heartbeat",
+		// Fase 2: o nó devolve o resultado da tarefa. Mesma credencial de nó (X-Node-Id + X-Node-Key),
+		// conferida no controller. O GET /network/tasks/next não entra aqui: só escrita exige sessão.
+		"/network/tasks/*/result",
+		// Fase 3: o nó de borda confirma o que sincronizou e pede a reconciliação. Mesma credencial
+		// de nó; as leituras de conteúdo são GET e não passam por aqui.
+		"/network/content/*/*/synced",
+		"/network/content/reconcile",
+		// Fase 3: o nó de mídia devolve o arquivo transcodificado. Mesma credencial de nó; além
+		// dela o controller exige o perfil NODE_MEDIA e a tarefa designada a este nó.
+		"/network/media/*/result");
 
 	private final AntPathMatcher matcher = new AntPathMatcher();
 	private final CurrentUserResolver currentUserResolver;

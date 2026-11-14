@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+# Instalador do Node Runtime da Énóis Distributed Network.
+#
+# Uso:
+#   ./install.sh --control-plane https://control.enois.ia.br --token <provision-token> \
+#                [--region sa-east-1] [--country BR] [--cpu 2] [--memory 1024]
+#   ./install.sh --set-key              # cola a API key que o admin gerou
+#   ./install.sh --backup               # arquiva a identidade (node.json + api-key)
+#   ./install.sh --restore <arquivo>    # restaura a identidade de um backup
+#   ./install.sh --start                # sobe o container
+#   ./install.sh --update               # atualiza o runtime (delega ao bootstrap)
+#   ./install.sh --rollback             # volta para o runtime anterior (delega ao bootstrap)
+#
+# O que faz (docs/rede-distribuida/01-arquitetura.md §4):
+#   1. grava o estado do nó em $NODE_HOME com permissão restrita;
+#   2. faz o enroll com o token de provisionamento de uso único;
+#   3. espera o admin gerar a API key (--set-key cola a chave uma vez);
+#   4. sobe o container via docker compose e confirma o primeiro heartbeat.
+#
+# O token é de uso único: rodar o enroll de novo com o mesmo token falha com
+# NODE_TOKEN_USED. Para reinstalar do zero, peça um token novo.
+set -euo pipefail
+
+NODE_HOME="${NODE_HOME:-/var/lib/enois-node}"
+COMPOSE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# A versão declarada no heartbeat é o COMMIT da fonte de verdade que o
+# bootstrap construiu ("qa@<sha8>", lido de $NODE_HOME/runtime-version), não
+# uma constante: dois nós na mesma fonte podem estar em commits diferentes, e
+# a versão é o que o painel usa para ver essa divergência. Sem registro local
+# (install.sh puro, antes do primeiro bootstrap), declara só a fonte padrão.
+RUNTIME_VERSION="$(head -n 1 "$NODE_HOME/runtime-version" 2>/dev/null || true)"
+RUNTIME_VERSION="${RUNTIME_VERSION:-${NODE_RUNTIME_SOURCE:-qa}}"
+
+die() { printf 'Erro: %s\n' "$*" >&2; exit 1; }
+info() { printf '[install] %s\n' "$*"; }
+
+usage() {
+  sed -n '/^# Uso:/,/^# O que faz/p' "$0" | sed -e 's/^# \{0,1\}//' -e '/^O que faz/d'
+}
+
+CONTROL_PLANE='' TOKEN='' REGION='' COUNTRY='' CPU='' MEMORY='' MODE='' BACKUP_FILE=''
+while (($#)); do
+  case "$1" in
+    --control-plane) CONTROL_PLANE="$2"; shift 2 ;;
+    --token) TOKEN="$2"; shift 2 ;;
+    --region) REGION="$2"; shift 2 ;;
+    --country) COUNTRY="$2"; shift 2 ;;
+    --cpu) CPU="$2"; shift 2 ;;
+    --memory) MEMORY="$2"; shift 2 ;;
+    --set-key|--start|--update|--rollback) MODE="$1"; shift ;;
+    --backup) MODE="--backup"; shift ;;
+    --restore) MODE="--restore"; BACKUP_FILE="${2:-}"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "Opção desconhecida: $1 (veja --help)" ;;
+  esac
+done
+
+mkdir -p "$NODE_HOME"
+# 700 travaria o container: o runtime roda como 10001 (Dockerfile) e, num host
+# comum, o install roda como o participante (1000). Ajuste definitivo (dono 10001)
+# é feito no --start, onde o docker já é obrigatório; aqui o diretório só precisa
+# ser atravessável — os arquivos de credencial ficam 0600 do dono.
+chmod 711 "$NODE_HOME"
+
+# ------------------------------------------------- --backup / --restore
+# O par node.json + api-key é a identidade do nó (04-identidade-e-autorizacao.md):
+# perdidos, o re-enroll cria um nó NOVO e a aprovação humana se repete. O backup
+# existe para reinstalar a mesma identidade em máquina reformada ou migrada.
+if [[ "$MODE" == "--backup" ]]; then
+  [[ -s "$NODE_HOME/node.json" ]] || die "sem $NODE_HOME/node.json — rode o enroll primeiro"
+  [[ -s "$NODE_HOME/api-key" ]] || die "sem $NODE_HOME/api-key — rode --set-key primeiro"
+  for tool in tar; do command -v "$tool" >/dev/null 2>&1 || die "Comando ausente: $tool"; done
+
+  node_id=$(sed -n 's/.*"nodeId":"\([^"]*\)".*/\1/p' "$NODE_HOME/node.json")
+  out="enois-node-${node_id:-identidade}-$(date +%Y%m%d-%H%M%S).tar.gz"
+  # O pino vai junto quando existir: restaurar sem ele deixa o runtime sem como
+  # conferir a config (tar reclama de arquivo ausente e sai != 0 com set -e). O
+  # termo aceito vai também: restaurar a identidade sem ele deixaria o nó aceitar
+  # de volta config de uma autoridade que já caiu (regra do termo, fase 6).
+  # A config guardada (config.json/config-verified-at) NÃO vai: ela é cache derivável e a
+  # validade é medida pelo relógio da máquina. Restaurada noutra máquina, ela chegaria com
+  # instante de verificação de outra máquina — ou seja, mentiria sobre o próprio frescor, e o
+  # TTL do §6 ficaria sem sentido. Sem o cache, o nó simplesmente verifica de novo no próximo
+  # ciclo, que é o que ele faria de qualquer jeito.
+  umask 077
+  local_files=(node.json api-key)
+  if [[ -s "$NODE_HOME/pinning-key" ]]; then
+    local_files+=(pinning-key)
+  fi
+  if [[ -s "$NODE_HOME/term" ]]; then
+    local_files+=(term)
+  fi
+  tar -C "$NODE_HOME" -czf "$out" "${local_files[@]}"
+  umask 022
+  info "Backup da identidade em ./$out (permissão 600)."
+  info "Guarde com o mesmo cuidado da chave: quem tem o backup opera como o nó."
+  exit 0
+fi
+
+if [[ "$MODE" == "--restore" ]]; then
+  [[ -n "$BACKUP_FILE" ]] || die '--restore precisa do caminho do arquivo (ex.: ./install.sh --restore enois-node-nd_x.tar.gz)'
+  [[ -f "$BACKUP_FILE" ]] || die "backup não encontrado: $BACKUP_FILE"
+  for tool in tar; do command -v "$tool" >/dev/null 2>&1 || die "Comando ausente: $tool"; done
+
+  if [[ -s "$NODE_HOME/node.json" ]]; then
+    die "já existe um nó registrado em $NODE_HOME/node.json — restaurar por cima trocaria a identidade; remova-a primeiro se tem certeza"
+  fi
+  tar -C "$NODE_HOME" -xzf "$BACKUP_FILE"
+  chmod 600 "$NODE_HOME/node.json" "$NODE_HOME/api-key" "$NODE_HOME/pinning-key" "$NODE_HOME/term" 2>/dev/null || true
+  node_id=$(sed -n 's/.*"nodeId":"\([^"]*\)".*/\1/p' "$NODE_HOME/node.json")
+  [[ -n "$node_id" ]] || die "backup sem nodeId válido dentro — arquivo truncado ou não é um backup de nó"
+  info "Identidade de $node_id restaurada em $NODE_HOME."
+  info "Rode --start para confirmar o heartbeat e subir o container."
+  exit 0
+fi
+
+# ---------------------------------------------------------------- --set-key
+if [[ "$MODE" == "--set-key" ]]; then
+  printf 'Cole a API key do nó (enk_...) e pressione Enter: '
+  read -r key
+  [[ "$key" == enk_* ]] || die 'chave inválida: deve começar com enk_ (nunca é gravada em log)'
+  umask 177
+  printf '%s\n' "$key" > "$NODE_HOME/api-key"
+  umask 022
+  info "Chave gravada em $NODE_HOME/api-key (permissão 600). Rode --start para subir o container."
+  exit 0
+fi
+
+# ---------------------------------------------------------------- enroll
+if [[ -z "$MODE" ]]; then
+  [[ -n "$CONTROL_PLANE" ]] || die '--control-plane é obrigatório'
+  [[ -n "$TOKEN" ]] || die '--token é obrigatório'
+  for tool in curl; do command -v "$tool" >/dev/null 2>&1 || die "Comando ausente: $tool"; done
+
+  if [[ -s "$NODE_HOME/node.json" ]]; then
+    info "Nó já registrado em $NODE_HOME/node.json — nada a fazer (diagnóstico: ./node-doctor.sh)."
+  else
+    declared_cpu="${CPU:-$(nproc 2>/dev/null || echo 1)}"
+    declared_mem="${MEMORY:-$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 1024)}"
+
+    body=$(printf '{"provisionToken":"%s","runtimeVersion":"%s","declared":{"cpuCores":%s,"memoryMb":%s,"diskMb":20480,"bandwidthMbps":100}' \
+      "$TOKEN" "$RUNTIME_VERSION" "$declared_cpu" "$declared_mem")
+    if [[ -n "$REGION" ]]; then
+      # Forma documentada no contrato (03-contratos.md §2): aninhada em location.
+      body="$body,\"location\":{\"region\":\"$REGION\",\"country\":\"${COUNTRY:-XX}\"}"
+    fi
+    body="$body}"
+
+    info "Fazendo enroll no Control Plane $CONTROL_PLANE..."
+    enroll=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+      -H 'Content-Type: application/json' -d "$body" \
+      "$CONTROL_PLANE/network/nodes/enroll") || die "enroll falhou (token inválido, expirado ou já usado?)"
+
+    node_id=$(printf '%s' "$enroll" | sed -n 's/.*"nodeId":"\([^"]*\)".*/\1/p')
+    [[ -n "$node_id" ]] || die "resposta do enroll sem nodeId: $enroll"
+
+    umask 177
+    printf '%s\n' "$enroll" > "$NODE_HOME/node.json"
+    # o dump traz a API key; fica 600 até o --start entregar ao uid do container
+    # Pino da config assinada (03-contratos.md §2): a chave pública lida AGORA na config é
+    # a que todas as configs seguintes têm de carregar — o runtime recusa as outras.
+    pin=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+      -H "X-Node-Id: $node_id" -H "X-Node-Key: $(head -n 1 "$NODE_HOME/api-key" 2>/dev/null || echo sem-chave)" \
+      "$CONTROL_PLANE/network/nodes/me/config" 2>/dev/null \
+      | sed -n 's/.*"publicKey":"\([^"]*\)".*/\1/p') || pin=''
+    if [[ -n "$pin" ]]; then
+      printf '%s' "$pin" > "$NODE_HOME/pinning-key"
+      info "Chave pública do Control Plane pinada (config assinada será verificada contra ela)."
+    else
+      info "Sem publicKey na config agora (nó sem chave); o pinning fica para o primeiro --start com config assinada."
+    fi
+    umask 022
+    info "Nó $node_id registrado — pendente de aprovação."
+  fi
+  info "Próximo passo: o admin gera a API key na tela de administração; depois rode --set-key."
+  exit 0
+fi
+
+# ------------------------------------------------- --update / --rollback
+# A obtenção e verificação do código novo (release + sha256, ou git na fonte de
+# verdade) e a troca de versão vivem no bootstrap.sh — é ele que constrói a
+# imagem na máquina e grava runtime-version. Aqui só encaminha: manter dois
+# caminhos de atualização seria ter duas regras sobre o que o nó executa.
+if [[ "$MODE" == "--update" || "$MODE" == "--rollback" ]]; then
+  bootstrap="$COMPOSE_DIR/bootstrap.sh"
+  [[ -f "$bootstrap" ]] || die "bootstrap.sh não encontrado ao lado de install.sh — atualização precisa dele"
+  info "Delegando ao bootstrap.sh (a fonte de verdade e a verificação vivem lá)..."
+  exec /bin/bash "$bootstrap" "$MODE" "$@"
+fi
+
+# ---------------------------------------------------------------- --start
+[[ -s "$NODE_HOME/node.json" ]] || die "sem $NODE_HOME/node.json — rode o enroll primeiro"
+[[ -s "$NODE_HOME/api-key" ]] || die "sem $NODE_HOME/api-key — rode --set-key primeiro"
+command -v curl >/dev/null 2>&1 || die 'Comando ausente: curl'
+
+node_id=$(sed -n 's/.*"nodeId":"\([^"]*\)".*/\1/p' "$NODE_HOME/node.json")
+node_key=$(head -n 1 "$NODE_HOME/api-key")
+: "${CONTROL_PLANE:?--start precisa de --control-plane ou CONTROL_PLANE no ambiente}"
+# A URL fica gravada para os --update/--rollback do bootstrap funcionarem sem
+# que o participante redigite o endereço do Control Plane a cada atualização.
+umask 177
+printf '%s\n' "$CONTROL_PLANE" > "$NODE_HOME/control-plane"
+umask 022
+
+# Antes de subir qualquer container, prova que a credencial serve — subir um nó
+# com chave revogada só cria um loop de erro no container.
+info "Confirmando autenticação com heartbeat..."
+hb=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+  -H "X-Node-Id: $node_id" -H "X-Node-Key: $node_key" \
+  -H 'Content-Type: application/json' -d '{"runtimeVersion":"'"$RUNTIME_VERSION"'"}' \
+  "$CONTROL_PLANE/network/nodes/heartbeat") || die "heartbeat falhou — diagnostique com ./node-doctor.sh"
+status=$(printf '%s' "$hb" | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')
+info "Estado do nó no Control Plane: ${status:-desconhecido}"
+
+# Pino da config assinada quando o enroll não conseguiu gravá-lo (o nó ainda não
+# tinha chave naquela hora). Confiar na chave pública é legítimo SÓ aqui: a credencial
+# do nó acabou de ser provada pelo heartbeat (TOFU). Depois disso o pino nunca muda
+# sozinho — trocar a chave do Control Plane é decisão manual do participante.
+if [[ ! -s "$NODE_HOME/pinning-key" ]]; then
+  info "Sem pino da config assinada — pinando agora (primeiro start com credencial válida)..."
+  pin=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+    -H "X-Node-Id: $node_id" -H "X-Node-Key: $node_key" \
+    "$CONTROL_PLANE/network/nodes/me/config" 2>/dev/null \
+    | sed -n 's/.*"publicKey":"\([^"]*\)".*/\1/p') || pin=''
+  if [[ -n "$pin" ]]; then
+    umask 177
+    printf '%s' "$pin" > "$NODE_HOME/pinning-key"
+    umask 022
+    info "Chave pública do Control Plane pinada; o executor recusará configs com outra chave."
+  else
+    info "Aviso: config sem publicKey (assinatura ainda não configurada?) — o executor recusará tarefas até existir pino; rode --start de novo depois."
+  fi
+fi
+
+for tool in docker; do command -v "$tool" >/dev/null 2>&1 || die "Comando ausente: $tool"; done
+# O container roda como uid 10001 e precisa LER a identidade do nó. No ensaio com
+# kernel fs.protected_regular=2 e o Docker registrando 1000:1000 no diretório
+# montado, o uid 10001 não lia node.json — o nó subia sem identidade e reiniciava.
+# Por isso o estado é entregue ao uid do container: dono e grupo 10001:10001,
+# diretório 750 e arquivos 640 (dono lê e escreve; outros não leem).
+if chown 10001:10001 "$NODE_HOME" 2>/dev/null; then
+  chmod 750 "$NODE_HOME"
+  umask 027
+  for arq in node.json api-key control-plane runtime-version; do
+    [[ -s "$NODE_HOME/$arq" ]] && chmod 640 "$NODE_HOME/$arq"
+  done
+  info "Estado do nó em $NODE_HOME pertence a 10001:10001 (o usuário do container)."
+else
+  info "Aviso: não consegui dar o diretório ao uid 10001 (rode com sudo). O nó pode não conseguir ler a própria identidade."
+fi
+
+# O compose lê o ambiente do docker, não as variáveis deste shell: sem exportar
+# NODE_HOME ele aborta com "rode o install.sh, que exporta NODE_HOME" — mesmo
+# depois de o install ter sido rodado, e depois de o heartbeat já ter provado a
+# credencial. E CONTROL_PLANE_URL precisa ser ATRIBUÍDA: `export VAR` sem valor
+# emite vazio, e o compose aborta com "informe a URL do Control Plane" mesmo com
+# --control-plane na linha de comando.
+CONTROL_PLANE_URL="$CONTROL_PLANE"
+export NODE_HOME CONTROL_PLANE_URL
+# A tag da imagem é a VERSÃO verificada pelo bootstrap ("qa-<sha8>"), não uma tag
+# móvel do registry: a imagem foi construída nesta máquina a partir do código
+# conferido, e o restart sobe exatamente a mesma. O compose default existe para o
+# primeiro docker compose manual; quem passou pelo bootstrap nunca cai nele.
+if [[ -s "$NODE_HOME/runtime-version" ]]; then
+  NODE_RUNTIME_TAG="$(head -n 1 "$NODE_HOME/runtime-version" | tr '@' '-')"
+  export NODE_RUNTIME_TAG
+  info "Runtime em uso: $RUNTIME_VERSION (imagem enois-node-runtime:$NODE_RUNTIME_TAG)"
+fi
+docker compose -f "$COMPOSE_DIR/docker-compose.yml" up -d
+info "Container subido. Diagnóstico: NODE_HOME=$NODE_HOME ./node-doctor.sh"

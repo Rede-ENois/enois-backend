@@ -1,0 +1,181 @@
+package com.socialcoisa.rede.network.adapters.out.persistence;
+
+import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+import org.springframework.data.domain.PageRequest;
+import org.springframework.stereotype.Repository;
+
+import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
+import com.socialcoisa.rede.network.domain.DataClass;
+import com.socialcoisa.rede.network.domain.NetworkTask;
+import com.socialcoisa.rede.network.domain.TaskStatus;
+import com.socialcoisa.rede.network.domain.TaskType;
+
+@Repository
+class NetworkTaskPersistenceAdapter implements NetworkTaskRepository {
+
+	private final SpringDataNetworkTaskJpaRepository repository;
+
+	NetworkTaskPersistenceAdapter(SpringDataNetworkTaskJpaRepository repository) {
+		this.repository = repository;
+	}
+
+	@Override
+	public Optional<NetworkTask> findById(String id) {
+		return repository.findById(id).map(NetworkTaskJpaEntity::toDomain);
+	}
+
+	@Override
+	public Optional<NetworkTask> findByIdempotencyKey(String idempotencyKey) {
+		return repository.findByIdempotencyKey(idempotencyKey).map(NetworkTaskJpaEntity::toDomain);
+	}
+
+	@Override
+	public void create(String id, TaskType type, String idempotencyKey, String payload, DataClass dataClass,
+			String region, String targetNodeId, Instant deadline, Instant nextAttemptAt, Instant now) {
+		repository.save(new NetworkTaskJpaEntity(id, type.name(), idempotencyKey, payload, dataClass.name(),
+			normalizeRegion(region), normalizeTarget(targetNodeId), deadline, nextAttemptAt, now));
+	}
+
+	/** Alvo vazio é a mesma coisa que sem alvo: dois jeitos de dizer a mesma ausência viram bug. */
+	private static String normalizeTarget(String targetNodeId) {
+		return targetNodeId == null || targetNodeId.isBlank() ? null : targetNodeId.trim();
+	}
+
+	/**
+	 * Região vazia e região nula são a mesma coisa ("sem preferência"). Guardar {@code ""} criaria um
+	 * valor que não casa com nó nenhum e que ninguém distingue de null na leitura — dois jeitos de
+	 * dizer a mesma ausência viram bug de comparação mais tarde.
+	 */
+	private static String normalizeRegion(String region) {
+		return region == null || region.isBlank() ? null : region.trim();
+	}
+
+	@Override
+	public List<NetworkTask> findDispatchable(Instant now, int limit) {
+		return repository.findDispatchable(now, PageRequest.ofSize(limit))
+			.stream()
+			.map(NetworkTaskJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public List<NetworkTask> findAbandoned(Instant now, int limit) {
+		return repository.findAbandoned(now, PageRequest.ofSize(limit))
+			.stream()
+			.map(NetworkTaskJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public List<NetworkTask> findAssignedTo(String nodeId, Instant now, int limit) {
+		return repository.findAssignedTo(nodeId, now, PageRequest.ofSize(limit))
+			.stream()
+			.map(NetworkTaskJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public List<NetworkTask> findPendingTargeted(String targetNodeId, Instant now, int limit) {
+		return repository.findPendingTargeted(targetNodeId, now, PageRequest.ofSize(limit))
+			.stream()
+			.map(NetworkTaskJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public long countOpenTargeted(String targetNodeId, Instant now) {
+		return repository.countOpenTargeted(targetNodeId, now);
+	}
+
+	@Override
+	public List<NetworkTask> findOnNonOperatingNodes(Instant now, int limit) {
+		return repository.findOnNonOperatingNodes(now, PageRequest.ofSize(limit))
+			.stream()
+			.map(NetworkTaskJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public long countOnNonOperatingNodes(Instant now) {
+		return repository.countOnNonOperatingNodes(now);
+	}
+
+	@Override
+	public List<NetworkTask> findOnEvacuatedRegions(Collection<String> regions, Instant now, int limit) {
+		// Coleção vazia vira `in ()`, que o JPQL/Hibernate não aceita: nada a drenar é a resposta
+		// correta quando não há região evacuada, e a consulta nem precisa ir ao banco.
+		if (regions == null || regions.isEmpty()) {
+			return List.of();
+		}
+		return repository.findOnEvacuatedRegions(regions, now, PageRequest.ofSize(limit))
+			.stream()
+			.map(NetworkTaskJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public long countOnEvacuatedRegions(Collection<String> regions, Instant now) {
+		if (regions == null || regions.isEmpty()) {
+			return 0;
+		}
+		return repository.countOnEvacuatedRegions(regions, now);
+	}
+
+	@Override
+	public int claim(String id, String nodeId, int expectedAttempt, Instant claimExpiresAt, Instant now) {
+		return repository.claim(id, nodeId, expectedAttempt, claimExpiresAt, now);
+	}
+
+	@Override
+	public int complete(String id, int attempt, String output, Instant now) {
+		return repository.complete(id, attempt, output, now);
+	}
+
+	@Override
+	public int fail(String id, int attempt, String error, Instant now) {
+		return repository.fail(id, attempt, error, now);
+	}
+
+	@Override
+	public int requeue(String id, int attempt, String error, Instant nextAttemptAt, Instant now) {
+		return repository.requeue(id, attempt, error, nextAttemptAt, now);
+	}
+
+	@Override
+	public int kill(String id, int attempt, String error, Instant now) {
+		return repository.kill(id, attempt, error, now);
+	}
+
+	@Override
+	public int cancel(String id, String actorId, Instant now) {
+		return repository.cancel(id, now);
+	}
+
+	@Override
+	public long countByStatus(TaskStatus status) {
+		return repository.countByStatus(status.name());
+	}
+
+	@Override
+	public Map<String, Long> countDoneByNode(Collection<String> nodeIds) {
+		if (nodeIds.isEmpty()) {
+			return Map.of();
+		}
+		return repository.countDoneByNode(nodeIds)
+			.stream()
+			.collect(java.util.stream.Collectors.toMap(row -> (String) row[0], row -> (Long) row[1]));
+	}
+
+	@Override
+	public List<NetworkTask> listRecent(int limit) {
+		return repository.listRecent(PageRequest.ofSize(limit))
+			.stream()
+			.map(NetworkTaskJpaEntity::toDomain)
+			.toList();
+	}
+}
