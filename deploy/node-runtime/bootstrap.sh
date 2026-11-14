@@ -193,7 +193,10 @@ fi
 
 # ---------------------------------------------------------------- fluxo completo
 mkdir -p "$NODE_HOME"
-chmod 700 "$NODE_HOME"
+# 711, não 700: o container roda como 10001 e o install/bootstrap como o
+# participante (1000 no host comum). O diretório é só caminho; a identidade é
+# entregue ao uid do container pelo install.sh --start (dono 10001:10001, 0640).
+chmod 711 "$NODE_HOME"
 
 umask 177
 printf '%s\n' "$SOURCE" > "$NODE_HOME/runtime-source"

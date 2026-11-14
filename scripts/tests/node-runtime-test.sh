@@ -7,7 +7,7 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 NODE_DIR="$ROOT/deploy/node-runtime"
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+
 
 for tool in bash head sed grep dirname pwd mkdir stat chmod read nproc awk date tar gzip cat sha256sum tr rm; do
   location="$(command -v "$tool")"
@@ -88,7 +88,13 @@ NH="$TMP/node-home"
 out=$(NODE_HOME="$NH" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" \
   --control-plane https://cp.test --token tok_ok --region sa-east-1 --country BR 2>&1) ||
   { printf '[FAIL] enroll saiu com erro:\n%s\n' "$out" >&2; exit 1; }
-assert_eq 'enroll grava node.json com 600' '600' "$(stat -c '%a' "$NH/node.json")"
+# 600 na criação (o enroll pode rodar sem docker, sem como ajustar o dono); o
+# --start entrega o estado ao uid do container, que é quem precisa ler.
+assert_eq 'enroll grava node.json só para o dono (600)' '600' "$(stat -c '%a' "$NH/node.json")"
+# Defeito real (ensaio de ponta a ponta): NODE_HOME em 700 é inatravessável para o
+# uid 10001 do container, e o nó subia em restart loop com "sem node.json" mesmo com
+# o arquivo ali. O diretório é caminho (711); o arquivo é credencial (600).
+assert_eq 'NODE_HOME atravessável pelo container, não por outros usuários (711)' '711' "$(stat -c '%a' "$NH")"
 assert_contains 'enroll pede a API key' "$out" '--set-key'
 assert_contains 'região vai aninhada em location, como o contrato documenta' \
   "$(cat "$TMP/curl-calls")" '"location":{"region":"sa-east-1","country":"BR"}'
@@ -185,9 +191,22 @@ assert_contains 'restore devolve o mesmo nodeId' "$out" 'nd_teste123'
 assert_eq 'node.json restaurado com 600' '600' "$(stat -c '%a' "$NH/node.json")"
 assert_eq 'api-key restaurada com 600' '600' "$(stat -c '%a' "$NH/api-key")"
 make_command curl "case \"\${@: -1}\" in */network/nodes/heartbeat) printf '%s' '$HB_BODY' ;; *) exit 22 ;; esac"
-make_command docker 'case "$*" in *"ps --format"*) exit 1 ;; esac; exit 0'
+make_command docker "case \"\$*\" in *\"ps --format\"*) exit 1 ;; compose*) printf \"%s | node_home=%s | cp=%s\\n\" \"\$*\" \"\${NODE_HOME:-}\" \"\${CONTROL_PLANE_URL:-}\" >> \"$TMP/compose-install\"; exit 0 ;; esac; exit 0"
 out=$(NODE_HOME="$NH" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" --start --control-plane https://cp.test 2>&1)
 assert_contains 'nó restaurado autentica com a mesma identidade' "$out" 'Estado do nó no Control Plane: ACTIVE'
+# O compose lê o ambiente do docker, não o do shell: sem NODE_HOME exportado o `up -d`
+# aborta DEPOIS de o heartbeat já ter provado a credencial (achado no ensaio de R113).
+assert_eq '--start exporta NODE_HOME para o compose' "$NH" "$(sed -n 's/.*node_home=\([^ ]*\).*/\1/p' "$TMP/compose-install" | head -n 1)"
+assert_eq '--start exporta a URL do Control Plane para o compose' 'https://cp.test' "$(sed -n 's/.* | cp=\(.*\)$/\1/p' "$TMP/compose-install" | head -n 1)"
+# Defeito de campo (ensaio ponta a ponta): com o Docker remapeando o dono do diretório
+# montado para 1000:1000, o nó via "sed: Permission denied" no node.json mesmo com o
+# arquivo em 0644 — o kernel nega arquivo de outro usuário em diretório que não é
+# seu. O --start entrega o estado ao uid do container e afrouxa para 0640; quem não
+# tem docker não é enganado: recebe aviso do que fazer.
+make_command docker "case \"\$*\" in *\"ps --format\"*) exit 1 ;; compose*) exit 0 ;; esac; exit 0"
+make_command chown "exit 1"
+out=$(NODE_HOME="$NH" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" --start --control-plane https://cp.test 2>&1)
+assert_contains 'sem permissão para dar o diretório ao container, o start avisa' "$out" 'não consegui dar o diretório ao uid 10001'
 
 # ------------------------------------------------- install.sh --update / --rollback
 # A troca de versão vive no bootstrap.sh e o install.sh DELEGA — dois caminhos
@@ -266,7 +285,7 @@ bootstrap_docker() {
   make_command docker 'case "$*" in
     build*) exit 0 ;;
     image\ inspect*) if [ "${DOCKER_INSPECT_FAIL:-0}" = "1" ]; then exit 74; fi; exit 0 ;;
-    compose*) printf "%s | tag=%s\n" "$*" "${NODE_RUNTIME_TAG:-}" >> "$COMPOSE_CALLS"; exit 0 ;;
+    compose*) printf "%s | tag=%s | node_home=%s | cp=%s\n" "$*" "${NODE_RUNTIME_TAG:-}" "${NODE_HOME:-}" "${CONTROL_PLANE_URL:-}" >> "$COMPOSE_CALLS"; exit 0 ;;
   esac; exit 0'
 }
 bootstrap_docker
@@ -307,6 +326,14 @@ assert_contains 'o @ da versão vira hífen na tag (não é válido em tag)' \
   "$(cat "$TMP/compose-calls")" 'tag=qa-deadbeef'
 assert_contains 'heartbeat declara o commit construído, não uma constante' \
   "$(cat "$TMP/curl-calls")" '"runtimeVersion":"qa@deadbeef"'
+# Defeito real de R113 (achado no ensaio de ponta a ponta): o compose lê o ambiente do
+# docker, não o do shell, e `--start` exportava só CONTROL_PLANE_URL — sem NODE_HOME o
+# primeiro `up -d` abortava com "rode o install.sh, que exporta NODE_HOME" DEPOIS de o
+# heartbeat já ter provado a credencial. O stub registra o que chegou exportado.
+COMPOSE_NODE_HOME=$(sed -n 's/.*node_home=\([^ ]*\) |.*/\1/p' "$TMP/compose-calls" | head -n 1)
+assert_eq 'compose recebe NODE_HOME exportado (senão aborta no up)' "$NHB" "$COMPOSE_NODE_HOME"
+COMPOSE_CP=$(sed -n 's/.*cp=\([^ ]*\)$/\1/p' "$TMP/compose-calls" | head -n 1)
+assert_eq 'compose recebe a URL do Control Plane' 'https://cp.test' "$COMPOSE_CP"
 assert_contains 'bootstrap encerra com o nó em operação' "$out" 'Nó em operação: qa@deadbeef'
 
 # Pacote adulterado (sha divergente do SHA256SUMS publicado) é recusado e o

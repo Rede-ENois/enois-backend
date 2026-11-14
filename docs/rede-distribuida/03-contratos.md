@@ -24,6 +24,9 @@ Uma requisição de nó **sem** `X-Node-Id` válido, chave válida e certificado
 
 ### `POST /network/nodes/enroll`
 Sem `X-Session-Token`. A credencial é o **token de provisionamento de uso único**.
+O nó é chamador de servidor, não navegador: `/network/**` **não exige origem**
+(como os webhooks — cada rota autentica por conta própria), então o enroll funciona
+por `curl` de dentro do container, sem `Origin` nem `X-Client-Origin`.
 
 ```json
 {

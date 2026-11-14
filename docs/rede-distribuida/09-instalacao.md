@@ -105,7 +105,7 @@ NODE_HOME=/var/lib/enois-node ./node-doctor.sh --control-plane https://<control-
 ```
 
 Checa dependências, identidade registrada, permissão da chave (600) e do
-diretório (700), **presença e permissão do pino da config** (sem pino o runtime
+diretório (711 até a entrega ao container; 750 depois), **presença e permissão do pino da config** (sem pino o runtime
 recusa toda config — o doctor aponta o `--start` que resolve), estado do
 container e conectividade com o Control Plane.
 Sai 0 quando não há FAIL; WARN não impede a operação. Nunca imprime a API key.
@@ -306,8 +306,8 @@ release oficial conferido por sha256, ou vindo do git na fonte de verdade.
 
 | caminho | conteúdo | permissão |
 |---|---|---|
-| `$NODE_HOME/node.json` | resposta do enroll (`nodeId`, estado) | 600 |
-| `$NODE_HOME/api-key` | a API key do nó em claro — único lugar | 600 |
+| `$NODE_HOME/node.json` | resposta do enroll (`nodeId`, estado) | 600 até o `--start`; 640 depois (dono 10001) |
+| `$NODE_HOME/api-key` | a API key do nó em claro — único lugar | 600 até o `--start`; 640 depois (dono 10001) |
 | `$NODE_HOME/pinning-key` | a chave pública do Control Plane, pinada no enroll ou no primeiro `--start` | 600 |
 | `$NODE_HOME/term` | o maior `term` de autoridade já aceito — config de termo menor é recusada | 600 |
 | `$NODE_HOME/runtime-source` | a fonte de verdade do código (`qa` ou `main` — lista fechada) | 600 |
@@ -320,6 +320,22 @@ release oficial conferido por sha256, ou vindo do git na fonte de verdade.
 | `$NODE_HOME/edge/cursor` | o último `seq` do feed de mudanças já aplicado no cache | 600 |
 | `$NODE_HOME/edge/<kind>/<id>.json` + `.version` | conteúdo público em cache de borda e a versão confirmada | 600 |
 | volume `enois-node` | workspace do runtime no container | — |
+
+**Quem é o dono do estado.** O container roda como `10001:10001` (o Dockerfile),
+e o `install.sh` roda como o participante (uid 1000 num host comum). Até o
+`--start` os arquivos ficam `600` do participante, porque o enroll pode acontecer
+sem docker. O `--start` é quem entrega o estado ao uid do container: `chown
+10001:10001` do diretório, `750` nele e `640` nos arquivos de identidade — dono
+lê e escreve, outros não leem. O `chown` precisa de privilégio; sem ele o
+instalador avisa e o nó pode não conseguir ler a própria identidade.
+
+Por que não `644`: medido no ensaio (container `10001`, diretório montado que o
+Docker registra como `1000:1000`, kernel com `fs.protected_regular=2`). O uid
+10001 lia um arquivo `644` de outro dono numa hierarquia montada, e recebia
+`Permission denied` em `node.json` (`600`) — o nó subia, não achava a identidade
+e reiniciava. Depois da entrega ao uid do container o arquivo é **do próprio nó**
+(`640`, dono 10001), e a leitura não depende de quem o Docker diz que é o dono do
+diretório.
 
 `NODE_HOME` padrão é `/var/lib/enois-node`; sobrescreva por ambiente. O par
 `nodeId` + chave é a identidade do nó: apagar os dois arquivos não "desregistra"

@@ -56,7 +56,11 @@ while (($#)); do
 done
 
 mkdir -p "$NODE_HOME"
-chmod 700 "$NODE_HOME"
+# 700 travaria o container: o runtime roda como 10001 (Dockerfile) e, num host
+# comum, o install roda como o participante (1000). Ajuste definitivo (dono 10001)
+# é feito no --start, onde o docker já é obrigatório; aqui o diretório só precisa
+# ser atravessável — os arquivos de credencial ficam 0600 do dono.
+chmod 711 "$NODE_HOME"
 
 # ------------------------------------------------- --backup / --restore
 # O par node.json + api-key é a identidade do nó (04-identidade-e-autorizacao.md):
@@ -152,6 +156,7 @@ if [[ -z "$MODE" ]]; then
 
     umask 177
     printf '%s\n' "$enroll" > "$NODE_HOME/node.json"
+    # o dump traz a API key; fica 600 até o --start entregar ao uid do container
     # Pino da config assinada (03-contratos.md §2): a chave pública lida AGORA na config é
     # a que todas as configs seguintes têm de carregar — o runtime recusa as outras.
     pin=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
@@ -228,7 +233,30 @@ if [[ ! -s "$NODE_HOME/pinning-key" ]]; then
 fi
 
 for tool in docker; do command -v "$tool" >/dev/null 2>&1 || die "Comando ausente: $tool"; done
-export CONTROL_PLANE_URL
+# O container roda como uid 10001 e precisa LER a identidade do nó. No ensaio com
+# kernel fs.protected_regular=2 e o Docker registrando 1000:1000 no diretório
+# montado, o uid 10001 não lia node.json — o nó subia sem identidade e reiniciava.
+# Por isso o estado é entregue ao uid do container: dono e grupo 10001:10001,
+# diretório 750 e arquivos 640 (dono lê e escreve; outros não leem).
+if chown 10001:10001 "$NODE_HOME" 2>/dev/null; then
+  chmod 750 "$NODE_HOME"
+  umask 027
+  for arq in node.json api-key control-plane runtime-version; do
+    [[ -s "$NODE_HOME/$arq" ]] && chmod 640 "$NODE_HOME/$arq"
+  done
+  info "Estado do nó em $NODE_HOME pertence a 10001:10001 (o usuário do container)."
+else
+  info "Aviso: não consegui dar o diretório ao uid 10001 (rode com sudo). O nó pode não conseguir ler a própria identidade."
+fi
+
+# O compose lê o ambiente do docker, não as variáveis deste shell: sem exportar
+# NODE_HOME ele aborta com "rode o install.sh, que exporta NODE_HOME" — mesmo
+# depois de o install ter sido rodado, e depois de o heartbeat já ter provado a
+# credencial. E CONTROL_PLANE_URL precisa ser ATRIBUÍDA: `export VAR` sem valor
+# emite vazio, e o compose aborta com "informe a URL do Control Plane" mesmo com
+# --control-plane na linha de comando.
+CONTROL_PLANE_URL="$CONTROL_PLANE"
+export NODE_HOME CONTROL_PLANE_URL
 # A tag da imagem é a VERSÃO verificada pelo bootstrap ("qa-<sha8>"), não uma tag
 # móvel do registry: a imagem foi construída nesta máquina a partir do código
 # conferido, e o restart sobe exatamente a mesma. O compose default existe para o
