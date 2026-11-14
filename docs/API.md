@@ -1553,3 +1553,55 @@ Expressão só de constante (`5`) não é rolagem: sem dado, não há o que sort
 | `ROLL_REQUEST_ALREADY_ANSWERED` | 409 | O pedido já foi respondido — a segunda resposta é recusada |
 | `ROLL_LABEL_MISMATCH` | 400 | Rótulo da resposta contradiz o do pedido |
 | `ROLL_NOT_FOUND` | 404 | Rolagem inexistente na campanha |
+
+## Éroleplay — chat da campanha
+
+Prefixo do controller: `/roleplay/campaigns/{id}/chat` (o gateway remove `/api`). **Nenhuma rota
+desta seção é pública**: o chat é a cena da mesa, e quem não participa não lê nada — nem o canal
+público. As escritas respondem sob `Idempotency-Key` — repetir a mesma chave devolve a mesma
+mensagem, não uma segunda publicação.
+
+Os canais são dois e a diferença é semântica: `IC` (na voz do personagem — o que se diz é cena) e
+`OOC` (coordenação entre as pessoas reais). O par (campanha, canal) é o endereço; não há entidade
+de canal para configurar.
+
+### Rotas
+
+| Método | Caminho | Quem | O que faz |
+|---|---|---|---|
+| `POST` | `/roleplay/campaigns/{id}/chat` | participante | Publica; corpo `{ "channel": "IC\|OOC", "content", "recipientId"? }` |
+| `GET` | `/roleplay/campaigns/{id}/chat?channel=IC` | participante | Histórico do canal (teto de 100), já recortado por quem pede |
+| `GET` | `/roleplay/campaigns/{id}/chat/pinned` | participante | As fixadas da campanha (teto de 20), no recorte de quem pede |
+| `GET` | `/roleplay/campaigns/{id}/chat/{messageId}` | quem pode ler | Uma mensagem; quem não pode ler recebe 404 |
+| `POST` | `/roleplay/campaigns/{id}/chat/{messageId}/pin` | mestre | Fixa (não reescreve conteúdo) |
+| `POST` | `/roleplay/campaigns/{id}/chat/{messageId}/unpin` | mestre | Desfixa |
+| `GET` | `/roleplay/campaigns/{id}/chat/presence` | participante | Quem da mesa está com stream aberto agora (papel + entrada) |
+
+### Regras
+
+- **A mensagem é criada uma vez.** Não há PUT nem DELETE: o que foi dito foi dito. O único estado
+  que muda é a fixação — decisão do mestre, idempotente nos dois sentidos, que não altera o
+  conteúdo.
+- **O aparte privado** (`recipientId`) é visível só para remetente, destinatário e mestre — o
+  mestre é da mesa. Na listagem, a mensagem alheia simplesmente não entra; na leitura por id, a
+  recusa é `404` ("não existe para você"), porque não confirma existência.
+- **Teto do conteúdo:** 1 a 2000 caracteres, aparado no servidor.
+- **Tempo real:** o aviso de mudança sai pelo evento `campaign` do stream de mensagens
+  (`GET /conversations/stream`, o mesmo canal da caixa de entrada e das chamadas). O corpo do
+  evento só leva `campaignId` — a mensagem nunca viaja no stream; o cliente recarrega pelos
+  endpoints desta seção, que autorizam de novo.
+- **Presença:** participante + papel + data de entrada de quem tem stream aberto. Nunca duração de
+  sessão nem identificador de conexão.
+
+### Códigos de erro próprios
+
+| Código | HTTP | Quando |
+|---|---|---|
+| `CHAT_CHANNEL_REQUIRED` | 400 | Canal ausente ou vazio |
+| `CHAT_CHANNEL_INVALID` | 400 | Canal fora de `IC`/`OOC` |
+| `CHAT_MESSAGE_EMPTY` | 400 | Conteúdo vazio ou só de espaços |
+| `CHAT_MESSAGE_TOO_LONG` | 400 | Conteúdo acima de 2000 caracteres |
+| `CHAT_RECIPIENT_SELF` | 400 | Aparte privado para si mesmo |
+| `CHAT_MESSAGE_NOT_FOUND` | 404 | Mensagem inexistente na campanha — ou não é do leitor |
+| `CHAT_MASTER_REQUIRED` | 403 | Fixar/desfixar sem ser o mestre |
+| `CAMPAIGN_NOT_A_MEMBER` | 403 | Ler o chat sem participar da campanha |

@@ -30,8 +30,8 @@ explícito, nunca com comportamento genérico inventado.
 | 2 | Registro de sistemas + primeiro `SystemAdapter` | concluída |
 | 3 | Character Sheet Engine (modelo do mestre, preenchimento, privacidade por campo) | concluída |
 | 4 | Dice Engine (servidor, registro imutável, rolagem pedida pelo mestre) | concluída |
-| 5 | Chat de campanha (IC/OOC, privado, fixado, presença) | em andamento |
-| 6 | Voz por mesa via Épapo + mesa virtual | pendente |
+| 5 | Chat de campanha (IC/OOC, privado, fixado, presença) | concluída |
+| 6 | Voz por mesa via Épapo + mesa virtual | em andamento |
 | 7 | World Builder | pendente |
 | 8 | Biblioteca e compartilhamento | pendente |
 | 9 | Front do Éroleplay (identidade visual própria, tema por campanha) | pendente |
@@ -85,9 +85,9 @@ explícito, nunca com comportamento genérico inventado.
 
 ### Fase 5 — chat de campanha
 
-- [ ] Canais IC/OOC por campanha, privados e fixados
-- [ ] Presença via SSE reaproveitando `MessageStreamHub`
-- [ ] Persistência + API + testes
+- [x] Canais IC/OOC por campanha, privados e fixados
+- [x] Presença via SSE reaproveitando `MessageStreamHub`
+- [x] Persistência + API + testes
 
 ### Fase 6 — voz e mesa virtual
 
@@ -115,12 +115,11 @@ explícito, nunca com comportamento genérico inventado.
 
 ## 5. Próxima tarefa
 
-**Fase 5**: chat de campanha.
+**Fase 6**: voz e mesa virtual.
 
-Começo: canais IC/OOC por campanha com a mesma isolamento do módulo (autorização pela matriz de
-capacidades), mensagens fixadas pelo mestre, conversa privada entre dois participantes e presença
-via SSE reaproveitando o `MessageStreamHub` — sem tocar no módulo de mensagens 1:1 existente. A
-campanha é a fronteira: mensagem de chat vive dentro dela e herda o recorte de participação.
+Começo: a sessão de campanha ganha referência `voiceRoomId` para a chamada do Épapo (reusando os
+contratos existentes de `/chamadas`, sem inventar sala nova) e o estado da mesa (turnos, tokens,
+posições) vai para o backend. A campanha continua sendo a fronteira de autorização.
 
 ## 6. Critérios de encerramento do agendamento
 

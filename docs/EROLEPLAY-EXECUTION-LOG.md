@@ -309,3 +309,81 @@ fechado. Todas corrigidas no teste, sem afrouxar a regra de produção.
 
 - Fases 5 a 10 (chat, voz/mesa virtual, world builder, biblioteca, front, endurecimento).
 - A origem rastreável da frente ainda não foi registrada como issue no backlog.
+
+## Rodada 5 — 2026-11-14 — Fase 5 (chat de campanha)
+
+**O que foi reutilizado (sem reinvenção):**
+
+- A matriz de capacidades da Fase 1 (`CampaignPermissions`) decide quem fala (`POST_IN_CAMPAIGN`)
+  e quem lê (`VIEW_CAMPAIGN`); a `CampaignService` ganhou `requireCapability` para o resto do
+  módulo perguntar pela régua sem reimplementá-la.
+- O stream de mensagens (`MessageStreamHub`, SSE por usuário) agora também entrega o evento
+  `campaign` — "o chat da campanha X mudou". O hub é a infraestrutura única de stream; o corpo só
+  leva o id da campanha, o cliente recarrega pelo endpoint que autoriza de novo. Nenhuma mensagem
+  viaja no stream.
+- `IdempotencyApplicationService` em toda escrita; `WriteRouteInterceptor` segue barrando escrita
+  sem sessão (nenhuma rota de chat entrou na allowlist pública).
+- Padrões de teste do módulo: `TestAuthHelper`, fixtures com prefixo próprio, H2 compartilhada.
+
+**O que foi implementado:**
+
+- `ChatChannel` (domínio): IC (na voz do personagem) e OOC (coordenação da mesa). A diferença é
+  semântica; o par (campanha, canal) é o endereço — não há tabela de canais para configurar.
+- `CampaignMessage` (domínio): conteúdo aparado de 1 a 2000 caracteres, criado uma vez e sem
+  reescrita; o único estado que muda depois é a FIXAÇÃO, decisão do mestre que não altera uma
+  vírgula do que está escrito. O aparte privado nasce com destinatário (recusa destinatário igual
+  ao autor). O recorte de leitura é regra de domínio: `visibleTo(readerId, readerIsMaster)`.
+- `CampaignChatService` (aplicação): publicar, histórico do canal, fixados, leitura por id,
+  fixar/desfixar e presença. Participação conferida em toda leitura; aparte visível só para
+  remetente, destinatário e mestre; na listagem a mensagem alheia some, na leitura por id a
+  recusa é 404 (não confirma existência); a fixação exige mestre (403).
+- `CampaignChatController` (API): `/roleplay/campaigns/{id}/chat` — POST publicar, GET histórico
+  (`?channel=IC|OOC`), GET `/pinned`, GET `/{messageId}`, POST `/{messageId}/pin`, POST
+  `/{messageId}/unpin`, GET `/presence`. Nenhuma rota pública.
+- Presença: `MessageStreamHub.hasOpenStream` cruzado com a lista de participantes — a fronteira da
+  campanha é conferida ANTES do cruzamento com o hub; quem tem aba aberta é só visível a quem já
+  passou pela autorização da campanha.
+- Persistência V296 (`roleplay_campaign_messages`): aditiva, `if not exists`, InnoDB,
+  charset/collation explícitos, sem FK; índices por (campanha, canal, criado em) e (campanha,
+  fixado em). A mensagem é criada uma vez; só o par de fixação muda.
+
+**Decisões de desenho:**
+
+1. O canal é par de valores (`IC`/`OOC`), não entidade: configurar canal é trabalho de front
+   disfarçado de back, e a mesa não pediu isso.
+2. O aparte é tri-lateral (remetente, destinatário, mestre): o mestre é da mesa, e esconder cena
+   dele romperia a função de quem arbitra o jogo. Não é ficha nem segredo de mestre — é conversa.
+3. Recusa de leitura alheia é 404, não 403: existência não se confirma.
+4. Fixação é idempotente nos dois sentidos (fixar o fixado e desfixar o solto devolvem o mesmo
+   estado) e nunca reescreve conteúdo.
+5. O evento `campaign` segue o padrão `CallChanged` do hub: publicado dentro da transação,
+   entregue depois do commit, corpo só com ids.
+6. O histórico é teto de 100 por consulta; fixados, teto de 20 — pin que vira segundo histórico
+   perde o sentido.
+7. Presença é leitura da campanha (não escrita) e devolve participante + papel + entrada — nunca
+   duração de sessão nem endereço.
+8. O hub virou público (classe e `hasOpenStream`) com a fronteira documentada: é o registro único
+   de "quem está com a aba aberta" da plataforma.
+
+**Testes (números reais):**
+
+- `CampaignMessageTests` (15, domínio): criação válida, canal OOC, recusas (canal nulo, vazia/
+  branca, acima do teto, aparte para si), teto exato com aparagem, recorte do aparte por leitor
+  (pontas e mestre; terceiro de fora), fixação preservando conteúdo/autoria/criação, idempotência
+  da fixação nos dois sentidos, reconstituição e tradução `wire` nos dois sentidos.
+- `CampaignChatFlowTests` (8, ponta a ponta): publicar grava e o histórico devolve o mesmo;
+  mesmo Idempotency-Key não publica duas vezes; canais separados; participante lê e quem não
+  participa leva 403; aparte visível só para pontas e mestre (terceiro não vê na lista e leva 404
+  por id); mestre fixa e jogador não (403); fixado aparece com conteúdo preservado; desfixar tira
+  do fixado; fixação preserva conteúdo; presença exige participação.
+- `CampaignChatSecurityTests` (7, isolamento/integridade): todas as 7 rotas 401 sem sessão; não
+  participante 403 nas quatro leituras/escritas; mensagem alheia não confirma existência (404 por
+  id, 403 no pin); aparte para não-participante recusado; id de mensagem de outra campanha não
+  serve (404 na leitura e no pin cruzados); registro sem rota de edição nem remoção (405 e o
+  conteúdo sobrevive); canal inválido e conteúdo vazio recusados sem gravar.
+- **Escopo ampliado na árvore final** (`./mvnw -Dtest='...17 classes...' test`): **152 testes, 0
+  falhas, 0 erros** — o módulo inteiro mais `AutomatedWritePathsTests` (2/2: nenhuma rota de chat
+  aceitou escrita sem sessão).
+- **Suíte inteira executada** (`./mvnw test`, 2026-11-14): **BUILD SUCCESS — 2767 testes, 0
+  falhas, 0 erros, 1 skip** (o skip é pré-existente, em `KofAgentLiveChannelTests`, e não é deste
+  módulo). Todas as 16 classes do Éroleplay passaram dentro dela, as 30 novas do chat inclusas.
