@@ -1082,6 +1082,7 @@ Detalhes em [`DIGEST.md`](DIGEST.md).
 | `NotificationCategory` | Mapa único kind → categoria de push (`ALWAYS` para segurança/moderação/sanção) |
 | `NotificationModule` | Single kind → interface area mapping (menu indicators); case-insensitive, unknown kinds are `OTHER` |
 | `NotificationPreferenceService` | Lê/grava as preferências (`notification_preferences`); `allowsPush(userId, kind)` |
+| `NotificationPreferenceRepository.findCommunityProjectSubscriberIds` | Página por `user_id` apenas de assinantes de projetos, limitada a 200 |
 | `NotificationPreferenceController` | GET/PUT /api/me/notification-preferences, GET /api/notifications/digest/unsubscribe |
 | `WeeklyDigestService` | Agendamento, conteúdo, envio único por semana ISO e token de descadastro |
 
@@ -1547,6 +1548,14 @@ Projetos da comunidade (páginas públicas com moderação própria) e projetos 
 | `GET /moderation/community-projects` / `POST /moderation/.../approve` / `.../reject` | Fila de revisão |
 | `POST /admin/.../suspend` / `.../unsuspend` | Suspender (admin) |
 | `GET /me/projects` / `POST /me/projects` / `PUT /me/projects/{projectId}` | Projetos do perfil |
+
+`communityProjects` é uma adesão explícita, desligada por padrão para contas novas e existentes
+(V292). A primeira aprovação registra `CommunityProjectPublished` junto da publicação, com bloqueio
+da linha para serializar aprovações. `NotificadorProjetoComunidade` entrega `NEW_COMMUNITY_PROJECT`
+em lotes de até 200 assinantes por evento da outbox, com continuação e recibo na mesma transação.
+Não avisa o autor nem identidades bloqueadas nos dois sentidos; revalida publicação, conta e adesão
+na entrega. Recusa, edição e restauração não geram novo lançamento. Contrato e limites em
+[`DIGEST.md`](DIGEST.md#novos-projetos-da-comunidade).
 
 O HTML dos projetos passa pelo `SafeHtml` e tem teto de 200.000 caracteres depois da limpeza.
 A coluna `user_projects.html` é `LONGTEXT` com charset `utf8mb4`, inclusive em bancos legados:

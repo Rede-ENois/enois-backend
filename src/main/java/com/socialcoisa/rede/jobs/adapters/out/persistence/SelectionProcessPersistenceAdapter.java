@@ -92,6 +92,16 @@ class SelectionProcessPersistenceAdapter implements SelectionProcessRepository {
 	}
 
 	@Override
+	public List<StageMovement> latestMovementsOf(java.util.Collection<Long> applicationIds) {
+		if (applicationIds.isEmpty()) {
+			return List.of();
+		}
+		return movements.findLatestPerApplication(applicationIds).stream()
+			.map(StageMovementJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
 	public StageNote saveNote(StageNote note) {
 		return notes.save(StageNoteJpaEntity.fromDomain(note)).toDomain();
 	}

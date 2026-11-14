@@ -39,6 +39,22 @@ that counts coin entries of someone who just acted leaves the `presenca:` entrie
 Concurrency tests (several threads sending the same requests at once) follow
 `PostCounterConcurrencyTests`; see [`CONCURRENCY.md`](CONCURRENCY.md) for what H2 cannot reproduce.
 
+`CommunityProjectNotificationTests` dirige o worker real por ids concretos, com relógio fixo.
+As fixtures de projetos ficam agendadas para esse relógio dentro da transação que grava o evento:
+workers de outros contextos compartilham o H2 e não podem disputar seus claims. Avisos, recibos,
+continuações e preferências dos assinantes do cenário são limpos mesmo quando uma asserção falha.
+
+`OutboxWorkerTests` e `OutboxRetentionWorkerTests` usam bases H2 próprias para impedir que workers
+de outros contextos disputem os claims. Nesses contextos, a ponte de fixtures `TestDatabaseSupport`
+é substituída para não redirecionar o helper estático de autenticação; os repositórios e workers
+continuam reais.
+
+A economia automática fica desligada em `src/test/resources/application.properties`: um cron
+não pode alterar a cotação compartilhada entre asserções de carteira e serviços. Os cenários de
+`CoinEconomyIsolationTests` chamam os dois jobs reais em um H2 próprio para garantir esse contrato;
+`CoinEconomyServiceTests` mantém a cobertura da publicação habilitada com relógio controlado.
+Isso não altera a configuração de produção.
+
 ## Estrutura de Testes
 
 Os testes estão em `src/test/java/com/socialcoisa/rede/` e seguem a mesma estrutura de pacotes do código fonte.

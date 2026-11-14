@@ -14,10 +14,12 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.socialcoisa.rede.media.application.port.out.MediaStorageGateway;
 import com.socialcoisa.rede.media.domain.MediaAsset;
+import com.socialcoisa.rede.shared.web.TestDatabaseSupport;
 
 /**
  * O worker de exclusao de midia nao pode segurar uma conexao do banco enquanto conversa com o CDN e
@@ -33,9 +35,13 @@ import com.socialcoisa.rede.media.domain.MediaAsset;
  */
 @SpringBootTest
 @TestPropertySource(properties = {
+		"spring.datasource.url=jdbc:h2:mem:media_deletion_transaction;MODE=MySQL;DB_CLOSE_DELAY=-1",
 		"rede.media.deletion-worker-delay-ms=3600000",
 		"rede.media.deletion-worker-initial-delay-ms=3600000" })
 class MediaDeletionWorkerTransactionTests {
+
+	/** O H2 próprio não deve substituir a ponte estática usada por testes autenticados. */
+	@MockitoBean private TestDatabaseSupport testDatabaseSupport;
 
 	/** Conta, por chamada, se havia transacao ativa no thread. */
 	static final List<Boolean> INSIDE_TRANSACTION = new ArrayList<>();
