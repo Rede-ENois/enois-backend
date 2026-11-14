@@ -42,7 +42,8 @@ import com.socialcoisa.rede.moderation.application.port.out.ReportedMediaReader;
  * varredura de mídia (MediaSafetySweepWorker) cobre o caso com revisão humana.</p>
  */
 @Component
-class ReportedMediaAdapter implements ReportedMediaReader {
+class ReportedMediaAdapter implements ReportedMediaReader,
+		com.socialcoisa.rede.moderation.application.port.out.MetadadosMidiaDenunciadaReader {
 
 	private static final Logger LOG = LoggerFactory.getLogger(ReportedMediaAdapter.class);
 
@@ -78,6 +79,15 @@ class ReportedMediaAdapter implements ReportedMediaReader {
 	 * sem armazenamento ou com download que falha, a lista volta vazia e a decisão cai na revisão
 	 * humana — nunca em "olhei e está tudo bem".
 	 */
+	@Override
+	public boolean hasMediaOf(com.socialcoisa.rede.moderation.domain.Report report) {
+		if (report.targetType() == com.socialcoisa.rede.moderation.domain.TargetType.CALL) {
+			return callReports.findByReportId(report.id()).map(context -> context.mediaId())
+				.filter(id -> !id.isBlank()).isPresent();
+		}
+		return !mediaIdsOf(report.targetType().name(), report.targetId()).isEmpty();
+	}
+
 	@Override
 	public List<byte[]> imagesOf(com.socialcoisa.rede.moderation.domain.Report report, int limit) {
 		if (report == null || report.targetType() != com.socialcoisa.rede.moderation.domain.TargetType.CALL) {

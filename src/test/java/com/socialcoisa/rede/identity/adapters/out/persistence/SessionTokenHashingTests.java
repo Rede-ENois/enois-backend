@@ -29,6 +29,67 @@ class SessionTokenHashingTests {
 
 	@Autowired
 	private SessionTokenHashMigration migration;
+	@Autowired private SpringDataAuthSessionJpaRepository repository;
+
+	@Autowired
+	private com.socialcoisa.rede.moderation.application.port.out.SanctionRepository sanctions;
+	@Autowired private org.springframework.transaction.support.TransactionTemplate transacao;
+
+	@Test
+	void revogacaoInvalidaLeituraReutilizadaNaMesmaRequisicao() {
+		Instant agora = Instant.now();
+		sessions.save("synthetic-705-revoke", "synthetic-705-revoke-refresh", USER, agora, agora.plusSeconds(60), agora.plusSeconds(120), null);
+		var anterior = org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+		var request = new org.springframework.web.context.request.ServletRequestAttributes(new org.springframework.mock.web.MockHttpServletRequest());
+		org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(request);
+		try {
+			assertThat(sessions.findActiveUserId("synthetic-705-revoke", agora)).contains(USER);
+			transacao.executeWithoutResult(ignorado -> sessions.revokeAllByUser(USER, agora));
+			assertThat(sessions.findActiveUserId("synthetic-705-revoke", agora)).isEmpty();
+		}
+		finally {
+			org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(anterior);
+			request.requestCompleted();
+		}
+	}
+
+	@Test
+	void sessaoNormalNaoAutorizaContaSuspensaMesmoAntesDaRevogacao() {
+		Instant now = Instant.now();
+		sessions.save("synthetic-705-stale", "synthetic-705-stale-refresh", USER, now, now.plusSeconds(3600),
+			now.plusSeconds(86_400), null);
+		var sanction = sanctions.save(com.socialcoisa.rede.moderation.domain.UserSanction.suspended(
+			"sanc_hash705_stale", USER, "admin:705", "Conduta repetida.", now));
+		try {
+			assertThat(sessions.findActiveUserId("synthetic-705-stale", now)).isEmpty();
+			assertThat(sessions.findActiveUserIdByRefreshToken("synthetic-705-stale-refresh", now)).isEmpty();
+		}
+		finally {
+			sanctions.save(sanction.remove("review705", now));
+		}
+	}
+
+	@Test
+	void sessaoLimitadaPersisteEscopoHashExpiracaoERevogacaoSemRenovacao() {
+		Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+		sessions.saveSanctionsOnly("synthetic-705-restricted", USER, now, now.plusSeconds(60), null);
+		var row = jdbc.queryForMap("select token, refresh_token, sanctions_only, expires_at, refresh_expires_at from auth_sessions where user_id = ?", USER);
+		assertThat(row.get("token")).asString().matches("[0-9a-f]{64}").isNotEqualTo("synthetic-705-restricted");
+		assertThat(row.get("refresh_token")).isNull();
+		assertThat(row.get("sanctions_only")).isEqualTo(true);
+		assertThat(((Timestamp) row.get("expires_at")).toInstant()).isBeforeOrEqualTo(now);
+		assertThat(((Timestamp) row.get("expires_at")).toInstant()).isBefore(now.minusSeconds(120));
+		assertThat(((Timestamp) row.get("refresh_expires_at")).toInstant()).isAfter(now);
+		assertThat(repository.findTokensExpiredBefore(now, org.springframework.data.domain.PageRequest.ofSize(1000)))
+			.doesNotContain((String) row.get("token"));
+		assertThat(sessions.findActiveSanctionsUserId("synthetic-705-restricted", now)).contains(USER);
+		assertThat(sessions.findActiveSanctionsUserId((String) row.get("token"), now)).isEmpty();
+		assertThat(sessions.findActiveUserId("synthetic-705-restricted", now)).isEmpty();
+		assertThat(sessions.findActiveUserIdByRefreshToken("synthetic-705-restricted", now)).isEmpty();
+		assertThat(sessions.findActiveSanctionsUserId("synthetic-705-restricted", now.plusSeconds(60))).isEmpty();
+		sessions.revoke("synthetic-705-restricted", now);
+		assertThat(sessions.findActiveSanctionsUserId("synthetic-705-restricted", now)).isEmpty();
+	}
 
 	@BeforeEach
 	void createUser() {

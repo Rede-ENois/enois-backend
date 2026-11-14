@@ -41,8 +41,14 @@ class OAuthBrowserReturn {
 		if (!StringUtils.hasText(redirectUrl)) {
 			return auth;
 		}
+		if (auth.twoFactor() != null) {
+			return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(redirectUrl + "?status=two_factor_required"))
+				.header(HttpHeaders.SET_COOKIE, sessionCookies.challenge(auth.twoFactor().challengeId(),
+					auth.twoFactor().expiresAt()).toArray(String[]::new)).build();
+		}
 		// No credential in the URL (history, logs, Referer): the session rides on the 302 cookies.
-		return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(redirectUrl + "?status=ok"))
+		String scope = "SANCTIONS_ONLY".equals(auth.accessScope()) ? "&accessScope=SANCTIONS_ONLY" : "";
+		return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(redirectUrl + "?status=ok" + scope))
 			.header(HttpHeaders.SET_COOKIE, sessionCookies.issue(auth.token(), auth.expiresAt(), auth.refreshToken(),
 				auth.refreshExpiresAt()).toArray(String[]::new))
 			.build();

@@ -29,7 +29,7 @@ import com.socialcoisa.rede.shared.web.TestAuthHelper;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * A suspensao com prazo trava login na hora; sem recurso no prazo vira BAN com purga
+ * A suspensao com prazo limita o login a decisao e recurso; sem recurso no prazo vira BAN com purga
  * sozinha, e com recurso pendente a conversao espera a decisao humana.
  */
 @SpringBootTest
@@ -57,7 +57,7 @@ class SuspensionFlowTests {
 	}
 
 	@Test
-	void suspendedAccountCannotLogin() throws Exception {
+	void suspendedAccountReceivesOnlySanctionsAccess() throws Exception {
 		var target = new TestAuthHelper(mockMvc, objectMapper).authenticate("susp_target");
 		var admin = new TestAuthHelper(mockMvc, objectMapper).authenticate("susp_admin");
 
@@ -73,14 +73,14 @@ class SuspensionFlowTests {
 		mockMvc.perform(get("/auth/me").header("X-Session-Token", target.token()))
 			.andExpect(status().isUnauthorized());
 
-		// ...e o login nao sai mais.
+		// ...e a nova autenticacao nao recupera acesso normal.
 		mockMvc.perform(post("/auth/login")
 				.header("Idempotency-Key", "susp-login")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of(
 					"email", "susp_target@test.com", "password", "Test1234!"))))
-			.andExpect(status().isForbidden())
-			.andExpect(jsonPath("$.code").value("ACCOUNT_BANNED"));
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.accessScope").value("SANCTIONS_ONLY"));
 	}
 
 	@Test

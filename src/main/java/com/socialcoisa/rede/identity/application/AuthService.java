@@ -9,7 +9,6 @@ import java.util.Base64;
 import java.util.Locale;
 import java.util.UUID;
 
-import org.springframework.beans.factory.annotation.Value;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -66,8 +65,7 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 	private static final Duration VERIFICATION_RESEND_WINDOW = Duration.ofHours(1);
 	private static final int VERIFICATION_RESEND_LIMIT = 3;
 
-	private final Duration accessTokenTtl;
-	private final Duration refreshTokenTtl;
+	private final EmissorSessaoService emissorSessao;
 	private final UserProfileRepository userProfileRepository;
 	private final CredentialRepository credentialRepository;
 	private final AuthSessionRepository authSessionRepository;
@@ -81,25 +79,21 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 	private final Clock clock;
 	private volatile String dummyPasswordHash;
 
-	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
 	private final org.springframework.jdbc.core.JdbcTemplate jdbc;
 	private final com.socialcoisa.rede.shared.security.IpRateLimiter rateLimiter;
 	private final SecureRandom secureRandom = new SecureRandom();
 
-	public AuthService(@Value("${rede.auth.access-token-ttl-minutes:60}") int accessTokenTtlMinutes,
-                       @Value("${rede.auth.refresh-token-ttl-days:30}") int refreshTokenTtlDays,
-                       UserProfileRepository userProfileRepository, CredentialRepository credentialRepository,
+	public AuthService(UserProfileRepository userProfileRepository, CredentialRepository credentialRepository,
                        AuthSessionRepository authSessionRepository, PasswordResetTokenRepository passwordResetTokenRepository,
                        EmailVerificationTokenRepository emailVerificationTokenRepository,
                        PendingSignupRepository pendingSignups,
                        TwoFactorService twoFactorService,
                        UserExternalIdentityRepository externalIdentityRepository,
                        PasswordHasher passwordHasher, EmailService emailService, Clock clock,
-                       com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate,
+                       EmissorSessaoService emissorSessao,
                        org.springframework.jdbc.core.JdbcTemplate jdbc,
                        com.socialcoisa.rede.shared.security.IpRateLimiter rateLimiter) {
-		this.accessTokenTtl = Duration.ofMinutes(accessTokenTtlMinutes);
-		this.refreshTokenTtl = Duration.ofDays(refreshTokenTtlDays);
+		this.emissorSessao = emissorSessao;
 		this.userProfileRepository = userProfileRepository;
 		this.credentialRepository = credentialRepository;
 		this.authSessionRepository = authSessionRepository;
@@ -111,7 +105,6 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 		this.passwordHasher = passwordHasher;
         this.emailService = emailService;
         this.clock = clock;
-		this.sanctionGate = sanctionGate;
 		this.jdbc = jdbc;
 		this.rateLimiter = rateLimiter;
 	}
@@ -236,12 +229,6 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 		UserProfile profile = userProfileRepository.findById(credential.userId())
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
 		requireVerifiedIdentity(profile);
-		// Ban (recurso negado) trava ate o login: a conta nao emite sessao nova.
-		if (sanctionGate.banned(profile.id())) {
-			LOG.warn("auth_login_blocked reason=account_banned userId={}", profile.id());
-			throw new ApiException(403, "ACCOUNT_BANNED",
-				"Esta conta foi banida apos revisao do recurso. Fale com o suporte se precisar.");
-		}
 
 		// Senha correta e o primeiro passo: com segundo fator ativo, aqui sai um desafio, nao sessao.
 		var requiredMethod = twoFactorService.requiredMethod(profile.id());
@@ -250,8 +237,9 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 			TwoFactorChallenge challenge = twoFactorService.startChallenge(profile.id(), requiredMethod.get());
 			return LoginResult.twoFactorRequired(challenge.id(), challenge.method().name(), challenge.expiresAt());
 		}
-		LOG.info("auth_login_success userId={}", profile.id());
-		return LoginResult.authenticated(createResponse(profile, command.ip()));
+		AuthResponse response = emissorSessao.emitirAposFatores(profile, command.ip());
+		LOG.info("auth_login_success userId={} scope={}", profile.id(), response.accessScope());
+		return LoginResult.authenticated(response);
 	}
 
 	/** Conclui o login com o codigo do segundo fator (ou um codigo de recuperacao). */
@@ -264,12 +252,9 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 		String userId = twoFactorService.verifyChallenge(challengeId.trim(), code);
 		UserProfile profile = userProfileRepository.findById(userId)
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
-		if (sanctionGate.banned(profile.id())) {
-			throw new ApiException(403, "ACCOUNT_BANNED",
-				"Esta conta foi banida apos revisao do recurso. Fale com o suporte se precisar.");
-		}
-		LOG.info("auth_login_success userId={} via=2fa", profile.id());
-		return createResponse(profile, null);
+		AuthResponse response = emissorSessao.emitirAposFatores(profile, null);
+		LOG.info("auth_login_success userId={} via=2fa scope={}", profile.id(), response.accessScope());
+		return response;
 	}
 
 	@Override
@@ -622,15 +607,7 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 	}
 
 	private AuthResponse createResponse(UserProfile profile, String ip) {
-		Instant now = clock.instant();
-		Instant expiresAt = now.plus(accessTokenTtl);
-		Instant refreshExpiresAt = now.plus(refreshTokenTtl);
-		String token = newToken();
-		String refreshToken = newToken();
-		authSessionRepository.save(token, refreshToken, profile.id(), now, expiresAt, refreshExpiresAt,
-			ip == null || ip.isBlank() ? null : ip.trim());
-		return new AuthResponse(token, refreshToken, expiresAt, refreshExpiresAt,
-			AuthUserView.from(profile, hasUsablePassword(profile.id())));
+		return emissorSessao.emitir(profile, ip);
 	}
 
 	private AuthResponse refreshSession(String currentRefreshToken) {
@@ -643,7 +620,7 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 		}
 		UserProfile profile = userProfileRepository.findById(userId)
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
-		return createResponse(profile, null);
+		return emissorSessao.emitirAposFatores(profile, null);
 	}
 
 	@Override

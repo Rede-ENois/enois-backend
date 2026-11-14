@@ -25,10 +25,22 @@ public class CurrentUserResolver {
 	}
 
 	public CurrentUser resolve(String sessionToken) {
+		return resolve(sessionToken, false);
+	}
+
+	/** Apenas os endpoints da própria decisão e recurso podem aceitar o escopo limitado. */
+	public CurrentUser resolveSanctions(String sessionToken) {
+		return resolve(sessionToken, true);
+	}
+
+	private CurrentUser resolve(String sessionToken, boolean sanctionsOnly) {
 		if (!StringUtils.hasText(sessionToken)) {
 			throw new ApiException(401, "UNAUTHENTICATED", "Sessao invalida ou expirada.");
 		}
-		String resolvedUserId = authSessionRepository.findActiveUserId(sessionToken.trim(), clock.instant())
+		var identity = sanctionsOnly
+			? authSessionRepository.findActiveSanctionsUserId(sessionToken.trim(), clock.instant())
+			: authSessionRepository.findActiveUserId(sessionToken.trim(), clock.instant());
+		String resolvedUserId = identity
 			.orElseThrow(() -> new ApiException(401, "UNAUTHENTICATED", "Sessao invalida ou expirada."));
 		// Set before the verification check so a 403 EMAIL_NOT_VERIFIED is still attributed to the
 		// user. RequestObservabilityFilter logs it on the access line and clears it.

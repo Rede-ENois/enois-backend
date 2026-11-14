@@ -32,4 +32,10 @@ class BanContentArchivePersistenceAdapter implements BanContentArchiveRepository
 				e.contentId(), e.contentSnapshot(), e.archivedAt()))
 			.toList();
 	}
+
+	@Override
+	public java.util.Optional<String> findSnapshot(String sanctionId, String userId, String contentType, String contentId) {
+		return repository.findFirstBySanctionIdAndUserIdAndContentTypeAndContentIdOrderByArchivedAtDesc(
+			sanctionId, userId, contentType, contentId).map(BanContentArchiveJpaEntity::contentSnapshot);
+	}
 }

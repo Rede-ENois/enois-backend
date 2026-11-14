@@ -2,7 +2,8 @@
 
 Base URL: `http://localhost:8080`
 
-Autenticação via header: `Authorization: Bearer <session_token>`
+Navegadores usam cookies HttpOnly `enois_session` e `enois_refresh`. Escritas com cookie exigem
+`X-CSRF-Protection: 1`. Clientes não navegador usam `X-Session-Token`; não há bearer novo.
 
 ## Autenticação
 
@@ -38,11 +39,12 @@ Autenticação via header: `Authorization: Bearer <session_token>`
 }
 ```
 
-Resposta (signup e login):
+Resposta de login concluído (o cadastro inicia confirmação por e-mail, sem sessão):
 ```json
 {
-  "token": "abc123...",
-  "refreshToken": "def456...",
+  "expiresAt": "2026-11-14T13:00:00Z",
+  "refreshExpiresAt": "2026-12-14T12:00:00Z",
+  "accessScope": "FULL",
   "user": {
     "id": "user_xxx",
     "username": "joao-silva",
@@ -54,11 +56,17 @@ Resposta (signup e login):
 
 ### POST /api/auth/refresh
 
-```json
-{
-  "refreshToken": "def456..."
-}
-```
+No navegador, o refresh vem do cookie HttpOnly, sem corpo. Sessões `SANCTIONS_ONLY` não têm refresh.
+Tokens de sessão não aparecem no JSON.
+
+### Sanções e autenticação limitada
+
+`GET /api/me/sanctions` preserva sanções/recursos e acrescenta `serverNow`, `deadline`, `evidence`
+e `canAppeal`. `POST /api/me/sanctions/appeals` abre recurso do próprio titular.
+Suspensos autenticam com todos os fatores e recebem somente `accessScope: "SANCTIONS_ONLY"`, não
+uma sessão normal. `GET /api/auth/me` recusa esse escopo com `403 ACCOUNT_SUSPENDED`.
+O contrato completo de campos, prazos, erros, OAuth e `GET /api/auth/2fa/challenge` está em
+[`SANCOES.md`](SANCOES.md).
 
 ---
 

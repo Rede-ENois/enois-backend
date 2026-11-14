@@ -83,7 +83,12 @@ class WriteRouteInterceptor implements HandlerInterceptor {
 		if (PUBLIC_WRITES.stream().anyMatch(pattern -> matcher.match(pattern, path))) {
 			return true;
 		}
-		currentUserResolver.resolve(request.getHeader("X-Session-Token"));
+		if ("POST".equals(request.getMethod()) && "/me/sanctions/appeals".equals(path)) {
+			currentUserResolver.resolveSanctions(request.getHeader("X-Session-Token"));
+		}
+		else {
+			currentUserResolver.resolve(request.getHeader("X-Session-Token"));
+		}
 		return true;
 	}
 

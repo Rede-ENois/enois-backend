@@ -255,7 +255,7 @@ public class SanctionService {
 			throw new ApiException(400, "CANNOT_EDIT_OWN", "Você não pode corrigir a penalidade da própria conta.");
 		}
 		UserSanction updated = sanctions.save(sanction.escalateTo(type, cleanReason));
-		if (!sanction.isBlocked() && updated.isBlocked()) {
+		if ((!sanction.isBlocked() && updated.isBlocked()) || (!sanction.isBan() && updated.isBan())) {
 			sessions.revokeAllByUser(sanction.userId(), Instant.now(clock));
 		}
 		if (!sanction.isBan() && updated.isBan()) {

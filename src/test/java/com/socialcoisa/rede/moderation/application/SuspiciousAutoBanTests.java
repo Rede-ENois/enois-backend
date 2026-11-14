@@ -115,8 +115,12 @@ class SuspiciousAutoBanTests {
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of(
 					"email", "probe_staff_target@test.com", "password", "Test1234!"))))
-			.andExpect(status().isForbidden())
-			.andExpect(jsonPath("$.code").value("ACCOUNT_BANNED"));
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.accessScope").value("SANCTIONS_ONLY"));
+		assertThat(jdbc.queryForObject("select type from user_sanctions where user_id = ? and status = 'ACTIVE'",
+			String.class, target.userId())).isEqualTo("SUSPENDED");
+		mockMvc.perform(get("/auth/me").with(cenario.cliente()).header("X-Session-Token", target.token()))
+			.andExpect(status().isUnauthorized());
 
 		jdbc.update("delete from moderator_applications where user_id = ?", target.userId());
 	}
@@ -177,7 +181,7 @@ class SuspiciousAutoBanTests {
 		var report = cenario.executarRodada();
 		assertThat(report.banned()).isGreaterThanOrEqualTo(1);
 
-		// Sessão revogada e login bloqueado.
+		// A suspensão do worker continua revogando a sessão; nova entrada só consulta a decisão.
 		mockMvc.perform(get("/auth/me").with(cenario.cliente()).header("X-Session-Token", target.token()))
 			.andExpect(status().isUnauthorized());
 		mockMvc.perform(post("/auth/login")
@@ -186,8 +190,10 @@ class SuspiciousAutoBanTests {
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of(
 					"email", "probe_auto_target@test.com", "password", "Test1234!"))))
-			.andExpect(status().isForbidden())
-			.andExpect(jsonPath("$.code").value("ACCOUNT_BANNED"));
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.accessScope").value("SANCTIONS_ONLY"));
+		assertThat(jdbc.queryForObject("select type from user_sanctions where user_id = ? and status = 'ACTIVE'",
+			String.class, target.userId())).isEqualTo("SUSPENDED");
 
 		// Sanitização: o post saiu do banco, não só da listagem.
 		mockMvc.perform(get("/feed/posts/" + postId).with(cenario.cliente())).andExpect(status().isNotFound());

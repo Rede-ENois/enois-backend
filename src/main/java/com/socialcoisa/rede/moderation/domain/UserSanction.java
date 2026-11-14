@@ -4,8 +4,8 @@ import java.time.Instant;
 
 /**
  * Sancao de um usuario por moderacao. RESTRICTION trava publicar/comentar e pode ser revista
- * (recurso); SUSPENDED bloqueia como o BAN mas tem prazo de reversao (graca de 7 dias antes de
- * virar BAN definitivo); BAN e permanente e vem do recurso NEGADO por um humano.
+ * (recurso); SUSPENDED bloqueia o acesso normal e tem prazo de recurso (graca configurada antes
+ * da conversao para BAN). BAN e permanente e pode vir do recurso NEGADO por um humano.
  */
 public record UserSanction(String id, String userId, String reportId, SanctionType type, String reason,
 		SanctionStatus status, Instant createdAt, Instant removedAt, String removedBy) {
@@ -35,7 +35,7 @@ public record UserSanction(String id, String userId, String reportId, SanctionTy
 		return type == SanctionType.BAN || type == SanctionType.PERMABAN;
 	}
 
-	/** Bloqueio total de acesso (SUSPENDED, BAN ou PERMABAN): sem sessao nova. */
+	/** Sem acesso normal; SUSPENDED admite apenas consulta/recurso com autenticacao limitada. */
 	public boolean isBlocked() {
 		return isBan() || type == SanctionType.SUSPENDED;
 	}
