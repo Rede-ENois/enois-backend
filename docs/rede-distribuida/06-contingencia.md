@@ -123,7 +123,7 @@ Pré-requisitos, todos obrigatórios:
 - procedimentos de recuperação de dados documentados;
 - **prevenção de split-brain**.
 
-### 3.1 Recuperação regional (V289, R103)
+### 3.1 Recuperação regional (V304, R103)
 
 A região afetada sai, e os nós das outras atendem o que podem. A saída é **declaração humana com
 motivo obrigatório** (`POST /admin/network/regions`), pela mesma razão do modo operacional
@@ -151,13 +151,13 @@ então a tarefa presa voltava por claim vencido e era designada **ao mesmo nó**
 de tentativas.
 
 Tarefa com **alvo** num nó evacuado volta para a fila e **não** roda em outro nó: alvo é vínculo
-(V287), não preferência. Ela espera o prazo ou a região voltar.
+(V302), não preferência. Ela espera o prazo ou a região voltar.
 
 `GET /admin/network/tasks/overview` mostra `awaitingEvacuation` enquanto a drenagem regional não
 rodou — entre a declaração e o ciclo seguinte, é a diferença entre "nada aconteceu" e "há trabalho
 parado".
 
-**Prova:** `NetworkRegionTests` (13 testes; Q0 neutralizando as quatro portas falha em 6) e V289
+**Prova:** `NetworkRegionTests` (13 testes; Q0 neutralizando as quatro portas falha em 6) e V304
 aplicada duas vezes em MariaDB 11.4 real com `network_nodes`/`network_tasks` povoados antes.
 
 ### 3.2 Replicação geográfica (R104)
@@ -199,11 +199,11 @@ O Control Plane não pode ser ponto único de falha sem estratégia de recupera�
 5. Nó que detecta dois controladores com termos diferentes entra em `QUARANTINED` e para de aceitar
    tarefas até a situação resolver.
 
-### 4.1 O que está entregue (V288, R101 — regra 5 na R102)
+### 4.1 O que está entregue (V303, R101 — regra 5 na R102)
 
 | regra | onde vive | como é provado |
 |---|---|---|
-| 1. termo monotônico | `network_state.term` (V288), `NetworkAuthorityRepository.promote` | só sobe por `promote`; `NetworkAuthorityPersistenceTests` |
+| 1. termo monotônico | `network_state.term` (V303), `NetworkAuthorityRepository.promote` | só sobe por `promote`; `NetworkAuthorityPersistenceTests` |
 | 2. nó recusa termo menor | `term_regressao` em `deploy/node-runtime/node-runtime.sh`, estado em `$NODE_HOME/term` | `scripts/tests/node-executor-test.sh` cenários 5d/5e; Q0 removendo a checagem |
 | 3. quórum explícito, fail secure | `NetworkAuthorityService.promote` → `NETWORK_AUTHORITY_NO_QUORUM` | `NetworkAuthorityTests.semQuorumNinguemPromove`, `semEleitoradoNinguemPromove` |
 | 4. mesmo termo impossível | CAS `update network_state … where term = <lido>` | `NetworkAuthorityPersistenceTests`, e o `row_count` conferido no MariaDB 11.4 real |
@@ -217,11 +217,11 @@ Decisões que o desenho fixa, e por quê:
 - **O eleitorado é o DECLARADO** (`network_authorities`), não "quem está respondendo". Se fosse
   derivado da vivacidade, a metade isolada de uma partição se acharia 100% dos vivos e se
   promoveria sozinha. Declarar é decisão humana e auditada; a vivacidade de cada declarada vem de
-  `network_instance_readers` (V278), a mesma tabela que o painel já usa para dizer quantas
+  `network_instance_readers` (V293), a mesma tabela que o painel já usa para dizer quantas
   instâncias estão lendo.
 - **Quórum é sobre o eleitorado inteiro**: `vivos * 2 > declarados`. Com 2 declaradas, uma viva não
   promove (empate não é maioria) — é o cenário `semQuorumNinguemPromove`.
-- **A linha global é invariante do deploy**: a V288 faz seed dela (`term = 0`), porque até aqui
+- **A linha global é invariante do deploy**: a V303 faz seed dela (`term = 0`), porque até aqui
   `NetworkStatePersistenceAdapter` a criava preguiçosamente na primeira transição de modo. Sem ela,
   o CAS da primeira promoção de um banco novo atualizaria zero linhas e falharia sempre.
 - **O termo entra na linha assinada** (`formatVersion` 2, termo por último), não só no JSON: é o que
@@ -249,7 +249,7 @@ O Control Plane compara o termo reportado com o vigente em `network_state`:
 
 Três decisões que o desenho fixa:
 
-- **A quarentena de termo não expira por relógio.** A de saúde (V282) tem janela porque falha se
+- **A quarentena de termo não expira por relógio.** A de saúde (V297) tem janela porque falha se
   resolve sozinha; divergência de termo não — liberar com o relógio devolveria o nó a operar ainda
   dividido entre dois mandos. `findQuarantineExpired` só enxerga nós `ACTIVE`, então o status
   `QUARANTINED` já basta; a janela gravada em `quarantinedUntil` é horizonte de revisão para o

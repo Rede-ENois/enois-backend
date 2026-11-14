@@ -12,7 +12,7 @@ import org.springframework.stereotype.Repository;
 import com.socialcoisa.rede.network.application.port.out.NetworkAuthorityRepository;
 
 /**
- * Termo da autoridade e eleitorado declarado (V288), em JDBC direto.
+ * Termo da autoridade e eleitorado declarado (V303), em JDBC direto.
  *
  * <p>JDBC e não JPA pelo mesmo motivo da versão de conteúdo: a promoção é condicional por natureza.
  * Ler o termo, comparar na aplicação e gravar teria a janela em que duas instâncias leem o mesmo

@@ -153,7 +153,7 @@ public class ContentSyncService {
 	}
 
 	/**
-	 * O feed de mudanças depois do cursor do nó (V283).
+	 * O feed de mudanças depois do cursor do nó (V298).
 	 *
 	 * <p>É o que faltava para o cache de borda: sem o feed, o nó só descobria mudança perguntando
 	 * agregado por agregado, então quem guardava mil entradas não tinha como saber quais revalidar e

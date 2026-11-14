@@ -56,7 +56,7 @@ Quatro perguntas de desenho, cada uma com a alternativa rejeitada:
 
 ## Decisão
 
-Uma tabela `network_region_states` (V289) guarda a **decisão**: `region` (chave normalizada),
+Uma tabela `network_region_states` (V304) guarda a **decisão**: `region` (chave normalizada),
 `declared_by`, `declared_reason`, `declared_at`. `POST /admin/network/regions` declara (região e
 motivo obrigatórios, auditoria `NETWORK_REGION_OUT_OF_SERVICE`), `DELETE /admin/network/regions/{region}`
 devolve (`NETWORK_REGION_BACK_IN_SERVICE`, 404 se não estava fora), `GET` lista o painel.
@@ -68,7 +68,7 @@ evacuador.
 
 No scheduler, `drainEvacuatedRegions` roda **antes** de `dispatchPending`, na mesma posição da
 drenagem por status. Tarefa com **alvo** num nó evacuado volta para a fila mas **não** é designada a
-outro: alvo é vínculo (V287), não preferência — o estado daquele trabalho vive naquele nó, e
+outro: alvo é vínculo (V302), não preferência — o estado daquele trabalho vive naquele nó, e
 executar no nó errado não é executar pior, é não executar.
 
 ## Consequências
@@ -109,6 +109,6 @@ executar no nó errado não é executar pior, é não executar.
   nó, e `limparRegiaoQueNaoEstavaForaResponde404` fixa o 404 confesso.
 - Motivo: `declaracaoSemMotivoERecusada` e `declaracaoEVoltaSaoAuditadas` (motivo com aspas não
   quebra o JSON da auditoria).
-- Migração: V289 aplicada **duas vezes** em MariaDB 11.4 real, com `network_nodes`/`network_tasks`
+- Migração: V304 aplicada **duas vezes** em MariaDB 11.4 real, com `network_nodes`/`network_tasks`
   povoados antes — dados preservados.
 - Suíte completa: 2673 testes, 0 falhas, 3 skipped.

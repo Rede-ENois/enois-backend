@@ -14,7 +14,7 @@ public interface AuditLogRepository {
 	 *
 	 * <p>É a leitura do painel ("histórico do nó"), não uma consulta genérica de auditoria: o alvo
 	 * é sempre um id estável e a leitura é limitada. Vai pelo índice {@code (target_id, created_at)}
-	 * da V286 — sem ele, cada abertura de página varreria a maior tabela de trilha do sistema.</p>
+	 * da V301 — sem ele, cada abertura de página varreria a maior tabela de trilha do sistema.</p>
 	 */
 	List<AuditRecord> recentForTarget(String targetId, int limit);
 

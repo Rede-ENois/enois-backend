@@ -226,7 +226,7 @@ padrão).
 **Suíte completa:** 2688 testes antes desta rodada; com os testes novos, **2698** — 0 falhas, 0
 erros, 3 skipped. **Nenhuma migração de banco nesta rodada**: a rota não precisa de coluna, porque a
 permissão vive no documento assinado, não no banco — e ficar no banco seria justamente o desenho
-rejeitado. **V290 continua livre.**
+rejeitado. **V305 continua livre.**
 
 **Prova de interop entre as duas pontas:** para a mesma lista com vírgula na query, a linha canônica
 montada pelo signer (Java) e a reconstruída pelo runtime (bash) são **byte a byte iguais**:

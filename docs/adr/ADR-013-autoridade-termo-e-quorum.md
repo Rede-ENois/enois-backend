@@ -32,7 +32,7 @@ Quatro perguntas de desenho, cada uma com alternativa rejeitada:
    construção, não por vigilância.
 
 4. **A vivacidade vem de onde?** De uma noção nova de "está no ar" seria uma segunda verdade ao lado
-   da que o painel já usa. Vem de `network_instance_readers.last_seen_at` (V278), a mesma tabela que
+   da que o painel já usa. Vem de `network_instance_readers.last_seen_at` (V293), a mesma tabela que
    responde quantas instâncias estão lendo de verdade; a janela é
    `rede.network.authority.liveness-seconds` (padrão 30 s).
 
@@ -46,12 +46,12 @@ maioria do eleitorado inteiro está viva (`vivos * 2 > declarados`); então o te
 Cinco propriedades:
 
 1. **Termo 0 é a autoridade original.** Antes da primeira promoção não há dono nem `promoted_at`; a
-   V288 não inventa número para bancos existentes.
+   V303 não inventa número para bancos existentes.
 
 2. **A linha global é invariante do deploy.** Até aqui ela nascia preguiçosamente na primeira
    transição de modo (`NetworkStatePersistenceAdapter`). Um banco que nunca mudou de modo teria o
    CAS da primeira promoção atualizando zero linhas — a promoção falharia sempre, com a mensagem de
-   corrida perdida, que é o diagnóstico errado. A V288 faz seed da linha (`term = 0`) e um teste
+   corrida perdida, que é o diagnóstico errado. A V303 faz seed da linha (`term = 0`) e um teste
    mantém o mesmo invariante. Um teste separado cobre a ausência deliberada, para o serviço não
    quebrar se alguém apagar a linha.
 
@@ -69,7 +69,7 @@ Cinco propriedades:
 
 ## Consequências
 
-- `network_state` ganha três colunas e `network_authorities` nasce na V288. Nenhum nó externo escreve
+- `network_state` ganha três colunas e `network_authorities` nasce na V303. Nenhum nó externo escreve
   em nenhuma das duas: a promoção é operação administrativa auditada
   (`NETWORK_AUTHORITY_DECLARED`/`REVOKED`/`PROMOTED`).
 - A config assinada muda de formato (`formatVersion` 2). Runtime antigo (formato 1) recusa a config
@@ -95,6 +95,6 @@ Cinco propriedades:
   termo **não** andou.
 - Assinatura: `termoEntraNaLinhaAssinadaENaoSoNoPayload` (mesmo carimbo e mesmas permissões, só o
   termo muda, e a assinatura muda) e `configDoNoCarregaOTermoVigenteEDeclaraOFormatoNovo`.
-- Migração V288 aplicada duas vezes em MariaDB 11.4.13 real em três bancos: linha de modo antiga
+- Migração V303 aplicada duas vezes em MariaDB 11.4.13 real em três bancos: linha de modo antiga
   preservada (`EMERGENCY` com `term = 0`), nó e tarefas antigos intactos, e o seed criando a global
   onde não havia.

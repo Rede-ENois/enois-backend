@@ -32,7 +32,7 @@ class NetworkAuthorityPersistenceTests {
 		jdbc.update("delete from network_authorities");
 		jdbc.update("delete from network_instance_readers");
 		jdbc.update("delete from network_state");
-		// A linha global existe SEMPRE em produção (seed da V288). O delete acima apaga porque
+		// A linha global existe SEMPRE em produção (seed da V303). O delete acima apaga porque
 		// outros testes a deixam em estados arbitrários; sem recriar, o CAS da promoção atualizaria
 		// zero linhas e falharia por ausência do invariante, não por corrida — o que este teste mede.
 		jdbc.update("insert into network_state (id, mode, reason, since, term) values ('global', 'NORMAL', ?, ?, 0)",

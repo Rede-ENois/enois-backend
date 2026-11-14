@@ -15,7 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.socialcoisa.rede.network.application.port.out.ContentVersionRepository;
 
 /**
- * Poda do feed de mudanças do conteúdo público (V283).
+ * Poda do feed de mudanças do conteúdo público (V298).
  *
  * <p>O feed é janela, não histórico: cada linha diz "esta versão foi cunhada agora", e depois que
  * todos os nós de borda passaram por ela a linha não serve para mais nada. Sem poda, a tabela

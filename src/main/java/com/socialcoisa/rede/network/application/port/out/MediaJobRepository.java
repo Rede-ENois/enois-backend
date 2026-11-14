@@ -8,7 +8,7 @@ import com.socialcoisa.rede.network.domain.MediaJobStatus;
 import com.socialcoisa.rede.network.domain.MediaTranscodeJob;
 
 /**
- * Estado dos transcodes delegados a nós {@code NODE_MEDIA} (V280).
+ * Estado dos transcodes delegados a nós {@code NODE_MEDIA} (V295).
  *
  * <p>As escritas são condicionais por estado: só uma tentativa pode marcar {@code VERIFIED}, e um
  * resultado rejeitado não sobrescreve um já verificado. Ler e depois gravar deixaria a janela em que

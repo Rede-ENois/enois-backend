@@ -38,14 +38,14 @@ class NetworkTaskJpaEntity {
 	@Column(name = "data_class", nullable = false, length = 24)
 	private String dataClass;
 
-	/** Região de origem declarada pelo pedido; null = sem preferência (V285). */
+	/** Região de origem declarada pelo pedido; null = sem preferência (V300). */
 	@Column(length = 64)
 	private String region;
 
 	@Column(name = "assigned_node_id", length = 40)
 	private String assignedNodeId;
 
-	/** Nó a que a tarefa pertence; null = qualquer nó elegível (V287). */
+	/** Nó a que a tarefa pertence; null = qualquer nó elegível (V302). */
 	@Column(name = "target_node_id", length = 40)
 	private String targetNodeId;
 

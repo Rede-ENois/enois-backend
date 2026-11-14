@@ -61,7 +61,7 @@ entrar em `DEGRADED`/`EMERGENCY` (o Control Plane não mede dependência externa
 
 ## Consequências
 
-- Migração **não** foi necessária: `network_state` (V277) já guardava `mode`, `reason` e `since`, e a
+- Migração **não** foi necessária: `network_state` (V292) já guardava `mode`, `reason` e `since`, e a
   tabela `audit_logs` já existe. O que faltava era caminho de escrita e leitura, não coluna.
 - O teto de despacho passou a ser variável por modo. `SCAN_LIMIT` virou `public` porque o teste que
   mede "metade da varredura" precisa do mesmo número — e ele é `50`; metade com piso 1 evita que um

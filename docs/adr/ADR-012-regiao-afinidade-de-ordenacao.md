@@ -15,7 +15,7 @@ Duas perguntas de desenho, cada uma com alternativa rejeitada:
 
 1. **A região é do nó ou da tarefa?** Do nó sozinho não basta: saber que o nó está em `sa-east-1`
    não diz nada sobre para onde o trabalho *quer* ir. A região precisa entrar na tarefa
-   (`network_tasks.region`, V285), declarada por quem enfileira — igual ao `dataClass`, é uma
+   (`network_tasks.region`, V300), declarada por quem enfileira — igual ao `dataClass`, é uma
    propriedade do pedido, não do executor.
 
 2. **Filtro ou ordenação?** **Filtro rejeitado.** Filtrar por região esvaziaria a fila sempre que a
@@ -72,4 +72,4 @@ Quatro propriedades:
 - Preservação: `tarefaSemRegiaoSegueOEscalonamentoDeAntes` (mesma rodada, espalha pela folga) e
   `noDaRegiaoDegradadoPerdeParaODistanteSaudavel` (saúde vence região).
 - Contrato: `enrollComLocationDaDocGravaARegiao`.
-- Migração V285 aplicada duas vezes em MariaDB 11.4.13 real com linha antiga preservada.
+- Migração V300 aplicada duas vezes em MariaDB 11.4.13 real com linha antiga preservada.

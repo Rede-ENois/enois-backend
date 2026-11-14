@@ -208,6 +208,9 @@ jobs:
           SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: org.hibernate.dialect.MariaDBDialect
         run: ./mvnw -B -q -Dtest=RedeApplicationTests test
 
+      - name: 🧪 Upgrade do HTML de projetos em schema legado
+        run: python3 scripts/tests/user-project-html-migration-test.py
+
   # ===========================================================================
   # Build + Push para Harbor (push/workflow_dispatch em main ou qa, hosted runner)
   # ===========================================================================

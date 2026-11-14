@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.calendar.application;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -38,7 +39,7 @@ public class CalendarReminderService {
 	private static final Logger LOG = LoggerFactory.getLogger(CalendarReminderService.class);
 
 	/** Quantos vencidos o worker envia por ciclo: um lote pequeno evita prender o laço num pico. */
-	static final int BATCH = 20;
+	public static final int BATCH = 20;
 
 	/**
 	 * Autor das notificações automáticas. `notifications.actor_id` é `not null`, e um lembrete não
@@ -67,15 +68,7 @@ public class CalendarReminderService {
 	 */
 	@Transactional
 	public CalendarReminder setForReader(String userId, String entryId, int minutesBefore) {
-		CalendarEntry entry = entries.findById(entryId)
-			.orElseThrow(() -> new ApiException(404, "CALENDAR_ENTRY_NOT_FOUND",
-				"Compromisso não encontrado."));
-		boolean involved = entry.ownerId().equals(userId) || participates(userId, entry);
-		if (!involved) {
-			// Mesma resposta de inexistente: não confirma a existência da agenda de outra pessoa (D10).
-			throw new ApiException(404, "CALENDAR_ENTRY_NOT_FOUND",
-				"Compromisso não encontrado.");
-		}
+		CalendarEntry entry = requireInvolved(userId, entryId);
 		if (!entry.active()) {
 			throw new ApiException(409, "CALENDAR_ENTRY_CANCELLED",
 				"Compromisso cancelado não aceita lembrete.");
@@ -97,6 +90,10 @@ public class CalendarReminderService {
 	 */
 	@Transactional
 	public boolean clearForReader(String userId, String entryId, int minutesBefore) {
+		// Antecedência fora da lista não é "não havia nada para tirar": é pedido inválido, e a tela
+		// precisa saber disso em vez de achar que apagou.
+		CalendarReminder.requireAllowedMinutes(minutesBefore);
+		requireInvolved(userId, entryId);
 		return reminders.findByEntryAndUserAndMinutes(entryId, userId, minutesBefore)
 			.map(reminder -> {
 				clear(reminder, clock.instant());
@@ -110,9 +107,25 @@ public class CalendarReminderService {
 	 * encerrado pelo cancelamento) saem da lista — a tela escolhe o lembrete, não vê o histórico.
 	 */
 	public List<CalendarReminder> ofReader(String userId, String entryId) {
+		requireInvolved(userId, entryId);
 		return reminders.findByEntry(entryId).stream()
 			.filter(r -> r.userId().equals(userId) && r.sentAt() == null)
 			.toList();
+	}
+
+	/**
+	 * O compromisso, desde que quem lê organize ou participe dele. Alheio responde o mesmo 404 de um
+	 * id que não existe: um 403 confirmaria que aquele compromisso existe na agenda de alguém (D10).
+	 */
+	private CalendarEntry requireInvolved(String userId, String entryId) {
+		CalendarEntry entry = entries.findById(entryId)
+			.orElseThrow(() -> new ApiException(404, "CALENDAR_ENTRY_NOT_FOUND",
+				"Compromisso não encontrado."));
+		if (!entry.ownerId().equals(userId) && !participates(userId, entry)) {
+			throw new ApiException(404, "CALENDAR_ENTRY_NOT_FOUND",
+				"Compromisso não encontrado.");
+		}
+		return entry;
 	}
 
 	/**
@@ -147,7 +160,7 @@ public class CalendarReminderService {
 					clear(reminder, now);
 					continue;
 				}
-				notify(reminder, entry.get());
+				notify(reminder, entry.get(), now);
 				reminder.sent(now);
 				reminders.save(reminder);
 				sent++;
@@ -171,30 +184,46 @@ public class CalendarReminderService {
 		if (entry.ownerId().equals(userId)) {
 			return true;
 		}
-		return participants.findByEntry(entry.id()).stream()
-			.filter(p -> p.userId().equals(userId))
-			.anyMatch(p -> p.state() == CalendarParticipantState.ACCEPTED
-				|| p.state() == CalendarParticipantState.TENTATIVE);
+		// A pergunta é sobre uma pessoa só: buscar o convite dela evita carregar a lista inteira
+		// de participantes a cada lembrete que o worker vence.
+		return participants.findByEntryAndUser(entry.id(), userId)
+			.map(p -> p.state() == CalendarParticipantState.ACCEPTED
+				|| p.state() == CalendarParticipantState.TENTATIVE)
+			.orElse(false);
 	}
 
 	private boolean participates(String userId, CalendarEntry entry) {
-		return participants.findByEntry(entry.id()).stream().anyMatch(p -> p.userId().equals(userId));
+		return participants.findByEntryAndUser(entry.id(), userId).isPresent();
 	}
 
-	private void notify(CalendarReminder reminder, CalendarEntry entry) {
-		String when = textOfMinutes(reminder.minutesBefore());
+	private void notify(CalendarReminder reminder, CalendarEntry entry, Instant now) {
+		// O texto fala do tempo que falta de verdade, não da antecedência escolhida: um lembrete de
+		// 1 dia que venceu em cima da hora avisaria "em 1 dia" de um compromisso que começa em 10
+		// minutos. O worker pode atrasar, e o aviso não pode mentir sobre o horário.
+		String when = textUntil(entry.startsAt(), now);
+		// O aviso abre o compromisso que o originou: a pessoa que tocou no lembrete quer ver quem
+		// convidou, onde é e o que responder. Levar só à agenda deixava a tarefa pela metade.
 		// O lembrete é do sistema: ninguém "fez" isso para a pessoa. `actor_id` é obrigatório na
 		// tabela de notificações (a coluna não aceita nulo), então o autor é o próprio relógio.
 		notifications.create(reminder.userId(), "CALENDAR_REMINDER", SYSTEM_ACTOR, "Compromisso chegando",
-			"«" + entry.title() + "» começa " + when + ".", "/agenda?period=day", "Ver agenda");
+			"«" + entry.title() + "» " + when + ".", "/agenda/" + entry.id(), "Ver compromisso");
 	}
 
-	private static String textOfMinutes(int minutes) {
-		if (minutes >= 1440) {
-			int days = minutes / 1440;
-			return days == 1 ? "em 1 dia" : "em " + days + " dias";
+	/** "começa em 10 min", "começa em 2 h", "começa em 1 dia" ou "já começou". */
+	static String textUntil(Instant startsAt, Instant now) {
+		long minutes = Duration.between(now, startsAt).toMinutes();
+		if (minutes <= 0) {
+			return "já começou";
 		}
-		return "em " + minutes + " min";
+		if (minutes < 60) {
+			return "começa em " + minutes + " min";
+		}
+		if (minutes < 1440) {
+			long hours = minutes / 60;
+			return "começa em " + hours + (hours == 1 ? " hora" : " horas");
+		}
+		long days = minutes / 1440;
+		return "começa em " + days + (days == 1 ? " dia" : " dias");
 	}
 
 	/**

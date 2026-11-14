@@ -1,7 +1,8 @@
 package com.socialcoisa.rede.calendar.adapters.in.web;
 
-import java.time.Instant;
-import java.time.format.DateTimeParseException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -26,9 +27,9 @@ import com.socialcoisa.rede.shared.web.CurrentUserResolver;
  * iCalendar da agenda de quem está lendo (fase 8, D6/D3).
  *
  * <p>O export responde `text/calendar` com um nome de arquivo próprio para o navegador baixar sem
- * abrir o texto na tela. O import recebe o arquivo cru no corpo, como o resto do app faz com
- * `application/json`: o import é uma escrita e passa pelo `Idempotency-Key` (D11), então apertar
- * duas vezes no botão não duplica a agenda.
+ * abrir o texto na tela. O import recebe o arquivo como multipart, no mesmo formato do upload de
+ * currículo: o import é uma escrita e passa pelo `Idempotency-Key` (D11), então apertar duas vezes
+ * no botão não duplica a agenda.
  */
 @RestController
 @RequestMapping("/calendar/entries")
@@ -52,11 +53,12 @@ class CalendarIcsController {
 			@RequestParam(required = false) String from, @RequestParam(required = false) String to,
 			@RequestParam(required = false) String scope) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		String body = ics.export(user.id().value(), instant(from, "from"), instant(to, "to"), scope(scope));
+		String body = ics.export(user.id().value(), CalendarEntryController.instant(from, "from"),
+			CalendarEntryController.instant(to, "to"), scope(scope));
 		return ResponseEntity.ok()
 			.header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"agenda-enois.ics\"")
 			.contentType(MediaType.parseMediaType("text/calendar;charset=UTF-8"))
-			.body(body.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+			.body(body.getBytes(StandardCharsets.UTF_8));
 	}
 
 	/**
@@ -77,29 +79,21 @@ class CalendarIcsController {
 		if (file == null || file.isEmpty()) {
 			throw new ApiException(400, "INVALID_ICS", "Envie o arquivo iCalendar no campo file.");
 		}
-		String body;
-		try {
-			body = new String(file.getBytes(), java.nio.charset.StandardCharsets.UTF_8);
-		}
-		catch (java.io.IOException error) {
-			throw new ApiException(400, "INVALID_ICS", "Não foi possível ler o arquivo enviado.");
-		}
-		String hash = idempotency.hash(body);
-		String content = body;
+		// O hash da chave é do arquivo, não do resultado: repetir o mesmo upload devolve a resposta
+		// guardada. Ele é lido em fluxo (até o teto do serviço) e o import lê o arquivo de novo, do
+		// disco, em vez de guardar o corpo inteiro num array.
+		String hash = idempotency.hash(file.getResource());
 		return idempotency.execute(user.id().value(), "POST", "/api/calendar/entries/import", idempotencyKey,
 			hash, () -> new CommandResponse(200,
-				ics.importCalendar(user.id().value(), content, scope(scope))));
+				ics.importCalendar(user.id().value(), open(file), scope(scope))));
 	}
 
-	private static Instant instant(String raw, String field) {
-		if (raw == null || raw.isBlank()) {
-			throw new ApiException(400, "INVALID_WINDOW", "Informe " + field + " em ISO-8601.");
-		}
+	private static InputStream open(MultipartFile file) {
 		try {
-			return Instant.parse(raw.trim());
+			return file.getInputStream();
 		}
-		catch (DateTimeParseException exception) {
-			throw new ApiException(400, "INVALID_WINDOW", field + " precisa ser um instante ISO-8601.");
+		catch (IOException error) {
+			throw new ApiException(400, "INVALID_ICS", "Não foi possível ler o arquivo enviado.");
 		}
 	}
 

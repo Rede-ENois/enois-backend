@@ -15,7 +15,7 @@ import com.socialcoisa.rede.network.domain.ContentKind;
 import com.socialcoisa.rede.network.domain.ContentVersion;
 
 /**
- * Versões de conteúdo público, feed de mudanças e snapshots de nó (V279, V283), em JDBC direto.
+ * Versões de conteúdo público, feed de mudanças e snapshots de nó (V294, V298), em JDBC direto.
  *
  * <p>JDBC e não JPA porque as duas escritas são condicionais por natureza: a versão só sobe se a
  * linha ainda estiver na versão esperada, e o snapshot é um upsert. Em JPA isso viraria leitura +
@@ -82,7 +82,7 @@ class ContentVersionPersistenceAdapter implements ContentVersionRepository {
 	/**
 	 * Nó de região fora de operação fica fora da fila de conferência.
 	 *
-	 * <p>A região sai de operação por decisão humana (V289) e o nó dela PARA de receber trabalho: o
+	 * <p>A região sai de operação por decisão humana (V304) e o nó dela PARA de receber trabalho: o
 	 * despacho não o escolhe, o heartbeat responde {@code acceptTasks=false} e a drenagem regional
 	 * devolve o que estava na mão dele. O snapshot dele, então, fica velho sozinho — não porque o nó
 	 * divergiu, mas porque o Control Plane parou de lhe servir conteúdo. Conferir esse snapshot
@@ -127,7 +127,7 @@ class ContentVersionPersistenceAdapter implements ContentVersionRepository {
 	private static final String COUNT_ALL = "select count(*) from network_content_snapshots";
 
 	/**
-	 * O feed de mudanças (V283). A posição é do cliente, não da linha: a tabela é uma fila
+	 * O feed de mudanças (V298). A posição é do cliente, não da linha: a tabela é uma fila
 	 * compartilhada e cada nó guarda o próprio cursor, então não existe coluna de consumo aqui.
 	 */
 	private static final String INSERT_CHANGE = """
@@ -161,7 +161,7 @@ class ContentVersionPersistenceAdapter implements ContentVersionRepository {
 	 *
 	 * <p>{@code coalesce(n.region, '')} põe o nó sem região declarada como uma região própria: ele
 	 * tem cópia, e ignorá-lo subnotificaria a rede que não usa o campo. O {@code group by} é sobre a
-	 * região normalizada, porque "Sudeste" e "sudeste" são a mesma região desde a V289.</p>
+	 * região normalizada, porque "Sudeste" e "sudeste" são a mesma região desde a V304.</p>
 	 */
 	private static final String COUNT_REGIONS_WITH_COPY = """
 		select count(distinct coalesce(lower(trim(n.region)), ''))

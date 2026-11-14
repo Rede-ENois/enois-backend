@@ -7,7 +7,7 @@ import java.util.Locale;
  * Comparação de região, num lugar só: a grafia normalizada é a chave de tudo que decide por região.
  *
  * <p>O comparador de afinidade sempre foi case-insensitive ({@code equalsIgnoreCase}, ADR-012), e a
- * declaração de região fora de operação (V289) usa a mesma regra. Sem normalizar, "Sudeste" no nó e
+ * declaração de região fora de operação (V304) usa a mesma regra. Sem normalizar, "Sudeste" no nó e
  * "sudeste" na declaração seriam a mesma região para o balanceador e duas para o evacuador — o nó
  * receberia tarefa de uma região declarada caída.</p>
  *

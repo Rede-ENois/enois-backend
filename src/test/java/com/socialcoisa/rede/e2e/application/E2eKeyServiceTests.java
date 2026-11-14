@@ -38,15 +38,68 @@ class E2eKeyServiceTests {
 	}
 
 	@Test
-	void uploadKeypairSavesAndDeactivatesPrevious() {
+	void uploadKeypairDesativaAnteriorMasMantemHistorico() {
+		service = new E2eKeyService(keyRepo, participantReader,
+			Clock.fixed(Instant.parse("2026-11-05T00:00:00Z"), ZoneId.of("UTC")));
 		String first = service.uploadKeypair("u1", "pub1", "priv1", "RSA-OAEP");
 		assertThat(keyRepo.findActiveKeypair("u1")).isPresent();
 
+		// Clock mais tarde pra ordem do historico ser deterministica (a coluna guarda segundos).
+		service = new E2eKeyService(keyRepo, participantReader,
+			Clock.fixed(Instant.parse("2026-11-05T00:01:00Z"), ZoneId.of("UTC")));
 		String second = service.uploadKeypair("u1", "pub2", "priv2", null);
 		assertThat(second).isNotEqualTo(first);
 		UserKeypair active = keyRepo.findActiveKeypair("u1").orElseThrow();
 		assertThat(active.publicKey()).isEqualTo("pub2");
 		assertThat(active.algorithm()).isEqualTo("RSA-OAEP");
+
+		// O keypair antigo fica inativo, mas continua la: as chaves de conversa e as chaves por
+		// mensagem antigas foram cifradas com "pub1" e so a "priv1" abre. Perder esse historico
+		// seria perder todas as mensagens anteriores a troca.
+		List<UserKeypair> history = service.keypairHistory("u1");
+		assertThat(history).hasSize(2);
+		assertThat(history.get(0).publicKey()).isEqualTo("pub2");
+		assertThat(history.get(0).active()).isTrue();
+		assertThat(history.get(1).publicKey()).isEqualTo("pub1");
+		assertThat(history.get(1).active()).isFalse();
+		assertThat(history.get(1).encryptedPrivateKey()).isEqualTo("priv1");
+	}
+
+	@Test
+	void historicoSobreviveAMultiplasRotacoes() {
+		service.uploadKeypair("u1", "pub1", "priv1", null);
+		service = new E2eKeyService(keyRepo, participantReader,
+			Clock.fixed(Instant.parse("2026-11-05T00:01:00Z"), ZoneId.of("UTC")));
+		service.uploadKeypair("u1", "pub2", "priv2", null);
+		service = new E2eKeyService(keyRepo, participantReader,
+			Clock.fixed(Instant.parse("2026-11-05T00:02:00Z"), ZoneId.of("UTC")));
+		service.uploadKeypair("u1", "pub3", "priv3", null);
+
+		Map<String, UserKeypair> byPub = new LinkedHashMap<>();
+		for (UserKeypair kp : service.keypairHistory("u1")) {
+			byPub.put(kp.publicKey(), kp);
+		}
+		assertThat(byPub).hasSize(3);
+		assertThat(byPub.get("pub1").active()).isFalse();
+		assertThat(byPub.get("pub1").encryptedPrivateKey()).isEqualTo("priv1");
+		assertThat(byPub.get("pub2").active()).isFalse();
+		assertThat(byPub.get("pub3").active()).isTrue();
+		assertThat(service.keypairHistory("u1").get(0).publicKey()).isEqualTo("pub3");
+	}
+
+	@Test
+	void reenviarMesmaChavePublicaNaoCriaNovoKeypair() {
+		String first = service.uploadKeypair("u1", "pub1", "priv1-cifrada-com-senha-velha", "RSA-OAEP");
+
+		// Recifragem apos trocar a senha da conta: mesma publica, privada recifrada.
+		String second = service.uploadKeypair("u1", "pub1", "priv1-cifrada-com-senha-nova", null);
+
+		assertThat(second).isEqualTo(first);
+		UserKeypair active = keyRepo.findActiveKeypair("u1").orElseThrow();
+		assertThat(active.id()).isEqualTo(first);
+		assertThat(active.encryptedPrivateKey()).isEqualTo("priv1-cifrada-com-senha-nova");
+		assertThat(active.createdAt()).isEqualTo(Instant.parse("2026-11-05T00:00:00Z"));
+		assertThat(service.keypairHistory("u1")).hasSize(1);
 	}
 
 	@Test
@@ -122,6 +175,8 @@ class E2eKeyServiceTests {
 
 		@Override
 		public void saveKeypair(UserKeypair keypair) {
+			// Mesma semantica do save do JPA: o id manda, nao duplica linha.
+			keypairs.removeIf(k -> k.id().equals(keypair.id()));
 			keypairs.add(keypair);
 		}
 

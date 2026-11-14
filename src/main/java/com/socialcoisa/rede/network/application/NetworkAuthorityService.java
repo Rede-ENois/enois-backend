@@ -39,7 +39,7 @@ import com.socialcoisa.rede.shared.web.ApiException;
  * </ul>
  *
  * <p>Quem conta como "viva" é o mesmo sinal que o painel já usa para dizer quantas instâncias estão
- * lendo de verdade: {@code network_instance_readers.last_seen_at} (V278). Não há segunda noção de
+ * lendo de verdade: {@code network_instance_readers.last_seen_at} (V293). Não há segunda noção de
  * vivacidade para conciliar.</p>
  */
 @Service

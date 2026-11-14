@@ -373,6 +373,11 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 		if (command.showCity() != null) {
 			profile.setShowCity(command.showCity(), clock.instant());
 		}
+		// Declaracao de recrutador: desligar so fecha a central para quem nao tem vaga (ver
+		// RecruitmentHubService); nao apaga vaga, candidatura nem processo seletivo.
+		if (command.isRecruiter() != null) {
+			profile.setRecruiter(command.isRecruiter(), clock.instant());
+		}
 		// Curriculo: ausente no corpo da requisicao mantem o que ja estava; vazio limpa. Nao passa
 		// pelo `update` geral porque nao e campo de exibicao — e arquivo, e so o dono le.
 		if (command.resumeUrl() != null) {

@@ -146,7 +146,7 @@ e a versão guardados (senão serviria o que a vitrine esconde) e conta em
 seria pior que reter por uma rodada.
 
 **Executor de cache de borda (`EDGE_CACHE`).** O nó consome o **feed de mudanças**
-(V283): `GET /network/content/changes?cursor=<seq>&limit=<n>` devolve, depois do
+(V298): `GET /network/content/changes?cursor=<seq>&limit=<n>` devolve, depois do
 cursor que o nó guardou, só o que ganhou versão nova — `kind`, `contentId`,
 `version`, `contentHash` — e **nunca o corpo**. Para cada mudança, o corpo vem de
 `GET /network/content/{kind}/{id}` (o mesmo caminho autorizado da borda), é
@@ -175,7 +175,7 @@ com o cursor.
 
 **Quem enfileira `EDGE_CACHE` — e por que a tarefa tem alvo.** O executor sozinho
 não bastava: nenhuma tarefa chegava até ele. Toda tarefa de borda nasce **com
-alvo** (`network_tasks.target_node_id`, V287), e não para "a rede", porque o
+alvo** (`network_tasks.target_node_id`, V302), e não para "a rede", porque o
 cursor e os corpos do cache vivem em `$NODE_HOME/edge/` **daquele** nó: uma
 tarefa sem alvo seria designada por mérito a um nó sorteado, que avançaria só o
 próprio cursor enquanto os outros de borda continuam frios. Alvo é filtro, ao

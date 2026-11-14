@@ -85,16 +85,16 @@ o TTL continua sendo a garantia, o sinal é a aceleração. Para a rede:
 
 1. **Fase 3, passo 1 — entregue:** cache de borda só para conteúdo **público e imutável por versão**
    (ex.: objeto de mídia já publicado). Imutável não precisa de invalidação.
-2. **Fase 3, passo 2 — entregue (V283):** conteúdo mutável entra com TTL curto e um **feed de
+2. **Fase 3, passo 2 — entregue (V298):** conteúdo mutável entra com TTL curto e um **feed de
    mudanças** que diz ao nó o que revalidar. O feed (`GET /network/content/changes`) devolve, para o
    cursor `seq` que o nó informa, as versões cunhadas depois dele — `kind`, `contentId`, `version`,
    `contentHash`, `seq` — e nunca o corpo: quem entrega corpo continua sendo `GET /network/content/{kind}/{id}`,
-   com a credencial de nó. A linha do feed é gravada **na mesma transação** da versão (V279), senão
+   com a credencial de nó. A linha do feed é gravada **na mesma transação** da versão (V294), senão
    uma mudança cunhada sem linha ficaria invisível para todo nó até o TTL — ou para sempre, se o
    agregado nunca mais fosse editado.
    - **Por que cursor e não "lista de ids mudados desde X":** `seq` é monotônica e estritamente
      crescente; `updated_at` empata no milissegundo e o nó pularia ou releria a linha do empate. A
-     posição pertence ao leitor (o mesmo padrão da V278): não há coluna de consumo por nó.
+     posição pertence ao leitor (o mesmo padrão da V293): não há coluna de consumo por nó.
    - **Poda e `reset`:** o feed é janela, não histórico. `ContentChangeRetentionWorker` apaga em lotes
      o que passou de `rede.network.content.changes.retention-hours` (72 h por padrão). Um cursor que
      ficou atrás da menor posição retida recebe `reset=true` e lista vazia — **nunca** "nada mudou",
@@ -102,7 +102,7 @@ o TTL continua sendo a garantia, o sinal é a aceleração. Para a rede:
      sincronizei", não "perdi posição": recebe a página normal, sem reset.
    - **Remoção de agregado não vira linha no feed.** O feed só carrega versão cunhada, e versão só é
      cunhada sobre corpo existente. O nó descobre que um agregado sumiu ao revalidar e receber 404; a
-     reconciliação (V281) fecha o ciclo pelo outro lado. Um tombstone por nó multiplicaria linhas para
+     reconciliação (V296) fecha o ciclo pelo outro lado. Um tombstone por nó multiplicaria linhas para
      dizer a mesma coisa.
    - **O consumidor do feed está entregue no nó.** `node-runtime.sh` executa `EDGE_CACHE`: lê
      `?cursor=<seq guardado>` do arquivo `$NODE_HOME/edge/cursor`, baixa só o que mudou pelo mesmo
@@ -112,7 +112,7 @@ o TTL continua sendo a garantia, o sinal é a aceleração. Para a rede:
      deixaria a entrada velha até o TTL. `reset=true` apaga o cache e recomeça do zero; 404 apaga a
      entrada. Falha no meio devolve `complete=false` com o cursor, e a próxima tarefa retoma.
    - **A tarefa que alimenta o consumidor é por nó.** O cursor é do disco do nó, então `EDGE_CACHE`
-     nasce com alvo (`network_tasks.target_node_id`, V287) e o despacho a trata como filtro: só o nó
+     nasce com alvo (`network_tasks.target_node_id`, V302) e o despacho a trata como filtro: só o nó
      alvo a recebe. Sem alvo, a designação por mérito mandaria a tarefa a um nó sorteado, que
      avançaria só o próprio cursor — os outros de borda nunca sairiam do frio. Quem cria a tarefa é
      `EdgeCacheService`: pedido explícito do admin (`POST /admin/network/nodes/{id}/edge-cache`) ou
@@ -178,7 +178,7 @@ A ordem é por **saúde e depois por folga**: nó saudável antes de nó degrada
 quem tem mais vagas livres proporcionalmente. Empate é resolvido por jitter, senão o primeiro da
 lista viraria gargalo.
 
-Saúde é **medida**, não declarada, e mora em quatro colunas de `network_nodes` (V282):
+Saúde é **medida**, não declarada, e mora em quatro colunas de `network_nodes` (V297):
 
 | coluna | o que é | quem escreve |
 |---|---|---|
@@ -275,7 +275,7 @@ região: a contagem por nó chama isso de redundância total.
 ### 7.4.1 A varredura não acusa nó de região evacuada
 
 A fila da reconciliação filtrava só `n.status = 'ACTIVE'`. O nó de uma região declarada fora de
-operação continua `ACTIVE` (a região é que saiu, em V289/ADR-015), então a varredura o conferia e
+operação continua `ACTIVE` (a região é que saiu, em V304/ADR-015), então a varredura o conferia e
 gravava `CONTENT_STALE`. O nó não divergiu: desde a declaração o Control Plane **parou de lhe
 servir** — o despacho não o escolhe, o heartbeat responde `acceptTasks=false` e o `sweep` do cache o
 pula. Acusá-lo é acusar o nó por uma decisão do Control Plane, e no meio do incidente o painel

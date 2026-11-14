@@ -140,7 +140,7 @@ class NetworkRegionTests {
 
 	/**
 	 * A região é comparada normalizada: o nó declarou "Sudeste" e a evacuação veio " SUDESTE ". Sem a
-	 * normalização (V289), seriam duas regiões para o evacuador e uma para o balanceador — o nó
+	 * normalização (V304), seriam duas regiões para o evacuador e uma para o balanceador — o nó
 	 * receberia tarefa de uma região declarada caída.
 	 */
 	@Test
@@ -267,7 +267,7 @@ class NetworkRegionTests {
 
 	/**
 	 * Tarefa com <b>alvo</b> na região evacuada volta para a fila e <b>não</b> é executada por outro
-	 * nó: alvo é vínculo (V287), não preferência — o estado daquele trabalho vive naquele nó.
+	 * nó: alvo é vínculo (V302), não preferência — o estado daquele trabalho vive naquele nó.
 	 * Executar no nó errado não é executar pior, é não executar.
 	 */
 	@Test

@@ -88,11 +88,11 @@ class NetworkNodeJpaEntity {
 	@Column(name = "last_seen_at")
 	private Instant lastSeenAt;
 
-	/** Versão da permissão: 1 no enroll, +1 em cada transição administrativa (V284). */
+	/** Versão da permissão: 1 no enroll, +1 em cada transição administrativa (V299). */
 	@Column(name = "config_version", nullable = false)
 	private int configVersion = 1;
 
-	/** Instante em que a permissão vigente passou a valer; null em linha anterior à V284. */
+	/** Instante em que a permissão vigente passou a valer; null em linha anterior à V299. */
 	@Column(name = "config_issued_at")
 	private Instant configIssuedAt;
 

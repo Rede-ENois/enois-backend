@@ -105,7 +105,7 @@ depender do estado local dele. Executar no nó sorteado é executar no lugar err
   chamar até alguém declarar a rota. É o comportamento correto: a permissão que falta é do
   operador, e nada aqui a concede por omissão.
 - **Nenhuma migração de banco.** A task usa a tabela e as colunas que já existem
-  (`network_tasks.target_node_id` de V287, `idempotency_key` de V277). **V290 continua livre.**
+  (`network_tasks.target_node_id` de V302, `idempotency_key` de V292). **V305 continua livre.**
 
 ## Provas
 

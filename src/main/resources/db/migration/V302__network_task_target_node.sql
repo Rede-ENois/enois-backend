@@ -9,7 +9,7 @@
 -- tarefa (outra chave de idempotência), então cada repetição aquece um nó diferente por sorteio,
 -- ou o mesmo, indefinidamente.
 --
--- Esta coluna diz a qual nó a tarefa pertence. É um <b>filtro</b>, ao contrário de `region` (V285),
+-- Esta coluna diz a qual nó a tarefa pertence. É um <b>filtro</b>, ao contrário de `region` (V300),
 -- e a diferença não é estilo: região é preferência porque qualquer nó saudável entrega aquele
 -- trabalho; alvo é vínculo porque só um nó sabe continuar aquele trabalho. Por isso o alvo entra
 -- em `choose()` antes de qualquer critério de mérito — e um alvo que não está entre os candidatos

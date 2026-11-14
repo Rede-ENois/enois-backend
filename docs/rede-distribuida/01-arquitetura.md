@@ -59,7 +59,7 @@ declara-se confiável ou se promove a controlador.
 | API key por nó | tabela `network_node_keys` (nova), só hash |
 | autorização e perfis | `network_nodes.profiles` + `AdminGuard` |
 | certificados | emissão no onboarding, rotação por job |
-| configuração assinada | endpoint `GET /network/nodes/me/config` — **entregue**: payload com perfis, limites, tarefas permitidas, rotas permitidas (`allowedRoutes`, formato 4), `formatVersion`, `configVersion` (versão da permissão, no nó desde a V284), `ttlSeconds` (validade relativa, formato 3) e assinatura Ed25519 sobre linha canônica, com a chave pública de pinagem publicada |
+| configuração assinada | endpoint `GET /network/nodes/me/config` — **entregue**: payload com perfis, limites, tarefas permitidas, rotas permitidas (`allowedRoutes`, formato 4), `formatVersion`, `configVersion` (versão da permissão, no nó desde a V299), `ttlSeconds` (validade relativa, formato 3) e assinatura Ed25519 sobre linha canônica, com a chave pública de pinagem publicada |
 | descoberta e saúde | heartbeat + `last_seen_at` |
 | capacidade | declarada no cadastro, observada no heartbeat |
 | scheduler | Fase 2 |
@@ -139,7 +139,7 @@ sequenceDiagram
 | `IdempotencyApplicationService` | não | reusado como está |
 | `AdminGuard` / `AdminRouteInterceptor` | não | `/admin/network/**` já nasce protegido |
 | `WriteRouteInterceptor` | sim, aditivo | rotas de nó entram na lista branca com credencial própria |
-| `MessageStreamHub` | sim, na Fase 3 — **feito** | broadcast entre instâncias por tabela de sinais com polling ([ADR-007](../adr/ADR-007-broadcast-entre-instancias-por-tabela.md), V278); provado com duas instâncias reais (`TwoInstancesBroadcastTests`) |
+| `MessageStreamHub` | sim, na Fase 3 — **feito** | broadcast entre instâncias por tabela de sinais com polling ([ADR-007](../adr/ADR-007-broadcast-entre-instancias-por-tabela.md), V293); provado com duas instâncias reais (`TwoInstancesBroadcastTests`) |
 | `CacheConfig` | sim, na Fase 3 — **feito** | continua em memória por pod; a invalidação por evento atravessa instâncias pelo mesmo sinal de broadcast, e o TTL segue como garantia |
 | `MediaFfmpegRunner` | sim, na Fase 3 | passa a poder executar em `NODE_MEDIA` |
 | `HealthWatcher` | não | já transforma status em evento |

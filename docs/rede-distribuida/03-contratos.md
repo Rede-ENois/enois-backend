@@ -134,7 +134,7 @@ Três números, de propósito:
   acrescentou `ttlSeconds` (doc 06 §6) e o formato 4 acrescentou `allowedRoutes`. Runtime de
   formato 1 não lê o termo; o de formato 2 reconstrói a linha sem o TTL; o de formato 3 reconstrói
   a linha com os dois; o de formato 4 reconstrói com a lista de rotas.
-- `term` é o **termo da autoridade** que assinou (V288, doc 06 §4). Só sobe na promoção de Control
+- `term` é o **termo da autoridade** que assinou (V303, doc 06 §4). Só sobe na promoção de Control
   Plane e o nó recusa config de termo menor que o último aceito — config de termo velho é uma
   autoridade deposta tentando voltar a mandar.
 - `configVersion` é a versão da **permissão** do nó — nasce `1` no enroll e soma `1` a cada
@@ -477,7 +477,7 @@ revogação continua sendo decisão administrativa.
 ## 3c. Autoridade do Control Plane (`/admin/network/authority`)
 
 Promoção controlada de Control Plane (fase 6, doc 06 §4). Todos os endpoints exigem sessão de
-admin. O termo vigente vive na linha global de `network_state` (V288) e o eleitorado em
+admin. O termo vigente vive na linha global de `network_state` (V303) e o eleitorado em
 `network_authorities`.
 
 ```json

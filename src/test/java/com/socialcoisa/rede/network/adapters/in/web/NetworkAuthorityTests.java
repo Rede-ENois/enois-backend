@@ -61,7 +61,7 @@ class NetworkAuthorityTests {
 		jdbc.update("delete from network_authorities");
 		jdbc.update("delete from network_instance_readers");
 		jdbc.update("delete from network_state");
-		// Em produção a linha global é invariante (seed da V288): sem ela, o CAS da promoção
+		// Em produção a linha global é invariante (seed da V303): sem ela, o CAS da promoção
 		// atualizaria zero linhas e TODA promoção falharia com PROMOTION_LOST. O teste mantém o
 		// mesmo invariante em vez de medir a falha que o seed impede de existir.
 		jdbc.update("insert into network_state (id, mode, reason, since, term) values ('global', 'NORMAL', ?, ?, 0)",
@@ -271,7 +271,7 @@ class NetworkAuthorityTests {
 		return new Session(session.token(), session.userId());
 	}
 
-	/** Marca a instância como leitora viva, que é o que {@code aliveSince} lê (V278). */
+	/** Marca a instância como leitora viva, que é o que {@code aliveSince} lê (V293). */
 	private void alive(String instanceId, Instant seenAt) {
 		Timestamp at = Timestamp.from(seenAt);
 		jdbc.update("""

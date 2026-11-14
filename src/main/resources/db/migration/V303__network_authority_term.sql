@@ -23,7 +23,7 @@
 -- quem pode votar é decisão humana (declarada por um admin), não derivada de quem está vivo agora.
 -- Se o eleitorado fosse "as instâncias respondendo", a metade de uma partição se acharia maioria e
 -- promoveria a si mesma — o split-brain que este desenho existe para evitar. A vivacidade de cada
--- uma vem de `network_instance_readers` (V278), a mesma tabela que já diz quais instâncias estão
+-- uma vem de `network_instance_readers` (V293), a mesma tabela que já diz quais instâncias estão
 -- lendo de verdade: uma autoridade viva é uma que está declarada E deu sinal dentro da janela.
 --
 -- Nenhum nó externo escreve aqui; a promoção é operação administrativa auditada.
@@ -33,7 +33,7 @@ alter table network_state add column if not exists term int not null default 0;
 alter table network_state add column if not exists authority_id varchar(64) null;
 
 -- A linha global do modo nasce aqui e não na primeira transição: NetworkStatePersistenceAdapter
--- cria-a preguiçosamente ao gravar um modo (V277), e um banco que nunca passou por transição
+-- cria-a preguiçosamente ao gravar um modo (V292), e um banco que nunca passou por transição
 -- admite não ter a linha. O CAS da promoção é `update ... where term = <lido>` — sem a linha,
 -- atualiza ZERO linhas e a primeira promoção de um banco novo falharia sempre com
 -- NETWORK_AUTHORITY_PROMOTION_LOST. "A linha da autoridade existe" é invariante do deploy, não
@@ -42,7 +42,7 @@ alter table network_state add column if not exists authority_id varchar(64) null
 alter table network_state add column if not exists promoted_at timestamp null;
 
 insert into network_state (id, mode, reason, since, term)
-values ('global', 'NORMAL', 'seed inicial de autoridade (V288)', current_timestamp, 0)
+values ('global', 'NORMAL', 'seed inicial de autoridade (V303)', current_timestamp, 0)
 on duplicate key update id = id;
 
 create table if not exists network_authorities (

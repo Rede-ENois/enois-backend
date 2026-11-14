@@ -1,7 +1,7 @@
 -- Énóis Distributed Network (fase 3): transcode de mídia executado no nó (NODE_MEDIA).
 --
 -- O critério de aceite (docs/rede-distribuida/07-plano-incremental.md) é "transcode executa no nó;
--- resultado verificado por hash e tamanho". A tarefa em si já vive em `network_tasks` (V277); esta
+-- resultado verificado por hash e tamanho". A tarefa em si já vive em `network_tasks` (V292); esta
 -- tabela guarda o que a verificação precisa e o que o painel mostra:
 --
 -- - `source_sha256`/`source_bytes` — a origem que o Control Plane leu e fixou no momento do pedido.

@@ -31,7 +31,7 @@ formato de serialização de uma biblioteca: subir a versão do Jackson, mudar u
 ou habilitar escrita de datas como array quebraria a assinatura de todo nó já instalado, sem que
 nenhuma permissão tivesse mudado. O canônico é contrato; o JSON é transporte.
 
-**`configVersion` e `issuedAt` vêm do ciclo de vida do nó (V284), não do relógio.** A versão nasce
+**`configVersion` e `issuedAt` vêm do ciclo de vida do nó (V299), não do relógio.** A versão nasce
 `1` no enroll e soma `1` em cada transição administrativa, dentro do próprio `UPDATE`
 (`n.configVersion = n.configVersion + 1`); o `issuedAt` é carimbado com o instante da transição.
 Duas leituras seguidas devolvem o mesmo documento — e, como Ed25519 é determinística, a mesma
@@ -55,7 +55,7 @@ válida é `ERROR` e `signed:false`, nunca exceção que derruba a rota.
   **fase 6 acrescentou o `term`** à linha canônica e subiu o `formatVersion` para 2 (ADR-013): o
   número da autoridade precisa estar assinado, ou a regra de o termo nunca regredir seria editável.
 - **Transição administrativa é o único produtor de versão nova.** Não há contador em memória nem job
-  que precise lembrar de incrementar: a versão é derivada do `UPDATE` que já existe. A migração V284
+  que precise lembrar de incrementar: a versão é derivada do `UPDATE` que já existe. A migração V299
   é aditiva e idempotente, e linha anterior a ela cai no `created_at` para não inventar data.
 - **`publicKey` vai em toda resposta.** É o pino que o instalador grava no enroll; o runtime confere
   toda config seguinte contra ele sem depender do transporte desta resposta. A chave pública não é
@@ -84,7 +84,7 @@ válida é `ERROR` e `signed:false`, nunca exceção que derruba a rota.
   recebe lista vazia; `NODE_LOCAL` recebe todos os tipos na ordem do enum.
 - `NetworkNodesTests` (13): rota com credencial de nó, payload real, duas leituras idênticas,
   transição de status compondo versão, 401 sem credencial, nó pendente lendo a própria config.
-- Migração V284 aplicada duas vezes em MariaDB 11.4.13 real, com linha anterior preservada
+- Migração V299 aplicada duas vezes em MariaDB 11.4.13 real, com linha anterior preservada
   (`config_version = 1`, `config_issued_at` nulo) e transição simulada (`+1` e carimbo).
 - `scripts/tests/node-executor-test.sh` (117 asserções): o nó recusa config cuja assinatura não é do
   pino mesmo com `publicKey` copiado do pino, e recusa corpo adulterado depois de assinado (a

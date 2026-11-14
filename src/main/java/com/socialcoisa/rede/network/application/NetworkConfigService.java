@@ -29,7 +29,7 @@ import com.socialcoisa.rede.network.domain.TaskType;
  * por nós.</p>
  *
  * <p><b>Ler a config duas vezes sem nada mudar devolve o mesmo documento.</b> {@code configVersion} e
- * {@code issuedAt} vêm do ciclo de vida do nó (V284), não do relógio da requisição: o runtime trata
+ * {@code issuedAt} vêm do ciclo de vida do nó (V299), não do relógio da requisição: o runtime trata
  * config nova como evento e revalida a cada documento diferente, então uma config "nova" a cada
  * segundo viraria ruído e esconderia a mudança que importa.</p>
  *

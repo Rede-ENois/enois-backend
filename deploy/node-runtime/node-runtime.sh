@@ -548,7 +548,7 @@ exec_read_query() {
 }
 
 # ---------------- executor real: EDGE_CACHE (cache de borda) ----------------
-# O cache de borda é alimentado pelo feed de mudanças (V283): GET
+# O cache de borda é alimentado pelo feed de mudanças (V298): GET
 # /network/content/changes devolve, depois do cursor do nó, só o que ganhou versão
 # nova — kind, contentId, version, contentHash — e nunca o corpo. O corpo continua
 # vindo de GET /network/content/{kind}/{id}, o mesmo caminho autorizado da borda.

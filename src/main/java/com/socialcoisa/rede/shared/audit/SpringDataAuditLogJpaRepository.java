@@ -28,7 +28,7 @@ interface SpringDataAuditLogJpaRepository extends JpaRepository<AuditLogJpaEntit
 
 	/**
 	 * As ações contra um alvo, mais novas primeiro — o histórico que a página por nó do painel
-	 * abre. Vai pelo índice {@code (target_id, created_at)} da V286: sem ele, cada abertura de
+	 * abre. Vai pelo índice {@code (target_id, created_at)} da V301: sem ele, cada abertura de
 	 * página varreria a maior tabela de trilha do sistema com filtro em coluna sem índice.
 	 */
 	@Query("select a from AuditLogJpaEntity a where a.targetId = :targetId order by a.createdAt desc")

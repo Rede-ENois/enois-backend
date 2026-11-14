@@ -15,7 +15,7 @@ retentativa morasse no evento, a tarefa ficaria presa em "concluída" com o nó 
 
 ## Decisão
 
-A linha da tarefa (`network_tasks`, V277) é a **autoridade** sobre tentativa, prazo, nó designado,
+A linha da tarefa (`network_tasks`, V292) é a **autoridade** sobre tentativa, prazo, nó designado,
 claim e erro. O evento do outbox é só o gatilho que cria a linha.
 
 - `attempt` sobe a cada designação; resultado de tentativa antiga é descartado pelo `attempt`.

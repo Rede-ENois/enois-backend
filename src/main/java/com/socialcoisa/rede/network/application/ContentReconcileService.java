@@ -59,7 +59,7 @@ public class ContentReconcileService {
 	/**
 	 * A fila da varredura: nunca conferidos primeiro, depois os conferidos há mais tempo.
 	 *
-	 * <p>Nó de região fora de operação (V289) fica fora: ele não recebe conteúdo desde a declaração
+	 * <p>Nó de região fora de operação (V304) fica fora: ele não recebe conteúdo desde a declaração
 	 * — é a rede que parou de lhe servir, não o cache dele que divergiu. Conferir agora acusaria o nó
 	 * por uma decisão do Control Plane, e quando a região voltar o nó sincroniza de novo e a fila o
 	 * alcança sozinha.</p>

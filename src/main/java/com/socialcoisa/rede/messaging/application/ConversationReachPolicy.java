@@ -58,11 +58,12 @@ public class ConversationReachPolicy {
 	private void requireMayReach(String kind, String actorId, Collection<String> recipientIds) {
 		// A group is many people who did not all choose each other: a block between two members
 		// hides their content from each other but does not silence the whole group.
-		if (!"GROUP".equalsIgnoreCase(kind)) {
-			for (String recipientId : recipientIds) {
-				if (blockedUsers.blockedBetween(actorId, recipientId)) {
-					throw blocked();
-				}
+		if (!"GROUP".equalsIgnoreCase(kind) && !recipientIds.isEmpty()) {
+			// One read for the whole set: asking pair by pair is two queries per recipient on the
+			// hot path of every send.
+			Set<String> blocked = blockedUsers.blockedIdsFor(actorId);
+			if (recipientIds.stream().anyMatch(blocked::contains)) {
+				throw blocked();
 			}
 		}
 		// JOB and SERVICE conversations are opened by the minor's own action (applying, hiring)

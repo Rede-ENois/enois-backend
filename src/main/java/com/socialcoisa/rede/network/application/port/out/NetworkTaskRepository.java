@@ -68,7 +68,7 @@ public interface NetworkTaskRepository {
 	long countOnNonOperatingNodes(Instant now);
 
 	/**
-	 * Tarefas designadas a nós de regiões declaradas fora de operação (V289), com claim vigente.
+	 * Tarefas designadas a nós de regiões declaradas fora de operação (V304), com claim vigente.
 	 *
 	 * <p>Complementa {@link #findOnNonOperatingNodes} e não repete: lá o critério é o <b>status do
 	 * nó</b>, aqui é a <b>região ter sido evacuada</b> — o nó continua {@code ACTIVE} e a drenagem

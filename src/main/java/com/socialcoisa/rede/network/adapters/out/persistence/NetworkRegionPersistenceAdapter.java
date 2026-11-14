@@ -11,7 +11,7 @@ import org.springframework.stereotype.Repository;
 import com.socialcoisa.rede.network.application.port.out.NetworkRegionRepository;
 
 /**
- * Regiões fora de operação (V289), em JDBC direto.
+ * Regiões fora de operação (V304), em JDBC direto.
  *
  * <p>A leitura que o scheduler usa é {@link #outOfService()}, uma linha por região caída — a rede
  * tem dezenas de regiões no máximo, e a consulta roda em toda escolha de nó. JDBC e não JPA pelo

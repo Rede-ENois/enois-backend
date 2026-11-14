@@ -37,7 +37,7 @@ interface SpringDataNetworkTaskJpaRepository extends JpaRepository<NetworkTaskJp
 	/**
 	 * Pedidos em aberto para este nó. "Aberta" é PENDING ou DISPATCHED com claim vigente: as duas
 	 * significam que ainda há trabalho por fazer ali. O índice {@code idx_network_tasks_target}
-	 * (V287) responde a esta faixa e a de {@code countOpenTargeted}.
+	 * (V302) responde a esta faixa e a de {@code countOpenTargeted}.
 	 */
 	@Query("select t from NetworkTaskJpaEntity t where t.targetNodeId = :targetNodeId and "
 			+ "(t.status = 'PENDING' or (t.status = 'DISPATCHED' and t.claimExpiresAt > :now)) "
@@ -80,7 +80,7 @@ interface SpringDataNetworkTaskJpaRepository extends JpaRepository<NetworkTaskJp
 	long countOnNonOperatingNodes(@Param("now") Instant now);
 
 	/**
-	 * Tarefas designadas a nós de regiões declaradas fora de operação (V289), com claim vigente.
+	 * Tarefas designadas a nós de regiões declaradas fora de operação (V304), com claim vigente.
 	 *
 	 * <p>A diferença em relação a {@link #findOnNonOperatingNodes} é o critério, e é a razão de a
 	 * consulta existir: lá o nó está fora porque o STATUS dele diz isso; aqui o nó está

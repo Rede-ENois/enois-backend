@@ -250,7 +250,7 @@ public class NetworkTaskService {
 
 	/**
 	 * Drenagem regional: devolve à fila, na hora, o que estava designado a nós de regiões evacuadas
-	 * (V289).
+	 * (V304).
 	 *
 	 * <p>Antes desta rodada, evacuar uma região não devolvia nada: a drenagem existente pergunta
 	 * pelo <b>status do nó</b> ({@code n.status <> 'ACTIVE'}), e o nó da região caída continua
@@ -264,7 +264,7 @@ public class NetworkTaskService {
 	 * na regra de descarte que já existe.</p>
 	 *
 	 * <p>Tarefa com <b>alvo</b> num nó evacuado volta para a fila mas não é designada a outro: alvo é
-	 * vínculo (V287), não preferência — o estado daquele trabalho vive naquele nó. Ela espera o
+	 * vínculo (V302), não preferência — o estado daquele trabalho vive naquele nó. Ela espera o
 	 * prazo ou a região voltar, o que é o comportamento certo: executar no nó errado não é executar
 	 * pior, é não executar.</p>
 	 */

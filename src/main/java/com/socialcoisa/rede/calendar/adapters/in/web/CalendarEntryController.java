@@ -23,6 +23,7 @@ import com.socialcoisa.rede.calendar.application.CalendarCommandService;
 import com.socialcoisa.rede.calendar.application.CalendarConflictService;
 import com.socialcoisa.rede.calendar.application.CalendarInvitationService;
 import com.socialcoisa.rede.calendar.application.CalendarQueryService;
+import com.socialcoisa.rede.calendar.application.CalendarRecurrenceService;
 import com.socialcoisa.rede.calendar.application.CalendarReminderService;
 import com.socialcoisa.rede.calendar.domain.CalendarEntry;
 import com.socialcoisa.rede.calendar.domain.CalendarParticipant;
@@ -57,11 +58,13 @@ class CalendarEntryController {
 	private final IdempotencyApplicationService idempotency;
 	private final CalendarReminderService calendarReminderService;
 	private final CalendarConflictService calendarConflictService;
+	private final CalendarRecurrenceService calendarRecurrenceService;
 
 	CalendarEntryController(CurrentUserResolver currentUserResolver, CalendarQueryService calendarQueryService,
 			CalendarCommandService calendarCommandService, CalendarInvitationService calendarInvitationService,
 			UserProfileRepository profiles, IdempotencyApplicationService idempotency,
-			CalendarReminderService calendarReminderService, CalendarConflictService calendarConflictService) {
+			CalendarReminderService calendarReminderService, CalendarConflictService calendarConflictService,
+			CalendarRecurrenceService calendarRecurrenceService) {
 		this.currentUserResolver = currentUserResolver;
 		this.calendarQueryService = calendarQueryService;
 		this.calendarCommandService = calendarCommandService;
@@ -70,6 +73,7 @@ class CalendarEntryController {
 		this.idempotency = idempotency;
 		this.calendarReminderService = calendarReminderService;
 		this.calendarConflictService = calendarConflictService;
+		this.calendarRecurrenceService = calendarRecurrenceService;
 	}
 
 	/**
@@ -174,6 +178,43 @@ class CalendarEntryController {
 				CalendarEntryView.from(calendarCommandService.cancel(user.id().value(), entryId))));
 	}
 
+	/**
+	 * Torna o compromisso recorrente: `WEEKLY`, `BIWEEKLY` ou `MONTHLY`. As próximas ocorrências
+	 * nascem na hora, e o worker mantém o horizonte cheio; cada ocorrência é um compromisso comum,
+	 * que pode ser editada ou cancelada sozinha.
+	 */
+	@PostMapping("/{entryId}/series")
+	ResponseEntity<String> startSeries(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@PathVariable String entryId, @RequestBody(required = false) SeriesRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		if (request == null) {
+			throw new ApiException(400, "INVALID_RECURRENCE", "Informe a cadência da série.");
+		}
+		String hash = idempotency.hash(Map.of("entryId", entryId, "request", request));
+		return idempotency.execute(user.id().value(), "POST", "/api/calendar/entries/{entryId}/series",
+			idempotencyKey, hash, () -> new CommandResponse(200,
+				CalendarEntryView.from(calendarRecurrenceService.start(user.id().value(), entryId,
+					request.recurrence()))));
+	}
+
+	/**
+	 * Encerra a série: as ocorrências futuras são canceladas e o compromisso informado volta a ser
+	 * único. O passado fica — cancelar o que já aconteceu apagaria o registro de algo que houve.
+	 */
+	@DeleteMapping("/{entryId}/series")
+	ResponseEntity<String> stopSeries(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@PathVariable String entryId) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		String hash = idempotency.hash(Map.of("entryId", entryId));
+		return idempotency.execute(user.id().value(), "DELETE", "/api/calendar/entries/{entryId}/series",
+			idempotencyKey, hash, () -> new CommandResponse(200,
+				CalendarEntryView.from(calendarRecurrenceService.stop(user.id().value(), entryId))));
+	}
+
 	/** Convida pelo @. Só o organizador; a resposta é de quem foi convidado, em outra rota. */
 	@PostMapping("/{entryId}/participants")
 	ResponseEntity<String> invite(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
@@ -253,17 +294,22 @@ class CalendarEntryController {
 		}
 	}
 
+	/**
+	 * Tira o lembrete de uma antecedência. Sem `minutesBefore` não há o que tirar: responder 200
+	 * faria a tela acreditar que apagou algo, então o pedido incompleto é 400 com código.
+	 */
 	@DeleteMapping("/{entryId}/reminders")
 	void clearReminder(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String entryId, @RequestParam(required = false) Integer minutesBefore) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		if (minutesBefore != null) {
-			try {
-				calendarReminderService.clearForReader(user.id().value(), entryId, minutesBefore);
-			}
-			catch (IllegalArgumentException error) {
-				throw new ApiException(400, "INVALID_REMINDER", error.getMessage());
-			}
+		if (minutesBefore == null) {
+			throw new ApiException(400, "INVALID_REMINDER", "Informe minutesBefore (5, 15, 30, 60 ou 1440).");
+		}
+		try {
+			calendarReminderService.clearForReader(user.id().value(), entryId, minutesBefore);
+		}
+		catch (IllegalArgumentException error) {
+			throw new ApiException(400, "INVALID_REMINDER", error.getMessage());
 		}
 	}
 
@@ -296,7 +342,7 @@ class CalendarEntryController {
 			.toList();
 	}
 
-	private static Instant instant(String raw, String field) {
+	static Instant instant(String raw, String field) {
 		if (raw == null || raw.isBlank()) {
 			throw new ApiException(400, "INVALID_WINDOW", "Informe " + field + " em ISO-8601.");
 		}
@@ -321,15 +367,21 @@ class CalendarEntryController {
 	/** O contrato de saída não expõe a entidade nem o dono: quem lê já é o dono. */
 	record CalendarEntryView(String id, String scope, String kind, String title, String description,
 			String startsAt, String endsAt, String timeZoneId, boolean allDay, String state,
-			String sourceType, String sourceId, String createdAt, String updatedAt, String cancelledAt) {
+			String sourceType, String sourceId, String createdAt, String updatedAt, String cancelledAt,
+			String seriesId, String recurrence) {
 
 		static CalendarEntryView from(CalendarEntry entry) {
 			return new CalendarEntryView(entry.id(), entry.scope().name(), entry.kind().name(), entry.title(),
 				entry.description(), entry.startsAt().toString(), entry.endsAt().toString(), entry.zone().getId(),
 				entry.allDay(), entry.state().name(), entry.source().type(), entry.source().id(),
 				entry.createdAt().toString(), entry.updatedAt().toString(),
-				entry.cancelledAt() == null ? null : entry.cancelledAt().toString());
+				entry.cancelledAt() == null ? null : entry.cancelledAt().toString(),
+				entry.seriesId(), entry.recurrence() == null ? null : entry.recurrence().name());
 		}
+	}
+
+	/** Pedido de início de série: só a cadência; o resto vem do compromisso fundador. */
+	record SeriesRequest(String recurrence) {
 	}
 
 	/** Item da agenda: o compromisso mais o lugar de quem está lendo nele. */

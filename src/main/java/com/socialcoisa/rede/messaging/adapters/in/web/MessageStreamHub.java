@@ -30,7 +30,7 @@ import tools.jackson.databind.ObjectMapper;
  * <p>O registro é em memória, por processo. Com mais de uma instância do backend, a aba aberta na
  * instância B não recebia o aviso de uma escrita atendida na instância A — o evento era entregue só
  * no processo que o publicou. Por isso cada aviso local também vira um sinal em
- * {@code network_instance_signals} (V278), e cada instância entrega no próprio registro o que as
+ * {@code network_instance_signals} (V293), e cada instância entrega no próprio registro o que as
  * outras emitiram. O sinal carrega só ids, como o evento local: conteúdo continua vindo dos
  * endpoints autorizados.</p>
  */
@@ -173,6 +173,12 @@ class MessageStreamHub {
 		}
 		catch (IOException | IllegalStateException closed) {
 			// The tab went away; the container completes the emitter, here it only leaves the registry.
+			remove(userId, emitter);
+		}
+		catch (RuntimeException failure) {
+			// O aviso sai DEPOIS do commit: deixar a excecao subir transformaria em 500 uma mensagem
+			// que ja esta gravada, e o cliente tentaria reenviar o que nao falhou. O stream e
+			// best-effort por definicao — a tela busca o estado real nos endpoints autorizados.
 			remove(userId, emitter);
 		}
 	}

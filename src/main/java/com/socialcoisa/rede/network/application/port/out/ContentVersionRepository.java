@@ -9,7 +9,7 @@ import com.socialcoisa.rede.network.domain.ContentChange;
 import com.socialcoisa.rede.network.domain.ContentKind;
 import com.socialcoisa.rede.network.domain.ContentVersion;
 
-/** Versão do conteúdo público (V279), o feed de mudanças (V283) e o que cada nó já sincronizou. */
+/** Versão do conteúdo público (V294), o feed de mudanças (V298) e o que cada nó já sincronizou. */
 public interface ContentVersionRepository {
 
 	Optional<ContentVersion> find(ContentKind kind, String contentId);
@@ -69,7 +69,7 @@ public interface ContentVersionRepository {
 	long countAll();
 
 	/**
-	 * Registra no feed que esta versão foi cunhada (V283).
+	 * Registra no feed que esta versão foi cunhada (V298).
 	 *
 	 * <p>Chamado na MESMA transação da cunhagem: versão nova sem linha no feed seria uma mudança que
 	 * nenhum nó descobre, e o cache de borda ficaria velho até o TTL — no pior caso, para sempre, se

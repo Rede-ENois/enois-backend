@@ -3,7 +3,7 @@ package com.socialcoisa.rede.network.domain;
 import java.time.Instant;
 
 /**
- * Uma mudança de conteúdo público no feed que o nó de borda consome (V283).
+ * Uma mudança de conteúdo público no feed que o nó de borda consome (V298).
  *
  * <p>É o delta, não o conteúdo: diz qual agregado ganhou versão nova, e o nó decide se recarrega a
  * entrada que ele tem em cache. Sem isto, um nó com milhares de agregados em cache não tem como

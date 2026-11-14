@@ -32,7 +32,7 @@ Quatro perguntas de desenho, cada uma com a alternativa rejeitada:
 
 3. **Qual quarentena?** **A de status (`NodeStatus.QUARANTINED`), com motivo `TERM_CONFLICT`, e não
    a janela de saúde.** São duas mecânicas distintas no código: a janela (`quarantined_until`,
-   V282) existe para falha, que se resolve sozinha, e o `NodeHealthWorker` a libera por relógio. A
+   V297) existe para falha, que se resolve sozinha, e o `NodeHealthWorker` a libera por relógio. A
    divergência de termo não se resolve esperando: liberar por prazo devolveria o nó a operar ainda
    dividido entre dois mandos. O status `QUARANTINED` já basta para tirá-lo de circulação —
    `requireOperable` recusa `nextFor`/`acceptResult` com 403 `NODE_QUARANTINED`, `findCandidates` só
@@ -58,8 +58,8 @@ encerra e limpa a janela; `acceptTasks` passa a considerar o próprio nó, não 
 
 ## Consequências
 
-- Nenhuma migração: o motivo `TERM_CONFLICT` cabe em `quarantine_reason` (`varchar(40)`, V282) e o
-  termo observado não é armazenado — o heartbeat é transiente por desenho. V289 continua livre.
+- Nenhuma migração: o motivo `TERM_CONFLICT` cabe em `quarantine_reason` (`varchar(40)`, V297) e o
+  termo observado não é armazenado — o heartbeat é transiente por desenho. V305 continua livre.
 - `HeartbeatCommand` e `HeartbeatRequest` ganham `observedTerm` (aditivo e opcional): nó de runtime
   antigo que não manda o campo não é penalizado, e continua operando como antes.
 - `approve` passa a chamar `release` quando o motivo é `TERM_CONFLICT`. Para os demais motivos o

@@ -15,7 +15,7 @@ import com.socialcoisa.rede.network.domain.MediaJobStatus;
 import com.socialcoisa.rede.network.domain.MediaTranscodeJob;
 
 /**
- * Jobs de transcode delegado (V280), em JDBC direto.
+ * Jobs de transcode delegado (V295), em JDBC direto.
  *
  * <p>JDBC porque as transições são condicionais por estado e a comparação é o ponto: {@code
  * markVerified} só grava se a linha ainda não estiver VERIFIED, então duas tentativas que chegam

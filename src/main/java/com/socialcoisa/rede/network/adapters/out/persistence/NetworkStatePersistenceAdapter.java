@@ -31,7 +31,7 @@ class NetworkStatePersistenceAdapter implements NetworkStateRepository {
 	 *
 	 * <p>Antes: sem linha em {@code network_state}, a entidade era criada já com o modo novo e a
 	 * comparação "o modo mudou?" saía antes do {@code save}. A primeira transição nunca era gravada e
-	 * {@code current()} respondia {@code NORMAL} para sempre num banco recém-migrado — a V277 cria a
+	 * {@code current()} respondia {@code NORMAL} para sempre num banco recém-migrado — a V292 cria a
 	 * tabela e não insere a linha. Agora: sem linha, insere direto; com linha, só grava se o modo
 	 * mudou, como antes.</p>
 	 */

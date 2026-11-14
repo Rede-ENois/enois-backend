@@ -187,7 +187,7 @@ Implementada na fase 5 (`GET /network/nodes/me/config`, contrato em `03-contrato
   a verificação falha fechada: sem openssl, sem pino legível ou com qualquer campo assinado
   ausente, a config é recusada e o nó não pede tarefa.
 - **`configVersion` vem do ciclo de vida**, não de um contador em memória: `1` no enroll, `+1` em
-  cada transição administrativa (V284). Sem isso, o `issuedAt` teria de ser o relógio da requisição
+  cada transição administrativa (V299). Sem isso, o `issuedAt` teria de ser o relógio da requisição
   e o runtime veria "config nova" a cada segundo.
 - **`signed:false` quando não há chave configurada** — o Control Plane não inventa assinatura, e
   quem decide aceitar config sem assinatura é o runtime (padrão: recusar).

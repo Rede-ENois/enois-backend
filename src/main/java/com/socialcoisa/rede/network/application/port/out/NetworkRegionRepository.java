@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Regiões fora de operação por decisão humana (V289) — a outra metade da recuperação regional
+ * Regiões fora de operação por decisão humana (V304) — a outra metade da recuperação regional
  * (docs/rede-distribuida/06-contingencia.md §3).
  *
  * <p>A região que entra aqui SAI da rede: nó dela não recebe tarefa nova, não conta vaga, não ouve

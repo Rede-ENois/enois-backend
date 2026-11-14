@@ -6,7 +6,7 @@
 ## Contexto
 
 O item "replicação geográfica" da fase 6 pede "só o que pode replicar; divergência detectada". O
-que pode replicar e a detecção de divergência já existiam (V279–V283, 05 §7): cada nó confirma em
+que pode replicar e a detecção de divergência já existiam (V294–V298, 05 §7): cada nó confirma em
 `network_content_snapshots` a versão e o hash do que guardou, o feed de mudanças (`seq`) orienta o
 revalidar, e a varredura periódica confere snapshot contra origem, acusando `CONTENT_STALE`,
 `CONTENT_GONE` e `CONTENT_UNREADABLE`.
@@ -15,7 +15,7 @@ O que faltava era a palavra do próprio nome: **geográfica**. Toda a medida era
 da contingência (`06-contingencia.md` §3) é por região. Dois defeitos concretos, provados em código:
 
 1. **A varredura acusava nó de região evacuada.** A fila (`dueForCheck`) filtrava só
-   `n.status = 'ACTIVE'`. O nó da região declarada fora de operação (V289, ADR-015) continua
+   `n.status = 'ACTIVE'`. O nó da região declarada fora de operação (V304, ADR-015) continua
    `ACTIVE` — a região é que saiu —, então a varredura o conferia e gravava `CONTENT_STALE`. O nó
    não divergiu: desde a declaração o Control Plane parou de lhe servir (despacho filtra,
    `acceptTasks=false`, o `sweep` do cache o pula). Num incidente regional, o painel encheria de
@@ -65,7 +65,7 @@ que o painel existe para mostrar.
 ## Consequências
 
 - Nenhuma migração: a guarda é parâmetro da consulta existente, e a cobertura é consulta nova sobre
-  tabelas existentes (`network_content_snapshots` × `network_nodes`). V290 continua livre.
+  tabelas existentes (`network_content_snapshots` × `network_nodes`). V305 continua livre.
 - `ContentReconcileService` ganha `NetworkRegionRepository` no construtor; `AdminNetworkContentController`
   ganha `NetworkReplicationCoverageService`. Aditivo interno; nenhum teste constrói nenhum dos dois à mão.
 - A rede evacuada reporta cobertura menor **e** universo menor na mesma resposta: `outOfServiceRegions`

@@ -85,7 +85,7 @@ class NetworkTermConflictTests {
 		jdbc.update("delete from network_provision_tokens");
 		jdbc.update("delete from network_nodes");
 		jdbc.update("delete from network_state");
-		// A linha global é invariante do deploy (seed da V288) e é dela que sai o termo vigente.
+		// A linha global é invariante do deploy (seed da V303) e é dela que sai o termo vigente.
 		jdbc.update("insert into network_state (id, mode, reason, since, term) values ('global', 'NORMAL', ?, ?, 2)",
 			"estado de teste", Timestamp.from(Instant.now()));
 		jdbc.update("delete from audit_logs where action = 'NETWORK_NODE_QUARANTINED'");
@@ -187,7 +187,7 @@ class NetworkTermConflictTests {
 	// ---------------------------------------------------------------- depois do conflito
 
 	/**
-	 * A quarentena de termo não tem prazo, ao contrário da de saúde (V282). Se o relógio a
+	 * A quarentena de termo não tem prazo, ao contrário da de saúde (V297). Se o relógio a
 	 * liberasse, o nó voltaria a operar ainda dividido entre dois mandos — que é exatamente o estado
 	 * que a regra 5 proíbe.
 	 */

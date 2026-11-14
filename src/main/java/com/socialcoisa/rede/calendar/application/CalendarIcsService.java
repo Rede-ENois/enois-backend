@@ -1,7 +1,10 @@
 package com.socialcoisa.rede.calendar.application;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -13,16 +16,22 @@ import java.time.zone.ZoneRules;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import com.socialcoisa.rede.calendar.application.port.out.CalendarEntryRepository;
+import com.socialcoisa.rede.calendar.application.port.out.CalendarInvitationRepository;
 import com.socialcoisa.rede.calendar.domain.CalendarEntry;
 import com.socialcoisa.rede.calendar.domain.CalendarEntrySource;
 import com.socialcoisa.rede.calendar.domain.CalendarKind;
+import com.socialcoisa.rede.calendar.domain.CalendarRecurrence;
 import com.socialcoisa.rede.calendar.domain.CalendarScope;
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -48,31 +57,49 @@ public class CalendarIcsService {
 	private static final DateTimeFormatter ICS_DATE = DateTimeFormatter.ofPattern("yyyyMMdd");
 	/** RFC 5545 §3.1: cada linha tem no máximo 75 octets, sem contar o CRLF. */
 	private static final int MAX_LINE = 75;
-	/** Teto do upload: um arquivo de agenda pessoal não é um dump, e não deve virar um. */
-	private static final int MAX_IMPORT_BYTES = 512 * 1024;
+	/**
+	 * Teto do upload. Um arquivo de agenda pessoal não é um dump, e não deve virar um. O limite do
+	 * multipart é de centenas de MB por causa de vídeo; sem este teto, o import leria e analisaria o
+	 * arquivo inteiro antes de recusar.
+	 */
 	private static final int MAX_IMPORT_EVENTS = 500;
+	/** Teto de blocos por `VTIMEZONE`: um fuso não muda de regra mais que isso numa janela. */
+	private static final int MAX_TIMEZONE_OBSERVANCES = 400;
 	private static final String SOURCE_TYPE = "ICS";
 
 	private final CalendarEntryRepository entries;
+	private final CalendarInvitationRepository invitations;
 	private final CalendarSourceService source;
-	private final Clock clock;
+	private final CalendarRecurrenceService recurrences;
+	private final int maxImportBytes;
 
-	public CalendarIcsService(CalendarEntryRepository entries, CalendarSourceService source, Clock clock) {
+	public CalendarIcsService(CalendarEntryRepository entries, CalendarInvitationRepository invitations,
+			CalendarSourceService source, CalendarRecurrenceService recurrences,
+			@Value("${rede.calendar.ics-max-import-bytes:524288}") int maxImportBytes) {
 		this.entries = entries;
+		this.invitations = invitations;
 		this.source = source;
-		this.clock = clock;
+		this.recurrences = recurrences;
+		this.maxImportBytes = maxImportBytes;
 	}
 
 	// --- export --------------------------------------------------------------
 
 	/**
 	 * O `.ics` da agenda de quem está lendo na janela pedida. Cancelado entra com
-	 * `STATUS:CANCELLED` e o `UID` que sempre foi dele.
+	 * `STATUS:CANCELLED` e o `UID` que sempre foi dele. O convite exportado é todo convite com
+	 * linha de participante, aceito ou recusado: o arquivo é o histórico da agenda, e o
+	 * `PARTSTAT` do leitor externo resolve o que ele faz com quem recusou.
+	 *
+	 * <p>Um `VTIMEZONE` por fuso que a janela realmente usa, e cada um só com as transições da
+	 * janela — o export de um mês não carrega décadas de mudança de regra.
 	 */
 	public String export(String userId, Instant from, Instant to, CalendarScope scope) {
 		validateWindow(from, to);
 		List<CalendarEntry> agenda = new ArrayList<>(entries.findInWindow(userId, scope, from, to));
-		agenda.addAll(entries.findInvitedInWindow(userId, scope, from, to));
+		for (CalendarInvitationRepository.InvitedEntry invited : invitations.findInvited(userId, scope, from, to)) {
+			agenda.add(invited.entry());
+		}
 		agenda.sort((left, right) -> left.startsAt().compareTo(right.startsAt()));
 
 		Map<String, ZoneId> zones = new LinkedHashMap<>();
@@ -87,7 +114,7 @@ public class CalendarIcsService {
 		line(ics, "CALSCALE:GREGORIAN");
 		line(ics, "METHOD:PUBLISH");
 		for (ZoneId zone : zones.values()) {
-			vtimezone(ics, zone);
+			vtimezone(ics, zone, from, to);
 		}
 		for (CalendarEntry entry : agenda) {
 			vevent(ics, entry);
@@ -122,38 +149,47 @@ public class CalendarIcsService {
 	 * `VTIMEZONE` a partir das transições reais do fuso. Um `STANDARD` fixo com o deslocamento de
 	 * hoje erraria metade do ano em regiões com horário de verão; a lista de observâncias cobre
 	 * exatamente cada mudança que o tzdata conhece no intervalo exportado.
+	 *
+	 * <p>O bloco abre com a observância em vigor no começo da janela: um arquivo de janeiro precisa
+	 * do deslocamento de janeiro, mesmo que a última transição tenha sido no ano anterior. E o
+	 * recorte é o da janela pedida — percorrer o tzdata desde 1970 para exportar um mês era
+	 * caminhada sem uso.
 	 */
-	private void vtimezone(StringBuilder ics, ZoneId zone) {
+	private static void vtimezone(StringBuilder ics, ZoneId zone, Instant from, Instant to) {
 		line(ics, "BEGIN:VTIMEZONE");
 		line(ics, "TZID:" + zone.getId());
 		ZoneRules rules = zone.getRules();
-		Instant cursor = Instant.parse("1970-01-01T00:00:00Z");
-		Instant limit = Instant.now().plus(java.time.Duration.ofDays(3650));
-		int emitted = 0;
-		while (cursor.isBefore(limit) && emitted < 400) {
-			ZoneOffsetTransition transition = rules.nextTransition(cursor);
-			if (transition == null || transition.getInstant().isAfter(limit)) {
-				break;
-			}
-			boolean daylight = transition.getOffsetAfter().getTotalSeconds()
-				> transition.getOffsetBefore().getTotalSeconds();
-			line(ics, daylight ? "BEGIN:DAYLIGHT" : "BEGIN:STANDARD");
-			line(ics, "DTSTART:" + ICS_TIME.format(transition.getDateTimeBefore()));
-			line(ics, "TZOFFSETFROM:" + offset(transition.getOffsetBefore()));
-			line(ics, "TZOFFSETTO:" + offset(transition.getOffsetAfter()));
-			line(ics, daylight ? "END:DAYLIGHT" : "END:STANDARD");
-			cursor = transition.getInstant();
+		// Uma borda de um dia garante que a mudança no próprio instante da janela entre.
+		Instant cursor = from.minus(Duration.ofDays(1));
+		Instant limit = to.plus(Duration.ofDays(1));
+		// A observância que já valia na borda da janela abre o bloco. O deslocamento de entrada e de
+		// saída são o mesmo: a regra começa valendo, e quem muda é a próxima transição.
+		ZoneOffset current = rules.getOffset(cursor);
+		observance(ics, LocalDateTime.ofInstant(cursor, current), current, current,
+			rules.isDaylightSavings(cursor));
+		int emitted = 1;
+		for (ZoneOffsetTransition transition = rules.nextTransition(cursor);
+				transition != null && !transition.getInstant().isAfter(limit)
+					&& emitted < MAX_TIMEZONE_OBSERVANCES;
+				transition = rules.nextTransition(transition.getInstant())) {
+			observance(ics, transition.getDateTimeBefore(), transition.getOffsetBefore(),
+				transition.getOffsetAfter(), daylight(transition));
 			emitted++;
 		}
-		if (emitted == 0) {
-			// Fuso sem transição (UTC, por exemplo): uma observância fixa é o arquivo inteiro.
-			line(ics, "BEGIN:STANDARD");
-			line(ics, "DTSTART:19700101T000000");
-			line(ics, "TZOFFSETFROM:" + offset(rules.getOffset(Instant.EPOCH)));
-			line(ics, "TZOFFSETTO:" + offset(rules.getOffset(Instant.EPOCH)));
-			line(ics, "END:STANDARD");
-		}
 		line(ics, "END:VTIMEZONE");
+	}
+
+	private static boolean daylight(ZoneOffsetTransition transition) {
+		return transition.getOffsetAfter().getTotalSeconds() > transition.getOffsetBefore().getTotalSeconds();
+	}
+
+	private static void observance(StringBuilder ics, LocalDateTime startsAt, ZoneOffset before,
+			ZoneOffset after, boolean daylight) {
+		line(ics, daylight ? "BEGIN:DAYLIGHT" : "BEGIN:STANDARD");
+		line(ics, "DTSTART:" + ICS_TIME.format(startsAt));
+		line(ics, "TZOFFSETFROM:" + offset(before));
+		line(ics, "TZOFFSETTO:" + offset(after));
+		line(ics, daylight ? "END:DAYLIGHT" : "END:STANDARD");
 	}
 
 	/** Origem presente é o UID (estável entre exportações); entrada sem origem usa o id próprio. */
@@ -164,7 +200,7 @@ public class CalendarIcsService {
 
 	/** `SEQUENCE` cresce a cada alteração: o leitor externo usa isso para aceitar a revisão nova. */
 	private static long sequence(CalendarEntry entry) {
-		return Math.max(0, java.time.Duration.between(entry.createdAt(), entry.updatedAt()).getSeconds());
+		return Math.max(0, Duration.between(entry.createdAt(), entry.updatedAt()).getSeconds());
 	}
 
 	private static String stamp(Instant instant, ZoneId zone) {
@@ -212,13 +248,19 @@ public class CalendarIcsService {
 	 * Importa o arquivo na agenda de quem está lendo. `VEVENT` sem UID ou sem horário não tem
 	 * identidade suficiente e é contado em `skipped`, sem derrubar o arquivo inteiro: um arquivo
 	 * real traz `VTIMEZONE`, `VALARM` e eventos alheios ao que este app representa.
+	 *
+	 * <p>Os dois tetos contam coisas diferentes. O de bytes protege memória e tempo de análise, e
+	 * é lido de um arquivo temporário: um corpo de centenas de MB não cabe num array só para
+	 * responder 400. O de eventos limita quantas linhas o import pode criar de uma vez, e também
+	 * evita que `BEGIN:VEVENT` sobrepostos confundam o parser.
 	 */
-	public ImportResult importCalendar(String userId, String body, CalendarScope scope) {
-		if (body == null || body.isBlank()) {
-			throw new ApiException(400, "INVALID_ICS", "Envie o arquivo iCalendar no corpo.");
+	public ImportResult importCalendar(String userId, InputStream content, CalendarScope scope) {
+		if (content == null) {
+			throw new ApiException(400, "INVALID_ICS", "Envie o arquivo iCalendar no campo file.");
 		}
-		if (body.getBytes(StandardCharsets.UTF_8).length > MAX_IMPORT_BYTES) {
-			throw new ApiException(400, "INVALID_ICS", "O arquivo passa de 512 KB.");
+		String body = readLimited(content);
+		if (body.isBlank()) {
+			throw new ApiException(400, "INVALID_ICS", "Envie o arquivo iCalendar no campo file.");
 		}
 		List<Vevent> events = parse(body);
 		if (events.size() > MAX_IMPORT_EVENTS) {
@@ -250,9 +292,9 @@ public class CalendarIcsService {
 			}
 			boolean dateOnly = isDateOnly(event.start());
 			if (end == null || !end.isAfter(start)) {
-				end = dateOnly ? start.plus(java.time.Duration.ofDays(1)) : start.plus(java.time.Duration.ofHours(1));
+				end = dateOnly ? start.plus(Duration.ofDays(1)) : start.plus(Duration.ofHours(1));
 			}
-			if (java.time.Duration.between(start, end).compareTo(CalendarEntry.MAX_DURATION) > 0) {
+			if (Duration.between(start, end).compareTo(CalendarEntry.MAX_DURATION) > 0) {
 				skipped++;
 				continue;
 			}
@@ -268,8 +310,62 @@ public class CalendarIcsService {
 			else if (result.moved()) {
 				moved++;
 			}
+			importRule(userId, result.entry(), event, start, zone);
 		}
 		return new ImportResult(events.size(), created, moved, cancelled, skipped);
+	}
+
+	/**
+	 * A repetição do arquivo vira série de verdade, em vez de ser descartada em silêncio.
+	 *
+	 * <p>O `RRULE` do iCalendar é uma regra; aqui a série é materializada como todas as outras, e cada
+	 * ocorrência é um compromisso completo na agenda. Só cadências que o app representa viram série —
+	 * diária ou por dia da semana ficam de fora, e a ocorrência original continua única.
+	 *
+	 * <p>`COUNT` e `UNTIL` limitam a série como no arquivo; `EXDATE` remove as datas que a origem
+	 * pulou. O `BYDAY`/`INTERVAL` só é aceito quando descreve exatamente uma das cadências do app.
+	 */
+	private void importRule(String userId, CalendarEntry entry, Vevent event, Instant start, ZoneId zone) {
+		CalendarRule rule = CalendarRule.parse(event.rrule());
+		if (rule == null) {
+			return;
+		}
+		Set<Instant> excluded = new HashSet<>();
+		if (event.exdate() != null) {
+			for (String raw : event.exdate().split(",")) {
+				Instant when = instantOf(raw, zone.getId());
+				if (when != null) {
+					excluded.add(when);
+				}
+			}
+		}
+		int anchorDay = start.atZone(zone).getDayOfMonth();
+		recurrences.materializeImported(userId, entry.id(), rule.recurrence(), excluded, anchorDay,
+			rule.until(), rule.count());
+	}
+
+	private String readLimited(InputStream content) {
+		try (InputStream in = content; ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+			byte[] chunk = new byte[8192];
+			int total = 0;
+			int read;
+			while ((read = in.read(chunk)) != -1) {
+				total += read;
+				if (total > maxImportBytes) {
+					throw tooLarge();
+				}
+				out.write(chunk, 0, read);
+			}
+			return out.toString(StandardCharsets.UTF_8);
+		}
+		catch (IOException error) {
+			throw new ApiException(400, "INVALID_ICS", "Não foi possível ler o arquivo enviado.");
+		}
+	}
+
+	private ApiException tooLarge() {
+		return new ApiException(400, "INVALID_ICS",
+			"O arquivo passa de " + (maxImportBytes / 1024) + " KB.");
 	}
 
 	private static ZoneId zoneOf(String raw) {
@@ -319,6 +415,12 @@ public class CalendarIcsService {
 		Map<String, String> current = null;
 		for (String line : unfolded) {
 			if (line.equalsIgnoreCase("BEGIN:VEVENT")) {
+				// Sobreposição não é um `VEVENT` a mais: é sintaxe quebrada. Recomeçar engoliria o
+				// evento de fora e contaria o de dentro como se fosse só um.
+				if (current != null) {
+					throw new ApiException(400, "INVALID_ICS",
+						"Um VEVENT começa antes do anterior terminar; o arquivo está malformado.");
+				}
 				current = new LinkedHashMap<>();
 				continue;
 			}
@@ -326,7 +428,8 @@ public class CalendarIcsService {
 				if (current != null) {
 					events.add(new Vevent(current.get("UID"), current.get("SUMMARY"), current.get("DESCRIPTION"),
 						current.get("DTSTART"), current.get("DTSTART.TZID"), current.get("DTEND"),
-						current.get("DTEND.TZID"), "CANCELLED".equalsIgnoreCase(current.get("STATUS"))));
+						current.get("DTEND.TZID"), "CANCELLED".equalsIgnoreCase(current.get("STATUS")),
+						current.get("RRULE"), current.get("EXDATE")));
 				}
 				current = null;
 				continue;
@@ -338,11 +441,13 @@ public class CalendarIcsService {
 			String left = line.substring(0, at);
 			String value = unescape(line.substring(at + 1));
 			String name = left.split(";")[0].toUpperCase();
-			if (!List.of("UID", "SUMMARY", "DESCRIPTION", "DTSTART", "DTEND", "STATUS").contains(name)) {
+			if (!List.of("UID", "SUMMARY", "DESCRIPTION", "DTSTART", "DTEND", "STATUS", "RRULE", "EXDATE")
+					.contains(name)) {
 				continue;
 			}
-			current.put(name, value);
-			if (name.equals("DTSTART") || name.equals("DTEND")) {
+			// EXDATE pode repetir: a série cancelada uma vez tem uma linha por data excluída.
+			current.merge(name, value, (before, extra) -> before + "," + extra);
+			if (name.equals("DTSTART") || name.equals("DTEND") || name.equals("EXDATE")) {
 				int tzid = left.indexOf("TZID=");
 				if (tzid >= 0) {
 					String zone = left.substring(tzid + 5);
@@ -367,13 +472,35 @@ public class CalendarIcsService {
 		return lines;
 	}
 
+	/**
+	 * Desfaz o escape do RFC 5545 numa passada só. A versão em cadeia de `replace` errava o caso
+	 * mais comum de texto com barra invertida: em `\\n` (barra escapada seguida de "n") o primeiro
+	 * `replace` casava a segunda barra com o "n" e produzia barra + quebra de linha, em vez do
+	 * literal `\n` que o arquivo dizia. Uma passada respeita o par barra+caractere de cada vez.
+	 */
 	private static String unescape(String text) {
-		return text.replace("\\n", "\n").replace("\\N", "\n").replace("\\,", ",").replace("\\;", ";")
-			.replace("\\\\", "\\");
+		if (text.indexOf('\\') < 0) {
+			return text;
+		}
+		StringBuilder out = new StringBuilder(text.length());
+		for (int index = 0; index < text.length(); index++) {
+			char current = text.charAt(index);
+			if (current != '\\' || index + 1 >= text.length()) {
+				out.append(current);
+				continue;
+			}
+			char next = text.charAt(++index);
+			switch (next) {
+				case 'n', 'N' -> out.append('\n');
+				case ',', ';', '\\' -> out.append(next);
+				default -> out.append('\\').append(next);
+			}
+		}
+		return out.toString();
 	}
 
 	private record Vevent(String uid, String summary, String description, String start, String startZone,
-			String end, String endZone, boolean cancelled) {
+			String end, String endZone, boolean cancelled, String rrule, String exdate) {
 	}
 
 	/**
@@ -386,14 +513,6 @@ public class CalendarIcsService {
 	}
 
 	private static void validateWindow(Instant from, Instant to) {
-		if (from == null || to == null) {
-			throw new ApiException(400, "INVALID_WINDOW", "Informe from e to para exportar a agenda.");
-		}
-		if (!to.isAfter(from)) {
-			throw new ApiException(400, "INVALID_WINDOW", "to precisa ser depois de from.");
-		}
-		if (java.time.Duration.between(from, to).compareTo(java.time.Duration.ofDays(366)) > 0) {
-			throw new ApiException(400, "INVALID_WINDOW", "A exportação cobre no máximo um ano.");
-		}
+		CalendarWindows.validate(from, to, "exportar a agenda");
 	}
 }

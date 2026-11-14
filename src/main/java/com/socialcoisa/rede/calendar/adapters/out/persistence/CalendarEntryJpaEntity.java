@@ -6,6 +6,7 @@ import com.socialcoisa.rede.calendar.domain.CalendarEntry;
 import com.socialcoisa.rede.calendar.domain.CalendarEntrySource;
 import com.socialcoisa.rede.calendar.domain.CalendarEntryState;
 import com.socialcoisa.rede.calendar.domain.CalendarKind;
+import com.socialcoisa.rede.calendar.domain.CalendarRecurrence;
 import com.socialcoisa.rede.calendar.domain.CalendarScope;
 
 import jakarta.persistence.Column;
@@ -19,7 +20,7 @@ import jakarta.persistence.Table;
 		@Index(name = "idx_calendar_entries_owner_start", columnList = "owner_id, starts_at, state"),
 		@Index(name = "uq_calendar_entries_source", columnList = "owner_id, source_type, source_id",
 				unique = true)})
-class CalendarEntryJpaEntity {
+public class CalendarEntryJpaEntity {
 
 	@Id
 	private String id;
@@ -69,6 +70,17 @@ class CalendarEntryJpaEntity {
 	@Column(name = "cancelled_at")
 	private Instant cancelledAt;
 
+	/** Série a que a entrada pertence; nulo é compromisso único (V277). */
+	@Column(name = "series_id")
+	private String seriesId;
+
+	@Column(length = 16)
+	private String recurrence;
+
+	/** Marca de ponta da série: a extensão cria as próximas ocorrências a partir daqui. */
+	@Column(nullable = false)
+	private boolean tail = false;
+
 	protected CalendarEntryJpaEntity() {
 	}
 
@@ -90,14 +102,18 @@ class CalendarEntryJpaEntity {
 		e.createdAt = entry.createdAt();
 		e.updatedAt = entry.updatedAt();
 		e.cancelledAt = entry.cancelledAt();
+		e.seriesId = entry.seriesId();
+		e.recurrence = entry.recurrence() == null ? null : entry.recurrence().name();
+		e.tail = entry.tail();
 		return e;
 	}
 
-	CalendarEntry toDomain() {
+	public CalendarEntry toDomain() {
 		return new CalendarEntry(id, ownerId, CalendarScope.parse(scope), CalendarKind.parse(kind),
 			new CalendarEntrySource(sourceType, sourceId), title, description, startsAt, endsAt,
 			CalendarEntry.zoneOf(timeZoneId), allDay, CalendarEntryState.parse(state), createdAt, updatedAt,
-			cancelledAt);
+			cancelledAt, seriesId,
+			recurrence == null ? null : CalendarRecurrence.parse(recurrence), tail);
 	}
 
 }

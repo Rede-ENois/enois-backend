@@ -6,7 +6,7 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * Autoridade vigente (termo) e o eleitorado declarado (V288).
+ * Autoridade vigente (termo) e o eleitorado declarado (V303).
  *
  * <p>As duas coisas vivem no mesmo port porque o quórum é a razão de as duas existirem: o termo diz
  * <b>qual</b> Control Plane vale, o eleitorado diz <b>quem</b> pode decidir que outro passe a valer.
@@ -41,7 +41,7 @@ public interface NetworkAuthorityRepository {
 
 	/**
 	 * Instâncias do eleitorado que deram sinal depois de {@code threshold}. A vivacidade vem de
-	 * {@code network_instance_readers} (V278), a mesma tabela que já responde quantas instâncias estão
+	 * {@code network_instance_readers} (V293), a mesma tabela que já responde quantas instâncias estão
 	 * lendo de verdade — não de uma noção nova de "está no ar".
 	 */
 	Set<String> aliveSince(Instant threshold);
