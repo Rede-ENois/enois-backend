@@ -91,16 +91,31 @@ com.socialcoisa.rede.eroleplay
 
 ### 3.2 System Adapter e System Registry
 
-O contrato de um adaptador define o que o Éroleplay precisa saber fazer com um sistema:
+O contrato de um adaptador (`SystemAdapter`) entrega, nesta fase:
 
-- identidade do sistema e sua família (D20 / D100 / CUSTOM);
-- **validar** um conjunto de atributos segundo as regras do sistema;
-- **rolar** testes segundo o sistema (a Dice Engine delega o cálculo específico);
-- expor as *opções de ficha* (quais atributos, quais tipos) para o mestre montar o modelo.
+- identidade do sistema (`id`, `label`) e a família do motor (`D20 / D100 / CUSTOM`);
+- a **procedência** (`author`, `license`, `officialUrl`, `builtIn`), que é o que permite respeitar
+  direitos: só conteúdo original ou autorizado é registrado, com autoria e licença à vista;
+- os **atributos da ficha** que o sistema define, como descritores (`SheetAttribute`: chave,
+  rótulo, tipo, obrigatoriedade e opções, quando é uma escolha).
 
-O registro resolve o adaptador pelo identificador. Sistemas sem adaptador registrado respondem
-com erro explícito (`GAME_SYSTEM_NOT_SUPPORTED`), nunca com um comportamento genérico
-inventado — é o que mantém a regra central honesta.
+O primeiro adaptador é o sistema D20 **original** do Éroleplay (`d20-generico`): seis atributos,
+nível, pontos de vida, defesa, uma origem entre dez e um campo de história. Não é cópia de sistema
+comercial — nomes de perícia, magia, classe e progressão de um sistema publicado ficam fora até
+haver autorização de quem detém os direitos.
+
+O registro (`GameSystemRegistry`) resolve o adaptador pelo identificador. Sistemas sem adaptador
+registrado respondem com erro explícito (`GAME_SYSTEM_NOT_SUPPORTED`), nunca com um comportamento
+genérico inventado — é o que mantém a regra central honesta. Um identificador ausente devolve
+`GAME_SYSTEM_REQUIRED`. A **família** que a campanha grava vem do adaptador, não do pedido: se o
+corpo informar uma família que não bate com a do sistema registrado, a criação é recusada
+(`GAME_SYSTEM_FAMILY_MISMATCH`).
+
+Os adapters entram por injeção do Spring (`EroleplaySystemsConfig`): registrar um sistema novo é
+publicar um bean, não editar o registro. O catálogo é público em `GET /roleplay/systems`.
+
+As peças mais pesadas do contrato — validar um valor de ficha e rolar um teste — entram com as
+fases que precisam delas (3 e 4), sem inventar regra que ninguém pediu.
 
 ## 4. Modelo de domínio (Fase 1 entregue)
 
@@ -212,9 +227,9 @@ convite, decisão de pedido e transferência de mestria são eventos auditáveis
 
 | Fase | Entrega | Estado |
 |---|---|---|
-| 0 | RFC, modelo de domínio, contratos de integração, roadmap | em andamento |
-| 1 | Campanhas, papéis, visibilidade, membros, pedidos, mesas e lugares | em andamento |
-| 2 | Registro de sistemas + primeiro `SystemAdapter` (D20 genérico) | pendente |
+| 0 | RFC, modelo de domínio, contratos de integração, roadmap | concluída |
+| 1 | Campanhas, papéis, visibilidade, membros, pedidos, mesas e lugares | concluída |
+| 2 | Registro de sistemas + primeiro `SystemAdapter` (D20 genérico) | concluída |
 | 3 | Character Sheet Engine (modelo do mestre, preenchimento, privacidade por campo) | pendente |
 | 4 | Dice Engine (servidor, registro imutável, rolagem solicitada pelo mestre) | pendente |
 | 5 | Chat de campanha (IC/OOC, privado, fixado, presença) | pendente |

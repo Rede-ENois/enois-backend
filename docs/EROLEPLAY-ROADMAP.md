@@ -60,13 +60,12 @@ explícito, nunca com comportamento genérico inventado.
 
 ### Fase 2 — registro de sistemas
 
-- [ ] `GameSystem` (identificador, nome, família, autoria, licença, link oficial)
-- [ ] `SystemRegistry` com resolução por identificador e erro explícito para sistema
-      sem adaptador
-- [ ] Contrato `SystemAdapter` (validar atributos, rolar teste, expor opções de ficha)
-- [ ] Primeiro adaptador: família D20, regras originais
-- [ ] Persistência + API de consulta do registro (público)
-- [ ] Testes do registro (sistema desconhecido, resolução, fallback proibido)
+- [x] `GameSystem` (identificador, nome, família, autoria, licença, link oficial, original da plataforma)
+- [x] `GameSystemRegistry` com resolução por identificador e erro explícito para sistema sem adaptador
+- [x] Contrato `SystemAdapter` (identidade, procedência, família e atributos da ficha)
+- [x] Primeiro adaptador: família D20, regras originais (`d20-generico`)
+- [x] API de consulta do registro, pública (`GET /roleplay/systems`)
+- [x] Testes do registro (sistema desconhecido, resolução, fallback proibido, família divergente)
 
 ### Fase 3 — fichas de personagem
 
@@ -116,12 +115,12 @@ explícito, nunca com comportamento genérico inventado.
 
 ## 5. Próxima tarefa
 
-**Fase 1 → Fase 2**: registry de sistemas de RPG.
+**Fase 3**: modelo de ficha definido pelo mestre.
 
-Começo: `GameSystem` (metadados públicos) + `SystemRegistry` (resolução por identificador,
-erro explícito para sistema sem adaptador) + contrato `SystemAdapter` + primeiro adaptador da
-família D20 com regras originais + persistência + API pública de consulta + testes, incluindo o
-caso "sistema sem adaptador responde erro próprio" e a proibição de fallback genérico.
+Começo: `SheetTemplate` (campos, tipos, obrigatoriedade, visibilidade) montado a partir dos
+atributos que o adapter do sistema declara; preenchimento pelo jogador com validação no servidor;
+privacidade por campo (o jogador não lê a ficha de outro) bloqueada na API; persistência +
+testes de IDOR/enumeração.
 
 ## 6. Critérios de encerramento do agendamento
 

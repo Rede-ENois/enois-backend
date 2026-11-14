@@ -1189,6 +1189,38 @@ the same defense as post content (`PlainText.defuse`). `400` codes: `INVALID_REL
 empty or more than 8 items), `RELEASE_ITEM_TITLE_REQUIRED`, `RELEASE_ITEM_TITLE_TOO_LONG` (80),
 `RELEASE_ITEM_DESCRIPTION_REQUIRED`, `RELEASE_ITEM_DESCRIPTION_TOO_LONG` (240).
 
+## Éroleplay — sistemas de regras
+
+O catálogo público dos sistemas registrados. Leitura sem sessão; é o que a tela usa para montar o
+seletor na criação da campanha. Só expõe o que cada adaptador declara — identidade, procedência,
+licença e atributos da ficha — nunca conteúdo protegido de sistema comercial.
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/roleplay/systems` | Lista os sistemas de regras registrados | Não |
+
+Resposta (um item por sistema registrado):
+
+```json
+[{
+  "id": "d20-generico",
+  "label": "D20 Éroleplay",
+  "family": "D20",
+  "author": "Éroleplay",
+  "license": "conteúdo original do Éroleplay",
+  "officialUrl": null,
+  "builtIn": true,
+  "attributes": [
+    { "key": "forca", "label": "Força", "type": "NUMBER", "required": true, "options": [] },
+    { "key": "origem", "label": "Origem", "type": "CHOICE", "required": true,
+      "options": ["Acadêmico", "Artista", "Combatente", "Devoto", "Engenhoso", "Forasteiro",
+                  "Nômade", "Operário", "Popular", "Sócio"] }
+  ]
+}]
+```
+
+`type` aceita `NUMBER`, `TEXT`, `LONGTEXT`, `BOOLEAN` e `CHOICE`.
+
 ## Éroleplay — campanhas
 
 Prefixo do controller: `/roleplay/campaigns` (o gateway remove `/api`). Todas as escritas exigem
@@ -1296,4 +1328,7 @@ A convite cria o vínculo de membro na hora; a campanha precisa estar em `ACTIVE
 | `MASTERSHIP_TRANSFER_REQUIRED` | 409 | O mestre tentou sair sem transferir a mestria |
 | `CAMPAIGN_ARCHIVED` | 409 | Campanha arquivada ou encerrada |
 | `INVALID_GAME_SYSTEM` | 400 | Sistema de RPG não reconhecido |
+| `GAME_SYSTEM_REQUIRED` | 400 | Criação/edição sem sistema de regras |
+| `GAME_SYSTEM_NOT_SUPPORTED` | 400 | Sistema sem adaptador registrado |
+| `GAME_SYSTEM_FAMILY_MISMATCH` | 400 | A família informada não bate com a do sistema registrado |
 | `TABLE_NOT_FOUND` | 404 | Mesa inexistente ou de outra campanha |

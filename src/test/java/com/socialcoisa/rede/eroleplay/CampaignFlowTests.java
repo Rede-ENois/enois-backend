@@ -314,6 +314,54 @@ class CampaignFlowTests {
 	}
 
 	@Test
+	void sistemaNaoRegistradoNaoCriaCampanha() throws Exception {
+		var master = authHelper().authenticate("eroleplay-mestre-nao-registrado");
+		MvcResult result = mockMvc.perform(post("/roleplay/campaigns")
+				.header("X-Session-Token", master.token())
+				.header("Idempotency-Key", "create-sistema-nao-registrado")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+					"name", "Sistema Fantasma",
+					"gameSystem", "sistema-que-nao-existe",
+					"systemFamily", "D20"))))
+			.andReturn();
+		assertThat(result.getResponse().getStatus()).isEqualTo(400);
+		assertThat(result.getResponse().getContentAsString()).contains("GAME_SYSTEM_NOT_SUPPORTED");
+	}
+
+	@Test
+	void familiaQueNaoBateComOSistemaRegistradoRecusa() throws Exception {
+		var master = authHelper().authenticate("eroleplay-mestre-familia");
+		MvcResult result = mockMvc.perform(post("/roleplay/campaigns")
+				.header("X-Session-Token", master.token())
+				.header("Idempotency-Key", "create-familia-errada")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+					"name", "Familia Errada",
+					"gameSystem", "d20-generico",
+					"systemFamily", "D100"))))
+			.andReturn();
+		assertThat(result.getResponse().getStatus()).isEqualTo(400);
+		assertThat(result.getResponse().getContentAsString()).contains("GAME_SYSTEM_FAMILY_MISMATCH");
+	}
+
+	@Test
+	void aFamiliaVemDoSistemaQuandoOCorpoNaoInforma() throws Exception {
+		var master = authHelper().authenticate("eroleplay-mestre-sem-familia");
+		MvcResult result = mockMvc.perform(post("/roleplay/campaigns")
+				.header("X-Session-Token", master.token())
+				.header("Idempotency-Key", "create-sem-familia")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+					"name", "Sem Familia",
+					"gameSystem", "d20-generico"))))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.systemFamily").value("D20"))
+			.andReturn();
+		assertThat(result.getResponse().getContentAsString()).contains("d20-generico");
+	}
+
+	@Test
 	void edicaoDaCampanhaEDoMestre() throws Exception {
 		var master = authHelper().authenticate("eroleplay-mestre-edicao");
 		String campaignId = createCampaign(master, "Nome Antigo", "PUBLIC", "create-nome-antigo");

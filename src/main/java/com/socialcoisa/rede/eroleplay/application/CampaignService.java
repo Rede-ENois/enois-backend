@@ -24,6 +24,7 @@ import com.socialcoisa.rede.eroleplay.domain.CampaignVisibility;
 import com.socialcoisa.rede.eroleplay.domain.GameSystemFamily;
 import com.socialcoisa.rede.eroleplay.domain.GameTable;
 import com.socialcoisa.rede.eroleplay.domain.JoinOutcome;
+import com.socialcoisa.rede.eroleplay.domain.SystemAdapter;
 import com.socialcoisa.rede.eroleplay.domain.TableSeat;
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -42,11 +43,14 @@ public class CampaignService {
 
 	private final EroleplayRepository repository;
 	private final CampaignNotifier notifier;
+	private final GameSystemRegistry systems;
 	private final Clock clock;
 
-	public CampaignService(EroleplayRepository repository, CampaignNotifier notifier, Clock clock) {
+	public CampaignService(EroleplayRepository repository, CampaignNotifier notifier, GameSystemRegistry systems,
+			Clock clock) {
 		this.repository = repository;
 		this.notifier = notifier;
+		this.systems = systems;
 		this.clock = clock;
 	}
 
@@ -67,10 +71,8 @@ public class CampaignService {
 		if (finalName.length() > NAME_MAX) {
 			throw new ApiException(400, "INVALID_NAME", "Nome da campanha deve ter ate 120 caracteres.");
 		}
-		if (!StringUtils.hasText(gameSystem)) {
-			throw new ApiException(400, "INVALID_GAME_SYSTEM", "Escolha um sistema de regras.");
-		}
-		GameSystemFamily family = systemFamily == null ? GameSystemFamily.D20 : systemFamily;
+		SystemAdapter system = systems.require(gameSystem);
+		GameSystemFamily family = familyOf(system, systemFamily);
 		Instant now = clock.instant();
 		Campaign campaign = Campaign.create(newId("roleplay_campaign"), uniqueSlug(CampaignSlug.from(finalName)),
 			finalName, trimToNull(description), trimToNull(setting), gameSystem.trim(), family,
@@ -94,8 +96,15 @@ public class CampaignService {
 		if (finalName != null && finalName.length() > NAME_MAX) {
 			throw new ApiException(400, "INVALID_NAME", "Nome da campanha deve ter ate 120 caracteres.");
 		}
-		Campaign updated = campaign.update(finalName, trimToNull(description), trimToNull(setting),
-			gameSystem == null ? null : gameSystem.trim(), systemFamily, visibility, clock.instant());
+		String nextSystem = null;
+		GameSystemFamily nextFamily = systemFamily;
+		if (gameSystem != null) {
+			SystemAdapter system = systems.require(gameSystem);
+			nextSystem = system.id();
+			nextFamily = familyOf(system, systemFamily);
+		}
+		Campaign updated = campaign.update(finalName, trimToNull(description), trimToNull(setting), nextSystem,
+			nextFamily, visibility, clock.instant());
 		repository.saveCampaign(updated);
 		return updated;
 	}
@@ -362,6 +371,18 @@ public class CampaignService {
 			}
 		}
 		throw new ApiException(409, "SLUG_UNAVAILABLE", "Nao foi possivel gerar um endereco para a campanha.");
+	}
+
+	/**
+	 * A familia vem do adapter, nao do pedido: o cliente nao escolhe dizer que um sistema D100 e D20.
+	 * Quando o corpo informa uma familia, ela precisa bater com a do sistema registrado.
+	 */
+	private GameSystemFamily familyOf(SystemAdapter system, GameSystemFamily declared) {
+		if (declared != null && declared != system.family()) {
+			throw new ApiException(400, "GAME_SYSTEM_FAMILY_MISMATCH",
+				"A familia informada nao corresponde ao sistema escolhido.");
+		}
+		return system.family();
 	}
 
 	private static String newId(String prefix) {
