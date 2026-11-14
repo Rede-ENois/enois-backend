@@ -7,11 +7,44 @@ participante precise conhecer a arquitetura interna. Está em
 | arquivo | papel |
 |---|---|
 | `docker-compose.yml` | o container do nó: `read_only`, `cap_drop: ALL`, `no-new-privileges`, limites de CPU/memória/PIDs, sem porta exposta e sem docker socket; `entrypoint` roda o loop do nó, não o jar |
-| `install.sh` | o fluxo de instalação em três passos (abaixo), mais backup e restauração da identidade |
+| `Dockerfile` | a base do container do nó (`debian:bookworm-slim` por digest + curl/openssl/ffmpeg, usuário 10001) — construída **nesta máquina** pelo bootstrap, não baixada de registry |
+| `bootstrap.sh` | criação programática do nó numa passada: obtém o código (release oficial verificado por sha256, ou git na fonte de verdade), constrói a imagem local, roda o ciclo do `install.sh` e grava versão/fonte em `$NODE_HOME` |
+| `install.sh` | o fluxo de instalação em três passos (abaixo), mais backup/restauração da identidade; `--update`/`--rollback` delegam ao `bootstrap.sh` |
 | `node-runtime.sh` | o loop de execução: heartbeat → config assinada → poll → executa o que a config autoriza → resultado |
 | `node-doctor.sh` | diagnóstico PASS/WARN/FAIL — mesmo formato do `scripts/dev-doctor.sh` do backend |
 
-## 1. Os três passos
+O runtime também tem pipeline de distribuição próprio: a tag `slave-v*` no
+repositório dispara `.github/workflows/slave-release.yml`, que empacota
+`deploy/node-runtime/` num tar.gz **achatado** com um `VERSION`
+(`<fonte>@<sha8>`) e publica `enois-node-runtime-<tag>.tar.gz` +
+`SHA256SUMS` no GitHub Releases — sem tocar o CI/CD de deploy que já funciona.
+
+## 1. Os três passos (ou uma passada: bootstrap)
+
+O **bootstrap** cria o nó programaticamente numa só passada — é o caminho
+recomendado para quem vai contribuir com infra:
+
+```bash
+./bootstrap.sh --control-plane https://<control-plane> --token <token> \
+               --region sa-east-1 --country BR          # fonte de verdade: qa
+./bootstrap.sh --update --source main                    # troca a fonte e atualiza
+./bootstrap.sh --rollback                                # volta ao runtime anterior
+./bootstrap.sh --status                                  # diagnóstico (node-doctor)
+```
+
+Ele obtém o código do runtime e **constrói a imagem nesta máquina**: primeiro
+tenta o **release oficial** (baixa o tar.gz e confere o sha256 contra o
+`SHA256SUMS` publicado — pacote adulterado é recusado e o runtime atual segue
+rodando); sem release publicado, cai para o **git** na fonte de verdade. A fonte
+é escolha explícita e **lista fechada** (`qa` ou `main` — branch ou fork
+arbitrário é recusado no parse), e fica gravada em `$NODE_HOME/runtime-source`;
+o `--update` sem `--source` mantém a fonte já gravada, nunca troca sozinho. A
+versão em uso (`qa@<sha8>` — o commit exato que foi construído) vai para
+`$NODE_HOME/runtime-version` e é o que o heartbeat declara: é assim que o painel
+vê divergência de runtime entre nós. Depois roda o ciclo do `install.sh`
+(enroll com o token de uso único → cola a API key que o admin gerou → `--start`).
+
+Os três passos manuais continuam existindo para quem quer entender cada etapa:
 
 ```bash
 # 1. Enroll com o token de provisionamento que o admin entregou por canal privado.
@@ -265,9 +298,9 @@ vírgula literal na query escreve `%2C`.
 
 Conteúdo de usuário (HTML, CSS, KofScript) **nunca** executa no nó — continua nos
 sandboxes próprios (02-modelo-de-ameacas.md). O script é montado no container
-(`/node-runtime.sh:ro`); a imagem do runtime se troca por `install.sh --update`
-(§6), nunca por `docker pull` manual — a troca só acontece com assinatura OCI
-verificada.
+(`/node-runtime.sh:ro`); a imagem do runtime se troca por `bootstrap.sh --update`
+(§6), nunca por `docker pull` manual — a troca só acontece com o código da
+release oficial conferido por sha256, ou vindo do git na fonte de verdade.
 
 ## 4. Estado local
 
@@ -277,9 +310,11 @@ verificada.
 | `$NODE_HOME/api-key` | a API key do nó em claro — único lugar | 600 |
 | `$NODE_HOME/pinning-key` | a chave pública do Control Plane, pinada no enroll ou no primeiro `--start` | 600 |
 | `$NODE_HOME/term` | o maior `term` de autoridade já aceito — config de termo menor é recusada | 600 |
-| `$NODE_HOME/image-pubkey` | a chave pública que assina as imagens do runtime (cosign) — sem ela não há `--update` | 600 |
-| `$NODE_HOME/runtime-image` | o digest verificado em uso (`repo@sha256:…`), não a tag | 600 |
-| `$NODE_HOME/runtime-image.previous` | o digest anterior, para `--rollback` | 600 |
+| `$NODE_HOME/runtime-source` | a fonte de verdade do código (`qa` ou `main` — lista fechada) | 600 |
+| `$NODE_HOME/runtime-version` | a versão em uso (`<fonte>@<sha8>` — o commit construído, o que o heartbeat declara) | 600 |
+| `$NODE_HOME/runtime-version.previous` | a versão anterior, para `--rollback` | 600 |
+| `$NODE_HOME/control-plane` | a URL do Control Plane, gravada pelo `--start` — os updates seguintes não redigitam | 600 |
+| `$NODE_HOME/src/` | o código conferido de que a imagem local foi construída | — |
 | `$NODE_HOME/replica/cursor-<kind>` | onde a travessia do catálogo parou (`<criado em>|<id>`) | 600 |
 | `$NODE_HOME/replica/<kind>/<id>.json` + `.version` | conteúdo público guardado e a versão confirmada | 600 |
 | `$NODE_HOME/edge/cursor` | o último `seq` do feed de mudanças já aplicado no cache | 600 |
@@ -311,36 +346,52 @@ operação por engano seria pior que refazer o onboarding. O backup vale como a
 chave: quem tem o arquivo opera como o nó; guarde com o mesmo cuidado e descarte
 junto com a revogação (a retenção acompanha o ciclo de vida da identidade).
 
-## 6. Atualização e rollback (assinatura OCI)
+## 6. Atualização e rollback (código verificado, imagem construída aqui)
 
 Trocar a imagem do runtime não é `docker pull`: é substituir o que roda no nó.
-Por isso a troca exige três coisas — a chave pública que assina as imagens, o
-**digest** da imagem nova (nunca a tag, que o registry reescreve) e a verificação
-`cosign` sobre esse digest.
+A imagem é **construída na máquina do participante** a partir do código
+verificado — não baixada de um registry — e a verificação é sobre o **código**,
+que é o que a rede executa:
+
+- **release oficial**: o bootstrap baixa `enois-node-runtime-<tag>.tar.gz` e o
+  `SHA256SUMS` do GitHub Releases e roda `sha256sum -c` **contra o arquivo
+  baixado**, na mesma pasta — soma que aponta para outro arquivo é recusada pelo
+  próprio `sha256sum -c`, não aceita por comparação de string. O `VERSION`
+  dentro do pacote tem de ser `<fonte>@<sha8>`; o que não tem esse formato é
+  recusado mesmo com o sha conferindo;
+- **git na fonte de verdade**: sem release publicado, o bootstrap faz checkout
+  de `origin/<fonte>` e a versão é `git rev-parse --short=8` do checkout.
 
 ```bash
-./install.sh --update                 # resolve o digest da tag qa, verifica e sobe
-./install.sh --update --version v1.2.3   # mesma coisa, para uma versão publicada
-./install.sh --rollback               # volta ao digest anterior (verificado de novo)
+./bootstrap.sh --update                    # release/git novo → constrói → troca → sobe
+./bootstrap.sh --update --source main      # muda a fonte de verdade E atualiza
+./bootstrap.sh --rollback                  # volta à versão anterior
+./install.sh --update                      # mesmo caminho (delega ao bootstrap)
 ```
 
-A chave sai de `--image-pubkey <arquivo>` ou de `$NODE_HOME/image-pubkey`. Sem
-chave, o `--update` **recusa**: atualizar sem verificação é justamente o que a
-assinatura existe para impedir. O fluxo é fail-secure — assinatura inválida,
-ausente ou digest não resolvido abortam a troca e o runtime atual continua
-rodando; nada é gravado em `runtime-image` antes da verificação passar.
+O fluxo é fail-secure: download que falha, sha que não confere, `VERSION`
+inválido ou build que quebra abortam **antes** de gravar qualquer estado — o
+runtime atual continua rodando. Só depois do build pronto o bootstrap grava
+`runtime-version` (o anterior vai para `runtime-version.previous`) e chama o
+`install.sh --start` com `NODE_RUNTIME_TAG=<versão>` (`@` vira `-` na tag, que
+não aceita `@`): o restart sobe exatamente a imagem construída do commit
+verificado, não uma tag móvel de registry.
 
-O digest verificado fica em `$NODE_HOME/runtime-image` e o `--start` passa a
-usá-lo (`NODE_RUNTIME_IMAGE=<digest>`), de modo que um restart não volte à tag
-que o registry possa ter reescrito. O `--rollback` relê
-`runtime-image.previous`, **verifica a assinatura de novo** com a chave atual
-(uma imagem que não verifica mais não volta) e grava o digest que estava em uso
-como novo anterior — rollback repetido alterna entre os dois, não perde o outro.
+O `--rollback` exige que a imagem da versão anterior **ainda exista nesta
+máquina** (`docker image inspect`): "voltar" sem a imagem seria construir de
+novo exatamente o que se quis evitar. Ele troca versão, guarda a atual como novo
+anterior e **não troca a fonte de verdade** — fonte é escolha do participante,
+não efeito colateral do rollback. O `install.sh --update/--rollback` direto
+delega ao bootstrap: manter dois caminhos de atualização seria ter duas regras
+sobre o que o nó executa.
 
-Comportamento fixado em `scripts/tests/node-runtime-test.sh` (43 asserções): sem
-chave recusa; update grava e sobe o digest; assinatura inválida recusa e o
-runtime atual sobrevive; rollback sem anterior recusa; rollback aplica o anterior
-e preserva o atual; digest não verificável é recusado.
+Comportamento fixado em `scripts/tests/node-runtime-test.sh` (79 asserções):
+fonte fora da lista fechada recusa antes de rede; release com sha divergente é
+recusado e o runtime atual sobrevive; `SHA256SUMS` sem a linha do asset recusa;
+`VERSION` fora do formato recusa; sem release cai para o git; mesma versão não
+refaz nada; update preserva o anterior em `.previous`; rollback sem anterior
+recusa; rollback sem a imagem anterior nesta máquina recusa; rollback não troca
+a fonte.
 
 ## 7. O que ainda não está aqui
 
@@ -363,6 +414,6 @@ e preserva o atual; digest não verificável é recusado.
   transferência limita o nó; se o ciclo passar a executar em paralelo, o limite tem
   de virar taxa compartilhada — senão N tarefas concorrentes multiplicariam a banda
   que o participante cedeu por N.
-- **Publicação das imagens assinadas**: o verificador está pronto e testado; o
-  pipeline que constrói e assina as imagens do runtime (`cosign sign`) entra com
-  o registro de imagens da rede.
+- **Cache do pacote no bootstrap**: hoje cada `--update` baixa o tar.gz de
+  novo; um cache local do último release verificado reduziria o tráfego com o
+  GitHub em updates frequentes.

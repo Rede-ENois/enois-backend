@@ -19,7 +19,10 @@ set -u
 NODE_HOME="${NODE_HOME:-/var/lib/enois-node}"
 CONTROL_PLANE="${CONTROL_PLANE_URL:?CONTROL_PLANE_URL é obrigatório}"
 POLL_SECONDS="${NODE_POLL_SECONDS:-15}"
-RUNTIME_VERSION="${RUNTIME_VERSION:-0.1.0}"
+# "<fonte>@<sha8>" — o commit exato da fonte de verdade que o bootstrap construiu
+# (compose exporta o que o install.sh leu de $NODE_HOME/runtime-version). Nó que
+# mente a versão é o único jeito de o painel não ver divergência de runtime.
+RUNTIME_VERSION="${RUNTIME_VERSION:-qa}"
 
 [[ -s "$NODE_HOME/node.json" ]] || { printf '[executor] sem node.json\n' >&2; exit 1; }
 [[ -s "$NODE_HOME/api-key" ]] || { printf '[executor] sem api-key\n' >&2; exit 1; }

@@ -8,8 +8,8 @@
 #   ./install.sh --backup               # arquiva a identidade (node.json + api-key)
 #   ./install.sh --restore <arquivo>    # restaura a identidade de um backup
 #   ./install.sh --start                # sobe o container
-#   ./install.sh --update [--version v] # atualiza o runtime (exige assinatura OCI)
-#   ./install.sh --rollback             # volta para o runtime anterior (último assinado)
+#   ./install.sh --update               # atualiza o runtime (delega ao bootstrap)
+#   ./install.sh --rollback             # volta para o runtime anterior (delega ao bootstrap)
 #
 # O que faz (docs/rede-distribuida/01-arquitetura.md §4):
 #   1. grava o estado do nó em $NODE_HOME com permissão restrita;
@@ -23,8 +23,13 @@ set -euo pipefail
 
 NODE_HOME="${NODE_HOME:-/var/lib/enois-node}"
 COMPOSE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-RUNTIME_VERSION="0.1.0"
-IMAGE_REPO="${NODE_RUNTIME_IMAGE_REPO:-ghcr.io/rede-enois/enois-backend}"
+# A versão declarada no heartbeat é o COMMIT da fonte de verdade que o
+# bootstrap construiu ("qa@<sha8>", lido de $NODE_HOME/runtime-version), não
+# uma constante: dois nós na mesma fonte podem estar em commits diferentes, e
+# a versão é o que o painel usa para ver essa divergência. Sem registro local
+# (install.sh puro, antes do primeiro bootstrap), declara só a fonte padrão.
+RUNTIME_VERSION="$(head -n 1 "$NODE_HOME/runtime-version" 2>/dev/null || true)"
+RUNTIME_VERSION="${RUNTIME_VERSION:-${NODE_RUNTIME_SOURCE:-qa}}"
 
 die() { printf 'Erro: %s\n' "$*" >&2; exit 1; }
 info() { printf '[install] %s\n' "$*"; }
@@ -33,7 +38,7 @@ usage() {
   sed -n '/^# Uso:/,/^# O que faz/p' "$0" | sed -e 's/^# \{0,1\}//' -e '/^O que faz/d'
 }
 
-CONTROL_PLANE='' TOKEN='' REGION='' COUNTRY='' CPU='' MEMORY='' MODE='' BACKUP_FILE='' VERSION='' IMAGE_PUBKEY=''
+CONTROL_PLANE='' TOKEN='' REGION='' COUNTRY='' CPU='' MEMORY='' MODE='' BACKUP_FILE=''
 while (($#)); do
   case "$1" in
     --control-plane) CONTROL_PLANE="$2"; shift 2 ;;
@@ -43,8 +48,6 @@ while (($#)); do
     --cpu) CPU="$2"; shift 2 ;;
     --memory) MEMORY="$2"; shift 2 ;;
     --set-key|--start|--update|--rollback) MODE="$1"; shift ;;
-    --version) VERSION="$2"; shift 2 ;;
-    --image-pubkey) IMAGE_PUBKEY="$2"; shift 2 ;;
     --backup) MODE="--backup"; shift ;;
     --restore) MODE="--restore"; BACKUP_FILE="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -169,61 +172,15 @@ if [[ -z "$MODE" ]]; then
 fi
 
 # ------------------------------------------------- --update / --rollback
-# Nada roda sem assinatura verificada: o digest é conferido com cosign contra a
-# chave pública distribuída fora de banda (image-pubkey). Uma imagem sem
-# assinatura válida NÃO substitui a que está rodando — o nó continua no runtime
-# anterior, que é o comportamento fail-secure esperado.
+# A obtenção e verificação do código novo (release + sha256, ou git na fonte de
+# verdade) e a troca de versão vivem no bootstrap.sh — é ele que constrói a
+# imagem na máquina e grava runtime-version. Aqui só encaminha: manter dois
+# caminhos de atualização seria ter duas regras sobre o que o nó executa.
 if [[ "$MODE" == "--update" || "$MODE" == "--rollback" ]]; then
-  [[ -s "$NODE_HOME/node.json" ]] || die "sem $NODE_HOME/node.json — rode o enroll primeiro"
-  for tool in docker cosign; do command -v "$tool" >/dev/null 2>&1 || die "Comando ausente: $tool"; done
-
-  image_key=''
-  if [[ -n "$IMAGE_PUBKEY" && -s "$IMAGE_PUBKEY" ]]; then
-    image_key="$IMAGE_PUBKEY"
-  elif [[ -s "$NODE_HOME/image-pubkey" ]]; then
-    image_key="$NODE_HOME/image-pubkey"
-  fi
-  [[ -n "$image_key" ]] || die "sem chave das imagens — coloque-a em $NODE_HOME/image-pubkey ou passe --image-pubkey; update sem verificação não roda"
-
-  current=$(cat "$NODE_HOME/runtime-image" 2>/dev/null || echo '')
-
-  if [[ "$MODE" == "--rollback" ]]; then
-    target=$(cat "$NODE_HOME/runtime-image.previous" 2>/dev/null || echo '')
-    [[ -n "$target" ]] || die "nenhum runtime anterior gravado — não há para onde voltar"
-    cosign verify --key "$image_key" "$target" >/dev/null 2>&1 ||
-      die "o runtime anterior ($target) não verifica mais com a chave atual — rollback recusado"
-    info "Voltando para $target"
-  else
-    tag="${VERSION:-${NODE_RUNTIME_TAG:-qa}}"
-    ref="$IMAGE_REPO:$tag"
-    info "Baixando $ref..."
-    docker pull "$ref" >/dev/null || die "pull falhou: $ref"
-    # O digest amarra a assinatura ao conteúdo exato: a verificação é sobre ele,
-    # nunca sobre a tag (tag pode ser reescrita no registry).
-    target=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$ref" 2>/dev/null |
-      grep -m1 '@sha256:' || true)
-    [[ -n "$target" ]] || die "não consegui resolver o digest de $ref (imagem local sem RepoDigest?)"
-    cosign verify --key "$image_key" "$target" >/dev/null 2>&1 ||
-      die "assinatura inválida ou ausente em $target — atualização recusada, o runtime atual continua"
-    if [[ "$target" == "$current" ]]; then
-      info "Já está rodando $target — nada a fazer."
-      exit 0
-    fi
-    info "Assinatura válida; atualizando para $target"
-  fi
-
-  umask 177
-  # Guarda o atual como anterior ANTES de sobrescrever; no rollback o "anterior"
-  # passa a ser o runtime de onde estamos saindo (permite voltar e avançar de novo).
-  if [[ -n "$current" ]]; then
-    printf '%s\n' "$current" > "$NODE_HOME/runtime-image.previous"
-  fi
-  printf '%s\n' "$target" > "$NODE_HOME/runtime-image"
-  umask 022
-
-  NODE_RUNTIME_IMAGE="$target" docker compose -f "$COMPOSE_DIR/docker-compose.yml" up -d
-  info "Runtime agora em $target. Diagnóstico: NODE_HOME=$NODE_HOME ./node-doctor.sh"
-  exit 0
+  bootstrap="$COMPOSE_DIR/bootstrap.sh"
+  [[ -f "$bootstrap" ]] || die "bootstrap.sh não encontrado ao lado de install.sh — atualização precisa dele"
+  info "Delegando ao bootstrap.sh (a fonte de verdade e a verificação vivem lá)..."
+  exec /bin/bash "$bootstrap" "$MODE" "$@"
 fi
 
 # ---------------------------------------------------------------- --start
@@ -234,6 +191,11 @@ command -v curl >/dev/null 2>&1 || die 'Comando ausente: curl'
 node_id=$(sed -n 's/.*"nodeId":"\([^"]*\)".*/\1/p' "$NODE_HOME/node.json")
 node_key=$(head -n 1 "$NODE_HOME/api-key")
 : "${CONTROL_PLANE:?--start precisa de --control-plane ou CONTROL_PLANE no ambiente}"
+# A URL fica gravada para os --update/--rollback do bootstrap funcionarem sem
+# que o participante redigite o endereço do Control Plane a cada atualização.
+umask 177
+printf '%s\n' "$CONTROL_PLANE" > "$NODE_HOME/control-plane"
+umask 022
 
 # Antes de subir qualquer container, prova que a credencial serve — subir um nó
 # com chave revogada só cria um loop de erro no container.
@@ -267,12 +229,14 @@ fi
 
 for tool in docker; do command -v "$tool" >/dev/null 2>&1 || die "Comando ausente: $tool"; done
 export CONTROL_PLANE_URL
-# Se um --update já pinou um digest verificado, o start usa esse digest — não a tag,
-# que pode ter sido reescrita no registry desde a verificação.
-if [[ -s "$NODE_HOME/runtime-image" ]]; then
-  NODE_RUNTIME_IMAGE=$(head -n 1 "$NODE_HOME/runtime-image")
-  export NODE_RUNTIME_IMAGE
-  info "Usando o runtime verificado: $NODE_RUNTIME_IMAGE"
+# A tag da imagem é a VERSÃO verificada pelo bootstrap ("qa-<sha8>"), não uma tag
+# móvel do registry: a imagem foi construída nesta máquina a partir do código
+# conferido, e o restart sobe exatamente a mesma. O compose default existe para o
+# primeiro docker compose manual; quem passou pelo bootstrap nunca cai nele.
+if [[ -s "$NODE_HOME/runtime-version" ]]; then
+  NODE_RUNTIME_TAG="$(head -n 1 "$NODE_HOME/runtime-version" | tr '@' '-')"
+  export NODE_RUNTIME_TAG
+  info "Runtime em uso: $RUNTIME_VERSION (imagem enois-node-runtime:$NODE_RUNTIME_TAG)"
 fi
 docker compose -f "$COMPOSE_DIR/docker-compose.yml" up -d
 info "Container subido. Diagnóstico: NODE_HOME=$NODE_HOME ./node-doctor.sh"

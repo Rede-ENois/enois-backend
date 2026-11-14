@@ -11,10 +11,11 @@
 # atrás de NAT funciona — ninguém abre conexão para ele.
 services:
   node:
-    # NODE_RUNTIME_IMAGE aceita repo:tag ou repo@sha256:<digest>. É o que o
-    # --update/--rollback exporta depois de verificar a assinatura do digest, e o
-    # que o --start reusa: restart nunca volta silenciosamente para uma tag reescrita.
-    image: ${NODE_RUNTIME_IMAGE:-ghcr.io/rede-enois/enois-backend:${NODE_RUNTIME_TAG:-qa}}
+    # A imagem é construída LOCALMENTE pelo bootstrap a partir do código verificado
+    # (release + sha256, ou git na fonte de verdade) e a tag é a VERSÃO do código
+    # ("qa-<sha8>"): a mesma tag sempre significa o mesmo conteúdo, e o restart sobe
+    # exatamente o que rodava antes — sem depender de tag móvel de registry.
+    image: enois-node-runtime:${NODE_RUNTIME_TAG:-qa}
     container_name: enois-node
     restart: unless-stopped
     user: "10001:10001"
@@ -29,7 +30,10 @@ services:
       NODE_HOME: /var/lib/enois-node
       CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:?informe a URL do Control Plane}
       NODE_POLL_SECONDS: ${NODE_POLL_SECONDS:-15}
-      RUNTIME_VERSION: ${RUNTIME_VERSION:-0.1.0}
+      # A versão declarada no heartbeat — "<fonte>@<sha8>" gravada pelo bootstrap em
+      # $NODE_HOME/runtime-version, que o install.sh lê e exporta aqui. O painel vê,
+      # nó a nó, em qual commit da fonte de verdade cada runtime está.
+      RUNTIME_VERSION: ${RUNTIME_VERSION:-qa}
     volumes:
       # Estado do nó (nodeId + API key, permissão 600 no host) gravado pelo install.sh.
       - ${NODE_HOME:? rode o install.sh, que exporta NODE_HOME}:/var/lib/enois-node:rw

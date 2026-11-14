@@ -106,7 +106,17 @@ if [[ -s "$NODE_HOME/config.json" && -s "$NODE_HOME/config-verified-at" ]]; then
   fi
 fi
 
-# 6. Container
+# 6. Versão e fonte de verdade do runtime (o bootstrap grava as duas)
+if [[ -s "$NODE_HOME/runtime-version" ]]; then
+  pass "Runtime declarado no heartbeat: $(head -n 1 "$NODE_HOME/runtime-version")"
+  if [[ -s "$NODE_HOME/runtime-source" ]]; then
+    pass "Fonte de verdade: $(head -n 1 "$NODE_HOME/runtime-source") (troque com bootstrap.sh --update --source <qa|main>)"
+  fi
+else
+  warn "Sem $NODE_HOME/runtime-version — o heartbeat declara só a fonte; rode o bootstrap.sh para registrar a versão"
+fi
+
+# 7. Container
 if command -v docker >/dev/null 2>&1; then
   if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'enois-node'; then
     pass "Container enois-node em execução"
@@ -115,7 +125,7 @@ if command -v docker >/dev/null 2>&1; then
   fi
 fi
 
-# 7. Conectividade com o Control Plane
+# 8. Conectividade com o Control Plane
 if [[ -n "$CONTROL_PLANE" ]] && command -v curl >/dev/null 2>&1; then
   if curl --fail --silent --output /dev/null --connect-timeout 5 --max-time 10 "$CONTROL_PLANE/health" 2>/dev/null; then
     pass "Control Plane acessível em $CONTROL_PLANE"
