@@ -29,8 +29,8 @@ explícito, nunca com comportamento genérico inventado.
 | 1 | Campanhas: papéis, visibilidade, membros, pedidos, mesas, lugares | em andamento |
 | 2 | Registro de sistemas + primeiro `SystemAdapter` | concluída |
 | 3 | Character Sheet Engine (modelo do mestre, preenchimento, privacidade por campo) | concluída |
-| 4 | Dice Engine (servidor, registro imutável, rolagem pedida pelo mestre) | em andamento |
-| 5 | Chat de campanha (IC/OOC, privado, fixado, presença) | pendente |
+| 4 | Dice Engine (servidor, registro imutável, rolagem pedida pelo mestre) | concluída |
+| 5 | Chat de campanha (IC/OOC, privado, fixado, presença) | em andamento |
 | 6 | Voz por mesa via Épapo + mesa virtual | pendente |
 | 7 | World Builder | pendente |
 | 8 | Biblioteca e compartilhamento | pendente |
@@ -78,10 +78,10 @@ explícito, nunca com comportamento genérico inventado.
 
 ### Fase 4 — motor de dados
 
-- [ ] Rolagem no servidor com fonte de aleatoriedade não previsível pelo cliente
-- [ ] Registro imutável da rolagem (quem, quando, o quê, resultado, contexto)
-- [ ] Rolagem solicitada pelo mestre, respondida pelo jogador, com estado
-- [ ] API + testes de integridade do registro
+- [x] Rolagem no servidor com fonte de aleatoriedade não previsível pelo cliente
+- [x] Registro imutável da rolagem (quem, quando, o quê, resultado, contexto)
+- [x] Rolagem solicitada pelo mestre, respondida pelo jogador, com estado
+- [x] API + testes de integridade do registro
 
 ### Fase 5 — chat de campanha
 
@@ -115,14 +115,12 @@ explícito, nunca com comportamento genérico inventado.
 
 ## 5. Próxima tarefa
 
-**Fase 4**: motor de dados.
+**Fase 5**: chat de campanha.
 
-Começo: `DiceRoll` com fonte de aleatoriedade do servidor (`SecureRandom`), registro imutável
-(quem, quando, o que pediu, resultado, contexto da campanha) e a rolagem pedida pelo mestre e
-respondida pelo jogador. O sistema de regras continua decidindo a semântica: a família D20 diz o
-que é crítico, o adapter do sistema diz como o teste se resolve. Rolagem nunca é calculada no
-cliente; o registro não é editável nem apagável, e a leitura é da campanha (o mestre vê todas, o
-jogador vê as próprias e as públicas da mesa).
+Começo: canais IC/OOC por campanha com a mesma isolamento do módulo (autorização pela matriz de
+capacidades), mensagens fixadas pelo mestre, conversa privada entre dois participantes e presença
+via SSE reaproveitando o `MessageStreamHub` — sem tocar no módulo de mensagens 1:1 existente. A
+campanha é a fronteira: mensagem de chat vive dentro dela e herda o recorte de participação.
 
 ## 6. Critérios de encerramento do agendamento
 

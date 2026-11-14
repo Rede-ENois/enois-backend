@@ -80,7 +80,8 @@ public enum NotificationCategory {
 		Map.entry("ROLEPLAY_CAMPAIGN_JOIN_APPROVED", GROUPS),
 		Map.entry("ROLEPLAY_CAMPAIGN_JOIN_REJECTED", GROUPS),
 		Map.entry("ROLEPLAY_CAMPAIGN_INVITED", GROUPS),
-		Map.entry("ROLEPLAY_CAMPAIGN_MASTERSHIP_TRANSFERRED", GROUPS));
+		Map.entry("ROLEPLAY_CAMPAIGN_MASTERSHIP_TRANSFERRED", GROUPS),
+		Map.entry("ROLEPLAY_ROLL_REQUESTED", GROUPS));
 
 	public static NotificationCategory of(String kind) {
 		return kind == null ? SYSTEM : BY_KIND.getOrDefault(kind, SYSTEM);
