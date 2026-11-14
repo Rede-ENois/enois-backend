@@ -62,6 +62,46 @@ class CalendarReminderServiceTests {
 	}
 
 	@Test
+	void askingAgainAfterClearingBringsTheReminderBackToLife() {
+		String owner = owner();
+		String entryId = entry(owner, "Retirado e posto de novo", Instant.now().plus(Duration.ofMinutes(10)));
+
+		// Antecedência de um dia: o lembrete nasce vencido e sai no primeiro ciclo do worker.
+		reminders.setForReader(owner, entryId, 1440);
+		reminders.deliverDue();
+		assertThat(reminderRepository.findByEntry(entryId).get(0).sentAt()).isNotNull();
+
+		// A pessoa pede o mesmo lembrete outra vez. A linha já foi resolvida e não pode ser devolvida
+		// como está: um lembrete ligado na tela que nunca mais toca é pior que nenhum.
+		CalendarReminder again = reminders.setForReader(owner, entryId, 1440);
+
+		assertThat(again.sentAt()).isNull();
+		assertThat(again.attempts()).isZero();
+		// O horário de aviso é recalculado a partir do começo do compromisso, não herdado do antigo.
+		assertThat(again.dueAt()).isEqualTo(entries.findById(entryId).orElseThrow().startsAt()
+			.minus(Duration.ofMinutes(1440)));
+		assertThat(reminderRepository.findByEntry(entryId)).hasSize(1);
+
+		reminders.deliverDue();
+		assertThat(reminderRepository.findByEntry(entryId).get(0).sentAt()).isNotNull();
+	}
+
+	@Test
+	void clearingAndAskingAgainAlsoBringsTheReminderBack() {
+		String owner = owner();
+		String entryId = entry(owner, "Tirar e voltar", Instant.now().plus(Duration.ofDays(2)));
+
+		reminders.setForReader(owner, entryId, 60);
+		assertThat(reminders.clearForReader(owner, entryId, 60)).isTrue();
+		assertThat(reminders.ofReader(owner, entryId)).isEmpty();
+
+		reminders.setForReader(owner, entryId, 60);
+
+		assertThat(reminders.ofReader(owner, entryId)).hasSize(1);
+		assertThat(reminderRepository.findByEntry(entryId)).hasSize(1);
+	}
+
+	@Test
 	void theDueTimeIsTheStartMinusTheLead() {
 		String owner = owner();
 		Instant startsAt = Instant.parse("2026-12-01T19:00:00Z");
