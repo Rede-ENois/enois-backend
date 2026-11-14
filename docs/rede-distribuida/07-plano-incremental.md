@@ -144,3 +144,13 @@ por um perfil existente antes de existir `NODE_STORAGE` com o tipo próprio (Q0 
 `TaskType`). O que o brief pressupõe e o código não tem — mTLS por certificado individual, CSR e
 reverse tunnel — está declarado como trabalho da fase 2, não como reuso. **V319 segue livre**: a fase
 0 não cria tabela; o catálogo do Storage nasce na fase 1.
+
+## Énóis Global Cooperative — fase 0 entregue
+
+Diagnóstico em [`11-global-coop-fase-0.md`](11-global-coop-fase-0.md). O cooperativismo global reusa
+autoridade única do Control Plane, a malha de sinais entre instâncias (V307), modos operacionais,
+região/cobertura, auditoria e o change feed de conteúdo (V283). O ponto crítico do brief, a captura
+única por **binlog** com checkpoint de réplica, **não existe** no código — o change feed é escrito
+pela aplicação, não observa o banco, e não cobre alteração feita por SQL direto ou outro módulo.
+Ligar CDC é decisão de infraestrutura do mantenedor (`log_bin`, `binlog_format=ROW`, usuário com
+`REPLICATION SLAVE`), não efeito colateral de código.

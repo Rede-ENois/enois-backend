@@ -212,6 +212,19 @@ hb=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
 status=$(printf '%s' "$hb" | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')
 info "Estado do nó no Control Plane: ${status:-desconhecido}"
 
+# Subir drenando é resposta legítima, mas o operador tem de saber POR QUE ainda não executa —
+# senão "está rodando" e "está trabalhando" viram a mesma frase. O container sobe igual; o
+# aviso é sobre o que ele vai fazer nas primeiras horas.
+case "${status:-}" in
+  PENDING_APPROVAL)
+    warn_approval="O nó ainda está PENDING_APPROVAL: o admin precisa aprová-lo na tela de administração da rede. O container sobe drenando e passa a trabalhar sozinho assim que a aprovação chegar (o heartbeat traz acceptTasks=true)."
+    info "$warn_approval" ;;
+  QUARANTINED|SUSPENDED)
+    info "O nó está ${status}: autentica e drena até o admin liberar." ;;
+  ACTIVE)
+    info "Nó aprovado. Se a configuração assinada não estiver ativa no Control Plane, ele continuará sem executar tarefas." ;;
+esac
+
 # Pino da config assinada quando o enroll não conseguiu gravá-lo (o nó ainda não
 # tinha chave naquela hora). Confiar na chave pública é legítimo SÓ aqui: a credencial
 # do nó acabou de ser provada pelo heartbeat (TOFU). Depois disso o pino nunca muda

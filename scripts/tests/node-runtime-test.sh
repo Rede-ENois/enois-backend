@@ -479,4 +479,57 @@ assert_contains 'doctor aponta o relógio, não a config' "$out" 'Relógio atrá
 assert_contains 'e manda conferir NTP' "$out" 'confira NTP/hora da máquina'
 rm -f "$NH2/config.json" "$NH2/config-verified-at"
 
+# Aceite pela rede: o doctor pergunta ao CP "fui aceito?" com a credencial do nó. Hoje um nó
+# PENDING_APPROVAL passava com PASS em tudo (chave 600, pino 600, container up) e o operador
+# concluía que estava tudo bem num nó que nunca receberia tarefa.
+make_command docker 'case "$*" in *"ps --format"*) echo enois-node ;; esac; exit 0'
+
+# C1 — aceito: acceptTasks=true vira PASS com status e modo.
+printf '%s' '{"nodeId":"nd_teste123","status":"ACTIVE","mode":"NORMAL","acceptTasks":true}' > "$TMP/hb-aceito"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) /bin/cat "$TMP/hb-aceito" ;;
+  *) printf '%s' '{"status":"UP"}' ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(NODE_HOME="$NH2" PATH="$TMP" /bin/bash "$NODE_DIR/node-doctor.sh" --control-plane https://cp.test 2>&1) || doctor_rc=$?
+assert_contains 'doctor diz que o nó foi aceito' "$out" 'Aceito pela rede: status=ACTIVE modo=NORMAL'
+assert_contains 'e confirma que o CP despacha' "$out" 'o Control Plane despacha tarefas'
+
+# C2 — pendente: WARN, nunca PASS. É o caso do nó recém-enrollado.
+printf '%s' '{"nodeId":"nd_teste123","status":"PENDING_APPROVAL","mode":"NORMAL","acceptTasks":false}' > "$TMP/hb-aceito"
+out=$(NODE_HOME="$NH2" PATH="$TMP" /bin/bash "$NODE_DIR/node-doctor.sh" --control-plane https://cp.test 2>&1) || true
+assert_contains 'doctor avisa que falta a aprovação do admin' "$out" 'Aguardando aprovação do administrador (status=PENDING_APPROVAL)'
+assert_not_contains 'pendente NÃO é reportado como aceito' "$out" 'Aceito pela rede'
+
+# C3 — aprovado mas sem pino: o aviso do aceite tem de dizer que o runtime ainda recusa config.
+printf '%s' '{"nodeId":"nd_teste123","status":"ACTIVE","mode":"NORMAL","acceptTasks":false}' > "$TMP/hb-aceito"
+out=$(NODE_HOME="$NH2" PATH="$TMP" /bin/bash "$NODE_DIR/node-doctor.sh" --control-plane https://cp.test 2>&1) || true
+assert_contains 'aprovado sem despacho diz "drenando"' "$out" 'Aprovado, mas a rede não despacha agora'
+assert_contains 'e lembra que sem pino nada executa' "$out" 'mesmo aprovado, o runtime recusa toda config'
+
+# C4 — credencial recusada (HTTP de erro): FAIL, porque é verdade sobre a operação.
+printf '%s' '{"nodeId":"nd_teste123","status":"REVOKED","mode":"NORMAL","acceptTasks":false}' > "$TMP/hb-aceito"
+cat > "$TMP/curl" <<'MOCK'
+#!/bin/bash
+url="${@: -1}"
+case "$url" in
+  */network/nodes/heartbeat) exit 22 ;;
+  *) printf '%s' '{"status":"UP"}' ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(NODE_HOME="$NH2" PATH="$TMP" /bin/bash "$NODE_DIR/node-doctor.sh" --control-plane https://cp.test 2>&1) && doctor_rc=0 || doctor_rc=$?
+assert_eq 'heartbeat recusado é FAIL (sai 1)' '1' "$doctor_rc"
+assert_contains 'doctor explica a recusa da credencial' "$out" 'recusou a credencial do nó'
+
+# C5 — o doctor nunca imprime a chave no heartbeat tampouco.
+NODE_HOME="$NH2" PATH="$TMP" /bin/bash "$NODE_DIR/node-doctor.sh" --control-plane https://cp.test 2>&1 > "$TMP/doctor-hb-out" || true
+/bin/grep -Fq 'enk_abcdef0123456789' "$TMP/doctor-hb-out" && {
+  printf '[FAIL] doctor vazou a API key no heartbeat\n' >&2; exit 1; }
+PASS=$((PASS + 1)); printf '[PASS] %s\n' 'doctor não imprime a API key no heartbeat'
+
 printf '\nTodos os cenários passaram (%d asserções).\n' "$PASS"

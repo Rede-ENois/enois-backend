@@ -79,6 +79,30 @@ depois de uma rotação silenciosa no Control Plane. O pino é gravado **uma ún
   Control Plane passe a devolver outra chave. Trocar a chave é decisão consciente
   do participante (remover o arquivo e pinar de novo), não um efeito colateral.
 
+### 1.2 Ligar a config assinada no Control Plane
+
+Sem chave configurada, o Control Plane responde `signed:false` e `publicKey:null`,
+o pino não tem o que gravar e o nó autentica mas não executa — é o estado que o
+`node-doctor.sh` mostra como "a rede não despacha". O par é gerado **uma vez** e
+fica no ambiente do Control Plane:
+
+```bash
+openssl genpkey -algorithm ed25519 -out signing.pem
+
+# publica em X.509 base64 (vai no payload e é pinada pelo nó)
+openssl pkey -in signing.pem -pubout -outform DER | base64 -w0
+
+# privada em PKCS#8 base64 (assinatura, só no Control Plane)
+openssl pkcs8 -topk8 -nocrypt -in signing.pem -outform DER | base64 -w0
+```
+
+Exporte `REDE_NETWORK_CONFIG_SIGNING_KEY` (privada) e
+`REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY` (pública) no serviço e reinicie. A
+resposta de `GET /network/nodes/me/config` passa a sair com `"signed":true`. O nó
+que ainda não tem pino pina no próximo `--start`; o que já tem pino continua
+aceitando a chave nova só se ela for a mesma que ele pinou — trocar o par exige
+remover o pino no nó, que é decisão do participante (TOFU, §1.1).
+
 ## 2. O que o instalador materializa das regras da rede
 
 - **Token de uso único.** Rodar o enroll de novo com o mesmo token falha com

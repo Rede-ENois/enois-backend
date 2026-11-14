@@ -25,6 +25,7 @@ testadas). O trabalho vive na branch de longa duração `feat/rede-distribuida`,
 | 08 | [Impacto na infraestrutura atual](08-impacto.md) | O que muda no que já está no ar, e o que não muda. |
 | 09 | [Instalação do Node Runtime](09-instalacao.md) | Como um participante instala, registra e diagnostica um nó com `deploy/node-runtime/`. |
 | 10 | [Énóis Storage — fase 0](10-storage-fase-0.md) | Diagnóstico do que a rede já oferece ao Storage, o que precisa de extensão e o que o brief pressupõe e **não existe** hoje (mTLS, reverse tunnel). |
+| 11 | [Énóis Global Cooperative — fase 0](11-global-coop-fase-0.md) | O que o cooperativismo global reusa da rede, e o que o brief pressupõe e **não existe** (captura por binlog, checkpoints de réplica, observabilidade de host). |
 
 Decisões arquiteturais ficam em [`docs/adr/`](../adr/).
 
