@@ -42,7 +42,8 @@ import com.socialcoisa.rede.moderation.application.port.out.ReportedMediaReader;
  * varredura de mídia (MediaSafetySweepWorker) cobre o caso com revisão humana.</p>
  */
 @Component
-class ReportedMediaAdapter implements ReportedMediaReader {
+class ReportedMediaAdapter implements ReportedMediaReader,
+		com.socialcoisa.rede.moderation.application.port.out.MetadadosMidiaDenunciadaReader {
 
 	private static final Logger LOG = LoggerFactory.getLogger(ReportedMediaAdapter.class);
 
@@ -71,6 +72,15 @@ class ReportedMediaAdapter implements ReportedMediaReader {
 		this.assets = assets;
 		this.downloader = downloader;
 		this.callReports = callReports;
+	}
+
+	@Override
+	public boolean hasMediaOf(com.socialcoisa.rede.moderation.domain.Report report) {
+		if (report.targetType() == com.socialcoisa.rede.moderation.domain.TargetType.CALL) {
+			return callReports.findByReportId(report.id()).map(context -> context.mediaId())
+				.filter(id -> !id.isBlank()).isPresent();
+		}
+		return !mediaIdsOf(report.targetType().name(), report.targetId()).isEmpty();
 	}
 
 	/**

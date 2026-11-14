@@ -75,6 +75,25 @@ public class RateLimitSessions {
 		return userId;
 	}
 
+	/** O filtro de escopo usa o mesmo orçamento; o marcador nunca substitui a autorização real. */
+	public boolean prepareScopeLookup(String token, String ip) {
+		String trimmed = token.trim();
+		String hash = Hashes.sha256Hex(trimmed);
+		long now = clock.millis();
+		Cached cached = known.get(hash);
+		if ((cached == null || cached.until() <= now) && !takeLookup(ip, now)) {
+			return false;
+		}
+		String userId = sessions.getObject().findActiveSanctionsUserId(trimmed, clock.instant()).orElse(null);
+		if (userId != null) {
+			if (known.size() > MAX_ENTRIES) {
+				known.clear();
+			}
+			known.put(hash, new Cached(userId, now + TTL_MS));
+		}
+		return true;
+	}
+
 	private boolean takeLookup(String ip, long now) {
 		if (lookups.size() > MAX_ENTRIES) {
 			lookups.clear();

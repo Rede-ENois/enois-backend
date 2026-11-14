@@ -38,6 +38,22 @@ class AuthSessionJpaEntity {
 	@Column(name = "revoked_at")
 	private Instant revokedAt;
 
+	@Column(name = "sanctions_only", nullable = false)
+	private boolean sanctionsOnly;
+
+	@Column(name = "sanctions_expires_at")
+	private Instant sanctionsExpiresAt;
+
+	/** A mesma decisão mais recente do gate, na leitura da sessão, sem consulta adicional. */
+	@org.hibernate.annotations.Formula("(select s.type from user_sanctions s where s.user_id = user_id "
+		+ "and s.status = 'ACTIVE' order by s.created_at desc limit 1)")
+	private String activeSanctionType;
+
+	boolean blockedAccount() {
+		return "SUSPENDED".equals(activeSanctionType) || "BAN".equals(activeSanctionType)
+			|| "PERMABAN".equals(activeSanctionType);
+	}
+
 	protected AuthSessionJpaEntity() {
 	}
 
@@ -63,6 +79,23 @@ class AuthSessionJpaEntity {
 
 	String userId() {
 		return userId;
+	}
+
+	boolean fullAccess() {
+		return !sanctionsOnly;
+	}
+
+	void restrictToSanctions() {
+		this.sanctionsOnly = true;
+		this.sanctionsExpiresAt = expiresAt;
+		// Pods antigos desconhecem o escopo: o acesso já nasce vencido, mesmo com diferença de relógios.
+		this.expiresAt = Instant.parse("2000-01-01T00:00:00Z");
+		// Sem token de refresh, sua data só mantém a retenção compatível com os pods antigos.
+	}
+
+	boolean activeForSanctionsAt(Instant now) {
+		return sanctionsOnly ? revokedAt == null && sanctionsExpiresAt != null && sanctionsExpiresAt.isAfter(now)
+			: activeAt(now);
 	}
 
 	String refreshToken() {

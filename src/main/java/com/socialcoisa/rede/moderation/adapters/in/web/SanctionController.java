@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository;
 import com.socialcoisa.rede.moderation.application.SanctionService;
+import com.socialcoisa.rede.moderation.application.TransparenciaSancaoService;
 import com.socialcoisa.rede.moderation.application.SanctionService.SanctionEntry;
 import com.socialcoisa.rede.moderation.domain.Appeal;
 import com.socialcoisa.rede.moderation.domain.SanctionStatus;
@@ -36,22 +37,25 @@ class SanctionController {
 	private final AdminGuard adminGuard;
 	private final ModeratorGuard moderatorGuard;
 	private final AuthSessionRepository sessions;
+	private final TransparenciaSancaoService transparencia;
 
 	SanctionController(SanctionService sanctions, CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
-			ModeratorGuard moderatorGuard, AuthSessionRepository sessions) {
+			ModeratorGuard moderatorGuard, AuthSessionRepository sessions, TransparenciaSancaoService transparencia) {
 		this.sanctions = sanctions;
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
 		this.moderatorGuard = moderatorGuard;
 		this.sessions = sessions;
+		this.transparencia = transparencia;
 	}
 
 	/** Penalidades do proprio usuario (o que a conta carrega e o historico). */
 	@GetMapping("/me/sanctions")
 	Map<String, Object> mine(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
-		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		CurrentUser user = currentUserResolver.resolveSanctions(sessionToken);
 		return Map.of(
-			"sanctions", sanctions.sanctionsOf(user.id().value()).stream().map(SanctionView::from).toList(),
+			"serverNow", transparencia.serverNow(),
+			"sanctions", transparencia.decisoesDoTitular(user.id().value()),
 			"appeals", sanctions.appealsOf(user.id().value()).stream().map(AppealView::from).toList());
 	}
 
@@ -59,7 +63,7 @@ class SanctionController {
 	@PostMapping("/me/sanctions/appeals")
 	Map<String, Object> appeal(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestBody CreateAppealRequest request) {
-		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		CurrentUser user = currentUserResolver.resolveSanctions(sessionToken);
 		Appeal created = sanctions.appeal(user.id().value(), request.message());
 		return Map.of("status", "PENDING", "id", created.id());
 	}

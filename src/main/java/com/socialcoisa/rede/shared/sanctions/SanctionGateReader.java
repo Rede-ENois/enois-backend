@@ -16,8 +16,11 @@ public interface SanctionGateReader {
 	/** Conta com sancao ativa (restricao ou ban): nao publica nem comenta. */
 	boolean restricted(String userId);
 
-	/** Conta banida (recurso negado): nem loga. */
+	/** Acesso normal bloqueado: SUSPENDED, BAN ou PERMABAN. */
 	boolean banned(String userId);
+
+	/** Suspensão ativa permite somente autenticação para a própria decisão e recurso. */
+	boolean suspended(String userId);
 
 	/** The banned among these accounts, for a list (the adapter answers in one query). */
 	default Set<String> bannedAmong(Collection<String> userIds) {

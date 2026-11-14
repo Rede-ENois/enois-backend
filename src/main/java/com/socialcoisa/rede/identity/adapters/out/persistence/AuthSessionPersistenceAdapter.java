@@ -5,6 +5,8 @@ import java.util.Optional;
 
 import org.slf4j.MDC;
 import org.springframework.stereotype.Repository;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
 
 import com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository;
 import com.socialcoisa.rede.shared.security.Hashes;
@@ -14,6 +16,7 @@ import com.socialcoisa.rede.shared.web.RequestObservabilityFilter;
 class AuthSessionPersistenceAdapter implements AuthSessionRepository {
 
 	private static final java.util.regex.Pattern STORED_HASH = java.util.regex.Pattern.compile("^[0-9a-f]{64}$");
+	private static final String REQUEST_CACHE = AuthSessionPersistenceAdapter.class.getName();
 
 	private final SpringDataAuthSessionJpaRepository repository;
 
@@ -37,6 +40,8 @@ class AuthSessionPersistenceAdapter implements AuthSessionRepository {
 	public Optional<String> findActiveUserId(String token, Instant now) {
 		return findSession(token)
 			.filter(session -> session.activeAt(now))
+			.filter(AuthSessionJpaEntity::fullAccess)
+			.filter(session -> !session.blockedAccount())
 			.map(AuthSessionJpaEntity::userId);
 	}
 
@@ -44,6 +49,8 @@ class AuthSessionPersistenceAdapter implements AuthSessionRepository {
 	public Optional<String> findActiveUserIdByRefreshToken(String refreshToken, Instant now) {
 		return findSessionByRefresh(refreshToken)
 			.filter(session -> session.activeRefreshAt(now))
+			.filter(AuthSessionJpaEntity::fullAccess)
+			.filter(session -> !session.blockedAccount())
 			.map(AuthSessionJpaEntity::userId);
 	}
 
@@ -53,11 +60,31 @@ class AuthSessionPersistenceAdapter implements AuthSessionRepository {
 			session.revoke(revokedAt);
 			repository.save(session);
 		});
+		limparLeituraDaRequisicao();
+	}
+
+	@Override
+	public void saveSanctionsOnly(String token, String userId, Instant createdAt, Instant expiresAt, String ip) {
+		var session = new AuthSessionJpaEntity(Hashes.sha256Hex(token), null, userId, createdAt, expiresAt,
+			expiresAt, ip != null ? ip : MDC.get(RequestObservabilityFilter.MDC_CLIENT_IP));
+		session.restrictToSanctions();
+		repository.save(session);
+	}
+
+	@Override
+	public Optional<String> findActiveSanctionsUserId(String token, Instant now) {
+		return findSession(token).filter(session -> session.activeForSanctionsAt(now)).map(AuthSessionJpaEntity::userId);
+	}
+
+	@Override
+	public boolean isSanctionsOnly(String token, Instant now) {
+		return findSession(token).filter(session -> session.activeForSanctionsAt(now)).filter(s -> !s.fullAccess()).isPresent();
 	}
 
 	@Override
 	@org.springframework.transaction.annotation.Transactional
 	public boolean revokeByRefreshToken(String refreshToken, Instant revokedAt) {
+		limparLeituraDaRequisicao();
 		return findSessionByRefresh(refreshToken)
 			.map(session -> repository.revokeIfActive(session.token(), revokedAt) > 0)
 			.orElse(false);
@@ -69,8 +96,28 @@ class AuthSessionPersistenceAdapter implements AuthSessionRepository {
 	 * converte essas linhas em até 1 minuto; depois o fallback nunca encontra nada.
 	 */
 	private Optional<AuthSessionJpaEntity> findSession(String token) {
-		Optional<AuthSessionJpaEntity> hashed = repository.findById(Hashes.sha256Hex(token));
-		return hashed.isPresent() || looksLikeStoredHash(token) ? hashed : repository.findById(token);
+		String hash = Hashes.sha256Hex(token);
+		var request = RequestContextHolder.getRequestAttributes();
+		if (request != null && request.getAttribute(REQUEST_CACHE, RequestAttributes.SCOPE_REQUEST) instanceof LeituraDaRequisicao leitura
+				&& leitura.hash().equals(hash)) {
+			return leitura.sessao();
+		}
+		Optional<AuthSessionJpaEntity> hashed = repository.findById(hash);
+		var session = hashed.isPresent() || looksLikeStoredHash(token) ? hashed : repository.findById(token);
+		// Só esta requisição reutiliza a leitura; revogação e decisão são relidas no próximo pedido.
+		if (request != null) {
+			request.setAttribute(REQUEST_CACHE, new LeituraDaRequisicao(hash, session), RequestAttributes.SCOPE_REQUEST);
+		}
+		return session;
+	}
+
+	private record LeituraDaRequisicao(String hash, Optional<AuthSessionJpaEntity> sessao) {}
+
+	private void limparLeituraDaRequisicao() {
+		var request = RequestContextHolder.getRequestAttributes();
+		if (request != null) {
+			request.removeAttribute(REQUEST_CACHE, RequestAttributes.SCOPE_REQUEST);
+		}
 	}
 
 	private Optional<AuthSessionJpaEntity> findSessionByRefresh(String refreshToken) {
@@ -90,12 +137,14 @@ class AuthSessionPersistenceAdapter implements AuthSessionRepository {
 	@Override
 	public void revokeAllByUser(String userId, Instant revokedAt) {
 		repository.revokeAllByUser(userId, revokedAt);
+		limparLeituraDaRequisicao();
 	}
 
 	@Override
 	public void revokeOthersByUser(String userId, String keepToken, Instant revokedAt) {
 		String keep = keepToken == null ? "" : keepToken.trim();
 		repository.revokeOthersByUser(userId, Hashes.sha256Hex(keep), keep, revokedAt);
+		limparLeituraDaRequisicao();
 	}
 
 	@Override
