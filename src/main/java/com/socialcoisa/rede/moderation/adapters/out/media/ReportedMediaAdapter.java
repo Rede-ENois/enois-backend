@@ -74,11 +74,6 @@ class ReportedMediaAdapter implements ReportedMediaReader,
 		this.callReports = callReports;
 	}
 
-	/**
-	 * Denúncia de chamada: a imagem é o print do momento, pendurado na própria denúncia. Sem print,
-	 * sem armazenamento ou com download que falha, a lista volta vazia e a decisão cai na revisão
-	 * humana — nunca em "olhei e está tudo bem".
-	 */
 	@Override
 	public boolean hasMediaOf(com.socialcoisa.rede.moderation.domain.Report report) {
 		if (report.targetType() == com.socialcoisa.rede.moderation.domain.TargetType.CALL) {
@@ -88,6 +83,11 @@ class ReportedMediaAdapter implements ReportedMediaReader,
 		return !mediaIdsOf(report.targetType().name(), report.targetId()).isEmpty();
 	}
 
+	/**
+	 * Denúncia de chamada: a imagem é o print do momento, pendurado na própria denúncia. Sem print,
+	 * sem armazenamento ou com download que falha, a lista volta vazia e a decisão cai na revisão
+	 * humana — nunca em "olhei e está tudo bem".
+	 */
 	@Override
 	public List<byte[]> imagesOf(com.socialcoisa.rede.moderation.domain.Report report, int limit) {
 		if (report == null || report.targetType() != com.socialcoisa.rede.moderation.domain.TargetType.CALL) {
