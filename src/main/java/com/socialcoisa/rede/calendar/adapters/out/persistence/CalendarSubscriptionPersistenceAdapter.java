@@ -28,6 +28,11 @@ class CalendarSubscriptionPersistenceAdapter implements CalendarSubscriptionRepo
 	}
 
 	@Override
+	public void lockUserForIssue(String userId) {
+		springData.lockUserForIssue(userId);
+	}
+
+	@Override
 	public Optional<CalendarSubscription> findByTokenHash(String tokenHash) {
 		return springData.findByTokenHash(tokenHash).map(CalendarSubscriptionJpaEntity::toDomain);
 	}

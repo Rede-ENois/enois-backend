@@ -22,8 +22,10 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository;
+import com.socialcoisa.rede.shared.web.TestDatabaseSupport;
 
 /**
  * O contrato do worker da outbox: o evento nao vira PROCESSED com handler que falhou, e a nova
@@ -35,10 +37,14 @@ import com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository;
  */
 @SpringBootTest
 @TestPropertySource(properties = {
+		"spring.datasource.url=jdbc:h2:mem:outbox_worker;MODE=MySQL;DB_CLOSE_DELAY=-1",
 		"rede.outbox.worker-initial-delay-ms=3600000",
 		"rede.outbox.worker-delay-ms=3600000",
 		"rede.outbox.claim-stale-seconds=60" })
 class OutboxWorkerTests {
+
+	/** A ponte estática pertence aos contextos com autenticação, não à base isolada deste worker. */
+	@MockitoBean private TestDatabaseSupport testDatabaseSupport;
 
 	/** A mesma instancia registrada como bean: o contador tem de ser o do contexto. */
 	private final CountingHandler counter = CountingHandler.instance;

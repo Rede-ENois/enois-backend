@@ -1,6 +1,7 @@
 # Processo seletivo (ATS) — pipeline de recrutamento por vaga
 
-Estado: implementado em 2026-11-12 e na `qa` (PR #677 mergeado).
+Estado: implementado em 2026-11-12 e na `qa` (PR #677 mergeado); declaração de recrutador
+acrescentada em 2026-11-13; tabela paginada acrescentada em 2026-11-13 (V291).
 
 Complementa `docs/JOB_AGGREGATOR.md` (vagas internas e externas) e
 `docs/SOCIAL_PROFESSIONAL_CONTEXTS.md` (identidade profissional). Não cria um segundo sistema
@@ -45,6 +46,7 @@ reprovada não se move mais.
 | `DELETE /jobs/{jobId}/process/stages/{stageId}` | dono | apaga etapa vazia; etapa ocupada → 409 `STAGE_IN_USE` |
 | `POST /jobs/{jobId}/process/stages/order` | dono | reordena (`{"stageIds": [...]}`, todas as etapas) |
 | `GET /jobs/{jobId}/process` | dono | board: etapas, colunas por etapa, reprovadas, resumo |
+| `GET /jobs/{jobId}/process/applications` | dono | **página** de candidaturas: cursor, filtro e busca |
 | `POST /jobs/{jobId}/process/applications/{applicationId}/move` | dono | `{"stageId","kind","note"}` → movimento |
 | `GET /jobs/{jobId}/process/applications/{applicationId}/movements` | dono | histórico em ordem |
 | `GET /jobs/{jobId}/process/applications/{applicationId}/notes` | dono | notas internas |
@@ -53,6 +55,50 @@ reprovada não se move mais.
 
 "Todo o fluxo de etapas" é configurável: criar, renomear, apagar (respeitando candidatos na
 etapa), reordenar. Renomear preserva o id, então o histórico dos candidatos continua válido.
+
+### Tabela paginada
+
+`GET /jobs/{jobId}/process/applications` devolve **uma página** de candidaturas, do mais recente
+para o mais antigo.
+
+| Parâmetro | O que faz |
+|---|---|
+| `cursor` | o `nextCursor` da página anterior; a página começa depois dele |
+| `limit` | linhas por página (1 a 100; padrão 30) |
+| `status` | `APPLIED`, `IN_REVIEW`, `ADVANCED` ou `NOT_SELECTED` |
+| `search` | casa o texto do retrato do candidato e da mensagem |
+
+A resposta é `{ "items": [...], "nextCursor": "..." }`; o cursor só vem quando a página veio
+cheia, e a última página não devolve cursor — é o que faz o cliente parar.
+
+Por que isso importa: antes, o board trazia a vaga inteira e cortava no teto (1000), o que
+tornava impossível ver a candidatura de número 1001 e recarregava tudo a cada rolagem. Agora a
+página sai do banco por **cursor keyset** — `(applied_at, id)`, do mais novo para o mais velho —
+com o filtro e a busca aplicados **na consulta**. O `id` entra como desempate porque a coluna
+guarda segundos: duas candidaturas podem cair no mesmo segundo, e paginar só pelo instante
+estrito pularia ou repetiria linha empatada. Índice composed em `V291`
+(`job_applications (job_id, applied_at, id)`).
+
+A etapa de cada linha vem de uma consulta só, para as candidaturas **da página** — pedir o
+histórico da vaga inteira desfaria a paginação.
+
+`status` desconhecido é **400 `INVALID_APPLICATION_STATUS`** e cursor inválido é **400
+`INVALID_CURSOR`**: entrada errada é recusa explícita, não lista vazia que parece "não tem
+candidato".
+
+### Declaração de recrutador
+
+O perfil profissional ganhou `isRecruiter` (`users.is_recruiter`, V290) — o "Sou recrutador/a"
+da edição de perfil, aceito por `PATCH /me/profile` e devolvido no perfil próprio.
+
+Ler a Central (`GET /jobs/recruitment`) exige **uma das duas coisas**: a declaração ligada ou
+pelo menos uma vaga publicada por quem está na sessão. Quem publica vaga é recrutador por
+definição, então o fluxo que já existia continua funcionando sem nenhuma tela nova; quem não
+recruta e não tem vaga recebe 403 `RECRUITER_REQUIRED` em vez de uma lista vazia que fingiria
+um recurso que não é dela.
+
+Desligar a declaração não apaga vaga, candidatura, etapa nem histórico: só fecha a Central para
+quem não tem vaga. Reativar devolve o acesso ao que já estava lá.
 
 ## Autorização (no backend)
 
@@ -70,6 +116,10 @@ etapa), reordenar. Renomear preserva o id, então o histórico dos candidatos co
   vaga; sem consulta por candidatura.
 - Central: três consultas em lote (vagas, reprovadas por vaga, último movimento por
   candidatura, com `max(id) group by application_id`) — sem N+1 por vaga nem por candidato.
+- Tabela paginada: uma consulta de ids por página (ordenada e cortada no banco) e uma para
+  carregar só as linhas da página; o último movimento vem em uma consulta para as candidaturas
+  pedidas. O `answers` da candidatura é `@ElementCollection` EAGER — por isso a página é
+  montada em duas etapas, senão o Hibernate paginaria em memória.
 
 ## Provas
 
@@ -88,10 +138,29 @@ etapa), reordenar. Renomear preserva o id, então o histórico dos candidatos co
 - exclusão de etapa ocupada (409) e de etapa vazia com posições recontadas; renomear preserva
   o vínculo dos candidatos;
 - espécie de movimento desconhecida é 400, não avanço silencioso;
-- Central: funil por vaga, isolamento entre recrutadores, 401 sem sessão.
+- Central: funil por vaga, isolamento entre recrutadores, 401 sem sessão;
+- declaração de recrutador: conta sem vaga e sem a declaração recebe 403 `RECRUITER_REQUIRED`,
+  ligar a declaração abre a Central vazia e desligar volta a fechar; quem tem vaga continua
+  entrando sem a declaração (o fluxo antigo não quebra).
+
+`ApplicationBoardPageTests` (5 testes, integração com H2 e MockMvc):
+
+- as 12 candidaturas de uma vaga aparecem **uma vez cada**, percorrendo o cursor até o fim (o
+  teste falha sem o corte por cursor — a prova é que a implementação antiga traria as mesmas
+  linhas em todas as páginas);
+- a última página não devolve `nextCursor`, então o cliente para;
+- filtro por estado devolve só quem está nele; a busca acha o candidato pelo nome do retrato e
+  um termo que não casa ninguém devolve lista vazia, não a lista inteira;
+- `status` desconhecido é 400 `INVALID_APPLICATION_STATUS` e cursor inválido é 400
+  `INVALID_CURSOR`;
+- terceiro recebe 403 `NOT_OWNER` e sem sessão 401.
 
 ## Fora deste escopo (próximos passos)
 
 Questionários, avaliações por critério, slot de entrevista escolhido pelo candidato, banco de
 talentos, papéis de equipe (Administrador/Recrutador/Entrevistador/Observador) e a UI no
 design system. A fundação acima é a que esses itens vão usar — não há segunda base a criar.
+
+A UI do "Sou recrutador/a" no front (`@rede-enois/design-system`) ainda não foi entregue: o
+backend já aceita, guarda e aplica a declaração, mas a tela que a liga vem no incremento do
+frontend.

@@ -13,18 +13,21 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository;
+import com.socialcoisa.rede.shared.web.TestDatabaseSupport;
 
 /**
  * Retencao da outbox: some o que ja foi concluido depois da janela, e so isso.
  *
- * <p>O worker roda no proprio teste (o agendador fica com intervalo enorme), com janela curta para
- * o cenario caber numa base compartilhada: cada linha nasce com o prefixo unico desta classe, entao
- * nenhuma afirmacao depende de contagem global da tabela.</p>
+ * <p>O worker roda no proprio teste, com base propria e janela curta. Outros contextos mantem
+ * workers ativos no H2 compartilhado e poderiam disputar os claims destas fixtures. As linhas
+ * continuam marcadas com o prefixo unico do cenario.</p>
  */
 @SpringBootTest
 @TestPropertySource(properties = {
+		"spring.datasource.url=jdbc:h2:mem:outbox_retencao;MODE=MySQL;DB_CLOSE_DELAY=-1",
 		"rede.outbox.retention.enabled=true",
 		"rede.outbox.retention.days=1",
 		"rede.outbox.retention.batch-size=2",
@@ -33,6 +36,9 @@ import com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository;
 		"rede.outbox.worker-initial-delay-ms=3600000",
 		"rede.outbox.worker-delay-ms=3600000" })
 class OutboxRetentionWorkerTests {
+
+	/** A base isolada não pode substituir o helper estático usado pelos contextos com autenticação. */
+	@MockitoBean private TestDatabaseSupport testDatabaseSupport;
 
 	/**
 	 * Mesmo handler de falha do teste do worker: sem ele nao ha como deixar um evento em PENDING para

@@ -13,6 +13,7 @@ import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.communityprojects.application.port.out.CommunityProjectRepository;
 import com.socialcoisa.rede.communityprojects.domain.CommunityProject;
 import com.socialcoisa.rede.communityprojects.domain.CommunityProjectStatus;
+import com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 /**
@@ -27,15 +28,17 @@ public class CommunityProjectService {
 	private final CommunityProjectRepository projects;
 	private final UserProfileRepository profiles;
 	private final Clock clock;
+	private final OutboxEventRepository outbox;
 
 	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
 
 	public CommunityProjectService(CommunityProjectRepository projects, UserProfileRepository profiles,
-			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate, Clock clock) {
+			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate, Clock clock, OutboxEventRepository outbox) {
 		this.sanctionGate = sanctionGate;
 		this.projects = projects;
 		this.profiles = profiles;
 		this.clock = clock;
+		this.outbox = outbox;
 	}
 
 	@Transactional
@@ -54,7 +57,7 @@ public class CommunityProjectService {
 	@Transactional
 	public CommunityProject edit(String projectId, String userId, String title, String description, String shortDescription,
 			String cover, String url, String repoUrl, String tags, String category, String newSlug) {
-		CommunityProject project = owned(projectId, userId);
+		CommunityProject project = ownedForUpdate(projectId, userId);
 		if (!StringUtils.hasText(title) || title.trim().length() < 3) {
 			throw new ApiException(400, "INVALID_TITLE", "Título do projeto precisa de pelo menos 3 caracteres.");
 		}
@@ -78,7 +81,7 @@ public class CommunityProjectService {
 
 	@Transactional
 	public CommunityProject resubmit(String projectId, String userId) {
-		CommunityProject project = owned(projectId, userId);
+		CommunityProject project = ownedForUpdate(projectId, userId);
 		if (project.status() != CommunityProjectStatus.REJECTED) {
 			throw new ApiException(409, "NOT_REJECTED", "Só projeto recusado pode ser reenviado.");
 		}
@@ -87,22 +90,26 @@ public class CommunityProjectService {
 
 	@Transactional
 	public void remove(String projectId, String userId) {
-		owned(projectId, userId);
+		ownedForUpdate(projectId, userId);
 		projects.delete(projectId);
 	}
 
 	@Transactional
 	public CommunityProject approve(String projectId, String reviewerId, String note) {
-		CommunityProject project = project(projectId);
+		CommunityProject project = projectForUpdate(projectId);
 		if (project.status() != CommunityProjectStatus.SUBMITTED) {
 			throw new ApiException(409, "NOT_SUBMITTED", "Este projeto não está na fila de revisão.");
 		}
-		return projects.save(project.approve(reviewerId, trim(note), clock.instant()));
+		CommunityProject published = projects.save(project.approve(reviewerId, trim(note), clock.instant()));
+		if (project.publishedAt() == null) {
+			outbox.append("CommunityProjectPublished", project.id(), "{\"afterUserId\":\"\"}");
+		}
+		return published;
 	}
 
 	@Transactional
 	public CommunityProject reject(String projectId, String reviewerId, String note) {
-		CommunityProject project = project(projectId);
+		CommunityProject project = projectForUpdate(projectId);
 		if (project.status() != CommunityProjectStatus.SUBMITTED) {
 			throw new ApiException(409, "NOT_SUBMITTED", "Este projeto não está na fila de revisão.");
 		}
@@ -114,7 +121,7 @@ public class CommunityProjectService {
 
 	@Transactional
 	public CommunityProject suspend(String projectId, String reviewerId, String note) {
-		CommunityProject project = project(projectId);
+		CommunityProject project = projectForUpdate(projectId);
 		if (project.status() == CommunityProjectStatus.SUSPENDED) {
 			throw new ApiException(409, "ALREADY_SUSPENDED", "Este projeto já está suspenso.");
 		}
@@ -123,7 +130,7 @@ public class CommunityProjectService {
 
 	@Transactional
 	public CommunityProject unsuspend(String projectId, String reviewerId) {
-		CommunityProject project = project(projectId);
+		CommunityProject project = projectForUpdate(projectId);
 		if (project.status() != CommunityProjectStatus.SUSPENDED) {
 			throw new ApiException(409, "NOT_SUSPENDED", "Este projeto não está suspenso.");
 		}
@@ -172,13 +179,13 @@ public class CommunityProjectService {
 			.orElseThrow(() -> new ApiException(404, "PROJECT_NOT_FOUND", "Criador não encontrado."));
 	}
 
-	private CommunityProject project(String id) {
-		return projects.findById(id)
+	private CommunityProject projectForUpdate(String id) {
+		return projects.findByIdForUpdate(id)
 			.orElseThrow(() -> new ApiException(404, "PROJECT_NOT_FOUND", "Projeto não encontrado."));
 	}
 
-	private CommunityProject owned(String id, String userId) {
-		CommunityProject project = project(id);
+	private CommunityProject ownedForUpdate(String id, String userId) {
+		CommunityProject project = projectForUpdate(id);
 		if (!project.ownedBy(userId)) {
 			throw new ApiException(403, "NOT_AUTHORIZED", "Este projeto não é seu.");
 		}

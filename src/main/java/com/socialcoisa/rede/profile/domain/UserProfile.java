@@ -76,6 +76,8 @@ public class UserProfile {
 	private List<String> externalLinks;
 	private boolean openToWork;
 	private boolean mentor;
+	/** Declaracao do perfil: a pessoa recruta. Nao e papel administrativo — nao abre recurso de outro. */
+	private boolean recruiter;
 	/** Papel administrativo imutável: só muda por operação de banco, nunca por edição de perfil. */
 	private boolean admin;
 	private int connectionsCount;
@@ -378,6 +380,7 @@ public class UserProfile {
 		this.externalLinks = List.of();
 		this.openToWork = false;
 		this.mentor = false;
+		this.recruiter = false;
 		this.badges = List.of();
 		this.nickname = null;
 		this.socialName = null;
@@ -783,6 +786,26 @@ public class UserProfile {
 
 	public boolean mentor() {
 		return mentor;
+	}
+
+	public boolean recruiter() {
+		return recruiter;
+	}
+
+	/**
+	 * Liga/desliga a declaracao de recrutador. Desligar nao apaga vaga, candidatura nem processo:
+	 * o painel volta a aparecer se a pessoa reativar (ou se continuar dona de alguma vaga).
+	 */
+	public void setRecruiter(boolean recruiter, Instant now) {
+		if (this.recruiter != recruiter) {
+			this.recruiter = recruiter;
+			this.updatedAt = now;
+		}
+	}
+
+	/** Hidrata a coluna; o cliente nunca escreve direto no estado restaurado. */
+	public void hydrateRecruiter(boolean recruiter) {
+		this.recruiter = recruiter;
 	}
 
 	public boolean admin() {

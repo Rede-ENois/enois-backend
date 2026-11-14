@@ -217,12 +217,10 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			throw new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado.");
 		}
 
-		// REPLIES: comentarios do usuario — privado, so o dono ve.
+		// REPLIES usa endpoint proprio (GET /users/{username}/replies); aqui retorna 400.
 		if (tab == ProfileTab.REPLIES) {
-			if (query.viewerId() == null || !query.viewerId().value().equals(authorId)) {
-				throw new ApiException(403, "REPLIES_PRIVATE", "Apenas o dono do perfil pode ver seus comentarios.");
-			}
-			return getProfileReplies(authorId, before, limit, query.viewerId());
+			throw new ApiException(400, "USE_REPLIES_ENDPOINT",
+				"Use o endpoint /users/{username}/replies para a aba de respostas.");
 		}
 
 		// Tabs filtradas buscam janela maior pra nao perder dados com pos-filtro.
@@ -304,29 +302,93 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		return new FeedPage(enriched, nextCursor);
 	}
 
-	/** Comentarios do usuario em posts de outros, paginados por data. Privado. */
-	private FeedPage getProfileReplies(String authorId, Instant before, int limit, UserId viewerId) {
-		var comments = commentRepository.findByAuthorPaged(authorId, before, limit);
-		if (comments.isEmpty()) {
-			return new FeedPage(List.of(), null);
+	@Override
+	@Transactional(readOnly = true)
+	public ProfileRepliesPage getProfileReplies(UserId viewerId, String username, java.util.Optional<Instant> before, int limit) {
+		int safeLimit = normalizeLimit(limit);
+		Instant beforeDate = before.orElse(DEFAULT_BEFORE);
+		String authorId = userProfileRepository.findByUsername(username)
+			.map(UserProfile::id)
+			.orElse(username);
+		if (sanctionGate.banned(authorId)) {
+			throw new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado.");
 		}
-		// Busca os posts originais pra contexto.
+		if (viewerId == null || !viewerId.value().equals(authorId)) {
+			throw new ApiException(403, "REPLIES_PRIVATE", "Apenas o dono do perfil pode ver seus comentarios.");
+		}
+
+		var comments = commentRepository.findByAuthorPaged(authorId, beforeDate, safeLimit);
+		if (comments.isEmpty()) {
+			return new ProfileRepliesPage(List.of(), null);
+		}
+
+		// Posts originais pra contexto (snippet do post pai).
 		List<String> postIds = comments.stream()
 			.map(c -> c.postId().value())
 			.distinct()
 			.toList();
 		var posts = postRepository.findByIds(postIds.stream().map(PostId::new).toList());
 		var postMap = posts.stream().collect(Collectors.toMap(p -> p.id().value(), p -> p));
-		// Monta a resposta como PostView dos posts originais com o comentario como contexto.
-		// Reutiliza o enrich pra consistencia.
-		List<Post> replyPosts = comments.stream()
-			.map(c -> postMap.get(c.postId().value()))
-			.filter(java.util.Objects::nonNull)
+
+		// Autores dos posts pra nome/username do contexto.
+		Set<String> postAuthorIds = posts.stream().map(p -> p.authorId().value()).collect(Collectors.toSet());
+		var postAuthors = userProfileRepository.findAllByIds(postAuthorIds).stream()
+			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
+
+		// Enriquece os comentarios (autor, badges, estilo, reacoes).
+		Set<String> commentAuthorIds = Set.of(authorId);
+		Set<String> contributorIds = userSeals.findActiveUserIds(commentAuthorIds);
+		Set<String> humanityVerified = identityVerifications.verifiedAmong(commentAuthorIds);
+		var commentAuthors = userProfileRepository.findAllByIds(commentAuthorIds).stream()
+			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
+
+		var reactions = postInteractionRepository.findCommentReactionsByUser(viewerId,
+			comments.stream().map(com.socialcoisa.rede.feed.domain.Comment::id).toList());
+		var reactionSummaries = postInteractionRepository.countCommentReactionsByType(
+			comments.stream().map(com.socialcoisa.rede.feed.domain.Comment::id).toList(), Set.of());
+
+		List<ProfileReplyView> items = comments.stream()
+			.map(c -> {
+				var p = commentAuthors.get(c.authorId().value());
+				CommentView cv = CommentView.from(c,
+					p != null ? p.displayWithNickname() : null,
+					p != null ? p.username() : null,
+					p != null ? p.avatar() : null,
+					p != null ? p.allBadges() : List.of())
+					.withAvatarFrame(p != null ? p.avatarFrame() : null)
+					.withAuthorStyle(NameStyleView.from(p))
+					.withContributor(contributorIds.contains(c.authorId().value())
+						? ContributorTagView.from(p) : null)
+					.withAuthorHumanityVerified(humanityVerified.contains(c.authorId().value()));
+
+				var r = reactions.containsKey(cv.id()) ? cv.withCurrentUserReaction(reactions.get(cv.id())) : cv;
+				var summary = reactionSummaries.getOrDefault(r.id(), Map.of());
+				int total = summary.values().stream().mapToInt(Long::intValue).sum();
+				r = r.withReactionCount(total).withReactionSummary(summary);
+
+				// Contexto do post pai.
+				Post post = postMap.get(c.postId().value());
+				ProfileReplyView.ReplyContext ctx;
+				if (post != null) {
+					var postAuthor = postAuthors.get(post.authorId().value());
+					String snippet = post.content() != null && post.content().length() > 120
+						? post.content().substring(0, 120) + "..."
+						: post.content();
+					ctx = new ProfileReplyView.ReplyContext(
+						post.id().value(),
+						postAuthor != null ? postAuthor.displayWithNickname() : null,
+						postAuthor != null ? postAuthor.username() : null,
+						snippet);
+				} else {
+					ctx = new ProfileReplyView.ReplyContext(c.postId().value(), null, null, null);
+				}
+				return new ProfileReplyView(r, ctx);
+			})
 			.toList();
-		List<PostView> enriched = enrich(replyPosts, viewerId);
+
 		Instant lastDate = comments.get(comments.size() - 1).createdAt();
-		String nextCursor = comments.size() == limit ? cursorCodec.encode(lastDate) : null;
-		return new FeedPage(enriched, nextCursor);
+		String nextCursor = comments.size() == safeLimit ? cursorCodec.encode(lastDate) : null;
+		return new ProfileRepliesPage(items, nextCursor);
 	}
 
 	@Override
