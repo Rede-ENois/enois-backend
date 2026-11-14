@@ -160,6 +160,6 @@ O consumidor deve encaminhar `SANCTIONS_ONLY`/`ACCOUNT_SUSPENDED` para `/conta-s
 áreas privadas normais. Após 401, entrar novamente; após 403 de CSRF ou falha de rede, não presumir
 perda de sessão ou ausência de penalidades. Uma falha na consulta deve oferecer erro/repetição.
 
-Migração aditiva: `V295__auth_session_access_scope.sql`, sem alteração de sanções ou evidências
+Migração aditiva: `V296__auth_session_access_scope.sql`, sem alteração de sanções ou evidências
 existentes. Nenhuma alteração em classificadores, bot, agressividade, fila humana, conversão,
 worker de vencimento, liberação automática ou elegibilidade de BAN/PERMABAN.
