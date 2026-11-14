@@ -64,11 +64,18 @@ read the same value and both write a result computed from it. The rules below co
 | Join a grouped notification | `notifications` | `select ... for update` of the unread group |
 | Mark notifications read | `notifications` | `update ... where ... and is_read = false` |
 | Name style | `users` | `updateNameStyle` (only its columns) |
+| Notification preferences | `users` | `lockForUpdate` before reading and merging the partial update; also serializes the first preferences row |
 | Daily presence | treasury account | `presenceExecutor`, one thread |
 | Any coin movement | `coin_accounts` (treasury, payer, payee) | `lockAccount` (`for update`) before the balance check |
+| Community project mutations | `community_projects` | `findByIdForUpdate` before edit, approve, reject, suspend, resubmit, unsuspend or remove; public reads remain unlocked; publication and its first outbox event commit together |
 | Daily game prizes | treasury account | one transaction per credit, up to 3 attempts on `COIN_CONCURRENCY` or a lock timeout |
 
 ## Testing
+
+`CommunityProjectPublicationConcurrencyTests` uses real service and JPA transactions in threads,
+latches and H2's `INFORMATION_SCHEMA.SESSIONS` (`SESSION_STATE = 'BLOCKED'`). It exercises edit and
+approval in both orders, checks that every existing-project mutation locks before reading state,
+and verifies that public search completes while approval holds the lock.
 
 `PostCounterConcurrencyTests` and `GroupedNotificationTests#concurrentJoinsOfOneGroupCountEveryEvent`
 run the same requests from several threads at once against H2 and assert exact counts. H2 does not

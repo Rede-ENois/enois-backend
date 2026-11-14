@@ -4,12 +4,19 @@ import java.util.List;
 
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import com.socialcoisa.rede.communityprojects.domain.CommunityProjectStatus;
 
+import jakarta.persistence.LockModeType;
+
 interface SpringDataCommunityProjectJpaRepository extends JpaRepository<CommunityProjectJpaEntity, String> {
+
+	@Lock(LockModeType.PESSIMISTIC_WRITE)
+	@Query("select p from CommunityProjectJpaEntity p where p.id = :id")
+	java.util.Optional<CommunityProjectJpaEntity> findByIdForUpdate(@Param("id") String id);
 
 	java.util.Optional<CommunityProjectJpaEntity> findByUserIdAndSlug(String userId, String slug);
 
