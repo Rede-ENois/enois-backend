@@ -1776,3 +1776,54 @@ Mentoria, evento e entrevista de vaga já escrevem aí; não existe segunda agen
 | `CalendarWindows` | Teto de um ano em toda leitura por intervalo |
 
 Contrato completo em [`CALENDAR.md`](CALENDAR.md).
+
+---
+
+## 43. Éroleplay (RPG de mesa e RPG textual)
+
+Plataforma de campanha dentro do Énóis. O produto **não depende de um sistema de RPG
+específico**: os dados (campanha, ficha, mesa, mensagem, rolagem) são compartilháveis, as regras
+não — cada sistema tem um adaptador próprio e um registro resolve o adaptador pelo identificador.
+Um sistema sem adaptador registrado responde com erro explícito, nunca com um comportamento
+genérico inventado.
+
+Isolamento por módulo, no mesmo desenho do módulo `groups`: tabelas próprias e decisão de acesso
+por matriz de capacidades, com a autorização sempre no back-end.
+
+| Classe | Papel |
+|---|---|
+| `Campaign` | Campanha: slug, nome, ambientação, sistema, visibilidade, estado, dono, contagem de membros |
+| `CampaignRole` / `CampaignCapability` / `CampaignPermissions` | Papel (mestre/jogador), capacidades e a matriz que decide tudo |
+| `CampaignVisibility` / `CampaignStatus` | Quem entra e quem descobre; campanha arquivada sai da descoberta e recusa entrada |
+| `CampaignMember` / `CampaignMembership` | Vínculo de participação e papel efetivo |
+| `CampaignJoinRequest` / `CampaignJoinRequestStatus` | Pedido de entrada e sua decisão (aprovado, recusado, cancelado) |
+| `CampaignSlug` | Slug legível, com dobra de acento e palavra reservada |
+| `GameSystemFamily` | Família do sistema (D20, D100, custom); valor desconhecido é erro, não palpite |
+| `GameTable` / `TableSeat` | Mesa da campanha (com referência opcional a uma sessão de voz do Épapo) e lugar ocupado |
+| `CampaignService` | Criar, editar, entrar, convidar, sair, remover, transferir mestria, decidir pedido, arquivar, mesas e lugares |
+| `CampaignNotifier` | Avisos de entrada, pedido, convite, decisão e transferência de mestria |
+| `EroleplayRepository` | Porta de saída (campanhas, membros, pedidos, mesas, lugares) |
+| `EroleplayPersistenceAdapter` | Implementação JPA da porta |
+| `CampaignController` | API REST em `/roleplay/campaigns` |
+| `AttributeType` / `SheetAttribute` | Tipo e descritor de um atributo de ficha que o sistema define |
+| `SystemAdapter` | Contrato de um sistema: identidade, procedência, família e atributos da ficha |
+| `D20System` | Sistema D20 ORIGINAL do Éroleplay (`d20-generico`), não cópia de sistema comercial |
+| `GameSystemRegistry` | Resolve o sistema pelo identificador; sem adaptador, erro próprio (nunca genérico) |
+| `EroleplaySystemsConfig` | Publica os adapters como beans: registrar sistema novo é publicar um bean |
+| `GameSystemController` | Catálogo público dos sistemas em `/roleplay/systems` |
+
+Regras que valem sempre:
+
+- A listagem pública devolve apenas campanhas `PUBLIC` e `ACTIVE`, e apenas a apresentação —
+  nunca participantes, mesas ou conteúdo interno.
+- Só existe um mestre por campanha: ele precisa transferir a mestria antes de sair.
+- A decisão de um pedido de entrada é atômica; a segunda decisão devolve
+  `REQUEST_ALREADY_DECIDED`.
+- A voz da mesa referencia uma sessão de chamada do Épapo (`voiceRoomId`); o módulo não cria
+  sala de voz paralela.
+- A campanha guarda só o IDENTIFICADOR do sistema, nunca as regras. Um sistema sem adaptador
+  registrado responde com erro próprio; a família que a campanha grava vem do adaptador, não do
+  pedido do cliente.
+
+Contrato completo em [`EROLEPLAY-RFC.md`](EROLEPLAY-RFC.md); estado e próxima tarefa em
+[`EROLEPLAY-ROADMAP.md`](EROLEPLAY-ROADMAP.md).
