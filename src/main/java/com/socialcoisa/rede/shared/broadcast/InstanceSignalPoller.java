@@ -157,11 +157,6 @@ class InstanceSignalPoller {
 		return consumers.size();
 	}
 
-	/** Uso de teste: força a releitura desde o início da tabela. */
-	void rewind() {
-		lastSeq.set(0);
-	}
-
 	/** Uso de teste: fixa a posição de leitura, para ler só o que foi emitido depois dela. */
 	void seek(long seq) {
 		lastSeq.set(Math.max(0, seq));
