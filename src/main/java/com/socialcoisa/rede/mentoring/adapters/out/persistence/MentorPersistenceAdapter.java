@@ -78,6 +78,11 @@ class MentorPersistenceAdapter implements MentorRepository {
 	}
 
 	@Override
+	public boolean bookSlotIfFree(String slotId) {
+		return slotRepo.bookIfFree(slotId) == 1;
+	}
+
+	@Override
 	public List<MentorSlot> findSlotsByMentor(String mentorId) {
 		return slotRepo.findByMentorIdOrderByStartsAtAsc(mentorId).stream()
 			.map(MentorSlotJpaEntity::toDomain)

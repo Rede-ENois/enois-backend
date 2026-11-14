@@ -292,7 +292,13 @@ public class MentorService {
 		if (mentor.userId().equals(menteeId)) {
 			throw new ApiException(400, "CANNOT_BOOK_OWN", "Voce nao pode agendar uma sessao com voce mesmo.");
 		}
-		repository.saveSlot(slot.book());
+		// O `available` da leitura não é árbitro: duas inscrições correndo juntas leem o mesmo
+		// "disponível" e a leitura-decisão-escrita reserva duas vezes o mesmo horário (com duas
+		// retenções de faísca). O UPDATE condicional é quem decide; quem perde a corrida é recusado
+		// sem custar nada.
+		if (!repository.bookSlotIfFree(slotId)) {
+			throw new ApiException(409, "SLOT_UNAVAILABLE", "Horario nao esta mais disponivel.");
+		}
 		String id = "mentor_session_" + UUID.randomUUID().toString().replace("-", "");
 		// A sala é resolvida agora e fica gravada na sessão: mudar a sala do perfil depois não move
 		// uma sessão já marcada (quem agendou já recebeu este link).
