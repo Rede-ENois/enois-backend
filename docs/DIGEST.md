@@ -1,11 +1,14 @@
 # Resumo semanal e preferências de notificação
 
-O que chega à pessoa **fora do app**: o push no celular e o resumo semanal por e-mail. A caixa de
-notificações in-app nunca é filtrada; as preferências só decidem o que sai dela.
+Preferências do push no celular, do resumo semanal por e-mail e da adesão aos avisos de novos
+projetos da comunidade. As categorias anteriores continuam criando avisos in-app independentemente
+dos botões de push; os avisos de projetos exigem adesão também dentro do app.
 
 ## Preferências (`notification_preferences`, V211)
 
-Uma linha por pessoa, criada na primeira mudança. Sem linha = padrão: tudo ligado.
+Uma linha por pessoa, criada na primeira mudança. Sem linha = categorias anteriores ligadas e
+`communityProjects` desligado. A V292 adiciona `community_projects not null default false`,
+preservando as escolhas anteriores e deixando contas existentes sem avisos de projetos até a adesão.
 
 | Campo | O que controla |
 |---|---|
@@ -15,6 +18,7 @@ Uma linha por pessoa, criada na primeira mudança. Sem linha = padrão: tudo lig
 | `pushGroups` | Grupos (inclusive comentários em grupo), blogs, jogos (lançamentos e jogo diário) |
 | `pushJobs` | Vagas (mudança de estado da candidatura) |
 | `pushSystem` | Suporte, microprojetos, avisos da plataforma |
+| `communityProjects` | Novos projetos da comunidade: adesão aos avisos in-app e push da categoria `PROJECTS` |
 
 Segurança, moderação, sanção e recurso (`SEGURANCA`, `MODERACAO`, `SANCAO`, `RECURSO`) **sempre**
 viram push e não têm campo.
@@ -23,6 +27,30 @@ O mapa `kind → categoria` vive num lugar só: `notifications/domain/Notificati
 entra ali no mesmo commit; o `NotificationCategoryTests` varre o código e falha se algum kind usado
 em `NotificationService.create(...)` ficar sem categoria. Kind sem mapa cai em `SYSTEM` (continua
 obedecendo a um botão da pessoa).
+
+## Novos projetos da comunidade
+
+A primeira aprovação pela moderação publica o projeto e grava `CommunityProjectPublished` na
+outbox na mesma transação. A decisão de aprovação bloqueia a linha do projeto: duas aprovações
+concorrentes não criam dois lançamentos. Envio para revisão, recusa, edição e restauração de
+suspensão não criam avisos de lançamento.
+
+`NotificadorProjetoComunidade` consulta somente preferências com adesão, em páginas de até 200
+ids com cursor exclusivo `user_id`. O índice da V292 cobre `(community_projects, user_id)`. Cada
+evento entrega um lote e grava a continuação na mesma transação dos avisos e do recibo existente
+de `processed_event_handlers`; uma retentativa com recibo não repete avisos nem continuações.
+Uma página cheia pode produzir uma última continuação vazia.
+
+Na entrega de cada lote, o projeto precisa continuar publicado e seu autor precisa existir,
+sem exclusão ou banimento. O destinatário precisa existir, manter a adesão e não estar excluído
+ou banido. Não há aviso para o próprio autor nem para identidades bloqueadas em qualquer sentido.
+O filtro existente de bloqueios e silenciamentos da caixa de avisos permanece ativo na leitura.
+
+O aviso usa `NEW_COMMUNITY_PROJECT`, categoria `PROJECTS`, contexto `SOCIAL` e módulo `COMMUNITY_PROJECTS`.
+O destino é `/projetos/{username}/{slug}`; o conteúdo se limita ao autor e ao título público,
+sem notas de revisão. O push usa a mesma preferência `communityProjects`, independentemente
+de `pushGroups` e `pushSystem`. Desligar a preferência impede entregas futuras, preservando o
+histórico já recebido. O descadastro do resumo semanal preserva essa escolha.
 
 ## Resumo semanal
 

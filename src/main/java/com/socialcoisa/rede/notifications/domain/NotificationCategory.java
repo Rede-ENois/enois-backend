@@ -15,6 +15,7 @@ public enum NotificationCategory {
 	/** Groups, blogs, games and the group call ("Tamo junto"). */
 	GROUPS,
 	JOBS,
+	PROJECTS,
 	/** Support, microprojects and platform notices. */
 	SYSTEM,
 	/** Security, moderation and sanctions: always pushed, never configurable. */
@@ -53,6 +54,7 @@ public enum NotificationCategory {
 		Map.entry("NEW_GROUP_REPLY", GROUPS),
 		Map.entry("NEW_BLOG_POST", GROUPS),
 		Map.entry("NEW_GAME", GROUPS),
+		Map.entry("NEW_COMMUNITY_PROJECT", PROJECTS),
 		Map.entry("JOGO_DIARIO", GROUPS),
 		Map.entry("JOB_APPLICATION_STATUS", JOBS),
 		Map.entry("JOB_INTERVIEW", JOBS),

@@ -891,7 +891,7 @@ controle de acesso.
 | POST | `/api/notifications/{notificationId}/read` | Marcar como lida | Sim |
 | POST | `/api/notifications/read-all` | Marcar todas como lidas | Sim |
 | GET | `/api/notifications/unread-summary` | Unread count per area for menu indicators (`?context=SOCIAL\|PROFESSIONAL`) | Sim |
-| GET | `/api/me/notification-preferences` | Preferências de push e do resumo semanal | Sim |
+| GET | `/api/me/notification-preferences` | Preferências de push, resumo semanal e avisos de projetos | Sim |
 | PUT | `/api/me/notification-preferences` | Atualização parcial (campo ausente/nulo mantém o valor) | Sim |
 | GET | `/api/notifications/digest/unsubscribe?token=` | Descadastro do resumo semanal (link do e-mail, HTML) | Não (token) |
 | POST | `/api/notifications/digest/unsubscribe?token=` | Descadastro em um clique (RFC 8058, cliente de e-mail): 200/400 sem corpo | Não (token) |
@@ -901,11 +901,21 @@ Preferências (GET e resposta do PUT):
 
 ```json
 { "weeklyDigest": true, "pushSocial": true, "pushMessages": true, "pushGroups": true,
-  "pushJobs": true, "pushSystem": true, "updatedAt": "2026-10-30T12:00:00Z" }
+  "pushJobs": true, "pushSystem": true, "communityProjects": false,
+  "updatedAt": "2026-10-30T12:00:00Z" }
 ```
 
-`updatedAt` é `null` enquanto a pessoa nunca mudou nada (padrão: tudo ligado). Segurança, moderação e
-sanções sempre viram push. Regras e categorias em [`DIGEST.md`](DIGEST.md).
+`updatedAt` é `null` enquanto a pessoa nunca mudou nada. `communityProjects` é `false` por padrão,
+inclusive para contas existentes; os demais padrões continuam `true`. O PUT autenticado altera só
+a conta da sessão: campos ausentes ou nulos preservam o valor, inclusive para clientes anteriores
+que não enviam `communityProjects`. Segurança, moderação e sanções sempre viram push.
+Regras e categorias em [`DIGEST.md`](DIGEST.md).
+
+Com `communityProjects: true`, a pessoa recebe `NEW_COMMUNITY_PROJECT` para novos projetos
+publicados pela primeira aprovação da moderação. A entrega é assíncrona e paginada pela outbox;
+o autor não recebe o próprio aviso, bloqueios nos dois sentidos são respeitados e a adesão é
+conferida na entrega. Edição e restauração de suspensão não são novos lançamentos.
+O aviso tem `context: "SOCIAL"`, `module: "COMMUNITY_PROJECTS"` e `href: "/projetos/{username}/{slug}"`.
 
 Each item of `GET /api/notifications` carries `module`, the interface area of its kind (same
 `NotificationModule` names as below, e.g. `EVENTS`, `OTHER`), so the app hides or flags notifications
@@ -933,7 +943,7 @@ list. Messages (`NEW_MESSAGE`, `NEW_WORK_MESSAGE`) and `CONNECTION_REQUEST` are 
 their own unread signals and the notices panel does not list them. Only areas with unread notifications appear in `byModule`; an area clears when its
 notifications are read (`/read` or `/read-all`). The kind to area mapping is
 `NotificationModule` (`MESSAGES`, `EVENTS`, `JOBS`, `COMPANIES`, `MENTORING`, `DAILY_GAMES`,
-`COMMUNITY_GAMES`, `GROUPS`, `STUDY_PAIRS`, `BLOGS`, `NETWORK`, `OTHER`).
+`COMMUNITY_GAMES`, `COMMUNITY_PROJECTS`, `GROUPS`, `STUDY_PAIRS`, `BLOGS`, `NETWORK`, `OTHER`).
 
 `byCommunity` counts the same unread notifications per community id, for those whose `place` is a
 community (only communities with unread ones appear). `eventsToday` is the number of events happening

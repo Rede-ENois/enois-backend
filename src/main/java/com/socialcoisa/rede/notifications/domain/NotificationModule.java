@@ -17,6 +17,7 @@ public enum NotificationModule {
 	MENTORING,
 	DAILY_GAMES,
 	COMMUNITY_GAMES,
+	COMMUNITY_PROJECTS,
 	GROUPS,
 	STUDY_PAIRS,
 	BLOGS,
@@ -41,6 +42,7 @@ public enum NotificationModule {
 		Map.entry("MENTORING", MENTORING),
 		Map.entry("JOGO_DIARIO", DAILY_GAMES),
 		Map.entry("NEW_GAME", COMMUNITY_GAMES),
+		Map.entry("NEW_COMMUNITY_PROJECT", COMMUNITY_PROJECTS),
 		Map.entry("NEW_BLOG_POST", BLOGS),
 		Map.entry("CONNECTION_REQUEST", NETWORK),
 		Map.entry("CONNECTION_ACCEPTED", NETWORK));

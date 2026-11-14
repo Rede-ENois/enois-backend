@@ -56,6 +56,21 @@ public interface JobRepository {
 	/** Candidaturas recebidas por uma vaga, mais recentes primeiro. */
 	List<com.socialcoisa.rede.jobs.domain.JobApplication> findApplicationsByJob(String jobId, int limit);
 
+	/**
+	 * Uma pagina de candidaturas da vaga, do mais recente para o mais antigo, com o cursor keyset
+	 * (applied_at, id), o filtro de estado e a busca aplicados no banco. A ordenacao, o filtro e a
+	 * busca vivem aqui porque a tabela cresce: trazer a vaga inteira para paginar em memoria nao
+	 * escala.
+	 *
+	 * @param beforeAppliedAt instante da ultima linha entregue (null = primeira pagina)
+	 * @param beforeId id da ultima linha entregue, desempate dentro do instante
+	 * @param status estado exigido (null = todos)
+	 * @param search termo livre sobre o retrato do candidato e a mensagem (null/vazio = sem busca)
+	 */
+	List<com.socialcoisa.rede.jobs.domain.JobApplication> findApplicationsByJobPage(String jobId,
+			java.time.Instant beforeAppliedAt, Long beforeId,
+			com.socialcoisa.rede.jobs.domain.JobApplicationStatus status, String search, int limit);
+
 	/** Candidaturas feitas por uma pessoa, da mais recente para a mais antiga. */
 	List<com.socialcoisa.rede.jobs.domain.JobApplication> findApplicationsByUser(String userId, int limit);
 
