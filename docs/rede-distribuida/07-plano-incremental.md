@@ -133,3 +133,14 @@ que mudou e o que não mudou. Merge é decisão humana.
 4. Nenhum comportamento existente alterado sem declaração explícita.
 5. ADRs registradas para cada decisão arquitetural relevante.
 6. Instalação do runtime reproduzível em máquina limpa.
+
+## Énóis Storage — fase 0 entregue
+
+Diagnóstico em [`10-storage-fase-0.md`](10-storage-fase-0.md): o Storage reusa identidade,
+provisionamento por token de uso único, API key por nó, config assinada, heartbeat, modos, fila de
+tarefas, aceite por evidência (`MediaResultVerifier`) e auditoria — sem criar segundo sistema.
+`TaskTypeAuthorizationTests` fixa o mapa perfil → tarefa e **falha** se armazenamento for autorizado
+por um perfil existente antes de existir `NODE_STORAGE` com o tipo próprio (Q0 provado mutando
+`TaskType`). O que o brief pressupõe e o código não tem — mTLS por certificado individual, CSR e
+reverse tunnel — está declarado como trabalho da fase 2, não como reuso. **V319 segue livre**: a fase
+0 não cria tabela; o catálogo do Storage nasce na fase 1.
