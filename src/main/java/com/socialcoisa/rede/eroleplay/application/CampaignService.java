@@ -102,6 +102,11 @@ public class CampaignService {
 			SystemAdapter system = systems.require(gameSystem);
 			nextSystem = system.id();
 			nextFamily = familyOf(system, systemFamily);
+			if (!system.id().equals(campaign.gameSystem())
+					&& (repository.existsSheetTemplate(campaignId) || repository.countSheets(campaignId) > 0)) {
+				throw new ApiException(409, "SHEET_SYSTEM_LOCKED",
+					"A campanha ja tem ficha montada. Remova o modelo antes de trocar o sistema de regras.");
+			}
 		}
 		Campaign updated = campaign.update(finalName, trimToNull(description), trimToNull(setting), nextSystem,
 			nextFamily, visibility, clock.instant());
@@ -350,6 +355,21 @@ public class CampaignService {
 	private GameTable requireTable(String tableId) {
 		return repository.findTableById(tableId)
 			.orElseThrow(() -> new ApiException(404, "TABLE_NOT_FOUND", "Mesa nao encontrada."));
+	}
+
+	/**
+	 * Confere uma capacidade e devolve o papel de quem pediu — a porta que os serviços vizinhos usam.
+	 *
+	 * <p>Existe para que a régua continue num lugar só: o serviço de ficha não compara papel, ele
+	 * pede a capacidade. Devolver o papel evita uma segunda consulta para saber se a pessoa é
+	 * mestre, o que abriria espaço para as duas respostas divergirem.</p>
+	 */
+	@Transactional(readOnly = true)
+	public CampaignRole requirePermission(String campaignId, String userId, CampaignCapability capability) {
+		requireCampaign(campaignId);
+		CampaignRole role = roleOf(campaignId, userId);
+		require(role, capability);
+		return role;
 	}
 
 	private void require(CampaignRole role, CampaignCapability capability) {

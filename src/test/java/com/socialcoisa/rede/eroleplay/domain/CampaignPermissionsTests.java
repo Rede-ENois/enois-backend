@@ -41,6 +41,8 @@ class CampaignPermissionsTests {
 		assertThat(CampaignPermissions.can(CampaignRole.PLAYER, CampaignCapability.MANAGE_MEMBERS)).isFalse();
 		assertThat(CampaignPermissions.can(CampaignRole.PLAYER, CampaignCapability.MANAGE_TABLES)).isFalse();
 		assertThat(CampaignPermissions.can(CampaignRole.PLAYER, CampaignCapability.TRANSFER_MASTERSHIP)).isFalse();
+		// O jogador preenche a própria ficha, mas não define o modelo que todos vão preencher.
+		assertThat(CampaignPermissions.can(CampaignRole.PLAYER, CampaignCapability.MANAGE_SHEET_TEMPLATE)).isFalse();
 	}
 
 	@Test

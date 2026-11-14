@@ -45,7 +45,7 @@ transferência de mestria, pedidos, aprovação/recusa, arquivamento, mesas e lu
 Notificações: seis kinds `ROLEPLAY_CAMPAIGN_*` mapeados para a área `GROUPS`, e o prefixo
 `ROLEPLAY_` mapeado no `NotificationModule` para que nenhum item caia na área padrão.
 
-Migração: `V291__eroleplay_campaigns.sql` — cinco tabelas (`roleplay_campaigns`,
+Migração: `V293__eroleplay_campaigns.sql` (era V291; renumerada quando a `qa` andou) — cinco tabelas (`roleplay_campaigns`,
 `roleplay_campaign_members`, `roleplay_join_requests`, `roleplay_tables`,
 `roleplay_table_seats`), InnoDB, `utf8mb4_uca1400_ai_ci`, `if not exists`, sem chaves
 estrangeiras (o collation de produção impede FK com a collation padrão).
@@ -124,3 +124,94 @@ catálogo público em `/roleplay/systems`.
 ### Pendências
 
 - Fase 3 (fichas com privacidade por campo), 4 (motor de dados), 5 a 10.
+
+---
+
+## Rodada 3 — 2026-11-14 — Fase 3 (fichas de personagem)
+
+### O que já existia e foi reaproveitado
+
+- `CampaignService.requirePermission(...)`, que já devolve o `CampaignRole` do solicitante — a
+  ficha não precisou de nova checagem de participação.
+- `CampaignCapability` (com `POST_IN_CAMPAIGN` para preencher e `MANAGE_SHEET_TEMPLATE` para o
+  modelo) e a matriz de permissões, que ganhou a prova de que o jogador não administra o modelo.
+- O `SystemAdapter` da Fase 2, cujos `SheetAttribute` já descrevem tipo, rótulo, obrigatoriedade e
+  opções — o modelo de ficha nasce deles, sem inventar campo.
+- `DerivedAttribute` e `D20System.derivedAttributes()`, que já declaravam os seis modificadores.
+- O padrão de command com idempotência (`IdempotencyApplicationService`) usado por toda escrita.
+- `ApiException` com código próprio e `TestAuthHelper` para a autenticação real nos testes.
+
+### O que foi implementado (Fase 3)
+
+**Domínio.** `SheetVisibility` (máximo que um campo pode abrir, por campo), `SheetAudience` (quem
+está lendo: dono, mestre, outro participante), `SheetField` (campo do modelo, já com o máximo de
+abertura), `SheetEntry` (valor preenchido + visibilidade efetiva), `SheetTemplate` (modelo da
+campanha, nascido dos atributos do sistema) e `CharacterSheet` (a ficha que valida e normaliza
+contra o modelo).
+
+**Aplicação.** `SheetService`: define/ajusta/remove o modelo, preenche a ficha, monta o quadro do
+grupo, entrega a leitura recortada por público e calcula os derivados. `defineTemplate` é
+exclusivo do mestre e acontece uma vez; depois o que se ajusta é a abertura de cada campo.
+
+**Persistência.** `V294__eroleplay_sheets.sql` (aditiva, `if not exists`, InnoDB, charset/collation
+explícitos, sem FK); `SheetTemplateJpaEntity` e `CharacterSheetJpaEntity` com os valores em JSON
+`longtext`; as duas Spring Data repositories; e os métodos correspondentes na porta
+`EroleplayRepository` e no `EroleplayPersistenceAdapter`.
+
+**API.** `CharacterSheetController` em `/roleplay/campaigns/{id}/sheets`: `template` (GET/POST/PUT/
+DELETE), `me` (GET/PUT), `board`, a lista do mestre e a ficha de alguém por `userId`. Nenhuma rota
+pública; toda escrita responde sob `Idempotency-Key`.
+
+### Decisões
+
+- **Duas réguas, e não uma.** `SheetVisibility` é o máximo que o **modelo** permite; `SheetAudience`
+  é quem está **lendo**. Confundir as duas é o erro clássico: daria para concluir que "privado é o
+  degrau mais fechado", quando na verdade é a exceção do dono — nem o mestre lê o segredo do
+  jogador. Por isso a régua de público é um `switch` por caso, e não comparação de ordinal.
+- **Filtro na resposta, não na tela.** `SheetReading` anda sempre junto com o público, então não
+  existe caminho que devolva a ficha sem saber para quem. A gravação devolve a leitura do dono pelo
+  mesmo caminho, e por isso não há como a escrita vazar um campo.
+- **Ficha alheia não é recurso do jogador.** `read(...)` recusa jogador lendo jogador com `403` (e
+  não `404`, porque o que se pediu é proibido, não inexistente). O que o grupo enxerga é o
+  `board`, que sempre traz o nome do personagem — uma ficha inteiramente fechada não desaparece da
+  lista, porque sumir revelaria que há segredo.
+- **Derivado nunca é gravado.** É recalculado na leitura, e só aparece quando o público também
+  enxerga o campo de origem. Derivado digitado à mão seria a ficha mentindo sobre o sistema.
+- **Fechar um campo no modelo fecha o que já existe.** `updateTemplate` encolhe as fichas da
+  campanha na mesma transação; sem isso, a regra nova só valeria na próxima gravação.
+- **Troca de sistema com ficha preenchida é recusada** (`SHEET_SYSTEM_LOCKED`): ficha de D20 não
+  vira ficha de D100 sozinha, e regravar valores noutro sistema seria inventar dado do jogador.
+- **Remover o modelo exige que ninguém tenha preenchido** (`SHEET_TEMPLATE_IN_USE`), senão a ficha
+  fica órfã de contrato de validação.
+
+### Testes
+
+- `CharacterSheetTests` (20, domínio): modelo nascido do sistema, fechamento de campo, matriz
+  completa dono/mestre/participante × três visibilidades, campo fechado que não volta nem com a
+  chave, jogador que não abre acima do máximo e que fecha mais, obrigatório ausente, opcional em
+  branco como ausência, número inválido/fora do teto/normalizado, escolha sem diferenciar
+  maiúsculas, caractere de controle em TEXT de linha única (e quebra legítima em LONGTEXT), valor
+  acima do teto, campo desconhecido, campo duplicado, nome obrigatório, derivado calculado e não
+  gravado, derivado de origem fechada invisível ao mestre.
+- `SheetFlowTests` (11, ponta a ponta): modelo a partir do sistema com abertura escolhida pelo
+  mestre; jogador preenche e lê a ficha inteira; recorte do mestre; privado do jogador que não
+  volta nem ao mestre; quadro do grupo só com o aberto à campanha; lista do mestre; fechamento
+  retroativo; modelo em uso que não sai; validação do servidor (obrigatório, desconhecido, número,
+  escolha, nome); visibilidade acima do máximo recusada; derivado calculado e não regravado.
+- `SheetSecurityTests` (7, isolamento): todas as rotas de ficha respondem 401 sem sessão; quem não
+  participa não lê nem escreve; jogador não lê ficha de outro; jogador não administra o modelo;
+  jogador não lista as fichas do grupo; modelo duplicado recusado e remoção bloqueada com ficha;
+  identificador de pessoa de outra campanha não revela ficha (404 sem conteúdo).
+- `CampaignPermissionsTests` ganhou a prova de que o jogador não tem `MANAGE_SHEET_TEMPLATE`.
+
+Resultado real do escopo na primeira execução: **49 testes, 4 falhas** — três asserções minhas
+escritas contra o desenho (dois cenários de fluxo deixavam de abrir `historia` no modelo, e o teste
+de caractere de controle usava um campo LONGTEXT, que aceita quebra de linha por projeto) e uma
+asserção de privacidade que esperava lista vazia do mestre quando o correto é ele perder só o campo
+fechado. Todas corrigidas no teste, sem afrouxar a regra de produção.
+
+### Pendências
+
+- Fases 4 a 10 (motor de dados, chat, voz/mesa virtual, world builder, biblioteca, front,
+  endurecimento).
+- A origem rastreável da frente ainda não foi registrada como issue no backlog.

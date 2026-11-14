@@ -24,7 +24,8 @@ public final class CampaignPermissions {
 		}
 		return switch (capability) {
 			case VIEW_CAMPAIGN, POST_IN_CAMPAIGN, ROLL_DICE -> true;
-			case MANAGE_CAMPAIGN, MANAGE_MEMBERS, TRANSFER_MASTERSHIP, MANAGE_TABLES -> false;
+			case MANAGE_CAMPAIGN, MANAGE_MEMBERS, TRANSFER_MASTERSHIP, MANAGE_TABLES,
+					MANAGE_SHEET_TEMPLATE -> false;
 		};
 	}
 }

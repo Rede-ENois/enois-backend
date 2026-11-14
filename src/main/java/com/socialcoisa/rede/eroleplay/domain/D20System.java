@@ -71,6 +71,24 @@ public class D20System implements SystemAdapter {
 			HISTORIA);
 	}
 
+	/**
+	 * Os modificadores dos seis atributos, como a família D20 os lê: {@code (valor - 10) / 2}.
+	 *
+	 * <p>É conta, não conteúdo: a fórmula é do motor genérico que o Éroleplay publica. Derivado não
+	 * é gravado — sai do valor validado na leitura, então não há como a ficha carregar um
+	 * modificador que não corresponde ao atributo.</p>
+	 */
+	@Override
+	public List<DerivedAttribute> derivedAttributes() {
+		return List.of(
+			DerivedAttribute.modifier("forca", "Força"),
+			DerivedAttribute.modifier("destreza", "Destreza"),
+			DerivedAttribute.modifier("constituicao", "Constituição"),
+			DerivedAttribute.modifier("inteligencia", "Inteligência"),
+			DerivedAttribute.modifier("sabedoria", "Sabedoria"),
+			DerivedAttribute.modifier("carisma", "Carisma"));
+	}
+
 	private static final SheetAttribute HISTORIA = new SheetAttribute("historia", "História do Personagem",
 		AttributeType.LONGTEXT, false, List.of());
 }

@@ -1811,6 +1811,14 @@ por matriz de capacidades, com a autorização sempre no back-end.
 | `GameSystemRegistry` | Resolve o sistema pelo identificador; sem adaptador, erro próprio (nunca genérico) |
 | `EroleplaySystemsConfig` | Publica os adapters como beans: registrar sistema novo é publicar um bean |
 | `GameSystemController` | Catálogo público dos sistemas em `/roleplay/systems` |
+| `DerivedAttribute` | Valor que o sistema CALCULA (modificador, por exemplo); nunca digitado nem gravado |
+| `SheetTemplate` / `SheetField` | Modelo de ficha da campanha: campos do sistema e a abertura máxima de cada um |
+| `SheetVisibility` | Quem enxerga UM campo: `PRIVATE` < `GAME_MASTER` < `CAMPAIGN` (máximo do modelo) |
+| `SheetAudience` | Quem está lendo: dono, mestre ou outro participante — derivado do papel, nunca do corpo |
+| `SheetEntry` / `CharacterSheet` | Valor preenchido com sua visibilidade efetiva, e a ficha que valida contra o modelo |
+| `SheetService` | Modelo, preenchimento, quadro do grupo, leitura recortada por público e derivados |
+| `CharacterSheetController` | API REST em `/roleplay/campaigns/{id}/sheets` |
+| `SheetTemplateJpaEntity` / `CharacterSheetJpaEntity` | Persistência (V294), com os valores em JSON `longtext` |
 
 Regras que valem sempre:
 
@@ -1824,6 +1832,42 @@ Regras que valem sempre:
 - A campanha guarda só o IDENTIFICADOR do sistema, nunca as regras. Um sistema sem adaptador
   registrado responde com erro próprio; a família que a campanha grava vem do adaptador, não do
   pedido do cliente.
+
+### Privacidade da ficha
+
+A ficha não é uma coisa só: o nome do personagem a mesa inteira conhece, o histórico o mestre lê e
+o segredo que o jogador escreveu não sai dele. Por isso a privacidade é **por campo**, com duas
+réguas distintas:
+
+- o **modelo** (`SheetVisibility`) define o máximo que cada campo pode abrir, e quem decide é o
+  mestre — o jogador pode fechar mais, nunca abrir além do autorizado;
+- a **leitura** (`SheetAudience`) é calculada no serviço a partir de quem é a ficha e do papel de
+  quem pede; o público nunca vem do corpo da requisição.
+
+O recorte é aplicado **na resposta**, não na tela: quem lê recebe o objeto já filtrado. A mesma
+régua vale na gravação, que devolve a leitura do dono — não existe caminho que devolva um campo que
+a leitura esconderia.
+
+| Leitor | Enxerga |
+|---|---|
+| Dono | A própria ficha inteira, inclusive os campos `PRIVATE` |
+| Mestre | `GAME_MASTER` e `CAMPAIGN` de todos; `PRIVATE` de ninguém |
+| Outro participante | Só os campos `CAMPAIGN`, e só pelo **quadro** da campanha |
+| Jogador pedindo a ficha de outro | `403 FORBIDDEN` |
+
+`PRIVATE` **não é o degrau mais fechado da escada — é a exceção do dono**: nem o mestre lê o
+segredo do jogador. Por isso a régua de público é escrita caso a caso, e não por comparação de
+ordem.
+
+IDOR e enumeração são barrados na API: a rota de ficha alheia confere o papel antes de buscar o
+registro, e o quadro sempre traz o nome do personagem — uma ficha inteiramente fechada não
+desaparece da lista, porque sumir revelaria que há algo a esconder.
+
+Preencher exige participar da campanha, e a validação de valor (tipo, limite, opções,
+obrigatoriedade, visibilidade) é toda do servidor. Fechar um campo no modelo fecha o que já está
+preenchido, sem esperar nova gravação. Trocar o sistema de regras com ficha preenchida é recusado
+com `SHEET_SYSTEM_LOCKED`. Derivado nunca é gravado: é recalculado na leitura e só aparece quando o
+público também enxerga o campo de origem.
 
 Contrato completo em [`EROLEPLAY-RFC.md`](EROLEPLAY-RFC.md); estado e próxima tarefa em
 [`EROLEPLAY-ROADMAP.md`](EROLEPLAY-ROADMAP.md).

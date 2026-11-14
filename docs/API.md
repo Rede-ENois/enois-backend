@@ -1342,3 +1342,141 @@ A convite cria o vínculo de membro na hora; a campanha precisa estar em `ACTIVE
 | `GAME_SYSTEM_NOT_SUPPORTED` | 400 | Sistema sem adaptador registrado |
 | `GAME_SYSTEM_FAMILY_MISMATCH` | 400 | A família informada não bate com a do sistema registrado |
 | `TABLE_NOT_FOUND` | 404 | Mesa inexistente ou de outra campanha |
+
+## Éroleplay — fichas de personagem
+
+Prefixo do controller: `/roleplay/campaigns/{id}/sheets` (o gateway remove `/api`). **Nenhuma rota
+desta seção é pública**: ficha é dado pessoal de jogo, então toda leitura exige sessão e
+participação na campanha. As escritas respondem sob `Idempotency-Key`.
+
+O modelo é definido pelo mestre a partir dos atributos que o sistema da campanha declara — o mestre
+não inventa campo, apenas ajusta **até onde cada campo pode abrir**. Cada campo tem uma
+visibilidade **máxima** (`PRIVATE` < `GAME_MASTER` < `CAMPAIGN`) e cada valor preenchido carrega a
+visibilidade efetiva, que nunca pode ser mais aberta que o máximo do modelo.
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/roleplay/campaigns/{id}/sheets/template` | Modelo da ficha | Membro |
+| POST | `/api/roleplay/campaigns/{id}/sheets/template` | Define o modelo (uma vez) | Mestre |
+| PUT | `/api/roleplay/campaigns/{id}/sheets/template` | Ajusta a abertura máxima dos campos | Mestre |
+| DELETE | `/api/roleplay/campaigns/{id}/sheets/template` | Remove o modelo (só sem ficha preenchida) | Mestre |
+| GET | `/api/roleplay/campaigns/{id}/sheets/me` | A própria ficha, inteira | Membro |
+| PUT | `/api/roleplay/campaigns/{id}/sheets/me` | Preenche a própria ficha | Membro |
+| GET | `/api/roleplay/campaigns/{id}/sheets/board` | Quadro do grupo (só o aberto à campanha) | Membro |
+| GET | `/api/roleplay/campaigns/{id}/sheets` | Todas as fichas, no recorte do mestre | Mestre |
+| GET | `/api/roleplay/campaigns/{id}/sheets/{userId}` | A ficha de alguém, no recorte permitido | Mestre (ou o dono) |
+
+### GET /api/roleplay/campaigns/{id}/sheets/template
+
+```json
+{
+  "id": "roleplay_sheet_template_…",
+  "campaignId": "camp_…",
+  "gameSystem": "d20-generico",
+  "fields": [
+    { "key": "forca", "label": "Força", "type": "NUMBER", "required": true,
+      "options": [], "maxVisibility": "GAME_MASTER" },
+    { "key": "historia", "label": "História", "type": "LONGTEXT", "required": false,
+      "options": [], "maxVisibility": "CAMPAIGN" }
+  ],
+  "updatedAt": "2026-11-14T00:00:00Z"
+}
+```
+
+O campo nasce com o máximo em `GAME_MASTER` — fechar é o padrão, abrir é decisão explícita do mestre.
+
+### POST /api/roleplay/campaigns/{id}/sheets/template
+
+```json
+{ "fields": [ { "key": "forca", "maxVisibility": "CAMPAIGN" } ] }
+```
+
+`fields` é **opcional**: omitido (ou `[]`), todos os campos ficam com o máximo padrão. Chave que o
+sistema não declara responde `SHEET_FIELD_UNKNOWN`. Resposta `201` com o modelo criado.
+
+### PUT /api/roleplay/campaigns/{id}/sheets/template
+
+```json
+{ "fields": [ { "key": "historia", "maxVisibility": "PRIVATE" } ] }
+```
+
+Só os campos enviados mudam. **Fechar um campo fecha o que já está preenchido**: as fichas da
+campanha encolhem junto, senão a regra nova valeria só a partir da próxima gravação.
+
+### PUT /api/roleplay/campaigns/{id}/sheets/me
+
+```json
+{
+  "name": "Iara, a Cartógrafa",
+  "entries": [
+    { "key": "forca", "value": "12", "visibility": "CAMPAIGN" },
+    { "key": "destreza", "value": "14", "visibility": "GAME_MASTER" },
+    { "key": "historia", "value": "Cresceu entre mapas.", "visibility": "PRIVATE" }
+  ]
+}
+```
+
+O corpo substitui a ficha por inteiro. `visibility` omitida vale `PRIVATE` — abrir é ato explícito
+de quem preenche. A resposta é a leitura do **dono**, pelo mesmo caminho da leitura, então a
+gravação nunca devolve campo que a leitura esconderia.
+
+Normalização e validação são do servidor: número aceita `12`, `12,5` (vira `12.5`) e `-3`, limitado
+a `±999999` com 4 casas; escolha é comparada sem diferenciar maiúsculas de minúsculas e devolvida na
+grafia da opção; texto não aceita caractere de controle; campo opcional em branco vira ausência.
+
+### Resposta de ficha
+
+```json
+{
+  "id": "roleplay_sheet_…",
+  "campaignId": "camp_…",
+  "userId": "user_…",
+  "name": "Iara, a Cartógrafa",
+  "entries": [
+    { "key": "forca", "value": "12", "visibility": "CAMPAIGN" }
+  ],
+  "derived": [
+    { "key": "mod_forca", "label": "Modificador de Força", "value": "1" }
+  ],
+  "createdAt": "2026-11-14T00:00:00Z",
+  "updatedAt": "2026-11-14T00:00:00Z"
+}
+```
+
+`entries` sai **já filtrado** pelo público de quem pediu. `derived` são os valores que o sistema
+calcula e **nunca são persistidos** — são recalculados na leitura e aparecem só quando o público
+também enxerga o campo de origem.
+
+### Quem vê o quê
+
+| Leitor | `entries` que recebe |
+|---|---|
+| Dono (`/me`) | Todas, inclusive as `PRIVATE` |
+| Mestre (`/` e `/{userId}`) | `GAME_MASTER` e `CAMPAIGN` de todos; `PRIVATE` de ninguém, nem a própria |
+| Outro participante (`/board`) | Só os campos `CAMPAIGN` de todos |
+| Jogador pedindo a ficha de outro | `403 FORBIDDEN` — a ficha alheia não é recurso dele |
+| Jogador pedindo a lista (`/sheets`) | `403 FORBIDDEN` |
+
+O quadro sempre inclui o `name` do personagem, mesmo quando a ficha está inteiramente fechada: o
+grupo precisa saber que aquele personagem existe, e sumir da lista revelaria que há segredo.
+
+### Códigos de erro próprios
+
+| Código | HTTP | Quando |
+|---|---|---|
+| `SHEET_TEMPLATE_MISSING` | 409 | A campanha ainda não tem modelo de ficha |
+| `SHEET_TEMPLATE_EXISTS` | 409 | Já existe modelo; use `PUT` para ajustar |
+| `SHEET_TEMPLATE_IN_USE` | 409 | Há ficha preenchida; o modelo não pode ser removido |
+| `SHEET_SYSTEM_LOCKED` | 409 | Tentativa de trocar o sistema com ficha preenchida |
+| `SHEET_NOT_FOUND` | 404 | Ficha inexistente na campanha |
+| `SHEET_NAME_REQUIRED` | 400 | Nome do personagem ausente ou acima de 120 caracteres |
+| `SHEET_FIELD_REQUIRED` | 400 | Campo obrigatório veio vazio |
+| `SHEET_FIELD_UNKNOWN` | 400 | Chave que o modelo não tem |
+| `SHEET_FIELD_DUPLICATED` | 400 | Mesma chave enviada duas vezes |
+| `SHEET_FIELDS_REQUIRED` | 400 | Ajuste de modelo sem nenhum campo |
+| `SHEET_VISIBILITY_TOO_OPEN` | 400 | Visibilidade acima do máximo do modelo |
+| `SHEET_VALUE_TOO_LONG` | 400 | Valor acima do limite do campo |
+| `SHEET_VALUE_INVALID` | 400 | Valor incompatível com o tipo do campo |
+| `INVALID_SHEET_VISIBILITY` | 400 | Visibilidade não reconhecida ou ausente |
+| `GAME_SYSTEM_WITHOUT_ATTRIBUTES` | 400 | Sistema registrado não declara atributos de ficha |
+| `GAME_SYSTEM_ATTRIBUTE_DUPLICATED` | 409 | Sistema declara a mesma chave de atributo duas vezes |

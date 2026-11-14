@@ -11,7 +11,9 @@ import com.socialcoisa.rede.eroleplay.domain.CampaignJoinRequest;
 import com.socialcoisa.rede.eroleplay.domain.CampaignJoinRequestStatus;
 import com.socialcoisa.rede.eroleplay.domain.CampaignMember;
 import com.socialcoisa.rede.eroleplay.domain.CampaignMembership;
+import com.socialcoisa.rede.eroleplay.domain.CharacterSheet;
 import com.socialcoisa.rede.eroleplay.domain.GameTable;
+import com.socialcoisa.rede.eroleplay.domain.SheetTemplate;
 import com.socialcoisa.rede.eroleplay.domain.TableSeat;
 
 /**
@@ -81,4 +83,22 @@ public interface EroleplayRepository {
 	List<TableSeat> listSeats(String tableId);
 
 	void removeSeat(String tableId, String userId);
+
+	/** O modelo de ficha da campanha (um por campanha). */
+	void saveSheetTemplate(SheetTemplate template);
+
+	Optional<SheetTemplate> findSheetTemplate(String campaignId);
+
+	boolean existsSheetTemplate(String campaignId);
+
+	void deleteSheetTemplate(String campaignId);
+
+	void saveSheet(CharacterSheet sheet);
+
+	Optional<CharacterSheet> findSheet(String campaignId, String userId);
+
+	List<CharacterSheet> listSheets(String campaignId);
+
+	/** Quantas fichas existem na campanha — recusa a troca de sistema quando já há ficha preenchida. */
+	long countSheets(String campaignId);
 }

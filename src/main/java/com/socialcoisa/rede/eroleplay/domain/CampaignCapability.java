@@ -22,6 +22,11 @@ public enum CampaignCapability {
 	TRANSFER_MASTERSHIP,
 	/** Criar e editar mesas. */
 	MANAGE_TABLES,
+	/**
+	 * Definir o modelo de ficha da campanha: quais campos existem e até onde cada um pode ser
+	 * aberto. É distinto de preencher a própria ficha, que qualquer participante faz.
+	 */
+	MANAGE_SHEET_TEMPLATE,
 	/** Publicar no chat da campanha e conversar nos canais em que participa. */
 	POST_IN_CAMPAIGN,
 	/** Fazer rolagens e pedir rolagens ao mestre. */

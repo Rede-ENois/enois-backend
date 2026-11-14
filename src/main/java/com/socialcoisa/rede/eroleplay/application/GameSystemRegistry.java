@@ -3,6 +3,7 @@ package com.socialcoisa.rede.eroleplay.application;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -37,6 +38,14 @@ public class GameSystemRegistry {
 	/** Todos os sistemas registrados, na ordem em que foram injetados. */
 	public List<SystemAdapter> all() {
 		return List.copyOf(byId.values());
+	}
+
+	/** O adapter registrado para o identificador, se existir. Leitura tolerante para recurso opcional. */
+	public Optional<SystemAdapter> find(String systemId) {
+		if (!StringUtils.hasText(systemId)) {
+			return Optional.empty();
+		}
+		return Optional.ofNullable(byId.get(systemId.trim()));
 	}
 
 	/**

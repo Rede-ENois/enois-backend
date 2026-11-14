@@ -20,8 +20,14 @@ import com.socialcoisa.rede.eroleplay.domain.CampaignMembership;
 import com.socialcoisa.rede.eroleplay.domain.CampaignRole;
 import com.socialcoisa.rede.eroleplay.domain.CampaignStatus;
 import com.socialcoisa.rede.eroleplay.domain.CampaignVisibility;
+import com.socialcoisa.rede.eroleplay.domain.CharacterSheet;
 import com.socialcoisa.rede.eroleplay.domain.GameTable;
+import com.socialcoisa.rede.eroleplay.domain.SheetEntry;
+import com.socialcoisa.rede.eroleplay.domain.SheetField;
+import com.socialcoisa.rede.eroleplay.domain.SheetTemplate;
 import com.socialcoisa.rede.eroleplay.domain.TableSeat;
+
+import tools.jackson.databind.ObjectMapper;
 
 @Repository
 class EroleplayPersistenceAdapter implements EroleplayRepository {
@@ -39,16 +45,23 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 	private final SpringDataCampaignJoinRequestJpaRepository requests;
 	private final SpringDataGameTableJpaRepository tables;
 	private final SpringDataTableSeatJpaRepository seats;
+	private final SpringDataSheetTemplateJpaRepository templates;
+	private final SpringDataCharacterSheetJpaRepository sheets;
+	private final ObjectMapper objectMapper;
 
 	EroleplayPersistenceAdapter(SpringDataCampaignJpaRepository campaigns,
 			SpringDataCampaignMemberJpaRepository members,
 			SpringDataCampaignJoinRequestJpaRepository requests, SpringDataGameTableJpaRepository tables,
-			SpringDataTableSeatJpaRepository seats) {
+			SpringDataTableSeatJpaRepository seats, SpringDataSheetTemplateJpaRepository templates,
+			SpringDataCharacterSheetJpaRepository sheets, ObjectMapper objectMapper) {
 		this.campaigns = campaigns;
 		this.members = members;
 		this.requests = requests;
 		this.tables = tables;
 		this.seats = seats;
+		this.templates = templates;
+		this.sheets = sheets;
+		this.objectMapper = objectMapper;
 	}
 
 	@Override
@@ -188,5 +201,66 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 	@Override
 	public void removeSeat(String tableId, String userId) {
 		seats.deleteById(tableId + ":" + userId);
+	}
+
+	@Override
+	public void saveSheetTemplate(SheetTemplate template) {
+		String fieldsJson = objectMapper.writeValueAsString(template.fields());
+		SheetTemplateJpaEntity existing = templates.findByCampaignId(template.campaignId()).orElse(null);
+		String id = existing == null ? template.id() : existing.id();
+		templates.save(new SheetTemplateJpaEntity(id, template.campaignId(), template.gameSystem(), fieldsJson,
+			existing == null ? template.createdAt() : existing.createdAt(), template.updatedAt()));
+	}
+
+	@Override
+	public Optional<SheetTemplate> findSheetTemplate(String campaignId) {
+		return templates.findByCampaignId(campaignId).map(this::toTemplate);
+	}
+
+	@Override
+	public boolean existsSheetTemplate(String campaignId) {
+		return templates.existsByCampaignId(campaignId);
+	}
+
+	@Override
+	public void deleteSheetTemplate(String campaignId) {
+		templates.findByCampaignId(campaignId).ifPresent(entity -> templates.deleteById(entity.id()));
+	}
+
+	@Override
+	public void saveSheet(CharacterSheet sheet) {
+		String entriesJson = objectMapper.writeValueAsString(sheet.all());
+		CharacterSheetJpaEntity existing = sheets.findByCampaignIdAndUserId(sheet.campaignId(), sheet.userId())
+			.orElse(null);
+		String id = existing == null ? sheet.id() : existing.id();
+		sheets.save(new CharacterSheetJpaEntity(id, sheet.campaignId(), sheet.userId(), sheet.name(), entriesJson,
+			existing == null ? sheet.createdAt() : existing.createdAt(), sheet.updatedAt()));
+	}
+
+	@Override
+	public Optional<CharacterSheet> findSheet(String campaignId, String userId) {
+		return sheets.findByCampaignIdAndUserId(campaignId, userId).map(this::toSheet);
+	}
+
+	@Override
+	public List<CharacterSheet> listSheets(String campaignId) {
+		return sheets.findByCampaignIdOrderByUpdatedAtDesc(campaignId).stream().map(this::toSheet).toList();
+	}
+
+	@Override
+	public long countSheets(String campaignId) {
+		return sheets.countByCampaignId(campaignId);
+	}
+
+	private SheetTemplate toTemplate(SheetTemplateJpaEntity entity) {
+		List<SheetField> fields = List.of(objectMapper.readValue(entity.fieldsJson(), SheetField[].class));
+		return SheetTemplate.restore(entity.id(), entity.campaignId(), entity.gameSystem(), fields,
+			entity.createdAt(), entity.updatedAt());
+	}
+
+	private CharacterSheet toSheet(CharacterSheetJpaEntity entity) {
+		List<SheetEntry> entries = List.of(objectMapper.readValue(entity.entriesJson(), SheetEntry[].class));
+		return CharacterSheet.restore(entity.id(), entity.campaignId(), entity.userId(), entity.name(), entries,
+			entity.createdAt(), entity.updatedAt());
 	}
 }

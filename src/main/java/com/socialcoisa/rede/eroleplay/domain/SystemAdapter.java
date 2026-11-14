@@ -43,4 +43,13 @@ public interface SystemAdapter {
 
 	/** Os atributos que este sistema define para a ficha. */
 	List<SheetAttribute> attributes();
+
+	/**
+	 * Os valores que este sistema CALCULA a partir da ficha. Vazio por padrão: um sistema só
+	 * declara derivado quando a conta é regra de verdade — derivado digitado à mão seria a ficha
+	 * mentindo sobre o próprio sistema.
+	 */
+	default List<DerivedAttribute> derivedAttributes() {
+		return List.of();
+	}
 }

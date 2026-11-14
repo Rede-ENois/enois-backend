@@ -27,9 +27,9 @@ explícito, nunca com comportamento genérico inventado.
 |---|---|---|
 | 0 | RFC, modelo de domínio, contratos de integração, roadmap | em andamento |
 | 1 | Campanhas: papéis, visibilidade, membros, pedidos, mesas, lugares | em andamento |
-| 2 | Registro de sistemas + primeiro `SystemAdapter` | pendente |
-| 3 | Character Sheet Engine (modelo do mestre, preenchimento, privacidade por campo) | pendente |
-| 4 | Dice Engine (servidor, registro imutável, rolagem pedida pelo mestre) | pendente |
+| 2 | Registro de sistemas + primeiro `SystemAdapter` | concluída |
+| 3 | Character Sheet Engine (modelo do mestre, preenchimento, privacidade por campo) | concluída |
+| 4 | Dice Engine (servidor, registro imutável, rolagem pedida pelo mestre) | em andamento |
 | 5 | Chat de campanha (IC/OOC, privado, fixado, presença) | pendente |
 | 6 | Voz por mesa via Épapo + mesa virtual | pendente |
 | 7 | World Builder | pendente |
@@ -50,13 +50,13 @@ explícito, nunca com comportamento genérico inventado.
 
 - [x] Domínio: campanha, papel, visibilidade, estado, membro, pedido, mesa, lugar
 - [x] `CampaignPermissions` como fonte única de decisão de acesso
-- [x] Persistência (V291) e portas de saída
+- [x] Persistência (V293) e portas de saída
 - [x] `CampaignService` com criação, edição, entrada, convite, saída, remoção,
       transferência de mestria, pedido/decisão, arquivamento, mesas e lugares
 - [x] API REST `/roleplay/campaigns`
 - [x] Notificações `ROLEPLAY_CAMPAIGN_*`
 - [x] Testes: fluxo de campanha, matriz de permissões, segurança/autorização
-- [ ] Documentar a superfície em `docs/MODULES.md` e `docs/API.md`
+- [x] Documentar a superfície em `docs/MODULES.md` e `docs/API.md`
 
 ### Fase 2 — registro de sistemas
 
@@ -69,12 +69,12 @@ explícito, nunca com comportamento genérico inventado.
 
 ### Fase 3 — fichas de personagem
 
-- [ ] `SheetTemplate` definido pelo mestre (campos, tipos, obrigatoriedade, visibilidade)
-- [ ] `CharacterSheet` preenchida pelo jogador, com valores derivados das regras do sistema
-- [ ] Validação de preenchimento no servidor, contra o template
-- [ ] Privacidade: o jogador não lê a ficha de outro; visibilidade por campo; memberCount
+- [x] `SheetTemplate` definido pelo mestre (campos, tipos, obrigatoriedade, visibilidade)
+- [x] `CharacterSheet` preenchida pelo jogador, com valores derivados das regras do sistema
+- [x] Validação de preenchimento no servidor, contra o template
+- [x] Privacidade: o jogador não lê a ficha de outro; visibilidade por campo; memberCount
       nunca revela ficha
-- [ ] Persistência + API + testes de IDOR/enumeração
+- [x] Persistência (V294) + API + testes de IDOR/enumeração
 
 ### Fase 4 — motor de dados
 
@@ -115,12 +115,14 @@ explícito, nunca com comportamento genérico inventado.
 
 ## 5. Próxima tarefa
 
-**Fase 3**: modelo de ficha definido pelo mestre.
+**Fase 4**: motor de dados.
 
-Começo: `SheetTemplate` (campos, tipos, obrigatoriedade, visibilidade) montado a partir dos
-atributos que o adapter do sistema declara; preenchimento pelo jogador com validação no servidor;
-privacidade por campo (o jogador não lê a ficha de outro) bloqueada na API; persistência +
-testes de IDOR/enumeração.
+Começo: `DiceRoll` com fonte de aleatoriedade do servidor (`SecureRandom`), registro imutável
+(quem, quando, o que pediu, resultado, contexto da campanha) e a rolagem pedida pelo mestre e
+respondida pelo jogador. O sistema de regras continua decidindo a semântica: a família D20 diz o
+que é crítico, o adapter do sistema diz como o teste se resolve. Rolagem nunca é calculada no
+cliente; o registro não é editável nem apagável, e a leitura é da campanha (o mestre vê todas, o
+jogador vê as próprias e as públicas da mesa).
 
 ## 6. Critérios de encerramento do agendamento
 
