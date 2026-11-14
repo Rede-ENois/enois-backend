@@ -229,6 +229,19 @@ public class MentorService {
 		if (!mentor.userId().equals(userId)) {
 			throw new ApiException(403, "FORBIDDEN", "Voce nao e o dono deste perfil de mentor.");
 		}
+		// Horário publicado sem começo, sem fim, com fim antes do começo ou que já passou não é
+		// horário: ninguém consegue reservar um, e o primeiro e o último envenenam a lista com uma
+		// opção que quebra na tela. Nenhum deles deve chegar ao banco.
+		Instant now = clock.instant();
+		if (startsAt == null || endsAt == null) {
+			throw new ApiException(400, "SLOT_TIME_REQUIRED", "Informe o inicio e o fim do horario.");
+		}
+		if (!endsAt.isAfter(startsAt)) {
+			throw new ApiException(400, "SLOT_TIME_INVERTED", "O fim do horario precisa ser depois do inicio.");
+		}
+		if (!startsAt.isAfter(now)) {
+			throw new ApiException(400, "SLOT_TIME_PAST", "Este horario ja passou. Publique um horario futuro.");
+		}
 		String id = "slot_" + UUID.randomUUID().toString().replace("-", "");
 		MentorSlot slot = MentorSlot.create(id, mentorId, startsAt, endsAt);
 		repository.saveSlot(slot);
@@ -267,6 +280,14 @@ public class MentorService {
 		}
 		if (!slot.available()) {
 			throw new ApiException(409, "SLOT_UNAVAILABLE", "Horario nao esta mais disponivel.");
+		}
+		// Horário que já começou continua "disponível" no banco quando ninguém o reservou, e a
+		// inscrição nele nasceria já vencida: o relógio a concluiria na primeira leitura, sem a
+		// sessão acontecer e sem o mentorado poder cancelar. Recusa antes de reservar o horário e
+		// antes de reter qualquer faísca.
+		if (slot.startsAt() != null && !slot.startsAt().isAfter(clock.instant())) {
+			throw new ApiException(409, "SLOT_ALREADY_STARTED",
+				"Este horario ja comecou. Escolha outro horario livre.");
 		}
 		if (mentor.userId().equals(menteeId)) {
 			throw new ApiException(400, "CANNOT_BOOK_OWN", "Voce nao pode agendar uma sessao com voce mesmo.");
