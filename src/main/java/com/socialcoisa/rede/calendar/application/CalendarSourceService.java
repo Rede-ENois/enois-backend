@@ -13,6 +13,7 @@ import com.socialcoisa.rede.calendar.domain.CalendarEntry;
 import com.socialcoisa.rede.calendar.domain.CalendarEntrySource;
 import com.socialcoisa.rede.calendar.domain.CalendarKind;
 import com.socialcoisa.rede.calendar.domain.CalendarScope;
+import com.socialcoisa.rede.shared.web.ApiException;
 
 /**
  * Entrada gravada por outro módulo (mentoria, evento, entrevista), com a origem preenchida.
@@ -48,9 +49,15 @@ public class CalendarSourceService {
 	 */
 	public UpsertResult upsert(UpsertInput input) {
 		CalendarEntrySource source = new CalendarEntrySource(input.sourceType(), input.sourceId());
-		ZoneId zone = input.timeZoneId() == null || input.timeZoneId().isBlank()
-			? ZoneId.of(DEFAULT_ZONE)
-			: CalendarEntry.zoneOf(input.timeZoneId());
+		ZoneId zone;
+		try {
+			zone = input.timeZoneId() == null || input.timeZoneId().isBlank()
+				? ZoneId.of(DEFAULT_ZONE)
+				: CalendarEntry.zoneOf(input.timeZoneId());
+		}
+		catch (IllegalArgumentException invalidInput) {
+			throw new ApiException(400, "INVALID_CALENDAR_ENTRY", invalidInput.getMessage());
+		}
 		Instant now = clock.instant();
 
 		Optional<CalendarEntry> existing = entries.findBySource(input.ownerId(), source);

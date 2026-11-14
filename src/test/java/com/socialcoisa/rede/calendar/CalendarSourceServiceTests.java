@@ -153,6 +153,22 @@ class CalendarSourceServiceTests {
 		return "cal_owner_" + UUID.randomUUID();
 	}
 
+	@Test
+	void anUnknownTimeZoneFromTheOwningModuleIsA400NotAServerError() {
+		// O módulo dono manda o fuso que a pessoa escolheu; um fuso inventado não pode estourar como
+		// IllegalArgumentException cru (500): a origem do erro é dado que chegou, e responde 400.
+		String owner = owner();
+		String sourceId = "mentor_session_" + UUID.randomUUID();
+
+		assertThatThrownBy(() -> service.upsert(new CalendarSourceService.UpsertInput(owner, "MENTORING",
+				sourceId, CalendarScope.PROFESSIONAL, CalendarKind.MENTORING, "Mentoria", null, STARTS_AT,
+				STARTS_AT.plus(Duration.ofMinutes(50)), "Marte/Olympus_Mons")))
+			.isInstanceOf(com.socialcoisa.rede.shared.web.ApiException.class)
+			.extracting(e -> ((com.socialcoisa.rede.shared.web.ApiException) e).status(),
+				e -> ((com.socialcoisa.rede.shared.web.ApiException) e).code())
+			.containsExactly(400, "INVALID_CALENDAR_ENTRY");
+	}
+
 	private static CalendarSourceService.UpsertInput input(String owner, String sourceId, Instant startsAt) {
 		return new CalendarSourceService.UpsertInput(owner, "MENTORING", sourceId, CalendarScope.PROFESSIONAL,
 			CalendarKind.MENTORING, "Mentoria: Java", null, startsAt, startsAt.plus(Duration.ofMinutes(50)),

@@ -371,9 +371,19 @@ class CalendarEntryController {
 			String seriesId, String recurrence) {
 
 		static CalendarEntryView from(CalendarEntry entry) {
+			return from(entry, true);
+		}
+
+		/**
+		 * A origem (`sourceType`/`sourceId`) é o bookkeeping entre a agenda e o módulo dono — o id é
+		 * interno de outro módulo. Quem é dono do compromisso pode vê-la; convidado, mesmo recusado,
+		 * recebe os dois campos nulos.
+		 */
+		static CalendarEntryView from(CalendarEntry entry, boolean withSource) {
 			return new CalendarEntryView(entry.id(), entry.scope().name(), entry.kind().name(), entry.title(),
 				entry.description(), entry.startsAt().toString(), entry.endsAt().toString(), entry.zone().getId(),
-				entry.allDay(), entry.state().name(), entry.source().type(), entry.source().id(),
+				entry.allDay(), entry.state().name(), withSource ? entry.source().type() : null,
+				withSource ? entry.source().id() : null,
 				entry.createdAt().toString(), entry.updatedAt().toString(),
 				entry.cancelledAt() == null ? null : entry.cancelledAt().toString(),
 				entry.seriesId(), entry.recurrence() == null ? null : entry.recurrence().name());
@@ -388,7 +398,8 @@ class CalendarEntryController {
 	record AgendaItemView(CalendarEntryView entry, boolean owner, String participation) {
 
 		static AgendaItemView from(CalendarAgendaItem item) {
-			return new AgendaItemView(CalendarEntryView.from(item.entry()), item.owner(), participationOf(item));
+			return new AgendaItemView(CalendarEntryView.from(item.entry(), item.owner()), item.owner(),
+				participationOf(item));
 		}
 	}
 
@@ -397,7 +408,7 @@ class CalendarEntryController {
 			List<ParticipantView> participants) {
 
 		static AgendaDetailView from(CalendarAgendaItem item, List<ParticipantView> participants) {
-			return new AgendaDetailView(CalendarEntryView.from(item.entry()), item.owner(),
+			return new AgendaDetailView(CalendarEntryView.from(item.entry(), item.owner()), item.owner(),
 				participationOf(item), participants);
 		}
 	}
