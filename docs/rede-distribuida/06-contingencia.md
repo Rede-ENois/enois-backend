@@ -352,6 +352,12 @@ revalida no próprio ciclo e trabalha.
 | dois controladores com termos diferentes → nó entra em quarentena | `NetworkTermConflictTests` | entregue (R102) |
 | sobrecarga simultânea → `HIGH_LOAD` entra e sai pelos números medidos | `NetworkModesTests` | entregue (F4) |
 | recuperação → `RECOVERY` drena sem derrubar o que está em andamento | `NetworkModesTests` | entregue (F4) |
+| **carga → a distribuição aumenta a capacidade de atendimento** | `NetworkLoadTests.doisNosAtendemODobroDeUmNoComAMesmaCapacidadePorNo` (com `aCargaInteiraEhAtendidaEmRodadasSucessivasSemDuplicarNemPerder` e `sobSobrecargaCadaRodadaAtendeALimiteENaoMais`) | entregue (R112) |
+
+A medição de carga é **contagem**, não tempo: a mesma carga e o mesmo limite declarado por nó, uma
+rede de um nó e uma de dois nós — a de dois conclui o dobro por rodada (4 → 8), a carga inteira sai
+sem duplicar nem perder tarefa, e sob sobrecarga cada rodada atende exatamente a capacidade. Nenhum
+milissegundo é medido: a duração de um MockMvc sobre H2 descreveria a máquina de teste, não a rede.
 
 Os cenários de desastre que dependem de estado declarado e sobrevivem a reinício vivem em
 `NetworkDisasterTests`, que é onde os novos entram: um arquivo por vez de cenário cruzado, um método

@@ -33,6 +33,7 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 
 import com.socialcoisa.rede.media.application.MediaFfmpegRunner;
 import com.socialcoisa.rede.media.application.StubFfmpegRunner;
@@ -173,7 +174,7 @@ class NetworkMediaTests {
 		// O nó lê a origem: é o objeto da tarefa, e só ele.
 		var lido = mockMvc.perform(get("/network/media/" + mediaId + "/source").header("X-Node-Id", node.id())
 			.header("X-Node-Key", node.key())).andExpect(status().isOk()).andReturn();
-		assertThat(lido.getResponse().getContentAsByteArray()).isEqualTo(origem);
+		assertCorpoEmStreaming(lido, origem);
 
 		// O nó entrega o resultado; a resposta traz o que o Control Plane MEDIU.
 		var entregue = mockMvc
@@ -457,6 +458,26 @@ class NetworkMediaTests {
 					Map.of("cpuPercent", 5.0, "memoryMb", 1024, "runningTasks", 0)))))
 			.andExpect(status().isOk());
 		return node;
+	}
+
+	/**
+	 * O corpo da leitura é escrito na thread de streaming ({@code StreamingResponseBody}): o
+	 * {@code perform} pode voltar antes de o buffer estar completo, e na suíte inteira isso aparecia
+	 * como falha intermitente de corpo vazio. Espera o buffer encher, como em
+	 * {@code MediaStorageProxyTests.assertCorpoEmStreaming}.
+	 */
+	private static void assertCorpoEmStreaming(MvcResult resultado, byte[] esperado) throws InterruptedException {
+		long limite = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+		byte[] corpo;
+		do {
+			corpo = resultado.getResponse().getContentAsByteArray();
+			if (corpo.length == esperado.length || System.nanoTime() > limite) {
+				break;
+			}
+			Thread.sleep(10);
+		}
+		while (true);
+		assertThat(corpo).isEqualTo(esperado);
 	}
 
 	private static void rodar(List<String> comando) throws Exception {

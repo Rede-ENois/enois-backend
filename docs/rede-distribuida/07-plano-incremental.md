@@ -45,6 +45,7 @@ duas vezes com dado antigo preservado.
 | cancelamento e timeout | tarefa vencida não executa; resultado tardio é descartado |
 | detecção de tarefa abandonada | claim expirado volta para a fila |
 | controle de sobrecarga | sobrecarga vira `HIGH_LOAD`, medido |
+| **teste de carga: a distribuição aumenta a capacidade de atendimento** | mesma carga e mesmo limite por nó, uma rede de um nó e uma de dois nós: a de dois atende o dobro, medido em tarefas concluídas — **entregue (R112)**: `NetworkLoadTests` mede a **vazão do ciclo real** (enfileirar → designar → `GET /network/tasks/next` → `POST /network/tasks/{id}/result`), não a soma de vagas declaradas — contar vagas provaria que a conta fecha, e o critério do contrato é quantas tarefas a rede **serve**. Nó de 4 núcleos atende **4** tarefas por rodada; dois nós de 4 núcleos atendem **8**, com a mesma carga; a carga inteira sai sem duplicar nem perder tarefa (soma de `attempt` = carga, `DONE` distinto = carga); sob sobrecarga (20 tarefas, 2 nós) cada rodada atende exatamente a capacidade e o resto fica `PENDING`, porque capacidade maior não pode ser fila empurrada para o nó cheio. Nenhum tempo é medido: milissegundos de um MockMvc em H2 diriam mais sobre a máquina de teste do que sobre a rede, e o critério é contagem |
 
 **Prova:** teste que derruba o nó no meio da tarefa e mostra a redistribuição sem duplicar; contagem
 de execução igual a 1 por efeito.
