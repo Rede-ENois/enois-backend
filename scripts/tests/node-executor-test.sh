@@ -83,6 +83,7 @@ printf '%s' "$CP_PUB" > "$NH/pinning-key"; chmod 600 "$NH/pinning-key"
 CONFIG_SIGNED='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":4,"ttlSeconds":300,"configVersion":3,"profiles":["NODE_WORKER"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["ASYNC_JOB"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 3 '["NODE_WORKER"]' 4 8192 51200 100 '["ASYNC_JOB"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
 HEARTBEAT_OK='{"nodeId":"nd_exec1","status":"ACTIVE","profiles":["NODE_WORKER"],"serverTime":"now","mode":"NORMAL","acceptTasks":true}'
 HEARTBEAT_DRAIN='{"nodeId":"nd_exec1","status":"ACTIVE","profiles":["NODE_WORKER"],"serverTime":"now","mode":"DEGRADED","acceptTasks":false}'
+HEARTBEAT_PENDING='{"nodeId":"nd_exec1","status":"PENDING_APPROVAL","profiles":["NODE_WORKER"],"serverTime":"now","mode":"NORMAL","acceptTasks":false}'
 TASK_ASSIGNED='{"tasks":[{"taskId":"tk_1","type":"ASYNC_JOB","attempt":2,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"idem-42","payload":"{\"job\":\"x\"}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}'
 TASK_FORBIDDEN='{"tasks":[{"taskId":"tk_2","type":"MEDIA_TRANSCODE","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"idem-7","payload":"{}","dataClass":"PUBLIC_MEDIA"}],"mode":"NORMAL","serverTime":"now"}'
 
@@ -164,6 +165,70 @@ chmod +x "$TMP/curl"
 out=$(run_custom)
 assert_contains 'modo DEGRADED drena: acceptTasks=false' "$out" 'acceptTasks=false'
 assert_not_contains 'nó drenado não pede tarefa' "$(cat "$TMP/curl-calls")" '/network/tasks/next'
+# O status do heartbeat tem de virar resposta legível: ACTIVE + sem despacho é "aprovado, mas
+# a rede não despacha", que é diferente de "faltou aprovação". Antes da correção o log só dizia
+# `modo=DEGRADED acceptTasks=false` e as duas causas ficavam indistinguíveis.
+assert_contains 'nó ACTIVE sem despacho diz que está aprovado, não que falta aprovação' \
+  "$out" 'aprovado, mas a rede não despacha agora — modo=DEGRADED'
+
+# ------------------------------------------------- cenário 3b: nó pendente de aprovação
+# O caso que motivou a correção: o nó existe, autentica e recebe 200, mas o admin ainda não
+# aprovou. Sem o status no log, isso era um "acceptTasks=false" mudo a cada 15s.
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_PENDING' ;;
+  *) printf 'CHAMADA-INESPERADA %s' "\$url" >> "$TMP/curl-calls" ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom)
+assert_contains 'nó PENDING_APPROVAL diz que aguarda aprovação' "$out" 'aguardando aprovação — o nó existe e autentica, mas o admin ainda não aprovou'
+assert_not_contains 'nó pendente não pede tarefa' "$(cat "$TMP/curl-calls")" '/network/tasks/next'
+
+# ------------------------------------------------- cenário 3c: o aviso não repete a cada ciclo
+# O loop roda a cada NODE_POLL_SECONDS. Repetir a mesma transição a cada volta enterra o que
+# mudou. Duas chamadas de cycle com o MESMO estado têm de render uma linha; estado diferente
+# tem de render outra. Sem o guarda, este laco contaria 2 (ou mais).
+repeat_cycles() {
+  local n="$1"
+  : > "$TMP/curl-calls"
+  cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_PENDING' ;;
+  *) exit 22 ;;
+esac
+MOCK
+  chmod +x "$TMP/curl"
+  CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SECONDS=1 \
+    /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo "cycle; cycle; cycle")" 2>&1 || true
+}
+out=$(repeat_cycles 3)
+pending_lines=$(grep -c 'aguardando aprovação — o nó existe e autentica' <<<"$out" || true)
+assert_eq 'transição repetida em 3 ciclos é anunciada UMA vez' '1' "$pending_lines"
+
+# Estado diferente emite de novo: a linha de DEGRADED não pode ficar calada só porque já
+# houve aviso (senão o operador perde a mudança de PENDING para aprovado-drenando).
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) /bin/cat "$TMP/hb-current" ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+printf '%s' "$HEARTBEAT_PENDING" > "$TMP/hb-current"
+printf '%s' "$HEARTBEAT_DRAIN" > "$TMP/hb-next"
+out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SECONDS=1 \
+  /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo "cycle; /usr/bin/cp '$TMP/hb-next' '$TMP/hb-current'; cycle")" 2>&1 || true)
+assert_contains 'mudança de estado volta a anunciar' "$out" 'aguardando aprovação — o nó existe e autentica'
+assert_contains 'e diz o estado novo' "$out" 'aprovado, mas a rede não despacha agora — modo=DEGRADED'
 
 # ------------------------------------------------- cenário 4: config sem assinatura
 : > "$TMP/curl-calls"

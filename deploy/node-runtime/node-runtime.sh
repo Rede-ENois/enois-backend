@@ -39,6 +39,19 @@ json_field() {
   sed -n 's/.*"'"$2"'":"\([^"]*\)".*/\1/p' <<<"$1" | head -n 1
 }
 
+# Aviso que o operador precisa ler uma vez, não a cada ciclo.
+# O loop roda a cada NODE_POLL_SECONDS; repetir a mesma linha a cada volta faz o log
+# crescer e a informação útil (mudou o estado?) sumir. Guarda a última linha emitida em
+# memória, por rótulo, e cala a repetição. Estado novo, linha nova.
+LAST_NOTICE=""
+notice_once() {
+  # notice_once <rotulo> <mensagem>: emite só quando a transição é nova.
+  local key="$1" message="$2"
+  [[ "$LAST_NOTICE" == "$key" ]] && return 0
+  LAST_NOTICE="$key"
+  printf '[executor] %s\n' "$message" >&2
+}
+
 task_payload() {
   # O payload da tarefa é uma string JSON dentro do JSON da tarefa: chega escapado
   # ({\"mediaId\":...}). Não serve json_field — o [^"] para no primeiro \" — então
@@ -66,7 +79,7 @@ json_flag() {
 allowed_tasks() {
   local config rc
   if [[ ! -s "$NODE_HOME/pinning-key" ]]; then
-    printf '[executor] sem pinning-key — config não verificável; rode --start para pinar a chave\n' >&2
+    notice_once sem-pino 'sem pinning-key — config não verificável; rode --start para pinar a chave'
     return 1
   fi
   config=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
@@ -1052,6 +1065,33 @@ cycle() {
     "$CONTROL_PLANE/network/nodes/heartbeat") || { printf '[executor] heartbeat falhou\n' >&2; return 1; }
   mode=$(json_field "$hb" mode)
   accept_tasks=$(grep -q '"acceptTasks":true' <<<"$hb" && echo true || echo false)
+  # O status do Control Plane é a resposta à pergunta "fui aceito?" — e antes ele existia no
+  # corpo do heartbeat e morria ali. Um nó PENDING_APPROVAL e um nó aprovado mas em modo sem
+  # despacho registravam a MESMA linha (`modo=X acceptTasks=false`), e o operador não tinha
+  # como saber se faltava a aprovação do admin ou uma condição da rede. Agora o motivo sai
+  # por extenso, e só quando muda: transição é o que importa, não o ciclo.
+  status=$(json_field "$hb" status)
+  if [[ "$accept_tasks" == true ]]; then
+    notice_once "aceito-${status:-?}-${mode:-?}" "aceito pela rede — status=${status:-?} modo=${mode:-?} (aceita tarefas)"
+  else
+    case "${status:-}" in
+      PENDING_APPROVAL)
+        notice_once 'aguardando-aprovacao' \
+          "aguardando aprovação — o nó existe e autentica, mas o admin ainda não aprovou (status=$status)" ;;
+      QUARANTINED|SUSPENDED)
+        notice_once "quarentena-${status}" \
+          "fora de operação — status=$status; o nó autentica e drena até o admin liberar" ;;
+      REVOKED)
+        notice_once 'revogado' \
+          "nó revogado — status=$status; a revogação é terminal, provisione um nó novo" ;;
+      ACTIVE)
+        notice_once "drenando-${mode:-?}" \
+          "aprovado, mas a rede não despacha agora — modo=${mode:-?}; drenando (drenar é não pedir)" ;;
+      *)
+        notice_once "sem-aceite-${status:-?}-${mode:-?}" \
+          "a rede não despacha — status=${status:-?} modo=${mode:-?} acceptTasks=false" ;;
+    esac
+  fi
   printf '[executor] modo=%s acceptTasks=%s\n' "${mode:-?}" "$accept_tasks"
 
   # 2. drenar é NÃO PEDIR: modo sem despacho ou nó fora de operação não consulta fila.
