@@ -372,6 +372,15 @@ public class CampaignService {
 		return role;
 	}
 
+	/**
+	 * Verifica uma capacidade na frente de quem vai usá-la fora daqui (o chat e os próximos
+	 * recursos de campanha perguntam pela matriz em vez de reimplementar a régua).
+	 */
+	@Transactional(readOnly = true)
+	public void requireCapability(String campaignId, String userId, CampaignCapability capability) {
+		require(roleOf(campaignId, userId), capability);
+	}
+
 	private void require(CampaignRole role, CampaignCapability capability) {
 		if (!CampaignPermissions.can(role, capability)) {
 			throw new ApiException(403, "FORBIDDEN", "Voce nao tem permissao para isso nesta campanha.");

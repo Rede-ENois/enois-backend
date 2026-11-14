@@ -17,9 +17,11 @@ import com.socialcoisa.rede.eroleplay.domain.CampaignJoinRequest;
 import com.socialcoisa.rede.eroleplay.domain.CampaignJoinRequestStatus;
 import com.socialcoisa.rede.eroleplay.domain.CampaignMember;
 import com.socialcoisa.rede.eroleplay.domain.CampaignMembership;
+import com.socialcoisa.rede.eroleplay.domain.CampaignMessage;
 import com.socialcoisa.rede.eroleplay.domain.CampaignRole;
 import com.socialcoisa.rede.eroleplay.domain.CampaignStatus;
 import com.socialcoisa.rede.eroleplay.domain.CampaignVisibility;
+import com.socialcoisa.rede.eroleplay.domain.ChatChannel;
 import com.socialcoisa.rede.eroleplay.domain.CharacterSheet;
 import com.socialcoisa.rede.eroleplay.domain.DiceRoll;
 import com.socialcoisa.rede.eroleplay.domain.GameTable;
@@ -53,6 +55,7 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 	private final SpringDataCharacterSheetJpaRepository sheets;
 	private final SpringDataDiceRollJpaRepository rolls;
 	private final SpringDataRollRequestJpaRepository rollRequests;
+	private final SpringDataCampaignMessageJpaRepository messages;
 	private final ObjectMapper objectMapper;
 
 	EroleplayPersistenceAdapter(SpringDataCampaignJpaRepository campaigns,
@@ -60,7 +63,8 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 			SpringDataCampaignJoinRequestJpaRepository requests, SpringDataGameTableJpaRepository tables,
 			SpringDataTableSeatJpaRepository seats, SpringDataSheetTemplateJpaRepository templates,
 			SpringDataCharacterSheetJpaRepository sheets, SpringDataDiceRollJpaRepository rolls,
-			SpringDataRollRequestJpaRepository rollRequests, ObjectMapper objectMapper) {
+			SpringDataRollRequestJpaRepository rollRequests,
+			SpringDataCampaignMessageJpaRepository messages, ObjectMapper objectMapper) {
 		this.campaigns = campaigns;
 		this.members = members;
 		this.requests = requests;
@@ -70,6 +74,7 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 		this.sheets = sheets;
 		this.rolls = rolls;
 		this.rollRequests = rollRequests;
+		this.messages = messages;
 		this.objectMapper = objectMapper;
 	}
 
@@ -307,6 +312,30 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 	public List<RollRequest> listRollRequestsOf(String campaignId, String playerId) {
 		return rollRequests.findByCampaignIdAndPlayerIdOrderByCreatedAtDesc(campaignId, playerId).stream()
 			.map(this::toRollRequest).toList();
+	}
+
+	@Override
+	public void saveMessage(CampaignMessage message) {
+		messages.save(CampaignMessageJpaEntity.fromDomain(message));
+	}
+
+	@Override
+	public Optional<CampaignMessage> findMessage(String campaignId, String messageId) {
+		return messages.findById(messageId)
+			.filter(entity -> entity.campaignId().equals(campaignId))
+			.map(CampaignMessageJpaEntity::toDomain);
+	}
+
+	@Override
+	public List<CampaignMessage> listMessages(String campaignId, ChatChannel channel, int limit) {
+		return messages.findByCampaignIdAndChannelOrderByCreatedAtDesc(campaignId, channel.wire(),
+			PageRequest.of(0, limit)).stream().map(CampaignMessageJpaEntity::toDomain).toList();
+	}
+
+	@Override
+	public List<CampaignMessage> listPinnedMessages(String campaignId, int limit) {
+		return messages.findByCampaignIdAndPinnedAtNotNullOrderByPinnedAtDesc(campaignId, PageRequest.of(0, limit))
+			.stream().map(CampaignMessageJpaEntity::toDomain).toList();
 	}
 
 	private DiceRoll toRoll(DiceRollJpaEntity entity) {

@@ -1825,6 +1825,12 @@ por matriz de capacidades, com a autorização sempre no back-end.
 | `DiceService` | Rolar, pedir, responder, histórico e leitura recortada por público |
 | `DiceRollController` | API REST em `/roleplay/campaigns/{id}/rolls` |
 | `DiceRollJpaEntity` / `RollRequestJpaEntity` | Persistência (V295), com os dados individuais em JSON `longtext` |
+| `ChatChannel` | Os dois canais da mesa: IC (na voz do personagem) e OOC (coordenação) |
+| `CampaignMessage` | A mensagem do chat: criada uma vez, sem reescrita; fixação é metadado do mestre |
+| `CampaignChatService` | Publicar, histórico recortado por leitor, fixados, fixar/desfixar, presença |
+| `CampaignChatController` | API REST em `/roleplay/campaigns/{id}/chat` |
+| `CampaignMessageJpaEntity` | Persistência (V296) |
+| `CampaignChatChanged` | Evento de "chat mudou", entregue ao stream de mensagens depois do commit |
 
 Regras que valem sempre:
 
@@ -1892,6 +1898,25 @@ A visibilidade da rolagem é a MESMA régua da ficha (`SheetVisibility`): a rola
 o jogador pode fechar a própria, e o `PRIVATE` continua sendo a exceção do dono — nem o mestre lê.
 A resposta a um pedido nunca passa do teto gravado no pedido, e o pedido responde UMA vez: a segunda
 resposta é recusada com 409, que é o que impede rolar de novo até dar o número bom.
+
+### O chat da campanha
+
+O chat é a cena e a coordenação da mesa, e vive DENTRO da campanha: quem não participa não lê
+nada — nem o canal público. Os canais são dois e a diferença é semântica: em `IC` a pessoa fala
+na voz do personagem; em `OOC`, como si mesma. O par (campanha, canal) é o endereço; não há
+entidade de canal para configurar.
+
+O aparte privado (`recipientId`) é tri-lateral: remetente, destinatário e mestre leem — o mestre é
+da mesa, e a cena não se esconde de quem arbitra o jogo. O recorte é aplicado NA RESPOSTA, por
+leitor: na listagem a mensagem alheia simplesmente não entra; na leitura por id a recusa é 404,
+porque "não existe para você" é o que não confirma existência.
+
+A mensagem é criada uma vez e não se reescreve (não há PUT nem DELETE). O único estado que muda é
+a FIXAÇÃO: decisão do mestre, idempotente nos dois sentidos, que não altera uma vírgula do que
+está escrito. Todo aviso de mudança sai pelo evento `campaign` do stream de mensagens — o corpo só
+leva o id da campanha; o cliente recarrega pelo endpoint, que autoriza de novo. A presença da mesa
+é a lista de participantes cruzada com quem tem stream aberto, e só é respondida a quem passou
+pela fronteira da campanha.
 
 Contrato completo em [`EROLEPLAY-RFC.md`](EROLEPLAY-RFC.md); estado e próxima tarefa em
 [`EROLEPLAY-ROADMAP.md`](EROLEPLAY-ROADMAP.md).

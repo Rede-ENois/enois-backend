@@ -11,7 +11,9 @@ import com.socialcoisa.rede.eroleplay.domain.CampaignJoinRequest;
 import com.socialcoisa.rede.eroleplay.domain.CampaignJoinRequestStatus;
 import com.socialcoisa.rede.eroleplay.domain.CampaignMember;
 import com.socialcoisa.rede.eroleplay.domain.CampaignMembership;
+import com.socialcoisa.rede.eroleplay.domain.CampaignMessage;
 import com.socialcoisa.rede.eroleplay.domain.CharacterSheet;
+import com.socialcoisa.rede.eroleplay.domain.ChatChannel;
 import com.socialcoisa.rede.eroleplay.domain.DiceRoll;
 import com.socialcoisa.rede.eroleplay.domain.RollRequest;
 import com.socialcoisa.rede.eroleplay.domain.GameTable;
@@ -123,4 +125,17 @@ public interface EroleplayRepository {
 
 	/** Os pedidos feitos a um jogador — o que falta e o que ele ja respondeu. */
 	List<RollRequest> listRollRequestsOf(String campaignId, String playerId);
+
+	// ---- Chat da campanha: a mensagem e criada uma vez e so a fixacao muda depois. ----
+
+	/** Grava uma mensagem (criação ou a mesma mensagem com o estado de fixação mudado). */
+	void saveMessage(CampaignMessage message);
+
+	Optional<CampaignMessage> findMessage(String campaignId, String messageId);
+
+	/** O histórico do canal, mais recente primeiro, com o teto decidido pelo serviço. */
+	List<CampaignMessage> listMessages(String campaignId, ChatChannel channel, int limit);
+
+	/** As fixadas da campanha, mais recentes primeiro (os dois canais). */
+	List<CampaignMessage> listPinnedMessages(String campaignId, int limit);
 }
