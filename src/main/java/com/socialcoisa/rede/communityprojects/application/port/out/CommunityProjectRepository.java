@@ -12,6 +12,9 @@ public interface CommunityProjectRepository {
 
 	Optional<CommunityProject> findById(String id);
 
+	/** Serializa a decisão de aprovação antes de publicar e gravar o evento. */
+	Optional<CommunityProject> findByIdForUpdate(String id);
+
 	Optional<CommunityProject> findByUserAndSlug(String userId, String slug);
 
 	List<CommunityProject> findByUser(String userId);

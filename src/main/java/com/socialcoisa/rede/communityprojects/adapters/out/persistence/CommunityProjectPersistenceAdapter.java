@@ -30,6 +30,11 @@ class CommunityProjectPersistenceAdapter implements CommunityProjectRepository {
 	}
 
 	@Override
+	public Optional<CommunityProject> findByIdForUpdate(String id) {
+		return jpaRepository.findByIdForUpdate(id).map(CommunityProjectJpaEntity::toDomain);
+	}
+
+	@Override
 	public Optional<CommunityProject> findByUserAndSlug(String userId, String slug) {
 		return jpaRepository.findByUserIdAndSlug(userId, slug).map(CommunityProjectJpaEntity::toDomain);
 	}
