@@ -64,7 +64,9 @@ public class CalendarReminderService {
 
 	/**
 	 * Põe (ou troca) o lembrete de quem está lendo. Criar de novo com a mesma antecedência é o que
-	 * um duplo clique faz: devolve a linha que existe em vez de violar a chave única.
+	 * um duplo clique faz: devolve a linha que existe em vez de violar a chave única. Se a linha
+	 * existente já foi resolvida, ela é re-armada para o horário atual — pedir o lembrete de novo é
+	 * pedir para ser avisado de novo.
 	 */
 	@Transactional
 	public CalendarReminder setForReader(String userId, String entryId, int minutesBefore) {
@@ -76,7 +78,16 @@ public class CalendarReminderService {
 		Instant now = clock.instant();
 		Optional<CalendarReminder> existing = reminders.findByEntryAndUserAndMinutes(entryId, userId, minutesBefore);
 		if (existing.isPresent()) {
-			return existing.get();
+			CalendarReminder reminder = existing.get();
+			if (reminder.sentAt() == null) {
+				return reminder;
+			}
+			// A linha já foi resolvida (o aviso já saiu, o compromisso foi cancelado ou a antecedência
+			// venceu sem ninguém aceitar). Devolvê-la como está deixaria a tela mostrando um lembrete
+			// ligado que nunca mais toca: a pessoa pediu de novo e não seria avisada.
+			reminder.rearm(entry.startsAt());
+			reminders.save(reminder);
+			return reminder;
 		}
 		CalendarReminder reminder = CalendarReminder.create("rem_" + UUID.randomUUID().toString().replace("-", ""),
 			entryId, userId, minutesBefore, entry.startsAt(), now);

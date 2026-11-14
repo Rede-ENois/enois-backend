@@ -29,7 +29,7 @@ public class CalendarReminder {
 	private final String entryId;
 	private final String userId;
 	private final int minutesBefore;
-	private final Instant dueAt;
+	private Instant dueAt;
 	private final Instant createdAt;
 	private int attempts;
 	private Instant sentAt;
@@ -67,6 +67,19 @@ public class CalendarReminder {
 	 */
 	public boolean due(Instant now) {
 		return sentAt == null && attempts < MAX_ATTEMPTS && !dueAt.isAfter(now);
+	}
+
+	/**
+	 * Re-arma o lembrete já resolvido. A linha é a mesma — a chave única é pessoa + compromisso +
+	 * antecedência —, mas o aviso volta a valer para o horário atual do compromisso, que pode ter
+	 * mudado desde que a linha nasceu.
+	 */
+	public void rearm(Instant startsAt) {
+		Instant start = Objects.requireNonNull(startsAt, "início do compromisso");
+		this.dueAt = start.minus(Duration.ofMinutes(minutesBefore));
+		this.sentAt = null;
+		this.attempts = 0;
+		this.lastError = null;
 	}
 
 	public void sent(Instant at) {
