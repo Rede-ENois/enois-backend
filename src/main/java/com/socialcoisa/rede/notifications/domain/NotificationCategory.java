@@ -72,7 +72,15 @@ public enum NotificationCategory {
 		Map.entry("STUDY_PAIR_MATCHED", SOCIAL),
 		Map.entry("STUDY_PAIR_CHECKIN", SOCIAL),
 		Map.entry("STUDY_PAIR_ENDED", SOCIAL),
-		Map.entry("STUDY_PAIR_REMINDER", SOCIAL));
+		Map.entry("STUDY_PAIR_REMINDER", SOCIAL),
+		// Éroleplay: a vida da campanha (entrada, convite, comando). GROUPS porque é convivência
+		// entre participantes, como a de um grupo — não é mensagem privada nem trabalho.
+		Map.entry("ROLEPLAY_CAMPAIGN_MEMBER_JOINED", GROUPS),
+		Map.entry("ROLEPLAY_CAMPAIGN_JOIN_REQUEST", GROUPS),
+		Map.entry("ROLEPLAY_CAMPAIGN_JOIN_APPROVED", GROUPS),
+		Map.entry("ROLEPLAY_CAMPAIGN_JOIN_REJECTED", GROUPS),
+		Map.entry("ROLEPLAY_CAMPAIGN_INVITED", GROUPS),
+		Map.entry("ROLEPLAY_CAMPAIGN_MASTERSHIP_TRANSFERRED", GROUPS));
 
 	public static NotificationCategory of(String kind) {
 		return kind == null ? SYSTEM : BY_KIND.getOrDefault(kind, SYSTEM);
