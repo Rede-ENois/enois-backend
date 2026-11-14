@@ -21,10 +21,14 @@ import com.socialcoisa.rede.eroleplay.domain.CampaignRole;
 import com.socialcoisa.rede.eroleplay.domain.CampaignStatus;
 import com.socialcoisa.rede.eroleplay.domain.CampaignVisibility;
 import com.socialcoisa.rede.eroleplay.domain.CharacterSheet;
+import com.socialcoisa.rede.eroleplay.domain.DiceRoll;
 import com.socialcoisa.rede.eroleplay.domain.GameTable;
+import com.socialcoisa.rede.eroleplay.domain.RollRequest;
+import com.socialcoisa.rede.eroleplay.domain.RollRequestStatus;
 import com.socialcoisa.rede.eroleplay.domain.SheetEntry;
 import com.socialcoisa.rede.eroleplay.domain.SheetField;
 import com.socialcoisa.rede.eroleplay.domain.SheetTemplate;
+import com.socialcoisa.rede.eroleplay.domain.SheetVisibility;
 import com.socialcoisa.rede.eroleplay.domain.TableSeat;
 
 import tools.jackson.databind.ObjectMapper;
@@ -47,13 +51,16 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 	private final SpringDataTableSeatJpaRepository seats;
 	private final SpringDataSheetTemplateJpaRepository templates;
 	private final SpringDataCharacterSheetJpaRepository sheets;
+	private final SpringDataDiceRollJpaRepository rolls;
+	private final SpringDataRollRequestJpaRepository rollRequests;
 	private final ObjectMapper objectMapper;
 
 	EroleplayPersistenceAdapter(SpringDataCampaignJpaRepository campaigns,
 			SpringDataCampaignMemberJpaRepository members,
 			SpringDataCampaignJoinRequestJpaRepository requests, SpringDataGameTableJpaRepository tables,
 			SpringDataTableSeatJpaRepository seats, SpringDataSheetTemplateJpaRepository templates,
-			SpringDataCharacterSheetJpaRepository sheets, ObjectMapper objectMapper) {
+			SpringDataCharacterSheetJpaRepository sheets, SpringDataDiceRollJpaRepository rolls,
+			SpringDataRollRequestJpaRepository rollRequests, ObjectMapper objectMapper) {
 		this.campaigns = campaigns;
 		this.members = members;
 		this.requests = requests;
@@ -61,6 +68,8 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 		this.seats = seats;
 		this.templates = templates;
 		this.sheets = sheets;
+		this.rolls = rolls;
+		this.rollRequests = rollRequests;
 		this.objectMapper = objectMapper;
 	}
 
@@ -250,6 +259,68 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 	@Override
 	public long countSheets(String campaignId) {
 		return sheets.countByCampaignId(campaignId);
+	}
+
+	@Override
+	public void saveRoll(DiceRoll roll) {
+		String diceJson = objectMapper.writeValueAsString(roll.dice());
+		rolls.save(new DiceRollJpaEntity(roll.id(), roll.campaignId(), roll.rollerId(), roll.expression(),
+			diceJson, roll.total(), roll.label(), roll.visibility().name(), roll.requestId(), roll.createdAt()));
+	}
+
+	@Override
+	public List<DiceRoll> listRolls(String campaignId, int limit) {
+		return rolls.findByCampaignIdOrderByCreatedAtDesc(campaignId, PageRequest.of(0, limit))
+			.stream().map(this::toRoll).toList();
+	}
+
+	@Override
+	public Optional<DiceRoll> findRoll(String campaignId, String rollId) {
+		return rolls.findById(rollId)
+			.filter(entity -> entity.campaignId().equals(campaignId))
+			.map(this::toRoll);
+	}
+
+	@Override
+	public void saveRollRequest(RollRequest request) {
+		RollRequestJpaEntity existing = rollRequests.findByCampaignIdAndId(request.campaignId(), request.id())
+			.orElse(null);
+		Instant answeredAt = existing == null ? request.answeredAt() : existing.answeredAt();
+		rollRequests.save(new RollRequestJpaEntity(request.id(), request.campaignId(), request.masterId(),
+			request.playerId(), request.expression(), request.label(), request.maxVisibility().name(),
+			request.reason(), request.status().name(), request.answeredRollId(), request.createdAt(),
+			request.status() == RollRequestStatus.ANSWERED ? request.answeredAt() : answeredAt));
+	}
+
+	@Override
+	public Optional<RollRequest> findRollRequest(String campaignId, String requestId) {
+		return rollRequests.findByCampaignIdAndId(campaignId, requestId).map(this::toRollRequest);
+	}
+
+	@Override
+	public List<RollRequest> listRollRequests(String campaignId) {
+		return rollRequests.findByCampaignIdOrderByCreatedAtDesc(campaignId).stream()
+			.map(this::toRollRequest).toList();
+	}
+
+	@Override
+	public List<RollRequest> listRollRequestsOf(String campaignId, String playerId) {
+		return rollRequests.findByCampaignIdAndPlayerIdOrderByCreatedAtDesc(campaignId, playerId).stream()
+			.map(this::toRollRequest).toList();
+	}
+
+	private DiceRoll toRoll(DiceRollJpaEntity entity) {
+		List<Integer> dice = List.of(objectMapper.readValue(entity.diceJson(), Integer[].class));
+		return DiceRoll.restore(entity.id(), entity.campaignId(), entity.rollerId(), entity.expression(),
+			dice, entity.total(), entity.label(), SheetVisibility.of(entity.visibility()), entity.requestId(),
+			entity.createdAt());
+	}
+
+	private RollRequest toRollRequest(RollRequestJpaEntity entity) {
+		return RollRequest.restore(entity.id(), entity.campaignId(), entity.masterId(), entity.playerId(),
+			entity.expression(), entity.label(), SheetVisibility.of(entity.maxVisibility()), entity.reason(),
+			RollRequestStatus.valueOf(entity.status()), entity.answeredRollId(), entity.createdAt(),
+			entity.answeredAt());
 	}
 
 	private SheetTemplate toTemplate(SheetTemplateJpaEntity entity) {

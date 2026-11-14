@@ -85,6 +85,17 @@ class CampaignNotifier {
 			href(campaign), "Abrir campanha");
 	}
 
+	/**
+	 * Pedido de rolagem: o jogador precisa saber que o mestre pediu um teste dele. O corpo NUNCA
+	 * leva a expressão nem o motivo — o teste do mestre fica para dentro da campanha, e a caixa de
+	 * notificações é lida fora dela. O destino já exige participação, então só a campanha viaja.
+	 */
+	void rollRequested(Campaign campaign, String playerId, String masterId) {
+		notifications.create(playerId, "ROLEPLAY_ROLL_REQUESTED", masterId, "Pedido de rolagem",
+			nameOf(masterId) + " pediu uma rolagem sua em " + campaign.name() + ".", href(campaign),
+			"Abrir campanha");
+	}
+
 	/** Os mestres da campanha, menos quem fez a ação (o autor não é notificado dela). */
 	private List<CampaignMember> masters(Campaign campaign, String actorId) {
 		return repository.listMembers(campaign.id()).stream()

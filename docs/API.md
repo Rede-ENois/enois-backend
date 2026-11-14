@@ -1480,3 +1480,76 @@ grupo precisa saber que aquele personagem existe, e sumir da lista revelaria que
 | `INVALID_SHEET_VISIBILITY` | 400 | Visibilidade não reconhecida ou ausente |
 | `GAME_SYSTEM_WITHOUT_ATTRIBUTES` | 400 | Sistema registrado não declara atributos de ficha |
 | `GAME_SYSTEM_ATTRIBUTE_DUPLICATED` | 409 | Sistema declara a mesma chave de atributo duas vezes |
+
+## Éroleplay — motor de dados
+
+Prefixo do controller: `/roleplay/campaigns/{id}/rolls` (o gateway remove `/api`). **Nenhuma rota
+desta seção é pública**: rolagem é registro do que aconteceu na mesa, e o histórico é visível só
+para quem participa. As escritas respondem sob `Idempotency-Key` — repetir a mesma chave devolve o
+mesmo registro, não uma nova rolagem.
+
+O resultado **sempre sai do servidor**: o corpo descreve o que rolar (`2d6+3`), e o sorteio usa a
+fonte de aleatoriedade do servidor. Não existe campo de resultado no corpo — o que chegasse pronto
+seria a mesa escolhendo a própria sorte. O registro é imutável: não há rota que reescreva ou remova
+uma rolagem, e cada dado individual fica guardado para a mesa conferir a soma.
+
+### Rotas
+
+| Método | Caminho | Quem | O que faz |
+|---|---|---|---|
+| `POST` | `/roleplay/campaigns/{id}/rolls` | participante | Rola e registra; corpo `{ "expression", "label"?, "visibility"? }` |
+| `GET` | `/roleplay/campaigns/{id}/rolls` | participante | Histórico recente (teto de 100), já recortado por quem pede |
+| `GET` | `/roleplay/campaigns/{id}/rolls/{rollId}` | participante | Uma rolagem, no recorte de quem pede |
+| `POST` | `/roleplay/campaigns/{id}/rolls/requests` | mestre | Pede rolagem a um jogador; corpo `{ "playerId", "expression", "label"?, "visibility"?, "reason"? }` |
+| `GET` | `/roleplay/campaigns/{id}/rolls/requests` | participante | O mestre vê os pedidos que fez; o jogador os que recebeu |
+| `GET` | `/roleplay/campaigns/{id}/rolls/requests/{requestId}` | mestre ou jogador do pedido | Um pedido |
+| `POST` | `/roleplay/campaigns/{id}/rolls/requests/{requestId}/answer` | jogador do pedido | Responde com uma rolagem; corpo `{ "label"?, "visibility"? }` |
+
+### Visibilidade
+
+A rolagem usa a MESMA régua da ficha (`PRIVATE` / `GAME_MASTER` / `CAMPAIGN`). O valor informado é
+o teto, não o pedido: a visibilidade efetiva nunca passa do teto — na rolagem livre o teto é
+`CAMPAIGN`, e na resposta a um pedido é o `visibility` que o mestre gravou no pedido. O pedido
+respondido aponta para a rolagem que o respondeu (`answeredRollId`), e a rolagem aponta para o
+pedido (`requestId`).
+
+Quando o mestre pede uma rolagem, o jogador recebe a notificação `ROLEPLAY_ROLL_REQUESTED` (com
+link para a campanha). O corpo da notificação NUNCA leva a expressão nem o motivo — a caixa de
+notificações é lida fora da campanha, e o teste do mestre fica dentro dela.
+
+Recortes de leitura, aplicados na resposta:
+
+| Quem pede | Vê |
+|---|---|
+| Mestre | Todo o histórico da campanha |
+| Jogador | As próprias rolagens (inclusive as `PRIVATE`) e as `CAMPAIGN` dos outros |
+| Jogador lendo rolagem `PRIVATE`/`GAME_MASTER` de outro | `403 FORBIDDEN` |
+| Fora da campanha | `403 FORBIDDEN` em tudo |
+| Sem sessão | `401` em tudo |
+
+### Expressão
+
+A gramática é do servidor: grupos `NdF` somados a constantes com sinal (`2d6+3`, `1d8+2d6-1`,
+`d20`). Normaliza maiúsculas e espaços; a expressão gravada é a normalizada. Teto por grupo: 100
+dados; faces de 1 a 1000; constante até ±999.999; até 8 grupos e 8 constantes; 60 caracteres.
+Expressão só de constante (`5`) não é rolagem: sem dado, não há o que sortear nem o que conferir.
+
+### Códigos de erro próprios
+
+| Código | HTTP | Quando |
+|---|---|---|
+| `DICE_EXPRESSION_REQUIRED` | 400 | Expressão ausente ou vazia |
+| `DICE_EXPRESSION_TOO_LONG` | 400 | Expressão acima de 60 caracteres |
+| `DICE_EXPRESSION_INVALID` | 400 | Fora da gramática, operador solto, constante sozinha |
+| `DICE_GROUPS_TOO_MANY` | 400 | Mais de 8 grupos de dados |
+| `DICE_CONSTANTS_TOO_MANY` | 400 | Mais de 8 constantes |
+| `DICE_CONSTANT_TOO_LARGE` | 400 | Constante acima de ±999.999 |
+| `DICE_COUNT_INVALID` | 400 | Quantidade de dados fora de 1–100 |
+| `DICE_FACES_INVALID` | 400 | Faces fora de 1–1000 |
+| `DICE_SOURCE_BROKEN` | 500 | Fonte de aleatoriedade devolveu valor fora do intervalo (não registra) |
+| `ROLL_PLAYER_REQUIRED` | 400 | Pedido sem o jogador a quem vai |
+| `ROLL_REQUEST_SELF` | 400 | Mestre pedindo rolagem a si mesmo |
+| `ROLL_REQUEST_NOT_FOUND` | 404 | Pedido inexistente na campanha |
+| `ROLL_REQUEST_ALREADY_ANSWERED` | 409 | O pedido já foi respondido — a segunda resposta é recusada |
+| `ROLL_LABEL_MISMATCH` | 400 | Rótulo da resposta contradiz o do pedido |
+| `ROLL_NOT_FOUND` | 404 | Rolagem inexistente na campanha |

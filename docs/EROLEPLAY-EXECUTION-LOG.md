@@ -215,3 +215,97 @@ fechado. Todas corrigidas no teste, sem afrouxar a regra de produção.
 - Fases 4 a 10 (motor de dados, chat, voz/mesa virtual, world builder, biblioteca, front,
   endurecimento).
 - A origem rastreável da frente ainda não foi registrada como issue no backlog.
+
+## Rodada 4 — 2026-11-14 — Fase 4 (motor de dados)
+
+**O que foi reutilizado (sem reinvenção):**
+
+- A régua de visibilidade da Fase 3 (`SheetVisibility` / `SheetAudience`) governa também a rolagem —
+  a mesa não ganhou uma segunda linguagem de privacidade.
+- A matriz de capacidades da Fase 1 (`CampaignPermissions`) decide quem rola (`ROLL_DICE`, jogador e
+  mestre) e quem pede (só mestre, conferido no serviço).
+- `IdempotencyApplicationService` em toda escrita; `WriteRouteInterceptor` segue barrando escrita
+  sem sessão (nenhuma rota de rolagem entrou na allowlist pública).
+- Padrões de teste do módulo: `TestAuthHelper`, fixtures com prefixo próprio, H2 compartilhada.
+
+**O que foi implementado:**
+
+- `DiceExpression` (domínio): gramática `NdF` + constantes com sinal, interpretada NO SERVIDOR.
+  Teto por grupo 100 dados, faces 1–1000, constante ±999.999, 8 grupos + 8 constantes, 60
+  caracteres. Expressão só de constante não é rolagem. Erros com código próprio, nunca palpite.
+- `DiceRoll` (domínio): o registro imutável. O resultado NUNCA vem do corpo — a única construção é
+  o sorteio com a fonte injetada (`SecureRandom` em produção, fonte fixa no teste) ou a
+  reconstituição do que foi gravado. Cada dado individual fica no registro, então a soma é sempre
+  conferível. Fonte que devolve valor fora do intervalo vira erro (`DICE_SOURCE_BROKEN`), nunca
+  registro.
+- `RollRequest` / `RollRequestStatus` (domínio): o mestre pede, o jogador responde, PENDING →
+  ANSWERED, uma única resposta (a segunda é 409 `ROLL_REQUEST_ALREADY_ANSWERED`). A resposta usa a
+  expressão DO PEDIDO — o jogador pode fechar mais a visibilidade, nunca trocar o teste.
+- `DiceService` (aplicação): rolar/pedir/responder/histórico/leitura, com o teto de visibilidade
+  aplicado na gravação (`closestOf`) e o recorte aplicado na leitura (o público vem do papel na
+  campanha e de quem rolou, nunca do corpo). IDOR barrado com papel conferido antes da busca e
+  visibilidade depois dela.
+- `DiceRollController` (API): `/roleplay/campaigns/{id}/rolls` — POST rolar, GET histórico, GET uma
+  rolagem, POST/GET pedidos, GET um pedido, POST responder. Nenhuma rota pública.
+- Notificação `ROLEPLAY_ROLL_REQUESTED` pelo mesmo `CampaignNotifier` da campanha: o jogador fica
+  sabendo do pedido sem que o corpo da notificação leve expressão ou motivo (a caixa de
+  notificações é lida fora da campanha; o teste do mestre fica dentro dela).
+- Persistência V295 (`roleplay_dice_rolls`, `roleplay_roll_requests`): aditiva, `if not exists`,
+  InnoDB, charset/collation explícitos, sem FK, dados individuais em JSON `longtext`. A porta não
+  expõe atualização nem remoção — o registro é só-leitura até na assinatura da interface.
+
+**Decisões de desenho:**
+
+1. A visibilidade da rolagem reutiliza a régua da ficha; `PRIVATE` continua sendo a exceção do dono
+   (nem o mestre lê).
+2. O valor informado é TETO, não pedido: o que passa do teto é recuado, não rejeitado.
+3. O histórico do jogador filtra em memória (as próprias + as `CAMPAIGN`); a rolagem fechada de
+   outro nem entra na lista — sumir é a recusa, sem 403 por linha. A leitura por id recusa com 403.
+4. Pedido responde uma vez e usa a expressão pedida; rótulo contraditório é 400
+   `ROLL_LABEL_MISMATCH`.
+5. Mestre pede rolagem a si mesmo é 400 (`ROLL_REQUEST_SELF`) — ele rola direto.
+6. Estado do pedido deliberadamente sem cancelamento nem expiração: dois estados bastam e o que não
+   existe não precisa de regra.
+7. Sem letra nova de privacidade: quem lê rolagem é `SheetAudience`, calculado de papel + dono.
+8. O porte do histórico é 100 por consulta; paginação fica para quando a mesa pedir.
+
+**Testes (números reais):**
+
+- `DiceExpressionTests` (20, domínio): interpretação, normalização, intervalo exaustivo, e todas as
+  recusas de fronteira (vazia, longa, caractere fora da gramática, operador solto, constante
+  sozinha, quantidade/faces/constante fora da faixa, mais de 8 termos, constante que não cabe em
+  int, o menor long que escapa de `abs()`). **20/20 verdes na primeira execução.**
+- `DiceRollTests` (10, domínio): cada dado guardado e a soma conferindo, fonte chamada dentro dos
+  limites do dado (origem 1, limite exclusivo), fonte quebrada vira erro sem registro, construtor
+  público inexistente (o total não se injeta), lista de dados imutável, reconstituição sem recálculo
+  e a matriz dono/mestre/participante × três visibilidades. **10/10 verdes.**
+- `RollRequestTests` (5, domínio): nasce pendente, responder marca com a rolagem, a segunda resposta
+  é recusada, o pedido original não se altera ao responder, reconstituição do estado gravado.
+  **5/5 verdes.**
+- `DiceFlowTests` (11, ponta a ponta): rolar grava com cada dado e a soma; o histórico e a leitura
+  por id devolvem o mesmo que foi sorteado; a rolagem fechada não aparece para outro jogador nem na
+  lista nem por id (e o mestre também não lê a `PRIVATE`); pedido do mestre → resposta do jogador →
+  `ANSWERED` com `answeredRollId`; segunda resposta 409; expressão do corpo ignorada (rola o pedido);
+  rótulo contraditório 400; resposta não abre mais que o teto do pedido; mesma `Idempotency-Key` não
+  rola duas vezes; listas por papel; expressão inválida recusada sem gravar.
+- `DiceSecurityTests` (7, isolamento/integridade): todas as rotas 401 sem sessão; quem não participa
+  não lê nem rola; jogador não pede rolagem (e mestre a si é 400); pedido não é respondido por
+  terceiro (403 e o pedido continua `PENDING`); registro só-leitura na API (PUT/DELETE não têm rota —
+  405 — e o registro sobrevive igual); resultado do corpo ignorado em 10 tentativas seguidas.
+- Rodadas anteriores do módulo seguem verdes: `CharacterSheetTests` 20/20, `CampaignPermissionsTests`
+  6/6, `GameSystemRegistryTests` 5/5, `CampaignFlowTests` 13/13, `CampaignSecurityTests` 4/4,
+  `SheetFlowTests` 11/11, `SheetSecurityTests` 7/7, `AutomatedWritePathsTests` 2/2 (nenhuma rota de
+  rolagem aceitou escrita sem sessão).
+
+- **Suíte inteira executada depois da notificação integrada** (`./mvnw test`, 2026-11-14):
+  **BUILD SUCCESS — 2733 testes, 0 falhas, 0 erros, 1 skip** (o skip é pré-existente, em
+  `KofAgentLiveChannelTests`, e não é deste módulo). Todas as 13 classes do Éroleplay passaram
+  dentro dela: `DiceExpressionTests` 20, `DiceRollTests` 10, `RollRequestTests` 5, `DiceFlowTests`
+  11, `DiceSecurityTests` 7, `SheetFlowTests` 11, `SheetSecurityTests` 7, `CampaignFlowTests` 13,
+  `CampaignSecurityTests` 4, `CampaignPermissionsTests` 6, `GameSystemRegistryTests` 5,
+  `GameSystemEndpointTests` 1, `CharacterSheetTests` 20.
+
+**Pendências:**
+
+- Fases 5 a 10 (chat, voz/mesa virtual, world builder, biblioteca, front, endurecimento).
+- A origem rastreável da frente ainda não foi registrada como issue no backlog.

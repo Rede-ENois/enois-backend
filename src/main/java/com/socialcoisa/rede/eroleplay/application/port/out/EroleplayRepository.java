@@ -12,6 +12,8 @@ import com.socialcoisa.rede.eroleplay.domain.CampaignJoinRequestStatus;
 import com.socialcoisa.rede.eroleplay.domain.CampaignMember;
 import com.socialcoisa.rede.eroleplay.domain.CampaignMembership;
 import com.socialcoisa.rede.eroleplay.domain.CharacterSheet;
+import com.socialcoisa.rede.eroleplay.domain.DiceRoll;
+import com.socialcoisa.rede.eroleplay.domain.RollRequest;
 import com.socialcoisa.rede.eroleplay.domain.GameTable;
 import com.socialcoisa.rede.eroleplay.domain.SheetTemplate;
 import com.socialcoisa.rede.eroleplay.domain.TableSeat;
@@ -101,4 +103,24 @@ public interface EroleplayRepository {
 
 	/** Quantas fichas existem na campanha — recusa a troca de sistema quando já há ficha preenchida. */
 	long countSheets(String campaignId);
+
+	// ---- Motor de dados: o registro e so-leitura; a porta nao expõe atualizacao nem remocao. ----
+
+	/** Grava uma rolagem nova. A mesma id gravada duas vezes e colisao de id, nao atualizacao. */
+	void saveRoll(DiceRoll roll);
+
+	/** As rolagens recentes da campanha, para o historico da mesa (o recorte de quem vê é do serviço). */
+	List<DiceRoll> listRolls(String campaignId, int limit);
+
+	Optional<DiceRoll> findRoll(String campaignId, String rollId);
+
+	void saveRollRequest(RollRequest request);
+
+	Optional<RollRequest> findRollRequest(String campaignId, String requestId);
+
+	/** Os pedidos da campanha, mais recentes primeiro — o painel do mestre. */
+	List<RollRequest> listRollRequests(String campaignId);
+
+	/** Os pedidos feitos a um jogador — o que falta e o que ele ja respondeu. */
+	List<RollRequest> listRollRequestsOf(String campaignId, String playerId);
 }

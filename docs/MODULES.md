@@ -1819,6 +1819,12 @@ por matriz de capacidades, com a autorização sempre no back-end.
 | `SheetService` | Modelo, preenchimento, quadro do grupo, leitura recortada por público e derivados |
 | `CharacterSheetController` | API REST em `/roleplay/campaigns/{id}/sheets` |
 | `SheetTemplateJpaEntity` / `CharacterSheetJpaEntity` | Persistência (V294), com os valores em JSON `longtext` |
+| `DiceExpression` | A gramática do que rolar (`NdF` + constantes), interpretada e sorteada NO SERVIDOR |
+| `DiceRoll` | O registro imutável da rolagem: quem, quando, cada dado, soma, rótulo, teto |
+| `RollRequest` / `RollRequestStatus` | O pedido do mestre (PENDING → ANSWERED, uma única resposta) |
+| `DiceService` | Rolar, pedir, responder, histórico e leitura recortada por público |
+| `DiceRollController` | API REST em `/roleplay/campaigns/{id}/rolls` |
+| `DiceRollJpaEntity` / `RollRequestJpaEntity` | Persistência (V295), com os dados individuais em JSON `longtext` |
 
 Regras que valem sempre:
 
@@ -1868,6 +1874,24 @@ obrigatoriedade, visibilidade) é toda do servidor. Fechar um campo no modelo fe
 preenchido, sem esperar nova gravação. Trocar o sistema de regras com ficha preenchida é recusado
 com `SHEET_SYSTEM_LOCKED`. Derivado nunca é gravado: é recalculado na leitura e só aparece quando o
 público também enxerga o campo de origem.
+
+### Integridade da rolagem
+
+O resultado **sempre sai do servidor**: o corpo descreve o que rolar, e o sorteio usa a fonte de
+aleatoriedade do próprio servidor (`SecureRandom`). Não existe caminho — rota, corpo ou construtor —
+que aceite um resultado pronto. O registro é imutável por desenho: a classe não tem método que
+reescreva expressão, dados ou total, a porta de persistência não expõe atualização nem remoção, e a
+API não tem rota de edição. Cada dado individual fica gravado (JSON `longtext`), então "2d6+3 deu 9"
+é sempre conferível na mesa.
+
+O pedido de rolagem avisa o jogador pela notificação `ROLEPLAY_ROLL_REQUESTED`, pelo mesmo
+notificador da campanha — e com a MESMA regra de privacidade das demais notificações: o corpo não
+leva expressão nem motivo, só a campanha.
+
+A visibilidade da rolagem é a MESMA régua da ficha (`SheetVisibility`): a rolagem nasce com um teto,
+o jogador pode fechar a própria, e o `PRIVATE` continua sendo a exceção do dono — nem o mestre lê.
+A resposta a um pedido nunca passa do teto gravado no pedido, e o pedido responde UMA vez: a segunda
+resposta é recusada com 409, que é o que impede rolar de novo até dar o número bom.
 
 Contrato completo em [`EROLEPLAY-RFC.md`](EROLEPLAY-RFC.md); estado e próxima tarefa em
 [`EROLEPLAY-ROADMAP.md`](EROLEPLAY-ROADMAP.md).
