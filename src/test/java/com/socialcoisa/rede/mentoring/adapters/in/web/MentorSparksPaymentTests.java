@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -17,6 +18,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -47,6 +49,9 @@ class MentorSparksPaymentTests {
 
 	@Autowired
 	private CoinService coins;
+
+	@Autowired
+	private JdbcTemplate jdbc;
 
 	@Test
 	void paidBookingGoesToEscrowAndCompletionPaysTheMentorMinusTheFee() throws Exception {
@@ -118,6 +123,38 @@ class MentorSparksPaymentTests {
 	}
 
 	@Test
+	void bookingASlotWhoseTimeAlreadyStartedIsRefusedAndCostsNothing() throws Exception {
+		var auth = new TestAuthHelper(mockMvc, objectMapper);
+		var owner = auth.authenticate("mentor_late_owner");
+		var mentee = auth.authenticate("mentor_late_mentee");
+		String mentorId = createMentor(owner, CoinService.FAIS(100));
+		String slotId = createSlot(owner, mentorId, Instant.now().plusSeconds(86_400));
+
+		fund(mentee, CoinService.FAIS(200), "test-mentoria-fundo-late");
+		long menteeBefore = coins.balance(mentee.userId());
+		// O horário venceu e ninguém o reservou: ele segue "disponível" no banco.
+		ageSlot(slotId, Instant.now().minusSeconds(600));
+
+		mockMvc.perform(post("/mentors/" + mentorId + "/sessions")
+				.header("X-Session-Token", mentee.token())
+				.header("Idempotency-Key", "sparks-late-book-" + UUID.randomUUID())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("slotId", slotId, "message", "oi"))))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.code").value("SLOT_ALREADY_STARTED"));
+
+		// A recusa não custa nada: nenhuma faísca saiu, nenhuma sessão nasceu e o horário continua
+		// no estado em que estava.
+		assertThat(coins.balance(mentee.userId())).isEqualTo(menteeBefore);
+		mockMvc.perform(get("/mentors/sessions/mine").header("X-Session-Token", mentee.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$").isEmpty());
+		mockMvc.perform(get("/mentors/" + mentorId + "/slots"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.id == '" + slotId + "')].available").value(true));
+	}
+
+	@Test
 	void cancellingBeforeTheSessionRefundsAndFreesTheSlot() throws Exception {
 		var auth = new TestAuthHelper(mockMvc, objectMapper);
 		var owner = auth.authenticate("mentor_cancel_owner");
@@ -153,11 +190,14 @@ class MentorSparksPaymentTests {
 		var mentee = auth.authenticate("mentor_rules_mentee");
 		var stranger = auth.authenticate("mentor_rules_stranger");
 		String mentorId = createMentor(owner, CoinService.FAIS(60));
-		// Horário que já começou: quem manda no cancelamento passa a ser quem atende.
-		String slotId = createSlot(owner, mentorId, Instant.now().minusSeconds(7_200));
+		// Horário que já começou: quem manda no cancelamento passa a ser quem atende. Ele é marcado no
+		// futuro (é o único que se pode reservar) e depois recuado direto na linha, que é o que o
+		// tempo faz sozinho.
+		String slotId = createSlot(owner, mentorId, Instant.now().plusSeconds(86_400));
 
 		fund(mentee, CoinService.FAIS(200), "test-mentoria-fundo-rules");
 		String sessionId = book(mentee, mentorId, slotId);
+		ageSlot(slotId, Instant.now().minusSeconds(7_200));
 
 		complete(stranger, mentorId, sessionId, "sparks-stranger")
 			.andExpect(status().isForbidden());
@@ -213,12 +253,13 @@ class MentorSparksPaymentTests {
 		var mentee = auth.authenticate("mentor_settle_mentee");
 		String mentorId = createMentor(owner, CoinService.FAIS(100));
 		// Sessão de oito dias atrás: passada a janela de contestação, o dinheiro não pode ficar preso.
-		String slotId = createSlot(owner, mentorId, Instant.now().minusSeconds(8 * 86_400L));
+		String slotId = createSlot(owner, mentorId, Instant.now().plusSeconds(86_400));
 
 		fund(mentee, CoinService.FAIS(200), "test-mentoria-fundo-settle");
 		long ownerBefore = coins.balance(owner.userId());
 		long menteeBefore = coins.balance(mentee.userId());
 		book(mentee, mentorId, slotId);
+		ageSlot(slotId, Instant.now().minusSeconds(8 * 86_400L));
 
 		mentorService.settleExpiredSessions();
 
@@ -275,6 +316,12 @@ class MentorSparksPaymentTests {
 			.andExpect(status().isCreated())
 			.andReturn();
 		return objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asText();
+	}
+
+	/** Vence o horário direto na linha: é o que o tempo faz sozinho, e a API já não publica isso. */
+	private void ageSlot(String slotId, Instant startsAt) {
+		jdbc.update("update mentor_slots set starts_at = ?, ends_at = ? where id = ?",
+			Timestamp.from(startsAt), Timestamp.from(startsAt.plusSeconds(3_600)), slotId);
 	}
 
 	private org.springframework.test.web.servlet.ResultActions complete(TestAuthHelper.AuthSession user,

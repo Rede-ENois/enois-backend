@@ -17,6 +17,7 @@ public enum NotificationModule {
 	MENTORING,
 	DAILY_GAMES,
 	COMMUNITY_GAMES,
+	COMMUNITY_PROJECTS,
 	GROUPS,
 	STUDY_PAIRS,
 	BLOGS,
@@ -41,6 +42,7 @@ public enum NotificationModule {
 		Map.entry("MENTORING", MENTORING),
 		Map.entry("JOGO_DIARIO", DAILY_GAMES),
 		Map.entry("NEW_GAME", COMMUNITY_GAMES),
+		Map.entry("NEW_COMMUNITY_PROJECT", COMMUNITY_PROJECTS),
 		Map.entry("NEW_BLOG_POST", BLOGS),
 		Map.entry("CONNECTION_REQUEST", NETWORK),
 		Map.entry("CONNECTION_ACCEPTED", NETWORK));
@@ -55,6 +57,12 @@ public enum NotificationModule {
 			return mapped;
 		}
 		if (normalized.startsWith("GROUP_") || normalized.startsWith("NEW_GROUP_")) {
+			return GROUPS;
+		}
+		// Éroleplay: a área é a mesma dos grupos — convivência entre participantes de um espaço
+		// com mestre. Uma área nova exigiria mudar o menu do front (contrato), e o Éroleplay ainda
+		// não tem área própria na navegação.
+		if (normalized.startsWith("ROLEPLAY_")) {
 			return GROUPS;
 		}
 		return normalized.startsWith("STUDY_PAIR_") ? STUDY_PAIRS : OTHER;

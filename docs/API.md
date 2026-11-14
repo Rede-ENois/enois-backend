@@ -891,7 +891,7 @@ controle de acesso.
 | POST | `/api/notifications/{notificationId}/read` | Marcar como lida | Sim |
 | POST | `/api/notifications/read-all` | Marcar todas como lidas | Sim |
 | GET | `/api/notifications/unread-summary` | Unread count per area for menu indicators (`?context=SOCIAL\|PROFESSIONAL`) | Sim |
-| GET | `/api/me/notification-preferences` | Preferências de push e do resumo semanal | Sim |
+| GET | `/api/me/notification-preferences` | Preferências de push, resumo semanal e avisos de projetos | Sim |
 | PUT | `/api/me/notification-preferences` | Atualização parcial (campo ausente/nulo mantém o valor) | Sim |
 | GET | `/api/notifications/digest/unsubscribe?token=` | Descadastro do resumo semanal (link do e-mail, HTML) | Não (token) |
 | POST | `/api/notifications/digest/unsubscribe?token=` | Descadastro em um clique (RFC 8058, cliente de e-mail): 200/400 sem corpo | Não (token) |
@@ -901,11 +901,21 @@ Preferências (GET e resposta do PUT):
 
 ```json
 { "weeklyDigest": true, "pushSocial": true, "pushMessages": true, "pushGroups": true,
-  "pushJobs": true, "pushSystem": true, "updatedAt": "2026-10-30T12:00:00Z" }
+  "pushJobs": true, "pushSystem": true, "communityProjects": false,
+  "updatedAt": "2026-10-30T12:00:00Z" }
 ```
 
-`updatedAt` é `null` enquanto a pessoa nunca mudou nada (padrão: tudo ligado). Segurança, moderação e
-sanções sempre viram push. Regras e categorias em [`DIGEST.md`](DIGEST.md).
+`updatedAt` é `null` enquanto a pessoa nunca mudou nada. `communityProjects` é `false` por padrão,
+inclusive para contas existentes; os demais padrões continuam `true`. O PUT autenticado altera só
+a conta da sessão: campos ausentes ou nulos preservam o valor, inclusive para clientes anteriores
+que não enviam `communityProjects`. Segurança, moderação e sanções sempre viram push.
+Regras e categorias em [`DIGEST.md`](DIGEST.md).
+
+Com `communityProjects: true`, a pessoa recebe `NEW_COMMUNITY_PROJECT` para novos projetos
+publicados pela primeira aprovação da moderação. A entrega é assíncrona e paginada pela outbox;
+o autor não recebe o próprio aviso, bloqueios nos dois sentidos são respeitados e a adesão é
+conferida na entrega. Edição e restauração de suspensão não são novos lançamentos.
+O aviso tem `context: "SOCIAL"`, `module: "COMMUNITY_PROJECTS"` e `href: "/projetos/{username}/{slug}"`.
 
 Each item of `GET /api/notifications` carries `module`, the interface area of its kind (same
 `NotificationModule` names as below, e.g. `EVENTS`, `OTHER`), so the app hides or flags notifications
@@ -933,7 +943,7 @@ list. Messages (`NEW_MESSAGE`, `NEW_WORK_MESSAGE`) and `CONNECTION_REQUEST` are 
 their own unread signals and the notices panel does not list them. Only areas with unread notifications appear in `byModule`; an area clears when its
 notifications are read (`/read` or `/read-all`). The kind to area mapping is
 `NotificationModule` (`MESSAGES`, `EVENTS`, `JOBS`, `COMPANIES`, `MENTORING`, `DAILY_GAMES`,
-`COMMUNITY_GAMES`, `GROUPS`, `STUDY_PAIRS`, `BLOGS`, `NETWORK`, `OTHER`).
+`COMMUNITY_GAMES`, `COMMUNITY_PROJECTS`, `GROUPS`, `STUDY_PAIRS`, `BLOGS`, `NETWORK`, `OTHER`).
 
 `byCommunity` counts the same unread notifications per community id, for those whose `place` is a
 community (only communities with unread ones appear). `eventsToday` is the number of events happening
@@ -1188,3 +1198,410 @@ the front uses to show the popup once per release. Items are plain text, trimmed
 the same defense as post content (`PlainText.defuse`). `400` codes: `INVALID_RELEASE_ITEMS` (missing,
 empty or more than 8 items), `RELEASE_ITEM_TITLE_REQUIRED`, `RELEASE_ITEM_TITLE_TOO_LONG` (80),
 `RELEASE_ITEM_DESCRIPTION_REQUIRED`, `RELEASE_ITEM_DESCRIPTION_TOO_LONG` (240).
+
+## Éroleplay — sistemas de regras
+
+O catálogo público dos sistemas registrados. Leitura sem sessão; é o que a tela usa para montar o
+seletor na criação da campanha. Só expõe o que cada adaptador declara — identidade, procedência,
+licença e atributos da ficha — nunca conteúdo protegido de sistema comercial.
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/roleplay/systems` | Lista os sistemas de regras registrados | Não |
+
+Resposta (um item por sistema registrado):
+
+```json
+[{
+  "id": "d20-generico",
+  "label": "D20 Éroleplay",
+  "family": "D20",
+  "author": "Éroleplay",
+  "license": "conteúdo original do Éroleplay",
+  "officialUrl": null,
+  "builtIn": true,
+  "attributes": [
+    { "key": "forca", "label": "Força", "type": "NUMBER", "required": true, "options": [] },
+    { "key": "origem", "label": "Origem", "type": "CHOICE", "required": true,
+      "options": ["Acadêmico", "Artista", "Combatente", "Devoto", "Engenhoso", "Forasteiro",
+                  "Nômade", "Operário", "Popular", "Sócio"] }
+  ]
+}]
+```
+
+`type` aceita `NUMBER`, `TEXT`, `LONGTEXT`, `BOOLEAN` e `CHOICE`.
+
+## Éroleplay — campanhas
+
+Prefixo do controller: `/roleplay/campaigns` (o gateway remove `/api`). Todas as escritas exigem
+sessão autenticada e respondem sob `Idempotency-Key`. A listagem pública devolve apenas
+campanhas `PUBLIC` e `ACTIVE`.
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/roleplay/campaigns` | Lista campanhas públicas ativas | Não |
+| GET | `/api/roleplay/campaigns/mine` | Lista campanhas em que sou membro | Sim |
+| GET | `/api/roleplay/campaigns/{slugOuId}` | Detalhe da campanha | Opcional |
+| POST | `/api/roleplay/campaigns` | Cria campanha (criador vira mestre) | Sim |
+| PATCH | `/api/roleplay/campaigns/{id}` | Edita a campanha | Mestre |
+| POST | `/api/roleplay/campaigns/{id}/join` | Entra na campanha (ou pede entrada) | Sim |
+| POST | `/api/roleplay/campaigns/{id}/invite` | Convida alguém para a campanha | Mestre |
+| DELETE | `/api/roleplay/campaigns/{id}/members/me` | Sai da campanha | Membro |
+| GET | `/api/roleplay/campaigns/{id}/members` | Lista membros | Membro |
+| DELETE | `/api/roleplay/campaigns/{id}/members/{membroId}` | Remove um membro | Mestre |
+| POST | `/api/roleplay/campaigns/{id}/members/{membroId}/transfer-master` | Transfere a mestria | Mestre |
+| GET | `/api/roleplay/campaigns/{id}/requests` | Lista pedidos de entrada pendentes | Mestre |
+| POST | `/api/roleplay/campaigns/{id}/requests/{pedidoId}/approve` | Aprova o pedido | Mestre |
+| POST | `/api/roleplay/campaigns/{id}/requests/{pedidoId}/reject` | Recusa o pedido | Mestre |
+| POST | `/api/roleplay/campaigns/{id}/archive` | Arquiva a campanha | Mestre |
+| GET | `/api/roleplay/campaigns/{id}/tables` | Lista as mesas | Membro |
+| POST | `/api/roleplay/campaigns/{id}/tables` | Cria uma mesa (`name`, `open`) | Mestre |
+| GET | `/api/roleplay/campaigns/{id}/tables/{tableId}/seats` | Lista os lugares da mesa | Membro |
+| POST | `/api/roleplay/campaigns/{id}/tables/{mesaId}/sit` | Ocupa um lugar na mesa | Membro |
+| DELETE | `/api/roleplay/campaigns/{id}/tables/{mesaId}/sit` | Libera o lugar na mesa | Membro |
+
+### POST /api/roleplay/campaigns
+
+```json
+{
+  "name": "O Segredo de Várzea",
+  "description": "Investigação em uma vila do interior.",
+  "setting": "Várzea",
+  "gameSystem": "sistema-proprio-d20",
+  "systemFamily": "D20",
+  "visibility": "INVITE_ONLY"
+}
+```
+
+`gameSystem` é o identificador do sistema registrado (veja a fase 2 do roadmap). `systemFamily` aceita
+`D20`, `D100` e `CUSTOM`; `visibility` aceita `PRIVATE`, `INVITE_ONLY` e `PUBLIC`. Resposta `201`:
+
+```json
+{
+  "id": "camp_…",
+  "slug": "o-segredo-de-varzea",
+  "name": "O Segredo de Várzea",
+  "description": "Investigação em uma vila do interior.",
+  "setting": "Várzea",
+  "gameSystem": "sistema-proprio-d20",
+  "systemFamily": "D20",
+  "visibility": "INVITE_ONLY",
+  "status": "ACTIVE",
+  "members": 1,
+  "viewerRole": "GAME_MASTER",
+  "joined": true,
+  "createdAt": "2026-11-13T00:00:00Z"
+}
+```
+
+`viewerRole` e `joined` descrevem a relação de quem pediu com a campanha; para quem não é membro,
+`viewerRole` vem nulo.
+
+### POST /api/roleplay/campaigns/{id}/invite
+
+```json
+{ "userId": "user_…" }
+```
+
+A convite cria o vínculo de membro na hora; a campanha precisa estar em `ACTIVE`.
+
+### POST /api/roleplay/campaigns/{id}/tables
+
+```json
+{ "name": "Mesa do Pátio", "open": true }
+```
+
+`open` omitido vale `true`. `open=false` cria uma mesa fechada a novos lugares.
+
+### Códigos de erro próprios
+
+| Código | HTTP | Quando |
+|---|---|---|
+| `CAMPAIGN_NOT_FOUND` | 404 | Campanha inexistente |
+| `CAMPAIGN_INVITE_ONLY` | 403 | Campanha privada, sem convite |
+| `REQUEST_ALREADY_PENDING` | 409 | Já existe pedido de entrada pendente |
+| `REQUEST_NOT_FOUND` | 404 | Pedido inexistente ou não é da campanha |
+| `ALREADY_MEMBER` | 409 | Já sou membro da campanha |
+| `ALREADY_MASTER` | 409 | A campanha já tem um mestre |
+| `CANNOT_REMOVE_MASTER` | 409 | Não se remove o mestre; transfira a mestria |
+| `CAMPAIGN_NOT_ACCEPTING_MEMBERS` | 409 | Campanha arquivada ou encerrada |
+| `NOT_CAMPAIGN_MEMBER` | 403 | Quem pediu não é membro da campanha |
+| `FORBIDDEN` | 403 | Ação exige papel/capacidade que o solicitante não tem |
+| `INVALID_NAME` | 400 | Nome da campanha ausente |
+| `INVALID_VISIBILITY` | 400 | Visibilidade não reconhecida |
+| `SLUG_UNAVAILABLE` | 409 | Não foi possível gerar um slug livre |
+| `NOT_MEMBER` | 404 | Membro não encontrado na campanha |
+| `TABLE_NOT_OPEN` | 403 | A mesa não está aberta a novos lugares |
+| `NOT_SEATED` | 404 | Quem pediu não ocupa lugar na mesa |
+| `ALREADY_SEATED` | 409 | Já ocupa lugar nesta mesa |
+| `REQUEST_ALREADY_DECIDED` | 409 | Pedido já decidido |
+| `MASTERSHIP_TRANSFER_REQUIRED` | 409 | O mestre tentou sair sem transferir a mestria |
+| `CAMPAIGN_ARCHIVED` | 409 | Campanha arquivada ou encerrada |
+| `INVALID_GAME_SYSTEM` | 400 | Sistema de RPG não reconhecido |
+| `GAME_SYSTEM_REQUIRED` | 400 | Criação/edição sem sistema de regras |
+| `GAME_SYSTEM_NOT_SUPPORTED` | 400 | Sistema sem adaptador registrado |
+| `GAME_SYSTEM_FAMILY_MISMATCH` | 400 | A família informada não bate com a do sistema registrado |
+| `TABLE_NOT_FOUND` | 404 | Mesa inexistente ou de outra campanha |
+
+## Éroleplay — fichas de personagem
+
+Prefixo do controller: `/roleplay/campaigns/{id}/sheets` (o gateway remove `/api`). **Nenhuma rota
+desta seção é pública**: ficha é dado pessoal de jogo, então toda leitura exige sessão e
+participação na campanha. As escritas respondem sob `Idempotency-Key`.
+
+O modelo é definido pelo mestre a partir dos atributos que o sistema da campanha declara — o mestre
+não inventa campo, apenas ajusta **até onde cada campo pode abrir**. Cada campo tem uma
+visibilidade **máxima** (`PRIVATE` < `GAME_MASTER` < `CAMPAIGN`) e cada valor preenchido carrega a
+visibilidade efetiva, que nunca pode ser mais aberta que o máximo do modelo.
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/roleplay/campaigns/{id}/sheets/template` | Modelo da ficha | Membro |
+| POST | `/api/roleplay/campaigns/{id}/sheets/template` | Define o modelo (uma vez) | Mestre |
+| PUT | `/api/roleplay/campaigns/{id}/sheets/template` | Ajusta a abertura máxima dos campos | Mestre |
+| DELETE | `/api/roleplay/campaigns/{id}/sheets/template` | Remove o modelo (só sem ficha preenchida) | Mestre |
+| GET | `/api/roleplay/campaigns/{id}/sheets/me` | A própria ficha, inteira | Membro |
+| PUT | `/api/roleplay/campaigns/{id}/sheets/me` | Preenche a própria ficha | Membro |
+| GET | `/api/roleplay/campaigns/{id}/sheets/board` | Quadro do grupo (só o aberto à campanha) | Membro |
+| GET | `/api/roleplay/campaigns/{id}/sheets` | Todas as fichas, no recorte do mestre | Mestre |
+| GET | `/api/roleplay/campaigns/{id}/sheets/{userId}` | A ficha de alguém, no recorte permitido | Mestre (ou o dono) |
+
+### GET /api/roleplay/campaigns/{id}/sheets/template
+
+```json
+{
+  "id": "roleplay_sheet_template_…",
+  "campaignId": "camp_…",
+  "gameSystem": "d20-generico",
+  "fields": [
+    { "key": "forca", "label": "Força", "type": "NUMBER", "required": true,
+      "options": [], "maxVisibility": "GAME_MASTER" },
+    { "key": "historia", "label": "História", "type": "LONGTEXT", "required": false,
+      "options": [], "maxVisibility": "CAMPAIGN" }
+  ],
+  "updatedAt": "2026-11-14T00:00:00Z"
+}
+```
+
+O campo nasce com o máximo em `GAME_MASTER` — fechar é o padrão, abrir é decisão explícita do mestre.
+
+### POST /api/roleplay/campaigns/{id}/sheets/template
+
+```json
+{ "fields": [ { "key": "forca", "maxVisibility": "CAMPAIGN" } ] }
+```
+
+`fields` é **opcional**: omitido (ou `[]`), todos os campos ficam com o máximo padrão. Chave que o
+sistema não declara responde `SHEET_FIELD_UNKNOWN`. Resposta `201` com o modelo criado.
+
+### PUT /api/roleplay/campaigns/{id}/sheets/template
+
+```json
+{ "fields": [ { "key": "historia", "maxVisibility": "PRIVATE" } ] }
+```
+
+Só os campos enviados mudam. **Fechar um campo fecha o que já está preenchido**: as fichas da
+campanha encolhem junto, senão a regra nova valeria só a partir da próxima gravação.
+
+### PUT /api/roleplay/campaigns/{id}/sheets/me
+
+```json
+{
+  "name": "Iara, a Cartógrafa",
+  "entries": [
+    { "key": "forca", "value": "12", "visibility": "CAMPAIGN" },
+    { "key": "destreza", "value": "14", "visibility": "GAME_MASTER" },
+    { "key": "historia", "value": "Cresceu entre mapas.", "visibility": "PRIVATE" }
+  ]
+}
+```
+
+O corpo substitui a ficha por inteiro. `visibility` omitida vale `PRIVATE` — abrir é ato explícito
+de quem preenche. A resposta é a leitura do **dono**, pelo mesmo caminho da leitura, então a
+gravação nunca devolve campo que a leitura esconderia.
+
+Normalização e validação são do servidor: número aceita `12`, `12,5` (vira `12.5`) e `-3`, limitado
+a `±999999` com 4 casas; escolha é comparada sem diferenciar maiúsculas de minúsculas e devolvida na
+grafia da opção; texto não aceita caractere de controle; campo opcional em branco vira ausência.
+
+### Resposta de ficha
+
+```json
+{
+  "id": "roleplay_sheet_…",
+  "campaignId": "camp_…",
+  "userId": "user_…",
+  "name": "Iara, a Cartógrafa",
+  "entries": [
+    { "key": "forca", "value": "12", "visibility": "CAMPAIGN" }
+  ],
+  "derived": [
+    { "key": "mod_forca", "label": "Modificador de Força", "value": "1" }
+  ],
+  "createdAt": "2026-11-14T00:00:00Z",
+  "updatedAt": "2026-11-14T00:00:00Z"
+}
+```
+
+`entries` sai **já filtrado** pelo público de quem pediu. `derived` são os valores que o sistema
+calcula e **nunca são persistidos** — são recalculados na leitura e aparecem só quando o público
+também enxerga o campo de origem.
+
+### Quem vê o quê
+
+| Leitor | `entries` que recebe |
+|---|---|
+| Dono (`/me`) | Todas, inclusive as `PRIVATE` |
+| Mestre (`/` e `/{userId}`) | `GAME_MASTER` e `CAMPAIGN` de todos; `PRIVATE` de ninguém, nem a própria |
+| Outro participante (`/board`) | Só os campos `CAMPAIGN` de todos |
+| Jogador pedindo a ficha de outro | `403 FORBIDDEN` — a ficha alheia não é recurso dele |
+| Jogador pedindo a lista (`/sheets`) | `403 FORBIDDEN` |
+
+O quadro sempre inclui o `name` do personagem, mesmo quando a ficha está inteiramente fechada: o
+grupo precisa saber que aquele personagem existe, e sumir da lista revelaria que há segredo.
+
+### Códigos de erro próprios
+
+| Código | HTTP | Quando |
+|---|---|---|
+| `SHEET_TEMPLATE_MISSING` | 409 | A campanha ainda não tem modelo de ficha |
+| `SHEET_TEMPLATE_EXISTS` | 409 | Já existe modelo; use `PUT` para ajustar |
+| `SHEET_TEMPLATE_IN_USE` | 409 | Há ficha preenchida; o modelo não pode ser removido |
+| `SHEET_SYSTEM_LOCKED` | 409 | Tentativa de trocar o sistema com ficha preenchida |
+| `SHEET_NOT_FOUND` | 404 | Ficha inexistente na campanha |
+| `SHEET_NAME_REQUIRED` | 400 | Nome do personagem ausente ou acima de 120 caracteres |
+| `SHEET_FIELD_REQUIRED` | 400 | Campo obrigatório veio vazio |
+| `SHEET_FIELD_UNKNOWN` | 400 | Chave que o modelo não tem |
+| `SHEET_FIELD_DUPLICATED` | 400 | Mesma chave enviada duas vezes |
+| `SHEET_FIELDS_REQUIRED` | 400 | Ajuste de modelo sem nenhum campo |
+| `SHEET_VISIBILITY_TOO_OPEN` | 400 | Visibilidade acima do máximo do modelo |
+| `SHEET_VALUE_TOO_LONG` | 400 | Valor acima do limite do campo |
+| `SHEET_VALUE_INVALID` | 400 | Valor incompatível com o tipo do campo |
+| `INVALID_SHEET_VISIBILITY` | 400 | Visibilidade não reconhecida ou ausente |
+| `GAME_SYSTEM_WITHOUT_ATTRIBUTES` | 400 | Sistema registrado não declara atributos de ficha |
+| `GAME_SYSTEM_ATTRIBUTE_DUPLICATED` | 409 | Sistema declara a mesma chave de atributo duas vezes |
+
+## Éroleplay — motor de dados
+
+Prefixo do controller: `/roleplay/campaigns/{id}/rolls` (o gateway remove `/api`). **Nenhuma rota
+desta seção é pública**: rolagem é registro do que aconteceu na mesa, e o histórico é visível só
+para quem participa. As escritas respondem sob `Idempotency-Key` — repetir a mesma chave devolve o
+mesmo registro, não uma nova rolagem.
+
+O resultado **sempre sai do servidor**: o corpo descreve o que rolar (`2d6+3`), e o sorteio usa a
+fonte de aleatoriedade do servidor. Não existe campo de resultado no corpo — o que chegasse pronto
+seria a mesa escolhendo a própria sorte. O registro é imutável: não há rota que reescreva ou remova
+uma rolagem, e cada dado individual fica guardado para a mesa conferir a soma.
+
+### Rotas
+
+| Método | Caminho | Quem | O que faz |
+|---|---|---|---|
+| `POST` | `/roleplay/campaigns/{id}/rolls` | participante | Rola e registra; corpo `{ "expression", "label"?, "visibility"? }` |
+| `GET` | `/roleplay/campaigns/{id}/rolls` | participante | Histórico recente (teto de 100), já recortado por quem pede |
+| `GET` | `/roleplay/campaigns/{id}/rolls/{rollId}` | participante | Uma rolagem, no recorte de quem pede |
+| `POST` | `/roleplay/campaigns/{id}/rolls/requests` | mestre | Pede rolagem a um jogador; corpo `{ "playerId", "expression", "label"?, "visibility"?, "reason"? }` |
+| `GET` | `/roleplay/campaigns/{id}/rolls/requests` | participante | O mestre vê os pedidos que fez; o jogador os que recebeu |
+| `GET` | `/roleplay/campaigns/{id}/rolls/requests/{requestId}` | mestre ou jogador do pedido | Um pedido |
+| `POST` | `/roleplay/campaigns/{id}/rolls/requests/{requestId}/answer` | jogador do pedido | Responde com uma rolagem; corpo `{ "label"?, "visibility"? }` |
+
+### Visibilidade
+
+A rolagem usa a MESMA régua da ficha (`PRIVATE` / `GAME_MASTER` / `CAMPAIGN`). O valor informado é
+o teto, não o pedido: a visibilidade efetiva nunca passa do teto — na rolagem livre o teto é
+`CAMPAIGN`, e na resposta a um pedido é o `visibility` que o mestre gravou no pedido. O pedido
+respondido aponta para a rolagem que o respondeu (`answeredRollId`), e a rolagem aponta para o
+pedido (`requestId`).
+
+Quando o mestre pede uma rolagem, o jogador recebe a notificação `ROLEPLAY_ROLL_REQUESTED` (com
+link para a campanha). O corpo da notificação NUNCA leva a expressão nem o motivo — a caixa de
+notificações é lida fora da campanha, e o teste do mestre fica dentro dela.
+
+Recortes de leitura, aplicados na resposta:
+
+| Quem pede | Vê |
+|---|---|
+| Mestre | Todo o histórico da campanha |
+| Jogador | As próprias rolagens (inclusive as `PRIVATE`) e as `CAMPAIGN` dos outros |
+| Jogador lendo rolagem `PRIVATE`/`GAME_MASTER` de outro | `403 FORBIDDEN` |
+| Fora da campanha | `403 FORBIDDEN` em tudo |
+| Sem sessão | `401` em tudo |
+
+### Expressão
+
+A gramática é do servidor: grupos `NdF` somados a constantes com sinal (`2d6+3`, `1d8+2d6-1`,
+`d20`). Normaliza maiúsculas e espaços; a expressão gravada é a normalizada. Teto por grupo: 100
+dados; faces de 1 a 1000; constante até ±999.999; até 8 grupos e 8 constantes; 60 caracteres.
+Expressão só de constante (`5`) não é rolagem: sem dado, não há o que sortear nem o que conferir.
+
+### Códigos de erro próprios
+
+| Código | HTTP | Quando |
+|---|---|---|
+| `DICE_EXPRESSION_REQUIRED` | 400 | Expressão ausente ou vazia |
+| `DICE_EXPRESSION_TOO_LONG` | 400 | Expressão acima de 60 caracteres |
+| `DICE_EXPRESSION_INVALID` | 400 | Fora da gramática, operador solto, constante sozinha |
+| `DICE_GROUPS_TOO_MANY` | 400 | Mais de 8 grupos de dados |
+| `DICE_CONSTANTS_TOO_MANY` | 400 | Mais de 8 constantes |
+| `DICE_CONSTANT_TOO_LARGE` | 400 | Constante acima de ±999.999 |
+| `DICE_COUNT_INVALID` | 400 | Quantidade de dados fora de 1–100 |
+| `DICE_FACES_INVALID` | 400 | Faces fora de 1–1000 |
+| `DICE_SOURCE_BROKEN` | 500 | Fonte de aleatoriedade devolveu valor fora do intervalo (não registra) |
+| `ROLL_PLAYER_REQUIRED` | 400 | Pedido sem o jogador a quem vai |
+| `ROLL_REQUEST_SELF` | 400 | Mestre pedindo rolagem a si mesmo |
+| `ROLL_REQUEST_NOT_FOUND` | 404 | Pedido inexistente na campanha |
+| `ROLL_REQUEST_ALREADY_ANSWERED` | 409 | O pedido já foi respondido — a segunda resposta é recusada |
+| `ROLL_LABEL_MISMATCH` | 400 | Rótulo da resposta contradiz o do pedido |
+| `ROLL_NOT_FOUND` | 404 | Rolagem inexistente na campanha |
+
+## Éroleplay — chat da campanha
+
+Prefixo do controller: `/roleplay/campaigns/{id}/chat` (o gateway remove `/api`). **Nenhuma rota
+desta seção é pública**: o chat é a cena da mesa, e quem não participa não lê nada — nem o canal
+público. As escritas respondem sob `Idempotency-Key` — repetir a mesma chave devolve a mesma
+mensagem, não uma segunda publicação.
+
+Os canais são dois e a diferença é semântica: `IC` (na voz do personagem — o que se diz é cena) e
+`OOC` (coordenação entre as pessoas reais). O par (campanha, canal) é o endereço; não há entidade
+de canal para configurar.
+
+### Rotas
+
+| Método | Caminho | Quem | O que faz |
+|---|---|---|---|
+| `POST` | `/roleplay/campaigns/{id}/chat` | participante | Publica; corpo `{ "channel": "IC\|OOC", "content", "recipientId"? }` |
+| `GET` | `/roleplay/campaigns/{id}/chat?channel=IC` | participante | Histórico do canal (teto de 100), já recortado por quem pede |
+| `GET` | `/roleplay/campaigns/{id}/chat/pinned` | participante | As fixadas da campanha (teto de 20), no recorte de quem pede |
+| `GET` | `/roleplay/campaigns/{id}/chat/{messageId}` | quem pode ler | Uma mensagem; quem não pode ler recebe 404 |
+| `POST` | `/roleplay/campaigns/{id}/chat/{messageId}/pin` | mestre | Fixa (não reescreve conteúdo) |
+| `POST` | `/roleplay/campaigns/{id}/chat/{messageId}/unpin` | mestre | Desfixa |
+| `GET` | `/roleplay/campaigns/{id}/chat/presence` | participante | Quem da mesa está com stream aberto agora (papel + entrada) |
+
+### Regras
+
+- **A mensagem é criada uma vez.** Não há PUT nem DELETE: o que foi dito foi dito. O único estado
+  que muda é a fixação — decisão do mestre, idempotente nos dois sentidos, que não altera o
+  conteúdo.
+- **O aparte privado** (`recipientId`) é visível só para remetente, destinatário e mestre — o
+  mestre é da mesa. Na listagem, a mensagem alheia simplesmente não entra; na leitura por id, a
+  recusa é `404` ("não existe para você"), porque não confirma existência.
+- **Teto do conteúdo:** 1 a 2000 caracteres, aparado no servidor.
+- **Tempo real:** o aviso de mudança sai pelo evento `campaign` do stream de mensagens
+  (`GET /conversations/stream`, o mesmo canal da caixa de entrada e das chamadas). O corpo do
+  evento só leva `campaignId` — a mensagem nunca viaja no stream; o cliente recarrega pelos
+  endpoints desta seção, que autorizam de novo.
+- **Presença:** participante + papel + data de entrada de quem tem stream aberto. Nunca duração de
+  sessão nem identificador de conexão.
+
+### Códigos de erro próprios
+
+| Código | HTTP | Quando |
+|---|---|---|
+| `CHAT_CHANNEL_REQUIRED` | 400 | Canal ausente ou vazio |
+| `CHAT_CHANNEL_INVALID` | 400 | Canal fora de `IC`/`OOC` |
+| `CHAT_MESSAGE_EMPTY` | 400 | Conteúdo vazio ou só de espaços |
+| `CHAT_MESSAGE_TOO_LONG` | 400 | Conteúdo acima de 2000 caracteres |
+| `CHAT_RECIPIENT_SELF` | 400 | Aparte privado para si mesmo |
+| `CHAT_MESSAGE_NOT_FOUND` | 404 | Mensagem inexistente na campanha — ou não é do leitor |
+| `CHAT_MASTER_REQUIRED` | 403 | Fixar/desfixar sem ser o mestre |
+| `CAMPAIGN_NOT_A_MEMBER` | 403 | Ler o chat sem participar da campanha |

@@ -9,6 +9,12 @@ import org.junit.jupiter.api.Test;
 class NotificationModuleTests {
 
 	@Test
+	void projetosDaComunidadePertencemAoModuloDoCatalogo() {
+		assertThat(NotificationModule.of("NEW_COMMUNITY_PROJECT").name()).isEqualTo("COMMUNITY_PROJECTS");
+		assertThat(NotificationModule.of("new_community_project").name()).isEqualTo("COMMUNITY_PROJECTS");
+	}
+
+	@Test
 	void everyKindLandsInItsArea() {
 		Map<String, NotificationModule> expected = Map.ofEntries(
 			Map.entry("MESSAGE", NotificationModule.MESSAGES),

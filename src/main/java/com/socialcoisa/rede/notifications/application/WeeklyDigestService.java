@@ -233,7 +233,7 @@ public class WeeklyDigestService {
 		if (profiles.findById(userId).isEmpty()) {
 			return false;
 		}
-		preferences.update(userId, false, null, null, null, null, null);
+		preferences.update(userId, false, null, null, null, null, null, null);
 		return true;
 	}
 

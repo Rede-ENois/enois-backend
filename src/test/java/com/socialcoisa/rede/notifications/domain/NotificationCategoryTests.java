@@ -75,8 +75,19 @@ class NotificationCategoryTests {
 	}
 
 	@Test
+	void communityProjectPushRequiresItsOwnOptIn() {
+		assertThat(NotificationCategory.isMapped("NEW_COMMUNITY_PROJECT")).isTrue();
+		assertThat(NotificationCategory.of("NEW_COMMUNITY_PROJECT").name()).isEqualTo("PROJECTS");
+		assertThat(NotificationPreferences.DEFAULTS.allowsPush("NEW_COMMUNITY_PROJECT")).isFalse();
+		var projectsOnly = new NotificationPreferences(false, false, false, false, false, false, true, null);
+		assertThat(projectsOnly.allowsPush("NEW_COMMUNITY_PROJECT")).isTrue();
+		assertThat(projectsOnly.allowsPush("NEW_GAME")).isFalse();
+		assertThat(projectsOnly.allowsPush("MICROPROJETO")).isFalse();
+	}
+
+	@Test
 	void securityModerationAndSanctionsAreAlwaysPushed() {
-		NotificationPreferences everythingOff = new NotificationPreferences(false, false, false, false, false, false,
+		NotificationPreferences everythingOff = new NotificationPreferences(false, false, false, false, false, false, false,
 			null);
 		assertThat(everythingOff.allowsPush("SEGURANCA")).isTrue();
 		assertThat(everythingOff.allowsPush("MODERACAO")).isTrue();
