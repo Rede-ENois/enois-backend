@@ -1188,3 +1188,112 @@ the front uses to show the popup once per release. Items are plain text, trimmed
 the same defense as post content (`PlainText.defuse`). `400` codes: `INVALID_RELEASE_ITEMS` (missing,
 empty or more than 8 items), `RELEASE_ITEM_TITLE_REQUIRED`, `RELEASE_ITEM_TITLE_TOO_LONG` (80),
 `RELEASE_ITEM_DESCRIPTION_REQUIRED`, `RELEASE_ITEM_DESCRIPTION_TOO_LONG` (240).
+
+## Éroleplay — campanhas
+
+Prefixo do controller: `/roleplay/campaigns` (o gateway remove `/api`). Todas as escritas exigem
+sessão autenticada e respondem sob `Idempotency-Key`. A listagem pública devolve apenas
+campanhas `PUBLIC` e `ACTIVE`.
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/roleplay/campaigns` | Lista campanhas públicas ativas | Não |
+| GET | `/api/roleplay/campaigns/mine` | Lista campanhas em que sou membro | Sim |
+| GET | `/api/roleplay/campaigns/{slugOuId}` | Detalhe da campanha | Opcional |
+| POST | `/api/roleplay/campaigns` | Cria campanha (criador vira mestre) | Sim |
+| PATCH | `/api/roleplay/campaigns/{id}` | Edita a campanha | Mestre |
+| POST | `/api/roleplay/campaigns/{id}/join` | Entra na campanha (ou pede entrada) | Sim |
+| POST | `/api/roleplay/campaigns/{id}/invite` | Convida alguém para a campanha | Mestre |
+| DELETE | `/api/roleplay/campaigns/{id}/members/me` | Sai da campanha | Membro |
+| GET | `/api/roleplay/campaigns/{id}/members` | Lista membros | Membro |
+| DELETE | `/api/roleplay/campaigns/{id}/members/{membroId}` | Remove um membro | Mestre |
+| POST | `/api/roleplay/campaigns/{id}/members/{membroId}/transfer-master` | Transfere a mestria | Mestre |
+| GET | `/api/roleplay/campaigns/{id}/requests` | Lista pedidos de entrada pendentes | Mestre |
+| POST | `/api/roleplay/campaigns/{id}/requests/{pedidoId}/approve` | Aprova o pedido | Mestre |
+| POST | `/api/roleplay/campaigns/{id}/requests/{pedidoId}/reject` | Recusa o pedido | Mestre |
+| POST | `/api/roleplay/campaigns/{id}/archive` | Arquiva a campanha | Mestre |
+| GET | `/api/roleplay/campaigns/{id}/tables` | Lista as mesas | Membro |
+| POST | `/api/roleplay/campaigns/{id}/tables` | Cria uma mesa (`name`, `open`) | Mestre |
+| GET | `/api/roleplay/campaigns/{id}/tables/{tableId}/seats` | Lista os lugares da mesa | Membro |
+| POST | `/api/roleplay/campaigns/{id}/tables/{mesaId}/sit` | Ocupa um lugar na mesa | Membro |
+| DELETE | `/api/roleplay/campaigns/{id}/tables/{mesaId}/sit` | Libera o lugar na mesa | Membro |
+
+### POST /api/roleplay/campaigns
+
+```json
+{
+  "name": "O Segredo de Várzea",
+  "description": "Investigação em uma vila do interior.",
+  "setting": "Várzea",
+  "gameSystem": "sistema-proprio-d20",
+  "systemFamily": "D20",
+  "visibility": "INVITE_ONLY"
+}
+```
+
+`gameSystem` é o identificador do sistema registrado (veja a fase 2 do roadmap). `systemFamily` aceita
+`D20`, `D100` e `CUSTOM`; `visibility` aceita `PRIVATE`, `INVITE_ONLY` e `PUBLIC`. Resposta `201`:
+
+```json
+{
+  "id": "camp_…",
+  "slug": "o-segredo-de-varzea",
+  "name": "O Segredo de Várzea",
+  "description": "Investigação em uma vila do interior.",
+  "setting": "Várzea",
+  "gameSystem": "sistema-proprio-d20",
+  "systemFamily": "D20",
+  "visibility": "INVITE_ONLY",
+  "status": "ACTIVE",
+  "members": 1,
+  "viewerRole": "GAME_MASTER",
+  "joined": true,
+  "createdAt": "2026-11-13T00:00:00Z"
+}
+```
+
+`viewerRole` e `joined` descrevem a relação de quem pediu com a campanha; para quem não é membro,
+`viewerRole` vem nulo.
+
+### POST /api/roleplay/campaigns/{id}/invite
+
+```json
+{ "userId": "user_…" }
+```
+
+A convite cria o vínculo de membro na hora; a campanha precisa estar em `ACTIVE`.
+
+### POST /api/roleplay/campaigns/{id}/tables
+
+```json
+{ "name": "Mesa do Pátio", "open": true }
+```
+
+`open` omitido vale `true`. `open=false` cria uma mesa fechada a novos lugares.
+
+### Códigos de erro próprios
+
+| Código | HTTP | Quando |
+|---|---|---|
+| `CAMPAIGN_NOT_FOUND` | 404 | Campanha inexistente |
+| `CAMPAIGN_INVITE_ONLY` | 403 | Campanha privada, sem convite |
+| `REQUEST_ALREADY_PENDING` | 409 | Já existe pedido de entrada pendente |
+| `REQUEST_NOT_FOUND` | 404 | Pedido inexistente ou não é da campanha |
+| `ALREADY_MEMBER` | 409 | Já sou membro da campanha |
+| `ALREADY_MASTER` | 409 | A campanha já tem um mestre |
+| `CANNOT_REMOVE_MASTER` | 409 | Não se remove o mestre; transfira a mestria |
+| `CAMPAIGN_NOT_ACCEPTING_MEMBERS` | 409 | Campanha arquivada ou encerrada |
+| `NOT_CAMPAIGN_MEMBER` | 403 | Quem pediu não é membro da campanha |
+| `FORBIDDEN` | 403 | Ação exige papel/capacidade que o solicitante não tem |
+| `INVALID_NAME` | 400 | Nome da campanha ausente |
+| `INVALID_VISIBILITY` | 400 | Visibilidade não reconhecida |
+| `SLUG_UNAVAILABLE` | 409 | Não foi possível gerar um slug livre |
+| `NOT_MEMBER` | 404 | Membro não encontrado na campanha |
+| `TABLE_NOT_OPEN` | 403 | A mesa não está aberta a novos lugares |
+| `NOT_SEATED` | 404 | Quem pediu não ocupa lugar na mesa |
+| `ALREADY_SEATED` | 409 | Já ocupa lugar nesta mesa |
+| `REQUEST_ALREADY_DECIDED` | 409 | Pedido já decidido |
+| `MASTERSHIP_TRANSFER_REQUIRED` | 409 | O mestre tentou sair sem transferir a mestria |
+| `CAMPAIGN_ARCHIVED` | 409 | Campanha arquivada ou encerrada |
+| `INVALID_GAME_SYSTEM` | 400 | Sistema de RPG não reconhecido |
+| `TABLE_NOT_FOUND` | 404 | Mesa inexistente ou de outra campanha |

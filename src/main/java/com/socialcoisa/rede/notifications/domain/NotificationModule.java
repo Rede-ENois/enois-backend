@@ -57,6 +57,12 @@ public enum NotificationModule {
 		if (normalized.startsWith("GROUP_") || normalized.startsWith("NEW_GROUP_")) {
 			return GROUPS;
 		}
+		// Éroleplay: a área é a mesma dos grupos — convivência entre participantes de um espaço
+		// com mestre. Uma área nova exigiria mudar o menu do front (contrato), e o Éroleplay ainda
+		// não tem área própria na navegação.
+		if (normalized.startsWith("ROLEPLAY_")) {
+			return GROUPS;
+		}
 		return normalized.startsWith("STUDY_PAIR_") ? STUDY_PAIRS : OTHER;
 	}
 }
