@@ -21,4 +21,12 @@ interface SpringDataStageMovementJpaRepository extends JpaRepository<StageMoveme
 	List<StageMovementJpaEntity> findLatestPerApplicationForJobs(
 			@org.springframework.data.repository.query.Param("jobIds") java.util.Collection<String> jobIds);
 
+	@org.springframework.data.jpa.repository.Query("""
+			select m from StageMovementJpaEntity m
+			where m.applicationId in :applicationIds
+			  and m.id in (select max(latest.id) from StageMovementJpaEntity latest group by latest.applicationId)
+			""")
+	List<StageMovementJpaEntity> findLatestPerApplication(
+			@org.springframework.data.repository.query.Param("applicationIds") java.util.Collection<Long> applicationIds);
+
 }

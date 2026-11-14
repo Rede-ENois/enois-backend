@@ -40,6 +40,13 @@ public interface SelectionProcessRepository {
 	 */
 	List<StageMovement> latestMovementsOfJobs(java.util.Collection<String> jobIds);
 
+	/**
+	 * Último movimento de cada uma das candidaturas pedidas, numa consulta só. A listagem
+	 * paginada precisa da etapa apenas das linhas da página — pedir o histórico da vaga inteira
+	 * desfaria a paginação.
+	 */
+	List<StageMovement> latestMovementsOf(java.util.Collection<Long> applicationIds);
+
 	StageNote saveNote(StageNote note);
 
 	List<StageNote> notesOf(long applicationId);
