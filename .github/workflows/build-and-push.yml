@@ -170,6 +170,10 @@ jobs:
   # Schema check: boot against MariaDB 11.4 (the production engine) built only from the Flyway
   # migrations (ddl-auto=validate). A migration MariaDB refuses, or an entity without its
   # migration, fails here, not in prod. The SPRING_* env vars override the test profile's H2.
+  #
+  # Roda também em push: é o gate que de fato precede o deploy. O `mvnw test` do Dockerfile é
+  # pulado (a imagem não roda teste — ver Dockerfile), então SEM esta etapa um merge em qa/main
+  # que quebrasse o boot contra MariaDB só apareceria em produção. Custou ~1m30s, não ~17min.
   # ===========================================================================
   schema-check:
     name: 🧪 Schema x migrations
