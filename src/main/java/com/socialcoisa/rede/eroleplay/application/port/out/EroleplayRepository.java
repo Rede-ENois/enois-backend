@@ -13,6 +13,7 @@ import com.socialcoisa.rede.eroleplay.domain.CampaignMember;
 import com.socialcoisa.rede.eroleplay.domain.CampaignMembership;
 import com.socialcoisa.rede.eroleplay.domain.CampaignMessage;
 import com.socialcoisa.rede.eroleplay.domain.CharacterSheet;
+import com.socialcoisa.rede.eroleplay.domain.LibrarySheet;
 import com.socialcoisa.rede.eroleplay.domain.ChatChannel;
 import com.socialcoisa.rede.eroleplay.domain.DiceRoll;
 import com.socialcoisa.rede.eroleplay.domain.RollRequest;
@@ -123,6 +124,21 @@ public interface EroleplayRepository {
 
 	/** Quantas fichas existem na campanha — recusa a troca de sistema quando já há ficha preenchida. */
 	long countSheets(String campaignId);
+
+	// ---- Biblioteca: a copia publica da ficha, com opt-in do dono. ----
+
+	/** Grava (publica ou republica) a copia publica da ficha. */
+	void saveLibrarySheet(LibrarySheet librarySheet);
+
+	Optional<LibrarySheet> findLibrarySheet(String publicationId);
+
+	/** A publicacao da ficha informada, se existir (uma ficha tem no maximo uma publicacao). */
+	Optional<LibrarySheet> findLibrarySheetBySheet(String sheetId);
+
+	/** A biblioteca: publicacoes recentes, busca opcional por nome do personagem. */
+	List<LibrarySheet> listLibrarySheets(String query, Instant before, int limit);
+
+	void removeLibrarySheet(String publicationId);
 
 	// ---- Motor de dados: o registro e so-leitura; a porta nao expõe atualizacao nem remocao. ----
 

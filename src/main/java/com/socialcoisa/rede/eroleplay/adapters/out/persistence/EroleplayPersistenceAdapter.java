@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.eroleplay.application.port.out.EroleplayRepository;
 import com.socialcoisa.rede.eroleplay.domain.Campaign;
+import com.socialcoisa.rede.eroleplay.domain.LibrarySheet;
 import com.socialcoisa.rede.eroleplay.domain.CampaignJoinRequest;
 import com.socialcoisa.rede.eroleplay.domain.CampaignJoinRequestStatus;
 import com.socialcoisa.rede.eroleplay.domain.CampaignMember;
@@ -60,6 +61,7 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 	private final SpringDataTableStateJpaRepository tableStates;
 	private final SpringDataTableTokenJpaRepository tableTokens;
 	private final SpringDataWorldEntryJpaRepository worldEntries;
+	private final SpringDataLibrarySheetJpaRepository librarySheets;
 	private final ObjectMapper objectMapper;
 
 	EroleplayPersistenceAdapter(SpringDataCampaignJpaRepository campaigns,
@@ -70,7 +72,7 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 			SpringDataRollRequestJpaRepository rollRequests,
 			SpringDataCampaignMessageJpaRepository messages, SpringDataTableStateJpaRepository tableStates,
 			SpringDataTableTokenJpaRepository tableTokens, SpringDataWorldEntryJpaRepository worldEntries,
-			ObjectMapper objectMapper) {
+			SpringDataLibrarySheetJpaRepository librarySheets, ObjectMapper objectMapper) {
 		this.campaigns = campaigns;
 		this.members = members;
 		this.requests = requests;
@@ -84,6 +86,7 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 		this.tableStates = tableStates;
 		this.tableTokens = tableTokens;
 		this.worldEntries = worldEntries;
+		this.librarySheets = librarySheets;
 		this.objectMapper = objectMapper;
 	}
 
@@ -311,6 +314,45 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 	@Override
 	public long countSheets(String campaignId) {
 		return sheets.countByCampaignId(campaignId);
+	}
+
+	@Override
+	public void saveLibrarySheet(LibrarySheet librarySheet) {
+		String fieldsJson = objectMapper.writeValueAsString(librarySheet.fields());
+		librarySheets.save(LibrarySheetJpaEntity.fromDomain(librarySheet, fieldsJson));
+	}
+
+	@Override
+	public Optional<LibrarySheet> findLibrarySheet(String publicationId) {
+		return librarySheets.findById(publicationId).map(this::toLibrarySheet);
+	}
+
+	@Override
+	public Optional<LibrarySheet> findLibrarySheetBySheet(String sheetId) {
+		return librarySheets.findBySheetId(sheetId).map(this::toLibrarySheet);
+	}
+
+	@Override
+	public List<LibrarySheet> listLibrarySheets(String query, Instant before, int limit) {
+		String like = com.socialcoisa.rede.shared.web.LikePattern.contains(query);
+		return librarySheets.listLibrary(like, before, PageRequest.of(0, limit))
+			.stream()
+			.map(this::toLibrarySheet)
+			.toList();
+	}
+
+	@Override
+	public void removeLibrarySheet(String publicationId) {
+		librarySheets.findById(publicationId).ifPresent(librarySheets::delete);
+	}
+
+	private LibrarySheet toLibrarySheet(LibrarySheetJpaEntity entity) {
+		Map<String, String> fields = new java.util.LinkedHashMap<>();
+		if (entity.fieldsJson != null && !entity.fieldsJson.isBlank()) {
+			objectMapper.readTree(entity.fieldsJson).properties().forEach(entry -> fields.put(entry.getKey(),
+				entry.getValue().asText()));
+		}
+		return entity.toDomain(fields);
 	}
 
 	@Override

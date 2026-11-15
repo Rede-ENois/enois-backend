@@ -561,3 +561,73 @@ frente do Éroleplay. Branch nova `feat/eroleplay-world` cortada de `enois/qa`.
 
 Fase 8 — biblioteca e compartilhamento (publicação de campanha/ficha com opt-in do autor,
 leitura pública sem vazar dados de membro).
+
+## Rodada 8 — 2026-11-15 — Fase 8 (biblioteca de personagens)
+
+### Estado encontrado
+
+Mesma branch `feat/eroleplay-world`, com a PR #739 aberta. Durante a rodada ANTERIOR o revisor
+automatizado (`kof-agent-worker`) deixou `CHANGES_REQUESTED` na #739: o boot de produção quebrava
+com `ddl-auto=validate` porque `WorldEntryJpaEntity` declarava a coluna de corpo como
+`@Column(length = 2147483647)` enquanto a migração V298 cria `longtext`. Conserto de causa-raiz
+feito nesta rodada (`@Column(columnDefinition = "longtext")`, a convenção do módulo), commit
+próprio, e a prova: `RedeApplicationTests` passou de 3 erros para **3 testes, 0 falhas, 0 erros**,
+com o escopo do World Builder intocado (13/0/0). O rebase em `enois/qa` foi refeito limpo
+(a base da branch tinha ficado para trás das migrações V319–V324 — por isso a biblioteca é
+**V325**, número conferido contra a ponta remota antes de criar).
+
+### O que já existia e foi reaproveitado
+
+- A matriz de capacidades e `CampaignService.requirePermission` (publicar exige participação;
+  a leitura do catálogo é pública).
+- O fluxo de fichas da Fase 3: `findSheetById`, `CharacterSheet.visibleTo(SheetAudience.MEMBER)`
+  — o recorte público da biblioteca É o recorte que o dono já abriu à campanha, nenhuma régua
+  nova de privacidade foi inventada.
+- O sinal `campaign` (`CampaignChatChanged`) para os participantes verem a novidade no chat;
+  `Idempotency-Key` nas duas escritas; `ApiException` com códigos próprios; projeção `record`.
+
+### O que foi implementado
+
+- **Domínio**: `LibrarySheet` — a CÓPIA pública de uma ficha (estampa do recorte MEMBER), com
+  nome (teto 120), sistema, teto de 200 campos com valor até 2.000, e recusa de cópia vazia
+  (`LIBRARY_EMPTY`). Quem publica é o DONO da ficha; mestre não publica ficha alheia.
+- **Persistência**: migração **V325** (`roleplay_published_sheets` — aditiva, `if not exists`,
+  InnoDB, `utf8mb4_uca1400_ai_ci` explícito, sem FK, unique por ficha — uma publicação por ficha,
+  índices por publicação e dono); entidade JPA com `fields_json longtext`, repositório Spring
+  Data com busca JPQL só sobre colunas curtas (nome e sistema — a coluna de JSON é CLOB e não
+  participa de `lower()`), porta e adapter estendidos.
+- **Aplicação**: `LibraryService` — publish (dono; ficha inexistente e ficha alheia dão o MESMO
+  404), republish (mesma publicação: mesmo id, mesmo `publishedAt`), unpublish (apaga a CÓPIA,
+  nunca a ficha), leitura e listagem públicas com busca e cursor.
+- **API**: `LibraryController` — `GET /roleplay/library` (busca + cursor), `GET
+  /roleplay/library/{publicationId}`, `POST`/`DELETE
+  /roleplay/campaigns/{c}/sheets/{sheetId}/publish` com `Idempotency-Key`. A projeção pública
+  carrega nome, sistema, campos e instantes — NUNCA o id da ficha, da campanha ou do dono.
+
+### Testes executados (números reais)
+
+- `LibrarySheetTests` (5): identidade/dados mínimos; nome e sistema obrigatórios e valores vazios
+  descartados; tetos de nome, campos e valor; `LIBRARY_EMPTY` sem nada aberto; `restore`
+  preserva e `fields()` é cópia defensiva.
+- `LibraryFlowTests` (3): dono publica e a cópia sai com o recorte aberto SEM o campo privado e
+  SEM vazar ficha/campanha/dono no corpo; republicar atualiza sem duplicar e despublicar apaga a
+  cópia sem tocar na ficha; catálogo lista e busca por personagem, e ficha despublicada sai.
+- `LibrarySecurityTests` (3): 401 sem sessão nas duas escritas com as duas leituras públicas;
+  mestre não publica nem despublica ficha alheia, inexistente e alheia dão o mesmo 404; o campo
+  privado do mestre nunca vira público nem após republicação.
+- Escopo: **11 testes, 0 falhas, 0 erros**. Vizinhança (guarda de escrita automática, World
+  Builder, fichas): **28 testes, 0 falhas, 0 erros**. Boot com schema validado contra as
+  migrações: **3 testes, 0 falhas, 0 erros**.
+- Compilação `./mvnw -DskipTests compile` verde antes dos testes.
+
+### Docs e PR
+
+RFC ganhou §4.8 e a fase 8 marcada como concluída; MODULES ganhou as classes da biblioteca e a
+seção própria; API ganhou o capítulo da biblioteca com rotas, exemplo e códigos `LIBRARY_*`;
+ROADMAP marca a fase 8 como feita e aponta a Fase 9 como próxima. Tudo no mesmo commit da
+implementação. Push em `feat/eroleplay-world` carregado pela PR #739 — sem merge, como sempre.
+
+### Próxima tarefa
+
+Fase 9 — front: identidade visual própria do Éroleplay no design system e as telas
+(campanhas, mesa, fichas, chat, mundo, biblioteca).
