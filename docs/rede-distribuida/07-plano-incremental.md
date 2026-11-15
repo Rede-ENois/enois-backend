@@ -221,3 +221,39 @@ Provas: `NetworkConfigSignerTests` 8 (`discoLivreMedidoAssinaSeparadoDoNaoMedido
 `node-executor-test` reconstruindo a linha em shell no formato 5. Mutações: a config ignorando o
 medido derruba o teste ponta a ponta; `null`→`0` derruba o teste do não medido; no runtime, `ausente`
 virando `0` e o disco fora de posição derrubam o harness.
+
+### Réplica: a segunda cópia de um objeto (Storage fase 2, passo 1)
+
+`PUT /network/storage/objects/{id}/replicas/{n}` grava a cópia de número `n` (1..N) de um objeto
+que já está `STORED`. O nó destino busca o corpo pelo `GET /objects/{id}` — a mesma rota
+autenticada por `X-Node-Id`/`X-Node-Key` da fase 1 — e devolve os bytes aqui, onde o Control Plane
+**mede de novo**. Não há malha nova, nem endereço de nó, nem tabela nova: a V320 já nasceu com a
+chave primária `(object_id, replica)`, e a réplica é uma linha a mais.
+
+O que a operação recusa, e por quê:
+
+- **corpo divergente** (sha-256 diferente do medido na origem) → `409 STORAGE_REPLICA_DIVERGENT` e
+  nada gravado. Uma réplica com bytes diferentes seria uma segunda versão do mesmo objeto dizendo
+  que é a mesma, e o healing escolheria entre elas sem critério;
+- **réplica 0** → `400`. A 0 é a cópia de origem gravada no upload; sobrescrevê-la apontaria a
+  origem para outro nó sem passar pelo upload;
+- **objeto `PENDING`** → `409 STORAGE_NOT_STORED`. Replicar o que ainda não foi medido replicaria
+  um corpo que o catálogo não aprovou;
+- **disco livre medido abaixo de 1 GiB** no destino → `507`, antes de ler o corpo;
+- **réplica já tomada por outro nó** → `409 STORAGE_REPLICA_CONFLICT`. Repetir a mesma réplica no
+  mesmo nó, com o mesmo hash, é `200` com `alreadyPresent: true` — retry não duplica.
+
+A rota entrou na lista de escritas públicas de nó (`WriteRouteInterceptor`). ANTES ela não casava
+com o padrão `/network/storage/objects/*` (o caminho tem um nível a mais) e o interceptor exigia
+sessão de navegador: todo runtime levava `401` em réplica. O guarda `AutomatedWritePathsTests`
+acusa a rota nova, como deve.
+
+Provas: `StorageCatalogServiceTests` 19 (6 novos de réplica), `NetworkStorageTests` 9 (2 novos pelo
+caminho real: dois nós, upload no primeiro, réplica no segundo, `location` com as duas cópias), e
+o harness `storage-migration-test` com 3 asserções de que o schema da V320 comporta duas cópias do
+mesmo objeto em nós distintos e sobrevive à reaplicação. Mutações conferidas: aceitar hash
+divergente derruba 1; permitir réplica 0 derruba 1; aceitar objeto `PENDING` derruba 1; tirar a
+rota da lista pública derruba os 2 testes de ponta a ponta.
+
+**Ainda não existe**: réplica automática (quem decide que um objeto precisa de N cópias), healing e
+rebalanceamento. Esta entrega é a operação que eles vão chamar — o nó ainda precisa ser instruído.

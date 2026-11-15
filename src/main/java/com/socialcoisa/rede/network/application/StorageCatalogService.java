@@ -169,6 +169,92 @@ public class StorageCatalogService {
 		return new Stored(object.id(), measured.bytes(), measured.sha256());
 	}
 
+	/**
+	 * Grava uma segunda cópia de um objeto que já está {@code STORED} — a réplica da fase 2.
+	 *
+	 * <p>É o primeiro passo em que a tabela de colocações passa a ter mais de uma linha por objeto,
+	 * o que a V320 previu: a réplica é um número, não uma contagem. Quem chama já tem a cópia
+	 * inteira (o nó destino busca o corpo pelo {@code GET /objects/{id}}, autenticado pela chave
+	 * dele); este lado mede outra vez e só registra se bater com o hash da cópia de origem.</p>
+	 *
+	 * <p><b>Hash divergente não grava nada.</b> Um corpo corrompido no caminho não vira uma segunda
+	 * cópia "OK": se a réplica passasse com bytes diferentes, o catálogo passaria a ter duas versões
+	 * do mesmo objeto dizendo que são a mesma, e o healing escolheria entre elas sem critério. A
+	 * resposta é {@code 409}, e o número da réplica fica livre para a próxima tentativa.</p>
+	 *
+	 * <p><b>Réplica já existente é idempotente com o mesmo hash e conflito com outro</b>: repetir o
+	 * mesmo replay é o caso comum de um retry; trocar o número com conteúdo diferente é sinal de
+	 * catálogo divergente, e aceitar isso silenciosamente esconderia o problema.</p>
+	 */
+	@Transactional
+	public Replicated replicate(NetworkNode node, String objectId, int replica, InputStream body) {
+		requireStorage(node);
+		if (replica < 1) {
+			// 0 é a cópia de origem gravada no upload. A réplica só ocupa 1..N: sobrescrever a 0
+			// apontaria a origem para outro nó sem passar pelo upload, e a auditoria perderia quem
+			// gravou o objeto primeiro.
+			throw new ApiException(400, "STORAGE_REPLICA_INVALID",
+				"A replica 0 e a copia de origem; a replicacao usa 1 ou mais.");
+		}
+		StorageObject object = catalog.findById(objectId)
+			.orElseThrow(() -> new ApiException(404, "STORAGE_OBJECT_UNKNOWN", "Objeto nao encontrado no catalogo."));
+		if (object.state() != StorageObjectState.STORED) {
+			throw new ApiException(409, "STORAGE_NOT_STORED",
+				"O objeto precisa ter a copia de origem confirmada antes de ser replicado.");
+		}
+		if (node.observedDiskFreeMb() != null && node.observedDiskFreeMb() < MIN_DISK_FREE_MB) {
+			throw new ApiException(507, "STORAGE_NO_DISK_SPACE",
+				"O no informa " + node.observedDiskFreeMb() + " MB livres, abaixo do minimo de "
+					+ MIN_DISK_FREE_MB + " MB para receber replica.");
+		}
+		Spooled measured = measure(body);
+		try {
+			if (measured.bytes() == 0) {
+				throw new ApiException(400, "STORAGE_EMPTY_BODY", "O corpo enviado esta vazio.");
+			}
+			if (measured.bytes() > maxObjectBytes) {
+				throw new ApiException(413, "STORAGE_OBJECT_TOO_LARGE",
+					"O objeto excede o teto desta instalacao (" + maxObjectBytes + " bytes).");
+			}
+			if (!measured.sha256().equals(object.sha256())) {
+				// Comparado com o medido da ORIGEM, não com o que o nó destino declarou: a réplica
+				// só serve se for byte a byte o mesmo objeto que o catálogo já aprovou.
+				throw new ApiException(409, "STORAGE_REPLICA_DIVERGENT",
+					"O corpo recebido nao corresponde ao sha-256 do objeto no catalogo.");
+			}
+			Optional<StoragePlacement> existing = catalog.placementOn(object.id(), node.id());
+			if (existing.isPresent() && existing.orElseThrow().state() == StoragePlacement.State.OK) {
+				if (existing.orElseThrow().sha256().equals(measured.sha256())) {
+					return new Replicated(object.id(), existing.orElseThrow().replica(), measured.bytes(),
+						measured.sha256(), true);
+				}
+				throw new ApiException(409, "STORAGE_REPLICA_CONFLICT",
+					"Este no ja hospeda este objeto com outro conteudo.");
+			}
+			Optional<StoragePlacement> taken = catalog.placements(object.id())
+				.stream()
+				.filter(p -> p.replica() == replica && p.state() == StoragePlacement.State.OK)
+				.findFirst();
+			if (taken.isPresent()) {
+				throw new ApiException(409, "STORAGE_REPLICA_CONFLICT",
+					"A replica " + replica + " ja existe em outro no.");
+			}
+			catalog.savePlacement(new StoragePlacement(object.id(), replica, node.id(), measured.bytes(),
+				measured.sha256(), StoragePlacement.State.OK, clock.instant()));
+		}
+		catch (RuntimeException refused) {
+			// Em qualquer recusa o temporário sai: um objeto de 5 GB recusado por hash ficaria no
+			// disco de quem contribui até a próxima limpeza do sistema operacional.
+			deleteQuietly(measured.temp());
+			throw refused;
+		}
+		deleteQuietly(measured.temp());
+		audit.record(node.id(), "STORAGE_REPLICA_STORED", object.id(),
+			"{\"replica\":" + replica + ",\"bytes\":" + measured.bytes() + ",\"sha256\":\"" + measured.sha256()
+				+ "\"}");
+		return new Replicated(object.id(), replica, measured.bytes(), measured.sha256(), false);
+	}
+
 	/** O objeto só é servível com cópia conferida; {@code PENDING} responde 404 como se não existisse. */
 	public StorageObject requireDownloadable(String bucket, String key) {
 		StorageObject object = catalog.find(bucket, key)
@@ -306,6 +392,14 @@ public class StorageCatalogService {
 
 	/** O resultado do PUT: as duas medidas que o cliente pode conferir com o que ele enviou. */
 	public record Stored(String objectId, long bytes, String sha256) {
+	}
+
+	/**
+	 * O resultado de gravar uma réplica. {@code alreadyPresent} distingue "este nó já tinha esta
+	 * cópia, conferida" de "acabou de gravar": os dois são 200 para o retry do runtime, mas o
+	 * segundo é trabalho feito e o primeiro não, e o painel não deve contar a mesma réplica duas vezes.
+	 */
+	public record Replicated(String objectId, int replica, long bytes, String sha256, boolean alreadyPresent) {
 	}
 
 	/** O objeto por id — o chamador já sabe que ele existe (ex.: veio de uma colocação). */

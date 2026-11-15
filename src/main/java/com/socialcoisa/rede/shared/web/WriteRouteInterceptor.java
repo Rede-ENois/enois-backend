@@ -81,7 +81,11 @@ class WriteRouteInterceptor implements HandlerInterceptor {
 		// Storage (fase 1): o nó grava o corpo de um objeto do catálogo. Mesma credencial de nó
 		// (X-Node-Id + X-Node-Key), e o controller exige o perfil NODE_STORAGE — disco não dá
 		// permissão. Os GET de leitura não passam por aqui.
-		"/network/storage/objects/*");
+		"/network/storage/objects/*",
+		// Storage (fase 2): o nó destino grava uma réplica. Mesmo critério do PUT do corpo e mesma
+		// credencial; o caminho tem um nível a mais (/replicas/{n}) e sem esta linha o interceptor
+		// pedia sessão de navegador e o runtime levava 401 em toda réplica.
+		"/network/storage/objects/*/replicas/*");
 
 	private final AntPathMatcher matcher = new AntPathMatcher();
 	private final CurrentUserResolver currentUserResolver;

@@ -84,7 +84,10 @@ class AutomatedWritePathsTests {
 		"/network/media/*/result",
 		// Storage (fase 1): o nó grava o corpo de um objeto. Mesma credencial de nó e perfil
 		// NODE_STORAGE conferido no controller — sem sessão de navegador, como as demais.
-		"/network/storage/objects/*");
+		"/network/storage/objects/*",
+		// Storage (fase 2): o nó destino grava uma réplica. Mesma credencial e mesmo perfil; o
+		// caminho tem um nível a mais que o do corpo, por isso a linha própria.
+		"/network/storage/objects/*/replicas/*");
 
 	private static final Pattern MAPPING = Pattern
 		.compile("@(Get|Post|Put|Patch|Delete)Mapping(?:\\(\\s*(?:value\\s*=\\s*)?\"([^\"]*)\"[^)]*\\))?");

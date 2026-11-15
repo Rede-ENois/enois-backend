@@ -204,5 +204,31 @@ index_exists network_storage_objects idx_network_storage_objects_bucket \
 index_exists network_storage_placements idx_network_storage_placements_node \
   && pass "índice por nó presente" || fail "índice idx_network_storage_placements_node ausente"
 
+# ---------------------------------------------------------------- réplica (fase 2) sem migração nova
+# A fase 2 grava réplicas em nós diferentes SEM alterar o schema: a V320 já nasceu com a chave
+# primária (object_id, replica). Se alguém "resolver" a réplica com uma coluna ou tabela nova, este
+# bloco não acusa por si — mas as duas asserções abaixo provam que o schema atual já comporta a
+# operação inteira: duas cópias do mesmo objeto, em nós distintos, convivem; e repetir a mesma
+# (objeto, réplica) substitui em vez de duplicar.
+obj='sob_replica_teste'
+db -e "insert into network_storage_objects (id, bucket, object_key, content_type, state, created_by, created_at, updated_at)
+  values ('$obj', 'fotos', 'replica.jpg', 'image/jpeg', 'STORED', 'u_teste', now(), now())" >/dev/null 2>&1
+db -e "insert into network_storage_placements (object_id, replica, node_id, bytes, sha256, state, verified_at)
+  values ('$obj', 0, 'nd_a', 13, repeat('a', 64), 'OK', now()),
+         ('$obj', 1, 'nd_b', 13, repeat('a', 64), 'OK', now())" >/dev/null 2>&1
+copias=$(db -N -e "select count(*) from network_storage_placements where object_id = '$obj'" 2>/dev/null | tr -d '[:space:]')
+[[ "$copias" == "2" ]] && pass "duas réplicas do mesmo objeto convivem (schema da V320 basta)" \
+  || fail "o schema não aceitou duas réplicas do mesmo objeto (achei '$copias')"
+
+nos=$(db -N -e "select count(distinct node_id) from network_storage_placements where object_id = '$obj'" 2>/dev/null | tr -d '[:space:]')
+[[ "$nos" == "2" ]] && pass "as réplicas estão em nós diferentes" \
+  || fail "as réplicas caíram no mesmo nó (achei '$nos' distintos)"
+
+# Reexecutar a V320 (idempotente) não pode apagar as réplicas já gravadas.
+db < "$MIGRATIONS/V320__network_storage_placements.sql" >/dev/null 2>&1
+depois=$(db -N -e "select count(*) from network_storage_placements where object_id = '$obj'" 2>/dev/null | tr -d '[:space:]')
+[[ "$depois" == "2" ]] && pass "reaplicar a V320 preserva as réplicas (idempotente com dado)" \
+  || fail "reaplicar a V320 mexeu nas réplicas (achei '$depois')"
+
 printf '\nStorage migration: PASS %d | FAIL %d\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))

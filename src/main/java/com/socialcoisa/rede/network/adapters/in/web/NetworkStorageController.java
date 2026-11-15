@@ -105,6 +105,22 @@ class NetworkStorageController {
 		return storage.placementsOn(node.id()).stream().map(PlacementView::of).toList();
 	}
 
+	/**
+	 * Grava uma réplica de um objeto já confirmado. O nó destino busca o corpo pelo
+	 * {@code GET /objects/{objectId}} e devolve os mesmos bytes aqui, onde o Control Plane mede de
+	 * novo: o que fica no catálogo é o segundo medido, não o primeiro. Cópia que chega divergente
+	 * responde 409 e não entra no catálogo.
+	 */
+	@PutMapping("/objects/{objectId}/replicas/{replica}")
+	Map<String, Object> replica(@RequestHeader(value = "X-Node-Id", required = false) String nodeId,
+			@RequestHeader(value = "X-Node-Key", required = false) String nodeKey, @PathVariable String objectId,
+			@PathVariable int replica, HttpServletRequest request) {
+		NetworkNode node = keys.authenticate(nodeId, nodeKey);
+		StorageCatalogService.Replicated stored = storage.replicate(node, objectId, replica, requestBody(request));
+		return Map.of("objectId", stored.objectId(), "replica", stored.replica(), "bytes", stored.bytes(),
+			"sha256", stored.sha256(), "alreadyPresent", stored.alreadyPresent(), "status", "STORED");
+	}
+
 	/** O que o catálogo sabe deste objeto: as duas medidas e onde estão as cópias. */
 	@GetMapping("/objects/{objectId}/location")
 	Map<String, Object> location(@RequestHeader(value = "X-Node-Id", required = false) String nodeId,

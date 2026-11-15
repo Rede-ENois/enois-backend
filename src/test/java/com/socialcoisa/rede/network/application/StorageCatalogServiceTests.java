@@ -243,6 +243,104 @@ class StorageCatalogServiceTests {
 	}
 
 	/** Catálogo em memória: a porta é o que importa aqui, não o SQL (coberto pelos testes de schema). */
+	private static NetworkNode outroStorageNode(String id) {
+		return new NetworkNode(id, "vps-b", "user_2", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_STORAGE),
+			"sa-east-1", "BR", "1.0.0", null, 2, 4096, 102400, 100, null, null, null, null, null, 0, null, null);
+	}
+
+	/** Objeto já gravado pelo nó de origem, pronto para a réplica partir dele. */
+	private StorageObject objetoGravado(byte[] content) throws Exception {
+		StorageObject object = service.beginUpload("user_1", "fotos", "gato.jpg", "image/jpeg");
+		service.store(storageNode(), object.id(), new ByteArrayInputStream(content));
+		return object;
+	}
+
+	@Test
+	void a_replica_registra_segunda_copia_em_outro_no_com_o_medido() throws Exception {
+		byte[] content = body("conteudo do arquivo");
+		StorageObject object = objetoGravado(content);
+
+		StorageCatalogService.Replicated replicated = service.replicate(outroStorageNode("nd_b"), object.id(), 1,
+			new ByteArrayInputStream(content));
+
+		assertThat(replicated.replica()).isEqualTo(1);
+		assertThat(replicated.sha256()).isEqualTo(sha256(content));
+		assertThat(replicated.alreadyPresent()).isFalse();
+		assertThat(catalog.placements(object.id())).hasSize(2);
+		assertThat(service.location(object.id())).extracting(StoragePlacement::nodeId)
+			.containsExactlyInAnyOrder("nd_store", "nd_b");
+		verify(audit).record(eq("nd_b"), eq("STORAGE_REPLICA_STORED"), eq(object.id()), anyString());
+	}
+
+	@Test
+	void replica_com_conteudo_divergente_nao_entra_no_catalogo() throws Exception {
+		StorageObject object = objetoGravado(body("conteudo do arquivo"));
+
+		assertThatThrownBy(() -> service.replicate(outroStorageNode("nd_b"), object.id(), 1,
+			new ByteArrayInputStream(body("outro conteudo qualquer"))))
+			.isInstanceOf(ApiException.class).hasFieldOrPropertyWithValue("status", 409);
+
+		// Uma cópia só: a origem. Réplica com bytes diferentes seria uma segunda versão do mesmo
+		// objeto dizendo que é a mesma, e o healing escolheria entre elas sem critério.
+		assertThat(catalog.placements(object.id())).hasSize(1);
+	}
+
+	@Test
+	void replica_repete_o_mesmo_hash_sem_gravar_de_novo() throws Exception {
+		byte[] content = body("conteudo do arquivo");
+		StorageObject object = objetoGravado(content);
+		service.replicate(outroStorageNode("nd_b"), object.id(), 1, new ByteArrayInputStream(content));
+
+		StorageCatalogService.Replicated again = service.replicate(outroStorageNode("nd_b"), object.id(), 1,
+			new ByteArrayInputStream(content));
+
+		assertThat(again.alreadyPresent()).isTrue();
+		assertThat(catalog.placements(object.id())).hasSize(2);
+	}
+
+	@Test
+	void replica_zero_nao_sobrescreve_a_copia_de_origem() throws Exception {
+		byte[] content = body("conteudo do arquivo");
+		StorageObject object = objetoGravado(content);
+
+		assertThatThrownBy(() -> service.replicate(outroStorageNode("nd_b"), object.id(), 0,
+			new ByteArrayInputStream(content)))
+			.isInstanceOf(ApiException.class).hasFieldOrPropertyWithValue("status", 400);
+
+		assertThat(service.location(object.id())).extracting(StoragePlacement::nodeId).containsExactly("nd_store");
+	}
+
+	@Test
+	void objeto_sem_copia_confirmada_nao_aceita_replica() throws Exception {
+		StorageObject pending = service.beginUpload("user_1", "fotos", "pendente.jpg", "image/jpeg");
+
+		// O sha-256 da origem ainda é nulo: se o serviço não checasse o estado antes, a comparação
+		// com um hash inexistente daria NPE ou o corpo entraria como réplica de um objeto que o
+		// catálogo nunca aprovou. O código do erro distingue os dois casos: 409 STORAGE_NOT_STORED
+		// é a recusa certa; divergência (STORAGE_REPLICA_DIVERGENT) aqui seria o serviço seguindo
+		// adiante com um objeto sem medida.
+		assertThatThrownBy(() -> service.replicate(outroStorageNode("nd_b"), pending.id(), 1,
+			new ByteArrayInputStream(body("abc"))))
+			.isInstanceOf(ApiException.class)
+			.hasFieldOrPropertyWithValue("status", 409)
+			.hasFieldOrPropertyWithValue("code", "STORAGE_NOT_STORED");
+
+		assertThat(catalog.placements(pending.id())).isEmpty();
+	}
+
+	@Test
+	void replica_para_no_com_disco_apertado_e_recusada_antes_de_ler_o_corpo() throws Exception {
+		StorageObject object = objetoGravado(body("conteudo do arquivo"));
+		NetworkNode apertado = new NetworkNode("nd_b", "vps-b", "user_2", NodeStatus.ACTIVE,
+			Set.of(NodeProfile.NODE_STORAGE), "sa-east-1", "BR", "1.0.0", null, 2, 4096, 102400, 100, null, null, null,
+			null, StorageCatalogService.MIN_DISK_FREE_MB - 1, 0, null, null);
+
+		assertThatThrownBy(() -> service.replicate(apertado, object.id(), 1, new ByteArrayInputStream(body("x"))))
+			.isInstanceOf(ApiException.class).hasFieldOrPropertyWithValue("status", 507);
+
+		assertThat(service.location(object.id())).extracting(StoragePlacement::nodeId).containsExactly("nd_store");
+	}
+
 	private static final class InMemoryCatalog implements StorageCatalogRepository {
 
 		private final java.util.Map<String, StorageObject> byKey = new java.util.LinkedHashMap<>();

@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.network.adapters.in.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.hasItems;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -162,6 +163,74 @@ class NetworkStorageTests {
 			.andExpect(jsonPath("$.state").value("STORED"))
 			.andExpect(jsonPath("$.bytes").value(content.length))
 			.andExpect(jsonPath("$.nodes[0]").value(node.id()));
+	}
+
+	@Test
+	void o_segundo_no_grava_a_replica_e_a_localizacao_mostra_as_duas_copias() throws Exception {
+		String admin = adminToken();
+		Node origem = node(admin, List.of("NODE_STORAGE"));
+		Node destino = node(admin, List.of("NODE_STORAGE"));
+		String id = catalogObject("fotos-" + UUID.randomUUID().toString().substring(0, 8), "gato.jpg");
+		byte[] content = body("bytes do gato");
+
+		mockMvc.perform(put("/network/storage/objects/" + id).header("X-Node-Id", origem.id())
+			.header("X-Node-Key", origem.key()).contentType(MediaType.APPLICATION_OCTET_STREAM).content(content))
+			.andExpect(status().isOk());
+
+		// O destino busca o corpo pela rota autenticada (é isso que o runtime faz) e devolve os
+		// mesmos bytes. A réplica é do segundo nó, não do primeiro.
+		MvcResult download = mockMvc
+			.perform(get("/network/storage/objects/" + id).header("X-Node-Id", destino.id())
+				.header("X-Node-Key", destino.key()))
+			.andExpect(status().isOk())
+			.andReturn();
+
+		// O corpo sai na thread de streaming: ler o resultado imediatamente devolve vazio quando a
+		// máquina está carregada (a suíte inteira é o caso comum). Esperar o buffer é parte da
+		// asserção, como no teste de download da fase 1.
+		byte[] baixado;
+		long limite = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+		do {
+			baixado = download.getResponse().getContentAsByteArray();
+			if (baixado.length == content.length || System.nanoTime() > limite) {
+				break;
+			}
+			Thread.sleep(10);
+		}
+		while (true);
+		assertThat(baixado).isEqualTo(content);
+
+		mockMvc.perform(put("/network/storage/objects/" + id + "/replicas/1").header("X-Node-Id", destino.id())
+			.header("X-Node-Key", destino.key()).contentType(MediaType.APPLICATION_OCTET_STREAM).content(baixado))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.replica").value(1))
+			.andExpect(jsonPath("$.sha256").value(sha256(content)))
+			.andExpect(jsonPath("$.alreadyPresent").value(false));
+
+		mockMvc.perform(get("/network/storage/objects/" + id + "/location").header("X-Node-Id", origem.id())
+			.header("X-Node-Key", origem.key()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.nodes.length()").value(2))
+			.andExpect(jsonPath("$.nodes", hasItems(origem.id(), destino.id())));
+	}
+
+	@Test
+	void replica_com_outro_conteudo_e_recusada_e_nao_vira_copia() throws Exception {
+		String admin = adminToken();
+		Node origem = node(admin, List.of("NODE_STORAGE"));
+		Node destino = node(admin, List.of("NODE_STORAGE"));
+		String id = catalogObject("fotos-" + UUID.randomUUID().toString().substring(0, 8), "gato.jpg");
+		mockMvc.perform(put("/network/storage/objects/" + id).header("X-Node-Id", origem.id())
+			.header("X-Node-Key", origem.key()).contentType(MediaType.APPLICATION_OCTET_STREAM)
+			.content(body("bytes do gato"))).andExpect(status().isOk());
+
+		mockMvc.perform(put("/network/storage/objects/" + id + "/replicas/1").header("X-Node-Id", destino.id())
+			.header("X-Node-Key", destino.key()).contentType(MediaType.APPLICATION_OCTET_STREAM)
+			.content(body("conteudo corrompido"))).andExpect(status().isConflict());
+
+		mockMvc.perform(get("/network/storage/objects/" + id + "/location").header("X-Node-Id", origem.id())
+			.header("X-Node-Key", origem.key())).andExpect(status().isOk())
+			.andExpect(jsonPath("$.nodes.length()").value(1));
 	}
 
 	@Test
