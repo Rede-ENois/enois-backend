@@ -102,7 +102,12 @@ explícito, nunca com comportamento genérico inventado.
 
 ### Fase 7 — World Builder
 
-- [ ] Mundo, localizações, pistas, NPCs, com referência a partir das campanhas
+- [x] `WorldEntry` — o atlas da campanha: `LOCALE` (local), `CHARACTER` (NPC), `ITEM` (item),
+      `PLOT` (pista/rumor) e `LORE` (história do mundo). O mundo é do GRUPO: qualquer participante
+      registra, edita e apaga o que escreveu; o mestre pode em tudo; leitura é de quem participa
+- [x] Vinculação opcional com ficha da MESMA campanha (o id não sai na API — sai o nome do
+      personagem); persistência V298; API `/roleplay/campaigns/{c}/world` com atlas filtrável por
+      tipo e busca por título/corpo/tags; escritas sob `Idempotency-Key`
 
 ### Fase 8 — biblioteca
 

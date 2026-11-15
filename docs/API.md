@@ -1665,3 +1665,45 @@ tokens de cenário) é do mestre. Toda escrita exige `Idempotency-Key`.
 | `TOKEN_POSITION_INVALID` | 400 | Posição fora de −9999..9999 |
 | `TOKEN_NOT_FOUND` | 404 | Token inexistente nesta mesa |
 | `CALL_KIND_INVALID` | 400 | Tipo de chamada fora de `AUDIO`/`VIDEO` |
+
+## Éroleplay — World Builder (atlas do mundo)
+
+Prefixo do controller: `/roleplay/campaigns/{campaignId}/world` (o gateway remove `/api`).
+Leitura e escrita exigem sessão; leitura exige participação na campanha — o atlas nunca sai dela.
+Criar exige participação (`POST_IN_CAMPAIGN`); editar/apagar é do autor no que é dele e do mestre
+em tudo. Toda escrita exige `Idempotency-Key`.
+
+### Rotas
+
+| Método | Rota | Quem | O que faz |
+|---|---|---|---|
+| `POST` | `` | participante | Registra entrada; corpo `{ "kind", "title", "body"?, "tags"?, "sheetId"? }` |
+| `GET` | `` | participante | O atlas, filtrável: `?kind=LOCALE|CHARACTER|ITEM|PLOT|LORE` e `?q=texto` (título, corpo e tags) |
+| `GET` | `/{entryId}` | participante | Uma entrada; entrada de outra campanha é 404 |
+| `PUT` | `/{entryId}` | autor; mestre | Reescreve conteúdo (mesmos campos do POST) |
+| `DELETE` | `/{entryId}` | autor; mestre | Apaga a entrada |
+
+### Regras
+
+- Tipos: `LOCALE` (local), `CHARACTER` (NPC), `ITEM` (item), `PLOT` (pista/rumor), `LORE` (história
+  do mundo). Título 1–120; corpo até 20.000 (nulo/vazio = sem corpo); tags minúsculas, sem
+  repetição, soma até 600 caracteres.
+- `sheetId` vincula a ficha de um personagem da MESMA campanha — id fora dela recusa com 404. O id
+  da ficha NUNCA sai na resposta: sai `linkedSheetName` (nome do personagem) e `linkedToSheet`
+  (booleano).
+- A resposta da entrada: `{ id, campaignId, kind, title, body, tags, linkedToSheet, linkedSheetName,
+  authorId, createdAt, updatedAt }`.
+
+### Códigos de erro próprios
+
+| Código | HTTP | Quando |
+|---|---|---|
+| `WORLD_KIND_REQUIRED` | 400 | Entrada sem tipo |
+| `WORLD_KIND_INVALID` | 400 | Tipo fora dos cinco |
+| `WORLD_TITLE_REQUIRED` | 400 | Entrada sem título |
+| `WORLD_TITLE_TOO_LONG` | 400 | Título acima de 120 caracteres |
+| `WORLD_BODY_TOO_LONG` | 400 | Corpo acima de 20.000 caracteres |
+| `WORLD_TAGS_TOO_LONG` | 400 | Tags somando acima de 600 caracteres |
+| `WORLD_ENTRY_NOT_FOUND` | 404 | Entrada inexistente nesta campanha (inclui a de outra campanha) |
+| `SHEET_NOT_FOUND` | 404 | Ficha vinculada inexistente nesta campanha |
+| `FORBIDDEN` | 403 | Editar/apagar entrada de outra pessoa sem ser mestre; ler sem participar |

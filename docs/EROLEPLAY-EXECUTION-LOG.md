@@ -476,3 +476,72 @@ mesa; o id é o id da mesa) e `roleplay_table_tokens`.
 ### Próxima tarefa
 
 Fase 7 — World Builder (mundo, localizações, pistas, NPCs por campanha).
+
+## Rodada 7 — 2026-11-15 — Fase 7 (World Builder)
+
+### Estado encontrado
+
+`git fetch` no início da rodada: a PR #721 (Fase 6) tinha sido MERGEADA e a `qa` agora TOPA no
+commit dela. #704/#713/#716 também mergeadas; #702 (fundação) segue OPEN. Nenhum outro agente na
+frente do Éroleplay. Branch nova `feat/eroleplay-world` cortada de `enois/qa`.
+
+### O que já existia e foi reaproveitado
+
+- A matriz de capacidades (`CampaignPermissions`/`CampaignService.requireCapability`) como única
+  fonte de autorização — o World Builder não criou régua própria: criar é `POST_IN_CAMPAIGN`
+  (participante), editar/apagar é autor-ou-mestre (`MANAGE_CAMPAIGN` para o mestre), ler é
+  `VIEW_CAMPAIGN`.
+- O fluxo de fichas da Fase 3 para a vinculação opcional (`findSheetById` nova na porta,
+  reutilizando `CharacterSheetJpaEntity` e o `SpringDataCharacterSheetJpaRepository` existente).
+- Convenções de API do módulo: `Idempotency-Key` em toda escrita, `ApiException` com códigos
+  próprios, projeções `record` no controller, guard fail-closed de escrita (o módulo não tocou
+  em `PUBLIC_WRITES`).
+
+### O que foi implementado
+
+- **Domínio**: `WorldKind` (5 naturezas) e `WorldEntry` — título 1–120, corpo até 20.000 (vazio =
+  nulo), tags minúsculas sem repetição somando até 600, vinculação opcional de ficha, regra de
+  edição autor-ou-mestre. O mundo é do GRUPO por decisão de produto: anotação de jogador é memória
+  de mesa tanto quanto lore do mestre.
+- **Persistência**: migração **V298** (`roleplay_world_entries` — aditiva, `if not exists`,
+  InnoDB, `utf8mb4_uca1400_ai_ci` explícito, sem FK, índices por campanha+atualização, tipo e
+  autor); entidade JPA, repositório Spring Data, porta `EroleplayRepository` estendida
+  (save/find/list/remove) e adapter.
+- **Aplicação**: `WorldService` — create/edit/remove/read/atlas. Busca por texto no serviço sobre
+  o atlas recente (teto 100); vinculação de ficha conferida no servidor (ficha tem de ser da
+  MESMA campanha; recusa igual para id inexistente e id alheia — não enumera).
+- **API**: `CampaignWorldController` — 5 rotas sob `/roleplay/campaigns/{c}/world`
+  (`POST`, `GET` com `kind`+`q`, `GET /{entryId}`, `PUT /{entryId}`, `DELETE /{entryId}`). O id da
+  ficha vinculada NUNCA sai na resposta: sai `linkedSheetName` + `linkedToSheet`.
+
+### Correções de causa-raiz no caminho (com prova)
+
+- **Query JPQL morta derrubava o boot**: o primeiro rascunho do repositório Spring Data tinha um
+  método `search` com `lower()`/`concat()` sobre a coluna de corpo (longtext → CLOB), que o
+  Hibernate recusa na validação da query — e o serviço já filtrava em memória. Removido; o boot
+  do contexto de teste voltou a subir (a falha era reproduzida por TODAS as classes
+  `@SpringBootTest` da rodada, não só as novas).
+- **Fixture de teste**: o teste de tags usava duas tags idênticas (o `distinct()` do domínio as
+  colapsa antes do teto) — fixture reescrito com conteúdo distinto; e a criação de ficha do teste
+  de fluxo foi refeita pelo contrato real (modelo com `forca`/`historia` abertos + `PUT
+  /sheets/me` com os 11 campos do D20), com asserção de diagnóstico no `id` devolvido.
+
+### Testes executados (números reais)
+
+- `WorldEntryTests` (5): título obrigatório/teto; corpo teto e vazio→nulo; tags limpas/teto;
+  edição preserva identidade/autoria/criação; regra de quem edita.
+- `WorldFlowTests` (4): jogador registra e o nome da ficha sai SEM o id dela (dupla checagem no
+  create e na re-leitura); atlas filtra por tipo e por texto; autor edita e apaga o que escreveu,
+  mesmo Idempotency-Key não grava duas; entrada inválida (sem tipo, tipo inventado, sem título,
+  vínculo de ficha falso) volta 400 SEM gravar nada.
+- `WorldSecurityTests` (4): 401 sem sessão nas 4 operações; visitante 403 em leitura e escrita e
+  o atlas segue intocado; jogador não edita nem apaga entrada alheia (e o mestre pode); IDOR —
+  entrada da campanha A é 404 nas rotas da campanha B e segue intacta.
+- Escopo: **13 testes, 0 falhas, 0 erros**. Vizinhança (mesa, chat, guarda de escrita): **27
+  testes, 0 falhas, 0 erros** — total 40.
+- Compilação `./mvnw -DskipTests compile` verde antes dos testes.
+
+### Próxima tarefa
+
+Fase 8 — biblioteca e compartilhamento (publicação de campanha/ficha com opt-in do autor,
+leitura pública sem vazar dados de membro).

@@ -1939,3 +1939,18 @@ autoriza de novo.
 
 Contrato completo em [`EROLEPLAY-RFC.md`](EROLEPLAY-RFC.md); estado e próxima tarefa em
 [`EROLEPLAY-ROADMAP.md`](EROLEPLAY-ROADMAP.md).
+### O atlas do mundo (World Builder)
+
+O mundo da campanha é uma entidade só com cinco naturezas (`WorldKind`): `LOCALE` (local),
+`CHARACTER` (NPC), `ITEM` (item), `PLOT` (pista/rumor) e `LORE` (história do mundo). O que muda
+por sistema de regras é a FICHA (fase 3), não a lore — por isso o atlas não fala com o registro
+de sistemas: título, corpo, tags e, opcionalmente, a ficha de um personagem da MESMA campanha
+(o id da ficha nunca sai na API; sai `linkedSheetName`, o nome do personagem).
+
+O mundo é do grupo: qualquer participante registra (`POST_IN_CAMPAIGN`), edita e apaga o que
+escreveu; o mestre (`MANAGE_CAMPAIGN`) pode em tudo. Leitura exige participação — o atlas nunca
+sai da campanha, e entrada de outra campanha responde 404 ("não existe para você"), não 403.
+Persistência V298 (`roleplay_world_entries`), uma linha por entrada, sem FK. Busca por texto é
+no serviço, sobre o atlas recente — a coluna de corpo é CLOB e não participa de `lower()` JPQL.
+
+

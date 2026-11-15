@@ -27,6 +27,7 @@ import com.socialcoisa.rede.eroleplay.domain.DiceRoll;
 import com.socialcoisa.rede.eroleplay.domain.GameTable;
 import com.socialcoisa.rede.eroleplay.domain.RollRequest;
 import com.socialcoisa.rede.eroleplay.domain.RollRequestStatus;
+import com.socialcoisa.rede.eroleplay.domain.WorldEntry;
 import com.socialcoisa.rede.eroleplay.domain.SheetEntry;
 import com.socialcoisa.rede.eroleplay.domain.SheetField;
 import com.socialcoisa.rede.eroleplay.domain.SheetTemplate;
@@ -58,6 +59,7 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 	private final SpringDataCampaignMessageJpaRepository messages;
 	private final SpringDataTableStateJpaRepository tableStates;
 	private final SpringDataTableTokenJpaRepository tableTokens;
+	private final SpringDataWorldEntryJpaRepository worldEntries;
 	private final ObjectMapper objectMapper;
 
 	EroleplayPersistenceAdapter(SpringDataCampaignJpaRepository campaigns,
@@ -67,7 +69,8 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 			SpringDataCharacterSheetJpaRepository sheets, SpringDataDiceRollJpaRepository rolls,
 			SpringDataRollRequestJpaRepository rollRequests,
 			SpringDataCampaignMessageJpaRepository messages, SpringDataTableStateJpaRepository tableStates,
-			SpringDataTableTokenJpaRepository tableTokens, ObjectMapper objectMapper) {
+			SpringDataTableTokenJpaRepository tableTokens, SpringDataWorldEntryJpaRepository worldEntries,
+			ObjectMapper objectMapper) {
 		this.campaigns = campaigns;
 		this.members = members;
 		this.requests = requests;
@@ -80,6 +83,7 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 		this.messages = messages;
 		this.tableStates = tableStates;
 		this.tableTokens = tableTokens;
+		this.worldEntries = worldEntries;
 		this.objectMapper = objectMapper;
 	}
 
@@ -295,6 +299,11 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 	}
 
 	@Override
+	public Optional<CharacterSheet> findSheetById(String campaignId, String sheetId) {
+		return sheets.findByIdAndCampaignId(sheetId, campaignId).map(this::toSheet);
+	}
+
+	@Override
 	public List<CharacterSheet> listSheets(String campaignId) {
 		return sheets.findByCampaignIdOrderByUpdatedAtDesc(campaignId).stream().map(this::toSheet).toList();
 	}
@@ -400,5 +409,29 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 		List<SheetEntry> entries = List.of(objectMapper.readValue(entity.entriesJson(), SheetEntry[].class));
 		return CharacterSheet.restore(entity.id(), entity.campaignId(), entity.userId(), entity.name(), entries,
 			entity.createdAt(), entity.updatedAt());
+	}
+
+	@Override
+	public WorldEntry saveWorldEntry(WorldEntry entry) {
+		return worldEntries.save(WorldEntryJpaEntity.fromDomain(entry)).toDomain();
+	}
+
+	@Override
+	public Optional<WorldEntry> findWorldEntry(String campaignId, String entryId) {
+		return worldEntries.findById(entryId)
+			.filter(entity -> entity.campaignId.equals(campaignId))
+			.map(WorldEntryJpaEntity::toDomain);
+	}
+
+	@Override
+	public List<WorldEntry> listWorldEntries(String campaignId, int limit) {
+		return worldEntries.findByCampaignIdOrderByUpdatedAtDesc(campaignId, PageRequest.of(0, limit)).stream()
+			.map(WorldEntryJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public void removeWorldEntry(String entryId) {
+		worldEntries.deleteById(entryId);
 	}
 }

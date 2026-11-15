@@ -158,6 +158,21 @@ PLAYER pode ver a campanha, postar e rolar dados; visitante (papel nulo) não po
 
 ## 5. Contratos de integração
 
+### 4.7 World Builder (Fase 7 entregue)
+
+`WorldEntry`: a entidade do mundo da campanha — `LOCALE` (local), `CHARACTER` (NPC), `ITEM`
+(item), `PLOT` (pista/rumor) e `LORE` (história do mundo). Título (teto 120), corpo (teto 20
+mil), tags (soma 600, minúsculas, sem repetição) e vinculação opcional com ficha.
+
+- O mundo é do GRUPO: qualquer participante registra, edita e apaga o que escreveu
+  (`POST_IN_CAMPAIGN` para criar; autor edita o dele); o mestre (`MANAGE_CAMPAIGN`) pode em tudo.
+- Leitura exige `VIEW_CAMPAIGN` — o atlas nunca sai da campanha. Entrada de outra campanha é 404
+  ("não existe para você"), não 403.
+- A vinculação com ficha é conferida no servidor (ficha tem de ser da MESMA campanha) e o id dela
+  nunca atravessa a API: a projeção entrega `linkedSheetName` (o nome do personagem).
+- Persistência V298 (`roleplay_world_entries`), aditiva, sem FK. Busca por texto é no serviço,
+  sobre o atlas recente (teto 100) — `lower()` de JPQL não aceita a coluna de corpo (CLOB).
+
 ### 5.1 Notificações
 
 Kinds próprios (mapeados em `NotificationCategory` → área `GROUPS`):
@@ -239,7 +254,7 @@ convite, decisão de pedido e transferência de mestria são eventos auditáveis
 | 4 | Dice Engine (servidor, registro imutável, rolagem solicitada pelo mestre) | pendente |
 | 5 | Chat de campanha (IC/OOC, privado, fixado, presença) | pendente |
 | 6 | Voz por mesa via Épapo + mesa virtual | pendente |
-| 7 | World Builder | pendente |
+| 7 | World Builder | concluída |
 | 8 | Biblioteca e compartilhamento | pendente |
 | 9 | Front do Éroleplay (identidade visual própria, tema por campanha) | pendente |
 | 10 | Observabilidade, endurecimento e revisão de segurança | pendente |
