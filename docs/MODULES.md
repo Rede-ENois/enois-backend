@@ -1831,6 +1831,10 @@ por matriz de capacidades, com a autorização sempre no back-end.
 | `CampaignChatController` | API REST em `/roleplay/campaigns/{id}/chat` |
 | `CampaignMessageJpaEntity` | Persistência (V296) |
 | `CampaignChatChanged` | Evento de "chat mudou", entregue ao stream de mensagens depois do commit |
+| `LibrarySheet` | A cópia pública de uma ficha: nome do personagem, sistema de jogo e o recorte aberto à campanha |
+| `LibraryService` | Publicar, republicar, despublicar, ler e listar a biblioteca; a autorização é do dono da ficha |
+| `LibraryController` | API REST em `/roleplay/library` e `/roleplay/campaigns/{id}/sheets/{sheetId}/publish` |
+| `LibrarySheetJpaEntity` | Persistência (V326), com os campos públicos em JSON `longtext` |
 
 Regras que valem sempre:
 
@@ -1939,3 +1943,34 @@ autoriza de novo.
 
 Contrato completo em [`EROLEPLAY-RFC.md`](EROLEPLAY-RFC.md); estado e próxima tarefa em
 [`EROLEPLAY-ROADMAP.md`](EROLEPLAY-ROADMAP.md).
+### O atlas do mundo (World Builder)
+
+O mundo da campanha é uma entidade só com cinco naturezas (`WorldKind`): `LOCALE` (local),
+`CHARACTER` (NPC), `ITEM` (item), `PLOT` (pista/rumor) e `LORE` (história do mundo). O que muda
+por sistema de regras é a FICHA (fase 3), não a lore — por isso o atlas não fala com o registro
+de sistemas: título, corpo, tags e, opcionalmente, a ficha de um personagem da MESMA campanha
+(o id da ficha nunca sai na API; sai `linkedSheetName`, o nome do personagem).
+
+O mundo é do grupo: qualquer participante registra (`POST_IN_CAMPAIGN`), edita e apaga o que
+escreveu; o mestre (`MANAGE_CAMPAIGN`) pode em tudo. Leitura exige participação — o atlas nunca
+sai da campanha, e entrada de outra campanha responde 404 ("não existe para você"), não 403.
+Persistência V298 (`roleplay_world_entries`), uma linha por entrada, sem FK. Busca por texto é
+no serviço, sobre o atlas recente — a coluna de corpo é CLOB e não participa de `lower()` JPQL.
+
+### A biblioteca de personagens (Fase 8)
+
+A biblioteca é o catálogo público do Éroleplay: as fichas que os jogadores QUEREM compartilhar.
+O que entra ali não é a ficha, é uma **cópia** — uma estampa do recorte que o dono já abriu à
+campanha (`SheetAudience.MEMBER`). Quem publica é o dono da ficha; o mestre não publica a ficha
+de outro jogador, e o conteúdo privado por definição continua privado mesmo depois de republicado.
+
+A cópia tem id próprio: a projeção pública não carrega o id da ficha, o da campanha nem o do dono,
+então não há como enumerar fichas pelo catálogo. Ficha de terceiro e ficha inexistente devolvem o
+mesmo 404. Republicar atualiza a mesma cópia (mesmo id, mesmo dono, mesmo instante de primeira
+publicação); despublicar apaga a cópia e nunca toca na ficha — ela continua existindo na campanha.
+
+Persistência V326 (`roleplay_published_sheets`), uma linha por cópia, sem FK. A busca é por nome do
+personagem ou pelo sistema de jogo, em JPQL sobre colunas curtas — o corpo da cópia fica em
+`longtext` e não participa de `lower()` JPQL.
+
+

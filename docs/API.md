@@ -1665,3 +1665,106 @@ tokens de cenário) é do mestre. Toda escrita exige `Idempotency-Key`.
 | `TOKEN_POSITION_INVALID` | 400 | Posição fora de −9999..9999 |
 | `TOKEN_NOT_FOUND` | 404 | Token inexistente nesta mesa |
 | `CALL_KIND_INVALID` | 400 | Tipo de chamada fora de `AUDIO`/`VIDEO` |
+
+## Éroleplay — World Builder (atlas do mundo)
+
+Prefixo do controller: `/roleplay/campaigns/{campaignId}/world` (o gateway remove `/api`).
+Leitura e escrita exigem sessão; leitura exige participação na campanha — o atlas nunca sai dela.
+Criar exige participação (`POST_IN_CAMPAIGN`); editar/apagar é do autor no que é dele e do mestre
+em tudo. Toda escrita exige `Idempotency-Key`.
+
+### Rotas
+
+| Método | Rota | Quem | O que faz |
+|---|---|---|---|
+| `POST` | `` | participante | Registra entrada; corpo `{ "kind", "title", "body"?, "tags"?, "sheetId"? }` |
+| `GET` | `` | participante | O atlas, filtrável: `?kind=LOCALE|CHARACTER|ITEM|PLOT|LORE` e `?q=texto` (título, corpo e tags) |
+| `GET` | `/{entryId}` | participante | Uma entrada; entrada de outra campanha é 404 |
+| `PUT` | `/{entryId}` | autor; mestre | Reescreve conteúdo (mesmos campos do POST) |
+| `DELETE` | `/{entryId}` | autor; mestre | Apaga a entrada |
+
+### Regras
+
+- Tipos: `LOCALE` (local), `CHARACTER` (NPC), `ITEM` (item), `PLOT` (pista/rumor), `LORE` (história
+  do mundo). Título 1–120; corpo até 20.000 (nulo/vazio = sem corpo); tags minúsculas, sem
+  repetição, soma até 600 caracteres.
+- `sheetId` vincula a ficha de um personagem da MESMA campanha — id fora dela recusa com 404. O id
+  da ficha NUNCA sai na resposta: sai `linkedSheetName` (nome do personagem) e `linkedToSheet`
+  (booleano).
+- A resposta da entrada: `{ id, campaignId, kind, title, body, tags, linkedToSheet, linkedSheetName,
+  authorId, createdAt, updatedAt }`.
+
+### Códigos de erro próprios
+
+| Código | HTTP | Quando |
+|---|---|---|
+| `WORLD_KIND_REQUIRED` | 400 | Entrada sem tipo |
+| `WORLD_KIND_INVALID` | 400 | Tipo fora dos cinco |
+| `WORLD_TITLE_REQUIRED` | 400 | Entrada sem título |
+| `WORLD_TITLE_TOO_LONG` | 400 | Título acima de 120 caracteres |
+| `WORLD_BODY_TOO_LONG` | 400 | Corpo acima de 20.000 caracteres |
+| `WORLD_TAGS_TOO_LONG` | 400 | Tags somando acima de 600 caracteres |
+| `WORLD_ENTRY_NOT_FOUND` | 404 | Entrada inexistente nesta campanha (inclui a de outra campanha) |
+| `SHEET_NOT_FOUND` | 404 | Ficha vinculada inexistente nesta campanha |
+| `FORBIDDEN` | 403 | Editar/apagar entrada de outra pessoa sem ser mestre; ler sem participar |
+
+## Éroleplay — biblioteca de personagens (Fase 8)
+
+A biblioteca é o catálogo público de fichas publicadas. O que o catálogo expõe é uma **cópia**
+da ficha: o recorte que o dono já abriu à campanha, com id de publicação próprio — nunca o id da
+ficha, da campanha ou do dono. Leitura pública, escrita só pelo dono da ficha.
+
+### Rotas
+
+| Método | Rota | Quem pode |
+|---|---|---|
+| GET | `/api/roleplay/library` | Público — catálogo com busca (`?q=`) e cursor (`?before=`, `?limit=`) |
+| GET | `/api/roleplay/library/{publicationId}` | Público — uma publicação |
+| POST | `/api/roleplay/campaigns/{id}/sheets/{sheetId}/publish` | Dono da ficha (mestre NÃO publica ficha alheia) |
+| DELETE | `/api/roleplay/campaigns/{id}/sheets/{sheetId}/publish` | Dono da publicação |
+
+Publicar e despublicar exigem cabeçalho `Idempotency-Key` (o mesmo da rota, na resposta de erro
+`IDEMPOTENCY_KEY_REQUIRED` se faltar).
+
+### POST /api/roleplay/campaigns/{id}/sheets/{sheetId}/publish
+
+Sem corpo. A cópia recebe exatamente o recorte `MEMBER` da ficha na hora da publicação — não é
+referência viva: mudanças posteriores na ficha só entram com republicação. Republicar a mesma
+ficha atualiza a MESMA publicação (mesmo id, mesmo `publishedAt`, `updatedAt` novo). Resposta
+`201`:
+
+```json
+{
+  "id": "roleplay_library_…",
+  "characterName": "Iara, a Cartógrafa",
+  "gameSystem": "d20-generico",
+  "fields": { "forca": "12", "destreza": "14" },
+  "publishedAt": "2026-11-15T00:00:00Z",
+  "updatedAt": "2026-11-15T00:00:00Z"
+}
+```
+
+`DELETE` na mesma rota devolve `{ "status": "unpublished" }` e apaga só a cópia — a ficha
+continua na campanha.
+
+### Regras
+
+- Fechar todos os campos e publicar recusa com `LIBRARY_EMPTY` — cópia sem conteúdo público não
+  existe.
+- Ficha inexistente, ficha de outro jogador e publicação de outra pessoa devolvem o MESMO 404
+  (`LIBRARY_NOT_FOUND` / `SHEET_NOT_FOUND` conforme a etapa), sem distinguir os casos.
+- A busca do catálogo é sobre o nome do personagem e o sistema de jogo; o recorte de campos vem
+  do dono da ficha.
+
+### Códigos de erro próprios
+
+| Código | HTTP | Quando |
+|---|---|---|
+| `LIBRARY_NAME_REQUIRED` | 400 | Cópia sem nome do personagem |
+| `LIBRARY_NAME_TOO_LONG` | 400 | Nome acima de 120 caracteres |
+| `LIBRARY_SYSTEM_REQUIRED` | 400 | Cópia sem sistema de jogo |
+| `LIBRARY_FIELD_TOO_LONG` | 400 | Valor de campo acima de 2.000 caracteres |
+| `LIBRARY_FIELDS_TOO_MANY` | 400 | Mais de 200 campos na cópia |
+| `LIBRARY_EMPTY` | 400 | Nada aberto à campanha — a cópia ficaria vazia |
+| `LIBRARY_NOT_FOUND` | 404 | Publicação inexistente, ou de outra pessoa para despublicar |
+| `SHEET_NOT_FOUND` | 404 | Ficha inexistente nesta campanha (inclui a de outro jogador) |

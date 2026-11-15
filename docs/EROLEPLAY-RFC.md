@@ -158,6 +158,41 @@ PLAYER pode ver a campanha, postar e rolar dados; visitante (papel nulo) não po
 
 ## 5. Contratos de integração
 
+### 4.7 World Builder (Fase 7 entregue)
+
+`WorldEntry`: a entidade do mundo da campanha — `LOCALE` (local), `CHARACTER` (NPC), `ITEM`
+(item), `PLOT` (pista/rumor) e `LORE` (história do mundo). Título (teto 120), corpo (teto 20
+mil), tags (soma 600, minúsculas, sem repetição) e vinculação opcional com ficha.
+
+- O mundo é do GRUPO: qualquer participante registra, edita e apaga o que escreveu
+  (`POST_IN_CAMPAIGN` para criar; autor edita o dele); o mestre (`MANAGE_CAMPAIGN`) pode em tudo.
+- Leitura exige `VIEW_CAMPAIGN` — o atlas nunca sai da campanha. Entrada de outra campanha é 404
+  ("não existe para você"), não 403.
+- A vinculação com ficha é conferida no servidor (ficha tem de ser da MESMA campanha) e o id dela
+  nunca atravessa a API: a projeção entrega `linkedSheetName` (o nome do personagem).
+- Persistência V298 (`roleplay_world_entries`), aditiva, sem FK. Busca por texto é no serviço,
+  sobre o atlas recente (teto 100) — `lower()` de JPQL não aceita a coluna de corpo (CLOB).
+
+### 4.8 Biblioteca (Fase 8 entregue)
+
+`LibrarySheet`: a cópia pública de uma ficha de personagem. É uma ESTAMPA (snapshot) do recorte
+que o dono já abriu à campanha — nunca a ficha em si.
+
+- Quem publica é o DONO da ficha. O mestre não publica a ficha de outro jogador.
+- O conteúdo público é exatamente o recorte `MEMBER` da ficha (`SheetAudience.MEMBER`): campo
+  privado por definição continua privado e não vaza nem por republicação.
+- Republicar atualiza a mesma cópia (mesmo id de publicação, mesmo dono); despublicar apaga a
+  CÓPIA e nunca toca na ficha — a ficha continua existindo na campanha.
+- A publicação tem id próprio: a projeção pública não carrega o id da ficha, o id da campanha nem
+  o do dono, o que impede enumerar fichas pelo catálogo.
+- Ficha de terceiro ou inexistente dá o MESMO 404 ("não existe para você"), sem distinguir os
+  casos.
+- Busca é por nome do personagem ou pelo sistema de jogo; o corpo da cópia fica em `longtext` e
+  nunca entra em consulta JPQL (`lower()` não aceita coluna CLOB).
+- Publicação/despublicação anunciam na campanha pelo sinal `campaign` já existente.
+
+Persistência V326 (`roleplay_published_sheets`), aditiva, sem FK.
+
 ### 5.1 Notificações
 
 Kinds próprios (mapeados em `NotificationCategory` → área `GROUPS`):
@@ -239,8 +274,8 @@ convite, decisão de pedido e transferência de mestria são eventos auditáveis
 | 4 | Dice Engine (servidor, registro imutável, rolagem solicitada pelo mestre) | pendente |
 | 5 | Chat de campanha (IC/OOC, privado, fixado, presença) | pendente |
 | 6 | Voz por mesa via Épapo + mesa virtual | pendente |
-| 7 | World Builder | pendente |
-| 8 | Biblioteca e compartilhamento | pendente |
+| 7 | World Builder | concluída |
+| 8 | Biblioteca e compartilhamento | concluída |
 | 9 | Front do Éroleplay (identidade visual própria, tema por campanha) | pendente |
 | 10 | Observabilidade, endurecimento e revisão de segurança | pendente |
 

@@ -102,12 +102,22 @@ explícito, nunca com comportamento genérico inventado.
 
 ### Fase 7 — World Builder
 
-- [ ] Mundo, localizações, pistas, NPCs, com referência a partir das campanhas
+- [x] `WorldEntry` — o atlas da campanha: `LOCALE` (local), `CHARACTER` (NPC), `ITEM` (item),
+      `PLOT` (pista/rumor) e `LORE` (história do mundo). O mundo é do GRUPO: qualquer participante
+      registra, edita e apaga o que escreveu; o mestre pode em tudo; leitura é de quem participa
+- [x] Vinculação opcional com ficha da MESMA campanha (o id não sai na API — sai o nome do
+      personagem); persistência V298; API `/roleplay/campaigns/{c}/world` com atlas filtrável por
+      tipo e busca por título/corpo/tags; escritas sob `Idempotency-Key`
 
 ### Fase 8 — biblioteca
 
-- [ ] Publicação de campanha/ficha com opt-in do autor
-- [ ] Leitura pública sem vazar dados de membro
+- [x] Publicação de FICHA com opt-in do DONO: a cópia é instantâneo do recorte que ele já abriu
+      à campanha — campo privado nunca entra na cópia; republicar atualiza, despublicar apaga a
+      cópia sem tocar na ficha; persistência V326; escrita sob `Idempotency-Key`
+- [x] Leitura pública (`/roleplay/library`) sem vazar dado de membro: id da ficha, da campanha e
+      do dono NUNCA saem na projeção (a publicação tem id próprio); ficha alheia e inexistente
+      respondem o mesmo 404; busca por nome do personagem e sistema; mudança publica o mesmo
+      sinal `campaign` do chat/mesa
 
 ### Fase 9 — front
 
@@ -120,7 +130,7 @@ explícito, nunca com comportamento genérico inventado.
 
 ## 5. Próxima tarefa
 
-**Fase 7**: World Builder.
+**Fase 9**: front — identidade visual própria (tema por campanha) no design system e telas de campanha, mesa, ficha e dados. O backend das Fases 0–8 está entregue.
 
 Mundo da campanha (localizações, pistas, NPCs) com referência a partir das campanhas, seguindo o
 mesmo contrato das demais peças: aditivo, autorização na campanha (ver = participante, escrever =
