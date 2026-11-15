@@ -27,6 +27,10 @@ testadas). O trabalho vive na branch de longa duração `feat/rede-distribuida`,
 | 10 | [Énóis Storage — fase 0](10-storage-fase-0.md) | Diagnóstico do que a rede já oferece ao Storage, o que precisa de extensão e o que o brief pressupõe e **não existe** hoje (mTLS, reverse tunnel). |
 | 12 | [Énóis Storage — fase 1](12-storage-fase-1.md) | Catálogo (V319) e colocação (V320), rota de corpo por API key de nó, medida antes do aceite, e o que **não** foi entregue (gateway S3, multipart, URLs assinadas). |
 | 11 | [Énóis Global Cooperative — fase 0](11-global-coop-fase-0.md) | O que o cooperativismo global reusa da rede, e o que o brief pressupõe e **não existe** (captura por binlog, checkpoints de réplica, observabilidade de host). |
+| 13 | [Énóis Storage — fase 3](13-storage-fase-3-replicacao.md) | Réplica em nó de armazenamento, confirmação por digest, leitura por digest e varredura de durabilidade (V323). |
+| 14 | [Global Cooperative — captura de alterações](14-coop-captura-de-alteracoes.md) | Prontidão do banco para captura por binlog, medida em vez de declarada. |
+| 15 | [Inscrição para servir um nó](15-inscricao-de-no.md) | Formulário público com RG/CPF/contrato, decisão administrativa, link de uso único e chave exibida uma vez; responsável no painel. |
+| 17 | [Énóis Storage — fase 4](17-storage-fase-4-dominios-e-equilibrio.md) | Região como domínio de falha na escolha de réplica e relatório de equilíbrio; o que **não** existe (movimentação ativa, storage classes, erasure coding). |
 
 Decisões arquiteturais ficam em [`docs/adr/`](../adr/).
 

@@ -50,13 +50,16 @@ class AdminNetworkController {
 	private final CurrentUserResolver currentUserResolver;
 	private final AdminGuard adminGuard;
 	private final StorageScrubber scrubber;
+	private final com.socialcoisa.rede.network.application.StorageBalanceReport balance;
 	private final NetworkNodeResponsibleRepository responsibles;
 	private final NetworkUserDirectory users;
 	private final ChangeCaptureReadinessService changeCapture;
 
 	AdminNetworkController(NetworkNodeService nodes, NodeKeyService keys, NetworkDashboardService dashboard,
 			AuditTrail audit, CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
-			StorageScrubber scrubber, NetworkNodeResponsibleRepository responsibles, NetworkUserDirectory users,
+			StorageScrubber scrubber,
+			com.socialcoisa.rede.network.application.StorageBalanceReport balance,
+			NetworkNodeResponsibleRepository responsibles, NetworkUserDirectory users,
 			ChangeCaptureReadinessService changeCapture) {
 		this.nodes = nodes;
 		this.keys = keys;
@@ -65,6 +68,7 @@ class AdminNetworkController {
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
 		this.scrubber = scrubber;
+		this.balance = balance;
 		this.responsibles = responsibles;
 		this.users = users;
 		this.changeCapture = changeCapture;
@@ -183,6 +187,24 @@ class AdminNetworkController {
 			@RequestParam(defaultValue = "1000") int maxObjects) {
 		admin(sessionToken);
 		return scrubber.scan(bucket, maxObjects);
+	}
+
+	/**
+	 * O equilíbrio da distribuição entre os nós de armazenamento (brief §16).
+	 *
+	 * <p>Responde <b>se</b> vale rebalancear e <b>quem</b> está fora do equilíbrio, comparando a
+	 * participação de cada nó nas cópias confirmadas com a participação dele na capacidade pronta
+	 * (disco livre medido). Não move nada: mover cópias custa banda de quem participa e é decisão
+	 * de janela/prioridade, não efeito colateral de um GET.</p>
+	 *
+	 * <p>Fica sob {@code /nodes/} porque a classe inteira é mapeada ali — o caminho curto
+	 * {@code /admin/network/storage/balance} seria outra classe ou um segundo mapeamento.</p>
+	 */
+	@GetMapping("/storage/balance")
+	com.socialcoisa.rede.network.application.StorageBalanceReport.Report storageBalance(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		admin(sessionToken);
+		return balance.report();
 	}
 
 	/**

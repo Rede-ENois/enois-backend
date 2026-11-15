@@ -136,6 +136,89 @@ class StoragePlacementServiceTests {
 			.containsExactly("nd_b");
 	}
 
+	// ------------------------------------------------- fase 4: domínios de falha
+
+	/**
+	 * Duas réplicas na mesma região não sobrevivem à queda da região — é o mesmo erro que duas
+	 * cópias no mesmo nó, um nível acima. A fase 3 só sabia não repetir o NÓ; esta sabe não repetir
+	 * a REGIÃO declarada.
+	 */
+	@Test
+	void naoDesignaDuasReplicasNaMesmaRegiao() {
+		candidates(regionNode("nd_a", "sudeste", 81920L), regionNode("nd_b", "sudeste", 40960L),
+			regionNode("nd_c", "sul", 20480L));
+
+		List<NetworkNode> chosen = service.chooseReplicas("sob_1", 0, NOW);
+
+		// A primeira escolha é a de mais folga; a segunda tem de buscar OUTRA região, mesmo com
+		// disco menor — só nd_c é de região diferente.
+		assertThat(chosen).extracting(NetworkNode::id).containsExactly("nd_a", "nd_c");
+	}
+
+	/**
+	 * Quando não há região distinta suficiente, a cópia continua: uma segunda cópia na mesma região
+	 * ainda é melhor que nenhuma, e o painel mostra a distribuição real. Recusar aqui seria
+	 * declarar o objeto sem redundância por causa de uma restrição de topologia.
+	 */
+	@Test
+	void usaAMesmaRegiaoQuandoNaoHaOutraDisponivel() {
+		candidates(regionNode("nd_a", "sudeste", 81920L), regionNode("nd_b", "sudeste", 40960L),
+			regionNode("nd_c", "sudeste", 20480L));
+
+		List<NetworkNode> chosen = service.chooseReplicas("sob_1", 0, NOW);
+
+		assertThat(chosen).extracting(NetworkNode::id).containsExactly("nd_a", "nd_b");
+	}
+
+	/**
+	 * Região não declarada é um domínio de falha <b>desconhecido</b>. Ela não é igual à de um nó
+	 * que declarou região (não sabemos que é a mesma), e dois nós sem região não são a mesma
+	 * região entre si. Nunca igualar desconhecido a declarado é a regra de {@code NetworkRegions}.
+	 */
+	@Test
+	void regiaoNaoDeclaradaNaoEhADaRegiaoDeOutro() {
+		candidates(regionNode("nd_a", null, 81920L), regionNode("nd_b", "sudeste", 40960L),
+			regionNode("nd_c", null, 20480L));
+
+		List<NetworkNode> chosen = service.chooseReplicas("sob_1", 0, NOW);
+
+		// Três domínios distintos: vazio, sudeste, vazio. A ordem por folga vale e nenhum é
+		// tratado como cópia da região de outro.
+		assertThat(chosen).extracting(NetworkNode::id).containsExactly("nd_a", "nd_b");
+	}
+
+	/** A região que já recebeu cópia também conta: a segunda tem de ir para outra. */
+	@Test
+	void naoRepeteARegiaoQueJaTemCopia() {
+		when(catalog.placements("sob_1")).thenReturn(List.of(
+			new StoragePlacement("sob_1", 1, "nd_ok", 10, "abc", StoragePlacement.State.OK, NOW)));
+		candidates(regionNode("nd_ok", "sul", 102400L), regionNode("nd_a", "sul", 81920L),
+			regionNode("nd_b", "norte", 40960L));
+
+		List<NetworkNode> chosen = service.chooseReplicas("sob_1", 0, NOW);
+
+		// Faltam duas: a primeira fora da região ocupada (norte) e, esgotadas as regiões distintas,
+		// a segunda completa na repetida — menos redundância seria pior que a disponível.
+		assertThat(chosen).extracting(NetworkNode::id).containsExactly("nd_b", "nd_a");
+	}
+
+	/** A grafia não cria domínio: "Sudeste" e "sudeste" são a mesma região. */
+	@Test
+	void grafiaDaRegiaoNaoCriaDominioDiferente() {
+		candidates(regionNode("nd_a", "Sudeste", 81920L), regionNode("nd_b", "sudeste", 40960L),
+			regionNode("nd_c", "SUDESTE", 20480L));
+
+		List<NetworkNode> chosen = service.chooseReplicas("sob_1", 0, NOW);
+
+		// Todas a mesma região: usa a mesma região quando não há outra disponível.
+		assertThat(chosen).extracting(NetworkNode::id).containsExactly("nd_a", "nd_b");
+	}
+
+	private static NetworkNode regionNode(String id, String region, long diskFreeMb) {
+		return new NetworkNode(id, id, "owner", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_STORAGE), region, "BR",
+			"0.1.0", NOW, 4, 8192, 102400, 100, null, null, null, null, diskFreeMb, 0, null, null);
+	}
+
 	private void candidates(NetworkNode... found) {
 		when(nodes.findCandidates(any(), anyInt())).thenReturn(List.of(found));
 	}
