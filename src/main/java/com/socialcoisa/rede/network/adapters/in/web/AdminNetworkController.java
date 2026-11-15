@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.network.application.NetworkDashboardService;
+import com.socialcoisa.rede.network.application.ChangeCaptureReadinessService;
 import com.socialcoisa.rede.network.application.NetworkNodeService;
 import com.socialcoisa.rede.network.application.StorageScrubber;
 import com.socialcoisa.rede.network.application.NodeKeyService;
@@ -47,10 +48,11 @@ class AdminNetworkController {
 	private final CurrentUserResolver currentUserResolver;
 	private final AdminGuard adminGuard;
 	private final StorageScrubber scrubber;
+	private final ChangeCaptureReadinessService changeCapture;
 
 	AdminNetworkController(NetworkNodeService nodes, NodeKeyService keys, NetworkDashboardService dashboard,
 			AuditTrail audit, CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
-			StorageScrubber scrubber) {
+			StorageScrubber scrubber, ChangeCaptureReadinessService changeCapture) {
 		this.nodes = nodes;
 		this.keys = keys;
 		this.dashboard = dashboard;
@@ -58,6 +60,7 @@ class AdminNetworkController {
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
 		this.scrubber = scrubber;
+		this.changeCapture = changeCapture;
 	}
 
 	/**
@@ -151,6 +154,21 @@ class AdminNetworkController {
 			@RequestParam(defaultValue = "1000") int maxObjects) {
 		admin(sessionToken);
 		return scrubber.scan(bucket, maxObjects);
+	}
+
+	/**
+	 * O banco em que esta aplicação roda está pronto para captura de alterações por binlog?
+	 *
+	 * <p>É leitura e é o que faltava para a decisão de infraestrutura do doc 11 §4: mede
+	 * {@code @@log_bin} e {@code @@binlog_format} no servidor real, em vez de afirmar "precisa ligar
+	 * binlog" no documento. Não lê o binlog — um leitor exige usuário de replicação e posição
+	 * persistente, e existir sem essas condições seria um mecanismo que perde eventos em silêncio.</p>
+	 */
+	@GetMapping("/change-capture")
+	ChangeCaptureReadinessService.Readiness changeCapture(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		admin(sessionToken);
+		return changeCapture.check();
 	}
 
 	@GetMapping("/{id}")
