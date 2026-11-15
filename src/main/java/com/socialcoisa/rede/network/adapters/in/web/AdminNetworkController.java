@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.socialcoisa.rede.network.application.NetworkDashboardService;
 import com.socialcoisa.rede.network.application.ChangeCaptureReadinessService;
 import com.socialcoisa.rede.network.application.NetworkNodeService;
+import com.socialcoisa.rede.network.application.StorageOverviewService;
 import com.socialcoisa.rede.network.application.StorageScrubber;
 import com.socialcoisa.rede.network.application.NodeKeyService;
 import com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository;
@@ -51,6 +52,7 @@ class AdminNetworkController {
 	private final AdminGuard adminGuard;
 	private final StorageScrubber scrubber;
 	private final com.socialcoisa.rede.network.application.StorageBalanceReport balance;
+	private final StorageOverviewService storageOverview;
 	private final NetworkNodeResponsibleRepository responsibles;
 	private final NetworkUserDirectory users;
 	private final com.socialcoisa.rede.network.application.NodeObservabilityService observability;
@@ -62,7 +64,7 @@ class AdminNetworkController {
 			com.socialcoisa.rede.network.application.StorageBalanceReport balance,
 			NetworkNodeResponsibleRepository responsibles, NetworkUserDirectory users,
 			com.socialcoisa.rede.network.application.NodeObservabilityService observability,
-			ChangeCaptureReadinessService changeCapture) {
+			ChangeCaptureReadinessService changeCapture, StorageOverviewService storageOverview) {
 		this.nodes = nodes;
 		this.keys = keys;
 		this.dashboard = dashboard;
@@ -75,6 +77,7 @@ class AdminNetworkController {
 		this.users = users;
 		this.observability = observability;
 		this.changeCapture = changeCapture;
+		this.storageOverview = storageOverview;
 	}
 
 	/**
@@ -184,6 +187,17 @@ class AdminNetworkController {
 	 * o pedido. É leitura (não repara nada) e serve para o operador ver a lacuna antes que ela vire
 	 * um objeto que só existe num disco. {@code bucket} nulo varre o catálogo inteiro.
 	 */
+	/**
+	 * O Storage no painel (§8.2 do brief): capacidade declarada, disponível medido, uso medido,
+	 * objetos e o estado das cópias. Nada aqui é estimado — ver {@link StorageOverviewService}.
+	 */
+	@GetMapping("/storage/overview")
+	StorageOverviewService.Overview storageOverview(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		admin(sessionToken);
+		return storageOverview.overview();
+	}
+
 	@GetMapping("/storage/scrub")
 	StorageScrubber.Report scrubStorage(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(required = false) String bucket,

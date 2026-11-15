@@ -66,3 +66,73 @@ do mantenedor, não efeito colateral de código.
 
 O Storage (fase 1) **não** depende de nada deste documento; os dois seguem em paralelo sem colidir,
 porque o Storage acrescenta perfil e tipo de tarefa e o Cooperative mexe em captura e observação.
+## 5. Observabilidade §8.4 entregue: a distribuição do trabalho
+
+O §8.4 do brief pede o que nenhum painel respondia: *"identificar se a infraestrutura está realmente
+distribuindo o processamento ou se o Master continua absorvendo trabalho que poderia ser executado
+pelas réplicas"*. `GET /admin/network/nodes/dashboard` ganhou `load`:
+
+| campo | o que diz |
+|---|---|
+| `nodes[]` | por nó: `nodeId`, `displayName`, `status`, `done`, `failed`, `runningNow` |
+| `totalDone` / `totalFailed` | o agregado do catálogo |
+| `unassigned` | concluídas sem nó no registro — entram no total, não em nó nenhum |
+| `concentratedShare` | fatia (%) do nó que mais concluiu; **nula** quando não há conclusão |
+| `singleNode` | a maior fatia é de um nó, com **2+ réplicas ativas** |
+
+Decisões que os números carregam:
+
+- **nó que nunca executou aparece com zero**, não é omitido: é o dado do nó ocioso, e omiti-lo
+  faria "nó sem tarefa" e "nó inexistente" ficarem iguais;
+- **`concentratedShare` nula sem conclusão**: 0% e 100% seriam lidos como "distribui igual" e "tudo
+  num nó" para o mesmo caso vazio;
+- **`singleNode` exige 2+ réplicas ativas**: com uma só, 100% é a única opção, não falta de
+  distribuição — acusar aí culpava a topologia pelo que ela não podia fazer;
+- **`runningNow` usa o campo cru** do heartbeat (`observedRunningTasks`), não o getter
+  `runningTasks()` que converte nulo em zero: "não reportou" e "nenhuma rodando" são casos
+  diferentes, e o painel não pode decidir por ele;
+- **falhas definitivas** = `FAILED` + `DEAD`, que é a mesma falha depois de esgotar tentativas;
+  reprocessamento não entra (a tarefa continua viva e será contada quando terminar).
+
+A consulta `countDoneByNode` já existia no repositório **sem nenhum leitor**; esta entrega é o
+primeiro uso dela, e ganhou a irmã `countFailedByNode`.
+
+Provas: `NetworkDashboardDistributionTests` 8 e `NetworkNodesTests` 27 (1 novo pela rota). Mutações
+conferidas: fatia nula→0, uma réplica contando como concentração, órfãs ignoradas, `runningNow` pelo
+getter e falhas não contadas — cada uma derruba exatamente um teste. Suíte completa **3202**.
+
+## 6. §8.2 entregue: o Storage no painel
+
+`GET /admin/network/nodes/storage/overview` (admin) responde capacidade, uso, objetos e estado das
+cópias. A regra do brief — "indicadores devem refletir dados efetivamente coletados, nunca valores
+estimados" — virou três separações explícitas no contrato:
+
+| campo | o que é de verdade |
+|---|---|
+| `capacityMb` | disco **declarado** pelos nós de armazenamento vivos (a promessa que o runtime impõe como teto) |
+| `freeMb` | disco **livre medido** no heartbeat, somado. `null` quando **nenhum** nó mediu |
+| `unmeasuredNodes` | quantos nós ficaram fora dessa soma |
+| `usedBytes` | bytes das cópias **`OK`**, medidos pelo Control Plane ao receber o corpo |
+| `objectsByState` / `copiesByState` | contagem por estado — `DELETED` ainda ocupa chave, não ocupa disco |
+| `objectsUnderReplicated` + `replicasExpected` | a lacuna **com o alvo ao lado**, porque "3 abaixo" sem alvo não diz se é saudável |
+
+Quem fica fora da conta, e por quê:
+
+- **nó de processamento**: disco de transcodificação não é espaço de objeto (disco não dá
+  permissão);
+- **nó parado** (sem heartbeat há 180 s, o mesmo "vivo" do escalonador): não promete disco agora;
+- **região evacuada**: decisão humana, e o escalonamento já recusa objeto novo ali;
+- **cópia `PENDING_REMOTE`**: é obrigação, não byte em disco — somá-la inflaria o uso com algo que
+  não existe.
+
+O `usedBytes` vem de uma consulta de agregação em SQL (`sum(bytes) group by state`), não de varrer
+o catálogo linha a linha; e a lacuna vem da **mesma** varredura que o operador usa em `/storage/scrub`
+— dois números diferentes para "faltam cópias" seriam dois lugares para discordar.
+
+Este endpoint é leitura de catálogo. Reler bytes custa disco de quem contribui e continua sendo
+`scrub?readBodies=true`, opt-in.
+
+Provas: `StorageOverviewTests` 8, `NetworkStorageBalanceTests` 5 (2 novos pela rota, com nó real
+declarando 100 GB e reportando 4 GB). Mutações: disponível usando o declarado (derruba 4), sem
+medida virando zero, perfil qualquer somando disco, uso incluindo designação, nó parado somando e
+região evacuada somando — cada uma derruba o seu. Suíte completa **3212**.
