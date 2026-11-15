@@ -1,8 +1,6 @@
 package com.socialcoisa.rede.apiv1.origins;
 
 import java.io.IOException;
-import java.util.LinkedHashSet;
-import java.util.Locale;
 import java.util.Set;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -15,6 +13,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import com.socialcoisa.rede.shared.web.RequestPath;
 import com.socialcoisa.rede.shared.web.TrustedOriginCors;
+
 import org.springframework.web.util.pattern.PathPattern;
 import org.springframework.web.util.pattern.PathPatternParser;
 
@@ -29,8 +28,9 @@ import jakarta.servlet.http.HttpServletResponse;
  * Duas classes de origem:
  * <ul>
  * <li><b>Confiável</b> — as do próprio app ({@code CORS_ALLOWED_ORIGINS}) e os padrões de
- * {@code rede.origins.trusted} (ex.: {@code https://*.b7cloud.com.br}). Aceitas em todas as rotas,
- * inclusive {@code /admin/**} e {@code /moderation/**}.</li>
+ * {@code rede.origins.trusted} (ex.: {@code https://*.b7cloud.com.br}), numa lista única com o CORS
+ * ({@link AppOriginRegistry}). Aceitas em todas as rotas; {@code /admin/**} e
+ * {@code /moderation/**} exigem uma origem explícita, nunca um subdomínio de curinga.</li>
  * <li><b>Cadastrada</b> — origem de terceiro registrada em {@code /developers/origins}. Aceita nas
  * rotas normais, mas NUNCA em admin/moderação, e pode ser bloqueada automaticamente pelo
  * {@link OriginAbuseGuard} se gerar recusas em série.</li>
@@ -54,24 +54,15 @@ class RequestOriginFilter extends OncePerRequestFilter {
 
 	private final DeveloperOriginService origins;
 	private final OriginAbuseGuard abuse;
-	private final Set<String> staticOrigins;
-	private final Set<String> trustedPatterns;
-	/** Origens que recebem CORS com credenciais: apenas as explicitas, nunca um curinga. */
-	private final Set<String> credentialedOrigins;
+	/** App origins: a mesma lista que o CORS usa (fonte única, ver {@link AppOriginRegistry}). */
+	private final AppOriginRegistry appOrigins;
 	private final boolean enforce;
 
-	RequestOriginFilter(DeveloperOriginService origins, OriginAbuseGuard abuse,
-			@Value("${rede.cors.allowed-origins:https://enois.ia.br}") String allowed,
-			@Value("${rede.origins.trusted:https://*.b7cloud.com.br}") String trusted,
+	RequestOriginFilter(DeveloperOriginService origins, OriginAbuseGuard abuse, AppOriginRegistry appOrigins,
 			@Value("${rede.origins.enforce:true}") boolean enforce) {
 		this.origins = origins;
 		this.abuse = abuse;
-		this.staticOrigins = OriginPatterns.parse(allowed);
-		this.trustedPatterns = OriginPatterns.parse(trusted);
-		Set<String> credentialed = new LinkedHashSet<>();
-		staticOrigins.stream().filter(pattern -> !pattern.contains("*")).forEach(credentialed::add);
-		trustedPatterns.stream().filter(pattern -> !pattern.contains("*")).forEach(credentialed::add);
-		this.credentialedOrigins = Set.copyOf(credentialed);
+		this.appOrigins = appOrigins;
 		this.enforce = enforce;
 	}
 
@@ -201,13 +192,12 @@ class RequestOriginFilter extends OncePerRequestFilter {
 	}
 
 	private boolean isTrusted(String normalized) {
-		return OriginPatterns.matches(normalized, staticOrigins)
-				|| OriginPatterns.matches(normalized, trustedPatterns);
+		return appOrigins.isTrusted(normalized);
 	}
 
 	/** CORS com credenciais: so origem explicita; curinga de subdominio nao entra. */
 	private boolean isCredentialed(String normalized) {
-		return OriginPatterns.matches(normalized, credentialedOrigins);
+		return appOrigins.isCredentialed(normalized);
 	}
 
 	/** Responde o preflight de uma origem de terceiro cadastrada. */
@@ -322,10 +312,6 @@ class RequestOriginFilter extends OncePerRequestFilter {
 
 	/** Forma de comparação: esquema/host minúsculos e sem barra final. */
 	static String matchForm(String origin) {
-		String clean = origin == null ? "" : origin.trim().toLowerCase(Locale.ROOT);
-		while (clean.endsWith("/")) {
-			clean = clean.substring(0, clean.length() - 1);
-		}
-		return clean;
+		return AppOriginRegistry.matchForm(origin);
 	}
 }

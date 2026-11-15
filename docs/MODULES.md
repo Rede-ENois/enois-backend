@@ -28,7 +28,7 @@
 
 | Função | Descrição |
 |---|---|
-| `corsConfigurer()` | Configura CORS permitindo origens de `rede.cors.allowed-origins` |
+| `corsConfigurer()` | Configura CORS a partir do `AppOriginRegistry` — a mesma lista de origens que o portão de origem usa (`rede.cors.allowed-origins` + `rede.origins.trusted`) |
 
 ### Processamento compartilhado de caminhos
 
