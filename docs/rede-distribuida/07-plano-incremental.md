@@ -170,3 +170,24 @@ região/cobertura, auditoria e o change feed de conteúdo (V283). O ponto críti
 pela aplicação, não observa o banco, e não cobre alteração feita por SQL direto ou outro módulo.
 Ligar CDC é decisão de infraestrutura do mantenedor (`log_bin`, `binlog_format=ROW`, usuário com
 `REPLICATION SLAVE`), não efeito colateral de código.
+
+## Observabilidade — disco livre medido (fase 1 do Cooperative, primeiro item)
+
+O heartbeat já levava CPU, memória e tarefas em execução, e o disco só existia como
+`declared_disk_mb` do enroll: o que o participante **prometeu** ceder. A medida chegou em `V321`
+(`observed_disk_free_mb`, `bigint null`) e `node-runtime.sh` a obtém com `df -P -m "$NODE_HOME"`.
+
+Decisões que o código e o teste fixam:
+
+- **declarado e medido convivem** — a medida não sobrescreve o contrato; a divergência entre os dois
+  é diagnóstico (nó que perde disco sem avisar), não erro de configuração;
+- **`null` ≠ `0`** — `null` é "não reportou" (runtime anterior ou `df` que não respondeu), zero é
+  "sem espaço livre". A primeira versão do runtime mandava `0` quando não conseguia medir; agora o
+  campo simplesmente não sai, e `NetworkNodeObservedDiskTests` recusa a troca;
+- **o último reportado vale** — heartbeat novo sobrescreve o anterior.
+
+Provas: `NetworkNodeObservedDiskTests` (4), cenário 5g de `node-executor-test.sh` (que agora tem um
+`df` stub falho para provar que o campo não é inventado). Mutações conferidas: sem a coluna no
+`update`, 3 dos 4 testes caem; `null` virando `0` no controller derruba exatamente o teste do nulo.
+Ainda **não existe** uso dessa medida no escalonamento de armazenamento — é o próximo passo do
+Storage (fase 2).

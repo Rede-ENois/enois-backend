@@ -30,6 +30,9 @@ import java.util.Set;
  * @param observedCpuPercent uso de CPU no último heartbeat; null = não reportado
  * @param observedMemoryMb memória em uso no último heartbeat; null = não reportado
  * @param observedRunningTasks tarefas em execução no último heartbeat; null = não reportado
+ * @param observedDiskFreeMb disco livre medido pelo nó no último heartbeat; null = não reportado
+ * (runtime antigo), diferente de zero, que é "sem espaço". O declarado
+ * ({@link #declaredDiskMb}) é o contrato; este é a medida.
  * @param observedLatencyMs mediana do tempo de conclusão das últimas tarefas; null = sem amostra
  * @param consecutiveFailures resultados falhos seguidos; um sucesso zera a contagem
  * @param quarantinedUntil fora do balanceamento até este instante; null = em balanceamento
@@ -39,7 +42,26 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 		Set<NodeProfile> profiles, String region, String country, String runtimeVersion, Instant lastSeenAt,
 		int declaredCpuCores, int declaredMemoryMb, int declaredDiskMb, int declaredBandwidthMbps,
 		Double observedCpuPercent, Integer observedMemoryMb, Integer observedRunningTasks, Integer observedLatencyMs,
-		int consecutiveFailures, Instant quarantinedUntil, String quarantineReason) {
+		Long observedDiskFreeMb, int consecutiveFailures, Instant quarantinedUntil, String quarantineReason) {
+
+	/**
+	 * Mesmo nó com o disco livre medido: {@code null} = não reportado (runtime anterior a V321).
+	 *
+	 * <p>Existe para os chamadores que já montam o nó sem essa medida — leitores dos testes e código
+	 * que nunca armazena — não precisarem repetir {@code null} no meio de vinte argumentos, onde é
+	 * fácil trocar a ordem com {@code observedLatencyMs}. O construtor canônico continua sendo o do
+	 * record.</p>
+	 */
+	public NetworkNode(String id, String displayName, String ownerUserId, NodeStatus status,
+			Set<NodeProfile> profiles, String region, String country, String runtimeVersion, Instant lastSeenAt,
+			int declaredCpuCores, int declaredMemoryMb, int declaredDiskMb, int declaredBandwidthMbps,
+			Double observedCpuPercent, Integer observedMemoryMb, Integer observedRunningTasks, Integer observedLatencyMs,
+			int consecutiveFailures, Instant quarantinedUntil, String quarantineReason) {
+		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
+				declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
+				observedMemoryMb, observedRunningTasks, observedLatencyMs, null, consecutiveFailures, quarantinedUntil,
+				quarantineReason);
+	}
 
 	/** Acima disto o nó está ocupado demais para receber tarefa nova, mesmo com vaga declarada. */
 	public static final double SATURATED_CPU_PERCENT = 85.0;
