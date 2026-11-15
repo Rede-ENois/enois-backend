@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.socialcoisa.rede.network.application.NetworkDashboardService;
 import com.socialcoisa.rede.network.application.ChangeCaptureReadinessService;
 import com.socialcoisa.rede.network.application.NetworkNodeService;
+import com.socialcoisa.rede.network.application.StorageHealer;
 import com.socialcoisa.rede.network.application.StorageOverviewService;
 import com.socialcoisa.rede.network.application.StorageScrubber;
 import com.socialcoisa.rede.network.application.NodeKeyService;
@@ -53,6 +54,7 @@ class AdminNetworkController {
 	private final StorageScrubber scrubber;
 	private final com.socialcoisa.rede.network.application.StorageBalanceReport balance;
 	private final StorageOverviewService storageOverview;
+	private final StorageHealer healer;
 	private final NetworkNodeResponsibleRepository responsibles;
 	private final NetworkUserDirectory users;
 	private final com.socialcoisa.rede.network.application.NodeObservabilityService observability;
@@ -64,7 +66,8 @@ class AdminNetworkController {
 			com.socialcoisa.rede.network.application.StorageBalanceReport balance,
 			NetworkNodeResponsibleRepository responsibles, NetworkUserDirectory users,
 			com.socialcoisa.rede.network.application.NodeObservabilityService observability,
-			ChangeCaptureReadinessService changeCapture, StorageOverviewService storageOverview) {
+			ChangeCaptureReadinessService changeCapture, StorageOverviewService storageOverview,
+			StorageHealer healer) {
 		this.nodes = nodes;
 		this.keys = keys;
 		this.dashboard = dashboard;
@@ -78,6 +81,7 @@ class AdminNetworkController {
 		this.observability = observability;
 		this.changeCapture = changeCapture;
 		this.storageOverview = storageOverview;
+		this.healer = healer;
 	}
 
 	/**
@@ -196,6 +200,21 @@ class AdminNetworkController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		admin(sessionToken);
 		return storageOverview.overview();
+	}
+
+	/**
+	 * Healing do Storage (fase 3): a lacuna que o {@code /storage/scrub} aponta vira designação
+	 * {@code PENDING_REMOTE} para um nó que o nó destino vai puxar e confirmar. Opção de operador,
+	 * nunca agendador: cada designação gera tráfego de corpo. {@code dryRun=true} mostra o que
+	 * seria feito sem gravar nada. Ver {@link StorageHealer}.
+	 */
+	@PostMapping("/storage/heal")
+	StorageHealer.Report healStorage(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(required = false) String bucket,
+			@RequestParam(defaultValue = "100") int maxObjects,
+			@RequestParam(name = "dryRun", defaultValue = "false") boolean dryRun) {
+		var user = admin(sessionToken);
+		return healer.heal(user.id().value(), bucket, maxObjects, dryRun);
 	}
 
 	@GetMapping("/storage/scrub")
