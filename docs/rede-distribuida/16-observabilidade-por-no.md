@@ -42,6 +42,12 @@ continua funcionando e simplesmente não alimenta o console.
 **O console do nó não é auditoria.** É uma janela curta, apagada por teto na escrita (abaixo). O
 registro de auditoria (`audit_*`) tem outra promessa e não recebe estas linhas.
 
+**Dois painéis, com papéis diferentes.** O painel local
+([`09-instalacao.md`](09-instalacao.md) §3.2, `painel.py`) roda **na máquina**, lê os arquivos do nó
+e vê o log completo — é do operador que tem acesso ao host. O painel descrito aqui é **remoto**,
+pelo Control Plane, e vê a janela curta que o nó empurrou: é para o administrador que acompanha
+muitos nós pela tela, sem entrar em cada máquina. Nenhum substitui o outro.
+
 ## 3. Teto e retenção
 
 | tabela | conteúdo | teto por nó | como é aplicado |
