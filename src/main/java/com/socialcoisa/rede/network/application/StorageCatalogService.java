@@ -77,15 +77,23 @@ public class StorageCatalogService {
 	 * primeiro nó; na fase 2 o corpo vai para o nó designado e este diretório deixa de ser usado.
 	 */
 	private final String storageRoot;
+	/**
+	 * Quem escolhe os nós que recebem cópia (fase 3). Fica aqui porque a designação é decidida no
+	 * mesmo passo em que o objeto passa a ter conteúdo: a colocação nasce com a gravação, não num
+	 * segundo momento em que o objeto já seria servível sem saber quem o tem.
+	 */
+	private final StoragePlacementService placement;
 
 	StorageCatalogService(StorageCatalogRepository catalog, AuditTrail audit, Clock clock,
 			@Value("${rede.storage.max-object-bytes:5368709120}") long maxObjectBytes,
-			@Value("${rede.storage.root:${java.io.tmpdir}/enois-storage}") String storageRoot) {
+			@Value("${rede.storage.root:${java.io.tmpdir}/enois-storage}") String storageRoot,
+			StoragePlacementService placement) {
 		this.catalog = catalog;
 		this.audit = audit;
 		this.clock = clock;
 		this.maxObjectBytes = maxObjectBytes;
 		this.storageRoot = storageRoot;
+		this.placement = placement;
 	}
 
 	/**
@@ -163,10 +171,86 @@ public class StorageCatalogService {
 		}
 		catalog.savePlacement(new StoragePlacement(object.id(), 0, node.id(), measured.bytes(), measured.sha256(),
 			StoragePlacement.State.OK, now));
+		// A replica 0 e a do Control Plane. As demais sao DESIGNACAO, nao copia: o objeto entra no
+		// catalogo do no escolhido como PENDING_REMOTE e so vira OK quando o no confirmar o que
+		// gravou (markReplicaStored). Contar a designacao como durabilidade seria dizer que o
+		// objeto esta em tres lugares quando esta em um e dois prometeram.
+		designReplicas(object.id(), measured.bytes(), measured.sha256(), now);
 		audit.record(node.id(), "STORAGE_OBJECT_STORED", object.id(),
 			"{\"bucket\":\"" + escape(object.bucket()) + "\",\"key\":\"" + escape(object.key()) + "\",\"bytes\":"
 				+ measured.bytes() + ",\"sha256\":\"" + measured.sha256() + "\"}");
 		return new Stored(object.id(), measured.bytes(), measured.sha256());
+	}
+
+	/**
+	 * A réplica confirma a cópia: o nó que recebeu um objeto designado avisa que gravou. Só vale se
+	 * a colocação daquele nó existir e estiver {@code PENDING_REMOTE} — confirmação de cópia que
+	 * ninguém designou é um nó dizendo que tem um arquivo que o catálogo não pediu.
+	 *
+	 * <p>O que o nó declara (sha-256 e tamanho) é <b>conferido contra o medido no Control Plane</b>.
+	 * Divergência é cópia corrompida: a linha fica {@code STALE} e responde 409, em vez de vender
+	 * uma cópia íntegra que tem outro conteúdo.</p>
+	 */
+	public StoragePlacement confirmReplica(NetworkNode node, String objectId, long bytes, String sha256) {
+		requireStorage(node);
+		StorageObject object = catalog.findById(objectId)
+			.orElseThrow(() -> new ApiException(404, "STORAGE_OBJECT_UNKNOWN", "Objeto nao encontrado no catalogo."));
+		StoragePlacement placement = catalog.placementOn(objectId, node.id())
+			.orElseThrow(() -> new ApiException(403, "STORAGE_REPLICA_NOT_DESIGNATED",
+				"Este no nao foi designado para este objeto."));
+		if (placement.state() != StoragePlacement.State.PENDING_REMOTE) {
+			throw new ApiException(409, "STORAGE_REPLICA_ALREADY_CONFIRMED",
+				"Esta copia ja foi confirmada ou nao esta mais designada.");
+		}
+		if (object.sha256() == null || !object.sha256().equalsIgnoreCase(sha256) || object.bytes() != bytes) {
+			// A marcacao de STALE tem de sobreviver ao 409. Com a confirmacao dentro de uma transacao,
+			// o rollback desfazia esta gravacao e a linha voltava a PENDING_REMOTE: o no que gravou
+			// lixo nunca aparecia como STALE para a varredura, e a divergencia ficava invisivel
+			// justamente no registro dela. Por isso confirmReplica NAO e transacional: cada escrita
+			// aqui e uma instrucao unica, e o que precisa persistir persistir antes do 409.
+			marcarDivergente(objectId, placement, node.id(), bytes, sha256);
+			throw new ApiException(409, "STORAGE_REPLICA_MISMATCH",
+				"A copia declarada nao confere com o medido no Control Plane.");
+		}
+		Instant now = clock.instant();
+		StoragePlacement confirmed = new StoragePlacement(objectId, placement.replica(), node.id(), bytes,
+			object.sha256(), StoragePlacement.State.OK, now);
+		catalog.savePlacement(confirmed);
+		audit.record(node.id(), "STORAGE_REPLICA_CONFIRMED", objectId,
+			"{\"replica\":" + placement.replica() + ",\"bytes\":" + bytes + "}");
+		return confirmed;
+	}
+
+	/**
+	 * Grava a cópia como divergente numa transação <b>própria</b> ({@code REQUIRES_NEW}): o chamador
+	 * lança logo em seguida, e sem transação separada o rollback apagaria este registro. É a mesma
+	 * razão pela qual o desfecho de tarefa do módulo grava antes de responder erro — o que deu errado
+	 * precisa ficar registrado mesmo quando a operação falha.
+	 */
+	private void marcarDivergente(String objectId, StoragePlacement placement, String nodeId, long bytes,
+			String sha256) {
+		Instant now = clock.instant();
+		catalog.savePlacement(new StoragePlacement(objectId, placement.replica(), nodeId, bytes, sha256,
+			StoragePlacement.State.STALE, now));
+		audit.record(nodeId, "STORAGE_REPLICA_MISMATCH", objectId,
+			"{\"declaredSha256\":\"" + escape(sha256) + "\",\"declaredBytes\":" + bytes + "}");
+	}
+
+	/**
+	 * Registra quem deve receber cópia do objeto. Não falha quando não há nó adequado: o objeto já
+	 * está gravado e servível com uma cópia, e a réplica que falta é uma pendência de durabilidade,
+	 * não um erro do upload. A colocação fica visível em {@code /placements} como PENDING_REMOTE,
+	 * e é essa linha que uma varredura ou uma retomada encontra.
+	 */
+	private void designReplicas(String objectId, long bytes, String sha256, Instant now) {
+		List<NetworkNode> chosen = placement.chooseReplicas(objectId, bytes, now);
+		int replica = 1;
+		for (NetworkNode node : chosen) {
+			catalog.savePlacement(new StoragePlacement(objectId, replica++, node.id(), bytes, sha256,
+				StoragePlacement.State.PENDING_REMOTE, now));
+			audit.record("system", "STORAGE_REPLICA_DESIGNATED", objectId,
+				"{\"node\":\"" + escape(node.id()) + "\",\"bytes\":" + bytes + "}");
+		}
 	}
 
 	/** O objeto só é servível com cópia conferida; {@code PENDING} responde 404 como se não existisse. */
@@ -309,6 +393,11 @@ public class StorageCatalogService {
 	}
 
 	/** O objeto por id — o chamador já sabe que ele existe (ex.: veio de uma colocação). */
+	/** O objeto pelo conteúdo medido, para a réplica que só conhece o digest (fase 3). */
+	public Optional<StorageObject> byDigest(String sha256) {
+		return catalog.findByDigest(sha256);
+	}
+
 	public Optional<StorageObject> byId(String id) {
 		return catalog.findById(id);
 	}
@@ -326,9 +415,22 @@ public class StorageCatalogService {
 	 * catálogo diz que existe e o arquivo não está lá — divergência de metadado, não "não existe".</p>
 	 */
 	public InputStream readBody(String objectId) {
-		Path file = bodyPath(objectId);
+		// Fase 3: o corpo nao e replicado no proprio Control Plane -- ele identifica a copia pelo
+		// SHA-256 e devolve 409 com o digest, para o chamador designar a replica que de fato tem o
+		// objeto. Entregar bytes de um arquivo que se sabe ausente seria a pior forma de falha:
+		// um download que responde 200 e entrega nada (ou lixo) so aparece muito depois.
+		if (!Files.isReadable(bodyPath(objectId))) {
+			Optional<StorageObject> object = catalog.findById(objectId);
+			if (object.isPresent() && object.get().sha256() != null) {
+				throw new ApiException(409, "STORAGE_REPLICA_ELSEWHERE",
+					"Esta copia nao esta neste no; use o digest " + object.get().sha256()
+						+ " para identifica-la numa replica.");
+			}
+			throw new ApiException(410, "STORAGE_BODY_MISSING",
+				"O catalogo registra a copia, mas o corpo nao esta neste no.");
+		}
 		try {
-			return Files.newInputStream(file);
+			return Files.newInputStream(bodyPath(objectId));
 		}
 		catch (IOException missing) {
 			throw new ApiException(410, "STORAGE_BODY_MISSING",

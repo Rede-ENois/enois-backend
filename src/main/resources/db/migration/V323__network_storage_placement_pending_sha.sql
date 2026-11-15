@@ -1,0 +1,21 @@
+-- Énóis Storage, fase 3: a designação de réplica existe antes de a cópia existir.
+--
+-- Até aqui a colocação só nascia DEPOIS da gravação: a fase 1 gravava no Control Plane e inseria a
+-- réplica 0 já com bytes e sha-256 medidos. A fase 3 acrescenta a linha antes — o Control Plane diz
+-- "este nó deve ter o objeto", e o nó ainda não tem. Nesse momento não há digest nem tamanho a
+-- gravar: o que existe é a obrigação.
+--
+-- Com `sha256 not null`, recusar a designação passaria pela tabela, mas o vazio seria representado
+-- por uma string vazia — que é um digest inválido travestido de dado. A coluna passa a aceitar nulo,
+-- e nulo passa a significar exatamente "ainda não há cópia aqui". O estado é quem diz: uma linha
+-- `PENDING_REMOTE` **tem** que ter sha nulo enquanto não confirmada? Não — a fase 3 grava o
+-- esperado no design para o nó conferir; nulo é só o caso em que o Control Plane não sabia (nunca
+-- acontece hoje, mas a coluna não pode mentir se acontecer).
+--
+-- `bytes` já era `bigint not null` e continua com 0 na designação — 0 bytes é o valor honesto: não
+-- há cópia medida ainda, e a confirmação o substitui pelo medido do nó.
+--
+-- Aditiva e idempotente, como as demais deste módulo. Nenhuma linha existente muda: as colunas
+-- ganham permissão, não valor.
+
+alter table network_storage_placements modify column sha256 varchar(64) null;

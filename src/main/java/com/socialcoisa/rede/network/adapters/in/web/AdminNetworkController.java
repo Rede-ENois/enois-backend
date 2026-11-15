@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.network.application.NetworkDashboardService;
 import com.socialcoisa.rede.network.application.NetworkNodeService;
+import com.socialcoisa.rede.network.application.StorageScrubber;
 import com.socialcoisa.rede.network.application.NodeKeyService;
 import com.socialcoisa.rede.network.application.port.out.NodeKeyRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
@@ -45,15 +46,18 @@ class AdminNetworkController {
 	private final AuditTrail audit;
 	private final CurrentUserResolver currentUserResolver;
 	private final AdminGuard adminGuard;
+	private final StorageScrubber scrubber;
 
 	AdminNetworkController(NetworkNodeService nodes, NodeKeyService keys, NetworkDashboardService dashboard,
-			AuditTrail audit, CurrentUserResolver currentUserResolver, AdminGuard adminGuard) {
+			AuditTrail audit, CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
+			StorageScrubber scrubber) {
 		this.nodes = nodes;
 		this.keys = keys;
 		this.dashboard = dashboard;
 		this.audit = audit;
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
+		this.scrubber = scrubber;
 	}
 
 	/**
@@ -134,6 +138,19 @@ class AdminNetworkController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		admin(sessionToken);
 		return dashboard.dashboard();
+	}
+
+	/**
+	 * Varredura de durabilidade do Storage: objetos {@code STORED} com menos cópias confirmadas que
+	 * o pedido. É leitura (não repara nada) e serve para o operador ver a lacuna antes que ela vire
+	 * um objeto que só existe num disco. {@code bucket} nulo varre o catálogo inteiro.
+	 */
+	@GetMapping("/storage/scrub")
+	StorageScrubber.Report scrubStorage(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(required = false) String bucket,
+			@RequestParam(defaultValue = "1000") int maxObjects) {
+		admin(sessionToken);
+		return scrubber.scan(bucket, maxObjects);
 	}
 
 	@GetMapping("/{id}")
