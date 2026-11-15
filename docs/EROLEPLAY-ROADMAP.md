@@ -121,8 +121,10 @@ explícito, nunca com comportamento genérico inventado.
 
 ### Fase 9 — front
 
-- [ ] Identidade visual própria (tema por campanha), componentes no design system
-- [ ] Telas de campanha, mesa, ficha, dados
+- [x] Identidade visual própria (tema por campanha), componentes no design system (PR #248,
+  mergeada; release v0.37.0 contém os componentes de roleplay)
+- [x] Telas de campanha, mesa, ficha, dados (PR #898 do front, em revisão: `/roleplay` e
+  `/roleplay/$slug` com diretorio, mesas, ficha, dados, chat e mundo)
 
 ### Fase 10 — endurecimento
 
@@ -130,7 +132,7 @@ explícito, nunca com comportamento genérico inventado.
 
 ## 5. Próxima tarefa
 
-**Fase 9**: front — identidade visual própria (tema por campanha) no design system e telas de campanha, mesa, ficha e dados. O backend das Fases 0–8 está entregue.
+**Fase 10**: endurecimento — observabilidade (eventos, métricas) e revisão de segurança por fase. O front da Fase 9 está na PR #898 aguardando revisão humana; não impede o início da Fase 10.
 
 Mundo da campanha (localizações, pistas, NPCs) com referência a partir das campanhas, seguindo o
 mesmo contrato das demais peças: aditivo, autorização na campanha (ver = participante, escrever =

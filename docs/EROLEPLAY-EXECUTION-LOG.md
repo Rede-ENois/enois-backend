@@ -633,3 +633,37 @@ implementação. Push em `feat/eroleplay-world` carregado pela PR #739 — sem m
 
 Fase 9 — front: identidade visual própria do Éroleplay no design system e as telas
 (campanhas, mesa, fichas, chat, mundo, biblioteca).
+
+## Rodada 10 (2026-11-15) — Fase 9: design system mergeado e front em revisão
+
+### Contexto
+
+A rodada começou com a fila de deploy da QA parada: o boot falhava na validação de schema das
+tabelas da biblioteca e do mundo (V326) porque as entidades não nomeavam as colunas compostas e o
+profile de QA desliga a conversão automática de nomes. O conserto seguiu pela PR #747 (colunas
+nomeadas + V327 aditiva para bancos que já aplicaram a 326 antiga), mergeada e deployada com o
+health check verde — a fila voltou a andar. A PR #702 (fundação, com a migração V291 que colidiu
+com outra V291 já aplicada) foi fechada como superseded: todo o conteúdo já está na qa pelas
+migrações V293–V298 e V326, em versão melhor.
+
+### O que esta rodada entregou
+
+- **Design system (PR #248, mergeada)**: diretorio de campanhas e pagina da campanha (mesas,
+  ficha, dados, chat, mundo) na camada `domain`, 1927 testes do DS verdes, release v0.37.0
+  publicada contendo os componentes de roleplay. Durante a revisao, a tag v0.36.1-rc.1 publicou os
+  componentes como prerelease para o front empilhado compilar.
+- **Front (PR #898, em revisao)**: rotas `/roleplay` e `/roleplay/$slug` como contêineres finos das
+  views do DS; `roleplayApi` com as formas de resposta conferidas contra os controllers; tipos de
+  aplicacao por arquivo. Consome `^0.37.0` (a mesma versao da qa) desde que a #248 entrou.
+
+### Verificacao (numeros reais)
+
+- Front: eslint 0 erros; tsc 0 erros; build ok; suíte 248 arquivos / 1447 testes; CI da PR verde
+  (commit 875da84a).
+- Backend: o container da QA subiu com o conserto da #747 (deploy "Build, Push and Deploy" com
+  health check verde) e a fila de deploy voltou a processar PRs seguintes.
+
+### Próxima tarefa
+
+Fase 10 — endurecimento: observabilidade (eventos, métricas) e revisão de segurança por fase,
+enquanto a #898 aguarda revisão humana.
