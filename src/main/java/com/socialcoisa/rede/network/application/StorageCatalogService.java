@@ -58,6 +58,16 @@ public class StorageCatalogService {
 	/** Teto do tamanho da listagem por página: o cliente S3 pede até 1000. */
 	public static final int MAX_LIST_LIMIT = 1000;
 
+	/**
+	 * Piso de disco livre medido para o nó receber um corpo.
+	 *
+	 * <p>Não é o espaço ocupado pelo objeto — é a folga que o sistema de arquivos precisa para o
+	 * trabalho que o próprio nó faz em volta dele (temporário do upload, journal, arquivos de outro
+	 * processo). Um disco a menos de 1 GiB livre falha no meio de qualquer gravação sensata, e falhar
+	 * depois de receber o arquivo custa ao participante o que recusar antes não custa.</p>
+	 */
+	public static final long MIN_DISK_FREE_MB = 1024;
+
 	private final StorageCatalogRepository catalog;
 	private final AuditTrail audit;
 	private final Clock clock;
@@ -112,6 +122,16 @@ public class StorageCatalogService {
 			.orElseThrow(() -> new ApiException(404, "STORAGE_OBJECT_UNKNOWN", "Objeto nao encontrado no catalogo."));
 		if (object.state() != StorageObjectState.PENDING) {
 			throw new ApiException(409, "STORAGE_ALREADY_STORED", "O objeto ja tem copia confirmada.");
+		}
+		// O disco livre MEDIDO antes do corpo atravessar: um nó que declarou 2 TB e tem 40 GB passa
+		// na checagem do declarado e enche o disco no meio do arquivo — o carregador fica com um
+		// arquivo pela metade e as tarefas seguintes falham por um espaço que já se sabia escasso.
+		// Recusar antes é o mesmo critério do teto de tamanho: não escrever o que se sabe que não
+		// cabe. Sem medida (runtime antigo) não há o que comparar e o caminho segue como antes.
+		if (node.observedDiskFreeMb() != null && node.observedDiskFreeMb() < MIN_DISK_FREE_MB) {
+			throw new ApiException(507, "STORAGE_NO_DISK_SPACE",
+				"O no informa " + node.observedDiskFreeMb() + " MB livres, abaixo do minimo de "
+					+ MIN_DISK_FREE_MB + " MB para receber objeto.");
 		}
 		Spooled measured = measure(body);
 		if (measured.bytes() == 0) {

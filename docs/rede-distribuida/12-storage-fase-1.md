@@ -45,6 +45,15 @@ bucket e a unicidade do banco esconderia a colisão.
 **Disco não é permissão.** Um nó com 10 TB e sem `NODE_STORAGE` recebe 403. É a mesma regra que já
 vale para CPU e memória: capacidade não autoriza nada.
 
+**Capacidade de disco se decide pelo medido, não pelo declarado.** Desde `V321` o nó reporta no
+heartbeat o disco livre que ele **mede** (`df -P -m` no diretório de estado), ao lado do
+`declared_disk_mb` do enroll, que é a promessa. Um nó que reporta menos de
+`StorageCatalogService.MIN_DISK_FREE_MB` (1 GiB) recebe **507 `STORAGE_NO_DISK_SPACE` antes de o
+corpo atravessar** — mesmo critério do teto de tamanho: não escrever o que já se sabe que não cabe.
+Sem medida (`null`, runtime anterior a V321) o nó **não** é recusado: não medir não é estar sem
+espaço, e recusar por falta de informação tiraria do caminho nós com terabytes livres. O piso é
+folga de sistema de arquivos (temporário do upload, journal), não o tamanho do objeto.
+
 ## 3. O que NÃO está entregue (e por quê)
 
 | do brief | por que não agora |
@@ -55,6 +64,7 @@ vale para CPU e memória: capacidade não autoriza nada.
 | **URLs assinadas** | exigem credencial de cliente (ver gateway) |
 | **redundância, replicação, healing** | fase 3. A tabela de colocação já nasce com `replica` na chave primária para que a fase 3 **insira** linhas e não altere o esquema |
 | **mTLS** | não existe na rede (fase 0 §3); o transporte é HTTPS com a API key do nó |
+| **escolher o nó de destino pelo espaço livre** | a fase 1 tem **um** destinatário (o CP); escolher entre nós é a fase 2, e ela agora tem a medida de que precisa — o que falta é o endereçamento, não o número |
 
 ## 4. Verificação
 

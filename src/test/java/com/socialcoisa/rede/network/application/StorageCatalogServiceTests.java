@@ -85,6 +85,48 @@ class StorageCatalogServiceTests {
 			"sa-east-1", "BR", "1.0.0", null, 2, 4096, 102400, 100, null, null, null, null, 0, null, null);
 	}
 
+	/** O mesmo nó com o disco livre que ele MEDIU no último heartbeat (V321). */
+	private static NetworkNode storageNode(Long diskFreeMb) {
+		return new NetworkNode("nd_store", "vps-casa", "user_1", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_STORAGE),
+			"sa-east-1", "BR", "1.0.0", null, 2, 4096, 102400, 100, null, null, null, null, diskFreeMb, 0, null, null);
+	}
+
+	@Test
+	void no_com_disco_livre_medido_abaixo_do_piso_nao_recebe_o_corpo() throws Exception {
+		StorageObject object = service.beginUpload("user_1", "fotos", "gato.jpg", "image/jpeg");
+		NetworkNode apertado = storageNode(StorageCatalogService.MIN_DISK_FREE_MB - 1);
+
+		assertThatThrownBy(() -> service.store(apertado, object.id(), new ByteArrayInputStream(body("abc"))))
+			.isInstanceOf(ApiException.class)
+			.hasMessageContaining("livres");
+		// Recusar ANTES de escrever: sem corpo no disco e sem colocação que diga que gravou.
+		assertThat(Files.exists(service.bodyPath(object.id()))).isFalse();
+		assertThat(service.location(object.id())).isEmpty();
+		assertThat(catalog.findById(object.id()).orElseThrow().servable()).isFalse();
+	}
+
+	@Test
+	void no_exatamente_no_piso_ainda_recebe_o_corpo() throws Exception {
+		StorageObject object = service.beginUpload("user_1", "fotos", "gato.jpg", "image/jpeg");
+
+		service.store(storageNode(StorageCatalogService.MIN_DISK_FREE_MB), object.id(),
+			new ByteArrayInputStream(body("abc")));
+
+		assertThat(catalog.findById(object.id()).orElseThrow().servable()).isTrue();
+	}
+
+	@Test
+	void no_que_nao_reportou_disco_nao_e_recusado_por_isso() throws Exception {
+		StorageObject object = service.beginUpload("user_1", "fotos", "gato.jpg", "image/jpeg");
+
+		// null = "não reportou" (runtime anterior a V321). Não medir não é estar sem espaço: recusar
+		// aqui tiraria todo nó não atualizado do caminho de escrita por falta de informação, não por
+		// indisponibilidade — e o disco real poderia estar com terabytes livres.
+		service.store(storageNode((Long) null), object.id(), new ByteArrayInputStream(body("abc")));
+
+		assertThat(catalog.findById(object.id()).orElseThrow().servable()).isTrue();
+	}
+
 	@Test
 	void o_que_fica_no_catalogo_e_o_medido_do_corpo_nao_o_declarado() throws Exception {
 		StorageObject object = service.beginUpload("user_1", "fotos", "gato.jpg", "image/jpeg");
