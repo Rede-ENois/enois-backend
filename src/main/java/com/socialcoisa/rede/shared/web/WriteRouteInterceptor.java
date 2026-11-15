@@ -84,7 +84,13 @@ class WriteRouteInterceptor implements HandlerInterceptor {
 		"/network/storage/objects/*",
 		// Fase 3: a réplica confirma a cópia que o Control Plane designou. Mesma credencial de nó,
 		// mesmo motivo da rota acima — e a confirmação só vale para quem foi designado.
-		"/network/storage/objects/*/replica");
+		"/network/storage/objects/*/replica",
+		// Inscrição para servir um nó (V324): o formulário é público por definição — quem quer
+		// oferecer uma máquina pode não ter conta —, limitado por IP no controller. O link de
+		// exibição é autenticado pelo PRÓPRIO token de uso único, que só existe no e-mail de
+		// aprovação. Nenhum dos dois cria nó: criam inscrição e mostram a chave uma vez.
+		"/network/join/applications",
+		"/network/join/reveal");
 
 	private final AntPathMatcher matcher = new AntPathMatcher();
 	private final CurrentUserResolver currentUserResolver;
