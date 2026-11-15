@@ -209,7 +209,7 @@ term_regressao() {
 # recortar e ordenar, não reinterpretar o documento.
 config_signature() {
   # config_signature <config-json>: imprime "canonical<TAB>assinatura"; 1 se faltar campo.
-  local format_version config_version node_id profiles cpu memory disk bandwidth tasks routes issued_at ttl term signature
+  local format_version config_version node_id profiles cpu memory disk bandwidth tasks routes issued_at ttl term disk_free signature
   format_version=$(json_number "$1" formatVersion)
   config_version=$(json_number "$1" configVersion)
   node_id=$(json_field "$1" nodeId)
@@ -229,13 +229,22 @@ config_signature() {
   # O termo da autoridade entrou no formato 2 (fase 6): vem por último na linha.
   # Formato 1 não o tinha e não é mais servido pelo Control Plane.
   term=$(json_number "$1" term)
+  # diskFreeMb (formato 5) vem DEPOIS do termo: campo novo nunca desloca o último. É o disco
+  # livre que o próprio nó mediu e subiu no heartbeat -- não o declarado, que é o teto.
+  # "ausente" e não 0: zero é "sem espaço livre" e ausente é "não mediu"; assinar os dois
+  # iguais tornaria indistinguível, para quem verifica, um disco cheio de um disco desconhecido.
+  if grep -q '"diskFreeMb":[0-9]' <<< "$1"; then
+    disk_free=$(json_number "$1" diskFreeMb)
+  else
+    disk_free='ausente'
+  fi
   signature=$(json_field "$1" signature)
   [[ -n "$format_version" && -n "$config_version" && -n "$node_id" && -n "$cpu" \
       && -n "$memory" && -n "$disk" && -n "$bandwidth" && -n "$issued_at" \
       && -n "$ttl" && -n "$term" && -n "$signature" ]] || return 1
-  printf '%s|%s|%s|[%s]|%s|%s|%s|%s|[%s]|[%s]|%s|%s|%s\t%s' \
+  printf '%s|%s|%s|[%s]|%s|%s|%s|%s|[%s]|[%s]|%s|%s|%s|%s\t%s' \
     "$format_version" "$config_version" "$node_id" "$profiles" "$cpu" "$memory" "$disk" \
-    "$bandwidth" "$tasks" "$routes" "$issued_at" "$ttl" "$term" "$signature"
+    "$bandwidth" "$tasks" "$routes" "$issued_at" "$ttl" "$term" "$disk_free" "$signature"
 }
 
 json_list_sorted() {

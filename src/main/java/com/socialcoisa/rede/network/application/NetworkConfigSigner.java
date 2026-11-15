@@ -50,7 +50,7 @@ final class NetworkConfigSigner {
 	 */
 	record SignedFields(int formatVersion, int configVersion, String nodeId, List<String> profiles, int cpuCores,
 			int memoryMb, int diskMb, int bandwidthMbps, List<String> allowedTasks, List<String> allowedRoutes,
-			String issuedAt, int ttlSeconds, int term) {
+			String issuedAt, int ttlSeconds, int term, Long diskFreeMb) {
 
 		/**
 		 * A linha assinada. Listas vão ordenadas e em JSON compacto: a ordem do banco não é
@@ -66,7 +66,20 @@ final class NetworkConfigSigner {
 			return String.join("|", String.valueOf(formatVersion), String.valueOf(configVersion), nodeId,
 				jsonList(profiles), String.valueOf(cpuCores), String.valueOf(memoryMb), String.valueOf(diskMb),
 				String.valueOf(bandwidthMbps), jsonList(allowedTasks), jsonList(allowedRoutes), issuedAt,
-				String.valueOf(ttlSeconds), String.valueOf(term));
+				String.valueOf(ttlSeconds), String.valueOf(term), numberOrAbsent(diskFreeMb));
+		}
+
+		/**
+		 * Número assinado, ou a marca de ausência.
+		 *
+		 * <p>{@code null} não vira {@code 0}: zero é "sem espaço livre" e nulo é "o nó não mediu".
+		 * Assinar os dois como a mesma string tornaria indistinguível, para quem verifica, um nó
+		 * prestes a encher o disco de um nó sobre o qual não se sabe nada — e é justamente a
+		 * diferença que o resto do módulo mantém. A marca é a palavra {@code ausente}, que não é
+		 * número e nunca colide com um valor medido.</p>
+		 */
+		static String numberOrAbsent(Long value) {
+			return value == null ? "ausente" : String.valueOf(value);
 		}
 
 		private static String jsonList(List<String> values) {

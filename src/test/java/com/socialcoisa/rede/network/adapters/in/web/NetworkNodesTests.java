@@ -268,6 +268,34 @@ class NetworkNodesTests {
 	 * configuração assinada. Sem esta rota, o runtime teria de confiar no que o painel disse, e
 	 * permissão deixaria de ser dado do Control Plane.
 	 */
+	/**
+	 * O disco livre medido no heartbeat chega ao nó pela config assinada. É o elo que fecha o
+	 * circuito: o Control Plane já recusa corpo quando o disco medido está abaixo do piso, e o nó
+	 * precisa do mesmo número para decidir cache e réplica localmente — senão ele grava contra um
+	 * teto declarado que pode não existir, enquanto o Control Plane acha que ele não tem espaço.
+	 */
+	@Test
+	void configLevaODiscoLivreMedidoNoHeartbeatAoNo() throws Exception {
+		String admin = adminToken();
+		String nodeId = newNode(admin);
+		activate(admin, nodeId);
+		String key = issueKey(admin, nodeId);
+
+		mockMvc
+			.perform(post("/network/nodes/heartbeat").header("X-Node-Id", nodeId).header("X-Node-Key", key)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0", "observed",
+					Map.of("cpuPercent", 5.0, "memoryMb", 1024, "runningTasks", 0, "diskFreeMb", 45056)))))
+			.andExpect(status().isOk());
+
+		mockMvc
+			.perform(get("/network/nodes/me/config").header("X-Node-Id", nodeId).header("X-Node-Key", key))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.limits.diskFreeMb").value(45056))
+			// O declarado continua o declarado: a medida não sobrescreve o contrato.
+			.andExpect(jsonPath("$.limits.diskMb").value(51200));
+	}
+
 	@Test
 	void configAssinadaDizOPerfilEOsLimitesDoNo() throws Exception {
 		String admin = adminToken();
@@ -279,13 +307,17 @@ class NetworkNodesTests {
 			.perform(get("/network/nodes/me/config").header("X-Node-Id", nodeId).header("X-Node-Key", key))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.nodeId").value(nodeId))
-			.andExpect(jsonPath("$.formatVersion").value(4))
+			.andExpect(jsonPath("$.formatVersion").value(5))
 			// Versão da permissão: 1 do enroll + 1 da aprovação feita acima.
 			.andExpect(jsonPath("$.configVersion").value(2))
 			.andExpect(jsonPath("$.profiles[0]").value("NODE_MEDIA"))
 			.andExpect(jsonPath("$.limits.cpuCores").value(4))
 			.andExpect(jsonPath("$.limits.memoryMb").value(8192))
 			.andExpect(jsonPath("$.limits.diskMb").value(51200))
+			// O disco medido vai junto do declarado (formato 5): o nó decide cache e réplica
+			// contra o que existe, não contra o que foi prometido. Aqui ele nunca mandou
+			// heartbeat com `diskFreeMb`, então a config diz "não medido" — ausente, não zero.
+			.andExpect(jsonPath("$.limits.diskFreeMb").doesNotExist())
 			.andExpect(jsonPath("$.limits.bandwidthMbps").value(100))
 			.andExpect(jsonPath("$.allowedTasks[0]").value("MEDIA_TRANSCODE"))
 			.andExpect(jsonPath("$.allowedTasks[1]").value("MEDIA_THUMBNAIL"))
