@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.HexFormat;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -101,12 +102,24 @@ class NetworkStorageTests {
 			.andReturn();
 		String key = objectMapper.readTree(keyResult.getResponse().getContentAsString()).get("apiKey").asString();
 
-		mockMvc.perform(post("/network/nodes/heartbeat").header("X-Node-Id", nodeId).header("X-Node-Key", key)
-			.contentType(MediaType.APPLICATION_JSON)
-			.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0", "observed",
-				Map.of("cpuPercent", 5.0, "memoryMb", 1024, "runningTasks", 0)))))
+		Node node = new Node(nodeId, key);
+		heartbeat(node, null);
+		return node;
+	}
+
+	/** Heartbeat com o disco livre medido; {@code null} = não reportou (runtime anterior a V321). */
+	private void heartbeat(Node node, Long diskFreeMb) throws Exception {
+		Map<String, Object> observed = new HashMap<>();
+		observed.put("cpuPercent", 5.0);
+		observed.put("memoryMb", 1024);
+		observed.put("runningTasks", 0);
+		if (diskFreeMb != null) {
+			observed.put("diskFreeMb", diskFreeMb);
+		}
+		mockMvc.perform(post("/network/nodes/heartbeat").header("X-Node-Id", node.id())
+			.header("X-Node-Key", node.key()).contentType(MediaType.APPLICATION_JSON)
+			.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0", "observed", observed))))
 			.andExpect(status().isOk());
-		return new Node(nodeId, key);
 	}
 
 	/** O objeto no catálogo, criado como o app criaria: direto no repositório do catálogo. */
@@ -197,6 +210,30 @@ class NetworkStorageTests {
 			.header("X-Node-Key", worker.key()).contentType(MediaType.APPLICATION_OCTET_STREAM).content(body("x")))
 			.andExpect(status().isForbidden())
 			.andExpect(jsonPath("$.code").value("NODE_PROFILE_REQUIRED"));
+	}
+
+	@Test
+	void o_disco_livre_reportado_no_heartbeat_decide_se_o_no_recebe_o_corpo() throws Exception {
+		String admin = adminToken();
+		Node store = node(admin, List.of("NODE_STORAGE"));
+		String bucket = "fotos-" + UUID.randomUUID().toString().substring(0, 8);
+		String id = catalogObject(bucket, "apertado.jpg");
+
+		// O nó MEDIU o disco e reportou menos que o piso. O `declared.diskMb` do enroll continua em
+		// 102400 MB — a promessa não muda; o que decide é a medida, como no escalonamento de tarefas.
+		heartbeat(store, 512L);
+
+		mockMvc.perform(put("/network/storage/objects/" + id).header("X-Node-Id", store.id())
+			.header("X-Node-Key", store.key()).contentType(MediaType.APPLICATION_OCTET_STREAM).content(body("abc")))
+			.andExpect(status().is(507))
+			.andExpect(jsonPath("$.code").value("STORAGE_NO_DISK_SPACE"));
+
+		// E com espaço reportado o mesmo objeto passa — senão o teste estaria provando só que a rota
+		// responde erro para qualquer coisa.
+		heartbeat(store, 102400L);
+		mockMvc.perform(put("/network/storage/objects/" + id).header("X-Node-Id", store.id())
+			.header("X-Node-Key", store.key()).contentType(MediaType.APPLICATION_OCTET_STREAM).content(body("abc")))
+			.andExpect(status().isOk());
 	}
 
 	@Test
