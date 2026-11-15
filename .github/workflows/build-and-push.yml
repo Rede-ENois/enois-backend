@@ -436,6 +436,16 @@ jobs:
           DIDIT_MONTHLY_VERIFICATION_LIMIT: "25"
           DIDIT_MONTHLY_BUDGET_USD: "10.00"
           DIDIT_AUTO_TOPUP: "false"
+          # Assinatura da config do nó da rede distribuída (doc 06, ADR de config assinada).
+          # Sem o PAR (privada PKCS#8/DER + pública X.509/DER, ambas base64), o backend sobe
+          # com signingKey vazio e toda resposta de /network/nodes/me/config sai
+          # `signed:false, publicKey:null` — o nó faz heartbeat mas RECUSA toda config, e o
+          # instalador nunca fecha o pinning. É o estado em que a QA ficou após o merge da
+          # rede distribuída: o par precisa existir como secrets QA_* ANTES do primeiro deploy
+          # deste workflow. A privada é identidade do Control Plane: fixa entre deploys (nunca
+          # regenerada no boot, senão todo nó pinneria uma chave nova a cada restart).
+          QA_REDE_NETWORK_CONFIG_SIGNING_KEY: ${{ secrets.QA_REDE_NETWORK_CONFIG_SIGNING_KEY }}
+          QA_REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY: ${{ secrets.QA_REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY }}
           # Epapo (videoconferência própria). Sem estas quatro variáveis o backend responde
           # 503 CALLS_NOT_CONFIGURED / MENTORING_ROOMS_NOT_CONFIGURED e nenhuma sala abre —
           # é o estado em que a QA estava, com a rota do gateway respondendo
@@ -679,6 +689,8 @@ jobs:
               "REDE_CALLS_EPAPO_GATEWAY_URL=${REDE_CALLS_EPAPO_GATEWAY_URL}",
               "REDE_CALLS_EPAPO_INTERNAL_TOKEN=${REDE_CALLS_EPAPO_INTERNAL_TOKEN}",
               "REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN=${REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN}",
+              "REDE_NETWORK_CONFIG_SIGNING_KEY=${QA_REDE_NETWORK_CONFIG_SIGNING_KEY}",
+              "REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY=${QA_REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY}",
               "TRUSTED_PROXY_IPS=154.12.230.97",
               "JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=60.0 -XX:+ExitOnOutOfMemoryError"
             ],
