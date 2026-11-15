@@ -1009,6 +1009,11 @@ jobs:
           # sobe com a rota interna desligada (503) e o passo de publicacao avisa, sem derrubar
           # o deploy. Precisa ser o mesmo valor nos dois lugares: no container e no passo do curl.
           REDE_RELEASE_NOTES_DEPLOY_TOKEN: ${{ secrets.REDE_RELEASE_NOTES_DEPLOY_TOKEN }}
+          # Assinatura da config do no da rede distribuida: par DE PRODUCAO, separado da QA por
+          # prefixo (como VAPID_*/DB_*). A privada e identidade do Control Plane de producao:
+          # fixa entre deploys; regenerar invalida o pino TOFU de todo no ja cadastrado.
+          REDE_NETWORK_CONFIG_SIGNING_KEY: ${{ secrets.PROD_REDE_NETWORK_CONFIG_SIGNING_KEY }}
+          REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY: ${{ secrets.PROD_REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY }}
         run: |
           set -euo pipefail
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
@@ -1157,6 +1162,10 @@ jobs:
                 # "Novidades" automaticas do deploy (issue #622): mesmo valor que o passo de
                 # publicacao usa. Vazio = rota interna desligada (fail-closed, 503).
                 REDE_RELEASE_NOTES_DEPLOY_TOKEN: "${REDE_RELEASE_NOTES_DEPLOY_TOKEN}"
+                # Config assinada da rede distribuida (par de PRODUCAO). Vazio = assinatura
+                # desligada; /network/nodes/me/config responde signed:false e o no recusa config.
+                REDE_NETWORK_CONFIG_SIGNING_KEY: "${REDE_NETWORK_CONFIG_SIGNING_KEY}"
+                REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY: "${REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY}"
           EOF
 
           echo "==> Montar payload JSON (python escapa o YAML certo pro body)"
