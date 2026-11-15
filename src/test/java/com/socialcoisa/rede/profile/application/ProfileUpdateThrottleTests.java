@@ -1,85 +1,81 @@
 package com.socialcoisa.rede.profile.application;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.time.Clock;
-import java.util.Optional;
+import java.time.Instant;
+import java.time.ZoneOffset;
 
 import org.junit.jupiter.api.Test;
 
-import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.shared.security.ActionThrottle;
-import com.socialcoisa.rede.shared.web.ApiException;
 
 /**
- * A atualizacao de perfil e uma acao de humano: o app so chama nos dialogos de edicao. Repeticao em
- * rajada so vem de script, e cada chamada carrega limpeza de HTML/CSS — o teto por conta precisa
- * responder antes de qualquer trabalho.
+ * O teto de edição de perfil é POR CONTA, não por rede.
+ *
+ * <p>No QA todas as telas passam pelo servidor do front: se o teto contasse a rede, a primeira
+ * conta a editar trinta vezes deixaria as outras sem editar — e a própria dona de uma conta ficava
+ * barrada pelo uso de outra. O que sustenta isso: a chave do {@link ActionThrottle} é o usuário, e
+ * nenhum limitador por IP cobre {@code PATCH /me/profile}.</p>
  */
 class ProfileUpdateThrottleTests {
 
-	private static final int TETO = 3;
+	private final Clock clock = Clock.fixed(Instant.parse("2026-11-15T12:00:00Z"), ZoneOffset.UTC);
 
-	private static ProfileService service() {
-		UserProfileRepository repository = mock(UserProfileRepository.class);
-		when(repository.findById(any())).thenReturn(Optional.empty());
-		return new ProfileService(repository, null, null, null, null, null, null, null, new ActionThrottle(),
-			mock(com.socialcoisa.rede.shared.application.CacheInvalidator.class), TETO, Clock.systemUTC());
-	}
-
-	private static UpdateProfileCommand comando() {
-		return new UpdateProfileCommand("u1", "Nome", null, null, null, null, null, null, null, null, null,
-			java.util.List.of(), java.util.List.of(), null, null, java.util.List.of(), null, null, null, null, null,
-			null, null, null, null, null, null);
-	}
-
-	private static ApiException recusa(ProfileService service) {
-		try {
-			service.update(comando());
-			return null;
+	@Test
+	void twoAccountsDoNotShareTheProfileBudget() {
+		ActionThrottle throttle = new ActionThrottle();
+		for (int i = 0; i < 30; i++) {
+			throttle.exigePermitido("profile-update", "user_a", 30, java.time.Duration.ofHours(1));
 		}
-		catch (ApiException recusa) {
-			return recusa;
-		}
+
+		assertThatCode(() -> throttle.exigePermitido("profile-update", "user_b", 30, java.time.Duration.ofHours(1)))
+			.doesNotThrowAnyException();
 	}
 
 	@Test
-	void rajadaRecebeTetoPorConta() {
-		ProfileService service = service();
-		for (int i = 0; i < TETO; i++) {
-			ApiException recusa = recusa(service);
-			// Passou pelo teto e seguiu: o usuario nao existe neste repositorio falso.
-			assertThat(recusa).isNotNull();
-			assertThat(recusa.code()).isEqualTo("USER_NOT_FOUND");
+	void theSameAccountStillHasItsCeiling() {
+		ActionThrottle throttle = new ActionThrottle();
+		for (int i = 0; i < 30; i++) {
+			throttle.exigePermitido("profile-update", "user_a", 30, java.time.Duration.ofHours(1));
 		}
 
-		ApiException rajada = recusa(service);
-		assertThat(rajada).isNotNull();
-		assertThat(rajada.code()).isEqualTo("ACTION_THROTTLED");
-		assertThat(rajada.status()).isEqualTo(429);
+		org.assertj.core.api.Assertions
+			.assertThatThrownBy(() -> throttle.exigePermitido("profile-update", "user_a", 30,
+				java.time.Duration.ofHours(1)))
+			.isInstanceOfSatisfying(com.socialcoisa.rede.shared.web.ApiException.class,
+				error -> org.assertj.core.api.Assertions.assertThat(error.code()).isEqualTo("ACTION_THROTTLED"));
 	}
 
 	@Test
-	void contasDiferentesNaoDividemOTeto() {
-		ProfileService service = service();
-		for (int i = 0; i < TETO; i++) {
-			recusa(service);
-		}
-		assertThat(recusa(service).code()).isEqualTo("ACTION_THROTTLED");
+	void theProfileServiceKeysTheThrottleByAccount() {
+		// O service recebe a conta do dono da sessão: a chave do teto é essa conta, nunca a rede de
+		// onde o pedido chegou.
+		var repository = mock(com.socialcoisa.rede.profile.application.port.out.UserProfileRepository.class);
+		when(repository.findById(anyString())).thenReturn(java.util.Optional.empty());
+		ActionThrottle throttle = mock(ActionThrottle.class);
+		ProfileService service = new ProfileService(repository,
+			mock(com.socialcoisa.rede.profile.application.ReputationService.class),
+			mock(org.springframework.beans.factory.ObjectProvider.class),
+			mock(com.socialcoisa.rede.age.application.port.out.ParentalLinkRepository.class),
+			mock(com.socialcoisa.rede.profile.application.port.out.SocialPostCountReader.class),
+			mock(com.socialcoisa.rede.shared.sanctions.SanctionGateReader.class),
+			mock(com.socialcoisa.rede.profile.application.port.out.OfficialBadgeReader.class),
+			mock(com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository.class),
+			throttle, mock(com.socialcoisa.rede.shared.application.CacheInvalidator.class), 30, clock);
 
-		ApiException outraConta = null;
-		try {
-			service.update(new UpdateProfileCommand("u2", null, null, null, null, null, null, null, null, null, null,
-				java.util.List.of(), java.util.List.of(), null, null, java.util.List.of(), null, null, null, null, null,
-				null, null, null, null, null, null));
-		}
-		catch (ApiException recusa) {
-			outraConta = recusa;
-		}
-		assertThat(outraConta).isNotNull();
-		assertThat(outraConta.code()).isEqualTo("USER_NOT_FOUND");
+		assertThatThrownBy(() -> service.update(new UpdateProfileCommand("user_a", null, null, null, null, null,
+			null, null, null, null, null, java.util.List.of(), java.util.List.of(), null, null,
+			java.util.List.of(), null, null, null, null, null, null, null, null, null, null, null)))
+			.isInstanceOf(com.socialcoisa.rede.shared.web.ApiException.class);
+
+		org.mockito.Mockito.verify(throttle).exigePermitido(org.mockito.ArgumentMatchers.eq("profile-update"),
+			org.mockito.ArgumentMatchers.eq("user_a"), org.mockito.ArgumentMatchers.eq(30),
+			org.mockito.ArgumentMatchers.any());
 	}
 }

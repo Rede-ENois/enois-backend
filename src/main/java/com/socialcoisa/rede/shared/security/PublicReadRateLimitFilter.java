@@ -70,7 +70,7 @@ public class PublicReadRateLimitFilter extends OncePerRequestFilter {
 		// que este teto existe para conter, não o usuário navegando entre perfis.
 		// Only a live session earns its own bucket, keyed by the user; anything else counts against the IP.
 		long now = clock.millis();
-		String ip = ipResolver.resolve(request);
+		String ip = ipResolver.resolveNetwork(request);
 		String ipKey = "ip:" + ip;
 		String key = ipKey;
 		String who = ipKey;
