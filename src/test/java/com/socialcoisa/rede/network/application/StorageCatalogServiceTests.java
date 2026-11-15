@@ -20,6 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NodeProfile;
@@ -27,10 +28,13 @@ import com.socialcoisa.rede.network.domain.NodeStatus;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StorageObjectState;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.socialcoisa.rede.shared.audit.AuditTrail;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -62,14 +66,22 @@ class StorageCatalogServiceTests {
 
 	private InMemoryCatalog catalog;
 	private AuditTrail audit;
+	private NetworkNodeRepository nodes;
 	private StorageCatalogService service;
 
 	@BeforeEach
 	void setUp() {
 		catalog = new InMemoryCatalog();
 		audit = mock(AuditTrail.class);
+		nodes = mock(NetworkNodeRepository.class);
+		when(nodes.findCandidates(any(), anyInt())).thenReturn(List.of());
 		service = new StorageCatalogService(catalog, audit, Clock.fixed(NOW, ZoneOffset.UTC), 10_000,
-			root.toString());
+			root.toString(), placement(1));
+	}
+
+	/** O serviço de colocação com o número de cópias dado; por padrão, uma só (o Control Plane). */
+	private StoragePlacementService placement(int replicas) {
+		return new StoragePlacementService(nodes, catalog, replicas, 90);
 	}
 
 	private static byte[] body(String text) {
@@ -187,7 +199,7 @@ class StorageCatalogServiceTests {
 	@Test
 	void acima_do_teto_o_corpo_e_recusado_e_o_objeto_fica_pendente() {
 		StorageCatalogService pequeno = new StorageCatalogService(catalog, audit,
-			Clock.fixed(NOW, ZoneOffset.UTC), 4, root.toString());
+			Clock.fixed(NOW, ZoneOffset.UTC), 4, root.toString(), placement(1));
 		StorageObject object = pequeno.beginUpload("user_1", "fotos", "grande.bin", null);
 
 		assertThatThrownBy(() -> pequeno.store(storageNode(), object.id(),
@@ -256,6 +268,23 @@ class StorageCatalogServiceTests {
 		@Override
 		public Optional<StorageObject> findById(String id) {
 			return byKey.values().stream().filter(o -> o.id().equals(id)).findFirst();
+		}
+
+		@Override
+		public Optional<StorageObject> findByDigest(String sha256) {
+			return byKey.values().stream()
+				.filter(o -> o.state() == StorageObjectState.STORED && sha256.equals(o.sha256()))
+				.findFirst();
+		}
+
+		@Override
+		public java.util.List<StorageObject> listAll(String afterKey, int limit) {
+			return byKey.values().stream()
+				.filter(o -> o.state() != StorageObjectState.DELETED)
+				.filter(o -> afterKey == null || o.key().compareTo(afterKey) >= 0)
+				.sorted(java.util.Comparator.comparing(StorageObject::bucket).thenComparing(StorageObject::key))
+				.limit(limit)
+				.toList();
 		}
 
 		@Override

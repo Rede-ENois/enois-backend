@@ -30,9 +30,19 @@ fail() { printf '[FAIL] %s\n' "$1" >&2; FAIL=$((FAIL + 1)); }
 
 # As duas migrações que este harness cobre, na ordem. Uma migração nova de storage entra aqui: o
 # harness acompanha o módulo, não uma lista fixa de arquivos que envelhece em silêncio.
-STORAGE_MIGRATIONS=(V319__network_storage_objects.sql V320__network_storage_placements.sql)
+STORAGE_MIGRATIONS=(V319__network_storage_objects.sql V320__network_storage_placements.sql
+  V323__network_storage_placement_pending_sha.sql)
 for migration in "${STORAGE_MIGRATIONS[@]}"; do
   [[ -f "$MIGRATIONS/$migration" ]] || { fail "migração ausente: $migration"; exit 1; }
+done
+
+# Toda migração V319..V329 do Storage gravada no repositório tem de estar nesta lista, senão uma
+# migração nova entra sem nunca passar pelo banco REAL — e é o banco real que recusa o que o H2
+# aceita. A lista é explícita (o harness escolhe o que aplica), então o guarda é a comparação.
+mapfile -t on_disk < <(ls "$MIGRATIONS" | grep -E '^V32[0-9]__.*storage' | sort)
+for file in "${on_disk[@]}"; do
+  [[ " ${STORAGE_MIGRATIONS[*]} " == *" $file "* ]] \
+    || fail "migração de Storage fora do harness: $file"
 done
 
 CONTAINER=""
@@ -203,6 +213,33 @@ index_exists network_storage_objects idx_network_storage_objects_bucket \
   && pass "índice de listagem por bucket presente" || fail "índice idx_network_storage_objects_bucket ausente"
 index_exists network_storage_placements idx_network_storage_placements_node \
   && pass "índice por nó presente" || fail "índice idx_network_storage_placements_node ausente"
+
+# V323: a designação de réplica (fase 3) existe antes de haver cópia, logo sha256 tem de aceitar
+# nulo. A prova não é ler o information_schema: é o banco REAL aceitar a linha de designação com
+# sha nulo e recusar a designação duplicada pela chave primária composta.
+nullable() {
+  local count
+  count=$(db -N -e "select count(*) from information_schema.columns
+    where table_schema = database() and table_name = '$1' and column_name = '$2' and is_nullable = 'YES'" \
+    2>/dev/null | tr -d '[:space:]')
+  [[ "$count" != "0" ]]
+}
+nullable network_storage_placements sha256 \
+  && pass "V323: sha256 aceita nulo (designação sem cópia)" || fail "V323: sha256 ainda NOT NULL — a designação não grava"
+
+if db -e "insert into network_storage_placements (object_id, replica, node_id, bytes, sha256, state, verified_at)
+  values ('sob_mig001', 2, 'nd_designado', 0, null, 'PENDING_REMOTE', now(3))" 2>/dev/null; then
+  pass "designação sem digest grava no banco real"
+else
+  fail "designação sem digest recusada pelo banco"
+fi
+
+if db -e "insert into network_storage_placements (object_id, replica, node_id, bytes, sha256, state, verified_at)
+  values ('sob_mig001', 2, 'nd_outro', 0, null, 'PENDING_REMOTE', now(3))" 2>/dev/null; then
+  fail "chave (object_id, replica) deixou de ser única"
+else
+  pass "designação duplicada recusada pela chave primária"
+fi
 
 printf '\nStorage migration: PASS %d | FAIL %d\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))

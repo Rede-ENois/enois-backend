@@ -20,6 +20,11 @@ public record StoragePlacement(String objectId, int replica, String nodeId, long
 	public enum State {
 		/** Cópia inteira e conferida na gravação. */
 		OK,
+		/**
+		 * O nó foi designado e ainda não confirmou a cópia (fase 3). Não conta para a durabilidade:
+		 * um objeto com réplica só em {@code PENDING_REMOTE} continua com uma cópia de verdade.
+		 */
+		PENDING_REMOTE,
 		/** O nó foi suspenso/revogado ou não respondeu: a cópia não é servível, mas o disco dele ainda tem os bytes. */
 		STALE,
 		/** A coleta já removeu a cópia do nó (ou confirmou que não havia mais nada lá). */

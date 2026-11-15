@@ -45,6 +45,13 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	private static final String SELECT_BY_ID = "select " + OBJECT_COLUMNS
 		+ " from network_storage_objects where id = ?";
 
+	/** Pelo digest: primeiro STORED (o caso comum), e a ordenação torna o resultado determinístico
+	 * quando dois objetos distintos compartilham o mesmo conteúdo. */
+	private static final String SELECT_BY_DIGEST = "select " + OBJECT_COLUMNS
+		+ " from network_storage_objects where sha256 = ? and state = 'STORED' order by created_at asc";
+
+
+
 	private static final String INSERT_PENDING = """
 		insert into network_storage_objects (id, bucket, object_key, content_type, state, created_by, created_at, updated_at)
 		values (?, ?, ?, ?, 'PENDING', ?, ?, ?)
@@ -70,6 +77,18 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	 * índice, "as próximas N depois desta chave" é uma leitura de árvore; OFFSET reescreveria as
 	 * linhas anteriores a cada página.
 	 */
+	/**
+	 * Catalogo inteiro em ordem total (bucket, chave). O cursor por chave e o do contrato: a mesma
+	 * chave em dois buckets aparece na mesma pagina, e como a ordem e total nenhuma linha se perde
+	 * entre paginas.
+	 */
+	private static final String LIST_ALL = """
+		select %s from network_storage_objects
+		where object_key >= ? and state <> 'DELETED'
+		order by bucket asc, object_key asc
+		limit ?
+		""".formatted(OBJECT_COLUMNS);
+
 	private static final String LIST = """
 		select %s from network_storage_objects
 		where bucket = ? and object_key like ? and object_key > ? and state <> 'DELETED'
@@ -86,11 +105,20 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 
 	private static final String PLACEMENT_COLUMNS = "object_id, replica, node_id, bytes, sha256, state, verified_at";
 
+	/**
+	 * A cópia deste objeto neste nó em QUALQUER estado ativo (OK ou PENDING_REMOTE) — a fase 3
+	 * precisa ver a designação que ela mesma criou, e filtrar por OK aqui devolvia "não designado"
+	 * para todo objeto recém-designado. GONE fica de fora: cópia coletada não volta sem designação
+	 * nova.
+	 */
+	private static final String SELECT_PLACEMENT_ON = "select " + PLACEMENT_COLUMNS
+		+ " from network_storage_placements where object_id = ? and node_id = ? and state <> 'GONE' "
+		+ "order by replica asc";
+
 	private static final String SELECT_PLACEMENTS = "select " + PLACEMENT_COLUMNS
 		+ " from network_storage_placements where object_id = ? order by replica asc";
 
-	private static final String SELECT_PLACEMENT_ON = "select " + PLACEMENT_COLUMNS
-		+ " from network_storage_placements where object_id = ? and node_id = ? and state = 'OK' order by replica asc";
+
 
 	private static final String SELECT_NODE_PLACEMENTS = "select " + PLACEMENT_COLUMNS
 		+ " from network_storage_placements where node_id = ? order by verified_at desc";
@@ -109,6 +137,11 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	@Override
 	public Optional<StorageObject> findById(String id) {
 		return jdbc.query(SELECT_BY_ID, OBJECT_MAPPER, id).stream().findFirst();
+	}
+
+	@Override
+	public Optional<StorageObject> findByDigest(String sha256) {
+		return jdbc.query(SELECT_BY_DIGEST, OBJECT_MAPPER, sha256).stream().findFirst();
 	}
 
 	@Override
@@ -139,6 +172,11 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		String pattern = escapeLike(prefix == null ? "" : prefix) + "%";
 		String after = afterKey == null ? "" : afterKey;
 		return jdbc.query(LIST, OBJECT_MAPPER, bucket, pattern, after, limit);
+	}
+
+	@Override
+	public List<StorageObject> listAll(String afterKey, int limit) {
+		return jdbc.query(LIST_ALL, OBJECT_MAPPER, afterKey == null ? "" : afterKey, limit);
 	}
 
 	@Override
