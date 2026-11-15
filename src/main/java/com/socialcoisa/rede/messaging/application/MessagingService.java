@@ -597,10 +597,6 @@ public class MessagingService {
 		return repository.findReactionsByMessageId(messageId);
 	}
 
-	/** Mensagens por ids em batch (reply previews). */
-	public List<Message> findMessagesByIds(java.util.Collection<String> messageIds) {
-		return repository.findMessagesByIds(messageIds);
-	}
 
 	/**
 	 * Resumo das reações de VÁRIAS mensagens (contagem por tipo + a reação de quem está vendo),

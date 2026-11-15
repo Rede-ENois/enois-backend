@@ -832,6 +832,32 @@ com a autorização de sempre. O aviso sai depois do commit, então o refetch j�
 puro (401), sem corpo. O registro de streams vive na memória da instância: correto enquanto a
 produção roda um backend só; uma segunda instância exige difusão entre instâncias antes de escalar.
 
+### Citações no histórico de mensagens
+
+`GET /api/conversations/{conversationId}/messages` retorna `{items, nextCursor}`. Cada item
+mantém `replyToId` e traz `replyTo: null` quando não há citação disponível. Quando presente,
+`replyTo` contém exatamente estes campos:
+
+```text
+{ id: string, from: string, text: string, e2e: boolean,
+  iv: string | null, encryptedKeys: string | null,
+  mediaIds: string[], mediaSpoiler: boolean }
+```
+
+- `id` e `from` identificam a mensagem original e sua conta remetente.
+- Com `e2e: true`, `text` é o ciphertext integral, sem truncamento. `iv` e `encryptedKeys`
+  preservam os valores da mensagem original. `encryptedKeys` é uma **string contendo JSON**,
+  como no item principal, não um objeto JSON aninhado. Mensagens cifradas antigas podem ter
+  `encryptedKeys: null` e continuar usando a chave da conversa no cliente.
+- Com `e2e: false`, a prévia preserva o contrato legado: textos acima de 100 caracteres
+  retornam os primeiros 97 seguidos de `...`; textos até 100 ficam intactos.
+- `mediaIds` e `mediaSpoiler` pertencem à mensagem citada, inclusive nas mensagens só com mídia.
+- A citação pode estar fora da página atual. Só é preenchida para mensagem da mesma conversa
+  que não foi apagada para quem consulta. Mensagem ausente ou indisponível deixa `replyTo: null`,
+  sem remover a resposta nem alterar seu `replyToId`.
+- A leitura continua exigindo sessão válida (`401` sem sessão) e participação na conversa
+  (`403` para não participante). O servidor não decifra o conteúdo.
+
 ---
 
 ## Chamadas de áudio e vídeo
