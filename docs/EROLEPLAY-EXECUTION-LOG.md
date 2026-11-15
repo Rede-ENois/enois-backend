@@ -387,3 +387,92 @@ fechado. Todas corrigidas no teste, sem afrouxar a regra de produção.
 - **Suíte inteira executada** (`./mvnw test`, 2026-11-14): **BUILD SUCCESS — 2767 testes, 0
   falhas, 0 erros, 1 skip** (o skip é pré-existente, em `KofAgentLiveChannelTests`, e não é deste
   módulo). Todas as 16 classes do Éroleplay passaram dentro dela, as 30 novas do chat inclusas.
+
+---
+
+## Rodada 6 — 2026-11-14 — Fase 6 (voz da mesa e estado vivo)
+
+### O que já existia e foi reaproveitado
+
+- `CallService` e o contrato de chamadas do Épapo (`/calls`, `join`, gateway de autorização): a
+  voz da mesa NÃO inventa sala — é uma quarta vinculação de chamada (`table_id` em
+  `call_sessions`), do mesmo jeito do encontro (V256) e do tópico (V250).
+- `CallAudience` como fonte única de autorização de entrada: quem decide se entra é a porta
+  `TableCallLookup` (implementada pelo lado do Éroleplay), não o controller.
+- `MessageStreamHub` (SSE): o aviso "a mesa mudou" sai pelo mesmo evento `campaign` do chat
+  (`CampaignChatChanged`); o estado nunca viaja no stream, o cliente recarrega por GET.
+- `NotificationService` com aviso contado por chamada (`call_live:<callId>`) — não repete a cada
+  clique; kind novo `CALL_TABLE_LIVE` mapeado em `NotificationCategory` (GROUPS), como exige o
+  teste varredor.
+- `IdempotencyApplicationService` em toda escrita; `TestAuthHelper` com data de nascimento já
+  declarada (o age gate de chamadas passa sem setup); `FakeEpapoGateway` para o laço completo.
+
+### O que foi implementado
+
+Domínio: `TableState` (ordem de fala com teto 20 e sem repetição, vez que exige presença na ordem
+quando a ordem existe, cena com teto 600; quem sai da ordem perde a vez) e `TableToken` (nome/
+cor hex/posição em células −9999..9999; token de personagem move o dono, cenário só o mestre).
+
+Aplicação: `TableStateService` (estado nasce vazio na primeira leitura; ordem/vez/cena do mestre;
+jogador assume e limpa a própria vez; tokens com dono ou do cenário; `openVoice` por porta
+`VoiceOpener` que devolve o id da chamada). `CallService.startTable`/`openOfTable` (chamada de
+mesa: GROUP, avisa uma vez, entra quem participa da campanha).
+
+Portas: `TableCallLookup` (calls → eroleplay) e `VoiceOpener` (eroleplay → calls) — a fronteira
+fica nas duas mãos, sem dependência cíclica de módulo.
+
+Persistência: `TableStateJpaEntity`/`TableTokenJpaEntity` + repositórios Spring Data +
+`saveTable` agora devolve a mesa gravada.
+
+API (`CampaignTableController`, tudo sob Idempotency-Key nas escritas): `GET /state`,
+`POST /state/turn-order`, `POST /state/turn`, `POST /state/turn/clear`, `POST /state/scene`,
+`GET /tokens`, `POST /tokens`, `POST /tokens/{id}/move`, `POST /tokens/{id}/remove`,
+`POST /voice`, `GET /voice/open`.
+
+Migração: `V297__eroleplay_table_state.sql` (aditiva, `if not exists`, InnoDB, charset/collation
+explícitos, sem FK) — `call_sessions.table_id` + índice, `roleplay_table_states` (uma linha por
+mesa; o id é o id da mesa) e `roleplay_table_tokens`.
+
+### Correções de causa-raiz feitas na rodada
+
+- `setTurn`/`clearTurn` exigiam mestre ANTES do ramo que permitiria o jogador assumir a própria
+  vez — o ramo era inalcançável. Agora a checagem de mestre é só para passar/limpar a vez de
+  OUTREM, e o teste de prova cobre o jogador assumindo sem ser mestre.
+- `CALL_TABLE_LIVE` não estava mapeado em `NotificationCategory` (cairia no fallback SYSTEM e
+  ignoraria a preferência de grupos da pessoa). Mapeado para GROUPS.
+- Coluna `turn_order` nasceu como `json` nativo: no H2 o driver gravava o texto como literal de
+  JSON e a leitura quebrava com `MismatchedInputException`. Virou `longtext` com JSON de
+  aplicação — a mesma convenção do `dice_json` (V295). A migração ainda não tinha sido aplicada
+  em ambiente nenhum (branch não empurrada), então a correção foi na migração nova.
+
+### Testes (números reais)
+
+- `TableStateTests` (5, domínio): estado nasce vazio com o id da mesa; ordem sem repetição e com
+  teto; quem sai da ordem perde a vez; vez exige presença na ordem (409 `NOT_IN_TURN_ORDER`);
+  cena com teto, aparada, vazia = nula.
+- `TableTokenTests` (4, domínio): nome e cor obrigatórios com formato próprio (400
+  `TOKEN_LABEL_REQUIRED`/`TOKEN_LABEL_TOO_LONG`/`TOKEN_COLOR_INVALID`); grid finito (400
+  `TOKEN_POSITION_INVALID`); mover preserva identidade; regra de quem move (dono × mestre ×
+  cenário).
+- `TableStateFlowTests` (5, ponta a ponta): estado nasce vazio e persiste ordem/vez/cena; jogador
+  assume a própria vez sem ser mestre e não entrega a vez de terceiro (403); mesmo Idempotency-Key
+  não regrava; ciclo completo de tokens (criar cenário/personagem, mover, negado, remover).
+- `TableSecurityTests` (5): sem sessão 401 nas três rotas; visitante 403 em leitura e escrita e a
+  mesa segue intocada; jogador não faz trabalho de mestre (ordem/cena/token de cenário 403); IDOR
+  — token da mesa A não é movido pela rota da mesa B (404 `TOKEN_NOT_FOUND`) e a lista de B não
+  vaza; mesa inexistente 404 `TABLE_NOT_FOUND`.
+- `TableVoiceFlowTests` (5, com gateway falso do Épapo): a chamada nasce com `tableId` e GROUP;
+  quem abriu entra pelo `join` de sempre (token assinado); segunda abertura devolve a MESMA
+  chamada; participante entra e visitante não (403) nem vê a sala; sala de uma mesa não vaza para
+  a outra; aviso `CALL_TABLE_LIVE` chega ao participante e não ao estranho, e ninguém é chamado
+  com `CALL_INCOMING`.
+- Escopo ampliado na árvore final (6 classes novas + `NotificationCategoryTests` 3/3 +
+  `AutomatedWritePathsTests` 2/2): **29 testes, 0 falhas, 0 erros** — nenhuma rota nova de mesa
+  aceitou escrita sem sessão.
+- **Suíte inteira executada** (`./mvnw test`, 2026-11-14, ~5h de relógio): **BUILD SUCCESS —
+  2796 testes, 0 falhas, 0 erros, 1 skip** (o skip é pré-existente e não é deste módulo). Todas
+  as classes do Éroleplay passaram dentro dela, as 24 novas da Fase 6 inclusas.
+
+### Próxima tarefa
+
+Fase 7 — World Builder (mundo, localizações, pistas, NPCs por campanha).

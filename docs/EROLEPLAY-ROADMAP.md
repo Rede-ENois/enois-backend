@@ -91,9 +91,14 @@ explícito, nunca com comportamento genérico inventado.
 
 ### Fase 6 — voz e mesa virtual
 
-- [ ] Referência `voiceRoomId` para sessão de chamada do Épapo (sem inventar sala nova)
-- [ ] Embutir a chamada com os contratos existentes de `/chamadas`
-- [ ] Estado de mesa (turnos, tokens, posições) no back-end
+- [x] Referência da chamada do Épapo na mesa (`table_id` em `call_sessions`, espelho do V256; a
+      mesa guarda o id da chamada — o room/token de entrada continua só pelo `join`)
+- [x] Embutir a chamada com os contratos existentes de `/chamadas` (`POST
+      /roleplay/campaigns/{c}/tables/{t}/voice` abre/devolve a chamada; entrada pelo `join` de
+      sempre; público de voz = campanha; aviso `CALL_TABLE_LIVE` aos participantes)
+- [x] Estado de mesa no back-end (`roleplay_table_states` + `roleplay_table_tokens`, V297): ordem
+      de fala, vez (mestre passa a qualquer um; jogador assume a própria), cena visível e tokens
+      (dono move o dele; cenário só o mestre)
 
 ### Fase 7 — World Builder
 
@@ -115,11 +120,11 @@ explícito, nunca com comportamento genérico inventado.
 
 ## 5. Próxima tarefa
 
-**Fase 6**: voz e mesa virtual.
+**Fase 7**: World Builder.
 
-Começo: a sessão de campanha ganha referência `voiceRoomId` para a chamada do Épapo (reusando os
-contratos existentes de `/chamadas`, sem inventar sala nova) e o estado da mesa (turnos, tokens,
-posições) vai para o backend. A campanha continua sendo a fronteira de autorização.
+Mundo da campanha (localizações, pistas, NPCs) com referência a partir das campanhas, seguindo o
+mesmo contrato das demais peças: aditivo, autorização na campanha (ver = participante, escrever =
+mestre), SSE pelo mesmo evento `campaign`, e nada de conteúdo de sistema comercial.
 
 ## 6. Critérios de encerramento do agendamento
 

@@ -115,6 +115,9 @@ public class MessageStreamHub {
 		if (change.eventId() != null) {
 			data.put("eventId", change.eventId());
 		}
+		if (change.tableId() != null) {
+			data.put("tableId", change.tableId());
+		}
 		deliver(change.userIds(), "call", Map.copyOf(data));
 	}
 
