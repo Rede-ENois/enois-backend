@@ -58,9 +58,11 @@ Levantamento feito no repositório do back-end (`/home/mel/Documentos/rede`) e n
 
 O `auth-gateway` do Épapo aceita apenas `callId` e `sessionId` e assina o JWT do Embedded
 Meeting. Portanto a mesa do Éroleplay **não** inventa uma sala de voz: ela referencia uma
-sessão de chamada já existente (`voiceRoomId`) e o front embute a chamada com os mesmos
-contratos já usados em `/chamadas`. Ampliar o Épapo para "sala permanente de campanha" é
-decisão de infraestrutura separada, fora do escopo do módulo.
+sessão de chamada já existente (o campo `voice_room_id` da mesa guarda o ID DA CHAMADA) e o
+front embute a chamada com os mesmos contratos já usados em `/chamadas`. A chamada nasce com o
+vínculo `table_id` (a quarta vinculação, ao lado de conversa, grupo e encontro), e a autorização
+de cada entrada é reavaliada pelo gateway de chamadas contra a campanha. Ampliar o Épapo para
+"sala permanente de campanha" é decisão de infraestrutura separada, fora do escopo do módulo.
 
 ## 3. Arquitetura
 
@@ -174,8 +176,11 @@ Regras: o corpo nunca carrega conteúdo da campanha; o `href` aponta para
 
 ### 5.2 Voz (Épapo)
 
-`voiceRoomId` referencia uma sessão de chamada do Épapo. O front embute a chamada pelos
-contratos existentes; nenhum endpoint de sala de voz novo é criado pelo Éroleplay nesta fase.
+`voice_room_id` da mesa guarda o id de uma sessão de chamada do Épapo. O front embute a chamada
+pelos contratos existentes (`POST /calls/{id}/join` assina e autoriza); nenhum endpoint de sala
+de voz novo é criado pelo Éroleplay. O público da voz é a campanha — a porta `TableCallLookup`
+(calls → eroleplay) responde quem participa, e o mesmo canal serve ao `CallAudience` do gateway
+de entrada. O aviso "a mesa está ao vivo" é o kind `CALL_TABLE_LIVE`, contado por chamada.
 
 ### 5.3 Superfície HTTP
 

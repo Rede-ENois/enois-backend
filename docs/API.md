@@ -1605,3 +1605,63 @@ de canal para configurar.
 | `CHAT_MESSAGE_NOT_FOUND` | 404 | Mensagem inexistente na campanha — ou não é do leitor |
 | `CHAT_MASTER_REQUIRED` | 403 | Fixar/desfixar sem ser o mestre |
 | `CAMPAIGN_NOT_A_MEMBER` | 403 | Ler o chat sem participar da campanha |
+
+## Éroleplay — voz e estado da mesa
+
+Prefixo do controller: `/roleplay/campaigns/{campaignId}/tables/{tableId}` (o gateway remove
+`/api`). Leitura exige participação na campanha; a mudança do estado vivo (ordem de fala, cena,
+tokens de cenário) é do mestre. Toda escrita exige `Idempotency-Key`.
+
+### Rotas
+
+| Método | Rota | Quem | O que faz |
+|---|---|---|---|
+| `GET` | `/state` | participante | O estado vivo: ordem de fala, vez, cena (nasce vazio na primeira leitura) |
+| `POST` | `/state/turn-order` | mestre | Grava a ordem de fala; corpo `{ "order": ["userId", …] }` (nulo limpa) |
+| `POST` | `/state/turn` | mestre para outrem; jogador para si | Passa a vez; corpo `{ "userId"? }` (nulo = si mesmo) |
+| `POST` | `/state/turn/clear` | mestre para outrem; jogador para a própria vez | Encerra a vez sem próximo |
+| `POST` | `/state/scene` | mestre | Grava a cena visível; corpo `{ "scene"? }` (nulo limpa; teto 600) |
+| `GET` | `/tokens` | participante | Os tokens posicionados na mesa |
+| `POST` | `/tokens` | mestre (cenário); dono (personagem) | Cria token; corpo `{ "ownerId"?, "label", "color", "posX", "posY" }` |
+| `POST` | `/tokens/{tokenId}/move` | dono; mestre | Move o token para outra célula `{ "posX", "posY" }` |
+| `POST` | `/tokens/{tokenId}/remove` | dono; mestre | Remove o token |
+| `POST` | `/voice` | participante | Abre (ou devolve) a chamada do Épapo da mesa; corpo `{ "kind"? }` (`AUDIO` padrão) |
+| `GET` | `/voice/open` | participante | A chamada aberta da mesa (corpo vazio quando ninguém está na voz) |
+
+### Regras
+
+- **A voz não tem sala própria.** `/voice` cria uma chamada do Épapo com vínculo `table_id`
+  (espelho do vínculo de encontro). A resposta é o `CallView` da mesa dentro da abertura — o
+  `voice/open` devolve a chamada "ao vivo", e a entrada é o `POST /calls/{id}/join` de sempre,
+  que assina o token e reavalia a autorização. A mesa guarda só o id da chamada.
+- **Público da voz é a campanha.** Participante entra; quem não participa leva 403 no join e não
+  vê a sala em `/voice/open`. Quem abre já está dentro; a segunda abertura devolve a MESMA
+  chamada.
+- **Aviso de mesa ao vivo:** os participantes (menos quem abriu) recebem `CALL_TABLE_LIVE`, uma
+  vez por chamada (contada por `call_live:<callId>`), na preferência de push de grupos. Ninguém
+  é chamado com `CALL_INCOMING`: a mesa avisa, não toca.
+- **Estado é vivo, histórico é imutável.** Estado (uma linha por mesa) reescreve a cada clique;
+  chat e rolagens continuam só acrescentando.
+- **Tempo real:** toda mudança publica o evento `campaign` do stream de mensagens; o corpo só
+  leva o id da campanha. O cliente recarrega por GET, que autoriza de novo.
+- **Tokens:** cor em hex (`RRGGBB`/`RRGGBBAA`, com ou sem `#`); posição em células de grid
+  (−9999 a 9999). Token sem `ownerId` é do cenário (só o mestre cria/move/remove); token com
+  `ownerId` é de personagem (o dono move e remove; o mestre, qualquer um). Token de outra mesa
+  não é encontrado pelas rotas desta (404).
+
+### Códigos de erro próprios
+
+| Código | HTTP | Quando |
+|---|---|---|
+| `TABLE_NOT_FOUND` | 404 | Mesa inexistente |
+| `NOT_CAMPAIGN_MEMBER` | 403 | Ler/participar sem participar da campanha |
+| `FORBIDDEN` | 403 | Escrever no estado sem ser mestre; mover token que não é seu |
+| `TURN_ORDER_TOO_LONG` | 400 | Ordem de fala acima de 20 pessoas |
+| `NOT_IN_TURN_ORDER` | 409 | Passar a vez a quem não está na ordem (quando a ordem existe) |
+| `SCENE_TOO_LONG` | 400 | Cena acima de 600 caracteres |
+| `TOKEN_LABEL_REQUIRED` | 400 | Token sem nome |
+| `TOKEN_LABEL_TOO_LONG` | 400 | Nome acima de 60 caracteres |
+| `TOKEN_COLOR_INVALID` | 400 | Cor fora do hex `RRGGBB`/`RRGGBBAA` |
+| `TOKEN_POSITION_INVALID` | 400 | Posição fora de −9999..9999 |
+| `TOKEN_NOT_FOUND` | 404 | Token inexistente nesta mesa |
+| `CALL_KIND_INVALID` | 400 | Tipo de chamada fora de `AUDIO`/`VIDEO` |

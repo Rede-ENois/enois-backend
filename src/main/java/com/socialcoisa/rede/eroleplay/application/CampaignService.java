@@ -347,6 +347,22 @@ public class CampaignService {
 		return repository.listSeats(tableId);
 	}
 
+	/**
+	 * A campanha da mesa, para as chamadas de voz: o serviço de chamadas pergunta "de quem é esta
+	 * mesa" e a resposta sai do banco, não da URL. Mesa inexistente é 404 aqui dentro.
+	 */
+	@Transactional(readOnly = true)
+	public String tableCampaignId(String tableId) {
+		return requireTable(tableId).campaignId();
+	}
+
+	/** Quem deve saber que a mesa está ao vivo: os participantes da campanha (a lista é só o aviso). */
+	@Transactional(readOnly = true)
+	public List<String> tableAudience(String tableId) {
+		GameTable table = requireTable(tableId);
+		return repository.listMembers(table.campaignId()).stream().map(CampaignMember::userId).toList();
+	}
+
 	private Campaign requireCampaign(String campaignId) {
 		return repository.findCampaignById(campaignId)
 			.orElseThrow(() -> new ApiException(404, "CAMPAIGN_NOT_FOUND", "Campanha nao encontrada."));

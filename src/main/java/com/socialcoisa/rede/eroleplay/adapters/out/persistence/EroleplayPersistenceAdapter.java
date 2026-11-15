@@ -56,6 +56,8 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 	private final SpringDataDiceRollJpaRepository rolls;
 	private final SpringDataRollRequestJpaRepository rollRequests;
 	private final SpringDataCampaignMessageJpaRepository messages;
+	private final SpringDataTableStateJpaRepository tableStates;
+	private final SpringDataTableTokenJpaRepository tableTokens;
 	private final ObjectMapper objectMapper;
 
 	EroleplayPersistenceAdapter(SpringDataCampaignJpaRepository campaigns,
@@ -64,7 +66,8 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 			SpringDataTableSeatJpaRepository seats, SpringDataSheetTemplateJpaRepository templates,
 			SpringDataCharacterSheetJpaRepository sheets, SpringDataDiceRollJpaRepository rolls,
 			SpringDataRollRequestJpaRepository rollRequests,
-			SpringDataCampaignMessageJpaRepository messages, ObjectMapper objectMapper) {
+			SpringDataCampaignMessageJpaRepository messages, SpringDataTableStateJpaRepository tableStates,
+			SpringDataTableTokenJpaRepository tableTokens, ObjectMapper objectMapper) {
 		this.campaigns = campaigns;
 		this.members = members;
 		this.requests = requests;
@@ -75,6 +78,8 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 		this.rolls = rolls;
 		this.rollRequests = rollRequests;
 		this.messages = messages;
+		this.tableStates = tableStates;
+		this.tableTokens = tableTokens;
 		this.objectMapper = objectMapper;
 	}
 
@@ -183,8 +188,8 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 	}
 
 	@Override
-	public void saveTable(GameTable table) {
-		tables.save(GameTableJpaEntity.fromDomain(table));
+	public GameTable saveTable(GameTable table) {
+		return tables.save(GameTableJpaEntity.fromDomain(table)).toDomain();
 	}
 
 	@Override
@@ -210,6 +215,39 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 	@Override
 	public List<TableSeat> listSeats(String tableId) {
 		return seats.findByTableIdOrderBySeatedAtAsc(tableId).stream().map(TableSeatJpaEntity::toDomain).toList();
+	}
+
+	@Override
+	public java.util.Optional<com.socialcoisa.rede.eroleplay.domain.TableState> findTableState(String tableId) {
+		return tableStates.findByTableId(tableId).map(entity -> entity.toDomain(objectMapper));
+	}
+
+	@Override
+	public com.socialcoisa.rede.eroleplay.domain.TableState saveTableState(
+			com.socialcoisa.rede.eroleplay.domain.TableState state) {
+		return tableStates.save(TableStateJpaEntity.from(state, objectMapper)).toDomain(objectMapper);
+	}
+
+	@Override
+	public java.util.Optional<com.socialcoisa.rede.eroleplay.domain.TableToken> findTableToken(String tokenId) {
+		return tableTokens.findById(tokenId).map(TableTokenJpaEntity::toDomain);
+	}
+
+	@Override
+	public java.util.List<com.socialcoisa.rede.eroleplay.domain.TableToken> listTableTokens(String tableId) {
+		return tableTokens.findByTableIdOrderByUpdatedAtDesc(tableId).stream().map(TableTokenJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public com.socialcoisa.rede.eroleplay.domain.TableToken saveTableToken(
+			com.socialcoisa.rede.eroleplay.domain.TableToken token) {
+		return tableTokens.save(TableTokenJpaEntity.from(token)).toDomain();
+	}
+
+	@Override
+	public void removeTableToken(String tokenId) {
+		tableTokens.deleteById(tokenId);
 	}
 
 	@Override

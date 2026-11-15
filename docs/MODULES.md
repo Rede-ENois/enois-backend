@@ -1918,5 +1918,24 @@ leva o id da campanha; o cliente recarrega pelo endpoint, que autoriza de novo. 
 é a lista de participantes cruzada com quem tem stream aberto, e só é respondida a quem passou
 pela fronteira da campanha.
 
+### A voz da mesa e o estado vivo
+
+A voz da mesa NÃO tem sala própria: abrir a voz cria (ou devolve) uma chamada do Épapo com
+vínculo `table_id` — a quarta vinculação, ao lado de conversa, grupo e encontro. A mesa guarda o
+ID DA CHAMADA, e só o id: o endereço da sala e o token de entrada saem apenas pelo `join` das
+chamadas, que reavalia a autorização a cada pedido. O público da voz é a campanha — participante
+entra; visitante leva 403 nem vê a sala "ao vivo". Quem abre já entra dentro, o grupo não toca
+ninguém (`CALL_TABLE_LIVE`, um aviso contado por chamada, mapeado na preferência de grupos), e a
+segunda abertura devolve a MESMA chamada — não nasce sala duplicada.
+
+O estado da mesa é o oposto do histórico (chat, rolagens): é VIVO, uma linha por mesa, reescrito
+a cada clique. Nele vivem a ordem de fala (teto 20, sem repetição), a vez, a cena visível e os
+tokens posicionados em células de grid. Quem manda no estado é o mestre; o jogador tem exatamente
+dois poderes: assumir e limpar a própria vez. Token de personagem move o dono; token de cenário
+(porta, baú, monstro) só o mestre. Leitura exige participação; escrita de ordem/cena exige
+mestria; a matriz de capacidades decide, como em todo o módulo. Toda mudança publica o mesmo
+evento `campaign` do chat — os participantes redesenharem a mesa recarregando por GET, que
+autoriza de novo.
+
 Contrato completo em [`EROLEPLAY-RFC.md`](EROLEPLAY-RFC.md); estado e próxima tarefa em
 [`EROLEPLAY-ROADMAP.md`](EROLEPLAY-ROADMAP.md).

@@ -74,13 +74,27 @@ public interface EroleplayRepository {
 	 */
 	int markRequestDecided(String requestId, CampaignJoinRequestStatus status, String actorId, Instant now);
 
-	void saveTable(GameTable table);
+	GameTable saveTable(GameTable table);
 
 	Optional<GameTable> findTableById(String id);
 
 	List<GameTable> listTables(String campaignId);
 
 	void saveSeat(TableSeat seat);
+
+	/** O estado vivo da mesa (um por mesa); vazio quando a mesa ainda não começou. */
+	java.util.Optional<com.socialcoisa.rede.eroleplay.domain.TableState> findTableState(String tableId);
+
+	com.socialcoisa.rede.eroleplay.domain.TableState saveTableState(
+			com.socialcoisa.rede.eroleplay.domain.TableState state);
+
+	java.util.Optional<com.socialcoisa.rede.eroleplay.domain.TableToken> findTableToken(String tokenId);
+
+	java.util.List<com.socialcoisa.rede.eroleplay.domain.TableToken> listTableTokens(String tableId);
+
+	com.socialcoisa.rede.eroleplay.domain.TableToken saveTableToken(com.socialcoisa.rede.eroleplay.domain.TableToken token);
+
+	void removeTableToken(String tokenId);
 
 	Optional<TableSeat> findSeat(String tableId, String userId);
 

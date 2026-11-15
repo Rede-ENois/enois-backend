@@ -48,6 +48,9 @@ public interface CallRepository {
 	/** Chamada "ao vivo" (aberta) do encontro. */
 	Optional<CallSession> findOpenByEvent(String eventId);
 
+	/** Chamada "ao vivo" (aberta) da mesa do Éroleplay. */
+	Optional<CallSession> findOpenByTable(String tableId);
+
 	/** Chamadas abertas em que a pessoa está dentro ou foi convidada — para retomar a tela. */
 	List<CallSession> findOpenByParticipant(String userId);
 
