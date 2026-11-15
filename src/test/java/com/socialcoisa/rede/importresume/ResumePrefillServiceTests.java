@@ -91,7 +91,7 @@ class ResumePrefillServiceTests {
 			null, "Vaga backend Java.", List.of("Java"),
 			List.of(JobApplicationField.create("f1", "job-1", "LinkedIn", JobApplicationField.FieldType.LINK,
 				false, 0)),
-			"autor-1", null, Instant.now());
+			"autor-1", null, Instant.now(), null);
 		when(jobs.findById("job-1")).thenReturn(Optional.of(job));
 		String resume = "Ana Souza\nana@mail.com\nhttps://www.linkedin.com/in/ana\n"
 			+ "texto corrido suficiente para passar do minimo de trinta caracteres aqui.";

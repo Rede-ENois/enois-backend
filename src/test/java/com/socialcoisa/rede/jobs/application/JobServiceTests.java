@@ -138,7 +138,7 @@ class JobServiceTests {
 
 		Job job = service.create("Pessoa Desenvolvedora", "Acme", null, "Remoto", "CLT", "PLENO",
 			"R$ 8.000 – R$ 12.000", "brl", "1500", null, "MONTH", "Vaga de teste com valor.",
-			List.of("Java"), List.of(), USER, true, null);
+			List.of("Java"), List.of(), USER, true, null, null);
 
 		assertThat(job.salary()).isEqualTo("8.000 – 12.000");
 		assertThat(job.currency()).isEqualTo("BRL");
@@ -151,7 +151,7 @@ class JobServiceTests {
 
 		Job job = service.create("Backend Engineer", "Acme", null, "Remote", "PJ", "SENIOR",
 			"US$ 90,000/year", "usd", "90000", null, "YEAR", "Vaga de teste com valor.",
-			List.of("Go"), List.of(), USER, true, null);
+			List.of("Go"), List.of(), USER, true, null, null);
 
 		assertThat(job.salary()).isEqualTo("90,000/year");
 		assertThat(job.currency()).isEqualTo("USD");
@@ -162,7 +162,7 @@ class JobServiceTests {
 		when(reputationService.reputationOf(USER)).thenReturn(300);
 
 		Job job = service.create("Suporte", "Acme", null, "São Paulo", "CLT", "JUNIOR", null, null,
-			"1500", null, "MONTH", "Vaga de teste com valor.", List.of(), List.of(), USER, true, null);
+			"1500", null, "MONTH", "Vaga de teste com valor.", List.of(), List.of(), USER, true, null, null);
 
 		assertThat(job.currency()).isEqualTo("BRL");
 		assertThat(job.salary()).isNull();
@@ -173,7 +173,7 @@ class JobServiceTests {
 		when(reputationService.reputationOf(USER)).thenReturn(300);
 
 		assertThatThrownBy(() -> service.create("Vaga", "Acme", null, null, "CLT", "PLENO", null, "BRL",
-			"1500", null, "MONTH", "Vaga de teste com valor.", List.of(), List.of(), USER, false, null))
+			"1500", null, "MONTH", "Vaga de teste com valor.", List.of(), List.of(), USER, false, null, null))
 			.isInstanceOf(ApiException.class)
 			.hasMessageContaining("regras da comunidade");
 	}
@@ -183,7 +183,7 @@ class JobServiceTests {
 		when(reputationService.reputationOf(USER)).thenReturn(300);
 
 		assertThatThrownBy(() -> service.create("Vaga", "Acme", null, null, "CLT", "PLENO", "1000", "BTC",
-			"1500", null, "MONTH", "Vaga de teste com valor.", List.of(), List.of(), USER, true, null))
+			"1500", null, "MONTH", "Vaga de teste com valor.", List.of(), List.of(), USER, true, null, null))
 			.isInstanceOf(ApiException.class)
 			.hasMessageContaining("Moeda nao suportada");
 	}
@@ -193,7 +193,7 @@ class JobServiceTests {
 		when(reputationService.reputationOf(USER)).thenReturn(JobService.MIN_REPUTATION_TO_CREATE_JOB);
 
 		assertThatThrownBy(() -> service.create("Vaga", "Acme", null, null, "CLT", "PLENO", null, "BRL",
-			"1500", null, "MONTH", "Vaga de teste com valor.", List.of(), List.of(), USER, true, null))
+			"1500", null, "MONTH", "Vaga de teste com valor.", List.of(), List.of(), USER, true, null, null))
 			.isInstanceOf(ApiException.class)
 			.hasMessageContaining("reputacao");
 	}
@@ -204,7 +204,7 @@ class JobServiceTests {
 		java.time.Instant now = java.time.Instant.now();
 		return Job.create("job_1", "Backend", "Acme", null, "Remoto", "CLT", "SENIOR", null, "BRL",
 			new java.math.BigDecimal("1500"), null, "MONTH", "Vaga de teste com valor.",
-			List.of("Java"), List.of(), USER, now, now);
+			List.of("Java"), List.of(), USER, now, now, null);
 	}
 
 	@Test

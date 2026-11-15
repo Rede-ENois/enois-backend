@@ -96,6 +96,10 @@ class JobJpaEntity {
 	@Column(name = "closed_at")
 	private Instant closedAt;
 
+	/** Prazo declarado para candidaturas (nulo = sem prazo). */
+	@Column(name = "application_deadline")
+	private Instant applicationDeadline;
+
 	@Column(name = "company_id")
 	private String companyId;
 
@@ -127,6 +131,7 @@ class JobJpaEntity {
 		e.updatedAt = job.updatedAt();
 		e.status = job.status();
 		e.closedAt = job.closedAt();
+		e.applicationDeadline = job.applicationDeadline();
 		e.companyId = job.companyId();
 		return e;
 	}
@@ -135,7 +140,7 @@ class JobJpaEntity {
 		return Job.restore(id, title, company, logo, location, type, level, salary, currency, salaryMin,
 			salaryMax, salaryPeriod, description, skills,
 			applicationFields.stream().map(JobApplicationFieldEmbeddable::toDomain).toList(), postedBy,
-			communityAgreedAt, status, closedAt, postedAt, updatedAt, companyId);
+			communityAgreedAt, status, closedAt, postedAt, updatedAt, companyId, applicationDeadline);
 	}
 
 }

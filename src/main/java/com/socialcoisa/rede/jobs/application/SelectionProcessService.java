@@ -17,9 +17,11 @@ import org.springframework.transaction.annotation.Transactional;
 import com.socialcoisa.rede.companies.domain.RecruitmentCapability;
 import com.socialcoisa.rede.jobs.application.port.out.JobRepository;
 import com.socialcoisa.rede.jobs.application.port.out.SelectionProcessRepository;
+import com.socialcoisa.rede.jobs.application.port.out.SelectionProcessTemplateRepository;
 import com.socialcoisa.rede.jobs.domain.Job;
 import com.socialcoisa.rede.jobs.domain.JobApplication;
 import com.socialcoisa.rede.jobs.domain.JobApplicationStatus;
+import com.socialcoisa.rede.jobs.domain.SelectionProcessTemplate;
 import com.socialcoisa.rede.jobs.domain.SelectionStage;
 import com.socialcoisa.rede.jobs.domain.StageMovement;
 import com.socialcoisa.rede.jobs.domain.StageMovementKind;
@@ -44,13 +46,15 @@ public class SelectionProcessService {
 
 	private final JobRepository jobs;
 	private final SelectionProcessRepository pipeline;
+	private final SelectionProcessTemplateRepository templates;
 	private final JobCommandAuthorization command;
 	private final Clock clock;
 
 	public SelectionProcessService(JobRepository jobs, SelectionProcessRepository pipeline,
-			JobCommandAuthorization command, Clock clock) {
+			SelectionProcessTemplateRepository templates, JobCommandAuthorization command, Clock clock) {
 		this.jobs = jobs;
 		this.pipeline = pipeline;
+		this.templates = templates;
 		this.command = command;
 		this.clock = clock;
 	}
@@ -292,6 +296,66 @@ public class SelectionProcessService {
 		if (!resequenced.equals(remaining)) {
 			pipeline.updateStagePositions(resequenced);
 		}
+	}
+
+	// ---------- Modelos de processo seletivo ----------
+
+	/**
+	 * Biblioteca pessoal: cada recrutador guarda os fluxos que usa e aplica por cópia na vaga.
+	 * Modelo é do dono (não da página): a vaga que recebe a cópia passa pelo gate normal de
+	 * CONFIGURE_PROCESS, então quem aplica precisa poder configurar AQUELA vaga.
+	 */
+	@Transactional
+	public SelectionProcessTemplate createTemplate(String requesterId, String name, List<String> stageNames) {
+		String cleanName = name == null ? "" : name.trim();
+		templates.findByOwner(requesterId, 100).stream()
+			.filter(existing -> existing.name().equalsIgnoreCase(cleanName))
+			.findFirst()
+			.ifPresent(existing -> {
+				throw new ApiException(409, "TEMPLATE_NAME_TAKEN", "Você já tem um modelo com esse nome.");
+			});
+		SelectionProcessTemplate template = SelectionProcessTemplate.create(
+			"ptmpl_" + java.util.UUID.randomUUID().toString().replace("-", ""), requesterId, cleanName,
+			stageNames, clock.instant());
+		return templates.save(template);
+	}
+
+	public List<SelectionProcessTemplate> templatesOf(String requesterId, int limit) {
+		return templates.findByOwner(requesterId, limit);
+	}
+
+	@Transactional
+	public void deleteTemplate(String templateId, String requesterId) {
+		SelectionProcessTemplate template = templates.findById(templateId)
+			.orElseThrow(() -> new ApiException(404, "TEMPLATE_NOT_FOUND", "Modelo não encontrado."));
+		if (!template.ownerId().equals(requesterId)) {
+			throw new ApiException(403, "NOT_OWNER", "Este modelo não é seu.");
+		}
+		templates.deleteById(templateId);
+	}
+
+	/**
+	 * Aplica o modelo numa vaga: semeia as etapas NA ORDEM do modelo. Vaga que já tem fluxo
+	 * recebe 409 — aplicar por cima misturaria dois fluxos; quem quer trocar apaga as etapas
+	 * vazias primeiro (a regra de etapa ocupada protege quem já está no pipeline).
+	 */
+	@Transactional
+	public List<SelectionStage> applyTemplate(String jobId, String requesterId, String templateId) {
+		requireCommander(jobId, requesterId, RecruitmentCapability.CONFIGURE_PROCESS);
+		SelectionProcessTemplate template = templates.findById(templateId)
+			.orElseThrow(() -> new ApiException(404, "TEMPLATE_NOT_FOUND", "Modelo não encontrado."));
+		List<SelectionStage> existing = pipeline.stagesOf(jobId);
+		if (!existing.isEmpty()) {
+			throw new ApiException(409, "PIPELINE_ALREADY_CONFIGURED",
+				"Esta vaga já tem fluxo de etapas. Apague as etapas vazias antes de aplicar um modelo.");
+		}
+		int position = 0;
+		for (String stageName : template.stageNames()) {
+			pipeline.saveStage(SelectionStage.create(
+				"stage_" + java.util.UUID.randomUUID().toString().replace("-", ""), jobId, stageName,
+				position++, clock.instant()));
+		}
+		return pipeline.stagesOf(jobId);
 	}
 
 }

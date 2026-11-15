@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.jobs.application.JobService;
@@ -240,6 +241,30 @@ class SelectionProcessController {
 			return new NoteView(note.id() == null ? null : String.valueOf(note.id()),
 				String.valueOf(note.applicationId()), note.authorId(), note.body(),
 				note.createdAt().toString());
+		}
+	}
+
+	// ---------- Modelos de processo seletivo ----------
+
+	record ApplyTemplateRequest(String templateId) {
+	}
+
+	/** Aplica o modelo na vaga: semeia as etapas na ordem. Vaga com fluxo já configurado → 409. */
+	@PostMapping("/templates/apply")
+	List<StageView> applyTemplate(@PathVariable String jobId, @RequestBody ApplyTemplateRequest body,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return process.applyTemplate(jobId, user.id().value(), body.templateId()).stream()
+			.map(StageView::of)
+			.toList();
+	}
+
+	/** O modelo como a API devolve (compartilhado com o hub, que lista a biblioteca). */
+	record TemplateView(String id, String name, List<String> stages, String createdAt, String updatedAt) {
+
+		static TemplateView of(com.socialcoisa.rede.jobs.domain.SelectionProcessTemplate template) {
+			return new TemplateView(template.id(), template.name(), template.stageNames(),
+				template.createdAt().toString(), template.updatedAt().toString());
 		}
 	}
 
