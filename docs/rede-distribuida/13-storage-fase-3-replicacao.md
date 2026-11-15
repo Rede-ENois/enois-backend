@@ -42,7 +42,7 @@ módulo. Nó com disco medido abaixo do piso **e** do tamanho do objeto não rec
 
 | item | por que não |
 |---|---|
-| **healing automático** | reparar exige escolher nó e reenviar o corpo — custo de disco e banda de quem contribui. A varredura **aponta** a lacuna; a decisão de reparar é de quem opera. Automático, um objeto pequeno com bugs de placement geraria tráfego em anel |
+| **healing automático (agendado)** | o healing **existe** como ato de operador — `POST /admin/network/nodes/storage/heal` designa a lacuna a nós (ver §5.1). O que não existe é agendador: designar gera tráfego de corpo, e o custo de disco e banda é de quem contribui |
 | **scrubbing que relê o corpo de OUTRO nó** | o Control Plane não inicia conexão para o nó (NAT e a proibição de cadastrar endereço). O que existe hoje é a releitura do que está **neste** CP: `GET /admin/network/nodes/storage/scrub?readBodies=true` compara tamanho e sha-256 do arquivo com o medido e devolve `divergent[]` — ver §4.1 |
 | **domínio de falha maior que o nó** | o cadastro não tem host físico, rack nem operadora. Derivar isso de região/cidade seria deduzir topologia. "Mesmo nó" é o que o dado permite afirmar |
 | **erasure coding** | da fase 4 do brief (§ distribuição inteligente), não da 3 |
@@ -85,3 +85,39 @@ digest calculado) e corpo intacto (relido, não reportado).
 Provas: `StorageScrubberReadBackTests` 4 e `NetworkStorageReplicationTests` 7 (1 novo pela rota
 admin). Mutações: aceitar divergência, comparar só o tamanho e ignorar corpo ausente — cada uma
 derruba exatamente um teste.
+
+## 5.1 Healing: a lacuna que a varredura aponta tem quem a feche
+
+Até aqui a varredura **apontava** a lacuna e nada a fechava. O defeito era de distância entre dois
+serviços: `designReplicas` só roda **no instante do upload**. Objeto que ficou sem cópia — cluster
+sem nó de armazenamento vivo naquele momento, réplica confirmada `STALE`, ou designação que nunca
+foi puxada — ficava `underReplicated` **para sempre**, visível em `/storage/scrub` e sem chamador.
+
+`POST /admin/network/nodes/storage/heal?bucket=&maxObjects=100&dryRun=false` (admin) lê a **mesma**
+varredura do operador e, para cada lacuna, grava a designação `PENDING_REMOTE` num nó escolhido.
+O nó continua sendo quem busca o corpo (`GET /network/storage/objects/{id}`), quem grava e quem
+confirma (`POST .../replica`) — nada disso mudou.
+
+| o que o healing não faz | por quê |
+|---|---|
+| reler corpo de nó | a origem confiável é a réplica 0 ou uma `OK`; uma `STALE` pode ter conteúdo trocado. `staleCopiesIgnored`/`STALE_COPIES_ONLY` separa "não há cópia boa" de "não há nó" — são pedidos de cura diferentes |
+| escolher réplica | a diversidade de região é a de `StoragePlacementService`, a mesma do upload. Duas regras de colocação seriam duas chances de acreditar numa redundância inexistente |
+| marcar a cópia como `OK` | a única prova de que a cópia existe é a confirmação do nó com os bytes/sha que ele mediu. Um healer que declarasse pronto seria a mesma mentira que o contrato evita |
+| rodar sozinho | cada designação é tráfego de corpo. `dryRun=true` mostra o que seria feito sem gravar |
+
+Motivos de `skipped[]`: `ALREADY_DESIGNATED` (a lacuna já tem dono esperando confirmação — designar
+de novo só reinicia o relógio do retry), `NO_CANDIDATE` (nenhum nó livre com perfil, disco e região),
+`STALE_COPIES_ONLY` (as cópias restantes não conferem) e `BODY_MISSING` (o objeto foi lapidado entre
+a varredura e a cura, ou o CP não tem o arquivo).
+
+O número da réplica continua depois do **maior existente**, nunca do 1: a chave é
+`(object_id, replica)`, e reaproveitar um número sobrescreveria a cópia antiga de outro nó.
+
+Cada objeto é uma transação própria: um nó que entra em quarentena no meio do lote não desfaz as
+designações anteriores, que já são válidas.
+
+**Verificação:** `StorageHealerTests` 8 e `NetworkStorageHealTests` 4 (caminho real: objeto com
+lacuna → `scrub` acha → healing designa → nó confirma → `scrub` para de acusar). Mutações: `dryRun`
+gravando, réplica reaproveitando o número 1, `STALE` contando como origem, designar mais que a
+lacuna, pendente sendo reescolhida e designar já como `OK` — cada uma derruba o seu, e a de `OK`
+derruba 2 no teste de rota.
