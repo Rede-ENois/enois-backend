@@ -445,7 +445,7 @@ class NetworkConfigServiceTests {
 
 		@Override
 		public void touch(String id, String runtimeVersion, Double cpuPercent, Integer memoryMb,
-				Integer runningTasks, Instant now) {
+				Integer runningTasks, Long diskFreeMb, Instant now) {
 			throw new AssertionError("nao usado");
 		}
 

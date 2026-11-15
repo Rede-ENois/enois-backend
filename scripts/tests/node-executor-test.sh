@@ -10,7 +10,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 for tool in bash head sed grep dirname pwd mkdir stat chmod awk printf cat rm mktemp wc sha256sum tr \
-            openssl sort paste base64 date mv; do
+            openssl sort paste base64 date mv df; do
   location="$(command -v "$tool")"
   ln -s "$location" "$TMP/$tool" 2>/dev/null || true
 done
@@ -108,6 +108,9 @@ MOCK
 # Um ciclo só: o loop infinito roda sob timeout curto do sleep stub.
 make_command() {
   local name="$1" contents="$2"
+  # `>` segue link simbólico: se o tool já foi ligado em $TMP, escrever no destino escreveria no
+  # binário REAL do sistema. Remover o link primeiro garante que o stub é um arquivo novo aqui.
+  rm -f "$TMP/$name"
   printf '%s\n' '#!/bin/bash' "$contents" > "$TMP/$name"
   chmod +x "$TMP/$name"
 }
@@ -378,6 +381,22 @@ assert_contains 'heartbeat reporta o termo aceito' "$(cat "$TMP/curl-calls")" '"
 rm -f "$NH_TERM/term"
 out=$(run_custom "$NH_TERM")
 assert_not_contains 'nó sem termo aceito não inventa termo no heartbeat' "$(cat "$TMP/curl-calls")" 'observedTerm'
+
+# ------------------------------------------------- cenário 5g: o disco livre medido sobe no heartbeat
+# O `declaredDiskMb` do enroll é o que o participante PROMETEU; o que existe de fato só o nó sabe.
+# Um nó que perdeu disco continua sendo tratado como se tivesse tudo que prometeu enquanto o
+# Control Plane não receber a medida.
+out=$(run_custom "$NH_TERM")
+assert_contains 'heartbeat manda o disco livre medido' "$(cat "$TMP/curl-calls")" '"diskFreeMb":'
+
+# E não manda ZERO quando não conseguiu medir: nulo é "não reportado", zero é "sem espaço". O
+# harness roda com um `df` stub que falha para provar que o campo simplesmente não sai.
+make_command df 'exit 1'
+out=$(run_custom "$NH_TERM")
+assert_not_contains 'sem medida de disco, o campo não é inventado' "$(cat "$TMP/curl-calls")" '"diskFreeMb"'
+make_command df 'printf "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 100 50 50 50%% /\n"'
+out=$(run_custom "$NH_TERM")
+assert_contains 'df cmd disponível => disco livre medido' "$(cat "$TMP/curl-calls")" '"diskFreeMb":'
 
 # ------------------------------------------------- cenário 6: credencial nunca em log
 out=$(run_one_cycle "$TASK_ASSIGNED")

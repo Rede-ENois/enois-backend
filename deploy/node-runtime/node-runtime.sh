@@ -1049,9 +1049,19 @@ exec_api_request() {
 
 cycle() {
   # 1. heartbeat: estado, modo e se pode pedir tarefa.
-  local hb mode accept_tasks observed_cpu observed_mem observed_term term_part
+  local hb mode accept_tasks observed_cpu observed_mem observed_disk observed_term term_part disk_part
   observed_cpu=$(awk 'NR==1 {printf "%.1f", $1}' /proc/loadavg 2>/dev/null || echo 0)
   observed_mem=$(awk '/MemAvailable/ {printf "%d", ($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+  # Disco livre MEDIDO no diretório de estado do nó — é este que o Control Plane mostra ao lado do
+  # `declared_disk_mb` do enroll e que a capacidade do Storage leva em conta. O declarado é o que o
+  # participante prometeu; este é o que existe. Sem a medida, um nó que perdeu disco continua sendo
+  # tratado como se tivesse tudo que prometeu.
+  #
+  # Vazio quando o `df` não responde: no contrato, nulo é "não reportado", e mandar 0 diria "sem
+  # espaço" — o oposto do que se sabe. `-P` dá uma linha por sistema de arquivos, sem quebra de
+  # linha para nomes com espaço.
+  observed_disk=$(df -P -m "$NODE_HOME" 2>/dev/null | awk 'NR==2 {print $4}')
+  [[ "$observed_disk" =~ ^[0-9]+$ ]] || observed_disk=''
   # O termo aceito vai no heartbeat (doc 06 §4, regra 5): é assim que o Control Plane
   # descobre que este nó viu um controlador de mando maior que o dele. Nó que ainda não
   # aceitou config nenhuma não reporta termo — zero afirmaria "vi o termo zero", que é
@@ -1060,8 +1070,10 @@ cycle() {
   [[ -s "$NODE_HOME/term" ]] && observed_term=$(head -n 1 "$NODE_HOME/term")
   term_part=''
   [[ -n "$observed_term" ]] && term_part=",\"observedTerm\":$observed_term"
+  disk_part=''
+  [[ -n "$observed_disk" ]] && disk_part=",\"diskFreeMb\":$observed_disk"
   hb=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
-    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"memoryMb\":$observed_mem,\"runningTasks\":0}$term_part}" \
+    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"memoryMb\":$observed_mem,\"runningTasks\":0$disk_part}$term_part}" \
     "$CONTROL_PLANE/network/nodes/heartbeat") || { printf '[executor] heartbeat falhou\n' >&2; return 1; }
   mode=$(json_field "$hb" mode)
   accept_tasks=$(grep -q '"acceptTasks":true' <<<"$hb" && echo true || echo false)

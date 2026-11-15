@@ -55,6 +55,9 @@ class NetworkNodeJpaEntity {
 	@Column(name = "observed_latency_ms")
 	private Integer observedLatencyMs;
 
+	@Column(name = "observed_disk_free_mb")
+	private Long observedDiskFreeMb;
+
 	@Column(name = "consecutive_failures", nullable = false)
 	private int consecutiveFailures;
 
@@ -125,7 +128,8 @@ class NetworkNodeJpaEntity {
 		return new NetworkNode(id, displayName, ownerUserId, NodeStatus.valueOf(status),
 			NodeProfilesCsv.parse(profiles), region, country, runtimeVersion, lastSeenAt, declaredCpuCores,
 			declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent, observedMemoryMb,
-			observedRunningTasks, observedLatencyMs, consecutiveFailures, quarantinedUntil, quarantineReason);
+			observedRunningTasks, observedLatencyMs, observedDiskFreeMb, consecutiveFailures, quarantinedUntil,
+			quarantineReason);
 	}
 
 	String status() {

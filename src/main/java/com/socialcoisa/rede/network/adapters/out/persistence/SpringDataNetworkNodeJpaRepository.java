@@ -68,9 +68,11 @@ interface SpringDataNetworkNodeJpaRepository extends JpaRepository<NetworkNodeJp
 
 	@Modifying
 	@Query("update NetworkNodeJpaEntity n set n.runtimeVersion = :version, n.observedCpuPercent = :cpu, "
-			+ "n.observedMemoryMb = :memory, n.observedRunningTasks = :tasks, n.lastSeenAt = :now where n.id = :id")
+			+ "n.observedMemoryMb = :memory, n.observedRunningTasks = :tasks, n.observedDiskFreeMb = :diskFree, "
+			+ "n.lastSeenAt = :now where n.id = :id")
 	int heartbeat(@Param("id") String id, @Param("version") String version, @Param("cpu") Double cpu,
-			@Param("memory") Integer memory, @Param("tasks") Integer tasks, @Param("now") Instant now);
+			@Param("memory") Integer memory, @Param("tasks") Integer tasks, @Param("diskFree") Long diskFree,
+			@Param("now") Instant now);
 
 	@Query("select n from NetworkNodeJpaEntity n where n.status = 'ACTIVE' and n.lastSeenAt >= :seenAfter "
 			+ "order by n.lastSeenAt desc")
