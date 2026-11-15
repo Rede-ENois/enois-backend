@@ -360,6 +360,35 @@ public class StorageCatalogService {
 		return new Spooled(temp, total, HexFormat.of().formatHex(digest.digest()));
 	}
 
+	/**
+	 * Mede um fluxo sem guardar nada: o sha-256 e o tamanho do que passou.
+	 *
+	 * <p>É o medidor da verificação por releitura — reler o corpo de uma cópia para conferir se ele
+	 * ainda é o que o catálogo promete não pode escrever um segundo arquivo no disco de quem
+	 * contribui. Mesmo algoritmo e mesmo pedaço de 64 KiB do {@link #measure}, porque medir de duas
+	 * formas diferentes daria um digest que não bate com o guardado.</p>
+	 */
+	public static Measured measureStream(InputStream body) {
+		MessageDigest digest = sha256();
+		long total = 0;
+		byte[] buffer = new byte[64 * 1024];
+		try (InputStream input = body) {
+			int read;
+			while ((read = input.read(buffer)) != -1) {
+				digest.update(buffer, 0, read);
+				total += read;
+			}
+		}
+		catch (IOException unreadable) {
+			throw new ApiException(400, "STORAGE_UPLOAD_FAILED", "Nao foi possivel ler o corpo enviado.");
+		}
+		return new Measured(total, HexFormat.of().formatHex(digest.digest()));
+	}
+
+	/** O que a releitura viu: tamanho e digest. Sem arquivo, sem temporário. */
+	public record Measured(long bytes, String sha256) {
+	}
+
 	/** Apaga sem transformar erro de limpeza em erro da requisição: o lixo é recuperável, o upload não. */
 	private static void deleteQuietly(Path path) {
 		try {

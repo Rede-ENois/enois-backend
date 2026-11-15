@@ -43,7 +43,7 @@ módulo. Nó com disco medido abaixo do piso **e** do tamanho do objeto não rec
 | item | por que não |
 |---|---|
 | **healing automático** | reparar exige escolher nó e reenviar o corpo — custo de disco e banda de quem contribui. A varredura **aponta** a lacuna; a decisão de reparar é de quem opera. Automático, um objeto pequeno com bugs de placement geraria tráfego em anel |
-| **scrubbing que relê bytes** | exige a réplica servir o corpo ao Control Plane e o CP comparar hash com o medido. O contrato de leitura por digest já existe; falta o passo de verificação periódica |
+| **scrubbing que relê o corpo de OUTRO nó** | o Control Plane não inicia conexão para o nó (NAT e a proibição de cadastrar endereço). O que existe hoje é a releitura do que está **neste** CP: `GET /admin/network/nodes/storage/scrub?readBodies=true` compara tamanho e sha-256 do arquivo com o medido e devolve `divergent[]` — ver §4.1 |
 | **domínio de falha maior que o nó** | o cadastro não tem host físico, rack nem operadora. Derivar isso de região/cidade seria deduzir topologia. "Mesmo nó" é o que o dado permite afirmar |
 | **erasure coding** | da fase 4 do brief (§ distribuição inteligente), não da 3 |
 | **via de entrega ao par (push do CP para o nó)** | o nó **puxa** o objeto na URL do CP, e o CP não inicia conexão para o nó — pelo mesmo motivo do §17: o CP não conhece o endereço do nó |
@@ -65,3 +65,23 @@ aceitar `PENDING_REMOTE` como confirmável derruba o mesmo teste; varredura cont
 
 `V323__network_storage_placement_pending_sha.sql` — `sha256` passa a aceitar nulo, porque a
 designação existe antes de haver cópia. Aditiva: nenhuma linha existente muda.
+
+## 4.1. Releitura do corpo (implementada)
+
+`GET /admin/network/nodes/storage/scrub?readBodies=true` vai além de contar linhas: lê de novo o
+arquivo de cada cópia `OK` que este Control Plane hospeda e compara **tamanho e sha-256** com o
+medido que o catálogo guarda. O relatório ganhou `bodiesRelidos` e `divergent[]` (objeto, réplica,
+nó, digest esperado, digest encontrado); divergência é auditada como `STORAGE_SCRUB_DIVERGENT`.
+
+Divergência é coisa diferente de lacuna: `underReplicated` diz "falta cópia", `divergent` diz "a
+cópia que o catálogo promete existe e não confere". Um objeto ainda pode ser servido pela cópia
+certa; o que não pode é o catálogo prometer durabilidade para um arquivo trocado.
+
+O parâmetro é **opt-in**: reler disco de quem contribui é custo, e a contagem periódica não deve
+carregá-lo por efeito colateral. Três casos têm asserção — corpo trocado com o mesmo tamanho
+(comparação de comprimento passaria), corpo ausente (digest vazio = "não consegui ler", nunca um
+digest calculado) e corpo intacto (relido, não reportado).
+
+Provas: `StorageScrubberReadBackTests` 4 e `NetworkStorageReplicationTests` 7 (1 novo pela rota
+admin). Mutações: aceitar divergência, comparar só o tamanho e ignorar corpo ausente — cada uma
+derruba exatamente um teste.

@@ -187,9 +187,12 @@ class AdminNetworkController {
 	@GetMapping("/storage/scrub")
 	StorageScrubber.Report scrubStorage(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(required = false) String bucket,
-			@RequestParam(defaultValue = "1000") int maxObjects) {
+			@RequestParam(defaultValue = "1000") int maxObjects,
+			// Releitura dos corpos: desligada por padrão porque custa disco de quem contribui. Ligada,
+			// confere também se o arquivo ainda tem o sha-256 que o catálogo promete.
+			@RequestParam(name = "readBodies", defaultValue = "false") boolean readBodies) {
 		admin(sessionToken);
-		return scrubber.scan(bucket, maxObjects);
+		return scrubber.scan(bucket, maxObjects, readBodies);
 	}
 
 	/**
