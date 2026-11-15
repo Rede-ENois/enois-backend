@@ -81,6 +81,10 @@ public class CalendarEntryJpaEntity {
 	@Column(nullable = false)
 	private boolean tail = false;
 
+	/** Limite da série vindo do `UNTIL` do arquivo importado; nulo é série sem limite (V322). */
+	@Column(name = "series_until")
+	private Instant seriesUntil;
+
 	protected CalendarEntryJpaEntity() {
 	}
 
@@ -105,6 +109,7 @@ public class CalendarEntryJpaEntity {
 		e.seriesId = entry.seriesId();
 		e.recurrence = entry.recurrence() == null ? null : entry.recurrence().name();
 		e.tail = entry.tail();
+		e.seriesUntil = entry.seriesUntil();
 		return e;
 	}
 
@@ -113,7 +118,7 @@ public class CalendarEntryJpaEntity {
 			new CalendarEntrySource(sourceType, sourceId), title, description, startsAt, endsAt,
 			CalendarEntry.zoneOf(timeZoneId), allDay, CalendarEntryState.parse(state), createdAt, updatedAt,
 			cancelledAt, seriesId,
-			recurrence == null ? null : CalendarRecurrence.parse(recurrence), tail);
+			recurrence == null ? null : CalendarRecurrence.parse(recurrence), tail, seriesUntil);
 	}
 
 }
