@@ -172,7 +172,7 @@ public class NetworkNodeService {
 		}
 		Instant now = clock.instant();
 		nodes.touch(authenticated.id(), beat.runtimeVersion(), beat.cpuPercent(), beat.memoryMb(),
-			beat.runningTasks(), now);
+			beat.runningTasks(), beat.diskFreeMb(), now);
 		NetworkNode updated = require(authenticated.id());
 		quarantineOnTermConflict(updated, beat.observedTerm(), now);
 		return require(authenticated.id());
@@ -372,6 +372,6 @@ public class NetworkNodeService {
 	}
 
 	public record HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
-			Integer runningTasks, Integer observedTerm) {
+			Integer runningTasks, Long diskFreeMb, Integer observedTerm) {
 	}
 }

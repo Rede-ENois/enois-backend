@@ -55,6 +55,9 @@ class NetworkNodeJpaEntity {
 	@Column(name = "observed_latency_ms")
 	private Integer observedLatencyMs;
 
+	@Column(name = "observed_disk_free_mb")
+	private Long observedDiskFreeMb;
+
 	@Column(name = "consecutive_failures", nullable = false)
 	private int consecutiveFailures;
 
@@ -88,11 +91,11 @@ class NetworkNodeJpaEntity {
 	@Column(name = "last_seen_at")
 	private Instant lastSeenAt;
 
-	/** Versão da permissão: 1 no enroll, +1 em cada transição administrativa (V284). */
+	/** Versão da permissão: 1 no enroll, +1 em cada transição administrativa (V313). */
 	@Column(name = "config_version", nullable = false)
 	private int configVersion = 1;
 
-	/** Instante em que a permissão vigente passou a valer; null em linha anterior à V284. */
+	/** Instante em que a permissão vigente passou a valer; null em linha anterior à V313. */
 	@Column(name = "config_issued_at")
 	private Instant configIssuedAt;
 
@@ -125,7 +128,8 @@ class NetworkNodeJpaEntity {
 		return new NetworkNode(id, displayName, ownerUserId, NodeStatus.valueOf(status),
 			NodeProfilesCsv.parse(profiles), region, country, runtimeVersion, lastSeenAt, declaredCpuCores,
 			declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent, observedMemoryMb,
-			observedRunningTasks, observedLatencyMs, consecutiveFailures, quarantinedUntil, quarantineReason);
+			observedRunningTasks, observedLatencyMs, observedDiskFreeMb, consecutiveFailures, quarantinedUntil,
+			quarantineReason);
 	}
 
 	String status() {

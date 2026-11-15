@@ -30,12 +30,16 @@ import tools.jackson.databind.ObjectMapper;
  * <p>O registro é em memória, por processo. Com mais de uma instância do backend, a aba aberta na
  * instância B não recebia o aviso de uma escrita atendida na instância A — o evento era entregue só
  * no processo que o publicou. Por isso cada aviso local também vira um sinal em
- * {@code network_instance_signals} (V278), e cada instância entrega no próprio registro o que as
+ * {@code network_instance_signals} (V307), e cada instância entrega no próprio registro o que as
  * outras emitiram. O sinal carrega só ids, como o evento local: conteúdo continua vindo dos
  * endpoints autorizados.</p>
+ *
+ * <p>Publico porque o chat de campanha (Éroleplay) consulta quem tem stream aberto para a
+ * presença da mesa — o hub é a infraestrutura única de stream da plataforma, e ninguém cria um
+ * segundo registro de "quem está com a aba aberta".</p>
  */
 @Component
-class MessageStreamHub {
+public class MessageStreamHub {
 
 	private static final Logger LOG = LoggerFactory.getLogger(MessageStreamHub.class);
 
@@ -111,6 +115,9 @@ class MessageStreamHub {
 		if (change.eventId() != null) {
 			data.put("eventId", change.eventId());
 		}
+		if (change.tableId() != null) {
+			data.put("tableId", change.tableId());
+		}
 		deliver(change.userIds(), "call", Map.copyOf(data));
 	}
 
@@ -152,6 +159,25 @@ class MessageStreamHub {
 		}
 	}
 
+	/**
+	 * "O chat da campanha X mudou": mesmo canal do stream de mensagens, evento próprio do Éroleplay.
+	 * O corpo só diz a campanha — o conteúdo real vem dos endpoints do chat, que autorizam de novo
+	 * por leitor (participante lê o canal; aparte privado, só as pontas e o mestre).
+	 */
+	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+	void onCampaignChatChanged(com.socialcoisa.rede.eroleplay.application.CampaignChatChanged change) {
+		Map<String, String> data = Map.of("campaignId", change.campaignId());
+		for (String userId : change.userIds()) {
+			ConcurrentLinkedDeque<SseEmitter> userStreams = streams.get(userId);
+			if (userStreams == null) {
+				continue;
+			}
+			for (SseEmitter emitter : userStreams) {
+				send(userId, emitter, SseEmitter.event().name("campaign").data(data));
+			}
+		}
+	}
+
 	/** Keeps idle streams alive through proxies that drop silent connections (often at 60s). */
 	@Scheduled(fixedDelay = 25_000, initialDelay = 25_000)
 	void heartbeat() {
@@ -160,6 +186,12 @@ class MessageStreamHub {
 				send(userId, emitter, SseEmitter.event().comment("ping"));
 			}
 		});
+	}
+
+	/** O usuário tem pelo menos um stream aberto agora (a presença do chat pergunta por pessoa). */
+	public boolean hasOpenStream(String userId) {
+		ConcurrentLinkedDeque<SseEmitter> userStreams = streams.get(userId);
+		return userStreams != null && !userStreams.isEmpty();
 	}
 
 	int openStreams(String userId) {
@@ -173,6 +205,12 @@ class MessageStreamHub {
 		}
 		catch (IOException | IllegalStateException closed) {
 			// The tab went away; the container completes the emitter, here it only leaves the registry.
+			remove(userId, emitter);
+		}
+		catch (RuntimeException failure) {
+			// O aviso sai DEPOIS do commit: deixar a excecao subir transformaria em 500 uma mensagem
+			// que ja esta gravada, e o cliente tentaria reenviar o que nao falhou. O stream e
+			// best-effort por definicao — a tela busca o estado real nos endpoints autorizados.
 			remove(userId, emitter);
 		}
 	}

@@ -1,12 +1,16 @@
 package com.socialcoisa.rede.idempotency.application;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.HexFormat;
 import java.util.function.Supplier;
 
+import org.springframework.core.io.InputStreamSource;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -71,6 +75,28 @@ public class IdempotencyApplicationService {
 		created.complete(response.status(), body, clock.instant());
 		repository.save(created);
 		return json(response.status(), body);
+	}
+
+	/**
+	 * Hash de um arquivo enviado como recurso. Vai para o mesmo campo que o hash do JSON, então
+	 * serve para a mesma chave: repetir o upload idêntico é replay, e trocar um byte é conflito.
+	 */
+	public String hash(InputStreamSource source) {
+		try (InputStream in = source.getInputStream()) {
+			return hashOf(MessageDigest.getInstance("SHA-256"), in);
+		}
+		catch (IOException | NoSuchAlgorithmException exception) {
+			throw new ApiException(500, "HASH_FAILURE", "Nao foi possivel calcular hash da requisicao.");
+		}
+	}
+
+	private static String hashOf(MessageDigest digest, InputStream in) throws IOException {
+		byte[] chunk = new byte[8192];
+		int read;
+		while ((read = in.read(chunk)) != -1) {
+			digest.update(chunk, 0, read);
+		}
+		return HexFormat.of().formatHex(digest.digest());
 	}
 
 	public String hash(Object value) {

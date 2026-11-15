@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.calendar.application;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -9,7 +10,9 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.socialcoisa.rede.calendar.application.port.out.CalendarEntryRepository;
 import com.socialcoisa.rede.calendar.application.port.out.CalendarReminderRepository;
@@ -38,7 +41,7 @@ public class CalendarReminderService {
 	private static final Logger LOG = LoggerFactory.getLogger(CalendarReminderService.class);
 
 	/** Quantos vencidos o worker envia por ciclo: um lote pequeno evita prender o laço num pico. */
-	static final int BATCH = 20;
+	public static final int BATCH = 20;
 
 	/**
 	 * Autor das notificações automáticas. `notifications.actor_id` é `not null`, e um lembrete não
@@ -51,31 +54,30 @@ public class CalendarReminderService {
 	private final CalendarParticipantRepository participants;
 	private final NotificationService notifications;
 	private final Clock clock;
+	private final TransactionTemplate perReminder;
 
 	CalendarReminderService(CalendarReminderRepository reminders, CalendarEntryRepository entries,
-			CalendarParticipantRepository participants, NotificationService notifications, Clock clock) {
+			CalendarParticipantRepository participants, NotificationService notifications, Clock clock,
+			PlatformTransactionManager transactionManager) {
 		this.reminders = reminders;
 		this.entries = entries;
 		this.participants = participants;
 		this.notifications = notifications;
 		this.clock = clock;
+		// O ciclo do worker precisa de uma transação por lembrete: uma na transação única do laço
+		// marcaria os demais como enviados junto com a falha, e o rollback descartaria os que saíram.
+		this.perReminder = new TransactionTemplate(transactionManager);
 	}
 
 	/**
 	 * Põe (ou troca) o lembrete de quem está lendo. Criar de novo com a mesma antecedência é o que
-	 * um duplo clique faz: devolve a linha que existe em vez de violar a chave única.
+	 * um duplo clique faz: devolve a linha que existe em vez de violar a chave única. Se a linha
+	 * existente já foi resolvida, ela é re-armada para o horário atual — pedir o lembrete de novo é
+	 * pedir para ser avisado de novo.
 	 */
 	@Transactional
 	public CalendarReminder setForReader(String userId, String entryId, int minutesBefore) {
-		CalendarEntry entry = entries.findById(entryId)
-			.orElseThrow(() -> new ApiException(404, "CALENDAR_ENTRY_NOT_FOUND",
-				"Compromisso não encontrado."));
-		boolean involved = entry.ownerId().equals(userId) || participates(userId, entry);
-		if (!involved) {
-			// Mesma resposta de inexistente: não confirma a existência da agenda de outra pessoa (D10).
-			throw new ApiException(404, "CALENDAR_ENTRY_NOT_FOUND",
-				"Compromisso não encontrado.");
-		}
+		CalendarEntry entry = requireInvolved(userId, entryId);
 		if (!entry.active()) {
 			throw new ApiException(409, "CALENDAR_ENTRY_CANCELLED",
 				"Compromisso cancelado não aceita lembrete.");
@@ -83,7 +85,16 @@ public class CalendarReminderService {
 		Instant now = clock.instant();
 		Optional<CalendarReminder> existing = reminders.findByEntryAndUserAndMinutes(entryId, userId, minutesBefore);
 		if (existing.isPresent()) {
-			return existing.get();
+			CalendarReminder reminder = existing.get();
+			if (reminder.sentAt() == null) {
+				return reminder;
+			}
+			// A linha já foi resolvida (o aviso já saiu, o compromisso foi cancelado ou a antecedência
+			// venceu sem ninguém aceitar). Devolvê-la como está deixaria a tela mostrando um lembrete
+			// ligado que nunca mais toca: a pessoa pediu de novo e não seria avisada.
+			reminder.rearm(entry.startsAt());
+			reminders.save(reminder);
+			return reminder;
 		}
 		CalendarReminder reminder = CalendarReminder.create("rem_" + UUID.randomUUID().toString().replace("-", ""),
 			entryId, userId, minutesBefore, entry.startsAt(), now);
@@ -97,6 +108,10 @@ public class CalendarReminderService {
 	 */
 	@Transactional
 	public boolean clearForReader(String userId, String entryId, int minutesBefore) {
+		// Antecedência fora da lista não é "não havia nada para tirar": é pedido inválido, e a tela
+		// precisa saber disso em vez de achar que apagou.
+		CalendarReminder.requireAllowedMinutes(minutesBefore);
+		requireInvolved(userId, entryId);
 		return reminders.findByEntryAndUserAndMinutes(entryId, userId, minutesBefore)
 			.map(reminder -> {
 				clear(reminder, clock.instant());
@@ -110,9 +125,25 @@ public class CalendarReminderService {
 	 * encerrado pelo cancelamento) saem da lista — a tela escolhe o lembrete, não vê o histórico.
 	 */
 	public List<CalendarReminder> ofReader(String userId, String entryId) {
+		requireInvolved(userId, entryId);
 		return reminders.findByEntry(entryId).stream()
 			.filter(r -> r.userId().equals(userId) && r.sentAt() == null)
 			.toList();
+	}
+
+	/**
+	 * O compromisso, desde que quem lê organize ou participe dele. Alheio responde o mesmo 404 de um
+	 * id que não existe: um 403 confirmaria que aquele compromisso existe na agenda de alguém (D10).
+	 */
+	private CalendarEntry requireInvolved(String userId, String entryId) {
+		CalendarEntry entry = entries.findById(entryId)
+			.orElseThrow(() -> new ApiException(404, "CALENDAR_ENTRY_NOT_FOUND",
+				"Compromisso não encontrado."));
+		if (!entry.ownerId().equals(userId) && !participates(userId, entry)) {
+			throw new ApiException(404, "CALENDAR_ENTRY_NOT_FOUND",
+				"Compromisso não encontrado.");
+		}
+		return entry;
 	}
 
 	/**
@@ -127,39 +158,55 @@ public class CalendarReminderService {
 	}
 
 	/**
-	 * O ciclo do worker. Cada lembrete é enviado e marcado sozinho: uma falha não impede o próximo
-	 * de sair, e o motivo fica gravado na linha para quem for investigar.
+	 * O ciclo do worker. Cada lembrete é enviado e marcado na própria transação: uma falha não
+	 * impede o próximo de sair, e o motivo fica gravado na linha para quem for investigar.
 	 */
-	@Transactional
 	public int deliverDue() {
 		Instant now = clock.instant();
 		List<CalendarReminder> due = reminders.findDue(now, CalendarReminder.MAX_ATTEMPTS, BATCH);
 		int sent = 0;
 		for (CalendarReminder reminder : due) {
 			try {
-				Optional<CalendarEntry> entry = entries.findById(reminder.entryId());
-				if (entry.isEmpty() || !entry.get().active()) {
-					// Compromisso sumiu ou foi cancelado: o lembrete não tem mais o que avisar.
-					clear(reminder, now);
-					continue;
+				Boolean delivered = perReminder.execute(status -> {
+					Optional<CalendarEntry> entry = entries.findById(reminder.entryId());
+					if (entry.isEmpty() || !entry.get().active()) {
+						// Compromisso sumiu ou foi cancelado: o lembrete não tem mais o que avisar.
+						clear(reminder, now);
+						return false;
+					}
+					if (!shouldNotify(reminder.userId(), entry.get())) {
+						clear(reminder, now);
+						return false;
+					}
+					notify(reminder, entry.get(), now);
+					reminder.sent(now);
+					reminders.save(reminder);
+					return true;
+				});
+				if (Boolean.TRUE.equals(delivered)) {
+					sent++;
 				}
-				if (!shouldNotify(reminder.userId(), entry.get())) {
-					clear(reminder, now);
-					continue;
-				}
-				notify(reminder, entry.get());
-				reminder.sent(now);
-				reminders.save(reminder);
-				sent++;
 			}
 			catch (RuntimeException error) {
-				reminder.failed(reasonOf(error), now);
-				reminders.save(reminder);
-				LOG.warn("Lembrete {} falhou (tentativa {}): {}", reminder.id(), reminder.attempts(),
-					reminder.lastError());
+				markFailed(reminder, error, now);
 			}
 		}
 		return sent;
+	}
+
+	/** Fora da transação do lembrete: a marca de falha tem de sobreviver ao rollback dela. */
+	private void markFailed(CalendarReminder reminder, RuntimeException error, Instant now) {
+		try {
+			perReminder.executeWithoutResult(status -> {
+				reminder.failed(reasonOf(error), now);
+				reminders.save(reminder);
+			});
+		}
+		catch (RuntimeException secondary) {
+			LOG.warn("Lembrete {} não pôde registrar a falha: {}", reminder.id(), secondary.getMessage());
+		}
+		LOG.warn("Lembrete {} falhou (tentativa {}): {}", reminder.id(), reminder.attempts(),
+			reminder.lastError());
 	}
 
 	/**
@@ -171,30 +218,46 @@ public class CalendarReminderService {
 		if (entry.ownerId().equals(userId)) {
 			return true;
 		}
-		return participants.findByEntry(entry.id()).stream()
-			.filter(p -> p.userId().equals(userId))
-			.anyMatch(p -> p.state() == CalendarParticipantState.ACCEPTED
-				|| p.state() == CalendarParticipantState.TENTATIVE);
+		// A pergunta é sobre uma pessoa só: buscar o convite dela evita carregar a lista inteira
+		// de participantes a cada lembrete que o worker vence.
+		return participants.findByEntryAndUser(entry.id(), userId)
+			.map(p -> p.state() == CalendarParticipantState.ACCEPTED
+				|| p.state() == CalendarParticipantState.TENTATIVE)
+			.orElse(false);
 	}
 
 	private boolean participates(String userId, CalendarEntry entry) {
-		return participants.findByEntry(entry.id()).stream().anyMatch(p -> p.userId().equals(userId));
+		return participants.findByEntryAndUser(entry.id(), userId).isPresent();
 	}
 
-	private void notify(CalendarReminder reminder, CalendarEntry entry) {
-		String when = textOfMinutes(reminder.minutesBefore());
+	private void notify(CalendarReminder reminder, CalendarEntry entry, Instant now) {
+		// O texto fala do tempo que falta de verdade, não da antecedência escolhida: um lembrete de
+		// 1 dia que venceu em cima da hora avisaria "em 1 dia" de um compromisso que começa em 10
+		// minutos. O worker pode atrasar, e o aviso não pode mentir sobre o horário.
+		String when = textUntil(entry.startsAt(), now);
+		// O aviso abre o compromisso que o originou: a pessoa que tocou no lembrete quer ver quem
+		// convidou, onde é e o que responder. Levar só à agenda deixava a tarefa pela metade.
 		// O lembrete é do sistema: ninguém "fez" isso para a pessoa. `actor_id` é obrigatório na
 		// tabela de notificações (a coluna não aceita nulo), então o autor é o próprio relógio.
 		notifications.create(reminder.userId(), "CALENDAR_REMINDER", SYSTEM_ACTOR, "Compromisso chegando",
-			"«" + entry.title() + "» começa " + when + ".", "/agenda?period=day", "Ver agenda");
+			"«" + entry.title() + "» " + when + ".", "/agenda/" + entry.id(), "Ver compromisso");
 	}
 
-	private static String textOfMinutes(int minutes) {
-		if (minutes >= 1440) {
-			int days = minutes / 1440;
-			return days == 1 ? "em 1 dia" : "em " + days + " dias";
+	/** "começa em 10 min", "começa em 2 h", "começa em 1 dia" ou "já começou". */
+	static String textUntil(Instant startsAt, Instant now) {
+		long minutes = Duration.between(now, startsAt).toMinutes();
+		if (minutes <= 0) {
+			return "já começou";
 		}
-		return "em " + minutes + " min";
+		if (minutes < 60) {
+			return "começa em " + minutes + " min";
+		}
+		if (minutes < 1440) {
+			long hours = minutes / 60;
+			return "começa em " + hours + (hours == 1 ? " hora" : " horas");
+		}
+		long days = minutes / 1440;
+		return "começa em " + days + (days == 1 ? " dia" : " dias");
 	}
 
 	/**

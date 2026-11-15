@@ -798,6 +798,22 @@ Implementa: `CreateMediaUploadUseCase`, `GetMediaAssetUseCase`, `GetMediaSummari
 | `save(...)` | POST /api/jobs/{jobId}/saves |
 | `removeSave(...)` | DELETE /api/jobs/{jobId}/saves |
 
+### Processo seletivo (ATS)
+
+Etapas configuráveis por vaga (`selection_stages`), histórico de movimentos
+(`stage_movements` — a etapa atual é o destino do último movimento), notas internas
+(`stage_notes`, nunca expostas ao candidato) e board por etapa. Entrevistas entram na agenda
+central pela origem `JOB_INTERVIEW`.
+
+| Classe | Papel |
+|---|---|
+| `SelectionProcessController` | `/jobs/{jobId}/process/**` — etapas, board, movimentos e notas |
+| `SelectionProcessService` | Etapas, movimentos, notas e board; autoriza pelo autor da vaga |
+| `RecruitmentHubController` / `RecruitmentHubService` | `GET /jobs/recruitment` — minhas vagas com o funil |
+| `JobInterviewService` | Agenda a entrevista e escreve nas duas agendas pela origem |
+
+Detalhes em [`SELECTION_PROCESS.md`](SELECTION_PROCESS.md).
+
 ---
 
 ## 10. Events (Eventos)
@@ -1066,6 +1082,7 @@ Detalhes em [`DIGEST.md`](DIGEST.md).
 | `NotificationCategory` | Mapa único kind → categoria de push (`ALWAYS` para segurança/moderação/sanção) |
 | `NotificationModule` | Single kind → interface area mapping (menu indicators); case-insensitive, unknown kinds are `OTHER` |
 | `NotificationPreferenceService` | Lê/grava as preferências (`notification_preferences`); `allowsPush(userId, kind)` |
+| `NotificationPreferenceRepository.findCommunityProjectSubscriberIds` | Página por `user_id` apenas de assinantes de projetos, limitada a 200 |
 | `NotificationPreferenceController` | GET/PUT /api/me/notification-preferences, GET /api/notifications/digest/unsubscribe |
 | `WeeklyDigestService` | Agendamento, conteúdo, envio único por semana ISO e token de descadastro |
 
@@ -1532,6 +1549,26 @@ Projetos da comunidade (páginas públicas com moderação própria) e projetos 
 | `POST /admin/.../suspend` / `.../unsuspend` | Suspender (admin) |
 | `GET /me/projects` / `POST /me/projects` / `PUT /me/projects/{projectId}` | Projetos do perfil |
 
+`communityProjects` é uma adesão explícita, desligada por padrão para contas novas e existentes
+(V292). A primeira aprovação registra `CommunityProjectPublished` junto da publicação, com bloqueio
+da linha para serializar aprovações. `NotificadorProjetoComunidade` entrega `NEW_COMMUNITY_PROJECT`
+em lotes de até 200 assinantes por evento da outbox, com continuação e recibo na mesma transação.
+Não avisa o autor nem identidades bloqueadas nos dois sentidos; revalida publicação, conta e adesão
+na entrega. Recusa, edição e restauração não geram novo lançamento. Contrato e limites em
+[`DIGEST.md`](DIGEST.md#novos-projetos-da-comunidade).
+
+O HTML dos projetos passa pelo `SafeHtml` e tem teto de 200.000 caracteres depois da limpeza.
+A coluna `user_projects.html` é `LONGTEXT` com charset `utf8mb4`, inclusive em bancos legados:
+a V287 aplica essa conversão em uma versão nova, sem depender da alteração histórica da V117.
+Conteúdo existente e nulidade são preservados; ids e referências não mudam. Não há alteração
+de contrato HTTP, sanitização ou limite de entrada.
+
+O teste `scripts/tests/user-project-html-migration-test.py` monta uma coluna legada Latin-1
+em MariaDB isolado e verifica conversão, criação/edição Unicode, HTML acima de 64 KiB e
+preservação de registros e nulos. Ele roda no job `schema-check`, sem publicar porta e sem rede;
+a imagem fixada de MariaDB usada pela CI precisa estar presente localmente antes da execução.
+Para executar: `python3 scripts/tests/user-project-html-migration-test.py`.
+
 ## 31. Preferences (Preferências)
 
 Preferências do usuário: tema, modo de exibição, notificações e toggles de experiência.
@@ -1709,3 +1746,196 @@ Denúncia de chamada entra na moderação como alvo `CALL`, com a captura do mom
 sozinha** esse alvo: penalidade e banimento são decisão humana no painel de revisão.
 
 Detalhes, escolha de infraestrutura e contrato em [`CHAMADAS.md`](CHAMADAS.md).
+
+## 42. Calendar (Agenda central)
+
+Fonte temporal única do app. Todo compromisso é uma linha de `calendar_entries` com dois escopos
+independentes (`SOCIAL`, `PROFESSIONAL`), tipo só para a tela, fuso do organizador ao lado do
+instante e uma origem opcional (`source_type` + `source_id`) que diz qual módulo o criou. Convites
+com resposta, disponibilidade semanal, lembretes, recorrência materializada e `.ics` (export,
+import e assinatura privada) vivem no mesmo módulo.
+
+Entrada **com origem é somente leitura** na rota da agenda (409 `CALENDAR_ENTRY_SOURCE_OWNED`): quem
+muda o fato é o módulo dono, por `CalendarSourceService.upsert`, que é idempotente pela origem.
+Mentoria, evento e entrevista de vaga já escrevem aí; não existe segunda agenda.
+
+| Classe | Papel |
+|---|---|
+| `CalendarEntry` / `CalendarEntryState` | Agregado e máquina de estados (ativo/cancelado) |
+| `CalendarEntrySource` | Origem: nula ou tipo + id, nunca meio par |
+| `CalendarCommandService` | Criar, editar, cancelar; recusa escrita em entrada com origem |
+| `CalendarQueryService` | Agenda lida pelo dono, com o lugar dele em cada item |
+| `CalendarConflictService` | O que ocupa o intervalo (leitura; sobrepor é permitido) |
+| `CalendarSourceService` | Upsert idempotente por origem, para os módulos donos |
+| `CalendarInvitationService` | Convites e respostas (teto de 100 participantes) |
+| `CalendarAvailabilityService` | Semana substitutiva, sem janelas sobrepostas |
+| `CalendarReminderService` / `CalendarReminderWorker` | Criação pela tela; envio a cada 30 s |
+| `CalendarRecurrenceService` / `CalendarRecurrence` | Série materializada por relógio de parede |
+| `CalendarIcsService` | Export/import com `UID` estável, `TZID` e cancelamento |
+| `CalendarSubscriptionService` | Assinatura `.ics` por token (hash no banco) |
+| `CalendarWindows` | Teto de um ano em toda leitura por intervalo |
+
+Contrato completo em [`CALENDAR.md`](CALENDAR.md).
+
+---
+
+## 43. Éroleplay (RPG de mesa e RPG textual)
+
+Plataforma de campanha dentro do Énóis. O produto **não depende de um sistema de RPG
+específico**: os dados (campanha, ficha, mesa, mensagem, rolagem) são compartilháveis, as regras
+não — cada sistema tem um adaptador próprio e um registro resolve o adaptador pelo identificador.
+Um sistema sem adaptador registrado responde com erro explícito, nunca com um comportamento
+genérico inventado.
+
+Isolamento por módulo, no mesmo desenho do módulo `groups`: tabelas próprias e decisão de acesso
+por matriz de capacidades, com a autorização sempre no back-end.
+
+| Classe | Papel |
+|---|---|
+| `Campaign` | Campanha: slug, nome, ambientação, sistema, visibilidade, estado, dono, contagem de membros |
+| `CampaignRole` / `CampaignCapability` / `CampaignPermissions` | Papel (mestre/jogador), capacidades e a matriz que decide tudo |
+| `CampaignVisibility` / `CampaignStatus` | Quem entra e quem descobre; campanha arquivada sai da descoberta e recusa entrada |
+| `CampaignMember` / `CampaignMembership` | Vínculo de participação e papel efetivo |
+| `CampaignJoinRequest` / `CampaignJoinRequestStatus` | Pedido de entrada e sua decisão (aprovado, recusado, cancelado) |
+| `CampaignSlug` | Slug legível, com dobra de acento e palavra reservada |
+| `GameSystemFamily` | Família do sistema (D20, D100, custom); valor desconhecido é erro, não palpite |
+| `GameTable` / `TableSeat` | Mesa da campanha (com referência opcional a uma sessão de voz do Épapo) e lugar ocupado |
+| `CampaignService` | Criar, editar, entrar, convidar, sair, remover, transferir mestria, decidir pedido, arquivar, mesas e lugares |
+| `CampaignNotifier` | Avisos de entrada, pedido, convite, decisão e transferência de mestria |
+| `EroleplayRepository` | Porta de saída (campanhas, membros, pedidos, mesas, lugares) |
+| `EroleplayPersistenceAdapter` | Implementação JPA da porta |
+| `CampaignController` | API REST em `/roleplay/campaigns` |
+| `AttributeType` / `SheetAttribute` | Tipo e descritor de um atributo de ficha que o sistema define |
+| `SystemAdapter` | Contrato de um sistema: identidade, procedência, família e atributos da ficha |
+| `D20System` | Sistema D20 ORIGINAL do Éroleplay (`d20-generico`), não cópia de sistema comercial |
+| `GameSystemRegistry` | Resolve o sistema pelo identificador; sem adaptador, erro próprio (nunca genérico) |
+| `EroleplaySystemsConfig` | Publica os adapters como beans: registrar sistema novo é publicar um bean |
+| `GameSystemController` | Catálogo público dos sistemas em `/roleplay/systems` |
+| `DerivedAttribute` | Valor que o sistema CALCULA (modificador, por exemplo); nunca digitado nem gravado |
+| `SheetTemplate` / `SheetField` | Modelo de ficha da campanha: campos do sistema e a abertura máxima de cada um |
+| `SheetVisibility` | Quem enxerga UM campo: `PRIVATE` < `GAME_MASTER` < `CAMPAIGN` (máximo do modelo) |
+| `SheetAudience` | Quem está lendo: dono, mestre ou outro participante — derivado do papel, nunca do corpo |
+| `SheetEntry` / `CharacterSheet` | Valor preenchido com sua visibilidade efetiva, e a ficha que valida contra o modelo |
+| `SheetService` | Modelo, preenchimento, quadro do grupo, leitura recortada por público e derivados |
+| `CharacterSheetController` | API REST em `/roleplay/campaigns/{id}/sheets` |
+| `SheetTemplateJpaEntity` / `CharacterSheetJpaEntity` | Persistência (V294), com os valores em JSON `longtext` |
+| `DiceExpression` | A gramática do que rolar (`NdF` + constantes), interpretada e sorteada NO SERVIDOR |
+| `DiceRoll` | O registro imutável da rolagem: quem, quando, cada dado, soma, rótulo, teto |
+| `RollRequest` / `RollRequestStatus` | O pedido do mestre (PENDING → ANSWERED, uma única resposta) |
+| `DiceService` | Rolar, pedir, responder, histórico e leitura recortada por público |
+| `DiceRollController` | API REST em `/roleplay/campaigns/{id}/rolls` |
+| `DiceRollJpaEntity` / `RollRequestJpaEntity` | Persistência (V295), com os dados individuais em JSON `longtext` |
+| `ChatChannel` | Os dois canais da mesa: IC (na voz do personagem) e OOC (coordenação) |
+| `CampaignMessage` | A mensagem do chat: criada uma vez, sem reescrita; fixação é metadado do mestre |
+| `CampaignChatService` | Publicar, histórico recortado por leitor, fixados, fixar/desfixar, presença |
+| `CampaignChatController` | API REST em `/roleplay/campaigns/{id}/chat` |
+| `CampaignMessageJpaEntity` | Persistência (V296) |
+| `CampaignChatChanged` | Evento de "chat mudou", entregue ao stream de mensagens depois do commit |
+
+Regras que valem sempre:
+
+- A listagem pública devolve apenas campanhas `PUBLIC` e `ACTIVE`, e apenas a apresentação —
+  nunca participantes, mesas ou conteúdo interno.
+- Só existe um mestre por campanha: ele precisa transferir a mestria antes de sair.
+- A decisão de um pedido de entrada é atômica; a segunda decisão devolve
+  `REQUEST_ALREADY_DECIDED`.
+- A voz da mesa referencia uma sessão de chamada do Épapo (`voiceRoomId`); o módulo não cria
+  sala de voz paralela.
+- A campanha guarda só o IDENTIFICADOR do sistema, nunca as regras. Um sistema sem adaptador
+  registrado responde com erro próprio; a família que a campanha grava vem do adaptador, não do
+  pedido do cliente.
+
+### Privacidade da ficha
+
+A ficha não é uma coisa só: o nome do personagem a mesa inteira conhece, o histórico o mestre lê e
+o segredo que o jogador escreveu não sai dele. Por isso a privacidade é **por campo**, com duas
+réguas distintas:
+
+- o **modelo** (`SheetVisibility`) define o máximo que cada campo pode abrir, e quem decide é o
+  mestre — o jogador pode fechar mais, nunca abrir além do autorizado;
+- a **leitura** (`SheetAudience`) é calculada no serviço a partir de quem é a ficha e do papel de
+  quem pede; o público nunca vem do corpo da requisição.
+
+O recorte é aplicado **na resposta**, não na tela: quem lê recebe o objeto já filtrado. A mesma
+régua vale na gravação, que devolve a leitura do dono — não existe caminho que devolva um campo que
+a leitura esconderia.
+
+| Leitor | Enxerga |
+|---|---|
+| Dono | A própria ficha inteira, inclusive os campos `PRIVATE` |
+| Mestre | `GAME_MASTER` e `CAMPAIGN` de todos; `PRIVATE` de ninguém |
+| Outro participante | Só os campos `CAMPAIGN`, e só pelo **quadro** da campanha |
+| Jogador pedindo a ficha de outro | `403 FORBIDDEN` |
+
+`PRIVATE` **não é o degrau mais fechado da escada — é a exceção do dono**: nem o mestre lê o
+segredo do jogador. Por isso a régua de público é escrita caso a caso, e não por comparação de
+ordem.
+
+IDOR e enumeração são barrados na API: a rota de ficha alheia confere o papel antes de buscar o
+registro, e o quadro sempre traz o nome do personagem — uma ficha inteiramente fechada não
+desaparece da lista, porque sumir revelaria que há algo a esconder.
+
+Preencher exige participar da campanha, e a validação de valor (tipo, limite, opções,
+obrigatoriedade, visibilidade) é toda do servidor. Fechar um campo no modelo fecha o que já está
+preenchido, sem esperar nova gravação. Trocar o sistema de regras com ficha preenchida é recusado
+com `SHEET_SYSTEM_LOCKED`. Derivado nunca é gravado: é recalculado na leitura e só aparece quando o
+público também enxerga o campo de origem.
+
+### Integridade da rolagem
+
+O resultado **sempre sai do servidor**: o corpo descreve o que rolar, e o sorteio usa a fonte de
+aleatoriedade do próprio servidor (`SecureRandom`). Não existe caminho — rota, corpo ou construtor —
+que aceite um resultado pronto. O registro é imutável por desenho: a classe não tem método que
+reescreva expressão, dados ou total, a porta de persistência não expõe atualização nem remoção, e a
+API não tem rota de edição. Cada dado individual fica gravado (JSON `longtext`), então "2d6+3 deu 9"
+é sempre conferível na mesa.
+
+O pedido de rolagem avisa o jogador pela notificação `ROLEPLAY_ROLL_REQUESTED`, pelo mesmo
+notificador da campanha — e com a MESMA regra de privacidade das demais notificações: o corpo não
+leva expressão nem motivo, só a campanha.
+
+A visibilidade da rolagem é a MESMA régua da ficha (`SheetVisibility`): a rolagem nasce com um teto,
+o jogador pode fechar a própria, e o `PRIVATE` continua sendo a exceção do dono — nem o mestre lê.
+A resposta a um pedido nunca passa do teto gravado no pedido, e o pedido responde UMA vez: a segunda
+resposta é recusada com 409, que é o que impede rolar de novo até dar o número bom.
+
+### O chat da campanha
+
+O chat é a cena e a coordenação da mesa, e vive DENTRO da campanha: quem não participa não lê
+nada — nem o canal público. Os canais são dois e a diferença é semântica: em `IC` a pessoa fala
+na voz do personagem; em `OOC`, como si mesma. O par (campanha, canal) é o endereço; não há
+entidade de canal para configurar.
+
+O aparte privado (`recipientId`) é tri-lateral: remetente, destinatário e mestre leem — o mestre é
+da mesa, e a cena não se esconde de quem arbitra o jogo. O recorte é aplicado NA RESPOSTA, por
+leitor: na listagem a mensagem alheia simplesmente não entra; na leitura por id a recusa é 404,
+porque "não existe para você" é o que não confirma existência.
+
+A mensagem é criada uma vez e não se reescreve (não há PUT nem DELETE). O único estado que muda é
+a FIXAÇÃO: decisão do mestre, idempotente nos dois sentidos, que não altera uma vírgula do que
+está escrito. Todo aviso de mudança sai pelo evento `campaign` do stream de mensagens — o corpo só
+leva o id da campanha; o cliente recarrega pelo endpoint, que autoriza de novo. A presença da mesa
+é a lista de participantes cruzada com quem tem stream aberto, e só é respondida a quem passou
+pela fronteira da campanha.
+
+### A voz da mesa e o estado vivo
+
+A voz da mesa NÃO tem sala própria: abrir a voz cria (ou devolve) uma chamada do Épapo com
+vínculo `table_id` — a quarta vinculação, ao lado de conversa, grupo e encontro. A mesa guarda o
+ID DA CHAMADA, e só o id: o endereço da sala e o token de entrada saem apenas pelo `join` das
+chamadas, que reavalia a autorização a cada pedido. O público da voz é a campanha — participante
+entra; visitante leva 403 nem vê a sala "ao vivo". Quem abre já entra dentro, o grupo não toca
+ninguém (`CALL_TABLE_LIVE`, um aviso contado por chamada, mapeado na preferência de grupos), e a
+segunda abertura devolve a MESMA chamada — não nasce sala duplicada.
+
+O estado da mesa é o oposto do histórico (chat, rolagens): é VIVO, uma linha por mesa, reescrito
+a cada clique. Nele vivem a ordem de fala (teto 20, sem repetição), a vez, a cena visível e os
+tokens posicionados em células de grid. Quem manda no estado é o mestre; o jogador tem exatamente
+dois poderes: assumir e limpar a própria vez. Token de personagem move o dono; token de cenário
+(porta, baú, monstro) só o mestre. Leitura exige participação; escrita de ordem/cena exige
+mestria; a matriz de capacidades decide, como em todo o módulo. Toda mudança publica o mesmo
+evento `campaign` do chat — os participantes redesenharem a mesa recarregando por GET, que
+autoriza de novo.
+
+Contrato completo em [`EROLEPLAY-RFC.md`](EROLEPLAY-RFC.md); estado e próxima tarefa em
+[`EROLEPLAY-ROADMAP.md`](EROLEPLAY-ROADMAP.md).

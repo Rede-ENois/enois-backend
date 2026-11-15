@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.e2e.adapters.in.web;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -7,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -91,6 +93,53 @@ class E2eKeyControllerTests {
 				.header("X-Session-Token", user.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.publicKey").value("new-pub"));
+
+		// A publica antiga sai da rota ativa, mas o historico guarda a privada antiga: sem ela,
+		// as chaves cifradas com "old-pub" virariam mensagens ilegiveis pra sempre. Do keypairs
+		// no mesmo milissegundo empatam no created_at, entao a ordem nao e parte da promessa aqui.
+		String body = mockMvc.perform(get("/e2e/keypair/history")
+				.header("X-Session-Token", user.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.length()").value(2))
+			.andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+		var history = objectMapper.readTree(body);
+		assertThat(history.size()).isEqualTo(2);
+		assertThat(history.get(0).get("publicKey").asText()).isEqualTo("new-pub");
+		assertThat(history.get(0).get("active").asBoolean()).isTrue();
+		String inactivePriv = history.get(0).get("active").asBoolean()
+			? history.get(1).get("encryptedPrivateKey").asText()
+			: history.get(0).get("encryptedPrivateKey").asText();
+		assertThat(inactivePriv).isEqualTo("old-priv");
+		Set<String> pubs = Set.of(history.get(0).get("publicKey").asText(),
+			history.get(1).get("publicKey").asText());
+		assertThat(pubs).containsExactlyInAnyOrder("new-pub", "old-pub");
+	}
+
+	@Test
+	void reenviarMesmaChavePublicaNaoPerdeCriadoEm() throws Exception {
+		var user = auth.authenticate("e2e_kp_rewrap_" + System.nanoTime());
+
+		mockMvc.perform(post("/e2e/keypair")
+				.header("X-Session-Token", user.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+					"publicKey", "same-pub", "encryptedPrivateKey", "recifrada-com-senha-nova"))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.id").isNotEmpty());
+
+		mockMvc.perform(get("/e2e/keypair")
+				.header("X-Session-Token", user.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.publicKey").value("same-pub"))
+			.andExpect(jsonPath("$.encryptedPrivateKey").value("recifrada-com-senha-nova"));
+
+		mockMvc.perform(get("/e2e/keypair/history")
+				.header("X-Session-Token", user.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.length()").value(1))
+			.andExpect(jsonPath("$[0].publicKey").value("same-pub"))
+			.andExpect(jsonPath("$[0].active").value(true))
+			.andExpect(jsonPath("$[0].encryptedPrivateKey").value("recifrada-com-senha-nova"));
 	}
 
 	@Test

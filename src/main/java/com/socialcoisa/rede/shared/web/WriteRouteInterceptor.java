@@ -77,7 +77,14 @@ class WriteRouteInterceptor implements HandlerInterceptor {
 		"/network/content/reconcile",
 		// Fase 3: o nó de mídia devolve o arquivo transcodificado. Mesma credencial de nó; além
 		// dela o controller exige o perfil NODE_MEDIA e a tarefa designada a este nó.
-		"/network/media/*/result");
+		"/network/media/*/result",
+		// Storage (fase 1): o nó grava o corpo de um objeto do catálogo. Mesma credencial de nó
+		// (X-Node-Id + X-Node-Key), e o controller exige o perfil NODE_STORAGE — disco não dá
+		// permissão. Os GET de leitura não passam por aqui.
+		"/network/storage/objects/*",
+		// Fase 3: a réplica confirma a cópia que o Control Plane designou. Mesma credencial de nó,
+		// mesmo motivo da rota acima — e a confirmação só vale para quem foi designado.
+		"/network/storage/objects/*/replica");
 
 	private final AntPathMatcher matcher = new AntPathMatcher();
 	private final CurrentUserResolver currentUserResolver;

@@ -1,7 +1,6 @@
 package com.socialcoisa.rede.calendar.adapters.out.persistence;
 
 import java.time.Instant;
-import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -24,17 +23,28 @@ interface SpringDataCalendarEntryJpaRepository extends JpaRepository<CalendarEnt
 			@Param("windowStart") Instant windowStart, @Param("windowEnd") Instant windowEnd);
 
 	/**
-	 * Mesma janela meia-aberta, mas por conjunto de ids: são os compromissos que outra pessoa
-	 * organizou e convidou quem está lendo. Lista vazia nunca chega aqui (o adaptador devolve nada
-	 * antes), porque `in ()` não é SQL válido em toda versão.
+	 * Os compromissos com convite ainda sem resposta, direto na tabela de participantes: o banco
+	 * cruza convite com compromisso numa consulta só, sem primeiro carregar a lista de convites
+	 * pendentes para então mandar os ids de volta num `in`. Ativo e `INVITED` filtrados aqui: a
+	 * resposta (ou o cancelamento) tira o convite da fila, e a ordem segue a idade do convite.
 	 */
-	@Query("select e from CalendarEntryJpaEntity e where e.id in :ids "
-		+ "and (:scope is null or e.scope = :scope) "
-		+ "and e.startsAt < :windowEnd and e.endsAt > :windowStart "
-		+ "order by e.startsAt asc")
-	List<CalendarEntryJpaEntity> findInWindowByIds(@Param("ids") Collection<String> ids,
-			@Param("scope") String scope, @Param("windowStart") Instant windowStart,
-			@Param("windowEnd") Instant windowEnd);
+	@Query("select e from CalendarEntryJpaEntity e join CalendarParticipantJpaEntity p "
+		+ "on p.entryId = e.id and p.userId = :userId and p.state = 'INVITED' "
+		+ "where e.state = 'ACTIVE' "
+		+ "order by p.invitedAt asc")
+	List<CalendarEntryJpaEntity> findPendingInvitations(@Param("userId") String userId);
+
+	/** Todas as irmãs de uma série, do mais antigo ao mais novo — histórico incluído. */
+	@Query("select e from CalendarEntryJpaEntity e where e.seriesId = :seriesId order by e.startsAt asc")
+	List<CalendarEntryJpaEntity> findBySeriesIdOrderByStartsAtAsc(@Param("seriesId") String seriesId);
+
+	Optional<CalendarEntryJpaEntity> findBySeriesIdAndStartsAt(String seriesId, Instant startsAt);
+
+	/**
+	 * As pontas de série, de qualquer situação: cancelar uma ocorrência não encerra a série, e a
+	 * ponta cancelada continua orientando a extensão até o dono encerrar por `stop`.
+	 */
+	List<CalendarEntryJpaEntity> findByTailTrue();
 
 	Optional<CalendarEntryJpaEntity> findByOwnerIdAndSourceTypeAndSourceId(String ownerId, String sourceType,
 			String sourceId);

@@ -37,9 +37,11 @@ class FeedCorporateController {
 	@GetMapping("/feed/corporate")
 	Object corporateFeed(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit) {
-		// Mesma política do /feed: ler com sessão (o visitante vê o estado dele, bloqueios valem).
-		var user = currentUserResolver.resolve(sessionToken);
-		return getFeedService.getCorporateFeed(user.id(), cursorCodec.decode(cursor).orElse(null), limit);
+		// Público, na mesma regra do perfil profissional: a página de um perfil corporativo é
+		// pública, então o feed agregado do mesmo conteúdo não pode exigir mais que ela. Com
+		// sessão válida o visitante é alguém (personalização e bloqueios valem); sem, é ninguém.
+		return getFeedService.getCorporateFeed(viewerIdOrNull(sessionToken),
+			cursorCodec.decode(cursor).orElse(null), limit);
 	}
 
 	@GetMapping("/corporate/{profileUsername}/posts")

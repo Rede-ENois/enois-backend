@@ -27,6 +27,19 @@ interface SpringDataConversationParticipantJpaRepository extends JpaRepository<C
 
 	Optional<ConversationParticipantJpaEntity> findByConversationIdAndUserId(String conversationId, String userId);
 
+	/**
+	 * Marca a conversa como lida em UMA instrucao. O envio ja leu a lista de participantes no
+	 * comeco do caso de uso, entao reler a linha so para escrever nela era uma ida ao banco por
+	 * mensagem enviada.
+	 */
+	@org.springframework.data.jpa.repository.Modifying
+	@org.springframework.data.jpa.repository.Query("""
+			UPDATE ConversationParticipantJpaEntity cp SET cp.lastReadAt = :now
+			WHERE cp.conversationId = :conversationId AND cp.userId = :userId""")
+	int markRead(@org.springframework.data.repository.query.Param("conversationId") String conversationId,
+			@org.springframework.data.repository.query.Param("userId") String userId,
+			@org.springframework.data.repository.query.Param("now") java.time.Instant now);
+
 	/** Participantes de VARIAS conversas em UMA consulta (lista de conversas do app). */
 	List<ConversationParticipantJpaEntity> findByConversationIdIn(java.util.Collection<String> conversationIds);
 

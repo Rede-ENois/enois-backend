@@ -24,6 +24,9 @@ Uma requisição de nó **sem** `X-Node-Id` válido, chave válida e certificado
 
 ### `POST /network/nodes/enroll`
 Sem `X-Session-Token`. A credencial é o **token de provisionamento de uso único**.
+O nó é chamador de servidor, não navegador: `/network/**` **não exige origem**
+(como os webhooks — cada rota autentica por conta própria), então o enroll funciona
+por `curl` de dentro do container, sem `Origin` nem `X-Client-Origin`.
 
 ```json
 {
@@ -134,7 +137,7 @@ Três números, de propósito:
   acrescentou `ttlSeconds` (doc 06 §6) e o formato 4 acrescentou `allowedRoutes`. Runtime de
   formato 1 não lê o termo; o de formato 2 reconstrói a linha sem o TTL; o de formato 3 reconstrói
   a linha com os dois; o de formato 4 reconstrói com a lista de rotas.
-- `term` é o **termo da autoridade** que assinou (V288, doc 06 §4). Só sobe na promoção de Control
+- `term` é o **termo da autoridade** que assinou (V317, doc 06 §4). Só sobe na promoção de Control
   Plane e o nó recusa config de termo menor que o último aceito — config de termo velho é uma
   autoridade deposta tentando voltar a mandar.
 - `configVersion` é a versão da **permissão** do nó — nasce `1` no enroll e soma `1` a cada
@@ -160,9 +163,16 @@ com listas ordenadas em JSON compacto. Assina-se o canônico, não o JSON — re
 não muda a assinatura. O `term` continua fechando a linha, e por isso o formato 3 inseriu
 `ttlSeconds` **antes** dele, não depois: runtime antigo que só sabe ler até o termo vê um documento
 de formato 3 e recusa, em vez de ler um `ttl` no lugar do termo. O formato 4 seguiu a mesma regra e
-inseriu `allowedRoutes` logo depois de `allowedTasks` — o campo novo nunca desloca o último. É por
-estar dentro da assinatura que o nó consegue recusar termo que regride e TTL que o Control Plane
-não emitiu, conferindo contra o pino em vez de confiar no transporte.
+inseriu `allowedRoutes` logo depois de `allowedTasks`, e o formato 5 pôs `diskFreeMb` **depois** do
+termo — o campo novo nunca desloca o último. É por estar dentro da assinatura que o nó consegue
+recusar termo que regride e TTL que o Control Plane não emitiu, conferindo contra o pino em vez de
+confiar no transporte.
+
+`diskFreeMb` é **medido**, e não medido é escrito como a palavra `ausente` na linha assinada, nunca
+como `0`. Zero é "sem espaço livre"; ausente é "o nó não mediu" (runtime anterior à V321, ou `df`
+que não respondeu). Assinar os dois igual tornaria indistinguível, para quem verifica, um nó
+prestes a encher o disco de um nó sobre o qual não se sabe nada — e é essa diferença que decide se
+o nó ainda pode receber corpo.
 
 `allowedRoutes` é a lista de **destinos que o nó pode chamar**, no formato `nome=url`
 (`["catalogo=https://catalogo.exemplo/api"]`). Ela entra no payload e **na assinatura**, e é o que
@@ -477,7 +487,7 @@ revogação continua sendo decisão administrativa.
 ## 3c. Autoridade do Control Plane (`/admin/network/authority`)
 
 Promoção controlada de Control Plane (fase 6, doc 06 §4). Todos os endpoints exigem sessão de
-admin. O termo vigente vive na linha global de `network_state` (V288) e o eleitorado em
+admin. O termo vigente vive na linha global de `network_state` (V317) e o eleitorado em
 `network_authorities`.
 
 ```json

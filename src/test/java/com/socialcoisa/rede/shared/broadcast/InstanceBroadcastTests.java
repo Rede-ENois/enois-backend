@@ -35,6 +35,11 @@ import tools.jackson.databind.ObjectMapper;
  * chave, isolamento entre usuários e a regra de não reentregar o próprio sinal. O <b>emissor</b>
  * não é exercitado aqui — quem cobre o caminho de produção completo, com emissor, poller e cache
  * de uma segunda instância real sobre a mesma tabela, é {@code TwoInstancesBroadcastTests}.</p>
+ *
+ * <p>A posição de leitura do teste é fixada em {@code maxSeq()} capturado antes da emissão — nunca
+ * no início da tabela. A varredura entrega em lote limitado e a base H2 é compartilhada entre as
+ * classes da suíte: reler desde 0 no meio dela encheria o lote com sinal de outros testes e o
+ * sinal deste ficaria fora.</p>
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -64,17 +69,18 @@ class InstanceBroadcastTests {
 	private JdbcTemplate jdbc;
 
 	/**
-	 * A aba aberta nesta instância recebe o aviso de uma escrita atendida em outra. Antes do V278 o
+	 * A aba aberta nesta instância recebe o aviso de uma escrita atendida em outra. Antes do V307 o
 	 * evento morria no processo que o publicou e a aba só via a mudança no próximo carregamento.
 	 */
 	@Test
 	void streamOfThisInstanceReceivesTheSignalOfAnother() throws Exception {
 		var user = new TestAuthHelper(mockMvc, objectMapper).authenticate("broadcast_stream_user");
 		MvcResult stream = openStream(user.token());
+		long before = store.maxSeq();
 
-		readFromTail();
 		emitFromOtherInstance(InstanceSignals.USER_EVENT, user.userId(),
 			"{\"event\":\"conversation\",\"data\":{\"conversationId\":\"conv_de_outra_instancia\"}}");
+		poller.seek(before);
 		assertThat(poller.runOnce()).isGreaterThanOrEqualTo(1);
 
 		String body = stream.getResponse().getContentAsString();
@@ -87,10 +93,11 @@ class InstanceBroadcastTests {
 		var target = new TestAuthHelper(mockMvc, objectMapper).authenticate("broadcast_target_user");
 		var outsider = new TestAuthHelper(mockMvc, objectMapper).authenticate("broadcast_outsider_user");
 		MvcResult outsiderStream = openStream(outsider.token());
+		long before = store.maxSeq();
 
-		readFromTail();
 		emitFromOtherInstance(InstanceSignals.USER_EVENT, target.userId(),
 			"{\"event\":\"notification\",\"data\":{\"notificationId\":\"n_de_outra\",\"kind\":\"POST_REPOSTED\"}}");
+		poller.seek(before);
 		poller.runOnce();
 
 		assertThat(outsiderStream.getResponse().getContentAsString()).doesNotContain("n_de_outra");
@@ -110,9 +117,10 @@ class InstanceBroadcastTests {
 		assertThat(cache).isNotNull();
 		cache.put("broadcast:alguem", "versao-antiga");
 		assertThat(cache.get("broadcast:alguem")).isNotNull();
+		long before = store.maxSeq();
 
-		readFromTail();
 		emitFromOtherInstance(InstanceSignals.CACHE_INVALIDATED, CacheConfig.LINK_PREVIEWS, "{}");
+		poller.seek(before);
 		poller.runOnce();
 
 		assertThat(cache.get("broadcast:alguem")).isNull();
@@ -125,10 +133,11 @@ class InstanceBroadcastTests {
 		assertThat(cache).isNotNull();
 		cache.put("broadcast:alvo", "versao-antiga");
 		cache.put("broadcast:outro", "continua");
+		long before = store.maxSeq();
 
-		readFromTail();
 		emitFromOtherInstance(InstanceSignals.CACHE_INVALIDATED, CacheConfig.LINK_PREVIEWS + "/broadcast:alvo",
 			"{}");
+		poller.seek(before);
 		poller.runOnce();
 
 		assertThat(cache.get("broadcast:alvo")).isNull();
@@ -146,7 +155,7 @@ class InstanceBroadcastTests {
 		var recipient = auth.authenticate("broadcast_local_recipient");
 		String conversationId = directConversation(sender.token(), recipient.userId());
 		MvcResult recipientStream = openStream(recipient.token());
-		readFromTail();
+		long before = store.maxSeq();
 
 		mockMvc.perform(post("/conversations/" + conversationId + "/messages")
 				.header("X-Session-Token", sender.token())
@@ -162,24 +171,10 @@ class InstanceBroadcastTests {
 		assertThat(origins).contains(broadcaster.instanceId());
 
 		// A varredura não reentrega o próprio sinal: o corpo tem o evento uma vez.
-		readFromTail();
+		poller.seek(before);
 		poller.runOnce();
 		String body = recipientStream.getResponse().getContentAsString();
 		assertThat(countOccurrences(body, "event:conversation")).isEqualTo(1);
-	}
-
-	/**
-	 * Posiciona o leitor no fim da tabela antes de emitir, em vez de voltar ao inicio.
-	 *
-	 * <p>O banco H2 da suíte é compartilhado por todas as classes, e cada escrita de teste grava um
-	 * sinal em {@code network_instance_signals}. {@code rewind()} relia a tabela inteira desde a
-	 * posição 0 e o lote de 200 traz o sinal antigo dos vizinhos ANTES do que este teste acabou de
-	 * emitir — a varredura consome o lote no sinal errado e o teste falha vendo a entrega que não
-	 * aconteceu. {@code seek(maxSeq())} lê a partir do fim: o que interessa é exatamente o sinal
-	 * emitido daqui para a frente, com o backlog dos outros fora do caminho.</p>
-	 */
-	private void readFromTail() {
-		poller.seek(store.maxSeq());
 	}
 
 	private void emitFromOtherInstance(String type, String target, String payload) {

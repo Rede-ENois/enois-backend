@@ -28,7 +28,7 @@ próprio. O navegador não fala com `api.betterttv.net` nem com `cdn.frankerface
 | `FfzGlobalEmoteSource` | coleção global do FFZ (13) | 2ª |
 | `FfzListingEmoteSource` (`animated=true`) | as mais usadas do FFZ **com versão em movimento** (400) | 3ª — arte animada vence a estática de mesmo código |
 | `FfzListingEmoteSource` (`sort=count-desc`) | as mais usadas do FFZ (600) | 4ª — dá a posição de uso |
-| `EmbeddedCatalogSource` | retrato embarcado (`emotes/catalogo.json`: 1018 figurinhas — 622 populares, 372 animadas, 53 do BTTV) | última — só preenche o que ninguém trouxe |
+| `EmbeddedCatalogSource` | retrato embarcado (`emotes/catalogo.json`: 1017 figurinhas — 621 populares, 372 animadas, 53 do BTTV) | última — só preenche o que ninguém trouxe |
 
 Regras da junção:
 

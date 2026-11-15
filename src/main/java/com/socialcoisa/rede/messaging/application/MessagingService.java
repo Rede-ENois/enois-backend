@@ -22,6 +22,13 @@ import com.socialcoisa.rede.shared.web.ApiException;
 @Service
 public class MessagingService {
 
+	/**
+	 * Janela do dedupe de duplo clique/retry. O comentario do codigo dizia 2 minutos e a janela
+	 * eram 10 segundos: um retry de transporte que demorava mais que isso criava a mensagem
+	 * de novo e notificava o destinatario duas vezes.
+	 */
+	private static final long DUPLICATE_WINDOW_SECONDS = 120;
+
 	private final MessagingRepository repository;
 	private final NotificationService notificationService;
 	private final Clock clock;
@@ -196,11 +203,14 @@ public class MessagingService {
 		behavioralTimingGuard.record(senderId);
 		Conversation conversation = repository.findConversationById(conversationId)
 			.orElseThrow(() -> new ApiException(404, "CONVERSATION_NOT_FOUND", "Conversa nao encontrada."));
-		if (!repository.isParticipant(conversationId, senderId)) {
+		// Uma leitura de participantes serve a tudo: checagem de participante, alcance, fan-out de
+		// notificacoes e aviso de mudanca. Antes a mesma lista era lida tres vezes por envio.
+		List<ConversationParticipant> participants = repository.findParticipantsByConversation(conversationId);
+		if (participants.stream().noneMatch(p -> p.userId().equals(senderId))) {
 			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
 		}
 		requireBusinessDirectInitiatorProfile(conversation, senderId);
-		requireMayReachParticipants(conversation, senderId);
+		requireMayReachParticipants(conversation, senderId, participants);
 		java.util.List<String> midias = mediaIds == null ? java.util.List.of()
 			: mediaIds.stream().filter(v -> v != null && !v.isBlank()).map(String::trim).distinct().toList();
 		String corpo = text == null ? "" : text.trim();
@@ -223,7 +233,7 @@ public class MessagingService {
 		// Duplo clique/retry: a MESMA mensagem (texto + mídias) do mesmo remetente em até 2
 		// minutos devolve a linha já criada em vez de duplicar e notificar de novo.
 		var duplicate = repository.findRecentDuplicate(conversationId, senderId, corpo,
-			clock.instant().minusSeconds(10));
+			clock.instant().minusSeconds(DUPLICATE_WINDOW_SECONDS));
 		if (duplicate.isPresent() && duplicate.get().mediaIds().equals(midias)
 				&& duplicate.get().mediaSpoiler() == mediaSpoiler) {
 			return duplicate.get();
@@ -233,13 +243,14 @@ public class MessagingService {
 			nextMessageInstant(conversationId));
 		repository.saveMessage(message);
 		// Ao enviar, a conversa fica lida para QUEM ENVIOU (PR #15) — antes o contador continuava
-		// aceso mesmo com a conversa aberta.
-		repository.markRead(conversationId, senderId, clock.instant());
+		// aceso mesmo com a conversa aberta. O read usa o instante DA mensagem: nextMessageInstant
+		// pode nascer à frente do relógio (desempate de mesmo segundo), e um lastReadAt menor deixava
+		// a própria mensagem do remetente contando como não lida para ele.
+		repository.markRead(conversationId, senderId, message.createdAt());
 		notificationService.markReadByHref(senderId, conversationHref(conversationId));
 		String preview = corpo.isEmpty()
 			? (midias.isEmpty() ? "Nova mensagem" : "Enviou uma midia")
 			: (corpo.length() > 80 ? corpo.substring(0, 77) + "..." : corpo);
-		List<ConversationParticipant> participants = repository.findParticipantsByConversation(conversationId);
 		notifyRecipients(conversation, participants, senderId, preview);
 		publishChange(conversationId, participants);
 		coins.recordPresence(senderId);
@@ -262,11 +273,13 @@ public class MessagingService {
 		behavioralTimingGuard.record(senderId);
 		Conversation conversation = repository.findConversationById(conversationId)
 			.orElseThrow(() -> new ApiException(404, "CONVERSATION_NOT_FOUND", "Conversa nao encontrada."));
-		if (!repository.isParticipant(conversationId, senderId)) {
+		// Uma leitura de participantes serve a tudo (mesma economia do caminho em claro).
+		List<ConversationParticipant> participants = repository.findParticipantsByConversation(conversationId);
+		if (participants.stream().noneMatch(p -> p.userId().equals(senderId))) {
 			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
 		}
 		requireBusinessDirectInitiatorProfile(conversation, senderId);
-		requireMayReachParticipants(conversation, senderId);
+		requireMayReachParticipants(conversation, senderId, participants);
 		if (ciphertext == null || ciphertext.isBlank()) {
 			throw new ApiException(400, "EMPTY_MESSAGE", "Mensagem cifrada vazia.");
 		}
@@ -286,8 +299,17 @@ public class MessagingService {
 		if (encryptedKeys != null && encryptedKeys.length() > 16000) {
 			throw new ApiException(400, "ENCRYPTED_KEYS_TOO_LONG", "Chaves cifradas excedem o tamanho maximo.");
 		}
-		// First write of the send: see MessagingRepository#touchConversation.
+		// Mesma ordem do caminho em claro: o touch e a primeira escrita do envio e faz o dedupe
+		// abaixo enxergar a mensagem que o primeiro clique criou.
 		repository.touchConversation(conversationId, clock.instant());
+		// Duplo clique/retry: retry de transporte repete a mesma cifra e devolve a linha anterior
+		// em vez de duplicar e notificar de novo (o caminho em claro ja fazia; o E2E nao tinha).
+		var duplicate = repository.findRecentDuplicate(conversationId, senderId, ciphertext,
+			clock.instant().minusSeconds(DUPLICATE_WINDOW_SECONDS));
+		if (duplicate.isPresent() && duplicate.get().e2e() && duplicate.get().mediaIds().equals(midias)
+				&& duplicate.get().mediaSpoiler() == mediaSpoiler) {
+			return duplicate.get();
+		}
 		String id = "message_" + UUID.randomUUID().toString().replace("-", "");
 		Message message = encryptedKeys != null
 			? Message.createE2ePerMessage(id, conversationId, senderId, ciphertext, iv, encryptedKeys,
@@ -295,9 +317,10 @@ public class MessagingService {
 			: Message.createE2e(id, conversationId, senderId, ciphertext, iv, midias, mediaSpoiler,
 				replyToId, nextMessageInstant(conversationId));
 		repository.saveMessage(message);
-		repository.markRead(conversationId, senderId, clock.instant());
+		// Ao enviar, a conversa fica lida para QUEM ENVIOU (PR #15). Mesma regra do caminho em
+		// claro: o read usa o instante da mensagem, que pode estar à frente do relógio.
+		repository.markRead(conversationId, senderId, message.createdAt());
 		notificationService.markReadByHref(senderId, conversationHref(conversationId));
-		List<ConversationParticipant> participants = repository.findParticipantsByConversation(conversationId);
 		notifyRecipients(conversation, participants, senderId, "Mensagem cifrada");
 		publishChange(conversationId, participants);
 		coins.recordPresence(senderId);
@@ -360,8 +383,9 @@ public class MessagingService {
 	}
 
 	/** Blocks and minor protection, with the participants as they are at send time. */
-	private void requireMayReachParticipants(Conversation conversation, String senderId) {
-		List<String> recipients = repository.findParticipantsByConversation(conversation.id()).stream()
+	private void requireMayReachParticipants(Conversation conversation, String senderId,
+			List<ConversationParticipant> participants) {
+		List<String> recipients = participants.stream()
 			.map(ConversationParticipant::userId)
 			.filter(userId -> !userId.equals(senderId))
 			.toList();
@@ -476,12 +500,17 @@ public class MessagingService {
 	}
 
 	public List<Message> getMessages(String conversationId, String viewerId, java.time.Instant before, int limit) {
+		return getMessages(conversationId, viewerId, before, null, limit);
+	}
+
+	public List<Message> getMessages(String conversationId, String viewerId, java.time.Instant before,
+			String beforeId, int limit) {
 		limit = pageLimit(limit);
 		if (!repository.findConversationById(conversationId).isPresent()) {
 			throw new ApiException(404, "CONVERSATION_NOT_FOUND", "Conversa nao encontrada.");
 		}
 		// O leitor entra na consulta: a mensagem que ELE apagou nao volta (para o outro continua).
-		return repository.findMessagesByConversation(conversationId, viewerId, before, limit);
+		return repository.findMessagesByConversation(conversationId, viewerId, before, beforeId, limit);
 	}
 
 	/** "Apagar para mim" por mensagem: some so para quem apagou. */

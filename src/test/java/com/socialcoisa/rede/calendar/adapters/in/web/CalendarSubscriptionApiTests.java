@@ -215,4 +215,43 @@ class CalendarSubscriptionApiTests {
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("INVALID_SCOPE"));
 	}
+
+	@Test
+	void askingForAnotherScopeOnAnActiveSubscriptionIsConflictInsteadOfSilentIgnoring() throws Exception {
+		TestAuthHelper.AuthSession user = account();
+		String token = mockMvc.perform(post("/calendar/subscription")
+			.header("X-Session-Token", user.token())
+			.param("scope", "SOCIAL"))
+			.andExpect(status().isOk())
+			.andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8)
+			.replaceAll(".*\"token\":\"([^\"]+)\".*", "$1");
+
+		// O recorte é congelado no token: pedir outro não pode devolver a assinatura antiga como se
+		// tivesse sido reconfigurada, nem emitir um segundo link vivo.
+		mockMvc.perform(post("/calendar/subscription").header("X-Session-Token", user.token())
+			.param("scope", "PROFESSIONAL"))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.code").value("CALENDAR_SUBSCRIPTION_SCOPE_CONFLICT"));
+
+		// A assinatura e o token antigos seguem exatamente como estavam.
+		mockMvc.perform(get("/calendar/subscription").header("X-Session-Token", user.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.scope").value("SOCIAL"))
+			.andExpect(jsonPath("$.token").doesNotExist());
+		mockMvc.perform(get("/calendar/subscribe/" + token + ".ics")).andExpect(status().isOk());
+	}
+
+	@Test
+	void repeatingTheSameScopeStillReturnsTheExistingSubscription() throws Exception {
+		TestAuthHelper.AuthSession user = account();
+		mockMvc.perform(post("/calendar/subscription").header("X-Session-Token", user.token())
+			.param("scope", "PROFESSIONAL"))
+			.andExpect(status().isOk());
+
+		mockMvc.perform(post("/calendar/subscription").header("X-Session-Token", user.token())
+			.param("scope", "PROFESSIONAL"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.scope").value("PROFESSIONAL"))
+			.andExpect(jsonPath("$.token").doesNotExist());
+	}
 }

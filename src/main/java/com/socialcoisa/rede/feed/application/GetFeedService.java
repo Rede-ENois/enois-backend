@@ -32,7 +32,9 @@ import com.socialcoisa.rede.feed.domain.FeedItem;
 import com.socialcoisa.rede.feed.domain.FeedTab;
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
+import com.socialcoisa.rede.feed.domain.PostRepost;
 import com.socialcoisa.rede.feed.domain.PostType;
+import com.socialcoisa.rede.feed.domain.ProfileTab;
 import com.socialcoisa.rede.feed.domain.ReactionType;
 import com.socialcoisa.rede.feed.domain.UserId;
 import com.socialcoisa.rede.profile.application.ContributorTagView;
@@ -71,6 +73,16 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	private final com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications;
 
 	private static final Instant DEFAULT_BEFORE = Instant.parse("9999-12-31T23:59:59Z");
+
+	/**
+	 * Teto de posts por página em qualquer feed. Cada página é uma consulta pesada — o
+	 * enriquecimento busca autor, mídia, enquete, contadores e selos em lote para a página inteira —
+	 * e a lista carrega aos poucos. Pedir mais que isso de uma vez é o que deixava o feed lento.
+	 */
+	private static final int MAX_PAGE_SIZE = 10;
+
+	/** Página padrão quando o cliente não manda `limit` ou manda um valor inválido. */
+	private static final int DEFAULT_PAGE_SIZE = 10;
 
 	public GetFeedService(PostRepository postRepository, ArticleRepository articleRepository,
 			FeedCacheRepository feedCacheRepository,
@@ -197,29 +209,35 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	public FeedPage getProfilePosts(GetProfilePostsQuery query) {
 		int limit = normalizeLimit(query.limit());
 		Instant before = query.before().orElse(DEFAULT_BEFORE);
-		// O path aceita username ou id; o conteudo guarda author_id, entao resolvemos o username.
+		ProfileTab tab = query.tab() == null ? ProfileTab.ALL : query.tab();
 		String authorId = userProfileRepository.findByUsername(query.username())
 			.map(com.socialcoisa.rede.profile.domain.UserProfile::id)
 			.orElse(query.username());
-		// Banned account: its page is gone (same rule as the profile read), and so is its timeline.
 		if (sanctionGate.banned(authorId)) {
 			throw new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado.");
 		}
-		List<Post> authored = postRepository.findActiveByAuthor(new UserId(authorId), before, limit);
 
-		// Reposts puros: ponteiros na tabela post_reposts com a data do repost (nao do original).
-		List<com.socialcoisa.rede.feed.domain.PostRepost> reposts = postReposts.findByUserId(authorId, before, limit);
+		// REPLIES usa endpoint proprio (GET /users/{username}/replies); aqui retorna 400.
+		if (tab == ProfileTab.REPLIES) {
+			throw new ApiException(400, "USE_REPLIES_ENDPOINT",
+				"Use o endpoint /users/{username}/replies para a aba de respostas.");
+		}
+
+		// Tabs filtradas buscam janela maior pra nao perder dados com pos-filtro.
+		// O cursor de "tem mais" vem da janela de origem, nao da pagina filtrada.
+		boolean filtered = tab != ProfileTab.ALL;
+		int windowSize = filtered ? limit * 3 : limit;
+
+		List<Post> authored = postRepository.findActiveByAuthor(new UserId(authorId), before, windowSize);
+		List<PostRepost> reposts = postReposts.findByUserId(authorId, before, windowSize);
 		java.util.Map<String, Instant> repostDates = reposts.stream()
-			.collect(Collectors.toMap(com.socialcoisa.rede.feed.domain.PostRepost::postId,
-				com.socialcoisa.rede.feed.domain.PostRepost::createdAt));
-		List<String> repostedIds = reposts.stream().map(com.socialcoisa.rede.feed.domain.PostRepost::postId).toList();
+			.collect(Collectors.toMap(PostRepost::postId, PostRepost::createdAt));
+		List<String> repostedIds = reposts.stream().map(PostRepost::postId).toList();
 		List<Post> repostedPosts = repostedIds.isEmpty() ? List.of()
 			: postRepository.findByIds(repostedIds.stream().map(PostId::new).toList()).stream()
 				.filter(Post::isActive)
 				.toList();
 
-		// Mescla posts autorais e repostados, sem duplicatas, ordenados pela data efetiva
-		// (data do repost para reposts, data de criacao para posts autorais).
 		Set<String> authoredIds = authored.stream().map(p -> p.id().value()).collect(Collectors.toSet());
 		List<Post> merged = new ArrayList<>(authored);
 		for (Post rp : repostedPosts) {
@@ -229,13 +247,31 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		}
 		merged.sort(Comparator.comparing(
 			(Post p) -> repostDates.getOrDefault(p.id().value(), p.createdAt())).reversed());
-		List<Post> page = merged.stream().limit(limit).toList();
 
-		// Enriquece e marca os reposts com o badge "X republicou" e a data do repost.
+		// A janela de origem encheu = pode haver mais dados. Usa isso como sinal de hasMore,
+		// nao o tamanho da pagina filtrada.
+		boolean windowFull = authored.size() == windowSize || reposts.size() == windowSize;
+
+		Set<String> repostedSet = new java.util.HashSet<>(repostedIds);
+		List<Post> visible = switch (tab) {
+			case POSTS -> merged.stream()
+				.filter(p -> p.authorId().value().equals(authorId))
+				.filter(p -> !repostedSet.contains(p.id().value()))
+				.toList();
+			case REPOSTS -> merged.stream()
+				.filter(p -> repostedSet.contains(p.id().value()) && !p.authorId().value().equals(authorId))
+				.toList();
+			case MEDIA -> merged.stream()
+				.filter(p -> !p.mediaIds().isEmpty())
+				.toList();
+			default -> merged;
+		};
+
+		List<Post> page = visible.stream().limit(limit).toList();
+
 		List<PostView> enriched = enrich(page, query.viewerId());
 		UserProfile ownerProfile = userProfileRepository.findById(authorId).orElse(null);
 		if (ownerProfile != null && !repostedIds.isEmpty()) {
-			Set<String> repostedSet = new java.util.HashSet<>(repostedIds);
 			enriched = enriched.stream()
 				.map(v -> repostedSet.contains(v.id()) && !v.authorId().equals(authorId)
 					? v.withRepostedBy(new PostView.RepostedByView(
@@ -245,13 +281,114 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				.toList();
 		}
 
-		// Cursor pela data efetiva do ultimo item (repost date ou created date).
-		Instant lastEffective = page.isEmpty() ? null
+		// Cursor: quando a pagina filtrada esvazia mas a janela encheu, usa o ultimo
+		// item da janela de origem como cursor pra continuar buscando na proxima pagina.
+		Instant lastPageDate = page.isEmpty() ? null
 			: repostDates.getOrDefault(page.get(page.size() - 1).id().value(),
 				page.get(page.size() - 1).createdAt());
-		String nextCursor = page.size() == limit && lastEffective != null
-			? cursorCodec.encode(lastEffective) : null;
+		Instant lastWindowDate = merged.isEmpty() ? null
+			: repostDates.getOrDefault(merged.get(merged.size() - 1).id().value(),
+				merged.get(merged.size() - 1).createdAt());
+		String nextCursor;
+		if (filtered) {
+			// Tabs filtradas: tem mais se a janela encheu, cursor pelo ultimo da janela.
+			nextCursor = windowFull && lastWindowDate != null
+				? cursorCodec.encode(lastWindowDate) : null;
+		} else {
+			// ALL: comportamento original.
+			nextCursor = page.size() == limit && lastPageDate != null
+				? cursorCodec.encode(lastPageDate) : null;
+		}
 		return new FeedPage(enriched, nextCursor);
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public ProfileRepliesPage getProfileReplies(UserId viewerId, String username, java.util.Optional<Instant> before, int limit) {
+		int safeLimit = normalizeLimit(limit);
+		Instant beforeDate = before.orElse(DEFAULT_BEFORE);
+		String authorId = userProfileRepository.findByUsername(username)
+			.map(UserProfile::id)
+			.orElse(username);
+		if (sanctionGate.banned(authorId)) {
+			throw new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado.");
+		}
+		if (viewerId == null || !viewerId.value().equals(authorId)) {
+			throw new ApiException(403, "REPLIES_PRIVATE", "Apenas o dono do perfil pode ver seus comentarios.");
+		}
+
+		var comments = commentRepository.findByAuthorPaged(authorId, beforeDate, safeLimit);
+		if (comments.isEmpty()) {
+			return new ProfileRepliesPage(List.of(), null);
+		}
+
+		// Posts originais pra contexto (snippet do post pai).
+		List<String> postIds = comments.stream()
+			.map(c -> c.postId().value())
+			.distinct()
+			.toList();
+		var posts = postRepository.findByIds(postIds.stream().map(PostId::new).toList());
+		var postMap = posts.stream().collect(Collectors.toMap(p -> p.id().value(), p -> p));
+
+		// Autores dos posts pra nome/username do contexto.
+		Set<String> postAuthorIds = posts.stream().map(p -> p.authorId().value()).collect(Collectors.toSet());
+		var postAuthors = userProfileRepository.findAllByIds(postAuthorIds).stream()
+			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
+
+		// Enriquece os comentarios (autor, badges, estilo, reacoes).
+		Set<String> commentAuthorIds = Set.of(authorId);
+		Set<String> contributorIds = userSeals.findActiveUserIds(commentAuthorIds);
+		Set<String> humanityVerified = identityVerifications.verifiedAmong(commentAuthorIds);
+		var commentAuthors = userProfileRepository.findAllByIds(commentAuthorIds).stream()
+			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
+
+		var reactions = postInteractionRepository.findCommentReactionsByUser(viewerId,
+			comments.stream().map(com.socialcoisa.rede.feed.domain.Comment::id).toList());
+		var reactionSummaries = postInteractionRepository.countCommentReactionsByType(
+			comments.stream().map(com.socialcoisa.rede.feed.domain.Comment::id).toList(), Set.of());
+
+		List<ProfileReplyView> items = comments.stream()
+			.map(c -> {
+				var p = commentAuthors.get(c.authorId().value());
+				CommentView cv = CommentView.from(c,
+					p != null ? p.displayWithNickname() : null,
+					p != null ? p.username() : null,
+					p != null ? p.avatar() : null,
+					p != null ? p.allBadges() : List.of())
+					.withAvatarFrame(p != null ? p.avatarFrame() : null)
+					.withAuthorStyle(NameStyleView.from(p))
+					.withContributor(contributorIds.contains(c.authorId().value())
+						? ContributorTagView.from(p) : null)
+					.withAuthorHumanityVerified(humanityVerified.contains(c.authorId().value()));
+
+				var r = reactions.containsKey(cv.id()) ? cv.withCurrentUserReaction(reactions.get(cv.id())) : cv;
+				var summary = reactionSummaries.getOrDefault(r.id(), Map.of());
+				int total = summary.values().stream().mapToInt(Long::intValue).sum();
+				r = r.withReactionCount(total).withReactionSummary(summary);
+
+				// Contexto do post pai.
+				Post post = postMap.get(c.postId().value());
+				ProfileReplyView.ReplyContext ctx;
+				if (post != null) {
+					var postAuthor = postAuthors.get(post.authorId().value());
+					String snippet = post.content() != null && post.content().length() > 120
+						? post.content().substring(0, 120) + "..."
+						: post.content();
+					ctx = new ProfileReplyView.ReplyContext(
+						post.id().value(),
+						postAuthor != null ? postAuthor.displayWithNickname() : null,
+						postAuthor != null ? postAuthor.username() : null,
+						snippet);
+				} else {
+					ctx = new ProfileReplyView.ReplyContext(c.postId().value(), null, null, null);
+				}
+				return new ProfileReplyView(r, ctx);
+			})
+			.toList();
+
+		Instant lastDate = comments.get(comments.size() - 1).createdAt();
+		String nextCursor = comments.size() == safeLimit ? cursorCodec.encode(lastDate) : null;
+		return new ProfileRepliesPage(items, nextCursor);
 	}
 
 	@Override
@@ -716,8 +853,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 
 	private int normalizeLimit(int limit) {
 		if (limit < 1) {
-			return 20;
+			return DEFAULT_PAGE_SIZE;
 		}
-		return Math.min(limit, 50);
+		return Math.min(limit, MAX_PAGE_SIZE);
 	}
 }

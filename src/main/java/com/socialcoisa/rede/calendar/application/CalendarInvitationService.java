@@ -1,10 +1,7 @@
 package com.socialcoisa.rede.calendar.application;
 
 import java.time.Clock;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.stereotype.Service;
@@ -27,6 +24,9 @@ import com.socialcoisa.rede.shared.web.ApiException;
  */
 @Service
 public class CalendarInvitationService {
+
+	/** Teto de convidados por compromisso: a lista do detalhe e cada convite são lidos inteiros. */
+	public static final int MAX_PARTICIPANTS = 100;
 
 	private final CalendarEntryRepository entries;
 	private final CalendarParticipantRepository participants;
@@ -57,6 +57,10 @@ public class CalendarInvitationService {
 			throw new ApiException(409, "INVITE_ALREADY_EXISTS",
 				"Esta pessoa ja foi convidada para este compromisso.");
 		}
+		if (participants.countByEntry(entryId) >= MAX_PARTICIPANTS) {
+			throw new ApiException(400, "INVITE_LIMIT_REACHED",
+				"Um compromisso comporta no maximo " + MAX_PARTICIPANTS + " convidados.");
+		}
 		CalendarParticipant participant = CalendarParticipant.invite(
 			"calp_" + UUID.randomUUID().toString().replace("-", ""), entry.id(), entry.ownerId(), profile.id(),
 			clock.instant());
@@ -71,26 +75,12 @@ public class CalendarInvitationService {
 
 	/**
 	 * Convites que a pessoa ainda não respondeu, de todas as agendas, do mais antigo ao mais novo.
-	 * Entrada cancelada fica de fora: ela existe na linha, mas não é mais convite a responder.
+	 * Entrada cancelada fica de fora: ela existe na linha, mas não é mais convite a responder. O
+	 * banco cruza convite e compromisso numa consulta só; quem respondeu (ou o compromisso que
+	 * cancelou) não volta, então não há segundo passo filtrando em memória.
 	 */
 	public List<CalendarEntry> pendingInvitations(String userId) {
-		List<CalendarParticipant> pending = participants.findPendingByUser(userId);
-		if (pending.isEmpty()) {
-			return List.of();
-		}
-		List<String> ids = pending.stream().map(CalendarParticipant::entryId).toList();
-		Map<String, CalendarEntry> byId = new HashMap<>();
-		for (CalendarEntry entry : entries.findAllByIds(ids)) {
-			byId.put(entry.id(), entry);
-		}
-		List<CalendarEntry> open = new ArrayList<>();
-		for (String id : ids) {
-			CalendarEntry entry = byId.get(id);
-			if (entry != null && entry.active()) {
-				open.add(entry);
-			}
-		}
-		return open;
+		return entries.findPendingInvitations(userId);
 	}
 
 	/**

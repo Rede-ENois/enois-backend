@@ -26,6 +26,8 @@ import com.socialcoisa.rede.calendar.domain.CalendarParticipant;
 import com.socialcoisa.rede.calendar.domain.CalendarParticipantState;
 import com.socialcoisa.rede.calendar.domain.CalendarReminder;
 import com.socialcoisa.rede.calendar.domain.CalendarScope;
+import com.socialcoisa.rede.notifications.application.port.out.NotificationRepository;
+import com.socialcoisa.rede.notifications.domain.Notification;
 
 /**
  * Lembretes de compromisso contra o banco de verdade.
@@ -45,6 +47,7 @@ class CalendarReminderServiceTests {
 	@Autowired CalendarParticipantRepository participants;
 	@Autowired CalendarCommandService commands;
 	@Autowired CalendarSourceService sources;
+	@Autowired NotificationRepository notifications;
 
 	@Test
 	void settingTheSameReminderTwiceKeepsOneRow() {
@@ -55,6 +58,46 @@ class CalendarReminderServiceTests {
 		CalendarReminder second = reminders.setForReader(owner, entryId, 15);
 
 		assertThat(second.id()).isEqualTo(first.id());
+		assertThat(reminderRepository.findByEntry(entryId)).hasSize(1);
+	}
+
+	@Test
+	void askingAgainAfterClearingBringsTheReminderBackToLife() {
+		String owner = owner();
+		String entryId = entry(owner, "Retirado e posto de novo", Instant.now().plus(Duration.ofMinutes(10)));
+
+		// Antecedência de um dia: o lembrete nasce vencido e sai no primeiro ciclo do worker.
+		reminders.setForReader(owner, entryId, 1440);
+		reminders.deliverDue();
+		assertThat(reminderRepository.findByEntry(entryId).get(0).sentAt()).isNotNull();
+
+		// A pessoa pede o mesmo lembrete outra vez. A linha já foi resolvida e não pode ser devolvida
+		// como está: um lembrete ligado na tela que nunca mais toca é pior que nenhum.
+		CalendarReminder again = reminders.setForReader(owner, entryId, 1440);
+
+		assertThat(again.sentAt()).isNull();
+		assertThat(again.attempts()).isZero();
+		// O horário de aviso é recalculado a partir do começo do compromisso, não herdado do antigo.
+		assertThat(again.dueAt()).isEqualTo(entries.findById(entryId).orElseThrow().startsAt()
+			.minus(Duration.ofMinutes(1440)));
+		assertThat(reminderRepository.findByEntry(entryId)).hasSize(1);
+
+		reminders.deliverDue();
+		assertThat(reminderRepository.findByEntry(entryId).get(0).sentAt()).isNotNull();
+	}
+
+	@Test
+	void clearingAndAskingAgainAlsoBringsTheReminderBack() {
+		String owner = owner();
+		String entryId = entry(owner, "Tirar e voltar", Instant.now().plus(Duration.ofDays(2)));
+
+		reminders.setForReader(owner, entryId, 60);
+		assertThat(reminders.clearForReader(owner, entryId, 60)).isTrue();
+		assertThat(reminders.ofReader(owner, entryId)).isEmpty();
+
+		reminders.setForReader(owner, entryId, 60);
+
+		assertThat(reminders.ofReader(owner, entryId)).hasSize(1);
 		assertThat(reminderRepository.findByEntry(entryId)).hasSize(1);
 	}
 
@@ -87,6 +130,25 @@ class CalendarReminderServiceTests {
 		List<CalendarReminder> stored = reminderRepository.findByEntry(entryId);
 		assertThat(stored).hasSize(1);
 		assertThat(stored.get(0).sentAt()).isNotNull();
+	}
+
+	@Test
+	void theReminderNotificationOpensTheEntryItIsAbout() {
+		String owner = owner();
+		String entryId = entry(owner, "Revisão com a equipe", Instant.now().plus(Duration.ofMinutes(5)));
+		reminders.setForReader(owner, entryId, 5);
+
+		reminders.deliverDue();
+
+		Notification sent = notifications.findByUserId(owner, Instant.now().plus(Duration.ofMinutes(1)),
+			null, 10)
+			.stream()
+			.filter(notification -> "CALENDAR_REMINDER".equals(notification.kind()))
+			.findFirst()
+			.orElseThrow();
+		// "Ver agenda" levava à agenda sem o compromisso; o aviso tem de abrir o que ele avisa.
+		assertThat(sent.href()).isEqualTo("/agenda/" + entryId);
+		assertThat(sent.ctaLabel()).isEqualTo("Ver compromisso");
 	}
 
 	@Test
@@ -188,6 +250,24 @@ class CalendarReminderServiceTests {
 	}
 
 	@Test
+	void theNotificationSaysTheTimeThatIsActuallyLeft() {
+		// Um lembrete de 1 dia criado em cima da hora vence na hora, e o compromisso começa em 10
+		// minutos. O texto antigo dizia "em 1 dia" — mentira sobre o horário.
+		String owner = owner();
+		String entryId = entry(owner, "Começa já", Instant.now().plus(Duration.ofMinutes(10)));
+		reminders.setForReader(owner, entryId, 1440);
+
+		reminders.deliverDue();
+
+		String body = notifications.findByUserId(owner, null, null, 20).stream()
+			.filter(n -> "CALENDAR_REMINDER".equals(n.kind()))
+			.map(n -> n.body())
+			.findFirst()
+			.orElseThrow();
+		assertThat(body).contains("«Começa já»").contains("min").doesNotContain("1 dia");
+	}
+
+	@Test
 	void aStrangerCannotSetAReminderOnSomeoneElsesEntry() {
 		String host = owner();
 		String stranger = owner();
@@ -220,6 +300,28 @@ class CalendarReminderServiceTests {
 
 	private static String owner() {
 		return "rem_owner_" + UUID.randomUUID();
+	}
+
+	/**
+	 * O worker manda um lote por ciclo: se o `deliverDue` carregasse a fila inteira, um acumulo de
+	 * vencidos (fim de semana, queda do envio) virava um ciclo longo preso a um pico e o laço de 30 s
+	 * perdia o ritmo. O lote é aplicado na consulta da porta, e este teste tranca que um ciclo
+	 * entrega no máximo o lote declarado; o resto fica na fila para o próximo.
+	 */
+	@Test
+	void oneCycleDeliversAtMostTheBatchCeiling() {
+		String sender = owner();
+		Instant soon = Instant.now().plus(Duration.ofMinutes(10));
+		int moreThanTheBatch = CalendarReminderService.BATCH + 5;
+		for (int i = 0; i < moreThanTheBatch; i++) {
+			String entryId = entry(sender, "Lote " + i, soon);
+			// Antecedência de um dia: com o compromisso a 10 min, o lembrete já nasce vencido.
+			reminders.setForReader(sender, entryId, 1440);
+		}
+
+		int delivered = reminders.deliverDue();
+
+		assertThat(delivered).isEqualTo(CalendarReminderService.BATCH);
 	}
 
 	private String entry(String owner, String title, Instant startsAt) {

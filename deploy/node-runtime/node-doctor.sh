@@ -4,6 +4,11 @@
 # Uso:  NODE_HOME=/var/lib/enois-node ./node-doctor.sh [--control-plane URL]
 #
 # Somente leitura: não muda estado, não reenvia enroll, não imprime a API key.
+#
+# Exceção declarada: com --control-plane ele faz um heartbeat com a credencial do nó para
+# perguntar "fui aceito?" — leitura de estado, mas que registra o último contato do nó no
+# Control Plane. O heartbeat sai do próprio nó, com a identidade dele, e nada é alterado
+# além disso.
 set -u
 
 NODE_HOME="${NODE_HOME:-/var/lib/enois-node}"
@@ -106,7 +111,17 @@ if [[ -s "$NODE_HOME/config.json" && -s "$NODE_HOME/config-verified-at" ]]; then
   fi
 fi
 
-# 6. Container
+# 6. Versão e fonte de verdade do runtime (o bootstrap grava as duas)
+if [[ -s "$NODE_HOME/runtime-version" ]]; then
+  pass "Runtime declarado no heartbeat: $(head -n 1 "$NODE_HOME/runtime-version")"
+  if [[ -s "$NODE_HOME/runtime-source" ]]; then
+    pass "Fonte de verdade: $(head -n 1 "$NODE_HOME/runtime-source") (troque com bootstrap.sh --update --source <qa|main>)"
+  fi
+else
+  warn "Sem $NODE_HOME/runtime-version — o heartbeat declara só a fonte; rode o bootstrap.sh para registrar a versão"
+fi
+
+# 7. Container
 if command -v docker >/dev/null 2>&1; then
   if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'enois-node'; then
     pass "Container enois-node em execução"
@@ -115,7 +130,49 @@ if command -v docker >/dev/null 2>&1; then
   fi
 fi
 
-# 7. Conectividade com o Control Plane
+# 7b. Aceite pela rede — o nó autenticou e o Control Plane despacha?
+# Sem esta pergunta o operador vê "API key 600, pino 600, container up" e conclui que está tudo
+# bem num nó que nunca recebeu tarefa. O heartbeat com a credencial do nó é a resposta: `status`
+# diz se o admin aprovou e `acceptTasks` diz se a rede está despachando. O heartbeat é leitura
+# de estado, mas ele REGISTRA contato no Control Plane (último contato do nó) — o doctor deixa
+# de ser 100% só-local, e isso está dito no cabeçalho do arquivo).
+# Sem credencial ou sem URL não é FAIL — é "não deu para perguntar".
+if [[ -n "$CONTROL_PLANE" ]] && command -v curl >/dev/null 2>&1 \
+   && [[ -s "$NODE_HOME/node.json" && -s "$NODE_HOME/api-key" ]]; then
+  node_id_hb=$(sed -n 's/.*"nodeId":"\([^"]*\)".*/\1/p' "$NODE_HOME/node.json")
+  hb=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+    -H "X-Node-Id: $node_id_hb" -H "X-Node-Key: $(head -n 1 "$NODE_HOME/api-key")" \
+    -H 'Content-Type: application/json' -d '{}' \
+    "$CONTROL_PLANE/network/nodes/heartbeat" 2>/dev/null) && hb_rc=0 || hb_rc=$?
+  if (( hb_rc != 0 )); then
+    if (( hb_rc == 22 )); then
+      fail "Control Plane recusou a credencial do nó (heartbeat HTTP de erro) — a chave foi revogada ou rotacionada; gere uma nova no painel"
+    else
+      warn "Heartbeat não respondeu (transporte) — aceite da rede não verificado"
+    fi
+  else
+    hb_status=$(sed -n 's/.*"status":"\([^"]*\)".*/\1/p' <<<"$hb" | head -n 1)
+    hb_mode=$(sed -n 's/.*"mode":"\([^"]*\)".*/\1/p' <<<"$hb" | head -n 1)
+    if grep -q '"acceptTasks":true' <<<"$hb"; then
+      pass "Aceito pela rede: status=${hb_status:-?} modo=${hb_mode:-?} — o Control Plane despacha tarefas"
+    else
+      case "$hb_status" in
+        PENDING_APPROVAL) warn "Aguardando aprovação do administrador (status=PENDING_APPROVAL) — o nó autentica e drena até lá" ;;
+        QUARANTINED|SUSPENDED) warn "Fora de operação (status=$hb_status) — nó autentica e drena até o admin liberar" ;;
+        REVOKED) fail "Nó revogado (status=REVOKED) — revogação é terminal; provisione um nó novo" ;;
+        ACTIVE) warn "Aprovado, mas a rede não despacha agora (modo=${hb_mode:-?}) — drenando" ;;
+        *) warn "A rede não despacha (status=${hb_status:-?} modo=${hb_mode:-?})" ;;
+      esac
+      if [[ ! -s "$NODE_HOME/pinning-key" ]]; then
+        warn "E sem pino da config assinada: mesmo aprovado, o runtime recusa toda config — rode install.sh --start"
+      fi
+    fi
+  fi
+elif [[ -n "$CONTROL_PLANE" ]]; then
+  warn "Aceite da rede não verificado (falta node.json ou API key)"
+fi
+
+# 8. Conectividade com o Control Plane
 if [[ -n "$CONTROL_PLANE" ]] && command -v curl >/dev/null 2>&1; then
   if curl --fail --silent --output /dev/null --connect-timeout 5 --max-time 10 "$CONTROL_PLANE/health" 2>/dev/null; then
     pass "Control Plane acessível em $CONTROL_PLANE"

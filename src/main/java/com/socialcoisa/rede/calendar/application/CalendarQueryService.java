@@ -3,17 +3,14 @@ package com.socialcoisa.rede.calendar.application;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 import org.springframework.stereotype.Service;
 
 import com.socialcoisa.rede.calendar.application.port.out.CalendarEntryRepository;
+import com.socialcoisa.rede.calendar.application.port.out.CalendarInvitationRepository;
 import com.socialcoisa.rede.calendar.application.port.out.CalendarParticipantRepository;
 import com.socialcoisa.rede.calendar.domain.CalendarEntry;
-import com.socialcoisa.rede.calendar.domain.CalendarParticipant;
-import com.socialcoisa.rede.calendar.domain.CalendarParticipantState;
 import com.socialcoisa.rede.calendar.domain.CalendarScope;
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -25,10 +22,13 @@ import com.socialcoisa.rede.shared.web.ApiException;
 public class CalendarQueryService {
 
 	private final CalendarEntryRepository entries;
+	private final CalendarInvitationRepository invitations;
 	private final CalendarParticipantRepository participants;
 
-	public CalendarQueryService(CalendarEntryRepository entries, CalendarParticipantRepository participants) {
+	public CalendarQueryService(CalendarEntryRepository entries, CalendarInvitationRepository invitations,
+			CalendarParticipantRepository participants) {
 		this.entries = entries;
+		this.invitations = invitations;
 		this.participants = participants;
 	}
 
@@ -42,12 +42,7 @@ public class CalendarQueryService {
 	}
 
 	private static void validateWindow(Instant from, Instant to) {
-		if (from == null || to == null) {
-			throw new ApiException(400, "INVALID_WINDOW", "Informe from e to para consultar a agenda.");
-		}
-		if (!to.isAfter(from)) {
-			throw new ApiException(400, "INVALID_WINDOW", "to precisa ser depois de from.");
-		}
+		CalendarWindows.validate(from, to, "consultar a agenda");
 	}
 
 	/**
@@ -63,19 +58,11 @@ public class CalendarQueryService {
 		for (CalendarEntry entry : entries.findInWindow(userId, scope, from, to)) {
 			items.add(CalendarAgendaItem.owned(entry));
 		}
-		List<CalendarEntry> invited = entries.findInvitedInWindow(userId, scope, from, to);
-		if (!invited.isEmpty()) {
-			Map<String, CalendarParticipantState> mine = new HashMap<>();
-			for (CalendarParticipant participant : participants
-				.findByUserAndEntryIds(userId, invited.stream().map(CalendarEntry::id).toList())) {
-				mine.put(participant.entryId(), participant.state());
-			}
-			for (CalendarEntry entry : invited) {
-				CalendarParticipantState myState = mine.get(entry.id());
-				if (myState != null) {
-					items.add(CalendarAgendaItem.invited(entry, myState));
-				}
-			}
+		// O convite chega com a resposta dele no mesmo join: uma consulta, sem carregar os ids dos
+		// compromissos convidados para depois devolvê-los ao banco num `in` de tamanho variável.
+		// O filtro de estado é da tela (D13): pendente e recusado continuam na agenda da pessoa.
+		for (CalendarInvitationRepository.InvitedEntry invited : invitations.findInvited(userId, scope, from, to)) {
+			items.add(CalendarAgendaItem.invited(invited.entry(), invited.answer()));
 		}
 		items.sort(Comparator.comparing(item -> item.entry().startsAt()));
 		return items;

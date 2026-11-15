@@ -42,6 +42,9 @@ import com.socialcoisa.rede.shared.web.StatusResponse;
 @RequestMapping("/notifications")
 class NotificationContractController {
 
+	/** Teto de avisos por página: a lista carrega aos poucos, como o feed e as mensagens. */
+	private static final int MAX_PAGE_SIZE = 20;
+
 	private final IdempotencyApplicationService idempotency;
 	private final CurrentUserResolver currentUserResolver;
 	private final NotificationService notificationService;
@@ -70,6 +73,9 @@ class NotificationContractController {
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit,
 			@RequestParam(required = false) String context) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		// Teto de página: sem ele, `limit` vinha do cliente sem limite nenhum e uma aba aberta
+		// pedia a lista inteira de uma vez. A lista carrega aos poucos, como o feed e as mensagens.
+		limit = Math.clamp(limit, 1, MAX_PAGE_SIZE);
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		// Bloqueio: notificacao de quem foi bloqueado (ou de quem bloqueou) nao aparece mais.
 		Set<String> hidden = blockedUsersReader.hiddenIdsFor(user.id().value());

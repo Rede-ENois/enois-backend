@@ -50,9 +50,13 @@ class NetworkConfigSignerTests {
 	}
 
 	private NetworkConfigSigner.SignedFields fields(List<String> profiles) {
-		return new NetworkConfigSigner.SignedFields(4, 7, "nd_1", profiles, 4, 8192, 51200, 100,
+		return fields(profiles, 40960L);
+	}
+
+	private NetworkConfigSigner.SignedFields fields(List<String> profiles, Long diskFreeMb) {
+		return new NetworkConfigSigner.SignedFields(5, 7, "nd_1", profiles, 4, 8192, 51200, 100,
 			List.of("MEDIA_TRANSCODE"), List.of("catalogo=https://catalogo.exemplo/api"),
-			"2026-11-12T12:00:00Z", 300, 4);
+			"2026-11-12T12:00:00Z", 300, 4, diskFreeMb);
 	}
 
 	@Test
@@ -67,15 +71,15 @@ class NetworkConfigSignerTests {
 		var fields = fields(List.of("NODE_MEDIA"));
 		String signature = sign(fields.canonical());
 		// O ataque: mais perfis do que o Control Plane aprovou.
-		var forged = new NetworkConfigSigner.SignedFields(4, 7, "nd_1", List.of("NODE_MEDIA", "NODE_WORKER"), 4, 8192,
+		var forged = new NetworkConfigSigner.SignedFields(5, 7, "nd_1", List.of("NODE_MEDIA", "NODE_WORKER"), 4, 8192,
 			51200, 100, List.of("MEDIA_TRANSCODE"), List.of("catalogo=https://catalogo.exemplo/api"),
-			"2026-11-12T12:00:00Z", 300, 4);
+			"2026-11-12T12:00:00Z", 300, 4, 40960L);
 		assertThat(NetworkConfigSigner.verify(pair.getPublic(), forged.canonical(), signature)).isFalse();
 		// E a variante mais sorrateira: mesma permissão, número de versão maior — o nó aceitaria uma
 		// config que nunca foi emitida só porque "parece mais nova".
-		var bumped = new NetworkConfigSigner.SignedFields(4, 8, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
+		var bumped = new NetworkConfigSigner.SignedFields(5, 8, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
 			List.of("MEDIA_TRANSCODE"), List.of("catalogo=https://catalogo.exemplo/api"),
-			"2026-11-12T12:00:00Z", 300, 4);
+			"2026-11-12T12:00:00Z", 300, 4, 40960L);
 		assertThat(NetworkConfigSigner.verify(pair.getPublic(), bumped.canonical(), signature)).isFalse();
 	}
 
@@ -86,15 +90,15 @@ class NetworkConfigSignerTests {
 		// O ataque SSRF: o intermediário troca o destino autorizado por um que ele controla (ou por
 		// um endereço de metadados dentro da rede do participante). A rota é permissão, e permissão
 		// fora da assinatura não é permissão.
-		var swapped = new NetworkConfigSigner.SignedFields(4, 7, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
+		var swapped = new NetworkConfigSigner.SignedFields(5, 7, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
 			List.of("MEDIA_TRANSCODE"), List.of("catalogo=http://169.254.169.254/latest/meta-data"),
-			"2026-11-12T12:00:00Z", 300, 4);
+			"2026-11-12T12:00:00Z", 300, 4, 40960L);
 		assertThat(NetworkConfigSigner.verify(pair.getPublic(), swapped.canonical(), signature)).isFalse();
 		// E a variante de acréscimo: uma rota a mais, junto com a legítima.
-		var added = new NetworkConfigSigner.SignedFields(4, 7, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
+		var added = new NetworkConfigSigner.SignedFields(5, 7, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
 			List.of("MEDIA_TRANSCODE"),
 			List.of("catalogo=https://catalogo.exemplo/api", "extra=https://atacante.exemplo/api"),
-			"2026-11-12T12:00:00Z", 300, 4);
+			"2026-11-12T12:00:00Z", 300, 4, 40960L);
 		assertThat(NetworkConfigSigner.verify(pair.getPublic(), added.canonical(), signature)).isFalse();
 	}
 
@@ -102,28 +106,49 @@ class NetworkConfigSignerTests {
 	void rotaVaziaNaoMudaAFormaDaLinhaCanonica() {
 		// Nó sem rota declarada: a lista vazia entra na linha como "[]" — a forma é a mesma, e a
 		// assinatura do formato 4 continua sendo conferível contra a do formato 3 pela posição.
-		var comRota = new NetworkConfigSigner.SignedFields(4, 7, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
+		var comRota = new NetworkConfigSigner.SignedFields(5, 7, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
 			List.of("MEDIA_TRANSCODE"), List.of("catalogo=https://catalogo.exemplo/api"),
-			"2026-11-12T12:00:00Z", 300, 4);
-		var semRota = new NetworkConfigSigner.SignedFields(4, 7, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
-			List.of("MEDIA_TRANSCODE"), List.of(), "2026-11-12T12:00:00Z", 300, 4);
+			"2026-11-12T12:00:00Z", 300, 4, 40960L);
+		var semRota = new NetworkConfigSigner.SignedFields(5, 7, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
+			List.of("MEDIA_TRANSCODE"), List.of(), "2026-11-12T12:00:00Z", 300, 4, 40960L);
 		assertThat(comRota.canonical())
 			.contains("[\"MEDIA_TRANSCODE\"]|[\"catalogo=https://catalogo.exemplo/api\"]|2026-11-12T12:00:00Z");
 		assertThat(semRota.canonical()).contains("[\"MEDIA_TRANSCODE\"]|[]|2026-11-12T12:00:00Z");
-		// O termo continua no FIM: campo novo nunca desloca o último.
-		assertThat(semRota.canonical()).endsWith("2026-11-12T12:00:00Z|300|4");
+		// O termo continua na mesma posição e o disco medido entrou DEPOIS dele: campo novo nunca
+		// desloca o último, e o último agora é o disco livre medido no heartbeat.
+		assertThat(semRota.canonical()).endsWith("2026-11-12T12:00:00Z|300|4|40960");
+	}
+
+	@Test
+	void discoLivreMedidoAssinaSeparadoDoNaoMedido() {
+		var medido = fields(List.of("NODE_MEDIA"), 40960L);
+		var vazio = fields(List.of("NODE_MEDIA"), 0L);
+		var naoMedido = fields(List.of("NODE_MEDIA"), null);
+
+		assertThat(medido.canonical()).endsWith("|40960");
+		assertThat(vazio.canonical()).endsWith("|0");
+		assertThat(naoMedido.canonical()).endsWith("|ausente");
+
+		// "Sem espaço" e "não sei" não podem ser a mesma string assinada: quem verifica decidiria
+		// cache e réplica do mesmo jeito para os dois, e o nó cheio passaria como se estivesse bem.
+		assertThat(vazio.canonical()).isNotEqualTo(naoMedido.canonical());
+		String signature = sign(naoMedido.canonical());
+		assertThat(NetworkConfigSigner.verify(pair.getPublic(), naoMedido.canonical(), signature)).isTrue();
+		// E trocar o medido pelo declarado do outro lado quebra a assinatura.
+		assertThat(NetworkConfigSigner.verify(pair.getPublic(), vazio.canonical(), signature)).isFalse();
+		assertThat(NetworkConfigSigner.verify(pair.getPublic(), medido.canonical(), signature)).isFalse();
 	}
 
 	@Test
 	void mesmaPermissaoEmOrdemDiferreProduzAMesmaLinhaCanonica() {
-		var first = new NetworkConfigSigner.SignedFields(4, 7, "nd_1", List.of("NODE_MEDIA", "NODE_WORKER"), 4, 8192,
+		var first = new NetworkConfigSigner.SignedFields(5, 7, "nd_1", List.of("NODE_MEDIA", "NODE_WORKER"), 4, 8192,
 			51200, 100, List.of("ASYNC_JOB", "MEDIA_TRANSCODE"),
 			List.of("catalogo=https://catalogo.exemplo/api", "acervo=https://acervo.exemplo/api"),
-			"2026-11-12T12:00:00Z", 300, 4);
-		var second = new NetworkConfigSigner.SignedFields(4, 7, "nd_1", List.of("NODE_WORKER", "NODE_MEDIA"), 4, 8192,
+			"2026-11-12T12:00:00Z", 300, 4, 40960L);
+		var second = new NetworkConfigSigner.SignedFields(5, 7, "nd_1", List.of("NODE_WORKER", "NODE_MEDIA"), 4, 8192,
 			51200, 100, List.of("MEDIA_TRANSCODE", "ASYNC_JOB"),
 			List.of("acervo=https://acervo.exemplo/api", "catalogo=https://catalogo.exemplo/api"),
-			"2026-11-12T12:00:00Z", 300, 4);
+			"2026-11-12T12:00:00Z", 300, 4, 40960L);
 		assertThat(first.canonical()).isEqualTo(second.canonical());
 		String signature = sign(first.canonical());
 		assertThat(NetworkConfigSigner.verify(pair.getPublic(), second.canonical(), signature)).isTrue();

@@ -58,6 +58,7 @@ class JobContractController {
 	private final tools.jackson.databind.ObjectMapper objectMapper;
 	private final com.socialcoisa.rede.companies.application.CompanyService companyService;
 	private final JobInterviewService interviewService;
+	private final com.socialcoisa.rede.jobs.application.JobCompatibilityService compatibility;
 
 	JobContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
 			JobService jobService, CursorCodec cursorCodec,
@@ -72,9 +73,11 @@ class JobContractController {
 			com.socialcoisa.rede.jobs.application.ExternalJobSubmissionService externalJobSubmission,
 			com.socialcoisa.rede.jobs.application.ExternalJobApplicationService externalJobApplication,
 			com.socialcoisa.rede.companies.application.CompanyService companyService,
-			JobInterviewService interviewService) {
+			JobInterviewService interviewService,
+			com.socialcoisa.rede.jobs.application.JobCompatibilityService compatibility) {
 		this.companyService = companyService;
 		this.interviewService = interviewService;
+		this.compatibility = compatibility;
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.jobService = jobService;
@@ -146,7 +149,7 @@ class JobContractController {
 		String viewer = viewerId(sessionToken);
 		if (soExternas) {
 			return externalPage(query, platform, level, workModel, employmentType, city, state, country,
-				salaryMin, remoteOnly, publishedAfter, sort, cursor, limit, viewer != null);
+				salaryMin, remoteOnly, publishedAfter, sort, cursor, limit, viewer);
 		}
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		List<Job> jobs = jobService.list(query, type, level, location, skills, before, limit);
@@ -599,12 +602,18 @@ class JobContractController {
 		Set<String> savedIds = authenticated ? jobService.savedJobIds(viewer, ids) : Set.of();
 		Map<String, Integer> counts = authenticated ? jobService.applicationsCountByJobIds(ids) : Map.of();
 		Map<String, String> slugs = companySlugs(jobs);
+		// O perfil é lido UMA vez para a página inteira: o score é o mesmo cálculo em cada linha.
+		var compat = compatibility.forViewer(viewer);
 		List<JobView> items = jobs.stream()
 			.map(job -> {
 				boolean owner = authenticated && viewer.equals(job.postedBy());
+				int matchScore = owner ? 0
+					: compat.scoreOf(job.skills(),
+						job.title() + " " + (job.description() == null ? "" : job.description()),
+						job.location(), null, null);
 				return new JobView(job.id(), job.title(), job.company(), job.logo(), job.location(), job.type(),
 					job.level(), job.salary(), job.currency(), job.skills(),
-					job.postedAt() != null ? job.postedAt().toString() : null, 0,
+					job.postedAt() != null ? job.postedAt().toString() : null, matchScore,
 					!owner && appliedIds.contains(job.id()), savedIds.contains(job.id()), owner,
 					owner ? counts.getOrDefault(job.id(), 0) : 0, authorOf(job), fieldViews(job),
 					job.status().name(), job.closedAt() != null ? job.closedAt().toString() : null,
@@ -621,7 +630,7 @@ class JobContractController {
 			return new PageResponse<>(items, nextCursor);
 		}
 		List<JobView> merged = new java.util.ArrayList<>(items);
-		merged.addAll(externalJobViews(externalQuery, authenticated));
+		merged.addAll(externalJobViews(externalQuery, viewer));
 		return new PageResponse<>(merged, nextCursor);
 	}
 
@@ -634,7 +643,7 @@ class JobContractController {
 	private PageResponse<JobView> externalPage(String query, String platform, String level, String workModel,
 			String employmentType, String city, String state, String country, java.math.BigDecimal salaryMin,
 			Boolean remoteOnly, String publishedAfter, String sort, String cursor, int limit,
-			boolean showApplyEmail) {
+			String viewer) {
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		Instant after = null;
 		if (org.springframework.util.StringUtils.hasText(publishedAfter)) {
@@ -660,8 +669,10 @@ class JobContractController {
 			blankToNull(city), blankToNull(state), blankToNull(country), salaryMin, remoteOnly, after,
 			normalizedSort, before, limit);
 		List<ExternalJob> found = externalJobRepository.search(search);
+		boolean showApplyEmail = viewer != null;
+		var compat = compatibility.forViewer(viewer);
 		List<JobView> items = found.stream()
-			.map(job -> toExternalView(job, false, showApplyEmail)).toList();
+			.map(job -> toExternalView(job, false, showApplyEmail, compat)).toList();
 		// Cursor só na ordenação por data: nas outras, a posição não é estável entre páginas.
 		String nextCursor = null;
 		if (found.size() == limit
@@ -712,7 +723,7 @@ class JobContractController {
 	 * Vagas externas JA SALVAS no banco (tabela propria, atualizadas pelo worker da meia-noite) —
 	 * nao buscamos a fonte a cada requisicao. Entram DEPOIS das internas.
 	 */
-	private List<JobView> externalJobViews(String query, boolean showApplyEmail) {
+	private List<JobView> externalJobViews(String query, String viewer) {
 		// A listagem de "externas" (agregadores) NAO mistura as criadas pela comunidade: elas têm
 		// filtro próprio ("Vaga externa criada no Énóis" = plataforma Comunidade). A busca já
 		// filtra as removidas/expiradas — o complemento da primeira página não pode mostrá-las.
@@ -720,8 +731,10 @@ class JobContractController {
 			org.springframework.util.StringUtils.hasText(query) ? query.trim() : null, null,
 			com.socialcoisa.rede.jobs.application.ExternalJobSubmissionService.COMMUNITY_PLATFORM,
 			externalListingLimit);
+		var compat = compatibility.forViewer(viewer);
+		boolean showApplyEmail = viewer != null;
 		return externalJobRepository.search(search).stream()
-			.map(job -> toExternalView(job, false, showApplyEmail)).toList();
+			.map(job -> toExternalView(job, false, showApplyEmail, compat)).toList();
 	}
 
 	private JobView toExternalView(ExternalJob job) {
@@ -738,9 +751,23 @@ class JobContractController {
 	 * publica de vagas externas expunha o endereco para qualquer visitante.
 	 */
 	private JobView toExternalView(ExternalJob job, boolean owner, boolean showApplyEmail) {
+		return toExternalView(job, owner, showApplyEmail, null);
+	}
+
+	/**
+	 * `compat` nulo = visitante (sem perfil): o score fica 0 e a tela não mostra o selo. A vaga
+	 * externa raramente lista requisitos, então o sinal de tecnologia vem do texto do anúncio.
+	 */
+	private JobView toExternalView(ExternalJob job, boolean owner, boolean showApplyEmail,
+			com.socialcoisa.rede.jobs.domain.JobCompatibility compat) {
+		var details = job.details();
+		int matchScore = compat == null ? 0
+			: compat.scoreOf(List.of(), job.title() + " " + (job.description() == null ? "" : job.description()),
+				details == null ? null : details.city(), details == null ? null : details.state(),
+				details == null ? null : details.workModel());
 		return new JobView(job.id(), job.title(), job.company(), null, job.location(), null, null,
 			job.salary(), job.currency(), List.of(),
-			job.importedAt() != null ? job.importedAt().toString() : null, 0, false, false, owner, 0, null,
+			job.importedAt() != null ? job.importedAt().toString() : null, matchScore, false, false, owner, 0, null,
 			List.of(), "OPEN", null, "EXTERNAL", job.url(), job.platform(),
 			showApplyEmail ? job.applyEmail() : null,
 			job.description(), job.salaryMin(), job.salaryMax(), job.salaryPeriod(), externalSalaryLabel(job),
@@ -748,9 +775,22 @@ class JobContractController {
 	}
 
 	private JobView toView(Job job, String viewer, boolean applied, boolean saved, int applicationsCount) {
+		return toView(job, viewer, applied, saved, applicationsCount, compatibility.forViewer(viewer));
+	}
+
+	/**
+	 * `compat` já resolvido: a listagem lê o perfil uma vez e reaproveita em todas as linhas.
+	 * O dono da vaga não recebe score — ele não é candidato na própria vaga.
+	 */
+	private JobView toView(Job job, String viewer, boolean applied, boolean saved, int applicationsCount,
+			com.socialcoisa.rede.jobs.domain.JobCompatibility compat) {
+		boolean owner = viewer != null && viewer.equals(job.postedBy());
+		int matchScore = owner || compat == null ? 0
+			: compat.scoreOf(job.skills(), job.title() + " " + (job.description() == null ? "" : job.description()),
+				job.location(), null, null);
 		return new JobView(job.id(), job.title(), job.company(), job.logo(), job.location(), job.type(), job.level(),
-			job.salary(), job.currency(), job.skills(), job.postedAt() != null ? job.postedAt().toString() : null, 0,
-			applied, saved, viewer != null && viewer.equals(job.postedBy()), applicationsCount, authorOf(job),
+			job.salary(), job.currency(), job.skills(), job.postedAt() != null ? job.postedAt().toString() : null,
+			matchScore, applied, saved, owner, applicationsCount, authorOf(job),
 			fieldViews(job), job.status().name(), job.closedAt() != null ? job.closedAt().toString() : null,
 			"INTERNAL", null, null, null,
 			job.description(), formatAmount(job.salaryMin()), formatAmount(job.salaryMax()),

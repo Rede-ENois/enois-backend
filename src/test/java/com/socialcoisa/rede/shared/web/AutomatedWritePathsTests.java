@@ -81,7 +81,13 @@ class AutomatedWritePathsTests {
 		"/network/content/*/*/synced",
 		"/network/content/reconcile",
 		// Fase 3: entrega do arquivo transcodificado pelo nó de mídia.
-		"/network/media/*/result");
+		"/network/media/*/result",
+		// Storage (fase 1): o nó grava o corpo de um objeto. Mesma credencial de nó e perfil
+		// NODE_STORAGE conferido no controller — sem sessão de navegador, como as demais.
+		"/network/storage/objects/*",
+		// Storage (fase 3): a réplica confirma a cópia designada. Mesma credencial, e a confirmação
+		// é conferida contra a colocação antes de virar durabilidade.
+		"/network/storage/objects/*/replica");
 
 	private static final Pattern MAPPING = Pattern
 		.compile("@(Get|Post|Put|Patch|Delete)Mapping(?:\\(\\s*(?:value\\s*=\\s*)?\"([^\"]*)\"[^)]*\\))?");

@@ -126,8 +126,12 @@ class FeedPaginationTests {
 			deleted.id().value(), prefix + PostType.BLOG, prefix + PostType.BUSINESS, channel.id().value());
 	}
 
+	/**
+	 * Le as paginas ate o cursor acabar. O teto do servico e de 10 por pagina, e a base H2 e
+	 * compartilhada: a janela do ranking pode ter mais paginas do que o fixture criou.
+	 */
 	private List<String> readAll(FeedTab tab, String cursor, int limit) {
-		return readAll(tab, cursor, limit, 10, null);
+		return readAll(tab, cursor, limit, 120, null);
 	}
 
 	/**

@@ -179,7 +179,7 @@ class ProfilePublicCacheTests {
 
 	private static UpdateProfileCommand comando(String userId, String name, String username) {
 		return new UpdateProfileCommand(userId, name, null, null, null, null, null, null, null, null, null,
-			List.of(), List.of(), null, null, List.of(), null, null, username, null, null, null, null, null, null,
-			null);
+			List.of(), List.of(), null, null, List.of(), null, null, null, username, null, null, null, null, null,
+			null, null);
 	}
 }

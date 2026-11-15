@@ -26,7 +26,7 @@
 - **Rede de conexões** entre usuários
 - **Communidades** temáticas
 - **Eventos** com confirmação de presença
-- **Vagas de emprego** com candidatura
+- **Vagas de emprego** com candidatura e processo seletivo em etapas ([SELECTION_PROCESS.md](SELECTION_PROCESS.md))
 - **Mentoria** com agendamento de sessões
 - **Mensagens diretas** em conversas
 - **Interfaces social e profissional** na mesma conta ([SOCIAL_PROFESSIONAL_CONTEXTS.md](SOCIAL_PROFESSIONAL_CONTEXTS.md))

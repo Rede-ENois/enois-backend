@@ -59,6 +59,7 @@ public class CallService implements CallRoomAuthorization {
 	private final CallAudience audience;
 	private final TopicLookup topics;
 	private final EventLookup eventLookup;
+	private final com.socialcoisa.rede.calls.application.port.out.TableCallLookup tables;
 	private final MeetingTokenIssuer tokens;
 	private final NotificationService notifications;
 	private final UserProfileRepository profiles;
@@ -73,14 +74,16 @@ public class CallService implements CallRoomAuthorization {
 	private final TransactionTemplate entrance;
 
 	public CallService(CallRepository calls, CallAudience audience, TopicLookup topics, EventLookup eventLookup,
-			MeetingTokenIssuer tokens, NotificationService notifications, UserProfileRepository profiles,
-			UserRateLimiter rateLimiter, AgeGate ageGate, ApplicationEventPublisher events, Clock clock,
+			com.socialcoisa.rede.calls.application.port.out.TableCallLookup tables, MeetingTokenIssuer tokens,
+			NotificationService notifications, UserProfileRepository profiles, UserRateLimiter rateLimiter,
+			AgeGate ageGate, ApplicationEventPublisher events, Clock clock,
 			PlatformTransactionManager transactionManager) {
 		this.entrance = new TransactionTemplate(transactionManager);
 		this.calls = calls;
 		this.audience = audience;
 		this.topics = topics;
 		this.eventLookup = eventLookup;
+		this.tables = tables;
 		this.tokens = tokens;
 		this.notifications = notifications;
 		this.profiles = profiles;
@@ -196,6 +199,48 @@ public class CallService implements CallRoomAuthorization {
 		notifyEventLive(call, actorId, interested);
 		publish(call, interested);
 		return view(call, actorId, null);
+	}
+
+	/**
+	 * Abre (ou devolve) a sala de voz da mesa do Éroleplay. Mesma mecânica do "Tamo junto": nasce
+	 * "ao vivo" com quem abriu já dentro, sem toque — a mesa é convocada, não chamada. Quem entra
+	 * precisa participar da campanha da mesa, e a conferência é refeita a cada entrada.
+	 */
+	@Transactional
+	public CallView startTable(String tableId, String actorId, CallKind kind) {
+		requireConfigured();
+		ageGate.requireCanWrite(actorId);
+		List<String> members = tables.campaignMembersOf(tableId);
+		rateLimiter.require(actorId, UserRateLimiter.START_CALL);
+		Instant now = clock.instant();
+		Optional<CallSession> open = calls.findOpenByTable(tableId);
+		if (open.isPresent()) {
+			enter(open.get(), actorId);
+			return view(open.get(), actorId, null);
+		}
+		CallSession call = CallSession.forTable(newId("call"), kind, tableId, actorId, newRoomId(),
+			displayName(actorId), now);
+		calls.create(call, members, now);
+		enter(call, actorId);
+		notifyTableLive(call, actorId, members);
+		publish(call, members);
+		return view(call, actorId, null);
+	}
+
+	/** Sala "Tamo junto" aberta da mesa do Éroleplay, se houver — é o "ao vivo" da mesa. */
+	@Transactional(readOnly = true)
+	public Optional<CallView> openOfTable(String tableId, String actorId) {
+		return calls.findOpenByTable(tableId)
+			.filter(call -> {
+				try {
+					tables.requireMemberOfCampaign(tableId, actorId);
+					return true;
+				}
+				catch (ApiException denied) {
+					return false;
+				}
+			})
+			.map(call -> view(call, actorId, null));
 	}
 
 	// ------------------------------------------------------------------ responder (1:1)
@@ -622,12 +667,13 @@ public class CallService implements CallRoomAuthorization {
 	private List<String> audienceOf(CallSession call) {
 		return call.conversationId() != null ? audience.participantsOf(call.conversationId())
 			: call.groupId() != null ? audience.groupMembers(call.groupId())
-			: call.eventId() != null ? eventLookup.interestedIn(call.eventId()) : List.of();
+			: call.eventId() != null ? eventLookup.interestedIn(call.eventId())
+			: call.tableId() != null ? tables.campaignMembersOf(call.tableId()) : List.of();
 	}
 
 	private void publish(CallSession call, List<String> userIds) {
 		events.publishEvent(new CallChanged(call.id(), call.conversationId(), call.groupId(), call.eventId(),
-			call.state().name(), userIds));
+			call.tableId(), call.state().name(), userIds));
 	}
 
 	private void notifyIncoming(CallSession call, String actorId, List<String> recipients) {
@@ -663,6 +709,18 @@ public class CallService implements CallRoomAuthorization {
 			}
 			notifications.createCounted(userId, "CALL_EVENT_LIVE", "call_live:" + call.id(), actorId,
 				"Tamo junto ao vivo", body, count -> body, callHref(call.id()), "Entrar");
+		}
+	}
+
+	private void notifyTableLive(CallSession call, String actorId, List<String> members) {
+		String body = "🔴 A mesa esta ao vivo! Entre na voz quando quiser.";
+		for (String userId : members) {
+			if (userId.equals(actorId)) {
+				continue;
+			}
+			// Uma notificação por chamada (a chave é a própria chamada): não repete a cada entrada.
+			notifications.createCounted(userId, "CALL_TABLE_LIVE", "call_live:" + call.id(), actorId,
+				"Mesa ao vivo", body, count -> body, callHref(call.id()), "Entrar");
 		}
 	}
 
@@ -705,8 +763,8 @@ public class CallService implements CallRoomAuthorization {
 	private CallView view(CallSession call, String actorId, Integer participantCount) {
 		int present = participantCount != null ? participantCount : calls.countPresentExcluding(call.id(), null);
 		return new CallView(call.id(), call.kind(), call.modality(), call.conversationId(), call.groupId(),
-			call.topicId(), call.eventId(), call.initiatorId(), call.displayName(), call.state(), call.createdAt(),
-			call.answeredAt(), call.endedAt(), call.endReason(), call.expiresAt(), present,
+			call.topicId(), call.eventId(), call.tableId(), call.initiatorId(), call.displayName(), call.state(),
+			call.createdAt(), call.answeredAt(), call.endedAt(), call.endReason(), call.expiresAt(), present,
 			call.initiatorId().equals(actorId), calls.participantState(call.id(), actorId));
 	}
 
@@ -743,9 +801,9 @@ public class CallService implements CallRoomAuthorization {
 
 	/** Visão da chamada para uma pessoa. Nunca carrega token nem nome de sala. */
 	public record CallView(String id, CallKind kind, CallModality modality, String conversationId, String groupId,
-			String topicId, String eventId, String initiatorId, String displayName, CallState state, Instant createdAt,
-			Instant answeredAt, Instant endedAt, String endReason, Instant expiresAt, int participantCount,
-			boolean isInitiator, CallParticipantState myState) {
+			String topicId, String eventId, String tableId, String initiatorId, String displayName, CallState state,
+			Instant createdAt, Instant answeredAt, Instant endedAt, String endReason, Instant expiresAt,
+			int participantCount, boolean isInitiator, CallParticipantState myState) {
 	}
 
 	/**

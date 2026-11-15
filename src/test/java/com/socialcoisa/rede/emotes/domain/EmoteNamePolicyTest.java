@@ -15,6 +15,7 @@ class EmoteNamePolicyTest {
 		assertThat(EmoteNamePolicy.blocked("plant")).isTrue();
 		assertThat(EmoteNamePolicy.blocked("show")).isTrue();
 		assertThat(EmoteNamePolicy.blocked("dick")).isTrue();
+		assertThat(EmoteNamePolicy.blocked("PantsGrab")).isTrue();
 	}
 
 	@Test

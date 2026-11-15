@@ -19,7 +19,10 @@ set -u
 NODE_HOME="${NODE_HOME:-/var/lib/enois-node}"
 CONTROL_PLANE="${CONTROL_PLANE_URL:?CONTROL_PLANE_URL é obrigatório}"
 POLL_SECONDS="${NODE_POLL_SECONDS:-15}"
-RUNTIME_VERSION="${RUNTIME_VERSION:-0.1.0}"
+# "<fonte>@<sha8>" — o commit exato da fonte de verdade que o bootstrap construiu
+# (compose exporta o que o install.sh leu de $NODE_HOME/runtime-version). Nó que
+# mente a versão é o único jeito de o painel não ver divergência de runtime.
+RUNTIME_VERSION="${RUNTIME_VERSION:-qa}"
 
 [[ -s "$NODE_HOME/node.json" ]] || { printf '[executor] sem node.json\n' >&2; exit 1; }
 [[ -s "$NODE_HOME/api-key" ]] || { printf '[executor] sem api-key\n' >&2; exit 1; }
@@ -34,6 +37,19 @@ auth_bin=(-H "X-Node-Id: $node_id" -H "X-Node-Key: $node_key")
 json_field() {
   # json_field <json> <chave>: primeiro valor string da chave, sem depender de jq.
   sed -n 's/.*"'"$2"'":"\([^"]*\)".*/\1/p' <<<"$1" | head -n 1
+}
+
+# Aviso que o operador precisa ler uma vez, não a cada ciclo.
+# O loop roda a cada NODE_POLL_SECONDS; repetir a mesma linha a cada volta faz o log
+# crescer e a informação útil (mudou o estado?) sumir. Guarda a última linha emitida em
+# memória, por rótulo, e cala a repetição. Estado novo, linha nova.
+LAST_NOTICE=""
+notice_once() {
+  # notice_once <rotulo> <mensagem>: emite só quando a transição é nova.
+  local key="$1" message="$2"
+  [[ "$LAST_NOTICE" == "$key" ]] && return 0
+  LAST_NOTICE="$key"
+  printf '[executor] %s\n' "$message" >&2
 }
 
 task_payload() {
@@ -63,7 +79,7 @@ json_flag() {
 allowed_tasks() {
   local config rc
   if [[ ! -s "$NODE_HOME/pinning-key" ]]; then
-    printf '[executor] sem pinning-key — config não verificável; rode --start para pinar a chave\n' >&2
+    notice_once sem-pino 'sem pinning-key — config não verificável; rode --start para pinar a chave'
     return 1
   fi
   config=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
@@ -193,7 +209,7 @@ term_regressao() {
 # recortar e ordenar, não reinterpretar o documento.
 config_signature() {
   # config_signature <config-json>: imprime "canonical<TAB>assinatura"; 1 se faltar campo.
-  local format_version config_version node_id profiles cpu memory disk bandwidth tasks routes issued_at ttl term signature
+  local format_version config_version node_id profiles cpu memory disk bandwidth tasks routes issued_at ttl term disk_free signature
   format_version=$(json_number "$1" formatVersion)
   config_version=$(json_number "$1" configVersion)
   node_id=$(json_field "$1" nodeId)
@@ -213,13 +229,22 @@ config_signature() {
   # O termo da autoridade entrou no formato 2 (fase 6): vem por último na linha.
   # Formato 1 não o tinha e não é mais servido pelo Control Plane.
   term=$(json_number "$1" term)
+  # diskFreeMb (formato 5) vem DEPOIS do termo: campo novo nunca desloca o último. É o disco
+  # livre que o próprio nó mediu e subiu no heartbeat -- não o declarado, que é o teto.
+  # "ausente" e não 0: zero é "sem espaço livre" e ausente é "não mediu"; assinar os dois
+  # iguais tornaria indistinguível, para quem verifica, um disco cheio de um disco desconhecido.
+  if grep -q '"diskFreeMb":[0-9]' <<< "$1"; then
+    disk_free=$(json_number "$1" diskFreeMb)
+  else
+    disk_free='ausente'
+  fi
   signature=$(json_field "$1" signature)
   [[ -n "$format_version" && -n "$config_version" && -n "$node_id" && -n "$cpu" \
       && -n "$memory" && -n "$disk" && -n "$bandwidth" && -n "$issued_at" \
       && -n "$ttl" && -n "$term" && -n "$signature" ]] || return 1
-  printf '%s|%s|%s|[%s]|%s|%s|%s|%s|[%s]|[%s]|%s|%s|%s\t%s' \
+  printf '%s|%s|%s|[%s]|%s|%s|%s|%s|[%s]|[%s]|%s|%s|%s|%s\t%s' \
     "$format_version" "$config_version" "$node_id" "$profiles" "$cpu" "$memory" "$disk" \
-    "$bandwidth" "$tasks" "$routes" "$issued_at" "$ttl" "$term" "$signature"
+    "$bandwidth" "$tasks" "$routes" "$issued_at" "$ttl" "$term" "$disk_free" "$signature"
 }
 
 json_list_sorted() {
@@ -548,7 +573,7 @@ exec_read_query() {
 }
 
 # ---------------- executor real: EDGE_CACHE (cache de borda) ----------------
-# O cache de borda é alimentado pelo feed de mudanças (V283): GET
+# O cache de borda é alimentado pelo feed de mudanças (V312): GET
 # /network/content/changes devolve, depois do cursor do nó, só o que ganhou versão
 # nova — kind, contentId, version, contentHash — e nunca o corpo. O corpo continua
 # vindo de GET /network/content/{kind}/{id}, o mesmo caminho autorizado da borda.
@@ -1033,9 +1058,19 @@ exec_api_request() {
 
 cycle() {
   # 1. heartbeat: estado, modo e se pode pedir tarefa.
-  local hb mode accept_tasks observed_cpu observed_mem observed_term term_part
+  local hb mode accept_tasks observed_cpu observed_mem observed_disk observed_term term_part disk_part
   observed_cpu=$(awk 'NR==1 {printf "%.1f", $1}' /proc/loadavg 2>/dev/null || echo 0)
   observed_mem=$(awk '/MemAvailable/ {printf "%d", ($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+  # Disco livre MEDIDO no diretório de estado do nó — é este que o Control Plane mostra ao lado do
+  # `declared_disk_mb` do enroll e que a capacidade do Storage leva em conta. O declarado é o que o
+  # participante prometeu; este é o que existe. Sem a medida, um nó que perdeu disco continua sendo
+  # tratado como se tivesse tudo que prometeu.
+  #
+  # Vazio quando o `df` não responde: no contrato, nulo é "não reportado", e mandar 0 diria "sem
+  # espaço" — o oposto do que se sabe. `-P` dá uma linha por sistema de arquivos, sem quebra de
+  # linha para nomes com espaço.
+  observed_disk=$(df -P -m "$NODE_HOME" 2>/dev/null | awk 'NR==2 {print $4}')
+  [[ "$observed_disk" =~ ^[0-9]+$ ]] || observed_disk=''
   # O termo aceito vai no heartbeat (doc 06 §4, regra 5): é assim que o Control Plane
   # descobre que este nó viu um controlador de mando maior que o dele. Nó que ainda não
   # aceitou config nenhuma não reporta termo — zero afirmaria "vi o termo zero", que é
@@ -1044,11 +1079,40 @@ cycle() {
   [[ -s "$NODE_HOME/term" ]] && observed_term=$(head -n 1 "$NODE_HOME/term")
   term_part=''
   [[ -n "$observed_term" ]] && term_part=",\"observedTerm\":$observed_term"
+  disk_part=''
+  [[ -n "$observed_disk" ]] && disk_part=",\"diskFreeMb\":$observed_disk"
   hb=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
-    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"memoryMb\":$observed_mem,\"runningTasks\":0}$term_part}" \
+    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"memoryMb\":$observed_mem,\"runningTasks\":0$disk_part}$term_part}" \
     "$CONTROL_PLANE/network/nodes/heartbeat") || { printf '[executor] heartbeat falhou\n' >&2; return 1; }
   mode=$(json_field "$hb" mode)
   accept_tasks=$(grep -q '"acceptTasks":true' <<<"$hb" && echo true || echo false)
+  # O status do Control Plane é a resposta à pergunta "fui aceito?" — e antes ele existia no
+  # corpo do heartbeat e morria ali. Um nó PENDING_APPROVAL e um nó aprovado mas em modo sem
+  # despacho registravam a MESMA linha (`modo=X acceptTasks=false`), e o operador não tinha
+  # como saber se faltava a aprovação do admin ou uma condição da rede. Agora o motivo sai
+  # por extenso, e só quando muda: transição é o que importa, não o ciclo.
+  status=$(json_field "$hb" status)
+  if [[ "$accept_tasks" == true ]]; then
+    notice_once "aceito-${status:-?}-${mode:-?}" "aceito pela rede — status=${status:-?} modo=${mode:-?} (aceita tarefas)"
+  else
+    case "${status:-}" in
+      PENDING_APPROVAL)
+        notice_once 'aguardando-aprovacao' \
+          "aguardando aprovação — o nó existe e autentica, mas o admin ainda não aprovou (status=$status)" ;;
+      QUARANTINED|SUSPENDED)
+        notice_once "quarentena-${status}" \
+          "fora de operação — status=$status; o nó autentica e drena até o admin liberar" ;;
+      REVOKED)
+        notice_once 'revogado' \
+          "nó revogado — status=$status; a revogação é terminal, provisione um nó novo" ;;
+      ACTIVE)
+        notice_once "drenando-${mode:-?}" \
+          "aprovado, mas a rede não despacha agora — modo=${mode:-?}; drenando (drenar é não pedir)" ;;
+      *)
+        notice_once "sem-aceite-${status:-?}-${mode:-?}" \
+          "a rede não despacha — status=${status:-?} modo=${mode:-?} acceptTasks=false" ;;
+    esac
+  fi
   printf '[executor] modo=%s acceptTasks=%s\n' "${mode:-?}" "$accept_tasks"
 
   # 2. drenar é NÃO PEDIR: modo sem despacho ou nó fora de operação não consulta fila.

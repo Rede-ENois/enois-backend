@@ -89,6 +89,32 @@ class CalendarIcsApiTests {
 	}
 
 	@Test
+	void exportWithAWindowLongerThanAYearIs400() throws Exception {
+		TestAuthHelper.AuthSession user = account();
+		mockMvc.perform(get("/calendar/entries/export.ics").header("X-Session-Token", user.token())
+				.param("from", FROM.minus(Duration.ofDays(400)).toString()).param("to", TO.toString()))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("WINDOW_TOO_LONG"));
+	}
+
+	@Test
+	void importingAFileOverTheByteCeilingIs400() throws Exception {
+		TestAuthHelper.AuthSession user = account();
+		StringBuilder huge = new StringBuilder("BEGIN:VCALENDAR\r\n");
+		while (huge.length() < 600 * 1024) {
+			huge.append("X-PREENCHIMENTO:").append("a".repeat(200)).append("\r\n");
+		}
+		huge.append("END:VCALENDAR\r\n");
+
+		mockMvc.perform(withKey(multipart("/calendar/entries/import")
+				.file(icsFile(huge.toString()))
+				.param("scope", "SOCIAL")
+				.header("X-Session-Token", user.token())))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("INVALID_ICS"));
+	}
+
+	@Test
 	void importWithoutSessionIs401() throws Exception {
 		mockMvc.perform(icsImport("BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n"))
 			.andExpect(status().isUnauthorized());
@@ -164,6 +190,27 @@ class CalendarIcsApiTests {
 			.andExpect(jsonPath("$.created").value(0))
 			.andExpect(jsonPath("$.cancelled").value(1))
 			.andExpect(jsonPath("$.skipped").value(0));
+	}
+
+	@Test
+	void aDifferentFileWithTheSameKeyIsAPayloadConflict() throws Exception {
+		TestAuthHelper.AuthSession user = account();
+		String key = UUID.randomUUID().toString();
+		String first = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:um\r\n"
+			+ "DTSTART;TZID=America/Sao_Paulo:20270202T190000\r\nSUMMARY:Um\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+
+		mockMvc.perform(withKey(multipart("/calendar/entries/import").file(icsFile(first))
+			.header("X-Session-Token", user.token()), key))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.created").value(1));
+
+		// O hash da chave sai do arquivo: trocar um byte reconhece a chave como reutilizada, em vez
+		// de devolver a resposta antiga como se o arquivo novo tivesse sido importado.
+		mockMvc.perform(withKey(multipart("/calendar/entries/import")
+			.file(icsFile(first.replace("SUMMARY:Um", "SUMMARY:Outro")))
+			.header("X-Session-Token", user.token()), key))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.code").value("IDEMPOTENCY_PAYLOAD_CONFLICT"));
 	}
 
 	private String exportOf(TestAuthHelper.AuthSession user) throws Exception {

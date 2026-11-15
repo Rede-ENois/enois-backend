@@ -17,6 +17,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,11 +26,13 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.socialcoisa.rede.calendar.application.CalendarInvitationService;
 import com.socialcoisa.rede.calendar.application.port.out.CalendarEntryRepository;
 import com.socialcoisa.rede.calendar.application.port.out.CalendarParticipantRepository;
 import com.socialcoisa.rede.calendar.domain.CalendarEntry;
 import com.socialcoisa.rede.calendar.domain.CalendarEntrySource;
 import com.socialcoisa.rede.calendar.domain.CalendarKind;
+import com.socialcoisa.rede.calendar.domain.CalendarParticipant;
 import com.socialcoisa.rede.calendar.domain.CalendarScope;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
@@ -181,6 +184,33 @@ class CalendarInvitationApiTests {
 				.content(objectMapper.writeValueAsString(Map.of("username", "ninguem_com_esse_arroba"))))
 			.andExpect(status().isNotFound())
 			.andExpect(jsonPath("$.code").value("INVITE_USER_NOT_FOUND"));
+	}
+
+	@Test
+	void oCompromissoRecusaConviteAcimaDoTeto() throws Exception {
+		var owner = account("cal_inv_cap_owner");
+		String entryId = saveEntry(owner.userId(), "Festa grande");
+		// Convites gravados direto: criar 100 perfis pela API custaria a rodada inteira. O teto lê a
+		// contagem do compromisso, então a linha de teste é indistinguível de um convite da tela.
+		IntStream.range(0, CalendarInvitationService.MAX_PARTICIPANTS).forEach(index -> participants
+			.save(CalendarParticipant.invite("calp_cap_" + index, entryId, owner.userId(),
+				"guest_" + index, CREATED_AT)));
+		var guest = account("cal_inv_cap_guest");
+
+		mockMvc
+			.perform(post("/calendar/entries/{entryId}/participants", entryId)
+				.header("X-Session-Token", owner.token())
+				.header("Idempotency-Key", "cap-1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("username", usernameOf(guest)))))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("INVITE_LIMIT_REACHED"));
+
+		// O teto recusa o que passaria dele, não o que já está dentro: retirar um convite abre vaga.
+		participants.delete(participants
+			.findByEntryAndUser(entryId, "guest_0")
+			.orElseThrow());
+		invite(owner, entryId, usernameOf(guest), "cap-2");
 	}
 
 	@Test

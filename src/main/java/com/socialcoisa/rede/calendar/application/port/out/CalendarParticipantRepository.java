@@ -16,19 +16,10 @@ public interface CalendarParticipantRepository {
 
 	Optional<CalendarParticipant> findByEntryAndUser(String entryId, String userId);
 
-	/** Convites de uma pessoa para um conjunto de compromissos, em uma consulta só. */
-	List<CalendarParticipant> findByUserAndEntryIds(String userId, List<String> entryIds);
-
 	/** Todos os participantes de um compromisso, na ordem em que foram convidados. */
 	List<CalendarParticipant> findByEntry(String entryId);
 
-	/**
-	 * Ids dos compromissos em que a pessoa foi convidada, para a leitura incluir o que ela não
-	 * organiza. Devolve id de compromisso, não de convite.
-	 */
-	List<String> findEntryIdsByUser(String userId);
-
-	/** Convites de uma pessoa com a resposta que ela ainda não deu, do convite mais antigo ao mais novo. */
-	List<CalendarParticipant> findPendingByUser(String userId);
+	/** Quantos convites o compromisso tem, sem carregar as linhas: teto do convite. */
+	long countByEntry(String entryId);
 
 }

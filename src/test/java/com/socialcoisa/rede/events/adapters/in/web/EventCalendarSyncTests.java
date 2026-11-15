@@ -8,7 +8,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.UUID;
 
@@ -147,8 +146,9 @@ class EventCalendarSyncTests {
 	}
 
 	private JsonNode agenda(TestAuthHelper.AuthSession session) throws Exception {
-		Instant from = Instant.now().minus(1, ChronoUnit.DAYS);
-		Instant to = Instant.now().plus(3650, ChronoUnit.DAYS);
+		// A leitura da agenda tem teto de um ano; a janela cerca o evento de agosto de 2030.
+		Instant from = Instant.parse("2030-08-01T00:00:00Z");
+		Instant to = Instant.parse("2030-08-31T00:00:00Z");
 		MvcResult result = mockMvc
 			.perform(get("/calendar/entries?from=" + from + "&to=" + to)
 				.header("X-Session-Token", session.token()))

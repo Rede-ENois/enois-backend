@@ -125,6 +125,42 @@ class CalendarRemindersApiTests {
 	}
 
 	@Test
+	void readingAndClearingAStrangersRemindersIs404LikeANonexistentEntry() throws Exception {
+		// A leitura e a remoção prometem o mesmo 404 do detalhe (D10); antes respondiam 200 vazio,
+		// o que confirmava que o compromisso existia na agenda de outra pessoa.
+		String entryId = saveEntry("rem_host_" + UUID.randomUUID(), Instant.now().plus(Duration.ofHours(2)));
+		TestAuthHelper.AuthSession session = account("rem_api_" + UUID.randomUUID());
+
+		mockMvc.perform(get("/calendar/entries/{id}/reminders", entryId)
+				.header("X-Session-Token", session.token()))
+			.andExpect(status().isNotFound())
+			.andExpect(jsonPath("$.code").value("CALENDAR_ENTRY_NOT_FOUND"));
+
+		mockMvc.perform(delete("/calendar/entries/{id}/reminders", entryId)
+				.param("minutesBefore", "15")
+				.header("X-Session-Token", session.token()))
+			.andExpect(status().isNotFound())
+			.andExpect(jsonPath("$.code").value("CALENDAR_ENTRY_NOT_FOUND"));
+	}
+
+	@Test
+	void clearingWithoutALeadIs400InsteadOfASilentNoOp() throws Exception {
+		TestAuthHelper.AuthSession session = account("rem_api_" + UUID.randomUUID());
+		String entryId = saveEntry(session.userId(), Instant.now().plus(Duration.ofHours(2)));
+
+		mockMvc.perform(delete("/calendar/entries/{id}/reminders", entryId)
+				.header("X-Session-Token", session.token()))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("INVALID_REMINDER"));
+
+		mockMvc.perform(delete("/calendar/entries/{id}/reminders", entryId)
+				.param("minutesBefore", "7")
+				.header("X-Session-Token", session.token()))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("INVALID_REMINDER"));
+	}
+
+	@Test
 	void aCancelledEntryRefusesNewReminders() throws Exception {
 		TestAuthHelper.AuthSession session = account("rem_api_" + UUID.randomUUID());
 		String entryId = saveEntry(session.userId(), Instant.now().plus(Duration.ofHours(2)));
