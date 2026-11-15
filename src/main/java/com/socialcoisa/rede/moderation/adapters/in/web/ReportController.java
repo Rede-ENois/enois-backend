@@ -206,24 +206,24 @@ class ReportController {
 	}
 
 	@PostMapping("/admin/reports/{reportId}/penalize")
-	ResponseEntity<String> penalize(@RequestHeader("X-Session-Token") String sessionToken, @PathVariable String reportId) {
+	ResponseEntity<ReportView> penalize(@RequestHeader("X-Session-Token") String sessionToken, @PathVariable String reportId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		adminGuard.requireAdmin(user);
-		return ResponseEntity.ok(ReportView.from(moderationService.penalize(reportId, user.id().value())).toString());
+		return ResponseEntity.ok(ReportView.from(moderationService.penalize(reportId, user.id().value())));
 	}
 
 	@PostMapping("/admin/reports/{reportId}/warn")
-	ResponseEntity<String> warn(@RequestHeader("X-Session-Token") String sessionToken, @PathVariable String reportId) {
+	ResponseEntity<ReportView> warn(@RequestHeader("X-Session-Token") String sessionToken, @PathVariable String reportId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		adminGuard.requireAdmin(user);
-		return ResponseEntity.ok(ReportView.from(moderationService.warn(reportId, user.id().value())).toString());
+		return ResponseEntity.ok(ReportView.from(moderationService.warn(reportId, user.id().value())));
 	}
 
 	@PostMapping("/admin/reports/{reportId}/ban")
-	ResponseEntity<String> ban(@RequestHeader("X-Session-Token") String sessionToken, @PathVariable String reportId) {
+	ResponseEntity<ReportView> ban(@RequestHeader("X-Session-Token") String sessionToken, @PathVariable String reportId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		adminGuard.requireAdmin(user);
-		return ResponseEntity.ok(ReportView.from(moderationService.ban(reportId, user.id().value(), this.sessions)).toString());
+		return ResponseEntity.ok(ReportView.from(moderationService.ban(reportId, user.id().value(), this.sessions)));
 	}
 
 	/** Remove a pagina empresarial denunciada (fecha a pagina; nao toca a conta do dono). */
