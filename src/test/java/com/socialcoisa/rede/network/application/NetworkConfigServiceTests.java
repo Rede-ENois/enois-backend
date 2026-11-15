@@ -134,7 +134,7 @@ class NetworkConfigServiceTests {
 		var fields = new NetworkConfigSigner.SignedFields(view.formatVersion(), view.configVersion(), view.nodeId(),
 				view.profiles(), view.limits().cpuCores(), view.limits().memoryMb(), view.limits().diskMb(),
 				view.limits().bandwidthMbps(), view.allowedTasks(), view.allowedRoutes(), view.issuedAt(),
-				view.ttlSeconds(), view.term());
+				view.ttlSeconds(), view.term(), view.limits().diskFreeMb());
 		Signature verifier = Signature.getInstance("Ed25519");
 		verifier.initVerify(pin);
 		verifier.update(fields.canonical().getBytes(StandardCharsets.UTF_8));
@@ -288,7 +288,7 @@ class NetworkConfigServiceTests {
 		var fields = new NetworkConfigSigner.SignedFields(view.formatVersion(), view.configVersion(), view.nodeId(),
 			view.profiles(), view.limits().cpuCores(), view.limits().memoryMb(), view.limits().diskMb(),
 			view.limits().bandwidthMbps(), view.allowedTasks(), view.allowedRoutes(), view.issuedAt(),
-			view.ttlSeconds(), view.term());
+			view.ttlSeconds(), view.term(), view.limits().diskFreeMb());
 		Signature verifier = Signature.getInstance("Ed25519");
 		verifier.initVerify(pin);
 		verifier.update(fields.canonical().getBytes(StandardCharsets.UTF_8));
@@ -299,7 +299,7 @@ class NetworkConfigServiceTests {
 			view.profiles(), view.limits().cpuCores(), view.limits().memoryMb(), view.limits().diskMb(),
 			view.limits().bandwidthMbps(), view.allowedTasks(),
 			List.of("catalogo=http://169.254.169.254/latest/meta-data"), view.issuedAt(), view.ttlSeconds(),
-			view.term());
+			view.term(), view.limits().diskFreeMb());
 		Signature outra = Signature.getInstance("Ed25519");
 		outra.initVerify(pin);
 		outra.update(trocada.canonical().getBytes(StandardCharsets.UTF_8));

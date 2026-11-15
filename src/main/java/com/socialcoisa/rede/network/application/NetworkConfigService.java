@@ -62,8 +62,15 @@ public class NetworkConfigService {
 	 * um destino que ninguém autorizou. Assinar a lista é o que fecha o SSRF (doc 02, linha SSRF) —
 	 * sem isso, a task {@code API_REQUEST} seria uma porta aberta para dentro da rede do
 	 * participante.</p>
+	 *
+	 * <p>5: {@code diskFreeMb} entrou no payload e na linha canônica — o disco livre que o próprio
+	 * nó <b>mede</b> no heartbeat, ao lado do {@code diskMb} que o participante <b>declarou</b>
+	 * ceder. Sem ele, o nó só conhecia a promessa e decidia cache e réplica contra um teto que pode
+	 * não existir. Entra no FIM da linha, depois do termo: é a mesma regra dos formatos 2, 3 e 4 —
+	 * campo novo nunca desloca o último. A posição não é tratamento especial do termo, é a regra
+	 * que mantém legível quem reconstrói a linha.</p>
 	 */
-	static final int FORMAT_VERSION = 4;
+	static final int FORMAT_VERSION = 5;
 
 	private final Clock clock;
 	private final NetworkNodeRepository nodes;
@@ -327,15 +334,17 @@ public class NetworkConfigService {
 				: List.of();
 		var stamp = nodes.configStamp(node.id())
 			.orElseGet(() -> new NetworkNodeRepository.ConfigStamp(FORMAT_VERSION, Instant.now(clock)));
+		// O disco declarado é o teto; o medido é a folga. Os dois vão para o nó porque ele decide o
+		// mesmo que o controle decide: cache e réplica só gravam o que cabe no que existe.
 		var limits = new LimitsView(node.declaredCpuCores(), node.declaredMemoryMb(), node.declaredDiskMb(),
-			node.declaredBandwidthMbps());
+			node.observedDiskFreeMb(), node.declaredBandwidthMbps());
 		// O termo vai no documento e na assinatura: é o que deixa a regra do nó ("termo só sobe")
 		// verificável contra quem assinou, não contra o transporte.
 		var authority = authorities.current()
 			.orElseGet(() -> new NetworkAuthorityRepository.AuthorityRecord(0, null, null));
 		var fields = new NetworkConfigSigner.SignedFields(FORMAT_VERSION, stamp.version(), node.id(), profiles,
 			limits.cpuCores(), limits.memoryMb(), limits.diskMb(), limits.bandwidthMbps(), allowedTasks,
-			allowedRoutes, stamp.issuedAt().toString(), ttlSeconds, authority.term());
+			allowedRoutes, stamp.issuedAt().toString(), ttlSeconds, authority.term(), limits.diskFreeMb());
 		String signature = sign(fields.canonical());
 		return new NodeConfigView(node.id(), node.status().name(), operable, FORMAT_VERSION, stamp.version(),
 			profiles, limits, allowedTasks, allowedRoutes, node.region(), node.country(),
@@ -374,7 +383,16 @@ public class NetworkConfigService {
 	 * transfere: teto de taxa ({@code --limit-rate}) das transferências de corpo. Nenhum dos dois
 	 * entra no despacho — o Control Plane não mede banda nem disco de nó remoto.
 	 */
-	public record LimitsView(int cpuCores, int memoryMb, int diskMb, int bandwidthMbps) {
+	/**
+	 * O que o nó pode usar, em duas colunas que não se misturam: {@code diskMb} é o teto que o
+	 * participante cedeu (o declarado, que vai na assinatura) e {@code diskFreeMb} é o que ele
+	 * MEDIU no último heartbeat. Nulos significam "não reportado" — runtime anterior à V321 — e são
+	 * diferentes de zero, que seria "sem espaço".
+	 *
+	 * <p>O nó precisa dos dois para a mesma decisão que o Control Plane já toma: não gravar o que
+	 * não cabe. O teto diz quanto pode ocupar; a folga diz quanto ainda existe.</p>
+	 */
+	public record LimitsView(int cpuCores, int memoryMb, int diskMb, Long diskFreeMb, int bandwidthMbps) {
 	}
 
 	/**
