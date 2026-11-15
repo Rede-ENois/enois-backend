@@ -145,6 +145,21 @@ assert_contains 'resultado carrega a tentativa vigente' "$(cat "$TMP/curl-calls"
 assert_contains 'output ecoa o idempotencyKey (prova de ciclo)' "$(cat "$TMP/curl-calls")" \
   '"output":"{\"echo\":\"idem-42\"}"'
 
+# O painel do nó exibe as linhas do runtime, e elas só chegam ao Control Plane pelo heartbeat (o nó
+# não abre porta — brief §17). O primeiro ciclo não tem nada a mandar: a linha de aceite nasce da
+# RESPOSTA do heartbeat. O segundo é o que prova o caminho — o buffer do ciclo anterior entra no
+# corpo, escapado, e é esvaziado depois.
+# Neste ponto "$TMP/curl-calls" ainda é o PRIMEIRO ciclo do nó novo — e o heartbeat dele não pode
+# carregar linha nenhuma: a primeira mensagem só nasce da resposta desse heartbeat.
+assert_not_contains 'primeiro heartbeat do no novo nao carrega linha antes de nascer' \
+  "$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)" '"logs":'
+out=$(run_one_cycle "$TASK_ASSIGNED")
+hb_line=$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)
+assert_contains 'heartbeat carrega as linhas do painel (logs)' "$hb_line" '"logs":['
+assert_contains 'linha do painel tem nivel' "$hb_line" '"level":"INFO"'
+assert_contains 'a decisao de aceite vira linha do painel' "$hb_line" 'aceito pela rede'
+assert_contains 'linha do painel leva o instante' "$hb_line" '"at":"'
+
 # ------------------------------------------------- cenário 2: tarefa fora da config
 out=$(run_one_cycle "$TASK_FORBIDDEN")
 assert_contains 'tarefa fora da config assinada é recusada' "$out" 'recusada (fora da config assinada): MEDIA_TRANSCODE'

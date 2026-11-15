@@ -52,11 +52,13 @@ class AdminNetworkController {
 	private final StorageScrubber scrubber;
 	private final NetworkNodeResponsibleRepository responsibles;
 	private final NetworkUserDirectory users;
+	private final com.socialcoisa.rede.network.application.NodeObservabilityService observability;
 	private final ChangeCaptureReadinessService changeCapture;
 
 	AdminNetworkController(NetworkNodeService nodes, NodeKeyService keys, NetworkDashboardService dashboard,
 			AuditTrail audit, CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
 			StorageScrubber scrubber, NetworkNodeResponsibleRepository responsibles, NetworkUserDirectory users,
+			com.socialcoisa.rede.network.application.NodeObservabilityService observability,
 			ChangeCaptureReadinessService changeCapture) {
 		this.nodes = nodes;
 		this.keys = keys;
@@ -67,6 +69,7 @@ class AdminNetworkController {
 		this.scrubber = scrubber;
 		this.responsibles = responsibles;
 		this.users = users;
+		this.observability = observability;
 		this.changeCapture = changeCapture;
 	}
 
@@ -183,6 +186,25 @@ class AdminNetworkController {
 			@RequestParam(defaultValue = "1000") int maxObjects) {
 		admin(sessionToken);
 		return scrubber.scan(bucket, maxObjects);
+	}
+
+	/**
+	 * O painel do nó: série recente e console recente, para a página de cada nó mostrar os mesmos
+	 * quadros do topo do painel de monitoração dentro dele.
+	 *
+	 * <p>É leitura e é <b>direta do nó</b> no sentido que a arquitetura permite: o nó empurra a
+	 * amostra no heartbeat (ele não abre porta — brief §17) e esta rota devolve a janela curta. A
+	 * tela recarrega a cada poucos segundos, o que dá o comportamento ao vivo sem o Control Plane
+	 * abrir conexão para a máquina de quem participa.</p>
+	 */
+	@GetMapping("/{id}/observability")
+	com.socialcoisa.rede.network.application.NodeObservabilityService.Panel observability(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String id, @RequestParam(defaultValue = "60") int samples,
+			@RequestParam(defaultValue = "200") int logs) {
+		admin(sessionToken);
+		nodes.require(id); // Nó desconhecido é 404, não quadro vazio.
+		return observability.panel(id, samples, logs);
 	}
 
 	/**

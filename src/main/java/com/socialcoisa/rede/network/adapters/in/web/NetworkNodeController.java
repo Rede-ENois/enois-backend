@@ -37,14 +37,17 @@ class NetworkNodeController {
 	private final NetworkModeService modes;
 	private final NetworkConfigService configs;
 	private final NetworkRegionService regions;
+	private final com.socialcoisa.rede.network.application.NodeObservabilityService observability;
 
 	NetworkNodeController(NetworkNodeService nodes, NodeKeyService keys, NetworkModeService modes,
-			NetworkConfigService configs, NetworkRegionService regions) {
+			NetworkConfigService configs, NetworkRegionService regions,
+			com.socialcoisa.rede.network.application.NodeObservabilityService observability) {
 		this.nodes = nodes;
 		this.keys = keys;
 		this.modes = modes;
 		this.configs = configs;
 		this.regions = regions;
+		this.observability = observability;
 	}
 
 	/**
@@ -78,10 +81,18 @@ class NetworkNodeController {
 	record EnrollResponse(String nodeId, String status, String contract, String message) {
 	}
 
-	record HeartbeatRequest(String runtimeVersion, Observed observed, Integer observedTerm) {
+	record HeartbeatRequest(String runtimeVersion, Observed observed, Integer observedTerm,
+			java.util.List<LogRequest> logs) {
 	}
 
 	record Observed(Double cpuPercent, Integer memoryMb, Integer runningTasks, Long diskFreeMb) {
+	}
+
+	/**
+	 * Linha do console do nó. O runtime manda o que já escreveria no log dele; o Control Plane guarda
+	 * uma janela curta para a página do nó, e nada além disso (não é auditoria nem retenção).
+	 */
+	record LogRequest(String level, String message, String at) {
 	}
 
 	/**
@@ -129,6 +140,23 @@ class NetworkNodeController {
 		// E falso quando a REGIÃO do nó foi evacuada: o nó está ACTIVE e continua autenticando, mas a
 		// região não opera. Dizer `true` a ele seria a evacuação existindo só no painel — o nó
 		// pediria tarefa e receberia lista vazia em loop, em vez de drenar e parar de perguntar.
+		// O quadro ao vivo da página do nó é alimentado por este mesmo heartbeat: a amostra do
+		// minuto e as linhas que o runtime escreveu. O nó não abre porta (brief §17), então ele
+		// EMPURRA a observação em vez de o Control Plane abrir conexão para dentro da máquina de
+		// quem participa. Nada disto bloqueia a resposta do heartbeat: uma amostra que falhe não
+		// pode impedir um nó de receber permissão de operar.
+		if (observed != null) {
+			observability.record(updated, observed.cpuPercent(), observed.memoryMb(), observed.diskFreeMb(),
+				observed.runningTasks());
+		}
+		if (request != null && request.logs() != null) {
+			for (LogRequest line : request.logs()) {
+				if (line == null) {
+					continue;
+				}
+				observability.log(updated, line.level(), line.message(), parseInstant(line.at()));
+			}
+		}
 		boolean regionEvacuated = NetworkRegions.outOfService(regions.outOfService(), updated.region());
 		boolean acceptTasks = modes.current().dispatchAllowed() && updated.status() == NodeStatus.ACTIVE
 				&& !regionEvacuated;
@@ -147,5 +175,18 @@ class NetworkNodeController {
 	NetworkConfigService.NodeConfigView myConfig(@RequestHeader(value = "X-Node-Id", required = false) String nodeId,
 			@RequestHeader(value = "X-Node-Key", required = false) String nodeKey) {
 		return configs.forNode(keys.authenticate(nodeId, nodeKey));
+	}
+
+	/** Instante do runtime; ausente ou ilegível cai no relógio do Control Plane. */
+	private static java.time.Instant parseInstant(String raw) {
+		if (raw == null || raw.isBlank()) {
+			return null;
+		}
+		try {
+			return java.time.Instant.parse(raw.strip());
+		}
+		catch (java.time.format.DateTimeParseException unreadable) {
+			return null;
+		}
 	}
 }
