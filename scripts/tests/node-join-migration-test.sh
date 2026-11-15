@@ -107,8 +107,14 @@ done
 # ---------------------------------------------------------------- dados entre as rodadas
 # Um token de provisionamento antigo (caminho administrativo) tem de sobreviver à 2ª rodada com as
 # colunas novas nulas: é exatamente o caso de produção — linhas anteriores a esta migração.
+# O mariadb:11.4 reinicia o mysqld uma vez ao final do init: a janela entre "servidor respondeu" e
+# "socket pronto" derrubava a gravação de forma intermitente (ERROR 2026 Broken pipe / 2002). O
+# storage-migration-test já tinha o retry; aqui faltava -- e o harness acusava o CÓDIGO por causa
+# da infra. Repetir a gravação é seguro: as chaves são fixas e o insert é único.
 seeded=0
-db >/dev/null 2>&1 <<'SQL'
+for _ in 1 2 3 4 5; do
+  db >/dev/null 2>&1 <<'SQL' && { seeded=0; break; }
+
 insert into network_nodes (id, display_name, owner_user_id, status, profiles, declared_cpu_cores,
   declared_memory_mb, declared_disk_mb, declared_bandwidth_mbps, region, country, created_at)
 values ('nd_mig_join001', 'no-mig', 'user-mig', 'ACTIVE', 'NODE_WORKER', 4, 8192, 102400, 100, 'sa-east-1', 'BR',
@@ -122,7 +128,10 @@ insert into network_join_requests (id, full_name, email, rg, cpf, motivation, te
 values ('njr_mig001', 'Maria Migracao', 'maria@mig.test', 'MG-12.345.678', '52998224725',
   'Quero participar da rede com uma maquina dedicada', '1', now(3), 'PENDING', 'NODE_WORKER', now(3), now(3));
 SQL
-seeded=$?
+  seeded=1
+  sleep 2
+done
+
 if [[ "$seeded" -eq 0 ]]; then
   pass "dados de teste gravados entre as rodadas (token antigo + inscrição)"
 else
