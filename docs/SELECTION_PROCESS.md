@@ -183,6 +183,40 @@ Rotas da equipe: `GET/POST /empresas/{companyId}/recrutamento/equipe`,
 Publicar vaga continua exigindo papel de página (RECRUITER+): **publicar ≠ conduzir**, e a
 equipe de recrutamento não concede papel na página.
 
+## Modelos de processo seletivo
+
+Biblioteca **pessoal** de fluxos: quem recruta guarda os modelos que usa e aplica por cópia
+numa vaga — editar o modelo depois não muda vaga já configurada, e o modelo não é da página
+(é de quem o criou; aplicar numa vaga continua exigindo CONFIGURE_PROCESS dela).
+
+| Rota | O que faz |
+|---|---|
+| `GET /jobs/recruitment/templates` | os modelos de quem está na sessão |
+| `POST /jobs/recruitment/templates` | cria modelo (`{"name", "stages":[...]}`) |
+| `DELETE /jobs/recruitment/templates/{templateId}` | apaga (só o dono) |
+| `POST /jobs/{jobId}/process/templates/apply` | aplica o modelo na vaga (semeia as etapas na ordem) |
+
+Recusas explícitas: nome repetido na biblioteca 409 `TEMPLATE_NAME_TAKEN`, modelo sem etapa 422
+`TEMPLATE_STAGES_REQUIRED`, etapa repetida 422 `TEMPLATE_STAGE_DUPLICATED`, vaga com fluxo já
+configurado 409 `PIPELINE_ALREADY_CONFIGURED` (quem quer trocar apaga as etapas vazias — a regra
+de etapa ocupada protege quem está no pipeline).
+
+## Ciclo de vida da vaga
+
+- **Prazo de candidaturas** (`applicationDeadline`, V329): opcional na criação e ajustável por
+  `PUT /jobs/{jobId}/deadline` (corpo nulo/vazio remove). Vaga aberta com prazo vencido recusa a
+  candidatura com **409 `APPLICATION_DEADLINE_PASSED`** — estado distinto de vaga encerrada
+  (`JOB_CLOSED`), para o candidato saber o que aconteceu. A checagem é no servidor, no mesmo
+  lock do apply.
+- **Reabrir**: `POST /jobs/{jobId}/reopen` devolve a vaga encerrada a OPEN preservando
+  candidaturas e fluxo; reabrir vaga aberta é 409 `JOB_NOT_CLOSED` (erro de estado, não
+  sucesso silencioso). Quem comanda a vaga reabre: o autor sempre e, na vaga de página, quem
+  tem CONFIGURE_PROCESS (a equipe de recrutamento pode encerrar e reabrir; a mensagem de
+  recusa segue a de antes, `NOT_OWNER`).
+- **Pessoa transita**: recrutar é estado, não identidade — desligar "Sou recrutador/a" fecha a
+  Central para quem não tem vaga, mas não apaga modelo, vaga nem histórico; religar devolve
+  tudo. Quem recruta continua podendo se candidatar a vagas de outras pessoas normalmente.
+
 ## Fora deste escopo (próximos passos)
 
 Questionários, avaliações por critério, slot de entrevista escolhido pelo candidato, banco de
