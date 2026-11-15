@@ -540,6 +540,22 @@ frente do Éroleplay. Branch nova `feat/eroleplay-world` cortada de `enois/qa`.
 - Escopo: **13 testes, 0 falhas, 0 erros**. Vizinhança (mesa, chat, guarda de escrita): **27
   testes, 0 falhas, 0 erros** — total 40.
 - Compilação `./mvnw -DskipTests compile` verde antes dos testes.
+- **Suíte inteira nesta árvore** (após o escopo final): **3.071 testes em 583 classes**.
+  Resultado: **3.056 verdes, 15 quebrados em exatamente 2 classes fora do módulo**
+  (`NetworkReplicaTests` — 5 falhas; `NetworkMediaTests` — 10 erros). Classificação com prova
+  executada: (a) rodando as duas classes SOZINHAS nesta branch, 23 de 24 passam — só
+  `paginaDeComunidadesCustaOMesmoNumeroDeConsultasComUmaOuComQuatro` segue vermelha; (b) esse
+  mesmo método isolado **também falha na base limpa `enois/qa`** (mesma asserção,
+  `expected: 8 but was: 6`) — falha pré-existente da base, guard ambiental, não regressão desta
+  PR; (c) as outras 14 são o padrão de interferência entre classes no H2 compartilhado já
+  relatado na issue #682 e tratado na PR #727 de outro agente — escopo exclusivo de teste,
+  fora do alcance desta rodada. As duas classes não tocam nenhum código do Éroleplay. Escoteiro:
+  a vermelhidão está registrada na #682/#727 em vez de silenciada aqui.
+
+### PR
+
+`feat/eroleplay-world` → **PR #739** para `qa`, aberta sem merge, referenciando a origem
+(roadmap/RFC §4.7) e descrevendo a verificação acima.
 
 ### Próxima tarefa
 
