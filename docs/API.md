@@ -222,6 +222,14 @@ dela e não manda `topic` (`400 TOPIC_FROM_COMMUNITY` / `TOPIC_FROM_CHANNEL`). A
 agendamento (`POST /api/feed/scheduled`). Publicações do sistema (blog, jogos) e posts antigos podem
 seguir sem assunto.
 
+#### Duplicação de conteúdo
+
+Publicação e comentário repetidos retornam `409 DUPLICATE_CONTENT` somente quando conta,
+texto normalizado e contexto validado coincidem na janela configurada. Destino, conversa e
+conteúdo efetivo (mídia, artigo, página ou enquete) distinguem contribuições legítimas; uma
+transação desfeita não impede a tentativa corrigida. O contrato e os limites estão em
+[`DUPLICACAO-CONTEXTUAL.md`](DUPLICACAO-CONTEXTUAL.md).
+
 #### Enquete (`type: "POLL"`)
 
 `content` é o **título da enquete** (até 400 caracteres) e `pollOptions` traz as alternativas: de

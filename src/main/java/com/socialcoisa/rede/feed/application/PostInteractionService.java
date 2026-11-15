@@ -56,6 +56,7 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 	private final com.socialcoisa.rede.contributions.application.port.out.UserSealRepository userSeals;
 	private final BlockedUsersReader blockedUsersReader;
 	private final com.socialcoisa.rede.media.application.port.in.ValidateMediaOwnershipUseCase validateMediaOwnership;
+	private final com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries;
 	private final com.socialcoisa.rede.shared.sanctions.SanctionGate sanctionGate;
 	private final com.socialcoisa.rede.shared.risk.RiskEngine riskEngine;
 	private final com.socialcoisa.rede.shared.age.AgeGate agePolicy;
@@ -84,7 +85,8 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 			ContentDuplicationGuard duplicationGuard,
 			BehavioralTimingGuard behavioralTimingGuard,
 			com.socialcoisa.rede.shared.age.AgeGate agePolicy,
-			com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications) {
+			com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications,
+			com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries) {
 		this.postRepository = postRepository;
 		this.commentRepository = commentRepository;
 		this.postInteractionRepository = postInteractionRepository;
@@ -96,6 +98,7 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 		this.userSeals = userSeals;
 		this.blockedUsersReader = blockedUsersReader;
 		this.validateMediaOwnership = validateMediaOwnership;
+		this.mediaSummaries = mediaSummaries;
 		this.sanctionGate = sanctionGate;
 		this.riskEngine = riskEngine;
 		this.agePolicy = agePolicy;
@@ -116,12 +119,14 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 		newAccountCooldown.require(command.authorId().value());
 		userRateLimiter.require(command.authorId().value(), UserRateLimiter.CREATE_COMMENT);
 		behavioralTimingGuard.record(command.authorId().value());
-		riskEngine.assess(command.authorId().value(), "comment", command.content());
-		duplicationGuard.require(command.authorId().value(), command.content());
 		Post post = lockActivePost(command.postId());
 		List<String> mediaIds = normalizeCommentMedia(command.mediaIds(), command.authorId());
 		String content = normalizeContent(command.content(), !mediaIds.isEmpty());
 		String parentCommentId = normalizeParentComment(command.parentCommentId(), post.id());
+		String[] campos = ContextoDuplicacaoFeed.comentario(post.id(), parentCommentId, mediaIds,
+			mediaSummaries.visibleByIds(mediaIds).keySet());
+		riskEngine.assess(command.authorId().value(), "comment", content, campos);
+		duplicationGuard.require(command.authorId().value(), content, campos);
 		Comment comment = Comment.create(newId("comment"), post.id(), command.authorId(), parentCommentId, content,
 			mediaIds, command.mediaSpoiler(), clock.instant());
 		Comment saved = commentRepository.save(comment);
