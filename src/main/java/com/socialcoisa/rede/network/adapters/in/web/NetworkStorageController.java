@@ -13,7 +13,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -96,6 +98,60 @@ class NetworkStorageController {
 		return response.body(output -> writeBody(storage.readBody(object.id()), output));
 	}
 
+	/**
+	 * O corpo por <b>digest</b>: é assim que uma réplica referencia a cópia que tem sem depender do
+	 * id lógico do catálogo, que vive no Control Plane e não no nó. O digest é o sha-256 que o
+	 * Control Plane mediu; quem responde busca o objeto com esse digest em <b>sua própria</b>
+	 * colocação e só serve se a cópia estiver {@code OK} — cópia designada e não confirmada não é
+	 * cópia.
+	 *
+	 * <p>O nó que quer a cópia chama esta rota na URL do Control Plane com a própria chave; ele
+	 * nunca recebe IP nem hostname de outro storage node (brief §17).</p>
+	 */
+	@GetMapping("/objects/by-digest/{sha256}")
+	ResponseEntity<StreamingResponseBody> getByDigest(@RequestHeader(value = "X-Node-Id", required = false) String nodeId,
+			@RequestHeader(value = "X-Node-Key", required = false) String nodeKey, @PathVariable String sha256) {
+		NetworkNode node = keys.authenticate(nodeId, nodeKey);
+		requireStorage(node);
+		// Só hex de 64: um digest com outra forma não é um digest, e varrer o catálogo com ele
+		// seria trabalho sem destino.
+		if (sha256 == null || !sha256.matches("[0-9a-f]{64}")) {
+			throw new ApiException(400, "STORAGE_DIGEST_INVALID", "Digest invalido.");
+		}
+		StorageObject object = storage.byDigest(sha256)
+			.orElseThrow(() -> new ApiException(404, "STORAGE_NOT_FOUND", "Objeto nao encontrado."));
+		boolean holds = storage.location(object.id()).stream()
+			.anyMatch(placement -> placement.state() == StoragePlacement.State.OK
+				&& placement.nodeId().equals(node.id()));
+		if (!holds) {
+			throw new ApiException(403, "STORAGE_NOT_HELD",
+				"Este no nao tem copia conferida deste objeto.");
+		}
+		ResponseEntity.BodyBuilder response = ResponseEntity.ok()
+			.header(HttpHeaders.CONTENT_TYPE, object.contentType())
+			.header(HttpHeaders.CONTENT_LENGTH, String.valueOf(object.bytes()))
+			.header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+			.eTag("\"" + object.sha256() + "\"");
+		return response.body(output -> writeBody(storage.readBody(object.id()), output));
+	}
+
+	/**
+	 * A réplica confirma a cópia designada: o que ela mediu ao gravar. Os bytes e o sha-256 são
+	 * confrontados com o medido no Control Plane — cópia que não confere não conta como durabilidade.
+	 */
+	@PostMapping("/objects/{objectId}/replica")
+	Map<String, Object> confirmReplica(@RequestHeader(value = "X-Node-Id", required = false) String nodeId,
+			@RequestHeader(value = "X-Node-Key", required = false) String nodeKey, @PathVariable String objectId,
+			@RequestBody(required = false) ReplicaConfirmation request) {
+		NetworkNode node = keys.authenticate(nodeId, nodeKey);
+		if (request == null) {
+			throw new ApiException(400, "STORAGE_REPLICA_BODY_MISSING", "Corpo da confirmacao ausente.");
+		}
+		StoragePlacement confirmed = storage.confirmReplica(node, objectId, request.bytes(), request.sha256());
+		return Map.of("objectId", confirmed.objectId(), "replica", confirmed.replica(),
+			"state", confirmed.state().name());
+	}
+
 	/** O que este nó hospeda: identidade lógica e medidas, nunca o conteúdo. */
 	@GetMapping("/placements")
 	List<PlacementView> placements(@RequestHeader(value = "X-Node-Id", required = false) String nodeId,
@@ -156,6 +212,10 @@ class NetworkStorageController {
 		try (InputStream input = body) {
 			input.transferTo(output);
 		}
+	}
+
+	/** Confirmação de cópia: o medido pela réplica, não o que o Control Plane esperava. */
+	record ReplicaConfirmation(long bytes, String sha256) {
 	}
 
 	record PlacementView(String objectId, int replica, String nodeId, long bytes, String sha256, String state) {

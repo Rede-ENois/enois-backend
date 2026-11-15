@@ -23,6 +23,14 @@ public interface StorageCatalogRepository {
 	Optional<StorageObject> findById(String id);
 
 	/**
+	 * O objeto pelo sha-256 do conteúdo (fase 3), para a réplica que conhece a cópia pelo digest e
+	 * não pelo id lógico. Só objetos com conteúdo medido têm digest único: dois {@code PENDING} não
+	 * têm {@code sha256}, e dois objetos distintos com o mesmo conteúdo compartilham o digest — o
+	 * que é próprio do identificador de conteúdo.
+	 */
+	Optional<StorageObject> findByDigest(String sha256);
+
+	/**
 	 * Cria o objeto em {@code PENDING}, ou devolve o existente. A segunda chamada do mesmo cliente
 	 * não duplica: {@code bucket + key} é única no banco e a consulta é o que decide.
 	 */
@@ -41,6 +49,14 @@ public interface StorageCatalogRepository {
 	 */
 	List<StorageObject> list(String bucket, String prefix, String afterKey, int limit);
 
+	/**
+	 * Todos os objetos servíveis, ordenados por {@code bucket, object_key} — a paginação da varredura
+	 * percorre o catálogo inteiro, não um bucket. O cursor é a chave: dois buckets podem ter a mesma
+	 * chave, e o cursor por chave visita as duas na mesma página — o que não perde nem duplica
+	 * objeto, porque a ordenação é total por {@code bucket, object_key}.
+	 */
+	List<StorageObject> listAll(String afterKey, int limit);
+
 	/** Grava (ou substitui) a cópia {@code replica} deste objeto neste nó. */
 	void savePlacement(StoragePlacement placement);
 
@@ -48,6 +64,11 @@ public interface StorageCatalogRepository {
 	List<StoragePlacement> placements(String objectId);
 
 	/** A cópia servível deste objeto num nó específico, se existir. */
+	/**
+	 * A cópia deste objeto neste nó em qualquer estado vivo ({@code OK} ou {@code PENDING_REMOTE}).
+	 * A fase 3 usa esta leitura para a própria designação se confirmar; filtrar por {@code OK} aqui
+	 * esconderia a linha que a designação acabou de criar.
+	 */
 	Optional<StoragePlacement> placementOn(String objectId, String nodeId);
 
 	/** O que este nó hospeda, para o painel e para o nó saber o que tem. */

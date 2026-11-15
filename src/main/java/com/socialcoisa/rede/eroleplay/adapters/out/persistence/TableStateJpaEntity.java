@@ -30,6 +30,10 @@ class TableStateJpaEntity {
 	@Column(name = "campaign_id", nullable = false)
 	private String campaignId;
 
+	// A coluna da V297 é turn_order (snake_case, como as vizinhas); sem o name explícito o
+	// Hibernate deriva turnOrder do campo e a validação de schema procura a coluna errada —
+	// o boot morre com "missing column [turnOrder]" e derruba o deploy inteiro.
+	@Column(name = "turn_order")
 	private String turnOrder;
 
 	@Column(name = "active_turn_user_id")

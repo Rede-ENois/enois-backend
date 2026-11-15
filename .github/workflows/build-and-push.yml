@@ -440,6 +440,16 @@ jobs:
           DIDIT_MONTHLY_VERIFICATION_LIMIT: "25"
           DIDIT_MONTHLY_BUDGET_USD: "10.00"
           DIDIT_AUTO_TOPUP: "false"
+          # Assinatura da config do nó da rede distribuída (doc 06, ADR de config assinada).
+          # Sem o PAR (privada PKCS#8/DER + pública X.509/DER, ambas base64), o backend sobe
+          # com signingKey vazio e toda resposta de /network/nodes/me/config sai
+          # `signed:false, publicKey:null` — o nó faz heartbeat mas RECUSA toda config, e o
+          # instalador nunca fecha o pinning. É o estado em que a QA ficou após o merge da
+          # rede distribuída: o par precisa existir como secrets QA_* ANTES do primeiro deploy
+          # deste workflow. A privada é identidade do Control Plane: fixa entre deploys (nunca
+          # regenerada no boot, senão todo nó pinneria uma chave nova a cada restart).
+          QA_REDE_NETWORK_CONFIG_SIGNING_KEY: ${{ secrets.QA_REDE_NETWORK_CONFIG_SIGNING_KEY }}
+          QA_REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY: ${{ secrets.QA_REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY }}
           # Epapo (videoconferência própria). Sem estas quatro variáveis o backend responde
           # 503 CALLS_NOT_CONFIGURED / MENTORING_ROOMS_NOT_CONFIGURED e nenhuma sala abre —
           # é o estado em que a QA estava, com a rota do gateway respondendo
@@ -683,6 +693,8 @@ jobs:
               "REDE_CALLS_EPAPO_GATEWAY_URL=${REDE_CALLS_EPAPO_GATEWAY_URL}",
               "REDE_CALLS_EPAPO_INTERNAL_TOKEN=${REDE_CALLS_EPAPO_INTERNAL_TOKEN}",
               "REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN=${REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN}",
+              "REDE_NETWORK_CONFIG_SIGNING_KEY=${QA_REDE_NETWORK_CONFIG_SIGNING_KEY}",
+              "REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY=${QA_REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY}",
               "TRUSTED_PROXY_IPS=154.12.230.97",
               "JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=60.0 -XX:+ExitOnOutOfMemoryError"
             ],
@@ -1001,6 +1013,11 @@ jobs:
           # sobe com a rota interna desligada (503) e o passo de publicacao avisa, sem derrubar
           # o deploy. Precisa ser o mesmo valor nos dois lugares: no container e no passo do curl.
           REDE_RELEASE_NOTES_DEPLOY_TOKEN: ${{ secrets.REDE_RELEASE_NOTES_DEPLOY_TOKEN }}
+          # Assinatura da config do no da rede distribuida: par DE PRODUCAO, separado da QA por
+          # prefixo (como VAPID_*/DB_*). A privada e identidade do Control Plane de producao:
+          # fixa entre deploys; regenerar invalida o pino TOFU de todo no ja cadastrado.
+          REDE_NETWORK_CONFIG_SIGNING_KEY: ${{ secrets.PROD_REDE_NETWORK_CONFIG_SIGNING_KEY }}
+          REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY: ${{ secrets.PROD_REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY }}
         run: |
           set -euo pipefail
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
@@ -1149,6 +1166,10 @@ jobs:
                 # "Novidades" automaticas do deploy (issue #622): mesmo valor que o passo de
                 # publicacao usa. Vazio = rota interna desligada (fail-closed, 503).
                 REDE_RELEASE_NOTES_DEPLOY_TOKEN: "${REDE_RELEASE_NOTES_DEPLOY_TOKEN}"
+                # Config assinada da rede distribuida (par de PRODUCAO). Vazio = assinatura
+                # desligada; /network/nodes/me/config responde signed:false e o no recusa config.
+                REDE_NETWORK_CONFIG_SIGNING_KEY: "${REDE_NETWORK_CONFIG_SIGNING_KEY}"
+                REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY: "${REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY}"
           EOF
 
           echo "==> Montar payload JSON (python escapa o YAML certo pro body)"
