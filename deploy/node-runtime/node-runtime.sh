@@ -44,12 +44,62 @@ json_field() {
 # crescer e a informação útil (mudou o estado?) sumir. Guarda a última linha emitida em
 # memória, por rótulo, e cala a repetição. Estado novo, linha nova.
 LAST_NOTICE=""
+# Linhas que o painel do nó mostra (GET /admin/network/nodes/{id}/observability, admin).
+# O runtime NÃO abre porta (brief §17): quem exibe é o Control Plane, e a linha chega lá
+# EMPURRADA no heartbeat, que já acontece a cada ciclo. O buffer é curto e esvaziado a
+# cada heartbeat: o que não couber num ciclo é descartado de propósito — é tela, não arquivo,
+# e o arquivo de log do nó continua sendo a verdade para quem está na máquina.
+EVENTS_MAX=20
+# Fila em ARQUIVO, não em memória: `cycle` roda num processo por volta (e um reinício não pode
+# apagar a linha que ainda não subiu). O arquivo é do nó, fica em 0600 junto da chave e é esvaziado
+# assim que o heartbeat leva as linhas.
+EVENTS_FILE="$NODE_HOME/pending-events"
+event() {
+  # event <nivel> <mensagem>: guarda para o próximo heartbeat.
+  local level="$1" message="$2"
+  # Normaliza sem ferramenta externa: o runtime roda com PATH mínimo (e um `cut` ausente
+  # descartaria a linha em silêncio — foi assim que esta função falhou no harness).
+  message="${message//$'\n'/ }"
+  message="${message//$'\r'/ }"
+  message="${message:0:400}"
+  [[ -z "$message" ]] && return 0
+  printf '%s|%s\n' "$level" "$message" >> "$EVENTS_FILE" 2>/dev/null || return 0
+  chmod 600 "$EVENTS_FILE" 2>/dev/null || true
+  # Teto: fica o que couber. Reescreve num arquivo novo e troca por mv — nunca segue symlink.
+  local lines
+  lines=$(wc -l < "$EVENTS_FILE" 2>/dev/null || echo 0)
+  if (( lines > EVENTS_MAX )); then
+    tail -n "$EVENTS_MAX" "$EVENTS_FILE" > "$EVENTS_FILE.tmp" && mv -f "$EVENTS_FILE.tmp" "$EVENTS_FILE"
+  fi
+}
+
+json_escape() {
+  # Escapa para string JSON: barra invertida, aspas e caracteres de controle.
+  sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/ /g' -e 's/\r/ /g' <<<"$1"
+}
+
+events_json() {
+  # Formato do contrato HeartbeatRequest.logs: [{level, message, at}]. Vazio quando não há nada.
+  [[ -s "$EVENTS_FILE" ]] || return 0
+  local at item level message sep="" out=""
+  at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  while IFS= read -r item; do
+    [[ -z "$item" ]] && continue
+    level="${item%%|*}"
+    message="${item#*|}"
+    out+="${sep}{\"level\":\"$level\",\"message\":\"$(json_escape "$message")\",\"at\":\"$at\"}"
+    sep=","
+  done < "$EVENTS_FILE"
+  printf '%s' "$out"
+}
+
 notice_once() {
   # notice_once <rotulo> <mensagem>: emite só quando a transição é nova.
   local key="$1" message="$2"
   [[ "$LAST_NOTICE" == "$key" ]] && return 0
   LAST_NOTICE="$key"
   printf '[executor] %s\n' "$message" >&2
+  event INFO "$message"
 }
 
 task_payload() {
@@ -1081,9 +1131,16 @@ cycle() {
   [[ -n "$observed_term" ]] && term_part=",\"observedTerm\":$observed_term"
   disk_part=''
   [[ -n "$observed_disk" ]] && disk_part=",\"diskFreeMb\":$observed_disk"
+  # Linhas do ciclo vão JUNTO do heartbeat: é a única saída do nó (ele não abre porta), e o
+  # Control Plane guarda uma janela curta para o painel do nó. O buffer é esvaziado depois de
+  # enviado; se o heartbeat falhar, as linhas ficam para a próxima volta.
+  local events logs_part=""
+  events=$(events_json)
+  [[ -n "$events" ]] && logs_part=",\"logs\":[$events]"
   hb=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
-    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"memoryMb\":$observed_mem,\"runningTasks\":0$disk_part}$term_part}" \
+    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"memoryMb\":$observed_mem,\"runningTasks\":0$disk_part}$term_part$logs_part}" \
     "$CONTROL_PLANE/network/nodes/heartbeat") || { printf '[executor] heartbeat falhou\n' >&2; return 1; }
+  : > "$EVENTS_FILE" 2>/dev/null || true
   mode=$(json_field "$hb" mode)
   accept_tasks=$(grep -q '"acceptTasks":true' <<<"$hb" && echo true || echo false)
   # O status do Control Plane é a resposta à pergunta "fui aceito?" — e antes ele existia no
