@@ -309,10 +309,17 @@ allowed_tasks_list() {
 
 result() {
   # result <taskId> <attempt> <status> <output-json|vazio> <error-code|vazio> [mensagem]
+  # O contrato do Control Plane (NetworkTaskController.ResultRequest) declara output como
+  # STRING (JSON codificado), não objeto: enviar o objeto direto é corpo que o Jackson
+  # recusa com 400, o resultado nunca chega e a tarefa volta a ser redespachada para
+  # sempre — o nó executa, o CP nunca sabe. O output viaja como texto JSON dentro da string.
   local task_id="$1" attempt="$2" status="$3" output="$4" error_code="$5" message="${6:-negado pela config assinada}"
   local body output_part error_part
   output_part=''
-  [[ -n "$output" ]] && output_part=",\"output\":$output"
+  if [[ -n "$output" ]]; then
+    output=$(printf '%s' "$output" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    output_part=",\"output\":\"$output\""
+  fi
   error_part=''
   [[ -n "$error_code" ]] && error_part=",\"error\":{\"code\":\"$error_code\",\"message\":\"$message\",\"retryable\":false}"
   body="{\"taskId\":\"$task_id\",\"attempt\":$attempt,\"status\":\"$status\"$output_part$error_part}"
