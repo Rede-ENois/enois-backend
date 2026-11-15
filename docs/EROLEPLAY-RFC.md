@@ -191,7 +191,7 @@ que o dono já abriu à campanha — nunca a ficha em si.
   nunca entra em consulta JPQL (`lower()` não aceita coluna CLOB).
 - Publicação/despublicação anunciam na campanha pelo sinal `campaign` já existente.
 
-Persistência V325 (`roleplay_published_sheets`), aditiva, sem FK.
+Persistência V326 (`roleplay_published_sheets`), aditiva, sem FK.
 
 ### 5.1 Notificações
 

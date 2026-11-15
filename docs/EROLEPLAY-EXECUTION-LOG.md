@@ -574,7 +574,9 @@ feito nesta rodada (`@Column(columnDefinition = "longtext")`, a convenção do m
 próprio, e a prova: `RedeApplicationTests` passou de 3 erros para **3 testes, 0 falhas, 0 erros**,
 com o escopo do World Builder intocado (13/0/0). O rebase em `enois/qa` foi refeito limpo
 (a base da branch tinha ficado para trás das migrações V319–V324 — por isso a biblioteca é
-**V325**, número conferido contra a ponta remota antes de criar).
+**V325**, número conferido contra a ponta remota antes de criar — e renomeada para
+**V326** na rodada seguinte: a `qa` recebeu uma V325 própria (observabilidade por nó) no
+intervalo, e migração duplicada só aparece no merge).
 
 ### O que já existia e foi reaproveitado
 
@@ -591,7 +593,7 @@ com o escopo do World Builder intocado (13/0/0). O rebase em `enois/qa` foi refe
 - **Domínio**: `LibrarySheet` — a CÓPIA pública de uma ficha (estampa do recorte MEMBER), com
   nome (teto 120), sistema, teto de 200 campos com valor até 2.000, e recusa de cópia vazia
   (`LIBRARY_EMPTY`). Quem publica é o DONO da ficha; mestre não publica ficha alheia.
-- **Persistência**: migração **V325** (`roleplay_published_sheets` — aditiva, `if not exists`,
+- **Persistência**: migração **V326** (`roleplay_published_sheets` — aditiva, `if not exists`,
   InnoDB, `utf8mb4_uca1400_ai_ci` explícito, sem FK, unique por ficha — uma publicação por ficha,
   índices por publicação e dono); entidade JPA com `fields_json longtext`, repositório Spring
   Data com busca JPQL só sobre colunas curtas (nome e sistema — a coluna de JSON é CLOB e não

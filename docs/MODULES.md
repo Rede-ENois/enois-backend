@@ -1834,7 +1834,7 @@ por matriz de capacidades, com a autorização sempre no back-end.
 | `LibrarySheet` | A cópia pública de uma ficha: nome do personagem, sistema de jogo e o recorte aberto à campanha |
 | `LibraryService` | Publicar, republicar, despublicar, ler e listar a biblioteca; a autorização é do dono da ficha |
 | `LibraryController` | API REST em `/roleplay/library` e `/roleplay/campaigns/{id}/sheets/{sheetId}/publish` |
-| `LibrarySheetJpaEntity` | Persistência (V325), com os campos públicos em JSON `longtext` |
+| `LibrarySheetJpaEntity` | Persistência (V326), com os campos públicos em JSON `longtext` |
 
 Regras que valem sempre:
 
@@ -1969,7 +1969,7 @@ então não há como enumerar fichas pelo catálogo. Ficha de terceiro e ficha i
 mesmo 404. Republicar atualiza a mesma cópia (mesmo id, mesmo dono, mesmo instante de primeira
 publicação); despublicar apaga a cópia e nunca toca na ficha — ela continua existindo na campanha.
 
-Persistência V325 (`roleplay_published_sheets`), uma linha por cópia, sem FK. A busca é por nome do
+Persistência V326 (`roleplay_published_sheets`), uma linha por cópia, sem FK. A busca é por nome do
 personagem ou pelo sistema de jogo, em JPQL sobre colunas curtas — o corpo da cópia fica em
 `longtext` e não participa de `lower()` JPQL.
 

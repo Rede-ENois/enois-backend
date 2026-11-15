@@ -113,7 +113,7 @@ explícito, nunca com comportamento genérico inventado.
 
 - [x] Publicação de FICHA com opt-in do DONO: a cópia é instantâneo do recorte que ele já abriu
       à campanha — campo privado nunca entra na cópia; republicar atualiza, despublicar apaga a
-      cópia sem tocar na ficha; persistência V325; escrita sob `Idempotency-Key`
+      cópia sem tocar na ficha; persistência V326; escrita sob `Idempotency-Key`
 - [x] Leitura pública (`/roleplay/library`) sem vazar dado de membro: id da ficha, da campanha e
       do dono NUNCA saem na projeção (a publicação tem id próprio); ficha alheia e inexistente
       respondem o mesmo 404; busca por nome do personagem e sistema; mudança publica o mesmo
