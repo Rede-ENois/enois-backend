@@ -244,11 +244,11 @@ Fora de `POLL` o campo `pollOptions` é ignorado (não vira linha no banco). O p
 { "option": 2 }
 ```
 
-`option` é a **posição** da alternativa (0..5). O voto é **único e definitivo**: uma pessoa, um
-voto, sem troca depois. O segundo voto — na mesma alternativa ou em outra — responde
-**409 `ALREADY_VOTED`**, e a contagem não muda. Alternativa fora do intervalo (ou corpo sem
-`option`) responde 400 `INVALID_POLL_OPTION`; post que não é enquete responde 400 `NOT_A_POLL`.
-Sem sessão: 401. A resposta é o estado atualizado da enquete:
+`option` é a **posição** da alternativa (0..5). Uma pessoa, um voto — mas o voto **pode ser
+trocado**: enviar outra posição move o voto (a contagem antiga cai, a nova sobe, o total não
+cresce), e repetir a mesma posição é idempotente, sem mudar nada. Alternativa fora do intervalo
+(ou corpo sem `option`) responde 400 `INVALID_POLL_OPTION`; post que não é enquete responde
+400 `NOT_A_POLL`. Sem sessão: 401. A resposta é o estado atualizado da enquete:
 
 ```json
 { "options": ["Java","Kotlin","Go","TypeScript"], "counts": [1,0,0,0], "myVote": 0, "totalVotes": 1 }

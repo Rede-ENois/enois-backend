@@ -27,5 +27,6 @@ public interface PollRepository {
 	long countVotes(PostId postId);
 
 	/** Grava o voto. A unique (post_id, user_id) e a regra: o primeiro voto ganha, nunca troca. */
+	/** Grava o voto na alternativa: cria a linha do primeiro voto ou move a que ja existe. */
 	void vote(PostId postId, UserId user, int optionPosition);
 }

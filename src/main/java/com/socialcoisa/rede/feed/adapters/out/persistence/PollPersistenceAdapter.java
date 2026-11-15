@@ -81,8 +81,14 @@ class PollPersistenceAdapter implements PollRepository {
 
 	@Override
 	public void vote(PostId postId, UserId user, int optionPosition) {
-		// O primeiro voto ganha: se ja existe (ou outra requisicao chegou junto), o banco recusa o
-		// INSERT pela unique (post_id, user_id) — nunca ha UPDATE do voto anterior.
+		// Upsert do voto: a pessoa pode trocar de alternativa, entao um voto ja gravado e MOVIDO
+		// (UPDATE da linha, mesma unique) e so o primeiro voto cria linha nova.
+		PollVoteJpaEntity existing = votes.findByPostIdAndUserId(postId.value(), user.value()).orElse(null);
+		if (existing != null) {
+			existing.changeOption(optionPosition);
+			votes.saveAndFlush(existing);
+			return;
+		}
 		votes.saveAndFlush(new PollVoteJpaEntity(newId("poll_vote"), postId.value(), user.value(), optionPosition,
 			clock.instant()));
 	}
