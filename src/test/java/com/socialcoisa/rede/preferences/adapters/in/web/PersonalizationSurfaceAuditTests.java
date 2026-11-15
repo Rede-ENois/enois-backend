@@ -42,6 +42,9 @@ class PersonalizationSurfaceAuditTests {
 	@Autowired
 	private ObjectMapper objectMapper;
 
+	@Autowired
+	private com.socialcoisa.rede.shared.outbox.ProcessadorOutboxDeTeste outbox;
+
 	private TestAuthHelper auth;
 	/** O H2 dos testes é compartilhado entre classes: comunidade criada aqui é apagada aqui. */
 	private final java.util.List<String[]> createdCommunities = new java.util.ArrayList<>();
@@ -157,24 +160,18 @@ class PersonalizationSurfaceAuditTests {
 					"content", "Comentário no post corporativo.", "mediaIds", List.of()))))
 			.andExpect(status().isCreated());
 
-		// A notificação é criada pela outbox (worker de 5s) e aponta para a publicação,
-		// independente da identidade de autoria.
+		assertThat(outbox.processar("PostCommented", businessId)).as("evento do comentario deve ser processado").isTrue();
+		// O worker real foi acionado pelo cenario, sem depender do agendador.
 		JsonNode found = null;
-		for (int attempt = 0; attempt < 20 && found == null; attempt++) {
-			MvcResult result = mockMvc.perform(get("/notifications")
-					.header("X-Session-Token", author.token()))
-				.andExpect(status().isOk())
-				.andReturn();
-			for (JsonNode item : objectMapper.readTree(result.getResponse().getContentAsString())
-				.get("items")) {
-				if ("NEW_COMMENT".equals(item.path("kind").asText())
-						&& item.path("href").asText().contains(businessId)) {
-					found = item;
-					break;
-				}
-			}
-			if (found == null) {
-				Thread.sleep(500);
+		MvcResult result = mockMvc.perform(get("/notifications")
+				.header("X-Session-Token", author.token()))
+			.andExpect(status().isOk())
+			.andReturn();
+		for (JsonNode item : objectMapper.readTree(result.getResponse().getContentAsString()).get("items")) {
+			if ("NEW_COMMENT".equals(item.path("kind").asText())
+					&& item.path("href").asText().contains(businessId)) {
+				found = item;
+				break;
 			}
 		}
 		assertThat(found).as("notificação de comentário no post BUSINESS").isNotNull();

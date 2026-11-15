@@ -35,6 +35,7 @@ import com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository;
  */
 @SpringBootTest
 @TestPropertySource(properties = {
+		"spring.datasource.url=jdbc:h2:mem:outbox-worker;MODE=MySQL;DB_CLOSE_DELAY=-1",
 		"rede.outbox.worker-delay-ms=3600000",
 		"rede.outbox.claim-stale-seconds=60" })
 class OutboxWorkerTests {
@@ -44,6 +45,12 @@ class OutboxWorkerTests {
 
 	@TestConfiguration
 	static class TestHandlersConfig {
+
+		@Bean
+		@org.springframework.context.annotation.Primary
+		java.time.Clock relogioDoCenario() {
+			return java.time.Clock.fixed(Instant.parse("2026-11-01T12:00:00.123456789Z"), java.time.ZoneOffset.UTC);
+		}
 
 		@Bean
 		CountingHandler countingHandler() {
@@ -96,6 +103,7 @@ class OutboxWorkerTests {
 	@Autowired private OutboxWorker worker;
 	@Autowired private OutboxEventRepository outbox;
 	@Autowired private JdbcTemplate jdbc;
+	@Autowired private java.time.Clock clock;
 
 	private final String prefix = "outbox_" + UUID.randomUUID().toString().substring(0, 8);
 
@@ -123,7 +131,7 @@ class OutboxWorkerTests {
 		assertThat(status(eventId)).isEqualTo("PENDING");
 		assertThat(attempts(eventId)).isEqualTo(1);
 		assertThat(lastError(eventId)).contains("TesteSempreFalha");
-		assertThat(nextAttemptAt(eventId)).isAfter(Instant.now());
+		assertThat(nextAttemptAt(eventId)).isAfter(clock.instant());
 	}
 
 	@Test
@@ -221,12 +229,14 @@ class OutboxWorkerTests {
 	private String append(String eventType) {
 		String aggregateId = prefix + "_" + eventType + "_" + UUID.randomUUID().toString().substring(0, 8);
 		outbox.append(eventType, aggregateId, "{\"test\":\"true\"}");
-		return jdbc.queryForObject("select id from outbox_events where aggregate_id = ?", String.class, aggregateId);
+		String id = jdbc.queryForObject("select id from outbox_events where aggregate_id = ?", String.class, aggregateId);
+		makeDueNow(id);
+		return id;
 	}
 
 	private void makeDueNow(String eventId) {
 		jdbc.update("update outbox_events set next_attempt_at = ? where id = ?",
-			java.sql.Timestamp.from(Instant.now().minusSeconds(1)), eventId);
+			java.sql.Timestamp.from(clock.instant().minusSeconds(1)), eventId);
 	}
 
 	private String status(String eventId) {

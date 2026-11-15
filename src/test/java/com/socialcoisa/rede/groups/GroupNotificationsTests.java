@@ -48,6 +48,9 @@ class GroupNotificationsTests {
 	@Autowired
 	private ObjectMapper objectMapper;
 
+	@Autowired
+	private com.socialcoisa.rede.shared.outbox.ProcessadorOutboxDeTeste outbox;
+
 	private TestAuthHelper authHelper() {
 		return new TestAuthHelper(mockMvc, objectMapper);
 	}
@@ -100,7 +103,9 @@ class GroupNotificationsTests {
 				.content(objectMapper.writeValueAsString(Map.of("topicId", topicId, "content", text))))
 			.andExpect(status().isCreated())
 			.andReturn();
-		return objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asText();
+		String id = objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asText();
+		assertThat(outbox.processar("GroupPostPublished", id)).as("evento publicado deve ser consumido pelo worker real").isTrue();
+		return id;
 	}
 
 	private String comment(TestAuthHelper.AuthSession author, String groupId, String postId, String text,
@@ -147,16 +152,11 @@ class GroupNotificationsTests {
 		return found;
 	}
 
-	/** The new-post fan-out runs on the outbox worker, so the test waits for it (bounded). */
-	private java.util.List<JsonNode> awaitNewPosts(TestAuthHelper.AuthSession user,
+	/** O helper de publicacao consome o evento real antes de consultar as notificacoes. */
+	private java.util.List<JsonNode> notificacoesDeNovasPublicacoes(TestAuthHelper.AuthSession user,
 			java.util.function.Predicate<java.util.List<JsonNode>> done) throws Exception {
-		long deadline = System.currentTimeMillis() + 20_000;
 		java.util.List<JsonNode> items = allOfKind(notifications(user), "GROUP_NEW_POST");
-		while (!done.test(items)) {
-			assertThat(System.currentTimeMillis()).as("outbox worker did not deliver in time").isLessThan(deadline);
-			Thread.sleep(200);
-			items = allOfKind(notifications(user), "GROUP_NEW_POST");
-		}
+		assertThat(done.test(items)).as("notificacoes devem refletir o evento processado").isTrue();
 		return items;
 	}
 
@@ -172,16 +172,16 @@ class GroupNotificationsTests {
 
 		publish(author, groupId, topicId, "texto privado do grupo", "post-notif-newpost-1");
 
-		var first = awaitNewPosts(reader, items -> items.size() == 1);
+		var first = notificacoesDeNovasPublicacoes(reader, items -> items.size() == 1);
 		assertThat(first.get(0).get("body").asText()).isEqualTo("notif-newpost-author publicou em Notif Novas.")
 			.doesNotContain("texto privado");
 		assertThat(first.get(0).get("title").asText()).isEqualTo("Novas publicações em Notif Novas");
 		assertThat(first.get(0).get("href").asText()).isEqualTo("/grupos/notif-novas");
-		assertThat(awaitNewPosts(owner, items -> items.size() == 1)).hasSize(1);
+		assertThat(notificacoesDeNovasPublicacoes(owner, items -> items.size() == 1)).hasSize(1);
 
 		publish(author, groupId, topicId, "segunda", "post-notif-newpost-2");
 
-		var collapsed = awaitNewPosts(reader, items -> items.size() == 1
+		var collapsed = notificacoesDeNovasPublicacoes(reader, items -> items.size() == 1
 			&& items.get(0).get("actorCount").asInt() == 2);
 		assertThat(collapsed.get(0).get("id").asText()).isEqualTo(first.get(0).get("id").asText());
 		assertThat(collapsed.get(0).get("body").asText()).isEqualTo("2 novas publicações em Notif Novas.");
@@ -192,12 +192,12 @@ class GroupNotificationsTests {
 			.andExpect(status().isOk());
 		publish(author, groupId, topicId, "terceira", "post-notif-newpost-3");
 
-		var fresh = awaitNewPosts(reader, items -> items.size() == 2);
+		var fresh = notificacoesDeNovasPublicacoes(reader, items -> items.size() == 2);
 		assertThat(fresh.get(0).get("read").asBoolean()).isFalse();
 		assertThat(fresh.get(0).get("actorCount").asInt()).isEqualTo(1);
 		assertThat(fresh.get(0).get("body").asText()).isEqualTo("notif-newpost-author publicou em Notif Novas.");
 		// The owner never read: three posts, still one notification.
-		assertThat(awaitNewPosts(owner, items -> !items.isEmpty() && items.get(0).get("actorCount").asInt() == 3))
+		assertThat(notificacoesDeNovasPublicacoes(owner, items -> !items.isEmpty() && items.get(0).get("actorCount").asInt() == 3))
 			.hasSize(1);
 		// The author is never told about their own posts.
 		assertThat(allOfKind(notifications(author), "GROUP_NEW_POST")).isEmpty();

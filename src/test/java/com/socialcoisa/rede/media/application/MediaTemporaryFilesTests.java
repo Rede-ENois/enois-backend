@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /**
  * O temporário do vídeo grande não pode depender do `/tmp` da imagem: o pod só tem a pasta de dados
@@ -16,6 +17,9 @@ import org.junit.jupiter.api.Test;
  * global da JVM e derrubava os outros `@SpringBootTest` da suíte.</p>
  */
 class MediaTemporaryFilesTests {
+
+	@TempDir
+	Path dir;
 
 	@Test
 	void gravaNaPastaDeDadosQuandoOTmpDoProcessoNaoServe() throws Exception {
@@ -70,18 +74,17 @@ class MediaTemporaryFilesTests {
 
 	@Test
 	void semNenhumaPastaGravavelOErroDizQuaisForamTentadas() throws Exception {
-		// O último recurso é o tmp do processo, que aqui é um arquivo comum (não `os.devNull`:
-		// escrever em `/dev/null` funciona, e o teste passaria pelo motivo errado).
-		Path semTmp = Files.createTempFile("tmp-que-nao-e-pasta-", ".txt");
-		var arquivos = new MediaTemporaryFiles("/dev/null/nao-e-pasta", "/dev/null/nao-e-dados",
-			semTmp.toString(), null);
+		Path semTmp = Files.createFile(dir.resolve("arquivo-nao-e-pasta"));
+		String configurada = semTmp.resolve("configurada").toString();
+		String dados = semTmp.resolve("dados").toString();
+		var arquivos = new MediaTemporaryFiles(configurada, dados, semTmp.toString(), null);
 		try {
 			assertThatThrownBy(() -> arquivos.create("media-raw-", ".mp4"))
 				.isInstanceOf(MediaTemporaryFiles.UnavailableException.class)
-				.hasMessageContaining("/dev/null/nao-e-pasta")
+				.hasMessageContaining(configurada)
 				.hasMessageContaining(semTmp.toString())
 				.satisfies(failure -> assertThat(((MediaTemporaryFiles.UnavailableException) failure).dirs())
-					.containsExactly("/dev/null/nao-e-pasta", "/dev/null/nao-e-dados", semTmp.toString()));
+					.containsExactly(configurada, dados, semTmp.toString()));
 		}
 		finally {
 			Files.deleteIfExists(semTmp);

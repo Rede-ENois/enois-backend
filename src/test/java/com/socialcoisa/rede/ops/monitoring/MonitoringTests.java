@@ -123,7 +123,7 @@ class MonitoringTests {
 		}
 		monitoring.recordException(500, "INTERNAL_ERROR", marker, "GET", "/painel-prova",
 			"req-stack-" + UUID.randomUUID(), null, failure);
-		Thread.sleep(800);
+		drain(marker);
 
 		mockMvc.perform(get("/admin/monitoring/events")
 				.header("X-Session-Token", admin.token())
@@ -138,22 +138,18 @@ class MonitoringTests {
 				org.hamcrest.Matchers.containsString("abc123"))));
 	}
 
-	private static void drain(String marker) throws InterruptedException {
-		// O flush é assíncrono (500ms). Wait for this event's marker itself: every request is also an
-		// event, so the file growing does not mean our event was written yet.
+	private void drain(String marker) throws java.io.IOException {
+		// O cenario aciona o flush real; o agendador da suite nao executa em segundo plano.
 		java.nio.file.Path day = java.nio.file.Paths.get(
 			System.getProperty("java.io.tmpdir"), "rede-monitoring-test",
 			"events-" + java.time.LocalDate.now(java.time.ZoneOffset.UTC) + ".jsonl");
 		for (int i = 0; i < 80; i++) {
-			try {
-				if (java.nio.file.Files.readString(day).contains(marker)) {
-					return;
-				}
+			monitoring.flush();
+			if (java.nio.file.Files.exists(day) && java.nio.file.Files.readString(day).contains(marker)) {
+				return;
 			}
-			catch (java.io.IOException ignored) {
-			}
-			Thread.sleep(100);
 		}
+		assertThat(java.nio.file.Files.readString(day)).as("flush deve persistir o evento do cenario").contains(marker);
 	}
 
 	@Test

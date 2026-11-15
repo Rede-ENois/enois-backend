@@ -3,10 +3,8 @@ package com.socialcoisa.rede.media.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -14,6 +12,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -23,14 +22,24 @@ import com.socialcoisa.rede.shared.web.ApiException;
 class MediaFfmpegRunnerTests {
 
 	@TempDir
+	static Path launchers;
+
+	private static FfmpegProcessoDeTeste processos;
+
+	@BeforeAll
+	static void prepararLaunchers() throws Exception {
+		processos = FfmpegProcessoDeTeste.criar(Files.createDirectory(launchers.resolve("launchers com espaços")));
+	}
+
+	@TempDir
 	Path dir;
 
 	@Test
 	void pinsTheFormatsAndTheProtocolFromTheValidatedType() throws Exception {
 		Path args = dir.resolve("args.txt");
-		Path ffmpeg = script("printf '%s\\n' \"$@\" > '" + args + "'\nfor last; do :; done\n"
-			+ "printf clean > \"${last#file:}\"\n");
-		Path input = Files.writeString(dir.resolve("in.bin"), "video");
+		Path cenario = Files.createDirectory(dir.resolve("cenário com espaços"));
+		Path ffmpeg = processos.ffmpeg(cenario, args, 5, 5);
+		Path input = Files.writeString(dir.resolve("entrada com espaços.bin"), "video");
 		Path output = Files.createFile(dir.resolve("out.bin"));
 
 		new MediaFfmpegRunner(ffmpeg.toString(), 1).strip(input, output, "video/mp4", Duration.ofSeconds(10));
@@ -52,8 +61,7 @@ class MediaFfmpegRunnerTests {
 	@Test
 	void movesTheMp4IndexToTheFrontWithoutTouchingTheBitstream() throws Exception {
 		Path args = dir.resolve("args.txt");
-		Path ffmpeg = script("printf '%s\\n' \"$@\" > '" + args + "'\nfor last; do :; done\n"
-			+ "printf clean > \"${last#file:}\"\n");
+		Path ffmpeg = processos.ffmpeg(dir, args, 5, 5);
 		Path input = Files.writeString(dir.resolve("in.bin"), "video");
 		Path output = Files.createFile(dir.resolve("out.bin"));
 
@@ -67,8 +75,7 @@ class MediaFfmpegRunnerTests {
 	@Test
 	void leavesTheOtherContainersWithoutTheMp4OnlyFlag() throws Exception {
 		Path args = dir.resolve("args.txt");
-		Path ffmpeg = script("printf '%s\\n' \"$@\" > '" + args + "'\nfor last; do :; done\n"
-			+ "printf clean > \"${last#file:}\"\n");
+		Path ffmpeg = processos.ffmpeg(dir, args, 5, 5);
 		Path input = Files.writeString(dir.resolve("in.bin"), "video");
 		Path output = Files.createFile(dir.resolve("out.bin"));
 
@@ -79,7 +86,7 @@ class MediaFfmpegRunnerTests {
 
 	@Test
 	void rejectsAFailedRunInsteadOfKeepingTheOriginal() throws Exception {
-		Path ffmpeg = script("exit 1\n");
+		Path ffmpeg = processos.ffmpeg(dir, null, -1, -1);
 		Path input = Files.writeString(dir.resolve("in.bin"), "video");
 		Path output = Files.createFile(dir.resolve("out.bin"));
 
@@ -100,7 +107,7 @@ class MediaFfmpegRunnerTests {
 
 	@Test
 	void rejectsATypeWithoutPinnedFormats() throws Exception {
-		Path ffmpeg = script("exit 0\n");
+		Path ffmpeg = processos.ffmpeg(dir, null, 0, 0);
 		Path input = Files.writeString(dir.resolve("in.bin"), "video");
 
 		assertThatThrownBy(() -> new MediaFfmpegRunner(ffmpeg.toString(), 1).strip(input, input, "video/x-flv",
@@ -111,7 +118,7 @@ class MediaFfmpegRunnerTests {
 	@Test
 	void interruptionKillsTheProcessFreesTheSlotAndKeepsTheInterruptFlag() throws Exception {
 		Path pids = dir.resolve("pids.txt");
-		Path ffmpeg = script("echo $$ >> '" + pids + "'\nexec sleep 30\n");
+		Path ffmpeg = processos.demorado(dir, null, pids, false);
 		MediaFfmpegRunner runner = new MediaFfmpegRunner(ffmpeg.toString(), 1);
 		Path input = Files.writeString(dir.resolve("in.bin"), "video");
 
@@ -139,9 +146,16 @@ class MediaFfmpegRunnerTests {
 
 		// The slot was released: a new run starts right away.
 		Attempt third = start(runner, input, dir.resolve("out-3.bin"));
-		awaitPid(pids, 2);
+		long thirdPid = awaitPid(pids, 2);
 		third.thread().interrupt();
 		third.done().get(5, TimeUnit.SECONDS);
+		assertThat(third.failure().get()).isInstanceOf(ApiException.class).extracting("code")
+			.isEqualTo("MEDIA_PROCESSING_UNAVAILABLE");
+		assertThat(third.interruptKept()).isTrue();
+		assertThat(ProcessHandle.of(thirdPid).map(handle -> {
+			handle.onExit().orTimeout(5, TimeUnit.SECONDS).join();
+			return handle.isAlive();
+		}).orElse(false)).isFalse();
 	}
 
 	private record Attempt(Thread thread, CompletableFuture<Void> done, AtomicReference<Throwable> failure,
@@ -184,10 +198,4 @@ class MediaFfmpegRunnerTests {
 		throw new AssertionError("ffmpeg stand-in did not start");
 	}
 
-	private Path script(String body) throws Exception {
-		Path script = dir.resolve("ffmpeg-" + System.nanoTime() + ".sh");
-		Files.writeString(script, "#!/bin/sh\n" + body, StandardCharsets.UTF_8);
-		Files.setPosixFilePermissions(script, PosixFilePermissions.fromString("rwx------"));
-		return script;
-	}
 }

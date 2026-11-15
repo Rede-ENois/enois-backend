@@ -25,6 +25,7 @@ import com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository;
  */
 @SpringBootTest
 @TestPropertySource(properties = {
+		"spring.datasource.url=jdbc:h2:mem:outbox-retention;MODE=MySQL;DB_CLOSE_DELAY=-1",
 		"rede.outbox.retention.enabled=true",
 		"rede.outbox.retention.days=1",
 		"rede.outbox.retention.batch-size=2",
@@ -39,6 +40,12 @@ class OutboxRetentionWorkerTests {
 	 */
 	@TestConfiguration
 	static class FailingHandlerConfig {
+
+		@Bean
+		@org.springframework.context.annotation.Primary
+		java.time.Clock relogioDoCenario() {
+			return java.time.Clock.fixed(Instant.parse("2026-11-01T12:00:00.123456789Z"), java.time.ZoneOffset.UTC);
+		}
 
 		@Bean
 		FailingHandler failingHandler() {
@@ -60,6 +67,7 @@ class OutboxRetentionWorkerTests {
 	@Autowired private OutboxWorker worker;
 	@Autowired private OutboxEventRepository outbox;
 	@Autowired private JdbcTemplate jdbc;
+	@Autowired private java.time.Clock clock;
 
 	private final String prefix = "retencao_" + UUID.randomUUID().toString().substring(0, 8);
 
@@ -96,7 +104,7 @@ class OutboxRetentionWorkerTests {
 	void loteLimitaQuantasLinhasSaemPorRodada() {
 		for (int i = 0; i < 3; i++) {
 			String id = append("TesteSempreOk", 40);
-			worker.processOne(id);
+			assertThat(worker.processOne(id)).as("fixture deve ser processada antes da retencao").isTrue();
 		}
 		long before = retention.expiredCount();
 
@@ -111,8 +119,9 @@ class OutboxRetentionWorkerTests {
 		outbox.append(eventType, aggregateId, "{\"test\":\"true\"}");
 		String id = jdbc.queryForObject("select id from outbox_events where aggregate_id = ?", String.class,
 			aggregateId);
-		Instant created = Instant.now().minusSeconds(daysOld * 86400L);
-		jdbc.update("update outbox_events set created_at = ? where id = ?", Timestamp.from(created), id);
+		Instant created = clock.instant().minusSeconds(daysOld * 86400L);
+		jdbc.update("update outbox_events set created_at = ?, next_attempt_at = ? where id = ?",
+			Timestamp.from(created), Timestamp.from(clock.instant().minusSeconds(1)), id);
 		return id;
 	}
 
