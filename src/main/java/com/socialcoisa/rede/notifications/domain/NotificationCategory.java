@@ -85,7 +85,9 @@ public enum NotificationCategory {
 	Map.entry("ROLEPLAY_ROLL_REQUESTED", GROUPS),
 	// Colagem: alguém contribuiu (texto ou foto) na fotografia da pessoa. SOCIAL porque é a
 	// convivência do feed fotográfico — mesma família de comentário e reação.
-	Map.entry("COLLAGEM_COMMENTED", SOCIAL));
+	Map.entry("COLLAGEM_COMMENTED", SOCIAL),
+	// Murais: alguém colou a publicação da pessoa num mural. SOCIAL — convivência, não sistema.
+	Map.entry("MURAL_CONTRIBUTED", SOCIAL));
 
 	public static NotificationCategory of(String kind) {
 		return kind == null ? SYSTEM : BY_KIND.getOrDefault(kind, SYSTEM);

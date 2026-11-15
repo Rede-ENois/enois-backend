@@ -15,6 +15,7 @@ import com.socialcoisa.rede.groups.application.port.out.GroupContentRepository;
 import com.socialcoisa.rede.groups.domain.GroupComment;
 import com.socialcoisa.rede.groups.domain.GroupPost;
 import com.socialcoisa.rede.moderation.application.port.out.CallReportContextRepository;
+import com.socialcoisa.rede.murais.application.port.out.MuraisRepository;
 import com.socialcoisa.rede.moderation.application.port.out.ReportedContentReader;
 import com.socialcoisa.rede.moderation.domain.Report;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
@@ -40,15 +41,18 @@ class ReportedContentAdapter implements ReportedContentReader {
 	private final GroupContentRepository groupContent;
 	private final CallReportContextRepository callReports;
 	private final ColagemRepository colagem;
+	private final MuraisRepository murais;
 
 	ReportedContentAdapter(PostRepository posts, CommentRepository comments, UserProfileRepository profiles,
-			GroupContentRepository groupContent, CallReportContextRepository callReports, ColagemRepository colagem) {
+			GroupContentRepository groupContent, CallReportContextRepository callReports, ColagemRepository colagem,
+			MuraisRepository murais) {
 		this.posts = posts;
 		this.comments = comments;
 		this.profiles = profiles;
 		this.groupContent = groupContent;
 		this.callReports = callReports;
 		this.colagem = colagem;
+		this.murais = murais;
 	}
 
 	@Override
@@ -62,6 +66,7 @@ class ReportedContentAdapter implements ReportedContentReader {
 			case "COLLAGEM_POST" -> colagem.findPostById(targetId).map(post -> colagemPostText(post));
 			case "COLLAGEM_COMMENT" -> colagem.findCommentById(targetId)
 				.map(comment -> colagemCommentText(comment));
+			case "MURAL" -> murais.findMuralById(targetId).map(mural -> muralText(mural));
 			default -> Optional.empty();
 		};
 		return content.map(this::shorten).filter(StringUtils::hasText);
@@ -131,5 +136,13 @@ class ReportedContentAdapter implements ReportedContentReader {
 	private String shorten(String content) {
 		String trimmed = content.trim();
 		return trimmed.length() <= MAX_CHARS ? trimmed : trimmed.substring(0, MAX_CHARS);
+	}
+
+	// Mural: o quadro denunciável é título e descrição — o que a pessoa escreveu nele.
+	private String muralText(com.socialcoisa.rede.murais.domain.Mural mural) {
+		return Stream.of(mural.title(), mural.description())
+			.filter(StringUtils::hasText)
+			.reduce((first, second) -> first + "\n" + second)
+			.orElse("");
 	}
 }

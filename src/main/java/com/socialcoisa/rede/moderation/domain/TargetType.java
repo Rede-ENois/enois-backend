@@ -24,5 +24,7 @@ public enum TargetType {
 	/** Foto da Colagem (o feed fotográfico do Explorar). */
 	COLLAGEM_POST,
 	/** Comentário (texto ou foto) de uma foto da Colagem. */
-	COLLAGEM_COMMENT
+	COLLAGEM_COMMENT,
+	/** Mural do Explorar (a coleção cai; as publicações coladas continuam no feed). */
+	MURAL
 }

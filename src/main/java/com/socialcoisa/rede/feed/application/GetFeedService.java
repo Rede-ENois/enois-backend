@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.feed.application.port.in.GetFeedUseCase;
 import com.socialcoisa.rede.feed.application.port.in.GetPostUseCase;
+import com.socialcoisa.rede.feed.application.port.in.GetPostsUseCase;
 import com.socialcoisa.rede.feed.application.port.in.GetProfilePostsUseCase;
 import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.out.ConnectionGraphRepository;
@@ -48,7 +49,7 @@ import com.socialcoisa.rede.shared.blocks.BlockedUsersReader;
 import com.socialcoisa.rede.shared.web.CursorCodec;
 
 @Service
-public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, GetPostUseCase {
+public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, GetPostUseCase, GetPostsUseCase {
 
 	private final PostRepository postRepository;
 	private final ArticleRepository articleRepository;
@@ -404,6 +405,24 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		return (enriched.isEmpty() ? PostView.from(post) : enriched.get(0))
 			.withPageHtml(post.pageHtml())
 			.withArticleBody(articleRepository.findBody(post.id()).orElse(null));
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public List<PostView> getPosts(List<String> postIds, UserId viewerId) {
+		if (postIds == null || postIds.isEmpty()) {
+			return List.of();
+		}
+		Map<String, PostView> visiveis = new LinkedHashMap<>();
+		for (String postId : postIds.stream().distinct().toList()) {
+			try {
+				visiveis.put(postId, getPost(postId, viewerId));
+			}
+			catch (ApiException invisivel) {
+				// Apagado, vencido, privado ou bloqueado: sai da coleção sem derrubar a página.
+			}
+		}
+		return List.copyOf(visiveis.values());
 	}
 
 	@Override

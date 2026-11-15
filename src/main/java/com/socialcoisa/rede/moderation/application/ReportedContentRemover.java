@@ -5,6 +5,7 @@ import org.springframework.stereotype.Component;
 import com.socialcoisa.rede.colagem.application.port.in.ColagemModerationPort;
 import com.socialcoisa.rede.feed.application.port.in.ModerationRemoveCommentUseCase;
 import com.socialcoisa.rede.feed.application.port.in.ModerationRemovePostUseCase;
+import com.socialcoisa.rede.murais.application.port.in.MuraisModerationPort;
 import com.socialcoisa.rede.moderation.domain.Report;
 
 /**
@@ -17,12 +18,14 @@ public class ReportedContentRemover {
 	private final ModerationRemovePostUseCase posts;
 	private final ModerationRemoveCommentUseCase comments;
 	private final ColagemModerationPort colagem;
+	private final MuraisModerationPort murais;
 
 	public ReportedContentRemover(ModerationRemovePostUseCase posts, ModerationRemoveCommentUseCase comments,
-			ColagemModerationPort colagem) {
+			ColagemModerationPort colagem, MuraisModerationPort murais) {
 		this.posts = posts;
 		this.comments = comments;
 		this.colagem = colagem;
+		this.murais = murais;
 	}
 
 	public void remove(Report report, String actorId, String reasonPrefix) {
@@ -32,6 +35,7 @@ public class ReportedContentRemover {
 			case COMMENT -> comments.removeAsModerator(actorId, report.targetId(), reason);
 			case COLLAGEM_POST -> colagem.removePostAsModerator(actorId, report.targetId(), reason);
 			case COLLAGEM_COMMENT -> colagem.removeCommentAsModerator(actorId, report.targetId(), reason);
+			case MURAL -> murais.removeMuralAsModerator(actorId, report.targetId(), reason);
 			default -> {
 				// Other targets have no platform-wide removal: the team acts in the target's module.
 			}
