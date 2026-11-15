@@ -18,6 +18,7 @@ import com.socialcoisa.rede.network.application.ChangeCaptureReadinessService;
 import com.socialcoisa.rede.network.application.NetworkNodeService;
 import com.socialcoisa.rede.network.application.StorageHealer;
 import com.socialcoisa.rede.network.application.StorageOverviewService;
+import com.socialcoisa.rede.network.application.StorageReplicationDispatcher;
 import com.socialcoisa.rede.network.application.StorageScrubber;
 import com.socialcoisa.rede.network.application.NodeKeyService;
 import com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository;
@@ -55,6 +56,7 @@ class AdminNetworkController {
 	private final com.socialcoisa.rede.network.application.StorageBalanceReport balance;
 	private final StorageOverviewService storageOverview;
 	private final StorageHealer healer;
+	private final StorageReplicationDispatcher dispatcher;
 	private final NetworkNodeResponsibleRepository responsibles;
 	private final NetworkUserDirectory users;
 	private final com.socialcoisa.rede.network.application.NodeObservabilityService observability;
@@ -67,7 +69,7 @@ class AdminNetworkController {
 			NetworkNodeResponsibleRepository responsibles, NetworkUserDirectory users,
 			com.socialcoisa.rede.network.application.NodeObservabilityService observability,
 			ChangeCaptureReadinessService changeCapture, StorageOverviewService storageOverview,
-			StorageHealer healer) {
+			StorageHealer healer, StorageReplicationDispatcher dispatcher) {
 		this.nodes = nodes;
 		this.keys = keys;
 		this.dashboard = dashboard;
@@ -82,6 +84,7 @@ class AdminNetworkController {
 		this.changeCapture = changeCapture;
 		this.storageOverview = storageOverview;
 		this.healer = healer;
+		this.dispatcher = dispatcher;
 	}
 
 	/**
@@ -209,12 +212,42 @@ class AdminNetworkController {
 	 * seria feito sem gravar nada. Ver {@link StorageHealer}.
 	 */
 	@PostMapping("/storage/heal")
-	StorageHealer.Report healStorage(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+	Object healStorage(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(required = false) String bucket,
 			@RequestParam(defaultValue = "100") int maxObjects,
-			@RequestParam(name = "dryRun", defaultValue = "false") boolean dryRun) {
+			@RequestParam(name = "dryRun", defaultValue = "false") boolean dryRun,
+			// Designar e só designar é o comportamento de antes desta rodada; `dispatch=true` também
+			// enfileira o OBJECT_PUT para o nó, que é o que faz a réplica acontecer.
+			@RequestParam(name = "dispatch", defaultValue = "false") boolean dispatch) {
 		var user = admin(sessionToken);
-		return healer.heal(user.id().value(), bucket, maxObjects, dryRun);
+		var relatorio = healer.heal(user.id().value(), bucket, maxObjects, dryRun);
+		if (!dispatch || dryRun) {
+			return relatorio;
+		}
+		// Uma passada por objeto designado. Falha de um não derruba os outros: cada designação já é
+		// uma obrigação gravada, e o operador vê qual objeto não teve tarefa.
+		var enviadas = new java.util.ArrayList<StorageReplicationDispatcher.Dispatched>();
+		var puladas = new java.util.ArrayList<StorageReplicationDispatcher.Skipped>();
+		for (String objectId : relatorio.designated().stream().map(StorageHealer.HealedObject::objectId)
+			.distinct().toList()) {
+			var despacho = dispatcher.dispatch(objectId);
+			enviadas.addAll(despacho.dispatched());
+			puladas.addAll(despacho.skipped());
+		}
+		return new StorageHealer.ReportWithDispatch(relatorio, new java.util.ArrayList<Object>(enviadas),
+			new java.util.ArrayList<Object>(puladas));
+	}
+
+	/**
+	 * Enfileira o {@code OBJECT_PUT} para as designações pendentes <b>que já existem</b> — inclusive
+	 * as gravadas por um upload anterior, que antes esperavam um nó que soubesse puxá-las sozinho.
+	 */
+	@PostMapping("/storage/objects/{objectId}/dispatch")
+	StorageReplicationDispatcher.Report dispatchReplica(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String objectId) {
+		admin(sessionToken);
+		return dispatcher.dispatch(objectId);
 	}
 
 	@GetMapping("/storage/scrub")
