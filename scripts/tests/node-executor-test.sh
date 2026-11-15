@@ -138,7 +138,12 @@ assert_contains 'poll da fila designada' "$(cat "$TMP/curl-calls")" '/network/ta
 assert_contains 'tarefa autorizada vira DONE' "$out" 'DONE tk_1'
 assert_eq 'resultado postado uma vez' '1' "$(results_posted)"
 assert_contains 'resultado carrega a tentativa vigente' "$(cat "$TMP/curl-calls")" '"attempt":2'
-assert_contains 'output ecoa o idempotencyKey (prova de ciclo)' "$(cat "$TMP/curl-calls")" '"idem-42"'
+# O #740 mudou o contrato do resultado: `output` vai como STRING JSON, não como objeto (o Control
+# Plane recusava objeto). A asserção continuou procurando o objeto cru e ficou vermelha na qa — o
+# harness acusava o código, quando era ela que descrevia o contrato antigo. A agulha agora é o
+# formato que o runtime de fato posta: com o escape, prova que o eco é string e que leva a chave.
+assert_contains 'output ecoa o idempotencyKey (prova de ciclo)' "$(cat "$TMP/curl-calls")" \
+  '"output":"{\"echo\":\"idem-42\"}"'
 
 # ------------------------------------------------- cenário 2: tarefa fora da config
 out=$(run_one_cycle "$TASK_FORBIDDEN")
@@ -452,8 +457,8 @@ assert_contains 'ffmpeg roda com o filtro de escala do Control Plane' "$(cat "$M
 assert_contains 'ffmpeg usa o encoder fixo (libx264, crf 28)' "$(cat "$MP/ffmpeg-args")" '-c:v libx264 -preset veryfast -crf 28'
 assert_contains 'ffmpeg confina protocolo a arquivo local' "$(cat "$MP/ffmpeg-args")" '-protocol_whitelist file'
 assert_contains 'mp4 pede moov na frente (faststart)' "$(cat "$MP/ffmpeg-args")" '-movflags +faststart'
-assert_contains 'resultado declara as medidas do Control Plane' "$(cat "$TMP/curl-calls")" '"resultSha256":"bb22cc33"'
-assert_contains 'resultado declara o tamanho medido' "$(cat "$TMP/curl-calls")" '"resultBytes":13'
+assert_contains 'resultado declara as medidas do Control Plane' "$(cat "$TMP/curl-calls")" '\"resultSha256\":\"bb22cc33\"'
+assert_contains 'resultado declara o tamanho medido' "$(cat "$TMP/curl-calls")" '\"resultBytes\":13'
 assert_contains 'task é concluída' "$out" 'transcode DONE tk_9'
 assert_eq 'um único resultado postado' '1' "$(results_posted)"
 
@@ -518,7 +523,7 @@ assert_contains 'confirmação leva versão e hash' "$(cat "$TMP/curl-calls")" '
 assert_eq 'corpo guardado no disco do nó' '{"username":"ana"}' "$(cat "$NR/replica/PROFILE/ana.json")"
 assert_eq 'versão guardada ao lado do corpo' '3' "$(cat "$NR/replica/PROFILE/ana.version")"
 assert_contains 'travessia concluída é reportada' "$out" 'travessia concluída'
-assert_contains 'resultado declara complete=true' "$(cat "$TMP/curl-calls")" '"complete":true'
+assert_contains 'resultado declara complete=true' "$(cat "$TMP/curl-calls")" '\"complete\":true'
 assert_eq 'cursor limpo ao concluir' '' "$(cat "$NR/replica/cursor-PROFILE")"
 
 # Segunda rodada: com a versão guardada, o nó pergunta version= e o Control Plane
@@ -575,7 +580,7 @@ MOCK
 chmod +x "$TMP/curl"
 out=$(run_custom "$NR")
 assert_eq 'agregado que sumiu é descartado' '0' "$(find "$NR/replica/PROFILE" -name 'dora*' | wc -l | tr -d ' ')"
-assert_contains 'remoção é reportada no resultado' "$(cat "$TMP/curl-calls")" '"removed":1'
+assert_contains 'remoção é reportada no resultado' "$(cat "$TMP/curl-calls")" '\"removed\":1'
 assert_not_contains 'agregado removido não é confirmado como sincronizado' "$(cat "$TMP/curl-calls")" 'dora/synced'
 
 # ------------------------------------------------- cenário 13: EDGE_CACHE (feed de mudanças)
@@ -622,7 +627,7 @@ assert_eq 'corpo do perfil guardado no cache' '{"username":"ana"}' "$(cat "$NE/e
 assert_eq 'versão guardada ao lado do corpo' '3' "$(cat "$NE/edge/PROFILE/ana.version")"
 assert_eq 'corpo da comunidade guardado no cache' '{"id":"cm_1"}' "$(cat "$NE/edge/COMMUNITY/cm_1.json")"
 assert_eq 'cursor avançou para a última mudança' '2' "$(cat "$NE/edge/cursor")"
-assert_contains 'resultado declara complete=true' "$(cat "$TMP/curl-calls")" '"complete":true'
+assert_contains 'resultado declara complete=true' "$(cat "$TMP/curl-calls")" '\"complete\":true'
 assert_eq 'um único resultado postado' '1' "$(results_posted)"
 
 # ------------------------------------------------- cenário 14: feed podado (reset)
@@ -689,7 +694,7 @@ MOCK
 chmod +x "$TMP/curl"
 out=$(run_custom "$NE")
 assert_eq 'entrada removida é descartada da borda' '0' "$(find "$NE/edge/PROFILE" -name 'gone*' | wc -l | tr -d ' ')"
-assert_contains 'remoção é contada no resultado' "$(cat "$TMP/curl-calls")" '"removed":1'
+assert_contains 'remoção é contada no resultado' "$(cat "$TMP/curl-calls")" '\"removed\":1'
 assert_not_contains 'agregado removido não é confirmado como sincronizado' "$(cat "$TMP/curl-calls")" 'gone/synced'
 
 # ------------------------------------------------- cenário 16: EDGE_DELIVER em dia (cache)
@@ -723,8 +728,8 @@ chmod +x "$TMP/curl"
 out=$(run_custom "$NE")
 assert_contains 'entrega pergunta pela versão que o nó tem' "$(cat "$TMP/curl-calls")" '/network/content/PROFILE/ana?version=3'
 assert_contains 'entrega em dia reconfirma o que tem' "$(cat "$TMP/curl-calls")" '/network/content/PROFILE/ana/synced'
-assert_contains 'veredicto positivo declara versão e hash' "$(cat "$TMP/curl-calls")" '"version":3,"contentHash":"h-ana","deliverable":true'
-assert_contains 'veredicto declara que veio do cache' "$(cat "$TMP/curl-calls")" '"source":"cache"'
+assert_contains 'veredicto positivo declara versão e hash' "$(cat "$TMP/curl-calls")" '\"version\":3,\"contentHash\":\"h-ana\",\"deliverable\":true'
+assert_contains 'veredicto declara que veio do cache' "$(cat "$TMP/curl-calls")" '\"source\":\"cache\"'
 assert_eq 'corpo em dia não é rebaixado' '{"username":"ana"}' "$(cat "$NE/edge/PROFILE/ana.json")"
 
 # ------------------------------------------------- cenário 17: EDGE_DELIVER rebaixa quando o cache ficou velho
@@ -756,8 +761,8 @@ assert_contains 'cache velho é rebaixado da origem' "$(cat "$TMP/curl-calls")" 
 assert_contains 'confirmação da versão nova leva o hash novo' "$(cat "$TMP/curl-calls")" '{"sourceVersion":4,"contentHash":"h-ana4"}'
 assert_eq 'corpo novo guardado antes do veredicto' '{"username":"ana","new":true}' "$(cat "$NE/edge/PROFILE/ana.json")"
 assert_eq 'versão nova guardada ao lado do corpo' '4' "$(cat "$NE/edge/PROFILE/ana.version")"
-assert_contains 'veredicto declara a origem do corpo (refetched)' "$(cat "$TMP/curl-calls")" '"source":"refetched"'
-assert_contains 'veredicto positivo carrega a versão rebaixada' "$(cat "$TMP/curl-calls")" '"version":4,"contentHash":"h-ana4","deliverable":true'
+assert_contains 'veredicto declara a origem do corpo (refetched)' "$(cat "$TMP/curl-calls")" '\"source\":\"refetched\"'
+assert_contains 'veredicto positivo carrega a versão rebaixada' "$(cat "$TMP/curl-calls")" '\"version\":4,\"contentHash\":\"h-ana4\",\"deliverable\":true'
 
 # ------------------------------------------------- cenário 18: EDGE_DELIVER de agregado removido
 # 404 na origem: entregar é impossível em qualquer nó. Descartar a entrada local e
@@ -784,7 +789,7 @@ MOCK
 chmod +x "$TMP/curl"
 out=$(run_custom "$NE")
 assert_eq 'entrega de agregado removido descarta a entrada' '0' "$(find "$NE/edge/PROFILE" -name 'sumido*' | wc -l | tr -d ' ')"
-assert_contains 'veredicto negativo por remoção da origem' "$(cat "$TMP/curl-calls")" '"deliverable":false,"reason":"CONTENT_GONE"'
+assert_contains 'veredicto negativo por remoção da origem' "$(cat "$TMP/curl-calls")" '\"deliverable\":false,\"reason\":\"CONTENT_GONE\"'
 assert_not_contains 'agregado removido não é confirmado como sincronizado' "$(cat "$TMP/curl-calls")" 'sumido/synced'
 
 # ------------------------------------------------- cenário 19: EDGE_DELIVER não é mais eco de ciclo
@@ -855,7 +860,7 @@ out=$(run_custom "$ND")
 assert_eq 'entrada mais antiga evictada (mtime) para caber a nova' '0' "$(find "$ND/edge/PROFILE" -name 'velho1*' | wc -l | tr -d ' ')"
 assert_eq 'entrada mais nova do cache sobrevive' '1' "$(find "$ND/edge/PROFILE" -name 'velho3.json' | wc -l | tr -d ' ')"
 assert_eq 'entrada nova é gravada depois de abrir espaço' '{"username":"novo"}' "$(cat "$ND/edge/PROFILE/novo.json")"
-assert_contains 'resultado declara a evicção' "$(cat "$TMP/curl-calls")" '"evicted":1'
+assert_contains 'resultado declara a evicção' "$(cat "$TMP/curl-calls")" '\"evicted\":1'
 assert_not_contains 'entrada que coube não é contada como perdida' "$(cat "$TMP/curl-calls")" '"dropped":1'
 assert_eq 'conteúdo guardado cabe no teto declarado' '1' "$(if (( $(stat -c %s "$ND/edge/PROFILE"/*.json | awk '{s+=$1} END {print s}') <= 1048576 )); then echo 1; else echo 0; fi)"
 
@@ -923,8 +928,8 @@ MOCK
 chmod +x "$TMP/curl"
 out=$(run_custom "$NRT")
 assert_eq 'réplica não grava item que passa do teto' '0' "$(find "$NRT/replica/PROFILE" -name 'gigante.json' 2>/dev/null | wc -l | tr -d ' ')"
-assert_contains 'resultado declara disco cheio' "$(cat "$TMP/curl-calls")" '"diskFull":true'
-assert_contains 'travessia conclui incompleta' "$(cat "$TMP/curl-calls")" '"complete":false'
+assert_contains 'resultado declara disco cheio' "$(cat "$TMP/curl-calls")" '\"diskFull\":true'
+assert_contains 'travessia conclui incompleta' "$(cat "$TMP/curl-calls")" '\"complete\":false'
 assert_not_contains 'item que não coube não é confirmado como sincronizado' "$(cat "$TMP/curl-calls")" 'gigante/synced'
 
 # ------------------------------------------------- cenário 23: a réplica abre espaço evictando CACHE, nunca a si mesma
@@ -1295,9 +1300,9 @@ MOCK
 make_curl_api "$CONFIG_API" "$TASK_API"
 out=$(run_custom "$NA")
 assert_contains 'a rota autorizada é chamada' "$(cat "$TMP/curl-calls")" 'https://catalogo.exemplo/api'
-assert_contains 'o resultado declara o status da rota' "$(cat "$TMP/curl-calls")" '"status":200'
-assert_contains 'o resultado declara o tamanho do corpo' "$(cat "$TMP/curl-calls")" '"bytes":16'
-assert_contains 'o resultado declara o digest do corpo' "$(cat "$TMP/curl-calls")" '"digest":"'
+assert_contains 'o resultado declara o status da rota' "$(cat "$TMP/curl-calls")" '\"status\":200'
+assert_contains 'o resultado declara o tamanho do corpo' "$(cat "$TMP/curl-calls")" '\"bytes\":16'
+assert_contains 'o resultado declara o digest do corpo' "$(cat "$TMP/curl-calls")" '\"digest\":\"'
 assert_not_contains 'o corpo da rota não volta no resultado' "$(cat "$TMP/curl-calls")" 'CONTEUDO-DA-ROTA'
 assert_not_contains 'a credencial do nó não vai para o destino' "$(cat "$TMP/curl-calls")" 'X-Node-Key: enk_echoteste0123 https://catalogo'
 assert_contains 'task concluída' "$out" 'rota catalogo status=200'
