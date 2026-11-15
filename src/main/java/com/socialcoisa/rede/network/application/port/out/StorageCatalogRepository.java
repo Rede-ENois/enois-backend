@@ -71,6 +71,19 @@ public interface StorageCatalogRepository {
 	 */
 	Optional<StoragePlacement> placementOn(String objectId, String nodeId);
 
+	/**
+	 * Objetos do catálogo inteiro por estado: {@code {quantidade, bytes}} cada. Uma consulta só, para
+	 * o painel — varrer o catálogo para somar seria contar linha a linha o que o banco já sabe.
+	 *
+	 * <p>Estado ausente no mapa é "nenhum objeto naquele estado", que é diferente de zero objetos
+	 * encontrados. Quem consome deve tratar a ausência como zero explícito na soma, nunca como
+	 * "não medido".</p>
+	 */
+	java.util.Map<String, long[]> summarizeObjects();
+
+	/** Cópias por estado: {@code {quantidade, bytes}} cada. Mesma regra de ausência acima. */
+	java.util.Map<String, long[]> summarizePlacements();
+
 	/** O que este nó hospeda, para o painel e para o nó saber o que tem. */
 	List<StoragePlacement> placementsOnNode(String nodeId);
 }

@@ -241,6 +241,28 @@ class StorageScrubberReadBackTests {
 		}
 
 		@Override
+		public java.util.Map<String, long[]> summarizeObjects() {
+			java.util.Map<String, long[]> porEstado = new java.util.LinkedHashMap<>();
+			for (StorageObject o : objects) {
+				long[] par = porEstado.computeIfAbsent(o.state().name(), k -> new long[2]);
+				par[0]++;
+				par[1] += o.bytes() == null ? 0 : o.bytes();
+			}
+			return porEstado;
+		}
+
+		@Override
+		public java.util.Map<String, long[]> summarizePlacements() {
+			java.util.Map<String, long[]> porEstado = new java.util.LinkedHashMap<>();
+			for (StoragePlacement p : placements) {
+				long[] par = porEstado.computeIfAbsent(p.state().name(), k -> new long[2]);
+				par[0]++;
+				par[1] += p.bytes();
+			}
+			return porEstado;
+		}
+
+		@Override
 		public List<StoragePlacement> placementsOnNode(String nodeId) {
 			return placements.stream().filter(p -> p.nodeId().equals(nodeId)).toList();
 		}

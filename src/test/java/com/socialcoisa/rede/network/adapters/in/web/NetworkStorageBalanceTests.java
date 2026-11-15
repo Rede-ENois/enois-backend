@@ -100,6 +100,47 @@ class NetworkStorageBalanceTests {
 		assertThat(tree.get("skewed")).isEmpty();
 	}
 
+	/**
+	 * O Storage no painel: capacidade declarada, disponível MEDIDO e uso MEDIDO.
+	 *
+	 * <p>O nó declara 100 GB e reporta 4 GB livres: o painel tem de mostrar os dois como coisas
+	 * diferentes. Um objeto STORED com uma cópia OK de 10 bytes entra em `usedBytes`; uma designação
+	 * PENDING_REMOTE de 999 bytes não entra, porque não está em disco nenhum.</p>
+	 */
+	@Test
+	void aVisaoDeStorageDistingueDeclaradoDeMedidoEAceitaSoCopiaConfirmada() throws Exception {
+		String admin = adminToken();
+		insertNode("nd_ov");
+		jdbc.update("update network_nodes set observed_disk_free_mb = 4000 where id = 'nd_ov'");
+		jdbc.update("""
+			insert into network_storage_objects (id, bucket, object_key, content_type, bytes, sha256, state,
+			  created_by, created_at, updated_at)
+			values ('sob_ov', 'fotos', 'p.jpg', 'image/jpeg', 10, repeat('a', 64), 'STORED', 'u', now(3), now(3))
+			""");
+		jdbc.update("""
+			insert into network_storage_placements (object_id, replica, node_id, bytes, sha256, state, verified_at)
+			values ('sob_ov', 0, 'nd_ov', 10, repeat('a', 64), 'OK', now(3)),
+			       ('sob_ov', 1, 'nd_ov', 999, repeat('a', 64), 'PENDING_REMOTE', now(3))
+			""");
+
+		mockMvc.perform(get("/admin/network/nodes/storage/overview").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.capacityMb").value(102400))
+			.andExpect(jsonPath("$.freeMb").value(4000))
+			.andExpect(jsonPath("$.nodesDeclaringCapacity").value(1))
+			.andExpect(jsonPath("$.unmeasuredNodes").value(0))
+			// Só a cópia OK: a designação de 999 bytes não é espaço ocupado.
+			.andExpect(jsonPath("$.usedBytes").value(10))
+			.andExpect(jsonPath("$.objectsByState.STORED").value(1))
+			.andExpect(jsonPath("$.copiesByState.PENDING_REMOTE").value(1))
+			.andExpect(jsonPath("$.replicasExpected").value(2));
+	}
+
+	@Test
+	void aVisaoDeStorageExigeAdmin() throws Exception {
+		mockMvc.perform(get("/admin/network/nodes/storage/overview")).andExpect(status().isUnauthorized());
+	}
+
 	// ---------------------------------------------------------------- apoio
 
 	private void insertNode(String id) {
