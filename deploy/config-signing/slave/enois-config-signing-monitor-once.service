@@ -1,0 +1,17 @@
+[Unit]
+Description=Verificação única da chave pública de assinatura do Control Plane (Énóis)
+Documentation=file:/usr/local/share/enois-config-signing/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/enois/config-signing-monitor.env
+ExecStart=/usr/local/sbin/enois-monitor-config-signing --once
+# 0 = pinado; 2 = ainda sem config assinada (o timer tenta de novo).
+# 3/5/6 = divergência ou falha que exige gente: a unidade fica failed.
+SuccessExitStatus=0 2
+TimeoutStartSec=120
+Nice=10

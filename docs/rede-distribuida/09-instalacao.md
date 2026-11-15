@@ -103,6 +103,12 @@ que ainda não tem pino pina no próximo `--start`; o que já tem pino continua
 aceitando a chave nova só se ela for a mesma que ele pinou — trocar o par exige
 remover o pino no nó, que é decisão do participante (TOFU, §1.1).
 
+Gerar o par, provar que o Control Plane assinou de verdade e acompanhar um nó
+até o pino tem ferramenta própria em
+[`deploy/config-signing/`](../../deploy/config-signing/README.md): o master gera
+o par e verifica a assinatura com o fingerprint esperado; o slave instala o
+monitor que pina a chave no nó quando ela aparecer.
+
 ## 2. O que o instalador materializa das regras da rede
 
 - **Token de uso único.** Rodar o enroll de novo com o mesmo token falha com
