@@ -171,3 +171,33 @@ não existir, é este estado correto que se vê: réplica pendente, tarefa volta
 real: tarefa designada, nó posta o eco do runtime, `applied=false`; depois o nó confirma pelo
 `POST .../replica` e o mesmo `DONE` é aceito). Mutação "sem conferência de `OBJECT_PUT`" (o código
 anterior) derruba 2.
+
+## 5.3 O runtime executa `OBJECT_PUT`
+
+O `*)` do `deploy/node-runtime/node-runtime.sh` respondia `DONE` com um eco do `idempotencyKey`
+para todo tipo **sem executor** — inclusive `OBJECT_PUT`. Com o conferente do §5.2 o eco passou a
+ser recusado (o que já era correto), mas a réplica nunca acontecia. Agora existe `exec_object_put`:
+
+| passo | o que faz |
+|---|---|
+| 1 | lê `objectId`, `sha256`, `bytes` e `replica` do payload; payload incompleto → `STORAGE_TASK_PAYLOAD_INVALID` |
+| 2 | baixa por `GET /network/storage/objects/{id}` com a **mesma** chave de nó e o mesmo `--limit-rate` do teto de banda declarado |
+| 3 | **mede o que veio** (`sha256sum` + `stat`) e compara com o medido pelo Control Plane. Divergência → `STORAGE_REPLICA_MISMATCH`, e **não confirma** |
+| 4 | confere o teto de disco cedido **antes** de confirmar. Acima → `STORAGE_OBJECT_TOO_LARGE` (o temporário sai; `diskMb=0` é "sem teto declarado", não "zero bytes") |
+| 5 | confirma em `POST .../replica` com **as medidas que ele mesmo calculou** |
+| 6 | posta `DONE` com `{objectId, replica, bytes, sha256}` — que o Control Plane confere de novo |
+
+O corpo **não** fica em `$NODE_HOME/replica`: `disk_make_room` trata `replica/` como promessa não
+evictável, e quem decide o que o nó hospeda é o catálogo por colocação. Guardar ali criaria duas
+verdades sobre a mesma cópia. Este executor baixa, confere e confirma; retenção local entra quando
+houver política de cache que o Control Plane consiga reconciliar. Como o arquivo temporário sai
+logo após a confirmação, o nó não acumula conteúdo sem política — e não enche o disco de quem
+contribui.
+
+O `--silent` no `curl` do download não é decoração: sem ele o curl copia o corpo para a saída padrão
+e o painel do nó receberia **bytes de conteúdo de usuário** como se fossem linha de log.
+
+**Verificação:** 9 asserções novas em `scripts/tests/node-executor-test.sh` (177 → **186**):
+caminho feliz (baixa → confere → confirma → `DONE` com o medido, e **sem** o eco), corpo divergente
+(não confirma), e teto de disco menor que o objeto (não confirma). Mutações: sem a entrada no `case`
+(volta ao eco), confiar no sha do payload, e confirmar sem checar o teto — cada uma derruba a sua.
