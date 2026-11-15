@@ -100,7 +100,7 @@ class SelectionProcessController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		String requesterId = user.id().value();
-		List<SelectionStage> stages = process.stages(jobId, requesterId);
+		List<SelectionStage> stages = process.stagesForBoard(jobId, requesterId);
 		Map<Long, SelectionProcessService.PipelinePosition> positions = process.positionsOf(jobId, requesterId);
 		List<JobApplication> applications = jobs.applicationsOf(jobId, requesterId, 1000);
 
