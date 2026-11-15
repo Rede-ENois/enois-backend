@@ -1,6 +1,5 @@
 package com.socialcoisa.rede.feed.domain;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 
@@ -22,7 +21,7 @@ public class Post {
 	private PostStatus status;
 	private Instant deletedAt;
 	private Instant editedAt;
-	/** Quando o post se apaga sozinho (MOMENT: +24h); null = nunca. */
+	/** Quando o post se apaga sozinho (efêmeros: MOMENT +24h, INSTANTE +1h); null = nunca. */
 	private Instant expiresAt;
 	/** Quem assina: a identidade social (padrão) ou a profissional da mesma conta. Nunca nulo. */
 	private final AuthorIdentity authorIdentity;
@@ -96,8 +95,8 @@ public class Post {
 	public static Post publish(PostId id, UserId authorId, PostType type, String content, String pageHtml,
 			List<String> tags, List<String> mediaIds, String communityId, String topic, Instant createdAt,
 			AuthorIdentity authorIdentity) {
-		// Momento é efêmero por definição: nasce com prazo de 24 horas e se apaga sozinho.
-		Instant expiresAt = type == PostType.MOMENT ? createdAt.plus(Duration.ofHours(24)) : null;
+		// Efêmero nasce com prazo e se apaga sozinho: Momento 24h, Instante 1h da publicação efetiva.
+		Instant expiresAt = type.isEphemeral() ? createdAt.plus(type.ephemeralDuration()) : null;
 		return new Post(id, authorId, type, content, pageHtml, tags, mediaIds, communityId, topic, null, createdAt,
 			Visibility.PUBLIC, Counters.zero(), PostStatus.ACTIVE, null, null, expiresAt, authorIdentity);
 	}
@@ -116,7 +115,7 @@ public class Post {
 	public static Post publish(PostId id, UserId authorId, PostType type, String content, String pageHtml,
 			List<String> tags, List<String> mediaIds, String communityId, String topic, String channelId,
 			Instant createdAt, AuthorIdentity authorIdentity, boolean mediaSpoiler) {
-		Instant expiresAt = type == PostType.MOMENT ? createdAt.plus(Duration.ofHours(24)) : null;
+		Instant expiresAt = type.isEphemeral() ? createdAt.plus(type.ephemeralDuration()) : null;
 		return new Post(id, authorId, type, content, pageHtml, tags, mediaIds, communityId, topic, channelId,
 			createdAt, Visibility.PUBLIC, Counters.zero(), PostStatus.ACTIVE, null, null, expiresAt, authorIdentity,
 			mediaSpoiler);
@@ -172,8 +171,9 @@ public class Post {
 
 	/**
 	 * Edicao com TROCA DE TIPO (a categoria e editavel, como o texto): as regras de conteudo de
-	 * cada tipo valem no service, e o prazo do MOMENT acompanha a virada — entrando em MOMENT
-	 * ganha as 24h da criacao (ou aproveita o prazo que ja existia); saindo, o prazo some.
+	 * cada tipo valem no service, e o prazo do efêmero acompanha a virada — entrando em MOMENT
+	 * ganha as 24h (ou aproveita o prazo que ja existia), entrando em INSTANTE ganha 1h; saindo,
+	 * o prazo some.
 	 */
 	public Post edited(PostType newType, String newContent, String newPageHtml, List<String> newTags,
 			Instant editedAt) {
@@ -187,8 +187,8 @@ public class Post {
 	 */
 	public Post edited(PostType newType, String newContent, String newPageHtml, List<String> newTags,
 			String newTopic, Instant editedAt) {
-		Instant newExpiresAt = newType == PostType.MOMENT
-			? (expiresAt != null ? expiresAt : editedAt.plus(Duration.ofHours(24)))
+		Instant newExpiresAt = newType.isEphemeral()
+			? (expiresAt != null ? expiresAt : editedAt.plus(newType.ephemeralDuration()))
 			: null;
 		// Editar nunca muda a autoria: tipo, conteúdo, tags e assunto são editáveis.
 		Post edited = new Post(id, authorId, newType, newContent, newPageHtml, newTags, mediaIds, communityId,

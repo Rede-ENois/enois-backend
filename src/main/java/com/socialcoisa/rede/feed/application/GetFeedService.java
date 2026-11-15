@@ -71,6 +71,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	private final com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries;
 	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
 	private final com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications;
+	private final java.time.Clock clock;
 
 	private static final Instant DEFAULT_BEFORE = Instant.parse("9999-12-31T23:59:59Z");
 
@@ -99,7 +100,9 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			com.socialcoisa.rede.feed.application.port.out.PostRepostRepository postReposts,
 			com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries,
 			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate,
-			com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications) {
+			com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications,
+			java.time.Clock clock) {
+		this.clock = clock;
 		this.mediaSummaries = mediaSummaries;
 		this.sanctionGate = sanctionGate;
 		this.identityVerifications = identityVerifications;
@@ -417,6 +420,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	private Post visiblePost(String postId, UserId viewerId) {
 		Post post = postRepository.findById(new PostId(postId))
 			.filter(Post::isActive)
+			// Link antigo ou consulta direta não ressuscita efêmero vencido: 404, como inexistente.
+			.filter(candidato -> !candidato.expired(clock.instant()))
 			.orElseThrow(() -> new ApiException(404, "POST_NOT_FOUND", "Post nao encontrado."));
 		// Link direto (notificacao antiga, por exemplo) tambem respeita o bloqueio.
 		if (viewerId != null && blockedUsersReader.hiddenIdsFor(viewerId.value()).contains(post.authorId().value())) {
@@ -527,10 +532,16 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		if (posts.isEmpty()) {
 			return List.of();
 		}
+		// Efêmero vencido sai da listagem mesmo antes do worker passar (janela de até 5 min).
+		java.time.Instant now = clock.instant();
+		List<Post> unexpired = posts.stream().filter(post -> !post.expired(now)).toList();
+		if (unexpired.isEmpty()) {
+			return List.of();
+		}
 		Set<String> hidden = knownHidden != null ? knownHidden
 			: blockedUsersReader.hiddenIdsFor(currentUserId != null ? currentUserId.value() : null);
-		List<Post> visible = hidden.isEmpty() ? posts
-			: posts.stream().filter(post -> !hidden.contains(post.authorId().value())).toList();
+		List<Post> visible = hidden.isEmpty() ? unexpired
+			: unexpired.stream().filter(post -> !hidden.contains(post.authorId().value())).toList();
 		if (visible.isEmpty()) {
 			return List.of();
 		}

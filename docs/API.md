@@ -214,7 +214,13 @@ Cidade e UF (`city`, `state`) são estruturadas e separadas do `location` livre,
 ```
 
 Tipos: `INSIGHT`, `ARTICLE`, `QUESTION`, `PROJECT`, `OPPORTUNITY`, `PAGE`, `NEWS`, `TUTORIAL`,
-`REVIEW`, `DIVERTIDO`, `MOMENT`, `BLOG`, `BUSINESS`, `POLL`, `COMPLAINT`
+`REVIEW`, `DIVERTIDO`, `MOMENT`, `INSTANTE`, `BLOG`, `BUSINESS`, `POLL`, `COMPLAINT`
+
+Efêmeros: `MOMENT` se apaga sozinho em 24 horas e `INSTANTE` em 1 hora, contados da publicação
+efetiva (agendado conta da hora em que o worker o publica). A resposta carrega `expiresAt`; vencido,
+o post sai das listagens e responde 404 em consulta direta, e o worker de expiração aplica o
+soft-delete do fluxo normal (`MomentExpiryScheduler`, a cada 5 min). Efêmero não é republicável
+(`400 NOT_REPOSTABLE`) nem vai para o LinkedIn.
 
 Assunto (`topic`): obrigatório em post avulso, um da taxonomia (`ContentTaxonomy.TOPICS`). Sem ele,
 `400 TOPIC_REQUIRED`; fora da lista, `400 INVALID_TOPIC`. Post de comunidade ou canal herda o assunto
