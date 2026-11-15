@@ -2,6 +2,7 @@ package com.socialcoisa.rede.moderation.application;
 
 import org.springframework.stereotype.Component;
 
+import com.socialcoisa.rede.colagem.application.port.in.ColagemModerationPort;
 import com.socialcoisa.rede.feed.application.port.in.ModerationRemoveCommentUseCase;
 import com.socialcoisa.rede.feed.application.port.in.ModerationRemovePostUseCase;
 import com.socialcoisa.rede.moderation.domain.Report;
@@ -15,10 +16,13 @@ public class ReportedContentRemover {
 
 	private final ModerationRemovePostUseCase posts;
 	private final ModerationRemoveCommentUseCase comments;
+	private final ColagemModerationPort colagem;
 
-	public ReportedContentRemover(ModerationRemovePostUseCase posts, ModerationRemoveCommentUseCase comments) {
+	public ReportedContentRemover(ModerationRemovePostUseCase posts, ModerationRemoveCommentUseCase comments,
+			ColagemModerationPort colagem) {
 		this.posts = posts;
 		this.comments = comments;
+		this.colagem = colagem;
 	}
 
 	public void remove(Report report, String actorId, String reasonPrefix) {
@@ -26,6 +30,8 @@ public class ReportedContentRemover {
 		switch (report.targetType()) {
 			case POST -> posts.removeAsModerator(actorId, report.targetId(), reason);
 			case COMMENT -> comments.removeAsModerator(actorId, report.targetId(), reason);
+			case COLLAGEM_POST -> colagem.removePostAsModerator(actorId, report.targetId(), reason);
+			case COLLAGEM_COMMENT -> colagem.removeCommentAsModerator(actorId, report.targetId(), reason);
 			default -> {
 				// Other targets have no platform-wide removal: the team acts in the target's module.
 			}

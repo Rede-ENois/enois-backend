@@ -407,6 +407,30 @@ Tipos de reação: `LIKE`, `LOVE`, `CONGRATS`, `INSIGHTFUL`, `CURIOUS`
 
 ---
 
+## Colagem
+
+O feed fotográfico que vive no Explorar. É um espaço próprio: **nada publicado aqui aparece em
+`/api/feed`**. Regras completas em [COLAGEM.md](COLAGEM.md).
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/colagem` | feed próprio (grade), `cursor`/`limit` (≤ 48) | Sim |
+| POST | `/api/colagem/posts` | publica exatamente uma fotografia (`mediaId`, `description?`, `mediaSpoiler?`) | Sim + idempotência |
+| GET | `/api/colagem/posts/{postId}` | foto única com autor, reações e contagem de comentários | Sim |
+| DELETE | `/api/colagem/posts/{postId}` | o autor remove a própria foto | Sim + idempotência |
+| GET | `/api/colagem/posts/{postId}/comments` | contribuições crônicas (`after`, `limit`) | Sim |
+| POST | `/api/colagem/posts/{postId}/comments` | texto e/ou UMA foto; resposta de foto não pode ter foto | Sim + idempotência |
+| DELETE | `/api/colagem/posts/{postId}/comments/{commentId}` | o autor do comentário remove o próprio | Sim + idempotência |
+| POST | `/api/colagem/posts/{postId}/reactions` | `{ "reaction": "LIKE" }` — uma por pessoa, trocável | Sim + idempotência |
+| DELETE | `/api/colagem/posts/{postId}/reactions` | remove a reação de quem pediu | Sim + idempotência |
+
+Erros: `400 MEDIA_REQUIRED`, `400 NOT_IMAGE`, `400 CONTENT_TOO_LONG` (legenda 500),
+`400 COMMENT_TOO_LONG` (800), `400 COMMENT_EMPTY`, `400 PHOTO_REPLY_NOT_ALLOWED`,
+`400 INVALID_REACTION`, `403 MEDIA_OWNER_MISMATCH`, `403 NOT_AUTHORIZED`, `404 MEDIA_NOT_FOUND`,
+`404 POST_NOT_FOUND`, `404 COMMENT_NOT_FOUND`.
+
+---
+
 ## Onboarding (primeira entrada)
 
 | Método | Rota | Descrição | Autenticação |

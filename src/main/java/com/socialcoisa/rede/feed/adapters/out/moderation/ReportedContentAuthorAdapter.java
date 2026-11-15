@@ -4,6 +4,7 @@ import java.util.Optional;
 
 import org.springframework.stereotype.Component;
 
+import com.socialcoisa.rede.colagem.application.port.out.ColagemRepository;
 import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.PostId;
@@ -27,13 +28,15 @@ class ReportedContentAuthorAdapter implements ReportedContentAuthorReader {
 	private final CommentRepository comments;
 	private final GroupContentRepository groupContent;
 	private final CallReportContextRepository callReports;
+	private final ColagemRepository colagem;
 
 	ReportedContentAuthorAdapter(PostRepository posts, CommentRepository comments,
-			GroupContentRepository groupContent, CallReportContextRepository callReports) {
+			GroupContentRepository groupContent, CallReportContextRepository callReports, ColagemRepository colagem) {
 		this.posts = posts;
 		this.comments = comments;
 		this.groupContent = groupContent;
 		this.callReports = callReports;
+		this.colagem = colagem;
 	}
 
 	/**
@@ -61,6 +64,8 @@ class ReportedContentAuthorAdapter implements ReportedContentAuthorReader {
 			case "CALL" -> Optional.empty();
 			case "GROUP_POST" -> groupContent.findPost(targetId).map(GroupPost::authorId);
 			case "GROUP_COMMENT" -> groupContent.findComment(targetId).map(GroupComment::authorId);
+			case "COLLAGEM_POST" -> colagem.findPostById(targetId).map(p -> p.authorId().value());
+			case "COLLAGEM_COMMENT" -> colagem.findCommentById(targetId).map(c -> c.authorId().value());
 			default -> Optional.empty();
 		};
 	}

@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import com.socialcoisa.rede.calls.domain.CallReportContext;
+import com.socialcoisa.rede.colagem.application.port.out.ColagemRepository;
 import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.PostId;
@@ -38,14 +39,16 @@ class ReportedContentAdapter implements ReportedContentReader {
 	private final UserProfileRepository profiles;
 	private final GroupContentRepository groupContent;
 	private final CallReportContextRepository callReports;
+	private final ColagemRepository colagem;
 
 	ReportedContentAdapter(PostRepository posts, CommentRepository comments, UserProfileRepository profiles,
-			GroupContentRepository groupContent, CallReportContextRepository callReports) {
+			GroupContentRepository groupContent, CallReportContextRepository callReports, ColagemRepository colagem) {
 		this.posts = posts;
 		this.comments = comments;
 		this.profiles = profiles;
 		this.groupContent = groupContent;
 		this.callReports = callReports;
+		this.colagem = colagem;
 	}
 
 	@Override
@@ -56,6 +59,9 @@ class ReportedContentAdapter implements ReportedContentReader {
 			case "USER" -> profiles.findById(targetId).map(this::profileText);
 			case "GROUP_POST" -> groupContent.findPost(targetId).map(GroupPost::content);
 			case "GROUP_COMMENT" -> groupContent.findComment(targetId).map(GroupComment::content);
+			case "COLLAGEM_POST" -> colagem.findPostById(targetId).map(post -> colagemPostText(post));
+			case "COLLAGEM_COMMENT" -> colagem.findCommentById(targetId)
+				.map(comment -> colagemCommentText(comment));
 			default -> Optional.empty();
 		};
 		return content.map(this::shorten).filter(StringUtils::hasText);
@@ -107,6 +113,19 @@ class ReportedContentAdapter implements ReportedContentReader {
 			.filter(StringUtils::hasText)
 			.reduce((first, second) -> first + "\n" + second)
 			.orElse("");
+	}
+
+	// Colagem: o texto vem da legenda (a foto em si vai à triagem de mídia); indicamos que é foto
+	// para o modelo não estranhar a frase curta.
+	private String colagemPostText(com.socialcoisa.rede.colagem.domain.ColagemPost post) {
+		return post.description() == null ? "[foto da Colagem sem legenda]" : post.description();
+	}
+
+	private String colagemCommentText(com.socialcoisa.rede.colagem.domain.ColagemComment comment) {
+		if (comment.content() != null) {
+			return comment.content();
+		}
+		return comment.hasPhoto() ? "[comentário fotográfico na Colagem]" : null;
 	}
 
 	private String shorten(String content) {
