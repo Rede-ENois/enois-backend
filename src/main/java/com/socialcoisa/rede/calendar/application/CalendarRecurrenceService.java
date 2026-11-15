@@ -164,13 +164,13 @@ public class CalendarRecurrenceService {
 		}
 		// O limite interrompeu a série: a ponta fica fechada para o worker não reabrí-la a cada
 		// ciclo — o `UNTIL` do arquivo é o fim, não uma janela a ser estendida.
-		if (last != tail) {
-			last.openTail();
+		if (limit != null && cursor != null && cursor.isAfter(limit)) {
+			last.closeTail();
 			entries.save(last);
 		}
-		else if (limit != null && cursor != null && cursor.isAfter(limit)) {
-			tail.closeTail();
-			entries.save(tail);
+		else if (last != tail) {
+			last.openTail();
+			entries.save(last);
 		}
 		return created;
 	}
