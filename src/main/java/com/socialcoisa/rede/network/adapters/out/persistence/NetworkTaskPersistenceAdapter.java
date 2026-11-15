@@ -172,6 +172,16 @@ class NetworkTaskPersistenceAdapter implements NetworkTaskRepository {
 	}
 
 	@Override
+	public Map<String, Long> countFailedByNode(Collection<String> nodeIds) {
+		if (nodeIds.isEmpty()) {
+			return Map.of();
+		}
+		return repository.countFailedByNode(nodeIds)
+			.stream()
+			.collect(java.util.stream.Collectors.toMap(row -> (String) row[0], row -> (Long) row[1]));
+	}
+
+	@Override
 	public List<NetworkTask> listRecent(int limit) {
 		return repository.listRecent(PageRequest.ofSize(limit))
 			.stream()

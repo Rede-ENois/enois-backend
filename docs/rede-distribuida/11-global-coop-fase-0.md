@@ -66,3 +66,37 @@ do mantenedor, não efeito colateral de código.
 
 O Storage (fase 1) **não** depende de nada deste documento; os dois seguem em paralelo sem colidir,
 porque o Storage acrescenta perfil e tipo de tarefa e o Cooperative mexe em captura e observação.
+## 5. Observabilidade §8.4 entregue: a distribuição do trabalho
+
+O §8.4 do brief pede o que nenhum painel respondia: *"identificar se a infraestrutura está realmente
+distribuindo o processamento ou se o Master continua absorvendo trabalho que poderia ser executado
+pelas réplicas"*. `GET /admin/network/nodes/dashboard` ganhou `load`:
+
+| campo | o que diz |
+|---|---|
+| `nodes[]` | por nó: `nodeId`, `displayName`, `status`, `done`, `failed`, `runningNow` |
+| `totalDone` / `totalFailed` | o agregado do catálogo |
+| `unassigned` | concluídas sem nó no registro — entram no total, não em nó nenhum |
+| `concentratedShare` | fatia (%) do nó que mais concluiu; **nula** quando não há conclusão |
+| `singleNode` | a maior fatia é de um nó, com **2+ réplicas ativas** |
+
+Decisões que os números carregam:
+
+- **nó que nunca executou aparece com zero**, não é omitido: é o dado do nó ocioso, e omiti-lo
+  faria "nó sem tarefa" e "nó inexistente" ficarem iguais;
+- **`concentratedShare` nula sem conclusão**: 0% e 100% seriam lidos como "distribui igual" e "tudo
+  num nó" para o mesmo caso vazio;
+- **`singleNode` exige 2+ réplicas ativas**: com uma só, 100% é a única opção, não falta de
+  distribuição — acusar aí culpava a topologia pelo que ela não podia fazer;
+- **`runningNow` usa o campo cru** do heartbeat (`observedRunningTasks`), não o getter
+  `runningTasks()` que converte nulo em zero: "não reportou" e "nenhuma rodando" são casos
+  diferentes, e o painel não pode decidir por ele;
+- **falhas definitivas** = `FAILED` + `DEAD`, que é a mesma falha depois de esgotar tentativas;
+  reprocessamento não entra (a tarefa continua viva e será contada quando terminar).
+
+A consulta `countDoneByNode` já existia no repositório **sem nenhum leitor**; esta entrega é o
+primeiro uso dela, e ganhou a irmã `countFailedByNode`.
+
+Provas: `NetworkDashboardDistributionTests` 8 e `NetworkNodesTests` 27 (1 novo pela rota). Mutações
+conferidas: fatia nula→0, uma réplica contando como concentração, órfãs ignoradas, `runningNow` pelo
+getter e falhas não contadas — cada uma derruba exatamente um teste. Suíte completa **3202**.
