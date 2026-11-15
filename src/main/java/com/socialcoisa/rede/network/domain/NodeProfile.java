@@ -30,6 +30,9 @@ public enum NodeProfile {
 	/** Nó da própria infraestrutura do Énóis. Prioridade de escalonamento, não permissão extra. */
 	NODE_LOCAL,
 
+	/** Armazenamento de objetos do Énóis Storage: guarda bytes que não são dele. */
+	NODE_STORAGE,
+
 	/** Contingência: só assume as funções previamente preparadas para incidente. */
 	NODE_EMERGENCY;
 
