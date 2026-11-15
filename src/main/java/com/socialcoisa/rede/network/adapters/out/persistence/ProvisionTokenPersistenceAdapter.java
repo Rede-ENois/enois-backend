@@ -19,15 +19,22 @@ class ProvisionTokenPersistenceAdapter implements ProvisionTokenRepository {
 	@Override
 	public void insert(String tokenHash, String displayName, String ownerUserId, String profiles, Instant expiresAt,
 			String createdBy, Instant now) {
-		repository.save(
-			new ProvisionTokenJpaEntity(tokenHash, displayName, ownerUserId, profiles, expiresAt, createdBy, now));
+		repository.save(new ProvisionTokenJpaEntity(tokenHash, displayName, ownerUserId, profiles, expiresAt,
+			createdBy, now, null, null));
+	}
+
+	@Override
+	public void insertForApplicant(String tokenHash, String displayName, String ownerUserId, String profiles,
+			Instant expiresAt, String createdBy, Instant now, String ownerName, String ownerEmail) {
+		repository.save(new ProvisionTokenJpaEntity(tokenHash, displayName, ownerUserId, profiles, expiresAt,
+			createdBy, now, ownerName, ownerEmail));
 	}
 
 	@Override
 	public Optional<ProvisionTokenRecord> findByHash(String tokenHash) {
 		return repository.findByTokenHash(tokenHash)
 			.map(entity -> new ProvisionTokenRecord(entity.tokenHash(), entity.displayName(), entity.ownerUserId(),
-				entity.profiles(), entity.expiresAt(), entity.usedAt()));
+				entity.profiles(), entity.expiresAt(), entity.usedAt(), entity.ownerName(), entity.ownerEmail()));
 	}
 
 	@Override

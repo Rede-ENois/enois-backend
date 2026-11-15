@@ -17,6 +17,8 @@ import com.socialcoisa.rede.network.application.NetworkDashboardService;
 import com.socialcoisa.rede.network.application.NetworkNodeService;
 import com.socialcoisa.rede.network.application.StorageScrubber;
 import com.socialcoisa.rede.network.application.NodeKeyService;
+import com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository;
+import com.socialcoisa.rede.network.application.port.out.NetworkUserDirectory;
 import com.socialcoisa.rede.network.application.port.out.NodeKeyRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NodeProfile;
@@ -47,10 +49,12 @@ class AdminNetworkController {
 	private final CurrentUserResolver currentUserResolver;
 	private final AdminGuard adminGuard;
 	private final StorageScrubber scrubber;
+	private final NetworkNodeResponsibleRepository responsibles;
+	private final NetworkUserDirectory users;
 
 	AdminNetworkController(NetworkNodeService nodes, NodeKeyService keys, NetworkDashboardService dashboard,
 			AuditTrail audit, CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
-			StorageScrubber scrubber) {
+			StorageScrubber scrubber, NetworkNodeResponsibleRepository responsibles, NetworkUserDirectory users) {
 		this.nodes = nodes;
 		this.keys = keys;
 		this.dashboard = dashboard;
@@ -58,6 +62,8 @@ class AdminNetworkController {
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
 		this.scrubber = scrubber;
+		this.responsibles = responsibles;
+		this.users = users;
 	}
 
 	/**
@@ -71,7 +77,20 @@ class AdminNetworkController {
 			String region, String runtimeVersion, Instant lastSeenAt, boolean operable, String keyId,
 			String keyPrefix, boolean keyUsed, Integer latencyMs, int failureStreak, boolean degraded,
 			String quarantineReason, Instant quarantinedUntil, int declaredCpuCores, int declaredMemoryMb,
-			int declaredDiskMb, int declaredBandwidthMbps) {
+			int declaredDiskMb, int declaredBandwidthMbps, ResponsibleView responsible) {
+
+		/**
+		 * Quem ativou a possibilidade de o nó servir e quem responde por ele.
+		 *
+		 * <p>{@code source} diz de onde veio a informação, e os dois casos não se confundem:
+		 * {@code ACCOUNT} é o texto do cadastro de uma conta que JÁ tinha token e ativou antes da
+		 * fase 1 (o participation path original, que não tem registro próprio de ativação);
+		 * {@code JOIN_REQUEST} é a inscrição aprovada (V324), com nome e e-mail exatamente como a
+		 * pessoa escreveu no formulário. Um nó sem nenhum dos dois aparece com {@code source} nulo
+		 * e o painel mostra o id da conta dona — nunca uma pessoa inventada.</p>
+		 */
+		record ResponsibleView(String name, String email, String source) {
+		}
 
 		/**
 		 * O nó como o painel o vê. {@code degraded} e {@code quarantinedUntil} vêm da saúde medida, que
@@ -82,7 +101,8 @@ class AdminNetworkController {
 		 * não sai sozinha, e esconder o motivo depois do prazo de revisão deixaria o painel mostrando
 		 * um nó parado sem dizer por quê.</p>
 		 */
-		static NodeView of(NetworkNode node, NodeKeyRepository.NodeKeyRecord key, Instant now) {
+		static NodeView of(NetworkNode node, NodeKeyRepository.NodeKeyRecord key, Instant now,
+				ResponsibleView responsible) {
 			boolean quarantined = node.quarantined(now);
 			boolean showQuarantine = quarantined
 				|| (node.status() == NodeStatus.QUARANTINED && node.quarantineReason() != null);
@@ -93,7 +113,7 @@ class AdminNetworkController {
 				node.observedLatencyMs(), node.consecutiveFailures(), showQuarantine || node.slow() || node.failing(),
 				showQuarantine ? node.quarantineReason() : null, showQuarantine ? node.quarantinedUntil() : null,
 				node.declaredCpuCores(), node.declaredMemoryMb(), node.declaredDiskMb(),
-				node.declaredBandwidthMbps());
+				node.declaredBandwidthMbps(), responsible);
 		}
 	}
 
@@ -124,8 +144,16 @@ class AdminNetworkController {
 		// Uma consulta para as chaves de todos os nós: a tela lista até 200 e abriria 200 consultas.
 		Map<String, NodeKeyRepository.NodeKeyRecord> activeKeys = keys.activeKeysFor(
 			found.stream().map(NetworkNode::id).toList());
+		// Responsáveis e contas em duas consultas: a tela lista até 200 nós e abriria 400.
+		Map<String, NetworkNodeResponsibleRepository.Responsible> joined = responsibles
+			.byNodeIds(found.stream().map(NetworkNode::id).toList());
+		Map<String, NetworkUserDirectory.Account> accounts = users
+			.byIds(found.stream().map(NetworkNode::ownerUserId).distinct().toList());
 		Instant now = Instant.now();
-		return found.stream().map(node -> NodeView.of(node, activeKeys.get(node.id()), now)).toList();
+		return found.stream()
+			.map(node -> NodeView.of(node, activeKeys.get(node.id()), now,
+				responsibleOf(node, joined.get(node.id()), accounts.get(node.ownerUserId()))))
+			.toList();
 	}
 
 	/**
@@ -255,7 +283,24 @@ class AdminNetworkController {
 
 	/** Um nó com a chave vigente dele: a tela precisa dos dois para desenhar a linha. */
 	private NodeView view(NetworkNode node) {
-		return NodeView.of(node, keys.activeKeyFor(node.id()), Instant.now());
+		return NodeView.of(node, keys.activeKeyFor(node.id()), Instant.now(), responsibleOf(node,
+			responsibles.find(node.id()).orElse(null), users.byId(node.ownerUserId()).orElse(null)));
+	}
+
+	/**
+	 * A inscrição manda: quem pediu por escrito responde pela máquina. A conta é o segundo caminho,
+	 * e só quando ela existe — um nó provisionado por token administrativo tem conta dona e nome de
+	 * conta, e é isso que o painel mostra. Sem nenhum dos dois, {@code null}.
+	 */
+	private static NodeView.ResponsibleView responsibleOf(NetworkNode node,
+			NetworkNodeResponsibleRepository.Responsible joined, NetworkUserDirectory.Account account) {
+		if (joined != null) {
+			return new NodeView.ResponsibleView(joined.fullName(), joined.email(), joined.source());
+		}
+		if (account != null) {
+			return new NodeView.ResponsibleView(account.name(), account.email(), "ACCOUNT");
+		}
+		return null;
 	}
 
 	private CurrentUser admin(String sessionToken) {

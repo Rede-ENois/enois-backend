@@ -53,11 +53,17 @@ public class NetworkNodeService {
 	private final Clock clock;
 	private final Duration tokenTtl;
 	private final Duration conflictWindow;
+	/**
+	 * Quem responde pelo nó, quando não há conta do site. Fica aqui, e não no serviço de inscrição,
+	 * porque o enroll é o único momento em que o nó passa a existir e o dono é decidido.
+	 */
+	private final com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository responsibles;
 
 	NetworkNodeService(NetworkNodeRepository nodes, NetworkAuthorityRepository authorities,
 			ProvisionTokenRepository tokens, NodeKeyService keyService, AuditTrail audit, Clock clock,
 			@Value("${rede.network.provision-token-ttl-minutes:30}") long tokenTtlMinutes,
-			@Value("${rede.network.authority.conflict-quarantine-seconds:600}") long conflictSeconds) {
+			@Value("${rede.network.authority.conflict-quarantine-seconds:600}") long conflictSeconds,
+			com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository responsibles) {
 		this.nodes = nodes;
 		this.authorities = authorities;
 		this.tokens = tokens;
@@ -66,6 +72,7 @@ public class NetworkNodeService {
 		this.clock = clock;
 		this.tokenTtl = tokenTtlMinutes > 0 ? Duration.ofMinutes(tokenTtlMinutes) : DEFAULT_TOKEN_TTL;
 		this.conflictWindow = Duration.ofSeconds(Math.max(30, conflictSeconds));
+		this.responsibles = responsibles;
 	}
 
 	/**
@@ -91,6 +98,28 @@ public class NetworkNodeService {
 			now.plus(tokenTtl), actorId, now);
 		audit.record(actorId, "NODE_PROVISION_TOKEN_ISSUED", displayName.trim(),
 			"{\"owner\":\"" + ownerUserId.trim() + "\"}");
+		return new IssuedToken(plain, now.plus(tokenTtl));
+	}
+
+	/**
+	 * Token de provisionamento emitido na <b>exibição</b> do link de uma inscrição aprovada, não na
+	 * aprovação. O serviço de inscrição já consumiu o link e verifica a si mesmo; aqui o token é
+	 * criado com o nome e o e-mail de quem pediu, para que o enroll registre o responsável.
+	 */
+	@Transactional
+	public IssuedToken issueForApplicant(String actorId, String displayName, String ownerUserId,
+			List<NodeProfile> profiles, String ownerName, String ownerEmail) {
+		if (displayName == null || displayName.isBlank() || displayName.length() > MAX_DISPLAY_NAME) {
+			throw new ApiException(400, "NODE_NAME_INVALID", "Nome do no ausente ou longo demais.");
+		}
+		if (profiles == null || profiles.isEmpty()) {
+			throw new ApiException(400, "NODE_PROFILES_REQUIRED", "Escolha ao menos um perfil.");
+		}
+		String plain = NodeIds.next("npt");
+		Instant now = clock.instant();
+		tokens.insertForApplicant(Hashes.sha256Hex(plain), displayName.trim(), ownerUserId,
+			profiles.stream().map(Enum::name).sorted().collect(java.util.stream.Collectors.joining(",")),
+			now.plus(tokenTtl), actorId, now, ownerName, ownerEmail);
 		return new IssuedToken(plain, now.plus(tokenTtl));
 	}
 
@@ -146,6 +175,12 @@ public class NetworkNodeService {
 		nodes.create(nodeId, token.displayName(), token.ownerUserId(), List.copyOf(parseProfiles(token.profiles())),
 			command.region(), command.country(), command.cpuCores(), command.memoryMb(), command.diskMb(),
 			command.bandwidthMbps(), now);
+		// O nó nasce com quem pediu por escrito: a chave veio de um token sem dono (`system-join`) e
+		// sem esta linha o painel não teria como dizer quem responde pela máquina. O e-mail casado com
+		// uma conta do site já deu dono ao token; a linha de responsável fica como retrato da inscrição.
+		if (token.ownerName() != null && token.ownerEmail() != null) {
+			responsibles.save(nodeId, token.ownerName(), token.ownerEmail(), "JOIN_REQUEST", now);
+		}
 		audit.record(token.ownerUserId(), "NODE_ENROLLED", nodeId, "{}");
 		return nodes.findById(nodeId)
 			.orElseThrow(() -> new IllegalStateException("No recem-criado nao encontrado: " + nodeId));
