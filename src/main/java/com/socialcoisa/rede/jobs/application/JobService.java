@@ -68,6 +68,7 @@ public class JobService {
 	private final BehavioralTimingGuard behavioralTimingGuard;
 	private final CompanyService companyService;
 	private final CacheInvalidator cacheInvalidator;
+	private final JobCommandAuthorization command;
 
 	public JobService(JobRepository repository, ReputationService reputationService,
 			com.socialcoisa.rede.profile.application.port.out.UserProfileRepository userProfileRepository,
@@ -77,7 +78,7 @@ public class JobService {
 			JobAbandonPenaltyRepository abandonPenalties,
 			tools.jackson.databind.ObjectMapper objectMapper, Clock clock,
 			UserRateLimiter userRateLimiter, BehavioralTimingGuard behavioralTimingGuard,
-			CompanyService companyService, CacheInvalidator cacheInvalidator) {
+			CompanyService companyService, CacheInvalidator cacheInvalidator, JobCommandAuthorization command) {
 		this.repository = repository;
 		this.reputationService = reputationService;
 		this.userProfileRepository = userProfileRepository;
@@ -92,6 +93,7 @@ public class JobService {
 		this.behavioralTimingGuard = behavioralTimingGuard;
 		this.companyService = companyService;
 		this.cacheInvalidator = cacheInvalidator;
+		this.command = command;
 	}
 
 	@Transactional
@@ -212,9 +214,10 @@ public class JobService {
 			JobApplicationStatus newStatus, String feedback) {
 		Job job = repository.findByIdForUpdate(jobId)
 			.orElseThrow(() -> new ApiException(404, "JOB_NOT_FOUND", "Vaga nao encontrada."));
-		if (!job.postedBy().equals(userId)) {
-			throw new ApiException(403, "NOT_OWNER", "So quem publicou a vaga pode gerenciar as candidaturas.");
-		}
+		// A vaga vem travada para update: triagens concorrentes serializam, e a checagem de
+		// comando roda sobre o estado travado.
+		command.requireCommander(job, userId, com.socialcoisa.rede.companies.domain.RecruitmentCapability.TRIAGE,
+			"So quem publicou a vaga pode gerenciar as candidaturas.");
 		// A candidatura tem que ser DESTA vaga: sem isso, um id de outra vaga seria alcancavel
 		// pelo caminho da URL.
 		JobApplication application = repository.findApplicationById(applicationId)
@@ -294,13 +297,11 @@ public class JobService {
 		return saved;
 	}
 
-	/** Candidaturas recebidas por uma vaga: somente o autor da vaga ve quem se candidatou. */
+	/** Candidaturas recebidas por uma vaga: o autor da vaga e a equipe de recrutamento dela veem. */
 	public List<JobApplication> applicationsOf(String jobId, String requesterId, int limit) {
-		Job job = repository.findById(jobId)
-			.orElseThrow(() -> new ApiException(404, "JOB_NOT_FOUND", "Vaga nao encontrada."));
-		if (!job.postedBy().equals(requesterId)) {
-			throw new ApiException(403, "NOT_OWNER", "So quem publicou a vaga ve as candidaturas recebidas.");
-		}
+		command.requireCommander(jobId, requesterId,
+			com.socialcoisa.rede.companies.domain.RecruitmentCapability.VIEW_CANDIDATES,
+			"So quem publicou a vaga ve as candidaturas recebidas.");
 		return repository.findApplicationsByJob(jobId, Math.min(Math.max(limit, 1), 100));
 	}
 

@@ -102,7 +102,10 @@ quem não tem vaga. Reativar devolve o acesso ao que já estava lá.
 
 ## Autorização (no backend)
 
-- Toda rota de processo exige sessão e **o autor da vaga**; terceiro recebe 403 `NOT_OWNER`.
+- Toda rota de processo exige sessão e quem comanda a vaga: **o autor** sempre e, quando a vaga
+  nasceu numa página, a **equipe de recrutamento** dela conforme o papel
+  (ver [COMPANY_PAGES.md](COMPANY_PAGES.md)). Quem não comanda recebe 403 `NOT_OWNER` — a mesma
+  recusa de antes, então nenhuma resposta nova vaza.
 - A candidatura é sempre resolvida **dentro da vaga da URL**: id de candidatura de outra vaga
   responde 404 `APPLICATION_NOT_FOUND`, sem vazar entre processos.
 - A Central lista apenas as vagas cuja autoria é de quem está na sessão — não há parâmetro de
@@ -155,11 +158,37 @@ quem não tem vaga. Reativar devolve o acesso ao que já estava lá.
   `INVALID_CURSOR`;
 - terceiro recebe 403 `NOT_OWNER` e sem sessão 401.
 
+## Quem conduz a seleção
+
+Duas axes de papel convivem e não se confundem:
+
+- **Papel na página** (`CompanyRole`: OWNER/ADMIN/EDITOR/RECRUITER) — vale para agir *em nome
+  dela*: publicar vaga exige RECRUITER ou superior. Não conduz processo por si só.
+- **Equipe de recrutamento** (`recruitment_members`, V328) — vale para conduzir a seleção da
+  organização: ORG_ADMIN, RECRUITMENT_MANAGER, RECRUTER… (ver abaixo). O **dono da página vale
+  ORG_ADMIN sem registro**; terceiro sem registro não ganha nada.
+
+| Papel | O que pode |
+|---|---|
+| `ORG_ADMIN` | tudo: configurar etapas, triar, ver candidatos, entrevistas, gerir a equipe |
+| `RECRUITMENT_MANAGER` | configurar etapas, triar, ver candidatos, entrevistas |
+| `RECRUITER` | triar, ver candidatos, entrevistas |
+| `INTERVIEWER` | ver candidatos e entrevistas (sem mover) |
+| `OBSERVER` | só ver candidatos |
+
+Rotas da equipe: `GET/POST /empresas/{companyId}/recrutamento/equipe`,
+`PATCH/DELETE .../equipe/{userId}`, `GET /empresas/{companyId}/recrutamento/eu` (papel próprio;
+`null` para forasteiro). Gerir a equipe exige ORG_ADMIN (`RECRUITMENT_FORBIDDEN`).
+
+Publicar vaga continua exigindo papel de página (RECRUITER+): **publicar ≠ conduzir**, e a
+equipe de recrutamento não concede papel na página.
+
 ## Fora deste escopo (próximos passos)
 
 Questionários, avaliações por critério, slot de entrevista escolhido pelo candidato, banco de
-talentos, papéis de equipe (Administrador/Recrutador/Entrevistador/Observador) e a UI no
-design system. A fundação acima é a que esses itens vão usar — não há segunda base a criar.
+talentos e a UI no design system. A fundação acima é a que esses itens vão usar — não há
+segunda base a criar.
+
 
 A UI do "Sou recrutador/a" no front (`@rede-enois/design-system`) ainda não foi entregue: o
 backend já aceita, guarda e aplica a declaração, mas a tela que a liga vem no incremento do

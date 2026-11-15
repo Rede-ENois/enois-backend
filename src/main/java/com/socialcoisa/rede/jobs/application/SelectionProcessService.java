@@ -14,6 +14,7 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialcoisa.rede.companies.domain.RecruitmentCapability;
 import com.socialcoisa.rede.jobs.application.port.out.JobRepository;
 import com.socialcoisa.rede.jobs.application.port.out.SelectionProcessRepository;
 import com.socialcoisa.rede.jobs.domain.Job;
@@ -29,8 +30,10 @@ import com.socialcoisa.rede.shared.web.ApiException;
  * Pipeline de recrutamento de uma vaga: etapas do fluxo, movimento das candidaturas entre
  * etapas e notas internas da equipe.
  *
- * <p>Autorização: quem publicou a vaga comanda o processo — o mesmo dono que já tria
- * candidaturas em {@link JobService}. Tudo validado aqui no backend; o front apenas mostra.
+ * <p>Autorização: o autor da vaga comanda o processo; quando a vaga nasceu numa página
+ * empresarial, a equipe de recrutamento dela comanda segundo o papel — configurar fluxo pede
+ * CONFIGURE_PROCESS, mover e anotar pedem TRIAGE (tudo resolvido por {@link JobCommandAuthorization}).
+ * Tudo validado aqui no backend; o front apenas mostra.
  *
  * <p>A etapa atual de uma candidatura é o ÚLTIMO movimento dela — nunca um campo solto, para
  * não existir segunda fonte de verdade. Candidatura sem movimento está na entrada do fluxo
@@ -41,11 +44,14 @@ public class SelectionProcessService {
 
 	private final JobRepository jobs;
 	private final SelectionProcessRepository pipeline;
+	private final JobCommandAuthorization command;
 	private final Clock clock;
 
-	public SelectionProcessService(JobRepository jobs, SelectionProcessRepository pipeline, Clock clock) {
+	public SelectionProcessService(JobRepository jobs, SelectionProcessRepository pipeline,
+			JobCommandAuthorization command, Clock clock) {
 		this.jobs = jobs;
 		this.pipeline = pipeline;
+		this.command = command;
 		this.clock = clock;
 	}
 
@@ -128,6 +134,15 @@ public class SelectionProcessService {
 		return pipeline.stagesOf(jobId);
 	}
 
+	/**
+	 * As etapas para montar o board — leitura (VIEW_CANDIDATES), não configuração. O board é
+	 * visível a toda a equipe de recrutamento; gerenciar as etapas em si, não.
+	 */
+	public List<SelectionStage> stagesForBoard(String jobId, String requesterId) {
+		requireCommander(jobId, requesterId, RecruitmentCapability.VIEW_CANDIDATES);
+		return pipeline.stagesOf(jobId);
+	}
+
 	// ---------- Movimento das candidaturas ----------
 
 	/**
@@ -138,7 +153,7 @@ public class SelectionProcessService {
 	@Transactional
 	public StageMovement moveApplication(String jobId, String applicationId, String requesterId,
 			String toStageId, StageMovementKind kind, String note) {
-		Job job = requireOwnedJob(jobId, requesterId);
+		requireCommander(jobId, requesterId, RecruitmentCapability.TRIAGE);
 		JobApplication application = jobs.findApplicationById(applicationId)
 			.filter(found -> found.jobId().equals(jobId))
 			.orElseThrow(() -> new ApiException(404, "APPLICATION_NOT_FOUND", "Candidatura não encontrada."));
@@ -190,7 +205,7 @@ public class SelectionProcessService {
 	 * movimentos para a vaga inteira — não uma por candidato.
 	 */
 	public Map<Long, PipelinePosition> positionsOf(String jobId, String requesterId) {
-		requireOwner(jobId, requesterId);
+		requireCommander(jobId, requesterId, RecruitmentCapability.VIEW_CANDIDATES);
 		List<SelectionStage> stages = pipeline.stagesOf(jobId);
 		String entry = stages.isEmpty() ? null : stages.get(0).id();
 		Map<Long, PipelinePosition> positions = new java.util.LinkedHashMap<>();
@@ -244,16 +259,12 @@ public class SelectionProcessService {
 	// ---------- Autorização ----------
 
 	private void requireOwner(String jobId, String requesterId) {
-		requireOwnedJob(jobId, requesterId);
+		requireCommander(jobId, requesterId, RecruitmentCapability.CONFIGURE_PROCESS);
 	}
 
-	private Job requireOwnedJob(String jobId, String requesterId) {
-		Job job = jobs.findById(jobId)
-			.orElseThrow(() -> new ApiException(404, "JOB_NOT_FOUND", "Vaga não encontrada."));
-		if (!job.postedBy().equals(requesterId)) {
-			throw new ApiException(403, "NOT_OWNER", "Só quem publicou a vaga comanda o processo seletivo.");
-		}
-		return job;
+	private Job requireCommander(String jobId, String requesterId, RecruitmentCapability capability) {
+		return command.requireCommander(jobId, requesterId, capability,
+			"Só quem publicou a vaga comanda o processo seletivo.");
 	}
 
 	private SelectionStage requireStageOfOwnedJob(String stageId, String requesterId) {
@@ -264,7 +275,7 @@ public class SelectionProcessService {
 	}
 
 	private void requireOwnedApplication(String jobId, String applicationId, String requesterId) {
-		requireOwner(jobId, requesterId);
+		requireCommander(jobId, requesterId, RecruitmentCapability.TRIAGE);
 		jobs.findApplicationById(applicationId)
 			.filter(found -> found.jobId().equals(jobId))
 			.orElseThrow(() -> new ApiException(404, "APPLICATION_NOT_FOUND", "Candidatura não encontrada."));
