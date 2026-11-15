@@ -29,7 +29,7 @@ class WorldEntryJpaEntity {
 
 	String title;
 
-	@Column(length = 2147483647)
+	@Column(columnDefinition = "longtext")
 	String body;
 
 	String tags;
