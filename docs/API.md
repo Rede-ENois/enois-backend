@@ -214,7 +214,7 @@ Cidade e UF (`city`, `state`) são estruturadas e separadas do `location` livre,
 ```
 
 Tipos: `INSIGHT`, `ARTICLE`, `QUESTION`, `PROJECT`, `OPPORTUNITY`, `PAGE`, `NEWS`, `TUTORIAL`,
-`REVIEW`, `DIVERTIDO`, `MOMENT`, `BLOG`, `BUSINESS`, `POLL`
+`REVIEW`, `DIVERTIDO`, `MOMENT`, `BLOG`, `BUSINESS`, `POLL`, `COMPLAINT`
 
 Assunto (`topic`): obrigatório em post avulso, um da taxonomia (`ContentTaxonomy.TOPICS`). Sem ele,
 `400 TOPIC_REQUIRED`; fora da lista, `400 INVALID_TOPIC`. Post de comunidade ou canal herda o assunto
