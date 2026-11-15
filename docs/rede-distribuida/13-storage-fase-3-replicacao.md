@@ -52,7 +52,7 @@ módulo. Nó com disco medido abaixo do piso **e** do tamanho do objeto não rec
 
 | verificação | resultado |
 |---|---|
-| suíte completa | 3107 testes (R123) |
+| suíte completa | 3111 testes (R123) |
 | `StoragePlacementServiceTests` (novo) | 8 — folga, não-repetição, nó pronto, disco, estável |
 | `NetworkStorageReplicationTests` (novo) | 6 — designação ≠ durabilidade, confirmação conferida, digest, varredura |
 | `storage-migration-test` | **29** asserções em MariaDB 11.4 real, migrações 2× com dados |
