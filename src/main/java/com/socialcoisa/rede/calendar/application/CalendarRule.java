@@ -23,12 +23,19 @@ import com.socialcoisa.rede.calendar.domain.CalendarRecurrence;
  */
 record CalendarRule(CalendarRecurrence recurrence, Instant until, Integer count) {
 
-	private static final ZoneId DEFAULT_ZONE = ZoneId.of("America/Sao_Paulo");
 	private static final DateTimeFormatter UNTIL_UTC = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'");
 	private static final DateTimeFormatter UNTIL_LOCAL = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss");
 	private static final DateTimeFormatter UNTIL_DATE = DateTimeFormatter.ofPattern("yyyyMMdd");
 
 	static CalendarRule parse(String rrule) {
+		return parse(rrule, ZoneId.of("America/Sao_Paulo"));
+	}
+
+	/**
+	 * O `UNTIL` flutuante (sem `Z`) e o só-data são horários de parede do evento: resolvem no fuso
+	 * dele, não num fuso fixo do servidor. O `UNTIL` em UTC é absoluto e ignora o fuso.
+	 */
+	static CalendarRule parse(String rrule, ZoneId zone) {
 		if (rrule == null || rrule.isBlank()) {
 			return null;
 		}
@@ -67,7 +74,7 @@ record CalendarRule(CalendarRecurrence recurrence, Instant until, Integer count)
 		}
 		Instant until = null;
 		if (parts.get("UNTIL") != null) {
-			until = parseUntil(parts.get("UNTIL"));
+			until = parseUntil(parts.get("UNTIL"), zone);
 			if (until == null) {
 				return null;
 			}
@@ -75,17 +82,17 @@ record CalendarRule(CalendarRecurrence recurrence, Instant until, Integer count)
 		return new CalendarRule(recurrence, until, count);
 	}
 
-	/** `UNTIL` em UTC, no fuso local ou só data; texto fora do formato recusa a regra inteira. */
-	private static Instant parseUntil(String raw) {
+	/** `UNTIL` em UTC, no fuso do evento ou só data; texto fora do formato recusa a regra inteira. */
+	private static Instant parseUntil(String raw, ZoneId zone) {
 		String value = raw.trim();
 		try {
 			if (value.endsWith("Z")) {
 				return LocalDateTime.parse(value, UNTIL_UTC).toInstant(ZoneOffset.UTC);
 			}
 			if (value.length() == 8) {
-				return LocalDate.parse(value, UNTIL_DATE).atStartOfDay(DEFAULT_ZONE).toInstant();
+				return LocalDate.parse(value, UNTIL_DATE).atStartOfDay(zone).toInstant();
 			}
-			return LocalDateTime.parse(value, UNTIL_LOCAL).atZone(DEFAULT_ZONE).toInstant();
+			return LocalDateTime.parse(value, UNTIL_LOCAL).atZone(zone).toInstant();
 		}
 		catch (DateTimeParseException malformed) {
 			return null;

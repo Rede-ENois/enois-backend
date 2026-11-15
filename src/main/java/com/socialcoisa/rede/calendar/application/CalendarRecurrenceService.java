@@ -130,10 +130,12 @@ public class CalendarRecurrenceService {
 		int anchorDay = anchorDay(seriesId, tail);
 		Instant windowEnd = now.plus(Duration.ofDays(CalendarRecurrence.HORIZON_DAYS));
 		Instant cursor = firstAhead(tail, recurrence, anchorDay, now);
+		Instant limit = tail.seriesUntil();
 		CalendarEntry last = tail;
 		int created = 0;
 		int steps = 0;
-		while (cursor != null && !cursor.isAfter(windowEnd)) {
+		while (cursor != null && !cursor.isAfter(windowEnd)
+				&& (limit == null || !cursor.isAfter(limit))) {
 			if (++steps > CalendarRecurrence.MAX_OCCURRENCES_PER_RUN) {
 				LOG.warn("Série {} passou de {} ocorrências na janela; extensão interrompida",
 					seriesId, CalendarRecurrence.MAX_OCCURRENCES_PER_RUN);
@@ -147,17 +149,28 @@ public class CalendarRecurrenceService {
 					new CalendarEntrySource(null, null), last.title(), last.description(), start,
 					start.plus(last.duration()), last.zone(), last.allDay(), now);
 				occurrence.joinSeriesQuietly(seriesId, recurrence);
+				occurrence.limitSeries(limit);
 				last.closeTail();
 				entries.save(last);
 				entries.save(occurrence);
 				created++;
 			}
+			else if (occurrence.seriesUntil() == null && limit != null) {
+				occurrence.limitSeries(limit);
+				entries.save(occurrence);
+			}
 			last = occurrence;
 			cursor = recurrence.nextStart(cursor, tail.zone(), anchorDay);
 		}
+		// O limite interrompeu a série: a ponta fica fechada para o worker não reabrí-la a cada
+		// ciclo — o `UNTIL` do arquivo é o fim, não uma janela a ser estendida.
 		if (last != tail) {
 			last.openTail();
 			entries.save(last);
+		}
+		else if (limit != null && cursor != null && cursor.isAfter(limit)) {
+			tail.closeTail();
+			entries.save(tail);
 		}
 		return created;
 	}
@@ -231,6 +244,7 @@ public class CalendarRecurrenceService {
 		String seriesId = nextSeriesId();
 		Instant now = clock.instant();
 		founder.joinSeriesQuietly(seriesId, recurrence);
+		founder.limitSeries(until);
 		entries.save(founder);
 		materialize(founder, seriesId, recurrence, excluded, anchorDay, until, count, now);
 		return Optional.of(seriesId);
@@ -248,6 +262,7 @@ public class CalendarRecurrenceService {
 		int remaining = count == null ? CalendarRecurrence.MAX_OCCURRENCES_PER_RUN : Math.max(count - 1, 0);
 		Instant cursor = firstAhead(founder, recurrence, anchorDay, now);
 		CalendarEntry last = founder;
+		boolean stoppedByLimit = false;
 		while (cursor != null && remaining > 0 && !cursor.isAfter(windowEnd)
 				&& (until == null || !cursor.isAfter(until))) {
 			Instant next = cursor;
@@ -260,12 +275,18 @@ public class CalendarRecurrenceService {
 				founder.kind(), new CalendarEntrySource(null, null), founder.title(), founder.description(),
 				next, next.plus(founder.duration()), founder.zone(), founder.allDay(), now);
 			occurrence.joinSeriesQuietly(seriesId, recurrence);
+			occurrence.limitSeries(until);
 			last.closeTail();
 			entries.save(last);
 			entries.save(occurrence);
 			last = occurrence;
 		}
-		last.openTail();
+		// O limite interrompeu a série (o próximo passo passa do `UNTIL`): a ponta fica fechada
+		// para o worker não reabrí-la a cada ciclo — o fim do arquivo não é janela a estender.
+		stoppedByLimit = cursor != null && until != null && cursor.isAfter(until);
+		if (!stoppedByLimit) {
+			last.openTail();
+		}
 		entries.save(last);
 	}
 

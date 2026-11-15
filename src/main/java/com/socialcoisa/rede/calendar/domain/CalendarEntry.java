@@ -42,6 +42,8 @@ public class CalendarEntry {
 	private CalendarRecurrence recurrence;
 	/** Marca de ponta da série: a extensão cria as próximas ocorrências a partir daqui. */
 	private boolean tail;
+	/** Limite da série vindo do arquivo importado (`UNTIL`); nulo é série sem limite. */
+	private Instant seriesUntil;
 
 	public CalendarEntry(String id, String ownerId, CalendarScope scope, CalendarKind kind,
 			CalendarEntrySource source, String title, String description, Instant startsAt, Instant endsAt,
@@ -55,6 +57,15 @@ public class CalendarEntry {
 			CalendarEntrySource source, String title, String description, Instant startsAt, Instant endsAt,
 			ZoneId zone, boolean allDay, CalendarEntryState state, Instant createdAt, Instant updatedAt,
 			Instant cancelledAt, String seriesId, CalendarRecurrence recurrence, boolean tail) {
+		this(id, ownerId, scope, kind, source, title, description, startsAt, endsAt, zone, allDay, state,
+			createdAt, updatedAt, cancelledAt, seriesId, recurrence, tail, null);
+	}
+
+	public CalendarEntry(String id, String ownerId, CalendarScope scope, CalendarKind kind,
+			CalendarEntrySource source, String title, String description, Instant startsAt, Instant endsAt,
+			ZoneId zone, boolean allDay, CalendarEntryState state, Instant createdAt, Instant updatedAt,
+			Instant cancelledAt, String seriesId, CalendarRecurrence recurrence, boolean tail,
+			Instant seriesUntil) {
 		this.id = Objects.requireNonNull(id, "id");
 		this.ownerId = requireText(ownerId, "dono do compromisso");
 		this.scope = Objects.requireNonNull(scope, "agenda");
@@ -79,6 +90,7 @@ public class CalendarEntry {
 			this.recurrence = null;
 		}
 		this.tail = tail && this.seriesId != null;
+		this.seriesUntil = this.seriesId != null ? seriesUntil : null;
 		applyInterval(startsAt, endsAt);
 		checkLengths();
 	}
@@ -190,6 +202,7 @@ public class CalendarEntry {
 		this.seriesId = null;
 		this.recurrence = null;
 		this.tail = false;
+		this.seriesUntil = null;
 		updatedAt = Objects.requireNonNull(now, "atualização");
 	}
 
@@ -202,6 +215,14 @@ public class CalendarEntry {
 		}
 		this.seriesId = seriesId;
 		this.recurrence = checked;
+	}
+
+	/** Marca o limite da série (o `UNTIL` do arquivo importado): a extensão não passa dele. */
+	public void limitSeries(Instant until) {
+		if (this.seriesId == null) {
+			throw new IllegalStateException("limite de série sem série");
+		}
+		this.seriesUntil = until;
 	}
 
 	/** A extensão cria as próximas ocorrências a partir daqui. */
@@ -318,5 +339,7 @@ public class CalendarEntry {
 	public CalendarRecurrence recurrence() { return recurrence; }
 
 	public boolean tail() { return tail; }
+
+	public Instant seriesUntil() { return seriesUntil; }
 
 }
