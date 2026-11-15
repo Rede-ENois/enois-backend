@@ -20,26 +20,36 @@ import jakarta.persistence.Table;
 @Table(name = "roleplay_world_entries")
 class WorldEntryJpaEntity {
 
+	/* Mesma regra da biblioteca: o nome da coluna é declarado, não deduzido do ambiente. */
 	@Id
+	@Column(name = "id")
 	String id;
 
+	@Column(name = "campaign_id")
 	String campaignId;
 
+	@Column(name = "kind")
 	String kind;
 
+	@Column(name = "title")
 	String title;
 
-	@Column(columnDefinition = "longtext")
+	@Column(name = "body", columnDefinition = "longtext")
 	String body;
 
+	@Column(name = "tags")
 	String tags;
 
+	@Column(name = "linked_sheet_id")
 	String linkedSheetId;
 
+	@Column(name = "author_id")
 	String authorId;
 
+	@Column(name = "created_at")
 	Instant createdAt;
 
+	@Column(name = "updated_at")
 	Instant updatedAt;
 
 	static WorldEntryJpaEntity fromDomain(WorldEntry entry) {

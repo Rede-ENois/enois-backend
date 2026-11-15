@@ -19,25 +19,37 @@ import jakarta.persistence.Table;
 @Table(name = "roleplay_published_sheets")
 class LibrarySheetJpaEntity {
 
+	/*
+	 * Todo campo nomeia a coluna. O boot valida o mapeamento contra o banco já migrado, e a
+	 * estratégia física de nomes do ambiente não é a mesma em todo lugar: sem o nome explícito, o
+	 * Hibernate procurou `campaignId` numa tabela cuja coluna é `campaign_id` e a QA não subiu.
+	 */
 	@Id
+	@Column(name = "id")
 	String id;
 
+	@Column(name = "campaign_id")
 	String campaignId;
 
+	@Column(name = "sheet_id")
 	String sheetId;
 
+	@Column(name = "owner_id")
 	String ownerId;
 
-	@Column(length = 120)
+	@Column(name = "character_name", length = 120)
 	String characterName;
 
+	@Column(name = "game_system")
 	String gameSystem;
 
-	@Column(columnDefinition = "longtext")
+	@Column(name = "fields_json", columnDefinition = "longtext")
 	String fieldsJson;
 
+	@Column(name = "published_at")
 	Instant publishedAt;
 
+	@Column(name = "updated_at")
 	Instant updatedAt;
 
 	static LibrarySheetJpaEntity fromDomain(LibrarySheet sheet, String fieldsJson) {
