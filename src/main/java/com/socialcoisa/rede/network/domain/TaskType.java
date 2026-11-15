@@ -35,7 +35,13 @@ public enum TaskType {
 	READ_QUERY(NodeProfile.NODE_READ_REPLICA),
 
 	/** Requisição a uma instância auxiliar de API. */
-	API_REQUEST(NodeProfile.NODE_API);
+	API_REQUEST(NodeProfile.NODE_API),
+
+	/** Gravação de um objeto do Énóis Storage num nó. */
+	OBJECT_PUT(NodeProfile.NODE_STORAGE),
+
+	/** Leitura de um objeto do Énóis Storage de um nó. */
+	OBJECT_GET(NodeProfile.NODE_STORAGE);
 
 	private final NodeProfile requiredProfile;
 

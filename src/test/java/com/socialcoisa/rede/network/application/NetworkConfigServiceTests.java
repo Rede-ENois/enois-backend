@@ -227,7 +227,7 @@ class NetworkConfigServiceTests {
 
 		// NODE_LOCAL cobre todos; a ordem é a da declaração do enum, estável para o runtime comparar.
 		assertThat(view.allowedTasks()).containsExactly("EDGE_CACHE", "EDGE_DELIVER", "ASYNC_JOB", "MEDIA_TRANSCODE",
-			"MEDIA_THUMBNAIL", "READ_QUERY", "API_REQUEST");
+			"MEDIA_THUMBNAIL", "READ_QUERY", "API_REQUEST", "OBJECT_PUT", "OBJECT_GET");
 	}
 
 	/**

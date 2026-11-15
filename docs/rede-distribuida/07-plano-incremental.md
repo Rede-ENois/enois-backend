@@ -145,6 +145,22 @@ por um perfil existente antes de existir `NODE_STORAGE` com o tipo próprio (Q0 
 reverse tunnel — está declarado como trabalho da fase 2, não como reuso. **V319 segue livre**: a fase
 0 não cria tabela; o catálogo do Storage nasce na fase 1.
 
+## Énóis Storage — fase 1 entregue (núcleo)
+
+Detalhe em [`12-storage-fase-1.md`](12-storage-fase-1.md). O catálogo nasceu em **V319**
+(`network_storage_objects`) e a colocação em **V320** (`network_storage_placements`), com identidade
+lógica própria (`sob_…`), lápide em vez de `delete` e a chave primária `(object_id, replica)` já
+pronta para a replicação da fase 3 — a fase 3 **insere** linhas, não altera a tabela. O nó grava e
+lê o corpo por `PUT`/`GET /network/storage/objects/{id}` com a mesma API key da rede e o perfil
+`NODE_STORAGE` (disco não dá permissão); o tamanho e o sha-256 que entram no catálogo são os que o
+Control Plane **mede enquanto grava**, nunca os declarados. Rota registrada em
+`WriteRouteInterceptor` porque escrita de nó não tem sessão de navegador. O gateway S3 público,
+multipart, URLs assinadas e o upload direto ao nó ficam declarados como **não entregues** (§3 do
+doc), com a razão de cada um. Verificado em `StorageCatalogServiceTests` (10), `NetworkStorageTests`
+(6) e `scripts/tests/storage-migration-test.sh`: **26 asserções** contra MariaDB **11.4.13** real,
+aplicando as migrações **duas vezes** com dados no meio — e foi esse harness que achou o `ERROR
+1071` (índice de 4096 bytes em utf8mb4) que o H2 aceitava em silêncio.
+
 ## Énóis Global Cooperative — fase 0 entregue
 
 Diagnóstico em [`11-global-coop-fase-0.md`](11-global-coop-fase-0.md). O cooperativismo global reusa
