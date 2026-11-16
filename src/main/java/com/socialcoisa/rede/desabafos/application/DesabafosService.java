@@ -42,7 +42,7 @@ import com.socialcoisa.rede.shared.web.CursorCodec;
 @Service
 public class DesabafosService implements DesabafosModerationPort {
 
-	public static final int MAX_CONTENT = 1000;
+	public static final int MAX_CONTENT = 3000;
 	public static final int MAX_COMMENT = 800;
 	public static final int MAX_PAGE_SIZE = 48;
 	public static final int DEFAULT_PAGE_SIZE = 24;

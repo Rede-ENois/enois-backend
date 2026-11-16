@@ -70,6 +70,9 @@ public enum NotificationCategory {
 		// ANSWER_ACCEPTED (#336), EVENT_NEXT_OCCURRENCE (#337), STUDY_PAIR_* (#338).
 		Map.entry("ANSWER_ACCEPTED", SOCIAL),
 		Map.entry("EVENT_NEXT_OCCURRENCE", GROUPS),
+		// Remarcação/cancelamento do evento avisa quem confirmou presença: convivência do evento,
+		// mesma família do lembrete de ocorrência — desligar "grupos" silencia o aviso também.
+		Map.entry("EVENT", GROUPS),
 		Map.entry("STUDY_PAIR_MATCHED", SOCIAL),
 		Map.entry("STUDY_PAIR_CHECKIN", SOCIAL),
 		Map.entry("STUDY_PAIR_ENDED", SOCIAL),

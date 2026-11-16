@@ -560,7 +560,7 @@ aplicam.
 | Método | Rota | Descrição | Autenticação |
 |---|---|---|---|
 | GET | `/api/desabafos` | feed próprio cronológico, `cursor`/`limit` (≤ 48) | Sim |
-| POST | `/api/desabafos/posts` | publica o desabafo (`content`, ≤ 1000) | Sim + idempotência |
+| POST | `/api/desabafos/posts` | publica o desabafo (`content`, ≤ 3000) | Sim + idempotência |
 | GET | `/api/desabafos/posts/{postId}` | desabafo com autor, contagens e `myReaction` | Sim |
 | DELETE | `/api/desabafos/posts/{postId}` | o autor remove o próprio desabafo | Sim + idempotência |
 | GET | `/api/desabafos/posts/{postId}/comments` | acolhidas crônicas | Sim |
@@ -592,7 +592,7 @@ Exemplo de desabafo no feed:
 Notificação: comentário gera `DESABAFOS_COMMENTED` para o autor do desabafo (categoria SOCIAL).
 Reação não gera notificação — é apoio silencioso, contado.
 
-Erros: `400 CONTENT_REQUIRED`, `400 CONTENT_TOO_LONG` (1000), `400 COMMENT_EMPTY`,
+Erros: `400 CONTENT_REQUIRED`, `400 CONTENT_TOO_LONG` (3000), `400 COMMENT_EMPTY`,
 `400 COMMENT_TOO_LONG` (800), `400 INVALID_REACTION`, `403 NOT_AUTHORIZED`,
 `404 POST_NOT_FOUND`, `404 COMMENT_NOT_FOUND`.
 
