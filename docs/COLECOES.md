@@ -43,7 +43,7 @@ Erros: `400 COLECAO_TITLE_REQUIRED`, `400 COLECAO_TITLE_TOO_LONG`, `400 CONTENT_
 
 ## Persistência
 
-`V330__colecoes_salvas.sql` cria `colecoes_salvas` e `colecao_salva_posts` (sem FK por limitação
+`V336__colecoes_salvas.sql` cria `colecoes_salvas` e `colecao_salva_posts` (sem FK por limitação
 do ambiente MariaDB; idempotente e aditivo). A listagem dos posts consome o port-in
 `GetPostsUseCase` do feed — um só lugar decide o que é visível; a checagem de "salvo" reusa
 `PostInteractionRepository.findSavedPostIdsByUserId`, a mesma fonte da listagem `/feed/saved`.

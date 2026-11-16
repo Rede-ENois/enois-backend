@@ -49,7 +49,7 @@ imagem, ela chama `ColagemModerationPort.removeByMedia(mediaId)`, que derruba to
 usam a mídia (com os comentários) e os comentários fotográficos que a carregam. Além disso, foto
 cuja mídia deixou de estar visível **some do feed** na leitura (sem imagem não há Colagem).
 
-## Persistência (`V328__colagem.sql`)
+## Persistência (`V334__colagem.sql`)
 
 - `colagem_posts` — foto, legenda, `media_spoiler`, status (`ACTIVE`/`REMOVED`), `removed_at`
 - `colagem_comments` — texto e/ou `media_id`, `parent_comment_id` (um nível), status

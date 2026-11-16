@@ -44,6 +44,6 @@ Erros: `400 MURAL_TITLE_REQUIRED`, `400 MURAL_TITLE_TOO_LONG`, `400 CONTENT_TOO_
 
 ## Persistência
 
-`V329__murais.sql` cria `murais` e `mural_contribuicoes` (sem FK por limitação do ambiente
+`V335__murais.sql` cria `murais` e `mural_contribuicoes` (sem FK por limitação do ambiente
 MariaDB; idempotente e aditivo). A leitura das contribuições consome o port-in `GetPostsUseCase`
 do feed — um só lugar decide o que é visível.
