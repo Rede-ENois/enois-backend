@@ -55,6 +55,7 @@ class StorageScrubberReadBackTests {
 
 	private InMemoryCatalog catalog;
 	private AuditTrail audit;
+	private NodeBodyStore nodeBodies;
 	private StorageCatalogService service;
 	private StorageScrubber scrubber;
 
@@ -62,8 +63,11 @@ class StorageScrubberReadBackTests {
 	void setUp() {
 		catalog = new InMemoryCatalog();
 		audit = mock(AuditTrail.class);
+		// O mesmo diretório que o processo usa quando roda junto do nó local. Fica vazio nos testes
+		// de releitura da réplica 0; o teste do sumiço é que grava nele.
+		nodeBodies = new NodeBodyStore(root.resolve("no-local/objects").toString());
 		service = new StorageCatalogService(catalog, audit, Clock.fixed(NOW, ZoneOffset.UTC), 10_000, root.toString(),
-			stubPlacement());
+			stubPlacement(), nodeBodies);
 		scrubber = new StorageScrubber(catalog, stubPlacement(), audit, Clock.fixed(NOW, ZoneOffset.UTC), service);
 	}
 
@@ -135,6 +139,30 @@ class StorageScrubberReadBackTests {
 		assertThat(report.divergent()).hasSize(1);
 		// Digest vazio é "não consegui ler" — nunca um digest calculado sobre nada.
 		assertThat(report.divergent().get(0).actualSha256()).isEmpty();
+	}
+
+	@Test
+	void sumico_da_replica_zero_nao_e_escondido_pelo_corpo_do_no_local() throws Exception {
+		StorageObject object = gravado(body("conteudo do arquivo"));
+		// A réplica 0 some da raiz do Control Plane -- mas o MESMO corpo está no diretório do nó
+		// local, porque o nó também guarda uma cópia deste objeto.
+		Files.delete(service.bodyPath(object.id()));
+		nodeBodies.write(object.id(), new ByteArrayInputStream(body("conteudo do arquivo")));
+		// Cópia confirmada em OUTRO nó: não é relida daqui e não pode ser acusada pela falta local.
+		catalog.savePlacement(new StoragePlacement(object.id(), 1, "nd_replica", object.bytes(), object.sha256(),
+			StoragePlacement.State.OK, NOW));
+
+		StorageScrubber.Report report = scrubber.scan("fotos", 10, true);
+
+		// Uma releitura por objeto (a réplica 0), não uma por cópia: antes o laço relia o arquivo
+		// local uma vez por colocação e contava 2.
+		assertThat(report.bodiesRelidos()).isEqualTo(1);
+		assertThat(report.divergent()).hasSize(1);
+		StorageScrubber.Report.Divergent divergente = report.divergent().get(0);
+		assertThat(divergente.replica()).isZero();
+		assertThat(divergente.nodeId()).isEqualTo("nd_ctrl");
+		// Digest vazio = "não consegui ler" — a réplica 0 sumiu, o corpo do nó local não a substitui.
+		assertThat(divergente.actualSha256()).isEmpty();
 	}
 
 	@Test
