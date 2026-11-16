@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -83,17 +84,24 @@ public class StorageCatalogService {
 	 * segundo momento em que o objeto já seria servível sem saber quem o tem.
 	 */
 	private final StoragePlacementService placement;
+	/**
+	 * O corpo que o nó que roda <b>nesta mesma máquina</b> guarda no próprio disco
+	 * ({@code rede.storage.node-body-root}). Nulo = esta instalação não tem nó local de corpos; é o
+	 * caso do Control Plane puro e da suíte.
+	 */
+	private final NodeBodyStore nodeBodies;
 
 	StorageCatalogService(StorageCatalogRepository catalog, AuditTrail audit, Clock clock,
 			@Value("${rede.storage.max-object-bytes:5368709120}") long maxObjectBytes,
 			@Value("${rede.storage.root:${java.io.tmpdir}/enois-storage}") String storageRoot,
-			StoragePlacementService placement) {
+			StoragePlacementService placement, @Nullable NodeBodyStore nodeBodies) {
 		this.catalog = catalog;
 		this.audit = audit;
 		this.clock = clock;
 		this.maxObjectBytes = maxObjectBytes;
 		this.storageRoot = storageRoot;
 		this.placement = placement;
+		this.nodeBodies = nodeBodies;
 	}
 
 	/**
@@ -444,24 +452,68 @@ public class StorageCatalogService {
 	 * catálogo diz que existe e o arquivo não está lá — divergência de metadado, não "não existe".</p>
 	 */
 	public InputStream readBody(String objectId) {
-		// Fase 3: o corpo nao e replicado no proprio Control Plane -- ele identifica a copia pelo
-		// SHA-256 e devolve 409 com o digest, para o chamador designar a replica que de fato tem o
-		// objeto. Entregar bytes de um arquivo que se sabe ausente seria a pior forma de falha:
-		// um download que responde 200 e entrega nada (ou lixo) so aparece muito depois.
-		if (!Files.isReadable(bodyPath(objectId))) {
-			Optional<StorageObject> object = catalog.findById(objectId);
-			if (object.isPresent() && object.get().sha256() != null) {
-				throw new ApiException(409, "STORAGE_REPLICA_ELSEWHERE",
-					"Esta copia nao esta neste no; use o digest " + object.get().sha256()
-						+ " para identifica-la numa replica.");
-			}
-			throw new ApiException(410, "STORAGE_BODY_MISSING",
-				"O catalogo registra a copia, mas o corpo nao esta neste no.");
+		// O corpo é servido do disco DESTA instalação, nas duas formas que ela pode ter sem pedir
+		// nada a outro nó:
+		//   1. a raiz do Control Plane — onde o upload grava a réplica 0;
+		//   2. o diretório de corpos do nó local (`rede.storage.node-body-root`) — onde o
+		//      OBJECT_PUT deixa o corpo que este nó guarda.
+		// Antes só a primeira existia: objeto replicado para o nó local respondia 409 mesmo com os
+		// bytes a um diretório de distância, e "guardar no próprio disco" não servia para nada.
+		Optional<StorageObject> object = catalog.findById(objectId);
+		// A raiz SEM o `createDirectories` do `root()`: ler é leitura. Criar o diretório aqui faria
+		// um GET num Control Plane que nunca recebeu upload escrever em disco, e fariam uma falha de
+		// disco virar 500 num download em vez de "não está aqui" (409/410).
+		Path cpBody = Path.of(storageRoot).resolve(objectId);
+		if (Files.isReadable(cpBody)) {
+			return openVerified(cpBody, object);
 		}
+		if (nodeBodies != null && nodeBodies.has(objectId)) {
+			return openVerified(nodeBodies.pathOf(objectId), object);
+		}
+		// Nem aqui nem ali: continua sendo 409 com o digest, para o chamador designar a réplica que
+		// tem o objeto. Entregar bytes de um arquivo que se sabe ausente seria a pior forma de
+		// falha: um download que responde 200 e entrega nada (ou lixo) só aparece muito depois.
+		if (object.isPresent() && object.get().sha256() != null) {
+			throw new ApiException(409, "STORAGE_REPLICA_ELSEWHERE",
+				"Esta copia nao esta neste no; use o digest " + object.get().sha256()
+					+ " para identifica-la numa replica.");
+		}
+		throw new ApiException(410, "STORAGE_BODY_MISSING",
+			"O catalogo registra a copia, mas o corpo nao esta neste no.");
+	}
+
+	/**
+	 * O corpo da <b>réplica 0</b> — o arquivo da raiz deste Control Plane, <b>sem</b> cair para o
+	 * diretório do nó local.
+	 *
+	 * <p>É o que a varredura relê. Se ela usasse {@link #readBody}, achar o corpo no nó local faria
+	 * o sumiço da réplica 0 passar em silêncio: o relatório diria "conferido" sobre um arquivo que
+	 * o catálogo não atribui a esta instalação.</p>
+	 */
+	public InputStream openReplicaZeroBody(String objectId) {
+		return openVerified(bodyPath(objectId), catalog.findById(objectId));
+	}
+
+	/**
+	 * Abre o corpo depois de conferir que ele tem o tamanho que o catálogo promete.
+	 *
+	 * <p>O download responde com o {@code Content-Length} medido no upload. Servir um arquivo
+	 * truncado com esse comprimento é um 200 que se rompe no fim — e o cliente não tem como saber
+	 * se perdeu bytes da rede ou do disco. Divergência de tamanho responde 410, com os dois números
+	 * no erro; divergência de conteúdo com o mesmo tamanho é o que a varredura encontra pelo
+	 * sha-256, não o caminho de download.</p>
+	 */
+	private InputStream openVerified(Path body, Optional<StorageObject> object) {
 		try {
-			return Files.newInputStream(bodyPath(objectId));
+			long size = Files.size(body);
+			Long expected = object.map(StorageObject::bytes).orElse(null);
+			if (expected != null && expected != size) {
+				throw new ApiException(410, "STORAGE_BODY_SIZE_MISMATCH",
+					"O corpo tem " + size + " bytes, mas o catalogo registra " + expected + ".");
+			}
+			return Files.newInputStream(body);
 		}
-		catch (IOException missing) {
+		catch (IOException unreadable) {
 			throw new ApiException(410, "STORAGE_BODY_MISSING",
 				"O catalogo registra a copia, mas o corpo nao esta neste no.");
 		}
