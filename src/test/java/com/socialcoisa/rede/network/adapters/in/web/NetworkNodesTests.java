@@ -823,6 +823,94 @@ class NetworkNodesTests {
 		.andExpect(status().isForbidden());
 	}
 
+	/**
+	 * O participante vê quanto <b>concluiu</b> e quanto <b>devolveu</b> à fila — a §8.4 pede que a
+	 * rede mostre como os nós trabalham juntos, e a tela dele mostrava só a conclusão.
+	 *
+	 * <p>Os dois zeros sozinhos diziam a mesma coisa para o nó novo e para o nó que roda há uma
+	 * semana sem terminar nada. Com a devolução ao lado, a tela consegue distinguir "ainda não
+	 * recebi" de "recebi e devolvi".</p>
+	 */
+	@Test
+	void participanteVeOTrabalhoQueConcluiuEDevolveu() throws Exception {
+		String admin = adminToken();
+		var dono = auth.authenticate("net_owner_contrib");
+		String nodeId = newNodeOwner(admin, dono.userId());
+		String key = issueKey(admin, nodeId);
+		heartbeat(admin, nodeId, key, 10.0, 1024, 0);
+
+		// Nó recém-aprovado: nada concluído e nada devolvido. A tela precisa poder afirmar isso —
+		// ausência do campo diria "não medi", que é outra coisa.
+		mockMvc.perform(get("/network/participant/nodes").header("X-Session-Token", dono.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[0].tasksDone").value(0))
+			.andExpect(jsonPath("$[0].tasksRequeued").value(0));
+
+		// Uma tarefa concluída por ele, e um resultado que ele entregou e foi recusado — a linha que
+		// o Control Plane grava com o NÓ como ator.
+		jdbc.update("""
+			insert into network_tasks (id, task_type, status, attempt, idempotency_key, payload, data_class,
+			  assigned_node_id, deadline, next_attempt_at, finished_at, created_at, updated_at)
+			values (?, 'ASYNC_JOB', 'DONE', 1, ?, '{}', 'PUBLIC', ?, current_timestamp, current_timestamp,
+			  current_timestamp, current_timestamp, current_timestamp)
+			""", "tsk_" + System.nanoTime(), "contrib-" + System.nanoTime(), nodeId);
+		registrarRecusa(nodeId);
+
+		mockMvc.perform(get("/network/participant/nodes/" + nodeId).header("X-Session-Token", dono.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.tasksDone").value(1))
+			// A recusa não é conclusão: somá-la em `tasksDone` inflaria a contribuição.
+			.andExpect(jsonPath("$.tasksRequeued").value(1));
+	}
+
+	/**
+	 * Claim vencido é auditado como {@code system}: o nó não devolveu nada, ele SUMIU no meio do
+	 * trabalho. Contar isso como devolução transformaria abandono em atividade, e a tela do
+	 * participante estaria elogiando justamente quem não entregou.
+	 */
+	@Test
+	void claimVencidoNaoContaComoDevolucaoDoParticipante() throws Exception {
+		String admin = adminToken();
+		var dono = auth.authenticate("net_owner_abandon");
+		String nodeId = newNodeOwner(admin, dono.userId());
+		String key = issueKey(admin, nodeId);
+		heartbeat(admin, nodeId, key, 10.0, 1024, 0);
+
+		jdbc.update("insert into audit_logs (id, actor_id, action, target_id, metadata, created_at) "
+			+ "values (?, 'system', 'NETWORK_TASK_REQUEUED', ?, '{}', current_timestamp)",
+			"aud_" + System.nanoTime(), "tsk_abandonada");
+
+		mockMvc.perform(get("/network/participant/nodes/" + nodeId).header("X-Session-Token", dono.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.tasksRequeued").value(0));
+	}
+
+	private void registrarRecusa(String nodeId) {
+		jdbc.update("insert into audit_logs (id, actor_id, action, target_id, metadata, created_at) "
+			+ "values (?, ?, 'NETWORK_TASK_RESULT_REFUSED', ?, '{}', current_timestamp)",
+			"aud_" + System.nanoTime(), nodeId, "tsk_recusada");
+	}
+
+	/**
+	 * Desconectar devolve o mesmo quadro do participante — e a contribuição que ele já tinha
+	 * continua lá. Zero inventado na resposta apagaria o trabalho feito no instante em que ele sai.
+	 */
+	@Test
+	void desconectarDevolveAContribuicaoQueOParticipanteJaTinha() throws Exception {
+		String admin = adminToken();
+		var dono = auth.authenticate("net_owner_desc_contrib");
+		String nodeId = newNodeOwner(admin, dono.userId());
+		String key = issueKey(admin, nodeId);
+		heartbeat(admin, nodeId, key, 10.0, 1024, 0);
+		registrarRecusa(nodeId);
+
+		mockMvc.perform(post("/network/participant/nodes/" + nodeId + "/disconnect")
+			.header("X-Session-Token", dono.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("SUSPENDED"))
+			.andExpect(jsonPath("$.tasksRequeued").value(1));
+	}
+
 	// ---------------------------------------------------------------- interface do participante
 
 	/**

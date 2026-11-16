@@ -299,3 +299,41 @@ O `setUp` passa a limpar `network_state`, como `NetworkTasksTests` e `NetworkMod
 **Prova discriminante:** `NetworkTasksTests` + `NetworkStorageResultAcceptanceTests` na mesma JVM —
 sem a limpeza **falha**, com a limpeza **passa**. O `network_state` é a segunda tabela global do
 módulo que os testes precisam zerar (a primeira foi o catálogo de conteúdo, §6.8).
+
+## 9. A contribuição que a tela do participante mostra
+
+A interface do participante (`GET /network/participant/nodes` e `/nodes/{id}`) mostrava só
+`tasksDone`. Dois casos ficavam indistinguíveis:
+
+- **tarefa reciclada não contava para quem a executou.** `countDoneByNode` agrupa por
+  `assigned_node_id`, que é zerado quando a tarefa volta para a fila; se outro nó a conclui, o
+  crédito vai para ele. Numa rede onde réplicas caem no meio do trabalho — o motivo de existir a
+  reciclagem —, quem executou e perdeu o claim não aparecia em lugar nenhum;
+- **zero de nó novo e zero de nó parado eram iguais.** "0 tarefas" para o nó aprovado há cinco
+  minutos e para o que roda há uma semana sem concluir nada.
+
+Agora a rota devolve também **`tasksRequeued`**: tarefas que este nó **entregou** e tiveram o
+resultado recusado, voltando à fila.
+
+| campo | o que é |
+|---|---|
+| `tasksDone` | concluídas **por este nó como último executor** |
+| `tasksRequeued` | entregues por ele e devolvidas à fila (resultado recusado) |
+
+Decisões:
+
+- **Só a devolução com o nó como ator.** A trilha já separa os casos: `claim_expired` é auditado como
+  `system` — o nó não devolveu nada, ele sumiu no meio do trabalho. Contá-lo como contribuição
+  transformaria abandono em atividade. Entra só `NETWORK_TASK_RESULT_REFUSED`, que é a recusa do
+  resultado que o próprio nó enviou.
+- **Lida da auditoria, não deduzida.** É a mesma linha que prova a recusa, contada por `actor_id`
+  pelo índice `idx_audit_actor_created` (V1). O número e a prova não podem divergir porque são a
+  mesma linha.
+- **A desconexão devolve o mesmo quadro.** A resposta de `POST /nodes/{id}/disconnect` antes montava a
+  visão com zeros inventados; ela passa a ler o nó de verdade, e o trabalho já feito continua visível
+  no instante em que o participante sai.
+
+**Verificação:** `NetworkNodesTests` **4 novos** (nó novo devolve `0`/`0`; conclusão e devolução
+aparecem separadas; claim vencido do `system` não conta; desconexão mantém a contribuição). Mutações:
+contar o reenfileiramento do sistema, somar a devolução em `tasksDone`, e devolver zero inventado na
+desconexão — **3 de 3 derrubam**.

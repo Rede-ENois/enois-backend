@@ -36,4 +36,7 @@ interface SpringDataAuditLogJpaRepository extends JpaRepository<AuditLogJpaEntit
 			Pageable pageable);
 
 	long countByCreatedAtBefore(Instant cutoff);
+
+	/** Linhas do ator com a ação — a contribuição contada na trilha que a prova. Vai pelo índice do ator. */
+	long countByActorIdAndAction(String actorId, String action);
 }
