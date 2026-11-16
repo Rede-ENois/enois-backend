@@ -4,7 +4,7 @@ Estado: implementado em 2026-11-12 e na `qa` (PR #677 mergeado); declaração de
 acrescentada em 2026-11-13; tabela paginada acrescentada em 2026-11-13 (V291); questionário
 condicional e rascunho acrescentados em 2026-11-15 (V330); timeline de auditoria, entrevista na
 agenda central e aviso de reprovação pelo board acrescentados em 2026-11-16; jornada do candidato
-(etapa nomeada e histórico próprio da candidatura) e banco de talentos com LGPD (V333) acrescentados
+(etapa nomeada e histórico próprio da candidatura) e banco de talentos com LGPD (V340) acrescentados
 em 2026-11-16.
 
 Complementa `docs/JOB_AGGREGATOR.md` (vagas internas e externas) e
@@ -489,7 +489,7 @@ uma decisão da pessoa, e um 409 impediria o caso legítimo). A resposta de marc
 contar a própria entrevista. Nas listas, `conflicts` vem `null` ("não avaliado"), distinto de lista
 vazia ("nada conflita").
 
-## Banco de talentos (V333)
+## Banco de talentos (V340)
 
 A candidatura que a pessoa **libera** para uma organização continuar vendo depois que a vaga fecha.
 Não é uma lista de quem se candidatou: é uma lista de quem consentiu em aparecer.

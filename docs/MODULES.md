@@ -804,7 +804,7 @@ Etapas configuráveis por vaga (`selection_stages`), histórico de movimentos
 (`stage_movements` — a etapa atual é o destino do último movimento), notas internas
 (`stage_notes`, nunca expostas ao candidato) e board por etapa. Entrevistas entram na agenda
 central pela origem `JOB_INTERVIEW`. Cada candidatura tem no máximo uma entrevista agendada
-(índice único em `job_interviews.active_application_id`, V333) e guarda quantas canceladas o
+(índice único em `job_interviews.active_application_id`, V339) e guarda quantas canceladas o
 processo tiver: cancelar libera a candidatura para uma entrevista nova.
 
 | Classe | Papel |
