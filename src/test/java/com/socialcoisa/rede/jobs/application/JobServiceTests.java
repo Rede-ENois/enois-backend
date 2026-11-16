@@ -129,7 +129,24 @@ class JobServiceTests {
 			org.mockito.Mockito.mock(com.socialcoisa.rede.companies.application.CompanyService.class),
 			org.mockito.Mockito.mock(com.socialcoisa.rede.shared.application.CacheInvalidator.class),
 			new com.socialcoisa.rede.jobs.application.JobCommandAuthorization(repository,
-				(companyId, userId, capability) -> false));
+				(companyId, userId, capability) -> false),
+			new com.socialcoisa.rede.jobs.application.port.out.JobApplicationDraftRepository() {
+				@Override
+				public com.socialcoisa.rede.jobs.domain.JobApplicationDraft save(
+						com.socialcoisa.rede.jobs.domain.JobApplicationDraft draft) {
+					return draft;
+				}
+
+				@Override
+				public java.util.Optional<com.socialcoisa.rede.jobs.domain.JobApplicationDraft> find(
+						String jobId, String userId) {
+					return java.util.Optional.empty();
+				}
+
+				@Override
+				public void delete(String jobId, String userId) {
+				}
+			});
 	}
 
 	@Test

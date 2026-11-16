@@ -19,6 +19,8 @@ import com.socialcoisa.rede.companies.domain.CompanyRole;
 import com.socialcoisa.rede.companies.domain.RecruitmentCapability;
 import com.socialcoisa.rede.jobs.application.port.out.JobAbandonPenaltyRepository;
 import com.socialcoisa.rede.jobs.application.port.out.JobApplicationDelivery;
+import com.socialcoisa.rede.jobs.application.port.out.JobApplicationDraftRepository;
+import com.socialcoisa.rede.jobs.domain.JobApplicationDraft;
 import com.socialcoisa.rede.jobs.application.port.out.JobApplicationStatusNotifier;
 import com.socialcoisa.rede.jobs.application.port.out.JobRepository;
 import com.socialcoisa.rede.jobs.domain.Job;
@@ -57,6 +59,7 @@ public class JobService {
 		.compile("(?i)(R\\$|US\\$|\\$|€)");
 
 	private final JobRepository repository;
+	private final JobApplicationDraftRepository draftRepository;
 	private final ReputationService reputationService;
 	private final com.socialcoisa.rede.profile.application.port.out.UserProfileRepository userProfileRepository;
 	private final com.socialcoisa.rede.corporate.application.CorporateProfileService corporateProfiles;
@@ -80,8 +83,10 @@ public class JobService {
 			JobAbandonPenaltyRepository abandonPenalties,
 			tools.jackson.databind.ObjectMapper objectMapper, Clock clock,
 			UserRateLimiter userRateLimiter, BehavioralTimingGuard behavioralTimingGuard,
-			CompanyService companyService, CacheInvalidator cacheInvalidator, JobCommandAuthorization command) {
+			CompanyService companyService, CacheInvalidator cacheInvalidator, JobCommandAuthorization command,
+			JobApplicationDraftRepository draftRepository) {
 		this.repository = repository;
+		this.draftRepository = draftRepository;
 		this.reputationService = reputationService;
 		this.userProfileRepository = userProfileRepository;
 		this.corporateProfiles = corporateProfiles;
@@ -332,6 +337,8 @@ public class JobService {
 		JobApplication application = JobApplication.create(null, jobId, userId, trimToNull(message, 2000), snapshot,
 			clock.instant(), normalized);
 		String applicationId = repository.saveApplication(application);
+		// Enviou, o rascunho morre: não sobra lixo do que já virou candidatura.
+		draftRepository.delete(jobId, userId);
 		// Candidatura nova nasce sempre APPLIED: o estado nao vem de fora.
 		JobApplication saved = JobApplication.restore(applicationId, jobId, userId, application.message(), snapshot,
 			application.appliedAt(), normalized, JobApplicationStatus.APPLIED, null, null);
@@ -339,6 +346,26 @@ public class JobService {
 		// Entrega: o empregador recebe por e-mail e na mensagem direta, com o perfil do candidato.
 		delivery.deliver(job, saved);
 		return saved;
+	}
+
+	// ---------- Rascunho da candidatura (autosave) ----------
+
+	/**
+	 * Grava o rascunho das respostas (um por candidato×vaga, grava por cima). Não valida contra
+	 * o formulário — é o que a pessoa digitou até agora, não um envio; a validação acontece no
+	 * apply, que continua sendo o único caminho que cria candidatura.
+	 */
+	public JobApplicationDraft saveDraft(String jobId, String userId, Map<String, String> answers) {
+		repository.findById(jobId)
+			.orElseThrow(() -> new ApiException(404, "JOB_NOT_FOUND", "Vaga nao encontrada."));
+		return draftRepository.save(JobApplicationDraft.create(jobId, userId, answers, clock.instant()));
+	}
+
+	/** O rascunho de quem pede nesta vaga; vaga inexistente é 404 igual ao apply. */
+	public java.util.Optional<JobApplicationDraft> draftOf(String jobId, String userId) {
+		repository.findById(jobId)
+			.orElseThrow(() -> new ApiException(404, "JOB_NOT_FOUND", "Vaga nao encontrada."));
+		return draftRepository.find(jobId, userId);
 	}
 
 	/** Candidaturas recebidas por uma vaga: o autor da vaga e a equipe de recrutamento dela veem. */
@@ -366,6 +393,11 @@ public class JobService {
 		List<String> missing = new java.util.ArrayList<>();
 		List<JobApplication.JobApplicationAnswer> result = new java.util.ArrayList<>();
 		for (JobApplicationField field : job.applicationFields()) {
+			// Campo condicional não visível não pede resposta: exigir o invisível é o que faz o
+			// candidato travar num formulário que não mostra o que falta.
+			if (!field.visibleGiven(byField)) {
+				continue;
+			}
 			String value = byField.get(field.id());
 			if (!StringUtils.hasText(value)) {
 				if (field.required()) {
@@ -474,11 +506,34 @@ public class JobService {
 			if (!labels.add(label.toLowerCase(java.util.Locale.ROOT))) {
 				throw new ApiException(400, "DUPLICATE_FIELD_LABEL", "Ha dois campos com o mesmo nome: " + label + ".");
 			}
-			normalized.add(JobApplicationField.create(
-				"field_" + UUID.randomUUID().toString().replace("-", ""), jobId, label,
-				JobApplicationField.FieldType.from(input.type()), input.required(), index));
+			String id = "field_" + UUID.randomUUID().toString().replace("-", "");
+			boolean conditional = StringUtils.hasText(input.visibleIfFieldId())
+				|| StringUtils.hasText(input.visibleIfValue());
+			// A condicional se resolve contra o que JÁ foi normalizado nesta chamada: origem tem
+			// que vir antes na lista, o que proíbe ciclo por construção (o ciclo exigiria
+			// depender de um campo que ainda não existe). Na criação os ids ainda não são
+			// conhecidos de quem publica, então o rótulo exato de um campo anterior também
+			// resolve a origem; o que fica gravado é sempre o id resolvido.
+			normalized.add(conditional
+				? JobApplicationField.conditional(id, jobId, label,
+					JobApplicationField.FieldType.from(input.type()), input.required(), index,
+					input.visibleIfFieldId(), input.visibleIfValue(),
+					sourceId -> fieldInNormalizedByIdOrLabel(sourceId, normalized))
+				: JobApplicationField.create(id, jobId, label,
+					JobApplicationField.FieldType.from(input.type()), input.required(), index));
 		}
 		return normalized;
+	}
+
+	/** Origem da condicional: casa por id, e por rótulo exato (mesma chamada de normalização). */
+	private JobApplicationField fieldInNormalizedByIdOrLabel(String sourceId, List<JobApplicationField> normalized) {
+		String key = sourceId.trim();
+		for (JobApplicationField field : normalized) {
+			if (field.id().equals(key) || field.label().equalsIgnoreCase(key)) {
+				return field;
+			}
+		}
+		return null;
 	}
 
 	private String trimToNull(String value, int max) {
@@ -489,8 +544,16 @@ public class JobService {
 		return trimmed.length() > max ? trimmed.substring(0, max) : trimmed;
 	}
 
-	/** Campos que o autor define no formulario de candidatura. */
-	public record JobFieldInput(String label, String type, boolean required) {
+	/**
+	 * Campos que o autor define no formulario de candidatura. `visibleIfFieldId`/`visibleIfValue`
+	 * tornam o campo condicional: só aparece quando a resposta do campo de origem casa com o valor.
+	 */
+	public record JobFieldInput(String label, String type, boolean required, String visibleIfFieldId,
+			String visibleIfValue) {
+
+		public JobFieldInput(String label, String type, boolean required) {
+			this(label, type, required, null, null);
+		}
 	}
 
 	/** Resposta do candidato a um campo da vaga. */

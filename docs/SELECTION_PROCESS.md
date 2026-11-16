@@ -1,7 +1,8 @@
 # Processo seletivo (ATS) — pipeline de recrutamento por vaga
 
 Estado: implementado em 2026-11-12 e na `qa` (PR #677 mergeado); declaração de recrutador
-acrescentada em 2026-11-13; tabela paginada acrescentada em 2026-11-13 (V291).
+acrescentada em 2026-11-13; tabela paginada acrescentada em 2026-11-13 (V291); questionário
+condicional e rascunho acrescentados em 2026-11-15 (V330).
 
 Complementa `docs/JOB_AGGREGATOR.md` (vagas internas e externas) e
 `docs/SOCIAL_PROFESSIONAL_CONTEXTS.md` (identidade profissional). Não cria um segundo sistema
@@ -275,9 +276,52 @@ Cada item roda em **transação própria**: o que entrou ficou gravado mesmo que
 recusado no meio do lote. O caminho de cada item é o mesmo do movimento individual — nenhuma
 regra de etapa é reimplementada no lote.
 
+## Questionário condicional e rascunho (V330)
+
+O formulário de candidatura (os campos que o autor define na vaga) ganhou lógica condicional e
+o candidato ganhou autosave — sem segunda vaga nem segunda candidatura: são as mesmas
+`job_application_fields`, com duas colunas novas e uma tabela nova de buffer.
+
+### Campo condicional
+
+Na criação/edição da vaga, um campo pode declarar de quem depende:
+
+```json
+{"label":"Carteira de motorista","type":"TEXT","required":true,
+ "visibleIfFieldId":"field_abc","visibleIfValue":"Sim"}
+```
+
+Regras, todas do domínio (`JobApplicationField.conditional`):
+
+- A origem é referida por **id** ou pelo **rótulo exato** de um campo anterior — na criação da
+  vaga os ids ainda não existem, então o rótulo é o jeito natural de apontar; o que fica gravado
+  (e o que a vaga devolve) é sempre o **id resolvido** da origem, então renomear o campo de
+  origem depois não quebra a condição.
+- Origem sem texto ou valor vazio é 422 `CONDITION_REQUIRES_SOURCE` / `CONDITION_REQUIRES_VALUE`.
+- Origem que não existe na vaga é 422 `CONDITION_SOURCE_NOT_FOUND` — a origem precisa **preceder**
+  na lista de campos, o que torna ciclo impossível por construção (depende de quem ainda não
+  existe não passa na resolução).
+- Casagem do valor é normalizada: caixa e acento ignorados (`"SIM"` revela igual a `"Sim"`).
+- Campo invisível **não é exigido** no envio, mesmo sendo obrigatório — exigir o invisível é o
+  que faz o candidato travar num formulário que não mostra o que falta.
+- A vaga devolve `visibleIfFieldId`/`visibleIfValue` junto do campo; quem monta o formulário
+  (front) é quem esconde o campo não revelado.
+
+### Autosave do rascunho
+
+| Rota | Quem | O que faz |
+|---|---|---|
+| `PUT /jobs/{jobId}/applications/draft` | candidato | grava o rascunho (`{"answers": {"fieldId": "valor"}}`), um por candidato×vaga, gravando por cima |
+| `GET /jobs/{jobId}/applications/draft` | candidato | o próprio rascunho; sem rascunho devolve 200 vazio, não 404 |
+
+O rascunho é um buffer de digitação (`job_application_drafts`, JSON numa linha só): não valida
+obrigatórios, não entra no board, não notifica ninguém, não conta como candidatura. Teto de 25
+respostas (`DRAFT_TOO_MANY_ANSWERS`) e 100.000 caracteres. **Enviou a candidatura, o rascunho
+morre** — o apply apaga a linha. Vaga inexistente é 404 `JOB_NOT_FOUND`, igual ao apply.
+
 ## Fora deste escopo (próximos passos)
 
-Questionários, avaliações por critério, slot de entrevista escolhido pelo candidato, banco de
+Avaliações por critério, slot de entrevista escolhido pelo candidato, banco de
 talentos e a UI no design system. A fundação acima é a que esses itens vão usar — não há
 segunda base a criar.
 
