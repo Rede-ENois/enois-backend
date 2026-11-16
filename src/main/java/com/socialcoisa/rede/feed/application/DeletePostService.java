@@ -144,6 +144,25 @@ public class DeletePostService
 		if (!post.isActive() && !post.isQuarantined()) {
 			return RemovalOutcome.ALREADY_OFFLINE;
 		}
+		return applyRemoval(post, moderatorId, reason);
+	}
+
+	@Override
+	@Transactional
+	public RemovalOutcome removeAsAdminWithOutcome(String adminId, String postId, String reason) {
+		Post post = postRepository.findById(new PostId(postId)).orElse(null);
+		if (post == null) {
+			return RemovalOutcome.NOT_FOUND;
+		}
+		// Mesmo efeito da moderação (é o mesmo applyRemoval abaixo); a porta administrativa chama
+		// este caminho só para deixar explícito quem decidiu e manter o mesmo contrato de resposta.
+		if (!post.isActive() && !post.isQuarantined()) {
+			return RemovalOutcome.ALREADY_OFFLINE;
+		}
+		return applyRemoval(post, adminId, reason);
+	}
+
+	private RemovalOutcome applyRemoval(Post post, String actorId, String reason) {
 		post.delete(clock.instant());
 		postRepository.save(post);
 		// A cópia de uma republicação não pode sobreviver ao original (inclusive por moderação).
@@ -151,7 +170,7 @@ public class DeletePostService
 		feedCacheRepository.removeEverywhere(post.id());
 		outboxEventRepository.append("PostDeleted", post.id().value(), "{\"postId\":\"" + post.id().value() + "\"}");
 		requestMediaDeletion(post);
-		auditLogRepository.record(new com.socialcoisa.rede.feed.domain.UserId(moderatorId),
+		auditLogRepository.record(new com.socialcoisa.rede.feed.domain.UserId(actorId),
 			"POST_DELETED_BY_MODERATION", post.id().value(), normalizeReason(reason));
 		return RemovalOutcome.REMOVED;
 	}

@@ -17,6 +17,17 @@ public interface ModerationRemovePostUseCase {
 	 */
 	RemovalOutcome removeAsModeratorWithOutcome(String moderatorId, String postId, String reason);
 
+	/**
+	 * A decisão DIRETA do administrador.
+	 *
+	 * <p>O efeito é o mesmo do caminho de moderação (soft delete, cache, mídia, republicações,
+	 * auditoria {@code POST_DELETED_BY_MODERATION}), inclusive para post em quarentena — que é o
+	 * desfecho de "violação confirmada". A porta existe separada para o painel administrativo não
+	 * depender da regra de quórum e para o contrato de resposta ({@code REMOVED},
+	 * {@code NOT_FOUND}, {@code ALREADY_OFFLINE}) ficar explícito no nome de quem decidiu.</p>
+	 */
+	RemovalOutcome removeAsAdminWithOutcome(String adminId, String postId, String reason);
+
 	/** O que a remoção fez com o post. */
 	enum RemovalOutcome {
 		/** O post estava no ar e saiu. */
