@@ -173,6 +173,36 @@ tempo fora; heartbeat normal não gera evento; primeiro contato não é reconex�
 histórico do próprio nó). Mutações: sem detectar a volta, primeiro contato como reconexão, heartbeat
 normal auditado — **3 de 3 derrubam**.
 
+## 6.7 Atraso de sincronização visto pelo painel
+
+O brief §8.6 pede o **histórico de sincronização** por réplica. O nó já podia perguntar o próprio
+atraso (`GET /network/content/lag`, autenticado pela chave dele); o administrador não via o de
+ninguém. Sem isso, "a réplica X está atrasada" só era sabível entrando na máquina — e o operador que
+precisa redistribuir carga não entra em vinte máquinas para descobrir qual está para trás.
+
+A rota nova é a leitura do painel:
+
+```
+GET /admin/network/content/nodes/{nodeId}/lag
+```
+
+Devolve **todos** os tipos de conteúdo, cada um com `behind` — quantos agregados daquele tipo o nó
+tem em versão anterior à da origem (`countBehind`). Tipo em dia aparece com `0`: o tipo ausente
+esconderia qual conjunto foi medido.
+
+Decisões:
+
+- **Nó desconhecido é `404`, não lista zerada.** "Não está atrasado" e "não existe" não podem ser a
+  mesma resposta — a primeira afirma saúde sobre um nó que pode nem existir.
+- **A rota é do painel, não do nó.** Ela lê o atraso de outro nó pelo id; a autenticação é de
+  administrador, e o `AdminRouteInterceptor` fecha `/admin/**` como rede de segurança.
+- **É o atraso medido, não uma estimativa.** O número sai dos snapshots que o nó declarou ter contra
+  a versão da origem; não há heurística de "provavelmente está atrasado".
+
+**Verificação:** `AdminNetworkContentLagTests` **4** (o admin vê o atraso por tipo, com todos os
+tipos presentes; nó desconhecido é `404`; sem sessão não abre; pessoa comum recebe `403`). Mutações:
+nó desconhecido devolvendo lista zerada e leitura do nó errado — **2 de 2 derrubam**.
+
 ## 7. O que NÃO está entregue
 
 | item | por quê |

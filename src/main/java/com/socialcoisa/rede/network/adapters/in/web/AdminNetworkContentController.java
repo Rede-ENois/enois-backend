@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -12,6 +13,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.network.application.ContentReconcileService;
 import com.socialcoisa.rede.network.application.ContentReconcileWorker;
+import com.socialcoisa.rede.network.application.ContentSyncService;
+import com.socialcoisa.rede.network.application.NetworkNodeService;
 import com.socialcoisa.rede.network.application.NetworkReplicationCoverageService;
 import com.socialcoisa.rede.network.application.port.out.ContentVersionRepository;
 import com.socialcoisa.rede.shared.web.AdminGuard;
@@ -32,15 +35,19 @@ class AdminNetworkContentController {
 	private final ContentReconcileService reconcile;
 	private final ContentReconcileWorker worker;
 	private final NetworkReplicationCoverageService coverage;
+	private final ContentSyncService content;
+	private final NetworkNodeService nodes;
 	private final CurrentUserResolver currentUserResolver;
 	private final AdminGuard adminGuard;
 
 	AdminNetworkContentController(ContentReconcileService reconcile, ContentReconcileWorker worker,
-			NetworkReplicationCoverageService coverage, CurrentUserResolver currentUserResolver,
-			AdminGuard adminGuard) {
+			NetworkReplicationCoverageService coverage, ContentSyncService content, NetworkNodeService nodes,
+			CurrentUserResolver currentUserResolver, AdminGuard adminGuard) {
 		this.reconcile = reconcile;
 		this.worker = worker;
 		this.coverage = coverage;
+		this.content = content;
+		this.nodes = nodes;
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
 	}
@@ -93,6 +100,31 @@ class AdminNetworkContentController {
 	List<CoverageView> coverage(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		admin(sessionToken);
 		return coverage.coverage().stream().map(CoverageView::of).toList();
+	}
+
+	/**
+	 * O atraso de sincronização <b>deste</b> nó, por tipo de conteúdo (brief §8.6, histórico de
+	 * sincronização).
+	 *
+	 * <p>O nó já podia perguntar o próprio atraso ({@code GET /network/content/lag}, autenticado pela
+	 * chave dele); o administrador não via o de ninguém. Sem esta rota, "a réplica X está atrasada"
+	 * só era sabível entrando na máquina — e o operador que precisa redistribuir carga não entra em
+	 * vinte máquinas para descobrir qual está para trás.</p>
+	 *
+	 * <p>Nó desconhecido é 404, não lista zerada: "não está atrasado" e "não existe" não podem ser a
+	 * mesma resposta. Os tipos vêm todos, inclusive os que estão em dia: o tipo ausente esconderia
+	 * qual conjunto foi medido.</p>
+	 */
+	@GetMapping("/nodes/{nodeId}/lag")
+	List<LagView> nodeLag(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String nodeId) {
+		admin(sessionToken);
+		return content.lag(nodes.require(nodeId)).stream()
+			.map(lag -> new LagView(lag.kind().name(), lag.behind()))
+			.toList();
+	}
+
+	record LagView(String kind, long behind) {
 	}
 
 	/**
