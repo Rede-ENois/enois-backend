@@ -243,6 +243,41 @@ A derivação vive em `NodeHealth` (`network/domain`), puro: reusa `alive`, `can
 `network` ignorando `canOperate` (suspenso virando `OK`), `application` ignorando perfil vazio, `host`
 sempre `OK` — **3 de 3 derrubam**.
 
+## 6.9 Cobertura de trabalho: a rede tem quem faça cada tipo?
+
+O brief §8.4 pede que o painel mostre como os nós trabalham juntos. `byProfile` conta perfis
+**declarados**, e isso não responde a pergunta operacional: **a rede tem alguém para executar cada
+tipo de trabalho agora?** Um nó com o perfil continua contado quando está em quarentena, de região
+evacuada ou sem vaga — e não executa nada. Hoje essa descoberta custava abrir nó por nó até achar
+que nenhum aceitava `MEDIA_TRANSCODE`.
+
+`GET /admin/network/nodes/dashboard` passa a devolver `workTypes`: um item por tipo de
+`TaskType`, com `capable` = quantos nós podem executá-lo **agora**.
+
+| regra de "pode agora" | por quê |
+|---|---|
+| `ACTIVE` | suspenso, pendente e revogado não recebem tarefa |
+| vivo na janela de 180 s | é a mesma régua do scheduler; nó sem heartbeat não aceita |
+| sem quarentena vigente | decisão administrativa já o tirou do balanceamento |
+| região não evacuada | região fora de operação não atende ninguém |
+| com vaga (`hasCapacity`) | nó cheio não aceita, mesmo com perfil |
+| o perfil cobre o tipo | `allowedFor`, a mesma regra do despacho (`NODE_LOCAL` cobre todos) |
+
+Decisões:
+
+- **Todos os tipos aparecem, inclusive com `0`.** O tipo ausente esconderia justamente a lacuna —
+  é o erro que o painel tem de evitar. `capable = 0` é o vermelho da tela.
+- **Conta nó, não vaga.** "Dois nós podem fazer mídia" é o que se quer saber para decidir se falta
+  gente; quantas vagas restam em cada um já está em `freeSlots` e na carga por nó.
+- **É o medido na hora, não cache.** O mesmo nó devolvendo a vaga muda o número na leitura seguinte.
+- **Vale para todos os tipos, sem lista fixa.** A enumeração é `TaskType.values()`: tipo novo entra
+  sozinho no painel, e não há lista paralela para esquecer de atualizar.
+
+**Verificação:** 3 testes novos em `NetworkNodesTests` (tipo sem ninguém apto aparece com `0` e os
+demais tipos também aparecem; nó em quarentena não conta; nó que devolve a vaga volta a contar).
+Mutações: sem checagem de vaga, sem checagem de quarentena, e omitir os tipos zerados — **3 de 3
+derrubam**.
+
 ## 7. O que NÃO está entregue
 
 | item | por quê |
@@ -251,3 +286,16 @@ sempre `OK` — **3 de 3 derrubam**.
 | retenção longa / exportação do console | é janela de tela; para histórico existe o log do próprio nó, na máquina, e a auditoria do Control Plane |
 | métricas de processo (heap, GC, threads) do nó | o nó reporta o que mede no host (CPU, memória, disco, tarefas). Heap/GC exigiriam o runtime expor métricas próprias |
 | tela de front | as rotas existem; os quatro quadros (série, resumo, console, contagem) são o contrato da página do nó |
+## 8. Defeito encontrado no caminho: o modo global vazando entre classes de teste
+
+`NetworkStorageResultAcceptanceTests.oDespachoEnfileiraOPutParaADesignacaoPendente` falhava em cerca
+de **uma a cada três** rodadas da suíte completa, sempre passando isolado. A causa foi medida, não
+suposta: nos modos `DEGRADED` e `EMERGENCY` o despacho não designa nada (`dispatchLimit = 0`), e o
+`network_state` — estado **global** da rede — é deixado nesses modos por outras classes e **não** era
+limpo pelo `setUp` do teste de Storage. A tarefa ficava com `assigned_node_id` nulo com o nó certo
+elegível, e o resultado dependia de qual classe rodou antes.
+
+O `setUp` passa a limpar `network_state`, como `NetworkTasksTests` e `NetworkModesTests` já faziam.
+**Prova discriminante:** `NetworkTasksTests` + `NetworkStorageResultAcceptanceTests` na mesma JVM —
+sem a limpeza **falha**, com a limpeza **passa**. O `network_state` é a segunda tabela global do
+módulo que os testes precisam zerar (a primeira foi o catálogo de conteúdo, §6.8).
