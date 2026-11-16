@@ -495,6 +495,25 @@ public class StorageCatalogService {
 	}
 
 	/**
+	 * O corpo guardado por <b>este</b> nó, no disco dele ({@code rede.storage.node-body-root}),
+	 * <b>sem</b> cair para a raiz do Control Plane.
+	 *
+	 * <p>É o que a varredura relê quando a cópia pertence ao nó local. Sem ele, a varredura só
+	 * conferia a réplica 0: um arquivo trocado no diretório do nó continuava contando como cópia
+	 * confirmada, e o catálogo prometia durabilidade que não tinha.</p>
+	 *
+	 * <p>Falha ao abrir é 410, como na réplica 0: o catálogo diz que existe e o disco não tem —
+	 * divergência de metadado, não "não existe".</p>
+	 */
+	public InputStream openNodeBody(String objectId) {
+		if (nodeBodies == null || !nodeBodies.has(objectId)) {
+			throw new ApiException(410, "STORAGE_BODY_MISSING",
+				"O catalogo registra a copia neste no, mas o corpo nao esta no disco dele.");
+		}
+		return openVerified(nodeBodies.pathOf(objectId), catalog.findById(objectId));
+	}
+
+	/**
 	 * Abre o corpo depois de conferir que ele tem o tamanho que o catálogo promete.
 	 *
 	 * <p>O download responde com o {@code Content-Length} medido no upload. Servir um arquivo

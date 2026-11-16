@@ -344,7 +344,7 @@ de navegador, e a credencial é conferida no controller (fail-closed, como `obje
 | item | por quê |
 |---|---|
 | o Control Plane **ler** o inventário de outro nó | o CP não inicia conexão para o nó (NAT; o brief proíbe cadastrar endereço). Quem chama é o nó, na própria URL do CP, e é o CP que responde |
-| a varredura reler o corpo do nó local usando este inventário | o inventário já sabe o dono do disco; ligar isso ao `StorageScrubber` é a próxima rodada, não esta |
+| ~~a varredura reler o corpo do nó local~~ | entregue no §5.7 |
 | poda automática por colocação | apagar disco de quem contribui é ato de operador, com o número na mão (§5.1, mesmo critério do healing) |
 
 **Verificação:** `NodeStorageInventoryTests` **11** (conferido, ausente, designação pendente com
@@ -353,4 +353,40 @@ credencial legível anula o nó, sem instalação é 409) e `NetworkStorageInven
 rota real (órfão + poda seca, poda real preservando o colocado, outro nó 403, sem chave 401).
 Mutações: poda apagando divergente, sem checagem de dono, órfão incluindo o colocado, `dryRun`
 ignorado, digest não conferido, credencial legível aceita, purge fora do interceptor — **7 de 7
+derrubam**.
+
+## 5.7 A varredura relê também o corpo do nó local
+
+O §5.6 fez o processo saber de quem é o disco (`NodeBodyStore.ownerNodeId()`). Antes disso o
+`StorageScrubber` só relia a réplica 0, e isso deixava um ponto cego: objeto replicado para o nó
+local podia ser **trocado no disco dele** e a varredura continuava dizendo "conferido". O catálogo
+prometia uma durabilidade que o arquivo não tinha.
+
+Agora a varredura percorre as cópias confirmadas e relê **só** as que estão no disco desta
+instalação:
+
+| cópia | relida? | por quê |
+|---|---|---|
+| réplica 0 (raiz do Control Plane) | sim, por `openReplicaZeroBody` | é o arquivo do upload, nesta máquina |
+| colocação cujo `nodeId` é o dono deste disco | sim, por `openNodeBody` | o diretório do nó local é local |
+| qualquer outro nó | **não** | o CP não inicia conexão para o nó (NAT; o brief proíbe cadastrar endereço) |
+
+O `openNodeBody` é simétrico ao `openReplicaZeroBody`: abre **só** o arquivo do diretório do nó
+(`rede.storage.node-body-root`), **sem** cair para a raiz do CP. Sem essa separação, um corpo da
+raiz esconderia a troca no diretório do nó — o mesmo sumiço-da-réplica-0 que o §5.5 já tinha
+fechado do outro lado.
+
+`bodiesRelidos` conta **uma leitura por cópia relida**. Antes o laço percorria todas as cópias OK e
+relia o mesmo arquivo local para cada uma, contando N leituras de um arquivo só; e com a raiz
+vazia acusava de divergente a cópia de outro nó que estava íntegra.
+
+Quando este processo **não** guarda corpo de nó (`node-body-root` ausente), o `NodeBodyStore` é
+nulo, `ownerNodeId()` não entra na conta e a varredura relê só a réplica 0 — comportamento
+declarado, não uma dedução.
+
+**Verificação:** `StorageScrubberReadBackTests` **8**, sendo **3 novos**: corpo do nó local com
+digest diferente é reportado com a `replica`/`nodeId` certos; corpo do nó local intacto não vira
+acusação; cópia de **outro** nó não é relida como se fosse deste disco. Mutações: nunca reler o
+corpo do nó local (volta ao ponto cego), reler qualquer cópia como local, `openNodeBody` caindo para
+a raiz do CP, dono do disco ignorado, contagem de `bodiesRelidos` sem a cópia do nó — **5 de 5
 derrubam**.
