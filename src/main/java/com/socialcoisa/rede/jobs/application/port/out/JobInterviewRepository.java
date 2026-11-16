@@ -12,7 +12,7 @@ public interface JobInterviewRepository {
 
 	Optional<JobInterview> findById(String id);
 
-	/** A entrevista que está valendo para a candidatura (no máximo uma, pelo índice único). */
+	/** A entrevista que está valendo para a candidatura (no máximo uma agendada, pelo índice único). */
 	Optional<JobInterview> findScheduledByApplication(String applicationId);
 
 	List<JobInterview> findByApplication(String applicationId);
