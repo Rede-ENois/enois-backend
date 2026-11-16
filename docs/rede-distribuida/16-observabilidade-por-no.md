@@ -286,6 +286,8 @@ derrubam**.
 | retenção longa / exportação do console | é janela de tela; para histórico existe o log do próprio nó, na máquina, e a auditoria do Control Plane |
 | métricas de processo (heap, GC, threads) do nó | o nó reporta o que mede no host (CPU, memória, disco, tarefas). Heap/GC exigiriam o runtime expor métricas próprias |
 | tela de front | as rotas existem; os quatro quadros (série, resumo, console, contagem) são o contrato da página do nó |
+| topologia com aresta **entre nós** | não há registro de origem em tarefa nem de link entre máquinas; o §11 entrega o vínculo nó → domínio e recusa inventar o resto |
+
 ## 8. Defeito encontrado no caminho: o modo global vazando entre classes de teste
 
 `NetworkStorageResultAcceptanceTests.oDespachoEnfileiraOPutParaADesignacaoPendente` falhava em cerca
@@ -369,3 +371,62 @@ Decisões:
 com um segundo nó de números diferentes para que a leitura seja do nó pedido; a listagem traz a
 contribuição de cada nó, com o parado em zero). Mutações: `tasksDone` sempre zero; falhas somadas em
 `tasksDone`; e a contribuição lida do primeiro nó da lista — **3 de 3 derrubam**.
+## 11. A topologia como dado: domínios, membros e conexões declaradas
+
+O brief §8.5 pede uma **visualização** da infraestrutura: nós por tipo, região e domínio, o estado de
+cada um e as conexões entre eles. O painel lista nós um a um e agrega por região num mapa de
+contagem — nada que uma tela de grafo possa desenhar sem reconstruir a topologia somando números
+soltos, e o servidor é quem sabe quais nós compartilham um domínio de falha.
+
+`GET /admin/network/nodes/topology` (admin) devolve:
+
+| parte | conteúdo |
+|---|---|
+| `generatedAt` | quando o quadro foi medido — *vivo* é relativo a este instante |
+| `nodes[]` | `id`, `name`, `status`, `alive`, `quarantined`, `profiles`, `region`, `domain`, `health` |
+| `domains[]` | um por domínio de falha: `region` (normalizada), `outOfService`, `nodes`, `alive` |
+| `declaredConnections` | arestas nó → domínio que o cadastro declara |
+| `limit`, `truncated` | teto de 200 nós, o mesmo da listagem; `truncated` diz se há nós fora do quadro |
+
+### O que a rede pode afirmar — e o que não pode
+
+O único **domínio de falha maior que o nó** no cadastro é a **região** — a mesma que a colocação do
+Storage usa (fase 4) e que a evacuação consulta. Host físico, rack, operadora e link não estão
+registrados em lugar nenhum; derivá-los do nome, do IP ou do dono seria deduzir topologia a partir
+de texto livre, e um domínio errado faz a rede acreditar numa redundância que não existe.
+
+**Quem entregou trabalho a quem também não existe:** a tarefa guarda o nó *designado*, não o de
+origem. As conexões entregues são as **declaradas** — nó pertence a um domínio. Não há aresta
+"nó A → nó B" porque não há registro de tráfego entre eles.
+
+### Decisões
+
+- **Domínio = região normalizada.** `"Sudeste"`, `"sudeste"` e `"SUDESTE"` são o mesmo domínio: a
+  `NetworkRegions.normalize`, a mesma função da colocação e da evacuação. Três réguas diferentes para
+  "a mesma região" seriam três respostas para o mesmo incidente.
+- **Nó sem região cai num domínio próprio (`""`)**, distinto de qualquer região real. Não há como
+  afirmar que dois nós sem região sejam o mesmo domínio; o vazio diz só "não declarado".
+- **`declaredConnections` conta só quem declarou região.** É o número de arestas que existem. Um nó
+  sem região não tem aresta para lugar nenhum — contá-lo seria afirmar um vínculo que o cadastro não
+  tem.
+- **Vivo é medido, status é administrativo.** `alive` usa a janela de 180 s do scheduler (ou
+  `rede.network.node-stale-seconds`, a mesma configuração), relativa a `generatedAt`. Um nó `ACTIVE`
+  sem heartbeat aparece `ACTIVE` **e** `alive=false`: a máquina parada de responder e o nó tirado de
+  serviço por decisão são fatos diferentes, e o mapa precisa dos dois.
+- **`outOfService` é do domínio, não do nó.** A região evacuada continua com seus nós e com os vivos
+  contados; o que ela não faz é atender. Fundir "a máquina caiu" com "a região inteira foi evacuada
+  por decisão" esconderia a diferença.
+- **`health` vem no nó** (as quatro dimensões do §6.8), para a tela colorir sem uma segunda chamada
+  por nó.
+- **A rota não desenha.** Posição, cor e interação são decisão de front; calcular layout no backend
+  amarraria a tela ao servidor sem necessidade.
+- **Ordem estável.** Domínios por número de membros (desc), empate pela chave — dois quadros sem
+  mudança de dado saem na mesma ordem, e o diff da tela é o que mudou na rede.
+
+**Verificação:** 3 testes novos em `NetworkNodesTests` (agrupamento por domínio com grafias
+diferentes e domínio vazio separado; região evacuada marcada com o nó ainda vivo; nó `ACTIVE` sem
+heartbeat com `alive=false`) e a rota exige admin — 37 no total. Mutações: fundir o domínio vazio
+com região real; contar quem **não** tem região em `declaredConnections`; `alive` ignorando a janela;
+`outOfService` ignorado — **4 de 4 derrubam** (a do `declaredConnections` só passou a derrubar depois
+de o teste ganhar um terceiro nó sem região: com 2 de cada lado, contar o grupo errado dava o mesmo
+número).
