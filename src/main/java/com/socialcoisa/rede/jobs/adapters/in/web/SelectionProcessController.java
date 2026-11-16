@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -21,6 +22,7 @@ import com.socialcoisa.rede.jobs.application.CandidateTriageService;
 import com.socialcoisa.rede.jobs.application.JobCommandAuthorization;
 import com.socialcoisa.rede.jobs.application.JobService;
 import com.socialcoisa.rede.jobs.application.SelectionProcessService;
+import com.socialcoisa.rede.jobs.domain.ApplicationEvaluation;
 import com.socialcoisa.rede.jobs.domain.CandidateScore;
 import com.socialcoisa.rede.jobs.domain.JobApplication;
 import com.socialcoisa.rede.jobs.domain.SelectionStage;
@@ -229,6 +231,26 @@ class SelectionProcessController {
 		return NoteView.of(process.addNote(jobId, applicationId, user.id().value(), body.body()));
 	}
 
+	// ---------- Avaliações internas ----------
+
+	@GetMapping("/applications/{applicationId}/evaluations")
+	List<EvaluationView> evaluations(@PathVariable String jobId, @PathVariable String applicationId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return process.evaluations(jobId, applicationId, user.id().value()).stream()
+			.map(EvaluationView::of)
+			.toList();
+	}
+
+	@PutMapping("/applications/{applicationId}/evaluations")
+	EvaluationView evaluate(@PathVariable String jobId, @PathVariable String applicationId,
+			@RequestBody EvaluationRequest body,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return EvaluationView.of(process.evaluate(jobId, applicationId, user.id().value(), body.criteria(),
+			body.parsedVerdict(), body.summary()));
+	}
+
 	// ---------- Contratos ----------
 
 	record StageRequest(String name) {
@@ -320,6 +342,30 @@ class SelectionProcessController {
 			return new MovementView(movement.id() == null ? null : String.valueOf(movement.id()),
 				String.valueOf(movement.applicationId()), movement.fromStageId(), movement.toStageId(),
 				movement.kind().name(), movement.actorId(), movement.note(), movement.movedAt().toString());
+		}
+	}
+
+	record EvaluationView(String id, String applicationId, String authorId, Map<String, Integer> criteria,
+			String verdict, String summary, String createdAt, String updatedAt) {
+
+		static EvaluationView of(ApplicationEvaluation evaluation) {
+			return new EvaluationView(evaluation.id() == null ? null : String.valueOf(evaluation.id()),
+				String.valueOf(evaluation.applicationId()), evaluation.authorId(), evaluation.criteria(),
+				evaluation.verdict().name(), evaluation.summary(),
+				evaluation.createdAt().toString(), evaluation.updatedAt().toString());
+		}
+	}
+
+	record EvaluationRequest(Map<String, Integer> criteria, String verdict, String summary) {
+
+		ApplicationEvaluation.Verdict parsedVerdict() {
+			try {
+				return ApplicationEvaluation.Verdict.valueOf(verdict == null ? "" : verdict.trim());
+			}
+			catch (IllegalArgumentException exception) {
+				throw new com.socialcoisa.rede.shared.web.ApiException(422, "EVALUATION_VERDICT_INVALID",
+					"O veredito precisa ser STRONG_YES, YES, MAYBE ou NO.");
+			}
 		}
 	}
 
