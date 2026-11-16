@@ -51,6 +51,8 @@ reprovada não se move mais.
 | `GET /jobs/{jobId}/process/applications/{applicationId}/movements` | dono | histórico em ordem |
 | `GET /jobs/{jobId}/process/applications/{applicationId}/notes` | dono | notas internas |
 | `POST /jobs/{jobId}/process/applications/{applicationId}/notes` | dono | cria nota (`{"body": ...}`) |
+| `GET /jobs/{jobId}/process/candidates` | equipe (VIEW_CANDIDATES) | fila de triagem com score explicável, ordenada |
+| `POST /jobs/{jobId}/process/applications/batch-move` | equipe (TRIAGE) | move/reprova várias de uma vez, com desfecho por item |
 | `GET /jobs/recruitment` | sessão | Central: minhas vagas com o funil de cada uma |
 
 "Todo o fluxo de etapas" é configurável: criar, renomear, apagar (respeitando candidatos na
@@ -102,7 +104,10 @@ quem não tem vaga. Reativar devolve o acesso ao que já estava lá.
 
 ## Autorização (no backend)
 
-- Toda rota de processo exige sessão e **o autor da vaga**; terceiro recebe 403 `NOT_OWNER`.
+- Toda rota de processo exige sessão e quem comanda a vaga: **o autor** sempre e, quando a vaga
+  nasceu numa página, a **equipe de recrutamento** dela conforme o papel
+  (ver [COMPANY_PAGES.md](COMPANY_PAGES.md)). Quem não comanda recebe 403 `NOT_OWNER` — a mesma
+  recusa de antes, então nenhuma resposta nova vaza.
 - A candidatura é sempre resolvida **dentro da vaga da URL**: id de candidatura de outra vaga
   responde 404 `APPLICATION_NOT_FOUND`, sem vazar entre processos.
 - A Central lista apenas as vagas cuja autoria é de quem está na sessão — não há parâmetro de
@@ -155,11 +160,127 @@ quem não tem vaga. Reativar devolve o acesso ao que já estava lá.
   `INVALID_CURSOR`;
 - terceiro recebe 403 `NOT_OWNER` e sem sessão 401.
 
+## Quem conduz a seleção
+
+Duas axes de papel convivem e não se confundem:
+
+- **Papel na página** (`CompanyRole`: OWNER/ADMIN/EDITOR/RECRUITER) — vale para agir *em nome
+  dela*: publicar vaga exige RECRUITER ou superior. Não conduz processo por si só.
+- **Equipe de recrutamento** (`recruitment_members`, V328) — vale para conduzir a seleção da
+  organização: ORG_ADMIN, RECRUITMENT_MANAGER, RECRUTER… (ver abaixo). O **dono da página vale
+  ORG_ADMIN sem registro**; terceiro sem registro não ganha nada.
+
+| Papel | O que pode |
+|---|---|
+| `ORG_ADMIN` | tudo: configurar etapas, triar, ver candidatos, entrevistas, gerir a equipe |
+| `RECRUITMENT_MANAGER` | configurar etapas, triar, ver candidatos, entrevistas |
+| `RECRUITER` | triar, ver candidatos, entrevistas |
+| `INTERVIEWER` | ver candidatos e entrevistas (sem mover) |
+| `OBSERVER` | só ver candidatos |
+
+Rotas da equipe: `GET/POST /empresas/{companyId}/recrutamento/equipe`,
+`PATCH/DELETE .../equipe/{userId}`, `GET /empresas/{companyId}/recrutamento/eu` (papel próprio;
+`null` para forasteiro). Gerir a equipe exige ORG_ADMIN (`RECRUITMENT_FORBIDDEN`).
+
+Publicar vaga continua exigindo papel de página (RECRUITER+): **publicar ≠ conduzir**, e a
+equipe de recrutamento não concede papel na página.
+
+## Modelos de processo seletivo
+
+Biblioteca **pessoal** de fluxos: quem recruta guarda os modelos que usa e aplica por cópia
+numa vaga — editar o modelo depois não muda vaga já configurada, e o modelo não é da página
+(é de quem o criou; aplicar numa vaga continua exigindo CONFIGURE_PROCESS dela).
+
+| Rota | O que faz |
+|---|---|
+| `GET /jobs/recruitment/templates` | os modelos de quem está na sessão |
+| `POST /jobs/recruitment/templates` | cria modelo (`{"name", "stages":[...]}`) |
+| `DELETE /jobs/recruitment/templates/{templateId}` | apaga (só o dono) |
+| `POST /jobs/{jobId}/process/templates/apply` | aplica o modelo na vaga (semeia as etapas na ordem) |
+
+Recusas explícitas: nome repetido na biblioteca 409 `TEMPLATE_NAME_TAKEN`, modelo sem etapa 422
+`TEMPLATE_STAGES_REQUIRED`, etapa repetida 422 `TEMPLATE_STAGE_DUPLICATED`, vaga com fluxo já
+configurado 409 `PIPELINE_ALREADY_CONFIGURED` (quem quer trocar apaga as etapas vazias — a regra
+de etapa ocupada protege quem está no pipeline).
+
+## Ciclo de vida da vaga
+
+- **Prazo de candidaturas** (`applicationDeadline`, V329): opcional na criação e ajustável por
+  `PUT /jobs/{jobId}/deadline` (corpo nulo/vazio remove). Vaga aberta com prazo vencido recusa a
+  candidatura com **409 `APPLICATION_DEADLINE_PASSED`** — estado distinto de vaga encerrada
+  (`JOB_CLOSED`), para o candidato saber o que aconteceu. A checagem é no servidor, no mesmo
+  lock do apply.
+- **Reabrir**: `POST /jobs/{jobId}/reopen` devolve a vaga encerrada a OPEN preservando
+  candidaturas e fluxo; reabrir vaga aberta é 409 `JOB_NOT_CLOSED` (erro de estado, não
+  sucesso silencioso). Quem comanda a vaga reabre: o autor sempre e, na vaga de página, quem
+  tem CONFIGURE_PROCESS (a equipe de recrutamento pode encerrar e reabrir; a mensagem de
+  recusa segue a de antes, `NOT_OWNER`).
+- **Pessoa transita**: recrutar é estado, não identidade — desligar "Sou recrutador/a" fecha a
+  Central para quem não tem vaga, mas não apaga modelo, vaga nem histórico; religar devolve
+  tudo. Quem recruta continua podendo se candidatar a vagas de outras pessoas normalmente.
+
+## Triagem com score explicável
+
+O score de uma candidatura vai de 0 a 100 e **todo ponto vem de um motivo escrito**
+(`CandidateScore`, em `jobs/domain`). Ele não é uma caixa-preta: a resposta traz a lista de
+componentes, cada um com código, texto e pontos.
+
+| Componente | Peso | Quando existe |
+|---|---|---|
+| `SKILLS` | 75 | a vaga lista requisitos **e** o retrato do candidato tem habilidades |
+| `IDENTITY` | 25 | sempre (é um sim/não do retrato) |
+
+Como no `JobCompatibility`, o peso só considera os sinais que existem, e o total é normalizado
+sobre o peso dos sinais presentes. Regras que fazem o número ser honesto:
+
+- **É o retrato congelado que pontua**, não o perfil de hoje: o recrutador decide com o que a
+  pessoa apresentou quando se candidatou.
+- **Vaga que não diz o que pede não gera score**: sem requisito no anúncio, `available = false`
+  e `total = 0` com o motivo "identidade verificada"/"não verificada". A tela diz "sem dados para
+  comparar" — nunca "0% compatível", porque não houve comparação.
+- **O motivo cita o que casou**: "2 de 3 requisitos da vaga: Java, Spring".
+- **O score ordena, não reprova.** Recusa continua sendo ato humano, com retorno escrito.
+- **Não entram idade, gênero, local de nascimento, foto nem qualquer atributo protegido**: a
+  comparação é sobre requisito declarado, verificação e nada mais. Reputação e faixa salarial
+  ficam de fora de propósito — a primeira é histórico da conta, não competência; a segunda o
+  perfil não declara.
+
+Endpoints:
+
+| Rota | Quem | O que faz |
+|---|---|---|
+| `GET /jobs/{jobId}/process/candidates?limit=` | VIEW_CANDIDATES | candidaturas com score, da mais aderente para a menos; sem score vai ao fim |
+| `POST /jobs/{jobId}/process/applications/batch-move` | TRIAGE | `{"applicationIds":[...],"stageId","kind","note"}` |
+
+O card do board (`GET /jobs/{jobId}/process`) já vem com `score` — não há segunda chamada para
+mostrar a nota na coluna.
+
+### Ações em lote
+
+Um recrutador triagem 30 candidaturas, não uma. O lote aceita até 200 ids (acima disso é 422
+`BATCH_TOO_LARGE` — seleção errada não se adivinha), descarta ids repetidos e devolve **o
+desfecho de cada item**, não um "ok" global:
+
+```json
+[{"applicationId":"12","movement":{...},"errorCode":null,"errorMessage":null},
+ {"applicationId":"13","movement":null,"errorCode":"ALREADY_IN_STAGE","errorMessage":"..."}]
+```
+
+Recusas antes de gravar qualquer coisa (nada é movido, erro explícito): lista vazia 400
+`NO_APPLICATIONS_SELECTED`, candidatura de outra vaga 404 `APPLICATION_NOT_FOUND`, candidatura
+já reprovada 409 `APPLICATION_REJECTED`, reprovação sem motivo 400 `FEEDBACK_REQUIRED`, quem
+pede sem TRIAGE 403 `NOT_OWNER`.
+
+Cada item roda em **transação própria**: o que entrou ficou gravado mesmo que o próximo seja
+recusado no meio do lote. O caminho de cada item é o mesmo do movimento individual — nenhuma
+regra de etapa é reimplementada no lote.
+
 ## Fora deste escopo (próximos passos)
 
 Questionários, avaliações por critério, slot de entrevista escolhido pelo candidato, banco de
-talentos, papéis de equipe (Administrador/Recrutador/Entrevistador/Observador) e a UI no
-design system. A fundação acima é a que esses itens vão usar — não há segunda base a criar.
+talentos e a UI no design system. A fundação acima é a que esses itens vão usar — não há
+segunda base a criar.
+
 
 A UI do "Sou recrutador/a" no front (`@rede-enois/design-system`) ainda não foi entregue: o
 backend já aceita, guarda e aplica a declaração, mas a tela que a liga vem no incremento do

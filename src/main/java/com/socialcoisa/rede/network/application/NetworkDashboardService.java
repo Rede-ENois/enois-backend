@@ -13,6 +13,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
+import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
+import com.socialcoisa.rede.network.domain.TaskStatus;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NetworkRegions;
 import com.socialcoisa.rede.network.domain.NodeProfile;
@@ -42,11 +44,14 @@ public class NetworkDashboardService {
 
 	private final NetworkNodeRepository nodes;
 	private final NetworkRegionService regions;
+	private final NetworkTaskRepository tasks;
 	private final Clock clock;
 
-	NetworkDashboardService(NetworkNodeRepository nodes, NetworkRegionService regions, Clock clock) {
+	NetworkDashboardService(NetworkNodeRepository nodes, NetworkRegionService regions, NetworkTaskRepository tasks,
+			Clock clock) {
 		this.nodes = nodes;
 		this.regions = regions;
+		this.tasks = tasks;
 		this.clock = clock;
 	}
 
@@ -126,7 +131,7 @@ public class NetworkDashboardService {
 		return new Dashboard(total, active, unavailable, quarantined, alive, degraded, declaredCores,
 			declaredMemoryMb, freeSlots, cpuSamples == 0 ? null : cpuSum / cpuSamples,
 			cpuSamples, memorySamples == 0 ? null : memorySumMb / memorySamples, memorySamples,
-			byRegion, byProfile, topRuntimes, evacuated);
+			byRegion, byProfile, topRuntimes, evacuated, load(all));
 	}
 
 	/**
@@ -147,6 +152,72 @@ public class NetworkDashboardService {
 	public record Dashboard(int total, int active, int unavailable, int quarantined, int alive, int degraded,
 			int declaredCpuCores, int declaredMemoryMb, int freeSlots, Double avgCpuPercent, int cpuSamples,
 			Integer avgMemoryMb, int memorySamples, Map<String, Integer> byRegion, Map<String, Integer> byProfile,
-			Map<String, Integer> runtimeVersions, List<String> outOfServiceRegions) {
+			Map<String, Integer> runtimeVersions, List<String> outOfServiceRegions, Distribution load) {
+	}
+
+	/**
+	 * Como o trabalho está distribuído entre os nós — o §8.4 do brief (cooperativismo global).
+	 *
+	 * <p>A pergunta que estes números respondem: <b>a rede está distribuindo o processamento ou o
+	 * Master absorve o que as réplicas poderiam fazer?</b> Por isso cada nó vem com o que executou,
+	 * o que falhou e quantas tarefas estão na mão dele <b>agora</b> — e o agregado traz
+	 * {@code concentratedShare}, a fatia do nó que mais executou.</p>
+	 *
+	 * <p>Quando não há o que concluir, o relatório diz isso em vez de mostrar zero: sem tarefa
+	 * concluída, {@code concentratedShare} é {@code null} — "nenhum trabalho" e "todo o trabalho num
+	 * nó só" seriam lidos iguais se ambos fossem 0 ou 1. Do mesmo jeito, {@code singleNode} só é
+	 * verdadeiro com pelo menos duas réplicas ativas: com uma só, a fatia de 100% não é concentração,
+	 * é a única opção.</p>
+	 *
+	 * @param nodes          um registro por nó listado no painel, incluindo os que nunca executaram
+	 * @param totalDone      tarefas concluídas em toda a rede (soma do que foi contado por nó)
+	 * @param totalFailed    falhas definitivas por nó (idem)
+	 * @param unassigned     concluídas sem nó no registro — contam para o total, não para um nó
+	 * @param concentratedShare fatia do nó com mais conclusões; {@code null} sem conclusão alguma
+	 * @param singleNode     a maior fatia é de um nó com 2+ réplicas ativas: a distribuição não ocorre
+	 */
+	public record Distribution(List<NodeLoad> nodes, long totalDone, long totalFailed, long unassigned,
+			Double concentratedShare, boolean singleNode) {
+	}
+
+	/**
+	 * O que um nó executou. {@code runningNow} é o último reportado no heartbeat (campo cru) e pode
+	 * ser {@code null} — runtime antigo não manda, e nulo não é "zero tarefas rodando".
+	 */
+	public record NodeLoad(String nodeId, String displayName, String status, long done, long failed,
+			Integer runningNow) {
+	}
+
+	/**
+	 * Monta a distribuição. Só os nós que o painel lista entram: um nó fora do teto de listagem não
+	 * é "nó com zero tarefas", e somá-lo esconderia trabalho que existe.
+	 */
+	private Distribution load(List<NetworkNode> all) {
+		List<String> ids = all.stream().map(NetworkNode::id).toList();
+		Map<String, Long> done = ids.isEmpty() ? Map.of() : tasks.countDoneByNode(ids);
+		Map<String, Long> failed = ids.isEmpty() ? Map.of() : tasks.countFailedByNode(ids);
+		long totalDone = 0;
+		long totalFailed = 0;
+		List<NodeLoad> perNode = new java.util.ArrayList<>(all.size());
+		for (NetworkNode node : all) {
+			long concluidas = done.getOrDefault(node.id(), 0L);
+			totalDone += concluidas;
+			long falhas = failed.getOrDefault(node.id(), 0L);
+			totalFailed += falhas;
+			// observedRunningTasks cru, não runningTasks(): o getter converte nulo em zero, e "não
+			// reportou" não é "nenhuma tarefa rodando" — na tela os dois casos são decisões diferentes.
+			perNode.add(new NodeLoad(node.id(), node.displayName(), node.status().name(), concluidas, falhas,
+				node.observedRunningTasks()));
+		}
+		// Concluídas que não caíram em nenhum nó: o total da rede é do catálogo inteiro, e a
+		// diferença para o que foi somado por nó é justamente o que não tem dono no registro.
+		long todasConcluidas = tasks.countByStatus(TaskStatus.DONE);
+		long semNo = Math.max(0, todasConcluidas - totalDone);
+		long maior = perNode.stream().mapToLong(NodeLoad::done).max().orElse(0);
+		// Sem conclusão alguma, "fatia" não existe: zero sobre zero não é percentual.
+		Double fatia = totalDone == 0 ? null : Math.round((maior * 1000.0 / totalDone)) / 10.0;
+		long ativas = perNode.stream().filter(n -> "ACTIVE".equals(n.status())).count();
+		boolean concentrado = fatia != null && ativas >= 2 && maior > 0 && maior == totalDone;
+		return new Distribution(List.copyOf(perNode), todasConcluidas, totalFailed, semNo, fatia, concentrado);
 	}
 }

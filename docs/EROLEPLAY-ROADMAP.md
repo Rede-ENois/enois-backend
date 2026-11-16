@@ -121,8 +121,10 @@ explícito, nunca com comportamento genérico inventado.
 
 ### Fase 9 — front
 
-- [ ] Identidade visual própria (tema por campanha), componentes no design system
-- [ ] Telas de campanha, mesa, ficha, dados
+- [x] Identidade visual própria (tema por campanha), componentes no design system (PR #248,
+  mergeada; release v0.37.0 contém os componentes de roleplay)
+- [x] Telas de campanha, mesa, ficha, dados (PR #898 do front, em revisão: `/roleplay` e
+  `/roleplay/$slug` com diretorio, mesas, ficha, dados, chat e mundo)
 
 ### Fase 10 — endurecimento
 

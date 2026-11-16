@@ -75,6 +75,18 @@ interface SpringDataNetworkTaskJpaRepository extends JpaRepository<NetworkTaskJp
 			+ "and t.assignedNodeId in :nodeIds group by t.assignedNodeId")
 	List<Object[]> countDoneByNode(@Param("nodeIds") Collection<String> nodeIds);
 
+	/**
+	 * Falhas definitivas por nó, na mesma forma: {@code [0] = assignedNodeId}, {@code [1] = count}.
+	 *
+	 * <p>Conta {@code FAILED} e {@code DEAD} juntos porque os dois são o fim do trabalho sem
+	 * resultado: {@code DEAD} é a mesma falha depois de esgotar as tentativas, e separar na tela o
+	 * erro que teve nova chance do que não teve esconderia o nó que erra sempre. Reprocessamento
+	 * ({@code requeue}) não entra: a tarefa continua viva e vai ser contada quando terminar.</p>
+	 */
+	@Query("select t.assignedNodeId, count(*) from NetworkTaskJpaEntity t "
+			+ "where t.status in ('FAILED', 'DEAD') and t.assignedNodeId in :nodeIds group by t.assignedNodeId")
+	List<Object[]> countFailedByNode(@Param("nodeIds") Collection<String> nodeIds);
+
 	@Query("select count(*) from NetworkTaskJpaEntity t join NetworkNodeJpaEntity n on n.id = t.assignedNodeId "
 			+ "where t.status = 'DISPATCHED' and t.claimExpiresAt > :now and n.status <> 'ACTIVE'")
 	long countOnNonOperatingNodes(@Param("now") Instant now);

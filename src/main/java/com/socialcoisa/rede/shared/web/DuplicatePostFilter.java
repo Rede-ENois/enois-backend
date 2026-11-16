@@ -1,6 +1,5 @@
 package com.socialcoisa.rede.shared.web;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -24,11 +23,8 @@ import com.socialcoisa.rede.shared.security.ClientIpResolver;
 import com.socialcoisa.rede.shared.security.Hashes;
 
 import jakarta.servlet.FilterChain;
-import jakarta.servlet.ReadListener;
 import jakarta.servlet.ServletException;
-import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
 
 /**
@@ -153,33 +149,6 @@ public class DuplicatePostFilter extends OncePerRequestFilter {
 	}
 
 	private record CachedResponse(int status, String contentType, byte[] body) {
-	}
-
-	/** Corpo lido uma vez e reapresentado ao controller (o InputStream do Servlet é de uso único). */
-	private static final class CachedBodyRequest extends HttpServletRequestWrapper {
-
-		private final byte[] body;
-
-		CachedBodyRequest(HttpServletRequest request, byte[] body) {
-			super(request);
-			this.body = body;
-		}
-
-		@Override
-		public ServletInputStream getInputStream() {
-			ByteArrayInputStream input = new ByteArrayInputStream(body);
-			return new ServletInputStream() {
-				@Override public boolean isFinished() { return input.available() == 0; }
-				@Override public boolean isReady() { return true; }
-				@Override public void setReadListener(ReadListener listener) { }
-				@Override public int read() { return input.read(); }
-			};
-		}
-
-		@Override
-		public java.io.BufferedReader getReader() {
-			return new java.io.BufferedReader(new java.io.InputStreamReader(getInputStream(), StandardCharsets.UTF_8));
-		}
 	}
 
 }

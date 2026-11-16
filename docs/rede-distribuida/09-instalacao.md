@@ -506,7 +506,7 @@ a fonte.
   `EDGE_DELIVER` (revalidação da entrada e veredicto de entrega conferido contra
   o snapshot do nó) e `API_REQUEST` (chamada à rota da lista **assinada**
   `allowedRoutes`, com o destino fora do payload e o resultado como evidência),
-  163 asserções em `scripts/tests/node-executor-test.sh`.
+  189 asserções em `scripts/tests/node-executor-test.sh` (12 asserções são do executor `OBJECT_PUT` do Storage, ver 13-storage-fase-3 §5.3).
   O **produtor** de `API_REQUEST` no lado do Control Plane também existe:
   `POST /admin/network/nodes/{nodeId}/api-request?route=<nome>` enfileira a task
   com alvo, conferindo o nome contra a mesma lista assinada que o nó recebe

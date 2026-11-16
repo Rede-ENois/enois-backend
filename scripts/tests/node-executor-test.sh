@@ -10,7 +10,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 for tool in bash head sed grep dirname pwd mkdir stat chmod awk printf cat rm mktemp wc sha256sum tr \
-            openssl sort paste base64 date mv df; do
+            openssl sort paste base64 date mv df cut; do
   location="$(command -v "$tool")"
   ln -s "$location" "$TMP/$tool" 2>/dev/null || true
 done
@@ -1397,5 +1397,93 @@ out=$(run_custom "$NA")
 assert_contains 'rota com vírgula na query é chamada com a query inteira' "$(cat "$TMP/curl-calls")" 'https://api.exemplo/x?ids=1,2'
 assert_contains 'a config com rota de query-string é aceita (linha canônica confere)' "$out" 'rota busca status=200'
 assert_not_contains 'e a config não é recusada por assinatura' "$out" 'assinatura da config não confere com o pino'
+
+# ------------------------------------------------- cenário: OBJECT_PUT (replica do Storage)
+# O Control Plane decide que o no guarda uma copia; o no PUXA o corpo, confere contra o
+# medido pelo CP e confirma. Antes deste executor o `*)` respondia DONE com eco do
+# idempotencyKey SEM BAIXAR NADA -- e o CP aceitava. Estes cenarios travam o caminho real.
+OBJ_BODY='corpo-do-objeto-1234567890'
+OBJ_SHA=$(printf '%s' "$OBJ_BODY" | sha256sum | cut -d' ' -f1)
+OBJ_BYTES=${#OBJ_BODY}
+OBJ_CONFIG='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":5,"ttlSeconds":300,"configVersion":9,"profiles":["NODE_STORAGE"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["OBJECT_PUT"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 9 '["NODE_STORAGE"]' 4 8192 51200 100 '["OBJECT_PUT"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+OBJ_TASK='{"tasks":[{"taskId":"tk_obj1","type":"OBJECT_PUT","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"storage:sob_x:1","payload":"{\"objectId\":\"sob_x\",\"bucket\":\"fotos\",\"key\":\"a.jpg\",\"sha256\":\"'"$OBJ_SHA"'\",\"bytes\":'"$OBJ_BYTES"',\"replica\":1}","dataClass":"PUBLIC_MEDIA"}],"mode":"NORMAL","serverTime":"now"}'
+OBJ_TASK_CORRUPT='{"tasks":[{"taskId":"tk_obj2","type":"OBJECT_PUT","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"storage:sob_y:1","payload":"{\"objectId\":\"sob_y\",\"bucket\":\"fotos\",\"key\":\"b.jpg\",\"sha256\":\"'$(printf 'a%.0s' $(seq 1 64))'\",\"bytes\":5,\"replica\":1}","dataClass":"PUBLIC_MEDIA"}],"mode":"NORMAL","serverTime":"now"}'
+
+# curl do Storage: config assinada do cenario + corpo no GET + recibo no POST de confirmacao.
+make_curl_storage() {
+  cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+outfile=""
+prev=""
+for a in "\$@"; do
+  [[ "\$prev" == "-o" ]] && outfile="\$a"
+  prev="\$a"
+done
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '${OBJ_CONFIG_ATUAL:-$OBJ_CONFIG}' ;;
+  */network/tasks/next) printf '%s' '${TASK_NEXT_BODY:-$OBJ_TASK}' ;;
+  */network/storage/objects/*/replica) printf '%s' '{"objectId":"sob_x","replica":1,"state":"OK"}' ;;
+  */network/storage/objects/*) if [[ -n "\$outfile" ]]; then printf '%s' "$OBJ_BODY" > "\$outfile"; exit 0; fi; exit 22 ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+  chmod +x "$TMP/curl"
+}
+
+# 1. caminho feliz: baixa, confere, confirma, DONE com o que o NO mediu.
+TASK_NEXT_BODY="$OBJ_TASK" make_curl_storage
+: > "$TMP/curl-calls"
+out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SECONDS=1 \
+  /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true)
+assert_contains 'OBJECT_PUT executa de verdade (nao cai no eco)' "$out" 'DONE tk_obj1'
+assert_contains 'o corpo e BAIXADO no Control Plane' "$(cat "$TMP/curl-calls")" '/network/storage/objects/sob_x'
+assert_contains 'a replica e confirmada com o medido pelo no' "$(cat "$TMP/curl-calls")" '"sha256":"'"$OBJ_SHA"'"'
+# No corpo do resultado o output vai como STRING JSON: o escape é o formato do contrato.
+assert_contains 'o resultado leva o sha e os bytes medidos' "$(cat "$TMP/curl-calls")" "\\\"bytes\\\":$OBJ_BYTES,\\\"sha256\\\":\\\"$OBJ_SHA"
+assert_not_contains 'a resposta e DONE sem o eco de ciclo de vida' "$out" '"output":"{\"echo\"'
+
+# O corpo FICA no disco do no: antes o executor baixava, confirmava e apagava -- o catalogo
+# dizia "copia OK aqui" e o arquivo nao existia em lugar nenhum.
+assert_eq 'o corpo fica guardado no disco do no' "$OBJ_BODY" "$(cat "$NH/objects/sob_x.bin" 2>/dev/null || echo AUSENTE)"
+assert_eq 'e nenhum temporario sobra no diretorio de corpos' '0' \
+  "$(ls "$NH/objects" 2>/dev/null | grep -c '^object-put\.' || true)"
+# O teto declarado mede o que o no de fato guarda: objects/ tem de entrar na conta. Sem isso o
+# no dizia usar 2 MB enquanto guardava 40 GB de replica local.
+conteudo=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo content_bytes)" 2>/dev/null | tail -n 1)
+assert_eq 'o tamanho guardado entra no estado de conteudo do no' "$OBJ_BYTES" "$conteudo"
+
+# 2. corpo divergente: NAO confirma e NAO diz DONE.
+TASK_NEXT_BODY="$OBJ_TASK_CORRUPT" make_curl_storage
+: > "$TMP/curl-calls"
+out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SECONDS=1 \
+  /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true)
+assert_contains 'corpo divergente falha com motivo proprio' "$out" 'STORAGE_REPLICA_MISMATCH'
+assert_not_contains 'e nada e confirmado ao CP' "$(cat "$TMP/curl-calls")" '/replica'
+
+# 3. teto de disco menor que o objeto: falha antes de confirmar.
+# diskMb=0 é "sem teto declarado" no módulo (não é "zero bytes"): o cenário preciso usa um
+# teto de 1MB, que o objeto de 26 bytes cabe -- então um objeto grande é o que força a falha.
+# Aqui o teto é 1MB em bytes e o corpo é forçado a exceder: o objeto declarado tem bytes
+# grandes no payload, mas o CORPO é o medido -- logo o caminho exercitado é o do medido.
+OBJ_BIG=$(head -c 1100000 /dev/zero | tr '\0' 'a')
+OBJ_BIG_SHA=$(printf '%s' "$OBJ_BIG" | sha256sum | cut -d' ' -f1)
+OBJ_BIG_BYTES=${#OBJ_BIG}
+OBJ_CONFIG_SMALL='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":5,"ttlSeconds":300,"configVersion":10,"profiles":["NODE_STORAGE"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":1,"bandwidthMbps":100},"allowedTasks":["OBJECT_PUT"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 10 '["NODE_STORAGE"]' 4 8192 1 100 '["OBJECT_PUT"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+OBJ_TASK_BIG='{"tasks":[{"taskId":"tk_obj3","type":"OBJECT_PUT","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"storage:sob_z:1","payload":"{\"objectId\":\"sob_z\",\"bucket\":\"fotos\",\"key\":\"z.bin\",\"sha256\":\"'"$OBJ_BIG_SHA"'\",\"bytes\":'"$OBJ_BIG_BYTES"',\"replica\":1}","dataClass":"PUBLIC_MEDIA"}],"mode":"NORMAL","serverTime":"now"}'
+OBJ_BODY="$OBJ_BIG"
+TASK_NEXT_BODY="$OBJ_TASK_BIG" OBJ_CONFIG_ATUAL="$OBJ_CONFIG_SMALL" make_curl_storage
+: > "$TMP/curl-calls"
+out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SECONDS=1 \
+  /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true)
+# O no baixou e conferiu (sha bateu), mas o corpo nao cabe nos 1MB cedidos: recusa ANTES de
+# confirmar. Confirmar e apagar depois seria prometer uma copia que o no nao tem.
+assert_contains 'teto de disco menor que o objeto recusa antes de confirmar' "$out" 'STORAGE_OBJECT_TOO_LARGE'
+assert_not_contains 'e nao confirma a copia' "$(cat "$TMP/curl-calls")" '/replica'
+rm -f "$TMP"/object-put.*
+
 
 printf '\nTodos os cenarios passaram (%d assercoes).\n' "$PASS"

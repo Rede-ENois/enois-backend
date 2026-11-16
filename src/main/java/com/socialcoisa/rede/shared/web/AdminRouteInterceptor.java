@@ -2,11 +2,15 @@ package com.socialcoisa.rede.shared.web;
 
 import java.util.List;
 
-import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.server.PathContainer;
+import org.springframework.stereotype.Component;
 import org.springframework.web.util.pattern.PathPattern;
 import org.springframework.web.util.pattern.PathPatternParser;
 import org.springframework.web.servlet.HandlerInterceptor;
+
+import com.socialcoisa.rede.moderation.application.AdminAuthorityAudit;
+import com.socialcoisa.rede.shared.security.ClientIpResolver;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -23,6 +27,10 @@ import jakarta.servlet.http.HttpServletResponse;
  *
  * The same lock covers `/moderation/**`: every route there is moderator work (admin or approved
  * moderator), except the two any signed-in member uses to see and apply for the role.
+ *
+ * <p>Toda recusa decidida aqui vira uma linha na trilha de auditoria com o motivo (só admin, só
+ * moderador ou sem sessão) e o IP resolvido — a resposta ao cliente não muda: continua o mesmo 401
+ * ou 403 genérico, sem dizer qual regra faltou.</p>
  */
 @Component
 class AdminRouteInterceptor implements HandlerInterceptor {
@@ -30,6 +38,8 @@ class AdminRouteInterceptor implements HandlerInterceptor {
 	private final CurrentUserResolver currentUserResolver;
 	private final AdminGuard adminGuard;
 	private final ModeratorGuard moderatorGuard;
+	private final ObjectProvider<AdminAuthorityAudit> denials;
+	private final ObjectProvider<ClientIpResolver> ipResolver;
 
 	/**
 	 * Caminhos de /admin que o painel de moderação abre para MODERADORES (além do admin):
@@ -56,11 +66,19 @@ class AdminRouteInterceptor implements HandlerInterceptor {
 	private static final List<PathPattern> ACOES_DE_USUARIO = List.of("sanction", "sanitize", "ips")
 		.stream().map(action -> pattern("/admin/users/*/" + action)).toList();
 
+	/**
+	 * A trilha e o resolvedor de IP entram por {@link ObjectProvider}: o interceptor é criado junto
+	 * com o contexto WebMvc, antes de quem depende de repositório estar pronto, e a resolução só
+	 * acontece na recusa — o caminho autorizado não paga por ela.
+	 */
 	AdminRouteInterceptor(CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
-			ModeratorGuard moderatorGuard) {
+			ModeratorGuard moderatorGuard, ObjectProvider<AdminAuthorityAudit> denials,
+			ObjectProvider<ClientIpResolver> ipResolver) {
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
 		this.moderatorGuard = moderatorGuard;
+		this.denials = denials;
+		this.ipResolver = ipResolver;
 	}
 
 	@Override
@@ -73,22 +91,67 @@ class AdminRouteInterceptor implements HandlerInterceptor {
 		}
 		PathContainer path = RequestPath.segments(request);
 		if (MODERATION_PATH.matches(path)) {
-			CurrentUser user = currentUserResolver.resolve(request.getHeader("X-Session-Token"));
+			CurrentUser user = userOf(request);
 			if (MODERATION_OPEN_TO_MEMBERS.stream().noneMatch(pattern -> pattern.matches(path))) {
-				moderatorGuard.requireModerator(user);
+				require(() -> moderatorGuard.requireModerator(user), request, request.getMethod(),
+					AdminAuthorityAudit.MODERATOR_ONLY);
 			}
 			return true;
 		}
 		if (!ADMIN_PATH.matches(path)) {
 			return true;
 		}
-		CurrentUser user = currentUserResolver.resolve(request.getHeader("X-Session-Token"));
+		CurrentUser user = userOf(request);
 		if (abertoAoModerador(path)) {
-			moderatorGuard.requireModerator(user);
+			require(() -> moderatorGuard.requireModerator(user), request, request.getMethod(),
+				AdminAuthorityAudit.MODERATOR_ONLY);
 			return true;
 		}
-		adminGuard.requireAdmin(user);
+		require(() -> adminGuard.requireAdmin(user), request, request.getMethod(), AdminAuthorityAudit.ADMIN_ONLY);
 		return true;
+	}
+
+	/**
+	 * Resolve a sessão sem que o 401 escape antes da linha de auditoria: sem sessão a recusa também
+	 * é registrada, com o motivo de sessão ausente, e o erro sobe igual ao de antes.
+	 */
+	private CurrentUser userOf(HttpServletRequest request) {
+		try {
+			return currentUserResolver.resolve(request.getHeader("X-Session-Token"));
+		}
+		catch (ApiException refused) {
+			refuse(request, request.getMethod(), refused, AdminAuthorityAudit.SESSION_MISSING);
+			throw refused;
+		}
+	}
+
+	/** Executa a guarda; se ela recusar, a recusa é registrada e o MESMO erro segue para o cliente. */
+	private void require(Runnable guard, HttpServletRequest request, String method, String reason) {
+		try {
+			guard.run();
+		}
+		catch (ApiException refused) {
+			refuse(request, method, refused, reason);
+			throw refused;
+		}
+	}
+
+	private void refuse(HttpServletRequest request, String method, ApiException refused, String gate) {
+		try {
+			denials.getObject().denied(
+				currentUserResolver.activeUserId(request.getHeader("X-Session-Token")).orElse(null),
+				method, RequestPath.applicationPath(request), refused.status(), reasonOf(refused, gate),
+				ipResolver.getObject().resolve(request));
+		}
+		catch (RuntimeException failure) {
+			// A auditoria é observabilidade, não autorização: uma falha aqui não pode transformar a
+			// recusa em 500 nem deixar a requisição passar. A própria trilha já loga a falha.
+		}
+	}
+
+	/** Motivo registrado: sem sessão é 401; com sessão, a regra que faltou. */
+	private static String reasonOf(ApiException refused, String gate) {
+		return refused.status() == 401 ? AdminAuthorityAudit.SESSION_MISSING : gate;
 	}
 
 	private boolean abertoAoModerador(PathContainer path) {

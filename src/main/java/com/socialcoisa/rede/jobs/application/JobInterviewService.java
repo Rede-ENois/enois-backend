@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.socialcoisa.rede.calendar.application.CalendarSourceService;
 import com.socialcoisa.rede.calendar.domain.CalendarKind;
 import com.socialcoisa.rede.calendar.domain.CalendarScope;
+import com.socialcoisa.rede.companies.domain.RecruitmentCapability;
 import com.socialcoisa.rede.jobs.application.port.out.JobInterviewNotifier;
 import com.socialcoisa.rede.jobs.application.port.out.JobInterviewRepository;
 import com.socialcoisa.rede.jobs.application.port.out.JobRepository;
@@ -37,27 +38,34 @@ public class JobInterviewService {
 	private final JobInterviewRepository interviews;
 	private final CalendarSourceService calendar;
 	private final JobInterviewNotifier notifier;
+	private final JobCommandAuthorization command;
 	private final java.time.Clock clock;
 
 	JobInterviewService(JobRepository jobs, JobInterviewRepository interviews, CalendarSourceService calendar,
-			JobInterviewNotifier notifier, java.time.Clock clock) {
+			JobInterviewNotifier notifier, JobCommandAuthorization command, java.time.Clock clock) {
 		this.jobs = jobs;
 		this.interviews = interviews;
 		this.calendar = calendar;
 		this.notifier = notifier;
+		this.command = command;
 		this.clock = clock;
 	}
 
 	/**
 	 * Marca (ou reagenda, quando já existe uma valendo) a entrevista da candidatura.
 	 *
-	 * <p>Só quem publicou a vaga marca, e a candidatura tem de ser DESTA vaga: sem isso, um id de
-	 * outra candidatura seria alcançável pelo caminho da URL.
+	 * <p>O autor da vaga marca — e, quando a vaga nasceu numa página, também quem na equipe tem
+	 * MANAGE_INTERVIEWS (recrutador, entrevistador). A candidatura tem de ser DESTA vaga: sem
+	 * isso, um id de outra candidatura seria alcançável pelo caminho da URL.
+	 *
+	 * <p>Quem marca fica como {@code employerId} da entrevista: só essa pessoa mexe nela depois —
+	 * reagendar e cancelar não se alargam para o resto da equipe.
 	 */
 	@Transactional
 	public JobInterview schedule(String jobId, String applicationId, String employerId, Instant startsAt,
 			Instant endsAt, String timeZoneId, String notes) {
-		Job job = ownedJob(jobId, employerId);
+		Job job = command.requireCommander(jobId, employerId, RecruitmentCapability.MANAGE_INTERVIEWS,
+			"So quem publicou a vaga pode marcar a entrevista.");
 		JobApplication application = applicationOfJob(jobId, applicationId);
 		Instant now = clock.instant();
 
@@ -79,7 +87,8 @@ public class JobInterviewService {
 	public JobInterview reschedule(String jobId, String applicationId, String interviewId, String employerId,
 			Instant startsAt, Instant endsAt, String timeZoneId, String notes) {
 		JobInterview interview = ownedInterview(jobId, applicationId, interviewId, employerId);
-		Job job = ownedJob(interview.jobId(), employerId);
+		Job job = jobs.findById(interview.jobId())
+			.orElseThrow(() -> new ApiException(404, "JOB_NOT_FOUND", "Vaga nao encontrada."));
 		interview.reschedule(startsAt, endsAt, zoneOf(timeZoneId), notes, clock.instant());
 		interviews.save(interview);
 		syncCalendar(interview, job, interview.candidateId());
@@ -91,7 +100,8 @@ public class JobInterviewService {
 	@Transactional
 	public JobInterview cancel(String jobId, String applicationId, String interviewId, String employerId) {
 		JobInterview interview = ownedInterview(jobId, applicationId, interviewId, employerId);
-		Job job = ownedJob(interview.jobId(), employerId);
+		Job job = jobs.findById(interview.jobId())
+			.orElseThrow(() -> new ApiException(404, "JOB_NOT_FOUND", "Vaga nao encontrada."));
 		interview.cancel(clock.instant());
 		interviews.save(interview);
 		calendar.cancel(interview.candidateId(), CALENDAR_SOURCE, interview.id());
@@ -102,10 +112,12 @@ public class JobInterviewService {
 
 	/**
 	 * As entrevistas valendo nas candidaturas de uma vaga, por id de candidatura. É o que a lista do
-	 * empregador usa para mostrar o horário já marcado sem uma consulta por candidatura.
+	 * empregador usa para mostrar o horário já marcado sem uma consulta por candidatura. O autor da
+	 * vaga e a equipe de recrutamento dela (VIEW_CANDIDATES) veem; a ninguém mais.
 	 */
 	public java.util.Map<String, JobInterview> scheduledByApplication(String jobId, String employerId) {
-		ownedJob(jobId, employerId);
+		command.requireCommander(jobId, employerId, RecruitmentCapability.VIEW_CANDIDATES,
+			"So quem publicou a vaga pode marcar a entrevista.");
 		return interviews.findScheduledByJob(jobId).stream()
 			.collect(java.util.stream.Collectors.toMap(JobInterview::applicationId, interview -> interview));
 	}
@@ -120,26 +132,20 @@ public class JobInterviewService {
 			.collect(java.util.stream.Collectors.toMap(JobInterview::applicationId, interview -> interview));
 	}
 
-	/** As entrevistas da candidatura, visíveis ao empregador ou ao candidato — a ninguém mais. */
+	/**
+	 * As entrevistas da candidatura, visíveis a quem participa — o autor da vaga ou a equipe de
+	 * recrutamento dela (VIEW_CANDIDATES), ou o candidato. A ninguém mais.
+	 */
 	public List<JobInterview> ofApplication(String jobId, String applicationId, String requesterId) {
 		Job job = jobs.findById(jobId)
 			.orElseThrow(() -> new ApiException(404, "JOB_NOT_FOUND", "Vaga nao encontrada."));
 		JobApplication application = applicationOfJob(jobId, applicationId);
-		boolean employer = job.postedBy().equals(requesterId);
+		boolean employer = command.canCommand(job, requesterId, RecruitmentCapability.VIEW_CANDIDATES);
 		boolean candidate = application.userId().equals(requesterId);
 		if (!employer && !candidate) {
 			throw new ApiException(403, "NOT_PARTICIPANT", "So os envolvidos no processo veem as entrevistas.");
 		}
 		return interviews.findByApplication(applicationId);
-	}
-
-	private Job ownedJob(String jobId, String employerId) {
-		Job job = jobs.findById(jobId)
-			.orElseThrow(() -> new ApiException(404, "JOB_NOT_FOUND", "Vaga nao encontrada."));
-		if (!job.postedBy().equals(employerId)) {
-			throw new ApiException(403, "NOT_OWNER", "So quem publicou a vaga pode marcar a entrevista.");
-		}
-		return job;
 	}
 
 	private JobApplication applicationOfJob(String jobId, String applicationId) {

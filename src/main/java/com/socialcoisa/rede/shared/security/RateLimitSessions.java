@@ -52,7 +52,7 @@ public class RateLimitSessions {
 		this.sharedMultiplier = Math.max(1, sharedMultiplier);
 	}
 
-	/** User id of a live session, or null; {@code ip} is the caller's resolved address. */
+	/** User id of a live session, or null; {@code ip} is the caller's resolved network address. */
 	public String userId(String token, String ip) {
 		String trimmed = token.trim();
 		String hash = Hashes.sha256Hex(trimmed);
@@ -61,6 +61,8 @@ public class RateLimitSessions {
 		if (cached != null && cached.until() > now) {
 			return cached.userId();
 		}
+		// {@code ip} é a rede (o chamador passa resolveNetwork): o orçamento de consultas é por
+		// origem física, para que um front repassando identidades não vire atalho ao banco.
 		if (!takeLookup(ip, now)) {
 			return null;
 		}

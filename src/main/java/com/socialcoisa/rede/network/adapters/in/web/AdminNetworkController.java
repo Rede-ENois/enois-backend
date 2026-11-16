@@ -16,6 +16,9 @@ import org.springframework.web.bind.annotation.RestController;
 import com.socialcoisa.rede.network.application.NetworkDashboardService;
 import com.socialcoisa.rede.network.application.ChangeCaptureReadinessService;
 import com.socialcoisa.rede.network.application.NetworkNodeService;
+import com.socialcoisa.rede.network.application.StorageHealer;
+import com.socialcoisa.rede.network.application.StorageOverviewService;
+import com.socialcoisa.rede.network.application.StorageReplicationDispatcher;
 import com.socialcoisa.rede.network.application.StorageScrubber;
 import com.socialcoisa.rede.network.application.NodeKeyService;
 import com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository;
@@ -51,6 +54,9 @@ class AdminNetworkController {
 	private final AdminGuard adminGuard;
 	private final StorageScrubber scrubber;
 	private final com.socialcoisa.rede.network.application.StorageBalanceReport balance;
+	private final StorageOverviewService storageOverview;
+	private final StorageHealer healer;
+	private final StorageReplicationDispatcher dispatcher;
 	private final NetworkNodeResponsibleRepository responsibles;
 	private final NetworkUserDirectory users;
 	private final com.socialcoisa.rede.network.application.NodeObservabilityService observability;
@@ -62,7 +68,8 @@ class AdminNetworkController {
 			com.socialcoisa.rede.network.application.StorageBalanceReport balance,
 			NetworkNodeResponsibleRepository responsibles, NetworkUserDirectory users,
 			com.socialcoisa.rede.network.application.NodeObservabilityService observability,
-			ChangeCaptureReadinessService changeCapture) {
+			ChangeCaptureReadinessService changeCapture, StorageOverviewService storageOverview,
+			StorageHealer healer, StorageReplicationDispatcher dispatcher) {
 		this.nodes = nodes;
 		this.keys = keys;
 		this.dashboard = dashboard;
@@ -75,6 +82,9 @@ class AdminNetworkController {
 		this.users = users;
 		this.observability = observability;
 		this.changeCapture = changeCapture;
+		this.storageOverview = storageOverview;
+		this.healer = healer;
+		this.dispatcher = dispatcher;
 	}
 
 	/**
@@ -184,6 +194,62 @@ class AdminNetworkController {
 	 * o pedido. É leitura (não repara nada) e serve para o operador ver a lacuna antes que ela vire
 	 * um objeto que só existe num disco. {@code bucket} nulo varre o catálogo inteiro.
 	 */
+	/**
+	 * O Storage no painel (§8.2 do brief): capacidade declarada, disponível medido, uso medido,
+	 * objetos e o estado das cópias. Nada aqui é estimado — ver {@link StorageOverviewService}.
+	 */
+	@GetMapping("/storage/overview")
+	StorageOverviewService.Overview storageOverview(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		admin(sessionToken);
+		return storageOverview.overview();
+	}
+
+	/**
+	 * Healing do Storage (fase 3): a lacuna que o {@code /storage/scrub} aponta vira designação
+	 * {@code PENDING_REMOTE} para um nó que o nó destino vai puxar e confirmar. Opção de operador,
+	 * nunca agendador: cada designação gera tráfego de corpo. {@code dryRun=true} mostra o que
+	 * seria feito sem gravar nada. Ver {@link StorageHealer}.
+	 */
+	@PostMapping("/storage/heal")
+	Object healStorage(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(required = false) String bucket,
+			@RequestParam(defaultValue = "100") int maxObjects,
+			@RequestParam(name = "dryRun", defaultValue = "false") boolean dryRun,
+			// Designar e só designar é o comportamento de antes desta rodada; `dispatch=true` também
+			// enfileira o OBJECT_PUT para o nó, que é o que faz a réplica acontecer.
+			@RequestParam(name = "dispatch", defaultValue = "false") boolean dispatch) {
+		var user = admin(sessionToken);
+		var relatorio = healer.heal(user.id().value(), bucket, maxObjects, dryRun);
+		if (!dispatch || dryRun) {
+			return relatorio;
+		}
+		// Uma passada por objeto designado. Falha de um não derruba os outros: cada designação já é
+		// uma obrigação gravada, e o operador vê qual objeto não teve tarefa.
+		var enviadas = new java.util.ArrayList<StorageReplicationDispatcher.Dispatched>();
+		var puladas = new java.util.ArrayList<StorageReplicationDispatcher.Skipped>();
+		for (String objectId : relatorio.designated().stream().map(StorageHealer.HealedObject::objectId)
+			.distinct().toList()) {
+			var despacho = dispatcher.dispatch(objectId);
+			enviadas.addAll(despacho.dispatched());
+			puladas.addAll(despacho.skipped());
+		}
+		return new StorageHealer.ReportWithDispatch(relatorio, new java.util.ArrayList<Object>(enviadas),
+			new java.util.ArrayList<Object>(puladas));
+	}
+
+	/**
+	 * Enfileira o {@code OBJECT_PUT} para as designações pendentes <b>que já existem</b> — inclusive
+	 * as gravadas por um upload anterior, que antes esperavam um nó que soubesse puxá-las sozinho.
+	 */
+	@PostMapping("/storage/objects/{objectId}/dispatch")
+	StorageReplicationDispatcher.Report dispatchReplica(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String objectId) {
+		admin(sessionToken);
+		return dispatcher.dispatch(objectId);
+	}
+
 	@GetMapping("/storage/scrub")
 	StorageScrubber.Report scrubStorage(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(required = false) String bucket,

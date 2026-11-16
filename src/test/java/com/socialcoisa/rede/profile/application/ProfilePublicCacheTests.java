@@ -99,7 +99,8 @@ class ProfilePublicCacheTests {
 			sanctionGate, mock(OfficialBadgeReader.class),
 			mock(com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository.class),
 			new ActionThrottle(),
-			ctx.getBean(CacheInvalidator.class), 0, Clock.fixed(NOW, ZoneOffset.UTC)));
+			ctx.getBean(CacheInvalidator.class), mock(com.socialcoisa.rede.media.application.MediaPublicHost.class), 0,
+			Clock.fixed(NOW, ZoneOffset.UTC)));
 		ctx.refresh();
 		context = ctx;
 		profiles = ctx.getBean(ProfileService.class);
