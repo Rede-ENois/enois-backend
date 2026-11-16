@@ -58,7 +58,7 @@ class SignupChallengeTests {
 		String payload = new String(java.util.Base64.getUrlDecoder().decode(challenge.id().split("\\.")[0]),
 			java.nio.charset.StandardCharsets.UTF_8);
 		org.assertj.core.api.Assertions.assertThat(payload.split("\\|")).hasSize(3);
-		Thread.sleep(1_300);
+		Thread.sleep(3_200);
 		Map<String, Object> wrong = signup("cap_wrong");
 		wrong.put("challengeId", challenge.id());
 		wrong.put("challengeAnswer", challenge.answer() + 1);
@@ -70,7 +70,7 @@ class SignupChallengeTests {
 			.andExpect(jsonPath("$.code").value("SIGNUP_CAPTCHA_INVALID"));
 
 		Challenge valid = issue();
-		Thread.sleep(1_300);
+		Thread.sleep(3_200);
 		Map<String, Object> accepted = signup("cap_ok");
 		accepted.put("challengeId", valid.id());
 		accepted.put("challengeAnswer", valid.answer());

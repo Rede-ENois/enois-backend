@@ -357,6 +357,9 @@ jobs:
           HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
           DB_PASSWORD: ${{ secrets.QA_DB_PASSWORD }}
           REDE_SECURITY_ENCRYPTION_KEY: ${{ secrets.QA_REDE_SECURITY_ENCRYPTION_KEY }}
+          # Assinatura do endereço da cópia anexada a uma denúncia. Sem este segredo na QA a cópia
+          # não abre no painel (a API responde 503 nessa rota e registra o aviso no boot).
+          REDE_MEDIA_ATTACHMENTS_SECRET: ${{ secrets.QA_REDE_MEDIA_ATTACHMENTS_SECRET }}
           TURNSTILE_SITE_KEY: ${{ secrets.QA_TURNSTILE_SITE_KEY }}
           TURNSTILE_SECRET_KEY: ${{ secrets.QA_TURNSTILE_SECRET_KEY }}
           # Login social nos DOIS ambientes: a QA roda em `enois-qa.b7cloud.tech` com a API em
@@ -646,6 +649,7 @@ jobs:
               "REDE_ORIGINS_ENFORCE=true",
               "PANIC_MODE=${PANIC_MODE}",
               "REDE_SECURITY_ENCRYPTION_KEY=${REDE_SECURITY_ENCRYPTION_KEY}",
+              "REDE_MEDIA_ATTACHMENTS_SECRET=${REDE_MEDIA_ATTACHMENTS_SECRET}",
               "TURNSTILE_SITE_KEY=${TURNSTILE_SITE_KEY}",
               "TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY}",
               "LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}",
@@ -927,6 +931,7 @@ jobs:
           # responde "Authentication failed" e nenhum e-mail de 2FA/reset sai.
           MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
           REDE_SECURITY_ENCRYPTION_KEY: ${{ secrets.PROD_REDE_SECURITY_ENCRYPTION_KEY }}
+          REDE_MEDIA_ATTACHMENTS_SECRET: ${{ secrets.PROD_REDE_MEDIA_ATTACHMENTS_SECRET }}
           TURNSTILE_SITE_KEY: ${{ secrets.PROD_TURNSTILE_SITE_KEY }}
           TURNSTILE_SECRET_KEY: ${{ secrets.PROD_TURNSTILE_SECRET_KEY }}
           LINKEDIN_CLIENT_ID: ${{ secrets.LINKEDIN_CLIENT_ID }}
@@ -1103,6 +1108,7 @@ jobs:
                 CORS_ALLOWED_ORIGINS: https://enois.ia.br,https://isweee.com
                 SITE_DOMAINS: enois.ia.br,isweee.com
                 REDE_SECURITY_ENCRYPTION_KEY: ${REDE_SECURITY_ENCRYPTION_KEY}
+                REDE_MEDIA_ATTACHMENTS_SECRET: ${REDE_MEDIA_ATTACHMENTS_SECRET}
                 TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY}
                 TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY}
                 REDE_AUTH_SIGNUP_ENABLED: "true"

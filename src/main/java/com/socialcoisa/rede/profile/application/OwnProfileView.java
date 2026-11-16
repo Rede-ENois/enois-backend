@@ -23,6 +23,8 @@ public record OwnProfileView(String id, String username, String name, String hea
 		/** Itens da loja equipados (ids do catalogo de cosmeticos) e o recado do perfil. */
 		String avatarFrame, String cardTheme, String nameplate, String bannerItem, String profileEffect,
 		String statusText, String statusIcon, String birthDate,
+		/** Foto de perfil no host DESTE ambiente (ver {@link UserProfileView#avatarUrl}). */
+		String avatarUrl,
 		/** Cidade/UF do proprio perfil e se aparecem para os outros. */
 		String city, String state, boolean showCity,
 		/** Equipped GARDEN item id and the reputation garden (null outside {@code GET /me}). */
@@ -42,7 +44,7 @@ public record OwnProfileView(String id, String username, String name, String hea
 			profile.nameFont(), profile.nameColor(), profile.contributorTagColor(), profile.avatarFrame(),
 			profile.cardTheme(), profile.nameplate(), profile.bannerItem(), profile.profileEffect(),
 			profile.statusText(), profile.statusIcon(),
-			profile.birthDate() != null ? profile.birthDate().toString() : null,
+			profile.birthDate() != null ? profile.birthDate().toString() : null, null,
 			profile.place() == null ? null : profile.place().city(),
 			profile.place() == null ? null : profile.place().state(), profile.showCity(), profile.gardenStyle(),
 			profile.garden(), profile.profileAppearance());
@@ -60,7 +62,7 @@ public record OwnProfileView(String id, String username, String name, String hea
 			bioHtml, bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, isRecruiter,
 			connectionsCount, followersCount, reputation, postsCount, nickname, socialName, pronouns, badges, aka,
 			resumeUrl, resumeName, showRanking, nameTheme, nameFont, nameColor, contributorTagColor, avatarFrame,
-			cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, birthDate, city, state, showCity,
+			cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, birthDate, avatarUrl, city, state, showCity,
 			gardenStyle, garden, profileAppearance);
 	}
 
@@ -70,7 +72,17 @@ public record OwnProfileView(String id, String username, String name, String hea
 			bioHtml, bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, isRecruiter,
 			connectionsCount, followersCount, reputation, postsCount, nickname, socialName, pronouns, badges, aka,
 			resumeUrl, resumeName, showRanking, nameTheme, nameFont, nameColor, contributorTagColor, avatarFrame,
-			cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, birthDate, city, state, showCity,
+			cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, birthDate, avatarUrl, city, state, showCity,
 			gardenStyle, garden, profileAppearance);
+	}
+
+	/** Foto de perfil no host deste ambiente (o `avatar` continua o endereco gravado). */
+	public OwnProfileView withAvatarUrl(String localizedAvatarUrl) {
+		return new OwnProfileView(id, username, name, headline, email, company, location, avatar, banner, badge, bio,
+			bioHtml, bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, isRecruiter,
+			connectionsCount, followersCount, reputation, postsCount, nickname, socialName, pronouns, badges, aka,
+			resumeUrl, resumeName, showRanking, nameTheme, nameFont, nameColor, contributorTagColor, avatarFrame,
+			cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, birthDate, localizedAvatarUrl,
+			city, state, showCity, gardenStyle, garden, profileAppearance);
 	}
 }

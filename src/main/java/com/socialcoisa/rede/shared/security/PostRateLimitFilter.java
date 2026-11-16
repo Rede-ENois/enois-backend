@@ -77,7 +77,7 @@ public class PostRateLimitFilter extends OncePerRequestFilter {
 			allowed = tryAcquire("u:" + Hashes.sha256Hex(token.trim()), userLimit);
 		}
 		else {
-			allowed = tryAcquire("i:" + ipResolver.resolve(request), ipLimit);
+			allowed = tryAcquire("i:" + ipResolver.resolveNetwork(request), ipLimit);
 		}
 		if (!allowed) {
 			LOG.warn("Rate limit de POST atingido");
