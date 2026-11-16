@@ -4,6 +4,7 @@ import java.util.Optional;
 
 import org.springframework.stereotype.Component;
 
+import com.socialcoisa.rede.colagem.application.port.out.ColagemRepository;
 import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.PostId;
@@ -11,6 +12,7 @@ import com.socialcoisa.rede.groups.application.port.out.GroupContentRepository;
 import com.socialcoisa.rede.groups.domain.GroupComment;
 import com.socialcoisa.rede.groups.domain.GroupPost;
 import com.socialcoisa.rede.moderation.application.port.out.CallReportContextRepository;
+import com.socialcoisa.rede.murais.application.port.out.MuraisRepository;
 import com.socialcoisa.rede.moderation.application.port.out.ReportedContentAuthorReader;
 import com.socialcoisa.rede.moderation.domain.Report;
 
@@ -27,13 +29,18 @@ class ReportedContentAuthorAdapter implements ReportedContentAuthorReader {
 	private final CommentRepository comments;
 	private final GroupContentRepository groupContent;
 	private final CallReportContextRepository callReports;
+	private final ColagemRepository colagem;
+	private final MuraisRepository murais;
 
 	ReportedContentAuthorAdapter(PostRepository posts, CommentRepository comments,
-			GroupContentRepository groupContent, CallReportContextRepository callReports) {
+			GroupContentRepository groupContent, CallReportContextRepository callReports, ColagemRepository colagem,
+			MuraisRepository murais) {
 		this.posts = posts;
 		this.comments = comments;
 		this.groupContent = groupContent;
 		this.callReports = callReports;
+		this.colagem = colagem;
+		this.murais = murais;
 	}
 
 	/**
@@ -61,6 +68,9 @@ class ReportedContentAuthorAdapter implements ReportedContentAuthorReader {
 			case "CALL" -> Optional.empty();
 			case "GROUP_POST" -> groupContent.findPost(targetId).map(GroupPost::authorId);
 			case "GROUP_COMMENT" -> groupContent.findComment(targetId).map(GroupComment::authorId);
+			case "COLLAGEM_POST" -> colagem.findPostById(targetId).map(p -> p.authorId().value());
+			case "COLLAGEM_COMMENT" -> colagem.findCommentById(targetId).map(c -> c.authorId().value());
+			case "MURAL" -> murais.findMuralById(targetId).map(m -> m.ownerId().value());
 			default -> Optional.empty();
 		};
 	}

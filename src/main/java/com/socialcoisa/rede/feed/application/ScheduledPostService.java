@@ -148,9 +148,11 @@ public class ScheduledPostService {
 			try {
 				// As menções valem no momento da PUBLICAÇÃO: quem foi marcado é avisado quando o
 				// post entra no ar, não quando ele foi agendado.
+				// Enquete agendada nasce simples (sem multipla escolha nem prazo): a extensao da
+				// enquete e configurada na hora da criacao direta, nao no agendamento.
 				publishPost.publish(new PublishPostCommand(new UserId(post.userId()), post.type(), post.content(),
 					post.pageHtml(), post.articleBody(), post.tags(), post.mediaIds(), post.communityId(),
-					post.mentionedUserIds(), post.topic(), null, false, post.pollOptions()));
+					post.mentionedUserIds(), post.topic(), null, false, post.pollOptions(), false, null));
 				repository.delete(post.id());
 				published++;
 			}
