@@ -200,6 +200,9 @@ Cidade e UF (`city`, `state`) são estruturadas e separadas do `location` livre,
 | GET | `/api/feed/posts/{postId}/comments/{commentId}/reactions` | Reações do comentário | Sim |
 | POST | `/api/feed/posts/{postId}/accepted-answer` | Aceitar a resposta de uma dúvida | Sim |
 | DELETE | `/api/feed/posts/{postId}/accepted-answer` | Desfazer a resposta aceita | Sim |
+| GET | `/api/feed/draft` | Ver meu rascunho do compositor | Sim |
+| PUT | `/api/feed/draft` | Salvar meu rascunho (substitui) | Sim |
+| DELETE | `/api/feed/draft` | Descartar meu rascunho | Sim |
 
 ### POST /api/feed/posts
 
@@ -291,6 +294,48 @@ Sem sessão: 401. A resposta é o estado atualizado da enquete:
 
 Todo `PostView` de um post `POLL` traz o campo `poll` (nas leituras de feed e de post único); a
 contagem é derivada de `poll_votes`, nunca um contador acumulado.
+
+### GET / PUT / DELETE /api/feed/draft
+
+O rascunho do compositor (V332): um **por pessoa**, atualizado a cada salvamento — é onde a
+pessoa parou de escrever, e não um post: nunca aparece em feed, perfil nem busca. Publicar e
+agendar seguem pelos endpoints de sempre (`POST /api/feed/posts`, `POST /api/feed/scheduled`);
+o compositor apaga o rascunho quando uma das duas dá certo. Tudo exige sessão; sem ela, 401.
+
+- `GET /api/feed/draft` → `200` com `{"draft": {...}}` ou `{"draft": null}` quando não há
+  rascunho (ausência não é erro).
+- `PUT /api/feed/draft` → salva (substitui o que havia; o `id` e o `createdAt` se preservam).
+- `DELETE /api/feed/draft` → descarta; sem rascunho, continua `200` (idempotente).
+
+Corpo do `PUT` (todos os campos opcionais exceto `type`):
+
+```json
+{
+  "type": "POLL",
+  "content": "pesquisa da semana",
+  "pageHtml": null,
+  "articleBody": null,
+  "topic": "TECNOLOGIA",
+  "pollOptions": ["cafe", "cha"],
+  "pollMultipleChoice": true,
+  "pollEndsAt": "2030-01-01T10:00:00Z",
+  "mentionedUserIds": ["usr_xxx"]
+}
+```
+
+Regras:
+
+- A validação aqui é a **mínima** para valer a pena restaurar: tipo válido e algo escrito
+  (`400 TIPO_OBRIGATORIO` / `400 CONTEUDO_OBRIGATORIO`). As regras completas — tamanho,
+  antiflood, conta restrita, enquete inteira — valem na publicação, pelo caso de uso de sempre.
+  Alternativas de enquete pela metade são aceitas (é um rascunho).
+- `pollEndsAt` inválido responde `400 DATA_INVALIDA` (ISO-8601); `type` desconhecido,
+  `400 TIPO_INVALIDO`.
+- **Mídia anexada não entra no rascunho**: os arquivos só sobem no momento de publicar — o
+  rascunho guarda texto e estrutura (`mediaIds` do rascunho não existe), e a mídia é reanexada
+  ao retomar.
+- As extensões da enquete viajam com o rascunho; no **agendamento** a enquete nasce simples
+  (regra atual do agendado, sem múltipla escolha nem prazo).
 
 ### GET /api/users/{username}/diario
 
