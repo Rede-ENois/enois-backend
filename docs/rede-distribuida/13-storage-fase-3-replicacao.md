@@ -345,6 +345,7 @@ de navegador, e a credencial é conferida no controller (fail-closed, como `obje
 |---|---|
 | o Control Plane **ler** o inventário de outro nó | o CP não inicia conexão para o nó (NAT; o brief proíbe cadastrar endereço). Quem chama é o nó, na própria URL do CP, e é o CP que responde |
 | ~~a varredura reler o corpo do nó local~~ | entregue no §5.7 |
+| conferir o disco de **outro** nó | o nó devolve o que mediu no próprio disco — §5.8 |
 | poda automática por colocação | apagar disco de quem contribui é ato de operador, com o número na mão (§5.1, mesmo critério do healing) |
 
 **Verificação:** `NodeStorageInventoryTests` **11** (conferido, ausente, designação pendente com
@@ -390,3 +391,46 @@ acusação; cópia de **outro** nó não é relida como se fosse deste disco. Mu
 corpo do nó local (volta ao ponto cego), reler qualquer cópia como local, `openNodeBody` caindo para
 a raiz do CP, dono do disco ignorado, contagem de `bodiesRelidos` sem a cópia do nó — **5 de 5
 derrubam**.
+
+## 5.8 O nó confere o próprio disco e devolve o que não confere
+
+O §5.7 fechou a releitura do disco da instalação em que o Control Plane roda. Ficava de fora a
+cópia de **todo outro nó**: ela está num disco que o Control Plane não alcança (NAT; o brief proíbe
+cadastrar endereço), e a varredura do CP jamais a conferia. Um arquivo trocado lá continuava
+contando como durabilidade.
+
+Quem tem acesso ao disco é o dono dele. Agora o nó relê as próprias cópias e devolve o que mediu:
+
+| rota | corpo | devolve |
+|---|---|---|
+| `POST /network/storage/scrub` | `[{ "objectId", "actualSha256" }]` | `{ "nodeId", "stale" }` |
+
+Credencial de nó (`X-Node-Id` + `X-Node-Key`) e perfil de armazenamento, como as demais rotas de
+Storage do nó. A rota está na lista explícita do `WriteRouteInterceptor` (o nó não tem sessão de
+navegador) e o `AutomatedWritePathsTests` a conhece.
+
+### O que o Control Plane aceita do relatório
+
+**Só a cópia que é deste nó.** O serviço filtra por `node.id()` antes de qualquer escrita: um nó que
+liste o `objectId` de outro não muda nada. Essa guarda não é detalhe — sem ela, qualquer participante
+derrubaria a durabilidade do cluster com um `POST`, que é o ataque mais barato que a rede pode ter.
+
+**Digest esperado vem do catálogo, nunca do relatório.** O nó declara só o que **mediu**
+(`actualSha256`); tamanho, réplica e o digest esperado saem da colocação. Se o nó escolhesse o
+esperado, faria o próprio conteúdo passar por íntegro.
+
+**Idempotente.** Cópia já `STALE` ou `GONE` não é regravada nem re-auditada: um nó que reenvia o
+mesmo relatório não infla a auditoria nem muda o estado de novo. O estado vai para `STALE` pelo mesmo
+caminho `marcarDivergente` da confirmação divergente — a ação é a mesma (re-replicar, **nunca**
+apagar), e o healing do §5.1 já sabe ler `STALE`.
+
+### O que ainda não está entregue
+
+O nó **precisa** rodar esta varredura por conta própria (o runtime ainda não tem rotina periódica
+para ela); `POST /network/storage/scrub` é a rota pronta para ele chamar.
+
+**Verificação:** `StorageNodeScrubTests` **4** (cópia própria fica `STALE`; nó não rebaixa a cópia de
+outro; já `STALE` não é regravada nem re-auditada; digest esperado vem do catálogo) e
+`NetworkStorageNodeScrubTests` **3** pela rota real (cópia própria `STALE`; intruso não rebaixa a do
+dono; sem chave é 401). Mutações: sem filtro por dono, sem idempotência, rota fora do interceptor,
+relatório engolido (`stale` sempre zero) — **4 de 4 derrubam**.

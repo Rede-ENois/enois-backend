@@ -92,6 +92,9 @@ class AutomatedWritePathsTests {
 		// mais a ele. Mesma credencial de nó, e o serviço só aceita o dono do disco — outro nó
 		// responde 403 sem tocar em arquivo nenhum.
 		"/network/storage/inventory/purge",
+		// Storage (fase 3, §5.8): o nó devolve o que mediu no próprio disco -- o Control Plane só
+		// pode conferir o corpo da instalação em que roda; a cópia de outro nó só o dono relê.
+		"/network/storage/scrub",
 		// Inscrição de nó: o formulário é público (quem oferece a máquina pode não ter conta) e o
 		// link é autenticado pelo token de uso único do e-mail. Ambos limitados no controller.
 		"/network/join/applications",
