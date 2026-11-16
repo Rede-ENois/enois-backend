@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.shared.sanctions;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.Optional;
 import java.util.Set;
@@ -26,4 +27,14 @@ public interface SanctionGateReader {
 
 	/** Motivo da sancao ativa, para a mensagem ao usuario. Vazio quando livre. */
 	Optional<String> activeReason(String userId);
+
+	/**
+	 * A sancao ativa com o que a mensagem ao usuario precisa: tipo (texto do enum), motivo e
+	 * criacao (base do prazo de revisao da suspensao). Vazia quando livre.
+	 */
+	Optional<ActiveSanctionSummary> activeSanctionOf(String userId);
+
+	/** O que o enforcement precisa contar a quem é punido (tipo como texto do enum de dominio). */
+	record ActiveSanctionSummary(String type, String reason, Instant createdAt) {
+	}
 }
