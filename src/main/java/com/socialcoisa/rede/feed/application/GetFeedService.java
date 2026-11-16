@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.feed.application.port.in.GetFeedUseCase;
 import com.socialcoisa.rede.feed.application.port.in.GetPostUseCase;
+import com.socialcoisa.rede.feed.application.port.in.GetPostsUseCase;
 import com.socialcoisa.rede.feed.application.port.in.GetProfilePostsUseCase;
 import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.out.ConnectionGraphRepository;
@@ -48,7 +49,7 @@ import com.socialcoisa.rede.shared.blocks.BlockedUsersReader;
 import com.socialcoisa.rede.shared.web.CursorCodec;
 
 @Service
-public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, GetPostUseCase {
+public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, GetPostUseCase, GetPostsUseCase {
 
 	private final PostRepository postRepository;
 	private final ArticleRepository articleRepository;
@@ -71,6 +72,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	private final com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries;
 	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
 	private final com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications;
+	private final java.time.Clock clock;
 
 	private static final Instant DEFAULT_BEFORE = Instant.parse("9999-12-31T23:59:59Z");
 
@@ -99,7 +101,9 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			com.socialcoisa.rede.feed.application.port.out.PostRepostRepository postReposts,
 			com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries,
 			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate,
-			com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications) {
+			com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications,
+			java.time.Clock clock) {
+		this.clock = clock;
 		this.mediaSummaries = mediaSummaries;
 		this.sanctionGate = sanctionGate;
 		this.identityVerifications = identityVerifications;
@@ -405,6 +409,24 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 
 	@Override
 	@Transactional(readOnly = true)
+	public List<PostView> getPosts(List<String> postIds, UserId viewerId) {
+		if (postIds == null || postIds.isEmpty()) {
+			return List.of();
+		}
+		Map<String, PostView> visiveis = new LinkedHashMap<>();
+		for (String postId : postIds.stream().distinct().toList()) {
+			try {
+				visiveis.put(postId, getPost(postId, viewerId));
+			}
+			catch (ApiException invisivel) {
+				// Apagado, vencido, privado ou bloqueado: sai da coleção sem derrubar a página.
+			}
+		}
+		return List.copyOf(visiveis.values());
+	}
+
+	@Override
+	@Transactional(readOnly = true)
 	public void requireVisible(String postId, UserId viewerId) {
 		visiblePost(postId, viewerId);
 	}
@@ -417,6 +439,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	private Post visiblePost(String postId, UserId viewerId) {
 		Post post = postRepository.findById(new PostId(postId))
 			.filter(Post::isActive)
+			// Link antigo ou consulta direta não ressuscita efêmero vencido: 404, como inexistente.
+			.filter(candidato -> !candidato.expired(clock.instant()))
 			.orElseThrow(() -> new ApiException(404, "POST_NOT_FOUND", "Post nao encontrado."));
 		// Link direto (notificacao antiga, por exemplo) tambem respeita o bloqueio.
 		if (viewerId != null && blockedUsersReader.hiddenIdsFor(viewerId.value()).contains(post.authorId().value())) {
@@ -527,10 +551,16 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		if (posts.isEmpty()) {
 			return List.of();
 		}
+		// Efêmero vencido sai da listagem mesmo antes do worker passar (janela de até 5 min).
+		java.time.Instant now = clock.instant();
+		List<Post> unexpired = posts.stream().filter(post -> !post.expired(now)).toList();
+		if (unexpired.isEmpty()) {
+			return List.of();
+		}
 		Set<String> hidden = knownHidden != null ? knownHidden
 			: blockedUsersReader.hiddenIdsFor(currentUserId != null ? currentUserId.value() : null);
-		List<Post> visible = hidden.isEmpty() ? posts
-			: posts.stream().filter(post -> !hidden.contains(post.authorId().value())).toList();
+		List<Post> visible = hidden.isEmpty() ? unexpired
+			: unexpired.stream().filter(post -> !hidden.contains(post.authorId().value())).toList();
 		if (visible.isEmpty()) {
 			return List.of();
 		}
@@ -579,8 +609,12 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		Map<String, List<String>> pollOptions = polls.optionsByPostIds(postIdValues);
 		Map<String, Map<Integer, Long>> pollCounts = pollOptions.isEmpty() ? Map.of()
 			: polls.countsByPostIds(pollOptions.keySet());
-		Map<String, Integer> myVotes = currentUserId == null || pollOptions.isEmpty() ? Map.of()
-			: polls.votesByUserAndPostIds(currentUserId, pollOptions.keySet());
+		Map<String, List<Integer>> myVotes = currentUserId == null || pollOptions.isEmpty() ? Map.of()
+			: polls.myVotesByPostIds(currentUserId, pollOptions.keySet());
+		// Configuracao (multipla escolha e prazo); enquete antiga sem linha le como SIMPLES.
+		Map<String, com.socialcoisa.rede.feed.domain.PollConfig> pollConfigs = pollOptions.isEmpty() ? Map.of()
+			: polls.configsByPostIds(pollOptions.keySet());
+		Map<String, Long> pollVoters = pollOptions.isEmpty() ? Map.of() : polls.votersCountByPostIds(pollOptions.keySet());
 		// Reposts puros do viewer: batch check para marcar currentUserReposted.
 		Set<String> repostedByViewer = currentUserId == null ? Set.of()
 			: postReposts.findPostIdsRepostedByUser(currentUserId.value(), postIdValues);
@@ -657,9 +691,13 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				for (int position = 0; position < options.size(); position++) {
 					perOption.add(counts.getOrDefault(position, 0L));
 				}
-				long total = perOption.stream().mapToLong(Long::longValue).sum();
+				// Na multipla escolha a pessoa pode marcar varias: o total conta PESSOAS, nao votos.
+				long total = pollVoters.getOrDefault(post.id().value(), 0L);
+				var config = pollConfigs.getOrDefault(post.id().value(),
+					com.socialcoisa.rede.feed.domain.PollConfig.SIMPLES);
 				return withRepostedFlag.withPoll(new PollView(options, perOption,
-					myVotes.get(post.id().value()), total));
+					myVotes.getOrDefault(post.id().value(), List.of()), total, config.multipleChoice(),
+					config.endsAt()));
 			})
 			.map(view -> view.withMedia(mediaById))
 			.toList();

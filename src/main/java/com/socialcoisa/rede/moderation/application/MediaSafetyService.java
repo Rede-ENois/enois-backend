@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialcoisa.rede.colagem.application.port.in.ColagemModerationPort;
 import com.socialcoisa.rede.feed.application.port.in.ModerationRemovePostUseCase;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.Post;
@@ -58,6 +59,7 @@ public class MediaSafetyService {
 	private final MediaAssetRepository assets;
 	private final PostRepository posts;
 	private final ModerationRemovePostUseCase removePost;
+	private final ColagemModerationPort colagem;
 	private final ModeratorService moderators;
 	private final UserProfileRepository profiles;
 	private final Clock clock;
@@ -65,14 +67,15 @@ public class MediaSafetyService {
 
 	public MediaSafetyService(MediaSafetyCheckRepository checks, ReportedMediaReader mediaReader,
 			MediaSafetyAnalyzer analyzer, MediaAssetRepository assets, PostRepository posts,
-			ModerationRemovePostUseCase removePost, ModeratorService moderators, UserProfileRepository profiles,
-			Clock clock, @Value("${rede.moderation.media.enabled:true}") boolean enabled) {
+			ModerationRemovePostUseCase removePost, ColagemModerationPort colagem, ModeratorService moderators,
+			UserProfileRepository profiles, Clock clock, @Value("${rede.moderation.media.enabled:true}") boolean enabled) {
 		this.checks = checks;
 		this.mediaReader = mediaReader;
 		this.analyzer = analyzer;
 		this.assets = assets;
 		this.posts = posts;
 		this.removePost = removePost;
+		this.colagem = colagem;
 		this.moderators = moderators;
 		this.profiles = profiles;
 		this.clock = clock;
@@ -155,6 +158,16 @@ public class MediaSafetyService {
 				LOG.warn("media_safety_remove_failed post={} motivo={}", post.id().value(),
 					failure.getClass().getSimpleName());
 			}
+		}
+
+		// A mesma mídia pode estar na Colagem (foto publicada ou comentário fotográfico): sai de
+		// lá também, senão o takedown deixa a imagem no ar num feed paralelo.
+		try {
+			removed += colagem.removeByMedia(mediaId, reason);
+		}
+		catch (RuntimeException failure) {
+			LOG.warn("media_safety_colagem_remove_failed mediaId={} motivo={}", mediaId,
+				failure.getClass().getSimpleName());
 		}
 
 		String sanction = "NONE";

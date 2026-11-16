@@ -148,7 +148,7 @@ class LinkedInShareOutboxEventHandlerTests {
 		}
 
 		@Override
-		public List<Post> findExpiredMoments(Instant now, int limit) {
+		public List<Post> findExpiredEphemeral(Instant now, int limit) {
 			throw new UnsupportedOperationException();
 		}
 

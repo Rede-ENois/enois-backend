@@ -74,15 +74,23 @@ public enum NotificationCategory {
 		Map.entry("STUDY_PAIR_CHECKIN", SOCIAL),
 		Map.entry("STUDY_PAIR_ENDED", SOCIAL),
 		Map.entry("STUDY_PAIR_REMINDER", SOCIAL),
-		// Éroleplay: a vida da campanha (entrada, convite, comando). GROUPS porque é convivência
-		// entre participantes, como a de um grupo — não é mensagem privada nem trabalho.
-		Map.entry("ROLEPLAY_CAMPAIGN_MEMBER_JOINED", GROUPS),
-		Map.entry("ROLEPLAY_CAMPAIGN_JOIN_REQUEST", GROUPS),
-		Map.entry("ROLEPLAY_CAMPAIGN_JOIN_APPROVED", GROUPS),
-		Map.entry("ROLEPLAY_CAMPAIGN_JOIN_REJECTED", GROUPS),
-		Map.entry("ROLEPLAY_CAMPAIGN_INVITED", GROUPS),
-		Map.entry("ROLEPLAY_CAMPAIGN_MASTERSHIP_TRANSFERRED", GROUPS),
-		Map.entry("ROLEPLAY_ROLL_REQUESTED", GROUPS));
+	// Éroleplay: a vida da campanha (entrada, convite, comando). GROUPS porque é convivência
+	// entre participantes, como a de um grupo — não é mensagem privada nem trabalho.
+	Map.entry("ROLEPLAY_CAMPAIGN_MEMBER_JOINED", GROUPS),
+	Map.entry("ROLEPLAY_CAMPAIGN_JOIN_REQUEST", GROUPS),
+	Map.entry("ROLEPLAY_CAMPAIGN_JOIN_APPROVED", GROUPS),
+	Map.entry("ROLEPLAY_CAMPAIGN_JOIN_REJECTED", GROUPS),
+	Map.entry("ROLEPLAY_CAMPAIGN_INVITED", GROUPS),
+	Map.entry("ROLEPLAY_CAMPAIGN_MASTERSHIP_TRANSFERRED", GROUPS),
+	Map.entry("ROLEPLAY_ROLL_REQUESTED", GROUPS),
+	// Colagem: alguém contribuiu (texto ou foto) na fotografia da pessoa. SOCIAL porque é a
+	// convivência do feed fotográfico — mesma família de comentário e reação.
+	Map.entry("COLLAGEM_COMMENTED", SOCIAL),
+	// Murais: alguém colou a publicação da pessoa num mural. SOCIAL — convivência, não sistema.
+	Map.entry("MURAL_CONTRIBUTED", SOCIAL),
+	// Desabafos: alguém acolheu (comentou) o desabafo da pessoa. SOCIAL — convivência acolhedora,
+	// mesma família de comentário; sem notificação de reação, que é só contagem.
+	Map.entry("DESABAFOS_COMMENTED", SOCIAL));
 
 	public static NotificationCategory of(String kind) {
 		return kind == null ? SYSTEM : BY_KIND.getOrDefault(kind, SYSTEM);

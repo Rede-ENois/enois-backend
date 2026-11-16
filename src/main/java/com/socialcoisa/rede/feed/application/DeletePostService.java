@@ -20,6 +20,7 @@ import com.socialcoisa.rede.feed.application.port.in.ModerationQuarantinePostUse
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
+import com.socialcoisa.rede.feed.domain.PostType;
 import com.socialcoisa.rede.media.application.port.in.RequestPostMediaDeletionUseCase;
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -105,9 +106,9 @@ public class DeletePostService
 	}
 
 	/**
-	 * Expiração do Momento (24h): o MESMO caminho da exclusão — some do feed, o cache é limpo e a
-	 * mídia entra na fila de remoção. Automático, então sem auditoria de moderação: o rastro é o
-	 * evento PostDeleted do outbox.
+	 * Expiração do efêmero (Momento 24h, Instante 1h): o MESMO caminho da exclusão — some do feed,
+	 * o cache é limpo e a mídia entra na fila de remoção. Automático, então sem auditoria de
+	 * moderação: o rastro é o evento PostDeleted do outbox.
 	 */
 	@Transactional
 	public boolean expireMoment(PostId postId) {
@@ -120,8 +121,9 @@ public class DeletePostService
 		// A cópia de uma republicação não pode sobreviver ao original (inclusive por moderação).
 		removeReposts(post);
 		feedCacheRepository.removeEverywhere(post.id());
+		String reason = post.type() == PostType.INSTANTE ? "INSTANTE_EXPIRED" : "MOMENT_EXPIRED";
 		outboxEventRepository.append("PostDeleted", post.id().value(), "{\"postId\":\"" + post.id().value()
-			+ "\",\"reason\":\"MOMENT_EXPIRED\"}");
+			+ "\",\"reason\":\"" + reason + "\"}");
 		requestMediaDeletion(post);
 		return true;
 	}
