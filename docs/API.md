@@ -880,6 +880,7 @@ entrada na sala é autorizada no servidor com token assinado — detalhes em
 | POST | `/api/calls/{callId}/decline` | Recusar | Sim |
 | POST | `/api/calls/{callId}/cancel` | Quem iniciou desiste | Sim |
 | POST | `/api/calls/{callId}/join` | Autoriza e devolve `host`, `room`, `jwt` (emitido pelo gateway da Epapo) e `call` | Sim |
+| POST | `/api/calls/{callId}/presence` | Sinal de vida de quem está na sala: mantém a presença contada e a sala ao vivo | Sim |
 | POST | `/api/calls/{callId}/leave` | Sair (no grupo a chamada continua) | Sim |
 | POST | `/api/calls/{callId}/end` | Encerrar para todos | Sim |
 | POST | `/api/calls/{callId}/fail` | A tela perdeu a mídia: falha explícita em vez de sessão pendurada | Sim |
