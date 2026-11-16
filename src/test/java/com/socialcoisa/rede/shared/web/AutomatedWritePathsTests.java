@@ -88,6 +88,13 @@ class AutomatedWritePathsTests {
 		// Storage (fase 3): a réplica confirma a cópia designada. Mesma credencial, e a confirmação
 		// é conferida contra a colocação antes de virar durabilidade.
 		"/network/storage/objects/*/replica",
+		// Storage (fase 3, §5.6): o nó poda do próprio disco os corpos que o catálogo não atribui
+		// mais a ele. Mesma credencial de nó, e o serviço só aceita o dono do disco — outro nó
+		// responde 403 sem tocar em arquivo nenhum.
+		"/network/storage/inventory/purge",
+		// Storage (fase 3, §5.8): o nó devolve o que mediu no próprio disco -- o Control Plane só
+		// pode conferir o corpo da instalação em que roda; a cópia de outro nó só o dono relê.
+		"/network/storage/scrub",
 		// Inscrição de nó: o formulário é público (quem oferece a máquina pode não ter conta) e o
 		// link é autenticado pelo token de uso único do e-mail. Ambos limitados no controller.
 		"/network/join/applications",

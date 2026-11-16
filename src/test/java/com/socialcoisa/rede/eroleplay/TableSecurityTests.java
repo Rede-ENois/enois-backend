@@ -180,6 +180,68 @@ class TableSecurityTests {
 	}
 
 	@Test
+	void jogadorNaoAbreNemConsultaAVozDaMesa() throws Exception {
+		var master = authHelper().authenticate("f6-seg-mestre-voz");
+		var player = authHelper().authenticate("f6-seg-jogador-voz");
+		String campaignId = createCampaign(master, "Mesa Voz", "f6-create-seg-voz");
+		String tableId = createTable(master, campaignId, "f6-table-seg-voz");
+		join(player, campaignId, "f6-join-seg-voz");
+		String base = "/roleplay/campaigns/" + campaignId + "/tables/" + tableId;
+
+		// A voz é estado da mesa: quem muda cena e ordem é o mestre, e abrir/fechar a sala de voz
+		// também é — o jogador não convoca a mesa nem a encerra para todos.
+		MvcResult abrir = mockMvc.perform(post(base + "/voice")
+				.header("X-Session-Token", player.token())
+				.header("Idempotency-Key", "f6-seg-voz-jogador")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{}"))
+			.andReturn();
+		assertThat(abrir.getResponse().getStatus()).isEqualTo(403);
+
+		// A leitura do "ao vivo" é tolerante, como toda leitura pública: sem sala aberta (o POST do
+		// jogador foi recusado), o participante lê vazio em vez de erro — a recusa é do ato, não da
+		// leitura, e a entrada segue sendo recusada no join.
+		MvcResult consulta = mockMvc.perform(get(base + "/voice/open")
+				.header("X-Session-Token", player.token()))
+			.andReturn();
+		assertThat(consulta.getResponse().getStatus()).isEqualTo(200);
+		assertThat(consulta.getResponse().getContentAsString()).isEqualTo("");
+
+		// A mesa do mestre segue sem sala de voz criada pelo jogador.
+		JsonNode mesas = objectMapper.readTree(mockMvc
+			.perform(get("/roleplay/campaigns/" + campaignId + "/tables")
+				.header("X-Session-Token", master.token()))
+			.andReturn().getResponse().getContentAsString());
+		// O campo da listagem é o id da sala: nulo = ninguém criou sala pela mão do jogador.
+		assertThat(mesas.get("items").get(0).get("voiceRoomId").isNull()).isTrue();
+	}
+
+	@Test
+	void vozDeMesaDeOutraCampanhaNaoEConfirmadaPeloPathDesta() throws Exception {
+		var master = authHelper().authenticate("f6-seg-mestre-voz-ida");
+		String campaignId = createCampaign(master, "Mesa Voz Cruzada", "f6-create-seg-voz-ida");
+		String tableAqui = createTable(master, campaignId, "f6-table-seg-voz-ida");
+
+		// O mestre abre a voz da mesa desta campanha (a rota dele, o dono dela).
+		mockMvc.perform(post("/roleplay/campaigns/" + campaignId + "/tables/" + tableAqui + "/voice")
+				.header("X-Session-Token", master.token())
+				.header("Idempotency-Key", "f6-seg-voz-ida-abrir")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{}"))
+			.andReturn();
+
+		// O path de OUTRA campanha não confirma a chamada da mesa alheia: quem participa das duas
+		// campanhas não usa o caminho de uma para ler a voz da mesa da outra — mesa de outra
+		// campanha é 404, como se não existisse por aqui.
+		String campaignB = createCampaign(master, "Mesa Voz Outra", "f6-create-seg-voz-outra");
+		String baseB = "/roleplay/campaigns/" + campaignB + "/tables/" + tableAqui;
+		MvcResult consulta = mockMvc.perform(get(baseB + "/voice/open")
+				.header("X-Session-Token", master.token()))
+			.andReturn();
+		assertThat(consulta.getResponse().getStatus()).isEqualTo(404);
+	}
+
+	@Test
 	void tokenDeOutraMesaNaoEMovidoPorRotaDesta() throws Exception {
 		var master = authHelper().authenticate("f6-seg-mestre-idor");
 		String campaignId = createCampaign(master, "Mesa IDOR", "f6-create-seg-idor");

@@ -2,7 +2,8 @@
 
 Estado: implementado em 2026-11-12 e na `qa` (PR #677 mergeado); declaração de recrutador
 acrescentada em 2026-11-13; tabela paginada acrescentada em 2026-11-13 (V291); questionário
-condicional e rascunho acrescentados em 2026-11-15 (V330).
+condicional e rascunho acrescentados em 2026-11-15 (V330); timeline de auditoria, entrevista na
+agenda central e aviso de reprovação pelo board acrescentados em 2026-11-16.
 
 Complementa `docs/JOB_AGGREGATOR.md` (vagas internas e externas) e
 `docs/SOCIAL_PROFESSIONAL_CONTEXTS.md` (identidade profissional). Não cria um segundo sistema
@@ -52,6 +53,7 @@ reprovada não se move mais.
 | `GET /jobs/{jobId}/process/applications/{applicationId}/movements` | dono | histórico em ordem |
 | `GET /jobs/{jobId}/process/applications/{applicationId}/notes` | dono | notas internas |
 | `POST /jobs/{jobId}/process/applications/{applicationId}/notes` | dono | cria nota (`{"body": ...}`) |
+| `GET /jobs/{jobId}/process/applications/{applicationId}/audit` | equipe (VIEW_CANDIDATES) | timeline de auditoria da candidatura |
 | `GET /jobs/{jobId}/process/candidates` | equipe (VIEW_CANDIDATES) | fila de triagem com score explicável, ordenada |
 | `POST /jobs/{jobId}/process/applications/batch-move` | equipe (TRIAGE) | move/reprova várias de uma vez, com desfecho por item |
 | `GET /jobs/recruitment` | sessão | Central: minhas vagas com o funil de cada uma |
@@ -160,6 +162,20 @@ quem não tem vaga. Reativar devolve o acesso ao que já estava lá.
 - `status` desconhecido é 400 `INVALID_APPLICATION_STATUS` e cursor inválido é 400
   `INVALID_CURSOR`;
 - terceiro recebe 403 `NOT_OWNER` e sem sessão 401.
+
+`ApplicationEvaluationTests` (2 testes, integração com H2 e MockMvc):
+
+- a avaliação sobe com critérios, veredito e resumo e volta na leitura; **reavaliar pelo mesmo autor
+  grava por cima** (uma linha, não duas) e a leitura não devolve duplicata;
+- critérios vazios, veredito fora do conjunto e resumo acima do teto são recusa explícita
+  (`EVALUATION_*`), não gravação silenciosa.
+
+`ApplicationAuditTimelineTests` (2 testes, integração com H2 e MockMvc):
+
+- nota, avaliação e movimento real (avanço para a segunda etapa) geram três eventos na ordem
+  inversa do tempo, com ator, alvo `job_application:{id}` e metadado dizendo o que mudou;
+- candidato e terceiro recebem 403 e candidatura de outra vaga recebe 404 `APPLICATION_NOT_FOUND` —
+  a timeline é interna e não vaza para quem não conduz a seleção.
 
 ## Quem conduz a seleção
 
@@ -319,11 +335,104 @@ obrigatórios, não entra no board, não notifica ninguém, não conta como cand
 respostas (`DRAFT_TOO_MANY_ANSWERS`) e 100.000 caracteres. **Enviou a candidatura, o rascunho
 morre** — o apply apaga a linha. Vaga inexistente é 404 `JOB_NOT_FOUND`, igual ao apply.
 
+## Avaliações internas (V332)
+
+Parecer estruturado por avaliador, ao lado da nota livre: critérios nomeados com nota de 0 a 10
+(até 10 critérios), veredito fechado (`STRONG_YES`, `YES`, `MAYBE`, `NO`) e resumo de até 2000
+caracteres. Uma avaliação por autor por candidatura (`job_application_evaluations`, única por
+`application_id` + `author_id`): reavaliar grava por cima — o que interessa é a posição atual de
+cada avaliador; o histórico da decisão vive nos movimentos do pipeline.
+
+| Rota | Quem | O que faz |
+|---|---|---|
+| `PUT /jobs/{jobId}/process/applications/{applicationId}/evaluations` | TRIAGE | cria ou refaz a avaliação do próprio chamador |
+| `GET /jobs/{jobId}/process/applications/{applicationId}/evaluations` | VIEW_CANDIDATES | as avaliações da candidatura, mais recente primeiro |
+
+Códigos de recusa explícitos: `EVALUATION_VERDICT_INVALID`, `EVALUATION_CRITERIA_REQUIRED`,
+`EVALUATION_TOO_MANY_CRITERIA`, `EVALUATION_CRITERIA_LABEL_REQUIRED`,
+`EVALUATION_CRITERIA_LABEL_TOO_LONG`, `EVALUATION_SCORE_OUT_OF_RANGE`,
+`EVALUATION_SUMMARY_TOO_LONG`. Como as notas, a avaliação jamais aparece em rota do candidato.
+
+## Comunicação com o candidato (sem canal novo)
+
+O aviso ao candidato sai da mesma infraestrutura de notificações e mensagens que o projeto já
+tinha — a porta `JobApplicationStatusNotifier` (notificação in-app + push, mensagem direta na
+conversa de candidatura com contexto `JOB` e e-mail), sem segunda caixa e sem segundo mensageiro.
+O corpo da notificação in-app **não** traz o retorno escrito (ele pode aparecer em tela
+bloqueada); o retorno segue na mensagem direta, no e-mail e na lista de candidaturas do candidato.
+
+Reprovar avisa; avançar ou retornar etapa **não**. A reprovação é decisão final — o candidato
+precisa do retorno e do estado novo; um movimento interno entre etapas não muda nada para quem
+está do outro lado, e avisar a cada card arrastado viraria ruído.
+
+| Caminho | Antes | Agora |
+|---|---|---|
+| Triagem pelo estado clássico (`PATCH /jobs/{jobId}/applications/{applicationId}`) | avisava | avisa (como antes) |
+| Reprovar pelo board (`POST .../process/applications/{applicationId}/move`, `kind=REJECT`) | mudo | avisa pelo mesmo caminho |
+| Reprovar em lote (`POST .../process/applications/batch-move`, `kind=REJECT`) | mudo | cada candidatura do lote avisa a própria candidata |
+| Avançar/retornar etapa | mudo | mudo (proposital) |
+
+Falha de entrega é tolerada (o estado já foi persistido antes do aviso): o erro é registrado e a
+decisão continua valendo — o candidato ao menos vê o estado atualizado na lista dele.
+
+## Timeline de auditoria
+
+Toda decisão que muda o estado de uma candidatura deixa rastro na trilha de auditoria que o
+projeto já mantém (`shared.audit.AuditTrail`, tabela `audit_logs` e o índice `(target_id,
+created_at)` da V315) — **não há tabela nova para isso**. O alvo é sempre
+`job_application:{applicationId}`, o ator é quem agiu e o metadado diz o que mudou:
+
+| Ação | Quando | Metadado |
+|---|---|---|
+| `RECRUITMENT_APPLICATION_MOVED` | movimento, avanço, retorno ou reprovação | `kind` (`ADVANCE`, `RETURN` ou `REJECT`) e a etapa (`toStageId`, ou `fromStageId` na reprovação) |
+| `RECRUITMENT_APPLICATION_NOTED` | nota interna criada | `noteId` |
+| `RECRUITMENT_APPLICATION_EVALUATED` | avaliação interna gravada ou refeita | `verdict` |
+
+| Rota | Quem | O que faz |
+|---|---|---|
+| `GET /jobs/{jobId}/process/applications/{applicationId}/audit` | VIEW_CANDIDATES | a timeline da candidatura, mais recente primeiro (até 200 eventos) |
+
+A rota exige sessão e a capacidade de ver candidatos da vaga, e confere que a candidatura pertence
+àquela vaga: candidato e estranho recebem 403, candidatura de outra vaga recebe 404
+`APPLICATION_NOT_FOUND`. Como o resto do módulo, a timeline é **interna** — não existe rota de
+auditoria para o candidato.
+
+## Entrevistas na agenda central (sem segundo calendário)
+
+A entrevista da candidatura **é** um compromisso da agenda que o projeto já tem: a origem é
+`JOB_INTERVIEW` + id da entrevista, gravada nas duas agendas (candidato e quem marcou) pela porta de
+origem do calendário. Reagendar move as duas entradas em vez de criar outras; cancelar publica o
+cancelamento no mesmo UID. Não existe segundo calendário nem segundo lembrete.
+
+| Rota | Quem | O que faz |
+|---|---|---|
+| `POST /jobs/{jobId}/applications/{applicationId}/interview` | MANAGE_INTERVIEWS | marca (ou reagenda a que já vale) |
+| `PATCH /jobs/{jobId}/applications/{applicationId}/interview/{interviewId}` | quem marcou | reagenda |
+| `DELETE /jobs/{jobId}/applications/{applicationId}/interview/{interviewId}` | quem marcou | cancela |
+| `GET /jobs/{jobId}/applications/{applicationId}/interview` | empregador (VIEW_CANDIDATES) ou candidato | as entrevistas da candidatura |
+| `GET /jobs/{jobId}/interviews/free-slots` | MANAGE_INTERVIEWS | horários livres na janela pedida |
+
+### Horários livres e conflito
+
+`GET /jobs/{jobId}/interviews/free-slots?from=&to=&durationMinutes=` devolve os horários livres
+tirados da **disponibilidade semanal que quem está marcando declarou na agenda** (`/calendar/
+availability`), em passos de meia hora, descartando o que já ocupa a agenda profissional dessa
+pessoa. Nunca lê a agenda do candidato: a agenda dele é privada, e quem responde se o horário serve
+é ele, pelo convite.
+
+Sem janela declarada, a resposta traz `reasonCode` `NO_AVAILABILITY`; com as janelas todas ocupadas,
+`NO_FREE_SLOT` — lista vazia **com motivo**, nunca uma lista inventada de horários.
+
+Marcar em cima de outro compromisso **não é bloqueado**: o mesmo princípio do calendário (sobrepor é
+uma decisão da pessoa, e um 409 impediria o caso legítimo). A resposta de marcar/reagendar traz
+`conflicts` — o que já ocupa aquele horário na agenda de quem marcou (id, título e intervalo), sem
+contar a própria entrevista. Nas listas, `conflicts` vem `null` ("não avaliado"), distinto de lista
+vazia ("nada conflita").
+
 ## Fora deste escopo (próximos passos)
 
-Avaliações por critério, slot de entrevista escolhido pelo candidato, banco de
-talentos e a UI no design system. A fundação acima é a que esses itens vão usar — não há
-segunda base a criar.
+Slot de entrevista escolhido pelo candidato, banco de talentos e a UI no design system. A
+fundação acima é a que esses itens vão usar — não há segunda base a criar.
 
 
 A UI do "Sou recrutador/a" no front (`@rede-enois/design-system`) ainda não foi entregue: o

@@ -1149,6 +1149,59 @@ exec_object_put() {
   printf '[executor] DONE %s (replica %s de %s, %s bytes)\n' "$task_id" "${replica:-?}" "$object_id" "$got_bytes"
 }
 
+exec_storage_scrub() {
+  # exec_storage_scrub: confere o que este no guarda no proprio disco e devolve o que nao confere.
+  #
+  # O Control Plane so rele o corpo do disco da instalacao em que roda (doc 13 §5.7). A copia daqui
+  # so este no pode conferir: ele e o unico com acesso ao arquivo (o CP nao abre conexao para o no).
+  # Antes, um corpo trocado neste disco continuava contando como durabilidade no catalogo.
+  #
+  # Roda DEPOIS do heartbeat e ANTES de pedir tarefa: uma varredura longa num disco grande nao pode
+  # atrasar o heartbeat, que e a unica saida do no. Sem objetos, a saida e imediata.
+  local permitted="${1:-}" objects_dir="$NODE_HOME/objects" f id sha lote primeiro resp stale
+  [[ -d "$objects_dir" ]] || return 0
+  # Quem guarda objeto e no de armazenamento. Rodar em no que nao guarda mandaria relatorio vazio
+  # todo ciclo e so faria volume no log do Control Plane.
+  grep -q '"OBJECT_PUT"' <<<"[$permitted]" || return 0
+
+  lote=''
+  primeiro=1
+  enviar() {
+    [[ -n "$lote" ]] || return 0
+    resp=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 60 \
+      "${auth[@]}" -d "[$lote]" "$CONTROL_PLANE/network/storage/scrub") || {
+      # Nao e transitorio no sentido de repetir agora: a proxima volta reenvia. O estado do
+      # catalogo so muda quando o CP ACEITA o relatorio -- um no que falha em entregar nao pode
+      # declarar que a copia esta boa.
+      event warn 'varredura do disco nao foi entregue ao Control Plane'
+      return 0; }
+    stale=$(json_number "$resp" stale)
+    (( ${stale:-0} > 0 )) && event warn "varredura: ${stale} copia(s) deste no nao conferem (marcadas STALE)"
+    lote=''
+    primeiro=1
+  }
+
+  for f in "$objects_dir"/*.bin; do
+    [[ -f "$f" ]] || continue
+    id="${f##*/}"
+    id="${id%.bin}"
+    sha=$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)
+    # Arquivo ilegivel: NAO entra no relatorio. "Nao consegui ler" e diferente de "leu e divergiu";
+    # declarar divergencia aqui derrubaria uma copia boa por um erro de I/O passageiro.
+    [[ -n "$sha" ]] || continue
+    [[ "$primeiro" == 1 ]] || lote+=','
+    lote+="{\"objectId\":\"$id\",\"actualSha256\":\"$sha\"}"
+    primeiro=0
+    # Lote pequeno: o corpo de cada item e curto, e um relatorio gigante numa request so pode
+    # estourar o limite do servidor no meio -- reenviar tudo de novo seria pior.
+    if [[ $((${#lote} / 128)) -ge 200 ]]; then
+      enviar
+    fi
+  done
+  enviar
+  return 0
+}
+
 exec_api_request() {
   local next="$1" task_id="$2" attempt="$3"
   local config="${4:-}"
@@ -1290,6 +1343,10 @@ cycle() {
   config=$(allowed_tasks) || return 1
   allowed=$(allowed_tasks_list <<<"$config")
   printf '[executor] allowedTasks=%s\n' "$allowed"
+
+  # 3.5 a varredura do proprio disco: a copia daqui so o dono pode conferir, e o Control Plane nao
+  # abre conexao para o no (doc 13 §5.8).
+  exec_storage_scrub "$allowed"
 
   # 4. fila designada a este nó.
   local next tasks_list

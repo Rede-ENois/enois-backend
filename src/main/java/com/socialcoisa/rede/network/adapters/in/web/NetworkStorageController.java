@@ -23,6 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import com.socialcoisa.rede.network.application.NodeKeyService;
+import com.socialcoisa.rede.network.application.NodeStorageInventory;
 import com.socialcoisa.rede.network.application.StorageCatalogService;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.StorageObject;
@@ -46,10 +47,12 @@ import com.socialcoisa.rede.shared.web.ApiException;
 class NetworkStorageController {
 
 	private final StorageCatalogService storage;
+	private final NodeStorageInventory inventory;
 	private final NodeKeyService keys;
 
-	NetworkStorageController(StorageCatalogService storage, NodeKeyService keys) {
+	NetworkStorageController(StorageCatalogService storage, NodeStorageInventory inventory, NodeKeyService keys) {
 		this.storage = storage;
+		this.inventory = inventory;
 		this.keys = keys;
 	}
 
@@ -159,6 +162,67 @@ class NetworkStorageController {
 		NetworkNode node = keys.authenticate(nodeId, nodeKey);
 		requireStorage(node);
 		return storage.placementsOn(node.id()).stream().map(PlacementView::of).toList();
+	}
+
+	/**
+	 * O que este nó <b>de fato</b> tem no disco, comparado com o que o catálogo diz que ele deve ter.
+	 *
+	 * <p>Resolve três lacunas de uma vez: dá ao operador o que pode ser podado (órfão), diz o que
+	 * foi colocado e sumiu ({@code missing}) e o que está lá e não confere ({@code divergent}). É a
+	 * única visão do disco de um nó que o Control Plane consegue ter sem abrir conexão para ele.</p>
+	 */
+	@GetMapping("/inventory")
+	NodeStorageInventory.Report inventory(@RequestHeader(value = "X-Node-Id", required = false) String nodeId,
+			@RequestHeader(value = "X-Node-Key", required = false) String nodeKey) {
+		NetworkNode node = keys.authenticate(nodeId, nodeKey);
+		requireStorage(node);
+		return inventory.inventory(node);
+	}
+
+	/**
+	 * Apaga do disco deste nó os corpos que o catálogo <b>não atribui mais</b> a ele.
+	 *
+	 * <p>{@code dryRun} é o padrão: apagar disco de quem contribui é ato de operador, com o número
+	 * na mão. O que sai é só órfão — arquivo que nenhuma colocação deste nó reivindica. Cópia
+	 * colocada e divergente <b>não</b> se apaga aqui: é a única cópia possivelmente boa do objeto, e
+	 * o caminho é re-replicar, não descartar.</p>
+	 */
+	@PostMapping("/inventory/purge")
+	NodeStorageInventory.Purge purgeOrphans(
+			@RequestHeader(value = "X-Node-Id", required = false) String nodeId,
+			@RequestHeader(value = "X-Node-Key", required = false) String nodeKey,
+			@RequestParam(name = "dryRun", defaultValue = "true") boolean dryRun) {
+		NetworkNode node = keys.authenticate(nodeId, nodeKey);
+		requireStorage(node);
+		return inventory.purgeOrphans(node, dryRun);
+	}
+
+	/**
+	 * O nó devolve o que mediu no <b>próprio</b> disco: as cópias suas que não conferem.
+	 *
+	 * <p>Fecha o que a varredura do Control Plane não alcança: ela só relê o disco da instalação em
+	 * que roda. A cópia de outro nó só o dono do disco pode conferir, e é ele que chama aqui.</p>
+	 *
+	 * <p>O nó declara o <b>medido</b>; o Control Plane confere contra a colocação e só rebaixa as
+	 * cópias que <b>são deste nó</b>. Entrada que não é dele é ignorada — o relatório de um nó não
+	 * derruba a cópia de outro.</p>
+	 */
+	@PostMapping("/scrub")
+	Map<String, Object> reportScrub(@RequestHeader(value = "X-Node-Id", required = false) String nodeId,
+			@RequestHeader(value = "X-Node-Key", required = false) String nodeKey,
+			@RequestBody(required = false) List<ScrubEntry> divergentes) {
+		NetworkNode node = keys.authenticate(nodeId, nodeKey);
+		if (divergentes == null) {
+			throw new ApiException(400, "STORAGE_SCRUB_BODY_MISSING", "Corpo do relatorio ausente.");
+		}
+		int marcadas = storage.reportDirtyReplicas(node, divergentes.stream()
+			.map(e -> new StorageCatalogService.Divergente(e.objectId(), e.actualSha256()))
+			.toList());
+		return Map.of("nodeId", node.id(), "stale", marcadas);
+	}
+
+	/** O que o nó mediu numa cópia: o id do objeto e o digest que o arquivo tem agora. */
+	record ScrubEntry(String objectId, String actualSha256) {
 	}
 
 	/** O que o catálogo sabe deste objeto: as duas medidas e onde estão as cópias. */

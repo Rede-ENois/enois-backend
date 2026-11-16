@@ -85,6 +85,13 @@ class WriteRouteInterceptor implements HandlerInterceptor {
 		// Fase 3: a réplica confirma a cópia que o Control Plane designou. Mesma credencial de nó,
 		// mesmo motivo da rota acima — e a confirmação só vale para quem foi designado.
 		"/network/storage/objects/*/replica",
+		// Inventário: o nó poda do próprio disco os corpos que o catálogo não atribui mais a ele.
+		// Mesma credencial de nó (X-Node-Id + X-Node-Key), e o serviço só aceita o nó cujo id é o
+		// dono do disco — um nó qualquer não apaga o disco de outro.
+		"/network/storage/inventory/purge",
+		// Varredura do proprio no: ele devolve o que mediu no disco dele, e o Control Plane so
+		// rebaixa as copias que SAO deste no (o filtro por dono e no servico). Mesma credencial.
+		"/network/storage/scrub",
 		// Inscrição para servir um nó (V324): o formulário é público por definição — quem quer
 		// oferecer uma máquina pode não ter conta —, limitado por IP no controller. O link de
 		// exibição é autenticado pelo PRÓPRIO token de uso único, que só existe no e-mail de

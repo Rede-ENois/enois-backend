@@ -76,7 +76,7 @@ class StorageCatalogServiceTests {
 		nodes = mock(NetworkNodeRepository.class);
 		when(nodes.findCandidates(any(), anyInt())).thenReturn(List.of());
 		service = new StorageCatalogService(catalog, audit, Clock.fixed(NOW, ZoneOffset.UTC), 10_000,
-			root.toString(), placement(1));
+			root.toString(), placement(1), null);
 	}
 
 	/** O serviço de colocação com o número de cópias dado; por padrão, uma só (o Control Plane). */
@@ -199,7 +199,7 @@ class StorageCatalogServiceTests {
 	@Test
 	void acima_do_teto_o_corpo_e_recusado_e_o_objeto_fica_pendente() {
 		StorageCatalogService pequeno = new StorageCatalogService(catalog, audit,
-			Clock.fixed(NOW, ZoneOffset.UTC), 4, root.toString(), placement(1));
+			Clock.fixed(NOW, ZoneOffset.UTC), 4, root.toString(), placement(1), null);
 		StorageObject object = pequeno.beginUpload("user_1", "fotos", "grande.bin", null);
 
 		assertThatThrownBy(() -> pequeno.store(storageNode(), object.id(),

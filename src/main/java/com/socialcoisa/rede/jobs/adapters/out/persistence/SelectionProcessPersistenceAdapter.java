@@ -1,14 +1,20 @@
 package com.socialcoisa.rede.jobs.adapters.out.persistence;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.stereotype.Repository;
 
 import com.socialcoisa.rede.jobs.application.port.out.SelectionProcessRepository;
+import com.socialcoisa.rede.jobs.domain.ApplicationEvaluation;
 import com.socialcoisa.rede.jobs.domain.SelectionStage;
 import com.socialcoisa.rede.jobs.domain.StageMovement;
 import com.socialcoisa.rede.jobs.domain.StageNote;
+
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 
 @Repository
 class SelectionProcessPersistenceAdapter implements SelectionProcessRepository {
@@ -16,12 +22,17 @@ class SelectionProcessPersistenceAdapter implements SelectionProcessRepository {
 	private final SpringDataSelectionStageJpaRepository stages;
 	private final SpringDataStageMovementJpaRepository movements;
 	private final SpringDataStageNoteJpaRepository notes;
+	private final SpringDataApplicationEvaluationJpaRepository evaluations;
+	private final ObjectMapper objectMapper;
 
 	SelectionProcessPersistenceAdapter(SpringDataSelectionStageJpaRepository stages,
-			SpringDataStageMovementJpaRepository movements, SpringDataStageNoteJpaRepository notes) {
+			SpringDataStageMovementJpaRepository movements, SpringDataStageNoteJpaRepository notes,
+			SpringDataApplicationEvaluationJpaRepository evaluations, ObjectMapper objectMapper) {
 		this.stages = stages;
 		this.movements = movements;
 		this.notes = notes;
+		this.evaluations = evaluations;
+		this.objectMapper = objectMapper;
 	}
 
 	@Override
@@ -111,6 +122,35 @@ class SelectionProcessPersistenceAdapter implements SelectionProcessRepository {
 		return notes.findByApplicationIdOrderByCreatedAtAsc(applicationId).stream()
 			.map(StageNoteJpaEntity::toDomain)
 			.toList();
+	}
+
+	@Override
+	public ApplicationEvaluation saveEvaluation(ApplicationEvaluation evaluation) {
+		ApplicationEvaluationJpaEntity entity = evaluations
+			.findByApplicationIdAndAuthorId(evaluation.applicationId(), evaluation.authorId())
+			.orElseGet(ApplicationEvaluationJpaEntity::new);
+		entity.applyFrom(evaluation, objectMapper.writeValueAsString(evaluation.criteria()));
+		return evaluations.save(entity).toDomain(criteriaOf(entity));
+	}
+
+	@Override
+	public List<ApplicationEvaluation> evaluationsOf(long applicationId) {
+		return evaluations.findByApplicationIdOrderByUpdatedAtDesc(applicationId).stream()
+			.map(entity -> entity.toDomain(criteriaOf(entity)))
+			.toList();
+	}
+
+	private Map<String, Integer> criteriaOf(ApplicationEvaluationJpaEntity entity) {
+		try {
+			Map<String, Integer> criteria = objectMapper.readValue(entity.criteriaJson(),
+				new TypeReference<LinkedHashMap<String, Integer>>() {
+				});
+			return criteria == null ? Map.of() : criteria;
+		}
+		catch (Exception exception) {
+			// JSON ilegível não pode apagar a avaliação da listagem; a próxima gravação revalida.
+			return Map.of();
+		}
 	}
 
 }

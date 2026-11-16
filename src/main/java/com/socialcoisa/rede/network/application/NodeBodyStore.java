@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
 /**
@@ -42,6 +43,13 @@ public class NodeBodyStore {
 	private final Path root;
 
 	NodeBodyStore(@Value("${rede.storage.node-body-root}") String root) {
+		if (root == null || root.isBlank()) {
+			// `@ConditionalOnProperty` casa com a propriedade PRESENTE, mesmo vazia. Sem esta
+			// recusa, `Path.of("")` resolveria para o diretório corrente e o processo gravaria
+			// corpo de nó no diretório de trabalho — desligado tem de ser ausente, não vazio.
+			throw new IllegalStateException(
+				"rede.storage.node-body-root vazio: omita a propriedade para nao guardar corpo de no");
+		}
 		this.root = Path.of(root).toAbsolutePath().normalize();
 		try {
 			Files.createDirectories(this.root);
@@ -95,6 +103,90 @@ public class NodeBodyStore {
 	/** Abre o corpo gravado. */
 	public InputStream read(String objectId) throws IOException {
 		return Files.newInputStream(pathOf(objectId));
+	}
+
+	/**
+	 * Os ids dos corpos que este disco tem.
+	 *
+	 * <p>É o outro lado do catálogo: o catálogo diz o que este nó <b>deveria</b> guardar, e isto
+	 * diz o que ele <b>de fato</b> tem. Só {@code .bin} entra: temporário de escrita interrompida
+	 * não é corpo e não pode virar "órfão" — apagá-lo no inventário esconderia uma tarefa que está
+	 * rodando agora.</p>
+	 */
+	public java.util.Set<String> objectIds() {
+		try (var stream = Files.list(root)) {
+			return stream.filter(Files::isRegularFile)
+				.map(path -> path.getFileName().toString())
+				.filter(nome -> nome.endsWith(".bin"))
+				.map(nome -> nome.substring(0, nome.length() - ".bin".length()))
+				.collect(java.util.stream.Collectors.toCollection(java.util.TreeSet::new));
+		}
+		catch (IOException unreadable) {
+			// Não listar não é "não tenho nada": vazio aqui faria o inventário dizer que o disco
+			// está limpo e que todas as cópias sumiram de uma vez.
+			throw new IllegalStateException("Nao foi possivel listar os corpos em " + root, unreadable);
+		}
+	}
+
+	/**
+	 * De quem é este disco, lendo as mesmas credenciais que o runtime grava no diretório do nó
+	 * ({@code node.json} com o id, {@code api-key} com a chave).
+	 *
+	 * <p>Uma propriedade separada ({@code rede.storage.node-id}) daria dois lugares dizendo de quem
+	 * é o disco, e o segundo é o que ninguém atualiza. Lendo o que já existe, o processo que serve as
+	 * rotas de Storage é <b>o mesmo</b> nó que o runtime provisionou.</p>
+	 *
+	 * <p>{@code api-key} é exigida: {@code node.json} sozinho não prova que este processo é aquele
+	 * nó. E ela fica em {@code 0600} — um arquivo de credencial legível por outro usuário é o
+	 * próximo incidente.</p>
+	 *
+	 * @return o id do nó dono, ou {@code null} se este diretório não é de um nó provisionado
+	 */
+	@Nullable
+	public String ownerNodeId() {
+		return resolveOwnerNodeId();
+	}
+
+	@Nullable
+	private String resolveOwnerNodeId() {
+		// O runtime grava `node.json` e `api-key` em $NODE_HOME e os corpos em $NODE_HOME/objects.
+		// Quando o root é o diretório de corpos, as credenciais estão no pai; quando o root já é o
+		// $NODE_HOME, estão nele. Nos dois casos a fonte é a mesma que o nó provisionado usa.
+		Path home = root.getFileName() != null && root.getFileName().toString().equals("objects")
+			? root.getParent()
+			: root;
+		Path meta = home == null ? null : home.resolve("node.json");
+		Path chave = home == null ? null : home.resolve("api-key");
+		if (meta == null || !Files.isRegularFile(meta) || chave == null || !Files.isRegularFile(chave)) {
+			return null;
+		}
+		if (!ownCredentials(chave)) {
+			LOG.warn("api-key de {} legivel por outros usuarios; o no nao e assumido", home);
+			return null;
+		}
+		try {
+			tools.jackson.databind.JsonNode json = new tools.jackson.databind.ObjectMapper().readTree(meta.toFile());
+			tools.jackson.databind.JsonNode id = json.get("nodeId");
+			return id == null || !id.asString().matches("[A-Za-z0-9_-]{1,64}") ? null : id.asString();
+		}
+		catch (RuntimeException ilegivel) {
+			LOG.warn("node.json ilegivel em {}: {}", root.getParent(), ilegivel.getMessage());
+			return null;
+		}
+	}
+
+	/** O grupo ou outros não podem ler a credencial. Sem POSIX (Windows) a checagem não se aplica. */
+	private static boolean ownCredentials(Path chave) {
+		try {
+			var perms = Files.getPosixFilePermissions(chave);
+			return perms.stream().noneMatch(p -> p.name().startsWith("GROUP_") || p.name().startsWith("OTHERS_"));
+		}
+		catch (UnsupportedOperationException semPosix) {
+			return true;
+		}
+		catch (IOException ilegivel) {
+			return false;
+		}
 	}
 
 	/** Bytes que os corpos ocupam neste disco — o que o heartbeat reporta como livro medido. */

@@ -55,6 +55,7 @@ class StorageScrubberReadBackTests {
 
 	private InMemoryCatalog catalog;
 	private AuditTrail audit;
+	private NodeBodyStore nodeBodies;
 	private StorageCatalogService service;
 	private StorageScrubber scrubber;
 
@@ -62,9 +63,13 @@ class StorageScrubberReadBackTests {
 	void setUp() {
 		catalog = new InMemoryCatalog();
 		audit = mock(AuditTrail.class);
+		// O mesmo diretório que o processo usa quando roda junto do nó local. Fica vazio nos testes
+		// de releitura da réplica 0; o teste do sumiço é que grava nele.
+		nodeBodies = new NodeBodyStore(root.resolve("no-local/objects").toString());
 		service = new StorageCatalogService(catalog, audit, Clock.fixed(NOW, ZoneOffset.UTC), 10_000, root.toString(),
-			stubPlacement());
-		scrubber = new StorageScrubber(catalog, stubPlacement(), audit, Clock.fixed(NOW, ZoneOffset.UTC), service);
+			stubPlacement(), nodeBodies);
+		scrubber = new StorageScrubber(catalog, stubPlacement(), audit, Clock.fixed(NOW, ZoneOffset.UTC), service,
+			nodeBodies);
 	}
 
 	/** A colocação não participa da releitura: o alvo de cópias é 2 e nenhum nó é candidato. */
@@ -135,6 +140,101 @@ class StorageScrubberReadBackTests {
 		assertThat(report.divergent()).hasSize(1);
 		// Digest vazio é "não consegui ler" — nunca um digest calculado sobre nada.
 		assertThat(report.divergent().get(0).actualSha256()).isEmpty();
+	}
+
+	@Test
+	void sumico_da_replica_zero_nao_e_escondido_pelo_corpo_do_no_local() throws Exception {
+		StorageObject object = gravado(body("conteudo do arquivo"));
+		// A réplica 0 some da raiz do Control Plane -- mas o MESMO corpo está no diretório do nó
+		// local, porque o nó também guarda uma cópia deste objeto.
+		Files.delete(service.bodyPath(object.id()));
+		nodeBodies.write(object.id(), new ByteArrayInputStream(body("conteudo do arquivo")));
+		// Cópia confirmada em OUTRO nó: não é relida daqui e não pode ser acusada pela falta local.
+		catalog.savePlacement(new StoragePlacement(object.id(), 1, "nd_replica", object.bytes(), object.sha256(),
+			StoragePlacement.State.OK, NOW));
+
+		StorageScrubber.Report report = scrubber.scan("fotos", 10, true);
+
+		// Uma releitura por objeto (a réplica 0), não uma por cópia: antes o laço relia o arquivo
+		// local uma vez por colocação e contava 2.
+		assertThat(report.bodiesRelidos()).isEqualTo(1);
+		assertThat(report.divergent()).hasSize(1);
+		StorageScrubber.Report.Divergent divergente = report.divergent().get(0);
+		assertThat(divergente.replica()).isZero();
+		assertThat(divergente.nodeId()).isEqualTo("nd_ctrl");
+		// Digest vazio = "não consegui ler" — a réplica 0 sumiu, o corpo do nó local não a substitui.
+		assertThat(divergente.actualSha256()).isEmpty();
+	}
+
+	/**
+	 * O corpo do nó local entra na releitura. Antes ele era um ponto cego: objeto replicado para o
+	 * nó local podia ser trocado no disco dele e a varredura continuava dizendo "conferido", porque
+	 * só a réplica 0 era relida. A gotcha: sem verificar o dono do disco, qualquer colocação no id
+	 * deste processo seria relida como se fosse dele.
+	 */
+	@Test
+	void corpo_do_no_local_com_digest_diferente_e_reportado_com_a_replica_e_o_no_certos() throws Exception {
+		StorageObject object = gravado(body("conteudo do arquivo"));
+		Files.delete(service.bodyPath(object.id()));
+		nodeBodies.write(object.id(), new ByteArrayInputStream(body("CONTEUDO DO ARQUIVO")));
+		provisionado("nd_local");
+		catalog.savePlacement(new StoragePlacement(object.id(), 1, "nd_local", object.bytes(), object.sha256(),
+			StoragePlacement.State.OK, NOW));
+
+		StorageScrubber.Report report = scrubber.scan("fotos", 10, true);
+
+		// A réplica 0 sumiu (divergente, digest vazio) e o corpo do nó local tem outro digest: duas
+		// divergências, cada uma na cópia que a produziu. Nenhuma é escondida pela outra.
+		assertThat(report.bodiesRelidos()).isEqualTo(2);
+		assertThat(report.divergent()).hasSize(2);
+		StorageScrubber.Report.Divergent noLocal = report.divergent().stream()
+			.filter(d -> d.replica() == 1)
+			.findFirst()
+			.orElseThrow();
+		assertThat(noLocal.nodeId()).isEqualTo("nd_local");
+		assertThat(noLocal.expectedSha256()).isEqualTo(object.sha256());
+		assertThat(noLocal.actualSha256()).isNotBlank().isNotEqualTo(object.sha256());
+	}
+
+	@Test
+	void corpo_do_no_local_intacto_nao_e_reportado() throws Exception {
+		StorageObject object = gravado(body("conteudo do arquivo"));
+		Files.delete(service.bodyPath(object.id()));
+		nodeBodies.write(object.id(), new ByteArrayInputStream(body("conteudo do arquivo")));
+		provisionado("nd_local");
+		catalog.savePlacement(new StoragePlacement(object.id(), 1, "nd_local", object.bytes(), object.sha256(),
+			StoragePlacement.State.OK, NOW));
+
+		StorageScrubber.Report report = scrubber.scan("fotos", 10, true);
+
+		// Só a réplica 0 diverge (sumiu). O corpo do nó local confere e não vira acusação.
+		assertThat(report.divergent()).hasSize(1);
+		assertThat(report.divergent().get(0).replica()).isZero();
+	}
+
+	@Test
+	void copia_de_outro_no_nao_e_relida_como_se_fosse_deste_disco() throws Exception {
+		StorageObject object = gravado(body("conteudo do arquivo"));
+		// Um arquivo com o mesmo id no diretório do nó local, de conteúdo diferente: ele NÃO é a
+		// cópia do nd_replica, e relê-lo acusaria o outro nó por um arquivo que não é dele.
+		nodeBodies.write(object.id(), new ByteArrayInputStream(body("OUTRA COISA AQUI!!")));
+		provisionado("nd_local");
+		catalog.savePlacement(new StoragePlacement(object.id(), 1, "nd_replica", object.bytes(), object.sha256(),
+			StoragePlacement.State.OK, NOW));
+
+		StorageScrubber.Report report = scrubber.scan("fotos", 10, true);
+
+		assertThat(report.bodiesRelidos()).isEqualTo(1);
+		assertThat(report.divergent()).isEmpty();
+	}
+
+	/** As credenciais que o runtime grava em $NODE_HOME: é delas que sai o dono do disco. */
+	private void provisionado(String nodeId) throws Exception {
+		Files.createDirectories(root.resolve("no-local"));
+		Files.writeString(root.resolve("no-local/node.json"), "{\"nodeId\":\"" + nodeId + "\"}");
+		Path chave = root.resolve("no-local/api-key");
+		Files.writeString(chave, "chave-de-teste");
+		Files.setPosixFilePermissions(chave, java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
 	}
 
 	@Test

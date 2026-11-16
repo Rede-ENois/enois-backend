@@ -1652,7 +1652,7 @@ tokens de cenário) é do mestre. Toda escrita exige `Idempotency-Key`.
 | `POST` | `/tokens` | mestre (cenário); dono (personagem) | Cria token; corpo `{ "ownerId"?, "label", "color", "posX", "posY" }` |
 | `POST` | `/tokens/{tokenId}/move` | dono; mestre | Move o token para outra célula `{ "posX", "posY" }` |
 | `POST` | `/tokens/{tokenId}/remove` | dono; mestre | Remove o token |
-| `POST` | `/voice` | participante | Abre (ou devolve) a chamada do Épapo da mesa; corpo `{ "kind"? }` (`AUDIO` padrão) |
+| `POST` | `/voice` | mestre | Abre (ou devolve) a chamada do Épapo da mesa; corpo `{ "kind"? }` (`AUDIO` padrão) |
 | `GET` | `/voice/open` | participante | A chamada aberta da mesa (corpo vazio quando ninguém está na voz) |
 
 ### Regras
@@ -1661,9 +1661,14 @@ tokens de cenário) é do mestre. Toda escrita exige `Idempotency-Key`.
   (espelho do vínculo de encontro). A resposta é o `CallView` da mesa dentro da abertura — o
   `voice/open` devolve a chamada "ao vivo", e a entrada é o `POST /calls/{id}/join` de sempre,
   que assina o token e reavalia a autorização. A mesa guarda só o id da chamada.
-- **Público da voz é a campanha.** Participante entra; quem não participa leva 403 no join e não
+- **Abrir a voz é estado da mesa, então é do mestre** (403 `FORBIDDEN` para participante); a
+  consulta da sala aberta é leitura de participante. Quem não participa leva 403 no join e não
   vê a sala em `/voice/open`. Quem abre já está dentro; a segunda abertura devolve a MESMA
   chamada.
+- **O path cruza campanha com mesa.** As rotas de voz reavaliam que a mesa pertence à campanha
+  informada antes de delegar ao serviço de chamadas: mesa desconhecida ou de outra campanha é
+  404 — o id da mesa sozinho não autoriza. A leitura da sala é tolerante (não-participante lê
+  corpo vazio, como toda leitura pública); a recusa de entrada é do join, que reavalia o papel.
 - **Aviso de mesa ao vivo:** os participantes (menos quem abriu) recebem `CALL_TABLE_LIVE`, uma
   vez por chamada (contada por `call_live:<callId>`), na preferência de push de grupos. Ninguém
   é chamado com `CALL_INCOMING`: a mesa avisa, não toca.
@@ -1825,3 +1830,53 @@ entram).
   `ROLEPLAY_CAMPAIGN_MEMBER_REMOVED`, `ROLEPLAY_CAMPAIGN_MASTERSHIP_TRANSFERRED`,
   `ROLEPLAY_CAMPAIGN_ARCHIVED`, `ROLEPLAY_TABLE_CREATED`.
 - A trilha é a mesma de todo o sistema; não há rota para participantes — o histórico é do painel.
+
+## Éroleplay — métricas do módulo no painel (Fase 10)
+
+A observabilidade do Éroleplay vive no painel de monitorabilidade, não num painel próprio: o
+mesmo gate de `/admin/monitoring/**` (interceptador + `requireModerator`) protege a leitura, e o
+que sai é só agregado — número de campanhas por estado e visibilidade, distribuição por sistema,
+volume de dados guardados pelo módulo e ritmo de criação. Nunca conteúdo de campanha, slug,
+descrição ou identidade de pessoa.
+
+### Rotas
+
+| Método | Rota | Quem pode | O que faz |
+|---|---|---|---|
+| GET | `/api/admin/monitoring/roleplay` | Moderador ou admin | O agregado do módulo, calculado na hora (cache de 1 minuto) |
+
+### Resposta
+
+```json
+{
+  "generatedAt": "2026-11-16T03:12:00Z",
+  "campaigns": 12,
+  "activeCampaigns": 10,
+  "archivedCampaigns": 2,
+  "publicCampaigns": 6,
+  "inviteOnlyCampaigns": 4,
+  "privateCampaigns": 2,
+  "bySystem": { "d20-generico": 12 },
+  "campaignsLast7Days": 3,
+  "campaignsLast30Days": 9,
+  "members": 40,
+  "pendingJoinRequests": 1,
+  "tables": 15,
+  "seats": 55,
+  "characterSheets": 22,
+  "sheetTemplates": 4,
+  "chatMessages": 310,
+  "diceRolls": 180,
+  "rollRequests": 12,
+  "worldEntries": 35,
+  "publishedSheets": 8
+}
+```
+
+### Regras
+
+- Sem sessão é 401; sessão válida sem ser moderador é 403.
+- O cache (`rede.monitoring.roleplay-cache-ms`, padrão 60000) serve leituras repetidas do painel;
+  `0` rele o agregado a cada leitura.
+- Só agregado: nenhuma consulta toca conteúdo livre da campanha e nenhuma linha devolve id de
+  pessoa — o mesmo recorte de privacidade do histórico de auditoria.

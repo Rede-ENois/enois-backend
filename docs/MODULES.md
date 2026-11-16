@@ -1874,6 +1874,7 @@ por matriz de capacidades, com a autorização sempre no back-end.
 | `LibrarySheetJpaEntity` | Persistência (V326), com os campos públicos em JSON `longtext` |
 | `CampaignAuditTrail` | Os atos de campanha na trilha única do sistema (`audit_logs`), com ação `ROLEPLAY_*` e metadata mínimo |
 | `AdminRoleplayController` | Histórico de auditoria da campanha em `/admin/roleplay/campaigns/{id}/history` (exclusivo de administrador) |
+| `RoleplayMetricsService` | Agregado do módulo no painel de monitorabilidade (`GET /admin/monitoring/roleplay`), só números — cache de 1 minuto configurável |
 
 Regras que valem sempre:
 
@@ -1883,13 +1884,21 @@ Regras que valem sempre:
 - A decisão de um pedido de entrada é atômica; a segunda decisão devolve
   `REQUEST_ALREADY_DECIDED`.
 - A voz da mesa referencia uma sessão de chamada do Épapo (`voiceRoomId`); o módulo não cria
-  sala de voz paralela.
+  sala de voz paralela. A voz é estado da mesa como cena e ordem: abrir a sala (ou devolvê-la) é
+  ato do mestre; consultar a sala aberta é leitura de participante.
+- A rota de voz recebe campanha e mesa no path: a mesa tem de pertencer à campanha informada
+  (mesa desconhecida ou de outra campanha é 404) antes de qualquer delegação ao serviço de
+  chamadas — o tableId sozinho não decide. A leitura da sala aberta é tolerante (não-participante
+  lê vazio); a recusa de entrada é do join, que assina token.
 - Os atos de campanha (criação, edição, entrada, pedido, decisão, convite, saída, remoção,
   transferência de mestria, arquivamento, criação de mesa) ficam na trilha única de auditoria do
   sistema (`audit_logs`), com prefixo `ROLEPLAY_*` e a campanha como alvo — não há trilha própria
   do módulo. O metadata carrega identificadores, papéis e mudanças de estado; o conteúdo livre da
   campanha (descrição, ambientação) nunca entra. A leitura do histórico é exclusiva de
   administrador: sem sessão é 401, sessão comum é 403 e campanha desconhecida é 404.
+- O painel vê o módulo por números, nunca por conteúdo: o agregado em
+  `/admin/monitoring/roleplay` é exclusivo de moderador, cacheado por um minuto e não expõe
+  nome, slug, descrição nem id de pessoa — o mesmo recorte de privacidade da trilha.
 - A campanha guarda só o IDENTIFICADOR do sistema, nunca as regras. Um sistema sem adaptador
   registrado responde com erro próprio; a família que a campanha grava vem do adaptador, não do
   pedido do cliente.

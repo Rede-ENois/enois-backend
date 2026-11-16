@@ -108,6 +108,141 @@ derruba `heartbeat carrega as linhas do painel`.
 - **Harness intermitente.** O `mariadb:11.4` reinicia o mysqld ao fim do init; "respondeu uma vez"
   não é "ficou no ar". A prontidão passou a exigir um create/drop de tabela após uma pausa.
 
+## 6.5 A idade da série: `freshness`
+
+O brief §8.7 exige que o painel **distinga ausência de dado, nó offline e métrica efetivamente
+zerada**. O quadro devolvia a série e nada mais — uma janela com um ponto de duas horas atrás
+desenhava igual a uma com pontos deste minuto, e "0% de CPU" era indistinguível de "não mediu".
+
+`GET /admin/network/nodes/{id}/observability` ganhou `freshness`:
+
+| campo | o que diz |
+|---|---|
+| `state` | `NO_SAMPLES` (nunca empurrou amostra), `FRESH` (último ponto dentro da janela de vivo), `STALE` (há ponto, mas mais velho que a janela) |
+| `lastSampleAt` | o instante do **último** ponto medido |
+| `ageSeconds` | idade desse ponto, em segundos |
+
+Decisões que o contrato carrega:
+
+- **`ageSeconds` é nulo sem amostra.** Zero diria "mediu agora", que é o oposto do caso vazio — a
+  mesma regra que já vale para `observedDiskFreeMb` nulo.
+- **`FRESH` é `age ≤ 180 s`**, a mesma janela de "vivo" do scheduler, do painel e da cobertura. Um
+  ponto na fronteira saindo como `STALE` faria o painel acusar nó que o balanceamento ainda despacha.
+- **`STALE` não esconde o número**: a tela mostra a medida **com a idade** (`lastSampleAt`), porque
+  omitir o instante faria um dado de duas horas atrás parecer atual.
+- **A idade é calculada no servidor**, do relógio dele. O runtime do nó não decide quão velho é o
+  próprio dado — seria confiar numa máquina de terceiro para julgar a própria honestidade.
+
+`NO_SAMPLES` é resposta para nó que existe no catálogo mas não empurrou nada; nó inexistente continua
+`404`, e "não mediu" e "nó não existe" não podem ser o mesmo 404.
+
+**Verificação:** `NodeObservabilityFreshnessTests` **5** (sem amostra é `NO_SAMPLES` com idade nula;
+ponto recente é `FRESH` com a idade real; ponto velho é `STALE` preservando o instante; a fronteira de
+180 s é inclusiva; a série é lida do mais novo, não do mais antigo) e `NetworkNodeObservabilityTests`
+**7** (2 novos pela rota: `freshness` chega ao JSON com `lastSampleAt`/`ageSeconds`; nó sem amostra
+responde `NO_SAMPLES` em vez de métricas zeradas). Mutações: idade 0 no caso vazio, qualquer série
+como `FRESH`, último ponto tomado como o mais antigo, fronteira exclusiva — **4 de 4 derrubam**.
+
+## 6.6 Histórico de conexão: a volta do nó
+
+O brief §8.6 pede o **histórico de conexão** de cada réplica. Até aqui o heartbeat só tocava
+`lastSeenAt`: o painel mostrava "conectado agora" e não contava que a máquina ficou fora.
+
+Agora o heartbeat compara o último contato com a janela de "vivo" (180 s, a mesma do scheduler, do
+painel e da série) **antes** de atualizar o `lastSeenAt`. Se o último contato é mais velho que a
+janela, a volta vira evento auditado:
+
+| ação | metadata |
+|---|---|
+| `NETWORK_NODE_RECONNECTED` | `offlineForSeconds` (tempo fora) e `lastSeenAt` (o contato anterior) |
+
+Ele aparece na rota que a página do nó já usa, `GET /admin/network/nodes/{id}/history` — sem rota
+nem tabela própria: a trilha que prova as ações é a mesma que as conta.
+
+Decisões:
+
+- **É a transição, não o heartbeat.** Uma linha por ciclo por nó afogaria a trilha; o que se guarda é
+  "esteve fora por X e voltou agora".
+- **Primeiro contato não é reconexão.** Nó que nunca bateu coração não "voltou"; registrá-lo sombrearia
+  um incidente que não houve.
+- **`offlineForSeconds` é o dado que importa.** "Voltou" sem "por quanto tempo" diz metade do que o
+  operador precisa para decidir se a máquina é confiável.
+
+**Verificação:** `NetworkNodeReconnectionTests` **4** (nó que volta depois da janela vira evento com o
+tempo fora; heartbeat normal não gera evento; primeiro contato não é reconexão; o evento aparece no
+histórico do próprio nó). Mutações: sem detectar a volta, primeiro contato como reconexão, heartbeat
+normal auditado — **3 de 3 derrubam**.
+
+## 6.7 Atraso de sincronização visto pelo painel
+
+O brief §8.6 pede o **histórico de sincronização** por réplica. O nó já podia perguntar o próprio
+atraso (`GET /network/content/lag`, autenticado pela chave dele); o administrador não via o de
+ninguém. Sem isso, "a réplica X está atrasada" só era sabível entrando na máquina — e o operador que
+precisa redistribuir carga não entra em vinte máquinas para descobrir qual está para trás.
+
+A rota nova é a leitura do painel:
+
+```
+GET /admin/network/content/nodes/{nodeId}/lag
+```
+
+Devolve **todos** os tipos de conteúdo, cada um com `behind` — quantos agregados daquele tipo o nó
+tem em versão anterior à da origem (`countBehind`). Tipo em dia aparece com `0`: o tipo ausente
+esconderia qual conjunto foi medido.
+
+Decisões:
+
+- **Nó desconhecido é `404`, não lista zerada.** "Não está atrasado" e "não existe" não podem ser a
+  mesma resposta — a primeira afirma saúde sobre um nó que pode nem existir.
+- **A rota é do painel, não do nó.** Ela lê o atraso de outro nó pelo id; a autenticação é de
+  administrador, e o `AdminRouteInterceptor` fecha `/admin/**` como rede de segurança.
+- **É o atraso medido, não uma estimativa.** O número sai dos snapshots que o nó declarou ter contra
+  a versão da origem; não há heurística de "provavelmente está atrasado".
+
+**Verificação:** `AdminNetworkContentLagTests` **4** (o admin vê o atraso por tipo, com todos os
+tipos presentes; nó desconhecido é `404`; sem sessão não abre; pessoa comum recebe `403`). Mutações:
+nó desconhecido devolvendo lista zerada e leitura do nó errado — **2 de 2 derrubam**.
+
+## 6.8 Quatro dimensões de saúde — `health`
+
+O brief §8.8 exige "obrigatoriamente" distinguir quatro dimensões de saúde, com um motivo explícito:
+**uma máquina pode estar online e a réplica inutilizável**. O quadro do nó era série + console +
+`freshness`; não havia onde ler se a máquina responde, se a instalação se identifica, se o nó serve a
+rede e se participa do balanceamento. Um único "verde/vermelho" afundava os quatro casos num só.
+
+`GET /admin/network/nodes/{id}/observability` passa a devolver `health` com quatro campos, cada um em
+`OK` / `DEGRADED` / `FAILING`:
+
+| dimensão | pergunta que responde | `OK` | `DEGRADED` | `FAILING` |
+|---|---|---|---|---|
+| `host` | o processo do nó responde? | heartbeat na janela de 180 s | — | heartbeat velho ou nunca recebido |
+| `runtime` | a instalação se identifica? | versão reportada | sem versão (runtime anterior ao campo) | — |
+| `application` | o nó executa o que lhe foi autorizado, e bem? | com perfil, sem falhas seguidas, sem atraso | falhas seguidas ≥ 3, ou agregados atrás da origem | sem perfil |
+| `network` | participa do balanceamento? | vivo, operando, com capacidade | saturado (CPU ≥ 85 %) ou sem vaga | parado, suspenso, revogado ou em quarentena |
+
+Decisões:
+
+- **Só o que o Control Plane mediu.** Não há sonda ao vivo: o nó não abre porta (o modelo é pull), e
+  "está vivo" é o heartbeat dentro da janela — a mesma do scheduler, do painel e da série. Um segundo
+  corte faria o nó estar vivo numa dimensão e morto na outra no mesmo quadro.
+- **`runtime` sem versão é `DEGRADED`, não `FAILING`.** O agente está vivo e atende, só não se dá a
+  conhecer; tratá-lo como falha tiraria do balanceamento máquinas que trabalham.
+- **`application` sem perfil é `FAILING`, com host `OK`.** A máquina está de pé e não serve a ninguém —
+  é o caso que o brief diz que não pode aparecer como "offline".
+- **`network` separada da `application`.** Nó suspenso por decisão administrativa tem host e runtime
+  saudáveis; o que caiu foi a participação. Sem essa separação o operador procuraria um defeito de
+  máquina que não existe.
+- **Atraso e falhas seguidas são `DEGRADED`.** Quantos agregados dependem de quantos existem na origem;
+  essa proporção não está no quadro, então o estado não sobe sozinho para `FAILING`.
+
+A derivação vive em `NodeHealth` (`network/domain`), puro: reusa `alive`, `canOperate`, `quarantined`,
+`saturated`, `hasCapacity`, `failing` e os limiares do domínio (`SATURATED_CPU_PERCENT = 85`,
+`FAILURE_STREAK_LIMIT = 3`) — nenhum limiar novo.
+
+**Verificação:** `NodeHealthTests` **8** + 3 testes novos em `NetworkNodeObservabilityTests`. Mutações:
+`network` ignorando `canOperate` (suspenso virando `OK`), `application` ignorando perfil vazio, `host`
+sempre `OK` — **3 de 3 derrubam**.
+
 ## 7. O que NÃO está entregue
 
 | item | por quê |

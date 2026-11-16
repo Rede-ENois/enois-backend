@@ -10,8 +10,10 @@ Documento do que **existe** no código. A fase 1 (catálogo e rota de corpo) est
 | **réplica** | entregue: o Control Plane designa nós e eles buscam o objeto na própria URL do CP | `StoragePlacementService`, `POST /network/storage/objects/{id}/replica` |
 | **domínios de falha** | parcial: **nunca duas cópias no mesmo nó**; domínio maior que o nó (host físico, rack, operadora) não existe — ver §3 |
 | **checksums** | entregue: o sha-256 medido no CP é a identidade da cópia; a confirmação da réplica é **conferida** contra ele | `StorageCatalogService.confirmReplica` |
-| **scrubbing** | parcial: encontra objetos com menos cópias `OK` que o pedido; **não** relê bytes — ver §3 | `StorageScrubber`, `GET /admin/network/nodes/storage/scrub` |
-| **healing** | **não entregue** — ver §3 | |
+| **scrubbing** | entregue: encontra objetos com menos cópias `OK` que o pedido e relê a **réplica 0** (tamanho + sha-256) — §4.1 | `StorageScrubber`, `GET /admin/network/nodes/storage/scrub` |
+| **healing** | entregue como ato de operador (`POST /admin/network/nodes/storage/heal`), sem agendador — §5.1 | `StorageHealer` |
+| **corpo servível do disco local** | entregue: a raiz do Control Plane e o diretório do nó local — §5.5 | `StorageCatalogService.readBody`, `NodeBodyStore` |
+| **inventário do disco do nó** | entregue: o que o nó tem contra o que o catálogo promete, com poda só de órfão — §5.6 | `NodeStorageInventory`, `GET /network/storage/inventory` |
 | **recuperação de objetos** | entregue no sentido de "buscar por conteúdo": `GET /network/storage/objects/by-digest/{sha256}` serve à réplica que conhece o digest e tem a cópia `OK` | `NetworkStorageController` |
 
 ## 2. Decisões que valem por si
@@ -69,8 +71,9 @@ designação existe antes de haver cópia. Aditiva: nenhuma linha existente muda
 ## 4.1. Releitura do corpo (implementada)
 
 `GET /admin/network/nodes/storage/scrub?readBodies=true` vai além de contar linhas: lê de novo o
-arquivo de cada cópia `OK` que este Control Plane hospeda e compara **tamanho e sha-256** com o
-medido que o catálogo guarda. O relatório ganhou `bodiesRelidos` e `divergent[]` (objeto, réplica,
+arquivo da **réplica 0** — a cópia que este Control Plane hospeda na própria raiz — e compara
+**tamanho e sha-256** com o medido que o catálogo guarda. Cópia de outro nó não é relida daqui, e
+por isso também não é acusada (§5.5). O relatório ganhou `bodiesRelidos` e `divergent[]` (objeto, réplica,
 nó, digest esperado, digest encontrado); divergência é auditada como `STORAGE_SCRUB_DIVERGENT`.
 
 Divergência é coisa diferente de lacuna: `underReplicated` diz "falta cópia", `divergent` diz "a
@@ -237,3 +240,197 @@ despacho: `OBJECT_PUT.allowedFor(profiles)`.
 idempotente); `StorageOverviewTests` 9 (1 novo: nó local soma). Harness: 189 asserções, 3 novas.
 Mutações: apagar após confirmar, `objects/` fora do `content_bytes`, escrita não atômica, id sem
 validação, uso contando qualquer arquivo, filtro por nome de perfil — 6 de 6 derrubam.
+
+## 5.5 O Control Plane serve o corpo do disco local
+
+`GET /network/storage/objects/{objectId}` (e o `by-digest`) respondia **só** da raiz do Control
+Plane (`rede.storage.root`). Objeto replicado para o nó que roda na mesma máquina respondia
+`409 STORAGE_REPLICA_ELSEWHERE` mesmo com os bytes a um diretório de distância: o "guardar no
+próprio disco" do §5.4 gravava, mas ninguém lia.
+
+**A ordem de leitura** (`StorageCatalogService.readBody`):
+
+1. `rede.storage.root/<objectId>` — a réplica 0, gravada pelo upload;
+2. `<rede.storage.node-body-root>/<objectId>.bin` — o corpo do nó local, gravado pelo `OBJECT_PUT`;
+3. nenhum dos dois: `409 STORAGE_REPLICA_ELSEWHERE` com o digest, como antes.
+
+A raiz do CP vem primeiro porque é a réplica 0 — o arquivo que o upload mediu. O diretório do nó é
+o mesmo `objects/` do §5.4; `rede.storage.node-body-root` aponta para ele. Sem a propriedade, o
+processo não lê esse diretório (Control Plane puro e suíte). Propriedade **vazia** falha no boot:
+`@ConditionalOnProperty` casa com presente-e-vazia, e sem a recusa `Path.of("")` gravaria no
+diretório de trabalho.
+
+**Tamanho conferido antes de servir.** O download responde com o `Content-Length` medido no upload.
+Se o arquivo local tem outro tamanho, a resposta é `410 STORAGE_BODY_SIZE_MISMATCH` com os dois
+números — um 200 com comprimento errado se rompe no fim, e o cliente não sabe se perdeu bytes da
+rede ou do disco. Corpo do mesmo tamanho com outro conteúdo é o que a varredura encontra pelo
+sha-256; o caminho de download não paga uma leitura inteira para descobrir.
+
+**A varredura relê a réplica 0, não todas as cópias.** Antes ela percorria cada cópia `OK` e relia o
+**mesmo** arquivo local uma vez por colocação: com a raiz vazia, acusava de divergente a cópia de
+outro nó que está íntegra, e `bodiesRelidos` contava N leituras de um arquivo só. E, desde que o
+corpo do nó local passou a ser servido, reler por `readBody` esconderia o sumiço da réplica 0 atrás
+de um corpo que o catálogo não atribui a esta instalação. Agora `openReplicaZeroBody` não tem
+fallback, e a divergência é atribuída à réplica 0 — a única que este processo pode reler.
+
+**O que continua fora:** reler o corpo do nó local na varredura. O catálogo não diz qual id de nó
+roda nesta máquina, então a cópia do diretório local não tem colocação a que atribuir a divergência.
+Quem confere a cópia na gravação é o `confirmReplica` (bytes + sha-256 do que o nó mediu).
+
+**A leitura não cria diretório.** `readBody` resolve `rede.storage.root` direto, sem o
+`createDirectories` do `root()`: um GET num Control Plane que nunca recebeu upload não escreve em
+disco, e uma falha de disco responde 409/410 em vez de virar 500 num download.
+
+**Verificação:** `StorageLocalBodyServingTests` 7 (serve do nó local; 409 sem corpo; raiz do CP tem
+prioridade; truncado é 410; sem nó local lê a raiz; réplica 0 não cai para o nó; leitura não cria o
+diretório);
+`StorageScrubberReadBackTests` 5 (1 novo: sumiço da réplica 0 não é escondido e a cópia de outro nó
+não é acusada); `NetworkStorageReplicationTests` 8 (1 novo pela rota real). Mutações: sem fallback,
+ordem invertida, sem conferência de tamanho, réplica 0 com fallback, varredura relendo todas as
+cópias, `readBody` voltando a chamar `bodyPath` — 6 de 6 derrubam.
+
+## 5.6 Inventário do disco do nó: o que ele tem contra o que o catálogo promete
+
+O §5.4 fez o nó guardar, e o §5.5 fez o Control Plane servir do disco local. Faltava a pergunta que
+liga os dois: **o que está de fato no disco deste nó, comparado com o que o catálogo diz que ele
+deve ter?** Sem ela, três coisas ficavam invisíveis — colocação removida deixava o arquivo para
+sempre no disco de quem contribui, a varredura só relia a réplica 0, e arquivo trocado no diretório
+do nó não aparecia em relatório nenhum.
+
+### Quem é "este nó"
+
+O dono do disco sai das credenciais que o runtime **já** grava: `$NODE_HOME/node.json` (o id) e
+`$NODE_HOME/api-key`. Não existe propriedade paralela `rede.storage.node-id`: dois lugares dizendo
+de quem é o disco, e o segundo é o que ninguém atualiza. Quando `rede.storage.node-body-root`
+aponta para `$NODE_HOME/objects`, as credenciais são lidas no pai; apontando para `$NODE_HOME`
+direto, nele mesmo.
+
+`api-key` legível por **grupo ou outros** anula o nó: `node.json` sozinho não prova nada, e uma
+credencial legível por outro usuário é o que um atacante lê para se passar pelo nó. `node.json`
+ilegível, id fora de `[A-Za-z0-9_-]{1,64}` ou credencial ausente também anulam.
+
+### As rotas
+
+| rota | o que devolve |
+|---|---|
+| `GET /network/storage/inventory` | `held`, `missing`, `divergent`, `orphan`, `orphanBytes`, `heldBytes` |
+| `POST /network/storage/inventory/purge?dryRun=` | `removed`, `kept`, `freedBytes` |
+
+As duas exigem credencial de nó (`X-Node-Id` + `X-Node-Key`) e o perfil de armazenamento. O serviço
+ainda confere que **o nó autenticado é o dono do disco** — token válido de outro nó responde 403,
+não lê o disco desta máquina.
+
+### Órfão, ausente e divergente são coisas diferentes
+
+| campo | significado | o que se faz |
+|---|---|---|
+| `orphan` | arquivo no disco **sem colocação** para este nó | poda pode apagar (é o único caso) |
+| `missing` | colocado e **ausente** do disco; `state` diz se era `OK` (perda) ou `PENDING_REMOTE` (a tarefa ainda não rodou) | re-replicar / esperar |
+| `divergent` | no disco e o sha-256 **não confere** | re-replicar — **nunca** apagar aqui |
+
+A poda **só** apaga órfão. Cópia divergente é a única cópia possivelmente boa do objeto: apagá-la
+antes de o Control Plane re-replicar transformaria divergência em perda. E `dryRun` é o padrão: o
+operador vê o número antes de liberar disco de quem contribui.
+
+`orphanBytes` é medido, não estimado. Sem instalação (`node-body-root` ausente ou sem credencial) a
+rota responde `409 STORAGE_NODE_BODY_DISABLED` em vez de relatório vazio — vazio diria "nada falta,
+nada sobra", que é uma afirmação.
+
+`purge` é `POST` e por isso está na lista explícita de `WriteRouteInterceptor`: o nó não tem sessão
+de navegador, e a credencial é conferida no controller (fail-closed, como `objects/*/replica`).
+
+### O que NÃO está entregue
+
+| item | por quê |
+|---|---|
+| o Control Plane **ler** o inventário de outro nó | o CP não inicia conexão para o nó (NAT; o brief proíbe cadastrar endereço). Quem chama é o nó, na própria URL do CP, e é o CP que responde |
+| ~~a varredura reler o corpo do nó local~~ | entregue no §5.7 |
+| conferir o disco de **outro** nó | o nó devolve o que mediu no próprio disco — §5.8 |
+| poda automática por colocação | apagar disco de quem contribui é ato de operador, com o número na mão (§5.1, mesmo critério do healing) |
+
+**Verificação:** `NodeStorageInventoryTests` **11** (conferido, ausente, designação pendente com
+estado, divergente, órfão medido, poda seca, poda só de órfão, divergente preservado, outro nó não lê,
+credencial legível anula o nó, sem instalação é 409) e `NetworkStorageInventoryTests` **4** pela
+rota real (órfão + poda seca, poda real preservando o colocado, outro nó 403, sem chave 401).
+Mutações: poda apagando divergente, sem checagem de dono, órfão incluindo o colocado, `dryRun`
+ignorado, digest não conferido, credencial legível aceita, purge fora do interceptor — **7 de 7
+derrubam**.
+
+## 5.7 A varredura relê também o corpo do nó local
+
+O §5.6 fez o processo saber de quem é o disco (`NodeBodyStore.ownerNodeId()`). Antes disso o
+`StorageScrubber` só relia a réplica 0, e isso deixava um ponto cego: objeto replicado para o nó
+local podia ser **trocado no disco dele** e a varredura continuava dizendo "conferido". O catálogo
+prometia uma durabilidade que o arquivo não tinha.
+
+Agora a varredura percorre as cópias confirmadas e relê **só** as que estão no disco desta
+instalação:
+
+| cópia | relida? | por quê |
+|---|---|---|
+| réplica 0 (raiz do Control Plane) | sim, por `openReplicaZeroBody` | é o arquivo do upload, nesta máquina |
+| colocação cujo `nodeId` é o dono deste disco | sim, por `openNodeBody` | o diretório do nó local é local |
+| qualquer outro nó | **não** | o CP não inicia conexão para o nó (NAT; o brief proíbe cadastrar endereço) |
+
+O `openNodeBody` é simétrico ao `openReplicaZeroBody`: abre **só** o arquivo do diretório do nó
+(`rede.storage.node-body-root`), **sem** cair para a raiz do CP. Sem essa separação, um corpo da
+raiz esconderia a troca no diretório do nó — o mesmo sumiço-da-réplica-0 que o §5.5 já tinha
+fechado do outro lado.
+
+`bodiesRelidos` conta **uma leitura por cópia relida**. Antes o laço percorria todas as cópias OK e
+relia o mesmo arquivo local para cada uma, contando N leituras de um arquivo só; e com a raiz
+vazia acusava de divergente a cópia de outro nó que estava íntegra.
+
+Quando este processo **não** guarda corpo de nó (`node-body-root` ausente), o `NodeBodyStore` é
+nulo, `ownerNodeId()` não entra na conta e a varredura relê só a réplica 0 — comportamento
+declarado, não uma dedução.
+
+**Verificação:** `StorageScrubberReadBackTests` **8**, sendo **3 novos**: corpo do nó local com
+digest diferente é reportado com a `replica`/`nodeId` certos; corpo do nó local intacto não vira
+acusação; cópia de **outro** nó não é relida como se fosse deste disco. Mutações: nunca reler o
+corpo do nó local (volta ao ponto cego), reler qualquer cópia como local, `openNodeBody` caindo para
+a raiz do CP, dono do disco ignorado, contagem de `bodiesRelidos` sem a cópia do nó — **5 de 5
+derrubam**.
+
+## 5.8 O nó confere o próprio disco e devolve o que não confere
+
+O §5.7 fechou a releitura do disco da instalação em que o Control Plane roda. Ficava de fora a
+cópia de **todo outro nó**: ela está num disco que o Control Plane não alcança (NAT; o brief proíbe
+cadastrar endereço), e a varredura do CP jamais a conferia. Um arquivo trocado lá continuava
+contando como durabilidade.
+
+Quem tem acesso ao disco é o dono dele. Agora o nó relê as próprias cópias e devolve o que mediu:
+
+| rota | corpo | devolve |
+|---|---|---|
+| `POST /network/storage/scrub` | `[{ "objectId", "actualSha256" }]` | `{ "nodeId", "stale" }` |
+
+Credencial de nó (`X-Node-Id` + `X-Node-Key`) e perfil de armazenamento, como as demais rotas de
+Storage do nó. A rota está na lista explícita do `WriteRouteInterceptor` (o nó não tem sessão de
+navegador) e o `AutomatedWritePathsTests` a conhece.
+
+### O que o Control Plane aceita do relatório
+
+**Só a cópia que é deste nó.** O serviço filtra por `node.id()` antes de qualquer escrita: um nó que
+liste o `objectId` de outro não muda nada. Essa guarda não é detalhe — sem ela, qualquer participante
+derrubaria a durabilidade do cluster com um `POST`, que é o ataque mais barato que a rede pode ter.
+
+**Digest esperado vem do catálogo, nunca do relatório.** O nó declara só o que **mediu**
+(`actualSha256`); tamanho, réplica e o digest esperado saem da colocação. Se o nó escolhesse o
+esperado, faria o próprio conteúdo passar por íntegro.
+
+**Idempotente.** Cópia já `STALE` ou `GONE` não é regravada nem re-auditada: um nó que reenvia o
+mesmo relatório não infla a auditoria nem muda o estado de novo. O estado vai para `STALE` pelo mesmo
+caminho `marcarDivergente` da confirmação divergente — a ação é a mesma (re-replicar, **nunca**
+apagar), e o healing do §5.1 já sabe ler `STALE`.
+
+### O que ainda não está entregue
+
+O nó **precisa** rodar esta varredura por conta própria (o runtime ainda não tem rotina periódica
+para ela); `POST /network/storage/scrub` é a rota pronta para ele chamar.
+
+**Verificação:** `StorageNodeScrubTests` **4** (cópia própria fica `STALE`; nó não rebaixa a cópia de
+outro; já `STALE` não é regravada nem re-auditada; digest esperado vem do catálogo) e
+`NetworkStorageNodeScrubTests` **3** pela rota real (cópia própria `STALE`; intruso não rebaixa a do
+dono; sem chave é 401). Mutações: sem filtro por dono, sem idempotência, rota fora do interceptor,
+relatório engolido (`stale` sempre zero) — **4 de 4 derrubam**.

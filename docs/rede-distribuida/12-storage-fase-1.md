@@ -15,7 +15,7 @@ ficou fora e por quê, e como cada afirmação foi verificada.
 | **identificadores lógicos** | entregue | `StorageObject.id` (`sob_…`) estável, independente de qualquer nó; a chave S3 é do cliente e não é normalizada |
 | **colocação (onde está a cópia)** | entregue | `network_storage_placements` (V320) — `(object_id, replica)` → `node_id`, `bytes`, `sha256`, `state`, `verified_at` |
 | **upload por nó** | entregue | `PUT /network/storage/objects/{id}` — bytes crus, credencial de nó, perfil obrigatório |
-| **download por nó** | entregue | `GET /network/storage/objects/{id}` — `Content-Length`, `ETag` = sha-256, sem renderizar |
+| **download por nó** | entregue | `GET /network/storage/objects/{id}` — `Content-Length`, `ETag` = sha-256, sem renderizar; serve da raiz do CP e do diretório do nó local (13 §5.5) |
 | **medida antes do aceite** | entregue | o Control Plane calcula tamanho e SHA-256 **enquanto grava**; o declarado não é lido |
 | **teto de tamanho** | entregue | `rede.storage.max-object-bytes` (padrão 5 GiB); acima do teto o corpo é recusado |
 | **primeiro Storage Node** | parcial: o Control Plane faz esse papel | grava no diretório `rede.storage.root`; ver §3 |
