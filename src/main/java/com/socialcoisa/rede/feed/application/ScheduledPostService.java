@@ -86,9 +86,26 @@ public class ScheduledPostService {
 		// A enquete é o caso em que conteúdo sem alternativas é um post que falharia na hora
 		// marcada: as mesmas regras da publicação direta valem aqui, para o erro aparecer agora.
 		List<String> pollOptions = type == PostType.POLL ? pollOptions(command.pollOptions()) : List.of();
-		if (repository.findByUser(userId).size() >= MAX_PENDING) {
+		List<ScheduledPost> pendentes = repository.findByUser(userId);
+		if (pendentes.size() >= MAX_PENDING) {
 			throw new ApiException(409, "TOO_MANY_SCHEDULED",
 				"Você já tem " + MAX_PENDING + " posts agendados. Cancele algum para criar outro.");
+		}
+		// Flood pelo agendamento (issue da fila de suporte): dois agendados do mesmo autor para o
+		// mesmo minuto com o mesmo conteúdo publicariam em sequência no mesmo tick do worker — a
+		// janela de duplicados da publicação direta não cobre porque publica tudo de uma vez.
+		// Recusa na marcação, com o motivo visível na hora, como as demais regras daqui.
+		if (StringUtils.hasText(command.content())) {
+			String conteudo = command.content().strip().toLowerCase().replaceAll("\\s+", " ");
+			String minuto = String.valueOf(scheduledAt.getEpochSecond() / 60);
+			boolean repetido = pendentes.stream()
+				.anyMatch(item -> item.scheduledAt().getEpochSecond() / 60 == Long.parseLong(minuto)
+					&& item.content() != null
+					&& item.content().strip().toLowerCase().replaceAll("\\s+", " ").equals(conteudo));
+			if (repetido) {
+				throw new ApiException(409, "SCHEDULED_DUPLICATE_CONTENT",
+					"Você já tem um post agendado com este conteúdo para este horário.");
+			}
 		}
 		// Mesma regra da publicação direta, aplicada cedo para o erro aparecer no agendamento:
 		// post de comunidade herda o assunto dela; post avulso declara um da taxonomia (obrigatório).
