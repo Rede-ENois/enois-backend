@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.companies.domain.RecruitmentCapability;
+import com.socialcoisa.rede.jobs.application.port.out.JobApplicationStatusNotifier;
 import com.socialcoisa.rede.jobs.application.port.out.JobRepository;
 import com.socialcoisa.rede.jobs.application.port.out.SelectionProcessRepository;
 import com.socialcoisa.rede.jobs.application.port.out.SelectionProcessTemplateRepository;
@@ -55,6 +56,7 @@ public class SelectionProcessService {
 	private final SelectionProcessRepository pipeline;
 	private final SelectionProcessTemplateRepository templates;
 	private final JobCommandAuthorization command;
+	private final JobApplicationStatusNotifier statusNotifier;
 	private final Clock clock;
 	private final AuditTrail audit;
 	private final ObjectMapper objectMapper;
@@ -65,12 +67,13 @@ public class SelectionProcessService {
 	public static final String AUDIT_EVALUATED = "RECRUITMENT_APPLICATION_EVALUATED";
 
 	public SelectionProcessService(JobRepository jobs, SelectionProcessRepository pipeline,
-			SelectionProcessTemplateRepository templates, JobCommandAuthorization command, Clock clock,
-			AuditTrail audit, ObjectMapper objectMapper) {
+			SelectionProcessTemplateRepository templates, JobCommandAuthorization command,
+			JobApplicationStatusNotifier statusNotifier, Clock clock, AuditTrail audit, ObjectMapper objectMapper) {
 		this.jobs = jobs;
 		this.pipeline = pipeline;
 		this.templates = templates;
 		this.command = command;
+		this.statusNotifier = statusNotifier;
 		this.clock = clock;
 		this.audit = audit;
 		this.objectMapper = objectMapper;
@@ -174,7 +177,7 @@ public class SelectionProcessService {
 	@Transactional
 	public StageMovement moveApplication(String jobId, String applicationId, String requesterId,
 			String toStageId, StageMovementKind kind, String note) {
-		requireCommander(jobId, requesterId, RecruitmentCapability.TRIAGE);
+		Job job = requireCommander(jobId, requesterId, RecruitmentCapability.TRIAGE);
 		JobApplication application = jobs.findApplicationById(applicationId)
 			.filter(found -> found.jobId().equals(jobId))
 			.orElseThrow(() -> new ApiException(404, "APPLICATION_NOT_FOUND", "Candidatura não encontrada."));
@@ -202,6 +205,10 @@ public class SelectionProcessService {
 				clock.instant());
 			recordAudit(AUDIT_MOVED, requesterId, applicationId,
 				Map.of("kind", "REJECT", "fromStageId", String.valueOf(currentStageId)));
+			// Reprovar pelo board tem de avisar o candidato igual à triagem pelo estado clássico: o
+			// retorno que ele já recebe é o que o faz entender a decisão. O estado persistido acima é
+			// a fonte; o aviso sai dele, pela mesma porta de notificação das outras mudanças.
+			statusNotifier.notifyStatusChange(job, rejected(application, reason), JobApplicationStatus.NOT_SELECTED);
 			return saved;
 		}
 
@@ -324,6 +331,24 @@ public class SelectionProcessService {
 
 	private void recordAudit(String action, String actorId, String applicationId, Map<String, String> metadata) {
 		audit.record(actorId, action, "job_application:" + applicationId, objectMapper.writeValueAsString(metadata));
+	}
+
+	/**
+	 * A candidatura como ela fica DEPOIS da reprovação, para o aviso sair do estado novo e do
+	 * retorno que o candidato tem direito a ler.
+	 *
+	 * <p>Reconstruída em vez de passar pelo {@code withStatus}: o pipeline já aceita reprovar em
+	 * qualquer etapa, e a transição clássica {@code ADVANCED → NOT_SELECTED} não está na tabela do
+	 * domínio — validar aqui transformaria a reprovação pelo board em erro, que é justamente o
+	 * caminho que este aviso veio destravar.
+	 */
+	private static JobApplication rejected(JobApplication application, String reason) {
+		if (application.status() == JobApplicationStatus.NOT_SELECTED) {
+			return application;
+		}
+		return JobApplication.restore(application.id(), application.jobId(), application.userId(),
+			application.message(), application.candidateSnapshot(), application.appliedAt(), application.answers(),
+			JobApplicationStatus.NOT_SELECTED, reason, null);
 	}
 
 	/** Avaliações internas: leitura com quem vê candidatos. Nunca expostas ao candidato. */

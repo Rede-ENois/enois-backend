@@ -2,7 +2,8 @@
 
 Estado: implementado em 2026-11-12 e na `qa` (PR #677 mergeado); declaração de recrutador
 acrescentada em 2026-11-13; tabela paginada acrescentada em 2026-11-13 (V291); questionário
-condicional e rascunho acrescentados em 2026-11-15 (V330).
+condicional e rascunho acrescentados em 2026-11-15 (V330); timeline de auditoria, entrevista na
+agenda central e aviso de reprovação pelo board acrescentados em 2026-11-16.
 
 Complementa `docs/JOB_AGGREGATOR.md` (vagas internas e externas) e
 `docs/SOCIAL_PROFESSIONAL_CONTEXTS.md` (identidade profissional). Não cria um segundo sistema
@@ -351,6 +352,28 @@ Códigos de recusa explícitos: `EVALUATION_VERDICT_INVALID`, `EVALUATION_CRITER
 `EVALUATION_TOO_MANY_CRITERIA`, `EVALUATION_CRITERIA_LABEL_REQUIRED`,
 `EVALUATION_CRITERIA_LABEL_TOO_LONG`, `EVALUATION_SCORE_OUT_OF_RANGE`,
 `EVALUATION_SUMMARY_TOO_LONG`. Como as notas, a avaliação jamais aparece em rota do candidato.
+
+## Comunicação com o candidato (sem canal novo)
+
+O aviso ao candidato sai da mesma infraestrutura de notificações e mensagens que o projeto já
+tinha — a porta `JobApplicationStatusNotifier` (notificação in-app + push, mensagem direta na
+conversa de candidatura com contexto `JOB` e e-mail), sem segunda caixa e sem segundo mensageiro.
+O corpo da notificação in-app **não** traz o retorno escrito (ele pode aparecer em tela
+bloqueada); o retorno segue na mensagem direta, no e-mail e na lista de candidaturas do candidato.
+
+Reprovar avisa; avançar ou retornar etapa **não**. A reprovação é decisão final — o candidato
+precisa do retorno e do estado novo; um movimento interno entre etapas não muda nada para quem
+está do outro lado, e avisar a cada card arrastado viraria ruído.
+
+| Caminho | Antes | Agora |
+|---|---|---|
+| Triagem pelo estado clássico (`PATCH /jobs/{jobId}/applications/{applicationId}`) | avisava | avisa (como antes) |
+| Reprovar pelo board (`POST .../process/applications/{applicationId}/move`, `kind=REJECT`) | mudo | avisa pelo mesmo caminho |
+| Reprovar em lote (`POST .../process/applications/batch-move`, `kind=REJECT`) | mudo | cada candidatura do lote avisa a própria candidata |
+| Avançar/retornar etapa | mudo | mudo (proposital) |
+
+Falha de entrega é tolerada (o estado já foi persistido antes do aviso): o erro é registrado e a
+decisão continua valendo — o candidato ao menos vê o estado atualizado na lista dele.
 
 ## Timeline de auditoria
 
