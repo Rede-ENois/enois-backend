@@ -170,7 +170,8 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 			SELECT p FROM PostJpaEntity p
 			WHERE p.status = :status AND p.createdAt < :before
 			  AND (EXISTS (SELECT r.id FROM ReactionJpaEntity r WHERE r.postId = p.id AND r.userId = :reader)
-			    OR EXISTS (SELECT c.id FROM CommentJpaEntity c WHERE c.postId = p.id AND c.authorId = :reader))
+			    OR EXISTS (SELECT c.id FROM CommentJpaEntity c WHERE c.postId = p.id AND c.authorId = :reader)
+			    OR EXISTS (SELECT s.id FROM SavedPostJpaEntity s WHERE s.postId = p.id AND s.userId = :reader))
 			ORDER BY p.createdAt DESC""")
 	List<PostJpaEntity> findInteracted(@Param("status") PostStatus status, @Param("reader") String reader,
 			@Param("before") Instant before, Pageable pageable);

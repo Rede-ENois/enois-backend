@@ -63,6 +63,7 @@ class AdminNetworkController {
 	private final com.socialcoisa.rede.network.application.NodeObservabilityService observability;
 	private final ChangeCaptureReadinessService changeCapture;
 	private final NetworkTaskRepository tasks;
+	private final com.socialcoisa.rede.network.application.NetworkTopologyService topology;
 
 	AdminNetworkController(NetworkNodeService nodes, NodeKeyService keys, NetworkDashboardService dashboard,
 			AuditTrail audit, CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
@@ -71,7 +72,8 @@ class AdminNetworkController {
 			NetworkNodeResponsibleRepository responsibles, NetworkUserDirectory users,
 			com.socialcoisa.rede.network.application.NodeObservabilityService observability,
 			ChangeCaptureReadinessService changeCapture, StorageOverviewService storageOverview,
-			StorageHealer healer, StorageReplicationDispatcher dispatcher, NetworkTaskRepository tasks) {
+			StorageHealer healer, StorageReplicationDispatcher dispatcher, NetworkTaskRepository tasks,
+			com.socialcoisa.rede.network.application.NetworkTopologyService topology) {
 		this.nodes = nodes;
 		this.keys = keys;
 		this.dashboard = dashboard;
@@ -88,6 +90,7 @@ class AdminNetworkController {
 		this.healer = healer;
 		this.dispatcher = dispatcher;
 		this.tasks = tasks;
+		this.topology = topology;
 	}
 
 	/**
@@ -197,6 +200,21 @@ class AdminNetworkController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		admin(sessionToken);
 		return dashboard.dashboard();
+	}
+
+	/**
+	 * A topologia como dado para a tela desenhar (brief §8.5): nós por domínio de falha, estado de
+	 * cada um e as conexões que o cadastro declara.
+	 *
+	 * <p>A rota não desenha — posição, cor e interação são decisão de front. Ela também não inventa
+	 * aresta entre dois nós: a tarefa não guarda o nó de origem, e o que existe é o vínculo
+	 * nó → domínio. Ver {@link com.socialcoisa.rede.network.application.NetworkTopologyService}.</p>
+	 */
+	@GetMapping("/topology")
+	com.socialcoisa.rede.network.application.NetworkTopologyService.Topology topologyView(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		admin(sessionToken);
+		return topology.topology();
 	}
 
 	/**
