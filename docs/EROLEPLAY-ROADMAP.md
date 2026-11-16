@@ -1,5 +1,9 @@
 # Éroleplay — Roadmap
 
+PROJECT_STATUS=COMPLETED (2026-11-16) — backend das fases 0–10 entregue com prova executada.
+CRONJOB_STATUS=DISABLED — desativar o agendamento de rodadas (não há ferramenta de exclusão no
+toolbox; requer ação do usuário).
+
 Estado geral: **concluída no backend** (fases 0–10 com prova executada; PRs abertas para `qa`
 aguardando revisão humana e merge, que são decisão de mantenedor).
 Documento vivo: cada rodada atualiza a seção de estado e a "próxima tarefa" antes de encerrar.
