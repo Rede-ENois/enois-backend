@@ -422,7 +422,13 @@ responde `{ "postId": "post_xxx", "acceptedCommentId": null, "resolved": false }
 }
 ```
 
-Tipos de reação: `LIKE`, `LOVE`, `CONGRATS`, `INSIGHTFUL`, `CURIOUS`
+Tipos de reação (o enum central é `ReactionType`, compartilhado por post, comentário e
+mensagem): `LIKE`, `LOVE`, `LAUGH`, `ROFL`, `SKULL`, `WOW`, `SAD`, `SOB`, `CELEBRATE`,
+`SUPPORT`, `INSIGHTFUL`, `ANGRY`, `DISGUST`, `SKEPTICAL`, `EYES`, `NOTE`, `FIRE`, `CLAP`,
+`CLOWN`, `NAILS` — e as **contextuais**, cada uma com situação clara de uso: `USEFUL` (a dica
+serviu), `RELATABLE` (me identifiquei), `HYPE` (empolgação com lançamento/projeto), `THANKS`
+(pela ajuda que resolveu), `VIBE` (a estética do post) e `SALUTE` (respeito pelo gesto).
+Uma reação por pessoa — trocar o tipo substitui, sem somar no total.
 
 ### POST /api/feed/posts/bulk-delete
 
