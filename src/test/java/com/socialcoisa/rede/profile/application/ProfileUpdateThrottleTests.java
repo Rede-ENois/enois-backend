@@ -67,7 +67,8 @@ class ProfileUpdateThrottleTests {
 			mock(com.socialcoisa.rede.shared.sanctions.SanctionGateReader.class),
 			mock(com.socialcoisa.rede.profile.application.port.out.OfficialBadgeReader.class),
 			mock(com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository.class),
-			throttle, mock(com.socialcoisa.rede.shared.application.CacheInvalidator.class), 30, clock);
+			throttle, mock(com.socialcoisa.rede.shared.application.CacheInvalidator.class),
+			mock(com.socialcoisa.rede.media.application.MediaPublicHost.class), 30, clock);
 
 		assertThatThrownBy(() -> service.update(new UpdateProfileCommand("user_a", null, null, null, null, null,
 			null, null, null, null, null, java.util.List.of(), java.util.List.of(), null, null,

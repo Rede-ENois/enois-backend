@@ -47,6 +47,14 @@ import jakarta.servlet.http.HttpServletResponse;
 @Order(Ordered.HIGHEST_PRECEDENCE + 5)
 class RequestOriginFilter extends OncePerRequestFilter {
 
+	/**
+	 * Cópia anexada a uma denúncia: lida só com assinatura de curto prazo ou sessão do dono/moderação
+	 * (ver {@code ReportAttachmentController}). Entra pela lista de rotas sem origem porque é aberta
+	 * por servidor e cliente de e-mail (painel, notificação), que não têm a origem do app.
+	 */
+	private static final PathPattern REPORT_ATTACHMENT_PATH = PathPatternParser.defaultInstance
+		.parse("/media/attachments/*");
+
 	private static final PathPattern ADMIN_PATH = PathPatternParser.defaultInstance.parse("/admin/**");
 	private static final PathPattern MODERATION_PATH = PathPatternParser.defaultInstance.parse("/moderation/**");
 
@@ -278,6 +286,11 @@ class RequestOriginFilter extends OncePerRequestFilter {
 		}
 		// Links de descadastro (newsletter do blog e resumo semanal): clique no cliente de e-mail.
 		if (path.equals("/blogs/descadastrar") || path.equals("/notifications/digest/unsubscribe")) {
+			return true;
+		}
+		// Cópia de denúncia pelo endereço assinado: sem origem, e nunca renderizada (download opaco).
+		if (("GET".equalsIgnoreCase(method) || "HEAD".equalsIgnoreCase(method))
+				&& REPORT_ATTACHMENT_PATH.matches(org.springframework.http.server.PathContainer.parsePath(path))) {
 			return true;
 		}
 		// Nó da rede: o runtime roda em container e fala por curl, sem navegador e sem Origin. A

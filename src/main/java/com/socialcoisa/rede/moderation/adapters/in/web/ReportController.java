@@ -116,8 +116,16 @@ class ReportController {
 		// Denúncia de chamada: quem estava na sala, quem foi apontado e a captura do momento.
 		body.put("call", review.call());
 		String captureId = review.call() == null ? null : review.call().mediaId();
-		body.put("media", captureId == null || captureId.isBlank() ? null
-			: getMediaAssetUseCase.getMedia(captureId));
+		if (captureId == null || captureId.isBlank()) {
+			body.put("media", null);
+		}
+		else {
+			Map<String, Object> capture = new java.util.LinkedHashMap<>();
+			capture.put("asset", getMediaAssetUseCase.getMedia(captureId));
+			// A cópia é a prova da denúncia: abre pelo endereço assinado, nunca pelo endereço do bucket.
+			capture.put("url", moderationService.attachmentUrlFor(captureId));
+			body.put("media", capture);
+		}
 		return body;
 	}
 
