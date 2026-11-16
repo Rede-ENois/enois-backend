@@ -73,6 +73,7 @@ class FeedController {
 	private final GetFeedUseCase getFeedUseCase;
 	private final GetPostUseCase getPostUseCase;
 	private final GetProfilePostsUseCase getProfilePostsUseCase;
+	private final com.socialcoisa.rede.feed.application.port.in.GetDiarioUseCase getDiario;
 	private final DeletePostUseCase deletePostUseCase;
 	private final EditPostUseCase editPostUseCase;
 	private final RestorePostUseCase restorePostUseCase;
@@ -102,7 +103,9 @@ class FeedController {
 	private final tools.jackson.databind.ObjectMapper pollJson = new tools.jackson.databind.ObjectMapper();
 
 	FeedController(PublishPostUseCase publishPostUseCase, GetFeedUseCase getFeedUseCase, GetPostUseCase getPostUseCase,
-			GetProfilePostsUseCase getProfilePostsUseCase, DeletePostUseCase deletePostUseCase,
+			GetProfilePostsUseCase getProfilePostsUseCase,
+			com.socialcoisa.rede.feed.application.port.in.GetDiarioUseCase getDiario,
+			DeletePostUseCase deletePostUseCase,
 			EditPostUseCase editPostUseCase, RestorePostUseCase restorePostUseCase,
 			BulkDeletePostsUseCase bulkDeletePostsUseCase, CommentOnPostUseCase commentOnPostUseCase,
 			GetCommentsUseCase getCommentsUseCase, ReactToPostUseCase reactToPostUseCase,
@@ -124,6 +127,7 @@ class FeedController {
 		this.getFeedUseCase = getFeedUseCase;
 		this.getPostUseCase = getPostUseCase;
 		this.getProfilePostsUseCase = getProfilePostsUseCase;
+		this.getDiario = getDiario;
 		this.deletePostUseCase = deletePostUseCase;
 		this.editPostUseCase = editPostUseCase;
 		this.restorePostUseCase = restorePostUseCase;
@@ -236,6 +240,20 @@ class FeedController {
 			@RequestParam(required = false) String cursor,
 			@RequestParam(defaultValue = "20") int limit) {
 		return getProfilePostsUseCase.getProfileReplies(
+			viewerIdOrNull(sessionToken), username, cursorCodec.decode(cursor), limit);
+	}
+
+	/**
+	 * Diario de atividade do perfil: linha do tempo unificada (publicacoes, reposts e, para o
+	 * proprio dono, comentarios). Leitura publica como as demais abas do perfil; o dono e
+	 * reconhecido pela sessao pra incluir os comentarios, que continuam privados pra visitantes.
+	 */
+	@GetMapping("/users/{username}/diario")
+	Object profileDiario(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String username,
+			@RequestParam(required = false) String cursor,
+			@RequestParam(defaultValue = "20") int limit) {
+		return getDiario.getDiario(
 			viewerIdOrNull(sessionToken), username, cursorCodec.decode(cursor), limit);
 	}
 

@@ -183,6 +183,7 @@ Cidade e UF (`city`, `state`) são estruturadas e separadas do `location` livre,
 | GET | `/api/feed` | Feed principal | Sim |
 | POST | `/api/feed/seen` | Avança o marcador "Você está em dia" | Sim |
 | GET | `/api/users/{username}/posts` | Posts do usuário | Sim |
+| GET | `/api/users/{username}/diario` | Diário de atividade do perfil (linha do tempo unificada) | Sim |
 | DELETE | `/api/feed/posts/{postId}` | Deletar post | Sim |
 | POST | `/api/feed/posts/bulk-delete` | Deletar posts em lote | Sim |
 | POST | `/api/feed/posts/{postId}/comments` | Comentar em post | Sim |
@@ -290,6 +291,40 @@ Sem sessão: 401. A resposta é o estado atualizado da enquete:
 
 Todo `PostView` de um post `POLL` traz o campo `poll` (nas leituras de feed e de post único); a
 contagem é derivada de `poll_votes`, nunca um contador acumulado.
+
+### GET /api/users/{username}/diario
+
+Diário de atividade do perfil: linha do tempo unificada do que a pessoa publicou (`PUBLICACAO`),
+repostou (`REPOST`) e — somente quando quem lê é o próprio dono — comentou (`COMENTARIO`), mesma
+regra de privacidade da aba de respostas. Derivado dos dados existentes (nada é gravado para o
+diário); leitura pública como as demais abas do perfil, com autor banido respondendo 404
+`USER_NOT_FOUND`. Query params: `cursor=<base64>`, `limit=<1-50>` (padrão 20).
+
+```json
+{
+  "itens": [
+    {
+      "tipo": "COMENTARIO",
+      "quando": "2026-11-15T18:03:00Z",
+      "postId": "post_123",
+      "trecho": "opinião no post do outro",
+      "contexto": { "autorNome": "Ana", "autorUsername": "ana", "trecho": "conteúdo do post original" }
+    },
+    {
+      "tipo": "PUBLICACAO",
+      "quando": "2026-11-15T17:00:00Z",
+      "postId": "post_456",
+      "trecho": "conteúdo da própria publicação",
+      "contexto": null
+    }
+  ],
+  "nextCursor": "…"
+}
+```
+
+`contexto` descreve o post original por trás de comentário e repost e vem `null` em publicações;
+repost de post apagado e comentário apagado saem da linha. O cliente agrupa os eventos por dia
+para montar a linha do tempo.
 
 ### GET /api/feed
 
