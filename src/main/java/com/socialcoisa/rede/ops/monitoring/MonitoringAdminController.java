@@ -23,16 +23,18 @@ class MonitoringAdminController {
 
 	private final MonitoringService monitoring;
 	private final UserMetricsService userMetrics;
+	private final RoleplayMetricsService roleplayMetrics;
 	private final CurrentUserResolver currentUserResolver;
 	private final ModeratorGuard moderatorGuard;
 	private final AdminAuthorityAudit denied;
 	private final AdminDenialCounter deniedBaseline;
 
 	MonitoringAdminController(MonitoringService monitoring, UserMetricsService userMetrics,
-			CurrentUserResolver currentUserResolver, ModeratorGuard moderatorGuard, AdminAuthorityAudit denied,
-			AdminDenialCounter deniedBaseline) {
+			RoleplayMetricsService roleplayMetrics, CurrentUserResolver currentUserResolver,
+			ModeratorGuard moderatorGuard, AdminAuthorityAudit denied, AdminDenialCounter deniedBaseline) {
 		this.monitoring = monitoring;
 		this.userMetrics = userMetrics;
+		this.roleplayMetrics = roleplayMetrics;
 		this.currentUserResolver = currentUserResolver;
 		this.moderatorGuard = moderatorGuard;
 		this.denied = denied;
@@ -79,6 +81,14 @@ class MonitoringAdminController {
 	}
 
 	record LastDenialView(String method, String route, String reason) {
+	}
+
+	/** Métricas do Éroleplay: campanhas por estado/visibilidade/sistema, volume de dados e ritmo. */
+	@GetMapping("/roleplay")
+	RoleplayMetricsService.RoleplayView roleplay(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		moderatorGuard.requireModerator(currentUserResolver.resolve(sessionToken));
+		return roleplayMetrics.roleplay();
 	}
 
 	@GetMapping("/events")

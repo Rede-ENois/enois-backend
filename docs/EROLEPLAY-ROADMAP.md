@@ -131,14 +131,16 @@ explícito, nunca com comportamento genérico inventado.
 - [x] Trilha de auditoria dos atos de campanha na trilha única do sistema (`ROLEPLAY_*` em
   `audit_logs`) e leitura do histórico no painel (`GET /admin/roleplay/campaigns/{id}/history`,
   exclusiva de administrador, 404 para campanha desconhecida)
-- [ ] Observabilidade (métricas de eventos do módulo)
+- [x] Observabilidade (métricas de eventos do módulo): `GET /admin/monitoring/roleplay` no painel
+  de monitorabilidade, exclusivo de moderador — só agregado (campanhas por estado/visibilidade/
+  sistema, volume de membros/mesas/fichas/chat/dados/mundo/biblioteca, ritmo de 7 e 30 dias),
+  nunca conteúdo de campanha nem identidade de pessoa
 - [ ] Revisão de segurança por fase
 
 ## 5. Próxima tarefa
 
-**Fase 9**: front — identidade visual própria (tema por campanha) no design system e telas de
-campanha, mesa, ficha e dados (o backend das Fases 0–8 está entregue). Em paralelo, restam na
-Fase 10 as métricas de eventos do módulo e a revisão de segurança por fase.
+**Fase 10**: revisão de segurança por fase — o último critério aberto do roadmap. O backend das
+Fases 0–9 está entregue e o painel já observa o módulo.
 
 Mundo da campanha (localizações, pistas, NPCs) com referência a partir das campanhas, seguindo o
 mesmo contrato das demais peças: aditivo, autorização na campanha (ver = participante, escrever =

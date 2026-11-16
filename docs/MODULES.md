@@ -1874,6 +1874,7 @@ por matriz de capacidades, com a autorização sempre no back-end.
 | `LibrarySheetJpaEntity` | Persistência (V326), com os campos públicos em JSON `longtext` |
 | `CampaignAuditTrail` | Os atos de campanha na trilha única do sistema (`audit_logs`), com ação `ROLEPLAY_*` e metadata mínimo |
 | `AdminRoleplayController` | Histórico de auditoria da campanha em `/admin/roleplay/campaigns/{id}/history` (exclusivo de administrador) |
+| `RoleplayMetricsService` | Agregado do módulo no painel de monitorabilidade (`GET /admin/monitoring/roleplay`), só números — cache de 1 minuto configurável |
 
 Regras que valem sempre:
 
@@ -1890,6 +1891,9 @@ Regras que valem sempre:
   do módulo. O metadata carrega identificadores, papéis e mudanças de estado; o conteúdo livre da
   campanha (descrição, ambientação) nunca entra. A leitura do histórico é exclusiva de
   administrador: sem sessão é 401, sessão comum é 403 e campanha desconhecida é 404.
+- O painel vê o módulo por números, nunca por conteúdo: o agregado em
+  `/admin/monitoring/roleplay` é exclusivo de moderador, cacheado por um minuto e não expõe
+  nome, slug, descrição nem id de pessoa — o mesmo recorte de privacidade da trilha.
 - A campanha guarda só o IDENTIFICADOR do sistema, nunca as regras. Um sistema sem adaptador
   registrado responde com erro próprio; a família que a campanha grava vem do adaptador, não do
   pedido do cliente.
