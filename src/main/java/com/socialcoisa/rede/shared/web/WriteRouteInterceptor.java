@@ -89,6 +89,9 @@ class WriteRouteInterceptor implements HandlerInterceptor {
 		// Mesma credencial de nó (X-Node-Id + X-Node-Key), e o serviço só aceita o nó cujo id é o
 		// dono do disco — um nó qualquer não apaga o disco de outro.
 		"/network/storage/inventory/purge",
+		// Varredura do proprio no: ele devolve o que mediu no disco dele, e o Control Plane so
+		// rebaixa as copias que SAO deste no (o filtro por dono e no servico). Mesma credencial.
+		"/network/storage/scrub",
 		// Inscrição para servir um nó (V324): o formulário é público por definição — quem quer
 		// oferecer uma máquina pode não ter conta —, limitado por IP no controller. O link de
 		// exibição é autenticado pelo PRÓPRIO token de uso único, que só existe no e-mail de

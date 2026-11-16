@@ -197,6 +197,34 @@ class NetworkStorageController {
 		return inventory.purgeOrphans(node, dryRun);
 	}
 
+	/**
+	 * O nó devolve o que mediu no <b>próprio</b> disco: as cópias suas que não conferem.
+	 *
+	 * <p>Fecha o que a varredura do Control Plane não alcança: ela só relê o disco da instalação em
+	 * que roda. A cópia de outro nó só o dono do disco pode conferir, e é ele que chama aqui.</p>
+	 *
+	 * <p>O nó declara o <b>medido</b>; o Control Plane confere contra a colocação e só rebaixa as
+	 * cópias que <b>são deste nó</b>. Entrada que não é dele é ignorada — o relatório de um nó não
+	 * derruba a cópia de outro.</p>
+	 */
+	@PostMapping("/scrub")
+	Map<String, Object> reportScrub(@RequestHeader(value = "X-Node-Id", required = false) String nodeId,
+			@RequestHeader(value = "X-Node-Key", required = false) String nodeKey,
+			@RequestBody(required = false) List<ScrubEntry> divergentes) {
+		NetworkNode node = keys.authenticate(nodeId, nodeKey);
+		if (divergentes == null) {
+			throw new ApiException(400, "STORAGE_SCRUB_BODY_MISSING", "Corpo do relatorio ausente.");
+		}
+		int marcadas = storage.reportDirtyReplicas(node, divergentes.stream()
+			.map(e -> new StorageCatalogService.Divergente(e.objectId(), e.actualSha256()))
+			.toList());
+		return Map.of("nodeId", node.id(), "stale", marcadas);
+	}
+
+	/** O que o nó mediu numa cópia: o id do objeto e o digest que o arquivo tem agora. */
+	record ScrubEntry(String objectId, String actualSha256) {
+	}
+
 	/** O que o catálogo sabe deste objeto: as duas medidas e onde estão as cópias. */
 	@GetMapping("/objects/{objectId}/location")
 	Map<String, Object> location(@RequestHeader(value = "X-Node-Id", required = false) String nodeId,

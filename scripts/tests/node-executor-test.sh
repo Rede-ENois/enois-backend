@@ -1485,5 +1485,63 @@ assert_contains 'teto de disco menor que o objeto recusa antes de confirmar' "$o
 assert_not_contains 'e nao confirma a copia' "$(cat "$TMP/curl-calls")" '/replica'
 rm -f "$TMP"/object-put.*
 
+# ------------------------------------------------- cenário: varredura do próprio disco (§5.8)
+# O Control Plane só relê o disco da instalação em que roda. A cópia DESTE nó só o dono confere:
+# o nó mede o que guardou e devolve; o CP decide (e só rebaixa a cópia que é dele).
+SCRUB_CONFIG='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":5,"ttlSeconds":300,"configVersion":11,"profiles":["NODE_STORAGE"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["OBJECT_PUT"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 11 '["NODE_STORAGE"]' 4 8192 51200 100 '["OBJECT_PUT"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+SCRUB_TASK_VAZIO='{"tasks":[],"mode":"NORMAL","serverTime":"now"}'
+
+# curl da varredura: config assinada + fila vazia + recibo do relatorio.
+make_curl_scrub() {
+  cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$SCRUB_CONFIG' ;;
+  */network/tasks/next) printf '%s' '$SCRUB_TASK_VAZIO' ;;
+  */network/storage/scrub) printf '%s' '{"nodeId":"nd_exec1","stale":${SCRUB_STALE:-0}}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+  chmod +x "$TMP/curl"
+}
+
+# O nó guarda um corpo e a varredura o entrega com o sha MEDIDO no disco.
+mkdir -p "$NH/objects"
+printf '%s' "$OBJ_BODY" > "$NH/objects/sob_ok.bin"
+make_curl_scrub
+: > "$TMP/curl-calls"
+out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SECONDS=1 \
+  /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true)
+assert_contains 'a varredura entrega o que o no mediu' "$(cat "$TMP/curl-calls")" '/network/storage/scrub'
+assert_contains 'o relatorio leva o sha do arquivo no disco' "$(cat "$TMP/curl-calls")" '"actualSha256":"'"$OBJ_SHA"'"'
+assert_contains 'e o id do objeto, sem o sufixo .bin' "$(cat "$TMP/curl-calls")" '"objectId":"sob_ok"'
+
+# Arquivo ILEGÍVEL não entra no relatório. Declarar divergência por um erro de I/O passageiro
+# derrubaria uma cópia boa -- "não consegui ler" não é "leu e divergiu".
+rm -f "$NH/objects/sob_ok.bin"
+printf 'x' > "$NH/objects/sob_ilegivel.bin"
+chmod 000 "$NH/objects/sob_ilegivel.bin" 2>/dev/null || true
+: > "$TMP/curl-calls"
+out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SECONDS=1 \
+  /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true)
+# Rodando como root o `chmod 000` não barra a leitura, e o arquivo entra com o sha real. O que o
+# teste fixa é que a ausência de sha NUNCA vira entrada sem digest.
+assert_not_contains 'arquivo ilegivel nunca entra sem digest' "$(cat "$TMP/curl-calls")" '"actualSha256":""'
+chmod 644 "$NH/objects/sob_ilegivel.bin" 2>/dev/null || true
+rm -f "$NH/objects/sob_ilegivel.bin"
+
+# Nó que NÃO guarda objeto (sem OBJECT_PUT na config assinada) não relata nada: relatório vazio
+# todo ciclo só faria volume no log do Control Plane.
+printf '%s' "$OBJ_BODY" > "$NH/objects/sob_ok.bin"
+SCRUB_CONFIG_SEM_STORAGE='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":5,"ttlSeconds":300,"configVersion":12,"profiles":["NODE_EDGE"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["EDGE_CACHE"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 12 '["NODE_EDGE"]' 4 8192 51200 100 '["EDGE_CACHE"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+SCRUB_CONFIG="$SCRUB_CONFIG_SEM_STORAGE" make_curl_scrub
+: > "$TMP/curl-calls"
+out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SECONDS=1 \
+  /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true)
+assert_not_contains 'no sem OBJECT_PUT nao manda relatorio' "$(cat "$TMP/curl-calls")" '/network/storage/scrub'
+
 
 printf '\nTodos os cenarios passaram (%d assercoes).\n' "$PASS"
