@@ -113,7 +113,7 @@ public class EnumerationGuardFilter extends OncePerRequestFilter {
 			return;
 		}
 
-		String ip = ipResolver.resolve(request);
+		String ip = ipResolver.resolveNetwork(request);
 		String userId = authenticatedUser(request, ip);
 		String key = userId != null ? "u:" + userId : "ip:" + ip;
 

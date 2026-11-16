@@ -1794,3 +1794,33 @@ continua na campanha.
 | `LIBRARY_EMPTY` | 400 | Nada aberto à campanha — a cópia ficaria vazia |
 | `LIBRARY_NOT_FOUND` | 404 | Publicação inexistente, ou de outra pessoa para despublicar |
 | `SHEET_NOT_FOUND` | 404 | Ficha inexistente nesta campanha (inclui a de outro jogador) |
+
+## Éroleplay — histórico de auditoria da campanha (Fase 10)
+
+Os atos de campanha ficam na trilha única de auditoria do sistema (`audit_logs`), com ação com
+prefixo `ROLEPLAY_*` e a campanha como alvo. A leitura do histórico é do painel administrativo e
+segue o mesmo padrão do histórico de rede: dupla trava (interceptador de `/admin/**` +
+`requireAdmin`), sem trilha própria do módulo e sem conteúdo da campanha no metadata.
+
+### Rotas
+
+| Método | Rota | Quem pode | O que faz |
+|---|---|---|---|
+| GET | `/api/admin/roleplay/campaigns/{id}/history` | Admin | O histórico de atos da campanha, do mais novo para o mais antigo (`?limit=`, padrão 50, teto 200, piso 1) |
+
+Cada entrada devolve `{ "id", "actorId", "action", "metadata", "createdAt" }`, com `metadata` como
+JSON mínimo (identificadores e mudanças de estado — a criação traz também `name`, `slug`,
+`visibility` e `system` para identificar a campanha no painel; descrição e ambientação nunca
+entram).
+
+### Regras
+
+- Sem sessão é 401; sessão válida sem ser admin é 403; campanha desconhecida é 404 — não é uma
+  lista vazia.
+- Ações gravadas: `ROLEPLAY_CAMPAIGN_CREATED`, `ROLEPLAY_CAMPAIGN_UPDATED`,
+  `ROLEPLAY_CAMPAIGN_MEMBER_JOINED`, `ROLEPLAY_CAMPAIGN_JOIN_REQUESTED`,
+  `ROLEPLAY_CAMPAIGN_JOIN_REQUEST_APPROVED`, `ROLEPLAY_CAMPAIGN_JOIN_REQUEST_REJECTED`,
+  `ROLEPLAY_CAMPAIGN_MEMBER_INVITED`, `ROLEPLAY_CAMPAIGN_MEMBER_LEFT`,
+  `ROLEPLAY_CAMPAIGN_MEMBER_REMOVED`, `ROLEPLAY_CAMPAIGN_MASTERSHIP_TRANSFERRED`,
+  `ROLEPLAY_CAMPAIGN_ARCHIVED`, `ROLEPLAY_TABLE_CREATED`.
+- A trilha é a mesma de todo o sistema; não há rota para participantes — o histórico é do painel.

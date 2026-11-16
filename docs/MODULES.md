@@ -28,7 +28,7 @@
 
 | Função | Descrição |
 |---|---|
-| `corsConfigurer()` | Configura CORS permitindo origens de `rede.cors.allowed-origins` |
+| `corsConfigurer()` | Configura CORS a partir do `AppOriginRegistry` — a mesma lista de origens que o portão de origem usa (`rede.cors.allowed-origins` + `rede.origins.trusted`) |
 
 ### Processamento compartilhado de caminhos
 
@@ -1379,7 +1379,17 @@ eventos/logs/erros. Documentação completa em [`MONITORAMENTO.md`](MONITORAMENT
 | `GET /admin/monitoring/overview` | KPIs, séries por minuto, recursos, eventos recentes |
 | `GET /admin/monitoring/events` | Lista de eventos com filtros (nível, tipo, busca, **intervalo de data/hora**, paginação por cursor) |
 | `GET /admin/monitoring/users` | Contas da comunidade: total, entradas por dia (30 dias), crescimento diário e projeções |
+| `GET /admin/monitoring/denied-admin` | Recusas de autorização em `/admin/**` e `/moderation/**`: total, avisos de repetição, contas acima do limiar da janela e varreduras sem sessão acima do limiar |
 | `GET /admin/emails` | Log de e-mails enviados |
+
+Toda recusa decidida pelo `AdminRouteInterceptor` (sem sessão, só admin ou só moderação) grava uma
+linha em `audit_logs` com ação `ADMIN_AUTHORITY_DENIED`, a rota sem id e o motivo
+(`SESSION_MISSING`, `ADMIN_ONLY`, `MODERATOR_ONLY`) — nunca corpo de requisição nem token. O 401/403
+recusado antes do interceptor (rota inexistente, cabeçalho de sessão ausente, escrita sem sessão) é
+contado em memória por pod e vira UMA linha de auditoria com escopo `admin-baseline` só quando a
+mesma origem repete acima do limiar (`rede.security.denied-admin-alerts.threshold`, padrão 20, em
+`window-minutes`, padrão 10) — gravar uma linha por recusa transformaria varredura em carga de
+escrita.
 
 O painel de log aceita "mostrar mais", cópia individual e cópia completa, e o modo pânico (chave de
 sistema que responde 429 em toda escrita) fica no módulo shared (`PanicController`).
@@ -1835,6 +1845,8 @@ por matriz de capacidades, com a autorização sempre no back-end.
 | `LibraryService` | Publicar, republicar, despublicar, ler e listar a biblioteca; a autorização é do dono da ficha |
 | `LibraryController` | API REST em `/roleplay/library` e `/roleplay/campaigns/{id}/sheets/{sheetId}/publish` |
 | `LibrarySheetJpaEntity` | Persistência (V326), com os campos públicos em JSON `longtext` |
+| `CampaignAuditTrail` | Os atos de campanha na trilha única do sistema (`audit_logs`), com ação `ROLEPLAY_*` e metadata mínimo |
+| `AdminRoleplayController` | Histórico de auditoria da campanha em `/admin/roleplay/campaigns/{id}/history` (exclusivo de administrador) |
 
 Regras que valem sempre:
 
@@ -1845,6 +1857,12 @@ Regras que valem sempre:
   `REQUEST_ALREADY_DECIDED`.
 - A voz da mesa referencia uma sessão de chamada do Épapo (`voiceRoomId`); o módulo não cria
   sala de voz paralela.
+- Os atos de campanha (criação, edição, entrada, pedido, decisão, convite, saída, remoção,
+  transferência de mestria, arquivamento, criação de mesa) ficam na trilha única de auditoria do
+  sistema (`audit_logs`), com prefixo `ROLEPLAY_*` e a campanha como alvo — não há trilha própria
+  do módulo. O metadata carrega identificadores, papéis e mudanças de estado; o conteúdo livre da
+  campanha (descrição, ambientação) nunca entra. A leitura do histórico é exclusiva de
+  administrador: sem sessão é 401, sessão comum é 403 e campanha desconhecida é 404.
 - A campanha guarda só o IDENTIFICADOR do sistema, nunca as regras. Um sistema sem adaptador
   registrado responde com erro próprio; a família que a campanha grava vem do adaptador, não do
   pedido do cliente.

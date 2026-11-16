@@ -41,6 +41,32 @@ bucket. A saida foi tirar o bucket do caminho do navegador:
   `https://s3.b7cloud.tech/enois-bucket/`) para `https://api.enois.ia.br/api/storage/` nas colunas
   que guardam midia. O caminho depois do prefixo e o mesmo `objectKey`, entao nada e remapeado.
 
+- **Endereço de mídia é do ambiente, não do ambiente de origem.** A URL gravada no asset é estável
+  de propósito (URL assinada apodreceria), então um ambiente que nasceu de uma cópia (o QA) devolve
+  no campo bruto o endereço de onde o asset veio. Toda projeção que o navegador abre — `avatarUrl`
+  do perfil (público, próprio e listas de conexões/seguidores) — passa por `MediaPublicHost`, que
+  troca **só o host** de produção (`rede.site.domains`, primeiro domínio) pelo host de mídia deste
+  ambiente (`REDE_MEDIA_S3_PUBLIC_BASE_URL` ou `IMAGEKIT_URL_ENDPOINT`). Se o host configurado não
+  pertence ao ambiente (`REDE_BACKEND_URL`, `REDE_FRONTEND_URL`, `CORS_ALLOWED_ORIGINS`), o boot
+  registra um aviso e não derruba o serviço. Em produção a troca não se aplica.
+
+  ```properties
+  REDE_MEDIA_S3_PUBLIC_BASE_URL=https://enois-api-qa.b7cloud.tech/api/storage/
+  REDE_BACKEND_URL=https://enois-api-qa.b7cloud.tech
+  REDE_FRONTEND_URL=https://enois-qa.b7cloud.tech
+  ```
+
+- **Cópia de denúncia não é conteúdo público.** A captura de uma denúncia é o arquivo enviado por
+  quem denunciou, ainda sem revisão de imagem. Ela nasce em chave própria
+  (`reports/capture/uploads/...`, fora do prefixo público) e não é servida por `GET /media/...` nem
+  por `GET /storage/...`. Quem abre é quem enviou, quem modera, ou o endereço assinado de curto
+  prazo (`/media/attachments/{id}?scope=...&expires=...&signature=...`) que o painel de denúncia
+  recebe. O segredo é `REDE_MEDIA_ATTACHMENTS_SECRET` (obrigatório para a cópia abrir; a rota
+  responde 503 e o boot avisa quando falta). **Negue leitura pública do prefixo
+  `reports/capture/`** na policy do bucket — e, quando houver CDN na frente, na CDN (a CDN não
+  conhece a policy do bucket). O conteúdo sempre sai como download
+  (`application/octet-stream`, `Content-Disposition: attachment`).
+
 Consequencia operacional: a largura de banda da midia passa pelo pod. Se um dia o b7 liberar CORS
 e leitura publica, basta apontar `REDE_MEDIA_S3_PUBLIC_BASE_URL` de volta para o bucket/CDN e
 `REDE_MEDIA_S3_UPLOAD_THROUGH_API=false`.
