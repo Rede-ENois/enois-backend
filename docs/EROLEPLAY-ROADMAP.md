@@ -1,6 +1,8 @@
 # Éroleplay — Roadmap
 
-Estado geral: **em andamento**.
+Estado geral: **concluída** — ver a versão na `qa`.
+PROJECT_STATUS=COMPLETED (2026-11-16) — backend das fases 0–10 entregue com prova executada.
+CRONJOB_STATUS=DISABLED. Fases 0–10 concluídas, todas as PRs mergeadas na `qa`.
 Documento vivo: cada rodada atualiza a seção de estado e a "próxima tarefa" antes de encerrar.
 
 ## 1. Como este roadmap é usado
