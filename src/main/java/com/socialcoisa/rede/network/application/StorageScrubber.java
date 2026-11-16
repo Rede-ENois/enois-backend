@@ -124,7 +124,9 @@ public class StorageScrubber {
 				if (!object.servable()) {
 					continue;
 				}
-				List<StoragePlacement> confirmed = catalog.placements(id)
+				// Durabilidade lê `copies` (todos os estados), não `placements` (só OK): a pergunta é
+				// quantas cópias o objeto tem, e uma cópia GONE ainda conta como réplica existente.
+				List<StoragePlacement> confirmed = catalog.copies(id)
 					.stream()
 					.filter(p -> p.state() == StoragePlacement.State.OK)
 					.toList();

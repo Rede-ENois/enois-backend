@@ -94,3 +94,48 @@ network/
   adapters/in/web/   NetworkStorageController (/network/storage/**)
 db/migration/        V319 (objetos), V320 (colocações)
 ```
+## A coleta da lápide (§14 do brief do Storage)
+
+Remover um objeto marca `DELETED` e mantém a linha — mas o objeto pode voltar a ter cópias depois
+disso: um upload que venceu a corrida, ou uma réplica da fase 3 que chegou atrasada. Enquanto essas
+cópias existirem, o objeto "removido" continua contando na durabilidade e pode ser servido por um
+caminho que não conhece a lápide.
+
+`POST /admin/network/nodes/storage/tombstones/collect?dryRun=true` (admin) recolhe as cópias de
+lápides **vencidas** (mais que `rede.storage.tombstone.retention-hours`, 72 h por padrão):
+
+- **A janela protege o desfazer.** Lápide recente não é tocada: o cliente pode desfazer, e apagar a
+  cópia agora tornaria o desfazer impossível sem um novo upload.
+- **O que muda é a cópia, não o objeto.** Cópia ativa vira `GONE`; a linha do objeto fica — a lápide é
+  rastro, não remoção de linha, e é ela que impede a chave de voltar a ser usada pelo mesmo objeto.
+- **`dryRun` é o padrão** e mostra o que sairia sem gravar. A coleta é **ato de operador**, nunca
+  agendador: cada execução muda a durabilidade de objetos removidos.
+- **Objeto que voltou a `STORED` é pulado.** A página é lida, e cada objeto é relido antes de decidir:
+  entre a página e a decisão, um upload pode ter marcado o objeto de volta, e recolher as cópias dele
+  apagaria o corpo que o cliente acabou de gravar.
+- **O cursor avança mesmo quando a página não rende.** Um lote inteiro de lápides vivas consumiria o
+  teto de páginas relendo a mesma linha (medido: 20 páginas para uma lápide, antes do conserto).
+- **Auditoria por operação**, não por cópia: `STORAGE_TOMBSTONES_COLLECT_RUN` diz quantas lápides e
+  em qual janela; uma linha por cópia seria centenas para dizer o que o relatório diz.
+
+### A durabilidade lê `copies`, não `placements`
+
+A coleta expôs um defeito mais grave que a própria coleta: **`catalog.placements(objectId)` devolve só
+cópias `OK`**, mas três leitores o usavam como "todas as cópias do objeto":
+
+| leitor | o que perguntava | resultado com `placements` |
+|---|---|---|
+| `StorageReplicationDispatcher` | há `PENDING_REMOTE` a despachar? | lista **sempre vazia**: a réplica designada pelo upload e pelo healing nunca virava tarefa |
+| `StorageHealer.temDesignacaoPendente` | já há um dono para a lacuna? | **sempre `false`**: a cura designava de novo, com um número novo |
+| `StorageHealer.heal` | qual é o maior número de réplica? | lia só `OK`: o número de uma cópia `GONE` seria reaproveitado e sobrescreveria a linha |
+
+A porta ganhou `copies(objectId)` (todos os estados) e `placements(objectId)` ficou com o nome do que
+faz — só `OK`. **Corrigir os três leitores um a um** deixaria o quarto nascer errado; o nome errado
+era a causa.
+
+**Verificação:** `NetworkStorageTombstoneTests` 6 (rota real: lápide vencida recolhida, recente
+intocada, `dryRun` sem gravar, objeto vivo fora, exige admin, **despacho envia a réplica pendente**) e
+`StorageTombstoneCollectorTests` 6 (corrida do objeto que voltou a vivo, cursor que avança, janela
+pedida ao banco, `dryRun` sem gravar nem auditar, coleta real grava `GONE` e audita). Mutações: o
+despacho voltar a ler `placements`; a janela de retenção ignorada; `dryRun` gravando; a coleta não
+reler o estado; o cursor preso na página pulada — **5 de 5 derrubam**.

@@ -20,6 +20,7 @@ import com.socialcoisa.rede.network.application.StorageHealer;
 import com.socialcoisa.rede.network.application.StorageOverviewService;
 import com.socialcoisa.rede.network.application.StorageReplicationDispatcher;
 import com.socialcoisa.rede.network.application.StorageScrubber;
+import com.socialcoisa.rede.network.application.StorageTombstoneCollector;
 import com.socialcoisa.rede.network.application.NodeKeyService;
 import com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository;
 import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
@@ -64,6 +65,7 @@ class AdminNetworkController {
 	private final ChangeCaptureReadinessService changeCapture;
 	private final NetworkTaskRepository tasks;
 	private final com.socialcoisa.rede.network.application.NetworkTopologyService topology;
+	private final StorageTombstoneCollector tombstones;
 
 	AdminNetworkController(NetworkNodeService nodes, NodeKeyService keys, NetworkDashboardService dashboard,
 			AuditTrail audit, CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
@@ -73,7 +75,8 @@ class AdminNetworkController {
 			com.socialcoisa.rede.network.application.NodeObservabilityService observability,
 			ChangeCaptureReadinessService changeCapture, StorageOverviewService storageOverview,
 			StorageHealer healer, StorageReplicationDispatcher dispatcher, NetworkTaskRepository tasks,
-			com.socialcoisa.rede.network.application.NetworkTopologyService topology) {
+			com.socialcoisa.rede.network.application.NetworkTopologyService topology,
+			StorageTombstoneCollector tombstones) {
 		this.nodes = nodes;
 		this.keys = keys;
 		this.dashboard = dashboard;
@@ -91,6 +94,7 @@ class AdminNetworkController {
 		this.dispatcher = dispatcher;
 		this.tasks = tasks;
 		this.topology = topology;
+		this.tombstones = tombstones;
 	}
 
 	/**
@@ -218,11 +222,6 @@ class AdminNetworkController {
 	}
 
 	/**
-	 * Varredura de durabilidade do Storage: objetos {@code STORED} com menos cópias confirmadas que
-	 * o pedido. É leitura (não repara nada) e serve para o operador ver a lacuna antes que ela vire
-	 * um objeto que só existe num disco. {@code bucket} nulo varre o catálogo inteiro.
-	 */
-	/**
 	 * O Storage no painel (§8.2 do brief): capacidade declarada, disponível medido, uso medido,
 	 * objetos e o estado das cópias. Nada aqui é estimado — ver {@link StorageOverviewService}.
 	 */
@@ -278,6 +277,11 @@ class AdminNetworkController {
 		return dispatcher.dispatch(objectId);
 	}
 
+	/**
+	 * Varredura de durabilidade do Storage: objetos {@code STORED} com menos cópias confirmadas que
+	 * o pedido. É leitura (não repara nada) e serve para o operador ver a lacuna antes que ela vire
+	 * um objeto que só existe num disco. {@code bucket} nulo varre o catálogo inteiro.
+	 */
 	@GetMapping("/storage/scrub")
 	StorageScrubber.Report scrubStorage(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(required = false) String bucket,
@@ -300,6 +304,28 @@ class AdminNetworkController {
 	 * <p>Fica sob {@code /nodes/} porque a classe inteira é mapeada ali — o caminho curto
 	 * {@code /admin/network/storage/balance} seria outra classe ou um segundo mapeamento.</p>
 	 */
+	/**
+	 * Coleta de lápides do Storage (brief §14): objetos {@code DELETED} há mais que a janela de
+	 * retenção têm as cópias restantes recolhidas. Uma lápide que ainda tem cópia continua contando
+	 * na durabilidade e pode ser servida por um caminho que não conhece a remoção.
+	 *
+	 * <p>{@code dryRun} é o padrão: a primeira coisa a fazer num incidente é ver o que sairia sem
+	 * apagar. A operação é ato de operador, não de agendador — igual ao healing e à poda do disco
+	 * do nó.</p>
+	 */
+	@PostMapping("/storage/tombstones/collect")
+	StorageTombstoneCollector.Report collectTombstones(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(defaultValue = "true") boolean dryRun) {
+		CurrentUser admin = admin(sessionToken);
+		var relatorio = tombstones.collect(dryRun);
+		// A auditoria da coleta é da operação: quantas lápides, em qual janela. As cópias recolhidas
+		// não são auditadas uma a uma — seriam centenas de linhas para dizer o que o relatório diz.
+		audit.record(admin.id().value(), "STORAGE_TOMBSTONE_COLLECT_RUN", "storage",
+			"{\"dryRun\":" + dryRun + ",\"objects\":" + relatorio.collected().size() + "}");
+		return relatorio;
+	}
+
 	@GetMapping("/storage/balance")
 	com.socialcoisa.rede.network.application.StorageBalanceReport.Report storageBalance(
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {

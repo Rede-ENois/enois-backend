@@ -60,8 +60,32 @@ public interface StorageCatalogRepository {
 	/** Grava (ou substitui) a cópia {@code replica} deste objeto neste nó. */
 	void savePlacement(StoragePlacement placement);
 
-	/** As cópias deste objeto ainda servíveis (estado {@code OK}), em ordem de réplica. */
+	/**
+	 * Todas as cópias deste objeto em <b>qualquer</b> estado, em ordem de réplica.
+	 *
+	 * <p>É a leitura que a durabilidade usa, e o nome diz isso: uma cópia {@code GONE} ainda conta
+	 * como réplica existente. Quem pergunta "quantas cópias o objeto tem" precisa deste número —
+	 * {@code placements} descreve o que é <i>servível</i>, que é outra pergunta.</p>
+	 */
+	List<StoragePlacement> copies(String objectId);
+
+	/**
+	 * As cópias deste objeto ainda servíveis (estado {@code OK}), em ordem de réplica.
+	 *
+	 * <p>Uso de leitura/serving: objeto que voltou a ter cópia confirmada. Para durabilidade use
+	 * {@link #copies(String)}.</p>
+	 */
 	List<StoragePlacement> placements(String objectId);
+
+	/**
+	 * Lápides vencidas, em ordem total {@code (bucket, object_key)}, estritamente <b>depois</b> do
+	 * cursor. O cursor é o par {@code (bucket, chave)} e não só a chave: a mesma chave em dois
+	 * buckets é legítima, e um cursor só pela chave oscilaria entre as duas linhas para sempre.
+	 *
+	 * <p>Cada linha devolvida está além do cursor, então uma página que não rendeu (todos os objetos
+	 * pulados) ainda avança — nenhuma chamada repete o que já foi decidido.</p>
+	 */
+	List<StorageObject> listDeletedBefore(Instant before, String afterBucket, String afterKey, int limit);
 
 	/** A cópia servível deste objeto num nó específico, se existir. */
 	/**

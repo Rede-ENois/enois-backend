@@ -105,7 +105,7 @@ class StorageHealerTests {
 	void lacuna_vira_designacao_pendente_para_o_no_escolhido() {
 		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(gap("sob_1"));
 		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
-		when(catalog.placements("sob_1")).thenReturn(List.of());
+		when(catalog.copies("sob_1")).thenReturn(List.of());
 		NetworkNode no = storageNode("nd_a", "sudeste");
 		when(placement.chooseReplicas(eq("sob_1"), anyLong(), any(Instant.class))).thenReturn(List.of(no));
 		expectSaved();
@@ -127,7 +127,7 @@ class StorageHealerTests {
 	void dry_run_mostra_o_que_seria_feito_e_nao_grava_nada() {
 		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(gap("sob_1"));
 		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
-		when(catalog.placements("sob_1")).thenReturn(List.of());
+		when(catalog.copies("sob_1")).thenReturn(List.of());
 		when(placement.chooseReplicas(eq("sob_1"), anyLong(), any(Instant.class)))
 			.thenReturn(List.of(storageNode("nd_a", "sudeste")));
 
@@ -145,7 +145,7 @@ class StorageHealerTests {
 		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(gap("sob_1"));
 		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
 		// A réplica 1 já tem dono num nó que a perdeu (STALE): a nova não pode ser a 1.
-		when(catalog.placements("sob_1")).thenReturn(List.of(
+		when(catalog.copies("sob_1")).thenReturn(List.of(
 			new StoragePlacement("sob_1", 0, "nd_cp", 2048, "a".repeat(64), StoragePlacement.State.OK, NOW),
 			new StoragePlacement("sob_1", 2, "nd_velho", 2048, "a".repeat(64), StoragePlacement.State.STALE, NOW)));
 		when(placement.chooseReplicas(eq("sob_1"), anyLong(), any(Instant.class)))
@@ -162,7 +162,7 @@ class StorageHealerTests {
 	void so_copia_stale_nao_e_origem_para_replicar() {
 		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(gap("sob_1"));
 		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
-		when(catalog.placements("sob_1")).thenReturn(List.of(
+		when(catalog.copies("sob_1")).thenReturn(List.of(
 			new StoragePlacement("sob_1", 1, "nd_x", 2048, "b".repeat(64), StoragePlacement.State.STALE, NOW)));
 		// Nenhum nó: sem isso o motivo diria NO_CANDIDATE, escondendo que há cópia suspeita.
 		when(placement.chooseReplicas(eq("sob_1"), anyLong(), any(Instant.class))).thenReturn(List.of());
@@ -179,7 +179,7 @@ class StorageHealerTests {
 	void sem_no_livre_a_lacuna_fica_com_motivo_proprio() {
 		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(gap("sob_1"));
 		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
-		when(catalog.placements("sob_1")).thenReturn(List.of(
+		when(catalog.copies("sob_1")).thenReturn(List.of(
 			new StoragePlacement("sob_1", 0, "nd_cp", 2048, "a".repeat(64), StoragePlacement.State.OK, NOW)));
 		when(placement.chooseReplicas(eq("sob_1"), anyLong(), any(Instant.class))).thenReturn(List.of());
 
@@ -193,7 +193,7 @@ class StorageHealerTests {
 	void designacao_pendente_ja_tem_dono_e_nao_e_reescolhida() {
 		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(gap("sob_1"));
 		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
-		when(catalog.placements("sob_1")).thenReturn(List.of(
+		when(catalog.copies("sob_1")).thenReturn(List.of(
 			new StoragePlacement("sob_1", 1, "nd_a", 2048, "a".repeat(64),
 				StoragePlacement.State.PENDING_REMOTE, NOW)));
 
@@ -220,7 +220,7 @@ class StorageHealerTests {
 	void designa_no_maximo_o_que_falta_mesmo_com_mais_candidatos() {
 		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(gap("sob_1"));
 		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
-		when(catalog.placements("sob_1")).thenReturn(List.of());
+		when(catalog.copies("sob_1")).thenReturn(List.of());
 		// Três nós livres, mas só falta UMA cópia: designar as três criaria duplicidade que o
 		// alvo não pediu e o relatório de equilíbrio acusaria como desbalanceamento.
 		when(placement.chooseReplicas(eq("sob_1"), anyLong(), any(Instant.class))).thenReturn(List.of(
