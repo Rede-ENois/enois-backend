@@ -276,9 +276,14 @@ fallback, e a divergência é atribuída à réplica 0 — a única que este pro
 roda nesta máquina, então a cópia do diretório local não tem colocação a que atribuir a divergência.
 Quem confere a cópia na gravação é o `confirmReplica` (bytes + sha-256 do que o nó mediu).
 
-**Verificação:** `StorageLocalBodyServingTests` 6 (serve do nó local; 409 sem corpo; raiz do CP tem
-prioridade; truncado é 410; sem nó local lê a raiz; réplica 0 não cai para o nó);
+**A leitura não cria diretório.** `readBody` resolve `rede.storage.root` direto, sem o
+`createDirectories` do `root()`: um GET num Control Plane que nunca recebeu upload não escreve em
+disco, e uma falha de disco responde 409/410 em vez de virar 500 num download.
+
+**Verificação:** `StorageLocalBodyServingTests` 7 (serve do nó local; 409 sem corpo; raiz do CP tem
+prioridade; truncado é 410; sem nó local lê a raiz; réplica 0 não cai para o nó; leitura não cria o
+diretório);
 `StorageScrubberReadBackTests` 5 (1 novo: sumiço da réplica 0 não é escondido e a cópia de outro nó
 não é acusada); `NetworkStorageReplicationTests` 8 (1 novo pela rota real). Mutações: sem fallback,
 ordem invertida, sem conferência de tamanho, réplica 0 com fallback, varredura relendo todas as
-cópias — 5 de 5 derrubam.
+cópias, `readBody` voltando a chamar `bodyPath` — 6 de 6 derrubam.

@@ -159,6 +159,20 @@ class StorageLocalBodyServingTests {
 	}
 
 	@Test
+	void leitura_nao_cria_o_diretorio_do_control_plane() {
+		// GET é leitura. `root()` cria o diretório na primeira escrita, e chamá-lo no caminho de
+		// leitura faria um download num Control Plane que nunca recebeu upload escrever em disco —
+		// e uma falha de disco viraria 500 num download em vez de "não está aqui".
+		StorageObject object = objeto("sob_a", "conteudo");
+		Path raizCp = root.resolve("cp");
+		assertThat(Files.exists(raizCp)).isFalse();
+
+		assertThatThrownBy(() -> service.readBody(object.id())).isInstanceOf(ApiException.class);
+
+		assertThat(Files.exists(raizCp)).as("a leitura criou o diretório de escrita").isFalse();
+	}
+
+	@Test
 	void a_replica_zero_nao_cai_para_o_corpo_do_no_local() throws Exception {
 		StorageObject object = objeto("sob_a", "conteudo do objeto");
 		corpoDoNoLocal(object.id(), "conteudo do objeto");

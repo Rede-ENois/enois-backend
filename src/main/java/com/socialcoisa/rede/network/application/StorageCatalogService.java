@@ -460,7 +460,10 @@ public class StorageCatalogService {
 		// Antes só a primeira existia: objeto replicado para o nó local respondia 409 mesmo com os
 		// bytes a um diretório de distância, e "guardar no próprio disco" não servia para nada.
 		Optional<StorageObject> object = catalog.findById(objectId);
-		Path cpBody = bodyPath(objectId);
+		// A raiz SEM o `createDirectories` do `root()`: ler é leitura. Criar o diretório aqui faria
+		// um GET num Control Plane que nunca recebeu upload escrever em disco, e fariam uma falha de
+		// disco virar 500 num download em vez de "não está aqui" (409/410).
+		Path cpBody = Path.of(storageRoot).resolve(objectId);
 		if (Files.isReadable(cpBody)) {
 			return openVerified(cpBody, object);
 		}
