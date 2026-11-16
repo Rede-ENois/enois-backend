@@ -1884,7 +1884,12 @@ Regras que valem sempre:
 - A decisão de um pedido de entrada é atômica; a segunda decisão devolve
   `REQUEST_ALREADY_DECIDED`.
 - A voz da mesa referencia uma sessão de chamada do Épapo (`voiceRoomId`); o módulo não cria
-  sala de voz paralela.
+  sala de voz paralela. A voz é estado da mesa como cena e ordem: abrir a sala (ou devolvê-la) é
+  ato do mestre; consultar a sala aberta é leitura de participante.
+- A rota de voz recebe campanha e mesa no path: a mesa tem de pertencer à campanha informada
+  (mesa desconhecida ou de outra campanha é 404) antes de qualquer delegação ao serviço de
+  chamadas — o tableId sozinho não decide. A leitura da sala aberta é tolerante (não-participante
+  lê vazio); a recusa de entrada é do join, que assina token.
 - Os atos de campanha (criação, edição, entrada, pedido, decisão, convite, saída, remoção,
   transferência de mestria, arquivamento, criação de mesa) ficam na trilha única de auditoria do
   sistema (`audit_logs`), com prefixo `ROLEPLAY_*` e a campanha como alvo — não há trilha própria

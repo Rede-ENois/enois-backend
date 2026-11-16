@@ -737,7 +737,6 @@ livre e nenhuma linha devolve id de pessoa — o mesmo recorte de privacidade da
   (**31 testes, 0 falhas, 0 erros**); a classe de mídia acumula os erros de FK no `setUp` por
   contaminação da base H2 compartilhada já documentada na Rodada 11, e o CI da ponta `qa`
   (877ab584) está verde na mesma base — guarda ambiental local, não regressão desta mudança.
-- Compilação `./mvnw -DskipTests compile` verde antes dos testes.
 
 ### Docs e PR
 
@@ -750,3 +749,83 @@ Branch `feat/eroleplay-metricas` com PR para `qa` — sem merge, como sempre.
 
 Fase 10 fecha com a revisão de segurança por fase. Em paralelo, a Fase 9 (front) aguarda os
 comentários da revisão em #898.
+
+---
+
+## Rodada 14 — 2026-11-16 — revisão de segurança por fase (Fase 10)
+
+### Estado encontrado
+
+Fase 9 (front) segue com a PR #898 aberta; as duas rodadas anteriores de Fase 10 (auditoria e
+métricas) estão em PRs abertas para `qa` (#784, #785). Ninguém estava na revisão de segurança. A
+rodada começou da ponta `enois/qa` (`4d2aa51d`) em worktree e branch novos
+(`feat/eroleplay-seguranca`), sem colisão.
+
+### Escopo da varredura
+
+Toda a superfície REST do módulo (campanhas, entrada, mesas, estado, fichas, dados, chat, mundo,
+biblioteca, voz, rotas administrativas) relida linha a linha com as lentes de autorização, IDOR,
+enumeração e privacidade por campo. Quatro achados; dois eram defeitos reais, dois foram
+desmentidos por execução.
+
+### Correções de causa-raiz (com prova)
+
+- **A voz da mesa era aberta por qualquer participante.** `openVoice` usava a guarda de leitura
+  (`validateViewer`); convocar a mesa para a voz — ou encerrar a sala para todos — é estado da
+  mesa como cena e ordem, então passou a exigir mestre (`validateMaster`, 403 `FORBIDDEN`). O
+  teste de prova falhou no código antigo (jogador recebia 200) e passa agora; a consulta da sala
+  aberta continua de participante (leitura).
+- **A rota de voz não cruzava campanha com mesa.** `GET .../voice/open` recebia campanha e mesa no
+  path, mas delegava ao serviço de chamadas pelo tableId sozinho — quem participa de duas
+  campanhas lia a sala aberta de mesa de uma delas informando o id no path da outra. Novo
+  `TableStateService.requireTableOfCampaign` prova que a mesa pertence à campanha do path: mesa
+  desconhecida ou de outra campanha é 404 `TABLE_NOT_FOUND`. O teste de prova falhou no código
+  antigo e passa agora. A PRIMEIRA versão desta correção fechava também a leitura para
+  não-participante (403), e a suíte pegou a regressão: `TableVoiceFlowTests` provava 200 de corpo
+  vazio para visitante, que é o contrato tolerante de leitura do sistema. A correção final mantém
+  a leitura tolerante e deixa a recusa de entrada no join, que assina token.
+- **Leitura de pedido de rolagem por terceiro: desmentido.** O suspeito era o `requestId` que sai
+  no histórico de rolagens; o teste de execução prova que um terceiro participante da campanha
+  com o id em mãos recebe 403 `FORBIDDEN` — a leitura do pedido é do mestre e do jogador alvo, e
+  ninguém mais (`DiceService.readRequest`). O campo é contrato documentado da resposta.
+- **Nome da campanha na trilha de auditoria: decisão documentada, não vazamento.** O metadata da
+  criação/edição traz o nome porque identifica a campanha no painel; descrição e ambientação
+  (conteúdo livre) nunca entram. Registrado na regra do `MODULES.md`.
+
+### Testes executados (números reais)
+
+- `TableSecurityTests` (7/7), `DiceSecurityTests` (8/8) e `TableVoiceFlowTests` (5/5) verdes,
+  incluindo os dois testes de prova novos.
+- Módulo Éroleplay inteiro (`com.socialcoisa.rede.eroleplay.**`, 27 classes): **200 testes, 0
+  falhas, 0 erros**. Com o módulo de chamadas (`com.socialcoisa.rede.calls.**`) junto: **249
+  testes, 0 falhas, 0 erros, 1 pulado**, BUILD SUCCESS.
+- Suíte completa: 3.365 testes, 8 falhas, 10 erros e 1 pulado. Uma falha era REGRESSÃO desta
+  rodada (`TableVoiceFlowTests`, leitura de voz fechada para visitante) — corrigida como acima e
+  reconferida verde. As demais 7 falhas e 10 erros ficam em `network` e `media`
+  (`NetworkMediaTests.setUp` viola FK ao limpar a base compartilhada) e `ReportAttachmentTests`,
+  todas fora do diff; passam isoladas na mesma árvore (`NetworkReplicaTests` +
+  `NetworkStorageResultAcceptanceTests` + `NetworkMediaTests`: 28/28; `ReportAttachmentTests`:
+  6/6) — guarda ambiental da base H2 compartilhada, não regressão desta mudança.
+- Compilação `./mvnw -DskipTests compile` verde antes dos testes.
+
+### Docs e PR
+
+ROADMAP marca a Fase 10 completa e registra que não há pendência de backend; MODULES ganhou as
+regras de posse da voz (estado de mestre) e do cruzamento campanha×mesa na rota; API descreve a
+autorização da rota de voz. Tudo no mesmo commit da implementação. Branch
+`feat/eroleplay-seguranca` com PR para `qa` — sem merge, como sempre.
+
+### Próxima tarefa
+
+As fases 0 a 10 estão concluídas no backend com prova executada. Segue o acompanhamento das PRs
+abertas (revisão humana e merge são decisão de mantenedor) e a validação de tela do front.
+
+### Correção de documentação (rodada seguinte)
+
+A seção "Próxima tarefa" do ROADMAP ainda anunciava "Mundo da campanha (localizações, pistas,
+NPCs)" como trabalho pendente — resíduo do planejamento anterior à Fase 7. O `WorldEntry` (atlas
+`LOCALE`/`CHARACTER`/`ITEM`/`PLOT`/`LORE`, API `/roleplay/campaigns/{c}/world`, V298) já entrega
+exatamente isso e está marcado como feito. Parágrafo removido: documento que descreve como
+pendente o que o código entrega é bug de documentação (AGENTS.md). Sem mudança de código.
+
+---
