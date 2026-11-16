@@ -319,11 +319,28 @@ obrigatórios, não entra no board, não notifica ninguém, não conta como cand
 respostas (`DRAFT_TOO_MANY_ANSWERS`) e 100.000 caracteres. **Enviou a candidatura, o rascunho
 morre** — o apply apaga a linha. Vaga inexistente é 404 `JOB_NOT_FOUND`, igual ao apply.
 
+## Avaliações internas (V332)
+
+Parecer estruturado por avaliador, ao lado da nota livre: critérios nomeados com nota de 0 a 10
+(até 10 critérios), veredito fechado (`STRONG_YES`, `YES`, `MAYBE`, `NO`) e resumo de até 2000
+caracteres. Uma avaliação por autor por candidatura (`job_application_evaluations`, única por
+`application_id` + `author_id`): reavaliar grava por cima — o que interessa é a posição atual de
+cada avaliador; o histórico da decisão vive nos movimentos do pipeline.
+
+| Rota | Quem | O que faz |
+|---|---|---|
+| `PUT /jobs/{jobId}/process/applications/{applicationId}/evaluations` | TRIAGE | cria ou refaz a avaliação do próprio chamador |
+| `GET /jobs/{jobId}/process/applications/{applicationId}/evaluations` | VIEW_CANDIDATES | as avaliações da candidatura, mais recente primeiro |
+
+Códigos de recusa explícitos: `EVALUATION_VERDICT_INVALID`, `EVALUATION_CRITERIA_REQUIRED`,
+`EVALUATION_TOO_MANY_CRITERIA`, `EVALUATION_CRITERIA_LABEL_REQUIRED`,
+`EVALUATION_CRITERIA_LABEL_TOO_LONG`, `EVALUATION_SCORE_OUT_OF_RANGE`,
+`EVALUATION_SUMMARY_TOO_LONG`. Como as notas, a avaliação jamais aparece em rota do candidato.
+
 ## Fora deste escopo (próximos passos)
 
-Avaliações por critério, slot de entrevista escolhido pelo candidato, banco de
-talentos e a UI no design system. A fundação acima é a que esses itens vão usar — não há
-segunda base a criar.
+Slot de entrevista escolhido pelo candidato, banco de talentos e a UI no design system. A
+fundação acima é a que esses itens vão usar — não há segunda base a criar.
 
 
 A UI do "Sou recrutador/a" no front (`@rede-enois/design-system`) ainda não foi entregue: o

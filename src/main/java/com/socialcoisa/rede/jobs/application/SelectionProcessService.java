@@ -20,6 +20,7 @@ import com.socialcoisa.rede.jobs.application.port.out.SelectionProcessRepository
 import com.socialcoisa.rede.jobs.application.port.out.SelectionProcessTemplateRepository;
 import com.socialcoisa.rede.jobs.domain.Job;
 import com.socialcoisa.rede.jobs.domain.JobApplication;
+import com.socialcoisa.rede.jobs.domain.ApplicationEvaluation;
 import com.socialcoisa.rede.jobs.domain.JobApplicationStatus;
 import com.socialcoisa.rede.jobs.domain.SelectionProcessTemplate;
 import com.socialcoisa.rede.jobs.domain.SelectionStage;
@@ -261,6 +262,37 @@ public class SelectionProcessService {
 	public List<StageNote> notes(String jobId, String applicationId, String requesterId) {
 		requireOwnedApplication(jobId, applicationId, requesterId);
 		return pipeline.notesOf(Long.parseLong(applicationId));
+	}
+
+	// ---------- Avaliações internas ----------
+
+	/**
+	 * Registra (ou refaz) a avaliação do próprio avaliador sobre a candidatura: uma por autor,
+	 * com veredito, critérios e parecer. Quem move no pipeline (TRIAGE) pode avaliar; a posição
+	 * é de quem a escreveu — nem o dono da vaga escreve pelos outros.
+	 */
+	@Transactional
+	public ApplicationEvaluation evaluate(String jobId, String applicationId, String requesterId,
+			Map<String, Integer> criteria, ApplicationEvaluation.Verdict verdict, String summary) {
+		requireOwnedApplication(jobId, applicationId, requesterId);
+		long id = Long.parseLong(applicationId);
+		ApplicationEvaluation evaluation = ApplicationEvaluation.create(id, requesterId, criteria, verdict,
+			summary, clock.instant());
+		return pipeline.evaluationsOf(id).stream()
+			.filter(existing -> existing.authorId().equals(requesterId))
+			.findFirst()
+			.map(existing -> existing.reevaluate(criteria, verdict, summary, clock.instant()))
+			.map(pipeline::saveEvaluation)
+			.orElseGet(() -> pipeline.saveEvaluation(evaluation));
+	}
+
+	/** Avaliações internas: leitura com quem vê candidatos. Nunca expostas ao candidato. */
+	public List<ApplicationEvaluation> evaluations(String jobId, String applicationId, String requesterId) {
+		requireCommander(jobId, requesterId, RecruitmentCapability.VIEW_CANDIDATES);
+		jobs.findApplicationById(applicationId)
+			.filter(found -> found.jobId().equals(jobId))
+			.orElseThrow(() -> new ApiException(404, "APPLICATION_NOT_FOUND", "Candidatura não encontrada."));
+		return pipeline.evaluationsOf(Long.parseLong(applicationId));
 	}
 
 	// ---------- Autorização ----------
