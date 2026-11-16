@@ -243,6 +243,41 @@ A derivação vive em `NodeHealth` (`network/domain`), puro: reusa `alive`, `can
 `network` ignorando `canOperate` (suspenso virando `OK`), `application` ignorando perfil vazio, `host`
 sempre `OK` — **3 de 3 derrubam**.
 
+## 6.9 Cobertura de trabalho: a rede tem quem faça cada tipo?
+
+O brief §8.4 pede que o painel mostre como os nós trabalham juntos. `byProfile` conta perfis
+**declarados**, e isso não responde a pergunta operacional: **a rede tem alguém para executar cada
+tipo de trabalho agora?** Um nó com o perfil continua contado quando está em quarentena, de região
+evacuada ou sem vaga — e não executa nada. Hoje essa descoberta custava abrir nó por nó até achar
+que nenhum aceitava `MEDIA_TRANSCODE`.
+
+`GET /admin/network/nodes/dashboard` passa a devolver `workTypes`: um item por tipo de
+`TaskType`, com `capable` = quantos nós podem executá-lo **agora**.
+
+| regra de "pode agora" | por quê |
+|---|---|
+| `ACTIVE` | suspenso, pendente e revogado não recebem tarefa |
+| vivo na janela de 180 s | é a mesma régua do scheduler; nó sem heartbeat não aceita |
+| sem quarentena vigente | decisão administrativa já o tirou do balanceamento |
+| região não evacuada | região fora de operação não atende ninguém |
+| com vaga (`hasCapacity`) | nó cheio não aceita, mesmo com perfil |
+| o perfil cobre o tipo | `allowedFor`, a mesma regra do despacho (`NODE_LOCAL` cobre todos) |
+
+Decisões:
+
+- **Todos os tipos aparecem, inclusive com `0`.** O tipo ausente esconderia justamente a lacuna —
+  é o erro que o painel tem de evitar. `capable = 0` é o vermelho da tela.
+- **Conta nó, não vaga.** "Dois nós podem fazer mídia" é o que se quer saber para decidir se falta
+  gente; quantas vagas restam em cada um já está em `freeSlots` e na carga por nó.
+- **É o medido na hora, não cache.** O mesmo nó devolvendo a vaga muda o número na leitura seguinte.
+- **Vale para todos os tipos, sem lista fixa.** A enumeração é `TaskType.values()`: tipo novo entra
+  sozinho no painel, e não há lista paralela para esquecer de atualizar.
+
+**Verificação:** 3 testes novos em `NetworkNodesTests` (tipo sem ninguém apto aparece com `0` e os
+demais tipos também aparecem; nó em quarentena não conta; nó que devolve a vaga volta a contar).
+Mutações: sem checagem de vaga, sem checagem de quarentena, e omitir os tipos zerados — **3 de 3
+derrubam**.
+
 ## 7. O que NÃO está entregue
 
 | item | por quê |
@@ -251,3 +286,147 @@ sempre `OK` — **3 de 3 derrubam**.
 | retenção longa / exportação do console | é janela de tela; para histórico existe o log do próprio nó, na máquina, e a auditoria do Control Plane |
 | métricas de processo (heap, GC, threads) do nó | o nó reporta o que mede no host (CPU, memória, disco, tarefas). Heap/GC exigiriam o runtime expor métricas próprias |
 | tela de front | as rotas existem; os quatro quadros (série, resumo, console, contagem) são o contrato da página do nó |
+| topologia com aresta **entre nós** | não há registro de origem em tarefa nem de link entre máquinas; o §11 entrega o vínculo nó → domínio e recusa inventar o resto |
+
+## 8. Defeito encontrado no caminho: o modo global vazando entre classes de teste
+
+`NetworkStorageResultAcceptanceTests.oDespachoEnfileiraOPutParaADesignacaoPendente` falhava em cerca
+de **uma a cada três** rodadas da suíte completa, sempre passando isolado. A causa foi medida, não
+suposta: nos modos `DEGRADED` e `EMERGENCY` o despacho não designa nada (`dispatchLimit = 0`), e o
+`network_state` — estado **global** da rede — é deixado nesses modos por outras classes e **não** era
+limpo pelo `setUp` do teste de Storage. A tarefa ficava com `assigned_node_id` nulo com o nó certo
+elegível, e o resultado dependia de qual classe rodou antes.
+
+O `setUp` passa a limpar `network_state`, como `NetworkTasksTests` e `NetworkModesTests` já faziam.
+**Prova discriminante:** `NetworkTasksTests` + `NetworkStorageResultAcceptanceTests` na mesma JVM —
+sem a limpeza **falha**, com a limpeza **passa**. O `network_state` é a segunda tabela global do
+módulo que os testes precisam zerar (a primeira foi o catálogo de conteúdo, §6.8).
+
+## 9. A contribuição que a tela do participante mostra
+
+A interface do participante (`GET /network/participant/nodes` e `/nodes/{id}`) mostrava só
+`tasksDone`. Dois casos ficavam indistinguíveis:
+
+- **tarefa reciclada não contava para quem a executou.** `countDoneByNode` agrupa por
+  `assigned_node_id`, que é zerado quando a tarefa volta para a fila; se outro nó a conclui, o
+  crédito vai para ele. Numa rede onde réplicas caem no meio do trabalho — o motivo de existir a
+  reciclagem —, quem executou e perdeu o claim não aparecia em lugar nenhum;
+- **zero de nó novo e zero de nó parado eram iguais.** "0 tarefas" para o nó aprovado há cinco
+  minutos e para o que roda há uma semana sem concluir nada.
+
+Agora a rota devolve também **`tasksRequeued`**: tarefas que este nó **entregou** e tiveram o
+resultado recusado, voltando à fila.
+
+| campo | o que é |
+|---|---|
+| `tasksDone` | concluídas **por este nó como último executor** |
+| `tasksRequeued` | entregues por ele e devolvidas à fila (resultado recusado) |
+
+Decisões:
+
+- **Só a devolução com o nó como ator.** A trilha já separa os casos: `claim_expired` é auditado como
+  `system` — o nó não devolveu nada, ele sumiu no meio do trabalho. Contá-lo como contribuição
+  transformaria abandono em atividade. Entra só `NETWORK_TASK_RESULT_REFUSED`, que é a recusa do
+  resultado que o próprio nó enviou.
+- **Lida da auditoria, não deduzida.** É a mesma linha que prova a recusa, contada por `actor_id`
+  pelo índice `idx_audit_actor_created` (V1). O número e a prova não podem divergir porque são a
+  mesma linha.
+- **A desconexão devolve o mesmo quadro.** A resposta de `POST /nodes/{id}/disconnect` antes montava a
+  visão com zeros inventados; ela passa a ler o nó de verdade, e o trabalho já feito continua visível
+  no instante em que o participante sai.
+
+**Verificação:** `NetworkNodesTests` **4 novos** (nó novo devolve `0`/`0`; conclusão e devolução
+aparecem separadas; claim vencido do `system` não conta; desconexão mantém a contribuição). Mutações:
+contar o reenfileiramento do sistema, somar a devolução em `tasksDone`, e devolver zero inventado na
+desconexão — **3 de 3 derrubam**.
+
+## 10. O diagnóstico do nó mostra o que ele executou
+
+O brief §8.6 pede, no diagnóstico individual, as **tarefas executadas** da réplica. A lista e o
+detalhe do admin (`GET /admin/network/nodes` e `/{id}`) traziam estado, capacidade, chave e saúde —
+mas nenhuma contribuição medida. O operador via um nó `ACTIVE`, sem quarentena e com vaga, e não
+tinha como distinguir o nó que está executando do que nunca recebeu nada.
+
+`NodeView` passa a trazer dois campos:
+
+| campo | o que é |
+|---|---|
+| `tasksDone` | tarefas concluídas (`DONE`) **por este nó como último executor** |
+| `tasksFailed` | falhas definitivas (`FAILED` e `DEAD` — as duas são fim de trabalho sem resultado) |
+
+Decisões:
+
+- **Contadas à parte.** `tasksFailed` não entra em `tasksDone`: somar as duas faria o nó que erra
+  tudo parecer o mais produtivo da rede.
+- **Zero aparece.** Sem tarefa, o campo vem `0` e não ausente — omissão diria "não medi", e o nó
+  parado existe na lista para ser visto.
+- **Lote, não por linha.** A listagem lê concluídas e falhas em duas consultas para todos os nós
+  (`countDoneByNode`/`countFailedByNode` já existiam), como já faz com chaves e responsáveis: a tela
+  lista até 200 e abriria 200 consultas por contador.
+- **Mesma régua do painel e da tela do participante.** É o mesmo `countDoneByNode` que o
+  `Distribution` (§8.4) e o `NetworkParticipantService` usam — três telas não podem discordar sobre o
+  mesmo fato.
+
+**Verificação:** 2 testes novos em `NetworkNodesTests` (o detalhe traz concluídas e falhas separadas,
+com um segundo nó de números diferentes para que a leitura seja do nó pedido; a listagem traz a
+contribuição de cada nó, com o parado em zero). Mutações: `tasksDone` sempre zero; falhas somadas em
+`tasksDone`; e a contribuição lida do primeiro nó da lista — **3 de 3 derrubam**.
+## 11. A topologia como dado: domínios, membros e conexões declaradas
+
+O brief §8.5 pede uma **visualização** da infraestrutura: nós por tipo, região e domínio, o estado de
+cada um e as conexões entre eles. O painel lista nós um a um e agrega por região num mapa de
+contagem — nada que uma tela de grafo possa desenhar sem reconstruir a topologia somando números
+soltos, e o servidor é quem sabe quais nós compartilham um domínio de falha.
+
+`GET /admin/network/nodes/topology` (admin) devolve:
+
+| parte | conteúdo |
+|---|---|
+| `generatedAt` | quando o quadro foi medido — *vivo* é relativo a este instante |
+| `nodes[]` | `id`, `name`, `status`, `alive`, `quarantined`, `profiles`, `region`, `domain`, `health` |
+| `domains[]` | um por domínio de falha: `region` (normalizada), `outOfService`, `nodes`, `alive` |
+| `declaredConnections` | arestas nó → domínio que o cadastro declara |
+| `limit`, `truncated` | teto de 200 nós, o mesmo da listagem; `truncated` diz se há nós fora do quadro |
+
+### O que a rede pode afirmar — e o que não pode
+
+O único **domínio de falha maior que o nó** no cadastro é a **região** — a mesma que a colocação do
+Storage usa (fase 4) e que a evacuação consulta. Host físico, rack, operadora e link não estão
+registrados em lugar nenhum; derivá-los do nome, do IP ou do dono seria deduzir topologia a partir
+de texto livre, e um domínio errado faz a rede acreditar numa redundância que não existe.
+
+**Quem entregou trabalho a quem também não existe:** a tarefa guarda o nó *designado*, não o de
+origem. As conexões entregues são as **declaradas** — nó pertence a um domínio. Não há aresta
+"nó A → nó B" porque não há registro de tráfego entre eles.
+
+### Decisões
+
+- **Domínio = região normalizada.** `"Sudeste"`, `"sudeste"` e `"SUDESTE"` são o mesmo domínio: a
+  `NetworkRegions.normalize`, a mesma função da colocação e da evacuação. Três réguas diferentes para
+  "a mesma região" seriam três respostas para o mesmo incidente.
+- **Nó sem região cai num domínio próprio (`""`)**, distinto de qualquer região real. Não há como
+  afirmar que dois nós sem região sejam o mesmo domínio; o vazio diz só "não declarado".
+- **`declaredConnections` conta só quem declarou região.** É o número de arestas que existem. Um nó
+  sem região não tem aresta para lugar nenhum — contá-lo seria afirmar um vínculo que o cadastro não
+  tem.
+- **Vivo é medido, status é administrativo.** `alive` usa a janela de 180 s do scheduler (ou
+  `rede.network.node-stale-seconds`, a mesma configuração), relativa a `generatedAt`. Um nó `ACTIVE`
+  sem heartbeat aparece `ACTIVE` **e** `alive=false`: a máquina parada de responder e o nó tirado de
+  serviço por decisão são fatos diferentes, e o mapa precisa dos dois.
+- **`outOfService` é do domínio, não do nó.** A região evacuada continua com seus nós e com os vivos
+  contados; o que ela não faz é atender. Fundir "a máquina caiu" com "a região inteira foi evacuada
+  por decisão" esconderia a diferença.
+- **`health` vem no nó** (as quatro dimensões do §6.8), para a tela colorir sem uma segunda chamada
+  por nó.
+- **A rota não desenha.** Posição, cor e interação são decisão de front; calcular layout no backend
+  amarraria a tela ao servidor sem necessidade.
+- **Ordem estável.** Domínios por número de membros (desc), empate pela chave — dois quadros sem
+  mudança de dado saem na mesma ordem, e o diff da tela é o que mudou na rede.
+
+**Verificação:** 3 testes novos em `NetworkNodesTests` (agrupamento por domínio com grafias
+diferentes e domínio vazio separado; região evacuada marcada com o nó ainda vivo; nó `ACTIVE` sem
+heartbeat com `alive=false`) e a rota exige admin — 37 no total. Mutações: fundir o domínio vazio
+com região real; contar quem **não** tem região em `declaredConnections`; `alive` ignorando a janela;
+`outOfService` ignorado — **4 de 4 derrubam** (a do `declaredConnections` só passou a derrubar depois
+de o teste ganhar um terceiro nó sem região: com 2 de cada lado, contar o grupo errado dava o mesmo
+número).

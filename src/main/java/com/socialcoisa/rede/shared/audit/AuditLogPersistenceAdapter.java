@@ -34,4 +34,9 @@ class AuditLogPersistenceAdapter implements AuditLogRepository {
 				entity.metadata(), entity.createdAt()))
 			.toList();
 	}
+
+	@Override
+	public long countByActorAndAction(UserId actorId, String action) {
+		return repository.countByActorIdAndAction(actorId.value(), action);
+	}
 }

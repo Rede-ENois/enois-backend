@@ -140,6 +140,18 @@ class CallController {
 		return calls.join(callId, userId);
 	}
 
+	/**
+	 * Sinal de vida de quem está na sala: o ping é o que mantém a presença contada como gente e a
+	 * sala "ao vivo". Presença sem ping recente deixa de contar, e a sala sem ninguém vivo fecha
+	 * pelo worker, em vez de ficar aberta para sempre.
+	 */
+	@PostMapping("/calls/{callId}/presence")
+	CallService.CallView presence(@RequestHeader("X-Session-Token") String sessionToken,
+			@PathVariable String callId) {
+		String userId = currentUserResolver.resolve(sessionToken).id().value();
+		return calls.presence(callId, userId);
+	}
+
 	/** Sair da sala. No grupo, a chamada continua para os outros; no 1:1, encerra. */
 	@PostMapping("/calls/{callId}/leave")
 	CallService.CallView leave(@RequestHeader("X-Session-Token") String sessionToken, @PathVariable String callId) {

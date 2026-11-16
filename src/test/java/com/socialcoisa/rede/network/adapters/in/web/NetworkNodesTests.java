@@ -477,6 +477,97 @@ class NetworkNodesTests {
 		assertThat(fatia.isNull() || (fatia.asDouble() >= 0.0 && fatia.asDouble() <= 100.0)).isTrue();
 	}
 
+	/**
+	 * §8.4 do brief: "o painel deve mostrar como os nós trabalham juntos". {@code byProfile} conta
+	 * perfis <b>declarados</b>, e isso não responde a pergunta operacional — <b>a rede tem alguém
+	 * para fazer cada tipo de trabalho agora?</b> Um nó com o perfil continua contado mesmo em
+	 * quarentena, de região evacuada ou sem vaga, e não executa nada.
+	 *
+	 * <p>O cenário has no tipo que ninguém cobre no momento da medida: o único nó {@code NODE_MEDIA}
+	 * vivo fica sem vaga (4 núcleos, 4 tarefas rodando). O tipo precisa aparecer com zero — e não
+	 * ausente, o que esconderia justamente a lacuna.</p>
+	 */
+	@Test
+	void dashboardDizQuaisTiposDeTrabalhoNaoTemQuemFaca() throws Exception {
+		String admin = adminToken();
+
+		String media = enroll(issueToken(admin, "no-media", List.of("NODE_MEDIA")));
+		String keyMedia = issueKey(admin, media);
+		// Capacidade declarada é 4 núcleos (o enroll fixa 4): 4 tarefas rodando = sem vaga.
+		heartbeat(admin, media, keyMedia, 40.0, 2048, 4);
+
+		var result = mockMvc.perform(get("/admin/network/nodes/dashboard").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andReturn();
+		var work = objectMapper.readTree(result.getResponse().getContentAsString()).get("workTypes");
+
+		assertThat(work).isNotNull();
+		var porTipo = new java.util.HashMap<String, Integer>();
+		work.forEach(t -> porTipo.put(t.get("type").asText(), t.get("capable").asInt()));
+
+		// Todos os tipos aparecem — inclusive os sem ninguém: o tipo ausente esconderia a lacuna.
+		assertThat(porTipo.keySet()).contains("MEDIA_TRANSCODE", "OBJECT_PUT", "API_REQUEST", "EDGE_DELIVER",
+			"READ_QUERY", "ASYNC_JOB");
+		// O nó de mídia existe, está vivo e tem o perfil — e não pode receber agora.
+		assertThat(porTipo.get("MEDIA_TRANSCODE")).isZero();
+		// Nenhum nó executando tarefa neste cenário: o tipo de trabalho comum também está descoberto,
+		// e é a mesma pergunta que a tela faz, não um efeito colateral do nó de mídia.
+		assertThat(porTipo.get("OBJECT_PUT")).isZero();
+	}
+
+	@Test
+	void noEmQuarentenaNaoContaComoQuemFazOTrabalho() throws Exception {
+		String admin = adminToken();
+		String media = enroll(issueToken(admin, "no-media-quarentena", List.of("NODE_MEDIA")));
+		String keyMedia = issueKey(admin, media);
+		heartbeat(admin, media, keyMedia, 10.0, 1024, 0);
+		// De pé, vivo, com vaga e com o perfil — e em quarentena. Perfil declarado não é capacidade:
+		// contar este nó afirmaria que a rede faz mídia quando ninguém está aceitando a tarefa.
+		jdbc.update("update network_nodes set quarantined_until = timestampadd(second, 600, current_timestamp), "
+			+ "quarantine_reason = 'resultado divergente' where id = ?", media);
+
+		var result = mockMvc.perform(get("/admin/network/nodes/dashboard").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andReturn();
+		var work = objectMapper.readTree(result.getResponse().getContentAsString()).get("workTypes");
+		int transcode = -1;
+		for (var t : work) {
+			if ("MEDIA_TRANSCODE".equals(t.get("type").asText())) {
+				transcode = t.get("capable").asInt();
+			}
+		}
+		assertThat(transcode).isZero();
+	}
+
+	@Test
+	void dashboardRecuperaOCapacidadeQuandoONoLiberaVaga() throws Exception {
+		String admin = adminToken();
+
+		String media = enroll(issueToken(admin, "no-media-livre", List.of("NODE_MEDIA")));
+		String keyMedia = issueKey(admin, media);
+		heartbeat(admin, media, keyMedia, 20.0, 1024, 4);
+		// O mesmo nó devolve a vaga: o tipo volta a ter quem o faça. Prova que o número é o medido
+		// agora, não um cache da primeira leitura.
+		mockMvc
+			.perform(post("/network/nodes/heartbeat").header("X-Node-Id", media).header("X-Node-Key", keyMedia)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0", "observed",
+					Map.of("cpuPercent", 20.0, "memoryMb", 1024, "runningTasks", 1)))))
+			.andExpect(status().isOk());
+
+		var result = mockMvc.perform(get("/admin/network/nodes/dashboard").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andReturn();
+		var work = objectMapper.readTree(result.getResponse().getContentAsString()).get("workTypes");
+		int transcode = 0;
+		for (var t : work) {
+			if ("MEDIA_TRANSCODE".equals(t.get("type").asText())) {
+				transcode = t.get("capable").asInt();
+			}
+		}
+		assertThat(transcode).isEqualTo(1);
+	}
+
 	// ---------------------------------------------------------------- dashboard do painel
 
 	/**
@@ -730,6 +821,275 @@ class NetworkNodesTests {
 			.content(objectMapper.writeValueAsString(
 				Map.of("displayName", "x", "ownerUserId", "y", "profiles", List.of("NODE_EDGE")))))
 		.andExpect(status().isForbidden());
+	}
+
+	/**
+	 * O participante vê quanto <b>concluiu</b> e quanto <b>devolveu</b> à fila — a §8.4 pede que a
+	 * rede mostre como os nós trabalham juntos, e a tela dele mostrava só a conclusão.
+	 *
+	 * <p>Os dois zeros sozinhos diziam a mesma coisa para o nó novo e para o nó que roda há uma
+	 * semana sem terminar nada. Com a devolução ao lado, a tela consegue distinguir "ainda não
+	 * recebi" de "recebi e devolvi".</p>
+	 */
+	@Test
+	void participanteVeOTrabalhoQueConcluiuEDevolveu() throws Exception {
+		String admin = adminToken();
+		var dono = auth.authenticate("net_owner_contrib");
+		String nodeId = newNodeOwner(admin, dono.userId());
+		String key = issueKey(admin, nodeId);
+		heartbeat(admin, nodeId, key, 10.0, 1024, 0);
+
+		// Nó recém-aprovado: nada concluído e nada devolvido. A tela precisa poder afirmar isso —
+		// ausência do campo diria "não medi", que é outra coisa.
+		mockMvc.perform(get("/network/participant/nodes").header("X-Session-Token", dono.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[0].tasksDone").value(0))
+			.andExpect(jsonPath("$[0].tasksRequeued").value(0));
+
+		// Uma tarefa concluída por ele, e um resultado que ele entregou e foi recusado — a linha que
+		// o Control Plane grava com o NÓ como ator.
+		jdbc.update("""
+			insert into network_tasks (id, task_type, status, attempt, idempotency_key, payload, data_class,
+			  assigned_node_id, deadline, next_attempt_at, finished_at, created_at, updated_at)
+			values (?, 'ASYNC_JOB', 'DONE', 1, ?, '{}', 'PUBLIC', ?, current_timestamp, current_timestamp,
+			  current_timestamp, current_timestamp, current_timestamp)
+			""", "tsk_" + System.nanoTime(), "contrib-" + System.nanoTime(), nodeId);
+		registrarRecusa(nodeId);
+
+		mockMvc.perform(get("/network/participant/nodes/" + nodeId).header("X-Session-Token", dono.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.tasksDone").value(1))
+			// A recusa não é conclusão: somá-la em `tasksDone` inflaria a contribuição.
+			.andExpect(jsonPath("$.tasksRequeued").value(1));
+	}
+
+	/**
+	 * Claim vencido é auditado como {@code system}: o nó não devolveu nada, ele SUMIU no meio do
+	 * trabalho. Contar isso como devolução transformaria abandono em atividade, e a tela do
+	 * participante estaria elogiando justamente quem não entregou.
+	 */
+	@Test
+	void claimVencidoNaoContaComoDevolucaoDoParticipante() throws Exception {
+		String admin = adminToken();
+		var dono = auth.authenticate("net_owner_abandon");
+		String nodeId = newNodeOwner(admin, dono.userId());
+		String key = issueKey(admin, nodeId);
+		heartbeat(admin, nodeId, key, 10.0, 1024, 0);
+
+		jdbc.update("insert into audit_logs (id, actor_id, action, target_id, metadata, created_at) "
+			+ "values (?, 'system', 'NETWORK_TASK_REQUEUED', ?, '{}', current_timestamp)",
+			"aud_" + System.nanoTime(), "tsk_abandonada");
+
+		mockMvc.perform(get("/network/participant/nodes/" + nodeId).header("X-Session-Token", dono.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.tasksRequeued").value(0));
+	}
+
+	private void registrarRecusa(String nodeId) {
+		jdbc.update("insert into audit_logs (id, actor_id, action, target_id, metadata, created_at) "
+			+ "values (?, ?, 'NETWORK_TASK_RESULT_REFUSED', ?, '{}', current_timestamp)",
+			"aud_" + System.nanoTime(), nodeId, "tsk_recusada");
+	}
+
+	/**
+	 * Desconectar devolve o mesmo quadro do participante — e a contribuição que ele já tinha
+	 * continua lá. Zero inventado na resposta apagaria o trabalho feito no instante em que ele sai.
+	 */
+	@Test
+	void desconectarDevolveAContribuicaoQueOParticipanteJaTinha() throws Exception {
+		String admin = adminToken();
+		var dono = auth.authenticate("net_owner_desc_contrib");
+		String nodeId = newNodeOwner(admin, dono.userId());
+		String key = issueKey(admin, nodeId);
+		heartbeat(admin, nodeId, key, 10.0, 1024, 0);
+		registrarRecusa(nodeId);
+
+		mockMvc.perform(post("/network/participant/nodes/" + nodeId + "/disconnect")
+			.header("X-Session-Token", dono.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("SUSPENDED"))
+			.andExpect(jsonPath("$.tasksRequeued").value(1));
+	}
+
+	/**
+	 * O diagnóstico individual do nó (§8.6) pede "tarefas executadas". A lista e o detalhe do admin
+	 * traziam estado, capacidade e saúde, mas nenhuma contribuição medida — e sem ela o operador não
+	 * distingue o nó ocioso do que está executando e falhando.
+	 */
+	@Test
+	void o_detalhe_do_no_traz_as_tarefas_que_ele_executou_e_falhou() throws Exception {
+		String admin = adminToken();
+		String nodeId = newNode(admin);
+		activate(admin, nodeId);
+		comoConcluir(nodeId, "DONE");
+		comoConcluir(nodeId, "DONE");
+		comoConcluir(nodeId, "FAILED");
+		// Um segundo nó com números DIFERENTES: sem ele, ler a contribuição de "algum" nó passaria
+		// no teste por coincidência, e o detalhe mostraria a vida de outro servidor.
+		String outro = newNode(admin);
+		activate(admin, outro);
+		comoConcluir(outro, "DONE");
+		comoConcluir(outro, "DONE");
+		comoConcluir(outro, "DONE");
+		comoConcluir(outro, "DONE");
+
+		mockMvc.perform(get("/admin/network/nodes/" + nodeId).header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.tasksDone").value(2))
+			// Falha conta separada: somá-la em `tasksDone` faria um nó que erra tudo parecer produtivo.
+			.andExpect(jsonPath("$.tasksFailed").value(1));
+	}
+
+	@Test
+	void a_listagem_traz_a_contribuicao_de_cada_no() throws Exception {
+		String admin = adminToken();
+		String trabalhador = newNode(admin);
+		String parado = newNode(admin);
+		activate(admin, trabalhador);
+		activate(admin, parado);
+		comoConcluir(trabalhador, "DONE");
+
+		var result = mockMvc.perform(get("/admin/network/nodes").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andReturn();
+		var lista = objectMapper.readTree(result.getResponse().getContentAsString());
+		var porNo = new java.util.HashMap<String, tools.jackson.databind.JsonNode>();
+		lista.forEach(n -> porNo.put(n.get("id").asText(), n));
+
+		assertThat(porNo.get(trabalhador).get("tasksDone").asLong()).isEqualTo(1);
+		// O nó parado aparece com zero, não ausente: omissão diria "não medi".
+		assertThat(porNo.get(parado).get("tasksDone").asLong()).isZero();
+		assertThat(porNo.get(parado).get("tasksFailed").asLong()).isZero();
+	}
+
+	private void comoConcluir(String nodeId, String status) {
+		jdbc.update("""
+			insert into network_tasks (id, task_type, status, attempt, idempotency_key, payload, data_class,
+			  assigned_node_id, deadline, next_attempt_at, finished_at, created_at, updated_at)
+			values (?, 'ASYNC_JOB', ?, 1, ?, '{}', 'PUBLIC', ?, current_timestamp, current_timestamp,
+			  current_timestamp, current_timestamp, current_timestamp)
+			""", "tsk_" + System.nanoTime(), status, "diag-" + System.nanoTime(), nodeId);
+	}
+
+	/**
+	 * A topologia como dado para a tela desenhar (brief §8.5). O que estes testes seguram é que a
+	 * rota entrega o agrupamento por <b>domínio de falha</b> que a rede pode afirmar — e não inventa
+	 * aresta entre dois nós, que o cadastro não registra.
+	 */
+	@Test
+	void a_topologia_agrupa_por_dominio_de_falha_e_nao_funde_regiao_nao_declarada() throws Exception {
+		String admin = adminToken();
+		String sudeste = enrollComLocation(issueToken(admin, "topo-se", List.of("NODE_WORKER")), "Sudeste", "BR");
+		String sudeste2 = enrollComLocation(issueToken(admin, "topo-se2", List.of("NODE_EDGE")), "SUDESTE", "BR");
+		// Nós sem região caem num domínio vazio, que é domínio próprio: fundi-lo com uma região real
+		// afirmaria um vínculo que o cadastro não registra.
+		String semRegiaoA = enroll(issueToken(admin, "topo-sem-a", List.of("NODE_WORKER")));
+		String semRegiaoB = enroll(issueToken(admin, "topo-sem-b", List.of("NODE_WORKER")));
+		// Um terceiro sem região: com 2 com e 2 sem, contar o grupo errado daria o mesmo número.
+		String semRegiaoC = enroll(issueToken(admin, "topo-sem-c", List.of("NODE_WORKER")));
+		for (String id : List.of(sudeste, sudeste2, semRegiaoA, semRegiaoB, semRegiaoC)) {
+			activate(admin, id);
+			heartbeat(admin, id, issueKey(admin, id), 5.0, 512, 0);
+		}
+
+		var result = mockMvc.perform(get("/admin/network/nodes/topology").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andReturn();
+		var tree = objectMapper.readTree(result.getResponse().getContentAsString());
+
+		var dominios = tree.get("domains");
+		var porRegiao = new java.util.HashMap<String, tools.jackson.databind.JsonNode>();
+		dominios.forEach(d -> porRegiao.put(d.get("region").asText(), d));
+
+		// Grafias diferentes são o MESMO domínio de falha (a normalização da colocação e da evacuação).
+		assertThat(porRegiao.get("sudeste").get("nodes").asLong()).isEqualTo(2);
+		// Os dois sem região caem no domínio vazio, e o domínio vazio não é a região de ninguém.
+		assertThat(porRegiao.get("").get("nodes").asLong()).isEqualTo(3);
+		assertThat(porRegiao.containsKey("sudeste")).isTrue();
+
+		// Aresta declarada só existe para quem declarou região: 2 de 4 nós.
+		assertThat(tree.get("declaredConnections").asLong()).isEqualTo(2);
+		assertThat(tree.get("truncated").asBoolean()).isFalse();
+
+		// O nó traz o domínio calculado e as quatro dimensões de saúde — a tela não faz segunda chamada.
+		var primeiro = tree.get("nodes").get(0);
+		assertThat(primeiro.has("domain")).isTrue();
+		assertThat(primeiro.get("alive").asBoolean()).isTrue();
+		assertThat(primeiro.get("health").get("host").asText()).isEqualTo("OK");
+	}
+
+	@Test
+	void regiao_evacuada_aparece_marcada_na_topologia() throws Exception {
+		String admin = adminToken();
+		String nodeId = enrollComLocation(issueToken(admin, "topo-evac", List.of("NODE_WORKER")), "nordeste", "BR");
+		activate(admin, nodeId);
+		heartbeat(admin, nodeId, issueKey(admin, nodeId), 5.0, 512, 0);
+
+		mockMvc.perform(post("/admin/network/regions").header("X-Session-Token", admin)
+			.contentType(MediaType.APPLICATION_JSON)
+			.content(objectMapper.writeValueAsString(Map.of("region", "nordeste", "reason", "incidente"))))
+			.andExpect(status().isOk());
+
+		var result = mockMvc.perform(get("/admin/network/nodes/topology").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andReturn();
+		// O nó continua vivo: o domínio é que está fora. Fundir as duas coisas esconderia a diferença
+		// entre "a máquina caiu" e "a região inteira foi evacuada por decisão".
+		var dominios = objectMapper.readTree(result.getResponse().getContentAsString()).get("domains");
+		boolean achou = false;
+		for (var d : dominios) {
+			if ("nordeste".equals(d.get("region").asText())) {
+				assertThat(d.get("outOfService").asBoolean()).isTrue();
+				assertThat(d.get("alive").asLong()).isEqualTo(1);
+				achou = true;
+			}
+		}
+		assertThat(achou).isTrue();
+	}
+
+	/**
+	 * Vivo é medido, status é administrativo. Um nó `ACTIVE` sem heartbeat dentro da janela precisa
+	 * aparecer vivo=falso: se a topologia mostrasse só o status, a tela desenharia como saudável uma
+	 * máquina que parou de responder — e é justamente no mapa que o operador procura o que caiu.
+	 */
+	@Test
+	void a_topologia_mostra_no_ativo_sem_heartbeat_como_nao_vivo() throws Exception {
+		String admin = adminToken();
+		String vivo = enrollComLocation(issueToken(admin, "topo-vivo", List.of("NODE_WORKER")), "sul", "BR");
+		String parado = enrollComLocation(issueToken(admin, "topo-parado", List.of("NODE_WORKER")), "sul", "BR");
+		activate(admin, vivo);
+		heartbeat(admin, vivo, issueKey(admin, vivo), 5.0, 512, 0);
+		// O heartbeat sempre grava o agora; para o nó ter parado de responder, o carimbo precisa
+		// recuar. O status fica ACTIVE dos dois lados — é o que torna a asserção discriminante.
+		activate(admin, parado);
+		heartbeat(admin, parado, issueKey(admin, parado), 5.0, 512, 0);
+		jdbc.update("update network_nodes set last_seen_at = ? where id = ?",
+			java.sql.Timestamp.from(java.time.Instant.now().minusSeconds(3600)), parado);
+
+		var result = mockMvc.perform(get("/admin/network/nodes/topology").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andReturn();
+		var tree = objectMapper.readTree(result.getResponse().getContentAsString());
+		var porId = new java.util.HashMap<String, tools.jackson.databind.JsonNode>();
+		tree.get("nodes").forEach(n -> porId.put(n.get("id").asText(), n));
+
+		assertThat(porId.get(parado).get("status").asText()).isEqualTo("ACTIVE");
+		assertThat(porId.get(vivo).get("alive").asBoolean()).isTrue();
+		assertThat(porId.get(parado).get("alive").asBoolean()).isFalse();
+
+		// O domínio conta só o vivo: contar o parado como disponível na mesma região esconderia
+		// que o domínio inteiro já não responde.
+		for (var d : tree.get("domains")) {
+			if ("sul".equals(d.get("region").asText())) {
+				assertThat(d.get("nodes").asLong()).isEqualTo(2);
+				assertThat(d.get("alive").asLong()).isEqualTo(1);
+			}
+		}
+	}
+
+	@Test
+	void a_topologia_exige_admin() throws Exception {
+		mockMvc.perform(get("/admin/network/nodes/topology")).andExpect(status().isUnauthorized());
 	}
 
 	// ---------------------------------------------------------------- interface do participante
