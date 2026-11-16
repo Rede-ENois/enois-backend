@@ -53,18 +53,24 @@ public class StorageOverviewNodes {
 	 * @param freeMb o que está livre agora; {@code null} = não medido
 	 * @param totalMb o tamanho do volume; {@code null} = não medido
 	 * @param reservedMb {@code total - declarado}, nunca negativo; {@code null} = total não medido
+	 * @param usedMb o que o ESTADO DE CONTEÚDO ocupa, medido pelo nó; {@code null} = não reportado
+	 * @param usedPercent {@code usedMb / declarado} em porcentagem; {@code null} = uso não medido ou
+	 * teto zero. Pode passar de 100 — nó acima do teto é o que se quer enxergar
+	 * ("limite máximo de utilização" do §7)
 	 */
-	public record Disco(String nodeId, int declaredMb, Long freeMb, Long totalMb, Long reservedMb) {
+	public record Disco(String nodeId, int declaredMb, Long freeMb, Long totalMb, Long reservedMb,
+			Long usedMb, Double usedPercent) {
 	}
 
 	/**
 	 * @param unmeasuredNodes nós de armazenamento que não reportaram o disco <b>livre</b>
+	 * @param unmeasuredUsage nós de armazenamento que não reportaram o <b>uso</b> do conteúdo
 	 * @param unmeasuredDiskTotals nós de armazenamento que não reportaram o <b>tamanho</b> do volume.
 	 * Podem ser diferentes na mesma rede — e é por isso que são contadores distintos: durante a
 	 * atualização dos runtimes, o comum é conhecer o livre e ainda não conhecer o total.
 	 */
 	public record Capacity(long declaredMb, Long freeMb, int declaringNodes, int unmeasuredNodes,
-			int unmeasuredDiskTotals, List<Disco> disks) {
+			int unmeasuredDiskTotals, int unmeasuredUsage, List<Disco> disks) {
 	}
 
 	private final NetworkNodeRepository nodes;
@@ -88,6 +94,7 @@ public class StorageOverviewNodes {
 		int comDisco = 0;
 		int semMedida = 0;
 		int semTotal = 0;
+		int semUso = 0;
 		List<Disco> discos = new java.util.ArrayList<>();
 		for (NetworkNode node : all) {
 			// Quem conta é quem PODE guardar objeto -- o mesmo critério do despacho e da colocação
@@ -114,14 +121,17 @@ public class StorageOverviewNodes {
 			else {
 				livre += node.observedDiskFreeMb();
 			}
+			if (node.observedContentUsedMb() == null) {
+				semUso++;
+			}
 			Long reserva = node.reservedDiskMb();
 			if (node.observedDiskTotalMb() == null) {
 				semTotal++;
 			}
 			discos.add(new Disco(node.id(), node.declaredDiskMb(), node.observedDiskFreeMb(),
-				node.observedDiskTotalMb(), reserva));
+				node.observedDiskTotalMb(), reserva, node.observedContentUsedMb(), node.usedPercent()));
 		}
 		Long livreAgregado = semMedida == comDisco && comDisco > 0 ? null : livre;
-		return new Capacity(declarado, livreAgregado, comDisco, semMedida, semTotal, List.copyOf(discos));
+		return new Capacity(declarado, livreAgregado, comDisco, semMedida, semTotal, semUso, List.copyOf(discos));
 	}
 }
