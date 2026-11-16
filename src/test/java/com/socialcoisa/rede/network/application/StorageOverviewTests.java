@@ -145,6 +145,22 @@ class StorageOverviewTests {
 	}
 
 	@Test
+	void no_da_infraestrutura_propria_soma_capacidade_porque_pode_guardar_objeto() {
+		// NODE_LOCAL cobre todos os tipos, inclusive OBJECT_PUT: o nó da infraestrutura própria
+		// guarda objeto no próprio disco. Filtrar por NOME de perfil o deixava fora e o painel
+		// mostrava menos capacidade do que a rede tem.
+		NetworkNode local = node("nd_local", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_LOCAL), 512000, 40000L,
+			NOW);
+		when(nodes.list(anyInt())).thenReturn(List.of(storage("nd_a", 102400, 5000L), local));
+
+		StorageOverviewNodes.Capacity c = overviewNodes.capacity();
+
+		assertThat(c.declaredMb()).isEqualTo(614400);
+		assertThat(c.freeMb()).isEqualTo(45000L);
+		assertThat(c.declaringNodes()).isEqualTo(2);
+	}
+
+	@Test
 	void uso_conta_so_copia_confirmada_e_nao_designacao() {
 		catalog = mock(StorageCatalogRepository.class);
 		when(catalog.summarizeObjects()).thenReturn(Map.of(

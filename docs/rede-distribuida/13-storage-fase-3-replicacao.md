@@ -201,3 +201,39 @@ e o painel do nó receberia **bytes de conteúdo de usuário** como se fossem li
 caminho feliz (baixa → confere → confirma → `DONE` com o medido, e **sem** o eco), corpo divergente
 (não confirma), e teto de disco menor que o objeto (não confirma). Mutações: sem a entrada no `case`
 (volta ao eco), confiar no sha do payload, e confirmar sem checar o teto — cada uma derruba a sua.
+
+## 5.4 O nó guarda o corpo no próprio disco
+
+O §5.3 baixava, conferia, confirmava e **apagava**. O catálogo dizia "cópia `OK` neste nó" e o
+arquivo não existia em lugar nenhum — a durabilidade era uma linha de banco. Agora o corpo fica.
+
+**Onde:** `$NODE_HOME/objects/<objectId>.bin`, diretório próprio.
+
+Por que não `$NODE_HOME/replica/`: `disk_make_room` trata `replica/` como **promessa não evictável**
+e a poda dela é decisão do Control Plane. Um corpo de Storage no mesmo lugar confundiria duas
+políticas de retenção — a do cache de projeção e a da colocação de objeto.
+
+**Quando vira corpo:** depois da confirmação. O arquivo baixa como `objects/object-put.*` e só ganha
+o nome final com `mv` quando o CP aceitou a cópia. Um processo morto entre as duas etapas deixa um
+`.partial` — nunca um corpo servível que o catálogo não conhece. O `.partial` é varrido no ciclo
+seguinte.
+
+**O teto declarado conta.** `content_bytes` passou a somar `objects/*.bin`: sem isso o nó reportava
+2 MB de uso enquanto guardava 40 GB de réplica local, e o teto que o participante cedeu não valia
+nada.
+
+**No Control Plane:** `NodeBodyStore` (`@ConditionalOnProperty rede.storage.node-body-root`) é a
+mesma ideia do lado servidor — gravação atômica (temporário + `ATOMIC_MOVE`), validação de
+`objectId` contra `..` e `/`, e `usedBytes()` que conta **só** `.bin` (temporário e lixo não inflam
+o medido). Vazio = o processo não guarda corpo de nó, que é o caso do Control Plane puro e da suíte.
+
+**`NODE_LOCAL` conta no painel.** `StorageOverviewNodes` filtrava por **nome** do perfil
+`NODE_STORAGE`; o nó da infraestrutura própria (`NODE_LOCAL`) guarda objeto e cobria todos os
+tipos, mas ficava fora da soma. O painel mostrava menos capacidade do que a rede tem e o operador
+decidia colocação sobre um número que excluía as réplicas locais. O critério agora é o mesmo do
+despacho: `OBJECT_PUT.allowedFor(profiles)`.
+
+**Verificação:** `NodeBodyStoreTests` 7 (atômico, `..` não escapa, uso só de `.bin`, remoção
+idempotente); `StorageOverviewTests` 9 (1 novo: nó local soma). Harness: 189 asserções, 3 novas.
+Mutações: apagar após confirmar, `objects/` fora do `content_bytes`, escrita não atômica, id sem
+validação, uso contando qualquer arquivo, filtro por nome de perfil — 6 de 6 derrubam.

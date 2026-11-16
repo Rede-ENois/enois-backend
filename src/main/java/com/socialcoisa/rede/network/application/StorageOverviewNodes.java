@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NetworkRegions;
+import com.socialcoisa.rede.network.domain.TaskType;
 
 /**
  * A capacidade do Storage vista pelos nós: quanto o participante <b>prometeu</b> e quanto ele
@@ -59,9 +60,12 @@ public class StorageOverviewNodes {
 		int comDisco = 0;
 		int semMedida = 0;
 		for (NetworkNode node : all) {
-			// Só nó de armazenamento conta: somar o disco de quem faz transcodificação inflaria a
-			// capacidade do Storage com espaço que nenhum objeto pode usar.
-			if (!node.profiles().contains(com.socialcoisa.rede.network.domain.NodeProfile.NODE_STORAGE)) {
+			// Quem conta é quem PODE guardar objeto -- o mesmo critério do despacho e da colocação
+			// (`OBJECT_PUT.allowedFor`), não o nome do perfil. Nó da infraestrutura própria
+			// ({@code NODE_LOCAL}) guarda objeto no próprio disco e cobria todos os tipos, mas o
+			// filtro por nome de perfil o deixava fora: o painel mostrava menos capacidade do que a
+			// rede tem, e o operador decidia colocação sobre um número que excluía as réplicas locais.
+			if (!TaskType.OBJECT_PUT.allowedFor(node.profiles())) {
 				continue;
 			}
 			if (!node.alive(clock.instant(), Duration.ofSeconds(STALE_SECONDS))) {

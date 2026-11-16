@@ -1446,6 +1446,16 @@ assert_contains 'a replica e confirmada com o medido pelo no' "$(cat "$TMP/curl-
 assert_contains 'o resultado leva o sha e os bytes medidos' "$(cat "$TMP/curl-calls")" "\\\"bytes\\\":$OBJ_BYTES,\\\"sha256\\\":\\\"$OBJ_SHA"
 assert_not_contains 'a resposta e DONE sem o eco de ciclo de vida' "$out" '"output":"{\"echo\"'
 
+# O corpo FICA no disco do no: antes o executor baixava, confirmava e apagava -- o catalogo
+# dizia "copia OK aqui" e o arquivo nao existia em lugar nenhum.
+assert_eq 'o corpo fica guardado no disco do no' "$OBJ_BODY" "$(cat "$NH/objects/sob_x.bin" 2>/dev/null || echo AUSENTE)"
+assert_eq 'e nenhum temporario sobra no diretorio de corpos' '0' \
+  "$(ls "$NH/objects" 2>/dev/null | grep -c '^object-put\.' || true)"
+# O teto declarado mede o que o no de fato guarda: objects/ tem de entrar na conta. Sem isso o
+# no dizia usar 2 MB enquanto guardava 40 GB de replica local.
+conteudo=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo content_bytes)" 2>/dev/null | tail -n 1)
+assert_eq 'o tamanho guardado entra no estado de conteudo do no' "$OBJ_BYTES" "$conteudo"
+
 # 2. corpo divergente: NAO confirma e NAO diz DONE.
 TASK_NEXT_BODY="$OBJ_TASK_CORRUPT" make_curl_storage
 : > "$TMP/curl-calls"
