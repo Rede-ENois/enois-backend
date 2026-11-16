@@ -545,6 +545,59 @@ Erros: `400 MEDIA_REQUIRED`, `400 NOT_IMAGE`, `400 CONTENT_TOO_LONG` (legenda 50
 
 ---
 
+## Desabafos
+
+O feed de texto acolhedor que vive no Explorar. Espaço próprio com tabelas próprias (fora de
+`posts`): **nada publicado aqui aparece em `/api/feed`, no perfil, no diário ou na busca**. É
+só texto — sem mídia, sem enquete, sem página. Sem gamificação: o feed é cronológico, sem
+pontos e sem ranking. Reação é **contada, nunca nominada** — não existe endpoint nem campo que
+liste quem apoiou; a interface oferece as reações de apoio (LOVE, SUPPORT), mas o backend aceita
+qualquer `ReactionType` conhecido. Comentários (acolhidas) são planos: respondem o desabafo
+direto, sem comentário de comentário. Os mesmos gates da plataforma (idade, sanção, ritmo de
+publicação), bloqueios, denúncias (alvos `DESABAFO_POST`/`DESABAFO_COMMENT`) e idempotência se
+aplicam.
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/desabafos` | feed próprio cronológico, `cursor`/`limit` (≤ 48) | Sim |
+| POST | `/api/desabafos/posts` | publica o desabafo (`content`, ≤ 1000) | Sim + idempotência |
+| GET | `/api/desabafos/posts/{postId}` | desabafo com autor, contagens e `myReaction` | Sim |
+| DELETE | `/api/desabafos/posts/{postId}` | o autor remove o próprio desabafo | Sim + idempotência |
+| GET | `/api/desabafos/posts/{postId}/comments` | acolhidas crônicas | Sim |
+| POST | `/api/desabafos/posts/{postId}/comments` | acolhida em texto (`content`, ≤ 800) | Sim + idempotência |
+| DELETE | `/api/desabafos/posts/{postId}/comments/{commentId}` | o autor da acolhida remove a própria | Sim + idempotência |
+| POST | `/api/desabafos/posts/{postId}/reactions` | `{ "reaction": "SUPPORT" }` — uma por pessoa, trocável; resposta = contagens | Sim + idempotência |
+| DELETE | `/api/desabafos/posts/{postId}/reactions` | remove a reação de quem pediu | Sim + idempotência |
+
+Exemplo de desabafo no feed:
+
+```json
+{
+  "items": [
+    {
+      "id": "desabafo_9f2c...",
+      "author": { "id": "user_...", "name": "Ana", "username": "ana" },
+      "content": "Estou cansado de fingir que está tudo bem hoje",
+      "createdAt": "2026-11-16T03:00:00Z",
+      "reactions": 3,
+      "reactionSummary": { "LOVE": 2, "SUPPORT": 1 },
+      "myReaction": "SUPPORT",
+      "comments": 4
+    }
+  ],
+  "nextCursor": "MjAyNi0xMS0xNlQwMjo1OTo1OVox..."
+}
+```
+
+Notificação: comentário gera `DESABAFOS_COMMENTED` para o autor do desabafo (categoria SOCIAL).
+Reação não gera notificação — é apoio silencioso, contado.
+
+Erros: `400 CONTENT_REQUIRED`, `400 CONTENT_TOO_LONG` (1000), `400 COMMENT_EMPTY`,
+`400 COMMENT_TOO_LONG` (800), `400 INVALID_REACTION`, `403 NOT_AUTHORIZED`,
+`404 POST_NOT_FOUND`, `404 COMMENT_NOT_FOUND`.
+
+---
+
 ## Murais
 
 Coleções **colaborativas** no Explorar: o mural é só o quadro; quem cola aponta publicações que

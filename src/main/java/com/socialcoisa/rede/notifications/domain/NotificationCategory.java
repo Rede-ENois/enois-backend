@@ -87,7 +87,10 @@ public enum NotificationCategory {
 	// convivência do feed fotográfico — mesma família de comentário e reação.
 	Map.entry("COLLAGEM_COMMENTED", SOCIAL),
 	// Murais: alguém colou a publicação da pessoa num mural. SOCIAL — convivência, não sistema.
-	Map.entry("MURAL_CONTRIBUTED", SOCIAL));
+	Map.entry("MURAL_CONTRIBUTED", SOCIAL),
+	// Desabafos: alguém acolheu (comentou) o desabafo da pessoa. SOCIAL — convivência acolhedora,
+	// mesma família de comentário; sem notificação de reação, que é só contagem.
+	Map.entry("DESABAFOS_COMMENTED", SOCIAL));
 
 	public static NotificationCategory of(String kind) {
 		return kind == null ? SYSTEM : BY_KIND.getOrDefault(kind, SYSTEM);

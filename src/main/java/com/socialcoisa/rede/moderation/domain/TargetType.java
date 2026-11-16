@@ -26,5 +26,9 @@ public enum TargetType {
 	/** Comentário (texto ou foto) de uma foto da Colagem. */
 	COLLAGEM_COMMENT,
 	/** Mural do Explorar (a coleção cai; as publicações coladas continuam no feed). */
-	MURAL
+	MURAL,
+	/** Desabafo do Explorar (o texto cai do feed próprio junto com as acolhidas). */
+	DESABAFO_POST,
+	/** Comentário de acolhida num desabafo. */
+	DESABAFO_COMMENT
 }
