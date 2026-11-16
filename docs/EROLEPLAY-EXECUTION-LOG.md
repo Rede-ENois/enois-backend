@@ -633,3 +633,66 @@ implementação. Push em `feat/eroleplay-world` carregado pela PR #739 — sem m
 
 Fase 9 — front: identidade visual própria do Éroleplay no design system e as telas
 (campanhas, mesa, fichas, chat, mundo, biblioteca).
+
+## Rodada 11 — 2026-11-15 — Fase 10 (trilha de auditoria dos atos de campanha)
+
+### Estado encontrado
+
+Fase 9 (front) segue com a PR #898 aberta e CI verde, com dois comentários de revisão do
+revisor automatizado ainda sem resposta. Ninguém estava na Fase 10. A rodada começou da ponta
+`enois/qa` (`160d9034`) em worktree e branch novos (`feat/eroleplay-auditoria`), sem colisão.
+
+### O que já existia e foi reaproveitado
+
+- **A trilha única do sistema**: `audit_logs` (V1, índice de alvo na V315) e a porta
+  `AuditLogRepository` com o `AuditTrail` (`record`/`recentForTarget`) que `NetworkModeService`,
+  `NetworkRegionService` e `StorageScrubber` já usam. O RFC (§7) pede atos auditáveis; a trilha
+  já existia — não cabe trilha própria do módulo.
+- O padrão de leitura administrativa do `AdminNetworkController` (`/{id}/history`): dupla trava
+  (interceptador de `/admin/**` + `adminGuard.requireAdmin`), teto de lote, 404 para alvo
+  desconhecido em vez de lista vazia.
+- A matriz de capacidades da campanha e o `CampaignNotifier`, que já concentram quem pode cada
+  ato — a auditoria entrou exatamente onde o ato acontece.
+
+### O que foi implementado
+
+- `CampaignAuditTrail`: o vocabulário `ROLEPLAY_*` dos onze atos (criação, edição, entrada,
+  pedido de entrada, decisão, convite, saída, remoção, transferência de mestria, arquivamento,
+  criação de mesa), cada um gravado na trilha única com a campanha como alvo e metadata JSON
+  mínimo (ids, papéis, mudanças de estado). O conteúdo livre da campanha (descrição, ambientação)
+  nunca entra; a criação traz nome/slug porque identificam a campanha no painel. Classe separada
+  do serviço para o `CampaignService` não estourar o teto de 500 linhas (444 → 467).
+- `AdminRoleplayController`: `GET /admin/roleplay/campaigns/{id}/history`, exclusivo de
+  administrador (401 sem sessão, 403 sem admin, 404 para campanha desconhecida — não lista
+  vazia), lote com padrão 50 e teto 200, resposta `{id, actorId, action, metadata, createdAt}`
+  do mais novo para o mais antigo.
+- `CampaignService.requireExists`: a confirmação de existência para a leitura administrativa,
+  sem carregar a entidade no controller.
+- **Nenhuma migração**: a trilha é a tabela existente; nada de schema novo.
+
+### Testes executados (números reais)
+
+- `CampaignAuditTests` (4): os atos ficam na trilha na ordem do mais novo para o mais antigo com
+  teto de lote; o metadata nomeia os envolvidos sem levar a descrição nem a ambientação; convite,
+  transferência e remoção gravam; o histórico é exclusivo de administrador (401/403/404).
+- Módulo Éroleplay inteiro (`com.socialcoisa.rede.eroleplay.**`): **27 classes, 208 testes,
+  0 falhas, 0 erros**.
+- Suíte completa: **3.197 testes, 6 falhas e 10 erros — todos em módulos fora do diff**
+  (mentoring e network/media). As três classes envolvidas passam isoladas na MESMA árvore
+  (**26 testes, 0 falhas, 0 erros**); os erros de network/media são violação de FK no `setUp`
+  por contaminação da base H2 compartilhada entre classes, e o CI da ponta `qa` (3d6905d8) está
+  verde na mesma base — guarda ambiental local, não regressão desta mudança.
+- Compilação `./mvnw -DskipTests compile` verde antes dos testes.
+
+### Docs e PR
+
+ROADMAP marca o primeiro item da Fase 10 como feito e aponta o que resta (métricas e revisão de
+segurança por fase); MODULES ganhou `CampaignAuditTrail` e `AdminRoleplayController` na tabela do
+§43 e a regra da trilha única; API ganhou o capítulo do histórico de auditoria. Tudo no mesmo
+commit da implementação. Branch `feat/eroleplay-auditoria` com PR para `qa` — sem merge, como
+sempre.
+
+### Próxima tarefa
+
+Fase 10 continua: métricas de eventos do módulo (observabilidade) e a revisão de segurança por
+fase. Em paralelo, a Fase 9 (front) aguarda os comentários da revisão em #898.

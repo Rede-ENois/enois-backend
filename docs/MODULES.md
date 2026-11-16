@@ -1835,6 +1835,8 @@ por matriz de capacidades, com a autorização sempre no back-end.
 | `LibraryService` | Publicar, republicar, despublicar, ler e listar a biblioteca; a autorização é do dono da ficha |
 | `LibraryController` | API REST em `/roleplay/library` e `/roleplay/campaigns/{id}/sheets/{sheetId}/publish` |
 | `LibrarySheetJpaEntity` | Persistência (V326), com os campos públicos em JSON `longtext` |
+| `CampaignAuditTrail` | Os atos de campanha na trilha única do sistema (`audit_logs`), com ação `ROLEPLAY_*` e metadata mínimo |
+| `AdminRoleplayController` | Histórico de auditoria da campanha em `/admin/roleplay/campaigns/{id}/history` (exclusivo de administrador) |
 
 Regras que valem sempre:
 
@@ -1845,6 +1847,12 @@ Regras que valem sempre:
   `REQUEST_ALREADY_DECIDED`.
 - A voz da mesa referencia uma sessão de chamada do Épapo (`voiceRoomId`); o módulo não cria
   sala de voz paralela.
+- Os atos de campanha (criação, edição, entrada, pedido, decisão, convite, saída, remoção,
+  transferência de mestria, arquivamento, criação de mesa) ficam na trilha única de auditoria do
+  sistema (`audit_logs`), com prefixo `ROLEPLAY_*` e a campanha como alvo — não há trilha própria
+  do módulo. O metadata carrega identificadores, papéis e mudanças de estado; o conteúdo livre da
+  campanha (descrição, ambientação) nunca entra. A leitura do histórico é exclusiva de
+  administrador: sem sessão é 401, sessão comum é 403 e campanha desconhecida é 404.
 - A campanha guarda só o IDENTIFICADOR do sistema, nunca as regras. Um sistema sem adaptador
   registrado responde com erro próprio; a família que a campanha grava vem do adaptador, não do
   pedido do cliente.

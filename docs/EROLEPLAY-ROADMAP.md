@@ -126,11 +126,17 @@ explícito, nunca com comportamento genérico inventado.
 
 ### Fase 10 — endurecimento
 
-- [ ] Observabilidade (eventos, métricas) e revisão de segurança por fase
+- [x] Trilha de auditoria dos atos de campanha na trilha única do sistema (`ROLEPLAY_*` em
+  `audit_logs`) e leitura do histórico no painel (`GET /admin/roleplay/campaigns/{id}/history`,
+  exclusiva de administrador, 404 para campanha desconhecida)
+- [ ] Observabilidade (métricas de eventos do módulo)
+- [ ] Revisão de segurança por fase
 
 ## 5. Próxima tarefa
 
-**Fase 9**: front — identidade visual própria (tema por campanha) no design system e telas de campanha, mesa, ficha e dados. O backend das Fases 0–8 está entregue.
+**Fase 9**: front — identidade visual própria (tema por campanha) no design system e telas de
+campanha, mesa, ficha e dados (o backend das Fases 0–8 está entregue). Em paralelo, restam na
+Fase 10 as métricas de eventos do módulo e a revisão de segurança por fase.
 
 Mundo da campanha (localizações, pistas, NPCs) com referência a partir das campanhas, seguindo o
 mesmo contrato das demais peças: aditivo, autorização na campanha (ver = participante, escrever =
