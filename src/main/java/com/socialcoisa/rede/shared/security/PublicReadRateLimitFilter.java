@@ -28,6 +28,12 @@ import jakarta.servlet.http.HttpServletResponse;
  * e a leitura de perfil (`/users/{username}`). Um humano abre poucos perfis por minuto; um script
  * varrendo a base bate no teto em segundos e recebe 429 ENUMERATION_GUARD.
  *
+ * A lista de pessoas (`/network/users`) entra no mesmo teto: ela devolve conjunto de identificadores,
+ * que é para o que a varredura serve. `/network/suggestions` e `/network/connections/*` NÃO entram —
+ * são a própria navegação de quem está logado (balde por conta, compartilhado com as telas), e
+ * limitá-las puniria a pessoa comum em vez do script. Já `/ranking` e a vitrine de perfis montam a
+ * URL de pessoa, mas não recebem aquilo que se varre: ficam no limite global.
+ *
  * Janela deslizante em memória por IP, como os outros limitadores do projeto.
  */
 @Component
@@ -60,7 +66,7 @@ public class PublicReadRateLimitFilter extends OncePerRequestFilter {
 			return true;
 		}
 		String path = request.getRequestURI();
-		return !(path.equals("/users/search") || path.startsWith("/users/"));
+		return !(path.equals("/users/search") || path.startsWith("/users/") || path.equals("/network/users"));
 	}
 
 	@Override

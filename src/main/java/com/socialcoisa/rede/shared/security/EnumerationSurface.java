@@ -72,8 +72,6 @@ public final class EnumerationSurface {
 		route("^/auth/login$", Kind.USERNAME, null, "auth.login"),
 		route("^/auth/password/forgot$", Kind.USERNAME, null, "auth.forgot"),
 		route("^/auth/signup$", Kind.USERNAME, null, "auth.signup"),
-		route("^/auth/username-available$", Kind.USERNAME, null, "auth.usernameAvailable"),
-		route("^/auth/email-available$", Kind.USERNAME, null, "auth.emailAvailable"),
 
 		// --- Administração: varredura de endpoints é sinal por si ---
 		route("^/admin/.*$", Kind.ID, null, "admin.scan"));
