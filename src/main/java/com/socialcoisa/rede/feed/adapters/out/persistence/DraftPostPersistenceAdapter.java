@@ -45,6 +45,16 @@ class DraftPostPersistenceAdapter implements DraftPostRepository {
 	}
 
 	@Override
+	public List<DraftPost> findAllByUser(String userId) {
+		return repository.findByUserIdOrderByUpdatedAtDesc(userId).stream().map(this::toDomain).toList();
+	}
+
+	@Override
+	public Optional<DraftPost> findById(String id) {
+		return repository.findById(id).map(this::toDomain);
+	}
+
+	@Override
 	public void delete(String id) {
 		repository.deleteById(id);
 	}
