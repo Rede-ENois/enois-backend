@@ -4,7 +4,8 @@ Estado: implementado em 2026-11-12 e na `qa` (PR #677 mergeado); declaração de
 acrescentada em 2026-11-13; tabela paginada acrescentada em 2026-11-13 (V291); questionário
 condicional e rascunho acrescentados em 2026-11-15 (V330); timeline de auditoria, entrevista na
 agenda central e aviso de reprovação pelo board acrescentados em 2026-11-16; jornada do candidato
-(etapa nomeada e histórico próprio da candidatura) acrescentada em 2026-11-16.
+(etapa nomeada e histórico próprio da candidatura) e banco de talentos com LGPD (V333) acrescentados
+em 2026-11-16.
 
 Complementa `docs/JOB_AGGREGATOR.md` (vagas internas e externas) e
 `docs/SOCIAL_PROFESSIONAL_CONTEXTS.md` (identidade profissional). Não cria um segundo sistema
@@ -180,6 +181,19 @@ quem não tem vaga. Reativar devolve o acesso ao que já estava lá.
   inversa do tempo, com ator, alvo `job_application:{id}` e metadado dizendo o que mudou;
 - candidato e terceiro recebem 403 e candidatura de outra vaga recebe 404 `APPLICATION_NOT_FOUND` —
   a timeline é interna e não vaza para quem não conduz a seleção.
+
+`TalentPoolTests` (8 testes, integração com H2 e MockMvc):
+
+- candidato com perfil ativo, **sem liberar**, não aparece — nem na lista nem com busca pelo id dele;
+  liberar faz aparecer, retirar tira na hora (o segundo DELETE é no-op, não erro), liberar de novo
+  volta a mostrar;
+- `/mine` mostra a organização e o nome dela (o candidato precisa saber onde está listado para sair);
+- estranho recebe 403 `RECRUITMENT_FORBIDDEN` (não lista vazia), organização inexistente é 404
+  `COMPANY_NOT_FOUND`, recado sem liberação é 404 `NOT_IN_TALENT_POOL`;
+- cinco liberados com `limit=2` percorrem o cursor e coletam cada pessoa **uma vez**;
+  cursor inválido é 400 `INVALID_CURSOR`;
+- apagar a conta leva a linha junto: depois do `POST /auth/account/delete` a lista da empresa
+  volta vazia. O caso do consentimento ausente e o da exclusão de conta falham no código anterior.
 
 `CandidateJourneyTests` (3 testes, integração com H2 e MockMvc):
 
@@ -475,10 +489,49 @@ uma decisão da pessoa, e um 409 impediria o caso legítimo). A resposta de marc
 contar a própria entrevista. Nas listas, `conflicts` vem `null` ("não avaliado"), distinto de lista
 vazia ("nada conflita").
 
+## Banco de talentos (V333)
+
+A candidatura que a pessoa **libera** para uma organização continuar vendo depois que a vaga fecha.
+Não é uma lista de quem se candidatou: é uma lista de quem consentiu em aparecer.
+
+O que sustenta tudo é o consentimento explícito, guardado por par `(candidate_id, company_id)` em
+`talent_pool_opt_ins`, com a versão do texto consentido e a data. **Sem linha ativa, a pessoa não é
+encontrada por busca nenhuma** — a leitura da organização começa pelo conjunto de consentimentos e só
+depois aplica a busca sobre ele; a ordem inversa deixaria a busca decidir quem aparece.
+
+| Rota | Quem | O que faz |
+|---|---|---|
+| `GET /jobs/recruitment/talent-pool/mine` | quem está na sessão | onde a pessoa está listada, com o nome da organização |
+| `POST /jobs/recruitment/talent-pool/{companyId}/opt-in` | quem está na sessão | libera (idempotente; liberar de novo renova data e versão) |
+| `DELETE /jobs/recruitment/talent-pool/{companyId}/opt-in` | quem está na sessão | retira (no-op sem nada ativo: o estado desejado já vale) |
+| `PATCH /jobs/recruitment/talent-pool/{companyId}/note` | quem está na sessão | recado para os recrutadores (404 sem liberação) |
+| `GET /jobs/recruitment/talent-pool/{companyId}` | VIEW_CANDIDATES | a página do banco, com `cursor`, `search` e `limit` |
+
+### Escolhas que não são óbvias
+
+- **Nenhum retrato do perfil é copiado.** O recrutamento lê o perfil de hoje, pelas mesmas colunas
+  que lê em qualquer outra tela. Copiar o perfil criaria dado pessoal duplicado e que envelhece.
+- **Retirar não apaga a linha na hora.** A leitura perde o acesso no mesmo instante (toda consulta
+  filtra por `withdrawing_at is null`), e a linha some de vez em `TalentPoolService.RETENTION`
+  (180 dias) pela rotina `TalentPoolRetentionWorker` — o fato de ter consentido e retirado continua
+  auditável durante a guarda.
+- **Exclusão de conta apaga os consentimentos** (`AuthService.deleteAccount`), junto com o resto da
+  anonimização. Sem conta não há consentimento vivo para listar.
+- **A busca é a booleana do projeto** (`shared.search.BooleanQuery`), aplicada entre os ids liberados.
+  Bloqueio entre as pessoas vale aqui também: quem está bloqueado não aparece na lista.
+- **Paginação por cursor** `(consented_at desc, id desc)`: o cursor carrega o par instante+id, porque
+  a coluna guarda segundos e o instante sozinho repetiria as linhas empatadas.
+
+### Auditoria
+
+Liberar, retirar e expurgar deixam linha na trilha única: `RECRUITMENT_TALENT_POOL_OPT_IN`,
+`RECRUITMENT_TALENT_POOL_WITHDRAWN`, `RECRUITMENT_TALENT_POOL_PURGED` — com o alvo
+`talent_pool:{companyId}` e o ator no candidato (ou `system` no expurgo).
+
 ## Fora deste escopo (próximos passos)
 
-Slot de entrevista escolhido pelo candidato, banco de talentos e a UI no design system. A
-fundação acima é a que esses itens vão usar — não há segunda base a criar.
+Slot de entrevista escolhido pelo candidato e a UI no design system. A fundação acima é a que esses
+itens vão usar — não há segunda base a criar.
 
 
 A UI do "Sou recrutador/a" no front (`@rede-enois/design-system`) ainda não foi entregue: o
