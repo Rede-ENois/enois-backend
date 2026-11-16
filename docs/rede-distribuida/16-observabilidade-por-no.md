@@ -337,3 +337,35 @@ Decisões:
 aparecem separadas; claim vencido do `system` não conta; desconexão mantém a contribuição). Mutações:
 contar o reenfileiramento do sistema, somar a devolução em `tasksDone`, e devolver zero inventado na
 desconexão — **3 de 3 derrubam**.
+
+## 10. O diagnóstico do nó mostra o que ele executou
+
+O brief §8.6 pede, no diagnóstico individual, as **tarefas executadas** da réplica. A lista e o
+detalhe do admin (`GET /admin/network/nodes` e `/{id}`) traziam estado, capacidade, chave e saúde —
+mas nenhuma contribuição medida. O operador via um nó `ACTIVE`, sem quarentena e com vaga, e não
+tinha como distinguir o nó que está executando do que nunca recebeu nada.
+
+`NodeView` passa a trazer dois campos:
+
+| campo | o que é |
+|---|---|
+| `tasksDone` | tarefas concluídas (`DONE`) **por este nó como último executor** |
+| `tasksFailed` | falhas definitivas (`FAILED` e `DEAD` — as duas são fim de trabalho sem resultado) |
+
+Decisões:
+
+- **Contadas à parte.** `tasksFailed` não entra em `tasksDone`: somar as duas faria o nó que erra
+  tudo parecer o mais produtivo da rede.
+- **Zero aparece.** Sem tarefa, o campo vem `0` e não ausente — omissão diria "não medi", e o nó
+  parado existe na lista para ser visto.
+- **Lote, não por linha.** A listagem lê concluídas e falhas em duas consultas para todos os nós
+  (`countDoneByNode`/`countFailedByNode` já existiam), como já faz com chaves e responsáveis: a tela
+  lista até 200 e abriria 200 consultas por contador.
+- **Mesma régua do painel e da tela do participante.** É o mesmo `countDoneByNode` que o
+  `Distribution` (§8.4) e o `NetworkParticipantService` usam — três telas não podem discordar sobre o
+  mesmo fato.
+
+**Verificação:** 2 testes novos em `NetworkNodesTests` (o detalhe traz concluídas e falhas separadas,
+com um segundo nó de números diferentes para que a leitura seja do nó pedido; a listagem traz a
+contribuição de cada nó, com o parado em zero). Mutações: `tasksDone` sempre zero; falhas somadas em
+`tasksDone`; e a contribuição lida do primeiro nó da lista — **3 de 3 derrubam**.
