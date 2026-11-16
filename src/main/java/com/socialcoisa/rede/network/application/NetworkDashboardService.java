@@ -19,6 +19,7 @@ import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NetworkRegions;
 import com.socialcoisa.rede.network.domain.NodeProfile;
 import com.socialcoisa.rede.network.domain.NodeStatus;
+import com.socialcoisa.rede.network.domain.TaskType;
 
 /**
  * Agregados do topo do painel "Énóis Network".
@@ -131,7 +132,42 @@ public class NetworkDashboardService {
 		return new Dashboard(total, active, unavailable, quarantined, alive, degraded, declaredCores,
 			declaredMemoryMb, freeSlots, cpuSamples == 0 ? null : cpuSum / cpuSamples,
 			cpuSamples, memorySamples == 0 ? null : memorySumMb / memorySamples, memorySamples,
-			byRegion, byProfile, topRuntimes, evacuated, load(all));
+			byRegion, byProfile, topRuntimes, evacuated, load(all), workTypes(all, evacuated, now));
+	}
+
+	/**
+	 * Cada tipo de trabalho da rede e quantos nós podem executá-lo <b>agora</b> — o §8.4 do brief
+	 * ("o painel deve mostrar como os nós trabalham juntos").
+	 *
+	 * <p>A pergunta que isto responde não está em nenhum outro lugar do painel: <b>a rede tem
+	 * alguém para fazer cada tipo de trabalho?</b> {@code byProfile} conta perfis declarados, o que
+	 * não é a mesma coisa — um nó {@code NODE_MEDIA} em quarentena, de região evacuada ou sem vaga
+	 * continua contado no perfil e não executa nada. Hoje essa descoberta custava abrir nó por nó
+	 * até achar que nenhum aceitava {@code MEDIA_TRANSCODE}.</p>
+	 *
+	 * <p>"Pode agora" é a régua do despacho: {@code ACTIVE}, vivo na mesma janela do scheduler, sem
+	 * quarentena, fora de região evacuada e com vaga. A fleet é pequena e cabe no teto da listagem;
+	 * acima dele, a lista diz que está olhando um recorte.</p>
+	 *
+	 * <p>{@code uncovered} é a lista dos sem capacidade — é o que a tela pinta de vermelho. Lista
+	 * vazia significa cobertura completa, e não "não medi": toda a enumeração é varrida, inclusive
+	 * os tipos que nenhum perfil cobre.</p>
+	 */
+	private List<WorkCoverage> workTypes(List<NetworkNode> all, List<String> evacuated, Instant now) {
+		List<WorkCoverage> result = new java.util.ArrayList<>();
+		for (TaskType type : TaskType.values()) {
+			int capable = 0;
+			for (NetworkNode node : all) {
+				if (node.status() != NodeStatus.ACTIVE || !node.alive(now, Duration.ofSeconds(STALE_SECONDS))
+						|| node.quarantined(now) || NetworkRegions.outOfService(evacuated, node.region())
+						|| !node.hasCapacity() || !type.allowedFor(node.profiles())) {
+					continue;
+				}
+				capable++;
+			}
+			result.add(new WorkCoverage(type.name(), capable));
+		}
+		return List.copyOf(result);
 	}
 
 	/**
@@ -152,7 +188,18 @@ public class NetworkDashboardService {
 	public record Dashboard(int total, int active, int unavailable, int quarantined, int alive, int degraded,
 			int declaredCpuCores, int declaredMemoryMb, int freeSlots, Double avgCpuPercent, int cpuSamples,
 			Integer avgMemoryMb, int memorySamples, Map<String, Integer> byRegion, Map<String, Integer> byProfile,
-			Map<String, Integer> runtimeVersions, List<String> outOfServiceRegions, Distribution load) {
+			Map<String, Integer> runtimeVersions, List<String> outOfServiceRegions, Distribution load,
+			List<WorkCoverage> workTypes) {
+	}
+
+	/**
+	 * Quantos nós podem executar um tipo de trabalho agora.
+	 *
+	 * @param type     o tipo de trabalho da rede ({@link com.socialcoisa.rede.network.domain.TaskType})
+	 * @param capable  nós {@code ACTIVE}, vivos, sem quarentena, fora de região evacuada e com vaga
+	 *                 que aceitam este tipo; {@code 0} = a rede não tem quem o faça
+	 */
+	public record WorkCoverage(String type, int capable) {
 	}
 
 	/**

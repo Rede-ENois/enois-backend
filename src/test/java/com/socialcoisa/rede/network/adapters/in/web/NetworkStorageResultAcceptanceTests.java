@@ -57,6 +57,11 @@ class NetworkStorageResultAcceptanceTests {
 		jdbc.update("delete from network_storage_placements");
 		jdbc.update("delete from network_storage_objects");
 		jdbc.update("delete from network_tasks");
+		// O modo da rede é estado GLOBAL e outras classes o deixam em DEGRADED/EMERGENCY; nesses
+		// modos o despacho não designa (dispatchLimit = 0) e a tarefa fica com assigned_node_id nulo,
+		// mesmo com o nó certo elegível. Sem limpar, este teste depende de qual classe rodou antes —
+		// passa isolado e falha em cerca de uma a cada três rodadas da suíte.
+		jdbc.update("delete from network_state");
 		jdbc.update("delete from network_node_keys");
 		jdbc.update("delete from network_provision_tokens");
 		jdbc.update("delete from network_nodes");

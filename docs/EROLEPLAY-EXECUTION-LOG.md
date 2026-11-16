@@ -828,4 +828,31 @@ NPCs)" como trabalho pendente — resíduo do planejamento anterior à Fase 7. O
 exatamente isso e está marcado como feito. Parágrafo removido: documento que descreve como
 pendente o que o código entrega é bug de documentação (AGENTS.md). Sem mudança de código.
 
+
+### Isolamento de teste: região evacuada vazava entre classes (rodada seguinte)
+
+O CI do PR de encerramento falhou em `NetworkStorageBalanceTests` (classe fora do diff): `capacityMb`
+esperado 102400, veio 0. Não era flake aleatório — reproduzi de forma determinística rodando
+`NetworkRegionTests` e, em seguida, a classe, na mesma base: **18 testes, 1 falha**, com
+`nodesDeclaringCapacity: 0` no corpo. Causa-raiz: `network_region_states` é estado **global** da
+base H2 compartilhada; `NetworkRegionTests` declara a região `sudeste` fora de serviço e limpava a
+tabela só no `@BeforeEach`, nunca no fim — a declaração sobrevivia à classe e o nó de `sudeste` do
+teste seguinte era descartado (região fora de serviço não soma capacidade). Correção na causa:
+`@AfterEach` devolvendo `network_region_states`, e a limpeza extraída para não repetir. O par que
+falhava passou a **18/18, BUILD SUCCESS**. Documentado o padrão em `docs/TESTING.md`.
+
 ---
+
+### Encerramento (rodada seguinte)
+
+Conferido o estado real da frente: **todos os PRs do Éroleplay foram mergeados** — backend em
+#735 (ordem de fala), #739 (World Builder), #747 (colunas da biblioteca), #756 (docs da Fase 9),
+#775 (trilha de auditoria), #785 (métricas) e #794 (autorização das rotas de voz); front em #898.
+Nenhum PR do módulo segue aberto. O ROADMAP e este log ainda diziam "PRs abertas aguardando
+revisão humana" e "front em revisão (PR #898)" — documento descrevendo como pendente o que a `qa`
+já tem é bug de documentação (AGENTS.md). Corrigido, sem mudança de código.
+
+A desativação do agendamento não foi feita por agente: o registro da automação vive no banco do
+aplicativo (em execução) e não há ferramenta nem API suportada para desativá-la a partir daqui —
+escrever direto no banco de um app vivo é interferência de harness, não uma ação de engenharia.
+Fica registrada como a única pendência, e é da usuária.
