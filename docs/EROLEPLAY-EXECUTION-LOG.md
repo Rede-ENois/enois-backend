@@ -696,3 +696,57 @@ sempre.
 
 Fase 10 continua: métricas de eventos do módulo (observabilidade) e a revisão de segurança por
 fase. Em paralelo, a Fase 9 (front) aguarda os comentários da revisão em #898.
+
+## Rodada 13 — 2026-11-16 — métricas do Éroleplay no painel (Fase 10)
+
+Unidade: "Observabilidade (métricas de eventos do módulo)". A observabilidade entrou no painel de
+monitorabilidade que já existe — não inventamos um painel novo nem stack nova. `GET
+/admin/monitoring/roleplay` devolve o agregado do módulo: campanhas por estado, visibilidade e
+sistema, volume dos dados guardados (membros, mesas, lugares, fichas, templates, chat, rolagens,
+mundo, biblioteca) e ritmo de criação em 7 e 30 dias. Zero PII: nenhuma consulta toca conteúdo
+livre e nenhuma linha devolve id de pessoa — o mesmo recorte de privacidade da trilha da Rodada 11.
+
+### O que foi implementado
+
+- `RoleplayMetricsService` (ops/monitoring, 100 linhas): `JdbcTemplate` sobre as tabelas que o
+  módulo já tem, contagens em índices existentes — **nenhuma migração**, nenhum schema novo.
+  Cache volátil de 60s porque o painel atualiza a cada 30s e nenhuma dessas contas muda nessa
+  escala; o TTL virou propriedade (`rede.monitoring.roleplay-cache-ms`, padrão 60000) com o
+  mesmo padrão de `@Value` dos vizinhos (`MonitoringService`, `HealthWatcher`, `FileEventSink`).
+- `MonitoringAdminController`: rota `GET /admin/monitoring/roleplay` com o gate do próprio painel
+  (`moderatorGuard.requireModerator(currentUserResolver.resolve(sessionToken))`) — sem sessão é
+  401, sessão comum é 403.
+- Propriedade declarada no `application.properties` principal (env `REDE_MONITORING_ROLEPLAY_CACHE_MS`).
+
+### Testes executados (números reais)
+
+- `RoleplayMetricsTests` (3): o painel devolve agregados de campanhas criadas pelos endpoints
+  reais (com `systemFamily` vindo do adaptador), sem vazar descrição, ambientação nem id do
+  mestre; as contagens por estado/visibilidade/sistema batem com as invariâncias do banco
+  (visibilidade soma o total, estado soma o total, membros ≥ campanhas, 7d ≤ 30d ≤ total); a
+  leitura é exclusiva de moderador (401/403/200). **3 testes, 0 falhas, 0 erros.**
+  O teste roda com `rede.monitoring.roleplay-cache-ms=0` para o agregado refletir o que acabou
+  de ser criado — sem isso o cache compartilhado do contexto devolvia zeros velhos (falso
+  vermelho de dados, não de código).
+- Suíte escopada `com.socialcoisa.rede.ops.monitoring.** + com.socialcoisa.rede.eroleplay.** +
+  domain`: **38 classes, 249 testes, 0 falhas, 0 erros, 1 skip** — o skip é o
+  `KofAgentLiveChannelTests`, gate E2E de Telegram que só roda com credenciais reais no shell
+  (pré-existente, nunca roda em CI).
+- Suíte completa: **3.338 testes, 7 falhas e 10 erros — todos em módulos fora do diff** (profile
+  nameplate, network storage/replica/media). As quatro classes passam isoladas na MESMA árvore
+  (**31 testes, 0 falhas, 0 erros**); a classe de mídia acumula os erros de FK no `setUp` por
+  contaminação da base H2 compartilhada já documentada na Rodada 11, e o CI da ponta `qa`
+  (877ab584) está verde na mesma base — guarda ambiental local, não regressão desta mudança.
+- Compilação `./mvnw -DskipTests compile` verde antes dos testes.
+
+### Docs e PR
+
+ROADMAP marca o segundo item da Fase 10 como feito (resta só a revisão de segurança por fase);
+MODULES ganhou `RoleplayMetricsService` na tabela do §43 e a regra "painel vê números, nunca
+conteúdo"; API ganhou o capítulo das métricas com a resposta de exemplo. Tudo no mesmo commit.
+Branch `feat/eroleplay-metricas` com PR para `qa` — sem merge, como sempre.
+
+### Próxima tarefa
+
+Fase 10 fecha com a revisão de segurança por fase. Em paralelo, a Fase 9 (front) aguarda os
+comentários da revisão em #898.
