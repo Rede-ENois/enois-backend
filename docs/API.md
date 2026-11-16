@@ -880,6 +880,7 @@ entrada na sala é autorizada no servidor com token assinado — detalhes em
 | POST | `/api/calls/{callId}/decline` | Recusar | Sim |
 | POST | `/api/calls/{callId}/cancel` | Quem iniciou desiste | Sim |
 | POST | `/api/calls/{callId}/join` | Autoriza e devolve `host`, `room`, `jwt` (emitido pelo gateway da Epapo) e `call` | Sim |
+| POST | `/api/calls/{callId}/presence` | Sinal de vida de quem está na sala: mantém a presença contada e a sala ao vivo | Sim |
 | POST | `/api/calls/{callId}/leave` | Sair (no grupo a chamada continua) | Sim |
 | POST | `/api/calls/{callId}/end` | Encerrar para todos | Sim |
 | POST | `/api/calls/{callId}/fail` | A tela perdeu a mídia: falha explícita em vez de sessão pendurada | Sim |
@@ -1651,7 +1652,7 @@ tokens de cenário) é do mestre. Toda escrita exige `Idempotency-Key`.
 | `POST` | `/tokens` | mestre (cenário); dono (personagem) | Cria token; corpo `{ "ownerId"?, "label", "color", "posX", "posY" }` |
 | `POST` | `/tokens/{tokenId}/move` | dono; mestre | Move o token para outra célula `{ "posX", "posY" }` |
 | `POST` | `/tokens/{tokenId}/remove` | dono; mestre | Remove o token |
-| `POST` | `/voice` | participante | Abre (ou devolve) a chamada do Épapo da mesa; corpo `{ "kind"? }` (`AUDIO` padrão) |
+| `POST` | `/voice` | mestre | Abre (ou devolve) a chamada do Épapo da mesa; corpo `{ "kind"? }` (`AUDIO` padrão) |
 | `GET` | `/voice/open` | participante | A chamada aberta da mesa (corpo vazio quando ninguém está na voz) |
 
 ### Regras
@@ -1660,9 +1661,14 @@ tokens de cenário) é do mestre. Toda escrita exige `Idempotency-Key`.
   (espelho do vínculo de encontro). A resposta é o `CallView` da mesa dentro da abertura — o
   `voice/open` devolve a chamada "ao vivo", e a entrada é o `POST /calls/{id}/join` de sempre,
   que assina o token e reavalia a autorização. A mesa guarda só o id da chamada.
-- **Público da voz é a campanha.** Participante entra; quem não participa leva 403 no join e não
+- **Abrir a voz é estado da mesa, então é do mestre** (403 `FORBIDDEN` para participante); a
+  consulta da sala aberta é leitura de participante. Quem não participa leva 403 no join e não
   vê a sala em `/voice/open`. Quem abre já está dentro; a segunda abertura devolve a MESMA
   chamada.
+- **O path cruza campanha com mesa.** As rotas de voz reavaliam que a mesa pertence à campanha
+  informada antes de delegar ao serviço de chamadas: mesa desconhecida ou de outra campanha é
+  404 — o id da mesa sozinho não autoriza. A leitura da sala é tolerante (não-participante lê
+  corpo vazio, como toda leitura pública); a recusa de entrada é do join, que reavalia o papel.
 - **Aviso de mesa ao vivo:** os participantes (menos quem abriu) recebem `CALL_TABLE_LIVE`, uma
   vez por chamada (contada por `call_live:<callId>`), na preferência de push de grupos. Ninguém
   é chamado com `CALL_INCOMING`: a mesa avisa, não toca.

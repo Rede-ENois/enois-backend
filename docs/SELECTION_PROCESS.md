@@ -2,7 +2,9 @@
 
 Estado: implementado em 2026-11-12 e na `qa` (PR #677 mergeado); declaração de recrutador
 acrescentada em 2026-11-13; tabela paginada acrescentada em 2026-11-13 (V291); questionário
-condicional e rascunho acrescentados em 2026-11-15 (V330).
+condicional e rascunho acrescentados em 2026-11-15 (V330); timeline de auditoria, entrevista na
+agenda central e aviso de reprovação pelo board acrescentados em 2026-11-16; jornada do candidato
+(etapa nomeada e histórico próprio da candidatura) acrescentada em 2026-11-16.
 
 Complementa `docs/JOB_AGGREGATOR.md` (vagas internas e externas) e
 `docs/SOCIAL_PROFESSIONAL_CONTEXTS.md` (identidade profissional). Não cria um segundo sistema
@@ -35,7 +37,9 @@ mesmas de antes. Nada de segunda vaga, segunda candidatura ou segundo mensageiro
 
 Reprovar (`REJECT`) exige motivo não vazio. O motivo vai para o movimento e para o campo
 `feedback` da candidatura (que o candidato já vê), e o estado vira `NOT_SELECTED`. Candidatura
-reprovada não se move mais.
+reprovada não se move mais. A `note` de um movimento de passagem de etapa é da equipe: o
+candidato lê o motivo da reprovação na jornada dele, nunca essa nota (ver
+[Experiência do candidato](#experiência-do-candidato)).
 
 ## Endpoints (todos sob `/jobs`)
 
@@ -50,6 +54,7 @@ reprovada não se move mais.
 | `GET /jobs/{jobId}/process/applications` | dono | **página** de candidaturas: cursor, filtro e busca |
 | `POST /jobs/{jobId}/process/applications/{applicationId}/move` | dono | `{"stageId","kind","note"}` → movimento |
 | `GET /jobs/{jobId}/process/applications/{applicationId}/movements` | dono | histórico em ordem |
+| `GET /jobs/{jobId}/applications/{applicationId}/journey` | candidato dono **ou** quem comanda | fluxo, histórico e etapa atual — sem nota interna |
 | `GET /jobs/{jobId}/process/applications/{applicationId}/notes` | dono | notas internas |
 | `POST /jobs/{jobId}/process/applications/{applicationId}/notes` | dono | cria nota (`{"body": ...}`) |
 | `GET /jobs/{jobId}/process/applications/{applicationId}/audit` | equipe (VIEW_CANDIDATES) | timeline de auditoria da candidatura |
@@ -175,6 +180,18 @@ quem não tem vaga. Reativar devolve o acesso ao que já estava lá.
   inversa do tempo, com ator, alvo `job_application:{id}` e metadado dizendo o que mudou;
 - candidato e terceiro recebem 403 e candidatura de outra vaga recebe 404 `APPLICATION_NOT_FOUND` —
   a timeline é interna e não vaza para quem não conduz a seleção.
+
+`CandidateJourneyTests` (3 testes, integração com H2 e MockMvc):
+
+- o candidato vê o **nome** da etapa em `/jobs/applications/mine` (na entrada do fluxo e depois de
+  avançar) e a jornada com fluxo, histórico em ordem e `currentStageId`; quem comanda a vaga lê a
+  mesma jornada;
+- o motivo da reprovação chega ao candidato, mas a nota de contexto escrita numa passagem de etapa
+  **não**: `steps[0].note` vem `null` para ele e continua legível para a equipe — o texto inteiro
+  da resposta do candidato é varrido para provar que não vaza;
+- terceiro recebe 403 `NOT_PARTICIPANT`, sem sessão é 401 e candidatura de outra vaga é 404
+  `APPLICATION_NOT_FOUND`. Os três testes falham no código anterior (a rota não existia e
+  `stageName` não era devolvido).
 
 ## Quem conduz a seleção
 
@@ -351,6 +368,58 @@ Códigos de recusa explícitos: `EVALUATION_VERDICT_INVALID`, `EVALUATION_CRITER
 `EVALUATION_TOO_MANY_CRITERIA`, `EVALUATION_CRITERIA_LABEL_REQUIRED`,
 `EVALUATION_CRITERIA_LABEL_TOO_LONG`, `EVALUATION_SCORE_OUT_OF_RANGE`,
 `EVALUATION_SUMMARY_TOO_LONG`. Como as notas, a avaliação jamais aparece em rota do candidato.
+
+## Comunicação com o candidato (sem canal novo)
+
+O aviso ao candidato sai da mesma infraestrutura de notificações e mensagens que o projeto já
+tinha — a porta `JobApplicationStatusNotifier` (notificação in-app + push, mensagem direta na
+conversa de candidatura com contexto `JOB` e e-mail), sem segunda caixa e sem segundo mensageiro.
+O corpo da notificação in-app **não** traz o retorno escrito (ele pode aparecer em tela
+bloqueada); o retorno segue na mensagem direta, no e-mail e na lista de candidaturas do candidato.
+
+Reprovar avisa; avançar ou retornar etapa **não**. A reprovação é decisão final — o candidato
+precisa do retorno e do estado novo; um movimento interno entre etapas não muda nada para quem
+está do outro lado, e avisar a cada card arrastado viraria ruído.
+
+| Caminho | Antes | Agora |
+|---|---|---|
+| Triagem pelo estado clássico (`PATCH /jobs/{jobId}/applications/{applicationId}`) | avisava | avisa (como antes) |
+| Reprovar pelo board (`POST .../process/applications/{applicationId}/move`, `kind=REJECT`) | mudo | avisa pelo mesmo caminho |
+| Reprovar em lote (`POST .../process/applications/batch-move`, `kind=REJECT`) | mudo | cada candidatura do lote avisa a própria candidata |
+| Avançar/retornar etapa | mudo | mudo (proposital) |
+
+Falha de entrega é tolerada (o estado já foi persistido antes do aviso): o erro é registrado e a
+decisão continua valendo — o candidato ao menos vê o estado atualizado na lista dele.
+
+## Experiência do candidato
+
+O candidato acompanha o **próprio** processo, sem segundo sistema e sem canal novo: tudo sai das
+tabelas que o pipeline já grava.
+
+| Onde | Antes | Agora |
+|---|---|---|
+| `GET /jobs/applications/mine` | só o estado clássico (`IN_REVIEW`) | também `stageName` — o nome da etapa atual, da mesma fonte do board (último movimento; sem movimento, a entrada do fluxo) |
+| `GET /jobs/{jobId}/applications/{applicationId}/journey` | não existia | fluxo da vaga (etapas nomeadas, na ordem), histórico em ordem e `currentStageId` |
+
+Quem lê a jornada é quem participa: **o dono da candidatura** e **quem comanda a vaga** — o mesmo
+par da entrevista. Terceiro recebe 403 `NOT_PARTICIPANT`; candidatura de outra vaga recebe 404
+`APPLICATION_NOT_FOUND`; sem sessão, 401.
+
+O que o candidato **não** vê, por decisão de projeto:
+
+- **nota interna** (`stage_notes`) e **avaliação** (`application_evaluations`) — não entram na
+  jornada por nenhum caminho;
+- **a nota de um movimento de passagem de etapa** (`ADVANCE`/`RETURN`). Ela é contexto de trabalho
+  da equipe; a jornada do candidato devolve `note: null` nesses passos. A única nota que chega ao
+  candidato é o **motivo da reprovação**, junto de `feedback` — é o retorno a que ele tem direito.
+  Quem comanda a vaga continua lendo todas as notas na jornada dele.
+
+Consulta em lote: o `stageName` da lista sai de uma consulta de últimos movimentos para todas as
+candidaturas e uma de etapas por vaga distinta — sem N+1 por candidatura.
+
+**Ainda não existe** (registrado como pendência, não fingido): desistência do candidato (retirar a
+própria candidatura), releitura das respostas do questionário dentro da jornada e aviso a cada
+mudança de etapa. Nenhum desses exige tabela nova, mas cada um muda semântica de produto.
 
 ## Timeline de auditoria
 

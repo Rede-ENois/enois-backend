@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.companies.domain.RecruitmentCapability;
+import com.socialcoisa.rede.jobs.application.port.out.JobApplicationStatusNotifier;
 import com.socialcoisa.rede.jobs.application.port.out.JobRepository;
 import com.socialcoisa.rede.jobs.application.port.out.SelectionProcessRepository;
 import com.socialcoisa.rede.jobs.application.port.out.SelectionProcessTemplateRepository;
@@ -55,6 +56,7 @@ public class SelectionProcessService {
 	private final SelectionProcessRepository pipeline;
 	private final SelectionProcessTemplateRepository templates;
 	private final JobCommandAuthorization command;
+	private final JobApplicationStatusNotifier statusNotifier;
 	private final Clock clock;
 	private final AuditTrail audit;
 	private final ObjectMapper objectMapper;
@@ -65,12 +67,13 @@ public class SelectionProcessService {
 	public static final String AUDIT_EVALUATED = "RECRUITMENT_APPLICATION_EVALUATED";
 
 	public SelectionProcessService(JobRepository jobs, SelectionProcessRepository pipeline,
-			SelectionProcessTemplateRepository templates, JobCommandAuthorization command, Clock clock,
-			AuditTrail audit, ObjectMapper objectMapper) {
+			SelectionProcessTemplateRepository templates, JobCommandAuthorization command,
+			JobApplicationStatusNotifier statusNotifier, Clock clock, AuditTrail audit, ObjectMapper objectMapper) {
 		this.jobs = jobs;
 		this.pipeline = pipeline;
 		this.templates = templates;
 		this.command = command;
+		this.statusNotifier = statusNotifier;
 		this.clock = clock;
 		this.audit = audit;
 		this.objectMapper = objectMapper;
@@ -174,7 +177,7 @@ public class SelectionProcessService {
 	@Transactional
 	public StageMovement moveApplication(String jobId, String applicationId, String requesterId,
 			String toStageId, StageMovementKind kind, String note) {
-		requireCommander(jobId, requesterId, RecruitmentCapability.TRIAGE);
+		Job job = requireCommander(jobId, requesterId, RecruitmentCapability.TRIAGE);
 		JobApplication application = jobs.findApplicationById(applicationId)
 			.filter(found -> found.jobId().equals(jobId))
 			.orElseThrow(() -> new ApiException(404, "APPLICATION_NOT_FOUND", "Candidatura não encontrada."));
@@ -202,6 +205,10 @@ public class SelectionProcessService {
 				clock.instant());
 			recordAudit(AUDIT_MOVED, requesterId, applicationId,
 				Map.of("kind", "REJECT", "fromStageId", String.valueOf(currentStageId)));
+			// Reprovar pelo board tem de avisar o candidato igual à triagem pelo estado clássico: o
+			// retorno que ele já recebe é o que o faz entender a decisão. O estado persistido acima é
+			// a fonte; o aviso sai dele, pela mesma porta de notificação das outras mudanças.
+			statusNotifier.notifyStatusChange(job, rejected(application, reason), JobApplicationStatus.NOT_SELECTED);
 			return saved;
 		}
 
@@ -267,6 +274,97 @@ public class SelectionProcessService {
 		return pipeline.movementsOf(Long.parseLong(applicationId));
 	}
 
+	// ---------- Jornada do candidato ----------
+
+	/**
+	 * A jornada de UMA candidatura: o fluxo da vaga com as etapas e o histórico em ordem — o que
+	 * o candidato percorreu e onde está.
+	 *
+	 * <p>Quem vê é quem participa: o candidato dono da candidatura e quem comanda a vaga (o
+	 * mesmo par da entrevista). Terceiro recebe 403 e candidatura de outra vaga recebe 404, sem
+	 * vazar entre processos.
+	 *
+	 * <p>A etapa atual é o destino do último movimento; sem movimento, a candidatura está na
+	 * entrada do fluxo (a primeira etapa). Nota interna da equipe e avaliação NÃO entram aqui —
+	 * o recrutador as lê pelas rotas da equipe; o candidato recebe o retorno em
+	 * {@link com.socialcoisa.rede.jobs.domain.JobApplication#feedback()}, que já vem na lista dele.
+	 * A nota de um movimento de passagem de etapa também não chega ao candidato: só a reprovação
+	 * carrega texto para ele, que é o retorno a que ele tem direito.
+	 */
+	public StageJourney journey(String jobId, String applicationId, String requesterId) {
+		Job job = jobs.findById(jobId)
+			.orElseThrow(() -> new ApiException(404, "JOB_NOT_FOUND", "Vaga não encontrada."));
+		JobApplication application = jobs.findApplicationById(applicationId)
+			.filter(found -> found.jobId().equals(jobId))
+			.orElseThrow(() -> new ApiException(404, "APPLICATION_NOT_FOUND", "Candidatura não encontrada."));
+		boolean employer = command.canCommand(job, requesterId, RecruitmentCapability.VIEW_CANDIDATES);
+		boolean candidate = application.userId().equals(requesterId);
+		if (!employer && !candidate) {
+			throw new ApiException(403, "NOT_PARTICIPANT",
+				"Só os envolvidos no processo veem a jornada da candidatura.");
+		}
+		List<SelectionStage> flow = pipeline.stagesOf(jobId);
+		List<StageMovement> history = pipeline.movementsOf(Long.parseLong(applicationId));
+		String currentStageId = history.isEmpty() ? (flow.isEmpty() ? null : flow.get(0).id())
+			: history.get(history.size() - 1).toStageId();
+		// A nota do movimento só é do candidato na REPROVAÇÃO — é o retorno que ele tem direito a
+		// ler. Numa passagem de etapa a equipe pode escrever contexto de trabalho; isso fica com
+		// quem comanda a vaga e não vira texto do candidato.
+		List<StageMovement> visibleHistory = employer ? history
+			: history.stream().map(SelectionProcessService::withoutInternalNote).toList();
+		return new StageJourney(applicationId, jobId, application.status(), application.feedback(),
+			currentStageId, flow, visibleHistory);
+	}
+
+	/** O movimento como o candidato o vê: só a reprovação carrega o texto; o resto perde a nota. */
+	private static StageMovement withoutInternalNote(StageMovement movement) {
+		if (movement.kind() == StageMovementKind.REJECT || movement.note() == null) {
+			return movement;
+		}
+		return new StageMovement(movement.id(), movement.applicationId(), movement.jobId(), movement.fromStageId(),
+			movement.toStageId(), movement.kind(), movement.actorId(), null, movement.movedAt());
+	}
+
+	/** A jornada de uma candidatura: etapas do fluxo, histórico e a etapa atual, sem nota interna. */
+	public record StageJourney(String applicationId, String jobId, JobApplicationStatus status, String feedback,
+			String currentStageId, List<SelectionStage> flow, List<StageMovement> history) {
+	}
+
+	/**
+	 * Nome da etapa atual de cada candidatura, em lote — a lista do candidato mostra o nome da
+	 * etapa, não só o enum do estado. Uma consulta de últimos movimentos para todas as
+	 * candidaturas e uma de etapas por vaga distinta: sem N+1 por candidatura.
+	 */
+	public Map<String, String> currentStageNames(List<JobApplication> applications) {
+		Map<String, String> names = new java.util.LinkedHashMap<>();
+		List<Long> ids = applications.stream()
+			.filter(application -> application.id() != null)
+			.map(application -> Long.valueOf(application.id()))
+			.toList();
+		if (ids.isEmpty()) {
+			return names;
+		}
+		Map<Long, String> currentByApplication = new java.util.LinkedHashMap<>();
+		for (StageMovement movement : pipeline.latestMovementsOf(ids)) {
+			currentByApplication.put(movement.applicationId(), movement.toStageId());
+		}
+		Map<String, List<SelectionStage>> stagesByJob = new java.util.LinkedHashMap<>();
+		for (JobApplication application : applications) {
+			if (application.id() == null) {
+				continue;
+			}
+			List<SelectionStage> stages = stagesByJob.computeIfAbsent(application.jobId(), pipeline::stagesOf);
+			if (stages.isEmpty()) {
+				continue;
+			}
+			String stageId = currentByApplication.get(Long.valueOf(application.id()));
+			String effective = stageId == null ? stages.get(0).id() : stageId;
+			stages.stream().filter(stage -> stage.id().equals(effective)).findFirst()
+				.ifPresent(stage -> names.put(application.id(), stage.name()));
+		}
+		return names;
+	}
+
 	// ---------- Notas internas ----------
 
 	@Transactional
@@ -324,6 +422,24 @@ public class SelectionProcessService {
 
 	private void recordAudit(String action, String actorId, String applicationId, Map<String, String> metadata) {
 		audit.record(actorId, action, "job_application:" + applicationId, objectMapper.writeValueAsString(metadata));
+	}
+
+	/**
+	 * A candidatura como ela fica DEPOIS da reprovação, para o aviso sair do estado novo e do
+	 * retorno que o candidato tem direito a ler.
+	 *
+	 * <p>Reconstruída em vez de passar pelo {@code withStatus}: o pipeline já aceita reprovar em
+	 * qualquer etapa, e a transição clássica {@code ADVANCED → NOT_SELECTED} não está na tabela do
+	 * domínio — validar aqui transformaria a reprovação pelo board em erro, que é justamente o
+	 * caminho que este aviso veio destravar.
+	 */
+	private static JobApplication rejected(JobApplication application, String reason) {
+		if (application.status() == JobApplicationStatus.NOT_SELECTED) {
+			return application;
+		}
+		return JobApplication.restore(application.id(), application.jobId(), application.userId(),
+			application.message(), application.candidateSnapshot(), application.appliedAt(), application.answers(),
+			JobApplicationStatus.NOT_SELECTED, reason, null);
 	}
 
 	/** Avaliações internas: leitura com quem vê candidatos. Nunca expostas ao candidato. */
