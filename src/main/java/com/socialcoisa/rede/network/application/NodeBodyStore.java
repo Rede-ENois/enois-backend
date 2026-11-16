@@ -42,6 +42,13 @@ public class NodeBodyStore {
 	private final Path root;
 
 	NodeBodyStore(@Value("${rede.storage.node-body-root}") String root) {
+		if (root == null || root.isBlank()) {
+			// `@ConditionalOnProperty` casa com a propriedade PRESENTE, mesmo vazia. Sem esta
+			// recusa, `Path.of("")` resolveria para o diretório corrente e o processo gravaria
+			// corpo de nó no diretório de trabalho — desligado tem de ser ausente, não vazio.
+			throw new IllegalStateException(
+				"rede.storage.node-body-root vazio: omita a propriedade para nao guardar corpo de no");
+		}
 		this.root = Path.of(root).toAbsolutePath().normalize();
 		try {
 			Files.createDirectories(this.root);

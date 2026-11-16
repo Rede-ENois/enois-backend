@@ -10,8 +10,9 @@ Documento do que **existe** no código. A fase 1 (catálogo e rota de corpo) est
 | **réplica** | entregue: o Control Plane designa nós e eles buscam o objeto na própria URL do CP | `StoragePlacementService`, `POST /network/storage/objects/{id}/replica` |
 | **domínios de falha** | parcial: **nunca duas cópias no mesmo nó**; domínio maior que o nó (host físico, rack, operadora) não existe — ver §3 |
 | **checksums** | entregue: o sha-256 medido no CP é a identidade da cópia; a confirmação da réplica é **conferida** contra ele | `StorageCatalogService.confirmReplica` |
-| **scrubbing** | parcial: encontra objetos com menos cópias `OK` que o pedido; **não** relê bytes — ver §3 | `StorageScrubber`, `GET /admin/network/nodes/storage/scrub` |
-| **healing** | **não entregue** — ver §3 | |
+| **scrubbing** | entregue: encontra objetos com menos cópias `OK` que o pedido e relê a **réplica 0** (tamanho + sha-256) — §4.1 | `StorageScrubber`, `GET /admin/network/nodes/storage/scrub` |
+| **healing** | entregue como ato de operador (`POST /admin/network/nodes/storage/heal`), sem agendador — §5.1 | `StorageHealer` |
+| **corpo servível do disco local** | entregue: a raiz do Control Plane e o diretório do nó local — §5.5 | `StorageCatalogService.readBody`, `NodeBodyStore` |
 | **recuperação de objetos** | entregue no sentido de "buscar por conteúdo": `GET /network/storage/objects/by-digest/{sha256}` serve à réplica que conhece o digest e tem a cópia `OK` | `NetworkStorageController` |
 
 ## 2. Decisões que valem por si
@@ -69,8 +70,9 @@ designação existe antes de haver cópia. Aditiva: nenhuma linha existente muda
 ## 4.1. Releitura do corpo (implementada)
 
 `GET /admin/network/nodes/storage/scrub?readBodies=true` vai além de contar linhas: lê de novo o
-arquivo de cada cópia `OK` que este Control Plane hospeda e compara **tamanho e sha-256** com o
-medido que o catálogo guarda. O relatório ganhou `bodiesRelidos` e `divergent[]` (objeto, réplica,
+arquivo da **réplica 0** — a cópia que este Control Plane hospeda na própria raiz — e compara
+**tamanho e sha-256** com o medido que o catálogo guarda. Cópia de outro nó não é relida daqui, e
+por isso também não é acusada (§5.5). O relatório ganhou `bodiesRelidos` e `divergent[]` (objeto, réplica,
 nó, digest esperado, digest encontrado); divergência é auditada como `STORAGE_SCRUB_DIVERGENT`.
 
 Divergência é coisa diferente de lacuna: `underReplicated` diz "falta cópia", `divergent` diz "a
@@ -237,3 +239,51 @@ despacho: `OBJECT_PUT.allowedFor(profiles)`.
 idempotente); `StorageOverviewTests` 9 (1 novo: nó local soma). Harness: 189 asserções, 3 novas.
 Mutações: apagar após confirmar, `objects/` fora do `content_bytes`, escrita não atômica, id sem
 validação, uso contando qualquer arquivo, filtro por nome de perfil — 6 de 6 derrubam.
+
+## 5.5 O Control Plane serve o corpo do disco local
+
+`GET /network/storage/objects/{objectId}` (e o `by-digest`) respondia **só** da raiz do Control
+Plane (`rede.storage.root`). Objeto replicado para o nó que roda na mesma máquina respondia
+`409 STORAGE_REPLICA_ELSEWHERE` mesmo com os bytes a um diretório de distância: o "guardar no
+próprio disco" do §5.4 gravava, mas ninguém lia.
+
+**A ordem de leitura** (`StorageCatalogService.readBody`):
+
+1. `rede.storage.root/<objectId>` — a réplica 0, gravada pelo upload;
+2. `<rede.storage.node-body-root>/<objectId>.bin` — o corpo do nó local, gravado pelo `OBJECT_PUT`;
+3. nenhum dos dois: `409 STORAGE_REPLICA_ELSEWHERE` com o digest, como antes.
+
+A raiz do CP vem primeiro porque é a réplica 0 — o arquivo que o upload mediu. O diretório do nó é
+o mesmo `objects/` do §5.4; `rede.storage.node-body-root` aponta para ele. Sem a propriedade, o
+processo não lê esse diretório (Control Plane puro e suíte). Propriedade **vazia** falha no boot:
+`@ConditionalOnProperty` casa com presente-e-vazia, e sem a recusa `Path.of("")` gravaria no
+diretório de trabalho.
+
+**Tamanho conferido antes de servir.** O download responde com o `Content-Length` medido no upload.
+Se o arquivo local tem outro tamanho, a resposta é `410 STORAGE_BODY_SIZE_MISMATCH` com os dois
+números — um 200 com comprimento errado se rompe no fim, e o cliente não sabe se perdeu bytes da
+rede ou do disco. Corpo do mesmo tamanho com outro conteúdo é o que a varredura encontra pelo
+sha-256; o caminho de download não paga uma leitura inteira para descobrir.
+
+**A varredura relê a réplica 0, não todas as cópias.** Antes ela percorria cada cópia `OK` e relia o
+**mesmo** arquivo local uma vez por colocação: com a raiz vazia, acusava de divergente a cópia de
+outro nó que está íntegra, e `bodiesRelidos` contava N leituras de um arquivo só. E, desde que o
+corpo do nó local passou a ser servido, reler por `readBody` esconderia o sumiço da réplica 0 atrás
+de um corpo que o catálogo não atribui a esta instalação. Agora `openReplicaZeroBody` não tem
+fallback, e a divergência é atribuída à réplica 0 — a única que este processo pode reler.
+
+**O que continua fora:** reler o corpo do nó local na varredura. O catálogo não diz qual id de nó
+roda nesta máquina, então a cópia do diretório local não tem colocação a que atribuir a divergência.
+Quem confere a cópia na gravação é o `confirmReplica` (bytes + sha-256 do que o nó mediu).
+
+**A leitura não cria diretório.** `readBody` resolve `rede.storage.root` direto, sem o
+`createDirectories` do `root()`: um GET num Control Plane que nunca recebeu upload não escreve em
+disco, e uma falha de disco responde 409/410 em vez de virar 500 num download.
+
+**Verificação:** `StorageLocalBodyServingTests` 7 (serve do nó local; 409 sem corpo; raiz do CP tem
+prioridade; truncado é 410; sem nó local lê a raiz; réplica 0 não cai para o nó; leitura não cria o
+diretório);
+`StorageScrubberReadBackTests` 5 (1 novo: sumiço da réplica 0 não é escondido e a cópia de outro nó
+não é acusada); `NetworkStorageReplicationTests` 8 (1 novo pela rota real). Mutações: sem fallback,
+ordem invertida, sem conferência de tamanho, réplica 0 com fallback, varredura relendo todas as
+cópias, `readBody` voltando a chamar `bodyPath` — 6 de 6 derrubam.

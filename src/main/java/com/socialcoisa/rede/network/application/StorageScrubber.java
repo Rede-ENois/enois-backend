@@ -20,10 +20,10 @@ import com.socialcoisa.rede.shared.web.ApiException;
  * Varredura de durabilidade: encontra os objetos que o catálogo diz {@code STORED} mas que não têm
  * as cópias que a configuração pede.
  *
- * <p>É a parte de "scrubbing" da fase 3 que dá para fazer com o que existe. Ela <b>não</b> lê byte
- * por byte comparando hash — isso exige que a réplica sirva o corpo para o Control Plane, e é o
- * próximo passo (o contrato de leitura por digest já existe, {@code GET /objects/by-digest}). O que
- * ela faz é o que a colocação permite afirmar:</p>
+ * <p>É a parte de "scrubbing" da fase 3 que dá para fazer com o que existe. Ela conta as cópias
+ * {@code OK} e, opcionalmente, relê a <b>réplica 0</b> — o arquivo da raiz deste Control Plane —
+ * comparando tamanho e sha-256 com o medido. Cópia de outro nó não é relida daqui: o Control Plane
+ * não inicia conexão para o nó (NAT, e o brief proíbe cadastrar endereço). O que ela afirma:</p>
  *
  * <ul>
  * <li>conta só cópias {@code OK}: designada e não confirmada não é cópia, e é justamente o caso que
@@ -86,10 +86,11 @@ public class StorageScrubber {
 	/**
 	 * Varredura de durabilidade com o passo de releitura.
 	 *
-	 * <p>{@code readBodies} releia o corpo de cada cópia {@code OK} que este Control Plane hospeda e
-	 * compara com o sha-256 do catálogo. Sem ele, a varredura só conta linhas: um arquivo corrompido
-	 * no disco, truncado por um <i>crash</i> ou trocado por outro processo continua contando como
-	 * cópia confirmada, e o catálogo promete durabilidade que não tem.</p>
+	 * <p>{@code readBodies} relê o corpo da <b>réplica 0</b> — a cópia que este Control Plane
+	 * hospeda na própria raiz — e compara com o sha-256 do catálogo. Sem ele, a varredura só conta
+	 * linhas: um arquivo corrompido no disco, truncado por um <i>crash</i> ou trocado por outro
+	 * processo continua contando como cópia confirmada, e o catálogo promete durabilidade que não
+	 * tem.</p>
 	 *
 	 * <p>Cópia de outro nó <b>não</b> é relida aqui: o Control Plane não inicia conexão para o nó
 	 * (o nó atrás de NAT só faz saída, e o brief proíbe cadastro de endereço). Reler o que está em
@@ -128,33 +129,36 @@ public class StorageScrubber {
 						confirmed.stream().map(StoragePlacement::nodeId).toList()));
 				}
 				if (readBodies) {
-					for (StoragePlacement copia : confirmed) {
-						// Só o que está NESTE Control Plane pode ser relido: o corpo dos outros nós não fica aqui.
-						// Não há id fixo de CP — qualquer nó pode gravar pelo PUT e o corpo fica no
-						// diretório desta instalação. Arquivo ausente NÃO é pulado: é justamente a
-						// divergência que a releitura existe para encontrar (o catálogo promete uma
-						// cópia que o disco não tem), e quem a detecta é o readBody logo abaixo.
-						if (copia.sha256() == null) {
-							continue;
-						}
+					// A única cópia que este processo pode reler é a réplica 0: o arquivo da raiz
+					// deste Control Plane, gravado pelo upload. As demais estão no disco de nós que
+					// o CP não alcança (o brief proíbe cadastrar endereço; o nó só faz saída).
+					// Antes o laço percorria TODAS as cópias OK e relia o mesmo arquivo local para
+					// cada uma: com a raiz vazia, acusava de divergente a cópia de outro nó que está
+					// íntegra. E, desde que o corpo do nó local passou a ser servido, reler por
+					// `readBody` esconderia o sumiço da réplica 0 atrás do corpo do nó.
+					StoragePlacement local = confirmed.stream()
+						.filter(copia -> copia.replica() == 0)
+						.findFirst()
+						.orElse(null);
+					if (local != null && local.sha256() != null) {
 						relidos++;
-						try (InputStream body = bodies.readBody(id)) {
+						try (InputStream body = bodies.openReplicaZeroBody(id)) {
 							StorageCatalogService.Measured lido = StorageCatalogService.measureStream(body);
-							if (!lido.sha256().equalsIgnoreCase(copia.sha256()) || lido.bytes() != copia.bytes()) {
-								divergentes.add(new Report.Divergent(id, copia.replica(), copia.nodeId(),
-									copia.sha256(), lido.sha256()));
+							if (!lido.sha256().equalsIgnoreCase(local.sha256()) || lido.bytes() != local.bytes()) {
+								divergentes.add(new Report.Divergent(id, local.replica(), local.nodeId(),
+									local.sha256(), lido.sha256()));
 							}
 						}
 						catch (ApiException sumiu) {
 							// Corpo ausente ou ilegível é a mesma divergência vista por outro ângulo: o
 							// catálogo promete uma cópia que o disco não tem. Digest vazio representa
 							// "não consegui ler", nunca um digest calculado.
-							divergentes.add(new Report.Divergent(id, copia.replica(), copia.nodeId(),
-								copia.sha256(), ""));
+							divergentes.add(new Report.Divergent(id, local.replica(), local.nodeId(),
+								local.sha256(), ""));
 						}
 						catch (IOException closeFailed) {
-							divergentes.add(new Report.Divergent(id, copia.replica(), copia.nodeId(),
-								copia.sha256(), ""));
+							divergentes.add(new Report.Divergent(id, local.replica(), local.nodeId(),
+								local.sha256(), ""));
 						}
 					}
 				}
