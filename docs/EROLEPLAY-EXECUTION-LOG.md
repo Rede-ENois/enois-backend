@@ -828,6 +828,19 @@ NPCs)" como trabalho pendente — resíduo do planejamento anterior à Fase 7. O
 exatamente isso e está marcado como feito. Parágrafo removido: documento que descreve como
 pendente o que o código entrega é bug de documentação (AGENTS.md). Sem mudança de código.
 
+
+### Isolamento de teste: região evacuada vazava entre classes (rodada seguinte)
+
+O CI do PR de encerramento falhou em `NetworkStorageBalanceTests` (classe fora do diff): `capacityMb`
+esperado 102400, veio 0. Não era flake aleatório — reproduzi de forma determinística rodando
+`NetworkRegionTests` e, em seguida, a classe, na mesma base: **18 testes, 1 falha**, com
+`nodesDeclaringCapacity: 0` no corpo. Causa-raiz: `network_region_states` é estado **global** da
+base H2 compartilhada; `NetworkRegionTests` declara a região `sudeste` fora de serviço e limpava a
+tabela só no `@BeforeEach`, nunca no fim — a declaração sobrevivia à classe e o nó de `sudeste` do
+teste seguinte era descartado (região fora de serviço não soma capacidade). Correção na causa:
+`@AfterEach` devolvendo `network_region_states`, e a limpeza extraída para não repetir. O par que
+falhava passou a **18/18, BUILD SUCCESS**. Documentado o padrão em `docs/TESTING.md`.
+
 ---
 
 ### Encerramento (rodada seguinte)

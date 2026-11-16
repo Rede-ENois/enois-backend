@@ -12,6 +12,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -67,7 +68,7 @@ class NetworkRegionTests {
 	@BeforeEach
 	void setUp() {
 		auth = new TestAuthHelper(mockMvc, objectMapper);
-		jdbc.update("delete from network_region_states");
+		limparEstadoDeRegiao();
 		jdbc.update("delete from network_tasks");
 		jdbc.update("delete from network_state");
 		jdbc.update("delete from network_node_keys");
@@ -75,6 +76,16 @@ class NetworkRegionTests {
 		jdbc.update("delete from network_nodes");
 		jdbc.update("delete from audit_logs where action like 'NETWORK_REGION_%' "
 				+ "or action = 'NETWORK_TASK_REGION_EVACUATED'");
+	}
+
+	/**
+	 * A base H2 é compartilhada entre as classes de teste: região evacuada aqui mudaria o resultado
+	 * de quem roda depois (um nó em região fora de serviço não soma capacidade nem recebe tarefa).
+	 * Limpar só antes do próprio teste deixava a declaração para o próximo.
+	 */
+	@AfterEach
+	void limparEstadoDeRegiao() {
+		jdbc.update("delete from network_region_states");
 	}
 
 	// ---------------------------------------------------------------- a região sai
