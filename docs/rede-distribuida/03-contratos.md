@@ -164,15 +164,24 @@ não muda a assinatura. O `term` continua fechando a linha, e por isso o formato
 `ttlSeconds` **antes** dele, não depois: runtime antigo que só sabe ler até o termo vê um documento
 de formato 3 e recusa, em vez de ler um `ttl` no lugar do termo. O formato 4 seguiu a mesma regra e
 inseriu `allowedRoutes` logo depois de `allowedTasks`, e o formato 5 pôs `diskFreeMb` **depois** do
-termo — o campo novo nunca desloca o último. É por estar dentro da assinatura que o nó consegue
-recusar termo que regride e TTL que o Control Plane não emitiu, conferindo contra o pino em vez de
-confiar no transporte.
+termo — o campo novo nunca desloca o último. O formato 6 seguiu a mesma regra e pôs `diskTotalMb`
+depois do disco livre. É por estar dentro da assinatura que o nó consegue recusar termo que regride
+e TTL que o Control Plane não emitiu, conferindo contra o pino em vez de confiar no transporte.
 
 `diskFreeMb` é **medido**, e não medido é escrito como a palavra `ausente` na linha assinada, nunca
 como `0`. Zero é "sem espaço livre"; ausente é "o nó não mediu" (runtime anterior à V321, ou `df`
 que não respondeu). Assinar os dois igual tornaria indistinguível, para quem verifica, um nó
 prestes a encher o disco de um nó sobre o qual não se sabe nada — e é essa diferença que decide se
 o nó ainda pode receber corpo.
+
+`diskTotalMb` é o **tamanho** do volume medido na mesma chamada do `df` que mede o livre, e existe
+para a conta do §7 do brief do Storage: o **espaço reservado pelo participante** é
+`diskTotalMb - diskMb`. Com só o declarado e o livre não havia como dizer quanto o participante
+guardou para si ("2 TB de disco, 500 GB reservados, 1,5 TB oferecidos"). Mesma regra de ausência: é
+`ausente` quando o `df` não respondeu, nunca `0`, que afirmaria um volume de tamanho zero. O painel
+expõe a conta por nó em `GET /admin/network/nodes/storage/overview` (campo `disks[]`), com
+`reservedMb` nulo quando o nó não reportou o tamanho e nunca negativo — participante que cedeu mais
+do que o volume tem aparece com reserva zero e a divergência visível no declarado contra o total.
 
 `allowedRoutes` é a lista de **destinos que o nó pode chamar**, no formato `nome=url`
 (`["catalogo=https://catalogo.exemplo/api"]`). Ela entra no payload e **na assinatura**, e é o que

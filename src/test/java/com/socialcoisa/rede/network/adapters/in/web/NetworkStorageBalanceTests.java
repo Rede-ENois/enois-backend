@@ -129,11 +129,40 @@ class NetworkStorageBalanceTests {
 			.andExpect(jsonPath("$.freeMb").value(4000))
 			.andExpect(jsonPath("$.nodesDeclaringCapacity").value(1))
 			.andExpect(jsonPath("$.unmeasuredNodes").value(0))
+			// A reserva de cada volume vai junto: total não reportado (V341 não aplicada a este nó)
+			// é linha com totalMb e reservedMb nulos — nunca zero, que diria "não reservou nada".
+			.andExpect(jsonPath("$.disks[0].nodeId").value("nd_ov"))
+			.andExpect(jsonPath("$.disks[0].totalMb").doesNotExist())
+			.andExpect(jsonPath("$.disks[0].reservedMb").doesNotExist())
 			// Só a cópia OK: a designação de 999 bytes não é espaço ocupado.
 			.andExpect(jsonPath("$.usedBytes").value(10))
 			.andExpect(jsonPath("$.objectsByState.STORED").value(1))
 			.andExpect(jsonPath("$.copiesByState.PENDING_REMOTE").value(1))
 			.andExpect(jsonPath("$.replicasExpected").value(2));
+	}
+
+	@Test
+	void aVisaoDeStorageMostraReservaComVolumeMedido() throws Exception {
+		String admin = adminToken();
+		insertNode("nd_res");
+		// 2 TB de volume, 1,5 TB cedidos: reserva de 0,5 TB — a conta do brief §7, com o número que
+		// o próprio nó mediu (V341), não o que ele prometeu.
+		jdbc.update("update network_nodes set observed_disk_free_mb = 400000, observed_disk_total_mb = 2097152 "
+			+ "where id = 'nd_res'");
+		jdbc.update("""
+			insert into network_storage_objects (id, bucket, object_key, content_type, bytes, sha256, state,
+			  created_by, created_at, updated_at)
+			values ('sob_res', 'fotos', 'r.jpg', 'image/jpeg', 10, repeat('b', 64), 'STORED', 'u', now(3), now(3))
+			""");
+
+		mockMvc.perform(get("/admin/network/nodes/storage/overview").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.disks[0].nodeId").value("nd_res"))
+			.andExpect(jsonPath("$.disks[0].declaredMb").value(102400))
+			.andExpect(jsonPath("$.disks[0].totalMb").value(2097152))
+			.andExpect(jsonPath("$.disks[0].freeMb").value(400000))
+			.andExpect(jsonPath("$.disks[0].reservedMb").value(2097152 - 102400))
+			.andExpect(jsonPath("$.unmeasuredDiskTotals").value(0));
 	}
 
 	@Test

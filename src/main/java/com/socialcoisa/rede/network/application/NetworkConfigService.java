@@ -69,8 +69,14 @@ public class NetworkConfigService {
 	 * não existir. Entra no FIM da linha, depois do termo: é a mesma regra dos formatos 2, 3 e 4 —
 	 * campo novo nunca desloca o último. A posição não é tratamento especial do termo, é a regra
 	 * que mantém legível quem reconstrói a linha.</p>
+	 *
+	 * <p>6: {@code diskTotalMb} entrou no payload e na linha canônica — o <b>tamanho</b> do volume,
+	 * ao lado do {@code diskFreeMb} que o nó mede. Com só os dois valores de antes (declarado e
+	 * livre) não havia como dizer quanto o participante <b>reservou para si</b>: a reserva do brief
+	 * do Storage §7 é {@code total - declarado}, e sem o total ela não existe. Entra no fim da
+	 * linha, depois do disco livre, pela mesma regra dos formatos 2 a 5.</p>
 	 */
-	static final int FORMAT_VERSION = 5;
+	static final int FORMAT_VERSION = 6;
 
 	private final Clock clock;
 	private final NetworkNodeRepository nodes;
@@ -337,14 +343,15 @@ public class NetworkConfigService {
 		// O disco declarado é o teto; o medido é a folga. Os dois vão para o nó porque ele decide o
 		// mesmo que o controle decide: cache e réplica só gravam o que cabe no que existe.
 		var limits = new LimitsView(node.declaredCpuCores(), node.declaredMemoryMb(), node.declaredDiskMb(),
-			node.observedDiskFreeMb(), node.declaredBandwidthMbps());
+			node.observedDiskFreeMb(), node.observedDiskTotalMb(), node.declaredBandwidthMbps());
 		// O termo vai no documento e na assinatura: é o que deixa a regra do nó ("termo só sobe")
 		// verificável contra quem assinou, não contra o transporte.
 		var authority = authorities.current()
 			.orElseGet(() -> new NetworkAuthorityRepository.AuthorityRecord(0, null, null));
 		var fields = new NetworkConfigSigner.SignedFields(FORMAT_VERSION, stamp.version(), node.id(), profiles,
 			limits.cpuCores(), limits.memoryMb(), limits.diskMb(), limits.bandwidthMbps(), allowedTasks,
-			allowedRoutes, stamp.issuedAt().toString(), ttlSeconds, authority.term(), limits.diskFreeMb());
+			allowedRoutes, stamp.issuedAt().toString(), ttlSeconds, authority.term(), limits.diskFreeMb(),
+			limits.diskTotalMb());
 		String signature = sign(fields.canonical());
 		return new NodeConfigView(node.id(), node.status().name(), operable, FORMAT_VERSION, stamp.version(),
 			profiles, limits, allowedTasks, allowedRoutes, node.region(), node.country(),
@@ -391,8 +398,14 @@ public class NetworkConfigService {
 	 *
 	 * <p>O nó precisa dos dois para a mesma decisão que o Control Plane já toma: não gravar o que
 	 * não cabe. O teto diz quanto pode ocupar; a folga diz quanto ainda existe.</p>
+	 *
+	 * <p>{@code diskTotalMb} é o <b>tamanho</b> do volume medido na mesma chamada (formato 6). Existe
+	 * para que o nó possa dizer ao participante quanto ele reservou para si, com o número que o
+	 * próprio Control Plane usa: {@code total - diskMb}. Nulo quando o Control Plane não conhece o
+	 * tamanho — runtime que ainda não reportou —, e nunca igual a zero.</p>
 	 */
-	public record LimitsView(int cpuCores, int memoryMb, int diskMb, Long diskFreeMb, int bandwidthMbps) {
+	public record LimitsView(int cpuCores, int memoryMb, int diskMb, Long diskFreeMb, Long diskTotalMb,
+			int bandwidthMbps) {
 	}
 
 	/**

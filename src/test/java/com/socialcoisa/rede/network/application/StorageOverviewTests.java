@@ -69,6 +69,13 @@ class StorageOverviewTests {
 		return node(id, NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_STORAGE), declaredMb, freeMb, NOW);
 	}
 
+	/** Nó de armazenamento com o TAMANHO do volume medido, além do livre. */
+	private static NetworkNode storageComTotal(String id, int declaredMb, Long freeMb, Long totalMb) {
+		return new NetworkNode(id, "no-" + id, "user-" + id, NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_STORAGE),
+			"sudeste", "BR", "1.0.0", NOW, 4, 4096, declaredMb, 100, null, null, null, null, freeMb, totalMb, 0,
+			null, null);
+	}
+
 	@Test
 	void disponivel_e_o_medido_no_heartbeat_nao_o_declarado() {
 		when(nodes.list(anyInt())).thenReturn(List.of(storage("nd_a", 102400, 5000L), storage("nd_b", 204800, 3000L)));
@@ -158,6 +165,55 @@ class StorageOverviewTests {
 		assertThat(c.declaredMb()).isEqualTo(614400);
 		assertThat(c.freeMb()).isEqualTo(45000L);
 		assertThat(c.declaringNodes()).isEqualTo(2);
+	}
+
+	/**
+	 * Brief §7: "2 TB de disco, 500 GB reservados pessoalmente, 1,5 TB oferecidos".
+	 *
+	 * <p>A reserva é {@code total - declarado}. Sem o total medido, ela não existe — e o teste com os
+	 * DOIS nós distintos prova que a conta é de cada volume, não uma soma: 2 TB com 1,5 TB cedidos
+	 * reserva 0,5 TB, e 500 GB com 500 GB cedidos reserva zero. Somar os totais daria 2,5 TB e
+	 * somar declarados 2 TB, e o resultado seria o mesmo por acidente — é por isso que os lados são
+	 * desiguais.</p>
+	 */
+	@Test
+	void a_reserva_e_a_conta_de_cada_volume_total_menos_declarado() {
+		when(nodes.list(anyInt())).thenReturn(List.of(
+			storageComTotal("nd_grande", 1536000, 900000L, 2097152L),
+			storageComTotal("nd_pequeno", 512000, 400000L, 512000L)));
+
+		StorageOverviewNodes.Capacity c = overviewNodes.capacity();
+
+		assertThat(c.disks()).extracting(StorageOverviewNodes.Disco::nodeId).containsExactly("nd_grande", "nd_pequeno");
+		assertThat(c.disks().get(0).reservedMb()).isEqualTo(2097152L - 1536000L);
+		assertThat(c.disks().get(1).reservedMb()).isZero();
+		assertThat(c.unmeasuredDiskTotals()).isZero();
+	}
+
+	@Test
+	void sem_total_medido_a_reserva_e_desconhecida_e_nao_zero() {
+		// Runtime anterior à V341: conhece o livre, não o tamanho. Zero diria "não reservou nada".
+		when(nodes.list(anyInt())).thenReturn(List.of(storage("nd_a", 102400, 5000L)));
+
+		StorageOverviewNodes.Capacity c = overviewNodes.capacity();
+
+		assertThat(c.disks()).hasSize(1);
+		assertThat(c.disks().get(0).totalMb()).isNull();
+		assertThat(c.disks().get(0).reservedMb()).isNull();
+		assertThat(c.unmeasuredDiskTotals()).isEqualTo(1);
+		// O livre continua sendo conhecido: os dois "sem medida" não se confundem.
+		assertThat(c.unmeasuredNodes()).isZero();
+	}
+
+	@Test
+	void participante_que_cedeu_mais_que_o_volume_tem_reserva_zero_e_nao_negativa() {
+		// Divergência entre prometido e medido é diagnóstico; reserva negativa esconderia o erro.
+		when(nodes.list(anyInt())).thenReturn(List.of(storageComTotal("nd_a", 2048000, 50000L, 512000L)));
+
+		StorageOverviewNodes.Capacity c = overviewNodes.capacity();
+
+		assertThat(c.disks().get(0).reservedMb()).isZero();
+		assertThat(c.disks().get(0).totalMb()).isEqualTo(512000L);
 	}
 
 	@Test

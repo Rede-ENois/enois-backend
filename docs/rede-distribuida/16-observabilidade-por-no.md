@@ -31,13 +31,19 @@ Então o nó **empurra** a observação no heartbeat que ele já faz a cada cicl
 ```json
 POST /network/nodes/heartbeat
 { "runtimeVersion": "…",
-  "observed": { "cpuPercent": 12.5, "memoryMb": 2048, "runningTasks": 0, "diskFreeMb": 9000 },
+  "observed": { "cpuPercent": 12.5, "memoryMb": 2048, "runningTasks": 0, "diskFreeMb": 9000, "diskTotalMb": 40000 },
   "logs": [ { "level": "INFO", "message": "tarefa tk_1 concluida", "at": "2026-11-12T12:00:00Z" } ] }
 ```
 
 O efeito visível é o de um quadro ao vivo (atualizado a cada heartbeat, e a tela recarrega a rota);
 o caminho é o que a arquitetura permite. `logs` é opcional: um runtime anterior a esta fase
 continua funcionando e simplesmente não alimenta o console.
+
+`diskTotalMb` (V341, formato 6 da config assinada) é o **tamanho** do volume, medido na mesma
+chamada do `df` que mede o livre. Ele não entra na série de amostras — é tamanho, não uso —, mas
+fica em `observed_disk_total_mb` do nó para a conta do §7 do brief do Storage, que precisa de
+`total - declarado` para dizer o espaço reservado pelo participante. Ausente é ausente: runtime
+que não mediu não inventa `0`.
 
 **O console do nó não é auditoria.** É uma janela curta, apagada por teto na escrita (abaixo). O
 registro de auditoria (`audit_*`) tem outra promessa e não recebe estas linhas.
