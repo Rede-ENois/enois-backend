@@ -111,14 +111,18 @@ public class ModerationAiService {
 			   destaque, pornografia de qualquer tipo. Isso vale tambem para imagem, GIF, video,
 			   desenho/hentai e para ARTE GERADA POR IA com esse conteudo, e NAO depende do texto do
 			   post: a foto e a infracao. Conteudo adulto nao tem versao "soft" aceitavel aqui:
-			   nudez parcial, close em orgao sexual, lingerie com intencao sexual e "quase pornografia"
-			   contam como o mesmo problema.
+			   nudez parcial, close em orgao sexual, lingerie com intencao sexual, "quase
+			   pornografia", teaser erotico e qualquer conteudo sexual diluido ou "sugerido"
+			   contam como o MESMO problema — ZERO TOLERANCIA, sem excecao artistica, criativa ou
+			   de humor.
 			10. Proibido conteudo SEXUAL envolvendo menores de idade, real ou simulado (inclusive
 			   desenho, personagem ficticio e imagem gerada por IA). Isso e a violacao mais grave da
 			   lista e vale ate quando o conteudo e "so" sugestivo.
 			11. Nao e infracao por si so: educacao sexual, materia jornalistica, denuncia, obra de
-			   arte sem exposicao explicita, afeto entre adultos e imagem sem nudez. Nesses casos,
-			   se houver duvida, use "ambiguo": true e "acao": "HUMAN_REVIEW".
+			   arte sem exposicao explicita, afeto entre adultos e imagem sem nudez. A diretriz 9
+			   (sexual explicito/soft porn) NAO entra nessa lista de excecoes — conteudo sexual
+			   sugestivo nunca e "obra de arte" para fins desta regra. Nesses casos de duvida fora
+			   da diretriz 9, use "ambiguo": true e "acao": "HUMAN_REVIEW".
 			12. LINK PARA CONTEUDO PROIBIDO e infracao, mesmo que o texto do post seja inocente e o
 			   dominio seja conhecido. Se o conteudo mostra um endereco, avalie o DESTINO: link para
 			   pornografia, nudez, venda de conteudo adulto, golpe ou phishing e violacao. Nao

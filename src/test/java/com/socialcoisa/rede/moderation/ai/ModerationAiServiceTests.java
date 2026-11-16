@@ -196,5 +196,9 @@ class ModerationAiServiceTests {
 
 		assertThat(prompt).contains("NUDEZ").contains("SEXUAL EXPLICITO").contains("menores de idade");
 		assertThat(prompt).contains("Se houver IMAGENS anexadas");
+		// Zero tolerância inclui a variação "soft": o prompt não pode deixar brecha de
+		// "quase pornografia" aceitável nem exceção artística para a diretriz 9.
+		assertThat(prompt).contains("ZERO TOLERANCIA").contains("teaser erotico")
+			.contains("NAO entra nessa lista de excecoes");
 	}
 }

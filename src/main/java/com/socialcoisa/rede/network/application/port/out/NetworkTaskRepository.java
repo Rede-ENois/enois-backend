@@ -95,6 +95,9 @@ public interface NetworkTaskRepository {
 	 */
 	Map<String, Long> countDoneByNode(Collection<String> nodeIds);
 
+	/** Falhas definitivas ({@code FAILED} e {@code DEAD}) por nó. Nó sem falha não aparece. */
+	Map<String, Long> countFailedByNode(Collection<String> nodeIds);
+
 	/**
 	 * Designa a tarefa a um nó, subindo a tentativa. Condicional: só muda se a tarefa ainda estiver
 	 * PENDING e a tentativa esperada for a atual.

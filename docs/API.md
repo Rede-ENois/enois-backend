@@ -214,7 +214,7 @@ Cidade e UF (`city`, `state`) são estruturadas e separadas do `location` livre,
 ```
 
 Tipos: `INSIGHT`, `ARTICLE`, `QUESTION`, `PROJECT`, `OPPORTUNITY`, `PAGE`, `NEWS`, `TUTORIAL`,
-`REVIEW`, `DIVERTIDO`, `MOMENT`, `BLOG`, `BUSINESS`, `POLL`
+`REVIEW`, `DIVERTIDO`, `MOMENT`, `BLOG`, `BUSINESS`, `POLL`, `COMPLAINT`
 
 Assunto (`topic`): obrigatório em post avulso, um da taxonomia (`ContentTaxonomy.TOPICS`). Sem ele,
 `400 TOPIC_REQUIRED`; fora da lista, `400 INVALID_TOPIC`. Post de comunidade ou canal herda o assunto
@@ -244,11 +244,11 @@ Fora de `POLL` o campo `pollOptions` é ignorado (não vira linha no banco). O p
 { "option": 2 }
 ```
 
-`option` é a **posição** da alternativa (0..5). O voto é **único e definitivo**: uma pessoa, um
-voto, sem troca depois. O segundo voto — na mesma alternativa ou em outra — responde
-**409 `ALREADY_VOTED`**, e a contagem não muda. Alternativa fora do intervalo (ou corpo sem
-`option`) responde 400 `INVALID_POLL_OPTION`; post que não é enquete responde 400 `NOT_A_POLL`.
-Sem sessão: 401. A resposta é o estado atualizado da enquete:
+`option` é a **posição** da alternativa (0..5). Uma pessoa, um voto — mas o voto **pode ser
+trocado**: enviar outra posição move o voto (a contagem antiga cai, a nova sobe, o total não
+cresce), e repetir a mesma posição é idempotente, sem mudar nada. Alternativa fora do intervalo
+(ou corpo sem `option`) responde 400 `INVALID_POLL_OPTION`; post que não é enquete responde
+400 `NOT_A_POLL`. Sem sessão: 401. A resposta é o estado atualizado da enquete:
 
 ```json
 { "options": ["Java","Kotlin","Go","TypeScript"], "counts": [1,0,0,0], "myVote": 0, "totalVotes": 1 }
@@ -831,6 +831,32 @@ com a autorização de sempre. O aviso sai depois do commit, então o refetch j�
 5 streams por usuário (abas/aparelhos); o sexto fecha o mais antigo. Sem sessão a resposta é o status
 puro (401), sem corpo. O registro de streams vive na memória da instância: correto enquanto a
 produção roda um backend só; uma segunda instância exige difusão entre instâncias antes de escalar.
+
+### Citações no histórico de mensagens
+
+`GET /api/conversations/{conversationId}/messages` retorna `{items, nextCursor}`. Cada item
+mantém `replyToId` e traz `replyTo: null` quando não há citação disponível. Quando presente,
+`replyTo` contém exatamente estes campos:
+
+```text
+{ id: string, from: string, text: string, e2e: boolean,
+  iv: string | null, encryptedKeys: string | null,
+  mediaIds: string[], mediaSpoiler: boolean }
+```
+
+- `id` e `from` identificam a mensagem original e sua conta remetente.
+- Com `e2e: true`, `text` é o ciphertext integral, sem truncamento. `iv` e `encryptedKeys`
+  preservam os valores da mensagem original. `encryptedKeys` é uma **string contendo JSON**,
+  como no item principal, não um objeto JSON aninhado. Mensagens cifradas antigas podem ter
+  `encryptedKeys: null` e continuar usando a chave da conversa no cliente.
+- Com `e2e: false`, a prévia preserva o contrato legado: textos acima de 100 caracteres
+  retornam os primeiros 97 seguidos de `...`; textos até 100 ficam intactos.
+- `mediaIds` e `mediaSpoiler` pertencem à mensagem citada, inclusive nas mensagens só com mídia.
+- A citação pode estar fora da página atual. Só é preenchida para mensagem da mesma conversa
+  que não foi apagada para quem consulta. Mensagem ausente ou indisponível deixa `replyTo: null`,
+  sem remover a resposta nem alterar seu `replyToId`.
+- A leitura continua exigindo sessão válida (`401` sem sessão) e participação na conversa
+  (`403` para não participante). O servidor não decifra o conteúdo.
 
 ---
 
@@ -1665,3 +1691,106 @@ tokens de cenário) é do mestre. Toda escrita exige `Idempotency-Key`.
 | `TOKEN_POSITION_INVALID` | 400 | Posição fora de −9999..9999 |
 | `TOKEN_NOT_FOUND` | 404 | Token inexistente nesta mesa |
 | `CALL_KIND_INVALID` | 400 | Tipo de chamada fora de `AUDIO`/`VIDEO` |
+
+## Éroleplay — World Builder (atlas do mundo)
+
+Prefixo do controller: `/roleplay/campaigns/{campaignId}/world` (o gateway remove `/api`).
+Leitura e escrita exigem sessão; leitura exige participação na campanha — o atlas nunca sai dela.
+Criar exige participação (`POST_IN_CAMPAIGN`); editar/apagar é do autor no que é dele e do mestre
+em tudo. Toda escrita exige `Idempotency-Key`.
+
+### Rotas
+
+| Método | Rota | Quem | O que faz |
+|---|---|---|---|
+| `POST` | `` | participante | Registra entrada; corpo `{ "kind", "title", "body"?, "tags"?, "sheetId"? }` |
+| `GET` | `` | participante | O atlas, filtrável: `?kind=LOCALE|CHARACTER|ITEM|PLOT|LORE` e `?q=texto` (título, corpo e tags) |
+| `GET` | `/{entryId}` | participante | Uma entrada; entrada de outra campanha é 404 |
+| `PUT` | `/{entryId}` | autor; mestre | Reescreve conteúdo (mesmos campos do POST) |
+| `DELETE` | `/{entryId}` | autor; mestre | Apaga a entrada |
+
+### Regras
+
+- Tipos: `LOCALE` (local), `CHARACTER` (NPC), `ITEM` (item), `PLOT` (pista/rumor), `LORE` (história
+  do mundo). Título 1–120; corpo até 20.000 (nulo/vazio = sem corpo); tags minúsculas, sem
+  repetição, soma até 600 caracteres.
+- `sheetId` vincula a ficha de um personagem da MESMA campanha — id fora dela recusa com 404. O id
+  da ficha NUNCA sai na resposta: sai `linkedSheetName` (nome do personagem) e `linkedToSheet`
+  (booleano).
+- A resposta da entrada: `{ id, campaignId, kind, title, body, tags, linkedToSheet, linkedSheetName,
+  authorId, createdAt, updatedAt }`.
+
+### Códigos de erro próprios
+
+| Código | HTTP | Quando |
+|---|---|---|
+| `WORLD_KIND_REQUIRED` | 400 | Entrada sem tipo |
+| `WORLD_KIND_INVALID` | 400 | Tipo fora dos cinco |
+| `WORLD_TITLE_REQUIRED` | 400 | Entrada sem título |
+| `WORLD_TITLE_TOO_LONG` | 400 | Título acima de 120 caracteres |
+| `WORLD_BODY_TOO_LONG` | 400 | Corpo acima de 20.000 caracteres |
+| `WORLD_TAGS_TOO_LONG` | 400 | Tags somando acima de 600 caracteres |
+| `WORLD_ENTRY_NOT_FOUND` | 404 | Entrada inexistente nesta campanha (inclui a de outra campanha) |
+| `SHEET_NOT_FOUND` | 404 | Ficha vinculada inexistente nesta campanha |
+| `FORBIDDEN` | 403 | Editar/apagar entrada de outra pessoa sem ser mestre; ler sem participar |
+
+## Éroleplay — biblioteca de personagens (Fase 8)
+
+A biblioteca é o catálogo público de fichas publicadas. O que o catálogo expõe é uma **cópia**
+da ficha: o recorte que o dono já abriu à campanha, com id de publicação próprio — nunca o id da
+ficha, da campanha ou do dono. Leitura pública, escrita só pelo dono da ficha.
+
+### Rotas
+
+| Método | Rota | Quem pode |
+|---|---|---|
+| GET | `/api/roleplay/library` | Público — catálogo com busca (`?q=`) e cursor (`?before=`, `?limit=`) |
+| GET | `/api/roleplay/library/{publicationId}` | Público — uma publicação |
+| POST | `/api/roleplay/campaigns/{id}/sheets/{sheetId}/publish` | Dono da ficha (mestre NÃO publica ficha alheia) |
+| DELETE | `/api/roleplay/campaigns/{id}/sheets/{sheetId}/publish` | Dono da publicação |
+
+Publicar e despublicar exigem cabeçalho `Idempotency-Key` (o mesmo da rota, na resposta de erro
+`IDEMPOTENCY_KEY_REQUIRED` se faltar).
+
+### POST /api/roleplay/campaigns/{id}/sheets/{sheetId}/publish
+
+Sem corpo. A cópia recebe exatamente o recorte `MEMBER` da ficha na hora da publicação — não é
+referência viva: mudanças posteriores na ficha só entram com republicação. Republicar a mesma
+ficha atualiza a MESMA publicação (mesmo id, mesmo `publishedAt`, `updatedAt` novo). Resposta
+`201`:
+
+```json
+{
+  "id": "roleplay_library_…",
+  "characterName": "Iara, a Cartógrafa",
+  "gameSystem": "d20-generico",
+  "fields": { "forca": "12", "destreza": "14" },
+  "publishedAt": "2026-11-15T00:00:00Z",
+  "updatedAt": "2026-11-15T00:00:00Z"
+}
+```
+
+`DELETE` na mesma rota devolve `{ "status": "unpublished" }` e apaga só a cópia — a ficha
+continua na campanha.
+
+### Regras
+
+- Fechar todos os campos e publicar recusa com `LIBRARY_EMPTY` — cópia sem conteúdo público não
+  existe.
+- Ficha inexistente, ficha de outro jogador e publicação de outra pessoa devolvem o MESMO 404
+  (`LIBRARY_NOT_FOUND` / `SHEET_NOT_FOUND` conforme a etapa), sem distinguir os casos.
+- A busca do catálogo é sobre o nome do personagem e o sistema de jogo; o recorte de campos vem
+  do dono da ficha.
+
+### Códigos de erro próprios
+
+| Código | HTTP | Quando |
+|---|---|---|
+| `LIBRARY_NAME_REQUIRED` | 400 | Cópia sem nome do personagem |
+| `LIBRARY_NAME_TOO_LONG` | 400 | Nome acima de 120 caracteres |
+| `LIBRARY_SYSTEM_REQUIRED` | 400 | Cópia sem sistema de jogo |
+| `LIBRARY_FIELD_TOO_LONG` | 400 | Valor de campo acima de 2.000 caracteres |
+| `LIBRARY_FIELDS_TOO_MANY` | 400 | Mais de 200 campos na cópia |
+| `LIBRARY_EMPTY` | 400 | Nada aberto à campanha — a cópia ficaria vazia |
+| `LIBRARY_NOT_FOUND` | 404 | Publicação inexistente, ou de outra pessoa para despublicar |
+| `SHEET_NOT_FOUND` | 404 | Ficha inexistente nesta campanha (inclui a de outro jogador) |

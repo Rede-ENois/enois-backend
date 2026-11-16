@@ -55,7 +55,7 @@ class PostContentLimitsTests {
 		var author = auth.authenticate("plimits_author1");
 
 		for (PostType type : List.of(PostType.QUESTION, PostType.REVIEW, PostType.PROJECT, PostType.NEWS,
-				PostType.OPPORTUNITY, PostType.TUTORIAL, PostType.INSIGHT)) {
+				PostType.OPPORTUNITY, PostType.TUTORIAL, PostType.INSIGHT, PostType.COMPLAINT)) {
 			int limit = PostContentLimits.of(type);
 
 			publish(author, type, "x".repeat(limit), "plimits-" + type + "-ok").andExpect(status().isCreated());

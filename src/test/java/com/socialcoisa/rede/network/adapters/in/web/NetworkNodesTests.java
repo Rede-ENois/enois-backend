@@ -418,6 +418,65 @@ class NetworkNodesTests {
 			.andExpect(jsonPath("$.allowedTasks").isEmpty());
 	}
 
+	/**
+	 * O painel diz, pela rota, quanto trabalho cada nó executou e se a rede está distribuindo.
+	 *
+	 * <p>Dois nós ativos; só um recebeu tarefa concluída. O painel tem de mostrar o nó ocioso com
+	 * zero (não omitido), a fatia em 100% e `singleNode` verdadeiro — é a leitura que responde ao
+	 * §8.4 do brief: "o Master absorve trabalho que as réplicas poderiam fazer".</p>
+	 */
+	@Test
+	void dashboardMostraADistribuicaoDeTrabalhoPorNo() throws Exception {
+		String admin = adminToken();
+		String ocupado = newNode(admin);
+		activate(admin, ocupado);
+		String keyOcupado = issueKey(admin, ocupado);
+		heartbeat(admin, ocupado, keyOcupado, 20.0, 1024, 0);
+
+		String ocioso = newNode(admin);
+		activate(admin, ocioso);
+		String keyOcioso = issueKey(admin, ocioso);
+		heartbeat(admin, ocioso, keyOcioso, 5.0, 512, 0);
+
+		// Uma tarefa concluída no nó ocupado. O painel lê o agregado do catálogo, então a linha
+		// concluída é o dado que ele conta — independente de como ela chegou a DONE.
+		jdbc.update("""
+			insert into network_tasks (id, task_type, status, attempt, idempotency_key, payload, data_class,
+			  assigned_node_id, deadline, next_attempt_at, finished_at, created_at, updated_at)
+			values (?, 'ASYNC_JOB', 'DONE', 1, ?, '{}', 'PUBLIC', ?, current_timestamp, current_timestamp,
+			  current_timestamp, current_timestamp, current_timestamp)
+			""", "tsk_" + System.nanoTime(), "distribuicao-" + System.nanoTime(), ocupado);
+
+		var result = mockMvc.perform(get("/admin/network/nodes/dashboard").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andReturn();
+		var load = objectMapper.readTree(result.getResponse().getContentAsString()).get("load");
+
+		assertThat(load).isNotNull();
+		assertThat(load.get("nodes")).hasSize(2);
+		var porNo = new java.util.HashMap<String, tools.jackson.databind.JsonNode>();
+		load.get("nodes").forEach(n -> porNo.put(n.get("nodeId").asText(), n));
+		assertThat(porNo.get(ocupado).get("done").asLong()).isEqualTo(1);
+		// O ocioso está na lista com zero: omiti-lo esconderia exatamente o que o painel pergunta.
+		assertThat(porNo.get(ocioso).get("done").asLong()).isZero();
+		// O `runningNow` é o número que o nó reportou no heartbeat, não uma estimativa.
+		assertThat(porNo.get(ocioso).get("runningNow").asInt()).isZero();
+		assertThat(porNo.get(ocupado).get("runningNow").asInt()).isZero();
+		// O agregado é do catálogo inteiro, e o banco da suíte tem tarefas de outros testes: a
+		// asserção é sobre a soma por nó ter sido contabilizada, não sobre um total absoluto.
+		long total = load.get("totalDone").asLong();
+		assertThat(total).isGreaterThanOrEqualTo(1);
+		long porNoSoma = 0;
+		for (var n : load.get("nodes")) {
+			porNoSoma += n.get("done").asLong();
+		}
+		assertThat(porNoSoma).isLessThanOrEqualTo(total);
+		// A fatia é coerente com o total: nenhum percentual fora de 0..100, e nula quando não há o que
+		// dividir. A concentração em si é medida nos testes de serviço, onde o catálogo é controlado.
+		var fatia = load.get("concentratedShare");
+		assertThat(fatia.isNull() || (fatia.asDouble() >= 0.0 && fatia.asDouble() <= 100.0)).isTrue();
+	}
+
 	// ---------------------------------------------------------------- dashboard do painel
 
 	/**

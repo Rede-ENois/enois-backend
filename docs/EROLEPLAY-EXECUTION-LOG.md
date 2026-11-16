@@ -476,3 +476,194 @@ mesa; o id é o id da mesa) e `roleplay_table_tokens`.
 ### Próxima tarefa
 
 Fase 7 — World Builder (mundo, localizações, pistas, NPCs por campanha).
+
+## Rodada 7 — 2026-11-15 — Fase 7 (World Builder)
+
+### Estado encontrado
+
+`git fetch` no início da rodada: a PR #721 (Fase 6) tinha sido MERGEADA e a `qa` agora TOPA no
+commit dela. #704/#713/#716 também mergeadas; #702 (fundação) segue OPEN. Nenhum outro agente na
+frente do Éroleplay. Branch nova `feat/eroleplay-world` cortada de `enois/qa`.
+
+### O que já existia e foi reaproveitado
+
+- A matriz de capacidades (`CampaignPermissions`/`CampaignService.requireCapability`) como única
+  fonte de autorização — o World Builder não criou régua própria: criar é `POST_IN_CAMPAIGN`
+  (participante), editar/apagar é autor-ou-mestre (`MANAGE_CAMPAIGN` para o mestre), ler é
+  `VIEW_CAMPAIGN`.
+- O fluxo de fichas da Fase 3 para a vinculação opcional (`findSheetById` nova na porta,
+  reutilizando `CharacterSheetJpaEntity` e o `SpringDataCharacterSheetJpaRepository` existente).
+- Convenções de API do módulo: `Idempotency-Key` em toda escrita, `ApiException` com códigos
+  próprios, projeções `record` no controller, guard fail-closed de escrita (o módulo não tocou
+  em `PUBLIC_WRITES`).
+
+### O que foi implementado
+
+- **Domínio**: `WorldKind` (5 naturezas) e `WorldEntry` — título 1–120, corpo até 20.000 (vazio =
+  nulo), tags minúsculas sem repetição somando até 600, vinculação opcional de ficha, regra de
+  edição autor-ou-mestre. O mundo é do GRUPO por decisão de produto: anotação de jogador é memória
+  de mesa tanto quanto lore do mestre.
+- **Persistência**: migração **V298** (`roleplay_world_entries` — aditiva, `if not exists`,
+  InnoDB, `utf8mb4_uca1400_ai_ci` explícito, sem FK, índices por campanha+atualização, tipo e
+  autor); entidade JPA, repositório Spring Data, porta `EroleplayRepository` estendida
+  (save/find/list/remove) e adapter.
+- **Aplicação**: `WorldService` — create/edit/remove/read/atlas. Busca por texto no serviço sobre
+  o atlas recente (teto 100); vinculação de ficha conferida no servidor (ficha tem de ser da
+  MESMA campanha; recusa igual para id inexistente e id alheia — não enumera).
+- **API**: `CampaignWorldController` — 5 rotas sob `/roleplay/campaigns/{c}/world`
+  (`POST`, `GET` com `kind`+`q`, `GET /{entryId}`, `PUT /{entryId}`, `DELETE /{entryId}`). O id da
+  ficha vinculada NUNCA sai na resposta: sai `linkedSheetName` + `linkedToSheet`.
+
+### Correções de causa-raiz no caminho (com prova)
+
+- **Query JPQL morta derrubava o boot**: o primeiro rascunho do repositório Spring Data tinha um
+  método `search` com `lower()`/`concat()` sobre a coluna de corpo (longtext → CLOB), que o
+  Hibernate recusa na validação da query — e o serviço já filtrava em memória. Removido; o boot
+  do contexto de teste voltou a subir (a falha era reproduzida por TODAS as classes
+  `@SpringBootTest` da rodada, não só as novas).
+- **Fixture de teste**: o teste de tags usava duas tags idênticas (o `distinct()` do domínio as
+  colapsa antes do teto) — fixture reescrito com conteúdo distinto; e a criação de ficha do teste
+  de fluxo foi refeita pelo contrato real (modelo com `forca`/`historia` abertos + `PUT
+  /sheets/me` com os 11 campos do D20), com asserção de diagnóstico no `id` devolvido.
+
+### Testes executados (números reais)
+
+- `WorldEntryTests` (5): título obrigatório/teto; corpo teto e vazio→nulo; tags limpas/teto;
+  edição preserva identidade/autoria/criação; regra de quem edita.
+- `WorldFlowTests` (4): jogador registra e o nome da ficha sai SEM o id dela (dupla checagem no
+  create e na re-leitura); atlas filtra por tipo e por texto; autor edita e apaga o que escreveu,
+  mesmo Idempotency-Key não grava duas; entrada inválida (sem tipo, tipo inventado, sem título,
+  vínculo de ficha falso) volta 400 SEM gravar nada.
+- `WorldSecurityTests` (4): 401 sem sessão nas 4 operações; visitante 403 em leitura e escrita e
+  o atlas segue intocado; jogador não edita nem apaga entrada alheia (e o mestre pode); IDOR —
+  entrada da campanha A é 404 nas rotas da campanha B e segue intacta.
+- Escopo: **13 testes, 0 falhas, 0 erros**. Vizinhança (mesa, chat, guarda de escrita): **27
+  testes, 0 falhas, 0 erros** — total 40.
+- Compilação `./mvnw -DskipTests compile` verde antes dos testes.
+- **Suíte inteira nesta árvore** (após o escopo final): **3.071 testes em 583 classes**.
+  Resultado: **3.056 verdes, 15 quebrados em exatamente 2 classes fora do módulo**
+  (`NetworkReplicaTests` — 5 falhas; `NetworkMediaTests` — 10 erros). Classificação com prova
+  executada: (a) rodando as duas classes SOZINHAS nesta branch, 23 de 24 passam — só
+  `paginaDeComunidadesCustaOMesmoNumeroDeConsultasComUmaOuComQuatro` segue vermelha; (b) esse
+  mesmo método isolado **também falha na base limpa `enois/qa`** (mesma asserção,
+  `expected: 8 but was: 6`) — falha pré-existente da base, guard ambiental, não regressão desta
+  PR; (c) as outras 14 são o padrão de interferência entre classes no H2 compartilhado já
+  relatado na issue #682 e tratado na PR #727 de outro agente — escopo exclusivo de teste,
+  fora do alcance desta rodada. As duas classes não tocam nenhum código do Éroleplay. Escoteiro:
+  a vermelhidão está registrada na #682/#727 em vez de silenciada aqui.
+
+### PR
+
+`feat/eroleplay-world` → **PR #739** para `qa`, aberta sem merge, referenciando a origem
+(roadmap/RFC §4.7) e descrevendo a verificação acima.
+
+### Próxima tarefa
+
+Fase 8 — biblioteca e compartilhamento (publicação de campanha/ficha com opt-in do autor,
+leitura pública sem vazar dados de membro).
+
+## Rodada 8 — 2026-11-15 — Fase 8 (biblioteca de personagens)
+
+### Estado encontrado
+
+Mesma branch `feat/eroleplay-world`, com a PR #739 aberta. Durante a rodada ANTERIOR o revisor
+automatizado (`kof-agent-worker`) deixou `CHANGES_REQUESTED` na #739: o boot de produção quebrava
+com `ddl-auto=validate` porque `WorldEntryJpaEntity` declarava a coluna de corpo como
+`@Column(length = 2147483647)` enquanto a migração V298 cria `longtext`. Conserto de causa-raiz
+feito nesta rodada (`@Column(columnDefinition = "longtext")`, a convenção do módulo), commit
+próprio, e a prova: `RedeApplicationTests` passou de 3 erros para **3 testes, 0 falhas, 0 erros**,
+com o escopo do World Builder intocado (13/0/0). O rebase em `enois/qa` foi refeito limpo
+(a base da branch tinha ficado para trás das migrações V319–V324 — por isso a biblioteca é
+**V325**, número conferido contra a ponta remota antes de criar — e renomeada para
+**V326** na rodada seguinte: a `qa` recebeu uma V325 própria (observabilidade por nó) no
+intervalo, e migração duplicada só aparece no merge).
+
+### O que já existia e foi reaproveitado
+
+- A matriz de capacidades e `CampaignService.requirePermission` (publicar exige participação;
+  a leitura do catálogo é pública).
+- O fluxo de fichas da Fase 3: `findSheetById`, `CharacterSheet.visibleTo(SheetAudience.MEMBER)`
+  — o recorte público da biblioteca É o recorte que o dono já abriu à campanha, nenhuma régua
+  nova de privacidade foi inventada.
+- O sinal `campaign` (`CampaignChatChanged`) para os participantes verem a novidade no chat;
+  `Idempotency-Key` nas duas escritas; `ApiException` com códigos próprios; projeção `record`.
+
+### O que foi implementado
+
+- **Domínio**: `LibrarySheet` — a CÓPIA pública de uma ficha (estampa do recorte MEMBER), com
+  nome (teto 120), sistema, teto de 200 campos com valor até 2.000, e recusa de cópia vazia
+  (`LIBRARY_EMPTY`). Quem publica é o DONO da ficha; mestre não publica ficha alheia.
+- **Persistência**: migração **V326** (`roleplay_published_sheets` — aditiva, `if not exists`,
+  InnoDB, `utf8mb4_uca1400_ai_ci` explícito, sem FK, unique por ficha — uma publicação por ficha,
+  índices por publicação e dono); entidade JPA com `fields_json longtext`, repositório Spring
+  Data com busca JPQL só sobre colunas curtas (nome e sistema — a coluna de JSON é CLOB e não
+  participa de `lower()`), porta e adapter estendidos.
+- **Aplicação**: `LibraryService` — publish (dono; ficha inexistente e ficha alheia dão o MESMO
+  404), republish (mesma publicação: mesmo id, mesmo `publishedAt`), unpublish (apaga a CÓPIA,
+  nunca a ficha), leitura e listagem públicas com busca e cursor.
+- **API**: `LibraryController` — `GET /roleplay/library` (busca + cursor), `GET
+  /roleplay/library/{publicationId}`, `POST`/`DELETE
+  /roleplay/campaigns/{c}/sheets/{sheetId}/publish` com `Idempotency-Key`. A projeção pública
+  carrega nome, sistema, campos e instantes — NUNCA o id da ficha, da campanha ou do dono.
+
+### Testes executados (números reais)
+
+- `LibrarySheetTests` (5): identidade/dados mínimos; nome e sistema obrigatórios e valores vazios
+  descartados; tetos de nome, campos e valor; `LIBRARY_EMPTY` sem nada aberto; `restore`
+  preserva e `fields()` é cópia defensiva.
+- `LibraryFlowTests` (3): dono publica e a cópia sai com o recorte aberto SEM o campo privado e
+  SEM vazar ficha/campanha/dono no corpo; republicar atualiza sem duplicar e despublicar apaga a
+  cópia sem tocar na ficha; catálogo lista e busca por personagem, e ficha despublicada sai.
+- `LibrarySecurityTests` (3): 401 sem sessão nas duas escritas com as duas leituras públicas;
+  mestre não publica nem despublica ficha alheia, inexistente e alheia dão o mesmo 404; o campo
+  privado do mestre nunca vira público nem após republicação.
+- Escopo: **11 testes, 0 falhas, 0 erros**. Vizinhança (guarda de escrita automática, World
+  Builder, fichas): **28 testes, 0 falhas, 0 erros**. Boot com schema validado contra as
+  migrações: **3 testes, 0 falhas, 0 erros**.
+- Compilação `./mvnw -DskipTests compile` verde antes dos testes.
+
+### Docs e PR
+
+RFC ganhou §4.8 e a fase 8 marcada como concluída; MODULES ganhou as classes da biblioteca e a
+seção própria; API ganhou o capítulo da biblioteca com rotas, exemplo e códigos `LIBRARY_*`;
+ROADMAP marca a fase 8 como feita e aponta a Fase 9 como próxima. Tudo no mesmo commit da
+implementação. Push em `feat/eroleplay-world` carregado pela PR #739 — sem merge, como sempre.
+
+### Próxima tarefa
+
+Fase 9 — front: identidade visual própria do Éroleplay no design system e as telas
+(campanhas, mesa, fichas, chat, mundo, biblioteca).
+
+## Rodada 10 (2026-11-15) — Fase 9: design system mergeado e front em revisão
+
+### Contexto
+
+A rodada começou com a fila de deploy da QA parada: o boot falhava na validação de schema das
+tabelas da biblioteca e do mundo (V326) porque as entidades não nomeavam as colunas compostas e o
+profile de QA desliga a conversão automática de nomes. O conserto seguiu pela PR #747 (colunas
+nomeadas + V327 aditiva para bancos que já aplicaram a 326 antiga), mergeada e deployada com o
+health check verde — a fila voltou a andar. A PR #702 (fundação, com a migração V291 que colidiu
+com outra V291 já aplicada) foi fechada como superseded: todo o conteúdo já está na qa pelas
+migrações V293–V298 e V326, em versão melhor.
+
+### O que esta rodada entregou
+
+- **Design system (PR #248, mergeada)**: diretorio de campanhas e pagina da campanha (mesas,
+  ficha, dados, chat, mundo) na camada `domain`, 1927 testes do DS verdes, release v0.37.0
+  publicada contendo os componentes de roleplay. Durante a revisao, a tag v0.36.1-rc.1 publicou os
+  componentes como prerelease para o front empilhado compilar.
+- **Front (PR #898, em revisao)**: rotas `/roleplay` e `/roleplay/$slug` como contêineres finos das
+  views do DS; `roleplayApi` com as formas de resposta conferidas contra os controllers; tipos de
+  aplicacao por arquivo. Consome `^0.37.0` (a mesma versao da qa) desde que a #248 entrou.
+
+### Verificacao (numeros reais)
+
+- Front: eslint 0 erros; tsc 0 erros; build ok; suíte 248 arquivos / 1447 testes; CI da PR verde
+  (commit 875da84a).
+- Backend: o container da QA subiu com o conserto da #747 (deploy "Build, Push and Deploy" com
+  health check verde) e a fila de deploy voltou a processar PRs seguintes.
+
+### Próxima tarefa
+
+Fase 10 — endurecimento: observabilidade (eventos, métricas) e revisão de segurança por fase,
+enquanto a #898 aguarda revisão humana.

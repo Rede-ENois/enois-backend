@@ -102,7 +102,10 @@ quem não tem vaga. Reativar devolve o acesso ao que já estava lá.
 
 ## Autorização (no backend)
 
-- Toda rota de processo exige sessão e **o autor da vaga**; terceiro recebe 403 `NOT_OWNER`.
+- Toda rota de processo exige sessão e quem comanda a vaga: **o autor** sempre e, quando a vaga
+  nasceu numa página, a **equipe de recrutamento** dela conforme o papel
+  (ver [COMPANY_PAGES.md](COMPANY_PAGES.md)). Quem não comanda recebe 403 `NOT_OWNER` — a mesma
+  recusa de antes, então nenhuma resposta nova vaza.
 - A candidatura é sempre resolvida **dentro da vaga da URL**: id de candidatura de outra vaga
   responde 404 `APPLICATION_NOT_FOUND`, sem vazar entre processos.
 - A Central lista apenas as vagas cuja autoria é de quem está na sessão — não há parâmetro de
@@ -155,11 +158,71 @@ quem não tem vaga. Reativar devolve o acesso ao que já estava lá.
   `INVALID_CURSOR`;
 - terceiro recebe 403 `NOT_OWNER` e sem sessão 401.
 
+## Quem conduz a seleção
+
+Duas axes de papel convivem e não se confundem:
+
+- **Papel na página** (`CompanyRole`: OWNER/ADMIN/EDITOR/RECRUITER) — vale para agir *em nome
+  dela*: publicar vaga exige RECRUITER ou superior. Não conduz processo por si só.
+- **Equipe de recrutamento** (`recruitment_members`, V328) — vale para conduzir a seleção da
+  organização: ORG_ADMIN, RECRUITMENT_MANAGER, RECRUTER… (ver abaixo). O **dono da página vale
+  ORG_ADMIN sem registro**; terceiro sem registro não ganha nada.
+
+| Papel | O que pode |
+|---|---|
+| `ORG_ADMIN` | tudo: configurar etapas, triar, ver candidatos, entrevistas, gerir a equipe |
+| `RECRUITMENT_MANAGER` | configurar etapas, triar, ver candidatos, entrevistas |
+| `RECRUITER` | triar, ver candidatos, entrevistas |
+| `INTERVIEWER` | ver candidatos e entrevistas (sem mover) |
+| `OBSERVER` | só ver candidatos |
+
+Rotas da equipe: `GET/POST /empresas/{companyId}/recrutamento/equipe`,
+`PATCH/DELETE .../equipe/{userId}`, `GET /empresas/{companyId}/recrutamento/eu` (papel próprio;
+`null` para forasteiro). Gerir a equipe exige ORG_ADMIN (`RECRUITMENT_FORBIDDEN`).
+
+Publicar vaga continua exigindo papel de página (RECRUITER+): **publicar ≠ conduzir**, e a
+equipe de recrutamento não concede papel na página.
+
+## Modelos de processo seletivo
+
+Biblioteca **pessoal** de fluxos: quem recruta guarda os modelos que usa e aplica por cópia
+numa vaga — editar o modelo depois não muda vaga já configurada, e o modelo não é da página
+(é de quem o criou; aplicar numa vaga continua exigindo CONFIGURE_PROCESS dela).
+
+| Rota | O que faz |
+|---|---|
+| `GET /jobs/recruitment/templates` | os modelos de quem está na sessão |
+| `POST /jobs/recruitment/templates` | cria modelo (`{"name", "stages":[...]}`) |
+| `DELETE /jobs/recruitment/templates/{templateId}` | apaga (só o dono) |
+| `POST /jobs/{jobId}/process/templates/apply` | aplica o modelo na vaga (semeia as etapas na ordem) |
+
+Recusas explícitas: nome repetido na biblioteca 409 `TEMPLATE_NAME_TAKEN`, modelo sem etapa 422
+`TEMPLATE_STAGES_REQUIRED`, etapa repetida 422 `TEMPLATE_STAGE_DUPLICATED`, vaga com fluxo já
+configurado 409 `PIPELINE_ALREADY_CONFIGURED` (quem quer trocar apaga as etapas vazias — a regra
+de etapa ocupada protege quem está no pipeline).
+
+## Ciclo de vida da vaga
+
+- **Prazo de candidaturas** (`applicationDeadline`, V329): opcional na criação e ajustável por
+  `PUT /jobs/{jobId}/deadline` (corpo nulo/vazio remove). Vaga aberta com prazo vencido recusa a
+  candidatura com **409 `APPLICATION_DEADLINE_PASSED`** — estado distinto de vaga encerrada
+  (`JOB_CLOSED`), para o candidato saber o que aconteceu. A checagem é no servidor, no mesmo
+  lock do apply.
+- **Reabrir**: `POST /jobs/{jobId}/reopen` devolve a vaga encerrada a OPEN preservando
+  candidaturas e fluxo; reabrir vaga aberta é 409 `JOB_NOT_CLOSED` (erro de estado, não
+  sucesso silencioso). Quem comanda a vaga reabre: o autor sempre e, na vaga de página, quem
+  tem CONFIGURE_PROCESS (a equipe de recrutamento pode encerrar e reabrir; a mensagem de
+  recusa segue a de antes, `NOT_OWNER`).
+- **Pessoa transita**: recrutar é estado, não identidade — desligar "Sou recrutador/a" fecha a
+  Central para quem não tem vaga, mas não apaga modelo, vaga nem histórico; religar devolve
+  tudo. Quem recruta continua podendo se candidatar a vagas de outras pessoas normalmente.
+
 ## Fora deste escopo (próximos passos)
 
 Questionários, avaliações por critério, slot de entrevista escolhido pelo candidato, banco de
-talentos, papéis de equipe (Administrador/Recrutador/Entrevistador/Observador) e a UI no
-design system. A fundação acima é a que esses itens vão usar — não há segunda base a criar.
+talentos e a UI no design system. A fundação acima é a que esses itens vão usar — não há
+segunda base a criar.
+
 
 A UI do "Sou recrutador/a" no front (`@rede-enois/design-system`) ainda não foi entregue: o
 backend já aceita, guarda e aplica a declaração, mas a tela que a liga vem no incremento do

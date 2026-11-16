@@ -44,12 +44,62 @@ json_field() {
 # crescer e a informação útil (mudou o estado?) sumir. Guarda a última linha emitida em
 # memória, por rótulo, e cala a repetição. Estado novo, linha nova.
 LAST_NOTICE=""
+# Linhas que o painel do nó mostra (GET /admin/network/nodes/{id}/observability, admin).
+# O runtime NÃO abre porta (brief §17): quem exibe é o Control Plane, e a linha chega lá
+# EMPURRADA no heartbeat, que já acontece a cada ciclo. O buffer é curto e esvaziado a
+# cada heartbeat: o que não couber num ciclo é descartado de propósito — é tela, não arquivo,
+# e o arquivo de log do nó continua sendo a verdade para quem está na máquina.
+EVENTS_MAX=20
+# Fila em ARQUIVO, não em memória: `cycle` roda num processo por volta (e um reinício não pode
+# apagar a linha que ainda não subiu). O arquivo é do nó, fica em 0600 junto da chave e é esvaziado
+# assim que o heartbeat leva as linhas.
+EVENTS_FILE="$NODE_HOME/pending-events"
+event() {
+  # event <nivel> <mensagem>: guarda para o próximo heartbeat.
+  local level="$1" message="$2"
+  # Normaliza sem ferramenta externa: o runtime roda com PATH mínimo (e um `cut` ausente
+  # descartaria a linha em silêncio — foi assim que esta função falhou no harness).
+  message="${message//$'\n'/ }"
+  message="${message//$'\r'/ }"
+  message="${message:0:400}"
+  [[ -z "$message" ]] && return 0
+  printf '%s|%s\n' "$level" "$message" >> "$EVENTS_FILE" 2>/dev/null || return 0
+  chmod 600 "$EVENTS_FILE" 2>/dev/null || true
+  # Teto: fica o que couber. Reescreve num arquivo novo e troca por mv — nunca segue symlink.
+  local lines
+  lines=$(wc -l < "$EVENTS_FILE" 2>/dev/null || echo 0)
+  if (( lines > EVENTS_MAX )); then
+    tail -n "$EVENTS_MAX" "$EVENTS_FILE" > "$EVENTS_FILE.tmp" && mv -f "$EVENTS_FILE.tmp" "$EVENTS_FILE"
+  fi
+}
+
+json_escape() {
+  # Escapa para string JSON: barra invertida, aspas e caracteres de controle.
+  sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/ /g' -e 's/\r/ /g' <<<"$1"
+}
+
+events_json() {
+  # Formato do contrato HeartbeatRequest.logs: [{level, message, at}]. Vazio quando não há nada.
+  [[ -s "$EVENTS_FILE" ]] || return 0
+  local at item level message sep="" out=""
+  at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  while IFS= read -r item; do
+    [[ -z "$item" ]] && continue
+    level="${item%%|*}"
+    message="${item#*|}"
+    out+="${sep}{\"level\":\"$level\",\"message\":\"$(json_escape "$message")\",\"at\":\"$at\"}"
+    sep=","
+  done < "$EVENTS_FILE"
+  printf '%s' "$out"
+}
+
 notice_once() {
   # notice_once <rotulo> <mensagem>: emite só quando a transição é nova.
   local key="$1" message="$2"
   [[ "$LAST_NOTICE" == "$key" ]] && return 0
   LAST_NOTICE="$key"
   printf '[executor] %s\n' "$message" >&2
+  event INFO "$message"
 }
 
 task_payload() {
@@ -623,12 +673,17 @@ bandwidth_args() {
 }
 
 content_bytes() {
-  # content_bytes: bytes guardados no ESTADO DE CONTEÚDO do nó (edge/ + replica/).
+  # content_bytes: bytes guardados no ESTADO DE CONTEÚDO do nó (edge/ + replica/ + objects/).
   # Contar $NODE_HOME inteiro incluiria node.json, api-key e o pino — credencial não
   # é conteúdo e não pode ser apagada por estouro de cache.
+  #
+  # `objects/` entram porque são corpo de verdade em disco depois desta rodada. Sem eles, o
+  # teto declarado era medido sem o maior consumidor: o nó dizia usar 2 MB enquanto guardava
+  # 40 GB de réplica local.
   local total=0 size f
   for f in "$NODE_HOME"/edge/*/*.json "$NODE_HOME"/edge/*/*.version \
-           "$NODE_HOME"/replica/*/*.json "$NODE_HOME"/replica/*/*.version; do
+           "$NODE_HOME"/replica/*/*.json "$NODE_HOME"/replica/*/*.version \
+           "$NODE_HOME"/objects/*.bin; do
     [[ -f "$f" ]] || continue
     size=$(stat -c %s "$f") || continue
     total=$((total + size))
@@ -996,6 +1051,104 @@ route_lookup() {
   return 1
 }
 
+# ---------------- executor real: OBJECT_PUT (replica de objeto do Storage) ----------------
+# O Control Plane decidiu que este no guarda uma copia e enfileirou a tarefa. O no
+# PUXA o corpo na URL do Control Plane (ele nao conhece o endereco de outro no --
+# brief §17), confere o que baixou contra o medido pelo CP e confirma. Quem prova a
+# copia e o CP: ele mede de novo o que o no declara.
+#
+# O arquivo NAO fica em NODE_HOME/replica: `disk_make_room` trata replica/ como
+# promessa (nao evictavel) e o CP e quem decide o que o no hospeda, por colocacao no
+# catalogo. Guardar aqui criaria duas verdades sobre a mesma copia. Este executor baixa,
+# confere e confirma -- retencao local entra quando houver politica de cache que o CP
+# consiga reconciliar (ver docs/rede-distribuida/13-storage-fase-3-replicacao.md §5.3).
+exec_object_put() {
+  local next="$1" task_id="$2" attempt="$3" config="${4:-}"
+  local payload object_id expect_sha expect_bytes replica tmp got_sha got_bytes resp code
+  local -a bw=()
+  mapfile -t bw < <(bandwidth_args "$config")
+
+  payload=$(task_payload "$next")
+  object_id=$(json_field "$payload" objectId)
+  expect_sha=$(json_field "$payload" sha256)
+  expect_bytes=$(json_number "$payload" bytes)
+  replica=$(json_number "$payload" replica)
+  if [[ -z "$object_id" || -z "$expect_sha" || -z "$expect_bytes" ]]; then
+    fail_task "$task_id" "$attempt" STORAGE_TASK_PAYLOAD_INVALID \
+      'tarefa OBJECT_PUT sem objectId/sha256/bytes'
+    return 0
+  fi
+
+  # Onde o corpo FICA: o objeto e guardado no proprio disco deste no, no diretorio de corpos.
+  # Antes o executor baixava, confirmava e apagava -- o catalogo dizia "copia OK aqui" e o
+  # arquivo nao existia em lugar nenhum. Diretorio proprio (nao `replica/`, que disk_make_room
+  # trata como promessa nao evictavel e cuja poda e do CP).
+  local objects_dir="$NODE_HOME/objects"
+  mkdir -p "$objects_dir" || {
+    fail_task "$task_id" "$attempt" STORAGE_TMP_UNAVAILABLE 'sem diretorio para o corpo'; return 0; }
+  tmp=$(mktemp "$objects_dir/object-put.XXXXXX" 2>/dev/null) || {
+    fail_task "$task_id" "$attempt" STORAGE_TMP_UNAVAILABLE 'sem diretorio para o corpo temporario'; return 0; }
+
+  # O corpo vem pelo mesmo canal autenticado de toda tarefa, com o mesmo teto de banda
+  # que o participante declarou ceder: baixar corpo e subir resultado passam pelo mesmo
+  # limite porque e ele quem transfere. `-s` e obrigatorio: sem ele o curl copia o CORPO
+  # para a saida padrao, e o painel do no receberia bytes de conteudo de usuario como se
+  # fossem linha de log.
+  if ! curl --fail --silent --show-error --connect-timeout 10 --max-time 1800 \
+      ${bw[@]+"${bw[@]}"} "${auth[@]}" -o "$tmp" \
+      "$CONTROL_PLANE/network/storage/objects/$object_id"; then
+    rm -f "$tmp"
+    fail_task "$task_id" "$attempt" STORAGE_FETCH_FAILED 'nao foi possivel baixar o objeto'
+    return 0
+  fi
+
+  # A MEDIDA e do runtime, nao do payload: o que veio pela rede e o que se confere.
+  got_sha=$(sha256sum "$tmp" | cut -d' ' -f1)
+  got_bytes=$(stat -c %s "$tmp")
+  if [[ "$got_sha" != "$expect_sha" || "$got_bytes" != "$expect_bytes" ]]; then
+    # Divergencia nao e transitoria: baixar de novo daria o mesmo corpo. O no NAO confirma
+    # -- confirmar aqui seria gravar a prova de uma copia que nao confere.
+    rm -f "$tmp"
+    fail_task "$task_id" "$attempt" STORAGE_REPLICA_MISMATCH \
+      "corpo divergente (sha=$got_sha bytes=$got_bytes esperado sha=$expect_sha bytes=$expect_bytes)"
+    return 0
+  fi
+
+  # Capacidade: o teto declarado e o que o participante cedeu. O corpo ja esta em disco,
+  # entao a verificacao e ANTES de manter: se nao cabe, o temporario sai e a tarefa falha
+  # com motivo proprio, em vez de encher o disco de quem contribui.
+  local disk_mb disk_cap_bytes
+  disk_mb=$(config_disk_mb "$config")
+  disk_cap_bytes=$((disk_mb * 1024 * 1024))
+  if (( disk_cap_bytes > 0 )) && (( got_bytes > disk_cap_bytes )); then
+    rm -f "$tmp"
+    fail_task "$task_id" "$attempt" STORAGE_OBJECT_TOO_LARGE \
+      "objeto de $got_bytes bytes excede os ${disk_mb}MB cedidos"
+    return 0
+  fi
+
+  # O corpo so ganha o nome final DEPOIS da confirmacao: o CP ja aceitou que este no guarda o
+  # objeto, e um processo morto entre as duas etapas deixa um `.partial` (varrido no proximo
+  # ciclo), nunca um corpo servivel que o catalogo nao conhece.
+  resp=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 60 \
+    "${auth[@]}" -H 'Content-Type: application/json' -d \
+    "{\"bytes\":$got_bytes,\"sha256\":\"$got_sha\"}" \
+    "$CONTROL_PLANE/network/storage/objects/$object_id/replica") || {
+    rm -f "$tmp"
+    fail_task "$task_id" "$attempt" STORAGE_REPLICA_REFUSED 'confirmacao de replica recusada'
+    return 0; }
+  mv -f "$tmp" "$objects_dir/$object_id.bin" || {
+    rm -f "$tmp"
+    fail_task "$task_id" "$attempt" STORAGE_BODY_COMMIT_FAILED 'nao foi possivel guardar o corpo'
+    return 0; }
+
+  # O output leva as medidas QUE ESTE NO mediu -- o CP confere contra as dele e recusa
+  # DONE sem copia confirmada. `code` vazio = confirmado.
+  result "$task_id" "${attempt:-1}" DONE \
+    "{\"objectId\":\"$object_id\",\"replica\":${replica:-0},\"bytes\":$got_bytes,\"sha256\":\"$got_sha\"}" ''
+  printf '[executor] DONE %s (replica %s de %s, %s bytes)\n' "$task_id" "${replica:-?}" "$object_id" "$got_bytes"
+}
+
 exec_api_request() {
   local next="$1" task_id="$2" attempt="$3"
   local config="${4:-}"
@@ -1088,9 +1241,16 @@ cycle() {
   [[ -n "$observed_term" ]] && term_part=",\"observedTerm\":$observed_term"
   disk_part=''
   [[ -n "$observed_disk" ]] && disk_part=",\"diskFreeMb\":$observed_disk"
+  # Linhas do ciclo vão JUNTO do heartbeat: é a única saída do nó (ele não abre porta), e o
+  # Control Plane guarda uma janela curta para o painel do nó. O buffer é esvaziado depois de
+  # enviado; se o heartbeat falhar, as linhas ficam para a próxima volta.
+  local events logs_part=""
+  events=$(events_json)
+  [[ -n "$events" ]] && logs_part=",\"logs\":[$events]"
   hb=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
-    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"memoryMb\":$observed_mem,\"runningTasks\":0$disk_part}$term_part}" \
+    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"memoryMb\":$observed_mem,\"runningTasks\":0$disk_part}$term_part$logs_part}" \
     "$CONTROL_PLANE/network/nodes/heartbeat") || { printf '[executor] heartbeat falhou\n' >&2; return 1; }
+  : > "$EVENTS_FILE" 2>/dev/null || true
   mode=$(json_field "$hb" mode)
   accept_tasks=$(grep -q '"acceptTasks":true' <<<"$hb" && echo true || echo false)
   # O status do Control Plane é a resposta à pergunta "fui aceito?" — e antes ele existia no
@@ -1152,6 +1312,7 @@ cycle() {
       EDGE_CACHE) exec_edge_cache "$next" "$task_id" "${attempt:-1}" "$config" ;;
       EDGE_DELIVER) exec_edge_deliver "$next" "$task_id" "${attempt:-1}" "$config" ;;
       API_REQUEST) exec_api_request "$next" "$task_id" "${attempt:-1}" "$config" ;;
+      OBJECT_PUT) exec_object_put "$next" "$task_id" "${attempt:-1}" "$config" ;;
       *)
         # Prova de ciclo de vida: eco do idempotencyKey como output. Conteúdo de usuário
         # (HTML, CSS, KofScript) NUNCA executa aqui — continua nos sandboxes próprios.

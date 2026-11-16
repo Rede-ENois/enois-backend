@@ -87,7 +87,11 @@ class AutomatedWritePathsTests {
 		"/network/storage/objects/*",
 		// Storage (fase 3): a réplica confirma a cópia designada. Mesma credencial, e a confirmação
 		// é conferida contra a colocação antes de virar durabilidade.
-		"/network/storage/objects/*/replica");
+		"/network/storage/objects/*/replica",
+		// Inscrição de nó: o formulário é público (quem oferece a máquina pode não ter conta) e o
+		// link é autenticado pelo token de uso único do e-mail. Ambos limitados no controller.
+		"/network/join/applications",
+		"/network/join/reveal");
 
 	private static final Pattern MAPPING = Pattern
 		.compile("@(Get|Post|Put|Patch|Delete)Mapping(?:\\(\\s*(?:value\\s*=\\s*)?\"([^\"]*)\"[^)]*\\))?");

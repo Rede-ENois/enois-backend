@@ -274,6 +274,36 @@ class NetworkStorageReplicationTests {
 		assertThat(under.get(0).get("missing").asInt()).isEqualTo(1);
 	}
 
+	@Test
+	void relituraDoCorpoApontaACopiaQueNaoConfereMais() throws Exception {
+		String admin = adminToken();
+		String bucket = "repl-relido-" + UUID.randomUUID().toString().substring(0, 8);
+		StoredObject ok = storedObject(bucket, "ok.jpg", body("conteudo intacto"), "nd_control_plane");
+		StoredObject quebrado = storedObject(bucket, "quebrado.jpg", body("conteudo original"), "nd_control_plane");
+
+		// Grava o corpo REAL no diretório do Control Plane pelo caminho de produção, e depois troca o
+		// conteúdo mantendo o tamanho: é a corrupção que só a releitura encontra.
+		java.nio.file.Path dir = java.nio.file.Path
+			.of(System.getProperty("java.io.tmpdir"), "enois-storage");
+		java.nio.file.Files.createDirectories(dir);
+		java.nio.file.Files.write(dir.resolve(ok.id()), body("conteudo intacto"));
+		java.nio.file.Files.write(dir.resolve(quebrado.id()), body("CONTEUDO ORIGINAL"));
+
+		var result = mockMvc
+			.perform(get("/admin/network/nodes/storage/scrub").header("X-Session-Token", admin)
+				.param("bucket", bucket).param("readBodies", "true"))
+			.andExpect(status().isOk())
+			.andReturn();
+		var report = objectMapper.readTree(result.getResponse().getContentAsString());
+
+		assertThat(report.get("bodiesRelidos").asInt()).isEqualTo(2);
+		var divergent = report.get("divergent");
+		assertThat(divergent).hasSize(1);
+		assertThat(divergent.get(0).get("objectId").asString()).isEqualTo(quebrado.id());
+		assertThat(divergent.get(0).get("expectedSha256").asString()).isEqualTo(quebrado.sha256());
+		assertThat(divergent.get(0).get("actualSha256").asString()).isEqualTo(sha256(body("CONTEUDO ORIGINAL")));
+	}
+
 	private void designate(String objectId, int replica, String nodeId) {
 		jdbc.update("""
 			insert into network_storage_placements (object_id, replica, node_id, bytes, sha256, state, verified_at)

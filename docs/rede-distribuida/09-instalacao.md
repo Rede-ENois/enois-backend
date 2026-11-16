@@ -12,6 +12,7 @@ participante precise conhecer a arquitetura interna. Está em
 | `install.sh` | o fluxo de instalação em três passos (abaixo), mais backup/restauração da identidade; `--update`/`--rollback` delegam ao `bootstrap.sh` |
 | `node-runtime.sh` | o loop de execução: heartbeat → config assinada → poll → executa o que a config autoriza → resultado |
 | `node-doctor.sh` | diagnóstico PASS/WARN/FAIL — mesmo formato do `scripts/dev-doctor.sh` do backend |
+| `painel.py` | painel de observabilidade local (TUI, Python stdlib): config assinada, métricas do container e do host, eventos e log do executor — ver §3.2 |
 
 O runtime também tem pipeline de distribuição próprio: a tag `slave-v*` no
 repositório dispara `.github/workflows/slave-release.yml`, que empacota
@@ -139,6 +140,63 @@ diretório (711 até a entrega ao container; 750 depois), **presença e permiss�
 recusa toda config — o doctor aponta o `--start` que resolve), estado do
 container e conectividade com o Control Plane.
 Sai 0 quando não há FAIL; WARN não impede a operação. Nunca imprime a API key.
+
+## 3.2 Painel de observabilidade local (`painel.py`)
+
+O `node-doctor.sh` responde "o nó está pronto?"; o painel responde "o que o nó
+está fazendo agora?". É uma TUI **read-only** em Python puro (só stdlib — nada
+para instalar no nó):
+
+```bash
+python3 deploy/node-runtime/painel.py
+```
+
+O que mostra, atualizado a cada 3 s (`Q` sai, `R` força uma atualização):
+
+- **Contrato vigente**: estado do nó (`ACTIVE`/`PENDING_APPROVAL`…), se a config
+  está assinada (`✓ Ed25519` = o nó verifica a assinatura contra o pino),
+  `configVersion`/`formatVersion`/termo, perfis, `allowedTasks`,
+  `allowedRoutes` e limites (cores, memória, disco declarado × disco livre
+  **medido** que o próprio nó subiu no heartbeat).
+- **Container**: CPU com sparkline (~6 min de histórico), memória, rede e bloco;
+  bytes do cache de borda e da réplica; cursor do feed de mudanças.
+- **Host**: load, memória livre, uptime.
+- **Eventos recentes e log do executor**: tarefas despachadas, `DONE`/`FAILED`
+  na janela do log, recusas de assinatura, erros de rede — verde quando tudo
+  flui, vermelho no que exige atenção (502 do Control Plane é erro DELE, não do
+  nó: o painel deixa isso legível em vez de parecer que o nó quebrou).
+
+A identidade do nó (`nodeId`, API key) é lida **via container** (`docker exec` —
+o operador do nó tem docker, não precisa de sudo) ou, fora do container, de
+`$ENOIS_NODE_HOME`. Variáveis de ambiente para rodar contra outro nó/CP:
+`ENOIS_NODE_ID`, `ENOIS_NODE_HOME`, `ENOIS_CONTROL_PLANE`, `ENOIS_NODE_CONTAINER`,
+`ENOIS_ORIGIN`, `ENOIS_PANEL_REFRESH`. O painel não manda heartbeat nem executa
+tarefa — ele só olha; nada do que ele faz aparece para o Control Plane além das
+leituras GET que o próprio nó já faz.
+
+### Regra de manutenção: o painel acompanha a evolução da rede
+
+Este painel é parte da superfície operacional do nó, não acessório — painel que
+mostra contrato velho é pior do que nenhum. Por isso:
+
+**Todo PR que mudar o contrato visível ao nó atualiza o `painel.py` no mesmo PR.**
+Em concreto, mexe no painel quem mexer em:
+
+- campos de `/network/nodes/me/config` (`ConfigResponse`/`NodeConfigView`) —
+  campo novo entra no painel; campo removido sai;
+- o formato da config assinada (`NetworkConfigSigner`, `formatVersion`);
+- os enums de tarefa (`NodeTaskType`/`allowedTasks`) e de rota
+  (`allowedRoutes`) — o painel lista o que a config traz, e os executores
+  novos precisam aparecer nos eventos;
+- o texto dos eventos que o `node-runtime.sh` escreve no log (o painel parseia
+  padrões como `tarefa tk_… tipo=… tentativa=…`, `aceito pela rede`,
+  `recusada`) — mudou a linha do log, muda o parse;
+- novos subcomandos de diagnóstico: se o `node-doctor.sh` ganhar uma checagem
+  nova relevante para o operador, o painel a reflete.
+
+O teste de fumaça é barato e não precisa de nó real: rodar o painel contra o
+ambiente de QA e conferir que os campos novos aparecem. Registra-se aqui a
+obrigação para não virar código órfão na próxima evolução da rede.
 
 ## 3.1 O loop de execução (`node-runtime.sh`)
 
@@ -448,7 +506,7 @@ a fonte.
   `EDGE_DELIVER` (revalidação da entrada e veredicto de entrega conferido contra
   o snapshot do nó) e `API_REQUEST` (chamada à rota da lista **assinada**
   `allowedRoutes`, com o destino fora do payload e o resultado como evidência),
-  163 asserções em `scripts/tests/node-executor-test.sh`.
+  189 asserções em `scripts/tests/node-executor-test.sh` (12 asserções são do executor `OBJECT_PUT` do Storage, ver 13-storage-fase-3 §5.3).
   O **produtor** de `API_REQUEST` no lado do Control Plane também existe:
   `POST /admin/network/nodes/{nodeId}/api-request?route=<nome>` enfileira a task
   com alvo, conferindo o nome contra a mesma lista assinada que o nó recebe

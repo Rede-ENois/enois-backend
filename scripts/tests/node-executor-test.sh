@@ -10,7 +10,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 for tool in bash head sed grep dirname pwd mkdir stat chmod awk printf cat rm mktemp wc sha256sum tr \
-            openssl sort paste base64 date mv df; do
+            openssl sort paste base64 date mv df cut; do
   location="$(command -v "$tool")"
   ln -s "$location" "$TMP/$tool" 2>/dev/null || true
 done
@@ -138,7 +138,27 @@ assert_contains 'poll da fila designada' "$(cat "$TMP/curl-calls")" '/network/ta
 assert_contains 'tarefa autorizada vira DONE' "$out" 'DONE tk_1'
 assert_eq 'resultado postado uma vez' '1' "$(results_posted)"
 assert_contains 'resultado carrega a tentativa vigente' "$(cat "$TMP/curl-calls")" '"attempt":2'
-assert_contains 'output ecoa o idempotencyKey (prova de ciclo)' "$(cat "$TMP/curl-calls")" '"idem-42"'
+# O #740 mudou o contrato do resultado: `output` vai como STRING JSON, não como objeto (o Control
+# Plane recusava objeto). A asserção continuou procurando o objeto cru e ficou vermelha na qa — o
+# harness acusava o código, quando era ela que descrevia o contrato antigo. A agulha agora é o
+# formato que o runtime de fato posta: com o escape, prova que o eco é string e que leva a chave.
+assert_contains 'output ecoa o idempotencyKey (prova de ciclo)' "$(cat "$TMP/curl-calls")" \
+  '"output":"{\"echo\":\"idem-42\"}"'
+
+# O painel do nó exibe as linhas do runtime, e elas só chegam ao Control Plane pelo heartbeat (o nó
+# não abre porta — brief §17). O primeiro ciclo não tem nada a mandar: a linha de aceite nasce da
+# RESPOSTA do heartbeat. O segundo é o que prova o caminho — o buffer do ciclo anterior entra no
+# corpo, escapado, e é esvaziado depois.
+# Neste ponto "$TMP/curl-calls" ainda é o PRIMEIRO ciclo do nó novo — e o heartbeat dele não pode
+# carregar linha nenhuma: a primeira mensagem só nasce da resposta desse heartbeat.
+assert_not_contains 'primeiro heartbeat do no novo nao carrega linha antes de nascer' \
+  "$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)" '"logs":'
+out=$(run_one_cycle "$TASK_ASSIGNED")
+hb_line=$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)
+assert_contains 'heartbeat carrega as linhas do painel (logs)' "$hb_line" '"logs":['
+assert_contains 'linha do painel tem nivel' "$hb_line" '"level":"INFO"'
+assert_contains 'a decisao de aceite vira linha do painel' "$hb_line" 'aceito pela rede'
+assert_contains 'linha do painel leva o instante' "$hb_line" '"at":"'
 
 # ------------------------------------------------- cenário 2: tarefa fora da config
 out=$(run_one_cycle "$TASK_FORBIDDEN")
@@ -452,8 +472,8 @@ assert_contains 'ffmpeg roda com o filtro de escala do Control Plane' "$(cat "$M
 assert_contains 'ffmpeg usa o encoder fixo (libx264, crf 28)' "$(cat "$MP/ffmpeg-args")" '-c:v libx264 -preset veryfast -crf 28'
 assert_contains 'ffmpeg confina protocolo a arquivo local' "$(cat "$MP/ffmpeg-args")" '-protocol_whitelist file'
 assert_contains 'mp4 pede moov na frente (faststart)' "$(cat "$MP/ffmpeg-args")" '-movflags +faststart'
-assert_contains 'resultado declara as medidas do Control Plane' "$(cat "$TMP/curl-calls")" '"resultSha256":"bb22cc33"'
-assert_contains 'resultado declara o tamanho medido' "$(cat "$TMP/curl-calls")" '"resultBytes":13'
+assert_contains 'resultado declara as medidas do Control Plane' "$(cat "$TMP/curl-calls")" '\"resultSha256\":\"bb22cc33\"'
+assert_contains 'resultado declara o tamanho medido' "$(cat "$TMP/curl-calls")" '\"resultBytes\":13'
 assert_contains 'task é concluída' "$out" 'transcode DONE tk_9'
 assert_eq 'um único resultado postado' '1' "$(results_posted)"
 
@@ -518,7 +538,7 @@ assert_contains 'confirmação leva versão e hash' "$(cat "$TMP/curl-calls")" '
 assert_eq 'corpo guardado no disco do nó' '{"username":"ana"}' "$(cat "$NR/replica/PROFILE/ana.json")"
 assert_eq 'versão guardada ao lado do corpo' '3' "$(cat "$NR/replica/PROFILE/ana.version")"
 assert_contains 'travessia concluída é reportada' "$out" 'travessia concluída'
-assert_contains 'resultado declara complete=true' "$(cat "$TMP/curl-calls")" '"complete":true'
+assert_contains 'resultado declara complete=true' "$(cat "$TMP/curl-calls")" '\"complete\":true'
 assert_eq 'cursor limpo ao concluir' '' "$(cat "$NR/replica/cursor-PROFILE")"
 
 # Segunda rodada: com a versão guardada, o nó pergunta version= e o Control Plane
@@ -575,7 +595,7 @@ MOCK
 chmod +x "$TMP/curl"
 out=$(run_custom "$NR")
 assert_eq 'agregado que sumiu é descartado' '0' "$(find "$NR/replica/PROFILE" -name 'dora*' | wc -l | tr -d ' ')"
-assert_contains 'remoção é reportada no resultado' "$(cat "$TMP/curl-calls")" '"removed":1'
+assert_contains 'remoção é reportada no resultado' "$(cat "$TMP/curl-calls")" '\"removed\":1'
 assert_not_contains 'agregado removido não é confirmado como sincronizado' "$(cat "$TMP/curl-calls")" 'dora/synced'
 
 # ------------------------------------------------- cenário 13: EDGE_CACHE (feed de mudanças)
@@ -622,7 +642,7 @@ assert_eq 'corpo do perfil guardado no cache' '{"username":"ana"}' "$(cat "$NE/e
 assert_eq 'versão guardada ao lado do corpo' '3' "$(cat "$NE/edge/PROFILE/ana.version")"
 assert_eq 'corpo da comunidade guardado no cache' '{"id":"cm_1"}' "$(cat "$NE/edge/COMMUNITY/cm_1.json")"
 assert_eq 'cursor avançou para a última mudança' '2' "$(cat "$NE/edge/cursor")"
-assert_contains 'resultado declara complete=true' "$(cat "$TMP/curl-calls")" '"complete":true'
+assert_contains 'resultado declara complete=true' "$(cat "$TMP/curl-calls")" '\"complete\":true'
 assert_eq 'um único resultado postado' '1' "$(results_posted)"
 
 # ------------------------------------------------- cenário 14: feed podado (reset)
@@ -689,7 +709,7 @@ MOCK
 chmod +x "$TMP/curl"
 out=$(run_custom "$NE")
 assert_eq 'entrada removida é descartada da borda' '0' "$(find "$NE/edge/PROFILE" -name 'gone*' | wc -l | tr -d ' ')"
-assert_contains 'remoção é contada no resultado' "$(cat "$TMP/curl-calls")" '"removed":1'
+assert_contains 'remoção é contada no resultado' "$(cat "$TMP/curl-calls")" '\"removed\":1'
 assert_not_contains 'agregado removido não é confirmado como sincronizado' "$(cat "$TMP/curl-calls")" 'gone/synced'
 
 # ------------------------------------------------- cenário 16: EDGE_DELIVER em dia (cache)
@@ -723,8 +743,8 @@ chmod +x "$TMP/curl"
 out=$(run_custom "$NE")
 assert_contains 'entrega pergunta pela versão que o nó tem' "$(cat "$TMP/curl-calls")" '/network/content/PROFILE/ana?version=3'
 assert_contains 'entrega em dia reconfirma o que tem' "$(cat "$TMP/curl-calls")" '/network/content/PROFILE/ana/synced'
-assert_contains 'veredicto positivo declara versão e hash' "$(cat "$TMP/curl-calls")" '"version":3,"contentHash":"h-ana","deliverable":true'
-assert_contains 'veredicto declara que veio do cache' "$(cat "$TMP/curl-calls")" '"source":"cache"'
+assert_contains 'veredicto positivo declara versão e hash' "$(cat "$TMP/curl-calls")" '\"version\":3,\"contentHash\":\"h-ana\",\"deliverable\":true'
+assert_contains 'veredicto declara que veio do cache' "$(cat "$TMP/curl-calls")" '\"source\":\"cache\"'
 assert_eq 'corpo em dia não é rebaixado' '{"username":"ana"}' "$(cat "$NE/edge/PROFILE/ana.json")"
 
 # ------------------------------------------------- cenário 17: EDGE_DELIVER rebaixa quando o cache ficou velho
@@ -756,8 +776,8 @@ assert_contains 'cache velho é rebaixado da origem' "$(cat "$TMP/curl-calls")" 
 assert_contains 'confirmação da versão nova leva o hash novo' "$(cat "$TMP/curl-calls")" '{"sourceVersion":4,"contentHash":"h-ana4"}'
 assert_eq 'corpo novo guardado antes do veredicto' '{"username":"ana","new":true}' "$(cat "$NE/edge/PROFILE/ana.json")"
 assert_eq 'versão nova guardada ao lado do corpo' '4' "$(cat "$NE/edge/PROFILE/ana.version")"
-assert_contains 'veredicto declara a origem do corpo (refetched)' "$(cat "$TMP/curl-calls")" '"source":"refetched"'
-assert_contains 'veredicto positivo carrega a versão rebaixada' "$(cat "$TMP/curl-calls")" '"version":4,"contentHash":"h-ana4","deliverable":true'
+assert_contains 'veredicto declara a origem do corpo (refetched)' "$(cat "$TMP/curl-calls")" '\"source\":\"refetched\"'
+assert_contains 'veredicto positivo carrega a versão rebaixada' "$(cat "$TMP/curl-calls")" '\"version\":4,\"contentHash\":\"h-ana4\",\"deliverable\":true'
 
 # ------------------------------------------------- cenário 18: EDGE_DELIVER de agregado removido
 # 404 na origem: entregar é impossível em qualquer nó. Descartar a entrada local e
@@ -784,7 +804,7 @@ MOCK
 chmod +x "$TMP/curl"
 out=$(run_custom "$NE")
 assert_eq 'entrega de agregado removido descarta a entrada' '0' "$(find "$NE/edge/PROFILE" -name 'sumido*' | wc -l | tr -d ' ')"
-assert_contains 'veredicto negativo por remoção da origem' "$(cat "$TMP/curl-calls")" '"deliverable":false,"reason":"CONTENT_GONE"'
+assert_contains 'veredicto negativo por remoção da origem' "$(cat "$TMP/curl-calls")" '\"deliverable\":false,\"reason\":\"CONTENT_GONE\"'
 assert_not_contains 'agregado removido não é confirmado como sincronizado' "$(cat "$TMP/curl-calls")" 'sumido/synced'
 
 # ------------------------------------------------- cenário 19: EDGE_DELIVER não é mais eco de ciclo
@@ -855,7 +875,7 @@ out=$(run_custom "$ND")
 assert_eq 'entrada mais antiga evictada (mtime) para caber a nova' '0' "$(find "$ND/edge/PROFILE" -name 'velho1*' | wc -l | tr -d ' ')"
 assert_eq 'entrada mais nova do cache sobrevive' '1' "$(find "$ND/edge/PROFILE" -name 'velho3.json' | wc -l | tr -d ' ')"
 assert_eq 'entrada nova é gravada depois de abrir espaço' '{"username":"novo"}' "$(cat "$ND/edge/PROFILE/novo.json")"
-assert_contains 'resultado declara a evicção' "$(cat "$TMP/curl-calls")" '"evicted":1'
+assert_contains 'resultado declara a evicção' "$(cat "$TMP/curl-calls")" '\"evicted\":1'
 assert_not_contains 'entrada que coube não é contada como perdida' "$(cat "$TMP/curl-calls")" '"dropped":1'
 assert_eq 'conteúdo guardado cabe no teto declarado' '1' "$(if (( $(stat -c %s "$ND/edge/PROFILE"/*.json | awk '{s+=$1} END {print s}') <= 1048576 )); then echo 1; else echo 0; fi)"
 
@@ -923,8 +943,8 @@ MOCK
 chmod +x "$TMP/curl"
 out=$(run_custom "$NRT")
 assert_eq 'réplica não grava item que passa do teto' '0' "$(find "$NRT/replica/PROFILE" -name 'gigante.json' 2>/dev/null | wc -l | tr -d ' ')"
-assert_contains 'resultado declara disco cheio' "$(cat "$TMP/curl-calls")" '"diskFull":true'
-assert_contains 'travessia conclui incompleta' "$(cat "$TMP/curl-calls")" '"complete":false'
+assert_contains 'resultado declara disco cheio' "$(cat "$TMP/curl-calls")" '\"diskFull\":true'
+assert_contains 'travessia conclui incompleta' "$(cat "$TMP/curl-calls")" '\"complete\":false'
 assert_not_contains 'item que não coube não é confirmado como sincronizado' "$(cat "$TMP/curl-calls")" 'gigante/synced'
 
 # ------------------------------------------------- cenário 23: a réplica abre espaço evictando CACHE, nunca a si mesma
@@ -1295,9 +1315,9 @@ MOCK
 make_curl_api "$CONFIG_API" "$TASK_API"
 out=$(run_custom "$NA")
 assert_contains 'a rota autorizada é chamada' "$(cat "$TMP/curl-calls")" 'https://catalogo.exemplo/api'
-assert_contains 'o resultado declara o status da rota' "$(cat "$TMP/curl-calls")" '"status":200'
-assert_contains 'o resultado declara o tamanho do corpo' "$(cat "$TMP/curl-calls")" '"bytes":16'
-assert_contains 'o resultado declara o digest do corpo' "$(cat "$TMP/curl-calls")" '"digest":"'
+assert_contains 'o resultado declara o status da rota' "$(cat "$TMP/curl-calls")" '\"status\":200'
+assert_contains 'o resultado declara o tamanho do corpo' "$(cat "$TMP/curl-calls")" '\"bytes\":16'
+assert_contains 'o resultado declara o digest do corpo' "$(cat "$TMP/curl-calls")" '\"digest\":\"'
 assert_not_contains 'o corpo da rota não volta no resultado' "$(cat "$TMP/curl-calls")" 'CONTEUDO-DA-ROTA'
 assert_not_contains 'a credencial do nó não vai para o destino' "$(cat "$TMP/curl-calls")" 'X-Node-Key: enk_echoteste0123 https://catalogo'
 assert_contains 'task concluída' "$out" 'rota catalogo status=200'
@@ -1377,5 +1397,93 @@ out=$(run_custom "$NA")
 assert_contains 'rota com vírgula na query é chamada com a query inteira' "$(cat "$TMP/curl-calls")" 'https://api.exemplo/x?ids=1,2'
 assert_contains 'a config com rota de query-string é aceita (linha canônica confere)' "$out" 'rota busca status=200'
 assert_not_contains 'e a config não é recusada por assinatura' "$out" 'assinatura da config não confere com o pino'
+
+# ------------------------------------------------- cenário: OBJECT_PUT (replica do Storage)
+# O Control Plane decide que o no guarda uma copia; o no PUXA o corpo, confere contra o
+# medido pelo CP e confirma. Antes deste executor o `*)` respondia DONE com eco do
+# idempotencyKey SEM BAIXAR NADA -- e o CP aceitava. Estes cenarios travam o caminho real.
+OBJ_BODY='corpo-do-objeto-1234567890'
+OBJ_SHA=$(printf '%s' "$OBJ_BODY" | sha256sum | cut -d' ' -f1)
+OBJ_BYTES=${#OBJ_BODY}
+OBJ_CONFIG='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":5,"ttlSeconds":300,"configVersion":9,"profiles":["NODE_STORAGE"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["OBJECT_PUT"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 9 '["NODE_STORAGE"]' 4 8192 51200 100 '["OBJECT_PUT"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+OBJ_TASK='{"tasks":[{"taskId":"tk_obj1","type":"OBJECT_PUT","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"storage:sob_x:1","payload":"{\"objectId\":\"sob_x\",\"bucket\":\"fotos\",\"key\":\"a.jpg\",\"sha256\":\"'"$OBJ_SHA"'\",\"bytes\":'"$OBJ_BYTES"',\"replica\":1}","dataClass":"PUBLIC_MEDIA"}],"mode":"NORMAL","serverTime":"now"}'
+OBJ_TASK_CORRUPT='{"tasks":[{"taskId":"tk_obj2","type":"OBJECT_PUT","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"storage:sob_y:1","payload":"{\"objectId\":\"sob_y\",\"bucket\":\"fotos\",\"key\":\"b.jpg\",\"sha256\":\"'$(printf 'a%.0s' $(seq 1 64))'\",\"bytes\":5,\"replica\":1}","dataClass":"PUBLIC_MEDIA"}],"mode":"NORMAL","serverTime":"now"}'
+
+# curl do Storage: config assinada do cenario + corpo no GET + recibo no POST de confirmacao.
+make_curl_storage() {
+  cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+outfile=""
+prev=""
+for a in "\$@"; do
+  [[ "\$prev" == "-o" ]] && outfile="\$a"
+  prev="\$a"
+done
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '${OBJ_CONFIG_ATUAL:-$OBJ_CONFIG}' ;;
+  */network/tasks/next) printf '%s' '${TASK_NEXT_BODY:-$OBJ_TASK}' ;;
+  */network/storage/objects/*/replica) printf '%s' '{"objectId":"sob_x","replica":1,"state":"OK"}' ;;
+  */network/storage/objects/*) if [[ -n "\$outfile" ]]; then printf '%s' "$OBJ_BODY" > "\$outfile"; exit 0; fi; exit 22 ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+  chmod +x "$TMP/curl"
+}
+
+# 1. caminho feliz: baixa, confere, confirma, DONE com o que o NO mediu.
+TASK_NEXT_BODY="$OBJ_TASK" make_curl_storage
+: > "$TMP/curl-calls"
+out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SECONDS=1 \
+  /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true)
+assert_contains 'OBJECT_PUT executa de verdade (nao cai no eco)' "$out" 'DONE tk_obj1'
+assert_contains 'o corpo e BAIXADO no Control Plane' "$(cat "$TMP/curl-calls")" '/network/storage/objects/sob_x'
+assert_contains 'a replica e confirmada com o medido pelo no' "$(cat "$TMP/curl-calls")" '"sha256":"'"$OBJ_SHA"'"'
+# No corpo do resultado o output vai como STRING JSON: o escape é o formato do contrato.
+assert_contains 'o resultado leva o sha e os bytes medidos' "$(cat "$TMP/curl-calls")" "\\\"bytes\\\":$OBJ_BYTES,\\\"sha256\\\":\\\"$OBJ_SHA"
+assert_not_contains 'a resposta e DONE sem o eco de ciclo de vida' "$out" '"output":"{\"echo\"'
+
+# O corpo FICA no disco do no: antes o executor baixava, confirmava e apagava -- o catalogo
+# dizia "copia OK aqui" e o arquivo nao existia em lugar nenhum.
+assert_eq 'o corpo fica guardado no disco do no' "$OBJ_BODY" "$(cat "$NH/objects/sob_x.bin" 2>/dev/null || echo AUSENTE)"
+assert_eq 'e nenhum temporario sobra no diretorio de corpos' '0' \
+  "$(ls "$NH/objects" 2>/dev/null | grep -c '^object-put\.' || true)"
+# O teto declarado mede o que o no de fato guarda: objects/ tem de entrar na conta. Sem isso o
+# no dizia usar 2 MB enquanto guardava 40 GB de replica local.
+conteudo=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo content_bytes)" 2>/dev/null | tail -n 1)
+assert_eq 'o tamanho guardado entra no estado de conteudo do no' "$OBJ_BYTES" "$conteudo"
+
+# 2. corpo divergente: NAO confirma e NAO diz DONE.
+TASK_NEXT_BODY="$OBJ_TASK_CORRUPT" make_curl_storage
+: > "$TMP/curl-calls"
+out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SECONDS=1 \
+  /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true)
+assert_contains 'corpo divergente falha com motivo proprio' "$out" 'STORAGE_REPLICA_MISMATCH'
+assert_not_contains 'e nada e confirmado ao CP' "$(cat "$TMP/curl-calls")" '/replica'
+
+# 3. teto de disco menor que o objeto: falha antes de confirmar.
+# diskMb=0 é "sem teto declarado" no módulo (não é "zero bytes"): o cenário preciso usa um
+# teto de 1MB, que o objeto de 26 bytes cabe -- então um objeto grande é o que força a falha.
+# Aqui o teto é 1MB em bytes e o corpo é forçado a exceder: o objeto declarado tem bytes
+# grandes no payload, mas o CORPO é o medido -- logo o caminho exercitado é o do medido.
+OBJ_BIG=$(head -c 1100000 /dev/zero | tr '\0' 'a')
+OBJ_BIG_SHA=$(printf '%s' "$OBJ_BIG" | sha256sum | cut -d' ' -f1)
+OBJ_BIG_BYTES=${#OBJ_BIG}
+OBJ_CONFIG_SMALL='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":5,"ttlSeconds":300,"configVersion":10,"profiles":["NODE_STORAGE"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":1,"bandwidthMbps":100},"allowedTasks":["OBJECT_PUT"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 10 '["NODE_STORAGE"]' 4 8192 1 100 '["OBJECT_PUT"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+OBJ_TASK_BIG='{"tasks":[{"taskId":"tk_obj3","type":"OBJECT_PUT","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"storage:sob_z:1","payload":"{\"objectId\":\"sob_z\",\"bucket\":\"fotos\",\"key\":\"z.bin\",\"sha256\":\"'"$OBJ_BIG_SHA"'\",\"bytes\":'"$OBJ_BIG_BYTES"',\"replica\":1}","dataClass":"PUBLIC_MEDIA"}],"mode":"NORMAL","serverTime":"now"}'
+OBJ_BODY="$OBJ_BIG"
+TASK_NEXT_BODY="$OBJ_TASK_BIG" OBJ_CONFIG_ATUAL="$OBJ_CONFIG_SMALL" make_curl_storage
+: > "$TMP/curl-calls"
+out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SECONDS=1 \
+  /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true)
+# O no baixou e conferiu (sha bateu), mas o corpo nao cabe nos 1MB cedidos: recusa ANTES de
+# confirmar. Confirmar e apagar depois seria prometer uma copia que o no nao tem.
+assert_contains 'teto de disco menor que o objeto recusa antes de confirmar' "$out" 'STORAGE_OBJECT_TOO_LARGE'
+assert_not_contains 'e nao confirma a copia' "$(cat "$TMP/curl-calls")" '/replica'
+rm -f "$TMP"/object-put.*
+
 
 printf '\nTodos os cenarios passaram (%d assercoes).\n' "$PASS"

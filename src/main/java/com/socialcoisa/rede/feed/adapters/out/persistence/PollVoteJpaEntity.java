@@ -11,7 +11,8 @@ import jakarta.persistence.UniqueConstraint;
 
 /**
  * Um voto por pessoa por enquete — a unique (post_id, user_id) e a regra, nao uma checagem
- * otimista no codigo: concorrencia nao cria dois votos nem troca o primeiro.
+ * otimista no codigo: concorrencia nao cria dois votos. Trocar de alternativa e UPDATE desta
+ * linha, nunca um segundo voto.
  */
 @Entity
 @Table(name = "poll_votes",
@@ -48,4 +49,9 @@ class PollVoteJpaEntity {
 	String getPostId() { return postId; }
 	String getUserId() { return userId; }
 	int getOptionPosition() { return optionPosition; }
+
+	/** Move o voto para outra alternativa: a linha continua a mesma, a unique (post, user) tambem. */
+	void changeOption(int novaPosicao) {
+		this.optionPosition = novaPosicao;
+	}
 }

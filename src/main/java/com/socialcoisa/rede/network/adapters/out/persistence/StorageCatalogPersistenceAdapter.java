@@ -123,6 +123,32 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	private static final String SELECT_NODE_PLACEMENTS = "select " + PLACEMENT_COLUMNS
 		+ " from network_storage_placements where node_id = ? order by verified_at desc";
 
+	/**
+	 * Resumo do catalogo inteiro em UMA consulta: quantos objetos por estado e quantos bytes eles
+	 * somam. E o que o painel precisa para "capacidade total" e "espaco utilizado" sem varrer linha
+	 * por linha -- e sem estimar, que e o que o brief proibe.
+	 *
+	 * <p>Os bytes sao os MEDIDOS na gravacao (coluna {@code bytes}), nao os declarados. Objeto
+	 * PENDING tem bytes nulos e soma zero: ele ainda nao ocupa espaco medido, e contar um tamanho
+	 * que nao existe inflaria o uso.</p>
+	 */
+	private static final String SUMMARIZE_OBJECTS = """
+		select state, count(*) as objetos, coalesce(sum(bytes), 0) as bytes
+		from network_storage_objects
+		group by state
+		""";
+
+	/**
+	 * Resumo das colocacoes por estado: quantas copias existem e quantos bytes estao em disco por
+	 * estado. {@code PENDING_REMOTE} e designacao (nao ocupa disco), {@code OK} e copia medida --
+	 * somar os dois daria um "espaco utilizado" que ninguem tem.
+	 */
+	private static final String SUMMARIZE_PLACEMENTS = """
+		select state, count(*) as copias, coalesce(sum(bytes), 0) as bytes
+		from network_storage_placements
+		group by state
+		""";
+
 	private final JdbcTemplate jdbc;
 
 	StorageCatalogPersistenceAdapter(JdbcTemplate jdbc) {
@@ -194,6 +220,24 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	@Override
 	public Optional<StoragePlacement> placementOn(String objectId, String nodeId) {
 		return jdbc.query(SELECT_PLACEMENT_ON, PLACEMENT_MAPPER, objectId, nodeId).stream().findFirst();
+	}
+
+	@Override
+	public java.util.Map<String, long[]> summarizeObjects() {
+		java.util.Map<String, long[]> porEstado = new java.util.LinkedHashMap<>();
+		jdbc.query(SUMMARIZE_OBJECTS, (rs) -> {
+			porEstado.put(rs.getString("state"), new long[] { rs.getLong("objetos"), rs.getLong("bytes") });
+		});
+		return porEstado;
+	}
+
+	@Override
+	public java.util.Map<String, long[]> summarizePlacements() {
+		java.util.Map<String, long[]> porEstado = new java.util.LinkedHashMap<>();
+		jdbc.query(SUMMARIZE_PLACEMENTS, (rs) -> {
+			porEstado.put(rs.getString("state"), new long[] { rs.getLong("copias"), rs.getLong("bytes") });
+		});
+		return porEstado;
 	}
 
 	@Override
