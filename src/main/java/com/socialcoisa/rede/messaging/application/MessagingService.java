@@ -410,7 +410,14 @@ public class MessagingService {
 		if (!repository.isParticipant(conversationId, userId)) {
 			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
 		}
-		repository.markRead(conversationId, userId, clock.instant());
+		// A leitura é monotônica: o desempate de mesmo segundo pode ter nascido mensagens À FRENTE
+		// do relógio, e gravar o relógio atual deixava o lastReadAt atrás delas — o badge não zerava
+		// (cf. auditoria de mensagens). Avança até a última mensagem da conversa quando ela passou.
+		java.time.Instant readAt = repository.findLastMessage(conversationId)
+			.map(Message::createdAt)
+			.map(last -> last.isAfter(clock.instant()) ? last : clock.instant())
+			.orElseGet(clock::instant);
+		repository.markRead(conversationId, userId, readAt);
 		// Read conversation, read notices: its message notifications leave the unread count too.
 		notificationService.markReadByHref(userId, conversationHref(conversationId));
 		// Read receipts: the other side sees "visto" without waiting for the next refetch.
