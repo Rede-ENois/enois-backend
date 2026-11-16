@@ -108,6 +108,71 @@ derruba `heartbeat carrega as linhas do painel`.
 - **Harness intermitente.** O `mariadb:11.4` reinicia o mysqld ao fim do init; "respondeu uma vez"
   não é "ficou no ar". A prontidão passou a exigir um create/drop de tabela após uma pausa.
 
+## 6.5 A idade da série: `freshness`
+
+O brief §8.7 exige que o painel **distinga ausência de dado, nó offline e métrica efetivamente
+zerada**. O quadro devolvia a série e nada mais — uma janela com um ponto de duas horas atrás
+desenhava igual a uma com pontos deste minuto, e "0% de CPU" era indistinguível de "não mediu".
+
+`GET /admin/network/nodes/{id}/observability` ganhou `freshness`:
+
+| campo | o que diz |
+|---|---|
+| `state` | `NO_SAMPLES` (nunca empurrou amostra), `FRESH` (último ponto dentro da janela de vivo), `STALE` (há ponto, mas mais velho que a janela) |
+| `lastSampleAt` | o instante do **último** ponto medido |
+| `ageSeconds` | idade desse ponto, em segundos |
+
+Decisões que o contrato carrega:
+
+- **`ageSeconds` é nulo sem amostra.** Zero diria "mediu agora", que é o oposto do caso vazio — a
+  mesma regra que já vale para `observedDiskFreeMb` nulo.
+- **`FRESH` é `age ≤ 180 s`**, a mesma janela de "vivo" do scheduler, do painel e da cobertura. Um
+  ponto na fronteira saindo como `STALE` faria o painel acusar nó que o balanceamento ainda despacha.
+- **`STALE` não esconde o número**: a tela mostra a medida **com a idade** (`lastSampleAt`), porque
+  omitir o instante faria um dado de duas horas atrás parecer atual.
+- **A idade é calculada no servidor**, do relógio dele. O runtime do nó não decide quão velho é o
+  próprio dado — seria confiar numa máquina de terceiro para julgar a própria honestidade.
+
+`NO_SAMPLES` é resposta para nó que existe no catálogo mas não empurrou nada; nó inexistente continua
+`404`, e "não mediu" e "nó não existe" não podem ser o mesmo 404.
+
+**Verificação:** `NodeObservabilityFreshnessTests` **5** (sem amostra é `NO_SAMPLES` com idade nula;
+ponto recente é `FRESH` com a idade real; ponto velho é `STALE` preservando o instante; a fronteira de
+180 s é inclusiva; a série é lida do mais novo, não do mais antigo) e `NetworkNodeObservabilityTests`
+**7** (2 novos pela rota: `freshness` chega ao JSON com `lastSampleAt`/`ageSeconds`; nó sem amostra
+responde `NO_SAMPLES` em vez de métricas zeradas). Mutações: idade 0 no caso vazio, qualquer série
+como `FRESH`, último ponto tomado como o mais antigo, fronteira exclusiva — **4 de 4 derrubam**.
+
+## 6.6 Histórico de conexão: a volta do nó
+
+O brief §8.6 pede o **histórico de conexão** de cada réplica. Até aqui o heartbeat só tocava
+`lastSeenAt`: o painel mostrava "conectado agora" e não contava que a máquina ficou fora.
+
+Agora o heartbeat compara o último contato com a janela de "vivo" (180 s, a mesma do scheduler, do
+painel e da série) **antes** de atualizar o `lastSeenAt`. Se o último contato é mais velho que a
+janela, a volta vira evento auditado:
+
+| ação | metadata |
+|---|---|
+| `NETWORK_NODE_RECONNECTED` | `offlineForSeconds` (tempo fora) e `lastSeenAt` (o contato anterior) |
+
+Ele aparece na rota que a página do nó já usa, `GET /admin/network/nodes/{id}/history` — sem rota
+nem tabela própria: a trilha que prova as ações é a mesma que as conta.
+
+Decisões:
+
+- **É a transição, não o heartbeat.** Uma linha por ciclo por nó afogaria a trilha; o que se guarda é
+  "esteve fora por X e voltou agora".
+- **Primeiro contato não é reconexão.** Nó que nunca bateu coração não "voltou"; registrá-lo sombrearia
+  um incidente que não houve.
+- **`offlineForSeconds` é o dado que importa.** "Voltou" sem "por quanto tempo" diz metade do que o
+  operador precisa para decidir se a máquina é confiável.
+
+**Verificação:** `NetworkNodeReconnectionTests` **4** (nó que volta depois da janela vira evento com o
+tempo fora; heartbeat normal não gera evento; primeiro contato não é reconexão; o evento aparece no
+histórico do próprio nó). Mutações: sem detectar a volta, primeiro contato como reconexão, heartbeat
+normal auditado — **3 de 3 derrubam**.
+
 ## 7. O que NÃO está entregue
 
 | item | por quê |

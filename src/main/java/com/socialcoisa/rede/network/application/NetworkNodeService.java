@@ -42,6 +42,9 @@ public class NetworkNodeService {
 	 */
 	private static final int MAX_ALIVE_TOKENS_PER_OWNER = 3;
 
+	/** Janela de "vivo": o mesmo corte que o scheduler usa para decidir se manda tarefa. */
+	private final Duration staleAfter;
+
 	/** Motivo de quarentena para nó que reportou termo maior que o da autoridade vigente. */
 	static final String TERM_CONFLICT = "TERM_CONFLICT";
 
@@ -63,6 +66,9 @@ public class NetworkNodeService {
 			ProvisionTokenRepository tokens, NodeKeyService keyService, AuditTrail audit, Clock clock,
 			@Value("${rede.network.provision-token-ttl-minutes:30}") long tokenTtlMinutes,
 			@Value("${rede.network.authority.conflict-quarantine-seconds:600}") long conflictSeconds,
+			// Mesma janela de "vivo" do scheduler, do painel e da série: uma janela só, para que um
+			// nó não esteja "conectado" num quadro e "fora" no outro.
+			@Value("${rede.network.node-stale-seconds:180}") long staleSeconds,
 			com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository responsibles) {
 		this.nodes = nodes;
 		this.authorities = authorities;
@@ -72,6 +78,7 @@ public class NetworkNodeService {
 		this.clock = clock;
 		this.tokenTtl = tokenTtlMinutes > 0 ? Duration.ofMinutes(tokenTtlMinutes) : DEFAULT_TOKEN_TTL;
 		this.conflictWindow = Duration.ofSeconds(Math.max(30, conflictSeconds));
+		this.staleAfter = Duration.ofSeconds(Math.max(30, staleSeconds));
 		this.responsibles = responsibles;
 	}
 
@@ -206,11 +213,36 @@ public class NetworkNodeService {
 			requireOperable(authenticated);
 		}
 		Instant now = clock.instant();
+		// Antes de tocar: o heartbeat é a única oportunidade de ver a VOLTA do nó (brief §8.6,
+		// histórico de conexão). `lastSeenAt` antigo diz que houve uma janela sem contato; sem este
+		// registro, o painel mostra "conectado agora" e não conta que a máquina ficou fora.
+		registrarReconexao(authenticated, now);
 		nodes.touch(authenticated.id(), beat.runtimeVersion(), beat.cpuPercent(), beat.memoryMb(),
 			beat.runningTasks(), beat.diskFreeMb(), now);
 		NetworkNode updated = require(authenticated.id());
 		quarantineOnTermConflict(updated, beat.observedTerm(), now);
 		return require(authenticated.id());
+	}
+
+	/**
+	 * Registra a volta de um nó que estava fora da janela de "vivo".
+	 *
+	 * <p>É o histórico de conexão do brief §8.6. Não é log de cada heartbeat — seria uma linha por
+	 * ciclo por nó e afogaria a trilha; é a <b>transição</b>: o nó esteve fora por quanto tempo e
+	 * voltou quando. O intervalo fica em {@code offlineForSeconds}, calculado a partir do último
+	 * contato que o Control Plane tinha.</p>
+	 *
+	 * <p>Nó que nunca bateu coração não é "reconexão": é o primeiro contato, e registrá-lo como
+	 * volta sombreada um incidente que não houve.</p>
+	 */
+	private void registrarReconexao(NetworkNode node, Instant now) {
+		Instant anterior = node.lastSeenAt();
+		if (anterior == null || anterior.isAfter(now.minus(staleAfter))) {
+			return;
+		}
+		long fora = Math.max(0, Duration.between(anterior, now).getSeconds());
+		audit.record(node.id(), "NETWORK_NODE_RECONNECTED", node.id(),
+			"{\"offlineForSeconds\":" + fora + ",\"lastSeenAt\":\"" + anterior + "\"}");
 	}
 
 	/**
