@@ -187,6 +187,10 @@ class CampaignTableController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String campaignId, @PathVariable String tableId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		// O id da mesa veio do path de ESTA campanha: a mesa tem de pertencer a ela antes de o
+		// serviço de chamadas decidir pelo tableId sozinho — a rota não confirma chamada de mesa
+		// de outra campanha para quem tem as duas.
+		tables.requireTableOfCampaign(campaignId, tableId);
 		return calls.openOfTable(tableId, user.id().value()).orElse(null);
 	}
 

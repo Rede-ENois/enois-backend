@@ -205,6 +205,48 @@ class DiceSecurityTests {
 	}
 
 	@Test
+	void oRequestIdNaRolagemNaoAbreOPedidoParaTerceiro() throws Exception {
+		// O cenário do IDOR suspeito: o pedido respondido deixa requestId na rolagem, que sai no
+		// histórico para a campanha. Um terceiro participante pega o id e tenta ler o pedido — a
+		// conversa de dois não é do grupo, então é 403, não o pedido aberto.
+		var master = authHelper().authenticate("eroleplay-f4sec-req-mestre");
+		var player = authHelper().authenticate("eroleplay-f4sec-req-jogador");
+		var terceiro = authHelper().authenticate("eroleplay-f4sec-req-terceiro");
+		String campaignId = createCampaign(master, "Request Vazado", "f4sec-create-req");
+		join(player, campaignId);
+		join(terceiro, campaignId);
+
+		MvcResult pedido = mockMvc.perform(post("/roleplay/campaigns/" + campaignId + "/rolls/requests")
+				.header("X-Session-Token", master.token())
+				.header("Idempotency-Key", "f4sec-req-pedido")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("playerId", player.userId(),
+					"expression", "1d20", "reason", "checagem secreta do mestre"))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String requestId = objectMapper.readTree(pedido.getResponse().getContentAsString()).get("id").asText();
+
+		MvcResult resposta = mockMvc.perform(
+				post("/roleplay/campaigns/" + campaignId + "/rolls/requests/" + requestId + "/answer")
+					.header("X-Session-Token", player.token())
+					.header("Idempotency-Key", "f4sec-req-resposta")
+					.contentType(MediaType.APPLICATION_JSON)
+					.content("{}"))
+			.andExpect(status().isCreated())
+			.andReturn();
+		// O requestId está de fato no corpo da rolagem que o terceiro vê no histórico.
+		String requestIdNaRolagem = objectMapper.readTree(resposta.getResponse().getContentAsString())
+			.get("requestId").asText();
+		assertThat(requestIdNaRolagem).isEqualTo(requestId);
+
+		// Mas o id exposto não abre o pedido: 403 para quem não é parte.
+		mockMvc.perform(get("/roleplay/campaigns/" + campaignId + "/rolls/requests/" + requestIdNaRolagem)
+				.header("X-Session-Token", terceiro.token()))
+			.andExpect(status().isForbidden())
+			.andExpect(result -> assertThat(result.getResponse().getContentAsString()).contains("FORBIDDEN"));
+	}
+
+	@Test
 	void oRegistroESoLeituraNaApi() throws Exception {
 		var master = authHelper().authenticate("eroleplay-f4sec-imutavel-mestre");
 		String campaignId = createCampaign(master, "Registro Imutavel", "f4sec-create-imutavel");

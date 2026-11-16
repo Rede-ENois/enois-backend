@@ -123,7 +123,7 @@ explícito, nunca com comportamento genérico inventado.
 
 - [x] Identidade visual própria (tema por campanha), componentes no design system (PR #248,
   mergeada; release v0.37.0 contém os componentes de roleplay)
-- [x] Telas de campanha, mesa, ficha, dados (PR #898 do front, em revisão: `/roleplay` e
+- [x] Telas de campanha, mesa, ficha, dados (PR #898 do front, mergeada: `/roleplay` e
   `/roleplay/$slug` com diretorio, mesas, ficha, dados, chat e mundo)
 
 ### Fase 10 — endurecimento
@@ -135,12 +135,15 @@ explícito, nunca com comportamento genérico inventado.
   de monitorabilidade, exclusivo de moderador — só agregado (campanhas por estado/visibilidade/
   sistema, volume de membros/mesas/fichas/chat/dados/mundo/biblioteca, ritmo de 7 e 30 dias),
   nunca conteúdo de campanha nem identidade de pessoa
-- [ ] Revisão de segurança por fase
+- [x] Revisão de segurança por fase (varredura de toda a superfície da API do módulo: voz da mesa
+  virou estado de mestre, a rota de voz cruza campanha e mesa, leitura de pedido de rolagem e
+  privacidade de ficha provadas por teste)
 
 ## 5. Próxima tarefa
 
-**Fase 10**: revisão de segurança por fase — o último critério aberto do roadmap. O backend das
-Fases 0–9 está entregue e o painel já observa o módulo.
+**Nenhuma pendência de backend.** As fases 0 a 10 estão concluídas no backend com prova executada
+(código, testes verdes, docs e PRs para `qa` — aguardando revisão humana e merge, que é decisão de
+mantenedor). O que segue é acompanhamento das PRs abertas e a validação de tela do front.
 
 Mundo da campanha (localizações, pistas, NPCs) com referência a partir das campanhas, seguindo o
 mesmo contrato das demais peças: aditivo, autorização na campanha (ver = participante, escrever =
