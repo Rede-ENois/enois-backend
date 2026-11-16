@@ -30,6 +30,7 @@ import com.socialcoisa.rede.jobs.domain.Job;
 import com.socialcoisa.rede.jobs.domain.JobInterview;
 import com.socialcoisa.rede.jobs.domain.JobApplicationStatus;
 import com.socialcoisa.rede.jobs.domain.JobApplication;
+import com.socialcoisa.rede.jobs.domain.JobApplicationDraft;
 import com.socialcoisa.rede.profile.application.NameStyleView;
 import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.CurrentUser;
@@ -595,6 +596,30 @@ class JobContractController {
 			});
 	}
 
+	/**
+	 * Autosave do rascunho da candidatura: grava o que foi digitado até agora, sem validar
+	 * obrigatórios (isso é do envio). Rascunho não é candidatura — o board não vê.
+	 */
+	@org.springframework.web.bind.annotation.PutMapping("/{jobId}/applications/draft")
+	DraftView saveDraft(@PathVariable String jobId,
+			@org.springframework.web.bind.annotation.RequestBody(required = false) DraftRequest body,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		JobApplicationDraft draft = jobService.saveDraft(jobId, user.id().value(),
+			body == null || body.answers() == null ? Map.of() : body.answers());
+		return new DraftView(draft.updatedAt().toString());
+	}
+
+	/** O rascunho de quem pede nesta vaga; sem rascunho devolve 200 vazio, não 404. */
+	@org.springframework.web.bind.annotation.GetMapping("/{jobId}/applications/draft")
+	Object draft(@PathVariable String jobId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return jobService.draftOf(jobId, user.id().value())
+			.map(draft -> (Object) new DraftBodyView(draft.answers(), draft.updatedAt().toString()))
+			.orElse(Map.of());
+	}
+
 	@PostMapping("/{jobId}/saves")
 	ResponseEntity<String> save(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
@@ -935,7 +960,8 @@ class JobContractController {
 
 	private List<ApplicationFieldView> fieldViews(Job job) {
 		return job.applicationFields().stream()
-			.map(field -> new ApplicationFieldView(field.id(), field.label(), field.type().name(), field.required()))
+			.map(field -> new ApplicationFieldView(field.id(), field.label(), field.type().name(), field.required(),
+				field.visibleIfFieldId(), field.visibleIfValue()))
 			.toList();
 	}
 
@@ -998,7 +1024,9 @@ class JobContractController {
 			boolean identityVerified, NameStyleView nameStyle) {
 	}
 
-	record ApplicationFieldView(String id, String label, String type, boolean required) {
+	/** Condição vai junto: é o front que monta o formulário escondendo o campo não revelado. */
+	record ApplicationFieldView(String id, String label, String type, boolean required, String visibleIfFieldId,
+			String visibleIfValue) {
 	}
 
 	record CreateJobRequest(String title, String company, String logo, String location, String type, String level,
@@ -1032,10 +1060,26 @@ class JobContractController {
 			boolean resumeAttached, String resumeName, String status, String appliedAt) {
 	}
 
-	record ApplicationFieldRequest(String label, String type, boolean required) {
+	/** `visibleIfFieldId`/`visibleIfValue` tornam o campo condicional (aparece quando a origem casa). */
+	record ApplicationFieldRequest(String label, String type, boolean required, String visibleIfFieldId,
+			String visibleIfValue) {
+
+		ApplicationFieldRequest(String label, String type, boolean required) {
+			this(label, type, required, null, null);
+		}
 	}
 
 	record ApplyRequest(String message, List<AnswerRequest> answers) {
+	}
+
+	/** Corpo do autosave: as respostas digitadas até agora, por fieldId. */
+	record DraftRequest(Map<String, String> answers) {
+	}
+
+	record DraftView(String updatedAt) {
+	}
+
+	record DraftBodyView(Map<String, String> answers, String updatedAt) {
 	}
 
 	/** `feedback` e obrigatorio ao reprovar (o dominio recusa sem ele). */
@@ -1090,7 +1134,8 @@ class JobContractController {
 			return List.of();
 		}
 		return fields.stream()
-			.map(field -> new JobService.JobFieldInput(field.label(), field.type(), field.required()))
+			.map(field -> new JobService.JobFieldInput(field.label(), field.type(), field.required(),
+				field.visibleIfFieldId(), field.visibleIfValue()))
 			.toList();
 	}
 
