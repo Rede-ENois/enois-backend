@@ -431,6 +431,50 @@ Erros: `400 MEDIA_REQUIRED`, `400 NOT_IMAGE`, `400 CONTENT_TOO_LONG` (legenda 50
 
 ---
 
+## Murais
+
+Coleções **colaborativas** no Explorar: o mural é só o quadro; quem cola aponta publicações que
+**JÁ existem no feed**. Regras completas em [MURAIS.md](MURAIS.md).
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/murais` | murais ativos, `cursor`/`limit` (≤ 48) | Sim |
+| POST | `/api/murais` | cria o quadro (`title`, `description?`) | Sim + idempotência |
+| GET | `/api/murais/{muralId}` | quadro único com dono e contagem | Sim |
+| PATCH | `/api/murais/{muralId}` | dono edita título/descrição | Sim |
+| DELETE | `/api/murais/{muralId}` | dono remove o quadro (posts ficam no feed) | Sim + idempotência |
+| GET | `/api/murais/{muralId}/contribuicoes` | página crônica com posts enriquecidos | Sim |
+| POST | `/api/murais/{muralId}/contribuicoes` | cola post existente (`postId`) → 201 | Sim + idempotência |
+| DELETE | `/api/murais/{muralId}/contribuicoes/{postId}` | quem colou ou o dono tira o elo | Sim + idempotência |
+
+Erros: `400 MURAL_TITLE_REQUIRED`, `400 MURAL_TITLE_TOO_LONG`, `400 CONTENT_TOO_LONG`,
+`403 NOT_AUTHORIZED`, `404 MURAL_NOT_FOUND`, `404 POST_NOT_FOUND`, `404 CONTRIBUICAO_NOT_FOUND`,
+`409 JA_NO_MURAL`.
+
+---
+
+## Coleções pessoais
+
+Pastas **privadas** com os posts que você **JÁ salvou**: só o dono vê e mexe; guardar exige o post
+salvo no perfil e visível. Regras completas em [COLECOES.md](COLECOES.md).
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/colecoes` | as SUAS coleções, `cursor`/`limit` (≤ 48) | Sim |
+| POST | `/api/colecoes` | cria a pasta (`title`, `description?`) | Sim + idempotência |
+| GET | `/api/colecoes/{colecaoId}` | pasta única com contagem (dono; alheia = 404) | Sim |
+| PATCH | `/api/colecoes/{colecaoId}` | edita título/descrição | Sim |
+| DELETE | `/api/colecoes/{colecaoId}` | apaga a pasta e os elos de verdade | Sim + idempotência |
+| GET | `/api/colecoes/{colecaoId}/posts` | página crônica com posts enriquecidos | Sim |
+| POST | `/api/colecoes/{colecaoId}/posts` | guarda post salvo (`postId`) → 201 | Sim + idempotência |
+| DELETE | `/api/colecoes/{colecaoId}/posts/{postId}` | tira o elo; o post segue salvo | Sim + idempotência |
+
+Erros: `400 COLECAO_TITLE_REQUIRED`, `400 COLECAO_TITLE_TOO_LONG`, `400 CONTENT_TOO_LONG`,
+`404 COLECAO_NOT_FOUND`, `404 POST_NOT_FOUND`, `404 POST_NAO_NA_COLECAO`, `409 NAO_SALVO`,
+`409 JA_NA_COLECAO`.
+
+---
+
 ## Onboarding (primeira entrada)
 
 | Método | Rota | Descrição | Autenticação |
