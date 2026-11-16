@@ -7,10 +7,13 @@ import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialcoisa.rede.network.application.port.out.ContentVersionRepository;
+import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.NodeObservabilityRepository;
 import com.socialcoisa.rede.network.application.port.out.NodeObservabilityRepository.LogLine;
 import com.socialcoisa.rede.network.application.port.out.NodeObservabilityRepository.Sample;
 import com.socialcoisa.rede.network.domain.NetworkNode;
+import com.socialcoisa.rede.network.domain.NodeHealth;
 
 /**
  * O painel de observabilidade de UM nó: a série recente e o console recente, para a página do nó
@@ -42,11 +45,16 @@ public class NodeObservabilityService {
 	static final long ALIVE_SECONDS = 180;
 
 	private final NodeObservabilityRepository repository;
+	private final NetworkNodeRepository nodes;
+	private final ContentVersionRepository versions;
 	private final Clock clock;
 	private final java.util.function.Supplier<String> ids = () -> NodeIds.next("nl");
 
-	NodeObservabilityService(NodeObservabilityRepository repository, Clock clock) {
+	NodeObservabilityService(NodeObservabilityRepository repository, NetworkNodeRepository nodes,
+			ContentVersionRepository versions, Clock clock) {
 		this.repository = repository;
+		this.nodes = nodes;
+		this.versions = versions;
 		this.clock = clock;
 	}
 
@@ -86,13 +94,36 @@ public class NodeObservabilityService {
 		repository.trimLogs(node.id(), LOG_KEEP);
 	}
 
-	/** O quadro do nó: série (antiga → nova) e console (nova → antiga). */
+	/** O quadro do nó: série (antiga → nova) e console (nova → antiga), com as quatro dimensões de saúde. */
 	@Transactional(readOnly = true)
 	public Panel panel(String nodeId, int sampleLimit, int logLimit) {
 		List<Sample> samples = repository.samples(nodeId, clamp(sampleLimit, SAMPLE_KEEP));
 		List<LogLine> logs = repository.logs(nodeId, clamp(logLimit, LOG_KEEP));
-		return new Panel(nodeId, clock.instant(), List.copyOf(samples), logs.stream().map(View::of).toList(),
-			summarize(samples), logLevels(logs), freshness(samples, clock.instant()));
+		Instant now = clock.instant();
+		return new Panel(nodeId, now, List.copyOf(samples), logs.stream().map(View::of).toList(),
+			summarize(samples), logLevels(logs), freshness(samples, now), health(nodeId, now));
+	}
+
+	/**
+	 * As quatro dimensões de saúde do nó (brief §8.8), com o atraso de sincronização que a aplicação
+	 * considera.
+	 *
+	 * <p>A leitura do atraso vem do catálogo de versões, e não do serviço de sincronização: o
+	 * atraso é a mesma conta ({@code countBehind} por tipo) e assim o quadro não depende do
+	 * serviço de conteúdo para desenhar saúde. Nó que sumiu do banco entre a leitura da tela e esta
+	 * chamada não ganha saúde inventada: o chamador já exigiu que existisse.</p>
+	 */
+	NodeHealth health(String nodeId, Instant now) {
+		NetworkNode node = nodes.findById(nodeId).orElse(null);
+		if (node == null) {
+			return null;
+		}
+		long behind = 0;
+		for (com.socialcoisa.rede.network.domain.ContentKind kind
+				: com.socialcoisa.rede.network.domain.ContentKind.values()) {
+			behind += versions.countBehind(nodeId, kind);
+		}
+		return NodeHealth.of(node, behind, now);
 	}
 
 	/**
@@ -150,7 +181,7 @@ public class NodeObservabilityService {
 
 	/** O que a página do nó desenha. {@code generatedAt} deixa claro que o quadro é do instante. */
 	public record Panel(String nodeId, Instant generatedAt, List<Sample> series, List<View> console,
-			Summary summary, java.util.Map<String, Long> consoleLevels, Freshness freshness) {
+			Summary summary, java.util.Map<String, Long> consoleLevels, Freshness freshness, NodeHealth health) {
 	}
 
 	private static Summary summarize(List<Sample> samples) {
