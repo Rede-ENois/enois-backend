@@ -172,6 +172,37 @@ class NetworkNodeObservabilityTests {
 	}
 
 	@Test
+	void a_rota_diz_a_idade_da_serie_para_o_painel_nao_afirmar_sobre_dado_velho() throws Exception {
+		String admin = adminToken();
+		Node node = activeNode(admin, "idade");
+		heartbeat(node, 7.0, List.of());
+
+		var panel = mockMvc
+			.perform(get("/admin/network/nodes/" + node.id() + "/observability").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.freshness.state").value("FRESH"))
+			.andReturn();
+		var freshness = objectMapper.readTree(panel.getResponse().getContentAsString()).get("freshness");
+		// O ponto acabou de ser empurrado, e o instante dele vai no quadro: é o que permite à tela
+		// mostrar o número com a idade em vez de fingir que ele é do agora.
+		assertThat(freshness.get("lastSampleAt").isNull()).isFalse();
+		assertThat(freshness.get("ageSeconds").asLong()).isLessThan(180);
+	}
+
+	@Test
+	void no_sem_amostra_diz_NO_SAMPLES_em_vez_de_metricas_zeradas() throws Exception {
+		String admin = adminToken();
+		Node node = activeNode(admin, "sem-amostra");
+
+		// Sem heartbeat nenhum: não há medida. A rota tem de dizer isso, e nao "0% de CPU" -- o nó
+		// existe no catálogo, então 404 seria mentira no outro sentido.
+		mockMvc.perform(get("/admin/network/nodes/" + node.id() + "/observability").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.freshness.state").value("NO_SAMPLES"))
+			.andExpect(jsonPath("$.summary.sampleCount").value(0));
+	}
+
+	@Test
 	void oPainelDeNoExigeAdminENoDesconhecidoEh404() throws Exception {
 		String admin = adminToken();
 		Node node = activeNode(admin, "guarda");
