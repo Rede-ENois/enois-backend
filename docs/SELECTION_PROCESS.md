@@ -52,6 +52,7 @@ reprovada não se move mais.
 | `GET /jobs/{jobId}/process/applications/{applicationId}/movements` | dono | histórico em ordem |
 | `GET /jobs/{jobId}/process/applications/{applicationId}/notes` | dono | notas internas |
 | `POST /jobs/{jobId}/process/applications/{applicationId}/notes` | dono | cria nota (`{"body": ...}`) |
+| `GET /jobs/{jobId}/process/applications/{applicationId}/audit` | equipe (VIEW_CANDIDATES) | timeline de auditoria da candidatura |
 | `GET /jobs/{jobId}/process/candidates` | equipe (VIEW_CANDIDATES) | fila de triagem com score explicável, ordenada |
 | `POST /jobs/{jobId}/process/applications/batch-move` | equipe (TRIAGE) | move/reprova várias de uma vez, com desfecho por item |
 | `GET /jobs/recruitment` | sessão | Central: minhas vagas com o funil de cada uma |
@@ -160,6 +161,20 @@ quem não tem vaga. Reativar devolve o acesso ao que já estava lá.
 - `status` desconhecido é 400 `INVALID_APPLICATION_STATUS` e cursor inválido é 400
   `INVALID_CURSOR`;
 - terceiro recebe 403 `NOT_OWNER` e sem sessão 401.
+
+`ApplicationEvaluationTests` (2 testes, integração com H2 e MockMvc):
+
+- a avaliação sobe com critérios, veredito e resumo e volta na leitura; **reavaliar pelo mesmo autor
+  grava por cima** (uma linha, não duas) e a leitura não devolve duplicata;
+- critérios vazios, veredito fora do conjunto e resumo acima do teto são recusa explícita
+  (`EVALUATION_*`), não gravação silenciosa.
+
+`ApplicationAuditTimelineTests` (2 testes, integração com H2 e MockMvc):
+
+- nota, avaliação e movimento real (avanço para a segunda etapa) geram três eventos na ordem
+  inversa do tempo, com ator, alvo `job_application:{id}` e metadado dizendo o que mudou;
+- candidato e terceiro recebem 403 e candidatura de outra vaga recebe 404 `APPLICATION_NOT_FOUND` —
+  a timeline é interna e não vaza para quem não conduz a seleção.
 
 ## Quem conduz a seleção
 
@@ -336,6 +351,28 @@ Códigos de recusa explícitos: `EVALUATION_VERDICT_INVALID`, `EVALUATION_CRITER
 `EVALUATION_TOO_MANY_CRITERIA`, `EVALUATION_CRITERIA_LABEL_REQUIRED`,
 `EVALUATION_CRITERIA_LABEL_TOO_LONG`, `EVALUATION_SCORE_OUT_OF_RANGE`,
 `EVALUATION_SUMMARY_TOO_LONG`. Como as notas, a avaliação jamais aparece em rota do candidato.
+
+## Timeline de auditoria
+
+Toda decisão que muda o estado de uma candidatura deixa rastro na trilha de auditoria que o
+projeto já mantém (`shared.audit.AuditTrail`, tabela `audit_logs` e o índice `(target_id,
+created_at)` da V315) — **não há tabela nova para isso**. O alvo é sempre
+`job_application:{applicationId}`, o ator é quem agiu e o metadado diz o que mudou:
+
+| Ação | Quando | Metadado |
+|---|---|---|
+| `RECRUITMENT_APPLICATION_MOVED` | movimento, avanço, retorno ou reprovação | `kind` (`ADVANCE`, `RETURN` ou `REJECT`) e a etapa (`toStageId`, ou `fromStageId` na reprovação) |
+| `RECRUITMENT_APPLICATION_NOTED` | nota interna criada | `noteId` |
+| `RECRUITMENT_APPLICATION_EVALUATED` | avaliação interna gravada ou refeita | `verdict` |
+
+| Rota | Quem | O que faz |
+|---|---|---|
+| `GET /jobs/{jobId}/process/applications/{applicationId}/audit` | VIEW_CANDIDATES | a timeline da candidatura, mais recente primeiro (até 200 eventos) |
+
+A rota exige sessão e a capacidade de ver candidatos da vaga, e confere que a candidatura pertence
+àquela vaga: candidato e estranho recebem 403, candidatura de outra vaga recebe 404
+`APPLICATION_NOT_FOUND`. Como o resto do módulo, a timeline é **interna** — não existe rota de
+auditoria para o candidato.
 
 ## Fora deste escopo (próximos passos)
 

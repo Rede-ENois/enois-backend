@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.companies.domain.RecruitmentCapability;
+import com.socialcoisa.rede.feed.application.port.out.AuditLogRepository.AuditRecord;
 import com.socialcoisa.rede.jobs.application.CandidateTriageService;
 import com.socialcoisa.rede.jobs.application.JobCommandAuthorization;
 import com.socialcoisa.rede.jobs.application.JobService;
@@ -31,6 +32,8 @@ import com.socialcoisa.rede.jobs.domain.StageMovementKind;
 import com.socialcoisa.rede.jobs.domain.StageNote;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
+
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Processo seletivo da vaga (pipeline de recrutamento): fluxo de etapas, Kanban das
@@ -49,14 +52,16 @@ class SelectionProcessController {
 	private final CandidateTriageService triage;
 	private final JobCommandAuthorization command;
 	private final CurrentUserResolver currentUserResolver;
+	private final ObjectMapper objectMapper;
 
 	SelectionProcessController(SelectionProcessService process, JobService jobs, CandidateTriageService triage,
-			JobCommandAuthorization command, CurrentUserResolver currentUserResolver) {
+			JobCommandAuthorization command, CurrentUserResolver currentUserResolver, ObjectMapper objectMapper) {
 		this.process = process;
 		this.jobs = jobs;
 		this.triage = triage;
 		this.command = command;
 		this.currentUserResolver = currentUserResolver;
+		this.objectMapper = objectMapper;
 	}
 
 	// ---------- Fluxo de etapas ----------
@@ -251,6 +256,17 @@ class SelectionProcessController {
 			body.parsedVerdict(), body.summary()));
 	}
 
+	// ---------- Timeline de auditoria ----------
+
+	@GetMapping("/applications/{applicationId}/audit")
+	List<AuditTimelineView> auditTimeline(@PathVariable String jobId, @PathVariable String applicationId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return process.auditTimeline(jobId, applicationId, user.id().value()).stream()
+			.map(record -> AuditTimelineView.of(record, objectMapper))
+			.toList();
+	}
+
 	// ---------- Contratos ----------
 
 	record StageRequest(String name) {
@@ -365,6 +381,31 @@ class SelectionProcessController {
 			catch (IllegalArgumentException exception) {
 				throw new com.socialcoisa.rede.shared.web.ApiException(422, "EVALUATION_VERDICT_INVALID",
 					"O veredito precisa ser STRONG_YES, YES, MAYBE ou NO.");
+			}
+		}
+	}
+
+	record AuditTimelineView(String actorId, String action, String targetId, Map<String, Object> metadata,
+			String createdAt) {
+
+		/** O metadata sai como objeto, não como string: quem desenha a linha não faz parse de JSON. */
+		static AuditTimelineView of(AuditRecord record, ObjectMapper objectMapper) {
+			return new AuditTimelineView(record.actorId(), record.action(), record.targetId(),
+				parseMetadata(record.metadata(), objectMapper), record.createdAt().toString());
+		}
+
+		private static Map<String, Object> parseMetadata(String metadata, ObjectMapper objectMapper) {
+			if (metadata == null || metadata.isBlank()) {
+				return Map.of();
+			}
+			try {
+				return objectMapper.readValue(metadata,
+					new tools.jackson.core.type.TypeReference<Map<String, Object>>() {
+					});
+			}
+			catch (Exception exception) {
+				// Metadata fora do formato não derruba a lista; sai vazio para a linha ainda aparecer.
+				return Map.of();
 			}
 		}
 	}

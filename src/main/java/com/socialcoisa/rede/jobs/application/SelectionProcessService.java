@@ -27,7 +27,10 @@ import com.socialcoisa.rede.jobs.domain.SelectionStage;
 import com.socialcoisa.rede.jobs.domain.StageMovement;
 import com.socialcoisa.rede.jobs.domain.StageMovementKind;
 import com.socialcoisa.rede.jobs.domain.StageNote;
+import com.socialcoisa.rede.shared.audit.AuditTrail;
 import com.socialcoisa.rede.shared.web.ApiException;
+
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Pipeline de recrutamento de uma vaga: etapas do fluxo, movimento das candidaturas entre
@@ -53,14 +56,24 @@ public class SelectionProcessService {
 	private final SelectionProcessTemplateRepository templates;
 	private final JobCommandAuthorization command;
 	private final Clock clock;
+	private final AuditTrail audit;
+	private final ObjectMapper objectMapper;
+
+	/** Ações da trilha de auditoria de recrutamento — a mesma trilha de todo o sistema. */
+	public static final String AUDIT_MOVED = "RECRUITMENT_APPLICATION_MOVED";
+	public static final String AUDIT_NOTED = "RECRUITMENT_APPLICATION_NOTED";
+	public static final String AUDIT_EVALUATED = "RECRUITMENT_APPLICATION_EVALUATED";
 
 	public SelectionProcessService(JobRepository jobs, SelectionProcessRepository pipeline,
-			SelectionProcessTemplateRepository templates, JobCommandAuthorization command, Clock clock) {
+			SelectionProcessTemplateRepository templates, JobCommandAuthorization command, Clock clock,
+			AuditTrail audit, ObjectMapper objectMapper) {
 		this.jobs = jobs;
 		this.pipeline = pipeline;
 		this.templates = templates;
 		this.command = command;
 		this.clock = clock;
+		this.audit = audit;
+		this.objectMapper = objectMapper;
 	}
 
 	// ---------- Configuração do fluxo da vaga ----------
@@ -187,6 +200,8 @@ public class SelectionProcessService {
 			StageMovement saved = pipeline.saveMovement(movement);
 			jobs.updateApplicationStatus(applicationId, JobApplicationStatus.NOT_SELECTED, reason,
 				clock.instant());
+			recordAudit(AUDIT_MOVED, requesterId, applicationId,
+				Map.of("kind", "REJECT", "fromStageId", String.valueOf(currentStageId)));
 			return saved;
 		}
 
@@ -200,8 +215,11 @@ public class SelectionProcessService {
 		}
 		StageMovementKind effective = kind == StageMovementKind.RETURN ? StageMovementKind.RETURN
 			: StageMovementKind.ADVANCE;
-		return pipeline.saveMovement(new StageMovement(null, Long.parseLong(applicationId), jobId, currentStageId,
-			target.id(), effective, requesterId, note, clock.instant()));
+		StageMovement saved = pipeline.saveMovement(new StageMovement(null, Long.parseLong(applicationId), jobId,
+			currentStageId, target.id(), effective, requesterId, note, clock.instant()));
+		recordAudit(AUDIT_MOVED, requesterId, applicationId,
+			Map.of("kind", effective.name(), "toStageId", target.id()));
+		return saved;
 	}
 
 	public record PipelinePosition(String stageId, boolean rejected, java.time.Instant lastMovementAt) {
@@ -254,8 +272,10 @@ public class SelectionProcessService {
 	@Transactional
 	public StageNote addNote(String jobId, String applicationId, String requesterId, String body) {
 		requireOwnedApplication(jobId, applicationId, requesterId);
-		return pipeline.saveNote(new StageNote(null, Long.parseLong(applicationId), requesterId, body,
-			clock.instant()));
+		StageNote saved = pipeline.saveNote(new StageNote(null, Long.parseLong(applicationId), requesterId,
+			body, clock.instant()));
+		recordAudit(AUDIT_NOTED, requesterId, applicationId, Map.of("noteId", String.valueOf(saved.id())));
+		return saved;
 	}
 
 	/** Notas internas: só o dono da vaga. Nunca expostas ao candidato por nenhum caminho daqui. */
@@ -278,12 +298,32 @@ public class SelectionProcessService {
 		long id = Long.parseLong(applicationId);
 		ApplicationEvaluation evaluation = ApplicationEvaluation.create(id, requesterId, criteria, verdict,
 			summary, clock.instant());
-		return pipeline.evaluationsOf(id).stream()
+		ApplicationEvaluation saved = pipeline.evaluationsOf(id).stream()
 			.filter(existing -> existing.authorId().equals(requesterId))
 			.findFirst()
 			.map(existing -> existing.reevaluate(criteria, verdict, summary, clock.instant()))
 			.map(pipeline::saveEvaluation)
 			.orElseGet(() -> pipeline.saveEvaluation(evaluation));
+		recordAudit(AUDIT_EVALUATED, requesterId, applicationId,
+			Map.of("verdict", saved.verdict().name()));
+		return saved;
+	}
+
+	/**
+	 * A linha do tempo de auditoria da candidatura: os atos de recrutamento registrados na
+	 * trilha única do sistema, mais novos primeiro. Quem vê candidatos lê; nada aqui vai ao
+	 * candidato (o histórico dele são os movimentos, não a auditoria da equipe).
+	 */
+	public List<com.socialcoisa.rede.feed.application.port.out.AuditLogRepository.AuditRecord> auditTimeline(String jobId, String applicationId, String requesterId) {
+		requireCommander(jobId, requesterId, RecruitmentCapability.VIEW_CANDIDATES);
+		jobs.findApplicationById(applicationId)
+			.filter(found -> found.jobId().equals(jobId))
+			.orElseThrow(() -> new ApiException(404, "APPLICATION_NOT_FOUND", "Candidatura não encontrada."));
+		return audit.recentForTarget("job_application:" + applicationId, 200);
+	}
+
+	private void recordAudit(String action, String actorId, String applicationId, Map<String, String> metadata) {
+		audit.record(actorId, action, "job_application:" + applicationId, objectMapper.writeValueAsString(metadata));
 	}
 
 	/** Avaliações internas: leitura com quem vê candidatos. Nunca expostas ao candidato. */
