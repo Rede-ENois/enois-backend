@@ -49,11 +49,12 @@ class SuspiciousSignupGuardTests {
 	}
 
 	@Test
-	void repeatedAttackSignupsPauseSignupsButNeverBlockTheIp() throws Exception {
+	void repeatedAttackSignupsPauseTheDeviceButNeverBlockTheIp() throws Exception {
 		// Forged IP headers from the client: none of them may become the paused/blocked address.
 		for (int i = 1; i <= 3; i++) {
 			mockMvc.perform(post("/auth/signup")
 					.header("Idempotency-Key", "guard-signup-" + i)
+					.header("X-Device-Fingerprint", "device-guard-1")
 					.header("X-Real-IP", FORGED)
 					.header("CF-Connecting-IP", FORGED)
 					.contentType(MediaType.APPLICATION_JSON)
@@ -72,13 +73,22 @@ class SuspiciousSignupGuardTests {
 					"email", "quem-nao-existe@test.com", "password", "Test1234!"))))
 			.andExpect(status().isUnauthorized());
 
-		// Signups from the real peer are paused for a while, even with a normal name.
+		// The device that repeated the pattern is paused for a while, even with a normal name...
 		mockMvc.perform(post("/auth/signup")
 				.header("Idempotency-Key", "guard-signup-normal")
+				.header("X-Device-Fingerprint", "device-guard-1")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(signup("Pessoa Normal", "normal@test.com")))
 			.andExpect(status().isForbidden())
 			.andExpect(jsonPath("$.code").value("SIGNUP_REFUSED"));
+
+		// ...while another person on the same address keeps signing up.
+		mockMvc.perform(post("/auth/signup")
+				.header("Idempotency-Key", "guard-signup-neighbour")
+				.header("X-Device-Fingerprint", "device-guard-2")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(signup("Pessoa Vizinha", "vizinha@test.com")))
+			.andExpect(status().isCreated());
 	}
 
 	private String signup(String name, String email) throws Exception {

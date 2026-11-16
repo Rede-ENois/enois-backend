@@ -71,7 +71,9 @@ class MessageSendHotPathTests {
 	@BeforeEach
 	void setUp() {
 		service = new MessagingService(repository, notifications, Clock.fixed(NOW, ZoneOffset.UTC), rateLimiter,
-			timingGuard, ageGate, sanctionGate, new ConversationReachPolicy(agePolicy, connections, blockedUsers),
+			timingGuard, ageGate, sanctionGate, new ConversationReachPolicy(agePolicy, connections, blockedUsers,
+				mock(com.socialcoisa.rede.shared.sanctions.SanctionGateReader.class),
+				mock(com.socialcoisa.rede.profile.application.port.out.UserProfileRepository.class)),
 			corporateProfiles, coins, events, new ConversationViewers(Clock.fixed(NOW, ZoneOffset.UTC)));
 
 		when(repository.findConversationById(CONVERSATION_ID))

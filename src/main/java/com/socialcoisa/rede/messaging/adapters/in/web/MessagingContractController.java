@@ -25,6 +25,7 @@ import com.socialcoisa.rede.corporate.domain.CorporateProfile;
 import com.socialcoisa.rede.feed.domain.ReactionType;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
+import com.socialcoisa.rede.messaging.application.ConversationReachPolicy;
 import com.socialcoisa.rede.messaging.application.MessageReplyReader;
 import com.socialcoisa.rede.messaging.application.MessagingService;
 import com.socialcoisa.rede.messaging.application.port.out.MessagingRepository;
@@ -48,19 +49,19 @@ class MessagingContractController {
 	private final MessagingService messagingService;
 	private final MessageReplyReader messageReplyReader;
 	private final CursorCodec cursorCodec;
-	private final com.socialcoisa.rede.shared.blocks.BlockedUsersReader blockedUsersReader;
+	private final ConversationReachPolicy reachPolicy;
 	private final CorporateProfileService corporateProfiles;
 
 	MessagingContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
 			MessagingService messagingService, CursorCodec cursorCodec,
-			com.socialcoisa.rede.shared.blocks.BlockedUsersReader blockedUsersReader,
+			ConversationReachPolicy reachPolicy,
 			CorporateProfileService corporateProfiles, MessageReplyReader messageReplyReader) {
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.messagingService = messagingService;
 		this.messageReplyReader = messageReplyReader;
 		this.cursorCodec = cursorCodec;
-		this.blockedUsersReader = blockedUsersReader;
+		this.reachPolicy = reachPolicy;
 		this.corporateProfiles = corporateProfiles;
 	}
 
@@ -303,7 +304,7 @@ class MessagingContractController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@RequestBody DirectConversationRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		String otherId = resolveRecipient(user, request.userId());
+		String otherId = resolveRecipient("DIRECT", user, request.userId());
 		Map<String, Object> payload = Map.of("direct", otherId);
 		String hash = idempotency.hash(payload);
 		return idempotency.execute(user.id(), "POST", "/api/conversations/direct", idempotencyKey, hash, () -> {
@@ -327,7 +328,7 @@ class MessagingContractController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@RequestBody DirectConversationRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		String otherId = resolveRecipient(user, request.userId());
+		String otherId = resolveRecipient("BUSINESS_DIRECT", user, request.userId());
 		Map<String, Object> payload = Map.of("business-direct", otherId);
 		String hash = idempotency.hash(payload);
 		return idempotency.execute(user.id(), "POST", "/api/conversations/business-direct", idempotencyKey, hash, () -> {
@@ -489,20 +490,12 @@ class MessagingContractController {
 			lm.encryptedKeys(), lm.from());
 	}
 
-	/** Valida o destinatario: obrigatorio, nao pode ser voce, nao pode estar bloqueado. */
-	private String resolveRecipient(CurrentUser user, String rawUserId) {
-		String otherId = rawUserId == null ? "" : rawUserId.trim();
-		if (otherId.isEmpty()) {
-			throw new ApiException(400, "INVALID_RECIPIENT", "Destinatario obrigatorio.");
-		}
-		if (otherId.equals(user.id().value())) {
-			throw new ApiException(400, "INVALID_RECIPIENT", "Nao da para abrir uma conversa consigo mesmo.");
-		}
-		if (blockedUsersReader.hiddenIdsFor(user.id().value()).contains(otherId)
-				|| blockedUsersReader.hiddenIdsFor(otherId).contains(user.id().value())) {
-			throw new ApiException(403, "USER_BLOCKED", "Nao e possivel conversar com este usuario.");
-		}
-		return otherId;
+	/**
+	 * Resolve o destinatário pela política única de alcance. Antes esta rota só olhava bloqueio:
+	 * um id inexistente, excluído ou banido virava participante de uma conversa criada.
+	 */
+	private String resolveRecipient(String kind, CurrentUser user, String rawUserId) {
+		return reachPolicy.resolveRecipient(kind, user.id().value(), rawUserId);
 	}
 
 	/**

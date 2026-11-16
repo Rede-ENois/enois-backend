@@ -69,6 +69,18 @@ class PublicReadGuardTests {
 	}
 
 	@Test
+	void thePeopleListSharesTheSameCeilingAsTheSearch() throws Exception {
+		for (int i = 0; i < 20; i++) {
+			mockMvc.perform(get("/users/search").param("q", "t4list" + i))
+				.andExpect(status().isOk());
+		}
+		// A lista de pessoas devolve identificadores: alternar entre ela e a busca não cria balde novo.
+		mockMvc.perform(get("/network/users").header("X-Session-Token", "invented-t4"))
+			.andExpect(status().isTooManyRequests())
+			.andExpect(jsonPath("$.code").value("ENUMERATION_GUARD"));
+	}
+
+	@Test
 	void anInventedSessionTokenDoesNotEarnAFreshBucket() throws Exception {
 		for (int i = 0; i < 20; i++) {
 			mockMvc.perform(get("/users/search").param("q", "t3anon" + i))
