@@ -48,17 +48,20 @@ public class EventService {
 	private final Clock clock;
 	private final CacheInvalidator cacheInvalidator;
 	private final CalendarSourceService calendar;
+	private final com.socialcoisa.rede.notifications.application.NotificationService notifications;
 
 	public EventService(EventRepository repository,
 			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate,
 			com.socialcoisa.rede.shared.security.SuspiciousText suspiciousText, Clock clock,
-			CacheInvalidator cacheInvalidator, CalendarSourceService calendar) {
+			CacheInvalidator cacheInvalidator, CalendarSourceService calendar,
+			com.socialcoisa.rede.notifications.application.NotificationService notifications) {
 		this.repository = repository;
 		this.sanctionGate = sanctionGate;
 		this.suspiciousText = suspiciousText;
 		this.clock = clock;
 		this.cacheInvalidator = cacheInvalidator;
 		this.calendar = calendar;
+		this.notifications = notifications;
 	}
 
 	@Transactional
@@ -69,6 +72,8 @@ public class EventService {
 		if (!event.createdBy().equals(userId)) {
 			throw new ApiException(403, "NOT_EVENT_OWNER", "Este evento nao e seu.");
 		}
+		String previousDate = event.date();
+		String previousTime = event.time();
 		TextFieldLimit.check("EVENT_FIELD_TOO_LONG", "titulo", title, 255);
 		TextFieldLimit.check("EVENT_FIELD_TOO_LONG", "local", location, 255);
 		TextFieldLimit.check("EVENT_FIELD_TOO_LONG", "host", host, 255);
@@ -95,6 +100,12 @@ public class EventService {
 		// Quem ja confirmou presenca acompanha a edicao: o compromisso na agenda e o mesmo evento,
 		// e deixar o horario antigo la seria pior do que nao ter agenda nenhuma.
 		syncCalendarForAttendees(event);
+		// A data que mudou sem aviso e a que faz quem ia aparecer no dia errado — o relato do
+		// suporte. So avisa quando o quando do evento mudou; edicao de capa nao notifica ninguem.
+		if (!previousDate.equals(event.date()) || !previousTime.equals(event.time())) {
+			notifyAttendees(event, "Evento remarcado",
+				"A data mudou para " + event.date() + (event.time() == null ? "." : " às " + event.time() + "."));
+		}
 		cacheInvalidator.afterCommit(CacheConfig.EVENTS);
 		return event;
 	}
@@ -206,6 +217,11 @@ public class EventService {
 		if (!admin && !event.createdBy().equals(userId)) {
 			throw new ApiException(403, "NOT_EVENT_OWNER", "Este evento nao e seu.");
 		}
+		// O cancelamento avisa antes de apagar as presencas: depois do deleteAttendees nao ha lista
+		// de quem ia, e quem confirmou presenca e exatamente quem precisa saber que o compromisso
+		// caiu (a agenda sincronizada sumiria sem explicacao).
+		notifyAttendees(event, "Evento cancelado",
+			"Quem criou o evento cancelou ele. A entrada saiu da sua agenda.");
 		// Ocorrencia removida (pelo dono ou pela moderacao) encerra a serie: sem isto a ocorrencia
 		// anterior voltaria a ser a mais recente e recriaria a data que acabou de sair.
 		if (event.seriesId() != null) {
@@ -217,6 +233,17 @@ public class EventService {
 		repository.deleteAttendees(eventId);
 		repository.deleteById(eventId);
 		cacheInvalidator.afterCommit(CacheConfig.EVENTS);
+	}
+
+	/** Avisa quem confirmou presenca sobre remarcacao ou cancelamento (a lista some no delete). */
+	private void notifyAttendees(Event event, String title, String body) {
+		for (String attendeeId : repository.findAttendeeIds(event.id())) {
+			if (attendeeId.equals(event.createdBy())) {
+				continue;
+			}
+			notifications.create(attendeeId, "EVENT", event.createdBy(), title, body,
+				"/eventos?evento=" + event.id(), "Ver evento");
+		}
 	}
 
 	/**
