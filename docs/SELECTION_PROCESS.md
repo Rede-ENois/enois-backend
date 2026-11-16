@@ -51,6 +51,8 @@ reprovada não se move mais.
 | `GET /jobs/{jobId}/process/applications/{applicationId}/movements` | dono | histórico em ordem |
 | `GET /jobs/{jobId}/process/applications/{applicationId}/notes` | dono | notas internas |
 | `POST /jobs/{jobId}/process/applications/{applicationId}/notes` | dono | cria nota (`{"body": ...}`) |
+| `GET /jobs/{jobId}/process/candidates` | equipe (VIEW_CANDIDATES) | fila de triagem com score explicável, ordenada |
+| `POST /jobs/{jobId}/process/applications/batch-move` | equipe (TRIAGE) | move/reprova várias de uma vez, com desfecho por item |
 | `GET /jobs/recruitment` | sessão | Central: minhas vagas com o funil de cada uma |
 
 "Todo o fluxo de etapas" é configurável: criar, renomear, apagar (respeitando candidatos na
@@ -216,6 +218,62 @@ de etapa ocupada protege quem está no pipeline).
 - **Pessoa transita**: recrutar é estado, não identidade — desligar "Sou recrutador/a" fecha a
   Central para quem não tem vaga, mas não apaga modelo, vaga nem histórico; religar devolve
   tudo. Quem recruta continua podendo se candidatar a vagas de outras pessoas normalmente.
+
+## Triagem com score explicável
+
+O score de uma candidatura vai de 0 a 100 e **todo ponto vem de um motivo escrito**
+(`CandidateScore`, em `jobs/domain`). Ele não é uma caixa-preta: a resposta traz a lista de
+componentes, cada um com código, texto e pontos.
+
+| Componente | Peso | Quando existe |
+|---|---|---|
+| `SKILLS` | 75 | a vaga lista requisitos **e** o retrato do candidato tem habilidades |
+| `IDENTITY` | 25 | sempre (é um sim/não do retrato) |
+
+Como no `JobCompatibility`, o peso só considera os sinais que existem, e o total é normalizado
+sobre o peso dos sinais presentes. Regras que fazem o número ser honesto:
+
+- **É o retrato congelado que pontua**, não o perfil de hoje: o recrutador decide com o que a
+  pessoa apresentou quando se candidatou.
+- **Vaga que não diz o que pede não gera score**: sem requisito no anúncio, `available = false`
+  e `total = 0` com o motivo "identidade verificada"/"não verificada". A tela diz "sem dados para
+  comparar" — nunca "0% compatível", porque não houve comparação.
+- **O motivo cita o que casou**: "2 de 3 requisitos da vaga: Java, Spring".
+- **O score ordena, não reprova.** Recusa continua sendo ato humano, com retorno escrito.
+- **Não entram idade, gênero, local de nascimento, foto nem qualquer atributo protegido**: a
+  comparação é sobre requisito declarado, verificação e nada mais. Reputação e faixa salarial
+  ficam de fora de propósito — a primeira é histórico da conta, não competência; a segunda o
+  perfil não declara.
+
+Endpoints:
+
+| Rota | Quem | O que faz |
+|---|---|---|
+| `GET /jobs/{jobId}/process/candidates?limit=` | VIEW_CANDIDATES | candidaturas com score, da mais aderente para a menos; sem score vai ao fim |
+| `POST /jobs/{jobId}/process/applications/batch-move` | TRIAGE | `{"applicationIds":[...],"stageId","kind","note"}` |
+
+O card do board (`GET /jobs/{jobId}/process`) já vem com `score` — não há segunda chamada para
+mostrar a nota na coluna.
+
+### Ações em lote
+
+Um recrutador triagem 30 candidaturas, não uma. O lote aceita até 200 ids (acima disso é 422
+`BATCH_TOO_LARGE` — seleção errada não se adivinha), descarta ids repetidos e devolve **o
+desfecho de cada item**, não um "ok" global:
+
+```json
+[{"applicationId":"12","movement":{...},"errorCode":null,"errorMessage":null},
+ {"applicationId":"13","movement":null,"errorCode":"ALREADY_IN_STAGE","errorMessage":"..."}]
+```
+
+Recusas antes de gravar qualquer coisa (nada é movido, erro explícito): lista vazia 400
+`NO_APPLICATIONS_SELECTED`, candidatura de outra vaga 404 `APPLICATION_NOT_FOUND`, candidatura
+já reprovada 409 `APPLICATION_REJECTED`, reprovação sem motivo 400 `FEEDBACK_REQUIRED`, quem
+pede sem TRIAGE 403 `NOT_OWNER`.
+
+Cada item roda em **transação própria**: o que entrou ficou gravado mesmo que o próximo seja
+recusado no meio do lote. O caminho de cada item é o mesmo do movimento individual — nenhuma
+regra de etapa é reimplementada no lote.
 
 ## Fora deste escopo (próximos passos)
 

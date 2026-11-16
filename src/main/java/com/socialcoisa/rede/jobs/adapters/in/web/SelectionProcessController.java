@@ -16,8 +16,12 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.socialcoisa.rede.companies.domain.RecruitmentCapability;
+import com.socialcoisa.rede.jobs.application.CandidateTriageService;
+import com.socialcoisa.rede.jobs.application.JobCommandAuthorization;
 import com.socialcoisa.rede.jobs.application.JobService;
 import com.socialcoisa.rede.jobs.application.SelectionProcessService;
+import com.socialcoisa.rede.jobs.domain.CandidateScore;
 import com.socialcoisa.rede.jobs.domain.JobApplication;
 import com.socialcoisa.rede.jobs.domain.SelectionStage;
 import com.socialcoisa.rede.jobs.domain.StageMovement;
@@ -40,12 +44,16 @@ class SelectionProcessController {
 
 	private final SelectionProcessService process;
 	private final JobService jobs;
+	private final CandidateTriageService triage;
+	private final JobCommandAuthorization command;
 	private final CurrentUserResolver currentUserResolver;
 
-	SelectionProcessController(SelectionProcessService process, JobService jobs,
-			CurrentUserResolver currentUserResolver) {
+	SelectionProcessController(SelectionProcessService process, JobService jobs, CandidateTriageService triage,
+			JobCommandAuthorization command, CurrentUserResolver currentUserResolver) {
 		this.process = process;
 		this.jobs = jobs;
+		this.triage = triage;
+		this.command = command;
 		this.currentUserResolver = currentUserResolver;
 	}
 
@@ -104,6 +112,10 @@ class SelectionProcessController {
 		List<SelectionStage> stages = process.stagesForBoard(jobId, requesterId);
 		Map<Long, SelectionProcessService.PipelinePosition> positions = process.positionsOf(jobId, requesterId);
 		List<JobApplication> applications = jobs.applicationsOf(jobId, requesterId, 1000);
+		Map<String, CandidateScore> scores = triage.scoresOf(
+			command.requireCommander(jobId, requesterId, RecruitmentCapability.VIEW_CANDIDATES,
+				"Somente quem publicou a vaga ou a equipe dela pode ver a triagem das candidaturas."),
+			applications);
 
 		Map<String, List<BoardCardView>> columns = new LinkedHashMap<>();
 		for (SelectionStage stage : stages) {
@@ -121,7 +133,7 @@ class SelectionProcessController {
 				continue;
 			}
 			SelectionProcessService.PipelinePosition position = positions.get(Long.valueOf(application.id()));
-			BoardCardView card = BoardCardView.of(application, position);
+			BoardCardView card = BoardCardView.of(application, position, scores.get(application.id()));
 			if (position != null && position.rejected()) {
 				rejected.add(card);
 				continue;
@@ -143,15 +155,51 @@ class SelectionProcessController {
 			@RequestBody MoveRequest body,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		StageMovementKind kind = switch (body.kind() == null ? "ADVANCE" : body.kind().toUpperCase()) {
+		return MovementView.of(process.moveApplication(jobId, applicationId, user.id().value(), body.stageId(),
+			kindOf(body.kind()), body.note()));
+	}
+
+	/**
+	 * Move várias candidaturas de uma vez. Cada item aparece no resultado, movido ou recusado com
+	 * o motivo — a resposta 200 não quer dizer "todas entraram".
+	 */
+	@PostMapping("/applications/batch-move")
+	List<BatchMoveResultView> batchMove(@PathVariable String jobId, @RequestBody BatchMoveRequest body,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return triage.moveBatch(jobId, user.id().value(), body.applicationIds(), body.stageId(), kindOf(body.kind()),
+			body.note()).stream()
+			.map(outcome -> new BatchMoveResultView(outcome.applicationId(),
+				outcome.movement() == null ? null : MovementView.of(outcome.movement()),
+				outcome.errorCode(), outcome.errorMessage()))
+			.toList();
+	}
+
+	// ---------- Triagem ----------
+
+	/**
+	 * A fila de triagem: candidaturas com score explicável, da mais aderente para a menos, com a
+	 * lista de componentes que formou cada ponto. Candidatura sem dado para comparar vem depois,
+	 * marcada — não como a pior nota.
+	 */
+	@GetMapping("/candidates")
+	List<RankedCandidateView> candidates(@PathVariable String jobId,
+			@RequestParam(required = false) Integer limit,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return triage.ranked(jobId, user.id().value(), limit == null ? 100 : limit).stream()
+			.map(RankedCandidateView::of)
+			.toList();
+	}
+
+	private static StageMovementKind kindOf(String kind) {
+		return switch (kind == null ? "ADVANCE" : kind.toUpperCase()) {
 			case "ADVANCE" -> StageMovementKind.ADVANCE;
 			case "RETURN" -> StageMovementKind.RETURN;
 			case "REJECT" -> StageMovementKind.REJECT;
 			default -> throw new com.socialcoisa.rede.shared.web.ApiException(400, "INVALID_MOVEMENT_KIND",
 				"A movimentação precisa ser ADVANCE, RETURN ou REJECT.");
 		};
-		return MovementView.of(process.moveApplication(jobId, applicationId, user.id().value(), body.stageId(),
-			kind, body.note()));
 	}
 
 	/** Linha do tempo da candidatura: quem moveu, quando, de onde para onde. */
@@ -202,16 +250,56 @@ class SelectionProcessController {
 		}
 	}
 
+	/**
+	 * O card do board. O score vem com os componentes escritos (nunca só o número) e
+	 * `scoreAvailable = false` quando a vaga não diz o que pede — a tela mostra "sem dados para
+	 * comparar" em vez de "0".
+	 */
 	record BoardCardView(String applicationId, String userId, String status, String appliedAt,
-			String stageId, boolean rejected, String lastMovementAt) {
+			String stageId, boolean rejected, String lastMovementAt, ScoreView score) {
 
 		static BoardCardView of(JobApplication application,
-				SelectionProcessService.PipelinePosition position) {
+				SelectionProcessService.PipelinePosition position, CandidateScore score) {
 			return new BoardCardView(application.id(), application.userId(), application.status().name(),
 				application.appliedAt() == null ? null : application.appliedAt().toString(),
 				position == null ? null : position.stageId(), position != null && position.rejected(),
 				position == null || position.lastMovementAt() == null ? null
-					: position.lastMovementAt().toString());
+					: position.lastMovementAt().toString(),
+				score == null ? null : ScoreView.of(score));
+		}
+	}
+
+	record ScoreComponentView(String code, String label, int points, int maxPoints) {
+
+		static ScoreComponentView of(CandidateScore.Component component) {
+			return new ScoreComponentView(component.code(), component.label(), component.points(),
+				component.maxPoints());
+		}
+	}
+
+	record ScoreView(int total, boolean available, List<ScoreComponentView> components) {
+
+		static ScoreView of(CandidateScore score) {
+			return new ScoreView(score.total(), score.available(),
+				score.components().stream().map(ScoreComponentView::of).toList());
+		}
+	}
+
+	record BatchMoveRequest(List<String> applicationIds, String stageId, String kind, String note) {
+	}
+
+	record BatchMoveResultView(String applicationId, MovementView movement, String errorCode, String errorMessage) {
+	}
+
+	/** Candidatura na fila de triagem: quem é, em que pé está e por que tem esse score. */
+	record RankedCandidateView(String applicationId, String userId, String name, String status, String appliedAt,
+			ScoreView score) {
+
+		static RankedCandidateView of(CandidateTriageService.Ranked ranked) {
+			return new RankedCandidateView(ranked.application().id(), ranked.application().userId(),
+				ranked.candidateName(), ranked.application().status().name(),
+				ranked.application().appliedAt() == null ? null : ranked.application().appliedAt().toString(),
+				ScoreView.of(ranked.score()));
 		}
 	}
 

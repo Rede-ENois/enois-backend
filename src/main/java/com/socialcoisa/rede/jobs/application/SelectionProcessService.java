@@ -44,6 +44,9 @@ import com.socialcoisa.rede.shared.web.ApiException;
 @Service
 public class SelectionProcessService {
 
+	/** Teto do movimento em lote: além disso a seleção foi feita errada, e não se adivinha. */
+	public static final int MAX_BATCH_SIZE = 200;
+
 	private final JobRepository jobs;
 	private final SelectionProcessRepository pipeline;
 	private final SelectionProcessTemplateRepository templates;
