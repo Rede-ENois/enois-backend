@@ -132,6 +132,10 @@ backlog) e diga na PR — nunca deixe em silêncio.
   pessoal (e-mail, IP, telefone, documento) não aparecem em lugar algum — nem em fixture de teste.
 - **Nunca desative um controle de segurança para fazer teste passar** (guarda, rate limit, captcha,
   validação). Se o teste pede isso, o teste está errado.
+- **Conteúdo sexual é zero tolerância, inclusive a variação "soft"**: pornografia explícita, nudez,
+  nudez parcial com intenção erótica, lingerie sexualizante, teaser erótico e "quase pornografia"
+  contam como o mesmo problema; não existe exceção artística, criativa ou de humor que suavize a
+  regra, e nenhuma alteração de moderação pode afrouxá-la. Ver `docs/PUBLISHING_POLICY.md`.
 - **Produção é intocável por agente:** nenhuma ação destrutiva, nenhuma escrita, nenhuma conta de
   teste. Validação de produção é sonda de leitura pública (`GET /api/version`, `GET /health`) e tela.
 - **Push em `main` ou `qa` dispara deploy automático.** Não force push, não dispare workflow manual,

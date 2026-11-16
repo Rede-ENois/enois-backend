@@ -389,6 +389,57 @@ class SelectionProcessTests {
 		mockMvc.perform(get("/jobs/recruitment")).andExpect(status().isUnauthorized());
 	}
 
+	/**
+	 * A central é de quem recruta. Antes do flag, qualquer conta autenticada recebia 200 com a
+	 * central vazia — o recurso parecia existir para quem não é recrutador. Agora: sem vaga e sem a
+	 * declaração do perfil, é recusa explícita; com a declaração, a central abre (mesmo vazia).
+	 */
+	@Test
+	void hubRefusesAnAccountThatNeitherRecruitsNorOwnsVacancies() throws Exception {
+		var stranger = auth.authenticate("hub_stranger");
+
+		mockMvc.perform(get("/jobs/recruitment").header("X-Session-Token", stranger.token()))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("RECRUITER_REQUIRED"));
+
+		// Declarar-se recrutador no próprio perfil abre a central — ainda sem vaga, a lista é vazia.
+		mockMvc.perform(patch("/me/profile")
+				.header("X-Session-Token", stranger.token())
+				.header("Idempotency-Key", "hub-recruiter-flag-" + stranger.userId())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"isRecruiter\":true}"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.isRecruiter").value(true));
+
+		mockMvc.perform(get("/jobs/recruitment").header("X-Session-Token", stranger.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.jobs.length()").value(0))
+			.andExpect(jsonPath("$.totals.jobs").value(0));
+
+		// Desligar volta a fechar para quem não tem vaga publicada.
+		mockMvc.perform(patch("/me/profile")
+				.header("X-Session-Token", stranger.token())
+				.header("Idempotency-Key", "hub-recruiter-off-" + stranger.userId())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"isRecruiter\":false}"))
+			.andExpect(status().isOk());
+
+		mockMvc.perform(get("/jobs/recruitment").header("X-Session-Token", stranger.token()))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("RECRUITER_REQUIRED"));
+	}
+
+	/** Quem tem vaga continua vendo a central sem depender da declaração: o fluxo antigo não quebra. */
+	@Test
+	void hubStaysOpenForWhomOwnsAVacancyWithoutTheRecruiterFlag() throws Exception {
+		var employer = auth.authenticate("hub_legacy_owner");
+		createJob(employer);
+
+		mockMvc.perform(get("/jobs/recruitment").header("X-Session-Token", employer.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.jobs.length()").value(1));
+	}
+
 	// ---------- Apoio ----------
 
 	private String createJob(TestAuthHelper.AuthSession session) throws Exception {

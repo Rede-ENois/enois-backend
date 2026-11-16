@@ -25,6 +25,7 @@ import com.socialcoisa.rede.corporate.domain.CorporateProfile;
 import com.socialcoisa.rede.feed.domain.ReactionType;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
+import com.socialcoisa.rede.messaging.application.MessageReplyReader;
 import com.socialcoisa.rede.messaging.application.MessagingService;
 import com.socialcoisa.rede.messaging.application.port.out.MessagingRepository;
 import com.socialcoisa.rede.messaging.domain.Conversation;
@@ -45,6 +46,7 @@ class MessagingContractController {
 	private final IdempotencyApplicationService idempotency;
 	private final CurrentUserResolver currentUserResolver;
 	private final MessagingService messagingService;
+	private final MessageReplyReader messageReplyReader;
 	private final CursorCodec cursorCodec;
 	private final com.socialcoisa.rede.shared.blocks.BlockedUsersReader blockedUsersReader;
 	private final CorporateProfileService corporateProfiles;
@@ -52,10 +54,11 @@ class MessagingContractController {
 	MessagingContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
 			MessagingService messagingService, CursorCodec cursorCodec,
 			com.socialcoisa.rede.shared.blocks.BlockedUsersReader blockedUsersReader,
-			CorporateProfileService corporateProfiles) {
+			CorporateProfileService corporateProfiles, MessageReplyReader messageReplyReader) {
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.messagingService = messagingService;
+		this.messageReplyReader = messageReplyReader;
 		this.cursorCodec = cursorCodec;
 		this.blockedUsersReader = blockedUsersReader;
 		this.corporateProfiles = corporateProfiles;
@@ -150,16 +153,18 @@ class MessagingContractController {
 			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
 		}
 		limit = Math.clamp(limit, 1, 100);
-		Instant before = cursorCodec.decode(cursor).orElse(null);
-		List<Message> msgs = messagingService.getMessages(conversationId, user.id().value(), before, limit);
+		var pageCursor = cursorCodec.decodePage(cursor);
+		Instant before = pageCursor.map(CursorCodec.PageCursor::instant).orElse(null);
+		String beforeId = pageCursor.map(CursorCodec.PageCursor::tieBreak).orElse(null);
+		List<Message> msgs = messagingService.getMessages(conversationId, user.id().value(), before, beforeId, limit);
 		var summaries = messagingService.reactionSummaries(msgs.stream().map(Message::id).toList(),
 			user.id().value());
 		// Carrega em batch as mensagens citadas (reply) da página, sem N+1.
 		java.util.Set<String> replyIds = msgs.stream()
 			.map(Message::replyToId).filter(java.util.Objects::nonNull).collect(java.util.stream.Collectors.toSet());
-		java.util.Map<String, Message> repliedMessages = replyIds.isEmpty() ? java.util.Map.of()
-			: messagingService.findMessagesByIds(replyIds).stream()
-				.collect(java.util.stream.Collectors.toMap(Message::id, java.util.function.Function.identity()));
+		java.util.Map<String, Message> repliedMessages = messageReplyReader
+			.findVisible(conversationId, user.id().value(), replyIds).stream()
+			.collect(java.util.stream.Collectors.toMap(Message::id, java.util.function.Function.identity()));
 		var items = msgs.stream()
 			.map(m -> {
 				var summary = summaries.get(m.id());
@@ -167,9 +172,11 @@ class MessagingContractController {
 				if (m.replyToId() != null) {
 					Message replied = repliedMessages.get(m.replyToId());
 					if (replied != null) {
-						String replyText = replied.text().length() > 100
+						// Ciphertext precisa chegar inteiro para o cliente conseguir decifrar.
+						String replyText = !replied.e2e() && replied.text().length() > 100
 							? replied.text().substring(0, 97) + "..." : replied.text();
-						replyView = new ReplyView(replied.id(), replied.senderId(), replyText, replied.e2e());
+						replyView = new ReplyView(replied.id(), replied.senderId(), replyText, replied.e2e(),
+							replied.iv(), replied.encryptedKeys(), replied.mediaIds(), replied.mediaSpoiler());
 					}
 				}
 				return new MessageView(m.id(), m.conversationId(), m.senderId(), m.text(), m.mediaIds(),
@@ -179,9 +186,10 @@ class MessagingContractController {
 					m.e2e(), m.iv(), m.encryptedKeys(), m.replyToId(), replyView);
 			})
 			.toList();
-		// Pagina cheia => ainda ha mensagens mais antigas: o cursor aponta para a mais antiga desta pagina.
+		// Pagina cheia => ainda ha mensagens mais antigas: o cursor aponta para a mais antiga desta pagina,
+		// com o id como desempate (duas mensagens podem compartilhar o segundo).
 		String nextCursor = msgs.size() == limit && !msgs.isEmpty()
-			? cursorCodec.encode(msgs.get(msgs.size() - 1).createdAt()) : null;
+			? cursorCodec.encodePage(msgs.get(msgs.size() - 1).createdAt(), msgs.get(msgs.size() - 1).id()) : null;
 		return new PageResponse<>(items, nextCursor);
 	}
 
@@ -217,10 +225,19 @@ class MessagingContractController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String conversationId, @RequestBody SendMessageRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		String hash = idempotency.hash(Map.of("conversationId", conversationId, "text",
-			request.text() == null ? "" : request.text(), "mediaIds",
-			request.mediaIds() == null ? List.of() : request.mediaIds(), "mediaSpoiler",
-			Boolean.TRUE.equals(request.mediaSpoiler())));
+		// O hash cobre o payload INTEIRO do envio. Faltando e2e/iv/encryptedKeys/replyToId, dois
+		// envios diferentes com a mesma chave viravam replay do primeiro: o segundo conteudo (e a
+		// cifra dele) nunca chegava a ser gravado.
+		java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
+		payload.put("conversationId", conversationId);
+		payload.put("text", request.text() == null ? "" : request.text());
+		payload.put("mediaIds", request.mediaIds() == null ? List.of() : request.mediaIds());
+		payload.put("mediaSpoiler", Boolean.TRUE.equals(request.mediaSpoiler()));
+		payload.put("e2e", Boolean.TRUE.equals(request.e2e()));
+		payload.put("iv", request.iv() == null ? "" : request.iv());
+		payload.put("encryptedKeys", request.encryptedKeys() == null ? "" : request.encryptedKeys());
+		payload.put("replyToId", request.replyToId() == null ? "" : request.replyToId());
+		String hash = idempotency.hash(payload);
 		return idempotency.execute(user.id(), "POST", "/api/conversations/{conversationId}/messages", idempotencyKey,
 			hash, () -> {
 				Message msg;
@@ -539,7 +556,8 @@ class MessagingContractController {
 			boolean e2e, String iv, String encryptedKeys, String replyToId, ReplyView replyTo) {
 	}
 
-	record ReplyView(String id, String from, String text, boolean e2e) {
+	record ReplyView(String id, String from, String text, boolean e2e, String iv, String encryptedKeys,
+			List<String> mediaIds, boolean mediaSpoiler) {
 	}
 
 	record CreateConversationRequest(String kind, String title, List<String> participantIds) {

@@ -24,4 +24,14 @@ class AuditLogPersistenceAdapter implements AuditLogRepository {
 		repository.save(new AuditLogJpaEntity(UUID.randomUUID().toString(), actorId.value(), action, targetId, metadata,
 			clock.instant()));
 	}
+
+	@Override
+	public java.util.List<AuditRecord> recentForTarget(String targetId, int limit) {
+		return repository.findByTargetIdOrderByCreatedAtDesc(targetId,
+			org.springframework.data.domain.PageRequest.ofSize(limit))
+			.stream()
+			.map(entity -> new AuditRecord(entity.id(), entity.actorId(), entity.action(), entity.targetId(),
+				entity.metadata(), entity.createdAt()))
+			.toList();
+	}
 }

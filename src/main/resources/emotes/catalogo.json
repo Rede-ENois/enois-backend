@@ -1,7 +1,7 @@
 {
  "source": "BTTV /3/cached/emotes/global + FFZ /v1/emotes?sort=count-desc (popular e animated)",
  "generatedAt": "2026-10-29T02:52:03Z",
- "total": 1018,
+ "total": 1017,
  "emotes": [
   {
    "code": "OMEGALUL",
@@ -1129,13 +1129,6 @@
    "id": "35752",
    "animated": false,
    "popularRank": 175
-  },
-  {
-   "code": "PantsGrab",
-   "provider": "FFZ",
-   "id": "283427",
-   "animated": false,
-   "popularRank": 176
   },
   {
    "code": "4HEader",

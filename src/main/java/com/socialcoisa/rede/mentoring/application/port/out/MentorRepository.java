@@ -24,6 +24,12 @@ public interface MentorRepository {
 
 	void saveSlot(MentorSlot slot);
 
+	/**
+	 * Reserva o horário só se ele ainda estiver livre e devolve se o UPDATE o alcançou. É o
+	 * árbitro da corrida entre duas inscrições no mesmo horário: o banco decide, não a leitura.
+	 */
+	boolean bookSlotIfFree(String slotId);
+
 	List<MentorSlot> findSlotsByMentor(String mentorId);
 
 	Optional<MentorSlot> findSlotById(String slotId);

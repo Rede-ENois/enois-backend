@@ -15,6 +15,7 @@ Uso: `python3 scripts/emotes-snapshot.py` (so rede; nenhuma credencial).
 import json
 import re
 import sys
+import unicodedata
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +36,32 @@ FFZ_LISTING = "https://api.frankerfacez.com/v1/emotes?sort=count-desc&per_page=2
 PAGINAS_POPULARES = 4
 PAGINAS_ANIMADAS = 2
 
+# Mesma politica de `EmoteNamePolicy`: figurinha de nome sexual nao entra no retrato.
+FORTES = (
+    "dick", "porn", "nude", "nudes", "boob", "titt", "titty", "pussy", "vagina", "penis", "anal",
+    "orgasm", "handjob", "blowjob", "jerkoff", "hentai", "cumshot", "jizz", "cumm", "sexy", "booty",
+    "butt", "eggplant", "poggies", "peitos", "punheta", "buceta", "transar", "pantsgrab",
+)
+FRACOS = ("egg", "plant", "show", "sex", "naked", "pelada", "pelado")
+EXCECOES = ("button", "butter", "butterfly")
+
+
+def normalizar(codigo):
+    letras = unicodedata.normalize("NFD", codigo.lower()).encode("ascii", "ignore").decode("ascii")
+    trocas = {"0": "o", "1": "i", "!": "i", "|": "i", "3": "e", "4": "a", "@": "a", "5": "s", "$": "s", "7": "t"}
+    return "".join(trocas.get(c, c) for c in letras if trocas.get(c, c).isalpha())
+
+
+def nome_barrado(codigo):
+    normalizado = normalizar(codigo)
+    if not normalizado:
+        return False
+    if any(innocuo in normalizado for innocuo in EXCECOES):
+        return False
+    if any(termo in normalizado for termo in FORTES):
+        return True
+    return normalizado in FRACOS
+
 
 def baixar(url):
     request = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
@@ -47,6 +74,8 @@ def baixar(url):
 def emote(code, provider, identificador, animated=False, popular_rank=None):
     """Valida como o record `Emote`; devolve None para o que nunca apareceria no texto."""
     if not isinstance(code, str) or not CODIGO.match(code):
+        return None
+    if nome_barrado(code):
         return None
     if not isinstance(identificador, str) or not IDENTIFICADOR.match(identificador):
         return None

@@ -168,6 +168,52 @@ class JobPersistenceAdapter implements JobRepository {
 	}
 
 	@Override
+	public List<com.socialcoisa.rede.jobs.domain.JobApplication> findApplicationsByJobPage(String jobId,
+			java.time.Instant beforeAppliedAt, Long beforeId,
+			com.socialcoisa.rede.jobs.domain.JobApplicationStatus status, String search, int limit) {
+		// Duas etapas de proposito: o `@ElementCollection` das respostas e EAGER, e um JOIN FETCH
+		// com pagina faz o Hibernate paginar em memoria (as linhas do fetch multiplicam). Aqui os
+		// ids da pagina saem do banco com ordenacao e corte, e so essas linhas sao carregadas.
+		CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+		CriteriaQuery<Long> idQuery = cb.createQuery(Long.class);
+		Root<JobApplicationJpaEntity> root = idQuery.from(JobApplicationJpaEntity.class);
+		List<Predicate> where = new ArrayList<>();
+		where.add(cb.equal(root.get("jobId"), jobId));
+		if (status != null) {
+			where.add(cb.equal(root.get("status"), status));
+		}
+		if (beforeAppliedAt != null && beforeId != null) {
+			Predicate earlier = cb.lessThan(root.get("appliedAt"), beforeAppliedAt);
+			Predicate sameInstantEarlierId = cb.and(
+				cb.equal(root.get("appliedAt"), beforeAppliedAt),
+				cb.lessThan(root.<Long>get("id"), beforeId));
+			where.add(cb.or(earlier, sameInstantEarlierId));
+		}
+		// A busca casa o texto que o recrutador ve no card: o retrato do candidato gravado no
+		// momento da inscricao e a mensagem. Campo nulo vira string vazia para o LIKE nunca ficar
+		// desconhecido (e esconder a linha).
+		String pattern = com.socialcoisa.rede.shared.web.LikePattern.contains(search);
+		if (pattern != null) {
+			where.add(cb.or(
+				cb.like(cb.lower(cb.coalesce(root.get("candidateSnapshot"), "")), pattern, LIKE_ESCAPE),
+				cb.like(cb.lower(cb.coalesce(root.get("message"), "")), pattern, LIKE_ESCAPE)));
+		}
+		idQuery.select(root.get("id"))
+			.where(where.toArray(Predicate[]::new))
+			.orderBy(cb.desc(root.get("appliedAt")), cb.desc(root.get("id")));
+		List<Long> ids = entityManager.createQuery(idQuery).setMaxResults(limit).getResultList();
+		if (ids.isEmpty()) {
+			return List.of();
+		}
+		// A ordem da primeira consulta e a que vale; o IN nao garante ordem.
+		java.util.Map<Long, JobApplicationJpaEntity> byId = applicationRepo.findAllById(ids).stream()
+			.collect(java.util.stream.Collectors.toMap(JobApplicationJpaEntity::numericId, entity -> entity));
+		return ids.stream().map(byId::get).filter(java.util.Objects::nonNull)
+			.map(JobApplicationJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
 	public List<com.socialcoisa.rede.jobs.domain.JobApplication> findApplicationsByUser(String userId, int limit) {
 		return applicationRepo.findByUserIdOrderByAppliedAtDesc(userId, PageRequest.of(0, limit)).stream()
 			.map(JobApplicationJpaEntity::toDomain)

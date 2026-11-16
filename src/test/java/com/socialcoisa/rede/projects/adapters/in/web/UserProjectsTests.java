@@ -221,6 +221,32 @@ class UserProjectsTests {
 	}
 
 	@Test
+	void projectHtmlDocumentKeepsStylesAndUnicodeOnCreateAndUpdate() throws Exception {
+		var session = auth.authenticate("user_proj_unicode_document");
+		String html = """
+			<!doctype html><html><head><style>
+			.marca::before { content: '✳'; }
+			</style></head><body><h2>Projeto Unicode → ↗ ⌕ ◎ 🧪</h2></body></html>
+			""";
+		var payload = objectMapper.createObjectNode().put("title", "Projeto Unicode").put("html", html);
+		String created = mockMvc.perform(withSession(post("/me/projects"), session)
+			.contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(payload)))
+			.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+		var project = objectMapper.readTree(created);
+		assertThat(project.path("html").asText()).contains("<style>", "✳", "→", "🧪");
+
+		payload.put("html", html.replace("Projeto Unicode", "Projeto revisado"));
+		String updated = mockMvc.perform(withSession(put("/me/projects/" + project.path("id").asText()), session)
+			.contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(payload)))
+			.andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+		String savedHtml = objectMapper.readTree(updated).path("html").asText();
+		assertThat(savedHtml).contains("Projeto revisado", "<style>", "✳", "→", "🧪");
+		mockMvc.perform(withSession(get("/me/projects"), session))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[?(@.id == '" + project.path("id").asText() + "')].html").value(savedHtml));
+	}
+
+	@Test
 	void diaryEntryAcceptsTheWholeLinkedInDescription() throws Exception {
 		var session = auth.authenticate("user_proj_diary_2000");
 

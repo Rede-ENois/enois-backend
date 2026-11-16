@@ -23,9 +23,10 @@ import com.socialcoisa.rede.shared.security.UserRateLimiter;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 /**
- * Voto da enquete: UMA alternativa, UM voto por pessoa, sem troca. A regra nao e "melhor esforco":
- * a unique (post_id, user_id) recusa o segundo voto e a leitura devolve o voto que ja estava la.
- * Votar de novo na MESMA alternativa tambem e recusado (nao ha "confirmar" — o voto ja vale).
+ * Voto da enquete: UMA alternativa por pessoa, e a pessoa pode TROCAR de alternativa (regravando na
+ * nova). A unique (post_id, user_id) garante uma linha por pessoa — trocar de voto e UPDATE da
+ * linha, nunca um segundo voto. Repetir a MESMA alternativa e idempotente: nao ha escrita, a
+ * leitura devolve o estado que ja estava la.
  */
 @Service
 public class PollVoteService implements VotePollUseCase {
@@ -76,24 +77,30 @@ public class PollVoteService implements VotePollUseCase {
 			throw new ApiException(400, "INVALID_POLL_OPTION", "Alternativa da enquete invalida.");
 		}
 		Integer previous = polls.votesByUserAndPostIds(user, List.of(post.id().value())).get(post.id().value());
-		if (previous != null) {
-			// Sem troca de opiniao: o voto e definitivo. 409 porque o estado do recurso ja decide.
-			throw new ApiException(409, "ALREADY_VOTED", "Voce ja votou nesta enquete — o voto nao pode ser trocado.");
+		if (previous != null && previous == optionPosition) {
+			// Mesma alternativa: o voto ja esta gravado — devolve o estado sem escrever de novo.
+			return view(post.id().value(), options, optionPosition);
 		}
 		try {
 			polls.vote(post.id(), user, optionPosition);
 		}
 		catch (DataIntegrityViolationException concurrent) {
-			// Outra requisicao da mesma pessoa chegou primeiro: vale o voto que ficou gravado.
-			throw new ApiException(409, "ALREADY_VOTED", "Voce ja votou nesta enquete — o voto nao pode ser trocado.");
+			// Duas requisicoes da mesma pessoa chegaram juntas e as duas viram "sem voto": uma
+			// gravou, a outra bateu na unique. Vale o voto ja gravado; quem vota recarrega o
+			// estado real e, se quiser trocar, envia de novo (a troca em si continua aceita).
+			throw new ApiException(409, "ALREADY_VOTED", "Voce ja votou nesta enquete.");
 		}
-		Map<Integer, Long> counts = polls.countsByPostIds(List.of(post.id().value()))
-			.getOrDefault(post.id().value(), Map.of());
+		return view(post.id().value(), options, optionPosition);
+	}
+
+	/** Contagem por alternativa + total, com o voto gravado marcado em {@code myVote}. */
+	private PollView view(String postId, List<String> options, int myVote) {
+		Map<Integer, Long> counts = polls.countsByPostIds(List.of(postId)).getOrDefault(postId, Map.of());
 		List<Long> perOption = new java.util.ArrayList<>(options.size());
 		for (int position = 0; position < options.size(); position++) {
 			perOption.add(counts.getOrDefault(position, 0L));
 		}
 		long total = perOption.stream().mapToLong(Long::longValue).sum();
-		return new PollView(options, perOption, optionPosition, total);
+		return new PollView(options, perOption, myVote, total);
 	}
 }

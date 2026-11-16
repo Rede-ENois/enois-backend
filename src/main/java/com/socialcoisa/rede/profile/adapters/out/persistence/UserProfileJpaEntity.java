@@ -143,6 +143,10 @@ class UserProfileJpaEntity {
 	@Column(name = "is_mentor", nullable = false)
 	private boolean mentor;
 
+	/** Declaracao do perfil, nao papel administrativo (ver UserProfile#recruiter). */
+	@Column(name = "is_recruiter", nullable = false)
+	private boolean recruiter;
+
 	@Column(nullable = false)
 	private int reputation;
 
@@ -247,6 +251,7 @@ class UserProfileJpaEntity {
 		entity.externalLinks = new ArrayList<>(profile.externalLinks());
 		entity.openToWork = profile.openToWork();
 		entity.mentor = profile.mentor();
+		entity.recruiter = profile.recruiter();
 		entity.isAdmin = profile.admin();
 		entity.reputation = profile.reputation();
 		entity.createdAt = profile.createdAt();
@@ -290,6 +295,7 @@ class UserProfileJpaEntity {
 			profile.enableFederatedSecondFactor(federatedSecondFactorAt);
 		}
 		profile.hydrateAdmin(isAdmin);
+		profile.hydrateRecruiter(recruiter);
 		profile.hydrateIdentityDisplay(nickname, socialName, pronouns);
 		profile.hydrateAka(aka);
 		profile.hydrateBirthDate(birthDate);

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="pt-BR" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sua inscrição para servir um nó foi aprovada</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f8f7ff; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; -webkit-font-smoothing: antialiased;">
+<table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #f8f7ff;">
+    <tr>
+        <td align="center" style="padding: 40px 16px;">
+            <table role="presentation" style="width: 100%; max-width: 560px; border-collapse: collapse; background-color: #ffffff; border-radius: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 8px 24px -8px rgba(99,102,241,0.08);">
+
+                <tr>
+                    <td style="padding: 32px 40px 28px 40px; text-align: center; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); border-radius: 16px 16px 0 0;">
+                        <h1 style="margin: 0; color: #ffffff; font-family: 'Plus Jakarta Sans', 'Inter', sans-serif; font-size: 26px; font-weight: 700; letter-spacing: -0.02em;">
+                            Rede Énois
+                        </h1>
+                        <p style="margin: 8px 0 0 0; color: rgba(255,255,255,0.85); font-size: 13px; font-weight: 500; letter-spacing: 0.02em;">
+                            Nó aprovado
+                        </p>
+                    </td>
+                </tr>
+
+                <tr>
+                    <td style="padding: 40px 40px 32px 40px;">
+                        <h2 style="margin: 0 0 16px 0; color: #1a1a2e; font-family: 'Plus Jakarta Sans', 'Inter', sans-serif; font-size: 22px; font-weight: 600; letter-spacing: -0.02em;">
+                            Olá, <span th:text="${userName}">participante</span>! 👋
+                        </h2>
+
+                        <p style="margin: 0 0 16px 0; color: #4b5563; font-size: 15px; line-height: 1.6;">
+                            Sua inscrição para servir um nó na <strong style="color: #1a1a2e;">Rede Énois</strong> foi <strong style="color: #1a1a2e;">aprovada</strong>.
+                        </p>
+
+                        <p style="margin: 0 0 28px 0; color: #4b5563; font-size: 15px; line-height: 1.6;">
+                            Clique no botão abaixo para exibir a chave do seu nó. O link é
+                            <strong style="color: #1a1a2e;">válido por 7 dias</strong> e pode ser aberto
+                            <strong style="color: #1a1a2e;">uma única vez</strong>.
+                        </p>
+
+                        <table role="presentation" style="width: 100%; border-collapse: collapse; margin: 28px 0;">
+                            <tr>
+                                <td align="center">
+                                    <a th:href="${revealLink}"
+                                       style="display: inline-block; padding: 14px 40px; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: #ffffff; text-decoration: none; border-radius: 999px; font-weight: 600; font-size: 15px; font-family: 'Plus Jakarta Sans', 'Inter', sans-serif; letter-spacing: -0.01em; box-shadow: 0 4px 12px rgba(99,102,241,0.3);">
+                                        Exibir a chave do meu nó
+                                    </a>
+                                </td>
+                            </tr>
+                        </table>
+
+                        <p style="margin: 0 0 16px 0; color: #4b5563; font-size: 14px; line-height: 1.6;">
+                            Depois de aprovada pela máquina, a chave continua sendo o que autoriza o nó a
+                            operar: guarde-a enquanto a exibe, porque o servidor não a mostra de novo.
+                        </p>
+                    </td>
+                </tr>
+
+                <tr>
+                    <td style="padding: 20px 40px; background-color: #fffbeb; border-top: 1px solid #fde68a;">
+                        <p style="margin: 0; color: #92400e; font-size: 13px; line-height: 1.5;">
+                            <strong style="color: #78350f;">⚠️ Abra o link uma única vez.</strong><br>
+                            Se a chave for perdida depois de exibida, não há como recuperá-la: será
+                            preciso fazer uma nova inscrição. Na dúvida, não abra o link em mais de um
+                            lugar ao mesmo tempo.
+                        </p>
+                    </td>
+                </tr>
+
+                <tr>
+                    <td style="padding: 28px 40px; text-align: center; border-top: 1px solid #f3f4f6; border-radius: 0 0 16px 16px;">
+                        <p style="margin: 0 0 8px 0; color: #9ca3af; font-size: 12px; line-height: 1.5;">
+                            Este é um email automático, por favor não responda.
+                        </p>
+                        <p style="margin: 0; color: #9ca3af; font-size: 12px;">
+                            © <span th:text="${currentYear}">2026</span> Rede Énois · Todos os direitos reservados.
+                        </p>
+                    </td>
+                </tr>
+            </table>
+        </td>
+    </tr>
+</table>
+</body>
+</html>

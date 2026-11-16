@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
@@ -17,6 +18,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -49,6 +51,9 @@ class MentorSessionCompletionTests {
 	@Autowired
 	private CoinService coins;
 
+	@Autowired
+	private JdbcTemplate jdbc;
+
 	@Test
 	void aSessionWhoseTimeEndedIsCompletedAndLeavesTheUpcomingList() throws Exception {
 		var auth = new TestAuthHelper(mockMvc, objectMapper);
@@ -56,11 +61,14 @@ class MentorSessionCompletionTests {
 		var mentee = auth.authenticate("mentor_clock_mentee");
 		String mentorId = createMentor(owner, null);
 
-		// Horário de uma hora que já terminou (começou duas horas atrás) e um futuro de controle.
-		String endedSlot = createSlot(owner, mentorId, Instant.now().minusSeconds(7_200));
-		String futureSlot = createSlot(owner, mentorId, Instant.now().plusSeconds(86_400));
+		// Horário de uma hora que já terminou e um futuro de controle. Os dois são publicados e
+		// reservados no futuro (o passado não se publica nem se reserva) e o primeiro é recuado
+		// direto na linha, que é o estado real de um horário que passou sem ninguém remarcar.
+		String endedSlot = createSlot(owner, mentorId, Instant.now().plusSeconds(86_400));
+		String futureSlot = createSlot(owner, mentorId, Instant.now().plusSeconds(90_000));
 		String ended = book(mentee, mentorId, endedSlot);
 		String upcoming = book(mentee, mentorId, futureSlot);
+		ageSlot(endedSlot, Instant.now().minusSeconds(7_200));
 
 		// A agenda do mentor: a que terminou vira concluída; a futura continua agendada.
 		mockMvc.perform(get("/mentors/" + mentorId + "/sessions").header("X-Session-Token", owner.token()))
@@ -88,10 +96,11 @@ class MentorSessionCompletionTests {
 		var mentee = auth.authenticate("mentor_clock_worker_mentee");
 		String mentorId = createMentor(owner, PRICE);
 		// Terminou um minuto atrás: passou do horário, mas ainda dentro da janela de contestação.
-		String slotId = createSlot(owner, mentorId, Instant.now().minusSeconds(3_660));
+		String slotId = createSlot(owner, mentorId, Instant.now().plusSeconds(86_400));
 
 		fund(mentee, CoinService.FAIS(200), "test-mentoria-relogio-worker");
 		String sessionId = book(mentee, mentorId, slotId);
+		ageSlot(slotId, Instant.now().minusSeconds(3_660));
 		long ownerBefore = coins.balance(owner.userId());
 		long menteeBefore = coins.balance(mentee.userId());
 
@@ -114,12 +123,13 @@ class MentorSessionCompletionTests {
 		var mentee = auth.authenticate("mentor_clock_settle_mentee");
 		String mentorId = createMentor(owner, PRICE);
 		// Oito dias atrás: já passou a janela de contestação de sete dias contada do fim do horário.
-		String slotId = createSlot(owner, mentorId, Instant.now().minusSeconds(8 * 86_400L));
+		String slotId = createSlot(owner, mentorId, Instant.now().plusSeconds(86_400));
 
 		fund(mentee, CoinService.FAIS(200), "test-mentoria-relogio-settle");
 		long ownerBefore = coins.balance(owner.userId());
 		long menteeBefore = coins.balance(mentee.userId());
 		String sessionId = book(mentee, mentorId, slotId);
+		ageSlot(slotId, Instant.now().minusSeconds(8 * 86_400L));
 
 		// O relógio conclui primeiro (sem pagar) e o worker de liquidação resolve o valor depois.
 		mentorService.completeFinishedSessions();
@@ -144,11 +154,12 @@ class MentorSessionCompletionTests {
 		var owner = auth.authenticate("mentor_clock_manual_owner");
 		var mentee = auth.authenticate("mentor_clock_manual_mentee");
 		String mentorId = createMentor(owner, PRICE);
-		String slotId = createSlot(owner, mentorId, Instant.now().minusSeconds(8 * 86_400L));
+		String slotId = createSlot(owner, mentorId, Instant.now().plusSeconds(86_400));
 
 		fund(mentee, CoinService.FAIS(200), "test-mentoria-relogio-manual");
 		long ownerBefore = coins.balance(owner.userId());
 		String sessionId = book(mentee, mentorId, slotId);
+		ageSlot(slotId, Instant.now().minusSeconds(8 * 86_400L));
 
 		mockMvc.perform(post("/mentors/" + mentorId + "/sessions/" + sessionId + "/complete")
 				.header("X-Session-Token", owner.token())
@@ -194,6 +205,16 @@ class MentorSessionCompletionTests {
 			.andExpect(status().isCreated())
 			.andReturn();
 		return objectMapper.readTree(slot.getResponse().getContentAsString()).get("id").asText();
+	}
+
+	/**
+	 * Move o horário para o passado direto na linha. Publicar horário vencido não é permitido, mas a
+	 * linha continua existindo quando o tempo passa — é esse o estado de uma sessão que ficou para
+	 * trás, e é ele que o relógio da agenda precisa enxergar.
+	 */
+	private void ageSlot(String slotId, Instant startsAt) {
+		jdbc.update("update mentor_slots set starts_at = ?, ends_at = ? where id = ?",
+			Timestamp.from(startsAt), Timestamp.from(startsAt.plusSeconds(3_600)), slotId);
 	}
 
 	private String book(TestAuthHelper.AuthSession mentee, String mentorId, String slotId) throws Exception {
