@@ -22,4 +22,16 @@ public interface AuditLogRepository {
 	record AuditRecord(String id, String actorId, String action, String targetId, String metadata,
 			Instant createdAt) {
 	}
+
+	/**
+	 * Quantas linhas deste ator com a ação dada existem — a contribuição contada na própria trilha.
+	 *
+	 * <p>Serve à tela do participante: a recusa de um resultado é auditada com o nó como ator, e
+	 * essa linha é a única prova de que ele <b>entregou</b> e devolveu à fila. Contar da mesmíssima
+	 * linha que prova o fato impede que o número e a prova divirjam.</p>
+	 *
+	 * <p>Vai pelo índice {@code idx_audit_actor_created} (V1): a leitura é limitada ao ator, que é
+	 * um id de nó, e não à maior tabela de trilha do sistema.</p>
+	 */
+	long countByActorAndAction(UserId actorId, String action);
 }

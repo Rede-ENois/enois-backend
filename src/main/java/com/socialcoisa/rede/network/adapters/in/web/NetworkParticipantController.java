@@ -47,7 +47,7 @@ class NetworkParticipantController {
 	record MyNodeView(String id, String displayName, String status, List<String> profiles, String region,
 			String country, String runtimeVersion, Instant lastSeenAt, int declaredCpuCores, int declaredMemoryMb,
 			int declaredDiskMb, int declaredBandwidthMbps, Double observedCpuPercent, Integer observedMemoryMb,
-			Integer observedRunningTasks, Integer latencyMs, long tasksDone, boolean operable,
+			Integer observedRunningTasks, Integer latencyMs, long tasksDone, long tasksRequeued, boolean operable,
 			String quarantineReason) {
 
 		static MyNodeView of(NetworkParticipantService.NodeWithContribution entry) {
@@ -58,7 +58,7 @@ class NetworkParticipantController {
 				node.runtimeVersion(), node.lastSeenAt(), node.declaredCpuCores(), node.declaredMemoryMb(),
 				node.declaredDiskMb(), node.declaredBandwidthMbps(), node.observedCpuPercent(),
 				node.observedMemoryMb(), node.observedRunningTasks(), node.observedLatencyMs(),
-				entry.tasksDone(),
+				entry.tasksDone(), entry.tasksRequeued(),
 				node.canOperate(), quarantined ? node.quarantineReason() : null);
 		}
 	}
@@ -85,8 +85,9 @@ class NetworkParticipantController {
 	MyNodeView disconnect(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String id) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		return MyNodeView.of(new NetworkParticipantService.NodeWithContribution(
-			participant.disconnect(user.id().value(), id), 0));
+		// A tela do participante mostra a contribuição; a desconexão devolve o mesmo quadro, e um
+		// zero inventado aqui apagaria as tarefas que ele já concluiu no instante em que ele sai.
+		return MyNodeView.of(participant.disconnect(user.id().value(), id));
 	}
 
 	/**
