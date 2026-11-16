@@ -820,4 +820,12 @@ autorização da rota de voz. Tudo no mesmo commit da implementação. Branch
 As fases 0 a 10 estão concluídas no backend com prova executada. Segue o acompanhamento das PRs
 abertas (revisão humana e merge são decisão de mantenedor) e a validação de tela do front.
 
+### Correção de documentação (rodada seguinte)
+
+A seção "Próxima tarefa" do ROADMAP ainda anunciava "Mundo da campanha (localizações, pistas,
+NPCs)" como trabalho pendente — resíduo do planejamento anterior à Fase 7. O `WorldEntry` (atlas
+`LOCALE`/`CHARACTER`/`ITEM`/`PLOT`/`LORE`, API `/roleplay/campaigns/{c}/world`, V298) já entrega
+exatamente isso e está marcado como feito. Parágrafo removido: documento que descreve como
+pendente o que o código entrega é bug de documentação (AGENTS.md). Sem mudança de código.
+
 ---

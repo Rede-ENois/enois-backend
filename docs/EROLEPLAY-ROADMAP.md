@@ -151,10 +151,6 @@ explícito, nunca com comportamento genérico inventado.
 (código, testes verdes, docs e PRs para `qa` — aguardando revisão humana e merge, que é decisão de
 mantenedor). O que segue é acompanhamento das PRs abertas e a validação de tela do front.
 
-Mundo da campanha (localizações, pistas, NPCs) com referência a partir das campanhas, seguindo o
-mesmo contrato das demais peças: aditivo, autorização na campanha (ver = participante, escrever =
-mestre), SSE pelo mesmo evento `campaign`, e nada de conteúdo de sistema comercial.
-
 ## 6. Critérios de encerramento do agendamento
 
 O agendamento só é desativado quando as fases 0 a 10 estiverem concluídas **com prova
