@@ -971,6 +971,127 @@ class NetworkNodesTests {
 			""", "tsk_" + System.nanoTime(), status, "diag-" + System.nanoTime(), nodeId);
 	}
 
+	/**
+	 * A topologia como dado para a tela desenhar (brief §8.5). O que estes testes seguram é que a
+	 * rota entrega o agrupamento por <b>domínio de falha</b> que a rede pode afirmar — e não inventa
+	 * aresta entre dois nós, que o cadastro não registra.
+	 */
+	@Test
+	void a_topologia_agrupa_por_dominio_de_falha_e_nao_funde_regiao_nao_declarada() throws Exception {
+		String admin = adminToken();
+		String sudeste = enrollComLocation(issueToken(admin, "topo-se", List.of("NODE_WORKER")), "Sudeste", "BR");
+		String sudeste2 = enrollComLocation(issueToken(admin, "topo-se2", List.of("NODE_EDGE")), "SUDESTE", "BR");
+		// Nós sem região caem num domínio vazio, que é domínio próprio: fundi-lo com uma região real
+		// afirmaria um vínculo que o cadastro não registra.
+		String semRegiaoA = enroll(issueToken(admin, "topo-sem-a", List.of("NODE_WORKER")));
+		String semRegiaoB = enroll(issueToken(admin, "topo-sem-b", List.of("NODE_WORKER")));
+		// Um terceiro sem região: com 2 com e 2 sem, contar o grupo errado daria o mesmo número.
+		String semRegiaoC = enroll(issueToken(admin, "topo-sem-c", List.of("NODE_WORKER")));
+		for (String id : List.of(sudeste, sudeste2, semRegiaoA, semRegiaoB, semRegiaoC)) {
+			activate(admin, id);
+			heartbeat(admin, id, issueKey(admin, id), 5.0, 512, 0);
+		}
+
+		var result = mockMvc.perform(get("/admin/network/nodes/topology").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andReturn();
+		var tree = objectMapper.readTree(result.getResponse().getContentAsString());
+
+		var dominios = tree.get("domains");
+		var porRegiao = new java.util.HashMap<String, tools.jackson.databind.JsonNode>();
+		dominios.forEach(d -> porRegiao.put(d.get("region").asText(), d));
+
+		// Grafias diferentes são o MESMO domínio de falha (a normalização da colocação e da evacuação).
+		assertThat(porRegiao.get("sudeste").get("nodes").asLong()).isEqualTo(2);
+		// Os dois sem região caem no domínio vazio, e o domínio vazio não é a região de ninguém.
+		assertThat(porRegiao.get("").get("nodes").asLong()).isEqualTo(3);
+		assertThat(porRegiao.containsKey("sudeste")).isTrue();
+
+		// Aresta declarada só existe para quem declarou região: 2 de 4 nós.
+		assertThat(tree.get("declaredConnections").asLong()).isEqualTo(2);
+		assertThat(tree.get("truncated").asBoolean()).isFalse();
+
+		// O nó traz o domínio calculado e as quatro dimensões de saúde — a tela não faz segunda chamada.
+		var primeiro = tree.get("nodes").get(0);
+		assertThat(primeiro.has("domain")).isTrue();
+		assertThat(primeiro.get("alive").asBoolean()).isTrue();
+		assertThat(primeiro.get("health").get("host").asText()).isEqualTo("OK");
+	}
+
+	@Test
+	void regiao_evacuada_aparece_marcada_na_topologia() throws Exception {
+		String admin = adminToken();
+		String nodeId = enrollComLocation(issueToken(admin, "topo-evac", List.of("NODE_WORKER")), "nordeste", "BR");
+		activate(admin, nodeId);
+		heartbeat(admin, nodeId, issueKey(admin, nodeId), 5.0, 512, 0);
+
+		mockMvc.perform(post("/admin/network/regions").header("X-Session-Token", admin)
+			.contentType(MediaType.APPLICATION_JSON)
+			.content(objectMapper.writeValueAsString(Map.of("region", "nordeste", "reason", "incidente"))))
+			.andExpect(status().isOk());
+
+		var result = mockMvc.perform(get("/admin/network/nodes/topology").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andReturn();
+		// O nó continua vivo: o domínio é que está fora. Fundir as duas coisas esconderia a diferença
+		// entre "a máquina caiu" e "a região inteira foi evacuada por decisão".
+		var dominios = objectMapper.readTree(result.getResponse().getContentAsString()).get("domains");
+		boolean achou = false;
+		for (var d : dominios) {
+			if ("nordeste".equals(d.get("region").asText())) {
+				assertThat(d.get("outOfService").asBoolean()).isTrue();
+				assertThat(d.get("alive").asLong()).isEqualTo(1);
+				achou = true;
+			}
+		}
+		assertThat(achou).isTrue();
+	}
+
+	/**
+	 * Vivo é medido, status é administrativo. Um nó `ACTIVE` sem heartbeat dentro da janela precisa
+	 * aparecer vivo=falso: se a topologia mostrasse só o status, a tela desenharia como saudável uma
+	 * máquina que parou de responder — e é justamente no mapa que o operador procura o que caiu.
+	 */
+	@Test
+	void a_topologia_mostra_no_ativo_sem_heartbeat_como_nao_vivo() throws Exception {
+		String admin = adminToken();
+		String vivo = enrollComLocation(issueToken(admin, "topo-vivo", List.of("NODE_WORKER")), "sul", "BR");
+		String parado = enrollComLocation(issueToken(admin, "topo-parado", List.of("NODE_WORKER")), "sul", "BR");
+		activate(admin, vivo);
+		heartbeat(admin, vivo, issueKey(admin, vivo), 5.0, 512, 0);
+		// O heartbeat sempre grava o agora; para o nó ter parado de responder, o carimbo precisa
+		// recuar. O status fica ACTIVE dos dois lados — é o que torna a asserção discriminante.
+		activate(admin, parado);
+		heartbeat(admin, parado, issueKey(admin, parado), 5.0, 512, 0);
+		jdbc.update("update network_nodes set last_seen_at = ? where id = ?",
+			java.sql.Timestamp.from(java.time.Instant.now().minusSeconds(3600)), parado);
+
+		var result = mockMvc.perform(get("/admin/network/nodes/topology").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andReturn();
+		var tree = objectMapper.readTree(result.getResponse().getContentAsString());
+		var porId = new java.util.HashMap<String, tools.jackson.databind.JsonNode>();
+		tree.get("nodes").forEach(n -> porId.put(n.get("id").asText(), n));
+
+		assertThat(porId.get(parado).get("status").asText()).isEqualTo("ACTIVE");
+		assertThat(porId.get(vivo).get("alive").asBoolean()).isTrue();
+		assertThat(porId.get(parado).get("alive").asBoolean()).isFalse();
+
+		// O domínio conta só o vivo: contar o parado como disponível na mesma região esconderia
+		// que o domínio inteiro já não responde.
+		for (var d : tree.get("domains")) {
+			if ("sul".equals(d.get("region").asText())) {
+				assertThat(d.get("nodes").asLong()).isEqualTo(2);
+				assertThat(d.get("alive").asLong()).isEqualTo(1);
+			}
+		}
+	}
+
+	@Test
+	void a_topologia_exige_admin() throws Exception {
+		mockMvc.perform(get("/admin/network/nodes/topology")).andExpect(status().isUnauthorized());
+	}
+
 	// ---------------------------------------------------------------- interface do participante
 
 	/**
