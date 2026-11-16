@@ -203,6 +203,46 @@ Decisões:
 tipos presentes; nó desconhecido é `404`; sem sessão não abre; pessoa comum recebe `403`). Mutações:
 nó desconhecido devolvendo lista zerada e leitura do nó errado — **2 de 2 derrubam**.
 
+## 6.8 Quatro dimensões de saúde — `health`
+
+O brief §8.8 exige "obrigatoriamente" distinguir quatro dimensões de saúde, com um motivo explícito:
+**uma máquina pode estar online e a réplica inutilizável**. O quadro do nó era série + console +
+`freshness`; não havia onde ler se a máquina responde, se a instalação se identifica, se o nó serve a
+rede e se participa do balanceamento. Um único "verde/vermelho" afundava os quatro casos num só.
+
+`GET /admin/network/nodes/{id}/observability` passa a devolver `health` com quatro campos, cada um em
+`OK` / `DEGRADED` / `FAILING`:
+
+| dimensão | pergunta que responde | `OK` | `DEGRADED` | `FAILING` |
+|---|---|---|---|---|
+| `host` | o processo do nó responde? | heartbeat na janela de 180 s | — | heartbeat velho ou nunca recebido |
+| `runtime` | a instalação se identifica? | versão reportada | sem versão (runtime anterior ao campo) | — |
+| `application` | o nó executa o que lhe foi autorizado, e bem? | com perfil, sem falhas seguidas, sem atraso | falhas seguidas ≥ 3, ou agregados atrás da origem | sem perfil |
+| `network` | participa do balanceamento? | vivo, operando, com capacidade | saturado (CPU ≥ 85 %) ou sem vaga | parado, suspenso, revogado ou em quarentena |
+
+Decisões:
+
+- **Só o que o Control Plane mediu.** Não há sonda ao vivo: o nó não abre porta (o modelo é pull), e
+  "está vivo" é o heartbeat dentro da janela — a mesma do scheduler, do painel e da série. Um segundo
+  corte faria o nó estar vivo numa dimensão e morto na outra no mesmo quadro.
+- **`runtime` sem versão é `DEGRADED`, não `FAILING`.** O agente está vivo e atende, só não se dá a
+  conhecer; tratá-lo como falha tiraria do balanceamento máquinas que trabalham.
+- **`application` sem perfil é `FAILING`, com host `OK`.** A máquina está de pé e não serve a ninguém —
+  é o caso que o brief diz que não pode aparecer como "offline".
+- **`network` separada da `application`.** Nó suspenso por decisão administrativa tem host e runtime
+  saudáveis; o que caiu foi a participação. Sem essa separação o operador procuraria um defeito de
+  máquina que não existe.
+- **Atraso e falhas seguidas são `DEGRADED`.** Quantos agregados dependem de quantos existem na origem;
+  essa proporção não está no quadro, então o estado não sobe sozinho para `FAILING`.
+
+A derivação vive em `NodeHealth` (`network/domain`), puro: reusa `alive`, `canOperate`, `quarantined`,
+`saturated`, `hasCapacity`, `failing` e os limiares do domínio (`SATURATED_CPU_PERCENT = 85`,
+`FAILURE_STREAK_LIMIT = 3`) — nenhum limiar novo.
+
+**Verificação:** `NodeHealthTests` **8** + 3 testes novos em `NetworkNodeObservabilityTests`. Mutações:
+`network` ignorando `canOperate` (suspenso virando `OK`), `application` ignorando perfil vazio, `host`
+sempre `OK` — **3 de 3 derrubam**.
+
 ## 7. O que NÃO está entregue
 
 | item | por quê |
