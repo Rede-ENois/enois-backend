@@ -69,6 +69,14 @@ public class StorageHealer {
 			List<Skipped> skipped) {
 	}
 
+	/**
+	 * O relatório do healing com o despacho ao lado. {@code dispatched} são as tarefas
+	 * {@code OBJECT_PUT} enfileiradas; {@code dispatchSkipped} diz por que uma designação não virou
+	 * tarefa. Designar sem despachar deixava a cópia esperando um nó que a puxasse por conta própria.
+	 */
+	public record ReportWithDispatch(Report heal, List<Object> dispatched, List<Object> dispatchSkipped) {
+	}
+
 	/** Uma designação ({@code replica} e {@code nodeId}) para o objeto. */
 	public record HealedObject(String objectId, int replica, String nodeId) {
 	}

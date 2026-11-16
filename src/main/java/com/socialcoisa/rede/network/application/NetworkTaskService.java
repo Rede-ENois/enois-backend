@@ -67,6 +67,8 @@ public class NetworkTaskService {
 	 * implementacao nao exista sem quebrar o scheduler. Ausente, a entrega NAO conclui.
 	 */
 	private final org.springframework.beans.factory.ObjectProvider<com.socialcoisa.rede.network.application.port.out.EdgeDeliverVerifier> edgeDeliveries;
+	/** Conferência do OBJECT_PUT: o CP é dono da medida, então a declaração do nó não basta. */
+	private final org.springframework.beans.factory.ObjectProvider<com.socialcoisa.rede.network.application.port.out.StorageResultVerifier> storageResults;
 	private final NetworkModeService modes;
 	private final NetworkRegionService regions;
 	private final AuditTrail audit;
@@ -79,6 +81,7 @@ public class NetworkTaskService {
 
 	NetworkTaskService(NetworkTaskRepository tasks, NetworkNodeRepository nodes, org.springframework.beans.factory.ObjectProvider<MediaResultVerifier> mediaResults,
 			org.springframework.beans.factory.ObjectProvider<com.socialcoisa.rede.network.application.port.out.EdgeDeliverVerifier> edgeDeliveries,
+			org.springframework.beans.factory.ObjectProvider<com.socialcoisa.rede.network.application.port.out.StorageResultVerifier> storageResults,
 			NetworkModeService modes, NetworkRegionService regions, AuditTrail audit, Clock clock,
 			@Value("${rede.network.task.claim-ttl-seconds:120}") long claimTtlSeconds,
 			@Value("${rede.network.task.node-stale-seconds:180}") long nodeStaleSeconds,
@@ -89,6 +92,7 @@ public class NetworkTaskService {
 		this.nodes = nodes;
 		this.mediaResults = mediaResults;
 		this.edgeDeliveries = edgeDeliveries;
+		this.storageResults = storageResults;
 		this.modes = modes;
 		this.regions = regions;
 		this.audit = audit;
@@ -420,6 +424,28 @@ public class NetworkTaskService {
 				com.socialcoisa.rede.network.application.port.out.EdgeDeliverVerifier.Verification verification = verifier == null
 					? com.socialcoisa.rede.network.application.port.out.EdgeDeliverVerifier.Verification
 						.refused("EDGE_DELIVER_VERIFIER_UNAVAILABLE", "Conferencia de entrega indisponivel.", true)
+					: verifier.verify(task, command.output());
+				if (!verification.ok()) {
+					audit.record(node.id(), "NETWORK_TASK_RESULT_REFUSED", task.id(),
+						"{\"status\":\"" + verification.status() + "\"}");
+					if (verification.retryable() && task.attempt() < maxAttempts) {
+						Instant next = now.plus(backoff(task.attempt()));
+						tasks.requeue(task.id(), command.attempt(), verification.status(), next, now);
+						return new ResultOutcome(task.id(), TaskStatus.PENDING.name(), false, verification.status());
+					}
+					tasks.fail(task.id(), command.attempt(), verification.status(), now);
+					return new ResultOutcome(task.id(), TaskStatus.FAILED.name(), false, verification.status());
+				}
+			}
+			// Storage: o CP mediu o corpo, então "gravei" é declaração que ele pode contradizer. Sem
+			// cópia confirmada, aceitar o DONE criaria um objeto "replicado" que não existe no nó --
+			// e o healing deixaria de procurá-lo.
+			if (task.taskType() == TaskType.OBJECT_PUT) {
+				com.socialcoisa.rede.network.application.port.out.StorageResultVerifier verifier = storageResults
+					.getIfAvailable();
+				com.socialcoisa.rede.network.application.port.out.StorageResultVerifier.Verification verification = verifier == null
+					? com.socialcoisa.rede.network.application.port.out.StorageResultVerifier.Verification
+						.refused("STORAGE_VERIFIER_UNAVAILABLE", "Conferencia de replica indisponivel.", true)
 					: verifier.verify(task, command.output());
 				if (!verification.ok()) {
 					audit.record(node.id(), "NETWORK_TASK_RESULT_REFUSED", task.id(),

@@ -25,6 +25,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import com.socialcoisa.rede.network.application.port.out.EdgeDeliverVerifier;
 import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
+import com.socialcoisa.rede.network.application.port.out.StorageResultVerifier;
 import com.socialcoisa.rede.network.domain.DataClass;
 import com.socialcoisa.rede.network.domain.NetworkTask;
 import com.socialcoisa.rede.network.domain.NodeProfile;
@@ -140,6 +141,7 @@ class NetworkTaskClockBoundaryTests {
 		// O relógio pertence só a esta instância real do serviço. A transação preserva a fronteira JPA.
 		NetworkTaskService service = new NetworkTaskService(repository, nodes,
 			context.getBeanProvider(MediaResultVerifier.class), context.getBeanProvider(EdgeDeliverVerifier.class),
+			context.getBeanProvider(StorageResultVerifier.class),
 			modes, regions, audit, Clock.fixed(agora, ZoneOffset.UTC), 120, 180, 5, 900, 600);
 		return new TransactionTemplate(transactions).execute(status -> acao.apply(service));
 	}

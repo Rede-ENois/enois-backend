@@ -121,3 +121,53 @@ lacuna → `scrub` acha → healing designa → nó confirma → `scrub` para de
 gravando, réplica reaproveitando o número 1, `STALE` contando como origem, designar mais que a
 lacuna, pendente sendo reescolhida e designar já como `OK` — cada uma derruba o seu, e a de `OK`
 derruba 2 no teste de rota.
+
+## 5.2 O `OBJECT_PUT` tem produtor, e o `DONE` dele é conferido
+
+Duas metades que não se conheciam:
+
+1. **ninguém enfileirava `OBJECT_PUT`.** O tipo existia, exigia `NODE_STORAGE` e aparecia na config
+   assinada — mas nenhum serviço criava a tarefa. O healing designava e parava ali.
+2. **o Control Plane aceitava qualquer `DONE`.** O `*)` do `deploy/node-runtime/node-runtime.sh`
+   responde `DONE` com um eco do `idempotencyKey` para todo tipo **sem executor** — inclusive
+   `OBJECT_PUT`. A tarefa de réplica terminava "com sucesso" sem nada gravado: a colocação seguia
+   `PENDING_REMOTE`, o `/storage/scrub` seguia apontando a lacuna e o painel mostrava a tarefa
+   concluída. Verde por fora, durabilidade nenhuma.
+
+### O produtor
+
+`StorageReplicationDispatcher` transforma cada colocação `PENDING_REMOTE` num `OBJECT_PUT` com
+`targetNodeId` = o nó da colocação (a réplica não pode rodar em nó que não é dono da linha), chave
+`storage:<objectId>:<replica>` e payload `{objectId, bucket, key, sha256, bytes, replica}`.
+Chamado por `POST /admin/network/nodes/storage/objects/{id}/dispatch` e por
+`POST /admin/network/nodes/storage/heal?dispatch=true`. Não designa: já chama `dispatchPending()` na
+mesma transação, senão a tarefa esperaria a próxima varredura periódica.
+
+A **classe de dado é `PUBLIC_MEDIA`**, a mesma do transcode e a do conteúdo que a tarefa descreve.
+`INTERNAL` seria errado no sentido oposto: a regra dura manda dado que não pode sair da infra para
+nó `NODE_LOCAL`, e o Storage vive num participante `NODE_STORAGE` — a tarefa ficaria parada na fila
+para sempre, sem erro, filtrada pela classe.
+
+### O conferente
+
+`StorageResultVerifier` (`StorageResultVerifierAdapter`) recusa o `DONE` de `OBJECT_PUT` quando:
+
+| situação | status | retentável |
+|---|---|---|
+| sem cópia `OK` **deste** nó (inclui `PENDING_REMOTE` e `STALE`, e a cópia existir só em outro nó) | `STORAGE_REPLICA_NOT_CONFIRMED` | sim |
+| `bytes` declarados diferentes do medido pelo CP | `STORAGE_REPLICA_MEASURE_MISMATCH` | não |
+| `sha256` declarado diferente do medido pelo CP | `STORAGE_REPLICA_MEASURE_MISMATCH` | não |
+| payload sem `objectId` | `STORAGE_TASK_PAYLOAD_INVALID` | não |
+
+Os campos de medida no `output` são **opcionais**: exigir seria criar um segundo contrato de
+confirmação ao lado do `POST .../replica`, que já é o contrato. O que se recusa é a **divergência**
+— número declarado que o catálogo contradiz é afirmação falsa.
+
+Com isto o eco do runtime passa a ser recusado pelo motivo certo, e a tarefa **continua na fila**
+(recusa retentável), em vez de morrer com sucesso falso. Enquanto o executor de Storage no runtime
+não existir, é este estado correto que se vê: réplica pendente, tarefa voltando, painel honesto.
+
+**Verificação:** `StorageResultVerifierTests` 8 e `NetworkStorageResultAcceptanceTests` 4 (caminho
+real: tarefa designada, nó posta o eco do runtime, `applied=false`; depois o nó confirma pelo
+`POST .../replica` e o mesmo `DONE` é aceito). Mutação "sem conferência de `OBJECT_PUT`" (o código
+anterior) derruba 2.
