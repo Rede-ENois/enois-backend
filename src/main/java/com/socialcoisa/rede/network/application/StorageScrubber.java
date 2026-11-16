@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -42,14 +43,17 @@ public class StorageScrubber {
 	private final AuditTrail audit;
 	private final Clock clock;
 	private final StorageCatalogService bodies;
+	/** Nulo quando este processo não guarda corpo de nó: aí só a réplica 0 é relida. */
+	private final NodeBodyStore nodeBodies;
 
 	StorageScrubber(StorageCatalogRepository catalog, StoragePlacementService placement, AuditTrail audit,
-			Clock clock, StorageCatalogService bodies) {
+			Clock clock, StorageCatalogService bodies, @Nullable NodeBodyStore nodeBodies) {
 		this.catalog = catalog;
 		this.placement = placement;
 		this.audit = audit;
 		this.clock = clock;
 		this.bodies = bodies;
+		this.nodeBodies = nodeBodies;
 	}
 
 	/** O que a varredura encontrou, incluindo os objetos que precisam de cópia nova. */
@@ -92,9 +96,9 @@ public class StorageScrubber {
 	 * processo continua contando como cópia confirmada, e o catálogo promete durabilidade que não
 	 * tem.</p>
 	 *
-	 * <p>Cópia de outro nó <b>não</b> é relida aqui: o Control Plane não inicia conexão para o nó
-	 * (o nó atrás de NAT só faz saída, e o brief proíbe cadastro de endereço). Reler o que está em
-	 * outro lugar é trabalho da próxima rodada do nó, não deste lado.</p>
+	 * <p>Relê o disco <b>desta</b> instalação: a réplica 0 e, quando o processo também é um nó, as
+	 * cópias do diretório dele. Cópia de outro nó <b>não</b> é relida: o Control Plane não inicia
+	 * conexão para o nó (o nó atrás de NAT só faz saída, e o brief proíbe cadastro de endereço).</p>
 	 */
 	@Transactional(readOnly = true)
 	public Report scan(String bucket, int maxObjects, boolean readBodies) {
@@ -129,36 +133,45 @@ public class StorageScrubber {
 						confirmed.stream().map(StoragePlacement::nodeId).toList()));
 				}
 				if (readBodies) {
-					// A única cópia que este processo pode reler é a réplica 0: o arquivo da raiz
-					// deste Control Plane, gravado pelo upload. As demais estão no disco de nós que
-					// o CP não alcança (o brief proíbe cadastrar endereço; o nó só faz saída).
+					// Relê o que está no disco DESTA instalação, e só isso: a réplica 0 (a raiz do
+					// Control Plane) e, quando este processo também é um nó, as cópias do disco dele.
+					// Cópia de outro nó não é relida: o CP não inicia conexão para o nó (o brief
+					// proíbe cadastrar endereço, e o nó atrás de NAT só faz saída).
+					//
 					// Antes o laço percorria TODAS as cópias OK e relia o mesmo arquivo local para
 					// cada uma: com a raiz vazia, acusava de divergente a cópia de outro nó que está
-					// íntegra. E, desde que o corpo do nó local passou a ser servido, reler por
-					// `readBody` esconderia o sumiço da réplica 0 atrás do corpo do nó.
-					StoragePlacement local = confirmed.stream()
-						.filter(copia -> copia.replica() == 0)
-						.findFirst()
-						.orElse(null);
-					if (local != null && local.sha256() != null) {
+					// íntegra, e `bodiesRelidos` contava N leituras de um arquivo só.
+					// O dono do disco vem do próprio store: é ele que lê `node.json` e `api-key`.
+					String donoDesteDisco = nodeBodies == null ? null : nodeBodies.ownerNodeId();
+					for (StoragePlacement copia : confirmed) {
+						if (copia.sha256() == null) {
+							continue;
+						}
+						boolean replicaZero = copia.replica() == 0;
+						boolean noLocal = donoDesteDisco != null && copia.nodeId().equals(donoDesteDisco);
+						if (!replicaZero && !noLocal) {
+							continue;
+						}
 						relidos++;
-						try (InputStream body = bodies.openReplicaZeroBody(id)) {
+						try (InputStream body = replicaZero
+								? bodies.openReplicaZeroBody(id)
+								: bodies.openNodeBody(id)) {
 							StorageCatalogService.Measured lido = StorageCatalogService.measureStream(body);
-							if (!lido.sha256().equalsIgnoreCase(local.sha256()) || lido.bytes() != local.bytes()) {
-								divergentes.add(new Report.Divergent(id, local.replica(), local.nodeId(),
-									local.sha256(), lido.sha256()));
+							if (!lido.sha256().equalsIgnoreCase(copia.sha256()) || lido.bytes() != copia.bytes()) {
+								divergentes.add(new Report.Divergent(id, copia.replica(), copia.nodeId(),
+									copia.sha256(), lido.sha256()));
 							}
 						}
 						catch (ApiException sumiu) {
 							// Corpo ausente ou ilegível é a mesma divergência vista por outro ângulo: o
 							// catálogo promete uma cópia que o disco não tem. Digest vazio representa
 							// "não consegui ler", nunca um digest calculado.
-							divergentes.add(new Report.Divergent(id, local.replica(), local.nodeId(),
-								local.sha256(), ""));
+							divergentes.add(new Report.Divergent(id, copia.replica(), copia.nodeId(),
+								copia.sha256(), ""));
 						}
 						catch (IOException closeFailed) {
-							divergentes.add(new Report.Divergent(id, local.replica(), local.nodeId(),
-								local.sha256(), ""));
+							divergentes.add(new Report.Divergent(id, copia.replica(), copia.nodeId(),
+								copia.sha256(), ""));
 						}
 					}
 				}
