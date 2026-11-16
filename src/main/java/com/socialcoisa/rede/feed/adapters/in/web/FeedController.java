@@ -173,7 +173,7 @@ class FeedController {
 			var published = publishPostUseCase.publish(new PublishPostCommand(user.id(), request.type(), request.content(),
 				request.pageHtml(), request.articleBody(), request.tags(), request.mediaIds(), request.communityId(),
 				request.mentionedUserIds(), request.topic(), request.channelId(), Boolean.TRUE.equals(request.mediaSpoiler()),
-				request.pollOptions()));
+				request.pollOptions(), Boolean.TRUE.equals(request.pollMultipleChoice()), request.pollEndsAt()));
 			// Presence counts here and not inside PublishPostService: the scheduler also publishes
 			// through it, and a scheduled post going live is not the person being here today.
 			coins.recordPresence(user.id().value());
@@ -585,15 +585,16 @@ class FeedController {
 	}
 
 	/**
-	 * Voto da enquete: uma alternativa, um voto por pessoa, definitivo. Votar de novo (na mesma ou
-	 * em outra) responde 409 ALREADY_VOTED.
+	 * Voto da enquete: enquanto ela estiver aberta, a pessoa escolhe e pode trocar a selecao
+	 * (a escolha unica substitui; a multipla soma e remove alternativas). Depois do prazo
+	 * responde 409 POLL_CLOSED e o resultado fica congelado.
 	 */
 	@PostMapping("/feed/posts/{postId}/poll/vote")
 	ResponseEntity<String> votePoll(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String postId, @RequestBody PollVoteRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		requireVisible(postId, user.id());
-		var poll = votePoll.vote(new PostId(postId), user.id(), request.option() == null ? -1 : request.option());
+		var poll = votePoll.vote(new PostId(postId), user.id(), request.option(), request.options());
 		return ResponseEntity.ok().body(pollJson.writeValueAsString(poll));
 	}
 

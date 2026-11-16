@@ -609,8 +609,12 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		Map<String, List<String>> pollOptions = polls.optionsByPostIds(postIdValues);
 		Map<String, Map<Integer, Long>> pollCounts = pollOptions.isEmpty() ? Map.of()
 			: polls.countsByPostIds(pollOptions.keySet());
-		Map<String, Integer> myVotes = currentUserId == null || pollOptions.isEmpty() ? Map.of()
-			: polls.votesByUserAndPostIds(currentUserId, pollOptions.keySet());
+		Map<String, List<Integer>> myVotes = currentUserId == null || pollOptions.isEmpty() ? Map.of()
+			: polls.myVotesByPostIds(currentUserId, pollOptions.keySet());
+		// Configuracao (multipla escolha e prazo); enquete antiga sem linha le como SIMPLES.
+		Map<String, com.socialcoisa.rede.feed.domain.PollConfig> pollConfigs = pollOptions.isEmpty() ? Map.of()
+			: polls.configsByPostIds(pollOptions.keySet());
+		Map<String, Long> pollVoters = pollOptions.isEmpty() ? Map.of() : polls.votersCountByPostIds(pollOptions.keySet());
 		// Reposts puros do viewer: batch check para marcar currentUserReposted.
 		Set<String> repostedByViewer = currentUserId == null ? Set.of()
 			: postReposts.findPostIdsRepostedByUser(currentUserId.value(), postIdValues);
@@ -687,9 +691,13 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				for (int position = 0; position < options.size(); position++) {
 					perOption.add(counts.getOrDefault(position, 0L));
 				}
-				long total = perOption.stream().mapToLong(Long::longValue).sum();
+				// Na multipla escolha a pessoa pode marcar varias: o total conta PESSOAS, nao votos.
+				long total = pollVoters.getOrDefault(post.id().value(), 0L);
+				var config = pollConfigs.getOrDefault(post.id().value(),
+					com.socialcoisa.rede.feed.domain.PollConfig.SIMPLES);
 				return withRepostedFlag.withPoll(new PollView(options, perOption,
-					myVotes.get(post.id().value()), total));
+					myVotes.getOrDefault(post.id().value(), List.of()), total, config.multipleChoice(),
+					config.endsAt()));
 			})
 			.map(view -> view.withMedia(mediaById))
 			.toList();

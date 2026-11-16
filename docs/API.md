@@ -231,18 +231,30 @@ seguir sem assunto.
 #### Enquete (`type: "POLL"`)
 
 `content` é o **título da enquete** (até 400 caracteres) e `pollOptions` traz as alternativas: de
-**2 a 6**, cada uma com até 120 caracteres, sem repetição (a comparação ignora maiúsculas).
+**2 a 6**, cada uma com até 120 caracteres, sem repetição (a comparação ignora maiúsculas). Dois
+campos opcionais estendem a enquete (V331):
+
+- `pollMultipleChoice` (boolean): **múltipla escolha** — cada pessoa marca várias alternativas; o
+  total continua contando **pessoas**, não marcações.
+- `pollEndsAt` (ISO-8601): **prazo de encerramento** — precisa ser futuro e de no máximo **30
+  dias**; passado o instante, ninguém vota mais e o resultado congela.
 
 ```json
 {
   "type": "POLL",
   "content": "Qual linguagem você usa no trabalho?",
-  "pollOptions": ["Java", "Kotlin", "Go", "TypeScript"]
+  "pollOptions": ["Java", "Kotlin", "Go", "TypeScript"],
+  "pollMultipleChoice": true,
+  "pollEndsAt": "2026-11-25T12:00:00Z"
 }
 ```
 
-Fora de `POLL` o campo `pollOptions` é ignorado (não vira linha no banco). O post volta com
-`poll: { options: [...], counts: [0,0,0,0], myVote: null, totalVotes: 0 }`.
+Fora de `POLL` os campos de enquete são ignorados (não viram linha no banco). Prazo no passado
+responde 400 `POLL_DEADLINE_IN_PAST`; além do teto de 30 dias, 400 `POLL_DEADLINE_TOO_FAR`. O post
+volta com
+`poll: { options: [...], counts: [0,...], myVotes: [], totalVotes: 0, multipleChoice: false, endsAt: null }`.
+Enquetes criadas antes das extensões (sem linha em `poll_configs`) leem como escolha única e sem
+prazo. A enquete **agendada** nasce simples (sem múltipla escolha nem prazo).
 
 ### POST /api/feed/posts/{postId}/poll/vote
 
@@ -250,14 +262,30 @@ Fora de `POLL` o campo `pollOptions` é ignorado (não vira linha no banco). O p
 { "option": 2 }
 ```
 
-`option` é a **posição** da alternativa (0..5). Uma pessoa, um voto — mas o voto **pode ser
-trocado**: enviar outra posição move o voto (a contagem antiga cai, a nova sobe, o total não
-cresce), e repetir a mesma posição é idempotente, sem mudar nada. Alternativa fora do intervalo
-(ou corpo sem `option`) responde 400 `INVALID_POLL_OPTION`; post que não é enquete responde
-400 `NOT_A_POLL`. Sem sessão: 401. A resposta é o estado atualizado da enquete:
+Na **escolha única**, `option` é a **posição** da alternativa (0..5). Na **múltipla escolha**, o
+corpo traz a lista:
 
 ```json
-{ "options": ["Java","Kotlin","Go","TypeScript"], "counts": [1,0,0,0], "myVote": 0, "totalVotes": 1 }
+{ "options": [0, 2] }
+```
+
+O voto pode ser **trocado** enquanto a enquete está aberta: na escolha única o novo voto
+substitui o anterior; na múltipla a lista passada vira a seleção inteira (sai o que removeu,
+entra o que somou). O total segue contando pessoas. Depois do prazo a enquete responde
+**409 `POLL_CLOSED`** e a contagem não muda. Alternativa fora do intervalo (ou corpo inválido
+para o tipo da enquete) responde 400 `INVALID_POLL_OPTION`; múltipla sem nenhuma alternativa
+responde 400 `POLL_OPTION_REQUIRED`; post que não é enquete responde 400 `NOT_A_POLL`.
+Sem sessão: 401. A resposta é o estado atualizado da enquete:
+
+```json
+{
+  "options": ["Java","Kotlin","Go","TypeScript"],
+  "counts": [1,0,1,0],
+  "myVotes": [0, 2],
+  "totalVotes": 1,
+  "multipleChoice": true,
+  "endsAt": "2026-11-25T12:00:00Z"
+}
 ```
 
 Todo `PostView` de um post `POLL` traz o campo `poll` (nas leituras de feed e de post único); a
