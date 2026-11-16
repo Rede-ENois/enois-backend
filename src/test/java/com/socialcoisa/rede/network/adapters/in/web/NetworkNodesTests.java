@@ -477,6 +477,97 @@ class NetworkNodesTests {
 		assertThat(fatia.isNull() || (fatia.asDouble() >= 0.0 && fatia.asDouble() <= 100.0)).isTrue();
 	}
 
+	/**
+	 * §8.4 do brief: "o painel deve mostrar como os nós trabalham juntos". {@code byProfile} conta
+	 * perfis <b>declarados</b>, e isso não responde a pergunta operacional — <b>a rede tem alguém
+	 * para fazer cada tipo de trabalho agora?</b> Um nó com o perfil continua contado mesmo em
+	 * quarentena, de região evacuada ou sem vaga, e não executa nada.
+	 *
+	 * <p>O cenário has no tipo que ninguém cobre no momento da medida: o único nó {@code NODE_MEDIA}
+	 * vivo fica sem vaga (4 núcleos, 4 tarefas rodando). O tipo precisa aparecer com zero — e não
+	 * ausente, o que esconderia justamente a lacuna.</p>
+	 */
+	@Test
+	void dashboardDizQuaisTiposDeTrabalhoNaoTemQuemFaca() throws Exception {
+		String admin = adminToken();
+
+		String media = enroll(issueToken(admin, "no-media", List.of("NODE_MEDIA")));
+		String keyMedia = issueKey(admin, media);
+		// Capacidade declarada é 4 núcleos (o enroll fixa 4): 4 tarefas rodando = sem vaga.
+		heartbeat(admin, media, keyMedia, 40.0, 2048, 4);
+
+		var result = mockMvc.perform(get("/admin/network/nodes/dashboard").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andReturn();
+		var work = objectMapper.readTree(result.getResponse().getContentAsString()).get("workTypes");
+
+		assertThat(work).isNotNull();
+		var porTipo = new java.util.HashMap<String, Integer>();
+		work.forEach(t -> porTipo.put(t.get("type").asText(), t.get("capable").asInt()));
+
+		// Todos os tipos aparecem — inclusive os sem ninguém: o tipo ausente esconderia a lacuna.
+		assertThat(porTipo.keySet()).contains("MEDIA_TRANSCODE", "OBJECT_PUT", "API_REQUEST", "EDGE_DELIVER",
+			"READ_QUERY", "ASYNC_JOB");
+		// O nó de mídia existe, está vivo e tem o perfil — e não pode receber agora.
+		assertThat(porTipo.get("MEDIA_TRANSCODE")).isZero();
+		// Nenhum nó executando tarefa neste cenário: o tipo de trabalho comum também está descoberto,
+		// e é a mesma pergunta que a tela faz, não um efeito colateral do nó de mídia.
+		assertThat(porTipo.get("OBJECT_PUT")).isZero();
+	}
+
+	@Test
+	void noEmQuarentenaNaoContaComoQuemFazOTrabalho() throws Exception {
+		String admin = adminToken();
+		String media = enroll(issueToken(admin, "no-media-quarentena", List.of("NODE_MEDIA")));
+		String keyMedia = issueKey(admin, media);
+		heartbeat(admin, media, keyMedia, 10.0, 1024, 0);
+		// De pé, vivo, com vaga e com o perfil — e em quarentena. Perfil declarado não é capacidade:
+		// contar este nó afirmaria que a rede faz mídia quando ninguém está aceitando a tarefa.
+		jdbc.update("update network_nodes set quarantined_until = timestampadd(second, 600, current_timestamp), "
+			+ "quarantine_reason = 'resultado divergente' where id = ?", media);
+
+		var result = mockMvc.perform(get("/admin/network/nodes/dashboard").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andReturn();
+		var work = objectMapper.readTree(result.getResponse().getContentAsString()).get("workTypes");
+		int transcode = -1;
+		for (var t : work) {
+			if ("MEDIA_TRANSCODE".equals(t.get("type").asText())) {
+				transcode = t.get("capable").asInt();
+			}
+		}
+		assertThat(transcode).isZero();
+	}
+
+	@Test
+	void dashboardRecuperaOCapacidadeQuandoONoLiberaVaga() throws Exception {
+		String admin = adminToken();
+
+		String media = enroll(issueToken(admin, "no-media-livre", List.of("NODE_MEDIA")));
+		String keyMedia = issueKey(admin, media);
+		heartbeat(admin, media, keyMedia, 20.0, 1024, 4);
+		// O mesmo nó devolve a vaga: o tipo volta a ter quem o faça. Prova que o número é o medido
+		// agora, não um cache da primeira leitura.
+		mockMvc
+			.perform(post("/network/nodes/heartbeat").header("X-Node-Id", media).header("X-Node-Key", keyMedia)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0", "observed",
+					Map.of("cpuPercent", 20.0, "memoryMb", 1024, "runningTasks", 1)))))
+			.andExpect(status().isOk());
+
+		var result = mockMvc.perform(get("/admin/network/nodes/dashboard").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andReturn();
+		var work = objectMapper.readTree(result.getResponse().getContentAsString()).get("workTypes");
+		int transcode = 0;
+		for (var t : work) {
+			if ("MEDIA_TRANSCODE".equals(t.get("type").asText())) {
+				transcode = t.get("capable").asInt();
+			}
+		}
+		assertThat(transcode).isEqualTo(1);
+	}
+
 	// ---------------------------------------------------------------- dashboard do painel
 
 	/**
