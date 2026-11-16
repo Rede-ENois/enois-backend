@@ -831,9 +831,16 @@ jobs:
             fi
             # A sonda roda logo depois de o container novo subir, e o gateway pergunta a este
             # MESMO backend para responder: se ela perguntar antes de o backend aquecer, recebe
-            # 502 (o Énóis não soube responder), que é o sintoma de uma falha real e também o de
-            # uma janela de segundos. Por isso repete até vir uma resposta do Énóis: 200, 401, 403
-            # e 404 são definitivas e provam que a cadeia inteira atendeu.
+            # 502 (a ponte não soube responder), que é o sintoma de uma falha real e também o de
+            # uma janela de segundos. Por isso repete até vir uma resposta definitiva.
+            #
+            # O que cada resposta significa com o gateway atual (que distingue negação de ponte
+            # quebrada): 200/403/404 provam que a cadeia inteira atendeu — para um id de chamada
+            # inexistente, "não" é a resposta certa. 401 é o gateway RECUSANDO a credencial de
+            # chamada deste backend (par EPAPO_INTERNAL_TOKEN descasado) e 502 é o gateway não
+            # conseguindo autorizar contra o Énóis (par ENOIS_AUTHORIZE_SECRET descasado) —
+            # nenhum dos dois é rede nem janela de boot depois de o healthcheck passar: deploy
+            # verde aqui esconderia um fluxo de entrada morto, então ambos falham o passo.
             #
             # `|| true`: o curl já imprime 000 quando não conecta e sai com erro. Com `|| echo 000`
             # o valor virava 000000 e caía no ramo "resposta inesperada" em vez de "não respondeu".
@@ -854,12 +861,22 @@ jobs:
               sleep 5
             done
             case "${probe}" in
-              200|401|403|404)
+              200|403|404)
                 echo " gateway respondeu (${probe}) em ${REDE_CALLS_EPAPO_GATEWAY_URL}"
                 ;;
+              401)
+                echo "::error::o gateway recusou a credencial de chamada deste backend (401): o par"
+                echo "REDE_CALLS_EPAPO_INTERNAL_TOKEN (aqui) x EPAPO_INTERNAL_TOKEN (no Epapo) está"
+                echo "descasado. Os dois lados precisam do MESMO valor; trocar um sem o outro deixa"
+                echo "todo mundo fora de sala com deploy verde."
+                exit 1
+                ;;
               502)
-                echo "::warning::o gateway não conseguiu falar com o backend da QA (502) após 5 tentativas."
-                echo "O container está no ar; isto indica o Énóis recusando ou demorando a responder à autorização."
+                echo "::error::o gateway não conseguiu autorizar contra o Énóis (502) após 5 tentativas:"
+                echo "a perna gateway→Énóis está quebrada — normalmente o par ENOIS_AUTHORIZE_SECRET"
+                echo "(no Epapo) x REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN (aqui) descasado. Os dois lados"
+                echo "precisam do MESMO valor."
+                exit 1
                 ;;
               000|"")
                 echo "::warning::o Epapo não respondeu em ${REDE_CALLS_EPAPO_GATEWAY_URL} a partir do host da QA."

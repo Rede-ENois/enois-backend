@@ -26,6 +26,24 @@ interface SpringDataCallParticipantJpaRepository extends JpaRepository<CallParti
 
 	long countByCallIdAndStateAndUserIdIn(String callId, CallParticipantState state, Collection<String> userIds);
 
+	long countByCallIdAndStateAndLastSeenAtAfter(String callId, CallParticipantState state, Instant after);
+
+	/**
+	 * Presença ativa que já foi pingada depois de entrar: é a prova de que o cliente desta sala
+	 * sabe mandar sinal de vida. Comparação campo a campo ({@code lastSeenAt > joinedAt}) porque
+	 * derivada não compara duas colunas; linha nunca pingada tem os dois iguais (ou nulos).
+	 */
+	@Query("select count(p) > 0 from CallParticipantJpaEntity p "
+			+ "where p.callId = :callId and p.state = :state and p.lastSeenAt > p.joinedAt")
+	boolean existsPingedByCallIdAndState(@Param("callId") String callId, @Param("state") CallParticipantState state);
+
+	/** Sinal de vida: só quem segue na sala conta — ping de quem já saiu não reabre nada. */
+	@Modifying(clearAutomatically = true)
+	@Query("UPDATE CallParticipantJpaEntity p SET p.lastSeenAt = :now "
+			+ "WHERE p.callId = :callId AND p.userId = :userId AND p.state = :state")
+	int markSeen(@Param("callId") String callId, @Param("userId") String userId,
+			@Param("state") CallParticipantState state, @Param("now") Instant now);
+
 	/**
 	 * Entrar (ou sair) só muda a linha se ela ainda estiver em {@code from}. Devolve quantas linhas
 	 * casaram: zero quer dizer que outra requisição já fez a mesma coisa, e o chamador decide o que
