@@ -25,6 +25,6 @@ create table if not exists talent_pool_opt_ins (
 ) engine=InnoDB default charset=utf8mb4 collate=utf8mb4_uca1400_ai_ci;
 
 -- Leitura do candidato ("onde estou liberado") e expurgo por candidato.
-create index idx_talent_pool_candidate on talent_pool_opt_ins (candidate_id, consented_at);
+create index if not exists idx_talent_pool_candidate on talent_pool_opt_ins (candidate_id, consented_at);
 -- Leitura da empresa: só as linhas ativas entram na busca e na contagem.
-create index idx_talent_pool_company on talent_pool_opt_ins (company_id, withdrawing_at, consented_at);
+create index if not exists idx_talent_pool_company on talent_pool_opt_ins (company_id, withdrawing_at, consented_at);
