@@ -64,6 +64,12 @@ class NetworkNodeObservabilityTests {
 		jdbc.update("delete from network_node_keys");
 		jdbc.update("delete from network_provision_tokens");
 		jdbc.update("delete from network_nodes");
+		// A saúde da aplicação conta quantos agregados o nó tem atrás da origem (`countBehind`), e
+		// essa conta é sobre o catálogo de conteúdo — que é compartilhado entre as classes de teste.
+		// Sem limpar, um nó recém-criado apareceria "atrás" do conteúdo que outras classes deixaram,
+		// e o resultado dependeria de qual classe rodou antes, não do que este teste montou.
+		jdbc.update("delete from network_content_snapshots");
+		jdbc.update("delete from network_content_versions");
 	}
 
 	@Test
@@ -169,6 +175,81 @@ class NetworkNodeObservabilityTests {
 		String body = panel.getResponse().getContentAsString();
 		assertThat(body).contains("disco apertado").doesNotContain("falha de rede");
 		assertThat(objectMapper.readTree(body).get("summary").get("cpuAvgPercent").asDouble()).isEqualTo(11.0);
+	}
+
+	@Test
+	void o_painel_entrega_as_quatro_dimensoes_de_saude_ao_vivo() throws Exception {
+		String admin = adminToken();
+		Node node = activeNode(admin, "dimensoes");
+		heartbeat(node, 7.0, List.of());
+
+		// Nó recém-aprovado, com heartbeat e versão de runtime: nenhuma dimensão pode acusar falha.
+		// É a prova de que o painel as entrega separadas (host, runtime, aplicação, rede) e não num
+		// estado único.
+		mockMvc.perform(get("/admin/network/nodes/" + node.id() + "/observability").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.health.host").value("OK"))
+			.andExpect(jsonPath("$.health.runtime").value("OK"))
+			.andExpect(jsonPath("$.health.application").value("OK"))
+			.andExpect(jsonPath("$.health.network").value("OK"));
+	}
+
+	@Test
+	void suspender_o_no_derruba_so_a_participacao() throws Exception {
+		String admin = adminToken();
+		Node node = activeNode(admin, "suspenso");
+		heartbeat(node, 7.0, List.of());
+		mockMvc
+			.perform(post("/admin/network/nodes/" + node.id() + "/status").header("X-Session-Token", admin)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"status\":\"SUSPENDED\"}"))
+			.andExpect(status().isOk());
+
+		// A máquina continua saudável; o que caiu foi a participação na rede. Devolver um único
+		// "offline" aqui mandaria o operador procurar um problema de host que não existe.
+		mockMvc.perform(get("/admin/network/nodes/" + node.id() + "/observability").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.health.host").value("OK"))
+			.andExpect(jsonPath("$.health.runtime").value("OK"))
+			.andExpect(jsonPath("$.health.network").value("FAILING"))
+			.andReturn();
+	}
+
+	@Test
+	void no_sem_perfil_esta_de_pe_mas_nao_serve_ninguem() throws Exception {
+		String admin = adminToken();
+		Node node = activeNode(admin, "ocioso");
+		heartbeat(node, 3.0, List.of());
+		// Tirar o perfil é legal pelo painel (lista vazia = nenhum tipo de tarefa). O nó continua
+		// mandando heartbeat e passa a não servir a rede: é exatamente o caso que o brief §8.8 diz
+		// que não pode aparecer como "offline".
+		mockMvc
+			.perform(post("/admin/network/nodes/" + node.id() + "/profiles").header("X-Session-Token", admin)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"profiles\":[]}"))
+			.andExpect(status().isOk());
+
+		mockMvc.perform(get("/admin/network/nodes/" + node.id() + "/observability").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.health.host").value("OK"))
+			.andExpect(jsonPath("$.health.application").value("FAILING"));
+	}
+
+	@Test
+	void no_atras_em_relacao_a_origem_fica_DEGRADED_na_aplicacao() throws Exception {
+		String admin = adminToken();
+		Node node = activeNode(admin, "atrasado");
+		heartbeat(node, 7.0, List.of());
+		// Uma versão de conteúdo pública existe e este nó não tem snapshot dela: ele está atrás da
+		// origem. É o mesmo dado que o `lag` por nó mostra, visto pela dimensão de aplicação.
+		jdbc.update("insert into network_content_versions (content_type, content_id, version, content_hash, "
+			+ "updated_at) values ('PROFILE', ?, 1, ?, current_timestamp)", "perfil-atrasado-" + System.nanoTime(),
+			"0".repeat(64));
+
+		mockMvc.perform(get("/admin/network/nodes/" + node.id() + "/observability").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.health.host").value("OK"))
+			.andExpect(jsonPath("$.health.application").value("DEGRADED"));
 	}
 
 	@Test

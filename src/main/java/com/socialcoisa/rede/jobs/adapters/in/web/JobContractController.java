@@ -59,6 +59,7 @@ class JobContractController {
 	private final tools.jackson.databind.ObjectMapper objectMapper;
 	private final com.socialcoisa.rede.companies.application.CompanyService companyService;
 	private final JobInterviewService interviewService;
+	private final com.socialcoisa.rede.jobs.application.InterviewSlotService interviewSlots;
 	private final com.socialcoisa.rede.jobs.application.JobCompatibilityService compatibility;
 
 	JobContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
@@ -75,9 +76,11 @@ class JobContractController {
 			com.socialcoisa.rede.jobs.application.ExternalJobApplicationService externalJobApplication,
 			com.socialcoisa.rede.companies.application.CompanyService companyService,
 			JobInterviewService interviewService,
+			com.socialcoisa.rede.jobs.application.InterviewSlotService interviewSlots,
 			com.socialcoisa.rede.jobs.application.JobCompatibilityService compatibility) {
 		this.companyService = companyService;
 		this.interviewService = interviewService;
+		this.interviewSlots = interviewSlots;
 		this.compatibility = compatibility;
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
@@ -460,7 +463,8 @@ class JobContractController {
 			parseInstant(body == null ? null : body.startsAt(), "startsAt"),
 			parseInstant(body == null ? null : body.endsAt(), "endsAt"),
 			body == null ? null : body.timeZoneId(), body == null ? null : body.notes());
-		return ResponseEntity.status(HttpStatus.CREATED).body(InterviewView.of(interview));
+		return ResponseEntity.status(HttpStatus.CREATED)
+			.body(InterviewView.withConflicts(interview, interviewSlots.conflictsOf(user.id().value(), interview)));
 	}
 
 	/** Reagenda uma entrevista existente. A origem não muda, então as duas entradas da agenda movem. */
@@ -474,7 +478,8 @@ class JobContractController {
 			parseInstant(body == null ? null : body.startsAt(), "startsAt"),
 			parseInstant(body == null ? null : body.endsAt(), "endsAt"),
 			body == null ? null : body.timeZoneId(), body == null ? null : body.notes());
-		return ResponseEntity.ok(InterviewView.of(interview));
+		return ResponseEntity.ok(
+			InterviewView.withConflicts(interview, interviewSlots.conflictsOf(user.id().value(), interview)));
 	}
 
 	/** Desmarca a entrevista e cancela os dois compromissos da agenda. */
@@ -1089,17 +1094,42 @@ class JobContractController {
 	record InterviewRequest(String startsAt, String endsAt, String timeZoneId, String notes) {
 	}
 
-	/** Entrevista como a API devolve: instantes em ISO-8601 UTC e o fuso de quem marcou. */
+	/**
+	 * Entrevista como a API devolve: instantes em ISO-8601 UTC e o fuso de quem marcou.
+	 *
+	 * <p>{@code conflicts} só vem preenchido no ato de marcar/reagendar: é o aviso do que já ocupa
+	 * o horário na agenda de quem marcou. `null` quer dizer "não avaliado" (nas listas), distinto de
+	 * lista vazia ("avaliado, nada conflita").
+	 */
 	record InterviewView(String id, String applicationId, String jobId, String candidateId, String status,
 			String startsAt, String endsAt, String timeZoneId, String notes, String createdAt, String updatedAt,
-			String cancelledAt) {
+			String cancelledAt, List<ConflictView> conflicts) {
 
 		static InterviewView of(JobInterview interview) {
 			return new InterviewView(interview.id(), interview.applicationId(), interview.jobId(),
 				interview.candidateId(), interview.status().name(), interview.startsAt().toString(),
 				interview.endsAt().toString(), interview.zone().getId(), interview.notes(),
 				interview.createdAt().toString(), interview.updatedAt().toString(),
-				interview.cancelledAt() == null ? null : interview.cancelledAt().toString());
+				interview.cancelledAt() == null ? null : interview.cancelledAt().toString(), null);
+		}
+
+		static InterviewView withConflicts(JobInterview interview,
+				List<com.socialcoisa.rede.calendar.application.CalendarAgendaItem> conflicts) {
+			return new InterviewView(interview.id(), interview.applicationId(), interview.jobId(),
+				interview.candidateId(), interview.status().name(), interview.startsAt().toString(),
+				interview.endsAt().toString(), interview.zone().getId(), interview.notes(),
+				interview.createdAt().toString(), interview.updatedAt().toString(),
+				interview.cancelledAt() == null ? null : interview.cancelledAt().toString(),
+				conflicts.stream().map(ConflictView::of).toList());
+		}
+	}
+
+	/** Um compromisso que já ocupa o horário da entrevista, na agenda de quem marcou. */
+	record ConflictView(String entryId, String title, String startsAt, String endsAt) {
+
+		static ConflictView of(com.socialcoisa.rede.calendar.application.CalendarAgendaItem item) {
+			return new ConflictView(item.entry().id(), item.entry().title(), item.entry().startsAt().toString(),
+				item.entry().endsAt().toString());
 		}
 	}
 
