@@ -60,7 +60,7 @@ class AdminAccessBaselineFilter extends OncePerRequestFilter {
 	private static final PathPattern ADMIN_PATH = PathPatternParser.defaultInstance.parse("/admin/**");
 	private static final PathPattern MODERATION_PATH = PathPatternParser.defaultInstance.parse("/moderation/**");
 
-	private final CurrentUserResolver users;
+	private final ObjectProvider<CurrentUserResolver> users;
 	private final ClientIpResolver ipResolver;
 	private final ObjectProvider<AdminDenialCounter> counter;
 	private final ObjectProvider<AdminAuthorityAudit> audit;
@@ -69,11 +69,12 @@ class AdminAccessBaselineFilter extends OncePerRequestFilter {
 	private final int maxBody;
 
 	/**
-	 * A contagem e a trilha entram por {@link ObjectProvider}: o filtro nasce antes do contexto
-	 * completo, e um bean que dependa de repositório no construtor derruba o boot inteiro (armadilha
-	 * já vista neste repositório). Quem só responde 200 nunca paga por resolvê-los.
+	 * O resolvedor de sessão, a contagem e a trilha entram por {@link ObjectProvider}: o filtro nasce
+	 * antes do contexto completo, e um bean cuja cadeia chega ao EntityManager (o resolvedor chega
+	 * pelo perfil) derruba o boot inteiro (armadilha já vista neste repositório). Quem só responde
+	 * 200 nunca paga por resolvê-los.
 	 */
-	AdminAccessBaselineFilter(CurrentUserResolver users, ClientIpResolver ipResolver,
+	AdminAccessBaselineFilter(ObjectProvider<CurrentUserResolver> users, ClientIpResolver ipResolver,
 			ObjectProvider<AdminDenialCounter> counter, ObjectProvider<AdminAuthorityAudit> audit, Clock clock,
 			@Value("${rede.security.identity-secret:}") String identitySecret,
 			@Value("${rede.security.duplicate-post-max-body-bytes:65536}") int maxBody) {
@@ -110,7 +111,7 @@ class AdminAccessBaselineFilter extends OncePerRequestFilter {
 			return;
 		}
 		String path = RequestPath.applicationPath(request);
-		String userId = users.activeUserId(request.getHeader("X-Session-Token")).orElse("");
+		String userId = users.getObject().activeUserId(request.getHeader("X-Session-Token")).orElse("");
 		String identity = identityOf(request, body, userId);
 		AdminDenialCounter.Decision decision = counter.getObject().windowed(identity, clock.millis());
 		if (!decision.alert()) {
