@@ -6,6 +6,6 @@ import com.socialcoisa.rede.feed.domain.UserId;
 
 public interface VotePollUseCase {
 
-	/** Voto unico e definitivo: uma opcao, um voto por pessoa, sem troca depois. */
+	/** Grava o voto na alternativa: cria o primeiro ou move o existente. Um voto por pessoa. */
 	PollView vote(PostId postId, UserId user, int optionPosition);
 }

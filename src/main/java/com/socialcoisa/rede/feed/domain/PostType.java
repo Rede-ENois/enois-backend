@@ -34,5 +34,7 @@ public enum PostType {
 	 * (AuthorIdentity.CORPORATE) e exibida apenas no feed corporativo e no perfil profissional —
 	 * nunca no feed Tudo nem nos feeds sociais. A regra vive no backend (ver GetFeedService).
 	 */
-	BUSINESS
+	BUSINESS,
+	/** Reclamação: desabafo/denúncia de problema (pedido do painel de suporte). Texto padrão. */
+	COMPLAINT
 }

@@ -84,6 +84,11 @@ class CallPersistenceAdapter implements CallRepository {
 		return earliest(calls.findOpenByEvent(eventId, OPEN));
 	}
 
+	@Override
+	public Optional<CallSession> findOpenByTable(String tableId) {
+		return earliest(calls.findOpenByTable(tableId, OPEN));
+	}
+
 	private static Optional<CallSession> earliest(List<CallSessionJpaEntity> open) {
 		return open.stream()
 			.min(java.util.Comparator.comparing(CallSessionJpaEntity::createdAt))

@@ -9,6 +9,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.util.List;
 import java.util.Map;
 
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -18,6 +20,7 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import com.socialcoisa.rede.moderation.application.port.out.BlockedIpRepository;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 import tools.jackson.databind.ObjectMapper;
@@ -47,10 +50,28 @@ class SuspiciousAutoBanTests {
 	@Autowired
 	private org.springframework.jdbc.core.JdbcTemplate jdbc;
 
+	@Autowired
+	private IpBlockService ipBlocks;
+
+	@Autowired
+	private BlockedIpRepository blockedIps;
+
+	private CenarioAutoBan cenario;
+
+	@BeforeEach
+	void prepararCenario() throws Exception {
+		cenario = new CenarioAutoBan(worker, jdbc);
+	}
+
+	@AfterEach
+	void limparCenario() {
+		cenario.close();
+	}
+
 	@Test
 	void theAttackPatternIsPurgedEvenWhenTheAccountLooksLikeStaff() throws Exception {
 		var admin = new TestAuthHelper(mockMvc, objectMapper).authenticate("group-admin");
-		new TestAuthHelper(mockMvc, objectMapper).authenticate("probe_purge_target");
+		var target = new TestAuthHelper(mockMvc, objectMapper).authenticate("probe_purge_target", cenario.cliente());
 
 		mockMvc.perform(post("/admin/moderators")
 				.header("X-Session-Token", admin.token())
@@ -63,6 +84,7 @@ class SuspiciousAutoBanTests {
 		org.assertj.core.api.Assertions.assertThat(worker.purgeAttackPatterns()).isGreaterThanOrEqualTo(1);
 
 		mockMvc.perform(post("/auth/login")
+				.with(cenario.cliente())
 				.header("Idempotency-Key", "autoban-purge-login")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of(
@@ -70,12 +92,14 @@ class SuspiciousAutoBanTests {
 			.andExpect(status().isForbidden())
 			.andExpect(jsonPath("$.code").value("ACCOUNT_BANNED"));
 
+		jdbc.update("delete from moderator_applications where user_id = ?",
+			target.userId());
 	}
 
 	@Test
 	void aStaffAccountCarryingTheAttackSignatureIsStillPunished() throws Exception {
 		var admin = new TestAuthHelper(mockMvc, objectMapper).authenticate("group-admin");
-		var target = new TestAuthHelper(mockMvc, objectMapper).authenticate("probe_staff_target");
+		var target = new TestAuthHelper(mockMvc, objectMapper).authenticate("probe_staff_target", cenario.cliente());
 
 		// A conta entra na equipe (a automação normalmente não pune equipe)...
 		mockMvc.perform(post("/admin/moderators")
@@ -85,10 +109,11 @@ class SuspiciousAutoBanTests {
 					"username", "probe-staff-target", "note", "Nomeado no cenário de teste."))))
 			.andExpect(status().isOk());
 
-		worker.sweep();
+		cenario.executarRodada();
 
 		// ...mas carrega o nome do ataque: é conta comprometida, não equipe.
 		mockMvc.perform(post("/auth/login")
+				.with(cenario.cliente())
 				.header("Idempotency-Key", "autoban-staff-login")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of(
@@ -109,36 +134,38 @@ class SuspiciousAutoBanTests {
 	@Test
 	void duasContasNoMesmoCicloNaoBloqueiamAOrigem() throws Exception {
 		var auth = new TestAuthHelper(mockMvc, objectMapper);
-		auth.authenticate("probe_pair_first");
-		auth.authenticate("probe_pair_second");
+		auth.authenticate("probe_pair_first", cenario.cliente());
+		auth.authenticate("probe_pair_second", cenario.cliente());
 
-		var report = worker.sweep();
+		var report = cenario.executarRodada();
 
 		assertThat(report.banned()).isEqualTo(2);
 		assertThat(report.failed()).isZero();
 		assertThat(report.blockedIps()).isEmpty();
 		assertThat(jdbc.queryForObject("select count(*) from blocked_ips", Integer.class)).isZero();
-		assertThat(auth.authenticate("autoban_healthy_after_pair").userId()).isNotBlank();
+		assertThat(auth.authenticate("autoban_healthy_after_pair", cenario.cliente()).userId()).isNotBlank();
 	}
 
 	@Test
 	void tresContasNoMesmoCicloBloqueiamCadastroELoginDaOrigem() throws Exception {
 		var auth = new TestAuthHelper(mockMvc, objectMapper);
-		var targets = List.of(auth.authenticate("probe_batch_first"),
-			auth.authenticate("probe_batch_second"), auth.authenticate("probe_batch_third"));
+		var targets = List.of(auth.authenticate("probe_batch_first", cenario.cliente()),
+			auth.authenticate("probe_batch_second", cenario.cliente()),
+			auth.authenticate("probe_batch_third", cenario.cliente()));
 
-		var report = worker.sweep();
+		var report = cenario.executarRodada();
 
 		assertThat(report.banned()).isEqualTo(3);
 		assertThat(report.failed()).isZero();
-		assertThat(report.blockedIps()).hasSize(1);
+		assertThat(report.blockedIps()).containsExactly(cenario.endereco());
 		assertThat(jdbc.queryForList("select ip from blocked_ips", String.class))
 			.containsExactlyElementsOf(report.blockedIps());
 		for (var target : targets) {
-			mockMvc.perform(get("/auth/me").header("X-Session-Token", target.token()))
+			mockMvc.perform(get("/auth/me").with(cenario.cliente()).header("X-Session-Token", target.token()))
 				.andExpect(status().isUnauthorized());
 		}
 		mockMvc.perform(post("/auth/login")
+				.with(cenario.cliente())
 				.header("Idempotency-Key", "autoban-batch-login")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of(
@@ -146,6 +173,7 @@ class SuspiciousAutoBanTests {
 			.andExpect(status().isForbidden())
 			.andExpect(jsonPath("$.code").value("IP_BLOCKED"));
 		mockMvc.perform(post("/auth/signup")
+				.with(cenario.cliente())
 				.header("Idempotency-Key", "autoban-batch-signup")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of(
@@ -156,10 +184,43 @@ class SuspiciousAutoBanTests {
 	}
 
 	@Test
+	void naoContaminaAutenticacaoDepoisDeFixturesDeOutrasClasses() throws Exception {
+		var anterior = new CenarioAutoBan(worker, jdbc);
+		ipBlocks.block("fixture:anterior", anterior.endereco(), "Bloqueio de outro cenário de teste.");
+		try {
+			var helper = new TestAuthHelper(mockMvc, objectMapper);
+			for (int indice = 0; indice < 3; indice++) {
+				helper.authenticate("probe_isolamento_lote_" + indice, cenario.cliente());
+			}
+			var report = cenario.executarRodada();
+			assertThat(report.banned()).isEqualTo(3);
+			assertThat(report.failed()).isZero();
+			assertThat(report.blockedIps()).containsExactly(cenario.endereco());
+			mockMvc.perform(post("/auth/login")
+					.with(cenario.cliente())
+					.header("Idempotency-Key", "isolamento-bloqueio-login")
+					.contentType(MediaType.APPLICATION_JSON)
+					.content(objectMapper.writeValueAsString(Map.of(
+						"email", "probe_isolamento_lote_0@test.com", "password", "Test1234!"))))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.code").value("IP_BLOCKED"));
+
+			cenario.close();
+			assertThat(blockedIps.existsByIp(cenario.endereco())).isFalse();
+			assertThat(blockedIps.existsByIp(anterior.endereco())).isTrue();
+			assertThat(helper.authenticate("isolamento_cenario_seguinte", cenario.cliente()).userId()).isNotBlank();
+		}
+		finally {
+			jdbc.update("delete from blocked_ips where ip = ?", anterior.endereco());
+		}
+	}
+
+	@Test
 	void bansAndSanitizesAnAccountAboveTheRiskCeiling() throws Exception {
-		var target = new TestAuthHelper(mockMvc, objectMapper).authenticate("probe_auto_target");
+		var target = new TestAuthHelper(mockMvc, objectMapper).authenticate("probe_auto_target", cenario.cliente());
 
 		MvcResult published = mockMvc.perform(post("/feed/posts")
+				.with(cenario.cliente())
 				.header("X-Session-Token", target.token())
 				.header("Idempotency-Key", "autoban-post-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -170,15 +231,16 @@ class SuspiciousAutoBanTests {
 			.andReturn();
 		String postId = objectMapper.readTree(published.getResponse().getContentAsString()).get("id").asText();
 
-		var report = worker.sweep();
+		var report = cenario.executarRodada();
 		assertThat(report.banned()).isEqualTo(1);
 		assertThat(report.failed()).isZero();
 		assertThat(report.blockedIps()).isEmpty();
 
 		// Sessão revogada e login bloqueado.
-		mockMvc.perform(get("/auth/me").header("X-Session-Token", target.token()))
+		mockMvc.perform(get("/auth/me").with(cenario.cliente()).header("X-Session-Token", target.token()))
 			.andExpect(status().isUnauthorized());
 		mockMvc.perform(post("/auth/login")
+				.with(cenario.cliente())
 				.header("Idempotency-Key", "autoban-login-1")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of(
@@ -187,6 +249,6 @@ class SuspiciousAutoBanTests {
 			.andExpect(jsonPath("$.code").value("ACCOUNT_BANNED"));
 
 		// Sanitização: o post saiu do banco, não só da listagem.
-		mockMvc.perform(get("/feed/posts/" + postId)).andExpect(status().isNotFound());
+		mockMvc.perform(get("/feed/posts/" + postId).with(cenario.cliente())).andExpect(status().isNotFound());
 	}
 }

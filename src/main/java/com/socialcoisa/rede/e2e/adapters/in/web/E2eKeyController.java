@@ -49,6 +49,22 @@ class E2eKeyController {
 		return new KeypairView(kp.publicKey(), kp.encryptedPrivateKey(), kp.algorithm());
 	}
 
+	/**
+	 * Historico de keypairs do proprio usuario, do mais recente pro mais antigo.
+	 *
+	 * Chaves de conversa e chaves por mensagem antigas foram cifradas com a chave publica de um
+	 * keypair que ja nao esta ativo; so a privada daquele keypair as abre. Sem esse endpoint, trocar
+	 * de keypair tornaria todas as mensagens anteriores ilegiveis.
+	 */
+	@GetMapping("/e2e/keypair/history")
+	List<KeypairHistoryView> myKeypairHistory(@RequestHeader("X-Session-Token") String sessionToken) {
+		String userId = currentUserResolver.resolve(sessionToken).id().value();
+		return e2eKeys.keypairHistory(userId).stream()
+			.map(kp -> new KeypairHistoryView(kp.id(), kp.publicKey(), kp.encryptedPrivateKey(),
+				kp.algorithm(), kp.active(), kp.createdAt().toString()))
+			.toList();
+	}
+
 	@GetMapping("/e2e/keypair/{userId}")
 	PublicKeyView userPublicKey(@RequestHeader("X-Session-Token") String sessionToken,
 			@PathVariable String userId) {
@@ -92,6 +108,8 @@ class E2eKeyController {
 
 	record KeypairRequest(String publicKey, String encryptedPrivateKey, String algorithm) {}
 	record KeypairView(String publicKey, String encryptedPrivateKey, String algorithm) {}
+	record KeypairHistoryView(String id, String publicKey, String encryptedPrivateKey, String algorithm,
+			boolean active, String createdAt) {}
 	record PublicKeyView(String publicKey, String algorithm) {}
 	record ConversationKeyRequest(String userId, String encryptedKey) {}
 	record ConversationKeyView(String encryptedKey, int keyVersion) {}

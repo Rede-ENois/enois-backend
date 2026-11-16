@@ -58,12 +58,19 @@ public class CalendarSubscriptionService {
 	 * A assinatura ativa ou uma nova. Devolve o token em claro, que só existe aqui — quem já tinha
 	 * uma recebe {@code null} e a tela mostra que o link antigo continua valendo.
 	 *
+	 * <p>A emissão é o único caminho que cria linha, e ela é serializada pela tranca da pessoa:
+	 * duas emissões correndo juntas não nascem com dois tokens ativos.
+	 *
 	 * <p>Pedir um recorte diferente do que a assinatura ativa tem é recusado: devolver a existente
 	 * em silêncio faria a pessoa achar que acabou de assinar a agenda profissional e receber um
 	 * arquivo com a social. O recorte é congelado no token; trocá-lo é regenerar o link (D7).
 	 */
 	@Transactional
 	public Issued issue(String userId, CalendarScope scope) {
+		// Duas emissões correndo juntas leriam o mesmo "não há ativa" e criariam dois links vivos —
+		// e o revogar só mata um, deixando credencial ativa que a pessoa não conhece. A tranca na
+		// linha da pessoa serializa a checagem e a criação: quem chega depois já vê a ativa.
+		subscriptions.lockUserForIssue(userId);
 		Optional<CalendarSubscription> existing = subscriptions.findActiveByUser(userId);
 		if (existing.isPresent()) {
 			CalendarSubscription current = existing.get();

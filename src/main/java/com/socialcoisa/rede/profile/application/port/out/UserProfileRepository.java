@@ -107,6 +107,24 @@ public interface UserProfileRepository {
 	/** Ids em páginas estáveis, para o job de atualização do ranking. */
 	List<String> findAllIds(int offset, int limit);
 
+	/**
+	 * Uma página de perfis elegíveis para a réplica de leitura, ordenada por (criado em, id).
+	 *
+	 * <p>Chave e não posição: o job do ranking percorre uma tabela que só cresce e pode usar
+	 * `offset`; a réplica percorre-a enquanto contas nascem e morrem, e `offset` pularia ou
+	 * repetiria itens entre páginas. A chave é o par de retorno: {@code createdAt} desempata pelo id,
+	 * que é único.</p>
+	 *
+	 * <p>"Elegível" é decidido aqui, no módulo dono: conta removida (anônima, {@code removed-}) nunca
+	 * entra, e nunca entra uma conta sem {@code @} utilizável. O critério de suspensão fica no
+	 * serviço, que é quem conhece o gate.</p>
+	 *
+	 * @param afterCreatedAt exclusive; nulo começa do início
+	 * @param afterId exclusive, desempate; nulo com {@code afterCreatedAt} nulo começa do início
+	 * @param limit tamanho máximo da página
+	 */
+	List<ReplicaProfileKey> replicaPage(java.time.Instant afterCreatedAt, String afterId, int limit);
+
 	/** O ranking público: os perfis que acabaram de chegar, mais recentes primeiro. */
 	List<UserProfile> findNewestProfiles(int limit);
 

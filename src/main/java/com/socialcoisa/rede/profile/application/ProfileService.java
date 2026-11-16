@@ -108,6 +108,28 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 			.withBioHtml(profile.bioHtml()).withBannerHtml(profile.bannerHtml());
 	}
 
+	/**
+	 * Quais destas contas podem aparecer publicamente, em <b>UMA</b> consulta.
+	 *
+	 * <p>É a mesma regra que faz {@link #getByUsername} responder 404 para conta banida — dita no
+	 * módulo dono, para quem percorre a base (a réplica de leitura) não inventar um segundo critério.
+	 * Conta removida não precisa entrar aqui: quem enumera já a exclui pelo {@code @} anônimo, que é
+	 * a chave que a leitura pública usa.</p>
+	 */
+	public java.util.Set<String> accountsVisible(java.util.Collection<String> userIds) {
+		if (userIds == null || userIds.isEmpty()) {
+			return java.util.Set.of();
+		}
+		java.util.Set<String> banned = sanctionGate.bannedAmong(userIds);
+		java.util.Set<String> visible = new java.util.HashSet<>();
+		for (String userId : userIds) {
+			if (!banned.contains(userId)) {
+				visible.add(userId);
+			}
+		}
+		return visible;
+	}
+
 	/** Liga/desliga a secao de ranking na tela de perfil (preferencia de quem le). */
 	@Transactional
 	public com.socialcoisa.rede.shared.web.StatusResponse setShowRanking(String userId, boolean showRanking) {
@@ -350,6 +372,11 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 		}
 		if (command.showCity() != null) {
 			profile.setShowCity(command.showCity(), clock.instant());
+		}
+		// Declaracao de recrutador: desligar so fecha a central para quem nao tem vaga (ver
+		// RecruitmentHubService); nao apaga vaga, candidatura nem processo seletivo.
+		if (command.isRecruiter() != null) {
+			profile.setRecruiter(command.isRecruiter(), clock.instant());
 		}
 		// Curriculo: ausente no corpo da requisicao mantem o que ja estava; vazio limpa. Nao passa
 		// pelo `update` geral porque nao e campo de exibicao — e arquivo, e so o dono le.

@@ -52,6 +52,19 @@ class UserBlockPersistenceAdapter implements UserBlockRepository, BlockedUsersRe
 		return hiddenBetween(userA, userB);
 	}
 
+	/**
+	 * Bloqueios nos dois sentidos em DUAS consultas para o conjunto inteiro (mutes ficam de fora:
+	 * mutar nao impede conversar). Antes o envio de mensagem perguntava destinatario por
+	 * destinatario, e cada pergunta custava duas idas ao banco.
+	 */
+	@Override
+	public Set<String> blockedIdsFor(String userId) {
+		if (userId == null || userId.isBlank()) {
+			return Set.of();
+		}
+		return findHiddenIds(userId);
+	}
+
 	@Override
 	public List<UserBlock> findByBlockerId(String blockerId) {
 		return repository.findByBlockerIdOrderByCreatedAtDesc(blockerId).stream()

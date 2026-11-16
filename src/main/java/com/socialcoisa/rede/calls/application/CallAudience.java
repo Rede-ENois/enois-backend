@@ -29,12 +29,15 @@ public class CallAudience {
 	private final MessagingService messaging;
 	private final GroupService groups;
 	private final EventLookup events;
+	private final com.socialcoisa.rede.calls.application.port.out.TableCallLookup tables;
 	private final CallRepository calls;
 
-	public CallAudience(MessagingService messaging, GroupService groups, EventLookup events, CallRepository calls) {
+	public CallAudience(MessagingService messaging, GroupService groups, EventLookup events,
+			com.socialcoisa.rede.calls.application.port.out.TableCallLookup tables, CallRepository calls) {
 		this.messaging = messaging;
 		this.groups = groups;
 		this.events = events;
+		this.tables = tables;
 		this.calls = calls;
 	}
 
@@ -92,6 +95,12 @@ public class CallAudience {
 			events.requireExists(call.eventId());
 			return;
 		}
+		if (call.tableId() != null) {
+			// A voz da mesa é de quem joga: participa da campanha da mesa ou não entra. A mesa e o
+			// papel são relidos do banco a cada verificação.
+			tables.requireMemberOfCampaign(call.tableId(), userId);
+			return;
+		}
 		// Sem vínculo não há como provar nada: nega, em vez de abrir.
 		throw new ApiException(403, "CALL_NOT_ALLOWED", "Chamada sem vinculo de conversa, grupo ou evento.");
 	}
@@ -112,7 +121,8 @@ public class CallAudience {
 	public List<String> audienceOf(CallSession call) {
 		List<String> all = call.conversationId() != null ? participantsOf(call.conversationId())
 			: call.groupId() != null ? groupMembers(call.groupId())
-			: call.eventId() != null ? events.interestedIn(call.eventId()) : List.of();
+			: call.eventId() != null ? events.interestedIn(call.eventId())
+			: call.tableId() != null ? tables.campaignMembersOf(call.tableId()) : List.of();
 		return all.stream().filter(id -> !id.equals(call.initiatorId())).toList();
 	}
 }

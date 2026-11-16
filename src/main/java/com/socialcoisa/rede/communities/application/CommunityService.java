@@ -244,10 +244,40 @@ public class CommunityService {
 
 	// Comunidade criada por conta banida sai da vitrine (o conteúdo dela já é limpo).
 	private List<Community> visible(List<Community> communities) {
-		return communities.stream()
-			.filter(community -> !sanctionGate.banned(community.createdBy()))
-			.filter(community -> !suspiciousText.matches(community.name(), community.description()))
-			.toList();
+		return communities.stream().filter(this::canAppear).toList();
+	}
+
+	/**
+	 * Quais destas comunidades podem aparecer na vitrine, em <b>UMA</b> consulta de sanção.
+	 *
+	 * <p>A réplica percorre uma página inteira; perguntar comunidade a comunidade seria uma consulta
+	 * por item. O filtro de texto é por item (é sobre o próprio nome/descrição, já carregado), mas a
+	 * sanção do criador sai em lote — é a única que exigiria consulta por item.</p>
+	 */
+	public java.util.Set<String> communitiesVisible(java.util.Collection<String> communityIds) {
+		if (communityIds == null || communityIds.isEmpty()) {
+			return java.util.Set.of();
+		}
+		var byId = repository.findByIds(communityIds);
+		java.util.Set<String> creators = new java.util.HashSet<>();
+		for (Community community : byId.values()) {
+			creators.add(community.createdBy());
+		}
+		java.util.Set<String> banned = sanctionGate.bannedAmong(creators);
+		java.util.Set<String> visible = new java.util.HashSet<>();
+		for (Community community : byId.values()) {
+			if (!banned.contains(community.createdBy())
+					&& !suspiciousText.matches(community.name(), community.description())) {
+				visible.add(community.id());
+			}
+		}
+		return visible;
+	}
+
+	/** A regra da vitrine, num lugar só: quem criou está suspenso ou o texto parece ataque. */
+	private boolean canAppear(Community community) {
+		return !sanctionGate.banned(community.createdBy())
+				&& !suspiciousText.matches(community.name(), community.description());
 	}
 
 	public Community getById(String id) {

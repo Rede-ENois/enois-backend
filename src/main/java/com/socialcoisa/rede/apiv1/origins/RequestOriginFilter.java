@@ -287,7 +287,15 @@ class RequestOriginFilter extends OncePerRequestFilter {
 			return true;
 		}
 		// Links de descadastro (newsletter do blog e resumo semanal): clique no cliente de e-mail.
-		return path.equals("/blogs/descadastrar") || path.equals("/notifications/digest/unsubscribe");
+		if (path.equals("/blogs/descadastrar") || path.equals("/notifications/digest/unsubscribe")) {
+			return true;
+		}
+		// Nó da rede: o runtime roda em container e fala por curl, sem navegador e sem Origin. A
+		// credencial é própria do contrato do nó — token de provisionamento de uso único no enroll,
+		// X-Node-Id + X-Node-Key (e a prova de resultado em /tasks) no resto. Sem esta exceção todo
+		// enroll morria em 403 ORIGIN_REQUIRED e o bootstrap dizia "token inválido, expirado ou já
+		// usado?", culpando a chave do participante por uma recusa que era do gate.
+		return path.startsWith("/network/");
 	}
 
 	private static boolean isBlogFeedPath(String path) {

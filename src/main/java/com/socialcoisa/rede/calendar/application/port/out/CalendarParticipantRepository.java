@@ -16,10 +16,10 @@ public interface CalendarParticipantRepository {
 
 	Optional<CalendarParticipant> findByEntryAndUser(String entryId, String userId);
 
-	/** Convites de uma pessoa para um conjunto de compromissos, em uma consulta só. */
-	List<CalendarParticipant> findByUserAndEntryIds(String userId, List<String> entryIds);
-
 	/** Todos os participantes de um compromisso, na ordem em que foram convidados. */
 	List<CalendarParticipant> findByEntry(String entryId);
+
+	/** Quantos convites o compromisso tem, sem carregar as linhas: teto do convite. */
+	long countByEntry(String entryId);
 
 }

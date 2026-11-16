@@ -44,20 +44,28 @@ class CalendarEntryPersistenceAdapter implements CalendarEntryRepository {
 	}
 
 	@Override
-	public List<CalendarEntry> findInvitedInWindow(String userId, CalendarScope scope, Instant windowStart,
-			Instant windowEnd) {
-		if (!windowEnd.isAfter(windowStart)) {
-			return List.of();
-		}
-		String scopeName = scope == null ? null : scope.name();
-		return springData.findInWindowByParticipant(userId, scopeName, windowStart, windowEnd).stream()
+	public List<CalendarEntry> findPendingInvitations(String userId) {
+		return springData.findPendingInvitations(userId).stream()
 			.map(CalendarEntryJpaEntity::toDomain)
 			.toList();
 	}
 
 	@Override
-	public List<CalendarEntry> findPendingInvitations(String userId) {
-		return springData.findPendingInvitations(userId).stream()
+	public List<CalendarEntry> findBySeries(String seriesId) {
+		return springData.findBySeriesIdOrderByStartsAtAsc(seriesId).stream()
+			.map(CalendarEntryJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public Optional<CalendarEntry> findBySeriesAndStart(String seriesId, Instant startsAt) {
+		return springData.findBySeriesIdAndStartsAt(seriesId, startsAt)
+			.map(CalendarEntryJpaEntity::toDomain);
+	}
+
+	@Override
+	public List<CalendarEntry> findSeriesTails() {
+		return springData.findByTailTrue().stream()
 			.map(CalendarEntryJpaEntity::toDomain)
 			.toList();
 	}

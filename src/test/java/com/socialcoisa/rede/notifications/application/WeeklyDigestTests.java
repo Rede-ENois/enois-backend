@@ -154,7 +154,7 @@ class WeeklyDigestTests {
 		String community = community("digest-optout", reader.userId());
 		communityPost(community, author.userId(), "Post um", 1);
 		communityPost(community, author.userId(), "Post dois", 1);
-		preferences.update(reader.userId(), false, null, null, null, null, null);
+		preferences.update(reader.userId(), false, null, null, null, null, null, null);
 
 		assertThat(digest.sendTo(reader.userId())).isEqualTo(Outcome.NOT_ELIGIBLE);
 		assertThat(digests.eligibleUserIds(digest.weekKey(), "", 1_000_000)).doesNotContain(reader.userId());
@@ -186,6 +186,21 @@ class WeeklyDigestTests {
 		// Idempotent: the second click is still a confirmation, not an error.
 		mockMvc.perform(get("/notifications/digest/unsubscribe").param("token", token))
 			.andExpect(status().isOk());
+	}
+
+	@Test
+	void unsubscribeKeepsTheCommunityProjectOptIn() throws Exception {
+		var reader = auth.authenticate("digest_projects_reader");
+		try {
+			preferences.update(reader.userId(), null, null, null, null, null, null, true);
+			mockMvc.perform(get("/notifications/digest/unsubscribe").param("token", digest.unsubscribeToken(reader.userId())))
+				.andExpect(status().isOk());
+			assertThat(preferences.of(reader.userId()).weeklyDigest()).isFalse();
+			assertThat(preferences.of(reader.userId()).communityProjects()).isTrue();
+		}
+		finally {
+			jdbc.update("delete from notification_preferences where user_id = ?", reader.userId());
+		}
 	}
 
 	@Test

@@ -186,7 +186,7 @@ public class OnboardingService {
 			return;
 		}
 		profileService.update(new UpdateProfileCommand(userId, null, null, null, null, null, null, null, null, null,
-			null, merged, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
+			null, merged, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
 	}
 
 	private boolean joinCommunity(String userId, String communityId) {

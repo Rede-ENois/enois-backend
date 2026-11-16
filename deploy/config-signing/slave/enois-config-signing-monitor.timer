@@ -1,0 +1,11 @@
+[Unit]
+Description=Dispara a verificação da chave de assinatura a cada minuto (Énóis)
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=60s
+AccuracySec=5s
+Unit=enois-config-signing-monitor-once.service
+
+[Install]
+WantedBy=timers.target

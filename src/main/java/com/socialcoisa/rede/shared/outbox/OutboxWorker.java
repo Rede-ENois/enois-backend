@@ -69,7 +69,10 @@ class OutboxWorker {
 		this.metrics = metrics;
 	}
 
-	@Scheduled(fixedDelayString = "${rede.outbox.worker-delay-ms:5000}")
+	// O initialDelay e 0 em producao (primeira passada no boot). Os testes que dirigem o worker na
+	// mao o afastam, senao essa primeira passada roda junto com o teste e rouba o claim dele.
+	@Scheduled(initialDelayString = "${rede.outbox.worker-initial-delay-ms:0}",
+			fixedDelayString = "${rede.outbox.worker-delay-ms:5000}")
 	void processPendingEvents() {
 		List<OutboxEventJpaEntity> pending = outboxRepository
 			.findByStatusAndNextAttemptAtLessThanEqualOrderByCreatedAtAsc("PENDING", clock.instant(),

@@ -19,9 +19,9 @@ import com.socialcoisa.rede.shared.web.ConfirmationPage;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 
 /**
- * What reaches the person outside the app:
+ * Push, digest and opt-in community project notices:
  *
- * GET /me/notification-preferences — current toggles (defaults: everything on).
+ * GET /me/notification-preferences: current toggles (community projects off by default).
  * PUT /me/notification-preferences — partial update (a null or missing field keeps its value).
  * GET /notifications/digest/unsubscribe?token= — opt-out link clicked in the weekly digest e-mail.
  * POST /notifications/digest/unsubscribe?token= — RFC 8058 one-click opt-out sent by the mail client.
@@ -41,16 +41,16 @@ class NotificationPreferenceController {
 	}
 
 	record PreferencesView(boolean weeklyDigest, boolean pushSocial, boolean pushMessages, boolean pushGroups,
-			boolean pushJobs, boolean pushSystem, Instant updatedAt) {
+			boolean pushJobs, boolean pushSystem, boolean communityProjects, Instant updatedAt) {
 
 		static PreferencesView of(NotificationPreferences p) {
 			return new PreferencesView(p.weeklyDigest(), p.pushSocial(), p.pushMessages(), p.pushGroups(),
-				p.pushJobs(), p.pushSystem(), p.updatedAt());
+				p.pushJobs(), p.pushSystem(), p.communityProjects(), p.updatedAt());
 		}
 	}
 
 	record UpdateRequest(Boolean weeklyDigest, Boolean pushSocial, Boolean pushMessages, Boolean pushGroups,
-			Boolean pushJobs, Boolean pushSystem) {
+			Boolean pushJobs, Boolean pushSystem, Boolean communityProjects) {
 	}
 
 	@GetMapping("/me/notification-preferences")
@@ -63,9 +63,9 @@ class NotificationPreferenceController {
 	PreferencesView update(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestBody(required = false) UpdateRequest request) {
 		String userId = currentUserResolver.resolve(sessionToken).id().value();
-		UpdateRequest r = request == null ? new UpdateRequest(null, null, null, null, null, null) : request;
+		UpdateRequest r = request == null ? new UpdateRequest(null, null, null, null, null, null, null) : request;
 		return PreferencesView.of(service.update(userId, r.weeklyDigest(), r.pushSocial(), r.pushMessages(),
-			r.pushGroups(), r.pushJobs(), r.pushSystem()));
+			r.pushGroups(), r.pushJobs(), r.pushSystem(), r.communityProjects()));
 	}
 
 	@GetMapping(value = "/notifications/digest/unsubscribe", produces = MediaType.TEXT_HTML_VALUE)

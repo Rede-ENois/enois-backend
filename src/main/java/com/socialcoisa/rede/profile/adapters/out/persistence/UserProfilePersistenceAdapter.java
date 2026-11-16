@@ -347,6 +347,16 @@ class UserProfilePersistenceAdapter implements UserProfileRepository {
 	}
 
 	@Override
+	public List<com.socialcoisa.rede.profile.application.port.out.ReplicaProfileKey> replicaPage(
+			java.time.Instant afterCreatedAt, String afterId, int limit) {
+		// O par (criado em, id) é a chave: com um dos dois faltando a comparação perde a ordem total
+		// e a página seguinte repetiria itens — então ou os dois vêm, ou nenhum (início).
+		boolean fromStart = afterCreatedAt == null || afterId == null;
+		return repository.replicaPage(fromStart ? null : afterCreatedAt, fromStart ? null : afterId,
+				UserProfile.REMOVED_USERNAME_PREFIX + "%", PageRequest.of(0, Math.max(1, limit)));
+	}
+
+	@Override
 	public List<UserProfile> findAdmins() {
 		return repository.findByIsAdminTrue().stream()
 			.map(UserProfileJpaEntity::toDomain)

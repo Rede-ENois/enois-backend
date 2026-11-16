@@ -121,8 +121,21 @@ class JobContractController {
 		Job job = jobService.create(body.title(), body.company(), body.logo(), body.location(), body.type(), body.level(),
 			body.salary(), body.currency(), body.salaryMin(), body.salaryMax(), body.salaryPeriod(),
 			body.description(), body.skills(), toFieldInputs(body.applicationFields()), user.id().value(),
-			body.communityAgreement(), body.companyId());
+			body.communityAgreement(), body.companyId(), parseDeadline(body.applicationDeadline()));
 		return ResponseEntity.status(HttpStatus.CREATED).body(toView(job, user.id().value(), false, false, 0));
+	}
+
+	/** Prazo de candidaturas: ausente/nulo = sem prazo; presente precisa ser ISO-8601 válido. */
+	private static java.time.Instant parseDeadline(String raw) {
+		if (raw == null || raw.isBlank()) {
+			return null;
+		}
+		try {
+			return java.time.Instant.parse(raw.trim());
+		}
+		catch (java.time.format.DateTimeParseException exception) {
+			throw new ApiException(422, "INVALID_DEADLINE", "Data/hora de prazo inválida: " + raw);
+		}
 	}
 
 	@GetMapping
@@ -199,7 +212,7 @@ class JobContractController {
 					base.applicationsCount(), base.applied(), true, false, 0, null, base.applicationFields(),
 					base.status(), base.closedAt(), base.sourceType(), base.sourceUrl(), base.sourcePlatform(),
 					base.applyEmail(), base.description(), base.salaryMin(), base.salaryMax(),
-					base.salaryPeriod(), base.salaryLabel(), base.salaryNotInformed(), null,
+					base.salaryPeriod(), base.salaryLabel(), base.salaryNotInformed(), null, null,
 					base.externalDetails()));
 			}
 		}
@@ -522,6 +535,33 @@ class JobContractController {
 			toView(job, user.id().value(), false, false, jobService.applicationsCount(job.id())));
 	}
 
+	/**
+	 * Reabre a vaga encerrada: volta a aceitar candidaturas preservando tudo o que chegou.
+	 * Autor comanda sempre; na vaga de página, CONFIGURE_PROCESS também.
+	 */
+	@PostMapping("/{jobId}/reopen")
+	ResponseEntity<JobView> reopen(@PathVariable String jobId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		Job job = jobService.reopen(jobId, user.id().value());
+		return ResponseEntity.ok(
+			toView(job, user.id().value(), false, false, jobService.applicationsCount(job.id())));
+	}
+
+	/** Define (ou remove, com corpo nulo/vazio) o prazo de candidaturas. */
+	@PutMapping("/{jobId}/deadline")
+	ResponseEntity<JobView> setDeadline(@PathVariable String jobId,
+			@RequestBody(required = false) DeadlineRequest body,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		Job job = jobService.setDeadline(jobId, user.id().value(), parseDeadline(body == null ? null : body.deadline()));
+		return ResponseEntity.ok(toView(job, user.id().value(), false, false,
+			jobService.applicationsCount(job.id())));
+	}
+
+	record DeadlineRequest(String deadline) {
+	}
+
 	@DeleteMapping("/{jobId}")
 	ResponseEntity<DeleteResultView> delete(@PathVariable String jobId,
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
@@ -619,7 +659,8 @@ class JobContractController {
 					job.status().name(), job.closedAt() != null ? job.closedAt().toString() : null,
 					"INTERNAL", null, null, null,
 					job.description(), formatAmount(job.salaryMin()), formatAmount(job.salaryMax()),
-					job.salaryPeriod(), salaryLabel(job), false, slugs.get(job.companyId()), null);
+					job.salaryPeriod(), salaryLabel(job), false, slugs.get(job.companyId()),
+					job.applicationDeadline() != null ? job.applicationDeadline().toString() : null, null);
 			})
 			.toList();
 		String nextCursor = jobs.size() == limit
@@ -771,7 +812,7 @@ class JobContractController {
 			List.of(), "OPEN", null, "EXTERNAL", job.url(), job.platform(),
 			showApplyEmail ? job.applyEmail() : null,
 			job.description(), job.salaryMin(), job.salaryMax(), job.salaryPeriod(), externalSalaryLabel(job),
-			job.salaryNotInformed(), null, ExternalDetailsView.of(job));
+			job.salaryNotInformed(), null, null, ExternalDetailsView.of(job));
 	}
 
 	private JobView toView(Job job, String viewer, boolean applied, boolean saved, int applicationsCount) {
@@ -794,7 +835,8 @@ class JobContractController {
 			fieldViews(job), job.status().name(), job.closedAt() != null ? job.closedAt().toString() : null,
 			"INTERNAL", null, null, null,
 			job.description(), formatAmount(job.salaryMin()), formatAmount(job.salaryMax()),
-			job.salaryPeriod(), salaryLabel(job), false, companySlugs(List.of(job)).get(job.companyId()), null);
+			job.salaryPeriod(), salaryLabel(job), false, companySlugs(List.of(job)).get(job.companyId()),
+			job.applicationDeadline() != null ? job.applicationDeadline().toString() : null, null);
 	}
 
 	/** Slug of the company page each job is linked to, in one read (jobs without a page are left out). */
@@ -919,6 +961,8 @@ class JobContractController {
 			boolean salaryNotInformed,
 			// The company page the job is linked to (null when it is not linked).
 			String companySlug,
+			// Prazo de candidaturas (ISO-8601; nulo = sem prazo).
+			String applicationDeadline,
 			// Metadados estruturados das vagas externas (nulo nas internas): publicação, modelo de
 			// trabalho, localidade, faixa numérica, atribuição e ciclo de vida.
 			ExternalDetailsView externalDetails) {
@@ -962,7 +1006,10 @@ class JobContractController {
 			String description, List<String> skills, boolean communityAgreement,
 			List<ApplicationFieldRequest> applicationFields,
 			// Optional on create: post for this company page (RECRUITER or above). Ignored on edit.
-			String companyId) {
+			String companyId,
+			// Prazo para candidaturas, ISO-8601 (nulo = sem prazo). Mudar depois é
+			// PUT /{jobId}/deadline, não recriar a vaga.
+			String applicationDeadline) {
 	}
 
 	/** Cadastro de vaga EXTERNA: so o que a listagem mostra e o link para onde a candidatura vai. */

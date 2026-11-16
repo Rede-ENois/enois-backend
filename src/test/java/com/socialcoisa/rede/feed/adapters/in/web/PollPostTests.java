@@ -25,9 +25,10 @@ import tools.jackson.databind.ObjectMapper;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 /**
- * Enquete (PostType.POLL): titulo ate 400, de 2 a 6 alternativas, voto unico por pessoa e SEM troca
- * depois. A imutabilidade e o ponto do recurso, entao ela tem teste proprio: o segundo voto (na
- * mesma alternativa ou em outra) responde 409 e a contagem nao muda.
+ * Enquete (PostType.POLL): titulo ate 400, de 2 a 6 alternativas, um voto por pessoa COM troca de
+ * alternativa. A troca e o ponto do recurso, entao ela tem teste proprio: votar de novo em outra
+ * alternativa MOVE o voto (a contagem antiga cai, a nova sobe, o total nao cresce) e repetir a
+ * MESMA alternativa e idempotente — nada muda.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -83,34 +84,38 @@ class PollPostTests {
 	}
 
 	@Test
-	void cannotChangeVoteAfterCasting() throws Exception {
+	void changingVoteMovesTheCountWithoutGrowingTheTotal() throws Exception {
 		var author = auth.authenticate("user_poll_change");
 		var voter = auth.authenticate("user_poll_changer");
 		String postId = publishPoll(author, "Cafe ou cha?", List.of("Cafe", "Cha"), "poll-change-1");
 
 		vote(voter, postId, 0);
 
-		// Trocar de alternativa e recusado: o voto e definitivo.
+		// Trocar de alternativa: o voto MOVE — contagem antiga cai, nova sobe, total segue 1.
 		mockMvc.perform(post(voteUrl(postId))
 				.header("X-Session-Token", voter.token())
 				.contentType(MediaType.APPLICATION_JSON)
 				.content("{\"option\":1}"))
-			.andExpect(status().isConflict())
-			.andExpect(jsonPath("$.code").value("ALREADY_VOTED"));
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.myVote").value(1))
+			.andExpect(jsonPath("$.totalVotes").value(1))
+			.andExpect(jsonPath("$.counts[0]").value(0))
+			.andExpect(jsonPath("$.counts[1]").value(1));
 
-		// Votar de novo na MESMA alternativa tambem: nao ha "confirmar", o primeiro voto vale.
+		// Repetir a MESMA alternativa: idempotente, o estado nao muda.
 		mockMvc.perform(post(voteUrl(postId))
 				.header("X-Session-Token", voter.token())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content("{\"option\":0}"))
-			.andExpect(status().isConflict())
-			.andExpect(jsonPath("$.code").value("ALREADY_VOTED"));
+				.content("{\"option\":1}"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.myVote").value(1))
+			.andExpect(jsonPath("$.totalVotes").value(1));
 
 		JsonNode poll = readPoll(voter, postId);
-		assertThat(poll.get("myVote").asInt()).isZero();
+		assertThat(poll.get("myVote").asInt()).isEqualTo(1);
 		assertThat(poll.get("totalVotes").asLong()).isEqualTo(1);
-		assertThat(poll.get("counts").get(0).asLong()).isEqualTo(1);
-		assertThat(poll.get("counts").get(1).asLong()).isZero();
+		assertThat(poll.get("counts").get(0).asLong()).isZero();
+		assertThat(poll.get("counts").get(1).asLong()).isEqualTo(1);
 	}
 
 	@Test

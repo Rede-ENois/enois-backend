@@ -52,6 +52,25 @@ Para simular indisponibilidade de temporários, os testes criam um arquivo comum
 usam esse arquivo como pai de diretórios inválidos. Não dependem de `/dev/null`, permissões POSIX,
 privilégios do usuário nem alterações globais em `java.io.tmpdir`.
 
+### Outbox e economia controladas
+
+`CommunityProjectNotificationTests` dirige o worker real por ids concretos, com relógio fixo.
+As fixtures de projetos ficam agendadas para esse relógio dentro da transação que grava o evento:
+workers de outros contextos compartilham o H2 e não podem disputar seus claims. Avisos, recibos,
+continuações e preferências dos assinantes do cenário são limpos mesmo quando uma asserção falha.
+
+`OutboxWorkerTests` e `OutboxRetentionWorkerTests` usam bases H2 próprias para impedir que chamadas
+de outros contextos disputem os claims. Nesses contextos e em `MediaDeletionWorkerTransactionTests`,
+a ponte de fixtures `TestDatabaseSupport` é substituída para evitar a associação estática durante
+o boot. O `TestDatabaseContextListener` associa o helper ao contexto que está efetivamente em teste
+e o reassocia ao retornar a outro contexto em cache; os repositórios e workers continuam reais.
+
+A economia automática fica desligada em `src/test/resources/application.properties`: um cron
+não pode alterar a cotação compartilhada entre asserções de carteira e serviços. Os cenários de
+`CoinEconomyIsolationTests` chamam os dois jobs reais em um H2 próprio para garantir esse contrato;
+`CoinEconomyServiceTests` mantém a cobertura da publicação habilitada com relógio controlado.
+Isso não altera a configuração de produção.
+
 ## Estrutura de Testes
 
 Os testes estão em `src/test/java/com/socialcoisa/rede/` e seguem a mesma estrutura de pacotes do código fonte.
@@ -102,31 +121,46 @@ Prova de regressão entre classes, no mesmo processo e com reutilização do con
   '-Dtest=MarketplaceSanitizeBehaviorTests#theSanitizingPassRemovesOnlyTheLeftoversAndKeepsHealthyListings,BulkBanAndSuspiciousTests#approvedModeratorCanSeeAndRemoveSuspiciousPostsInBulk,SuspiciousAutoBanTests#bansAndSanitizesAnAccountAboveTheRiskCeiling,ProfileControllerTests#viewsPublicProfile' test
 ```
 
+Além do descarte da base, `CenarioAutoBan` fornece uma origem sintética por cenário e registra os
+bloqueios criados pela rodada para limpeza no `@AfterEach`, inclusive se uma asserção falhar, sem
+remover bloqueios anteriores. A regressão `naoContaminaAutenticacaoDepoisDeFixturesDeOutrasClasses`
+semeia explicitamente o bloqueio anterior e confere aplicação do controle, preservação desse estado
+e autenticação de um cenário seguinte. Os testes de duas e três contas cobrem os dois lados do
+limiar, inclusive recusa de cadastro e login. A limpeza não desfaz sanções, revogações de sessão ou
+sanitizações; essas persistem até o descarte do H2. Worker e regras de produção permanecem intactos.
+
 ### Teste de Contexto
 
 **RedeApplicationTests.java**: Testa se o contexto da aplicação carrega.
 
 ## Padrões de Teste
 
+O [fluxo de marketplace com cotação explícita](TESTING_MARKETPLACE_COTACAO.md) descreve os valores,
+as fronteiras de commit HTTP e o isolamento das fixtures financeiras.
+
 ### TestAuthHelper
 
 ```java
-var auth = TestAuthHelper.signup("Teste", "teste@email.com", "senha123");
+var helper = new TestAuthHelper(mockMvc, objectMapper);
+var auth = helper.authenticate("conta_do_cenario");
 // auth.token() -> token de sessão
 // auth.userId() -> ID do usuário
 ```
+
+Para cenários que precisam distinguir clientes, `authenticate(nome, RequestPostProcessor)` aplica o
+mesmo processador ao cadastro, à confirmação e ao login. A sobrecarga sem processador mantém o
+comportamento padrão. A origem do cliente é dado da fixture, não um controle desligado.
 
 ### Teste de Controller (MockMvc)
 
 ```java
 @Test
-void shouldReturnFeed() {
-    var auth = TestAuthHelper.signup(...);
+void listaPublicacoesDoCenario() throws Exception {
+    var auth = new TestAuthHelper(mockMvc, objectMapper).authenticate("feed_cenario");
 
-    mockMvc.perform(get("/api/feed")
-            .header("Authorization", "Bearer " + auth.token()))
-        .andExpect(status().isOk())
-        .andExpect(jsonPath("$.data").isArray());
+    mockMvc.perform(get("/feed/posts")
+            .header("X-Session-Token", auth.token()))
+        .andExpect(status().isOk());
 }
 ```
 

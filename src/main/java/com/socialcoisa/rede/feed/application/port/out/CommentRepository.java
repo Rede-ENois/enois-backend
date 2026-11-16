@@ -38,6 +38,9 @@ public interface CommentRepository {
 
 	List<String> findPostIdsByAuthor(String authorId);
 
+	/** Comentarios do autor paginados por data (mais recentes primeiro). Para a tab Respostas do perfil. */
+	List<Comment> findByAuthorPaged(String authorId, Instant before, int limit);
+
 	/** TODOS os comentários do autor, em qualquer status — purga por spam e ban cleanup. */
 	List<Comment> findAllByAuthor(String authorId);
 

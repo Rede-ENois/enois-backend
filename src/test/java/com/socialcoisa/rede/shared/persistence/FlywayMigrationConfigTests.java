@@ -107,6 +107,18 @@ class FlywayMigrationConfigTests {
 	}
 
 	@Test
+	void atualizaCharsetDoHtmlEmMigracaoNova() throws Exception {
+		var resource = getClass().getClassLoader()
+			.getResource("db/migration/V287__user_project_html_charset_upgrade.sql");
+		assertThat(resource).as("O upgrade de bancos legados exige uma migracao nova").isNotNull();
+		String sql = Files.readString(Path.of(resource.toURI()))
+			.replaceAll("(?m)^\\s*--.*$", "")
+			.replaceAll("\\s+", " ").toLowerCase(java.util.Locale.ROOT);
+		assertThat(sql).contains("alter table user_projects modify column html longtext "
+			+ "character set utf8mb4 collate utf8mb4_unicode_ci /*! null */");
+	}
+
+	@Test
 	void projectTextColumnsDeclareUnicodeStorageExplicitly() throws Exception {
 		var resource = Objects.requireNonNull(
 			getClass().getClassLoader().getResource("db/migration/V237__user_projects_text_utf8mb4.sql"));

@@ -1,0 +1,98 @@
+# Release do Node Runtime — o código que roda na máquina do participante.
+#
+# Publica, no GitHub Releases, o pacote que o bootstrap.sh da máquina do
+# participante baixa e verifica por sha256:
+#   - enois-node-runtime-<tag>.tar.gz  (o conteúdo de deploy/node-runtime)
+#   - SHA256SUMS                       (a soma do tar, para a verificação local)
+#
+# Dispara só em tag própria do runtime (slave-v*), que não é a tag de deploy do
+# backend: o pipeline de deploy atual (build-and-push.yml) não é tocado nem
+# disparado por esta tag — ele escuta push em main/qa e PR, não tags.
+#
+# A tag carrega o commit da fonte de verdade: slave-v1-qa@<sha8> diz que o
+# código empacotado é o <sha8> da qa. O bootstrap recusa pacote sem VERSION
+# reconhecível, então não existe release sem rastreabilidade de commit.
+name: 📦 Release do Node Runtime (slave)
+
+on:
+  push:
+    tags:
+      - 'slave-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 📦 Empacotar e publicar
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 🧱 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🔎 Conferir que a tag aponta para este commit
+        run: |
+          set -euo pipefail
+          apontado="$(git rev-parse "${GITHUB_REF_NAME}^{commit}")"
+          if [ "$apontado" != "$GITHUB_SHA" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} aponta para $apontado, mas o checkout veio em $GITHUB_SHA"
+            exit 1
+          fi
+          echo "tag=${GITHUB_REF_NAME} commit=${GITHUB_SHA}"
+
+      # O VERSION dentro do pacote é o que o bootstrap declara no heartbeat: é
+      # ele que amarra release ↔ commit da fonte de verdade. Formato <fonte>@<sha8>,
+      # o mesmo que o runtime declara — trocar a forma aqui quebra a comparação do
+      # bootstrap, e o pacote seria recusado na máquina do participante (fail secure).
+      # Três conferências, não só o formato: o sha8 é o commit empacotado, o commit
+      # está na fonte declarada (main@x com commit fora da main é release mentiroso)
+      # e o formato é o que o bootstrap aceita.
+      - name: 🏷️ Resolver e conferir a versão (fonte@commit)
+        id: versao
+        run: |
+          set -euo pipefail
+          bruta="${GITHUB_REF_NAME#slave-v}"
+          versao="${bruta#[0-9]-}"
+          if ! grep -Eq '^(qa|main)@[0-9a-f]{8}$' <<<"$versao"; then
+            echo "::error::a tag precisa ser slave-v<qa|main>@<sha8> (ex.: slave-v1-qa@ab12cd34); interpretei '${versao}'"
+            exit 1
+          fi
+          fonte="${versao%%@*}"
+          empacotado="$(git rev-parse --short=8 HEAD)"
+          if ! grep -q "@${empacotado}$" <<<"$versao"; then
+            echo "::error::o commit empacotado é ${empacotado}, mas a tag declara '${versao}'"
+            exit 1
+          fi
+          git fetch --quiet origin "$fonte"
+          if ! git merge-base --is-ancestor "HEAD" "origin/${fonte}"; then
+            echo "::error::o commit ${empacotado} não está na fonte declarada (${fonte})"
+            exit 1
+          fi
+          echo "versao=${versao}" >> "$GITHUB_OUTPUT"
+          echo "arquivo=enois-node-runtime-${versao}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "versao conferida: ${versao} (commit ${empacotado} em origin/${fonte})"
+
+      - name: 🗜️ Empacotar deploy/node-runtime
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          printf '%s\n' "${{ steps.versao.outputs.versao }}" > deploy/node-runtime/VERSION
+          tar -C deploy/node-runtime -czf "dist/${{ steps.versao.outputs.arquivo }}" \
+            VERSION docker-compose.yml Dockerfile install.sh bootstrap.sh node-runtime.sh node-doctor.sh
+          cd dist
+          sha256sum "${{ steps.versao.outputs.arquivo }}" > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: 📋 Publicar no GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSAO: ${{ steps.versao.outputs.versao }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Node Runtime ${VERSAO}" \
+            --notes "Código do nó (deploy/node-runtime) em ${VERSAO}.
+          O bootstrap.sh desta máquina baixa este pacote, confere o sha256 e constrói a imagem local.
+          Instalação: docs/rede-distribuida/09-instalacao.md (bootstrap.sh)." \
+            dist/*
