@@ -116,7 +116,7 @@ class DesabafosFlowTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "des-long-" + UUID.randomUUID())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(java.util.Map.of("content", "x".repeat(1001)))))
+				.content(objectMapper.writeValueAsString(java.util.Map.of("content", "x".repeat(3001)))))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("CONTENT_TOO_LONG"));
 		mockMvc.perform(post("/desabafos/posts")
