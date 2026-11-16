@@ -38,6 +38,9 @@ public class NodeObservabilityService {
 	/** Tamanho da mensagem de log — o console mostra uma linha, não um stack trace. */
 	private static final int MAX_LOG = 500;
 
+	/** Mesma janela de "vivo" do scheduler, do painel e da cobertura: 180 s. */
+	static final long ALIVE_SECONDS = 180;
+
 	private final NodeObservabilityRepository repository;
 	private final Clock clock;
 	private final java.util.function.Supplier<String> ids = () -> NodeIds.next("nl");
@@ -89,7 +92,45 @@ public class NodeObservabilityService {
 		List<Sample> samples = repository.samples(nodeId, clamp(sampleLimit, SAMPLE_KEEP));
 		List<LogLine> logs = repository.logs(nodeId, clamp(logLimit, LOG_KEEP));
 		return new Panel(nodeId, clock.instant(), List.copyOf(samples), logs.stream().map(View::of).toList(),
-			summarize(samples), logLevels(logs));
+			summarize(samples), logLevels(logs), freshness(samples, clock.instant()));
+	}
+
+	/**
+	 * Quão recente é o último ponto da série — e o que isso permite afirmar.
+	 *
+	 * <p>O brief §8.7 exige que o painel <b>distinga ausência de dados, nó offline e métrica
+	 * efetivamente zerada</b>. Sem este bloco, o quadro devolvia a série e nada mais: uma janela com
+	 * um ponto de duas horas atrás desenhava igual a uma com pontos deste minuto, e "0% de CPU" era
+	 * indistinguível de "não mediu". Os três casos são diferentes e a tela precisa poder separá-los:</p>
+	 *
+	 * <ul>
+	 * <li>{@code NO_SAMPLES} — o nó nunca empurrou amostra. Não há dado; nada se sabe;</li>
+	 * <li>{@code FRESH} — o último ponto cabe na janela de "vivo" (a mesma do scheduler e do
+	 * painel: 180 s). É a medida vigente;</li>
+	 * <li>{@code STALE} — há ponto, mas o último é mais velho que a janela. O nó pode estar fora, ou
+	 * pode estar online sem empurrar há um tempo; o painel mostra o número <b>com a idade</b>, e
+	 * {@code lastSampleAt} diz de quando ele é.</li>
+	 * </ul>
+	 *
+	 * <p>{@code ageSeconds} é nulo sem amostra: 0 diria "medido agora", que é o oposto do caso vazio.
+	 * A idade é calculada no servidor, do relógio dele — o runtime do nó não decide quão velho é o
+	 * próprio dado.</p>
+	 */
+	static Freshness freshness(List<Sample> samples, Instant now) {
+		if (samples == null || samples.isEmpty()) {
+			return new Freshness("NO_SAMPLES", null, null);
+		}
+		// A série vem do mais novo para o mais antigo: o primeiro é o último ponto medido.
+		Instant last = samples.get(0).sampledAt();
+		long age = Math.max(0, java.time.Duration.between(last, now).getSeconds());
+		return new Freshness(age <= ALIVE_SECONDS ? "FRESH" : "STALE", last, age);
+	}
+
+	/**
+	 * A idade da série. {@code state} é o que a tela usa para decidir se pode afirmar algo sobre o
+	 * nó; {@code lastSampleAt} e {@code ageSeconds} dizem de quando é o número mostrado.
+	 */
+	public record Freshness(String state, Instant lastSampleAt, Long ageSeconds) {
 	}
 
 	/**
@@ -109,7 +150,7 @@ public class NodeObservabilityService {
 
 	/** O que a página do nó desenha. {@code generatedAt} deixa claro que o quadro é do instante. */
 	public record Panel(String nodeId, Instant generatedAt, List<Sample> series, List<View> console,
-			Summary summary, java.util.Map<String, Long> consoleLevels) {
+			Summary summary, java.util.Map<String, Long> consoleLevels, Freshness freshness) {
 	}
 
 	private static Summary summarize(List<Sample> samples) {
