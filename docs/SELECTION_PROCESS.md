@@ -374,6 +374,38 @@ A rota exige sessão e a capacidade de ver candidatos da vaga, e confere que a c
 `APPLICATION_NOT_FOUND`. Como o resto do módulo, a timeline é **interna** — não existe rota de
 auditoria para o candidato.
 
+## Entrevistas na agenda central (sem segundo calendário)
+
+A entrevista da candidatura **é** um compromisso da agenda que o projeto já tem: a origem é
+`JOB_INTERVIEW` + id da entrevista, gravada nas duas agendas (candidato e quem marcou) pela porta de
+origem do calendário. Reagendar move as duas entradas em vez de criar outras; cancelar publica o
+cancelamento no mesmo UID. Não existe segundo calendário nem segundo lembrete.
+
+| Rota | Quem | O que faz |
+|---|---|---|
+| `POST /jobs/{jobId}/applications/{applicationId}/interview` | MANAGE_INTERVIEWS | marca (ou reagenda a que já vale) |
+| `PATCH /jobs/{jobId}/applications/{applicationId}/interview/{interviewId}` | quem marcou | reagenda |
+| `DELETE /jobs/{jobId}/applications/{applicationId}/interview/{interviewId}` | quem marcou | cancela |
+| `GET /jobs/{jobId}/applications/{applicationId}/interview` | empregador (VIEW_CANDIDATES) ou candidato | as entrevistas da candidatura |
+| `GET /jobs/{jobId}/interviews/free-slots` | MANAGE_INTERVIEWS | horários livres na janela pedida |
+
+### Horários livres e conflito
+
+`GET /jobs/{jobId}/interviews/free-slots?from=&to=&durationMinutes=` devolve os horários livres
+tirados da **disponibilidade semanal que quem está marcando declarou na agenda** (`/calendar/
+availability`), em passos de meia hora, descartando o que já ocupa a agenda profissional dessa
+pessoa. Nunca lê a agenda do candidato: a agenda dele é privada, e quem responde se o horário serve
+é ele, pelo convite.
+
+Sem janela declarada, a resposta traz `reasonCode` `NO_AVAILABILITY`; com as janelas todas ocupadas,
+`NO_FREE_SLOT` — lista vazia **com motivo**, nunca uma lista inventada de horários.
+
+Marcar em cima de outro compromisso **não é bloqueado**: o mesmo princípio do calendário (sobrepor é
+uma decisão da pessoa, e um 409 impediria o caso legítimo). A resposta de marcar/reagendar traz
+`conflicts` — o que já ocupa aquele horário na agenda de quem marcou (id, título e intervalo), sem
+contar a própria entrevista. Nas listas, `conflicts` vem `null` ("não avaliado"), distinto de lista
+vazia ("nada conflita").
+
 ## Fora deste escopo (próximos passos)
 
 Slot de entrevista escolhido pelo candidato, banco de talentos e a UI no design system. A
