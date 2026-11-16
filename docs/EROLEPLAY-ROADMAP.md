@@ -1,6 +1,7 @@
 # Éroleplay — Roadmap
 
-Estado geral: **em andamento**.
+Estado geral: **concluída no backend** (fases 0–10 com prova executada; PRs abertas para `qa`
+aguardando revisão humana e merge, que são decisão de mantenedor).
 Documento vivo: cada rodada atualiza a seção de estado e a "próxima tarefa" antes de encerrar.
 
 ## 1. Como este roadmap é usado
@@ -25,17 +26,17 @@ explícito, nunca com comportamento genérico inventado.
 
 | Fase | Entrega | Estado |
 |---|---|---|
-| 0 | RFC, modelo de domínio, contratos de integração, roadmap | em andamento |
-| 1 | Campanhas: papéis, visibilidade, membros, pedidos, mesas, lugares | em andamento |
+| 0 | RFC, modelo de domínio, contratos de integração, roadmap | concluída |
+| 1 | Campanhas: papéis, visibilidade, membros, pedidos, mesas, lugares | concluída |
 | 2 | Registro de sistemas + primeiro `SystemAdapter` | concluída |
 | 3 | Character Sheet Engine (modelo do mestre, preenchimento, privacidade por campo) | concluída |
 | 4 | Dice Engine (servidor, registro imutável, rolagem pedida pelo mestre) | concluída |
 | 5 | Chat de campanha (IC/OOC, privado, fixado, presença) | concluída |
-| 6 | Voz por mesa via Épapo + mesa virtual | em andamento |
-| 7 | World Builder | pendente |
-| 8 | Biblioteca e compartilhamento | pendente |
-| 9 | Front do Éroleplay (identidade visual própria, tema por campanha) | pendente |
-| 10 | Observabilidade, endurecimento e revisão de segurança | pendente |
+| 6 | Voz por mesa via Épapo + mesa virtual | concluída |
+| 7 | World Builder | concluída |
+| 8 | Biblioteca e compartilhamento | concluída |
+| 9 | Front do Éroleplay (identidade visual própria, tema por campanha) | backend concluído; front em revisão (PR #898) |
+| 10 | Observabilidade, endurecimento e revisão de segurança | concluída |
 
 ## 4. Fila de trabalho
 
@@ -44,7 +45,8 @@ explícito, nunca com comportamento genérico inventado.
 - [x] Reconhecimento do ecossistema com fatos verificados no código
 - [x] RFC técnico (`docs/EROLEPLAY-RFC.md`)
 - [x] Roadmap e log de execução
-- [ ] Registrar a origem (issue) da frente no backlog
+- [x] Registrar a origem (issue) da frente no backlog (issue #701, "plataforma universal de RPG
+  de mesa e RPG textual")
 
 ### Fase 1 — campanhas
 
