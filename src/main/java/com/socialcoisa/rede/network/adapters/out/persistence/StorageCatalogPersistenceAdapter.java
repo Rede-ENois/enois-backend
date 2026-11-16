@@ -115,8 +115,32 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		+ " from network_storage_placements where object_id = ? and node_id = ? and state <> 'GONE' "
 		+ "order by replica asc";
 
-	private static final String SELECT_PLACEMENTS = "select " + PLACEMENT_COLUMNS
+	/**
+	 * Todas as cópias em qualquer estado: é a leitura da durabilidade (V320). O filtro por {@code OK}
+	 * continua existindo ao lado, nomeado, porque são perguntas diferentes — e três leitores fazendo
+	 * o filtro por conta própria já tinham divergido sobre "o objeto tem cópia".
+	 */
+	private static final String SELECT_COPIES = "select " + PLACEMENT_COLUMNS
 		+ " from network_storage_placements where object_id = ? order by replica asc";
+
+	private static final String SELECT_PLACEMENTS = "select " + PLACEMENT_COLUMNS
+		+ " from network_storage_placements where object_id = ? and state = 'OK' order by replica asc";
+
+	/**
+	 * Lápides vencidas em ordem total (bucket, chave), estritamente depois do cursor. O índice
+	 * {@code (state, updated_at)} da V319 filtra o estado; a ordenação vem do índice do bucket.
+	 *
+	 * <p>A comparação é de PAR como na ordenação ({@code bucket > ? or (bucket = ? and key > ?)}),
+	 * não {@code object_key >= ?}: com o cursor só pela chave, a linha do mesmo nome no bucket
+	 * seguinte fazia a página voltar — medido, o coletor paginava até o teto relendo a mesma linha.</p>
+	 */
+	private static final String LIST_DELETED_BEFORE = """
+		select %s from network_storage_objects
+		where state = 'DELETED' and deleted_at is not null and deleted_at <= ?
+		  and (? = '' or bucket > ? or (bucket = ? and object_key > ?))
+		order by bucket asc, object_key asc
+		limit ?
+		""".formatted(OBJECT_COLUMNS);
 
 
 
@@ -213,8 +237,24 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	}
 
 	@Override
+	public List<StoragePlacement> copies(String objectId) {
+		return jdbc.query(SELECT_COPIES, PLACEMENT_MAPPER, objectId);
+	}
+
+	@Override
 	public List<StoragePlacement> placements(String objectId) {
 		return jdbc.query(SELECT_PLACEMENTS, PLACEMENT_MAPPER, objectId);
+	}
+
+	@Override
+	public List<StorageObject> listDeletedBefore(Instant before, String afterBucket, String afterKey, int limit) {
+		// Cursor nulo vira par vazio: `? = ''` desliga o filtro e a primeira página começa do início
+		// de todos os buckets, inclusive de bucket que começa com o menor byte.
+		String bucket = afterBucket == null ? "" : afterBucket;
+		String key = afterKey == null ? "" : afterKey;
+		String semCursor = afterBucket == null ? "" : "x";
+		return jdbc.query(LIST_DELETED_BEFORE, OBJECT_MAPPER, Timestamp.from(before), semCursor, bucket, bucket,
+			key, limit);
 	}
 
 	@Override

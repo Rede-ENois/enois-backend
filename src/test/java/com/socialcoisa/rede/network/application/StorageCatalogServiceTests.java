@@ -342,8 +342,28 @@ class StorageCatalogServiceTests {
 		}
 
 		@Override
-		public List<StoragePlacement> placements(String objectId) {
+		public List<StoragePlacement> copies(String objectId) {
 			return placements.values().stream().filter(p -> p.objectId().equals(objectId)).toList();
+		}
+
+		@Override
+		public List<StoragePlacement> placements(String objectId) {
+			return copies(objectId).stream().filter(p -> p.state() == StoragePlacement.State.OK).toList();
+		}
+
+		@Override
+		public List<StorageObject> listDeletedBefore(java.time.Instant before, String afterBucket,
+				String afterKey, int limit) {
+			var encontrados = byKey.values().stream()
+				.filter(o -> o.state() == com.socialcoisa.rede.network.domain.StorageObjectState.DELETED)
+				.filter(o -> o.deletedAt() != null && !o.deletedAt().isAfter(before))
+				.filter(o -> afterBucket == null
+						|| o.bucket().compareTo(afterBucket) > 0
+						|| (o.bucket().equals(afterBucket) && o.key().compareTo(afterKey) > 0))
+				.sorted(java.util.Comparator.comparing(StorageObject::bucket).thenComparing(StorageObject::key))
+				.limit(limit)
+				.toList();
+			return encontrados;
 		}
 
 		@Override

@@ -93,7 +93,9 @@ public class StorageReplicationDispatcher {
 		StorageObject object = catalog.findById(objectId)
 			.orElseThrow(() -> new com.socialcoisa.rede.shared.web.ApiException(404, "STORAGE_NOT_FOUND",
 				"Objeto nao encontrado."));
-		List<StoragePlacement> pendentes = catalog.placements(objectId)
+		// Pendente é designação, não cópia servível: `placements` devolve só OK e a lista vinha
+		// sempre vazia — o despacho nunca mandava gravar a réplica que a fase 3 tinha designado.
+		List<StoragePlacement> pendentes = catalog.copies(objectId)
 			.stream()
 			.filter(p -> p.state() == StoragePlacement.State.PENDING_REMOTE)
 			.limit(MAX_PLACEMENTS)

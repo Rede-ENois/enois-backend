@@ -16,6 +16,7 @@ import jakarta.persistence.Table;
 class PollConfigJpaEntity {
 
 	@Id
+	@Column(name = "post_id")
 	private String postId;
 
 	@Column(name = "multiple_choice", nullable = false)

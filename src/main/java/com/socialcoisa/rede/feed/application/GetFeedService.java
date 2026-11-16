@@ -661,7 +661,9 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 					.withContributor(corporateProfile == null && contributorIds.contains(post.authorId().value())
 						? ContributorTagView.from(profile) : null)
 					.withAuthorHumanityVerified(corporateProfile == null
-						&& humanityVerified.contains(post.authorId().value()));
+						&& humanityVerified.contains(post.authorId().value()))
+					.withAuthorHeadline(corporateProfile != null ? corporateProfile.headline()
+						: profile != null ? profile.headline() : null);
 				ReactionType reaction = currentUserReactions.get(post.id());
 				PostView withReaction = (reaction != null ? view.withCurrentUserReaction(reaction) : view)
 					.withReactionSummary(reactionSummaries.getOrDefault(post.id(), Map.of()));
