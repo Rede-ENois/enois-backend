@@ -143,6 +143,36 @@ ponto recente é `FRESH` com a idade real; ponto velho é `STALE` preservando o 
 responde `NO_SAMPLES` em vez de métricas zeradas). Mutações: idade 0 no caso vazio, qualquer série
 como `FRESH`, último ponto tomado como o mais antigo, fronteira exclusiva — **4 de 4 derrubam**.
 
+## 6.6 Histórico de conexão: a volta do nó
+
+O brief §8.6 pede o **histórico de conexão** de cada réplica. Até aqui o heartbeat só tocava
+`lastSeenAt`: o painel mostrava "conectado agora" e não contava que a máquina ficou fora.
+
+Agora o heartbeat compara o último contato com a janela de "vivo" (180 s, a mesma do scheduler, do
+painel e da série) **antes** de atualizar o `lastSeenAt`. Se o último contato é mais velho que a
+janela, a volta vira evento auditado:
+
+| ação | metadata |
+|---|---|
+| `NETWORK_NODE_RECONNECTED` | `offlineForSeconds` (tempo fora) e `lastSeenAt` (o contato anterior) |
+
+Ele aparece na rota que a página do nó já usa, `GET /admin/network/nodes/{id}/history` — sem rota
+nem tabela própria: a trilha que prova as ações é a mesma que as conta.
+
+Decisões:
+
+- **É a transição, não o heartbeat.** Uma linha por ciclo por nó afogaria a trilha; o que se guarda é
+  "esteve fora por X e voltou agora".
+- **Primeiro contato não é reconexão.** Nó que nunca bateu coração não "voltou"; registrá-lo sombrearia
+  um incidente que não houve.
+- **`offlineForSeconds` é o dado que importa.** "Voltou" sem "por quanto tempo" diz metade do que o
+  operador precisa para decidir se a máquina é confiável.
+
+**Verificação:** `NetworkNodeReconnectionTests` **4** (nó que volta depois da janela vira evento com o
+tempo fora; heartbeat normal não gera evento; primeiro contato não é reconexão; o evento aparece no
+histórico do próprio nó). Mutações: sem detectar a volta, primeiro contato como reconexão, heartbeat
+normal auditado — **3 de 3 derrubam**.
+
 ## 7. O que NÃO está entregue
 
 | item | por quê |
