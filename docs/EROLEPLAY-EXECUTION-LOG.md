@@ -829,3 +829,17 @@ exatamente isso e está marcado como feito. Parágrafo removido: documento que d
 pendente o que o código entrega é bug de documentação (AGENTS.md). Sem mudança de código.
 
 ---
+
+### Encerramento (rodada seguinte)
+
+Conferido o estado real da frente: **todos os PRs do Éroleplay foram mergeados** — backend em
+#735 (ordem de fala), #739 (World Builder), #747 (colunas da biblioteca), #756 (docs da Fase 9),
+#775 (trilha de auditoria), #785 (métricas) e #794 (autorização das rotas de voz); front em #898.
+Nenhum PR do módulo segue aberto. O ROADMAP e este log ainda diziam "PRs abertas aguardando
+revisão humana" e "front em revisão (PR #898)" — documento descrevendo como pendente o que a `qa`
+já tem é bug de documentação (AGENTS.md). Corrigido, sem mudança de código.
+
+A desativação do agendamento não foi feita por agente: o registro da automação vive no banco do
+aplicativo (em execução) e não há ferramenta nem API suportada para desativá-la a partir daqui —
+escrever direto no banco de um app vivo é interferência de harness, não uma ação de engenharia.
+Fica registrada como a única pendência, e é da usuária.

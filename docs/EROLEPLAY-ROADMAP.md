@@ -4,8 +4,8 @@ PROJECT_STATUS=COMPLETED (2026-11-16) — backend das fases 0–10 entregue com 
 CRONJOB_STATUS=DISABLED — desativar o agendamento de rodadas (não há ferramenta de exclusão no
 toolbox; requer ação do usuário).
 
-Estado geral: **concluída no backend** (fases 0–10 com prova executada; PRs abertas para `qa`
-aguardando revisão humana e merge, que são decisão de mantenedor).
+Estado geral: **concluída no backend e mergeada na `qa`** (fases 0–10 com prova executada; todos os
+PRs da frente revisados e mergeados por mantenedor).
 Documento vivo: cada rodada atualiza a seção de estado e a "próxima tarefa" antes de encerrar.
 
 ## 1. Como este roadmap é usado
@@ -39,7 +39,7 @@ explícito, nunca com comportamento genérico inventado.
 | 6 | Voz por mesa via Épapo + mesa virtual | concluída |
 | 7 | World Builder | concluída |
 | 8 | Biblioteca e compartilhamento | concluída |
-| 9 | Front do Éroleplay (identidade visual própria, tema por campanha) | backend concluído; front em revisão (PR #898) |
+| 9 | Front do Éroleplay (identidade visual própria, tema por campanha) | concluída (front mergeado, PR #898) |
 | 10 | Observabilidade, endurecimento e revisão de segurança | concluída |
 
 ## 4. Fila de trabalho
@@ -147,9 +147,9 @@ explícito, nunca com comportamento genérico inventado.
 
 ## 5. Próxima tarefa
 
-**Nenhuma pendência de backend.** As fases 0 a 10 estão concluídas no backend com prova executada
-(código, testes verdes, docs e PRs para `qa` — aguardando revisão humana e merge, que é decisão de
-mantenedor). O que segue é acompanhamento das PRs abertas e a validação de tela do front.
+**Nenhuma pendência.** As fases 0 a 10 estão concluídas com prova executada (código, testes verdes
+e docs no mesmo commit) e todas as entregas da frente foram mergeadas na `qa`: backend nos PRs
+#735, #739, #747, #756, #775, #785 e #794; front no PR #898. Não há PR do Éroleplay aberto.
 
 ## 6. Critérios de encerramento do agendamento
 
@@ -157,7 +157,7 @@ O agendamento só é desativado quando as fases 0 a 10 estiverem concluídas **c
 executada**: código no repositório, testes verdes, docs atualizadas e PRs abertos. PR aguardando
 revisão humana não impede a continuação nem o encerramento.
 
-**Estado (2026-11-16): critérios satisfeitos.** Fases 0–10 concluídas no backend, com testes
-executados (módulo Éroleplay 200/200; com chamadas 249/249) e docs atualizadas. As entregas estão
-em PRs abertas para `qa`, aguardando revisão humana — o merge é decisão de mantenedor. O
-agendamento pode ser desativado.
+**Estado (2026-11-16): critérios satisfeitos e merge concluído.** Fases 0–10 concluídas, com testes
+executados (módulo Éroleplay 200/200; com chamadas 249/249) e docs atualizadas no mesmo commit. As
+entregas estão na `qa` — os PRs do backend (#735, #739, #747, #756, #775, #785, #794) e o do front
+(#898) foram mergeados. O agendamento pode ser desativado.
