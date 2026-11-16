@@ -54,9 +54,14 @@ class NetworkConfigSignerTests {
 	}
 
 	private NetworkConfigSigner.SignedFields fields(List<String> profiles, Long diskFreeMb) {
-		return new NetworkConfigSigner.SignedFields(5, 7, "nd_1", profiles, 4, 8192, 51200, 100,
+		return fields(profiles, diskFreeMb, null);
+	}
+
+	/** Formato 6: o disco livre e o tamanho do volume, ambos medidos. */
+	private NetworkConfigSigner.SignedFields fields(List<String> profiles, Long diskFreeMb, Long diskTotalMb) {
+		return new NetworkConfigSigner.SignedFields(6, 7, "nd_1", profiles, 4, 8192, 51200, 100,
 			List.of("MEDIA_TRANSCODE"), List.of("catalogo=https://catalogo.exemplo/api"),
-			"2026-11-12T12:00:00Z", 300, 4, diskFreeMb);
+			"2026-11-12T12:00:00Z", 300, 4, diskFreeMb, diskTotalMb);
 	}
 
 	@Test
@@ -71,15 +76,15 @@ class NetworkConfigSignerTests {
 		var fields = fields(List.of("NODE_MEDIA"));
 		String signature = sign(fields.canonical());
 		// O ataque: mais perfis do que o Control Plane aprovou.
-		var forged = new NetworkConfigSigner.SignedFields(5, 7, "nd_1", List.of("NODE_MEDIA", "NODE_WORKER"), 4, 8192,
+		var forged = new NetworkConfigSigner.SignedFields(6, 7, "nd_1", List.of("NODE_MEDIA", "NODE_WORKER"), 4, 8192,
 			51200, 100, List.of("MEDIA_TRANSCODE"), List.of("catalogo=https://catalogo.exemplo/api"),
-			"2026-11-12T12:00:00Z", 300, 4, 40960L);
+			"2026-11-12T12:00:00Z", 300, 4, 40960L, null);
 		assertThat(NetworkConfigSigner.verify(pair.getPublic(), forged.canonical(), signature)).isFalse();
 		// E a variante mais sorrateira: mesma permissão, número de versão maior — o nó aceitaria uma
 		// config que nunca foi emitida só porque "parece mais nova".
-		var bumped = new NetworkConfigSigner.SignedFields(5, 8, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
+		var bumped = new NetworkConfigSigner.SignedFields(6, 8, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
 			List.of("MEDIA_TRANSCODE"), List.of("catalogo=https://catalogo.exemplo/api"),
-			"2026-11-12T12:00:00Z", 300, 4, 40960L);
+			"2026-11-12T12:00:00Z", 300, 4, 40960L, null);
 		assertThat(NetworkConfigSigner.verify(pair.getPublic(), bumped.canonical(), signature)).isFalse();
 	}
 
@@ -90,15 +95,15 @@ class NetworkConfigSignerTests {
 		// O ataque SSRF: o intermediário troca o destino autorizado por um que ele controla (ou por
 		// um endereço de metadados dentro da rede do participante). A rota é permissão, e permissão
 		// fora da assinatura não é permissão.
-		var swapped = new NetworkConfigSigner.SignedFields(5, 7, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
+		var swapped = new NetworkConfigSigner.SignedFields(6, 7, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
 			List.of("MEDIA_TRANSCODE"), List.of("catalogo=http://169.254.169.254/latest/meta-data"),
-			"2026-11-12T12:00:00Z", 300, 4, 40960L);
+			"2026-11-12T12:00:00Z", 300, 4, 40960L, null);
 		assertThat(NetworkConfigSigner.verify(pair.getPublic(), swapped.canonical(), signature)).isFalse();
 		// E a variante de acréscimo: uma rota a mais, junto com a legítima.
-		var added = new NetworkConfigSigner.SignedFields(5, 7, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
+		var added = new NetworkConfigSigner.SignedFields(6, 7, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
 			List.of("MEDIA_TRANSCODE"),
 			List.of("catalogo=https://catalogo.exemplo/api", "extra=https://atacante.exemplo/api"),
-			"2026-11-12T12:00:00Z", 300, 4, 40960L);
+			"2026-11-12T12:00:00Z", 300, 4, 40960L, null);
 		assertThat(NetworkConfigSigner.verify(pair.getPublic(), added.canonical(), signature)).isFalse();
 	}
 
@@ -106,17 +111,41 @@ class NetworkConfigSignerTests {
 	void rotaVaziaNaoMudaAFormaDaLinhaCanonica() {
 		// Nó sem rota declarada: a lista vazia entra na linha como "[]" — a forma é a mesma, e a
 		// assinatura do formato 4 continua sendo conferível contra a do formato 3 pela posição.
-		var comRota = new NetworkConfigSigner.SignedFields(5, 7, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
+		var comRota = new NetworkConfigSigner.SignedFields(6, 7, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
 			List.of("MEDIA_TRANSCODE"), List.of("catalogo=https://catalogo.exemplo/api"),
-			"2026-11-12T12:00:00Z", 300, 4, 40960L);
-		var semRota = new NetworkConfigSigner.SignedFields(5, 7, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
-			List.of("MEDIA_TRANSCODE"), List.of(), "2026-11-12T12:00:00Z", 300, 4, 40960L);
+			"2026-11-12T12:00:00Z", 300, 4, 40960L, null);
+		var semRota = new NetworkConfigSigner.SignedFields(6, 7, "nd_1", List.of("NODE_MEDIA"), 4, 8192, 51200, 100,
+			List.of("MEDIA_TRANSCODE"), List.of(), "2026-11-12T12:00:00Z", 300, 4, 40960L, null);
 		assertThat(comRota.canonical())
 			.contains("[\"MEDIA_TRANSCODE\"]|[\"catalogo=https://catalogo.exemplo/api\"]|2026-11-12T12:00:00Z");
 		assertThat(semRota.canonical()).contains("[\"MEDIA_TRANSCODE\"]|[]|2026-11-12T12:00:00Z");
 		// O termo continua na mesma posição e o disco medido entrou DEPOIS dele: campo novo nunca
-		// desloca o último, e o último agora é o disco livre medido no heartbeat.
-		assertThat(semRota.canonical()).endsWith("2026-11-12T12:00:00Z|300|4|40960");
+		// desloca o último. No formato 6 o último é o TAMANHO do volume, logo depois do disco livre.
+		assertThat(semRota.canonical()).endsWith("2026-11-12T12:00:00Z|300|4|40960|ausente");
+	}
+
+	/**
+	 * O tamanho do volume (formato 6) é assinado ao lado do disco livre, e distinguir "não medido"
+	 * de um tamanho real importa: é dele que sai a reserva do participante ({@code total - declarado},
+	 * brief §7). Trocar o total por outro número no caminho seria trocar a reserva que o participante
+	 * vê — e a assinatura tem de recusar.
+	 */
+	@Test
+	void tamanhoDoVolumeAssinaSeparadoDoNaoMedidoENaoPodeSerTrocado() {
+		var comTotal = fields(List.of("NODE_MEDIA"), 40960L, 2097152L);
+		var semTotal = fields(List.of("NODE_MEDIA"), 40960L, null);
+
+		assertThat(comTotal.canonical()).endsWith("|40960|2097152");
+		assertThat(semTotal.canonical()).endsWith("|40960|ausente");
+		assertThat(comTotal.canonical()).isNotEqualTo(semTotal.canonical());
+
+		String signature = sign(comTotal.canonical());
+		assertThat(NetworkConfigSigner.verify(pair.getPublic(), comTotal.canonical(), signature)).isTrue();
+		// Mesmo livre, total diferente: outra reserva, outra assinatura.
+		var outroTotal = fields(List.of("NODE_MEDIA"), 40960L, 512000L);
+		assertThat(NetworkConfigSigner.verify(pair.getPublic(), outroTotal.canonical(), signature)).isFalse();
+		// E o formato anterior (sem o campo) não confere a assinatura do formato 6.
+		assertThat(NetworkConfigSigner.verify(pair.getPublic(), semTotal.canonical(), signature)).isFalse();
 	}
 
 	@Test
@@ -125,9 +154,9 @@ class NetworkConfigSignerTests {
 		var vazio = fields(List.of("NODE_MEDIA"), 0L);
 		var naoMedido = fields(List.of("NODE_MEDIA"), null);
 
-		assertThat(medido.canonical()).endsWith("|40960");
-		assertThat(vazio.canonical()).endsWith("|0");
-		assertThat(naoMedido.canonical()).endsWith("|ausente");
+		assertThat(medido.canonical()).endsWith("|40960|ausente");
+		assertThat(vazio.canonical()).endsWith("|0|ausente");
+		assertThat(naoMedido.canonical()).endsWith("|ausente|ausente");
 
 		// "Sem espaço" e "não sei" não podem ser a mesma string assinada: quem verifica decidiria
 		// cache e réplica do mesmo jeito para os dois, e o nó cheio passaria como se estivesse bem.
@@ -141,14 +170,14 @@ class NetworkConfigSignerTests {
 
 	@Test
 	void mesmaPermissaoEmOrdemDiferreProduzAMesmaLinhaCanonica() {
-		var first = new NetworkConfigSigner.SignedFields(5, 7, "nd_1", List.of("NODE_MEDIA", "NODE_WORKER"), 4, 8192,
+		var first = new NetworkConfigSigner.SignedFields(6, 7, "nd_1", List.of("NODE_MEDIA", "NODE_WORKER"), 4, 8192,
 			51200, 100, List.of("ASYNC_JOB", "MEDIA_TRANSCODE"),
 			List.of("catalogo=https://catalogo.exemplo/api", "acervo=https://acervo.exemplo/api"),
-			"2026-11-12T12:00:00Z", 300, 4, 40960L);
-		var second = new NetworkConfigSigner.SignedFields(5, 7, "nd_1", List.of("NODE_WORKER", "NODE_MEDIA"), 4, 8192,
+			"2026-11-12T12:00:00Z", 300, 4, 40960L, null);
+		var second = new NetworkConfigSigner.SignedFields(6, 7, "nd_1", List.of("NODE_WORKER", "NODE_MEDIA"), 4, 8192,
 			51200, 100, List.of("MEDIA_TRANSCODE", "ASYNC_JOB"),
 			List.of("acervo=https://acervo.exemplo/api", "catalogo=https://catalogo.exemplo/api"),
-			"2026-11-12T12:00:00Z", 300, 4, 40960L);
+			"2026-11-12T12:00:00Z", 300, 4, 40960L, null);
 		assertThat(first.canonical()).isEqualTo(second.canonical());
 		String signature = sign(first.canonical());
 		assertThat(NetworkConfigSigner.verify(pair.getPublic(), second.canonical(), signature)).isTrue();
