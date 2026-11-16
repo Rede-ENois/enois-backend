@@ -9,7 +9,7 @@ import java.nio.file.StandardCopyOption;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
@@ -32,7 +32,7 @@ import org.springframework.stereotype.Component;
  * arquivo fica em disco e é servido dele, sem passar pelo Control Plane.</p>
  */
 @Component
-@ConditionalOnProperty(name = "rede.storage.node-body-root")
+@Conditional(NodeBodyRootConfigured.class)
 public class NodeBodyStore {
 
 	private static final Logger LOG = LoggerFactory.getLogger(NodeBodyStore.class);
