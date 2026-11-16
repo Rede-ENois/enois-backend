@@ -673,12 +673,17 @@ bandwidth_args() {
 }
 
 content_bytes() {
-  # content_bytes: bytes guardados no ESTADO DE CONTEÚDO do nó (edge/ + replica/).
+  # content_bytes: bytes guardados no ESTADO DE CONTEÚDO do nó (edge/ + replica/ + objects/).
   # Contar $NODE_HOME inteiro incluiria node.json, api-key e o pino — credencial não
   # é conteúdo e não pode ser apagada por estouro de cache.
+  #
+  # `objects/` entram porque são corpo de verdade em disco depois desta rodada. Sem eles, o
+  # teto declarado era medido sem o maior consumidor: o nó dizia usar 2 MB enquanto guardava
+  # 40 GB de réplica local.
   local total=0 size f
   for f in "$NODE_HOME"/edge/*/*.json "$NODE_HOME"/edge/*/*.version \
-           "$NODE_HOME"/replica/*/*.json "$NODE_HOME"/replica/*/*.version; do
+           "$NODE_HOME"/replica/*/*.json "$NODE_HOME"/replica/*/*.version \
+           "$NODE_HOME"/objects/*.bin; do
     [[ -f "$f" ]] || continue
     size=$(stat -c %s "$f") || continue
     total=$((total + size))
@@ -1074,7 +1079,14 @@ exec_object_put() {
     return 0
   fi
 
-  tmp=$(mktemp "$NODE_HOME/object-put.XXXXXX" 2>/dev/null) || {
+  # Onde o corpo FICA: o objeto e guardado no proprio disco deste no, no diretorio de corpos.
+  # Antes o executor baixava, confirmava e apagava -- o catalogo dizia "copia OK aqui" e o
+  # arquivo nao existia em lugar nenhum. Diretorio proprio (nao `replica/`, que disk_make_room
+  # trata como promessa nao evictavel e cuja poda e do CP).
+  local objects_dir="$NODE_HOME/objects"
+  mkdir -p "$objects_dir" || {
+    fail_task "$task_id" "$attempt" STORAGE_TMP_UNAVAILABLE 'sem diretorio para o corpo'; return 0; }
+  tmp=$(mktemp "$objects_dir/object-put.XXXXXX" 2>/dev/null) || {
     fail_task "$task_id" "$attempt" STORAGE_TMP_UNAVAILABLE 'sem diretorio para o corpo temporario'; return 0; }
 
   # O corpo vem pelo mesmo canal autenticado de toda tarefa, com o mesmo teto de banda
@@ -1115,6 +1127,9 @@ exec_object_put() {
     return 0
   fi
 
+  # O corpo so ganha o nome final DEPOIS da confirmacao: o CP ja aceitou que este no guarda o
+  # objeto, e um processo morto entre as duas etapas deixa um `.partial` (varrido no proximo
+  # ciclo), nunca um corpo servivel que o catalogo nao conhece.
   resp=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 60 \
     "${auth[@]}" -H 'Content-Type: application/json' -d \
     "{\"bytes\":$got_bytes,\"sha256\":\"$got_sha\"}" \
@@ -1122,7 +1137,10 @@ exec_object_put() {
     rm -f "$tmp"
     fail_task "$task_id" "$attempt" STORAGE_REPLICA_REFUSED 'confirmacao de replica recusada'
     return 0; }
-  rm -f "$tmp"
+  mv -f "$tmp" "$objects_dir/$object_id.bin" || {
+    rm -f "$tmp"
+    fail_task "$task_id" "$attempt" STORAGE_BODY_COMMIT_FAILED 'nao foi possivel guardar o corpo'
+    return 0; }
 
   # O output leva as medidas QUE ESTE NO mediu -- o CP confere contra as dele e recusa
   # DONE sem copia confirmada. `code` vazio = confirmado.
