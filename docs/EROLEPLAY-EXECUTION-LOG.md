@@ -794,16 +794,18 @@ desmentidos por execução.
 
 ### Testes executados (números reais)
 
-- `TableSecurityTests` (7) e `DiceSecurityTests` (8) verdes, incluindo os dois testes de prova
-  novos.
-- Módulo Éroleplay inteiro (`com.socialcoisa.rede.eroleplay.**` + domínio): **200 testes, 0
-  falhas, 0 erros** (o número da rodada anterior contava classes fora do seletor do módulo; este
-  é o seletor real do módulo).
+- `TableSecurityTests` (7/7), `DiceSecurityTests` (8/8) e `TableVoiceFlowTests` (5/5) verdes,
+  incluindo os dois testes de prova novos.
+- Módulo Éroleplay inteiro (`com.socialcoisa.rede.eroleplay.**`, 27 classes): **200 testes, 0
+  falhas, 0 erros**. Com o módulo de chamadas (`com.socialcoisa.rede.calls.**`) junto: **249
+  testes, 0 falhas, 0 erros, 1 pulado**, BUILD SUCCESS.
 - Suíte completa: 3.365 testes, 8 falhas, 10 erros e 1 pulado. Uma falha era REGRESSÃO desta
   rodada (`TableVoiceFlowTests`, leitura de voz fechada para visitante) — corrigida como acima e
   reconferida verde. As demais 7 falhas e 10 erros ficam em `network` e `media`
   (`NetworkMediaTests.setUp` viola FK ao limpar a base compartilhada) e `ReportAttachmentTests`,
-  todas fora do diff; passam isoladas na mesma árvore.
+  todas fora do diff; passam isoladas na mesma árvore (`NetworkReplicaTests` +
+  `NetworkStorageResultAcceptanceTests` + `NetworkMediaTests`: 28/28; `ReportAttachmentTests`:
+  6/6) — guarda ambiental da base H2 compartilhada, não regressão desta mudança.
 - Compilação `./mvnw -DskipTests compile` verde antes dos testes.
 
 ### Docs e PR

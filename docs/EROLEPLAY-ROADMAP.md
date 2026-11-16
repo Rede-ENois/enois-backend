@@ -156,3 +156,8 @@ mestre), SSE pelo mesmo evento `campaign`, e nada de conteúdo de sistema comerc
 O agendamento só é desativado quando as fases 0 a 10 estiverem concluídas **com prova
 executada**: código no repositório, testes verdes, docs atualizadas e PRs abertos. PR aguardando
 revisão humana não impede a continuação nem o encerramento.
+
+**Estado (2026-11-16): critérios satisfeitos.** Fases 0–10 concluídas no backend, com testes
+executados (módulo Éroleplay 200/200; com chamadas 249/249) e docs atualizadas. As entregas estão
+em PRs abertas para `qa`, aguardando revisão humana — o merge é decisão de mantenedor. O
+agendamento pode ser desativado.
