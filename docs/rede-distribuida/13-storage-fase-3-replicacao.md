@@ -21,6 +21,13 @@ deve ter o objeto" e o nó ainda não tem. Só a confirmação — com bytes e s
 medido — vira `OK`. A varredura conta só `OK`. Um painel que contasse linhas diria que o objeto está
 em três lugares quando está em um.
 
+**A varredura global pagina pelo par `(bucket, object_key)`, com cursor exclusivo.** Ordenação e
+retomada usam o mesmo par: uma chave menor no bucket seguinte não é omitida, e a última linha não
+é recontada. O cursor é interno; a listagem HTTP por bucket e o relatório não mudam. Cada consulta
+mantém o lote máximo de 200 e o teto por rodada. `PENDING` consome cota de leitura, sem medir
+réplicas; `DELETED` fica fora. `StorageCatalogPaginationTests` exercita o JDBC real em H2 próprio,
+402 objetos entre três buckets, chaves iguais, páginas de uma linha, término limitado e os tetos.
+
 **A divergência sobrevive ao erro.** Se a réplica confirma com digest diferente do medido, a linha
 vira `STALE` **e** a resposta é 409. Por isso `confirmReplica` não é transacional: com a confirmação
 dentro de uma transação, o rollback do 409 desfazia a marcação e o nó que gravou lixo nunca aparecia
@@ -30,6 +37,19 @@ como `STALE` — a divergência ficava invisível justamente no registro dela.
 conhece o arquivo pelo sha-256. O download por digest só serve a quem tem a cópia `OK` — "tem a
 linha" e "tem os bytes" são coisas diferentes. O nó busca na URL do Control Plane com a própria
 chave: **nenhum IP ou hostname de storage node** é cadastrado (brief §17).
+
+Objetos lógicos distintos podem compartilhar o mesmo digest. A resolução cruza esse digest com
+uma colocação `OK` do nó autenticado e com o objeto `STORED`, antes de escolher o id cujo corpo
+será lido. A existência de um objeto mais antigo em outro nó não impede essa leitura. Sem cópia
+`OK` própria, um digest conhecido continua respondendo 403 `STORAGE_NOT_HELD`; um digest sem objeto
+`STORED` continua 404 `STORAGE_NOT_FOUND`. Autorização não comprova existência do arquivo: se a
+cópia autorizada não está no disco do CP, o streaming termina com 409 `STORAGE_REPLICA_ELSEWHERE`.
+
+Na confirmação, `sha256` ausente, nulo, vazio ou fora do formato hexadecimal de 64 caracteres
+responde 400 `STORAGE_DIGEST_INVALID` antes de consumir a designação, mudar a colocação ou emitir
+auditoria de réplica. Mantém-se a comparação sem distinção de caixa nessa operação. Um digest
+válido divergente ainda gera `STALE` e 409; repetir uma confirmação consumida continua respondendo
+409 `STORAGE_REPLICA_ALREADY_CONFIRMED`, sem regravar a colocação nem duplicar sua auditoria.
 
 **A escolha é estável.** Ordem por folga de disco medida (decrescente) e desempate por id. O mesmo
 objeto, reenviado, escolhe o mesmo conjunto enquanto a rede não mudar; um conjunto que mudasse a
@@ -55,6 +75,8 @@ módulo. Nó com disco medido abaixo do piso **e** do tamanho do objeto não rec
 | suíte completa | 3111 testes (R123) |
 | `StoragePlacementServiceTests` (novo) | 8 — folga, não-repetição, nó pronto, disco, estável |
 | `NetworkStorageReplicationTests` (novo) | 6 — designação ≠ durabilidade, confirmação conferida, digest, varredura |
+| `NetworkStorageDigestTests` | JDBC e HTTP com dispatch assíncrono: digest compartilhado nas duas ordens, corpo próprio, ausência de arquivo e autorização fail-closed |
+| `NetworkStorageConfirmationTests` | HTTP e serviço reais: digest inválido sem mutação, confirmação posterior, divergência válida, retry e credenciais/perfis/designação |
 | `storage-migration-test` | **29** asserções em MariaDB 11.4 real, migrações 2× com dados |
 
 Mutações conferidas: confirmação sem conferir digest derruba `designacaoNaoContaComoDurabilidade…`;

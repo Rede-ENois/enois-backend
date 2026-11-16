@@ -30,6 +30,9 @@ public interface StorageCatalogRepository {
 	 */
 	Optional<StorageObject> findByDigest(String sha256);
 
+	/** Objeto STORED com este digest e colocação OK no nó autenticado, resolvidos juntos. */
+	Optional<StorageObject> findByDigestOnNode(String sha256, String nodeId);
+
 	/**
 	 * Cria o objeto em {@code PENDING}, ou devolve o existente. A segunda chamada do mesmo cliente
 	 * não duplica: {@code bucket + key} é única no banco e a consulta é o que decide.
@@ -49,13 +52,16 @@ public interface StorageCatalogRepository {
 	 */
 	List<StorageObject> list(String bucket, String prefix, String afterKey, int limit);
 
+	/** Posição exclusiva na ordenação global do catálogo, sem codificação de chave ou bucket. */
+	record Cursor(String bucket, String key) {
+	}
+
 	/**
-	 * Todos os objetos servíveis, ordenados por {@code bucket, object_key} — a paginação da varredura
-	 * percorre o catálogo inteiro, não um bucket. O cursor é a chave: dois buckets podem ter a mesma
-	 * chave, e o cursor por chave visita as duas na mesma página — o que não perde nem duplica
-	 * objeto, porque a ordenação é total por {@code bucket, object_key}.
+	 * Objetos não removidos, inclusive PENDING, ordenados por {@code bucket, object_key}.
+	 * Cursor nulo inicia a varredura; o próximo lote começa estritamente após o par informado.
+	 * A chave sozinha não identifica a posição quando a varredura atravessa buckets.
 	 */
-	List<StorageObject> listAll(String afterKey, int limit);
+	List<StorageObject> listAll(Cursor after, int limit);
 
 	/** Grava (ou substitui) a cópia {@code replica} deste objeto neste nó. */
 	void savePlacement(StoragePlacement placement);

@@ -118,15 +118,7 @@ class NetworkStorageController {
 		if (sha256 == null || !sha256.matches("[0-9a-f]{64}")) {
 			throw new ApiException(400, "STORAGE_DIGEST_INVALID", "Digest invalido.");
 		}
-		StorageObject object = storage.byDigest(sha256)
-			.orElseThrow(() -> new ApiException(404, "STORAGE_NOT_FOUND", "Objeto nao encontrado."));
-		boolean holds = storage.location(object.id()).stream()
-			.anyMatch(placement -> placement.state() == StoragePlacement.State.OK
-				&& placement.nodeId().equals(node.id()));
-		if (!holds) {
-			throw new ApiException(403, "STORAGE_NOT_HELD",
-				"Este no nao tem copia conferida deste objeto.");
-		}
+		StorageObject object = storage.heldByDigest(sha256, node.id());
 		ResponseEntity.BodyBuilder response = ResponseEntity.ok()
 			.header(HttpHeaders.CONTENT_TYPE, object.contentType())
 			.header(HttpHeaders.CONTENT_LENGTH, String.valueOf(object.bytes()))

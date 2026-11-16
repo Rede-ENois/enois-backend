@@ -50,6 +50,14 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	private static final String SELECT_BY_DIGEST = "select " + OBJECT_COLUMNS
 		+ " from network_storage_objects where sha256 = ? and state = 'STORED' order by created_at asc";
 
+	private static final String SELECT_BY_DIGEST_ON_NODE = "select " + OBJECT_COLUMNS + """
+		 from network_storage_objects o
+		 where o.sha256 = ? and o.state = 'STORED'
+		 and exists (select 1 from network_storage_placements p
+		   where p.object_id = o.id and p.node_id = ? and p.state = 'OK')
+		 order by o.created_at asc, o.id asc limit 1
+		""";
+
 
 
 	private static final String INSERT_PENDING = """
@@ -72,19 +80,10 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		where id = ? and state <> 'DELETED'
 		""";
 
-	/**
-	 * Listagem por prefixo e paginação por chave (cursor), não por OFFSET: com {@code object_key} no
-	 * índice, "as próximas N depois desta chave" é uma leitura de árvore; OFFSET reescreveria as
-	 * linhas anteriores a cada página.
-	 */
-	/**
-	 * Catalogo inteiro em ordem total (bucket, chave). O cursor por chave e o do contrato: a mesma
-	 * chave em dois buckets aparece na mesma pagina, e como a ordem e total nenhuma linha se perde
-	 * entre paginas.
-	 */
+	/** O predicado exclusivo usa o mesmo par da ordenação, inclusive ao atravessar buckets. */
 	private static final String LIST_ALL = """
 		select %s from network_storage_objects
-		where object_key >= ? and state <> 'DELETED'
+		where (bucket > ? or (bucket = ? and object_key > ?)) and state <> 'DELETED'
 		order by bucket asc, object_key asc
 		limit ?
 		""".formatted(OBJECT_COLUMNS);
@@ -171,6 +170,11 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	}
 
 	@Override
+	public Optional<StorageObject> findByDigestOnNode(String sha256, String nodeId) {
+		return jdbc.query(SELECT_BY_DIGEST_ON_NODE, OBJECT_MAPPER, sha256, nodeId).stream().findFirst();
+	}
+
+	@Override
 	public StorageObject createPending(String id, String bucket, String key, String contentType, String createdBy,
 			Instant now) {
 		Timestamp stamp = Timestamp.from(now);
@@ -201,8 +205,10 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	}
 
 	@Override
-	public List<StorageObject> listAll(String afterKey, int limit) {
-		return jdbc.query(LIST_ALL, OBJECT_MAPPER, afterKey == null ? "" : afterKey, limit);
+	public List<StorageObject> listAll(Cursor after, int limit) {
+		String bucket = after == null ? "" : after.bucket();
+		String key = after == null ? "" : after.key();
+		return jdbc.query(LIST_ALL, OBJECT_MAPPER, bucket, bucket, key, limit);
 	}
 
 	@Override

@@ -278,10 +278,20 @@ class StorageCatalogServiceTests {
 		}
 
 		@Override
-		public java.util.List<StorageObject> listAll(String afterKey, int limit) {
+		public Optional<StorageObject> findByDigestOnNode(String sha256, String nodeId) {
+			return byKey.values().stream()
+				.filter(o -> o.state() == StorageObjectState.STORED && sha256.equals(o.sha256()))
+				.filter(o -> placements(o.id()).stream().anyMatch(p -> p.nodeId().equals(nodeId)
+					&& p.state() == StoragePlacement.State.OK))
+				.findFirst();
+		}
+
+		@Override
+		public java.util.List<StorageObject> listAll(Cursor after, int limit) {
 			return byKey.values().stream()
 				.filter(o -> o.state() != StorageObjectState.DELETED)
-				.filter(o -> afterKey == null || o.key().compareTo(afterKey) >= 0)
+				.filter(o -> after == null || o.bucket().compareTo(after.bucket()) > 0
+					|| (o.bucket().equals(after.bucket()) && o.key().compareTo(after.key()) > 0))
 				.sorted(java.util.Comparator.comparing(StorageObject::bucket).thenComparing(StorageObject::key))
 				.limit(limit)
 				.toList();

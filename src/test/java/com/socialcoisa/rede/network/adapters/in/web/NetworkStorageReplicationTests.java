@@ -1,13 +1,18 @@
 package com.socialcoisa.rede.network.adapters.in.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.HexFormat;
@@ -26,6 +31,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 import com.socialcoisa.rede.shared.web.TestDatabase;
+import com.socialcoisa.rede.network.application.StorageCatalogService;
 
 import tools.jackson.databind.ObjectMapper;
 
@@ -58,6 +64,9 @@ class NetworkStorageReplicationTests {
 
 	@Autowired
 	private JdbcTemplate jdbc;
+
+	@Autowired
+	private StorageCatalogService storage;
 
 	private TestAuthHelper auth;
 
@@ -207,27 +216,32 @@ class NetworkStorageReplicationTests {
 
 	@Test
 	void downloadPorDigestSoServeQuemTemACopia() throws Exception {
-		String admin = adminToken();
 		Node dono = node(List.of("NODE_STORAGE"));
 		Node semCopia = node(List.of("NODE_STORAGE"));
 		String bucket = "repl-" + UUID.randomUUID().toString().substring(0, 8);
-		StoredObject object = storedObject(bucket, "foto.jpg", body("conteudo"), dono.id());
+		byte[] content = body("conteudo-digest-" + UUID.randomUUID());
+		StoredObject object = storedObject(bucket, "foto.jpg", content, dono.id());
 
-		// A colocação é o que autoriza: o objeto existe (o dono tem a réplica 0), mas este nó não tem.
-		// O corpo está no Control Plane, não no nó do dono — por isso o dono também não serve os bytes.
 		mockMvc
 			.perform(get("/network/storage/objects/by-digest/" + object.sha256()).header("X-Node-Id", semCopia.id())
 				.header("X-Node-Key", semCopia.key()))
 			.andExpect(status().isForbidden())
-			.andExpect(jsonPath("$.code").value("STORAGE_NOT_HELD"));
-		// E o dono da réplica 0 também não serve: a colocação dele existe, mas o corpo não está com
-		// ele (está no Control Plane). A resposta é 403 NOT_HELD e não um 200 vazio: "tem a linha"
-		// e "tem os bytes" são coisas diferentes, e é o bytes que o download entrega.
-		mockMvc
-			.perform(get("/network/storage/objects/by-digest/" + object.sha256()).header("X-Node-Id", dono.id())
-				.header("X-Node-Key", dono.key()))
-			.andExpect(status().isForbidden())
-			.andExpect(jsonPath("$.code").value("STORAGE_NOT_HELD"));
+			.andExpect(jsonPath("$.code").value("STORAGE_NOT_HELD"))
+			.andExpect(request().asyncNotStarted());
+		var file = storage.bodyPath(object.id());
+		try {
+			Files.write(file, content);
+			var inicio = mockMvc.perform(get("/network/storage/objects/by-digest/" + object.sha256())
+				.header("X-Node-Id", dono.id()).header("X-Node-Key", dono.key()))
+				.andExpect(request().asyncStarted()).andReturn();
+			mockMvc.perform(asyncDispatch(inicio)).andExpect(status().isOk())
+				.andExpect(content().bytes(content))
+				.andExpect(header().string("ETag", "\"" + object.sha256() + "\""))
+				.andExpect(header().string("Content-Length", String.valueOf(content.length)));
+		}
+		finally {
+			Files.deleteIfExists(file);
+		}
 	}
 
 	@Test

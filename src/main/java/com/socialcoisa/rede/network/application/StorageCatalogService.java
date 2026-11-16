@@ -193,6 +193,9 @@ public class StorageCatalogService {
 	 */
 	public StoragePlacement confirmReplica(NetworkNode node, String objectId, long bytes, String sha256) {
 		requireStorage(node);
+		if (sha256 == null || !sha256.matches("[0-9a-fA-F]{64}")) {
+			throw new ApiException(400, "STORAGE_DIGEST_INVALID", "Digest invalido.");
+		}
 		StorageObject object = catalog.findById(objectId)
 			.orElseThrow(() -> new ApiException(404, "STORAGE_OBJECT_UNKNOWN", "Objeto nao encontrado no catalogo."));
 		StoragePlacement placement = catalog.placementOn(objectId, node.id())
@@ -425,6 +428,16 @@ public class StorageCatalogService {
 	/** O objeto pelo conteúdo medido, para a réplica que só conhece o digest (fase 3). */
 	public Optional<StorageObject> byDigest(String sha256) {
 		return catalog.findByDigest(sha256);
+	}
+
+	/** A identidade lógica vem da colocação OK do nó, não do primeiro objeto global com o digest. */
+	public StorageObject heldByDigest(String sha256, String nodeId) {
+		return catalog.findByDigestOnNode(sha256, nodeId).orElseThrow(() -> {
+			if (catalog.findByDigest(sha256).isEmpty()) {
+				return new ApiException(404, "STORAGE_NOT_FOUND", "Objeto nao encontrado.");
+			}
+			return new ApiException(403, "STORAGE_NOT_HELD", "Este no nao tem copia conferida deste objeto.");
+		});
 	}
 
 	public Optional<StorageObject> byId(String id) {

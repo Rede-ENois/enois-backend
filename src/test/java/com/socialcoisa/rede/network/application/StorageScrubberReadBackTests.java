@@ -170,6 +170,16 @@ class StorageScrubberReadBackTests {
 		}
 
 		@Override
+		public Optional<StorageObject> findByDigestOnNode(String sha256, String nodeId) {
+			return objects.stream()
+				.filter(o -> o.state() == StorageObjectState.STORED && sha256.equals(o.sha256()))
+				.filter(o -> placements(o.id()).stream().anyMatch(p -> p.nodeId().equals(nodeId)
+					&& p.state() == StoragePlacement.State.OK))
+				.sorted(java.util.Comparator.comparing(StorageObject::createdAt).thenComparing(StorageObject::id))
+				.findFirst();
+		}
+
+		@Override
 		public StorageObject createPending(String id, String bucket, String key, String contentType, String createdBy,
 				Instant now) {
 			Optional<StorageObject> existing = find(bucket, key);
@@ -212,11 +222,12 @@ class StorageScrubberReadBackTests {
 		}
 
 		@Override
-		public List<StorageObject> listAll(String afterKey, int limit) {
+		public List<StorageObject> listAll(Cursor after, int limit) {
 			return objects.stream()
-				.filter(o -> o.state() == StorageObjectState.STORED)
-				.filter(o -> afterKey == null || o.key().compareTo(afterKey) > 0)
-				.sorted((a, b) -> a.key().compareTo(b.key()))
+				.filter(o -> o.state() != StorageObjectState.DELETED)
+				.filter(o -> after == null || o.bucket().compareTo(after.bucket()) > 0
+					|| (o.bucket().equals(after.bucket()) && o.key().compareTo(after.key()) > 0))
+				.sorted(java.util.Comparator.comparing(StorageObject::bucket).thenComparing(StorageObject::key))
 				.limit(limit)
 				.toList();
 		}

@@ -103,9 +103,10 @@ public class StorageScrubber {
 		int relidos = 0;
 		int scanned = 0;
 		String after = null;
+		StorageCatalogRepository.Cursor afterObject = null;
 		while (scanned < Math.max(1, maxObjects)) {
 			List<StorageObject> page = bucket == null
-				? catalog.listAll(after, Math.min(200, Math.max(1, maxObjects) - scanned))
+				? catalog.listAll(afterObject, Math.min(200, Math.max(1, maxObjects) - scanned))
 				: catalog.list(bucket, "", after, Math.min(200, Math.max(1, maxObjects) - scanned));
 			if (page.isEmpty()) {
 				break;
@@ -114,6 +115,7 @@ public class StorageScrubber {
 				scanned++;
 				String id = object.id();
 				after = object.key();
+				afterObject = new StorageCatalogRepository.Cursor(object.bucket(), object.key());
 				// Só objeto servível tem durabilidade a medir: PENDING ainda não tem corpo, DELETED
 				// foi removido de propósito.
 				if (!object.servable()) {
