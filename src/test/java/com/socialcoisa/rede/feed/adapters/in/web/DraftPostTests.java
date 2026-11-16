@@ -133,6 +133,74 @@ class DraftPostTests {
 		mockMvc.perform(delete("/feed/draft")).andExpect(status().isUnauthorized());
 	}
 
+	/**
+	 * A lista (GET/PUT/DELETE /feed/drafts): quem escreve mais de um texto — o relato do blog que
+	 * originou a issue — não pode perder material. Dois rascunhos coexistem; salvar em um não
+	 * mexe no outro; posse confere igual (404 para id alheio).
+	 */
+	@Test
+	void listaDeRascunhosGuardaVariosTextosSemMisturar() throws Exception {
+		var autora = auth.authenticate("rascunho_lista_dona");
+
+		String primeiro = mockMvc.perform(put("/feed/drafts").header("X-Session-Token", autora.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"type\":\"ARTICLE\",\"content\":\"ensino de rede\",\"articleBody\":\"texto do artigo um\"}"))
+			.andExpect(status().isOk())
+			.andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+		String idUm = objectMapper.readTree(primeiro).get("draft").get("id").asString();
+
+		String segundo = mockMvc.perform(put("/feed/drafts").header("X-Session-Token", autora.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"type\":\"ARTICLE\",\"content\":\"mutirao\",\"articleBody\":\"texto do artigo dois\"}"))
+			.andExpect(status().isOk())
+			.andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+		String idDois = objectMapper.readTree(segundo).get("draft").get("id").asString();
+
+		assertThat(idUm).isNotEqualTo(idDois);
+
+		// A lista traz os dois.
+		mockMvc.perform(get("/feed/drafts").header("X-Session-Token", autora.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.drafts.length()").value(2));
+
+		// Salvar de novo em um (por id) atualiza só ele.
+		mockMvc.perform(put("/feed/drafts/" + idUm).header("X-Session-Token", autora.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"type\":\"ARTICLE\",\"content\":\"ensino de rede v2\",\"articleBody\":\"texto atualizado\"}"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.draft.id").value(idUm));
+
+		mockMvc.perform(get("/feed/drafts").header("X-Session-Token", autora.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.drafts.length()").value(2))
+			.andExpect(jsonPath("$..[?(@.id == '" + idUm + "')].articleBody").value(
+					org.hamcrest.Matchers.hasItem("texto atualizado")))
+			.andExpect(jsonPath("$..[?(@.id == '" + idDois + "')].articleBody").value(
+					org.hamcrest.Matchers.hasItem("texto do artigo dois")));
+
+		// Descartar um da lista não apaga o outro.
+		mockMvc.perform(delete("/feed/drafts/" + idDois).header("X-Session-Token", autora.token()))
+			.andExpect(status().isOk());
+		mockMvc.perform(get("/feed/drafts").header("X-Session-Token", autora.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.drafts.length()").value(1))
+			.andExpect(jsonPath("$.drafts[0].id").value(idUm));
+
+		// Id de outra pessoa (ou inexistente) recusa sem vazar existência: 404 nos dois casos.
+		var outra = auth.authenticate("rascunho_lista_outra");
+		mockMvc.perform(put("/feed/drafts/" + idUm).header("X-Session-Token", outra.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"type\":\"INSIGHT\",\"content\":\"tentativa alheia\"}"))
+			.andExpect(status().isNotFound());
+		mockMvc.perform(delete("/feed/drafts/" + idUm).header("X-Session-Token", outra.token()))
+			.andExpect(status().isNotFound());
+
+		// E o rascunho da autora segue intacto depois das tentativas alheias.
+		mockMvc.perform(get("/feed/drafts").header("X-Session-Token", autora.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.drafts.length()").value(1));
+	}
+
 	@Test
 	void rascunhoEPrivadoEDescarteIdempotente() throws Exception {
 		var autora = auth.authenticate("rascunho_privado_dona");
