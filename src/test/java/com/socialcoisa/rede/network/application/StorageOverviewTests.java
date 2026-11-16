@@ -72,8 +72,8 @@ class StorageOverviewTests {
 	/** Nó de armazenamento com o TAMANHO do volume medido, além do livre. */
 	private static NetworkNode storageComTotal(String id, int declaredMb, Long freeMb, Long totalMb) {
 		return new NetworkNode(id, "no-" + id, "user-" + id, NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_STORAGE),
-			"sudeste", "BR", "1.0.0", NOW, 4, 4096, declaredMb, 100, null, null, null, null, freeMb, totalMb, 0,
-			null, null);
+			"sudeste", "BR", "1.0.0", NOW, 4, 4096, declaredMb, 100, null, null, null, null, freeMb, totalMb, null,
+			0, null, null);
 	}
 
 	@Test
@@ -214,6 +214,58 @@ class StorageOverviewTests {
 
 		assertThat(c.disks().get(0).reservedMb()).isZero();
 		assertThat(c.disks().get(0).totalMb()).isEqualTo(512000L);
+	}
+
+	/** Nó de armazenamento com o uso do conteúdo medido, além do declarado. */
+	private static NetworkNode storageComUso(String id, int declaredMb, Long usedMb) {
+		return new NetworkNode(id, "no-" + id, "user-" + id, NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_STORAGE),
+			"sudeste", "BR", "1.0.0", NOW, 4, 4096, declaredMb, 100, null, null, null, null, null, null, usedMb, 0,
+			null, null);
+	}
+
+	/**
+	 * Brief §7, "capacidade utilizada pelo Énóis" e "limite máximo de utilização": o uso é medido no
+	 * NÓ, e o percentual sai contra o que ele cedeu. Dois nós com lados desiguais — um em metade, um
+	 * acima do teto — provam que o percentual é de cada um e que passar de 100 aparece em vez de ser
+	 * cortado.
+	 */
+	@Test
+	void uso_do_conteudo_e_percentual_por_no_e_acima_do_teto_aparece() {
+		when(nodes.list(anyInt())).thenReturn(List.of(
+			storageComUso("nd_metade", 100000, 50000L),
+			storageComUso("nd_acima", 20000, 22000L)));
+
+		StorageOverviewNodes.Capacity c = overviewNodes.capacity();
+
+		assertThat(c.unmeasuredUsage()).isZero();
+		assertThat(c.disks().get(0).usedMb()).isEqualTo(50000L);
+		assertThat(c.disks().get(0).usedPercent()).isEqualTo(50.0);
+		assertThat(c.disks().get(1).usedMb()).isEqualTo(22000L);
+		// Acima do teto: 110%, não 100. Cortar esconderia justamente o nó que consome além do prometido.
+		assertThat(c.disks().get(1).usedPercent()).isEqualTo(110.0);
+	}
+
+	@Test
+	void uso_nao_medido_e_desconhecido_e_nao_zero() {
+		// Zero é resposta legítima (nó sem conteúdo); sem medida é outra coisa.
+		when(nodes.list(anyInt())).thenReturn(List.of(storage("nd_a", 102400, 5000L)));
+
+		StorageOverviewNodes.Capacity c = overviewNodes.capacity();
+
+		assertThat(c.disks().get(0).usedMb()).isNull();
+		assertThat(c.disks().get(0).usedPercent()).isNull();
+		assertThat(c.unmeasuredUsage()).isEqualTo(1);
+	}
+
+	@Test
+	void teto_zero_nao_vira_divisao_por_zero() {
+		// 0 no contrato significa "sem teto", não "teto de zero": não há percentual a calcular.
+		when(nodes.list(anyInt())).thenReturn(List.of(storageComUso("nd_sem_teto", 0, 5000L)));
+
+		StorageOverviewNodes.Capacity c = overviewNodes.capacity();
+
+		assertThat(c.disks().get(0).usedMb()).isEqualTo(5000L);
+		assertThat(c.disks().get(0).usedPercent()).isNull();
 	}
 
 	@Test
