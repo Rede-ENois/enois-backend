@@ -1379,7 +1379,17 @@ eventos/logs/erros. Documentação completa em [`MONITORAMENTO.md`](MONITORAMENT
 | `GET /admin/monitoring/overview` | KPIs, séries por minuto, recursos, eventos recentes |
 | `GET /admin/monitoring/events` | Lista de eventos com filtros (nível, tipo, busca, **intervalo de data/hora**, paginação por cursor) |
 | `GET /admin/monitoring/users` | Contas da comunidade: total, entradas por dia (30 dias), crescimento diário e projeções |
+| `GET /admin/monitoring/denied-admin` | Recusas de autorização em `/admin/**` e `/moderation/**`: total, avisos de repetição, contas acima do limiar da janela e varreduras sem sessão acima do limiar |
 | `GET /admin/emails` | Log de e-mails enviados |
+
+Toda recusa decidida pelo `AdminRouteInterceptor` (sem sessão, só admin ou só moderação) grava uma
+linha em `audit_logs` com ação `ADMIN_AUTHORITY_DENIED`, a rota sem id e o motivo
+(`SESSION_MISSING`, `ADMIN_ONLY`, `MODERATOR_ONLY`) — nunca corpo de requisição nem token. O 401/403
+recusado antes do interceptor (rota inexistente, cabeçalho de sessão ausente, escrita sem sessão) é
+contado em memória por pod e vira UMA linha de auditoria com escopo `admin-baseline` só quando a
+mesma origem repete acima do limiar (`rede.security.denied-admin-alerts.threshold`, padrão 20, em
+`window-minutes`, padrão 10) — gravar uma linha por recusa transformaria varredura em carga de
+escrita.
 
 O painel de log aceita "mostrar mais", cópia individual e cópia completa, e o modo pânico (chave de
 sistema que responde 429 em toda escrita) fica no módulo shared (`PanicController`).
