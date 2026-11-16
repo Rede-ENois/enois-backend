@@ -60,6 +60,13 @@ class AdminRouteInterceptor implements HandlerInterceptor {
 		"/admin/blocked-ips/**", "/admin/monitoring/**").stream()
 		.map(AdminRouteInterceptor::pattern).toList();
 
+	/**
+	 * Superfície das ações administrativas DIRETAS (advertência, banimento, remoção de publicação).
+	 * Fica fora das duas listas acima de propósito: é ADMIN em bloco, inclusive rota nova que nasça
+	 * aqui — moderador continua pelo caminho de votação e não ganha nada por chegar antes.
+	 */
+	private static final PathPattern ADMIN_MODERATION_PATH = pattern("/admin/moderation/**");
+
 	/** Subcaminhos de /admin/support que continuam exclusivos do admin (infraestrutura). */
 	private static final List<PathPattern> SUPPORT_ADMIN_ONLY = List.of(pattern("/admin/support/github/**"));
 
@@ -155,6 +162,9 @@ class AdminRouteInterceptor implements HandlerInterceptor {
 	}
 
 	private boolean abertoAoModerador(PathContainer path) {
+		if (ADMIN_MODERATION_PATH.matches(path)) {
+			return false;
+		}
 		if (SUPPORT_ADMIN_ONLY.stream().anyMatch(pattern -> pattern.matches(path))) {
 			return false;
 		}

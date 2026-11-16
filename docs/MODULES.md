@@ -1181,6 +1181,33 @@ Rebaixar um ban libera o login de volta — o conteúdo purgado pelo ban não vo
 | `revokeSanction(adminId, sanctionId, reason)` | POST /api/admin/sanctions/{sanctionId}/revoke |
 | `editSanction(adminId, sanctionId, type, reason)` | POST /api/admin/sanctions/{sanctionId}/edit |
 
+### Ações administrativas DIRETAS (AdminModerationService / UserWarningService)
+
+**Arquivos**: `moderation/application/AdminModerationService.java`, `UserWarningService.java`,
+`moderation/adapters/in/web/AdminModerationController.java`
+
+O administrador decide direto sobre uma CONTA ou uma PUBLICAÇÃO, sem denúncia e sem votação:
+advertir, sancionar (restrição, suspensão, banimento, banimento permanente) e remover publicação.
+O sistema de votação (`ModeratorService.vote`, `SanctionProposalService`) não muda e continua sendo
+o único caminho dos moderadores: nada aqui conta voto, e as rotas são de ADMIN em bloco
+(`AdminRouteInterceptor.ADMIN_MODERATION_PATH` recusa antes do MVC; cada método confirma com
+`AdminGuard`).
+
+| Função | Rota | Efeito |
+|---|---|---|
+| `user(username)` | GET /api/admin/moderation/users/{username} | Perfil público + `activeWarnings` (contagem) |
+| `user summary` | GET /api/admin/moderation/users/{username}/summary | Sanção ativa + advertências ativas |
+| `history(username, limit)` | GET /api/admin/moderation/users/{username}/history | Advertências e sanções juntas, mais recente primeiro |
+| `warn(...)` | POST /api/admin/moderation/users/{username}/warnings | Cria `user_warnings`, notifica, audita `ADMIN_WARNING_ISSUED` |
+| `warningHistory(...)` | GET /api/admin/moderation/users/{username}/warnings | Histórico da conta (ativas e revogadas) |
+| `revoke(...)` | POST /api/admin/moderation/warnings/{warningId}/revoke | Revoga sem apagar (histórico preservado), audita `ADMIN_WARNING_REVOKED` |
+| `sanction(...)` | POST /api/admin/moderation/users/{username}/sanction | Reaproveita `ModeratorService.sanctionUser` (revoga sessões, purga conteúdo no ban), audita `ADMIN_SANCTION_APPLIED` |
+| `removePost(...)` | POST /api/admin/moderation/posts/{postId}/remove | `ModerationRemovePostUseCase.removeAsAdminWithOutcome` (soft delete, mídia, republicações), audita `ADMIN_POST_REMOVED` |
+
+Motivo obrigatório (10 a 2000 caracteres) em toda escrita; `Idempotency-Key` devolve a mesma
+resposta (replay) sem repetir a decisão. `user_warnings` (`V330`) é o histórico que faltava: antes
+"avisar" numa denúncia só mudava o status e mandava uma notificação, sem registro por conta.
+
 ### ContentQuarantineReviewService
 
 **Arquivo**: `src/main/java/com/socialcoisa/rede/moderation/application/ContentQuarantineReviewService.java`

@@ -49,7 +49,13 @@ public record UserProfileView(String id, String username, String name, String he
 		 * Selo "Humanidade Comprovada": verdadeiro só depois de aprovação confirmada pelo provedor
 		 * de identidade. Substitui a forma pública posterior no record.
 		 */
-		boolean humanityVerified) {
+		boolean humanityVerified,
+		/**
+		 * Quantas advertências administrativas ativas a conta acumulou. Só a abertura de perfil por
+		 * um administrador preenche (ver {@code ProfileService}); para qualquer outro leitor é
+		 * {@code null}, e o histórico não é público.
+		 */
+		Integer activeWarnings) {
 
 	public static UserProfileView from(UserProfile profile) {
 		return new UserProfileView(profile.id(), profile.username(), profile.displayWithNickname(), profile.headline(),
@@ -62,7 +68,7 @@ public record UserProfileView(String id, String username, String name, String he
 			profile.profileEffect(), profile.statusText(), profile.statusIcon(), profile.createdAt() == null ? null : profile.createdAt().toString(),
 			profile.publicPlace() == null ? null : profile.publicPlace().city(),
 			profile.publicPlace() == null ? null : profile.publicPlace().state(), profile.gardenStyle(),
-			profile.garden(), profile.profileAppearance().social(), false);
+			profile.garden(), profile.profileAppearance().social(), false, null);
 
 	}
 
@@ -75,7 +81,7 @@ public record UserProfileView(String id, String username, String name, String he
 			bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, connectionsCount,
 			followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme, nameFont, nameColor,
 			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state,
-			gardenStyle, garden, profileLook, humanityVerified);
+			gardenStyle, garden, profileLook, humanityVerified, activeWarnings);
 	}
 
 	/**
@@ -87,7 +93,7 @@ public record UserProfileView(String id, String username, String name, String he
 			bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, connectionsCount,
 			followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme, nameFont, nameColor,
 			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state,
-			gardenStyle, garden, profileLook, verified);
+			gardenStyle, garden, profileLook, verified, activeWarnings);
 	}
 
 	/** Foto de perfil no host deste ambiente ({@code avatar} continua o endereco gravado, sem troca). */
@@ -96,7 +102,7 @@ public record UserProfileView(String id, String username, String name, String he
 			bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, connectionsCount,
 			followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme, nameFont, nameColor,
 			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state,
-			gardenStyle, garden, profileLook, humanityVerified);
+			gardenStyle, garden, profileLook, humanityVerified, activeWarnings);
 	}
 
 	/** Capa em HTML/CSS; so a leitura do perfil anexa (mesmo motivo da bio). */
@@ -105,6 +111,18 @@ public record UserProfileView(String id, String username, String name, String he
 			bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, connectionsCount,
 			followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme, nameFont, nameColor,
 			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state,
-			gardenStyle, garden, profileLook, humanityVerified);
+			gardenStyle, garden, profileLook, humanityVerified, activeWarnings);
+	}
+
+	/**
+	 * Advertências ativas da conta. Só o administrador que abre o perfil recebe o número: a
+	 * advertência é dado de moderação, não informação pública do perfil.
+	 */
+	public UserProfileView withActiveWarnings(Integer activeWarnings) {
+		return new UserProfileView(id, username, name, headline, company, location, avatar, banner, avatarUrl, badge,
+			bio, bioHtml, bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor,
+			connectionsCount, followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme,
+			nameFont, nameColor, contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText,
+			statusIcon, joinedAt, city, state, gardenStyle, garden, profileLook, humanityVerified, activeWarnings);
 	}
 }
