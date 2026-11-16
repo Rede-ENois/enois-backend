@@ -61,6 +61,7 @@ class JobContractController {
 	private final JobInterviewService interviewService;
 	private final com.socialcoisa.rede.jobs.application.InterviewSlotService interviewSlots;
 	private final com.socialcoisa.rede.jobs.application.JobCompatibilityService compatibility;
+	private final com.socialcoisa.rede.jobs.application.SelectionProcessService process;
 
 	JobContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
 			JobService jobService, CursorCodec cursorCodec,
@@ -77,11 +78,13 @@ class JobContractController {
 			com.socialcoisa.rede.companies.application.CompanyService companyService,
 			JobInterviewService interviewService,
 			com.socialcoisa.rede.jobs.application.InterviewSlotService interviewSlots,
-			com.socialcoisa.rede.jobs.application.JobCompatibilityService compatibility) {
+			com.socialcoisa.rede.jobs.application.JobCompatibilityService compatibility,
+			com.socialcoisa.rede.jobs.application.SelectionProcessService process) {
 		this.companyService = companyService;
 		this.interviewService = interviewService;
 		this.interviewSlots = interviewSlots;
 		this.compatibility = compatibility;
+		this.process = process;
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.jobService = jobService;
@@ -417,12 +420,15 @@ class JobContractController {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		var applications = jobService.myApplications(user.id().value(), Math.min(limit, 100));
 		java.util.Map<String, JobInterview> interviews = interviewService.scheduledForCandidate(applications);
+		// O nome da etapa vem da mesma fonte do board (último movimento): o candidato vê "Entrevista
+		// técnica", não só "IN_REVIEW" — a lista deixa de ser um enum que não diz onde ele está.
+		java.util.Map<String, String> stageNames = process.currentStageNames(applications);
 		return applications.stream()
 			.map(application -> {
 				Job job = jobService.getById(application.jobId());
 				JobInterview interview = interviews.get(application.id());
 				return new MyApplicationView(application.id(), application.jobId(), job.title(), job.company(),
-					application.status().name(), application.feedback(),
+					application.status().name(), stageNames.get(application.id()), application.feedback(),
 					application.reviewedAt() != null ? application.reviewedAt().toString() : null,
 					application.appliedAt().toString(),
 					interview != null ? InterviewView.of(interview) : null);
@@ -430,9 +436,51 @@ class JobContractController {
 			.toList();
 	}
 
-	/** Uma candidatura como o CANDIDATO a ve, com a entrevista marcada quando houver. */
+	/**
+	 * A jornada da candidatura como o CANDIDATO a acompanha: o fluxo da vaga (etapas nomeadas, na
+	 * ordem), o histórico em ordem e a etapa atual. Quem vê é quem participa — o próprio candidato
+	 * e quem comanda a vaga; terceiro recebe 403. Nota interna e avaliação nunca entram aqui; o
+	 * retorno que o candidato tem direito já vem em {@code feedback}.
+	 */
+	@GetMapping("/{jobId}/applications/{applicationId}/journey")
+	JourneyView journey(@PathVariable String jobId, @PathVariable String applicationId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return JourneyView.of(process.journey(jobId, applicationId, user.id().value()));
+	}
+
+	/** Uma candidatura como o CANDIDATO a ve, com a etapa atual e a entrevista quando houver. */
 	record MyApplicationView(String id, String jobId, String jobTitle, String jobCompany, String status,
-			String feedback, String reviewedAt, String appliedAt, InterviewView interview) {
+			String stageName, String feedback, String reviewedAt, String appliedAt, InterviewView interview) {
+	}
+
+	/** O fluxo da vaga e o histórico da candidatura, sem nota interna nem avaliação. */
+	record JourneyView(String applicationId, String jobId, String status, String feedback, String currentStageId,
+			List<JourneyStageView> stages, List<JourneyStepView> steps) {
+
+		static JourneyView of(com.socialcoisa.rede.jobs.application.SelectionProcessService.StageJourney journey) {
+			return new JourneyView(journey.applicationId(), journey.jobId(), journey.status().name(),
+				journey.feedback(), journey.currentStageId(),
+				journey.flow().stream().map(JourneyStageView::of).toList(),
+				journey.history().stream().map(JourneyStepView::of).toList());
+		}
+	}
+
+	/** Uma etapa do fluxo como o candidato a vê: nome e ordem, sem id interno de outro recurso. */
+	record JourneyStageView(String id, String name, int position) {
+
+		static JourneyStageView of(com.socialcoisa.rede.jobs.domain.SelectionStage stage) {
+			return new JourneyStageView(stage.id(), stage.name(), stage.position());
+		}
+	}
+
+	/** Um passo do histórico do candidato: para onde foi, de que espécie, quando e com que contexto. */
+	record JourneyStepView(String fromStageId, String toStageId, String kind, String note, String movedAt) {
+
+		static JourneyStepView of(com.socialcoisa.rede.jobs.domain.StageMovement movement) {
+			return new JourneyStepView(movement.fromStageId(), movement.toStageId(), movement.kind().name(),
+				movement.note(), movement.movedAt().toString());
+		}
 	}
 
 	@PatchMapping("/{jobId}/applications/{applicationId}")
