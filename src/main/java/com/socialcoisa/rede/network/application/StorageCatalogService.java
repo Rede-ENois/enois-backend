@@ -230,6 +230,53 @@ public class StorageCatalogService {
 	}
 
 	/**
+	 * O nó relê o próprio disco e devolve o que mediu: a lista de cópias suas que <b>não</b> conferem
+	 * com o catálogo.
+	 *
+	 * <p>É o fecho do último ponto cego da varredura. A varredura do Control Plane só relê o disco
+	 * <b>desta</b> instalação (§5.7): as cópias dos demais nós só podem ser conferidas pelo próprio
+	 * nó, que é o único que tem acesso ao disco delas (NAT — o brief proíbe cadastrar endereço).</p>
+	 *
+	 * <p>O nó declara o medido; o Control Plane <b>confere</b> contra a colocação e só marca as
+	 * cópias que <b>são</b> dele. Um nó não rebaixa a cópia de outro: a lista é filtrada por
+	 * {@code node.id()} antes de qualquer escrita. O estado vai para {@code STALE} pelo mesmo caminho
+	 * da confirmação divergente — a ação é a mesma (re-replicar, nunca apagar).</p>
+	 *
+	 * <p>Idempotente: cópia já {@code STALE} ou {@code GONE} não é regravada nem re-auditada. Um nó
+	 * que reenvia o mesmo relatório não infla a auditoria nem muda o estado de novo.</p>
+	 *
+	 * @return quantas cópias foram marcadas {@code STALE} nesta chamada
+	 */
+	public int reportDirtyReplicas(NetworkNode node, List<Divergente> declaradas) {
+		requireStorage(node);
+		if (declaradas == null) {
+			return 0;
+		}
+		int marcadas = 0;
+		for (Divergente declarada : declaradas) {
+			if (declarada == null || declarada.objectId() == null || declarada.objectId().isBlank()) {
+				continue;
+			}
+			// Só a cópia DESTE nó. O filtro por dono é o que impede um nó de rebaixar a cópia de
+			// outro: sem ele, a lista de entradas de qualquer nó serviria para derrubar o cluster.
+			StoragePlacement minha = catalog.placementOn(declarada.objectId(), node.id()).orElse(null);
+			if (minha == null || minha.state() != StoragePlacement.State.OK) {
+				continue;
+			}
+			// O nó declara o que mediu; o digest esperado vem do catálogo, nunca do relatório. Um
+			// nó não escolhe contra o que é comparado.
+			marcarDivergente(declarada.objectId(), minha, node.id(), minha.bytes(),
+				declarada.actualSha256() == null ? "" : declarada.actualSha256());
+			marcadas++;
+		}
+		return marcadas;
+	}
+
+	/** O que um nó mediu no próprio disco e que não confere com o catálogo. */
+	public record Divergente(String objectId, String actualSha256) {
+	}
+
+	/**
 	 * Grava a cópia como divergente numa transação <b>própria</b> ({@code REQUIRES_NEW}): o chamador
 	 * lança logo em seguida, e sem transação separada o rollback apagaria este registro. É a mesma
 	 * razão pela qual o desfecho de tarefa do módulo grava antes de responder erro — o que deu errado
