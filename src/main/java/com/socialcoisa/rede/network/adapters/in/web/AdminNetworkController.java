@@ -22,6 +22,7 @@ import com.socialcoisa.rede.network.application.StorageReplicationDispatcher;
 import com.socialcoisa.rede.network.application.StorageScrubber;
 import com.socialcoisa.rede.network.application.NodeKeyService;
 import com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository;
+import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
 import com.socialcoisa.rede.network.application.port.out.NetworkUserDirectory;
 import com.socialcoisa.rede.network.application.port.out.NodeKeyRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
@@ -61,6 +62,7 @@ class AdminNetworkController {
 	private final NetworkUserDirectory users;
 	private final com.socialcoisa.rede.network.application.NodeObservabilityService observability;
 	private final ChangeCaptureReadinessService changeCapture;
+	private final NetworkTaskRepository tasks;
 
 	AdminNetworkController(NetworkNodeService nodes, NodeKeyService keys, NetworkDashboardService dashboard,
 			AuditTrail audit, CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
@@ -69,7 +71,7 @@ class AdminNetworkController {
 			NetworkNodeResponsibleRepository responsibles, NetworkUserDirectory users,
 			com.socialcoisa.rede.network.application.NodeObservabilityService observability,
 			ChangeCaptureReadinessService changeCapture, StorageOverviewService storageOverview,
-			StorageHealer healer, StorageReplicationDispatcher dispatcher) {
+			StorageHealer healer, StorageReplicationDispatcher dispatcher, NetworkTaskRepository tasks) {
 		this.nodes = nodes;
 		this.keys = keys;
 		this.dashboard = dashboard;
@@ -85,6 +87,7 @@ class AdminNetworkController {
 		this.storageOverview = storageOverview;
 		this.healer = healer;
 		this.dispatcher = dispatcher;
+		this.tasks = tasks;
 	}
 
 	/**
@@ -98,7 +101,8 @@ class AdminNetworkController {
 			String region, String runtimeVersion, Instant lastSeenAt, boolean operable, String keyId,
 			String keyPrefix, boolean keyUsed, Integer latencyMs, int failureStreak, boolean degraded,
 			String quarantineReason, Instant quarantinedUntil, int declaredCpuCores, int declaredMemoryMb,
-			int declaredDiskMb, int declaredBandwidthMbps, ResponsibleView responsible) {
+			int declaredDiskMb, int declaredBandwidthMbps, long tasksDone, long tasksFailed,
+			ResponsibleView responsible) {
 
 		/**
 		 * Quem ativou a possibilidade de o nó servir e quem responde por ele.
@@ -123,7 +127,7 @@ class AdminNetworkController {
 		 * um nó parado sem dizer por quê.</p>
 		 */
 		static NodeView of(NetworkNode node, NodeKeyRepository.NodeKeyRecord key, Instant now,
-				ResponsibleView responsible) {
+				ResponsibleView responsible, long tasksDone, long tasksFailed) {
 			boolean quarantined = node.quarantined(now);
 			boolean showQuarantine = quarantined
 				|| (node.status() == NodeStatus.QUARANTINED && node.quarantineReason() != null);
@@ -134,7 +138,7 @@ class AdminNetworkController {
 				node.observedLatencyMs(), node.consecutiveFailures(), showQuarantine || node.slow() || node.failing(),
 				showQuarantine ? node.quarantineReason() : null, showQuarantine ? node.quarantinedUntil() : null,
 				node.declaredCpuCores(), node.declaredMemoryMb(), node.declaredDiskMb(),
-				node.declaredBandwidthMbps(), responsible);
+				node.declaredBandwidthMbps(), tasksDone, tasksFailed, responsible);
 		}
 	}
 
@@ -170,10 +174,16 @@ class AdminNetworkController {
 			.byNodeIds(found.stream().map(NetworkNode::id).toList());
 		Map<String, NetworkUserDirectory.Account> accounts = users
 			.byIds(found.stream().map(NetworkNode::ownerUserId).distinct().toList());
+		// A contribuição medida também em duas consultas (concluídas e falhas por nó), pelo mesmo
+		// motivo: a tela lista até 200 nós.
+		List<String> ids = found.stream().map(NetworkNode::id).toList();
+		Map<String, Long> done = tasks.countDoneByNode(ids);
+		Map<String, Long> failed = tasks.countFailedByNode(ids);
 		Instant now = Instant.now();
 		return found.stream()
 			.map(node -> NodeView.of(node, activeKeys.get(node.id()), now,
-				responsibleOf(node, joined.get(node.id()), accounts.get(node.ownerUserId()))))
+				responsibleOf(node, joined.get(node.id()), accounts.get(node.ownerUserId())),
+				done.getOrDefault(node.id(), 0L), failed.getOrDefault(node.id(), 0L)))
 			.toList();
 	}
 
@@ -416,7 +426,9 @@ class AdminNetworkController {
 	/** Um nó com a chave vigente dele: a tela precisa dos dois para desenhar a linha. */
 	private NodeView view(NetworkNode node) {
 		return NodeView.of(node, keys.activeKeyFor(node.id()), Instant.now(), responsibleOf(node,
-			responsibles.find(node.id()).orElse(null), users.byId(node.ownerUserId()).orElse(null)));
+			responsibles.find(node.id()).orElse(null), users.byId(node.ownerUserId()).orElse(null)),
+			tasks.countDoneByNode(List.of(node.id())).getOrDefault(node.id(), 0L),
+			tasks.countFailedByNode(List.of(node.id())).getOrDefault(node.id(), 0L));
 	}
 
 	/**

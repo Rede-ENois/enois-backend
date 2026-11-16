@@ -911,6 +911,66 @@ class NetworkNodesTests {
 			.andExpect(jsonPath("$.tasksRequeued").value(1));
 	}
 
+	/**
+	 * O diagnóstico individual do nó (§8.6) pede "tarefas executadas". A lista e o detalhe do admin
+	 * traziam estado, capacidade e saúde, mas nenhuma contribuição medida — e sem ela o operador não
+	 * distingue o nó ocioso do que está executando e falhando.
+	 */
+	@Test
+	void o_detalhe_do_no_traz_as_tarefas_que_ele_executou_e_falhou() throws Exception {
+		String admin = adminToken();
+		String nodeId = newNode(admin);
+		activate(admin, nodeId);
+		comoConcluir(nodeId, "DONE");
+		comoConcluir(nodeId, "DONE");
+		comoConcluir(nodeId, "FAILED");
+		// Um segundo nó com números DIFERENTES: sem ele, ler a contribuição de "algum" nó passaria
+		// no teste por coincidência, e o detalhe mostraria a vida de outro servidor.
+		String outro = newNode(admin);
+		activate(admin, outro);
+		comoConcluir(outro, "DONE");
+		comoConcluir(outro, "DONE");
+		comoConcluir(outro, "DONE");
+		comoConcluir(outro, "DONE");
+
+		mockMvc.perform(get("/admin/network/nodes/" + nodeId).header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.tasksDone").value(2))
+			// Falha conta separada: somá-la em `tasksDone` faria um nó que erra tudo parecer produtivo.
+			.andExpect(jsonPath("$.tasksFailed").value(1));
+	}
+
+	@Test
+	void a_listagem_traz_a_contribuicao_de_cada_no() throws Exception {
+		String admin = adminToken();
+		String trabalhador = newNode(admin);
+		String parado = newNode(admin);
+		activate(admin, trabalhador);
+		activate(admin, parado);
+		comoConcluir(trabalhador, "DONE");
+
+		var result = mockMvc.perform(get("/admin/network/nodes").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andReturn();
+		var lista = objectMapper.readTree(result.getResponse().getContentAsString());
+		var porNo = new java.util.HashMap<String, tools.jackson.databind.JsonNode>();
+		lista.forEach(n -> porNo.put(n.get("id").asText(), n));
+
+		assertThat(porNo.get(trabalhador).get("tasksDone").asLong()).isEqualTo(1);
+		// O nó parado aparece com zero, não ausente: omissão diria "não medi".
+		assertThat(porNo.get(parado).get("tasksDone").asLong()).isZero();
+		assertThat(porNo.get(parado).get("tasksFailed").asLong()).isZero();
+	}
+
+	private void comoConcluir(String nodeId, String status) {
+		jdbc.update("""
+			insert into network_tasks (id, task_type, status, attempt, idempotency_key, payload, data_class,
+			  assigned_node_id, deadline, next_attempt_at, finished_at, created_at, updated_at)
+			values (?, 'ASYNC_JOB', ?, 1, ?, '{}', 'PUBLIC', ?, current_timestamp, current_timestamp,
+			  current_timestamp, current_timestamp, current_timestamp)
+			""", "tsk_" + System.nanoTime(), status, "diag-" + System.nanoTime(), nodeId);
+	}
+
 	// ---------------------------------------------------------------- interface do participante
 
 	/**
