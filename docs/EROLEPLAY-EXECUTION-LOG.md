@@ -829,6 +829,21 @@ exatamente isso e está marcado como feito. Parágrafo removido: documento que d
 pendente o que o código entrega é bug de documentação (AGENTS.md). Sem mudança de código.
 
 
+### Segunda classe com o mesmo vazamento de região (rodada seguinte)
+
+A lição do conserto anterior se aplicava a mais uma classe: `NetworkReplicationGeographicTests`
+declarava a região `sudeste` fora de serviço em testes sem `clear` e também só limpava no
+`@BeforeEach`. A reprovação não é trivial porque a ordem padrão do JUnit não segue a ordem do
+arquivo — e aqui os últimos métodos da classe (os que não declaram) limpavam o resíduo no
+próprio `@BeforeEach`, escondendo o vazamento. Prova determinística, com **todos** os métodos
+ordenados via `@TestMethodOrder` (os que declaram por último): par com
+`NetworkStorageBalanceTests` → **15 testes, 1 falha** no código antigo (`capacityMb` 102400×0,
+idêntico ao CI), **15/15, BUILD SUCCESS** com o mesmo `@AfterEach` da `NetworkRegionTests`.
+Canário temporário confirmou que uma linha em `network_region_states` sobrevive entre métodos.
+Padrão reforçado em `docs/TESTING.md`.
+
+---
+
 ### Isolamento de teste: região evacuada vazava entre classes (rodada seguinte)
 
 O CI do PR de encerramento falhou em `NetworkStorageBalanceTests` (classe fora do diff): `capacityMb`
