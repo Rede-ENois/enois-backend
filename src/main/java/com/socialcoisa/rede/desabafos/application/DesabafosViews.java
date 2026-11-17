@@ -4,24 +4,22 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
-import com.socialcoisa.rede.profile.application.NameStyleView;
-
 /**
- * Views HTTP dos Desabafos. A reação é contada, nunca nominada: o resumo traz só os totais por
- * tipo — quem apoiou fica com o apoio, sem lista de pessoas.
+ * Views HTTP dos Desabafos. Nenhuma delas carrega AUTOR: o anonimato é do contrato, não da tela —
+ * sem id, nome, username, avatar ou estilo no JSON, nenhum cliente (atual ou futuro) consegue
+ * reexpor quem escreveu. O autor reconhece o próprio texto pelo `mine`, que o servidor calcula
+ * comparando a sessão de quem lê com o vínculo interno (que continua existindo para moderação,
+ * auditoria e penalidade — anonimato público não é ausência de responsabilização). A reação é
+ * contada, nunca nominada: o resumo traz só os totais por tipo.
  */
 public final class DesabafosViews {
 
-	public record DesabafosAuthor(String id, String name, String username, String avatar, String avatarFrame,
-			NameStyleView style) {
+	public record DesabafoPostView(String id, String content, Instant createdAt, long reactions,
+			Map<String, Long> reactionSummary, String myReaction, long comments, boolean mine) {
 	}
 
-	public record DesabafoPostView(String id, DesabafosAuthor author, String content, Instant createdAt,
-			long reactions, Map<String, Long> reactionSummary, String myReaction, long comments) {
-	}
-
-	public record DesabafoCommentView(String id, String postId, DesabafosAuthor author, String content,
-			Instant createdAt) {
+	public record DesabafoCommentView(String id, String postId, String content, Instant createdAt,
+			boolean mine) {
 	}
 
 	public record DesabafosPage(List<DesabafoPostView> items, String nextCursor) {
