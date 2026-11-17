@@ -81,6 +81,26 @@ class NetworkParticipantController {
 	 * A suspensão é reversível pelo admin — religar o nó do participante é decisão humana, não do
 	 * runtime que "voltou a ligar".
 	 */
+	/**
+	 * Pausa a participação (brief §18). O nó continua registrado e reportando; para de receber
+	 * tarefa e réplica. Reversível por ele mesmo em {@code /resume} — por isso não revoga a chave,
+	 * nem passa por {@code SUSPENDED}, que só um admin desfaz.
+	 */
+	@PostMapping("/nodes/{id}/pause")
+	MyNodeView pause(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String id) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return MyNodeView.of(participant.pause(user.id().value(), id));
+	}
+
+	/** Retoma o que ele mesmo pausou. Só {@code PAUSED} volta por aqui. */
+	@PostMapping("/nodes/{id}/resume")
+	MyNodeView resume(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String id) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return MyNodeView.of(participant.resume(user.id().value(), id));
+	}
+
 	@PostMapping("/nodes/{id}/disconnect")
 	MyNodeView disconnect(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String id) {

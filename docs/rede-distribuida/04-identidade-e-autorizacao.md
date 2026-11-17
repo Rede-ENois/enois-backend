@@ -51,7 +51,7 @@ create table if not exists network_nodes (
   id varchar(40) not null,
   display_name varchar(120) not null,
   owner_user_id varchar(40) not null,
-  status varchar(24) not null,          -- PENDING_APPROVAL | ACTIVE | SUSPENDED | QUARANTINED | REVOKED
+  status varchar(24) not null,          -- PENDING_APPROVAL | ACTIVE | SUSPENDED | QUARANTINED | PAUSED | REVOKED
   profiles varchar(255) not null,       -- CSV de NodeProfile
   declared_cpu_cores int not null,
   declared_memory_mb int not null,
@@ -151,11 +151,24 @@ stateDiagram-v2
   QUARANTINED --> REVOKED: admin
   ACTIVE --> REVOKED: admin
   SUSPENDED --> REVOKED: admin
+  ACTIVE --> PAUSED: participante
+  PAUSED --> ACTIVE: participante
+  PAUSED --> REVOKED: admin
   REVOKED --> [*]
 ```
 
 `REVOKED` é terminal. Voltar exige cadastro novo — identidade nova, chave nova. Isso é de propósito:
 revogação que pode ser desfeita não é revogação.
+
+**`PAUSED` ≠ `SUSPENDED`.** Suspender é sair da rede: as chaves caem e só um admin devolve o
+servidor. Pausar é parar de emprestar a máquina: a chave continua valendo, o heartbeat segue sendo
+aceito (o painel vê a máquina viva e o que ela mede) e o nó simplesmente não recebe tarefa nem
+réplica — `canOperate()` é verdadeiro só para `ACTIVE`. Volta sozinho, por
+`POST /network/participant/nodes/{id}/resume`; enquanto pausado, `GET /network/tasks/next` responde
+`403 NODE_PAUSED`. Pausa que exigisse admin não seria pausa, seria suspensão com outro nome.
+
+Só `ACTIVE` é pausável e só `PAUSED` é retomável: rebaixar `SUSPENDED` ou `QUARANTINED` a `PAUSED`
+daria, pela retomada, a saída de uma decisão humana pela tela do participante.
 
 ## 6. Onde a autorização é checada
 
