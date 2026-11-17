@@ -43,12 +43,18 @@ class NetworkParticipantController {
 	 * Um nó como o participante o vê. Capacidade declarada (o que ele aceitou ceder) ao lado da
 	 * observada (o que o último heartbeat mediu) — o contrato pede que ele veja os dois, porque é
 	 * comparando-os que ele ajusta os próprios limites.
+	 *
+	 * <p>O disco segue a mesma regra: {@code declaredDiskMb} é o que ele cedeu,
+	 * {@code observedContentUsedMb} é o que o Énóis <b>ocupa</b> ali (o nó mede o próprio estado de
+	 * conteúdo) e {@code reservedDiskMb} é o que ele guardou para si. Antes só o declarado vinha: o
+	 * §18 pede "consultar espaço utilizado", e o participante — que é justamente quem controla a
+	 * própria infraestrutura — não tinha como ver quanto ela está sendo usada.</p>
 	 */
 	record MyNodeView(String id, String displayName, String status, List<String> profiles, String region,
 			String country, String runtimeVersion, Instant lastSeenAt, int declaredCpuCores, int declaredMemoryMb,
 			int declaredDiskMb, int declaredBandwidthMbps, Double observedCpuPercent, Integer observedMemoryMb,
-			Integer observedRunningTasks, Integer latencyMs, long tasksDone, long tasksRequeued, boolean operable,
-			String quarantineReason) {
+			Integer observedRunningTasks, Integer latencyMs, Long observedContentUsedMb, Double diskUsedPercent,
+			Long reservedDiskMb, long tasksDone, long tasksRequeued, boolean operable, String quarantineReason) {
 
 		static MyNodeView of(NetworkParticipantService.NodeWithContribution entry) {
 			NetworkNode node = entry.node();
@@ -58,6 +64,7 @@ class NetworkParticipantController {
 				node.runtimeVersion(), node.lastSeenAt(), node.declaredCpuCores(), node.declaredMemoryMb(),
 				node.declaredDiskMb(), node.declaredBandwidthMbps(), node.observedCpuPercent(),
 				node.observedMemoryMb(), node.observedRunningTasks(), node.observedLatencyMs(),
+				node.observedContentUsedMb(), node.usedPercent(), node.reservedDiskMb(),
 				entry.tasksDone(), entry.tasksRequeued(),
 				node.canOperate(), quarantined ? node.quarantineReason() : null);
 		}
