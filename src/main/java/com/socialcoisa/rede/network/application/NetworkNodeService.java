@@ -321,6 +321,73 @@ public class NetworkNodeService {
 	}
 
 	/**
+	 * Pausa voluntária do participante (brief §18, "pausar participação"): ele para de emprestar a
+	 * máquina sem sair da rede.
+	 *
+	 * <p>Desconectar e pausar são coisas diferentes, e a diferença é a chave. Na desconexão o
+	 * servidor sai e as credenciais caem — para voltar, só um admin reaprova. Na pausa o nó
+	 * continua registrado, autenticando e batendo coração (o painel segue vendo a máquina viva e o
+	 * que ela mede); o que ele deixa de receber é trabalho — {@code canOperate()} só é verdadeiro
+	 * para {@code ACTIVE}, então a tarefa deixa de ser designada a ele em
+	 * {@code GET /network/tasks/next} e a colocação de réplica passa a recusá-lo.</p>
+	 *
+	 * <p>Reversível por ele mesmo ({@link #resumeParticipation}): pausa que exige admin não é
+	 * pausa, é suspensão. Idempotente — pausar duas vezes não gera efeito duplo nem auditoria
+	 * duplicada.</p>
+	 */
+	@Transactional
+	public NetworkNode pauseParticipation(String nodeId, String ownerUserId) {
+		NetworkNode node = requireOwned(nodeId, ownerUserId);
+		if (node.status() == NodeStatus.PAUSED) {
+			return node;
+		}
+		if (node.status() != NodeStatus.ACTIVE) {
+			// Parado não pode ficar mais parado: PENDING_APPROVAL não começou, e SUSPENDED,
+			// QUARANTINED e REVOKED são decisões de outro (ou terminais). Rebaixá-los a PAUSED
+			// apagaria a razão — e a pausa devolve o nó a ACTIVE, o que daria a volta por cima de
+			// uma suspensão ou de uma quarentena.
+			throw new ApiException(409, "NODE_NOT_PAUSABLE", "So um no ativo pode ser pausado.");
+		}
+		nodes.updateStatus(nodeId, NodeStatus.PAUSED, ownerUserId, clock.instant());
+		audit.record(ownerUserId, "NODE_PAUSED", nodeId, "{\"voluntary\":true}");
+		return require(nodeId);
+	}
+
+	/**
+	 * Retomada pelo próprio participante. Só um nó {@code PAUSED} volta por aqui: suspenso,
+	 * em quarentena ou pendente continuam sendo decisão administrativa, e devolvê-los a
+	 * {@code ACTIVE} por esta porta contornaria a regra 3 (nenhum nó opera sem autorização humana).
+	 *
+	 * <p>Se a região do nó foi evacuada no meio, ele volta a {@code ACTIVE} e continua sem receber
+	 * tarefa — a região é decisão humana e a retomada da pausa não a desfaz.</p>
+	 */
+	@Transactional
+	public NetworkNode resumeParticipation(String nodeId, String ownerUserId) {
+		NetworkNode node = requireOwned(nodeId, ownerUserId);
+		if (node.status() == NodeStatus.ACTIVE) {
+			return node;
+		}
+		if (node.status() != NodeStatus.PAUSED) {
+			throw new ApiException(409, "NODE_NOT_RESUMABLE", "So um no pausado pode ser retomado.");
+		}
+		nodes.updateStatus(nodeId, NodeStatus.ACTIVE, ownerUserId, clock.instant());
+		audit.record(ownerUserId, "NODE_RESUMED", nodeId, "{\"voluntary\":true}");
+		return require(nodeId);
+	}
+
+	/** O nó do participante, ou 404 — 403 confirmaria que o id existe. */
+	private NetworkNode requireOwned(String nodeId, String ownerUserId) {
+		NetworkNode node = require(nodeId);
+		if (!node.ownerUserId().equals(ownerUserId)) {
+			throw new ApiException(404, "NODE_UNKNOWN", "No nao encontrado.");
+		}
+		if (node.status() == NodeStatus.REVOKED) {
+			throw new ApiException(409, "NODE_REVOKED", "No revogado nao muda.");
+		}
+		return node;
+	}
+
+	/**
 	 * Desconexão voluntária do participante (interface do participante, não o painel). Suspensão
 	 * reversível — revogação continua sendo decisão administrativa —, com as chaves vigentes caindo
 	 * na mesma transação, como na revogação: servidor desligado a próprio pedido não pode continuar

@@ -80,6 +80,22 @@ public class NetworkParticipantService {
 		return myNode(ownerUserId, lifecycle.disconnectVoluntarily(nodeId, ownerUserId).id());
 	}
 
+	/**
+	 * Pausa a contribuição do nó: ele para de receber trabalho sem sair da rede. Diferente do
+	 * {@link #disconnect}, a chave continua válida e o heartbeat continua sendo aceito — o
+	 * participante pausa porque precisa da máquina agora, não porque quer sair.
+	 */
+	@Transactional
+	public NodeWithContribution pause(String ownerUserId, String nodeId) {
+		return myNode(ownerUserId, lifecycle.pauseParticipation(nodeId, ownerUserId).id());
+	}
+
+	/** Retoma a contribuição pausada pelo próprio participante. */
+	@Transactional
+	public NodeWithContribution resume(String ownerUserId, String nodeId) {
+		return myNode(ownerUserId, lifecycle.resumeParticipation(nodeId, ownerUserId).id());
+	}
+
 	/** Solicitação de ingresso: o token nasce com o próprio participante como dono e criador. */
 	@Transactional
 	public NetworkNodeService.IssuedToken requestJoin(String ownerUserId, String displayName) {
