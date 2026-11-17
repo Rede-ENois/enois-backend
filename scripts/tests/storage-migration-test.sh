@@ -293,5 +293,85 @@ nullable network_nodes observed_bytes_in_mb \
   && pass "V345: observed_bytes_in_mb aceita nulo (runtime antigo)" \
   || fail "V345: observed_bytes_in_mb NOT NULL — runtime antigo não conseguiria gravar"
 
+
+# ---------------------------------------------------------------- V347: banda por tipo (brief §6)
+# A tabela por (nó, tipo) tem PRIMARY KEY composta e FOREIGN KEY para `network_nodes` com
+# `on delete cascade`: o H2 aceita `on duplicate key update` em formas que o MariaDB recusa, e a
+# cascata só se prova apagando o nó num banco que a force. Mesmo motivo da V345 para estar aqui.
+NODE_KIND_BW=V347__network_node_storage_bandwidth.sql
+[[ -f "$MIGRATIONS/$NODE_KIND_BW" ]] || fail "migração ausente: $NODE_KIND_BW"
+
+if apply "$NODE_KIND_BW" >/dev/null 2>&1; then
+  pass "V347: aplica sobre network_nodes no banco real"
+else
+  fail "1ª aplicação falhou: $NODE_KIND_BW"
+  db < "$MIGRATIONS/$NODE_KIND_BW" 2>&1 | head -3 >&2 || true
+fi
+
+# Nó e banda REAIS entre as duas aplicações: a 2ª passa por `create table if not exists` e não
+# pode apagar nem a linha do nó nem a especialização que ele já tinha.
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_node_storage_bandwidth (node_id, kind, bandwidth_mbps, updated_at)
+values ('nd_traf001', 'MEDIA', 15, now(3));
+SQL
+then
+  pass "banda por tipo gravada entre as rodadas"
+else
+  fail "não foi possível gravar a banda do tipo"
+fi
+
+if apply "$NODE_KIND_BW" >/dev/null 2>&1; then
+  pass "V347: reaplicar não falha (idempotente)"
+else
+  fail "2ª aplicação falhou (não idempotente): $NODE_KIND_BW"
+fi
+
+kindbw=$(db -N -e "select bandwidth_mbps from network_node_storage_bandwidth
+  where node_id = 'nd_traf001' and kind = 'MEDIA'" 2>/dev/null | tr -d '[:space:]')
+[[ "$kindbw" == "15" ]] && pass "a banda por tipo sobreviveu à 2ª aplicação" \
+  || fail "esperava 15, achei '$kindbw'"
+
+# A chave é o PAR (nó, tipo): dois tipos no mesmo nó convivem, e repetir o par é recusado — é o
+# que uma coluna JSON não faria.
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_node_storage_bandwidth (node_id, kind, bandwidth_mbps, updated_at)
+values ('nd_traf001', 'ARCHIVE', 5, now(3));
+SQL
+then
+  pass "dois tipos no mesmo nó convivem"
+else
+  fail "o mesmo nó não aceitou um segundo tipo"
+fi
+
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_node_storage_bandwidth (node_id, kind, bandwidth_mbps, updated_at)
+values ('nd_traf001', 'MEDIA', 99, now(3));
+SQL
+then
+  fail "o par (nó, tipo) duplicado foi aceito — a chave primária composta não vale"
+else
+  pass "par (nó, tipo) duplicado recusado pela chave primária"
+fi
+
+# Apagar o nó leva a banda junto (cascade): linha órfã faria a config de um nó novo nascer com a
+# banda do antigo se o id fosse reciclado.
+if db >/dev/null 2>&1 <<'SQL'
+delete from network_node_storage_bandwidth where node_id = 'nd_casc001';
+insert into network_nodes (id, display_name, owner_user_id, status, profiles, declared_cpu_cores,
+  declared_memory_mb, declared_disk_mb, declared_bandwidth_mbps, created_at, last_seen_at)
+values ('nd_casc001', 'no-cascata', 'user-mig', 'ACTIVE', 'NODE_STORAGE_MEDIA', 2, 4096, 51200, 50,
+  now(3), now(3));
+insert into network_node_storage_bandwidth (node_id, kind, bandwidth_mbps, updated_at)
+values ('nd_casc001', 'MEDIA', 7, now(3));
+delete from network_nodes where id = 'nd_casc001';
+SQL
+then
+  left=$(db -N -e "select count(*) from network_node_storage_bandwidth where node_id = 'nd_casc001'" 2>/dev/null | tr -d '[:space:]')
+  [[ "$left" == "0" ]] && pass "apagar o nó apaga a banda (on delete cascade)" \
+    || fail "sobraram $left linha(s) de banda de um nó apagado"
+else
+  fail "não foi possível exercitar a cascata"
+fi
+
 printf '\nStorage migration: PASS %d | FAIL %d\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))

@@ -41,6 +41,16 @@ public interface NetworkNodeRepository {
 	void updateContract(String id, int cpuCores, int memoryMb, int diskMb, int bandwidthMbps,
 			List<NodeProfile> profiles, Instant now);
 
+	/**
+	 * Compõe {@code configVersion} sem mudar limite nem perfil.
+	 *
+	 * <p>Existe para o que entra na config assinada <b>sem</b> fazer parte do contrato de
+	 * capacidade: a banda por tipo de storage node (V347). Reusar `updateContract` para isso
+	 * reescreveria os quatro limites com os valores lidos antes, e uma mudança de capacidade
+	 * concorrente seria perdida em silêncio.</p>
+	 */
+	void touchConfig(String id, Instant now);
+
 	/** Heartbeat: capacidade observada, versão do runtime e último contato. */
 	void touch(String id, String runtimeVersion, Double cpuPercent, Integer memoryMb, Integer runningTasks,
 			Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Long bytesInMb, Long bytesOutMb, Instant now);

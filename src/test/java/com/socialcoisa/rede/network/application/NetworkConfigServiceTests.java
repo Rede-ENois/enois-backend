@@ -105,7 +105,23 @@ class NetworkConfigServiceTests {
 			}
 		};
 		return new NetworkConfigService(Clock.systemUTC(), repository, authorities, signingKey, publicKey,
-			ttlSeconds, allowedRoutes);
+			ttlSeconds, allowedRoutes, new com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository() {
+				@Override
+				public java.util.Map<com.socialcoisa.rede.network.domain.StorageNodeKind, Integer> findByNode(
+						String nodeId) {
+					return java.util.Map.of();
+				}
+
+				@Override
+				public void put(String nodeId, com.socialcoisa.rede.network.domain.StorageNodeKind kind, int mbps) {
+					throw new AssertionError("nao usado");
+				}
+
+				@Override
+				public void remove(String nodeId, com.socialcoisa.rede.network.domain.StorageNodeKind kind) {
+					throw new AssertionError("nao usado");
+				}
+			});
 	}
 
 	private static NetworkNode node(NodeStatus status, Set<NodeProfile> profiles) {
@@ -440,6 +456,11 @@ class NetworkConfigServiceTests {
 		@Override
 		public void updateContract(String id, int cpuCores, int memoryMb, int diskMb, int bandwidthMbps,
 				List<NodeProfile> profiles, Instant now) {
+			throw new AssertionError("nao usado");
+		}
+
+		@Override
+		public void touchConfig(String id, Instant now) {
 			throw new AssertionError("nao usado");
 		}
 

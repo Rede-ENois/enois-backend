@@ -66,6 +66,11 @@ interface SpringDataNetworkNodeJpaRepository extends JpaRepository<NetworkNodeJp
 			@Param("disk") int disk, @Param("bandwidth") int bandwidth, @Param("profiles") String profiles,
 			@Param("now") Instant now);
 
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Query("update NetworkNodeJpaEntity n set n.configVersion = n.configVersion + 1, n.configIssuedAt = :now "
+			+ "where n.id = :id and n.status <> 'REVOKED'")
+	int touchConfig(@Param("id") String id, @Param("now") Instant now);
+
 	@Modifying
 	@Query("update NetworkNodeJpaEntity n set n.runtimeVersion = :version, n.observedCpuPercent = :cpu, "
 			+ "n.observedMemoryMb = :memory, n.observedRunningTasks = :tasks, n.observedDiskFreeMb = :diskFree, "

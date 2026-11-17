@@ -195,3 +195,100 @@ O participante pode **subir e descer** os próprios limites. Um teto que só o a
 participante pedir licença para emprestar mais da própria máquina, e o brief diz que ele "deverá
 conseguir controlar a utilização de sua infraestrutura". O que separa os dois atores é o perfil:
 tirar ou dar perfil muda **quais tarefas** o nó pode receber, e isso é aprovação humana.
+
+## 8. Tipos de storage node (brief §6, V347)
+
+O §6 pede seis perfis especializados — `STORAGE_NODE_STANDARD`, `_MEDIA`, `_ARCHIVE`, `_EDGE`,
+`_REPLICA`, `_HOME` — e diz que "um mesmo servidor poderá disponibilizar múltiplos perfis,
+respeitando os limites e permissões autorizados". Antes desta rodada havia um só: `NODE_STORAGE`.
+
+### 8.1 Perfis
+
+`NodeProfile` ganhou os seis nomes do contrato. `NODE_STORAGE` continua existindo e é o tipo
+**STANDARD**: todo nó cadastrado antes tem só ele, e nada muda para ele.
+
+| perfil | `storageKind()` | para que serve |
+|---|---|---|
+| `NODE_STORAGE` | `STANDARD` | convencional, leitura e escrita, qualquer objeto |
+| `NODE_STORAGE_STANDARD` | `STANDARD` | mesmo perfil, com o nome do brief |
+| `NODE_STORAGE_MEDIA` | `MEDIA` | imagens, vídeos e miniaturas |
+| `NODE_STORAGE_ARCHIVE` | `ARCHIVE` | longo prazo: capacidade e custo |
+| `NODE_STORAGE_EDGE` | `EDGE` | perto dos usuários: leitura e distribuição |
+| `NODE_STORAGE_REPLICA` | `REPLICA` | mantém cópias redundantes |
+| `NODE_STORAGE_HOME` | `HOME` | servidor doméstico, disponibilidade variável, NAT |
+
+**Permissão**: `OBJECT_PUT` e `OBJECT_GET` são autorizados por **qualquer** perfil com
+`storageKind()` não nulo — a especialização é aditiva. Quem tem só `NODE_STORAGE` continua
+recebendo tudo. Perfil sem `storageKind()` (`NODE_WORKER`, `NODE_EDGE`…) continua sem autorizar
+armazenamento, e nenhum perfil de storage autoriza tarefa que não seja de armazenamento.
+
+### 8.2 Preferência de colocação — preferência, nunca filtro
+
+A ordem de candidatos passou a ter três critérios, nesta prioridade:
+
+1. **o tipo do objeto**: nó que declara o tipo preferido vem antes;
+2. **folga cedida** (`declarado − ocupado`), a mesma régua do §2.1;
+3. `id`, para a ordem ser estável.
+
+A classe do objeto é derivada do que o catálogo já sabe (`ObjectClass`), sem coluna nova:
+
+| classe | como é decidida | tipo preferido |
+|---|---|---|
+| `MEDIA` | `contentType` começa com `image/`, `video/` ou `audio/` | `MEDIA` |
+| `COLD` | `createdAt` mais velho que `rede.storage.cold-after-days` (padrão 30) | `ARCHIVE` |
+| `DEFAULT` | o resto, e objeto fora do catálogo | `STANDARD` |
+
+**"Frio" é piso, não verdade**: o catálogo não guarda último acesso, então a idade é medida desde
+`createdAt`. Um objeto criado há 60 dias pode ter sido lido ontem — por isso a colocação
+**prefere** o arquivo e não exige.
+
+Sem nó do tipo preferido, qualquer nó de armazenamento recebe: exigir o tipo deixaria objeto sem
+réplica por falta de um perfil que é declarativo, e a durabilidade do §9 cairia por topologia.
+Nó com vários tipos casa com qualquer um deles.
+
+### 8.3 Banda por tipo
+
+| aspecto | o que vale |
+|---|---|
+| escrita | `POST /network/participant/nodes/{id}/storage-bandwidth/{kind}` com `{"mbps":15}` |
+| remoção | `mbps` nulo; o tipo volta a usar a banda geral do nó |
+| tipo não declarado pelo nó | `409 STORAGE_KIND_NOT_DECLARED` |
+| tipo desconhecido | `400 STORAGE_KIND_INVALID` |
+| negativo | `400 NODE_CAPACITY_INVALID` |
+| efeito | soma 1 em `configVersion` (`NetworkNodeRepository.touchConfig`, que **não** reescreve os limites) |
+| persistência | `network_node_storage_bandwidth`, uma linha por (nó, tipo) — V347 |
+| ausência | o tipo usa `limits.bandwidthMbps` do nó; **nunca zero** |
+| auditoria | `NODE_STORAGE_BANDWIDTH_CHANGED` / `_REMOVED` |
+
+### 8.4 Formato 7 da config assinada
+
+`FORMAT_VERSION = 7`. O campo novo vai **no fim** da linha canônica:
+
+```
+...|diskFreeMb|diskTotalMb|["ARCHIVE=5","MEDIA=15"]
+```
+
+Lista ordenada por nome de tipo, no formato `TIPO=mbps`. Config de formato ≤ 6 continua
+verificável: `canonical()` **omite** a lista quando `formatVersion <= 6`, então a assinatura de um
+documento antigo não muda. O runtime (`deploy/node-runtime/node-runtime.sh`) reconstrói a linha do
+mesmo jeito e só acrescenta a lista quando o formato é ≥ 7.
+
+Na transferência, o runtime aplica o teto **do tipo** sobre `limits.bandwidthMbps` (o tipo reservou
+aquela banda; aplicar a geral seria ceder mais do que o participante aceitou). Nó com vários tipos
+usa o **menor** teto entre eles. Harness: `scripts/tests/node-executor-test.sh`, cenário 25b —
+inclui o caso de lista adulterada depois de assinada, que tem de ser recusada.
+
+### 8.5 O que NÃO está entregue
+
+- **`HOME` é declarativo, sem regra própria.** Um nó doméstico não recebe tratamento de
+  durabilidade diferente: a colocação o trata como qualquer storage, e a conta de domínio de falha
+  do §1 não o distingue. O perfil serve para o participante declarar a natureza da máquina e para
+  o painel mostrá-la. Diferenciar (nunca ser única cópia de um domínio, menos réplicas, peso menor)
+  é decisão de produto e não foi tomada.
+- **`EDGE` e `REPLICA` não mudaram nada no comportamento.** Não há objeto cujo tipo preferido seja
+  `EDGE` ou `REPLICA`: nó desses tipos recebe por folga, como o STANDARD. O brief descreve o que
+  eles *priorizam*, e não há ainda medida (latência por usuário, papel de redundância) que decida a
+  preferência.
+- **CDC do Cooperative (§4)** continua bloqueado por decisão de infra.
+- **Sem IOPS, SMART ou disponibilidade por faixa** (§7): o que existe é disco livre, total, uso de
+  conteúdo e tráfego medidos pelo nó.

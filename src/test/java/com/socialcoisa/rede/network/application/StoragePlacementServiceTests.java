@@ -329,4 +329,94 @@ class StoragePlacementServiceTests {
 			102400, 100, null, null, null, null, diskFreeMb, null, null, 0, null, null);
 	}
 
+	// ------------------------------------------------- §6: o tipo do nó prefere, nunca filtra
+
+	/**
+	 * Objeto de mídia vai primeiro para nó de mídia — mesmo que outro tenha mais folga.
+	 *
+	 * <p>Sem isto, a especialização do §6 não existiria: declarar seis tipos e continuar ordenando
+	 * só por folga daria o mesmo comportamento de antes com nomes novos.</p>
+	 */
+	@Test
+	void objetoDeMidiaPrefereNoDeMidia() {
+		when(catalog.findById("sob_1")).thenReturn(java.util.Optional.of(mediaObject(NOW.minusSeconds(60))));
+		candidates(kindNode("nd_convencional", NodeProfile.NODE_STORAGE, 81920L),
+			kindNode("nd_midia", NodeProfile.NODE_STORAGE_MEDIA, 20480L));
+
+		assertThat(service.chooseReplicas("sob_1", 0, NOW)).extracting(NetworkNode::id).containsExactly("nd_midia",
+			"nd_convencional");
+	}
+
+	/**
+	 * Objeto parado há mais que a janela vai para o arquivo. O nó MEDIA está lá e é mais folgado: não
+	 * importa — o objeto não é de mídia, é velho.
+	 */
+	@Test
+	void objetoParadoPrefereNoDeArquivo() {
+		when(catalog.findById("sob_1")).thenReturn(java.util.Optional.of(textObject(NOW.minusSeconds(40L * 86400))));
+		candidates(kindNode("nd_midia", NodeProfile.NODE_STORAGE_MEDIA, 81920L),
+			kindNode("nd_arquivo", NodeProfile.NODE_STORAGE_ARCHIVE, 20480L));
+
+		assertThat(service.chooseReplicas("sob_1", 0, NOW)).extracting(NetworkNode::id)
+			.containsExactly("nd_arquivo", "nd_midia");
+	}
+
+	/**
+	 * O ponto do "preferência, nunca filtro": sem nó do tipo preferido, o convencional recebe. Se o
+	 * tipo fosse exigência, este objeto ficaria sem réplica por falta de um perfil declarativo — e a
+	 * durabilidade medida no §9 cairia por topologia, não por falta de espaço.
+	 */
+	@Test
+	void semNoDoTipoPreferidoQualquerStorageRecebe() {
+		when(catalog.findById("sob_1")).thenReturn(java.util.Optional.of(mediaObject(NOW.minusSeconds(60))));
+		candidates(kindNode("nd_convencional", NodeProfile.NODE_STORAGE, 20480L),
+			kindNode("nd_arquivo", NodeProfile.NODE_STORAGE_ARCHIVE, 81920L));
+
+		assertThat(service.chooseReplicas("sob_1", 0, NOW)).extracting(NetworkNode::id)
+			.containsExactly("nd_arquivo", "nd_convencional");
+	}
+
+	/**
+	 * Nó com vários tipos casa com qualquer um deles (o brief §6 diz que um servidor pode ter
+	 * múltiplos perfis). Ordenar por UM perfil escolhido ao acaso faria o mesmo servidor perder a
+	 * preferência só por ter declarado mais.
+	 */
+	@Test
+	void noComVariosTiposCasaComQualquerUmDeles() {
+		when(catalog.findById("sob_1")).thenReturn(java.util.Optional.of(mediaObject(NOW.minusSeconds(60))));
+		NetworkNode multi = nodeWith("nd_multi", NodeStatus.ACTIVE,
+			Set.of(NodeProfile.NODE_STORAGE_ARCHIVE, NodeProfile.NODE_STORAGE_MEDIA), 20480L, NOW);
+		candidates(multi, kindNode("nd_convencional", NodeProfile.NODE_STORAGE, 81920L));
+
+		assertThat(service.chooseReplicas("sob_1", 0, NOW)).extracting(NetworkNode::id)
+			.containsExactly("nd_multi", "nd_convencional");
+	}
+
+	/**
+	 * Objeto sem entrada no catálogo: classe DEFAULT, preferência pelo convencional. A colocação não
+	 * pode quebrar por objeto desconhecido — ela é chamada com o id antes de qualquer leitura.
+	 */
+	@Test
+	void objetoForaDoCatalogoNaoQuebraAColocacao() {
+		when(catalog.findById("sob_1")).thenReturn(java.util.Optional.empty());
+		candidates(kindNode("nd_midia", NodeProfile.NODE_STORAGE_MEDIA, 81920L),
+			kindNode("nd_convencional", NodeProfile.NODE_STORAGE, 20480L));
+
+		assertThat(service.chooseReplicas("sob_1", 0, NOW)).extracting(NetworkNode::id)
+			.containsExactly("nd_convencional", "nd_midia");
+	}
+
+	private static NetworkNode kindNode(String id, NodeProfile profile, long declaredMb) {
+		return nodeWith(id, NodeStatus.ACTIVE, Set.of(profile), 409600L, NOW);
+	}
+
+	private static com.socialcoisa.rede.network.domain.StorageObject mediaObject(java.time.Instant createdAt) {
+		return new com.socialcoisa.rede.network.domain.StorageObject("sob_1", "fotos", "a.jpg", "image/jpeg", 10L,
+			"abc", com.socialcoisa.rede.network.domain.StorageObjectState.STORED, "owner", createdAt, createdAt, null);
+	}
+
+	private static com.socialcoisa.rede.network.domain.StorageObject textObject(java.time.Instant createdAt) {
+		return new com.socialcoisa.rede.network.domain.StorageObject("sob_1", "docs", "a.txt", "text/plain", 10L,
+			"abc", com.socialcoisa.rede.network.domain.StorageObjectState.STORED, "owner", createdAt, createdAt, null);
+	}
 }

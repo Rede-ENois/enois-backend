@@ -12,7 +12,10 @@ import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NetworkRegions;
+import com.socialcoisa.rede.network.domain.NodeProfile;
 import com.socialcoisa.rede.network.domain.NodeStatus;
+import com.socialcoisa.rede.network.domain.ObjectClass;
+import com.socialcoisa.rede.network.domain.StorageNodeKind;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
 import com.socialcoisa.rede.network.domain.TaskType;
 
@@ -62,18 +65,38 @@ public class StoragePlacementService {
 	/** Janela de frescor do heartbeat, em segundos. */
 	private final java.time.Duration nodeStaleAfter;
 
+	/**
+	 * A partir de que idade um objeto conta como arquivo (brief §6, {@code STORAGE_NODE_ARCHIVE}).
+	 *
+	 * <p>Trinta dias é o mínimo que separa "recente" de "parado" sem exagerar: conteúdo de
+	 * aplicação (avatar, thumb, anexo) costuma ser lido no mês. O valor é configuração porque é
+	 * decisão de produto, e a colocação só <b>prefere</b> — não exige.
+	 */
+	private final long coldAfterSeconds;
+
 	private final NetworkNodeRepository nodes;
 	private final StorageCatalogRepository catalog;
 
+	// Há dois construtores (o principal e o de teste, abaixo): sem a anotação o Spring não escolhe
+	// e tenta o sem-args. Só o principal existe no contexto.
+	@org.springframework.beans.factory.annotation.Autowired
 	StoragePlacementService(NetworkNodeRepository nodes, StorageCatalogRepository catalog,
 			@Value("${rede.storage.replicas:2}") int replicas,
-			@Value("${rede.network.node-stale-seconds:90}") int staleSeconds) {
+			@Value("${rede.network.node-stale-seconds:90}") int staleSeconds,
+			@Value("${rede.storage.cold-after-days:30}") int coldAfterDays) {
 		// Uma réplica é o comportamento da fase 1: sem cópia por nó, só a do Control Plane. Zero ou
 		// negativo não faz sentido — objeto sem nenhuma cópia não é objeto —, então o piso é 1.
 		this.replicas = Math.max(1, replicas);
 		this.nodeStaleAfter = java.time.Duration.ofSeconds(Math.max(1, staleSeconds));
 		this.nodes = nodes;
 		this.catalog = catalog;
+		this.coldAfterSeconds = Math.max(1, coldAfterDays) * 86_400L;
+	}
+
+	/** Mesma montagem com a janela de arquivo padrão — para quem não configura o módulo. */
+	StoragePlacementService(NetworkNodeRepository nodes, StorageCatalogRepository catalog, int replicas,
+			int staleSeconds) {
+		this(nodes, catalog, replicas, staleSeconds, 30);
 	}
 
 	/** O número de cópias configurado, incluindo a do Control Plane. */
@@ -114,8 +137,10 @@ public class StoragePlacementService {
 		var ready = allCandidates.stream()
 			.filter(node -> !occupied.contains(node.id()))
 			.filter(node -> storageReady(node, bytes, now))
-			.sorted(Comparator.comparingLong((NetworkNode node) -> cedentHeadroomMbOrZero(node, now) - (bytes / (1024 * 1024)))
-				.reversed()
+			.sorted(preference(objectId, now)
+				.thenComparing(Comparator.comparingLong(
+					(NetworkNode node) -> cedentHeadroomMbOrZero(node, now) - (bytes / (1024 * 1024)))
+					.reversed())
 				.thenComparing(NetworkNode::id))
 			.toList();
 
@@ -164,6 +189,43 @@ public class StoragePlacementService {
 	/** O primeiro nó que deve receber cópia nova, se houver. */
 	public Optional<NetworkNode> chooseReplica(String objectId, long bytes, Instant now) {
 		return chooseReplicas(objectId, bytes, now).stream().findFirst();
+	}
+
+	/**
+	 * A preferência de tipo de nó por objeto (brief §6): mídia para nó de mídia, objeto parado para
+	 * arquivo, o resto para o convencional.
+	 *
+	 * <p>É <b>preferência</b>, nunca filtro: sem nó do tipo preferido, qualquer nó de armazenamento
+	 * recebe a cópia. Exigir o tipo deixaria objeto sem réplica por falta de um perfil que é
+	 * declarativo, e a durabilidade que o §9 já mede cairia por causa de topologia.</p>
+	 *
+	 * <p>Nó que tem <b>vários</b> tipos casa com qualquer um deles. Nó só com {@code NODE_STORAGE}
+	 * casa sempre — é o tipo convencional.</p>
+	 */
+	private Comparator<NetworkNode> preference(String objectId, Instant now) {
+		ObjectClass objectClass = objectClass(objectId, now);
+		StorageNodeKind wanted = objectClass.preferredKind();
+		// Menos primeiro: `false` (0) vem antes de `true` (1). Assim "não casa" perde para "casa".
+		return Comparator.comparing((NetworkNode node) -> !kindsOf(node).contains(wanted));
+	}
+
+	/** Os tipos de storage que este nó declara. Vazio = não é nó de armazenamento. */
+	private static java.util.Set<StorageNodeKind> kindsOf(NetworkNode node) {
+		return node.profiles().stream()
+			.map(NodeProfile::storageKind)
+			.filter(kind -> kind != null)
+			.collect(java.util.stream.Collectors.toUnmodifiableSet());
+	}
+
+	/** A classe do objeto pelo que o catálogo diz dele; desconhecido cai em DEFAULT. */
+	private ObjectClass objectClass(String objectId, Instant now) {
+		var object = catalog.findById(objectId).orElse(null);
+		if (object == null) {
+			return ObjectClass.DEFAULT;
+		}
+		Long age = object.createdAt() == null ? null
+			: java.time.Duration.between(object.createdAt(), now).getSeconds();
+		return ObjectClass.of(object.contentType(), age, coldAfterSeconds);
 	}
 
 	/**

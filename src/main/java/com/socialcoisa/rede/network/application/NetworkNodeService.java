@@ -16,6 +16,7 @@ import com.socialcoisa.rede.network.application.port.out.ProvisionTokenRepositor
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NodeProfile;
 import com.socialcoisa.rede.network.domain.NodeStatus;
+import com.socialcoisa.rede.network.domain.StorageNodeKind;
 import com.socialcoisa.rede.shared.audit.AuditTrail;
 import com.socialcoisa.rede.shared.security.Hashes;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -61,6 +62,7 @@ public class NetworkNodeService {
 	 * porque o enroll é o único momento em que o nó passa a existir e o dono é decidido.
 	 */
 	private final com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository responsibles;
+	private final com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository storageBandwidth;
 
 	NetworkNodeService(NetworkNodeRepository nodes, NetworkAuthorityRepository authorities,
 			ProvisionTokenRepository tokens, NodeKeyService keyService, AuditTrail audit, Clock clock,
@@ -69,7 +71,8 @@ public class NetworkNodeService {
 			// Mesma janela de "vivo" do scheduler, do painel e da série: uma janela só, para que um
 			// nó não esteja "conectado" num quadro e "fora" no outro.
 			@Value("${rede.network.node-stale-seconds:180}") long staleSeconds,
-			com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository responsibles) {
+			com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository responsibles,
+			com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository storageBandwidth) {
 		this.nodes = nodes;
 		this.authorities = authorities;
 		this.tokens = tokens;
@@ -80,6 +83,7 @@ public class NetworkNodeService {
 		this.conflictWindow = Duration.ofSeconds(Math.max(30, conflictSeconds));
 		this.staleAfter = Duration.ofSeconds(Math.max(30, staleSeconds));
 		this.responsibles = responsibles;
+		this.storageBandwidth = storageBandwidth;
 	}
 
 	/**
@@ -465,6 +469,33 @@ public class NetworkNodeService {
 			+ (diskMb == null ? "null" : diskMb) + ",\"bandwidthMbps\":"
 			+ (bandwidthMbps == null ? "null" : bandwidthMbps) + "}");
 		return require(nodeId);
+	}
+
+	/**
+	 * Banda própria de um tipo de storage node (brief §6). Reversível pelo participante; o tipo já
+	 * tem de estar entre os perfis dele (quem confere é {@code NetworkParticipantService}).
+	 *
+	 * <p>A mudança compõe {@code configVersion}: a lista entra na config assinada (formato 7), e
+	 * sem versão nova o runtime continuaria aplicando a banda anterior.</p>
+	 */
+	@Transactional
+	public NetworkNode setStorageBandwidth(String nodeId, String ownerUserId, StorageNodeKind kind, int mbps) {
+		NetworkNode node = requireOwned(nodeId, ownerUserId);
+		storageBandwidth.put(nodeId, kind, mbps);
+		nodes.touchConfig(nodeId, clock.instant());
+		audit.record(ownerUserId, "NODE_STORAGE_BANDWIDTH_CHANGED", nodeId,
+			"{\"kind\":\"" + kind.name() + "\",\"bandwidthMbps\":" + mbps + "}");
+		return require(node.id());
+	}
+
+	/** Remove a banda própria do tipo: ele volta a usar a banda geral do nó. */
+	@Transactional
+	public NetworkNode removeStorageBandwidth(String nodeId, String ownerUserId, StorageNodeKind kind) {
+		NetworkNode node = requireOwned(nodeId, ownerUserId);
+		storageBandwidth.remove(nodeId, kind);
+		nodes.touchConfig(nodeId, clock.instant());
+		audit.record(ownerUserId, "NODE_STORAGE_BANDWIDTH_REMOVED", nodeId, "{\"kind\":\"" + kind.name() + "\"}");
+		return require(node.id());
 	}
 
 	/**
