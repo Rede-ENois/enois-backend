@@ -343,6 +343,52 @@ class StorageOverviewTests {
 		assertThat(o.replicasExpected()).isEqualTo(2);
 	}
 
+	/**
+	 * O painel do §17 pede "quantidade de buckets" e o uso por bucket. Bucket não é tabela: ele
+	 * existe enquanto tem objeto. O número é o tamanho do mapa, e por isso o teste usa dois buckets
+	 * com tamanhos DIFERENTES — uma implementação que devolvesse só a contagem total daria 2 para
+	 * qualquer um e passaria sem provar que a separação existe.
+	 */
+	@Test
+	void painel_traz_a_quantidade_e_o_uso_por_bucket() {
+		catalog = mock(StorageCatalogRepository.class);
+		when(catalog.summarizeObjects()).thenReturn(Map.of());
+		when(catalog.summarizePlacements()).thenReturn(Map.of());
+		when(catalog.summarizeBuckets()).thenReturn(Map.of(
+			"fotos", new long[] { 3, 700 },
+			"midia", new long[] { 1, 4000 }));
+		scrubber = mock(StorageScrubber.class);
+		when(scrubber.scan(isNull(), anyInt())).thenReturn(new StorageScrubber.Report(2, 0, List.of(), 0, List.of(), Map.of()));
+		StoragePlacementService placement = mock(StoragePlacementService.class);
+		when(placement.targetReplicas()).thenReturn(2);
+
+		var service = new StorageOverviewService(catalog, placement, overviewNodes, scrubber,
+			Clock.fixed(NOW, ZoneOffset.UTC));
+		var o = service.overview();
+
+		assertThat(o.buckets()).isEqualTo(2);
+		assertThat(o.usageByBucket()).containsEntry("fotos", new StorageOverviewService.BucketUsage(3, 700))
+			.containsEntry("midia", new StorageOverviewService.BucketUsage(1, 4000));
+	}
+
+	@Test
+	void painel_sem_bucket_mostra_zero_e_mapa_vazio() {
+		catalog = mock(StorageCatalogRepository.class);
+		when(catalog.summarizeObjects()).thenReturn(Map.of());
+		when(catalog.summarizePlacements()).thenReturn(Map.of());
+		when(catalog.summarizeBuckets()).thenReturn(Map.of());
+		scrubber = mock(StorageScrubber.class);
+		when(scrubber.scan(isNull(), anyInt())).thenReturn(new StorageScrubber.Report(2, 0, List.of(), 0, List.of(), Map.of()));
+		StoragePlacementService placement = mock(StoragePlacementService.class);
+		when(placement.targetReplicas()).thenReturn(2);
+
+		var o = new StorageOverviewService(catalog, placement, overviewNodes, scrubber,
+			Clock.fixed(NOW, ZoneOffset.UTC)).overview();
+
+		assertThat(o.buckets()).isZero();
+		assertThat(o.usageByBucket()).isEmpty();
+	}
+
 	@Test
 	void lacuna_de_copias_vem_da_mesma_varredura_do_operador() {
 		catalog = mock(StorageCatalogRepository.class);

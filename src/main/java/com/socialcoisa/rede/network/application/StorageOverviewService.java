@@ -49,7 +49,12 @@ public class StorageOverviewService {
 			int unmeasuredDiskTotals, int unmeasuredUsage, List<StorageOverviewNodes.Disco> disks,
 			long usedBytes, Map<String, Long> objectsByState, Map<String, Long> copiesByState,
 			int objectsUnderReplicated, int replicasExpected, Map<String, Long> objectsByDurability, int onlineNodes,
-			int offlineNodes, List<StorageOverviewNodes.OfflineNode> offline) {
+			int offlineNodes, List<StorageOverviewNodes.OfflineNode> offline, int buckets,
+			Map<String, BucketUsage> usageByBucket) {
+	}
+
+	/** O que um bucket tem: objetos servíveis e bytes medidos. */
+	public record BucketUsage(long objects, long bytes) {
 	}
 
 	private final StorageCatalogRepository catalog;
@@ -76,6 +81,10 @@ public class StorageOverviewService {
 	@Transactional(readOnly = true)
 	public Overview overview() {
 		Map<String, long[]> objetos = catalog.summarizeObjects();
+		// Por bucket: o numero de buckets e o tamanho deste mapa. Bucket nao e uma tabela -- existe
+		// enquanto tiver objeto --, entao perguntar "quantos buckets" e contar as chaves distintas.
+		Map<String, BucketUsage> porBucket = new LinkedHashMap<>();
+		catalog.summarizeBuckets().forEach((nome, par) -> porBucket.put(nome, new BucketUsage(par[0], par[1])));
 		Map<String, long[]> copias = catalog.summarizePlacements();
 
 		Map<String, Long> objetosPorEstado = new LinkedHashMap<>();
@@ -95,6 +104,7 @@ public class StorageOverviewService {
 			capacidade.unmeasuredNodes(), capacidade.unmeasuredDiskTotals(), capacidade.unmeasuredUsage(),
 			capacidade.disks(), usado,
 			objetosPorEstado, copiasPorEstado, lacuna.underReplicated().size(), placement.targetReplicas(),
-			lacuna.byDurability(), capacidade.onlineNodes(), capacidade.offlineNodes(), capacidade.offline());
+			lacuna.byDurability(), capacidade.onlineNodes(), capacidade.offlineNodes(), capacidade.offline(),
+			porBucket.size(), porBucket);
 	}
 }

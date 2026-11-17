@@ -173,6 +173,25 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		group by state
 		""";
 
+	/**
+	 * Por bucket (§17 do brief): quantos objetos SERVIVEIS e quantos bytes MEDIDOS eles somam.
+	 *
+	 * <p>Serve o "quantidade de buckets" do painel sem uma segunda consulta — o numero de linhas
+	 * devolvidas e o numero de buckets. E o indice {@code (bucket, object_key)} da V319 cobre o
+	 * {@code group by}: o banco le o indice, nao a tabela.</p>
+	 *
+	 * <p>Fica de fora o objeto {@code DELETED}: lapide nao e conteudo, e o bucket "vazio" de um
+	 * objeto removido nao e um bucket que o operador tem. {@code PENDING} entra com zero bytes —
+	 * ele existe no bucket e ainda nao ocupa espaco medido.</p>
+	 */
+	private static final String SUMMARIZE_BUCKETS = """
+		select bucket, count(*) as objetos, coalesce(sum(bytes), 0) as bytes
+		from network_storage_objects
+		where state <> 'DELETED'
+		group by bucket
+		order by bucket asc
+		""";
+
 	private final JdbcTemplate jdbc;
 
 	StorageCatalogPersistenceAdapter(JdbcTemplate jdbc) {
@@ -278,6 +297,15 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 			porEstado.put(rs.getString("state"), new long[] { rs.getLong("copias"), rs.getLong("bytes") });
 		});
 		return porEstado;
+	}
+
+	@Override
+	public java.util.Map<String, long[]> summarizeBuckets() {
+		java.util.Map<String, long[]> porBucket = new java.util.LinkedHashMap<>();
+		jdbc.query(SUMMARIZE_BUCKETS, (rs) -> {
+			porBucket.put(rs.getString("bucket"), new long[] { rs.getLong("objetos"), rs.getLong("bytes") });
+		});
+		return porBucket;
 	}
 
 	@Override
