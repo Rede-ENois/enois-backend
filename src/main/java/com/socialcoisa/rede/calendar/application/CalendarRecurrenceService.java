@@ -41,6 +41,7 @@ import com.socialcoisa.rede.shared.web.ApiException;
 public class CalendarRecurrenceService {
 
 	private static final Logger LOG = LoggerFactory.getLogger(CalendarRecurrenceService.class);
+	private static final Instant MAX_SERIES_UNTIL = Instant.parse("9999-12-31T23:59:59.999Z");
 
 	private final CalendarEntryRepository entries;
 	private final Clock clock;
@@ -243,6 +244,20 @@ public class CalendarRecurrenceService {
 		}
 		String seriesId = nextSeriesId();
 		Instant now = clock.instant();
+		if (count != null) {
+			Instant countLimit = founder.startsAt();
+			for (int step = 1; step < count && (until == null || countLimit.isBefore(until)); step++) {
+				countLimit = recurrence.nextStart(countLimit, founder.zone(), anchorDay);
+				if (countLimit.isAfter(MAX_SERIES_UNTIL)
+						&& (until == null || until.isAfter(MAX_SERIES_UNTIL))) {
+					throw new ApiException(400, "CALENDAR_RECURRENCE_LIMIT_OUT_OF_RANGE",
+						"O limite da repetição passa do intervalo suportado.");
+				}
+			}
+			if (until == null || countLimit.isBefore(until)) {
+				until = countLimit;
+			}
+		}
 		founder.joinSeriesQuietly(seriesId, recurrence);
 		founder.limitSeries(until);
 		entries.save(founder);
@@ -283,7 +298,7 @@ public class CalendarRecurrenceService {
 		}
 		// O limite interrompeu a série (o próximo passo passa do `UNTIL`): a ponta fica fechada
 		// para o worker não reabrí-la a cada ciclo — o fim do arquivo não é janela a estender.
-		stoppedByLimit = cursor != null && until != null && cursor.isAfter(until);
+		stoppedByLimit = until != null && (!until.isAfter(now) || (cursor != null && cursor.isAfter(until)));
 		if (!stoppedByLimit) {
 			last.openTail();
 		}

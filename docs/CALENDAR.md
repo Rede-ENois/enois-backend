@@ -86,7 +86,8 @@ Série é materializada: cada ocorrência é uma linha própria, agrupada por `s
 calculado em **relógio de parede no fuso da série** (`ZonedDateTime`), não em `Instant`: "toda terça
 ás 19h" continua às 19h depois da mudança de horário. A mensal conta os meses a partir da âncora
 (dia 31 cai no último dia dos meses curtos e volta). O serviço estende a série até `HORIZON_DAYS`
-(90) à frente, com teto de 200 ocorrências por passada.
+(90) à frente, com teto de 200 ocorrências por passada. Na importação, `COUNT` inclui a fundadora e
+limita a série pela data da última posição, mesmo além do horizonte; `UNTIL` anterior prevalece.
 
 ## Janela de leitura
 
