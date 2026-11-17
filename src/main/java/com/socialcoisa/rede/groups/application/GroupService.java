@@ -183,8 +183,9 @@ public class GroupService {
 			throw new ApiException(409, "OWNERSHIP_TRANSFER_REQUIRED",
 				"Transfira a propriedade para outro membro antes de sair.");
 		}
-		repository.removeMember(groupId, userId);
-		repository.adjustMemberCount(groupId, -1);
+		if (repository.removeMember(groupId, userId) == 1) {
+			repository.adjustMemberCount(groupId, -1);
+		}
 	}
 
 	@Transactional
@@ -196,9 +197,10 @@ public class GroupService {
 		if (target.role() == GroupRole.OWNER) {
 			throw new ApiException(409, "CANNOT_REMOVE_OWNER", "O dono do grupo nao pode ser removido.");
 		}
-		repository.removeMember(groupId, targetUserId);
-		repository.adjustMemberCount(groupId, -1);
-		notifier.memberRemoved(group, targetUserId, actorId);
+		if (repository.removeMember(groupId, targetUserId) == 1) {
+			repository.adjustMemberCount(groupId, -1);
+			notifier.memberRemoved(group, targetUserId, actorId);
+		}
 	}
 
 	/**

@@ -6,6 +6,7 @@ import java.util.Optional;
 
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -33,5 +34,7 @@ interface SpringDataGroupMemberJpaRepository extends JpaRepository<GroupMemberJp
 
 	long countByGroupId(String groupId);
 
-	void deleteByGroupIdAndUserId(String groupId, String userId);
+	@Modifying
+	@Query("DELETE FROM GroupMemberJpaEntity m WHERE m.groupId = :groupId AND m.userId = :userId")
+	int deleteByGroupIdAndUserId(@Param("groupId") String groupId, @Param("userId") String userId);
 }
