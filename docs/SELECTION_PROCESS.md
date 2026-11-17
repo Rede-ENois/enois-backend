@@ -25,6 +25,10 @@ conduzir o processo seletivo dentro do Énóis.
 A vaga, a candidatura, a entrevista (`docs` de vagas), as mensagens e as notificações são as
 mesmas de antes. Nada de segunda vaga, segunda candidatura ou segundo mensageiro.
 
+Edição, encerramento, reabertura e definição do prazo usam `findByIdForUpdate` dentro da
+transação. A edição preserva o estado e o prazo lidos após adquirir o lock, sem sobrescrever
+uma mudança concorrente no ciclo de vida.
+
 ## Modelo
 
 - **`selection_stages`** — `(id, job_id, name, position, created_at)`. Cada vaga tem o próprio
