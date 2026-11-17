@@ -151,4 +151,28 @@ class SignupChallengeBindingTests {
 			.isInstanceOfSatisfying(ApiException.class,
 				error -> assertThat(error.code()).isEqualTo("SIGNUP_CAPTCHA_REUSED"));
 	}
+
+	@Test
+	void anOversizedChallengeIdIsRefusedBeforeAnyBase64Decode() {
+		SignupChallengeService service = service();
+		String oversized = Base64.getUrlEncoder().withoutPadding().encodeToString(new byte[2_048]) + "." + "x";
+		assertThat(oversized.length()).isGreaterThan(SignupChallengeService.MAX_CHALLENGE_ID_LENGTH);
+		assertThatThrownBy(() -> service.require(oversized, 4, "sess-1", "device-1"))
+			.isInstanceOfSatisfying(ApiException.class,
+				error -> assertThat(error.code()).isEqualTo("SIGNUP_CAPTCHA_INVALID"));
+	}
+
+	@org.junit.jupiter.params.ParameterizedTest
+	@org.junit.jupiter.params.provider.ValueSource(strings = {
+		"nao!base64.url",          // '!' fora do alfabeto
+		"abc.def.",                // três partes
+		"..." ,                    // separador sem conteúdo
+		"<x>.yz"                   // caracteres de HTML
+	})
+	void aChallengeIdOutsideBase64UrlAlphabetIsRefused(String challengeId) {
+		SignupChallengeService service = service();
+		assertThatThrownBy(() -> service.require(challengeId, 4, "sess-1", "device-1"))
+			.isInstanceOfSatisfying(ApiException.class,
+				error -> assertThat(error.code()).isEqualTo("SIGNUP_CAPTCHA_INVALID"));
+	}
 }
