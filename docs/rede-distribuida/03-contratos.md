@@ -184,7 +184,7 @@ expõe a conta por nó em `GET /admin/network/nodes/storage/overview` (campo `di
 do que o volume tem aparece com reserva zero e a divergência visível no declarado contra o total.
 
 O `disks[]` também traz `usedMb` e `usedPercent`: o §7 pede o uso **por nó** ("capacidade utilizada
-pelo Énóis") e um "limite máximo de utilização". O uso vem do `usedMb` do heartbeat (V342), não de
+pelo Énóis") e um "limite máximo de utilização". O uso vem do `usedMb` do heartbeat (V344), não de
 uma soma do catálogo — o catálogo não sabe o que o nó guarda fora dele (cache de borda, réplica
 órfã). `usedPercent` é `usedMb / diskMb`; `null` quando o uso não foi medido ou o teto é `0` (que no
 contrato significa "sem teto"). Passa de 100 quando o nó consome além do prometido: cortar

@@ -357,10 +357,22 @@ printf '%s\n' '0.1.0' > "$dirbad/VERSION"
 for f in docker-compose.yml Dockerfile install.sh bootstrap.sh node-runtime.sh node-doctor.sh; do
   cp "$NODE_DIR/$f" "$dirbad/$f"
 done
-tar -C "$dirbad" -czf "$TMP/enois-node-runtime-slave-v9.tar.gz" \
+# O asset tem NOME PRÓPRIO: `release_fixtures 'slave-v9'` já publicou um
+# `enois-node-runtime-slave-v9.tar.gz` com o sums dele, e reescrever o mesmo arquivo deixava a
+# soma de antes vazar para o caso de VERSION inválida — o bootstrap recusava por "sha256 não
+# confere" em vez de chegar ao VERSION, em 2 de 12 rodadas. Reusar um caminho publicado é a
+# corrida; um asset novo é a correção.
+tar -C "$dirbad" -czf "$TMP/enois-node-runtime-slave-v9-badversion.tar.gz" \
   VERSION docker-compose.yml Dockerfile install.sh bootstrap.sh node-runtime.sh node-doctor.sh
-( cd "$TMP" && sha256sum 'enois-node-runtime-slave-v9.tar.gz' > "$TMP/sums-slave-v9" )
-REL_TAG='slave-v9'; REL_ASSET='enois-node-runtime-slave-v9.tar.gz'; REL_SUMS_OK=1; bootstrap_curl
+( cd "$TMP" && sha256sum 'enois-node-runtime-slave-v9-badversion.tar.gz' > "$TMP/sums-enois-node-runtime-slave-v9-badversion" )
+# REL_DOWNLOAD_OK precisa voltar a 1: o cenário do pacote adulterado o deixou em 0 e, como
+# `bootstrap_curl` regrava o mock com os valores ATUAIS das variáveis, todo cenário depois dele
+# servia o tar adulterado — e este falhava em "sha256 não confere" em vez de chegar ao VERSION.
+# Era essa a falha intermitente do harness (dependia de qual cenário rodava antes do `sync` do
+# filesystem). Restaurar o estado de cada variável em TODO cenário é a regra.
+REL_TAG='slave-v9-badversion'
+REL_ASSET='enois-node-runtime-slave-v9-badversion.tar.gz'
+REL_DOWNLOAD_OK=1; REL_SUMS_OK=1; bootstrap_curl
 out=$(bootstrap_run '' --update) &&
   { printf '[FAIL] update aceitou VERSION inválida:\n%s\n' "$out" >&2; exit 1; }
 assert_contains 'VERSION fora do formato recusa o release' "$out" "sem VERSION válido (esperado <fonte>@<sha8>, veio '0.1.0')"
@@ -373,7 +385,8 @@ make_command git 'case "$*" in
   *rev-parse\ --short=8*) printf "cafe1234\n" ;;
   *) exit 1 ;;
 esac'
-REL_TAG=''; REL_ASSET=''; bootstrap_curl
+# Sem release publicado, o fallback é o git na fonte de verdade explícita.
+REL_TAG=''; REL_ASSET=''; REL_DOWNLOAD_OK=1; REL_SUMS_OK=1; bootstrap_curl
 out=$(bootstrap_run '' --update --source main) ||
   { printf '[FAIL] fallback git falhou:\n%s\n' "$out" >&2; exit 1; }
 assert_contains 'sem release cai para o git na fonte' "$out" 'Nenhum release do runtime publicado'
