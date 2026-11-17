@@ -144,10 +144,30 @@ public class StorageCatalogService {
 		// arquivo pela metade e as tarefas seguintes falham por um espaço que já se sabia escasso.
 		// Recusar antes é o mesmo critério do teto de tamanho: não escrever o que se sabe que não
 		// cabe. Sem medida (runtime antigo) não há o que comparar e o caminho segue como antes.
+		// Isto é o disco da máquina. Abaixo, a recusa pelo que ESTE recebedor cedeu: são duas
+		// réguas e a menor das duas manda, porque declarar 1,5 TB num disco de 2 TB com 500 GB de
+		// uso alheio não é espaço livre para o Énóis.
 		if (node.observedDiskFreeMb() != null && node.observedDiskFreeMb() < MIN_DISK_FREE_MB) {
 			throw new ApiException(507, "STORAGE_NO_DISK_SPACE",
 				"O no informa " + node.observedDiskFreeMb() + " MB livres, abaixo do minimo de "
 					+ MIN_DISK_FREE_MB + " MB para receber objeto.");
+		}
+		// O que o Énóis já ocupa aqui, pelo MAIOR entre o confirmado no catálogo e o medido pelo nó:
+		// os dois são limites de baixo e usar o menor esconderia o que um deles já viu ocupado.
+		long confirmadoMb = 0;
+		for (StoragePlacement placement : catalog.placementsOnNode(node.id())) {
+			if (placement.state() == StoragePlacement.State.OK) {
+				confirmadoMb += (placement.bytes() / (1024 * 1024)) + 1;
+			}
+		}
+		long usadoMb = node.observedContentUsedMb() == null ? 0 : node.observedContentUsedMb();
+		long ocupadoMb = Math.max(confirmadoMb, usadoMb);
+		// O teto só existe quando o participante declarou: declarado use zero para dizer "nada"
+		// seria recusar toda gravação a quem só não informou, e é o cadastro do enroll (V305).
+		if (node.declaredDiskMb() > 0 && node.declaredDiskMb() - ocupadoMb < MIN_DISK_FREE_MB) {
+			throw new ApiException(507, "STORAGE_NO_CEDENT_SPACE",
+				"O no cedeu " + node.declaredDiskMb() + " MB e ja ocupa " + ocupadoMb
+					+ " MB, abaixo do minimo de " + MIN_DISK_FREE_MB + " MB de folga para receber objeto.");
 		}
 		Spooled measured = measure(body);
 		if (measured.bytes() == 0) {

@@ -32,10 +32,11 @@ import com.socialcoisa.rede.network.domain.StoragePlacement;
  * topologia;</li>
  * <li><b>não designa para nó que não está pronto</b> — nó sem heartbeat recente pode ter o processo
  * morto; designar para ele é a cópia que nunca chega;</li>
- * <li><b>não designa para nó conhecido como cheio</b>, e <b>designa para nó sem medida</b> — não
- * saber não é saber que não cabe;</li>
- * <li><b>escolhe pela folga</b> e de forma estável — ordem por disco livre decrescente e desempate
- * por id, para o mesmo objeto não espalhar cópias diferentes a cada reenvio.</li>
+ * <li><b>não designa para nó sem folga cedida</b> — o §8/§9 decidem pela parte que o participante
+ * cedeu (declarado menos ocupado), não pelo disco livre da máquina. Sem declarado não há teto, e
+ * sem teto não há como afirmar que cabe: a colocação não designa (o {@code store} também recusa);</li>
+ * <li><b>escolhe pela folga cedida</b> e de forma estável — ordem decrescente e desempate por id,
+ * para o mesmo objeto não espalhar cópias diferentes a cada reenvio.</li>
  * </ul>
  */
 class StoragePlacementServiceTests {
@@ -57,7 +58,8 @@ class StoragePlacementServiceTests {
 
 	@Test
 	void distribuiPelosNosProntosComMaisFolga() {
-		candidates(storageNode("nd_a", 40960L), storageNode("nd_b", 81920L), storageNode("nd_c", 20480L));
+		candidates(nodeWithDisk("nd_a", 40960L, 40960L, null), nodeWithDisk("nd_b", 81920L, 81920L, null),
+			nodeWithDisk("nd_c", 20480L, 20480L, null));
 
 		List<NetworkNode> chosen = service.chooseReplicas("sob_1", 0, NOW);
 
@@ -81,7 +83,7 @@ class StoragePlacementServiceTests {
 		// A linha existe em STALE: o nó foi suspenso ou não confirmou. Ele pode receber de novo.
 		when(catalog.placements("sob_1")).thenReturn(
 			List.of(new StoragePlacement("sob_1", 1, "nd_a", 10, "abc", StoragePlacement.State.STALE, NOW)));
-		candidates(storageNode("nd_a", 40960L), storageNode("nd_b", 81920L));
+		candidates(nodeWithDisk("nd_a", 40960L, 40960L, null), nodeWithDisk("nd_b", 81920L, 81920L, null));
 
 		List<NetworkNode> chosen = service.chooseReplicas("sob_1", 0, NOW);
 
@@ -102,21 +104,25 @@ class StoragePlacementServiceTests {
 
 	@Test
 	void noComDiscoMedidoAbaixoDoPisoNaoRecebeCopia() {
-		// 500 MB livres: não cabe o objeto mais a folga mínima. O nó declarou mais, mas o MEDIDO manda.
-		candidates(storageNode("nd_cheio", 500L), storageNode("nd_a", 40960L));
+		// 500 MB livres: não cabe o objeto mais a folga mínima — e o disco continua sendo régua,
+		// além da cedida. O nó cedeu 50 GB, mas o disco da máquina não tem.
+		candidates(nodeWithDisk("nd_cheio", 500L, 51200L, null), nodeWithDisk("nd_a", 40960L, 409600L, null));
 
 		assertThat(service.chooseReplicas("sob_1", 0, NOW)).extracting(NetworkNode::id).containsExactly("nd_a");
 	}
 
+	/**
+	 * Sem declarado não há teto cedido, e sem teto a colocação não afirma que cabe. Antes ela
+	 * designava — "não medir não é saber que não cabe" —, mas o que faltava não era a medida do
+	 * disco: era o número que só o participante pode dar. Nó sem cadastro receberia cópia por tempo
+	 * indeterminado, sem limite nenhum, contra o §7 ("não permitir que ... consuma além do limite")
+	 * e o §8 ("capacidade real dos participantes").
+	 */
 	@Test
-	void noSemMedidaDeDiscoNaoEhRecusadoPorIsso() {
-		List<NetworkNode> chosen = List.of();
-		candidates(nodeWith("nd_sem_medida", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_STORAGE), null, NOW));
+	void noSemTetoCedidoNaoRecebeCopia() {
+		candidates(nodeWithDisk("nd_sem_teto", 40960L, 0L, null));
 
-		chosen = service.chooseReplicas("sob_1", 0, NOW);
-
-		// Não medir não é estar cheio: recusar aqui tiraria todo nó não atualizado da replicação.
-		assertThat(chosen).extracting(NetworkNode::id).containsExactly("nd_sem_medida");
+		assertThat(service.chooseReplicas("sob_1", 0, NOW)).isEmpty();
 	}
 
 	@Test
@@ -129,8 +135,8 @@ class StoragePlacementServiceTests {
 
 	@Test
 	void objetoGrandeDemaisParaAFolgaNaoEntra() {
-		// 2 GiB de objeto contra 2,5 GiB livres: sobra 0,5 GiB, abaixo do piso de 1 GiB.
-		candidates(storageNode("nd_a", 2560L), storageNode("nd_b", 102400L));
+		// 2 GiB de objeto contra 2,5 GiB cedidos: sobra 0,5 GiB, abaixo do piso de 1 GiB.
+		candidates(nodeWithDisk("nd_a", 102400L, 2560L, null), nodeWithDisk("nd_b", 102400L, 102400L, null));
 
 		assertThat(service.chooseReplicas("sob_1", 2L * 1024 * MB, NOW)).extracting(NetworkNode::id)
 			.containsExactly("nd_b");
@@ -216,21 +222,111 @@ class StoragePlacementServiceTests {
 
 	private static NetworkNode regionNode(String id, String region, long diskFreeMb) {
 		return new NetworkNode(id, id, "owner", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_STORAGE), region, "BR",
-			"0.1.0", NOW, 4, 8192, 102400, 100, null, null, null, null, diskFreeMb, 0, null, null);
+			"0.1.0", NOW, 4, 8192, 102400, 100, null, null, null, null, diskFreeMb, null, null, 0, null, null);
+	}
+
+	// ------------------------------------------------- §8: a folga que decide é a cedida
+
+	/**
+	 * O caso do §7 literalmente: 2 TB de volume, 500 GB reservados, 1,5 TB cedidos — e o disco está
+	 * com 1,6 TB já ocupados por OUTRA coisa (essa é a razão de não usar o livre).
+	 *
+	 * <p>nd_a tem 2 TB livres e cedeu 1 MiB: o disco nunca vai barrar, mas ele não tem mais nada
+	 * para ceder. nd_b cedeu 100 GB e tem quase tudo livre. Só olhando o livre (o comportamento
+	 * anterior), nd_a venceria — e o objeto iria para além do que a pessoa autorizou. Com a folga
+	 * cedida, quem tem espaço é nd_b.</p>
+	 *
+	 * <p>Os lados são desiguais de propósito: se a folga fosse o livre, a ordem seria a inversa e o
+	 * teste falharia; se fosse o menor dos dois zeros, nd_a continuaria vencendo.</p>
+	 */
+	@Test
+	void noQueEsgotouOQueCedeuNaoRecebeCopiaMesmoComDiscoLivre() {
+		NetworkNode esgotado = nodeWithDisk("nd_a", 2L * 1024 * 1024, 1L, null);
+		NetworkNode comFolga = nodeWithDisk("nd_b", 102400L, 102400L - 1024L, null);
+		candidates(esgotado, comFolga);
+
+		List<NetworkNode> chosen = service.chooseReplicas("sob_1", 0, NOW);
+
+		assertThat(chosen).extracting(NetworkNode::id).containsExactly("nd_b");
+	}
+
+	/**
+	 * O confirmado no catálogo é o ocupado, não o número de cópias: 3 cópias de 400 MiB cada (mais o
+	 * arredondamento de 1 MiB para cima, porque os bytes vão por MB inteiro) somam mais que a folga
+	 * de 1 GiB, e o nó sai mesmo com o disco quase vazio. Se a conta ignorasse os bytes confirmados,
+	 * ele venceria — a asserção cai.
+	 */
+	@Test
+	void ocupadoPelasCopiasConfirmadasContaContraOTeto() {
+		when(catalog.placementsOnNode("nd_a")).thenReturn(List.of(
+			copia("nd_a", 400L), copia("nd_a", 400L), copia("nd_a", 400L)));
+		candidates(nodeWithDisk("nd_a", 512000L, 1024L, null), nodeWithDisk("nd_b", 40960L, 40960L, null));
+
+		assertThat(service.chooseReplicas("sob_1", 0, NOW)).extracting(NetworkNode::id).containsExactly("nd_b");
+	}
+
+	/**
+	 * O nó medindo o uso em si (V344) pode ver arquivo que o catálogo não confirma — cópia
+	 * interrompida, sobra de troca. O maior dos dois é o ocupado: aqui o confirmado dá 0 e o medido
+	 * enche o teto, e o nó sai. Se a conta usasse o menor, ele ficaria.
+	 */
+	@Test
+	void usoMedidoPeloNoValeMesmoSemCopiaConfirmada() {
+		// Lados escolhidos para o MAX ser o único que recusa: o catálogo diz 0 (nada confirmado) e o
+		// nó diz 4095. Cedeu 4096. Só o medido (4095 de 4096) tira o nd_a; com o menor (0) ele teria
+		// 4096 MB de folga e receberia. O disco livre é 2 TB para a folga física não decidir por
+		// acaso o que é a conta do uso medido.
+		NetworkNode medidoCheio = nodeWithDisk("nd_a", 2L * 1024 * 1024, 4096L, 4095L);
+		candidates(medidoCheio);
+
+		assertThat(service.chooseReplicas("sob_1", 0, NOW)).isEmpty();
+	}
+
+	/**
+	 * Sem declarado não há teto a aplicar — é o cadastro do enroll, que o enrollment deixa em zero —
+	 * e sem teto a colocação não afirma que cabe. Antes deste contrato o nó era designado ("não
+	 * medir não é saber que não cabe"); a mudança de régua é explícita: a medida que faltava não era
+	 * o disco, era o número que só o participante pode dar, e receber cópia sem limite nenhum
+	 * contraria o §7. O nó com folga ao lado recebe, para o caso não passar por "rede vazia".
+	 */
+	@Test
+	void nóSemTetoCedidoPerdeParaQuemTemTeto() {
+		candidates(nodeWithDisk("nd_sem_teto", 409600L, 0L, null), nodeWithDisk("nd_com", 40960L, 40960L, null));
+
+		assertThat(service.chooseReplicas("sob_1", 0, NOW)).extracting(NetworkNode::id).containsExactly("nd_com");
+	}
+
+	private static StoragePlacement copia(String nodeId, long bytes) {
+		return new StoragePlacement("sob_" + nodeId + bytes, 1, nodeId, bytes * MB, "abc",
+			StoragePlacement.State.OK, NOW);
+	}
+
+	/**
+	 * Nó com os três números do disco separados: livre (da máquina), declarado (cedido) e o uso que
+	 * ele mediu em si.
+	 */
+	private static NetworkNode nodeWithDisk(String id, long diskFreeMb, long declaredMb, Long usedMb) {
+		return new NetworkNode(id, id, "owner", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_STORAGE), "sa-east-1",
+			"BR", "0.1.0", NOW, 4, 8192, (int) declaredMb, 100, null, null, null, null, diskFreeMb, null, usedMb, 0,
+			null, null);
 	}
 
 	private void candidates(NetworkNode... found) {
 		when(nodes.findCandidates(any(), anyInt())).thenReturn(List.of(found));
 	}
 
+	/**
+	 * Nó pronto com o disco livre dado e um teto cedido generoso: estes casos exercitam prontidão,
+	 * região e ordem, não a folga — a folga tem os seus testes próprios, com lados desiguais.
+	 */
 	private static NetworkNode storageNode(String id, long diskFreeMb) {
-		return nodeWith(id, NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_STORAGE), diskFreeMb, NOW);
+		return nodeWithDisk(id, diskFreeMb, 102400L, null);
 	}
 
 	private static NetworkNode nodeWith(String id, NodeStatus status, Set<NodeProfile> profiles, Long diskFreeMb,
 			Instant lastSeen) {
 		return new NetworkNode(id, id, "owner", status, profiles, "sa-east-1", "BR", "0.1.0", lastSeen, 4, 8192,
-			102400, 100, null, null, null, null, diskFreeMb, 0, null, null);
+			102400, 100, null, null, null, null, diskFreeMb, null, null, 0, null, null);
 	}
 
 }

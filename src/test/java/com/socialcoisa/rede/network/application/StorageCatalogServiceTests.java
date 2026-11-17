@@ -100,7 +100,64 @@ class StorageCatalogServiceTests {
 	/** O mesmo nó com o disco livre que ele MEDIU no último heartbeat (V321). */
 	private static NetworkNode storageNode(Long diskFreeMb) {
 		return new NetworkNode("nd_store", "vps-casa", "user_1", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_STORAGE),
-			"sa-east-1", "BR", "1.0.0", null, 2, 4096, 102400, 100, null, null, null, null, diskFreeMb, 0, null, null);
+			"sa-east-1", "BR", "1.0.0", null, 2, 4096, 102400, 100, null, null, null, null, diskFreeMb, null, null, 0,
+			null, null);
+	}
+
+	/** O mesmo nó com o teto que o participante cedeu e o uso que ele mediu em si (V344). */
+	private static NetworkNode storageNodeCedendo(long declaredMb, Long usedMb) {
+		return new NetworkNode("nd_store", "vps-casa", "user_1", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_STORAGE),
+			"sa-east-1", "BR", "1.0.0", null, 2, 4096, (int) declaredMb, 100, null, null, null, null, 204800L, null,
+			usedMb, 0, null, null);
+	}
+
+	/**
+	 * O §7: 2 TB de disco, 500 GB reservados, 1,5 TB cedidos. Com 1,5 TB já ocupados, o disco livre
+	 * (500 GB) passa folgado no piso de 1 GiB — mas a parte cedida acabou. Antes desta recusa o
+	 * objeto ia para além do que a pessoa autorizou; agora o 507 diz qual número acabou, com o
+	 * cedido, o ocupado e o piso na mensagem, para o operador saber se é o teto ou o disco.
+	 */
+	@Test
+	void no_que_esgotou_o_espaco_cedido_recusa_com_o_numero() throws Exception {
+		StorageObject object = service.beginUpload("user_1", "fotos", "gato.jpg", "image/jpeg");
+		long declaradoMb = 1_500_000L;
+		NetworkNode vazio = storageNodeCedendo(declaradoMb, declaradoMb - 10);
+
+		assertThatThrownBy(() -> service.store(vazio, object.id(), new ByteArrayInputStream(body("abc"))))
+			.isInstanceOf(ApiException.class)
+			.hasMessageContaining("cedeu " + declaradoMb)
+			.hasMessageContaining("ja ocupa " + (declaradoMb - 10));
+		assertThat(Files.exists(service.bodyPath(object.id()))).isFalse();
+	}
+
+	/** Abaixo do piso de folga nada entra; exatamente no piso entra — o mesmo piso do disco. */
+	@Test
+	void folga_cedida_no_piso_ainda_recebe_o_corpo() throws Exception {
+		StorageObject object = service.beginUpload("user_1", "fotos", "gato.jpg", "image/jpeg");
+
+		service.store(storageNodeCedendo(102400L, 102400L - StorageCatalogService.MIN_DISK_FREE_MB), object.id(),
+			new ByteArrayInputStream(body("abc")));
+
+		assertThat(catalog.findById(object.id()).orElseThrow().servable()).isTrue();
+	}
+
+	/**
+	 * Cópia interrompida, sobra de troca: arquivo no volume que o catálogo não confirma. O número
+	 * que o nó mediu é o que pega esse caso. Os lados fazem o MAX ser o único que recusa — o
+	 * catálogo confirma 10 MB e o nó mede os 102400: com o menor (10) sobraria folga e o corpo
+	 * entraria.
+	 */
+	@Test
+	void uso_medido_pelo_no_recusa_mesmo_sem_copia_confirmada() throws Exception {
+		StorageObject object = service.beginUpload("user_1", "fotos", "gato.jpg", "image/jpeg");
+		// Uma cópia confirmada pequena, pelo caminho real do catálogo.
+		catalog.savePlacement(new StoragePlacement(object.id(), 0, "nd_store", 10 * 1024 * 1024L, "abc",
+			StoragePlacement.State.OK, Instant.now()));
+
+		assertThatThrownBy(() -> service.store(storageNodeCedendo(102400L, 102400L),
+			object.id(), new ByteArrayInputStream(body("abc"))))
+			.isInstanceOf(ApiException.class)
+			.hasMessageContaining("ja ocupa 102400");
 	}
 
 	@Test
