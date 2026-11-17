@@ -410,6 +410,12 @@ decisão continua valendo — o candidato ao menos vê o estado atualizado na li
 O candidato acompanha o **próprio** processo, sem segundo sistema e sem canal novo: tudo sai das
 tabelas que o pipeline já grava.
 
+`GET /jobs/applications` mantém os cards e a resposta `{ "items": [...], "nextCursor": ... }`.
+A paginação ocorre no banco por `(appliedAt DESC, id DESC)`, com cursor composto do `CursorCodec`;
+`postedAt` continua sendo a publicação da vaga. Cursor inválido, inclusive desempate não numérico,
+responde 400 `INVALID_CURSOR`. Cursores antigos baseados em `postedAt` devem ser descartados;
+um instante puro passa a representar um corte estrito em `appliedAt`, sem desempate.
+
 | Onde | Antes | Agora |
 |---|---|---|
 | `GET /jobs/applications/mine` | só o estado clássico (`IN_REVIEW`) | também `stageName` — o nome da etapa atual, da mesma fonte do board (último movimento; sem movimento, a entrada do fluxo) |

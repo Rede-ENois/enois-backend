@@ -23,6 +23,7 @@ import com.socialcoisa.rede.jobs.application.port.out.JobApplicationDraftReposit
 import com.socialcoisa.rede.jobs.domain.JobApplicationDraft;
 import com.socialcoisa.rede.jobs.application.port.out.JobApplicationStatusNotifier;
 import com.socialcoisa.rede.jobs.application.port.out.JobRepository;
+import com.socialcoisa.rede.jobs.application.port.out.JobRepository.AppliedPage;
 import com.socialcoisa.rede.jobs.domain.Job;
 import com.socialcoisa.rede.jobs.domain.JobApplication;
 import com.socialcoisa.rede.jobs.domain.JobApplicationStatus;
@@ -607,8 +608,8 @@ public class JobService {
 	}
 
 	/** Vagas em que o usuario se candidatou. */
-	public List<Job> listApplications(String userId, java.time.Instant before, int limit) {
-		return repository.findAppliedByUser(userId, before, pageLimit(limit));
+	public AppliedPage listApplications(String userId, Instant before, Long beforeId, int limit) {
+		return repository.findAppliedByUser(userId, before, beforeId, pageLimit(limit));
 	}
 
 	/** Teto de qualquer listagem de vagas: sem ele, `?limit=100000` ia direto ao banco. */

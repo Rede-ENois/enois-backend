@@ -11,6 +11,7 @@ import org.springframework.stereotype.Repository;
 import org.springframework.util.StringUtils;
 
 import com.socialcoisa.rede.jobs.application.port.out.JobRepository;
+import com.socialcoisa.rede.jobs.application.port.out.JobRepository.AppliedPage;
 import com.socialcoisa.rede.jobs.domain.Job;
 import com.socialcoisa.rede.shared.search.BooleanQuery;
 
@@ -300,20 +301,19 @@ class JobPersistenceAdapter implements JobRepository {
 	}
 
 	@Override
-	public List<Job> findAppliedByUser(String userId, Instant before, int limit) {
-		List<String> jobIds = applicationRepo.findJobIdsByUserId(userId, PageRequest.of(0, limit));
-		if (jobIds.isEmpty()) {
-			return List.of();
-		}
-		java.util.Map<String, Job> byId = springData.findByIdIn(jobIds).stream()
-			.map(JobJpaEntity::toDomain)
+	public AppliedPage findAppliedByUser(String userId, Instant before, Long beforeId, int limit) {
+		List<Object[]> applications = applicationRepo.findAppliedByUser(userId, before, beforeId,
+			PageRequest.of(0, limit));
+		List<String> jobIds = applications.stream().map(row -> (String) row[0]).toList();
+		java.util.Map<String, Job> byId = findByIds(jobIds).stream()
 			.collect(java.util.stream.Collectors.toMap(Job::id, job -> job));
-		// Mantem a ordem das candidaturas (mais recentes primeiro), aplicando o cursor.
-		return jobIds.stream()
+		List<Job> jobs = jobIds.stream()
 			.map(byId::get)
 			.filter(java.util.Objects::nonNull)
-			.filter(job -> before == null || !job.postedAt().isAfter(before))
 			.toList();
+		Object[] last = applications.size() == limit ? applications.getLast() : null;
+		return new AppliedPage(jobs, last == null ? null : (Instant) last[1],
+			last == null ? null : (Long) last[2]);
 	}
 
 	@Override
