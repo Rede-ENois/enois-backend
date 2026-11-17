@@ -36,6 +36,8 @@ import java.util.Set;
  * @param observedDiskTotalMb tamanho do volume medido no último heartbeat; null = não reportado.
  * Com {@link #observedDiskFreeMb} é o que permite separar "espaço reservado pelo participante" do
  * "capacidade oferecida" (brief do Storage §7): a reserva é o total que não está a serviço do Énóis.
+ * @param observedContentUsedMb espaço que o ESTADO DE CONTEÚDO ocupa no nó, medido por ele; null =
+ * não reportado. É o "utilizado pelo Énóis" do §7 — distinto do livre, que qualquer processo derruba.
  * @param observedLatencyMs mediana do tempo de conclusão das últimas tarefas; null = sem amostra
  * @param consecutiveFailures resultados falhos seguidos; um sucesso zera a contagem
  * @param quarantinedUntil fora do balanceamento até este instante; null = em balanceamento
@@ -45,7 +47,8 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 		Set<NodeProfile> profiles, String region, String country, String runtimeVersion, Instant lastSeenAt,
 		int declaredCpuCores, int declaredMemoryMb, int declaredDiskMb, int declaredBandwidthMbps,
 		Double observedCpuPercent, Integer observedMemoryMb, Integer observedRunningTasks, Integer observedLatencyMs,
-		Long observedDiskFreeMb, Long observedDiskTotalMb, int consecutiveFailures, Instant quarantinedUntil,
+		Long observedDiskFreeMb, Long observedDiskTotalMb, Long observedContentUsedMb, int consecutiveFailures,
+		Instant quarantinedUntil,
 		String quarantineReason) {
 
 	/**
@@ -63,7 +66,7 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 			int consecutiveFailures, Instant quarantinedUntil, String quarantineReason) {
 		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
 				declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
-				observedMemoryMb, observedRunningTasks, observedLatencyMs, null, null, consecutiveFailures,
+				observedMemoryMb, observedRunningTasks, observedLatencyMs, null, null, null, consecutiveFailures,
 				quarantinedUntil, quarantineReason);
 	}
 
@@ -81,8 +84,26 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 			Long observedDiskFreeMb, int consecutiveFailures, Instant quarantinedUntil, String quarantineReason) {
 		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
 				declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
-				observedMemoryMb, observedRunningTasks, observedLatencyMs, observedDiskFreeMb, null,
+				observedMemoryMb, observedRunningTasks, observedLatencyMs, observedDiskFreeMb, null, null,
 				consecutiveFailures, quarantinedUntil, quarantineReason);
+	}
+
+	/**
+	 * Quanto o Énóis ocupa <b>relativamente</b> ao que o participante cedeu, em percentual.
+	 *
+	 * <p>É o "limite máximo de utilização" do brief §7 visto de quem opera: o mesmo teto chega ao
+	 * runtime em {@code limits.diskMb}, mas só o rodapé do disco sabia disso. Um nó em 97% está a
+	 * caminho de evictar cache ou recusar réplica, e o painel precisa dizer isso antes.</p>
+	 *
+	 * <p>{@code null} quando falta alguma das duas medidas (uso não reportado, ou teto zero — 0 no
+	 * contrato significa "sem teto", não "teto de zero"). Pode passar de 100: teto é promessa, e um
+	 * nó acima dele é exatamente o que se quer enxergar, não esconder.</p>
+	 */
+	public Double usedPercent() {
+		if (observedContentUsedMb == null || declaredDiskMb <= 0) {
+			return null;
+		}
+		return (observedContentUsedMb * 100.0) / declaredDiskMb;
 	}
 
 	/**

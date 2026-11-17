@@ -61,6 +61,9 @@ class NetworkNodeJpaEntity {
 	@Column(name = "observed_disk_total_mb")
 	private Long observedDiskTotalMb;
 
+	@Column(name = "observed_content_used_mb")
+	private Long observedContentUsedMb;
+
 	@Column(name = "consecutive_failures", nullable = false)
 	private int consecutiveFailures;
 
@@ -131,7 +134,8 @@ class NetworkNodeJpaEntity {
 		return new NetworkNode(id, displayName, ownerUserId, NodeStatus.valueOf(status),
 			NodeProfilesCsv.parse(profiles), region, country, runtimeVersion, lastSeenAt, declaredCpuCores,
 			declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent, observedMemoryMb,
-			observedRunningTasks, observedLatencyMs, observedDiskFreeMb, observedDiskTotalMb, consecutiveFailures,
+			observedRunningTasks, observedLatencyMs, observedDiskFreeMb, observedDiskTotalMb, observedContentUsedMb,
+			consecutiveFailures,
 			quarantinedUntil, quarantineReason);
 	}
 

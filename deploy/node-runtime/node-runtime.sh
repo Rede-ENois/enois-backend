@@ -1311,6 +1311,11 @@ cycle() {
   disk_part=''
   [[ -n "$observed_disk" ]] && disk_part=",\"diskFreeMb\":$observed_disk"
   [[ -n "$observed_disk_total" ]] && disk_part="$disk_part,\"diskTotalMb\":$observed_disk_total"
+  # Uso do ESTADO DE CONTEÚDO (edge/ + replica/ + objects/), o mesmo que o teto mede. Sem ele o
+  # Control Plane só sabia somar o catálogo e nunca comparava, nó por nó, "quanto ele usa" com
+  # "quanto ele prometeu" -- a pergunta do §7 do brief do Storage. Zero é resposta legítima (nó
+  # sem conteúdo), então o campo vai sempre que o cálculo roda; `df` que falhou não afeta.
+  disk_part="$disk_part,\"usedMb\":$(( $(content_bytes) / 1048576 ))"
   # Linhas do ciclo vão JUNTO do heartbeat: é a única saída do nó (ele não abre porta), e o
   # Control Plane guarda uma janela curta para o painel do nó. O buffer é esvaziado depois de
   # enviado; se o heartbeat falhar, as linhas ficam para a próxima volta.
