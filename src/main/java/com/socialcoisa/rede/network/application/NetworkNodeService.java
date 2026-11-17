@@ -218,7 +218,7 @@ public class NetworkNodeService {
 		// registro, o painel mostra "conectado agora" e não conta que a máquina ficou fora.
 		registrarReconexao(authenticated, now);
 		nodes.touch(authenticated.id(), beat.runtimeVersion(), beat.cpuPercent(), beat.memoryMb(),
-			beat.runningTasks(), beat.diskFreeMb(), beat.diskTotalMb(), now);
+			beat.runningTasks(), beat.diskFreeMb(), beat.diskTotalMb(), beat.contentUsedMb(), now);
 		NetworkNode updated = require(authenticated.id());
 		quarantineOnTermConflict(updated, beat.observedTerm(), now);
 		return require(authenticated.id());
@@ -439,18 +439,29 @@ public class NetworkNodeService {
 	}
 
 	public record HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
-			Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Integer observedTerm) {
+			Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Integer observedTerm) {
 
 		/**
 		 * Heartbeat de runtime que ainda não mede o tamanho do volume (anterior ao formato 6).
 		 *
 		 * <p>O total fica desconhecido — não {@code 0}, que afirmaria um disco de tamanho zero — e o
-		 * campo da V341 continua nulo até o nó subir com o runtime novo. Servidor que não envia o
+		 * campo da V343 continua nulo até o nó subir com o runtime novo. Servidor que não envia o
 		 * tamanho não tem reserva calculável, e o painel diz isso em vez de inventar.</p>
 		 */
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
+				Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Integer observedTerm) {
+			this(runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, diskTotalMb, null, observedTerm);
+		}
+
+		/**
+		 * Heartbeat de runtime que também não mede o uso do conteúdo (anterior à V344).
+		 *
+		 * <p>O uso fica desconhecido e o painel diz isso; o teto e o livre continuam valendo para
+		 * todas as decisões que já os usavam.</p>
+		 */
+		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Integer observedTerm) {
-			this(runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, null, observedTerm);
+			this(runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, null, null, observedTerm);
 		}
 	}
 }

@@ -435,6 +435,24 @@ assert_contains 'o tamanho vem da mesma linha do livre (não do declarado)' "$(c
 make_command df 'exit 1'
 out=$(run_custom "$NH_TERM")
 assert_not_contains 'sem medida, o tamanho do volume não é inventado' "$(cat "$TMP/curl-calls")" '"diskTotalMb"'
+
+# ---- uso do conteúdo (§7: "capacidade utilizada pelo Énóis")
+# O nó conta o ESTADO DE CONTEÚDO (edge/ + replica/ + objects/), que é o que o teto assinado mede.
+# É a conta que o painel compara com o declarado; o disco livre, que qualquer processo derruba, não
+# serve para isso.
+mkdir -p "$NH_TERM/objects" "$NH_TERM/edge/prof"
+head -c 1048576 /dev/zero > "$NH_TERM/objects/aa.bin"
+head -c 2097152 /dev/zero > "$NH_TERM/edge/prof/bb.json"
+out=$(run_custom "$NH_TERM")
+assert_contains 'heartbeat manda o uso do conteudo medido' "$(cat "$TMP/curl-calls")" '"usedMb":3'
+
+# A credencial não entra na conta: node.json e api-key não são conteúdo, e um estouro de cache não
+# pode derrubar o nó apagando a própria chave.
+head -c 5242880 /dev/zero > "$NH_TERM/node.json"
+out=$(run_custom "$NH_TERM")
+assert_contains 'a credencial nao entra no uso do conteudo' "$(cat "$TMP/curl-calls")" '"usedMb":3'
+printf '%s\n' '{"nodeId":"nd_exec1","status":"ACTIVE"}' > "$NH_TERM/node.json"
+rm -rf "$NH_TERM/objects" "$NH_TERM/edge"
 # O `df` volta a desligar-se: os cenários seguintes contam com ele fora do stub de medida.
 make_command df 'exit 1'
 rm -f "$TMP/df"

@@ -183,6 +183,13 @@ expõe a conta por nó em `GET /admin/network/nodes/storage/overview` (campo `di
 `reservedMb` nulo quando o nó não reportou o tamanho e nunca negativo — participante que cedeu mais
 do que o volume tem aparece com reserva zero e a divergência visível no declarado contra o total.
 
+O `disks[]` também traz `usedMb` e `usedPercent`: o §7 pede o uso **por nó** ("capacidade utilizada
+pelo Énóis") e um "limite máximo de utilização". O uso vem do `usedMb` do heartbeat (V344), não de
+uma soma do catálogo — o catálogo não sabe o que o nó guarda fora dele (cache de borda, réplica
+órfã). `usedPercent` é `usedMb / diskMb`; `null` quando o uso não foi medido ou o teto é `0` (que no
+contrato significa "sem teto"). Passa de 100 quando o nó consome além do prometido: cortar
+esconderia o caso que o operador precisa ver.
+
 `allowedRoutes` é a lista de **destinos que o nó pode chamar**, no formato `nome=url`
 (`["catalogo=https://catalogo.exemplo/api"]`). Ela entra no payload e **na assinatura**, e é o que
 fecha o SSRF (doc 02 §4.2): a task `API_REQUEST` diz apenas o **nome** da rota, e o runtime resolve
