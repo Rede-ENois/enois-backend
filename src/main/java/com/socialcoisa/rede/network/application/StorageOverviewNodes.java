@@ -124,14 +124,36 @@ public class StorageOverviewNodes {
 			if (node.observedContentUsedMb() == null) {
 				semUso++;
 			}
-			Long reserva = node.reservedDiskMb();
 			if (node.observedDiskTotalMb() == null) {
 				semTotal++;
 			}
-			discos.add(new Disco(node.id(), node.declaredDiskMb(), node.observedDiskFreeMb(),
-				node.observedDiskTotalMb(), reserva, node.observedContentUsedMb(), node.usedPercent()));
+			discos.add(diskOf(node));
 		}
 		Long livreAgregado = semMedida == comDisco && comDisco > 0 ? null : livre;
 		return new Capacity(declarado, livreAgregado, comDisco, semMedida, semTotal, semUso, List.copyOf(discos));
+	}
+
+	/**
+	 * O disco de <b>um</b> nó, para a página individual do §17.
+	 *
+	 * <p>A mesma conta de {@link #capacity()}, com a mesma fonte: o {@link Disco} é montado pelo
+	 * mesmo código que monta a linha do painel geral. Duas contas para o mesmo disco dariam dois
+	 * números na tela — e o operador não saberia qual acreditar.</p>
+	 *
+	 * <p>{@code null} quando o nó não existe ou não pode guardar objeto ({@code OBJECT_PUT}): a
+	 * página do nó o mostra, mas chamar de "disco de armazenamento" um nó de processamento
+	 * prometeria espaço que ele não oferece.</p>
+	 */
+	@Transactional(readOnly = true)
+	public Disco diskOf(String nodeId) {
+		return nodes.findById(nodeId)
+			.filter(node -> TaskType.OBJECT_PUT.allowedFor(node.profiles()))
+			.map(StorageOverviewNodes::diskOf)
+			.orElse(null);
+	}
+
+	private static Disco diskOf(NetworkNode node) {
+		return new Disco(node.id(), node.declaredDiskMb(), node.observedDiskFreeMb(), node.observedDiskTotalMb(),
+			node.reservedDiskMb(), node.observedContentUsedMb(), node.usedPercent());
 	}
 }

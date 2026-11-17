@@ -374,6 +374,27 @@ class AdminNetworkController {
 		return view(nodes.require(id));
 	}
 
+	/**
+	 * O disco deste nó para a <b>página individual</b> (brief §17): "espaço disponibilizado",
+	 * "espaço utilizado" e "espaço disponível".
+	 *
+	 * <p>Antes isso só existia no painel geral (`/storage/overview` → {@code disks[]}), onde o admin
+	 * tinha de procurar a linha do nó. A conta é a <b>mesma</b>: vem do mesmo método que monta a
+	 * linha daquele painel, para as duas telas não mostrarem números diferentes do mesmo disco.</p>
+	 *
+	 * <p>{@code null} (corpo vazio) quando o nó não guarda objeto: chamar de disco de armazenamento
+	 * o de um nó de processamento prometeria espaço que ele não oferece. Nó desconhecido é 404, como
+	 * em {@code GET /{id}}.</p>
+	 */
+	@GetMapping("/{id}/storage")
+	Object storage(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String id) {
+		admin(sessionToken);
+		nodes.require(id);
+		var disco = storageOverview.diskOf(id);
+		return disco == null ? java.util.Map.of() : disco;
+	}
+
 	/** Token de uso único que cria o nó; não é a chave de operação (ADR-003). */
 	@PostMapping("/provision-token")
 	IssuedTokenView issueToken(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
