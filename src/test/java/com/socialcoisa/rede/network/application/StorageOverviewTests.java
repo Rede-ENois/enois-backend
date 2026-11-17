@@ -280,7 +280,7 @@ class StorageOverviewTests {
 			"PENDING_REMOTE", new long[] { 1, 60 }));
 
 		scrubber = mock(StorageScrubber.class);
-		when(scrubber.scan(isNull(), anyInt())).thenReturn(new StorageScrubber.Report(2, 3, List.of(), 0, List.of()));
+		when(scrubber.scan(isNull(), anyInt())).thenReturn(new StorageScrubber.Report(2, 3, List.of(), 0, List.of(), Map.of()));
 		StoragePlacementService placement = mock(StoragePlacementService.class);
 		when(placement.targetReplicas()).thenReturn(2);
 
@@ -301,7 +301,8 @@ class StorageOverviewTests {
 		when(catalog.summarizePlacements()).thenReturn(Map.of());
 		scrubber = mock(StorageScrubber.class);
 		when(scrubber.scan(isNull(), anyInt())).thenReturn(new StorageScrubber.Report(2, 3,
-			List.of(new StorageScrubber.Report.UnderReplicated("sob_1", 1, 1, List.of("nd_a"))), 0, List.of()));
+			List.of(new StorageScrubber.Report.UnderReplicated("sob_1", 1, 1, List.of("nd_a"))), 0, List.of(),
+			Map.of("SINGLE_DOMAIN", 1L)));
 		StoragePlacementService placement = mock(StoragePlacementService.class);
 		when(placement.targetReplicas()).thenReturn(2);
 

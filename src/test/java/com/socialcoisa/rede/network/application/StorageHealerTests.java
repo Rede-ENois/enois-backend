@@ -19,6 +19,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -91,7 +92,7 @@ class StorageHealerTests {
 		for (String id : objectIds) {
 			lacunas.add(new StorageScrubber.Report.UnderReplicated(id, 1, 1, List.of("nd_cp")));
 		}
-		return new StorageScrubber.Report(2, objectIds.length, lacunas, 0, List.of());
+		return new StorageScrubber.Report(2, objectIds.length, lacunas, 0, List.of(), Map.of());
 	}
 
 	private void expectSaved() {
