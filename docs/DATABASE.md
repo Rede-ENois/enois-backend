@@ -125,8 +125,9 @@ Unique `(post_id, position)`. Em `posts`, o `content` do post `POLL` é o títul
 | option_position | INT | Alternativa escolhida |
 | created_at | TIMESTAMP | |
 
-Unique `(post_id, user_id)`: **um voto por pessoa, imutável** — não existe UPDATE do voto; o
-segundo INSERT é recusado pelo banco.
+Unique `(post_id, user_id, option_position)` impede repetir a mesma alternativa. A seleção pode
+ser trocada: escolha única mantém uma alternativa e múltipla permite várias; as trocas do mesmo
+post são serializadas pelo lock da linha em `posts`.
 
 ### `post_tags`
 
