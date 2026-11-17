@@ -3,6 +3,7 @@ package com.socialcoisa.rede.network.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -94,6 +95,33 @@ class NetworkNodePauseOwnerTests {
 		verify(audit).record(eq(DONO), eq("NODE_PAUSED"), eq("nd_1"), anyString());
 		// A chave continua: pausa não é saída da rede.
 		verify(keys, never()).revokeAllForNode(anyString(), anyString());
+	}
+
+	/**
+	 * O participante não muda a capacidade do nó de terceiro — nem por esta porta. O teste HTTP
+	 * prova que a ROTA confere o dono; só o serviço chamado direto prova que a REGRA está nele.
+	 */
+	@Test
+	void participante_nao_muda_capacidade_de_no_alheio() {
+		when(nodes.findById("nd_1")).thenReturn(java.util.Optional.of(node(OUTRO, NodeStatus.ACTIVE)));
+
+		assertThatThrownBy(() -> service.participantCapacity("nd_1", DONO, null, null, 1, null))
+			.isInstanceOf(ApiException.class)
+			.extracting(error -> ((ApiException) error).status())
+			.isEqualTo(404);
+
+		verify(nodes, never()).updateContract(anyString(), anyInt(), anyInt(), anyInt(), anyInt(), any(),
+			any());
+	}
+
+	/** O admin continua podendo: a porta dele não passa pela conferência de dono. */
+	@Test
+	void admin_muda_capacidade_de_qualquer_no() {
+		when(nodes.findById("nd_1")).thenReturn(java.util.Optional.of(node(OUTRO, NodeStatus.ACTIVE)));
+
+		service.capacity("nd_1", null, null, 2048, null, "admin_1");
+
+		verify(nodes).updateContract(eq("nd_1"), eq(4), eq(8192), eq(2048), eq(100), any(), eq(NOW));
 	}
 
 	private static NetworkNode node(String owner, NodeStatus status) {

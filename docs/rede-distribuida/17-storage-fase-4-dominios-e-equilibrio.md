@@ -172,3 +172,26 @@ não vira `lastOfflineSeconds`.
 **O que não existe.** Disponibilidade ao longo de um período (servido/parado por faixa de tempo),
 latência de tráfego, IOPS e velocidade — dependem de série histórica que o módulo não guarda além da
 amostra de observabilidade do último minuto, e de decisão de produto (§7 do brief).
+
+## 7. O participante ajusta o que cede (brief §18, sem migração)
+
+O §18 lista "definir capacidade máxima" e "definir limites de banda" entre o que o **participante**
+faz. Até aqui só o admin conseguia (`POST /admin/network/nodes/{id}/capacity`): o participante
+precisava de um terceiro para emprestar mais — ou menos — da própria máquina.
+
+`POST /network/participant/nodes/{id}/capacity` fecha isso.
+
+| aspecto | o que vale |
+|---|---|
+| escrita | a **mesma** do admin (`NetworkNodeService.capacity`) — não existe caminho paralelo de configuração |
+| efeito | soma 1 em `configVersion`; o runtime aplica na próxima leitura da config assinada |
+| campo ausente | mantém o valor atual |
+| negativo | `400 NODE_CAPACITY_INVALID` |
+| perfil | **não** muda por esta rota — perfil é permissão de tipo de tarefa e continua decisão administrativa |
+| dono | conferido no **serviço** (404, nunca 403) |
+| auditoria | `NODE_CAPACITY_CHANGED_BY_PARTICIPANT`, com os quatro limites no metadado |
+
+O participante pode **subir e descer** os próprios limites. Um teto que só o admin sobe faria o
+participante pedir licença para emprestar mais da própria máquina, e o brief diz que ele "deverá
+conseguir controlar a utilização de sua infraestrutura". O que separa os dois atores é o perfil:
+tirar ou dar perfil muda **quais tarefas** o nó pode receber, e isso é aprovação humana.
