@@ -29,7 +29,10 @@ public final class ContentTaxonomy {
 		// família, política, fé, moda. Comunidades e posts antigos seguem válidos.
 		"FUN", "QUALIDADE_VIDA", "SAUDE", "VIAGEM", "COMIDA", "ESPORTES", "CINEMA", "LIVROS",
 		"FOTOGRAFIA", "CASA", "PETS", "PARENTALIDADE", "RELACIONAMENTOS", "MODA", "POLITICA",
-		"RELIGIAO");
+		"RELIGIAO",
+		// A #725 pediu um espaço para desabafo; como assunto, entra de graça no filtro
+		// "Assuntos que não gosto", sem mecanismo novo.
+		"DESABAFO");
 	/** Os oito originais, para não reclassificar nada que já existe. */
 	public static final List<String> ORIGINAL_TOPICS = List.of(
 		"TECNOLOGIA", "ENGENHARIA", "DESIGN", "PRODUTO", "LIDERANCA", "CARREIRA", "FREELANCE", "OUTROS");

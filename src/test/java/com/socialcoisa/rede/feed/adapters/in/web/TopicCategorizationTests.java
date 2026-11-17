@@ -86,6 +86,15 @@ class TopicCategorizationTests {
 			.andExpect(jsonPath("$.topic").value("GAMES"));
 	}
 
+	/** A #725 pediu o assunto "Desabafo"; sem ele na taxonomia o publish recusa com INVALID_TOPIC. */
+	@Test
+	void desabafoTopicIsAccepted() throws Exception {
+		String postId = publish("DESABAFO", "Post com o assunto desabafo.");
+		mockMvc.perform(get("/feed/posts/" + postId))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.topic").value("DESABAFO"));
+	}
+
 	@Test
 	void standalonePostWithoutTopicIsRejected() throws Exception {
 		mockMvc.perform(post("/feed/posts")
