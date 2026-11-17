@@ -282,7 +282,7 @@ Implementa: `GetFeedUseCase`, `GetProfilePostsUseCase`
 |---|---|
 | `getFeed(GetFeedQuery query)` | Retorna feed paginado para usuário, com abas: FOR_YOU, FOLLOWING, ALL, DISCUSSIONS, PROJECTS, RECENT |
 | `getProfilePosts(GetProfilePostsQuery query)` | Retorna posts de um perfil específico |
-| `getSavedFeed(UserId userId)` | Retorna posts salvos pelo usuário |
+| `getSavedFeed(UserId userId)` | Retorna posts salvos pelo usuário, preservando a ordem com mapa por id em O(S) |
 | `getCommunityFeed(String communityId, Instant cursor, int limit, UserId currentUser)` | Retorna feed de uma comunidade |
 | `enrich(List<Post> posts, UserId currentUserId)` | Enriquece posts com dados do autor e reação do usuário |
 | `filterByTab(List<Post> posts, FeedTab tab, UserId userId)` | Filtra posts por tipo de aba |

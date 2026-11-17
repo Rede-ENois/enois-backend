@@ -464,8 +464,10 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		List<Post> posts = postRepository.findByIds(postIds).stream()
 			.filter(Post::isActive).toList();
 		List<PostView> enriched = enrich(posts, userId);
+		Map<String, PostView> byId = enriched.stream()
+			.collect(Collectors.toMap(PostView::id, Function.identity(), (first, duplicate) -> first));
 		List<PostView> ordered = savedIds.stream()
-			.map(id -> enriched.stream().filter(p -> p.id().equals(id)).findFirst().orElse(null))
+			.map(byId::get)
 			.filter(java.util.Objects::nonNull)
 			.toList();
 		return new FeedPage(ordered, null);
