@@ -76,6 +76,55 @@ class StorageOverviewTests {
 			0, null, null);
 	}
 
+	/**
+	 * §17 pede "nós online e offline". Antes, o nó parado saía da soma (correto) e também do
+	 * painel (errado): não havia como saber QUEM caiu. O declarado dele continua fora da capacidade
+	 * — o teste usa um declarado GIGANTE no nó offline justamente para provar que ele não vaza para
+	 * a soma enquanto aparece na lista.
+	 */
+	@Test
+	void no_offline_aparece_na_lista_e_nao_soma_capacidade() {
+		NetworkNode vivo = storage("nd_vivo", 1000, 500L);
+		NetworkNode morto = node("nd_morto", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_STORAGE), 9_000_000,
+			800L, NOW.minusSeconds(600));
+		when(nodes.list(anyInt())).thenReturn(List.of(vivo, morto));
+
+		var c = overviewNodes.capacity();
+
+		assertThat(c.onlineNodes()).isEqualTo(1);
+		assertThat(c.offlineNodes()).isEqualTo(1);
+		assertThat(c.offline()).extracting(StorageOverviewNodes.OfflineNode::nodeId).containsExactly("nd_morto");
+		assertThat(c.offline().get(0).secondsSinceSeen()).isEqualTo(600);
+		// O disco do offline não entra: a capacidade é a do vivo.
+		assertThat(c.declaredMb()).isEqualTo(1000);
+		assertThat(c.freeMb()).isEqualTo(500L);
+	}
+
+	/** Nó que nunca bateu coração: ausente é diferente de "há 0 segundos". */
+	@Test
+	void no_que_nunca_apareceu_tem_ausencia_nula_nao_zero() {
+		when(nodes.list(anyInt())).thenReturn(List.of(storage("nd_ok", 1000, 500L),
+			node("nd_nunca", NodeStatus.PENDING_APPROVAL, Set.of(NodeProfile.NODE_STORAGE), 10, null, null)));
+
+		var c = overviewNodes.capacity();
+
+		assertThat(c.offline()).extracting(StorageOverviewNodes.OfflineNode::nodeId).containsExactly("nd_nunca");
+		assertThat(c.offline().get(0).secondsSinceSeen()).isNull();
+		assertThat(c.offline().get(0).lastSeenAt()).isNull();
+	}
+
+	/** Nó de processamento não é storage: não entra na conta de online/offline do Storage. */
+	@Test
+	void no_de_processamento_nao_entra_no_online_offline() {
+		when(nodes.list(anyInt())).thenReturn(List.of(storage("nd_ok", 1000, 500L),
+			node("nd_worker", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_WORKER), 10, 10L, NOW.minusSeconds(600))));
+
+		var c = overviewNodes.capacity();
+
+		assertThat(c.onlineNodes()).isEqualTo(1);
+		assertThat(c.offline()).isEmpty();
+	}
+
 	@Test
 	void disponivel_e_o_medido_no_heartbeat_nao_o_declarado() {
 		when(nodes.list(anyInt())).thenReturn(List.of(storage("nd_a", 102400, 5000L), storage("nd_b", 204800, 3000L)));

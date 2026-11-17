@@ -48,7 +48,8 @@ public class StorageOverviewService {
 	public record Overview(long capacityMb, Long freeMb, int nodesDeclaringCapacity, int unmeasuredNodes,
 			int unmeasuredDiskTotals, int unmeasuredUsage, List<StorageOverviewNodes.Disco> disks,
 			long usedBytes, Map<String, Long> objectsByState, Map<String, Long> copiesByState,
-			int objectsUnderReplicated, int replicasExpected, Map<String, Long> objectsByDurability) {
+			int objectsUnderReplicated, int replicasExpected, Map<String, Long> objectsByDurability, int onlineNodes,
+			int offlineNodes, List<StorageOverviewNodes.OfflineNode> offline) {
 	}
 
 	private final StorageCatalogRepository catalog;
@@ -94,6 +95,6 @@ public class StorageOverviewService {
 			capacidade.unmeasuredNodes(), capacidade.unmeasuredDiskTotals(), capacidade.unmeasuredUsage(),
 			capacidade.disks(), usado,
 			objetosPorEstado, copiasPorEstado, lacuna.underReplicated().size(), placement.targetReplicas(),
-			lacuna.byDurability());
+			lacuna.byDurability(), capacidade.onlineNodes(), capacidade.offlineNodes(), capacidade.offline());
 	}
 }
