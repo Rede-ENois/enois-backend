@@ -34,6 +34,9 @@ class MessageStreamTests {
 	@Autowired
 	private MessageStreamHub hub;
 
+	@Autowired
+	private org.springframework.context.ApplicationContext context;
+
 	@Test
 	void newMessageIsSignalledToTheRecipientStream() throws Exception {
 		var auth = new TestAuthHelper(mockMvc, objectMapper);
@@ -143,5 +146,32 @@ class MessageStreamTests {
 			.andExpect(status().is2xxSuccessful())
 			.andReturn();
 		return objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asText();
+	}
+
+	/**
+	 * #707: o envio real passa pela emissão no stream; a série da emissão tem que registrar o
+	 * desfecho ok (registry de produção, percentis inclusive) sem mudar o comportamento do POST.
+	 */
+	@Test
+	void envioRealRegistraEmissaoOkNaSerie() throws Exception {
+		var registry = context.getBean(io.micrometer.core.instrument.MeterRegistry.class);
+		assertThat(registry).isNotNull();
+
+		var auth = new TestAuthHelper(mockMvc, objectMapper);
+		var sender = auth.authenticate("msg_stream_metric_sender");
+		var recipient = auth.authenticate("msg_stream_metric_recipient");
+		String conversationId = directConversation(sender.token(), recipient.userId());
+		openStream(recipient.token());
+
+		mockMvc.perform(post("/conversations/" + conversationId + "/messages")
+				.header("X-Session-Token", sender.token())
+				.header("Idempotency-Key", "msg-stream-metric-send")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("text", "metrica"))))
+			.andExpect(status().is2xxSuccessful());
+
+		assertThat(registry.find(StreamEmissionMetrics.TIMER_NAME).tags("outcome", "ok").timer())
+			.as("emissao do aviso de conversa registrada como ok")
+			.isNotNull();
 	}
 }
