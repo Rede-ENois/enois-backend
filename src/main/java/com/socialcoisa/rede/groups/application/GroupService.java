@@ -2,7 +2,10 @@ package com.socialcoisa.rede.groups.application;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.stereotype.Service;
@@ -109,8 +112,13 @@ public class GroupService {
 
 	/** Membros de cada grupo de uma lista, numa consulta só. */
 	@Transactional(readOnly = true)
-	public java.util.Map<String, Long> countMembers(java.util.Collection<String> groupIds) {
+	public Map<String, Long> countMembers(Collection<String> groupIds) {
 		return repository.countMembers(groupIds);
+	}
+
+	@Transactional(readOnly = true)
+	public Map<String, GroupRole> rolesOf(Collection<String> groupIds, String userId) {
+		return repository.findRoles(groupIds, userId);
 	}
 
 	@Transactional(readOnly = true)
@@ -145,6 +153,11 @@ public class GroupService {
 	@Transactional(readOnly = true)
 	public boolean hasPendingRequest(String groupId, String userId) {
 		return repository.findPendingRequest(groupId, userId).isPresent();
+	}
+
+	@Transactional(readOnly = true)
+	public Set<String> pendingRequestsOf(Collection<String> groupIds, String userId) {
+		return repository.findPendingGroupIds(groupIds, userId);
 	}
 
 	@Transactional
