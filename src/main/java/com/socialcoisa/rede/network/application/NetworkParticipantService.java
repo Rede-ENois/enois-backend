@@ -113,6 +113,17 @@ public class NetworkParticipantService {
 		return myNode(ownerUserId, lifecycle.pauseParticipation(nodeId, ownerUserId).id());
 	}
 
+	/**
+	 * O participante redefine o que cede no próprio nó (brief §18, "definir capacidade máxima" e
+	 * "definir limites de banda"). Campo ausente mantém o valor atual.
+	 */
+	@Transactional
+	public NodeWithContribution capacity(String ownerUserId, String nodeId, Integer cpuCores, Integer memoryMb,
+			Integer diskMb, Integer bandwidthMbps) {
+		return myNode(ownerUserId,
+			lifecycle.participantCapacity(nodeId, ownerUserId, cpuCores, memoryMb, diskMb, bandwidthMbps).id());
+	}
+
 	/** Retoma a contribuição pausada pelo próprio participante. */
 	@Transactional
 	public NodeWithContribution resume(String ownerUserId, String nodeId) {

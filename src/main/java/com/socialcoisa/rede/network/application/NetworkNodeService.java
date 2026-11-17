@@ -421,6 +421,34 @@ public class NetworkNodeService {
 	@Transactional
 	public NetworkNode capacity(String nodeId, Integer cpuCores, Integer memoryMb, Integer diskMb,
 			Integer bandwidthMbps, String actorId) {
+		return capacity(nodeId, cpuCores, memoryMb, diskMb, bandwidthMbps, actorId, "NODE_CAPACITY_CHANGED");
+	}
+
+	/**
+	 * O participante redefinindo o que cede no próprio nó (brief §18: "definir capacidade máxima",
+	 * "definir limites de banda").
+	 *
+	 * <p>Reusa exatamente a mesma escrita do admin — a mudança compõe {@code configVersion} e o
+	 * runtime aplica na próxima leitura da config assinada. A diferença é só o ator.</p>
+	 *
+	 * <p>O participante pode <b>subir e descer</b> os próprios limites: o declarado é o que a
+	 * máquina dele cede, e o brief diz que ele "deverá conseguir controlar a utilização de sua
+	 * infraestrutura". Um teto que só o admin sobe obrigaria o participante a pedir licença para
+	 * emprestar mais da própria máquina.</p>
+	 *
+	 * <p>O que ele <b>não</b> pode mudar por esta porta é o perfil: perfil é permissão de tipo de
+	 * tarefa, e continua decisão administrativa ({@link #profiles}).</p>
+	 */
+	@Transactional
+	public NetworkNode participantCapacity(String nodeId, String ownerUserId, Integer cpuCores, Integer memoryMb,
+			Integer diskMb, Integer bandwidthMbps) {
+		requireOwned(nodeId, ownerUserId);
+		return capacity(nodeId, cpuCores, memoryMb, diskMb, bandwidthMbps, ownerUserId,
+			"NODE_CAPACITY_CHANGED_BY_PARTICIPANT");
+	}
+
+	private NetworkNode capacity(String nodeId, Integer cpuCores, Integer memoryMb, Integer diskMb,
+			Integer bandwidthMbps, String actorId, String action) {
 		if (anyNegative(cpuCores, memoryMb, diskMb, bandwidthMbps)) {
 			throw new ApiException(400, "NODE_CAPACITY_INVALID", "Capacidade nao pode ser negativa.");
 		}
@@ -432,8 +460,10 @@ public class NetworkNodeService {
 			diskMb != null ? diskMb : node.declaredDiskMb(),
 			bandwidthMbps != null ? bandwidthMbps : node.declaredBandwidthMbps(),
 			node.profiles().stream().toList(), clock.instant());
-		audit.record(actorId, "NODE_CAPACITY_CHANGED", nodeId, "{\"cpuCores\":" + (cpuCores == null ? "null"
-			: cpuCores) + ",\"memoryMb\":" + (memoryMb == null ? "null" : memoryMb) + "}");
+		audit.record(actorId, action, nodeId, "{\"cpuCores\":" + (cpuCores == null ? "null" : cpuCores)
+			+ ",\"memoryMb\":" + (memoryMb == null ? "null" : memoryMb) + ",\"diskMb\":"
+			+ (diskMb == null ? "null" : diskMb) + ",\"bandwidthMbps\":"
+			+ (bandwidthMbps == null ? "null" : bandwidthMbps) + "}");
 		return require(nodeId);
 	}
 

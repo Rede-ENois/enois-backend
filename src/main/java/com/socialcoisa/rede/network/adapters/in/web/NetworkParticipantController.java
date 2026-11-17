@@ -116,6 +116,27 @@ class NetworkParticipantController {
 		return MyNodeView.of(participant.resume(user.id().value(), id));
 	}
 
+	/** O que o participante cede neste nó. Campo ausente mantém o valor atual (brief §18). */
+	record CapacityRequest(Integer cpuCores, Integer memoryMb, Integer diskMb, Integer bandwidthMbps) {
+	}
+
+	/**
+	 * O participante ajusta os próprios limites — capacidade máxima e banda (brief §18).
+	 *
+	 * <p>Antes só o admin mudava capacidade: o participante precisava de um terceiro para emprestar
+	 * mais (ou menos) da própria máquina. A escrita é a mesma de {@code /admin/.../capacity}, então
+	 * a mudança compõe {@code configVersion} e o runtime aplica na próxima leitura — não existe
+	 * caminho paralelo de configuração. O que continua exclusivo do admin é o perfil.</p>
+	 */
+	@PostMapping("/nodes/{id}/capacity")
+	MyNodeView capacity(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String id, @RequestBody(required = false) CapacityRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return MyNodeView.of(participant.capacity(user.id().value(), id,
+			request == null ? null : request.cpuCores(), request == null ? null : request.memoryMb(),
+			request == null ? null : request.diskMb(), request == null ? null : request.bandwidthMbps()));
+	}
+
 	@PostMapping("/nodes/{id}/disconnect")
 	MyNodeView disconnect(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String id) {
