@@ -108,6 +108,15 @@ public interface StorageCatalogRepository {
 	/** Cópias por estado: {@code {quantidade, bytes}} cada. Mesma regra de ausência acima. */
 	java.util.Map<String, long[]> summarizePlacements();
 
+	/**
+	 * Objetos servíveis por bucket: {@code {quantidade, bytes}} cada, em ordem de bucket.
+	 *
+	 * <p>O tamanho do mapa é a resposta do "quantidade de buckets" do painel (§17) — uma consulta
+	 * agregada em vez de uma por bucket. Objeto {@code DELETED} não entra: lápide não é conteúdo,
+	 * e contar o bucket dela mostraria um bucket que o operador não tem.</p>
+	 */
+	java.util.Map<String, long[]> summarizeBuckets();
+
 	/** O que este nó hospeda, para o painel e para o nó saber o que tem. */
 	List<StoragePlacement> placementsOnNode(String nodeId);
 }

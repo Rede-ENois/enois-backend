@@ -363,6 +363,19 @@ class StorageScrubberReadBackTests {
 		}
 
 		@Override
+		public java.util.Map<String, long[]> summarizeBuckets() {
+			java.util.Map<String, long[]> porBucket = new java.util.TreeMap<>();
+			for (StorageObject o : objects) {
+				if (o.state() == StorageObjectState.DELETED) {
+					continue;
+				}
+				long[] par = porBucket.computeIfAbsent(o.bucket(), k -> new long[2]);
+				par[0]++;
+				par[1] += o.bytes() == null ? 0 : o.bytes();
+			}
+			return porBucket;
+		}
+
 		public java.util.Map<String, long[]> summarizeObjects() {
 			java.util.Map<String, long[]> porEstado = new java.util.LinkedHashMap<>();
 			for (StorageObject o : objects) {

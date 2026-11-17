@@ -115,6 +115,8 @@ estimados" — virou três separações explícitas no contrato:
 | `usedBytes` | bytes das cópias **`OK`**, medidos pelo Control Plane ao receber o corpo |
 | `objectsByState` / `copiesByState` | contagem por estado — `DELETED` ainda ocupa chave, não ocupa disco |
 | `objectsUnderReplicated` + `replicasExpected` | a lacuna **com o alvo ao lado**, porque "3 abaixo" sem alvo não diz se é saudável |
+| `objectsByDurability` | contagem por nível **efetivamente observado** (`SINGLE_DOMAIN`, `CROSS_REGION_PARTIAL`, `CROSS_REGION`) — ver [`13-storage-fase-3-replicacao.md`](13-storage-fase-3-replicacao.md) §2.1 |
+| `buckets` + `usageByBucket` | quantos buckets têm objeto servível e quanto cada um ocupa (`{objects, bytes}`). Bucket não é tabela: existe enquanto tem objeto, então o número é o de chaves distintas no `group by` — uma consulta só, coberta pelo índice `(bucket, object_key)` da V319 |
 
 Quem fica fora da conta, e por quê:
 
@@ -155,3 +157,13 @@ dele continua fora de toda soma: a mudança é de visibilidade, não de conta.
 `lastSeenAt`/`secondsSinceSeen` são **nulos** para quem nunca bateu coração — é o nó recém-enrolado,
 e "ausente" não é "há 0 segundos". Nó de processamento não entra na lista: o critério é o mesmo da
 soma (`OBJECT_PUT.allowedFor`), não o nome do perfil.
+
+**Bucket e lápide.** `buckets` conta objetos **servíveis**: o bucket que só tem lápide não aparece,
+porque lápide não é conteúdo e o operador não "tem" aquele bucket. Objeto `PENDING` conta na
+quantidade e soma **zero** bytes — ele existe e ainda não ocupa espaço medido. `Fotos` e `fotos` são
+**dois** buckets: o bucket é a chave do catálogo, não texto livre de tela, e normalizar aqui juntaria
+dois espaços de nomes.
+
+O SQL é `group by bucket` numa consulta só, com índice, e é verificado contra o H2 em
+`StorageCatalogBucketsPersistenceTests` — os testes do serviço usam mock e provariam a ligação, não
+a consulta.
