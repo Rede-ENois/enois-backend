@@ -134,3 +134,41 @@ Nenhuma migração nova: a fase 4 usa o catálogo e as colocações que a fase 1
 - **A rota colidia com `/{id}`.** A classe é mapeada em `/admin/network/nodes`, então
   `/storage/balance` ficou sob `/nodes/storage/balance`; o teste de autorização viu `200` em vez de
   `401` porque `/{id}` respondia.
+## 6. Tráfego e disponibilidade do nó (brief §18, V345)
+
+O §18 pede que o participante **consulte o tráfego** e a **disponibilidade** da máquina que cede.
+Os dois números têm origens diferentes, e misturá-los seria inventar um deles.
+
+**Tráfego: medido pelo nó.** `bytesInMb`/`bytesOutMb` vêm no heartbeat, acumulados nas interfaces do
+próprio nó (V345). O Control Plane só os guarda — contar bytes servidos do lado dele mediria o que o
+Control Plane transfere, não o que a máquina do participante consome da banda dele, e é a banda dele
+que o §18 quer mostrar. Nulo é "não mediu" (runtime anterior); zero é "medido, nada transferido".
+A proporção de saída (`outboundSharePercent`) é calculada aqui, nunca enviada pelo nó — senão um nó
+poderia dizer 90% de saída com 1 GB contra 10 GB de entrada.
+
+**Disponibilidade: medida pela rede.** A rede registra *transições*, não cada heartbeat (uma linha
+por ciclo por nó afogaria a trilha — ver `registrarReconexao`). O que ela consegue afirmar é o que a
+trilha prova: quantas vezes o nó voltou de uma ausência (`outages`, contados em
+`NETWORK_NODE_RECONNECTED`) e por quanto tempo ficou fora (`offlineSeconds`, somado dos
+`offlineForSeconds` de cada linha).
+
+Por isso `offlineSeconds` é acompanhado de dois campos:
+
+| campo | o que diz |
+|---|---|
+| `measuredOutages` | quantas das quedas entraram na soma |
+| `availabilityComplete` | `false` quando a soma é sobre **menos** quedas do que existem — a amostra de 200 linhas parou antes do fim, ou a linha não tinha o intervalo |
+
+`availabilityComplete=false` quer dizer que `offlineSeconds` é um **piso**, não o tempo fora real. A
+tela que apresentar o número como total estaria dizendo que o nó foi mais disponível do que foi.
+
+Linha de reconexão sem `offlineForSeconds` conta como queda — ela prova que houve uma — e não entra
+na soma: somar zero diria "voltou no mesmo instante", que é outra afirmação. Pelo mesmo motivo ela
+não vira `lastOfflineSeconds`.
+
+`online` usa a mesma janela de "vivo" do painel (`rede.network.node-stale-seconds`, 180 s): um nó
+"online" na tela do participante e "fora" no painel seriam dois números para o mesmo fato.
+
+**O que não existe.** Disponibilidade ao longo de um período (servido/parado por faixa de tempo),
+latência de tráfego, IOPS e velocidade — dependem de série histórica que o módulo não guarda além da
+amostra de observabilidade do último minuto, e de decisão de produto (§7 do brief).

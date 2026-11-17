@@ -54,7 +54,10 @@ class NetworkParticipantController {
 			String country, String runtimeVersion, Instant lastSeenAt, int declaredCpuCores, int declaredMemoryMb,
 			int declaredDiskMb, int declaredBandwidthMbps, Double observedCpuPercent, Integer observedMemoryMb,
 			Integer observedRunningTasks, Integer latencyMs, Long observedContentUsedMb, Double diskUsedPercent,
-			Long reservedDiskMb, long tasksDone, long tasksRequeued, boolean operable, String quarantineReason) {
+			Long reservedDiskMb, Long trafficInMb, Long trafficOutMb, Long trafficTotalMb,
+			Double outboundSharePercent, int outages, int measuredOutages, long offlineSeconds,
+			Long lastOfflineSeconds, boolean online, boolean availabilityComplete, long tasksDone, long tasksRequeued,
+			boolean operable, String quarantineReason) {
 
 		static MyNodeView of(NetworkParticipantService.NodeWithContribution entry) {
 			NetworkNode node = entry.node();
@@ -65,6 +68,11 @@ class NetworkParticipantController {
 				node.declaredDiskMb(), node.declaredBandwidthMbps(), node.observedCpuPercent(),
 				node.observedMemoryMb(), node.observedRunningTasks(), node.observedLatencyMs(),
 				node.observedContentUsedMb(), node.usedPercent(), node.reservedDiskMb(),
+				node.observedBytesInMb(), node.observedBytesOutMb(), node.observedTrafficMb(),
+				node.outboundSharePercent(),
+				entry.availability().outages(), entry.availability().measuredOutages(),
+				entry.availability().offlineSeconds(), entry.availability().lastOfflineSeconds(),
+				entry.availability().online(), entry.availability().complete(),
 				entry.tasksDone(), entry.tasksRequeued(),
 				node.canOperate(), quarantined ? node.quarantineReason() : null);
 		}

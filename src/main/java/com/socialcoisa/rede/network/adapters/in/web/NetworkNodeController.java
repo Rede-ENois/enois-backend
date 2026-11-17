@@ -85,8 +85,13 @@ class NetworkNodeController {
 			java.util.List<LogRequest> logs) {
 	}
 
+	/**
+	 * O que o nó mediu. {@code bytesInMb}/{@code bytesOutMb} são o tráfego ACUMULADO nas interfaces
+	 * dele (brief §18, "consultar tráfego"); o Control Plane só recebe a contagem e não soma nada
+	 * por conta própria — quem transfere é a máquina do participante, e é ela que mede.
+	 */
 	record Observed(Double cpuPercent, Integer memoryMb, Integer runningTasks, Long diskFreeMb,
-			Long diskTotalMb, Long usedMb) {
+			Long diskTotalMb, Long usedMb, Long bytesInMb, Long bytesOutMb) {
 	}
 
 	/**
@@ -134,7 +139,8 @@ class NetworkNodeController {
 			request == null ? null : request.runtimeVersion(), observed == null ? null : observed.cpuPercent(),
 			observed == null ? null : observed.memoryMb(), observed == null ? null : observed.runningTasks(),
 			observed == null ? null : observed.diskFreeMb(), observed == null ? null : observed.diskTotalMb(),
-			observed == null ? null : observed.usedMb(), request == null ? null : request.observedTerm()));
+			observed == null ? null : observed.usedMb(), observed == null ? null : observed.bytesInMb(),
+			observed == null ? null : observed.bytesOutMb(), request == null ? null : request.observedTerm()));
 		// acceptTasks também é falso quando o PRÓPRIO nó está em quarentena de status: é assim que
 		// o nó de TERM_CONFLICT drena na hora, sem precisar de 403 — 403 no heartbeat encerraria o
 		// canal pelo qual ele reporta o termo que viu.
