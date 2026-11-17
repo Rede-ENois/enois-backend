@@ -260,7 +260,7 @@ class JobServiceTests {
 	@Test
 	void editingDoesNotReopenAClosedJob() {
 		Job closed = openJob().closed(java.time.Instant.now());
-		when(repository.findById("job_1")).thenReturn(java.util.Optional.of(closed));
+		when(repository.findByIdForUpdate("job_1")).thenReturn(java.util.Optional.of(closed));
 
 		Job updated = service.update("job_1", "Backend II", "Acme", null, "Remoto", "CLT", "SENIOR", null, "BRL",
 			"1500", null, "MONTH", "Vaga de teste com valor.", List.of("Java"), List.of(), USER);
