@@ -47,7 +47,7 @@ A comparação usa `NetworkRegions.normalize` — a mesma de evacuação e afini
 | `skewed` | nós com desvio acima de **15 p.p.** |
 | `measurable` | `false` quando não há régua (nenhum disco medido, ou nenhuma cópia) |
 
-**A régua é a folga medido, não o declarado.** Um nó que declarou 1 TB e tem 10 GB livres é
+**A régua é a folga medida, não o declarado.** Um nó que declarou 1 TB e tem 10 GB livres é
 justamente quem não deve receber mais — é a mesma regra do `store` (507 `STORAGE_NO_DISK_SPACE`).
 
 **Só cópia `OK` conta.** Designada e não confirmada não ocupa disco; contá-la mandaria mover dados
@@ -60,6 +60,32 @@ cópias que tem, e `skewed` fica vazio — dizer "equilibrado" seria afirmar o q
 **Não move nada.** Mover cópias é transferência pela rede de quem participa; a decisão depende de
 banda, janela e prioridade (brief §16), que são escolha humana. O relatório entrega o "se" e o
 "quem"; o "quando" e o "quanto" não foram implementados.
+
+## 2.1 A colocação decide pela folga **cedida** (§8)
+
+Até a fase 4, `StoragePlacementService` ordenava e filtrava candidato pelo **disco livre** da
+máquina. Para o participante do §7 (2 TB de volume, 1,5 TB cedidos), o livre nunca chega a barrar:
+com 1,5 TB ocupados o disco ainda mede 500 GB, a colocação continua designando cópia, e o Énóis
+passa a ocupar mais do que a pessoa autorizou — o §8 pede "capacidade real dos participantes".
+
+Agora a folga é **cedida**: `declarado − ocupado`, com `ocupado = max(cópias OK somadas, uso medido
+pelo nó)`. O disco livre continua sendo régua, junto: ceder 50 GB num disco com 500 MB não é espaço.
+
+| situação | colocação | `store` |
+|---|---|---|
+| folga cedida ≥ piso (1 GiB) + a cópia | designa | grava |
+| folga cedida < piso | não designa | **507 `STORAGE_NO_CEDENT_SPACE`** com cedido, ocupado e piso |
+| disco livre < piso | não designa | 507 `STORAGE_NO_DISK_SPACE` |
+| declarado ausente (teto `0`) | **não designa** | 507 `STORAGE_NO_CEDENT_SPACE` |
+
+O último caso é a mudança de contrato desta rodada: antes, "não medir não é saber que não cabe"
+mandava ser permissivo. A medida que faltava não era o disco — era o número que só o participante
+pode dar, e nó sem teto recebia cópia sem limite nenhum, contra o §7 ("não permitir que ...
+consuma além do limite"). Nó de storage precisa de `declared_disk_mb` no enrollment.
+
+`ocupado` usa o **maior** entre o confirmado no catálogo e o uso que o nó mediu em si (V344): os
+dois são limites de baixo do uso real, e o menor esconderia o espaço que um deles já viu ocupado
+(cópia interrompida deixa arquivo no volume sem estar confirmada).
 
 ## 3. O que NÃO está entregue
 
