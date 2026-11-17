@@ -221,6 +221,11 @@ public class NetworkNodeService {
 		// histórico de conexão). `lastSeenAt` antigo diz que houve uma janela sem contato; sem este
 		// registro, o painel mostra "conectado agora" e não conta que a máquina ficou fora.
 		registrarReconexao(authenticated, now);
+		// O IP de origem vem do transporte, não do corpo: o nó atrás de NAT (brief §5) não informa
+		// endereço, e um campo no corpo seria o nó afirmando o próprio endereço — o oposto de medir.
+		if (beat.observedIp() != null && !beat.observedIp().isBlank()) {
+			nodes.observeIp(authenticated.id(), beat.observedIp(), now);
+		}
 		nodes.touch(authenticated.id(), beat.runtimeVersion(), beat.cpuPercent(), beat.memoryMb(),
 			beat.runningTasks(), beat.diskFreeMb(), beat.diskTotalMb(), beat.contentUsedMb(), beat.bytesInMb(),
 			beat.bytesOutMb(), now);
@@ -569,7 +574,7 @@ public class NetworkNodeService {
 
 	public record HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 			Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Long bytesInMb,
-			Long bytesOutMb, Integer observedTerm) {
+			Long bytesOutMb, Integer observedTerm, String observedIp) {
 
 		/**
 		 * Heartbeat de runtime anterior ao tráfego medido (V345): os dois contadores ficam nulos.
@@ -581,7 +586,7 @@ public class NetworkNodeService {
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Integer observedTerm) {
 			this(runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, diskTotalMb, contentUsedMb, null,
-				null, observedTerm);
+				null, observedTerm, null);
 		}
 
 		/**
@@ -594,7 +599,7 @@ public class NetworkNodeService {
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Integer observedTerm) {
 			this(runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, diskTotalMb, null, null, null,
-				observedTerm);
+				observedTerm, null);
 		}
 
 		/**
@@ -606,7 +611,7 @@ public class NetworkNodeService {
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Integer observedTerm) {
 			this(runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, null, null, null, null,
-				observedTerm);
+				observedTerm, null);
 		}
 	}
 }

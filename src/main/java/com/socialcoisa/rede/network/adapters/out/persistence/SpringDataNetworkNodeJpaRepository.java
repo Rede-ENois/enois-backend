@@ -71,7 +71,27 @@ interface SpringDataNetworkNodeJpaRepository extends JpaRepository<NetworkNodeJp
 			+ "where n.id = :id and n.status <> 'REVOKED'")
 	int touchConfig(@Param("id") String id, @Param("now") Instant now);
 
-	@Modifying
+	/**
+	 * Marca o instante da mudança de IP <b>antes</b> de sobrescrever o endereço.
+	 *
+	 * <p>Duas instruções em vez de um `case when` numa só: a condição "o IP anterior não é nulo e
+	 * é diferente do novo" precisa ler a coluna que a outra instrução escreve, e no JPA/JPQL isso
+	 * sai como `InvalidDataAccessApiUsageException` em alguns caminhos de flush. Aqui a ordem é
+	 * explícita: primeiro decide olhando o valor antigo, depois grava o novo.</p>
+	 *
+	 * <p>Não marca quando não havia valor: o primeiro contato é conhecimento, não mudança.</p>
+	 */
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Query("update NetworkNodeJpaEntity n set n.observedIpChangedAt = :now "
+			+ "where n.id = :id and n.observedIp is not null and n.observedIp <> :ip")
+	int markIpChanged(@Param("id") String id, @Param("ip") String ip, @Param("now") Instant now);
+
+	/** Grava o endereço de origem visto agora. Separado da marca para a ordem não depender do ORM. */
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Query("update NetworkNodeJpaEntity n set n.observedIp = :ip where n.id = :id")
+	int setObservedIp(@Param("id") String id, @Param("ip") String ip);
+
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
 	@Query("update NetworkNodeJpaEntity n set n.runtimeVersion = :version, n.observedCpuPercent = :cpu, "
 			+ "n.observedMemoryMb = :memory, n.observedRunningTasks = :tasks, n.observedDiskFreeMb = :diskFree, "
 			+ "n.observedDiskTotalMb = :diskTotal, n.observedContentUsedMb = :usedMb, "

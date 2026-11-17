@@ -460,6 +460,11 @@ class NetworkConfigServiceTests {
 		}
 
 		@Override
+		public void observeIp(String id, String ip, Instant now) {
+			throw new AssertionError("nao usado");
+		}
+
+		@Override
 		public void touchConfig(String id, Instant now) {
 			throw new AssertionError("nao usado");
 		}

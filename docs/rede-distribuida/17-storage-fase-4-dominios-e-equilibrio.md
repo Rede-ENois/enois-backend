@@ -292,3 +292,37 @@ inclui o caso de lista adulterada depois de assinada, que tem de ser recusada.
 - **CDC do Cooperative (§4)** continua bloqueado por decisão de infra.
 - **Sem IOPS, SMART ou disponibilidade por faixa** (§7): o que existe é disco livre, total, uso de
   conteúdo e tráfego medidos pelo nó.
+
+## 9. IP de origem e mudança de endereço (brief §5, V350)
+
+O §5 lista o que o participante doméstico **não** deve precisar fazer: contratar IP público,
+configurar DNS, abrir portas, informar IP no painel. A consequência é que a rede não deve
+**perguntar** o endereço — ela o **observa** na borda do heartbeat.
+
+| coluna | o que é |
+|---|---|
+| `observed_ip` | último endereço de origem visto; nulo é "não medido" |
+| `observed_ip_changed_at` | instante da última **mudança**; nulo é "nunca mudou desde o primeiro contato" |
+
+Regras, todas provadas por teste:
+
+1. **Primeiro contato não é mudança** — grava o IP e deixa o instante nulo (houve conhecimento,
+   não troca).
+2. **O mesmo IP não move o instante** — nó doméstico bate coração a cada ciclo; reescrever a marca
+   a cada vez faria o painel dizer "mudou há 15 segundos" para sempre. Mesmo princípio da
+   reconexão (§8.6): registra-se a **transição**, não a amostra.
+3. **`X-Forwarded-For` vence o socket**, e o primeiro item da lista é o cliente: atrás do proxy, o
+   socket fala com o proxy, não com o nó.
+4. Sem nenhum dos dois, devolve nulo e **nada é gravado** — nunca um endereço inventado.
+
+O IP entra pelo **transporte**, não pelo corpo: um campo no JSON seria o nó afirmando o próprio
+endereço, o oposto de medir.
+
+### O que NÃO está entregue
+
+- **Reverse tunnel**: o brief manda "reutilizar o mecanismo de Reverse Tunnel existente", e ele
+  **não existe**. O modelo é pull curto (`GET /network/tasks/next` a cada `NODE_POLL_SECONDS`).
+  Isso já atende NAT (o nó só faz saída), mas não permite ao Control Plane **empurrar** trabalho.
+- **Multiplexação, renovação de credenciais, transferências retomáveis, recuperação de sessões**:
+  inexistentes. `NODE_POLL_SECONDS` fixo, sem backoff; a chave do nó não expira nem roda.
+- A detecção de IP **registra**, não age: não há política que reaja a uma troca de endereço.

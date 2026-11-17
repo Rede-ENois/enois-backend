@@ -294,15 +294,15 @@ nullable network_nodes observed_bytes_in_mb \
   || fail "V345: observed_bytes_in_mb NOT NULL — runtime antigo não conseguiria gravar"
 
 
-# ---------------------------------------------------------------- V347: banda por tipo (brief §6)
+# ---------------------------------------------------------------- V348: banda por tipo (brief §6)
 # A tabela por (nó, tipo) tem PRIMARY KEY composta e FOREIGN KEY para `network_nodes` com
 # `on delete cascade`: o H2 aceita `on duplicate key update` em formas que o MariaDB recusa, e a
 # cascata só se prova apagando o nó num banco que a force. Mesmo motivo da V345 para estar aqui.
-NODE_KIND_BW=V347__network_node_storage_bandwidth.sql
+NODE_KIND_BW=V348__network_node_storage_bandwidth.sql
 [[ -f "$MIGRATIONS/$NODE_KIND_BW" ]] || fail "migração ausente: $NODE_KIND_BW"
 
 if apply "$NODE_KIND_BW" >/dev/null 2>&1; then
-  pass "V347: aplica sobre network_nodes no banco real"
+  pass "V348: aplica sobre network_nodes no banco real"
 else
   fail "1ª aplicação falhou: $NODE_KIND_BW"
   db < "$MIGRATIONS/$NODE_KIND_BW" 2>&1 | head -3 >&2 || true
@@ -321,7 +321,7 @@ else
 fi
 
 if apply "$NODE_KIND_BW" >/dev/null 2>&1; then
-  pass "V347: reaplicar não falha (idempotente)"
+  pass "V348: reaplicar não falha (idempotente)"
 else
   fail "2ª aplicação falhou (não idempotente): $NODE_KIND_BW"
 fi
@@ -371,6 +371,59 @@ then
     || fail "sobraram $left linha(s) de banda de um nó apagado"
 else
   fail "não foi possível exercitar a cascata"
+fi
+
+
+# ---------------------------------------------------------------- V350: IP de origem (brief §5)
+# "Detecção de mudança de IP". Duas colunas na tabela do enroll, nulas por padrão: nulo em
+# `observed_ip` é "não medido" e nulo em `observed_ip_changed_at` é "nunca mudou" — a V350 não pode
+# gravar valor em linha existente, ou todo nó já cadastrado nasceria com um endereço inventado.
+NODE_IP=V350__network_node_observed_ip.sql
+[[ -f "$MIGRATIONS/$NODE_IP" ]] || fail "migração ausente: $NODE_IP"
+
+if apply "$NODE_IP" >/dev/null 2>&1; then
+  pass "V350: aplica sobre network_nodes no banco real"
+else
+  fail "1ª aplicação falhou: $NODE_IP"
+  db < "$MIGRATIONS/$NODE_IP" 2>&1 | head -3 >&2 || true
+fi
+
+# A linha que já existia (nd_traf001, com tráfego gravado) fica com as duas colunas NULAS:
+# migração de coluna não inventa medição para quem não mediu.
+ipstate=$(db -N -e "select concat(ifnull(observed_ip,'nulo'), '/', ifnull(observed_ip_changed_at,'nulo'))
+  from network_nodes where id = 'nd_traf001'" 2>/dev/null | tr -d '[:space:]')
+[[ "$ipstate" == "nulo/nulo" ]] && pass "V350: nó existente nasce com IP e mudança nulos" \
+  || fail "esperava nulo/nulo, achei '$ipstate'"
+
+if db >/dev/null 2>&1 <<'SQL'
+update network_nodes set observed_ip = '203.0.113.10', observed_ip_changed_at = now(3)
+where id = 'nd_traf001';
+SQL
+then
+  pass "V350: colunas aceitam endereço e instante"
+else
+  fail "V350: não foi possível gravar IP e instante"
+fi
+
+if apply "$NODE_IP" >/dev/null 2>&1; then
+  pass "V350: reaplicar não falha (idempotente)"
+else
+  fail "2ª aplicação falhou (não idempotente): $NODE_IP"
+fi
+
+ipafter=$(db -N -e "select observed_ip from network_nodes where id = 'nd_traf001'" 2>/dev/null | tr -d '[:space:]')
+[[ "$ipafter" == "203.0.113.10" ]] && pass "o IP gravado sobreviveu à 2ª aplicação" \
+  || fail "esperava 203.0.113.10, achei '$ipafter'"
+
+# 45 caracteres cabem: o maior endereço textual é IPv6 com zona.
+if db >/dev/null 2>&1 <<'SQL'
+update network_nodes set observed_ip = '2001:0db8:85a3:0000:0000:8a2e:0370:7334'
+where id = 'nd_traf001';
+SQL
+then
+  pass "V350: observed_ip cabe um IPv6 completo"
+else
+  fail "V350: observed_ip não aceitou IPv6"
 fi
 
 printf '\nStorage migration: PASS %d | FAIL %d\n' "$PASS" "$FAIL"
