@@ -106,21 +106,22 @@ public class InterviewSlotService {
 		ZonedDateTime cursor = from.atZone(zone).toLocalDate().atStartOfDay(zone);
 		while (cursor.toInstant().isBefore(to) && slots.size() < MAX_SLOTS) {
 			if (cursor.getDayOfWeek().getValue() == window.dayOfWeek()) {
-				collectDay(window, cursor.toLocalDate().atStartOfDay(zone), to, length, requesterId, slots);
+				collectDay(window, cursor.toLocalDate().atStartOfDay(zone), from, to, length, requesterId, slots);
 			}
 			cursor = cursor.plusDays(1);
 		}
 	}
 
-	private void collectDay(CalendarAvailabilityWindow window, ZonedDateTime dayStart, Instant to, Duration length,
-			String requesterId, List<Slot> slots) {
+	private void collectDay(CalendarAvailabilityWindow window, ZonedDateTime dayStart, Instant from, Instant to,
+			Duration length, String requesterId, List<Slot> slots) {
 		ZoneId zone = window.zone();
 		Instant windowStart = dayStart.with(window.startsAt()).toInstant();
 		Instant windowEnd = dayStart.with(window.endsAt()).toInstant();
 		for (Instant start = windowStart; !start.plus(length).isAfter(windowEnd)
 				&& start.plus(length).isBefore(to) && slots.size() < MAX_SLOTS; start = start.plus(STEP)) {
 			Instant end = start.plus(length);
-			if (conflicts.hasConflict(requesterId, start, end, CalendarScope.PROFESSIONAL, null)) {
+			if (start.isBefore(from)
+					|| conflicts.hasConflict(requesterId, start, end, CalendarScope.PROFESSIONAL, null)) {
 				continue;
 			}
 			slots.add(new Slot(start.toString(), end.toString(), zone.getId()));

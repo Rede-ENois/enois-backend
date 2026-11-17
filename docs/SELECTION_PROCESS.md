@@ -484,6 +484,10 @@ availability`), em passos de meia hora, descartando o que já ocupa a agenda pro
 pessoa. Nunca lê a agenda do candidato: a agenda dele é privada, e quem responde se o horário serve
 é ele, pelo convite.
 
+Nenhum começo sugerido antecede `max(from, agora)`. O passo continua ancorado no início da
+disponibilidade: numa janela iniciada às 9h, consultar a partir de 11h10 começa nas 11h30,
+sem criar um horário fora da grade.
+
 Sem janela declarada, a resposta traz `reasonCode` `NO_AVAILABILITY`; com as janelas todas ocupadas,
 `NO_FREE_SLOT` — lista vazia **com motivo**, nunca uma lista inventada de horários.
 
