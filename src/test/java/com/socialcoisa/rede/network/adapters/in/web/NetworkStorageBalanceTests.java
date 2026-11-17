@@ -143,12 +143,16 @@ class NetworkStorageBalanceTests {
 
 	// ---------------------------------------------------------------- apoio
 
+	// Região-fixture própria: a base H2 é compartilhada e a NetworkRegionTests deixa 'sudeste'
+	// declarada fora de operação; nós de região evacuada não contam capacidade.
+	private static final String REGIAO_FIXTURE = "balance-fixture";
+
 	private void insertNode(String id) {
 		jdbc.update("""
 			insert into network_nodes (id, display_name, owner_user_id, status, profiles, declared_cpu_cores,
 			  declared_memory_mb, declared_disk_mb, declared_bandwidth_mbps, region, country, created_at, last_seen_at)
-			values (?, ?, 'owner-balance', 'ACTIVE', 'NODE_STORAGE', 4, 8192, 102400, 100, 'sudeste', 'BR', now(3), now(3))
-			""", id, "no-" + id);
+			values (?, ?, 'owner-balance', 'ACTIVE', 'NODE_STORAGE', 4, 8192, 102400, 100, ?, 'BR', now(3), now(3))
+			""", id, "no-" + id, REGIAO_FIXTURE);
 	}
 
 	private String adminToken() throws Exception {
