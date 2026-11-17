@@ -52,7 +52,8 @@ class NetworkNodePauseOwnerTests {
 		keys = mock(NodeKeyService.class);
 		service = new NetworkNodeService(nodes, mock(NetworkAuthorityRepository.class),
 			mock(ProvisionTokenRepository.class), keys, mock(AuditTrail.class), Clock.fixed(NOW, ZoneOffset.UTC), 30, 600,
-			180, mock(NetworkNodeResponsibleRepository.class));
+			180, mock(NetworkNodeResponsibleRepository.class),
+			mock(com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository.class));
 	}
 
 	/** Pausar o nó de outro participante é 404 — e o nó fica como estava. */
@@ -87,7 +88,8 @@ class NetworkNodePauseOwnerTests {
 		AuditTrail audit = mock(AuditTrail.class);
 		var own = new NetworkNodeService(nodes, mock(NetworkAuthorityRepository.class),
 			mock(ProvisionTokenRepository.class), keys, audit, Clock.fixed(NOW, ZoneOffset.UTC), 30, 600, 180,
-			mock(NetworkNodeResponsibleRepository.class));
+			mock(NetworkNodeResponsibleRepository.class),
+			mock(com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository.class));
 
 		own.pauseParticipation("nd_1", DONO);
 
@@ -129,4 +131,79 @@ class NetworkNodePauseOwnerTests {
 			null, null, null, null, (Long) null, 0, null, null);
 	}
 
+	// ------------------------------------------------- §6: banda por tipo, no serviço
+
+	/**
+	 * O tipo tem de estar entre os perfis do nó. Limite para tipo que ele não oferece encheria a
+	 * config assinada com uma banda que o runtime nunca aplica — assinada, inclusive, o que faria o
+	 * número mentiroso parecer autorizado.
+	 *
+	 * <p>Chamado no SERVIÇO, não na rota: com a checagem só no controller, qualquer outro chamador
+	 * gravaria o limite.</p>
+	 */
+	@Test
+	void banda_por_tipo_que_o_no_nao_declara_e_recusada() {
+		var lifecycle = mock(NetworkNodeService.class);
+		var bandwidth = mock(com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository.class);
+		when(lifecycle.require("nd_1"))
+			.thenReturn(storageNode(Set.of(com.socialcoisa.rede.network.domain.NodeProfile.NODE_STORAGE_MEDIA)));
+		var participant = participant(lifecycle, bandwidth);
+
+		assertThatThrownBy(() -> participant.storageBandwidth(DONO, "nd_1", "ARCHIVE", 10))
+			.isInstanceOf(ApiException.class)
+			.extracting(error -> ((ApiException) error).status())
+			.isEqualTo(409);
+
+		verify(lifecycle, never()).setStorageBandwidth(anyString(), anyString(), any(), anyInt());
+	}
+
+	/** Banda por tipo do nó de OUTRO participante: 404, e nada gravado. */
+	@Test
+	void banda_por_tipo_de_no_alheio_nao_grava() {
+		var lifecycle = mock(NetworkNodeService.class);
+		var bandwidth = mock(com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository.class);
+		when(lifecycle.require("nd_1"))
+			.thenReturn(storageNodeOf(OUTRO, Set.of(com.socialcoisa.rede.network.domain.NodeProfile.NODE_STORAGE_MEDIA)));
+		var participant = participant(lifecycle, bandwidth);
+
+		assertThatThrownBy(() -> participant.storageBandwidth(DONO, "nd_1", "MEDIA", 10))
+			.isInstanceOf(ApiException.class)
+			.extracting(error -> ((ApiException) error).status())
+			.isEqualTo(404);
+
+		verify(lifecycle, never()).setStorageBandwidth(anyString(), anyString(), any(), anyInt());
+	}
+
+	/** Tipo declarado e valor nulo: remove a especialização, para o tipo voltar à banda geral. */
+	@Test
+	void banda_por_tipo_nula_remove() {
+		var lifecycle = mock(NetworkNodeService.class);
+		var bandwidth = mock(com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository.class);
+		when(lifecycle.require("nd_1"))
+			.thenReturn(storageNode(Set.of(com.socialcoisa.rede.network.domain.NodeProfile.NODE_STORAGE_MEDIA)));
+		var participant = participant(lifecycle, bandwidth);
+
+		participant.storageBandwidth(DONO, "nd_1", "media", null);
+
+		verify(lifecycle).removeStorageBandwidth(eq("nd_1"), eq(DONO),
+			eq(com.socialcoisa.rede.network.domain.StorageNodeKind.MEDIA));
+		verify(lifecycle, never()).setStorageBandwidth(anyString(), anyString(), any(), anyInt());
+	}
+
+	private NetworkParticipantService participant(NetworkNodeService lifecycle,
+			com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository bandwidth) {
+		return new NetworkParticipantService(nodes, mock(com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository.class),
+			mock(com.socialcoisa.rede.feed.application.port.out.AuditLogRepository.class), lifecycle,
+			bandwidth, Clock.fixed(NOW, ZoneOffset.UTC), 180);
+	}
+
+	private static NetworkNode storageNode(Set<com.socialcoisa.rede.network.domain.NodeProfile> profiles) {
+		return storageNodeOf(DONO, profiles);
+	}
+
+	private static NetworkNode storageNodeOf(String owner,
+			Set<com.socialcoisa.rede.network.domain.NodeProfile> profiles) {
+		return new NetworkNode("nd_1", "no", owner, NodeStatus.ACTIVE, profiles, null, null, null, NOW, 4, 8192, 102400,
+			100, null, null, null, null, (Long) null, 0, null, null);
+	}
 }

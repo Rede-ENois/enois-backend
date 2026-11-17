@@ -43,6 +43,16 @@ sign_limits_config() {
   sign_config "6|$cv|nd_exec1|$profiles|$cpu|$mem|$disk|$bw|$tasks|$routes|2026-11-12T12:00:00Z|$ttl|$term|$free|$total"
 }
 
+sign_kind_config() {
+  # sign_kind_config <configVersion> <profiles-json> <tasks-json> <storageBandwidth-json> [term]:
+  # formato 7 (brief §6) — a lista de banda por tipo entra no FIM, depois do tamanho do volume.
+  # Os limites são os da config de réplica (1 CPU / 1024 MB / 20 GB / 8 Mbps), os mesmos que os
+  # mocks abaixo servem: linha assinada e JSON têm de dizer o mesmo, ou a assinatura não confere.
+  local cv="$1" profiles="$2" tasks="$3" kinds="$4" term="${5:-2}"
+  local line="7|$cv|nd_exec1|$profiles|1|1024|20480|8|$tasks|[]|2026-11-12T12:00:00Z|300|$term|ausente|ausente|$kinds"
+  sign_config "$line"
+}
+
 PASS=0
 assert_eq() {
   local name="$1" expected="$2" actual="$3"
@@ -1092,6 +1102,58 @@ out=$(run_custom "$NCBW")
 assert_contains 'nó sem banda declarada baixa sem --limit-rate' "$(cat "$TMP/curl-calls")" 'content/PROFILE/nobw'
 assert_not_contains 'banda 0 não injeta limite' "$(cat "$TMP/curl-calls")" '--limit-rate'
 assert_contains 'sincronização segue completa sem teto' "$(cat "$TMP/curl-calls")" 'nobw/synced'
+
+# ------------------------------------------------- cenário 25b: banda por tipo de storage (formato 7)
+# Brief §6: o participante dá a cada tipo de storage node um teto próprio. A lista assinada
+# ["MEDIA=2"] vale MAIS que a banda geral (8 Mbps): o tipo reservou 2 para si, e aplicar os 8
+# do nó seria ceder quatro vezes o que ele aceitou. 2 Mbps = 250 kB/s.
+NKIND="$TMP/node-kind"; rm -rf "$NKIND"; mkdir -p "$NKIND"; chmod 700 "$NKIND"
+cp "$NH/node.json" "$NKIND/node.json"; cp "$NH/api-key" "$NKIND/api-key"
+cp "$NH/pinning-key" "$NKIND/pinning-key"
+CONFIG_KIND='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":7,"ttlSeconds":300,"configVersion":15,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":20480,"bandwidthMbps":8,"storageBandwidth":["MEDIA=2"]},"allowedTasks":["READ_QUERY"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_kind_config 15 '["NODE_READ_REPLICA"]' '["READ_QUERY"]' '["MEDIA=2"]')"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_KIND' ;;
+  */network/tasks/next) printf '%s' '{"tasks":[{"taskId":"tk_kind","type":"READ_QUERY","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"replica:kind","payload":"{\\"kind\\":\\"PROFILE\\"}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}' ;;
+  */network/replica/PROFILE*) printf '%s' '{"kind":"PROFILE","items":["kinduser"],"hasMore":false,"nextAfterAt":"2026-11-11T10:00:00Z","nextAfterId":"u1"}' ;;
+  */network/content/PROFILE/kinduser/synced) printf '%s' '{"contentId":"kinduser","status":"SYNCED"}' ;;
+  */network/content/PROFILE/kinduser*)
+    printf '%s' '{"kind":"PROFILE","contentId":"kinduser","version":1,"contentHash":"h-kd","changed":true,"body":"{\\"username\":\"nb\"}"}'
+    [[ "\$*" == *"-w"* ]] && printf '\n200' ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NKIND")
+assert_contains 'formato 7 com banda por tipo é aceito' "$(cat "$TMP/curl-calls")" 'content/PROFILE/kinduser/synced'
+assert_contains 'o teto do tipo vence a banda geral' "$(cat "$TMP/curl-calls")" '--limit-rate 250k'
+assert_not_contains 'a banda geral de 8 Mbps não sobrescreve o tipo' "$(cat "$TMP/curl-calls")" '--limit-rate 1000k'
+
+# A lista vai ASSINADA: trocar "MEDIA=2" por "MEDIA=100" depois de assinada tem de invalidar.
+# Sem esta conferência, o runtime reconstruiria a linha sem a lista (formato <= 6) e a
+# adulteração passaria — o participante cedia o que o intermediário quisesse.
+TAMPERED_KIND="$(sign_kind_config 16 '["NODE_READ_REPLICA"]' '["READ_QUERY"]' '["MEDIA=2"]')"
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":7,"ttlSeconds":300,"configVersion":16,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":20480,"bandwidthMbps":8,"storageBandwidth":["MEDIA=100"]},"allowedTasks":["READ_QUERY"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"$TAMPERED_KIND","algorithm":"Ed25519","publicKey":"$CP_PUB"}' ;;
+  *) printf 'CHAMADA-INESPERADA %s' "\$url" >> "$TMP/curl-calls" ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom)
+assert_contains 'banda por tipo adulterada invalida a assinatura' "$out" 'assinatura da config não confere com o pino'
+assert_not_contains 'config com banda por tipo adulterada não habilita execução' "$(cat "$TMP/curl-calls")" '/network/tasks/next'
 
 # ------------------------------------------------- cenário 26: Control Plane fora dentro do TTL
 # Doc 06 §6, primeira linha: "Control Plane fora por < TTL de config → nós continuam com a última

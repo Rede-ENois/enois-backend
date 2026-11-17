@@ -56,8 +56,12 @@ class TaskTypeAuthorizationTests {
 		for (NodeProfile profile : NodeProfile.values()) {
 			Set<NodeProfile> profiles = Set.of(profile);
 			List<TaskType> daConfig = TaskType.allowedTypesFor(profiles);
+			// A regra esperada, reescrita do contrato: o perfil cobre o tipo quando é o exigido;
+			// NODE_LOCAL cobre todos; e os tipos de armazenamento são cobertos por QUALQUER perfil
+			// de storage (brief §6 — ver o teste abaixo).
 			List<TaskType> esperado = Arrays.stream(TaskType.values())
-				.filter(type -> type.requiredProfile() == profile || profile == NodeProfile.NODE_LOCAL)
+				.filter(type -> type.requiredProfile() == profile || profile == NodeProfile.NODE_LOCAL
+					|| (type.isStorage() && profile.storageKind() != null))
 				.toList();
 			assertEquals(esperado, daConfig, () -> "divergiu para " + profile);
 		}
@@ -65,34 +69,49 @@ class TaskTypeAuthorizationTests {
 
 	/**
 	 * O Storage entrou na fase 1 (docs/rede-distribuida/12-storage-fase-1.md) com perfil e tipos
-	 * PRÓPRIOS. A invariante que a fase 0 fixou continua valendo e é o que este teste guarda agora:
-	 * armazenamento nunca é autorizado por um perfil existente — só por {@code NODE_STORAGE}, e
-	 * {@code NODE_STORAGE} não autoriza nada além de armazenamento. Se alguém acrescentar
-	 * {@code OBJECT_PUT} ao {@code NODE_MEDIA} "porque é conveniente", o nó de mídia passaria a
-	 * guardar bytes de terceiros sem o participante ter consentido com disco.
+	 * PRÓPRIOS. A invariante da fase 0 continua valendo para todo perfil que <b>não</b> é de
+	 * armazenamento: {@code OBJECT_PUT}/{@code OBJECT_GET} nunca são autorizados por ele. Se
+	 * alguém acrescentar {@code OBJECT_PUT} ao {@code NODE_MEDIA}"porque é conveniente", o nó de
+	 * mídia passaria a guardar bytes de terceiros sem o participante ter consentido com disco.
+	 *
+	 * <p>A partir do brief §6 o inverso mudou de forma, não de fundo: os seis tipos de storage
+	 * ({@code NODE_STORAGE} e os especializados) autorizam armazenamento — a especialização é
+	 * aditiva, e é a colocação que prefere um tipo a outro. O que este teste guarda agora é que
+	 * todo perfil com {@code storageKind()} autoriza exatamente os tipos de armazenamento e nada
+	 * mais, e que quem não tem {@code storageKind()} não autoriza nenhum dos dois.</p>
 	 */
 	@Test
-	void armazenamentoSoEhAutorizadoPeloPerfilProprioDeStorage() {
-		Set<NodeProfile> deHoje = Arrays.stream(NodeProfile.values())
-			.filter(profile -> profile != NodeProfile.NODE_STORAGE && profile != NodeProfile.NODE_LOCAL)
-			.collect(Collectors.toSet());
+	void armazenamentoSoEhAutorizadoPorPerfilDeStorage() {
+		Set<String> armazenamento = Set.of("OBJECT_PUT", "OBJECT_GET");
 
-		for (NodeProfile profile : deHoje) {
-			for (TaskType tipo : TaskType.values()) {
-				String nome = tipo.name();
-				if (!nome.equals("OBJECT_PUT") && !nome.equals("OBJECT_GET")) {
-					continue;
-				}
-				assertFalse(tipo.allowedFor(Set.of(profile)),
-					nome + " não pode ser autorizado por " + profile + " — só por NODE_STORAGE");
+		for (NodeProfile profile : NodeProfile.values()) {
+			if (profile == NodeProfile.NODE_LOCAL) {
+				// Infraestrutura do Énóis executa tudo: é prioridade de escalonamento, não permissão
+				// nova — a distinção que o teste protege não se aplica a ela.
+				continue;
+			}
+			Set<String> autoriza = TaskType.allowedTypesFor(Set.of(profile)).stream()
+				.map(Enum::name)
+				.filter(armazenamento::contains)
+				.collect(Collectors.toSet());
+			if (profile.storageKind() != null) {
+				assertEquals(armazenamento, autoriza,
+					profile + " é do Storage e tem de autorizar armazenamento (brief §6)");
+			}
+			else {
+				assertTrue(autoriza.isEmpty(), () -> profile + " não é do Storage e autorizou " + autoriza);
 			}
 		}
 
-		// E o inverso: o perfil de storage não é um curinga. Ele autoriza armazenamento e nada mais,
-		// para que um nó contribuído com disco não comece a executar transcode ou leitura de dados.
-		Set<String> doStorage = TaskType.allowedTypesFor(Set.of(NodeProfile.NODE_STORAGE)).stream()
-			.map(Enum::name).collect(Collectors.toSet());
-		assertEquals(Set.of("OBJECT_PUT", "OBJECT_GET"), doStorage,
-			"o perfil de storage autoriza exatamente os tipos de armazenamento");
+		// E o Storage não é curinga: autoriza armazenamento e nada mais, para que um nó
+		// contribuído com disco não comece a executar transcode ou leitura de dados.
+		for (NodeProfile profile : NodeProfile.values()) {
+			if (profile.storageKind() == null || profile == NodeProfile.NODE_LOCAL) {
+				continue;
+			}
+			Set<String> todos = TaskType.allowedTypesFor(Set.of(profile)).stream().map(Enum::name)
+				.collect(Collectors.toSet());
+			assertEquals(armazenamento, todos, "o perfil " + profile + " autoriza exatamente armazenamento");
+		}
 	}
 }

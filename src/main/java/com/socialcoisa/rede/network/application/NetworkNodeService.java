@@ -16,6 +16,7 @@ import com.socialcoisa.rede.network.application.port.out.ProvisionTokenRepositor
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NodeProfile;
 import com.socialcoisa.rede.network.domain.NodeStatus;
+import com.socialcoisa.rede.network.domain.StorageNodeKind;
 import com.socialcoisa.rede.shared.audit.AuditTrail;
 import com.socialcoisa.rede.shared.security.Hashes;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -61,6 +62,7 @@ public class NetworkNodeService {
 	 * porque o enroll é o único momento em que o nó passa a existir e o dono é decidido.
 	 */
 	private final com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository responsibles;
+	private final com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository storageBandwidth;
 
 	NetworkNodeService(NetworkNodeRepository nodes, NetworkAuthorityRepository authorities,
 			ProvisionTokenRepository tokens, NodeKeyService keyService, AuditTrail audit, Clock clock,
@@ -69,7 +71,8 @@ public class NetworkNodeService {
 			// Mesma janela de "vivo" do scheduler, do painel e da série: uma janela só, para que um
 			// nó não esteja "conectado" num quadro e "fora" no outro.
 			@Value("${rede.network.node-stale-seconds:180}") long staleSeconds,
-			com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository responsibles) {
+			com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository responsibles,
+			com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository storageBandwidth) {
 		this.nodes = nodes;
 		this.authorities = authorities;
 		this.tokens = tokens;
@@ -80,6 +83,7 @@ public class NetworkNodeService {
 		this.conflictWindow = Duration.ofSeconds(Math.max(30, conflictSeconds));
 		this.staleAfter = Duration.ofSeconds(Math.max(30, staleSeconds));
 		this.responsibles = responsibles;
+		this.storageBandwidth = storageBandwidth;
 	}
 
 	/**
@@ -217,6 +221,11 @@ public class NetworkNodeService {
 		// histórico de conexão). `lastSeenAt` antigo diz que houve uma janela sem contato; sem este
 		// registro, o painel mostra "conectado agora" e não conta que a máquina ficou fora.
 		registrarReconexao(authenticated, now);
+		// O IP de origem vem do transporte, não do corpo: o nó atrás de NAT (brief §5) não informa
+		// endereço, e um campo no corpo seria o nó afirmando o próprio endereço — o oposto de medir.
+		if (beat.observedIp() != null && !beat.observedIp().isBlank()) {
+			nodes.observeIp(authenticated.id(), beat.observedIp(), now);
+		}
 		nodes.touch(authenticated.id(), beat.runtimeVersion(), beat.cpuPercent(), beat.memoryMb(),
 			beat.runningTasks(), beat.diskFreeMb(), beat.diskTotalMb(), beat.contentUsedMb(), beat.bytesInMb(),
 			beat.bytesOutMb(), now);
@@ -468,6 +477,33 @@ public class NetworkNodeService {
 	}
 
 	/**
+	 * Banda própria de um tipo de storage node (brief §6). Reversível pelo participante; o tipo já
+	 * tem de estar entre os perfis dele (quem confere é {@code NetworkParticipantService}).
+	 *
+	 * <p>A mudança compõe {@code configVersion}: a lista entra na config assinada (formato 7), e
+	 * sem versão nova o runtime continuaria aplicando a banda anterior.</p>
+	 */
+	@Transactional
+	public NetworkNode setStorageBandwidth(String nodeId, String ownerUserId, StorageNodeKind kind, int mbps) {
+		NetworkNode node = requireOwned(nodeId, ownerUserId);
+		storageBandwidth.put(nodeId, kind, mbps);
+		nodes.touchConfig(nodeId, clock.instant());
+		audit.record(ownerUserId, "NODE_STORAGE_BANDWIDTH_CHANGED", nodeId,
+			"{\"kind\":\"" + kind.name() + "\",\"bandwidthMbps\":" + mbps + "}");
+		return require(node.id());
+	}
+
+	/** Remove a banda própria do tipo: ele volta a usar a banda geral do nó. */
+	@Transactional
+	public NetworkNode removeStorageBandwidth(String nodeId, String ownerUserId, StorageNodeKind kind) {
+		NetworkNode node = requireOwned(nodeId, ownerUserId);
+		storageBandwidth.remove(nodeId, kind);
+		nodes.touchConfig(nodeId, clock.instant());
+		audit.record(ownerUserId, "NODE_STORAGE_BANDWIDTH_REMOVED", nodeId, "{\"kind\":\"" + kind.name() + "\"}");
+		return require(node.id());
+	}
+
+	/**
 	 * Redefine os perfis autorizados. Perfis decidem quais tipos de tarefa o nó recebe e o que vai
 	 * na config assinada, então a mudança também compõe versão, e o runtime aplica na próxima
 	 * leitura. Uma lista vazia não é erro: é como se tira tarefa de um nó sem suspendê-lo.
@@ -538,7 +574,7 @@ public class NetworkNodeService {
 
 	public record HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 			Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Long bytesInMb,
-			Long bytesOutMb, Integer observedTerm) {
+			Long bytesOutMb, Integer observedTerm, String observedIp) {
 
 		/**
 		 * Heartbeat de runtime anterior ao tráfego medido (V345): os dois contadores ficam nulos.
@@ -550,7 +586,7 @@ public class NetworkNodeService {
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Integer observedTerm) {
 			this(runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, diskTotalMb, contentUsedMb, null,
-				null, observedTerm);
+				null, observedTerm, null);
 		}
 
 		/**
@@ -563,7 +599,7 @@ public class NetworkNodeService {
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Integer observedTerm) {
 			this(runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, diskTotalMb, null, null, null,
-				observedTerm);
+				observedTerm, null);
 		}
 
 		/**
@@ -575,7 +611,7 @@ public class NetworkNodeService {
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Integer observedTerm) {
 			this(runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, null, null, null, null,
-				observedTerm);
+				observedTerm, null);
 		}
 	}
 }

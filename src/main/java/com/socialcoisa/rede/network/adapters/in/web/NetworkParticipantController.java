@@ -2,6 +2,7 @@ package com.socialcoisa.rede.network.adapters.in.web;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -57,7 +58,7 @@ class NetworkParticipantController {
 			Long reservedDiskMb, Long trafficInMb, Long trafficOutMb, Long trafficTotalMb,
 			Double outboundSharePercent, int outages, int measuredOutages, long offlineSeconds,
 			Long lastOfflineSeconds, boolean online, boolean availabilityComplete, long tasksDone, long tasksRequeued,
-			boolean operable, String quarantineReason) {
+			boolean operable, String quarantineReason, Map<String, Integer> storageBandwidth) {
 
 		static MyNodeView of(NetworkParticipantService.NodeWithContribution entry) {
 			NetworkNode node = entry.node();
@@ -74,7 +75,11 @@ class NetworkParticipantController {
 				entry.availability().offlineSeconds(), entry.availability().lastOfflineSeconds(),
 				entry.availability().online(), entry.availability().complete(),
 				entry.tasksDone(), entry.tasksRequeued(),
-				node.canOperate(), quarantined ? node.quarantineReason() : null);
+				node.canOperate(), quarantined ? node.quarantineReason() : null,
+				// Nome do tipo em vez do enum: é o vocabulário do contrato (§6), o mesmo da rota.
+				entry.storageBandwidth().entrySet().stream()
+					.collect(java.util.stream.Collectors.toMap(entry2 -> entry2.getKey().name(),
+						Map.Entry::getValue, (a, b) -> a, java.util.LinkedHashMap::new)));
 		}
 	}
 
@@ -135,6 +140,26 @@ class NetworkParticipantController {
 		return MyNodeView.of(participant.capacity(user.id().value(), id,
 			request == null ? null : request.cpuCores(), request == null ? null : request.memoryMb(),
 			request == null ? null : request.diskMb(), request == null ? null : request.bandwidthMbps()));
+	}
+
+	/** Banda própria de um tipo de storage node (brief §6). {@code mbps} nulo remove. */
+	record StorageBandwidthRequest(Integer mbps) {
+	}
+
+	/**
+	 * O participante dá ao tipo de armazenamento um teto de banda próprio.
+	 *
+	 * <p>Existe porque no brief §6 a banda é por <b>tipo</b>, e um servidor pode ter vários: um
+	 * nó ARCHIVE que cede 20 Mbps no total pode reservar 15 deles ao arquivo e deixar 5 para o
+	 * convencional. O tipo tem de estar entre os perfis do nó — o serviço recusa caso contrário.</p>
+	 */
+	@PostMapping("/nodes/{id}/storage-bandwidth/{kind}")
+	MyNodeView storageBandwidth(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String id, @PathVariable String kind,
+			@RequestBody(required = false) StorageBandwidthRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return MyNodeView.of(participant.storageBandwidth(user.id().value(), id, kind,
+			request == null ? null : request.mbps()));
 	}
 
 	@PostMapping("/nodes/{id}/disconnect")

@@ -17,6 +17,7 @@ import com.socialcoisa.rede.feed.application.port.out.AuditLogRepository;
 import com.socialcoisa.rede.feed.domain.UserId;
 import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
+import com.socialcoisa.rede.network.domain.StorageNodeKind;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 
@@ -55,11 +56,14 @@ public class NetworkParticipantService {
 	private final NetworkTaskRepository tasks;
 	private final AuditLogRepository audit;
 	private final NetworkNodeService lifecycle;
+	private final com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository storageBandwidth;
 	private final Clock clock;
 	private final long staleSeconds;
 
 	NetworkParticipantService(NetworkNodeRepository nodes, NetworkTaskRepository tasks, AuditLogRepository audit,
-			NetworkNodeService lifecycle, Clock clock,
+			NetworkNodeService lifecycle,
+			com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository storageBandwidth,
+			Clock clock,
 			// Mesma janela de "vivo" do painel, do scheduler e da reconexão: um nó "online" aqui e
 			// "fora" no painel seria o participante vendo dois números para a mesma coisa.
 			@Value("${rede.network.node-stale-seconds:180}") long staleSeconds) {
@@ -67,6 +71,7 @@ public class NetworkParticipantService {
 		this.tasks = tasks;
 		this.audit = audit;
 		this.lifecycle = lifecycle;
+		this.storageBandwidth = storageBandwidth;
 		this.clock = clock;
 		this.staleSeconds = staleSeconds;
 	}
@@ -77,7 +82,7 @@ public class NetworkParticipantService {
 		Map<String, Long> done = tasks.countDoneByNode(found.stream().map(NetworkNode::id).toList());
 		return found.stream()
 			.map(node -> new NodeWithContribution(node, done.getOrDefault(node.id(), 0L), requeued(node.id()),
-				availability(node)))
+				availability(node), storageBandwidth.findByNode(node.id())))
 			.toList();
 	}
 
@@ -89,7 +94,7 @@ public class NetworkParticipantService {
 			throw new ApiException(404, "NODE_UNKNOWN", "No nao encontrado.");
 		}
 		return new NodeWithContribution(node, tasks.countDoneByNode(List.of(nodeId)).getOrDefault(nodeId, 0L),
-			requeued(nodeId), availability(node));
+			requeued(nodeId), availability(node), storageBandwidth.findByNode(nodeId));
 	}
 
 	/**
@@ -122,6 +127,40 @@ public class NetworkParticipantService {
 			Integer diskMb, Integer bandwidthMbps) {
 		return myNode(ownerUserId,
 			lifecycle.participantCapacity(nodeId, ownerUserId, cpuCores, memoryMb, diskMb, bandwidthMbps).id());
+	}
+
+	/**
+	 * Banda por tipo de storage node (brief §6). O tipo tem de ser um que o nó <b>já tem</b>:
+	 * declarar limite para tipo que ele não oferece seria configurar uma máquina que não existe.
+	 * Valor nulo remove a especialização e o tipo volta a usar a banda geral do nó.
+	 */
+	@Transactional
+	public NodeWithContribution storageBandwidth(String ownerUserId, String nodeId, String kind, Integer mbps) {
+		NodeWithContribution entry = myNode(ownerUserId, nodeId);
+		NetworkNode node = entry.node();
+		StorageNodeKind type;
+		try {
+			type = StorageNodeKind.valueOf(kind == null ? "" : kind.trim().toUpperCase(java.util.Locale.ROOT));
+		}
+		catch (IllegalArgumentException unknown) {
+			throw new ApiException(400, "STORAGE_KIND_INVALID", "Tipo de no de armazenamento desconhecido.");
+		}
+		if (!node.profiles().stream().anyMatch(profile -> profile.storageKind() == type)) {
+			// O nó não declara este tipo: um limite aqui não valeria para nada e a tela mostraria
+			// uma banda que o nó nunca vai aplicar.
+			throw new ApiException(409, "STORAGE_KIND_NOT_DECLARED",
+				"O no nao declara esse tipo de armazenamento.");
+		}
+		if (mbps != null && mbps < 0) {
+			throw new ApiException(400, "NODE_CAPACITY_INVALID", "Banda nao pode ser negativa.");
+		}
+		if (mbps == null) {
+			lifecycle.removeStorageBandwidth(nodeId, ownerUserId, type);
+		}
+		else {
+			lifecycle.setStorageBandwidth(nodeId, ownerUserId, type, mbps);
+		}
+		return myNode(ownerUserId, nodeId);
 	}
 
 	/** Retoma a contribuição pausada pelo próprio participante. */
@@ -193,7 +232,13 @@ public class NetworkParticipantService {
 	 *                      à fila. Somado a {@code tasksDone}, é o que distingue "não recebi trabalho"
 	 *                      de "recebi e devolvi" — dois zeros do contador sozinhos dizem o mesmo
 	 */
-	public record NodeWithContribution(NetworkNode node, long tasksDone, long tasksRequeued, Availability availability) {
+	/**
+	 * O nó com o que a tela do participante mostra. {@code storageBandwidth} é a banda própria por
+	 * tipo de storage (brief §6): tipo ausente do mapa usa a banda geral do nó, e um mapa vazio diz
+	 * "não especializou nenhum" — nunca "zero".
+	 */
+	public record NodeWithContribution(NetworkNode node, long tasksDone, long tasksRequeued, Availability availability,
+			Map<StorageNodeKind, Integer> storageBandwidth) {
 	}
 
 	/**

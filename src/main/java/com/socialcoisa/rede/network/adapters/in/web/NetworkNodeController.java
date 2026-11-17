@@ -129,9 +129,37 @@ class NetworkNodeController {
 			"Aguarde a chave de API e a aprovacao do administrador.");
 	}
 
+	/**
+	 * O endereço de origem visto na borda (brief §5, "detecção de mudança de IP").
+	 *
+	 * <p>É observação do Control Plane, não alegação do nó: o participante doméstico não informa IP
+	 * (o §5 lista "informar IP no painel" entre o que ele não deve precisar fazer) e, atrás de NAT,
+	 * o endereço muda sem que a máquina saiba. {@code X-Forwarded-For} é usado quando existe porque
+	 * atrás do proxy o socket fala com o proxy, não com o nó; o primeiro item da lista é o cliente.
+	 * Sem nenhum dos dois, devolve {@code null} — "não medido", nunca um endereço inventado.</p>
+	 */
+	private static String peerAddressFromRequest() {
+		var attributes = org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+		if (attributes instanceof org.springframework.web.context.request.ServletRequestAttributes servlet) {
+			return servlet.getRequest().getRemoteAddr();
+		}
+		return null;
+	}
+
+	private static String peerIp(String forwardedFor, String remoteAddr) {
+		if (forwardedFor != null && !forwardedFor.isBlank()) {
+			String first = forwardedFor.split(",")[0].trim();
+			if (!first.isEmpty() && !"unknown".equalsIgnoreCase(first)) {
+				return first;
+			}
+		}
+		return remoteAddr == null || remoteAddr.isBlank() ? null : remoteAddr;
+	}
+
 	@PostMapping("/nodes/heartbeat")
 	HeartbeatResponse heartbeat(@RequestHeader(value = "X-Node-Id", required = false) String nodeId,
 			@RequestHeader(value = "X-Node-Key", required = false) String nodeKey,
+			@RequestHeader(value = "X-Forwarded-For", required = false) String forwardedFor,
 			@RequestBody(required = false) HeartbeatRequest request) {
 		NetworkNode node = keys.authenticate(nodeId, nodeKey);
 		Observed observed = request == null ? null : request.observed();
@@ -140,7 +168,8 @@ class NetworkNodeController {
 			observed == null ? null : observed.memoryMb(), observed == null ? null : observed.runningTasks(),
 			observed == null ? null : observed.diskFreeMb(), observed == null ? null : observed.diskTotalMb(),
 			observed == null ? null : observed.usedMb(), observed == null ? null : observed.bytesInMb(),
-			observed == null ? null : observed.bytesOutMb(), request == null ? null : request.observedTerm()));
+			observed == null ? null : observed.bytesOutMb(), request == null ? null : request.observedTerm(),
+			peerIp(forwardedFor, peerAddressFromRequest())));
 		// acceptTasks também é falso quando o PRÓPRIO nó está em quarentena de status: é assim que
 		// o nó de TERM_CONFLICT drena na hora, sem precisar de 403 — 403 no heartbeat encerraria o
 		// canal pelo qual ele reporta o termo que viu.
