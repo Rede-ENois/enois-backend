@@ -350,7 +350,7 @@ public class NetworkConfigService {
 			.orElseGet(() -> new NetworkNodeRepository.ConfigStamp(FORMAT_VERSION, Instant.now(clock)));
 		// O disco declarado é o teto; o medido é a folga. Os dois vão para o nó porque ele decide o
 		// mesmo que o controle decide: cache e réplica só gravam o que cabe no que existe.
-		// Os limites por tipo (brief §6) vêm da tabela da V347; o tipo sem linha usa a banda do nó.
+		// Os limites por tipo (brief §6) vêm da tabela da V348; o tipo sem linha usa a banda do nó.
 		// A lista da config assinada é ordenada por nome de tipo, como as demais listas: a ordem do
 		// banco não é contrato e duas ordens dariam assinaturas diferentes para a mesma permissão.
 		var porTipo = storageBandwidth.findByNode(node.id());

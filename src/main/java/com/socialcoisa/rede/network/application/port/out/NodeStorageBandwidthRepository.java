@@ -5,7 +5,7 @@ import java.util.Map;
 import com.socialcoisa.rede.network.domain.StorageNodeKind;
 
 /**
- * A banda própria de cada tipo de storage node (brief §6, V347).
+ * A banda própria de cada tipo de storage node (brief §6, V348).
  *
  * <p>Ausência de linha é "não especializado": o tipo usa o {@code declaredBandwidthMbps} do nó.
  * Nunca zero, que seria banda nenhuma — a mesma regra de nulo ≠ zero que o módulo aplica em toda

@@ -196,7 +196,7 @@ participante pedir licença para emprestar mais da própria máquina, e o brief 
 conseguir controlar a utilização de sua infraestrutura". O que separa os dois atores é o perfil:
 tirar ou dar perfil muda **quais tarefas** o nó pode receber, e isso é aprovação humana.
 
-## 8. Tipos de storage node (brief §6, V347)
+## 8. Tipos de storage node (brief §6, V348)
 
 O §6 pede seis perfis especializados — `STORAGE_NODE_STANDARD`, `_MEDIA`, `_ARCHIVE`, `_EDGE`,
 `_REPLICA`, `_HOME` — e diz que "um mesmo servidor poderá disponibilizar múltiplos perfis,
@@ -256,7 +256,7 @@ Nó com vários tipos casa com qualquer um deles.
 | tipo desconhecido | `400 STORAGE_KIND_INVALID` |
 | negativo | `400 NODE_CAPACITY_INVALID` |
 | efeito | soma 1 em `configVersion` (`NetworkNodeRepository.touchConfig`, que **não** reescreve os limites) |
-| persistência | `network_node_storage_bandwidth`, uma linha por (nó, tipo) — V347 |
+| persistência | `network_node_storage_bandwidth`, uma linha por (nó, tipo) — V348 |
 | ausência | o tipo usa `limits.bandwidthMbps` do nó; **nunca zero** |
 | auditoria | `NODE_STORAGE_BANDWIDTH_CHANGED` / `_REMOVED` |
 

@@ -11,7 +11,7 @@ import com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRep
 import com.socialcoisa.rede.network.domain.StorageNodeKind;
 
 /**
- * A banda por tipo de storage node (V347).
+ * A banda por tipo de storage node (V348).
  *
  * <p>Duas instruções por operação, sem entidade JPA: a tabela é pequena, o par (nó, tipo) é a
  * chave, e carregar objetos gerenciados só para ler dois números daria contexto de persistência

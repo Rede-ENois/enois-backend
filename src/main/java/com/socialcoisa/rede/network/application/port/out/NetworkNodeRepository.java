@@ -45,7 +45,7 @@ public interface NetworkNodeRepository {
 	 * Compõe {@code configVersion} sem mudar limite nem perfil.
 	 *
 	 * <p>Existe para o que entra na config assinada <b>sem</b> fazer parte do contrato de
-	 * capacidade: a banda por tipo de storage node (V347). Reusar `updateContract` para isso
+	 * capacidade: a banda por tipo de storage node (V348). Reusar `updateContract` para isso
 	 * reescreveria os quatro limites com os valores lidos antes, e uma mudança de capacidade
 	 * concorrente seria perdida em silêncio.</p>
 	 */
