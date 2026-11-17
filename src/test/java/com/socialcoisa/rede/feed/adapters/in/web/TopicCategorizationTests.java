@@ -86,6 +86,21 @@ class TopicCategorizationTests {
 			.andExpect(jsonPath("$.topic").value("GAMES"));
 	}
 
+	/**
+	 * Ampliação de 2026-11-17: os nichos novos (meio ambiente, animais, culinária...) precisam
+	 * nascer válidos dos dois lados — o app oferece no compositor, a API aceita no publish.
+	 */
+	@Test
+	void expandedTopicsAreAccepted() throws Exception {
+		for (String topic : List.of("MEIO_AMBIENTE", "ANIMAIS", "CULINARIA", "JARDINAGEM",
+				"ARTESANATO", "HISTORIA", "FILOSOFIA", "IDIOMAS")) {
+			String postId = publish(topic, "Post com o assunto " + topic + ".");
+			mockMvc.perform(get("/feed/posts/" + postId))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.topic").value(topic));
+		}
+	}
+
 	@Test
 	void standalonePostWithoutTopicIsRejected() throws Exception {
 		mockMvc.perform(post("/feed/posts")
