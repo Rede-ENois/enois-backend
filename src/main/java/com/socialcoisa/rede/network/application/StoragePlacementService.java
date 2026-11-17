@@ -36,12 +36,14 @@ import com.socialcoisa.rede.network.domain.TaskType;
  * <li><b>Não replica em nó que não está pronto agora.</b> Mesma régua do despacho de tarefa:
  * {@code ACTIVE}, heartbeat recente, perfil de armazenamento, sem quarentena. Nó que o heartbeat
  * ainda não confirmou pode estar com o processo morto.</li>
- * <li><b>Só replica o que não é conhecido como cheio.</b> Disco livre medido acima do piso e da
- * própria cópia, ou não medido (não saber não é saber que não cabe — a gravação falha alto e a
- * cópia fica {@code STALE}, não contada).</li>
- * <li><b>A escolhe o nó com mais folga</b>. Ordem estável, sem sorteio: o mesmo objeto, reenviado,
- * escolhe o mesmo conjunto enquanto a rede não mudar — e um conjunto que muda a cada retry daria
- * réplicas espalhadas e córpias órfãs.</li>
+ * <li><b>Só replica o que não é conhecido como cheio.</b> A folga que decide é a <b>que o
+ * participante cedeu</b> (o declarado, menos o que o Énóis já confirmou ocupar neste nó), e não o
+ * disco livre da máquina — ver {@link #cedentHeadroomMb}. Sem declarado isso não está medido, e
+ * não saber não é saber que não cabe: a web passa, e o {@code store} recusa com o número.</li>
+ * <li><b>A escolhe o nó com mais folga cedida</b>. Ordem estável, sem sorteio: o mesmo objeto,
+ * reenviado, escolhe o mesmo conjunto enquanto a rede não mudar — e um conjunto que muda a cada
+ * retry daria réplicas espalhadas e córpias órfãs. Empate é desfeito pelo id, para a ordem não
+ * depender da ordem de chegada da consulta.</li>
  * </ul>
  *
  * <p>O nó escolhido não é "aqui está o IP": ele é designado <b>no catálogo</b>, e recebe o objeto
@@ -112,7 +114,8 @@ public class StoragePlacementService {
 		var ready = allCandidates.stream()
 			.filter(node -> !occupied.contains(node.id()))
 			.filter(node -> storageReady(node, bytes, now))
-			.sorted(Comparator.comparingLong((NetworkNode node) -> headroomMb(node, bytes)).reversed()
+			.sorted(Comparator.comparingLong((NetworkNode node) -> cedentHeadroomMbOrZero(node, now) - (bytes / (1024 * 1024)))
+				.reversed()
 				.thenComparing(NetworkNode::id))
 			.toList();
 
@@ -173,29 +176,81 @@ public class StoragePlacementService {
 			&& node.alive(now, nodeStaleAfter)
 			&& !node.quarantined(now)
 			&& TaskType.OBJECT_PUT.allowedFor(node.profiles())
-			&& fitsDisk(node, bytes);
+			&& fitsDisk(node, bytes, now);
 	}
 
 	/**
-	 * O disco medido comporta os bytes da cópia, com o mesmo piso de folga que
-	 * {@code StorageCatalogService} aplica ao próprio disco. Sem medida, a cópia é permitida: não
-	 * saber não é saber que não cabe, e a gravação falha alto quando falhar.
+	 * O nó ainda tem espaço <b>na parte que cedeu</b> para esta cópia, com o mesmo piso de folga
+	 * que {@code StorageCatalogService} aplica ao gravar.
+	 *
+	 * <p>Antes: a checagem era o <b>disco livre medido</b> da máquina. Para um participante de
+	 * 2 TB que cedeu 1,5 TB isso nunca barra: o disco livre cai até 1,5 TB ocupados e ainda mede
+	 * 500 GB, então a colocação continuava mandando cópia — e o objeto ia para além do que a pessoa
+	 * autorizou. O livre conta o uso alheio ao Énóis; quem responde "posso ocupar isto aqui" é o
+	 * teto cedido.</p>
+	 *
+	 * <p>Agora: {@code declarado - ocupado} (ver {@link #cedentHeadroomMb}). Declarado ausente não
+	 * é medido, e não medido não veta — o {@code store} recusa com o número na hora da web.</p>
 	 */
-	private static boolean fitsDisk(NetworkNode node, long bytes) {
-		Long free = node.observedDiskFreeMb();
-		if (free == null) {
-			return true;
+	private boolean fitsDisk(NetworkNode node, long bytes, Instant now) {
+		Long headroom = cedentHeadroomMb(node, now);
+		// Sem teto cedido não há folga a afirmar: antes da mudança de régua este caso passava
+		// ("não medir não é saber que não cabe"), e o resultado era um nó recebendo cópia sem limite
+		// nenhum. O §7 proíbe consumir além do limite, e sem o número não existe limite.
+		if (headroom == null) {
+			return false;
 		}
 		long neededMb = (bytes / (1024 * 1024)) + 1;
-		return free - neededMb >= StorageCatalogService.MIN_DISK_FREE_MB;
+		// As duas réguas: a cedida (o §7/§8 — não passar do que a pessoa autorizou) e o disco livre
+		// medido (o arquivo tem de caber de fato; ceder 50 GB num disco com 500 MB não é espaço).
+		Long free = node.observedDiskFreeMb();
+		if (free != null && free - neededMb < StorageCatalogService.MIN_DISK_FREE_MB) {
+			return false;
+		}
+		return headroom - neededMb >= StorageCatalogService.MIN_DISK_FREE_MB;
 	}
 
-	private static long headroomMb(NetworkNode node, long bytes) {
-		Long free = node.observedDiskFreeMb();
-		if (free == null) {
-			return 0;
+	/**
+	 * Folga<b>cedida</b> do nó, em MB: o declarado menos o que o Énóis já confirmou ocupar ali.
+	 *
+	 * <p>Estas duas contas respondem perguntas diferentes e as duas importam:</p>
+	 * <ul>
+	 * <li><b>ocupado</b> — a soma das cópias {@code OK} deste nó no catálogo. É o que o Énóis
+	 * confirmou ter ali; cópia {@code STALE}/{@code GONE} não conta porque não é espaço ocupado que
+	 * se possa afirmar;</li>
+	 * <li><b>usado no disco</b> — o {@code observedContentUsedMb} que o nó mediu em si (V344). Pega
+	 * arquivo que ficou no volume sem estar confirmado no catálogo (cópia interrompida, sobra de
+	 * uma troca).</li>
+	 * </ul>
+	 * <p>O maior dos dois é o ocupado: os dois são limites <b>de baixo</b> do uso real, e usar o
+	 * menor esconderia o espaço que um deles já viu estar ocupado.</p>
+	 *
+	 * <p>{@code null} quando o declarado não foi informado: sem o teto não há folga a calcular, e
+	 * {@code 0} diria "não tem espaço" a quem só não declarou. Zero declarado é uma resposta, não
+	 * uma ausência — e vale zero de folga.</p>
+	 */
+	private Long cedentHeadroomMb(NetworkNode node, Instant now) {
+		if (node.declaredDiskMb() <= 0) {
+			return null;
 		}
-		return free - (bytes / (1024 * 1024));
+		long confirmadoMb = 0;
+		for (StoragePlacement placement : catalog.placementsOnNode(node.id())) {
+			if (placement.state() == StoragePlacement.State.OK) {
+				confirmadoMb += (placement.bytes() / (1024 * 1024)) + 1;
+			}
+		}
+		long medidoMb = node.observedContentUsedMb() == null ? 0 : node.observedContentUsedMb();
+		long ocupadoMb = Math.max(confirmadoMb, medidoMb);
+		return node.declaredDiskMb() - ocupadoMb;
+	}
+
+	/**
+	 * Folga cedida em MB, para a ordem. Quem chega aqui já tem teto ({@link #fitsDisk} descartou o
+	 * resto), então não há sentinela: a soma é sempre um número.
+	 */
+	private long cedentHeadroomMbOrZero(NetworkNode node, Instant now) {
+		Long headroom = cedentHeadroomMb(node, now);
+		return headroom == null ? 0L : headroom;
 	}
 
 }
