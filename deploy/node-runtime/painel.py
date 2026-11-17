@@ -23,7 +23,7 @@ import urllib.error
 import urllib.request
 
 NODE_ID = os.environ.get("ENOIS_NODE_ID", "")
-CP = os.environ.get("ENOIS_CONTROL_PLANE", "https://enois-api-qa.b7cloud.tech")
+CP = os.environ.get("ENOIS_CONTROL_PLANE", "https://api.enois.ia.br")
 CONTAINER = os.environ.get("ENOIS_NODE_CONTAINER", "enois-node")
 ORIGIN = os.environ.get("ENOIS_ORIGIN", "https://enois.ia.br")
 REFRESH_S = float(os.environ.get("ENOIS_PANEL_REFRESH", "3"))
