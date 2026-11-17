@@ -147,3 +147,11 @@ para o mesmo disco dariam dois números na tela. Nó de processamento devolve co
 campos), não erro — a página do nó existe, só não tem disco de armazenamento. Nó desconhecido é 404,
 e a rota exige admin pelo `AdminRouteInterceptor`; o `admin()` no controller é defesa em
 profundidade (mutação que o remove continua verde, e isso é o esperado).
+**Nós online e offline (§17).** `onlineNodes`, `offlineNodes` e `offline[]` dizem quem está no ar.
+Até aqui o nó sem heartbeat saía da soma (correto — parado não promete disco) **e do painel** (errado
+— não havia como saber quem caiu). Agora ele aparece com `lastSeenAt` e `secondsSinceSeen`, e o disco
+dele continua fora de toda soma: a mudança é de visibilidade, não de conta.
+
+`lastSeenAt`/`secondsSinceSeen` são **nulos** para quem nunca bateu coração — é o nó recém-enrolado,
+e "ausente" não é "há 0 segundos". Nó de processamento não entra na lista: o critério é o mesmo da
+soma (`OBJECT_PUT.allowedFor`), não o nome do perfil.
