@@ -445,7 +445,7 @@ public class NetworkNodeService {
 		 * Heartbeat de runtime que ainda não mede o tamanho do volume (anterior ao formato 6).
 		 *
 		 * <p>O total fica desconhecido — não {@code 0}, que afirmaria um disco de tamanho zero — e o
-		 * campo da V341 continua nulo até o nó subir com o runtime novo. Servidor que não envia o
+		 * campo da V343 continua nulo até o nó subir com o runtime novo. Servidor que não envia o
 		 * tamanho não tem reserva calculável, e o painel diz isso em vez de inventar.</p>
 		 */
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
@@ -454,7 +454,7 @@ public class NetworkNodeService {
 		}
 
 		/**
-		 * Heartbeat de runtime que também não mede o uso do conteúdo (anterior à V342).
+		 * Heartbeat de runtime que também não mede o uso do conteúdo (anterior à V344).
 		 *
 		 * <p>O uso fica desconhecido e o painel diz isso; o teto e o livre continuam valendo para
 		 * todas as decisões que já os usavam.</p>

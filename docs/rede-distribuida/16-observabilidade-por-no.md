@@ -39,13 +39,13 @@ O efeito visível é o de um quadro ao vivo (atualizado a cada heartbeat, e a te
 o caminho é o que a arquitetura permite. `logs` é opcional: um runtime anterior a esta fase
 continua funcionando e simplesmente não alimenta o console.
 
-`diskTotalMb` (V341, formato 6 da config assinada) é o **tamanho** do volume, medido na mesma
+`diskTotalMb` (V343, formato 6 da config assinada) é o **tamanho** do volume, medido na mesma
 chamada do `df` que mede o livre. Ele não entra na série de amostras — é tamanho, não uso —, mas
 fica em `observed_disk_total_mb` do nó para a conta do §7 do brief do Storage, que precisa de
 `total - declarado` para dizer o espaço reservado pelo participante. Ausente é ausente: runtime
 que não mediu não inventa `0`.
 
-`usedMb` (V342) é a **capacidade utilizada pelo Énóis**: o que o estado de conteúdo
+`usedMb` (V344) é a **capacidade utilizada pelo Énóis**: o que o estado de conteúdo
 (`edge/`, `replica/`, `objects/`) ocupa no nó — a mesma conta que o runtime compara com o teto
 assinado ao evictar. Não é o disco livre, que qualquer processo da máquina derruba. Zero é resposta
 legítima (nó sem conteúdo); nulo é "não reportado". O painel cruza o uso com o declarado
