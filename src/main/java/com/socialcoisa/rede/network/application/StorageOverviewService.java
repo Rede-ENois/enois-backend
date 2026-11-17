@@ -2,6 +2,7 @@ package com.socialcoisa.rede.network.application;
 
 import java.time.Clock;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.springframework.stereotype.Service;
@@ -19,6 +20,11 @@ import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepositor
  *
  * <ul>
  * <li><b>capacidade</b> é o que os nós <b>declararam</b> ceder ({@code declaredDiskMb}), somado;</li>
+ * <li><b>reservado</b> é a conta de cada volume que ficou fora do Énóis por decisão do participante
+ * ({@code total - declarado}, brief §7), uma linha em {@code disks} por nó. Não é somado: reserva
+ * é conta de um disco, e a soma entre nós não responde pergunta nenhuma. {@code null} por nó
+ * quando ele não reportou o tamanho (runtime anterior à V341), e {@code unmeasuredDiskTotals} diz
+ * quantos ficaram de fora;</li>
  * <li><b>disponível</b> é o disco livre <b>medido</b> no heartbeat ({@code observedDiskFreeMb}). Nó
  * sem medida entra em {@code unmeasuredNodes} e <b>não</b> soma zero — não medir não é estar sem
  * espaço;</li>
@@ -40,6 +46,7 @@ public class StorageOverviewService {
 	 * não ocupa disco) e cópia {@code OK} de {@code STALE}.
 	 */
 	public record Overview(long capacityMb, Long freeMb, int nodesDeclaringCapacity, int unmeasuredNodes,
+			int unmeasuredDiskTotals, List<StorageOverviewNodes.Disco> disks,
 			long usedBytes, Map<String, Long> objectsByState, Map<String, Long> copiesByState,
 			int objectsUnderReplicated, int replicasExpected) {
 	}
@@ -78,7 +85,7 @@ public class StorageOverviewService {
 		var lacuna = scrubber.scan(null, 1000);
 
 		return new Overview(capacidade.declaredMb(), capacidade.freeMb(), capacidade.declaringNodes(),
-			capacidade.unmeasuredNodes(), usado, objetosPorEstado, copiasPorEstado,
-			lacuna.underReplicated().size(), placement.targetReplicas());
+			capacidade.unmeasuredNodes(), capacidade.unmeasuredDiskTotals(), capacidade.disks(), usado,
+			objetosPorEstado, copiasPorEstado, lacuna.underReplicated().size(), placement.targetReplicas());
 	}
 }

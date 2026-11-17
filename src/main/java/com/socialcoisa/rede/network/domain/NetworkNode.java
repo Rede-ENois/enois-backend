@@ -33,6 +33,9 @@ import java.util.Set;
  * @param observedDiskFreeMb disco livre medido pelo nó no último heartbeat; null = não reportado
  * (runtime antigo), diferente de zero, que é "sem espaço". O declarado
  * ({@link #declaredDiskMb}) é o contrato; este é a medida.
+ * @param observedDiskTotalMb tamanho do volume medido no último heartbeat; null = não reportado.
+ * Com {@link #observedDiskFreeMb} é o que permite separar "espaço reservado pelo participante" do
+ * "capacidade oferecida" (brief do Storage §7): a reserva é o total que não está a serviço do Énóis.
  * @param observedLatencyMs mediana do tempo de conclusão das últimas tarefas; null = sem amostra
  * @param consecutiveFailures resultados falhos seguidos; um sucesso zera a contagem
  * @param quarantinedUntil fora do balanceamento até este instante; null = em balanceamento
@@ -42,7 +45,8 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 		Set<NodeProfile> profiles, String region, String country, String runtimeVersion, Instant lastSeenAt,
 		int declaredCpuCores, int declaredMemoryMb, int declaredDiskMb, int declaredBandwidthMbps,
 		Double observedCpuPercent, Integer observedMemoryMb, Integer observedRunningTasks, Integer observedLatencyMs,
-		Long observedDiskFreeMb, int consecutiveFailures, Instant quarantinedUntil, String quarantineReason) {
+		Long observedDiskFreeMb, Long observedDiskTotalMb, int consecutiveFailures, Instant quarantinedUntil,
+		String quarantineReason) {
 
 	/**
 	 * Mesmo nó com o disco livre medido: {@code null} = não reportado (runtime anterior a V321).
@@ -59,8 +63,45 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 			int consecutiveFailures, Instant quarantinedUntil, String quarantineReason) {
 		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
 				declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
-				observedMemoryMb, observedRunningTasks, observedLatencyMs, null, consecutiveFailures, quarantinedUntil,
-				quarantineReason);
+				observedMemoryMb, observedRunningTasks, observedLatencyMs, null, null, consecutiveFailures,
+				quarantinedUntil, quarantineReason);
+	}
+
+	/**
+	 * Mesmo nó com o disco livre medido e o tamanho não reportado (runtime anterior a V341).
+	 *
+	 * <p>Separado do construtor acima porque é o que a leitura do catálogo já montava: o total entrou
+	 * depois, e quem constrói o nó com a medida do livre continua dizendo a verdade — enquanto o
+	 * runtime não informar o tamanho, ele é desconhecido, não igual ao livre.</p>
+	 */
+	public NetworkNode(String id, String displayName, String ownerUserId, NodeStatus status,
+			Set<NodeProfile> profiles, String region, String country, String runtimeVersion, Instant lastSeenAt,
+			int declaredCpuCores, int declaredMemoryMb, int declaredDiskMb, int declaredBandwidthMbps,
+			Double observedCpuPercent, Integer observedMemoryMb, Integer observedRunningTasks, Integer observedLatencyMs,
+			Long observedDiskFreeMb, int consecutiveFailures, Instant quarantinedUntil, String quarantineReason) {
+		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
+				declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
+				observedMemoryMb, observedRunningTasks, observedLatencyMs, observedDiskFreeMb, null,
+				consecutiveFailures, quarantinedUntil, quarantineReason);
+	}
+
+	/**
+	 * O espaço que o participante reservou para si, em MB: o volume que <b>não</b> foi cedido, nunca
+	 * abaixo de zero.
+	 *
+	 * <p>É a conta do brief do Storage §7 — "2 TB de disco, 500 GB reservados, 1,5 TB oferecidos" — com
+	 * os dois números medidos: {@code total - declarado}. Devolve {@code null} quando falta o total:
+	 * sem o tamanho do volume não há reserva a calcular, e {@code 0} diria "não reservou nada".</p>
+	 *
+	 * <p>Participante que cedeu mais do que o volume tem (declarou 2 TB num disco de 500 GB) tem
+	 * reserva zero, não negativa: a divergência aparece em {@link #declaredDiskMb} contra o total, que
+	 * é o lugar de corrigi-la — inventar reserva negativa esconderia o erro no painel.</p>
+	 */
+	public Long reservedDiskMb() {
+		if (observedDiskTotalMb == null) {
+			return null;
+		}
+		return Math.max(0L, observedDiskTotalMb - declaredDiskMb);
 	}
 
 	/** Acima disto o nó está ocupado demais para receber tarefa nova, mesmo com vaga declarada. */
