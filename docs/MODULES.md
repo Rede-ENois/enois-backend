@@ -1336,6 +1336,9 @@ reputação, mesmas regras de moderação.
 Canal de contato categorizado: pedidos de suporte viram tickets com status, resposta da equipe,
 integração com issues do GitHub e log de e-mails no painel.
 
+O comentário espelhado mantém a resposta original do painel e sua autoria, mesmo quando o webhook
+chega antes da confirmação do GitHub.
+
 | Rota | Descrição |
 |---|---|
 | `GET /support/config` | Configuração pública (e-mail do time, categorias) |
