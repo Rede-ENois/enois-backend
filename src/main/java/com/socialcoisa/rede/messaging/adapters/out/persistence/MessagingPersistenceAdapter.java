@@ -185,10 +185,8 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 
 	@Override
 	public Optional<Message> findRecentDuplicate(String conversationId, String senderId, String text,
-			java.time.Instant since) {
-		return messageRepo
-			.findFirstByConversationIdAndSenderIdAndTextAndCreatedAtAfterOrderByCreatedAtDesc(
-				conversationId, senderId, text, since)
+			java.time.Instant since, String replyToId) {
+		return messageRepo.findRecentDuplicate(conversationId, senderId, text, since, replyToId)
 			.map(MessageJpaEntity::toDomain);
 	}
 

@@ -70,6 +70,12 @@ banda, janela e prioridade (brief §16), que são escolha humana. O relatório e
 | storage classes (hot/cold, custo, durabilidade por classe) | o catálogo não tem classe de objeto; acrescentar exige decisão de produto (quem escolhe a classe de um objeto novo?) |
 | erasure coding | muda o modelo de bytes+sha256 por objeto; hoje a base é réplica inteira |
 | escolha por região na **tarefa** | já existe para despacho (`NetworkRegions`); no Storage só entrou na colocação |
+| velocidade de leitura/escrita e IOPS estimados (§7) | **não se estimam.** O brief é explícito no §8.3: indicadores refletem o coletado, nunca o estimado. Medir de verdade exige benchmark no disco do participante — que é carga de escrita num nó de terceiro — e o benchmark precisa de desenho (tamanho, duração, horário, quando repetir). Decisão de produto/infra |
+| estado dos discos (§7, SMART) | o runtime roda em contêiner sem acesso ao dispositivo; `smartctl` na máquina de um voluntário é requisição de confiança que hoje a rede não tem motivo para fazer. Decisão de produto |
+| disponibilidade histórica (§7) | as amostras por nó são **60 pontos de 1 minuto** (V325) e são tela, não retenção. "Disponibilidade" de verdade exige janela de dias e uma regra do que conta como "no ar" (heartbeat perdido é queda? nó em drenagem conta?). O único registro de histórico hoje é `NETWORK_NODE_RECONNECTED` na trilha de auditoria — transição, não série. Decisão de produto + retenção |
+
+Capacidade (§7) **está entregue** por nó em `GET /admin/network/nodes/storage/overview`: `disks[]`
+com `declaredMb`, `freeMb`, `totalMb`, `reservedMb`, `usedMb` e `usedPercent`.
 
 ## 4. Verificação
 

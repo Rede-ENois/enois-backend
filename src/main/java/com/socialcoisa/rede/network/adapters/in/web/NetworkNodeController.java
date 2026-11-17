@@ -86,7 +86,7 @@ class NetworkNodeController {
 	}
 
 	record Observed(Double cpuPercent, Integer memoryMb, Integer runningTasks, Long diskFreeMb,
-			Long diskTotalMb) {
+			Long diskTotalMb, Long usedMb) {
 	}
 
 	/**
@@ -134,7 +134,7 @@ class NetworkNodeController {
 			request == null ? null : request.runtimeVersion(), observed == null ? null : observed.cpuPercent(),
 			observed == null ? null : observed.memoryMb(), observed == null ? null : observed.runningTasks(),
 			observed == null ? null : observed.diskFreeMb(), observed == null ? null : observed.diskTotalMb(),
-			request == null ? null : request.observedTerm()));
+			observed == null ? null : observed.usedMb(), request == null ? null : request.observedTerm()));
 		// acceptTasks também é falso quando o PRÓPRIO nó está em quarentena de status: é assim que
 		// o nó de TERM_CONFLICT drena na hora, sem precisar de 403 — 403 no heartbeat encerraria o
 		// canal pelo qual ele reporta o termo que viu.

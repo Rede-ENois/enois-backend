@@ -78,7 +78,7 @@ class NetworkCapacityReservationTests {
 			.perform(post("/network/nodes/heartbeat").header("X-Node-Id", "nd_cap").header("X-Node-Key", key)
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "teste",
-					"observed", Map.of("diskFreeMb", 900000, "diskTotalMb", 2097152)))))
+					"observed", Map.of("diskFreeMb", 900000, "diskTotalMb", 2097152, "usedMb", 768000)))))
 			.andExpect(status().isOk());
 
 		assertThat(jdbc.queryForObject("select observed_disk_total_mb from network_nodes where id = 'nd_cap'",
@@ -94,6 +94,9 @@ class NetworkCapacityReservationTests {
 		assertThat(meu.get("totalMb").asLong()).isEqualTo(2097152L);
 		assertThat(meu.get("declaredMb").asInt()).isEqualTo(1536000);
 		assertThat(meu.get("reservedMb").asLong()).isEqualTo(2097152L - 1536000L);
+		// §7 "capacidade utilizada pelo Énóis": o uso vem do nó, não de uma soma do catálogo.
+		assertThat(meu.get("usedMb").asLong()).isEqualTo(768000L);
+		assertThat(meu.get("usedPercent").asDouble()).isEqualTo(50.0);
 
 		// A config do nó leva o mesmo total, e ele está dentro da linha assinada.
 		var config = mockMvc

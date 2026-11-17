@@ -100,8 +100,13 @@ public interface MessagingRepository {
 	java.util.Map<String, Message> findLastMessagesByConversations(java.util.Collection<String> conversationIds,
 			String viewerId);
 
-	/** Mensagem idêntica do mesmo remetente na conversa desde um instante (duplo clique/retry). */
-	Optional<Message> findRecentDuplicate(String conversationId, String senderId, String text, java.time.Instant since);
+	/**
+	 * Mensagem idêntica do mesmo remetente na conversa desde um instante (duplo clique/retry).
+	 * O reply também participa: citar mensagens diferentes são envios distintos, mesmo que o
+	 * texto/cifra seja igual.
+	 */
+	Optional<Message> findRecentDuplicate(String conversationId, String senderId, String text,
+			java.time.Instant since, String replyToId);
 
 	/** A mensagem por id (para conferir de qual conversa ela e antes de mexer nela). */
 	Optional<Message> findMessageById(String messageId);

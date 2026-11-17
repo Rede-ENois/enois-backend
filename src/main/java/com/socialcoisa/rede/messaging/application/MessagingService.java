@@ -229,10 +229,11 @@ public class MessagingService {
 		// MessagingRepository#touchConversation). It also queues a double click behind the first
 		// send, so the duplicate check below sees the message it created.
 		repository.touchConversation(conversationId, clock.instant());
-		// Duplo clique/retry: a MESMA mensagem (texto + mídias) do mesmo remetente em até 2
-		// minutos devolve a linha já criada em vez de duplicar e notificar de novo.
+		// Duplo clique/retry: a MESMA mensagem (texto + mídias + citada) do mesmo remetente em até
+		// 2 minutos devolve a linha já criada em vez de duplicar e notificar de novo. O reply
+		// participa da igualdade: responder citados diferentes com o mesmo texto são envios novos.
 		var duplicate = repository.findRecentDuplicate(conversationId, senderId, corpo,
-			clock.instant().minusSeconds(DUPLICATE_WINDOW_SECONDS));
+			clock.instant().minusSeconds(DUPLICATE_WINDOW_SECONDS), replyToId);
 		if (duplicate.isPresent() && duplicate.get().mediaIds().equals(midias)
 				&& duplicate.get().mediaSpoiler() == mediaSpoiler) {
 			return duplicate.get();
@@ -303,8 +304,10 @@ public class MessagingService {
 		repository.touchConversation(conversationId, clock.instant());
 		// Duplo clique/retry: retry de transporte repete a mesma cifra e devolve a linha anterior
 		// em vez de duplicar e notificar de novo (o caminho em claro ja fazia; o E2E nao tinha).
+		// O reply participa da igualdade: reusar o mesmo envelope para citar outra mensagem e um
+		// envio novo, e o contexto do segundo não pode colapsar no primeiro.
 		var duplicate = repository.findRecentDuplicate(conversationId, senderId, ciphertext,
-			clock.instant().minusSeconds(DUPLICATE_WINDOW_SECONDS));
+			clock.instant().minusSeconds(DUPLICATE_WINDOW_SECONDS), replyToId);
 		if (duplicate.isPresent() && duplicate.get().e2e() && duplicate.get().mediaIds().equals(midias)
 				&& duplicate.get().mediaSpoiler() == mediaSpoiler) {
 			return duplicate.get();

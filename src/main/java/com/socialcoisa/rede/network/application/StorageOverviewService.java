@@ -46,7 +46,7 @@ public class StorageOverviewService {
 	 * não ocupa disco) e cópia {@code OK} de {@code STALE}.
 	 */
 	public record Overview(long capacityMb, Long freeMb, int nodesDeclaringCapacity, int unmeasuredNodes,
-			int unmeasuredDiskTotals, List<StorageOverviewNodes.Disco> disks,
+			int unmeasuredDiskTotals, int unmeasuredUsage, List<StorageOverviewNodes.Disco> disks,
 			long usedBytes, Map<String, Long> objectsByState, Map<String, Long> copiesByState,
 			int objectsUnderReplicated, int replicasExpected) {
 	}
@@ -85,7 +85,8 @@ public class StorageOverviewService {
 		var lacuna = scrubber.scan(null, 1000);
 
 		return new Overview(capacidade.declaredMb(), capacidade.freeMb(), capacidade.declaringNodes(),
-			capacidade.unmeasuredNodes(), capacidade.unmeasuredDiskTotals(), capacidade.disks(), usado,
+			capacidade.unmeasuredNodes(), capacidade.unmeasuredDiskTotals(), capacidade.unmeasuredUsage(),
+			capacidade.disks(), usado,
 			objetosPorEstado, copiasPorEstado, lacuna.underReplicated().size(), placement.targetReplicas());
 	}
 }
