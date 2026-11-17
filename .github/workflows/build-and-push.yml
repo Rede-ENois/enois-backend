@@ -700,7 +700,7 @@ jobs:
               "REDE_NETWORK_CONFIG_SIGNING_KEY=${QA_REDE_NETWORK_CONFIG_SIGNING_KEY}",
               "REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY=${QA_REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY}",
               "TRUSTED_PROXY_IPS=154.12.230.97",
-              "JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=60.0 -XX:+ExitOnOutOfMemoryError"
+              "JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=60.0 -XX:+ExitOnOutOfMemoryError -XX:-UseBASE64Intrinsics"
             ],
             "ExposedPorts": {"8081/tcp": {}},
             "HostConfig": {
@@ -1116,7 +1116,10 @@ jobs:
                 # Sem isto a JVM usa 25% do limite como heap (1GB de 4GB) e o resto da RAM fica
                 # sem uso; 60% + ExitOnOutOfMemoryError deixa a JVM crescer sob demanda e morre
                 # com erro claro (em vez de ser morta pelo kernel sem log).
-                JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=60.0 -XX:+ExitOnOutOfMemoryError"
+                # -XX:-UseBASE64Intrinsics: CVE-2026-114938 (OOB write no stub intrinseco de
+                # decode Base64 do C2, so em x86_64 com AVX-512 VBMI). Sem efeito no encode;
+                # custo ~2-3x apenas no decode Base64 (cursors/challenges curtos). Ver SECURITY.md.
+                JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=60.0 -XX:+ExitOnOutOfMemoryError -XX:-UseBASE64Intrinsics"
                 SPRING_PROFILES_ACTIVE: prd
                 DB_PASSWORD: ${DB_PASSWORD}
                 REDE_FRONTEND_URL: https://enois.ia.br
