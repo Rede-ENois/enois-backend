@@ -112,8 +112,8 @@ class GroupPersistenceAdapter implements GroupRepository {
 	}
 
 	@Override
-	public void removeMember(String groupId, String userId) {
-		members.deleteByGroupIdAndUserId(groupId, userId);
+	public int removeMember(String groupId, String userId) {
+		return members.deleteByGroupIdAndUserId(groupId, userId);
 	}
 
 	@Override
