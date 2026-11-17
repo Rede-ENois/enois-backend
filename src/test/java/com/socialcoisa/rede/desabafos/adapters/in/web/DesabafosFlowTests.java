@@ -62,8 +62,10 @@ class DesabafosFlowTests {
 		JsonNode post = objectMapper.readTree(created.getResponse().getContentAsString());
 		String postId = post.get("id").asText();
 		org.assertj.core.api.Assertions.assertThat(postId).startsWith("desabafo_");
-		org.assertj.core.api.Assertions.assertThat(post.get("author").get("id").asText()).isEqualTo(author.userId());
 		org.assertj.core.api.Assertions.assertThat(post.get("content").asText()).contains("cansado");
+		// ANONIMATO: a view não carrega autor — nem id, nome, username ou avatar.
+		org.assertj.core.api.Assertions.assertThat(post.has("author")).isFalse();
+		org.assertj.core.api.Assertions.assertThat(post.get("mine").asBoolean()).isTrue();
 
 		// O espaço próprio: aparece no feed dos Desabafos, em ordem cronológica.
 		MvcResult propio = mockMvc.perform(get("/desabafos").header("X-Session-Token", author.token()))
@@ -116,9 +118,16 @@ class DesabafosFlowTests {
 				.header("X-Session-Token", author.token())
 				.header("Idempotency-Key", "des-long-" + UUID.randomUUID())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(java.util.Map.of("content", "x".repeat(3001)))))
+				.content(objectMapper.writeValueAsString(java.util.Map.of("content", "x".repeat(5001)))))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("CONTENT_TOO_LONG"));
+		// 5000 é o teto novo: exatamente no limite publica.
+		mockMvc.perform(post("/desabafos/posts")
+				.header("X-Session-Token", author.token())
+				.header("Idempotency-Key", "des-max-" + UUID.randomUUID())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of("content", "y".repeat(5000)))))
+			.andExpect(status().isCreated());
 		mockMvc.perform(post("/desabafos/posts")
 				.header("X-Session-Token", author.token())
 				.contentType(MediaType.APPLICATION_JSON)
@@ -174,8 +183,9 @@ class DesabafosFlowTests {
 			.andReturn();
 		JsonNode comentario = objectMapper.readTree(acolhida.getResponse().getContentAsString());
 		String commentId = comentario.get("id").asText();
-		org.assertj.core.api.Assertions.assertThat(comentario.get("author").get("id").asText())
-			.isEqualTo(visitor.userId());
+		// ANONIMATO: a acolhida não carrega autor; quem escreveu reconhece a própria pelo mine.
+		org.assertj.core.api.Assertions.assertThat(comentario.has("author")).isFalse();
+		org.assertj.core.api.Assertions.assertThat(comentario.get("mine").asBoolean()).isTrue();
 
 		// Vazio e comprido demais recusam.
 		mockMvc.perform(post("/desabafos/posts/" + postId + "/comments")

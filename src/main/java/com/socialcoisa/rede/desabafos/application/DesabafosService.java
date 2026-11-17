@@ -7,7 +7,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
@@ -22,9 +21,6 @@ import com.socialcoisa.rede.desabafos.domain.DesabafoComment;
 import com.socialcoisa.rede.desabafos.domain.DesabafoPost;
 import com.socialcoisa.rede.feed.domain.UserId;
 import com.socialcoisa.rede.notifications.application.NotificationService;
-import com.socialcoisa.rede.profile.application.NameStyleView;
-import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
-import com.socialcoisa.rede.profile.domain.UserProfile;
 import com.socialcoisa.rede.shared.age.AgeGate;
 import com.socialcoisa.rede.shared.blocks.BlockedUsersReader;
 import com.socialcoisa.rede.shared.security.UserRateLimiter;
@@ -42,7 +38,7 @@ import com.socialcoisa.rede.shared.web.CursorCodec;
 @Service
 public class DesabafosService implements DesabafosModerationPort {
 
-	public static final int MAX_CONTENT = 3000;
+	public static final int MAX_CONTENT = 5000;
 	public static final int MAX_COMMENT = 800;
 	public static final int MAX_PAGE_SIZE = 48;
 	public static final int DEFAULT_PAGE_SIZE = 24;
@@ -52,20 +48,18 @@ public class DesabafosService implements DesabafosModerationPort {
 	private final SanctionGate sanctionGate;
 	private final UserRateLimiter userRateLimiter;
 	private final BlockedUsersReader blockedUsers;
-	private final UserProfileRepository profiles;
 	private final NotificationService notifications;
 	private final CursorCodec cursorCodec;
 	private final Clock clock;
 
 	public DesabafosService(DesabafosRepository repository, AgeGate agePolicy, SanctionGate sanctionGate,
-			UserRateLimiter userRateLimiter, BlockedUsersReader blockedUsers, UserProfileRepository profiles,
+			UserRateLimiter userRateLimiter, BlockedUsersReader blockedUsers,
 			NotificationService notifications, CursorCodec cursorCodec, Clock clock) {
 		this.repository = repository;
 		this.agePolicy = agePolicy;
 		this.sanctionGate = sanctionGate;
 		this.userRateLimiter = userRateLimiter;
 		this.blockedUsers = blockedUsers;
-		this.profiles = profiles;
 		this.notifications = notifications;
 		this.cursorCodec = cursorCodec;
 		this.clock = clock;
@@ -113,7 +107,7 @@ public class DesabafosService implements DesabafosModerationPort {
 			"desabafo_c_" + UUID.randomUUID().toString().replace("-", ""), postId, authorId, texto,
 			clock.instant(), com.socialcoisa.rede.desabafos.domain.DesabafoStatus.ACTIVE));
 		notifyPostAuthor(post, authorId);
-		return enrichComments(List.of(salvo)).get(0);
+		return enrichComments(List.of(salvo), authorId).get(0);
 	}
 
 	@Transactional
@@ -173,7 +167,7 @@ public class DesabafosService implements DesabafosModerationPort {
 		if (!hidden.isEmpty()) {
 			todos = todos.stream().filter(c -> !hidden.contains(c.authorId().value())).toList();
 		}
-		return new DesabafosViews.DesabafosCommentsPage(enrichComments(todos));
+		return new DesabafosViews.DesabafosCommentsPage(enrichComments(todos, viewer));
 	}
 
 	// ---- Moderação (port DesabafosModerationPort) ----
@@ -253,11 +247,10 @@ public class DesabafosService implements DesabafosModerationPort {
 		if (authorId.equals(commenterId.value())) {
 			return;
 		}
-		String actorName = profiles.findById(commenterId.value())
-			.map(profile -> profile.displayWithNickname() != null ? profile.displayWithNickname() : profile.name())
-			.orElse("Alguém");
-		notifications.create(authorId, "DESABAFOS_COMMENTED", commenterId.value(),
-			"Alguém acolheu seu desabafo", actorName + " comentou no seu desabafo.",
+		// Sem nome do ator e sem actorId: acolhida é anônima como o desabafo — quem acolheu não
+		// se revela nem pelo aviso (o vínculo interno segue para moderação e auditoria).
+		notifications.create(authorId, "DESABAFOS_COMMENTED", null,
+			"Alguém acolheu seu desabafo", "Alguém comentou no seu desabafo.",
 			"/desabafos?post=" + post.id(), "Ver");
 	}
 
@@ -277,42 +270,24 @@ public class DesabafosService implements DesabafosModerationPort {
 		if (visiveis.isEmpty()) {
 			return List.of();
 		}
-		Map<String, UserProfile> autores = profiles.findAllByIds(
-			visiveis.stream().map(p -> p.authorId().value()).collect(Collectors.toSet())).stream()
-			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
 		List<String> ids = visiveis.stream().map(DesabafoPost::id).toList();
 		Map<String, Map<String, Long>> reacoes = repository.countReactionsByPostIds(ids);
 		Map<String, String> minhas = viewer == null ? Map.of() : repository.findUserReactions(viewer.value(),
 			visiveis.stream().map(DesabafoPost::id).collect(Collectors.toSet()));
 		Map<String, Long> comentarios = repository.countActiveCommentsByPostIds(ids);
 
-		return visiveis.stream().map(post -> {
-			UserProfile autor = autores.get(post.authorId().value());
-			return new DesabafoPostView(post.id(), toAuthor(post.authorId().value(), autor), post.content(),
-				post.createdAt(), reacoes.getOrDefault(post.id(), Map.of()).values().stream()
-					.mapToLong(Long::longValue).sum(),
-				reacoes.getOrDefault(post.id(), Map.of()), minhas.get(post.id()),
-				comentarios.getOrDefault(post.id(), 0L));
-		}).toList();
+		return visiveis.stream().map(post -> new DesabafoPostView(post.id(), post.content(),
+			post.createdAt(), reacoes.getOrDefault(post.id(), Map.of()).values().stream()
+				.mapToLong(Long::longValue).sum(),
+			reacoes.getOrDefault(post.id(), Map.of()), minhas.get(post.id()),
+			comentarios.getOrDefault(post.id(), 0L),
+			viewer != null && post.authorId().equals(viewer))).toList();
 	}
 
-	private List<DesabafoCommentView> enrichComments(List<DesabafoComment> comments) {
-		if (comments.isEmpty()) {
-			return List.of();
-		}
-		Map<String, UserProfile> autores = profiles.findAllByIds(
-			comments.stream().map(c -> c.authorId().value()).collect(Collectors.toSet())).stream()
-			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
+	private List<DesabafoCommentView> enrichComments(List<DesabafoComment> comments, UserId viewer) {
 		return comments.stream().map(comment -> new DesabafoCommentView(comment.id(), comment.postId(),
-			toAuthor(comment.authorId().value(), autores.get(comment.authorId().value())), comment.content(),
-			comment.createdAt())).toList();
+			comment.content(), comment.createdAt(), viewer != null && comment.authorId().equals(viewer)))
+			.toList();
 	}
 
-	private DesabafosViews.DesabafosAuthor toAuthor(String id, UserProfile profile) {
-		if (profile == null) {
-			return new DesabafosViews.DesabafosAuthor(id, null, null, null, null, null);
-		}
-		return new DesabafosViews.DesabafosAuthor(profile.id(), profile.name(), profile.username(),
-			profile.avatar(), profile.avatarFrame(), NameStyleView.from(profile));
-	}
 }
