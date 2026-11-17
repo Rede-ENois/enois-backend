@@ -30,7 +30,7 @@ REFRESH_S = float(os.environ.get("ENOIS_PANEL_REFRESH", "3"))
 HISTORY_MAX = 120  # pontos do sparkline (~6 min a 3 s)
 
 # Fallbacks para rodar num nó já registrado: lê a identidade do node.json.
-NODE_JSON = os.environ.get("ENOIS_NODE_HOME", "/home/mel/enois-node/home") + "/node.json"
+NODE_JSON = os.environ.get("ENOIS_NODE_HOME", "/home/mel/enois-node/home.novo") + "/node.json"
 
 
 def load_node_id():
@@ -85,7 +85,10 @@ def fetch_config(key):
     try:
         req = urllib.request.Request(
             f"{CP}/network/nodes/me/config",
-            headers={"X-Node-Id": NODE_ID, "X-Node-Key": key or "", "Origin": ORIGIN},
+            # User-Agent de navegador: a prod fica atrás do Cloudflare, que bloqueia
+            # o Python-urllib com "error code: 1010" (403) antes de chegar ao CP.
+            headers={"X-Node-Id": NODE_ID, "X-Node-Key": key or "", "Origin": ORIGIN,
+                     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) enois-node-panel"},
         )
         with urllib.request.urlopen(req, timeout=8) as r:
             return json.load(r)
@@ -138,7 +141,7 @@ def node_content():
             return int(out.stdout.split()[0]) if out.returncode == 0 else 0
         except Exception:
             return 0
-    home = os.environ.get("ENOIS_NODE_HOME", "/home/mel/enois-node/home")
+    home = os.environ.get("ENOIS_NODE_HOME", "/home/mel/enois-node/home.novo")
     return du_mb(f"{home}/edge"), du_mb(f"{home}/replica")
 
 
