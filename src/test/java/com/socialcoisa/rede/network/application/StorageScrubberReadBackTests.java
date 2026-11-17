@@ -22,6 +22,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NodeProfile;
@@ -54,6 +55,7 @@ class StorageScrubberReadBackTests {
 	Path root;
 
 	private InMemoryCatalog catalog;
+	private NetworkNodeRepository nodes;
 	private AuditTrail audit;
 	private NodeBodyStore nodeBodies;
 	private StorageCatalogService service;
@@ -62,6 +64,7 @@ class StorageScrubberReadBackTests {
 	@BeforeEach
 	void setUp() {
 		catalog = new InMemoryCatalog();
+		nodes = mock(NetworkNodeRepository.class);
 		audit = mock(AuditTrail.class);
 		// O mesmo diretório que o processo usa quando roda junto do nó local. Fica vazio nos testes
 		// de releitura da réplica 0; o teste do sumiço é que grava nele.
@@ -69,7 +72,7 @@ class StorageScrubberReadBackTests {
 		service = new StorageCatalogService(catalog, audit, Clock.fixed(NOW, ZoneOffset.UTC), 10_000, root.toString(),
 			stubPlacement(), nodeBodies);
 		scrubber = new StorageScrubber(catalog, stubPlacement(), audit, Clock.fixed(NOW, ZoneOffset.UTC), service,
-			nodeBodies);
+			nodeBodies, nodes);
 	}
 
 	/** A colocação não participa da releitura: o alvo de cópias é 2 e nenhum nó é candidato. */

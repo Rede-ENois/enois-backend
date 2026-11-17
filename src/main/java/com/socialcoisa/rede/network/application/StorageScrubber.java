@@ -5,13 +5,18 @@ import java.io.InputStream;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
+import com.socialcoisa.rede.network.domain.NetworkNode;
+import com.socialcoisa.rede.network.domain.NetworkRegions;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
 import com.socialcoisa.rede.shared.audit.AuditTrail;
@@ -45,20 +50,87 @@ public class StorageScrubber {
 	private final StorageCatalogService bodies;
 	/** Nulo quando este processo não guarda corpo de nó: aí só a réplica 0 é relida. */
 	private final NodeBodyStore nodeBodies;
+	/** Para ler a região de cada nó que tem cópia — a diversidade mora na região, não no nó. */
+	private final NetworkNodeRepository nodes;
 
 	StorageScrubber(StorageCatalogRepository catalog, StoragePlacementService placement, AuditTrail audit,
-			Clock clock, StorageCatalogService bodies, @Nullable NodeBodyStore nodeBodies) {
+			Clock clock, StorageCatalogService bodies, @Nullable NodeBodyStore nodeBodies,
+			NetworkNodeRepository nodes) {
 		this.catalog = catalog;
 		this.placement = placement;
 		this.audit = audit;
 		this.clock = clock;
 		this.bodies = bodies;
 		this.nodeBodies = nodeBodies;
+		this.nodes = nodes;
+	}
+
+	/**
+	 * Quanta redundância <b>externa</b> a rede oferece para um objeto (brief §9). A contagem de
+	 * cópias não responde sozinha: três cópias no mesmo domínio de falha caem juntas.
+	 */
+	public enum Durability {
+		/**
+		 * As cópias do objeto estão todas no <b>mesmo domínio de falha</b> — inclusive o caso de uma
+		 * só. Perder aquele nó (ou aquela região) é perder o objeto; o §9 chama de "sem redundância
+		 * externa" quando existe um único storage node.
+		 */
+		SINGLE_DOMAIN,
+		/** Cópias em domínios distintos, mas ainda menos que o pedido da configuração. */
+		CROSS_REGION_PARTIAL,
+		/** Cópias suficientes, em domínios distintos: é o que a política pede. */
+		CROSS_REGION
+	}
+
+	/**
+	 * Classifica as cópias <b>OK</b> de um objeto. Régua só com dado real:</p>
+	 *
+	 * <p>A réplica 0 é o Control Plane, e o CP é um domínio próprio: uma cópia num storage node
+	 * sobrevive à queda do CP, e a do CP sobrevive à saída daquele nó. Nó sem região declarada é
+	 * domínio <b>desconhecido</b> — não é igual à região de outro (regra de {@code NetworkRegions}),
+	 * e por isso conta como domínio distinto em vez de se fundir com qualquer um.</p>
+	 *
+	 * <p>Nó que o cadastro não devolve conta como domínio desconhecido e distinto: o que a rede sabe
+	 * é que ele tem cópia; afirmar que é a mesma região de outro seria inventar.</p>
+	 */
+	public Durability durability(String objectId, List<StoragePlacement> confirmed, int expected) {
+		List<String> domains = domainsOf(confirmed);
+		// Uma cópia só: não há redundância alguma, externa ou não. É o caso do §9 ("se existir
+		// somente um storage node ... sem redundância externa") e também o objeto que perdeu todas
+		// as cópias menos uma.
+		if (domains.size() <= 1) {
+			return Durability.SINGLE_DOMAIN;
+		}
+		return confirmed.size() < expected ? Durability.CROSS_REGION_PARTIAL : Durability.CROSS_REGION;
+	}
+
+	/**
+	 * Domínios distintos ocupados pelas cópias, na forma comparável. A réplica 0 tem domínio
+	 * próprio; cada nó contribui com a região normalizada, ou com uma chave única quando não há
+	 * região (desconhecido não se funde com desconhecido).
+	 */
+	private List<String> domainsOf(List<StoragePlacement> confirmed) {
+		List<String> domains = new ArrayList<>();
+		for (StoragePlacement copia : confirmed) {
+			String domain;
+			if (copia.replica() == 0) {
+				domain = "control-plane";
+			}
+			else {
+				String region = nodes.findById(copia.nodeId()).map(NetworkNode::region).orElse(null);
+				String normalized = NetworkRegions.normalize(region);
+				domain = normalized.isEmpty() ? "unknown:" + copia.nodeId() : "region:" + normalized;
+			}
+			if (!domains.contains(domain)) {
+				domains.add(domain);
+			}
+		}
+		return domains;
 	}
 
 	/** O que a varredura encontrou, incluindo os objetos que precisam de cópia nova. */
 	public record Report(int replicasExpected, int objectsScanned, List<UnderReplicated> underReplicated,
-			int bodiesRelidos, List<Divergent> divergent) {
+			int bodiesRelidos, List<Divergent> divergent, Map<String, Long> byDurability) {
 
 		/** Objeto com menos cópias confirmadas que o pedido, e quantas faltam. */
 		public record UnderReplicated(String objectId, int confirmed, int missing, List<String> nodesWithCopy) {
@@ -105,6 +177,9 @@ public class StorageScrubber {
 		int expected = placement.targetReplicas();
 		List<Report.UnderReplicated> gaps = new ArrayList<>();
 		List<Report.Divergent> divergentes = new ArrayList<>();
+		// Quantos objetos por nível, para o painel dizer a durabilidade EFETIVA (§9) sem afirmar a
+		// que a política pede: dois objetos com 2 cópias podem estar em níveis diferentes.
+		Map<String, Long> porNivel = new LinkedHashMap<>();
 		int relidos = 0;
 		int scanned = 0;
 		String after = null;
@@ -130,6 +205,8 @@ public class StorageScrubber {
 					.stream()
 					.filter(p -> p.state() == StoragePlacement.State.OK)
 					.toList();
+				Durability nivel = durability(id, confirmed, expected);
+				porNivel.merge(nivel.name(), 1L, Long::sum);
 				if (confirmed.size() < expected) {
 					gaps.add(new Report.UnderReplicated(id, confirmed.size(), expected - confirmed.size(),
 						confirmed.stream().map(StoragePlacement::nodeId).toList()));
@@ -193,7 +270,7 @@ public class StorageScrubber {
 			audit.record("system", "STORAGE_SCRUB_DIVERGENT", bucket == null ? "*" : bucket,
 				"{\"copies\":" + divergentes.size() + ",\"at\":\"" + clock.instant() + "\"}");
 		}
-		return new Report(expected, scanned, List.copyOf(gaps), relidos, List.copyOf(divergentes));
+		return new Report(expected, scanned, List.copyOf(gaps), relidos, List.copyOf(divergentes), porNivel);
 	}
 
 }
