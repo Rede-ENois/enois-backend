@@ -259,7 +259,7 @@ term_regressao() {
 # recortar e ordenar, não reinterpretar o documento.
 config_signature() {
   # config_signature <config-json>: imprime "canonical<TAB>assinatura"; 1 se faltar campo.
-  local format_version config_version node_id profiles cpu memory disk bandwidth tasks routes issued_at ttl term disk_free signature
+  local format_version config_version node_id profiles cpu memory disk bandwidth tasks routes issued_at ttl term disk_free disk_total signature
   format_version=$(json_number "$1" formatVersion)
   config_version=$(json_number "$1" configVersion)
   node_id=$(json_field "$1" nodeId)
@@ -289,12 +289,21 @@ config_signature() {
     disk_free='ausente'
   fi
   signature=$(json_field "$1" signature)
+  # diskTotalMb (formato 6) vem DEPOIS do disco livre: o tamanho do volume, ao lado do que está
+  # livre nele. Sem ele o nó não sabe quanto o participante reservou para si -- só o livre, que
+  # muda a cada arquivo gravado. Mesma regra de ausência do formato 5: "0" diria um volume de
+  # tamanho zero, e "ausente" diz que este Control Plane ainda não mede o total.
+  if grep -q '"diskTotalMb":[0-9]' <<< "$1"; then
+    disk_total=$(json_number "$1" diskTotalMb)
+  else
+    disk_total='ausente'
+  fi
   [[ -n "$format_version" && -n "$config_version" && -n "$node_id" && -n "$cpu" \
       && -n "$memory" && -n "$disk" && -n "$bandwidth" && -n "$issued_at" \
       && -n "$ttl" && -n "$term" && -n "$signature" ]] || return 1
-  printf '%s|%s|%s|[%s]|%s|%s|%s|%s|[%s]|[%s]|%s|%s|%s|%s\t%s' \
+  printf '%s|%s|%s|[%s]|%s|%s|%s|%s|[%s]|[%s]|%s|%s|%s|%s|%s\t%s' \
     "$format_version" "$config_version" "$node_id" "$profiles" "$cpu" "$memory" "$disk" \
-    "$bandwidth" "$tasks" "$routes" "$issued_at" "$ttl" "$term" "$disk_free" "$signature"
+    "$bandwidth" "$tasks" "$routes" "$issued_at" "$ttl" "$term" "$disk_free" "$disk_total" "$signature"
 }
 
 json_list_sorted() {
@@ -1284,6 +1293,13 @@ cycle() {
   # linha para nomes com espaço.
   observed_disk=$(df -P -m "$NODE_HOME" 2>/dev/null | awk 'NR==2 {print $4}')
   [[ "$observed_disk" =~ ^[0-9]+$ ]] || observed_disk=''
+  # Tamanho do volume medido na MESMA chamada do livre: os dois saem da mesma linha do `df`, então
+  # um não pode estar descrevendo um sistema de arquivos diferente do outro. É o que permite ao
+  # Control Plane separar "espaço reservado pelo participante" (total - declarado) do "oferecido"
+  # (brief do Storage §7); com só o livre, a reserva era impossível de calcular. Mesma regra de
+  # ausência: vazio quando o `df` não responde, nunca 0.
+  observed_disk_total=$(df -P -m "$NODE_HOME" 2>/dev/null | awk 'NR==2 {print $2}')
+  [[ "$observed_disk_total" =~ ^[0-9]+$ ]] || observed_disk_total=''
   # O termo aceito vai no heartbeat (doc 06 §4, regra 5): é assim que o Control Plane
   # descobre que este nó viu um controlador de mando maior que o dele. Nó que ainda não
   # aceitou config nenhuma não reporta termo — zero afirmaria "vi o termo zero", que é
@@ -1294,6 +1310,7 @@ cycle() {
   [[ -n "$observed_term" ]] && term_part=",\"observedTerm\":$observed_term"
   disk_part=''
   [[ -n "$observed_disk" ]] && disk_part=",\"diskFreeMb\":$observed_disk"
+  [[ -n "$observed_disk_total" ]] && disk_part="$disk_part,\"diskTotalMb\":$observed_disk_total"
   # Linhas do ciclo vão JUNTO do heartbeat: é a única saída do nó (ele não abre porta), e o
   # Control Plane guarda uma janela curta para o painel do nó. O buffer é esvaziado depois de
   # enviado; se o heartbeat falhar, as linhas ficam para a próxima volta.

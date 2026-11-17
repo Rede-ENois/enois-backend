@@ -50,7 +50,7 @@ final class NetworkConfigSigner {
 	 */
 	record SignedFields(int formatVersion, int configVersion, String nodeId, List<String> profiles, int cpuCores,
 			int memoryMb, int diskMb, int bandwidthMbps, List<String> allowedTasks, List<String> allowedRoutes,
-			String issuedAt, int ttlSeconds, int term, Long diskFreeMb) {
+			String issuedAt, int ttlSeconds, int term, Long diskFreeMb, Long diskTotalMb) {
 
 		/**
 		 * A linha assinada. Listas vão ordenadas e em JSON compacto: a ordem do banco não é
@@ -66,7 +66,8 @@ final class NetworkConfigSigner {
 			return String.join("|", String.valueOf(formatVersion), String.valueOf(configVersion), nodeId,
 				jsonList(profiles), String.valueOf(cpuCores), String.valueOf(memoryMb), String.valueOf(diskMb),
 				String.valueOf(bandwidthMbps), jsonList(allowedTasks), jsonList(allowedRoutes), issuedAt,
-				String.valueOf(ttlSeconds), String.valueOf(term), numberOrAbsent(diskFreeMb));
+				String.valueOf(ttlSeconds), String.valueOf(term), numberOrAbsent(diskFreeMb),
+				numberOrAbsent(diskTotalMb));
 		}
 
 		/**
