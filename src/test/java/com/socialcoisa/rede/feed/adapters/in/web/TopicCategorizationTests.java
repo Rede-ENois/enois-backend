@@ -111,6 +111,15 @@ class TopicCategorizationTests {
 			.andExpect(jsonPath("$.code").value("INVALID_TOPIC"));
 	}
 
+	/** A #725 pediu o assunto "Desabafo"; o compositor do front já o oferta (PR #970 mergeada). */
+	@Test
+	void desabafoTopicIsAccepted() throws Exception {
+		String postId = publish("DESABAFO", "Post com o assunto desabafo.");
+		mockMvc.perform(get("/feed/posts/" + postId))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.topic").value("DESABAFO"));
+	}
+
 	@Test
 	void communityPostInheritsTheCommunityTopic() throws Exception {
 		var owner = author();
