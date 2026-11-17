@@ -351,9 +351,12 @@ class JobContractController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		limit = pageLimit(limit);
-		Instant before = cursorCodec.decode(cursor).orElse(null);
-		List<Job> jobs = jobService.listApplications(user.id().value(), before, limit);
-		return page(jobs, limit, user.id().value(), PageKind.APPLICATIONS, false, null);
+		var pageCursor = cursorCodec.decodePage(cursor);
+		var applications = jobService.listApplications(user.id().value(),
+			pageCursor.map(CursorCodec.PageCursor::instant).orElse(null),
+			pageCursor.map(decoded -> parseCursorId(decoded.tieBreak())).orElse(null), limit);
+		return page(applications.jobs(), user.id().value(), PageKind.APPLICATIONS, false, null,
+			cursorCodec.encodePage(applications.lastAppliedAt(), String.valueOf(applications.lastId())));
 	}
 
 	@GetMapping("/companies")
@@ -708,8 +711,24 @@ class JobContractController {
 		return Math.clamp(limit, 1, 100);
 	}
 
+	private static Long parseCursorId(String tieBreak) {
+		try {
+			return tieBreak == null ? null : Long.valueOf(tieBreak);
+		}
+		catch (NumberFormatException invalid) {
+			throw new ApiException(400, "INVALID_CURSOR", "Cursor inválido.");
+		}
+	}
+
 	private PageResponse<JobView> page(List<Job> jobs, int limit, String viewer, PageKind kind,
 			boolean includeExternal, String externalQuery) {
+		String nextCursor = jobs.size() == limit
+			? cursorCodec.encode(jobs.get(jobs.size() - 1).postedAt()) : null;
+		return page(jobs, viewer, kind, includeExternal, externalQuery, nextCursor);
+	}
+
+	private PageResponse<JobView> page(List<Job> jobs, String viewer, PageKind kind,
+			boolean includeExternal, String externalQuery, String nextCursor) {
 		List<String> ids = jobs.stream().map(Job::id).toList();
 		boolean authenticated = viewer != null;
 		Set<String> appliedIds = switch (kind) {
@@ -741,8 +760,6 @@ class JobContractController {
 					job.applicationDeadline() != null ? job.applicationDeadline().toString() : null, null);
 			})
 			.toList();
-		String nextCursor = jobs.size() == limit
-			? cursorCodec.encode(jobs.get(jobs.size() - 1).postedAt()) : null;
 		// Vagas externas entram DEPOIS das internas, so na 1a pagina da busca publica, e respeitando
 		// a pesquisa por titulo (elas nao tem tipo/nivel/local para filtrar).
 		if (!includeExternal || !externalListingEnabled) {
