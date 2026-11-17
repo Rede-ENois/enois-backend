@@ -18,11 +18,14 @@ public class MediaImageModerationService {
 	private final ImageContentReviewer reviewer;
 	private final boolean enabled;
 	private final double threshold;
+	/** Observação pura do custo da etapa (#710); sem registry, nada é registrado. */
+	private final MediaUploadStageMetrics stageMetrics;
 
 	public MediaImageModerationService(ObjectProvider<ImageContentClassifier> classifierProvider,
 			ImageContentReviewer reviewer,
 			@Value("${rede.media.nsfw.enabled:true}") boolean enabled,
-			@Value("${rede.media.nsfw.threshold:0.70}") double threshold) {
+			@Value("${rede.media.nsfw.threshold:0.70}") double threshold,
+			MediaUploadStageMetrics stageMetrics) {
 		if (!Double.isFinite(threshold) || threshold < 0.0 || threshold > 1.0) {
 			throw new IllegalArgumentException("rede.media.nsfw.threshold precisa estar entre 0 e 1.");
 		}
@@ -30,6 +33,7 @@ public class MediaImageModerationService {
 		this.reviewer = reviewer;
 		this.enabled = enabled;
 		this.threshold = threshold;
+		this.stageMetrics = stageMetrics;
 	}
 
 	public void verifyBeforeStorage(byte[] imageBytes, String mimeType) {
@@ -42,6 +46,7 @@ public class MediaImageModerationService {
 			throw new ApiException(503, "IMAGE_MODERATION_UNAVAILABLE",
 				"A verificação de imagens está indisponível. Tente novamente mais tarde.");
 		}
+		long startedAt = System.nanoTime();
 		try {
 			ImageContentClassifier.Assessment assessment = classifier.assess(imageBytes, mimeType);
 			double score = assessment.score();
@@ -54,20 +59,25 @@ public class MediaImageModerationService {
 				Result result = reviewer.review(reviewed).orElseThrow(() -> new ApiException(503,
 					"IMAGE_MODERATION_UNAVAILABLE", "Não foi possível confirmar a verificação desta imagem."));
 				if (result == Result.PROHIBITED) {
+					stageMetrics.record("nsfw", MediaUploadStageMetrics.Outcome.BLOCKED, startedAt);
 					throw new ApiException(422, "IMAGE_CONTENT_NOT_ALLOWED",
 						"Esta imagem parece conter conteúdo pornográfico e não pode ser enviada.");
 				}
 				if (result == Result.UNSURE) {
+					stageMetrics.record("nsfw", MediaUploadStageMetrics.Outcome.BLOCKED, startedAt);
 					throw new ApiException(503, "IMAGE_MODERATION_UNAVAILABLE",
 						"Não foi possível confirmar a verificação desta imagem.");
 				}
 			}
+			stageMetrics.record("nsfw", MediaUploadStageMetrics.Outcome.OK, startedAt);
 		}
 		catch (ImageContentClassifier.TooLargeToVerifyException failure) {
+			stageMetrics.record("nsfw", MediaUploadStageMetrics.Outcome.BLOCKED, startedAt);
 			throw new ApiException(422, "IMAGE_TOO_LARGE_TO_VERIFY",
 				"Esta imagem é grande ou longa demais para ser verificada. Envie uma versão menor.");
 		}
 		catch (IOException failure) {
+			stageMetrics.record("nsfw", MediaUploadStageMetrics.Outcome.BLOCKED, startedAt);
 			throw new ApiException(422, "IMAGE_CANNOT_BE_VERIFIED",
 				"Não foi possível verificar esta imagem. Tente outro arquivo.");
 		}
@@ -75,6 +85,7 @@ public class MediaImageModerationService {
 			throw failure;
 		}
 		catch (RuntimeException failure) {
+			stageMetrics.record("nsfw", MediaUploadStageMetrics.Outcome.ERROR, startedAt);
 			throw new ApiException(503, "IMAGE_MODERATION_UNAVAILABLE",
 				"A verificação de imagens está indisponível. Tente novamente mais tarde.");
 		}

@@ -241,5 +241,190 @@ else
   pass "designação duplicada recusada pela chave primária"
 fi
 
+# ---------------------------------------------------------------- V345: tráfego do nó (brief §18)
+# A migração do Storage que mexe em `network_nodes` — a tabela do ENROLL, não do catálogo. Ela entra
+# neste harness pelo mesmo motivo das outras: o H2 aceita `add column if not exists` em formas que o
+# MariaDB recusa, e a única prova que vale é o banco real. `network_nodes` é criada pela V305, que
+# já viveu em produção; aqui a tabela nasce no banco limpo do harness.
+NODE_TRAFFIC=V345__network_node_traffic.sql
+[[ -f "$MIGRATIONS/$NODE_TRAFFIC" ]] || fail "migração ausente: $NODE_TRAFFIC"
+
+if db < "$MIGRATIONS/V305__network_nodes.sql" >/dev/null 2>&1; then
+  pass "V305: network_nodes aplica em banco limpo (base da V345)"
+else
+  fail "V305: network_nodes não aplicou"
+fi
+
+if apply "$NODE_TRAFFIC" >/dev/null 2>&1; then
+  pass "V345: aplica sobre network_nodes no banco real"
+else
+  fail "1ª aplicação falhou: $NODE_TRAFFIC"
+  db < "$MIGRATIONS/$NODE_TRAFFIC" 2>&1 | head -3 >&2 || true
+fi
+
+# Um nó REAL entre as duas aplicações, com tráfego já medido: é o que "dados preservados" quer
+# dizer para uma migração de coluna — a linha existente não pode perder o que já tinha.
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_nodes (id, display_name, owner_user_id, status, profiles, declared_cpu_cores,
+  declared_memory_mb, declared_disk_mb, declared_bandwidth_mbps, observed_bytes_in_mb, observed_bytes_out_mb,
+  created_at, last_seen_at)
+values ('nd_traf001', 'no-do-trafego', 'user-mig', 'ACTIVE', 'NODE_STORAGE', 4, 8192, 102400, 100,
+  2048, 7168, now(3), now(3));
+SQL
+then
+  pass "nó com tráfego gravado entre as rodadas"
+else
+  fail "não foi possível gravar o nó de teste"
+fi
+
+if apply "$NODE_TRAFFIC" >/dev/null 2>&1; then
+  pass "V345: reaplicar não falha (idempotente)"
+else
+  fail "2ª aplicação falhou (não idempotente): $NODE_TRAFFIC"
+fi
+
+traffic=$(db -N -e "select concat(observed_bytes_in_mb, '/', observed_bytes_out_mb) from network_nodes
+  where id = 'nd_traf001'" 2>/dev/null | tr -d '[:space:]')
+[[ "$traffic" == "2048/7168" ]] && pass "o tráfego do nó sobreviveu à 2ª aplicação" \
+  || fail "esperava 2048/7168, achei '$traffic'"
+
+# Nulo é "não mediu", e a coluna TEM de aceitar: nó de runtime antigo não pode receber zero.
+nullable network_nodes observed_bytes_in_mb \
+  && pass "V345: observed_bytes_in_mb aceita nulo (runtime antigo)" \
+  || fail "V345: observed_bytes_in_mb NOT NULL — runtime antigo não conseguiria gravar"
+
+
+# ---------------------------------------------------------------- V348: banda por tipo (brief §6)
+# A tabela por (nó, tipo) tem PRIMARY KEY composta e FOREIGN KEY para `network_nodes` com
+# `on delete cascade`: o H2 aceita `on duplicate key update` em formas que o MariaDB recusa, e a
+# cascata só se prova apagando o nó num banco que a force. Mesmo motivo da V345 para estar aqui.
+NODE_KIND_BW=V348__network_node_storage_bandwidth.sql
+[[ -f "$MIGRATIONS/$NODE_KIND_BW" ]] || fail "migração ausente: $NODE_KIND_BW"
+
+if apply "$NODE_KIND_BW" >/dev/null 2>&1; then
+  pass "V348: aplica sobre network_nodes no banco real"
+else
+  fail "1ª aplicação falhou: $NODE_KIND_BW"
+  db < "$MIGRATIONS/$NODE_KIND_BW" 2>&1 | head -3 >&2 || true
+fi
+
+# Nó e banda REAIS entre as duas aplicações: a 2ª passa por `create table if not exists` e não
+# pode apagar nem a linha do nó nem a especialização que ele já tinha.
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_node_storage_bandwidth (node_id, kind, bandwidth_mbps, updated_at)
+values ('nd_traf001', 'MEDIA', 15, now(3));
+SQL
+then
+  pass "banda por tipo gravada entre as rodadas"
+else
+  fail "não foi possível gravar a banda do tipo"
+fi
+
+if apply "$NODE_KIND_BW" >/dev/null 2>&1; then
+  pass "V348: reaplicar não falha (idempotente)"
+else
+  fail "2ª aplicação falhou (não idempotente): $NODE_KIND_BW"
+fi
+
+kindbw=$(db -N -e "select bandwidth_mbps from network_node_storage_bandwidth
+  where node_id = 'nd_traf001' and kind = 'MEDIA'" 2>/dev/null | tr -d '[:space:]')
+[[ "$kindbw" == "15" ]] && pass "a banda por tipo sobreviveu à 2ª aplicação" \
+  || fail "esperava 15, achei '$kindbw'"
+
+# A chave é o PAR (nó, tipo): dois tipos no mesmo nó convivem, e repetir o par é recusado — é o
+# que uma coluna JSON não faria.
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_node_storage_bandwidth (node_id, kind, bandwidth_mbps, updated_at)
+values ('nd_traf001', 'ARCHIVE', 5, now(3));
+SQL
+then
+  pass "dois tipos no mesmo nó convivem"
+else
+  fail "o mesmo nó não aceitou um segundo tipo"
+fi
+
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_node_storage_bandwidth (node_id, kind, bandwidth_mbps, updated_at)
+values ('nd_traf001', 'MEDIA', 99, now(3));
+SQL
+then
+  fail "o par (nó, tipo) duplicado foi aceito — a chave primária composta não vale"
+else
+  pass "par (nó, tipo) duplicado recusado pela chave primária"
+fi
+
+# Apagar o nó leva a banda junto (cascade): linha órfã faria a config de um nó novo nascer com a
+# banda do antigo se o id fosse reciclado.
+if db >/dev/null 2>&1 <<'SQL'
+delete from network_node_storage_bandwidth where node_id = 'nd_casc001';
+insert into network_nodes (id, display_name, owner_user_id, status, profiles, declared_cpu_cores,
+  declared_memory_mb, declared_disk_mb, declared_bandwidth_mbps, created_at, last_seen_at)
+values ('nd_casc001', 'no-cascata', 'user-mig', 'ACTIVE', 'NODE_STORAGE_MEDIA', 2, 4096, 51200, 50,
+  now(3), now(3));
+insert into network_node_storage_bandwidth (node_id, kind, bandwidth_mbps, updated_at)
+values ('nd_casc001', 'MEDIA', 7, now(3));
+delete from network_nodes where id = 'nd_casc001';
+SQL
+then
+  left=$(db -N -e "select count(*) from network_node_storage_bandwidth where node_id = 'nd_casc001'" 2>/dev/null | tr -d '[:space:]')
+  [[ "$left" == "0" ]] && pass "apagar o nó apaga a banda (on delete cascade)" \
+    || fail "sobraram $left linha(s) de banda de um nó apagado"
+else
+  fail "não foi possível exercitar a cascata"
+fi
+
+
+# ---------------------------------------------------------------- V350: IP de origem (brief §5)
+# "Detecção de mudança de IP". Duas colunas na tabela do enroll, nulas por padrão: nulo em
+# `observed_ip` é "não medido" e nulo em `observed_ip_changed_at` é "nunca mudou" — a V350 não pode
+# gravar valor em linha existente, ou todo nó já cadastrado nasceria com um endereço inventado.
+NODE_IP=V350__network_node_observed_ip.sql
+[[ -f "$MIGRATIONS/$NODE_IP" ]] || fail "migração ausente: $NODE_IP"
+
+if apply "$NODE_IP" >/dev/null 2>&1; then
+  pass "V350: aplica sobre network_nodes no banco real"
+else
+  fail "1ª aplicação falhou: $NODE_IP"
+  db < "$MIGRATIONS/$NODE_IP" 2>&1 | head -3 >&2 || true
+fi
+
+# A linha que já existia (nd_traf001, com tráfego gravado) fica com as duas colunas NULAS:
+# migração de coluna não inventa medição para quem não mediu.
+ipstate=$(db -N -e "select concat(ifnull(observed_ip,'nulo'), '/', ifnull(observed_ip_changed_at,'nulo'))
+  from network_nodes where id = 'nd_traf001'" 2>/dev/null | tr -d '[:space:]')
+[[ "$ipstate" == "nulo/nulo" ]] && pass "V350: nó existente nasce com IP e mudança nulos" \
+  || fail "esperava nulo/nulo, achei '$ipstate'"
+
+if db >/dev/null 2>&1 <<'SQL'
+update network_nodes set observed_ip = '203.0.113.10', observed_ip_changed_at = now(3)
+where id = 'nd_traf001';
+SQL
+then
+  pass "V350: colunas aceitam endereço e instante"
+else
+  fail "V350: não foi possível gravar IP e instante"
+fi
+
+if apply "$NODE_IP" >/dev/null 2>&1; then
+  pass "V350: reaplicar não falha (idempotente)"
+else
+  fail "2ª aplicação falhou (não idempotente): $NODE_IP"
+fi
+
+ipafter=$(db -N -e "select observed_ip from network_nodes where id = 'nd_traf001'" 2>/dev/null | tr -d '[:space:]')
+[[ "$ipafter" == "203.0.113.10" ]] && pass "o IP gravado sobreviveu à 2ª aplicação" \
+  || fail "esperava 203.0.113.10, achei '$ipafter'"
+
+# 45 caracteres cabem: o maior endereço textual é IPv6 com zona.
+if db >/dev/null 2>&1 <<'SQL'
+update network_nodes set observed_ip = '2001:0db8:85a3:0000:0000:8a2e:0370:7334'
+where id = 'nd_traf001';
+SQL
+then
+  pass "V350: observed_ip cabe um IPv6 completo"
+else
+  fail "V350: observed_ip não aceitou IPv6"
+fi
+
 printf '\nStorage migration: PASS %d | FAIL %d\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))

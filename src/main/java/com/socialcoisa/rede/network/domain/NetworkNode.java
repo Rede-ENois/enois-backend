@@ -47,9 +47,46 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 		Set<NodeProfile> profiles, String region, String country, String runtimeVersion, Instant lastSeenAt,
 		int declaredCpuCores, int declaredMemoryMb, int declaredDiskMb, int declaredBandwidthMbps,
 		Double observedCpuPercent, Integer observedMemoryMb, Integer observedRunningTasks, Integer observedLatencyMs,
-		Long observedDiskFreeMb, Long observedDiskTotalMb, Long observedContentUsedMb, int consecutiveFailures,
-		Instant quarantinedUntil,
+		Long observedDiskFreeMb, Long observedDiskTotalMb, Long observedContentUsedMb, Long observedBytesInMb,
+		Long observedBytesOutMb, int consecutiveFailures, Instant quarantinedUntil,
 		String quarantineReason) {
+
+	/**
+	 * Mesmo nó sem o tráfego medido (runtime anterior à V345): os dois contadores ficam nulos, que
+	 * é "não mediu". Existe pelo mesmo motivo dos construtores abaixo — vinte e cinco argumentos,
+	 * com dois {@code Long} novos no meio, são fáceis de trocar de ordem.
+	 */
+	public NetworkNode(String id, String displayName, String ownerUserId, NodeStatus status,
+			Set<NodeProfile> profiles, String region, String country, String runtimeVersion, Instant lastSeenAt,
+			int declaredCpuCores, int declaredMemoryMb, int declaredDiskMb, int declaredBandwidthMbps,
+			Double observedCpuPercent, Integer observedMemoryMb, Integer observedRunningTasks, Integer observedLatencyMs,
+			Long observedDiskFreeMb, Long observedDiskTotalMb, Long observedContentUsedMb, int consecutiveFailures,
+			Instant quarantinedUntil, String quarantineReason) {
+		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
+			declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
+			observedMemoryMb, observedRunningTasks, observedLatencyMs, observedDiskFreeMb, observedDiskTotalMb,
+			observedContentUsedMb, null, null, consecutiveFailures, quarantinedUntil, quarantineReason);
+	}
+
+	/**
+	 * Tráfego total medido pelo nó (entrada + saída), ou {@code null} se ele não reportou nenhum dos
+	 * dois. Somar zero no que falta seria afirmar tráfego zero para quem só informou metade.
+	 */
+	public Long observedTrafficMb() {
+		if (observedBytesInMb == null && observedBytesOutMb == null) {
+			return null;
+		}
+		return (observedBytesInMb == null ? 0L : observedBytesInMb) + (observedBytesOutMb == null ? 0L : observedBytesOutMb);
+	}
+
+	/** Quanto do tráfego acumulado é de saída (0–100), ou {@code null} quando não há base. */
+	public Double outboundSharePercent() {
+		Long total = observedTrafficMb();
+		if (total == null || total <= 0) {
+			return null;
+		}
+		return (observedBytesOutMb == null ? 0.0 : observedBytesOutMb * 100.0) / total;
+	}
 
 	/**
 	 * Mesmo nó com o disco livre medido: {@code null} = não reportado (runtime anterior a V321).
@@ -66,8 +103,8 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 			int consecutiveFailures, Instant quarantinedUntil, String quarantineReason) {
 		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
 				declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
-				observedMemoryMb, observedRunningTasks, observedLatencyMs, null, null, null, consecutiveFailures,
-				quarantinedUntil, quarantineReason);
+				observedMemoryMb, observedRunningTasks, observedLatencyMs, null, null, null, null, null,
+				consecutiveFailures, quarantinedUntil, quarantineReason);
 	}
 
 	/**
@@ -84,8 +121,8 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 			Long observedDiskFreeMb, int consecutiveFailures, Instant quarantinedUntil, String quarantineReason) {
 		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
 				declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
-				observedMemoryMb, observedRunningTasks, observedLatencyMs, observedDiskFreeMb, null, null,
-				consecutiveFailures, quarantinedUntil, quarantineReason);
+				observedMemoryMb, observedRunningTasks, observedLatencyMs, observedDiskFreeMb, null, null, null,
+				null, consecutiveFailures, quarantinedUntil, quarantineReason);
 	}
 
 	/**

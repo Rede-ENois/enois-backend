@@ -9,11 +9,16 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
+import io.micrometer.core.instrument.MeterRegistry;
 
 import com.socialcoisa.rede.messaging.application.ConversationChanged;
 import com.socialcoisa.rede.notifications.application.NotificationCreatedEvent;
@@ -52,10 +57,22 @@ public class MessageStreamHub {
 	private final Map<String, ConcurrentLinkedDeque<SseEmitter>> streams = new ConcurrentHashMap<>();
 	private final InstanceBroadcaster broadcaster;
 	private final ObjectMapper objectMapper;
+	private final StreamEmissionMetrics emissionMetrics;
 
-	MessageStreamHub(InstanceBroadcaster broadcaster, ObjectMapper objectMapper) {
+	MessageStreamHub(InstanceBroadcaster broadcaster, ObjectMapper objectMapper,
+			StreamEmissionMetrics emissionMetrics) {
 		this.broadcaster = broadcaster;
 		this.objectMapper = objectMapper;
+		this.emissionMetrics = emissionMetrics;
+	}
+
+	@Configuration
+	static class StreamMetricsConfiguration {
+
+		@Bean
+		StreamEmissionMetrics streamEmissionMetrics(ObjectProvider<MeterRegistry> meters) {
+			return new StreamEmissionMetrics(meters);
+		}
 	}
 
 	SseEmitter open(String userId) {
@@ -200,17 +217,21 @@ public class MessageStreamHub {
 	}
 
 	private void send(String userId, SseEmitter emitter, SseEmitter.SseEventBuilder event) {
+		long startedAt = System.nanoTime();
 		try {
 			emitter.send(event);
+			emissionMetrics.record(emissionMetrics.aboveThreshold(startedAt), startedAt);
 		}
 		catch (IOException | IllegalStateException closed) {
 			// The tab went away; the container completes the emitter, here it only leaves the registry.
+			emissionMetrics.record(StreamEmissionMetrics.Outcome.CLOSED, startedAt);
 			remove(userId, emitter);
 		}
 		catch (RuntimeException failure) {
 			// O aviso sai DEPOIS do commit: deixar a excecao subir transformaria em 500 uma mensagem
 			// que ja esta gravada, e o cliente tentaria reenviar o que nao falhou. O stream e
 			// best-effort por definicao — a tela busca o estado real nos endpoints autorizados.
+			emissionMetrics.record(StreamEmissionMetrics.Outcome.ERROR, startedAt);
 			remove(userId, emitter);
 		}
 	}

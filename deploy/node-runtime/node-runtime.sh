@@ -301,9 +301,17 @@ config_signature() {
   [[ -n "$format_version" && -n "$config_version" && -n "$node_id" && -n "$cpu" \
       && -n "$memory" && -n "$disk" && -n "$bandwidth" && -n "$issued_at" \
       && -n "$ttl" && -n "$term" && -n "$signature" ]] || return 1
-  printf '%s|%s|%s|[%s]|%s|%s|%s|%s|[%s]|[%s]|%s|%s|%s|%s|%s\t%s' \
+  local canonical
+  canonical=$(printf '%s|%s|%s|[%s]|%s|%s|%s|%s|[%s]|[%s]|%s|%s|%s|%s|%s' \
     "$format_version" "$config_version" "$node_id" "$profiles" "$cpu" "$memory" "$disk" \
-    "$bandwidth" "$tasks" "$routes" "$issued_at" "$ttl" "$term" "$disk_free" "$disk_total" "$signature"
+    "$bandwidth" "$tasks" "$routes" "$issued_at" "$ttl" "$term" "$disk_free" "$disk_total")
+  # storageBandwidth (formato 7) vem DEPOIS do tamanho do volume: a banda própria de cada tipo
+  # de storage node (brief §6). Formato <= 6 não tinha a lista e não pode ganhá-la aqui --
+  # acrescentá-la mudaria a linha de uma config antiga e a assinatura deixaria de conferir.
+  if [[ "$format_version" -ge 7 ]]; then
+    canonical="$canonical|[$(json_list_sorted "$1" storageBandwidth)]"
+  fi
+  printf '%s\t%s' "$canonical" "$signature"
 }
 
 json_list_sorted() {
@@ -676,9 +684,37 @@ bandwidth_args() {
   # concorrentes competindo pelo mesmo teto.
   local mbps kbps
   mbps=$(json_number "$1" bandwidthMbps)
+  # O teto do TIPO (formato 7, brief §6) vence a banda geral: é o que o participante reservou
+  # para este tipo de máquina. Tipo sem limite próprio cai na banda do nó -- ausência é
+  # "não especializou", nunca zero, e zero mantém a regra de "sem teto".
+  local kind_mbps
+  kind_mbps=$(storage_kind_bandwidth "$1")
+  [[ -z "$kind_mbps" ]] || mbps="$kind_mbps"
   [[ -n "$mbps" && "$mbps" != 0 ]] || return 0
   kbps=$((mbps * 125))
   printf '%s\n%s\n' --limit-rate "${kbps}k"
+}
+
+storage_kind_bandwidth() {
+  # storage_kind_bandwidth <config-json>: o menor limite de banda entre os tipos de storage
+  # declarados na config (formato 7, brief §6), em Mbps; vazio quando não há lista. O runtime
+  # executa uma tarefa por ciclo e o tipo de storage de um nó não muda entre tarefas, então o
+  # teto aplicado é o do tipo dele. Com vários tipos, o MENOR: ceder mais do que qualquer tipo
+  # declarou nunca é o que o participante aceitou.
+  local list="$1" entry kind mbps menor=""
+  # A lista é ["TIPO=mbps", ...]; cada entrada é separada por '","'.
+  local entries
+  entries=$(json_list_sorted "$list" storageBandwidth)
+  [[ -n "$entries" ]] || return 0
+  while IFS= read -r entry; do
+    kind=${entry%%=*}
+    mbps=${entry#*=}
+    [[ "$mbps" =~ ^[0-9]+$ ]] || continue
+    if [[ -z "$menor" ]] || (( mbps < menor )); then
+      menor="$mbps"
+    fi
+  done < <(tr ',' '\n' <<< "$entries" | tr -d '"' | sed 's/^ *//;s/ *$//')
+  printf '%s' "$menor"
 }
 
 content_bytes() {

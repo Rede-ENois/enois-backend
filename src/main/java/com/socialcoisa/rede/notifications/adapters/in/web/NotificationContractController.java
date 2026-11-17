@@ -94,8 +94,10 @@ class NotificationContractController {
 				NotificationContext notificationContext = NotificationContext.of(n.kind());
 				// Aviso de trabalho mostra QUEM agiu pela identidade profissional (recrutador, contratante).
 				CorporateProfile pro = notificationContext == NotificationContext.PROFESSIONAL
-					? professionals.get(n.actorId()) : null;
-				UserProfile p = profiles.get(n.actorId());
+					&& n.actorId() != null ? professionals.get(n.actorId()) : null;
+				// Ator nulo (acolhida anônima em desabafo) não tem perfil a resolver; os mapas
+				// imutáveis recusam chave nula.
+				UserProfile p = n.actorId() == null ? null : profiles.get(n.actorId());
 				NotificationPlaces.Resolved target = targets.get(n.href());
 				return new NotificationView(n.id(), n.kind(), notificationContext.name(),
 					NotificationModule.of(n.kind()).name(), n.actorId(),

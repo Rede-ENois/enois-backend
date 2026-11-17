@@ -33,12 +33,37 @@ conhece o arquivo pelo sha-256. O download por digest só serve a quem tem a có
 linha" e "tem os bytes" são coisas diferentes. O nó busca na URL do Control Plane com a própria
 chave: **nenhum IP ou hostname de storage node** é cadastrado (brief §17).
 
-**A escolha é estável.** Ordem por folga de disco medida (decrescente) e desempate por id. O mesmo
-objeto, reenviado, escolhe o mesmo conjunto enquanto a rede não mudar; um conjunto que mudasse a
-cada retry espalharia réplicas e deixaria cópias órfãs.
+**A escolha é estável.** Ordem pela folga **cedida** (`declarado − ocupado`) e desempate por id — ver
+[`17-storage-fase-4-dominios-e-equilibrio.md`](17-storage-fase-4-dominios-e-equilibrio.md) §2.1. O
+mesmo objeto, reenviado, escolhe o mesmo conjunto enquanto a rede não mudar; um conjunto que mudasse
+a cada retry espalharia réplicas e deixaria cópias órfãs.
 
-**Sem medida de disco, o nó não é recusado.** Não medir não é estar cheio — a mesma regra do resto do
-módulo. Nó com disco medido abaixo do piso **e** do tamanho do objeto não recebe cópia.
+**Nó sem teto cedido não recebe cópia.** Ceder é o número que só o participante pode dar; sem ele não
+há limite a respeitar (brief §7) e a colocação não designa. O disco livre medido continua sendo régua
+junto: ceder 50 GB num disco com 500 MB não é espaço.
+
+## 2.1 Durabilidade efetiva (brief §9)
+
+`StorageScrubber.durability` classifica cada objeto **servível** pelas cópias `OK`, olhando o
+**domínio de falha** e não a contagem:
+
+| nível | quando | o que significa |
+|---|---|---|
+| `SINGLE_DOMAIN` | todas as cópias no mesmo domínio (inclusive uma só) | perder aquele nó/região é perder o objeto |
+| `CROSS_REGION_PARTIAL` | domínios distintos, cópias abaixo do alvo | sobrevive à queda de um domínio, não cumpre a política |
+| `CROSS_REGION` | domínios distintos e cópias suficientes | é o que `rede.storage.replicas` pede |
+
+**Por que a contagem não basta:** duas cópias na mesma região e duas em regiões distintas têm o
+mesmo número e durabilidade diferente. O caso do §9 ("se existir somente um storage node ... sem
+redundância externa") é `SINGLE_DOMAIN`, e agora aparece como tal em vez de "2 de 2 cópias".
+
+A **réplica 0** é domínio próprio (o Control Plane): uma cópia no CP sobrevive à queda de qualquer
+storage node, e uma no nó sobrevive à queda do CP. Nó **sem região** é domínio desconhecido e não se
+funde com outro desconhecido (regra de `NetworkRegions`); nó fora do cadastro conta como desconhecido
+e distinto — a rede sabe que ele tem cópia, não que ele está onde outro está.
+
+O painel (`GET /admin/network/nodes/storage/overview`) devolve `objectsByDurability`, a contagem de
+objetos por nível **efetivamente observado** — nunca a política pedida.
 
 ## 3. O que NÃO está entregue (e por quê)
 

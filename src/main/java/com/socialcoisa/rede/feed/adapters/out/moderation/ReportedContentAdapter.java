@@ -8,6 +8,8 @@ import org.springframework.util.StringUtils;
 
 import com.socialcoisa.rede.calls.domain.CallReportContext;
 import com.socialcoisa.rede.colagem.application.port.out.ColagemRepository;
+import com.socialcoisa.rede.confessionario.application.port.out.ConfessionarioRepository;
+import com.socialcoisa.rede.desabafos.application.port.out.DesabafosRepository;
 import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.PostId;
@@ -42,10 +44,12 @@ class ReportedContentAdapter implements ReportedContentReader {
 	private final CallReportContextRepository callReports;
 	private final ColagemRepository colagem;
 	private final MuraisRepository murais;
+	private final DesabafosRepository desabafos;
+	private final ConfessionarioRepository confessionario;
 
 	ReportedContentAdapter(PostRepository posts, CommentRepository comments, UserProfileRepository profiles,
 			GroupContentRepository groupContent, CallReportContextRepository callReports, ColagemRepository colagem,
-			MuraisRepository murais) {
+			MuraisRepository murais, DesabafosRepository desabafos, ConfessionarioRepository confessionario) {
 		this.posts = posts;
 		this.comments = comments;
 		this.profiles = profiles;
@@ -53,6 +57,8 @@ class ReportedContentAdapter implements ReportedContentReader {
 		this.callReports = callReports;
 		this.colagem = colagem;
 		this.murais = murais;
+		this.desabafos = desabafos;
+		this.confessionario = confessionario;
 	}
 
 	@Override
@@ -67,6 +73,20 @@ class ReportedContentAdapter implements ReportedContentReader {
 			case "COLLAGEM_COMMENT" -> colagem.findCommentById(targetId)
 				.map(comment -> colagemCommentText(comment));
 			case "MURAL" -> murais.findMuralById(targetId).map(mural -> muralText(mural));
+			// Desabafos e Confessionário: espaços anônimos de texto — o que a triagem julga é o
+			// texto (sem autor, que o contrato público não carrega mesmo para a moderação ler).
+			case "DESABAFO_POST" -> desabafos.findPostById(targetId)
+				.filter(com.socialcoisa.rede.desabafos.domain.DesabafoPost::isActive)
+				.map(com.socialcoisa.rede.desabafos.domain.DesabafoPost::content);
+			case "DESABAFO_COMMENT" -> desabafos.findCommentById(targetId)
+				.filter(com.socialcoisa.rede.desabafos.domain.DesabafoComment::isActive)
+				.map(com.socialcoisa.rede.desabafos.domain.DesabafoComment::content);
+			case "CONFESSIONARIO_POST" -> confessionario.findPostById(targetId)
+				.filter(com.socialcoisa.rede.confessionario.domain.ConfissaoPost::isActive)
+				.map(com.socialcoisa.rede.confessionario.domain.ConfissaoPost::content);
+			case "CONFESSIONARIO_COMMENT" -> confessionario.findCommentById(targetId)
+				.filter(com.socialcoisa.rede.confessionario.domain.ConfissaoComment::isActive)
+				.map(com.socialcoisa.rede.confessionario.domain.ConfissaoComment::content);
 			default -> Optional.empty();
 		};
 		return content.map(this::shorten).filter(StringUtils::hasText);

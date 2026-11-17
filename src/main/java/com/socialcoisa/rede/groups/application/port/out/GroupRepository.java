@@ -46,7 +46,8 @@ public interface GroupRepository {
 
 	long countMembers(String groupId);
 
-	void removeMember(String groupId, String userId);
+	/** Remove a associação e devolve a quantidade de linhas efetivamente excluídas. */
+	int removeMember(String groupId, String userId);
 
 	/** Mantém o contador desnormalizado do grupo (usado na listagem, para não contar a cada card). */
 	void adjustMemberCount(String groupId, int delta);

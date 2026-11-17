@@ -23,9 +23,26 @@ class MediaImageModerationServiceTests {
 	private final ObjectProvider<ImageContentClassifier> provider = mock();
 	private final ImageContentClassifier classifier = mock();
 	private final ImageContentReviewer reviewer = mock();
+	private final io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+		new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
 
 	private MediaImageModerationService service(boolean enabled, double threshold) {
-		return new MediaImageModerationService(provider, reviewer, enabled, threshold);
+		return new MediaImageModerationService(provider, reviewer, enabled, threshold,
+			comRegistry(registry));
+	}
+
+	/** Helper com o registry da prova; sem registry, nada é registrado. */
+	private static MediaUploadStageMetrics comRegistry(io.micrometer.core.instrument.MeterRegistry alvo) {
+		return new MediaUploadStageMetrics(new ObjectProvider<>() {
+			@Override
+			public io.micrometer.core.instrument.MeterRegistry getIfAvailable() {
+				return alvo;
+			}
+		});
+	}
+
+	private io.micrometer.core.instrument.Timer etapa(String outcome) {
+		return registry.find("rede_media_upload_stage").tags("stage", "nsfw", "outcome", outcome).timer();
 	}
 
 	@Test
@@ -146,5 +163,44 @@ class MediaImageModerationServiceTests {
 
 	private static ImageContentClassifier.Assessment still(double score) {
 		return new ImageContentClassifier.Assessment(score, null);
+	}
+
+	@Test
+	void etapaOkEApareceNaSerie() throws Exception {
+		when(provider.getIfAvailable()).thenReturn(classifier);
+		when(classifier.assess(new byte[] { 1 }, "image/jpeg")).thenReturn(still(0.10));
+
+		service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg");
+
+		assertThat(etapa("ok")).isNotNull();
+		assertThat(etapa("ok").count()).isEqualTo(1);
+	}
+
+	@Test
+	void conteudoRecusadoFicaNaSerieComoBlockedSemDeixarDeBloquear() throws Exception {
+		when(provider.getIfAvailable()).thenReturn(classifier);
+		when(classifier.assess(new byte[] { 1 }, "image/png")).thenReturn(still(0.99));
+		when(reviewer.review(new byte[] { 1 })).thenReturn(Optional.of(Result.PROHIBITED));
+
+		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/png"))
+			.isInstanceOf(ApiException.class)
+			.extracting("code").isEqualTo("IMAGE_CONTENT_NOT_ALLOWED");
+
+		assertThat(etapa("blocked")).isNotNull();
+		assertThat(etapa("blocked").count()).isEqualTo(1);
+	}
+
+	@Test
+	void falhaTecnicaFicaNaSerieComoErrorSemDeixarDeSer503() throws Exception {
+		when(provider.getIfAvailable()).thenReturn(classifier);
+		when(classifier.assess(new byte[] { 1 }, "image/png"))
+			.thenThrow(new IllegalStateException("sessao do modelo estourou"));
+
+		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/png"))
+			.isInstanceOf(ApiException.class)
+			.extracting("code").isEqualTo("IMAGE_MODERATION_UNAVAILABLE");
+
+		assertThat(etapa("error")).isNotNull();
+		assertThat(etapa("error").count()).isEqualTo(1);
 	}
 }

@@ -1,8 +1,10 @@
 package com.socialcoisa.rede.shared.audit;
 
 import java.time.Clock;
+import java.util.List;
 import java.util.UUID;
 
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
 
 import com.socialcoisa.rede.feed.application.port.out.AuditLogRepository;
@@ -38,5 +40,14 @@ class AuditLogPersistenceAdapter implements AuditLogRepository {
 	@Override
 	public long countByActorAndAction(UserId actorId, String action) {
 		return repository.countByActorIdAndAction(actorId.value(), action);
+	}
+
+	@Override
+	public List<com.socialcoisa.rede.feed.application.port.out.AuditLog> findByTargetAndAction(String targetId,
+			String action, int limit) {
+		return repository.findByTargetIdAndActionOrderByCreatedAtDesc(targetId, action, PageRequest.of(0, limit))
+			.stream()
+			.map(AuditLogJpaEntity::toRecord)
+			.toList();
 	}
 }

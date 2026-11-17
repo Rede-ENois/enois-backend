@@ -64,6 +64,12 @@ class NetworkNodeJpaEntity {
 	@Column(name = "observed_content_used_mb")
 	private Long observedContentUsedMb;
 
+	@Column(name = "observed_bytes_in_mb")
+	private Long observedBytesInMb;
+
+	@Column(name = "observed_bytes_out_mb")
+	private Long observedBytesOutMb;
+
 	@Column(name = "consecutive_failures", nullable = false)
 	private int consecutiveFailures;
 
@@ -96,6 +102,17 @@ class NetworkNodeJpaEntity {
 
 	@Column(name = "last_seen_at")
 	private Instant lastSeenAt;
+
+	/**
+	 * Endereço de origem do último contato (V350, brief §5). Lido pela borda — o nó atrás de NAT
+	 * não informa IP. {@code null} é "não medido".
+	 */
+	@Column(name = "observed_ip")
+	private String observedIp;
+
+	/** Instante da última MUDANÇA de {@code observedIp}; {@code null} enquanto ele não mudou. */
+	@Column(name = "observed_ip_changed_at")
+	private Instant observedIpChangedAt;
 
 	/** Versão da permissão: 1 no enroll, +1 em cada transição administrativa (V313). */
 	@Column(name = "config_version", nullable = false)
@@ -135,7 +152,7 @@ class NetworkNodeJpaEntity {
 			NodeProfilesCsv.parse(profiles), region, country, runtimeVersion, lastSeenAt, declaredCpuCores,
 			declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent, observedMemoryMb,
 			observedRunningTasks, observedLatencyMs, observedDiskFreeMb, observedDiskTotalMb, observedContentUsedMb,
-			consecutiveFailures,
+			observedBytesInMb, observedBytesOutMb, consecutiveFailures,
 			quarantinedUntil, quarantineReason);
 	}
 

@@ -30,7 +30,7 @@ testadas). O trabalho vive na branch de longa duração `feat/rede-distribuida`,
 | 13 | [Énóis Storage — fase 3](13-storage-fase-3-replicacao.md) | Réplica em nó de armazenamento, confirmação por digest, leitura por digest e varredura de durabilidade (V323). |
 | 14 | [Global Cooperative — captura de alterações](14-coop-captura-de-alteracoes.md) | Prontidão do banco para captura por binlog, medida em vez de declarada. |
 | 15 | [Inscrição para servir um nó](15-inscricao-de-no.md) | Formulário público com RG/CPF/contrato, decisão administrativa, link de uso único e chave exibida uma vez; responsável no painel. |
-| 17 | [Énóis Storage — fase 4](17-storage-fase-4-dominios-e-equilibrio.md) | Região como domínio de falha na escolha de réplica e relatório de equilíbrio; o que **não** existe (movimentação ativa, storage classes, erasure coding). |
+| 17 | [Énóis Storage — fase 4](17-storage-fase-4-dominios-e-equilibrio.md) | Região como domínio de falha na escolha de réplica, relatório de equilíbrio, tráfego e disponibilidade do nó (V345), limites de capacidade/banda ajustados pelo próprio participante, seis tipos de storage node com preferência de colocação e banda por tipo (V348, formato 7), IP de origem e mudança de endereço (V350); o que **não** existe (movimentação ativa, erasure coding, série histórica de disponibilidade, tratamento diferenciado para nó doméstico). |
 
 Decisões arquiteturais ficam em [`docs/adr/`](../adr/).
 

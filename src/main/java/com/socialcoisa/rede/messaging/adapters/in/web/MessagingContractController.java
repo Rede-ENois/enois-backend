@@ -75,6 +75,15 @@ class MessagingContractController {
 		var participantsByConversation = messagingService.getParticipantsByConversation(conversationIds);
 		var unreadByConversation = messagingService.countUnreadByConversation(conversationIds, userId);
 		var lastMessages = messagingService.getLastMessagePreviewByConversation(conversationIds, userId);
+		// Identidades profissionais da pagina inteira em UMA consulta: antes cada conversa
+		// profissional chamava activeByUserIds na propria linha, repetindo o mesmo SELECT por item.
+		var professionalIds = conversations.stream()
+			.filter(c -> ConversationContext.of(c.kind()) == ConversationContext.PROFESSIONAL)
+			.flatMap(c -> participantsByConversation.getOrDefault(c.id(), List.of()).stream())
+			.map(ConversationParticipant::userId)
+			.distinct()
+			.toList();
+		var identities = identitiesOf(professionalIds);
 		return conversations.stream()
 			.map(c -> {
 				var participants = participantsByConversation.getOrDefault(c.id(), List.of());
@@ -84,7 +93,8 @@ class MessagingContractController {
 				return toView(c.id(), userId, c.kind(), c.title(), pIds,
 					unreadByConversation.getOrDefault(c.id(), 0),
 					otherLastReadAt(participants, userId),
-					lastMessages.getOrDefault(c.id(), MessagingService.LastMessagePreview.EMPTY));
+					lastMessages.getOrDefault(c.id(), MessagingService.LastMessagePreview.EMPTY),
+					identities);
 			})
 			.toList();
 	}
@@ -473,10 +483,10 @@ class MessagingContractController {
 
 	private ConversationView toView(String convId, String userId, String kind, String title,
 			List<String> participantIds, int unread, String otherLastReadAt,
-			MessagingService.LastMessagePreview preview) {
+			MessagingService.LastMessagePreview preview, Map<String, IdentityView> identities) {
 		ConversationContext context = ConversationContext.of(kind);
 		return new ConversationView(convId, userId, kind, context.name(), title, participantIds,
-			identitiesOf(context, participantIds), preview.text(),
+			identitiesFor(context, participantIds, identities), preview.text(),
 			preview.time() != null ? preview.time().toString() : null, unread,
 			otherLastReadAt, preview.e2e(), preview.iv(), preview.encryptedKeys(), preview.from());
 	}
@@ -508,8 +518,24 @@ class MessagingContractController {
 		if (context != ConversationContext.PROFESSIONAL) {
 			return Map.of();
 		}
-		return corporateProfiles.activeByUserIds(participantIds).values().stream()
+		return identitiesOf(participantIds);
+	}
+
+	/** Lote da página inteira: uma ida ao banco para todas as conversas profissionais. */
+	private Map<String, IdentityView> identitiesOf(List<String> userIds) {
+		return corporateProfiles.activeByUserIds(userIds).values().stream()
 			.collect(Collectors.toMap(CorporateProfile::userId, IdentityView::from));
+	}
+
+	/** Filtra do lote da página as identidades da conversa; conversa social não carrega nenhuma. */
+	private Map<String, IdentityView> identitiesFor(ConversationContext context,
+			List<String> participantIds, Map<String, IdentityView> pageIdentities) {
+		if (context != ConversationContext.PROFESSIONAL) {
+			return Map.of();
+		}
+		return participantIds.stream()
+			.filter(pageIdentities::containsKey)
+			.collect(Collectors.toMap(id -> id, pageIdentities::get));
 	}
 
 	/** Blank keeps every context (older clients); anything else must be SOCIAL or PROFESSIONAL. */
