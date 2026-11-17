@@ -66,6 +66,12 @@ public class StorageOverviewService {
 		this.clock = clock;
 	}
 
+	/** O disco de um nó: a mesma conta do painel geral, para a página do nó. */
+	@Transactional(readOnly = true)
+	public StorageOverviewNodes.Disco diskOf(String nodeId) {
+		return nodes.diskOf(nodeId);
+	}
+
 	@Transactional(readOnly = true)
 	public Overview overview() {
 		Map<String, long[]> objetos = catalog.summarizeObjects();

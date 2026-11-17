@@ -136,3 +136,14 @@ Provas: `StorageOverviewTests` 8, `NetworkStorageBalanceTests` 5 (2 novos pela r
 declarando 100 GB e reportando 4 GB). Mutações: disponível usando o declarado (derruba 4), sem
 medida virando zero, perfil qualquer somando disco, uso incluindo designação, nó parado somando e
 região evacuada somando — cada uma derruba o seu. Suíte completa **3212**.
+
+**O disco na página do nó (§17).** `GET /admin/network/nodes/{id}/storage` (admin) devolve o `Disco`
+daquele nó: `declaredMb` (espaço disponibilizado), `usedMb` (o que o Énóis ocupa, medido), `freeMb`
+(disponível), `totalMb`, `reservedMb` e `usedPercent`. Antes isso só existia em
+`/storage/overview` → `disks[]`, e o admin tinha de achar a linha do nó.
+
+A conta é a **mesma**: o serviço usa o mesmo método que monta a linha do painel geral. Duas contas
+para o mesmo disco dariam dois números na tela. Nó de processamento devolve corpo vazio (o mapa sem
+campos), não erro — a página do nó existe, só não tem disco de armazenamento. Nó desconhecido é 404,
+e a rota exige admin pelo `AdminRouteInterceptor`; o `admin()` no controller é defesa em
+profundidade (mutação que o remove continua verde, e isso é o esperado).
