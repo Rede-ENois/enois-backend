@@ -15,6 +15,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.hibernate.resource.jdbc.spi.StatementInspector;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -109,16 +110,21 @@ class NetworkReplicaTests {
 	@Autowired
 	private CountingInspector inspector;
 
-	private TestAuthHelper auth;
+	private PerfisReplicaFixture auth;
 
 	@BeforeEach
 	void setUp() {
-		auth = new TestAuthHelper(mockMvc, objectMapper);
+		auth = new PerfisReplicaFixture(new TestAuthHelper(mockMvc, objectMapper), jdbc);
 		jdbc.update("delete from network_content_snapshots");
 		jdbc.update("delete from network_content_versions");
 		jdbc.update("delete from network_node_keys");
 		jdbc.update("delete from network_provision_tokens");
 		jdbc.update("delete from network_nodes");
+	}
+
+	@AfterEach
+	void restaurarDatasDosPerfis() {
+		auth.close();
 	}
 
 	// ---------------------------------------------------------------- enumeração por chave
@@ -241,11 +247,12 @@ class NetworkReplicaTests {
 		String afterId = anchor == null ? null : anchor.get("nextAfterId").asText();
 
 		var banned = auth.authenticate("replica_ban_1");
+		String bannedUsername = usernameOf(banned);
 		String visible = perfil("replica_ok_1");
 		ban(banned.userId());
 
 		List<String> ids = texts(replica(node, "PROFILE", afterAt, afterId, 100));
-		assertThat(ids).contains(visible).doesNotContain(usernameOf(banned));
+		assertThat(ids).contains(visible).doesNotContain(bannedUsername);
 	}
 
 	/**
