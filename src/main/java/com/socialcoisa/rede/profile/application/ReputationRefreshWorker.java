@@ -45,9 +45,9 @@ class ReputationRefreshWorker {
 	int refreshRankingNow() {
 		int updated = 0;
 		try {
-			int offset = 0;
+			String afterId = null;
 			while (true) {
-				var ids = profiles.findAllIds(offset, PAGE);
+				var ids = profiles.findAllIds(afterId, PAGE);
 				if (ids.isEmpty()) {
 					break;
 				}
@@ -77,7 +77,7 @@ class ReputationRefreshWorker {
 				if (ids.size() < PAGE) {
 					break;
 				}
-				offset += PAGE;
+				afterId = ids.getLast();
 			}
 		}
 		catch (RuntimeException error) {

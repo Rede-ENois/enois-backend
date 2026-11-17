@@ -337,12 +337,16 @@ class UserProfilePersistenceAdapter implements UserProfileRepository {
 	}
 
 	@Override
-	public List<String> findAllIds(int offset, int limit) {
+	public List<String> findAllIds(String afterId, int limit) {
+		var query = em.createNativeQuery(afterId == null
+			? "select id from users order by id limit :limit"
+			: "select id from users where id > :afterId order by id limit :limit")
+			.setParameter("limit", limit);
+		if (afterId != null) {
+			query.setParameter("afterId", afterId);
+		}
 		@SuppressWarnings("unchecked")
-		List<String> ids = em.createNativeQuery("select id from users order by id limit :limit offset :offset")
-			.setParameter("limit", limit)
-			.setParameter("offset", offset)
-			.getResultList();
+		List<String> ids = query.getResultList();
 		return ids;
 	}
 

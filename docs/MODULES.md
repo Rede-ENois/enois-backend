@@ -472,6 +472,9 @@ Implementa: `GetMeUseCase`, `GetUserProfileUseCase`, `UpdateProfileUseCase`
 | `getRanking(int limit)` | Top usuários por reputação |
 | `update(UpdateProfileCommand cmd)` | Atualiza campos do perfil, incluindo cidade/UF (`CityState`, os dois ou nenhum) e `showCity` (cidade no perfil público só por opção, padrão desligado) |
 
+`ReputationRefreshWorker` percorre os IDs em ordem crescente por cursor, em lotes de até 500.
+Cada rodada começa do início, e a falha de uma conta não impede as demais.
+
 ### ProfileExtensionService
 
 **Arquivo**: `src/main/java/com/socialcoisa/rede/profile/application/ProfileExtensionService.java`
