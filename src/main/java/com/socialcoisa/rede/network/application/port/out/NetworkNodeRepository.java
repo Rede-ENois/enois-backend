@@ -43,7 +43,7 @@ public interface NetworkNodeRepository {
 
 	/** Heartbeat: capacidade observada, versão do runtime e último contato. */
 	void touch(String id, String runtimeVersion, Double cpuPercent, Integer memoryMb, Integer runningTasks,
-			Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Instant now);
+			Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Long bytesInMb, Long bytesOutMb, Instant now);
 
 	long countByStatus(NodeStatus status);
 

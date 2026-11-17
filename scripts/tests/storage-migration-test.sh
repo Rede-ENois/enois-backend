@@ -241,5 +241,57 @@ else
   pass "designação duplicada recusada pela chave primária"
 fi
 
+# ---------------------------------------------------------------- V345: tráfego do nó (brief §18)
+# A migração do Storage que mexe em `network_nodes` — a tabela do ENROLL, não do catálogo. Ela entra
+# neste harness pelo mesmo motivo das outras: o H2 aceita `add column if not exists` em formas que o
+# MariaDB recusa, e a única prova que vale é o banco real. `network_nodes` é criada pela V305, que
+# já viveu em produção; aqui a tabela nasce no banco limpo do harness.
+NODE_TRAFFIC=V345__network_node_traffic.sql
+[[ -f "$MIGRATIONS/$NODE_TRAFFIC" ]] || fail "migração ausente: $NODE_TRAFFIC"
+
+if db < "$MIGRATIONS/V305__network_nodes.sql" >/dev/null 2>&1; then
+  pass "V305: network_nodes aplica em banco limpo (base da V345)"
+else
+  fail "V305: network_nodes não aplicou"
+fi
+
+if apply "$NODE_TRAFFIC" >/dev/null 2>&1; then
+  pass "V345: aplica sobre network_nodes no banco real"
+else
+  fail "1ª aplicação falhou: $NODE_TRAFFIC"
+  db < "$MIGRATIONS/$NODE_TRAFFIC" 2>&1 | head -3 >&2 || true
+fi
+
+# Um nó REAL entre as duas aplicações, com tráfego já medido: é o que "dados preservados" quer
+# dizer para uma migração de coluna — a linha existente não pode perder o que já tinha.
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_nodes (id, display_name, owner_user_id, status, profiles, declared_cpu_cores,
+  declared_memory_mb, declared_disk_mb, declared_bandwidth_mbps, observed_bytes_in_mb, observed_bytes_out_mb,
+  created_at, last_seen_at)
+values ('nd_traf001', 'no-do-trafego', 'user-mig', 'ACTIVE', 'NODE_STORAGE', 4, 8192, 102400, 100,
+  2048, 7168, now(3), now(3));
+SQL
+then
+  pass "nó com tráfego gravado entre as rodadas"
+else
+  fail "não foi possível gravar o nó de teste"
+fi
+
+if apply "$NODE_TRAFFIC" >/dev/null 2>&1; then
+  pass "V345: reaplicar não falha (idempotente)"
+else
+  fail "2ª aplicação falhou (não idempotente): $NODE_TRAFFIC"
+fi
+
+traffic=$(db -N -e "select concat(observed_bytes_in_mb, '/', observed_bytes_out_mb) from network_nodes
+  where id = 'nd_traf001'" 2>/dev/null | tr -d '[:space:]')
+[[ "$traffic" == "2048/7168" ]] && pass "o tráfego do nó sobreviveu à 2ª aplicação" \
+  || fail "esperava 2048/7168, achei '$traffic'"
+
+# Nulo é "não mediu", e a coluna TEM de aceitar: nó de runtime antigo não pode receber zero.
+nullable network_nodes observed_bytes_in_mb \
+  && pass "V345: observed_bytes_in_mb aceita nulo (runtime antigo)" \
+  || fail "V345: observed_bytes_in_mb NOT NULL — runtime antigo não conseguiria gravar"
+
 printf '\nStorage migration: PASS %d | FAIL %d\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))

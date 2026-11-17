@@ -64,6 +64,12 @@ class NetworkNodeJpaEntity {
 	@Column(name = "observed_content_used_mb")
 	private Long observedContentUsedMb;
 
+	@Column(name = "observed_bytes_in_mb")
+	private Long observedBytesInMb;
+
+	@Column(name = "observed_bytes_out_mb")
+	private Long observedBytesOutMb;
+
 	@Column(name = "consecutive_failures", nullable = false)
 	private int consecutiveFailures;
 
@@ -135,7 +141,7 @@ class NetworkNodeJpaEntity {
 			NodeProfilesCsv.parse(profiles), region, country, runtimeVersion, lastSeenAt, declaredCpuCores,
 			declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent, observedMemoryMb,
 			observedRunningTasks, observedLatencyMs, observedDiskFreeMb, observedDiskTotalMb, observedContentUsedMb,
-			consecutiveFailures,
+			observedBytesInMb, observedBytesOutMb, consecutiveFailures,
 			quarantinedUntil, quarantineReason);
 	}
 
