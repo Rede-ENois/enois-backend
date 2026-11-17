@@ -84,6 +84,11 @@ class CallPersistenceAdapter implements CallRepository {
 		return earliest(calls.findOpenByEvent(eventId, OPEN));
 	}
 
+	@Override
+	public Optional<CallSession> findOpenByTable(String tableId) {
+		return earliest(calls.findOpenByTable(tableId, OPEN));
+	}
+
 	private static Optional<CallSession> earliest(List<CallSessionJpaEntity> open) {
 		return open.stream()
 			.min(java.util.Comparator.comparing(CallSessionJpaEntity::createdAt))
@@ -130,6 +135,22 @@ class CallPersistenceAdapter implements CallRepository {
 		}
 		return (int) participants.countByCallIdAndStateAndUserIdNot(callId, CallParticipantState.JOINED,
 			excludedUserId);
+	}
+
+	@Override
+	public int countPresentSince(String callId, Instant since) {
+		return (int) participants.countByCallIdAndStateAndLastSeenAtAfter(callId, CallParticipantState.JOINED, since);
+	}
+
+	@Override
+	public boolean hasPingedPresence(String callId) {
+		return participants.existsPingedByCallIdAndState(callId, CallParticipantState.JOINED);
+	}
+
+	@Override
+	@Transactional
+	public boolean seen(String callId, String userId, Instant now) {
+		return participants.markSeen(callId, userId, CallParticipantState.JOINED, now) == 1;
 	}
 
 	@Override

@@ -3,6 +3,7 @@ package com.socialcoisa.rede.shared.security;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -33,6 +34,18 @@ import jakarta.servlet.http.HttpServletRequest;
  * <p>{@code security.trusted-proxy-ips} takes IPs or CIDRs. Loopback and private ranges stay
  * trusted by default (in-cluster ingress).</p>
  *
+ * <p><b>Servidor do front.</b> As telas do app chamam a API pelo servidor do front (SSR), e nesse
+ * caminho o salto que chega até nós é o do servidor dele: todas as contas que usam o mesmo front
+ * caíam num balde de IP só — o teto de cadastro, de recuperação de senha e de reenvio de e-mail era
+ * compartilhado por quem nem se conhece. O front repassa o IP do navegador <i>acrescentando-o ao fim
+ * da própria cadeia</i>, e é exatamente o primeiro item a partir da direita que ainda não é proxy
+ * nosso. Esse item, porém, só vale quando o último salto da conexão é um proxy nosso E a origem
+ * declarada é a de um front do próprio app: um cliente que fala direto com a origem pode mandar a
+ * cadeia que quiser, e sem essa dupla verificação bastaria reescrever o cabeçalho para escolher o
+ * próprio IP. O {@code X-Client-Origin} <b>não</b> entra nesta decisão — ele é do navegador e serve
+ * ao portão de origem, não à identidade de rede. O {@link #resolveNetwork} continua devolvendo a
+ * rede, para o que precisa de bloqueio por origem física.</p>
+ *
  * Sobre confiar no `X-Forwarded-For`: o cabeçalho pode vir forjado pelo cliente, e o item forjado
  * fica no MEIO da lista (o proxy acrescenta o IP real no fim) ou no COMEÇO (quando o proxy
  * substitui o cabeçalho e o cliente mandou um). Por isso a cadeia é lida da direita para a
@@ -53,6 +66,8 @@ public class ClientIpResolver {
 
 	private final List<Cidr> trustedProxies;
 	private final List<Cidr> cloudflareRanges;
+	/** Origens HTTPS dos fronts do próprio app que repassam o IP do navegador. */
+	private final Set<String> repassingFronts;
 
 	/** Default sem proxy extra confiável — usado pelos testes, mantém o comportamento anterior. */
 	public ClientIpResolver() {
@@ -60,17 +75,62 @@ public class ClientIpResolver {
 	}
 
 	public ClientIpResolver(String trustedProxyIps) {
-		this(trustedProxyIps, CLOUDFLARE_RANGES);
+		this(trustedProxyIps, CLOUDFLARE_RANGES, "");
+	}
+
+	/** Sem proxies extras, com fronts do app que repassam o IP do navegador. */
+	public static ClientIpResolver withRepassingFronts(String repassingFrontOrigins) {
+		return new ClientIpResolver(List.of(), Cidr.parseList(CLOUDFLARE_RANGES), repassingFrontOrigins);
+	}
+
+	/** Caminho único de construção: cada construtor público só escolhe os valores default. */
+	private ClientIpResolver(List<Cidr> trustedProxies, List<Cidr> cloudflareRanges, String repassingFrontOrigins) {
+		this.trustedProxies = trustedProxies;
+		this.cloudflareRanges = cloudflareRanges;
+		this.repassingFronts = parseFronts(repassingFrontOrigins);
 	}
 
 	@Autowired
 	public ClientIpResolver(@Value("${security.trusted-proxy-ips:}") String trustedProxyIps,
-			@Value("${security.cloudflare-ips:" + CLOUDFLARE_RANGES + "}") String cloudflareIps) {
-		this.trustedProxies = Cidr.parseList(trustedProxyIps);
-		this.cloudflareRanges = Cidr.parseList(cloudflareIps);
+			@Value("${security.cloudflare-ips:" + CLOUDFLARE_RANGES + "}") String cloudflareIps,
+			@Value("${security.repassing-front-origins:}") String repassingFrontOrigins) {
+		this(Cidr.parseList(trustedProxyIps), Cidr.parseList(cloudflareIps), repassingFrontOrigins);
 	}
 
+	/**
+	 * Só HTTPS conta: o front serve as páginas do app por TLS, e uma origem em HTTP claro não
+	 * identifica servidor nenhum (qualquer um a escreve).
+	 */
+	private static Set<String> parseFronts(String value) {
+		if (!StringUtils.hasText(value)) {
+			return Set.of();
+		}
+		return Arrays.stream(value.split(","))
+			.map(String::trim)
+			.map(origin -> origin.toLowerCase(Locale.ROOT))
+			.filter(origin -> origin.startsWith("https://"))
+			.map(origin -> origin.endsWith("/") ? origin.substring(0, origin.length() - 1) : origin)
+			.collect(java.util.stream.Collectors.toUnmodifiableSet());
+	}
+
+	/**
+	 * Identidade de rede usada pelos limites de identidade (cadastro, senha, reenvio de e-mail):
+	 * o navegador repassado por um front nosso quando dá para provar; senão, o IP da conexão.
+	 */
 	public String resolve(HttpServletRequest request) {
+		String repassed = repassedByOurFront(request);
+		if (repassed != null) {
+			return repassed;
+		}
+		return resolveNetwork(request);
+	}
+
+	/**
+	 * A rede de onde o pedido saiu, sem o repasse do front: é a base do bloqueio de rede da
+	 * moderação e do limite global — um bloqueio de rede não pode ser trocado por uma conta nova
+	 * que abre outra sessão no mesmo front.
+	 */
+	public String resolveNetwork(HttpServletRequest request) {
 		String remote = request.getRemoteAddr();
 		if (!isTrustedProxy(remote)) {
 			return isPlausible(remote) ? remote.trim() : "desconhecido";
@@ -93,6 +153,42 @@ public class ClientIpResolver {
 			return isPlausible(remote) ? remote.trim() : "desconhecido";
 		}
 		return isPlausible(remote) ? remote.trim() : "desconhecido";
+	}
+
+	/**
+	 * O IP do navegador, quando o pedido veio de um front do próprio app por um proxy nosso.
+	 *
+	 * <p>O front acrescenta o IP do navegador ao fim da cadeia que recebeu. Com a conexão chegando
+	 * por um proxy nosso, esse item é o primeiro a partir da direita que não é proxy — exatamente o
+	 * que {@code clientHop} devolve. O restante da cadeia vem do navegador e nunca é lido.</p>
+	 */
+	private String repassedByOurFront(HttpServletRequest request) {
+		if (repassingFronts.isEmpty() || !isTrustedProxy(request.getRemoteAddr())) {
+			return null;
+		}
+		if (!repassingFronts.contains(normalizeOrigin(request.getHeader("Origin")))) {
+			return null;
+		}
+		String forwarded = request.getHeader("X-Forwarded-For");
+		if (!StringUtils.hasText(forwarded)) {
+			return null;
+		}
+		// O front não acrescentou nada (página sem navegador, chamada interna): a cadeia é a que o
+		// proxy da frente gravou, e o item do fim é o IP do próprio front — não um cliente.
+		int lastComma = forwarded.lastIndexOf(',');
+		if (lastComma < 0 || !isTrustedProxy(forwarded.substring(lastComma + 1).trim())) {
+			return null;
+		}
+		String candidate = clientHop(forwarded);
+		return isPlausible(candidate) && !isTrustedProxy(candidate) ? candidate : null;
+	}
+
+	private static String normalizeOrigin(String origin) {
+		String clean = origin == null ? "" : origin.trim().toLowerCase(Locale.ROOT);
+		while (clean.endsWith("/")) {
+			clean = clean.substring(0, clean.length() - 1);
+		}
+		return clean;
 	}
 
 	/** Is this address one of our own proxies (loopback, private, or configured)? */

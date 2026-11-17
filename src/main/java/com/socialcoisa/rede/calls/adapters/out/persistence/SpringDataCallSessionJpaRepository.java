@@ -33,6 +33,11 @@ interface SpringDataCallSessionJpaRepository extends JpaRepository<CallSessionJp
 	List<CallSessionJpaEntity> findOpenByEvent(@Param("eventId") String eventId,
 			@Param("states") Collection<CallState> states);
 
+	/** Salas abertas da mesa do Éroleplay. A mesa tem uma sala só: a primeira aberta é a dela. */
+	@Query("SELECT c FROM CallSessionJpaEntity c WHERE c.tableId = :tableId AND c.state IN :states")
+	List<CallSessionJpaEntity> findOpenByTable(@Param("tableId") String tableId,
+			@Param("states") Collection<CallState> states);
+
 	@Query("SELECT c FROM CallSessionJpaEntity c WHERE c.state IN :states AND c.expiresAt < :now ORDER BY c.expiresAt")
 	List<CallSessionJpaEntity> expired(@Param("states") Collection<CallState> states, @Param("now") Instant now,
 			Pageable pageable);

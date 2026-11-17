@@ -35,6 +35,19 @@ public class IpRateLimiter {
 	public static final String TWO_FACTOR = "2fa";
 	public static final String CONTRIBUTION = "contribution";
 	public static final String REFRESH = "refresh";
+	/**
+	 * Emissão do desafio de cadastro. Teto próprio porque emitir é o passo anterior ao cadastro:
+	 * sem ele, um cliente dentro do teto de cadastro podia pedir desafios sem limite.
+	 */
+	public static final String ISSUE_CHALLENGE = "signup-challenge";
+	/** Inscrição para servir um nó (formulário público com RG/CPF) e a abertura do link de chave. */
+	public static final String NODE_JOIN = "node-join";
+	/**
+	 * Abertura do link de chave de nó. Cota própria: o formulário aceita poucas inscrições por hora,
+	 * e o link é aberto por quem já foi aprovado — dividir a cota faria a pessoa que acabou de
+	 * receber o e-mail ser barrada pelo próprio formulário que ela já preencheu.
+	 */
+	public static final String NODE_REVEAL = "node-reveal";
 
 	/** Teto de chaves guardadas: passou disso, a limpeza roda na hora (evita crescer sem limite). */
 	private static final int MAX_KEYS = 20_000;
@@ -49,6 +62,9 @@ public class IpRateLimiter {
 	private final int twoFactorLimit;
 	private final int contributionLimit;
 	private final int refreshLimit;
+	private final int issueChallengeLimit;
+	private final int nodeJoinLimit;
+	private final int nodeRevealLimit;
 	private final long signupWindowMs;
 	private final long loginWindowMs;
 	private final long passwordWindowMs;
@@ -56,6 +72,9 @@ public class IpRateLimiter {
 	private final long twoFactorWindowMs;
 	private final long contributionWindowMs;
 	private final long refreshWindowMs;
+	private final long issueChallengeWindowMs;
+	private final long nodeJoinWindowMs;
+	private final long nodeRevealWindowMs;
 
 	public IpRateLimiter(Clock clock,
 			@Value("${rede.security.rate-limit.signup.limit:5}") int signupLimit,
@@ -71,7 +90,13 @@ public class IpRateLimiter {
 			@Value("${rede.security.rate-limit.contribution.limit:5}") int contributionLimit,
 			@Value("${rede.security.rate-limit.contribution.window-minutes:60}") long contributionWindowMinutes,
 			@Value("${rede.security.rate-limit.refresh.limit:120}") int refreshLimit,
-			@Value("${rede.security.rate-limit.refresh.window-minutes:15}") long refreshWindowMinutes) {
+			@Value("${rede.security.rate-limit.refresh.window-minutes:15}") long refreshWindowMinutes,
+			@Value("${rede.security.rate-limit.signup-challenge.limit:30}") int issueChallengeLimit,
+			@Value("${rede.security.rate-limit.signup-challenge.window-minutes:60}") long issueChallengeWindowMinutes,
+			@Value("${rede.security.rate-limit.node-join.limit:3}") int nodeJoinLimit,
+			@Value("${rede.security.rate-limit.node-join.window-minutes:60}") long nodeJoinWindowMinutes,
+			@Value("${rede.security.rate-limit.node-reveal.limit:10}") int nodeRevealLimit,
+			@Value("${rede.security.rate-limit.node-reveal.window-minutes:15}") long nodeRevealWindowMinutes) {
 		this.clock = clock;
 		this.signupLimit = signupLimit;
 		this.loginLimit = loginLimit;
@@ -87,6 +112,12 @@ public class IpRateLimiter {
 		this.contributionWindowMs = contributionWindowMinutes * 60_000L;
 		this.refreshLimit = refreshLimit;
 		this.refreshWindowMs = refreshWindowMinutes * 60_000L;
+		this.issueChallengeLimit = issueChallengeLimit;
+		this.issueChallengeWindowMs = issueChallengeWindowMinutes * 60_000L;
+		this.nodeJoinLimit = nodeJoinLimit;
+		this.nodeJoinWindowMs = nodeJoinWindowMinutes * 60_000L;
+		this.nodeRevealLimit = nodeRevealLimit;
+		this.nodeRevealWindowMs = nodeRevealWindowMinutes * 60_000L;
 	}
 
 	/**
@@ -126,6 +157,9 @@ public class IpRateLimiter {
 			case TWO_FACTOR -> twoFactorWindowMs;
 			case CONTRIBUTION -> contributionWindowMs;
 			case REFRESH -> refreshWindowMs;
+			case ISSUE_CHALLENGE -> issueChallengeWindowMs;
+			case NODE_JOIN -> nodeJoinWindowMs;
+			case NODE_REVEAL -> nodeRevealWindowMs;
 			default -> 0L;
 		};
 	}
@@ -139,6 +173,9 @@ public class IpRateLimiter {
 			case TWO_FACTOR -> twoFactorLimit;
 			case CONTRIBUTION -> contributionLimit;
 			case REFRESH -> refreshLimit;
+			case ISSUE_CHALLENGE -> issueChallengeLimit;
+			case NODE_JOIN -> nodeJoinLimit;
+			case NODE_REVEAL -> nodeRevealLimit;
 			default -> 0;
 		};
 	}

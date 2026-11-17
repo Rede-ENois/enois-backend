@@ -328,6 +328,37 @@ public class EmailService {
         }
     }
 
+    /**
+     * O link de uso único da inscrição de nó aprovada: abre a página que exibe a chave uma vez.
+     *
+     * @return false quando o envio falha — a administração vê no painel que o e-mail não saiu e
+     *         pode renovar o link, em vez de a pessoa esperar por uma mensagem que não chegou
+     */
+    public boolean sendNodeJoinApprovedEmail(String toEmail, String userName, String revealToken) {
+        String subject = "Sua inscrição para servir um nó foi aprovada";
+        String revealLink = frontendUrl + "/rede/entrar/confirmar?token=" + revealToken;
+        try {
+            MimeMessage message = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
+            helper.setFrom(fromEmail);
+            helper.setTo(toEmail);
+            helper.setSubject(subject);
+            Context context = new Context();
+            context.setVariable("userName", userName);
+            context.setVariable("revealLink", revealLink);
+            context.setVariable("currentYear", java.time.Year.now().getValue());
+            helper.setText(templateEngine.process("node-join-approved", context), true);
+            mailSender.send(message);
+            recordEmail(toEmail, subject, "NODE_JOIN_APPROVED", true, null);
+            return true;
+        } catch (Exception e) {
+            recordEmail(toEmail, subject, "NODE_JOIN_APPROVED", false, e.getMessage());
+            LOG.error("Falha ao enviar link de provisionamento de no para {}: {} ({})", PiiMask.email(toEmail),
+                PiiMask.text(e.getMessage()), e.getClass().getSimpleName());
+            return false;
+        }
+    }
+
     private String buildResetLink(String resetToken) {
         return frontendUrl + "/auth/reset?token=" + resetToken;
     }

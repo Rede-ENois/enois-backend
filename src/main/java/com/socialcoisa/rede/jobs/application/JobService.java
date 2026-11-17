@@ -2,6 +2,7 @@ package com.socialcoisa.rede.jobs.application;
 
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -15,8 +16,11 @@ import org.springframework.util.StringUtils;
 import com.socialcoisa.rede.companies.application.CompanyService;
 import com.socialcoisa.rede.companies.domain.Company;
 import com.socialcoisa.rede.companies.domain.CompanyRole;
+import com.socialcoisa.rede.companies.domain.RecruitmentCapability;
 import com.socialcoisa.rede.jobs.application.port.out.JobAbandonPenaltyRepository;
 import com.socialcoisa.rede.jobs.application.port.out.JobApplicationDelivery;
+import com.socialcoisa.rede.jobs.application.port.out.JobApplicationDraftRepository;
+import com.socialcoisa.rede.jobs.domain.JobApplicationDraft;
 import com.socialcoisa.rede.jobs.application.port.out.JobApplicationStatusNotifier;
 import com.socialcoisa.rede.jobs.application.port.out.JobRepository;
 import com.socialcoisa.rede.jobs.domain.Job;
@@ -55,6 +59,7 @@ public class JobService {
 		.compile("(?i)(R\\$|US\\$|\\$|€)");
 
 	private final JobRepository repository;
+	private final JobApplicationDraftRepository draftRepository;
 	private final ReputationService reputationService;
 	private final com.socialcoisa.rede.profile.application.port.out.UserProfileRepository userProfileRepository;
 	private final com.socialcoisa.rede.corporate.application.CorporateProfileService corporateProfiles;
@@ -68,6 +73,7 @@ public class JobService {
 	private final BehavioralTimingGuard behavioralTimingGuard;
 	private final CompanyService companyService;
 	private final CacheInvalidator cacheInvalidator;
+	private final JobCommandAuthorization command;
 
 	public JobService(JobRepository repository, ReputationService reputationService,
 			com.socialcoisa.rede.profile.application.port.out.UserProfileRepository userProfileRepository,
@@ -77,8 +83,10 @@ public class JobService {
 			JobAbandonPenaltyRepository abandonPenalties,
 			tools.jackson.databind.ObjectMapper objectMapper, Clock clock,
 			UserRateLimiter userRateLimiter, BehavioralTimingGuard behavioralTimingGuard,
-			CompanyService companyService, CacheInvalidator cacheInvalidator) {
+			CompanyService companyService, CacheInvalidator cacheInvalidator, JobCommandAuthorization command,
+			JobApplicationDraftRepository draftRepository) {
 		this.repository = repository;
+		this.draftRepository = draftRepository;
 		this.reputationService = reputationService;
 		this.userProfileRepository = userProfileRepository;
 		this.corporateProfiles = corporateProfiles;
@@ -92,13 +100,14 @@ public class JobService {
 		this.behavioralTimingGuard = behavioralTimingGuard;
 		this.companyService = companyService;
 		this.cacheInvalidator = cacheInvalidator;
+		this.command = command;
 	}
 
 	@Transactional
 	public Job create(String title, String company, String logo, String location, String type, String level,
 			String salary, String currency, String salaryMin, String salaryMax, String salaryPeriod,
 			String description, List<String> skills, List<JobFieldInput> fields, String userId,
-			boolean communityAgreement, String companyId) {
+			boolean communityAgreement, String companyId, Instant applicationDeadline) {
 		// Posting for a company page takes RECRUITER or above on it; the job then carries the
 		// page's name and logo, so nobody publishes in a page's name without being on its team.
 		Company page = null;
@@ -132,7 +141,7 @@ public class JobService {
 		String id = "job_" + UUID.randomUUID().toString().replace("-", "");
 		Job job = Job.create(id, title, company, logo, location, type, level, normalizeSalary(salary),
 			normalizeCurrency(currency), range.min(), range.max(), range.period(), range.description(), skills,
-			normalizeFields(id, fields), userId, clock.instant(), clock.instant());
+			normalizeFields(id, fields), userId, clock.instant(), clock.instant(), applicationDeadline);
 		if (page != null) {
 			job = job.withCompany(page.id());
 		}
@@ -166,10 +175,45 @@ public class JobService {
 		Job updated = Job.restore(jobId, title, company, logo, location, type, level, normalizeSalary(salary),
 			normalizeCurrency(currency), range.min(), range.max(), range.period(), range.description(), skills,
 			normalizeFields(jobId, fields), userId, existing.communityAgreedAt(),
-			existing.status(), existing.closedAt(), existing.postedAt(), clock.instant(), existing.companyId());
+			existing.status(), existing.closedAt(), existing.postedAt(), clock.instant(), existing.companyId(),
+			existing.applicationDeadline());
 		repository.save(updated);
 		cacheInvalidator.afterCommit(CacheConfig.JOBS);
 		return updated;
+	}
+
+	/**
+	 * Define (ou remove, com nulo) o prazo de candidaturas. Operação própria e não parte da
+	 * edição: mudar o prazo é ato de ciclo de vida — vale para vaga aberta e para reaberta,
+	 * e quem conduz a seleção (CONFIGURE_PROCESS) pode fazê-lo na vaga de página.
+	 */
+	@Transactional
+	public Job setDeadline(String jobId, String userId, Instant deadline) {
+		Job existing = repository.findByIdForUpdate(jobId)
+			.orElseThrow(() -> new ApiException(404, "JOB_NOT_FOUND", "Vaga nao encontrada."));
+		command.requireCommander(existing, userId, RecruitmentCapability.CONFIGURE_PROCESS,
+			"Voce nao pode configurar uma vaga que nao criou.");
+		Job updated = existing.withDeadline(deadline, clock.instant());
+		repository.save(updated);
+		cacheInvalidator.afterCommit(CacheConfig.JOBS);
+		return updated;
+	}
+
+	/**
+	 * Reabre a vaga encerrada. Quem comanda a vaga (autor ou CONFIGURE_PROCESS na vaga de
+	 * página) reabre; as candidaturas já recebidas continuam lá, o fluxo de etapas também.
+	 */
+	@Transactional
+	public Job reopen(String jobId, String userId) {
+		// Mesmo lock do close/apply: ciclo de vida inteiro disputa a mesma serialização.
+		Job existing = repository.findByIdForUpdate(jobId)
+			.orElseThrow(() -> new ApiException(404, "JOB_NOT_FOUND", "Vaga nao encontrada."));
+		command.requireCommander(existing, userId, RecruitmentCapability.CONFIGURE_PROCESS,
+			"Voce nao pode reabrir uma vaga que nao criou.");
+		Job reopened = existing.reopened(clock.instant());
+		repository.save(reopened);
+		cacheInvalidator.afterCommit(CacheConfig.JOBS);
+		return reopened;
 	}
 
 	/**
@@ -181,9 +225,10 @@ public class JobService {
 		// Mesmo lock do apply: encerrar e candidatar-se disputam o mesmo ponto de serializacao.
 		Job existing = repository.findByIdForUpdate(jobId)
 			.orElseThrow(() -> new ApiException(404, "JOB_NOT_FOUND", "Vaga nao encontrada."));
-		if (!existing.postedBy().equals(userId)) {
-			throw new ApiException(403, "NOT_OWNER", "Voce nao pode encerrar uma vaga que nao criou.");
-		}
+		// O autor encerra sempre; na vaga de página, quem conduz a seleção (CONFIGURE_PROCESS)
+		// também — a mensagem é a de antes, então nenhuma resposta nova vaza.
+		command.requireCommander(existing, userId, RecruitmentCapability.CONFIGURE_PROCESS,
+			"Voce nao pode encerrar uma vaga que nao criou.");
 		// Repetir o encerramento e erro de estado, nao sucesso silencioso: o autor precisa saber
 		// que a acao nao mudou nada agora.
 		if (!existing.isOpen()) {
@@ -212,9 +257,10 @@ public class JobService {
 			JobApplicationStatus newStatus, String feedback) {
 		Job job = repository.findByIdForUpdate(jobId)
 			.orElseThrow(() -> new ApiException(404, "JOB_NOT_FOUND", "Vaga nao encontrada."));
-		if (!job.postedBy().equals(userId)) {
-			throw new ApiException(403, "NOT_OWNER", "So quem publicou a vaga pode gerenciar as candidaturas.");
-		}
+		// A vaga vem travada para update: triagens concorrentes serializam, e a checagem de
+		// comando roda sobre o estado travado.
+		command.requireCommander(job, userId, com.socialcoisa.rede.companies.domain.RecruitmentCapability.TRIAGE,
+			"So quem publicou a vaga pode gerenciar as candidaturas.");
 		// A candidatura tem que ser DESTA vaga: sem isso, um id de outra vaga seria alcancavel
 		// pelo caminho da URL.
 		JobApplication application = repository.findApplicationById(applicationId)
@@ -271,6 +317,12 @@ public class JobService {
 		if (!job.isOpen()) {
 			throw new ApiException(409, "JOB_CLOSED", "Esta vaga foi encerrada e nao recebe mais candidaturas.");
 		}
+		// Prazo declarado pelo autor expirou: recusa explícita com código próprio, não a mesma
+		// mensagem de vaga encerrada — são estados diferentes para o candidato.
+		if (!job.acceptingApplications(clock.instant())) {
+			throw new ApiException(409, "APPLICATION_DEADLINE_PASSED",
+				"O prazo para candidaturas desta vaga ja passou.");
+		}
 		if (job.postedBy().equals(userId)) {
 			throw new ApiException(400, "CANNOT_APPLY_TO_OWN_JOB", "Voce nao pode se candidatar a sua propria vaga.");
 		}
@@ -285,6 +337,8 @@ public class JobService {
 		JobApplication application = JobApplication.create(null, jobId, userId, trimToNull(message, 2000), snapshot,
 			clock.instant(), normalized);
 		String applicationId = repository.saveApplication(application);
+		// Enviou, o rascunho morre: não sobra lixo do que já virou candidatura.
+		draftRepository.delete(jobId, userId);
 		// Candidatura nova nasce sempre APPLIED: o estado nao vem de fora.
 		JobApplication saved = JobApplication.restore(applicationId, jobId, userId, application.message(), snapshot,
 			application.appliedAt(), normalized, JobApplicationStatus.APPLIED, null, null);
@@ -294,13 +348,31 @@ public class JobService {
 		return saved;
 	}
 
-	/** Candidaturas recebidas por uma vaga: somente o autor da vaga ve quem se candidatou. */
-	public List<JobApplication> applicationsOf(String jobId, String requesterId, int limit) {
-		Job job = repository.findById(jobId)
+	// ---------- Rascunho da candidatura (autosave) ----------
+
+	/**
+	 * Grava o rascunho das respostas (um por candidato×vaga, grava por cima). Não valida contra
+	 * o formulário — é o que a pessoa digitou até agora, não um envio; a validação acontece no
+	 * apply, que continua sendo o único caminho que cria candidatura.
+	 */
+	public JobApplicationDraft saveDraft(String jobId, String userId, Map<String, String> answers) {
+		repository.findById(jobId)
 			.orElseThrow(() -> new ApiException(404, "JOB_NOT_FOUND", "Vaga nao encontrada."));
-		if (!job.postedBy().equals(requesterId)) {
-			throw new ApiException(403, "NOT_OWNER", "So quem publicou a vaga ve as candidaturas recebidas.");
-		}
+		return draftRepository.save(JobApplicationDraft.create(jobId, userId, answers, clock.instant()));
+	}
+
+	/** O rascunho de quem pede nesta vaga; vaga inexistente é 404 igual ao apply. */
+	public java.util.Optional<JobApplicationDraft> draftOf(String jobId, String userId) {
+		repository.findById(jobId)
+			.orElseThrow(() -> new ApiException(404, "JOB_NOT_FOUND", "Vaga nao encontrada."));
+		return draftRepository.find(jobId, userId);
+	}
+
+	/** Candidaturas recebidas por uma vaga: o autor da vaga e a equipe de recrutamento dela veem. */
+	public List<JobApplication> applicationsOf(String jobId, String requesterId, int limit) {
+		command.requireCommander(jobId, requesterId,
+			com.socialcoisa.rede.companies.domain.RecruitmentCapability.VIEW_CANDIDATES,
+			"So quem publicou a vaga ve as candidaturas recebidas.");
 		return repository.findApplicationsByJob(jobId, Math.min(Math.max(limit, 1), 100));
 	}
 
@@ -321,6 +393,11 @@ public class JobService {
 		List<String> missing = new java.util.ArrayList<>();
 		List<JobApplication.JobApplicationAnswer> result = new java.util.ArrayList<>();
 		for (JobApplicationField field : job.applicationFields()) {
+			// Campo condicional não visível não pede resposta: exigir o invisível é o que faz o
+			// candidato travar num formulário que não mostra o que falta.
+			if (!field.visibleGiven(byField)) {
+				continue;
+			}
 			String value = byField.get(field.id());
 			if (!StringUtils.hasText(value)) {
 				if (field.required()) {
@@ -429,11 +506,34 @@ public class JobService {
 			if (!labels.add(label.toLowerCase(java.util.Locale.ROOT))) {
 				throw new ApiException(400, "DUPLICATE_FIELD_LABEL", "Ha dois campos com o mesmo nome: " + label + ".");
 			}
-			normalized.add(JobApplicationField.create(
-				"field_" + UUID.randomUUID().toString().replace("-", ""), jobId, label,
-				JobApplicationField.FieldType.from(input.type()), input.required(), index));
+			String id = "field_" + UUID.randomUUID().toString().replace("-", "");
+			boolean conditional = StringUtils.hasText(input.visibleIfFieldId())
+				|| StringUtils.hasText(input.visibleIfValue());
+			// A condicional se resolve contra o que JÁ foi normalizado nesta chamada: origem tem
+			// que vir antes na lista, o que proíbe ciclo por construção (o ciclo exigiria
+			// depender de um campo que ainda não existe). Na criação os ids ainda não são
+			// conhecidos de quem publica, então o rótulo exato de um campo anterior também
+			// resolve a origem; o que fica gravado é sempre o id resolvido.
+			normalized.add(conditional
+				? JobApplicationField.conditional(id, jobId, label,
+					JobApplicationField.FieldType.from(input.type()), input.required(), index,
+					input.visibleIfFieldId(), input.visibleIfValue(),
+					sourceId -> fieldInNormalizedByIdOrLabel(sourceId, normalized))
+				: JobApplicationField.create(id, jobId, label,
+					JobApplicationField.FieldType.from(input.type()), input.required(), index));
 		}
 		return normalized;
+	}
+
+	/** Origem da condicional: casa por id, e por rótulo exato (mesma chamada de normalização). */
+	private JobApplicationField fieldInNormalizedByIdOrLabel(String sourceId, List<JobApplicationField> normalized) {
+		String key = sourceId.trim();
+		for (JobApplicationField field : normalized) {
+			if (field.id().equals(key) || field.label().equalsIgnoreCase(key)) {
+				return field;
+			}
+		}
+		return null;
 	}
 
 	private String trimToNull(String value, int max) {
@@ -444,8 +544,16 @@ public class JobService {
 		return trimmed.length() > max ? trimmed.substring(0, max) : trimmed;
 	}
 
-	/** Campos que o autor define no formulario de candidatura. */
-	public record JobFieldInput(String label, String type, boolean required) {
+	/**
+	 * Campos que o autor define no formulario de candidatura. `visibleIfFieldId`/`visibleIfValue`
+	 * tornam o campo condicional: só aparece quando a resposta do campo de origem casa com o valor.
+	 */
+	public record JobFieldInput(String label, String type, boolean required, String visibleIfFieldId,
+			String visibleIfValue) {
+
+		public JobFieldInput(String label, String type, boolean required) {
+			this(label, type, required, null, null);
+		}
 	}
 
 	/** Resposta do candidato a um campo da vaga. */

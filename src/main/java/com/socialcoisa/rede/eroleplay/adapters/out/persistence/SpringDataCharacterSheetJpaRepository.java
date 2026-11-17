@@ -9,6 +9,8 @@ interface SpringDataCharacterSheetJpaRepository extends JpaRepository<CharacterS
 
 	Optional<CharacterSheetJpaEntity> findByCampaignIdAndUserId(String campaignId, String userId);
 
+	Optional<CharacterSheetJpaEntity> findByIdAndCampaignId(String id, String campaignId);
+
 	List<CharacterSheetJpaEntity> findByCampaignIdOrderByUpdatedAtDesc(String campaignId);
 
 	long countByCampaignId(String campaignId);

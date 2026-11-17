@@ -36,8 +36,12 @@ class PostPersistenceAdapter implements PostRepository, SocialPostCountReader {
 	}
 
 	@Override
-	public List<Post> findExpiredMoments(Instant now, int limit) {
-		return repository.findByTypeAndStatusAndExpiresAtBefore(PostType.MOMENT, PostStatus.ACTIVE, now).stream()
+	public List<Post> findExpiredEphemeral(Instant now, int limit) {
+		return repository
+			.findByTypeInAndStatusAndExpiresAtBefore(
+				java.util.Arrays.stream(PostType.values()).filter(PostType::isEphemeral).toList(),
+				PostStatus.ACTIVE, now)
+			.stream()
 			.limit(Math.max(1, limit))
 			.map(PostJpaEntity::toDomain).toList();
 	}

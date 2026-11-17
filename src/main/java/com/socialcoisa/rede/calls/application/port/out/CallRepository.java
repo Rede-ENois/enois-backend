@@ -48,6 +48,9 @@ public interface CallRepository {
 	/** Chamada "ao vivo" (aberta) do encontro. */
 	Optional<CallSession> findOpenByEvent(String eventId);
 
+	/** Chamada "ao vivo" (aberta) da mesa do Éroleplay. */
+	Optional<CallSession> findOpenByTable(String tableId);
+
 	/** Chamadas abertas em que a pessoa está dentro ou foi convidada — para retomar a tela. */
 	List<CallSession> findOpenByParticipant(String userId);
 
@@ -81,6 +84,22 @@ public interface CallRepository {
 
 	/** Sai da sala; falso quando não estava dentro. */
 	boolean leave(String callId, String userId, Instant now);
+
+	/**
+	 * Sinal de vida de quem está na sala: atualiza {@code lastSeenAt} de quem segue JOINED. Falso
+	 * quando não há presença ativa (ping de quem já saiu não reabre nada).
+	 */
+	boolean seen(String callId, String userId, Instant now);
+
+	/** Quem está na sala agora (JOINED) e mandou sinal de vida a partir de {@code since}. */
+	int countPresentSince(String callId, Instant since);
+
+	/**
+	 * Se alguma presença ativa desta sala já foi pingada depois de entrar. É a prova de que o
+	 * cliente desta sala sabe pingar: sem esse sinal, o critério de sinal de vida do worker não
+	 * se aplica (rolagem em curso — front antigo não pode ter a chamada derrubada por prazo).
+	 */
+	boolean hasPingedPresence(String callId);
 
 	/** Decisão em chamada 1:1 (atender, recusar): só muda quem ainda não decidiu. */
 	boolean decide(String callId, String userId, CallParticipantState next, Instant now);

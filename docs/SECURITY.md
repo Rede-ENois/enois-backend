@@ -103,6 +103,38 @@ quando a priorização sair da documentação.
 6. **Fase F — métricas**: incidentes por categoria, tempo de detecção/contensão, reincidência, taxa
    de reversão, falsos positivos, custo/latência da IA, divergências financeiras.
 
+## 3.1 Verificação de privilégios (E-02)
+
+A verificação de privilégios é sempre **da própria conta para cima**: a conta de teste chama a rota
+que exige papel e o resultado esperado é a recusa. Nenhuma etapa autoriza apontar a sessão para o
+perfil de outra pessoa, nem alterar dado que não seja da própria conta — era isso que a rotina antiga
+fazia, consumindo o teto de edição de perfil de várias contas e chegando a bloquear o perfil de quem
+não participou da rodada.
+
+1. `GET /moderation/me` com a própria sessão: mostra o próprio estado (elegível, moderador, admin)
+   sem alterar nada.
+2. `GET /admin/admins` com a própria conta comum: esperado **403**.
+3. Qualquer rota administrativa (`/admin/**`) e de moderação (`/moderation/**`) com a própria conta
+   comum: esperado **403**; sem sessão: esperado **401**.
+4. `PATCH /me/profile` com a própria sessão altera somente o perfil da própria conta.
+
+O passo a passo da rodada, com o checklist "nenhuma escrita fora da própria conta", está em
+[`PENTEST-RUNBOOK.md`](PENTEST-RUNBOOK.md).
+
+Cada recusa acima fica registrada: o `AdminRouteInterceptor` grava na trilha de auditoria
+(`ADMIN_AUTHORITY_DENIED`) o método, a rota, o status, o motivo (`SESSION_MISSING`, `ADMIN_ONLY`,
+`MODERATOR_ONLY`) e o IP resolvido — sem corpo de requisição e sem token. O painel
+`GET /admin/monitoring/denied-admin` mostra o total, as contas que passaram do limiar
+(`rede.security.denied-admin-alerts.threshold`, padrão 20, em `window-minutes`, padrão 10) e a
+varredura anônima que passou do mesmo limiar.
+
+## 3.2 Banco de dados — requisito de rede (E-08)
+
+O banco só é acessível pela aplicação e pelo IP de administração, com TLS; a porta não é exposta à
+internet. Como conferir na implantação e o que configurar está em
+[`DEPLOYMENT.md`](DEPLOYMENT.md#banco-de-dados-rede-e-tls-e-08). A verificação faz parte do checklist
+de implantação e não depende do código.
+
 ## 4. Regras que valem para toda fase
 
 - Controle crítico **no backend**, no momento da execução — nunca só na tela.

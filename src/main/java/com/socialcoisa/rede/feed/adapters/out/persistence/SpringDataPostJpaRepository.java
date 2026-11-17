@@ -66,8 +66,9 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 	List<PostJpaEntity> findByChannelIdAndStatusAndCreatedAtBeforeOrderByCreatedAtDesc(String channelId,
 			PostStatus status, Instant before, Pageable pageable);
 
-	/** Momentos vencidos e ainda ativos — o worker aplica o soft-delete do fluxo normal. */
-	List<PostJpaEntity> findByTypeAndStatusAndExpiresAtBefore(PostType type, PostStatus status, Instant now);
+	/** Efêmeros vencidos e ainda ativos (Momento, Instante) — o worker aplica o soft-delete. */
+	List<PostJpaEntity> findByTypeInAndStatusAndExpiresAtBefore(Collection<PostType> types, PostStatus status,
+			Instant now);
 
 	// ---- Separação de identidades (perfil profissional): regras no backend, sempre ----
 
@@ -170,7 +171,8 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 			SELECT p FROM PostJpaEntity p
 			WHERE p.status = :status AND p.createdAt < :before
 			  AND (EXISTS (SELECT r.id FROM ReactionJpaEntity r WHERE r.postId = p.id AND r.userId = :reader)
-			    OR EXISTS (SELECT c.id FROM CommentJpaEntity c WHERE c.postId = p.id AND c.authorId = :reader))
+			    OR EXISTS (SELECT c.id FROM CommentJpaEntity c WHERE c.postId = p.id AND c.authorId = :reader)
+			    OR EXISTS (SELECT s.id FROM SavedPostJpaEntity s WHERE s.postId = p.id AND s.userId = :reader))
 			ORDER BY p.createdAt DESC""")
 	List<PostJpaEntity> findInteracted(@Param("status") PostStatus status, @Param("reader") String reader,
 			@Param("before") Instant before, Pageable pageable);

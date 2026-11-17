@@ -47,6 +47,8 @@ import com.socialcoisa.rede.shared.web.ApiException;
  * minuto depois de a última pessoa sair (a tolerância é o que deixa recarregar a página).</li>
  * <li>Cada tópico do grupo tem a própria sala de vídeo "Tamo junto"; a sala geral é outra.</li>
  * <li>Sair do grupo não encerra a chamada para os outros; no 1:1 sair encerra.</li>
+ * <li>A presença na sala tem sinal de vida: quem está dentro pinga, e a entrada cujo token
+ * falhou é desfeita na hora — fechar a aba sem desligar não sustenta a sala para sempre.</li>
  * <li>Gravação nunca é ligada (o token de entrada desliga gravação/transmissão).</li>
  * </ul>
  */
@@ -55,10 +57,17 @@ public class CallService implements CallRoomAuthorization {
 
 	private static final Logger LOG = LoggerFactory.getLogger(CallService.class);
 
+	/**
+	 * Janela do sinal de vida: o front pinga a cada minuto, e duas batidas perdidas seguidas ainda
+	 * contam como gente presente. Passou da janela sem ping nenhum, a presença é fantasma.
+	 */
+	private static final Duration PRESENCE_FRESH_WINDOW = Duration.ofMinutes(2);
+
 	private final CallRepository calls;
 	private final CallAudience audience;
 	private final TopicLookup topics;
 	private final EventLookup eventLookup;
+	private final com.socialcoisa.rede.calls.application.port.out.TableCallLookup tables;
 	private final MeetingTokenIssuer tokens;
 	private final NotificationService notifications;
 	private final UserProfileRepository profiles;
@@ -73,14 +82,16 @@ public class CallService implements CallRoomAuthorization {
 	private final TransactionTemplate entrance;
 
 	public CallService(CallRepository calls, CallAudience audience, TopicLookup topics, EventLookup eventLookup,
-			MeetingTokenIssuer tokens, NotificationService notifications, UserProfileRepository profiles,
-			UserRateLimiter rateLimiter, AgeGate ageGate, ApplicationEventPublisher events, Clock clock,
+			com.socialcoisa.rede.calls.application.port.out.TableCallLookup tables, MeetingTokenIssuer tokens,
+			NotificationService notifications, UserProfileRepository profiles, UserRateLimiter rateLimiter,
+			AgeGate ageGate, ApplicationEventPublisher events, Clock clock,
 			PlatformTransactionManager transactionManager) {
 		this.entrance = new TransactionTemplate(transactionManager);
 		this.calls = calls;
 		this.audience = audience;
 		this.topics = topics;
 		this.eventLookup = eventLookup;
+		this.tables = tables;
 		this.tokens = tokens;
 		this.notifications = notifications;
 		this.profiles = profiles;
@@ -198,6 +209,48 @@ public class CallService implements CallRoomAuthorization {
 		return view(call, actorId, null);
 	}
 
+	/**
+	 * Abre (ou devolve) a sala de voz da mesa do Éroleplay. Mesma mecânica do "Tamo junto": nasce
+	 * "ao vivo" com quem abriu já dentro, sem toque — a mesa é convocada, não chamada. Quem entra
+	 * precisa participar da campanha da mesa, e a conferência é refeita a cada entrada.
+	 */
+	@Transactional
+	public CallView startTable(String tableId, String actorId, CallKind kind) {
+		requireConfigured();
+		ageGate.requireCanWrite(actorId);
+		List<String> members = tables.campaignMembersOf(tableId);
+		rateLimiter.require(actorId, UserRateLimiter.START_CALL);
+		Instant now = clock.instant();
+		Optional<CallSession> open = calls.findOpenByTable(tableId);
+		if (open.isPresent()) {
+			enter(open.get(), actorId);
+			return view(open.get(), actorId, null);
+		}
+		CallSession call = CallSession.forTable(newId("call"), kind, tableId, actorId, newRoomId(),
+			displayName(actorId), now);
+		calls.create(call, members, now);
+		enter(call, actorId);
+		notifyTableLive(call, actorId, members);
+		publish(call, members);
+		return view(call, actorId, null);
+	}
+
+	/** Sala "Tamo junto" aberta da mesa do Éroleplay, se houver — é o "ao vivo" da mesa. */
+	@Transactional(readOnly = true)
+	public Optional<CallView> openOfTable(String tableId, String actorId) {
+		return calls.findOpenByTable(tableId)
+			.filter(call -> {
+				try {
+					tables.requireMemberOfCampaign(tableId, actorId);
+					return true;
+				}
+				catch (ApiException denied) {
+					return false;
+				}
+			})
+			.map(call -> view(call, actorId, null));
+	}
+
 	// ------------------------------------------------------------------ responder (1:1)
 
 	@Transactional
@@ -299,8 +352,27 @@ public class CallService implements CallRoomAuthorization {
 	public JoinView join(String callId, String actorId) {
 		requireConfigured();
 		CallSession call = enterStandalone(callId, actorId);
-		String token = tokens.tokenFor(call, roomParticipant(call, actorId),
-			displayName(actorId), moderatorOf(call, actorId));
+		String token;
+		try {
+			token = tokens.tokenFor(call, roomParticipant(call, actorId),
+				displayName(actorId), moderatorOf(call, actorId));
+		}
+		catch (RuntimeException failed) {
+			// A entrada gravou a presença antes de sair para buscar o token. Sem token a pessoa
+			// nunca abre a sala: se não sair da conta de presentes, o fantasma sustenta a sala
+			// "ao vivo" para sempre. Só o grupo tem presença que sobrevive à tentativa — no 1:1
+			// os prazos de toque e abandono já fecham tudo sozinhos.
+			if (call.modality() == CallModality.GROUP) {
+				try {
+					leave(callId, actorId);
+				}
+				catch (RuntimeException undoFailed) {
+					LOG.warn("call-undo call={} user={} falhou: {}", callId, actorId,
+						undoFailed.getClass().getSimpleName());
+				}
+			}
+			throw failed;
+		}
 		return new JoinView(call.id(), call.kind(), call.modality(), tokens.host(), tokens.tokenTtlSeconds(),
 			call.roomId(), token, view(call, actorId, null));
 	}
@@ -378,6 +450,24 @@ public class CallService implements CallRoomAuthorization {
 		Instant now = clock.instant();
 		return new CallParticipant(call.id() + ":" + actorId, call.id(), actorId, CallParticipantState.JOINED,
 			now, now, null, now);
+	}
+
+	/**
+	 * Sinal de vida de quem está na sala. A presença deixa de ser o registro de uma entrada e passa
+	 * a ter prazo: o ping atualiza {@code lastSeenAt} e empurra o vencimento da chamada — que é o
+	 * que o worker de expiração lê. Sala com gente viva nem chega até ele; sala cujo sinal de vida
+	 * apagou fecha sozinha pelo mesmo caminho da sala vazia.
+	 */
+	@Transactional
+	public CallView presence(String callId, String actorId) {
+		CallSession call = requireCall(callId, actorId);
+		if (call.state().isOpen() && calls.seen(callId, actorId, clock.instant())) {
+			Instant now = clock.instant();
+			CallState from = call.state();
+			call.touch(now, CallSession.ABANDON_TIMEOUT);
+			calls.persist(call, from);
+		}
+		return view(call, actorId, null);
 	}
 
 	/** Quem iniciou a chamada é moderador; quem entra depois nunca vira moderador por conta própria. */
@@ -520,10 +610,16 @@ public class CallService implements CallRoomAuthorization {
 		int closed = 0;
 		for (CallSession call : expired) {
 			CallState from = call.state();
-			// Grupo com gente dentro não fecha por prazo: o abandono é quando a MÍDIA parou, não
-			// quando a sala nasceu. Sem isto, uma sala viva seria derrubada uma hora depois de abrir.
+			// Grupo com gente dentro não fecha por prazo: o abandono é quando o SINAL DE VIDA parou,
+			// não quando a sala nasceu. Sem isto, uma sala viva seria derrubada uma hora depois de
+			// abrir. Presença sem ping recente é fantasma — aba fechada sem desligar, entrada cujo
+			// token falhou — e sala só de fantasma fecha como vazia. Guarda de rolagem: sala cujo
+			// front nunca pingou (cliente antigo, sem a rota nova) mantém o critério antigo, em que
+			// presença conta como gente; nenhuma chamada viva é derrubada por prazo na transição.
 			if (from == CallState.ACTIVE && call.modality() == CallModality.GROUP) {
-				if (calls.countPresentExcluding(call.id(), null) > 0) {
+				if (calls.countPresentExcluding(call.id(), null) > 0
+						&& (!calls.hasPingedPresence(call.id())
+							|| calls.countPresentSince(call.id(), now.minus(PRESENCE_FRESH_WINDOW)) > 0)) {
 					continue;
 				}
 				if (!call.expire(now, "NO_CONNECTION")) {
@@ -622,12 +718,13 @@ public class CallService implements CallRoomAuthorization {
 	private List<String> audienceOf(CallSession call) {
 		return call.conversationId() != null ? audience.participantsOf(call.conversationId())
 			: call.groupId() != null ? audience.groupMembers(call.groupId())
-			: call.eventId() != null ? eventLookup.interestedIn(call.eventId()) : List.of();
+			: call.eventId() != null ? eventLookup.interestedIn(call.eventId())
+			: call.tableId() != null ? tables.campaignMembersOf(call.tableId()) : List.of();
 	}
 
 	private void publish(CallSession call, List<String> userIds) {
 		events.publishEvent(new CallChanged(call.id(), call.conversationId(), call.groupId(), call.eventId(),
-			call.state().name(), userIds));
+			call.tableId(), call.state().name(), userIds));
 	}
 
 	private void notifyIncoming(CallSession call, String actorId, List<String> recipients) {
@@ -663,6 +760,18 @@ public class CallService implements CallRoomAuthorization {
 			}
 			notifications.createCounted(userId, "CALL_EVENT_LIVE", "call_live:" + call.id(), actorId,
 				"Tamo junto ao vivo", body, count -> body, callHref(call.id()), "Entrar");
+		}
+	}
+
+	private void notifyTableLive(CallSession call, String actorId, List<String> members) {
+		String body = "🔴 A mesa esta ao vivo! Entre na voz quando quiser.";
+		for (String userId : members) {
+			if (userId.equals(actorId)) {
+				continue;
+			}
+			// Uma notificação por chamada (a chave é a própria chamada): não repete a cada entrada.
+			notifications.createCounted(userId, "CALL_TABLE_LIVE", "call_live:" + call.id(), actorId,
+				"Mesa ao vivo", body, count -> body, callHref(call.id()), "Entrar");
 		}
 	}
 
@@ -705,8 +814,8 @@ public class CallService implements CallRoomAuthorization {
 	private CallView view(CallSession call, String actorId, Integer participantCount) {
 		int present = participantCount != null ? participantCount : calls.countPresentExcluding(call.id(), null);
 		return new CallView(call.id(), call.kind(), call.modality(), call.conversationId(), call.groupId(),
-			call.topicId(), call.eventId(), call.initiatorId(), call.displayName(), call.state(), call.createdAt(),
-			call.answeredAt(), call.endedAt(), call.endReason(), call.expiresAt(), present,
+			call.topicId(), call.eventId(), call.tableId(), call.initiatorId(), call.displayName(), call.state(),
+			call.createdAt(), call.answeredAt(), call.endedAt(), call.endReason(), call.expiresAt(), present,
 			call.initiatorId().equals(actorId), calls.participantState(call.id(), actorId));
 	}
 
@@ -743,9 +852,9 @@ public class CallService implements CallRoomAuthorization {
 
 	/** Visão da chamada para uma pessoa. Nunca carrega token nem nome de sala. */
 	public record CallView(String id, CallKind kind, CallModality modality, String conversationId, String groupId,
-			String topicId, String eventId, String initiatorId, String displayName, CallState state, Instant createdAt,
-			Instant answeredAt, Instant endedAt, String endReason, Instant expiresAt, int participantCount,
-			boolean isInitiator, CallParticipantState myState) {
+			String topicId, String eventId, String tableId, String initiatorId, String displayName, CallState state,
+			Instant createdAt, Instant answeredAt, Instant endedAt, String endReason, Instant expiresAt,
+			int participantCount, boolean isInitiator, CallParticipantState myState) {
 	}
 
 	/**

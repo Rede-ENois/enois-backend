@@ -70,7 +70,35 @@ class AutomatedWritePathsTests {
 		"/notifications/digest/unsubscribe",
 		"/calls/*/gateway/entry/*",
 		"/mentoring/*/gateway/entry/*",
-		"/internal/novidades-deploy");
+		"/internal/novidades-deploy",
+		// Nó da rede cooperativa não tem sessão: o enroll usa o token de provisionamento e o
+		// heartbeat a API key do nó, ambos conferidos no controller (fase 1 da rede distribuída).
+		"/network/nodes/enroll",
+		"/network/nodes/heartbeat",
+		// Fase 2: resultado de tarefa devolvido pelo nó, com a mesma credencial de nó.
+		"/network/tasks/*/result",
+		// Fase 3: nó de borda confirmando o que sincronizou e pedindo reconciliação.
+		"/network/content/*/*/synced",
+		"/network/content/reconcile",
+		// Fase 3: entrega do arquivo transcodificado pelo nó de mídia.
+		"/network/media/*/result",
+		// Storage (fase 1): o nó grava o corpo de um objeto. Mesma credencial de nó e perfil
+		// NODE_STORAGE conferido no controller — sem sessão de navegador, como as demais.
+		"/network/storage/objects/*",
+		// Storage (fase 3): a réplica confirma a cópia designada. Mesma credencial, e a confirmação
+		// é conferida contra a colocação antes de virar durabilidade.
+		"/network/storage/objects/*/replica",
+		// Storage (fase 3, §5.6): o nó poda do próprio disco os corpos que o catálogo não atribui
+		// mais a ele. Mesma credencial de nó, e o serviço só aceita o dono do disco — outro nó
+		// responde 403 sem tocar em arquivo nenhum.
+		"/network/storage/inventory/purge",
+		// Storage (fase 3, §5.8): o nó devolve o que mediu no próprio disco -- o Control Plane só
+		// pode conferir o corpo da instalação em que roda; a cópia de outro nó só o dono relê.
+		"/network/storage/scrub",
+		// Inscrição de nó: o formulário é público (quem oferece a máquina pode não ter conta) e o
+		// link é autenticado pelo token de uso único do e-mail. Ambos limitados no controller.
+		"/network/join/applications",
+		"/network/join/reveal");
 
 	private static final Pattern MAPPING = Pattern
 		.compile("@(Get|Post|Put|Patch|Delete)Mapping(?:\\(\\s*(?:value\\s*=\\s*)?\"([^\"]*)\"[^)]*\\))?");

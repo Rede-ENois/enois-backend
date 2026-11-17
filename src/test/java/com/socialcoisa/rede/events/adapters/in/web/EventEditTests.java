@@ -141,6 +141,54 @@ class EventEditTests {
 			.andExpect(status().isNotFound());
 	}
 
+	/** Quem confirmou presenca tem que saber que o evento mudou de dia — sem avisar, aparece no dia errado. */
+	@Test
+	void rescheduleNotifiesAttendees() throws Exception {
+		var creator = auth.authenticate("evedit_owner5");
+		var attendee = auth.authenticate("evedit_attendee5");
+		String eventId = create(creator, "Sarau", "2030-06-14");
+
+		mockMvc.perform(post("/events/" + eventId + "/attendees")
+				.header("X-Session-Token", attendee.token())
+				.header("Idempotency-Key", "evedit-att-5"))
+			.andExpect(status().isOk());
+
+		mockMvc.perform(patch("/events/" + eventId)
+				.header("X-Session-Token", creator.token())
+				.header("Idempotency-Key", "evedit-5")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("title", "Sarau", "date", "2030-07-20",
+					"time", "19:00", "format", "Presencial", "host", "Énóis"))))
+			.andExpect(status().isOk());
+
+		mockMvc.perform(get("/notifications").header("X-Session-Token", attendee.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$..[?(@.kind == 'EVENT')].title").value(
+					org.hamcrest.Matchers.hasItem("Evento remarcado")));
+	}
+
+	/** Cancelamento (delete pelo dono) avisa quem ia: a agenda da pessoa cai sem explicacao sem isso. */
+	@Test
+	void cancelNotifiesAttendees() throws Exception {
+		var creator = auth.authenticate("evedit_owner6");
+		var attendee = auth.authenticate("evedit_attendee6");
+		String eventId = create(creator, "Roda de conversa", "2030-06-15");
+
+		mockMvc.perform(post("/events/" + eventId + "/attendees")
+				.header("X-Session-Token", attendee.token())
+				.header("Idempotency-Key", "evedit-att-6"))
+			.andExpect(status().isOk());
+
+		mockMvc.perform(delete("/events/" + eventId).header("X-Session-Token", creator.token())
+				.header("Idempotency-Key", "evedit-del-6"))
+			.andExpect(status().isOk());
+
+		mockMvc.perform(get("/notifications").header("X-Session-Token", attendee.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$..[?(@.kind == 'EVENT')].title").value(
+					org.hamcrest.Matchers.hasItem("Evento cancelado")));
+	}
+
 	private String create(TestAuthHelper.AuthSession creator, String title, String date) throws Exception {
 		String body = objectMapper.writeValueAsString(Map.of("title", title, "date", date, "time", "19:00",
 			"format", "Presencial", "host", "Énóis"));

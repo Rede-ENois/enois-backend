@@ -28,7 +28,7 @@
 
 | Função | Descrição |
 |---|---|
-| `corsConfigurer()` | Configura CORS permitindo origens de `rede.cors.allowed-origins` |
+| `corsConfigurer()` | Configura CORS a partir do `AppOriginRegistry` — a mesma lista de origens que o portão de origem usa (`rede.cors.allowed-origins` + `rede.origins.trusted`) |
 
 ### Processamento compartilhado de caminhos
 
@@ -803,7 +803,9 @@ Implementa: `CreateMediaUploadUseCase`, `GetMediaAssetUseCase`, `GetMediaSummari
 Etapas configuráveis por vaga (`selection_stages`), histórico de movimentos
 (`stage_movements` — a etapa atual é o destino do último movimento), notas internas
 (`stage_notes`, nunca expostas ao candidato) e board por etapa. Entrevistas entram na agenda
-central pela origem `JOB_INTERVIEW`.
+central pela origem `JOB_INTERVIEW`. Cada candidatura tem no máximo uma entrevista agendada
+(índice único em `job_interviews.active_application_id`, V340) e guarda quantas canceladas o
+processo tiver: cancelar libera a candidatura para uma entrevista nova.
 
 | Classe | Papel |
 |---|---|
@@ -1181,6 +1183,33 @@ Rebaixar um ban libera o login de volta — o conteúdo purgado pelo ban não vo
 | `revokeSanction(adminId, sanctionId, reason)` | POST /api/admin/sanctions/{sanctionId}/revoke |
 | `editSanction(adminId, sanctionId, type, reason)` | POST /api/admin/sanctions/{sanctionId}/edit |
 
+### Ações administrativas DIRETAS (AdminModerationService / UserWarningService)
+
+**Arquivos**: `moderation/application/AdminModerationService.java`, `UserWarningService.java`,
+`moderation/adapters/in/web/AdminModerationController.java`
+
+O administrador decide direto sobre uma CONTA ou uma PUBLICAÇÃO, sem denúncia e sem votação:
+advertir, sancionar (restrição, suspensão, banimento, banimento permanente) e remover publicação.
+O sistema de votação (`ModeratorService.vote`, `SanctionProposalService`) não muda e continua sendo
+o único caminho dos moderadores: nada aqui conta voto, e as rotas são de ADMIN em bloco
+(`AdminRouteInterceptor.ADMIN_MODERATION_PATH` recusa antes do MVC; cada método confirma com
+`AdminGuard`).
+
+| Função | Rota | Efeito |
+|---|---|---|
+| `user(username)` | GET /api/admin/moderation/users/{username} | Perfil público + `activeWarnings` (contagem) |
+| `user summary` | GET /api/admin/moderation/users/{username}/summary | Sanção ativa + advertências ativas |
+| `history(username, limit)` | GET /api/admin/moderation/users/{username}/history | Advertências e sanções juntas, mais recente primeiro |
+| `warn(...)` | POST /api/admin/moderation/users/{username}/warnings | Cria `user_warnings`, notifica, audita `ADMIN_WARNING_ISSUED` |
+| `warningHistory(...)` | GET /api/admin/moderation/users/{username}/warnings | Histórico da conta (ativas e revogadas) |
+| `revoke(...)` | POST /api/admin/moderation/warnings/{warningId}/revoke | Revoga sem apagar (histórico preservado), audita `ADMIN_WARNING_REVOKED` |
+| `sanction(...)` | POST /api/admin/moderation/users/{username}/sanction | Reaproveita `ModeratorService.sanctionUser` (revoga sessões, purga conteúdo no ban), audita `ADMIN_SANCTION_APPLIED` |
+| `removePost(...)` | POST /api/admin/moderation/posts/{postId}/remove | `ModerationRemovePostUseCase.removeAsAdminWithOutcome` (soft delete, mídia, republicações), audita `ADMIN_POST_REMOVED` |
+
+Motivo obrigatório (10 a 2000 caracteres) em toda escrita; `Idempotency-Key` devolve a mesma
+resposta (replay) sem repetir a decisão. `user_warnings` (`V330`) é o histórico que faltava: antes
+"avisar" numa denúncia só mudava o status e mandava uma notificação, sem registro por conta.
+
 ### ContentQuarantineReviewService
 
 **Arquivo**: `src/main/java/com/socialcoisa/rede/moderation/application/ContentQuarantineReviewService.java`
@@ -1379,7 +1408,17 @@ eventos/logs/erros. Documentação completa em [`MONITORAMENTO.md`](MONITORAMENT
 | `GET /admin/monitoring/overview` | KPIs, séries por minuto, recursos, eventos recentes |
 | `GET /admin/monitoring/events` | Lista de eventos com filtros (nível, tipo, busca, **intervalo de data/hora**, paginação por cursor) |
 | `GET /admin/monitoring/users` | Contas da comunidade: total, entradas por dia (30 dias), crescimento diário e projeções |
+| `GET /admin/monitoring/denied-admin` | Recusas de autorização em `/admin/**` e `/moderation/**`: total, avisos de repetição, contas acima do limiar da janela e varreduras sem sessão acima do limiar |
 | `GET /admin/emails` | Log de e-mails enviados |
+
+Toda recusa decidida pelo `AdminRouteInterceptor` (sem sessão, só admin ou só moderação) grava uma
+linha em `audit_logs` com ação `ADMIN_AUTHORITY_DENIED`, a rota sem id e o motivo
+(`SESSION_MISSING`, `ADMIN_ONLY`, `MODERATOR_ONLY`) — nunca corpo de requisição nem token. O 401/403
+recusado antes do interceptor (rota inexistente, cabeçalho de sessão ausente, escrita sem sessão) é
+contado em memória por pod e vira UMA linha de auditoria com escopo `admin-baseline` só quando a
+mesma origem repete acima do limiar (`rede.security.denied-admin-alerts.threshold`, padrão 20, em
+`window-minutes`, padrão 10) — gravar uma linha por recusa transformaria varredura em carga de
+escrita.
 
 O painel de log aceita "mostrar mais", cópia individual e cópia completa, e o modo pânico (chave de
 sistema que responde 429 em toda escrita) fica no módulo shared (`PanicController`).
@@ -1831,6 +1870,13 @@ por matriz de capacidades, com a autorização sempre no back-end.
 | `CampaignChatController` | API REST em `/roleplay/campaigns/{id}/chat` |
 | `CampaignMessageJpaEntity` | Persistência (V296) |
 | `CampaignChatChanged` | Evento de "chat mudou", entregue ao stream de mensagens depois do commit |
+| `LibrarySheet` | A cópia pública de uma ficha: nome do personagem, sistema de jogo e o recorte aberto à campanha |
+| `LibraryService` | Publicar, republicar, despublicar, ler e listar a biblioteca; a autorização é do dono da ficha |
+| `LibraryController` | API REST em `/roleplay/library` e `/roleplay/campaigns/{id}/sheets/{sheetId}/publish` |
+| `LibrarySheetJpaEntity` | Persistência (V326), com os campos públicos em JSON `longtext` |
+| `CampaignAuditTrail` | Os atos de campanha na trilha única do sistema (`audit_logs`), com ação `ROLEPLAY_*` e metadata mínimo |
+| `AdminRoleplayController` | Histórico de auditoria da campanha em `/admin/roleplay/campaigns/{id}/history` (exclusivo de administrador) |
+| `RoleplayMetricsService` | Agregado do módulo no painel de monitorabilidade (`GET /admin/monitoring/roleplay`), só números — cache de 1 minuto configurável |
 
 Regras que valem sempre:
 
@@ -1840,7 +1886,21 @@ Regras que valem sempre:
 - A decisão de um pedido de entrada é atômica; a segunda decisão devolve
   `REQUEST_ALREADY_DECIDED`.
 - A voz da mesa referencia uma sessão de chamada do Épapo (`voiceRoomId`); o módulo não cria
-  sala de voz paralela.
+  sala de voz paralela. A voz é estado da mesa como cena e ordem: abrir a sala (ou devolvê-la) é
+  ato do mestre; consultar a sala aberta é leitura de participante.
+- A rota de voz recebe campanha e mesa no path: a mesa tem de pertencer à campanha informada
+  (mesa desconhecida ou de outra campanha é 404) antes de qualquer delegação ao serviço de
+  chamadas — o tableId sozinho não decide. A leitura da sala aberta é tolerante (não-participante
+  lê vazio); a recusa de entrada é do join, que assina token.
+- Os atos de campanha (criação, edição, entrada, pedido, decisão, convite, saída, remoção,
+  transferência de mestria, arquivamento, criação de mesa) ficam na trilha única de auditoria do
+  sistema (`audit_logs`), com prefixo `ROLEPLAY_*` e a campanha como alvo — não há trilha própria
+  do módulo. O metadata carrega identificadores, papéis e mudanças de estado; o conteúdo livre da
+  campanha (descrição, ambientação) nunca entra. A leitura do histórico é exclusiva de
+  administrador: sem sessão é 401, sessão comum é 403 e campanha desconhecida é 404.
+- O painel vê o módulo por números, nunca por conteúdo: o agregado em
+  `/admin/monitoring/roleplay` é exclusivo de moderador, cacheado por um minuto e não expõe
+  nome, slug, descrição nem id de pessoa — o mesmo recorte de privacidade da trilha.
 - A campanha guarda só o IDENTIFICADOR do sistema, nunca as regras. Um sistema sem adaptador
   registrado responde com erro próprio; a família que a campanha grava vem do adaptador, não do
   pedido do cliente.
@@ -1918,5 +1978,55 @@ leva o id da campanha; o cliente recarrega pelo endpoint, que autoriza de novo. 
 é a lista de participantes cruzada com quem tem stream aberto, e só é respondida a quem passou
 pela fronteira da campanha.
 
+### A voz da mesa e o estado vivo
+
+A voz da mesa NÃO tem sala própria: abrir a voz cria (ou devolve) uma chamada do Épapo com
+vínculo `table_id` — a quarta vinculação, ao lado de conversa, grupo e encontro. A mesa guarda o
+ID DA CHAMADA, e só o id: o endereço da sala e o token de entrada saem apenas pelo `join` das
+chamadas, que reavalia a autorização a cada pedido. O público da voz é a campanha — participante
+entra; visitante leva 403 nem vê a sala "ao vivo". Quem abre já entra dentro, o grupo não toca
+ninguém (`CALL_TABLE_LIVE`, um aviso contado por chamada, mapeado na preferência de grupos), e a
+segunda abertura devolve a MESMA chamada — não nasce sala duplicada.
+
+O estado da mesa é o oposto do histórico (chat, rolagens): é VIVO, uma linha por mesa, reescrito
+a cada clique. Nele vivem a ordem de fala (teto 20, sem repetição), a vez, a cena visível e os
+tokens posicionados em células de grid. Quem manda no estado é o mestre; o jogador tem exatamente
+dois poderes: assumir e limpar a própria vez. Token de personagem move o dono; token de cenário
+(porta, baú, monstro) só o mestre. Leitura exige participação; escrita de ordem/cena exige
+mestria; a matriz de capacidades decide, como em todo o módulo. Toda mudança publica o mesmo
+evento `campaign` do chat — os participantes redesenharem a mesa recarregando por GET, que
+autoriza de novo.
+
 Contrato completo em [`EROLEPLAY-RFC.md`](EROLEPLAY-RFC.md); estado e próxima tarefa em
 [`EROLEPLAY-ROADMAP.md`](EROLEPLAY-ROADMAP.md).
+### O atlas do mundo (World Builder)
+
+O mundo da campanha é uma entidade só com cinco naturezas (`WorldKind`): `LOCALE` (local),
+`CHARACTER` (NPC), `ITEM` (item), `PLOT` (pista/rumor) e `LORE` (história do mundo). O que muda
+por sistema de regras é a FICHA (fase 3), não a lore — por isso o atlas não fala com o registro
+de sistemas: título, corpo, tags e, opcionalmente, a ficha de um personagem da MESMA campanha
+(o id da ficha nunca sai na API; sai `linkedSheetName`, o nome do personagem).
+
+O mundo é do grupo: qualquer participante registra (`POST_IN_CAMPAIGN`), edita e apaga o que
+escreveu; o mestre (`MANAGE_CAMPAIGN`) pode em tudo. Leitura exige participação — o atlas nunca
+sai da campanha, e entrada de outra campanha responde 404 ("não existe para você"), não 403.
+Persistência V298 (`roleplay_world_entries`), uma linha por entrada, sem FK. Busca por texto é
+no serviço, sobre o atlas recente — a coluna de corpo é CLOB e não participa de `lower()` JPQL.
+
+### A biblioteca de personagens (Fase 8)
+
+A biblioteca é o catálogo público do Éroleplay: as fichas que os jogadores QUEREM compartilhar.
+O que entra ali não é a ficha, é uma **cópia** — uma estampa do recorte que o dono já abriu à
+campanha (`SheetAudience.MEMBER`). Quem publica é o dono da ficha; o mestre não publica a ficha
+de outro jogador, e o conteúdo privado por definição continua privado mesmo depois de republicado.
+
+A cópia tem id próprio: a projeção pública não carrega o id da ficha, o da campanha nem o do dono,
+então não há como enumerar fichas pelo catálogo. Ficha de terceiro e ficha inexistente devolvem o
+mesmo 404. Republicar atualiza a mesma cópia (mesmo id, mesmo dono, mesmo instante de primeira
+publicação); despublicar apaga a cópia e nunca toca na ficha — ela continua existindo na campanha.
+
+Persistência V326 (`roleplay_published_sheets`), uma linha por cópia, sem FK. A busca é por nome do
+personagem ou pelo sistema de jogo, em JPQL sobre colunas curtas — o corpo da cópia fica em
+`longtext` e não participa de `lower()` JPQL.
+
+

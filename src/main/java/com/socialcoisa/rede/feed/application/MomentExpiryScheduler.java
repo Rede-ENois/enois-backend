@@ -9,9 +9,10 @@ import org.springframework.stereotype.Component;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 
 /**
- * O Momento se apaga sozinho: a cada 5 minutos o worker procura os MOMENT ativos cujo prazo de
- * 24h venceu e aplica o soft-delete do fluxo normal (feed, cache e mídia iguais à exclusão).
- * Granularidade de 5 min — o post some do app logo depois das 24h, sem depender de ninguém.
+ * O efêmero se apaga sozinho: a cada 5 minutos o worker procura os posts efêmeros (Momento 24h,
+ * Instante 1h) ativos cujo prazo venceu e aplica o soft-delete do fluxo normal (feed, cache e
+ * mídia iguais à exclusão). Granularidade de 5 min — o post some do app logo depois do prazo,
+ * sem depender de ninguém.
  */
 @Component
 public class MomentExpiryScheduler {
@@ -31,7 +32,7 @@ public class MomentExpiryScheduler {
 	@Scheduled(fixedDelay = 300_000, initialDelay = 120_000)
 	public void expireDueMoments() {
 		Instant now = clock.instant();
-		for (var post : posts.findExpiredMoments(now, LOTE)) {
+		for (var post : posts.findExpiredEphemeral(now, LOTE)) {
 			try {
 				deletePostService.expireMoment(post.id());
 			} catch (RuntimeException ignored) {

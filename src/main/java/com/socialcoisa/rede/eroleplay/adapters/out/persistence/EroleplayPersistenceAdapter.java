@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.eroleplay.application.port.out.EroleplayRepository;
 import com.socialcoisa.rede.eroleplay.domain.Campaign;
+import com.socialcoisa.rede.eroleplay.domain.LibrarySheet;
 import com.socialcoisa.rede.eroleplay.domain.CampaignJoinRequest;
 import com.socialcoisa.rede.eroleplay.domain.CampaignJoinRequestStatus;
 import com.socialcoisa.rede.eroleplay.domain.CampaignMember;
@@ -27,6 +28,7 @@ import com.socialcoisa.rede.eroleplay.domain.DiceRoll;
 import com.socialcoisa.rede.eroleplay.domain.GameTable;
 import com.socialcoisa.rede.eroleplay.domain.RollRequest;
 import com.socialcoisa.rede.eroleplay.domain.RollRequestStatus;
+import com.socialcoisa.rede.eroleplay.domain.WorldEntry;
 import com.socialcoisa.rede.eroleplay.domain.SheetEntry;
 import com.socialcoisa.rede.eroleplay.domain.SheetField;
 import com.socialcoisa.rede.eroleplay.domain.SheetTemplate;
@@ -41,9 +43,9 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 	/** O que a descoberta mostra: campanha ativa. Arquivada e encerrada nao aparecem. */
 	private static final List<CampaignStatus> DISCOVERABLE = List.of(CampaignStatus.ACTIVE);
 
-	/** Complemento de {@link CampaignStatus#readableByMembers()}: o que some da lista de quem participa. */
-	private static final List<CampaignStatus> NOT_READABLE_BY_MEMBERS = java.util.Arrays.stream(CampaignStatus.values())
-		.filter(status -> !status.readableByMembers())
+	/** O que a listagem "minhas campanhas" mostra: o que quem participa ainda pode ler. Encerrada some. */
+	private static final List<CampaignStatus> READABLE_BY_MEMBERS = java.util.Arrays.stream(CampaignStatus.values())
+		.filter(CampaignStatus::readableByMembers)
 		.toList();
 
 	private final SpringDataCampaignJpaRepository campaigns;
@@ -56,6 +58,10 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 	private final SpringDataDiceRollJpaRepository rolls;
 	private final SpringDataRollRequestJpaRepository rollRequests;
 	private final SpringDataCampaignMessageJpaRepository messages;
+	private final SpringDataTableStateJpaRepository tableStates;
+	private final SpringDataTableTokenJpaRepository tableTokens;
+	private final SpringDataWorldEntryJpaRepository worldEntries;
+	private final SpringDataLibrarySheetJpaRepository librarySheets;
 	private final ObjectMapper objectMapper;
 
 	EroleplayPersistenceAdapter(SpringDataCampaignJpaRepository campaigns,
@@ -64,7 +70,9 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 			SpringDataTableSeatJpaRepository seats, SpringDataSheetTemplateJpaRepository templates,
 			SpringDataCharacterSheetJpaRepository sheets, SpringDataDiceRollJpaRepository rolls,
 			SpringDataRollRequestJpaRepository rollRequests,
-			SpringDataCampaignMessageJpaRepository messages, ObjectMapper objectMapper) {
+			SpringDataCampaignMessageJpaRepository messages, SpringDataTableStateJpaRepository tableStates,
+			SpringDataTableTokenJpaRepository tableTokens, SpringDataWorldEntryJpaRepository worldEntries,
+			SpringDataLibrarySheetJpaRepository librarySheets, ObjectMapper objectMapper) {
 		this.campaigns = campaigns;
 		this.members = members;
 		this.requests = requests;
@@ -75,6 +83,10 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 		this.rolls = rolls;
 		this.rollRequests = rollRequests;
 		this.messages = messages;
+		this.tableStates = tableStates;
+		this.tableTokens = tableTokens;
+		this.worldEntries = worldEntries;
+		this.librarySheets = librarySheets;
 		this.objectMapper = objectMapper;
 	}
 
@@ -109,7 +121,7 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 
 	@Override
 	public List<CampaignMembership> findMemberships(String userId, int limit) {
-		return members.findMemberships(userId, NOT_READABLE_BY_MEMBERS, PageRequest.of(0, limit)).stream()
+		return members.findMemberships(userId, READABLE_BY_MEMBERS, PageRequest.of(0, limit)).stream()
 			.map(row -> new CampaignMembership(((CampaignJpaEntity) row[1]).toDomain(),
 				((CampaignMemberJpaEntity) row[0]).role()))
 			.toList();
@@ -183,8 +195,8 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 	}
 
 	@Override
-	public void saveTable(GameTable table) {
-		tables.save(GameTableJpaEntity.fromDomain(table));
+	public GameTable saveTable(GameTable table) {
+		return tables.save(GameTableJpaEntity.fromDomain(table)).toDomain();
 	}
 
 	@Override
@@ -210,6 +222,39 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 	@Override
 	public List<TableSeat> listSeats(String tableId) {
 		return seats.findByTableIdOrderBySeatedAtAsc(tableId).stream().map(TableSeatJpaEntity::toDomain).toList();
+	}
+
+	@Override
+	public java.util.Optional<com.socialcoisa.rede.eroleplay.domain.TableState> findTableState(String tableId) {
+		return tableStates.findByTableId(tableId).map(entity -> entity.toDomain(objectMapper));
+	}
+
+	@Override
+	public com.socialcoisa.rede.eroleplay.domain.TableState saveTableState(
+			com.socialcoisa.rede.eroleplay.domain.TableState state) {
+		return tableStates.save(TableStateJpaEntity.from(state, objectMapper)).toDomain(objectMapper);
+	}
+
+	@Override
+	public java.util.Optional<com.socialcoisa.rede.eroleplay.domain.TableToken> findTableToken(String tokenId) {
+		return tableTokens.findById(tokenId).map(TableTokenJpaEntity::toDomain);
+	}
+
+	@Override
+	public java.util.List<com.socialcoisa.rede.eroleplay.domain.TableToken> listTableTokens(String tableId) {
+		return tableTokens.findByTableIdOrderByUpdatedAtDesc(tableId).stream().map(TableTokenJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public com.socialcoisa.rede.eroleplay.domain.TableToken saveTableToken(
+			com.socialcoisa.rede.eroleplay.domain.TableToken token) {
+		return tableTokens.save(TableTokenJpaEntity.from(token)).toDomain();
+	}
+
+	@Override
+	public void removeTableToken(String tokenId) {
+		tableTokens.deleteById(tokenId);
 	}
 
 	@Override
@@ -257,6 +302,11 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 	}
 
 	@Override
+	public Optional<CharacterSheet> findSheetById(String campaignId, String sheetId) {
+		return sheets.findByIdAndCampaignId(sheetId, campaignId).map(this::toSheet);
+	}
+
+	@Override
 	public List<CharacterSheet> listSheets(String campaignId) {
 		return sheets.findByCampaignIdOrderByUpdatedAtDesc(campaignId).stream().map(this::toSheet).toList();
 	}
@@ -264,6 +314,45 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 	@Override
 	public long countSheets(String campaignId) {
 		return sheets.countByCampaignId(campaignId);
+	}
+
+	@Override
+	public void saveLibrarySheet(LibrarySheet librarySheet) {
+		String fieldsJson = objectMapper.writeValueAsString(librarySheet.fields());
+		librarySheets.save(LibrarySheetJpaEntity.fromDomain(librarySheet, fieldsJson));
+	}
+
+	@Override
+	public Optional<LibrarySheet> findLibrarySheet(String publicationId) {
+		return librarySheets.findById(publicationId).map(this::toLibrarySheet);
+	}
+
+	@Override
+	public Optional<LibrarySheet> findLibrarySheetBySheet(String sheetId) {
+		return librarySheets.findBySheetId(sheetId).map(this::toLibrarySheet);
+	}
+
+	@Override
+	public List<LibrarySheet> listLibrarySheets(String query, Instant before, int limit) {
+		String like = com.socialcoisa.rede.shared.web.LikePattern.contains(query);
+		return librarySheets.listLibrary(like, before, PageRequest.of(0, limit))
+			.stream()
+			.map(this::toLibrarySheet)
+			.toList();
+	}
+
+	@Override
+	public void removeLibrarySheet(String publicationId) {
+		librarySheets.findById(publicationId).ifPresent(librarySheets::delete);
+	}
+
+	private LibrarySheet toLibrarySheet(LibrarySheetJpaEntity entity) {
+		Map<String, String> fields = new java.util.LinkedHashMap<>();
+		if (entity.fieldsJson != null && !entity.fieldsJson.isBlank()) {
+			objectMapper.readTree(entity.fieldsJson).properties().forEach(entry -> fields.put(entry.getKey(),
+				entry.getValue().asText()));
+		}
+		return entity.toDomain(fields);
 	}
 
 	@Override
@@ -362,5 +451,29 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 		List<SheetEntry> entries = List.of(objectMapper.readValue(entity.entriesJson(), SheetEntry[].class));
 		return CharacterSheet.restore(entity.id(), entity.campaignId(), entity.userId(), entity.name(), entries,
 			entity.createdAt(), entity.updatedAt());
+	}
+
+	@Override
+	public WorldEntry saveWorldEntry(WorldEntry entry) {
+		return worldEntries.save(WorldEntryJpaEntity.fromDomain(entry)).toDomain();
+	}
+
+	@Override
+	public Optional<WorldEntry> findWorldEntry(String campaignId, String entryId) {
+		return worldEntries.findById(entryId)
+			.filter(entity -> entity.campaignId.equals(campaignId))
+			.map(WorldEntryJpaEntity::toDomain);
+	}
+
+	@Override
+	public List<WorldEntry> listWorldEntries(String campaignId, int limit) {
+		return worldEntries.findByCampaignIdOrderByUpdatedAtDesc(campaignId, PageRequest.of(0, limit)).stream()
+			.map(WorldEntryJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
+	public void removeWorldEntry(String entryId) {
+		worldEntries.deleteById(entryId);
 	}
 }

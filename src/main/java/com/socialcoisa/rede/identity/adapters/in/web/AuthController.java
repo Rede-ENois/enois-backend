@@ -166,23 +166,31 @@ class AuthController {
 		return new AuthConfig(mode, siteKey, googleLoginEnabled);
 	}
 
-	/** Desafio de soma para o cadastro (usado quando não há Turnstile configurado). */
+	/**
+	 * Desafio de soma para o cadastro (usado quando não há Turnstile configurado). O desafio nasce
+	 * preso à sessão e ao aparelho que o pediu — quem resolve num navegador não consegue usá-lo em
+	 * outro. O teto de emissão é do filtro de identidade, não daqui.
+	 */
 	@GetMapping("/signup-challenge")
-	SignupChallengeService.Challenge signupChallenge() {
-		return signupCaptcha.issue();
+	SignupChallengeService.Challenge signupChallenge(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "X-Device-Fingerprint", required = false) String deviceFingerprint) {
+		return signupCaptcha.issue(sessionToken, deviceFingerprint);
 	}
 
 	@PostMapping("/signup")
 	@RateLimiter(name = "auth")
 	ResponseEntity<String> signup(@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestHeader(value = "X-Device-Fingerprint", required = false) String deviceFingerprint,
 			@RequestBody SignupRequest body,
 			jakarta.servlet.http.HttpServletRequest request) {
 		String ip = ipResolver.resolve(request);
 		exigeIpNaoBloqueado(ip);
-		// Contenção imediata: nome com o padrão do ataque não cria conta; repeated hits pause
-		// signups from the IP (as contas "probe" de 20/10 e 22/10 nasciam em série do mesmo provedor).
-		signupAttackGuard.checkSignup(body.name(), body.email(), ip);
+		// Contenção imediata: nome com o padrão do ataque não cria conta; repetições do mesmo
+		// aparelho pausam novos cadastros (as contas "probe" de 20/10 e 22/10 nasciam em série do
+		// mesmo provedor). A impressão do aparelho só identifica quem repete, nunca autoriza nada.
+		signupAttackGuard.checkSignup(body.name(), body.email(), ip, deviceFingerprint);
 		// An already registered e-mail goes through every gate below and gets the same 201 body as
 		// a new signup; the service e-mails the existing account instead (see AuthService.signup).
 		// Portao de cadastros: a operacao pode fechar a criacao de contas (a Mel pediu em
@@ -207,7 +215,7 @@ class AuthController {
 				turnstile.require(body.turnstileToken());
 			}
 			else {
-				signupCaptcha.require(body.challengeId(), body.challengeAnswer());
+				signupCaptcha.require(body.challengeId(), body.challengeAnswer(), sessionToken, deviceFingerprint);
 			}
 			return new CommandResponse(201, signupUseCase.signup(new SignupCommand(body.name(), "USER",
 				body.email(), body.password(), body.acceptedTerms(), body.birthDate())));

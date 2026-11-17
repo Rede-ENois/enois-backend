@@ -84,13 +84,16 @@ class SexualContentReportWiringTests {
 	@Mock
 	private com.socialcoisa.rede.moderation.application.port.out.CallReportContextRepository callReports;
 
+	@Mock
+	private com.socialcoisa.rede.media.application.ReportAttachments attachments;
+
 	private ModerationService service;
 
 	@BeforeEach
 	void setUp() {
 		service = new ModerationService(reports, contentRemover, quarantineReview, emailService, "", "https://enois.test",
 			profiles, contentAuthors, contentReader, companyReader, companyRemoval, sanctions, notifications,
-			throttle, learning, events, 10, callReports,
+			throttle, learning, events, 10, callReports, attachments,
 			Clock.fixed(NOW, ZoneOffset.UTC));
 		when(reports.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 	}

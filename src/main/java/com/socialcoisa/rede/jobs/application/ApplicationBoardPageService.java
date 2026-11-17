@@ -7,15 +7,14 @@ import java.util.Map;
 
 import org.springframework.stereotype.Service;
 
+import com.socialcoisa.rede.companies.domain.RecruitmentCapability;
 import com.socialcoisa.rede.jobs.application.port.out.JobRepository;
 import com.socialcoisa.rede.jobs.application.port.out.SelectionProcessRepository;
-import com.socialcoisa.rede.jobs.domain.Job;
 import com.socialcoisa.rede.jobs.domain.JobApplication;
 import com.socialcoisa.rede.jobs.domain.JobApplicationStatus;
 import com.socialcoisa.rede.jobs.domain.SelectionStage;
 import com.socialcoisa.rede.jobs.domain.StageMovement;
 import com.socialcoisa.rede.jobs.domain.StageMovementKind;
-import com.socialcoisa.rede.shared.web.ApiException;
 
 /**
  * Listagem paginada das candidaturas de uma vaga, para a tabela e as colunas do board.
@@ -33,10 +32,13 @@ public class ApplicationBoardPageService {
 
 	private final JobRepository jobs;
 	private final SelectionProcessRepository pipeline;
+	private final JobCommandAuthorization command;
 
-	public ApplicationBoardPageService(JobRepository jobs, SelectionProcessRepository pipeline) {
+	public ApplicationBoardPageService(JobRepository jobs, SelectionProcessRepository pipeline,
+			JobCommandAuthorization command) {
 		this.jobs = jobs;
 		this.pipeline = pipeline;
+		this.command = command;
 	}
 
 	/** Uma linha da página: a candidatura e onde ela está no fluxo. */
@@ -52,13 +54,11 @@ public class ApplicationBoardPageService {
 
 	public BoardPage page(String jobId, String requesterId, Instant beforeAppliedAt, Long beforeId,
 			JobApplicationStatus status, String search, int limit) {
-		// A autorização é a mesma do board e da Central: só o autor da vaga enxerga quem se
-		// candidatou — checada no backend, nunca a partir do que o cliente manda.
-		Job job = jobs.findById(jobId)
-			.orElseThrow(() -> new ApiException(404, "JOB_NOT_FOUND", "Vaga não encontrada."));
-		if (!job.postedBy().equals(requesterId)) {
-			throw new ApiException(403, "NOT_OWNER", "Só quem publicou a vaga vê as candidaturas recebidas.");
-		}
+		// A autorização é a mesma do board e da Central: o autor da vaga e a equipe de recrutamento
+		// da página dela enxergam quem se candidatou — checada no backend, nunca a partir do que o
+		// cliente manda.
+		command.requireCommander(jobId, requesterId, RecruitmentCapability.VIEW_CANDIDATES,
+			"Só quem publicou a vaga vê as candidaturas recebidas.");
 		int size = Math.clamp(limit, 1, MAX_PAGE_SIZE);
 		List<JobApplication> applications = jobs.findApplicationsByJobPage(jobId, beforeAppliedAt, beforeId,
 			status, search, size);

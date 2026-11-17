@@ -39,7 +39,7 @@ import com.socialcoisa.rede.shared.web.ApiException;
 @Service
 public class RepostPostService {
 
-	private static final Set<PostType> NOT_REPOSTABLE = Set.of(PostType.BUSINESS, PostType.MOMENT);
+	private static final Set<PostType> NOT_REPOSTABLE = Set.of(PostType.BUSINESS, PostType.MOMENT, PostType.INSTANTE);
 	private static final Set<PostType> OPINION_ONLY = Set.of(PostType.ARTICLE, PostType.BLOG, PostType.PAGE);
 	private static final int PER_HOUR = 30;
 

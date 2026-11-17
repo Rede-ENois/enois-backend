@@ -41,6 +41,7 @@ public enum NotificationCategory {
 		Map.entry("CALL_ENDED", MESSAGES),
 		Map.entry("CALL_GROUP_LIVE", GROUPS),
 		Map.entry("CALL_EVENT_LIVE", GROUPS),
+		Map.entry("CALL_TABLE_LIVE", GROUPS),
 		Map.entry("GROUP_MEMBER_JOINED", GROUPS),
 		Map.entry("GROUP_JOIN_REQUEST", GROUPS),
 		Map.entry("GROUP_JOIN_APPROVED", GROUPS),
@@ -69,19 +70,30 @@ public enum NotificationCategory {
 		// ANSWER_ACCEPTED (#336), EVENT_NEXT_OCCURRENCE (#337), STUDY_PAIR_* (#338).
 		Map.entry("ANSWER_ACCEPTED", SOCIAL),
 		Map.entry("EVENT_NEXT_OCCURRENCE", GROUPS),
+		// Remarcação/cancelamento do evento avisa quem confirmou presença: convivência do evento,
+		// mesma família do lembrete de ocorrência — desligar "grupos" silencia o aviso também.
+		Map.entry("EVENT", GROUPS),
 		Map.entry("STUDY_PAIR_MATCHED", SOCIAL),
 		Map.entry("STUDY_PAIR_CHECKIN", SOCIAL),
 		Map.entry("STUDY_PAIR_ENDED", SOCIAL),
 		Map.entry("STUDY_PAIR_REMINDER", SOCIAL),
-		// Éroleplay: a vida da campanha (entrada, convite, comando). GROUPS porque é convivência
-		// entre participantes, como a de um grupo — não é mensagem privada nem trabalho.
-		Map.entry("ROLEPLAY_CAMPAIGN_MEMBER_JOINED", GROUPS),
-		Map.entry("ROLEPLAY_CAMPAIGN_JOIN_REQUEST", GROUPS),
-		Map.entry("ROLEPLAY_CAMPAIGN_JOIN_APPROVED", GROUPS),
-		Map.entry("ROLEPLAY_CAMPAIGN_JOIN_REJECTED", GROUPS),
-		Map.entry("ROLEPLAY_CAMPAIGN_INVITED", GROUPS),
-		Map.entry("ROLEPLAY_CAMPAIGN_MASTERSHIP_TRANSFERRED", GROUPS),
-		Map.entry("ROLEPLAY_ROLL_REQUESTED", GROUPS));
+	// Éroleplay: a vida da campanha (entrada, convite, comando). GROUPS porque é convivência
+	// entre participantes, como a de um grupo — não é mensagem privada nem trabalho.
+	Map.entry("ROLEPLAY_CAMPAIGN_MEMBER_JOINED", GROUPS),
+	Map.entry("ROLEPLAY_CAMPAIGN_JOIN_REQUEST", GROUPS),
+	Map.entry("ROLEPLAY_CAMPAIGN_JOIN_APPROVED", GROUPS),
+	Map.entry("ROLEPLAY_CAMPAIGN_JOIN_REJECTED", GROUPS),
+	Map.entry("ROLEPLAY_CAMPAIGN_INVITED", GROUPS),
+	Map.entry("ROLEPLAY_CAMPAIGN_MASTERSHIP_TRANSFERRED", GROUPS),
+	Map.entry("ROLEPLAY_ROLL_REQUESTED", GROUPS),
+	// Colagem: alguém contribuiu (texto ou foto) na fotografia da pessoa. SOCIAL porque é a
+	// convivência do feed fotográfico — mesma família de comentário e reação.
+	Map.entry("COLLAGEM_COMMENTED", SOCIAL),
+	// Murais: alguém colou a publicação da pessoa num mural. SOCIAL — convivência, não sistema.
+	Map.entry("MURAL_CONTRIBUTED", SOCIAL),
+	// Desabafos: alguém acolheu (comentou) o desabafo da pessoa. SOCIAL — convivência acolhedora,
+	// mesma família de comentário; sem notificação de reação, que é só contagem.
+	Map.entry("DESABAFOS_COMMENTED", SOCIAL));
 
 	public static NotificationCategory of(String kind) {
 		return kind == null ? SYSTEM : BY_KIND.getOrDefault(kind, SYSTEM);

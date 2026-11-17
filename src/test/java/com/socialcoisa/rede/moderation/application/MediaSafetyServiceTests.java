@@ -19,6 +19,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import com.socialcoisa.rede.colagem.application.port.in.ColagemModerationPort;
 import com.socialcoisa.rede.feed.application.port.in.ModerationRemovePostUseCase;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.Post;
@@ -53,6 +54,7 @@ class MediaSafetyServiceTests {
 	private MediaAssetRepository assets;
 	private PostRepository posts;
 	private ModerationRemovePostUseCase removePost;
+	private ColagemModerationPort colagem;
 	private ModeratorService moderators;
 	private UserProfileRepository profiles;
 
@@ -66,10 +68,11 @@ class MediaSafetyServiceTests {
 		assets = mock(MediaAssetRepository.class);
 		posts = mock(PostRepository.class);
 		removePost = mock(ModerationRemovePostUseCase.class);
+		colagem = mock(ColagemModerationPort.class);
 		moderators = mock(ModeratorService.class);
 		profiles = mock(UserProfileRepository.class);
-		service = new MediaSafetyService(checks, mediaReader, analyzer, assets, posts, removePost, moderators,
-			profiles, RELOGIO, true);
+		service = new MediaSafetyService(checks, mediaReader, analyzer, assets, posts, removePost, colagem,
+			moderators, profiles, RELOGIO, true);
 
 		when(checks.findById(anyString())).thenReturn(Optional.empty());
 		when(mediaReader.imagesOf(anyString(), anyString(), anyInt())).thenReturn(List.of(new byte[] { 1, 2, 3 }));
@@ -171,7 +174,7 @@ class MediaSafetyServiceTests {
 	@Test
 	void aDisabledSwitchChecksNothing() {
 		MediaSafetyService desligado = new MediaSafetyService(checks, mediaReader, analyzer, assets, posts, removePost,
-			moderators, profiles, RELOGIO, false);
+			colagem, moderators, profiles, RELOGIO, false);
 
 		assertThat(desligado.check("media_1").status()).isEqualTo("DISABLED");
 		verify(analyzer, never()).analyze(any());
