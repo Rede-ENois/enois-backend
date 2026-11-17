@@ -24,6 +24,28 @@ interface SpringDataUserProfileJpaRepository extends JpaRepository<UserProfileJp
 	List<com.socialcoisa.rede.profile.application.port.out.SellerIdentity> sellersOf(
 		@org.springframework.data.repository.query.Param("ids") java.util.Collection<String> ids);
 
+	/**
+	 * Uma página da enumeração da réplica de leitura, por chave (criado em, id) — nunca por posição.
+	 *
+	 * <p>Conta removida fica de fora na consulta: o @ anônimo é gravado com o prefixo fixo, então o
+	 * filtro é exato e não precisa de mais uma consulta por item. O `:after*` nulo significa "desde o
+	 * começo"; a comparação por par preserva a ordem total mesmo com {@code createdAt} empatado.</p>
+	 */
+	@org.springframework.data.jpa.repository.Query("""
+		select new com.socialcoisa.rede.profile.application.port.out.ReplicaProfileKey(u.id, u.username, u.createdAt)
+		from UserProfileJpaEntity u
+		where (:afterCreatedAt is null
+			or u.createdAt > :afterCreatedAt
+			or (u.createdAt = :afterCreatedAt and u.id > :afterId))
+		  and u.username not like :removedPrefix
+		order by u.createdAt, u.id
+		""")
+	List<com.socialcoisa.rede.profile.application.port.out.ReplicaProfileKey> replicaPage(
+		@org.springframework.data.repository.query.Param("afterCreatedAt") java.time.Instant afterCreatedAt,
+		@org.springframework.data.repository.query.Param("afterId") String afterId,
+		@org.springframework.data.repository.query.Param("removedPrefix") String removedPrefix,
+		org.springframework.data.domain.Pageable page);
+
 	Optional<UserProfileJpaEntity> findByUsername(String username);
 
 	Optional<UserProfileJpaEntity> findByEmail(String email);

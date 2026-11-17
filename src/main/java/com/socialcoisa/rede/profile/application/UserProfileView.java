@@ -11,7 +11,14 @@ import com.socialcoisa.rede.profile.domain.UserProfile;
  * De proposito nao inclui dados sensiveis como o email.
  */
 public record UserProfileView(String id, String username, String name, String headline, String company,
-		String location, String avatar, String banner, String badge, String bio, String bioHtml,
+		String location, String avatar, String banner,
+		/**
+		 * Endereco da foto para ESTE ambiente, ao lado do `avatar` original. A foto gravada pode
+		 * apontar para outro ambiente (midia escrita antes de um QA nascer de uma copia); este campo
+		 * e o que a tela deve abrir (ver {@link com.socialcoisa.rede.media.application.MediaPublicHost}).
+		 */
+		String avatarUrl,
+		String badge, String bio, String bioHtml,
 		String bannerHtml,
 		List<String> skills,
 		List<String> goals,
@@ -42,11 +49,17 @@ public record UserProfileView(String id, String username, String name, String he
 		 * Selo "Humanidade Comprovada": verdadeiro só depois de aprovação confirmada pelo provedor
 		 * de identidade. Substitui a forma pública posterior no record.
 		 */
-		boolean humanityVerified) {
+		boolean humanityVerified,
+		/**
+		 * Quantas advertências administrativas ativas a conta acumulou. Só a abertura de perfil por
+		 * um administrador preenche (ver {@code ProfileService}); para qualquer outro leitor é
+		 * {@code null}, e o histórico não é público.
+		 */
+		Integer activeWarnings) {
 
 	public static UserProfileView from(UserProfile profile) {
 		return new UserProfileView(profile.id(), profile.username(), profile.displayWithNickname(), profile.headline(),
-			profile.company(), profile.location(), profile.avatar(), profile.banner(), profile.badge(), profile.bio(), null, null,
+			profile.company(), profile.location(), profile.avatar(), profile.banner(), null, profile.badge(), profile.bio(), null, null,
 			profile.skills(), profile.goals(), profile.availability(), profile.portfolio(), profile.externalLinks(),
 			profile.openToWork(), profile.mentor(), profile.connectionsCount(), profile.followersCount(),
 			profile.reputation(), profile.postsCount(), profile.pronouns(), profile.badges(), profile.aka(),
@@ -55,7 +68,7 @@ public record UserProfileView(String id, String username, String name, String he
 			profile.profileEffect(), profile.statusText(), profile.statusIcon(), profile.createdAt() == null ? null : profile.createdAt().toString(),
 			profile.publicPlace() == null ? null : profile.publicPlace().city(),
 			profile.publicPlace() == null ? null : profile.publicPlace().state(), profile.gardenStyle(),
-			profile.garden(), profile.profileAppearance().social(), false);
+			profile.garden(), profile.profileAppearance().social(), false, null);
 
 	}
 
@@ -64,11 +77,11 @@ public record UserProfileView(String id, String username, String name, String he
 	 * sugestoes usam o mesmo view, e nao tem por que carregar markup em todas elas.
 	 */
 	public UserProfileView withBioHtml(String bioHtml) {
-		return new UserProfileView(id, username, name, headline, company, location, avatar, banner, badge, bio, bioHtml,
+		return new UserProfileView(id, username, name, headline, company, location, avatar, banner, avatarUrl, badge, bio, bioHtml,
 			bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, connectionsCount,
 			followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme, nameFont, nameColor,
 			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state,
-			gardenStyle, garden, profileLook, humanityVerified);
+			gardenStyle, garden, profileLook, humanityVerified, activeWarnings);
 	}
 
 	/**
@@ -76,19 +89,40 @@ public record UserProfileView(String id, String username, String name, String he
 	 * nunca vira dado público.
 	 */
 	public UserProfileView withHumanityVerified(boolean verified) {
-		return new UserProfileView(id, username, name, headline, company, location, avatar, banner, badge, bio, bioHtml,
+		return new UserProfileView(id, username, name, headline, company, location, avatar, banner, avatarUrl, badge, bio, bioHtml,
 			bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, connectionsCount,
 			followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme, nameFont, nameColor,
 			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state,
-			gardenStyle, garden, profileLook, verified);
+			gardenStyle, garden, profileLook, verified, activeWarnings);
+	}
+
+	/** Foto de perfil no host deste ambiente ({@code avatar} continua o endereco gravado, sem troca). */
+	public UserProfileView withAvatarUrl(String localizedAvatarUrl) {
+		return new UserProfileView(id, username, name, headline, company, location, avatar, banner, localizedAvatarUrl, badge, bio, bioHtml,
+			bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, connectionsCount,
+			followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme, nameFont, nameColor,
+			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state,
+			gardenStyle, garden, profileLook, humanityVerified, activeWarnings);
 	}
 
 	/** Capa em HTML/CSS; so a leitura do perfil anexa (mesmo motivo da bio). */
 	public UserProfileView withBannerHtml(String bannerHtml) {
-		return new UserProfileView(id, username, name, headline, company, location, avatar, banner, badge, bio, bioHtml,
+		return new UserProfileView(id, username, name, headline, company, location, avatar, banner, avatarUrl, badge, bio, bioHtml,
 			bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, connectionsCount,
 			followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme, nameFont, nameColor,
 			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state,
-			gardenStyle, garden, profileLook, humanityVerified);
+			gardenStyle, garden, profileLook, humanityVerified, activeWarnings);
+	}
+
+	/**
+	 * Advertências ativas da conta. Só o administrador que abre o perfil recebe o número: a
+	 * advertência é dado de moderação, não informação pública do perfil.
+	 */
+	public UserProfileView withActiveWarnings(Integer activeWarnings) {
+		return new UserProfileView(id, username, name, headline, company, location, avatar, banner, avatarUrl, badge,
+			bio, bioHtml, bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor,
+			connectionsCount, followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme,
+			nameFont, nameColor, contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText,
+			statusIcon, joinedAt, city, state, gardenStyle, garden, profileLook, humanityVerified, activeWarnings);
 	}
 }

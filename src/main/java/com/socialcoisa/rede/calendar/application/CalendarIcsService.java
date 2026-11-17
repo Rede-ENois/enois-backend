@@ -326,7 +326,7 @@ public class CalendarIcsService {
 	 * pulou. O `BYDAY`/`INTERVAL` só é aceito quando descreve exatamente uma das cadências do app.
 	 */
 	private void importRule(String userId, CalendarEntry entry, Vevent event, Instant start, ZoneId zone) {
-		CalendarRule rule = CalendarRule.parse(event.rrule());
+		CalendarRule rule = CalendarRule.parse(event.rrule(), zone);
 		if (rule == null) {
 			return;
 		}

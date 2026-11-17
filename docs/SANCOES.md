@@ -20,6 +20,7 @@ A política de aplicação, conversão, duração e revisão humana não muda.
     "status": "ACTIVE",
     "createdAt": "2026-11-14T11:00:00Z",
     "removedAt": null,
+    "dueAt": "2026-11-21T11:00:00Z",
     "deadline": {"kind": "APPEAL", "at": "2026-11-21T11:00:00Z"},
     "evidence": {
       "kind": "BEHAVIOR",
@@ -33,6 +34,11 @@ A política de aplicação, conversão, duração e revisão humana não muda.
 
 Os campos anteriores de sanções e recursos permanecem. Listas continuam limitadas aos 20 registros
 mais recentes do próprio titular; parâmetros com identidade de outra pessoa não mudam esse titular.
+`reason` mantém o motivo persistido. O campo legado `dueAt` mantém a compatibilidade com a QA:
+somente suspensão ativa retorna `createdAt + graça configurada`; todos os demais casos retornam
+`null`, inclusive suspensão removida. É prazo de recurso, não término efetivo. A apresentação nova
+usa `deadline.kind/at`, sem inferir duração no cliente. Não existem campos `endAt` ou
+`appealDeadlineAt` nesta versão da API. As respostas administrativas anteriores conservam `dueAt`.
 `appeals` mantém `id`, `sanctionId`, `userId`, `message`, `status`, `createdAt`, `reviewedBy` e
 `reviewedAt`; os estados são `PENDING`, `APPROVED` e `DENIED`.
 
@@ -62,6 +68,8 @@ mais recentes do próprio titular; parâmetros com identidade de outra pessoa n�
   Deve ser renderizado como texto, nunca como HTML.
 - `MEDIA`: descrição estática de uma associação persistida de mídia do alvo. Não baixa nem retorna
   binário, captura, URL, identificador da mídia ou chave de armazenamento.
+  Inclui fotos de Colagem e comentários com foto, inclusive quando removidos logicamente;
+  marcadores internos da triagem não são apresentados como texto escrito pelo titular.
 - `BEHAVIOR`: decisões de conduta identificadas por suas referências existentes (administração,
   votação, antispam, honeypot ou contestação). Não escolhe um post arbitrário do arquivo da conta.
 - `UNAVAILABLE`, `text: null`: associação ausente, registro legado desconhecido, conteúdo apagado
@@ -114,6 +122,9 @@ Depois da senha correta, identidade verificada e todos os fatores locais exigido
   `429 SESSION_LOOKUP_LIMIT` com `Retry-After`, sem consultar novamente a persistência.
 - Depois de recurso aceito, a consulta limitada mostra `REMOVED`/`APPROVED`. A pessoa deve entrar de
   novo para obter `FULL`. A consulta não restaura conteúdo anteriormente purgado.
+- A consulta acompanha a decisão vigente: `BAN` e `PERMABAN` não autenticam a sessão limitada.
+  Recusas em superfícies administrativas mantêm a trilha e os contadores por conta da QA, sem
+  conceder acesso normal.
 - `BAN`/`PERMABAN` continuam sem nova sessão e sem recurso: `403 ACCOUNT_BANNED` somente depois da
   confirmação dos fatores. Senha errada continua `401 INVALID_CREDENTIALS`; identidade não verificada
   continua `403 EMAIL_NOT_VERIFIED`.
@@ -160,6 +171,10 @@ O consumidor deve encaminhar `SANCTIONS_ONLY`/`ACCOUNT_SUSPENDED` para `/conta-s
 áreas privadas normais. Após 401, entrar novamente; após 403 de CSRF ou falha de rede, não presumir
 perda de sessão ou ausência de penalidades. Uma falha na consulta deve oferecer erro/repetição.
 
-Migração aditiva: `V296__auth_session_access_scope.sql`, sem alteração de sanções ou evidências
+Migração aditiva: `V341__auth_session_access_scope.sql`, sem alteração de sanções ou evidências
 existentes. Nenhuma alteração em classificadores, bot, agressividade, fila humana, conversão,
 worker de vencimento, liberação automática ou elegibilidade de BAN/PERMABAN.
+
+A migração própria foi renumerada de V296 para V341 antes da integração da PR: a QA já possui
+`V296__eroleplay_chat.sql` e versões até V340. O SQL da sessão não mudou; nenhuma migração da QA
+foi editada. A PR ainda não integrada não deve ser aplicada com a numeração antiga.

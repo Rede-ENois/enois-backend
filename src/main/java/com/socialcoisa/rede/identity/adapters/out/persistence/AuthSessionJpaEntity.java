@@ -94,6 +94,9 @@ class AuthSessionJpaEntity {
 	}
 
 	boolean activeForSanctionsAt(Instant now) {
+		if ("BAN".equals(activeSanctionType) || "PERMABAN".equals(activeSanctionType)) {
+			return false;
+		}
 		return sanctionsOnly ? revokedAt == null && sanctionsExpiresAt != null && sanctionsExpiresAt.isAfter(now)
 			: activeAt(now);
 	}

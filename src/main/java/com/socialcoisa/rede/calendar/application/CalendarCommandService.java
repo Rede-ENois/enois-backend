@@ -82,6 +82,15 @@ public class CalendarCommandService {
 				entry.describe(blankToNull(description), now);
 			}
 			if (start != null) {
+				// A série é materializada em linhas irmãs com horário único no banco (D43): reagendar
+				// uma ocorrência para o horário de uma irmã violaria o índice e viraria um 409 opaco de
+				// integridade. Recusar antes, dizendo de que compromisso bate.
+				if (entry.seriesId() != null && entries.findBySeriesAndStart(entry.seriesId(), start)
+						.filter(sibling -> !sibling.id().equals(entry.id()))
+						.isPresent()) {
+					throw new ApiException(409, "CALENDAR_SERIES_SLOT_TAKEN",
+						"Ja existe uma ocorrencia da serie neste horario.");
+				}
 				entry.reschedule(start, end, CalendarEntry.zoneOf(timeZoneId), now);
 			}
 			return entry;

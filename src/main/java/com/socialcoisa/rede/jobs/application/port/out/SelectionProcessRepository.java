@@ -3,13 +3,14 @@ package com.socialcoisa.rede.jobs.application.port.out;
 import java.util.List;
 import java.util.Optional;
 
+import com.socialcoisa.rede.jobs.domain.ApplicationEvaluation;
 import com.socialcoisa.rede.jobs.domain.SelectionStage;
 import com.socialcoisa.rede.jobs.domain.StageMovement;
 import com.socialcoisa.rede.jobs.domain.StageNote;
 
 /**
  * Persistência do pipeline de recrutamento: etapas do fluxo da vaga, movimentos das
- * candidaturas e notas internas da equipe.
+ * candidaturas, notas internas e avaliações da equipe.
  */
 public interface SelectionProcessRepository {
 
@@ -50,5 +51,9 @@ public interface SelectionProcessRepository {
 	StageNote saveNote(StageNote note);
 
 	List<StageNote> notesOf(long applicationId);
+
+	ApplicationEvaluation saveEvaluation(ApplicationEvaluation evaluation);
+
+	List<ApplicationEvaluation> evaluationsOf(long applicationId);
 
 }

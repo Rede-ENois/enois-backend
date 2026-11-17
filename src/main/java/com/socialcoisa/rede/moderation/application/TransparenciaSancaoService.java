@@ -46,12 +46,14 @@ public class TransparenciaSancaoService {
 
 		return new Decisao(sancao.id(), sancao.userId(), sancao.reportId(), sancao.type().name(),
 			sancao.reason(), sancao.status().name(), sancao.createdAt().toString(),
-			sancao.removedAt() == null ? null : sancao.removedAt().toString(), prazo, evidencias.daSancao(sancao),
+			sancao.removedAt() == null ? null : sancao.removedAt().toString(),
+			sancao.isActive() && sancao.type() == SanctionType.SUSPENDED ? prazo.at() : null,
+			prazo, evidencias.daSancao(sancao),
 			sancao.isActive() && !sancao.isBan() && !pendente);
 	}
 
 	public record Prazo(String kind, String at) {}
 	public record Evidencia(String kind, String text) {}
 	public record Decisao(String id, String userId, String reportId, String type, String reason, String status,
-		String createdAt, String removedAt, Prazo deadline, Evidencia evidence, boolean canAppeal) {}
+		String createdAt, String removedAt, String dueAt, Prazo deadline, Evidencia evidence, boolean canAppeal) {}
 }

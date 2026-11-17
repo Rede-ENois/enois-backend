@@ -1,0 +1,16 @@
+[Unit]
+Description=Monitor da chave pública de assinatura do Control Plane (Énóis)
+Documentation=file:/usr/local/share/enois-config-signing/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/enois/config-signing-monitor.env
+ExecStart=/usr/local/sbin/enois-monitor-config-signing
+Restart=no
+TimeoutStopSec=30
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

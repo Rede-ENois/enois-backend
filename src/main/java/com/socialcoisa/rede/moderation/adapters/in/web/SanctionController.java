@@ -39,14 +39,19 @@ class SanctionController {
 	private final AuthSessionRepository sessions;
 	private final TransparenciaSancaoService transparencia;
 
+	/** Mesma graça configurada do worker que converte a suspensão expirada em ban. */
+	private final java.time.Duration grace;
+
 	SanctionController(SanctionService sanctions, CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
-			ModeratorGuard moderatorGuard, AuthSessionRepository sessions, TransparenciaSancaoService transparencia) {
+			ModeratorGuard moderatorGuard, AuthSessionRepository sessions, TransparenciaSancaoService transparencia,
+			@org.springframework.beans.factory.annotation.Value("${rede.moderation.suspension.grace-days:7}") int graceDays) {
 		this.sanctions = sanctions;
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
 		this.moderatorGuard = moderatorGuard;
 		this.sessions = sessions;
 		this.transparencia = transparencia;
+		this.grace = java.time.Duration.ofDays(Math.max(1, Math.min(graceDays, 365)));
 	}
 
 	/** Penalidades do proprio usuario (o que a conta carrega e o historico). */
@@ -84,7 +89,7 @@ class SanctionController {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		moderatorGuard.requireModerator(user);
 		UserSanction sanction = sanctions.approveAppeal(appealId, user.id().value());
-		return Map.of("status", "APPROVED", "sanction", SanctionView.from(sanction));
+		return Map.of("status", "APPROVED", "sanction", SanctionView.from(sanction, grace));
 	}
 
 	/** Recurso negado: conta banida (sessoes revogadas na hora). */
@@ -94,7 +99,7 @@ class SanctionController {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		moderatorGuard.requireModerator(user);
 		UserSanction sanction = sanctions.denyAppeal(appealId, user.id().value(), sessions);
-		return Map.of("status", "DENIED", "sanction", SanctionView.from(sanction));
+		return Map.of("status", "DENIED", "sanction", SanctionView.from(sanction, grace));
 	}
 
 
@@ -122,7 +127,7 @@ class SanctionController {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		adminGuard.requireAdmin(user);
 		UserSanction removed = sanctions.revokeSanction(user.id().value(), sanctionId, request.reason());
-		return Map.of("status", "REVOKED", "sanction", SanctionView.from(removed));
+		return Map.of("status", "REVOKED", "sanction", SanctionView.from(removed, grace));
 	}
 
 	/** Corrige a penalidade sem removê-la: troca o tipo e o motivo, mantendo o mesmo registro. */
@@ -140,7 +145,7 @@ class SanctionController {
 		}
 		UserSanction updated = sanctions.editSanction(user.id().value(), sanctionId, type, request.reason(),
 			sessions);
-		return Map.of("status", "UPDATED", "sanction", SanctionView.from(updated));
+		return Map.of("status", "UPDATED", "sanction", SanctionView.from(updated, grace));
 	}
 
 	record CreateAppealRequest(String message) {
@@ -163,11 +168,14 @@ class SanctionController {
 	}
 
 	record SanctionView(String id, String userId, String reportId, String type, String reason, String status,
-			String createdAt, String removedAt) {
-		static SanctionView from(UserSanction s) {
+			String createdAt, String removedAt, String dueAt) {
+		static SanctionView from(UserSanction s, java.time.Duration grace) {
+			// Campo legado: prazo de recurso da suspensão ativa, nunca promessa de liberação.
+			String dueAt = s.isActive() && s.type() == SanctionType.SUSPENDED
+				? s.createdAt().plus(grace).toString() : null;
 			return new SanctionView(s.id(), s.userId(), s.reportId(), s.type().name(), s.reason(),
 				s.status().name(), s.createdAt().toString(),
-				s.removedAt() != null ? s.removedAt().toString() : null);
+				s.removedAt() != null ? s.removedAt().toString() : null, dueAt);
 		}
 	}
 

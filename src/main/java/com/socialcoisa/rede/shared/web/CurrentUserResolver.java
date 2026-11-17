@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.shared.web;
 
 import java.time.Clock;
+import java.util.Optional;
 
 import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
@@ -39,13 +40,26 @@ public class CurrentUserResolver {
 		}
 		var identity = sanctionsOnly
 			? authSessionRepository.findActiveSanctionsUserId(sessionToken.trim(), clock.instant())
-			: authSessionRepository.findActiveUserId(sessionToken.trim(), clock.instant());
+			: activeUserId(sessionToken);
 		String resolvedUserId = identity
 			.orElseThrow(() -> new ApiException(401, "UNAUTHENTICATED", "Sessao invalida ou expirada."));
 		// Set before the verification check so a 403 EMAIL_NOT_VERIFIED is still attributed to the
 		// user. RequestObservabilityFilter logs it on the access line and clears it.
 		MDC.put(RequestObservabilityFilter.MDC_USER_ID, resolvedUserId);
 		return requireVerifiedIdentity(new CurrentUser(new UserId(resolvedUserId)));
+	}
+
+	/**
+	 * Quem é a sessão, quando ela é válida agora. O `resolve` LANÇA para leitura e escrita
+	 * autenticadas; este é o chamador que precisa saber quem agiu sem transformar ausência de sessão
+	 * em erro — a trilha de recusas administrativas, por exemplo, precisa do id quando ele existe e
+	 * segue sem ele quando não existe.
+	 */
+	public Optional<String> activeUserId(String sessionToken) {
+		if (!StringUtils.hasText(sessionToken)) {
+			return Optional.empty();
+		}
+		return authSessionRepository.findActiveUserId(sessionToken.trim(), clock.instant());
 	}
 
 	/**

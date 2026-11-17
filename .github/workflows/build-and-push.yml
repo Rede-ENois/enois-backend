@@ -170,6 +170,10 @@ jobs:
   # Schema check: boot against MariaDB 11.4 (the production engine) built only from the Flyway
   # migrations (ddl-auto=validate). A migration MariaDB refuses, or an entity without its
   # migration, fails here, not in prod. The SPRING_* env vars override the test profile's H2.
+  #
+  # Roda também em push: é o gate que de fato precede o deploy. O `mvnw test` do Dockerfile é
+  # pulado (a imagem não roda teste — ver Dockerfile), então SEM esta etapa um merge em qa/main
+  # que quebrasse o boot contra MariaDB só apareceria em produção. Custou ~1m30s, não ~17min.
   # ===========================================================================
   schema-check:
     name: 🧪 Schema x migrations
@@ -353,6 +357,9 @@ jobs:
           HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
           DB_PASSWORD: ${{ secrets.QA_DB_PASSWORD }}
           REDE_SECURITY_ENCRYPTION_KEY: ${{ secrets.QA_REDE_SECURITY_ENCRYPTION_KEY }}
+          # Assinatura do endereço da cópia anexada a uma denúncia. Sem este segredo na QA a cópia
+          # não abre no painel (a API responde 503 nessa rota e registra o aviso no boot).
+          REDE_MEDIA_ATTACHMENTS_SECRET: ${{ secrets.QA_REDE_MEDIA_ATTACHMENTS_SECRET }}
           TURNSTILE_SITE_KEY: ${{ secrets.QA_TURNSTILE_SITE_KEY }}
           TURNSTILE_SECRET_KEY: ${{ secrets.QA_TURNSTILE_SECRET_KEY }}
           # Login social nos DOIS ambientes: a QA roda em `enois-qa.b7cloud.tech` com a API em
@@ -436,6 +443,16 @@ jobs:
           DIDIT_MONTHLY_VERIFICATION_LIMIT: "25"
           DIDIT_MONTHLY_BUDGET_USD: "10.00"
           DIDIT_AUTO_TOPUP: "false"
+          # Assinatura da config do nó da rede distribuída (doc 06, ADR de config assinada).
+          # Sem o PAR (privada PKCS#8/DER + pública X.509/DER, ambas base64), o backend sobe
+          # com signingKey vazio e toda resposta de /network/nodes/me/config sai
+          # `signed:false, publicKey:null` — o nó faz heartbeat mas RECUSA toda config, e o
+          # instalador nunca fecha o pinning. É o estado em que a QA ficou após o merge da
+          # rede distribuída: o par precisa existir como secrets QA_* ANTES do primeiro deploy
+          # deste workflow. A privada é identidade do Control Plane: fixa entre deploys (nunca
+          # regenerada no boot, senão todo nó pinneria uma chave nova a cada restart).
+          QA_REDE_NETWORK_CONFIG_SIGNING_KEY: ${{ secrets.QA_REDE_NETWORK_CONFIG_SIGNING_KEY }}
+          QA_REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY: ${{ secrets.QA_REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY }}
           # Epapo (videoconferência própria). Sem estas quatro variáveis o backend responde
           # 503 CALLS_NOT_CONFIGURED / MENTORING_ROOMS_NOT_CONFIGURED e nenhuma sala abre —
           # é o estado em que a QA estava, com a rota do gateway respondendo
@@ -632,6 +649,7 @@ jobs:
               "REDE_ORIGINS_ENFORCE=true",
               "PANIC_MODE=${PANIC_MODE}",
               "REDE_SECURITY_ENCRYPTION_KEY=${REDE_SECURITY_ENCRYPTION_KEY}",
+              "REDE_MEDIA_ATTACHMENTS_SECRET=${REDE_MEDIA_ATTACHMENTS_SECRET}",
               "TURNSTILE_SITE_KEY=${TURNSTILE_SITE_KEY}",
               "TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY}",
               "LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}",
@@ -679,6 +697,8 @@ jobs:
               "REDE_CALLS_EPAPO_GATEWAY_URL=${REDE_CALLS_EPAPO_GATEWAY_URL}",
               "REDE_CALLS_EPAPO_INTERNAL_TOKEN=${REDE_CALLS_EPAPO_INTERNAL_TOKEN}",
               "REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN=${REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN}",
+              "REDE_NETWORK_CONFIG_SIGNING_KEY=${QA_REDE_NETWORK_CONFIG_SIGNING_KEY}",
+              "REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY=${QA_REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY}",
               "TRUSTED_PROXY_IPS=154.12.230.97",
               "JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=60.0 -XX:+ExitOnOutOfMemoryError"
             ],
@@ -811,9 +831,16 @@ jobs:
             fi
             # A sonda roda logo depois de o container novo subir, e o gateway pergunta a este
             # MESMO backend para responder: se ela perguntar antes de o backend aquecer, recebe
-            # 502 (o Énóis não soube responder), que é o sintoma de uma falha real e também o de
-            # uma janela de segundos. Por isso repete até vir uma resposta do Énóis: 200, 401, 403
-            # e 404 são definitivas e provam que a cadeia inteira atendeu.
+            # 502 (a ponte não soube responder), que é o sintoma de uma falha real e também o de
+            # uma janela de segundos. Por isso repete até vir uma resposta definitiva.
+            #
+            # O que cada resposta significa com o gateway atual (que distingue negação de ponte
+            # quebrada): 200/403/404 provam que a cadeia inteira atendeu — para um id de chamada
+            # inexistente, "não" é a resposta certa. 401 é o gateway RECUSANDO a credencial de
+            # chamada deste backend (par EPAPO_INTERNAL_TOKEN descasado) e 502 é o gateway não
+            # conseguindo autorizar contra o Énóis (par ENOIS_AUTHORIZE_SECRET descasado) —
+            # nenhum dos dois é rede nem janela de boot depois de o healthcheck passar: deploy
+            # verde aqui esconderia um fluxo de entrada morto, então ambos falham o passo.
             #
             # `|| true`: o curl já imprime 000 quando não conecta e sai com erro. Com `|| echo 000`
             # o valor virava 000000 e caía no ramo "resposta inesperada" em vez de "não respondeu".
@@ -834,12 +861,22 @@ jobs:
               sleep 5
             done
             case "${probe}" in
-              200|401|403|404)
+              200|403|404)
                 echo " gateway respondeu (${probe}) em ${REDE_CALLS_EPAPO_GATEWAY_URL}"
                 ;;
+              401)
+                echo "::error::o gateway recusou a credencial de chamada deste backend (401): o par"
+                echo "REDE_CALLS_EPAPO_INTERNAL_TOKEN (aqui) x EPAPO_INTERNAL_TOKEN (no Epapo) está"
+                echo "descasado. Os dois lados precisam do MESMO valor; trocar um sem o outro deixa"
+                echo "todo mundo fora de sala com deploy verde."
+                exit 1
+                ;;
               502)
-                echo "::warning::o gateway não conseguiu falar com o backend da QA (502) após 5 tentativas."
-                echo "O container está no ar; isto indica o Énóis recusando ou demorando a responder à autorização."
+                echo "::error::o gateway não conseguiu autorizar contra o Énóis (502) após 5 tentativas:"
+                echo "a perna gateway→Énóis está quebrada — normalmente o par ENOIS_AUTHORIZE_SECRET"
+                echo "(no Epapo) x REDE_CALLS_GATEWAY_AUTHORIZE_TOKEN (aqui) descasado. Os dois lados"
+                echo "precisam do MESMO valor."
+                exit 1
                 ;;
               000|"")
                 echo "::warning::o Epapo não respondeu em ${REDE_CALLS_EPAPO_GATEWAY_URL} a partir do host da QA."
@@ -911,6 +948,7 @@ jobs:
           # responde "Authentication failed" e nenhum e-mail de 2FA/reset sai.
           MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
           REDE_SECURITY_ENCRYPTION_KEY: ${{ secrets.PROD_REDE_SECURITY_ENCRYPTION_KEY }}
+          REDE_MEDIA_ATTACHMENTS_SECRET: ${{ secrets.PROD_REDE_MEDIA_ATTACHMENTS_SECRET }}
           TURNSTILE_SITE_KEY: ${{ secrets.PROD_TURNSTILE_SITE_KEY }}
           TURNSTILE_SECRET_KEY: ${{ secrets.PROD_TURNSTILE_SECRET_KEY }}
           LINKEDIN_CLIENT_ID: ${{ secrets.LINKEDIN_CLIENT_ID }}
@@ -997,6 +1035,11 @@ jobs:
           # sobe com a rota interna desligada (503) e o passo de publicacao avisa, sem derrubar
           # o deploy. Precisa ser o mesmo valor nos dois lugares: no container e no passo do curl.
           REDE_RELEASE_NOTES_DEPLOY_TOKEN: ${{ secrets.REDE_RELEASE_NOTES_DEPLOY_TOKEN }}
+          # Assinatura da config do no da rede distribuida: par DE PRODUCAO, separado da QA por
+          # prefixo (como VAPID_*/DB_*). A privada e identidade do Control Plane de producao:
+          # fixa entre deploys; regenerar invalida o pino TOFU de todo no ja cadastrado.
+          REDE_NETWORK_CONFIG_SIGNING_KEY: ${{ secrets.PROD_REDE_NETWORK_CONFIG_SIGNING_KEY }}
+          REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY: ${{ secrets.PROD_REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY }}
         run: |
           set -euo pipefail
           AUTH=(-H "X-API-Key: ${PORTAINER_API_KEY}" -H "Referer: ${PORTAINER_BASE_URL}")
@@ -1082,6 +1125,7 @@ jobs:
                 CORS_ALLOWED_ORIGINS: https://enois.ia.br,https://isweee.com
                 SITE_DOMAINS: enois.ia.br,isweee.com
                 REDE_SECURITY_ENCRYPTION_KEY: ${REDE_SECURITY_ENCRYPTION_KEY}
+                REDE_MEDIA_ATTACHMENTS_SECRET: ${REDE_MEDIA_ATTACHMENTS_SECRET}
                 TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY}
                 TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY}
                 REDE_AUTH_SIGNUP_ENABLED: "true"
@@ -1145,6 +1189,10 @@ jobs:
                 # "Novidades" automaticas do deploy (issue #622): mesmo valor que o passo de
                 # publicacao usa. Vazio = rota interna desligada (fail-closed, 503).
                 REDE_RELEASE_NOTES_DEPLOY_TOKEN: "${REDE_RELEASE_NOTES_DEPLOY_TOKEN}"
+                # Config assinada da rede distribuida (par de PRODUCAO). Vazio = assinatura
+                # desligada; /network/nodes/me/config responde signed:false e o no recusa config.
+                REDE_NETWORK_CONFIG_SIGNING_KEY: "${REDE_NETWORK_CONFIG_SIGNING_KEY}"
+                REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY: "${REDE_NETWORK_CONFIG_SIGNING_PUBLIC_KEY}"
           EOF
 
           echo "==> Montar payload JSON (python escapa o YAML certo pro body)"

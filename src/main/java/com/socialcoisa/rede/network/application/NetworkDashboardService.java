@@ -1,0 +1,270 @@
+package com.socialcoisa.rede.network.application;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
+import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
+import com.socialcoisa.rede.network.domain.TaskStatus;
+import com.socialcoisa.rede.network.domain.NetworkNode;
+import com.socialcoisa.rede.network.domain.NetworkRegions;
+import com.socialcoisa.rede.network.domain.NodeProfile;
+import com.socialcoisa.rede.network.domain.NodeStatus;
+import com.socialcoisa.rede.network.domain.TaskType;
+
+/**
+ * Agregados do topo do painel "Énóis Network".
+ *
+ * <p>O painel de nós lista até {@code MAX_LIST} linhas, mas nenhum número do topo vinha de dado:
+ * total de nós, ativos, indisponíveis, em quarentena, capacidade somada, CPU e memória agregadas,
+ * versões de runtime, distribuição por região e por perfil — tudo o que o contrato do painel pede
+ * — tinha de ser contado de cabeça pelo admin. Este serviço devolve os números calculados sobre a
+ * mesma lista que a tela já lê: a rede cooperativa é de centenas de nós, não de milhões, e uma
+ * consulta que a tela já faz não precisa virar seis.</p>
+ *
+ * <p>Nada aqui é estado nem decisão: é leitura. O modo da rede continua sendo cálculo do
+ * {@link NetworkModeService}, e a capacidade usada no modo continua a que ignora nó saturado,
+ * esgotado e em quarentena — estes números são para o humano ver, não para o scheduler usar.</p>
+ */
+@Service
+public class NetworkDashboardService {
+
+	/** Mesmo teto da listagem: agregar além dele seria mostrar uma rede que a tela não enxerga. */
+	private static final int MAX_LIST = 200;
+	/** Mesmo stale do scheduler: "vivo" aqui é o mesmo vivo que recebe tarefa. */
+	private static final long STALE_SECONDS = 180;
+
+	private final NetworkNodeRepository nodes;
+	private final NetworkRegionService regions;
+	private final NetworkTaskRepository tasks;
+	private final Clock clock;
+
+	NetworkDashboardService(NetworkNodeRepository nodes, NetworkRegionService regions, NetworkTaskRepository tasks,
+			Clock clock) {
+		this.nodes = nodes;
+		this.regions = regions;
+		this.tasks = tasks;
+		this.clock = clock;
+	}
+
+	@Transactional(readOnly = true)
+	public Dashboard dashboard() {
+		Instant now = clock.instant();
+		List<NetworkNode> all = nodes.list(MAX_LIST);
+		List<String> evacuated = regions.outOfService();
+
+		int total = all.size();
+		int active = 0;
+		int unavailable = 0;
+		int quarantined = 0;
+		int alive = 0;
+		int degraded = 0;
+		int declaredCores = 0;
+		int declaredMemoryMb = 0;
+		int freeSlots = 0;
+		Double cpuSum = 0.0;
+		int cpuSamples = 0;
+		int memorySumMb = 0;
+		int memorySamples = 0;
+		Map<String, Integer> byRegion = new TreeMap<>();
+		Map<String, Integer> byProfile = new TreeMap<>();
+		Map<String, Integer> byRuntime = new TreeMap<>();
+
+		for (NetworkNode node : all) {
+			if (node.status() == NodeStatus.ACTIVE) {
+				active++;
+				if (node.quarantined(now)) {
+					quarantined++;
+				}
+				if (node.alive(now, Duration.ofSeconds(STALE_SECONDS))) {
+					alive++;
+				}
+				if (node.failing() || node.slow() || node.quarantined(now)) {
+					degraded++;
+				}
+				// Vaga conservadora: a mesma conta do modo — quem está saturado, esgotado de memória
+				// ou fora do balanceamento não promete vaga que não vai cumprir. Saturado continua
+				// fora de "degradado": carga momentânea não é saúde.
+				if (node.hasCapacity() && !node.saturated() && !node.memoryExhausted()
+						&& !node.quarantined(now) && !NetworkRegions.outOfService(evacuated, node.region())) {
+					freeSlots += Math.max(0, node.concurrencyLimit() - node.runningTasks());
+				}
+			}
+			else if (node.status() != NodeStatus.PENDING_APPROVAL) {
+				unavailable++;
+			}
+			declaredCores += node.declaredCpuCores();
+			declaredMemoryMb += node.declaredMemoryMb();
+			if (node.observedCpuPercent() != null) {
+				cpuSum += node.observedCpuPercent();
+				cpuSamples++;
+			}
+			if (node.observedMemoryMb() != null) {
+				memorySumMb += node.observedMemoryMb();
+				memorySamples++;
+			}
+			if (node.region() != null && !node.region().isBlank()) {
+				byRegion.merge(node.region(), 1, Integer::sum);
+			}
+			for (NodeProfile profile : node.profiles()) {
+				byProfile.merge(profile.name(), 1, Integer::sum);
+			}
+			if (node.runtimeVersion() != null && !node.runtimeVersion().isBlank()) {
+				byRuntime.merge(node.runtimeVersion(), 1, Integer::sum);
+			}
+		}
+
+		Map<String, Integer> topRuntimes = new LinkedHashMap<>();
+		byRuntime.entrySet()
+			.stream()
+			.sorted(Map.Entry.<String, Integer>comparingByValue(Comparator.reverseOrder()))
+			.forEach(entry -> topRuntimes.put(entry.getKey(), entry.getValue()));
+
+		return new Dashboard(total, active, unavailable, quarantined, alive, degraded, declaredCores,
+			declaredMemoryMb, freeSlots, cpuSamples == 0 ? null : cpuSum / cpuSamples,
+			cpuSamples, memorySamples == 0 ? null : memorySumMb / memorySamples, memorySamples,
+			byRegion, byProfile, topRuntimes, evacuated, load(all), workTypes(all, evacuated, now));
+	}
+
+	/**
+	 * Cada tipo de trabalho da rede e quantos nós podem executá-lo <b>agora</b> — o §8.4 do brief
+	 * ("o painel deve mostrar como os nós trabalham juntos").
+	 *
+	 * <p>A pergunta que isto responde não está em nenhum outro lugar do painel: <b>a rede tem
+	 * alguém para fazer cada tipo de trabalho?</b> {@code byProfile} conta perfis declarados, o que
+	 * não é a mesma coisa — um nó {@code NODE_MEDIA} em quarentena, de região evacuada ou sem vaga
+	 * continua contado no perfil e não executa nada. Hoje essa descoberta custava abrir nó por nó
+	 * até achar que nenhum aceitava {@code MEDIA_TRANSCODE}.</p>
+	 *
+	 * <p>"Pode agora" é a régua do despacho: {@code ACTIVE}, vivo na mesma janela do scheduler, sem
+	 * quarentena, fora de região evacuada e com vaga. A fleet é pequena e cabe no teto da listagem;
+	 * acima dele, a lista diz que está olhando um recorte.</p>
+	 *
+	 * <p>{@code uncovered} é a lista dos sem capacidade — é o que a tela pinta de vermelho. Lista
+	 * vazia significa cobertura completa, e não "não medi": toda a enumeração é varrida, inclusive
+	 * os tipos que nenhum perfil cobre.</p>
+	 */
+	private List<WorkCoverage> workTypes(List<NetworkNode> all, List<String> evacuated, Instant now) {
+		List<WorkCoverage> result = new java.util.ArrayList<>();
+		for (TaskType type : TaskType.values()) {
+			int capable = 0;
+			for (NetworkNode node : all) {
+				if (node.status() != NodeStatus.ACTIVE || !node.alive(now, Duration.ofSeconds(STALE_SECONDS))
+						|| node.quarantined(now) || NetworkRegions.outOfService(evacuated, node.region())
+						|| !node.hasCapacity() || !type.allowedFor(node.profiles())) {
+					continue;
+				}
+				capable++;
+			}
+			result.add(new WorkCoverage(type.name(), capable));
+		}
+		return List.copyOf(result);
+	}
+
+	/**
+	 * Os números do topo do painel. {@code alive} e {@code degraded} só contam ACTIVE: nó pendente
+	 * não está "indisponível" — nunca chegou a operar — e contar suspenso junto de degradado
+	 * misturaria decisão administrativa com saúde medida.
+	 *
+	 * <p>{@code avgCpuPercent}/{@code avgMemoryMb} são médias dos reportes recentes com a contagem
+	 * de amostras ao lado: média sem amostras é {@code null}, e média sem saber de quantos nós é
+	 * média não diz nada. Capacidade livre é a mesma conta conservadora do modo: nó saturado,
+	 * esgotado de memória, em quarentena ou de região evacuada não promete vaga que não vai
+	 * cumprir.</p>
+	 *
+	 * <p>{@code outOfServiceRegions} é aditivo e é o que a tela precisa para explicar por que a
+	 * capacidade livre caiu sem nenhum nó ter saído: a região está fora por decisão humana, e a
+	 * lista das que estão é a diferença entre "o painel está errado" e "houve incidente".</p>
+	 */
+	public record Dashboard(int total, int active, int unavailable, int quarantined, int alive, int degraded,
+			int declaredCpuCores, int declaredMemoryMb, int freeSlots, Double avgCpuPercent, int cpuSamples,
+			Integer avgMemoryMb, int memorySamples, Map<String, Integer> byRegion, Map<String, Integer> byProfile,
+			Map<String, Integer> runtimeVersions, List<String> outOfServiceRegions, Distribution load,
+			List<WorkCoverage> workTypes) {
+	}
+
+	/**
+	 * Quantos nós podem executar um tipo de trabalho agora.
+	 *
+	 * @param type     o tipo de trabalho da rede ({@link com.socialcoisa.rede.network.domain.TaskType})
+	 * @param capable  nós {@code ACTIVE}, vivos, sem quarentena, fora de região evacuada e com vaga
+	 *                 que aceitam este tipo; {@code 0} = a rede não tem quem o faça
+	 */
+	public record WorkCoverage(String type, int capable) {
+	}
+
+	/**
+	 * Como o trabalho está distribuído entre os nós — o §8.4 do brief (cooperativismo global).
+	 *
+	 * <p>A pergunta que estes números respondem: <b>a rede está distribuindo o processamento ou o
+	 * Master absorve o que as réplicas poderiam fazer?</b> Por isso cada nó vem com o que executou,
+	 * o que falhou e quantas tarefas estão na mão dele <b>agora</b> — e o agregado traz
+	 * {@code concentratedShare}, a fatia do nó que mais executou.</p>
+	 *
+	 * <p>Quando não há o que concluir, o relatório diz isso em vez de mostrar zero: sem tarefa
+	 * concluída, {@code concentratedShare} é {@code null} — "nenhum trabalho" e "todo o trabalho num
+	 * nó só" seriam lidos iguais se ambos fossem 0 ou 1. Do mesmo jeito, {@code singleNode} só é
+	 * verdadeiro com pelo menos duas réplicas ativas: com uma só, a fatia de 100% não é concentração,
+	 * é a única opção.</p>
+	 *
+	 * @param nodes          um registro por nó listado no painel, incluindo os que nunca executaram
+	 * @param totalDone      tarefas concluídas em toda a rede (soma do que foi contado por nó)
+	 * @param totalFailed    falhas definitivas por nó (idem)
+	 * @param unassigned     concluídas sem nó no registro — contam para o total, não para um nó
+	 * @param concentratedShare fatia do nó com mais conclusões; {@code null} sem conclusão alguma
+	 * @param singleNode     a maior fatia é de um nó com 2+ réplicas ativas: a distribuição não ocorre
+	 */
+	public record Distribution(List<NodeLoad> nodes, long totalDone, long totalFailed, long unassigned,
+			Double concentratedShare, boolean singleNode) {
+	}
+
+	/**
+	 * O que um nó executou. {@code runningNow} é o último reportado no heartbeat (campo cru) e pode
+	 * ser {@code null} — runtime antigo não manda, e nulo não é "zero tarefas rodando".
+	 */
+	public record NodeLoad(String nodeId, String displayName, String status, long done, long failed,
+			Integer runningNow) {
+	}
+
+	/**
+	 * Monta a distribuição. Só os nós que o painel lista entram: um nó fora do teto de listagem não
+	 * é "nó com zero tarefas", e somá-lo esconderia trabalho que existe.
+	 */
+	private Distribution load(List<NetworkNode> all) {
+		List<String> ids = all.stream().map(NetworkNode::id).toList();
+		Map<String, Long> done = ids.isEmpty() ? Map.of() : tasks.countDoneByNode(ids);
+		Map<String, Long> failed = ids.isEmpty() ? Map.of() : tasks.countFailedByNode(ids);
+		long totalDone = 0;
+		long totalFailed = 0;
+		List<NodeLoad> perNode = new java.util.ArrayList<>(all.size());
+		for (NetworkNode node : all) {
+			long concluidas = done.getOrDefault(node.id(), 0L);
+			totalDone += concluidas;
+			long falhas = failed.getOrDefault(node.id(), 0L);
+			totalFailed += falhas;
+			// observedRunningTasks cru, não runningTasks(): o getter converte nulo em zero, e "não
+			// reportou" não é "nenhuma tarefa rodando" — na tela os dois casos são decisões diferentes.
+			perNode.add(new NodeLoad(node.id(), node.displayName(), node.status().name(), concluidas, falhas,
+				node.observedRunningTasks()));
+		}
+		// Concluídas que não caíram em nenhum nó: o total da rede é do catálogo inteiro, e a
+		// diferença para o que foi somado por nó é justamente o que não tem dono no registro.
+		long todasConcluidas = tasks.countByStatus(TaskStatus.DONE);
+		long semNo = Math.max(0, todasConcluidas - totalDone);
+		long maior = perNode.stream().mapToLong(NodeLoad::done).max().orElse(0);
+		// Sem conclusão alguma, "fatia" não existe: zero sobre zero não é percentual.
+		Double fatia = totalDone == 0 ? null : Math.round((maior * 1000.0 / totalDone)) / 10.0;
+		long ativas = perNode.stream().filter(n -> "ACTIVE".equals(n.status())).count();
+		boolean concentrado = fatia != null && ativas >= 2 && maior > 0 && maior == totalDone;
+		return new Distribution(List.copyOf(perNode), todasConcluidas, totalFailed, semNo, fatia, concentrado);
+	}
+}

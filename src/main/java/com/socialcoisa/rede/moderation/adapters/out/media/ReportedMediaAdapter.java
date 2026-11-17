@@ -17,6 +17,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
+import com.socialcoisa.rede.colagem.application.port.out.ColagemRepository;
 import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.PostId;
@@ -55,6 +56,7 @@ class ReportedMediaAdapter implements ReportedMediaReader,
 
 	private final PostRepository posts;
 	private final CommentRepository comments;
+	private final ColagemRepository colagem;
 	private final MediaAssetRepository assets;
 	/**
 	 * O downloader só existe com a migração ligada (ver MediaMigrationConfig). Sem ele a triagem
@@ -66,16 +68,26 @@ class ReportedMediaAdapter implements ReportedMediaReader,
 
 	ReportedMediaAdapter(PostRepository posts, CommentRepository comments, MediaAssetRepository assets,
 			ObjectProvider<MediaSourceDownloader> downloader,
-			com.socialcoisa.rede.moderation.application.port.out.CallReportContextRepository callReports) {
+			com.socialcoisa.rede.moderation.application.port.out.CallReportContextRepository callReports,
+			ColagemRepository colagem) {
 		this.posts = posts;
 		this.comments = comments;
 		this.assets = assets;
 		this.downloader = downloader;
 		this.callReports = callReports;
+		this.colagem = colagem;
 	}
 
 	@Override
 	public boolean hasMediaOf(com.socialcoisa.rede.moderation.domain.Report report) {
+		if (report.targetType() == com.socialcoisa.rede.moderation.domain.TargetType.COLLAGEM_POST) {
+			return colagem.findPostById(report.targetId()).map(post -> post.mediaId())
+				.filter(id -> !id.isBlank()).isPresent();
+		}
+		if (report.targetType() == com.socialcoisa.rede.moderation.domain.TargetType.COLLAGEM_COMMENT) {
+			return colagem.findCommentById(report.targetId()).map(comment -> comment.mediaId())
+				.filter(id -> !id.isBlank()).isPresent();
+		}
 		if (report.targetType() == com.socialcoisa.rede.moderation.domain.TargetType.CALL) {
 			return callReports.findByReportId(report.id()).map(context -> context.mediaId())
 				.filter(id -> !id.isBlank()).isPresent();

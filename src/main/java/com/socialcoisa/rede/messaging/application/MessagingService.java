@@ -65,40 +65,39 @@ public class MessagingService {
 
 	@Transactional
 	public Conversation createConversation(String kind, String title, List<String> participantIds, String createdBy) {
-		// Validação comum a TODO kind (DIRECT, GROUP, SERVICE...). Antes, só o fluxo direct checava
-		// bloqueio; criar um "grupo" com kind=GROUP furava bloqueio e proteção de menores (EN-05/E-16).
-		if (participantIds == null || participantIds.isEmpty()) {
-			throw new com.socialcoisa.rede.shared.web.ApiException(400, "INVALID_PARTICIPANTS",
-				"Informe pelo menos um participante.");
-		}
-		java.util.LinkedHashSet<String> unique = new java.util.LinkedHashSet<>();
-		for (String raw : participantIds) {
-			if (org.springframework.util.StringUtils.hasText(raw)) {
-				unique.add(raw.trim());
-			}
-		}
-		if (unique.isEmpty()) {
-			throw new com.socialcoisa.rede.shared.web.ApiException(400, "INVALID_PARTICIPANTS",
-				"Informe pelo menos um participante.");
-		}
-		if (unique.size() > 100) {
-			throw new com.socialcoisa.rede.shared.web.ApiException(400, "TOO_MANY_PARTICIPANTS",
-				"Uma conversa pode ter no maximo 100 participantes.");
-		}
 		// JOB and SERVICE conversations are opened by their own flows (and exempt from the minor
-		// rule below); the generic endpoint only creates person-to-person conversations.
+		// rule); the generic endpoint only creates person-to-person conversations.
 		String normalizedKind = kind == null || kind.isBlank() ? "DIRECT" : kind.trim().toUpperCase(java.util.Locale.ROOT);
 		if (!"DIRECT".equals(normalizedKind) && !"GROUP".equals(normalizedKind)) {
 			throw new ApiException(400, "INVALID_CONVERSATION_KIND", "Tipo de conversa invalido.");
 		}
 		ageGate.requireCanWrite(createdBy);
-		unique.add(createdBy);
-		java.util.List<String> others = unique.stream().filter(pid -> !pid.equals(createdBy)).toList();
-		reach.requireMayOpen(createdBy, others);
+		if (participantIds == null || participantIds.isEmpty()) {
+			throw new ApiException(400, "INVALID_PARTICIPANTS", "Informe pelo menos um participante.");
+		}
+		// O limite é aplicado à lista crua, antes de qualquer consulta: 101 ids não podem virar
+		// 101 buscas. Depois disso, a política resolve o conjunto inteiro numa leitura em lote.
+		long distinct = participantIds.stream()
+			.filter(raw -> raw != null && !raw.isBlank())
+			.map(String::trim)
+			.distinct()
+			.count();
+		if (distinct == 0) {
+			throw new ApiException(400, "INVALID_PARTICIPANTS", "Informe pelo menos um participante.");
+		}
+		if (distinct > 100) {
+			throw new ApiException(400, "TOO_MANY_PARTICIPANTS",
+				"Uma conversa pode ter no maximo 100 participantes.");
+		}
+		// Validação comum a TODO kind (formato, existência, banimento, bloqueio, idade) e devolve o
+		// conjunto normalizado. Roda ANTES do primeiro save: antes, uma conversa era criada e só
+		// depois o destinatário era checado, então um id inexistente deixava uma conversa órfã.
+		List<String> unique = reach.resolveParticipants(normalizedKind, createdBy, participantIds);
 		// A DM 1:1 is one thread per pair: opening it again from the inbox search returns the same
 		// conversation instead of a duplicate (the /direct endpoint already worked this way).
-		if ("DIRECT".equals(normalizedKind) && others.size() == 1) {
-			var existing = repository.findPairByKind(createdBy, others.get(0), "DIRECT");
+		if ("DIRECT".equals(normalizedKind) && unique.size() == 2) {
+			String otherId = unique.stream().filter(pid -> !pid.equals(createdBy)).findFirst().orElseThrow();
+			var existing = repository.findPairByKind(createdBy, otherId, "DIRECT");
 			if (existing.isPresent()) {
 				return existing.get();
 			}
@@ -597,10 +596,6 @@ public class MessagingService {
 		return repository.findReactionsByMessageId(messageId);
 	}
 
-	/** Mensagens por ids em batch (reply previews). */
-	public List<Message> findMessagesByIds(java.util.Collection<String> messageIds) {
-		return repository.findMessagesByIds(messageIds);
-	}
 
 	/**
 	 * Resumo das reações de VÁRIAS mensagens (contagem por tipo + a reação de quem está vendo),

@@ -309,3 +309,565 @@ fechado. Todas corrigidas no teste, sem afrouxar a regra de produção.
 
 - Fases 5 a 10 (chat, voz/mesa virtual, world builder, biblioteca, front, endurecimento).
 - A origem rastreável da frente ainda não foi registrada como issue no backlog.
+
+## Rodada 5 — 2026-11-14 — Fase 5 (chat de campanha)
+
+**O que foi reutilizado (sem reinvenção):**
+
+- A matriz de capacidades da Fase 1 (`CampaignPermissions`) decide quem fala (`POST_IN_CAMPAIGN`)
+  e quem lê (`VIEW_CAMPAIGN`); a `CampaignService` ganhou `requireCapability` para o resto do
+  módulo perguntar pela régua sem reimplementá-la.
+- O stream de mensagens (`MessageStreamHub`, SSE por usuário) agora também entrega o evento
+  `campaign` — "o chat da campanha X mudou". O hub é a infraestrutura única de stream; o corpo só
+  leva o id da campanha, o cliente recarrega pelo endpoint que autoriza de novo. Nenhuma mensagem
+  viaja no stream.
+- `IdempotencyApplicationService` em toda escrita; `WriteRouteInterceptor` segue barrando escrita
+  sem sessão (nenhuma rota de chat entrou na allowlist pública).
+- Padrões de teste do módulo: `TestAuthHelper`, fixtures com prefixo próprio, H2 compartilhada.
+
+**O que foi implementado:**
+
+- `ChatChannel` (domínio): IC (na voz do personagem) e OOC (coordenação da mesa). A diferença é
+  semântica; o par (campanha, canal) é o endereço — não há tabela de canais para configurar.
+- `CampaignMessage` (domínio): conteúdo aparado de 1 a 2000 caracteres, criado uma vez e sem
+  reescrita; o único estado que muda depois é a FIXAÇÃO, decisão do mestre que não altera uma
+  vírgula do que está escrito. O aparte privado nasce com destinatário (recusa destinatário igual
+  ao autor). O recorte de leitura é regra de domínio: `visibleTo(readerId, readerIsMaster)`.
+- `CampaignChatService` (aplicação): publicar, histórico do canal, fixados, leitura por id,
+  fixar/desfixar e presença. Participação conferida em toda leitura; aparte visível só para
+  remetente, destinatário e mestre; na listagem a mensagem alheia some, na leitura por id a
+  recusa é 404 (não confirma existência); a fixação exige mestre (403).
+- `CampaignChatController` (API): `/roleplay/campaigns/{id}/chat` — POST publicar, GET histórico
+  (`?channel=IC|OOC`), GET `/pinned`, GET `/{messageId}`, POST `/{messageId}/pin`, POST
+  `/{messageId}/unpin`, GET `/presence`. Nenhuma rota pública.
+- Presença: `MessageStreamHub.hasOpenStream` cruzado com a lista de participantes — a fronteira da
+  campanha é conferida ANTES do cruzamento com o hub; quem tem aba aberta é só visível a quem já
+  passou pela autorização da campanha.
+- Persistência V296 (`roleplay_campaign_messages`): aditiva, `if not exists`, InnoDB,
+  charset/collation explícitos, sem FK; índices por (campanha, canal, criado em) e (campanha,
+  fixado em). A mensagem é criada uma vez; só o par de fixação muda.
+
+**Decisões de desenho:**
+
+1. O canal é par de valores (`IC`/`OOC`), não entidade: configurar canal é trabalho de front
+   disfarçado de back, e a mesa não pediu isso.
+2. O aparte é tri-lateral (remetente, destinatário, mestre): o mestre é da mesa, e esconder cena
+   dele romperia a função de quem arbitra o jogo. Não é ficha nem segredo de mestre — é conversa.
+3. Recusa de leitura alheia é 404, não 403: existência não se confirma.
+4. Fixação é idempotente nos dois sentidos (fixar o fixado e desfixar o solto devolvem o mesmo
+   estado) e nunca reescreve conteúdo.
+5. O evento `campaign` segue o padrão `CallChanged` do hub: publicado dentro da transação,
+   entregue depois do commit, corpo só com ids.
+6. O histórico é teto de 100 por consulta; fixados, teto de 20 — pin que vira segundo histórico
+   perde o sentido.
+7. Presença é leitura da campanha (não escrita) e devolve participante + papel + entrada — nunca
+   duração de sessão nem endereço.
+8. O hub virou público (classe e `hasOpenStream`) com a fronteira documentada: é o registro único
+   de "quem está com a aba aberta" da plataforma.
+
+**Testes (números reais):**
+
+- `CampaignMessageTests` (15, domínio): criação válida, canal OOC, recusas (canal nulo, vazia/
+  branca, acima do teto, aparte para si), teto exato com aparagem, recorte do aparte por leitor
+  (pontas e mestre; terceiro de fora), fixação preservando conteúdo/autoria/criação, idempotência
+  da fixação nos dois sentidos, reconstituição e tradução `wire` nos dois sentidos.
+- `CampaignChatFlowTests` (8, ponta a ponta): publicar grava e o histórico devolve o mesmo;
+  mesmo Idempotency-Key não publica duas vezes; canais separados; participante lê e quem não
+  participa leva 403; aparte visível só para pontas e mestre (terceiro não vê na lista e leva 404
+  por id); mestre fixa e jogador não (403); fixado aparece com conteúdo preservado; desfixar tira
+  do fixado; fixação preserva conteúdo; presença exige participação.
+- `CampaignChatSecurityTests` (7, isolamento/integridade): todas as 7 rotas 401 sem sessão; não
+  participante 403 nas quatro leituras/escritas; mensagem alheia não confirma existência (404 por
+  id, 403 no pin); aparte para não-participante recusado; id de mensagem de outra campanha não
+  serve (404 na leitura e no pin cruzados); registro sem rota de edição nem remoção (405 e o
+  conteúdo sobrevive); canal inválido e conteúdo vazio recusados sem gravar.
+- **Escopo ampliado na árvore final** (`./mvnw -Dtest='...17 classes...' test`): **152 testes, 0
+  falhas, 0 erros** — o módulo inteiro mais `AutomatedWritePathsTests` (2/2: nenhuma rota de chat
+  aceitou escrita sem sessão).
+- **Suíte inteira executada** (`./mvnw test`, 2026-11-14): **BUILD SUCCESS — 2767 testes, 0
+  falhas, 0 erros, 1 skip** (o skip é pré-existente, em `KofAgentLiveChannelTests`, e não é deste
+  módulo). Todas as 16 classes do Éroleplay passaram dentro dela, as 30 novas do chat inclusas.
+
+---
+
+## Rodada 6 — 2026-11-14 — Fase 6 (voz da mesa e estado vivo)
+
+### O que já existia e foi reaproveitado
+
+- `CallService` e o contrato de chamadas do Épapo (`/calls`, `join`, gateway de autorização): a
+  voz da mesa NÃO inventa sala — é uma quarta vinculação de chamada (`table_id` em
+  `call_sessions`), do mesmo jeito do encontro (V256) e do tópico (V250).
+- `CallAudience` como fonte única de autorização de entrada: quem decide se entra é a porta
+  `TableCallLookup` (implementada pelo lado do Éroleplay), não o controller.
+- `MessageStreamHub` (SSE): o aviso "a mesa mudou" sai pelo mesmo evento `campaign` do chat
+  (`CampaignChatChanged`); o estado nunca viaja no stream, o cliente recarrega por GET.
+- `NotificationService` com aviso contado por chamada (`call_live:<callId>`) — não repete a cada
+  clique; kind novo `CALL_TABLE_LIVE` mapeado em `NotificationCategory` (GROUPS), como exige o
+  teste varredor.
+- `IdempotencyApplicationService` em toda escrita; `TestAuthHelper` com data de nascimento já
+  declarada (o age gate de chamadas passa sem setup); `FakeEpapoGateway` para o laço completo.
+
+### O que foi implementado
+
+Domínio: `TableState` (ordem de fala com teto 20 e sem repetição, vez que exige presença na ordem
+quando a ordem existe, cena com teto 600; quem sai da ordem perde a vez) e `TableToken` (nome/
+cor hex/posição em células −9999..9999; token de personagem move o dono, cenário só o mestre).
+
+Aplicação: `TableStateService` (estado nasce vazio na primeira leitura; ordem/vez/cena do mestre;
+jogador assume e limpa a própria vez; tokens com dono ou do cenário; `openVoice` por porta
+`VoiceOpener` que devolve o id da chamada). `CallService.startTable`/`openOfTable` (chamada de
+mesa: GROUP, avisa uma vez, entra quem participa da campanha).
+
+Portas: `TableCallLookup` (calls → eroleplay) e `VoiceOpener` (eroleplay → calls) — a fronteira
+fica nas duas mãos, sem dependência cíclica de módulo.
+
+Persistência: `TableStateJpaEntity`/`TableTokenJpaEntity` + repositórios Spring Data +
+`saveTable` agora devolve a mesa gravada.
+
+API (`CampaignTableController`, tudo sob Idempotency-Key nas escritas): `GET /state`,
+`POST /state/turn-order`, `POST /state/turn`, `POST /state/turn/clear`, `POST /state/scene`,
+`GET /tokens`, `POST /tokens`, `POST /tokens/{id}/move`, `POST /tokens/{id}/remove`,
+`POST /voice`, `GET /voice/open`.
+
+Migração: `V297__eroleplay_table_state.sql` (aditiva, `if not exists`, InnoDB, charset/collation
+explícitos, sem FK) — `call_sessions.table_id` + índice, `roleplay_table_states` (uma linha por
+mesa; o id é o id da mesa) e `roleplay_table_tokens`.
+
+### Correções de causa-raiz feitas na rodada
+
+- `setTurn`/`clearTurn` exigiam mestre ANTES do ramo que permitiria o jogador assumir a própria
+  vez — o ramo era inalcançável. Agora a checagem de mestre é só para passar/limpar a vez de
+  OUTREM, e o teste de prova cobre o jogador assumindo sem ser mestre.
+- `CALL_TABLE_LIVE` não estava mapeado em `NotificationCategory` (cairia no fallback SYSTEM e
+  ignoraria a preferência de grupos da pessoa). Mapeado para GROUPS.
+- Coluna `turn_order` nasceu como `json` nativo: no H2 o driver gravava o texto como literal de
+  JSON e a leitura quebrava com `MismatchedInputException`. Virou `longtext` com JSON de
+  aplicação — a mesma convenção do `dice_json` (V295). A migração ainda não tinha sido aplicada
+  em ambiente nenhum (branch não empurrada), então a correção foi na migração nova.
+
+### Testes (números reais)
+
+- `TableStateTests` (5, domínio): estado nasce vazio com o id da mesa; ordem sem repetição e com
+  teto; quem sai da ordem perde a vez; vez exige presença na ordem (409 `NOT_IN_TURN_ORDER`);
+  cena com teto, aparada, vazia = nula.
+- `TableTokenTests` (4, domínio): nome e cor obrigatórios com formato próprio (400
+  `TOKEN_LABEL_REQUIRED`/`TOKEN_LABEL_TOO_LONG`/`TOKEN_COLOR_INVALID`); grid finito (400
+  `TOKEN_POSITION_INVALID`); mover preserva identidade; regra de quem move (dono × mestre ×
+  cenário).
+- `TableStateFlowTests` (5, ponta a ponta): estado nasce vazio e persiste ordem/vez/cena; jogador
+  assume a própria vez sem ser mestre e não entrega a vez de terceiro (403); mesmo Idempotency-Key
+  não regrava; ciclo completo de tokens (criar cenário/personagem, mover, negado, remover).
+- `TableSecurityTests` (5): sem sessão 401 nas três rotas; visitante 403 em leitura e escrita e a
+  mesa segue intocada; jogador não faz trabalho de mestre (ordem/cena/token de cenário 403); IDOR
+  — token da mesa A não é movido pela rota da mesa B (404 `TOKEN_NOT_FOUND`) e a lista de B não
+  vaza; mesa inexistente 404 `TABLE_NOT_FOUND`.
+- `TableVoiceFlowTests` (5, com gateway falso do Épapo): a chamada nasce com `tableId` e GROUP;
+  quem abriu entra pelo `join` de sempre (token assinado); segunda abertura devolve a MESMA
+  chamada; participante entra e visitante não (403) nem vê a sala; sala de uma mesa não vaza para
+  a outra; aviso `CALL_TABLE_LIVE` chega ao participante e não ao estranho, e ninguém é chamado
+  com `CALL_INCOMING`.
+- Escopo ampliado na árvore final (6 classes novas + `NotificationCategoryTests` 3/3 +
+  `AutomatedWritePathsTests` 2/2): **29 testes, 0 falhas, 0 erros** — nenhuma rota nova de mesa
+  aceitou escrita sem sessão.
+- **Suíte inteira executada** (`./mvnw test`, 2026-11-14, ~5h de relógio): **BUILD SUCCESS —
+  2796 testes, 0 falhas, 0 erros, 1 skip** (o skip é pré-existente e não é deste módulo). Todas
+  as classes do Éroleplay passaram dentro dela, as 24 novas da Fase 6 inclusas.
+
+### Próxima tarefa
+
+Fase 7 — World Builder (mundo, localizações, pistas, NPCs por campanha).
+
+## Rodada 7 — 2026-11-15 — Fase 7 (World Builder)
+
+### Estado encontrado
+
+`git fetch` no início da rodada: a PR #721 (Fase 6) tinha sido MERGEADA e a `qa` agora TOPA no
+commit dela. #704/#713/#716 também mergeadas; #702 (fundação) segue OPEN. Nenhum outro agente na
+frente do Éroleplay. Branch nova `feat/eroleplay-world` cortada de `enois/qa`.
+
+### O que já existia e foi reaproveitado
+
+- A matriz de capacidades (`CampaignPermissions`/`CampaignService.requireCapability`) como única
+  fonte de autorização — o World Builder não criou régua própria: criar é `POST_IN_CAMPAIGN`
+  (participante), editar/apagar é autor-ou-mestre (`MANAGE_CAMPAIGN` para o mestre), ler é
+  `VIEW_CAMPAIGN`.
+- O fluxo de fichas da Fase 3 para a vinculação opcional (`findSheetById` nova na porta,
+  reutilizando `CharacterSheetJpaEntity` e o `SpringDataCharacterSheetJpaRepository` existente).
+- Convenções de API do módulo: `Idempotency-Key` em toda escrita, `ApiException` com códigos
+  próprios, projeções `record` no controller, guard fail-closed de escrita (o módulo não tocou
+  em `PUBLIC_WRITES`).
+
+### O que foi implementado
+
+- **Domínio**: `WorldKind` (5 naturezas) e `WorldEntry` — título 1–120, corpo até 20.000 (vazio =
+  nulo), tags minúsculas sem repetição somando até 600, vinculação opcional de ficha, regra de
+  edição autor-ou-mestre. O mundo é do GRUPO por decisão de produto: anotação de jogador é memória
+  de mesa tanto quanto lore do mestre.
+- **Persistência**: migração **V298** (`roleplay_world_entries` — aditiva, `if not exists`,
+  InnoDB, `utf8mb4_uca1400_ai_ci` explícito, sem FK, índices por campanha+atualização, tipo e
+  autor); entidade JPA, repositório Spring Data, porta `EroleplayRepository` estendida
+  (save/find/list/remove) e adapter.
+- **Aplicação**: `WorldService` — create/edit/remove/read/atlas. Busca por texto no serviço sobre
+  o atlas recente (teto 100); vinculação de ficha conferida no servidor (ficha tem de ser da
+  MESMA campanha; recusa igual para id inexistente e id alheia — não enumera).
+- **API**: `CampaignWorldController` — 5 rotas sob `/roleplay/campaigns/{c}/world`
+  (`POST`, `GET` com `kind`+`q`, `GET /{entryId}`, `PUT /{entryId}`, `DELETE /{entryId}`). O id da
+  ficha vinculada NUNCA sai na resposta: sai `linkedSheetName` + `linkedToSheet`.
+
+### Correções de causa-raiz no caminho (com prova)
+
+- **Query JPQL morta derrubava o boot**: o primeiro rascunho do repositório Spring Data tinha um
+  método `search` com `lower()`/`concat()` sobre a coluna de corpo (longtext → CLOB), que o
+  Hibernate recusa na validação da query — e o serviço já filtrava em memória. Removido; o boot
+  do contexto de teste voltou a subir (a falha era reproduzida por TODAS as classes
+  `@SpringBootTest` da rodada, não só as novas).
+- **Fixture de teste**: o teste de tags usava duas tags idênticas (o `distinct()` do domínio as
+  colapsa antes do teto) — fixture reescrito com conteúdo distinto; e a criação de ficha do teste
+  de fluxo foi refeita pelo contrato real (modelo com `forca`/`historia` abertos + `PUT
+  /sheets/me` com os 11 campos do D20), com asserção de diagnóstico no `id` devolvido.
+
+### Testes executados (números reais)
+
+- `WorldEntryTests` (5): título obrigatório/teto; corpo teto e vazio→nulo; tags limpas/teto;
+  edição preserva identidade/autoria/criação; regra de quem edita.
+- `WorldFlowTests` (4): jogador registra e o nome da ficha sai SEM o id dela (dupla checagem no
+  create e na re-leitura); atlas filtra por tipo e por texto; autor edita e apaga o que escreveu,
+  mesmo Idempotency-Key não grava duas; entrada inválida (sem tipo, tipo inventado, sem título,
+  vínculo de ficha falso) volta 400 SEM gravar nada.
+- `WorldSecurityTests` (4): 401 sem sessão nas 4 operações; visitante 403 em leitura e escrita e
+  o atlas segue intocado; jogador não edita nem apaga entrada alheia (e o mestre pode); IDOR —
+  entrada da campanha A é 404 nas rotas da campanha B e segue intacta.
+- Escopo: **13 testes, 0 falhas, 0 erros**. Vizinhança (mesa, chat, guarda de escrita): **27
+  testes, 0 falhas, 0 erros** — total 40.
+- Compilação `./mvnw -DskipTests compile` verde antes dos testes.
+- **Suíte inteira nesta árvore** (após o escopo final): **3.071 testes em 583 classes**.
+  Resultado: **3.056 verdes, 15 quebrados em exatamente 2 classes fora do módulo**
+  (`NetworkReplicaTests` — 5 falhas; `NetworkMediaTests` — 10 erros). Classificação com prova
+  executada: (a) rodando as duas classes SOZINHAS nesta branch, 23 de 24 passam — só
+  `paginaDeComunidadesCustaOMesmoNumeroDeConsultasComUmaOuComQuatro` segue vermelha; (b) esse
+  mesmo método isolado **também falha na base limpa `enois/qa`** (mesma asserção,
+  `expected: 8 but was: 6`) — falha pré-existente da base, guard ambiental, não regressão desta
+  PR; (c) as outras 14 são o padrão de interferência entre classes no H2 compartilhado já
+  relatado na issue #682 e tratado na PR #727 de outro agente — escopo exclusivo de teste,
+  fora do alcance desta rodada. As duas classes não tocam nenhum código do Éroleplay. Escoteiro:
+  a vermelhidão está registrada na #682/#727 em vez de silenciada aqui.
+
+### PR
+
+`feat/eroleplay-world` → **PR #739** para `qa`, aberta sem merge, referenciando a origem
+(roadmap/RFC §4.7) e descrevendo a verificação acima.
+
+### Próxima tarefa
+
+Fase 8 — biblioteca e compartilhamento (publicação de campanha/ficha com opt-in do autor,
+leitura pública sem vazar dados de membro).
+
+## Rodada 8 — 2026-11-15 — Fase 8 (biblioteca de personagens)
+
+### Estado encontrado
+
+Mesma branch `feat/eroleplay-world`, com a PR #739 aberta. Durante a rodada ANTERIOR o revisor
+automatizado (`kof-agent-worker`) deixou `CHANGES_REQUESTED` na #739: o boot de produção quebrava
+com `ddl-auto=validate` porque `WorldEntryJpaEntity` declarava a coluna de corpo como
+`@Column(length = 2147483647)` enquanto a migração V298 cria `longtext`. Conserto de causa-raiz
+feito nesta rodada (`@Column(columnDefinition = "longtext")`, a convenção do módulo), commit
+próprio, e a prova: `RedeApplicationTests` passou de 3 erros para **3 testes, 0 falhas, 0 erros**,
+com o escopo do World Builder intocado (13/0/0). O rebase em `enois/qa` foi refeito limpo
+(a base da branch tinha ficado para trás das migrações V319–V324 — por isso a biblioteca é
+**V325**, número conferido contra a ponta remota antes de criar — e renomeada para
+**V326** na rodada seguinte: a `qa` recebeu uma V325 própria (observabilidade por nó) no
+intervalo, e migração duplicada só aparece no merge).
+
+### O que já existia e foi reaproveitado
+
+- A matriz de capacidades e `CampaignService.requirePermission` (publicar exige participação;
+  a leitura do catálogo é pública).
+- O fluxo de fichas da Fase 3: `findSheetById`, `CharacterSheet.visibleTo(SheetAudience.MEMBER)`
+  — o recorte público da biblioteca É o recorte que o dono já abriu à campanha, nenhuma régua
+  nova de privacidade foi inventada.
+- O sinal `campaign` (`CampaignChatChanged`) para os participantes verem a novidade no chat;
+  `Idempotency-Key` nas duas escritas; `ApiException` com códigos próprios; projeção `record`.
+
+### O que foi implementado
+
+- **Domínio**: `LibrarySheet` — a CÓPIA pública de uma ficha (estampa do recorte MEMBER), com
+  nome (teto 120), sistema, teto de 200 campos com valor até 2.000, e recusa de cópia vazia
+  (`LIBRARY_EMPTY`). Quem publica é o DONO da ficha; mestre não publica ficha alheia.
+- **Persistência**: migração **V326** (`roleplay_published_sheets` — aditiva, `if not exists`,
+  InnoDB, `utf8mb4_uca1400_ai_ci` explícito, sem FK, unique por ficha — uma publicação por ficha,
+  índices por publicação e dono); entidade JPA com `fields_json longtext`, repositório Spring
+  Data com busca JPQL só sobre colunas curtas (nome e sistema — a coluna de JSON é CLOB e não
+  participa de `lower()`), porta e adapter estendidos.
+- **Aplicação**: `LibraryService` — publish (dono; ficha inexistente e ficha alheia dão o MESMO
+  404), republish (mesma publicação: mesmo id, mesmo `publishedAt`), unpublish (apaga a CÓPIA,
+  nunca a ficha), leitura e listagem públicas com busca e cursor.
+- **API**: `LibraryController` — `GET /roleplay/library` (busca + cursor), `GET
+  /roleplay/library/{publicationId}`, `POST`/`DELETE
+  /roleplay/campaigns/{c}/sheets/{sheetId}/publish` com `Idempotency-Key`. A projeção pública
+  carrega nome, sistema, campos e instantes — NUNCA o id da ficha, da campanha ou do dono.
+
+### Testes executados (números reais)
+
+- `LibrarySheetTests` (5): identidade/dados mínimos; nome e sistema obrigatórios e valores vazios
+  descartados; tetos de nome, campos e valor; `LIBRARY_EMPTY` sem nada aberto; `restore`
+  preserva e `fields()` é cópia defensiva.
+- `LibraryFlowTests` (3): dono publica e a cópia sai com o recorte aberto SEM o campo privado e
+  SEM vazar ficha/campanha/dono no corpo; republicar atualiza sem duplicar e despublicar apaga a
+  cópia sem tocar na ficha; catálogo lista e busca por personagem, e ficha despublicada sai.
+- `LibrarySecurityTests` (3): 401 sem sessão nas duas escritas com as duas leituras públicas;
+  mestre não publica nem despublica ficha alheia, inexistente e alheia dão o mesmo 404; o campo
+  privado do mestre nunca vira público nem após republicação.
+- Escopo: **11 testes, 0 falhas, 0 erros**. Vizinhança (guarda de escrita automática, World
+  Builder, fichas): **28 testes, 0 falhas, 0 erros**. Boot com schema validado contra as
+  migrações: **3 testes, 0 falhas, 0 erros**.
+- Compilação `./mvnw -DskipTests compile` verde antes dos testes.
+
+### Docs e PR
+
+RFC ganhou §4.8 e a fase 8 marcada como concluída; MODULES ganhou as classes da biblioteca e a
+seção própria; API ganhou o capítulo da biblioteca com rotas, exemplo e códigos `LIBRARY_*`;
+ROADMAP marca a fase 8 como feita e aponta a Fase 9 como próxima. Tudo no mesmo commit da
+implementação. Push em `feat/eroleplay-world` carregado pela PR #739 — sem merge, como sempre.
+
+### Próxima tarefa
+
+Fase 9 — front: identidade visual própria do Éroleplay no design system e as telas
+(campanhas, mesa, fichas, chat, mundo, biblioteca).
+
+## Rodada 11 — 2026-11-15 — Fase 10 (trilha de auditoria dos atos de campanha)
+
+### Estado encontrado
+
+Fase 9 (front) segue com a PR #898 aberta e CI verde, com dois comentários de revisão do
+revisor automatizado ainda sem resposta. Ninguém estava na Fase 10. A rodada começou da ponta
+`enois/qa` (`160d9034`) em worktree e branch novos (`feat/eroleplay-auditoria`), sem colisão.
+
+### O que já existia e foi reaproveitado
+
+- **A trilha única do sistema**: `audit_logs` (V1, índice de alvo na V315) e a porta
+  `AuditLogRepository` com o `AuditTrail` (`record`/`recentForTarget`) que `NetworkModeService`,
+  `NetworkRegionService` e `StorageScrubber` já usam. O RFC (§7) pede atos auditáveis; a trilha
+  já existia — não cabe trilha própria do módulo.
+- O padrão de leitura administrativa do `AdminNetworkController` (`/{id}/history`): dupla trava
+  (interceptador de `/admin/**` + `adminGuard.requireAdmin`), teto de lote, 404 para alvo
+  desconhecido em vez de lista vazia.
+- A matriz de capacidades da campanha e o `CampaignNotifier`, que já concentram quem pode cada
+  ato — a auditoria entrou exatamente onde o ato acontece.
+
+### O que foi implementado
+
+- `CampaignAuditTrail`: o vocabulário `ROLEPLAY_*` dos onze atos (criação, edição, entrada,
+  pedido de entrada, decisão, convite, saída, remoção, transferência de mestria, arquivamento,
+  criação de mesa), cada um gravado na trilha única com a campanha como alvo e metadata JSON
+  mínimo (ids, papéis, mudanças de estado). O conteúdo livre da campanha (descrição, ambientação)
+  nunca entra; a criação traz nome/slug porque identificam a campanha no painel. Classe separada
+  do serviço para o `CampaignService` não estourar o teto de 500 linhas (444 → 467).
+- `AdminRoleplayController`: `GET /admin/roleplay/campaigns/{id}/history`, exclusivo de
+  administrador (401 sem sessão, 403 sem admin, 404 para campanha desconhecida — não lista
+  vazia), lote com padrão 50 e teto 200, resposta `{id, actorId, action, metadata, createdAt}`
+  do mais novo para o mais antigo.
+- `CampaignService.requireExists`: a confirmação de existência para a leitura administrativa,
+  sem carregar a entidade no controller.
+- **Nenhuma migração**: a trilha é a tabela existente; nada de schema novo.
+
+### Testes executados (números reais)
+
+- `CampaignAuditTests` (4): os atos ficam na trilha na ordem do mais novo para o mais antigo com
+  teto de lote; o metadata nomeia os envolvidos sem levar a descrição nem a ambientação; convite,
+  transferência e remoção gravam; o histórico é exclusivo de administrador (401/403/404).
+- Módulo Éroleplay inteiro (`com.socialcoisa.rede.eroleplay.**`): **27 classes, 208 testes,
+  0 falhas, 0 erros**.
+- Suíte completa: **3.197 testes, 6 falhas e 10 erros — todos em módulos fora do diff**
+  (mentoring e network/media). As três classes envolvidas passam isoladas na MESMA árvore
+  (**26 testes, 0 falhas, 0 erros**); os erros de network/media são violação de FK no `setUp`
+  por contaminação da base H2 compartilhada entre classes, e o CI da ponta `qa` (3d6905d8) está
+  verde na mesma base — guarda ambiental local, não regressão desta mudança.
+- Compilação `./mvnw -DskipTests compile` verde antes dos testes.
+
+### Docs e PR
+
+ROADMAP marca o primeiro item da Fase 10 como feito e aponta o que resta (métricas e revisão de
+segurança por fase); MODULES ganhou `CampaignAuditTrail` e `AdminRoleplayController` na tabela do
+§43 e a regra da trilha única; API ganhou o capítulo do histórico de auditoria. Tudo no mesmo
+commit da implementação. Branch `feat/eroleplay-auditoria` com PR para `qa` — sem merge, como
+sempre.
+
+### Próxima tarefa
+
+Fase 10 continua: métricas de eventos do módulo (observabilidade) e a revisão de segurança por
+fase. Em paralelo, a Fase 9 (front) aguarda os comentários da revisão em #898.
+
+## Rodada 13 — 2026-11-16 — métricas do Éroleplay no painel (Fase 10)
+
+Unidade: "Observabilidade (métricas de eventos do módulo)". A observabilidade entrou no painel de
+monitorabilidade que já existe — não inventamos um painel novo nem stack nova. `GET
+/admin/monitoring/roleplay` devolve o agregado do módulo: campanhas por estado, visibilidade e
+sistema, volume dos dados guardados (membros, mesas, lugares, fichas, templates, chat, rolagens,
+mundo, biblioteca) e ritmo de criação em 7 e 30 dias. Zero PII: nenhuma consulta toca conteúdo
+livre e nenhuma linha devolve id de pessoa — o mesmo recorte de privacidade da trilha da Rodada 11.
+
+### O que foi implementado
+
+- `RoleplayMetricsService` (ops/monitoring, 100 linhas): `JdbcTemplate` sobre as tabelas que o
+  módulo já tem, contagens em índices existentes — **nenhuma migração**, nenhum schema novo.
+  Cache volátil de 60s porque o painel atualiza a cada 30s e nenhuma dessas contas muda nessa
+  escala; o TTL virou propriedade (`rede.monitoring.roleplay-cache-ms`, padrão 60000) com o
+  mesmo padrão de `@Value` dos vizinhos (`MonitoringService`, `HealthWatcher`, `FileEventSink`).
+- `MonitoringAdminController`: rota `GET /admin/monitoring/roleplay` com o gate do próprio painel
+  (`moderatorGuard.requireModerator(currentUserResolver.resolve(sessionToken))`) — sem sessão é
+  401, sessão comum é 403.
+- Propriedade declarada no `application.properties` principal (env `REDE_MONITORING_ROLEPLAY_CACHE_MS`).
+
+### Testes executados (números reais)
+
+- `RoleplayMetricsTests` (3): o painel devolve agregados de campanhas criadas pelos endpoints
+  reais (com `systemFamily` vindo do adaptador), sem vazar descrição, ambientação nem id do
+  mestre; as contagens por estado/visibilidade/sistema batem com as invariâncias do banco
+  (visibilidade soma o total, estado soma o total, membros ≥ campanhas, 7d ≤ 30d ≤ total); a
+  leitura é exclusiva de moderador (401/403/200). **3 testes, 0 falhas, 0 erros.**
+  O teste roda com `rede.monitoring.roleplay-cache-ms=0` para o agregado refletir o que acabou
+  de ser criado — sem isso o cache compartilhado do contexto devolvia zeros velhos (falso
+  vermelho de dados, não de código).
+- Suíte escopada `com.socialcoisa.rede.ops.monitoring.** + com.socialcoisa.rede.eroleplay.** +
+  domain`: **38 classes, 249 testes, 0 falhas, 0 erros, 1 skip** — o skip é o
+  `KofAgentLiveChannelTests`, gate E2E de Telegram que só roda com credenciais reais no shell
+  (pré-existente, nunca roda em CI).
+- Suíte completa: **3.338 testes, 7 falhas e 10 erros — todos em módulos fora do diff** (profile
+  nameplate, network storage/replica/media). As quatro classes passam isoladas na MESMA árvore
+  (**31 testes, 0 falhas, 0 erros**); a classe de mídia acumula os erros de FK no `setUp` por
+  contaminação da base H2 compartilhada já documentada na Rodada 11, e o CI da ponta `qa`
+  (877ab584) está verde na mesma base — guarda ambiental local, não regressão desta mudança.
+
+### Docs e PR
+
+ROADMAP marca o segundo item da Fase 10 como feito (resta só a revisão de segurança por fase);
+MODULES ganhou `RoleplayMetricsService` na tabela do §43 e a regra "painel vê números, nunca
+conteúdo"; API ganhou o capítulo das métricas com a resposta de exemplo. Tudo no mesmo commit.
+Branch `feat/eroleplay-metricas` com PR para `qa` — sem merge, como sempre.
+
+### Próxima tarefa
+
+Fase 10 fecha com a revisão de segurança por fase. Em paralelo, a Fase 9 (front) aguarda os
+comentários da revisão em #898.
+
+---
+
+## Rodada 14 — 2026-11-16 — revisão de segurança por fase (Fase 10)
+
+### Estado encontrado
+
+Fase 9 (front) segue com a PR #898 aberta; as duas rodadas anteriores de Fase 10 (auditoria e
+métricas) estão em PRs abertas para `qa` (#784, #785). Ninguém estava na revisão de segurança. A
+rodada começou da ponta `enois/qa` (`4d2aa51d`) em worktree e branch novos
+(`feat/eroleplay-seguranca`), sem colisão.
+
+### Escopo da varredura
+
+Toda a superfície REST do módulo (campanhas, entrada, mesas, estado, fichas, dados, chat, mundo,
+biblioteca, voz, rotas administrativas) relida linha a linha com as lentes de autorização, IDOR,
+enumeração e privacidade por campo. Quatro achados; dois eram defeitos reais, dois foram
+desmentidos por execução.
+
+### Correções de causa-raiz (com prova)
+
+- **A voz da mesa era aberta por qualquer participante.** `openVoice` usava a guarda de leitura
+  (`validateViewer`); convocar a mesa para a voz — ou encerrar a sala para todos — é estado da
+  mesa como cena e ordem, então passou a exigir mestre (`validateMaster`, 403 `FORBIDDEN`). O
+  teste de prova falhou no código antigo (jogador recebia 200) e passa agora; a consulta da sala
+  aberta continua de participante (leitura).
+- **A rota de voz não cruzava campanha com mesa.** `GET .../voice/open` recebia campanha e mesa no
+  path, mas delegava ao serviço de chamadas pelo tableId sozinho — quem participa de duas
+  campanhas lia a sala aberta de mesa de uma delas informando o id no path da outra. Novo
+  `TableStateService.requireTableOfCampaign` prova que a mesa pertence à campanha do path: mesa
+  desconhecida ou de outra campanha é 404 `TABLE_NOT_FOUND`. O teste de prova falhou no código
+  antigo e passa agora. A PRIMEIRA versão desta correção fechava também a leitura para
+  não-participante (403), e a suíte pegou a regressão: `TableVoiceFlowTests` provava 200 de corpo
+  vazio para visitante, que é o contrato tolerante de leitura do sistema. A correção final mantém
+  a leitura tolerante e deixa a recusa de entrada no join, que assina token.
+- **Leitura de pedido de rolagem por terceiro: desmentido.** O suspeito era o `requestId` que sai
+  no histórico de rolagens; o teste de execução prova que um terceiro participante da campanha
+  com o id em mãos recebe 403 `FORBIDDEN` — a leitura do pedido é do mestre e do jogador alvo, e
+  ninguém mais (`DiceService.readRequest`). O campo é contrato documentado da resposta.
+- **Nome da campanha na trilha de auditoria: decisão documentada, não vazamento.** O metadata da
+  criação/edição traz o nome porque identifica a campanha no painel; descrição e ambientação
+  (conteúdo livre) nunca entram. Registrado na regra do `MODULES.md`.
+
+### Testes executados (números reais)
+
+- `TableSecurityTests` (7/7), `DiceSecurityTests` (8/8) e `TableVoiceFlowTests` (5/5) verdes,
+  incluindo os dois testes de prova novos.
+- Módulo Éroleplay inteiro (`com.socialcoisa.rede.eroleplay.**`, 27 classes): **200 testes, 0
+  falhas, 0 erros**. Com o módulo de chamadas (`com.socialcoisa.rede.calls.**`) junto: **249
+  testes, 0 falhas, 0 erros, 1 pulado**, BUILD SUCCESS.
+- Suíte completa: 3.365 testes, 8 falhas, 10 erros e 1 pulado. Uma falha era REGRESSÃO desta
+  rodada (`TableVoiceFlowTests`, leitura de voz fechada para visitante) — corrigida como acima e
+  reconferida verde. As demais 7 falhas e 10 erros ficam em `network` e `media`
+  (`NetworkMediaTests.setUp` viola FK ao limpar a base compartilhada) e `ReportAttachmentTests`,
+  todas fora do diff; passam isoladas na mesma árvore (`NetworkReplicaTests` +
+  `NetworkStorageResultAcceptanceTests` + `NetworkMediaTests`: 28/28; `ReportAttachmentTests`:
+  6/6) — guarda ambiental da base H2 compartilhada, não regressão desta mudança.
+- Compilação `./mvnw -DskipTests compile` verde antes dos testes.
+
+### Docs e PR
+
+ROADMAP marca a Fase 10 completa e registra que não há pendência de backend; MODULES ganhou as
+regras de posse da voz (estado de mestre) e do cruzamento campanha×mesa na rota; API descreve a
+autorização da rota de voz. Tudo no mesmo commit da implementação. Branch
+`feat/eroleplay-seguranca` com PR para `qa` — sem merge, como sempre.
+
+### Próxima tarefa
+
+As fases 0 a 10 estão concluídas no backend com prova executada. Segue o acompanhamento das PRs
+abertas (revisão humana e merge são decisão de mantenedor) e a validação de tela do front.
+
+### Correção de documentação (rodada seguinte)
+
+A seção "Próxima tarefa" do ROADMAP ainda anunciava "Mundo da campanha (localizações, pistas,
+NPCs)" como trabalho pendente — resíduo do planejamento anterior à Fase 7. O `WorldEntry` (atlas
+`LOCALE`/`CHARACTER`/`ITEM`/`PLOT`/`LORE`, API `/roleplay/campaigns/{c}/world`, V298) já entrega
+exatamente isso e está marcado como feito. Parágrafo removido: documento que descreve como
+pendente o que o código entrega é bug de documentação (AGENTS.md). Sem mudança de código.
+
+
+### Segunda classe com o mesmo vazamento de região (rodada seguinte)
+
+A lição do conserto anterior se aplicava a mais uma classe: `NetworkReplicationGeographicTests`
+declarava a região `sudeste` fora de serviço em testes sem `clear` e também só limpava no
+`@BeforeEach`. A reprovação não é trivial porque a ordem padrão do JUnit não segue a ordem do
+arquivo — e aqui os últimos métodos da classe (os que não declaram) limpavam o resíduo no
+próprio `@BeforeEach`, escondendo o vazamento. Prova determinística, com **todos** os métodos
+ordenados via `@TestMethodOrder` (os que declaram por último): par com
+`NetworkStorageBalanceTests` → **15 testes, 1 falha** no código antigo (`capacityMb` 102400×0,
+idêntico ao CI), **15/15, BUILD SUCCESS** com o mesmo `@AfterEach` da `NetworkRegionTests`.
+Canário temporário confirmou que uma linha em `network_region_states` sobrevive entre métodos.
+Padrão reforçado em `docs/TESTING.md`.
+
+---
+
+### Isolamento de teste: região evacuada vazava entre classes (rodada seguinte)
+
+O CI do PR de encerramento falhou em `NetworkStorageBalanceTests` (classe fora do diff): `capacityMb`
+esperado 102400, veio 0. Não era flake aleatório — reproduzi de forma determinística rodando
+`NetworkRegionTests` e, em seguida, a classe, na mesma base: **18 testes, 1 falha**, com
+`nodesDeclaringCapacity: 0` no corpo. Causa-raiz: `network_region_states` é estado **global** da
+base H2 compartilhada; `NetworkRegionTests` declara a região `sudeste` fora de serviço e limpava a
+tabela só no `@BeforeEach`, nunca no fim — a declaração sobrevivia à classe e o nó de `sudeste` do
+teste seguinte era descartado (região fora de serviço não soma capacidade). Correção na causa:
+`@AfterEach` devolvendo `network_region_states`, e a limpeza extraída para não repetir. O par que
+falhava passou a **18/18, BUILD SUCCESS**. Documentado o padrão em `docs/TESTING.md`.
+
+---
+
+### Encerramento (rodada seguinte)
+
+Conferido o estado real da frente: **todos os PRs do Éroleplay foram mergeados** — backend em
+#735 (ordem de fala), #739 (World Builder), #747 (colunas da biblioteca), #756 (docs da Fase 9),
+#775 (trilha de auditoria), #785 (métricas) e #794 (autorização das rotas de voz); front em #898.
+Nenhum PR do módulo segue aberto. O ROADMAP e este log ainda diziam "PRs abertas aguardando
+revisão humana" e "front em revisão (PR #898)" — documento descrevendo como pendente o que a `qa`
+já tem é bug de documentação (AGENTS.md). Corrigido, sem mudança de código.
+
+A desativação do agendamento não foi feita por agente: o registro da automação vive no banco do
+aplicativo (em execução) e não há ferramenta nem API suportada para desativá-la a partir daqui —
+escrever direto no banco de um app vivo é interferência de harness, não uma ação de engenharia.
+Fica registrada como a única pendência, e é da usuária.

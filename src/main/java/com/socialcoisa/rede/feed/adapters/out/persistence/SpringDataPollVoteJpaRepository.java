@@ -11,7 +11,14 @@ interface SpringDataPollVoteJpaRepository extends JpaRepository<PollVoteJpaEntit
 
 	List<PollVoteJpaEntity> findByPostIdInAndUserId(Collection<String> postIds, String userId);
 
+	List<PollVoteJpaEntity> findByPostIdAndUserId(String postId, String userId);
+
 	long countByPostId(String postId);
+
+	/** Pessoas que votaram por post (na multipla escolha a pessoa conta uma vez). */
+	@Query("SELECT v.postId, COUNT(DISTINCT v.userId) FROM PollVoteJpaEntity v "
+		+ "WHERE v.postId IN :postIds GROUP BY v.postId")
+	List<Object[]> countVotersByPostIds(@Param("postIds") Collection<String> postIds);
 
 	/** Rows of (postId, optionPosition, count) — a contagem da enquete inteira numa consulta. */
 	@Query("SELECT v.postId, v.optionPosition, COUNT(v) FROM PollVoteJpaEntity v "

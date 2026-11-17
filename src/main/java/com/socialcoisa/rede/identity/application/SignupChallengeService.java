@@ -21,6 +21,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import com.socialcoisa.rede.shared.security.Hashes;
+import com.socialcoisa.rede.shared.security.IpRateLimiter;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 /**
@@ -28,8 +30,12 @@ import com.socialcoisa.rede.shared.web.ApiException;
  *
  * É um desafio de soma assinado (HMAC) e com prazo curto. The answer only enters the HMAC input, so
  * the token carries nothing that can be checked offline against candidate answers; the client gets
- * only the question. Além da resposta certa, exigimos pelo menos 1,2s desde a emissão (um script que
- * resolve na hora não passa). Single use is tracked in the database, shared by every pod.
+ * only the question. Além da resposta certa, exigimos pelo menos {@value #MIN_ELAPSED_MS}ms desde a
+ * emissão: uma soma dessas leva alguns segundos para um humano ler e digitar, e resolver na hora é
+ * o sinal mais barato de script. O desafio também fica preso a quem o pediu — o hash do token de
+ * sessão de quem emitiu e o da impressão do aparelho entram na assinatura — então um desafio
+ * resolvido numa sessão não vale em outra, nem num aparelho diferente. O uso único é o mesmo nonce
+ * gravado no banco, compartilhado por todos os pods.
  *
  * <p>ponytail: a sum question is readable by any bot; this is only a fallback. Production should
  * configure Turnstile (TURNSTILE_SITE_KEY / TURNSTILE_SECRET_KEY), which takes precedence.</p>
@@ -42,7 +48,12 @@ public class SignupChallengeService {
 
 	private static final Logger LOG = LoggerFactory.getLogger(SignupChallengeService.class);
 	private static final Duration TTL = Duration.ofMinutes(5);
-	private static final long MIN_ELAPSED_MS = 1_200L;
+	/** Tempo mínimo entre emitir e responder: digitar a soma é trabalho de humano. */
+	static final long MIN_ELAPSED_MS = 3_000L;
+	/** Teto de desafios por origem — quem só pode mandar 10 cadastros por hora não precisa de 300. */
+	static final String ISSUE_ACTION = IpRateLimiter.ISSUE_CHALLENGE;
+
+	private static final int SESSION_BINDING_HEX = 16;
 
 	private final boolean enabled;
 	private final Clock clock;
@@ -64,6 +75,14 @@ public class SignupChallengeService {
 	}
 
 	public Challenge issue() {
+		return issue(null, null);
+	}
+
+	/**
+	 * Emite o desafio preso a quem está pedindo: sessão (quando há) e impressão do aparelho. Os dois
+	 * entram na assinatura, então quem recebe um desafio não consegue passá-lo para outra sessão.
+	 */
+	public Challenge issue(String sessionToken, String deviceFingerprint) {
 		int left = 2 + random.nextInt(8);
 		int right = 2 + random.nextInt(8);
 		int answer = left + right;
@@ -71,11 +90,17 @@ public class SignupChallengeService {
 		Instant expiresAt = now.plus(TTL);
 		String nonce = UUID.randomUUID().toString().replace("-", "");
 		String payload = now.toEpochMilli() + "|" + expiresAt.toEpochMilli() + "|" + nonce;
-		String token = encode(payload.getBytes(StandardCharsets.UTF_8)) + "." + encode(sign(payload, answer));
+		String binding = binding(sessionToken, deviceFingerprint);
+		String token = encode(payload.getBytes(StandardCharsets.UTF_8)) + "."
+			+ encode(sign(payload + "|" + binding, answer));
 		return new Challenge(token, "Quanto é " + left + " + " + right + "?", expiresAt);
 	}
 
 	public void require(String challengeId, Integer answer) {
+		require(challengeId, answer, null, null);
+	}
+
+	public void require(String challengeId, Integer answer, String sessionToken, String deviceFingerprint) {
 		if (!enabled) {
 			return;
 		}
@@ -97,8 +122,10 @@ public class SignupChallengeService {
 			throw invalid();
 		}
 		String payload = new String(payloadBytes, StandardCharsets.UTF_8);
-		// A wrong answer and a forged token are indistinguishable: both fail the HMAC.
-		if (!MessageDigest.isEqual(signature, sign(payload, answer))) {
+		// A wrong answer, a forged token and a desafio emitido para outra sessão/aparelho are
+		// indistinguishable: all fail the HMAC.
+		String signed = payload + "|" + binding(sessionToken, deviceFingerprint);
+		if (!MessageDigest.isEqual(signature, sign(signed, answer))) {
 			throw invalid();
 		}
 
@@ -143,6 +170,18 @@ public class SignupChallengeService {
 	private ApiException invalid() {
 		return new ApiException(400, "SIGNUP_CAPTCHA_INVALID",
 			"Verificação de segurança inválida. Recarregue e tente de novo.");
+	}
+
+	/**
+	 * O que prende o desafio a quem o pediu. O token de sessão entra só como hash: o valor em claro
+	 * nunca é assinado nem guardado, e um desafio de visitante (sem sessão) fica marcado como tal.
+	 */
+	private static String binding(String sessionToken, String deviceFingerprint) {
+		String session = StringUtils.hasText(sessionToken)
+			? Hashes.sha256Hex(sessionToken.trim()).substring(0, SESSION_BINDING_HEX) : "anon";
+		String device = StringUtils.hasText(deviceFingerprint)
+			? Hashes.sha256Hex(deviceFingerprint.trim()).substring(0, SESSION_BINDING_HEX) : "anon";
+		return session + ":" + device;
 	}
 
 	private byte[] sign(String payload, int answer) {

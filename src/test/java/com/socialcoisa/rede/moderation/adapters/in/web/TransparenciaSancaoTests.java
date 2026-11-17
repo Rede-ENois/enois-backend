@@ -37,6 +37,7 @@ class TransparenciaSancaoTests {
 	@Autowired MockMvc mvc;
 	@Autowired ObjectMapper json;
 	@Autowired SanctionRepository sancoes;
+	@Autowired com.socialcoisa.rede.moderation.application.TransparenciaSancaoService transparencia;
 	@Autowired com.socialcoisa.rede.moderation.application.port.out.ReportRepository denuncias;
 	@Autowired com.socialcoisa.rede.moderation.application.port.out.BanContentArchiveRepository arquivo;
 	@Autowired org.springframework.jdbc.core.JdbcTemplate banco;
@@ -150,6 +151,7 @@ class TransparenciaSancaoTests {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.sanctions[0].evidence.kind").value("TEXT"))
 			.andExpect(jsonPath("$.sanctions[0].deadline.kind").value("NONE"))
+			.andExpect(jsonPath("$.sanctions[0].dueAt").isEmpty())
 			.andExpect(jsonPath("$.sanctions[0].deadline.at").isEmpty()).andReturn();
 		String corpo = resposta.getResponse().getContentAsString();
 		assertThat(corpo).doesNotContain("denunciante_privado705", "relato_privado705", "classificador_privado705",
@@ -194,9 +196,41 @@ class TransparenciaSancaoTests {
 			.andExpect(jsonPath("$.serverNow").value(AGORA.toString()))
 			.andExpect(jsonPath("$.sanctions[0].deadline.kind").value("APPEAL"))
 			.andExpect(jsonPath("$.sanctions[0].deadline.at").value("2026-11-17T11:00:00Z"))
+			.andExpect(jsonPath("$.sanctions[0].dueAt").value("2026-11-17T11:00:00Z"))
 			.andExpect(jsonPath("$.sanctions[0].evidence.kind").value("BEHAVIOR"))
 			.andExpect(jsonPath("$.sanctions[0].canAppeal").value(true))
 			.andExpect(jsonPath("$.sanctions[0].reason").value("Conduta repetida contraria as diretrizes."));
 		assertThat(sancoes.findActiveByUser(titular.userId()).orElseThrow().type().name()).isEqualTo("SUSPENDED");
+	}
+
+	@org.junit.jupiter.params.ParameterizedTest
+	@org.junit.jupiter.params.provider.ValueSource(strings = {"REMOVED", "BAN", "PERMABAN"})
+	void compatibilidadeDueAtNaoPrometeTerminoEmDecisaoSemPrazoAtivo(String estado) throws Exception {
+		var titular = autenticar("transp715_prazo_" + estado.toLowerCase(java.util.Locale.ROOT));
+		var suspensao = estado.equals("REMOVED");
+		sancoes.save(new UserSanction("sanc_transp715_" + estado, titular.userId(), "admin:715",
+			suspensao ? com.socialcoisa.rede.moderation.domain.SanctionType.SUSPENDED
+				: com.socialcoisa.rede.moderation.domain.SanctionType.valueOf(estado),
+			"Motivo persistido para compatibilidade.",
+			suspensao ? com.socialcoisa.rede.moderation.domain.SanctionStatus.REMOVED
+				: com.socialcoisa.rede.moderation.domain.SanctionStatus.ACTIVE,
+			AGORA.minusSeconds(3600), suspensao ? AGORA : null, suspensao ? "revisor715" : null));
+		if (!suspensao) {
+			mvc.perform(get("/me/sanctions").header("X-Session-Token", titular.token()))
+				.andExpect(status().isUnauthorized());
+			var decisao = transparencia.decisoesDoTitular(titular.userId()).getFirst();
+			assertThat(decisao.dueAt()).isNull();
+			assertThat(decisao.reason()).isEqualTo("Motivo persistido para compatibilidade.");
+			assertThat(decisao.deadline().kind()).isEqualTo("NONE");
+			assertThat(decisao.deadline().at()).isNull();
+			assertThat(decisao.canAppeal()).isFalse();
+			return;
+		}
+		mvc.perform(get("/me/sanctions").header("X-Session-Token", titular.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.sanctions[0].dueAt").isEmpty())
+			.andExpect(jsonPath("$.sanctions[0].reason").value("Motivo persistido para compatibilidade."))
+			.andExpect(jsonPath("$.sanctions[0].deadline.kind").value(suspensao ? "APPEAL" : "NONE"))
+			.andExpect(jsonPath("$.sanctions[0].canAppeal").value(false));
 	}
 }

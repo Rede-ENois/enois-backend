@@ -35,6 +35,27 @@ class SessionTokenHashingTests {
 	private com.socialcoisa.rede.moderation.application.port.out.SanctionRepository sanctions;
 	@Autowired private org.springframework.transaction.support.TransactionTemplate transacao;
 
+	@org.junit.jupiter.params.ParameterizedTest
+	@org.junit.jupiter.params.provider.ValueSource(strings = { "BAN", "PERMABAN" })
+	void decisaoAtualRecusaSessaoLimitadaGravadaDepoisDaConversao(String tipo) {
+		Instant agora = Instant.now();
+		var sancao = sanctions.save(new com.socialcoisa.rede.moderation.domain.UserSanction(
+			"sanc_hash715_tardia_" + tipo, USER, "admin:715",
+			com.socialcoisa.rede.moderation.domain.SanctionType.valueOf(tipo), "Decisao sintetica.",
+			com.socialcoisa.rede.moderation.domain.SanctionStatus.ACTIVE, agora, null, null));
+		String token = "synthetic-715-late-" + tipo;
+		try {
+			transacao.executeWithoutResult(ignorado -> sessions.revokeAllByUser(USER, agora));
+			sessions.saveSanctionsOnly(token, USER, agora, agora.plusSeconds(60), null);
+			assertThat(sessions.findActiveSanctionsUserId(token, agora)).isEmpty();
+			assertThat(sessions.isSanctionsOnly(token, agora)).isFalse();
+			assertThat(sessions.findActiveUserId(token, agora)).isEmpty();
+		}
+		finally {
+			sanctions.save(sancao.remove("review715", agora));
+		}
+	}
+
 	@Test
 	void revogacaoInvalidaLeituraReutilizadaNaMesmaRequisicao() {
 		Instant agora = Instant.now();

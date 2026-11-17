@@ -9,8 +9,11 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.util.pattern.PathPattern;
+import org.springframework.web.util.pattern.PathPatternParser;
 
 import com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository;
+import com.socialcoisa.rede.moderation.application.AdminAuthorityAudit;
 import com.socialcoisa.rede.shared.sanctions.SanctionGateReader;
 
 import jakarta.servlet.FilterChain;
@@ -22,10 +25,13 @@ import jakarta.servlet.http.HttpServletResponse;
 @Component
 @Order(4)
 class SessaoModeracaoFilter extends OncePerRequestFilter {
+	private static final PathPattern ADMINISTRATIVA = PathPatternParser.defaultInstance.parse("/admin/**");
+	private static final PathPattern MODERACAO = PathPatternParser.defaultInstance.parse("/moderation/**");
 	private static final Set<String> PERMITIDAS = Set.of("GET /me/sanctions", "POST /me/sanctions/appeals",
 		"POST /auth/logout", "POST /auth/login", "POST /auth/2fa/verify", "POST /auth/2fa/resend");
 	private final ObjectProvider<AuthSessionRepository> sessoes;
 	private final ObjectProvider<SanctionGateReader> sancoes;
+	private final ObjectProvider<AdminAuthorityAudit> auditoria;
 	private final Clock relogio;
 	private final com.socialcoisa.rede.shared.security.RateLimitSessions orcamento;
 	private final com.socialcoisa.rede.shared.security.ClientIpResolver origens;
@@ -33,12 +39,14 @@ class SessaoModeracaoFilter extends OncePerRequestFilter {
 	SessaoModeracaoFilter(ObjectProvider<AuthSessionRepository> sessoes,
 			ObjectProvider<SanctionGateReader> sancoes, Clock relogio,
 			com.socialcoisa.rede.shared.security.RateLimitSessions orcamento,
-			com.socialcoisa.rede.shared.security.ClientIpResolver origens) {
+			com.socialcoisa.rede.shared.security.ClientIpResolver origens,
+			ObjectProvider<AdminAuthorityAudit> auditoria) {
 		this.sessoes = sessoes;
 		this.sancoes = sancoes;
 		this.relogio = relogio;
 		this.orcamento = orcamento;
 		this.origens = origens;
+		this.auditoria = auditoria;
 	}
 
 	@Override
@@ -61,8 +69,26 @@ class SessaoModeracaoFilter extends OncePerRequestFilter {
 		}
 		String titular = sessoes.getObject().findActiveSanctionsUserId(token.trim(), relogio.instant()).orElse(null);
 		boolean suspenso = titular != null && sancoes.getObject().suspended(titular);
+		auditarRecusa(titular, pedido);
 		recusar(pedido, resposta, 403, suspenso ? "ACCOUNT_SUSPENDED" : "SESSION_RESTRICTED",
 			"Esta sessao permite somente consultar sua decisao e recorrer.");
+	}
+
+	private void auditarRecusa(String titular, HttpServletRequest pedido) {
+		if (titular == null) {
+			return;
+		}
+		try {
+			var caminho = RequestPath.segments(pedido);
+			if (!ADMINISTRATIVA.matches(caminho) && !MODERACAO.matches(caminho)) {
+				return;
+			}
+			auditoria.getObject().denied(titular, pedido.getMethod(), RequestPath.applicationPath(pedido),
+				403, AdminAuthorityAudit.SESSION_RESTRICTED, origens.resolve(pedido));
+		}
+		catch (RuntimeException falha) {
+			// A trilha registra suas falhas; a recusa nao pode depender da auditoria.
+		}
 	}
 
 	private void recusar(HttpServletRequest pedido, HttpServletResponse resposta, int status, String codigo,

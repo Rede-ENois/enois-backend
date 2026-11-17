@@ -36,6 +36,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 	private final com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications;
 	private final com.socialcoisa.rede.shared.security.ActionThrottle actionThrottle;
 	private final CacheInvalidator cacheInvalidator;
+	private final com.socialcoisa.rede.media.application.MediaPublicHost media;
 	private final int updatesPerHour;
 	private final Clock clock;
 
@@ -46,6 +47,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 			com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications,
 			com.socialcoisa.rede.shared.security.ActionThrottle actionThrottle,
 			CacheInvalidator cacheInvalidator,
+			com.socialcoisa.rede.media.application.MediaPublicHost media,
 			@org.springframework.beans.factory.annotation.Value("${rede.profile.updates-per-hour:30}") int updatesPerHour,
 			Clock clock) {
 		this.repository = repository;
@@ -58,6 +60,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 		this.identityVerifications = identityVerifications;
 		this.actionThrottle = actionThrottle;
 		this.cacheInvalidator = cacheInvalidator;
+		this.media = media;
 		this.updatesPerHour = updatesPerHour;
 		this.clock = clock;
 	}
@@ -77,7 +80,8 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 			.map(this::populateCounts)
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
 		// A bio em HTML so vai na leitura (ver OwnProfileView.withBioHtml).
-		return OwnProfileView.from(profile).withBioHtml(profile.bioHtml()).withBannerHtml(profile.bannerHtml());
+		return OwnProfileView.from(profile).withAvatarUrl(media.localize(profile.avatar()))
+			.withBioHtml(profile.bioHtml()).withBannerHtml(profile.bannerHtml());
 	}
 
 	/**
@@ -105,7 +109,30 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 		}
 		agendarMigracaoDeMidia(profile);
 		return comSelo(UserProfileView.from(profile))
+			.withAvatarUrl(media.localize(profile.avatar()))
 			.withBioHtml(profile.bioHtml()).withBannerHtml(profile.bannerHtml());
+	}
+
+	/**
+	 * Quais destas contas podem aparecer publicamente, em <b>UMA</b> consulta.
+	 *
+	 * <p>É a mesma regra que faz {@link #getByUsername} responder 404 para conta banida — dita no
+	 * módulo dono, para quem percorre a base (a réplica de leitura) não inventar um segundo critério.
+	 * Conta removida não precisa entrar aqui: quem enumera já a exclui pelo {@code @} anônimo, que é
+	 * a chave que a leitura pública usa.</p>
+	 */
+	public java.util.Set<String> accountsVisible(java.util.Collection<String> userIds) {
+		if (userIds == null || userIds.isEmpty()) {
+			return java.util.Set.of();
+		}
+		java.util.Set<String> banned = sanctionGate.bannedAmong(userIds);
+		java.util.Set<String> visible = new java.util.HashSet<>();
+		for (String userId : userIds) {
+			if (!banned.contains(userId)) {
+				visible.add(userId);
+			}
+		}
+		return visible;
 	}
 
 	/** Liga/desliga a secao de ranking na tela de perfil (preferencia de quem le). */
@@ -130,6 +157,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 			.map(this::populateCounts)
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
 		return comSelo(UserProfileView.from(profile))
+			.withAvatarUrl(media.localize(profile.avatar()))
 			.withBioHtml(profile.bioHtml()).withBannerHtml(profile.bannerHtml());
 	}
 
@@ -388,7 +416,8 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 				profile.declareBirthDate(date, clock.instant());
 			}
 		}
-		OwnProfileView saved = OwnProfileView.from(repository.save(profile));
+		UserProfile persisted = repository.save(profile);
+		OwnProfileView saved = OwnProfileView.from(persisted).withAvatarUrl(media.localize(persisted.avatar()));
 		invalidarPerfilPublico(profile, nomeAnterior);
 		return saved;
 	}

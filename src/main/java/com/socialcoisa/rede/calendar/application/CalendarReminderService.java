@@ -10,7 +10,9 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.socialcoisa.rede.calendar.application.port.out.CalendarEntryRepository;
 import com.socialcoisa.rede.calendar.application.port.out.CalendarReminderRepository;
@@ -52,14 +54,19 @@ public class CalendarReminderService {
 	private final CalendarParticipantRepository participants;
 	private final NotificationService notifications;
 	private final Clock clock;
+	private final TransactionTemplate perReminder;
 
 	CalendarReminderService(CalendarReminderRepository reminders, CalendarEntryRepository entries,
-			CalendarParticipantRepository participants, NotificationService notifications, Clock clock) {
+			CalendarParticipantRepository participants, NotificationService notifications, Clock clock,
+			PlatformTransactionManager transactionManager) {
 		this.reminders = reminders;
 		this.entries = entries;
 		this.participants = participants;
 		this.notifications = notifications;
 		this.clock = clock;
+		// O ciclo do worker precisa de uma transação por lembrete: uma na transação única do laço
+		// marcaria os demais como enviados junto com a falha, e o rollback descartaria os que saíram.
+		this.perReminder = new TransactionTemplate(transactionManager);
 	}
 
 	/**
@@ -151,39 +158,55 @@ public class CalendarReminderService {
 	}
 
 	/**
-	 * O ciclo do worker. Cada lembrete é enviado e marcado sozinho: uma falha não impede o próximo
-	 * de sair, e o motivo fica gravado na linha para quem for investigar.
+	 * O ciclo do worker. Cada lembrete é enviado e marcado na própria transação: uma falha não
+	 * impede o próximo de sair, e o motivo fica gravado na linha para quem for investigar.
 	 */
-	@Transactional
 	public int deliverDue() {
 		Instant now = clock.instant();
 		List<CalendarReminder> due = reminders.findDue(now, CalendarReminder.MAX_ATTEMPTS, BATCH);
 		int sent = 0;
 		for (CalendarReminder reminder : due) {
 			try {
-				Optional<CalendarEntry> entry = entries.findById(reminder.entryId());
-				if (entry.isEmpty() || !entry.get().active()) {
-					// Compromisso sumiu ou foi cancelado: o lembrete não tem mais o que avisar.
-					clear(reminder, now);
-					continue;
+				Boolean delivered = perReminder.execute(status -> {
+					Optional<CalendarEntry> entry = entries.findById(reminder.entryId());
+					if (entry.isEmpty() || !entry.get().active()) {
+						// Compromisso sumiu ou foi cancelado: o lembrete não tem mais o que avisar.
+						clear(reminder, now);
+						return false;
+					}
+					if (!shouldNotify(reminder.userId(), entry.get())) {
+						clear(reminder, now);
+						return false;
+					}
+					notify(reminder, entry.get(), now);
+					reminder.sent(now);
+					reminders.save(reminder);
+					return true;
+				});
+				if (Boolean.TRUE.equals(delivered)) {
+					sent++;
 				}
-				if (!shouldNotify(reminder.userId(), entry.get())) {
-					clear(reminder, now);
-					continue;
-				}
-				notify(reminder, entry.get(), now);
-				reminder.sent(now);
-				reminders.save(reminder);
-				sent++;
 			}
 			catch (RuntimeException error) {
-				reminder.failed(reasonOf(error), now);
-				reminders.save(reminder);
-				LOG.warn("Lembrete {} falhou (tentativa {}): {}", reminder.id(), reminder.attempts(),
-					reminder.lastError());
+				markFailed(reminder, error, now);
 			}
 		}
 		return sent;
+	}
+
+	/** Fora da transação do lembrete: a marca de falha tem de sobreviver ao rollback dela. */
+	private void markFailed(CalendarReminder reminder, RuntimeException error, Instant now) {
+		try {
+			perReminder.executeWithoutResult(status -> {
+				reminder.failed(reasonOf(error), now);
+				reminders.save(reminder);
+			});
+		}
+		catch (RuntimeException secondary) {
+			LOG.warn("Lembrete {} não pôde registrar a falha: {}", reminder.id(), secondary.getMessage());
+		}
+		LOG.warn("Lembrete {} falhou (tentativa {}): {}", reminder.id(), reminder.attempts(),
+			reminder.lastError());
 	}
 
 	/**

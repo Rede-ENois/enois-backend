@@ -35,6 +35,8 @@ public class CallSession {
 	private final String topicId;
 	/** Evento dono da sala "Tamo junto" do encontro; nulo nas chamadas de conversa e de grupo. */
 	private final String eventId;
+	/** Mesa do Éroleplay dona da sala de voz da campanha; nulo nas outras modalidades. */
+	private final String tableId;
 	private final String initiatorId;
 	private final String roomId;
 	private final String displayName;
@@ -48,8 +50,8 @@ public class CallSession {
 	private Instant lastActivityAt;
 
 	public CallSession(String id, CallKind kind, CallModality modality, String conversationId, String groupId,
-			String topicId, String eventId, String initiatorId, String roomId, String displayName, CallState state,
-			Instant createdAt, Instant answeredAt, Instant endedAt, String endedBy, String endReason,
+			String topicId, String eventId, String tableId, String initiatorId, String roomId, String displayName,
+			CallState state, Instant createdAt, Instant answeredAt, Instant endedAt, String endedBy, String endReason,
 			Instant expiresAt, Instant lastActivityAt) {
 		this.id = id;
 		this.kind = kind;
@@ -58,6 +60,7 @@ public class CallSession {
 		this.groupId = groupId;
 		this.topicId = topicId;
 		this.eventId = eventId;
+		this.tableId = tableId;
 		this.initiatorId = initiatorId;
 		this.roomId = roomId;
 		this.displayName = displayName;
@@ -73,14 +76,15 @@ public class CallSession {
 
 	public static CallSession start(String id, CallKind kind, CallModality modality, String conversationId,
 			String groupId, String initiatorId, String roomId, String displayName, Instant now) {
-		return start(id, kind, modality, conversationId, groupId, null, null, initiatorId, roomId, displayName, now);
+		return start(id, kind, modality, conversationId, groupId, null, null, null, initiatorId, roomId, displayName,
+			now);
 	}
 
 	/** Mesma abertura, com o tópico do grupo quando a sala é de um tópico. */
 	public static CallSession start(String id, CallKind kind, CallModality modality, String conversationId,
 			String groupId, String topicId, String initiatorId, String roomId, String displayName, Instant now) {
-		return start(id, kind, modality, conversationId, groupId, topicId, null, initiatorId, roomId, displayName,
-			now);
+		return start(id, kind, modality, conversationId, groupId, topicId, null, null, initiatorId, roomId,
+			displayName, now);
 	}
 
 	/**
@@ -89,17 +93,28 @@ public class CallSession {
 	 */
 	public static CallSession forEvent(String id, CallKind kind, String eventId, String initiatorId, String roomId,
 			String displayName, Instant now) {
-		return start(id, kind, CallModality.GROUP, null, null, null, eventId, initiatorId, roomId, displayName, now);
+		return start(id, kind, CallModality.GROUP, null, null, null, eventId, null, initiatorId, roomId, displayName,
+			now);
+	}
+
+	/**
+	 * Abertura da sala de voz da mesa do Éroleplay: mesma mecânica do "Tamo junto" (nasce "ao vivo",
+	 * sem toque, e se sustenta enquanto houver gente), presa à mesa em vez do grupo ou do encontro.
+	 */
+	public static CallSession forTable(String id, CallKind kind, String tableId, String initiatorId, String roomId,
+			String displayName, Instant now) {
+		return start(id, kind, CallModality.GROUP, null, null, null, null, tableId, initiatorId, roomId, displayName,
+			now);
 	}
 
 	private static CallSession start(String id, CallKind kind, CallModality modality, String conversationId,
-			String groupId, String topicId, String eventId, String initiatorId, String roomId, String displayName,
-			Instant now) {
+			String groupId, String topicId, String eventId, String tableId, String initiatorId, String roomId,
+			String displayName, Instant now) {
 		CallState initial = modality == CallModality.DIRECT ? CallState.RINGING : CallState.CONNECTING;
 		Instant expiresAt = modality == CallModality.DIRECT ? now.plus(RING_TIMEOUT)
 			: now.plus(EMPTY_GROUP_TIMEOUT);
-		return new CallSession(id, kind, modality, conversationId, groupId, topicId, eventId, initiatorId, roomId,
-			displayName, initial, now, null, null, null, null, expiresAt, now);
+		return new CallSession(id, kind, modality, conversationId, groupId, topicId, eventId, tableId, initiatorId,
+			roomId, displayName, initial, now, null, null, null, null, expiresAt, now);
 	}
 
 	/**
@@ -213,6 +228,10 @@ public class CallSession {
 
 	public String eventId() {
 		return eventId;
+	}
+
+	public String tableId() {
+		return tableId;
 	}
 
 	public String initiatorId() {
