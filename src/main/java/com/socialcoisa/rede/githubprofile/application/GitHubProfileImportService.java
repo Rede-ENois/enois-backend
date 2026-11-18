@@ -17,6 +17,7 @@ import org.springframework.util.StringUtils;
 import com.socialcoisa.rede.contributions.application.port.out.GitHubIdentityRepository;
 import com.socialcoisa.rede.contributions.domain.GitHubIdentity;
 import com.socialcoisa.rede.githubprofile.application.port.out.GitHubProfileGateway.GitHubProfileReadme;
+import com.socialcoisa.rede.githubprofile.application.port.out.GitHubProfileGateway.GitHubOrganization;
 import com.socialcoisa.rede.githubprofile.application.port.out.GitHubProfileGateway.GitHubUserRepository;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
@@ -45,19 +46,91 @@ public class GitHubProfileImportService {
 	private final ProjectsService projects;
 	private final MarkdownBioRenderer markdown;
 	private final Clock clock;
+	private final com.socialcoisa.rede.companies.application.CompanyService companies;
 
 	public GitHubProfileImportService(CachedGitHubProfileReader github, GitHubIdentityRepository identities,
-			UserProfileRepository profiles, ProjectsService projects, MarkdownBioRenderer markdown, Clock clock) {
+			UserProfileRepository profiles, ProjectsService projects, MarkdownBioRenderer markdown, Clock clock,
+			com.socialcoisa.rede.companies.application.CompanyService companies) {
 		this.github = github;
 		this.identities = identities;
 		this.profiles = profiles;
 		this.projects = projects;
 		this.markdown = markdown;
 		this.clock = clock;
+		this.companies = companies;
 	}
 
 	public List<GitHubUserRepository> repositories(String userId) {
 		return github.repositories(login(userId));
+	}
+
+	/**
+	 * As organizações do GitHub que a pessoa é membro: a lista para escolher o que importar como
+	 * empresa (épico "Importar organizações do GitHub"). Só o que é público/token vê — repos
+	 * privados nunca saem do GitHub para a rede por aqui.
+	 */
+	public List<GitHubOrganization> organizations(String userId) {
+		return github.organizations(login(userId));
+	}
+
+	/**
+	 * Repos públicos de uma organização do GitHub, para a pessoa escolher quais importar como
+	 * projetos (mesma régua dos repos próprios: posse vira seleção, teto e validação idênticos).
+	 */
+	public List<GitHubUserRepository> organizationRepositories(String userId, String org) {
+		return github.organizationRepositoryDetails(login(userId), org);
+	}
+
+	/**
+	 * Importa uma organização como EMPRESA na rede (nome, descrição, site apontando para o
+	 * github.com/org) e os repos escolhidos como projetos do perfil de quem importou, com a
+	 * origem marcada na descrição. Idempotente pela URL do repo (a mesma chave dos repos
+	 * próprios) e pelo slug da empresa.
+	 */
+	@Transactional
+	public ImportOrganizationResult importOrganization(String userId, String org, List<String> requested) {
+		String safeOrg = org == null ? "" : org.trim().toLowerCase(Locale.ROOT);
+		if (!StringUtils.hasText(safeOrg)) {
+			throw new ApiException(400, "ORG_OBRIGATORIA", "Escolha a organização para importar.");
+		}
+		// A pessoa precisa ser MEMBRO da org que está importando (é o dado público que autoriza).
+		boolean membro = github.organizations(login(userId)).stream()
+			.anyMatch(o -> o.login().toLowerCase(Locale.ROOT).equals(safeOrg));
+		if (!membro) {
+			throw new ApiException(403, "ORG_NAO_MEMBRO", "Você não é membro dessa organização no GitHub.");
+		}
+
+		// Idempotência por DONO: se eu já importei essa org, a minha empresa é reusada. A empresa
+		// da org de OUTRA pessoa não me impede de ter a minha (a base compartilhada dos testes e
+		// a rede real têm muitas pessoas da mesma org importando).
+		com.socialcoisa.rede.companies.domain.Company empresa = companies.memberOf(userId).stream()
+			.filter(c -> c.website() != null
+				&& c.website().toLowerCase(Locale.ROOT).endsWith("github.com/" + safeOrg))
+			.findFirst()
+			.orElse(null);
+		if (empresa == null) {
+			var detalhes = github.organizationRepositoryDetails(login(userId), safeOrg);
+			String descricao = detalhes.stream().map(GitHubUserRepository::description)
+				.filter(StringUtils::hasText).findFirst()
+				.orElse("Organização importada do GitHub.");
+			empresa = companies.create(userId, orgDisplayName(safeOrg), descricao, "Tecnologia", null, null,
+				"https://github.com/" + safeOrg);
+		}
+
+		// A importação compara os pedidos contra os repos DA ORG (não os do usuário): é o catálogo
+		// que a pessoa acabou de ver na lista da organização. A validação de seleção/teto/posse é
+		// a mesma do import de repos próprios.
+		int created = importFrom(userId, requested,
+			github.organizationRepositoryDetails(login(userId), safeOrg)).created();
+		return new ImportOrganizationResult(empresa.slug(), empresa.name(), created);
+	}
+
+	/** Nome de exibição da empresa: o nome público da org, ou o login quando não há nome. */
+	private static String orgDisplayName(String org) {
+		return org;
+	}
+
+	public record ImportOrganizationResult(String slug, String name, int projectsCreated) {
 	}
 
 	public ReadmePreview readmePreview(String userId) {
@@ -84,6 +157,12 @@ public class GitHubProfileImportService {
 
 	@Transactional
 	public ImportProjectsResult importProjects(String userId, List<String> requested) {
+		return importFrom(userId, requested, github.repositories(login(userId)));
+	}
+
+	/** Importação com catálogo alternativo (os repos de uma organização, no import de orgs). */
+	private ImportProjectsResult importFrom(String userId, List<String> requested,
+			List<GitHubUserRepository> catalogo) {
 		if (requested == null || requested.isEmpty()) {
 			throw new ApiException(400, "NO_REPOSITORIES", "Selecione pelo menos um repositório.");
 		}
@@ -91,9 +170,8 @@ public class GitHubProfileImportService {
 			throw new ApiException(400, "TOO_MANY_REPOSITORIES",
 				"Importe no máximo " + MAX_IMPORT + " repositórios por vez.");
 		}
-		String login = login(userId);
 		Map<String, GitHubUserRepository> available = new LinkedHashMap<>();
-		for (GitHubUserRepository repo : github.repositories(login)) {
+		for (GitHubUserRepository repo : catalogo) {
 			available.put(repo.fullName().toLowerCase(Locale.ROOT), repo);
 		}
 		List<UserProject> existing = projects.of(userId);
