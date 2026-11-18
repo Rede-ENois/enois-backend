@@ -61,13 +61,14 @@ contra o vetor externo é o que separa "implementei" de "assinei comigo mesmo e 
 | ListObjects (v1) | `GET /s3/{bucket}` | ✅ `marker` |
 | ListBuckets | `GET /s3` | ✅ só os buckets do dono |
 | DeleteBucket | `DELETE /s3/{bucket}` | ⚠️ recusa 409 se houver objeto; **501** para bucket vazio (não há tabela de buckets vazios) |
+| Emitir URL pré-assinada | `POST /s3/{bucket}/presign?key=&method=GET\|PUT&expires=` | ✅ sessão do dono; devolve `url`, `method`, `expiresIn`, `expiresAt` |
+| Usar URL pré-assinada | `GET`/`PUT /s3/{bucket}/{key}?X-Amz-Signature=…` | ✅ sem `Authorization`, sem sessão |
 
 **Não implementado**, e o brief manda não anunciar como se existisse:
 
 - **Multipart Upload** — recusado. Um "multipart" que grava o arquivo inteiro perde dados no retomado,
   e é exatamente o que o brief pede para não fazer.
-- **CopyObject**, **presigned URLs** (`X-Amz-Signature` na query), **ACL**, **tagging**,
-  **`versionId`**, **bucket policy**, **`POST` de formulário**.
+- **CopyObject**, **ACL**, **tagging**, **`versionId`**, **bucket policy**, **`POST` de formulário**.
 - **Regiões múltiplas**, **classes de armazenamento na resposta** (sempre `STANDARD`; a classe real é a
   da §8 e não é escolhida por requisição).
 
@@ -75,6 +76,33 @@ contra o vetor externo é o que separa "implementei" de "assinei comigo mesmo e 
 comportamento do S3 em bucket versionado — mas num bucket **sem** versionamento, o S3 real apagaria. A
 escolha aqui é a do módulo inteiro: apagar byte é coletado pelo nó, nunca por requisição de cliente
 (§14 e §16 da doc do Storage). Um cliente que espere "liberou espaço na hora" se engana.
+
+## 4.1 URLs pré-assinadas
+
+`POST /s3/{bucket}/presign?key=fotos%2Fgato.jpg&method=GET&expires=900` com `X-Session-Token` do dono
+devolve:
+
+```json
+{"url": "https://.../s3/fotos/...?X-Amz-Algorithm=...&X-Amz-Signature=...", "method": "GET",
+ "expiresIn": 900, "expiresAt": "2026-11-18T16:00:00Z"}
+```
+
+O portador usa a URL sem `Authorization` e sem sessão — é o que permite ao navegador ler um objeto sem
+receber credencial. Regras, todas com teste:
+
+- **Credencial:** a do dono da sessão, e o bucket tem de estar no escopo dela. Emitir não é um segundo
+  caminho para bucket alheio.
+- **Verbo:** só `GET` e `PUT`; o escopo da credencial continua mandando (uma URL de `PUT` com credencial
+  só de `GET` é recusada ao usar).
+- **Validade:** 1 s até 7 dias (`X-Amz-Expires`). Fora disso a emissão recusa e a leitura também.
+- **Assinatura:** `UNSIGNED-PAYLOAD` (como a AWS em URL); a consulta canônica inclui **todos** os
+  parâmetros da URL menos `X-Amz-Signature`, então acrescentar `response-content-disposition` ou trocar a
+  chave quebra a assinatura.
+- **`Host` assinado** é o que o portador manda ao usar a URL; o prefixo `/s3` é da instalação e entra só
+  como caminho — assiná-lo junto é o erro que fazia a URL emitida não abrir.
+
+A chave vai em parâmetro (`?key=`), não no caminho: `/{bucket}/{*key}` engole o resto do caminho no mesmo
+verbo, e uma rota `/{bucket}/{*key}/presigned` colide com ela.
 
 ## 5. Erros
 
@@ -93,8 +121,9 @@ Códigos: `AccessDenied`, `InvalidAccessKeyId`, `SignatureDoesNotMatch`, `NotImp
 - **Multipart** — o maior item ausente; arquivos grandes por SDK que usa multipart por padrão
   (>8 MB no boto3, >5 MiB no SDK Java) **falham**. Documentado aqui para que ninguém descubra em
   produção.
-- **Presigned URLs** — o brief pede e não existe. É o mecanismo natural para o front entregar sem
-  passar credencial ao navegador.
+- **Presigned URLs para `GET` e `PUT` existem**; `DELETE`/`LIST` por URL não são emitidos de
+  propósito (link vazado não apaga nem lista). URL pré-assinada para **multipart** não existe porque
+  multipart não existe.
 - **Access Keys administradas pelo painel** — a tabela e o repositório existem; não há ainda rota de
   painel para criar/revogar (a criação hoje é por SQL/admin direto). Lacuna declarada.
 - **Credenciais temporárias (STS)** — `X-Amz-Security-Token` não é processado.

@@ -27,6 +27,8 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
+import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 import com.socialcoisa.rede.network.application.SigV4Verifier;
 import com.socialcoisa.rede.shared.security.SecretCipher;
@@ -69,6 +71,9 @@ class S3GatewayTests {
 	@Autowired
 	private SecretCipher cipher;
 
+	@Autowired
+	private tools.jackson.databind.ObjectMapper objectMapper;
+
 	private String accessKey;
 	private String admin;
 	private String bucket;
@@ -86,6 +91,103 @@ class S3GatewayTests {
 			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), accessKey,
 			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET), admin,
 			java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+	}
+
+	/**
+	 * O caminho completo da URL pré-assinada (brief §11): o dono emite pela sessão, e a URL sai do
+	 * controle do segredo — o portador não tem credencial nenhuma e a requisição não leva cabeçalho
+	 * {@code Authorization}.
+	 *
+	 * <p>Agora a credencial é do dono de verdade: a do cenário tem outro {@code owner_user_id}, que é
+	 * o que prova que a emissão não pega "qualquer credencial que permita GET".</p>
+	 */
+	@Test
+	void url_pre_assinada_le_o_objeto_sem_nenhuma_credencial() throws Exception {
+		var dono = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_presign_dono");
+		String accessKeyDono = "AKIAENOISPRES" + UUID.randomUUID().toString().replace("-", "").substring(0, 6).toUpperCase();
+		jdbc.update("""
+			insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+				allowed_bucket, allowed_operations, created_at)
+			values (?, ?, ?, ?, ?, ?, 'GET PUT', ?)
+			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), accessKeyDono,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET), dono.userId(),
+			bucket, java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+
+		byte[] corpo = "conteudo lido por url pre-assinada".getBytes(StandardCharsets.UTF_8);
+		gravar("fotos/url.jpg", new String(corpo, StandardCharsets.UTF_8));
+
+		var emissao = mockMvc.perform(MockMvcRequestBuilders
+			.post("/s3/" + bucket + "/presign").param("key", "fotos/url.jpg").param("method", "GET").param("expires", "600")
+			.header("X-Session-Token", dono.token())).andReturn();
+		assertThat(emissao.getResponse().getStatus()).as(emissao.getResponse().getContentAsString()).isEqualTo(200);
+		String url = objectMapper.readTree(emissao.getResponse().getContentAsString()).get("url").asText();
+		assertThat(url).contains("X-Amz-Signature=").contains("X-Amz-Expires=600");
+
+		// O portador da URL: sem Authorization, sem sessão, sem nada além da query. O navegador/servidor
+		// decodifica `%25` uma vez ao transformar a URL em requisição; o gateway vê `%2F`, que é o valor
+		// assinado. Mandar o texto cru faria a servlet decodificar duas vezes e o valor divergir.
+		String consulta = decodificaUmaVez(url.substring(url.indexOf('?') + 1));
+		String caminho = url.substring(url.indexOf("/s3/"), url.indexOf('?'));
+		// O MockMvc não manda `Host`: sem ele o servidor assina com um host e verifica com outro. O
+		// navegador manda sempre — é o cabeçalho que o SigV4 exige.
+		var portador = get(caminho + "?" + consulta).header("Host", "localhost");
+		var resultado = mockMvc.perform(portador).andReturn();
+		if (resultado.getRequest().isAsyncStarted()) {
+			resultado = mockMvc.perform(asyncDispatch(resultado)).andReturn();
+		}
+		assertThat(resultado.getResponse().getStatus()).as(resultado.getResponse().getContentAsString()).isEqualTo(200);
+		assertThat(resultado.getResponse().getContentAsByteArray()).isEqualTo(corpo);
+	}
+
+	/** A mesma URL com um parâmetro trocado é recusada — o que ela assinou não é o que ela pede. */
+	@Test
+	void url_pre_assinada_adulterada_e_recusada() throws Exception {
+		var dono = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_presign_dono");
+		String accessKeyDono = "AKIAENOISPRES" + UUID.randomUUID().toString().replace("-", "").substring(0, 6).toUpperCase();
+		jdbc.update("""
+			insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+				allowed_bucket, allowed_operations, created_at)
+			values (?, ?, ?, ?, ?, ?, 'GET PUT', ?)
+			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), accessKeyDono,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET), dono.userId(),
+			bucket, java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+
+		var emissao = mockMvc.perform(MockMvcRequestBuilders
+			.post("/s3/" + bucket + "/presign").param("key", "fotos/url.jpg").param("method", "GET")
+			.header("X-Session-Token", dono.token())).andReturn();
+		String url = objectMapper.readTree(emissao.getResponse().getContentAsString()).get("url").asText();
+		String consulta = decodificaUmaVez(url.substring(url.indexOf('?') + 1)) + "&response-cache-control=public";
+		String caminho = url.substring(url.indexOf("/s3/"), url.indexOf('?'));
+
+		var resultado = mockMvc.perform(get(caminho + "?" + consulta)).andReturn();
+		assertThat(resultado.getResponse().getStatus()).isEqualTo(403);
+	}
+
+	/** DELETE por URL não é emitido: a lápide não vai para um link que pode vazar. */
+	@Test
+	void url_pre_assinada_de_delete_e_recusada_na_emissao() throws Exception {
+		var dono = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_presign_dono");
+
+		var emissao = mockMvc.perform(MockMvcRequestBuilders
+			.post("/s3/" + bucket + "/presign").param("key", "fotos/url.jpg").param("method", "DELETE")
+			.header("X-Session-Token", dono.token())).andReturn();
+
+		assertThat(emissao.getResponse().getStatus()).isEqualTo(400);
+		assertThat(emissao.getResponse().getContentAsString()).contains("InvalidArgument");
+	}
+
+	/**
+	 * Emitir URL exige sessão do dono: sem sessão é 401, nunca a URL.
+	 *
+	 * <p>O 401 (e não 403 do S3) é coerente com o resto do painel: quem emite é a aplicação com
+	 * sessão, não um SDK com credencial S3. E a ordem importa — a sessão é conferida ANTES do
+	 * parâmetro, então a rota não conta a forma da chamada a quem não está autenticado.</p>
+	 */
+	@Test
+	void emissao_de_url_sem_sessao_e_recusada() throws Exception {
+		var resultado = mockMvc.perform(MockMvcRequestBuilders.post("/s3/" + bucket + "/presign")).andReturn();
+
+		assertThat(resultado.getResponse().getStatus()).isEqualTo(401);
 	}
 
 	/** Sem assinatura o gateway não atende: não é um bucket público. */
@@ -164,7 +266,7 @@ class S3GatewayTests {
 	void delete_vira_lapide() throws Exception {
 		gravar("apagar.txt", "x");
 
-		MockHttpServletRequestBuilder del = org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+		MockHttpServletRequestBuilder del = MockMvcRequestBuilders
 			.delete("/s3/" + bucket + "/apagar.txt");
 		assinar(del, SECRET, shaVazio());
 		mockMvc.perform(del).andExpect(status().isNoContent());
@@ -294,6 +396,17 @@ class S3GatewayTests {
 				pair.substring(eq + 1), StandardCharsets.UTF_8));
 		}
 		return out;
+	}
+
+	/**
+	 * A URL emitida -> a query que o servidor enxerga, como um navegador faria: <b>uma</b> decodificação.
+	 *
+	 * <p>O emissor escreve o valor exatamente como ele é assinado, e o servlet entrega decodificado
+	 * uma vez — então a query chega igual à emitida. Decodificar no teste provaria uma requisição que
+	 * nenhum cliente real monta.</p>
+	 */
+	private static String decodificaUmaVez(String consulta) {
+		return consulta;
 	}
 
 	private static String shaVazio() {

@@ -17,7 +17,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
@@ -56,10 +59,11 @@ import jakarta.servlet.http.HttpServletRequest;
  * <tr><td>ListObjects (v1)</td><td>{@code GET /{bucket}}</td><td>igual</td></tr>
  * <tr><td>ListBuckets</td><td>{@code GET /}</td><td>igual</td></tr>
  * <tr><td>DeleteBucket</td><td>{@code DELETE /{bucket}}</td><td>recusa se houver objeto — igual ao S3</td></tr>
+ * <tr><td>URL pré-assinada</td><td>{@code POST /{bucket}/presign}</td><td>emite para GET/PUT; uso sem cabeçalho {@code Authorization}</td></tr>
  * </table>
  *
  * <p><b>Não implementado, e recusado com 501 em vez de "fazer parecer":</b> Multipart Upload,
- * CopyObject, presigned URLs (URL assinada na query), ACL, tagging, versionId, bucket policy e
+ * CopyObject, ACL, tagging, versionId, bucket policy e
  * {@code POST} de formulário. A recusa é explícita porque um cliente que recebe 200 sem a semântica
  * (um "multipart" que grava o arquivo inteiro) perde dados quando o upload é retomado.</p>
  *
@@ -77,6 +81,10 @@ class S3GatewayController {
 	/** O prefixo da instalação. O SDK não o conhece; a assinatura é feita sobre o caminho S3. */
 	static final String PREFIX = "/s3";
 
+	/** A data assinada, no formato do SigV4. */
+	private static final java.time.format.DateTimeFormatter AMZ_DATE = java.time.format.DateTimeFormatter
+		.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(java.time.ZoneOffset.UTC);
+
 	/** Teto de chaves por página, igual ao S3. */
 	private static final int MAX_KEYS = 1000;
 
@@ -85,14 +93,17 @@ class S3GatewayController {
 	private final StorageCatalogService storage;
 	private final StorageContentService content;
 	private final Clock clock;
+	private final com.socialcoisa.rede.shared.web.CurrentUserResolver currentUserResolver;
 
 	S3GatewayController(S3CredentialRepository credentials, StorageCatalogRepository catalog,
-			StorageCatalogService storage, StorageContentService content, Clock clock) {
+			StorageCatalogService storage, StorageContentService content, Clock clock,
+			com.socialcoisa.rede.shared.web.CurrentUserResolver currentUserResolver) {
 		this.credentials = credentials;
 		this.catalog = catalog;
 		this.storage = storage;
 		this.content = content;
 		this.clock = clock;
+		this.currentUserResolver = currentUserResolver;
 	}
 
 	// ---------------------------------------------------------------- listagem de buckets
@@ -220,10 +231,166 @@ class S3GatewayController {
 	 * <p><b>A recusa é 403 com XML de erro do S3</b>: um SDK que recebe texto simples não reconhece o
 	 * erro e mostra "erro desconhecido" ao usuário final.</p>
 	 */
+	/**
+	 * Autentica uma <b>URL pré-assinada</b> (brief §11) e devolve a credencial, ou {@code null} quando a
+	 * requisição não carrega {@code X-Amz-Signature}.
+	 *
+	 * <p>O escopo é o da credencial, como no cabeçalho: uma URL de {@code GET} não concede {@code PUT}.
+	 * A URL reduz o que o portador pode fazer, nunca amplia — quem gera escolhe o verbo, e o verbo
+	 * declarado não é o verbo da URL: ele é o que o cliente usar, e o escopo da credencial manda.</p>
+	 */
+	private S3Credential authenticatePresigned(HttpServletRequest request, String operation) {
+		// O cliente assinou o `Host` que ELE viu; o do servidor pode trazer o prefixo da instalação.
+		// Normalizar aqui é o que faz a assinatura do emissor e a do portador coincidirem.
+		String host = header(request, "host");
+		String hostAssinado = host.endsWith(PREFIX) ? host.substring(0, host.length() - PREFIX.length()) : host;
+		var presigned = SigV4Verifier.parsePresigned(
+			new SigV4Verifier.Request(request.getMethod(), s3Path(request), query(request),
+				Map.of("host", hostAssinado), null),
+			clock.instant());
+		if (presigned == null) {
+			return null;
+		}
+		S3Credential credential = credentials.findByAccessKey(presigned.parsed().accessKey())
+			.filter(c -> c.revokedAt() == null)
+			.orElseThrow(() -> s3Error(403, "InvalidAccessKeyId",
+				"A credencial da URL nao existe ou foi revogada."));
+		String secret = credentials.secretFor(credential.id());
+		if (secret == null) {
+			throw s3Error(403, "SignatureDoesNotMatch",
+				"Credencial sem segredo guardado nao pode assinar; gere uma nova.");
+		}
+		if (!SigV4Verifier.verifyPresigned(presigned, secret, clock.instant())) {
+			// Um só código para URL expirada e assinatura errada, como na AWS quando o prazo passou:
+			// dizer qual dos dois é ajudaria a descobrir o segredo, e o cliente resolve os dois do
+			// mesmo jeito — pedindo outra URL.
+			throw s3Error(403, "AccessDenied",
+				"A URL pre-assinada expirou"
+					+ (presigned.expiraEm().isBefore(clock.instant()) ? " (validade vencida)" : "")
+					+ " ou a assinatura nao confere.");
+		}
+		if (!credential.allows(operation)) {
+			throw s3Error(403, "AccessDenied", "A credencial da URL nao permite " + operation + ".");
+		}
+		return credential;
+	}
+
+	/**
+	 * Emite uma URL pré-assinada ({@code POST /s3/{bucket}/presign?key=fotos%2Fgato.jpg}).
+	 *
+	 * <p>A chave vem em parâmetro, e não no caminho: o caminho de objeto do gateway é
+	 * {@code /{bucket}/{*key}}, um segmento que engole o resto — uma rota {@code /{bucket}/{*key}/presigned}
+	 * colide com ele no mesmo verbo {@code POST} e o MVC não consegue escolher entre as duas. Como a
+	 * chave já vai codificada na URL emitida, pedi-la em parâmetro custa uma codificação a quem emite.</p>
+	 *
+	 * <p>Quem emite é quem tem o segredo — o Control Plane, autenticado pela sessão do dono, não por
+	 * credencial S3. A URL carrega {@code X-Amz-Signature} e vale até expirar; a credencial nunca sai
+	 * daqui, que é o motivo de a URL existir (o navegador recebe uma URL curta, não uma chave).</p>
+	 *
+	 * <p><b>Verbo:</b> só {@code GET} e {@code PUT}. {@code DELETE} por URL é o mesmo que dar a lápide
+	 * a qualquer portador de um link vazado, e {@code LIST} por URL vaza a listagem do bucket para quem
+	 * recebia um objeto só.</p>
+	 */
+	@PostMapping("/{bucket}/presign")
+	Map<String, Object> presign(@PathVariable String bucket,
+			@RequestParam(required = false) String key,
+			@RequestParam(defaultValue = "GET") String method,
+			@RequestParam(defaultValue = "900") long expires,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			HttpServletRequest request) {
+		// Sessão primeiro, parâmetro depois: a rota vive sob `/s3` e responde no vocabulário de erro do
+		// S3. Recusar pelo parâmetro ausente antes da autenticação diria a quem não está logado qual é
+		// a forma da chamada e devolveria 400 em vez do 403 do protocolo.
+		com.socialcoisa.rede.shared.web.CurrentUser user = currentUserResolver.resolve(sessionToken);
+		if (key == null || key.isBlank()) {
+			throw s3Error(400, "InvalidArgument", "Informe a chave do objeto.");
+		}
+		String verbo = method.toUpperCase(Locale.ROOT);
+		if (!"GET".equals(verbo) && !"PUT".equals(verbo)) {
+			throw s3Error(400, "InvalidArgument", "URL pre-assinada so para GET ou PUT.");
+		}
+		if (expires <= 0 || expires > SigV4Verifier.MAX_PRESIGNED_SECONDS) {
+			throw s3Error(400, "InvalidArgument",
+				"Expira em segundos entre 1 e " + SigV4Verifier.MAX_PRESIGNED_SECONDS + ".");
+		}
+		// A credencial é a do DONO da sessão, e o bucket tem de ser dele: sem isso a emissão seria um
+		// segundo caminho de acesso a bucket alheio, ignorando o escopo que o gateway respeita.
+		S3Credential credential = credentials.findByOwner(user.id().value(), 20)
+			.stream()
+			.filter(c -> c.revokedAt() == null && c.allows(verbo))
+			.filter(c -> c.allowedBucket() == null || c.allowedBucket().equals(bucket))
+			.findFirst()
+			.orElseThrow(() -> s3Error(403, "AccessDenied",
+				"Nao ha credencial do dono que permita " + verbo + " neste bucket."));
+		String secret = credentials.secretFor(credential.id());
+		if (secret == null) {
+			throw s3Error(503, "ServiceUnavailable",
+				"Credencial sem segredo guardado nao pode emitir URL; gere uma nova.");
+		}
+		return presignedUrl(credential, secret, bucket, key, verbo, expires, request);
+	}
+
+	private Map<String, Object> presignedUrl(S3Credential credential, String secret, String bucket, String key,
+			String verbo, long expires, HttpServletRequest request) {
+		String amzDate = AMZ_DATE.format(clock.instant());
+		String dateStamp = amzDate.substring(0, 8);
+		// O `host` que o cliente mandou já pode trazer o prefixo da instalação (`s3.enois.ia.br/s3`):
+		// concatenar outro daria `/s3/s3/bucket`. Um só `PREFIX` na URL, e o host sem ele.
+		// O `host` que o cliente mandou pode já trazer o prefixo da instalação (`s3.enois.ia.br/s3`):
+		// concatenar outro daria `/s3/s3/bucket`. Um só `PREFIX` na URL, e a assinatura é feita sobre
+		// o `Host` que o servidor vai ver quando o portador usar a URL.
+		String hostComPedido = header(request, "host");
+		String hostBase = hostComPedido.endsWith(PREFIX)
+			? hostComPedido.substring(0, hostComPedido.length() - PREFIX.length())
+			: hostComPedido;
+		// A assinatura usa o `Host` que o portador mandará ao usar a URL — sem o prefixo do gateway:
+		// o `PREFIX` é da instalação, não do protocolo, e entra só na URL como caminho.
+		String hostAssinado = hostBase;
+		String path = "/" + bucket + "/" + key;
+
+		// Os parâmetros da URL: datas e escopo, na forma que a AWS usa. `X-Amz-Credential` leva
+		// `/`, codificado duas vezes porque é dado DENTRO de um parâmetro.
+		Map<String, String> query = new LinkedHashMap<>();
+		query.put("X-Amz-Algorithm", "AWS4-HMAC-SHA256");
+		query.put("X-Amz-Credential", credential.accessKey() + "/" + dateStamp + "/" + REGION + "/s3/aws4_request");
+		query.put("X-Amz-Date", amzDate);
+		query.put("X-Amz-Expires", String.valueOf(expires));
+		query.put("X-Amz-SignedHeaders", "host");
+		Map<String, String> headers = Map.of("host", hostAssinado, "x-amz-date", amzDate,
+			"x-amz-content-sha256", "UNSIGNED-PAYLOAD");
+		var assinado = new SigV4Verifier.Request(verbo, path, query, headers, "UNSIGNED-PAYLOAD");
+		var parsed = new SigV4Verifier.Parsed(credential.accessKey(), REGION, "s3", "host", "");
+		String signature = SigV4Verifier.signature(assinado, parsed, secret, dateStamp);
+
+		StringBuilder url = new StringBuilder(request.getScheme()).append("://").append(hostBase).append(PREFIX)
+			.append('/').append(SigV4Verifier.uriEncode(bucket).replace("%2F", "/"));
+		for (String segment : key.split("/")) {
+			url.append('/').append(SigV4Verifier.uriEncode(segment));
+		}
+		url.append("?X-Amz-Algorithm=AWS4-HMAC-SHA256")
+			// O valor vai no texto em que ELE É ASSINADO: `X-Amz-Credential` com `/`, porque o texto de
+			// URL é uma camada acima da assinatura. Escapar aqui (`%2F` ou de novo `%252F`) faz o gateway
+			// ver um valor diferente do assinado — e a URL emitida não abre.
+			.append("&X-Amz-Credential=").append(query.get("X-Amz-Credential"))
+			.append("&X-Amz-Date=").append(amzDate)
+			.append("&X-Amz-Expires=").append(expires)
+			.append("&X-Amz-SignedHeaders=host")
+			.append("&X-Amz-Signature=").append(signature);
+		return Map.of("url", url.toString(), "method", verbo,
+			"expiresIn", expires,
+			"expiresAt", clock.instant().plusSeconds(expires).toString());
+	}
+
 	private S3Credential authenticate(HttpServletRequest request, String operation) {
 		String authorization = request.getHeader(HttpHeaders.AUTHORIZATION);
 		SigV4Verifier.Parsed parsed = SigV4Verifier.parseAuthorization(authorization);
 		if (parsed == null) {
+			// Sem cabeçalho: pode ser uma URL pré-assinada (`X-Amz-Signature` na query). É a única
+			// forma de um navegador — que não tem o segredo — ler ou gravar um objeto.
+			S3Credential presigned = authenticatePresigned(request, operation);
+			if (presigned != null) {
+				return presigned;
+			}
 			throw s3Error(403, "AccessDenied", "Assinatura AWS SigV4 ausente.");
 		}
 		S3Credential credential = credentials.findByAccessKey(parsed.accessKey())
