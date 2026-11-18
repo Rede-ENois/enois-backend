@@ -117,7 +117,8 @@ class BlogController {
 		String hash = idempotency.hash(request);
 		return idempotency.execute(user.id(), "POST", "/api/blogs/me/posts", idempotencyKey, hash,
 			() -> new CommandResponse(201, blogService.publish(user.id().value(), request.title(), request.body(),
-				request.format(), request.notifySubscribers() == null || request.notifySubscribers())));
+				request.format(), request.notifySubscribers() == null || request.notifySubscribers(),
+				request.mediaIds())));
 	}
 
 	@PatchMapping("/me/posts/{postId}")
@@ -128,7 +129,7 @@ class BlogController {
 		String hash = idempotency.hash(request);
 		return idempotency.execute(user.id(), "PATCH", "/api/blogs/me/posts/" + postId, idempotencyKey, hash,
 			() -> new CommandResponse(200, blogService.edit(user.id().value(), postId, request.title(),
-				request.body(), request.format())));
+				request.body(), request.format(), request.mediaIds())));
 	}
 
 	@DeleteMapping("/me/posts/{postId}")
@@ -189,6 +190,7 @@ class BlogController {
 		return ResponseEntity.status(newsletter.unsubscribeByToken(token) ? 200 : 400).build();
 	}
 
-	record BlogPostRequest(String title, String body, BlogPostFormat format, Boolean notifySubscribers) {
+	record BlogPostRequest(String title, String body, BlogPostFormat format, Boolean notifySubscribers,
+			java.util.List<String> mediaIds) {
 	}
 }

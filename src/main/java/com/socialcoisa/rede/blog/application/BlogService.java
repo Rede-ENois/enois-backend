@@ -51,6 +51,9 @@ public class BlogService {
 	private static final int MAX_BLOG_TITLE = 160;
 	private static final int MAX_DESCRIPTION = 500;
 	private static final int MAX_POST_TITLE = 200;
+
+	/** Teto de mídias por post (vlog): fotos e vídeos do autor, pela checagem de sempre. */
+	private static final int MAX_POST_MEDIA = 8;
 	/** Teto do corpo em markdown: o mesmo do HTML — um limite so, para todo mundo. */
 	private static final int MAX_MARKDOWN = 20_000;
 	private static final int POSTS_PAGE = 50;
@@ -67,14 +70,17 @@ public class BlogService {
 	private final com.socialcoisa.rede.shared.security.SuspiciousText suspiciousText;
 	private final Clock clock;
 	private final com.socialcoisa.rede.coin.application.CoinService coins;
+	private final com.socialcoisa.rede.media.application.port.in.ValidateMediaOwnershipUseCase mediaOwnership;
 
 	public BlogService(BlogRepository blogs, BlogPostRepository posts, BlogSubscriptionRepository subscriptions,
 			PublishPostUseCase publishPost, DeletePostUseCase deletePost, NotificationService notifications,
 			UserProfileRepository profiles, ApplicationEventPublisher events,
 			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate,
 			com.socialcoisa.rede.shared.security.SuspiciousText suspiciousText, Clock clock,
-			com.socialcoisa.rede.coin.application.CoinService coins) {
+			com.socialcoisa.rede.coin.application.CoinService coins,
+			com.socialcoisa.rede.media.application.port.in.ValidateMediaOwnershipUseCase mediaOwnership) {
 		this.coins = coins;
+		this.mediaOwnership = mediaOwnership;
 		this.blogs = blogs;
 		this.posts = posts;
 		this.subscriptions = subscriptions;
@@ -165,9 +171,15 @@ public class BlogService {
 	 */
 	@Transactional
 	public BlogPostView publish(String userId, String title, String body, BlogPostFormat format, boolean notify) {
+		return publish(userId, title, body, format, notify, null);
+	}
+
+	public BlogPostView publish(String userId, String title, String body, BlogPostFormat format, boolean notify,
+			List<String> mediaIds) {
 		String cleanTitle = requireText(title, MAX_POST_TITLE, "titulo", "Post precisa de um titulo.");
 		String cleanBody = cleanBody(body, format);
 		Blog blog = ensureBlog(userId);
+		List<String> cleanMedia = normalizeMedia(mediaIds, userId);
 
 		// O ponteiro nasce primeiro: o id dele e o id do post do blog (e o que o card do feed linka).
 		var pointer = publishPost.publish(new PublishPostCommand(new UserId(userId), PostType.BLOG, cleanTitle, null,
@@ -175,7 +187,7 @@ public class BlogService {
 		String postId = pointer.id();
 		coins.recordPresence(userId);
 		BlogPost saved = posts.save(BlogPost.publish(postId, blog.id(), userId, cleanTitle, cleanBody, format,
-			Instant.now(clock)));
+			cleanMedia, Instant.now(clock)));
 		if (notify) {
 			notifySubscribers(blog, saved);
 			// O fan-out de e-mail escuta DEPOIS do commit: nada sai se a transacao reverter.
@@ -186,10 +198,11 @@ public class BlogService {
 	}
 
 	@Transactional
-	public BlogPostView edit(String userId, String postId, String title, String body, BlogPostFormat format) {
+	public BlogPostView edit(String userId, String postId, String title, String body, BlogPostFormat format,
+			List<String> mediaIds) {
 		BlogPost post = ownedPost(userId, postId);
 		String cleanTitle = requireText(title, MAX_POST_TITLE, "titulo", "Post precisa de um titulo.");
-		post.edit(cleanTitle, cleanBody(body, format), format, Instant.now(clock));
+		post.edit(cleanTitle, cleanBody(body, format), format, normalizeMedia(mediaIds, userId), Instant.now(clock));
 		return BlogPostView.from(posts.save(post));
 	}
 
@@ -271,6 +284,29 @@ public class BlogService {
 	}
 
 	/** Corpo do post: HTML entra sanitizado; markdown entra como texto (o front formata) com a defesa de sempre. */
+	/**
+	 * Mídia do vlog: ids já subidos pelo fluxo de sempre (POST /media/uploads), checagem de posse
+	 * de sempre, teto de 8 por post. Nula/vazia = post só de texto, como sempre foi.
+	 */
+	private List<String> normalizeMedia(List<String> mediaIds, String userId) {
+		if (mediaIds == null) {
+			return List.of();
+		}
+		List<String> normalized = mediaIds.stream()
+			.filter(StringUtils::hasText)
+			.map(String::trim)
+			.distinct()
+			.toList();
+		if (normalized.isEmpty()) {
+			return List.of();
+		}
+		if (normalized.size() > MAX_POST_MEDIA) {
+			throw new ApiException(400, "POST_TOO_MANY_MEDIA", "Post aceita no maximo 8 midias.");
+		}
+		mediaOwnership.validateOwnedBy(new com.socialcoisa.rede.feed.domain.UserId(userId), normalized);
+		return normalized;
+	}
+
 	private String cleanBody(String body, BlogPostFormat format) {
 		if (!StringUtils.hasText(body)) {
 			throw new ApiException(400, "INVALID_BLOG_BODY", "Post precisa de conteudo.");
