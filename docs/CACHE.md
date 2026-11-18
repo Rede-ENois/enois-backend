@@ -112,3 +112,5 @@ O cache não substitui consulta ruim. O que foi corrigido junto:
 Feed, notificações, mensagens, conteúdo de post, reações, perfil próprio (`/me`) e todo dado que
 depende de sessão. Continuam sendo leitura direta, com as regras de paginação por cursor que já
 existiam. Respostas de escrita nunca passam pelo cache.
+O feed da comunidade tem o índice `posts(community_id, status, channel_id, created_at)` para apoiar
+a filtragem e a ordenação.
