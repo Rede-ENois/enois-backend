@@ -152,6 +152,40 @@ receber credencial. Regras, todas com teste:
 A chave vai em parâmetro (`?key=`), não no caminho: `/{bucket}/{*key}` engole o resto do caminho no mesmo
 verbo, e uma rota `/{bucket}/{*key}/presigned` colide com ela.
 
+## 4.2 Access Keys pelo painel
+
+A credencial nasce e morre pela rota do **dono**, não do admin — a chave autoriza o dono a usar os
+buckets dele, e não há parâmetro de dono em rota nenhuma (o dono é a sessão).
+
+| operação | rota | resposta |
+|---|---|---|
+| Listar | `GET /network/storage/s3/credentials` | `id`, `accessKey`, `allowedBucket`, `allowedOperations`, `revokedAt`, `createdAt` — **nunca** o segredo |
+| Criar | `POST /network/storage/s3/credentials` `{"allowedBucket": null, "allowedOperations": "GET PUT"}` | a credencial **e** `secretAccessKey`, uma vez; `Cache-Control: no-store` |
+| Revogar | `DELETE /network/storage/s3/credentials/{id}` | 204; repetir também é 204 |
+
+Regras, todas com teste:
+
+- **O segredo aparece uma vez.** Depois da criação só existem o cifrado (que o gateway usa para o
+  SigV4) e o hash. Não há rota que leia o claro de volta — perder a chave é revogar e criar outra.
+- **O segredo é hexadecimal de 32 caracteres**, no mesmo alfabeto do Access Key
+  (`AKIAENOIS` + 16 hex, 24 no total). Nada de caractere que exija escape em cabeçalho ou URL.
+- **Operações:** só `GET`, `PUT`, `LIST`, `DELETE` — o mesmo conjunto que o gateway autentica. Outro
+  verbo responde 400; `allowedOperations` ausente vira `GET` (o padrão do V357) e **em branco
+  responde 400** (escolher nada não é o mesmo que não escolher). A ordem gravada é fixa.
+- **`allowedBucket`:** nulo = todos os buckets do dono. Nome inválido responde 400; bucket **de outra
+  conta** responde 403 — a chave nasceria recusada pelo gateway, que confere donagem em todo verbo
+  (§4.0).
+- **Revogação** de credencial de outro dono responde **404**, não 403: quem não tem a chave não
+  precisa saber que ela existe. A revogada continua na lista com `revokedAt` — esconder a linha
+  apagaria o histórico de quem teve acesso.
+- **Rotação** é criar outra e revogar a antiga; as duas coexistem, então não há janela cega.
+- Toda criação e revogação entra na trilha de auditoria (`STORAGE_S3_CREDENTIAL_CREATED` /
+  `_REVOKED`), sem o segredo.
+
+A credencial criada aqui é a mesma que o gateway autentica: o teste
+`NetworkS3CredentialTests#criar_nao_devolve_o_segredo_de_novo_e_o_gateway_autentica_a_chave_criada`
+grava e lê um objeto com o par que a rota devolveu.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
@@ -172,7 +206,5 @@ Códigos: `AccessDenied`, `InvalidAccessKeyId`, `SignatureDoesNotMatch`, `NotImp
 - **Presigned URLs para `GET` e `PUT` existem**; `DELETE`/`LIST` por URL não são emitidos de
   propósito (link vazado não apaga nem lista). URL pré-assinada para **multipart** não existe porque
   multipart não existe.
-- **Access Keys administradas pelo painel** — a tabela e o repositório existem; não há ainda rota de
-  painel para criar/revogar (a criação hoje é por SQL/admin direto). Lacuna declarada.
 - **Credenciais temporárias (STS)** — `X-Amz-Security-Token` não é processado.
 - **Quotas e rate limiting por credencial** — a rota herda o limitador global, não um por Access Key.
