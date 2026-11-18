@@ -174,7 +174,7 @@ class BlogFlowTests {
 		return body;
 	}
 
-	private String publish(TestAuthHelper.AuthSession author, String title, String body, String format)
+private String publish(TestAuthHelper.AuthSession author, String title, String body, String format)
 			throws Exception {
 		MvcResult result = mockMvc.perform(post("/blogs/me/posts")
 				.header("X-Session-Token", author.token())
