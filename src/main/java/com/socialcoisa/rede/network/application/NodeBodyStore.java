@@ -41,8 +41,29 @@ public class NodeBodyStore {
 	private static final int MAX_ID_LENGTH = 64;
 
 	private final Path root;
+	/** Nulo = instalação sem chave: grava em claro, e o painel diz que não há cifra em repouso. */
+	private final EncryptedBodyFile cipher;
 
-	NodeBodyStore(@Value("${rede.storage.node-body-root}") String root) {
+	/**
+	 * Construtor do Spring: a chave de cifra é a mesma de {@code REDE_SECURITY_ENCRYPTION_KEY}.
+	 *
+	 * <p>Chave inválida (não base64, não 32 bytes) <b>derruba o boot</b>: o núcleo da aplicação já a
+	 * exige, e a única forma de chegar aqui com chave ruim é configuração quebrada. Degradar para
+	 * "grava em claro" em silêncio seria dizer que o disco está cifrado quando não está.</p>
+	 */
+	@org.springframework.beans.factory.annotation.Autowired
+	NodeBodyStore(@Value("${rede.storage.node-body-root}") String root,
+			@Value("${rede.security.encryption-key:}") String encryptionKey) {
+		this(root, decodeKey(encryptionKey));
+	}
+
+	/** Construtor sem cifra (testes e instalação sem chave). */
+	NodeBodyStore(String root) {
+		this(root, (byte[]) null);
+	}
+
+	/** Com cifra explícita (testes do disco cifrado). */
+	NodeBodyStore(String root, byte[] encryptionKey) {
 		if (root == null || root.isBlank()) {
 			// `@ConditionalOnProperty` casa com a propriedade PRESENTE, mesmo vazia. Sem esta
 			// recusa, `Path.of("")` resolveria para o diretório corrente e o processo gravaria
@@ -51,6 +72,7 @@ public class NodeBodyStore {
 				"rede.storage.node-body-root vazio: omita a propriedade para nao guardar corpo de no");
 		}
 		this.root = Path.of(root).toAbsolutePath().normalize();
+		this.cipher = encryptionKey == null ? null : new EncryptedBodyFile(encryptionKey);
 		try {
 			Files.createDirectories(this.root);
 		}
@@ -90,6 +112,20 @@ public class NodeBodyStore {
 		Path temp = Files.createTempFile(root, objectId + ".", ".partial");
 		try {
 			long bytes = Files.copy(body, temp, StandardCopyOption.REPLACE_EXISTING);
+			if (cipher != null) {
+				// Cifra num segundo temporário: o corpo em claro só existe no temporário do
+				// diretório, e o arquivo final já nasce cifrado (§10, "retirada física do disco").
+				Path encrypted = Files.createTempFile(root, objectId + ".", ".encpartial");
+				try {
+					cipher.write(temp, encrypted, root);
+				}
+				catch (IOException falha) {
+					Files.deleteIfExists(encrypted);
+					throw falha;
+				}
+				Files.deleteIfExists(temp);
+				temp = encrypted;
+			}
 			// Mesmo diretório: o move é rename atômico, sem cópia entre sistemas de arquivos.
 			Files.move(temp, destination, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
 			return bytes;
@@ -100,9 +136,41 @@ public class NodeBodyStore {
 		}
 	}
 
-	/** Abre o corpo gravado. */
+	/**
+	 * Abre o corpo gravado.
+	 *
+	 * <p>Corpo no formato cifrado é decifrado em fluxo; corpo legado (gravado antes da chave) é
+	 * servido como está. Os dois coexistem no mesmo diretório — recusar o antigo reprovaria todas as
+	 * réplicas que já existiam no dia em que a chave foi configurada.</p>
+	 */
 	public InputStream read(String objectId) throws IOException {
-		return Files.newInputStream(pathOf(objectId));
+		Path path = pathOf(objectId);
+		if (cipher != null && cipher.isEncrypted(path)) {
+			return cipher.read(path);
+		}
+		return EncryptedBodyFile.plain(path);
+	}
+
+	/** O disco está guardando corpo cifrado nesta instalação? O painel lê isto. */
+	public boolean encryptionAtRest() {
+		return cipher != null;
+	}
+
+	private static byte[] decodeKey(String base64) {
+		if (base64 == null || base64.isBlank()) {
+			return null;
+		}
+		try {
+			byte[] bytes = java.util.Base64.getDecoder().decode(base64.trim());
+			if (bytes.length != 32) {
+				throw new IllegalStateException(
+					"REDE_SECURITY_ENCRYPTION_KEY precisa ter 32 bytes (chave AES-256) para cifrar corpo de no.");
+			}
+			return bytes;
+		}
+		catch (IllegalArgumentException falha) {
+			throw new IllegalStateException("REDE_SECURITY_ENCRYPTION_KEY nao e base64 valido.", falha);
+		}
 	}
 
 	/**

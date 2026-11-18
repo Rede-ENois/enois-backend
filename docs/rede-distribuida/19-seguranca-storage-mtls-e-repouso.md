@@ -1,4 +1,4 @@
-# 19 — Certificado mTLS do nó (brief §10)
+# 19 — Segurança do Storage: certificado mTLS do nó e cifra em repouso (brief §10)
 
 O §10 do brief lista "mTLS" e "certificados individuais" — e o doc
 [04-identidade-e-autorizacao.md](04-identidade-e-autorizacao.md) §1 já descrevia **duas credenciais por
@@ -69,10 +69,9 @@ revogado e é renovado. Ela **não** é a terminação TLS. Honestamente:
   para se programar, mas quem decide renovar é ele.
 - **CRL/OCSP não existem.** A revogação é consultada no banco (`revoked_at`), o que funciona para
   decisão do Control Plane e não para um verificador offline.
-- **Nada de criptografia em repouso nem envelope.** Falta implementar: chaves por objeto ou por bucket,
-  re-`SecretCipher` do lado do nó, e a separação "chave fora do storage node" do brief §10. O
-  `SecretCipher` (AES-GCM, `REDE_SECURITY_ENCRYPTION_KEY`) já existe e é o que protege o segredo da
-  credencial S3 — é a base a reusar, não um segundo sistema.
+- **Criptografia em repouso do corpo do nó: implementada** (ver §7). **Envelope (chave por objeto ou
+  por bucket, com a chave fora do storage node) ainda não existe** — hoje a chave é única da instalação
+  e vive na configuração, que é exatamente o que o envelope precisa mudar.
 
 ## 5. Operação
 
@@ -111,3 +110,29 @@ motivo apareceria longe da causa.
 - `scripts/tests/storage-migration-test.sh` em **MariaDB 11.4 real**: **82 PASS / 0 FAIL**, aplicação 2×,
   incluindo "a tabela não guarda chave privada", unicidade do fingerprint, rotação com histórico e
   preservação dos dados entre as duas aplicações.
+
+## 7. Criptografia em repouso do corpo do nó
+
+O brief §10 pede que "a retirada física do disco" não revele os arquivos. O corpo que o nó grava em
+disco (`NodeBodyStore.write`) passa a ser cifrado **antes** de receber o nome final:
+
+- **AES-256-GCM em fluxo**, pela classe `EncryptedBodyFile`. O arquivo nunca é carregado inteiro na
+  memória — é um vídeo de centenas de MB, e o `SecretCipher` (que opera em `String`) não serve.
+- **Layout**: `ENOISENC1` (9) | versão (1) | IV (12) | GCM(corpo). O cabeçalho é o que permite ao nó
+  distinguir corpo cifrado de corpo legado.
+- **A chave é a mesma** de `REDE_SECURITY_ENCRYPTION_KEY` — a que já protege o segredo da credencial S3
+  e o TOTP. Um segundo material de chave seria um segundo segredo para o operador proteger.
+- **Autenticidade, não só sigilo**: o GCM autentica; um byte trocado no disco faz a leitura falhar com
+  `IOException` em vez de servir conteúdo forjado.
+- **Sem a chave, grava em claro e diz isso** (`encryptionAtRest()` é falso). Não finge cifrar.
+- **Corpo legado continua legível**: arquivo sem o cabeçalho é servido como está, para que ligar a
+  cifra numa instalação com réplicas não reprove todos os nós de uma vez.
+
+O que **falta** do §10: a chave é da instalação, não do objeto — quem tem a chave e o disco lê tudo. O
+**envelope** (chave de dados por objeto, cifrada por uma chave mestra que nunca desce ao storage node)
+é o passo seguinte, e é o que separa "disco perdido não revela" de "operador hostil também não".
+
+Evidência: `NodeBodyEncryptionTests` — 6 casos, incluindo **ler o arquivo do disco com
+`Files.readAllBytes` e não achar o texto em claro** (o requisito do §10 conferido diretamente), corpo
+binário de 3 MB, adulteração de um byte (falha), chave diferente (falha), corpo legado (lê) e sem
+chave (claro declarado). Mutação: desligar a cifra na escrita derruba 3 casos.

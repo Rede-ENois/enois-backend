@@ -212,7 +212,7 @@ Implementada na fase 5 (`GET /network/nodes/me/config`, contrato em `03-contrato
   deixaria o instalador sem resposta no passo em que ele espera aprovação humana.
 
 **Certificado mTLS (brief §10):** emitido desde `V358`, a partir de CSR conferido — ver
-[19-certificado-mtls-do-no.md](19-certificado-mtls-do-no.md). O que **ainda não** existe: a terminação
+[19-seguranca-storage-mtls-e-repouso.md](19-seguranca-storage-mtls-e-repouso.md). O que **ainda não** existe: a terminação
 TLS exigindo o certificado de cliente (o proxy da borda continua aceitando sem ele), rota de painel
 para revogar certificado, rotação automática e CRL/OCSP. Até lá, a autoridade de cada requisição de
 nó segue sendo a API key, e a config assinada protege o que o nó **aplica**, não o canal.
