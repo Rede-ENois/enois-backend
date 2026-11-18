@@ -19,4 +19,12 @@ interface SpringDataDesabafoPostJpaRepository extends JpaRepository<DesabafoPost
 		""")
 	List<DesabafoPostJpaEntity> feedBefore(@Param("status") DesabafoStatus status, @Param("before") Instant before,
 		Pageable pageable);
+
+	@Query("""
+		select p from DesabafoPostJpaEntity p
+		where p.status = :status and p.createdAt >= :de and p.createdAt < :ate
+		order by p.createdAt asc
+		""")
+	List<DesabafoPostJpaEntity> findAtivosEntre(@Param("status") DesabafoStatus status, @Param("de") Instant de,
+		@Param("ate") Instant ate, Pageable pageable);
 }
