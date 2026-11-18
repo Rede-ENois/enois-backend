@@ -78,8 +78,6 @@ class CommentMediaTests {
 					"content", "", "mediaIds", List.of("cm_media_1"), "mentionedUserIds", List.of()))))
 			.andReturn();
 		if (root.getResponse().getStatus() != 201) {
-			System.out.println("DEBUG cmedia root=" + root.getResponse().getStatus()
-				+ " body=" + root.getResponse().getContentAsString());
 			// Reproduz fora do HTTP para ver a excecao real, nao o handler generico.
 			commentOnPostUseCase.comment(new com.socialcoisa.rede.feed.application.CommentOnPostCommand(
 				new com.socialcoisa.rede.feed.domain.UserId(author.userId()),

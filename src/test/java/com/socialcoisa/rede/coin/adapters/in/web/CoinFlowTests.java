@@ -42,16 +42,10 @@ class CoinFlowTests {
 		// Genesis: a carteira nasce com 100 faíscas; reabrir não duplica.
 		MvcResult wallet1 = mockMvc.perform(get("/carteira").header("X-Session-Token", sender.token()))
 			.andReturn();
-		if (wallet1.getResponse().getStatus() != 200) {
-			System.out.println("DEBUG carteira: " + wallet1.getResponse().getContentAsString());
-		}
 		org.assertj.core.api.Assertions.assertThat(wallet1.getResponse().getStatus())
 			.as("carteira: " + wallet1.getResponse().getContentAsString()).isEqualTo(200);
 		MvcResult wallet2 = mockMvc.perform(get("/carteira").header("X-Session-Token", sender.token()))
 			.andReturn();
-		if (wallet2.getResponse().getStatus() != 200) {
-			System.out.println("DEBUG carteira2: " + wallet2.getResponse().getContentAsString());
-		}
 		org.assertj.core.api.Assertions.assertThat(wallet2.getResponse().getStatus())
 			.as("carteira2: " + wallet2.getResponse().getContentAsString()).isEqualTo(200);
 		org.assertj.core.api.Assertions.assertThat(

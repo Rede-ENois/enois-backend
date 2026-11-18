@@ -163,8 +163,6 @@ class BusinessFeedSeparationTests {
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(java.util.Map.of(
 					"username", "bizsep.ed", "name", "Editor Profissional"))))
-			.andDo(r -> System.out.println("CREATE RESP " + r.getResponse().getStatus() + " "
-				+ r.getResponse().getContentAsString()))
 			.andExpect(status().isOk());
 		mockMvc.perform(patch("/me/business-profile")
 				.header("X-Session-Token", author.token())

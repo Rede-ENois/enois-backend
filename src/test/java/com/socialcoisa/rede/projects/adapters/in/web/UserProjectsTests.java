@@ -73,8 +73,6 @@ class UserProjectsTests {
 				.getContentAsString());
 		var resposta = mockMvc.perform(get("/users/" + me.get("username").asText() + "/projects"))
 			.andReturn();
-		System.out.println("DEBUG-404 status=" + resposta.getResponse().getStatus() + " body="
-			+ resposta.getResponse().getContentAsString() + " username=" + me.get("username").asText());
 		mockMvc.perform(get("/users/" + me.get("username").asText() + "/projects"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.length()").value(1))

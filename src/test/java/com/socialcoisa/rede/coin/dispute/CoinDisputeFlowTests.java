@@ -83,7 +83,6 @@ class CoinDisputeFlowTests {
 				.content(objectMapper.writeValueAsString(Map.of(
 					"reason", "golpe", "description", "Paguei por um jogo e nunca recebi nada de volta."))))
 			.andReturn();
-		System.out.println("DEBUG contest: " + contested.getResponse().getContentAsString());
 		org.assertj.core.api.Assertions.assertThat(contested.getResponse().getStatus()).isEqualTo(200);
 		org.assertj.core.api.Assertions.assertThat(
 			objectMapper.readTree(contested.getResponse().getContentAsString()).get("state").asText()).isEqualTo("OPEN");

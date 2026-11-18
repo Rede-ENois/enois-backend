@@ -53,8 +53,8 @@ class SupportEmailNotifier {
 
 	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
 	@Transactional(propagation = Propagation.REQUIRES_NEW)
-	void onOpened(SupportRequestOpenedEvent event) {
-		System.out.println("DIAG notifier onOpened supportEmail=[" + supportEmail + "]");
+		void onOpened(SupportRequestOpenedEvent event) {
+		LOG.debug("notifier onOpened supportEmail=[{}]", supportEmail);
 		if (!StringUtils.hasText(supportEmail)) {
 			return;
 		}

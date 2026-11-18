@@ -40,10 +40,6 @@ class MyReportsTests {
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(post)))
 			.andReturn();
-		if (created.getResponse().getStatus() != 201) {
-			System.out.println("DEBUG post status=" + created.getResponse().getStatus()
-				+ " body=" + created.getResponse().getContentAsString());
-		}
 		assertThat(created.getResponse().getStatus())
 			.as("criar post: " + created.getResponse().getContentAsString()).isEqualTo(201);
 		String postId = objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asText();
@@ -102,8 +98,6 @@ class MyReportsTests {
 	@Test
 	void reportsMineRequiresAuthentication() throws Exception {
 		MvcResult result = mockMvc.perform(get("/reports/mine")).andReturn();
-		System.out.println("DEBUG mine status=" + result.getResponse().getStatus()
-			+ " body=" + result.getResponse().getContentAsString());
 		assertThat(result.getResponse().getStatus()).isEqualTo(401);
 	}
 }

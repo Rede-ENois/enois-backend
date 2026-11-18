@@ -308,7 +308,6 @@ class CallReportTests {
 		JsonNode call = review.get("call");
 		assertThat(call.get("callId").asText()).isEqualTo(callId);
 		assertThat(call.get("reportedUserId").asText()).isEqualTo(host.userId());
-		System.out.println("DEBUG_CALL " + call);
 		assertThat(call.get("mediaId").asText()).isEqualTo(capture);
 		assertThat(call.get("participants").toString()).contains(guest.userId()).contains(host.userId());
 		assertThat(call.get("reportedAt").asText()).isNotBlank();

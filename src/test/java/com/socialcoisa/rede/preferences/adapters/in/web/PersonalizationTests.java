@@ -55,7 +55,6 @@ class PersonalizationTests {
 					"likedTopics", java.util.List.of("TECNOLOGIA"),
 					"blockedTopics", java.util.List.of(),
 					"disabledModules", java.util.List.of("DAILY_GAMES")))))
-			.andDo(r -> System.out.println("PUT1 RESP " + r.getResponse().getStatus() + " " + r.getResponse().getContentAsString()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.likedTopics[0]").value("TECNOLOGIA"))
 			.andExpect(jsonPath("$.disabledModules[0]").value("DAILY_GAMES"));

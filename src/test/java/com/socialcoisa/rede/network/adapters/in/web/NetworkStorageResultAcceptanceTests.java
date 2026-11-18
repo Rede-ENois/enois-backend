@@ -238,8 +238,6 @@ class NetworkStorageResultAcceptanceTests {
 		assertThat(task.get("assigned_node_id")).as("tarefa designada nesta mesma chamada: %s", task)
 			.isEqualTo(storage.id());
 		var candidatos = jdbc.queryForList("select id, status, last_seen_at, observed_running_tasks, declared_cpu_cores from network_nodes");
-		System.out.println("DEBUG candidatos=" + candidatos);
 		var modes = jdbc.queryForList("select * from network_state");
-		System.out.println("DEBUG modos=" + modes);
 	}
 }
