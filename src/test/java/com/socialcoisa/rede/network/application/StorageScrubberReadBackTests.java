@@ -28,6 +28,7 @@ import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NodeProfile;
 import com.socialcoisa.rede.network.domain.NodeStatus;
 import com.socialcoisa.rede.network.domain.StorageObject;
+import com.socialcoisa.rede.network.domain.StorageRebalance;
 import com.socialcoisa.rede.network.domain.StorageObjectState;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
 import com.socialcoisa.rede.shared.audit.AuditTrail;
@@ -468,6 +469,48 @@ class StorageScrubberReadBackTests {
 				com.socialcoisa.rede.network.domain.StorageBucketPolicy policy) {
 			policies.put(policy.bucket(), policy);
 			return policy;
+		}
+
+		// --- Rebalanceamento (§16, V354): o fake guarda o mínimo ---
+
+		private final java.util.List<StorageRebalance> rebalances = new java.util.ArrayList<>();
+
+		@Override
+		public void saveRebalance(StorageRebalance rebalance) {
+			rebalances.add(rebalance);
+		}
+
+		@Override
+		public java.util.Optional<StorageRebalance> activeRebalance(String objectId, int fromReplica) {
+			return rebalances.stream()
+				.filter(r -> r.objectId().equals(objectId) && r.fromReplica() == fromReplica
+					&& r.state().active())
+				.findFirst();
+		}
+
+		@Override
+		public java.util.Optional<StorageRebalance> findRebalance(String id) {
+			return rebalances.stream().filter(r -> r.id().equals(id)).findFirst();
+		}
+
+		@Override
+		public java.util.List<StorageRebalance> activeRebalances(int limit) {
+			return rebalances.stream().filter(r -> r.state().active()).limit(limit).toList();
+		}
+
+		@Override
+		public boolean transitionRebalance(String id, StorageRebalance.State from, StorageRebalance.State to,
+				String failureReason, Instant now) {
+			for (int i = 0; i < rebalances.size(); i++) {
+				StorageRebalance r = rebalances.get(i);
+				if (r.id().equals(id) && r.state() == from) {
+					rebalances.set(i, new StorageRebalance(r.id(), r.objectId(), r.fromReplica(), r.fromNodeId(),
+						r.toReplica(), r.toNodeId(), to, failureReason, r.bytes(), r.bandwidthLimitMbps(),
+						r.requestedBy(), r.createdAt(), now));
+					return true;
+				}
+			}
+			return false;
 		}
 	}
 }

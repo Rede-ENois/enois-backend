@@ -513,3 +513,82 @@ O digest restaurado é o que o catálogo guardava da versão antiga — a restau
 - **Expiração por prefixo ou por objeto**: o prazo é só por bucket.
 - **Versionamento retroativo**: os objetos que existiam antes são a versão 1; não há reconstrução de
   histórico que nunca foi gravado.
+
+## 12. Rebalanceamento (brief §16, V354)
+
+A §2 desta doc mede o desequilíbrio e diz explicitamente: "não move nada". Esta seção entrega o
+movimento, com a regra que manda no desenho escrita no brief:
+
+> Nunca remover a última cópia saudável antes de confirmar a persistência e integridade do destino.
+
+### 12.1 Três passos, e só o terceiro toca a cópia antiga
+
+| passo | rota | o que muda no catálogo |
+|---|---|---|
+| 1. designar | `POST /admin/network/storage/rebalance` | réplica nova nasce `PENDING_REMOTE`; **antiga continua `OK`** |
+| 2. confirmar | `PUT /network/storage/objects/{id}/replica` (rota que já existia) | destino declara o que gravou; o Control Plane confere digest e tamanho |
+| 3. concluir | `POST /admin/network/storage/rebalance/{id}/complete` | **só com o destino `OK`** a antiga vira `GONE` |
+
+Consequência direta: a migração é **sem indisponibilidade**. Entre o passo 1 e o 3 a cópia antiga
+serve normalmente — a página que aponta para ela não para no meio da transferência.
+
+### 12.2 O que o movimento recusa (e por quê)
+
+| situação | resposta | motivo |
+|---|---|---|
+| origem é a **única** cópia `OK` | 409 `STORAGE_REBALANCE_LAST_COPY` | mover a única é apostar o arquivo na transferência |
+| origem não é `OK` (`STALE`, `GONE`, `PENDING_REMOTE`) | 409 `STORAGE_REPLICA_NOT_HEALTHY` | o conteúdo dela não é confiável |
+| destino já tem cópia do objeto | 409 `STORAGE_REBALANCE_SAME_NODE` | não alivia ninguém e desvia da conta de domínio de falha |
+| destino inativo ou sem perfil de storage | 409 `STORAGE_REBALANCE_DEST_NOT_READY` | a transferência nunca enfileiraria tarefa |
+| já há transferência viva desta réplica | 409 `STORAGE_REBALANCE_IN_PROGRESS` | clique duplo não abre duas transferências do mesmo objeto |
+
+O número da réplica nova continua o maior existente; o número da antiga **não é reaproveitado** pela
+mesma razão do healing: a chave `(object_id, replica)` sobrescreveria a cópia que ainda está servindo.
+
+### 12.3 Desfazer não toca a cópia antiga
+
+`POST /admin/network/storage/rebalance/{id}/cancel` recolhe a designação nova (`GONE`) e deixa a
+antiga como estava. Depois de `DONE` o cancelamento é **409**: desfazer o `DONE` removeria a cópia
+nova depois de a antiga ter saído — o único caminho que deixaria o objeto sem nenhuma das duas.
+
+`FAILED` é o estado de uma transferência que perdeu a designação (recolhida por outra rota, nó
+removido): a antiga continua, e o operador vê o motivo em `failureReason`, em vez de uma
+transferência viva para sempre.
+
+### 12.4 Unicidade: uma transferência viva por réplica
+
+A mesma coluna gerada do V352: `live_key` vale `object_id:from_replica` **só em `PENDING`** e NULL nos
+demais estados. Com a chave composta `(object_id, from_replica, live_key)`, o banco recusa duas
+transferências vivas da mesma réplica — e **aceita** duas concluídas ao longo do tempo, que é o que
+uma unicidade ingênua por estado proibiria para sempre (a segunda recuperação do mesmo objeto ficaria
+impossível).
+
+### 12.5 Bandas e progressividade
+
+O teto de banda é **por transferência** (`bandwidthLimitMbps`, padrão 10), não por nó: o operador
+escolhe quanto ceder para um objeto específico. A transferência em si é um `OBJECT_PUT` pelo caminho
+do §8.3, então o nó aplica o **menor** entre o teto da transferência e a própria capacidade.
+
+Não há transferência paralela de vários objetos numa mesma chamada: cada transferência é uma decisão
+de operador com o próprio teto.
+
+### 12.6 Rotas
+
+| rota | o que faz |
+|---|---|
+| `GET /admin/network/storage/rebalance` | transferências vivas, com a antiga ainda no lugar |
+| `POST /admin/network/storage/rebalance` | pede a transferência e enfileira o `OBJECT_PUT` |
+| `POST /admin/network/storage/rebalance/{id}/complete` | confirma o destino e remove a antiga |
+| `POST /admin/network/storage/rebalance/{id}/cancel` | desfaz; a antiga nunca é tocada |
+
+### 12.7 O que NÃO está entregue
+
+- **Escolha automática de quem mover**: a decisão de qual réplica sai continua do operador, a partir
+  do relatório da §2. Não há agendador que abra transferências sozinho — cada uma é tráfego de
+  corpo pela rede de quem participa.
+- **Prioridade por importância** (§16): não há peso por bucket ou classe de armazenamento na ordem
+  das transferências; a ordem é a escolha do operador.
+- **Pausa e retomada no meio de uma transferência em curso**: desfazer recolhe a designação e
+  recomeçar abre outra; não existe retomada de onde parou. O `OBJECT_PUT` do nó não é retomável
+  (lacuna registrada na doc da fase 3).
+- **Progresso em bytes**: o estado é por etapa (`PENDING`/`DONE`/…), não por fração transferida.

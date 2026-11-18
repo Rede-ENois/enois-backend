@@ -14,6 +14,7 @@ import org.springframework.stereotype.Repository;
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
 import com.socialcoisa.rede.network.domain.StorageBucketPolicy;
 import com.socialcoisa.rede.network.domain.StorageObject;
+import com.socialcoisa.rede.network.domain.StorageRebalance;
 import com.socialcoisa.rede.network.domain.StorageObjectState;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
 
@@ -355,6 +356,69 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	private static Integer nullableInt(ResultSet rs, String column) throws SQLException {
 		int value = rs.getInt(column);
 		return rs.wasNull() ? null : value;
+	}
+
+	private static final String REBALANCE_COLUMNS = """
+		id, object_id, from_replica, from_node_id, to_replica, to_node_id, state, failure_reason, bytes,
+		bandwidth_limit_mbps, requested_by, created_at, finished_at
+		""";
+
+	private static final String INSERT_REBALANCE = """
+		insert into network_storage_rebalances (id, object_id, from_replica, from_node_id, to_replica, to_node_id,
+			state, bytes, bandwidth_limit_mbps, requested_by, created_at)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		""";
+
+	private static final String SELECT_REBALANCE_ACTIVE = "select " + REBALANCE_COLUMNS
+		+ " from network_storage_rebalances where object_id = ? and from_replica = ? and state = 'PENDING'";
+
+	private static final String SELECT_REBALANCE_BY_ID = "select " + REBALANCE_COLUMNS
+		+ " from network_storage_rebalances where id = ?";
+
+	private static final String SELECT_REBALANCE_ACTIVE_ALL = "select " + REBALANCE_COLUMNS
+		+ " from network_storage_rebalances where state = 'PENDING' order by created_at asc limit ?";
+
+	/** Condicional no estado de origem: duas decisões simultâneas não se sobrescrevem. */
+	private static final String TRANSITION_REBALANCE = """
+		update network_storage_rebalances
+		set state = ?, failure_reason = ?, finished_at = ?
+		where id = ? and state = ?
+		""";
+
+	private static final RowMapper<StorageRebalance> REBALANCE_MAPPER = (ResultSet rs, int rowNum) ->
+		new StorageRebalance(rs.getString("id"), rs.getString("object_id"), rs.getInt("from_replica"),
+			rs.getString("from_node_id"), rs.getInt("to_replica"), rs.getString("to_node_id"),
+			StorageRebalance.State.valueOf(rs.getString("state")), rs.getString("failure_reason"),
+			rs.getLong("bytes"), nullableInt(rs, "bandwidth_limit_mbps"), rs.getString("requested_by"),
+			instant(rs, "created_at"), instant(rs, "finished_at"));
+
+	@Override
+	public void saveRebalance(StorageRebalance rebalance) {
+		jdbc.update(INSERT_REBALANCE, rebalance.id(), rebalance.objectId(), rebalance.fromReplica(),
+			rebalance.fromNodeId(), rebalance.toReplica(), rebalance.toNodeId(), rebalance.state().name(),
+			rebalance.bytes(), rebalance.bandwidthLimitMbps(), rebalance.requestedBy(),
+			Timestamp.from(rebalance.createdAt()));
+	}
+
+	@Override
+	public Optional<StorageRebalance> activeRebalance(String objectId, int fromReplica) {
+		return jdbc.query(SELECT_REBALANCE_ACTIVE, REBALANCE_MAPPER, objectId, fromReplica).stream().findFirst();
+	}
+
+	@Override
+	public Optional<StorageRebalance> findRebalance(String id) {
+		return jdbc.query(SELECT_REBALANCE_BY_ID, REBALANCE_MAPPER, id).stream().findFirst();
+	}
+
+	@Override
+	public List<StorageRebalance> activeRebalances(int limit) {
+		return jdbc.query(SELECT_REBALANCE_ACTIVE_ALL, REBALANCE_MAPPER, limit);
+	}
+
+	@Override
+	public boolean transitionRebalance(String id, StorageRebalance.State from, StorageRebalance.State to,
+			String failureReason, Instant now) {
+		return jdbc.update(TRANSITION_REBALANCE, to.name(), failureReason, Timestamp.from(now), id, from.name()) == 1;
 	}
 
 	@Override

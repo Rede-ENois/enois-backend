@@ -380,6 +380,7 @@ fi
 # gravar valor em linha existente, ou todo nó já cadastrado nasceria com um endereço inventado.
 NODE_IP=V350__network_node_observed_ip.sql
 VERSIONING=V352__network_storage_versioning.sql
+REBALANCE=V354__network_storage_rebalance.sql
 [[ -f "$MIGRATIONS/$NODE_IP" ]] || fail "migração ausente: $NODE_IP"
 
 if apply "$NODE_IP" >/dev/null 2>&1; then
@@ -531,6 +532,101 @@ then
 else
   pass "V352: expiração de zero dia recusada pela check"
 fi
+
+# ---------------------------------------------------------------------------
+# V354 — rebalanceamento (brief §16).
+#
+# A tabela guarda a DECISÃO de mover uma réplica. O que importa provar no banco:
+#   1. a transferência grava e sobrevive à reaplicação;
+#   2. uma réplica de origem não tem duas transferências VIVAS ao mesmo tempo (clique duplo);
+#   3. concluídas, duas transferências da mesma réplica convivem (a segunda recuperação do mesmo
+#      objeto é legítima — é o que uma unicidade ingênua por estado proibiria para sempre);
+#   4. a transferência morre junto com o objeto (cascade).
+# ---------------------------------------------------------------------------
+if apply "$REBALANCE" >/dev/null 2>&1; then
+  pass "V354: primeira aplicação"
+else
+  fail "V354: primeira aplicação falhou"
+  db < "$MIGRATIONS/$REBALANCE" 2>&1 | head -3 >&2 || true
+fi
+
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_storage_rebalances (id, object_id, from_replica, from_node_id, to_replica, to_node_id,
+  state, bytes, bandwidth_limit_mbps, requested_by)
+values ('reb_t1', 'sob_mig_v2', 1, 'nd_cheio', 2, 'nd_novo', 'PENDING', 10, 5, 'user-test');
+SQL
+then
+  pass "V354: transferência viva grava"
+else
+  fail "V354: não gravou a transferência"
+fi
+
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_storage_rebalances (id, object_id, from_replica, from_node_id, to_replica, to_node_id,
+  state, bytes, bandwidth_limit_mbps, requested_by)
+values ('reb_t2', 'sob_mig_v2', 1, 'nd_cheio', 3, 'nd_outro', 'PENDING', 10, 5, 'user-test');
+SQL
+then
+  fail "V354: aceitou duas transferências VIVAS da mesma réplica"
+else
+  pass "V354: a unicidade recusa duas transferências vivas da mesma réplica"
+fi
+
+if db >/dev/null 2>&1 <<'SQL'
+update network_storage_rebalances set state = 'DONE', finished_at = now(3) where id = 'reb_t1';
+insert into network_storage_rebalances (id, object_id, from_replica, from_node_id, to_replica, to_node_id,
+  state, bytes, bandwidth_limit_mbps, requested_by)
+values ('reb_t2', 'sob_mig_v2', 1, 'nd_cheio', 3, 'nd_outro', 'PENDING', 10, 5, 'user-test');
+SQL
+then
+  pass "V354: concluída e viva da mesma réplica convivem (nova transferência entra)"
+else
+  fail "V354: não aceitou nova transferência depois de a anterior concluir"
+fi
+
+# Concluídas repetidas: o que a unicidade por estado proibiria para sempre.
+if db >/dev/null 2>&1 <<'SQL'
+update network_storage_rebalances set state = 'DONE', finished_at = now(3) where id = 'reb_t2';
+insert into network_storage_rebalances (id, object_id, from_replica, from_node_id, to_replica, to_node_id,
+  state, bytes, bandwidth_limit_mbps, requested_by)
+values ('reb_t3', 'sob_mig_v2', 1, 'nd_cheio', 4, 'nd_outro', 'DONE', 10, 5, 'user-test');
+SQL
+then
+  pass "V354: duas concluídas da mesma réplica convivem"
+else
+  fail "V354: recusou duas concluídas da mesma réplica"
+fi
+
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_storage_rebalances (id, object_id, from_replica, from_node_id, to_replica, to_node_id,
+  state, bytes, requested_by)
+values ('reb_t4', 'sob_mig_v2', 1, 'nd_cheio', 5, 'nd_novo', 'PENDING', 10, 'user-test')
+on duplicate key update id = id;
+SQL
+then
+  pass "V354: insert-ou-noop não duplica a transferência viva"
+else
+  fail "V354: insert-ou-noop falhou"
+fi
+
+if apply "$REBALANCE" >/dev/null 2>&1; then
+  pass "V354: reaplicar não falha (idempotente)"
+else
+  fail "V354: 2ª aplicação falhou (não idempotente)"
+fi
+
+linhas=$(db -N -e "select count(*) from network_storage_rebalances where object_id = 'sob_mig_v2'" 2>/dev/null | tr -d '[:space:]')
+[[ "$linhas" == "4" ]] && pass "V354: as quatro transferências sobreviveram à 2ª aplicação" \
+  || fail "esperava 4 transferências, achei '$linhas'"
+
+# Cascade: apagar o objeto leva as transferências dele.
+db >/dev/null 2>&1 <<'SQL'
+update network_storage_rebalances set state = 'DONE' where id = 'reb_t4';
+delete from network_storage_objects where id = 'sob_mig_v2';
+SQL
+restantes=$(db -N -e "select count(*) from network_storage_rebalances where object_id = 'sob_mig_v2'" 2>/dev/null | tr -d '[:space:]')
+[[ "$restantes" == "0" ]] && pass "V354: apagar o objeto leva as transferências (cascade)" \
+  || fail "esperava 0 transferências, achei '$restantes'"
 
 printf '\nStorage migration: PASS %d | FAIL %d\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))
