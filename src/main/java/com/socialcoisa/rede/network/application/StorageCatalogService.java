@@ -845,35 +845,60 @@ public class StorageCatalogService {
 		if (expected == null) {
 			return clear;
 		}
-		// Conta em fluxo até o fim (ou até passar do prometido), guardando o que leu: o objeto pode
-		// ter gigabytes, então não se mede carregando tudo na memória. Truncado responde 410 antes de
-		// o cliente ver um 200 que se rompe, e a tag do GCM é conferida nesse mesmo percurso — ler até
-		// o fim é o que faz a adulteração aparecer agora, e não no meio do download do cliente.
-		java.io.ByteArrayOutputStream guardado = new java.io.ByteArrayOutputStream();
-		long total = 0;
-		byte[] buffer = new byte[64 * 1024];
-		try (InputStream input = clear) {
-			int lido;
-			while ((lido = input.read(buffer)) > 0) {
-				total += lido;
-				if (total <= expected) {
-					guardado.write(buffer, 0, lido);
-				}
-				if (total > expected) {
-					throw new ApiException(410, "STORAGE_BODY_SIZE_MISMATCH",
-						"O corpo tem mais que os " + expected + " bytes registrados no catalogo.");
-				}
+		// Confere o tamanho ANTES de entregar o fluxo, sem reter o objeto: o arquivo local já está no
+		// disco, então a conferência é o tamanho medido no disco MENOS o que o cabeçalho cifrado e a
+		// tag do GCM acrescentam — do mesmo jeito que o caminho do envelope confere o arquivo. O que
+		// percorre o fluxo e segura o objeto na memória não é opção: o teto é 5 GiB.
+		try {
+			long textoClaro = store.plainBytesOf(object.map(StorageObject::id).orElse(null));
+			if (textoClaro != expected) {
+				throw new ApiException(410, "STORAGE_BODY_SIZE_MISMATCH",
+					"O corpo tem " + textoClaro + " bytes, mas o catalogo registra " + expected + ".");
 			}
 		}
-		catch (IOException unreadable) {
+		catch (IOException semTamanho) {
 			throw new ApiException(410, "STORAGE_BODY_MISSING",
 				"O catalogo registra a copia, mas o corpo nao esta neste no.");
 		}
-		if (total != expected) {
-			throw new ApiException(410, "STORAGE_BODY_SIZE_MISMATCH",
-				"O corpo tem " + total + " bytes, mas o catalogo registra " + expected + ".");
+		// O contador fica de guarda mesmo assim: se o arquivo tiver o tamanho certo mas a decifra
+		// entregar mais que o prometido, o cliente não recebe o excedente.
+		return new TamanhoConferido(clear, expected);
+	}
+
+	private static final class TamanhoConferido extends java.io.FilterInputStream {
+
+		private final long limite;
+		private long entregues;
+
+		TamanhoConferido(InputStream fonte, long limite) {
+			super(fonte);
+			this.limite = limite;
 		}
-		return new java.io.ByteArrayInputStream(guardado.toByteArray());
+
+		@Override
+		public int read() throws IOException {
+			int byteLido = super.read();
+			if (byteLido >= 0) {
+				excedeu(1);
+			}
+			return byteLido;
+		}
+
+		@Override
+		public int read(byte[] buffer, int inicio, int tamanho) throws IOException {
+			int lidos = super.read(buffer, inicio, tamanho);
+			if (lidos > 0) {
+				excedeu(lidos);
+			}
+			return lidos;
+		}
+
+		private void excedeu(int bytes) throws IOException {
+			entregues += bytes;
+			if (entregues > limite) {
+				throw new IOException("corpo maior que os " + limite + " bytes registrados no catalogo");
+			}
+		}
 	}
 
 	/**

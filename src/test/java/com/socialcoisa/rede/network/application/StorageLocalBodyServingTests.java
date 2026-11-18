@@ -203,6 +203,65 @@ class StorageLocalBodyServingTests {
 		}
 	}
 
+	/**
+	 * Objeto maior que qualquer buffer interno atravessa a réplica local em <b>fluxo</b>.
+	 *
+	 * <p>Um contador que retém o que leu passaria nos testes pequenos e estouraria a heap num vídeo de
+	 * 500 MB. Aqui o corpo é lido em blocos e o primeiro já chega antes de o arquivo inteiro ser
+	 * tocado — se a leitura bufferizasse, este teste não distinguiria; o que ele garante é o contrato
+	 * do caminho: bytes idênticos, contagem exata, sem depender do tamanho caber na memória do teste.</p>
+	 */
+	@Test
+	void replica_local_cifrada_de_1_mib_faz_round_trip_exato() throws Exception {
+		NodeBodyStore cifrado = new NodeBodyStore(root.resolve("no-local/objects").toString(), chave());
+		StorageCatalogService comChave = new StorageCatalogService(catalog, mock(AuditTrail.class),
+			Clock.fixed(NOW, ZoneOffset.UTC), 10_000, root.resolve("cp").toString(),
+			java.util.Base64.getEncoder().encodeToString(chave()), mock(StoragePlacementService.class), cifrado);
+		byte[] corpo = new byte[1024 * 1024];
+		new java.util.Random(11).nextBytes(corpo);
+		StorageObject object = StorageObject.current("sob_grande", "fotos", "video.bin", "video/mp4",
+			(long) corpo.length, java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+				.digest(corpo)),
+			StorageObjectState.STORED, "user_1", NOW, NOW, null);
+		when(catalog.findById("sob_grande")).thenReturn(Optional.of(object));
+		cifrado.write("sob_grande", new ByteArrayInputStream(corpo));
+
+		try (var fluxo = comChave.readBody("sob_grande")) {
+			// Lê em blocos de 8 KiB: se o caminho entrega o documento inteiro de uma vez, é porque
+			// bufferizou — e o custo em heap seria o tamanho do objeto.
+			java.io.ByteArrayOutputStream recebido = new java.io.ByteArrayOutputStream();
+			byte[] bloco = new byte[8192];
+			int lido;
+			while ((lido = fluxo.read(bloco)) > 0) {
+				recebido.write(bloco, 0, lido);
+			}
+			assertThat(recebido.size()).isEqualTo(corpo.length);
+			assertThat(recebido.toByteArray()).isEqualTo(corpo);
+		}
+	}
+
+	/** Mais bytes do que o catálogo promete: erro, não entrega parcial. */
+	@Test
+	void replica_local_maior_que_o_registrado_e_recusada() throws Exception {
+		NodeBodyStore cifrado = new NodeBodyStore(root.resolve("no-local/objects").toString(), chave());
+		StorageCatalogService comChave = new StorageCatalogService(catalog, mock(AuditTrail.class),
+			Clock.fixed(NOW, ZoneOffset.UTC), 10_000, root.resolve("cp").toString(),
+			java.util.Base64.getEncoder().encodeToString(chave()), mock(StoragePlacementService.class), cifrado);
+		// Catálogo promete 10 bytes; o disco tem 9 KiB.
+		StorageObject object = objeto("sob_maior", "0123456789");
+		cifrado.write("sob_maior", new ByteArrayInputStream(new byte[9 * 1024]));
+
+		assertThatThrownBy(() -> {
+			try (var fluxo = comChave.readBody("sob_maior")) {
+				fluxo.readAllBytes();
+			}
+		}).isInstanceOf(ApiException.class)
+			.satisfies(erro -> {
+				assertThat(((ApiException) erro).status()).isEqualTo(410);
+				assertThat(((ApiException) erro).getMessage()).contains("9216").contains("registra 10");
+			});
+	}
+
 	private static byte[] chave() {
 		byte[] bytes = new byte[32];
 		new java.util.Random(5).nextBytes(bytes);

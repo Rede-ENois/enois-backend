@@ -141,7 +141,11 @@ disco (`NodeBodyStore.write`) passa a ser cifrado **antes** de receber o nome fi
   cifra numa instalação com réplicas não reprove todos os nós de uma vez.
 - **A leitura decifra os dois formatos**: `openVerified` reconhece o envelope (`ENOISENV1`) e a réplica
   local é lida pelo próprio `NodeBodyStore.read` (`ENOISENC1`). O catálogo não devolve arquivo cifrado
-  ao cliente — o tamanho conferido é o do fluxo **já decifrado**, que é o que o catálogo promete.
+  ao cliente.
+- **A conferência de tamanho é do texto claro** (`NodeBodyStore.plainBytesOf`: tamanho do arquivo menos
+  cabeçalho e tag no caso cifrado, o próprio tamanho no corpo legado). Ela é feita antes de abrir o
+  fluxo — percorrer o objeto para contá-lo custaria o tamanho dele em heap, que é o que o caminho de
+  5 GiB do envelope evita.
 
 ### 7.1 Envelope: chave por objeto
 
