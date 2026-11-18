@@ -712,7 +712,21 @@ UNIQUE: (provider, external_user_id)
 
 ## Migrações
 
-As migrações estão em `src/main/resources/db/migration/` e seguem a numeração:
+As migrações estão em `src/main/resources/db/migration/` e seguem a numeração.
+
+**A versão é única, e o Flyway recusa a cadeia inteira quando ela repete** — não é aviso: numa base
+nova o boot morre com `Found more than one migration with version N`, muito antes de chegar às
+tabelas. Como duas pessoas abrem PR ao mesmo tempo e cada uma vê o maior número que existia quando
+começou, a colisão nasce no merge e não aparece em nenhuma branch isolada. Antes de abrir o PR,
+confira o número contra a ponta da `qa` (`git ls-tree --name-only origin/qa
+src/main/resources/db/migration/ | sed -E 's/^(V[0-9]+)__.*/\1/' | sort | uniq -d`).
+
+**Quem chegou primeiro fica com o número.** Renumerar só é seguro para uma migração que *não
+escreveu checksum em base nenhuma*: a que ainda não foi mesclada na `qa`, ou a que foi mesclada mas
+nunca chegou a rodar (foi o caso da `V341`, que virou `V343`). Renumerar a que já rodou faz o Flyway
+tratar a linha antiga como `MISSING` e a nova como pendente — ela até aplica de novo, porque o SQL é
+idempotente, mas o histórico passa a ter duas linhas para o mesmo fato. A que perdeu a disputa pega o
+número seguinte livre.
 
 | Migração | Descrição |
 |---|---|
