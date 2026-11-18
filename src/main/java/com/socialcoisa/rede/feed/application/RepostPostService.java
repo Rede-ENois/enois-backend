@@ -50,10 +50,11 @@ public class RepostPostService {
 	private final ActionThrottle throttle;
 	private final AgeGate ageGate;
 	private final Clock clock;
+	private final com.socialcoisa.rede.communities.application.CommunityService communities;
 
 	public RepostPostService(PostRepository posts, PostRepostRepository reposts,
 			UserProfileRepository profiles, NotificationService notifications, ActionThrottle throttle,
-			AgeGate ageGate, Clock clock) {
+			AgeGate ageGate, Clock clock, com.socialcoisa.rede.communities.application.CommunityService communities) {
 		this.posts = posts;
 		this.reposts = reposts;
 		this.profiles = profiles;
@@ -61,6 +62,7 @@ public class RepostPostService {
 		this.throttle = throttle;
 		this.ageGate = ageGate;
 		this.clock = clock;
+		this.communities = communities;
 	}
 
 	/**
@@ -107,39 +109,44 @@ public class RepostPostService {
 
 	/** Repost com opinião: cria post novo do repostador citando o original. */
 	@Transactional
-	public Post repostWithOpinion(String userId, String postId, String opinion) {
-		ageGate.requireCanWrite(userId);
-		throttle.exigePermitido("repost", userId, PER_HOUR, Duration.ofHours(1));
-
-		Post root = resolveRoot(postId);
-		validateRepostable(root);
-
-		if (posts.findActiveRepostByAuthorAndSource(new UserId(userId), root.id().value()).isPresent()) {
-			throw new ApiException(409, "ALREADY_REPOSTED", "Voce ja republicou este post.");
-		}
-
-		String cleanOpinion = opinion == null ? "" : PlainText.defuse(opinion.trim());
-		if (cleanOpinion.isBlank()) {
-			throw new ApiException(400, "OPINION_REQUIRED", "Escreva um comentario para republicar com opiniao.");
-		}
-		if (cleanOpinion.length() > 600) {
-			throw new ApiException(400, "OPINION_TOO_LONG",
-				"A opiniao do repost deve ter no maximo 600 caracteres.");
-		}
-
-		String username = profiles.findById(root.authorId().value())
-			.map(profile -> profile.username())
-			.orElse(null);
-		boolean opinionOnly = OPINION_ONLY.contains(root.type());
-		Post copy = Post.publish(new PostId("post_" + UUID.randomUUID().toString().replace("-", "")),
-			new UserId(userId), opinionOnly ? PostType.INSIGHT : root.type(),
-			cleanOpinion, null, List.of(), List.of(), null,
-			null, clock.instant(), AuthorIdentity.SOCIAL)
-			.markRepostOf(root.id().value(), username, true);
-		Post saved = posts.save(copy);
-		notifyOriginalAuthor(root, userId, "/api/feed/posts/" + saved.id().value());
-		return saved;
-	}
+    public Post repostWithOpinion(String userId, String postId, String opinion) {
+        return repostWithOpinion(userId, postId, opinion, null);
+    }
+  
+    @Transactional
+    public Post repostWithOpinion(String userId, String postId, String opinion, String communityId) {
+        ageGate.requireCanWrite(userId);
+         throttle.exigePermitido("repost", userId, PER_HOUR, Duration.ofHours(1));
+  
+         Post root = resolveRoot(postId);
+         validateRepostable(root);
+  
+         if (posts.findActiveRepostByAuthorAndSource(new UserId(userId), root.id().value()).isPresent()) {
+            throw new ApiException(409, "ALREADY_REPOSTED", "Voce ja republicou este post.");
+        }
+  
+        String cleanOpinion = opinion == null ? "" : PlainText.defuse(opinion.trim());
+        if (cleanOpinion.isBlank()) {
+            throw new ApiException(400, "OPINION_REQUIRED", "Escreva um comentario para republicar com opiniao.");
+        }
+        if (cleanOpinion.length() > 600) {
+            throw new ApiException(400, "OPINION_TOO_LONG",
+                "A opiniao do repost deve ter no maximo 600 caracteres.");
+        }
+  
+        String username = profiles.findById(root.authorId().value())
+             .map(profile -> profile.username())
+             .orElse(null);
+        boolean opinionOnly = OPINION_ONLY.contains(root.type());
+        Post copy = Post.publish(new PostId("post_" + UUID.randomUUID().toString().replace("-", "")),
+             new UserId(userId), opinionOnly ? PostType.INSIGHT : root.type(),
+             cleanOpinion, null, List.of(), List.of(), communityId,
+             null, clock.instant(), AuthorIdentity.SOCIAL)
+             .markRepostOf(root.id().value(), username, true);
+        Post saved = posts.save(copy);
+        notifyOriginalAuthor(root, userId, "/api/feed/posts/" + saved.id().value());
+        return saved;
+     }
 
 	/**
 	 * Quem escreveu o original fica sabendo que ele circulou. Antes, republicar não avisava ninguém:
@@ -162,13 +169,27 @@ public class RepostPostService {
 	/** Compatibilidade: o endpoint antigo chama aqui. */
 	@Transactional
 	public Post repost(String userId, String postId, String opinion) {
-		String cleanOpinion = opinion == null ? "" : opinion.trim();
-		if (cleanOpinion.isBlank()) {
-			repostPure(userId, postId);
-			return resolveRoot(postId);
-		}
-		return repostWithOpinion(userId, postId, opinion);
+		return repost(userId, postId, opinion, null);
 	}
+
+  	@Transactional
+    public Post repost(String userId, String postId, String opinion, String communityId) {
+    	if (communityId != null && !communityId.isBlank()) {
+            communities.getById(communityId.trim());
+            if (!communities.isMember(communityId.trim(), userId)) {
+                throw new ApiException(403, "NOT_COMMUNITY_MEMBER",
+                     "Voce precisa ser membro da comunidade para republicar nela.");
+            }
+        }
+        String cleanOpinion = opinion == null ? "" : opinion.trim();
+        if (cleanOpinion.isBlank()) {
+            repostPure(userId, postId);
+            return resolveRoot(postId);
+        }
+        return repostWithOpinion(userId, postId, cleanOpinion, communityId != null ? communityId.trim() :
+        null);
+	    }
+
 
 	private Post resolveRoot(String postId) {
 		Post original = posts.findById(new PostId(postId))
