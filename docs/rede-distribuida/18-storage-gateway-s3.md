@@ -77,6 +77,52 @@ comportamento do S3 em bucket versionado — mas num bucket **sem** versionament
 escolha aqui é a do módulo inteiro: apagar byte é coletado pelo nó, nunca por requisição de cliente
 (§14 e §16 da doc do Storage). Um cliente que espere "liberou espaço na hora" se engana.
 
+## 4.0 Donagem do bucket — por verbo
+
+`allowedBucket = null` (o padrão de toda credencial) significa **todos os buckets do dono**, nunca "todos
+os buckets da rede". O escopo da credencial e a donagem do bucket são duas perguntas independentes, e
+as duas precisam de "sim":
+
+| verbo | escopo (`allowsBucket`) | donagem | ordem |
+|---|---|---|---|
+| ListBuckets `GET /s3` | — | ✅ por construção (`bucketsOf`) | — |
+| ListObjects `GET /s3/{bucket}` | ✅ | ✅ | antes |
+| GetObject / HeadObject | ✅ | ✅ | antes |
+| DeleteObject | ✅ | ✅ | antes |
+| DeleteBucket | ✅ | ✅ | antes |
+| PutObject | ✅ | ✅ | **depois da gravação** |
+
+**Por que o `PUT` é o único fora de ordem.** O Storage não tem tabela de buckets: o nome nasce do
+primeiro objeto (`created_by`). Conferir donagem antes da gravação recusaria o primeiro objeto de
+**toda** conta, porque o bucket que ele ainda vai criar não existe para ninguém. Então o `PUT`:
+
+1. grava (o mesmo caminho do catálogo, `beginUpload` + `finishUpload`);
+2. confere que **todo objeto vivo no bucket** é do dono da credencial;
+3. se houver um só de outra conta, a gravação é desfeita e a resposta é **403**.
+
+A desfeita (`S3GatewayController.desfazer`) não é lápide: `state = 'DELETED'` sai do `bucketsOf`, e
+apagar por cima do último objeto de uma conta faria o bucket deixar de ser dela. São duas portas no
+catálogo:
+
+- `discardPending(id)` — **apaga a linha** (e as localizações) do objeto **que esta gravação criou**;
+  é a inversão de um `createPending`. Um objeto plantado por outra conta no bucket alheio é exatamente
+  esse caso: se ficasse, passaria a "dar" o bucket ao invasor.
+- `restorePending(id)` — devolve `STORED → PENDING` na chave que **já existia**. O `beginUpload`
+  devolve o objeto existente, então reler a chave depois de gravar daria o objeto recém-gravado do
+  próprio dono e a donagem passaria sempre; por isso a pergunta é sobre **o bucket**, e por isso o
+  objeto anterior é guardado antes do upload.
+
+**403 em vez de 404.** O S3 responde 404 a um bucket que o chamador não pode ver; aqui a resposta é 403
+com `AccessDenied`. Quem tem credencial válida e recebe 404 acha que o bucket é dele e o objeto sumiu —
+e no Storage não há "bucket privado": ou é do dono, ou não existe para ele. Consequência declarada: a
+lápide do último objeto do dono no bucket faz o bucket deixar de ser dele, e o `GET` seguinte responde
+403, não 404 (o teste `delete_vira_lapide` aceita os dois justamente para não codificar essa ordem como
+contrato).
+
+**Reescrita da mesma chave** continua recusada com **409** (`ObjectAlreadyStored`): o catálogo não
+aceita duas cópias correntes da mesma chave — o mesmo gate da rota do nó. A recusa não toca no objeto
+que já estava lá.
+
 ## 4.1 URLs pré-assinadas
 
 `POST /s3/{bucket}/presign?key=fotos%2Fgato.jpg&method=GET&expires=900` com `X-Session-Token` do dono
@@ -130,8 +176,3 @@ Códigos: `AccessDenied`, `InvalidAccessKeyId`, `SignatureDoesNotMatch`, `NotImp
   painel para criar/revogar (a criação hoje é por SQL/admin direto). Lacuna declarada.
 - **Credenciais temporárias (STS)** — `X-Amz-Security-Token` não é processado.
 - **Quotas e rate limiting por credencial** — a rota herda o limitador global, não um por Access Key.
-- **Donagem do bucket na requisição Assinada por cabeçalho** — `PUT`/`GET` com `Authorization` e
-  credencial de escopo nulo alcança bucket cuja chave ele conheça, sem conferir dono. É dívida anterior
-  a este documento: o catálogo guarda o dono, mas `beginUpload`/`requireDownloadable` não o conferem.
-  A **emissão de URL** não herda o furo (confere dono); fechá-lo no cabeçalho é mudança de semântica
-  do gateway e tem PR próprio.

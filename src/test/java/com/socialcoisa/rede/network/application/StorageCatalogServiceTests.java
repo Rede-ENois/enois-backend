@@ -456,6 +456,17 @@ class StorageCatalogServiceTests {
 		}
 
 		@Override
+		public boolean discardPending(String id) {
+			throw new UnsupportedOperationException("nao usado neste teste");
+		}
+		@Override
+		public boolean restorePending(String id) {
+			return replace(id, o -> o.state() == StorageObjectState.STORED,
+				o -> StorageObject.current(o.id(), o.bucket(), o.key(), o.contentType(), null, null,
+					StorageObjectState.PENDING, o.createdBy(), o.createdAt(), java.time.Instant.now(), null));
+		}
+
+
 		public List<StorageObject> list(String bucket, String prefix, String afterKey, int limit) {
 			return byKey.values().stream()
 				.filter(o -> o.bucket().equals(bucket) && o.key().startsWith(prefix == null ? "" : prefix))

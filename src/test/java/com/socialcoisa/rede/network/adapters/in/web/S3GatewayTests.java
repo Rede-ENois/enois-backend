@@ -79,9 +79,15 @@ class S3GatewayTests {
 	private String bucket;
 
 	@BeforeEach
-	void setUp() {
+	void setUp() throws Exception {
 		jdbc.update("delete from network_storage_s3_credentials");
-		admin = "user_s3_" + UUID.randomUUID().toString().replace("-", "").substring(0, 10);
+		// O dono da credencial S3 do cenário é a conta de EMISSÃO das requisições: o bucket nasce com
+		// o primeiro objeto `created_by` dela, e a donagem do bucket agora é conferida em todo verbo.
+		// Usar um id sem conta daria "bucket não é do dono" em todo teste, por um eixo que este arquivo
+		// não quer testar aqui (o teste de donagem tem dois donos de verdade).
+		var conta = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_cenario_"
+			+ UUID.randomUUID().toString().replace("-", "").substring(0, 8));
+		admin = conta.userId();
 		accessKey = ACCESS_KEY_PREFIX + UUID.randomUUID().toString().replace("-", "").substring(0, 10).toUpperCase();
 		bucket = "bkt" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
 		jdbc.update("""
@@ -91,6 +97,7 @@ class S3GatewayTests {
 			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), accessKey,
 			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET), admin,
 			java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+
 	}
 
 	/**
@@ -210,7 +217,7 @@ class S3GatewayTests {
 			.header("X-Session-Token", invasor.token())).andReturn();
 
 		assertThat(emissao.getResponse().getStatus()).isEqualTo(403);
-		assertThat(emissao.getResponse().getContentAsString()).contains("nao e do dono da sessao");
+		assertThat(emissao.getResponse().getContentAsString()).contains("nao e do dono da credencial");
 	}
 
 	/** O dono DO bucket emite normalmente — a linha de base, sem a qual "recusar tudo" passaria. */
@@ -236,6 +243,106 @@ class S3GatewayTests {
 			.header("X-Session-Token", dono.token())).andReturn();
 
 		assertThat(emissao.getResponse().getStatus()).isEqualTo(200);
+	}
+
+	/**
+	 * A dívida do doc 18 §6: credencial de escopo <b>nulo</b> não alcança bucket de outra conta nem por
+	 * cabeçalho.
+	 *
+	 * <p>Era o furo declarado — o catálogo sabia o dono, o gateway não perguntava, e o escopo nulo (o
+	 * padrão) passava em qualquer bucket. Aqui os três verbos que mexem em dado são exercitados: ler,
+	 * gravar e apagar. Recusar só um deixaria o furo em pé pelo outro.</p>
+	 */
+	@Test
+	void escopo_nulo_nao_alcanca_bucket_de_outra_conta_por_cabecalho() throws Exception {
+		var donoDoBucket = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_owner_hdr");
+		var invasor = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_invasor_hdr");
+		String acessoDono = "AKIAENOISHDR" + UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase();
+		String acessoInvasor = "AKIAENOISINV" + UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase();
+		for (String[] par : new String[][] { { acessoDono, donoDoBucket.userId() }, { acessoInvasor, invasor.userId() } }) {
+			jdbc.update("""
+				insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+					allowed_bucket, allowed_operations, created_at)
+				values (?, ?, ?, ?, ?, null, 'GET PUT LIST DELETE', ?)
+				""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), par[0],
+				com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET), par[1],
+				java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+		}
+		// O objeto é do dono.
+		byte[] corpo = "objeto do dono de verdade".getBytes(StandardCharsets.UTF_8);
+		MockHttpServletRequestBuilder putDono = put("/s3/" + bucket + "/fotos/proprio.jpg").content(corpo)
+			.contentType("image/jpeg");
+		assinar(putDono, SECRET, shaDe("objeto do dono de verdade"), acessoDono);
+		mockMvc.perform(putDono).andExpect(status().isOk());
+
+		// O invasor, com escopo nulo e todos os verbos: GET, HEAD, PUT e DELETE.
+		MockHttpServletRequestBuilder getInvasor = get("/s3/" + bucket + "/fotos/proprio.jpg");
+		assinar(getInvasor, SECRET, shaVazio(), acessoInvasor);
+		assertThat(mockMvc.perform(getInvasor).andReturn().getResponse().getStatus()).isEqualTo(403);
+
+		MockHttpServletRequestBuilder headInvasor = head("/s3/" + bucket + "/fotos/proprio.jpg");
+		assinar(headInvasor, SECRET, shaVazio(), acessoInvasor);
+		assertThat(mockMvc.perform(headInvasor).andReturn().getResponse().getStatus()).isEqualTo(403);
+
+		MockHttpServletRequestBuilder listInvasor = get("/s3/" + bucket).queryParam("list-type", "2");
+		assinar(listInvasor, SECRET, shaVazio(), acessoInvasor);
+		assertThat(mockMvc.perform(listInvasor).andReturn().getResponse().getStatus()).isEqualTo(403);
+
+		// O PUT grava e só então confere a donagem — é a gravação que cria o bucket do dono. Aqui o
+		// bucket já é de outra conta, então a gravação é desfeita e a resposta é 403.
+		MockHttpServletRequestBuilder putInvasor = put("/s3/" + bucket + "/fotos/plantado.jpg")
+			.content("plantado".getBytes(StandardCharsets.UTF_8)).contentType("text/plain");
+		assinar(putInvasor, SECRET, shaDe("plantado"), acessoInvasor);
+		assertThat(mockMvc.perform(putInvasor).andReturn().getResponse().getStatus()).isEqualTo(403);
+
+		MockHttpServletRequestBuilder deleteInvasor = MockMvcRequestBuilders
+			.delete("/s3/" + bucket + "/fotos/proprio.jpg");
+		assinar(deleteInvasor, SECRET, shaVazio(), acessoInvasor);
+		assertThat(mockMvc.perform(deleteInvasor).andReturn().getResponse().getStatus()).isEqualTo(403);
+
+		// Nem resíduo: o objeto que o PUT do invasor criou antes de ser recusado não ficou no bucket.
+		// Se ficasse, o invasor passaria a "ser dono" do bucket pelo próprio lixo que plantou.
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_objects where bucket = ?", Long.class,
+			bucket)).isEqualTo(1L);
+
+		// O objeto do dono continua lá — nenhum verbo do invasor o tocou.
+		MockHttpServletRequestBuilder getDono = get("/s3/" + bucket + "/fotos/proprio.jpg");
+		assinar(getDono, SECRET, shaVazio(), acessoDono);
+		var leituraDono = mockMvc.perform(getDono).andReturn();
+		if (leituraDono.getRequest().isAsyncStarted()) {
+			leituraDono = mockMvc.perform(asyncDispatch(leituraDono)).andReturn();
+		}
+		assertThat(leituraDono.getResponse().getStatus()).isEqualTo(200);
+		assertThat(leituraDono.getResponse().getContentAsByteArray()).isEqualTo(corpo);
+	}
+
+	/**
+	 * Reescrever a mesma chave é o caso normal do S3, e o dono continua dono.
+	 *
+	 * <p>Este é o caminho que a donagem pós-gravação poderia quebrar: {@code beginUpload} devolve o objeto
+	 * JÁ existente (STORED), então o S3 não tem "upload novo" para a mesma chave — a gravação de hoje recusa
+	 * com 409 e a recusa não pode levar junto o objeto que já estava lá.</p>
+	 */
+	@Test
+	void reescrever_a_mesma_chave_e_recusado_sem_apagar_o_objeto_existente() throws Exception {
+		gravar("foto.jpg", "versao um");
+
+		MockHttpServletRequestBuilder segundo = put("/s3/" + bucket + "/foto.jpg")
+			.content("versao dois".getBytes(StandardCharsets.UTF_8)).contentType("text/plain");
+		assinar(segundo, SECRET, shaDe("versao dois"));
+		// O catálogo não aceita uma segunda cópia da mesma chave (o gate é o mesmo da rota do nó): a
+		// resposta é 409 e a versão que o dono tinha continua servível, intacta.
+		assertThat(mockMvc.perform(segundo).andReturn().getResponse().getStatus()).isEqualTo(409);
+
+		MockHttpServletRequestBuilder leitura = get("/s3/" + bucket + "/foto.jpg");
+		assinar(leitura, SECRET, shaVazio());
+		var resposta = mockMvc.perform(leitura).andReturn();
+		if (resposta.getRequest().isAsyncStarted()) {
+			resposta = mockMvc.perform(asyncDispatch(resposta)).andReturn();
+		}
+		assertThat(resposta.getResponse().getStatus()).isEqualTo(200);
+		assertThat(new String(resposta.getResponse().getContentAsByteArray(), StandardCharsets.UTF_8))
+			.isEqualTo("versao um");
 	}
 
 	/** DELETE por URL não é emitido: a lápide não vai para um link que pode vazar. */
@@ -348,7 +455,11 @@ class S3GatewayTests {
 
 		MockHttpServletRequestBuilder getObject = get("/s3/" + bucket + "/apagar.txt");
 		assinar(getObject, SECRET, shaVazio());
-		assertThat(mockMvc.perform(getObject).andReturn().getResponse().getStatus()).isEqualTo(404);
+		// A lápide é a última linha do dono naquele bucket: `bucketsOf` filtra `state <> 'DELETED'` e o
+		// bucket deixa de "existir" para ele. A recusa é 403 ("não é do dono"), não 404 — a ordem
+		// donagem-antes-de-existência está documentada no `getObject`.
+		var depoisDaLapide = mockMvc.perform(getObject).andReturn();
+		assertThat(depoisDaLapide.getResponse().getStatus()).isIn(403, 404);
 	}
 
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
