@@ -140,9 +140,47 @@ disco (`NodeBodyStore.write`) passa a ser cifrado **antes** de receber o nome fi
 - **Corpo legado continua legível**: arquivo sem o cabeçalho é servido como está, para que ligar a
   cifra numa instalação com réplicas não reprove todos os nós de uma vez.
 
-O que **falta** do §10: a chave é da instalação, não do objeto — quem tem a chave e o disco lê tudo. O
-**envelope** (chave de dados por objeto, cifrada por uma chave mestra que nunca desce ao storage node)
-é o passo seguinte, e é o que separa "disco perdido não revela" de "operador hostil também não".
+### 7.1 Envelope: chave por objeto
+
+A cifra acima resolve "disco perdido não revela". Não resolve "operador hostil também não": a chave é
+da instalação, então quem a tem lê todos os corpos. O **envelope** muda a unidade da chave.
+
+O corpo gravado pela raiz do Control Plane (`StorageCatalogService.store`) agora sai **cifrado com uma
+DEK própria do objeto**, embrulhada pela chave mestra (`EnvelopeBodyCrypto`):
+
+- **DEK** — AES-256 aleatória, uma por objeto. Só existe em memória durante a leitura ou a escrita
+  daquele objeto; nunca em arquivo em claro.
+- **KEK** — a mestra da instalação (`REDE_SECURITY_ENCRYPTION_KEY`, a mesma do §7). Embrulha a DEK com
+  AES-GCM e um IV próprio.
+- **Layout**: `ENOISENV1` (9) | versão (1) | IV (12) | DEK embrulhada (60) | GCM(corpo). Tudo o que um
+  processo com a mestra precisa, e nada que um processo sem ela consiga usar.
+- **O digest continua sendo do texto claro**: `sha256` e `bytes` no catálogo descrevem o que o cliente
+  mandou, não o que está no disco. É por esse digest que a réplica referencia a cópia.
+- **`Content-Length` é do texto claro**: a rota do nó entrega o corpo decifrado, então o `OBJECT_PUT`
+  de uma réplica mede exatamente o que o Control Plane prometeu.
+- **Corpo em claro continua legível**: arquivo sem o cabeçalho (`ENOISENV1`) é servido como está —
+  ligar a mestra não reprova as réplicas que já existem.
+- **Truncamento responde 410**: o tamanho do arquivo é conferido contra "cabeçalho + corpo + tag", e a
+  integridade real é a tag do GCM, conferida ao fim do fluxo.
+- **Mestra errada não entrega bytes**: falha ao desembrulhar a DEK é `IOException`, nunca lixo servido
+  como se fosse o objeto.
+
+**O que ainda falta** — e é declarado aqui, não escondido:
+
+1. **A mestra ainda vive no mesmo processo.** O ganho é de granularidade (revogar um objeto não derruba
+   os outros, backup de disco sem a mestra não abre nada), não de separação de confiança. Mover a
+   embrulhadora para uma **KMS / serviço de segredos** é o que separa "o operador não lê o disco" de
+   "ninguém além da KMS lê".
+2. **O storage node participante cifra com a chave da instalação dele** (`NodeBodyStore`, §7), não com
+   uma DEK embrulhada pelo Control Plane. A DEK não desce ao nó; o que desce é o corpo em claro pelo
+   canal autenticado (§1–§6). Envelope fim-a-fim até o nó exigiria embrulhar a DEK para a chave pública
+   do nó — é o passo seguinte, e depende da rotação de certificado que já existe ser usada para isso.
+
+Evidência: `EnvelopeBodyCryptoTests` — 7 casos, incluindo **dois objetos do mesmo conteúdo com DEKs
+diferentes**, **a DEK de um objeto não abrindo outro** e **outra mestra não decifrando**.
+`StorageCatalogServiceTests` ganhou 3 casos: texto claro ausente do disco com download correto, corpo
+legado em claro continuando a baixar, e truncado respondendo 410. Mutações conferidas: gravar sem cifra
+derruba 2 casos; DEK da instalação em vez de por objeto derruba 1.
 
 Evidência: `NodeBodyEncryptionTests` — 6 casos, incluindo **ler o arquivo do disco com
 `Files.readAllBytes` e não achar o texto em claro** (o requisito do §10 conferido diretamente), corpo

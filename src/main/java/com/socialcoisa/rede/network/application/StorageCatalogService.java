@@ -91,10 +91,27 @@ public class StorageCatalogService {
 	 * caso do Control Plane puro e da suíte.
 	 */
 	private final NodeBodyStore nodeBodies;
+	/**
+	 * Envelope do corpo (brief §10): chave de dados por objeto, embrulhada pela chave mestra.
+	 * Nulo = instalação sem chave; nesse caso o corpo é guardado em claro, e o doc 19 declara.
+	 */
+	private final EnvelopeBodyCrypto envelope;
 
+	/**
+	 * A forma anterior, sem chave: instalação que ainda não configurou a mestra grava em claro. Os
+	 * testes de outros assuntos do catálogo não passam a depender do envelope por causa disto.
+	 */
+	StorageCatalogService(StorageCatalogRepository catalog, AuditTrail audit, Clock clock,
+			long maxObjectBytes, String storageRoot, StoragePlacementService placement,
+			@Nullable NodeBodyStore nodeBodies) {
+		this(catalog, audit, clock, maxObjectBytes, storageRoot, "", placement, nodeBodies);
+	}
+
+	@org.springframework.beans.factory.annotation.Autowired
 	StorageCatalogService(StorageCatalogRepository catalog, AuditTrail audit, Clock clock,
 			@Value("${rede.storage.max-object-bytes:5368709120}") long maxObjectBytes,
 			@Value("${rede.storage.root:${java.io.tmpdir}/enois-storage}") String storageRoot,
+			@Value("${rede.security.encryption-key:}") String encryptionKey,
 			StoragePlacementService placement, @Nullable NodeBodyStore nodeBodies) {
 		this.catalog = catalog;
 		this.audit = audit;
@@ -103,6 +120,8 @@ public class StorageCatalogService {
 		this.storageRoot = storageRoot;
 		this.placement = placement;
 		this.nodeBodies = nodeBodies;
+		this.envelope = encryptionKey == null || encryptionKey.isBlank() ? null
+			: new EnvelopeBodyCrypto(java.util.Base64.getDecoder().decode(encryptionKey.trim()));
 	}
 
 	/**
@@ -211,7 +230,16 @@ public class StorageCatalogService {
 		}
 		Path destination = bodyPath(object.id());
 		try {
-			Files.move(measured.temp(), destination, StandardCopyOption.REPLACE_EXISTING);
+			if (envelope == null) {
+				Files.move(measured.temp(), destination, StandardCopyOption.REPLACE_EXISTING);
+			}
+			else {
+				// O digest medido é do TEXTO CLARO, e continua sendo: o catálogo promete o sha-256 do
+				// que o cliente mandou, não do que está no disco. O arquivo é cifrado com a DEK deste
+				// objeto; o texto claro só existe no temporário, que sai logo abaixo.
+				envelope.encryptTo(measured.temp(), destination, root());
+				deleteQuietly(measured.temp());
+			}
 		}
 		catch (IOException unwritable) {
 			deleteQuietly(measured.temp());
@@ -379,7 +407,16 @@ public class StorageCatalogService {
 		// arquivo que ainda não existe daria um objeto servível sem bytes.
 		Path destination = bodyPath(object.id());
 		try {
-			Files.move(measured.temp(), destination, StandardCopyOption.REPLACE_EXISTING);
+			if (envelope == null) {
+				Files.move(measured.temp(), destination, StandardCopyOption.REPLACE_EXISTING);
+			}
+			else {
+				// O digest medido é do TEXTO CLARO, e continua sendo: o catálogo promete o sha-256 do
+				// que o cliente mandou, não do que está no disco. O arquivo é cifrado com a DEK deste
+				// objeto; o texto claro só existe no temporário, que sai logo abaixo.
+				envelope.encryptTo(measured.temp(), destination, root());
+				deleteQuietly(measured.temp());
+			}
 		}
 		catch (IOException unwritable) {
 			deleteQuietly(measured.temp());
@@ -796,9 +833,29 @@ public class StorageCatalogService {
 		try {
 			long size = Files.size(body);
 			Long expected = object.map(StorageObject::bytes).orElse(null);
-			if (expected != null && expected != size) {
-				throw new ApiException(410, "STORAGE_BODY_SIZE_MISMATCH",
-					"O corpo tem " + size + " bytes, mas o catalogo registra " + expected + ".");
+			if (expected != null) {
+				if (envelope != null && envelope.isEnvelope(body)) {
+					// Corpo cifrado: o arquivo carrega cabeçalho do envelope + tag do GCM, e o tamanho
+					// prometido é o do texto claro. Comparar os dois diretamente daria 410 em todo
+					// objeto cifrado. O que se confere aqui é que o arquivo não é MENOR do que o
+					// possível para o tamanho prometido: truncamento aparece, e a integridade real é a
+					// tag do GCM, conferida ao fim do fluxo.
+					long minimo = expected + EnvelopeBodyCrypto.headerBytes() + 16;
+					if (size < minimo) {
+						throw new ApiException(410, "STORAGE_BODY_SIZE_MISMATCH",
+							"O corpo cifrado tem " + size + " bytes, menos que o minimo " + minimo
+								+ " para o objeto de " + expected + " bytes.");
+					}
+				}
+				else if (expected != size) {
+					throw new ApiException(410, "STORAGE_BODY_SIZE_MISMATCH",
+						"O corpo tem " + size + " bytes, mas o catalogo registra " + expected + ".");
+				}
+			}
+			if (envelope != null) {
+				// Envelope = DEK própria deste objeto. Arquivo em claro (gravado antes da chave)
+				// continua legível: ligar o envelope não pode reprovar o que já existe.
+				return envelope.isEnvelope(body) ? envelope.decrypt(body) : Files.newInputStream(body);
 			}
 			return Files.newInputStream(body);
 		}
