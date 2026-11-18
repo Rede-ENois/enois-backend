@@ -82,6 +82,8 @@ O cache não substitui consulta ruim. O que foi corrigido junto:
 
 - **Vitrine de comunidades**: duas consultas por comunidade (contagem de membros e "sou membro")
   viraram duas por página, com `group by` — de ~40 consultas por página de 20 para 3.
+- **Descoberta de grupos**: contagens, papéis e pedidos pendentes são consultados em lote por página;
+  os dados do leitor são resolvidos a cada requisição.
 - **Vitrine de eventos**: uma contagem de presenças por card virou uma consulta por página.
 - **Leitura de perfil**: `populateCounts` chamava `repository.save(...)` numa transação `readOnly` —
   o `save` virava `merge` (SELECT da linha) em toda abertura de perfil, sem nunca persistir nada.
