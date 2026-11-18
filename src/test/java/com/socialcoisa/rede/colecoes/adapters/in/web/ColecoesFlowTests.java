@@ -286,6 +286,50 @@ class ColecoesFlowTests {
 		org.assertj.core.api.Assertions.assertThat(salvos.getResponse().getContentAsString()).contains(postId2);
 	}
 
+	@Test
+	void seletorDoPostListaSoAsMinhasColecoesComMarcaDeOndeOPostJaEsta() throws Exception {
+		var dona = auth("colecao_seldona");
+		var outra = auth("colecao_seloutra");
+		var autor = auth("colecao_selautor");
+		String minhaColecao = createColecao(dona, "Referências de design");
+		String colecaoAlheia = createColecao(outra, "Coleção que NAO pode aparecer");
+		String postId = publishPost(autor, "post que o seletor vai guardar");
+
+		// Antes de guardar: a minha aparece com tem=false; a alheia não aparece.
+		MvcResult antes = mockMvc.perform(get("/colecoes/minhas").header("X-Session-Token", dona.token())
+				.param("postId", postId))
+			.andExpect(status().isOk())
+			.andReturn();
+		String antesJson = antes.getResponse().getContentAsString();
+		org.assertj.core.api.Assertions.assertThat(antesJson).contains(minhaColecao).doesNotContain(colecaoAlheia);
+		JsonNode itemAntes = objectMapper.readTree(antesJson).get("items").get(0);
+		org.assertj.core.api.Assertions.assertThat(itemAntes.get("tem").asBoolean()).isFalse();
+		org.assertj.core.api.Assertions.assertThat(itemAntes.get("postCount").asLong()).isZero();
+
+		// Guardado: a flag vira true e a contagem sobe.
+		save(dona, postId);
+		guardar(dona, minhaColecao, postId);
+		MvcResult depois = mockMvc.perform(get("/colecoes/minhas").header("X-Session-Token", dona.token())
+				.param("postId", postId))
+			.andExpect(status().isOk())
+			.andReturn();
+		JsonNode itemDepois = objectMapper.readTree(depois.getResponse().getContentAsString()).get("items").get(0);
+		org.assertj.core.api.Assertions.assertThat(itemDepois.get("tem").asBoolean()).isTrue();
+		org.assertj.core.api.Assertions.assertThat(itemDepois.get("postCount").asLong()).isEqualTo(1);
+
+		// Outra pessoa tem a lista PRÓPRIA: nem vê a minha pasta.
+		MvcResult deOutra = mockMvc.perform(get("/colecoes/minhas").header("X-Session-Token", outra.token())
+				.param("postId", postId))
+			.andExpect(status().isOk())
+			.andReturn();
+		org.assertj.core.api.Assertions.assertThat(deOutra.getResponse().getContentAsString())
+			.contains(colecaoAlheia).doesNotContain(minhaColecao);
+
+		// Sem sessão nem existe seletor: 401, como o resto do módulo.
+		mockMvc.perform(get("/colecoes/minhas").param("postId", postId))
+			.andExpect(status().isUnauthorized());
+	}
+
 	private TestAuthHelper.AuthSession auth(String name) throws Exception {
 		return new TestAuthHelper(mockMvc, objectMapper).authenticate(name);
 	}

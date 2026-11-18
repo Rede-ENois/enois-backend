@@ -47,6 +47,11 @@ class MuraisPersistenceAdapter implements MuraisRepository {
 	}
 
 	@Override
+	public List<Mural> findActiveMuraisByOwner(com.socialcoisa.rede.feed.domain.UserId ownerId) {
+		return murais.ativosDoDono(ownerId.value()).stream().map(MuralJpaEntity::toDomain).toList();
+	}
+
+	@Override
 	public MuralContribuicao saveContribuicao(MuralContribuicao contribuicao) {
 		return contribuicoes.save(new MuralContribuicaoJpaEntity(contribuicao)).toDomain();
 	}
@@ -54,6 +59,16 @@ class MuraisPersistenceAdapter implements MuraisRepository {
 	@Override
 	public Optional<MuralContribuicao> findContribuicao(String muralId, String postId) {
 		return contribuicoes.findById(MuralContribuicao.idDe(muralId, postId)).map(MuralContribuicaoJpaEntity::toDomain);
+	}
+
+	@Override
+	public Collection<String> findMuralIdsComPost(String postId, Collection<String> muralIds) {
+		if (muralIds.isEmpty()) {
+			return List.of();
+		}
+		return contribuicoes.peloPostNosMurais(postId, muralIds).stream()
+			.map(linha -> (String) linha[0])
+			.toList();
 	}
 
 	@Override
