@@ -53,6 +53,14 @@ public class MuraisController {
 		return murais.list(user.id(), cursorCodec.decode(cursor), limit);
 	}
 
+	/** Os meus murais na ótica de um post: alimenta o seletor "adicionar ao mural" do card. */
+	@GetMapping("/murais/meus")
+	MuraisViews.MeusMuraisPage meus(@RequestHeader("X-Session-Token") String sessionToken,
+			@RequestParam String postId) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return murais.meus(user.id(), postId);
+	}
+
 	@GetMapping("/murais/{muralId}")
 	MuraisViews.MuralResumo mural(@RequestHeader("X-Session-Token") String sessionToken,
 			@PathVariable String muralId) {

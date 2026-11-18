@@ -75,6 +75,10 @@ class AutomatedWritePathsTests {
 		// heartbeat a API key do nó, ambos conferidos no controller (fase 1 da rede distribuída).
 		"/network/nodes/enroll",
 		"/network/nodes/heartbeat",
+		// Renovação do certificado mTLS do nó (brief §10): a credencial é a API key (X-Node-Id +
+		// X-Node-Key), e o certificado que ele já tem não é exigido — quem renova pode estar com o
+		// certificado a um dia de expirar.
+		"/network/nodes/me/certificate",
 		// Fase 2: resultado de tarefa devolvido pelo nó, com a mesma credencial de nó.
 		"/network/tasks/*/result",
 		// Fase 3: nó de borda confirmando o que sincronizou e pedindo reconciliação.
@@ -120,7 +124,11 @@ class AutomatedWritePathsTests {
 			RequestBuilder requisicao = requisicao(rota);
 			var resultado = mockMvc.perform(requisicao).andReturn();
 			int codigo = resultado.getResponse().getStatus();
-			if (codigo != 401) {
+			// O gateway S3 (brief §11) não usa sessão de navegador: o SDK não tem uma. Ele
+			// autentica por AWS SigV4 e, SEM assinatura, tem de recusar — e recusar com o
+			// documento de erro do S3. Aceitar 403 de qualquer jeito seria passar a régua:
+			// qualquer rota que devolvesse 403 "por outro motivo" entraria sem credencial.
+			if (codigo != 401 && !ehGatewayS3Recusando(rota, resultado.getResponse().getContentAsString())) {
 				atravessadas.add(rota.verb() + " " + rota.path() + " -> " + codigo);
 			}
 		}
@@ -136,6 +144,17 @@ class AutomatedWritePathsTests {
 		org.assertj.core.api.Assertions.assertThat(WriteRouteInterceptor.PUBLIC_WRITES)
 			.as("fluxos publicos de escrita")
 			.containsExactlyInAnyOrderElementsOf(FLUXOS_PUBLICOS_ESPERADOS);
+	}
+
+	/**
+	 * A recusa do gateway S3 é legítima quando: o caminho é do gateway, o status é 403 (sem
+	 * assinatura ou assinatura inválida) e o corpo é o XML de erro do S3. A terceira condição é a
+	 * que impede a exceção de virar porta: um 403 sem o documento do gateway não é dele.
+	 */
+	private static boolean ehGatewayS3Recusando(Rota rota, String corpo) {
+		return rota.path().startsWith("/s3") && corpo != null && corpo.contains("<Code>")
+			&& (corpo.contains("AccessDenied") || corpo.contains("InvalidAccessKeyId")
+				|| corpo.contains("SignatureDoesNotMatch"));
 	}
 
 	private boolean ehFluxoPublico(String path) {

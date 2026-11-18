@@ -261,6 +261,66 @@ public class GitHubApiClient implements GitHubGateway, GitHubProfileGateway {
 	}
 
 	@Override
+	public List<GitHubOrganization> listUserOrganizations(String login, int maxPages) {
+		List<GitHubOrganization> result = new ArrayList<>();
+		String safeLogin = encode(login == null ? "" : login);
+		int pages = Math.max(1, Math.min(maxPages, 20));
+		for (int page = 1; page <= pages; page++) {
+			JsonNode array = get("/users/" + safeLogin + "/orgs?per_page=100&page=" + page);
+			if (!array.isArray() || array.isEmpty()) {
+				break;
+			}
+			for (JsonNode org : array) {
+				String loginOrg = org.path("login").asText("");
+				if (loginOrg.isBlank()) {
+					continue;
+				}
+				result.add(new GitHubOrganization(loginOrg, textOrNull(org, "name"),
+					textOrNull(org, "description"), "https://github.com/" + loginOrg));
+			}
+			if (array.size() < 100) {
+				break;
+			}
+		}
+		return result;
+	}
+
+	@Override
+	public List<GitHubUserRepository> listOrganizationRepositoryDetails(String org, int maxPages) {
+		List<GitHubUserRepository> result = new ArrayList<>();
+		String safeOrg = encode(org == null ? "" : org);
+		int pages = Math.max(1, Math.min(maxPages, 20));
+		for (int page = 1; page <= pages; page++) {
+			JsonNode array = get("/orgs/" + safeOrg + "/repos?per_page=100&page=" + page + "&sort=updated");
+			if (!array.isArray() || array.isEmpty()) {
+				break;
+			}
+			for (JsonNode repo : array) {
+				if (repo.path("private").asBoolean(false)) {
+					continue;
+				}
+				List<String> topics = new ArrayList<>();
+				for (JsonNode topic : repo.path("topics")) {
+					String value = topic.asText("");
+					if (!value.isBlank()) {
+						topics.add(value);
+					}
+				}
+				result.add(new GitHubUserRepository(repo.path("full_name").asText(""), repo.path("name").asText(""),
+					textOrNull(repo, "description"), repo.path("html_url").asText(""), textOrNull(repo, "homepage"),
+					textOrNull(repo, "language"), List.copyOf(topics), repo.path("stargazers_count").asInt(0),
+					repo.path("forks_count").asInt(0), repo.path("fork").asBoolean(false),
+					repo.path("archived").asBoolean(false), instant(repo, "updated_at"),
+					repo.path("default_branch").asText("main")));
+			}
+			if (array.size() < 100) {
+				break;
+			}
+		}
+		return result;
+	}
+
+	@Override
 	public List<GitHubUserRepository> listUserRepositories(String login, int maxPages) {
 		List<GitHubUserRepository> result = new ArrayList<>();
 		String safeLogin = encode(login == null ? "" : login);

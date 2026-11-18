@@ -141,6 +141,27 @@ public class MuraisService implements MuraisModerationPort {
 
 	// ---- Leitura ----
 
+	/**
+	 * Os murais de quem pergunta, com a marca de ONDE este post já está colado — o seletor
+	 * "adicionar ao mural" do card do feed usa isto: só os meus quadros, cada um dizendo se o
+	 * post já está lá e quantos elos tem.
+	 */
+	@Transactional(readOnly = true)
+	public MuraisViews.MeusMuraisPage meus(UserId owner, String postId) {
+		List<Mural> murais = repository.findActiveMuraisByOwner(owner);
+		if (murais.isEmpty()) {
+			return new MuraisViews.MeusMuraisPage(List.of());
+		}
+		Set<String> idsDosMurais = ids(murais);
+		Map<String, Long> contagens = repository.countContribuicoes(idsDosMurais);
+		Set<String> comOPost = Set.copyOf(repository.findMuralIdsComPost(postId, idsDosMurais));
+		List<MuraisViews.MuralDoPost> items = murais.stream()
+			.map(mural -> new MuraisViews.MuralDoPost(mural.id(), mural.title(), mural.description(),
+				contagens.getOrDefault(mural.id(), 0L), comOPost.contains(mural.id()), mural.createdAt()))
+			.toList();
+		return new MuraisViews.MeusMuraisPage(items);
+	}
+
 	@Transactional(readOnly = true)
 	public MuraisViews.MuraisPage list(UserId viewer, Optional<Instant> before, int limit) {
 		int tamanho = Math.min(Math.max(limit, 1), MAX_PAGE_SIZE);

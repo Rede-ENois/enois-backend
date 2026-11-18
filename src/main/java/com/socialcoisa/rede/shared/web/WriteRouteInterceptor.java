@@ -68,6 +68,9 @@ class WriteRouteInterceptor implements HandlerInterceptor {
 		// conferidos no controller — fail-closed como as rotas internas.
 		"/network/nodes/enroll",
 		"/network/nodes/heartbeat",
+		// Renovação do certificado mTLS do nó (brief §10): mesmo credencial de nó, e o nó não tem
+		// sessão de navegador. O controller confere X-Node-Id + X-Node-Key antes de assinar.
+		"/network/nodes/me/certificate",
 		// Fase 2: o nó devolve o resultado da tarefa. Mesma credencial de nó (X-Node-Id + X-Node-Key),
 		// conferida no controller. O GET /network/tasks/next não entra aqui: só escrita exige sessão.
 		"/network/tasks/*/result",
@@ -118,8 +121,22 @@ class WriteRouteInterceptor implements HandlerInterceptor {
 		if (PUBLIC_WRITES.stream().anyMatch(pattern -> matcher.match(pattern, path))) {
 			return true;
 		}
+		// Gateway S3 (brief §11): o SDK não tem sessão de navegador — a credencial é o par
+		// Access Key/Secret Key ASSINADO (AWS SigV4), conferido no próprio gateway. Não entra em
+		// PUBLIC_WRITES de propósito: aquela lista é "entrada pública" e esta rota não é pública, é
+		// autenticada por outro esquema. Sem assinatura válida a resposta é 403 com o XML de erro do
+		// S3, e o teste AutomatedWritePathsTests exige exatamente isso — 403 sem o documento do
+		// gateway não passa.
+		if (isS3Gateway(path)) {
+			return true;
+		}
 		currentUserResolver.resolve(request.getHeader("X-Session-Token"));
 		return true;
+	}
+
+	/** O prefixo do gateway S3. Um só lugar decide, para a rota e a checagem não divergirem. */
+	static boolean isS3Gateway(String path) {
+		return path.equals("/s3") || path.startsWith("/s3/");
 	}
 
 	private boolean isWrite(String method) {

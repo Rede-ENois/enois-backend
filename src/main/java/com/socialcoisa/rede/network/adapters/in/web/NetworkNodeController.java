@@ -38,16 +38,19 @@ class NetworkNodeController {
 	private final NetworkConfigService configs;
 	private final NetworkRegionService regions;
 	private final com.socialcoisa.rede.network.application.NodeObservabilityService observability;
+	private final com.socialcoisa.rede.network.application.NodeCertificateService certificates;
 
 	NetworkNodeController(NetworkNodeService nodes, NodeKeyService keys, NetworkModeService modes,
 			NetworkConfigService configs, NetworkRegionService regions,
-			com.socialcoisa.rede.network.application.NodeObservabilityService observability) {
+			com.socialcoisa.rede.network.application.NodeObservabilityService observability,
+			com.socialcoisa.rede.network.application.NodeCertificateService certificates) {
 		this.nodes = nodes;
 		this.keys = keys;
 		this.modes = modes;
 		this.configs = configs;
 		this.regions = regions;
 		this.observability = observability;
+		this.certificates = certificates;
 	}
 
 	/**
@@ -56,8 +59,14 @@ class NetworkNodeController {
 	 * era lida: um instalador que seguia a doc gravava o nó sem região, e o enroll aceitava em
 	 * silêncio.
 	 */
+	/**
+	 * {@code csr} é o pedido de certificado (PEM ou base64), opcional: o nó que não o manda continua
+	 * entrando pelo token, e recebe o certificado depois com a chave pela rota de renovação
+	 * ({@code POST /network/nodes/me/certificate}). Mandar no enroll evita um segundo round-trip logo
+	 * no primeiro contato — o momento em que o nó ainda está sem credencial nenhuma.
+	 */
 	record EnrollRequest(String provisionToken, String runtimeVersion, Declared declared, String region,
-			String country, Location location) {
+			String country, Location location, String csr) {
 
 		String effectiveRegion() {
 			return firstNonBlank(region, location == null ? null : location.region());
@@ -78,7 +87,13 @@ class NetworkNodeController {
 	record Declared(int cpuCores, int memoryMb, int diskMb, int bandwidthMbps) {
 	}
 
-	record EnrollResponse(String nodeId, String status, String contract, String message) {
+	/**
+	 * {@code certificate} só vem preenchido quando o enroll trouxe CSR <em>e</em> a CA está
+	 * configurada. {@code caPublicKey} é o pino que o nó guarda para conferir o próprio certificado
+	 * e a config assinada.
+	 */
+	record EnrollResponse(String nodeId, String status, String contract, String message, String certificate,
+			String caPublicKey, String certificateSerial, String certificateNotAfter) {
 	}
 
 	record HeartbeatRequest(String runtimeVersion, Observed observed, Integer observedTerm,
@@ -125,8 +140,42 @@ class NetworkNodeController {
 			request.effectiveRegion(), request.effectiveCountry(), declared == null ? 0 : declared.cpuCores(),
 			declared == null ? 0 : declared.memoryMb(), declared == null ? 0 : declared.diskMb(),
 			declared == null ? 0 : declared.bandwidthMbps()));
+		// O certificado NÃO autoriza nada por si: sem a API key o nó continua sem operar (doc 04 §1).
+		// Emiti-lo aqui só poupa o round-trip; a autorização continua sendo a chave.
+		com.socialcoisa.rede.network.application.NodeCertificateService.IssuedCertificate issued = null;
+		if (request.csr() != null && !request.csr().isBlank() && certificates.enabled()) {
+			// O "ator" da auditoria é o próprio nó (o enroll é autenticado pelo token de uso único),
+			// não um admin: a emissão no enroll é o nó pedindo o próprio certificado.
+			issued = certificates.issue(node.id(), request.csr(), node.id());
+		}
 		return new EnrollResponse(node.id(), node.status().name(), "1",
-			"Aguarde a chave de API e a aprovacao do administrador.");
+			"Aguarde a chave de API e a aprovacao do administrador.",
+			issued == null ? null : issued.certificatePem(), issued == null ? null : issued.caPublicKeyBase64(),
+			issued == null ? null : issued.serial(), issued == null ? null : issued.notAfter());
+	}
+
+	/**
+	 * Renova o certificado do nó (brief §10, "rotação"): o nó gera um par novo, manda o CSR e recebe
+	 * o certificado. É a mesma porta para o nó que entrou sem CSR no enroll.
+	 *
+	 * <p>A autenticação é a API key — a credencial que <b>autoriza</b>. O certificado que o nó já
+	 * tem não é exigido aqui de propósito: quem vai renovar pode estar com o certificado a um dia de
+	 * expirar, e exigir o certificado velho é como pedir a senha antiga a quem quer trocá-la.</p>
+	 */
+	@PostMapping("/nodes/me/certificate")
+	com.socialcoisa.rede.network.application.NodeCertificateService.IssuedCertificate renewCertificate(
+			@RequestHeader(value = "X-Node-Id", required = false) String nodeId,
+			@RequestHeader(value = "X-Node-Key", required = false) String nodeKey,
+			@RequestBody(required = false) CertificateRequest request) {
+		NetworkNode node = keys.authenticate(nodeId, nodeKey);
+		if (request == null || request.csr() == null || request.csr().isBlank()) {
+			throw new ApiException(400, "NODE_CSR_MISSING", "CSR ausente.");
+		}
+		// O ator é o próprio nó: a renovação não é decisão administrativa, é manutenção da máquina.
+		return certificates.issue(node.id(), request.csr(), node.id());
+	}
+
+	record CertificateRequest(String csr) {
 	}
 
 	/**

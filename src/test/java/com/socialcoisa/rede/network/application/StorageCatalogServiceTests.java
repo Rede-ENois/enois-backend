@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -229,6 +230,77 @@ class StorageCatalogServiceTests {
 		// O corpo tem de estar no diretório autorizado: medir um fluxo descartado daria "gravou"
 		// para um arquivo que não existe.
 		assertThat(Files.readAllBytes(service.bodyPath(object.id()))).isEqualTo(content);
+	}
+
+	/**
+	 * Com o envelope ligado, o disco <b>não</b> tem o texto claro — e o download continua entregando o
+	 * objeto original, com o sha-256 do texto claro.
+	 *
+	 * <p>Mutuação discriminante: desligar a cifra na gravação (voltar ao {@code Files.move}) deixa o
+	 * texto claro no arquivo e este teste falha. Um round-trip sozinho passaria nas duas versões.</p>
+	 */
+	@Test
+	void com_envelope_o_disco_nao_tem_o_texto_claro_e_o_download_devolve_o_original() throws Exception {
+		byte[] content = body("dado do participante que nao pode ficar em claro no disco do no");
+		StorageCatalogService cifrado = new StorageCatalogService(catalog, audit, Clock.fixed(NOW, ZoneOffset.UTC),
+			10_000, root.toString(), java.util.Base64.getEncoder().encodeToString(chaveMestra()), placement(1), null);
+		StorageObject object = cifrado.beginUpload("user_1", "fotos", "gato.jpg", "image/jpeg");
+
+		StorageCatalogService.Stored stored = cifrado.store(storageNode(), object.id(), new ByteArrayInputStream(content));
+
+		byte[] noDisco = Files.readAllBytes(cifrado.bodyPath(object.id()));
+		assertThat(new String(noDisco, StandardCharsets.ISO_8859_1)).doesNotContain("dado do participante");
+		assertThat(noDisco).startsWith("ENOISENV1".getBytes(StandardCharsets.US_ASCII));
+		// O digest prometido é do texto claro, não do que está no disco.
+		assertThat(stored.sha256()).isEqualTo(sha256(content));
+		try (InputStream in = cifrado.readBody(object.id())) {
+			assertThat(in.readAllBytes()).isEqualTo(content);
+		}
+	}
+
+	/**
+	 * Ligar o envelope não pode reprovar o que já existe: corpo gravado em claro (antes da chave)
+	 * continua baixando, e a conferência de tamanho do caminho cifrado não o pega por engano.
+	 */
+	@Test
+	void corpo_em_claro_gravado_antes_da_chave_continua_baixando() throws Exception {
+		byte[] content = body("gravado antes do envelope");
+		StorageObject object = service.beginUpload("user_1", "fotos", "velho.jpg", "image/jpeg");
+		service.store(storageNode(), object.id(), new ByteArrayInputStream(content));
+
+		StorageCatalogService comEnvelope = new StorageCatalogService(catalog, audit,
+			Clock.fixed(NOW, ZoneOffset.UTC), 10_000, root.toString(),
+			java.util.Base64.getEncoder().encodeToString(chaveMestra()), placement(1), null);
+
+		try (InputStream in = comEnvelope.readBody(object.id())) {
+			assertThat(in.readAllBytes()).isEqualTo(content);
+		}
+	}
+
+	/** Arquivo cifrado truncado responde 410, não "200 com bytes faltando". */
+	@Test
+	void corpo_envelope_truncado_responde_410() throws Exception {
+		byte[] content = body("objeto que sera truncado no disco");
+		StorageCatalogService cifrado = new StorageCatalogService(catalog, audit, Clock.fixed(NOW, ZoneOffset.UTC),
+			10_000, root.toString(), java.util.Base64.getEncoder().encodeToString(chaveMestra()), placement(1), null);
+		StorageObject object = cifrado.beginUpload("user_1", "fotos", "corta.jpg", "image/jpeg");
+		cifrado.store(storageNode(), object.id(), new ByteArrayInputStream(content));
+		Path arquivo = cifrado.bodyPath(object.id());
+		// Truncado no meio do corpo, não no cabeçalho: cortar só o cabeçalho deixaria o arquivo no
+		// formato do NodeBodyStore, que este caminho lê como corpo legado — outro bug, outro teste.
+		byte[] inteiro = Files.readAllBytes(arquivo);
+		Files.write(arquivo, java.util.Arrays.copyOf(inteiro, inteiro.length - 10),
+			java.nio.file.StandardOpenOption.TRUNCATE_EXISTING);
+
+		assertThatThrownBy(() -> cifrado.readBody(object.id()))
+			.isInstanceOf(ApiException.class)
+			.hasMessageContaining("minimo");
+	}
+
+	private static byte[] chaveMestra() {
+		byte[] bytes = new byte[32];
+		new java.util.Random(3).nextBytes(bytes);
+		return bytes;
 	}
 
 	@Test
@@ -574,6 +646,18 @@ class StorageCatalogServiceTests {
 				}
 			}
 			return false;
+		}
+
+		// --- Gateway S3 (§11, V356): os buckets do dono ---
+
+		@Override
+		public java.util.List<String> bucketsOf(String ownerUserId) {
+			return byKey.values().stream()
+				.filter(o -> o.createdBy() != null && o.createdBy().equals(ownerUserId))
+				.map(StorageObject::bucket)
+				.distinct()
+				.sorted()
+				.toList();
 		}
 	}
 }

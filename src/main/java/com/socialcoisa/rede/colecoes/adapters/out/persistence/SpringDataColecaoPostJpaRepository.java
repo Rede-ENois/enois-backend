@@ -26,5 +26,13 @@ interface SpringDataColecaoPostJpaRepository extends JpaRepository<ColecaoPostJp
 		""")
 	List<Object[]> countByColecaoIdIn(@Param("ids") Collection<String> ids);
 
+	/** Elos de UM post nas coleções indicadas — o suficiente para a flag "tem" do seletor. */
+	@Query("""
+		select e.colecaoId, e.postId from ColecaoPostJpaEntity e
+		where e.postId = :postId and e.colecaoId in :colecaoIds
+		""")
+	List<Object[]> peloPostNasColecoes(@Param("postId") String postId,
+		@Param("colecaoIds") Collection<String> colecaoIds);
+
 	void deleteByColecaoId(String colecaoId);
 }

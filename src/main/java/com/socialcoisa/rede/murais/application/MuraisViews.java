@@ -23,6 +23,18 @@ public final class MuraisViews {
 	public record MuraisPage(List<MuralResumo> items, String nextCursor) {
 	}
 
+	/**
+	 * Um mural do dono na ótica de um post: {@code tem} diz se o post já está colado — o seletor
+	 * do card marca o quadro e nem tenta a cola duplicada. Igual ao {@link MuralResumo}, menos
+	 * o dono (é quem pergunta) e com a flag.
+	 */
+	public record MuralDoPost(String id, String title, String description, long contributions, boolean tem,
+			Instant createdAt) {
+	}
+
+	public record MeusMuraisPage(List<MuralDoPost> items) {
+	}
+
 	public record ContribuicoesPage(List<ContribuicaoView> items, String nextCursor) {
 	}
 

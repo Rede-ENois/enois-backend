@@ -18,6 +18,18 @@ public final class ColecoesViews {
 	public record ColecoesPage(List<ColecaoResumo> items, String nextCursor) {
 	}
 
+	/**
+	 * Uma coleção do dono na ótica de um post: {@code tem} diz se o post já está guardado — o
+	 * seletor do card marca a pasta e nem tenta guardar duplicado. Igual ao
+	 * {@link ColecaoResumo}, com a flag.
+	 */
+	public record ColecaoDoPost(String id, String title, String description, long postCount, boolean tem,
+			Instant createdAt) {
+	}
+
+	public record MinhasColecoesPage(List<ColecaoDoPost> items) {
+	}
+
 	/** Um post guardado: o elo com a marca de quando entrou na coleção. */
 	public record PostSalvoView(String postId, PostView post, Instant adicionadoAt) {
 	}

@@ -41,7 +41,7 @@ registrados aqui para nenhuma fase seguinte fingir que herdou do que já havia:
 
 | brief § | item | estado real no código |
 |---|---|---|
-| §2, §4 | **mTLS por certificado individual, CSR no enroll** | **inexistente**. `docs/rede-distribuida/04-identidade-e-autorizacao.md` §8 já declara "ainda não implementado nesta fase": a autoridade de transporte hoje é HTTPS com a API key por nó. Nenhum decodificador de cliente certificado, nenhuma tabela de certificado |
+| §2, §4 | **mTLS por certificado individual, CSR no enroll** | **parcial (V358)**. O certificado Ed25519 individual é emitido pelo Control Plane a partir de um CSR com autoassinatura conferida, e é renovado/revogado (`docs/rede-distribuida/19-seguranca-storage-mtls-e-repouso.md`). O que falta: a terminação TLS exigir o certificado de cliente, rota de painel de revogação, rotação automática e CRL. A autoridade de cada requisição de nó continua sendo a API key |
 | §2, §5 | **reverse tunnel, conexão de saída persistente do nó** | **inexistente**. O modelo é pull curto (`GET /network/tasks/next` a cada ciclo). Não há canal aberto do nó para o CP. Isso atende NAT (o nó só faz saída), mas não serve para o CP **empurrar** um download para um nó atrás de NAT — a fase 1 deve manter o modelo pull |
 | §2 | **service discovery de nós** | parcial: o catálogo de nós está no banco do CP (`network_nodes`) e é o que o scheduler usa. Não há registro de endereço acessível por outro nó — e não deve haver antes da fase 2, porque o brief proíbe cadastro de IP/hostname |
 | §3.3 | **gateway S3 (`s3.enois.ia.br`)** | inexistente. O que existe é o `media` do app, que é **cliente** de um S3 de terceiro (`S3MediaObjectStore`) e um proxy de leitura (`MediaStorageProxyController`). Nada serve S3 para fora |

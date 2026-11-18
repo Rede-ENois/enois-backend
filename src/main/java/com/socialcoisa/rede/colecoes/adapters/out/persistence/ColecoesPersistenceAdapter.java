@@ -46,6 +46,13 @@ class ColecoesPersistenceAdapter implements ColecoesRepository {
 	}
 
 	@Override
+	public List<ColecaoSalva> findAllByOwner(UserId ownerId) {
+		return colecoes.findByOwnerIdOrderByCreatedAtDesc(ownerId.value()).stream()
+			.map(ColecaoSalvaJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
 	public ColecaoPost savePost(ColecaoPost elo) {
 		return posts.save(new ColecaoPostJpaEntity(elo)).toDomain();
 	}
@@ -53,6 +60,14 @@ class ColecoesPersistenceAdapter implements ColecoesRepository {
 	@Override
 	public Optional<ColecaoPost> findPost(String colecaoId, String postId) {
 		return posts.findById(ColecaoPost.idDe(colecaoId, postId)).map(ColecaoPostJpaEntity::toDomain);
+	}
+
+	@Override
+	public Collection<String> findColecaoIdsComPost(String postId, Collection<String> colecaoIds) {
+		if (colecaoIds.isEmpty()) {
+			return List.of();
+		}
+		return posts.peloPostNasColecoes(postId, colecaoIds).stream().map(linha -> (String) linha[0]).toList();
 	}
 
 	@Override

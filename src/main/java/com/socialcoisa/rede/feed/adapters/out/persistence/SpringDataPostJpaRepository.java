@@ -12,6 +12,7 @@ import org.springframework.data.repository.query.Param;
 import com.socialcoisa.rede.feed.domain.AuthorIdentity;
 import com.socialcoisa.rede.feed.domain.PostStatus;
 import com.socialcoisa.rede.feed.domain.PostType;
+import com.socialcoisa.rede.feed.domain.Visibility;
 
 interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, String> {
 
@@ -47,6 +48,22 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 	List<PostJpaEntity> findTextoSocialEntre(@Param("status") PostStatus status,
 			@Param("tipos") Collection<PostType> tipos, @Param("de") Instant de, @Param("ate") Instant ate,
 			Pageable pageable);
+
+	/**
+	 * Posts de texto social E PÚBLICOS num intervalo de criação (a janela do Papo Reto).
+	 * Post de CONNECTIONS é conversa de conexões: não entra no papo da rede, só no recorte
+	 * de quem tem acesso. Sem canal, como a leitura do Termômetro.
+	 */
+	@Query("""
+			select p from PostJpaEntity p
+			where p.status = :status and p.type in :tipos and p.channelId is null
+			  and p.visibility = :visibility
+			  and p.createdAt >= :de and p.createdAt < :ate
+			order by p.createdAt asc
+			""")
+	List<PostJpaEntity> findTextoSocialPublicoEntre(@Param("status") PostStatus status,
+			@Param("visibility") Visibility visibility, @Param("tipos") Collection<PostType> tipos,
+			@Param("de") Instant de, @Param("ate") Instant ate, Pageable pageable);
 
 	/** Posts ativos com link no corpo ou na mini página (a varredura da barreira de links). */
 	@Query("""

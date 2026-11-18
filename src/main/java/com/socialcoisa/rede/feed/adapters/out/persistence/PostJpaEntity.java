@@ -187,4 +187,9 @@ class PostJpaEntity {
 			.markRepostOf(repostOf, repostOfAuthor, repostWithOpinion)
 			.markAcceptedAnswer(acceptedCommentId, resolvedAt);
 	}
+
+	/** A comunidade do post (nula quando é do feed geral) — o recorte por comunidade do ranking. */
+	String comunidadeId() {
+		return communityId;
+	}
 }
