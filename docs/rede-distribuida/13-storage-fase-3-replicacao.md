@@ -229,7 +229,7 @@ ser recusado (o que já era correto), mas a réplica nunca acontecia. Agora exis
 | passo | o que faz |
 |---|---|
 | 1 | lê `objectId`, `sha256`, `bytes` e `replica` do payload; payload incompleto → `STORAGE_TASK_PAYLOAD_INVALID` |
-| 2 | baixa por `GET /network/storage/objects/{id}` com a **mesma** chave de nó e o mesmo `--limit-rate` do teto de banda declarado |
+| 2 | baixa por `GET /network/storage/objects/{id}` com a **mesma** chave de nó e `--limit-rate` do **menor** entre o teto da transferência (`bandwidthLimitMbps` do payload, quando existe) e a banda declarada |
 | 3 | **mede o que veio** (`sha256sum` + `stat`) e compara com o medido pelo Control Plane. Divergência → `STORAGE_REPLICA_MISMATCH`, e **não confirma** |
 | 4 | confere o teto de disco cedido **antes** de confirmar. Acima → `STORAGE_OBJECT_TOO_LARGE` (o temporário sai; `diskMb=0` é "sem teto declarado", não "zero bytes") |
 | 5 | confirma em `POST .../replica` com **as medidas que ele mesmo calculou** |

@@ -110,6 +110,8 @@ com `declaredMb`, `freeMb`, `totalMb`, `reservedMb`, `usedMb` e `usedPercent`.
 | `StoragePlacementServiceTests` | **13** (8 da fase 3 + 5 novos: duas réplicas na mesma região; usa a mesma quando não há outra; região não declarada ≠ declarada; não repete a região que já tem cópia; grafia não cria domínio) |
 | `StorageBalanceReportTests` | **6** — desequilíbrio apontado; proporcional não aponta ninguém; `STALE` não conta; sem medida não afirma nada; nó sem medida fica com capacidade nula; sem nós não inventa base |
 | `NetworkStorageBalanceTests` | **3** — rota exige admin; sem nó não inventa base; disco não medido chega nulo (não zero) |
+| `StorageReplicationDispatcherTests` | **3** — o teto da transferência vai no payload (`toReplica`, não `fromReplica`); sem transferência o campo não vai; transferência de outra réplica não define o teto desta |
+| `node-executor-test.sh` (harness) | **209** asserções (186 + 23 desta rodada): 8 Mbps do payload vira `limit-rate 1000k`; teto acima do declarado usa o do nó (`12500k`) |
 
 Mutações conferidas:
 
@@ -120,6 +122,8 @@ Mutações conferidas:
 | contar colocação `STALE` | `copiaNaoConfirmadaNaoContaNoRelatorio` |
 | disco não medido virar `0` | 2 erros nos testes do relatório |
 | usar `declared_disk_mb` em vez do medido | 3 testes do relatório |
+| tirar `bandwidthLimitMbps` do payload (§12.5) | `o_teto_da_transferencia_vai_no_payload_do_object_put` |
+| runtime ignorar o payload da tarefa (`bandwidth_args "$config"` sem o segundo argumento) | `o teto da transferencia vale no download do corpo` (harness) |
 
 Nenhuma migração nova: a fase 4 usa o catálogo e as colocações que a fase 1/3 já tinham.
 
@@ -566,8 +570,20 @@ impossível).
 ### 12.5 Bandas e progressividade
 
 O teto de banda é **por transferência** (`bandwidthLimitMbps`, padrão 10), não por nó: o operador
-escolhe quanto ceder para um objeto específico. A transferência em si é um `OBJECT_PUT` pelo caminho
-do §8.3, então o nó aplica o **menor** entre o teto da transferência e a própria capacidade.
+escolhe quanto ceder para um objeto específico.
+
+O caminho dele até o nó tem três elos, e os três existem:
+
+1. o `POST /admin/network/storage/rebalance` grava o teto na linha da transferência (V354);
+2. o `StorageReplicationDispatcher` põe `bandwidthLimitMbps` no payload do `OBJECT_PUT` quando há
+   transferência **viva** cuja réplica de destino é a desta designação — o vínculo é `toReplica`, não
+   `fromReplica`: a transferência que constrói esta cópia é a que define o teto dela. Sem
+   transferência o campo **não vai** (ausente = "usa o do nó", nunca zero);
+3. o runtime (`bandwidth_args`, `exec_object_put`) aplica `--limit-rate` no **menor** entre o teto da
+   transferência e a banda declarada (geral ou por tipo).
+
+Antes do elo 2 e do elo 3, o campo era gravado e nunca lido: o operador pedia 8 Mbps e o nó baixava
+na banda inteira declarada.
 
 Não há transferência paralela de vários objetos numa mesma chamada: cada transferência é uma decisão
 de operador com o próprio teto.
@@ -592,3 +608,6 @@ de operador com o próprio teto.
   recomeçar abre outra; não existe retomada de onde parou. O `OBJECT_PUT` do nó não é retomável
   (lacuna registrada na doc da fase 3).
 - **Progresso em bytes**: o estado é por etapa (`PENDING`/`DONE`/…), não por fração transferida.
+- **Teto de banda aplicado pelo próprio nó além do `--limit-rate`**: o nó limita a **velocidade**;
+  não há reserva nem fila de banda entre transferências concorrentes (o runtime executa uma tarefa
+  por ciclo, então hoje não há concorrência a arbitrar).
