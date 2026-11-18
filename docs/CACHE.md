@@ -88,6 +88,8 @@ O cache não substitui consulta ruim. O que foi corrigido junto:
 - **Leitura de perfil**: `populateCounts` chamava `repository.save(...)` numa transação `readOnly` —
   o `save` virava `merge` (SELECT da linha) em toda abertura de perfil, sem nunca persistir nada.
   Removido.
+- **Banimentos em listas públicas**: comunidades, busca de perfis e vitrine consultam as sanções
+  uma vez por lista, preservando os filtros e a ordem dos resultados.
 - **Índices** (`V232__read_list_indexes.sql`): `users(created_at)`, `communities(created_at)` e
   `events(created_at)` para as vitrines que paginam por `created_at DESC`. Sem eles a primeira página
   varria e ordenava a tabela inteira.
