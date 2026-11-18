@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.shared.html;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -7,6 +8,7 @@ import java.util.regex.Pattern;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
+import org.jsoup.parser.Parser;
 import org.jsoup.safety.Cleaner;
 import org.jsoup.safety.Safelist;
 import org.springframework.util.StringUtils;
@@ -639,5 +641,24 @@ public final class SafeHtml {
 
 	private static Safelist buildAllowlist() {
 		return new PageSafelist();
+	}
+
+	/**
+	 * Sanitiza um arquivo SVG enviado como mídia: remove scripts, eventos, foreignObject e
+	 * referências externas perigosas reutilizando a mesma allowlist das páginas HTML.
+	 */
+	public static byte[] sanitizeSvg(byte[] data) {
+		if (data == null || data.length == 0) {
+			throw new IllegalArgumentException("SVG vazio");
+		}
+		String raw = new String(data, StandardCharsets.UTF_8);
+		Document parsed = Jsoup.parseBodyFragment(raw);
+		Document cleaned = new Cleaner(PAGE_ALLOWLIST).clean(parsed);
+		cleaned.outputSettings().syntax(Document.OutputSettings.Syntax.xml);
+		Element svg = cleaned.selectFirst("svg");
+		if (svg == null) {
+			throw new IllegalArgumentException("Arquivo não contém elemento SVG válido");
+		}
+		return hardenSvgReferences(svg.outerHtml()).getBytes(StandardCharsets.UTF_8);
 	}
 }

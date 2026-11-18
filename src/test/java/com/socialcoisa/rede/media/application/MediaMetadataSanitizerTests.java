@@ -198,4 +198,23 @@ class MediaMetadataSanitizerTests {
 		}
 		return data.length;
 	}
+
+	@Test
+	void sanitizesSvgRemovingScriptsAndEventHandlersWhilePreservingShapes() throws Exception {
+		byte[] dirtySvg = """
+			<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" onload="alert(1)">
+			  <script>alert(2)</script>
+			  <circle cx="5" cy="5" r="4" fill="#7c3aed" />
+			</svg>
+			""".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+		byte[] clean = sanitizer.sanitize(dirtySvg, "image/svg+xml", "icon.svg");
+		String out = new String(clean, java.nio.charset.StandardCharsets.UTF_8);
+
+		assertTrue(out.contains("<svg"));
+		assertTrue(out.contains("<circle"));
+		assertFalse(out.contains("<script"));
+		assertFalse(out.contains("onload"));
+		assertFalse(out.contains("alert("));
+	}
 }
