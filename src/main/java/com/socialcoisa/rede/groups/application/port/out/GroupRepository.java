@@ -5,11 +5,13 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import com.socialcoisa.rede.groups.domain.Group;
 import com.socialcoisa.rede.groups.domain.GroupJoinRequest;
 import com.socialcoisa.rede.groups.domain.GroupMember;
 import com.socialcoisa.rede.groups.domain.GroupMembership;
+import com.socialcoisa.rede.groups.domain.GroupRole;
 import com.socialcoisa.rede.groups.domain.JoinRequestStatus;
 
 /** Persistência dos grupos. Tudo aqui é do domínio de Grupos — nada de comunidades nem de posts. */
@@ -38,6 +40,8 @@ public interface GroupRepository {
 	/** Membros de cada grupo, numa consulta só (grupo sem membro não aparece no mapa). */
 	Map<String, Long> countMembers(Collection<String> groupIds);
 
+	Map<String, GroupRole> findRoles(Collection<String> groupIds, String userId);
+
 	void saveMember(GroupMember member);
 
 	Optional<GroupMember> findMember(String groupId, String userId);
@@ -55,6 +59,8 @@ public interface GroupRepository {
 	void saveJoinRequest(GroupJoinRequest request);
 
 	Optional<GroupJoinRequest> findPendingRequest(String groupId, String userId);
+
+	Set<String> findPendingGroupIds(Collection<String> groupIds, String userId);
 
 	Optional<GroupJoinRequest> findRequestById(String id);
 

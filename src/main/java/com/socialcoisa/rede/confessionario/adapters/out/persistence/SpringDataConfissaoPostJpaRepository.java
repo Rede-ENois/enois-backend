@@ -19,4 +19,12 @@ interface SpringDataConfissaoPostJpaRepository extends JpaRepository<ConfissaoPo
 		""")
 	List<ConfissaoPostJpaEntity> feedBefore(@Param("status") ConfissaoStatus status, @Param("before") Instant before,
 		Pageable pageable);
+
+	@Query("""
+		select p from ConfissaoPostJpaEntity p
+		where p.status = :status and p.createdAt >= :de and p.createdAt < :ate
+		order by p.createdAt asc
+		""")
+	List<ConfissaoPostJpaEntity> findAtivosEntre(@Param("status") ConfissaoStatus status, @Param("de") Instant de,
+		@Param("ate") Instant ate, Pageable pageable);
 }

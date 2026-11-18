@@ -149,6 +149,10 @@ public class NetworkService {
 		return connectionRepository.findRequests(userId, ConnectionStatus.PENDING);
 	}
 
+	public int contarSolicitacoesRecebidasVisiveis(String userId) {
+		return connectionRepository.contarSolicitacoesRecebidasVisiveis(userId);
+	}
+
 	public int countConnections(String userId) {
 		return connectionRepository.countByUserAndStatus(userId, ConnectionStatus.ACCEPTED);
 	}

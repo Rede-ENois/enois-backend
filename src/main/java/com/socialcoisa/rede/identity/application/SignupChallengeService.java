@@ -53,6 +53,16 @@ public class SignupChallengeService {
 	/** Teto de desafios por origem — quem só pode mandar 10 cadastros por hora não precisa de 300. */
 	static final String ISSUE_ACTION = IpRateLimiter.ISSUE_CHALLENGE;
 
+	/**
+	 * Teto do {@code challengeId} aceito. Payload (~3 campos curtos) + assinatura HMAC em
+	 * base64url ficam bem abaixo disso; acima é entrada hostil, recusada antes do decode
+	 * (CVE-2026-114938).
+	 */
+	static final int MAX_CHALLENGE_ID_LENGTH = 512;
+
+	/** Alfabeto base64url de cada parte do desafio. */
+	private static final java.util.regex.Pattern BASE64URL = java.util.regex.Pattern.compile("[A-Za-z0-9_-]+={0,2}");
+
 	private static final int SESSION_BINDING_HEX = 16;
 
 	private final boolean enabled;
@@ -110,6 +120,13 @@ public class SignupChallengeService {
 		}
 		String[] parts = challengeId.split("\\.");
 		if (parts.length != 2) {
+			throw invalid();
+		}
+		// Teto e alfabeto conferem antes de tocar no decoder (CVE-2026-114938: o stub intrinseco
+		// de decode Base64 do C2 fazia OOB write). O desafio legitimo tem payload curto e
+		// assinatura HMAC fixa, entao 512 cobre folgado.
+		if (challengeId.length() > MAX_CHALLENGE_ID_LENGTH || !BASE64URL.matcher(parts[0]).matches()
+				|| !BASE64URL.matcher(parts[1]).matches()) {
 			throw invalid();
 		}
 		byte[] payloadBytes;

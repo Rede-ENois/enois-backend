@@ -16,6 +16,7 @@ import com.socialcoisa.rede.network.domain.ConnectionSuggestion;
 import com.socialcoisa.rede.network.domain.ConnectionStatus;
 import com.socialcoisa.rede.network.domain.UserConnection;
 import com.socialcoisa.rede.profile.application.port.out.ProfileNetworkReader;
+import com.socialcoisa.rede.profile.domain.UserProfile;
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
@@ -67,6 +68,26 @@ class ConnectionPersistenceAdapter implements ConnectionRepository, ProfileNetwo
 			.stream()
 			.map(UserConnectionJpaEntity::toDomain)
 			.toList();
+	}
+
+	@Override
+	public int contarSolicitacoesRecebidasVisiveis(String userId) {
+		return ((Number) em.createNativeQuery("""
+				SELECT COUNT(*)
+				FROM user_connections c
+				JOIN users u ON u.id = c.requester_user_id
+				WHERE c.receiver_user_id = :userId
+				  AND c.requester_user_id <> :userId
+				  AND c.status = 'PENDING'
+				  AND u.username IS NOT NULL AND u.username NOT LIKE :removedPrefix
+				  AND NOT EXISTS (
+				    SELECT 1 FROM user_blocks b
+				    WHERE (b.blocker_id = :userId AND b.blocked_id = c.requester_user_id)
+				       OR (b.blocked_id = :userId AND b.blocker_id = c.requester_user_id)
+				  )""")
+			.setParameter("userId", userId)
+			.setParameter("removedPrefix", UserProfile.REMOVED_USERNAME_PREFIX + "%")
+			.getSingleResult()).intValue();
 	}
 
 	@Override

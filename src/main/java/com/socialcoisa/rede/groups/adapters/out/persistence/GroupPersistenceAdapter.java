@@ -5,6 +5,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -89,6 +90,15 @@ class GroupPersistenceAdapter implements GroupRepository {
 	}
 
 	@Override
+	public Map<String, GroupRole> findRoles(Collection<String> groupIds, String userId) {
+		if (groupIds.isEmpty()) {
+			return Map.of();
+		}
+		return members.findRolesByGroupIdsAndUserId(groupIds, userId).stream()
+			.collect(Collectors.toMap(row -> (String) row[0], row -> (GroupRole) row[1]));
+	}
+
+	@Override
 	public void saveMember(GroupMember member) {
 		members.findByGroupIdAndUserId(member.groupId(), member.userId()).ifPresentOrElse(existing -> {
 			existing.changeRole(member.role());
@@ -133,6 +143,14 @@ class GroupPersistenceAdapter implements GroupRepository {
 	public Optional<GroupJoinRequest> findPendingRequest(String groupId, String userId) {
 		return requests.findByGroupIdAndUserIdAndStatus(groupId, userId, JoinRequestStatus.PENDING)
 			.map(GroupJoinRequestJpaEntity::toDomain);
+	}
+
+	@Override
+	public Set<String> findPendingGroupIds(Collection<String> groupIds, String userId) {
+		if (groupIds.isEmpty()) {
+			return Set.of();
+		}
+		return Set.copyOf(requests.findPendingGroupIds(groupIds, userId, JoinRequestStatus.PENDING));
 	}
 
 	@Override

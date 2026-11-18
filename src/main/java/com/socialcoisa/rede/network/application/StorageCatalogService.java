@@ -27,6 +27,7 @@ import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StorageObjectState;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
 import com.socialcoisa.rede.network.domain.TaskType;
+import com.socialcoisa.rede.network.domain.StorageBucketPolicy;
 import com.socialcoisa.rede.shared.audit.AuditTrail;
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -114,6 +115,16 @@ public class StorageCatalogService {
 		validateKey(key);
 		String type = contentType == null || contentType.isBlank() ? "application/octet-stream" : contentType;
 		Instant now = clock.instant();
+		StorageBucketPolicy policy = bucketPolicy(bucket);
+
+		if (policy.versioning()) {
+			// Bucket com versionamento: cada upload é uma versão nova. A corrente anterior sai da
+			// frente ANTES, porque o índice único condicional só aceita uma corrente por chave; se
+			// outra gravação venceu a corrida, esta tenta de novo com o próximo número em vez de
+			// derrubar a chave inteira.
+			return beginVersionedUpload(actorId, bucket, key, type, now, policy);
+		}
+
 		StorageObject object = catalog.createPending(OBJECT_ID_PREFIX + NodeIds.next(""), bucket, key, type,
 			actorId, now);
 		if (object.state() == StorageObjectState.DELETED) {
@@ -122,7 +133,142 @@ public class StorageCatalogService {
 			throw new ApiException(409, "STORAGE_KEY_DELETED",
 				"Esta chave foi removida e ainda espera coleta no no; remova a lapide ou use outra chave.");
 		}
+		Instant expiresAt = policy.expiresAtFor(now);
+		if (expiresAt != null && object.expiresAt() == null && object.version() == 1L) {
+			// O prazo é do bucket no momento da gravação; objeto que já existe mantém o que tinha.
+			catalog.setExpiresAt(object.id(), expiresAt);
+			object = catalog.findById(object.id()).orElse(object);
+		}
 		return object;
+	}
+
+	/** Quantas vezes a gravação versionada tenta de novo quando outra requisição venceu a corrida. */
+	private static final int VERSIONED_ATTEMPTS = 3;
+
+	private StorageObject beginVersionedUpload(String actorId, String bucket, String key, String type, Instant now,
+			StorageBucketPolicy policy) {
+		// Idempotência do versionamento: o MESMO cliente repetindo o upload do mesmo conteúdo ainda
+		// não confirmado tem de receber a mesma versão. Sem isso, retry de rede criaria v2, v3, v4 de
+		// um arquivo que nunca mudou, e a retenção guardaria tudo.
+		for (int attempt = 0; attempt < VERSIONED_ATTEMPTS; attempt++) {
+			Optional<StorageObject> current = catalog.find(bucket, key);
+			if (current.isPresent() && current.get().state() == StorageObjectState.PENDING) {
+				return current.get();
+			}
+			long version = current.map(o -> o.version() + 1).orElse(1L);
+			String id = OBJECT_ID_PREFIX + NodeIds.next("");
+			if (current.isPresent() && current.get().state() == StorageObjectState.DELETED
+					&& !policy.versioning()) {
+				throw new ApiException(409, "STORAGE_KEY_DELETED",
+					"Esta chave foi removida e ainda espera coleta no no; remova a lapide ou use outra chave.");
+			}
+			if (current.isPresent() && !catalog.markSuperseded(bucket, key, id, now)) {
+				// Outra gravação chegou primeiro: esta versão não é a próxima, e o número precisa ser
+				// relido. Recomeçar é mais seguro do que adivinhar.
+				continue;
+			}
+			StorageObject created = catalog.insertVersion(id, bucket, key, type, actorId, now, version);
+			Instant expiresAt = policy.expiresAtFor(now);
+			if (expiresAt != null) {
+				catalog.setExpiresAt(created.id(), expiresAt);
+				created = catalog.findById(created.id()).orElse(created);
+			}
+			audit.record(actorId, "STORAGE_VERSION_CREATED", created.id(),
+				"{\"bucket\":\"" + escape(bucket) + "\",\"key\":\"" + escape(key) + "\",\"version\":"
+					+ version + "}");
+			return created;
+		}
+		throw new ApiException(409, "STORAGE_VERSION_RACE",
+			"Outra gravacao desta chave chegou ao mesmo tempo; tente novamente.");
+	}
+
+	/** A política do bucket, ou os padrões quando ninguém configurou. */
+	public StorageBucketPolicy bucketPolicy(String bucket) {
+		validateBucket(bucket);
+		return catalog.bucketPolicy(bucket).orElseGet(() -> StorageBucketPolicy.padrao(bucket));
+	}
+
+	/**
+	 * Configura o ciclo de vida do bucket (brief §14). Retenção e expiração são validadas aqui, não
+	 * só no banco: a <code>check</code> do banco devolve erro de SQL, e o cliente precisa de um 400
+	 * com o campo errado.
+	 */
+	@Transactional
+	public StorageBucketPolicy putBucketPolicy(String actorId, String bucket, boolean versioning,
+			Integer retainSupersededDays, Integer expireAfterDays) {
+		validateBucket(bucket);
+		if (retainSupersededDays != null && retainSupersededDays < 0) {
+			throw new ApiException(400, "STORAGE_POLICY_INVALID", "A retencao nao pode ser negativa.");
+		}
+		if (expireAfterDays != null && expireAfterDays <= 0) {
+			throw new ApiException(400, "STORAGE_POLICY_INVALID", "A expiracao precisa ser de ao menos um dia.");
+		}
+		if (!versioning && retainSupersededDays != null) {
+			// Retenção existe para versão substituída. Guardar o número num bucket sem versionamento
+			// seria configurar algo que nunca vai agir — aceitar calado é o pior dos dois mundos.
+			throw new ApiException(400, "STORAGE_POLICY_INVALID",
+				"Retencao so faz sentido em bucket com versionamento.");
+		}
+		Instant now = clock.instant();
+		StorageBucketPolicy saved = catalog.saveBucketPolicy(new StorageBucketPolicy(bucket, versioning,
+			retainSupersededDays, expireAfterDays, actorId, now));
+		audit.record(actorId, "STORAGE_BUCKET_POLICY", bucket,
+			"{\"versioning\":" + versioning + ",\"retainSupersededDays\":" + json(retainSupersededDays)
+				+ ",\"expireAfterDays\":" + json(expireAfterDays) + "}");
+		return saved;
+	}
+
+	/** O histórico da chave, da versão mais antiga para a mais nova. */
+	public List<StorageObject> versions(String bucket, String key) {
+		validateBucket(bucket);
+		validateKey(key);
+		return catalog.versions(bucket, key);
+	}
+
+	/**
+	 * Volta a chave para uma versão anterior: a versão escolhida vira uma <b>versão nova</b>, com
+	 * conteúdo copiado da antiga, e a versão que estava na frente é substituída.
+	 *
+	 * <p>Não há "des-substituir" porque isso mudaria o passado: quem baixou a versão corrente
+	 * continua com o que baixou, e o histórico segue contando o que aconteceu. Restaurar é uma
+	 * gravação nova, com o conteúdo da antiga.</p>
+	 */
+	@Transactional
+	public StorageObject restore(String actorId, String bucket, String key, long version) {
+		StorageObject old = catalog.versions(bucket, key).stream().filter(o -> o.version() == version).findFirst()
+			.orElseThrow(() -> new ApiException(404, "STORAGE_VERSION_UNKNOWN",
+				"Esta chave nao tem a versao pedida."));
+		if (!old.servable()) {
+			throw new ApiException(409, "STORAGE_VERSION_NOT_SERVABLE",
+				"Esta versao nao tem copia conferida para restaurar.");
+		}
+		if (old.currentVersion() && old.state() != StorageObjectState.DELETED) {
+			throw new ApiException(409, "STORAGE_VERSION_CURRENT", "Esta e a versao corrente da chave.");
+		}
+		Instant now = clock.instant();
+		long next = catalog.versions(bucket, key).stream().mapToLong(StorageObject::version).max().orElse(0L) + 1;
+		String id = OBJECT_ID_PREFIX + NodeIds.next("");
+		Optional<StorageObject> current = catalog.find(bucket, key);
+		if (current.isPresent() && current.get().currentVersion() && current.get().state() != StorageObjectState.DELETED
+				&& !catalog.markSuperseded(bucket, key, id, now)) {
+			throw new ApiException(409, "STORAGE_VERSION_RACE", "A chave mudou durante a restauracao.");
+		}
+		catalog.insertVersion(id, bucket, key, old.contentType(), actorId, now, next);
+		// O conteúdo é o da versão antiga, e o conferido é o medido nela: a restauração não relê o
+		// disco, então o digest que vale é o que o catálogo já guardava.
+		if (!catalog.markStored(id, old.bytes(), old.sha256(), now)) {
+			throw new ApiException(409, "STORAGE_VERSION_RACE", "A chave mudou durante a restauracao.");
+		}
+		catalog.setExpiresAt(id, bucketPolicy(bucket).expiresAtFor(now));
+		audit.record(actorId, "STORAGE_VERSION_RESTORED", id,
+			"{\"bucket\":\"" + escape(bucket) + "\",\"key\":\"" + escape(key) + "\",\"restoredFrom\":"
+				+ version + ",\"version\":" + next + "}");
+		return catalog.findById(id).orElseThrow(() -> new ApiException(500, "STORAGE_VERSION_LOST",
+			"A versao restaurada desapareceu do catalogo."));
+	}
+
+	private static String json(Integer value) {
+		return value == null ? "null" : value.toString();
 	}
 
 	/**
@@ -328,11 +474,18 @@ public class StorageCatalogService {
 		}
 	}
 
-	/** O objeto só é servível com cópia conferida; {@code PENDING} responde 404 como se não existisse. */
+	/**
+	 * O objeto só é servível com cópia conferida; {@code PENDING} e vencido respondem 404 como se não
+	 * existisse.
+	 *
+	 * <p>O vencido vale aqui <b>na leitura</b>, e não só quando a varredura passa: o brief §14 pede
+	 * expiração automática, e um arquivo continuar servível entre o vencimento e a próxima varredura
+	 * significa que "expirou" era só um campo na tabela.</p>
+	 */
 	public StorageObject requireDownloadable(String bucket, String key) {
 		StorageObject object = catalog.find(bucket, key)
 			.orElseThrow(() -> new ApiException(404, "STORAGE_NOT_FOUND", "Objeto nao encontrado."));
-		if (!object.servable()) {
+		if (!object.servable() || object.expired(clock.instant())) {
 			throw new ApiException(404, "STORAGE_NOT_FOUND", "Objeto nao encontrado.");
 		}
 		return object;

@@ -3,6 +3,7 @@ package com.socialcoisa.rede.communities.application;
 import java.time.Clock;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.cache.annotation.Cacheable;
@@ -244,7 +245,12 @@ public class CommunityService {
 
 	// Comunidade criada por conta banida sai da vitrine (o conteúdo dela já é limpo).
 	private List<Community> visible(List<Community> communities) {
-		return communities.stream().filter(this::canAppear).toList();
+		if (communities.isEmpty()) {
+			return List.of();
+		}
+		Set<String> banned = sanctionGate.bannedAmong(
+			communities.stream().map(Community::createdBy).toList());
+		return communities.stream().filter(community -> canAppear(community, banned)).toList();
 	}
 
 	/**
@@ -275,8 +281,8 @@ public class CommunityService {
 	}
 
 	/** A regra da vitrine, num lugar só: quem criou está suspenso ou o texto parece ataque. */
-	private boolean canAppear(Community community) {
-		return !sanctionGate.banned(community.createdBy())
+	private boolean canAppear(Community community, Set<String> banned) {
+		return !banned.contains(community.createdBy())
 				&& !suspiciousText.matches(community.name(), community.description());
 	}
 

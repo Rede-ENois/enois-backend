@@ -26,6 +26,8 @@ import com.socialcoisa.rede.network.application.NodeKeyService;
 import com.socialcoisa.rede.network.application.NodeStorageInventory;
 import com.socialcoisa.rede.network.application.StorageCatalogService;
 import com.socialcoisa.rede.network.domain.NetworkNode;
+import com.socialcoisa.rede.network.domain.ByteRange;
+import com.socialcoisa.rede.network.domain.CachePolicy;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -95,10 +97,142 @@ class NetworkStorageController {
 		ResponseEntity.BodyBuilder response = ResponseEntity.ok()
 			.header(HttpHeaders.CONTENT_TYPE, object.contentType())
 			.header(HttpHeaders.CONTENT_LENGTH, String.valueOf(object.bytes()))
-			// Objeto de storage: conteúdo do cliente, não fica em cache compartilhado do caminho.
-			.header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+			// Entrega a um NÓ, não a um cliente: cache no caminho não tem a quem servir e guardaria
+			// bytes de terceiros fora da rede (brief §13).
+			.header(HttpHeaders.CACHE_CONTROL, CachePolicy.NODE.headerValue())
+			.lastModified(object.updatedAt() == null ? null : object.updatedAt().toEpochMilli())
 			.eTag("\"" + object.sha256() + "\"");
 		return response.body(output -> writeBody(storage.readBody(object.id()), output));
+	}
+
+	/**
+	 * Entrega pública do objeto (<b>brief §13</b>): cache por tipo, {@code Last-Modified}, {@code ETag}
+	 * e {@code Range}.
+	 *
+	 * <p>Separada da rota do nó porque as duas respostas são <b>opostas</b> em cache: o nó autenticado
+	 * não quer cache no caminho, e o cliente quer cache público justamente para a imagem não voltar
+	 * ao Control Plane a cada carga. Servir os dois pela mesma rota obrigaria a política a depender de
+	 * "quem pediu", e um cabeçalho esquecido no meio tornar pública uma imagem privada.</p>
+	 *
+	 * <p>{@code Range} devolve 206 com {@code Content-Range}; faixa que não existe devolve 416 com
+	 * {@code Content-Range: bytes *}/{@code total}, como a RFC 9110 manda — silenciosamente servir o
+	 * corpo inteiro faria um player achar que recebeu o trecho que pediu.</p>
+	 */
+	@GetMapping("/objects/{objectId}/content")
+	ResponseEntity<StreamingResponseBody> readContent(
+			@RequestHeader(value = "Range", required = false) String rangeHeader, @PathVariable String objectId,
+			HttpServletRequest request) {
+		StorageObject object = storage.byId(objectId)
+			.orElseThrow(() -> new ApiException(404, "STORAGE_NOT_FOUND", "Objeto nao encontrado."));
+		// Vencido responde 404 na leitura, não só quando a varredura passar (brief §14).
+		if (!object.servable() || object.expired(java.time.Instant.now())) {
+			throw new ApiException(404, "STORAGE_NOT_FOUND", "Objeto nao encontrado.");
+		}
+		List<StoragePlacement> location = storage.location(object.id());
+		if (location.isEmpty()) {
+			throw new ApiException(409, "STORAGE_PLACEMENT_MISSING",
+				"O catalogo diz que o objeto existe, mas nao ha copia registrada em no nenhum.");
+		}
+		long total = object.bytes();
+		CachePolicy policy = CachePolicy.forContentType(object.contentType());
+		String etag = "\"" + object.sha256() + "\"";
+
+		// Pedido condicional: o cliente que já tem o conteúdo não paga o corpo de novo. Comparado
+		// pelo digest, porque o objeto do catálogo é imutável — o sha-256 É a identidade do conteúdo.
+		if (matches(etag, request == null ? null : request.getHeader(HttpHeaders.IF_NONE_MATCH))) {
+			ResponseEntity.BodyBuilder notModified = ResponseEntity.status(HttpStatus.NOT_MODIFIED)
+				.header(HttpHeaders.ETAG, etag)
+				.header(HttpHeaders.CACHE_CONTROL, policy.headerValue());
+			if (object.updatedAt() != null) {
+				notModified.lastModified(object.updatedAt().toEpochMilli());
+			}
+			return notModified.build();
+		}
+
+		ResponseEntity.BodyBuilder response;
+		java.util.Optional<ByteRange> range;
+		try {
+			range = ByteRange.parse(rangeHeader, total);
+		}
+		catch (ByteRange.Unsatisifiable impossible) {
+			return ResponseEntity.status(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+				.header(HttpHeaders.CONTENT_RANGE, "bytes */" + total)
+				.header(HttpHeaders.ETAG, etag)
+				.build();
+		}
+		if (range.isPresent()) {
+			ByteRange bytes = range.get();
+			response = ResponseEntity.status(HttpStatus.PARTIAL_CONTENT)
+				.header(HttpHeaders.CONTENT_RANGE, bytes.contentRange())
+				.header(HttpHeaders.CONTENT_LENGTH, String.valueOf(bytes.length()))
+				.header(HttpHeaders.ACCEPT_RANGES, "bytes");
+			long skip = bytes.start();
+			long limit = bytes.length();
+			ResponseEntity.BodyBuilder partial = response;
+			return finish(partial, object, policy, etag).body(output -> writeSlice(storage.readBody(object.id()),
+				output, skip, limit));
+		}
+		// Corpo inteiro: 200 com Accept-Ranges para o cliente saber que pode pedir faixas depois.
+		ResponseEntity.BodyBuilder whole = ResponseEntity.ok()
+			.header(HttpHeaders.CONTENT_LENGTH, String.valueOf(total))
+			.header(HttpHeaders.ACCEPT_RANGES, "bytes");
+		return finish(whole, object, policy, etag).body(output -> writeBody(storage.readBody(object.id()), output));
+	}
+
+	private static ResponseEntity.BodyBuilder finish(ResponseEntity.BodyBuilder builder, StorageObject object,
+			CachePolicy policy, String etag) {
+		return builder.header(HttpHeaders.CONTENT_TYPE, object.contentType())
+			.header(HttpHeaders.CACHE_CONTROL, policy.headerValue())
+			.eTag(etag)
+			.lastModified(object.updatedAt() == null ? null : object.updatedAt().toEpochMilli());
+	}
+
+	/**
+	 * O {@code If-None-Match} bate com o {@code ETag}? Aceita {@code *} e lista, como a RFC manda.
+	 * A comparação é <b>fraca</b> ({@code W/} ignorado) porque o digest identifica o conteúdo, não a
+	 * representação de transporte.
+	 */
+	private static boolean matches(String etag, String ifNoneMatch) {
+		if (ifNoneMatch == null || ifNoneMatch.isBlank()) {
+			return false;
+		}
+		String wanted = etag.replace("W/", "");
+		for (String candidate : ifNoneMatch.split(",")) {
+			String item = candidate.trim().replace("W/", "");
+			if ("*".equals(item) || item.equals(wanted)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Escreve só a faixa pedida: pular até o início e copiar o número de bytes da faixa. */
+	private static void writeSlice(InputStream body, OutputStream output, long skip, long length) throws IOException {
+		try (InputStream input = body) {
+			long remaining = skip;
+			while (remaining > 0) {
+				long skipped = input.skip(remaining);
+				if (skipped > 0) {
+					remaining -= skipped;
+					continue;
+				}
+				// `skip` pode devolver 0 num stream de rede sem estar no fim: ler um byte resolve.
+				if (input.read() < 0) {
+					return;
+				}
+				remaining--;
+			}
+			long left = length;
+			byte[] buffer = new byte[8192];
+			while (left > 0) {
+				int read = input.read(buffer, 0, (int) Math.min(buffer.length, left));
+				if (read < 0) {
+					return;
+				}
+				output.write(buffer, 0, read);
+				left -= read;
+			}
+		}
 	}
 
 	/**

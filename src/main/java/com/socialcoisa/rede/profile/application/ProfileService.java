@@ -223,8 +223,10 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 
 	/** Busca pública de perfis: conta banida não é sugestão de conexão (mesma regra da vitrine). */
 	public List<UserProfileView> search(String query) {
-		return repository.searchByQuery(query).stream()
-			.filter(profile -> !sanctionGate.banned(profile.id()))
+		List<UserProfile> profiles = repository.searchByQuery(query);
+		var visible = accountsVisible(profiles.stream().map(UserProfile::id).toList());
+		return profiles.stream()
+			.filter(profile -> visible.contains(profile.id()))
 			.map(UserProfileView::from)
 			.toList();
 	}
@@ -245,8 +247,10 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 	public List<UserProfileView> getRanking(int limit) {
 		int wanted = Math.max(1, limit);
 		// A vitrine é curta: buscar um pouco além do pedido cobre as banidas sem varrer a tabela.
-		return repository.findNewestProfiles(wanted * 3).stream()
-			.filter(profile -> !sanctionGate.banned(profile.id()))
+		List<UserProfile> profiles = repository.findNewestProfiles(wanted * 3);
+		var visible = accountsVisible(profiles.stream().map(UserProfile::id).toList());
+		return profiles.stream()
+			.filter(profile -> visible.contains(profile.id()))
 			.limit(wanted)
 			.map(UserProfileView::from)
 			.toList();

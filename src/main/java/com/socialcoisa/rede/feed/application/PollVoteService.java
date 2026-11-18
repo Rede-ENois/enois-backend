@@ -65,6 +65,7 @@ public class PollVoteService implements VotePollUseCase {
 		userRateLimiter.require(user.value(), UserRateLimiter.CREATE_COMMENT);
 		behavioralTimingGuard.record(user.value());
 		riskEngine.assess(user.value(), "poll_vote", null);
+		postRepository.lockForUpdate(postId);
 		Post post = postRepository.findById(postId)
 			.orElseThrow(() -> new ApiException(404, "POST_NOT_FOUND", "Post nao encontrado."));
 		if (!post.isActive()) {
