@@ -102,14 +102,12 @@ class S3GatewayController {
 	ResponseEntity<String> listBuckets(HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "LIST");
 		List<String> buckets = catalog.bucketsOf(credential.ownerUserId());
-		StringBuilder xml = new StringBuilder();
-		xml.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
-		xml.append("<ListAllMyBucketsResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
-		xml.append("<Buckets>");
+		S3Xml xml = new S3Xml();
+		xml.root("ListAllMyBucketsResult").open("Buckets");
 		for (String bucket : buckets) {
-			xml.append("<Bucket><Name>").append(esc(bucket)).append("</Name></Bucket>");
+			xml.open("Bucket").element("Name", bucket).close("Bucket");
 		}
-		xml.append("</Buckets></ListAllMyBucketsResult>");
+		xml.close("Buckets").close("ListAllMyBucketsResult");
 		return xml(HttpStatus.OK).body(xml.toString());
 	}
 
@@ -129,30 +127,24 @@ class S3GatewayController {
 		boolean truncated = found.size() == maxKeys;
 		String lastKey = found.isEmpty() ? null : found.get(found.size() - 1).key();
 
-		StringBuilder xml = new StringBuilder();
-		xml.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
-		xml.append("<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
-		xml.append("<Name>").append(esc(bucket)).append("</Name>");
+		S3Xml xml = new S3Xml();
+		xml.root("ListBucketResult").element("Name", bucket);
 		String prefix = query.get("prefix");
 		if (prefix != null) {
-			xml.append("<Prefix>").append(esc(prefix)).append("</Prefix>");
+			xml.element("Prefix", prefix);
 		}
-		xml.append("<MaxKeys>").append(maxKeys).append("</MaxKeys>");
-		xml.append("<KeyCount>").append(found.size()).append("</KeyCount>");
-		xml.append("<IsTruncated>").append(truncated).append("</IsTruncated>");
+		xml.element("MaxKeys", maxKeys).element("KeyCount", found.size()).element("IsTruncated", truncated);
 		if (truncated && lastKey != null) {
-			xml.append(v2 ? "<NextContinuationToken>" : "<NextMarker>");
-			xml.append(v2 ? esc(lastKey) : esc(lastKey));
-			xml.append(v2 ? "</NextContinuationToken>" : "</NextMarker>");
+			xml.element(v2 ? "NextContinuationToken" : "NextMarker", lastKey);
 		}
 		for (StorageObject object : found) {
-			xml.append("<Contents><Key>").append(esc(object.key())).append("</Key>");
-			xml.append("<LastModified>").append(object.createdAt()).append("</LastModified>");
-			xml.append("<ETag>&quot;").append(esc(object.sha256())).append("&quot;</ETag>");
-			xml.append("<Size>").append(object.bytes() == null ? 0 : object.bytes()).append("</Size>");
-			xml.append("<StorageClass>STANDARD</StorageClass></Contents>");
+			xml.open("Contents").element("Key", object.key())
+				.element("LastModified", String.valueOf(object.createdAt()))
+				.element("ETag", "\"" + (object.sha256() == null ? "" : object.sha256()) + "\"")
+				.element("Size", object.bytes() == null ? 0 : object.bytes()).element("StorageClass", "STANDARD")
+				.close("Contents");
 		}
-		xml.append("</ListBucketResult>");
+		xml.close("ListBucketResult");
 		return xml(HttpStatus.OK).body(xml.toString());
 	}
 
@@ -370,18 +362,10 @@ class S3GatewayController {
 		return new S3ApiException(status, code, message);
 	}
 
-	/** XML de erro no formato do S3 — o formato que o SDK interpreta. */
+	/** XML de erro no formato do S3 — o formato que o SDK interpreta. Todo valor passa pelo builder. */
 	static String errorXml(String code, String message, String resource) {
-		return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" + "<Error><Code>" + esc(code) + "</Code><Message>"
-			+ esc(message) + "</Message><Resource>" + esc(resource == null ? "" : resource)
-			+ "</Resource><RequestId>" + esc(java.util.UUID.randomUUID().toString()) + "</RequestId></Error>";
-	}
-
-	static String esc(String value) {
-		if (value == null) {
-			return "";
-		}
-		return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
-			.replace("'", "&apos;");
+		return new S3Xml().open("Error").element("Code", code).element("Message", message)
+			.element("Resource", resource == null ? "" : resource)
+			.element("RequestId", java.util.UUID.randomUUID().toString()).close("Error").toString();
 	}
 }

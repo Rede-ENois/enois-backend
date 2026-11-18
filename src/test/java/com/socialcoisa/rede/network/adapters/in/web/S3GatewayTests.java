@@ -216,6 +216,30 @@ class S3GatewayTests {
 		assertThat(result.getResponse().getStatus()).isEqualTo(403);
 	}
 
+	/**
+	 * Chave com caracteres de XML: o documento tem de continuar sendo XML válido depois do escape.
+	 *
+	 * <p>Sem isso, um objeto chamado {@code <script>.txt} num bucket qualquer quebraria a resposta
+	 * de quem lista — e é o caminho que o CodeQL cobriu ({@code java/xss}) no PR #914.</p>
+	 */
+	@Test
+	void chave_com_caractere_de_xml_nao_quebra_a_listagem() throws Exception {
+		// `&` e `'` passam na URL sem percent-encoding (ao contrário de `<`, `>` e `"`, que o cliente
+		// codifica). São os que provam o escape do documento sem confundir com encode de URL.
+		String chave = "a&b'c.txt";
+		gravar(chave, "conteudo");
+
+		MockHttpServletRequestBuilder list = get("/s3/" + bucket).queryParam("list-type", "2");
+		assinar(list, SECRET, shaVazio());
+		var result = mockMvc.perform(list).andExpect(status().isOk()).andReturn();
+
+		String xml = result.getResponse().getContentAsString();
+		// O documento continua parseável e a chave aparece escapada.
+		javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder()
+			.parse(new java.io.ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+		assertThat(xml).contains("<Key>a&amp;b&apos;c.txt</Key>");
+	}
+
 	// ---------------------------------------------------------------- helpers: o "SDK"
 
 	private void gravar(String key, String conteudo) throws Exception {
