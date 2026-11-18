@@ -43,4 +43,8 @@ interface SpringDataGroupMemberJpaRepository extends JpaRepository<GroupMemberJp
 	@Modifying
 	@Query("DELETE FROM GroupMemberJpaEntity m WHERE m.groupId = :groupId AND m.userId = :userId")
 	int deleteByGroupIdAndUserId(@Param("groupId") String groupId, @Param("userId") String userId);
+
+	@Modifying
+	@Query("DELETE FROM GroupMemberJpaEntity m WHERE m.groupId = :groupId")
+	int deleteByGroupId(@Param("groupId") String groupId);
 }

@@ -29,4 +29,12 @@ interface SpringDataGroupPostJpaRepository extends JpaRepository<GroupPostJpaEnt
 	@Modifying
 	@Query("UPDATE GroupPostJpaEntity p SET p.pinned = false WHERE p.groupId = :groupId AND p.pinned = true")
 	int clearPinned(@Param("groupId") String groupId);
+
+	@Modifying
+	@Query("DELETE FROM GroupPostJpaEntity p WHERE p.groupId = :groupId")
+	int deleteByGroupId(@Param("groupId") String groupId);
+
+	long countByGroupId(String groupId);
+
+	List<GroupPostJpaEntity> findByGroupId(String groupId);
 }

@@ -38,4 +38,8 @@ interface SpringDataGroupJoinRequestJpaRepository extends JpaRepository<GroupJoi
 		WHERE r.id = :id AND r.status = :pending""")
 	int markDecided(@Param("id") String id, @Param("status") JoinRequestStatus status,
 			@Param("pending") JoinRequestStatus pending, @Param("actorId") String actorId, @Param("now") Instant now);
+
+	@Modifying
+	@Query("DELETE FROM GroupJoinRequestJpaEntity r WHERE r.groupId = :groupId")
+	int deleteByGroupId(@Param("groupId") String groupId);
 }

@@ -71,4 +71,21 @@ public interface GroupRepository {
 	 * decidiu antes — é o que impede duas aprovações simultâneas de virarem duas associações.
 	 */
 	int markDecided(String requestId, JoinRequestStatus status, String actorId, Instant now);
+
+	/**
+	 * Apaga de fato o grupo, mas só quando o conteúdo dele já não existe: membros, pedidos de
+	 * ingresso, tópicos, publicações, comentários e reações precisam ter sido removidos antes.
+	 *
+	 * <p>O comportamento normal é encerrar (CLOSED) e preservar o conteúdo de quem participava; este
+	 * caminho existe para a remoção FÍSICA pela plataforma, quando a preservação não se aplica —
+	 * conteúdo ilegal que precisa sair do banco, por exemplo. Quem chama já decidiu que o grupo não
+	 * deve continuar existindo, mesmo desligado.</p>
+	 */
+	void deleteRow(String groupId);
+
+	/** Remove todos os pedidos de ingresso do grupo (só a exclusão física pela plataforma). */
+	void deleteJoinRequests(String groupId);
+
+	/** Remove todas as associações de membro do grupo (só a exclusão física pela plataforma). */
+	void deleteMembers(String groupId);
 }
