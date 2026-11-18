@@ -90,8 +90,10 @@ devolve:
 O portador usa a URL sem `Authorization` e sem sessão — é o que permite ao navegador ler um objeto sem
 receber credencial. Regras, todas com teste:
 
-- **Credencial:** a do dono da sessão, e o bucket tem de estar no escopo dela. Emitir não é um segundo
-  caminho para bucket alheio.
+- **Credencial:** a do dono da sessão, **e o bucket tem de ser do dono** — conferido contra
+  `bucketsOf(owner)` antes de olhar credencial. `allowedBucket = null` significa "todos os buckets do
+  dono", não "todos os buckets da rede": sem essa conferência, escopo nulo emitiria URL de `PUT` para
+  o bucket de outra conta, e a URL **sai das mãos do dono**.
 - **Verbo:** só `GET` e `PUT`; o escopo da credencial continua mandando (uma URL de `PUT` com credencial
   só de `GET` é recusada ao usar).
 - **Validade:** 1 s até 7 dias (`X-Amz-Expires`). Fora disso a emissão recusa e a leitura também.
@@ -128,3 +130,8 @@ Códigos: `AccessDenied`, `InvalidAccessKeyId`, `SignatureDoesNotMatch`, `NotImp
   painel para criar/revogar (a criação hoje é por SQL/admin direto). Lacuna declarada.
 - **Credenciais temporárias (STS)** — `X-Amz-Security-Token` não é processado.
 - **Quotas e rate limiting por credencial** — a rota herda o limitador global, não um por Access Key.
+- **Donagem do bucket na requisição Assinada por cabeçalho** — `PUT`/`GET` com `Authorization` e
+  credencial de escopo nulo alcança bucket cuja chave ele conheça, sem conferir dono. É dívida anterior
+  a este documento: o catálogo guarda o dono, mas `beginUpload`/`requireDownloadable` não o conferem.
+  A **emissão de URL** não herda o furo (confere dono); fechá-lo no cabeçalho é mudança de semântica
+  do gateway e tem PR próprio.

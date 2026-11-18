@@ -313,8 +313,16 @@ class S3GatewayController {
 			throw s3Error(400, "InvalidArgument",
 				"Expira em segundos entre 1 e " + SigV4Verifier.MAX_PRESIGNED_SECONDS + ".");
 		}
-		// A credencial é a do DONO da sessão, e o bucket tem de ser dele: sem isso a emissão seria um
-		// segundo caminho de acesso a bucket alheio, ignorando o escopo que o gateway respeita.
+		// O bucket tem de ser DESTE dono. Não basta o escopo da credencial: `allowedBucket == null`
+		// significa "todos os buckets do dono", não "todos os buckets da rede" — e uma URL emitida
+		// sai das mãos do dono, então o escopo ilimitado não pode virar um link para o bucket de
+		// outra pessoa. A lista de buckets do dono já existe no catálogo (a mesma do ListBuckets).
+		boolean bucketDoDono = catalog.bucketsOf(user.id().value()).contains(bucket);
+		if (!bucketDoDono) {
+			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da sessao.");
+		}
+		// E a credencial escolhida tem de permitir o verbo E o bucket — escopo nulo passa aqui
+		// porque a donagem do bucket acima já foi conferida.
 		S3Credential credential = credentials.findByOwner(user.id().value(), 20)
 			.stream()
 			.filter(c -> c.revokedAt() == null && c.allows(verbo))
