@@ -165,6 +165,13 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		limit ?
 		""".formatted(OBJECT_COLUMNS);
 
+	/** Os buckets do dono: distintos e alfabéticos, sem as lápides (que não são conteúdo). */
+	private static final String BUCKETS_OF = """
+		select distinct bucket from network_storage_objects
+		where created_by = ? and state <> 'DELETED'
+		order by bucket asc
+		""";
+
 	private static final String LIST = """
 		select %s from network_storage_objects
 		where bucket = ? and object_key like ? and object_key > ? and state <> 'DELETED'
@@ -438,6 +445,11 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		String pattern = escapeLike(prefix == null ? "" : prefix) + "%";
 		String after = afterKey == null ? "" : afterKey;
 		return jdbc.query(LIST, OBJECT_MAPPER, bucket, pattern, after, limit);
+	}
+
+	@Override
+	public List<String> bucketsOf(String ownerUserId) {
+		return jdbc.query(BUCKETS_OF, (rs, row) -> rs.getString(1), ownerUserId);
 	}
 
 	@Override

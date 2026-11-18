@@ -55,6 +55,15 @@ public interface StorageCatalogRepository {
 	List<StorageObject> list(String bucket, String prefix, String afterKey, int limit);
 
 	/**
+	 * Os buckets com pelo menos um objeto do dono, em ordem alfabética — o ListBuckets do gateway S3.
+	 *
+	 * <p>Por <b>dono</b> e não por instalação: um cliente S3 não pode listar o bucket de outra conta.
+	 * Buckets do Storage não têm tabela própria (o nome nasce no primeiro upload), então a lista sai
+	 * dos objetos que existem.</p>
+	 */
+	List<String> bucketsOf(String ownerUserId);
+
+	/**
 	 * Todos os objetos servíveis, ordenados por {@code bucket, object_key} — a paginação da varredura
 	 * percorre o catálogo inteiro, não um bucket. O cursor é a chave: dois buckets podem ter a mesma
 	 * chave, e o cursor por chave visita as duas na mesma página — o que não perde nem duplica

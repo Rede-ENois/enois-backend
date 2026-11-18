@@ -575,5 +575,17 @@ class StorageCatalogServiceTests {
 			}
 			return false;
 		}
+
+		// --- Gateway S3 (§11, V356): os buckets do dono ---
+
+		@Override
+		public java.util.List<String> bucketsOf(String ownerUserId) {
+			return byKey.values().stream()
+				.filter(o -> o.createdBy() != null && o.createdBy().equals(ownerUserId))
+				.map(StorageObject::bucket)
+				.distinct()
+				.sorted()
+				.toList();
+		}
 	}
 }

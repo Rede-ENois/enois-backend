@@ -182,6 +182,56 @@ public class StorageCatalogService {
 			"Outra gravacao desta chave chegou ao mesmo tempo; tente novamente.");
 	}
 
+	/**
+	 * O upload do cliente S3 (brief §11): o corpo chega pelo gateway, não por um nó.
+	 *
+	 * <p><b>É o mesmo caminho do {@link #store}</b>, com uma diferença de origem: aqui quem grava a
+	 * réplica 0 é o Control Plane, e o nó recebe a designação como sempre. Duplicar o registro do
+	 * catálogo seria criar um segundo Storage — o que o contrato proíbe.</p>
+	 *
+	 * <p>Diferente do {@link #store}, que recebe um nó já autorizado, este ponto expõe o teto de
+	 * tamanho e o corpo vazio ao cliente — porque é o cliente que erra, e o erro tem de ser 413/400,
+	 * não 500.</p>
+	 */
+	public StorageObject finishUpload(String objectId, InputStream body, String actorId) {
+		StorageObject object = catalog.findById(objectId)
+			.orElseThrow(() -> new ApiException(404, "STORAGE_OBJECT_UNKNOWN", "Objeto nao encontrado no catalogo."));
+		if (object.state() != StorageObjectState.PENDING) {
+			throw new ApiException(409, "STORAGE_ALREADY_STORED", "O objeto ja tem copia confirmada.");
+		}
+		Spooled measured = measure(body);
+		if (measured.bytes() == 0) {
+			deleteQuietly(measured.temp());
+			throw new ApiException(400, "STORAGE_EMPTY_BODY", "O corpo enviado esta vazio.");
+		}
+		if (measured.bytes() > maxObjectBytes) {
+			deleteQuietly(measured.temp());
+			throw new ApiException(413, "STORAGE_OBJECT_TOO_LARGE",
+				"O objeto excede o teto desta instalacao (" + maxObjectBytes + " bytes).");
+		}
+		Path destination = bodyPath(object.id());
+		try {
+			Files.move(measured.temp(), destination, StandardCopyOption.REPLACE_EXISTING);
+		}
+		catch (IOException unwritable) {
+			deleteQuietly(measured.temp());
+			throw new ApiException(500, "STORAGE_ROOT_UNAVAILABLE", "Nao foi possivel gravar o objeto.");
+		}
+		Instant now = clock.instant();
+		if (!catalog.markStored(object.id(), measured.bytes(), measured.sha256(), now)) {
+			deleteQuietly(destination);
+			throw new ApiException(409, "STORAGE_ALREADY_STORED", "O objeto ja tem copia confirmada.");
+		}
+		// A réplica 0 é a do Control Plane — a mesma convenção do upload pelo nó.
+		catalog.savePlacement(new StoragePlacement(object.id(), 0, "control-plane", measured.bytes(),
+			measured.sha256(), StoragePlacement.State.OK, now));
+		designReplicas(object.id(), measured.bytes(), measured.sha256(), now);
+		audit.record(actorId, "STORAGE_OBJECT_STORED", object.id(),
+			"{\"bucket\":\"" + escape(object.bucket()) + "\",\"key\":\"" + escape(object.key()) + "\",\"bytes\":"
+				+ measured.bytes() + ",\"sha256\":\"" + measured.sha256() + "\",\"via\":\"s3\"}");
+		return catalog.findById(object.id()).orElse(object);
+	}
+
 	/** A política do bucket, ou os padrões quando ninguém configurou. */
 	public StorageBucketPolicy bucketPolicy(String bucket) {
 		validateBucket(bucket);

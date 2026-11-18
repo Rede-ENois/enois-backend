@@ -40,6 +40,22 @@ public class GlobalExceptionHandler {
 		this.monitoring = monitoring;
 	}
 
+	/**
+	 * O gateway S3 (brief §11) precisa do documento de erro em XML com o {@code Code} da S3
+	 * ({@code AccessDenied}, {@code SignatureDoesNotMatch}): o SDK lê esse campo para decidir
+	 * retentativa e para mostrar a mensagem. Registrado ANTES do genérico de {@code ApiException} e
+	 * restrito à subclasse, então nenhuma rota fora do gateway muda de formato.
+	 */
+	@ExceptionHandler(com.socialcoisa.rede.network.adapters.in.web.S3ApiException.class)
+	ResponseEntity<String> handleS3Exception(com.socialcoisa.rede.network.adapters.in.web.S3ApiException exception,
+			jakarta.servlet.http.HttpServletRequest request) {
+		LOGGER.debug("s3_gateway_error status={} code={}", exception.status(), exception.code());
+		return ResponseEntity.status(exception.status())
+			.header(org.springframework.http.HttpHeaders.CONTENT_TYPE, "application/xml; charset=utf-8")
+			.body(exception.toXml(request == null ? null
+				: request.getMethod() + " " + request.getRequestURI()));
+	}
+
 	@ExceptionHandler(ApiException.class)
 	ResponseEntity<ErrorResponse> handleApiException(ApiException exception,
 			jakarta.servlet.http.HttpServletRequest request) {
