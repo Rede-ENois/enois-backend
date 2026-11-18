@@ -13,6 +13,7 @@ import com.socialcoisa.rede.feed.domain.PostType;
 import com.socialcoisa.rede.feed.domain.UserId;
 import com.socialcoisa.rede.feed.domain.Visibility;
 
+import org.hibernate.annotations.BatchSize;
 import org.hibernate.annotations.DynamicUpdate;
 
 import jakarta.persistence.CollectionTable;
@@ -60,12 +61,14 @@ class PostJpaEntity {
 	@Column(name = "page_html", columnDefinition = "longtext")
 	private String pageHtml;
 
+	@BatchSize(size = 32)
 	@ElementCollection(fetch = FetchType.EAGER)
 	@CollectionTable(name = "post_tags", joinColumns = @JoinColumn(name = "post_id"),
 			indexes = @Index(name = "idx_post_tags_tag", columnList = "tag"))
 	@Column(name = "tag", nullable = false)
 	private List<String> tags = new ArrayList<>();
 
+	@BatchSize(size = 32)
 	@ElementCollection(fetch = FetchType.EAGER)
 	@CollectionTable(name = "post_media", joinColumns = @JoinColumn(name = "post_id"))
 	@Column(name = "media_id", nullable = false)
