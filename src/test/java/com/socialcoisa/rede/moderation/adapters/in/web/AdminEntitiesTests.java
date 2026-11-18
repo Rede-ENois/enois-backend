@@ -187,6 +187,7 @@ class AdminEntitiesTests {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.outcome").value("DELETED"))
 			.andExpect(jsonPath("$.name").value("Grupo Alvo"))
+			.andExpect(jsonPath("$.removedPosts").value(1))
 			.andExpect(jsonPath("$.adminWasMember").value(false));
 
 		// A MESMA chave devolve a mesma resposta; a linha já não existe e nada é decidido de novo.

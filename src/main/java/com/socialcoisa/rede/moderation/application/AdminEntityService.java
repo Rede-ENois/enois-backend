@@ -87,7 +87,7 @@ public class AdminEntityService {
 		audit.record(adminId, "ADMIN_COMMUNITY_DELETED", communityId,
 			"{\"name\":" + quote(community.name()) + ",\"ownerId\":" + quote(ownerId) + ",\"members\":" + members
 				+ ",\"reason\":" + quote(cleanReason) + ",\"detachedAssociations\":" + communityAssociations() + "}");
-		return new Deletion(communityId, community.name(), "DELETED", members, ownerId, adminWasMember);
+		return new Deletion(communityId, community.name(), "DELETED", members, ownerId, adminWasMember, 0);
 	}
 
 	/** Perfil visto pelo painel: o mesmo público + quantos vínculos a exclusão levaria. */
@@ -173,7 +173,7 @@ public class AdminEntityService {
 			"{\"slug\":" + quote(slug) + ",\"ownerId\":" + quote(ownerId) + ",\"members\":" + members
 				+ ",\"posts\":" + removedPosts + ",\"reason\":" + quote(cleanReason)
 				+ ",\"detachedAssociations\":" + groupAssociations() + "}");
-		return new Deletion(groupId, group.name(), "DELETED", members, ownerId, adminWasMember);
+		return new Deletion(groupId, group.name(), "DELETED", members, ownerId, adminWasMember, removedPosts);
 	}
 
 	/**
@@ -192,7 +192,7 @@ public class AdminEntityService {
 		// A auditoria da transição (ADMIN_GROUP_CLOSED, com o motivo) é do serviço de grupo; aqui só
 		// se decide — duas linhas para o mesmo fato poluiriam a trilha.
 		groups.closeByAdmin(groupId, adminId, cleanReason);
-		return new Deletion(groupId, group.name(), "CLOSED", members, group.ownerId(), adminWasMember);
+		return new Deletion(groupId, group.name(), "CLOSED", members, group.ownerId(), adminWasMember, 0);
 	}
 
 	@Transactional(readOnly = true)
@@ -299,7 +299,7 @@ public class AdminEntityService {
 
 	/** O que a exclusão levou: quem decidiu já vai na auditoria; aqui fica o que a tela mostra. */
 	public record Deletion(String id, String name, String outcome, int affectedMembers, String ownerId,
-			boolean adminWasMember) {
+			boolean adminWasMember, int removedPosts) {
 	}
 
 	public record CommunityOverview(String id, String name, String ownerId, int members, int admins) {
