@@ -63,7 +63,30 @@ public class NetworkNodeService {
 	 */
 	private final com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository responsibles;
 	private final com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository storageBandwidth;
+	/**
+	 * Revogação do certificado mTLS junto com a chave (brief §10).
+	 *
+	 * <p>{@code @Nullable} porque este serviço também roda em contextos que não criam o de
+	 * certificado. Sem o laço, revogar o nó matava a API key e deixava o certificado vigente — e o
+	 * handshake aceitaria de volta o nó derrubado. O {@code accepts()} também confere o estado, então
+	 * há duas barreiras; esta existe para o banco não contar uma história que a rede não vive.</p>
+	 */
+	private final com.socialcoisa.rede.network.application.NodeCertificateService certificates;
 
+	/**
+	 * Forma anterior, sem o serviço de certificado. Existe para quem monta o serviço à mão (testes de
+	 * unidade do ciclo de vida) não precisar de um certificado que não está testando.
+	 */
+	NetworkNodeService(NetworkNodeRepository nodes, NetworkAuthorityRepository authorities,
+			ProvisionTokenRepository tokens, NodeKeyService keyService, AuditTrail audit, Clock clock,
+			long tokenTtlMinutes, long conflictSeconds, long staleSeconds,
+			com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository responsibles,
+			com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository storageBandwidth) {
+		this(nodes, authorities, tokens, keyService, audit, clock, tokenTtlMinutes, conflictSeconds, staleSeconds,
+			responsibles, storageBandwidth, null);
+	}
+
+	@org.springframework.beans.factory.annotation.Autowired
 	NetworkNodeService(NetworkNodeRepository nodes, NetworkAuthorityRepository authorities,
 			ProvisionTokenRepository tokens, NodeKeyService keyService, AuditTrail audit, Clock clock,
 			@Value("${rede.network.provision-token-ttl-minutes:30}") long tokenTtlMinutes,
@@ -72,7 +95,9 @@ public class NetworkNodeService {
 			// nó não esteja "conectado" num quadro e "fora" no outro.
 			@Value("${rede.network.node-stale-seconds:180}") long staleSeconds,
 			com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository responsibles,
-			com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository storageBandwidth) {
+			com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository storageBandwidth,
+			@org.springframework.lang.Nullable
+			com.socialcoisa.rede.network.application.NodeCertificateService certificates) {
 		this.nodes = nodes;
 		this.authorities = authorities;
 		this.tokens = tokens;
@@ -84,6 +109,7 @@ public class NetworkNodeService {
 		this.staleAfter = Duration.ofSeconds(Math.max(30, staleSeconds));
 		this.responsibles = responsibles;
 		this.storageBandwidth = storageBandwidth;
+		this.certificates = certificates;
 	}
 
 	/**
@@ -325,6 +351,7 @@ public class NetworkNodeService {
 			// Revogar o nó revoga as chaves dele na mesma transação: chave vigente de nó revogado
 			// seria acesso válido por um caminho lateral.
 			keyService.revokeAllForNode(nodeId, actorId);
+			revogarCertificados(nodeId, actorId);
 		}
 		audit.record(actorId, "NODE_" + next.name(), nodeId, "{}");
 		return require(nodeId);
@@ -386,6 +413,13 @@ public class NetworkNodeService {
 	}
 
 	/** O nó do participante, ou 404 — 403 confirmaria que o id existe. */
+	/** Revoga o certificado do nó junto com a chave. Nó sem certificado é caso normal, não erro. */
+	private void revogarCertificados(String nodeId, String actorId) {
+		if (certificates != null) {
+			certificates.revokeAllForNode(nodeId, actorId);
+		}
+	}
+
 	private NetworkNode requireOwned(String nodeId, String ownerUserId) {
 		NetworkNode node = require(nodeId);
 		if (!node.ownerUserId().equals(ownerUserId)) {
@@ -416,6 +450,7 @@ public class NetworkNodeService {
 		if (node.status() != NodeStatus.SUSPENDED) {
 			nodes.updateStatus(nodeId, NodeStatus.SUSPENDED, ownerUserId, clock.instant());
 			keyService.revokeAllForNode(nodeId, ownerUserId);
+			revogarCertificados(nodeId, ownerUserId);
 			audit.record(ownerUserId, "NODE_DISCONNECTED", nodeId, "{\"voluntary\":true}");
 		}
 		return require(nodeId);

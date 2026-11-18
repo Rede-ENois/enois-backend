@@ -68,6 +68,9 @@ class WriteRouteInterceptor implements HandlerInterceptor {
 		// conferidos no controller — fail-closed como as rotas internas.
 		"/network/nodes/enroll",
 		"/network/nodes/heartbeat",
+		// Renovação do certificado mTLS do nó (brief §10): mesmo credencial de nó, e o nó não tem
+		// sessão de navegador. O controller confere X-Node-Id + X-Node-Key antes de assinar.
+		"/network/nodes/me/certificate",
 		// Fase 2: o nó devolve o resultado da tarefa. Mesma credencial de nó (X-Node-Id + X-Node-Key),
 		// conferida no controller. O GET /network/tasks/next não entra aqui: só escrita exige sessão.
 		"/network/tasks/*/result",
