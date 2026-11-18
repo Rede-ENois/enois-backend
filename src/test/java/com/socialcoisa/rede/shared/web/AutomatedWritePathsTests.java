@@ -75,6 +75,10 @@ class AutomatedWritePathsTests {
 		// heartbeat a API key do nó, ambos conferidos no controller (fase 1 da rede distribuída).
 		"/network/nodes/enroll",
 		"/network/nodes/heartbeat",
+		// Renovação do certificado mTLS do nó (brief §10): a credencial é a API key (X-Node-Id +
+		// X-Node-Key), e o certificado que ele já tem não é exigido — quem renova pode estar com o
+		// certificado a um dia de expirar.
+		"/network/nodes/me/certificate",
 		// Fase 2: resultado de tarefa devolvido pelo nó, com a mesma credencial de nó.
 		"/network/tasks/*/result",
 		// Fase 3: nó de borda confirmando o que sincronizou e pedindo reconciliação.

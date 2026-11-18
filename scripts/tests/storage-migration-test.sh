@@ -691,5 +691,77 @@ fi
 credenciais=$(db -N -e "select count(*) from network_storage_s3_credentials" 2>/dev/null | tr -d '[:space:]')
 [[ "$credenciais" == "1" ]] && pass "V357: a credencial sobreviveu à 2ª aplicação" \
   || fail "esperava 1 credencial, achei '$credenciais'"
+# ---------------------------------------------------------------------------
+# V358 — certificado mTLS individual do nó (brief §10, doc 04 §1).
+#
+# A tabela guarda o certificado PÚBLICO e o estado dele; NÃO existe coluna de chave privada
+# (a do nó fica no keystore dele, a da CA na configuração do Control Plane). O que a migração
+# precisa garantir: o fingerprint é único (é o identificador que o painel confere), a revogação
+# é linha alterada e não apagada, e reaplicar não falha.
+# ---------------------------------------------------------------------------
+CERTIFICADO=V358__network_node_certificates.sql
+if apply "$CERTIFICADO" >/dev/null 2>&1; then
+  pass "V358: primeira aplicação"
+else
+  fail "V358: primeira aplicação falhou"
+  db < "$MIGRATIONS/$CERTIFICADO" 2>&1 | head -3 >&2 || true
+fi
+
+# Nenhuma coluna de segredo nesta tabela: o certificado é público por definição.
+segredos=$(db -N -e "select count(*) from information_schema.columns where table_schema = database() \
+  and table_name = 'network_node_certificates' and column_name in ('private_key', 'ca_key', 'secret')" 2>/dev/null | tr -d '[:space:]')
+[[ "$segredos" == "0" ]] && pass "V358: a tabela não guarda chave privada" \
+  || fail "V358: apareceu coluna de chave privada ('$segredos')"
+
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_node_certificates (id, node_id, serial, subject, pem, public_key, fingerprint_sha256,
+  not_before, not_after, created_at)
+values ('nct_t1', 'nd_mig_t1', '0a1b2c', 'CN=ENOIS-NODE-nd_mig_t1', '-----BEGIN CERTIFICATE-----AAA-----END CERTIFICATE-----',
+  'chave-publica', repeat('f', 64), now(3), now(3) + interval 90 day, now(3));
+SQL
+then
+  pass "V358: certificado grava"
+else
+  fail "V358: não gravou o certificado"
+fi
+
+# O fingerprint é o identificador do certificado: repetir dois iguais seria o mesmo certificado
+# contado duas vezes no painel.
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_node_certificates (id, node_id, serial, subject, pem, public_key, fingerprint_sha256,
+  not_before, not_after, created_at)
+values ('nct_t2', 'nd_mig_t2', '0a1b2d', 'CN=ENOIS-NODE-nd_mig_t2', 'pem', 'chave', repeat('f', 64), now(3),
+  now(3) + interval 90 day, now(3));
+SQL
+then
+  fail "V358: aceitou fingerprint duplicado"
+else
+  pass "V358: a unicidade recusa fingerprint duplicado"
+fi
+
+# Rotação: o certificado anterior continua na tabela, revogado — o rastro não some.
+db >/dev/null 2>&1 <<'SQL'
+update network_node_certificates set revoked_at = now(3), revoked_by = 'nd_mig_t1', revoked_reason = 'rotacao'
+  where node_id = 'nd_mig_t1' and revoked_at is null;
+insert into network_node_certificates (id, node_id, serial, subject, pem, public_key, fingerprint_sha256,
+  not_before, not_after, created_at)
+values ('nct_t3', 'nd_mig_t1', '0a1b2e', 'CN=ENOIS-NODE-nd_mig_t1', 'pem2', 'chave2', repeat('e', 64), now(3),
+  now(3) + interval 90 day, now(3));
+SQL
+historico=$(db -N -e "select count(*) from network_node_certificates where node_id = 'nd_mig_t1'" 2>/dev/null | tr -d '[:space:]')
+vigente=$(db -N -e "select count(*) from network_node_certificates where node_id = 'nd_mig_t1' and revoked_at is null" 2>/dev/null | tr -d '[:space:]')
+[[ "$historico" == "2" && "$vigente" == "1" ]] && pass "V358: rotação mantém o histórico e deixa 1 vigente" \
+  || fail "V358: esperava 2 linhas com 1 vigente, achei '$histórico'/'$vigente'"
+
+if apply "$CERTIFICADO" >/dev/null 2>&1; then
+  pass "V358: reaplicar não falha (idempotente)"
+else
+  fail "V358: 2ª aplicação falhou (não idempotente)"
+fi
+
+certs=$(db -N -e "select count(*) from network_node_certificates" 2>/dev/null | tr -d '[:space:]')
+[[ "$certs" == "2" ]] && pass "V358: os certificados sobreviveram à 2ª aplicação" \
+  || fail "esperava 2 certificados, achei '$certs'"
+
 printf '\nStorage migration: PASS %d | FAIL %d\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))
