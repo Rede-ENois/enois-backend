@@ -351,7 +351,7 @@ class StorageCatalogServiceTests {
 			if (existing != null) {
 				return existing;
 			}
-			StorageObject object = new StorageObject(id, bucket, key, contentType, null, null,
+			StorageObject object = StorageObject.current(id, bucket, key, contentType, null, null,
 				StorageObjectState.PENDING, createdBy, now, now, null);
 			byKey.put(bucket + "/" + key, object);
 			return object;
@@ -360,14 +360,14 @@ class StorageCatalogServiceTests {
 		@Override
 		public boolean markStored(String id, long bytes, String sha256, Instant now) {
 			return replace(id, o -> o.state() == StorageObjectState.PENDING,
-				o -> new StorageObject(o.id(), o.bucket(), o.key(), o.contentType(), bytes, sha256,
+				o -> StorageObject.current(o.id(), o.bucket(), o.key(), o.contentType(), bytes, sha256,
 					StorageObjectState.STORED, o.createdBy(), o.createdAt(), now, null));
 		}
 
 		@Override
 		public boolean markDeleted(String id, Instant now) {
 			return replace(id, o -> o.state() != StorageObjectState.DELETED,
-				o -> new StorageObject(o.id(), o.bucket(), o.key(), o.contentType(), o.bytes(), o.sha256(),
+				o -> StorageObject.current(o.id(), o.bucket(), o.key(), o.contentType(), o.bytes(), o.sha256(),
 					StorageObjectState.DELETED, o.createdBy(), o.createdAt(), now, now));
 		}
 
@@ -469,6 +469,68 @@ class StorageCatalogServiceTests {
 		@Override
 		public List<StoragePlacement> placementsOnNode(String nodeId) {
 			return placements.values().stream().filter(p -> p.nodeId().equals(nodeId)).toList();
+		}
+
+		// --- Ciclo de vida (§14, V352): o fake guarda o mínimo que os serviços leem ---
+
+		@Override
+		public StorageObject insertVersion(String id, String bucket, String key, String contentType, String createdBy,
+				Instant now, long version) {
+			StorageObject object = new StorageObject(id, bucket, key, contentType, null, null,
+				StorageObjectState.PENDING, createdBy, now, now, null, version, null, null);
+			byKey.put(bucket + "/" + key, object);
+			return object;
+		}
+
+		@Override
+		public boolean markSuperseded(String bucket, String key, String supersededBy, Instant now) {
+			StorageObject corrente = byKey.get(bucket + "/" + key);
+			if (corrente == null || !corrente.currentVersion()) {
+				return false;
+			}
+			byKey.put(bucket + "/" + key, new StorageObject(corrente.id(), corrente.bucket(), corrente.key(),
+				corrente.contentType(), corrente.bytes(), corrente.sha256(), corrente.state(), corrente.createdBy(),
+				corrente.createdAt(), now, corrente.deletedAt(), corrente.version(), supersededBy,
+				corrente.expiresAt()));
+			return true;
+		}
+
+		@Override
+		public void setExpiresAt(String id, Instant expiresAt) {
+			replace(id, o -> true, o -> new StorageObject(o.id(), o.bucket(), o.key(), o.contentType(), o.bytes(),
+				o.sha256(), o.state(), o.createdBy(), o.createdAt(), o.updatedAt(), o.deletedAt(), o.version(),
+				o.supersededBy(), expiresAt));
+		}
+
+		@Override
+		public List<StorageObject> versions(String bucket, String key) {
+			return byKey.values().stream().filter(o -> o.bucket().equals(bucket) && o.key().equals(key)).toList();
+		}
+
+		@Override
+		public List<StorageObject> expired(Instant now, int limit) {
+			return byKey.values().stream().filter(o -> o.expired(now)).limit(limit).toList();
+		}
+
+		@Override
+		public List<StorageObject> supersededBefore(Instant cutoff, int limit) {
+			return byKey.values().stream().filter(o -> !o.currentVersion() && !o.updatedAt().isAfter(cutoff))
+				.limit(limit).toList();
+		}
+
+		private final java.util.Map<String, com.socialcoisa.rede.network.domain.StorageBucketPolicy> policies =
+			new java.util.LinkedHashMap<>();
+
+		@Override
+		public Optional<com.socialcoisa.rede.network.domain.StorageBucketPolicy> bucketPolicy(String bucket) {
+			return Optional.ofNullable(policies.get(bucket));
+		}
+
+		@Override
+		public com.socialcoisa.rede.network.domain.StorageBucketPolicy saveBucketPolicy(
+				com.socialcoisa.rede.network.domain.StorageBucketPolicy policy) {
+			policies.put(policy.bucket(), policy);
+			return policy;
 		}
 	}
 }

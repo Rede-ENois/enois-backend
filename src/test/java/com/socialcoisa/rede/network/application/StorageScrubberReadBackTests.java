@@ -279,7 +279,7 @@ class StorageScrubberReadBackTests {
 			if (existing.isPresent()) {
 				return existing.get();
 			}
-			StorageObject object = new StorageObject(id, bucket, key, contentType, null, null,
+			StorageObject object = StorageObject.current(id, bucket, key, contentType, null, null,
 				StorageObjectState.PENDING, createdBy, now, now, null);
 			objects.add(object);
 			return object;
@@ -290,7 +290,7 @@ class StorageScrubberReadBackTests {
 			for (int i = 0; i < objects.size(); i++) {
 				StorageObject o = objects.get(i);
 				if (o.id().equals(id) && o.state() == StorageObjectState.PENDING) {
-					objects.set(i, new StorageObject(o.id(), o.bucket(), o.key(), o.contentType(), bytes, sha256,
+					objects.set(i, StorageObject.current(o.id(), o.bucket(), o.key(), o.contentType(), bytes, sha256,
 						StorageObjectState.STORED, o.createdBy(), o.createdAt(), now, null));
 					return true;
 				}
@@ -400,6 +400,74 @@ class StorageScrubberReadBackTests {
 		@Override
 		public List<StoragePlacement> placementsOnNode(String nodeId) {
 			return placements.stream().filter(p -> p.nodeId().equals(nodeId)).toList();
+		}
+
+		// --- Ciclo de vida (§14, V352): o fake guarda o mínimo que os serviços leem ---
+
+		private final java.util.Map<String, com.socialcoisa.rede.network.domain.StorageBucketPolicy> policies =
+			new java.util.LinkedHashMap<>();
+
+		@Override
+		public StorageObject insertVersion(String id, String bucket, String key, String contentType, String createdBy,
+				Instant now, long version) {
+			StorageObject object = new StorageObject(id, bucket, key, contentType, null, null,
+				StorageObjectState.PENDING, createdBy, now, now, null, version, null, null);
+			objects.add(object);
+			return object;
+		}
+
+		@Override
+		public boolean markSuperseded(String bucket, String key, String supersededBy, Instant now) {
+			for (int i = 0; i < objects.size(); i++) {
+				StorageObject o = objects.get(i);
+				if (o.bucket().equals(bucket) && o.key().equals(key) && o.currentVersion()) {
+					objects.set(i, new StorageObject(o.id(), o.bucket(), o.key(), o.contentType(), o.bytes(),
+						o.sha256(), o.state(), o.createdBy(), o.createdAt(), now, o.deletedAt(), o.version(),
+						supersededBy, o.expiresAt()));
+					return true;
+				}
+			}
+			return false;
+		}
+
+		@Override
+		public void setExpiresAt(String id, Instant expiresAt) {
+			for (int i = 0; i < objects.size(); i++) {
+				StorageObject o = objects.get(i);
+				if (o.id().equals(id)) {
+					objects.set(i, new StorageObject(o.id(), o.bucket(), o.key(), o.contentType(), o.bytes(),
+						o.sha256(), o.state(), o.createdBy(), o.createdAt(), o.updatedAt(), o.deletedAt(),
+						o.version(), o.supersededBy(), expiresAt));
+				}
+			}
+		}
+
+		@Override
+		public List<StorageObject> versions(String bucket, String key) {
+			return objects.stream().filter(o -> o.bucket().equals(bucket) && o.key().equals(key)).toList();
+		}
+
+		@Override
+		public List<StorageObject> expired(Instant now, int limit) {
+			return objects.stream().filter(o -> o.expired(now)).limit(limit).toList();
+		}
+
+		@Override
+		public List<StorageObject> supersededBefore(Instant cutoff, int limit) {
+			return objects.stream().filter(o -> !o.currentVersion() && !o.updatedAt().isAfter(cutoff))
+				.limit(limit).toList();
+		}
+
+		@Override
+		public Optional<com.socialcoisa.rede.network.domain.StorageBucketPolicy> bucketPolicy(String bucket) {
+			return Optional.ofNullable(policies.get(bucket));
+		}
+
+		@Override
+		public com.socialcoisa.rede.network.domain.StorageBucketPolicy saveBucketPolicy(
+				com.socialcoisa.rede.network.domain.StorageBucketPolicy policy) {
+			policies.put(policy.bucket(), policy);
+			return policy;
 		}
 	}
 }

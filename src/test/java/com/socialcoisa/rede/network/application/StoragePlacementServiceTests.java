@@ -411,12 +411,12 @@ class StoragePlacementServiceTests {
 	}
 
 	private static com.socialcoisa.rede.network.domain.StorageObject mediaObject(java.time.Instant createdAt) {
-		return new com.socialcoisa.rede.network.domain.StorageObject("sob_1", "fotos", "a.jpg", "image/jpeg", 10L,
+		return com.socialcoisa.rede.network.domain.StorageObject.current("sob_1", "fotos", "a.jpg", "image/jpeg", 10L,
 			"abc", com.socialcoisa.rede.network.domain.StorageObjectState.STORED, "owner", createdAt, createdAt, null);
 	}
 
 	private static com.socialcoisa.rede.network.domain.StorageObject textObject(java.time.Instant createdAt) {
-		return new com.socialcoisa.rede.network.domain.StorageObject("sob_1", "docs", "a.txt", "text/plain", 10L,
+		return com.socialcoisa.rede.network.domain.StorageObject.current("sob_1", "docs", "a.txt", "text/plain", 10L,
 			"abc", com.socialcoisa.rede.network.domain.StorageObjectState.STORED, "owner", createdAt, createdAt, null);
 	}
 }

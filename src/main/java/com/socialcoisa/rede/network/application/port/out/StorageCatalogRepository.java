@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
+import com.socialcoisa.rede.network.domain.StorageBucketPolicy;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
 
@@ -16,7 +17,10 @@ import com.socialcoisa.rede.network.domain.StoragePlacement;
  */
 public interface StorageCatalogRepository {
 
-	/** O objeto por bucket e chave, inclusive lapidado — a lápide também precisa responder "já existiu". */
+	/**
+	 * O objeto por bucket e chave: a versão <b>corrente</b>, inclusive lapidada — a lápide também
+	 * precisa responder "já existiu".
+	 */
 	Optional<StorageObject> find(String bucket, String key);
 
 	/** O objeto por id, para as operações que já o resolveram (upload, download, remoção). */
@@ -119,4 +123,36 @@ public interface StorageCatalogRepository {
 
 	/** O que este nó hospeda, para o painel e para o nó saber o que tem. */
 	List<StoragePlacement> placementsOnNode(String nodeId);
+
+	/**
+	 * Cria a <b>versão nova</b> de uma chave. Diferente de {@link #createPending}: nunca reaproveita
+	 * linha. A versão corrente anterior tem de já ter sido marcada por {@link #markSuperseded} — o
+	 * índice único condicional recusa duas correntes da mesma chave.
+	 */
+	StorageObject insertVersion(String id, String bucket, String key, String contentType, String createdBy,
+			Instant now, long version);
+
+	/**
+	 * Marca a versão corrente de {@code bucket/key} como substituída por {@code supersededBy}.
+	 * Devolve {@code false} quando não havia corrente (concorrência: outra gravação chegou antes).
+	 */
+	boolean markSuperseded(String bucket, String key, String supersededBy, Instant now);
+
+	/** Prazo de vida do objeto; nulo remove o prazo. */
+	void setExpiresAt(String id, Instant expiresAt);
+
+	/** Todas as versões da chave em ordem crescente — o histórico, incluindo a corrente. */
+	List<StorageObject> versions(String bucket, String key);
+
+	/** Versões correntes, servíveis e vencidas até {@code now}, em ordem de vencimento. */
+	List<StorageObject> expired(Instant now, int limit);
+
+	/** Versões substituídas antes de {@code cutoff} e ainda sem lápide — o que a retenção libera. */
+	List<StorageObject> supersededBefore(Instant cutoff, int limit);
+
+	/** Política do bucket; vazio quando ninguém a configurou (os padrões valem). */
+	Optional<StorageBucketPolicy> bucketPolicy(String bucket);
+
+	/** Grava (ou substitui) a política do bucket e devolve o que ficou gravado. */
+	StorageBucketPolicy saveBucketPolicy(StorageBucketPolicy policy);
 }

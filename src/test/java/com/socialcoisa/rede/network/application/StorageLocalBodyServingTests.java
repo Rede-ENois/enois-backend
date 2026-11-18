@@ -81,7 +81,7 @@ class StorageLocalBodyServingTests {
 	}
 
 	private StorageObject objeto(String id, String content) {
-		StorageObject object = new StorageObject(id, "fotos", "gato.jpg", "image/jpeg",
+		StorageObject object = StorageObject.current(id, "fotos", "gato.jpg", "image/jpeg",
 			(long) bytes(content).length, sha(content), StorageObjectState.STORED, "user_1", NOW, NOW, null);
 		when(catalog.findById(id)).thenReturn(Optional.of(object));
 		return object;
