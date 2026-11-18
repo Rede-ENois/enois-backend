@@ -31,6 +31,7 @@ public interface PollRepository {
 	/**
 	 * Substitui a selecao da pessoa no post: grava o que falta e apaga o que saiu. Enquanto a
 	 * enquete esta aberta o voto pode ser trocado; depois do prazo o servico recusa antes de chegar aqui.
+	 * O chamador deve manter o lock do post ({@link PostRepository#lockForUpdate}) ate o fim da transacao.
 	 */
 	void replaceVotes(PostId postId, UserId user, List<Integer> positions);
 
