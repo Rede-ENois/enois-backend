@@ -308,6 +308,9 @@ Implementa: `DeletePostUseCase`, `BulkDeletePostsUseCase`
 | `normalizeReason(String reason)` | Normaliza razão da deleção |
 | `requestMediaDeletion(Post post)` | Inicia job de deleção de mídia associada |
 
+A expiração de Momento e Instante busca no banco até 200 posts ativos por rodada, ordenados por
+vencimento e id; somente prazos anteriores ao instante da rodada entram no lote.
+
 ### PostInteractionService
 
 **Arquivo**: `src/main/java/com/socialcoisa/rede/feed/application/PostInteractionService.java`

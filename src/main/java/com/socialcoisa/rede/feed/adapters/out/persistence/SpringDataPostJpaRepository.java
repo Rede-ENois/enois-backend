@@ -78,8 +78,8 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 			PostStatus status, Instant before, Pageable pageable);
 
 	/** Efêmeros vencidos e ainda ativos (Momento, Instante) — o worker aplica o soft-delete. */
-	List<PostJpaEntity> findByTypeInAndStatusAndExpiresAtBefore(Collection<PostType> types, PostStatus status,
-			Instant now);
+	List<PostJpaEntity> findByTypeInAndStatusAndExpiresAtBeforeOrderByExpiresAtAscIdAsc(Collection<PostType> types,
+			PostStatus status, Instant now, Pageable pageable);
 
 	// ---- Separação de identidades (perfil profissional): regras no backend, sempre ----
 
