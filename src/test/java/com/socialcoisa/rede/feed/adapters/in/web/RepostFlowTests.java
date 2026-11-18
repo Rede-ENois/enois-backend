@@ -385,7 +385,7 @@ class RepostFlowTests {
 						"opinion", "Tentando republicar sem ser membro",
 						"communityId", communityId))))
 				.andExpect(status().isForbidden())
-				.andExpect(jsonPath("$.code").value("NOT_COMMUNITY_MEMBER"));
+				.andExpect(jsonPath("$.code").value("NOT_A_MEMBER"));
 	}
 
 	@Test
