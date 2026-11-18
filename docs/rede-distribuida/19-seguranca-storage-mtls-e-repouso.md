@@ -139,6 +139,9 @@ disco (`NodeBodyStore.write`) passa a ser cifrado **antes** de receber o nome fi
 - **Sem a chave, grava em claro e diz isso** (`encryptionAtRest()` é falso). Não finge cifrar.
 - **Corpo legado continua legível**: arquivo sem o cabeçalho é servido como está, para que ligar a
   cifra numa instalação com réplicas não reprove todos os nós de uma vez.
+- **A leitura decifra os dois formatos**: `openVerified` reconhece o envelope (`ENOISENV1`) e a réplica
+  local é lida pelo próprio `NodeBodyStore.read` (`ENOISENC1`). O catálogo não devolve arquivo cifrado
+  ao cliente — o tamanho conferido é o do fluxo **já decifrado**, que é o que o catálogo promete.
 
 ### 7.1 Envelope: chave por objeto
 

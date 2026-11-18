@@ -775,7 +775,11 @@ public class StorageCatalogService {
 			return openVerified(cpBody, object);
 		}
 		if (nodeBodies != null && nodeBodies.has(objectId)) {
-			return openVerified(nodeBodies.pathOf(objectId), object);
+			// O `pathOf` + `openVerified` só reconhece o envelope (`ENOISENV1`); o arquivo que o
+			// NodeBodyStore grava é `ENOISENC1`, outro cabeçalho. Servir o caminho cru devolveria os
+			// bytes CIFRADOS com 200 — o cliente receberia bytes que só quem tem a chave entende.
+			// Quem sabe decifrar o corpo do nó é o próprio NodeBodyStore.
+			return openVerifiedDecifrado(nodeBodies, object);
 		}
 		// Nem aqui nem ali: continua sendo 409 com o digest, para o chamador designar a réplica que
 		// tem o objeto. Entregar bytes de um arquivo que se sabe ausente seria a pior forma de
@@ -818,6 +822,58 @@ public class StorageCatalogService {
 				"O catalogo registra a copia neste no, mas o corpo nao esta no disco dele.");
 		}
 		return openVerified(nodeBodies.pathOf(objectId), catalog.findById(objectId));
+	}
+
+	/**
+	 * Abre o corpo da réplica local pelo leitor do {@code NodeBodyStore}, conferindo o tamanho do que
+	 * ele <b>entrega</b> — já decifrado.
+	 *
+	 * <p>A conferência é sobre o fluxo decifrado, não sobre o arquivo: o arquivo cifrado é maior que o
+	 * objeto (cabeçalho `ENOISENC1` + tag), então medir o arquivo daria 410 em toda réplica cifrada.
+	 * Aqui o tamanho medido é o do texto claro, que é justamente o que o catálogo promete.</p>
+	 */
+	private InputStream openVerifiedDecifrado(NodeBodyStore store, Optional<StorageObject> object) {
+		InputStream clear;
+		try {
+			clear = store.read(object.map(StorageObject::id).orElse(null));
+		}
+		catch (IOException unreadable) {
+			throw new ApiException(410, "STORAGE_BODY_MISSING",
+				"O catalogo registra a copia, mas o corpo nao esta neste no.");
+		}
+		Long expected = object.map(StorageObject::bytes).orElse(null);
+		if (expected == null) {
+			return clear;
+		}
+		// Conta em fluxo até o fim (ou até passar do prometido), guardando o que leu: o objeto pode
+		// ter gigabytes, então não se mede carregando tudo na memória. Truncado responde 410 antes de
+		// o cliente ver um 200 que se rompe, e a tag do GCM é conferida nesse mesmo percurso — ler até
+		// o fim é o que faz a adulteração aparecer agora, e não no meio do download do cliente.
+		java.io.ByteArrayOutputStream guardado = new java.io.ByteArrayOutputStream();
+		long total = 0;
+		byte[] buffer = new byte[64 * 1024];
+		try (InputStream input = clear) {
+			int lido;
+			while ((lido = input.read(buffer)) > 0) {
+				total += lido;
+				if (total <= expected) {
+					guardado.write(buffer, 0, lido);
+				}
+				if (total > expected) {
+					throw new ApiException(410, "STORAGE_BODY_SIZE_MISMATCH",
+						"O corpo tem mais que os " + expected + " bytes registrados no catalogo.");
+				}
+			}
+		}
+		catch (IOException unreadable) {
+			throw new ApiException(410, "STORAGE_BODY_MISSING",
+				"O catalogo registra a copia, mas o corpo nao esta neste no.");
+		}
+		if (total != expected) {
+			throw new ApiException(410, "STORAGE_BODY_SIZE_MISMATCH",
+				"O corpo tem " + total + " bytes, mas o catalogo registra " + expected + ".");
+		}
+		return new java.io.ByteArrayInputStream(guardado.toByteArray());
 	}
 
 	/**

@@ -172,6 +172,43 @@ class StorageLocalBodyServingTests {
 		assertThat(Files.exists(raizCp)).as("a leitura criou o diretório de escrita").isFalse();
 	}
 
+	/**
+	 * Réplica local gravada <b>cifrada</b> (`ENOISENC1`) é servida em claro.
+	 *
+	 * <p>O {@code NodeBodyStore} cifra com a chave da instalação quando ela existe, e a leitura do
+	 * catálogo tem de decifrar — senão o download responde 200 com o cabeçalho e o GCM do arquivo, e
+	 * o cliente recebe bytes que só um processo com a chave entenderia. O mesmo formato do caminho
+	 * do envelope (`ENOISENV1`), outro cabeçalho: reconhecer um e não o outro é entregar lixo com
+	 * 200 só neste caminho.</p>
+	 */
+	@Test
+	void replica_local_cifrada_e_servida_em_claro() throws Exception {
+		NodeBodyStore cifrado = new NodeBodyStore(root.resolve("no-local/objects").toString(), chave());
+		StorageCatalogService comChave = new StorageCatalogService(catalog, mock(AuditTrail.class),
+			Clock.fixed(NOW, ZoneOffset.UTC), 10_000, root.resolve("cp").toString(),
+			java.util.Base64.getEncoder().encodeToString(chave()), mock(StoragePlacementService.class), cifrado);
+		StorageObject object = objeto("sob_c", "conteudo cifrado no disco do no");
+		try (var entrada = new ByteArrayInputStream(bytes("conteudo cifrado no disco do no"))) {
+			cifrado.write(object.id(), entrada);
+		}
+
+		// O disco NÃO tem o texto claro: sem isso o teste passaria servindo o arquivo cru.
+		byte[] noDisco = Files.readAllBytes(cifrado.pathOf(object.id()));
+		assertThat(noDisco).startsWith("ENOISENC1".getBytes(StandardCharsets.US_ASCII));
+		assertThat(new String(noDisco, StandardCharsets.ISO_8859_1)).doesNotContain("conteudo cifrado");
+
+		try (var corpo = comChave.readBody(object.id())) {
+			assertThat(new String(corpo.readAllBytes(), StandardCharsets.UTF_8))
+				.isEqualTo("conteudo cifrado no disco do no");
+		}
+	}
+
+	private static byte[] chave() {
+		byte[] bytes = new byte[32];
+		new java.util.Random(5).nextBytes(bytes);
+		return bytes;
+	}
+
 	@Test
 	void a_replica_zero_nao_cai_para_o_corpo_do_no_local() throws Exception {
 		StorageObject object = objeto("sob_a", "conteudo do objeto");
