@@ -417,3 +417,99 @@ HTTP.
   original.
 - **Erasure coding (§9)**: decidido **não implementar** nesta fase; continua replicação completa,
   verificada pela varredura (§15).
+
+## 11. Versionamento e ciclo de vida (brief §14, V352)
+
+Antes desta seção: a chave `(bucket, object_key)` era única, então `PUT` na mesma chave devolvia o
+objeto antigo (retry idempotente — certo para rede instável, errado para "guardei nova versão"), e
+nada tinha prazo. Remover era marcar lápide; a varredura de lápide já existia (fase 3). O que faltava
+era **o que fazer com o que sobra**: versões e prazo.
+
+### 11.1 A versão é um objeto com id próprio
+
+Cada versão de uma chave é uma linha do catálogo com `id` próprio. O `id` que um cliente já recebeu
+**continua devolvendo o conteúdo que ele gravou** — a versão nova não herda esse nome. É o que
+permite uma URL de mídia continuar estável depois de o arquivo ser substituído.
+
+| coluna | o que é |
+|---|---|
+| `version` | 1, 2, 3… por chave; todo objeto que já existia é a versão 1 de si mesmo |
+| `superseded_by` | id da versão que tomou a frente; **nulo é a corrente** |
+| `expires_at` | prazo calculado na gravação; nulo é "não expira" |
+
+`find(bucket, chave)` resolve para a corrente. O histórico é a lista inteira.
+
+### 11.2 Unicidade: só a corrente é única
+
+MariaDB não tem índice condicional. A condição vira **coluna gerada**: `current_key` devolve
+`bucket + char(31) + chave` na versão corrente e **NULL** na substituída — e NULL não colide em
+índice único. O índice `uq_network_storage_objects_current` é `(bucket, object_key, current_key)`:
+as duas primeiras colunas mantêm a chave como alvo válido do `on duplicate key update` da inserção
+idempotente.
+
+Consequência direta, provada no MariaDB real: **duas versões correntes da mesma chave são
+recusadas pelo banco**, não por código de aplicação. É a garantia que dois processos gravando a mesma
+chave ao mesmo tempo precisam.
+
+### 11.3 Política por bucket
+
+`network_storage_buckets`, uma linha por bucket configurado. Sem linha, valem os padrões do código:
+**sem versionamento, sem prazo** — criar a tabela não muda nada de quem não configurou.
+
+| campo | efeito |
+|---|---|
+| `versioning` | cada gravação concluída é versão nova; falso mantém o retry idempotente |
+| `retain_superseded_days` | dias que uma versão **substituída** sobrevive; nulo guarda para sempre |
+| `expire_after_days` | dias que um objeto **corrente** vive desde a gravação; nulo não expira |
+
+Retenção e expiração são campos diferentes porque contam de instantes diferentes: expiração conta da
+**gravação**, retenção conta da **substituição**. Retenção num bucket sem versionamento é recusada
+com 400 — seria configuração que nunca age.
+
+### 11.4 Expiração vale na leitura, não só na varredura
+
+Objeto vencido responde **404** imediatamente, antes de qualquer varredura. Expiração que só vale
+quando a varredura passa é um campo na tabela, não expiração: entre o vencimento e o próximo ciclo, o
+arquivo continuaria sendo servido.
+
+A varredura (`POST /admin/network/storage/lifecycle/run`, `dryRun=true` por padrão) faz duas coisas,
+e as duas **marcam lápide, nunca apagam linha**:
+
+1. **expiração** — objeto corrente, servível e vencido vira `DELETED`;
+2. **retenção** — versão substituída além do prazo do bucket vira `DELETED`.
+
+A linha tem de continuar existindo: é ela que a coleta de lápides da fase 3 percorre para mandar
+cada nó soltar as cópias. Apagar a linha deixaria o disco do participante sem registro do que
+coletar.
+
+### 11.5 Restaurar é gravar de novo, não voltar o passado
+
+`POST /admin/network/storage/objects/restore` cria uma **versão nova** com o conteúdo da antiga. A
+versão que estava na frente é substituída, não apagada: quem baixou a versão corrente continua com o
+que baixou, e o histórico continua contando o que aconteceu. Restaurar a versão que já está na frente
+é 409, não operação vazia.
+
+O digest restaurado é o que o catálogo guardava da versão antiga — a restauração não relê o disco.
+
+### 11.6 Rotas (admin)
+
+| rota | o que faz |
+|---|---|
+| `GET /admin/network/storage/buckets/{bucket}/policy` | política vigente; sem linha, devolve os padrões com `configured=false` |
+| `PUT /admin/network/storage/buckets/{bucket}/policy` | grava versionamento, retenção e expiração |
+| `GET /admin/network/storage/objects/versions?bucket=&key=` | histórico, do mais antigo ao mais novo |
+| `POST /admin/network/storage/objects/restore` | restaura versão como versão nova |
+| `POST /admin/network/storage/lifecycle/run?dryRun=` | expiração e retenção |
+
+### 11.7 O que NÃO está entregue
+
+- **Coleta de lápide de versão disparada pelo ciclo de vida**: ela marca a lápide e deixa a coleta
+  para o coletor da fase 3 (`retention-hours` próprio). Não há agendamento automático; as varreduras
+  rodam por chamada.
+- **"Um nó desconectado não restaura silenciosamente um arquivo excluído"** é garantido na
+  **confirmação**: upload que termina depois da lápide não ressuscita o objeto
+  (`where state = 'PENDING'`), e nó que volta não recebe tarefa de um objeto `DELETED`. Não existe
+  protocolo de sincronização de estado entre nó e Control Plane — o nó não mantém catálogo próprio.
+- **Expiração por prefixo ou por objeto**: o prazo é só por bucket.
+- **Versionamento retroativo**: os objetos que existiam antes são a versão 1; não há reconstrução de
+  histórico que nunca foi gravado.

@@ -379,6 +379,7 @@ fi
 # `observed_ip` é "não medido" e nulo em `observed_ip_changed_at` é "nunca mudou" — a V350 não pode
 # gravar valor em linha existente, ou todo nó já cadastrado nasceria com um endereço inventado.
 NODE_IP=V350__network_node_observed_ip.sql
+VERSIONING=V352__network_storage_versioning.sql
 [[ -f "$MIGRATIONS/$NODE_IP" ]] || fail "migração ausente: $NODE_IP"
 
 if apply "$NODE_IP" >/dev/null 2>&1; then
@@ -424,6 +425,111 @@ then
   pass "V350: observed_ip cabe um IPv6 completo"
 else
   fail "V350: observed_ip não aceitou IPv6"
+fi
+
+
+# ---------------------------------------------------------------------------
+# V352 — versionamento e ciclo de vida (brief §14).
+#
+# A migração que exige cuidado: ela REMOVE a chave única (bucket, object_key) e a substitui por uma
+# unicidade condicional. O que este trecho prova:
+#   1. o objeto que já existia continua sendo a versão 1 da chave;
+#   2. duas versões correntes da mesma chave são RECUSADAS pelo banco;
+#   3. uma versão corrente e uma substituída da mesma chave convivem;
+#   4. a segunda aplicação não falha e não perde dado.
+# ---------------------------------------------------------------------------
+if apply "$VERSIONING" >/dev/null 2>&1; then
+  pass "V352: primeira aplicação"
+else
+  fail "V352: primeira aplicação falhou"
+  db < "$MIGRATIONS/$VERSIONING" 2>&1 | head -3 >&2 || true
+fi
+
+version=$(db -N -e "select concat(version, '/', ifnull(superseded_by,'nulo'), '/', ifnull(expires_at,'nulo'))
+  from network_storage_objects where id = 'sob_mig001'" 2>/dev/null | tr -d '[:space:]')
+[[ "$version" == "1/nulo/nulo" ]] && pass "V352: objeto existente vira versão 1, corrente e sem prazo" \
+  || fail "esperava 1/nulo/nulo, achei '$version'"
+
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_storage_objects (id, bucket, object_key, content_type, bytes, sha256, state, created_by, version)
+values ('sob_mig_v1', 'migracao', 'versao.bin', 'application/octet-stream', 10, repeat('a', 64), 'STORED', 'user-test', 1);
+SQL
+then
+  pass "V352: primeira versão de uma chave nova entra"
+else
+  fail "V352: não aceitou a primeira versão"
+fi
+
+# Duas correntes da mesma chave têm de ser recusadas: sem isso, `find(bucket, chave)` não sabe qual
+# devolver e o upload idempotente deixa de ser idempotente.
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_storage_objects (id, bucket, object_key, content_type, bytes, sha256, state, created_by, version)
+values ('sob_mig_v2', 'migracao', 'versao.bin', 'application/octet-stream', 10, repeat('b', 64), 'STORED', 'user-test', 2);
+SQL
+then
+  fail "V352: aceitou duas versões CORRENTES da mesma chave"
+else
+  pass "V352: a unicidade recusa duas versões correntes da mesma chave"
+fi
+
+# Marcando a primeira como substituída, a segunda entra: é o que o versionamento faz.
+if db >/dev/null 2>&1 <<'SQL'
+update network_storage_objects set superseded_by = 'sob_mig_v2' where id = 'sob_mig_v1';
+insert into network_storage_objects (id, bucket, object_key, content_type, bytes, sha256, state, created_by, version)
+values ('sob_mig_v2', 'migracao', 'versao.bin', 'application/octet-stream', 10, repeat('b', 64), 'STORED', 'user-test', 2);
+SQL
+then
+  pass "V352: versão substituída e versão corrente convivem na mesma chave"
+else
+  fail "V352: não aceitou a versão corrente depois de substituir a anterior"
+fi
+
+# A chave antiga saiu: a inserção idempotente tem de cair na unicidade nova, não numa restrição que
+# ainda exista com o nome antigo.
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_storage_objects (id, bucket, object_key, content_type, state, created_by)
+values ('sob_mig_v2', 'migracao', 'versao.bin', 'application/octet-stream', 'PENDING', 'user-test')
+on duplicate key update id = id;
+SQL
+then
+  pass "V352: insert-ou-noop da versão corrente não duplica"
+else
+  fail "V352: insert-ou-noop falhou (a unicidade nova não é alvo do on duplicate key)"
+fi
+
+if apply "$VERSIONING" >/dev/null 2>&1; then
+  pass "V352: reaplicar não falha (idempotente)"
+else
+  fail "V352: 2ª aplicação falhou (não idempotente)"
+fi
+
+versaoafter=$(db -N -e "select concat(count(*), '/', max(version)) from network_storage_objects
+  where bucket = 'migracao' and object_key = 'versao.bin'" 2>/dev/null | tr -d '[:space:]')
+[[ "$versaoafter" == "2/2" ]] && pass "V352: as duas versões sobreviveram à 2ª aplicação" \
+  || fail "esperava 2/2, achei '$versaoafter'"
+
+politica=$(db -N -e "select count(*) from network_storage_buckets" 2>/dev/null | tr -d '[:space:]')
+[[ "$politica" == "0" ]] && pass "V352: a tabela de política nasce vazia (ninguém configurou nada)" \
+  || fail "esperava 0 políticas, achei '$politica'"
+
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_storage_buckets (bucket, versioning, retain_superseded_days, expire_after_days, updated_by)
+values ('migracao', 1, 30, 90, 'user-test');
+SQL
+then
+  pass "V352: política do bucket grava versionamento, retenção e expiração"
+else
+  fail "V352: não gravou a política do bucket"
+fi
+
+# A check do banco é a última linha de defesa: expiração de zero dia é recusada aqui também.
+if db >/dev/null 2>&1 <<'SQL'
+update network_storage_buckets set expire_after_days = 0 where bucket = 'migracao';
+SQL
+then
+  fail "V352: aceitou expiração de zero dia"
+else
+  pass "V352: expiração de zero dia recusada pela check"
 fi
 
 printf '\nStorage migration: PASS %d | FAIL %d\n' "$PASS" "$FAIL"

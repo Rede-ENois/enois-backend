@@ -49,7 +49,7 @@ class StorageNodeScrubTests {
 		audit = mock(AuditTrail.class);
 		service = new StorageCatalogService(catalog, audit, Clock.fixed(NOW, ZoneOffset.UTC), 10_000, "target/t-obj",
 			mock(StoragePlacementService.class), null);
-		when(catalog.findById("sob_1")).thenReturn(Optional.of(new StorageObject("sob_1", "fotos", "gato.jpg",
+		when(catalog.findById("sob_1")).thenReturn(Optional.of(StorageObject.current("sob_1", "fotos", "gato.jpg",
 			"image/jpeg", 8L, SHA, StorageObjectState.STORED, "u", NOW, NOW, null)));
 	}
 

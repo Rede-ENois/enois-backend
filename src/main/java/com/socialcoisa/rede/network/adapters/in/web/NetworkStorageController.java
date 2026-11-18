@@ -124,7 +124,8 @@ class NetworkStorageController {
 			HttpServletRequest request) {
 		StorageObject object = storage.byId(objectId)
 			.orElseThrow(() -> new ApiException(404, "STORAGE_NOT_FOUND", "Objeto nao encontrado."));
-		if (!object.servable()) {
+		// Vencido responde 404 na leitura, não só quando a varredura passar (brief §14).
+		if (!object.servable() || object.expired(java.time.Instant.now())) {
 			throw new ApiException(404, "STORAGE_NOT_FOUND", "Objeto nao encontrado.");
 		}
 		List<StoragePlacement> location = storage.location(object.id());
