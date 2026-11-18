@@ -87,6 +87,7 @@ O cache não substitui consulta ruim. O que foi corrigido junto:
 - **Descoberta de grupos**: contagens, papéis e pedidos pendentes são consultados em lote por página;
   os dados do leitor são resolvidos a cada requisição.
 - **Vitrine de eventos**: uma contagem de presenças por card virou uma consulta por página.
+- **Resumo da rede**: os pedidos recebidos visíveis são contados no banco, sem carregar a lista de perfis.
 - **Leitura de perfil**: `populateCounts` chamava `repository.save(...)` numa transação `readOnly` —
   o `save` virava `merge` (SELECT da linha) em toda abertura de perfil, sem nunca persistir nada.
   Removido.

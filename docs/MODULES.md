@@ -588,6 +588,7 @@ Implementa: `ManageProfileExtensionUseCase`
 | `getConnectionState(String userId, String targetUserId)` | Retorna status (PENDING, ACCEPTED, REMOVED, BLOCKED, NONE) e `requestedByMe` (pedido pendente enviado por quem consulta) |
 | `getConnections(String userId)` | Conexões aceitas |
 | `getPendingRequests(String userId)` | Solicitações pendentes |
+| `contarSolicitacoesRecebidasVisiveis(String userId)` | Conta pedidos recebidos visíveis no banco |
 | `countConnections(String userId)` | Conta conexões aceitas |
 | `getSuggestions(String userId, int limit)` | Sugere conexões baseadas em conexões mútuas |
 | `findFriends(UserId userId)` | Retorna IDs dos amigos (para feed) |
