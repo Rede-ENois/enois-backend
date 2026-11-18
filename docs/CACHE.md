@@ -80,6 +80,8 @@ o `sw.js` sai `no-cache`, com `updateViaCache: "none"` no registro do service wo
 
 O cache não substitui consulta ruim. O que foi corrigido junto:
 
+- **Coleções e murais**: os posts visíveis são carregados e enriquecidos em lote, preservando os
+  conteúdos completos de página e artigo na resposta.
 - **Vitrine de comunidades**: duas consultas por comunidade (contagem de membros e "sou membro")
   viraram duas por página, com `group by` — de ~40 consultas por página de 20 para 3.
 - **Vitrine de eventos**: uma contagem de presenças por card virou uma consulta por página.

@@ -413,16 +413,42 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		if (postIds == null || postIds.isEmpty()) {
 			return List.of();
 		}
-		Map<String, PostView> visiveis = new LinkedHashMap<>();
-		for (String postId : postIds.stream().distinct().toList()) {
-			try {
-				visiveis.put(postId, getPost(postId, viewerId));
-			}
-			catch (ApiException invisivel) {
-				// Apagado, vencido, privado ou bloqueado: sai da coleção sem derrubar a página.
-			}
+		List<PostId> ids = postIds.stream().distinct().map(PostId::new).toList();
+		Map<PostId, Post> porId = postRepository.findByIds(ids).stream()
+			.collect(Collectors.toMap(Post::id, Function.identity()));
+		List<Post> ativos = ids.stream()
+			.map(porId::get)
+			.filter(Objects::nonNull)
+			.filter(Post::isActive)
+			.filter(post -> !post.expired(clock.instant()))
+			.toList();
+		if (ativos.isEmpty()) {
+			return List.of();
 		}
-		return List.copyOf(visiveis.values());
+		Set<String> ocultos = viewerId == null ? Set.of() : blockedUsersReader.hiddenIdsFor(viewerId.value());
+		List<Post> candidatos = ativos.stream()
+			.filter(post -> !ocultos.contains(post.authorId().value()))
+			.toList();
+		Set<String> comunidades = candidatos.stream()
+			.filter(post -> post.channelId() != null && post.communityId() != null)
+			.map(Post::communityId)
+			.collect(Collectors.toSet());
+		Map<String, PostCommunityReader.CommunityRef> referencias = viewerId == null || comunidades.isEmpty()
+			? Map.of() : postCommunityReader.byIds(comunidades, viewerId.value());
+		List<Post> visiveis = candidatos.stream()
+			.filter(post -> post.channelId() == null || (post.communityId() != null
+				&& referencias.containsKey(post.communityId())
+				&& referencias.get(post.communityId()).joined()))
+			.toList();
+		Map<String, PostView> viewsPorId = enrich(visiveis, viewerId, ocultos).stream()
+			.collect(Collectors.toMap(PostView::id, Function.identity(), (primeiro, repetido) -> primeiro));
+		List<PostView> resultado = new ArrayList<>();
+		for (Post post : visiveis) {
+			PostView view = viewsPorId.getOrDefault(post.id().value(), PostView.from(post));
+			resultado.add(view.withPageHtml(post.pageHtml())
+				.withArticleBody(articleRepository.findBody(post.id()).orElse(null)));
+		}
+		return List.copyOf(resultado);
 	}
 
 	@Override
