@@ -87,6 +87,35 @@ public class GlobalExceptionHandler {
 			.body(new ErrorResponse("BAD_REQUEST", "Requisicao invalida.", Instant.now()));
 	}
 
+	/**
+	 * Limite da API do GitHub atingido (importação de projetos/README): sem handler isto virava
+	 * 500 genérico — e é exatamente o relato "importação de projetos do GitHub não está
+	 * funcionando". 503 com Retry-After diz ao front que é espera, não defeito.
+	 */
+	@ExceptionHandler(com.socialcoisa.rede.contributions.adapters.out.github.GitHubRateLimitException.class)
+	ResponseEntity<ErrorResponse> handleGitHubRateLimit(
+			com.socialcoisa.rede.contributions.adapters.out.github.GitHubRateLimitException exception) {
+		LOGGER.warn("github_rate_limit: {}", exception.getMessage());
+		return ResponseEntity.status(503)
+			.header("Retry-After", "3600")
+			.body(new ErrorResponse("GITHUB_RATE_LIMITED",
+				"O GitHub limitou as consultas agora. Tente de novo em até uma hora.", Instant.now()));
+	}
+
+	/**
+	 * O repositório (ou o perfil) sumiu do GitHub entre a listagem e a importação — apagado ou
+	 * tornado privado. 404 acionável em vez de 500: a pessoa tira o item da seleção e segue.
+	 */
+	@ExceptionHandler(com.socialcoisa.rede.contributions.application.port.out.GitHubRepositoryGoneException.class)
+	ResponseEntity<ErrorResponse> handleGitHubGone(
+			com.socialcoisa.rede.contributions.application.port.out.GitHubRepositoryGoneException exception) {
+		LOGGER.warn("github_repository_gone: {}", exception.getMessage());
+		return ResponseEntity.status(404)
+			.body(new ErrorResponse("GITHUB_CONTENT_GONE",
+				"Um repositório do GitHub deixou de estar disponível. Atualize a lista e tente de novo.",
+				Instant.now()));
+	}
+
 	@ExceptionHandler(DataIntegrityViolationException.class)
 	ResponseEntity<ErrorResponse> handleConflict(DataIntegrityViolationException exception) {
 		// A resposta NAO vaza detalhe de banco (a causa raiz fica no log), mas o CÓDIGO diz o que

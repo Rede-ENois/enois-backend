@@ -2,8 +2,10 @@ package com.socialcoisa.rede.githubprofile.adapters.in.web;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -40,6 +42,33 @@ class GitHubProfileImportController {
 	ReadmeView readme(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		return ReadmeView.from(service.readmePreview(user.id().value()));
+	}
+
+	/** As organizações do GitHub de quem está logado (a lista para escolher o que importar). */
+	@GetMapping("/me/github/orgs")
+	List<?> organizations(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return service.organizations(user.id().value());
+	}
+
+	/** Os repositórios públicos de uma organização (a lista para escolher os projetos). */
+	@GetMapping("/me/github/orgs/{org}/repos")
+	List<?> organizationRepositories(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String org) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return service.organizationRepositories(user.id().value(), org);
+	}
+
+	/** Importa a organização como empresa e os repos escolhidos como projetos. */
+	@PostMapping("/me/github/import/orgs/{org}")
+	Map<String, Object> importOrganization(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String org, @RequestBody orgRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		var resultado = service.importOrganization(user.id().value(), org, request.repos());
+		return Map.of("slug", resultado.slug(), "name", resultado.name(), "created", resultado.projectsCreated());
+	}
+
+	record orgRequest(java.util.List<String> repos) {
 	}
 
 	@PostMapping("/me/github/import/projects")
