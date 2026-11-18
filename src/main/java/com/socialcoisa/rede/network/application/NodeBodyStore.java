@@ -151,6 +151,22 @@ public class NodeBodyStore {
 		return EncryptedBodyFile.plain(path);
 	}
 
+	/**
+	 * Quantos bytes o objeto tem <b>em claro</b> no disco desta réplica.
+	 *
+	 * <p>É o número que o catálogo promete, então é ele que a leitura confere — sem percorrer o fluxo
+	 * e sem trazer o objeto para a memória. Corpo legado (em claro, sem cabeçalho) tem o próprio
+	 * tamanho do arquivo; corpo cifrado desconta o cabeçalho do {@code ENOISENC1} e a tag do GCM.</p>
+	 */
+	public long plainBytesOf(String objectId) throws IOException {
+		Path path = pathOf(objectId);
+		long noDisco = Files.size(path);
+		if (cipher != null && cipher.isEncrypted(path)) {
+			return noDisco - EncryptedBodyFile.headerBytes() - 16;
+		}
+		return noDisco;
+	}
+
 	/** O disco está guardando corpo cifrado nesta instalação? O painel lê isto. */
 	public boolean encryptionAtRest() {
 		return cipher != null;
