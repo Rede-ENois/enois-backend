@@ -5,7 +5,7 @@
 #   ./install.sh --control-plane https://control.enois.ia.br --token <provision-token> \
 #                [--region sa-east-1] [--country BR] [--cpu 2] [--memory 1024]
 #   ./install.sh --set-key              # cola a API key que o admin gerou
-#   ./install.sh --backup               # arquiva a identidade (node.json + api-key)
+#   ./install.sh --backup               # arquiva a identidade (node.json + api-key + node.key)
 #   ./install.sh --restore <arquivo>    # restaura a identidade de um backup
 #   ./install.sh --start                # sobe o container
 #   ./install.sh --update               # atualiza o runtime (delega ao bootstrap)
@@ -13,7 +13,8 @@
 #
 # O que faz (docs/rede-distribuida/01-arquitetura.md §4):
 #   1. grava o estado do nó em $NODE_HOME com permissão restrita;
-#   2. faz o enroll com o token de provisionamento de uso único;
+#   2. gera a chave Ed25519 do nó e faz o enroll com o token de uso único, levando
+#      só a pública no CSR (o Control Plane emite o certificado do nó);
 #   3. espera o admin gerar a API key (--set-key cola a chave uma vez);
 #   4. sobe o container via docker compose e confirma o primeiro heartbeat.
 #
@@ -64,8 +65,10 @@ chmod 711 "$NODE_HOME"
 
 # ------------------------------------------------- --backup / --restore
 # O par node.json + api-key é a identidade do nó (04-identidade-e-autorizacao.md):
-# perdidos, o re-enroll cria um nó NOVO e a aprovação humana se repete. O backup
-# existe para reinstalar a mesma identidade em máquina reformada ou migrada.
+# perdidos, o re-enroll cria um nó NOVO e a aprovação humana se repete. O node.key
+# é a chave privada do certificado: sem ele o nó não abre o que foi selado para a
+# chave dele (e a renovação seguinte teria de ser com outro par). O backup existe
+# para reinstalar a mesma identidade em máquina reformada ou migrada.
 if [[ "$MODE" == "--backup" ]]; then
   [[ -s "$NODE_HOME/node.json" ]] || die "sem $NODE_HOME/node.json — rode o enroll primeiro"
   [[ -s "$NODE_HOME/api-key" ]] || die "sem $NODE_HOME/api-key — rode --set-key primeiro"
@@ -84,6 +87,9 @@ if [[ "$MODE" == "--backup" ]]; then
   # ciclo, que é o que ele faria de qualquer jeito.
   umask 077
   local_files=(node.json api-key)
+  if [[ -s "$NODE_HOME/node.key" ]]; then
+    local_files+=(node.key)
+  fi
   if [[ -s "$NODE_HOME/pinning-key" ]]; then
     local_files+=(pinning-key)
   fi
@@ -106,7 +112,8 @@ if [[ "$MODE" == "--restore" ]]; then
     die "já existe um nó registrado em $NODE_HOME/node.json — restaurar por cima trocaria a identidade; remova-a primeiro se tem certeza"
   fi
   tar -C "$NODE_HOME" -xzf "$BACKUP_FILE"
-  chmod 600 "$NODE_HOME/node.json" "$NODE_HOME/api-key" "$NODE_HOME/pinning-key" "$NODE_HOME/term" 2>/dev/null || true
+  chmod 600 "$NODE_HOME/node.json" "$NODE_HOME/api-key" "$NODE_HOME/node.key" "$NODE_HOME/pinning-key" \
+    "$NODE_HOME/term" 2>/dev/null || true
   node_id=$(sed -n 's/.*"nodeId":"\([^"]*\)".*/\1/p' "$NODE_HOME/node.json")
   [[ -n "$node_id" ]] || die "backup sem nodeId válido dentro — arquivo truncado ou não é um backup de nó"
   info "Identidade de $node_id restaurada em $NODE_HOME."
@@ -131,6 +138,7 @@ if [[ -z "$MODE" ]]; then
   [[ -n "$CONTROL_PLANE" ]] || die '--control-plane é obrigatório'
   [[ -n "$TOKEN" ]] || die '--token é obrigatório'
   for tool in curl; do command -v "$tool" >/dev/null 2>&1 || die "Comando ausente: $tool"; done
+  command -v openssl >/dev/null 2>&1 || die 'Comando ausente: openssl (necessário para a chave e o CSR do nó)'
 
   if [[ -s "$NODE_HOME/node.json" ]]; then
     info "Nó já registrado em $NODE_HOME/node.json — nada a fazer (diagnóstico: ./node-doctor.sh)."
@@ -138,8 +146,22 @@ if [[ -z "$MODE" ]]; then
     declared_cpu="${CPU:-$(nproc 2>/dev/null || echo 1)}"
     declared_mem="${MEMORY:-$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 1024)}"
 
-    body=$(printf '{"provisionToken":"%s","runtimeVersion":"%s","declared":{"cpuCores":%s,"memoryMb":%s,"diskMb":20480,"bandwidthMbps":100}' \
-      "$TOKEN" "$RUNTIME_VERSION" "$declared_cpu" "$declared_mem")
+    # A chave do nó nasce aqui e nunca sai daqui: o enroll leva só a pública, dentro
+    # do CSR. É a identidade criptográfica do §10 do brief, distinta da API key (que
+    # autoriza). O CN do CSR é um marcador: o emissor monta o sujeito a partir do
+    # nodeId, que o nó ainda não tem antes do enroll.
+    if [[ ! -s "$NODE_HOME/node.key" ]]; then
+      (umask 077; openssl genpkey -algorithm ED25519 -out "$NODE_HOME/node.key" 2>/dev/null) ||
+        die 'não consegui gerar a chave Ed25519 do nó (openssl sem suporte a Ed25519?)'
+    fi
+    chmod 600 "$NODE_HOME/node.key"
+    openssl req -new -key "$NODE_HOME/node.key" -subj '/CN=ENOIS-NODE-ENROLL' \
+      -out "$NODE_HOME/node.csr" 2>/dev/null || die 'não consegui gerar o CSR do nó'
+    # O PEM vira uma string JSON: as quebras de linha viram \n escapado.
+    csr=$(awk '{printf "%s\\n", $0}' "$NODE_HOME/node.csr")
+
+    body=$(printf '{"provisionToken":"%s","runtimeVersion":"%s","csr":"%s","declared":{"cpuCores":%s,"memoryMb":%s,"diskMb":20480,"bandwidthMbps":100}' \
+      "$TOKEN" "$RUNTIME_VERSION" "$csr" "$declared_cpu" "$declared_mem")
     if [[ -n "$REGION" ]]; then
       # Forma documentada no contrato (03-contratos.md §2): aninhada em location.
       body="$body,\"location\":{\"region\":\"$REGION\",\"country\":\"${COUNTRY:-XX}\"}"
@@ -254,7 +276,8 @@ for tool in docker; do command -v "$tool" >/dev/null 2>&1 || die "Comando ausent
 if chown 10001:10001 "$NODE_HOME" 2>/dev/null; then
   chmod 750 "$NODE_HOME"
   umask 027
-  for arq in node.json api-key control-plane runtime-version; do
+  # node.key é chave privada: grupo só lê (640), nunca outros.
+  for arq in node.json api-key node.key control-plane runtime-version; do
     [[ -s "$NODE_HOME/$arq" ]] && chmod 640 "$NODE_HOME/$arq"
   done
   info "Estado do nó em $NODE_HOME pertence a 10001:10001 (o usuário do container)."
