@@ -629,16 +629,16 @@ restantes=$(db -N -e "select count(*) from network_storage_rebalances where obje
   || fail "esperava 0 transferências, achei '$restantes'"
 
 # ---------------------------------------------------------------------------
-# V356 — gateway S3 (brief §11).
+# V357 — gateway S3 (brief §11).
 #
 # A credencial de cliente tem de sobreviver à reaplicação, ser única por Access
 # Key (o gateway busca por ela a cada requisição) e aceitar revogação terminal.
 # ---------------------------------------------------------------------------
-S3GATEWAY=V356__network_storage_s3_gateway.sql
+S3GATEWAY=V357__network_storage_s3_gateway.sql
 if apply "$S3GATEWAY" >/dev/null 2>&1; then
-  pass "V356: primeira aplicação"
+  pass "V357: primeira aplicação"
 else
-  fail "V356: primeira aplicação falhou"
+  fail "V357: primeira aplicação falhou"
   db < "$MIGRATIONS/$S3GATEWAY" 2>&1 | head -3 >&2 || true
 fi
 
@@ -648,9 +648,9 @@ insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_
 values ('s3c_t1', 'AKIATESTE0000000001', repeat('a', 64), 'cifrado', 'user-test', null, 'GET PUT');
 SQL
 then
-  pass "V356: credencial de cliente grava"
+  pass "V357: credencial de cliente grava"
 else
-  fail "V356: não gravou a credencial"
+  fail "V357: não gravou a credencial"
 fi
 
 # Access Key é o identificador de busca: duplicar faria uma credencial autenticar como outra.
@@ -659,9 +659,9 @@ insert into network_storage_s3_credentials (id, access_key, secret_hash, owner_u
 values ('s3c_t2', 'AKIATESTE0000000001', repeat('b', 64), 'user-test', 'GET');
 SQL
 then
-  fail "V356: aceitou Access Key duplicada"
+  fail "V357: aceitou Access Key duplicada"
 else
-  pass "V356: a unicidade recusa Access Key duplicada"
+  pass "V357: a unicidade recusa Access Key duplicada"
 fi
 
 # Revogação: preenche revoked_at uma vez, e revogar de novo não sobrescreve a data original.
@@ -669,7 +669,7 @@ db >/dev/null 2>&1 <<'SQL'
 update network_storage_s3_credentials set revoked_at = now(3) where id = 's3c_t1';
 SQL
 revogada=$(db -N -e "select count(*) from network_storage_s3_credentials where id = 's3c_t1' and revoked_at is not null" 2>/dev/null | tr -d '[:space:]')
-[[ "$revogada" == "1" ]] && pass "V356: revogação grava revoked_at" || fail "V356: revogação não gravou"
+[[ "$revogada" == "1" ]] && pass "V357: revogação grava revoked_at" || fail "V357: revogação não gravou"
 
 # Operações vazias são credencial que não faz nada: a check recusa em vez de guardar silêncio.
 if db >/dev/null 2>&1 <<'SQL'
@@ -677,19 +677,19 @@ insert into network_storage_s3_credentials (id, access_key, secret_hash, owner_u
 values ('s3c_t3', 'AKIATESTE0000000003', repeat('c', 64), 'user-test', '');
 SQL
 then
-  fail "V356: aceitou credencial sem operação"
+  fail "V357: aceitou credencial sem operação"
 else
-  pass "V356: a check recusa credencial sem operação"
+  pass "V357: a check recusa credencial sem operação"
 fi
 
 if apply "$S3GATEWAY" >/dev/null 2>&1; then
-  pass "V356: reaplicar não falha (idempotente)"
+  pass "V357: reaplicar não falha (idempotente)"
 else
-  fail "V356: 2ª aplicação falhou (não idempotente)"
+  fail "V357: 2ª aplicação falhou (não idempotente)"
 fi
 
 credenciais=$(db -N -e "select count(*) from network_storage_s3_credentials" 2>/dev/null | tr -d '[:space:]')
-[[ "$credenciais" == "1" ]] && pass "V356: a credencial sobreviveu à 2ª aplicação" \
+[[ "$credenciais" == "1" ]] && pass "V357: a credencial sobreviveu à 2ª aplicação" \
   || fail "esperava 1 credencial, achei '$credenciais'"
 printf '\nStorage migration: PASS %d | FAIL %d\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))

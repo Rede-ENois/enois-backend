@@ -15,7 +15,7 @@ import com.socialcoisa.rede.network.domain.S3Credential;
 import com.socialcoisa.rede.shared.security.SecretCipher;
 
 /**
- * Credenciais do gateway S3 em {@code network_storage_s3_credentials} (V356).
+ * Credenciais do gateway S3 em {@code network_storage_s3_credentials} (V357).
  *
  * <p>O segredo é <b>decifrado por {@link SecretCipher}</b> (o mesmo AES-GCM do TOTP). Sem a chave de
  * cifra, {@link #secretFor(String)} devolve {@code null} e o gateway recusa a assinatura com

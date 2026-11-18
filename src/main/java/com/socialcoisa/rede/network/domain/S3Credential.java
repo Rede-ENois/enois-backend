@@ -6,7 +6,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * A credencial de cliente do gateway S3 (brief §11, V356): o par Access Key / Secret Key que o SDK
+ * A credencial de cliente do gateway S3 (brief §11, V357): o par Access Key / Secret Key que o SDK
  * assina com SigV4.
  *
  * <p><b>É separada da chave de nó, e não uma variação dela.</b> A chave de nó autoriza <i>operar a

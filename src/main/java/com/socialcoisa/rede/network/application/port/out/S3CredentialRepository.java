@@ -6,10 +6,10 @@ import java.util.Optional;
 import com.socialcoisa.rede.network.domain.S3Credential;
 
 /**
- * Credenciais do gateway S3 (brief §11, V356).
+ * Credenciais do gateway S3 (brief §11, V357).
  *
  * <p>{@link #secretFor(String)} é o ponto sensível: o SigV4 exige o segredo em claro para recalcular
- * o HMAC. Ver o comentário da migração V356 — a lacuna é declarada, não escondida.</p>
+ * o HMAC. Ver o comentário da migração V357 — a lacuna é declarada, não escondida.</p>
  */
 public interface S3CredentialRepository {
 

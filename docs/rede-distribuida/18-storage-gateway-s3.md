@@ -15,7 +15,7 @@ Storage.
 
 ## 2. Credencial: separada da chave de nó, de propósito
 
-`network_storage_s3_credentials` (V356) tem Access Key, segredo e **escopo**:
+`network_storage_s3_credentials` (V357) tem Access Key, segredo e **escopo**:
 
 | coluna | significado |
 |---|---|
