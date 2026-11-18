@@ -13,7 +13,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.stereotype.Service;
 
 import com.socialcoisa.rede.calendar.application.port.out.CalendarEntryRepository;
@@ -45,12 +47,15 @@ public class CalendarRecurrenceService {
 	private final CalendarEntryRepository entries;
 	private final Clock clock;
 	private final boolean workerEnabled;
+	private final TransactionTemplate extensionTransaction;
 
 	public CalendarRecurrenceService(CalendarEntryRepository entries, Clock clock,
-			@Value("${rede.calendar.recurrence.enabled:true}") boolean workerEnabled) {
+			@Value("${rede.calendar.recurrence.enabled:true}") boolean workerEnabled,
+			PlatformTransactionManager transactionManager) {
 		this.entries = entries;
 		this.clock = clock;
 		this.workerEnabled = workerEnabled;
+		this.extensionTransaction = new TransactionTemplate(transactionManager);
 	}
 
 	/**
@@ -122,6 +127,10 @@ public class CalendarRecurrenceService {
 	 * @return quantas ocorrências nasceram agora
 	 */
 	public int extend(CalendarEntry tail, Instant now) {
+		return extensionTransaction.execute(status -> extendInTransaction(tail, now));
+	}
+
+	private int extendInTransaction(CalendarEntry tail, Instant now) {
 		CalendarRecurrence recurrence = tail.recurrence();
 		if (recurrence == null || recurrence == CalendarRecurrence.NONE) {
 			return 0;

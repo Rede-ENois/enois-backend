@@ -82,6 +82,9 @@ compromisso em vez de duplicá-lo. Entrada cancelada não reabre: o cancelamento
 
 ## Recorrência (fase 12, V277)
 
+Cada extensão confirma as ocorrências e a transferência da ponta na mesma transação; uma falha
+preserva a ponta anterior para a próxima tentativa.
+
 Série é materializada: cada ocorrência é uma linha própria, agrupada por `series_id`. O passo é
 calculado em **relógio de parede no fuso da série** (`ZonedDateTime`), não em `Instant`: "toda terça
 ás 19h" continua às 19h depois da mudança de horário. A mensal conta os meses a partir da âncora
