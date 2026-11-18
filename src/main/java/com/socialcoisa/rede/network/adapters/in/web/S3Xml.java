@@ -1,90 +1,126 @@
 package com.socialcoisa.rede.network.adapters.in.web;
 
+import java.io.StringWriter;
+
+import javax.xml.stream.XMLOutputFactory;
+import javax.xml.stream.XMLStreamException;
+import javax.xml.stream.XMLStreamWriter;
+
 /**
- * Escritor de XML mínimo, onde <b>todo valor de dado passa por {@link #text(String)}</b>.
+ * Escritor de XML do gateway S3 sobre o {@link XMLStreamWriter} do JDK.
  *
- * <p><b>Por que existe:</b> o gateway S3 monta documentos XML com valores que vêm do cliente
- * (nome de bucket, prefixo, chave de objeto, continuação). Concatenar esses valores direto na
- * string é a definição de XSS/XML injection — e foi o que o CodeQL apontou no PR #914
- * ({@code java/xss}, linha do {@code body(...)}). A defesa não é "escapar em algum lugar": é não
- * existir caminho de escrita de dado que não passe pelo escape. Aqui não existe.</p>
+ * <p><b>Por que não concatenar strings:</b> o gateway monta documentos com valores que vêm do cliente
+ * (nome de bucket, prefixo, chave de objeto). Concatenar isso na resposta é a definição de XSS/XML
+ * injection — e foi o que o CodeQL apontou no PR #914 ({@code java/xss}). A versão anterior tentava
+ * escapar num helper próprio; o analisador não reconhece sanitizadores caseiros, e com razão: um
+ * escape pode ser esquecido na próxima chamada.</p>
  *
- * <p>A marcação (tags) vem de {@link #open(String)}/{@link #close(String)}, que só aceitam nomes de
- * elemento literais definidos no próprio gateway — nunca dado do cliente.</p>
+ * <p>Aqui quem escapa é a <b>API do JDK</b>: {@code writeCharacters} e {@code writeAttribute} são
+ * obrigados a produzir caracteres válidos, por contrato. Não existe caminho que escreva dado cru —
+ * os métodos públicos abaixo são os únicos que aceitam dado, e todos delegam ao writer.</p>
+ *
+ * <p>Cada instância escreve mais de um documento (por exemplo, um {@code ListBucketResult} e, se
+ * preciso, o conteúdo de cada objeto), então a classe é usada também fora do MVC.</p>
  */
 final class S3Xml {
-
-	private final StringBuilder out = new StringBuilder(512);
-
-	S3Xml() {
-		out.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
-	}
 
 	/** O namespace do S3: os SDKs o usam para desserializar; sem ele, o documento "não é S3". */
 	private static final String S3_NAMESPACE = "http://s3.amazonaws.com/doc/2006-03-01/";
 
-	/** Abre um elemento. {@code name} é literal do gateway, jamais dado do cliente. */
-	S3Xml open(String name) {
-		out.append('<').append(name).append('>');
-		return this;
+	private final StringWriter out = new StringWriter(512);
+	private final XMLStreamWriter writer;
+	private boolean started;
+
+	S3Xml() {
+		try {
+			this.writer = XMLOutputFactory.newFactory().createXMLStreamWriter(out);
+			this.writer.writeStartDocument("UTF-8", "1.0");
+		}
+		catch (XMLStreamException falha) {
+			throw new IllegalStateException("XMLStreamWriter indisponivel", falha);
+		}
 	}
 
 	/** Abre o elemento raiz com o namespace do S3 (literal, não dado). */
 	S3Xml root(String name) {
-		out.append('<').append(name).append(" xmlns=\"").append(S3_NAMESPACE).append("\">");
+		try {
+			writer.writeStartElement(name);
+			writer.writeDefaultNamespace(S3_NAMESPACE);
+		}
+		catch (XMLStreamException falha) {
+			throw broken(falha);
+		}
+		return this;
+	}
+
+	/** Abre um elemento. {@code name} é literal do gateway, jamais dado do cliente. */
+	S3Xml open(String name) {
+		try {
+			writer.writeStartElement(name);
+		}
+		catch (XMLStreamException falha) {
+			throw broken(falha);
+		}
 		return this;
 	}
 
 	S3Xml close(String name) {
-		out.append("</").append(name).append('>');
+		try {
+			writer.writeEndElement();
+		}
+		catch (XMLStreamException falha) {
+			throw broken(falha);
+		}
 		return this;
 	}
 
-	/** Elemento com texto. O valor é escapado AQUI, e é o único caminho para dado. */
+	/** Elemento com texto: o valor é escrito como caracteres, e a API o escapa. */
 	S3Xml element(String name, String value) {
-		return open(name).text(value).close(name);
+		open(name);
+		return text(value).close(name);
 	}
 
-	/** Elemento com número. */
 	S3Xml element(String name, long value) {
-		return open(name).text(Long.toString(value)).close(name);
+		return element(name, Long.toString(value));
 	}
 
-	/** Elemento com booleano no formato XML. */
 	S3Xml element(String name, boolean value) {
-		return open(name).text(value ? "true" : "false").close(name);
+		return element(name, value ? "true" : "false");
 	}
 
-	/** Texto de dado, escapado por construção. */
+	/** Texto de dado. {@code null} vira elemento vazio, nunca a string "null". */
 	S3Xml text(String value) {
 		if (value == null) {
 			return this;
 		}
-		for (int i = 0; i < value.length(); i++) {
-			char c = value.charAt(i);
-			switch (c) {
-				case '&' -> out.append("&amp;");
-				case '<' -> out.append("&lt;");
-				case '>' -> out.append("&gt;");
-				case '"' -> out.append("&quot;");
-				case '\'' -> out.append("&apos;");
-				default -> {
-					// Caractere de controle não é válido em XML 1.0; trocar por '?' preserva o
-					// documento em vez de gerar um XML que o SDK não consegue ler.
-					if (c < 0x20 && c != '\n' && c != '\r' && c != '\t') {
-						out.append('?');
-					}
-					else {
-						out.append(c);
-					}
-				}
-			}
+		try {
+			writer.writeCharacters(value);
+		}
+		catch (XMLStreamException falha) {
+			throw broken(falha);
 		}
 		return this;
 	}
 
 	@Override
 	public String toString() {
+		if (!started) {
+			started = true;
+			try {
+				writer.writeEndDocument();
+				writer.flush();
+				writer.close();
+			}
+			catch (XMLStreamException falha) {
+				throw broken(falha);
+			}
+		}
 		return out.toString();
+	}
+
+	private static IllegalStateException broken(XMLStreamException falha) {
+		// Não é erro do cliente: a montagem do documento é do gateway. 500 explícito e logado é
+		// melhor que um corpo truncado que o SDK leria como "lista vazia".
+		return new IllegalStateException("falha ao montar XML do gateway S3", falha);
 	}
 }

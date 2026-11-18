@@ -237,7 +237,9 @@ class S3GatewayTests {
 		// O documento continua parseável e a chave aparece escapada.
 		javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder()
 			.parse(new java.io.ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
-		assertThat(xml).contains("<Key>a&amp;b&apos;c.txt</Key>");
+		// O `&` é escapado (obrigatório em conteúdo); `'` é válido sem escape, e o `XMLStreamWriter`
+		// não o escapa — o teste aceita as duas formas equivalentes em XML.
+		assertThat(xml).containsPattern("<Key>a&amp;b(&apos;|')c\\.txt</Key>");
 	}
 
 	// ---------------------------------------------------------------- helpers: o "SDK"
