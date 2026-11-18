@@ -1218,17 +1218,21 @@ Gerenciamento de comunidades e grupos pela administração da plataforma, sem vo
 local. Mesma trava de `AdminModerationService`: `AdminRouteInterceptor` recusa antes do MVC e cada
 método confirma com `AdminGuard`.
 
+As escritas são `POST` com o motivo no corpo (o motivo é o que fica na auditoria; o `DELETE` do
+cliente não carrega corpo). Leitura nunca é auditada; toda escrita registra admin, alvo, operação,
+horário, resultado e motivo.
+
 | Função | Rota | Efeito |
 |---|---|---|
 | `communityOverview(id)` | GET /api/admin/moderation/communities/{id} | Dono, número de membros e de admins |
 | `communityMembers(id, q, page, size)` | GET /api/admin/moderation/communities/{id}/members | Lista completa (papel, entrada), busca por nome/@, páginas; audita nada (leitura) |
-| `deleteCommunity(id, reason)` | DELETE /api/admin/moderation/communities/{id} | Reaproveita `CommunityService.deleteCommunity(..., adminOverride)`; audita `ADMIN_COMMUNITY_DELETED` |
-| `removeCommunityMember(id, userId, reason)` | DELETE /api/admin/moderation/communities/{id}/members/{userId} | Remove inclusive o dono; audita `ADMIN_COMMUNITY_MEMBER_REMOVED` |
+| `deleteCommunity(id, reason)` | POST /api/admin/moderation/communities/{id}/delete | Reaproveita `CommunityService.deleteCommunity(..., adminOverride)`; audita `ADMIN_COMMUNITY_DELETED` |
+| `removeCommunityMember(id, userId, reason)` | POST /api/admin/moderation/communities/{id}/members/{userId}/remove | Remove inclusive o dono; audita `ADMIN_COMMUNITY_MEMBER_REMOVED` |
 | `groupOverview(id)` | GET /api/admin/moderation/groups/{id} | Dono, estado, número de membros |
 | `groupMembers(id, q, page, size)` | GET /api/admin/moderation/groups/{id}/members | Lista completa; mesmo contrato de páginas |
-| `deleteGroup(id, reason)` | DELETE /api/admin/moderation/groups/{id} | `GroupService.purgeByAdmin`: membros, pedidos, tópicos, publicações, comentários e reações saem na mesma transação; audita `ADMIN_GROUP_DELETED` |
+| `deleteGroup(id, reason)` | POST /api/admin/moderation/groups/{id}/delete | `GroupService.purgeByAdmin`: membros, pedidos, tópicos, publicações, comentários e reações saem na mesma transação; audita `ADMIN_GROUP_DELETED` |
 | `closeGroup(id, reason)` | POST /api/admin/moderation/groups/{id}/close | `GroupService.closeByAdmin`: estado CLOSED com o conteúdo preservado; audita `ADMIN_GROUP_CLOSED` |
-| `removeGroupMember(id, userId, reason)` | DELETE /api/admin/moderation/groups/{id}/members/{userId} | `GroupService.removeMemberByAdmin`; dono removido passa a propriedade ao membro mais antigo; audita `ADMIN_GROUP_MEMBER_REMOVED` |
+| `removeGroupMember(id, userId, reason)` | POST /api/admin/moderation/groups/{id}/members/{userId}/remove | `GroupService.removeMemberByAdmin`; dono removido passa a propriedade ao membro mais antigo; audita `ADMIN_GROUP_MEMBER_REMOVED` |
 
 Exclusão de grupo é apagar de fato: o conteúdo do grupo é dele (tabelas próprias, sem vínculo com o
 feed), então sai inteiro junto com o grupo. Quando o conteúdo é histórico e não objeto da decisão, o

@@ -1,7 +1,6 @@
 package com.socialcoisa.rede.moderation.adapters.in.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -80,7 +79,7 @@ class AdminEntitiesTests {
 			.andExpect(jsonPath("$.id").value(communityId))
 			.andExpect(jsonPath("$.members").value(2));
 
-		mockMvc.perform(delete("/admin/moderation/communities/" + communityId)
+		mockMvc.perform(post("/admin/moderation/communities/" + communityId + "/delete")
 				.header("X-Session-Token", admin.token())
 				.header("Idempotency-Key", "aent-com-del-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -90,7 +89,7 @@ class AdminEntitiesTests {
 			.andExpect(jsonPath("$.adminWasMember").value(false));
 
 		// Repetir a MESMA chave devolve a mesma resposta sem segunda decisão.
-		mockMvc.perform(delete("/admin/moderation/communities/" + communityId)
+		mockMvc.perform(post("/admin/moderation/communities/" + communityId + "/delete")
 				.header("X-Session-Token", admin.token())
 				.header("Idempotency-Key", "aent-com-del-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -118,7 +117,7 @@ class AdminEntitiesTests {
 
 		// Dono: continua com o caminho dele (DELETE /communities/{id}), não com o administrativo.
 		for (var session : List.of(dono, membro, moderador)) {
-			mockMvc.perform(delete("/admin/moderation/communities/" + communityId)
+			mockMvc.perform(post("/admin/moderation/communities/" + communityId + "/delete")
 					.header("X-Session-Token", session.token())
 					.header("Idempotency-Key", "aent-neg-del-" + session.userId())
 					.contentType(MediaType.APPLICATION_JSON)
@@ -126,7 +125,7 @@ class AdminEntitiesTests {
 				.andExpect(status().isForbidden());
 		}
 		// Sem sessão: 401, não 403 — a identidade é exigida antes do papel.
-		mockMvc.perform(delete("/admin/moderation/communities/" + communityId)
+		mockMvc.perform(post("/admin/moderation/communities/" + communityId + "/delete")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("reason", REASON))))
 			.andExpect(status().isUnauthorized());
@@ -142,7 +141,7 @@ class AdminEntitiesTests {
 		var dono = auth().authenticate("aent_why_dono");
 		String communityId = createCommunity(dono, "Comunidade Com Motivo", "aent-why-1");
 
-		mockMvc.perform(delete("/admin/moderation/communities/" + communityId)
+		mockMvc.perform(post("/admin/moderation/communities/" + communityId + "/delete")
 				.header("X-Session-Token", admin.token())
 				.header("Idempotency-Key", "aent-why-del-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -152,7 +151,7 @@ class AdminEntitiesTests {
 		assertThat(count("select count(*) from communities where id = ?", communityId)).isEqualTo(1);
 
 		// Id que não existe é 404, e não uma escrita sobre outra linha.
-		mockMvc.perform(delete("/admin/moderation/communities/nao-existe")
+		mockMvc.perform(post("/admin/moderation/communities/nao-existe/delete")
 				.header("X-Session-Token", admin.token())
 				.header("Idempotency-Key", "aent-why-del-404")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -180,7 +179,7 @@ class AdminEntitiesTests {
 			.andExpect(jsonPath("$.status").value("ACTIVE"))
 			.andExpect(jsonPath("$.members").value(2));
 
-		mockMvc.perform(delete("/admin/moderation/groups/" + groupId)
+		mockMvc.perform(post("/admin/moderation/groups/" + groupId + "/delete")
 				.header("X-Session-Token", admin.token())
 				.header("Idempotency-Key", "aent-grp-del-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -191,7 +190,7 @@ class AdminEntitiesTests {
 			.andExpect(jsonPath("$.adminWasMember").value(false));
 
 		// A MESMA chave devolve a mesma resposta; a linha já não existe e nada é decidido de novo.
-		mockMvc.perform(delete("/admin/moderation/groups/" + groupId)
+		mockMvc.perform(post("/admin/moderation/groups/" + groupId + "/delete")
 				.header("X-Session-Token", admin.token())
 				.header("Idempotency-Key", "aent-grp-del-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -248,7 +247,7 @@ class AdminEntitiesTests {
 		joinGroup(membro, groupId, "aent-gn-join-1");
 
 		for (var session : List.of(dono, membro)) {
-			mockMvc.perform(delete("/admin/moderation/groups/" + groupId)
+			mockMvc.perform(post("/admin/moderation/groups/" + groupId + "/delete")
 					.header("X-Session-Token", session.token())
 					.header("Idempotency-Key", "aent-gn-del-" + session.userId())
 					.contentType(MediaType.APPLICATION_JSON)
@@ -343,7 +342,7 @@ class AdminEntitiesTests {
 		String groupId = createGroup(dono, "Grupo Remocao", "aent-rm-grp");
 		joinGroup(membro, groupId, "aent-rm-grp-join");
 
-		mockMvc.perform(delete("/admin/moderation/communities/" + communityId + "/members/" + membro.userId())
+		mockMvc.perform(post("/admin/moderation/communities/" + communityId + "/members/" + membro.userId() + "/remove")
 				.header("X-Session-Token", admin.token())
 				.header("Idempotency-Key", "aent-rm-com-1")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -354,13 +353,13 @@ class AdminEntitiesTests {
 			communityId, membro.userId())).isZero();
 
 		// Remoção de quem não é membro é 404; a do dono é aceita na comunidade.
-		mockMvc.perform(delete("/admin/moderation/communities/" + communityId + "/members/" + membro.userId())
+		mockMvc.perform(post("/admin/moderation/communities/" + communityId + "/members/" + membro.userId() + "/remove")
 				.header("X-Session-Token", admin.token())
 				.header("Idempotency-Key", "aent-rm-com-2")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("reason", REASON))))
 			.andExpect(status().isNotFound());
-		mockMvc.perform(delete("/admin/moderation/communities/" + communityId + "/members/" + dono.userId())
+		mockMvc.perform(post("/admin/moderation/communities/" + communityId + "/members/" + dono.userId() + "/remove")
 				.header("X-Session-Token", admin.token())
 				.header("Idempotency-Key", "aent-rm-com-owner")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -368,7 +367,7 @@ class AdminEntitiesTests {
 			.andExpect(status().isOk());
 
 		// No grupo, tirar o dono passa a propriedade para quem ficou: o grupo não fica órfão.
-		mockMvc.perform(delete("/admin/moderation/groups/" + groupId + "/members/" + dono.userId())
+		mockMvc.perform(post("/admin/moderation/groups/" + groupId + "/members/" + dono.userId() + "/remove")
 				.header("X-Session-Token", admin.token())
 				.header("Idempotency-Key", "aent-rm-grp-owner")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -381,7 +380,7 @@ class AdminEntitiesTests {
 			dono.userId())).isZero();
 
 		// Dono e membro comum não removem pela via administrativa.
-		mockMvc.perform(delete("/admin/moderation/groups/" + groupId + "/members/" + membro.userId())
+		mockMvc.perform(post("/admin/moderation/groups/" + groupId + "/members/" + membro.userId() + "/remove")
 				.header("X-Session-Token", membro.token())
 				.header("Idempotency-Key", "aent-rm-grp-neg")
 				.contentType(MediaType.APPLICATION_JSON)

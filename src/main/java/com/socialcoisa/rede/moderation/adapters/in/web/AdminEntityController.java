@@ -6,7 +6,6 @@ import java.util.function.Supplier;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.util.StringUtils;
-import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -68,25 +67,26 @@ class AdminEntityController {
 		return entities.communityMembers(communityId, q, page, size);
 	}
 
-	@DeleteMapping("/admin/moderation/communities/{communityId}")
+	/** Exclusão da comunidade. POST com motivo: o corpo da requisição é o que fica na auditoria. */
+	@PostMapping("/admin/moderation/communities/{communityId}/delete")
 	Object deleteCommunity(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String communityId, @RequestBody(required = false) ReasonRequest request) {
 		CurrentUser user = requireAdmin(sessionToken);
 		String reason = request == null ? "" : request.reason();
-		return write(user, "DELETE", "/api/admin/moderation/communities/{communityId}", idempotencyKey,
+		return write(user, "POST", "/api/admin/moderation/communities/{communityId}/delete", idempotencyKey,
 			Map.of("communityId", communityId, "reason", reason), 200,
 			() -> entities.deleteCommunity(user.id().value(), communityId, reason));
 	}
 
-	@DeleteMapping("/admin/moderation/communities/{communityId}/members/{userId}")
+	@PostMapping("/admin/moderation/communities/{communityId}/members/{userId}/remove")
 	Object removeCommunityMember(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String communityId, @PathVariable String userId,
 			@RequestBody(required = false) ReasonRequest request) {
 		CurrentUser admin = requireAdmin(sessionToken);
 		String reason = request == null ? "" : request.reason();
-		return write(admin, "DELETE", "/api/admin/moderation/communities/{communityId}/members/{userId}",
+		return write(admin, "POST", "/api/admin/moderation/communities/{communityId}/members/{userId}/remove",
 			idempotencyKey, Map.of("communityId", communityId, "userId", userId, "reason", reason), 200,
 			() -> entities.removeCommunityMember(admin.id().value(), communityId, userId, reason));
 	}
@@ -108,13 +108,14 @@ class AdminEntityController {
 		return entities.groupMembers(groupId, q, page, size);
 	}
 
-	@DeleteMapping("/admin/moderation/groups/{groupId}")
+	/** Exclusão física do grupo (conteúdo incluído). POST com motivo, pelo mesmo contrato acima. */
+	@PostMapping("/admin/moderation/groups/{groupId}/delete")
 	Object deleteGroup(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String groupId, @RequestBody(required = false) ReasonRequest request) {
 		CurrentUser user = requireAdmin(sessionToken);
 		String reason = request == null ? "" : request.reason();
-		return write(user, "DELETE", "/api/admin/moderation/groups/{groupId}", idempotencyKey,
+		return write(user, "POST", "/api/admin/moderation/groups/{groupId}/delete", idempotencyKey,
 			Map.of("groupId", groupId, "reason", reason), 200,
 			() -> entities.deleteGroup(user.id().value(), groupId, reason));
 	}
@@ -131,14 +132,14 @@ class AdminEntityController {
 			() -> entities.closeGroup(user.id().value(), groupId, reason));
 	}
 
-	@DeleteMapping("/admin/moderation/groups/{groupId}/members/{userId}")
+	@PostMapping("/admin/moderation/groups/{groupId}/members/{userId}/remove")
 	Object removeGroupMember(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@PathVariable String groupId, @PathVariable String userId,
 			@RequestBody(required = false) ReasonRequest request) {
 		CurrentUser admin = requireAdmin(sessionToken);
 		String reason = request == null ? "" : request.reason();
-		return write(admin, "DELETE", "/api/admin/moderation/groups/{groupId}/members/{userId}", idempotencyKey,
+		return write(admin, "POST", "/api/admin/moderation/groups/{groupId}/members/{userId}/remove", idempotencyKey,
 			Map.of("groupId", groupId, "userId", userId, "reason", reason), 200,
 			() -> entities.removeGroupMember(admin.id().value(), groupId, userId, reason));
 	}
