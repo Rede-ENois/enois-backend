@@ -1,8 +1,10 @@
 package com.socialcoisa.rede.confessionario.adapters.out.persistence;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -21,6 +23,14 @@ interface SpringDataConfissaoCommentJpaRepository extends JpaRepository<Confissa
 		""")
 	List<CommentCountProjection> countByPostIdIn(@Param("postIds") Collection<String> postIds,
 		@Param("status") ConfissaoStatus status);
+
+	@Query("""
+		select c from ConfissaoCommentJpaEntity c
+		where c.status = :status and c.createdAt >= :de and c.createdAt < :ate
+		order by c.createdAt asc
+		""")
+	List<ConfissaoCommentJpaEntity> findAtivosEntre(@Param("status") ConfissaoStatus status, @Param("de") Instant de,
+		@Param("ate") Instant ate, Pageable pageable);
 
 	interface CommentCountProjection {
 
