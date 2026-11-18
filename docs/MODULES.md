@@ -272,6 +272,9 @@ Implementa: `PublishPostUseCase`
 | `notifyMentions(Post post, List<String> mentionedUsernames)` | Cria notificações para usuários mencionados |
 | `validate(PublishPostCommand cmd)` | Valida campos do post (content obrigatório, type válido) |
 
+O worker de agendamentos bloqueia cada item antes de publicar e confirma a publicação e a remoção
+da fila na mesma transação. A recusa de um item não desfaz os demais itens do lote.
+
 ### GetFeedService
 
 **Arquivo**: `src/main/java/com/socialcoisa/rede/feed/application/GetFeedService.java`
