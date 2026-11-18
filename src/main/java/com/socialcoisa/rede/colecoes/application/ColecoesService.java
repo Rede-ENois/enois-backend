@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -127,6 +128,27 @@ public class ColecoesService {
 	}
 
 	// ---- Leitura (sempre do próprio dono) ----
+
+	/**
+	 * As coleções de quem pergunta, com a marca de ONDE este post já está guardado — o seletor
+	 * "guardar em coleção" do card do feed usa isto. Não diz se o post está salvo no perfil:
+	 * quem orquestra o salvar antes de guardar é o front, com o estado que o card já tem.
+	 */
+	@Transactional(readOnly = true)
+	public ColecoesViews.MinhasColecoesPage minhas(UserId ownerId, String postId) {
+		List<ColecaoSalva> colecoes = repository.findAllByOwner(ownerId);
+		if (colecoes.isEmpty()) {
+			return new ColecoesViews.MinhasColecoesPage(List.of());
+		}
+		List<String> idsDasColecoes = colecoes.stream().map(ColecaoSalva::id).toList();
+		Map<String, Long> contagens = repository.countPosts(idsDasColecoes);
+		Set<String> comOPost = Set.copyOf(repository.findColecaoIdsComPost(postId, idsDasColecoes));
+		List<ColecoesViews.ColecaoDoPost> items = colecoes.stream()
+			.map(colecao -> new ColecoesViews.ColecaoDoPost(colecao.id(), colecao.title(), colecao.description(),
+				contagens.getOrDefault(colecao.id(), 0L), comOPost.contains(colecao.id()), colecao.createdAt()))
+			.toList();
+		return new ColecoesViews.MinhasColecoesPage(items);
+	}
 
 	@Transactional(readOnly = true)
 	public ColecoesPage list(UserId ownerId, Optional<Instant> before, int limit) {

@@ -20,9 +20,15 @@ public interface ColecoesRepository {
 	/** Coleções do dono criadas antes da marca, mais novas primeiro. */
 	List<ColecaoSalva> findByOwnerBefore(UserId ownerId, Instant before, int limit);
 
+	/** Todas as coleções do dono, mais novas primeiro — o seletor do post lista tudo. */
+	List<ColecaoSalva> findAllByOwner(UserId ownerId);
+
 	ColecaoPost savePost(ColecaoPost post);
 
 	Optional<ColecaoPost> findPost(String colecaoId, String postId);
+
+	/** Coleções (do conjunto) em que o post já está guardado — a flag "tem" do seletor. */
+	Collection<String> findColecaoIdsComPost(String postId, Collection<String> colecaoIds);
 
 	/** Elos da coleção antes da marca, mais recentes primeiro. */
 	List<ColecaoPost> findPostsByColecao(String colecaoId, Instant before, int limit);

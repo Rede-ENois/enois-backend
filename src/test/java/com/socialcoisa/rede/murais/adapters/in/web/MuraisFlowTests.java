@@ -284,6 +284,49 @@ class MuraisFlowTests {
 		org.assertj.core.api.Assertions.assertThat(feed.getResponse().getContentAsString()).contains(postId2);
 	}
 
+	@Test
+	void seletorDoPostListaSoOsMeusMuraisComMarcaDeOndeOPostJaEsta() throws Exception {
+		var dono = auth("mural_selowner");
+		var outra = auth("mural_seloutra");
+		var autor = auth("mural_selautor");
+		String meuMural = createMural(dono, "Meus muros de referências");
+		String muralAlheio = createMural(outra, "Mural que NÃO pode aparecer");
+		String postId = publishPost(autor, "post que o seletor vai colar");
+
+		// Antes da cola: o meu mural aparece com tem=false; o alheio não aparece.
+		MvcResult antes = mockMvc.perform(get("/murais/meus").header("X-Session-Token", dono.token())
+				.param("postId", postId))
+			.andExpect(status().isOk())
+			.andReturn();
+		String antesJson = antes.getResponse().getContentAsString();
+		org.assertj.core.api.Assertions.assertThat(antesJson).contains(meuMural).doesNotContain(muralAlheio);
+		JsonNode itemAntes = objectMapper.readTree(antesJson).get("items").get(0);
+		org.assertj.core.api.Assertions.assertThat(itemAntes.get("tem").asBoolean()).isFalse();
+		org.assertj.core.api.Assertions.assertThat(itemAntes.get("contributions").asLong()).isZero();
+
+		// Colado: a flag vira true e a contagem sobe.
+		contribute(dono, meuMural, postId);
+		MvcResult depois = mockMvc.perform(get("/murais/meus").header("X-Session-Token", dono.token())
+				.param("postId", postId))
+			.andExpect(status().isOk())
+			.andReturn();
+		JsonNode itemDepois = objectMapper.readTree(depois.getResponse().getContentAsString()).get("items").get(0);
+		org.assertj.core.api.Assertions.assertThat(itemDepois.get("tem").asBoolean()).isTrue();
+		org.assertj.core.api.Assertions.assertThat(itemDepois.get("contributions").asLong()).isEqualTo(1);
+
+		// Outra pessoa tem a lista PRÓPRIA: nem vê o meu quadro.
+		MvcResult deOutra = mockMvc.perform(get("/murais/meus").header("X-Session-Token", outra.token())
+				.param("postId", postId))
+			.andExpect(status().isOk())
+			.andReturn();
+		org.assertj.core.api.Assertions.assertThat(deOutra.getResponse().getContentAsString()).contains(muralAlheio)
+			.doesNotContain(meuMural);
+
+		// Sem sessão nem existe seletor: 401, como o resto do módulo.
+		mockMvc.perform(get("/murais/meus").param("postId", postId))
+			.andExpect(status().isUnauthorized());
+	}
+
 	// ---- Auxiliares ----
 
 	private String createMural(TestAuthHelper.AuthSession owner, String title) throws Exception {

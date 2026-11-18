@@ -54,6 +54,14 @@ public class ColecoesController {
 		return colecoes.list(user.id(), cursorCodec.decode(cursor), limit);
 	}
 
+	/** As minhas coleções na ótica de um post: alimenta o seletor "guardar em coleção" do card. */
+	@GetMapping("/colecoes/minhas")
+	ColecoesViews.MinhasColecoesPage minhas(@RequestHeader("X-Session-Token") String sessionToken,
+			@RequestParam String postId) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return colecoes.minhas(user.id(), postId);
+	}
+
 	@GetMapping("/colecoes/{colecaoId}")
 	ColecoesViews.ColecaoResumo colecao(@RequestHeader("X-Session-Token") String sessionToken,
 			@PathVariable String colecaoId) {

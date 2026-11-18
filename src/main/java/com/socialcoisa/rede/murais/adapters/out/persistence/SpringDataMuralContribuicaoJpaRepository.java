@@ -25,4 +25,11 @@ interface SpringDataMuralContribuicaoJpaRepository extends JpaRepository<MuralCo
 		group by c.muralId
 		""")
 	List<Object[]> countByMuralIdIn(@Param("ids") Collection<String> ids);
+
+	/** Elos de UM post nos murais indicados — o suficiente para a flag "tem" do seletor. */
+	@Query("""
+		select c.muralId, c.postId from MuralContribuicaoJpaEntity c
+		where c.postId = :postId and c.muralId in :muralIds
+		""")
+	List<Object[]> peloPostNosMurais(@Param("postId") String postId, @Param("muralIds") Collection<String> muralIds);
 }
