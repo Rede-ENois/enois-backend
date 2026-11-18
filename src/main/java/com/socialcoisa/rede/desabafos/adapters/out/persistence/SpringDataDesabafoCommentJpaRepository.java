@@ -1,8 +1,10 @@
 package com.socialcoisa.rede.desabafos.adapters.out.persistence;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -21,6 +23,14 @@ interface SpringDataDesabafoCommentJpaRepository extends JpaRepository<DesabafoC
 		""")
 	List<CommentCountProjection> countByPostIdIn(@Param("postIds") Collection<String> postIds,
 		@Param("status") DesabafoStatus status);
+
+	@Query("""
+		select c from DesabafoCommentJpaEntity c
+		where c.status = :status and c.createdAt >= :de and c.createdAt < :ate
+		order by c.createdAt asc
+		""")
+	List<DesabafoCommentJpaEntity> findAtivosEntre(@Param("status") DesabafoStatus status, @Param("de") Instant de,
+		@Param("ate") Instant ate, Pageable pageable);
 
 	interface CommentCountProjection {
 

@@ -83,7 +83,7 @@ class StorageHealerTests {
 	}
 
 	private static StorageObject stored(String id, long bytes) {
-		return new StorageObject(id, "fotos", id + ".jpg", "image/jpeg", bytes, "a".repeat(64),
+		return StorageObject.current(id, "fotos", id + ".jpg", "image/jpeg", bytes, "a".repeat(64),
 			StorageObjectState.STORED, "u", NOW, NOW, null);
 	}
 
@@ -208,7 +208,7 @@ class StorageHealerTests {
 	@Test
 	void objeto_lapidado_entre_a_varredura_e_a_cura_nao_vira_designacao() {
 		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(gap("sob_1"));
-		when(catalog.findById("sob_1")).thenReturn(Optional.of(new StorageObject("sob_1", "fotos", "a.jpg",
+		when(catalog.findById("sob_1")).thenReturn(Optional.of(StorageObject.current("sob_1", "fotos", "a.jpg",
 			"image/jpeg", 10L, "a".repeat(64), StorageObjectState.DELETED, "u", NOW, NOW, NOW)));
 
 		StorageHealer.Report relatorio = healer.heal("adm_1", null, 100, false);

@@ -37,6 +37,17 @@ interface SpringDataCommentJpaRepository extends JpaRepository<CommentJpaEntity,
 
 	List<CommentJpaEntity> findByPostIdIn(Collection<String> postIds);
 
+	/** Comentários ativos num intervalo de criação (a janela de leitura do Termômetro). */
+	@org.springframework.data.jpa.repository.Query("""
+			select c from CommentJpaEntity c
+			where c.status = :status and c.createdAt >= :de and c.createdAt < :ate
+			order by c.createdAt asc
+			""")
+	List<CommentJpaEntity> findAtivosEntre(
+			@org.springframework.data.repository.query.Param("status") CommentStatus status,
+			@org.springframework.data.repository.query.Param("de") Instant de,
+			@org.springframework.data.repository.query.Param("ate") Instant ate, Pageable pageable);
+
 	/**
 	 * Comentários que citam o termo E trazem URL de GIF — a busca de GIF da comunidade
 	 * (sem provedor externo, usa o que a rede mesma já compartilhou).

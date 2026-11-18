@@ -32,9 +32,19 @@ interface SpringDataGroupMemberJpaRepository extends JpaRepository<GroupMemberJp
 		GROUP BY m.groupId""")
 	List<Object[]> countByGroupIds(@Param("groupIds") Collection<String> groupIds);
 
+	@Query("""
+		SELECT m.groupId, m.role FROM GroupMemberJpaEntity m
+		WHERE m.groupId IN :groupIds AND m.userId = :userId""")
+	List<Object[]> findRolesByGroupIdsAndUserId(@Param("groupIds") Collection<String> groupIds,
+			@Param("userId") String userId);
+
 	long countByGroupId(String groupId);
 
 	@Modifying
 	@Query("DELETE FROM GroupMemberJpaEntity m WHERE m.groupId = :groupId AND m.userId = :userId")
 	int deleteByGroupIdAndUserId(@Param("groupId") String groupId, @Param("userId") String userId);
+
+	@Modifying
+	@Query("DELETE FROM GroupMemberJpaEntity m WHERE m.groupId = :groupId")
+	int deleteByGroupId(@Param("groupId") String groupId);
 }

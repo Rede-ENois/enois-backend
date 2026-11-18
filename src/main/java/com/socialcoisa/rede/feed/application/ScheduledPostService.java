@@ -9,9 +9,12 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
+import com.socialcoisa.rede.coin.application.CoinService;
 import com.socialcoisa.rede.feed.application.port.out.ScheduledPostRepository;
 import com.socialcoisa.rede.feed.domain.PostType;
 import com.socialcoisa.rede.feed.domain.ScheduledPost;
@@ -40,15 +43,17 @@ public class ScheduledPostService {
 	private final ScheduledPostRepository repository;
 	private final PublishPostUseCase publishPost;
 	private final Clock clock;
+	private final TransactionTemplate itemTransaction;
 
-	private final com.socialcoisa.rede.coin.application.CoinService coins;
+	private final CoinService coins;
 
 	public ScheduledPostService(ScheduledPostRepository repository, PublishPostUseCase publishPost, Clock clock,
-			com.socialcoisa.rede.coin.application.CoinService coins) {
+			CoinService coins, PlatformTransactionManager transactionManager) {
 		this.coins = coins;
 		this.repository = repository;
 		this.publishPost = publishPost;
 		this.clock = clock;
+		this.itemTransaction = new TransactionTemplate(transactionManager);
 	}
 
 	public record ScheduleCommand(PostType type, String content, String pageHtml, String articleBody,
@@ -154,12 +159,12 @@ public class ScheduledPostService {
 	 * Publica o que venceu. Cada item tem o seu próprio try: uma recusa não pode travar a fila
 	 * dos demais. O retorno é quantos entraram no ar nesta rodada.
 	 *
-	 * SEM @Transactional de propósito: a publicação é um caso de uso com transação PRÓPRIA; se o
-	 * lote inteiro compartilhasse uma transação, a primeira recusa a marcaria rollback-only e
-	 * derrubaria até as publicações que deram certo (UnexpectedRollbackException).
+	 * O lote não tem transação: cada item é bloqueado e publicado na própria transação, para que
+	 * uma recusa não desfaça os demais.
 	 */
 	public int publishDue() {
-		List<ScheduledPost> due = repository.findDue(clock.instant(), MAX_ATTEMPTS, 20);
+		Instant now = clock.instant();
+		List<ScheduledPost> due = repository.findDue(now, MAX_ATTEMPTS, 20);
 		int published = 0;
 		for (ScheduledPost post : due) {
 			try {
@@ -167,20 +172,33 @@ public class ScheduledPostService {
 				// post entra no ar, não quando ele foi agendado.
 				// Enquete agendada nasce simples (sem multipla escolha nem prazo): a extensao da
 				// enquete e configurada na hora da criacao direta, nao no agendamento.
-				publishPost.publish(new PublishPostCommand(new UserId(post.userId()), post.type(), post.content(),
-					post.pageHtml(), post.articleBody(), post.tags(), post.mediaIds(), post.communityId(),
-					post.mentionedUserIds(), post.topic(), null, false, post.pollOptions(), false, null));
-				repository.delete(post.id());
-				published++;
+				Boolean entrou = itemTransaction.execute(status -> {
+					ScheduledPost atual = repository.findByIdForUpdate(post.id()).orElse(null);
+					if (atual == null || atual.scheduledAt().isAfter(now) || atual.attempts() >= MAX_ATTEMPTS) {
+						return false;
+					}
+					publishPost.publish(new PublishPostCommand(new UserId(atual.userId()), atual.type(), atual.content(),
+						atual.pageHtml(), atual.articleBody(), atual.tags(), atual.mediaIds(), atual.communityId(),
+						atual.mentionedUserIds(), atual.topic(), null, false, atual.pollOptions(), false, null));
+					repository.delete(atual.id());
+					return true;
+				});
+				if (Boolean.TRUE.equals(entrou)) {
+					published++;
+				}
 			}
 			catch (RuntimeException error) {
 				String motivo = error instanceof ApiException api && StringUtils.hasText(api.getMessage())
 					? api.getMessage()
 					: "Não foi possível publicar no horário marcado.";
 				String limitado = motivo.length() > 500 ? motivo.substring(0, 500) : motivo;
-				repository.save(post.failed(limitado));
-				LOG.warn("Post agendado {} recusado na publicação (tentativa {}): {}", post.id(), post.attempts() + 1,
-					limitado);
+				itemTransaction.executeWithoutResult(status -> repository.findByIdForUpdate(post.id())
+					.filter(atual -> !atual.scheduledAt().isAfter(now) && atual.attempts() < MAX_ATTEMPTS)
+					.ifPresent(atual -> {
+						repository.save(atual.failed(limitado));
+						LOG.warn("Post agendado {} recusado na publicação (tentativa {}): {}", atual.id(),
+							atual.attempts() + 1, limitado);
+					}));
 			}
 		}
 		return published;

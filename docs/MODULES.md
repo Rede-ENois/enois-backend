@@ -272,6 +272,9 @@ Implementa: `PublishPostUseCase`
 | `notifyMentions(Post post, List<String> mentionedUsernames)` | Cria notificações para usuários mencionados |
 | `validate(PublishPostCommand cmd)` | Valida campos do post (content obrigatório, type válido) |
 
+O worker de agendamentos bloqueia cada item antes de publicar e confirma a publicação e a remoção
+da fila na mesma transação. A recusa de um item não desfaz os demais itens do lote.
+
 ### GetFeedService
 
 **Arquivo**: `src/main/java/com/socialcoisa/rede/feed/application/GetFeedService.java`
@@ -282,7 +285,7 @@ Implementa: `GetFeedUseCase`, `GetProfilePostsUseCase`
 |---|---|
 | `getFeed(GetFeedQuery query)` | Retorna feed paginado para usuário, com abas: FOR_YOU, FOLLOWING, ALL, DISCUSSIONS, PROJECTS, RECENT |
 | `getProfilePosts(GetProfilePostsQuery query)` | Retorna posts de um perfil específico |
-| `getSavedFeed(UserId userId)` | Retorna posts salvos pelo usuário |
+| `getSavedFeed(UserId userId)` | Retorna posts salvos pelo usuário, preservando a ordem com mapa por id em O(S) |
 | `getCommunityFeed(String communityId, Instant cursor, int limit, UserId currentUser)` | Retorna feed de uma comunidade |
 | `enrich(List<Post> posts, UserId currentUserId)` | Enriquece posts com dados do autor e reação do usuário |
 | `filterByTab(List<Post> posts, FeedTab tab, UserId userId)` | Filtra posts por tipo de aba |
@@ -304,6 +307,9 @@ Implementa: `DeletePostUseCase`, `BulkDeletePostsUseCase`
 | `normalizePostIds(List<String> postIds)` | Valida lista de IDs |
 | `normalizeReason(String reason)` | Normaliza razão da deleção |
 | `requestMediaDeletion(Post post)` | Inicia job de deleção de mídia associada |
+
+A expiração de Momento e Instante busca no banco até 200 posts ativos por rodada, ordenados por
+vencimento e id; somente prazos anteriores ao instante da rodada entram no lote.
 
 ### PostInteractionService
 
@@ -472,6 +478,9 @@ Implementa: `GetMeUseCase`, `GetUserProfileUseCase`, `UpdateProfileUseCase`
 | `getRanking(int limit)` | Top usuários por reputação |
 | `update(UpdateProfileCommand cmd)` | Atualiza campos do perfil, incluindo cidade/UF (`CityState`, os dois ou nenhum) e `showCity` (cidade no perfil público só por opção, padrão desligado) |
 
+`ReputationRefreshWorker` percorre os IDs em ordem crescente por cursor, em lotes de até 500.
+Cada rodada começa do início, e a falha de uma conta não impede as demais.
+
 ### ProfileExtensionService
 
 **Arquivo**: `src/main/java/com/socialcoisa/rede/profile/application/ProfileExtensionService.java`
@@ -579,6 +588,7 @@ Implementa: `ManageProfileExtensionUseCase`
 | `getConnectionState(String userId, String targetUserId)` | Retorna status (PENDING, ACCEPTED, REMOVED, BLOCKED, NONE) e `requestedByMe` (pedido pendente enviado por quem consulta) |
 | `getConnections(String userId)` | Conexões aceitas |
 | `getPendingRequests(String userId)` | Solicitações pendentes |
+| `contarSolicitacoesRecebidasVisiveis(String userId)` | Conta pedidos recebidos visíveis no banco |
 | `countConnections(String userId)` | Conta conexões aceitas |
 | `getSuggestions(String userId, int limit)` | Sugere conexões baseadas em conexões mútuas |
 | `findFriends(UserId userId)` | Retorna IDs dos amigos (para feed) |
@@ -1210,6 +1220,36 @@ Motivo obrigatório (10 a 2000 caracteres) em toda escrita; `Idempotency-Key` de
 resposta (replay) sem repetir a decisão. `user_warnings` (`V330`) é o histórico que faltava: antes
 "avisar" numa denúncia só mudava o status e mandava uma notificação, sem registro por conta.
 
+### AdminEntityService (comunidades e grupos)
+
+**Arquivo**: `src/main/java/com/socialcoisa/rede/moderation/application/AdminEntityService.java`
+
+Gerenciamento de comunidades e grupos pela administração da plataforma, sem votação e sem papel
+local. Mesma trava de `AdminModerationService`: `AdminRouteInterceptor` recusa antes do MVC e cada
+método confirma com `AdminGuard`.
+
+As escritas são `POST` com o motivo no corpo (o motivo é o que fica na auditoria; o `DELETE` do
+cliente não carrega corpo). Leitura nunca é auditada; toda escrita registra admin, alvo, operação,
+horário, resultado e motivo.
+
+| Função | Rota | Efeito |
+|---|---|---|
+| `communityOverview(id)` | GET /api/admin/moderation/communities/{id} | Dono, número de membros e de admins |
+| `communityMembers(id, q, page, size)` | GET /api/admin/moderation/communities/{id}/members | Lista completa (papel, entrada), busca por nome/@, páginas; audita nada (leitura) |
+| `deleteCommunity(id, reason)` | POST /api/admin/moderation/communities/{id}/delete | Reaproveita `CommunityService.deleteCommunity(..., adminOverride)`; audita `ADMIN_COMMUNITY_DELETED` |
+| `removeCommunityMember(id, userId, reason)` | POST /api/admin/moderation/communities/{id}/members/{userId}/remove | Remove inclusive o dono; audita `ADMIN_COMMUNITY_MEMBER_REMOVED` |
+| `groupOverview(id)` | GET /api/admin/moderation/groups/{id} | Dono, estado, número de membros |
+| `groupMembers(id, q, page, size)` | GET /api/admin/moderation/groups/{id}/members | Lista completa; mesmo contrato de páginas |
+| `deleteGroup(id, reason)` | POST /api/admin/moderation/groups/{id}/delete | `GroupService.purgeByAdmin`: membros, pedidos, tópicos, publicações, comentários e reações saem na mesma transação; audita `ADMIN_GROUP_DELETED` |
+| `closeGroup(id, reason)` | POST /api/admin/moderation/groups/{id}/close | `GroupService.closeByAdmin`: estado CLOSED com o conteúdo preservado; audita `ADMIN_GROUP_CLOSED` |
+| `removeGroupMember(id, userId, reason)` | POST /api/admin/moderation/groups/{id}/members/{userId}/remove | `GroupService.removeMemberByAdmin`; dono removido passa a propriedade ao membro mais antigo; audita `ADMIN_GROUP_MEMBER_REMOVED` |
+
+Exclusão de grupo é apagar de fato: o conteúdo do grupo é dele (tabelas próprias, sem vínculo com o
+feed), então sai inteiro junto com o grupo. Quando o conteúdo é histórico e não objeto da decisão, o
+painel usa `close`: o grupo sai da descoberta, não aceita gente nova e o que existia continua no
+banco (inacessível pela leitura normal, porque CLOSED não é legível por membros). A comunidade é
+apagada pelo caminho que já existia, com membros e vínculos na mesma transação.
+
 ### ContentQuarantineReviewService
 
 **Arquivo**: `src/main/java/com/socialcoisa/rede/moderation/application/ContentQuarantineReviewService.java`
@@ -1335,6 +1375,9 @@ reputação, mesmas regras de moderação.
 
 Canal de contato categorizado: pedidos de suporte viram tickets com status, resposta da equipe,
 integração com issues do GitHub e log de e-mails no painel.
+
+O comentário espelhado mantém a resposta original do painel e sua autoria, mesmo quando o webhook
+chega antes da confirmação do GitHub.
 
 | Rota | Descrição |
 |---|---|

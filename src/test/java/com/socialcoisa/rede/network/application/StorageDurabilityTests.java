@@ -165,9 +165,9 @@ class StorageDurabilityTests {
 	 */
 	@Test
 	void aVarreduraContaObjetosPorNivelDeDurabilidade() {
-		StorageObject objeto = new StorageObject("sob_1", "fotos", "a.jpg", "image/jpeg", 10L, "abc",
+		StorageObject objeto = StorageObject.current("sob_1", "fotos", "a.jpg", "image/jpeg", 10L, "abc",
 			StorageObjectState.STORED, "user_1", NOW, NOW, null);
-		StorageObject outro = new StorageObject("sob_2", "fotos", "b.jpg", "image/jpeg", 10L, "def",
+		StorageObject outro = StorageObject.current("sob_2", "fotos", "b.jpg", "image/jpeg", 10L, "def",
 			StorageObjectState.STORED, "user_1", NOW, NOW, null);
 		when(catalog.listAll(any(), anyInt())).thenReturn(List.of(objeto));
 		when(catalog.copies("sob_1")).thenReturn(List.of(copia(1, "nd_a"), copia(2, "nd_b")));

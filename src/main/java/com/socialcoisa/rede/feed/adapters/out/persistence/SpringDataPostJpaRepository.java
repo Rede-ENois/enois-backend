@@ -37,6 +37,17 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 	@Query("select p from PostJpaEntity p where :mediaId member of p.mediaIds")
 	List<PostJpaEntity> findByMediaId(@Param("mediaId") String mediaId);
 
+	/** Posts de texto do feed social num intervalo de criação (a janela de leitura do Termômetro). */
+	@Query("""
+			select p from PostJpaEntity p
+			where p.status = :status and p.type in :tipos and p.channelId is null
+			  and p.createdAt >= :de and p.createdAt < :ate
+			order by p.createdAt asc
+			""")
+	List<PostJpaEntity> findTextoSocialEntre(@Param("status") PostStatus status,
+			@Param("tipos") Collection<PostType> tipos, @Param("de") Instant de, @Param("ate") Instant ate,
+			Pageable pageable);
+
 	/** Posts ativos com link no corpo ou na mini página (a varredura da barreira de links). */
 	@Query("""
 		select p from PostJpaEntity p
@@ -67,8 +78,8 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 			PostStatus status, Instant before, Pageable pageable);
 
 	/** Efêmeros vencidos e ainda ativos (Momento, Instante) — o worker aplica o soft-delete. */
-	List<PostJpaEntity> findByTypeInAndStatusAndExpiresAtBefore(Collection<PostType> types, PostStatus status,
-			Instant now);
+	List<PostJpaEntity> findByTypeInAndStatusAndExpiresAtBeforeOrderByExpiresAtAscIdAsc(Collection<PostType> types,
+			PostStatus status, Instant now, Pageable pageable);
 
 	// ---- Separação de identidades (perfil profissional): regras no backend, sempre ----
 

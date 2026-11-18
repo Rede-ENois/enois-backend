@@ -137,9 +137,7 @@ class NetworkContractController {
 	NetworkSummaryView summary(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		int connections = networkService.countConnections(user.id().value());
-		int incoming = (int) visibleRequests(user.id().value()).stream()
-			.filter(r -> INCOMING.equals(r.direction()))
-			.count();
+		int incoming = networkService.contarSolicitacoesRecebidasVisiveis(user.id().value());
 		return new NetworkSummaryView(user.id().value(), connections, 0, incoming);
 	}
 

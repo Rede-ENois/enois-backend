@@ -326,3 +326,269 @@ endereço, o oposto de medir.
 - **Multiplexação, renovação de credenciais, transferências retomáveis, recuperação de sessões**:
   inexistentes. `NODE_POLL_SECONDS` fixo, sem backoff; a chave do nó não expira nem roda.
 - A detecção de IP **registra**, não age: não há política que reaja a uma troca de endereço.
+
+## 10. Entrega e distribuição (brief §13)
+
+O §13 pede cache HTTP, `ETag`, `Last-Modified`, `Range`, entrega por streaming e URLs assinadas. A
+entrega por **streaming** já era a do `StorageCatalogService` (o corpo sai do disco da instalação, em
+pedaços, e nunca é carregado inteiro); esta seção acrescenta o que faltava para um cliente HTTP
+aproveitá-la.
+
+### 10.1 Duas rotas, duas políticas opostas
+
+| rota | para quem | `Cache-Control` | `Range` |
+|---|---|---|---|
+| `GET /network/storage/objects/{id}` | nó autenticado (`X-Node-Key`) | `private, no-store` | não |
+| `GET /network/storage/objects/{id}/content` | cliente (pública, com sessão ou sem) | pelo **tipo** do objeto | sim |
+
+Separar foi decisão, não estética. Servidas pela mesma rota, a política teria de depender de "quem
+pediu", e um cabeçalho esquecido no meio tornaria pública uma imagem privada. A rota do nó continua
+como era, com `Last-Modified` acrescentado.
+
+### 10.2 A política vem do conteúdo, não do caminho
+
+`CachePolicy.forContentType`:
+
+| content-type | `Cache-Control` |
+|---|---|
+| `image/*`, `video/*`, `audio/*` | `public, max-age=31536000, immutable` |
+| `application/pdf`, `text/plain`, qualquer outro | `private, no-store` |
+| nulo (desconhecido) | `private, no-store` |
+
+O padrão é **privado**: um tipo que ninguém classificou não vira cacheável por omissão. `immutable`
+só é honesto porque o objeto do catálogo é imutável — conteúdo novo é objeto novo, com id próprio,
+que nunca muda por baixo de um cache. A rota do nó usa `CachePolicy.NODE`, sempre `no-store`, mesmo
+quando o tipo é imagem.
+
+### 10.3 `ETag` e `Last-Modified`
+
+- **`ETag`** é o `sha256` do conteúdo entre aspas. O digest **é** a identidade do conteúdo, então uma
+  comparação de `If-None-Match` é exata, não uma amostra.
+- **`Last-Modified`** é o `updated_at` da linha do catálogo.
+- `If-None-Match` bate (ou é `*`) → **304**, sem corpo, com `ETag` e a mesma política de cache. A
+  comparação é fraca (`W/` ignorado) e aceita lista, como a RFC 9110 manda.
+
+### 10.4 `Range`
+
+`ByteRange.parse` aceita `bytes=a-b`, `bytes=a-` (o que o player manda ao retomar) e `bytes=-n` (os n
+últimos). Regras:
+
+| entrada | resposta |
+|---|---|
+| faixa válida | `206` + `Content-Range: bytes a-b/total` + o trecho |
+| fim além do objeto | **truncado** até o último byte (`206`), como a RFC manda |
+| início além do objeto | `416` + `Content-Range: bytes */total` |
+| vários intervalos (`bytes=0-1,5-6`) | corpo inteiro (`200`) |
+| outra unidade, malformado, ausente | corpo inteiro (`200`) |
+| objeto vazio | corpo inteiro (`200`) |
+
+Toda resposta `200`/`206` traz `Accept-Ranges: bytes`. A faixa é lida **do disco** (`skip` + cópia
+limitada): nunca se carrega o arquivo inteiro em memória para servir 5 bytes.
+
+**Por que 416 e não "serve tudo".** Servir o corpo inteiro em silêncio para uma faixa que não existe
+faz o player achar que recebeu o trecho pedido e tocar do começo — o "vídeo que reinicia", um bug pior
+do que um erro visível. Múltiplos intervalos são a exceção porque montar `multipart/byteranges` à mão
+tem risco próprio, e cair no corpo inteiro é sempre uma resposta correta.
+
+### 10.5 Consumidores
+
+O front já **depende** de `Range`/`206` para vídeo: `withImageKitOriginal` pede o arquivo original do
+ImageKit porque a entrega transformada daquele CDN recusa `Range` com `403` quando a cota de
+transcodificação estoura. Teste em `enois-frontend/src/lib/api/media.test.ts` fixa que a URL do
+nosso Storage passa intacta pelo adapter (nenhum `?tr=` inventado) — a rota nova serve `Range`
+nativamente e não precisa de transformação.
+
+O player do design system (`lite-video.tsx`, e o `<audio>` do `media-grid`) usa `<video>`/`<audio>`
+com `preload="metadata"`, que faz `Range` sozinho. Teste em
+`enois-design-system/src/domain/post/media/storage-delivery.test.tsx` prova que a fonte continua
+sendo o elemento nativo e não vira `blob:` — um `fetch` que monte `blob:` perderia o seek e o cache
+HTTP.
+
+### 10.6 O que NÃO está entregue
+
+- **URLs assinadas e expiração de links** — a rota `/content` é pública para objeto servível. Não há
+  segredo por objeto nem prazo. Sem isso, imagem privada depende de a URL não circular: a política de
+  cache a protege do proxy, não de quem tem o link.
+- **Invalidação de cache**: o `immutable` de um ano assume o objeto imutável. Não existe `PURGE` nem
+  versão de URL a invalidar, porque não haverá o que invalidar enquanto objeto não for reescrito.
+- **CDN e nós EDGE servindo imagem**: `CachePolicy` torna a resposta cacheável; não há integração
+  com CDN nem rota de EDGE.
+- **Processamento de imagem** (redimensionar, recortar) continua no ImageKit; a rota nova serve o
+  original.
+- **Erasure coding (§9)**: decidido **não implementar** nesta fase; continua replicação completa,
+  verificada pela varredura (§15).
+
+## 11. Versionamento e ciclo de vida (brief §14, V352)
+
+Antes desta seção: a chave `(bucket, object_key)` era única, então `PUT` na mesma chave devolvia o
+objeto antigo (retry idempotente — certo para rede instável, errado para "guardei nova versão"), e
+nada tinha prazo. Remover era marcar lápide; a varredura de lápide já existia (fase 3). O que faltava
+era **o que fazer com o que sobra**: versões e prazo.
+
+### 11.1 A versão é um objeto com id próprio
+
+Cada versão de uma chave é uma linha do catálogo com `id` próprio. O `id` que um cliente já recebeu
+**continua devolvendo o conteúdo que ele gravou** — a versão nova não herda esse nome. É o que
+permite uma URL de mídia continuar estável depois de o arquivo ser substituído.
+
+| coluna | o que é |
+|---|---|
+| `version` | 1, 2, 3… por chave; todo objeto que já existia é a versão 1 de si mesmo |
+| `superseded_by` | id da versão que tomou a frente; **nulo é a corrente** |
+| `expires_at` | prazo calculado na gravação; nulo é "não expira" |
+
+`find(bucket, chave)` resolve para a corrente. O histórico é a lista inteira.
+
+### 11.2 Unicidade: só a corrente é única
+
+MariaDB não tem índice condicional. A condição vira **coluna gerada**: `current_key` devolve
+`bucket + char(31) + chave` na versão corrente e **NULL** na substituída — e NULL não colide em
+índice único. O índice `uq_network_storage_objects_current` é `(bucket, object_key, current_key)`:
+as duas primeiras colunas mantêm a chave como alvo válido do `on duplicate key update` da inserção
+idempotente.
+
+Consequência direta, provada no MariaDB real: **duas versões correntes da mesma chave são
+recusadas pelo banco**, não por código de aplicação. É a garantia que dois processos gravando a mesma
+chave ao mesmo tempo precisam.
+
+### 11.3 Política por bucket
+
+`network_storage_buckets`, uma linha por bucket configurado. Sem linha, valem os padrões do código:
+**sem versionamento, sem prazo** — criar a tabela não muda nada de quem não configurou.
+
+| campo | efeito |
+|---|---|
+| `versioning` | cada gravação concluída é versão nova; falso mantém o retry idempotente |
+| `retain_superseded_days` | dias que uma versão **substituída** sobrevive; nulo guarda para sempre |
+| `expire_after_days` | dias que um objeto **corrente** vive desde a gravação; nulo não expira |
+
+Retenção e expiração são campos diferentes porque contam de instantes diferentes: expiração conta da
+**gravação**, retenção conta da **substituição**. Retenção num bucket sem versionamento é recusada
+com 400 — seria configuração que nunca age.
+
+### 11.4 Expiração vale na leitura, não só na varredura
+
+Objeto vencido responde **404** imediatamente, antes de qualquer varredura. Expiração que só vale
+quando a varredura passa é um campo na tabela, não expiração: entre o vencimento e o próximo ciclo, o
+arquivo continuaria sendo servido.
+
+A varredura (`POST /admin/network/storage/lifecycle/run`, `dryRun=true` por padrão) faz duas coisas,
+e as duas **marcam lápide, nunca apagam linha**:
+
+1. **expiração** — objeto corrente, servível e vencido vira `DELETED`;
+2. **retenção** — versão substituída além do prazo do bucket vira `DELETED`.
+
+A linha tem de continuar existindo: é ela que a coleta de lápides da fase 3 percorre para mandar
+cada nó soltar as cópias. Apagar a linha deixaria o disco do participante sem registro do que
+coletar.
+
+### 11.5 Restaurar é gravar de novo, não voltar o passado
+
+`POST /admin/network/storage/objects/restore` cria uma **versão nova** com o conteúdo da antiga. A
+versão que estava na frente é substituída, não apagada: quem baixou a versão corrente continua com o
+que baixou, e o histórico continua contando o que aconteceu. Restaurar a versão que já está na frente
+é 409, não operação vazia.
+
+O digest restaurado é o que o catálogo guardava da versão antiga — a restauração não relê o disco.
+
+### 11.6 Rotas (admin)
+
+| rota | o que faz |
+|---|---|
+| `GET /admin/network/storage/buckets/{bucket}/policy` | política vigente; sem linha, devolve os padrões com `configured=false` |
+| `PUT /admin/network/storage/buckets/{bucket}/policy` | grava versionamento, retenção e expiração |
+| `GET /admin/network/storage/objects/versions?bucket=&key=` | histórico, do mais antigo ao mais novo |
+| `POST /admin/network/storage/objects/restore` | restaura versão como versão nova |
+| `POST /admin/network/storage/lifecycle/run?dryRun=` | expiração e retenção |
+
+### 11.7 O que NÃO está entregue
+
+- **Coleta de lápide de versão disparada pelo ciclo de vida**: ela marca a lápide e deixa a coleta
+  para o coletor da fase 3 (`retention-hours` próprio). Não há agendamento automático; as varreduras
+  rodam por chamada.
+- **"Um nó desconectado não restaura silenciosamente um arquivo excluído"** é garantido na
+  **confirmação**: upload que termina depois da lápide não ressuscita o objeto
+  (`where state = 'PENDING'`), e nó que volta não recebe tarefa de um objeto `DELETED`. Não existe
+  protocolo de sincronização de estado entre nó e Control Plane — o nó não mantém catálogo próprio.
+- **Expiração por prefixo ou por objeto**: o prazo é só por bucket.
+- **Versionamento retroativo**: os objetos que existiam antes são a versão 1; não há reconstrução de
+  histórico que nunca foi gravado.
+
+## 12. Rebalanceamento (brief §16, V354)
+
+A §2 desta doc mede o desequilíbrio e diz explicitamente: "não move nada". Esta seção entrega o
+movimento, com a regra que manda no desenho escrita no brief:
+
+> Nunca remover a última cópia saudável antes de confirmar a persistência e integridade do destino.
+
+### 12.1 Três passos, e só o terceiro toca a cópia antiga
+
+| passo | rota | o que muda no catálogo |
+|---|---|---|
+| 1. designar | `POST /admin/network/storage/rebalance` | réplica nova nasce `PENDING_REMOTE`; **antiga continua `OK`** |
+| 2. confirmar | `PUT /network/storage/objects/{id}/replica` (rota que já existia) | destino declara o que gravou; o Control Plane confere digest e tamanho |
+| 3. concluir | `POST /admin/network/storage/rebalance/{id}/complete` | **só com o destino `OK`** a antiga vira `GONE` |
+
+Consequência direta: a migração é **sem indisponibilidade**. Entre o passo 1 e o 3 a cópia antiga
+serve normalmente — a página que aponta para ela não para no meio da transferência.
+
+### 12.2 O que o movimento recusa (e por quê)
+
+| situação | resposta | motivo |
+|---|---|---|
+| origem é a **única** cópia `OK` | 409 `STORAGE_REBALANCE_LAST_COPY` | mover a única é apostar o arquivo na transferência |
+| origem não é `OK` (`STALE`, `GONE`, `PENDING_REMOTE`) | 409 `STORAGE_REPLICA_NOT_HEALTHY` | o conteúdo dela não é confiável |
+| destino já tem cópia do objeto | 409 `STORAGE_REBALANCE_SAME_NODE` | não alivia ninguém e desvia da conta de domínio de falha |
+| destino inativo ou sem perfil de storage | 409 `STORAGE_REBALANCE_DEST_NOT_READY` | a transferência nunca enfileiraria tarefa |
+| já há transferência viva desta réplica | 409 `STORAGE_REBALANCE_IN_PROGRESS` | clique duplo não abre duas transferências do mesmo objeto |
+
+O número da réplica nova continua o maior existente; o número da antiga **não é reaproveitado** pela
+mesma razão do healing: a chave `(object_id, replica)` sobrescreveria a cópia que ainda está servindo.
+
+### 12.3 Desfazer não toca a cópia antiga
+
+`POST /admin/network/storage/rebalance/{id}/cancel` recolhe a designação nova (`GONE`) e deixa a
+antiga como estava. Depois de `DONE` o cancelamento é **409**: desfazer o `DONE` removeria a cópia
+nova depois de a antiga ter saído — o único caminho que deixaria o objeto sem nenhuma das duas.
+
+`FAILED` é o estado de uma transferência que perdeu a designação (recolhida por outra rota, nó
+removido): a antiga continua, e o operador vê o motivo em `failureReason`, em vez de uma
+transferência viva para sempre.
+
+### 12.4 Unicidade: uma transferência viva por réplica
+
+A mesma coluna gerada do V352: `live_key` vale `object_id:from_replica` **só em `PENDING`** e NULL nos
+demais estados. Com a chave composta `(object_id, from_replica, live_key)`, o banco recusa duas
+transferências vivas da mesma réplica — e **aceita** duas concluídas ao longo do tempo, que é o que
+uma unicidade ingênua por estado proibiria para sempre (a segunda recuperação do mesmo objeto ficaria
+impossível).
+
+### 12.5 Bandas e progressividade
+
+O teto de banda é **por transferência** (`bandwidthLimitMbps`, padrão 10), não por nó: o operador
+escolhe quanto ceder para um objeto específico. A transferência em si é um `OBJECT_PUT` pelo caminho
+do §8.3, então o nó aplica o **menor** entre o teto da transferência e a própria capacidade.
+
+Não há transferência paralela de vários objetos numa mesma chamada: cada transferência é uma decisão
+de operador com o próprio teto.
+
+### 12.6 Rotas
+
+| rota | o que faz |
+|---|---|
+| `GET /admin/network/storage/rebalance` | transferências vivas, com a antiga ainda no lugar |
+| `POST /admin/network/storage/rebalance` | pede a transferência e enfileira o `OBJECT_PUT` |
+| `POST /admin/network/storage/rebalance/{id}/complete` | confirma o destino e remove a antiga |
+| `POST /admin/network/storage/rebalance/{id}/cancel` | desfaz; a antiga nunca é tocada |
+
+### 12.7 O que NÃO está entregue
+
+- **Escolha automática de quem mover**: a decisão de qual réplica sai continua do operador, a partir
+  do relatório da §2. Não há agendador que abra transferências sozinho — cada uma é tráfego de
+  corpo pela rede de quem participa.
+- **Prioridade por importância** (§16): não há peso por bucket ou classe de armazenamento na ordem
+  das transferências; a ordem é a escolha do operador.
+- **Pausa e retomada no meio de uma transferência em curso**: desfazer recolhe a designação e
+  recomeçar abre outra; não existe retomada de onde parou. O `OBJECT_PUT` do nó não é retomável
+  (lacuna registrada na doc da fase 3).
+- **Progresso em bytes**: o estado é por etapa (`PENDING`/`DONE`/…), não por fração transferida.

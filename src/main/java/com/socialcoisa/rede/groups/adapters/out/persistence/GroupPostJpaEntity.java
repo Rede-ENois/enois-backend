@@ -21,6 +21,10 @@ class GroupPostJpaEntity {
 	@Id
 	private String id;
 
+	String getId() {
+		return id;
+	}
+
 	@Column(name = "group_id", nullable = false)
 	private String groupId;
 

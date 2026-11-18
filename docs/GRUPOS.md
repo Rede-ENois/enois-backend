@@ -285,6 +285,8 @@ existente foi alterada para suportar Grupos.
 sem os encerrados: filtro e limite na consulta e a contagem de membros numa consulta só para a
 página inteira. Como `mine` é rota fixa, o nome que geraria esse slug recebe sufixo numérico
 (`mine-2`), do mesmo jeito que um slug já em uso.
+`GET /groups` consulta contagens, papéis e pedidos pendentes em lote por página; os dados do leitor
+são resolvidos a cada requisição.
 
 **Frontend.** `/grupos` (descoberta pública e criação com logo/banner), `/grupos/$slug` (página
 pública, ingresso, edição com logo/banner foto ou HTML, tópicos, feed, comentários, reações,

@@ -3,6 +3,7 @@ package com.socialcoisa.rede.network.application;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.Map;
 
 import org.springframework.stereotype.Service;
@@ -12,6 +13,7 @@ import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
 import com.socialcoisa.rede.network.domain.DataClass;
 import com.socialcoisa.rede.network.domain.NetworkNode;
+import com.socialcoisa.rede.network.domain.NodeStatus;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
 import com.socialcoisa.rede.network.domain.TaskType;
@@ -79,6 +81,21 @@ public class StorageReplicationDispatcher {
 		this.tasks = tasks;
 		this.objectMapper = objectMapper;
 		this.clock = clock;
+	}
+
+	/** O nó pelo id, para quem decide para onde mover sem ir direto ao repositório. */
+	Optional<NetworkNode> node(String nodeId) {
+		return nodes.findById(nodeId);
+	}
+
+	/**
+	 * O nó pode receber <b>este</b> objeto? Ativo, com perfil de armazenamento e objeto servível.
+	 * É a mesma condição do {@link #dispatch}: perguntá-la antes de designar evita criar uma
+	 * transferência que nunca vai enfileirar tarefa.
+	 */
+	boolean canStore(NetworkNode node, StorageObject object) {
+		return node.status() == NodeStatus.ACTIVE && TaskType.OBJECT_PUT.allowedFor(node.profiles())
+			&& object.servable() && object.sha256() != null && object.bytes() != null;
 	}
 
 	/**

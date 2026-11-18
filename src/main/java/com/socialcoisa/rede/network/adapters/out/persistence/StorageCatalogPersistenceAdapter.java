@@ -12,7 +12,9 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
+import com.socialcoisa.rede.network.domain.StorageBucketPolicy;
 import com.socialcoisa.rede.network.domain.StorageObject;
+import com.socialcoisa.rede.network.domain.StorageRebalance;
 import com.socialcoisa.rede.network.domain.StorageObjectState;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
 
@@ -36,11 +38,17 @@ import com.socialcoisa.rede.network.domain.StoragePlacement;
 class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 
 	private static final String OBJECT_COLUMNS = """
-		id, bucket, object_key, content_type, bytes, sha256, state, created_by, created_at, updated_at, deleted_at
+		id, bucket, object_key, content_type, bytes, sha256, state, created_by, created_at, updated_at, deleted_at,
+		version, superseded_by, expires_at
 		""";
 
+	/**
+	 * A chave resolve para a versão <b>corrente</b>. Sem o filtro de {@code superseded_by}, a
+	 * segunda versão virava uma linha a mais que o cliente nunca alcançava.
+	 */
 	private static final String SELECT_BY_KEY = "select " + OBJECT_COLUMNS
-		+ " from network_storage_objects where bucket = ? and object_key = ?";
+		+ " from network_storage_objects where bucket = ? and object_key = ? and superseded_by is null"
+		+ " order by version desc limit 1";
 
 	private static final String SELECT_BY_ID = "select " + OBJECT_COLUMNS
 		+ " from network_storage_objects where id = ?";
@@ -52,11 +60,79 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 
 
 
+	/**
+	 * Insert-ou-noop <b>da versão corrente</b>. O {@code on duplicate key} casa com
+	 * {@code uq_network_storage_objects_current}, o índice único condicional que só cobre a versão
+	 * corrente de cada chave (V352). Com versionamento, a inserção de uma versão nova é feita pelo
+	 * {@code insertVersion}, não por este caminho.
+	 */
 	private static final String INSERT_PENDING = """
 		insert into network_storage_objects (id, bucket, object_key, content_type, state, created_by, created_at, updated_at)
 		values (?, ?, ?, ?, 'PENDING', ?, ?, ?)
 		on duplicate key update id = id
 		""";
+
+	/** A versão nova: sempre insere, nunca reaproveita. A anterior já foi marcada como substituída. */
+	private static final String INSERT_VERSION = """
+		insert into network_storage_objects (id, bucket, object_key, content_type, state, created_by, created_at, updated_at, version)
+		values (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?)
+		""";
+
+	/**
+	 * Substitui a versão corrente anterior. Condicional no {@code superseded_by is null}: só quem
+	 * ainda é corrente é substituído, então duas gravações simultâneas não marcam a mesma versão
+	 * duas vezes com dois sucessores diferente.
+	 */
+	private static final String MARK_SUPERSEDED = """
+		update network_storage_objects
+		set superseded_by = ?, updated_at = ?
+		where bucket = ? and object_key = ? and superseded_by is null and state <> 'DELETED'
+		""";
+
+	private static final String SET_EXPIRES = """
+		update network_storage_objects set expires_at = ? where id = ?
+		""";
+
+	private static final String SELECT_BUCKET_POLICY = """
+		select bucket, versioning, retain_superseded_days, expire_after_days, updated_by, updated_at
+		from network_storage_buckets where bucket = ?
+		""";
+
+	private static final String UPSERT_BUCKET_POLICY = """
+		insert into network_storage_buckets (bucket, versioning, retain_superseded_days, expire_after_days,
+			updated_by, updated_at)
+		values (?, ?, ?, ?, ?, ?)
+		on duplicate key update versioning = values(versioning),
+			retain_superseded_days = values(retain_superseded_days),
+			expire_after_days = values(expire_after_days),
+			updated_by = values(updated_by), updated_at = values(updated_at)
+		""";
+
+	/** A ordenação é por chave ascendente e versão ascendente para o histórico ser estável. */
+	private static final String SELECT_VERSIONS = """
+		select %s from network_storage_objects
+		where bucket = ? and object_key = ?
+		order by version asc
+		""".formatted(OBJECT_COLUMNS);
+
+	/**
+	 * Objetos correntes, servíveis e vencidos. O {@code expires_at is not null} é redundante com a
+	 * comparação, mas deixa o índice usar a árvore: as linhas sem prazo são a maioria.
+	 */
+	private static final String SELECT_EXPIRED = """
+		select %s from network_storage_objects
+		where expires_at is not null and expires_at <= ? and state = 'STORED' and superseded_by is null
+		order by expires_at asc
+		limit ?
+		""".formatted(OBJECT_COLUMNS);
+
+	/** Versões substituídas há mais que a retenção. A lápide já foi aplicada ou ainda não: as duas contam. */
+	private static final String SELECT_PURGEABLE_SUPERSEDED = """
+		select %s from network_storage_objects
+		where superseded_by is not null and updated_at <= ? and state <> 'DELETED'
+		order by updated_at asc
+		limit ?
+		""".formatted(OBJECT_COLUMNS);
 
 	/** Só o PENDING vira STORED: cópia que chega depois da lápide não ressuscita o objeto. */
 	private static final String MARK_STORED = """
@@ -225,6 +301,127 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	}
 
 	@Override
+	public StorageObject insertVersion(String id, String bucket, String key, String contentType, String createdBy,
+			Instant now, long version) {
+		Timestamp stamp = Timestamp.from(now);
+		jdbc.update(INSERT_VERSION, id, bucket, key, contentType, createdBy, stamp, stamp, version);
+		return jdbc.query(SELECT_BY_ID, OBJECT_MAPPER, id).stream().findFirst().orElseThrow(
+			() -> new IllegalStateException("versao " + bucket + "/" + key + "#" + version + " invisivel apos inserir"));
+	}
+
+	@Override
+	public boolean markSuperseded(String bucket, String key, String supersededBy, Instant now) {
+		return jdbc.update(MARK_SUPERSEDED, supersededBy, Timestamp.from(now), bucket, key) == 1;
+	}
+
+	@Override
+	public void setExpiresAt(String id, Instant expiresAt) {
+		jdbc.update(SET_EXPIRES, expiresAt == null ? null : Timestamp.from(expiresAt), id);
+	}
+
+	@Override
+	public List<StorageObject> versions(String bucket, String key) {
+		return jdbc.query(SELECT_VERSIONS, OBJECT_MAPPER, bucket, key);
+	}
+
+	@Override
+	public List<StorageObject> expired(Instant now, int limit) {
+		return jdbc.query(SELECT_EXPIRED, OBJECT_MAPPER, Timestamp.from(now), limit);
+	}
+
+	@Override
+	public List<StorageObject> supersededBefore(Instant cutoff, int limit) {
+		return jdbc.query(SELECT_PURGEABLE_SUPERSEDED, OBJECT_MAPPER, Timestamp.from(cutoff), limit);
+	}
+
+	@Override
+	public Optional<StorageBucketPolicy> bucketPolicy(String bucket) {
+		return jdbc.query(SELECT_BUCKET_POLICY, BUCKET_MAPPER, bucket).stream().findFirst();
+	}
+
+	@Override
+	public StorageBucketPolicy saveBucketPolicy(StorageBucketPolicy policy) {
+		Timestamp stamp = Timestamp.from(policy.updatedAt());
+		jdbc.update(UPSERT_BUCKET_POLICY, policy.bucket(), policy.versioning(), policy.retainSupersededDays(),
+			policy.expireAfterDays(), policy.updatedBy(), stamp);
+		return bucketPolicy(policy.bucket()).orElseThrow(() -> new IllegalStateException(
+			"politica do bucket " + policy.bucket() + " invisivel apos gravar"));
+	}
+
+	private static final RowMapper<StorageBucketPolicy> BUCKET_MAPPER = (ResultSet rs, int rowNum) ->
+		new StorageBucketPolicy(rs.getString("bucket"), rs.getBoolean("versioning"),
+			nullableInt(rs, "retain_superseded_days"), nullableInt(rs, "expire_after_days"),
+			rs.getString("updated_by"), instant(rs, "updated_at"));
+
+	private static Integer nullableInt(ResultSet rs, String column) throws SQLException {
+		int value = rs.getInt(column);
+		return rs.wasNull() ? null : value;
+	}
+
+	private static final String REBALANCE_COLUMNS = """
+		id, object_id, from_replica, from_node_id, to_replica, to_node_id, state, failure_reason, bytes,
+		bandwidth_limit_mbps, requested_by, created_at, finished_at
+		""";
+
+	private static final String INSERT_REBALANCE = """
+		insert into network_storage_rebalances (id, object_id, from_replica, from_node_id, to_replica, to_node_id,
+			state, bytes, bandwidth_limit_mbps, requested_by, created_at)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		""";
+
+	private static final String SELECT_REBALANCE_ACTIVE = "select " + REBALANCE_COLUMNS
+		+ " from network_storage_rebalances where object_id = ? and from_replica = ? and state = 'PENDING'";
+
+	private static final String SELECT_REBALANCE_BY_ID = "select " + REBALANCE_COLUMNS
+		+ " from network_storage_rebalances where id = ?";
+
+	private static final String SELECT_REBALANCE_ACTIVE_ALL = "select " + REBALANCE_COLUMNS
+		+ " from network_storage_rebalances where state = 'PENDING' order by created_at asc limit ?";
+
+	/** Condicional no estado de origem: duas decisões simultâneas não se sobrescrevem. */
+	private static final String TRANSITION_REBALANCE = """
+		update network_storage_rebalances
+		set state = ?, failure_reason = ?, finished_at = ?
+		where id = ? and state = ?
+		""";
+
+	private static final RowMapper<StorageRebalance> REBALANCE_MAPPER = (ResultSet rs, int rowNum) ->
+		new StorageRebalance(rs.getString("id"), rs.getString("object_id"), rs.getInt("from_replica"),
+			rs.getString("from_node_id"), rs.getInt("to_replica"), rs.getString("to_node_id"),
+			StorageRebalance.State.valueOf(rs.getString("state")), rs.getString("failure_reason"),
+			rs.getLong("bytes"), nullableInt(rs, "bandwidth_limit_mbps"), rs.getString("requested_by"),
+			instant(rs, "created_at"), instant(rs, "finished_at"));
+
+	@Override
+	public void saveRebalance(StorageRebalance rebalance) {
+		jdbc.update(INSERT_REBALANCE, rebalance.id(), rebalance.objectId(), rebalance.fromReplica(),
+			rebalance.fromNodeId(), rebalance.toReplica(), rebalance.toNodeId(), rebalance.state().name(),
+			rebalance.bytes(), rebalance.bandwidthLimitMbps(), rebalance.requestedBy(),
+			Timestamp.from(rebalance.createdAt()));
+	}
+
+	@Override
+	public Optional<StorageRebalance> activeRebalance(String objectId, int fromReplica) {
+		return jdbc.query(SELECT_REBALANCE_ACTIVE, REBALANCE_MAPPER, objectId, fromReplica).stream().findFirst();
+	}
+
+	@Override
+	public Optional<StorageRebalance> findRebalance(String id) {
+		return jdbc.query(SELECT_REBALANCE_BY_ID, REBALANCE_MAPPER, id).stream().findFirst();
+	}
+
+	@Override
+	public List<StorageRebalance> activeRebalances(int limit) {
+		return jdbc.query(SELECT_REBALANCE_ACTIVE_ALL, REBALANCE_MAPPER, limit);
+	}
+
+	@Override
+	public boolean transitionRebalance(String id, StorageRebalance.State from, StorageRebalance.State to,
+			String failureReason, Instant now) {
+		return jdbc.update(TRANSITION_REBALANCE, to.name(), failureReason, Timestamp.from(now), id, from.name()) == 1;
+	}
+
+	@Override
 	public boolean markStored(String id, long bytes, String sha256, Instant now) {
 		return jdbc.update(MARK_STORED, bytes, sha256, Timestamp.from(now), id) == 1;
 	}
@@ -329,7 +526,8 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		rs.getString("id"), rs.getString("bucket"), rs.getString("object_key"), rs.getString("content_type"),
 		nullableLong(rs, "bytes"), rs.getString("sha256"), StorageObjectState.valueOf(rs.getString("state")),
 		rs.getString("created_by"), instant(rs, "created_at"), instant(rs, "updated_at"),
-		instant(rs, "deleted_at"));
+		instant(rs, "deleted_at"), rs.getLong("version"), rs.getString("superseded_by"),
+		instant(rs, "expires_at"));
 
 	private static final RowMapper<StoragePlacement> PLACEMENT_MAPPER = (ResultSet rs, int rowNum) ->
 		new StoragePlacement(rs.getString("object_id"), rs.getInt("replica"), rs.getString("node_id"),
