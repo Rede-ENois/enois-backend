@@ -6,6 +6,7 @@ import java.util.Optional;
 
 import com.socialcoisa.rede.network.domain.StorageBucketPolicy;
 import com.socialcoisa.rede.network.domain.StorageObject;
+import com.socialcoisa.rede.network.domain.StorageRebalance;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
 
 /**
@@ -155,4 +156,20 @@ public interface StorageCatalogRepository {
 
 	/** Grava (ou substitui) a política do bucket e devolve o que ficou gravado. */
 	StorageBucketPolicy saveBucketPolicy(StorageBucketPolicy policy);
+
+	/** Grava a transferência de rebalanceamento (brief §16). */
+	void saveRebalance(StorageRebalance rebalance);
+
+	/** A transferência viva (PENDING) de uma réplica de origem, se houver. */
+	Optional<StorageRebalance> activeRebalance(String objectId, int fromReplica);
+
+	/** Uma transferência pelo id. */
+	Optional<StorageRebalance> findRebalance(String id);
+
+	/** Transferências vivas, em ordem de criação — o que o operador pausa ou retoma. */
+	List<StorageRebalance> activeRebalances(int limit);
+
+	/** Mudança de estado de uma transferência, condicional ao estado de origem. */
+	boolean transitionRebalance(String id, StorageRebalance.State from, StorageRebalance.State to,
+			String failureReason, Instant now);
 }
