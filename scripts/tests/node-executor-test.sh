@@ -1584,6 +1584,31 @@ out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SE
 assert_contains 'teto de disco menor que o objeto recusa antes de confirmar' "$out" 'STORAGE_OBJECT_TOO_LARGE'
 assert_not_contains 'e nao confirma a copia' "$(cat "$TMP/curl-calls")" '/replica'
 rm -f "$TMP"/object-put.*
+# O cenario 3 trocou o corpo do mock pelo grande; de volta ao pequeno (sha/bytes do OBJ_TASK).
+OBJ_BODY='corpo-do-objeto-1234567890'
+
+# 4. teto de banda POR TRANSFERENCIA (brief §16): o rebalanceamento pede quanto ceder para este
+# objeto e o no aplica o MENOR entre o pedido e a banda declarada (100 Mbps no cenario). Sem isso
+# o `bandwidthLimitMbps` era gravado no CP e nunca chegava ao no, que aplicava so a banda declarada.
+OBJ_TASK_LIMITE='{"tasks":[{"taskId":"tk_obj4","type":"OBJECT_PUT","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"storage:sob_w:1","payload":"{\"objectId\":\"sob_w\",\"bucket\":\"fotos\",\"key\":\"w.jpg\",\"sha256\":\"'"$OBJ_SHA"'\",\"bytes\":'"$OBJ_BYTES"',\"replica\":2,\"bandwidthLimitMbps\":8}","dataClass":"PUBLIC_MEDIA"}],"mode":"NORMAL","serverTime":"now"}'
+TASK_NEXT_BODY="$OBJ_TASK_LIMITE" make_curl_storage
+: > "$TMP/curl-calls"
+out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SECONDS=1 \
+  /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true)
+assert_contains 'a transferencia com teto proprio baixa e conclui' "$out" 'DONE tk_obj4'
+# 8 Mbps = 1000 kB/s; se o teto da transferencia fosse ignorado, valeria 100 Mbps = 12500k.
+assert_contains 'o teto da transferencia vale no download do corpo' "$(cat "$TMP/curl-calls")" 'limit-rate 1000k'
+assert_not_contains 'e nao fica o teto declarado do no' "$(cat "$TMP/curl-calls")" 'limit-rate 12500k'
+
+# Teto da transferencia ACIMA do declarado: quem manda e o do no (menor dos dois).
+OBJ_TASK_LIMITE_ALTO='{"tasks":[{"taskId":"tk_obj5","type":"OBJECT_PUT","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"storage:sob_v:1","payload":"{\"objectId\":\"sob_v\",\"bucket\":\"fotos\",\"key\":\"v.jpg\",\"sha256\":\"'"$OBJ_SHA"'\",\"bytes\":'"$OBJ_BYTES"',\"replica\":3,\"bandwidthLimitMbps\":900}","dataClass":"PUBLIC_MEDIA"}],"mode":"NORMAL","serverTime":"now"}'
+TASK_NEXT_BODY="$OBJ_TASK_LIMITE_ALTO" make_curl_storage
+: > "$TMP/curl-calls"
+out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SECONDS=1 \
+  /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true)
+assert_contains 'teto da transferencia acima do declarado usa o do no' "$(cat "$TMP/curl-calls")" 'limit-rate 12500k'
+assert_not_contains 'e nao passa do que o participante cedeu' "$(cat "$TMP/curl-calls")" 'limit-rate 112500k'
+rm -f "$TMP"/object-put.*
 
 # ------------------------------------------------- cenário: varredura do próprio disco (§5.8)
 # O Control Plane só relê o disco da instalação em que roda. A cópia DESTE nó só o dono confere:
