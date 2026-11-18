@@ -49,6 +49,28 @@ public interface StorageCatalogRepository {
 	boolean markDeleted(String id, Instant now);
 
 	/**
+	 * Apaga a linha de um objeto <b>que nunca chegou a existir para o dono</b>: uma gravação desfeita
+	 * porque o bucket era de outra conta.
+	 *
+	 * <p>Não é a lápide, e a diferença é o que mantém o bucket do dono de pé: a lápide
+	 * ({@code state = 'DELETED'}) **sai** do {@code bucketsOf}, então apagar o último objeto de uma conta
+	 * com lápide faria o bucket deixar de ser dela. Esta remoção some da tabela sem deixar estado — é a
+	 * inversão de um {@code createPending}, não uma operação do dono.</p>
+	 */
+	boolean discardPending(String id);
+
+	/**
+	 * Devolve ao estado de espera um objeto que teve a gravação desfeita: {@code STORED → PENDING}.
+	 *
+	 * <p>É o par de {@link #markStored} na direção contrária, e existe para a recusa por donagem de um
+	 * {@code PUT} que <b>reescreveu</b> uma chave: apagar a linha seria apagar o objeto do dono. Só o
+	 * estado mudal — o corpo que a gravação recusada deixou no disco fica, e a próxima gravação o
+	 * substitui; os bytes e o digest saem, porque o catálogo não promete mais nada sobre uma cópia que a
+	 * resposta recusou.</p>
+	 */
+	boolean restorePending(String id);
+
+	/**
 	 * Listagem por prefixo de chave, ordenada por chave. {@code limit + 1} linhas é o que o chamador
 	 * pede para saber se há próxima página sem uma segunda consulta de contagem.
 	 */

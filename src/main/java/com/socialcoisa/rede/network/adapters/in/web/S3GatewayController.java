@@ -32,6 +32,7 @@ import com.socialcoisa.rede.network.application.port.out.S3CredentialRepository;
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
 import com.socialcoisa.rede.network.domain.S3Credential;
 import com.socialcoisa.rede.network.domain.StorageObject;
+import com.socialcoisa.rede.network.domain.StorageObjectState;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -129,6 +130,7 @@ class S3GatewayController {
 	ResponseEntity<String> listObjects(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "LIST");
 		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
 		Map<String, String> query = query(request);
 		boolean v2 = "2".equals(query.get("list-type"));
 		int maxKeys = parseMaxKeys(query.get("max-keys"));
@@ -164,6 +166,7 @@ class S3GatewayController {
 	ResponseEntity<Void> deleteBucket(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "DELETE");
 		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
 		List<StorageObject> any = storage.list(bucket, null, null, 1);
 		if (!any.isEmpty()) {
 			throw new ApiException(409, "BucketNotEmpty", "O bucket ainda tem objetos.");
@@ -173,7 +176,22 @@ class S3GatewayController {
 
 	// ---------------------------------------------------------------- objeto
 
-	/** PutObject: o corpo entra pelo caminho do catálogo; a resposta devolve o ETag (o digest). */
+	/**
+	 * PutObject: o corpo entra pelo caminho do catálogo; a resposta devolve o ETag (o digest).
+	 *
+	 * <p><b>Duas fases, porque o Storage não tem tabela de buckets.</b> O nome do bucket nasce do
+	 * primeiro objeto, então a donagem não pode ser conferida antes da gravação: um bucket novo ainda não
+	 * tem dono, e recusar antes faria o primeiro objeto de <b>toda</b> conta falhar. A ordem é:</p>
+	 * <ol>
+	 *   <li>grava — a gravação é o que dá dono ao bucket;</li>
+	 *   <li>pergunta — todo objeto vivo no bucket é do dono da credencial? Se um só for de outra conta, o
+	 *   bucket é alheio: a gravação é desfeita e a resposta é 403.</li>
+	 * </ol>
+	 *
+	 * <p>A desfeita nunca é lápide: {@code state = 'DELETED'} sai do {@code bucketsOf}, então apagar por
+	 * cima do último objeto de uma conta faria o bucket deixar de ser dela. {@link #desfazer} remove o que
+	 * esta gravação criou e devolve o objeto que ela substituiu ao estado em que estava.</p>
+	 */
 	@RequestMapping(value = "/{bucket}/{*key}", method = RequestMethod.PUT)
 	ResponseEntity<Void> putObject(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "PUT");
@@ -181,21 +199,58 @@ class S3GatewayController {
 		String key = keyOf(request);
 		// O tipo é o que o SDK manda; sem ele, o mesmo padrão do resto do módulo.
 		String contentType = request.getContentType();
+		// Refazer um PUT na mesma chave é o caso normal do S3: `beginUpload` devolve o objeto que já
+		// existe, que pode estar STORED. Guardar o estado de antes é o que permite devolvê-lo intacto
+		// se a gravação for recusada por donagem.
+		StorageObject antes = catalog.find(bucket, key).orElse(null);
 		StorageObject pending = storage.beginUpload(credential.ownerUserId(), bucket, key,
 			contentType == null ? "application/octet-stream" : contentType);
+		boolean iaCriar = antes == null || !antes.id().equals(pending.id());
+		if (!iaCriar && antes.state() != StorageObjectState.PENDING) {
+			throw s3Error(409, "ObjectAlreadyStored", "A chave ja tem copia confirmada; use outro nome de chave.");
+		}
 		// O catálogo mede o digest em pedaços de 64 KiB e grava; é o mesmo caminho da rota do nó.
 		StorageObject stored = storage.finishUpload(pending.id(), body(request), credential.ownerUserId());
+		if (!bucketSemDono(bucket, credential.ownerUserId())) {
+			desfazer(stored, antes);
+			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
+		}
 		return ResponseEntity.ok()
 			.eTag("\"" + stored.sha256() + "\"")
 			.header(HttpHeaders.CONTENT_LENGTH, "0")
 			.build();
 	}
 
-	/** GetObject: Range/206/416, 304 por If-None-Match, ETag = digest. */
+	/**
+	 * Desfaz uma gravação recusada por donagem.
+	 *
+	 * <p>O que conta é <b>a linha desta gravação</b>, não {@code stored.id()}: quando a chave já existia,
+	 * {@code finishUpload} devolve o <i>mesmo</i> id, e apagar a linha seria apagar o objeto do dono — o
+	 * oposto do que a recusa quer. Por isso só o objeto <b>novo</b> ({@code iaCriar}) é removido; o que
+	 * existia antes é devolvido ao estado anterior (o corpo já gravado deixa o catálogo e volta a ser
+	 * PENDING, que é o estado de espera que ele realmente tem).</p>
+	 */
+	private void desfazer(StorageObject stored, StorageObject antes) {
+		if (antes != null && antes.id().equals(stored.id())) {
+			catalog.restorePending(stored.id());
+			return;
+		}
+		catalog.discardPending(stored.id());
+	}
+
+	/**
+	 * GetObject: Range/206/416, 304 por If-None-Match, ETag = digest.
+	 *
+	 * <p><b>Ordem deliberada:</b> donagem antes da existência. O S3 responde 404 a um bucket que o
+	 * chamador não pode ver; aqui a resposta é 403. O motivo é que um 404 para quem tem credencial válida
+	 * deixaria o chamador achar que o bucket é dele e o objeto sumiu — e o Storage não tem "bucket
+	 * privado": ou é do dono, ou não existe para ele.</p>
+	 */
 	@GetMapping("/{bucket}/{*key}")
 	ResponseEntity<StreamingResponseBody> getObject(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "GET");
 		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
 		StorageObject object = storage.requireDownloadable(bucket, keyOf(request));
 		return content.respond(object, request.getHeader(HttpHeaders.RANGE),
 			request.getHeader(HttpHeaders.IF_NONE_MATCH));
@@ -206,6 +261,7 @@ class S3GatewayController {
 	ResponseEntity<Void> headObject(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "GET");
 		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
 		StorageObject object = storage.requireDownloadable(bucket, keyOf(request));
 		return content.head(object);
 	}
@@ -215,6 +271,7 @@ class S3GatewayController {
 	ResponseEntity<Void> deleteObject(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "DELETE");
 		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
 		String key = keyOf(request);
 		Optional<StorageObject> object = catalog.find(bucket, key);
 		if (object.isPresent()) {
@@ -317,9 +374,8 @@ class S3GatewayController {
 		// significa "todos os buckets do dono", não "todos os buckets da rede" — e uma URL emitida
 		// sai das mãos do dono, então o escopo ilimitado não pode virar um link para o bucket de
 		// outra pessoa. A lista de buckets do dono já existe no catálogo (a mesma do ListBuckets).
-		boolean bucketDoDono = catalog.bucketsOf(user.id().value()).contains(bucket);
-		if (!bucketDoDono) {
-			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da sessao.");
+		if (!catalog.bucketsOf(user.id().value()).contains(bucket)) {
+			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
 		}
 		// E a credencial escolhida tem de permitir o verbo E o bucket — escopo nulo passa aqui
 		// porque a donagem do bucket acima já foi conferida.
@@ -426,10 +482,59 @@ class S3GatewayController {
 	}
 
 	/** O bucket pedido é o permitido pela credencial? {@code null} em allowedBucket = todos do dono. */
+	/**
+	 * O bucket está no <b>escopo da credencial</b>.
+	 *
+	 * <p>Esta é a metade barata da pergunta. A outra metade — o bucket é do <b>dono</b>? — não cabe
+	 * aqui porque a resposta depende do verbo: um {@code PUT} numa chave nova <b>cria</b> o bucket, então
+	 * conferir antes da gravação recusaria o primeiro objeto de toda conta. Quem pergunta a donagem é
+	 * {@link #requireBucketDoDono}, chamado onde o dado já existe ou vai nascer.</p>
+	 */
 	private static void requireBucket(S3Credential credential, String bucket) {
 		if (!credential.allowsBucket(bucket)) {
 			throw s3Error(403, "AccessDenied", "A credencial nao permite este bucket.");
 		}
+	}
+
+	/**
+	 * O bucket pertence ao dono da credencial.
+	 *
+	 * <p>{@code allowedBucket} nulo significa "todos os buckets <b>do dono</b>", nunca "todos os buckets
+	 * da rede". Sem esta conferência, uma credencial de escopo nulo — o padrão — lia, gravava e apagava
+	 * em bucket de qualquer outra conta cuja chave conhecesse. O catálogo sempre soube o dono; o gateway
+	 * é que não perguntava.</p>
+	 *
+	 * <p>O Storage não tem tabela de buckets: o nome nasce no primeiro upload, então "bucket do dono" é
+	 * "o dono já gravou algo nele". <b>Ordem:</b> no {@code PUT} a conferência vem DEPOIS da gravação —
+	 * é a gravação que cria o bucket do dono. Nos demais verbos, antes, com o dado já no catálogo.</p>
+	 */
+	/**
+	 * O bucket pertence ao dono da credencial.
+	 *
+	 * <p>{@code allowedBucket} nulo significa "todos os buckets <b>do dono</b>", nunca "todos os buckets
+	 * da rede". Sem esta conferência, uma credencial de escopo nulo — o padrão — lia, gravava e apagava
+	 * em bucket de qualquer outra conta cuja chave conhecesse. O catálogo sempre soube o dono; o gateway
+	 * é que não perguntava.</p>
+	 */
+	private void requireBucketDoDono(S3Credential credential, String bucket) {
+		if (!catalog.bucketsOf(credential.ownerUserId()).contains(bucket)) {
+			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
+		}
+	}
+
+	/**
+	 * O bucket ainda não pertence a ninguém — todo objeto vivo nele é desta credencial?
+	 *
+	 * <p>O Storage não tem tabela de buckets: o dono nasce do primeiro objeto. Um bucket cujos objetos
+	 * vivos são todos desta credencial é, na prática, do dono — é o caso do primeiro upload. Basta um
+	 * objeto de outra conta para o bucket ser alheio, e é isso que o {@code PUT} recusa.</p>
+	 */
+	private boolean bucketSemDono(String bucket, String ownerUserId) {
+		// `list` devolve no máximo `limit` linhas: 1000 cobre a pergunta prática (o bucket já tem
+		// objeto de outra conta nas primeiras chaves). Um bucket maior que isso com objeto alheio só no
+		// fim passaria — por isso a pergunta é feita na GRAVAÇÃO, cujo objeto entra na lista.
+		return catalog.list(bucket, null, null, 1000).stream()
+			.allMatch(o -> ownerUserId.equals(o.createdBy()));
 	}
 
 	/** Os cabeçalhos declarados em SignedHeaders, normalizados como o cliente assinou. */
