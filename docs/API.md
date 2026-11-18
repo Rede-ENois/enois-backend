@@ -502,12 +502,20 @@ responde `{ "postId": "post_xxx", "acceptedCommentId": null, "resolved": false }
 }
 ```
 
-Tipos de reação (o enum central é `ReactionType`, compartilhado por post, comentário e
-mensagem): `LIKE`, `LOVE`, `LAUGH`, `ROFL`, `SKULL`, `WOW`, `SAD`, `SOB`, `CELEBRATE`,
-`SUPPORT`, `INSIGHTFUL`, `ANGRY`, `DISGUST`, `SKEPTICAL`, `EYES`, `NOTE`, `FIRE`, `CLAP`,
-`CLOWN`, `NAILS` — e as **contextuais**, cada uma com situação clara de uso: `USEFUL` (a dica
-serviu), `RELATABLE` (me identifiquei), `HYPE` (empolgação com lançamento/projeto), `THANKS`
-(pela ajuda que resolveu), `VIBE` (a estética do post) e `SALUTE` (respeito pelo gesto).
+Tipos de reação (o enum central é `ReactionType`, compartilhado por post, comentário, grupo,
+desabafo, colagem, confessionário e mensagem): são as **76 expressões do pacote É Nóis**, na ordem
+do seletor. As primeiras são as originais — `LIKE`, `LOVE`, `LAUGH`, `ROFL`, `SKULL`, `WOW`, `SAD`,
+`SOB`, `CELEBRATE`, `SUPPORT`, `INSIGHTFUL`, `ANGRY`, `DISGUST`, `SKEPTICAL`, `EYES`, `NOTE`, `FIRE`,
+`CLAP`, `CLOWN`, `NAILS` — e as **contextuais** (`USEFUL` a dica serviu, `RELATABLE` me identifiquei,
+`HYPE` empolgação com lançamento/projeto, `THANKS` pela ajuda que resolveu, `VIBE` a estética do
+post, `SALUTE` respeito pelo gesto); depois vêm `COOL`, `SLEEP`, `THINK`, `NERD`, `PARTY`, `COFFEE`,
+`SELFIE`, `THERMOMETER`, `PIRATE`, `HERO`, `ZANY`, `SCREAM`, `GRIMACE`, `MELTING`, `CRYING`,
+`MINDBLOWN`, `VOMIT`, `FUMING`, `EYEROLL`, `ROBOT`, `WIZARD`, `CHEF`, `SURF`, `MAGIC`, `REBEL`,
+`WINK`, `ALIEN`, `RAGE`, `MONEY`, `FEAR`, `WAVE`, `PEACE`, `OK`, `ROCK`, `DISLIKE`, `RAISED`, `GASP`,
+`POOP`, `TONGUE`, `KISS`, `DROOL`, `STARSTRUCK`, `VULCAN`, `CROSSED`, `POINT_RIGHT`, `FISTBUMP`,
+`MASK`, `COWBOY`, `SMIRK` e `GHOST`. Nenhuma reação existe fora do pacote, e cada tipo tem um ícone
+próprio (`ReactionIcons`, sem repetição). O tipo é gravado pelo nome, então acrescentar um tipo
+novo não mexe no que já foi gravado; tipo desconhecido continua recusado (400).
 Uma reação por pessoa — trocar o tipo substitui, sem somar no total.
 
 ### POST /api/feed/posts/bulk-delete
