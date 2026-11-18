@@ -326,3 +326,94 @@ endereço, o oposto de medir.
 - **Multiplexação, renovação de credenciais, transferências retomáveis, recuperação de sessões**:
   inexistentes. `NODE_POLL_SECONDS` fixo, sem backoff; a chave do nó não expira nem roda.
 - A detecção de IP **registra**, não age: não há política que reaja a uma troca de endereço.
+
+## 10. Entrega e distribuição (brief §13)
+
+O §13 pede cache HTTP, `ETag`, `Last-Modified`, `Range`, entrega por streaming e URLs assinadas. A
+entrega por **streaming** já era a do `StorageCatalogService` (o corpo sai do disco da instalação, em
+pedaços, e nunca é carregado inteiro); esta seção acrescenta o que faltava para um cliente HTTP
+aproveitá-la.
+
+### 10.1 Duas rotas, duas políticas opostas
+
+| rota | para quem | `Cache-Control` | `Range` |
+|---|---|---|---|
+| `GET /network/storage/objects/{id}` | nó autenticado (`X-Node-Key`) | `private, no-store` | não |
+| `GET /network/storage/objects/{id}/content` | cliente (pública, com sessão ou sem) | pelo **tipo** do objeto | sim |
+
+Separar foi decisão, não estética. Servidas pela mesma rota, a política teria de depender de "quem
+pediu", e um cabeçalho esquecido no meio tornaria pública uma imagem privada. A rota do nó continua
+como era, com `Last-Modified` acrescentado.
+
+### 10.2 A política vem do conteúdo, não do caminho
+
+`CachePolicy.forContentType`:
+
+| content-type | `Cache-Control` |
+|---|---|
+| `image/*`, `video/*`, `audio/*` | `public, max-age=31536000, immutable` |
+| `application/pdf`, `text/plain`, qualquer outro | `private, no-store` |
+| nulo (desconhecido) | `private, no-store` |
+
+O padrão é **privado**: um tipo que ninguém classificou não vira cacheável por omissão. `immutable`
+só é honesto porque o objeto do catálogo é imutável — conteúdo novo é objeto novo, com id próprio,
+que nunca muda por baixo de um cache. A rota do nó usa `CachePolicy.NODE`, sempre `no-store`, mesmo
+quando o tipo é imagem.
+
+### 10.3 `ETag` e `Last-Modified`
+
+- **`ETag`** é o `sha256` do conteúdo entre aspas. O digest **é** a identidade do conteúdo, então uma
+  comparação de `If-None-Match` é exata, não uma amostra.
+- **`Last-Modified`** é o `updated_at` da linha do catálogo.
+- `If-None-Match` bate (ou é `*`) → **304**, sem corpo, com `ETag` e a mesma política de cache. A
+  comparação é fraca (`W/` ignorado) e aceita lista, como a RFC 9110 manda.
+
+### 10.4 `Range`
+
+`ByteRange.parse` aceita `bytes=a-b`, `bytes=a-` (o que o player manda ao retomar) e `bytes=-n` (os n
+últimos). Regras:
+
+| entrada | resposta |
+|---|---|
+| faixa válida | `206` + `Content-Range: bytes a-b/total` + o trecho |
+| fim além do objeto | **truncado** até o último byte (`206`), como a RFC manda |
+| início além do objeto | `416` + `Content-Range: bytes */total` |
+| vários intervalos (`bytes=0-1,5-6`) | corpo inteiro (`200`) |
+| outra unidade, malformado, ausente | corpo inteiro (`200`) |
+| objeto vazio | corpo inteiro (`200`) |
+
+Toda resposta `200`/`206` traz `Accept-Ranges: bytes`. A faixa é lida **do disco** (`skip` + cópia
+limitada): nunca se carrega o arquivo inteiro em memória para servir 5 bytes.
+
+**Por que 416 e não "serve tudo".** Servir o corpo inteiro em silêncio para uma faixa que não existe
+faz o player achar que recebeu o trecho pedido e tocar do começo — o "vídeo que reinicia", um bug pior
+do que um erro visível. Múltiplos intervalos são a exceção porque montar `multipart/byteranges` à mão
+tem risco próprio, e cair no corpo inteiro é sempre uma resposta correta.
+
+### 10.5 Consumidores
+
+O front já **depende** de `Range`/`206` para vídeo: `withImageKitOriginal` pede o arquivo original do
+ImageKit porque a entrega transformada daquele CDN recusa `Range` com `403` quando a cota de
+transcodificação estoura. Teste em `enois-frontend/src/lib/api/media.test.ts` fixa que a URL do
+nosso Storage passa intacta pelo adapter (nenhum `?tr=` inventado) — a rota nova serve `Range`
+nativamente e não precisa de transformação.
+
+O player do design system (`lite-video.tsx`, e o `<audio>` do `media-grid`) usa `<video>`/`<audio>`
+com `preload="metadata"`, que faz `Range` sozinho. Teste em
+`enois-design-system/src/domain/post/media/storage-delivery.test.tsx` prova que a fonte continua
+sendo o elemento nativo e não vira `blob:` — um `fetch` que monte `blob:` perderia o seek e o cache
+HTTP.
+
+### 10.6 O que NÃO está entregue
+
+- **URLs assinadas e expiração de links** — a rota `/content` é pública para objeto servível. Não há
+  segredo por objeto nem prazo. Sem isso, imagem privada depende de a URL não circular: a política de
+  cache a protege do proxy, não de quem tem o link.
+- **Invalidação de cache**: o `immutable` de um ano assume o objeto imutável. Não existe `PURGE` nem
+  versão de URL a invalidar, porque não haverá o que invalidar enquanto objeto não for reescrito.
+- **CDN e nós EDGE servindo imagem**: `CachePolicy` torna a resposta cacheável; não há integração
+  com CDN nem rota de EDGE.
+- **Processamento de imagem** (redimensionar, recortar) continua no ImageKit; a rota nova serve o
+  original.
+- **Erasure coding (§9)**: decidido **não implementar** nesta fase; continua replicação completa,
+  verificada pela varredura (§15).
