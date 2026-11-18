@@ -45,6 +45,9 @@ public final class SigV4Verifier {
 	/** Janela de tolerância do relógio do cliente, em segundos (a AWS usa 15 min). */
 	public static final long CLOCK_SKEW_SECONDS = 900;
 
+	/** Teto de validade de uma URL pré-assinada: o mesmo da AWS (7 dias). */
+	public static final long MAX_PRESIGNED_SECONDS = 7L * 24 * 60 * 60;
+
 	private static final Pattern AUTH = Pattern.compile(
 		"AWS4-HMAC-SHA256\\s+Credential=([^,\\s]+)\\s*,\\s*SignedHeaders=([^,\\s]+)\\s*,\\s*Signature=([0-9a-f]{64})",
 		Pattern.CASE_INSENSITIVE);
@@ -96,6 +99,117 @@ public final class SigV4Verifier {
 		}
 		return new Parsed(credential[0], credential[2], credential[3], m.group(2).toLowerCase(Locale.ROOT),
 			m.group(3));
+	}
+
+	/**
+	 * Lê a credencial e a assinatura de uma <b>URL pré-assinada</b> (brief §11) — a assinatura vem na
+	 * <i>query</i>, não no cabeçalho.
+	 *
+	 * <p>A forma é a mesma do SigV4 de cabeçalho, com uma diferença de origem: o cliente que vai usar a
+	 * URL não manda {@code Authorization}. Por isso o {@code SignedHeaders} e o {@code X-Amz-Date}
+	 * também podem vir na query, e é de lá que se lê. O {@link Request} devolvido já traz esses valores
+	 * nos cabeçalhos, para que a assinatura seja calculada exatamente pelo mesmo caminho.</p>
+	 *
+	 * <p>Devolve {@code null} quando não há {@code X-Amz-Signature} — não é erro: pode ser uma
+	 * requisição assinada por cabeçalho, e quem chama decide.</p>
+	 */
+	public static Presigned parsePresigned(Request request, Instant now) {
+		Map<String, String> query = request.query();
+		String signature = query.get("X-Amz-Signature");
+		String credentialText = query.get("X-Amz-Credential");
+		if (signature == null || credentialText == null) {
+			return null;
+		}
+		String[] campos = credentialText.split("/");
+		if (campos.length != 5 || !"aws4_request".equals(campos[4])) {
+			return null;
+		}
+		String signedHeaders = query.getOrDefault("X-Amz-SignedHeaders", "host");
+		String amzDate = query.get("X-Amz-Date");
+		if (amzDate == null) {
+			return null;
+		}
+		// O `X-Amz-Credential` normalizado: a consulta canônica o codifica de novo, então o valor
+		// canônico é `campos` unidos por `/` — o mesmo texto que o emissor assinou, tenha o servidor
+		// entregado o `/` cru ou o `%2F`.
+		String credentialCanonica = String.join("/", campos);
+		// O hash do corpo em URL pré-assinada MOR S3 é `UNSIGNED-PAYLOAD`: a URL é gerada sem o corpo e
+		// vale para qualquer corpo até expirar. Aceitar outro valor aqui daria uma URL que só funciona
+		// para um corpo — e o cliente não saberia disso pela URL.
+		String payloadHash = query.getOrDefault("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD");
+
+		// Os parâmetros de assinatura NÃO entram na consulta canônica — é a regra que separa a
+		// assinatura do que ela assina. Manter `X-Amz-Signature` nela faria a verificação depender da
+		// própria assinatura e nunca conferir.
+		Map<String, String> assinada = new TreeMap<>(query);
+		assinada.remove("X-Amz-Signature");
+		assinada.put("X-Amz-Credential", credentialCanonica);
+
+		Map<String, String> headers = new TreeMap<>(request.headers());
+		headers.put("x-amz-date", amzDate);
+		headers.put("x-amz-content-sha256", payloadHash);
+		if (headers.get("host") == null) {
+			// O `host` está em SignedHeaders por quase todo SDK; sem ele a assinatura canônica sai com
+			// linha vazia e nada confere.
+			return null;
+		}
+
+		var canonical = new Request(request.method(), request.path(), assinada, headers, payloadHash);
+		var parsed = new Parsed(campos[0], campos[2], campos[3], signedHeaders.toLowerCase(Locale.ROOT), signature);
+		Instant expira;
+		long duracao;
+		String expiresText = query.get("X-Amz-Expires");
+		try {
+			duracao = Long.parseLong(expiresText);
+			if (duracao <= 0 || duracao > MAX_PRESIGNED_SECONDS) {
+				// Negativo = já nasceu vencida; acima do teto = "eterna" com outro nome. O S3 recusa
+				// acima de 7 dias, e uma URL que não expira é uma credencial de longa duração disfarçada.
+				return null;
+			}
+			expira = amzDate(amzDate).plusSeconds(duracao);
+		}
+		catch (RuntimeException invalido) {
+			// Sem `X-Amz-Expires` legível não há validade: uma URL eternamente válida é pior do que
+			// uma recusada.
+			return null;
+		}
+		return new Presigned(canonical, parsed, expira, duracao);
+	}
+
+	/**
+	 * A URL pré-assinada confere e ainda vale?
+	 *
+	 * <p>Duas coisas que o SigV4 de cabeçalho não precisa e esta precisa: a <b>expiração</b> — uma URL
+	 * assinada vive fora do relógio do servidor, então a janela é a dela, não {@link #CLOCK_SKEW_SECONDS}
+	 * — e a recusa de {@code X-Amz-Expires} absurdo (negativo ou acima do teto do S3, 7 dias), que seria
+	 * uma URL eternamente válida escrita com outro nome.</p>
+	 */
+	public static boolean verifyPresigned(Presigned presigned, String secret, Instant now) {
+		if (presigned == null || secret == null || secret.isBlank()) {
+			return false;
+		}
+		long expiracao = presigned.expiraEm().getEpochSecond();
+		long agora = now.getEpochSecond();
+		if (agora > expiracao) {
+			return false;
+		}
+		// Tolerância só para trás: um relógio do cliente adiantado não pode esticar a URL; um atrasado,
+		// sim, porque quem usa a URL logo depois de gerá-la pode estar abaixo do segundo.
+		long nascimento = expiracao - presigned.duracaoSegundos();
+		if (agora < nascimento - CLOCK_SKEW_SECONDS) {
+			return false;
+		}
+		String amzDate = presigned.request().headers().get("x-amz-date");
+		String calculada = signature(presigned.request(), presigned.parsed(), secret, amzDate.substring(0, 8));
+		return constantTimeEquals(calculada, presigned.parsed().signature());
+	}
+
+	private static Instant amzDate(String value) {
+		return Instant.from(AMZ_DATE.parse(value));
+	}
+
+	/** O que uma URL pré-assinada carrega. */
+	public record Presigned(Request request, Parsed parsed, Instant expiraEm, long duracaoSegundos) {
 	}
 
 	/**
