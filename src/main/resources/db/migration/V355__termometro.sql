@@ -1,5 +1,11 @@
 -- Termômetro: indicadores coletivos de clima e necessidade do Explorar.
 --
+-- Era a V351 quando a PR #896 entrou na qa; virou V355 porque a V351 já estava ocupada pelo
+-- índice do feed da comunidade (PR #904, que entrou na qa antes). Com duas migrações com a mesma
+-- versão o Flyway recusa a cadeia inteira ("Found more than one migration with version 351") e a
+-- base nova não sobe. Mesmo caminho da V343: renumerar é seguro aqui porque ninguém a aplicou —
+-- ela nunca passou da revisão, então não há checksum gravado em nenhuma base.
+--
 -- O painel não é enquete e não pergunta nada a ninguém: o sistema classifica o conteúdo PÚBLICO
 -- já publicado (posts e comentários do feed, desabafos, confissões do Confessionário) com um
 -- léxico determinístico local — sem LLM, sem serviço externo — e agrega o resultado por janela
