@@ -144,6 +144,105 @@ class NodeCertificateServiceTests {
 		verify(audit, never()).record(any(), anyString(), anyString(), anyString());
 	}
 
+	/**
+	 * O handshake aceita o certificado vigente de um nó ativo — a linha de base do {@code accepts()}.
+	 *
+	 * <p>Sem este caso os de recusa abaixo não provam nada: recusar tudo também os passaria.</p>
+	 */
+	@Test
+	void accepts_aceita_certificado_vigente_de_no_ativo() throws Exception {
+		var emitted = service.issue("nd_abc", csr(), "u_admin");
+		var presented = parse(emitted.certificatePem());
+
+		assertThat(service.accepts("nd_abc", presented)).isTrue();
+	}
+
+	/**
+	 * Nó REVOGADO com certificado vigente é RECUSADO.
+	 *
+	 * <p>O furo que este teste pega: revogar o nó matava a API key e deixava o certificado ativo no
+	 * banco. Quando a terminação TLS ligasse, o nó derrubado voltaria a entrar pelo handshake com um
+	 * certificado legítimo — a perda de potência valia só num dos dois canais. Mutação discriminante:
+	 * sem a consulta de estado em {@code accepts()}, este caso devolve {@code true}.</p>
+	 */
+	@Test
+	void accepts_recusa_certificado_vigente_de_no_revogado() throws Exception {
+		var emitted = service.issue("nd_abc", csr(), "u_admin");
+		var presented = parse(emitted.certificatePem());
+		// O certificado continua vigente no banco: quem mudou foi o nó.
+		comDisponibilizando("nd_abc", NodeStatus.REVOKED);
+
+		assertThat(service.accepts("nd_abc", presented)).isFalse();
+	}
+
+	/** Suspenso e em quarentena também não entram: só ACTIVE opera, o mesmo critério da tarefa. */
+	@Test
+	void accepts_recusa_estados_que_nao_operam() throws Exception {
+		var emitted = service.issue("nd_abc", csr(), "u_admin");
+		var presented = parse(emitted.certificatePem());
+
+		for (NodeStatus status : new NodeStatus[] { NodeStatus.SUSPENDED, NodeStatus.QUARANTINED,
+				NodeStatus.PAUSED, NodeStatus.PENDING_APPROVAL }) {
+			comDisponibilizando("nd_abc", status);
+			assertThat(service.accepts("nd_abc", presented)).as("status %s", status).isFalse();
+		}
+	}
+
+	/** Certificado de OUTRO nó não entra com o id deste, mesmo sendo assinado pela CA. */
+	@Test
+	void accepts_recusa_certificado_de_outro_no() throws Exception {
+		comDisponibilizando("nd_outro", NodeStatus.ACTIVE);
+		var emitidoParaOutro = service.issue("nd_outro", csr(), "u_admin");
+		var presented = parse(emitidoParaOutro.certificatePem());
+
+		assertThat(service.accepts("nd_abc", presented)).isFalse();
+	}
+
+	/**
+	 * Certificado assinado por OUTRA CA é recusado, mesmo com o id certo.
+	 *
+	 * <p>É o caso do participante que copia um Control Plane comprometido e apresenta um certificado
+	 * emitido por ele: o nome confere, a cadeia não.</p>
+	 */
+	@Test
+	void accepts_recusa_certificado_de_outra_ca() throws Exception {
+		KeyPair outraCa = NodeCertificateService.newCaKeyPair();
+		var emissor = NodeCertificateIssuer.issue(csr(), "nd_abc", outraCa.getPrivate(), outraCa.getPublic(),
+			BigInteger.valueOf(99), NOW);
+		var service2 = new NodeCertificateService(certificates, nodes, audit, Clock.fixed(NOW, ZoneOffset.UTC),
+			base64(ca.getPrivate().getEncoded()), base64(ca.getPublic().getEncoded()));
+		// Nem existe linha na tabela: o veredito vem da conferência da cadeia.
+		assertThat(service2.accepts("nd_abc", parse(emissor.pem()))).isFalse();
+	}
+
+	/** Nó revogado também não renova: a mesma porta da chave, o mesmo critério. */
+	@Test
+	void accepts_recusa_no_revogado_antes_de_olhar_certificado() {
+		comDisponibilizando("nd_abc", NodeStatus.REVOKED);
+		assertThat(service.accepts("nd_abc", null)).isFalse();
+	}
+
+	// ------------------------------------------------------------------ helpers
+
+	/**
+	 * Põe um nó com o status dado no repositório falso.
+	 *
+	 * <p>O mock do nó é criado FORA do {@code when(...)}: stubbing numa chamada a {@code mock()} dentro
+	 * de outro {@code when(...)} deixa o Mockito com stub pendente e o erro aparece no teste seguinte —
+	 * já custou uma rodada.</p>
+	 */
+	private void comDisponibilizando(String nodeId, NodeStatus status) {
+		NetworkNode node = mock(NetworkNode.class);
+		when(node.status()).thenReturn(status);
+		when(nodes.findById(nodeId)).thenReturn(Optional.of(node));
+	}
+
+	private static java.security.cert.X509Certificate parse(String pem) throws Exception {
+		return (java.security.cert.X509Certificate) java.security.cert.CertificateFactory.getInstance("X.509")
+			.generateCertificate(new java.io.ByteArrayInputStream(
+				java.util.Base64.getMimeDecoder().decode(pem.replaceAll("-----[A-Z ]+-----", ""))));
+	}
+
 	// ------------------------------------------------------------------ helpers
 
 	private String csr() {

@@ -229,11 +229,26 @@ public class NodeCertificateService {
 		catch (GeneralSecurityException falha) {
 			return false;
 		}
+		// O ESTADO DO NÓ VEM ANTES DO CERTIFICADO. O certificado prova "quem é"; quem decide "pode
+		// entrar" é o estado do autorizador. Sem esta checagem, revogar o nó matava a API key e
+		// deixava o certificado vigente — e o handshake aceitaria de volta, por TLS, o nó que o admin
+		// tinha derrubado. A perda de potência tem de valer nos dois canais, não só no da API key.
+		Optional<NetworkNode> node = nodes.findById(nodeId);
+		if (node.isEmpty() || !node.get().status().canOperate()) {
+			// canOperate() é o mesmo critério do despacho de tarefa: só ACTIVE opera. SUSPENDED,
+			// QUARANTINED, PAUSED, PENDING_APPROVAL e REVOKED ficam de fora — pausar um nó pela tela
+			// do participante tem de tirar também o canal TLS, senão a pausa é só no painel.
+			return false;
+		}
 		Optional<NodeCertificateRecord> active = certificates.findActiveByNode(nodeId);
 		if (active.isEmpty()) {
 			return false;
 		}
 		NodeCertificateRecord record = active.get();
+		if (!record.validAt(clock.instant())) {
+			// Revogado (janela de rotação) ou fora da validade: não é credencial.
+			return false;
+		}
 		return sha256Hex(derDoPem(record.pem())).equals(sha256Hex(digest(presented)));
 	}
 

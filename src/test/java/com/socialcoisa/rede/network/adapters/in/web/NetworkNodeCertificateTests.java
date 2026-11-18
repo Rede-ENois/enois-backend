@@ -122,6 +122,41 @@ class NetworkNodeCertificateTests {
 		assertThat(revogados).isEqualTo(1);
 	}
 
+	/**
+	 * Revogar o nó revoga o certificado na mesma transação (brief §10).
+	 *
+	 * <p>Antes: revogar matava a API key e deixava o certificado vigente. O nó derrubado voltaria a
+	 * entrar pelo handshake TLS no dia em que ele fosse exigido — a perda de potência valia em um canal
+	 * só. O banco agora conta a mesma história que a rede: nenhum certificado ativo para nó revogado.</p>
+	 */
+	@Test
+	void revogar_o_no_revoga_o_certificado() throws Exception {
+		KeyPair par = NodeCertificateService.newCaKeyPair();
+		var result = mockMvc
+			.perform(post("/network/nodes/enroll").contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(
+					Map.of("provisionToken", provisionToken("no-revogado"), "csr", csr(par)))))
+			.andExpect(status().isOk())
+			.andReturn();
+		String nodeId = objectMapper.readTree(result.getResponse().getContentAsString()).get("nodeId").asString();
+		mockMvc.perform(post("/admin/network/nodes/" + nodeId + "/approve").header("X-Session-Token", admin()))
+			.andExpect(status().isOk());
+
+		mockMvc
+			.perform(post("/admin/network/nodes/" + nodeId + "/status").header("X-Session-Token", admin())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("status", "REVOKED"))))
+			.andExpect(status().isOk());
+
+		Integer ativos = jdbc.queryForObject(
+			"select count(*) from network_node_certificates where node_id = ? and revoked_at is null", Integer.class,
+			nodeId);
+		assertThat(ativos).isZero();
+		String motivo = jdbc.queryForObject(
+			"select revoked_reason from network_node_certificates where node_id = ?", String.class, nodeId);
+		assertThat(motivo).isEqualTo("no revogado");
+	}
+
 	/** CSR forjado: recusado com 400 e nada gravado — o certificado não pode existir sem prova de posse. */
 	@Test
 	void enroll_com_csr_forjado_e_400_e_nao_grava_certificado() throws Exception {

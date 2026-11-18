@@ -51,6 +51,18 @@ Sem as duas variáveis, `NodeCertificateService.enabled()` é falso e a emissão
 seria uma segunda autoridade escondida, e o comportamento de produção dependeria de um arquivo que
 apareceu sem ninguém decidir.
 
+## 3.1 Quem pode entrar: o estado do nó manda
+
+`accepts(nodeId, certificado)` — a decisão que a terminação TLS vai usar — recusa **antes de olhar o
+certificado** quando o nó não é `ACTIVE`. Só o estado `ACTIVE` opera, o mesmo critério do despacho de
+tarefa (`NodeStatus.canOperate`): `PAUSED`, `SUSPENDED`, `QUARANTINED`, `PENDING_APPROVAL` e `REVOKED`
+ficam de fora.
+
+O certificado prova **quem é**; o estado do autorizador decide **se pode entrar**. Sem essa ordem, a
+revogação do nó mataria a API key e deixaria o certificado vigente — e o handshake aceitaria de volta,
+por TLS, o nó que o admin derrubou. Revogar o nó também revoga o certificado na mesma transação
+(`NetworkNodeService`), então as duas barreiras concordam com o banco.
+
 ## 4. O que NÃO está implementado
 
 Esta entrega é a **identidade criptográfica**: o certificado existe, é emitido com prova de posse, é
@@ -61,9 +73,9 @@ revogado e é renovado. Ela **não** é a terminação TLS. Honestamente:
   de cliente nas rotas `/network/`. Enquanto isso, a autorização de cada requisição de nó é a API key,
   como sempre foi — o certificado **acrescenta** uma camada que o proxy pode passar a exigir, não
   substitui a que existe.
-- **Não existe rota de painel para revogar certificado.** O serviço tem `revoke` e `revokeAllForNode`,
-  e a revogação do nó (`NodeKeyService.revokeAllForNode` + status `REVOKED`) já derruba a potência de
-  operar pela API key; ligar a revogação do certificado na mesma transição é a próxima peça.
+- **Não existe rota de painel dedicada para revogar só o certificado.** O serviço tem `revoke`, mas a
+  revogação que existe é a da **transição do nó**: revogar (`REVOKED`) ou desconectar (`SUSPENDED`) já
+  revoga o certificado na mesma transação, junto com a API key.
 - **Não há rotação automática.** O nó renova quando quiser, pela rota de renovação; não há worker
   avisando "faltam 15 dias". A validade de 90 dias e o `notAfter` na resposta dão ao nó a informação
   para se programar, mas quem decide renovar é ele.
