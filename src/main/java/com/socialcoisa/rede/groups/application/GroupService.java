@@ -41,16 +41,19 @@ public class GroupService {
 	private static final int MAX_PAGE = 50;
 
 	private final GroupRepository repository;
+	private final com.socialcoisa.rede.groups.application.port.out.GroupContentRepository content;
 	private final AuditLogRepository audit;
 	private final GroupNotifier notifier;
 	private final Clock clock;
 
 	private final com.socialcoisa.rede.coin.application.CoinService coins;
 
-	public GroupService(GroupRepository repository, AuditLogRepository audit, GroupNotifier notifier, Clock clock,
-			com.socialcoisa.rede.coin.application.CoinService coins) {
+	public GroupService(GroupRepository repository,
+			com.socialcoisa.rede.groups.application.port.out.GroupContentRepository content, AuditLogRepository audit,
+			GroupNotifier notifier, Clock clock, com.socialcoisa.rede.coin.application.CoinService coins) {
 		this.coins = coins;
 		this.repository = repository;
+		this.content = content;
 		this.audit = audit;
 		this.notifier = notifier;
 		this.clock = clock;
@@ -233,10 +236,86 @@ public class GroupService {
 	public Group close(String groupId, String actorId) {
 		Group group = requireGroup(groupId);
 		require(roleOf(groupId, actorId), GroupCapability.CLOSE_GROUP);
+		return closeAs(group, actorId, null, "GROUP_CLOSED");
+	}
+
+	/**
+	 * Encerra o grupo pela PLATAFORMA, seja de quem for.
+	 *
+	 * <p>A autorização de administrador é do controller ({@code AdminGuard}); aqui a mesma transição
+	 * do dono encerrando o grupo é executada, só com outro motivo na auditoria e com o motivo na
+	 * linha. Não nasce um segundo estado: encerrado é encerrado.</p>
+	 */
+	@Transactional
+	public Group closeByAdmin(String groupId, String actorId, String reason) {
+		Group group = requireGroup(groupId);
+		return closeAs(group, actorId, reason, "ADMIN_GROUP_CLOSED");
+	}
+
+	private Group closeAs(Group group, String actorId, String reason, String action) {
 		Group closed = group.withStatus(GroupStatus.CLOSED, clock.instant());
 		repository.save(closed);
-		audit.record(new UserId(actorId), "GROUP_CLOSED", groupId, "{\"slug\":\"" + group.slug() + "\"}");
+		String metadata = "{\"slug\":\"" + group.slug() + "\"";
+		if (reason != null) {
+			metadata += ",\"reason\":\"" + jsonSafe(reason) + "\"";
+		}
+		audit.record(new UserId(actorId), action, group.id(), metadata + "}");
 		return closed;
+	}
+
+	/**
+	 * Exclusão FÍSICA do grupo pela PLATAFORMA: conteúdo, associações e a linha do grupo.
+	 *
+	 * <p>Só é chamada por quem decidiu que o grupo não deve continuar existindo nem desligado (o
+	 * caminho normal é {@link #closeByAdmin}). O conteúdo do grupo em si não deixa órfão: reações,
+	 * comentários, publicações e tópicos saem na mesma transação. A auditoria fica no chamador, com o
+	 * administrador, o alvo e o motivo — ela não pertence ao grupo.</p>
+	 */
+	@Transactional
+	public int purgeByAdmin(String groupId) {
+		Group group = requireGroup(groupId);
+		repository.deleteJoinRequests(groupId);
+		repository.deleteMembers(groupId);
+		int removedPosts = content.deleteAllForGroup(groupId);
+		repository.deleteRow(groupId);
+		return removedPosts;
+	}
+
+	/**
+	 * Remove um membro pela PLATAFORMA, inclusive o dono.
+	 *
+	 * <p>O caminho de administração local recusa remover o dono ({@code CANNOT_REMOVE_OWNER}) para não
+	 * deixar o grupo sem quem possa administrá-lo. O admin da plataforma não é limitado por isso: se
+	 * remover o dono, o grupo passa para o membro mais antigo que ficou. Sem ninguém, fica sem dono —
+	 * a próxima intervenção administrativa resolve, e a auditoria registra os dois fatos.</p>
+	 */
+	@Transactional
+	public void removeMemberByAdmin(String groupId, String actorId, String targetUserId, String reason) {
+		Group group = requireGroup(groupId);
+		GroupMember target = repository.findMember(groupId, targetUserId)
+			.orElseThrow(() -> new ApiException(404, "NOT_MEMBER", "Essa pessoa nao e membro do grupo."));
+		if (repository.removeMember(groupId, targetUserId) == 1) {
+			repository.adjustMemberCount(groupId, -1);
+			notifier.memberRemoved(group, targetUserId, actorId);
+		}
+		if (target.role() == GroupRole.OWNER) {
+			// Quem sobra assume: sem dono, ninguem edita o grupo; com dono removido por decisao da
+			// plataforma, a continuidade e melhor do que um grupo congelado.
+			repository.listMembers(groupId).stream()
+				.filter(member -> !member.userId().equals(targetUserId))
+				.findFirst()
+				.ifPresent(next -> {
+					// O grupo aponta para o novo dono e o membro passa a OWNER; sem rebaixar mais
+					// ninguém, porque quem saiu já não está lá.
+					repository.save(group.withOwner(next.userId(), clock.instant()));
+					repository.saveMember(next.withRole(GroupRole.OWNER));
+					audit.record(new UserId(actorId), "ADMIN_GROUP_OWNER_REPLACED", groupId,
+						"{\"from\":\"" + targetUserId + "\",\"to\":\"" + next.userId() + "\"}");
+				});
+		}
+		audit.record(new UserId(actorId), "ADMIN_GROUP_MEMBER_REMOVED", groupId,
+			"{\"memberId\":\"" + targetUserId + "\",\"role\":\"" + target.role() + "\",\"reason\":\""
+				+ jsonSafe(reason) + "\"}");
 	}
 
 	/** Passa a propriedade: o novo dono vira OWNER e o antigo continua como ADMIN. */

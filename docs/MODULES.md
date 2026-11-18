@@ -1210,6 +1210,32 @@ Motivo obrigatório (10 a 2000 caracteres) em toda escrita; `Idempotency-Key` de
 resposta (replay) sem repetir a decisão. `user_warnings` (`V330`) é o histórico que faltava: antes
 "avisar" numa denúncia só mudava o status e mandava uma notificação, sem registro por conta.
 
+### AdminEntityService (comunidades e grupos)
+
+**Arquivo**: `src/main/java/com/socialcoisa/rede/moderation/application/AdminEntityService.java`
+
+Gerenciamento de comunidades e grupos pela administração da plataforma, sem votação e sem papel
+local. Mesma trava de `AdminModerationService`: `AdminRouteInterceptor` recusa antes do MVC e cada
+método confirma com `AdminGuard`.
+
+| Função | Rota | Efeito |
+|---|---|---|
+| `communityOverview(id)` | GET /api/admin/moderation/communities/{id} | Dono, número de membros e de admins |
+| `communityMembers(id, q, page, size)` | GET /api/admin/moderation/communities/{id}/members | Lista completa (papel, entrada), busca por nome/@, páginas; audita nada (leitura) |
+| `deleteCommunity(id, reason)` | DELETE /api/admin/moderation/communities/{id} | Reaproveita `CommunityService.deleteCommunity(..., adminOverride)`; audita `ADMIN_COMMUNITY_DELETED` |
+| `removeCommunityMember(id, userId, reason)` | DELETE /api/admin/moderation/communities/{id}/members/{userId} | Remove inclusive o dono; audita `ADMIN_COMMUNITY_MEMBER_REMOVED` |
+| `groupOverview(id)` | GET /api/admin/moderation/groups/{id} | Dono, estado, número de membros |
+| `groupMembers(id, q, page, size)` | GET /api/admin/moderation/groups/{id}/members | Lista completa; mesmo contrato de páginas |
+| `deleteGroup(id, reason)` | DELETE /api/admin/moderation/groups/{id} | `GroupService.purgeByAdmin`: membros, pedidos, tópicos, publicações, comentários e reações saem na mesma transação; audita `ADMIN_GROUP_DELETED` |
+| `closeGroup(id, reason)` | POST /api/admin/moderation/groups/{id}/close | `GroupService.closeByAdmin`: estado CLOSED com o conteúdo preservado; audita `ADMIN_GROUP_CLOSED` |
+| `removeGroupMember(id, userId, reason)` | DELETE /api/admin/moderation/groups/{id}/members/{userId} | `GroupService.removeMemberByAdmin`; dono removido passa a propriedade ao membro mais antigo; audita `ADMIN_GROUP_MEMBER_REMOVED` |
+
+Exclusão de grupo é apagar de fato: o conteúdo do grupo é dele (tabelas próprias, sem vínculo com o
+feed), então sai inteiro junto com o grupo. Quando o conteúdo é histórico e não objeto da decisão, o
+painel usa `close`: o grupo sai da descoberta, não aceita gente nova e o que existia continua no
+banco (inacessível pela leitura normal, porque CLOSED não é legível por membros). A comunidade é
+apagada pelo caminho que já existia, com membros e vínculos na mesma transação.
+
 ### ContentQuarantineReviewService
 
 **Arquivo**: `src/main/java/com/socialcoisa/rede/moderation/application/ContentQuarantineReviewService.java`

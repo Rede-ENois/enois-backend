@@ -156,4 +156,20 @@ class GroupPersistenceAdapter implements GroupRepository {
 	private String newId() {
 		return UUID.randomUUID().toString().replace("-", "");
 	}
+
+	@Override
+	@Transactional
+	public void deleteRow(String groupId) {
+		groups.deleteById(groupId);
+	}
+
+	@Override
+	public void deleteJoinRequests(String groupId) {
+		requests.deleteByGroupId(groupId);
+	}
+
+	@Override
+	public void deleteMembers(String groupId) {
+		members.deleteByGroupId(groupId);
+	}
 }
