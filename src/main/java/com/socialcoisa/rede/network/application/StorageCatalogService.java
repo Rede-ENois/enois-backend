@@ -22,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
+import com.socialcoisa.rede.network.domain.ObjectMetadata;
 import com.socialcoisa.rede.network.domain.NodeStatus;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StorageObjectState;
@@ -98,21 +99,42 @@ public class StorageCatalogService {
 	private final EnvelopeBodyCrypto envelope;
 
 	/**
+	 * Contador de operação do painel (§17, V366). <b>Nulo é válido</b>: os testes de outros assuntos do
+	 * catálogo constroem o serviço sem o contador, e a métrica é observação — não pode ser pré-requisito
+	 * para gravar um objeto.
+	 */
+	@Nullable
+	private final StorageOperationMetrics metrics;
+
+	/**
 	 * A forma anterior, sem chave: instalação que ainda não configurou a mestra grava em claro. Os
 	 * testes de outros assuntos do catálogo não passam a depender do envelope por causa disto.
 	 */
 	StorageCatalogService(StorageCatalogRepository catalog, AuditTrail audit, Clock clock,
 			long maxObjectBytes, String storageRoot, StoragePlacementService placement,
 			@Nullable NodeBodyStore nodeBodies) {
-		this(catalog, audit, clock, maxObjectBytes, storageRoot, "", placement, nodeBodies);
+		this(catalog, audit, clock, maxObjectBytes, storageRoot, "", placement, nodeBodies, null);
 	}
 
-	@org.springframework.beans.factory.annotation.Autowired
 	StorageCatalogService(StorageCatalogRepository catalog, AuditTrail audit, Clock clock,
 			@Value("${rede.storage.max-object-bytes:5368709120}") long maxObjectBytes,
 			@Value("${rede.storage.root:${java.io.tmpdir}/enois-storage}") String storageRoot,
 			@Value("${rede.security.encryption-key:}") String encryptionKey,
 			StoragePlacementService placement, @Nullable NodeBodyStore nodeBodies) {
+		this(catalog, audit, clock, maxObjectBytes, storageRoot, encryptionKey, placement, nodeBodies, null);
+	}
+
+	/**
+	 * Com o contador de operação: é esta a forma que o Spring injeta (o {@code @Autowired} fica neste
+	 * construtor). A delegação acima mantém os testes de outros assuntos com a assinatura que já usavam.
+	 */
+	@org.springframework.beans.factory.annotation.Autowired
+	StorageCatalogService(StorageCatalogRepository catalog, AuditTrail audit, Clock clock,
+			@Value("${rede.storage.max-object-bytes:5368709120}") long maxObjectBytes,
+			@Value("${rede.storage.root:${java.io.tmpdir}/enois-storage}") String storageRoot,
+			@Value("${rede.security.encryption-key:}") String encryptionKey,
+			StoragePlacementService placement, @Nullable NodeBodyStore nodeBodies,
+			@Nullable StorageOperationMetrics metrics) {
 		this.catalog = catalog;
 		this.audit = audit;
 		this.clock = clock;
@@ -122,6 +144,7 @@ public class StorageCatalogService {
 		this.nodeBodies = nodeBodies;
 		this.envelope = encryptionKey == null || encryptionKey.isBlank() ? null
 			: new EnvelopeBodyCrypto(java.util.Base64.getDecoder().decode(encryptionKey.trim()));
+		this.metrics = metrics;
 	}
 
 	/**
@@ -159,6 +182,77 @@ public class StorageCatalogService {
 			object = catalog.findById(object.id()).orElse(object);
 		}
 		return object;
+	}
+
+	/**
+	 * O que o cliente declarou junto do corpo (V367): {@code x-amz-meta-*}, {@code Cache-Control} e
+	 * {@code Content-Disposition}. Vai num objeto só porque é declarado no mesmo instante e gravado na
+	 * mesma linha.
+	 */
+	public record ClientHeaders(ObjectMetadata metadata, String cacheControl, String contentDisposition) {
+
+		public static final ClientHeaders NONE = new ClientHeaders(ObjectMetadata.EMPTY, null, null);
+
+		public ClientHeaders {
+			metadata = metadata == null ? ObjectMetadata.EMPTY : metadata;
+			cacheControl = limpo(cacheControl);
+			contentDisposition = limpo(contentDisposition);
+		}
+
+		private static String limpo(String valor) {
+			return valor == null || valor.isBlank() ? null : valor.trim();
+		}
+	}
+
+	/** Teto de {@code Cache-Control} e {@code Content-Disposition}: cabeçalho, não corpo. */
+	public static final int MAX_CLIENT_HEADER = 200;
+
+	/**
+	 * Valida o {@code Cache-Control} e o {@code Content-Disposition} declarados no upload.
+	 *
+	 * <p>Os valores voltam como cabeçalho HTTP no GET e no HEAD, e um {@code 
+} dentro deles seria
+	 * injeção de resposta. Recusar o caractere de controle é a regra; estourar o tamanho também, em vez
+	 * de truncar — um {@code Content-Disposition} cortado entrega o arquivo com outro nome.</p>
+	 */
+	public static ClientHeaders clientHeaders(String cacheControl, String contentDisposition,
+			ObjectMetadata metadata) {
+		for (String valor : new String[] { cacheControl, contentDisposition }) {
+			if (valor == null) {
+				continue;
+			}
+			if (valor.length() > MAX_CLIENT_HEADER) {
+				throw new ApiException(400, "InvalidArgument",
+					"Cache-Control e Content-Disposition do objeto cabem em " + MAX_CLIENT_HEADER + " caracteres.");
+			}
+			for (int i = 0; i < valor.length(); i++) {
+				if (valor.charAt(i) < 0x20 && valor.charAt(i) != '\t' || valor.charAt(i) == 0x7f) {
+					throw new ApiException(400, "InvalidArgument",
+						"Cache-Control e Content-Disposition nao aceitam caractere de controle.");
+				}
+			}
+		}
+		return new ClientHeaders(metadata, cacheControl, contentDisposition);
+	}
+
+	/**
+	 * Grava o que o cliente declarou no upload que acabou de começar.
+	 *
+	 * <p>Separado do {@code beginUpload} porque o multipart só sabe o metadado na criação do upload e
+	 * os cabeçalhos já vêm do {@code CreateMultipartUpload}: o serviço de multipart conta o que tem, e
+	 * o caminho é o mesmo do PUT simples — um método, não duas gravações que podem divergir.</p>
+	 */
+	public void saveClientHeaders(StorageObject object, ClientHeaders headers) {
+		if (object == null || headers == null) {
+			return;
+		}
+		if (headers.metadata().isEmpty() && headers.cacheControl() == null
+				&& headers.contentDisposition() == null) {
+			// Nada declarado é o caso comum e o valor da coluna já é nulo: não vale um UPDATE por PUT.
+			return;
+		}
+		catalog.setClientHeaders(object.id(), headers.metadata(), headers.cacheControl(),
+			headers.contentDisposition());
 	}
 
 	/** Quantas vezes a gravação versionada tenta de novo quando outra requisição venceu a corrida. */
@@ -213,6 +307,21 @@ public class StorageCatalogService {
 	 * não 500.</p>
 	 */
 	public StorageObject finishUpload(String objectId, InputStream body, String actorId) {
+		long inicio = System.nanoTime();
+		try {
+			StorageObject gravado = doFinishUpload(objectId, body, actorId);
+			conta("PUT", StorageOperationMetrics.Resultado.OK, inicio);
+			return gravado;
+		}
+		catch (RuntimeException recusado) {
+			// Qualquer recusa do caminho de gravação é pedido do cliente: objeto vencido, corpo vazio,
+			// acima do teto, sem raiz de disco. A falha É o que o painel precisa ver separada de OK.
+			conta("PUT", resultadoDe(recusado), inicio);
+			throw recusado;
+		}
+	}
+
+	private StorageObject doFinishUpload(String objectId, InputStream body, String actorId) {
 		StorageObject object = catalog.findById(objectId)
 			.orElseThrow(() -> new ApiException(404, "STORAGE_OBJECT_UNKNOWN", "Objeto nao encontrado no catalogo."));
 		if (object.state() != StorageObjectState.PENDING) {
@@ -570,6 +679,28 @@ public class StorageCatalogService {
 	 * significa que "expirou" era só um campo na tabela.</p>
 	 */
 	public StorageObject requireDownloadable(String bucket, String key) {
+		return requireDownloadable(bucket, key, "GET");
+	}
+
+	/**
+	 * O mesmo caminho de leitura com o verbo que o chamador usa. HEAD não tem corpo, mas tem o custo de
+	 * achar o objeto e de conferir a serventia — contá-lo como GET faria o painel mostrar leitura de
+	 * arquivo onde houve só conferência de existência.
+	 */
+	public StorageObject requireDownloadable(String bucket, String key, String operacao) {
+		long inicio = System.nanoTime();
+		try {
+			StorageObject object = doRequireDownloadable(bucket, key);
+			conta(operacao, StorageOperationMetrics.Resultado.OK, inicio);
+			return object;
+		}
+		catch (RuntimeException recusado) {
+			conta(operacao, resultadoDe(recusado), inicio);
+			throw recusado;
+		}
+	}
+
+	private StorageObject doRequireDownloadable(String bucket, String key) {
 		StorageObject object = catalog.find(bucket, key)
 			.orElseThrow(() -> new ApiException(404, "STORAGE_NOT_FOUND", "Objeto nao encontrado."));
 		if (!object.servable() || object.expired(clock.instant())) {
@@ -585,14 +716,36 @@ public class StorageCatalogService {
 
 	/** Listagem de um bucket por prefixo, com paginação por chave. */
 	public List<StorageObject> list(String bucket, String prefix, String afterKey, int limit) {
-		validateBucket(bucket);
-		int bounded = Math.max(1, Math.min(limit <= 0 ? MAX_LIST_LIMIT : limit, MAX_LIST_LIMIT));
-		return catalog.list(bucket, prefix, afterKey, bounded);
+		long inicio = System.nanoTime();
+		try {
+			validateBucket(bucket);
+			int bounded = Math.max(1, Math.min(limit <= 0 ? MAX_LIST_LIMIT : limit, MAX_LIST_LIMIT));
+			List<StorageObject> achados = catalog.list(bucket, prefix, afterKey, bounded);
+			conta("LIST", StorageOperationMetrics.Resultado.OK, inicio);
+			return achados;
+		}
+		catch (RuntimeException recusado) {
+			conta("LIST", resultadoDe(recusado), inicio);
+			throw recusado;
+		}
 	}
 
 	/** Lápide: idempotente, auditada, e não apaga a linha — as cópias nos nós ainda precisam ser coletadas. */
 	@Transactional
 	public boolean delete(String actorId, String bucket, String key) {
+		long inicio = System.nanoTime();
+		try {
+			boolean removido = doDelete(actorId, bucket, key);
+			conta("DELETE", StorageOperationMetrics.Resultado.OK, inicio);
+			return removido;
+		}
+		catch (RuntimeException recusado) {
+			conta("DELETE", resultadoDe(recusado), inicio);
+			throw recusado;
+		}
+	}
+
+	private boolean doDelete(String actorId, String bucket, String key) {
 		StorageObject object = catalog.find(bucket, key)
 			.orElseThrow(() -> new ApiException(404, "STORAGE_NOT_FOUND", "Objeto nao encontrado."));
 		Instant now = clock.instant();
@@ -721,6 +874,31 @@ public class StorageCatalogService {
 		catch (NoSuchAlgorithmException impossible) {
 			throw new IllegalStateException("SHA-256 ausente na JVM");
 		}
+	}
+
+	/**
+	 * O tempo medido vai para o painel. {@link System#nanoTime()} é monotônico: o relógio de parede pode
+	 * saltar com NTP no meio da operação e uma latência negativa ou de horas apareceria no piso do pior
+	 * caso do dia.
+	 */
+	private void conta(String operacao, StorageOperationMetrics.Resultado resultado, long inicioNanos) {
+		if (metrics == null) {
+			return;
+		}
+		metrics.record(operacao, resultado, Math.max(0, (System.nanoTime() - inicioNanos) / 1_000_000));
+	}
+
+	/**
+	 * 4xx é o cliente que errou; 5xx é falha nossa. Separar os dois no painel é o que permite ler
+	 * "a demanda é de clientes quebrados" e "o Storage está falhando" sem abrir log.
+	 */
+	private static StorageOperationMetrics.Resultado resultadoDe(RuntimeException erro) {
+		if (erro instanceof ApiException api) {
+			return api.status() >= 500 ? StorageOperationMetrics.Resultado.SERVER
+				: StorageOperationMetrics.Resultado.CLIENT;
+		}
+		// Qualquer outra exceção não é pedido errado do cliente: é falha nossa.
+		return StorageOperationMetrics.Resultado.SERVER;
 	}
 
 	/** JSON de auditoria: aspas e barra invertida da chave sao escapadas como no restante do modulo. */

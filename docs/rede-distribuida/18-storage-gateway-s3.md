@@ -230,6 +230,39 @@ conta não é revogada e continua viva; verbo desconhecido não grava; sem sess�
 conferida: tirar o dono do `SELECT` da revogação derruba o teste da outra conta (antes: 404 → depois:
 200, a conta errada revogando).
 
+### 4.4 Metadado e cabeçalhos do objeto (V367)
+
+**Antes:** o gateway guardava tipo, tamanho e digest e descartava o resto. Três coisas sumiam em
+silêncio entre o `PUT` e o `GET`: o `x-amz-meta-*` que o cliente declarou, o `Cache-Control` do
+objeto (o `GET` respondia a política do TIPO) e o `Content-Disposition` (o anexo vinha sem nome).
+
+**Agora:**
+
+| declarado no `PUT` / `CreateMultipartUpload` | volta no `HEAD` e no `GET` | guardado em |
+|---|---|---|
+| `x-amz-meta-<nome>` (até 10 pares, nome ≤ 40, valor ≤ 256, conjunto ≤ 2 KB) | `x-amz-meta-<nome>` normalizado em **minúsculas** | `network_storage_objects.metadata_json` |
+| `Cache-Control` (≤ 200 caracteres) | o declarado **vence** a política do tipo | `cache_control` |
+| `Content-Disposition` (≤ 200 caracteres) | igual ao declarado | `content_disposition` |
+
+Regras que não são estilo:
+
+- **Metadado fora dos limites é `InvalidArgument`, nunca truncado.** Cortar metadado de quem confia
+  nele é pior que recusar. O nome tem alfabeto restrito (`A-Za-z0-9._-`) porque volta como cabeçalho
+  HTTP: um `\r\n` nele seria injeção de resposta.
+- **Cabeçalho com caractere de controle é recusado ANTES de gravar** — e por isso nada é criado: o
+  `PUT` que falha por `Content-Disposition` inválido não deixa `PENDING` decorado com o que não foi
+  aceito.
+- **Nulo é "não declarou"**: objeto antigo (e objeto sem metadado) sai como antes, com a política do
+  tipo no `Cache-Control` e sem `x-amz-meta-*`. Nenhum cabeçalho vazio inventado.
+- **O metadado é gravado no começo do upload** (`beginUpload` devolve a linha `PENDING`), não na
+  conclusão: reenvio de um `PUT` interrompido reaproveita a linha, e cada upload declara o seu.
+
+Prova: `S3GatewayTests.o_metadado_e_os_cabecalhos_declarados_no_put_voltem_no_head_e_no_get`,
+`objeto_sem_metadado_nao_ganha_cabecalho_de_metadado`,
+`cabecalho_declarado_com_quebra_de_linha_e_recusado`, `ObjectMetadataTests` (6) e a migração
+`V367` aplicada duas vezes em MariaDB 11.4 por `scripts/tests/storage-metadata-migration-test.sh`
+(PASS 14), com um objeto gravado antes da migração preservado.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
@@ -241,6 +274,49 @@ O corpo é XML no formato do S3, com o `Code` que o SDK lê:
 ```
 
 Códigos: `AccessDenied`, `InvalidAccessKeyId`, `SignatureDoesNotMatch`, `NotImplemented`.
+
+## 5.1 Indicadores de operação no painel (V366)
+
+O §17 do brief pede **operações por segundo** e **latência**. Até a V366 o painel não tinha nenhum dos
+dois — não por falta de tela, mas porque **nada contava operação**: capacidade, uso e integridade são
+estado que o catálogo já grava; operação é evento.
+
+Agora cada operação do catálogo grava uma linha por `(minuto, operação, resultado)`:
+
+| campo | o que é |
+|---|---|
+| `operation` | `PUT`, `GET`, `HEAD`, `DELETE`, `LIST` — os verbos que o gateway e o painel usam de fato |
+| `outcome` | `OK`, `CLIENT` (4xx) ou `SERVER` (5xx). Separar os dois é o que distingue "clientes quebrados" de "Storage falhando" sem abrir log |
+| `req_count` | quantas operações no minuto |
+| `total_ms` | soma dos milissegundos — a média sai **na leitura** (`total_ms / req_count`) |
+| `max_ms` | o pior caso do minuto |
+
+**Por que soma e não média no banco.** Gravar a média por minuto e depois tirar a média das médias
+pesa um minuto parado igual a um minuto de pico: 10 operações de 10 ms e 1 de 1000 ms dariam 505 ms em
+vez dos 100 ms verdadeiros. O teste fixa exatamente esse número.
+
+**Por que não cada requisição.** A tabela é série, não log. Um SDK que lista mil vezes no mesmo minuto
+soma na mesma linha (UPSERT atômico no banco — duas instâncias do Control Plane no mesmo minuto não se
+perdem).
+
+Leitura: `GET /admin/network/storage/operations?minutes=15` (teto de 1440). Devolve `from`, `to`,
+`seconds` (o tempo medido; **zero** quando não houve operação), `operations`, `opsPerSecond`,
+`averageMs`, `maxMs` e os mapas `byOperation` / `byOutcome`. Janela fora de 1–1440 é **recusada com
+400**, não truncada: quem pediu 30 dias e recebeu 1 acha que a instalação parou.
+
+Falha ao registrar não derruba a operação do usuário — a métrica é observação, e perder uma amostra
+não pode virar erro de upload. A retenção (30 dias, `rede.storage.metrics.retention-days`) é varrida
+uma vez por dia por `StorageOperationMetricsWorker`; sem ela o `purge` seria código morto.
+
+Prova: `StorageOperationMetricsTests` (9 — conta ponderada, "sem dado" ≠ zero, 400/500 separados,
+normalização para `OTHER`, UPSERT, retenção, falha que não propaga), `StorageCatalogMetricsTests` (7 —
+a fiação no caminho real: GET, HEAD independente de GET, LIST, 5xx como `SERVER`, exceção não-`ApiException`
+como `SERVER` e nunca `OK`, catálogo sem contador continua servindo),
+`AdminNetworkStorageMetricsTests` (6 — rota, banco e guarda de admin) e
+`scripts/tests/storage-operations-migration-test.sh` (V366 aplicada **duas vezes** em MariaDB 11.4 real,
+UPSERT somando 10 gravações no mesmo minuto, `max_ms` preservado, média ponderada na consulta,
+retenção). Mutações conferidas: média das médias, "sem dado" virando a janela inteira, 500 contado como
+`CLIENT`, `LIST` sem contagem e chave primária sem `outcome` — todas derrubam.
 
 ## 6. O que NÃO está entregue
 
