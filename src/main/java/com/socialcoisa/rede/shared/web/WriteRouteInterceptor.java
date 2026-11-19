@@ -75,6 +75,7 @@ class WriteRouteInterceptor implements HandlerInterceptor {
 		// de nó (X-Node-Id + X-Node-Key), conferida no controller; o GET do dump é leitura e não
 		// passa por aqui.
 		"/network/standby/complete",
+		// #953: o nó conta que não conseguiu gravar/restaurar a cópia — mesma credencial de nó.
 		"/network/standby/failed",
 		// Fase 2: o nó devolve o resultado da tarefa. Mesma credencial de nó (X-Node-Id + X-Node-Key),
 		// conferida no controller. O GET /network/tasks/next não entra aqui: só escrita exige sessão.

@@ -83,6 +83,16 @@ cada tentativa. `cache-seconds=0` desliga o cache. A prova é `StandbyCacheTests
 muda a cada chamada (o caso real): é ela que discrimina — a fonte da rota é estável e regenerar daria
 o mesmo byte.
 
+**Qual arquivo cada tentativa recebe** (`StandbyDumpSnapshotProvider`) segue a **linha da cópia**, não
+o instante do pedido. Uma tentativa nova começa do zero mesmo com um dump da janela na mão, e o dump
+fica reservado para ela até a linha ser confirmada, falhar, ou outra tentativa começar. Sem isso, dois
+nós copiando na mesma janela, e uma cópia nova começando logo depois de outra, teriam dois defeitos: o
+`digest==null` que deixava a confirmação passar sem conferência (o mapa do digest era por processo, e
+o processo que gerou podia não ser o que recebia o `complete`), e o começo de uma cópia nova nascendo
+com o arquivo de outra. Instância que não gerou o dump de uma tentativa antiga recusa a retomada com
+`416 STANDBY_OFFSET_BEYOND_DUMP` em vez de entregar a cauda de outro arquivo — a confirmação dela é
+recusada por digest falso, e é honesto dizer isso.
+
 ### 3.3 O dump é conferido antes de sair
 
 `verify()` roda logo depois da geração: cada tabela lida tem `CREATE TABLE` e, se tinha linha no
@@ -153,6 +163,10 @@ Códigos: `STANDBY_NODE_REQUIRED`, `STANDBY_NODE_NOT_FOUND`, `STANDBY_COPY_NOT_S
 | retomada manda a cauda e o digest do dump inteiro | `retomadaEnviaACaudaComODigestDoDumpInteiro` |
 | banco indisponível → `FAILED`, sem cópia boa | `bancoIndisponivelNaoViraCopiaBoa` |
 | dump abaixo do piso → `FAILED` | `dumpAbaixoDoPisoFalhaENaoViraCopiaBoa` |
+| o nó conta a falha de gravação/restauração (sem motivo, com motivo longo) e a linha não fica `SYNCING` | `noSemMotivoEReasonLongaNaoDeixamACopiaCopiando` |
+| retomada usa o mesmo dump e a falha do nó vira `FAILED` | `noReportaFalhaERetomadaUsaOMesmoDumpEmCache` |
+| cópia nova não herda o dump da anterior e só confirma com o próprio arquivo | `copiaNovaNaoHerdaODumpDaAnteriorEConfirmaSOComOProprioArquivo` |
+| o cache não regenera entre leituras; janela vencida lê de novo; dump reprovado não sai | `StandbyCacheTests` |
 | nó não confirma a cópia de outro | `noNaoConfirmaCopiaDeOutroNo` |
 | promoção com cópia sobe o termo e audita o nó | `comCopiaProntaPromocaoSobeOTermoEAuditaONo` |
 | refresh não recopia com cópia do dia; recopia quando velha | `refreshNaoCopiaDeNovoQuandoJaHaCopiaDoDia`, `refreshCopiaDeNovoQuandoACopiaEstaVelha` |

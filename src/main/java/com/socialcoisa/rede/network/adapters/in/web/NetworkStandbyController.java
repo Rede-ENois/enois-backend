@@ -88,8 +88,8 @@ class NetworkStandbyController {
 		NetworkNode node = keys.authenticate(nodeId, nodeKey);
 		String motivo = request == null || request.reason() == null || request.reason().isBlank()
 			? "o no nao declarou o motivo" : request.reason().trim();
-		var snapshot = standby.fail(node.id(), node.id(), request == null ? null : request.authorityId(),
-			motivo.length() > 500 ? motivo.substring(0, 500) : motivo);
+		var snapshot = standby.reportFailure(node.id(), node.id(), request == null ? null : request.authorityId(),
+			motivo);
 		return CopyResult.of(snapshot);
 	}
 
