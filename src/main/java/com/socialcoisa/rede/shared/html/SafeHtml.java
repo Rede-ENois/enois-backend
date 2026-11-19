@@ -669,6 +669,12 @@ public final class SafeHtml {
 		if (svg == null) {
 			throw new IllegalArgumentException("Arquivo não contém elemento SVG válido");
 		}
+		// Standalone SVG served as image/svg+xml is parsed as XML and requires the SVG namespace
+		// (removed by the HTML allowlist cleaner) to render inside <img>.
+		svg.attr("xmlns", "http://www.w3.org/2000/svg");
+		if (svg.getAllElements().stream().anyMatch(el -> el.hasAttr("xlink:href"))) {
+			svg.attr("xmlns:xlink", "http://www.w3.org/1999/xlink");
+		}
 		return hardenSvgReferences(svg.outerHtml()).getBytes(StandardCharsets.UTF_8);
 	}
 }
