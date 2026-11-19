@@ -22,15 +22,22 @@ import org.springframework.stereotype.Component;
  *   saem inteiros ("http", "www" e domínio não nomeiam conversa — foi o bug do "http" em alta);
  * - o texto é dobrado (NFD, sem acento, minúsculo) e quebrado em palavras, igual ao léxico do
  *   Termômetro, então "Inteligência Artificial" e "inteligencia artificial" são o MESMO assunto;
- * - palavras vazias (stopwords em português: artigos, preposições, conectivos, "muito", "tô")
- *   e tokens pequenos (menos de 3 letras) não viram assunto — é o "que", "de", "pra" saindo;
- *   riso ("kkkk", "hahaha"), número puro ("2026") e letra repetida ("assssss") também não;
- * - o extrator usa UNIGRAMAS e BIGRAMAS de palavras elegíveis ADJACENTES no texto — pontuação
- *   ou palavra vazia no meio quebra o par ("feei o meetup" não cola "feei meetup"), e palavra
- *   repetida não vira par consigo mesma ("praia praia" é um assunto só);
- * - o assunto do texto funde o bigrama com os seus unigramas: quando "inteligencia artificial"
+ * - palavras vazias (stopwords em português: artigos, preposições, conectivos, pronomes, formas
+ *   de verbo de ligação, "muito", "tô") e tokens pequenos (menos de 3 letras) não viram assunto
+ *   — é o "que", "de", "pra" saindo; riso ("kkkk", "hahaha"), número puro ("2026") e letra
+ *   repetida ("assssss") também não; a lista fecha as falas da rede que não nomeiam conversa
+ *   nenhuma ("gente", "tipo", "coisa", "sei", "tenho") — foi o bug do "gente" em alta;
+ * - o extrator usa UNIGRAMAS e EXPRESSÕES de palavras elegíveis VIZINHAS no texto: o par é de
+ *   palavras vizinhas ("inteligencia artificial") ou de palavras separadas por UM conector de
+ *   expressão composta ("mercado de trabalho", "curso de ingles") — pontuação, palavra vazia
+ *   fora da lista de conectores ("feei o meetup" não cola) ou distância maior que um token
+ *   quebram o par, e palavra repetida não vira par consigo mesma ("praia praia" é um assunto só);
+ * - o pareamento é guloso e NÃO SOBREPÕE: cada palavra entra em uma única expressão, da
+ *   esquerda para a direita, e o par vence a palavra solta — assim "meetup de rust na sexta"
+ *   vira "meetup de rust" + "sexta" (a mesma conversa não é contada duas vezes sob dois pares);
+ * - o assunto do texto funde a expressão com os seus unigramas: quando "inteligencia artificial"
  *   aparece junto, ela cobre "inteligencia" e "artificial" — o mais específico nomeia a
- *   conversa; unigrama que não entrou em bigrama nenhum é assunto próprio;
+ *   conversa; unigrama que não entrou em expressão nenhuma é assunto próprio;
  * - as TAGS da publicação são assunto declarado pelo autor e entram como fala própria, sem
  *   depender de aparecerem no texto; o assunto da taxonomia (TECNOLOGIA, DESIGN…) fica de
  *   fora de propósito: é amplo demais e viraria alta de todo mundo;
@@ -40,7 +47,11 @@ import org.springframework.stereotype.Component;
 @Component
 public class PapoAssuntoExtractor {
 
-	/** Maior expressão que um assunto tirado do texto pode ter (em palavras): bigrama. */
+	/**
+	 * Maior expressão que um assunto tirado do texto pode ter, em PALAVRAS ELEGÍVEIS: o par.
+	 * O conector no meio da expressão composta ("mercado DE trabalho") não conta como palavra —
+	 * ele não é o assunto, ele cola o assunto.
+	 */
 	public static final int MAXIMO_PALAVRAS = 2;
 
 	/** Menor palavra elegível: "to", "eu", "o" não nomeiam conversa. */
@@ -65,9 +76,19 @@ public class PapoAssuntoExtractor {
 	/**
 	 * As palavras vazias do português falado na rede: dobradas (sem acento, minúsculas).
 	 * A lista é fechada a dedo — cada linha aqui é uma palavra que não nomeia assunto; não
-	 * existe lista automática de negócio aqui.
+	 * existe lista automática de negócio aqui. Ela é a PRIMEIRA peneira, não a única: palavra
+	 * de conversa que escapar dela cai na régua de publicações distintas do agregado
+	 * ({@code PapoAssunto}), que aprende a fala comum dos números do próprio corte.
 	 */
 	private static final Set<String> PALAVRAS_VAZIAS = palavrasVazias();
+
+	/**
+	 * Os conectores de expressão composta: entre duas palavras elegíveis, um destes (e só um
+	 * destes, e só um token) mantém a expressão viva — "mercado de trabalho", "curso de
+	 * ingles", "trabalho em equipe". Fora daqui nada cola: vírgula, "com o", "que" e afins
+	 * separam de verdade duas conversas.
+	 */
+	private static final Set<String> CONECTORES = Set.of("de", "da", "do", "das", "dos", "em", "no", "na", "nos", "nas");
 
 	/** Link inteiro: endereço, domínio e caminho não nomeiam conversa. */
 	private static final Pattern LINK = Pattern.compile("(?iu)\\b(?:https?://|ftp://|www\\.)\\S+");
@@ -123,11 +144,29 @@ public class PapoAssuntoExtractor {
 				"cada", "qualquer", "outro", "outra", "outros", "outras", "mesmo", "mesma", "tao", "nem", "sim",
 				"nao", "achei", "kkk", "kkkk", "haha", "rs",
 				"bom", "boa", "dia", "noite", "tarde", "oi", "ola", "eai", "salve",
+				// Contrações e plurais que faltavam: o "pelo", o "num", o "nessa" e o "voces"
+				// passavam pela peneira e viravam assunto próprio.
+				"pelo", "pela", "pelos", "pelas", "num", "numa", "nuns", "numas", "dum", "duma", "duas", "dois",
+				"voces", "vcs", "teu", "tua", "teus", "tuas", "desse", "dessa", "desses", "dessas", "deste",
+				"desta", "destes", "destas", "nesse", "nessa", "nesses", "nessas", "neste", "nesta", "nestes",
+				"nestas", "disso", "nisso", "disto", "nisto", "nele", "nela", "neles", "nelas", "aquele", "aquela",
+				"aqueles", "aquelas", "algum", "alguma", "alguns", "algumas", "nenhum", "nenhuma", "ate", "desde",
+				"apos", "durante", "conforme", "talvez", "quase",
+				// Formas de verbo de ligação, de verbo leve e de primeira pessoa: quem diz "tenho",
+				// "acho", "sei" está falando de si, não de um assunto.
+				"estao", "estamos", "estive", "tinha", "tinham", "temos", "havia", "seja", "sejam", "sendo",
+				"sido", "pode", "podem", "podia", "deve", "devem", "queria", "quer", "querem", "quero", "posso",
+				"sei", "tenho", "acho", "sabe", "sabem", "faz", "fazem", "fez", "fiz", "feito", "vamos", "vamo",
+				"ver", "olha", "olhem", "vejam",
+				// Fala da rede: aparece em publicação de todo mundo e não nomeia conversa nenhuma.
+				// Foi a lista que faltava no bug do "gente", do "mundo" e do "enois" em alta.
+				"gente", "galera", "pessoal", "mundo", "enois", "nois", "tipo", "coisa", "coisas", "negocio",
+				"negocios", "bagulho", "bora", "sla", "pdc", "pdp", "vlw", "flw", "obg", "blz", "eita", "vish",
+				"poxa", "caramba", "putz", "puts", "opa", "rsrs", "risos", "hahaha", "realmente", "basicamente",
+				"literalmente", "sinceramente", "certamente", "praticamente",
 				// Sobra de endereço quando o link já saiu: nada disso nomeia conversa.
 				"http", "https", "www", "ftp", "html", "htm", "php", "jsp", "utm", "href", "src", "cdn", "amp",
-				"nbsp", "link", "links",
-				// Chamada de conversa ("olha isso", "vejam"): o verbo não é o assunto.
-				"olha", "olhem", "vejam"));
+				"nbsp", "link", "links"));
 	}
 
 	/**
@@ -151,24 +190,14 @@ public class PapoAssuntoExtractor {
 		Map<String, Boolean> unicas = new LinkedHashMap<>();
 
 		List<Palavra> tokens = tokenizar(limpo);
-		List<String> palavras = new ArrayList<>();
-		for (Palavra token : tokens) {
-			if (palavraValida(token.texto())) {
-				palavras.add(token.texto());
+		List<Integer> elegiveis = new ArrayList<>();
+		for (int i = 0; i < tokens.size(); i++) {
+			if (palavraValida(tokens.get(i).texto())) {
+				elegiveis.add(i);
 			}
 		}
-		for (int i = 0; i < palavras.size(); i++) {
-			String atual = palavras.get(i);
-			unicas.putIfAbsent(atual, true);
-			// O bigrama é só de vizinhos de verdade: palavras elegíveis ADJACENTES no texto e
-			// diferentes entre si — pontuação entre elas quebra o par ("meetup, bora" não cola)
-			// e palavra repetida não vira par consigo mesma.
-			if (i + 1 < palavras.size()) {
-				String proxima = palavras.get(i + 1);
-				if (!atual.equals(proxima) && vizinhas(tokens, atual, proxima)) {
-					unicas.putIfAbsent(atual + " " + proxima, true);
-				}
-			}
+		for (String expressao : expressoes(tokens, elegiveis)) {
+			unicas.putIfAbsent(expressao, true);
 		}
 		for (String expressao : unicas.keySet()) {
 			falas.add(new Fala(expressao, fonte));
@@ -185,43 +214,95 @@ public class PapoAssuntoExtractor {
 	}
 
 	/**
-	 * As duas palavras são vizinhas no texto dobrado: entre o fim de uma e o começo da outra
-	 * não pode haver nada além de espaço. É essa a diferença entre "inteligencia artificial"
-	 * (um assunto) e "inteligencia, artificial" (duas palavras no mesmo texto).
+	 * As expressões do texto na ordem em que aparecem: o par de palavras elegíveis vizinhas e a
+	 * palavra que não entrou em par nenhum (a palavra do par também entra sozinha — é o cluster
+	 * de {@link #assuntos(List)} que apaga o unigrama coberto pela expressão).
+	 *
+	 * O pareamento é guloso, da esquerda para a direita, e NÃO SOBREPÕE: consumida a dupla, a
+	 * leitura continua depois dela — "meetup de rust na sexta" vira "meetup de rust" + "sexta",
+	 * e não dois pares contando a mesma conversa duas vezes.
 	 */
-	private static boolean vizinhas(List<Palavra> tokens, String primeira, String segunda) {
-		for (int i = 0; i + 1 < tokens.size(); i++) {
-			if (tokens.get(i).texto().equals(primeira) && tokens.get(i + 1).texto().equals(segunda)) {
-				return true;
+	private static List<String> expressoes(List<Palavra> tokens, List<Integer> elegiveis) {
+		List<String> expressoes = new ArrayList<>();
+		int i = 0;
+		while (i < elegiveis.size()) {
+			String atual = tokens.get(elegiveis.get(i)).texto();
+			if (i + 1 < elegiveis.size()) {
+				String proxima = tokens.get(elegiveis.get(i + 1)).texto();
+				String conector = conectorEntre(tokens, elegiveis.get(i), elegiveis.get(i + 1));
+				if (conector != null && !atual.equals(proxima)) {
+					expressoes.add(atual + conector + proxima);
+					expressoes.add(atual);
+					expressoes.add(proxima);
+					i += 2;
+					continue;
+				}
 			}
+			expressoes.add(atual);
+			i++;
 		}
-		return false;
+		return expressoes;
 	}
 
 	/**
-	 * O clustering das falas de um texto: cada bigrama funde os seus dois unigramas no cluster
-	 * dele e o assunto do cluster é o bigrama (a expressão mais longa vence). Unigrama que não
-	 * entrou em bigrama nenhum é cluster próprio. É o método que decide se "ia" e
-	 * "inteligencia artificial" contam juntos.
+	 * O que há entre as duas palavras: espaço quando as posições são vizinhas (o par direto),
+	 * o conector cercado de espaço quando há um único token entre elas e ele é conector de
+	 * expressão composta, e nulo quando nada cola — pontuação, palavra vazia que não é conector
+	 * ("feei o meetup") ou distância maior que um token ("praia com o cachorro").
+	 */
+	private static String conectorEntre(List<Palavra> tokens, int posicaoAtual, int posicaoProxima) {
+		if (posicaoProxima == posicaoAtual + 1) {
+			return " ";
+		}
+		if (posicaoProxima == posicaoAtual + 2 && CONECTORES.contains(tokens.get(posicaoAtual + 1).texto())) {
+			return " " + tokens.get(posicaoAtual + 1).texto() + " ";
+		}
+		return null;
+	}
+
+	/**
+	 * O clustering das falas de um texto: cada expressão composta funde as suas palavras no
+	 * cluster dela e o assunto do cluster é a expressão inteira (o mais específico vence).
+	 * Unigrama que não entrou em expressão nenhuma é cluster próprio. É o método que decide se
+	 * "inteligencia" e "inteligencia artificial" contam juntos — e o conector da expressão
+	 * ("mercado DE trabalho") não é palavra do cluster, é o que cola as duas.
 	 */
 	public List<String> assuntos(List<Fala> falas) {
 		Set<String> cobertas = new HashSet<>();
-		Set<String> bigramas = new LinkedHashSet<>();
+		Set<String> compostas = new LinkedHashSet<>();
 		for (Fala fala : falas) {
-			String[] palavras = fala.expressao().split("\\s+");
-			if (palavras.length > 1) {
-				bigramas.add(fala.expressao());
-				cobertas.add(palavras[0]);
-				cobertas.add(palavras[1]);
+			if (composta(fala.expressao())) {
+				compostas.add(fala.expressao());
+				cobertas.addAll(palavrasValidas(fala.expressao()));
 			}
 		}
-		Set<String> assuntos = new LinkedHashSet<>(bigramas);
+		Set<String> assuntos = new LinkedHashSet<>(compostas);
 		for (Fala fala : falas) {
 			if (!cobertas.contains(fala.expressao())) {
 				assuntos.add(fala.expressao());
 			}
 		}
 		return List.copyOf(assuntos);
+	}
+
+	/**
+	 * A expressão nomeia mais de uma palavra? Então é composta — é a mesma régua do domínio,
+	 * que olha se o subject tem espaço: expressão de duas palavras é a conversa específica,
+	 * palavra solta é a conversa de todo mundo.
+	 */
+	public static boolean composta(String expressao) {
+		return palavrasValidas(expressao).size() > 1;
+	}
+
+	/** As palavras ELEGÍVEIS de uma expressão: o conector de expressão composta não é palavra dela. */
+	private static List<String> palavrasValidas(String expressao) {
+		List<String> palavras = new ArrayList<>();
+		for (String palavra : expressao.trim().split("\\s+")) {
+			if (palavraValida(palavra)) {
+				palavras.add(palavra);
+			}
+		}
+		return palavras;
 	}
 
 	/**
@@ -237,12 +318,19 @@ public class PapoAssuntoExtractor {
 		if (palavras.length == 0 || palavras.length > MAXIMO_PALAVRAS_DECLARADO) {
 			return false;
 		}
-		for (String palavra : palavras) {
-			if (!palavraValida(palavra)) {
+		int validas = 0;
+		for (int i = 0; i < palavras.length; i++) {
+			if (palavraValida(palavras[i])) {
+				validas++;
+				continue;
+			}
+			// Fora das pontas, o token pode ser o conector da expressão composta
+			// ("mercado de trabalho"); abrindo ou fechando o assunto, nunca.
+			if (i == 0 || i == palavras.length - 1 || !CONECTORES.contains(palavras[i])) {
 				return false;
 			}
 		}
-		return true;
+		return validas > 0 && validas <= MAXIMO_PALAVRAS;
 	}
 
 	/** As palavras do texto dobradas, sem as vazias e com o tamanho mínimo. */

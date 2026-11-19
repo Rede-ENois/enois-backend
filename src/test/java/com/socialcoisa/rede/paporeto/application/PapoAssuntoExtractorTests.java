@@ -106,13 +106,81 @@ class PapoAssuntoExtractorTests {
 	}
 
 	@Test
+	void falaDaRedeNaoViraAssunto() {
+		// Foi o bug da tela: "gente", "sei", "tenho", "mundo", "ate" e "enois" apareciam como
+		// tendência própria. Eles não nomeiam conversa nenhuma — são a fala de todo mundo.
+		List<PapoAssuntoExtractor.Fala> falas = extractor.extrair(
+				"gente eu sei que tenho muito a dizer sobre o mundo, ate porque o enois e isso", "POST");
+
+		assertThat(falas).extracting(PapoAssuntoExtractor.Fala::expressao)
+			.doesNotContain("gente", "sei", "tenho", "mundo", "ate", "enois");
+	}
+
+	@Test
+	void textoSoDeConversaNaoGeraAssunto() {
+		// Conteúdo insuficiente: saudação, riso e abreviação não são conversa.
+		assertThat(extractor.extrair("sla, vamo bora nessa, blz?", "POST")).isEmpty();
+		assertThat(extractor.extrair("gente, olha isso, muito bom", "POST")).isEmpty();
+	}
+
+	@Test
+	void expressaoCompostaAtravessaOConectorEOLiga() {
+		// "mercado de trabalho" é UMA conversa: o "de" cola as duas palavras, e os unigramas
+		// ficam cobertos pela expressão (a tela não lista a mesma conversa três vezes).
+		List<String> assuntos = extractor.assuntos(
+				extractor.extrair("mercado de trabalho na minha cidade", "POST"));
+
+		assertThat(assuntos).containsExactly("mercado de trabalho", "cidade");
+	}
+
+	@Test
+	void acentoNaExpressaoCompostaNaoAtrapalha() {
+		List<String> assuntos = extractor.assuntos(
+				extractor.extrair("Inteligência de dados é o assunto da semana", "POST"));
+
+		assertThat(assuntos).contains("inteligencia de dados");
+		assertThat(assuntos).doesNotContain("inteligencia", "dados");
+	}
+
+	@Test
+	void pareamentoNaoSobrepoeAExpressao() {
+		// Cada palavra entra em uma expressão só: "meetup de rust na sexta" é a conversa do
+		// meetup (com o "na" não colando o "rust" no "sexta"), e não dois pares contando a
+		// mesma publicação duas vezes.
+		List<String> assuntos = extractor.assuntos(
+				extractor.extrair("meetup de rust na sexta", "POST"));
+
+		assertThat(assuntos).containsExactly("meetup de rust", "sexta");
+	}
+
+	@Test
+	void conectorForaDaListaNaoColaPalavra() {
+		// "com" não é conector de expressão composta: "inteligencia com artificial" são duas
+		// palavras no mesmo texto, não um assunto.
+		List<String> assuntos = extractor.assuntos(
+				extractor.extrair("inteligencia com artificial", "POST"));
+
+		assertThat(assuntos).containsExactly("inteligencia", "artificial");
+	}
+
+	@Test
 	void assuntoValidoRecusaRuidoNaLeitura() {
 		assertThat(extractor.assuntoValido("http")).isFalse();
 		assertThat(extractor.assuntoValido("kkkk")).isFalse();
 		assertThat(extractor.assuntoValido("2026")).isFalse();
 		assertThat(extractor.assuntoValido("")).isFalse();
+		assertThat(extractor.assuntoValido("gente")).isFalse();
 		assertThat(extractor.assuntoValido("inteligencia artificial")).isTrue();
 		assertThat(extractor.assuntoValido("home office")).isTrue();
+	}
+
+	@Test
+	void assuntoValidoAceitaOConectorSoNoMeioDaExpressao() {
+		assertThat(extractor.assuntoValido("mercado de trabalho")).isTrue();
+		assertThat(extractor.assuntoValido("de trabalho")).isFalse();
+		assertThat(extractor.assuntoValido("mercado de")).isFalse();
+		assertThat(extractor.assuntoValido("mercado bla trabalho")).isFalse();
+		assertThat(extractor.assuntoValido("de")).isFalse();
 	}
 
 }

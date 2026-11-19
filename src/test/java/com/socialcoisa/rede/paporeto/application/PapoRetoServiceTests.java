@@ -60,10 +60,20 @@ class PapoRetoServiceTests {
 				BlockedUsersReader.none(), Clock.fixed(AGORA, ZoneOffset.UTC));
 	}
 
+	/**
+	 * O assunto como o corte grava: as contagens da tela, a janela do escopo e as duas potências
+	 * medidas no corte. A janela de publicações é larga de propósito — é ela que deixa a régua de
+	 * discriminação julgar, como num corte de verdade.
+	 */
+	private static PapoAssunto agregado(String subject, long falasPost, long pessoas, double potencia,
+			double potenciaAntes) {
+		return new PapoAssunto(subject, falasPost, 0, pessoas, 0, AGORA, pessoas, 400, potencia, potenciaAntes);
+	}
+
 	@Test
 	void assuntoSemGenteSuficienteNaoEntraNoRanking() {
-		repositorio.assuntos.add(new PapoAssunto("meetup", 10, 0, 4, 0, AGORA));
-		repositorio.assuntos.add(new PapoAssunto("violao", 10, 0, 6, 0, AGORA));
+		repositorio.assuntos.add(agregado("meetup", 10, 4, 9, 9));
+		repositorio.assuntos.add(agregado("violao", 10, 6, 9, 9));
 
 		List<PapoRetoService.SubjectView> ranking = service().ranking();
 
@@ -74,9 +84,9 @@ class PapoRetoServiceTests {
 
 	@Test
 	void rankingOrdenaPorPontuacaoEEmpataPeloSubject() {
-		repositorio.assuntos.add(new PapoAssunto("zebra", 8, 0, 8, 0, AGORA));
-		repositorio.assuntos.add(new PapoAssunto("meetup", 10, 0, 10, 5, AGORA));
-		repositorio.assuntos.add(new PapoAssunto("violao", 10, 0, 10, 5, AGORA));
+		repositorio.assuntos.add(agregado("zebra", 8, 8, 1.0, 1.0));
+		repositorio.assuntos.add(agregado("meetup", 10, 10, 10.0, 10.0));
+		repositorio.assuntos.add(agregado("violao", 10, 10, 10.0, 10.0));
 
 		List<PapoRetoService.SubjectView> ranking = service().ranking();
 
@@ -87,8 +97,8 @@ class PapoRetoServiceTests {
 
 	@Test
 	void rankingDaComunidadeLeOEscopoDaComunidade() {
-		repositorio.assuntosPorEscopo.put("com_1", List.of(new PapoAssunto("mutirao", 10, 0, 7, 0, AGORA)));
-		repositorio.assuntos.add(new PapoAssunto("meetup", 10, 0, 10, 0, AGORA));
+		repositorio.assuntosPorEscopo.put("com_1", List.of(agregado("mutirao", 10, 7, 9, 9)));
+		repositorio.assuntos.add(agregado("meetup", 10, 10, 9, 9));
 
 		assertThat(service().ranking()).extracting(PapoRetoService.SubjectView::subject).containsExactly("meetup");
 		assertThat(service().rankingDaComunidade("com_1"))
@@ -100,10 +110,66 @@ class PapoRetoServiceTests {
 	void rankingNaoListaRuidoQueJaEstavaGravado() {
 		// O "http" entrou antes da correção do extrator e ainda está na janela: a régua da
 		// leitura tira da lista sem esperar a fala expirar.
-		repositorio.assuntos.add(new PapoAssunto("http", 10, 0, 9, 0, AGORA));
-		repositorio.assuntos.add(new PapoAssunto("meetup", 10, 0, 9, 0, AGORA));
+		repositorio.assuntos.add(agregado("http", 10, 9, 9, 9));
+		repositorio.assuntos.add(agregado("meetup", 10, 9, 9, 9));
 
 		assertThat(service().ranking()).extracting(PapoRetoService.SubjectView::subject).containsExactly("meetup");
+	}
+
+	@Test
+	void palavraOnipresenteNaoEntraMasExpressaoCompostaEntra() {
+		// "vida" em 100 das 400 publicações da janela: fala comum da rede, não conversa — mesmo
+		// com 30 pessoas e potência alta. A expressão composta onipresente fica (com metade da
+		// potência), porque conversa grande e legítima não pode desaparecer.
+		repositorio.assuntos.add(new PapoAssunto("vida", 200, 0, 30, 10, AGORA, 100, 400, 40.0, 30.0));
+		repositorio.assuntos.add(new PapoAssunto("mercado de trabalho", 200, 0, 30, 10, AGORA, 100, 400, 40.0, 30.0));
+
+		List<PapoRetoService.SubjectView> ranking = service().ranking();
+
+		assertThat(ranking).extracting(PapoRetoService.SubjectView::subject).containsExactly("mercado de trabalho");
+		assertThat(ranking.get(0).pontuacao()).isEqualTo(20.0);
+	}
+
+	@Test
+	void palavraRaraValeMaisQueAPalavraComumDeMesmaPotencia() {
+		// Mesma potência, mesma gente: a que aparece em menos publicações da janela é a conversa
+		// da comunidade; a que aparece em muitas é a fala de todo mundo.
+		repositorio.assuntos.add(new PapoAssunto("pangolim", 30, 0, 8, 2, AGORA, 8, 400, 12.0, 12.0));
+		repositorio.assuntos.add(new PapoAssunto("pessoa", 30, 0, 8, 2, AGORA, 50, 400, 12.0, 12.0));
+
+		List<PapoRetoService.SubjectView> ranking = service().ranking();
+
+		assertThat(ranking).extracting(PapoRetoService.SubjectView::subject)
+			.containsExactly("pangolim", "pessoa");
+		assertThat(ranking.get(0).pontuacao()).isGreaterThan(ranking.get(1).pontuacao());
+	}
+
+	@Test
+	void linhaDaReguaAntigaContinuaSendoLida() {
+		// A linha gravada antes da virada não tem potência nem publicações: ela é lida pela régua
+		// antiga até o primeiro corte reescrevê-la, e não some da tela no meio do caminho.
+		String estadoAntigo = "{\"falasPost\":10,\"falasComentario\":0,\"pessoas\":9,\"falasUltimaHora\":0,"
+				+ "\"ultimaFalaEpoch\":" + AGORA.getEpochSecond() + "}";
+		repositorio.assuntos.add(PapoAssunto.de("meetup", estadoAntigo));
+
+		List<PapoRetoService.SubjectView> ranking = service().ranking();
+
+		assertThat(ranking).hasSize(1);
+		assertThat(ranking.get(0).subject()).isEqualTo("meetup");
+		assertThat(ranking.get(0).pontuacao()).isGreaterThan(0);
+	}
+
+	@Test
+	void statusECrescimentoSaemDaTrajetoriaMedidaNoCorte() {
+		repositorio.assuntos.add(agregado("nascendo", 10, 10, 40.0, 1.0));
+		repositorio.assuntos.add(agregado("sustentado", 10, 10, 40.0, 39.0));
+
+		List<PapoRetoService.SubjectView> ranking = service().ranking();
+
+		assertThat(ranking.get(0).subject()).isEqualTo("nascendo");
+		assertThat(ranking.get(0).status()).isEqualTo("EMERGENTE");
+		assertThat(ranking.get(1).status()).isEqualTo("PERSISTENTE");
+		assertThat(ranking.get(1).crescimento()).isLessThan(10.0);
 	}
 
 	@Test

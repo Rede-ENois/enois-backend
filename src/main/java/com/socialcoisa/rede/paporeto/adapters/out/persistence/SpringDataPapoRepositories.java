@@ -12,10 +12,15 @@ import org.springframework.data.repository.query.Param;
 
 interface SpringDataPapoFalaJpaRepository extends JpaRepository<PapoFalaJpaEntity, String> {
 
+	/**
+	 * A janela em páginas, da fala mais antiga para a mais nova. O `id` entra na ordenação só
+	 * para desempatar as falas do mesmo bucket: sem desempate, a paginação da mesma hora pode
+	 * repetir uma linha e pular outra entre páginas.
+	 */
 	@Query("""
 			select f from PapoFalaJpaEntity f
 			where f.hora >= :de and f.hora < :ate
-			order by f.hora asc
+			order by f.hora asc, f.id asc
 			""")
 	List<PapoFalaJpaEntity> falasEntre(@Param("de") Instant de, @Param("ate") Instant ate, Pageable pageable);
 
