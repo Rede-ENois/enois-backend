@@ -105,6 +105,67 @@ class CommentContractTests {
 			.andExpect(jsonPath("$.items.size()").value(2));
 	}
 
+	@Test
+	void mesmoComentarioEmPostsDiferentesNaoEDuplicado() throws Exception {
+		var author = auth.authenticate("ccontext_author");
+		String primeiro = publish(author, "Primeiro destino do comentario contextual.");
+		String segundo = publish(author, "Segundo destino do comentario contextual.");
+		for (String postId : java.util.List.of(primeiro, segundo)) {
+			mockMvc.perform(post("/feed/posts/" + postId + "/comments")
+					.header("X-Session-Token", author.token())
+					.header("Idempotency-Key", "ccontext-" + postId)
+					.contentType(MediaType.APPLICATION_JSON)
+					.content(objectMapper.writeValueAsString(Map.of("content", "Parabens!"))))
+				.andExpect(status().isCreated());
+			mockMvc.perform(get("/feed/posts/" + postId + "/comments"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.items.size()").value(1))
+				.andExpect(jsonPath("$.items[0].content").value("Parabens!"));
+		}
+	}
+
+	@Test
+	void respostasIguaisEmConversasDiferentesDoMesmoPostSaoAceitas() throws Exception {
+		var autor = auth.authenticate("ccontext_replies");
+		String postId = publish(autor, "Post com duas conversas independentes.");
+		String primeira = comentar(autor, postId, Map.of("content", "Primeira pergunta"))
+			.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+		String segunda = comentar(autor, postId, Map.of("content", "Segunda pergunta"))
+			.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+		for (String resposta : java.util.List.of(primeira, segunda)) {
+			String id = objectMapper.readTree(resposta).path("id").asString();
+			var corpo = Map.<String, Object>of("content", "Obrigado!", "parentCommentId", id);
+			comentar(autor, postId, corpo).andExpect(status().isCreated());
+			comentar(autor, postId, corpo).andExpect(status().isConflict())
+				.andExpect(jsonPath("$.code").value("DUPLICATE_CONTENT"));
+		}
+	}
+
+	@Test
+	void publicacaoEComentarioComMesmoTextoNaoColidem() throws Exception {
+		var autor = auth.authenticate("ccontext_post");
+		String texto = "Mesmo texto em publicacao e comentario.";
+		String postId = publish(autor, texto);
+		comentar(autor, postId, Map.of("content", texto)).andExpect(status().isCreated());
+	}
+
+	@Test
+	void respostaInvalidaNaoBloqueiaComentarioValidoPosterior() throws Exception {
+		var autor = auth.authenticate("ccontext_invalid");
+		String postId = publish(autor, "Post para corrigir uma resposta invalida.");
+		comentar(autor, postId, Map.of("content", "Minha resposta", "parentCommentId", "comentario-inexistente"))
+			.andExpect(status().isNotFound());
+		comentar(autor, postId, Map.of("content", "Minha resposta")).andExpect(status().isCreated());
+	}
+
+	private org.springframework.test.web.servlet.ResultActions comentar(TestAuthHelper.AuthSession autor,
+			String postId, Map<String, Object> corpo) throws Exception {
+		return mockMvc.perform(post("/feed/posts/" + postId + "/comments")
+			.header("X-Session-Token", autor.token())
+			.header("Idempotency-Key", java.util.UUID.randomUUID().toString())
+			.contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(corpo)));
+	}
+
 	private String publish(TestAuthHelper.AuthSession session, String content) throws Exception {
 		MvcResult result = mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", session.token())
