@@ -27,7 +27,12 @@ class MediaImageModerationServiceTests {
 		new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
 
 	private MediaImageModerationService service(boolean enabled, double threshold) {
-		return new MediaImageModerationService(provider, reviewer, enabled, threshold,
+		return service(enabled, threshold, true);
+	}
+
+	/** Variante com o controle de continuidade por falha técnica explícito (#486). */
+	private MediaImageModerationService service(boolean enabled, double threshold, boolean failOpen) {
+		return new MediaImageModerationService(provider, reviewer, enabled, threshold, failOpen,
 			comRegistry(registry));
 	}
 
@@ -104,25 +109,29 @@ class MediaImageModerationServiceTests {
 	}
 
 	@Test
-	void doesNotApproveAnImageWhenSemanticReviewIsInconclusive() throws Exception {
+	void letsAnUnflaggedImageThroughWhenTheSemanticReviewerIsInconclusive() throws Exception {
 		when(provider.getIfAvailable()).thenReturn(classifier);
 		when(classifier.assess(new byte[] { 1 }, "image/jpeg")).thenReturn(still(0.95));
 		when(reviewer.review(new byte[] { 1 })).thenReturn(Optional.of(Result.UNSURE));
 
-		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg"))
-			.isInstanceOf(ApiException.class)
-			.extracting("code").isEqualTo("IMAGE_MODERATION_UNAVAILABLE");
+		// Falha técnica não bloqueia: o classificador apontou risco, mas o revisor não confirmou
+		// conteúdo proibido — a imagem segue para as demais camadas (#486).
+		service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg");
+
+		assertThat(etapa("error")).isNotNull();
+		assertThat(etapa("error").count()).isEqualTo(1);
 	}
 
 	@Test
-	void doesNotApproveAFlaggedImageWhenTheReviewerDoesNotAnswer() throws Exception {
+	void letsAFlaggedImageThroughWhenTheReviewerDoesNotAnswer() throws Exception {
 		when(provider.getIfAvailable()).thenReturn(classifier);
 		when(classifier.assess(new byte[] { 1 }, "image/jpeg")).thenReturn(still(0.95));
 		when(reviewer.review(new byte[] { 1 })).thenReturn(Optional.empty());
 
-		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg"))
-			.isInstanceOf(ApiException.class)
-			.extracting("code").isEqualTo("IMAGE_MODERATION_UNAVAILABLE");
+		service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg");
+
+		assertThat(etapa("error")).isNotNull();
+		assertThat(etapa("error").count()).isEqualTo(1);
 	}
 
 	@Test
@@ -141,22 +150,33 @@ class MediaImageModerationServiceTests {
 	}
 
 	@Test
-	void failsClosedWhenClassifierBeanIsMissing() {
-		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg"))
+	void letsTheUploadThroughWhenClassifierBeanIsMissing() {
+		// Sem classificador instalado, a falha técnica segue para as demais camadas em vez de
+		// barrar a publicação (#486).
+		service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg");
+
+		assertThat(etapa("error")).isNotNull();
+		assertThat(etapa("error").count()).isEqualTo(1);
+	}
+
+	@Test
+	void blocksWhenClassifierBeanIsMissingAndContinuityIsOff() {
+		assertThatThrownBy(() -> service(true, 0.70, false).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg"))
 			.isInstanceOf(ApiException.class)
 			.extracting("code").isEqualTo("IMAGE_MODERATION_UNAVAILABLE");
 	}
 
 	@Test
-	void failsClosedWhenClassifierCannotDecodeTheImage() throws Exception {
+	void letsADecodeFailureThroughWhenNoReviewerCanBeReached() throws Exception {
 		when(provider.getIfAvailable()).thenReturn(classifier);
 		when(classifier.assess(new byte[] { 1 }, "image/webp"))
 			.thenThrow(new IOException("invalid image"));
 		when(reviewer.review(new byte[] { 1 })).thenReturn(Optional.of(Result.UNSURE));
 
-		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/webp"))
-			.isInstanceOf(ApiException.class)
-			.extracting("code").isEqualTo("IMAGE_CANNOT_BE_VERIFIED");
+		service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/webp");
+
+		assertThat(etapa("error")).isNotNull();
+		assertThat(etapa("error").count()).isEqualTo(1);
 	}
 
 	/**
@@ -188,25 +208,39 @@ class MediaImageModerationServiceTests {
 	}
 
 	@Test
-	void failsClosedWhenTheReviewerDoesNotAnswerAfterADecodeFailure() throws Exception {
+	void letsADecodeFailureThroughWhenTheReviewerDoesNotAnswer() throws Exception {
 		when(provider.getIfAvailable()).thenReturn(classifier);
 		when(classifier.assess(new byte[] { 1 }, "image/avif"))
 			.thenThrow(new IOException("no decoder"));
 		when(reviewer.review(new byte[] { 1 })).thenReturn(Optional.empty());
 
-		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/avif"))
+		service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/avif");
+
+		assertThat(etapa("error")).isNotNull();
+		assertThat(etapa("error").count()).isEqualTo(1);
+	}
+
+	@Test
+	void blocksADecodeFailureWhenContinuityIsOff() throws Exception {
+		when(provider.getIfAvailable()).thenReturn(classifier);
+		when(classifier.assess(new byte[] { 1 }, "image/avif"))
+			.thenThrow(new IOException("no decoder"));
+		when(reviewer.review(new byte[] { 1 })).thenReturn(Optional.empty());
+
+		assertThatThrownBy(() -> service(true, 0.70, false).verifyBeforeStorage(new byte[] { 1 }, "image/avif"))
 			.isInstanceOf(ApiException.class)
 			.extracting("code").isEqualTo("IMAGE_CANNOT_BE_VERIFIED");
 	}
 
 	@Test
-	void failsClosedWhenClassifierReturnsInvalidScore() throws Exception {
+	void letsThroughWhenClassifierReturnsInvalidScore() throws Exception {
 		when(provider.getIfAvailable()).thenReturn(classifier);
 		when(classifier.assess(new byte[] { 1 }, "image/jpeg")).thenReturn(still(Double.NaN));
 
-		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg"))
-			.isInstanceOf(ApiException.class)
-			.extracting("code").isEqualTo("IMAGE_MODERATION_UNAVAILABLE");
+		service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg");
+
+		assertThat(etapa("error")).isNotNull();
+		assertThat(etapa("error").count()).isEqualTo(1);
 	}
 
 	@Test
@@ -244,12 +278,24 @@ class MediaImageModerationServiceTests {
 	}
 
 	@Test
-	void falhaTecnicaFicaNaSerieComoErrorSemDeixarDeSer503() throws Exception {
+	void falhaTecnicaFicaNaSerieComoInconclusivoSemBarrarOPost() throws Exception {
 		when(provider.getIfAvailable()).thenReturn(classifier);
 		when(classifier.assess(new byte[] { 1 }, "image/png"))
 			.thenThrow(new IllegalStateException("sessao do modelo estourou"));
 
-		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/png"))
+		service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/png");
+
+		assertThat(etapa("error")).isNotNull();
+		assertThat(etapa("error").count()).isEqualTo(1);
+	}
+
+	@Test
+	void falhaTecnicaContinua503QuandoAContinuidadeEstaDesligada() throws Exception {
+		when(provider.getIfAvailable()).thenReturn(classifier);
+		when(classifier.assess(new byte[] { 1 }, "image/png"))
+			.thenThrow(new IllegalStateException("sessao do modelo estourou"));
+
+		assertThatThrownBy(() -> service(true, 0.70, false).verifyBeforeStorage(new byte[] { 1 }, "image/png"))
 			.isInstanceOf(ApiException.class)
 			.extracting("code").isEqualTo("IMAGE_MODERATION_UNAVAILABLE");
 
