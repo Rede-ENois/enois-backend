@@ -66,4 +66,10 @@ class AuditLogJpaEntity {
 	Instant createdAt() {
 		return createdAt;
 	}
+
+	/** O que a linha prova, para quem lê pelo alvo em vez de pelo ator (disponibilidade do nó). */
+	com.socialcoisa.rede.feed.application.port.out.AuditLog toRecord() {
+		return new com.socialcoisa.rede.feed.application.port.out.AuditLog(id, actorId, action, targetId, metadata,
+			createdAt);
+	}
 }

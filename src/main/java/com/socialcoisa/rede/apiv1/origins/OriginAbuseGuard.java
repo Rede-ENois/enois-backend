@@ -3,7 +3,6 @@ package com.socialcoisa.rede.apiv1.origins;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
@@ -21,9 +20,9 @@ import org.springframework.stereotype.Component;
  * 23/10 — o ataque veio da própria origem do app, o guard contou as recusas do ATACANTE
  * junto com as dos usuários e bloqueou a origem de todo mundo.
  *
- * O que impede a repetição: as origens do app (CORS_ALLOWED_ORIGINS + trusted) são
- * consideradas confiáveis aqui e nunca acumulam bloqueio — só origem de TERCEIRO
- * cadastrada pode ser derrubada.
+ * O que impede a repetição: as origens do app ({@link AppOriginRegistry} — a mesma lista do
+ * portão e do CORS) são consideradas confiáveis aqui e nunca acumulam bloqueio — só origem de
+ * TERCEIRO cadastrada pode ser derrubada.
  */
 @Component
 class OriginAbuseGuard {
@@ -31,26 +30,19 @@ class OriginAbuseGuard {
 	private static final Logger LOG = LoggerFactory.getLogger(OriginAbuseGuard.class);
 
 	private final DeveloperOriginService origins;
-	private final Set<String> appOrigins;
+	/** Origem do proprio app: a mesma lista que o portao e o CORS usam (fonte unica). */
+	private final AppOriginRegistry appOrigins;
 	private final int maxFailures;
 	private final long windowMs;
 	private final long blockMinutes;
 	private final Map<String, Deque<Long>> failures = new ConcurrentHashMap<>();
 
-	OriginAbuseGuard(DeveloperOriginService origins,
-			@Value("${rede.cors.allowed-origins:https://enois.ia.br}") String allowedOrigins,
-			@Value("${rede.origins.trusted:https://*.b7cloud.com.br}") String trustedPatterns,
+	OriginAbuseGuard(DeveloperOriginService origins, AppOriginRegistry appOrigins,
 			@Value("${rede.origins.suspicious.max-failures:60}") int maxFailures,
 			@Value("${rede.origins.suspicious.window-seconds:300}") long windowSeconds,
 			@Value("${rede.origins.suspicious.block-minutes:30}") long blockMinutes) {
 		this.origins = origins;
-		// `OriginPatterns.parse` devolve conjunto IMUTAVEL: juntar as duas listas exige uma copia
-		// mutavel primeiro (o `addAll` direto estourava UnsupportedOperationException e derrubava
-		// o boot do app inteiro).
-		java.util.Set<String> appOrigins = new java.util.HashSet<>(
-			com.socialcoisa.rede.apiv1.origins.OriginPatterns.parse(allowedOrigins));
-		appOrigins.addAll(com.socialcoisa.rede.apiv1.origins.OriginPatterns.parse(trustedPatterns));
-		this.appOrigins = java.util.Set.copyOf(appOrigins);
+		this.appOrigins = appOrigins;
 		this.maxFailures = maxFailures;
 		this.windowMs = Math.max(1, windowSeconds) * 1000;
 		this.blockMinutes = Math.max(1, blockMinutes);
@@ -62,8 +54,7 @@ class OriginAbuseGuard {
 		}
 		// Origem do próprio app (usuários da plataforma compartilham a origem): o tráfego
 		//legítimo dela (expiração de sessão gera 401 natural) nunca pode fechá-la.
-		if (com.socialcoisa.rede.apiv1.origins.OriginPatterns.matches(
-				origin.toLowerCase(java.util.Locale.ROOT), appOrigins)) {
+		if (appOrigins.isTrusted(origin.trim().toLowerCase(java.util.Locale.ROOT))) {
 			return;
 		}
 		long now = System.currentTimeMillis();

@@ -9,6 +9,12 @@ import com.socialcoisa.rede.shared.web.ApiException;
 
 public record TrendingCursor(Instant windowEnd, int reactions, Instant createdAt, String postId) {
 
+	/** Teto do cursor aceito (ver CursorCodec.MAX_CURSOR_LENGTH). */
+	static final int MAX_CURSOR_LENGTH = 256;
+
+	/** Alfabeto base64url; recusar antes do decode evita passar lixo ao decoder nativo. */
+	private static final java.util.regex.Pattern BASE64URL = java.util.regex.Pattern.compile("[A-Za-z0-9_-]+={0,2}");
+
 	public String encode() {
 		String value = "1|" + windowEnd + "|" + reactions + "|" + createdAt + "|" + postId;
 		return Base64.getUrlEncoder().withoutPadding().encodeToString(value.getBytes(StandardCharsets.UTF_8));
@@ -16,6 +22,9 @@ public record TrendingCursor(Instant windowEnd, int reactions, Instant createdAt
 
 	public static TrendingCursor decode(String value) {
 		if (value == null || value.isBlank()) return null;
+		if (value.length() > MAX_CURSOR_LENGTH || !BASE64URL.matcher(value).matches()) {
+			throw new ApiException(400, "INVALID_CURSOR", "Cursor invalido.");
+		}
 		try {
 			String[] parts = new String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8).split("\\|", -1);
 			if (parts.length != 5 || !parts[0].equals("1")) throw new IllegalArgumentException();

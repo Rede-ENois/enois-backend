@@ -15,6 +15,8 @@ public interface ScheduledPostRepository {
 
 	Optional<ScheduledPost> findById(String id);
 
+	Optional<ScheduledPost> findByIdForUpdate(String id);
+
 	void delete(String id);
 
 	/** Vencidos e ainda tentáveis (tentativas abaixo do teto), do mais antigo ao mais novo. */

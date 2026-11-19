@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.shared.sanctions;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -51,6 +52,9 @@ class WriteGateCoverageTests {
 	private SanctionService sanctions;
 
 	@Autowired
+	private com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository sessions;
+
+	@Autowired
 	private JdbcTemplate jdbc;
 
 	private TestAuthHelper auth;
@@ -76,6 +80,31 @@ class WriteGateCoverageTests {
 					"topicId", topicId, "content", "publicacao de conta restrita", "mediaIds", List.of()))))
 			.andExpect(status().isForbidden())
 			.andExpect(jsonPath("$.code").value("ACCOUNT_RESTRICTED"));
+	}
+
+	/**
+	 * A punição que o usuário não consegue ver vira ticket de suporte: a recusa tem que dizer o
+	 * que a conta é (restrita/suspensa/banida), o motivo e, na suspensão, até quando revisa.
+	 */
+	@Test
+	void recusaDeContaPunidaDizMotivoEPrazo() throws Exception {
+		TestAuthHelper.AuthSession author = auth.authenticate("portao-restrita-motivo");
+		String groupId = createGroup(author, "Grupo do portao (motivo)");
+		String topicId = createTopic(author, groupId);
+
+		sanctions.restrictUser(author.userId(), "test-portao-motivo", "Spam repetido na rede.");
+
+		mockMvc.perform(post("/groups/" + groupId + "/posts")
+				.header("X-Session-Token", author.token())
+				.header("Idempotency-Key", "portao-grupo-motivo")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+					"topicId", topicId, "content", "publicacao de conta restrita", "mediaIds", List.of()))))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("ACCOUNT_RESTRICTED"))
+			.andExpect(jsonPath("$.message").value(
+				org.hamcrest.Matchers.containsString("restrita por moderação")))
+			.andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("Motivo: Spam repetido na rede.")));
 	}
 
 	@Test

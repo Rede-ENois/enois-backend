@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.feed.application.port.in.GetFeedUseCase;
 import com.socialcoisa.rede.feed.application.port.in.GetPostUseCase;
+import com.socialcoisa.rede.feed.application.port.in.GetPostsUseCase;
 import com.socialcoisa.rede.feed.application.port.in.GetProfilePostsUseCase;
 import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.out.ConnectionGraphRepository;
@@ -48,7 +49,7 @@ import com.socialcoisa.rede.shared.blocks.BlockedUsersReader;
 import com.socialcoisa.rede.shared.web.CursorCodec;
 
 @Service
-public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, GetPostUseCase {
+public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, GetPostUseCase, GetPostsUseCase {
 
 	private final PostRepository postRepository;
 	private final ArticleRepository articleRepository;
@@ -71,6 +72,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	private final com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries;
 	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
 	private final com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications;
+	private final java.time.Clock clock;
 
 	private static final Instant DEFAULT_BEFORE = Instant.parse("9999-12-31T23:59:59Z");
 
@@ -83,6 +85,12 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 
 	/** Página padrão quando o cliente não manda `limit` ou manda um valor inválido. */
 	private static final int DEFAULT_PAGE_SIZE = 10;
+
+	/**
+	 * Nome de exibição de conta banida (issue #1021): o conteúdo fica — sumir deixava o fio
+	 * desconexo — mas quem leu não vê nome, @, avatar nem badges de quem foi banido.
+	 */
+	static final String BANNED_DISPLAY_NAME = "Usuário";
 
 	public GetFeedService(PostRepository postRepository, ArticleRepository articleRepository,
 			FeedCacheRepository feedCacheRepository,
@@ -99,7 +107,9 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			com.socialcoisa.rede.feed.application.port.out.PostRepostRepository postReposts,
 			com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase mediaSummaries,
 			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate,
-			com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications) {
+			com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications,
+			java.time.Clock clock) {
+		this.clock = clock;
 		this.mediaSummaries = mediaSummaries;
 		this.sanctionGate = sanctionGate;
 		this.identityVerifications = identityVerifications;
@@ -405,6 +415,50 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 
 	@Override
 	@Transactional(readOnly = true)
+	public List<PostView> getPosts(List<String> postIds, UserId viewerId) {
+		if (postIds == null || postIds.isEmpty()) {
+			return List.of();
+		}
+		List<PostId> ids = postIds.stream().distinct().map(PostId::new).toList();
+		Map<PostId, Post> porId = postRepository.findByIds(ids).stream()
+			.collect(Collectors.toMap(Post::id, Function.identity()));
+		List<Post> ativos = ids.stream()
+			.map(porId::get)
+			.filter(Objects::nonNull)
+			.filter(Post::isActive)
+			.filter(post -> !post.expired(clock.instant()))
+			.toList();
+		if (ativos.isEmpty()) {
+			return List.of();
+		}
+		Set<String> ocultos = viewerId == null ? Set.of() : blockedUsersReader.hiddenIdsFor(viewerId.value());
+		List<Post> candidatos = ativos.stream()
+			.filter(post -> !ocultos.contains(post.authorId().value()))
+			.toList();
+		Set<String> comunidades = candidatos.stream()
+			.filter(post -> post.channelId() != null && post.communityId() != null)
+			.map(Post::communityId)
+			.collect(Collectors.toSet());
+		Map<String, PostCommunityReader.CommunityRef> referencias = viewerId == null || comunidades.isEmpty()
+			? Map.of() : postCommunityReader.byIds(comunidades, viewerId.value());
+		List<Post> visiveis = candidatos.stream()
+			.filter(post -> post.channelId() == null || (post.communityId() != null
+				&& referencias.containsKey(post.communityId())
+				&& referencias.get(post.communityId()).joined()))
+			.toList();
+		Map<String, PostView> viewsPorId = enrich(visiveis, viewerId, ocultos).stream()
+			.collect(Collectors.toMap(PostView::id, Function.identity(), (primeiro, repetido) -> primeiro));
+		List<PostView> resultado = new ArrayList<>();
+		for (Post post : visiveis) {
+			PostView view = viewsPorId.getOrDefault(post.id().value(), PostView.from(post));
+			resultado.add(view.withPageHtml(post.pageHtml())
+				.withArticleBody(articleRepository.findBody(post.id()).orElse(null)));
+		}
+		return List.copyOf(resultado);
+	}
+
+	@Override
+	@Transactional(readOnly = true)
 	public void requireVisible(String postId, UserId viewerId) {
 		visiblePost(postId, viewerId);
 	}
@@ -417,6 +471,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	private Post visiblePost(String postId, UserId viewerId) {
 		Post post = postRepository.findById(new PostId(postId))
 			.filter(Post::isActive)
+			// Link antigo ou consulta direta não ressuscita efêmero vencido: 404, como inexistente.
+			.filter(candidato -> !candidato.expired(clock.instant()))
 			.orElseThrow(() -> new ApiException(404, "POST_NOT_FOUND", "Post nao encontrado."));
 		// Link direto (notificacao antiga, por exemplo) tambem respeita o bloqueio.
 		if (viewerId != null && blockedUsersReader.hiddenIdsFor(viewerId.value()).contains(post.authorId().value())) {
@@ -440,8 +496,10 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		List<Post> posts = postRepository.findByIds(postIds).stream()
 			.filter(Post::isActive).toList();
 		List<PostView> enriched = enrich(posts, userId);
+		Map<String, PostView> byId = enriched.stream()
+			.collect(Collectors.toMap(PostView::id, Function.identity(), (first, duplicate) -> first));
 		List<PostView> ordered = savedIds.stream()
-			.map(id -> enriched.stream().filter(p -> p.id().equals(id)).findFirst().orElse(null))
+			.map(byId::get)
 			.filter(java.util.Objects::nonNull)
 			.toList();
 		return new FeedPage(ordered, null);
@@ -527,10 +585,16 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		if (posts.isEmpty()) {
 			return List.of();
 		}
+		// Efêmero vencido sai da listagem mesmo antes do worker passar (janela de até 5 min).
+		java.time.Instant now = clock.instant();
+		List<Post> unexpired = posts.stream().filter(post -> !post.expired(now)).toList();
+		if (unexpired.isEmpty()) {
+			return List.of();
+		}
 		Set<String> hidden = knownHidden != null ? knownHidden
 			: blockedUsersReader.hiddenIdsFor(currentUserId != null ? currentUserId.value() : null);
-		List<Post> visible = hidden.isEmpty() ? posts
-			: posts.stream().filter(post -> !hidden.contains(post.authorId().value())).toList();
+		List<Post> visible = hidden.isEmpty() ? unexpired
+			: unexpired.stream().filter(post -> !hidden.contains(post.authorId().value())).toList();
 		if (visible.isEmpty()) {
 			return List.of();
 		}
@@ -539,6 +603,10 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			.collect(Collectors.toSet());
 		Map<String, UserProfile> profiles = userProfileRepository.findAllByIds(authorIds).stream()
 			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
+		// Banido vira "Usuário" (issue #1021): o post/comentário continua — sumir deixava o fio
+		// desconexo — mas sem nome, @, avatar nem badges, que é a anonimização que o perfil já
+		// aplica. Em lote, uma consulta por página.
+		Set<String> bannedAuthors = sanctionGate.bannedAmong(profiles.keySet());
 		// Quem tem selo ativo ganha a tag "Contribuinte" junto do nome, em lote.
 		Set<String> contributorIds = userSeals.findActiveUserIds(profiles.keySet());
 		// Selo "Humanidade Comprovada": também em lote (uma consulta por página).
@@ -579,12 +647,17 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		Map<String, List<String>> pollOptions = polls.optionsByPostIds(postIdValues);
 		Map<String, Map<Integer, Long>> pollCounts = pollOptions.isEmpty() ? Map.of()
 			: polls.countsByPostIds(pollOptions.keySet());
-		Map<String, Integer> myVotes = currentUserId == null || pollOptions.isEmpty() ? Map.of()
-			: polls.votesByUserAndPostIds(currentUserId, pollOptions.keySet());
+		Map<String, List<Integer>> myVotes = currentUserId == null || pollOptions.isEmpty() ? Map.of()
+			: polls.myVotesByPostIds(currentUserId, pollOptions.keySet());
+		// Configuracao (multipla escolha e prazo); enquete antiga sem linha le como SIMPLES.
+		Map<String, com.socialcoisa.rede.feed.domain.PollConfig> pollConfigs = pollOptions.isEmpty() ? Map.of()
+			: polls.configsByPostIds(pollOptions.keySet());
+		Map<String, Long> pollVoters = pollOptions.isEmpty() ? Map.of() : polls.votersCountByPostIds(pollOptions.keySet());
 		// Reposts puros do viewer: batch check para marcar currentUserReposted.
 		Set<String> repostedByViewer = currentUserId == null ? Set.of()
 			: postReposts.findPostIdsRepostedByUser(currentUserId.value(), postIdValues);
-		// Citação do repost com opinião: busca os originais da página em UMA consulta.
+		// Citação do repost com opinião: busca em UMA consulta o post que cada pessoa repostou. É ele
+		// que o card cita — citar o original raiz sumia com a opinião de quem foi repostado.
 		java.util.Set<String> quotedIds = visible.stream()
 			.filter(p -> p.repostWithOpinion() && p.repostOf() != null)
 			.map(Post::repostOf)
@@ -614,20 +687,29 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			.map(post -> {
 				UserProfile profile = allProfiles.get(post.authorId().value());
 				var corporateProfile = corporate.get(post.authorId().value());
+				// Conta banida (com perfil ainda no banco) ou com perfil removido: o conteúdo fica,
+				// a identidade não — o nome cai para o rótulo genérico, nunca para o id cru (#1021).
+				boolean banned = bannedAuthors.contains(post.authorId().value());
+				boolean autorSemPerfil = corporateProfile == null && profile == null;
 				PostView view = PostView.from(post,
-					corporateProfile != null ? corporateProfile.username()
-						: profile != null ? profile.username() : null,
-					corporateProfile != null ? corporateProfile.name()
-						: profile != null ? profile.displayWithNickname() : post.authorId().value(),
-					corporateProfile != null ? corporateProfile.avatar()
-						: profile != null ? profile.avatar() : null,
-					profile != null ? profile.allBadges() : List.of())
-					.withAvatarFrame(profile != null ? profile.avatarFrame() : null)
+					banned ? null
+						: corporateProfile != null ? corporateProfile.username()
+							: profile != null ? profile.username() : null,
+					banned || autorSemPerfil ? BANNED_DISPLAY_NAME
+						: corporateProfile != null ? corporateProfile.name()
+							: profile.displayWithNickname(),
+					banned ? null
+						: corporateProfile != null ? corporateProfile.avatar()
+							: profile != null ? profile.avatar() : null,
+					banned ? List.of() : profile != null ? profile.allBadges() : List.of())
+					.withAvatarFrame(banned ? null : profile != null ? profile.avatarFrame() : null)
 					.withAuthorStyle(corporateProfile == null ? NameStyleView.from(profile) : null)
 					.withContributor(corporateProfile == null && contributorIds.contains(post.authorId().value())
 						? ContributorTagView.from(profile) : null)
 					.withAuthorHumanityVerified(corporateProfile == null
-						&& humanityVerified.contains(post.authorId().value()));
+						&& humanityVerified.contains(post.authorId().value()))
+					.withAuthorHeadline(corporateProfile != null ? corporateProfile.headline()
+						: profile != null ? profile.headline() : null);
 				ReactionType reaction = currentUserReactions.get(post.id());
 				PostView withReaction = (reaction != null ? view.withCurrentUserReaction(reaction) : view)
 					.withReactionSummary(reactionSummaries.getOrDefault(post.id(), Map.of()));
@@ -657,9 +739,13 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 				for (int position = 0; position < options.size(); position++) {
 					perOption.add(counts.getOrDefault(position, 0L));
 				}
-				long total = perOption.stream().mapToLong(Long::longValue).sum();
+				// Na multipla escolha a pessoa pode marcar varias: o total conta PESSOAS, nao votos.
+				long total = pollVoters.getOrDefault(post.id().value(), 0L);
+				var config = pollConfigs.getOrDefault(post.id().value(),
+					com.socialcoisa.rede.feed.domain.PollConfig.SIMPLES);
 				return withRepostedFlag.withPoll(new PollView(options, perOption,
-					myVotes.get(post.id().value()), total));
+					myVotes.getOrDefault(post.id().value(), List.of()), total, config.multipleChoice(),
+					config.endsAt()));
 			})
 			.map(view -> view.withMedia(mediaById))
 			.toList();

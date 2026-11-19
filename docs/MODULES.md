@@ -28,7 +28,7 @@
 
 | Função | Descrição |
 |---|---|
-| `corsConfigurer()` | Configura CORS permitindo origens de `rede.cors.allowed-origins` |
+| `corsConfigurer()` | Configura CORS a partir do `AppOriginRegistry` — a mesma lista de origens que o portão de origem usa (`rede.cors.allowed-origins` + `rede.origins.trusted`) |
 
 ### Processamento compartilhado de caminhos
 
@@ -272,6 +272,9 @@ Implementa: `PublishPostUseCase`
 | `notifyMentions(Post post, List<String> mentionedUsernames)` | Cria notificações para usuários mencionados |
 | `validate(PublishPostCommand cmd)` | Valida campos do post (content obrigatório, type válido) |
 
+O worker de agendamentos bloqueia cada item antes de publicar e confirma a publicação e a remoção
+da fila na mesma transação. A recusa de um item não desfaz os demais itens do lote.
+
 ### GetFeedService
 
 **Arquivo**: `src/main/java/com/socialcoisa/rede/feed/application/GetFeedService.java`
@@ -282,7 +285,7 @@ Implementa: `GetFeedUseCase`, `GetProfilePostsUseCase`
 |---|---|
 | `getFeed(GetFeedQuery query)` | Retorna feed paginado para usuário, com abas: FOR_YOU, FOLLOWING, ALL, DISCUSSIONS, PROJECTS, RECENT |
 | `getProfilePosts(GetProfilePostsQuery query)` | Retorna posts de um perfil específico |
-| `getSavedFeed(UserId userId)` | Retorna posts salvos pelo usuário |
+| `getSavedFeed(UserId userId)` | Retorna posts salvos pelo usuário, preservando a ordem com mapa por id em O(S) |
 | `getCommunityFeed(String communityId, Instant cursor, int limit, UserId currentUser)` | Retorna feed de uma comunidade |
 | `enrich(List<Post> posts, UserId currentUserId)` | Enriquece posts com dados do autor e reação do usuário |
 | `filterByTab(List<Post> posts, FeedTab tab, UserId userId)` | Filtra posts por tipo de aba |
@@ -304,6 +307,9 @@ Implementa: `DeletePostUseCase`, `BulkDeletePostsUseCase`
 | `normalizePostIds(List<String> postIds)` | Valida lista de IDs |
 | `normalizeReason(String reason)` | Normaliza razão da deleção |
 | `requestMediaDeletion(Post post)` | Inicia job de deleção de mídia associada |
+
+A expiração de Momento e Instante busca no banco até 200 posts ativos por rodada, ordenados por
+vencimento e id; somente prazos anteriores ao instante da rodada entram no lote.
 
 ### PostInteractionService
 
@@ -472,6 +478,9 @@ Implementa: `GetMeUseCase`, `GetUserProfileUseCase`, `UpdateProfileUseCase`
 | `getRanking(int limit)` | Top usuários por reputação |
 | `update(UpdateProfileCommand cmd)` | Atualiza campos do perfil, incluindo cidade/UF (`CityState`, os dois ou nenhum) e `showCity` (cidade no perfil público só por opção, padrão desligado) |
 
+`ReputationRefreshWorker` percorre os IDs em ordem crescente por cursor, em lotes de até 500.
+Cada rodada começa do início, e a falha de uma conta não impede as demais.
+
 ### ProfileExtensionService
 
 **Arquivo**: `src/main/java/com/socialcoisa/rede/profile/application/ProfileExtensionService.java`
@@ -579,6 +588,7 @@ Implementa: `ManageProfileExtensionUseCase`
 | `getConnectionState(String userId, String targetUserId)` | Retorna status (PENDING, ACCEPTED, REMOVED, BLOCKED, NONE) e `requestedByMe` (pedido pendente enviado por quem consulta) |
 | `getConnections(String userId)` | Conexões aceitas |
 | `getPendingRequests(String userId)` | Solicitações pendentes |
+| `contarSolicitacoesRecebidasVisiveis(String userId)` | Conta pedidos recebidos visíveis no banco |
 | `countConnections(String userId)` | Conta conexões aceitas |
 | `getSuggestions(String userId, int limit)` | Sugere conexões baseadas em conexões mútuas |
 | `findFriends(UserId userId)` | Retorna IDs dos amigos (para feed) |
@@ -803,7 +813,9 @@ Implementa: `CreateMediaUploadUseCase`, `GetMediaAssetUseCase`, `GetMediaSummari
 Etapas configuráveis por vaga (`selection_stages`), histórico de movimentos
 (`stage_movements` — a etapa atual é o destino do último movimento), notas internas
 (`stage_notes`, nunca expostas ao candidato) e board por etapa. Entrevistas entram na agenda
-central pela origem `JOB_INTERVIEW`.
+central pela origem `JOB_INTERVIEW`. Cada candidatura tem no máximo uma entrevista agendada
+(índice único em `job_interviews.active_application_id`, V340) e guarda quantas canceladas o
+processo tiver: cancelar libera a candidatura para uma entrevista nova.
 
 | Classe | Papel |
 |---|---|
@@ -1181,6 +1193,63 @@ Rebaixar um ban libera o login de volta — o conteúdo purgado pelo ban não vo
 | `revokeSanction(adminId, sanctionId, reason)` | POST /api/admin/sanctions/{sanctionId}/revoke |
 | `editSanction(adminId, sanctionId, type, reason)` | POST /api/admin/sanctions/{sanctionId}/edit |
 
+### Ações administrativas DIRETAS (AdminModerationService / UserWarningService)
+
+**Arquivos**: `moderation/application/AdminModerationService.java`, `UserWarningService.java`,
+`moderation/adapters/in/web/AdminModerationController.java`
+
+O administrador decide direto sobre uma CONTA ou uma PUBLICAÇÃO, sem denúncia e sem votação:
+advertir, sancionar (restrição, suspensão, banimento, banimento permanente) e remover publicação.
+O sistema de votação (`ModeratorService.vote`, `SanctionProposalService`) não muda e continua sendo
+o único caminho dos moderadores: nada aqui conta voto, e as rotas são de ADMIN em bloco
+(`AdminRouteInterceptor.ADMIN_MODERATION_PATH` recusa antes do MVC; cada método confirma com
+`AdminGuard`).
+
+| Função | Rota | Efeito |
+|---|---|---|
+| `user(username)` | GET /api/admin/moderation/users/{username} | Perfil público + `activeWarnings` (contagem) |
+| `user summary` | GET /api/admin/moderation/users/{username}/summary | Sanção ativa + advertências ativas |
+| `history(username, limit)` | GET /api/admin/moderation/users/{username}/history | Advertências e sanções juntas, mais recente primeiro |
+| `warn(...)` | POST /api/admin/moderation/users/{username}/warnings | Cria `user_warnings`, notifica, audita `ADMIN_WARNING_ISSUED` |
+| `warningHistory(...)` | GET /api/admin/moderation/users/{username}/warnings | Histórico da conta (ativas e revogadas) |
+| `revoke(...)` | POST /api/admin/moderation/warnings/{warningId}/revoke | Revoga sem apagar (histórico preservado), audita `ADMIN_WARNING_REVOKED` |
+| `sanction(...)` | POST /api/admin/moderation/users/{username}/sanction | Reaproveita `ModeratorService.sanctionUser` (revoga sessões, purga conteúdo no ban), audita `ADMIN_SANCTION_APPLIED` |
+| `removePost(...)` | POST /api/admin/moderation/posts/{postId}/remove | `ModerationRemovePostUseCase.removeAsAdminWithOutcome` (soft delete, mídia, republicações), audita `ADMIN_POST_REMOVED` |
+
+Motivo obrigatório (10 a 2000 caracteres) em toda escrita; `Idempotency-Key` devolve a mesma
+resposta (replay) sem repetir a decisão. `user_warnings` (`V330`) é o histórico que faltava: antes
+"avisar" numa denúncia só mudava o status e mandava uma notificação, sem registro por conta.
+
+### AdminEntityService (comunidades e grupos)
+
+**Arquivo**: `src/main/java/com/socialcoisa/rede/moderation/application/AdminEntityService.java`
+
+Gerenciamento de comunidades e grupos pela administração da plataforma, sem votação e sem papel
+local. Mesma trava de `AdminModerationService`: `AdminRouteInterceptor` recusa antes do MVC e cada
+método confirma com `AdminGuard`.
+
+As escritas são `POST` com o motivo no corpo (o motivo é o que fica na auditoria; o `DELETE` do
+cliente não carrega corpo). Leitura nunca é auditada; toda escrita registra admin, alvo, operação,
+horário, resultado e motivo.
+
+| Função | Rota | Efeito |
+|---|---|---|
+| `communityOverview(id)` | GET /api/admin/moderation/communities/{id} | Dono, número de membros e de admins |
+| `communityMembers(id, q, page, size)` | GET /api/admin/moderation/communities/{id}/members | Lista completa (papel, entrada), busca por nome/@, páginas; audita nada (leitura) |
+| `deleteCommunity(id, reason)` | POST /api/admin/moderation/communities/{id}/delete | Reaproveita `CommunityService.deleteCommunity(..., adminOverride)`; audita `ADMIN_COMMUNITY_DELETED` |
+| `removeCommunityMember(id, userId, reason)` | POST /api/admin/moderation/communities/{id}/members/{userId}/remove | Remove inclusive o dono; audita `ADMIN_COMMUNITY_MEMBER_REMOVED` |
+| `groupOverview(id)` | GET /api/admin/moderation/groups/{id} | Dono, estado, número de membros |
+| `groupMembers(id, q, page, size)` | GET /api/admin/moderation/groups/{id}/members | Lista completa; mesmo contrato de páginas |
+| `deleteGroup(id, reason)` | POST /api/admin/moderation/groups/{id}/delete | `GroupService.purgeByAdmin`: membros, pedidos, tópicos, publicações, comentários e reações saem na mesma transação; audita `ADMIN_GROUP_DELETED` |
+| `closeGroup(id, reason)` | POST /api/admin/moderation/groups/{id}/close | `GroupService.closeByAdmin`: estado CLOSED com o conteúdo preservado; audita `ADMIN_GROUP_CLOSED` |
+| `removeGroupMember(id, userId, reason)` | POST /api/admin/moderation/groups/{id}/members/{userId}/remove | `GroupService.removeMemberByAdmin`; dono removido passa a propriedade ao membro mais antigo; audita `ADMIN_GROUP_MEMBER_REMOVED` |
+
+Exclusão de grupo é apagar de fato: o conteúdo do grupo é dele (tabelas próprias, sem vínculo com o
+feed), então sai inteiro junto com o grupo. Quando o conteúdo é histórico e não objeto da decisão, o
+painel usa `close`: o grupo sai da descoberta, não aceita gente nova e o que existia continua no
+banco (inacessível pela leitura normal, porque CLOSED não é legível por membros). A comunidade é
+apagada pelo caminho que já existia, com membros e vínculos na mesma transação.
+
 ### ContentQuarantineReviewService
 
 **Arquivo**: `src/main/java/com/socialcoisa/rede/moderation/application/ContentQuarantineReviewService.java`
@@ -1307,6 +1376,9 @@ reputação, mesmas regras de moderação.
 Canal de contato categorizado: pedidos de suporte viram tickets com status, resposta da equipe,
 integração com issues do GitHub e log de e-mails no painel.
 
+O comentário espelhado mantém a resposta original do painel e sua autoria, mesmo quando o webhook
+chega antes da confirmação do GitHub.
+
 | Rota | Descrição |
 |---|---|
 | `GET /support/config` | Configuração pública (e-mail do time, categorias) |
@@ -1379,7 +1451,17 @@ eventos/logs/erros. Documentação completa em [`MONITORAMENTO.md`](MONITORAMENT
 | `GET /admin/monitoring/overview` | KPIs, séries por minuto, recursos, eventos recentes |
 | `GET /admin/monitoring/events` | Lista de eventos com filtros (nível, tipo, busca, **intervalo de data/hora**, paginação por cursor) |
 | `GET /admin/monitoring/users` | Contas da comunidade: total, entradas por dia (30 dias), crescimento diário e projeções |
+| `GET /admin/monitoring/denied-admin` | Recusas de autorização em `/admin/**` e `/moderation/**`: total, avisos de repetição, contas acima do limiar da janela e varreduras sem sessão acima do limiar |
 | `GET /admin/emails` | Log de e-mails enviados |
+
+Toda recusa decidida pelo `AdminRouteInterceptor` (sem sessão, só admin ou só moderação) grava uma
+linha em `audit_logs` com ação `ADMIN_AUTHORITY_DENIED`, a rota sem id e o motivo
+(`SESSION_MISSING`, `ADMIN_ONLY`, `MODERATOR_ONLY`) — nunca corpo de requisição nem token. O 401/403
+recusado antes do interceptor (rota inexistente, cabeçalho de sessão ausente, escrita sem sessão) é
+contado em memória por pod e vira UMA linha de auditoria com escopo `admin-baseline` só quando a
+mesma origem repete acima do limiar (`rede.security.denied-admin-alerts.threshold`, padrão 20, em
+`window-minutes`, padrão 10) — gravar uma linha por recusa transformaria varredura em carga de
+escrita.
 
 O painel de log aceita "mostrar mais", cópia individual e cópia completa, e o modo pânico (chave de
 sistema que responde 429 em toda escrita) fica no módulo shared (`PanicController`).
@@ -1835,6 +1917,9 @@ por matriz de capacidades, com a autorização sempre no back-end.
 | `LibraryService` | Publicar, republicar, despublicar, ler e listar a biblioteca; a autorização é do dono da ficha |
 | `LibraryController` | API REST em `/roleplay/library` e `/roleplay/campaigns/{id}/sheets/{sheetId}/publish` |
 | `LibrarySheetJpaEntity` | Persistência (V326), com os campos públicos em JSON `longtext` |
+| `CampaignAuditTrail` | Os atos de campanha na trilha única do sistema (`audit_logs`), com ação `ROLEPLAY_*` e metadata mínimo |
+| `AdminRoleplayController` | Histórico de auditoria da campanha em `/admin/roleplay/campaigns/{id}/history` (exclusivo de administrador) |
+| `RoleplayMetricsService` | Agregado do módulo no painel de monitorabilidade (`GET /admin/monitoring/roleplay`), só números — cache de 1 minuto configurável |
 
 Regras que valem sempre:
 
@@ -1844,7 +1929,21 @@ Regras que valem sempre:
 - A decisão de um pedido de entrada é atômica; a segunda decisão devolve
   `REQUEST_ALREADY_DECIDED`.
 - A voz da mesa referencia uma sessão de chamada do Épapo (`voiceRoomId`); o módulo não cria
-  sala de voz paralela.
+  sala de voz paralela. A voz é estado da mesa como cena e ordem: abrir a sala (ou devolvê-la) é
+  ato do mestre; consultar a sala aberta é leitura de participante.
+- A rota de voz recebe campanha e mesa no path: a mesa tem de pertencer à campanha informada
+  (mesa desconhecida ou de outra campanha é 404) antes de qualquer delegação ao serviço de
+  chamadas — o tableId sozinho não decide. A leitura da sala aberta é tolerante (não-participante
+  lê vazio); a recusa de entrada é do join, que assina token.
+- Os atos de campanha (criação, edição, entrada, pedido, decisão, convite, saída, remoção,
+  transferência de mestria, arquivamento, criação de mesa) ficam na trilha única de auditoria do
+  sistema (`audit_logs`), com prefixo `ROLEPLAY_*` e a campanha como alvo — não há trilha própria
+  do módulo. O metadata carrega identificadores, papéis e mudanças de estado; o conteúdo livre da
+  campanha (descrição, ambientação) nunca entra. A leitura do histórico é exclusiva de
+  administrador: sem sessão é 401, sessão comum é 403 e campanha desconhecida é 404.
+- O painel vê o módulo por números, nunca por conteúdo: o agregado em
+  `/admin/monitoring/roleplay` é exclusivo de moderador, cacheado por um minuto e não expõe
+  nome, slug, descrição nem id de pessoa — o mesmo recorte de privacidade da trilha.
 - A campanha guarda só o IDENTIFICADOR do sistema, nunca as regras. Um sistema sem adaptador
   registrado responde com erro próprio; a família que a campanha grava vem do adaptador, não do
   pedido do cliente.

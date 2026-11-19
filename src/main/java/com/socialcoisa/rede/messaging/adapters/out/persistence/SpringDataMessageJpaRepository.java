@@ -28,9 +28,18 @@ interface SpringDataMessageJpaRepository extends JpaRepository<MessageJpaEntity,
 	List<MessageJpaEntity> visibleLastMessages(@Param("conversationId") String conversationId,
 			@Param("viewerId") String viewerId, org.springframework.data.domain.Pageable pageable);
 
-	Optional<MessageJpaEntity>
-		findFirstByConversationIdAndSenderIdAndTextAndCreatedAtAfterOrderByCreatedAtDesc(
-			String conversationId, String senderId, String text, java.time.Instant since);
+	/** O reply participa da igualdade: citar mensagens diferentes sao envios distintos, nao retry. */
+	@Query("""
+			SELECT m FROM MessageJpaEntity m
+			WHERE m.conversationId = :conversationId
+			  AND m.senderId = :senderId
+			  AND m.text = :text
+			  AND m.createdAt > :since
+			  AND ((:replyToId IS NULL AND m.replyToId IS NULL) OR m.replyToId = :replyToId)
+			ORDER BY m.createdAt DESC""")
+	Optional<MessageJpaEntity> findRecentDuplicate(@Param("conversationId") String conversationId,
+			@Param("senderId") String senderId, @Param("text") String text,
+			@Param("since") java.time.Instant since, @Param("replyToId") String replyToId);
 
 	/** Mensagens da conversa SEM as que este leitor apagou para si (filtro no banco: a paginacao
 	 *  continua coerente, e nao sobra buraco na pagina).

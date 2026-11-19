@@ -377,4 +377,33 @@ class CampaignFlowTests {
 			.andExpect(jsonPath("$.name").value("Nome Novo"))
 			.andExpect(jsonPath("$.setting").value("planicie do sul"));
 	}
+
+	@Test
+	void campanhaEMesaPrivadasAparecemParaQuemCriou() throws Exception {
+		var master = authHelper().authenticate("eroleplay-mestre-privada-minha");
+		String campaignId = createCampaign(master, "Sessão Privada", "PRIVATE", "create-sessao-privada");
+
+		// A campanha privada não está na descoberta, mas TEM de estar em "minhas campanhas":
+		// é a única porta de entrada do mestre para a própria campanha.
+		mockMvc.perform(get("/roleplay/campaigns/mine").header("X-Session-Token", master.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.id == '" + campaignId + "')]").isNotEmpty())
+			.andExpect(jsonPath("$.items[?(@.id == '" + campaignId + "')].viewerRole").value("GAME_MASTER"))
+			.andExpect(jsonPath("$.items[?(@.id == '" + campaignId + "')].visibility").value("PRIVATE"));
+
+		// Mesa fechada (privada): nasce para o mestre e TEM de aparecer na listagem dele na hora.
+		MvcResult table = mockMvc.perform(post("/roleplay/campaigns/" + campaignId + "/tables")
+				.header("X-Session-Token", master.token())
+				.header("Idempotency-Key", "table-privada-" + campaignId)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("name", "Mesa Fechada", "open", false))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String tableId = objectMapper.readTree(table.getResponse().getContentAsString()).get("id").asText();
+
+		mockMvc.perform(get("/roleplay/campaigns/" + campaignId + "/tables")
+				.header("X-Session-Token", master.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.id == '" + tableId + "')].open").value(false));
+	}
 }

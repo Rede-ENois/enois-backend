@@ -57,6 +57,7 @@ read the same value and both write a result computed from it. The rules below co
 | Flow | Hot row | How it is written |
 |---|---|---|
 | React, save, share, repost, comment (and undo) | `posts` | `lockForUpdate`, child row, `adjustCounter` |
+| Replace poll votes | `posts` | `lockForUpdate` before reading and replacing the selection |
 | Delete or moderate a comment | `posts` | `lockForUpdate`, then load and remove the comment, `adjustCounter` |
 | Accepted answer cleared on comment removal | `posts` | `update ... where id = :postId and accepted_comment_id = :commentId` |
 | React to a comment | `comment_reactions` | `insert ignore` / `delete` with row counts |

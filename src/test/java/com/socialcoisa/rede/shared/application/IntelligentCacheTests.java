@@ -92,7 +92,8 @@ class IntelligentCacheTests {
 		context.registerBean(EventService.class,
 			() -> new EventService(repository, sanctions, new SuspiciousText("probe"),
 				Clock.fixed(Instant.now(), ZoneOffset.UTC), context.getBean(CacheInvalidator.class),
-				mock(com.socialcoisa.rede.calendar.application.CalendarSourceService.class)));
+				mock(com.socialcoisa.rede.calendar.application.CalendarSourceService.class),
+				mock(com.socialcoisa.rede.notifications.application.NotificationService.class)));
 		context.refresh();
 		events = context.getBean(EventService.class);
 	}

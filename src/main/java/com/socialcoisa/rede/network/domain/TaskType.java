@@ -53,12 +53,30 @@ public enum TaskType {
 		return requiredProfile;
 	}
 
-	/** O perfil cobre o tipo? {@code NODE_LOCAL} cobre todos. */
+	/**
+	 * O perfil cobre o tipo? {@code NODE_LOCAL} cobre todos.
+	 *
+	 * <p>Para os tipos de armazenamento, qualquer perfil cujo {@link NodeProfile#storageKind()} não
+	 * seja nulo cobre: os tipos especializados do brief §6 são <b>storage</b> como o
+	 * {@code NODE_STORAGE}, e quem tem só {@code NODE_STORAGE} continua recebendo tudo. A
+	 * especialização muda <i>para onde</i> a colocação prefere mandar, não <i>se</i> pode guardar.</p>
+	 */
 	public boolean allowedFor(Set<NodeProfile> profiles) {
 		if (profiles == null || profiles.isEmpty()) {
 			return false;
 		}
-		return profiles.contains(requiredProfile) || profiles.contains(NodeProfile.NODE_LOCAL);
+		if (profiles.contains(NodeProfile.NODE_LOCAL)) {
+			return true;
+		}
+		if (isStorage() && profiles.stream().anyMatch(profile -> profile.storageKind() != null)) {
+			return true;
+		}
+		return profiles.contains(requiredProfile);
+	}
+
+	/** Tipo de armazenamento do Énóis Storage (brief §6)? */
+	public boolean isStorage() {
+		return this == OBJECT_PUT || this == OBJECT_GET;
 	}
 
 	/**

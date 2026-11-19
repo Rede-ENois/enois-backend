@@ -4,6 +4,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.hibernate.annotations.BatchSize;
+
 import com.socialcoisa.rede.profile.domain.UserProfile;
 import com.socialcoisa.rede.shared.geo.CityState;
 
@@ -116,11 +118,13 @@ class UserProfileJpaEntity {
 	@Column(name = "banner_html", columnDefinition = "longtext")
 	private String bannerHtml;
 
+	@BatchSize(size = 32)
 	@ElementCollection(fetch = FetchType.EAGER)
 	@CollectionTable(name = "user_skills", joinColumns = @JoinColumn(name = "user_id"))
 	@Column(name = "skill", nullable = false, length = 1600)
 	private List<String> skills = new ArrayList<>();
 
+	@BatchSize(size = 32)
 	@ElementCollection(fetch = FetchType.EAGER)
 	@CollectionTable(name = "user_goals", joinColumns = @JoinColumn(name = "user_id"))
 	@Column(name = "goal", nullable = false, length = 1600)
@@ -132,6 +136,7 @@ class UserProfileJpaEntity {
 	@Column(length = 500)
 	private String portfolio;
 
+	@BatchSize(size = 32)
 	@ElementCollection(fetch = FetchType.EAGER)
 	@CollectionTable(name = "user_external_links", joinColumns = @JoinColumn(name = "user_id"))
 	@Column(name = "external_link", nullable = false, length = 500)

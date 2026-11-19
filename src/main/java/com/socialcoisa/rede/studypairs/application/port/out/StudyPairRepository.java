@@ -43,12 +43,28 @@ public interface StudyPairRepository {
 
 	Optional<StudyPair> findPair(String pairId);
 
+	/** Pares ativos e propostas pendentes: os dois contam no teto e aparecem em /me. */
 	List<StudyPair> findActivePairs(String userId);
 
 	List<StudyPair> findAllActivePairs();
 
 	/** Ends an ACTIVE pair; false when it was already ended. */
 	boolean endPair(String pairId, Instant endedAt);
+
+	/** Grava quebra-gelo + aceite de um membro; false quando o par não está mais PENDING. */
+	boolean acceptPending(String pairId, String userId, String icebreakerJson, Instant acceptedAt);
+
+	/** Proposta PENDING volta ENDED e o par tem prazo vencido; false quando já não está PENDING. */
+	boolean expirePending(String pairId, Instant endedAt);
+
+	/** PENDING vira ACTIVE no aceite mútuo; a semana do check-in conta do instante informado. */
+	void activate(String pairId, Instant acceptedAt);
+
+	/** O pedido MATCHED desta pessoa volta OPEN (recusa ou prazo); mantém o createdAt. */
+	void reopenMatchedRequest(String userId);
+
+	/** Catálogo do quebra-gelo guiado, na ordem das perguntas. */
+	List<com.socialcoisa.rede.studypairs.application.StudyPairService.IcebreakerView> findIcebreakers();
 
 	Optional<StudyCheckin> findCheckin(String pairId, String userId, String weekKey);
 

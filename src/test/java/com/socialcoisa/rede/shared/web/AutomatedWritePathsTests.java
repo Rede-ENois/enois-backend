@@ -75,6 +75,14 @@ class AutomatedWritePathsTests {
 		// heartbeat a API key do nó, ambos conferidos no controller (fase 1 da rede distribuída).
 		"/network/nodes/enroll",
 		"/network/nodes/heartbeat",
+		// Renovação do certificado mTLS do nó (brief §10): a credencial é a API key (X-Node-Id +
+		// X-Node-Key), e o certificado que ele já tem não é exigido — quem renova pode estar com o
+		// certificado a um dia de expirar.
+		"/network/nodes/me/certificate",
+		// Reserva (V364): o nó confirma a própria cópia, com a mesma credencial de nó. Era o único
+		// fluxo de escrita nascido do interceptor sem entrada aqui — o teste varre a lista real e
+		// acusou a divergência (antes: só em PUBLIC_WRITES → agora: nos dois lugares).
+		"/network/standby/complete",
 		// Fase 2: resultado de tarefa devolvido pelo nó, com a mesma credencial de nó.
 		"/network/tasks/*/result",
 		// Fase 3: nó de borda confirmando o que sincronizou e pedindo reconciliação.
@@ -88,6 +96,13 @@ class AutomatedWritePathsTests {
 		// Storage (fase 3): a réplica confirma a cópia designada. Mesma credencial, e a confirmação
 		// é conferida contra a colocação antes de virar durabilidade.
 		"/network/storage/objects/*/replica",
+		// Storage (fase 3, §5.6): o nó poda do próprio disco os corpos que o catálogo não atribui
+		// mais a ele. Mesma credencial de nó, e o serviço só aceita o dono do disco — outro nó
+		// responde 403 sem tocar em arquivo nenhum.
+		"/network/storage/inventory/purge",
+		// Storage (fase 3, §5.8): o nó devolve o que mediu no próprio disco -- o Control Plane só
+		// pode conferir o corpo da instalação em que roda; a cópia de outro nó só o dono relê.
+		"/network/storage/scrub",
 		// Inscrição de nó: o formulário é público (quem oferece a máquina pode não ter conta) e o
 		// link é autenticado pelo token de uso único do e-mail. Ambos limitados no controller.
 		"/network/join/applications",
@@ -113,7 +128,11 @@ class AutomatedWritePathsTests {
 			RequestBuilder requisicao = requisicao(rota);
 			var resultado = mockMvc.perform(requisicao).andReturn();
 			int codigo = resultado.getResponse().getStatus();
-			if (codigo != 401) {
+			// O gateway S3 (brief §11) não usa sessão de navegador: o SDK não tem uma. Ele
+			// autentica por AWS SigV4 e, SEM assinatura, tem de recusar — e recusar com o
+			// documento de erro do S3. Aceitar 403 de qualquer jeito seria passar a régua:
+			// qualquer rota que devolvesse 403 "por outro motivo" entraria sem credencial.
+			if (codigo != 401 && !ehGatewayS3Recusando(rota, resultado.getResponse().getContentAsString())) {
 				atravessadas.add(rota.verb() + " " + rota.path() + " -> " + codigo);
 			}
 		}
@@ -129,6 +148,17 @@ class AutomatedWritePathsTests {
 		org.assertj.core.api.Assertions.assertThat(WriteRouteInterceptor.PUBLIC_WRITES)
 			.as("fluxos publicos de escrita")
 			.containsExactlyInAnyOrderElementsOf(FLUXOS_PUBLICOS_ESPERADOS);
+	}
+
+	/**
+	 * A recusa do gateway S3 é legítima quando: o caminho é do gateway, o status é 403 (sem
+	 * assinatura ou assinatura inválida) e o corpo é o XML de erro do S3. A terceira condição é a
+	 * que impede a exceção de virar porta: um 403 sem o documento do gateway não é dele.
+	 */
+	private static boolean ehGatewayS3Recusando(Rota rota, String corpo) {
+		return rota.path().startsWith("/s3") && corpo != null && corpo.contains("<Code>")
+			&& (corpo.contains("AccessDenied") || corpo.contains("InvalidAccessKeyId")
+				|| corpo.contains("SignatureDoesNotMatch"));
 	}
 
 	private boolean ehFluxoPublico(String path) {

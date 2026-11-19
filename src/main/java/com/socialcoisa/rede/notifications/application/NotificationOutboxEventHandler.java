@@ -21,13 +21,16 @@ class NotificationOutboxEventHandler implements OutboxEventHandler {
 	private final PostRepository postRepository;
 	private final CommentRepository commentRepository;
 	private final UserProfileRepository userProfileRepository;
+	private final NotificationPreferenceService preferences;
 
 	NotificationOutboxEventHandler(NotificationService notificationService, PostRepository postRepository,
-			CommentRepository commentRepository, UserProfileRepository userProfileRepository) {
+			CommentRepository commentRepository, UserProfileRepository userProfileRepository,
+			NotificationPreferenceService preferences) {
 		this.notificationService = notificationService;
 		this.postRepository = postRepository;
 		this.commentRepository = commentRepository;
 		this.userProfileRepository = userProfileRepository;
+		this.preferences = preferences;
 	}
 
 	/**
@@ -47,15 +50,22 @@ class NotificationOutboxEventHandler implements OutboxEventHandler {
 	private void handlePostCommented(String payload) {
 		String postId = extractValue(payload, "postId");
 		String authorId = extractValue(payload, "authorId");
+		String commentId = extractValue(payload, "commentId");
 		if (postId == null || authorId == null) return;
 		Post post = postRepository.findById(new PostId(postId)).orElse(null);
 		if (post == null) return;
 		if (post.authorId().value().equals(authorId)) return;
+		if (preferences.silences(post.authorId().value(), "NEW_COMMENT")) return;
 		String actorName = userProfileRepository.findById(authorId)
 			.map(p -> p.name()).orElse("Alguém");
+		// O clique tem que abrir O COMENTÁRIO, não o post inteiro (relato: "não perde tempo
+		// procurando entre vários comentários"). O deep link carrega o id na query; o front
+		// rola até a linha e destaca.
+		String href = commentId == null ? "/api/feed/posts/" + postId
+			: "/api/feed/posts/" + postId + "?comentario=" + commentId;
 		notificationService.create(post.authorId().value(), "NEW_COMMENT", authorId,
 			"Novo comentário", actorName + " comentou no seu post.",
-			"/api/feed/posts/" + postId, "Ver", previewOfComment(extractValue(payload, "commentId"), post));
+			href, "Ver", previewOfComment(commentId, post));
 	}
 
 	private void handlePostReacted(String payload) {
@@ -65,6 +75,7 @@ class NotificationOutboxEventHandler implements OutboxEventHandler {
 		Post post = postRepository.findById(new PostId(postId)).orElse(null);
 		if (post == null) return;
 		if (post.authorId().value().equals(authorId)) return;
+		if (preferences.silences(post.authorId().value(), "NEW_REACTION")) return;
 		String actorName = userProfileRepository.findById(authorId)
 			.map(p -> p.name()).orElse("Alguém");
 		notificationService.createGrouped(post.authorId().value(), "NEW_REACTION", "NEW_REACTION:post:" + postId,
@@ -82,6 +93,7 @@ class NotificationOutboxEventHandler implements OutboxEventHandler {
 		Comment comment = commentRepository.findById(commentId).orElse(null);
 		if (comment == null) return;
 		if (comment.authorId().value().equals(authorId)) return;
+		if (preferences.silences(comment.authorId().value(), "COMMENT_REACTION")) return;
 		String actorName = userProfileRepository.findById(authorId)
 			.map(p -> p.name()).orElse("Alguém");
 		notificationService.createGrouped(comment.authorId().value(), "COMMENT_REACTION",

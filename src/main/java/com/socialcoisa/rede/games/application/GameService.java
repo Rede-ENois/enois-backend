@@ -383,8 +383,6 @@ public class GameService {
 		coins.purchase(userId, amount, ref,
 			"Gasto no jogo " + game.title() + (org.springframework.util.StringUtils.hasText(motivo)
 				? " — " + motivo.trim() : ""));
-		events.record("gev_" + java.util.UUID.randomUUID().toString().replace("-", ""), gameId,
-			GameEventKind.SHARE, userId, java.time.Instant.now(clock));
 	}
 
 	/**

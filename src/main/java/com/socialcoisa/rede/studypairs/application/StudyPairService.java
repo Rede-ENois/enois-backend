@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.studypairs.application;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
@@ -52,6 +53,9 @@ public class StudyPairService {
 	public static final String MODULE = "STUDY_PAIRS";
 
 	static final int MAX_ACTIVE_PAIRS = 2;
+	/** Prazo da proposta: 7 dias para os dois aceitarem, acompanhando o ciclo do check-in. */
+	static final int PROPOSAL_DAYS = 7;
+	static final int ICEBREAKER_ANSWER_MAX_LENGTH = 500;
 	static final int NOTE_MAX_LENGTH = 500;
 	static final int HISTORY_WEEKS = 4;
 	private static final int CANDIDATE_SCAN = 50;
@@ -69,10 +73,12 @@ public class StudyPairService {
 	private final NotificationService notifications;
 	private final PersonalizationService personalization;
 	private final Clock clock;
+	private final tools.jackson.databind.ObjectMapper json;
 
 	public StudyPairService(StudyPairRepository repository, UserProfileRepository profiles, BlockedUsersReader blocks,
 			AgeGate ageGate, AgePolicyReader agePolicy, SanctionGate sanctionGate, SanctionGateReader sanctions,
-			NotificationService notifications, PersonalizationService personalization, Clock clock) {
+			NotificationService notifications, PersonalizationService personalization, Clock clock,
+			tools.jackson.databind.ObjectMapper json) {
 		this.repository = repository;
 		this.profiles = profiles;
 		this.blocks = blocks;
@@ -83,6 +89,7 @@ public class StudyPairService {
 		this.notifications = notifications;
 		this.personalization = personalization;
 		this.clock = clock;
+		this.json = json;
 	}
 
 	/** Opens a request and, when someone already waits on the same goal, pairs with the oldest one. */
@@ -138,14 +145,24 @@ public class StudyPairService {
 			}
 			repository.saveRequest(new StudyPairRequest(requestId, userId, goalKey, goal, topic,
 				StudyPairRequest.Status.MATCHED, now));
-			StudyPair pair = new StudyPair("sp_" + UUID.randomUUID().toString().replace("-", ""),
+			// O casamento é uma PROPOSTA: o par nasce PENDING e só fica ACTIVE no aceite mútuo,
+			// com quebra-gelo. Recusa ou prazo devolve à fila quem não recusou (o pedido mantém
+			// o createdAt, então a posição original vale).
+			StudyPair pair = StudyPair.pending("sp_" + UUID.randomUUID().toString().replace("-", ""),
 				candidate.userId(), userId, goalKey, candidate.goalText(),
-				candidate.topic() != null ? candidate.topic() : topic, StudyPair.Status.ACTIVE, now, null);
-			repository.savePair(pair);
+				candidate.topic() != null ? candidate.topic() : topic, now, now.plus(java.time.Duration.ofDays(PROPOSAL_DAYS)));
+			try {
+				repository.savePair(pair);
+			}
+			catch (DuplicateKeyException raced) {
+				// A dupla já tem proposta ativa com este objetivo (a corrida passou pela checagem).
+				repository.reopenRequest(candidate.id());
+				continue;
+			}
 			UserProfile partner = profiles.findById(candidate.userId()).orElse(null);
-			notifyMatched(candidate.userId(), me, pair.goalText());
+			notifyProposed(candidate.userId(), me, pair.goalText());
 			if (partner != null) {
-				notifyMatched(userId, partner, pair.goalText());
+				notifyProposed(userId, partner, pair.goalText());
 			}
 			return new RequestResult(requestId, StudyPairRequest.Status.MATCHED.name(), pair.id());
 		}
@@ -251,23 +268,39 @@ public class StudyPairService {
 		List<StudyPair> pairs = repository.findActivePairs(userId).stream().filter(p -> !closedByBlock(p)).toList();
 		Map<String, UserProfile> partners = profiles.findAllByIds(pairs.stream().map(p -> p.partnerOf(userId)).toList())
 			.stream().collect(Collectors.toMap(UserProfile::id, Function.identity()));
-		List<PairView> views = pairs.stream().map(pair -> {
-			String partnerId = pair.partnerOf(userId);
-			UserProfile partner = partners.get(partnerId);
-			List<StudyCheckin> checkins = repository.findCheckins(pair.id(), weeks);
-			return new PairView(pair.id(), pair.goalText(), pair.goalKey(), pair.topic(), pair.startedAt().toString(),
-				thisWeek,
-				partner == null ? new PartnerView(partnerId, null, null, null)
-					: new PartnerView(partner.id(), partner.username(), partner.name(), partner.avatar()),
-				checkins.stream().anyMatch(c -> c.userId().equals(userId) && c.weekKey().equals(thisWeek)),
-				checkins.stream().anyMatch(c -> c.userId().equals(partnerId) && c.weekKey().equals(thisWeek)),
-				checkins.stream().map(c -> new CheckinView(c.userId(), c.weekKey(), c.note(), c.createdAt().toString(),
-					c.updatedAt().toString())).toList());
-		}).toList();
+		// Proposta pendente mostra o par como estará: nome, @ e avatar dos dois lados (revelação
+		// simétrica), quem já aceitou e o prazo. O quebra-gelo do outro sai só depois do meu aceite.
+		List<ProposalView> proposals = pairs.stream()
+			.filter(pair -> pair.status() == StudyPair.Status.PENDING)
+			.map(pair -> {
+				String partnerId = pair.partnerOf(userId);
+				UserProfile partner = partners.get(partnerId);
+				return new ProposalView(pair.id(), pair.goalText(), pair.goalKey(), pair.topic(),
+					partner == null ? new PartnerView(partnerId, null, null, null)
+						: new PartnerView(partner.id(), partner.username(), partner.name(), partner.avatar()),
+					pair.accepted(userId), pair.accepted(partnerId),
+					pair.accepted(userId) ? pair.icebreakerAnswersOf(partnerId) : null,
+					pair.deadline() == null ? null : pair.deadline().toString());
+			}).toList();
+		List<PairView> views = pairs.stream()
+			.filter(pair -> pair.status() == StudyPair.Status.ACTIVE)
+			.map(pair -> {
+				String partnerId = pair.partnerOf(userId);
+				UserProfile partner = partners.get(partnerId);
+				List<StudyCheckin> checkins = repository.findCheckins(pair.id(), weeks);
+				return new PairView(pair.id(), pair.goalText(), pair.goalKey(), pair.topic(), pair.startedAt().toString(),
+					thisWeek,
+					partner == null ? new PartnerView(partnerId, null, null, null)
+						: new PartnerView(partner.id(), partner.username(), partner.name(), partner.avatar()),
+					checkins.stream().anyMatch(c -> c.userId().equals(userId) && c.weekKey().equals(thisWeek)),
+					checkins.stream().anyMatch(c -> c.userId().equals(partnerId) && c.weekKey().equals(thisWeek)),
+					checkins.stream().map(c -> new CheckinView(c.userId(), c.weekKey(), c.note(), c.createdAt().toString(),
+						c.updatedAt().toString())).toList());
+			}).toList();
 		OpenRequestView open = repository.findOpenRequest(userId)
 			.map(r -> new OpenRequestView(r.id(), r.goalText(), r.goalKey(), r.topic(), r.createdAt().toString()))
 			.orElse(null);
-		return new MyStudyPairs(open, views);
+		return new MyStudyPairs(open, proposals, views);
 	}
 
 	/** One check-in per member per ISO week; posting again in the same week edits the note. */
@@ -321,6 +354,112 @@ public class StudyPairService {
 	}
 
 	/**
+	 * Aceite da proposta: grava quebra-gelo + aceite do membro. Quando os dois aceitaram, o par
+	 * fica ACTIVE e a semana do check-in passa a contar do aceite mútuo (startedAt vira o aceite).
+	 */
+	@Transactional
+	public AcceptResult accept(String userId, String pairId, Map<String, String> answers) {
+		StudyPair pair = memberPair(userId, pairId);
+		if (pair.status() != StudyPair.Status.PENDING) {
+			throw new ApiException(409, "STUDY_PAIR_NOT_PENDING", "Esta proposta não está mais aberta.");
+		}
+		if (pair.expired(clock.instant())) {
+			expireAndRequeue(pair);
+			throw new ApiException(409, "STUDY_PAIR_EXPIRED", "O prazo da proposta venceu. Você voltou para a fila.");
+		}
+		if (pair.accepted(userId)) {
+			throw new ApiException(409, "STUDY_PAIR_ALREADY_ACCEPTED", "Você já aceitou esta proposta.");
+		}
+		String json = validIcebreaker(answers);
+		if (!repository.acceptPending(pairId, userId, json, clock.instant())) {
+			throw new ApiException(409, "STUDY_PAIR_NOT_PENDING", "Esta proposta não está mais aberta.");
+		}
+		pair = pair.withIcebreaker(userId, json).withAccepted(userId, clock.instant());
+		if (pair.fullyAccepted()) {
+			// O aceite mútuo abre o par: a semana do check-in conta daqui.
+			repository.activate(pairId, clock.instant());
+			for (String member : List.of(pair.userA(), pair.userB())) {
+				notifications.create(member, "STUDY_PAIR_ACTIVE", pair.partnerOf(member),
+					"Par de estudo formado",
+					"Vocês dois aceitaram estudar \"" + pair.goalText() + "\". Um check-in por semana, no ritmo de vocês.",
+					HREF, "Ver par");
+			}
+		}
+		return new AcceptResult(pair.fullyAccepted());
+	}
+
+	/** Recusa: quem recusou sai; quem não recusou volta para a fila na posição original. */
+	@Transactional
+	public void decline(String userId, String pairId) {
+		StudyPair pair = memberPair(userId, pairId);
+		if (pair.status() != StudyPair.Status.PENDING) {
+			throw new ApiException(409, "STUDY_PAIR_NOT_PENDING", "Esta proposta não está mais aberta.");
+		}
+		if (!repository.endPair(pairId, clock.instant()) && !repository.expirePending(pairId, clock.instant())) {
+			throw new ApiException(409, "STUDY_PAIR_NOT_PENDING", "Esta proposta não está mais aberta.");
+		}
+		requeueOwnRequest(pair.partnerOf(userId));
+		notifications.create(pair.partnerOf(userId), "STUDY_PAIR_DECLINED", userId,
+			"A proposta de par não rolou desta vez",
+			"Sua proposta em \"" + pair.goalText() + "\" não foi aceita. Seu pedido voltou para a fila, na mesma posição.",
+			HREF, "Ver fila");
+	}
+
+	/**
+	 * Propostas vencidas viram ENDED na leitura: o primeiro leitor escreve o fim e devolve à fila
+	 * quem não recusou. Idempotente — o update condicional só vence uma vez.
+	 */
+	@Transactional
+	public void expireOverdueProposals() {
+		Instant now = clock.instant();
+		for (StudyPair pair : repository.findAllActivePairs()) {
+			if (pair.status() == StudyPair.Status.PENDING && pair.expired(now)) {
+				expireAndRequeue(pair);
+			}
+		}
+	}
+
+	private void expireAndRequeue(StudyPair pair) {
+		if (!repository.expirePending(pair.id(), clock.instant())) {
+			return;
+		}
+		for (String member : List.of(pair.userA(), pair.userB())) {
+			// Quem já aceitou não volta para a fila: a proposta dela terminou com o prazo.
+			if (pair.accepted(member)) {
+				continue;
+			}
+			requeueOwnRequest(member);
+		}
+	}
+
+	/** O pedido que casou volta OPEN; a posição original vale porque o createdAt não muda. */
+	private void requeueOwnRequest(String userId) {
+		repository.reopenMatchedRequest(userId);
+	}
+
+	/**
+	 * Valida as respostas do quebra-gelo: só pergunta do catálogo, valor limitado e limpo, e a
+	 * pergunta obrigatória ("por que agora") presente — o aceite sem ela não abre conversa vazia.
+	 */
+	private String validIcebreaker(Map<String, String> answers) {
+		Map<String, String> clean = new java.util.LinkedHashMap<>();
+		if (answers != null) {
+			for (var entry : answers.entrySet()) {
+				String answer = entry.getValue() == null ? "" : PlainText.defuse(entry.getValue().trim());
+				TextFieldLimit.check("STUDY_ICEBREAKER_TOO_LONG", "resposta", answer, ICEBREAKER_ANSWER_MAX_LENGTH);
+				clean.put(entry.getKey(), answer);
+			}
+		}
+		for (IcebreakerView question : repository.findIcebreakers()) {
+			if (question.required() && clean.getOrDefault(question.id(), "").isBlank()) {
+				throw new ApiException(400, "STUDY_ICEBREAKER_REQUIRED",
+					"Responda: " + question.question());
+			}
+		}
+		return json.writeValueAsString(clean);
+	}
+
+	/**
 	 * Weekly nudge: one notification per member of an ACTIVE pair who has not checked in this week,
 	 * at most once per week however many times (or on however many replicas) it runs. Returns how
 	 * many were sent.
@@ -348,6 +487,11 @@ public class StudyPairService {
 			}
 		}
 		return sent;
+	}
+
+	@Transactional(readOnly = true)
+	public List<IcebreakerView> icebreakers() {
+		return repository.findIcebreakers();
 	}
 
 	@Transactional(readOnly = true)
@@ -390,10 +534,12 @@ public class StudyPairService {
 		return personalization.of(userId).disabledModules().contains(MODULE);
 	}
 
-	private void notifyMatched(String recipientId, UserProfile partner, String goal) {
-		notifications.create(recipientId, "STUDY_PAIR_MATCHED", partner.id(), "Você tem um par de estudo",
-			"Você e @" + partner.username() + " querem \"" + goal + "\". Um check-in por semana, no ritmo de vocês.",
-			HREF, "Ver par");
+	/** Proposta formada: substitui o MATCHED antigo — o par só existe de fato no aceite mútuo. */
+	private void notifyProposed(String recipientId, UserProfile partner, String goal) {
+		notifications.create(recipientId, "STUDY_PAIR_PROPOSED", partner.id(), "Proposta de par de estudo",
+			"Você e @" + partner.username() + " querem \"" + goal
+				+ "\". Respondam o quebra-gelo e aceitem para começar.",
+			HREF, "Ver proposta");
 	}
 
 	private LocalDate today() {
@@ -421,6 +567,19 @@ public class StudyPairService {
 			List<CheckinView> checkins) {
 	}
 
-	public record MyStudyPairs(OpenRequestView openRequest, List<PairView> pairs) {
+	public record MyStudyPairs(OpenRequestView openRequest, List<ProposalView> proposals, List<PairView> pairs) {
+	}
+
+	/** Proposta aguardando aceite mútuo: o par revelado, quem aceitou, prazo e quebra-gelo. */
+	public record ProposalView(String id, String goal, String goalKey, String topic, PartnerView partner,
+			boolean myAccepted, boolean partnerAccepted, Map<String, String> partnerIcebreaker, String deadline) {
+	}
+
+	public record AcceptResult(boolean pairActive) {
+	}
+
+	/** Pergunta do quebra-gelo guiado; opções saem para CHOICE e MULTI. */
+	public record IcebreakerView(String id, int position, String question, boolean required, String kind,
+			List<String> options) {
 	}
 }

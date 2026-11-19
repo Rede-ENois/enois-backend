@@ -7,10 +7,13 @@ import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialcoisa.rede.network.application.port.out.ContentVersionRepository;
+import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.NodeObservabilityRepository;
 import com.socialcoisa.rede.network.application.port.out.NodeObservabilityRepository.LogLine;
 import com.socialcoisa.rede.network.application.port.out.NodeObservabilityRepository.Sample;
 import com.socialcoisa.rede.network.domain.NetworkNode;
+import com.socialcoisa.rede.network.domain.NodeHealth;
 
 /**
  * O painel de observabilidade de UM nó: a série recente e o console recente, para a página do nó
@@ -38,12 +41,20 @@ public class NodeObservabilityService {
 	/** Tamanho da mensagem de log — o console mostra uma linha, não um stack trace. */
 	private static final int MAX_LOG = 500;
 
+	/** Mesma janela de "vivo" do scheduler, do painel e da cobertura: 180 s. */
+	static final long ALIVE_SECONDS = 180;
+
 	private final NodeObservabilityRepository repository;
+	private final NetworkNodeRepository nodes;
+	private final ContentVersionRepository versions;
 	private final Clock clock;
 	private final java.util.function.Supplier<String> ids = () -> NodeIds.next("nl");
 
-	NodeObservabilityService(NodeObservabilityRepository repository, Clock clock) {
+	NodeObservabilityService(NodeObservabilityRepository repository, NetworkNodeRepository nodes,
+			ContentVersionRepository versions, Clock clock) {
 		this.repository = repository;
+		this.nodes = nodes;
+		this.versions = versions;
 		this.clock = clock;
 	}
 
@@ -83,13 +94,74 @@ public class NodeObservabilityService {
 		repository.trimLogs(node.id(), LOG_KEEP);
 	}
 
-	/** O quadro do nó: série (antiga → nova) e console (nova → antiga). */
+	/** O quadro do nó: série (antiga → nova) e console (nova → antiga), com as quatro dimensões de saúde. */
 	@Transactional(readOnly = true)
 	public Panel panel(String nodeId, int sampleLimit, int logLimit) {
 		List<Sample> samples = repository.samples(nodeId, clamp(sampleLimit, SAMPLE_KEEP));
 		List<LogLine> logs = repository.logs(nodeId, clamp(logLimit, LOG_KEEP));
-		return new Panel(nodeId, clock.instant(), List.copyOf(samples), logs.stream().map(View::of).toList(),
-			summarize(samples), logLevels(logs));
+		Instant now = clock.instant();
+		return new Panel(nodeId, now, List.copyOf(samples), logs.stream().map(View::of).toList(),
+			summarize(samples), logLevels(logs), freshness(samples, now), health(nodeId, now));
+	}
+
+	/**
+	 * As quatro dimensões de saúde do nó (brief §8.8), com o atraso de sincronização que a aplicação
+	 * considera.
+	 *
+	 * <p>A leitura do atraso vem do catálogo de versões, e não do serviço de sincronização: o
+	 * atraso é a mesma conta ({@code countBehind} por tipo) e assim o quadro não depende do
+	 * serviço de conteúdo para desenhar saúde. Nó que sumiu do banco entre a leitura da tela e esta
+	 * chamada não ganha saúde inventada: o chamador já exigiu que existisse.</p>
+	 */
+	NodeHealth health(String nodeId, Instant now) {
+		NetworkNode node = nodes.findById(nodeId).orElse(null);
+		if (node == null) {
+			return null;
+		}
+		long behind = 0;
+		for (com.socialcoisa.rede.network.domain.ContentKind kind
+				: com.socialcoisa.rede.network.domain.ContentKind.values()) {
+			behind += versions.countBehind(nodeId, kind);
+		}
+		return NodeHealth.of(node, behind, now);
+	}
+
+	/**
+	 * Quão recente é o último ponto da série — e o que isso permite afirmar.
+	 *
+	 * <p>O brief §8.7 exige que o painel <b>distinga ausência de dados, nó offline e métrica
+	 * efetivamente zerada</b>. Sem este bloco, o quadro devolvia a série e nada mais: uma janela com
+	 * um ponto de duas horas atrás desenhava igual a uma com pontos deste minuto, e "0% de CPU" era
+	 * indistinguível de "não mediu". Os três casos são diferentes e a tela precisa poder separá-los:</p>
+	 *
+	 * <ul>
+	 * <li>{@code NO_SAMPLES} — o nó nunca empurrou amostra. Não há dado; nada se sabe;</li>
+	 * <li>{@code FRESH} — o último ponto cabe na janela de "vivo" (a mesma do scheduler e do
+	 * painel: 180 s). É a medida vigente;</li>
+	 * <li>{@code STALE} — há ponto, mas o último é mais velho que a janela. O nó pode estar fora, ou
+	 * pode estar online sem empurrar há um tempo; o painel mostra o número <b>com a idade</b>, e
+	 * {@code lastSampleAt} diz de quando ele é.</li>
+	 * </ul>
+	 *
+	 * <p>{@code ageSeconds} é nulo sem amostra: 0 diria "medido agora", que é o oposto do caso vazio.
+	 * A idade é calculada no servidor, do relógio dele — o runtime do nó não decide quão velho é o
+	 * próprio dado.</p>
+	 */
+	static Freshness freshness(List<Sample> samples, Instant now) {
+		if (samples == null || samples.isEmpty()) {
+			return new Freshness("NO_SAMPLES", null, null);
+		}
+		// A série vem do mais novo para o mais antigo: o primeiro é o último ponto medido.
+		Instant last = samples.get(0).sampledAt();
+		long age = Math.max(0, java.time.Duration.between(last, now).getSeconds());
+		return new Freshness(age <= ALIVE_SECONDS ? "FRESH" : "STALE", last, age);
+	}
+
+	/**
+	 * A idade da série. {@code state} é o que a tela usa para decidir se pode afirmar algo sobre o
+	 * nó; {@code lastSampleAt} e {@code ageSeconds} dizem de quando é o número mostrado.
+	 */
+	public record Freshness(String state, Instant lastSampleAt, Long ageSeconds) {
 	}
 
 	/**
@@ -109,7 +181,7 @@ public class NodeObservabilityService {
 
 	/** O que a página do nó desenha. {@code generatedAt} deixa claro que o quadro é do instante. */
 	public record Panel(String nodeId, Instant generatedAt, List<Sample> series, List<View> console,
-			Summary summary, java.util.Map<String, Long> consoleLevels) {
+			Summary summary, java.util.Map<String, Long> consoleLevels, Freshness freshness, NodeHealth health) {
 	}
 
 	private static Summary summarize(List<Sample> samples) {

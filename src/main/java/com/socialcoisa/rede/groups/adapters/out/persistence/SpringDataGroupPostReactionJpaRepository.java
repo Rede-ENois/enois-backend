@@ -5,6 +5,10 @@ import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
 
 interface SpringDataGroupPostReactionJpaRepository extends JpaRepository<GroupReactionJpaEntity, String> {
 
@@ -15,4 +19,10 @@ interface SpringDataGroupPostReactionJpaRepository extends JpaRepository<GroupRe
 	void deleteByPostIdAndUserId(String postId, String userId);
 
 	long countByPostId(String postId);
+
+	/** Exclusão física das reações de um conjunto de publicações (só a remoção pela plataforma). */
+	@Modifying
+	@Query("DELETE FROM GroupReactionJpaEntity r WHERE r.postId IN :postIds")
+	int deleteByPostIds(@Param("postIds") java.util.Collection<String> postIds);
+
 }

@@ -45,4 +45,10 @@ class SanctionGateAdapter implements SanctionGateReader {
 	public Optional<String> activeReason(String userId) {
 		return sanctions.findActiveByUser(userId).map(UserSanction::reason);
 	}
+
+	@Override
+	public Optional<ActiveSanctionSummary> activeSanctionOf(String userId) {
+		return sanctions.findActiveByUser(userId)
+			.map(s -> new ActiveSanctionSummary(s.type().name(), s.reason(), s.createdAt()));
+	}
 }
