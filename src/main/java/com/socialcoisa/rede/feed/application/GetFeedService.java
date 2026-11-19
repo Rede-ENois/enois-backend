@@ -86,6 +86,12 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	/** Página padrão quando o cliente não manda `limit` ou manda um valor inválido. */
 	private static final int DEFAULT_PAGE_SIZE = 10;
 
+	/**
+	 * Nome de exibição de conta banida (issue #1021): o conteúdo fica — sumir deixava o fio
+	 * desconexo — mas quem leu não vê nome, @, avatar nem badges de quem foi banido.
+	 */
+	static final String BANNED_DISPLAY_NAME = "Usuário";
+
 	public GetFeedService(PostRepository postRepository, ArticleRepository articleRepository,
 			FeedCacheRepository feedCacheRepository,
 			ConnectionGraphRepository connectionGraphRepository, UserProfileRepository userProfileRepository,
@@ -597,6 +603,10 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			.collect(Collectors.toSet());
 		Map<String, UserProfile> profiles = userProfileRepository.findAllByIds(authorIds).stream()
 			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
+		// Banido vira "Usuário" (issue #1021): o post/comentário continua — sumir deixava o fio
+		// desconexo — mas sem nome, @, avatar nem badges, que é a anonimização que o perfil já
+		// aplica. Em lote, uma consulta por página.
+		Set<String> bannedAuthors = sanctionGate.bannedAmong(profiles.keySet());
 		// Quem tem selo ativo ganha a tag "Contribuinte" junto do nome, em lote.
 		Set<String> contributorIds = userSeals.findActiveUserIds(profiles.keySet());
 		// Selo "Humanidade Comprovada": também em lote (uma consulta por página).
@@ -677,15 +687,19 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			.map(post -> {
 				UserProfile profile = allProfiles.get(post.authorId().value());
 				var corporateProfile = corporate.get(post.authorId().value());
+				boolean banned = bannedAuthors.contains(post.authorId().value());
 				PostView view = PostView.from(post,
-					corporateProfile != null ? corporateProfile.username()
-						: profile != null ? profile.username() : null,
-					corporateProfile != null ? corporateProfile.name()
-						: profile != null ? profile.displayWithNickname() : post.authorId().value(),
-					corporateProfile != null ? corporateProfile.avatar()
-						: profile != null ? profile.avatar() : null,
-					profile != null ? profile.allBadges() : List.of())
-					.withAvatarFrame(profile != null ? profile.avatarFrame() : null)
+					banned ? null
+						: corporateProfile != null ? corporateProfile.username()
+							: profile != null ? profile.username() : null,
+					banned ? BANNED_DISPLAY_NAME
+						: corporateProfile != null ? corporateProfile.name()
+							: profile != null ? profile.displayWithNickname() : post.authorId().value(),
+					banned ? null
+						: corporateProfile != null ? corporateProfile.avatar()
+							: profile != null ? profile.avatar() : null,
+					banned ? List.of() : profile != null ? profile.allBadges() : List.of())
+					.withAvatarFrame(banned ? null : profile != null ? profile.avatarFrame() : null)
 					.withAuthorStyle(corporateProfile == null ? NameStyleView.from(profile) : null)
 					.withContributor(corporateProfile == null && contributorIds.contains(post.authorId().value())
 						? ContributorTagView.from(profile) : null)
