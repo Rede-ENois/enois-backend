@@ -58,6 +58,42 @@ final class ClienteDados implements AutoCloseable {
 		return consultar(atribuicao, pedido, sessao, 3500);
 	}
 
+	HttpResponse<byte[]> operarSessao(String operacao, byte[] corpo, String sessao, String refresh, String chave,
+			String dispositivo, String ip, String prova) throws IOException, InterruptedException {
+		var atribuicao = contexto.atual();
+		validarIngresso(atribuicao.credencial(), ip, prova);
+		var pedido = HttpRequest.newBuilder(atribuicao.dados().resolve("/internal/data/v1/browser/" + operacao))
+			.header("Content-Type", "application/json").header("X-Enois-Client-IP", ip)
+			.POST(HttpRequest.BodyPublishers.ofByteArray(corpo));
+		cabecalho(pedido, "X-Enois-Refresh-Token", refresh);
+		cabecalho(pedido, "Idempotency-Key", chave);
+		cabecalho(pedido, "X-Device-Fingerprint", dispositivo);
+		return consultar(atribuicao, pedido, sessao, 3500);
+	}
+
+	private static void cabecalho(HttpRequest.Builder pedido, String nome, String valor) {
+		if (valor != null && !valor.isBlank()) {
+			pedido.header(nome, valor);
+		}
+	}
+
+	private static void validarIngresso(String grant, String ip, String prova) throws IOException {
+		if (ip != null && ip.length() <= 45 && prova != null && prova.length() == 64) {
+			try {
+				var mac = javax.crypto.Mac.getInstance("HmacSHA256");
+				var utf8 = java.nio.charset.StandardCharsets.UTF_8;
+				mac.init(new javax.crypto.spec.SecretKeySpec(grant.getBytes(utf8), "HmacSHA256"));
+				byte[] esperado = mac.doFinal(("j6-ingress\n" + ip).getBytes(utf8));
+				if (java.security.MessageDigest.isEqual(esperado, java.util.HexFormat.of().parseHex(prova))) {
+					return;
+				}
+			} catch (java.security.GeneralSecurityException | IllegalArgumentException ignored) {
+				// Provas inválidas não identificam a origem da sessão.
+			}
+		}
+		throw new IOException("Contexto de ingresso inválido");
+	}
+
 	private HttpResponse<byte[]> consultar(ContextoWorkload.Atribuicao atribuicao, URI rota, String sessao, long limiteMs)
 			throws IOException, InterruptedException {
 		return consultar(atribuicao, HttpRequest.newBuilder(rota).GET(), sessao, limiteMs);

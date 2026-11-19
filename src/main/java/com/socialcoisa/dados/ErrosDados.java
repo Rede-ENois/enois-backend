@@ -10,7 +10,9 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.ErrorResponse;
 
-@RestControllerAdvice(assignableTypes = DadosController.class)
+import io.github.resilience4j.ratelimiter.RequestNotPermitted;
+
+@RestControllerAdvice(assignableTypes = {DadosController.class, SessoesDadosController.class})
 class ErrosDados {
 
 	@ExceptionHandler(ApiException.class)
@@ -20,5 +22,11 @@ class ErrosDados {
 			resposta.header(HttpHeaders.RETRY_AFTER, Long.toString(falha.retryAfterSeconds()));
 		}
 		return resposta.body(new ErrorResponse(falha.code(), falha.getMessage(), Instant.now()));
+	}
+
+	@ExceptionHandler(RequestNotPermitted.class)
+	ResponseEntity<ErrorResponse> limite() {
+		return ResponseEntity.status(429).header(HttpHeaders.RETRY_AFTER, "60")
+			.body(new ErrorResponse("RATE_LIMITED", "Limite de requisicoes excedido.", Instant.now()));
 	}
 }

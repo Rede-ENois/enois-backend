@@ -18,21 +18,16 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.identity.application.AuthResponse;
-import com.socialcoisa.rede.identity.application.LoginCommand;
 import com.socialcoisa.rede.identity.application.SignupChallengeService;
 import com.socialcoisa.rede.identity.application.SignupCommand;
 import com.socialcoisa.rede.identity.application.port.in.ChangeEmailUseCase;
 import com.socialcoisa.rede.identity.application.port.in.ChangePasswordUseCase;
 import com.socialcoisa.rede.identity.application.port.in.DeleteAccountUseCase;
 import com.socialcoisa.rede.identity.application.port.in.GetAuthenticatedUserUseCase;
-import com.socialcoisa.rede.identity.application.port.in.LoginUseCase;
-import com.socialcoisa.rede.identity.application.port.in.LogoutUseCase;
 import com.socialcoisa.rede.identity.application.port.in.OAuthStartResponse;
 import com.socialcoisa.rede.identity.application.port.in.OAuthUseCase;
-import com.socialcoisa.rede.identity.application.port.in.RefreshSessionUseCase;
 import com.socialcoisa.rede.identity.application.port.in.RequestPasswordResetUseCase;
 import com.socialcoisa.rede.identity.application.port.in.ResetPasswordUseCase;
-import com.socialcoisa.rede.identity.application.LoginResult;
 import com.socialcoisa.rede.identity.application.port.in.SignupUseCase;
 import com.socialcoisa.rede.identity.application.port.in.TwoFactorLoginUseCase;
 import com.socialcoisa.rede.identity.application.port.in.TwoFactorUseCase;
@@ -50,15 +45,13 @@ import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 @RequestMapping("/auth")
 class AuthController {
 
+	private final SessaoHttp sessoes;
 	private final SignupUseCase signupUseCase;
 	private final VerifyEmailUseCase verifyEmailUseCase;
 	private final TwoFactorLoginUseCase twoFactorLoginUseCase;
 	private final TwoFactorUseCase twoFactorUseCase;
-	private final LoginUseCase loginUseCase;
-	private final LogoutUseCase logoutUseCase;
 	private final GetAuthenticatedUserUseCase getAuthenticatedUserUseCase;
 	private final OAuthUseCase oAuthUseCase;
-	private final RefreshSessionUseCase refreshSessionUseCase;
 	private final RequestPasswordResetUseCase requestPasswordResetUseCase;
 	private final ResetPasswordUseCase resetPasswordUseCase;
 	private final ChangeEmailUseCase changeEmailUseCase;
@@ -70,7 +63,6 @@ class AuthController {
 	private final SiteDomains siteDomains;
 	private final com.socialcoisa.rede.identity.adapters.out.TurnstileValidator turnstile;
 	private final com.socialcoisa.rede.identity.application.SignupChallengeService signupCaptcha;
-	private final com.socialcoisa.rede.identity.application.NewDeviceNotifier newDeviceNotifier;
 	private final com.socialcoisa.rede.shared.security.IpBlockReader ipBlockReader;
 	private final com.socialcoisa.rede.shared.security.SignupAttackGuard signupAttackGuard;
 	private final com.socialcoisa.rede.shared.security.ClientIpResolver ipResolver;
@@ -83,10 +75,9 @@ class AuthController {
 
 	AuthController(SignupUseCase signupUseCase, VerifyEmailUseCase verifyEmailUseCase,
 			TwoFactorLoginUseCase twoFactorLoginUseCase, TwoFactorUseCase twoFactorUseCase,
-			LoginUseCase loginUseCase, LogoutUseCase logoutUseCase,
+			SessaoHttp sessoes,
 			GetAuthenticatedUserUseCase getAuthenticatedUserUseCase,
 			OAuthUseCase oAuthUseCase,
-			RefreshSessionUseCase refreshSessionUseCase,
 			RequestPasswordResetUseCase requestPasswordResetUseCase,
 			ResetPasswordUseCase resetPasswordUseCase,
 			ChangeEmailUseCase changeEmailUseCase,
@@ -97,7 +88,6 @@ class AuthController {
 			com.socialcoisa.rede.identity.application.AuthThrottle throttle,
 			com.socialcoisa.rede.identity.adapters.out.TurnstileValidator turnstile,
 			com.socialcoisa.rede.identity.application.SignupChallengeService signupCaptcha,
-			com.socialcoisa.rede.identity.application.NewDeviceNotifier newDeviceNotifier,
 			com.socialcoisa.rede.shared.security.IpBlockReader ipBlockReader,
 			com.socialcoisa.rede.shared.security.SignupAttackGuard signupAttackGuard,
 			com.socialcoisa.rede.shared.security.ClientIpResolver ipResolver,
@@ -105,15 +95,13 @@ class AuthController {
 			@Value("${rede.auth.signup-enabled:true}") boolean signupEnabled,
 			@Value("${rede.oauth.google.enabled:true}") boolean googleLoginEnabled,
 			com.socialcoisa.rede.shared.web.SessionCookies sessionCookies) {
+		this.sessoes = sessoes;
 		this.signupUseCase = signupUseCase;
 		this.verifyEmailUseCase = verifyEmailUseCase;
 		this.twoFactorLoginUseCase = twoFactorLoginUseCase;
 		this.twoFactorUseCase = twoFactorUseCase;
-		this.loginUseCase = loginUseCase;
-		this.logoutUseCase = logoutUseCase;
 		this.getAuthenticatedUserUseCase = getAuthenticatedUserUseCase;
 		this.oAuthUseCase = oAuthUseCase;
-		this.refreshSessionUseCase = refreshSessionUseCase;
 		this.requestPasswordResetUseCase = requestPasswordResetUseCase;
 		this.resetPasswordUseCase = resetPasswordUseCase;
 		this.changeEmailUseCase = changeEmailUseCase;
@@ -125,7 +113,6 @@ class AuthController {
 		this.siteDomains = siteDomains;
 		this.turnstile = turnstile;
 		this.signupCaptcha = signupCaptcha;
-		this.newDeviceNotifier = newDeviceNotifier;
 		this.ipBlockReader = ipBlockReader;
 		this.signupAttackGuard = signupAttackGuard;
 		this.ipResolver = ipResolver;
@@ -249,60 +236,20 @@ class AuthController {
 	 * (`twoFactorRequired`), e a sessao sai em {@code /auth/2fa/verify}.
 	 */
 	@PostMapping("/login")
-	@RateLimiter(name = "auth")
 	ResponseEntity<?> login(@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@RequestHeader(value = "X-Device-Fingerprint", required = false) String deviceFingerprint,
 			@RequestBody LoginRequest body,
 			jakarta.servlet.http.HttpServletRequest httpRequest) {
-		String ip = ipResolver.resolve(httpRequest);
-		exigeIpNaoBloqueado(ip);
-		// Login NÃO exige Turnstile: o widget invisível não gera token em tempo (bloqueador de
-		// scripts, Cloudflare lento, submit rápido) e travava login de gente de verdade. A porta
-		// fica fechada por IP bloqueado, limite por conta e travamento de tentativas — o captcha
-		// anti-bot fica no cadastro, que é onde nascem as contas falsas.
-		throttle.exigeLoginPermitido(body.email(), ip);
-		// SEM idempotência persistida: a resposta contém access/refresh token e o hash do corpo
-		// incluiria a senha (E-03/E-19). Repetir um login é seguro — gera outra sessão.
-		try {
-			LoginResult result = loginUseCase.login(new LoginCommand(body.email(), body.password(), ip));
-			throttle.limpaLogin(body.email(), ip);
-			if (result.requiresPasswordReset()) {
-				return ResponseEntity.status(200).contentType(org.springframework.http.MediaType.APPLICATION_JSON)
-					.body(objectMapper.writeValueAsString(Map.of(
-					"passwordExpired", true,
-					"resetToken", result.resetToken())));
-			}
-			if (!result.requiresTwoFactor()) {
-				newDeviceNotifier.check(result.session().user().id(), deviceFingerprint);
-				// Tokens go out as HttpOnly cookies (AuthCookieAdvice), never in the body.
-				return ResponseEntity.ok(result.session());
-			}
-			return ResponseEntity.status(202).contentType(org.springframework.http.MediaType.APPLICATION_JSON)
-				.body(objectMapper.writeValueAsString(Map.of(
-				"twoFactorRequired", true,
-				"challengeId", result.challenge().challengeId(),
-				"method", result.challenge().method(),
-				"expiresAt", result.challenge().expiresAt().toString())));
-		}
-		catch (ApiException falha) {
-			if (falha.status() == 401) {
-				throttle.registraFalhaLogin(body.email(), ip);
-			}
-			throw falha;
-		}
+		return sessoes.login(body, deviceFingerprint, ipResolver.resolve(httpRequest));
 	}
 
 	/** Conclui o login com o codigo do segundo fator (ou com um codigo de recuperacao). */
 	@PostMapping("/2fa/verify")
-	@RateLimiter(name = "twofa")
 	ResponseEntity<AuthResponse> verifyTwoFactor(
 			@RequestHeader(value = "X-Device-Fingerprint", required = false) String deviceFingerprint,
 			@RequestBody VerifyTwoFactorRequest body,
 			jakarta.servlet.http.HttpServletRequest httpRequest) {
-		exigeIpNaoBloqueado(ipResolver.resolve(httpRequest));
-		AuthResponse auth = twoFactorLoginUseCase.verifyTwoFactor(body.challengeId(), body.code());
-		newDeviceNotifier.check(auth.user().id(), deviceFingerprint);
-		return ResponseEntity.ok(auth);
+		return ResponseEntity.ok(sessoes.verificar(body.challengeId(), body.code(), deviceFingerprint, ipResolver.resolve(httpRequest)));
 	}
 
 	/** Reenvia o codigo por e-mail do desafio em andamento. */
@@ -320,15 +267,7 @@ class AuthController {
 				required = false) String refreshCookie,
 			jakarta.servlet.http.HttpServletResponse httpResponse) {
 		sessionCookies.clear().forEach(value -> httpResponse.addHeader(org.springframework.http.HttpHeaders.SET_COOKIE, value));
-		// O escopo da idempotencia e chave de tabela: vai como HASH do token, nunca o token vivo
-		// em texto puro (quem le a tabela — backup, DBA — nao ganha uma sessao com isso).
-		String credential = StringUtils.hasText(token) ? token : refreshCookie;
-		String scope = "session:" + (credential == null ? "anonymous" : idempotency.hash(credential.trim()));
-		String hash = idempotency.hash(Map.of("token", scope));
-		return idempotency.execute(scope, "POST", "/api/auth/logout", idempotencyKey, hash, () -> {
-			logoutUseCase.logout(token, refreshCookie);
-			return new CommandResponse(200, Map.of("status", "LOGGED_OUT"));
-		});
+		return sessoes.logout(token, refreshCookie, idempotencyKey);
 	}
 
 	@GetMapping("/me")
@@ -512,14 +451,13 @@ class AuthController {
 	}
 
 	@PostMapping("/refresh")
-	@RateLimiter(name = "refresh")
 	Object refreshSession(@RequestBody(required = false) RefreshRequest request,
 			@org.springframework.web.bind.annotation.CookieValue(name = com.socialcoisa.rede.shared.web.SessionCookies.REFRESH,
 				required = false) String refreshCookie) {
 		// Browsers send no body: the refresh token comes from the HttpOnly cookie.
 		String refreshToken = request != null && StringUtils.hasText(request.refreshToken()) ? request.refreshToken()
 			: refreshCookie;
-		return refreshSessionUseCase.refresh(refreshToken);
+		return sessoes.renovar(refreshToken);
 	}
 
 	@PostMapping("/oauth/{provider}/token")

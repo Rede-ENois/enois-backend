@@ -82,7 +82,8 @@ class DadosApplicationTests {
 			assertThat(contexto.getBean("requestMappingHandlerMapping", RequestMappingHandlerMapping.class).getHandlerMethods().keySet())
 				.flatExtracting(info -> info.getPatternValues())
 				.containsExactlyInAnyOrder("/internal/data/v1/ready", "/internal/data/v1/posts/{postId}",
-					"/internal/data/v1/posts", "/internal/data/v1/session", "/error", "/error");
+					"/internal/data/v1/posts", "/internal/data/v1/session",
+					"/internal/data/v1/browser/{operacao:login|refresh|logout|verify}", "/error", "/error");
 
 			long agora = System.currentTimeMillis();
 			var grant = grant(CHAVE, "enois-backend", "data", 1, agora + 10000);

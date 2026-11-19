@@ -33,7 +33,8 @@ import com.socialcoisa.rede.shared.outbox.AgendamentoOutboxDados;
 		RedeApplication.class, Filter.class, EmoteCatalogScheduler.class, ExternalJobRefreshScheduler.class
 	})
 })
-@Import({CredencialDados.class, DadosController.class, ErrosDados.class, AgendamentoOutboxDados.class})
+@Import({CredencialDados.class, DadosController.class, SessoesDadosController.class, ErrosDados.class,
+	AgendamentoOutboxDados.class})
 public class DadosApplication {
 
 	public static void main(String[] args) {
@@ -44,7 +45,8 @@ public class DadosApplication {
 		SpringApplication app = new SpringApplication(DadosApplication.class);
 		app.setDefaultProperties(Map.of(
 			"spring.web.resources.add-mappings", "false",
-			"management.endpoints.web.exposure.exclude", "*"
+			"management.endpoints.web.exposure.exclude", "*",
+			"spring.task.execution.mode", "force"
 		));
 		app.addListeners((ApplicationEnvironmentPreparedEvent event) -> {
 			var env = event.getEnvironment();

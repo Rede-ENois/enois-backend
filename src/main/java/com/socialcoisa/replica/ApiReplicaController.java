@@ -26,7 +26,8 @@ import com.socialcoisa.rede.shared.web.SessionCookies;
 class ApiReplicaController {
 
 	private static final int CORPO_MAXIMO = 1024 * 1024;
-	private static final Set<Integer> STATUS_PUBLICOS = Set.of(200, 201, 400, 401, 403, 404, 409, 413, 429);
+	private static final Set<Integer> STATUS_PUBLICOS = Set.of(200, 201, 202, 400, 401, 403, 404, 409, 413, 429);
+	private static final int CORPO_SESSAO_MAXIMO = 16 * 1024;
 	private final ClienteDados dados;
 
 	ApiReplicaController(ClienteDados dados) {
@@ -40,10 +41,8 @@ class ApiReplicaController {
 			@CookieValue(value = SessionCookies.SESSION, required = false) String cookie,
 			@CookieValue(value = SessionCookies.REFRESH, required = false) String refresh,
 			HttpServletRequest requisicao) {
-		if (!StringUtils.hasText(token) && (StringUtils.hasText(cookie) || StringUtils.hasText(refresh))
-				&& !"1".equals(csrf)) {
-			return ResponseEntity.status(403).cacheControl(CacheControl.noStore()).body(Map.of(
-				"code", "CSRF_REQUIRED", "message", "Requisicao recusada. Recarregue a pagina e tente de novo."));
+		if (csrfRecusado(token, cookie, refresh, csrf)) {
+			return erroCsrf();
 		}
 		try {
 			byte[] corpo = requisicao.getInputStream().readNBytes(CORPO_MAXIMO + 1);
@@ -56,6 +55,37 @@ class ApiReplicaController {
 			Thread.currentThread().interrupt();
 		} catch (IOException | IllegalArgumentException ignored) {
 			// A fronteira é indisponível quando o agente perde a atribuição.
+		}
+		return indisponivel();
+	}
+
+	@PostMapping({"/auth/login", "/auth/refresh", "/auth/logout", "/auth/2fa/verify"})
+	ResponseEntity<?> operarSessao(@RequestHeader(value = "X-Session-Token", required = false) String token,
+			@RequestHeader(value = "Idempotency-Key", required = false) String chave,
+			@RequestHeader(value = "X-CSRF-Protection", required = false) String csrf,
+			@RequestHeader(value = "X-Device-Fingerprint", required = false) String dispositivo,
+			@RequestHeader(value = "X-Enois-Client-IP", required = false) String ip,
+			@RequestHeader(value = "X-Enois-Ingress-Proof", required = false) String prova,
+			@CookieValue(value = SessionCookies.SESSION, required = false) String cookie,
+			@CookieValue(value = SessionCookies.REFRESH, required = false) String refresh,
+			HttpServletRequest requisicao) {
+		if (csrfRecusado(token, cookie, refresh, csrf)) {
+			return erroCsrf();
+		}
+		try {
+			byte[] corpo = requisicao.getInputStream().readNBytes(CORPO_SESSAO_MAXIMO + 1);
+			if (corpo.length > CORPO_SESSAO_MAXIMO) {
+				return ResponseEntity.status(413).cacheControl(CacheControl.noStore())
+					.body(new ErrorResponse("PAYLOAD_TOO_LARGE", "Requisição de sessão excede o limite.", Instant.now()));
+			}
+			String caminho = requisicao.getServletPath();
+			String operacao = caminho.substring(caminho.lastIndexOf('/') + 1);
+			return respostaPublica(dados.operarSessao(operacao, corpo, StringUtils.hasText(token) ? token : cookie,
+				refresh, chave, dispositivo, ip, prova), true);
+		} catch (InterruptedException falha) {
+			Thread.currentThread().interrupt();
+		} catch (IOException | IllegalArgumentException ignored) {
+			// O ingresso e o serviço de dados precisam estar disponíveis para operar uma sessão.
 		}
 		return indisponivel();
 	}
@@ -89,16 +119,34 @@ class ApiReplicaController {
 	}
 
 	private static ResponseEntity<?> respostaPublica(HttpResponse<byte[]> resposta) {
+		return respostaPublica(resposta, false);
+	}
+
+	private static ResponseEntity<?> respostaPublica(HttpResponse<byte[]> resposta, boolean sessao) {
 		int codigo = resposta.statusCode();
 		if (STATUS_PUBLICOS.contains(codigo)
 				&& resposta.headers().firstValue("X-Enois-Data-Protocol").filter("1"::equals).isPresent()) {
 			var publica = ResponseEntity.status(codigo).cacheControl(CacheControl.noStore());
 			resposta.headers().firstValue(HttpHeaders.RETRY_AFTER)
 				.ifPresent(valor -> publica.header(HttpHeaders.RETRY_AFTER, valor));
+			if (sessao) {
+				resposta.headers().allValues(HttpHeaders.SET_COOKIE)
+					.forEach(valor -> publica.header(HttpHeaders.SET_COOKIE, valor));
+			}
 			return publica
 				.contentType(MediaType.APPLICATION_JSON).body(resposta.body());
 		}
 		return indisponivel();
+	}
+
+	private static boolean csrfRecusado(String token, String cookie, String refresh, String csrf) {
+		return !StringUtils.hasText(token) && (StringUtils.hasText(cookie) || StringUtils.hasText(refresh))
+			&& !"1".equals(csrf);
+	}
+
+	private static ResponseEntity<?> erroCsrf() {
+		return ResponseEntity.status(403).cacheControl(CacheControl.noStore()).body(Map.of(
+			"code", "CSRF_REQUIRED", "message", "Requisicao recusada. Recarregue a pagina e tente de novo."));
 	}
 
 	private static ResponseEntity<ErrorResponse> indisponivel() {

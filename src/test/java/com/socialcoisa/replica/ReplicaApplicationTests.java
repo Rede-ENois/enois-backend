@@ -38,7 +38,7 @@ class ReplicaApplicationTests {
 			assertThat(contexto.getBean(RequestMappingHandlerMapping.class).getHandlerMethods().keySet())
 				.flatExtracting(info -> info.getPatternValues())
 				.containsExactlyInAnyOrder("/health", "/version", "/readyz", "/feed/posts/{postId}", "/feed/posts",
-					"/auth/me", "/error", "/error");
+					"/auth/me", "/auth/login", "/auth/logout", "/auth/refresh", "/auth/2fa/verify", "/error", "/error");
 
 			int porta = ((ServletWebServerApplicationContext) contexto).getWebServer().getPort();
 			var json = JsonMapper.builder().build();

@@ -36,7 +36,15 @@ origens HTTPS explícitas separadas por vírgulas. Uma falha de autenticação
 do workload resulta em 503. Um 401 do usuário só chega ao navegador após
 uma resposta autenticada do protocolo de dados.
 
+As rotas de sessão do J6 são `POST /auth/login`, `POST /auth/2fa/verify`,
+`POST /auth/refresh` e `POST /auth/logout`. O serviço de dados reaproveita
+o limite e as regras de autenticação do backend legado. A réplica só
+aceita o endereço de ingresso quando recebe a prova do agente pelo túnel.
+Login e renovação mantêm os valores `Set-Cookie` separados.
+
 ## Serviço Java de dados
+
+Para o aceite em staging, veja [MariaDB para o serviço de dados no J6](j6-mariadb.md).
 
 ```sh
 ./mvnw -Preplica,dados-distribuidos package
@@ -60,5 +68,5 @@ A revogação é lida no mesmo armazenamento de sessões em cada chamada.
 O serviço de dados pode processar a outbox e sua retenção com
 `REDE_DADOS_OUTBOX_ENABLED=true`. A ativação pertence ao corte de autoridade
 de jobs, quando o agendador anterior já foi drenado. Os claims e recibos
-continuam com o worker existente. Login, rotação de sessão, fan-out e
-os demais jobs e integrações seguem como etapas da migração.
+continuam com o worker existente. Fan-out e os demais jobs e integrações
+seguem como etapas da migração.

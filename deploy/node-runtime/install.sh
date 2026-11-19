@@ -140,7 +140,7 @@ if [[ -z "$MODE" ]]; then
   [[ -n "$CONTROL_PLANE" ]] || die '--control-plane é obrigatório'
   [[ -n "$TOKEN" ]] || die '--token é obrigatório'
   for tool in curl; do command -v "$tool" >/dev/null 2>&1 || die "Comando ausente: $tool"; done
-  command -v openssl >/dev/null 2>&1 || die 'Comando ausente: openssl (necessário para a chave e o CSR do nó)'
+  command -v /opt/homebrew/opt/openssl/bin/openssl >/dev/null 2>&1 || die 'Comando ausente: openssl (necessário para a chave e o CSR do nó)'
 
   if [[ -s "$NODE_HOME/node.json" ]]; then
     info "Nó já registrado em $NODE_HOME/node.json — nada a fazer (diagnóstico: ./node-doctor.sh)."
@@ -153,11 +153,11 @@ if [[ -z "$MODE" ]]; then
     # autoriza). O CN do CSR é um marcador: o emissor monta o sujeito a partir do
     # nodeId, que o nó ainda não tem antes do enroll.
     if [[ ! -s "$NODE_HOME/node.key" ]]; then
-      (umask 077; openssl genpkey -algorithm ED25519 -out "$NODE_HOME/node.key" 2>/dev/null) ||
+      (umask 077; /opt/homebrew/opt/openssl/bin/openssl genpkey -algorithm ED25519 -out "$NODE_HOME/node.key" 2>/dev/null) ||
         die 'não consegui gerar a chave Ed25519 do nó (openssl sem suporte a Ed25519?)'
     fi
     chmod 600 "$NODE_HOME/node.key"
-    openssl req -new -key "$NODE_HOME/node.key" -subj '/CN=ENOIS-NODE-ENROLL' \
+    /opt/homebrew/opt/openssl/bin/openssl req -new -key "$NODE_HOME/node.key" -subj '/CN=ENOIS-NODE-ENROLL' \
       -out "$NODE_HOME/node.csr" 2>/dev/null || die 'não consegui gerar o CSR do nó'
     # O PEM vira uma string JSON: as quebras de linha viram \n escapado.
     csr=$(awk '{printf "%s\\n", $0}' "$NODE_HOME/node.csr")
