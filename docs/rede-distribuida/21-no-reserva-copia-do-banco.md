@@ -41,39 +41,55 @@ O refresh **não inventa reserva**: só copia para nós que já têm linha. A li
 operador — promover um nó a reserva transforma o banco do Control Plane em dado que ele guarda, e
 isso não pode acontecer por um agendador ter escolhido.
 
-O job é **desligado por padrão** (`rede.network.standby.auto-sync.enabled=false`). O dump exige o
-binário e a senha do banco; um job que consulta o banco em desenvolvimento sem nó de reserva nenhum
-só gastaria I/O. Ligado, o desenho fica completo.
+O job é **desligado por padrão** (`rede.network.standby.auto-sync.enabled=false`). Um job que
+consulta o banco em desenvolvimento sem nó de reserva nenhum só gastaria I/O. Ligado, o desenho fica
+completo.
 
 ## 3. O dump
 
-`CommandLineStandbyDumpSource` (`rede.network.standby.dump.enabled=true`):
+### 3.1 Quem serializa — JDBC, não binário externo (#953)
 
-| opção | por quê |
-|---|---|
-| `--skip-dump-date` | duas cópias do MESMO dado têm o mesmo digest; sem isso, a retomada não provaria nada |
-| `--single-transaction` | dump consistente sem travar a escrita do banco que atende |
-| `--no-tablespaces` | não pede privilégio além de leitura |
-| `MYSQL_PWD` no ambiente | a senha não aparece em `ps` |
-| timeout (`dump.timeout-seconds`, mínimo 30 s) | dump travado não segura o endpoint indefinidamente |
+`JdbcStandbyDumpSource` (`rede.network.standby.dump.enabled=true`) é a implementação padrão desde a
+#953. Ela não exige `mariadb-dump` no `PATH` nem senha nova: usa a conexão que o aplicativo já tem.
 
-Sem o dump ligado, o bean de fallback **não finge cópia**: devolve 503 e a linha fica `FAILED` com o
-motivo. Um dump de mentira faria um nó sem o banco aparecer como pronto para assumir.
+**Antes (o que quebrava em PROD):** a cópia dependia do binário na imagem e de uma propriedade que o
+ambiente de produção não tinha. O container (`eclipse-temurin:25-jre-noble`) não traz o cliente da
+MariaDB, então ligar a propriedade não bastava: `GET /network/standby/dump` respondia 503 e a cadeia
+de reserva inteira não funcionava.
 
-**Falha dentro da transação.** Quando o servidor não consegue ler o banco, a exceção sobe e a
-transação da cópia sofre rollback. A marcação de falha é gravada por `StandbyFailureRecorder` em
-transação própria (`REQUIRES_NEW`) — senão a linha voltaria a `SYNCING` e o painel diria "copiando"
-para sempre.
+**Agora:** a sessão de leitura roda em `REPEATABLE READ` com transação aberta antes da primeira tabela
+e fechada depois da última — todas as tabelas saem do **mesmo ponto no tempo**, como o
+`--single-transaction` do `mariadb-dump`. A transação é só de leitura. O arquivo tem o formato do
+`mariadb-dump`: cabeçalho de sessão, `DROP TABLE IF EXISTS`, `CREATE TABLE` (pelo `SHOW CREATE TABLE`,
+que leva índice, colação e `AUTO_INCREMENT`), `INSERT` em lotes de `dump.batch-rows` (500) e o rodapé.
+Binário vai em hexadecimal; sem gatilhos, rotinas, eventos, usuários ou grants — a réplica é um banco,
+não um servidor, e credencial não viaja para o nó.
 
-### 3.1 O runtime do reserva já não fica para trás
+`CommandLineStandbyDumpSource` continua existindo e só entra com
+`rede.network.standby.dump.source=cli` explícito (para quem prefere o binário e o tem). As duas fontes
+ligadas pela mesma propriedade seriam ambiguidade de bean, e a que não roda em produção não pode ser a
+escolhida por omissão.
 
-A promoção exigia duas coisas do nó que assume, e o ciclo entregou as duas:
-a **cópia do banco** (este documento) e a **versão corrente do runtime** — o
-outro lado do mesmo problema: nada na máquina chamava o `--update` quando saía
-release, e o master recebia deploy enquanto a reserva ficava no código antigo.
-Agora `bootstrap.sh --auto-update on` faz o host seguir o release publicado
-(`09-instalacao.md` §6.1, desligado por padrão). O que continua manual é a
-cópia do banco, nas lacunas abaixo.
+### 3.2 O dump é gerado uma vez por janela
+
+**Antes:** cada `GET /network/standby/dump` rodava o dump inteiro do zero. Um nó que perdia a conexão
+aos 90% e retomava fazia o banco de produção ser lido do começo, e a retomada concatenava metades de
+dois dumps diferentes (digest diferente = confirmação recusada para sempre).
+
+**Agora:** o dump fica em memória por `rede.network.standby.dump.cache-seconds` (600 s por padrão) e a
+retomada devolve **o mesmo arquivo** — mesmo digest, mesmos bytes. O teto é curto de propósito: dentro
+da janela, uma escrita nova no banco não aparece na cópia; o que a janela evita é o I/O de re-dumpar a
+cada tentativa. `cache-seconds=0` desliga o cache. A prova é `StandbyCacheTests`, com uma fonte que
+muda a cada chamada (o caso real): é ela que discrimina — a fonte da rota é estável e regenerar daria
+o mesmo byte.
+
+### 3.3 O dump é conferido antes de sair
+
+`verify()` roda logo depois da geração: cada tabela lida tem `CREATE TABLE` e, se tinha linha no
+snapshot, um `INSERT`. Tabela com linha na origem e sem o dado no arquivo é **recusada** (a cópia vira
+`FAILED` com o motivo). O carregamento de verdade — o arquivo abre e devolve o dado num MariaDB real —
+está em `scripts/tests/standby-dump-migration-test.sh` (PASS 15), com texto com aspas/barra/nova linha,
+binário, `NULL`, número negativo, bigint grande e timestamp com milissegundos.
 
 ## 4. O que este ciclo NÃO entrega — declarado, não escondido
 
@@ -86,7 +102,11 @@ cópia do banco, nas lacunas abaixo.
    nó precisa de uma versão do runtime que chame `GET /network/standby/dump` e
    `POST /network/standby/complete`. O contrato existe e está testado; o runtime que o consome, não.
 3. **O nó não valida o banco recebido.** Ele confere o digest (que prova que os bytes são os que o
-   servidor mandou), não que o dump abre. Uma cópia íntegra de um banco quebrado passaria.
+   servidor mandou), não que o dump abre. O Control Plane confere o conteúdo antes de enviar (§3.3) e
+   o harness carrega o arquivo num MariaDB real; o nó ainda não faz a sua própria carga de prova. Um
+   dump que só quebrasse num detalhe do dialeto do nó passaria. Mas o nó **agora relata** a falha de
+   restauração (`POST /network/standby/failed`), e a linha vira `FAILED` com o motivo — antes ela
+   ficava `SYNCING` para sempre.
 4. **Não há aprovação de reserva no painel do admin.** A "reserva" deste ciclo é o nó que tem cópia
    `READY`; declarar um nó como reserva oficial (e alertar quando ele não tem cópia do dia) é do
    painel, e não foi entregue.
@@ -116,6 +136,7 @@ cópia do banco, nas lacunas abaixo.
 |---|---|
 | `GET /network/standby/dump?offset=` | o trecho; `X-Standby-Sha256` (dump inteiro), `X-Standby-Total-Bytes`, `X-Standby-Byte-Start` |
 | `POST /network/standby/complete` `{bytes, sha256}` | digest diferente do enviado → `FAILED`; nó não confirma a cópia de outro (`403 STANDBY_NODE_MISMATCH`) |
+| `POST /network/standby/failed` `{reason}` | o nó conta que não conseguiu gravar/restaurar; a linha vira `FAILED` com o motivo, em vez de ficar `SYNCING` para sempre (#953 item 4) |
 
 Códigos: `STANDBY_NODE_REQUIRED`, `STANDBY_NODE_NOT_FOUND`, `STANDBY_COPY_NOT_STARTED`,
 `STANDBY_COPY_MISSING`, `STANDBY_DUMP_UNAVAILABLE`, `STANDBY_OFFSET_INVALID`,
@@ -136,6 +157,10 @@ Códigos: `STANDBY_NODE_REQUIRED`, `STANDBY_NODE_NOT_FOUND`, `STANDBY_COPY_NOT_S
 | promoção com cópia sobe o termo e audita o nó | `comCopiaProntaPromocaoSobeOTermoEAuditaONo` |
 | refresh não recopia com cópia do dia; recopia quando velha | `refreshNaoCopiaDeNovoQuandoJaHaCopiaDoDia`, `refreshCopiaDeNovoQuandoACopiaEstaVelha` |
 | membro comum não lê nem pede cópia | `membroComumNaoLeNemPedeCopiaDoBanco` |
+| dump por JDBC: tabela, INSERT, escape, estabilidade, retomada, verify recusando arquivo furado | `JdbcStandbyDumpSourceTests` (5) |
+| dump é gerado uma vez por janela; retomada não regenera; verify recusa | `StandbyCacheTests` (4, fonte que muda a cada chamada) |
+| nó relata falha de restauração; retomada usa o mesmo dump | `NetworkStandbyTests.noReportaFalhaERetomadaUsaOMesmoDumpEmCache` |
+| o dump CARREGA num MariaDB 11.4 e devolve texto/binário/NULL/timestamp idênticos | `scripts/tests/standby-dump-migration-test.sh` (15 asserções) |
 | migração duas vezes em MariaDB 11.4 com dados | `scripts/tests/standby-migration-test.sh` (12 asserções) |
 
 A migração é testada no banco real porque o upsert do início de cópia e o `char(64)` do digest são

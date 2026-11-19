@@ -30,6 +30,7 @@ import com.socialcoisa.rede.network.application.StorageCatalogService;
 import com.socialcoisa.rede.network.application.StorageContentService;
 import com.socialcoisa.rede.network.application.port.out.S3CredentialRepository;
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
+import com.socialcoisa.rede.network.domain.ObjectMetadata;
 import com.socialcoisa.rede.network.domain.S3Credential;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StorageObjectState;
@@ -92,6 +93,9 @@ class S3GatewayController {
 
 	/** Teto de chaves por página, igual ao S3. */
 	private static final int MAX_KEYS = 1000;
+
+	/** O prefixo do metadado declarado pelo cliente no PUT; volta como cabeçalho no HEAD e no GET. */
+	static final String META_PREFIX = "x-amz-meta-";
 
 	private final S3CredentialRepository credentials;
 	private final StorageCatalogRepository catalog;
@@ -210,8 +214,12 @@ class S3GatewayController {
 		// existe, que pode estar STORED. Guardar o estado de antes é o que permite devolvê-lo intacto
 		// se a gravação for recusada por donagem.
 		StorageObject antes = catalog.find(bucket, key).orElse(null);
+		// Metadado e cabeçalhos declarados junto do corpo (V367): lidos ANTES da gravação, porque cabeçalho
+		// recusado não pode deixar objeto criado — nem um PENDING decorado com o que não foi aceito.
+		StorageCatalogService.ClientHeaders declarados = clientHeaders(request);
 		StorageObject pending = storage.beginUpload(credential.ownerUserId(), bucket, key,
 			contentType == null ? "application/octet-stream" : contentType);
+		storage.saveClientHeaders(pending, declarados);
 		boolean iaCriar = antes == null || !antes.id().equals(pending.id());
 		if (!iaCriar && antes.state() != StorageObjectState.PENDING) {
 			throw s3Error(409, "ObjectAlreadyStored", "A chave ja tem copia confirmada; use outro nome de chave.");
@@ -261,7 +269,8 @@ class S3GatewayController {
 		String key = keyOf(request);
 		String expires = query(request).get("expires");
 		var upload = multipart.create(credential.ownerUserId(), credential.id(), bucket, key,
-			request.getContentType(), expires == null ? null : Long.valueOf(expires));
+			request.getContentType(), expires == null ? null : Long.valueOf(expires))
+			.comCabeçalhos(clientHeaders(request));
 		if (!bucketSemDono(bucket, credential.ownerUserId())) {
 			multipart.abort(upload.uploadId());
 			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
@@ -389,7 +398,7 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "GET");
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
-		StorageObject object = storage.requireDownloadable(bucket, keyOf(request));
+		StorageObject object = storage.requireDownloadable(bucket, keyOf(request), "HEAD");
 		return content.head(object);
 	}
 
@@ -405,6 +414,33 @@ class S3GatewayController {
 			storage.delete(credential.ownerUserId(), bucket, key);
 		}
 		return ResponseEntity.noContent().build();
+	}
+
+	/**
+	 * Lê {@code x-amz-meta-*}, {@code Cache-Control} e {@code Content-Disposition} do pedido.
+	 *
+	 * <p>O S3 trata o metadado como {@code x-amz-meta-<nome>} com o nome em minúsculas e sem o prefixo;
+	 * é essa a forma que o HEAD devolve, e é o que o {@link ObjectMetadata} normaliza. O tipo de
+	 * conteúdo é decidido pela coluna própria, então o {@code Content-Type} não entra aqui.</p>
+	 */
+	private static StorageCatalogService.ClientHeaders clientHeaders(HttpServletRequest request) {
+		Map<String, String> meta = new LinkedHashMap<>();
+		for (java.util.Enumeration<String> nomes = request.getHeaderNames(); nomes != null && nomes.hasMoreElements();) {
+			String nome = nomes.nextElement();
+			if (nome != null && nome.toLowerCase(Locale.ROOT).startsWith(META_PREFIX)) {
+				// `putIfAbsent`: cabeçalho repetido vale a primeira ocorrência, como no próprio contrato.
+				meta.putIfAbsent(nome.substring(META_PREFIX.length()), request.getHeader(nome));
+			}
+		}
+		ObjectMetadata metadata;
+		try {
+			metadata = ObjectMetadata.of(meta);
+		}
+		catch (IllegalArgumentException invalido) {
+			throw s3Error(400, "InvalidArgument", invalido.getMessage());
+		}
+		return StorageCatalogService.clientHeaders(request.getHeader("Cache-Control"),
+			request.getHeader("Content-Disposition"), metadata);
 	}
 
 	// ---------------------------------------------------------------- autenticação

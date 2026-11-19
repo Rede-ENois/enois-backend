@@ -426,6 +426,89 @@ class S3GatewayTests {
 			.andExpect(header().string(HttpHeaders.ETAG, "\"" + sha + "\""));
 	}
 
+	/**
+	 * V367: o que o cliente declara no PUT volta no HEAD e no GET.
+	 *
+	 * <p><b>Antes:</b> o gateway guardava tipo, tamanho e digest e descartava o resto — o
+	 * {@code x-amz-meta-*} sumia, e o {@code Cache-Control} e o nome de arquivo do anexo vinham da
+	 * política do TIPO, não do que o cliente pediu. <b>Agora:</b> voltam iguais.</p>
+	 */
+	@Test
+	void o_metadado_e_os_cabecalhos_declarados_no_put_voltem_no_head_e_no_get() throws Exception {
+		byte[] corpo = "laudo em pdf".getBytes(StandardCharsets.UTF_8);
+		String sha = HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(corpo));
+		MockHttpServletRequestBuilder put = put("/s3/" + bucket + "/docs/laudo.pdf").content(corpo)
+			.contentType("application/pdf")
+			.header("x-amz-meta-Autor", "Ana")
+			.header("x-amz-meta-setor", "juridico")
+			.header(HttpHeaders.CACHE_CONTROL, "private, max-age=60")
+			.header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"laudo-final.pdf\"");
+		assinar(put, SECRET, sha);
+		mockMvc.perform(put).andExpect(status().isOk());
+
+		MockHttpServletRequestBuilder headObject = head("/s3/" + bucket + "/docs/laudo.pdf");
+		assinar(headObject, SECRET, shaVazio());
+		var head = mockMvc.perform(headObject).andExpect(status().isOk()).andReturn();
+		// O nome é normalizado em minúsculas, como o S3 faz: `Autor` e `autor` são a mesma chave.
+		assertThat(head.getResponse().getHeader("x-amz-meta-autor")).isEqualTo("Ana");
+		assertThat(head.getResponse().getHeader("x-amz-meta-setor")).isEqualTo("juridico");
+		mockMvc.perform(headObject)
+			// O declarado vence a política do tipo (que diria `private, no-store` para PDF).
+			.andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, max-age=60"))
+			.andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION,
+				"attachment; filename=\"laudo-final.pdf\""));
+
+		MockHttpServletRequestBuilder getObject = get("/s3/" + bucket + "/docs/laudo.pdf");
+		assinar(getObject, SECRET, shaVazio());
+		var getResult = mockMvc.perform(getObject).andReturn();
+		if (getResult.getRequest().isAsyncStarted()) {
+			getResult = mockMvc.perform(asyncDispatch(getResult)).andReturn();
+		}
+		assertThat(getResult.getResponse().getHeader("x-amz-meta-autor")).isEqualTo("Ana");
+		assertThat(getResult.getResponse().getHeader(HttpHeaders.CACHE_CONTROL)).isEqualTo("private, max-age=60");
+		assertThat(getResult.getResponse().getHeader(HttpHeaders.CONTENT_DISPOSITION))
+			.isEqualTo("attachment; filename=\"laudo-final.pdf\"");
+		assertThat(getResult.getResponse().getContentAsByteArray()).isEqualTo(corpo);
+	}
+
+	/** Objeto sem metadado declarado continua saindo com a política do tipo, não com cabeçalho vazio. */
+	@Test
+	void objeto_sem_metadado_nao_ganha_cabecalho_de_metadado() throws Exception {
+		gravar("sem-meta.txt", "texto");
+		MockHttpServletRequestBuilder headObject = head("/s3/" + bucket + "/sem-meta.txt");
+		assinar(headObject, SECRET, shaVazio());
+		mockMvc.perform(headObject)
+			.andExpect(status().isOk())
+			.andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+			.andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION, org.hamcrest.Matchers.nullValue()));
+	}
+
+	/** Cabeçalho com quebra de linha seria injeção de resposta: recusado no PUT, e nada é gravado. */
+	@Test
+	void cabecalho_declarado_com_quebra_de_linha_e_recusado() throws Exception {
+		// O dono do bucket gravado antes: sem ele, o bucket nasceria do objeto de outra conta e a
+		// leitura responderia 403 por donagem, escondendo o que se quer provar (a chave não existe).
+		gravar("docs/antes.txt", "ancora");
+		byte[] corpo = "x".getBytes(StandardCharsets.UTF_8);
+		String sha = HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(corpo));
+		MockHttpServletRequestBuilder put = put("/s3/" + bucket + "/docs/mau.txt").content(corpo)
+			.contentType("text/plain")
+			// Um objeto de outro arquivo do MESMO bucket: o bucket já nasceu do dono, e a chave não
+			// existir é o que se prova. Criar `docs/mau.txt` como primeiro objeto faria o bucket ser de
+			// outra conta pelo objeto gravado, e o 404 viraria 403 por um motivo que este teste não é.
+			.header(HttpHeaders.CONTENT_DISPOSITION, "inline\r\nSet-Cookie: a=b");
+		assinar(put, SECRET, sha);
+		mockMvc.perform(put)
+			.andExpect(status().isBadRequest())
+			.andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
+				.string(org.hamcrest.Matchers.containsString("InvalidArgument")));
+
+		// Recusar depois de gravar decoraria a linha com o que não foi aceito; a chave não pode existir.
+		MockHttpServletRequestBuilder getObject = get("/s3/" + bucket + "/docs/mau.txt");
+		assinar(getObject, SECRET, shaVazio());
+		mockMvc.perform(getObject).andExpect(status().isNotFound());
+	}
+
 	/** ListObjectsV2 respeita o prefixo e devolve o documento no namespace do S3. */
 	@Test
 	void listagem_v2_filtra_por_prefixo() throws Exception {
