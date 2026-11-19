@@ -20,15 +20,21 @@ class CommunityPersistenceAdapter implements CommunityRepository {
 	private final SpringDataCommunityMemberJpaRepository memberRepo;
 	private final SpringDataFavoriteCommunityJpaRepository favoriteRepo;
 	private final SpringDataCommunityPinnedPostJpaRepository pinnedRepo;
+	private final SpringDataCommunityChannelJpaRepository channelRepo;
+	private final org.springframework.jdbc.core.JdbcTemplate jdbc;
 
 	CommunityPersistenceAdapter(SpringDataCommunityJpaRepository springData,
 			SpringDataCommunityMemberJpaRepository memberRepo,
 			SpringDataFavoriteCommunityJpaRepository favoriteRepo,
-			SpringDataCommunityPinnedPostJpaRepository pinnedRepo) {
+			SpringDataCommunityPinnedPostJpaRepository pinnedRepo,
+			SpringDataCommunityChannelJpaRepository channelRepo,
+			org.springframework.jdbc.core.JdbcTemplate jdbc) {
 		this.springData = springData;
 		this.memberRepo = memberRepo;
 		this.favoriteRepo = favoriteRepo;
 		this.pinnedRepo = pinnedRepo;
+		this.channelRepo = channelRepo;
+		this.jdbc = jdbc;
 	}
 
 	@Override
@@ -209,8 +215,28 @@ class CommunityPersistenceAdapter implements CommunityRepository {
 			.toList();
 	}
 
+	/**
+	 * Exclusão da comunidade levando os vínculos que NÃO têm chave estrangeira para `communities`.
+	 *
+	 * <p>Antes, só membros e a linha da comunidade saíam: canais, publicações de canal, o fixado e os
+	 * favoritos ficavam órfãos no banco. As tabelas não têm FK (V33, V97 e V139), então a limpeza é
+	 * explícita e na mesma transação de quem chamou. O feed de canal continua sendo LIDO por id nas
+	 * Consultas — sem a linha, ele simplesmente deixa de existir.</p>
+	 */
 	@Override
 	public void delete(String communityId) {
+		// Publicações de canal e o que pende delas: comentário e reação não têm FK para posts.
+		jdbc.update("delete from comment_reactions where comment_id in (select id from comments"
+			+ " where post_id in (select id from posts where community_id = ? and channel_id is not null))",
+			communityId);
+		jdbc.update("delete from comments where post_id in"
+			+ " (select id from posts where community_id = ? and channel_id is not null)", communityId);
+		jdbc.update("delete from reactions where post_id in"
+			+ " (select id from posts where community_id = ? and channel_id is not null)", communityId);
+		jdbc.update("delete from posts where community_id = ? and channel_id is not null", communityId);
+		channelRepo.deleteByCommunityId(communityId);
+		pinnedRepo.deleteById(communityId);
+		jdbc.update("delete from favorite_communities where community_id = ?", communityId);
 		springData.deleteById(communityId);
 	}
 }
