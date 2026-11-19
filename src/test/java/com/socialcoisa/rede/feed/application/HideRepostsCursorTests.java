@@ -163,6 +163,18 @@ class HideRepostsCursorTests {
 		return post(id, createdAt).markRepostOf("post_original", "autor_original", true);
 	}
 
+	@Test
+	void authorWithoutProfileShowsGenericLabelNotTheRawId() {
+		// Autor banido/anonimizado: nenhum perfil vem do repositório (autor "author" sem stub).
+		when(preferences.blockedTopics("synthetic_reader")).thenReturn(List.of());
+		when(posts.findActiveAll(any(), eq(2))).thenReturn(List.of(post("p1", NEWEST)));
+
+		FeedPage page = feed.getFeed(new GetFeedQuery(READER, Optional.empty(), 2, FeedTab.ALL));
+
+		assertThat(page.items()).hasSize(1);
+		assertThat(page.items().get(0).authorName()).isEqualTo("Usuário");
+	}
+
 	private static Post post(String id, Instant createdAt) {
 		return Post.publish(new PostId(id), new UserId("author"), PostType.INSIGHT, "conteudo", null,
 			List.of(), List.of(), null, createdAt);
