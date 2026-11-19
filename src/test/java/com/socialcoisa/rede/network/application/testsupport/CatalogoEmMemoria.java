@@ -24,6 +24,8 @@ public abstract class CatalogoEmMemoria implements StorageCatalogRepository {
 	
 
 	private final java.util.Map<String, StorageObject> byKey = new java.util.LinkedHashMap<>();
+	/** Todas as linhas por id, inclusive as aposentadas — o banco guarda versão antiga. */
+	private final java.util.Map<String, StorageObject> porId = new java.util.LinkedHashMap<>();
 	private final java.util.Map<String, StoragePlacement> placements = new java.util.LinkedHashMap<>();
 
 	@Override
@@ -33,7 +35,19 @@ public abstract class CatalogoEmMemoria implements StorageCatalogRepository {
 
 	@Override
 	public Optional<StorageObject> findById(String id) {
-		return byKey.values().stream().filter(o -> o.id().equals(id)).findFirst();
+		// Todas as linhas, não só a corrente da chave: o aposentado tem de continuar achável por id.
+		return Optional.ofNullable(porId.get(id));
+	}
+
+	/** Grava a linha: por id sempre, e na chave só se for a corrente (o índice único do V352). */
+	private void guardar(StorageObject object) {
+		porId.put(object.id(), object);
+		if (object.currentVersion()) {
+			byKey.put(object.bucket() + "/" + object.key(), object);
+		}
+		else {
+			byKey.remove(object.bucket() + "/" + object.key());
+		}
 	}
 
 	@Override
@@ -57,12 +71,19 @@ public abstract class CatalogoEmMemoria implements StorageCatalogRepository {
 	public StorageObject createPending(String id, String bucket, String key, String contentType, String createdBy,
 			Instant now) {
 		StorageObject existing = byKey.get(bucket + "/" + key);
-		if (existing != null) {
+		// Fiel ao banco de V352: o índice único é (bucket, object_key, current_key), e a versão
+		// substituída (superseded_by preenchido) sai do índice. Criar a mesma chave numa linha nova
+		// depois de marcar a anterior como substituída é o insert que o banco aceita.
+		boolean colide = existing != null && existing.currentVersion();
+		if (colide) {
+			// A chave única do banco é (bucket, object_key) e o insert é inserir-ou-ler: a linha que
+			// já existe é a resposta, qualquer que seja o estado. É por isso que o serviço precisa
+			// retirar a lápide do caminho antes de chamar aqui.
 			return existing;
 		}
 		StorageObject object = StorageObject.current(id, bucket, key, contentType, null, null,
 			StorageObjectState.PENDING, createdBy, now, now, null);
-		byKey.put(bucket + "/" + key, object);
+		guardar(object);
 		return object;
 	}
 
@@ -87,13 +108,18 @@ public abstract class CatalogoEmMemoria implements StorageCatalogRepository {
 			return false;
 		}
 		StorageObject changed = change.apply(current.get());
-		byKey.put(changed.bucket() + "/" + changed.key(), changed);
+		guardar(changed);
 		return true;
 	}
 
 	@Override
 	public boolean discardPending(String id) {
-		throw new UnsupportedOperationException("nao usado neste teste");
+		// Como no banco: some a linha (e a colocação dela), não o corpo no nó — a cópia de cada nó é
+		// da coleta do StorageLifecycle, que consulta as colocações antes.
+		porId.remove(id);
+		byKey.values().removeIf(o -> o.id().equals(id));
+		placements.keySet().removeIf(chave -> chave.startsWith(id + "/"));
+		return true;
 	}
 	@Override
 	public boolean restorePending(String id) {
@@ -223,7 +249,7 @@ public abstract class CatalogoEmMemoria implements StorageCatalogRepository {
 		if (corrente == null || !corrente.currentVersion()) {
 			return false;
 		}
-		byKey.put(bucket + "/" + key, new StorageObject(corrente.id(), corrente.bucket(), corrente.key(),
+		guardar(new StorageObject(corrente.id(), corrente.bucket(), corrente.key(),
 			corrente.contentType(), corrente.bytes(), corrente.sha256(), corrente.state(), corrente.createdBy(),
 			corrente.createdAt(), now, corrente.deletedAt(), corrente.version(), supersededBy,
 			corrente.expiresAt(), corrente.metadata(), corrente.cacheControl(), corrente.contentDisposition()));

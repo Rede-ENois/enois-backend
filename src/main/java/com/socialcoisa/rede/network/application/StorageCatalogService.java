@@ -199,11 +199,46 @@ public class StorageCatalogService {
 			return beginVersionedUpload(actorId, bucket, key, type, now, policy);
 		}
 
+		// A chave única do banco é (bucket, object_key) — e a linha viva é a única com
+		// `superseded_by is null`. O `createPending` é inserir-ou-ler, então uma chave que ainda tem
+		// linha devolve a linha, qualquer que seja o estado. Duas armadilhas, e as duas davam falha
+		// silenciosa:
+		//
+		//   - vencida que a coleta não passou: o `beginUpload` devolvia o objeto velho, com o prazo
+		//     velho, e o `finishUpload` respondia 409 "já tem cópia" para um objeto que o download já
+		//     tratava como 404;
+		//   - lápide de remoção: o 409 chegava para o cliente S3, para quem o DELETE é só um nome livre
+		//     de novo.
+		//
+		// O que sai da chave aqui não é lápide nova: nada que ainda tenha conteúdo é marcado como
+		// removido por causa de uma abertura de upload que pode não virar gravação.
+		//   - lápide existente (o cliente já removeu): a LINHA sai. Deixá-la como lápide aposentada a
+		//     faria ser achada de novo pelo `delete`, que apagaria o objeto novo no lugar do dela — e o
+		//     que ela guardava já está na cópia de cada nó, que é quem a coleta consulta;
+		//   - vencida: sai aposentada (`superseded_by` apontando para a linha nova), porque vencimento
+		//     não é remoção e a coleta precisa dela como expirada.
+		// O insert-ou-ler deixaria de engolir a chave nos dois casos.
+		StorageObject existente = catalog.find(bucket, key).orElse(null);
+		if (existente != null && existente.state() == StorageObjectState.DELETED) {
+			catalog.discardPending(existente.id());
+			existente = null;
+		}
+		if (existente != null && existente.expired(now)) {
+			// A versão vencida sai da chave sem virar lápide: vencimento não é remoção. Se fosse lápide,
+			// o corpo de um objeto só vencido deixaria de ser servido por quem tem cópia, e a coleta o
+			// trataria como removido em vez de expirado. O que ela aponta é a linha nova.
+			String novoId = OBJECT_ID_PREFIX + NodeIds.next("");
+			if (!catalog.markSuperseded(bucket, key, novoId, now)) {
+				throw new ApiException(409, "STORAGE_VERSION_RACE",
+					"A chave mudou durante a reabertura; tente novamente.");
+			}
+			return catalog.createPending(novoId, bucket, key, type, actorId, now);
+		}
 		StorageObject object = catalog.createPending(OBJECT_ID_PREFIX + NodeIds.next(""), bucket, key, type,
 			actorId, now);
 		if (object.state() == StorageObjectState.DELETED) {
-			// A chave é um objeto novo depois da lápide: reabrir tem de ser explícito, senão o cliente
-			// reenvia o arquivo e nada aparece no download — falha silenciosa do pior tipo.
+			// Corrida: a lápide apareceu entre a leitura e o insert-ou-ler, e o insert-ou-ler devolveu
+			// a linha morta. Nada foi gravado, então a resposta pode ser a mesma de antes.
 			throw new ApiException(409, "STORAGE_KEY_DELETED",
 				"Esta chave foi removida e ainda espera coleta no no; remova a lapide ou use outra chave.");
 		}

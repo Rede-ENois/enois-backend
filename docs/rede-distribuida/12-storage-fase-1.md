@@ -88,6 +88,38 @@ de PUT do gateway (primeiro objeto 200, segundo 507 `QuotaExceeded`, vizinho 200
 global em vez de por participante, sem o acréscimo do tamanho, `beginUpload` sem a checagem, a soma
 que nunca acontece — **4 de 4 derrubam**.
 
+## 2.4 Chave vencida e chave removida recebem gravação nova
+
+A leitura já tratava o objeto vencido como inexistente (`requireDownloadable` responde 404), e o
+cliente S3 trata `DELETE` como "o nome está livre". O upload, não: `network_storage_objects` tem uma
+linha viva por `bucket + object_key` (o índice condicional `uq_network_storage_objects_current` do
+V352) e o `createPending` é **inserir-ou-ler** — ele devolvia a linha que já existia **qualquer que
+fosse o estado**. Duas falhas silenciosas saíam daí:
+
+| situação | antes | agora |
+|---|---|---|
+| chave vencida, coleta ainda não passou | o `beginUpload` devolvia o objeto velho, com o prazo velho; o `finishUpload` respondia `409 STORAGE_ALREADY_STORED` — e a chave não dava nem para baixar (404) nem para regravar | a versão vencida **sai aposentada** (`superseded_by` apontando para a linha nova) e a gravação segue numa linha nova, com id novo e prazo novo |
+| chave com lápide (removida pelo cliente ou pelo bucket) | `409 STORAGE_KEY_DELETED` — o cliente S3 reenviava o arquivo e recebia erro num nome que ele já tinha liberado | a linha da lápide é **descartada** e a gravação nasce numa linha nova |
+
+O que sai da chave não é lápide nova. Nada que ainda tenha conteúdo é marcado como removido por causa
+de uma **abertura** de upload — que roda em retry de rede e pode nunca virar gravação. E aposentar
+não é remover: a versão vencida continua `STORED`, e a coleta continua vendo nela um objeto
+**expirado**, não um removido, porque o corpo dela pode estar servido por quem tem cópia. A lápide, que
+já era remoção antes desta requisição, é apagada da tabela: o que ela guardava já está nas colocações
+de cada nó, que é o que a coleta consulta — apagar a linha não apaga byte nenhum de nó.
+
+O objeto vivo não muda: reenviar o mesmo `PUT` devolve o **mesmo** objeto (retry idempotente), e a
+rota S3 continua respondendo `409 ObjectAlreadyStored` quando o corpo tenta substituir uma cópia já
+confirmada.
+
+**Verificação:** `StorageExpiredKeyReuseTests` **6** (chave vencida recebe objeto novo sem herdar o
+prazo; a gravação nova termina e o download a devolve; o vencido não é apagado do disco do nó; o
+reenvio de objeto vivo não lapida nem aposenta; a chave lapidada recebe objeto novo sem ressuscitar o
+removido; objeto vivo segue recusando a gravação). `StorageCatalogCurrentKeyPersistenceTests` **4** no
+banco real (a versão aposentada libera a chave; a lápide que continua corrente impede a linha nova; a
+lápide descartada libera; a segunda corrente é barrada pelo índice). Mutações: sem a aposentadoria do
+vencido, vencido virando lápide, lápide voltando a dar 409 — **3 de 3 derrubam**.
+
 ## 3. O que NÃO está entregue (e por quê)
 
 | do brief | por que não agora |
