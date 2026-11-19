@@ -113,6 +113,11 @@ public class PapoRetoWorker {
 	 * pela âncora (publicação + expressão): se a publicação já falou esta expressão num corte
 	 * anterior, a fala não nasce de novo — recomeço de horizonte e relê por falha não duplicam
 	 * contagem.
+	 *
+	 * O que vira fala é o assunto do CLUSTER, não a palavra solta: quando "inteligencia
+	 * artificial" aparece junto no texto, ela cobre "inteligencia" e "artificial" naquela
+	 * publicação. É o mais específico que nomeia a conversa — e é o que impede o ranking de
+	 * listar a mesma conversa três vezes. As tags da publicação entram como assunto declarado.
 	 */
 	private void falar(Instant de, Instant ate) {
 		List<PapoRetoRepository.Fala> falas = new ArrayList<>();
@@ -121,13 +126,15 @@ public class PapoRetoWorker {
 				List<PapoTemaFala> jaLidas = repository.temasDePublicacao(publicacao.publicacaoId());
 				Set<String> expressoesDaPublicacao = new HashSet<>();
 				jaLidas.forEach(fala -> expressoesDaPublicacao.add(fala.expressao()));
-				for (PapoAssuntoExtractor.Fala tema : extractor.extrair(publicacao.texto(), fonte.fonte())) {
-					if (expressoesDaPublicacao.contains(tema.expressao())) {
+				List<PapoAssuntoExtractor.Fala> extraidas = extractor.extrair(publicacao.texto(), fonte.fonte(),
+						publicacao.assuntosDeclarados());
+				for (String expressao : extractor.assuntos(extraidas)) {
+					if (expressoesDaPublicacao.contains(expressao)) {
 						continue;
 					}
-					expressoesDaPublicacao.add(tema.expressao());
-					falas.add(new PapoRetoRepository.Fala(bucketDaHora(publicacao.criadoEm()), tema.expressao(),
-							tema.fonte(), publicacao.autorId(), publicacao.communityId(), publicacao.publicacaoId(), ate));
+					expressoesDaPublicacao.add(expressao);
+					falas.add(new PapoRetoRepository.Fala(bucketDaHora(publicacao.criadoEm()), expressao,
+							fonte.fonte(), publicacao.autorId(), publicacao.communityId(), publicacao.publicacaoId(), ate));
 				}
 			}
 		}

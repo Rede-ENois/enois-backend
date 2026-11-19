@@ -60,6 +60,33 @@ class ConfessionarioPapoPublicacaoReader implements PapoPublicacaoReader {
 		return publicacoes;
 	}
 
+	/**
+	 * O texto das histórias e comentários relacionados, só os ativos. A autoria volta aqui
+	 * para o service decidir bloqueio/anonimato — a tela do Confessionário NUNCA mostra autor.
+	 */
+	@Override
+	public List<Detalhe> detalhes(java.util.Collection<String> publicacaoIds) {
+		if (publicacaoIds == null || publicacaoIds.isEmpty()) {
+			return List.of();
+		}
+		List<Detalhe> detalhes = new ArrayList<>();
+		for (ConfissaoPostJpaEntity entidade : posts.findAllById(publicacaoIds)) {
+			ConfissaoPost post = entidade.toDomain();
+			if (post.status() == ConfissaoStatus.ACTIVE && !post.content().isBlank()) {
+				detalhes.add(new Detalhe(post.id(), post.content(), post.authorId().value(), post.createdAt(),
+						null, null));
+			}
+		}
+		for (ConfissaoCommentJpaEntity entidade : comments.findAllById(publicacaoIds)) {
+			ConfissaoComment comment = entidade.toDomain();
+			if (comment.status() == ConfissaoStatus.ACTIVE && !comment.content().isBlank()) {
+				detalhes.add(new Detalhe(comment.id(), comment.content(), comment.authorId().value(),
+						comment.createdAt(), null, null));
+			}
+		}
+		return detalhes;
+	}
+
 	@Override
 	public String fonte() {
 		return "CONFISSAO";

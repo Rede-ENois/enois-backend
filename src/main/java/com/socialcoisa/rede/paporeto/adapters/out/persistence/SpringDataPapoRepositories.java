@@ -35,6 +35,37 @@ interface SpringDataPapoFalaJpaRepository extends JpaRepository<PapoFalaJpaEntit
 			""")
 	List<String> expressoesDePublicacao(@Param("publicacaoId") String publicacaoId);
 
+	/**
+	 * As publicações que falaram a expressão no escopo e na janela, da mais recente para a mais
+	 * antiga — uma linha por publicação (GROUP BY), porque a mesma publicação pode ter falado o
+	 * assunto em mais de uma expressão. O escopo vazio é o global (todas as comunidades).
+	 */
+	@Query("""
+			select f.publicacaoId as publicacaoId, f.fonte as fonte, f.communityId as communityId,
+				max(f.hora) as hora
+			from PapoFalaJpaEntity f
+			where f.expressao = :expressao and f.hora >= :de and f.hora < :ate
+				and (:escopo = '' or f.communityId = :escopo)
+			group by f.publicacaoId, f.fonte, f.communityId
+			order by max(f.hora) desc
+			""")
+	List<PapoPublicacaoProjecao> publicacoesDoAssunto(@Param("escopo") String escopo,
+			@Param("expressao") String expressao, @Param("de") Instant de, @Param("ate") Instant ate,
+			Pageable pageable);
+
+}
+
+/** A linha crua da visão de publicações relacionadas: identidade e origem, sem texto. */
+interface PapoPublicacaoProjecao {
+
+	String getPublicacaoId();
+
+	String getFonte();
+
+	String getCommunityId();
+
+	Instant getHora();
+
 }
 
 interface SpringDataPapoAssuntoJpaRepository extends JpaRepository<PapoAssuntoJpaEntity, PapoAssuntoJpaEntity.Chave> {

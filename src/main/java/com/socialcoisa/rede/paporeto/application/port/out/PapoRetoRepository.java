@@ -54,6 +54,17 @@ public interface PapoRetoRepository {
 	/** A timeline do escopo/subject: os buckets [de, ate) em ordem do tempo. */
 	List<PapoIntervalo> intervalosDe(String escopo, String subject, Instant de, Instant ate);
 
+	/**
+	 * As publicações que falaram o assunto no escopo e na janela, da mais recente para a mais
+	 * antiga: a matéria-prima da visão de "publicações relacionadas". Uma publicação aparece
+	 * uma vez só, mesmo que tenha falado o assunto em mais de uma expressão.
+	 */
+	List<PublicacaoDaFala> publicacoesDoAssunto(String escopo, String subject, Instant de, Instant ate, int limite);
+
+	/** De onde a publicação veio e quando: o service resolve texto e autoria nas fontes. */
+	record PublicacaoDaFala(String publicacaoId, String fonte, String communityId, Instant hora) {
+	}
+
 	/** Quantas falas existem na janela (observabilidade, não painel). */
 	long falasTotais(Instant de, Instant ate);
 
