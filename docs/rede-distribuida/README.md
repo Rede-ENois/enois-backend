@@ -13,8 +13,8 @@ testadas). O trabalho vive na branch de longa duração `feat/rede-distribuida`,
 ## Integração com enois-distributed
 
 O [inventário J0](j0/README.md) registra a superfície Java e a baseline
-de migração para o novo control plane. As fases abaixo descrevem a rede
-legada.
+de migração para o novo control plane. O [runtime Java isolado](j1-runtime.md)
+documenta o primeiro entry point da réplica. As fases abaixo descrevem a rede legada.
 
 ## Documentos
 

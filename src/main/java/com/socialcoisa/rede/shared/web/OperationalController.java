@@ -23,7 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
  * variavel de ambiente em producao.
  */
 @RestController
-class OperationalController {
+public class OperationalController {
 
 	@GetMapping("/health")
 	Map<String, String> health() {

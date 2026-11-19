@@ -32,7 +32,6 @@ import com.socialcoisa.rede.feed.application.GetFeedQuery;
 import com.socialcoisa.rede.feed.application.GetCommentsQuery;
 import com.socialcoisa.rede.feed.application.GetProfilePostsQuery;
 import com.socialcoisa.rede.feed.application.PostActionCommand;
-import com.socialcoisa.rede.feed.application.PublishPostCommand;
 import com.socialcoisa.rede.feed.application.ReactToPostCommand;
 import com.socialcoisa.rede.feed.domain.FeedTab;
 import com.socialcoisa.rede.feed.application.port.in.BulkDeletePostsUseCase;
@@ -45,7 +44,6 @@ import com.socialcoisa.rede.feed.application.port.in.GetFeedUseCase;
 import com.socialcoisa.rede.feed.application.port.in.GetPostUseCase;
 import com.socialcoisa.rede.feed.application.port.in.GetProfilePostsUseCase;
 import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
-import com.socialcoisa.rede.feed.application.port.in.PublishPostUseCase;
 import com.socialcoisa.rede.feed.application.port.in.ReactToPostUseCase;
 import com.socialcoisa.rede.feed.application.port.in.SavePostUseCase;
 import com.socialcoisa.rede.feed.application.port.in.SharePostUseCase;
@@ -69,7 +67,7 @@ class FeedController {
 
 	private static final int MAX_COMMENT_LENGTH = 1024;
 
-	private final PublishPostUseCase publishPostUseCase;
+	private final PublicacaoPostHttp publicacao;
 	private final GetFeedUseCase getFeedUseCase;
 	private final GetPostUseCase getPostUseCase;
 	private final GetProfilePostsUseCase getProfilePostsUseCase;
@@ -102,7 +100,7 @@ class FeedController {
 	/** Resposta do voto da enquete (PollView): o endpoint devolve o estado da enquete em JSON. */
 	private final tools.jackson.databind.ObjectMapper pollJson = new tools.jackson.databind.ObjectMapper();
 
-	FeedController(PublishPostUseCase publishPostUseCase, GetFeedUseCase getFeedUseCase, GetPostUseCase getPostUseCase,
+	FeedController(PublicacaoPostHttp publicacao, GetFeedUseCase getFeedUseCase, GetPostUseCase getPostUseCase,
 			GetProfilePostsUseCase getProfilePostsUseCase,
 			com.socialcoisa.rede.feed.application.port.in.GetDiarioUseCase getDiario,
 			DeletePostUseCase deletePostUseCase,
@@ -123,7 +121,7 @@ class FeedController {
 			com.socialcoisa.rede.feed.application.port.in.VotePollUseCase votePoll,
 			com.socialcoisa.rede.feed.application.DeleteCommentService deleteComment) {
 		this.coins = coins;
-		this.publishPostUseCase = publishPostUseCase;
+		this.publicacao = publicacao;
 		this.getFeedUseCase = getFeedUseCase;
 		this.getPostUseCase = getPostUseCase;
 		this.getProfilePostsUseCase = getProfilePostsUseCase;
@@ -158,31 +156,7 @@ class FeedController {
 	ResponseEntity<String> publish(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@RequestBody PublishPostRequest request) {
-		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		if (honeypots.triggered(user.id().value(), request.website(), "post")) {
-			return ResponseEntity.status(201)
-				.body("{\"id\":\"post_" + java.util.UUID.randomUUID().toString().replace("-", "") + "\"}");
-		}
-		// A standalone post a person writes must declare its topic: without one it misses the feed
-		// filters and "O que quero ver". Checked here, at the person's entry point, because system
-		// publishers (blog, games, legacy scheduled posts) go through the same use case without one.
-		if (!StringUtils.hasText(request.communityId())
-				&& !StringUtils.hasText(request.topic())) {
-			throw new ApiException(400, "TOPIC_REQUIRED", "Escolha o assunto da publicação.");
-		}
-		// Imagem no meio do texto: todo marcador {{media:id}} precisa referenciar anexo do autor.
-		com.socialcoisa.rede.shared.text.InlineMedia.validate(request.content(), request.mediaIds());
-		String hash = idempotency.hash(request);
-		return idempotency.execute(user.id(), "POST", "/api/feed/posts", idempotencyKey, hash, () -> {
-			var published = publishPostUseCase.publish(new PublishPostCommand(user.id(), request.type(), request.content(),
-				request.pageHtml(), request.articleBody(), request.tags(), request.mediaIds(), request.communityId(),
-				request.mentionedUserIds(), request.topic(), request.channelId(), Boolean.TRUE.equals(request.mediaSpoiler()),
-				request.pollOptions(), Boolean.TRUE.equals(request.pollMultipleChoice()), request.pollEndsAt()));
-			// Presence counts here and not inside PublishPostService: the scheduler also publishes
-			// through it, and a scheduled post going live is not the person being here today.
-			coins.recordPresence(user.id().value());
-			return new CommandResponse(201, published);
-		});
+		return publicacao.publicar(sessionToken, idempotencyKey, request);
 	}
 
 	@GetMapping("/feed")

@@ -45,10 +45,7 @@ class VersionController {
 	@GetMapping("/version")
 	Map<String, Object> version(
 			@RequestHeader(value = "X-Version-Details", required = false) String providedToken) {
-		Map<String, Object> view = new LinkedHashMap<>();
-		BuildProperties props = build.getIfAvailable();
-		view.put("version", props != null ? props.getVersion() : "desconhecida");
-		view.put("artefato", props != null && props.getTime() != null ? props.getTime().toString() : null);
+		Map<String, Object> view = VersaoPublica.de(build.getIfAvailable());
 		if (!detailsAllowed(providedToken)) {
 			view.put("status", "UP");
 			return view;

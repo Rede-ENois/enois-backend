@@ -1,0 +1,42 @@
+package com.socialcoisa.replica;
+
+import java.net.URI;
+import java.util.Arrays;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+final class CorsReplica implements WebMvcConfigurer {
+
+	private final String[] origens;
+
+	CorsReplica(@Value("${rede.replica.cors-origins:}") String origens) {
+		this.origens = Arrays.stream(origens.split(",")).map(String::trim).filter(s -> !s.isEmpty())
+			.map(CorsReplica::verificarOrigem).distinct().toArray(String[]::new);
+	}
+
+	private static String verificarOrigem(String origem) {
+		var uri = URI.create(origem);
+		if (!"https".equals(uri.getScheme()) || uri.getHost() == null || !uri.getRawPath().isEmpty() ||
+				uri.getRawUserInfo() != null || uri.getRawQuery() != null || uri.getRawFragment() != null) {
+			throw new IllegalArgumentException("A réplica exige origens HTTPS explícitas.");
+		}
+		return origem;
+	}
+
+	@Override
+	public void addCorsMappings(CorsRegistry registry) {
+		registry.addMapping("/feed/posts").allowedOrigins(origens)
+			.allowedMethods("POST", "OPTIONS")
+			.allowedHeaders("Content-Type", "Idempotency-Key", "X-CSRF-Protection",
+				"X-Session-Token", "X-Client-Origin")
+			.allowCredentials(true);
+		for (String rota : new String[] {"/feed/posts/*", "/auth/me"}) {
+			registry.addMapping(rota).allowedOrigins(origens)
+				.allowedMethods("GET", "HEAD", "OPTIONS")
+				.allowedHeaders("Accept", "Content-Type", "X-Session-Token", "X-Client-Origin")
+				.allowCredentials(true);
+		}
+	}
+}
