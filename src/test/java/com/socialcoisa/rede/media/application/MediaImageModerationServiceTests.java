@@ -104,14 +104,25 @@ class MediaImageModerationServiceTests {
 	}
 
 	@Test
-	void allowsAnImageWhenSemanticReviewIsInconclusive() throws Exception {
+	void doesNotApproveAnImageWhenSemanticReviewIsInconclusive() throws Exception {
 		when(provider.getIfAvailable()).thenReturn(classifier);
 		when(classifier.assess(new byte[] { 1 }, "image/jpeg")).thenReturn(still(0.95));
 		when(reviewer.review(new byte[] { 1 })).thenReturn(Optional.of(Result.UNSURE));
 
-		service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg");
+		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg"))
+			.isInstanceOf(ApiException.class)
+			.extracting("code").isEqualTo("IMAGE_MODERATION_UNAVAILABLE");
+	}
 
-		verify(reviewer).review(new byte[] { 1 });
+	@Test
+	void doesNotApproveAFlaggedImageWhenTheReviewerDoesNotAnswer() throws Exception {
+		when(provider.getIfAvailable()).thenReturn(classifier);
+		when(classifier.assess(new byte[] { 1 }, "image/jpeg")).thenReturn(still(0.95));
+		when(reviewer.review(new byte[] { 1 })).thenReturn(Optional.empty());
+
+		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg"))
+			.isInstanceOf(ApiException.class)
+			.extracting("code").isEqualTo("IMAGE_MODERATION_UNAVAILABLE");
 	}
 
 	@Test
@@ -137,14 +148,55 @@ class MediaImageModerationServiceTests {
 	}
 
 	@Test
-	void allowsImageWhenClassifierCannotDecodeInsteadOfBlocking() throws Exception {
+	void failsClosedWhenClassifierCannotDecodeTheImage() throws Exception {
 		when(provider.getIfAvailable()).thenReturn(classifier);
 		when(classifier.assess(new byte[] { 1 }, "image/webp"))
 			.thenThrow(new IOException("invalid image"));
+		when(reviewer.review(new byte[] { 1 })).thenReturn(Optional.of(Result.UNSURE));
 
-		service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/webp");
+		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/webp"))
+			.isInstanceOf(ApiException.class)
+			.extracting("code").isEqualTo("IMAGE_CANNOT_BE_VERIFIED");
+	}
 
-		verify(classifier).assess(new byte[] { 1 }, "image/webp");
+	/**
+	 * A forma que o classificador não lê (AVIF/HEIF, sequência de quadros) não é imagem limpa: o
+	 * revisor semântico é a segunda chance, e ele decide só pelo sentido da imagem.
+	 */
+	@Test
+	void allowsADecodeFailureOnlyWhenTheSemanticReviewerSaysItIsClean() throws Exception {
+		when(provider.getIfAvailable()).thenReturn(classifier);
+		when(classifier.assess(new byte[] { 1 }, "image/avif"))
+			.thenThrow(new IOException("no decoder"));
+		when(reviewer.review(new byte[] { 1 })).thenReturn(Optional.of(Result.SAFE));
+
+		service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/avif");
+
+		verify(reviewer).review(new byte[] { 1 });
+	}
+
+	@Test
+	void blocksADecodeFailureThatTheSemanticReviewerCallsProhibited() throws Exception {
+		when(provider.getIfAvailable()).thenReturn(classifier);
+		when(classifier.assess(new byte[] { 1 }, "image/avif"))
+			.thenThrow(new IOException("no decoder"));
+		when(reviewer.review(new byte[] { 1 })).thenReturn(Optional.of(Result.PROHIBITED));
+
+		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/avif"))
+			.isInstanceOf(ApiException.class)
+			.extracting("code").isEqualTo("IMAGE_CONTENT_NOT_ALLOWED");
+	}
+
+	@Test
+	void failsClosedWhenTheReviewerDoesNotAnswerAfterADecodeFailure() throws Exception {
+		when(provider.getIfAvailable()).thenReturn(classifier);
+		when(classifier.assess(new byte[] { 1 }, "image/avif"))
+			.thenThrow(new IOException("no decoder"));
+		when(reviewer.review(new byte[] { 1 })).thenReturn(Optional.empty());
+
+		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/avif"))
+			.isInstanceOf(ApiException.class)
+			.extracting("code").isEqualTo("IMAGE_CANNOT_BE_VERIFIED");
 	}
 
 	@Test

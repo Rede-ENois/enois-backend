@@ -57,11 +57,19 @@ public class MediaImageModerationService {
 			if (score >= threshold) {
 				// An animation is reviewed on the frame that was flagged, not on its first frame.
 				byte[] reviewed = assessment.reviewFrame() != null ? assessment.reviewFrame() : imageBytes;
+				// Sem resposta do revisor é INCERTEZA, não aprovação: o classificador já apontou o
+				// risco, e mandar a imagem para o storage público porque o revisor não respondeu
+				// seria a única barreira existente falhando aberta.
 				Result result = reviewer.review(reviewed).orElse(Result.UNSURE);
 				if (result == Result.PROHIBITED) {
 					stageMetrics.record("nsfw", MediaUploadStageMetrics.Outcome.BLOCKED, startedAt);
 					throw new ApiException(422, "IMAGE_CONTENT_NOT_ALLOWED",
 						"Esta imagem parece conter conteúdo pornográfico e não pode ser enviada.");
+				}
+				if (result == Result.UNSURE) {
+					stageMetrics.record("nsfw", MediaUploadStageMetrics.Outcome.BLOCKED, startedAt);
+					throw new ApiException(503, "IMAGE_MODERATION_UNAVAILABLE",
+						"Não foi possível confirmar a verificação desta imagem.");
 				}
 			}
 			stageMetrics.record("nsfw", MediaUploadStageMetrics.Outcome.OK, startedAt);
@@ -72,7 +80,22 @@ public class MediaImageModerationService {
 				"Esta imagem é grande ou longa demais para ser verificada. Envie uma versão menor.");
 		}
 		catch (IOException failure) {
-			// Quando o classificador não consegue decodificar ou há incerteza, não bloqueia o envio.
+			// Não decodificou ≠ imagem limpa. Antes de barrar o upload, há uma segunda chance: os
+			// formatos que o classificador não lê (AVIF/HEIF, sequência de quadros) costumam ser
+			// imagem parada para o revisor semântico, que decide sobre o sentido da imagem, não sobre
+			// o formato. Só passa quando ele diz LIMPO; PROHIBITED barra e UNSURE — ou revisor sem
+			// resposta — mantém a recusa de antes, com o mesmo código que o app já traduz.
+			Result result = reviewer.review(imageBytes).orElse(Result.UNSURE);
+			if (result == Result.PROHIBITED) {
+				stageMetrics.record("nsfw", MediaUploadStageMetrics.Outcome.BLOCKED, startedAt);
+				throw new ApiException(422, "IMAGE_CONTENT_NOT_ALLOWED",
+					"Esta imagem parece conter conteúdo pornográfico e não pode ser enviada.");
+			}
+			if (result == Result.UNSURE) {
+				stageMetrics.record("nsfw", MediaUploadStageMetrics.Outcome.BLOCKED, startedAt);
+				throw new ApiException(422, "IMAGE_CANNOT_BE_VERIFIED",
+					"Não foi possível verificar esta imagem. Tente outro arquivo.");
+			}
 			stageMetrics.record("nsfw", MediaUploadStageMetrics.Outcome.OK, startedAt);
 		}
 		catch (ApiException failure) {

@@ -55,6 +55,19 @@ quadro. Fora desses limites o upload é recusado com `422 IMAGE_TOO_LARGE_TO_VER
 seguem o mesmo teto de 16 megapixels. Outros formatos animados (PNG animado, WebP animado e sequência
 AVIF) são recusados com `422 IMAGE_CANNOT_BE_VERIFIED`, pois não há compositor para eles.
 
+## O que acontece quando a verificação é incerta
+
+O classificador local é a primeira barreira e o revisor semântico é a segunda. Incerteza não é
+aprovação:
+
+- imagem **sinalizada** pelo classificador e o revisor diz `UNSURE` (ou não responde) →
+  `503 IMAGE_MODERATION_UNAVAILABLE`; diz `PROHIBITED` → `422 IMAGE_CONTENT_NOT_ALLOWED`.
+- imagem que o classificador **não consegue decodificar** (AVIF/HEIF, sequência de quadros) → o
+  revisor semântico decide: `SAFE` libera (é a forma que passa a ser aceita), `PROHIBITED` dá
+  `422 IMAGE_CONTENT_NOT_ALLOWED` e `UNSURE`/sem resposta mantém `422 IMAGE_CANNOT_BE_VERIFIED`.
+- `image/svg+xml` não passa pelo classificador de raster: o SVG é texto e o cliente o renderiza no
+  próprio navegador; a verificação de conteúdo dele é a sanitização, não o NSFW.
+
 ## Dependências de runtime
 
 ONNX Runtime Java fornece o backend CPU. A imagem usa uma base Linux com glibc, instala `libheif`

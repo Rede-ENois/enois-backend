@@ -57,6 +57,10 @@ class NetworkParticipantPauseTests {
 	@BeforeEach
 	void setUp() {
 		auth = new TestAuthHelper(mockMvc, objectMapper);
+		// O modo da rede é estado global e NÃO é limpo pelas classes vizinhas: um teste que o
+		// deixou em EMERGENCY (de propósito, para provar que o modo não é sobrescrito sozinho)
+		// fazia este heartbeat responder `acceptTasks=false` por um motivo que não é a pausa.
+		jdbc.update("delete from network_state");
 		jdbc.update("delete from network_node_logs");
 		jdbc.update("delete from network_node_samples");
 		jdbc.update("delete from network_node_keys");
