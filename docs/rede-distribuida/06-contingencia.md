@@ -268,6 +268,18 @@ O cenário de revogação (§5) está entregue e testado (`NetworkDisasterTests`
 carrega `ttlSeconds` (ADR-018), e o runtime guarda a última config **verificada** com o instante da
 verificação para poder continuar dentro do prazo sem falar com o Control Plane.
 
+### 4.3 O nó de reserva tem de ter o banco (V360)
+
+A regra 3/4 diz quem sobe o termo; não dizia que o nó que assume precisa ter o estado de quem
+mandava. Agora a promoção pela rota de reserva (`POST /admin/network/authority/promote-standby`)
+exige uma cópia completa e conferida do banco no nó declarado: sem ela, a cópia é pedida e a promoção
+é recusada com `409 NETWORK_STANDBY_COPY_MISSING`. O termo só sobe com a cópia `READY`, e a
+auditoria `NETWORK_AUTHORITY_PROMOTED_WITH_STANDBY` registra o nó que guarda o banco.
+
+A cópia existe em três momentos: sob demanda, refresh a cada 6 h e sincronização completa às 03:00
+(agendador desligado por padrão). O que ainda falta — binlog entre a cópia e o failover, runtime que
+consome o contrato, reserva declarada no painel — está em `21-no-reserva-copia-do-banco.md` §4.
+
 ## 5. Revogação durante processamento
 
 Cenário: o nó está executando uma tarefa e é revogado.
@@ -352,6 +364,7 @@ revalida no próprio ciclo e trabalha.
 | dois controladores com termos diferentes → nó entra em quarentena | `NetworkTermConflictTests` | entregue (R102) |
 | sobrecarga simultânea → `HIGH_LOAD` entra e sai pelos números medidos | `NetworkModesTests` | entregue (F4) |
 | recuperação → `RECOVERY` drena sem derrubar o que está em andamento | `NetworkModesTests` | entregue (F4) |
+| **promover nó de reserva sem cópia do banco → recusa e pede a cópia; termo não sobe** | `NetworkStandbyTests.promoverSemCopiaRecusaEPedeACopia`, `comCopiaProntaPromocaoSobeOTermoEAuditaONo`; migração V360 em MariaDB 11.4 real (`standby-migration-test.sh`) | entregue (V360) |
 | **carga → a distribuição aumenta a capacidade de atendimento** | `NetworkLoadTests.doisNosAtendemODobroDeUmNoComAMesmaCapacidadePorNo` (com `aCargaInteiraEhAtendidaEmRodadasSucessivasSemDuplicarNemPerder` e `sobSobrecargaCadaRodadaAtendeALimiteENaoMais`) | entregue (R112) |
 
 A medição de carga é **contagem**, não tempo: a mesma carga e o mesmo limite declarado por nó, uma
