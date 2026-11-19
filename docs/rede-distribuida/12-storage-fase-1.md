@@ -69,7 +69,14 @@ outros passava a responder `507 STORAGE_NO_CEDENT_SPACE` — o vizinho pagava pe
 
 A conta é `sum(bytes)` de `network_storage_objects` para o `created_by`, das versões **correntes** e
 sem lápide (`StorageCatalogPersistenceAdapter.bytesOwnedBy`): versão substituída não é conteúdo que o
-download entrega, lápide não é conteúdo nenhum. **Não é** por bucket — quem tem dez buckets não tem
+download entrega, lápide não é conteúdo nenhum.
+
+**A cota é do conteúdo entregue, não do espaço ocupado** (doc 13 §5.9.1). Um objeto com
+versionamento que foi reescrito dez vezes tem nove versões antigas no disco e só a corrente na conta;
+e o PUT de reescrita **acrescenta** o corpo novo sem descontar a versão que saiu da corrente, então a
+mesma chave pode receber `507` antes do objeto que só ela ocupa. Contar o espaço real exigiria somar
+todas as versões ainda não coletadas — decisão de produto (a cota passaria a cair por reescrita de
+objeto que o cliente continua vendo com um só nome). **Não é** por bucket — quem tem dez buckets não tem
 dez vezes o espaço. `rede.storage.max-bytes-per-owner=0` (padrão) **desliga** a cota, que é o
 comportamento que existia: a instalação que confia no limite do nó não muda de comportamento ao
 atualizar.
