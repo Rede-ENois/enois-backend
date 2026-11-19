@@ -104,19 +104,20 @@ class MediaImageModerationServiceTests {
 	}
 
 	@Test
-	void doesNotApproveAnImageWhenSemanticReviewIsInconclusive() throws Exception {
+	void allowsAnImageWhenSemanticReviewIsInconclusive() throws Exception {
 		when(provider.getIfAvailable()).thenReturn(classifier);
 		when(classifier.assess(new byte[] { 1 }, "image/jpeg")).thenReturn(still(0.95));
 		when(reviewer.review(new byte[] { 1 })).thenReturn(Optional.of(Result.UNSURE));
 
-		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg"))
-			.isInstanceOf(ApiException.class)
-			.extracting("code").isEqualTo("IMAGE_MODERATION_UNAVAILABLE");
+		service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/jpeg");
+
+		verify(reviewer).review(new byte[] { 1 });
 	}
 
 	@Test
-	void doesNotClassifyNonImageMedia() {
+	void doesNotClassifyNonImageMediaOrSvg() {
 		service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "video/mp4");
+		service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/svg+xml");
 
 		verifyNoInteractions(provider, classifier, reviewer);
 	}
@@ -136,14 +137,14 @@ class MediaImageModerationServiceTests {
 	}
 
 	@Test
-	void failsClosedWhenClassifierCannotDecodeTheImage() throws Exception {
+	void allowsImageWhenClassifierCannotDecodeInsteadOfBlocking() throws Exception {
 		when(provider.getIfAvailable()).thenReturn(classifier);
 		when(classifier.assess(new byte[] { 1 }, "image/webp"))
 			.thenThrow(new IOException("invalid image"));
 
-		assertThatThrownBy(() -> service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/webp"))
-			.isInstanceOf(ApiException.class)
-			.extracting("code").isEqualTo("IMAGE_CANNOT_BE_VERIFIED");
+		service(true, 0.70).verifyBeforeStorage(new byte[] { 1 }, "image/webp");
+
+		verify(classifier).assess(new byte[] { 1 }, "image/webp");
 	}
 
 	@Test
