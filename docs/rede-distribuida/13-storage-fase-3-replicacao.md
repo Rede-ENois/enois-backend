@@ -164,11 +164,42 @@ O número da réplica continua depois do **maior existente**, nunca do 1: a chav
 Cada objeto é uma transação própria: um nó que entra em quarentena no meio do lote não desfaz as
 designações anteriores, que já são válidas.
 
-**Verificação:** `StorageHealerTests` 8 e `NetworkStorageHealTests` 4 (caminho real: objeto com
-lacuna → `scrub` acha → healing designa → nó confirma → `scrub` para de acusar). Mutações: `dryRun`
-gravando, réplica reaproveitando o número 1, `STALE` contando como origem, designar mais que a
-lacuna, pendente sendo reescolhida e designar já como `OK` — cada uma derruba o seu, e a de `OK`
-derruba 2 no teste de rota.
+### 5.1.1 A cópia que não confere volta a ser espaço
+
+**Antes:** a cura só andava em `underReplicated`. A cópia `STALE` — o objeto existe e o conteúdo não
+é o prometido — ficava assim **para sempre**: a cura a ignorava, ela continuava ocupando o espaço
+cedido em `StoragePlacementService`, e cada rodada designava mais uma réplica ao lado da queimada.
+A tela dizia "existe e não confere" e nada acontecia.
+
+**Agora** a cura olha as duas testemunhas de divergência:
+
+| testemunha | o que enxerga |
+|---|---|
+| `divergent[]` da varredura com releitura | o disco **desta** instalação: réplica 0 e o diretório do nó local |
+| cópias `STALE` do catálogo | a cópia de **qualquer** nó que o próprio nó marcou (`409` na confirmação) ou que o nó reportou em `/network/storage/scrub` |
+
+A segunda é a que fecha o buraco quando o Control Plane não hospeda corpo nenhum (é o caso da
+instalação que não tem réplica 0): a varredura com releitura não tem o que comparar, `divergent`
+volta vazio para sempre, e só o estado da colocação conta a história. As duas listas se somam sem
+repetir (a chave é `objectId#replica`).
+
+O que a cura faz com cada uma:
+
+- **réplica 0 divergente** → **nada é apagado**. É o corpo do próprio Control Plane; reler em
+  caminho de cura não pode escrever por cima nem marcar como perdida a única cópia que se sabe boa.
+  Fica auditado (`STORAGE_REPLICA_ZERO_DIVERGENT`) e o relatório devolve `REPLICA_ZERO`;
+- **cópia de nó** → vai para `GONE` (`STORAGE_REPLICA_REPLACED`), o que **devolve o espaço** na conta
+  de folga cedida; a rodada seguinte designa uma réplica nova (número depois da maior) e o nó puxa
+  o corpo do CP e confirma com o digest. O arquivo velho no disco dele deixa de estar atribuído a
+  ele e a poda do nó (`/network/storage/inventory/purge`) o recolhe — a cura não apaga disco de
+  terceiro.
+
+O relatório ganhou `repostos[]` (`objectId`, `replica`, `nodeId`, `action`), porque a cura que
+tratou uma cópia e a cura que não achou nada merecem respostas diferentes na tela de quem opera.
+
+**Verificação:** `StorageHealerTests` **13** e `NetworkStorageHealTests` **5**. As asserções novas
+são discriminantes — mutações: não olhar as `STALE` do catálogo, marcar `OK` em vez de `GONE`, tratar
+a réplica 0 como as demais, varrer sem reler o disco — **4 de 4 derrubam** o teste correspondente.
 
 ## 5.2 O `OBJECT_PUT` tem produtor, e o `DONE` dele é conferido
 
@@ -471,10 +502,14 @@ apagar), e o healing do §5.1 já sabe ler `STALE`.
 
 ### O que ainda não está entregue
 
-O nó **precisa** rodar esta varredura por conta própria (o runtime ainda não tem rotina periódica
-para ela); `POST /network/storage/scrub` é a rota pronta para ele chamar.
+O nó **roda** esta varredura por conta própria: `exec_storage_scrub` em `deploy/node-runtime/node-runtime.sh`
+mede o próprio disco a cada ciclo, **depois do heartbeat e antes de pedir tarefa** (uma varredura
+longa não pode atrasar o heartbeat, que é a única saída do nó), em lotes, e entrega por
+`POST /network/storage/scrub`. Nó sem `OBJECT_PUT` na config assinada não manda relatório vazio. A
+divergência que ele aponta agora **é tratada pela cura** (§5.1.1).
 
-**Verificação:** `StorageNodeScrubTests` **4** (cópia própria fica `STALE`; nó não rebaixa a cópia de
+**Verificação:** `scripts/tests/node-executor-test.sh` cobre o runtime (entrega o sha medido, não
+declara divergência por erro de I/O, não manda relatório de nó sem `OBJECT_PUT`). `StorageNodeScrubTests` **4** (cópia própria fica `STALE`; nó não rebaixa a cópia de
 outro; já `STALE` não é regravada nem re-auditada; digest esperado vem do catálogo) e
 `NetworkStorageNodeScrubTests` **3** pela rota real (cópia própria `STALE`; intruso não rebaixa a do
 dono; sem chave é 401). Mutações: sem filtro por dono, sem idempotência, rota fora do interceptor,

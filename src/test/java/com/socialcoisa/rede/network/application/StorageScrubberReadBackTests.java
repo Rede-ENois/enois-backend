@@ -421,6 +421,11 @@ class StorageScrubberReadBackTests {
 			return placements.stream().filter(p -> p.nodeId().equals(nodeId)).toList();
 		}
 
+		@Override
+		public List<StoragePlacement> placementsInState(StoragePlacement.State state) {
+			return placements.stream().filter(p -> p.state() == state).toList();
+		}
+
 		// --- Ciclo de vida (§14, V352): o fake guarda o mínimo que os serviços leem ---
 
 		private final java.util.Map<String, com.socialcoisa.rede.network.domain.StorageBucketPolicy> policies =
