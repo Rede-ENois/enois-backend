@@ -687,14 +687,17 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			.map(post -> {
 				UserProfile profile = allProfiles.get(post.authorId().value());
 				var corporateProfile = corporate.get(post.authorId().value());
+				// Conta banida (com perfil ainda no banco) ou com perfil removido: o conteúdo fica,
+				// a identidade não — o nome cai para o rótulo genérico, nunca para o id cru (#1021).
 				boolean banned = bannedAuthors.contains(post.authorId().value());
+				boolean autorSemPerfil = corporateProfile == null && profile == null;
 				PostView view = PostView.from(post,
 					banned ? null
 						: corporateProfile != null ? corporateProfile.username()
 							: profile != null ? profile.username() : null,
-					banned ? BANNED_DISPLAY_NAME
+					banned || autorSemPerfil ? BANNED_DISPLAY_NAME
 						: corporateProfile != null ? corporateProfile.name()
-							: profile != null ? profile.displayWithNickname() : post.authorId().value(),
+							: profile.displayWithNickname(),
 					banned ? null
 						: corporateProfile != null ? corporateProfile.avatar()
 							: profile != null ? profile.avatar() : null,
