@@ -27,6 +27,7 @@ import com.socialcoisa.rede.media.application.port.out.MediaAssetRepository;
 import com.socialcoisa.rede.media.application.port.out.MediaObjectStore;
 import com.socialcoisa.rede.media.domain.MediaAsset;
 import com.socialcoisa.rede.media.domain.MediaStorageProvider;
+import com.socialcoisa.rede.shared.web.StreamedBody;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 /**
@@ -157,7 +158,9 @@ class ReportAttachmentTests {
 			.andExpect(header().string("Content-Disposition", "attachment"))
 			.andExpect(header().string("Cache-Control", "private, no-store"))
 			.andReturn();
-		assertThat(leitura.getResponse().getContentAsByteArray()).isNotEmpty();
+		// O corpo é escrito na thread de streaming: ler o buffer na hora devolvia vazio na suíte
+		// inteira (`Expecting actual not to be empty` no CI). Espera o streaming terminar.
+		StreamedBody.assertNotEmpty(leitura);
 	}
 
 	@Test
