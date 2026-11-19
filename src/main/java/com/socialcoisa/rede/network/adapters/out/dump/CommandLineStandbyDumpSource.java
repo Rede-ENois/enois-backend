@@ -43,6 +43,7 @@ import com.socialcoisa.rede.network.application.StandbyDumpSource;
  */
 @Component
 @ConditionalOnProperty(name = "rede.network.standby.dump.enabled", havingValue = "true")
+@ConditionalOnProperty(name = "rede.network.standby.dump.source", havingValue = "cli")
 class CommandLineStandbyDumpSource implements StandbyDumpSource {
 
 	private static final Logger LOG = LoggerFactory.getLogger(CommandLineStandbyDumpSource.class);
