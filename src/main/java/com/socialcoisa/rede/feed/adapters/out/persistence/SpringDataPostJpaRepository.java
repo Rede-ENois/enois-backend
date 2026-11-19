@@ -26,6 +26,13 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 			@Param("source") String source, @Param("status") com.socialcoisa.rede.feed.domain.PostStatus status);
 
 	@Query("""
+		select count(p) from PostJpaEntity p
+		where p.authorId = :authorId and p.repostOf = :source and p.status = :status
+		""")
+	long countActiveRepostsByAuthorAndSource(@Param("authorId") String authorId,
+			@Param("source") String source, @Param("status") com.socialcoisa.rede.feed.domain.PostStatus status);
+
+	@Query("""
 		select p from PostJpaEntity p
 		where p.repostOf = :source and p.status = :status
 		""")

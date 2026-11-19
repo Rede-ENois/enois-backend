@@ -180,6 +180,11 @@ class PostJpaEntity {
 		return entity;
 	}
 
+	/** O conteúdo como está guardado — para a citação do repost sair da própria linha. */
+	String content() {
+		return content;
+	}
+
 	Post toDomain() {
 		return Post.restore(new PostId(id), new UserId(authorId), type, content, pageHtml, tags, mediaIds, communityId,
 			topic, channelId, createdAt, visibility, new Counters(reactions, comments, saves, shares, reposts), status,

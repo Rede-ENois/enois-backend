@@ -201,12 +201,13 @@ class RepostFlowTests {
 				.andExpect(jsonPath("$.repostOf").value(articleId))
 				.andExpect(jsonPath("$.repostOfContent").value("Titulo do artigo citado"));
 
+		// A mesma opinião repetida continua recusada.
 		mockMvc.perform(post("/feed/posts/{id}/repost", articleId)
 				.header("X-Session-Token", reposter.token())
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("opinion", "De novo."))))
-				.andExpect(status().isConflict())
-				.andExpect(jsonPath("$.code").value("ALREADY_REPOSTED"));
+				.content(objectMapper.writeValueAsString(Map.of("opinion", "Vale a leitura."))))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.code").value("ALREADY_REPOSTED"));
 
 		// A citação é INSIGHT, mas republicá-la sem opinião aponta para o artigo
 		// original.
@@ -288,6 +289,50 @@ class RepostFlowTests {
 				.param("limit", "10"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.items[?(@.kind == 'POST_REPOSTED')]").isEmpty());
+	}
+
+	/**
+	 * Issue #755: quem já repostou o post original não conseguia comentar o repost com opinião de
+	 * outra pessoa — a validação olhava o original raiz e respondia "você já republicou".
+	 *
+	 * O dedupe agora é pela publicação repostada: o mesmo texto nela não entra duas vezes; outro
+	 * texto é outra opinião e entra. E a citação mostra a publicação escolhida, não o original.
+	 */
+	@Test
+	void anOpinionAboutSomeoneElsesRepostEntersEvenAfterRepostingTheOriginal() throws Exception {
+		var author = auth.authenticate("repost_chain_author_" + System.nanoTime());
+		var reposter = auth.authenticate("repost_chain_user_" + System.nanoTime());
+		var reader = auth.authenticate("repost_chain_reader_" + System.nanoTime());
+
+		String originalId = publish(author, "Assunto X: o post que todo mundo vai comentar.");
+		String reposterRepostId = quote(reposter, originalId, "O ponto do contexto muda tudo.");
+
+		// O leitor já repostou o original e agora comenta o repost do colega — antes era 409.
+		quote(reader, originalId, "Assino embaixo.");
+		String commentOnRepostId = quote(reader, reposterRepostId, "Concordo com a thread.");
+
+		// A citação é a publicação do colega, com a opinião dele — não o original.
+		mockMvc.perform(get("/feed/posts/{id}", commentOnRepostId))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.repostOf").value(reposterRepostId))
+			.andExpect(jsonPath("$.repostOfContent").value("O ponto do contexto muda tudo."));
+	}
+
+	/** O mesmo texto na mesma publicação não entra duas vezes. */
+	@Test
+	void theSameOpinionOnTheSameRepostIsRefused() throws Exception {
+		var author = auth.authenticate("repost_same_author_" + System.nanoTime());
+		var reposter = auth.authenticate("repost_same_user_" + System.nanoTime());
+
+		String originalId = publish(author, "Post que ganha uma opinião só.");
+		quote(reposter, originalId, "Opinião.");
+
+		mockMvc.perform(post("/feed/posts/{id}/repost", originalId)
+				.header("X-Session-Token", reposter.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("opinion", "Opinião."))))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.code").value("ALREADY_REPOSTED"));
 	}
 
 	private String quote(TestAuthHelper.AuthSession session, String postId, String opinion) throws Exception {

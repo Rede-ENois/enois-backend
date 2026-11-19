@@ -73,6 +73,15 @@ public interface PostRepository {
 	/** Republicação ativa desta pessoa para este post original (dedupe do botão). */
 	Optional<Post> findActiveRepostByAuthorAndSource(UserId authorId, String sourcePostId);
 
+	/**
+	 * O texto da citação ativa desta pessoa para este post (o que ela republicou). É o que o dedupe
+	 * do repost compara: o mesmo texto sobre o mesmo post já existe; outro texto é outra opinião.
+	 */
+	Optional<String> findActiveRepostContentByAuthorAndSource(UserId authorId, String sourcePostId);
+
+	/** Quantas citações ativas desta pessoa existem para este post (dado antigo pode ter mais de uma). */
+	long countActiveRepostsByAuthorAndSource(UserId authorId, String sourcePostId);
+
 	/** Cópias ativas de um post (limpeza quando o original é apagado). */
 	List<Post> findActiveRepostsBySource(String sourcePostId);
 

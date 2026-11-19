@@ -646,7 +646,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		// Reposts puros do viewer: batch check para marcar currentUserReposted.
 		Set<String> repostedByViewer = currentUserId == null ? Set.of()
 			: postReposts.findPostIdsRepostedByUser(currentUserId.value(), postIdValues);
-		// Citação do repost com opinião: busca os originais da página em UMA consulta.
+		// Citação do repost com opinião: busca em UMA consulta o post que cada pessoa repostou. É ele
+		// que o card cita — citar o original raiz sumia com a opinião de quem foi repostado.
 		java.util.Set<String> quotedIds = visible.stream()
 			.filter(p -> p.repostWithOpinion() && p.repostOf() != null)
 			.map(Post::repostOf)
