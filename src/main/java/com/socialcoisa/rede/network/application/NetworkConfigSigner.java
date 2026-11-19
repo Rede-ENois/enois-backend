@@ -50,7 +50,19 @@ final class NetworkConfigSigner {
 	 */
 	record SignedFields(int formatVersion, int configVersion, String nodeId, List<String> profiles, int cpuCores,
 			int memoryMb, int diskMb, int bandwidthMbps, List<String> allowedTasks, List<String> allowedRoutes,
-			String issuedAt, int ttlSeconds, int term, Long diskFreeMb) {
+			String issuedAt, int ttlSeconds, int term, Long diskFreeMb, Long diskTotalMb,
+			List<String> storageBandwidth) {
+
+		/**
+		 * Linha canônica de formato ≤ 6, sem a banda por tipo: existe para quem reconstrói um
+		 * documento antigo continuar conferindo a assinatura dele. Formato 7 é o do contrato atual.
+		 */
+		SignedFields(int formatVersion, int configVersion, String nodeId, List<String> profiles, int cpuCores,
+				int memoryMb, int diskMb, int bandwidthMbps, List<String> allowedTasks, List<String> allowedRoutes,
+				String issuedAt, int ttlSeconds, int term, Long diskFreeMb, Long diskTotalMb) {
+			this(formatVersion, configVersion, nodeId, profiles, cpuCores, memoryMb, diskMb, bandwidthMbps,
+				allowedTasks, allowedRoutes, issuedAt, ttlSeconds, term, diskFreeMb, diskTotalMb, List.of());
+		}
 
 		/**
 		 * A linha assinada. Listas vão ordenadas e em JSON compacto: a ordem do banco não é
@@ -61,12 +73,20 @@ final class NetworkConfigSigner {
 		 * {@code allowedRoutes} entrou no formato 4 e fica logo depois de {@code allowedTasks}: é a
 		 * lista de rotas que o nó pode chamar, e ela é assinada — sem assinatura, um intermediário
 		 * trocaria a rota autorizada por outra e o nó obedeceria (doc 02, linha SSRF).
+		 *
+		 * <p>{@code storageBandwidth} entrou no formato 7 e vai no FIM, depois do tamanho do volume:
+		 * é o teto de banda próprio de cada tipo de storage node (brief §6), que o runtime usa para
+		 * a transferência que o tipo dele faz. Assinada pelo mesmo motivo de {@code bandwidthMbps}:
+		 * um intermediário que a editasse dobraria a banda que o participante cedeu.</p>
 		 */
 		String canonical() {
-			return String.join("|", String.valueOf(formatVersion), String.valueOf(configVersion), nodeId,
+			String base = String.join("|", String.valueOf(formatVersion), String.valueOf(configVersion), nodeId,
 				jsonList(profiles), String.valueOf(cpuCores), String.valueOf(memoryMb), String.valueOf(diskMb),
 				String.valueOf(bandwidthMbps), jsonList(allowedTasks), jsonList(allowedRoutes), issuedAt,
-				String.valueOf(ttlSeconds), String.valueOf(term), numberOrAbsent(diskFreeMb));
+				String.valueOf(ttlSeconds), String.valueOf(term), numberOrAbsent(diskFreeMb),
+				numberOrAbsent(diskTotalMb));
+			// Formato <= 6 não tinha a lista: omitir mantém a assinatura antiga verificável.
+			return formatVersion <= 6 ? base : base + "|" + jsonList(storageBandwidth);
 		}
 
 		/**

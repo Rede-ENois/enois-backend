@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -41,8 +42,15 @@ class NotificationOutboxPreviewTests {
 	private final PostRepository posts = mock(PostRepository.class);
 	private final CommentRepository comments = mock(CommentRepository.class);
 	private final UserProfileRepository profiles = mock(UserProfileRepository.class);
+	private final NotificationPreferenceService preferences = mock(NotificationPreferenceService.class);
 	private final NotificationOutboxEventHandler handler = new NotificationOutboxEventHandler(notifications, posts,
-		comments, profiles);
+		comments, profiles, preferences);
+
+	/** Sem silêncio ligado, os testes de caminho feliz valem como hoje. */
+	private void semSilencio() {
+		when(preferences.silences(org.mockito.ArgumentMatchers.anyString(),
+			org.mockito.ArgumentMatchers.anyString())).thenReturn(false);
+	}
 
 	private Post post(String content) {
 		return Post.publish(new PostId("post_1"), new UserId(AUTOR), PostType.INSIGHT, content, null, List.of(), List.of(),
@@ -51,6 +59,7 @@ class NotificationOutboxPreviewTests {
 
 	@Test
 	void commentNotificationCarriesTheCommentText() {
+		semSilencio();
 		when(posts.findById(new PostId("post_1"))).thenReturn(Optional.of(post("post do autor")));
 		when(comments.findById("comment_1")).thenReturn(Optional.of(new Comment("comment_1", new PostId("post_1"),
 			new UserId(OUTRA), null, "  **muito bom**, parabéns!  ", List.of(), NOW, CommentStatus.ACTIVE, null, false,
@@ -61,12 +70,28 @@ class NotificationOutboxPreviewTests {
 
 		ArgumentCaptor<String> preview = ArgumentCaptor.forClass(String.class);
 		verify(notifications).create(eq(AUTOR), eq("NEW_COMMENT"), eq(OUTRA), eq("Novo comentário"), anyString(),
-			eq("/api/feed/posts/post_1"), eq("Ver"), preview.capture());
+			eq("/api/feed/posts/post_1?comentario=comment_1"), eq("Ver"), preview.capture());
 		assertThat(preview.getValue()).isEqualTo("muito bom, parabéns!");
+	}
+
+	/** O clique abre O COMENTÁRIO, não o post inteiro (issue #1022). */
+	@Test
+	void commentNotificationLinksToTheComment() {
+		semSilencio();
+		when(posts.findById(new PostId("post_1"))).thenReturn(Optional.of(post("texto do post")));
+		when(comments.findById("comment_1")).thenReturn(Optional.of(new Comment("comment_1", new PostId("post_1"),
+			new UserId(OUTRA), null, "achei útil", List.of(), NOW, CommentStatus.ACTIVE, null, false, false)));
+
+		handler.handle("PostCommented", "post_1",
+			"{\"postId\":\"post_1\",\"commentId\":\"comment_1\",\"authorId\":\"outra\"}");
+
+		verify(notifications).create(eq(AUTOR), eq("NEW_COMMENT"), eq(OUTRA), anyString(), anyString(),
+			eq("/api/feed/posts/post_1?comentario=comment_1"), anyString(), anyString());
 	}
 
 	@Test
 	void commentOnlyWithMediaFallsBackToThePostText() {
+		semSilencio();
 		when(posts.findById(new PostId("post_1"))).thenReturn(Optional.of(post("como fiz meu café")));
 		when(comments.findById("comment_1")).thenReturn(Optional.of(new Comment("comment_1", new PostId("post_1"),
 			new UserId(OUTRA), null, "![foto](https://cdn/foto.png)", List.of(), NOW, CommentStatus.ACTIVE, null, false,
@@ -83,6 +108,7 @@ class NotificationOutboxPreviewTests {
 
 	@Test
 	void reactionNotificationCarriesThePostText() {
+		semSilencio();
 		when(posts.findById(new PostId("post_1"))).thenReturn(Optional.of(post("<p>dica de <b>Kotlin</b></p>")));
 
 		handler.handle("PostReacted", "post_1", "{\"postId\":\"post_1\",\"authorId\":\"outra\"}");
@@ -95,6 +121,7 @@ class NotificationOutboxPreviewTests {
 
 	@Test
 	void commentReactionLeavesPreviewEmptyWhenTheCommentHasNoText() {
+		semSilencio();
 		when(comments.findById("comment_1")).thenReturn(Optional.of(new Comment("comment_1", new PostId("post_1"),
 			new UserId(AUTOR), null, "<video src=\"x.mp4\"></video>", List.of(), NOW, CommentStatus.ACTIVE, null, false,
 			false)));
@@ -103,5 +130,52 @@ class NotificationOutboxPreviewTests {
 
 		verify(notifications).createGrouped(eq(AUTOR), eq("COMMENT_REACTION"), anyString(), eq(OUTRA), anyString(),
 			anyString(), any(), isNull(), isNull(), eq("Ver"), isNull());
+	}
+
+	/** O silêncio ligado para no handler: o aviso nem nasce (nada na caixa nem push). */
+	@Test
+	void reactionSilenceStopsTheNotificationBeforeItExists() {
+		semSilencio();
+		when(preferences.silences(AUTOR, "NEW_REACTION")).thenReturn(true);
+		when(preferences.silences(AUTOR, "COMMENT_REACTION")).thenReturn(true);
+		when(posts.findById(new PostId("post_1"))).thenReturn(Optional.of(post("texto")));
+		when(comments.findById("comment_1")).thenReturn(Optional.of(new Comment("comment_1", new PostId("post_1"),
+			new UserId(AUTOR), null, "conteúdo", List.of(), NOW, CommentStatus.ACTIVE, null, false, false)));
+
+		handler.handle("PostReacted", "post_1", "{\"postId\":\"post_1\",\"authorId\":\"outra\"}");
+		handler.handle("CommentReacted", "comment_1", "{\"commentId\":\"comment_1\",\"authorId\":\"outra\"}");
+
+		verify(notifications, never()).create(anyString(), anyString(), anyString(), anyString(), anyString(),
+			anyString(), anyString(), any());
+		verify(notifications, never()).createGrouped(anyString(), anyString(), anyString(), anyString(), anyString(),
+			anyString(), any(), any(), any(), anyString(), any());
+		verify(profiles, never()).findById(anyString());
+	}
+
+	@Test
+	void postCommentSilenceStopsTheNotificationBeforeItExists() {
+		semSilencio();
+		when(preferences.silences(AUTOR, "NEW_COMMENT")).thenReturn(true);
+		when(posts.findById(new PostId("post_1"))).thenReturn(Optional.of(post("texto")));
+
+		handler.handle("PostCommented", "post_1",
+			"{\"postId\":\"post_1\",\"commentId\":\"comment_1\",\"authorId\":\"outra\"}");
+
+		verify(notifications, never()).create(anyString(), anyString(), anyString(), anyString(), anyString(),
+			anyString(), anyString(), any());
+		verify(profiles, never()).findById(anyString());
+	}
+
+	/** O silêncio é por destinatário: quem não silenciou continua recebendo. */
+	@Test
+	void silenceOfOneAuthorDoesNotAffectAnotherAuthor() {
+		semSilencio();
+		when(preferences.silences(OUTRA, "NEW_REACTION")).thenReturn(true);
+		when(posts.findById(new PostId("post_1"))).thenReturn(Optional.of(post("texto")));
+
+		handler.handle("PostReacted", "post_1", "{\"postId\":\"post_1\",\"authorId\":\"outra\"}");
+
+		verify(notifications).createGrouped(eq(AUTOR), eq("NEW_REACTION"), anyString(), eq(OUTRA), anyString(),
+			anyString(), any(), anyString(), anyString(), eq("Ver"), anyString());
 	}
 }

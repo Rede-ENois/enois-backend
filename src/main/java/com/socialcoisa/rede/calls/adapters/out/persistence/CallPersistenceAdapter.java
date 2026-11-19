@@ -138,6 +138,22 @@ class CallPersistenceAdapter implements CallRepository {
 	}
 
 	@Override
+	public int countPresentSince(String callId, Instant since) {
+		return (int) participants.countByCallIdAndStateAndLastSeenAtAfter(callId, CallParticipantState.JOINED, since);
+	}
+
+	@Override
+	public boolean hasPingedPresence(String callId) {
+		return participants.existsPingedByCallIdAndState(callId, CallParticipantState.JOINED);
+	}
+
+	@Override
+	@Transactional
+	public boolean seen(String callId, String userId, Instant now) {
+		return participants.markSeen(callId, userId, CallParticipantState.JOINED, now) == 1;
+	}
+
+	@Override
 	public int countPresentAmong(String callId, Collection<String> userIds) {
 		if (userIds == null || userIds.isEmpty()) {
 			return 0;

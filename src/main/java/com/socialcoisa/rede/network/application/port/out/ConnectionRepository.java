@@ -34,6 +34,8 @@ public interface ConnectionRepository {
 
 	List<UserConnection> findRequests(String userId, ConnectionStatus status);
 
+	int contarSolicitacoesRecebidasVisiveis(String userId);
+
 	int countByUserAndStatus(String userId, ConnectionStatus status);
 
 	/** Only an ACCEPTED connection counts: a pending request must not unlock anything. */

@@ -84,13 +84,12 @@ class StudyPairFlowTests {
 		String pairId = body(requestPair(b, "aprender rúst SP-MATCH").andExpect(status().isCreated())
 			.andExpect(jsonPath("$.status").value("MATCHED"))).get("pairId").asText();
 
-		assertThat(notifications(a.userId(), "STUDY_PAIR_MATCHED")).isEqualTo(1);
-		assertThat(notifications(b.userId(), "STUDY_PAIR_MATCHED")).isEqualTo(1);
+		assertThat(notifications(a.userId(), "STUDY_PAIR_PROPOSED")).isEqualTo(1);
+		assertThat(notifications(b.userId(), "STUDY_PAIR_PROPOSED")).isEqualTo(1);
 		me(a).andExpect(jsonPath("$.openRequest").doesNotExist())
-			.andExpect(jsonPath("$.pairs[0].id").value(pairId))
-			.andExpect(jsonPath("$.pairs[0].goal").value("Aprender Rust sp-match"))
-			.andExpect(jsonPath("$.pairs[0].partner.id").value(b.userId()))
-			.andExpect(jsonPath("$.pairs[0].myCheckinThisWeek").value(false));
+			.andExpect(jsonPath("$.proposals[0].id").value(pairId))
+			.andExpect(jsonPath("$.proposals[0].goal").value("Aprender Rust sp-match"))
+			.andExpect(jsonPath("$.proposals[0].partner.id").value(b.userId()));
 	}
 
 	@Test
@@ -105,7 +104,7 @@ class StudyPairFlowTests {
 		requestPair(blocked, "goal sp-fifo").andExpect(jsonPath("$.status").value("OPEN"));
 		requestPair(third, "goal sp-fifo").andExpect(jsonPath("$.status").value("MATCHED"));
 
-		me(third).andExpect(jsonPath("$.pairs[0].partner.id").value(first.userId()));
+		me(third).andExpect(jsonPath("$.proposals[0].partner.id").value(first.userId()));
 		me(blocked).andExpect(jsonPath("$.openRequest.goal").value("goal sp-fifo"))
 			.andExpect(jsonPath("$.pairs.length()").value(0));
 	}
@@ -400,9 +399,21 @@ class StudyPairFlowTests {
 		assertThat(others).doesNotContain("nota privada sp-private").doesNotContain(pairId);
 	}
 
+	/** O ciclo completo: pedido, proposta e aceite mútuo — o par fica ACTIVE como antes. */
 	private String pair(AuthSession first, AuthSession second, String goal) throws Exception {
 		requestPair(first, goal).andExpect(jsonPath("$.status").value("OPEN"));
-		return body(requestPair(second, goal).andExpect(jsonPath("$.status").value("MATCHED"))).get("pairId").asText();
+		String pairId = body(requestPair(second, goal).andExpect(jsonPath("$.status").value("MATCHED")))
+			.get("pairId").asText();
+		accept(second, pairId);
+		accept(first, pairId);
+		return pairId;
+	}
+
+	private void accept(AuthSession session, String pairId) throws Exception {
+		mockMvc.perform(post("/study-pairs/" + pairId + "/accept").header("X-Session-Token", session.token())
+				.header("Idempotency-Key", key()).contentType(MediaType.APPLICATION_JSON)
+				.content(json(Map.of("answers", Map.of("ice_why_now", "meta da dupla")))))
+			.andExpect(status().isOk());
 	}
 
 	private void disableModule(AuthSession session) throws Exception {

@@ -12,7 +12,10 @@ import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NetworkRegions;
+import com.socialcoisa.rede.network.domain.NodeProfile;
 import com.socialcoisa.rede.network.domain.NodeStatus;
+import com.socialcoisa.rede.network.domain.ObjectClass;
+import com.socialcoisa.rede.network.domain.StorageNodeKind;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
 import com.socialcoisa.rede.network.domain.TaskType;
 
@@ -36,12 +39,14 @@ import com.socialcoisa.rede.network.domain.TaskType;
  * <li><b>Não replica em nó que não está pronto agora.</b> Mesma régua do despacho de tarefa:
  * {@code ACTIVE}, heartbeat recente, perfil de armazenamento, sem quarentena. Nó que o heartbeat
  * ainda não confirmou pode estar com o processo morto.</li>
- * <li><b>Só replica o que não é conhecido como cheio.</b> Disco livre medido acima do piso e da
- * própria cópia, ou não medido (não saber não é saber que não cabe — a gravação falha alto e a
- * cópia fica {@code STALE}, não contada).</li>
- * <li><b>A escolhe o nó com mais folga</b>. Ordem estável, sem sorteio: o mesmo objeto, reenviado,
- * escolhe o mesmo conjunto enquanto a rede não mudar — e um conjunto que muda a cada retry daria
- * réplicas espalhadas e córpias órfãs.</li>
+ * <li><b>Só replica o que não é conhecido como cheio.</b> A folga que decide é a <b>que o
+ * participante cedeu</b> (o declarado, menos o que o Énóis já confirmou ocupar neste nó), e não o
+ * disco livre da máquina — ver {@link #cedentHeadroomMb}. Sem declarado isso não está medido, e
+ * não saber não é saber que não cabe: a web passa, e o {@code store} recusa com o número.</li>
+ * <li><b>A escolhe o nó com mais folga cedida</b>. Ordem estável, sem sorteio: o mesmo objeto,
+ * reenviado, escolhe o mesmo conjunto enquanto a rede não mudar — e um conjunto que muda a cada
+ * retry daria réplicas espalhadas e córpias órfãs. Empate é desfeito pelo id, para a ordem não
+ * depender da ordem de chegada da consulta.</li>
  * </ul>
  *
  * <p>O nó escolhido não é "aqui está o IP": ele é designado <b>no catálogo</b>, e recebe o objeto
@@ -60,18 +65,38 @@ public class StoragePlacementService {
 	/** Janela de frescor do heartbeat, em segundos. */
 	private final java.time.Duration nodeStaleAfter;
 
+	/**
+	 * A partir de que idade um objeto conta como arquivo (brief §6, {@code STORAGE_NODE_ARCHIVE}).
+	 *
+	 * <p>Trinta dias é o mínimo que separa "recente" de "parado" sem exagerar: conteúdo de
+	 * aplicação (avatar, thumb, anexo) costuma ser lido no mês. O valor é configuração porque é
+	 * decisão de produto, e a colocação só <b>prefere</b> — não exige.
+	 */
+	private final long coldAfterSeconds;
+
 	private final NetworkNodeRepository nodes;
 	private final StorageCatalogRepository catalog;
 
+	// Há dois construtores (o principal e o de teste, abaixo): sem a anotação o Spring não escolhe
+	// e tenta o sem-args. Só o principal existe no contexto.
+	@org.springframework.beans.factory.annotation.Autowired
 	StoragePlacementService(NetworkNodeRepository nodes, StorageCatalogRepository catalog,
 			@Value("${rede.storage.replicas:2}") int replicas,
-			@Value("${rede.network.node-stale-seconds:90}") int staleSeconds) {
+			@Value("${rede.network.node-stale-seconds:90}") int staleSeconds,
+			@Value("${rede.storage.cold-after-days:30}") int coldAfterDays) {
 		// Uma réplica é o comportamento da fase 1: sem cópia por nó, só a do Control Plane. Zero ou
 		// negativo não faz sentido — objeto sem nenhuma cópia não é objeto —, então o piso é 1.
 		this.replicas = Math.max(1, replicas);
 		this.nodeStaleAfter = java.time.Duration.ofSeconds(Math.max(1, staleSeconds));
 		this.nodes = nodes;
 		this.catalog = catalog;
+		this.coldAfterSeconds = Math.max(1, coldAfterDays) * 86_400L;
+	}
+
+	/** Mesma montagem com a janela de arquivo padrão — para quem não configura o módulo. */
+	StoragePlacementService(NetworkNodeRepository nodes, StorageCatalogRepository catalog, int replicas,
+			int staleSeconds) {
+		this(nodes, catalog, replicas, staleSeconds, 30);
 	}
 
 	/** O número de cópias configurado, incluindo a do Control Plane. */
@@ -112,7 +137,10 @@ public class StoragePlacementService {
 		var ready = allCandidates.stream()
 			.filter(node -> !occupied.contains(node.id()))
 			.filter(node -> storageReady(node, bytes, now))
-			.sorted(Comparator.comparingLong((NetworkNode node) -> headroomMb(node, bytes)).reversed()
+			.sorted(preference(objectId, now)
+				.thenComparing(Comparator.comparingLong(
+					(NetworkNode node) -> cedentHeadroomMbOrZero(node, now) - (bytes / (1024 * 1024)))
+					.reversed())
 				.thenComparing(NetworkNode::id))
 			.toList();
 
@@ -164,6 +192,43 @@ public class StoragePlacementService {
 	}
 
 	/**
+	 * A preferência de tipo de nó por objeto (brief §6): mídia para nó de mídia, objeto parado para
+	 * arquivo, o resto para o convencional.
+	 *
+	 * <p>É <b>preferência</b>, nunca filtro: sem nó do tipo preferido, qualquer nó de armazenamento
+	 * recebe a cópia. Exigir o tipo deixaria objeto sem réplica por falta de um perfil que é
+	 * declarativo, e a durabilidade que o §9 já mede cairia por causa de topologia.</p>
+	 *
+	 * <p>Nó que tem <b>vários</b> tipos casa com qualquer um deles. Nó só com {@code NODE_STORAGE}
+	 * casa sempre — é o tipo convencional.</p>
+	 */
+	private Comparator<NetworkNode> preference(String objectId, Instant now) {
+		ObjectClass objectClass = objectClass(objectId, now);
+		StorageNodeKind wanted = objectClass.preferredKind();
+		// Menos primeiro: `false` (0) vem antes de `true` (1). Assim "não casa" perde para "casa".
+		return Comparator.comparing((NetworkNode node) -> !kindsOf(node).contains(wanted));
+	}
+
+	/** Os tipos de storage que este nó declara. Vazio = não é nó de armazenamento. */
+	private static java.util.Set<StorageNodeKind> kindsOf(NetworkNode node) {
+		return node.profiles().stream()
+			.map(NodeProfile::storageKind)
+			.filter(kind -> kind != null)
+			.collect(java.util.stream.Collectors.toUnmodifiableSet());
+	}
+
+	/** A classe do objeto pelo que o catálogo diz dele; desconhecido cai em DEFAULT. */
+	private ObjectClass objectClass(String objectId, Instant now) {
+		var object = catalog.findById(objectId).orElse(null);
+		if (object == null) {
+			return ObjectClass.DEFAULT;
+		}
+		Long age = object.createdAt() == null ? null
+			: java.time.Duration.between(object.createdAt(), now).getSeconds();
+		return ObjectClass.of(object.contentType(), age, coldAfterSeconds);
+	}
+
+	/**
 	 * O nó pode receber a cópia <b>agora</b>: está pronto, tem o perfil, não está em quarentena e
 	 * não é conhecido como sem espaço. A ordem dos filtros é a do despacho de tarefa, para que uma
 	 * recusa aqui signifique o mesmo que significaria lá.
@@ -173,29 +238,81 @@ public class StoragePlacementService {
 			&& node.alive(now, nodeStaleAfter)
 			&& !node.quarantined(now)
 			&& TaskType.OBJECT_PUT.allowedFor(node.profiles())
-			&& fitsDisk(node, bytes);
+			&& fitsDisk(node, bytes, now);
 	}
 
 	/**
-	 * O disco medido comporta os bytes da cópia, com o mesmo piso de folga que
-	 * {@code StorageCatalogService} aplica ao próprio disco. Sem medida, a cópia é permitida: não
-	 * saber não é saber que não cabe, e a gravação falha alto quando falhar.
+	 * O nó ainda tem espaço <b>na parte que cedeu</b> para esta cópia, com o mesmo piso de folga
+	 * que {@code StorageCatalogService} aplica ao gravar.
+	 *
+	 * <p>Antes: a checagem era o <b>disco livre medido</b> da máquina. Para um participante de
+	 * 2 TB que cedeu 1,5 TB isso nunca barra: o disco livre cai até 1,5 TB ocupados e ainda mede
+	 * 500 GB, então a colocação continuava mandando cópia — e o objeto ia para além do que a pessoa
+	 * autorizou. O livre conta o uso alheio ao Énóis; quem responde "posso ocupar isto aqui" é o
+	 * teto cedido.</p>
+	 *
+	 * <p>Agora: {@code declarado - ocupado} (ver {@link #cedentHeadroomMb}). Declarado ausente não
+	 * é medido, e não medido não veta — o {@code store} recusa com o número na hora da web.</p>
 	 */
-	private static boolean fitsDisk(NetworkNode node, long bytes) {
-		Long free = node.observedDiskFreeMb();
-		if (free == null) {
-			return true;
+	private boolean fitsDisk(NetworkNode node, long bytes, Instant now) {
+		Long headroom = cedentHeadroomMb(node, now);
+		// Sem teto cedido não há folga a afirmar: antes da mudança de régua este caso passava
+		// ("não medir não é saber que não cabe"), e o resultado era um nó recebendo cópia sem limite
+		// nenhum. O §7 proíbe consumir além do limite, e sem o número não existe limite.
+		if (headroom == null) {
+			return false;
 		}
 		long neededMb = (bytes / (1024 * 1024)) + 1;
-		return free - neededMb >= StorageCatalogService.MIN_DISK_FREE_MB;
+		// As duas réguas: a cedida (o §7/§8 — não passar do que a pessoa autorizou) e o disco livre
+		// medido (o arquivo tem de caber de fato; ceder 50 GB num disco com 500 MB não é espaço).
+		Long free = node.observedDiskFreeMb();
+		if (free != null && free - neededMb < StorageCatalogService.MIN_DISK_FREE_MB) {
+			return false;
+		}
+		return headroom - neededMb >= StorageCatalogService.MIN_DISK_FREE_MB;
 	}
 
-	private static long headroomMb(NetworkNode node, long bytes) {
-		Long free = node.observedDiskFreeMb();
-		if (free == null) {
-			return 0;
+	/**
+	 * Folga<b>cedida</b> do nó, em MB: o declarado menos o que o Énóis já confirmou ocupar ali.
+	 *
+	 * <p>Estas duas contas respondem perguntas diferentes e as duas importam:</p>
+	 * <ul>
+	 * <li><b>ocupado</b> — a soma das cópias {@code OK} deste nó no catálogo. É o que o Énóis
+	 * confirmou ter ali; cópia {@code STALE}/{@code GONE} não conta porque não é espaço ocupado que
+	 * se possa afirmar;</li>
+	 * <li><b>usado no disco</b> — o {@code observedContentUsedMb} que o nó mediu em si (V344). Pega
+	 * arquivo que ficou no volume sem estar confirmado no catálogo (cópia interrompida, sobra de
+	 * uma troca).</li>
+	 * </ul>
+	 * <p>O maior dos dois é o ocupado: os dois são limites <b>de baixo</b> do uso real, e usar o
+	 * menor esconderia o espaço que um deles já viu estar ocupado.</p>
+	 *
+	 * <p>{@code null} quando o declarado não foi informado: sem o teto não há folga a calcular, e
+	 * {@code 0} diria "não tem espaço" a quem só não declarou. Zero declarado é uma resposta, não
+	 * uma ausência — e vale zero de folga.</p>
+	 */
+	private Long cedentHeadroomMb(NetworkNode node, Instant now) {
+		if (node.declaredDiskMb() <= 0) {
+			return null;
 		}
-		return free - (bytes / (1024 * 1024));
+		long confirmadoMb = 0;
+		for (StoragePlacement placement : catalog.placementsOnNode(node.id())) {
+			if (placement.state() == StoragePlacement.State.OK) {
+				confirmadoMb += (placement.bytes() / (1024 * 1024)) + 1;
+			}
+		}
+		long medidoMb = node.observedContentUsedMb() == null ? 0 : node.observedContentUsedMb();
+		long ocupadoMb = Math.max(confirmadoMb, medidoMb);
+		return node.declaredDiskMb() - ocupadoMb;
+	}
+
+	/**
+	 * Folga cedida em MB, para a ordem. Quem chega aqui já tem teto ({@link #fitsDisk} descartou o
+	 * resto), então não há sentinela: a soma é sempre um número.
+	 */
+	private long cedentHeadroomMbOrZero(NetworkNode node, Instant now) {
+		Long headroom = cedentHeadroomMb(node, now);
+		return headroom == null ? 0L : headroom;
 	}
 
 }

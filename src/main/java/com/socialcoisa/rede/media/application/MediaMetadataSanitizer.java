@@ -119,6 +119,9 @@ public class MediaMetadataSanitizer {
 			if (type.startsWith("image/webp")) {
 				return webp(data);
 			}
+			if (type.startsWith("image/svg+xml")) {
+				return com.socialcoisa.rede.shared.html.SafeHtml.sanitizeSvg(data);
+			}
 			if ("application/pdf".equals(type)) {
 				return pdf(data);
 			}

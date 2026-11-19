@@ -126,6 +126,22 @@ class MarketplaceController {
 		return Map.of("id", listing.id(), "status", listing.status().name());
 	}
 
+	/**
+	 * Baixa do tema pelo proprio autor (#901): o criador usa o que fez sem comprar. Sem compra,
+	 * sem escrow e sem saldo — o contador de instalacoes da galeria e que muda.
+	 */
+	@PostMapping("/marketplace/{listingId}/owner-download")
+	ResponseEntity<String> ownerDownload(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String listingId,
+			@RequestHeader(value = "Idempotency-Key", required = false) String key) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return idempotency.execute(user.id(), "POST", "/marketplace/" + listingId + "/owner-download", key,
+			idempotency.hash(Map.of()), () -> {
+				marketplace.ownerDownload(listingId, user.id().value());
+				return new CommandResponse(200, Map.of("status", "OWNER"));
+			});
+	}
+
 	@PostMapping("/marketplace/{listingId}/buy")
 	ResponseEntity<String> buy(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestHeader(value = "Idempotency-Key", required = false) String key, @PathVariable String listingId) {

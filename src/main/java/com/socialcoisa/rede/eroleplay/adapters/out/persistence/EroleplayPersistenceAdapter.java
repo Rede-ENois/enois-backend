@@ -43,9 +43,9 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 	/** O que a descoberta mostra: campanha ativa. Arquivada e encerrada nao aparecem. */
 	private static final List<CampaignStatus> DISCOVERABLE = List.of(CampaignStatus.ACTIVE);
 
-	/** Complemento de {@link CampaignStatus#readableByMembers()}: o que some da lista de quem participa. */
-	private static final List<CampaignStatus> NOT_READABLE_BY_MEMBERS = java.util.Arrays.stream(CampaignStatus.values())
-		.filter(status -> !status.readableByMembers())
+	/** O que a listagem "minhas campanhas" mostra: o que quem participa ainda pode ler. Encerrada some. */
+	private static final List<CampaignStatus> READABLE_BY_MEMBERS = java.util.Arrays.stream(CampaignStatus.values())
+		.filter(CampaignStatus::readableByMembers)
 		.toList();
 
 	private final SpringDataCampaignJpaRepository campaigns;
@@ -121,7 +121,7 @@ class EroleplayPersistenceAdapter implements EroleplayRepository {
 
 	@Override
 	public List<CampaignMembership> findMemberships(String userId, int limit) {
-		return members.findMemberships(userId, NOT_READABLE_BY_MEMBERS, PageRequest.of(0, limit)).stream()
+		return members.findMemberships(userId, READABLE_BY_MEMBERS, PageRequest.of(0, limit)).stream()
 			.map(row -> new CampaignMembership(((CampaignJpaEntity) row[1]).toDomain(),
 				((CampaignMemberJpaEntity) row[0]).role()))
 			.toList();

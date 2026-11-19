@@ -20,8 +20,10 @@ import com.socialcoisa.rede.network.application.StorageHealer;
 import com.socialcoisa.rede.network.application.StorageOverviewService;
 import com.socialcoisa.rede.network.application.StorageReplicationDispatcher;
 import com.socialcoisa.rede.network.application.StorageScrubber;
+import com.socialcoisa.rede.network.application.StorageTombstoneCollector;
 import com.socialcoisa.rede.network.application.NodeKeyService;
 import com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository;
+import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
 import com.socialcoisa.rede.network.application.port.out.NetworkUserDirectory;
 import com.socialcoisa.rede.network.application.port.out.NodeKeyRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
@@ -61,6 +63,9 @@ class AdminNetworkController {
 	private final NetworkUserDirectory users;
 	private final com.socialcoisa.rede.network.application.NodeObservabilityService observability;
 	private final ChangeCaptureReadinessService changeCapture;
+	private final NetworkTaskRepository tasks;
+	private final com.socialcoisa.rede.network.application.NetworkTopologyService topology;
+	private final StorageTombstoneCollector tombstones;
 
 	AdminNetworkController(NetworkNodeService nodes, NodeKeyService keys, NetworkDashboardService dashboard,
 			AuditTrail audit, CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
@@ -69,7 +74,9 @@ class AdminNetworkController {
 			NetworkNodeResponsibleRepository responsibles, NetworkUserDirectory users,
 			com.socialcoisa.rede.network.application.NodeObservabilityService observability,
 			ChangeCaptureReadinessService changeCapture, StorageOverviewService storageOverview,
-			StorageHealer healer, StorageReplicationDispatcher dispatcher) {
+			StorageHealer healer, StorageReplicationDispatcher dispatcher, NetworkTaskRepository tasks,
+			com.socialcoisa.rede.network.application.NetworkTopologyService topology,
+			StorageTombstoneCollector tombstones) {
 		this.nodes = nodes;
 		this.keys = keys;
 		this.dashboard = dashboard;
@@ -85,6 +92,9 @@ class AdminNetworkController {
 		this.storageOverview = storageOverview;
 		this.healer = healer;
 		this.dispatcher = dispatcher;
+		this.tasks = tasks;
+		this.topology = topology;
+		this.tombstones = tombstones;
 	}
 
 	/**
@@ -98,7 +108,8 @@ class AdminNetworkController {
 			String region, String runtimeVersion, Instant lastSeenAt, boolean operable, String keyId,
 			String keyPrefix, boolean keyUsed, Integer latencyMs, int failureStreak, boolean degraded,
 			String quarantineReason, Instant quarantinedUntil, int declaredCpuCores, int declaredMemoryMb,
-			int declaredDiskMb, int declaredBandwidthMbps, ResponsibleView responsible) {
+			int declaredDiskMb, int declaredBandwidthMbps, long tasksDone, long tasksFailed,
+			Long trafficInMb, Long trafficOutMb, ResponsibleView responsible) {
 
 		/**
 		 * Quem ativou a possibilidade de o nó servir e quem responde por ele.
@@ -123,7 +134,7 @@ class AdminNetworkController {
 		 * um nó parado sem dizer por quê.</p>
 		 */
 		static NodeView of(NetworkNode node, NodeKeyRepository.NodeKeyRecord key, Instant now,
-				ResponsibleView responsible) {
+				ResponsibleView responsible, long tasksDone, long tasksFailed) {
 			boolean quarantined = node.quarantined(now);
 			boolean showQuarantine = quarantined
 				|| (node.status() == NodeStatus.QUARANTINED && node.quarantineReason() != null);
@@ -134,7 +145,8 @@ class AdminNetworkController {
 				node.observedLatencyMs(), node.consecutiveFailures(), showQuarantine || node.slow() || node.failing(),
 				showQuarantine ? node.quarantineReason() : null, showQuarantine ? node.quarantinedUntil() : null,
 				node.declaredCpuCores(), node.declaredMemoryMb(), node.declaredDiskMb(),
-				node.declaredBandwidthMbps(), responsible);
+				node.declaredBandwidthMbps(), tasksDone, tasksFailed, node.observedBytesInMb(),
+				node.observedBytesOutMb(), responsible);
 		}
 	}
 
@@ -170,10 +182,16 @@ class AdminNetworkController {
 			.byNodeIds(found.stream().map(NetworkNode::id).toList());
 		Map<String, NetworkUserDirectory.Account> accounts = users
 			.byIds(found.stream().map(NetworkNode::ownerUserId).distinct().toList());
+		// A contribuição medida também em duas consultas (concluídas e falhas por nó), pelo mesmo
+		// motivo: a tela lista até 200 nós.
+		List<String> ids = found.stream().map(NetworkNode::id).toList();
+		Map<String, Long> done = tasks.countDoneByNode(ids);
+		Map<String, Long> failed = tasks.countFailedByNode(ids);
 		Instant now = Instant.now();
 		return found.stream()
 			.map(node -> NodeView.of(node, activeKeys.get(node.id()), now,
-				responsibleOf(node, joined.get(node.id()), accounts.get(node.ownerUserId()))))
+				responsibleOf(node, joined.get(node.id()), accounts.get(node.ownerUserId())),
+				done.getOrDefault(node.id(), 0L), failed.getOrDefault(node.id(), 0L)))
 			.toList();
 	}
 
@@ -190,10 +208,20 @@ class AdminNetworkController {
 	}
 
 	/**
-	 * Varredura de durabilidade do Storage: objetos {@code STORED} com menos cópias confirmadas que
-	 * o pedido. É leitura (não repara nada) e serve para o operador ver a lacuna antes que ela vire
-	 * um objeto que só existe num disco. {@code bucket} nulo varre o catálogo inteiro.
+	 * A topologia como dado para a tela desenhar (brief §8.5): nós por domínio de falha, estado de
+	 * cada um e as conexões que o cadastro declara.
+	 *
+	 * <p>A rota não desenha — posição, cor e interação são decisão de front. Ela também não inventa
+	 * aresta entre dois nós: a tarefa não guarda o nó de origem, e o que existe é o vínculo
+	 * nó → domínio. Ver {@link com.socialcoisa.rede.network.application.NetworkTopologyService}.</p>
 	 */
+	@GetMapping("/topology")
+	com.socialcoisa.rede.network.application.NetworkTopologyService.Topology topologyView(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		admin(sessionToken);
+		return topology.topology();
+	}
+
 	/**
 	 * O Storage no painel (§8.2 do brief): capacidade declarada, disponível medido, uso medido,
 	 * objetos e o estado das cópias. Nada aqui é estimado — ver {@link StorageOverviewService}.
@@ -250,6 +278,11 @@ class AdminNetworkController {
 		return dispatcher.dispatch(objectId);
 	}
 
+	/**
+	 * Varredura de durabilidade do Storage: objetos {@code STORED} com menos cópias confirmadas que
+	 * o pedido. É leitura (não repara nada) e serve para o operador ver a lacuna antes que ela vire
+	 * um objeto que só existe num disco. {@code bucket} nulo varre o catálogo inteiro.
+	 */
 	@GetMapping("/storage/scrub")
 	StorageScrubber.Report scrubStorage(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(required = false) String bucket,
@@ -272,6 +305,28 @@ class AdminNetworkController {
 	 * <p>Fica sob {@code /nodes/} porque a classe inteira é mapeada ali — o caminho curto
 	 * {@code /admin/network/storage/balance} seria outra classe ou um segundo mapeamento.</p>
 	 */
+	/**
+	 * Coleta de lápides do Storage (brief §14): objetos {@code DELETED} há mais que a janela de
+	 * retenção têm as cópias restantes recolhidas. Uma lápide que ainda tem cópia continua contando
+	 * na durabilidade e pode ser servida por um caminho que não conhece a remoção.
+	 *
+	 * <p>{@code dryRun} é o padrão: a primeira coisa a fazer num incidente é ver o que sairia sem
+	 * apagar. A operação é ato de operador, não de agendador — igual ao healing e à poda do disco
+	 * do nó.</p>
+	 */
+	@PostMapping("/storage/tombstones/collect")
+	StorageTombstoneCollector.Report collectTombstones(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(defaultValue = "true") boolean dryRun) {
+		CurrentUser admin = admin(sessionToken);
+		var relatorio = tombstones.collect(dryRun);
+		// A auditoria da coleta é da operação: quantas lápides, em qual janela. As cópias recolhidas
+		// não são auditadas uma a uma — seriam centenas de linhas para dizer o que o relatório diz.
+		audit.record(admin.id().value(), "STORAGE_TOMBSTONE_COLLECT_RUN", "storage",
+			"{\"dryRun\":" + dryRun + ",\"objects\":" + relatorio.collected().size() + "}");
+		return relatorio;
+	}
+
 	@GetMapping("/storage/balance")
 	com.socialcoisa.rede.network.application.StorageBalanceReport.Report storageBalance(
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
@@ -318,6 +373,27 @@ class AdminNetworkController {
 			@PathVariable String id) {
 		admin(sessionToken);
 		return view(nodes.require(id));
+	}
+
+	/**
+	 * O disco deste nó para a <b>página individual</b> (brief §17): "espaço disponibilizado",
+	 * "espaço utilizado" e "espaço disponível".
+	 *
+	 * <p>Antes isso só existia no painel geral (`/storage/overview` → {@code disks[]}), onde o admin
+	 * tinha de procurar a linha do nó. A conta é a <b>mesma</b>: vem do mesmo método que monta a
+	 * linha daquele painel, para as duas telas não mostrarem números diferentes do mesmo disco.</p>
+	 *
+	 * <p>{@code null} (corpo vazio) quando o nó não guarda objeto: chamar de disco de armazenamento
+	 * o de um nó de processamento prometeria espaço que ele não oferece. Nó desconhecido é 404, como
+	 * em {@code GET /{id}}.</p>
+	 */
+	@GetMapping("/{id}/storage")
+	Object storage(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String id) {
+		admin(sessionToken);
+		nodes.require(id);
+		var disco = storageOverview.diskOf(id);
+		return disco == null ? java.util.Map.of() : disco;
 	}
 
 	/** Token de uso único que cria o nó; não é a chave de operação (ADR-003). */
@@ -416,7 +492,9 @@ class AdminNetworkController {
 	/** Um nó com a chave vigente dele: a tela precisa dos dois para desenhar a linha. */
 	private NodeView view(NetworkNode node) {
 		return NodeView.of(node, keys.activeKeyFor(node.id()), Instant.now(), responsibleOf(node,
-			responsibles.find(node.id()).orElse(null), users.byId(node.ownerUserId()).orElse(null)));
+			responsibles.find(node.id()).orElse(null), users.byId(node.ownerUserId()).orElse(null)),
+			tasks.countDoneByNode(List.of(node.id())).getOrDefault(node.id(), 0L),
+			tasks.countFailedByNode(List.of(node.id())).getOrDefault(node.id(), 0L));
 	}
 
 	/**

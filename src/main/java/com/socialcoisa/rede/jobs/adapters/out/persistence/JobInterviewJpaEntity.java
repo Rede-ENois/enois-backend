@@ -22,6 +22,10 @@ class JobInterviewJpaEntity {
 	@Column(name = "application_id", nullable = false)
 	private Long applicationId;
 
+	/** Chave do índice único: a candidatura enquanto a entrevista está agendada, nula depois. */
+	@Column(name = "active_application_id")
+	private Long activeApplicationId;
+
 	@Column(name = "job_id", nullable = false)
 	private String jobId;
 
@@ -63,6 +67,7 @@ class JobInterviewJpaEntity {
 		JobInterviewJpaEntity e = new JobInterviewJpaEntity();
 		e.id = interview.id();
 		e.applicationId = Long.valueOf(interview.applicationId());
+		e.activeApplicationId = interview.scheduled() ? e.applicationId : null;
 		e.jobId = interview.jobId();
 		e.candidateId = interview.candidateId();
 		e.employerId = interview.employerId();

@@ -71,7 +71,7 @@ Migração `V75__games_platform.sql` (aditiva — nada do que existe é renomead
 - `developer_follows` — acompanhar o criador (mão única, como a inscrição de blog):
   `(follower_id, developer_user_id)` único.
 - `game_updates` — o devlog: `game_id`, `title`, `body`, `created_at`.
-- `game_events` — o que sustenta as métricas: `game_id`, `kind` (PAGE_VIEW, PLAY_START),
+- `game_events` — o que sustenta as métricas: `game_id`, `kind` (PAGE_VIEW, PLAY_START, SHARE),
   `user_id` opcional, `created_at`. **Sem** dados pessoais além do id de quem está logado.
 
 Identificadores `game_…`, `gdev_…`, `gup_…`, `gfav_…`, `gevt_…`; sem FK (a lição de collation das
@@ -222,3 +222,7 @@ O que a página do Énóis faz:
 Limites: texto até 600 caracteres; 12 compartilhamentos por dia por pessoa em cada jogo
 (`429 SHARE_LIMIT`). A sessão do jogador nunca atravessa a borda do iframe e o jogo não
 consegue publicar sem o clique humano na prévia.
+
+Só conquistas publicadas geram `SHARE`, usado no limite diário e na série de compartilhamentos.
+Despesas continuam registradas como `PURCHASE` no ledger de moedas e não geram evento de
+compartilhamento.

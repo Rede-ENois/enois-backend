@@ -57,7 +57,7 @@ class StorageResultVerifierTests {
 	}
 
 	private static StorageObject stored() {
-		return new StorageObject("sob_1", "fotos", "a.jpg", "image/jpeg", 10L, SHA, StorageObjectState.STORED,
+		return StorageObject.current("sob_1", "fotos", "a.jpg", "image/jpeg", 10L, SHA, StorageObjectState.STORED,
 			"u", NOW, NOW, null);
 	}
 

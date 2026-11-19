@@ -41,6 +41,7 @@ próprio no [`SECURITY.md`](SECURITY.md) — não vira issue pública.
 | Cache de leitura, invalidação e ETag | [`docs/CACHE.md`](docs/CACHE.md) |
 | Deploy, imagens e GitOps | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) |
 | Segurança, risco e antifraude | [`docs/SECURITY.md`](docs/SECURITY.md) |
+| Rodada de pen test e verificação de privilégios | [`docs/PENTEST-RUNBOOK.md`](docs/PENTEST-RUNBOOK.md) |
 | Identidade e contas | [`docs/IDENTITY.md`](docs/IDENTITY.md) |
 | Jogos indie | [`docs/GAMES.md`](docs/GAMES.md) |
 | Notificações: push por categoria e resumo semanal | [`docs/DIGEST.md`](docs/DIGEST.md) |

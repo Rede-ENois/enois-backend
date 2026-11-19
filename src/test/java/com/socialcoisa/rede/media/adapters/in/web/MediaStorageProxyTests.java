@@ -40,7 +40,8 @@ import com.socialcoisa.rede.shared.web.TestAuthHelper;
  * Range, para o player) e escrita autorizada pelo dono do asset e pela chave exata.
  */
 @SpringBootTest(properties = { "rede.media.storage=s3", "rede.media.s3.bucket=bucket-de-teste",
-		"rede.media.s3.publicBaseUrl=https://enois.exemplo.com/api/storage" })
+		"rede.media.s3.publicBaseUrl=https://enois.exemplo.com/api/storage",
+		"rede.media.attachments.secret=segredo-de-teste-com-mais-de-32-caracteres" })
 @AutoConfigureMockMvc
 class MediaStorageProxyTests {
 
@@ -473,12 +474,12 @@ class MediaStorageProxyTests {
 
 	/**
 	 * A captura de denúncia é a prova da violação: a checagem de imagem pública recusaria o
-	 * arquivo, e ela não pode ser publicada. Fica guardada e só quem modera consegue abrir.
+	 * arquivo, e ela não é publicada. A cópia vai para chave privada (fora do prefixo público) e a
+	 * rota pública de mídia não a devolve — nem para quem sabe o id do asset.
 	 */
 	@Test
-	void capturaDeDenunciaNaoPassaPelaChecagemPublicaESoModeracaoLe() throws Exception {
+	void aCapturaDeDenunciaVaiParaChavePrivadaENaoSaiPelaRotaPublica() throws Exception {
 		var dono = auth.authenticate("media_proxy_captura");
-		var outro = auth.authenticate("media_proxy_captura_outro");
 		var admin = auth.authenticate("group-admin");
 		byte[] captura = "captura-da-tela-da-chamada".repeat(64).getBytes(StandardCharsets.UTF_8);
 
@@ -490,8 +491,18 @@ class MediaStorageProxyTests {
 					"mimeType", "image/jpeg", "size", captura.length, "purpose", "REPORT_CAPTURE"))))
 			.andExpect(status().isCreated())
 			.andReturn();
-		String objectKey = objectMapper.readTree(criado.getResponse().getContentAsString())
-			.path("objectKey").asText();
+		var corpo = objectMapper.readTree(criado.getResponse().getContentAsString());
+		String uploadUrl = corpo.path("uploadUrl").asText();
+		// O navegador sobe pela MESMA chave privada que o asset declara, e o endereço público do
+		// asset também é a chave privada (é de lá que a cópia é lida depois).
+		String submitida = uploadUrl.substring(uploadUrl.indexOf("/storage/") + "/storage/".length());
+		String objectKey = corpo.path("objectKey").asText();
+		assertThat(objectKey).startsWith("reports/capture/");
+		// O proxy encerra a subida no endereço do asset (é o objeto que fica no bucket); o endereço
+		// público só acrescenta o caminho do bucket na frente da MESMA chave.
+		assertThat(corpo.path("cdnUrl").asText())
+			.endsWith("/api/storage/reports/capture/" + submitida);
+		assertThat(corpo.path("cdnUrl").asText()).contains("/reports/capture/");
 
 		mockMvc.perform(put("/storage/" + objectKey)
 				.header("X-Session-Token", dono.token())
@@ -499,18 +510,18 @@ class MediaStorageProxyTests {
 				.content(captura))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("STORED"));
+		assertThat(store().chaveEscrita).isEqualTo(objectKey);
 
-		// Sem sessão e com sessão comum: a prova não é servida.
-		mockMvc.perform(get("/storage/" + objectKey)).andExpect(status().isUnauthorized());
-		mockMvc.perform(get("/storage/" + objectKey).header("X-Session-Token", outro.token()))
+		// A rota pública de mídia (servida sem sessão e sem origem) não devolve a prova.
+		mockMvc.perform(get("/storage/" + objectKey)).andExpect(status().isNotFound());
+		mockMvc.perform(get("/storage/" + objectKey).header("X-Session-Token", admin.token()))
+			.andExpect(status().isNotFound());
+		// A subida continua sendo só do dono do asset.
+		mockMvc.perform(put("/storage/" + objectKey)
+				.header("X-Session-Token", admin.token())
+				.contentType(MediaType.IMAGE_JPEG)
+				.content(captura))
 			.andExpect(status().isForbidden());
-
-		var leitura = mockMvc.perform(get("/storage/" + objectKey).header("X-Session-Token", admin.token()))
-			.andExpect(status().isOk())
-			.andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")))
-			.andReturn();
-		// O bucket falso devolve o conteúdo fixo dele; o que importa aqui é que a leitura passou.
-		assertCorpoEmStreaming(leitura, store().conteudo);
 	}
 
 	@Test

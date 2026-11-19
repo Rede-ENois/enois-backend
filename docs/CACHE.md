@@ -80,12 +80,19 @@ o `sw.js` sai `no-cache`, com `updateViaCache: "none"` no registro do service wo
 
 O cache não substitui consulta ruim. O que foi corrigido junto:
 
+- **Coleções e murais**: os posts visíveis são carregados e enriquecidos em lote, preservando os
+  conteúdos completos de página e artigo na resposta.
 - **Vitrine de comunidades**: duas consultas por comunidade (contagem de membros e "sou membro")
   viraram duas por página, com `group by` — de ~40 consultas por página de 20 para 3.
+- **Descoberta de grupos**: contagens, papéis e pedidos pendentes são consultados em lote por página;
+  os dados do leitor são resolvidos a cada requisição.
 - **Vitrine de eventos**: uma contagem de presenças por card virou uma consulta por página.
+- **Resumo da rede**: os pedidos recebidos visíveis são contados no banco, sem carregar a lista de perfis.
 - **Leitura de perfil**: `populateCounts` chamava `repository.save(...)` numa transação `readOnly` —
   o `save` virava `merge` (SELECT da linha) em toda abertura de perfil, sem nunca persistir nada.
   Removido.
+- **Feed e perfis**: tags e mídias de posts e habilidades, objetivos e links de perfis usam
+  carregamento antecipado em lotes de até 32 donos, reduzindo consultas em listagens.
 - **Índices** (`V232__read_list_indexes.sql`): `users(created_at)`, `communities(created_at)` e
   `events(created_at)` para as vitrines que paginam por `created_at DESC`. Sem eles a primeira página
   varria e ordenava a tabela inteira.
@@ -105,3 +112,5 @@ O cache não substitui consulta ruim. O que foi corrigido junto:
 Feed, notificações, mensagens, conteúdo de post, reações, perfil próprio (`/me`) e todo dado que
 depende de sessão. Continuam sendo leitura direta, com as regras de paginação por cursor que já
 existiam. Respostas de escrita nunca passam pelo cache.
+O feed da comunidade tem o índice `posts(community_id, status, channel_id, created_at)` para apoiar
+a filtragem e a ordenação.

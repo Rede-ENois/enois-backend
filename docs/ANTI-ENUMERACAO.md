@@ -35,8 +35,9 @@ um scanner lento. O que separa os dois é a **forma** do tráfego:
 `/calls/{callId}`, `/events/{eventId}/calls/open`, `/posts/{id}`, `/posts/{id}/comments`,
 `/comments/{id}`, `/communities/{id}`, `/jobs/{id}`, `/events/{id}`, `/mentors/{id}`.
 
-**Autenticação** — `/auth/login`, `/auth/password/forgot`, `/auth/signup`,
-`/auth/username-available`, `/auth/email-available`.
+**Autenticação** — `/auth/login`, `/auth/password/forgot`, `/auth/signup`. As antigas
+`/auth/username-available` e `/auth/email-available` não existem mais e saíram da superfície: manter
+a linha daria falso sinal de varredura para um caminho que ninguém serve.
 
 **Administração** — `/admin/**` (varredura de endpoints é sinal por si).
 
@@ -59,6 +60,15 @@ vez dispara várias delas. Contá-las como enumeração puniria todo mundo.
 Níveis: **SUSPECT** (≥30), **HIGH** (≥55), **CONFIRMED** (≥80), **SEVERE** (confirmado + sequência +
 404 alto).
 
+## Tetos de leitura
+
+`PublicReadRateLimitFilter` (janela deslizante por IP, com balde próprio para sessão válida,
+`rede.rate.public-read-per-minute`, padrão 600) cobre `/users/search`, `/users/**` e `/network/users`
+— as rotas que servem para pedir pessoa atrás de pessoa. `/network/suggestions` e
+`/network/connections/*` ficam de fora de propósito: são a navegação de quem já está logado, e o teto
+aplicado ali puniria a pessoa comum. `/ranking` e as vitrines de perfil não recebem identificador de
+pessoa escolhido por quem consulta e continuam no limite global.
+
 ## Modos de operação
 
 `rede.security.enumeration.mode`:
@@ -71,6 +81,10 @@ Níveis: **SUSPECT** (≥30), **HIGH** (≥55), **CONFIRMED** (≥80), **SEVERE*
 **Ligar `enforce` é decisão de operação, não de código.** Antes: revisar
 `GET /admin/enumeration/observed` por alguns dias e confirmar que nenhuma chave legítima aparece
 com nível alto.
+
+Estado por ambiente: onde `REDE_ENUMERATION_MODE` não está definido no deploy, vale o padrão
+`shadow` (observa e mostra no painel, nunca nega). Ligar `enforce` em um ambiente é mudar a variável
+dele no deploy, depois da validação acima — o código não escolhe ambiente.
 
 ## Resposta automática (só em `enforce`)
 

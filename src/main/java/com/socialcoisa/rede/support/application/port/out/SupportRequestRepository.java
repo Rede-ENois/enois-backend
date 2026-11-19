@@ -13,6 +13,8 @@ public interface SupportRequestRepository {
 
 	Optional<SupportRequest> findById(String id);
 
+	Optional<SupportRequest> findByIdForUpdate(String id);
+
 	/** Filtro do painel: categoria e/ou status nulos significam "qualquer". */
 	List<SupportRequest> findFiltered(SupportCategory category, SupportStatus status, int limit);
 

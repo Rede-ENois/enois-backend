@@ -33,6 +33,11 @@ import java.util.Set;
  * @param observedDiskFreeMb disco livre medido pelo nó no último heartbeat; null = não reportado
  * (runtime antigo), diferente de zero, que é "sem espaço". O declarado
  * ({@link #declaredDiskMb}) é o contrato; este é a medida.
+ * @param observedDiskTotalMb tamanho do volume medido no último heartbeat; null = não reportado.
+ * Com {@link #observedDiskFreeMb} é o que permite separar "espaço reservado pelo participante" do
+ * "capacidade oferecida" (brief do Storage §7): a reserva é o total que não está a serviço do Énóis.
+ * @param observedContentUsedMb espaço que o ESTADO DE CONTEÚDO ocupa no nó, medido por ele; null =
+ * não reportado. É o "utilizado pelo Énóis" do §7 — distinto do livre, que qualquer processo derruba.
  * @param observedLatencyMs mediana do tempo de conclusão das últimas tarefas; null = sem amostra
  * @param consecutiveFailures resultados falhos seguidos; um sucesso zera a contagem
  * @param quarantinedUntil fora do balanceamento até este instante; null = em balanceamento
@@ -42,7 +47,46 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 		Set<NodeProfile> profiles, String region, String country, String runtimeVersion, Instant lastSeenAt,
 		int declaredCpuCores, int declaredMemoryMb, int declaredDiskMb, int declaredBandwidthMbps,
 		Double observedCpuPercent, Integer observedMemoryMb, Integer observedRunningTasks, Integer observedLatencyMs,
-		Long observedDiskFreeMb, int consecutiveFailures, Instant quarantinedUntil, String quarantineReason) {
+		Long observedDiskFreeMb, Long observedDiskTotalMb, Long observedContentUsedMb, Long observedBytesInMb,
+		Long observedBytesOutMb, int consecutiveFailures, Instant quarantinedUntil,
+		String quarantineReason) {
+
+	/**
+	 * Mesmo nó sem o tráfego medido (runtime anterior à V345): os dois contadores ficam nulos, que
+	 * é "não mediu". Existe pelo mesmo motivo dos construtores abaixo — vinte e cinco argumentos,
+	 * com dois {@code Long} novos no meio, são fáceis de trocar de ordem.
+	 */
+	public NetworkNode(String id, String displayName, String ownerUserId, NodeStatus status,
+			Set<NodeProfile> profiles, String region, String country, String runtimeVersion, Instant lastSeenAt,
+			int declaredCpuCores, int declaredMemoryMb, int declaredDiskMb, int declaredBandwidthMbps,
+			Double observedCpuPercent, Integer observedMemoryMb, Integer observedRunningTasks, Integer observedLatencyMs,
+			Long observedDiskFreeMb, Long observedDiskTotalMb, Long observedContentUsedMb, int consecutiveFailures,
+			Instant quarantinedUntil, String quarantineReason) {
+		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
+			declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
+			observedMemoryMb, observedRunningTasks, observedLatencyMs, observedDiskFreeMb, observedDiskTotalMb,
+			observedContentUsedMb, null, null, consecutiveFailures, quarantinedUntil, quarantineReason);
+	}
+
+	/**
+	 * Tráfego total medido pelo nó (entrada + saída), ou {@code null} se ele não reportou nenhum dos
+	 * dois. Somar zero no que falta seria afirmar tráfego zero para quem só informou metade.
+	 */
+	public Long observedTrafficMb() {
+		if (observedBytesInMb == null && observedBytesOutMb == null) {
+			return null;
+		}
+		return (observedBytesInMb == null ? 0L : observedBytesInMb) + (observedBytesOutMb == null ? 0L : observedBytesOutMb);
+	}
+
+	/** Quanto do tráfego acumulado é de saída (0–100), ou {@code null} quando não há base. */
+	public Double outboundSharePercent() {
+		Long total = observedTrafficMb();
+		if (total == null || total <= 0) {
+			return null;
+		}
+		return (observedBytesOutMb == null ? 0.0 : observedBytesOutMb * 100.0) / total;
+	}
 
 	/**
 	 * Mesmo nó com o disco livre medido: {@code null} = não reportado (runtime anterior a V321).
@@ -59,8 +103,63 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 			int consecutiveFailures, Instant quarantinedUntil, String quarantineReason) {
 		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
 				declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
-				observedMemoryMb, observedRunningTasks, observedLatencyMs, null, consecutiveFailures, quarantinedUntil,
-				quarantineReason);
+				observedMemoryMb, observedRunningTasks, observedLatencyMs, null, null, null, null, null,
+				consecutiveFailures, quarantinedUntil, quarantineReason);
+	}
+
+	/**
+	 * Mesmo nó com o disco livre medido e o tamanho não reportado (runtime anterior a V341).
+	 *
+	 * <p>Separado do construtor acima porque é o que a leitura do catálogo já montava: o total entrou
+	 * depois, e quem constrói o nó com a medida do livre continua dizendo a verdade — enquanto o
+	 * runtime não informar o tamanho, ele é desconhecido, não igual ao livre.</p>
+	 */
+	public NetworkNode(String id, String displayName, String ownerUserId, NodeStatus status,
+			Set<NodeProfile> profiles, String region, String country, String runtimeVersion, Instant lastSeenAt,
+			int declaredCpuCores, int declaredMemoryMb, int declaredDiskMb, int declaredBandwidthMbps,
+			Double observedCpuPercent, Integer observedMemoryMb, Integer observedRunningTasks, Integer observedLatencyMs,
+			Long observedDiskFreeMb, int consecutiveFailures, Instant quarantinedUntil, String quarantineReason) {
+		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
+				declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
+				observedMemoryMb, observedRunningTasks, observedLatencyMs, observedDiskFreeMb, null, null, null,
+				null, consecutiveFailures, quarantinedUntil, quarantineReason);
+	}
+
+	/**
+	 * Quanto o Énóis ocupa <b>relativamente</b> ao que o participante cedeu, em percentual.
+	 *
+	 * <p>É o "limite máximo de utilização" do brief §7 visto de quem opera: o mesmo teto chega ao
+	 * runtime em {@code limits.diskMb}, mas só o rodapé do disco sabia disso. Um nó em 97% está a
+	 * caminho de evictar cache ou recusar réplica, e o painel precisa dizer isso antes.</p>
+	 *
+	 * <p>{@code null} quando falta alguma das duas medidas (uso não reportado, ou teto zero — 0 no
+	 * contrato significa "sem teto", não "teto de zero"). Pode passar de 100: teto é promessa, e um
+	 * nó acima dele é exatamente o que se quer enxergar, não esconder.</p>
+	 */
+	public Double usedPercent() {
+		if (observedContentUsedMb == null || declaredDiskMb <= 0) {
+			return null;
+		}
+		return (observedContentUsedMb * 100.0) / declaredDiskMb;
+	}
+
+	/**
+	 * O espaço que o participante reservou para si, em MB: o volume que <b>não</b> foi cedido, nunca
+	 * abaixo de zero.
+	 *
+	 * <p>É a conta do brief do Storage §7 — "2 TB de disco, 500 GB reservados, 1,5 TB oferecidos" — com
+	 * os dois números medidos: {@code total - declarado}. Devolve {@code null} quando falta o total:
+	 * sem o tamanho do volume não há reserva a calcular, e {@code 0} diria "não reservou nada".</p>
+	 *
+	 * <p>Participante que cedeu mais do que o volume tem (declarou 2 TB num disco de 500 GB) tem
+	 * reserva zero, não negativa: a divergência aparece em {@link #declaredDiskMb} contra o total, que
+	 * é o lugar de corrigi-la — inventar reserva negativa esconderia o erro no painel.</p>
+	 */
+	public Long reservedDiskMb() {
+		if (observedDiskTotalMb == null) {
+			return null;
+		}
+		return Math.max(0L, observedDiskTotalMb - declaredDiskMb);
 	}
 
 	/** Acima disto o nó está ocupado demais para receber tarefa nova, mesmo com vaga declarada. */

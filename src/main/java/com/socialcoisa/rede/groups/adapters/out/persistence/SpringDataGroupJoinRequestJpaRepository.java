@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.groups.adapters.out.persistence;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -15,6 +16,12 @@ interface SpringDataGroupJoinRequestJpaRepository extends JpaRepository<GroupJoi
 
 	Optional<GroupJoinRequestJpaEntity> findByGroupIdAndUserIdAndStatus(String groupId, String userId,
 			JoinRequestStatus status);
+
+	@Query("""
+		SELECT r.groupId FROM GroupJoinRequestJpaEntity r
+		WHERE r.groupId IN :groupIds AND r.userId = :userId AND r.status = :status""")
+	List<String> findPendingGroupIds(@Param("groupIds") Collection<String> groupIds,
+			@Param("userId") String userId, @Param("status") JoinRequestStatus status);
 
 	List<GroupJoinRequestJpaEntity> findByGroupIdAndStatusOrderByCreatedAtAsc(String groupId, JoinRequestStatus status);
 
@@ -31,4 +38,8 @@ interface SpringDataGroupJoinRequestJpaRepository extends JpaRepository<GroupJoi
 		WHERE r.id = :id AND r.status = :pending""")
 	int markDecided(@Param("id") String id, @Param("status") JoinRequestStatus status,
 			@Param("pending") JoinRequestStatus pending, @Param("actorId") String actorId, @Param("now") Instant now);
+
+	@Modifying
+	@Query("DELETE FROM GroupJoinRequestJpaEntity r WHERE r.groupId = :groupId")
+	int deleteByGroupId(@Param("groupId") String groupId);
 }

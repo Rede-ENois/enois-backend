@@ -14,4 +14,6 @@ public interface SupportMessageRepository {
 	Optional<SupportMessage> findById(String id);
 
 	SupportMessage save(SupportMessage message);
+
+	void deleteById(String id);
 }
