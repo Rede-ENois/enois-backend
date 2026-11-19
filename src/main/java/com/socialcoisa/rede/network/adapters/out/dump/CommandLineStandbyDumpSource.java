@@ -19,7 +19,7 @@ import org.springframework.stereotype.Component;
 import com.socialcoisa.rede.network.application.StandbyDumpSource;
 
 /**
- * O dump do banco do Control Plane pelo {@code mariadb-dump}, para a cópia no nó de reserva (V360).
+ * O dump do banco do Control Plane pelo {@code mariadb-dump}, para a cópia no nó de reserva (V364).
  *
  * <p>Ligado por {@code rede.network.standby.dump.enabled=true}. Desligado por padrão porque exige o
  * binário e a senha do banco na mesma máquina — um processo que roda dump de produção não deve

@@ -79,7 +79,7 @@ class AutomatedWritePathsTests {
 		// X-Node-Key), e o certificado que ele já tem não é exigido — quem renova pode estar com o
 		// certificado a um dia de expirar.
 		"/network/nodes/me/certificate",
-		// Reserva (V360): o nó confirma a própria cópia, com a mesma credencial de nó. Era o único
+		// Reserva (V364): o nó confirma a própria cópia, com a mesma credencial de nó. Era o único
 		// fluxo de escrita nascido do interceptor sem entrada aqui — o teste varre a lista real e
 		// acusou a divergência (antes: só em PUBLIC_WRITES → agora: nos dois lugares).
 		"/network/standby/complete",

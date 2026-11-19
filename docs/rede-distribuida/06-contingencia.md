@@ -268,7 +268,7 @@ O cenário de revogação (§5) está entregue e testado (`NetworkDisasterTests`
 carrega `ttlSeconds` (ADR-018), e o runtime guarda a última config **verificada** com o instante da
 verificação para poder continuar dentro do prazo sem falar com o Control Plane.
 
-### 4.3 O nó de reserva tem de ter o banco (V360)
+### 4.3 O nó de reserva tem de ter o banco (V364)
 
 A regra 3/4 diz quem sobe o termo; não dizia que o nó que assume precisa ter o estado de quem
 mandava. Agora a promoção pela rota de reserva (`POST /admin/network/authority/promote-standby`)
@@ -364,7 +364,7 @@ revalida no próprio ciclo e trabalha.
 | dois controladores com termos diferentes → nó entra em quarentena | `NetworkTermConflictTests` | entregue (R102) |
 | sobrecarga simultânea → `HIGH_LOAD` entra e sai pelos números medidos | `NetworkModesTests` | entregue (F4) |
 | recuperação → `RECOVERY` drena sem derrubar o que está em andamento | `NetworkModesTests` | entregue (F4) |
-| **promover nó de reserva sem cópia do banco → recusa e pede a cópia; termo não sobe** | `NetworkStandbyTests.promoverSemCopiaRecusaEPedeACopia`, `comCopiaProntaPromocaoSobeOTermoEAuditaONo`; migração V360 em MariaDB 11.4 real (`standby-migration-test.sh`) | entregue (V360) |
+| **promover nó de reserva sem cópia do banco → recusa e pede a cópia; termo não sobe** | `NetworkStandbyTests.promoverSemCopiaRecusaEPedeACopia`, `comCopiaProntaPromocaoSobeOTermoEAuditaONo`; migração V364 em MariaDB 11.4 real (`standby-migration-test.sh`) | entregue (V364) |
 | **carga → a distribuição aumenta a capacidade de atendimento** | `NetworkLoadTests.doisNosAtendemODobroDeUmNoComAMesmaCapacidadePorNo` (com `aCargaInteiraEhAtendidaEmRodadasSucessivasSemDuplicarNemPerder` e `sobSobrecargaCadaRodadaAtendeALimiteENaoMais`) | entregue (R112) |
 
 A medição de carga é **contagem**, não tempo: a mesma carga e o mesmo limite declarado por nó, uma

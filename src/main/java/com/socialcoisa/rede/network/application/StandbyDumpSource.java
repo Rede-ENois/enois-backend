@@ -1,7 +1,7 @@
 package com.socialcoisa.rede.network.application;
 
 /**
- * De onde sai o SQL do banco do Control Plane para a cópia no nó de reserva (V360).
+ * De onde sai o SQL do banco do Control Plane para a cópia no nó de reserva (V364).
  *
  * <p>A política de cópia ({@link StandbySyncService}) não conhece {@code mariadb-dump}: ela pede os
  * bytes. Em produção a implementação é o dump real, com {@code --skip-dump-date} para que duas

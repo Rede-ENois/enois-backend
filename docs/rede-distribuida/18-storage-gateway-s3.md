@@ -155,9 +155,9 @@ receber credencial. Regras, todas com teste:
 A chave vai em parâmetro (`?key=`), não no caminho: `/{bucket}/{*key}` engole o resto do caminho no mesmo
 verbo, e uma rota `/{bucket}/{*key}/presigned` colide com ela.
 
-### 4.2 Multipart Upload (V361)
+### 4.2 Multipart Upload (V365)
 
-Até a V361 o gateway recusava `CreateMultipartUpload` com 501 — e isso **quebrava cliente real**: todo
+Até a V365 o gateway recusava `CreateMultipartUpload` com 501 — e isso **quebrava cliente real**: todo
 SDK usa multipart por padrão acima de 5–8 MB (boto3: 8 MB; SDK Java: 5 MiB), então um vídeo enviado
 pelo SDK falhava num arquivo que o protocolo inteiro sabe enviar.
 

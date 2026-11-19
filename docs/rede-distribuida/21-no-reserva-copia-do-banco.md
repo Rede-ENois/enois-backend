@@ -3,7 +3,7 @@
 A promoção de autoridade (`06-contingencia.md` §4, V317) trocava **quem manda** e deixava a réplica
 de destino **sem os dados** de quem mandava. Promover sem cópia é trocar o nome do controlador e
 recomeçar do zero: o failover só existe se o nó de reserva tiver o estado para assumir. Este
-documento descreve o que passou a existir (V360) e, na última seção, o que **não** existe.
+documento descreve o que passou a existir (V364) e, na última seção, o que **não** existe.
 
 ## 1. O desenho
 
@@ -12,7 +12,7 @@ guarda. A credencial de leitura do banco não sai do Control Plane — um nó de
 de replicação seria um segundo caminho de leitura do dado pessoal de todo mundo.
 
 ```
-admin ──POST /admin/network/authority/standby/copy {nodeId}──▶ Control Plane  (linha SYNCING, V360)
+admin ──POST /admin/network/authority/standby/copy {nodeId}──▶ Control Plane  (linha SYNCING, V364)
 nó    ──GET  /network/standby/dump?offset=N────────────────▶ dump + X-Standby-Sha256 (do dump INTEIRO)
 nó    ──POST /network/standby/complete {bytes, sha256}─────▶ CONFERE o digest → READY
 admin ──POST /admin/network/authority/promote-standby──────▶ exige READY → sobe o termo

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Migração da cópia do banco nos nós de reserva (V360) contra um MariaDB real, aplicada DUAS vezes.
+# Migração da cópia do banco nos nós de reserva (V364) contra um MariaDB real, aplicada DUAS vezes.
 #
 # Por que existe: os testes de suíte rodam em H2, e o H2 aceita coisas que o MariaDB de produção
 # recusa. A V360 não é só `create table`: ela tem chave primária composta, `char(64)` para o digest,
@@ -30,7 +30,7 @@ FAIL=0
 pass() { printf '[PASS] %s\n' "$1"; PASS=$((PASS + 1)); }
 fail() { printf '[FAIL] %s\n' "$1" >&2; FAIL=$((FAIL + 1)); }
 
-STANDY_MIGRATIONS=(V305__network_nodes.sql V360__network_standby_snapshots.sql)
+STANDY_MIGRATIONS=(V305__network_nodes.sql V364__network_standby_snapshots.sql)
 for migration in "${STANDY_MIGRATIONS[@]}"; do
   [[ -f "$MIGRATIONS/$migration" ]] || { fail "migração ausente: $migration"; exit 1; }
 done

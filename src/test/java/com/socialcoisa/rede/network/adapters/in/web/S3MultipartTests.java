@@ -35,7 +35,7 @@ import com.socialcoisa.rede.shared.security.SecretCipher;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 /**
- * Multipart Upload do gateway S3 (V361).
+ * Multipart Upload do gateway S3 (V365).
  *
  * <p><b>O defeito que estes testes fixam:</b> o gateway recusava {@code CreateMultipartUpload} com
  * 501. O SDK de qualquer linguagem usa multipart por padrão acima de 5–8 MB — então um arquivo

@@ -16,7 +16,7 @@ import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 /**
- * As duas pontas de uma cópia do banco vistas pelo NÓ de reserva (V360).
+ * As duas pontas de uma cópia do banco vistas pelo NÓ de reserva (V364).
  *
  * <p>A credencial é a mesma de todas as rotas de nó ({@code X-Node-Id} + {@code X-Node-Key}). O nó
  * só baixa e só confirma a cópia do <b>próprio</b> id: o id da URL e o da credencial têm de ser o

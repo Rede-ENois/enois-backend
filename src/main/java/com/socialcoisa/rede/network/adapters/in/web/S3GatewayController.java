@@ -63,7 +63,7 @@ import jakarta.servlet.http.HttpServletRequest;
  * <tr><td>URL pré-assinada</td><td>{@code POST /{bucket}/presign}</td><td>emite para GET/PUT; uso sem cabeçalho {@code Authorization}</td></tr>
  * </table>
  *
- * <p><b>Multipart Upload (V361):</b> {@code POST /{bucket}/{key}?uploads} cria, {@code PUT
+ * <p><b>Multipart Upload (V365):</b> {@code POST /{bucket}/{key}?uploads} cria, {@code PUT
  * /{bucket}/{key}?partNumber=&uploadId=} recebe cada parte (fora de ordem, reenvio substitui) e
  * {@code POST /{bucket}/{key}?uploadId=} conclui montando o corpo na ordem pedida. A conclusão grava pelo
  * mesmo caminho do PUT simples: nada vira objeto antes de o arquivo inteiro existir. Detalhes em
@@ -245,7 +245,7 @@ class S3GatewayController {
 		catalog.discardPending(stored.id());
 	}
 
-	// ---------------------------------------------------------------- multipart upload (V361)
+	// ---------------------------------------------------------------- multipart upload (V365)
 
 	/**
 	 * CreateMultipartUpload: {@code POST /{bucket}/{key}?uploads}.

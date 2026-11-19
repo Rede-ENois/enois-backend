@@ -11,7 +11,7 @@ import org.springframework.stereotype.Repository;
 import com.socialcoisa.rede.network.application.port.out.StandbySnapshotRepository;
 
 /**
- * Cópias do banco nos nós de reserva (V360), em JDBC direto.
+ * Cópias do banco nos nós de reserva (V364), em JDBC direto.
  *
  * <p>JDBC pelo mesmo motivo do termo da autoridade: a transição é condicional. Marcar
  * {@code SYNCING} não pode apagar a cópia completa anterior — se a transferência cair no meio, a

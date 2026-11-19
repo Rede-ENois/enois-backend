@@ -25,7 +25,7 @@ import org.springframework.stereotype.Service;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 /**
- * Multipart Upload do gateway S3 (V361).
+ * Multipart Upload do gateway S3 (V365).
  *
  * <p><b>Antes:</b> o gateway recusava {@code CreateMultipartUpload} com 501 — e não era um detalhe de
  * compatibilidade. Multipart é o caminho <b>padrão</b> de upload de todo SDK (boto3 acima de 8 MB, SDK
