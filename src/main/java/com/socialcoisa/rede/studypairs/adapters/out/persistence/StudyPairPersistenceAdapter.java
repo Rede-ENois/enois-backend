@@ -30,7 +30,8 @@ class StudyPairPersistenceAdapter implements StudyPairRepository {
 
 	private static final String REQUEST_COLUMNS = "id, user_id, goal_key, goal_text, topic, status, created_at";
 	private static final String PAIR_COLUMNS =
-		"id, user_a, user_b, goal_key, goal_text, topic, status, started_at, ended_at";
+		"id, user_a, user_b, goal_key, goal_text, topic, status, started_at, ended_at, icebreaker_a,"
+		+ " icebreaker_b, accepted_a, accepted_b, proposed_at, deadline";
 
 	private final JdbcTemplate jdbc;
 
@@ -91,9 +92,13 @@ class StudyPairPersistenceAdapter implements StudyPairRepository {
 
 	@Override
 	public void savePair(StudyPair p) {
-		jdbc.update("insert into study_pairs (" + PAIR_COLUMNS + ", active_pair_key) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		jdbc.update("insert into study_pairs (" + PAIR_COLUMNS + ", active_pair_key)"
+			+ " values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			p.id(), p.userA(), p.userB(), p.goalKey(), p.goalText(), p.topic(), p.status().name(), ts(p.startedAt()),
-			p.endedAt() == null ? null : ts(p.endedAt()), activePairKey(p));
+			p.endedAt() == null ? null : ts(p.endedAt()), p.icebreakerA(), p.icebreakerB(),
+			p.acceptedA() == null ? null : ts(p.acceptedA()), p.acceptedB() == null ? null : ts(p.acceptedB()),
+			p.proposedAt() == null ? null : ts(p.proposedAt()), p.deadline() == null ? null : ts(p.deadline()),
+			activePairKey(p));
 	}
 
 	@Override
@@ -104,19 +109,62 @@ class StudyPairPersistenceAdapter implements StudyPairRepository {
 
 	@Override
 	public List<StudyPair> findActivePairs(String userId) {
-		return jdbc.query("select " + PAIR_COLUMNS + " from study_pairs where status = 'ACTIVE'"
+		// PENDING conta como compromisso do par: proposta pendente ocupa vaga como par ativo.
+		return jdbc.query("select " + PAIR_COLUMNS + " from study_pairs where status in ('ACTIVE', 'PENDING')"
 			+ " and (user_a = ? or user_b = ?) order by started_at", (rs, n) -> pair(rs), userId, userId);
 	}
 
 	@Override
 	public List<StudyPair> findAllActivePairs() {
-		return jdbc.query("select " + PAIR_COLUMNS + " from study_pairs where status = 'ACTIVE'", (rs, n) -> pair(rs));
+		return jdbc.query("select " + PAIR_COLUMNS + " from study_pairs where status in ('ACTIVE', 'PENDING')",
+			(rs, n) -> pair(rs));
 	}
 
 	@Override
 	public boolean endPair(String pairId, Instant endedAt) {
 		return jdbc.update("update study_pairs set status = 'ENDED', ended_at = ?, active_pair_key = null"
 			+ " where id = ? and status = 'ACTIVE'", ts(endedAt), pairId) == 1;
+	}
+
+	@Override
+	public boolean acceptPending(String pairId, String userId, String icebreakerJson, Instant acceptedAt) {
+		// Conditional write: quem chega primeiro grava o aceite; a segunda pessoa só grava se o par
+		// ainda estiver PENDING (recusa, prazo ou fim venceram esta escrita).
+		boolean userAFirst = jdbc.update("update study_pairs set icebreaker_a = ?, accepted_a = ?"
+			+ " where id = ? and user_a = ? and status = 'PENDING'", icebreakerJson, ts(acceptedAt), pairId, userId) == 1;
+		if (userAFirst) {
+			return true;
+		}
+		return jdbc.update("update study_pairs set icebreaker_b = ?, accepted_b = ?"
+			+ " where id = ? and user_b = ? and status = 'PENDING'", icebreakerJson, ts(acceptedAt), pairId, userId) == 1;
+	}
+
+	@Override
+	public boolean expirePending(String pairId, Instant endedAt) {
+		return jdbc.update("update study_pairs set status = 'ENDED', ended_at = ?, active_pair_key = null"
+			+ " where id = ? and status = 'PENDING'", ts(endedAt), pairId) == 1;
+	}
+
+	@Override
+	public void activate(String pairId, Instant acceptedAt) {
+		jdbc.update("update study_pairs set status = 'ACTIVE', started_at = ? where id = ? and status = 'PENDING'"
+			+ " and accepted_a is not null and accepted_b is not null", ts(acceptedAt), pairId);
+	}
+
+	@Override
+	public List<com.socialcoisa.rede.studypairs.application.StudyPairService.IcebreakerView> findIcebreakers() {
+		return jdbc.query("select id, position, question, required, kind, options from study_pair_icebreakers"
+			+ " order by position", (rs, n) -> new com.socialcoisa.rede.studypairs.application.StudyPairService.IcebreakerView(
+				rs.getString("id"), rs.getInt("position"), rs.getString("question"), rs.getBoolean("required"),
+				rs.getString("kind"),
+				rs.getString("options") == null ? List.of() : List.of(rs.getString("options").split("\\|"))));
+	}
+
+	@Override
+	public void reopenMatchedRequest(String userId) {
+		// A posição original vale: o createdAt não muda, só o status e a chave da fila.
+		jdbc.update("update study_pair_requests set status = 'OPEN', open_user_id = user_id"
+			+ " where user_id = ? and status = 'MATCHED'", userId);
 	}
 
 	@Override
@@ -176,7 +224,9 @@ class StudyPairPersistenceAdapter implements StudyPairRepository {
 	}
 
 	private static String activePairKey(StudyPair p) {
-		if (p.status() != StudyPair.Status.ACTIVE) {
+		// A dupla nunca tem dois vínculos vivos: par ativo ou proposta pendente, um só. Encerrado
+		// solta a chave para a dupla poder ser proposta de novo.
+		if (p.status() == StudyPair.Status.ENDED) {
 			return null;
 		}
 		String a = p.userA();
@@ -193,7 +243,9 @@ class StudyPairPersistenceAdapter implements StudyPairRepository {
 	private static StudyPair pair(ResultSet rs) throws SQLException {
 		return new StudyPair(rs.getString("id"), rs.getString("user_a"), rs.getString("user_b"),
 			rs.getString("goal_key"), rs.getString("goal_text"), rs.getString("topic"),
-			StudyPair.Status.valueOf(rs.getString("status")), instant(rs, "started_at"), instant(rs, "ended_at"));
+			StudyPair.Status.valueOf(rs.getString("status")), instant(rs, "started_at"), instant(rs, "ended_at"),
+			rs.getString("icebreaker_a"), rs.getString("icebreaker_b"), instant(rs, "accepted_a"),
+			instant(rs, "accepted_b"), instant(rs, "proposed_at"), instant(rs, "deadline"));
 	}
 
 	private static StudyCheckin checkin(ResultSet rs) throws SQLException {
