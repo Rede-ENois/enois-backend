@@ -98,7 +98,6 @@ dois são limites de baixo do uso real, e o menor esconderia o espaço que um de
 | escolha por região na **tarefa** | já existe para despacho (`NetworkRegions`); no Storage só entrou na colocação |
 | velocidade de leitura/escrita e IOPS estimados (§7) | **não se estimam.** O brief é explícito no §8.3: indicadores refletem o coletado, nunca o estimado. Medir de verdade exige benchmark no disco do participante — que é carga de escrita num nó de terceiro — e o benchmark precisa de desenho (tamanho, duração, horário, quando repetir). Decisão de produto/infra |
 | estado dos discos (§7, SMART) | o runtime roda em contêiner sem acesso ao dispositivo; `smartctl` na máquina de um voluntário é requisição de confiança que hoje a rede não tem motivo para fazer. Decisão de produto |
-| disponibilidade histórica (§7) | as amostras por nó são **60 pontos de 1 minuto** (V325) e são tela, não retenção. "Disponibilidade" de verdade exige janela de dias e uma regra do que conta como "no ar" (heartbeat perdido é queda? nó em drenagem conta?). O único registro de histórico hoje é `NETWORK_NODE_RECONNECTED` na trilha de auditoria — transição, não série. Decisão de produto + retenção |
 
 Capacidade (§7) **está entregue** por nó em `GET /admin/network/nodes/storage/overview`: `disks[]`
 com `declaredMb`, `freeMb`, `totalMb`, `reservedMb`, `usedMb` e `usedPercent`.
@@ -615,3 +614,74 @@ de operador com o próprio teto.
 - **Teto de banda aplicado pelo próprio nó além do `--limit-rate`**: o nó limita a **velocidade**;
   não há reserva nem fila de banda entre transferências concorrentes (o runtime executa uma tarefa
   por ciclo, então hoje não há concorrência a arbitrar).
+## 11. Disponibilidade histórica (brief §7, V369)
+
+**Entregue.** O §7 pede "disponibilidade histórica" na página do nó; até o V369 ela era a última
+linha da tabela do §3, porque a rede guardava **transições** (`NETWORK_NODE_RECONNECTED` na trilha)
+e **amostras** de 1 minuto (V325, 60 pontos) — nenhuma das duas responde "ficou no ar 99,2% dos
+últimos 7 dias".
+
+### 11.1 A série
+
+`network_node_uptime_daily`, uma linha por nó e por dia:
+
+| coluna | significado |
+|---|---|
+| `present_seconds` | segundos do dia em que o nó esteve dentro da janela de "vivo" |
+| `observed_seconds` | segundos do dia sobre os quais houve medida (entre o primeiro e o último heartbeat do dia) |
+| `first_seen_at` / `last_seen_at` | o menor e o maior contato do dia (a janela não encolhe) |
+| `received_at` | o fim do trecho que chegou **por último** — é contra ele que o reenvio é reconhecido |
+
+A proporção é **uma soma sobre uma soma** (`100 × present / observed`), nunca a média das proporções
+dos dias: um dia com uma hora de medida e um dia inteiro não pesam igual. Dia sem tempo observado
+devolve `percentage: null` — "sem dado", não "0% no ar".
+
+### 11.2 A regra do trecho
+
+Entre dois heartbeats consecutivos o Control Plane sabe uma coisa: o nó respondeu no primeiro e no
+segundo. O intervalo entre eles é **observado** inteiro, e conta como **no ar** até
+`rede.network.node-stale-seconds` (180 s por padrão) depois do primeiro contato — a mesma janela de
+"vivo" do painel e do scheduler, para não haver dois números sobre a mesma coisa. Depois dela, o
+resto do intervalo é tempo fora.
+
+- **Primeiro contato** não inventa trecho: o tempo antes dele não existia para a rede.
+- **Trecho fora de ordem** (chegou depois, terminando antes do último contato) **soma** — é tempo
+  observado que ainda não estava contado.
+- **Reenvio** (o mesmo fim de trecho que chegou por último) **não soma**: é o mesmo heartbeat
+  publicado de novo. A comparação é com `received_at`, a chegada, e não com `last_seen_at`, o maior
+  instante — senão o reenvio de um trecho fora de ordem passaria como novo.
+- O trecho vai inteiro para o **dia do último contato**, não é partido na meia-noite: partir exigiria
+  saber se o nó estava no ar às 00:00, e o que se mediu foram dois contatos. A consequência é
+  conservadora — uma ausência de três dias cai toda no dia da volta e não some da janela de 7 dias.
+
+### 11.3 Rotas
+
+| rota | quem | o que devolve |
+|---|---|---|
+| `GET /admin/network/nodes/{id}/uptime?days=7` | administrador | a série por dia, de 1 a 90 dias |
+| `GET /network/participant/nodes/{id}/uptime?days=7` | dono do nó | a mesma série; nó de outra conta é 404 |
+| campo `uptime` em `GET /network/participant/nodes` | dono do nó | a série de 7 dias de cada nó |
+
+O admin e o participante leem a **mesma** função (`NodeUptimeService.last`), para não divergirem.
+
+### 11.4 Defeito corrigido: a soma das ausências era um piso
+
+`NetworkParticipantService.availability` somava `offlineForSeconds` das **200 linhas mais recentes**
+de reconexão e comparava com o **total** de quedas. A partir da 201ª, `complete` virava `false` para
+sempre e o tempo fora deixava de ser total — virava piso, sem nunca mais ser o número certo. Agora a
+soma lê todas as linhas (`AuditLogRepository.allMetadataFor`, que projeta só o metadado) e
+`complete` é sempre `true`; `measuredOutages` continua dizendo quantas quedas tinham o intervalo
+gravado — são duas perguntas diferentes.
+
+### 11.5 Retenção
+
+`rede.network.uptime.retention-days` (365 por padrão) e a varredura diária
+`rede.network.uptime.retention.cron` (`0 20 4 * * *`). A rota lê no máximo 90 dias; o resto é
+retenção para quem quiser olhar o ano.
+
+### 11.6 O que NÃO está entregue
+
+- **"No ar" por serviço**: o contador mede o nó vivo, não se o processo que serve o Storage estava
+  respondendo. É a mesma medida do painel; separá-las exige um sinal de saúde por perfil.
+- **Disponibilidade por janela arbitrária** (um mês específico): a leitura é "últimos N dias até
+  hoje". Consultar um intervalo passado exigiria outra forma de rota.

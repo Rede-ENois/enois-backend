@@ -66,6 +66,7 @@ class AdminNetworkController {
 	private final NetworkTaskRepository tasks;
 	private final com.socialcoisa.rede.network.application.NetworkTopologyService topology;
 	private final StorageTombstoneCollector tombstones;
+	private final com.socialcoisa.rede.network.application.NodeUptimeService uptime;
 
 	AdminNetworkController(NetworkNodeService nodes, NodeKeyService keys, NetworkDashboardService dashboard,
 			AuditTrail audit, CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
@@ -76,7 +77,8 @@ class AdminNetworkController {
 			ChangeCaptureReadinessService changeCapture, StorageOverviewService storageOverview,
 			StorageHealer healer, StorageReplicationDispatcher dispatcher, NetworkTaskRepository tasks,
 			com.socialcoisa.rede.network.application.NetworkTopologyService topology,
-			StorageTombstoneCollector tombstones) {
+			StorageTombstoneCollector tombstones,
+			com.socialcoisa.rede.network.application.NodeUptimeService uptime) {
 		this.nodes = nodes;
 		this.keys = keys;
 		this.dashboard = dashboard;
@@ -95,6 +97,7 @@ class AdminNetworkController {
 		this.tasks = tasks;
 		this.topology = topology;
 		this.tombstones = tombstones;
+		this.uptime = uptime;
 	}
 
 	/**
@@ -394,6 +397,23 @@ class AdminNetworkController {
 		nodes.require(id);
 		var disco = storageOverview.diskOf(id);
 		return disco == null ? java.util.Map.of() : disco;
+	}
+
+	/**
+	 * A disponibilidade histórica deste nó (brief §7, V369): por dia, quanto esteve no ar e sobre
+	 * quanto tempo houve medida.
+	 *
+	 * <p>Antes este item era "não entregue": a rede registrava transições na trilha, não uma série, e
+	 * não havia como responder "ficou no ar 99,2% dos últimos 7 dias". A janela vai de 1 a 90 dias,
+	 * com sete por padrão — a mesma janela que o participante vê, para admin e participante não
+	 * lerem números diferentes do mesmo nó.</p>
+	 */
+	@GetMapping("/{id}/uptime")
+	com.socialcoisa.rede.network.domain.NodeAvailability uptime(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String id, @RequestParam(defaultValue = "7") int days) {
+		admin(sessionToken);
+		return uptime.last(nodes.require(id), days);
 	}
 
 	/** Token de uso único que cria o nó; não é a chave de operação (ADR-003). */
