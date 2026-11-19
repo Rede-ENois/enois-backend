@@ -57,6 +57,10 @@ class NetworkParticipantPauseTests {
 	@BeforeEach
 	void setUp() {
 		auth = new TestAuthHelper(mockMvc, objectMapper);
+		// O modo da rede é estado global e NÃO é limpo pelas classes vizinhas: um teste que o
+		// deixou em EMERGENCY (de propósito, para provar que o modo não é sobrescrito sozinho)
+		// fazia este heartbeat responder `acceptTasks=false` por um motivo que não é a pausa.
+		jdbc.update("delete from network_state");
 		jdbc.update("delete from network_node_logs");
 		jdbc.update("delete from network_node_samples");
 		jdbc.update("delete from network_node_keys");
@@ -248,10 +252,13 @@ class NetworkParticipantPauseTests {
 	}
 
 	private String storageNodeFor(String admin, String ownerUserId) throws Exception {
+		// O displayName carrega o dono: a suíte H2 é COMPARTILHADA, e o registro de conclusão de
+		// despacho resolve o nó por nome. Um nome fixo aqui batia com o de outro teste e o
+		// heartbeat deste respondia a pausa do outro — falha intermitente do CI inteiro.
 		var tokenResult = mockMvc
 			.perform(post("/admin/network/nodes/provision-token").header("X-Session-Token", admin)
 				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("displayName", "no-da-pausa",
+				.content(objectMapper.writeValueAsString(Map.of("displayName", "no-da-pausa-" + ownerUserId,
 					"ownerUserId", ownerUserId, "profiles", List.of("NODE_STORAGE")))))
 			.andExpect(status().isOk())
 			.andReturn();

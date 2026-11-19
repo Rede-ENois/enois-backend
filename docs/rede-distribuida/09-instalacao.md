@@ -31,6 +31,7 @@ recomendado para quem vai contribuir com infra:
 ./bootstrap.sh --update --source main                    # troca a fonte e atualiza
 ./bootstrap.sh --rollback                                # volta ao runtime anterior
 ./bootstrap.sh --status                                  # diagnóstico (node-doctor)
+./bootstrap.sh --auto-update on                          # segue sozinho os releases (§6.1)
 ```
 
 Ele obtém o código do runtime e **constrói a imagem nesta máquina**: primeiro
@@ -497,6 +498,62 @@ refaz nada; update preserva o anterior em `.previous`; rollback sem anterior
 recusa; rollback sem a imagem anterior nesta máquina recusa; rollback não troca
 a fonte.
 
+### 6.1 Atualização automática — o slot de reserva acompanha o release
+
+O `--update` era manual, e era isso que deixava o **nó de reserva** (o que
+assume quando o master cai, `21-no-reserva-copia-do-banco.md`) parado numa
+versão antiga: saía release, o master recebia deploy, e a reserva continuava
+rodando o código de antes. Nada na máquina conferia. Agora existe o
+**autoatualizador**:
+
+```bash
+./bootstrap.sh --auto-update on    # liga: cron do host a cada 15 min confere o release
+./bootstrap.sh --auto-update off   # desliga (e remove o cron)
+./node-auto-update.sh              # roda um ciclo agora, à mão
+./node-auto-update.sh --install-cron --cron "/7 * * * *"
+```
+
+| peça | onde roda | o que faz |
+|---|---|---|
+| `node-auto-update.sh` | **host** (cron, usuário dono do `$NODE_HOME`) | relógio × servidor, trava, e chama `bootstrap.sh --update` |
+| `bootstrap.sh --update` | host | release + sha256 + imagem + `--start` — o caminho único de troca |
+| `install.sh --auto-update on\|off` | host | grava a escolha em `$NODE_HOME/auto-update` |
+
+Por que a decisão é do host e não do container: o runtime roda como 10001, com a
+raiz somente leitura e **sem docker** — ele não pode construir imagem nem trocar
+a si mesmo. O host é quem tem docker e quem já poderia rodar o `--update` à mão.
+É por isso que o `node-runtime.sh` não tem lógica de atualização: um "runtime que
+se atualiza" seria um segundo caminho com regras próprias.
+
+O que decide a versão é o **release publicado** do runtime (`slave-v*`, o canal
+onde a rede deposita o código). O bootstrap continua recusando release cujo
+`VERSION` não seja `<fonte>@<sha8>` do commit da própria fonte — o pior caso de
+um release errado é a máquina recusar, não executar outra coisa.
+
+Quatro recusas, cada uma com asserção:
+
+| situação | o que acontece |
+|---|---|
+| relógio mais de 5 min fora da data do servidor de release | não atualiza e pede NTP — a escolha do release é por data; com o relógio torto a máquina escolheria a versão errada |
+| outra atualização em andamento (trava de diretório) | espera a próxima volta; trava órfã de mais de 1 h é removida |
+| `runtime-version` fora de `<fonte>@<sha8>` | não troca o que não sabe o que é |
+| `bootstrap --update` falha (sha, build, download) | o runtime atual continua; o script sai não-zero e a trava é liberada |
+
+Desligada por padrão: um nó de participante é máquina de terceiro, e rodar
+código novo sem o operador olhar é escolha dele — não efeito colateral de
+instalar. Com a escolha desligada, nada muda: `--update`/`--rollback` manuais
+continuam valendo como antes.
+
+Comportamento fixado no mesmo `scripts/tests/node-runtime-test.sh` (134
+asserções; as de autoatualização são: `--auto-update on` grava e instala o cron,
+`off` grava e remove, valor desconhecido recusa, o ciclo chama o bootstrap e
+registra a troca, versão igual não é anunciada como troca, falha sai não-zero e
+não troca a versão, trava impede a execução e libera depois da falha, relógio
+torto não chega ao bootstrap, sem `node.json` e com `runtime-version` inválida
+recusa). Cada uma foi conferida por mutação (desligar a trava, a conferência de
+relógio, a propagação do erro ou a validação da versão derruba a asserção
+correspondente).
+
 ## 7. O que ainda não está aqui
 
 - **Executores de trabalho real por perfil**: cinco já executam de verdade no nó —
@@ -518,6 +575,12 @@ a fonte.
   transferência limita o nó; se o ciclo passar a executar em paralelo, o limite tem
   de virar taxa compartilhada — senão N tarefas concorrentes multiplicariam a banda
   que o participante cedeu por N.
+- **Atualização automática sem janela de saúde**: o autoatualizador troca a
+  versão depois de o código novo ser verificado (sha) e construído, mas **não**
+  mede o nó depois do restart: uma imagem que sobe e morre em loop não volta
+  sozinha para a anterior. `--rollback` existe e é uma linha, mas é manual. Não
+  há também janela de retenção (quantos releases o nó mantém) nem atualização
+  em onda (todos os nós de uma vez mexeriam na rede inteira ao mesmo tempo).
 - **Cache do pacote no bootstrap**: hoje cada `--update` baixa o tar.gz de
   novo; um cache local do último release verificado reduziria o tráfego com o
   GitHub em updates frequentes.

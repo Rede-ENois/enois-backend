@@ -56,13 +56,35 @@ class FeedPapoPostReader implements PapoPublicacaoReader {
 					continue;
 				}
 				publicacoes.add(new Publicacao(post.content(), post.authorId().value(), post.createdAt(),
-						post.communityId(), post.id().value()));
+						post.communityId(), post.id().value(), post.tags()));
 			}
 			if (lote.size() < PAGINA) {
 				break;
 			}
 		}
 		return publicacoes;
+	}
+
+	/**
+	 * O texto das publicações relacionadas: só o que SEGUE público e ativo. A tag não entra
+	 * aqui — o detalhe é a publicação, e o assunto é o que o worker já contou.
+	 */
+	@Override
+	public List<Detalhe> detalhes(java.util.Collection<String> publicacaoIds) {
+		if (publicacaoIds == null || publicacaoIds.isEmpty()) {
+			return List.of();
+		}
+		List<Detalhe> detalhes = new ArrayList<>();
+		for (PostJpaEntity entidade : posts.findAllById(publicacaoIds)) {
+			Post post = entidade.toDomain();
+			if (post.status() != PostStatus.ACTIVE || post.visibility() != Visibility.PUBLIC
+					|| post.content() == null || post.content().isBlank() || !TIPOS_DE_TEXTO.contains(post.type())) {
+				continue;
+			}
+			detalhes.add(new Detalhe(post.id().value(), post.content(), post.authorId().value(), post.createdAt(),
+					post.communityId(), null));
+		}
+		return detalhes;
 	}
 
 	@Override

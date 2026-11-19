@@ -178,6 +178,16 @@ class LinkedInShareOutboxEventHandlerTests {
 		}
 
 		@Override
+		public Optional<String> findActiveRepostContentByAuthorAndSource(UserId authorId, String sourcePostId) {
+			return Optional.empty();
+		}
+
+		@Override
+		public long countActiveRepostsByAuthorAndSource(UserId authorId, String sourcePostId) {
+			return 0;
+		}
+
+		@Override
 		public List<Post> findActiveRepostsBySource(String sourcePostId) {
 			return List.of();
 		}

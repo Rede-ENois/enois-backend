@@ -63,10 +63,14 @@ import jakarta.servlet.http.HttpServletRequest;
  * <tr><td>URL pré-assinada</td><td>{@code POST /{bucket}/presign}</td><td>emite para GET/PUT; uso sem cabeçalho {@code Authorization}</td></tr>
  * </table>
  *
- * <p><b>Não implementado, e recusado com 501 em vez de "fazer parecer":</b> Multipart Upload,
- * CopyObject, ACL, tagging, versionId, bucket policy e
- * {@code POST} de formulário. A recusa é explícita porque um cliente que recebe 200 sem a semântica
- * (um "multipart" que grava o arquivo inteiro) perde dados quando o upload é retomado.</p>
+ * <p><b>Multipart Upload (V365):</b> {@code POST /{bucket}/{key}?uploads} cria, {@code PUT
+ * /{bucket}/{key}?partNumber=&uploadId=} recebe cada parte (fora de ordem, reenvio substitui) e
+ * {@code POST /{bucket}/{key}?uploadId=} conclui montando o corpo na ordem pedida. A conclusão grava pelo
+ * mesmo caminho do PUT simples: nada vira objeto antes de o arquivo inteiro existir. Detalhes em
+ * {@code StorageMultipartService} e em {@code 18-storage-gateway-s3.md} §4.2.</p>
+ *
+ * <p><b>Não implementado, e recusado com 501 em vez de "fazer parecer":</b> CopyObject, ACL, tagging,
+ * versionId, bucket policy e {@code POST} de formulário.</p>
  *
  * <p><b>Documento em XML:</b> o gateway serializa à mão, sem {@code ListBucketResult.class}. O motivo
  * é controle de namespace e de ordem dos elementos: um JAXB muda a ordem e o SDK não protesta, mas
@@ -93,18 +97,21 @@ class S3GatewayController {
 	private final StorageCatalogRepository catalog;
 	private final StorageCatalogService storage;
 	private final StorageContentService content;
+	private final com.socialcoisa.rede.network.application.StorageMultipartService multipart;
 	private final Clock clock;
 	private final com.socialcoisa.rede.shared.web.CurrentUserResolver currentUserResolver;
 
 	S3GatewayController(S3CredentialRepository credentials, StorageCatalogRepository catalog,
 			StorageCatalogService storage, StorageContentService content, Clock clock,
-			com.socialcoisa.rede.shared.web.CurrentUserResolver currentUserResolver) {
+			com.socialcoisa.rede.shared.web.CurrentUserResolver currentUserResolver,
+			com.socialcoisa.rede.network.application.StorageMultipartService multipart) {
 		this.credentials = credentials;
 		this.catalog = catalog;
 		this.storage = storage;
 		this.content = content;
 		this.clock = clock;
 		this.currentUserResolver = currentUserResolver;
+		this.multipart = multipart;
 	}
 
 	// ---------------------------------------------------------------- listagem de buckets
@@ -236,6 +243,126 @@ class S3GatewayController {
 			return;
 		}
 		catalog.discardPending(stored.id());
+	}
+
+	// ---------------------------------------------------------------- multipart upload (V365)
+
+	/**
+	 * CreateMultipartUpload: {@code POST /{bucket}/{key}?uploads}.
+	 *
+	 * <p>É o único ponto em que a donagem do bucket é provada por gravação: o multipart cria a chave
+	 * como o PUT cria, então a conferência vem depois — se o bucket for de outra conta, o upload é
+	 * descartado e a resposta é 403.</p>
+	 */
+	@RequestMapping(value = "/{bucket}/{*key}", method = RequestMethod.POST, params = "uploads")
+	ResponseEntity<String> createMultipart(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "PUT");
+		requireBucket(credential, bucket);
+		String key = keyOf(request);
+		String expires = query(request).get("expires");
+		var upload = multipart.create(credential.ownerUserId(), credential.id(), bucket, key,
+			request.getContentType(), expires == null ? null : Long.valueOf(expires));
+		if (!bucketSemDono(bucket, credential.ownerUserId())) {
+			multipart.abort(upload.uploadId());
+			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
+		}
+		S3Xml xml = new S3Xml();
+		xml.root("InitiateMultipartUploadResult").element("Bucket", bucket).element("Key", key)
+			.element("UploadId", upload.uploadId());
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/**
+	 * UploadPart: {@code PUT /{bucket}/{key}?partNumber=N&uploadId=...}.
+	 *
+	 * <p>A credencial é a do upload aberto (e do dono dela) — não uma assinatura nova. É o que impede
+	 * que uma parte entre no upload por uma conta que não abriu nenhum.</p>
+	 */
+	@RequestMapping(value = "/{bucket}/{*key}", method = RequestMethod.PUT, params = {
+			"partNumber", "uploadId" })
+	ResponseEntity<Void> uploadPart(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "PUT");
+		requireBucket(credential, bucket);
+		java.util.Map<String, String> query = query(request);
+		var upload = multipart.require(query.get("uploadId"), credential.ownerUserId());
+		if (!upload.bucket().equals(bucket) || !upload.key().equals(keyOf(request))) {
+			throw s3Error(404, "NoSuchUpload", "O upload informado nao e desta chave.");
+		}
+		int numero;
+		try {
+			numero = Integer.parseInt(query.get("partNumber"));
+		}
+		catch (NumberFormatException notNumber) {
+			throw s3Error(400, "InvalidArgument", "partNumber invalido.");
+		}
+		var part = multipart.receivePart(upload, numero, body(request));
+		return ResponseEntity.ok().eTag("\"" + part.sha256() + "\"").header(HttpHeaders.CONTENT_LENGTH, "0")
+			.build();
+	}
+
+	/**
+	 * CompleteMultipartUpload: {@code POST /{bucket}/{key}?uploadId=...} com a lista de partes.
+	 *
+	 * <p>A lista vem em XML ({@code <CompleteMultipartUpload><Part><PartNumber>..}). O corpo só é
+	 * montado com as partes nomeadas; parte ausente é {@code InvalidPart} e o upload continua aberto.</p>
+	 */
+	@RequestMapping(value = "/{bucket}/{*key}", method = RequestMethod.POST, params = "uploadId")
+	ResponseEntity<String> completeMultipart(@PathVariable String bucket, HttpServletRequest request)
+			throws java.io.IOException {
+		S3Credential credential = authenticate(request, "PUT");
+		requireBucket(credential, bucket);
+		var upload = multipart.require(query(request).get("uploadId"), credential.ownerUserId());
+		if (!upload.bucket().equals(bucket) || !upload.key().equals(keyOf(request))) {
+			throw s3Error(404, "NoSuchUpload", "O upload informado nao e desta chave.");
+		}
+		java.util.List<Integer> pedidas = partesDoXml(body(request));
+		var concluido = multipart.complete(upload, pedidas);
+		S3Xml xml = new S3Xml();
+		xml.root("CompleteMultipartUploadResult").element("Location", bucket + "/" + concluido.key())
+			.element("Bucket", bucket).element("Key", concluido.key()).element("ETag", "\"" + concluido.etag() + "\"");
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/** AbortMultipartUpload: {@code DELETE /{bucket}/{key}?uploadId=...}. */
+	@RequestMapping(value = "/{bucket}/{*key}", method = RequestMethod.DELETE, params = "uploadId")
+	ResponseEntity<Void> abortMultipart(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "DELETE");
+		requireBucket(credential, bucket);
+		var upload = multipart.require(query(request).get("uploadId"), credential.ownerUserId());
+		multipart.abort(upload.uploadId());
+		return ResponseEntity.noContent().build();
+	}
+
+	/** ListParts: {@code GET /{bucket}/{key}?uploadId=...} — o cliente confere o que já chegou. */
+	@RequestMapping(value = "/{bucket}/{*key}", method = RequestMethod.GET, params = "uploadId")
+	ResponseEntity<String> listParts(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		var upload = multipart.require(query(request).get("uploadId"), credential.ownerUserId());
+		S3Xml xml = new S3Xml();
+		xml.root("ListPartsResult").element("Bucket", bucket).element("Key", upload.key())
+			.element("UploadId", upload.uploadId());
+		for (var part : multipart.parts(upload.uploadId())) {
+			xml.open("Part").element("PartNumber", part.number()).element("ETag", "\"" + part.sha256() + "\"")
+				.element("Size", part.bytes()).close("Part");
+		}
+		xml.close("ListPartsResult");
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/** A lista de {@code <PartNumber>} do CompleteMultipartUpload, na ordem em que o cliente mandou. */
+	private static java.util.List<Integer> partesDoXml(java.io.InputStream body) throws java.io.IOException {
+		String texto = new String(body.readAllBytes(), StandardCharsets.UTF_8);
+		java.util.List<Integer> numeros = new java.util.ArrayList<>();
+		java.util.regex.Matcher m = java.util.regex.Pattern.compile("<PartNumber>\\s*(\\d+)\\s*</PartNumber>")
+			.matcher(texto);
+		while (m.find()) {
+			numeros.add(Integer.parseInt(m.group(1)));
+		}
+		if (numeros.isEmpty()) {
+			throw s3Error(400, "MalformedXML", "CompleteMultipartUpload sem partes.");
+		}
+		return numeros;
 	}
 
 	/**
@@ -555,11 +682,24 @@ class S3GatewayController {
 		return request.getHeader(name);
 	}
 
-	/** Query decodificada (o SigV4 recodifica para canonicalizar). */
+	/**
+	 * Query decodificada (o SigV4 recodifica para canonicalizar).
+	 *
+	 * <p>Quando a query string não vem crua — `mockMvc(...).param(...)` monta os parâmetros sem query
+	 * string, e um container também pode consumir parâmetros do corpo de um POST de formulário — a
+	 * fonte é o mapa de parâmetros, que é o que o usuário vê servido de qualquer jeito. Ignorar essa
+	 * forma fazia o multipart "não existir" por um uploadId que estava na requisição.</p>
+	 */
 	static Map<String, String> query(HttpServletRequest request) {
 		Map<String, String> out = new LinkedHashMap<>();
 		String query = request.getQueryString();
 		if (query == null || query.isBlank()) {
+			for (Map.Entry<String, String[]> parametro : request.getParameterMap().entrySet()) {
+				String[] valores = parametro.getValue();
+				if (valores != null && valores.length > 0) {
+					out.put(parametro.getKey(), valores[0]);
+				}
+			}
 			return out;
 		}
 		for (String pair : query.split("&")) {

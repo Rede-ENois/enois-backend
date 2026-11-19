@@ -20,6 +20,17 @@ class StudyPairReminderScheduler {
 		this.service = service;
 	}
 
+	/** Propostas vencidas viram ENDED e quem não recusou volta para a fila. Hora cheia, leve. */
+	@Scheduled(cron = "${rede.study-pairs.expiry-cron:0 17 * * * *}", zone = "America/Sao_Paulo")
+	public void expireProposals() {
+		try {
+			service.expireOverdueProposals();
+		}
+		catch (RuntimeException failure) {
+			LOG.warn("study_pair_expiry_failed error={}", failure.getMessage());
+		}
+	}
+
 	@Scheduled(cron = "${rede.study-pairs.reminder-cron:0 0 18 * * THU}", zone = "America/Sao_Paulo")
 	public void remind() {
 		try {

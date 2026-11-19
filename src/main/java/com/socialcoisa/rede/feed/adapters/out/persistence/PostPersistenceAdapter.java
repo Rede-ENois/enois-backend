@@ -101,6 +101,18 @@ class PostPersistenceAdapter implements PostRepository, SocialPostCountReader {
 	}
 
 	@Override
+	public Optional<String> findActiveRepostContentByAuthorAndSource(UserId authorId, String sourcePostId) {
+		return repository.findRepostByAuthorAndSource(authorId.value(), sourcePostId,
+			com.socialcoisa.rede.feed.domain.PostStatus.ACTIVE).map(PostJpaEntity::content);
+	}
+
+	@Override
+	public long countActiveRepostsByAuthorAndSource(UserId authorId, String sourcePostId) {
+		return repository.countActiveRepostsByAuthorAndSource(authorId.value(), sourcePostId,
+			com.socialcoisa.rede.feed.domain.PostStatus.ACTIVE);
+	}
+
+	@Override
 	public List<Post> findActiveRepostsBySource(String sourcePostId) {
 		return repository.findRepostsBySource(sourcePostId,
 			com.socialcoisa.rede.feed.domain.PostStatus.ACTIVE).stream()

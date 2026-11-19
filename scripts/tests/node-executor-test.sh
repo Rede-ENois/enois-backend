@@ -170,6 +170,13 @@ assert_contains 'heartbeat carrega as linhas do painel (logs)' "$hb_line" '"logs
 assert_contains 'linha do painel tem nivel' "$hb_line" '"level":"INFO"'
 assert_contains 'a decisao de aceite vira linha do painel' "$hb_line" 'aceito pela rede'
 assert_contains 'linha do painel leva o instante' "$hb_line" '"at":"'
+# O tráfego de rede (brief §8.2) vai no mesmo heartbeat: é a única saída do nó. O runtime mede
+# /proc/net/dev do PRÓPRIO host (não dá para forjar num harness), então o que se prende aqui é a
+# forma do contrato que o Control Plane já aceita (V345): os dois campos como inteiros em MiB.
+assert_contains 'heartbeat leva o trafego de entrada em MiB' "$hb_line" '"bytesInMb":'
+assert_contains 'heartbeat leva o trafego de saida em MiB' "$hb_line" '"bytesOutMb":'
+assert_not_contains 'trafego medido nao e nulo nem negativo' \
+  "$(/bin/grep -oE '"bytes(In|Out)Mb":-?[0-9]+' <<<"$hb_line")" '-'
 
 # ------------------------------------------------- cenário 2: tarefa fora da config
 out=$(run_one_cycle "$TASK_FORBIDDEN")
@@ -1668,5 +1675,24 @@ out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SE
   /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true)
 assert_not_contains 'no sem OBJECT_PUT nao manda relatorio' "$(cat "$TMP/curl-calls")" '/network/storage/scrub'
 
+# ------------------------------------- atualizacao do runtime: e do HOST, nao do container
+# O slot de reserva nao se atualizava sozinho: saia release, o master recebia deploy, e a reserva
+# ficava na versao antiga -- justamente ela que assume quando o master cai. A correcao vive no
+# host (node-auto-update.sh + bootstrap --update, provados em node-runtime-test.sh); o runtime do
+# no NAO tem parte nisso: ele nao tem docker nem pode trocar a si mesmo. Esta secao fixa a
+# fronteira -- um `maybe_self_update` no container seria um segundo caminho com regras proprias.
+runtime_prelude() {
+  sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'
+}
+HEARTBEAT_TARGET='{"nodeId":"nd_exec1","status":"ACTIVE","profiles":["NODE_WORKER"],"serverTime":"now","mode":"NORMAL","acceptTasks":true,"targetRuntimeVersion":"qa@abcdef12"}'
+: > "$TMP/curl-calls"
+make_curl
+out=$(HEARTBEAT_OK="$HEARTBEAT_TARGET" CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" \
+  RUNTIME_VERSION='qa@11111111' NODE_POLL_SECONDS=1 \
+  /bin/bash -c "$(runtime_prelude; echo cycle)" 2>&1 || true)
+assert_not_contains 'heartbeat com alvo nao faz o container escrever pedido de atualizacao' \
+  "$(ls "$NH" 2>/dev/null)" 'update-requested'
+assert_contains 'o heartbeat continua sendo a unica saida' "$(cat "$TMP/curl-calls")" 'X-Node-Id: nd_exec1'
+assert_not_contains 'nenhuma chamada de atualizacao sai do runtime' "$(cat "$TMP/curl-calls")" 'bootstrap'
 
 printf '\nTodos os cenarios passaram (%d assercoes).\n' "$PASS"

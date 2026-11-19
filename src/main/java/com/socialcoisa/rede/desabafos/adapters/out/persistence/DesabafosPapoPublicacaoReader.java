@@ -60,6 +60,33 @@ class DesabafosPapoPublicacaoReader implements PapoPublicacaoReader {
 		return publicacoes;
 	}
 
+	/**
+	 * O texto dos desabafos e acolhidas relacionados, só os ativos. A autoria volta aqui para
+	 * o service decidir bloqueio/anonimato — a tela de desabafo NUNCA mostra autor.
+	 */
+	@Override
+	public List<Detalhe> detalhes(java.util.Collection<String> publicacaoIds) {
+		if (publicacaoIds == null || publicacaoIds.isEmpty()) {
+			return List.of();
+		}
+		List<Detalhe> detalhes = new ArrayList<>();
+		for (DesabafoPostJpaEntity entidade : posts.findAllById(publicacaoIds)) {
+			DesabafoPost post = entidade.toDomain();
+			if (post.status() == DesabafoStatus.ACTIVE && !post.content().isBlank()) {
+				detalhes.add(new Detalhe(post.id(), post.content(), post.authorId().value(), post.createdAt(),
+						null, null));
+			}
+		}
+		for (DesabafoCommentJpaEntity entidade : comments.findAllById(publicacaoIds)) {
+			DesabafoComment comment = entidade.toDomain();
+			if (comment.status() == DesabafoStatus.ACTIVE && !comment.content().isBlank()) {
+				detalhes.add(new Detalhe(comment.id(), comment.content(), comment.authorId().value(),
+						comment.createdAt(), null, null));
+			}
+		}
+		return detalhes;
+	}
+
 	@Override
 	public String fonte() {
 		return "DESABAFO";

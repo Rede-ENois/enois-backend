@@ -51,6 +51,20 @@ public class PapoRetoController {
 		return papoReto.timeline(escopo, subject, janelaDaQuery(janela));
 	}
 
+	/**
+	 * As publicações relacionadas do assunto: o texto público que originou a contagem, da mais
+	 * recente para a mais antiga. É a view filtrada do assunto dentro do Papo Reto — o visitante
+	 * da sessão decide o recorte de bloqueio, e espaço anônimo continua anônimo.
+	 */
+	@GetMapping("/papo-reto/{subject}/publicacoes")
+	List<PapoRetoService.PublicacaoRelacionadaView> publicacoes(@RequestHeader("X-Session-Token") String sessionToken,
+			@PathVariable String subject, @RequestParam(required = false) String comunidade,
+			@RequestParam(defaultValue = "7d") String janela) {
+		String viewerId = currentUserResolver.resolve(sessionToken).id().value();
+		String escopo = comunidade == null ? PapoRetoWorker.ESCOPO_GLOBAL : comunidade;
+		return papoReto.publicacoesRelacionadas(escopo, subject, janelaDaQuery(janela), viewerId);
+	}
+
 	/** Quantas falas a última janela analisou (a contagem que a página mostra). */
 	@GetMapping("/papo-reto/analise")
 	long falasAnalisadas(@RequestHeader("X-Session-Token") String sessionToken) {

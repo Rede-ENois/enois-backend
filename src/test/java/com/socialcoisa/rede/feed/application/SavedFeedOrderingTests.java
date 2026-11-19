@@ -48,7 +48,9 @@ class SavedFeedOrderingTests {
 		mock(UserProfileRepository.class), mock(UserSealRepository.class), interactions, null, null,
 		mock(BlockedUsersReader.class), mock(PostCommunityReader.class), null, null, null, null,
 		mock(PostNoteService.class), mock(PollRepository.class), mock(PostRepostRepository.class),
-		mock(GetMediaSummariesUseCase.class), null, mock(IdentityVerificationRepository.class),
+		mock(GetMediaSummariesUseCase.class),
+		mock(com.socialcoisa.rede.shared.sanctions.SanctionGateReader.class),
+		mock(IdentityVerificationRepository.class),
 		Clock.fixed(AGORA, ZoneOffset.UTC));
 
 	@Test

@@ -1364,6 +1364,19 @@ cycle() {
   # "quanto ele prometeu" -- a pergunta do §7 do brief do Storage. Zero é resposta legítima (nó
   # sem conteúdo), então o campo vai sempre que o cálculo roda; `df` que falhou não afeta.
   disk_part="$disk_part,\"usedMb\":$(( $(content_bytes) / 1048576 ))"
+  # Tráfego ACUMULADO das interfaces desde o boot (brief §8.2, "uso de rede"): o Control Plane já
+  # tem as colunas `observed_bytes_in_mb` / `observed_bytes_out_mb` (V345) e o heartbeat já aceita
+  # os campos — mas o runtime nunca os mediu, e o painel do nó não mostrava tráfego nenhum. Vai em
+  # MiB, como as outras medidas de tamanho; loopback fica de fora. Sem `/proc/net/dev` os campos
+  # NÃO vão: ausente é "não medido", nunca zero, que afirmaria "não transferiu nada".
+  net_part=''
+  if [[ -r /proc/net/dev ]]; then
+    net_medido=$(awk -F'[: ]+' '/^[ ]*[a-z]/ && $2 != "lo" { rx += $3; tx += $11 } END { printf "%d %d", rx / 1048576, tx / 1048576 }' /proc/net/dev)
+    read -r net_rx_mb net_tx_mb <<< "$net_medido"
+    if [[ "$net_rx_mb" =~ ^[0-9]+$ && "$net_tx_mb" =~ ^[0-9]+$ ]]; then
+      net_part=",\"bytesInMb\":$net_rx_mb,\"bytesOutMb\":$net_tx_mb"
+    fi
+  fi
   # Linhas do ciclo vão JUNTO do heartbeat: é a única saída do nó (ele não abre porta), e o
   # Control Plane guarda uma janela curta para o painel do nó. O buffer é esvaziado depois de
   # enviado; se o heartbeat falhar, as linhas ficam para a próxima volta.
@@ -1371,7 +1384,7 @@ cycle() {
   events=$(events_json)
   [[ -n "$events" ]] && logs_part=",\"logs\":[$events]"
   hb=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
-    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"memoryMb\":$observed_mem,\"runningTasks\":0$disk_part}$term_part$logs_part}" \
+    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"memoryMb\":$observed_mem,\"runningTasks\":0$disk_part$net_part}$term_part$logs_part}" \
     "$CONTROL_PLANE/network/nodes/heartbeat") || { printf '[executor] heartbeat falhou\n' >&2; return 1; }
   : > "$EVENTS_FILE" 2>/dev/null || true
   mode=$(json_field "$hb" mode)

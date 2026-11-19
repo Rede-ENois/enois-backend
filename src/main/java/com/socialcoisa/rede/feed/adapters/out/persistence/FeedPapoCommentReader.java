@@ -76,6 +76,37 @@ class FeedPapoCommentReader implements PapoPublicacaoReader {
 		return publicacoes;
 	}
 
+	/**
+	 * O texto dos comentários relacionados: só os ativos, de posts que seguem ativos e
+	 * públicos. O comentário não tem tag própria — o assunto é o que o worker contou do texto.
+	 * O `postId` viaja para a tela montar o link da discussão (o comentário não tem rota só dele).
+	 */
+	@Override
+	public List<Detalhe> detalhes(java.util.Collection<String> publicacaoIds) {
+		if (publicacaoIds == null || publicacaoIds.isEmpty()) {
+			return List.of();
+		}
+		List<Comment> ativos = new ArrayList<>();
+		for (CommentJpaEntity entidade : comments.findAllById(publicacaoIds)) {
+			Comment comment = entidade.toDomain();
+			if (comment.status() == CommentStatus.ACTIVE && comment.content() != null
+					&& !comment.content().isBlank()) {
+				ativos.add(comment);
+			}
+		}
+		Map<String, Post> postsDosComentarios = postsDos(ativos);
+		List<Detalhe> detalhes = new ArrayList<>();
+		for (Comment comment : ativos) {
+			Post post = postsDosComentarios.get(comment.postId().value());
+			if (post == null) {
+				continue;
+			}
+			detalhes.add(new Detalhe(comment.id(), comment.content(), comment.authorId().value(),
+					comment.createdAt(), post.communityId(), post.id().value()));
+		}
+		return detalhes;
+	}
+
 	/** Os posts dos comentários da página, só os que são papo público da rede. */
 	private Map<String, Post> postsDos(List<Comment> daPagina) {
 		Set<String> ids = new LinkedHashSet<>();

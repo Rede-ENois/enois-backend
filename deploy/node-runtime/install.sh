@@ -10,6 +10,7 @@
 #   ./install.sh --start                # sobe o container
 #   ./install.sh --update               # atualiza o runtime (delega ao bootstrap)
 #   ./install.sh --rollback             # volta para o runtime anterior (delega ao bootstrap)
+#   ./install.sh --auto-update on|off   # segue sozinho os releases do runtime (cron do host)
 #
 # O que faz (docs/rede-distribuida/01-arquitetura.md §4):
 #   1. grava o estado do nó em $NODE_HOME com permissão restrita;
@@ -49,6 +50,7 @@ while (($#)); do
     --cpu) CPU="$2"; shift 2 ;;
     --memory) MEMORY="$2"; shift 2 ;;
     --set-key|--start|--update|--rollback) MODE="$1"; shift ;;
+    --auto-update) MODE="$1"; AUTO_MODE="${2:-}"; shift; (($#)) && shift ;;
     --backup) MODE="--backup"; shift ;;
     --restore) MODE="--restore"; BACKUP_FILE="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -210,6 +212,28 @@ if [[ "$MODE" == "--update" || "$MODE" == "--rollback" ]]; then
   exec /bin/bash "$bootstrap" "$MODE" "$@"
 fi
 
+# ------------------------------------------------------------ --auto-update
+# Liga ou desliga a atualização automática desta máquina. Não é "sempre ligado" de propósito: o nó
+# roda código novo sem o operador olhar, e isso é escolha de quem cede a máquina. Quem decide e
+# executa é o node-auto-update.sh no host (o container não tem docker para trocar a si mesmo).
+if [[ "$MODE" == "--auto-update" ]]; then
+  [[ "$AUTO_MODE" == on || "$AUTO_MODE" == off ]] || die "use: install.sh --auto-update on|off"
+  umask 177
+  printf '%s\n' "$AUTO_MODE" > "$NODE_HOME/auto-update"
+  umask 022
+  if [[ "$AUTO_MODE" == on ]]; then
+    if /bin/bash "$COMPOSE_DIR/node-auto-update.sh" --install-cron; then
+      info "atualização automática ligada — o cron do host confere o release do runtime a cada 15 min"
+    else
+      info "cron não instalado (permissão?) — a linha está no log; o nó NÃO vai se atualizar sozinho até ela existir"
+    fi
+  else
+    /bin/bash "$COMPOSE_DIR/node-auto-update.sh" --remove-cron >/dev/null 2>&1 || true
+    info "atualização automática desligada"
+  fi
+  exit 0
+fi
+
 # ---------------------------------------------------------------- --start
 [[ -s "$NODE_HOME/node.json" ]] || die "sem $NODE_HOME/node.json — rode o enroll primeiro"
 [[ -s "$NODE_HOME/api-key" ]] || die "sem $NODE_HOME/api-key — rode --set-key primeiro"
@@ -302,5 +326,13 @@ if [[ -s "$NODE_HOME/runtime-version" ]]; then
   export NODE_RUNTIME_TAG
   info "Runtime em uso: $RUNTIME_VERSION (imagem enois-node-runtime:$NODE_RUNTIME_TAG)"
 fi
+# Atualização automática: a escolha fica gravada no NODE_HOME (o compose lê daqui, e o container a
+# vê a cada `up`). Sem o arquivo, desligada — nó de participante não se atualiza sem pedido.
+if [[ -s "$NODE_HOME/auto-update" && "$(tr -d '[:space:]' < "$NODE_HOME/auto-update")" == on ]]; then
+  NODE_AUTO_UPDATE=true
+else
+  NODE_AUTO_UPDATE=false
+fi
+export NODE_AUTO_UPDATE
 docker compose -f "$COMPOSE_DIR/docker-compose.yml" up -d
 info "Container subido. Diagnóstico: NODE_HOME=$NODE_HOME ./node-doctor.sh"

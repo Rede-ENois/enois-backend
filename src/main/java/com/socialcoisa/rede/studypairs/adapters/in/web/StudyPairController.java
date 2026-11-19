@@ -88,6 +88,39 @@ class StudyPairController {
 			() -> new CommandResponse(200, service.checkin(user.id().value(), pairId, request.note())));
 	}
 
+	/** Aceite da proposta com o quebra-gelo guiado; os dois aceitarem abre o par. */
+	@PostMapping("/{pairId}/accept")
+	ResponseEntity<String> accept(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@PathVariable String pairId, @RequestBody AcceptRequest request) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return idempotency.execute(user.id(), "POST", "/api/study-pairs/{pairId}/accept", idempotencyKey,
+			idempotency.hash(Map.of("pairId", pairId, "request", request)),
+			() -> new CommandResponse(200, service.accept(user.id().value(), pairId, request.answers())));
+	}
+
+	/** Recusa da proposta: quem não recusou volta para a fila na posição original. */
+	@PostMapping("/{pairId}/decline")
+	ResponseEntity<String> decline(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@PathVariable String pairId) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return idempotency.execute(user.id(), "POST", "/api/study-pairs/{pairId}/decline", idempotencyKey,
+			idempotency.hash(Map.of("pairId", pairId)),
+			() -> {
+				service.decline(user.id().value(), pairId);
+				return new CommandResponse(200, new StatusResponse(pairId, "DECLINED"));
+			});
+	}
+
+	/** Perguntas do quebra-gelo guiado: o catálogo mora no banco, o front não inventa. */
+	@GetMapping("/icebreakers")
+	Map<String, List<StudyPairService.IcebreakerView>> icebreakers(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		currentUserResolver.resolve(sessionToken);
+		return Map.of("items", service.icebreakers());
+	}
+
 	@PostMapping("/{pairId}/end")
 	ResponseEntity<String> end(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
@@ -102,6 +135,9 @@ class StudyPairController {
 	}
 
 	record GoalRequest(String goal, String topic) {
+	}
+
+	record AcceptRequest(Map<String, String> answers) {
 	}
 
 	record CheckinRequest(String note) {

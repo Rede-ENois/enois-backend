@@ -109,7 +109,7 @@ class AdminNetworkController {
 			String keyPrefix, boolean keyUsed, Integer latencyMs, int failureStreak, boolean degraded,
 			String quarantineReason, Instant quarantinedUntil, int declaredCpuCores, int declaredMemoryMb,
 			int declaredDiskMb, int declaredBandwidthMbps, long tasksDone, long tasksFailed,
-			ResponsibleView responsible) {
+			Long trafficInMb, Long trafficOutMb, ResponsibleView responsible) {
 
 		/**
 		 * Quem ativou a possibilidade de o nó servir e quem responde por ele.
@@ -145,7 +145,8 @@ class AdminNetworkController {
 				node.observedLatencyMs(), node.consecutiveFailures(), showQuarantine || node.slow() || node.failing(),
 				showQuarantine ? node.quarantineReason() : null, showQuarantine ? node.quarantinedUntil() : null,
 				node.declaredCpuCores(), node.declaredMemoryMb(), node.declaredDiskMb(),
-				node.declaredBandwidthMbps(), tasksDone, tasksFailed, responsible);
+				node.declaredBandwidthMbps(), tasksDone, tasksFailed, node.observedBytesInMb(),
+				node.observedBytesOutMb(), responsible);
 		}
 	}
 
