@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.shared.html;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -7,6 +8,7 @@ import java.util.regex.Pattern;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
+import org.jsoup.parser.Parser;
 import org.jsoup.safety.Cleaner;
 import org.jsoup.safety.Safelist;
 import org.springframework.util.StringUtils;
@@ -126,6 +128,9 @@ public final class SafeHtml {
 	/** Quadro (para descartar o que nao for embed de provedor) e o `src` dentro dele. */
 	private static final Pattern IFRAME_TAG = Pattern.compile("(?is)<iframe\\b[^>]*>");
 	private static final Pattern IFRAME_SRC = Pattern.compile("(?is)\\ssrc\\s*=\\s*(\"([^\"]*)\"|'([^']*)')");
+	private static final Pattern SVG_ANIMATION_TAG = Pattern.compile("(?is)<(?:animate|set)\\b[^>]*>");
+	private static final Pattern SVG_ATTRIBUTE_NAME = Pattern
+		.compile("(?is)\\s+attributename\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))");
 
 	/** Tag de link aberta, para reescrever alvo e `rel`. */
 	private static final Pattern LINK_TAG = Pattern.compile("(?is)<a\\b[^>]*>");
@@ -328,10 +333,17 @@ public final class SafeHtml {
 	 * `<image>` continua com https/data (é mídia visível, como o `<img>`), pelo protocolo da lista.
 	 */
 	private static String hardenSvgReferences(String markup) {
-		return SVG_REF_TAG.matcher(markup).replaceAll(tag -> HREF_ATTRIBUTE.matcher(tag.group(0))
+		String staticCleaned = SVG_REF_TAG.matcher(markup).replaceAll(tag -> HREF_ATTRIBUTE.matcher(tag.group(0))
 			.replaceAll(href -> {
 				String url = href.group(1) != null ? href.group(1) : href.group(2);
 				return url != null && url.trim().startsWith("#") ? href.group(0) : "";
+			}));
+		return SVG_ANIMATION_TAG.matcher(staticCleaned).replaceAll(tag -> SVG_ATTRIBUTE_NAME.matcher(tag.group(0))
+			.replaceAll(attr -> {
+				String name = attr.group(1) != null ? attr.group(1)
+					: attr.group(2) != null ? attr.group(2) : attr.group(3);
+				String normalized = name == null ? "" : name.trim().toLowerCase(Locale.ROOT);
+				return ("href".equals(normalized) || normalized.endsWith(":href")) ? "" : attr.group(0);
 			}));
 	}
 
@@ -639,5 +651,24 @@ public final class SafeHtml {
 
 	private static Safelist buildAllowlist() {
 		return new PageSafelist();
+	}
+
+	/**
+	 * Sanitiza um arquivo SVG enviado como mídia: remove scripts, eventos, foreignObject e
+	 * referências externas perigosas reutilizando a mesma allowlist das páginas HTML.
+	 */
+	public static byte[] sanitizeSvg(byte[] data) {
+		if (data == null || data.length == 0) {
+			throw new IllegalArgumentException("SVG vazio");
+		}
+		String raw = new String(data, StandardCharsets.UTF_8);
+		Document parsed = Jsoup.parseBodyFragment(raw);
+		Document cleaned = new Cleaner(PAGE_ALLOWLIST).clean(parsed);
+		cleaned.outputSettings().syntax(Document.OutputSettings.Syntax.xml);
+		Element svg = cleaned.selectFirst("svg");
+		if (svg == null) {
+			throw new IllegalArgumentException("Arquivo não contém elemento SVG válido");
+		}
+		return hardenSvgReferences(svg.outerHtml()).getBytes(StandardCharsets.UTF_8);
 	}
 }

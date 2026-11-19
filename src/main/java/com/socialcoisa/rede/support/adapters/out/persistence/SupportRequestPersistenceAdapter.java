@@ -32,6 +32,11 @@ class SupportRequestPersistenceAdapter implements SupportRequestRepository {
 	}
 
 	@Override
+	public Optional<SupportRequest> findByIdForUpdate(String id) {
+		return repository.findByIdForUpdate(id).map(SupportRequestJpaEntity::toDomain);
+	}
+
+	@Override
 	public List<SupportRequest> findFiltered(SupportCategory category, SupportStatus status, int limit) {
 		return repository.findFiltered(category, status, PageRequest.of(0, Math.max(1, Math.min(limit, 100))))
 			.stream()

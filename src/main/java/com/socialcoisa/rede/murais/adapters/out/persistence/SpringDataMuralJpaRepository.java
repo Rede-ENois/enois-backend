@@ -19,4 +19,11 @@ interface SpringDataMuralJpaRepository extends JpaRepository<MuralJpaEntity, Str
 		""")
 	List<MuralJpaEntity> ativosBefore(@Param("status") MuralStatus status, @Param("before") Instant before,
 		Pageable pageable);
+
+	@Query("""
+		select m from MuralJpaEntity m
+		where m.status = com.socialcoisa.rede.murais.domain.MuralStatus.ACTIVE and m.ownerId = :ownerId
+		order by m.createdAt desc
+		""")
+	List<MuralJpaEntity> ativosDoDono(@Param("ownerId") String ownerId);
 }

@@ -61,4 +61,13 @@ public interface GroupContentRepository {
 
 	/** Reações do leitor, por publicação — uma consulta só para a lista inteira (sem N+1). */
 	Map<String, ReactionType> reactionsByUser(String userId, List<String> postIds);
+
+	/**
+	 * Apaga fisicamente o conteúdo do grupo (reações, comentários, publicações e tópicos).
+	 *
+	 * <p>O caminho normal nunca apaga conteúdo de grupo: remover uma publicação é marcar REMOVED. Esta
+	 * remoção existe só para a exclusão FÍSICA pela plataforma, quando manter o histórico não se
+	 * aplica. Devolve quantas publicações saíram, para a auditoria.</p>
+	 */
+	int deleteAllForGroup(String groupId);
 }

@@ -40,6 +40,22 @@ public class GlobalExceptionHandler {
 		this.monitoring = monitoring;
 	}
 
+	/**
+	 * O gateway S3 (brief §11) precisa do documento de erro em XML com o {@code Code} da S3
+	 * ({@code AccessDenied}, {@code SignatureDoesNotMatch}): o SDK lê esse campo para decidir
+	 * retentativa e para mostrar a mensagem. Registrado ANTES do genérico de {@code ApiException} e
+	 * restrito à subclasse, então nenhuma rota fora do gateway muda de formato.
+	 */
+	@ExceptionHandler(com.socialcoisa.rede.network.adapters.in.web.S3ApiException.class)
+	ResponseEntity<String> handleS3Exception(com.socialcoisa.rede.network.adapters.in.web.S3ApiException exception,
+			jakarta.servlet.http.HttpServletRequest request) {
+		LOGGER.debug("s3_gateway_error status={} code={}", exception.status(), exception.code());
+		return ResponseEntity.status(exception.status())
+			.header(org.springframework.http.HttpHeaders.CONTENT_TYPE, "application/xml; charset=utf-8")
+			.body(exception.toXml(request == null ? null
+				: request.getMethod() + " " + request.getRequestURI()));
+	}
+
 	@ExceptionHandler(ApiException.class)
 	ResponseEntity<ErrorResponse> handleApiException(ApiException exception,
 			jakarta.servlet.http.HttpServletRequest request) {
@@ -85,6 +101,35 @@ public class GlobalExceptionHandler {
 		LOGGER.debug("bad_request type={}", exception.getClass().getSimpleName());
 		return ResponseEntity.badRequest()
 			.body(new ErrorResponse("BAD_REQUEST", "Requisicao invalida.", Instant.now()));
+	}
+
+	/**
+	 * Limite da API do GitHub atingido (importação de projetos/README): sem handler isto virava
+	 * 500 genérico — e é exatamente o relato "importação de projetos do GitHub não está
+	 * funcionando". 503 com Retry-After diz ao front que é espera, não defeito.
+	 */
+	@ExceptionHandler(com.socialcoisa.rede.contributions.adapters.out.github.GitHubRateLimitException.class)
+	ResponseEntity<ErrorResponse> handleGitHubRateLimit(
+			com.socialcoisa.rede.contributions.adapters.out.github.GitHubRateLimitException exception) {
+		LOGGER.warn("github_rate_limit: {}", exception.getMessage());
+		return ResponseEntity.status(503)
+			.header("Retry-After", "3600")
+			.body(new ErrorResponse("GITHUB_RATE_LIMITED",
+				"O GitHub limitou as consultas agora. Tente de novo em até uma hora.", Instant.now()));
+	}
+
+	/**
+	 * O repositório (ou o perfil) sumiu do GitHub entre a listagem e a importação — apagado ou
+	 * tornado privado. 404 acionável em vez de 500: a pessoa tira o item da seleção e segue.
+	 */
+	@ExceptionHandler(com.socialcoisa.rede.contributions.application.port.out.GitHubRepositoryGoneException.class)
+	ResponseEntity<ErrorResponse> handleGitHubGone(
+			com.socialcoisa.rede.contributions.application.port.out.GitHubRepositoryGoneException exception) {
+		LOGGER.warn("github_repository_gone: {}", exception.getMessage());
+		return ResponseEntity.status(404)
+			.body(new ErrorResponse("GITHUB_CONTENT_GONE",
+				"Um repositório do GitHub deixou de estar disponível. Atualize a lista e tente de novo.",
+				Instant.now()));
 	}
 
 	@ExceptionHandler(DataIntegrityViolationException.class)

@@ -25,7 +25,9 @@ class NotificationJpaEntity {
 	@Column(nullable = false)
 	private String kind;
 
-	@Column(name = "actor_id", nullable = false)
+	// Nulo = aviso sem autor a mostrar (acolhida em desabafo anônimo). A entidade acompanha a
+	// coluna (V346) para o `ddl-auto=validate` do boot não acusar divergência de nulidade.
+	@Column(name = "actor_id")
 	private String actorId;
 
 	@Column(nullable = false, length = 500)

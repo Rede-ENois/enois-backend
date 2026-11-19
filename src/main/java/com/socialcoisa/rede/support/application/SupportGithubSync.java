@@ -101,7 +101,8 @@ class SupportGithubSync {
 				// Token da pessoa sem permissão no repositório: cai para o token de serviço.
 				comment = gateway.comment(request.githubIssueNumber(), body, null);
 			}
-			comment.ifPresent(id -> thread.markGithubComment(event.messageId(), id, authorName, login));
+			comment.ifPresent(id -> thread.markGithubComment(event.requestId(), event.messageId(), id,
+				authorName, login));
 		}
 		catch (RuntimeException failure) {
 			LOG.warn("Falha ao espelhar a resposta do ticket {} no GitHub: {}", event.requestId(),

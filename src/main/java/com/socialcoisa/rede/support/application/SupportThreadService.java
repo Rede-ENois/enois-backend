@@ -9,7 +9,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.support.application.port.out.SupportMessageRepository;
+import com.socialcoisa.rede.support.application.port.out.SupportRequestRepository;
 import com.socialcoisa.rede.support.domain.SupportMessage;
 import com.socialcoisa.rede.support.domain.SupportMessageDirection;
 
@@ -25,10 +27,12 @@ public class SupportThreadService {
 	private static final int MAX_BODY = 4000;
 
 	private final SupportMessageRepository messages;
+	private final SupportRequestRepository requests;
 	private final Clock clock;
 
-	public SupportThreadService(SupportMessageRepository messages, Clock clock) {
+	public SupportThreadService(SupportMessageRepository messages, SupportRequestRepository requests, Clock clock) {
 		this.messages = messages;
+		this.requests = requests;
 		this.clock = clock;
 	}
 
@@ -50,6 +54,8 @@ public class SupportThreadService {
 	/** Comentário vindo do GitHub; devolve vazio quando já foi registrado (eco do próprio Énóis). */
 	@Transactional
 	public Optional<SupportMessage> addFromGithub(String requestId, long commentId, String authorLogin, String body) {
+		requests.findByIdForUpdate(requestId)
+			.orElseThrow(() -> new ApiException(404, "SUPPORT_REQUEST_NOT_FOUND", "Pedido de suporte não encontrado."));
 		if (messages.findByGithubCommentId(commentId).isPresent()) {
 			return Optional.empty();
 		}
@@ -65,14 +71,22 @@ public class SupportThreadService {
 
 	/** Registra o comentário publicado pelo painel para o webhook não duplicar a mensagem. */
 	@Transactional
-	public void markGithubComment(String messageId, long commentId, String authorName, String authorLogin) {
-		// Se o webhook chegou primeiro, o comentário já virou uma mensagem GITHUB; não viola a
-		// chave única nem duplica.
-		if (messages.findByGithubCommentId(commentId)
-			.filter(existing -> !existing.id().equals(messageId)).isPresent()) {
+	public void markGithubComment(String requestId, String messageId, long commentId, String authorName,
+			String authorLogin) {
+		requests.findByIdForUpdate(requestId)
+			.orElseThrow(() -> new ApiException(404, "SUPPORT_REQUEST_NOT_FOUND", "Pedido de suporte não encontrado."));
+		SupportMessage message = messages.findById(messageId)
+			.filter(existing -> existing.requestId().equals(requestId)).orElse(null);
+		if (message == null) {
 			return;
 		}
-		messages.findById(messageId).ifPresent(message -> messages.save(
-			message.withGithubComment(commentId, authorName, authorLogin)));
+		SupportMessage existing = messages.findByGithubCommentId(commentId).orElse(null);
+		if (existing != null && !existing.id().equals(messageId)) {
+			if (existing.direction() != SupportMessageDirection.GITHUB || !existing.requestId().equals(requestId)) {
+				return;
+			}
+			messages.deleteById(existing.id());
+		}
+		messages.save(message.withGithubComment(commentId, authorName, authorLogin));
 	}
 }

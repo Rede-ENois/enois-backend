@@ -23,6 +23,9 @@ repositório e nenhum deles serve sozinho:
   vivo: entre a página 3 e a 4 alguém apaga uma conta, o `offset` desloca e uma conta nunca é lida;
   alguém cria outra e uma conta é lida duas vezes. Numa réplica isso não é imprecisão estatística, é
   conteúdo sumindo do ar sem aviso.
+
+  **Atualização (2026-11-17):** `findAllIds` agora percorre ids por cursor nos jobs internos.
+  A decisão da réplica permanece a mesma, com ordem por `(created_at, id)`.
 - `CommunityRepository` não tinha enumeração nenhuma: só rolagem "para trás" da vitrine
   (`before`, mais novas primeiro), que não percorre o catálogo em direção única.
 

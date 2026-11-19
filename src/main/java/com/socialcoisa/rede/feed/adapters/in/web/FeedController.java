@@ -661,7 +661,8 @@ class FeedController {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		requireVisible(postId, user.id());
 		String opinion = body == null ? null : body.opinion();
-		Post result = repostPostService.repost(user.id().value(), postId, opinion);
+		String communityId = body == null ? null : body.communityId();
+		Post result = repostPostService.repost(user.id().value(), postId, opinion, communityId);
 		return PostView.from(result);
 	}
 
@@ -675,7 +676,7 @@ class FeedController {
 		return ResponseEntity.ok("{\"status\":\"REMOVED\"}");
 	}
 
-	record RepostRequest(String opinion) {
+	record RepostRequest(String opinion, String communityId) {
 	}
 
 	/** Ate 4 midias na edicao, do proprio autor (mesma regra do comentario novo). */

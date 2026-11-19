@@ -301,9 +301,17 @@ config_signature() {
   [[ -n "$format_version" && -n "$config_version" && -n "$node_id" && -n "$cpu" \
       && -n "$memory" && -n "$disk" && -n "$bandwidth" && -n "$issued_at" \
       && -n "$ttl" && -n "$term" && -n "$signature" ]] || return 1
-  printf '%s|%s|%s|[%s]|%s|%s|%s|%s|[%s]|[%s]|%s|%s|%s|%s|%s\t%s' \
+  local canonical
+  canonical=$(printf '%s|%s|%s|[%s]|%s|%s|%s|%s|[%s]|[%s]|%s|%s|%s|%s|%s' \
     "$format_version" "$config_version" "$node_id" "$profiles" "$cpu" "$memory" "$disk" \
-    "$bandwidth" "$tasks" "$routes" "$issued_at" "$ttl" "$term" "$disk_free" "$disk_total" "$signature"
+    "$bandwidth" "$tasks" "$routes" "$issued_at" "$ttl" "$term" "$disk_free" "$disk_total")
+  # storageBandwidth (formato 7) vem DEPOIS do tamanho do volume: a banda própria de cada tipo
+  # de storage node (brief §6). Formato <= 6 não tinha a lista e não pode ganhá-la aqui --
+  # acrescentá-la mudaria a linha de uma config antiga e a assinatura deixaria de conferir.
+  if [[ "$format_version" -ge 7 ]]; then
+    canonical="$canonical|[$(json_list_sorted "$1" storageBandwidth)]"
+  fi
+  printf '%s\t%s' "$canonical" "$signature"
 }
 
 json_list_sorted() {
@@ -666,7 +674,7 @@ config_disk_mb() {
 }
 
 bandwidth_args() {
-  # bandwidth_args <config-json>: argumento de limite de taxa do curl, um por linha;
+  # bandwidth_args <config-json> [payload-json]: argumento de limite de taxa do curl, um por linha;
   # vazio quando o participante não declarou banda (0 = sem teto). O limite declarado
   # é o que ele aceitou ceder de REDE, e o runtime é quem transfere: baixar corpo de
   # conteúdo e subir resultado de mídia passam todos pelo mesmo teto, em
@@ -676,9 +684,47 @@ bandwidth_args() {
   # concorrentes competindo pelo mesmo teto.
   local mbps kbps
   mbps=$(json_number "$1" bandwidthMbps)
+  # Teto POR TRANSFERENCIA (brief §16): o rebalanceamento pede quanto ceder para um objeto
+  # especifico, e o nó aplica o MENOR entre ele e o que declarou. Sem este passo o teto da
+  # transferência era gravado pelo CP e nunca chegava ao nó.
+  local transfer_mbps
+  transfer_mbps=$(json_number "$2" bandwidthLimitMbps)
+  if [[ -n "$transfer_mbps" && "$transfer_mbps" != 0 ]]; then
+    if [[ -z "$mbps" || "$mbps" == 0 ]] || (( transfer_mbps < mbps )); then
+      mbps="$transfer_mbps"
+    fi
+  fi
+  # O teto do TIPO (formato 7, brief §6) vence a banda geral: é o que o participante reservou
+  # para este tipo de máquina. Tipo sem limite próprio cai na banda do nó -- ausência é
+  # "não especializou", nunca zero, e zero mantém a regra de "sem teto".
+  local kind_mbps
+  kind_mbps=$(storage_kind_bandwidth "$1")
+  [[ -z "$kind_mbps" ]] || mbps="$kind_mbps"
   [[ -n "$mbps" && "$mbps" != 0 ]] || return 0
   kbps=$((mbps * 125))
   printf '%s\n%s\n' --limit-rate "${kbps}k"
+}
+
+storage_kind_bandwidth() {
+  # storage_kind_bandwidth <config-json>: o menor limite de banda entre os tipos de storage
+  # declarados na config (formato 7, brief §6), em Mbps; vazio quando não há lista. O runtime
+  # executa uma tarefa por ciclo e o tipo de storage de um nó não muda entre tarefas, então o
+  # teto aplicado é o do tipo dele. Com vários tipos, o MENOR: ceder mais do que qualquer tipo
+  # declarou nunca é o que o participante aceitou.
+  local list="$1" entry kind mbps menor=""
+  # A lista é ["TIPO=mbps", ...]; cada entrada é separada por '","'.
+  local entries
+  entries=$(json_list_sorted "$list" storageBandwidth)
+  [[ -n "$entries" ]] || return 0
+  while IFS= read -r entry; do
+    kind=${entry%%=*}
+    mbps=${entry#*=}
+    [[ "$mbps" =~ ^[0-9]+$ ]] || continue
+    if [[ -z "$menor" ]] || (( mbps < menor )); then
+      menor="$mbps"
+    fi
+  done < <(tr ',' '\n' <<< "$entries" | tr -d '"' | sed 's/^ *//;s/ *$//')
+  printf '%s' "$menor"
 }
 
 content_bytes() {
@@ -1075,9 +1121,11 @@ exec_object_put() {
   local next="$1" task_id="$2" attempt="$3" config="${4:-}"
   local payload object_id expect_sha expect_bytes replica tmp got_sha got_bytes resp code
   local -a bw=()
-  mapfile -t bw < <(bandwidth_args "$config")
 
   payload=$(task_payload "$next")
+  # O payload entra no teto: uma transferência de rebalanceamento pede quanto ceder para ESTE
+  # objeto, e vale o menor entre esse pedido e a banda declarada (bandwidth_args).
+  mapfile -t bw < <(bandwidth_args "$config" "$payload")
   object_id=$(json_field "$payload" objectId)
   expect_sha=$(json_field "$payload" sha256)
   expect_bytes=$(json_number "$payload" bytes)
@@ -1316,6 +1364,19 @@ cycle() {
   # "quanto ele prometeu" -- a pergunta do §7 do brief do Storage. Zero é resposta legítima (nó
   # sem conteúdo), então o campo vai sempre que o cálculo roda; `df` que falhou não afeta.
   disk_part="$disk_part,\"usedMb\":$(( $(content_bytes) / 1048576 ))"
+  # Tráfego ACUMULADO das interfaces desde o boot (brief §8.2, "uso de rede"): o Control Plane já
+  # tem as colunas `observed_bytes_in_mb` / `observed_bytes_out_mb` (V345) e o heartbeat já aceita
+  # os campos — mas o runtime nunca os mediu, e o painel do nó não mostrava tráfego nenhum. Vai em
+  # MiB, como as outras medidas de tamanho; loopback fica de fora. Sem `/proc/net/dev` os campos
+  # NÃO vão: ausente é "não medido", nunca zero, que afirmaria "não transferiu nada".
+  net_part=''
+  if [[ -r /proc/net/dev ]]; then
+    net_medido=$(awk -F'[: ]+' '/^[ ]*[a-z]/ && $2 != "lo" { rx += $3; tx += $11 } END { printf "%d %d", rx / 1048576, tx / 1048576 }' /proc/net/dev)
+    read -r net_rx_mb net_tx_mb <<< "$net_medido"
+    if [[ "$net_rx_mb" =~ ^[0-9]+$ && "$net_tx_mb" =~ ^[0-9]+$ ]]; then
+      net_part=",\"bytesInMb\":$net_rx_mb,\"bytesOutMb\":$net_tx_mb"
+    fi
+  fi
   # Linhas do ciclo vão JUNTO do heartbeat: é a única saída do nó (ele não abre porta), e o
   # Control Plane guarda uma janela curta para o painel do nó. O buffer é esvaziado depois de
   # enviado; se o heartbeat falhar, as linhas ficam para a próxima volta.
@@ -1323,7 +1384,7 @@ cycle() {
   events=$(events_json)
   [[ -n "$events" ]] && logs_part=",\"logs\":[$events]"
   hb=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
-    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"memoryMb\":$observed_mem,\"runningTasks\":0$disk_part}$term_part$logs_part}" \
+    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"memoryMb\":$observed_mem,\"runningTasks\":0$disk_part$net_part}$term_part$logs_part}" \
     "$CONTROL_PLANE/network/nodes/heartbeat") || { printf '[executor] heartbeat falhou\n' >&2; return 1; }
   : > "$EVENTS_FILE" 2>/dev/null || true
   mode=$(json_field "$hb" mode)

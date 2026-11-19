@@ -73,6 +73,9 @@ public enum NotificationCategory {
 		// Remarcação/cancelamento do evento avisa quem confirmou presença: convivência do evento,
 		// mesma família do lembrete de ocorrência — desligar "grupos" silencia o aviso também.
 		Map.entry("EVENT", GROUPS),
+		Map.entry("STUDY_PAIR_PROPOSED", SOCIAL),
+		Map.entry("STUDY_PAIR_ACTIVE", SOCIAL),
+		Map.entry("STUDY_PAIR_DECLINED", SOCIAL),
 		Map.entry("STUDY_PAIR_MATCHED", SOCIAL),
 		Map.entry("STUDY_PAIR_CHECKIN", SOCIAL),
 		Map.entry("STUDY_PAIR_ENDED", SOCIAL),
@@ -93,7 +96,10 @@ public enum NotificationCategory {
 	Map.entry("MURAL_CONTRIBUTED", SOCIAL),
 	// Desabafos: alguém acolheu (comentou) o desabafo da pessoa. SOCIAL — convivência acolhedora,
 	// mesma família de comentário; sem notificação de reação, que é só contagem.
-	Map.entry("DESABAFOS_COMMENTED", SOCIAL));
+	Map.entry("DESABAFOS_COMMENTED", SOCIAL),
+	// Confessionário: alguém reagiu (comentou) à história da pessoa. SOCIAL — mesma família do
+	// comentário; sem notificação de reação por emoji, que é só contagem.
+	Map.entry("CONFESSIONARIO_COMMENTED", SOCIAL));
 
 	public static NotificationCategory of(String kind) {
 		return kind == null ? SYSTEM : BY_KIND.getOrDefault(kind, SYSTEM);

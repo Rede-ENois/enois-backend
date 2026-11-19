@@ -48,7 +48,13 @@ public class StorageOverviewService {
 	public record Overview(long capacityMb, Long freeMb, int nodesDeclaringCapacity, int unmeasuredNodes,
 			int unmeasuredDiskTotals, int unmeasuredUsage, List<StorageOverviewNodes.Disco> disks,
 			long usedBytes, Map<String, Long> objectsByState, Map<String, Long> copiesByState,
-			int objectsUnderReplicated, int replicasExpected) {
+			int objectsUnderReplicated, int replicasExpected, Map<String, Long> objectsByDurability, int onlineNodes,
+			int offlineNodes, List<StorageOverviewNodes.OfflineNode> offline, int buckets,
+			Map<String, BucketUsage> usageByBucket) {
+	}
+
+	/** O que um bucket tem: objetos servíveis e bytes medidos. */
+	public record BucketUsage(long objects, long bytes) {
 	}
 
 	private final StorageCatalogRepository catalog;
@@ -66,9 +72,19 @@ public class StorageOverviewService {
 		this.clock = clock;
 	}
 
+	/** O disco de um nó: a mesma conta do painel geral, para a página do nó. */
+	@Transactional(readOnly = true)
+	public StorageOverviewNodes.Disco diskOf(String nodeId) {
+		return nodes.diskOf(nodeId);
+	}
+
 	@Transactional(readOnly = true)
 	public Overview overview() {
 		Map<String, long[]> objetos = catalog.summarizeObjects();
+		// Por bucket: o numero de buckets e o tamanho deste mapa. Bucket nao e uma tabela -- existe
+		// enquanto tiver objeto --, entao perguntar "quantos buckets" e contar as chaves distintas.
+		Map<String, BucketUsage> porBucket = new LinkedHashMap<>();
+		catalog.summarizeBuckets().forEach((nome, par) -> porBucket.put(nome, new BucketUsage(par[0], par[1])));
 		Map<String, long[]> copias = catalog.summarizePlacements();
 
 		Map<String, Long> objetosPorEstado = new LinkedHashMap<>();
@@ -87,6 +103,8 @@ public class StorageOverviewService {
 		return new Overview(capacidade.declaredMb(), capacidade.freeMb(), capacidade.declaringNodes(),
 			capacidade.unmeasuredNodes(), capacidade.unmeasuredDiskTotals(), capacidade.unmeasuredUsage(),
 			capacidade.disks(), usado,
-			objetosPorEstado, copiasPorEstado, lacuna.underReplicated().size(), placement.targetReplicas());
+			objetosPorEstado, copiasPorEstado, lacuna.underReplicated().size(), placement.targetReplicas(),
+			lacuna.byDurability(), capacidade.onlineNodes(), capacidade.offlineNodes(), capacidade.offline(),
+			porBucket.size(), porBucket);
 	}
 }

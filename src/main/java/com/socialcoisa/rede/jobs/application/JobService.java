@@ -23,6 +23,7 @@ import com.socialcoisa.rede.jobs.application.port.out.JobApplicationDraftReposit
 import com.socialcoisa.rede.jobs.domain.JobApplicationDraft;
 import com.socialcoisa.rede.jobs.application.port.out.JobApplicationStatusNotifier;
 import com.socialcoisa.rede.jobs.application.port.out.JobRepository;
+import com.socialcoisa.rede.jobs.application.port.out.JobRepository.AppliedPage;
 import com.socialcoisa.rede.jobs.domain.Job;
 import com.socialcoisa.rede.jobs.domain.JobApplication;
 import com.socialcoisa.rede.jobs.domain.JobApplicationStatus;
@@ -158,7 +159,7 @@ public class JobService {
 			String salary, String currency, String salaryMin, String salaryMax, String salaryPeriod,
 			String description, List<String> skills, List<JobFieldInput> fields, String userId) {
 		validate(title, company, type, level);
-		Job existing = repository.findById(jobId)
+		Job existing = repository.findByIdForUpdate(jobId)
 			.orElseThrow(() -> new ApiException(404, "JOB_NOT_FOUND", "Vaga nao encontrada."));
 		if (!existing.postedBy().equals(userId)) {
 			throw new ApiException(403, "NOT_OWNER", "Voce nao pode editar uma vaga que nao criou.");
@@ -607,8 +608,8 @@ public class JobService {
 	}
 
 	/** Vagas em que o usuario se candidatou. */
-	public List<Job> listApplications(String userId, java.time.Instant before, int limit) {
-		return repository.findAppliedByUser(userId, before, pageLimit(limit));
+	public AppliedPage listApplications(String userId, Instant before, Long beforeId, int limit) {
+		return repository.findAppliedByUser(userId, before, beforeId, pageLimit(limit));
 	}
 
 	/** Teto de qualquer listagem de vagas: sem ele, `?limit=100000` ia direto ao banco. */

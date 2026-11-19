@@ -86,6 +86,12 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	/** Página padrão quando o cliente não manda `limit` ou manda um valor inválido. */
 	private static final int DEFAULT_PAGE_SIZE = 10;
 
+	/**
+	 * Nome de exibição de conta banida (issue #1021): o conteúdo fica — sumir deixava o fio
+	 * desconexo — mas quem leu não vê nome, @, avatar nem badges de quem foi banido.
+	 */
+	static final String BANNED_DISPLAY_NAME = "Usuário";
+
 	public GetFeedService(PostRepository postRepository, ArticleRepository articleRepository,
 			FeedCacheRepository feedCacheRepository,
 			ConnectionGraphRepository connectionGraphRepository, UserProfileRepository userProfileRepository,
@@ -413,16 +419,42 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		if (postIds == null || postIds.isEmpty()) {
 			return List.of();
 		}
-		Map<String, PostView> visiveis = new LinkedHashMap<>();
-		for (String postId : postIds.stream().distinct().toList()) {
-			try {
-				visiveis.put(postId, getPost(postId, viewerId));
-			}
-			catch (ApiException invisivel) {
-				// Apagado, vencido, privado ou bloqueado: sai da coleção sem derrubar a página.
-			}
+		List<PostId> ids = postIds.stream().distinct().map(PostId::new).toList();
+		Map<PostId, Post> porId = postRepository.findByIds(ids).stream()
+			.collect(Collectors.toMap(Post::id, Function.identity()));
+		List<Post> ativos = ids.stream()
+			.map(porId::get)
+			.filter(Objects::nonNull)
+			.filter(Post::isActive)
+			.filter(post -> !post.expired(clock.instant()))
+			.toList();
+		if (ativos.isEmpty()) {
+			return List.of();
 		}
-		return List.copyOf(visiveis.values());
+		Set<String> ocultos = viewerId == null ? Set.of() : blockedUsersReader.hiddenIdsFor(viewerId.value());
+		List<Post> candidatos = ativos.stream()
+			.filter(post -> !ocultos.contains(post.authorId().value()))
+			.toList();
+		Set<String> comunidades = candidatos.stream()
+			.filter(post -> post.channelId() != null && post.communityId() != null)
+			.map(Post::communityId)
+			.collect(Collectors.toSet());
+		Map<String, PostCommunityReader.CommunityRef> referencias = viewerId == null || comunidades.isEmpty()
+			? Map.of() : postCommunityReader.byIds(comunidades, viewerId.value());
+		List<Post> visiveis = candidatos.stream()
+			.filter(post -> post.channelId() == null || (post.communityId() != null
+				&& referencias.containsKey(post.communityId())
+				&& referencias.get(post.communityId()).joined()))
+			.toList();
+		Map<String, PostView> viewsPorId = enrich(visiveis, viewerId, ocultos).stream()
+			.collect(Collectors.toMap(PostView::id, Function.identity(), (primeiro, repetido) -> primeiro));
+		List<PostView> resultado = new ArrayList<>();
+		for (Post post : visiveis) {
+			PostView view = viewsPorId.getOrDefault(post.id().value(), PostView.from(post));
+			resultado.add(view.withPageHtml(post.pageHtml())
+				.withArticleBody(articleRepository.findBody(post.id()).orElse(null)));
+		}
+		return List.copyOf(resultado);
 	}
 
 	@Override
@@ -464,8 +496,10 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		List<Post> posts = postRepository.findByIds(postIds).stream()
 			.filter(Post::isActive).toList();
 		List<PostView> enriched = enrich(posts, userId);
+		Map<String, PostView> byId = enriched.stream()
+			.collect(Collectors.toMap(PostView::id, Function.identity(), (first, duplicate) -> first));
 		List<PostView> ordered = savedIds.stream()
-			.map(id -> enriched.stream().filter(p -> p.id().equals(id)).findFirst().orElse(null))
+			.map(byId::get)
 			.filter(java.util.Objects::nonNull)
 			.toList();
 		return new FeedPage(ordered, null);
@@ -569,6 +603,10 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			.collect(Collectors.toSet());
 		Map<String, UserProfile> profiles = userProfileRepository.findAllByIds(authorIds).stream()
 			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
+		// Banido vira "Usuário" (issue #1021): o post/comentário continua — sumir deixava o fio
+		// desconexo — mas sem nome, @, avatar nem badges, que é a anonimização que o perfil já
+		// aplica. Em lote, uma consulta por página.
+		Set<String> bannedAuthors = sanctionGate.bannedAmong(profiles.keySet());
 		// Quem tem selo ativo ganha a tag "Contribuinte" junto do nome, em lote.
 		Set<String> contributorIds = userSeals.findActiveUserIds(profiles.keySet());
 		// Selo "Humanidade Comprovada": também em lote (uma consulta por página).
@@ -618,7 +656,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		// Reposts puros do viewer: batch check para marcar currentUserReposted.
 		Set<String> repostedByViewer = currentUserId == null ? Set.of()
 			: postReposts.findPostIdsRepostedByUser(currentUserId.value(), postIdValues);
-		// Citação do repost com opinião: busca os originais da página em UMA consulta.
+		// Citação do repost com opinião: busca em UMA consulta o post que cada pessoa repostou. É ele
+		// que o card cita — citar o original raiz sumia com a opinião de quem foi repostado.
 		java.util.Set<String> quotedIds = visible.stream()
 			.filter(p -> p.repostWithOpinion() && p.repostOf() != null)
 			.map(Post::repostOf)
@@ -648,15 +687,22 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			.map(post -> {
 				UserProfile profile = allProfiles.get(post.authorId().value());
 				var corporateProfile = corporate.get(post.authorId().value());
+				// Conta banida (com perfil ainda no banco) ou com perfil removido: o conteúdo fica,
+				// a identidade não — o nome cai para o rótulo genérico, nunca para o id cru (#1021).
+				boolean banned = bannedAuthors.contains(post.authorId().value());
+				boolean autorSemPerfil = corporateProfile == null && profile == null;
 				PostView view = PostView.from(post,
-					corporateProfile != null ? corporateProfile.username()
-						: profile != null ? profile.username() : null,
-					corporateProfile != null ? corporateProfile.name()
-						: profile != null ? profile.displayWithNickname() : post.authorId().value(),
-					corporateProfile != null ? corporateProfile.avatar()
-						: profile != null ? profile.avatar() : null,
-					profile != null ? profile.allBadges() : List.of())
-					.withAvatarFrame(profile != null ? profile.avatarFrame() : null)
+					banned ? null
+						: corporateProfile != null ? corporateProfile.username()
+							: profile != null ? profile.username() : null,
+					banned || autorSemPerfil ? BANNED_DISPLAY_NAME
+						: corporateProfile != null ? corporateProfile.name()
+							: profile.displayWithNickname(),
+					banned ? null
+						: corporateProfile != null ? corporateProfile.avatar()
+							: profile != null ? profile.avatar() : null,
+					banned ? List.of() : profile != null ? profile.allBadges() : List.of())
+					.withAvatarFrame(banned ? null : profile != null ? profile.avatarFrame() : null)
 					.withAuthorStyle(corporateProfile == null ? NameStyleView.from(profile) : null)
 					.withContributor(corporateProfile == null && contributorIds.contains(post.authorId().value())
 						? ContributorTagView.from(profile) : null)

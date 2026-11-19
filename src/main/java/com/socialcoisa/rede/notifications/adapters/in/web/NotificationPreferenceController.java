@@ -19,7 +19,7 @@ import com.socialcoisa.rede.shared.web.ConfirmationPage;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 
 /**
- * Push, digest and opt-in community project notices:
+ * Push, digest, opt-in community project notices and the reaction/comment silence:
  *
  * GET /me/notification-preferences: current toggles (community projects off by default).
  * PUT /me/notification-preferences — partial update (a null or missing field keeps its value).
@@ -41,16 +41,19 @@ class NotificationPreferenceController {
 	}
 
 	record PreferencesView(boolean weeklyDigest, boolean pushSocial, boolean pushMessages, boolean pushGroups,
-			boolean pushJobs, boolean pushSystem, boolean communityProjects, Instant updatedAt) {
+			boolean pushJobs, boolean pushSystem, boolean communityProjects, boolean muteReactions,
+			boolean mutePostComments, Instant updatedAt) {
 
 		static PreferencesView of(NotificationPreferences p) {
 			return new PreferencesView(p.weeklyDigest(), p.pushSocial(), p.pushMessages(), p.pushGroups(),
-				p.pushJobs(), p.pushSystem(), p.communityProjects(), p.updatedAt());
+				p.pushJobs(), p.pushSystem(), p.communityProjects(), p.muteReactions(), p.mutePostComments(),
+				p.updatedAt());
 		}
 	}
 
 	record UpdateRequest(Boolean weeklyDigest, Boolean pushSocial, Boolean pushMessages, Boolean pushGroups,
-			Boolean pushJobs, Boolean pushSystem, Boolean communityProjects) {
+			Boolean pushJobs, Boolean pushSystem, Boolean communityProjects, Boolean muteReactions,
+			Boolean mutePostComments) {
 	}
 
 	@GetMapping("/me/notification-preferences")
@@ -63,9 +66,11 @@ class NotificationPreferenceController {
 	PreferencesView update(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestBody(required = false) UpdateRequest request) {
 		String userId = currentUserResolver.resolve(sessionToken).id().value();
-		UpdateRequest r = request == null ? new UpdateRequest(null, null, null, null, null, null, null) : request;
+		UpdateRequest r = request == null
+				? new UpdateRequest(null, null, null, null, null, null, null, null, null) : request;
 		return PreferencesView.of(service.update(userId, r.weeklyDigest(), r.pushSocial(), r.pushMessages(),
-			r.pushGroups(), r.pushJobs(), r.pushSystem(), r.communityProjects()));
+			r.pushGroups(), r.pushJobs(), r.pushSystem(), r.communityProjects(), r.muteReactions(),
+			r.mutePostComments()));
 	}
 
 	@GetMapping(value = "/notifications/digest/unsubscribe", produces = MediaType.TEXT_HTML_VALUE)

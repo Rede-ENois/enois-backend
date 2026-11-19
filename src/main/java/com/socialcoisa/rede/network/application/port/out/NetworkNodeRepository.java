@@ -41,9 +41,28 @@ public interface NetworkNodeRepository {
 	void updateContract(String id, int cpuCores, int memoryMb, int diskMb, int bandwidthMbps,
 			List<NodeProfile> profiles, Instant now);
 
+	/**
+	 * Compõe {@code configVersion} sem mudar limite nem perfil.
+	 *
+	 * <p>Existe para o que entra na config assinada <b>sem</b> fazer parte do contrato de
+	 * capacidade: a banda por tipo de storage node (V348). Reusar `updateContract` para isso
+	 * reescreveria os quatro limites com os valores lidos antes, e uma mudança de capacidade
+	 * concorrente seria perdida em silêncio.</p>
+	 */
+	void touchConfig(String id, Instant now);
+
+	/**
+	 * O endereço de origem visto no último contato (brief §5, "detecção de mudança de IP").
+	 *
+	 * <p>Separado do heartbeat porque é observação do transporte, não do corpo: o nó atrás de NAT
+	 * não informa IP, e quem sabe a origem é a borda. {@code null} é "não medido" — não "sem
+	 * endereço" — e nesse caso nada é gravado.</p>
+	 */
+	void observeIp(String id, String ip, Instant now);
+
 	/** Heartbeat: capacidade observada, versão do runtime e último contato. */
 	void touch(String id, String runtimeVersion, Double cpuPercent, Integer memoryMb, Integer runningTasks,
-			Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Instant now);
+			Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Long bytesInMb, Long bytesOutMb, Instant now);
 
 	long countByStatus(NodeStatus status);
 

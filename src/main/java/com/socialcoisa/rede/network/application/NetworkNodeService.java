@@ -16,6 +16,7 @@ import com.socialcoisa.rede.network.application.port.out.ProvisionTokenRepositor
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NodeProfile;
 import com.socialcoisa.rede.network.domain.NodeStatus;
+import com.socialcoisa.rede.network.domain.StorageNodeKind;
 import com.socialcoisa.rede.shared.audit.AuditTrail;
 import com.socialcoisa.rede.shared.security.Hashes;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -61,7 +62,31 @@ public class NetworkNodeService {
 	 * porque o enroll é o único momento em que o nó passa a existir e o dono é decidido.
 	 */
 	private final com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository responsibles;
+	private final com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository storageBandwidth;
+	/**
+	 * Revogação do certificado mTLS junto com a chave (brief §10).
+	 *
+	 * <p>{@code @Nullable} porque este serviço também roda em contextos que não criam o de
+	 * certificado. Sem o laço, revogar o nó matava a API key e deixava o certificado vigente — e o
+	 * handshake aceitaria de volta o nó derrubado. O {@code accepts()} também confere o estado, então
+	 * há duas barreiras; esta existe para o banco não contar uma história que a rede não vive.</p>
+	 */
+	private final com.socialcoisa.rede.network.application.NodeCertificateService certificates;
 
+	/**
+	 * Forma anterior, sem o serviço de certificado. Existe para quem monta o serviço à mão (testes de
+	 * unidade do ciclo de vida) não precisar de um certificado que não está testando.
+	 */
+	NetworkNodeService(NetworkNodeRepository nodes, NetworkAuthorityRepository authorities,
+			ProvisionTokenRepository tokens, NodeKeyService keyService, AuditTrail audit, Clock clock,
+			long tokenTtlMinutes, long conflictSeconds, long staleSeconds,
+			com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository responsibles,
+			com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository storageBandwidth) {
+		this(nodes, authorities, tokens, keyService, audit, clock, tokenTtlMinutes, conflictSeconds, staleSeconds,
+			responsibles, storageBandwidth, null);
+	}
+
+	@org.springframework.beans.factory.annotation.Autowired
 	NetworkNodeService(NetworkNodeRepository nodes, NetworkAuthorityRepository authorities,
 			ProvisionTokenRepository tokens, NodeKeyService keyService, AuditTrail audit, Clock clock,
 			@Value("${rede.network.provision-token-ttl-minutes:30}") long tokenTtlMinutes,
@@ -69,7 +94,10 @@ public class NetworkNodeService {
 			// Mesma janela de "vivo" do scheduler, do painel e da série: uma janela só, para que um
 			// nó não esteja "conectado" num quadro e "fora" no outro.
 			@Value("${rede.network.node-stale-seconds:180}") long staleSeconds,
-			com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository responsibles) {
+			com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository responsibles,
+			com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository storageBandwidth,
+			@org.springframework.lang.Nullable
+			com.socialcoisa.rede.network.application.NodeCertificateService certificates) {
 		this.nodes = nodes;
 		this.authorities = authorities;
 		this.tokens = tokens;
@@ -80,6 +108,8 @@ public class NetworkNodeService {
 		this.conflictWindow = Duration.ofSeconds(Math.max(30, conflictSeconds));
 		this.staleAfter = Duration.ofSeconds(Math.max(30, staleSeconds));
 		this.responsibles = responsibles;
+		this.storageBandwidth = storageBandwidth;
+		this.certificates = certificates;
 	}
 
 	/**
@@ -217,8 +247,14 @@ public class NetworkNodeService {
 		// histórico de conexão). `lastSeenAt` antigo diz que houve uma janela sem contato; sem este
 		// registro, o painel mostra "conectado agora" e não conta que a máquina ficou fora.
 		registrarReconexao(authenticated, now);
+		// O IP de origem vem do transporte, não do corpo: o nó atrás de NAT (brief §5) não informa
+		// endereço, e um campo no corpo seria o nó afirmando o próprio endereço — o oposto de medir.
+		if (beat.observedIp() != null && !beat.observedIp().isBlank()) {
+			nodes.observeIp(authenticated.id(), beat.observedIp(), now);
+		}
 		nodes.touch(authenticated.id(), beat.runtimeVersion(), beat.cpuPercent(), beat.memoryMb(),
-			beat.runningTasks(), beat.diskFreeMb(), beat.diskTotalMb(), beat.contentUsedMb(), now);
+			beat.runningTasks(), beat.diskFreeMb(), beat.diskTotalMb(), beat.contentUsedMb(), beat.bytesInMb(),
+			beat.bytesOutMb(), now);
 		NetworkNode updated = require(authenticated.id());
 		quarantineOnTermConflict(updated, beat.observedTerm(), now);
 		return require(authenticated.id());
@@ -315,9 +351,84 @@ public class NetworkNodeService {
 			// Revogar o nó revoga as chaves dele na mesma transação: chave vigente de nó revogado
 			// seria acesso válido por um caminho lateral.
 			keyService.revokeAllForNode(nodeId, actorId);
+			revogarCertificados(nodeId, actorId);
 		}
 		audit.record(actorId, "NODE_" + next.name(), nodeId, "{}");
 		return require(nodeId);
+	}
+
+	/**
+	 * Pausa voluntária do participante (brief §18, "pausar participação"): ele para de emprestar a
+	 * máquina sem sair da rede.
+	 *
+	 * <p>Desconectar e pausar são coisas diferentes, e a diferença é a chave. Na desconexão o
+	 * servidor sai e as credenciais caem — para voltar, só um admin reaprova. Na pausa o nó
+	 * continua registrado, autenticando e batendo coração (o painel segue vendo a máquina viva e o
+	 * que ela mede); o que ele deixa de receber é trabalho — {@code canOperate()} só é verdadeiro
+	 * para {@code ACTIVE}, então a tarefa deixa de ser designada a ele em
+	 * {@code GET /network/tasks/next} e a colocação de réplica passa a recusá-lo.</p>
+	 *
+	 * <p>Reversível por ele mesmo ({@link #resumeParticipation}): pausa que exige admin não é
+	 * pausa, é suspensão. Idempotente — pausar duas vezes não gera efeito duplo nem auditoria
+	 * duplicada.</p>
+	 */
+	@Transactional
+	public NetworkNode pauseParticipation(String nodeId, String ownerUserId) {
+		NetworkNode node = requireOwned(nodeId, ownerUserId);
+		if (node.status() == NodeStatus.PAUSED) {
+			return node;
+		}
+		if (node.status() != NodeStatus.ACTIVE) {
+			// Parado não pode ficar mais parado: PENDING_APPROVAL não começou, e SUSPENDED,
+			// QUARANTINED e REVOKED são decisões de outro (ou terminais). Rebaixá-los a PAUSED
+			// apagaria a razão — e a pausa devolve o nó a ACTIVE, o que daria a volta por cima de
+			// uma suspensão ou de uma quarentena.
+			throw new ApiException(409, "NODE_NOT_PAUSABLE", "So um no ativo pode ser pausado.");
+		}
+		nodes.updateStatus(nodeId, NodeStatus.PAUSED, ownerUserId, clock.instant());
+		audit.record(ownerUserId, "NODE_PAUSED", nodeId, "{\"voluntary\":true}");
+		return require(nodeId);
+	}
+
+	/**
+	 * Retomada pelo próprio participante. Só um nó {@code PAUSED} volta por aqui: suspenso,
+	 * em quarentena ou pendente continuam sendo decisão administrativa, e devolvê-los a
+	 * {@code ACTIVE} por esta porta contornaria a regra 3 (nenhum nó opera sem autorização humana).
+	 *
+	 * <p>Se a região do nó foi evacuada no meio, ele volta a {@code ACTIVE} e continua sem receber
+	 * tarefa — a região é decisão humana e a retomada da pausa não a desfaz.</p>
+	 */
+	@Transactional
+	public NetworkNode resumeParticipation(String nodeId, String ownerUserId) {
+		NetworkNode node = requireOwned(nodeId, ownerUserId);
+		if (node.status() == NodeStatus.ACTIVE) {
+			return node;
+		}
+		if (node.status() != NodeStatus.PAUSED) {
+			throw new ApiException(409, "NODE_NOT_RESUMABLE", "So um no pausado pode ser retomado.");
+		}
+		nodes.updateStatus(nodeId, NodeStatus.ACTIVE, ownerUserId, clock.instant());
+		audit.record(ownerUserId, "NODE_RESUMED", nodeId, "{\"voluntary\":true}");
+		return require(nodeId);
+	}
+
+	/** O nó do participante, ou 404 — 403 confirmaria que o id existe. */
+	/** Revoga o certificado do nó junto com a chave. Nó sem certificado é caso normal, não erro. */
+	private void revogarCertificados(String nodeId, String actorId) {
+		if (certificates != null) {
+			certificates.revokeAllForNode(nodeId, actorId);
+		}
+	}
+
+	private NetworkNode requireOwned(String nodeId, String ownerUserId) {
+		NetworkNode node = require(nodeId);
+		if (!node.ownerUserId().equals(ownerUserId)) {
+			throw new ApiException(404, "NODE_UNKNOWN", "No nao encontrado.");
+		}
+		if (node.status() == NodeStatus.REVOKED) {
+			throw new ApiException(409, "NODE_REVOKED", "No revogado nao muda.");
+		}
+		return node;
 	}
 
 	/**
@@ -339,6 +450,7 @@ public class NetworkNodeService {
 		if (node.status() != NodeStatus.SUSPENDED) {
 			nodes.updateStatus(nodeId, NodeStatus.SUSPENDED, ownerUserId, clock.instant());
 			keyService.revokeAllForNode(nodeId, ownerUserId);
+			revogarCertificados(nodeId, ownerUserId);
 			audit.record(ownerUserId, "NODE_DISCONNECTED", nodeId, "{\"voluntary\":true}");
 		}
 		return require(nodeId);
@@ -353,6 +465,34 @@ public class NetworkNodeService {
 	@Transactional
 	public NetworkNode capacity(String nodeId, Integer cpuCores, Integer memoryMb, Integer diskMb,
 			Integer bandwidthMbps, String actorId) {
+		return capacity(nodeId, cpuCores, memoryMb, diskMb, bandwidthMbps, actorId, "NODE_CAPACITY_CHANGED");
+	}
+
+	/**
+	 * O participante redefinindo o que cede no próprio nó (brief §18: "definir capacidade máxima",
+	 * "definir limites de banda").
+	 *
+	 * <p>Reusa exatamente a mesma escrita do admin — a mudança compõe {@code configVersion} e o
+	 * runtime aplica na próxima leitura da config assinada. A diferença é só o ator.</p>
+	 *
+	 * <p>O participante pode <b>subir e descer</b> os próprios limites: o declarado é o que a
+	 * máquina dele cede, e o brief diz que ele "deverá conseguir controlar a utilização de sua
+	 * infraestrutura". Um teto que só o admin sobe obrigaria o participante a pedir licença para
+	 * emprestar mais da própria máquina.</p>
+	 *
+	 * <p>O que ele <b>não</b> pode mudar por esta porta é o perfil: perfil é permissão de tipo de
+	 * tarefa, e continua decisão administrativa ({@link #profiles}).</p>
+	 */
+	@Transactional
+	public NetworkNode participantCapacity(String nodeId, String ownerUserId, Integer cpuCores, Integer memoryMb,
+			Integer diskMb, Integer bandwidthMbps) {
+		requireOwned(nodeId, ownerUserId);
+		return capacity(nodeId, cpuCores, memoryMb, diskMb, bandwidthMbps, ownerUserId,
+			"NODE_CAPACITY_CHANGED_BY_PARTICIPANT");
+	}
+
+	private NetworkNode capacity(String nodeId, Integer cpuCores, Integer memoryMb, Integer diskMb,
+			Integer bandwidthMbps, String actorId, String action) {
 		if (anyNegative(cpuCores, memoryMb, diskMb, bandwidthMbps)) {
 			throw new ApiException(400, "NODE_CAPACITY_INVALID", "Capacidade nao pode ser negativa.");
 		}
@@ -364,9 +504,38 @@ public class NetworkNodeService {
 			diskMb != null ? diskMb : node.declaredDiskMb(),
 			bandwidthMbps != null ? bandwidthMbps : node.declaredBandwidthMbps(),
 			node.profiles().stream().toList(), clock.instant());
-		audit.record(actorId, "NODE_CAPACITY_CHANGED", nodeId, "{\"cpuCores\":" + (cpuCores == null ? "null"
-			: cpuCores) + ",\"memoryMb\":" + (memoryMb == null ? "null" : memoryMb) + "}");
+		audit.record(actorId, action, nodeId, "{\"cpuCores\":" + (cpuCores == null ? "null" : cpuCores)
+			+ ",\"memoryMb\":" + (memoryMb == null ? "null" : memoryMb) + ",\"diskMb\":"
+			+ (diskMb == null ? "null" : diskMb) + ",\"bandwidthMbps\":"
+			+ (bandwidthMbps == null ? "null" : bandwidthMbps) + "}");
 		return require(nodeId);
+	}
+
+	/**
+	 * Banda própria de um tipo de storage node (brief §6). Reversível pelo participante; o tipo já
+	 * tem de estar entre os perfis dele (quem confere é {@code NetworkParticipantService}).
+	 *
+	 * <p>A mudança compõe {@code configVersion}: a lista entra na config assinada (formato 7), e
+	 * sem versão nova o runtime continuaria aplicando a banda anterior.</p>
+	 */
+	@Transactional
+	public NetworkNode setStorageBandwidth(String nodeId, String ownerUserId, StorageNodeKind kind, int mbps) {
+		NetworkNode node = requireOwned(nodeId, ownerUserId);
+		storageBandwidth.put(nodeId, kind, mbps);
+		nodes.touchConfig(nodeId, clock.instant());
+		audit.record(ownerUserId, "NODE_STORAGE_BANDWIDTH_CHANGED", nodeId,
+			"{\"kind\":\"" + kind.name() + "\",\"bandwidthMbps\":" + mbps + "}");
+		return require(node.id());
+	}
+
+	/** Remove a banda própria do tipo: ele volta a usar a banda geral do nó. */
+	@Transactional
+	public NetworkNode removeStorageBandwidth(String nodeId, String ownerUserId, StorageNodeKind kind) {
+		NetworkNode node = requireOwned(nodeId, ownerUserId);
+		storageBandwidth.remove(nodeId, kind);
+		nodes.touchConfig(nodeId, clock.instant());
+		audit.record(ownerUserId, "NODE_STORAGE_BANDWIDTH_REMOVED", nodeId, "{\"kind\":\"" + kind.name() + "\"}");
+		return require(node.id());
 	}
 
 	/**
@@ -439,7 +608,21 @@ public class NetworkNodeService {
 	}
 
 	public record HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
-			Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Integer observedTerm) {
+			Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Long bytesInMb,
+			Long bytesOutMb, Integer observedTerm, String observedIp) {
+
+		/**
+		 * Heartbeat de runtime anterior ao tráfego medido (V345): os dois contadores ficam nulos.
+		 *
+		 * <p>Nulo é "não mediu", nunca zero — zero afirmaria tráfego nenhum e o painel do participante
+		 * (§18, "consultar tráfego") mostraria um número inventado para quem simplesmente roda uma
+		 * versão antiga.</p>
+		 */
+		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
+				Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Integer observedTerm) {
+			this(runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, diskTotalMb, contentUsedMb, null,
+				null, observedTerm, null);
+		}
 
 		/**
 		 * Heartbeat de runtime que ainda não mede o tamanho do volume (anterior ao formato 6).
@@ -450,7 +633,8 @@ public class NetworkNodeService {
 		 */
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Integer observedTerm) {
-			this(runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, diskTotalMb, null, observedTerm);
+			this(runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, diskTotalMb, null, null, null,
+				observedTerm, null);
 		}
 
 		/**
@@ -461,7 +645,8 @@ public class NetworkNodeService {
 		 */
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Integer observedTerm) {
-			this(runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, null, null, observedTerm);
+			this(runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, null, null, null, null,
+				observedTerm, null);
 		}
 	}
 }

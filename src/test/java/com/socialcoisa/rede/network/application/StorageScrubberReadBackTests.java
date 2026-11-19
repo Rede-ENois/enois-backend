@@ -22,11 +22,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NodeProfile;
 import com.socialcoisa.rede.network.domain.NodeStatus;
 import com.socialcoisa.rede.network.domain.StorageObject;
+import com.socialcoisa.rede.network.domain.StorageRebalance;
 import com.socialcoisa.rede.network.domain.StorageObjectState;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
 import com.socialcoisa.rede.shared.audit.AuditTrail;
@@ -54,6 +56,7 @@ class StorageScrubberReadBackTests {
 	Path root;
 
 	private InMemoryCatalog catalog;
+	private NetworkNodeRepository nodes;
 	private AuditTrail audit;
 	private NodeBodyStore nodeBodies;
 	private StorageCatalogService service;
@@ -62,6 +65,7 @@ class StorageScrubberReadBackTests {
 	@BeforeEach
 	void setUp() {
 		catalog = new InMemoryCatalog();
+		nodes = mock(NetworkNodeRepository.class);
 		audit = mock(AuditTrail.class);
 		// O mesmo diretório que o processo usa quando roda junto do nó local. Fica vazio nos testes
 		// de releitura da réplica 0; o teste do sumiço é que grava nele.
@@ -69,7 +73,7 @@ class StorageScrubberReadBackTests {
 		service = new StorageCatalogService(catalog, audit, Clock.fixed(NOW, ZoneOffset.UTC), 10_000, root.toString(),
 			stubPlacement(), nodeBodies);
 		scrubber = new StorageScrubber(catalog, stubPlacement(), audit, Clock.fixed(NOW, ZoneOffset.UTC), service,
-			nodeBodies);
+			nodeBodies, nodes);
 	}
 
 	/** A colocação não participa da releitura: o alvo de cópias é 2 e nenhum nó é candidato. */
@@ -276,7 +280,7 @@ class StorageScrubberReadBackTests {
 			if (existing.isPresent()) {
 				return existing.get();
 			}
-			StorageObject object = new StorageObject(id, bucket, key, contentType, null, null,
+			StorageObject object = StorageObject.current(id, bucket, key, contentType, null, null,
 				StorageObjectState.PENDING, createdBy, now, now, null);
 			objects.add(object);
 			return object;
@@ -287,7 +291,7 @@ class StorageScrubberReadBackTests {
 			for (int i = 0; i < objects.size(); i++) {
 				StorageObject o = objects.get(i);
 				if (o.id().equals(id) && o.state() == StorageObjectState.PENDING) {
-					objects.set(i, new StorageObject(o.id(), o.bucket(), o.key(), o.contentType(), bytes, sha256,
+					objects.set(i, StorageObject.current(o.id(), o.bucket(), o.key(), o.contentType(), bytes, sha256,
 						StorageObjectState.STORED, o.createdBy(), o.createdAt(), now, null));
 					return true;
 				}
@@ -301,6 +305,23 @@ class StorageScrubberReadBackTests {
 		}
 
 		@Override
+		public boolean discardPending(String id) {
+			throw new UnsupportedOperationException("nao usado neste teste");
+		}
+		@Override
+		public boolean restorePending(String id) {
+			for (int i = 0; i < objects.size(); i++) {
+				StorageObject o = objects.get(i);
+				if (o.id().equals(id) && o.state() == StorageObjectState.STORED) {
+					objects.set(i, StorageObject.current(o.id(), o.bucket(), o.key(), o.contentType(), null, null,
+						StorageObjectState.PENDING, o.createdBy(), o.createdAt(), java.time.Instant.now(), null));
+					return true;
+				}
+			}
+			return false;
+		}
+
+
 		public List<StorageObject> list(String bucket, String prefix, String afterKey, int limit) {
 			return objects.stream()
 				.filter(o -> o.bucket().equals(bucket) && o.state() == StorageObjectState.STORED)
@@ -360,6 +381,19 @@ class StorageScrubberReadBackTests {
 		}
 
 		@Override
+		public java.util.Map<String, long[]> summarizeBuckets() {
+			java.util.Map<String, long[]> porBucket = new java.util.TreeMap<>();
+			for (StorageObject o : objects) {
+				if (o.state() == StorageObjectState.DELETED) {
+					continue;
+				}
+				long[] par = porBucket.computeIfAbsent(o.bucket(), k -> new long[2]);
+				par[0]++;
+				par[1] += o.bytes() == null ? 0 : o.bytes();
+			}
+			return porBucket;
+		}
+
 		public java.util.Map<String, long[]> summarizeObjects() {
 			java.util.Map<String, long[]> porEstado = new java.util.LinkedHashMap<>();
 			for (StorageObject o : objects) {
@@ -384,6 +418,128 @@ class StorageScrubberReadBackTests {
 		@Override
 		public List<StoragePlacement> placementsOnNode(String nodeId) {
 			return placements.stream().filter(p -> p.nodeId().equals(nodeId)).toList();
+		}
+
+		// --- Ciclo de vida (§14, V352): o fake guarda o mínimo que os serviços leem ---
+
+		private final java.util.Map<String, com.socialcoisa.rede.network.domain.StorageBucketPolicy> policies =
+			new java.util.LinkedHashMap<>();
+
+		@Override
+		public StorageObject insertVersion(String id, String bucket, String key, String contentType, String createdBy,
+				Instant now, long version) {
+			StorageObject object = new StorageObject(id, bucket, key, contentType, null, null,
+				StorageObjectState.PENDING, createdBy, now, now, null, version, null, null);
+			objects.add(object);
+			return object;
+		}
+
+		@Override
+		public boolean markSuperseded(String bucket, String key, String supersededBy, Instant now) {
+			for (int i = 0; i < objects.size(); i++) {
+				StorageObject o = objects.get(i);
+				if (o.bucket().equals(bucket) && o.key().equals(key) && o.currentVersion()) {
+					objects.set(i, new StorageObject(o.id(), o.bucket(), o.key(), o.contentType(), o.bytes(),
+						o.sha256(), o.state(), o.createdBy(), o.createdAt(), now, o.deletedAt(), o.version(),
+						supersededBy, o.expiresAt()));
+					return true;
+				}
+			}
+			return false;
+		}
+
+		@Override
+		public void setExpiresAt(String id, Instant expiresAt) {
+			for (int i = 0; i < objects.size(); i++) {
+				StorageObject o = objects.get(i);
+				if (o.id().equals(id)) {
+					objects.set(i, new StorageObject(o.id(), o.bucket(), o.key(), o.contentType(), o.bytes(),
+						o.sha256(), o.state(), o.createdBy(), o.createdAt(), o.updatedAt(), o.deletedAt(),
+						o.version(), o.supersededBy(), expiresAt));
+				}
+			}
+		}
+
+		@Override
+		public List<StorageObject> versions(String bucket, String key) {
+			return objects.stream().filter(o -> o.bucket().equals(bucket) && o.key().equals(key)).toList();
+		}
+
+		@Override
+		public List<StorageObject> expired(Instant now, int limit) {
+			return objects.stream().filter(o -> o.expired(now)).limit(limit).toList();
+		}
+
+		@Override
+		public List<StorageObject> supersededBefore(Instant cutoff, int limit) {
+			return objects.stream().filter(o -> !o.currentVersion() && !o.updatedAt().isAfter(cutoff))
+				.limit(limit).toList();
+		}
+
+		@Override
+		public Optional<com.socialcoisa.rede.network.domain.StorageBucketPolicy> bucketPolicy(String bucket) {
+			return Optional.ofNullable(policies.get(bucket));
+		}
+
+		@Override
+		public com.socialcoisa.rede.network.domain.StorageBucketPolicy saveBucketPolicy(
+				com.socialcoisa.rede.network.domain.StorageBucketPolicy policy) {
+			policies.put(policy.bucket(), policy);
+			return policy;
+		}
+
+		// --- Rebalanceamento (§16, V354): o fake guarda o mínimo ---
+
+		private final java.util.List<StorageRebalance> rebalances = new java.util.ArrayList<>();
+
+		@Override
+		public void saveRebalance(StorageRebalance rebalance) {
+			rebalances.add(rebalance);
+		}
+
+		@Override
+		public java.util.Optional<StorageRebalance> activeRebalance(String objectId, int fromReplica) {
+			return rebalances.stream()
+				.filter(r -> r.objectId().equals(objectId) && r.fromReplica() == fromReplica
+					&& r.state().active())
+				.findFirst();
+		}
+
+		@Override
+		public java.util.Optional<StorageRebalance> findRebalance(String id) {
+			return rebalances.stream().filter(r -> r.id().equals(id)).findFirst();
+		}
+
+		@Override
+		public java.util.List<StorageRebalance> activeRebalances(int limit) {
+			return rebalances.stream().filter(r -> r.state().active()).limit(limit).toList();
+		}
+
+		@Override
+		public boolean transitionRebalance(String id, StorageRebalance.State from, StorageRebalance.State to,
+				String failureReason, Instant now) {
+			for (int i = 0; i < rebalances.size(); i++) {
+				StorageRebalance r = rebalances.get(i);
+				if (r.id().equals(id) && r.state() == from) {
+					rebalances.set(i, new StorageRebalance(r.id(), r.objectId(), r.fromReplica(), r.fromNodeId(),
+						r.toReplica(), r.toNodeId(), to, failureReason, r.bytes(), r.bandwidthLimitMbps(),
+						r.requestedBy(), r.createdAt(), now));
+					return true;
+				}
+			}
+			return false;
+		}
+
+		// --- Gateway S3 (§11, V356): os buckets do dono ---
+
+		@Override
+		public java.util.List<String> bucketsOf(String ownerUserId) {
+			return objects.stream()
+				.filter(o -> o.createdBy() != null && o.createdBy().equals(ownerUserId))
+				.map(StorageObject::bucket)
+				.distinct()
+				.sorted()
+				.toList();
 		}
 	}
 }

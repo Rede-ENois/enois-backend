@@ -171,11 +171,11 @@ O consumidor deve encaminhar `SANCTIONS_ONLY`/`ACCOUNT_SUSPENDED` para `/conta-s
 áreas privadas normais. Após 401, entrar novamente; após 403 de CSRF ou falha de rede, não presumir
 perda de sessão ou ausência de penalidades. Uma falha na consulta deve oferecer erro/repetição.
 
-Migração aditiva: `V345__auth_session_access_scope.sql`, sem alteração de sanções ou evidências
+Migração aditiva: `V366__auth_session_access_scope.sql`, sem alteração de sanções ou evidências
 existentes. Nenhuma alteração em classificadores, bot, agressividade, fila humana, conversão,
 worker de vencimento, liberação automática ou elegibilidade de BAN/PERMABAN.
 
-A migração própria foi renumerada de V296, depois V341 e V344, para V345 antes da integração da PR:
-a QA já possui `V296__eroleplay_chat.sql` e `V344__network_node_observed_content_usage.sql`.
-O SQL da sessão não mudou; nenhuma migração da QA foi editada. A PR ainda não integrada
-não deve ser aplicada com as numerações antigas.
+A migração própria foi renumerada de V296, depois V341, V344 e V345, até V366 na integração:
+a QA publicou `V296__eroleplay_chat.sql`, `V344__network_node_observed_content_usage.sql` e
+`V345__network_node_traffic.sql` depois das renomeações anteriores. O SQL da sessão não mudou;
+nenhuma migração da QA foi editada. A PR não deve ser aplicada com as numerações antigas.

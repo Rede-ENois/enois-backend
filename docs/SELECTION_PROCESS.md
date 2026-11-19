@@ -25,6 +25,10 @@ conduzir o processo seletivo dentro do Énóis.
 A vaga, a candidatura, a entrevista (`docs` de vagas), as mensagens e as notificações são as
 mesmas de antes. Nada de segunda vaga, segunda candidatura ou segundo mensageiro.
 
+Edição, encerramento, reabertura e definição do prazo usam `findByIdForUpdate` dentro da
+transação. A edição preserva o estado e o prazo lidos após adquirir o lock, sem sobrescrever
+uma mudança concorrente no ciclo de vida.
+
 ## Modelo
 
 - **`selection_stages`** — `(id, job_id, name, position, created_at)`. Cada vaga tem o próprio
@@ -410,6 +414,12 @@ decisão continua valendo — o candidato ao menos vê o estado atualizado na li
 O candidato acompanha o **próprio** processo, sem segundo sistema e sem canal novo: tudo sai das
 tabelas que o pipeline já grava.
 
+`GET /jobs/applications` mantém os cards e a resposta `{ "items": [...], "nextCursor": ... }`.
+A paginação ocorre no banco por `(appliedAt DESC, id DESC)`, com cursor composto do `CursorCodec`;
+`postedAt` continua sendo a publicação da vaga. Cursor inválido, inclusive desempate não numérico,
+responde 400 `INVALID_CURSOR`. Cursores antigos baseados em `postedAt` devem ser descartados;
+um instante puro passa a representar um corte estrito em `appliedAt`, sem desempate.
+
 | Onde | Antes | Agora |
 |---|---|---|
 | `GET /jobs/applications/mine` | só o estado clássico (`IN_REVIEW`) | também `stageName` — o nome da etapa atual, da mesma fonte do board (último movimento; sem movimento, a entrada do fluxo) |
@@ -479,6 +489,10 @@ tirados da **disponibilidade semanal que quem está marcando declarou na agenda*
 availability`), em passos de meia hora, descartando o que já ocupa a agenda profissional dessa
 pessoa. Nunca lê a agenda do candidato: a agenda dele é privada, e quem responde se o horário serve
 é ele, pelo convite.
+
+Nenhum começo sugerido antecede `max(from, agora)`. O passo continua ancorado no início da
+disponibilidade: numa janela iniciada às 9h, consultar a partir de 11h10 começa nas 11h30,
+sem criar um horário fora da grade.
 
 Sem janela declarada, a resposta traz `reasonCode` `NO_AVAILABILITY`; com as janelas todas ocupadas,
 `NO_FREE_SLOT` — lista vazia **com motivo**, nunca uma lista inventada de horários.

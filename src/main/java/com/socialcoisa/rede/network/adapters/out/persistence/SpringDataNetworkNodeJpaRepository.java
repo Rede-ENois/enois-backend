@@ -66,14 +66,41 @@ interface SpringDataNetworkNodeJpaRepository extends JpaRepository<NetworkNodeJp
 			@Param("disk") int disk, @Param("bandwidth") int bandwidth, @Param("profiles") String profiles,
 			@Param("now") Instant now);
 
-	@Modifying
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Query("update NetworkNodeJpaEntity n set n.configVersion = n.configVersion + 1, n.configIssuedAt = :now "
+			+ "where n.id = :id and n.status <> 'REVOKED'")
+	int touchConfig(@Param("id") String id, @Param("now") Instant now);
+
+	/**
+	 * Marca o instante da mudança de IP <b>antes</b> de sobrescrever o endereço.
+	 *
+	 * <p>Duas instruções em vez de um `case when` numa só: a condição "o IP anterior não é nulo e
+	 * é diferente do novo" precisa ler a coluna que a outra instrução escreve, e no JPA/JPQL isso
+	 * sai como `InvalidDataAccessApiUsageException` em alguns caminhos de flush. Aqui a ordem é
+	 * explícita: primeiro decide olhando o valor antigo, depois grava o novo.</p>
+	 *
+	 * <p>Não marca quando não havia valor: o primeiro contato é conhecimento, não mudança.</p>
+	 */
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Query("update NetworkNodeJpaEntity n set n.observedIpChangedAt = :now "
+			+ "where n.id = :id and n.observedIp is not null and n.observedIp <> :ip")
+	int markIpChanged(@Param("id") String id, @Param("ip") String ip, @Param("now") Instant now);
+
+	/** Grava o endereço de origem visto agora. Separado da marca para a ordem não depender do ORM. */
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Query("update NetworkNodeJpaEntity n set n.observedIp = :ip where n.id = :id")
+	int setObservedIp(@Param("id") String id, @Param("ip") String ip);
+
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
 	@Query("update NetworkNodeJpaEntity n set n.runtimeVersion = :version, n.observedCpuPercent = :cpu, "
 			+ "n.observedMemoryMb = :memory, n.observedRunningTasks = :tasks, n.observedDiskFreeMb = :diskFree, "
 			+ "n.observedDiskTotalMb = :diskTotal, n.observedContentUsedMb = :usedMb, "
+			+ "n.observedBytesInMb = :bytesIn, n.observedBytesOutMb = :bytesOut, "
 			+ "n.lastSeenAt = :now where n.id = :id")
 	int heartbeat(@Param("id") String id, @Param("version") String version, @Param("cpu") Double cpu,
 			@Param("memory") Integer memory, @Param("tasks") Integer tasks, @Param("diskFree") Long diskFree,
-			@Param("diskTotal") Long diskTotal, @Param("usedMb") Long usedMb, @Param("now") Instant now);
+			@Param("diskTotal") Long diskTotal, @Param("usedMb") Long usedMb, @Param("bytesIn") Long bytesIn,
+			@Param("bytesOut") Long bytesOut, @Param("now") Instant now);
 
 	@Query("select n from NetworkNodeJpaEntity n where n.status = 'ACTIVE' and n.lastSeenAt >= :seenAfter "
 			+ "order by n.lastSeenAt desc")

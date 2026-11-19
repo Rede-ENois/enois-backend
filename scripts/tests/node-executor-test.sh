@@ -43,6 +43,16 @@ sign_limits_config() {
   sign_config "6|$cv|nd_exec1|$profiles|$cpu|$mem|$disk|$bw|$tasks|$routes|2026-11-12T12:00:00Z|$ttl|$term|$free|$total"
 }
 
+sign_kind_config() {
+  # sign_kind_config <configVersion> <profiles-json> <tasks-json> <storageBandwidth-json> [term]:
+  # formato 7 (brief §6) — a lista de banda por tipo entra no FIM, depois do tamanho do volume.
+  # Os limites são os da config de réplica (1 CPU / 1024 MB / 20 GB / 8 Mbps), os mesmos que os
+  # mocks abaixo servem: linha assinada e JSON têm de dizer o mesmo, ou a assinatura não confere.
+  local cv="$1" profiles="$2" tasks="$3" kinds="$4" term="${5:-2}"
+  local line="7|$cv|nd_exec1|$profiles|1|1024|20480|8|$tasks|[]|2026-11-12T12:00:00Z|300|$term|ausente|ausente|$kinds"
+  sign_config "$line"
+}
+
 PASS=0
 assert_eq() {
   local name="$1" expected="$2" actual="$3"
@@ -160,6 +170,13 @@ assert_contains 'heartbeat carrega as linhas do painel (logs)' "$hb_line" '"logs
 assert_contains 'linha do painel tem nivel' "$hb_line" '"level":"INFO"'
 assert_contains 'a decisao de aceite vira linha do painel' "$hb_line" 'aceito pela rede'
 assert_contains 'linha do painel leva o instante' "$hb_line" '"at":"'
+# O tráfego de rede (brief §8.2) vai no mesmo heartbeat: é a única saída do nó. O runtime mede
+# /proc/net/dev do PRÓPRIO host (não dá para forjar num harness), então o que se prende aqui é a
+# forma do contrato que o Control Plane já aceita (V345): os dois campos como inteiros em MiB.
+assert_contains 'heartbeat leva o trafego de entrada em MiB' "$hb_line" '"bytesInMb":'
+assert_contains 'heartbeat leva o trafego de saida em MiB' "$hb_line" '"bytesOutMb":'
+assert_not_contains 'trafego medido nao e nulo nem negativo' \
+  "$(/bin/grep -oE '"bytes(In|Out)Mb":-?[0-9]+' <<<"$hb_line")" '-'
 
 # ------------------------------------------------- cenário 2: tarefa fora da config
 out=$(run_one_cycle "$TASK_FORBIDDEN")
@@ -1093,6 +1110,58 @@ assert_contains 'nó sem banda declarada baixa sem --limit-rate' "$(cat "$TMP/cu
 assert_not_contains 'banda 0 não injeta limite' "$(cat "$TMP/curl-calls")" '--limit-rate'
 assert_contains 'sincronização segue completa sem teto' "$(cat "$TMP/curl-calls")" 'nobw/synced'
 
+# ------------------------------------------------- cenário 25b: banda por tipo de storage (formato 7)
+# Brief §6: o participante dá a cada tipo de storage node um teto próprio. A lista assinada
+# ["MEDIA=2"] vale MAIS que a banda geral (8 Mbps): o tipo reservou 2 para si, e aplicar os 8
+# do nó seria ceder quatro vezes o que ele aceitou. 2 Mbps = 250 kB/s.
+NKIND="$TMP/node-kind"; rm -rf "$NKIND"; mkdir -p "$NKIND"; chmod 700 "$NKIND"
+cp "$NH/node.json" "$NKIND/node.json"; cp "$NH/api-key" "$NKIND/api-key"
+cp "$NH/pinning-key" "$NKIND/pinning-key"
+CONFIG_KIND='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":7,"ttlSeconds":300,"configVersion":15,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":20480,"bandwidthMbps":8,"storageBandwidth":["MEDIA=2"]},"allowedTasks":["READ_QUERY"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_kind_config 15 '["NODE_READ_REPLICA"]' '["READ_QUERY"]' '["MEDIA=2"]')"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '$CONFIG_KIND' ;;
+  */network/tasks/next) printf '%s' '{"tasks":[{"taskId":"tk_kind","type":"READ_QUERY","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"replica:kind","payload":"{\\"kind\\":\\"PROFILE\\"}","dataClass":"PUBLIC_DATA"}],"mode":"NORMAL","serverTime":"now"}' ;;
+  */network/replica/PROFILE*) printf '%s' '{"kind":"PROFILE","items":["kinduser"],"hasMore":false,"nextAfterAt":"2026-11-11T10:00:00Z","nextAfterId":"u1"}' ;;
+  */network/content/PROFILE/kinduser/synced) printf '%s' '{"contentId":"kinduser","status":"SYNCED"}' ;;
+  */network/content/PROFILE/kinduser*)
+    printf '%s' '{"kind":"PROFILE","contentId":"kinduser","version":1,"contentHash":"h-kd","changed":true,"body":"{\\"username\":\"nb\"}"}'
+    [[ "\$*" == *"-w"* ]] && printf '\n200' ;;
+  */network/tasks/*/result) printf '%s' '{"taskId":"x","status":"DONE","applied":true,"reason":"ok"}' ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom "$NKIND")
+assert_contains 'formato 7 com banda por tipo é aceito' "$(cat "$TMP/curl-calls")" 'content/PROFILE/kinduser/synced'
+assert_contains 'o teto do tipo vence a banda geral' "$(cat "$TMP/curl-calls")" '--limit-rate 250k'
+assert_not_contains 'a banda geral de 8 Mbps não sobrescreve o tipo' "$(cat "$TMP/curl-calls")" '--limit-rate 1000k'
+
+# A lista vai ASSINADA: trocar "MEDIA=2" por "MEDIA=100" depois de assinada tem de invalidar.
+# Sem esta conferência, o runtime reconstruiria a linha sem a lista (formato <= 6) e a
+# adulteração passaria — o participante cedia o que o intermediário quisesse.
+TAMPERED_KIND="$(sign_kind_config 16 '["NODE_READ_REPLICA"]' '["READ_QUERY"]' '["MEDIA=2"]')"
+: > "$TMP/curl-calls"
+cat > "$TMP/curl" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) printf '%s' '{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":7,"ttlSeconds":300,"configVersion":16,"profiles":["NODE_READ_REPLICA"],"limits":{"cpuCores":1,"memoryMb":1024,"diskMb":20480,"bandwidthMbps":8,"storageBandwidth":["MEDIA=100"]},"allowedTasks":["READ_QUERY"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"$TAMPERED_KIND","algorithm":"Ed25519","publicKey":"$CP_PUB"}' ;;
+  *) printf 'CHAMADA-INESPERADA %s' "\$url" >> "$TMP/curl-calls" ;;
+esac
+MOCK
+chmod +x "$TMP/curl"
+out=$(run_custom)
+assert_contains 'banda por tipo adulterada invalida a assinatura' "$out" 'assinatura da config não confere com o pino'
+assert_not_contains 'config com banda por tipo adulterada não habilita execução' "$(cat "$TMP/curl-calls")" '/network/tasks/next'
+
 # ------------------------------------------------- cenário 26: Control Plane fora dentro do TTL
 # Doc 06 §6, primeira linha: "Control Plane fora por < TTL de config → nós continuam com a última
 # config assinada". Antes do TTL não existia: bastava o GET da config falhar uma vez e o nó parava,
@@ -1522,6 +1591,31 @@ out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SE
 assert_contains 'teto de disco menor que o objeto recusa antes de confirmar' "$out" 'STORAGE_OBJECT_TOO_LARGE'
 assert_not_contains 'e nao confirma a copia' "$(cat "$TMP/curl-calls")" '/replica'
 rm -f "$TMP"/object-put.*
+# O cenario 3 trocou o corpo do mock pelo grande; de volta ao pequeno (sha/bytes do OBJ_TASK).
+OBJ_BODY='corpo-do-objeto-1234567890'
+
+# 4. teto de banda POR TRANSFERENCIA (brief §16): o rebalanceamento pede quanto ceder para este
+# objeto e o no aplica o MENOR entre o pedido e a banda declarada (100 Mbps no cenario). Sem isso
+# o `bandwidthLimitMbps` era gravado no CP e nunca chegava ao no, que aplicava so a banda declarada.
+OBJ_TASK_LIMITE='{"tasks":[{"taskId":"tk_obj4","type":"OBJECT_PUT","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"storage:sob_w:1","payload":"{\"objectId\":\"sob_w\",\"bucket\":\"fotos\",\"key\":\"w.jpg\",\"sha256\":\"'"$OBJ_SHA"'\",\"bytes\":'"$OBJ_BYTES"',\"replica\":2,\"bandwidthLimitMbps\":8}","dataClass":"PUBLIC_MEDIA"}],"mode":"NORMAL","serverTime":"now"}'
+TASK_NEXT_BODY="$OBJ_TASK_LIMITE" make_curl_storage
+: > "$TMP/curl-calls"
+out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SECONDS=1 \
+  /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true)
+assert_contains 'a transferencia com teto proprio baixa e conclui' "$out" 'DONE tk_obj4'
+# 8 Mbps = 1000 kB/s; se o teto da transferencia fosse ignorado, valeria 100 Mbps = 12500k.
+assert_contains 'o teto da transferencia vale no download do corpo' "$(cat "$TMP/curl-calls")" 'limit-rate 1000k'
+assert_not_contains 'e nao fica o teto declarado do no' "$(cat "$TMP/curl-calls")" 'limit-rate 12500k'
+
+# Teto da transferencia ACIMA do declarado: quem manda e o do no (menor dos dois).
+OBJ_TASK_LIMITE_ALTO='{"tasks":[{"taskId":"tk_obj5","type":"OBJECT_PUT","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"storage:sob_v:1","payload":"{\"objectId\":\"sob_v\",\"bucket\":\"fotos\",\"key\":\"v.jpg\",\"sha256\":\"'"$OBJ_SHA"'\",\"bytes\":'"$OBJ_BYTES"',\"replica\":3,\"bandwidthLimitMbps\":900}","dataClass":"PUBLIC_MEDIA"}],"mode":"NORMAL","serverTime":"now"}'
+TASK_NEXT_BODY="$OBJ_TASK_LIMITE_ALTO" make_curl_storage
+: > "$TMP/curl-calls"
+out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SECONDS=1 \
+  /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true)
+assert_contains 'teto da transferencia acima do declarado usa o do no' "$(cat "$TMP/curl-calls")" 'limit-rate 12500k'
+assert_not_contains 'e nao passa do que o participante cedeu' "$(cat "$TMP/curl-calls")" 'limit-rate 112500k'
+rm -f "$TMP"/object-put.*
 
 # ------------------------------------------------- cenário: varredura do próprio disco (§5.8)
 # O Control Plane só relê o disco da instalação em que roda. A cópia DESTE nó só o dono confere:
@@ -1581,5 +1675,24 @@ out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SE
   /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true)
 assert_not_contains 'no sem OBJECT_PUT nao manda relatorio' "$(cat "$TMP/curl-calls")" '/network/storage/scrub'
 
+# ------------------------------------- atualizacao do runtime: e do HOST, nao do container
+# O slot de reserva nao se atualizava sozinho: saia release, o master recebia deploy, e a reserva
+# ficava na versao antiga -- justamente ela que assume quando o master cai. A correcao vive no
+# host (node-auto-update.sh + bootstrap --update, provados em node-runtime-test.sh); o runtime do
+# no NAO tem parte nisso: ele nao tem docker nem pode trocar a si mesmo. Esta secao fixa a
+# fronteira -- um `maybe_self_update` no container seria um segundo caminho com regras proprias.
+runtime_prelude() {
+  sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'
+}
+HEARTBEAT_TARGET='{"nodeId":"nd_exec1","status":"ACTIVE","profiles":["NODE_WORKER"],"serverTime":"now","mode":"NORMAL","acceptTasks":true,"targetRuntimeVersion":"qa@abcdef12"}'
+: > "$TMP/curl-calls"
+make_curl
+out=$(HEARTBEAT_OK="$HEARTBEAT_TARGET" CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" \
+  RUNTIME_VERSION='qa@11111111' NODE_POLL_SECONDS=1 \
+  /bin/bash -c "$(runtime_prelude; echo cycle)" 2>&1 || true)
+assert_not_contains 'heartbeat com alvo nao faz o container escrever pedido de atualizacao' \
+  "$(ls "$NH" 2>/dev/null)" 'update-requested'
+assert_contains 'o heartbeat continua sendo a unica saida' "$(cat "$TMP/curl-calls")" 'X-Node-Id: nd_exec1'
+assert_not_contains 'nenhuma chamada de atualizacao sai do runtime' "$(cat "$TMP/curl-calls")" 'bootstrap'
 
 printf '\nTodos os cenarios passaram (%d assercoes).\n' "$PASS"

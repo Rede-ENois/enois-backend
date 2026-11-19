@@ -102,7 +102,7 @@ class NetworkCapacityReservationTests {
 		var config = mockMvc
 			.perform(get("/network/nodes/me/config").header("X-Node-Id", "nd_cap").header("X-Node-Key", key))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.formatVersion").value(6))
+			.andExpect(jsonPath("$.formatVersion").value(7))
 			.andExpect(jsonPath("$.limits.diskTotalMb").value(2097152))
 			.andExpect(jsonPath("$.limits.diskMb").value(1536000))
 			.andReturn();
@@ -114,11 +114,13 @@ class NetworkCapacityReservationTests {
 			limits.get("bandwidthMbps").asString(), jsonList(tree.get("allowedTasks")),
 			jsonList(tree.get("allowedRoutes")), tree.get("issuedAt").asString(),
 			tree.get("ttlSeconds").asString(), tree.get("term").asString(),
-			textOrAbsent(limits.get("diskFreeMb")), textOrAbsent(limits.get("diskTotalMb")));
+			textOrAbsent(limits.get("diskFreeMb")), textOrAbsent(limits.get("diskTotalMb")),
+			// Formato 7: a banda por tipo (brief §6) fecha a linha, depois do tamanho do volume.
+			jsonList(limits.get("storageBandwidth")));
 		assertThat(verify(canonical, tree.get("signature").asString())).as("canonical montada: %s", canonical).isTrue();
 
 		// O total trocado no caminho não confere: é a assinatura que impede anunciar outra reserva.
-		String comOutroTotal = canonical.replaceFirst("\\|2097152$", "|512000");
+		String comOutroTotal = canonical.replaceFirst("\\|2097152\\|", "|512000|");
 		assertThat(verify(comOutroTotal, tree.get("signature").asString())).isFalse();
 	}
 

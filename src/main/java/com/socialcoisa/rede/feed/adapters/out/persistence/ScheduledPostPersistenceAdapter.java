@@ -54,6 +54,11 @@ class ScheduledPostPersistenceAdapter implements ScheduledPostRepository {
 	}
 
 	@Override
+	public Optional<ScheduledPost> findByIdForUpdate(String id) {
+		return repository.findByIdForUpdate(id).map(this::toDomain);
+	}
+
+	@Override
 	public void delete(String id) {
 		repository.deleteById(id);
 	}

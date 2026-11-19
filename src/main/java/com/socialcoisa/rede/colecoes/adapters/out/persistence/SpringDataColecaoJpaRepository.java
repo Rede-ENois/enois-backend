@@ -17,4 +17,7 @@ interface SpringDataColecaoJpaRepository extends JpaRepository<ColecaoSalvaJpaEn
 		""")
 	List<ColecaoSalvaJpaEntity> doDonoBefore(@Param("ownerId") String ownerId, @Param("before") Instant before,
 		Pageable pageable);
+
+	/** Todas as coleções do dono, mais novas primeiro — o seletor do post lista tudo. */
+	List<ColecaoSalvaJpaEntity> findByOwnerIdOrderByCreatedAtDesc(String ownerId);
 }

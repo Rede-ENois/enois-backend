@@ -3,6 +3,7 @@ package com.socialcoisa.rede.network.application;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.Map;
 
 import org.springframework.stereotype.Service;
@@ -12,6 +13,7 @@ import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
 import com.socialcoisa.rede.network.domain.DataClass;
 import com.socialcoisa.rede.network.domain.NetworkNode;
+import com.socialcoisa.rede.network.domain.NodeStatus;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
 import com.socialcoisa.rede.network.domain.TaskType;
@@ -81,6 +83,21 @@ public class StorageReplicationDispatcher {
 		this.clock = clock;
 	}
 
+	/** O nó pelo id, para quem decide para onde mover sem ir direto ao repositório. */
+	Optional<NetworkNode> node(String nodeId) {
+		return nodes.findById(nodeId);
+	}
+
+	/**
+	 * O nó pode receber <b>este</b> objeto? Ativo, com perfil de armazenamento e objeto servível.
+	 * É a mesma condição do {@link #dispatch}: perguntá-la antes de designar evita criar uma
+	 * transferência que nunca vai enfileirar tarefa.
+	 */
+	boolean canStore(NetworkNode node, StorageObject object) {
+		return node.status() == NodeStatus.ACTIVE && TaskType.OBJECT_PUT.allowedFor(node.profiles())
+			&& object.servable() && object.sha256() != null && object.bytes() != null;
+	}
+
 	/**
 	 * Enfileira um {@code OBJECT_PUT} para cada designação pendente de um objeto.
 	 *
@@ -100,6 +117,10 @@ public class StorageReplicationDispatcher {
 			.filter(p -> p.state() == StoragePlacement.State.PENDING_REMOTE)
 			.limit(MAX_PLACEMENTS)
 			.toList();
+		// Uma consulta das transferências vivas para o lote inteiro, não uma por réplica: o teto de
+		// banda é por transferência, e o vínculo com a designação é a réplica de DESTINO.
+		List<com.socialcoisa.rede.network.domain.StorageRebalance> transferencias = catalog
+			.activeRebalances(MAX_PLACEMENTS);
 		Instant now = clock.instant();
 		List<Dispatched> enviadas = new java.util.ArrayList<>();
 		List<Skipped> puladas = new java.util.ArrayList<>();
@@ -118,9 +139,24 @@ public class StorageReplicationDispatcher {
 			}
 			String payload;
 			try {
-				payload = objectMapper.writeValueAsString(Map.of("objectId", object.id(), "bucket", object.bucket(),
-					"key", object.key(), "sha256", object.sha256(), "bytes", object.bytes(),
-					"replica", p.replica()));
+				// O teto da transferência vai junto quando existe uma: sem ele, o
+				// `bandwidthLimitMbps` do rebalanceamento era gravado no banco e nunca chegava ao nó,
+				// que aplicava só a banda declarada. A transferência é a que DESTINA esta réplica
+				// (`toReplica`), não a que sai dela. O nó usa o MENOR entre este e o que declarou.
+				Optional<Integer> teto = transferencias.stream()
+					.filter(r -> r.objectId().equals(object.id()) && r.toReplica() == p.replica())
+					.map(com.socialcoisa.rede.network.domain.StorageRebalance::bandwidthLimitMbps)
+					.filter(mbps -> mbps != null && mbps > 0)
+					.findFirst();
+				var campos = new java.util.LinkedHashMap<String, Object>();
+				campos.put("objectId", object.id());
+				campos.put("bucket", object.bucket());
+				campos.put("key", object.key());
+				campos.put("sha256", object.sha256());
+				campos.put("bytes", object.bytes());
+				campos.put("replica", p.replica());
+				teto.ifPresent(mbps -> campos.put("bandwidthLimitMbps", mbps));
+				payload = objectMapper.writeValueAsString(campos);
 			}
 			catch (RuntimeException serialization) {
 				throw new IllegalStateException("Falha ao serializar payload de replica", serialization);

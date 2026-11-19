@@ -30,5 +30,13 @@ public enum TargetType {
 	/** Desabafo do Explorar (o texto cai do feed próprio junto com as acolhidas). */
 	DESABAFO_POST,
 	/** Comentário de acolhida num desabafo. */
-	DESABAFO_COMMENT
+	DESABAFO_COMMENT,
+	/** Confissão do Confessionário (a história cai do feed próprio junto com as reações). */
+	CONFESSIONARIO_POST,
+	/** Comentário de reação numa confissão. */
+	CONFESSIONARIO_COMMENT,
+	/** Desafio do Explorar (o convite cai do feed próprio junto com as participações). */
+	DESAFIO_POST,
+	/** Participação (resultado publicado) num desafio. */
+	DESAFIO_PARTICIPACAO
 }

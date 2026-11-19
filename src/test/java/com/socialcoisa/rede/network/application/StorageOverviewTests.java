@@ -76,6 +76,55 @@ class StorageOverviewTests {
 			0, null, null);
 	}
 
+	/**
+	 * §17 pede "nós online e offline". Antes, o nó parado saía da soma (correto) e também do
+	 * painel (errado): não havia como saber QUEM caiu. O declarado dele continua fora da capacidade
+	 * — o teste usa um declarado GIGANTE no nó offline justamente para provar que ele não vaza para
+	 * a soma enquanto aparece na lista.
+	 */
+	@Test
+	void no_offline_aparece_na_lista_e_nao_soma_capacidade() {
+		NetworkNode vivo = storage("nd_vivo", 1000, 500L);
+		NetworkNode morto = node("nd_morto", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_STORAGE), 9_000_000,
+			800L, NOW.minusSeconds(600));
+		when(nodes.list(anyInt())).thenReturn(List.of(vivo, morto));
+
+		var c = overviewNodes.capacity();
+
+		assertThat(c.onlineNodes()).isEqualTo(1);
+		assertThat(c.offlineNodes()).isEqualTo(1);
+		assertThat(c.offline()).extracting(StorageOverviewNodes.OfflineNode::nodeId).containsExactly("nd_morto");
+		assertThat(c.offline().get(0).secondsSinceSeen()).isEqualTo(600);
+		// O disco do offline não entra: a capacidade é a do vivo.
+		assertThat(c.declaredMb()).isEqualTo(1000);
+		assertThat(c.freeMb()).isEqualTo(500L);
+	}
+
+	/** Nó que nunca bateu coração: ausente é diferente de "há 0 segundos". */
+	@Test
+	void no_que_nunca_apareceu_tem_ausencia_nula_nao_zero() {
+		when(nodes.list(anyInt())).thenReturn(List.of(storage("nd_ok", 1000, 500L),
+			node("nd_nunca", NodeStatus.PENDING_APPROVAL, Set.of(NodeProfile.NODE_STORAGE), 10, null, null)));
+
+		var c = overviewNodes.capacity();
+
+		assertThat(c.offline()).extracting(StorageOverviewNodes.OfflineNode::nodeId).containsExactly("nd_nunca");
+		assertThat(c.offline().get(0).secondsSinceSeen()).isNull();
+		assertThat(c.offline().get(0).lastSeenAt()).isNull();
+	}
+
+	/** Nó de processamento não é storage: não entra na conta de online/offline do Storage. */
+	@Test
+	void no_de_processamento_nao_entra_no_online_offline() {
+		when(nodes.list(anyInt())).thenReturn(List.of(storage("nd_ok", 1000, 500L),
+			node("nd_worker", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_WORKER), 10, 10L, NOW.minusSeconds(600))));
+
+		var c = overviewNodes.capacity();
+
+		assertThat(c.onlineNodes()).isEqualTo(1);
+		assertThat(c.offline()).isEmpty();
+	}
+
 	@Test
 	void disponivel_e_o_medido_no_heartbeat_nao_o_declarado() {
 		when(nodes.list(anyInt())).thenReturn(List.of(storage("nd_a", 102400, 5000L), storage("nd_b", 204800, 3000L)));
@@ -280,7 +329,7 @@ class StorageOverviewTests {
 			"PENDING_REMOTE", new long[] { 1, 60 }));
 
 		scrubber = mock(StorageScrubber.class);
-		when(scrubber.scan(isNull(), anyInt())).thenReturn(new StorageScrubber.Report(2, 3, List.of(), 0, List.of()));
+		when(scrubber.scan(isNull(), anyInt())).thenReturn(new StorageScrubber.Report(2, 3, List.of(), 0, List.of(), Map.of()));
 		StoragePlacementService placement = mock(StoragePlacementService.class);
 		when(placement.targetReplicas()).thenReturn(2);
 
@@ -294,6 +343,52 @@ class StorageOverviewTests {
 		assertThat(o.replicasExpected()).isEqualTo(2);
 	}
 
+	/**
+	 * O painel do §17 pede "quantidade de buckets" e o uso por bucket. Bucket não é tabela: ele
+	 * existe enquanto tem objeto. O número é o tamanho do mapa, e por isso o teste usa dois buckets
+	 * com tamanhos DIFERENTES — uma implementação que devolvesse só a contagem total daria 2 para
+	 * qualquer um e passaria sem provar que a separação existe.
+	 */
+	@Test
+	void painel_traz_a_quantidade_e_o_uso_por_bucket() {
+		catalog = mock(StorageCatalogRepository.class);
+		when(catalog.summarizeObjects()).thenReturn(Map.of());
+		when(catalog.summarizePlacements()).thenReturn(Map.of());
+		when(catalog.summarizeBuckets()).thenReturn(Map.of(
+			"fotos", new long[] { 3, 700 },
+			"midia", new long[] { 1, 4000 }));
+		scrubber = mock(StorageScrubber.class);
+		when(scrubber.scan(isNull(), anyInt())).thenReturn(new StorageScrubber.Report(2, 0, List.of(), 0, List.of(), Map.of()));
+		StoragePlacementService placement = mock(StoragePlacementService.class);
+		when(placement.targetReplicas()).thenReturn(2);
+
+		var service = new StorageOverviewService(catalog, placement, overviewNodes, scrubber,
+			Clock.fixed(NOW, ZoneOffset.UTC));
+		var o = service.overview();
+
+		assertThat(o.buckets()).isEqualTo(2);
+		assertThat(o.usageByBucket()).containsEntry("fotos", new StorageOverviewService.BucketUsage(3, 700))
+			.containsEntry("midia", new StorageOverviewService.BucketUsage(1, 4000));
+	}
+
+	@Test
+	void painel_sem_bucket_mostra_zero_e_mapa_vazio() {
+		catalog = mock(StorageCatalogRepository.class);
+		when(catalog.summarizeObjects()).thenReturn(Map.of());
+		when(catalog.summarizePlacements()).thenReturn(Map.of());
+		when(catalog.summarizeBuckets()).thenReturn(Map.of());
+		scrubber = mock(StorageScrubber.class);
+		when(scrubber.scan(isNull(), anyInt())).thenReturn(new StorageScrubber.Report(2, 0, List.of(), 0, List.of(), Map.of()));
+		StoragePlacementService placement = mock(StoragePlacementService.class);
+		when(placement.targetReplicas()).thenReturn(2);
+
+		var o = new StorageOverviewService(catalog, placement, overviewNodes, scrubber,
+			Clock.fixed(NOW, ZoneOffset.UTC)).overview();
+
+		assertThat(o.buckets()).isZero();
+		assertThat(o.usageByBucket()).isEmpty();
+	}
+
 	@Test
 	void lacuna_de_copias_vem_da_mesma_varredura_do_operador() {
 		catalog = mock(StorageCatalogRepository.class);
@@ -301,7 +396,8 @@ class StorageOverviewTests {
 		when(catalog.summarizePlacements()).thenReturn(Map.of());
 		scrubber = mock(StorageScrubber.class);
 		when(scrubber.scan(isNull(), anyInt())).thenReturn(new StorageScrubber.Report(2, 3,
-			List.of(new StorageScrubber.Report.UnderReplicated("sob_1", 1, 1, List.of("nd_a"))), 0, List.of()));
+			List.of(new StorageScrubber.Report.UnderReplicated("sob_1", 1, 1, List.of("nd_a"))), 0, List.of(),
+			Map.of("SINGLE_DOMAIN", 1L)));
 		StoragePlacementService placement = mock(StoragePlacementService.class);
 		when(placement.targetReplicas()).thenReturn(2);
 

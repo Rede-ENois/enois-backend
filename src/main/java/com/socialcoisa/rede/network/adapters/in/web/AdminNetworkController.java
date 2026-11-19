@@ -109,7 +109,7 @@ class AdminNetworkController {
 			String keyPrefix, boolean keyUsed, Integer latencyMs, int failureStreak, boolean degraded,
 			String quarantineReason, Instant quarantinedUntil, int declaredCpuCores, int declaredMemoryMb,
 			int declaredDiskMb, int declaredBandwidthMbps, long tasksDone, long tasksFailed,
-			ResponsibleView responsible) {
+			Long trafficInMb, Long trafficOutMb, ResponsibleView responsible) {
 
 		/**
 		 * Quem ativou a possibilidade de o nó servir e quem responde por ele.
@@ -145,7 +145,8 @@ class AdminNetworkController {
 				node.observedLatencyMs(), node.consecutiveFailures(), showQuarantine || node.slow() || node.failing(),
 				showQuarantine ? node.quarantineReason() : null, showQuarantine ? node.quarantinedUntil() : null,
 				node.declaredCpuCores(), node.declaredMemoryMb(), node.declaredDiskMb(),
-				node.declaredBandwidthMbps(), tasksDone, tasksFailed, responsible);
+				node.declaredBandwidthMbps(), tasksDone, tasksFailed, node.observedBytesInMb(),
+				node.observedBytesOutMb(), responsible);
 		}
 	}
 
@@ -372,6 +373,27 @@ class AdminNetworkController {
 			@PathVariable String id) {
 		admin(sessionToken);
 		return view(nodes.require(id));
+	}
+
+	/**
+	 * O disco deste nó para a <b>página individual</b> (brief §17): "espaço disponibilizado",
+	 * "espaço utilizado" e "espaço disponível".
+	 *
+	 * <p>Antes isso só existia no painel geral (`/storage/overview` → {@code disks[]}), onde o admin
+	 * tinha de procurar a linha do nó. A conta é a <b>mesma</b>: vem do mesmo método que monta a
+	 * linha daquele painel, para as duas telas não mostrarem números diferentes do mesmo disco.</p>
+	 *
+	 * <p>{@code null} (corpo vazio) quando o nó não guarda objeto: chamar de disco de armazenamento
+	 * o de um nó de processamento prometeria espaço que ele não oferece. Nó desconhecido é 404, como
+	 * em {@code GET /{id}}.</p>
+	 */
+	@GetMapping("/{id}/storage")
+	Object storage(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String id) {
+		admin(sessionToken);
+		nodes.require(id);
+		var disco = storageOverview.diskOf(id);
+		return disco == null ? java.util.Map.of() : disco;
 	}
 
 	/** Token de uso único que cria o nó; não é a chave de operação (ADR-003). */

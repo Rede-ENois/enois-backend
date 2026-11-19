@@ -48,7 +48,7 @@ class StorageTombstoneCollectorTests {
 	}
 
 	private static StorageObject objeto(String id, StorageObjectState estado, Instant deletedAt) {
-		return new StorageObject(id, "bucket", id + ".bin", "application/octet-stream", 10L, "a".repeat(64), estado,
+		return StorageObject.current(id, "bucket", id + ".bin", "application/octet-stream", 10L, "a".repeat(64), estado,
 			"user-test", deletedAt.minusSeconds(3600), deletedAt, deletedAt);
 	}
 

@@ -51,7 +51,7 @@ create table if not exists network_nodes (
   id varchar(40) not null,
   display_name varchar(120) not null,
   owner_user_id varchar(40) not null,
-  status varchar(24) not null,          -- PENDING_APPROVAL | ACTIVE | SUSPENDED | QUARANTINED | REVOKED
+  status varchar(24) not null,          -- PENDING_APPROVAL | ACTIVE | SUSPENDED | QUARANTINED | PAUSED | REVOKED
   profiles varchar(255) not null,       -- CSV de NodeProfile
   declared_cpu_cores int not null,
   declared_memory_mb int not null,
@@ -151,11 +151,24 @@ stateDiagram-v2
   QUARANTINED --> REVOKED: admin
   ACTIVE --> REVOKED: admin
   SUSPENDED --> REVOKED: admin
+  ACTIVE --> PAUSED: participante
+  PAUSED --> ACTIVE: participante
+  PAUSED --> REVOKED: admin
   REVOKED --> [*]
 ```
 
 `REVOKED` é terminal. Voltar exige cadastro novo — identidade nova, chave nova. Isso é de propósito:
 revogação que pode ser desfeita não é revogação.
+
+**`PAUSED` ≠ `SUSPENDED`.** Suspender é sair da rede: as chaves caem e só um admin devolve o
+servidor. Pausar é parar de emprestar a máquina: a chave continua valendo, o heartbeat segue sendo
+aceito (o painel vê a máquina viva e o que ela mede) e o nó simplesmente não recebe tarefa nem
+réplica — `canOperate()` é verdadeiro só para `ACTIVE`. Volta sozinho, por
+`POST /network/participant/nodes/{id}/resume`; enquanto pausado, `GET /network/tasks/next` responde
+`403 NODE_PAUSED`. Pausa que exigisse admin não seria pausa, seria suspensão com outro nome.
+
+Só `ACTIVE` é pausável e só `PAUSED` é retomável: rebaixar `SUSPENDED` ou `QUARANTINED` a `PAUSED`
+daria, pela retomada, a saída de uma decisão humana pela tela do participante.
 
 ## 6. Onde a autorização é checada
 
@@ -198,9 +211,11 @@ Implementada na fase 5 (`GET /network/nodes/me/config`, contrato em `03-contrato
 - **Nó pendente lê a própria config** (200, `operable:false`, `allowedTasks` vazio). Recusar com 403
   deixaria o instalador sem resposta no passo em que ele espera aprovação humana.
 
-Ainda **não** implementado nesta fase: mTLS por certificado individual, CSR e rotação automática de
-certificado. O modelo acima é o que existe hoje — a autoridade é a API key por nó, e a config
-assinada protege o que o nó **aplica**, não o canal.
+**Certificado mTLS (brief §10):** emitido desde `V358`, a partir de CSR conferido — ver
+[19-seguranca-storage-mtls-e-repouso.md](19-seguranca-storage-mtls-e-repouso.md). O que **ainda não** existe: a terminação
+TLS exigindo o certificado de cliente (o proxy da borda continua aceitando sem ele), rota de painel
+para revogar certificado, rotação automática e CRL/OCSP. Até lá, a autoridade de cada requisição de
+nó segue sendo a API key, e a config assinada protege o que o nó **aplica**, não o canal.
 
 As decisões de desenho estão em [ADR-011](../adr/ADR-011-config-assinada-canonico-e-versao.md):
 canônico em vez de JSON, versão da permissão vinda do ciclo de vida em vez do relógio da requisição,

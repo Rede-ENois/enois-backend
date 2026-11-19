@@ -24,17 +24,20 @@ class MonitoringAdminController {
 	private final MonitoringService monitoring;
 	private final UserMetricsService userMetrics;
 	private final RoleplayMetricsService roleplayMetrics;
+	private final MediaUploadMetricsService mediaMetrics;
 	private final CurrentUserResolver currentUserResolver;
 	private final ModeratorGuard moderatorGuard;
 	private final AdminAuthorityAudit denied;
 	private final AdminDenialCounter deniedBaseline;
 
 	MonitoringAdminController(MonitoringService monitoring, UserMetricsService userMetrics,
-			RoleplayMetricsService roleplayMetrics, CurrentUserResolver currentUserResolver,
-			ModeratorGuard moderatorGuard, AdminAuthorityAudit denied, AdminDenialCounter deniedBaseline) {
+			RoleplayMetricsService roleplayMetrics, MediaUploadMetricsService mediaMetrics,
+			CurrentUserResolver currentUserResolver, ModeratorGuard moderatorGuard,
+			AdminAuthorityAudit denied, AdminDenialCounter deniedBaseline) {
 		this.monitoring = monitoring;
 		this.userMetrics = userMetrics;
 		this.roleplayMetrics = roleplayMetrics;
+		this.mediaMetrics = mediaMetrics;
 		this.currentUserResolver = currentUserResolver;
 		this.moderatorGuard = moderatorGuard;
 		this.denied = denied;
@@ -89,6 +92,14 @@ class MonitoringAdminController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		moderatorGuard.requireModerator(currentUserResolver.resolve(sessionToken));
 		return roleplayMetrics.roleplay();
+	}
+
+	/** Métricas do upload de mídia: tempo por etapa do pipeline e tamanho gravado (#925). */
+	@GetMapping("/media")
+	MediaUploadMetricsService.MediaView media(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		moderatorGuard.requireModerator(currentUserResolver.resolve(sessionToken));
+		return mediaMetrics.media();
 	}
 
 	@GetMapping("/events")

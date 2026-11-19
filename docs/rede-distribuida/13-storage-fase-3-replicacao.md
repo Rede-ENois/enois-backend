@@ -33,18 +33,61 @@ conhece o arquivo pelo sha-256. O download por digest só serve a quem tem a có
 linha" e "tem os bytes" são coisas diferentes. O nó busca na URL do Control Plane com a própria
 chave: **nenhum IP ou hostname de storage node** é cadastrado (brief §17).
 
-**A escolha é estável.** Ordem por folga de disco medida (decrescente) e desempate por id. O mesmo
-objeto, reenviado, escolhe o mesmo conjunto enquanto a rede não mudar; um conjunto que mudasse a
-cada retry espalharia réplicas e deixaria cópias órfãs.
+**A escolha é estável.** Ordem pela folga **cedida** (`declarado − ocupado`) e desempate por id — ver
+[`17-storage-fase-4-dominios-e-equilibrio.md`](17-storage-fase-4-dominios-e-equilibrio.md) §2.1. O
+mesmo objeto, reenviado, escolhe o mesmo conjunto enquanto a rede não mudar; um conjunto que mudasse
+a cada retry espalharia réplicas e deixaria cópias órfãs.
 
-**Sem medida de disco, o nó não é recusado.** Não medir não é estar cheio — a mesma regra do resto do
-módulo. Nó com disco medido abaixo do piso **e** do tamanho do objeto não recebe cópia.
+**Nó sem teto cedido não recebe cópia.** Ceder é o número que só o participante pode dar; sem ele não
+há limite a respeitar (brief §7) e a colocação não designa. O disco livre medido continua sendo régua
+junto: ceder 50 GB num disco com 500 MB não é espaço.
+
+## 2.1 Durabilidade efetiva (brief §9)
+
+`StorageScrubber.durability` classifica cada objeto **servível** pelas cópias `OK`, olhando o
+**domínio de falha** e não a contagem:
+
+| nível | quando | o que significa |
+|---|---|---|
+| `SINGLE_DOMAIN` | todas as cópias no mesmo domínio (inclusive uma só) | perder aquele nó/região é perder o objeto |
+| `CROSS_REGION_PARTIAL` | domínios distintos, cópias abaixo do alvo | sobrevive à queda de um domínio, não cumpre a política |
+| `CROSS_REGION` | domínios distintos e cópias suficientes | é o que `rede.storage.replicas` pede |
+
+**Por que a contagem não basta:** duas cópias na mesma região e duas em regiões distintas têm o
+mesmo número e durabilidade diferente. O caso do §9 ("se existir somente um storage node ... sem
+redundância externa") é `SINGLE_DOMAIN`, e agora aparece como tal em vez de "2 de 2 cópias".
+
+A **réplica 0** é domínio próprio (o Control Plane): uma cópia no CP sobrevive à queda de qualquer
+storage node, e uma no nó sobrevive à queda do CP. Nó **sem região** é domínio desconhecido e não se
+funde com outro desconhecido (regra de `NetworkRegions`); nó fora do cadastro conta como desconhecido
+e distinto — a rede sabe que ele tem cópia, não que ele está onde outro está.
+
+O painel (`GET /admin/network/nodes/storage/overview`) devolve `objectsByDurability`, a contagem de
+objetos por nível **efetivamente observado** — nunca a política pedida.
+
+## 2.2 Replicação automática (`StorageReplicationWorker`)
+
+Ligado por `REDE_STORAGE_REPLICATION_AUTO_HEAL_ENABLED=true`, o worker roda a cada `delay-ms` (15 min
+de padrão) e faz uma passada:
+
+1. **solta as designações vencidas** — `PENDING_REMOTE` sem confirmação por
+   `rede.storage.replication.pending-max-age-minutes` (60) vira `GONE`. Antes, essa pendência durava
+   para sempre e o healer a lia como "a lacuna tem dono" (`ALREADY_DESIGNATED`): o operador não
+   conseguia curar aquele objeto nem manualmente, e a cópia "a caminho" nunca chegava. A idade é a de
+   `verified_at`, que `savePlacement` grava como o instante da designação;
+2. **cura** até 25 objetos por passada pelo mesmo `StorageHealer` (mesma colocação, mesmo teto de lote);
+3. **despacha** cada objeto designado pelo `StorageReplicationDispatcher` — uma tarefa `OBJECT_PUT`
+   por colocação, idempotente por `storage:<objectId>:<replica>`.
+
+Ele **não** grava corpo, **não** apaga e **não** confirma cópia: a confirmação continua sendo do nó,
+com bytes e sha-256 conferidos. `GONE` não é apagado — o histórico mostra que houve uma tentativa, e
+o scrub segue contando a linha como réplica existente (o que ela é).
 
 ## 3. O que NÃO está entregue (e por quê)
 
 | item | por que não |
 |---|---|
-| **healing automático (agendado)** | o healing **existe** como ato de operador — `POST /admin/network/nodes/storage/heal` designa a lacuna a nós (ver §5.1). O que não existe é agendador: designar gera tráfego de corpo, e o custo de disco e banda é de quem contribui |
+| **healing automático ligado de fábrica** | o agendador **existe** (`StorageReplicationWorker`), mas nasce **desligado** (`rede.storage.replication.auto-heal-enabled`, padrão `false`): ligar é decisão de quem opera a rede, porque designar gera tráfego de corpo no disco e na banda do participante. Desligado, o comportamento é o de antes — só o ato de operador |
 | **scrubbing que relê o corpo de OUTRO nó** | o Control Plane não inicia conexão para o nó (NAT e a proibição de cadastrar endereço). O que existe hoje é a releitura do que está **neste** CP: `GET /admin/network/nodes/storage/scrub?readBodies=true` compara tamanho e sha-256 do arquivo com o medido e devolve `divergent[]` — ver §4.1 |
 | **domínio de falha maior que o nó** | o cadastro não tem host físico, rack nem operadora. Derivar isso de região/cidade seria deduzir topologia. "Mesmo nó" é o que o dado permite afirmar |
 | **erasure coding** | da fase 4 do brief (§ distribuição inteligente), não da 3 |
@@ -57,11 +100,13 @@ módulo. Nó com disco medido abaixo do piso **e** do tamanho do objeto não rec
 | suíte completa | 3111 testes (R123) |
 | `StoragePlacementServiceTests` (novo) | 8 — folga, não-repetição, nó pronto, disco, estável |
 | `NetworkStorageReplicationTests` (novo) | 6 — designação ≠ durabilidade, confirmação conferida, digest, varredura |
+| `StorageReplicationWorkerTests` (novo) | 3 — designação vencida vira `GONE` e volta a ser curável (com despacho), designação recente **não** é solta, desligado não toca em nada |
 | `storage-migration-test` | **29** asserções em MariaDB 11.4 real, migrações 2× com dados |
 
 Mutações conferidas: confirmação sem conferir digest derruba `designacaoNaoContaComoDurabilidade…`;
 aceitar `PENDING_REMOTE` como confirmável derruba o mesmo teste; varredura contando
-`PENDING_REMOTE` como cópia derruba `varreduraApontaObjetoComMenosCopiasQueOPedido`.
+`PENDING_REMOTE` como cópia derruba `varreduraApontaObjetoComMenosCopiasQueOPedido`. No worker:
+soltar toda `PENDING_REMOTE` sem olhar a idade derruba `designacao_recente_nao_e_solta`.
 
 ## 5. Migração
 
@@ -184,7 +229,7 @@ ser recusado (o que já era correto), mas a réplica nunca acontecia. Agora exis
 | passo | o que faz |
 |---|---|
 | 1 | lê `objectId`, `sha256`, `bytes` e `replica` do payload; payload incompleto → `STORAGE_TASK_PAYLOAD_INVALID` |
-| 2 | baixa por `GET /network/storage/objects/{id}` com a **mesma** chave de nó e o mesmo `--limit-rate` do teto de banda declarado |
+| 2 | baixa por `GET /network/storage/objects/{id}` com a **mesma** chave de nó e `--limit-rate` do **menor** entre o teto da transferência (`bandwidthLimitMbps` do payload, quando existe) e a banda declarada |
 | 3 | **mede o que veio** (`sha256sum` + `stat`) e compara com o medido pelo Control Plane. Divergência → `STORAGE_REPLICA_MISMATCH`, e **não confirma** |
 | 4 | confere o teto de disco cedido **antes** de confirmar. Acima → `STORAGE_OBJECT_TOO_LARGE` (o temporário sai; `diskMb=0` é "sem teto declarado", não "zero bytes") |
 | 5 | confirma em `POST .../replica` com **as medidas que ele mesmo calculou** |

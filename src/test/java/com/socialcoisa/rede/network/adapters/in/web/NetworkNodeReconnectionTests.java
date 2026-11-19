@@ -116,8 +116,11 @@ class NetworkNodeReconnectionTests {
 	void no_que_volta_depois_da_janela_vira_evento_com_o_tempo_fora() throws Exception {
 		Node no = node("nd_volta");
 		heartbeat(no);
-		// A máquina ficou fora por 20 minutos: o último contato é o que o CP tinha.
-		jdbc.update("update network_nodes set last_seen_at = now(3) - interval '20' minute where id = ?", no.id());
+		// A máquina ficou fora por 21 minutos: o último contato é o que o CP tinha. A folga de 1 min
+		// não é decoração — com exatamente 20 min, o `getSeconds()` de uma diferença com fração de
+		// segundo trunca para 1199 (falso vermelho intermitente em 1.199 de ~1.200 execuções); 21 min
+		// prova o mesmo comportamento com margem de 60 s sobre o piso.
+		jdbc.update("update network_nodes set last_seen_at = now(3) - interval '21' minute where id = ?", no.id());
 
 		heartbeat(no);
 

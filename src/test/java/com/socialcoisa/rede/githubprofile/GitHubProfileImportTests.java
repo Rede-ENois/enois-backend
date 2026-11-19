@@ -28,6 +28,7 @@ import org.springframework.test.web.servlet.MvcResult;
 
 import com.socialcoisa.rede.contributions.application.GitHubIdentityService;
 import com.socialcoisa.rede.githubprofile.application.port.out.GitHubProfileGateway;
+import com.socialcoisa.rede.githubprofile.application.port.out.GitHubProfileGateway.GitHubOrganization;
 import com.socialcoisa.rede.githubprofile.application.port.out.GitHubProfileGateway.GitHubProfileReadme;
 import com.socialcoisa.rede.githubprofile.application.port.out.GitHubProfileGateway.GitHubUserRepository;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
@@ -64,6 +65,9 @@ class GitHubProfileImportTests {
 	@Autowired
 	private UserProfileRepository profiles;
 
+	@Autowired
+	private org.springframework.context.ApplicationContext context;
+
 	@TestConfiguration
 	static class FakeGatewayConfig {
 		@Bean
@@ -74,8 +78,13 @@ class GitHubProfileImportTests {
 	}
 
 	static class FakeGateway implements GitHubProfileGateway {
+		/** Logins que começam com "rate-" lançam o limite do GitHub (prova do handler HTTP). */
 		@Override
 		public List<GitHubUserRepository> listUserRepositories(String login, int maxPages) {
+			if (login.startsWith("rate-")) {
+				throw new com.socialcoisa.rede.contributions.adapters.out.github.GitHubRateLimitException(
+					"limite do GitHub");
+			}
 			LIST_CALLS.computeIfAbsent(login, key -> new AtomicInteger()).incrementAndGet();
 			return REPOS.get();
 		}
@@ -84,6 +93,25 @@ class GitHubProfileImportTests {
 		public Optional<GitHubProfileReadme> profileReadme(String login) {
 			README_CALLS.computeIfAbsent(login, key -> new AtomicInteger()).incrementAndGet();
 			return Optional.ofNullable(README.get());
+		}
+
+		private final List<GitHubOrganization> ORGS = List.of(
+			new GitHubOrganization("coisa-coletiva", "Coisa Coletiva", "Coletivo de tecnologia popular",
+				"https://github.com/coisa-coletiva"));
+
+		/** Logins que começam com "org-" são membros; qualquer outro login não tem org nenhuma. */
+		@Override
+		public List<GitHubOrganization> listUserOrganizations(String login, int maxPages) {
+			return login.startsWith("org-") ? ORGS : List.of();
+		}
+
+		@Override
+		public List<GitHubUserRepository> listOrganizationRepositoryDetails(String org, int maxPages) {
+			if (!"coisa-coletiva".equalsIgnoreCase(org)) {
+				return List.of();
+			}
+			return List.of(repo(org, "site", "Site do coletivo", "https://github.com/" + org + "/site", "HTML",
+				List.of("site"), 4, 0));
 		}
 	}
 
@@ -255,6 +283,91 @@ class GitHubProfileImportTests {
 			.andExpect(status().isNotFound())
 			.andExpect(jsonPath("$.code").value("GITHUB_README_NOT_FOUND"));
 	}
+
+	/**
+	 * O BUG do épico: o GitHub recusando por limite virava 500 genérico ("importação não está
+	 * funcionando"). Agora é 503 com código estável e Retry-After — espera, não defeito.
+	 */
+	@Test
+	void rateLimitDoGitHubVira503Acionavel() throws Exception {
+		String suffix = String.valueOf(System.nanoTime());
+		String login = "rate-dev-" + suffix;
+		var user = new TestAuthHelper(mockMvc, objectMapper).authenticate("rate_" + suffix);
+		identities.remember(user.userId(), "gh-" + login, login);
+		REPOS.set(List.of(repo(login, "alpha", "Projeto Alpha", "https://github.com/" + login + "/alpha", "Java",
+			List.of(), 1, 0)));
+		// Limpa o cache da qa para a ida ao gateway desta conta acontecer de verdade.
+		org.springframework.cache.CacheManager manager = context.getBean(org.springframework.cache.CacheManager.class);
+		manager.getCache("githubRepositories").clear();
+		// O gateway lança GitHubRateLimitException no meio da listagem: a resposta é 503 com o
+		// código estável e Retry-After — espera, não defeito (antes virava 500 genérico).
+		mockMvc.perform(get("/me/github/repos").header("X-Session-Token", user.token()))
+			.andExpect(status().isServiceUnavailable())
+			.andExpect(jsonPath("$.code").value("GITHUB_RATE_LIMITED"));
+		mockMvc.perform(post("/me/github/import/projects")
+				.header("X-Session-Token", user.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("repos", List.of("rate-dev/repo")))))
+			.andExpect(status().isServiceUnavailable())
+			.andExpect(jsonPath("$.code").value("GITHUB_RATE_LIMITED"));
+	}
+
+	/** Orgs: lista, importa como empresa e os repos escolhidos como projetos do perfil. */
+	@Test
+	void importaOrganizacaoComoEmpresaEProjetos() throws Exception {
+		String suffix = String.valueOf(System.nanoTime());
+		String login = "org-dev-" + suffix;
+		var user = new TestAuthHelper(mockMvc, objectMapper).authenticate("org_" + suffix);
+		identities.remember(user.userId(), "gh-" + login, login);
+		org.springframework.cache.CacheManager manager = context.getBean(org.springframework.cache.CacheManager.class);
+		manager.getCache("githubRepositories").clear();
+
+		mockMvc.perform(get("/me/github/orgs").header("X-Session-Token", user.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[0].login").value("coisa-coletiva"));
+
+		mockMvc.perform(get("/me/github/orgs/coisa-coletiva/repos").header("X-Session-Token", user.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.length()").value(1))
+			.andExpect(jsonPath("$[0].fullName").value("coisa-coletiva/site"));
+
+		// A URL do repo da org pode já ter sido importada por outra execução na base compartilhada
+		// (idempotência por URL é o contrato): cria OU marca como já existente — o que não pode é
+		// duplicar nem falhar.
+		org.springframework.test.web.servlet.MvcResult importado = mockMvc
+			.perform(post("/me/github/import/orgs/coisa-coletiva")
+				.header("X-Session-Token", user.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("repos", List.of("coisa-coletiva/site")))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.slug").value("coisa-coletiva"))
+			.andReturn();
+		int criados = objectMapper.readTree(importado.getResponse().getContentAsString()).get("created").asInt();
+		org.assertj.core.api.Assertions.assertThat(criados).isLessThanOrEqualTo(1);
+
+		// A empresa da org existe e quem importou é OWNER (página pública da empresa).
+		mockMvc.perform(get("/empresa/coisa-coletiva").header("X-Session-Token", user.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.slug").value("coisa-coletiva"))
+			.andExpect(jsonPath("$.website").value("https://github.com/coisa-coletiva"))
+			.andExpect(jsonPath("$.myRole").value("OWNER"));
+		// Projeto criado com a URL do repo.
+		assertThat(projects.of(user.userId()))
+			.anyMatch(p -> "https://github.com/coisa-coletiva/site".equals(p.repoUrl()));
+
+		// Não é membro da org: recusa sem importar nada.
+		var estranha = new TestAuthHelper(mockMvc, objectMapper).authenticate("org_estr" + suffix);
+		identities.remember(estranha.userId(), "gh-estr-" + suffix, "estr" + suffix);
+		mockMvc.perform(post("/me/github/import/orgs/coisa-coletiva")
+				.header("X-Session-Token", estranha.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("repos", List.of("coisa-coletiva/site")))))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("ORG_NAO_MEMBRO"));
+	}
+
+	@Autowired
+	private com.socialcoisa.rede.companies.application.CompanyService companies;
 
 	private static GitHubUserRepository repo(String login, String name, String description, String url,
 			String language, List<String> topics, int stars, int forks) {

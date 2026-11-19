@@ -2,6 +2,7 @@ package com.socialcoisa.rede.network.application;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 
 import org.springframework.stereotype.Service;
@@ -9,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
+import com.socialcoisa.rede.network.domain.NodeStatus;
 import com.socialcoisa.rede.network.domain.NetworkRegions;
 import com.socialcoisa.rede.network.domain.TaskType;
 
@@ -70,7 +72,23 @@ public class StorageOverviewNodes {
 	 * atualização dos runtimes, o comum é conhecer o livre e ainda não conhecer o total.
 	 */
 	public record Capacity(long declaredMb, Long freeMb, int declaringNodes, int unmeasuredNodes,
-			int unmeasuredDiskTotals, int unmeasuredUsage, List<Disco> disks) {
+			int unmeasuredDiskTotals, int unmeasuredUsage, List<Disco> disks, int onlineNodes, int offlineNodes,
+			List<OfflineNode> offline) {
+	}
+
+	/**
+	 * Nó de armazenamento que <b>não está no ar</b> (§17: "nós online e offline").
+	 *
+	 * <p>Antes ele desaparecia do painel: {@code continue} o tirava da soma (correto — nó parado não
+	 * promete disco) e também da lista (errado — o operador não conseguia saber <b>quem</b> caiu sem
+	 * cruzar o painel de nós). O disco dele não entra em conta nenhuma aqui: o que se diz é o fato,
+	 * quantos segundos ausente.</p>
+	 *
+	 * @param secondsSinceSeen segundos desde o último contato; {@code null} = nunca bateu coração
+	 * @param lastSeenAt instante do último contato; {@code null} = nunca
+	 */
+	public record OfflineNode(String nodeId, String displayName, String ownerUserId, NodeStatus status,
+			String region, Instant lastSeenAt, Long secondsSinceSeen) {
 	}
 
 	private final NetworkNodeRepository nodes;
@@ -95,7 +113,9 @@ public class StorageOverviewNodes {
 		int semMedida = 0;
 		int semTotal = 0;
 		int semUso = 0;
+		int online = 0;
 		List<Disco> discos = new java.util.ArrayList<>();
+		List<OfflineNode> foraDoAr = new java.util.ArrayList<>();
 		for (NetworkNode node : all) {
 			// Quem conta é quem PODE guardar objeto -- o mesmo critério do despacho e da colocação
 			// (`OBJECT_PUT.allowedFor`), não o nome do perfil. Nó da infraestrutura própria
@@ -107,9 +127,15 @@ public class StorageOverviewNodes {
 			}
 			if (!node.alive(clock.instant(), Duration.ofSeconds(STALE_SECONDS))) {
 				// Nó parado não promete disco agora: contar o declarado dele somaria capacidade que
-				// não está no ar.
+				// não está no ar. Ele SAI da soma e ENTRA na lista dos fora do ar -- sumir do painel
+				// também escondia de quem caiu.
+				Instant visto = node.lastSeenAt();
+				foraDoAr.add(new OfflineNode(node.id(), node.displayName(), node.ownerUserId(), node.status(),
+					node.region(), visto,
+					visto == null ? null : Math.max(0, Duration.between(visto, clock.instant()).getSeconds())));
 				continue;
 			}
+			online++;
 			if (NetworkRegions.outOfService(evacuadas, node.region())) {
 				continue;
 			}
@@ -124,14 +150,37 @@ public class StorageOverviewNodes {
 			if (node.observedContentUsedMb() == null) {
 				semUso++;
 			}
-			Long reserva = node.reservedDiskMb();
 			if (node.observedDiskTotalMb() == null) {
 				semTotal++;
 			}
-			discos.add(new Disco(node.id(), node.declaredDiskMb(), node.observedDiskFreeMb(),
-				node.observedDiskTotalMb(), reserva, node.observedContentUsedMb(), node.usedPercent()));
+			discos.add(diskOf(node));
 		}
 		Long livreAgregado = semMedida == comDisco && comDisco > 0 ? null : livre;
-		return new Capacity(declarado, livreAgregado, comDisco, semMedida, semTotal, semUso, List.copyOf(discos));
+		return new Capacity(declarado, livreAgregado, comDisco, semMedida, semTotal, semUso, List.copyOf(discos),
+			online, foraDoAr.size(), List.copyOf(foraDoAr));
+	}
+
+	/**
+	 * O disco de <b>um</b> nó, para a página individual do §17.
+	 *
+	 * <p>A mesma conta de {@link #capacity()}, com a mesma fonte: o {@link Disco} é montado pelo
+	 * mesmo código que monta a linha do painel geral. Duas contas para o mesmo disco dariam dois
+	 * números na tela — e o operador não saberia qual acreditar.</p>
+	 *
+	 * <p>{@code null} quando o nó não existe ou não pode guardar objeto ({@code OBJECT_PUT}): a
+	 * página do nó o mostra, mas chamar de "disco de armazenamento" um nó de processamento
+	 * prometeria espaço que ele não oferece.</p>
+	 */
+	@Transactional(readOnly = true)
+	public Disco diskOf(String nodeId) {
+		return nodes.findById(nodeId)
+			.filter(node -> TaskType.OBJECT_PUT.allowedFor(node.profiles()))
+			.map(StorageOverviewNodes::diskOf)
+			.orElse(null);
+	}
+
+	private static Disco diskOf(NetworkNode node) {
+		return new Disco(node.id(), node.declaredDiskMb(), node.observedDiskFreeMb(), node.observedDiskTotalMb(),
+			node.reservedDiskMb(), node.observedContentUsedMb(), node.usedPercent());
 	}
 }

@@ -75,10 +75,22 @@ class NetworkNodePersistenceAdapter implements NetworkNodeRepository {
 	}
 
 	@Override
+	public void observeIp(String id, String ip, Instant now) {
+		// Ordem importa: a marca é decidida contra o endereço ANTIGO.
+		repository.markIpChanged(id, ip, now);
+		repository.setObservedIp(id, ip);
+	}
+
+	@Override
+	public void touchConfig(String id, Instant now) {
+		repository.touchConfig(id, now);
+	}
+
+	@Override
 	public void touch(String id, String runtimeVersion, Double cpuPercent, Integer memoryMb, Integer runningTasks,
-			Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Instant now) {
+			Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Long bytesInMb, Long bytesOutMb, Instant now) {
 		repository.heartbeat(id, runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, diskTotalMb,
-			contentUsedMb, now);
+			contentUsedMb, bytesInMb, bytesOutMb, now);
 	}
 
 	@Override
