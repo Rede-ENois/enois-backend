@@ -365,6 +365,37 @@ não é acusada); `NetworkStorageReplicationTests` 8 (1 novo pela rota real). Mu
 ordem invertida, sem conferência de tamanho, réplica 0 com fallback, varredura relendo todas as
 cópias, `readBody` voltando a chamar `bodyPath` — 6 de 6 derrubam.
 
+## 5.5.1 O download não serve cópia que o catálogo marcou como não-conferente
+
+O §5.5 fez o `readBody` cair para o corpo do nó local. O `STALE` já existia antes (confirmação com
+digest errado, poda de designação vencida) e ganhou mais um produtor nos §5.7/§5.8 (a varredura do
+próprio disco). Ficava um buraco entre eles: a leitura local olhava **só o arquivo**. Um nó marcado
+`STALE` — pela confirmação com digest errado, pela poda de designação vencida ou pela varredura do
+próprio nó (§5.7/§5.8) — continuava servindo o corpo em `GET /network/storage/objects/{objectId}`, e é por
+esse download que a réplica de **outro** nó recebe o objeto. O catálogo dizia "não confere" e a rota
+entregava assim mesmo.
+
+| situação da leitura local | antes | agora |
+|---|---|---|
+| réplica 0 (`rede.storage.root`), com ou sem corpo de nó | servia | **serve** (é o arquivo do upload; o CP é dono do disco) |
+| corpo do nó, linha `OK` para o dono do disco | servia | serve |
+| corpo do nó, linha `STALE`/`PENDING_REMOTE`/`GONE` | **servia** | **`409 STORAGE_REPLICA_STALE`** com o estado na mensagem |
+| corpo do nó, sem linha de colocação para ele | servia | serve — o PUT autenticado grava o corpo antes de confirmar, e recusar por ausência transformaria essa janela em 409 |
+| disco sem identidade de nó (`ownerNodeId()` nulo) | servia | serve — não há colocação a cobrar (instalação do CP, não um runtime) |
+| corpo só na raiz do CP **e** cópia de nó ao lado | servia a raiz | serve a raiz, sem exigir a cópia do nó |
+
+Quem decide é o dono do disco, não o id que veio na requisição: `exigirCopiaServivel` pergunta ao
+`NodeBodyStore` de quem é este disco (`node.json` + `api-key` 0600, §5.6) e cobra a colocação **desse**
+nó. O `409` não lista bytes nem digest: a cópia não é boa, e quem quer o objeto usa outro nó.
+
+**O que continua fora:** a leitura da réplica 0 **não** é cobrada, porque a réplica 0 não tem linha de colocação de nó — quem
+prova a integridade dela é a varredura (§4.1), que a relê.
+
+**Verificação:** `StorageLocalBodyServingTests` **14** (4 novos: `STALE` não é servida e o `409` traz o
+estado; `OK` continua servida; corpo sem linha continua servido; disco sem identidade não é cobrado).
+Mutações: leitura local deixando de exigir cópia `OK`, só `GONE` recusado, ausência de linha recusando
+— **3 de 3 derrubam**.
+
 ## 5.6 Inventário do disco do nó: o que ele tem contra o que o catálogo promete
 
 O §5.4 fez o nó guardar, e o §5.5 fez o Control Plane servir do disco local. Faltava a pergunta que

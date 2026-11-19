@@ -949,10 +949,12 @@ public class StorageCatalogService {
 		// um GET num Control Plane que nunca recebeu upload escrever em disco, e fariam uma falha de
 		// disco virar 500 num download em vez de "não está aqui" (409/410).
 		Path cpBody = Path.of(storageRoot).resolve(objectId);
+		boolean localCopy = nodeBodies != null && nodeBodies.has(objectId);
 		if (Files.isReadable(cpBody)) {
 			return openVerified(cpBody, object);
 		}
-		if (nodeBodies != null && nodeBodies.has(objectId)) {
+		if (localCopy) {
+			exigirCopiaServivel(objectId);
 			// O `pathOf` + `openVerified` só reconhece o envelope (`ENOISENV1`); o arquivo que o
 			// NodeBodyStore grava é `ENOISENC1`, outro cabeçalho. Servir o caminho cru devolveria os
 			// bytes CIFRADOS com 200 — o cliente receberia bytes que só quem tem a chave entende.
@@ -969,6 +971,36 @@ public class StorageCatalogService {
 		}
 		throw new ApiException(410, "STORAGE_BODY_MISSING",
 			"O catalogo registra a copia, mas o corpo nao esta neste no.");
+	}
+
+	/**
+	 * Serve só a cópia que o catálogo ainda considera <b>boa</b>.
+	 *
+	 * <p><b>Antes:</b> a leitura local olhava só o arquivo. Um nó marcado {@code STALE} — pela
+	 * confirmação com digest errado, pela varredura do próprio nó ou pela poda de designação vencida —
+	 * continuava servindo o corpo para qualquer download ali, e o download é como a réplica de outro
+	 * nó recebe o objeto. O catálogo dizia "não confere" e esta rota entregava o que o catálogo nega.</p>
+	 *
+	 * <p><b>Agora:</b> quando o corpo é a cópia de um nó ({@code NodeBodyStore} com dono identificado),
+	 * a leitura exige linha {@code OK} para esse nó. Sem linha — objeto que nunca foi designado a ele — a
+	 * leitura local segue valendo: é o caso do Control Plane que recebeu o upload e guarda o corpo sem
+	 * passar por colocação de nó. A réplica 0 na raiz do CP continua fora desta regra: ela não tem
+	 * linha de colocação de nó, e o CP é o próprio dono do disco.</p>
+	 */
+	private void exigirCopiaServivel(String objectId) {
+		if (nodeBodies == null) {
+			return;
+		}
+		String dono = nodeBodies.ownerNodeId();
+		if (dono == null) {
+			// Disco sem identidade de nó (instalação do CP, não um runtime): não há colocação a cobrar.
+			return;
+		}
+		StoragePlacement copia = catalog.placementOn(objectId, dono).orElse(null);
+		if (copia != null && copia.state() != StoragePlacement.State.OK) {
+			throw new ApiException(409, "STORAGE_REPLICA_STALE",
+				"A copia neste no nao confere (" + copia.state().name() + "); use uma copia OK.");
+		}
 	}
 
 	/**
