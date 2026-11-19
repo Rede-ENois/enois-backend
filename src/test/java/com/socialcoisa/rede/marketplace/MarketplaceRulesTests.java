@@ -117,6 +117,64 @@ class MarketplaceRulesTests {
 	}
 
 	@Test
+	void themeAuthorDownloadsOwnListingWithoutPayingAndOthersCannot() throws Exception {
+		var auth = new TestAuthHelper(mockMvc, objectMapper);
+		var author = auth.authenticate("mkt_owner_courtesy");
+		var intruder = auth.authenticate("mkt_owner_intruder");
+		String themeId = publishedTheme(author, "Tema do proprio autor");
+		mockMvc.perform(post("/marketplace")
+				.header("X-Session-Token", author.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+					"itemKind", "THEME",
+					"itemId", themeId,
+					"title", "Tema do proprio autor",
+					"price", CoinService.FAIS(50)))))
+			.andExpect(status().isOk());
+		String listingId = repository.findActiveByItem("THEME", themeId).orElseThrow().id();
+		long authorBalance = walletBalance(author.token());
+		int installsBefore = installs(themeId);
+
+		// Antes: comprar o proprio tema era a unica porta, e ela fechava com 400 OWN_ITEM.
+		mockMvc.perform(post("/marketplace/" + listingId + "/buy")
+				.header("Idempotency-Key", java.util.UUID.randomUUID().toString())
+				.header("X-Session-Token", author.token()))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("OWN_ITEM"));
+
+		// Outra conta nao usa o atalho do autor (nao tem tema de graca).
+		mockMvc.perform(post("/marketplace/" + listingId + "/owner-download")
+				.header("Idempotency-Key", java.util.UUID.randomUUID().toString())
+				.header("X-Session-Token", intruder.token()))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("NOT_THE_OWNER"));
+
+		mockMvc.perform(post("/marketplace/" + listingId + "/owner-download")
+				.header("Idempotency-Key", java.util.UUID.randomUUID().toString())
+				.header("X-Session-Token", author.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("OWNER"));
+
+		// Nada sai do saldo do autor, nenhuma compra nasce e o contador so mede instalacao real.
+		assertThat(walletBalance(author.token())).isEqualTo(authorBalance);
+		assertThat(repository.findPurchasesByBuyer(author.userId())).isEmpty();
+		assertThat(installs(themeId)).isEqualTo(installsBefore);
+
+		// O autor instala o proprio tema pelo mesmo caminho de qualquer instalacao.
+		mockMvc.perform(post("/temas/galeria/" + themeId + "/install")
+				.header("X-Session-Token", author.token()))
+			.andExpect(status().isOk());
+		assertThat(installs(themeId)).isEqualTo(installsBefore + 1);
+	}
+
+	private int installs(String themeId) throws Exception {
+		String body = mockMvc.perform(get("/temas/galeria/" + themeId))
+			.andExpect(status().isOk())
+			.andReturn().getResponse().getContentAsString();
+		return objectMapper.readTree(body).get("installs").asInt();
+	}
+
+	@Test
 	void ensureListedIsIdempotentForTheGalleryMigration() throws Exception {
 		String itemId = "theme_migracao_teste";
 
