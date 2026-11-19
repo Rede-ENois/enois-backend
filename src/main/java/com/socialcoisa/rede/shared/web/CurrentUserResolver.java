@@ -42,11 +42,44 @@ public class CurrentUserResolver {
 			? authSessionRepository.findActiveSanctionsUserId(sessionToken.trim(), clock.instant())
 			: activeUserId(sessionToken);
 		String resolvedUserId = identity
-			.orElseThrow(() -> new ApiException(401, "UNAUTHENTICATED", "Sessao invalida ou expirada."));
+			.orElseThrow(() -> unauthenticated(sessionToken, true));
 		// Set before the verification check so a 403 EMAIL_NOT_VERIFIED is still attributed to the
 		// user. RequestObservabilityFilter logs it on the access line and clears it.
 		MDC.put(RequestObservabilityFilter.MDC_USER_ID, resolvedUserId);
 		return requireVerifiedIdentity(new CurrentUser(new UserId(resolvedUserId)));
+	}
+
+	/**
+	 * Recusa de sessao. Token que o banco conhece e que alguem encerrou ganha o detalhe
+	 * {@code SESSION_REVOKED}: sem ele o app mandava "sua sessao expirou" para quem tinha acabado de
+	 * trocar a senha. Token desconhecido continua igual — nada e dito sobre valor inventado.
+	 *
+	 * <p>{@code tokenDoPedido} diz que o token veio do pedido atual — o {@code SessionCookieFilter} ja
+	 * o leu do cabecalho ou derivou do cookie. E o que separa "esta sessao foi encerrada" de um token
+	 * qualquer que apareceu no caminho.</p>
+	 * <p>Quando o token chegou, e ele que manda: a leitura em cache e da mesma requisicao e pode ter
+	 * sido feita ANTES de a troca de senha revogar (a troca consulta a sessao para decidir se e admin).
+	 * Nesse caso o banco ja responde certo, e por isso o motivo vem sempre de uma leitura sem cache.</p>
+	 */
+	static ApiException unauthenticated(String sessionToken, boolean tokenDoPedido) {
+		return unauthenticated(sessionToken, tokenDoPedido, null, null);
+	}
+
+	/**
+	 * A recusa com o motivo, para quem ja tem as dependencias em maos — o tratamento global de
+	 * excecoes, que as recebe por {@code ObjectProvider} e as resolve no thread do pedido. Sem elas,
+	 * a recusa sai generica: e melhor nao dizer nada do que dizer errado.
+	 */
+	static ApiException unauthenticated(String sessionToken, boolean tokenDoPedido,
+			AuthSessionRepository authSessions, Clock clock) {
+		ApiException refusal = new ApiException(401, "UNAUTHENTICATED", "Sessao invalida ou expirada.");
+		if (!tokenDoPedido || !StringUtils.hasText(sessionToken) || authSessions == null || clock == null) {
+			return refusal;
+		}
+		boolean revoked = authSessions.findInactiveReason(sessionToken.trim(), clock.instant())
+			.filter(reason -> reason == AuthSessionRepository.InactiveSession.REVOKED)
+			.isPresent();
+		return revoked ? refusal.withDetail("SESSION_REVOKED") : refusal;
 	}
 
 	/**

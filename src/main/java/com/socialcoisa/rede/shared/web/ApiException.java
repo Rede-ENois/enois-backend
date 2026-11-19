@@ -4,6 +4,7 @@ public class ApiException extends RuntimeException {
 
 	private final int status;
 	private final String code;
+	private String detail;
 	private long retryAfterSeconds;
 
 	public ApiException(int status, String code, String message) {
@@ -27,12 +28,22 @@ public class ApiException extends RuntimeException {
 		return code;
 	}
 
+	/** Explicação adicional que o cliente usa para escolher a mensagem, nunca dado sensível. */
+	public String detail() {
+		return detail;
+	}
+
 	public long retryAfterSeconds() {
 		return retryAfterSeconds;
 	}
 
 	public ApiException withRetryAfter(long seconds) {
 		this.retryAfterSeconds = seconds;
+		return this;
+	}
+
+	public ApiException withDetail(String value) {
+		this.detail = value;
 		return this;
 	}
 }

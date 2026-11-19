@@ -55,6 +55,15 @@ class AuthSessionPersistenceAdapter implements AuthSessionRepository {
 	}
 
 	@Override
+	public Optional<InactiveSession> findInactiveReason(String token, Instant now) {
+		return findStoredSession(token)
+			.filter(session -> !session.activeAt(now))
+			.map(session -> session.revoked()
+				? InactiveSession.REVOKED
+				: InactiveSession.EXPIRED);
+	}
+
+	@Override
 	public void revoke(String token, Instant revokedAt) {
 		findSession(token).ifPresent(session -> {
 			session.revoke(revokedAt);
@@ -102,13 +111,17 @@ class AuthSessionPersistenceAdapter implements AuthSessionRepository {
 				&& leitura.hash().equals(hash)) {
 			return leitura.sessao();
 		}
-		Optional<AuthSessionJpaEntity> hashed = repository.findById(hash);
-		var session = hashed.isPresent() || looksLikeStoredHash(token) ? hashed : repository.findById(token);
+		var session = findStoredSession(token);
 		// Só esta requisição reutiliza a leitura; revogação e decisão são relidas no próximo pedido.
 		if (request != null) {
 			request.setAttribute(REQUEST_CACHE, new LeituraDaRequisicao(hash, session), RequestAttributes.SCOPE_REQUEST);
 		}
 		return session;
+	}
+
+	private Optional<AuthSessionJpaEntity> findStoredSession(String token) {
+		Optional<AuthSessionJpaEntity> hashed = repository.findById(Hashes.sha256Hex(token));
+		return hashed.isPresent() || looksLikeStoredHash(token) ? hashed : repository.findById(token);
 	}
 
 	private record LeituraDaRequisicao(String hash, Optional<AuthSessionJpaEntity> sessao) {}

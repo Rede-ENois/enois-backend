@@ -57,6 +57,12 @@ public final class TestDatabase {
 		require().update("update user_credentials set password_usable = false where user_id = ?", userId);
 	}
 
+	/** Sessao que venceu sozinha, sem ninguem revogar — a tabela guarda o hash do token, como o app. */
+	public static int expirarSessao(String sessionToken, java.time.Instant expiresAt) {
+		return require().update("update auth_sessions set expires_at = ? where token = ? and revoked_at is null",
+			expiresAt, com.socialcoisa.rede.shared.security.Hashes.sha256Hex(sessionToken));
+	}
+
 
 	/** Insere um token de confirmacao com o hash de um valor que o teste conhece. */
 	public static void insertVerificationToken(String rawToken, String userId, Instant expiresAt, Instant now) {
