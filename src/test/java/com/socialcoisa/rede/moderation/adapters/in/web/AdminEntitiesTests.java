@@ -108,6 +108,66 @@ class AdminEntitiesTests {
 	}
 
 	/**
+	 * Exclusão administrativa de conta: a pessoa não sabe a senha, e o admin decide sem ela. A conta
+	 * sai pelo MESMO caminho da auto-exclusão (perfil anonimizado, sessões revogadas), o motivo fica
+	 * na auditoria e ninguém apaga a própria conta nem a de outro administrador.
+	 */
+	@Test
+	void exclusaoAdministrativaDeContaAnonimizaERevogaSemSenha() throws Exception {
+		var admin = admin("aent_del_admin");
+		var alvo = auth().authenticate("aent_del_alvo");
+		String username = one("select username from users where id = ?", alvo.userId());
+
+		mockMvc.perform(post("/admin/moderation/users/" + username + "/delete")
+				.header("X-Session-Token", admin.token())
+				.header("Idempotency-Key", "aent-del-1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("reason", REASON))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.outcome").value("DELETED"));
+
+		assertThat(one("select username from users where id = ?", alvo.userId()))
+			.as("perfil anonimizado")
+			.startsWith("removed-");
+		assertThat(count("select count(*) from auth_sessions where user_id = ? and revoked_at is null",
+			alvo.userId())).as("sessões do alvo revogadas").isZero();
+		assertThat(count("select count(*) from audit_logs where action = 'ADMIN_ACCOUNT_DELETED' "
+			+ "and target_id = ?", alvo.userId())).isEqualTo(1);
+
+		// Sem motivo não há decisão: a recusa vem antes de qualquer escrita.
+		var outra = auth().authenticate("aent_del_outra");
+		String outraUsername = one("select username from users where id = ?", outra.userId());
+		mockMvc.perform(post("/admin/moderation/users/" + outraUsername + "/delete")
+				.header("X-Session-Token", admin.token())
+				.header("Idempotency-Key", "aent-del-2")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("reason", "curto"))))
+			.andExpect(status().isBadRequest());
+		assertThat(count("select count(*) from users where id = ? and username = ?",
+			outra.userId(), outraUsername)).as("sem motivo, nada muda").isEqualTo(1);
+
+		// A própria conta e a de outro administrador ficam de fora.
+		String adminUsername = one("select username from users where id = ?", admin.userId());
+		mockMvc.perform(post("/admin/moderation/users/" + adminUsername + "/delete")
+				.header("X-Session-Token", admin.token())
+				.header("Idempotency-Key", "aent-del-3")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("reason", REASON))))
+			.andExpect(status().isBadRequest());
+		var outroAdmin = admin("aent_del_admin2");
+		String outroAdminUsername = one("select username from users where id = ?", outroAdmin.userId());
+		mockMvc.perform(post("/admin/moderation/users/" + outroAdminUsername + "/delete")
+				.header("X-Session-Token", admin.token())
+				.header("Idempotency-Key", "aent-del-4")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("reason", REASON))))
+			.andExpect(status().isConflict());
+		assertThat(one("select username from users where id = ?", outroAdmin.userId()))
+			.as("conta admin intacta")
+			.isEqualTo(outroAdminUsername);
+	}
+
+	/**
 	 * A exclusão administrativa não pode deixar vínculo para trás: canal, publicação de canal, fixado e
 	 * favorito não têm chave estrangeira para `communities` (V33, V97, V139), então só a limpeza
 	 * explícita dentro da transação os leva embora. Antes desta cobertura, excluir deixava canal e
