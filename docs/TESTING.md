@@ -39,15 +39,31 @@ that counts coin entries of someone who just acted leaves the `presenca:` entrie
 Concurrency tests (several threads sending the same requests at once) follow
 `PostCounterConcurrencyTests`; see [`CONCURRENCY.md`](CONCURRENCY.md) for what H2 cannot reproduce.
 
+### Processos de mídia em Windows e Linux
+
+`MediaFfmpegRunnerTests` e `MediaFfmpegTranscodeTests` usam `FfmpegProcessoDeTeste`: o `jpackage`
+do JDK 25 gera launchers nativos com uma JVM mínima (`java.base`), sem instalar ffmpeg nem executar
+scripts de shell. O runner de produção continua lançando processos reais. Os cenários registram os
+argumentos, gravam a saída, devolvem a duração, falham ou bloqueiam até o timeout/interrupção.
+É necessário um JDK completo com `jpackage` e `jlink`, não apenas um JRE. Os launchers e seus
+cenários ficam em `@TempDir`, com limpeza automática também verificada; não há skip por plataforma.
+
+Para simular indisponibilidade de temporários, os testes criam um arquivo comum em `@TempDir` e
+usam esse arquivo como pai de diretórios inválidos. Não dependem de `/dev/null`, permissões POSIX,
+privilégios do usuário nem alterações globais em `java.io.tmpdir`.
+
+### Outbox e economia controladas
+
 `CommunityProjectNotificationTests` dirige o worker real por ids concretos, com relógio fixo.
 As fixtures de projetos ficam agendadas para esse relógio dentro da transação que grava o evento:
 workers de outros contextos compartilham o H2 e não podem disputar seus claims. Avisos, recibos,
 continuações e preferências dos assinantes do cenário são limpos mesmo quando uma asserção falha.
 
-`OutboxWorkerTests` e `OutboxRetentionWorkerTests` usam bases H2 próprias para impedir que workers
-de outros contextos disputem os claims. Nesses contextos, a ponte de fixtures `TestDatabaseSupport`
-é substituída para não redirecionar o helper estático de autenticação; os repositórios e workers
-continuam reais.
+`OutboxWorkerTests` e `OutboxRetentionWorkerTests` usam bases H2 próprias para impedir que chamadas
+de outros contextos disputem os claims. Nesses contextos e em `MediaDeletionWorkerTransactionTests`,
+a ponte de fixtures `TestDatabaseSupport` é substituída para evitar a associação estática durante
+o boot. O `TestDatabaseContextListener` associa o helper ao contexto que está efetivamente em teste
+e o reassocia ao retornar a outro contexto em cache; os repositórios e workers continuam reais.
 
 **Estado global de rede precisa ser devolvido.** A base H2 é compartilhada entre classes: quem
 deixa um estado que muda o resultado de outro (aqui, uma região declarada fora de serviço, que
@@ -96,12 +112,34 @@ Cada controller principal possui uma classe de teste:
 
 **TestAuthHelper.java**: Helper para autenticar usuários em testes (signup → retorna token + userId).
 
-O banco H2 é compartilhado entre classes. Cenários que executam rotinas globais precisam limpar os
-bloqueios de IP que a rodada inseriu, inclusive quando uma asserção falha, sem remover bloqueios
-anteriores. `CenarioAutoBan` fornece uma origem sintética por cenário e registra esses bloqueios
-para limpeza no `@AfterEach`. Sanções, revogações de sessão e sanitizações globais não são desfeitas.
-A regressão confere a aplicação do controle, a preservação de estado anterior e a autenticação de
-um cenário seguinte. O worker real e as regras de produção permanecem intactos.
+### Isolamento das varreduras globais
+
+A base H2 padrão é compartilhada entre contextos. Testes de workers que varrem contas e aplicam
+sanções não podem consumir as fixtures de outras classes. `SuspiciousAutoBanTests` usa uma base
+própria com `DB_CLOSE_DELAY=0` e descarta o contexto depois de cada método. Assim, o bloqueio real
+por repetição de origem continua coberto, sem deixar contas punidas ou origens bloqueadas para
+outros cenários. Não basta desligar o agendamento: `sweep()` continua executando a política completa.
+
+O `TestDatabaseContextListener`, registrado em `src/test/resources/META-INF/spring.factories`,
+reassocia o helper estático ao `JdbcTemplate` do contexto atual na preparação da instância (antes
+do `@BeforeAll` de instância) e antes de cada método, inclusive quando o Spring retorna a um
+contexto em cache após fechar uma base isolada. Contextos sem JDBC não precisam dessa associação.
+A instalação inicial por `TestDatabaseSupport` permanece disponível durante a criação do contexto.
+
+Prova de regressão entre classes, no mesmo processo e com reutilização do contexto:
+
+```bash
+./mvnw -DforkCount=1 -DreuseForks=true -Dsurefire.runOrder=alphabetical \
+  '-Dtest=MarketplaceSanitizeBehaviorTests#theSanitizingPassRemovesOnlyTheLeftoversAndKeepsHealthyListings,BulkBanAndSuspiciousTests#approvedModeratorCanSeeAndRemoveSuspiciousPostsInBulk,SuspiciousAutoBanTests#bansAndSanitizesAnAccountAboveTheRiskCeiling,ProfileControllerTests#viewsPublicProfile' test
+```
+
+Além do descarte da base, `CenarioAutoBan` fornece uma origem sintética por cenário e registra os
+bloqueios criados pela rodada para limpeza no `@AfterEach`, inclusive se uma asserção falhar, sem
+remover bloqueios anteriores. A regressão `naoContaminaAutenticacaoDepoisDeFixturesDeOutrasClasses`
+semeia explicitamente o bloqueio anterior e confere aplicação do controle, preservação desse estado
+e autenticação de um cenário seguinte. Os testes de duas e três contas cobrem os dois lados do
+limiar, inclusive recusa de cadastro e login. A limpeza não desfaz sanções, revogações de sessão ou
+sanitizações; essas persistem até o descarte do H2. Worker e regras de produção permanecem intactos.
 
 ### Teste de Contexto
 
@@ -136,6 +174,30 @@ void listaPublicacoesDoCenario() throws Exception {
             .header("X-Session-Token", auth.token()))
         .andExpect(status().isOk());
 }
+```
+
+## Workers, relógio e isolamento
+
+O classpath de teste registra `AgendamentoManualDeTesteConfig`: quando
+`spring.task.scheduling.enabled=false`, o `NoOpTaskScheduler` mantém os workers sob controle
+explícito dos cenários. Isso não desativa seus métodos, regras ou validações. O agendamento da
+aplicação produtiva não foi alterado; essa configuração existe somente em `src/test`.
+
+Os testes da outbox, retenção da outbox e transação de exclusão de mídia usam bases H2 próprias.
+Assim, outro contexto não consome seus eventos nem preenche o lote com fixtures alheias.
+O relógio desses cenários é fixo e as datas de elegibilidade são derivadas dele. Um job que deve
+estar vencido nasce antes do instante atual do cenário, não exatamente no limite sujeito à
+precisão da coluna do banco. As verificações de recibo, backoff, lote e transação continuam ativas.
+
+Os cenários que dependem de notificações da outbox usam `ProcessadorOutboxDeTeste` depois da
+resposta HTTP. Ele seleciona o evento por tipo e agregado e chama o worker real, sem consumir
+a fila inteira. O retorno do worker confirma a tentativa; as asserções das notificações
+comprovam os efeitos de negócio. `MonitoringTests` chama o `flush` real e verifica a gravação
+do marcador exclusivo no arquivo, sem aguardar o agendador nem remover a redação de dados.
+
+```bash
+./mvnw -Dtest=AgendamentoManualDeTesteTests,OutboxWorkerTests,OutboxRetentionWorkerTests,MediaDeletionWorkerTransactionTests test
+./mvnw -Dtest=GroupNotificationsTests,PersonalizationSurfaceAuditTests,MonitoringTests test
 ```
 
 ## Cobertura

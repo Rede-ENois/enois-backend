@@ -6,7 +6,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import java.time.Instant;
+import java.time.Clock;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -14,7 +15,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
@@ -50,6 +54,20 @@ import tools.jackson.databind.ObjectMapper;
 @SpringBootTest
 @AutoConfigureMockMvc
 class NetworkTasksTests {
+
+	@Autowired
+	private Clock relogio;
+
+	@TestConfiguration
+	static class RelogioDoCenario {
+
+		@Bean
+		@Primary
+		Clock relogioDasTarefas() {
+			// H2 persiste micros; o relógio segue avançando sem tornar enqueue/reclaim futuros por arredondamento.
+			return Clock.tick(Clock.systemUTC(), Duration.ofNanos(1000));
+		}
+	}
 
 	@Autowired
 	private MockMvc mockMvc;
@@ -106,7 +124,7 @@ class NetworkTasksTests {
 		// poderia designar a mesma tarefa a ele de novo.
 		stopHeartbeat(dead);
 		expireClaim(task.id());
-		assertThat(tasks.reclaimAbandoned(Instant.now())).isEqualTo(1);
+		assertThat(tasks.reclaimAbandoned(relogio.instant())).isEqualTo(1);
 		assertThat(statusOf(task.id())).isEqualTo("PENDING");
 
 		// A tarefa volta para a fila e vai para o outro nó, com tentativa maior.
@@ -188,10 +206,10 @@ class NetworkTasksTests {
 
 		// O prazo vence enquanto o nó executa.
 		jdbc.update("update network_tasks set deadline = ? where id = ?",
-			java.sql.Timestamp.from(Instant.now().minusSeconds(60)), task.id());
+			java.sql.Timestamp.from(relogio.instant().minusSeconds(60)), task.id());
 		expireClaim(task.id());
 
-		tasks.reclaimAbandoned(Instant.now());
+		tasks.reclaimAbandoned(relogio.instant());
 		assertThat(statusOf(task.id())).isEqualTo("DEAD");
 		assertThat(jdbc.queryForObject("select last_error from network_tasks where id = ?", String.class, task.id()))
 			.contains("TASK_EXPIRED");
@@ -208,7 +226,7 @@ class NetworkTasksTests {
 		// Simula o nó caindo repetidamente até esgotar as tentativas (default 5).
 		for (int i = 0; i < 5; i++) {
 			expireClaim(task.id());
-			tasks.reclaimAbandoned(Instant.now());
+			tasks.reclaimAbandoned(relogio.instant());
 			if ("DEAD".equals(statusOf(task.id()))) {
 				break;
 			}
@@ -239,7 +257,7 @@ class NetworkTasksTests {
 		// O próximo instante é no futuro: o backoff não devolve a tarefa imediatamente.
 		assertThat(jdbc.queryForObject("select next_attempt_at from network_tasks where id = ?",
 				java.sql.Timestamp.class, task.id()).toInstant())
-			.isAfter(Instant.now());
+			.isAfter(relogio.instant());
 	}
 
 	@Test
@@ -463,7 +481,7 @@ class NetworkTasksTests {
 	@Test
 	void modoDeIncidenteNaoEhSobrescritoPelaAutomacao() {
 		jdbc.update("insert into network_state (id, mode, reason, since) values ('global', 'EMERGENCY', 'teste', ?)",
-			java.sql.Timestamp.from(Instant.now()));
+			java.sql.Timestamp.from(relogio.instant()));
 		assertThat(modes.evaluate()).isEqualTo(NetworkMode.EMERGENCY);
 	}
 
@@ -535,12 +553,12 @@ class NetworkTasksTests {
 	/** O nó parou de mandar heartbeat: o último visto fica para trás do limiar de nó vivo. */
 	private void stopHeartbeat(Node node) {
 		jdbc.update("update network_nodes set last_seen_at = ? where id = ?",
-			java.sql.Timestamp.from(Instant.now().minusSeconds(600)), node.id());
+			java.sql.Timestamp.from(relogio.instant().minusSeconds(600)), node.id());
 	}
 
 	private void expireClaim(String taskId) {
 		jdbc.update("update network_tasks set claim_expires_at = ? where id = ?",
-			java.sql.Timestamp.from(Instant.now().minusSeconds(5)), taskId);
+			java.sql.Timestamp.from(relogio.instant().minusSeconds(5)), taskId);
 	}
 
 	private String assignedNode(String taskId) {
