@@ -90,11 +90,9 @@ class BannedAuthorAnonymizedTests {
 			values (?, ?, 'BAN', 'Conta de teste banida.', 'ACTIVE', now())
 			""", "san_banonpost_" + System.nanoTime(), author.userId());
 
-		// O #715 (sessão de consulta) não autentica mais a sessão de quem foi banido: o post
-		// continua no fio, mas quem lê o feed é outra conta.
-		var viewer = auth.authenticate("bananon_viewer_" + System.nanoTime());
-		MvcResult page = mockMvc.perform(get("/feed")
-				.header("X-Session-Token", viewer.token()))
+		// O #715 (sessão de consulta) não autentica mais a sessão de quem foi banido: a leitura do
+		// post único é pública de propósito (é o link compartilhado), então o fio continua legível.
+		MvcResult page = mockMvc.perform(get("/feed/posts/{id}", postId))
 			.andExpect(status().isOk())
 			.andReturn();
 		String body = page.getResponse().getContentAsString();
