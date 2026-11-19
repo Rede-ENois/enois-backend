@@ -203,6 +203,7 @@ class NetworkParticipantTrafficTests {
 		var dono = auth.authenticate("net_dono_linha_ilegivel");
 		String admin = adminToken();
 		String nodeId = storageNodeFor(admin, dono.userId());
+		// A queda COM intervalo é a de 1 h atrás; a sem intervalo é a mais RECENTE.
 		reconnect(nodeId, 120, Instant.now().minusSeconds(3600));
 		reconnectRaw(nodeId, "{}", Instant.now().minusSeconds(60));
 
@@ -210,12 +211,16 @@ class NetworkParticipantTrafficTests {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.outages").value(2))
 			.andExpect(jsonPath("$.offlineSeconds").value(120))
-			.andExpect(jsonPath("$.lastOfflineSeconds").value(120))
+			// A "última" é a da linha mais NOVA, e ela não tem intervalo — vazia, e não os 120 s da
+			// queda anterior.
+			.andExpect(jsonPath("$.lastOfflineSeconds").value(nullValue()))
 			// A linha sem intervalo NÃO é "0 segundos": se entrasse na soma como zero, o tempo fora
 			// apareceria menor do que as duas linhas provam. Ela entra em `outages` (houve queda) e
-			// não em `measuredOutages` — é esta separação que diz à tela que a soma é piso, não total.
+			// não em `measuredOutages` — as duas perguntas são diferentes.
 			.andExpect(jsonPath("$.measuredOutages").value(1))
-			.andExpect(jsonPath("$.availabilityComplete").value(false));
+			// Desde o V369 a soma lê todas as linhas da trilha: com duas quedas no total, ela não é
+			// mais um piso — é o total, e `complete` diz a verdade.
+			.andExpect(jsonPath("$.availabilityComplete").value(true));
 	}
 
 	/** Nó que nunca voltou de uma ausência: zero quedas, zero segundos, nenhuma "última". */

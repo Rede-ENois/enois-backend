@@ -10,11 +10,13 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.network.application.NetworkNodeService;
 import com.socialcoisa.rede.network.application.NetworkParticipantService;
 import com.socialcoisa.rede.network.domain.NetworkNode;
+import com.socialcoisa.rede.network.domain.NodeAvailability;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
 
@@ -58,7 +60,8 @@ class NetworkParticipantController {
 			Long reservedDiskMb, Long trafficInMb, Long trafficOutMb, Long trafficTotalMb,
 			Double outboundSharePercent, int outages, int measuredOutages, long offlineSeconds,
 			Long lastOfflineSeconds, boolean online, boolean availabilityComplete, long tasksDone, long tasksRequeued,
-			boolean operable, String quarantineReason, Map<String, Integer> storageBandwidth) {
+			boolean operable, String quarantineReason, Map<String, Integer> storageBandwidth,
+			NodeAvailability uptime) {
 
 		static MyNodeView of(NetworkParticipantService.NodeWithContribution entry) {
 			NetworkNode node = entry.node();
@@ -79,7 +82,10 @@ class NetworkParticipantController {
 				// Nome do tipo em vez do enum: é o vocabulário do contrato (§6), o mesmo da rota.
 				entry.storageBandwidth().entrySet().stream()
 					.collect(java.util.stream.Collectors.toMap(entry2 -> entry2.getKey().name(),
-						Map.Entry::getValue, (a, b) -> a, java.util.LinkedHashMap::new)));
+						Map.Entry::getValue, (a, b) -> a, java.util.LinkedHashMap::new)),
+				// Disponibilidade por dia (V369). É o que responde "consultar disponibilidade" da
+				// tela do participante com uma janela que atravessa dias, e não só as transições.
+				entry.uptime());
 		}
 	}
 
@@ -181,6 +187,20 @@ class NetworkParticipantController {
 	}
 
 	record JoinResponse(String token, Instant expiresAt, String nextStep) {
+	}
+
+	/**
+	 * A disponibilidade histórica deste nó, por dia (brief §18, V369).
+	 *
+	 * <p>A {@code uptime} que vai em cada nó do quadro cobre a janela padrão; esta rota abre a janela
+	 * que o participante quiser (de 1 a 90 dias) sem carregar o quadro inteiro. Nó de outra conta é
+	 * 404, como em {@code GET /nodes/{id}}.</p>
+	 */
+	@GetMapping("/nodes/{id}/uptime")
+	NodeAvailability uptime(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String id, @RequestParam(defaultValue = "7") int days) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return participant.uptime(user.id().value(), id, days);
 	}
 
 	@PostMapping("/join")

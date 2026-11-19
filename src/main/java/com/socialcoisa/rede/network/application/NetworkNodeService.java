@@ -74,6 +74,13 @@ public class NetworkNodeService {
 	private final com.socialcoisa.rede.network.application.NodeCertificateService certificates;
 
 	/**
+	 * O contador diário de disponibilidade (V369). {@code @Nullable} pelo mesmo motivo do
+	 * certificado: quem monta o serviço à mão nos testes de ciclo de vida não está contando
+	 * disponibilidade.
+	 */
+	private final NodeUptimeService uptime;
+
+	/**
 	 * Forma anterior, sem o serviço de certificado. Existe para quem monta o serviço à mão (testes de
 	 * unidade do ciclo de vida) não precisar de um certificado que não está testando.
 	 */
@@ -83,7 +90,7 @@ public class NetworkNodeService {
 			com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository responsibles,
 			com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository storageBandwidth) {
 		this(nodes, authorities, tokens, keyService, audit, clock, tokenTtlMinutes, conflictSeconds, staleSeconds,
-			responsibles, storageBandwidth, null);
+			responsibles, storageBandwidth, null, null);
 	}
 
 	@org.springframework.beans.factory.annotation.Autowired
@@ -97,7 +104,8 @@ public class NetworkNodeService {
 			com.socialcoisa.rede.network.application.port.out.NetworkNodeResponsibleRepository responsibles,
 			com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository storageBandwidth,
 			@org.springframework.lang.Nullable
-			com.socialcoisa.rede.network.application.NodeCertificateService certificates) {
+			com.socialcoisa.rede.network.application.NodeCertificateService certificates,
+			@org.springframework.lang.Nullable NodeUptimeService uptime) {
 		this.nodes = nodes;
 		this.authorities = authorities;
 		this.tokens = tokens;
@@ -110,6 +118,7 @@ public class NetworkNodeService {
 		this.responsibles = responsibles;
 		this.storageBandwidth = storageBandwidth;
 		this.certificates = certificates;
+		this.uptime = uptime;
 	}
 
 	/**
@@ -247,6 +256,12 @@ public class NetworkNodeService {
 		// histórico de conexão). `lastSeenAt` antigo diz que houve uma janela sem contato; sem este
 		// registro, o painel mostra "conectado agora" e não conta que a máquina ficou fora.
 		registrarReconexao(authenticated, now);
+		// Disponibilidade por dia (V369): o mesmo heartbeat que prova que o nó está vivo alimenta o
+		// contador. Fica ao lado da reconexão de propósito — as duas leem o contato anterior, e uma
+		// tela não pode dizer que ele ficou fora um tempo que a outra não vê.
+		if (uptime != null) {
+			uptime.record(authenticated, authenticated.lastSeenAt(), now);
+		}
 		// O IP de origem vem do transporte, não do corpo: o nó atrás de NAT (brief §5) não informa
 		// endereço, e um campo no corpo seria o nó afirmando o próprio endereço — o oposto de medir.
 		if (beat.observedIp() != null && !beat.observedIp().isBlank()) {

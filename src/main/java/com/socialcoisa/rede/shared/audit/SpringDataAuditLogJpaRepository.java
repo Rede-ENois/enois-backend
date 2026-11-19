@@ -40,6 +40,14 @@ interface SpringDataAuditLogJpaRepository extends JpaRepository<AuditLogJpaEntit
 	/** Linhas do ator com a ação — a contribuição contada na trilha que a prova. Vai pelo índice do ator. */
 	long countByActorIdAndAction(String actorId, String action);
 
+	/**
+	 * O metadado de TODAS as linhas do alvo com a ação, sem limite de amostra — a soma de um campo
+	 * que cresce com o histórico não pode parar nas mais recentes. Projeta só a coluna necessária:
+	 * a linha inteira de uma conta com anos de transição seria peso sem uso.
+	 */
+	@Query("select a.metadata from AuditLogJpaEntity a where a.targetId = :targetId and a.action = :action")
+	List<String> findMetadataByTargetIdAndAction(@Param("targetId") String targetId, @Param("action") String action);
+
 	/** As linhas do alvo com a ação, no limite pedido — para a soma das ausências de um nó. */
 	List<AuditLogJpaEntity> findByTargetIdAndActionOrderByCreatedAtDesc(String targetId, String action,
 			Pageable pageable);

@@ -194,7 +194,13 @@ class NetworkNodePauseOwnerTests {
 			com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository bandwidth) {
 		return new NetworkParticipantService(nodes, mock(com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository.class),
 			mock(com.socialcoisa.rede.feed.application.port.out.AuditLogRepository.class), lifecycle,
-			bandwidth, Clock.fixed(NOW, ZoneOffset.UTC), 180);
+			bandwidth, novaUptime(), Clock.fixed(NOW, ZoneOffset.UTC), 180);
+	}
+
+	private static com.socialcoisa.rede.network.application.NodeUptimeService novaUptime() {
+		return new com.socialcoisa.rede.network.application.NodeUptimeService(
+			mock(com.socialcoisa.rede.network.application.port.out.NodeUptimeRepository.class),
+			Clock.fixed(NOW, ZoneOffset.UTC), 180, 365);
 	}
 
 	private static NetworkNode storageNode(Set<com.socialcoisa.rede.network.domain.NodeProfile> profiles) {

@@ -43,6 +43,11 @@ class AuditLogPersistenceAdapter implements AuditLogRepository {
 	}
 
 	@Override
+	public List<String> allMetadataFor(String targetId, String action) {
+		return repository.findMetadataByTargetIdAndAction(targetId, action);
+	}
+
+	@Override
 	public List<com.socialcoisa.rede.feed.application.port.out.AuditLog> findByTargetAndAction(String targetId,
 			String action, int limit) {
 		return repository.findByTargetIdAndActionOrderByCreatedAtDesc(targetId, action, PageRequest.of(0, limit))
