@@ -47,6 +47,8 @@ import com.socialcoisa.rede.shared.web.ApiException;
  * minuto depois de a última pessoa sair (a tolerância é o que deixa recarregar a página).</li>
  * <li>Cada tópico do grupo tem a própria sala de vídeo "Tamo junto"; a sala geral é outra.</li>
  * <li>Sair do grupo não encerra a chamada para os outros; no 1:1 sair encerra.</li>
+ * <li>A presença na sala tem sinal de vida: quem está dentro pinga, e a entrada cujo token
+ * falhou é desfeita na hora — fechar a aba sem desligar não sustenta a sala para sempre.</li>
  * <li>Gravação nunca é ligada (o token de entrada desliga gravação/transmissão).</li>
  * </ul>
  */
@@ -54,6 +56,12 @@ import com.socialcoisa.rede.shared.web.ApiException;
 public class CallService implements CallRoomAuthorization {
 
 	private static final Logger LOG = LoggerFactory.getLogger(CallService.class);
+
+	/**
+	 * Janela do sinal de vida: o front pinga a cada minuto, e duas batidas perdidas seguidas ainda
+	 * contam como gente presente. Passou da janela sem ping nenhum, a presença é fantasma.
+	 */
+	private static final Duration PRESENCE_FRESH_WINDOW = Duration.ofMinutes(2);
 
 	private final CallRepository calls;
 	private final CallAudience audience;
@@ -344,8 +352,27 @@ public class CallService implements CallRoomAuthorization {
 	public JoinView join(String callId, String actorId) {
 		requireConfigured();
 		CallSession call = enterStandalone(callId, actorId);
-		String token = tokens.tokenFor(call, roomParticipant(call, actorId),
-			displayName(actorId), moderatorOf(call, actorId));
+		String token;
+		try {
+			token = tokens.tokenFor(call, roomParticipant(call, actorId),
+				displayName(actorId), moderatorOf(call, actorId));
+		}
+		catch (RuntimeException failed) {
+			// A entrada gravou a presença antes de sair para buscar o token. Sem token a pessoa
+			// nunca abre a sala: se não sair da conta de presentes, o fantasma sustenta a sala
+			// "ao vivo" para sempre. Só o grupo tem presença que sobrevive à tentativa — no 1:1
+			// os prazos de toque e abandono já fecham tudo sozinhos.
+			if (call.modality() == CallModality.GROUP) {
+				try {
+					leave(callId, actorId);
+				}
+				catch (RuntimeException undoFailed) {
+					LOG.warn("call-undo call={} user={} falhou: {}", callId, actorId,
+						undoFailed.getClass().getSimpleName());
+				}
+			}
+			throw failed;
+		}
 		return new JoinView(call.id(), call.kind(), call.modality(), tokens.host(), tokens.tokenTtlSeconds(),
 			call.roomId(), token, view(call, actorId, null));
 	}
@@ -423,6 +450,24 @@ public class CallService implements CallRoomAuthorization {
 		Instant now = clock.instant();
 		return new CallParticipant(call.id() + ":" + actorId, call.id(), actorId, CallParticipantState.JOINED,
 			now, now, null, now);
+	}
+
+	/**
+	 * Sinal de vida de quem está na sala. A presença deixa de ser o registro de uma entrada e passa
+	 * a ter prazo: o ping atualiza {@code lastSeenAt} e empurra o vencimento da chamada — que é o
+	 * que o worker de expiração lê. Sala com gente viva nem chega até ele; sala cujo sinal de vida
+	 * apagou fecha sozinha pelo mesmo caminho da sala vazia.
+	 */
+	@Transactional
+	public CallView presence(String callId, String actorId) {
+		CallSession call = requireCall(callId, actorId);
+		if (call.state().isOpen() && calls.seen(callId, actorId, clock.instant())) {
+			Instant now = clock.instant();
+			CallState from = call.state();
+			call.touch(now, CallSession.ABANDON_TIMEOUT);
+			calls.persist(call, from);
+		}
+		return view(call, actorId, null);
 	}
 
 	/** Quem iniciou a chamada é moderador; quem entra depois nunca vira moderador por conta própria. */
@@ -565,10 +610,16 @@ public class CallService implements CallRoomAuthorization {
 		int closed = 0;
 		for (CallSession call : expired) {
 			CallState from = call.state();
-			// Grupo com gente dentro não fecha por prazo: o abandono é quando a MÍDIA parou, não
-			// quando a sala nasceu. Sem isto, uma sala viva seria derrubada uma hora depois de abrir.
+			// Grupo com gente dentro não fecha por prazo: o abandono é quando o SINAL DE VIDA parou,
+			// não quando a sala nasceu. Sem isto, uma sala viva seria derrubada uma hora depois de
+			// abrir. Presença sem ping recente é fantasma — aba fechada sem desligar, entrada cujo
+			// token falhou — e sala só de fantasma fecha como vazia. Guarda de rolagem: sala cujo
+			// front nunca pingou (cliente antigo, sem a rota nova) mantém o critério antigo, em que
+			// presença conta como gente; nenhuma chamada viva é derrubada por prazo na transição.
 			if (from == CallState.ACTIVE && call.modality() == CallModality.GROUP) {
-				if (calls.countPresentExcluding(call.id(), null) > 0) {
+				if (calls.countPresentExcluding(call.id(), null) > 0
+						&& (!calls.hasPingedPresence(call.id())
+							|| calls.countPresentSince(call.id(), now.minus(PRESENCE_FRESH_WINDOW)) > 0)) {
 					continue;
 				}
 				if (!call.expire(now, "NO_CONNECTION")) {

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -71,7 +72,9 @@ class MessageSendHotPathTests {
 	@BeforeEach
 	void setUp() {
 		service = new MessagingService(repository, notifications, Clock.fixed(NOW, ZoneOffset.UTC), rateLimiter,
-			timingGuard, ageGate, sanctionGate, new ConversationReachPolicy(agePolicy, connections, blockedUsers),
+			timingGuard, ageGate, sanctionGate, new ConversationReachPolicy(agePolicy, connections, blockedUsers,
+				mock(com.socialcoisa.rede.shared.sanctions.SanctionGateReader.class),
+				mock(com.socialcoisa.rede.profile.application.port.out.UserProfileRepository.class)),
 			corporateProfiles, coins, events, new ConversationViewers(Clock.fixed(NOW, ZoneOffset.UTC)));
 
 		when(repository.findConversationById(CONVERSATION_ID))
@@ -82,7 +85,7 @@ class MessageSendHotPathTests {
 		when(blockedUsers.blockedIdsFor(SENDER_ID)).thenReturn(Set.of());
 		when(agePolicy.minorIds(any())).thenReturn(Set.of());
 		when(repository.findLastMessage(CONVERSATION_ID)).thenReturn(Optional.empty());
-		when(repository.findRecentDuplicate(anyString(), anyString(), anyString(), any())).thenReturn(Optional.empty());
+		when(repository.findRecentDuplicate(anyString(), anyString(), anyString(), any(), any())).thenReturn(Optional.empty());
 	}
 
 	@Test
@@ -142,7 +145,7 @@ class MessageSendHotPathTests {
 	@Test
 	void repeatedE2eContentReturnsTheSameRowInsteadOfDuplicating() {
 		// A mesma cifra reenviada (duplo clique no botao de cifrar) devolve a linha ja criada.
-		when(repository.findRecentDuplicate(anyString(), anyString(), anyString(), any()))
+		when(repository.findRecentDuplicate(anyString(), anyString(), anyString(), any(), any()))
 			.thenReturn(Optional.of(Message.createE2e("message_existing", CONVERSATION_ID, SENDER_ID, "cifra",
 				"aXYxMjM=", List.of(), false, NOW)));
 
@@ -157,7 +160,7 @@ class MessageSendHotPathTests {
 	void e2eWithDifferentMediaIsNotTheSameRow() {
 		// Mesma cifra, mas outro conjunto de midias: nao e a mesma mensagem, entao nao pode voltar
 		// a linha antiga — o reenvio traria o anexo errado.
-		when(repository.findRecentDuplicate(anyString(), anyString(), anyString(), any()))
+		when(repository.findRecentDuplicate(anyString(), anyString(), anyString(), any(), any()))
 			.thenReturn(Optional.of(Message.createE2e("message_com_midia", CONVERSATION_ID, SENDER_ID, "cifra",
 				"aXYxMjM=", List.of("midia-antiga"), false, NOW)));
 
@@ -173,7 +176,7 @@ class MessageSendHotPathTests {
 		service.sendMessage(CONVERSATION_ID, SENDER_ID, "oi", List.of(), false, null);
 
 		ArgumentCaptor<Instant> since = ArgumentCaptor.forClass(Instant.class);
-		verify(repository).findRecentDuplicate(eq(CONVERSATION_ID), eq(SENDER_ID), eq("oi"), since.capture());
+		verify(repository).findRecentDuplicate(eq(CONVERSATION_ID), eq(SENDER_ID), eq("oi"), since.capture(), isNull());
 		// O comentario do codigo prometia 2 minutos e a janela eram 10 segundos: um retry de
 		// transporte mais lento que isso criava a mensagem de novo e notificava duas vezes.
 		assertThat(since.getValue()).isEqualTo(NOW.minusSeconds(120));

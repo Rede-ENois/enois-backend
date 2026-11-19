@@ -19,8 +19,10 @@ caso vai para a fila de revisão humana. A automação **não apaga e não pune*
 decisão de uma pessoa. Ver `MODERACAO-CONTEUDO.md`.
 
 Conteúdo **sexual explícito é zero tolerância** e não tem versão "soft" aceitável — vale para foto,
-vídeo, desenho e arte gerada por IA (diretriz 9). O que chega confirmado é removido e a conta
-banida; ver `MODERACAO-MIDIA.md` e `MODERACAO-LINKS.md`.
+vídeo, desenho e arte gerada por IA (diretriz 9). **Inclui qualquer variação "soft porn"**: teaser,
+sugestão explícita, nudez parcial com intenção erótica, conteúdo sexual diluído ou "sugerido" —
+não existe enquadramento criativo, artístico ou humorístico que suavize a regra. O que chega
+confirmado é removido e a conta banida; ver `MODERACAO-MIDIA.md` e `MODERACAO-LINKS.md`.
 
 ## Permitido
 - **Criar e agendar posts pela funcionalidade oficial do Énóis**, em fluxo interativo, com o próprio

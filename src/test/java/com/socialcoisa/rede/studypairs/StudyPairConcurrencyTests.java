@@ -83,7 +83,7 @@ class StudyPairConcurrencyTests {
 		assertThat(statuses).containsExactly(201, 201);
 		// The waiting request left the queue exactly once, so only one pair was created for the goal.
 		assertThat(jdbc.queryForObject(
-			"select count(*) from study_pairs where goal_key = ? and status = 'ACTIVE'", Integer.class,
+			"select count(*) from study_pairs where goal_key = ? and status = 'PENDING'", Integer.class,
 			"objetivo-sp-race-goal")).isEqualTo(1);
 		assertThat(jdbc.queryForObject(
 			"select count(*) from study_pair_requests where user_id = ? and status = 'MATCHED'", Integer.class,
@@ -106,7 +106,7 @@ class StudyPairConcurrencyTests {
 
 		assertThatThrownBy(() -> jdbc.update("insert into study_pairs"
 			+ " (id, user_a, user_b, goal_key, goal_text, topic, status, started_at, ended_at, active_pair_key)"
-			+ " values (?, ?, ?, ?, ?, null, 'ACTIVE', current_timestamp, null, ?)",
+			+ " values (?, ?, ?, ?, ?, null, 'PENDING', current_timestamp, null, ?)",
 			"sp_duplicate_" + UUID.randomUUID().toString().replace("-", ""), b.userId(), a.userId(),
 			"objetivo-sp-race-duo", "objetivo sp-race-duo", duplicateKey))
 			.isInstanceOf(DuplicateKeyException.class);
@@ -134,6 +134,7 @@ class StudyPairConcurrencyTests {
 		Response matched = request(b, "objetivo sp-race-checkin");
 		assertThat(matched.status()).isEqualTo(201);
 		assertThat(matched.pairId()).isNotNull();
+		acceptBoth(a, b, matched.pairId());
 
 		// Double tap: the browser sends two writes with different Idempotency-Keys, so both reach the
 		// service and only the primary key (pair, member, week) decides who inserted the row.
@@ -159,8 +160,10 @@ class StudyPairConcurrencyTests {
 		assertThat(request(a, "objetivo sp-race-slot-1").status()).isEqualTo(201);
 		Response matched = request(b, "objetivo sp-race-slot-1");
 		assertThat(matched.status()).isEqualTo(201);
+		acceptBoth(a, b, matched.pairId());
 		assertThat(request(a, "objetivo sp-race-slot-2").status()).isEqualTo(201);
-		assertThat(request(c, "objetivo sp-race-slot-2").status()).isEqualTo(201);
+		Response second = request(c, "objetivo sp-race-slot-2");
+		assertThat(second.status()).isEqualTo(201);
 
 		// Two active pairs: the ceiling answers with the explicit error, not a third pair.
 		assertThat(request(a, "objetivo sp-race-slot-3").status()).isEqualTo(409);
@@ -237,9 +240,21 @@ class StudyPairConcurrencyTests {
 			Integer.class, userId);
 	}
 
+	/** Par ativo ou proposta pendente: os dois ocupam a vaga no teto de dois. */
 	private int activePairs(String userId) {
-		return jdbc.queryForObject("select count(*) from study_pairs where status = 'ACTIVE'"
+		return jdbc.queryForObject("select count(*) from study_pairs where status in ('ACTIVE', 'PENDING')"
 			+ " and (user_a = ? or user_b = ?)", Integer.class, userId, userId);
+	}
+
+	private void acceptBoth(AuthSession a, AuthSession b, String pairId) throws Exception {
+		for (AuthSession session : List.of(a, b)) {
+			mockMvc.perform(post("/study-pairs/" + pairId + "/accept")
+					.header("X-Session-Token", session.token())
+					.header("Idempotency-Key", key())
+					.contentType(MediaType.APPLICATION_JSON)
+					.content(json(Map.of("answers", Map.of("ice_why_now", "juntos")))))
+				.andReturn().getResponse().getStatus();
+		}
 	}
 
 	private String json(Object value) throws Exception {

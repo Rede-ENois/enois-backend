@@ -25,8 +25,11 @@ public interface JobRepository {
 	/** Vagas publicadas pelo usuario. */
 	List<Job> findByPostedBy(String userId, java.time.Instant before, int limit);
 
-	/** Vagas em que o usuario se candidatou, mais recentes primeiro. */
-	List<Job> findAppliedByUser(String userId, java.time.Instant before, int limit);
+	/** Vagas em que o usuario se candidatou, paginadas por (appliedAt, id) decrescentes. */
+	AppliedPage findAppliedByUser(String userId, java.time.Instant before, Long beforeId, int limit);
+
+	record AppliedPage(List<Job> jobs, java.time.Instant lastAppliedAt, Long lastId) {
+	}
 
 	int countApplications(String jobId);
 

@@ -20,6 +20,7 @@ import com.socialcoisa.rede.feed.application.port.in.ModerationQuarantinePostUse
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
+import com.socialcoisa.rede.feed.domain.PostType;
 import com.socialcoisa.rede.media.application.port.in.RequestPostMediaDeletionUseCase;
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -105,9 +106,9 @@ public class DeletePostService
 	}
 
 	/**
-	 * Expiração do Momento (24h): o MESMO caminho da exclusão — some do feed, o cache é limpo e a
-	 * mídia entra na fila de remoção. Automático, então sem auditoria de moderação: o rastro é o
-	 * evento PostDeleted do outbox.
+	 * Expiração do efêmero (Momento 24h, Instante 1h): o MESMO caminho da exclusão — some do feed,
+	 * o cache é limpo e a mídia entra na fila de remoção. Automático, então sem auditoria de
+	 * moderação: o rastro é o evento PostDeleted do outbox.
 	 */
 	@Transactional
 	public boolean expireMoment(PostId postId) {
@@ -120,8 +121,9 @@ public class DeletePostService
 		// A cópia de uma republicação não pode sobreviver ao original (inclusive por moderação).
 		removeReposts(post);
 		feedCacheRepository.removeEverywhere(post.id());
+		String reason = post.type() == PostType.INSTANTE ? "INSTANTE_EXPIRED" : "MOMENT_EXPIRED";
 		outboxEventRepository.append("PostDeleted", post.id().value(), "{\"postId\":\"" + post.id().value()
-			+ "\",\"reason\":\"MOMENT_EXPIRED\"}");
+			+ "\",\"reason\":\"" + reason + "\"}");
 		requestMediaDeletion(post);
 		return true;
 	}
@@ -144,6 +146,25 @@ public class DeletePostService
 		if (!post.isActive() && !post.isQuarantined()) {
 			return RemovalOutcome.ALREADY_OFFLINE;
 		}
+		return applyRemoval(post, moderatorId, reason);
+	}
+
+	@Override
+	@Transactional
+	public RemovalOutcome removeAsAdminWithOutcome(String adminId, String postId, String reason) {
+		Post post = postRepository.findById(new PostId(postId)).orElse(null);
+		if (post == null) {
+			return RemovalOutcome.NOT_FOUND;
+		}
+		// Mesmo efeito da moderação (é o mesmo applyRemoval abaixo); a porta administrativa chama
+		// este caminho só para deixar explícito quem decidiu e manter o mesmo contrato de resposta.
+		if (!post.isActive() && !post.isQuarantined()) {
+			return RemovalOutcome.ALREADY_OFFLINE;
+		}
+		return applyRemoval(post, adminId, reason);
+	}
+
+	private RemovalOutcome applyRemoval(Post post, String actorId, String reason) {
 		post.delete(clock.instant());
 		postRepository.save(post);
 		// A cópia de uma republicação não pode sobreviver ao original (inclusive por moderação).
@@ -151,7 +172,7 @@ public class DeletePostService
 		feedCacheRepository.removeEverywhere(post.id());
 		outboxEventRepository.append("PostDeleted", post.id().value(), "{\"postId\":\"" + post.id().value() + "\"}");
 		requestMediaDeletion(post);
-		auditLogRepository.record(new com.socialcoisa.rede.feed.domain.UserId(moderatorId),
+		auditLogRepository.record(new com.socialcoisa.rede.feed.domain.UserId(actorId),
 			"POST_DELETED_BY_MODERATION", post.id().value(), normalizeReason(reason));
 		return RemovalOutcome.REMOVED;
 	}

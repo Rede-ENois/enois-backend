@@ -191,3 +191,33 @@ Provas: `NetworkNodeObservedDiskTests` (4), cenário 5g de `node-executor-test.s
 `update`, 3 dos 4 testes caem; `null` virando `0` no controller derruba exatamente o teste do nulo.
 Ainda **não existe** uso dessa medida no escalonamento de armazenamento — é o próximo passo do
 Storage (fase 2).
+
+### Disco medido usado no Storage (fase 1, passo 2)
+
+A medida de `V321` deixou de ser só observação: `StorageCatalogService.store` recusa com **507
+`STORAGE_NO_DISK_SPACE`** antes de ler o corpo quando o nó reporta menos de `MIN_DISK_FREE_MB`
+(1 GiB). `declared_disk_mb` continua sendo a promessa e não participa da decisão. Nó sem medida
+(`null`) **não** é recusado — não medir não é estar sem espaço.
+
+Provas: `StorageCatalogServiceTests` 13 (3 novos: abaixo do piso recusa sem escrever, exatamente no
+piso grava, sem medida grava) e `NetworkStorageTests` 7 (1 novo pelo caminho real: heartbeat com
+disco apertado → PUT 507; heartbeat com espaço → PUT 200). Mutações: remover a checagem derruba o
+teste do piso; `null` tratado como zero derruba 6; `<` virando `<=` derruba o teste do piso exato.
+
+### Disco medido chega ao nó pela config assinada (formato 5)
+
+`limits` ganhou `diskFreeMb` — o disco livre **medido** no heartbeat, ao lado do `diskMb` que o
+participante **declarou**. Sem isso o nó só conhecia a promessa: cache e réplica decidiam contra um
+teto que pode não existir, enquanto o Control Plane já recusava corpo pelo medido (507). Os dois
+lados passam a decidir com o mesmo número.
+
+O formato subiu para **5** (`FORMAT_VERSION`), com `diskFreeMb` no **fim** da linha canônica, depois
+do termo: campo novo nunca desloca o último. Não medido entra como a palavra `ausente`, nunca como
+`0` — zero é "sem espaço", ausente é "não mediu", e assinar os dois igual tornaria os casos
+indistinguíveis para quem verifica.
+
+Provas: `NetworkConfigSignerTests` 8 (`discoLivreMedidoAssinaSeparadoDoNaoMedido`), `NetworkNodesTests`
+26 (`configLevaODiscoLivreMedidoNoHeartbeatAoNo`, ponta a ponta heartbeat → config), e o harness
+`node-executor-test` reconstruindo a linha em shell no formato 5. Mutações: a config ignorando o
+medido derruba o teste ponta a ponta; `null`→`0` derruba o teste do não medido; no runtime, `ausente`
+virando `0` e o disco fora de posição derrubam o harness.

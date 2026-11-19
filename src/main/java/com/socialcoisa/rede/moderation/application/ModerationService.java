@@ -44,6 +44,8 @@ public class ModerationService {
 	private final org.springframework.context.ApplicationEventPublisher events;
 	private final int reportsPerHour;
 	private final com.socialcoisa.rede.moderation.application.port.out.CallReportContextRepository callReports;
+	/** Endereço da cópia anexada à denúncia, para o painel de moderação (ver {@link ReportAttachments}). */
+	private final com.socialcoisa.rede.media.application.ReportAttachments reportAttachments;
 
 	public ModerationService(ReportRepository reportRepository,
 			ReportedContentRemover contentRemover,
@@ -62,6 +64,7 @@ public class ModerationService {
 			org.springframework.context.ApplicationEventPublisher events,
 			@org.springframework.beans.factory.annotation.Value("${rede.moderation.reports-per-hour:10}") int reportsPerHour,
 			com.socialcoisa.rede.moderation.application.port.out.CallReportContextRepository callReports,
+			com.socialcoisa.rede.media.application.ReportAttachments reportAttachments,
 			Clock clock) {
 		this.reportRepository = reportRepository;
 		this.contentRemover = contentRemover;
@@ -82,6 +85,7 @@ public class ModerationService {
 		this.events = events;
 		this.reportsPerHour = reportsPerHour;
 		this.callReports = callReports;
+		this.reportAttachments = reportAttachments;
 	}
 
 	/** Autor do alvo: para pagina empresarial e o DONO da pagina (os demais leitores trazem o perfil). */
@@ -240,6 +244,16 @@ public class ModerationService {
 		if (report.targetType() == TargetType.POST && report.reason() == ReportReason.SEXUAL_CONTENT) {
 			events.publishEvent(new SexualContentReportEvent(report.targetId(), report.description()));
 		}
+	}
+
+	/**
+	 * Endereço da cópia anexada a uma denúncia ({@code /media/attachments/<id>}), ou {@code null}
+	 * quando a denúncia não trouxe arquivo. O cliente nunca recebe endereço do bucket, e a cópia
+	 * não é pública (ver {@link ReportAttachments}).
+	 */
+	public String attachmentUrlFor(String mediaId) {
+		String id = mediaId == null ? "" : mediaId.trim();
+		return id.isEmpty() ? null : reportAttachments.moderatorUrl(id);
 	}
 
 	/** Denuncias do proprio usuario (mais recentes primeiro). Nao expõe dados de terceiros. */

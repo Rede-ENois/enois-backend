@@ -8,6 +8,7 @@ import java.util.stream.Collectors;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.feed.domain.ReactionType;
 import com.socialcoisa.rede.groups.application.port.out.GroupContentRepository;
@@ -144,5 +145,20 @@ class GroupContentPersistenceAdapter implements GroupContentRepository {
 		return reactions.findByUserIdAndPostIdIn(userId, postIds)
 			.stream()
 			.collect(Collectors.toMap(GroupReactionJpaEntity::postId, GroupReactionJpaEntity::type));
+	}
+
+	@Override
+	@Transactional
+	public int deleteAllForGroup(String groupId) {
+		// Ordem do mais preso ao mais solto: reação depende da publicação, comentário também; tópico
+		// por último. Tudo na transação de quem chamou (a exclusão inteira é uma decisão só).
+		List<String> postIds = posts.findByGroupId(groupId).stream().map(entity -> entity.getId()).toList();
+		if (!postIds.isEmpty()) {
+			reactions.deleteByPostIds(postIds);
+		}
+		comments.deleteByGroupId(groupId);
+		int removed = posts.deleteByGroupId(groupId);
+		topics.deleteByGroupId(groupId);
+		return removed;
 	}
 }

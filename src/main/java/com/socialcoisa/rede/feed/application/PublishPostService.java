@@ -40,6 +40,8 @@ public class PublishPostService implements PublishPostUseCase {
 	static final int MIN_POLL_OPTIONS = 2;
 	static final int MAX_POLL_OPTIONS = 6;
 	static final int MAX_POLL_OPTION_LENGTH = 120;
+	/** Teto do prazo da enquete: nada de enquete eterna ocupando espaco no feed. */
+	static final int MAX_POLL_DEADLINE_DAYS = 30;
 
 	private final PostRepository postRepository;
 	private final ArticleRepository articleRepository;
@@ -218,6 +220,10 @@ public class PublishPostService implements PublishPostUseCase {
 		if (saved.type() == PostType.POLL) {
 			// Alternativas em tabela propria, na mesma transacao: enquete sem alternativa nao existe.
 			polls.saveOptions(saved.id(), pollOptions(command));
+			// Configuracao (multipla escolha e prazo) na mesma transacao das alternativas.
+			polls.saveConfig(saved.id(),
+				new com.socialcoisa.rede.feed.domain.PollConfig(Boolean.TRUE.equals(command.pollMultipleChoice()),
+					command.pollEndsAt()));
 		}
 		feedDistributionService.distribute(saved);
 		outboxEventRepository.append("PostPublished", saved.id().value(), "{\"postId\":\"" + saved.id().value() + "\"}");
@@ -337,6 +343,22 @@ public class PublishPostService implements PublishPostUseCase {
 		// Fora de POLL as alternativas sao ignoradas — nunca ficam guardadas como lixo.
 		if (command.type() == PostType.POLL) {
 			pollOptions(command);
+			pollPrazo(command);
+		}
+	}
+
+	/** Prazo da enquete: precisa ser futuro e de no maximo 30 dias (veja MAX_POLL_DEADLINE_DAYS). */
+	private void pollPrazo(PublishPostCommand command) {
+		if (command.pollEndsAt() == null) {
+			return;
+		}
+		java.time.Instant agora = clock.instant();
+		if (!command.pollEndsAt().isAfter(agora)) {
+			throw new ApiException(400, "POLL_DEADLINE_IN_PAST", "O prazo da enquete precisa ser no futuro.");
+		}
+		if (command.pollEndsAt().isAfter(agora.plusSeconds(MAX_POLL_DEADLINE_DAYS * 24L * 3600L))) {
+			throw new ApiException(400, "POLL_DEADLINE_TOO_FAR",
+				"O prazo da enquete pode ser de no maximo " + MAX_POLL_DEADLINE_DAYS + " dias.");
 		}
 	}
 

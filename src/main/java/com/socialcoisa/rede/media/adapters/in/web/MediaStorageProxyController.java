@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
@@ -47,25 +48,25 @@ class MediaStorageProxyController {
 	private final com.socialcoisa.rede.media.application.MediaMetadataSanitizer sanitizer;
 	private final com.socialcoisa.rede.media.application.MediaImageModerationService imageModeration;
 	private final com.socialcoisa.rede.media.application.MediaDimensionsService dimensions;
-	private final com.socialcoisa.rede.shared.web.ModeratorGuard moderators;
 	/** Opcional: sem registry (testes que montam o controller na mao) nada e registrado. */
 	private final ObjectProvider<io.micrometer.core.instrument.MeterRegistry> meters;
+	private final com.socialcoisa.rede.media.application.MediaUploadStageMetrics stageMetrics;
 
 	MediaStorageProxyController(ObjectProvider<MediaObjectStore> storeProvider, MediaAssetRepository assets,
 			CurrentUserResolver currentUserResolver,
 			com.socialcoisa.rede.media.application.MediaMetadataSanitizer sanitizer,
 			com.socialcoisa.rede.media.application.MediaImageModerationService imageModeration,
 			com.socialcoisa.rede.media.application.MediaDimensionsService dimensions,
-			com.socialcoisa.rede.shared.web.ModeratorGuard moderators,
-			ObjectProvider<io.micrometer.core.instrument.MeterRegistry> meters) {
+			ObjectProvider<io.micrometer.core.instrument.MeterRegistry> meters,
+			com.socialcoisa.rede.media.application.MediaUploadStageMetrics stageMetrics) {
 		this.storeProvider = storeProvider;
 		this.assets = assets;
 		this.currentUserResolver = currentUserResolver;
 		this.sanitizer = sanitizer;
 		this.imageModeration = imageModeration;
 		this.dimensions = dimensions;
-		this.moderators = moderators;
 		this.meters = meters;
+		this.stageMetrics = stageMetrics;
 	}
 
 	private MediaObjectStore store() {
@@ -89,14 +90,16 @@ class MediaStorageProxyController {
 	@GetMapping("/{*key}")
 	ResponseEntity<StreamingResponseBody> read(@PathVariable String key,
 			@RequestHeader(value = HttpHeaders.RANGE, required = false) String range,
-			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+			@RequestParam(value = "disposition", required = false) String disposition) {
 		String objectKey = objectKey(key);
 		MediaAsset asset = assets.findById(mediaIdOf(objectKey)).orElse(null);
 		boolean moderatorOnly = asset != null && com.socialcoisa.rede.media.application.MediaService
 			.REPORT_CAPTURE_PURPOSE.equals(asset.purpose());
 		if (moderatorOnly) {
-			// Captura de denúncia é prova, não conteúdo público: quem vê é quem modera.
-			requireModeratorFor(sessionToken);
+			// A prova de denúncia não passa por aqui: ela mora em chave privada e sai pelo endereço do
+			// envio (ver ReportAttachmentController). Responder 404 mantém a rota pública de mídia
+			// pública — e não confirma a existência da prova a quem só sabe o id do asset.
+			throw new ApiException(404, "MEDIA_NOT_FOUND", "Midia nao encontrada.");
 		}
 		MediaObjectStore.StoredObject object;
 		try {
@@ -108,7 +111,10 @@ class MediaStorageProxyController {
 		String mime = asset != null ? asset.mimeType() : object.contentType();
 		// Only the media types the upload accepts render inline; anything else (legacy objects with an
 		// unexpected type) is served as an opaque download. nosniff comes from SecurityHeadersFilter.
-		boolean inline = com.socialcoisa.rede.media.application.MediaService.isAllowedMimeType(mime);
+		// Pedir `?disposition=attachment` também força o download — o painel de denúncia mostra o
+		// arquivo que a própria pessoa enviou, e o anexo não deve renderizar na origem do app.
+		boolean inline = com.socialcoisa.rede.media.application.MediaService.isAllowedMimeType(mime)
+			&& !moderatorOnly && !"attachment".equalsIgnoreCase(disposition);
 		ResponseEntity.BodyBuilder response = ResponseEntity
 			.status(object.contentRange() == null ? HttpStatus.OK : HttpStatus.PARTIAL_CONTENT)
 			.header(HttpHeaders.CONTENT_TYPE, inline ? mime : "application/octet-stream")
@@ -119,6 +125,9 @@ class MediaStorageProxyController {
 			// A captura de denúncia é a exceção: prova de moderação não fica em cache público.
 			.header(HttpHeaders.CACHE_CONTROL, moderatorOnly ? "private, no-store"
 				: "public, max-age=31536000, immutable");
+		if (inline && "image/svg+xml".equalsIgnoreCase(mime)) {
+			response.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+		}
 		if (object.contentRange() != null) {
 			response.header(HttpHeaders.CONTENT_RANGE, object.contentRange());
 		}
@@ -130,13 +139,6 @@ class MediaStorageProxyController {
 				body.transferTo(output);
 			}
 		});
-	}
-
-	private void requireModeratorFor(String sessionToken) {
-		if (sessionToken == null || sessionToken.isBlank()) {
-			throw new ApiException(401, "UNAUTHENTICATED", "Entre para ver esta midia.");
-		}
-		moderators.requireModerator(currentUserResolver.resolve(sessionToken));
 	}
 
 	/**
@@ -156,6 +158,8 @@ class MediaStorageProxyController {
 		if (!asset.ownerId().value().equals(user.id().value())) {
 			throw new ApiException(403, "MEDIA_FORBIDDEN", "Esta midia nao e sua.");
 		}
+		// Subida sempre pela chave exata do asset. Para a prova de denúncia, essa chave é a privada:
+		// é para lá que o objeto vai, e é de lá que a rota assinada o lê.
 		if (!asset.objectKey().equals(objectKey)) {
 			throw new ApiException(400, "MEDIA_KEY_MISMATCH", "Chave de midia invalida.");
 		}
@@ -174,11 +178,21 @@ class MediaStorageProxyController {
 		try {
 			if (length > com.socialcoisa.rede.media.application.MediaMetadataSanitizer.MAX_IN_MEMORY) {
 				if (sanitizer.supportsInMemory(mime)) {
+					stageMetrics.record("sanitize", com.socialcoisa.rede.media.application.MediaUploadStageMetrics.Outcome.BLOCKED, startedAt);
 					throw new ApiException(413, "MEDIA_TOO_LARGE",
 						"Arquivo grande demais para a limpeza de metadados.");
 				}
 				// Vídeo/áudio grande: arquivo temporário + ffmpeg, sem carregar tudo em memória.
-				java.nio.file.Path sanitized = sanitizer.sanitizeToFile(request.getInputStream(), mime, objectKey);
+				long sanitizeStartedAt = System.nanoTime();
+				java.nio.file.Path sanitized;
+				try {
+					sanitized = sanitizer.sanitizeToFile(request.getInputStream(), mime, objectKey);
+				}
+				catch (java.io.IOException failure) {
+					stageMetrics.record("sanitize", com.socialcoisa.rede.media.application.MediaUploadStageMetrics.Outcome.ERROR, sanitizeStartedAt);
+					throw failure;
+				}
+				stageMetrics.record("sanitize", com.socialcoisa.rede.media.application.MediaUploadStageMetrics.Outcome.OK, sanitizeStartedAt);
 				try {
 					try (var body = java.nio.file.Files.newInputStream(sanitized)) {
 						writeToBucket(objectKey, mime, java.nio.file.Files.size(sanitized), body, length, startedAt);
@@ -191,9 +205,19 @@ class MediaStorageProxyController {
 			else {
 				byte[] raw = request.getInputStream().readAllBytes();
 				// LIMPEZA NA ESCRITA: EXIF/GPS/XMP/IPTC não chegam ao bucket.
-				byte[] clean = sanitizer.sanitize(raw, mime, objectKey);
+				long sanitizeStartedAt = System.nanoTime();
+				byte[] clean;
+				try {
+					clean = sanitizer.sanitize(raw, mime, objectKey);
+				}
+				catch (RuntimeException failure) {
+					stageMetrics.record("sanitize", com.socialcoisa.rede.media.application.MediaUploadStageMetrics.Outcome.ERROR, sanitizeStartedAt);
+					throw failure;
+				}
+				stageMetrics.record("sanitize", com.socialcoisa.rede.media.application.MediaUploadStageMetrics.Outcome.OK, sanitizeStartedAt);
 				// A captura de denúncia mostra a própria violação (é a prova): a checagem de imagem
-				// pública recusaria o arquivo. Ela não é publicada — quem a vê é a moderação.
+				// pública recusaria o arquivo. Ela não é publicada — mora em chave privada e sai só
+				// pelo endereço assinado do envio (ReportAttachmentController).
 				if (!com.socialcoisa.rede.media.application.MediaService.REPORT_CAPTURE_PURPOSE
 					.equals(asset.purpose())) {
 					imageModeration.verifyBeforeStorage(clean, mime);
@@ -225,14 +249,18 @@ class MediaStorageProxyController {
 	 */
 	private void writeToBucket(String objectKey, String mime, long storedBytes, java.io.InputStream body,
 			long receivedBytes, long startedAt) {
+		long writeStartedAt = System.nanoTime();
 		try {
 			store().write(objectKey, mime, storedBytes, body);
+			stageMetrics.record("write", com.socialcoisa.rede.media.application.MediaUploadStageMetrics.Outcome.OK, writeStartedAt);
 			recordStoredSize(mime, storedBytes, receivedBytes, startedAt);
 		}
 		catch (ApiException failure) {
+			stageMetrics.record("write", com.socialcoisa.rede.media.application.MediaUploadStageMetrics.Outcome.ERROR, writeStartedAt);
 			throw failure;
 		}
 		catch (RuntimeException failure) {
+			stageMetrics.record("write", com.socialcoisa.rede.media.application.MediaUploadStageMetrics.Outcome.ERROR, writeStartedAt);
 			LOG.error("media_storage_write_failed mime={} receivedBytes={} storedBytes={} elapsedMs={} cause={}",
 				mime, receivedBytes, storedBytes, (System.nanoTime() - startedAt) / 1_000_000L,
 				failure.getClass().getName());

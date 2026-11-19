@@ -3,13 +3,13 @@ package com.socialcoisa.rede.feed.application;
 import java.util.List;
 import java.util.Map;
 
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.feed.application.port.in.VotePollUseCase;
 import com.socialcoisa.rede.feed.application.port.out.PollRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
+import com.socialcoisa.rede.feed.domain.PollConfig;
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
 import com.socialcoisa.rede.feed.domain.PostType;
@@ -23,9 +23,10 @@ import com.socialcoisa.rede.shared.security.UserRateLimiter;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 /**
- * Voto da enquete: UMA alternativa, UM voto por pessoa, sem troca. A regra nao e "melhor esforco":
- * a unique (post_id, user_id) recusa o segundo voto e a leitura devolve o voto que ja estava la.
- * Votar de novo na MESMA alternativa tambem e recusado (nao ha "confirmar" — o voto ja vale).
+ * Voto da enquete: enquanto ela esta aberta, a pessoa escolhe e pode TROCAR a selecao quantas
+ * vezes quiser (a escolha unica substitui a anterior; a multipla soma e remove alternativas).
+ * Depois do prazo (poll_configs.ends_at) o voto e recusado com 409 POLL_CLOSED e o resultado
+ * congela. Votar continua escrita com as mesmas guardas de publicar/comentar.
  */
 @Service
 public class PollVoteService implements VotePollUseCase {
@@ -38,10 +39,11 @@ public class PollVoteService implements VotePollUseCase {
 	private final UserRateLimiter userRateLimiter;
 	private final BehavioralTimingGuard behavioralTimingGuard;
 	private final RiskEngine riskEngine;
+	private final java.time.Clock clock;
 
 	public PollVoteService(PostRepository postRepository, PollRepository polls, AgeGate agePolicy,
 			SanctionGate sanctionGate, NewAccountCooldown newAccountCooldown, UserRateLimiter userRateLimiter,
-			BehavioralTimingGuard behavioralTimingGuard, RiskEngine riskEngine) {
+			BehavioralTimingGuard behavioralTimingGuard, RiskEngine riskEngine, java.time.Clock clock) {
 		this.postRepository = postRepository;
 		this.polls = polls;
 		this.agePolicy = agePolicy;
@@ -50,11 +52,12 @@ public class PollVoteService implements VotePollUseCase {
 		this.userRateLimiter = userRateLimiter;
 		this.behavioralTimingGuard = behavioralTimingGuard;
 		this.riskEngine = riskEngine;
+		this.clock = clock;
 	}
 
 	@Override
 	@Transactional
-	public PollView vote(PostId postId, UserId user, int optionPosition) {
+	public PollView vote(PostId postId, UserId user, Integer option, List<Integer> options) {
 		// Votar e escrita como qualquer outra: as mesmas guardas de publicar/comentar.
 		agePolicy.requireCanWrite(user.value());
 		sanctionGate.requireNotRestricted(user.value());
@@ -62,6 +65,7 @@ public class PollVoteService implements VotePollUseCase {
 		userRateLimiter.require(user.value(), UserRateLimiter.CREATE_COMMENT);
 		behavioralTimingGuard.record(user.value());
 		riskEngine.assess(user.value(), "poll_vote", null);
+		postRepository.lockForUpdate(postId);
 		Post post = postRepository.findById(postId)
 			.orElseThrow(() -> new ApiException(404, "POST_NOT_FOUND", "Post nao encontrado."));
 		if (!post.isActive()) {
@@ -70,30 +74,52 @@ public class PollVoteService implements VotePollUseCase {
 		if (post.type() != PostType.POLL) {
 			throw new ApiException(400, "NOT_A_POLL", "Este post nao e uma enquete.");
 		}
-		List<String> options = polls.optionsByPostIds(List.of(post.id().value()))
-			.getOrDefault(post.id().value(), List.of());
-		if (optionPosition < 0 || optionPosition >= options.size()) {
+		String postIdValue = post.id().value();
+		PollConfig config = polls.configsByPostIds(List.of(postIdValue)).getOrDefault(postIdValue, PollConfig.SIMPLES);
+		if (config.encerrada(clock.instant())) {
+			throw new ApiException(409, "POLL_CLOSED", "O prazo desta enquete terminou.");
+		}
+		List<String> alternativas = polls.optionsByPostIds(List.of(postIdValue)).getOrDefault(postIdValue, List.of());
+		List<Integer> escolhas = config.multipleChoice()
+			? validarMultipla(alternativas, options)
+			: validarUnica(alternativas, option);
+		// Troca de voto = substituicao da selecao: grava o que falta e apaga o que saiu.
+		polls.replaceVotes(post.id(), user, escolhas);
+		return estadoDaEnquete(postIdValue, alternativas, config, user);
+	}
+
+	/** Escolha unica: exatamente uma alternativa valida. */
+	private List<Integer> validarUnica(List<String> alternativas, Integer option) {
+		if (option == null || option < 0 || option >= alternativas.size()) {
 			throw new ApiException(400, "INVALID_POLL_OPTION", "Alternativa da enquete invalida.");
 		}
-		Integer previous = polls.votesByUserAndPostIds(user, List.of(post.id().value())).get(post.id().value());
-		if (previous != null) {
-			// Sem troca de opiniao: o voto e definitivo. 409 porque o estado do recurso ja decide.
-			throw new ApiException(409, "ALREADY_VOTED", "Voce ja votou nesta enquete — o voto nao pode ser trocado.");
+		return List.of(option);
+	}
+
+	/** Multipla escolha: pelo menos uma alternativa valida, sem repeticao. */
+	private List<Integer> validarMultipla(List<String> alternativas, List<Integer> escolhas) {
+		List<Integer> limpas = escolhas == null ? List.of()
+			: escolhas.stream().filter(java.util.Objects::nonNull).distinct().toList();
+		if (limpas.isEmpty()) {
+			throw new ApiException(400, "POLL_OPTION_REQUIRED", "Escolha pelo menos uma alternativa.");
 		}
-		try {
-			polls.vote(post.id(), user, optionPosition);
+		for (Integer escolha : limpas) {
+			if (escolha < 0 || escolha >= alternativas.size()) {
+				throw new ApiException(400, "INVALID_POLL_OPTION", "Alternativa da enquete invalida.");
+			}
 		}
-		catch (DataIntegrityViolationException concurrent) {
-			// Outra requisicao da mesma pessoa chegou primeiro: vale o voto que ficou gravado.
-			throw new ApiException(409, "ALREADY_VOTED", "Voce ja votou nesta enquete — o voto nao pode ser trocado.");
-		}
-		Map<Integer, Long> counts = polls.countsByPostIds(List.of(post.id().value()))
-			.getOrDefault(post.id().value(), Map.of());
-		List<Long> perOption = new java.util.ArrayList<>(options.size());
-		for (int position = 0; position < options.size(); position++) {
+		return limpas;
+	}
+
+	/** Estado pos-voto: contagens e selecao relidas, para o card atualizar na hora. */
+	private PollView estadoDaEnquete(String postIdValue, List<String> alternativas, PollConfig config, UserId user) {
+		Map<Integer, Long> counts = polls.countsByPostIds(List.of(postIdValue)).getOrDefault(postIdValue, Map.of());
+		List<Long> perOption = new java.util.ArrayList<>(alternativas.size());
+		for (int position = 0; position < alternativas.size(); position++) {
 			perOption.add(counts.getOrDefault(position, 0L));
 		}
-		long total = perOption.stream().mapToLong(Long::longValue).sum();
-		return new PollView(options, perOption, optionPosition, total);
+		List<Integer> minhas = polls.myVotesByPostIds(user, List.of(postIdValue)).getOrDefault(postIdValue, List.of());
+		long total = polls.votersCountByPostIds(List.of(postIdValue)).getOrDefault(postIdValue, 0L);
+		return new PollView(alternativas, perOption, minhas, total, config.multipleChoice(), config.endsAt());
 	}
 }

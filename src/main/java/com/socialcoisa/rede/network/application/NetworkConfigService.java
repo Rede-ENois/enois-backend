@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 
 import com.socialcoisa.rede.network.application.port.out.NetworkAuthorityRepository;
 import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
+import com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.TaskType;
 
@@ -62,8 +63,25 @@ public class NetworkConfigService {
 	 * um destino que ninguém autorizou. Assinar a lista é o que fecha o SSRF (doc 02, linha SSRF) —
 	 * sem isso, a task {@code API_REQUEST} seria uma porta aberta para dentro da rede do
 	 * participante.</p>
+	 *
+	 * <p>5: {@code diskFreeMb} entrou no payload e na linha canônica — o disco livre que o próprio
+	 * nó <b>mede</b> no heartbeat, ao lado do {@code diskMb} que o participante <b>declarou</b>
+	 * ceder. Sem ele, o nó só conhecia a promessa e decidia cache e réplica contra um teto que pode
+	 * não existir. Entra no FIM da linha, depois do termo: é a mesma regra dos formatos 2, 3 e 4 —
+	 * campo novo nunca desloca o último. A posição não é tratamento especial do termo, é a regra
+	 * que mantém legível quem reconstrói a linha.</p>
+	 *
+	 * <p>6: {@code diskTotalMb} entrou no payload e na linha canônica — o <b>tamanho</b> do volume,
+	 * ao lado do {@code diskFreeMb} que o nó mede. Com só os dois valores de antes (declarado e
+	 * livre) não havia como dizer quanto o participante <b>reservou para si</b>: a reserva do brief
+	 * do Storage §7 é {@code total - declarado}, e sem o total ela não existe. Entra no fim da
+	 * linha, depois do disco livre, pela mesma regra dos formatos 2 a 5.</p>
+	 *
+	 * <p>7: {@code storageBandwidth} — o teto de banda próprio de cada tipo de storage node (brief
+	 * §6). É uma lista {@code ["TIPO=mbps", ...]} ordenada, assinada como todo o resto: o runtime
+	 * usa o teto do tipo que ele tem para a transferência que faz. Também entra no fim.</p>
 	 */
-	static final int FORMAT_VERSION = 4;
+	static final int FORMAT_VERSION = 7;
 
 	private final Clock clock;
 	private final NetworkNodeRepository nodes;
@@ -71,6 +89,7 @@ public class NetworkConfigService {
 	private final Optional<PrivateKey> signingKey;
 	private final Optional<PublicKey> pinningKey;
 	private final int ttlSeconds;
+	private final NodeStorageBandwidthRepository storageBandwidth;
 	/** Rotas que o nó pode chamar, no formato {@code nome=url}. Vazio por padrão: sem rota declarada, o
 	 * nó não tem para onde ir. */
 	private final List<String> allowedRoutes;
@@ -79,10 +98,12 @@ public class NetworkConfigService {
 			@Value("${rede.network.config.signing-key:}") String signingKey,
 			@Value("${rede.network.config.signing-public-key:}") String publicKey,
 			@Value("${rede.network.config.ttl-seconds:300}") int ttlSeconds,
-			@Value("${rede.network.config.allowed-routes:}") String allowedRoutes) {
+			@Value("${rede.network.config.allowed-routes:}") String allowedRoutes,
+			NodeStorageBandwidthRepository storageBandwidth) {
 		this.clock = clock;
 		this.nodes = nodes;
 		this.authorities = authorities;
+		this.storageBandwidth = storageBandwidth;
 		this.signingKey = NetworkConfigSigner.privateKey(signingKey);
 		this.pinningKey = NetworkConfigSigner.publicKey(publicKey);
 		this.allowedRoutes = parseRoutes(allowedRoutes);
@@ -327,15 +348,27 @@ public class NetworkConfigService {
 				: List.of();
 		var stamp = nodes.configStamp(node.id())
 			.orElseGet(() -> new NetworkNodeRepository.ConfigStamp(FORMAT_VERSION, Instant.now(clock)));
+		// O disco declarado é o teto; o medido é a folga. Os dois vão para o nó porque ele decide o
+		// mesmo que o controle decide: cache e réplica só gravam o que cabe no que existe.
+		// Os limites por tipo (brief §6) vêm da tabela da V348; o tipo sem linha usa a banda do nó.
+		// A lista da config assinada é ordenada por nome de tipo, como as demais listas: a ordem do
+		// banco não é contrato e duas ordens dariam assinaturas diferentes para a mesma permissão.
+		var porTipo = storageBandwidth.findByNode(node.id());
+		List<String> storageBandwidthList = porTipo.entrySet().stream()
+			.sorted(java.util.Comparator.comparing(entry -> entry.getKey().name()))
+			.map(entry -> entry.getKey().name() + "=" + entry.getValue())
+			.toList();
 		var limits = new LimitsView(node.declaredCpuCores(), node.declaredMemoryMb(), node.declaredDiskMb(),
-			node.declaredBandwidthMbps());
+			node.observedDiskFreeMb(), node.observedDiskTotalMb(), node.declaredBandwidthMbps(),
+			storageBandwidthList);
 		// O termo vai no documento e na assinatura: é o que deixa a regra do nó ("termo só sobe")
 		// verificável contra quem assinou, não contra o transporte.
 		var authority = authorities.current()
 			.orElseGet(() -> new NetworkAuthorityRepository.AuthorityRecord(0, null, null));
 		var fields = new NetworkConfigSigner.SignedFields(FORMAT_VERSION, stamp.version(), node.id(), profiles,
 			limits.cpuCores(), limits.memoryMb(), limits.diskMb(), limits.bandwidthMbps(), allowedTasks,
-			allowedRoutes, stamp.issuedAt().toString(), ttlSeconds, authority.term());
+			allowedRoutes, stamp.issuedAt().toString(), ttlSeconds, authority.term(), limits.diskFreeMb(),
+			limits.diskTotalMb(), storageBandwidthList);
 		String signature = sign(fields.canonical());
 		return new NodeConfigView(node.id(), node.status().name(), operable, FORMAT_VERSION, stamp.version(),
 			profiles, limits, allowedTasks, allowedRoutes, node.region(), node.country(),
@@ -374,7 +407,22 @@ public class NetworkConfigService {
 	 * transfere: teto de taxa ({@code --limit-rate}) das transferências de corpo. Nenhum dos dois
 	 * entra no despacho — o Control Plane não mede banda nem disco de nó remoto.
 	 */
-	public record LimitsView(int cpuCores, int memoryMb, int diskMb, int bandwidthMbps) {
+	/**
+	 * O que o nó pode usar, em duas colunas que não se misturam: {@code diskMb} é o teto que o
+	 * participante cedeu (o declarado, que vai na assinatura) e {@code diskFreeMb} é o que ele
+	 * MEDIU no último heartbeat. Nulos significam "não reportado" — runtime anterior à V321 — e são
+	 * diferentes de zero, que seria "sem espaço".
+	 *
+	 * <p>O nó precisa dos dois para a mesma decisão que o Control Plane já toma: não gravar o que
+	 * não cabe. O teto diz quanto pode ocupar; a folga diz quanto ainda existe.</p>
+	 *
+	 * <p>{@code diskTotalMb} é o <b>tamanho</b> do volume medido na mesma chamada (formato 6). Existe
+	 * para que o nó possa dizer ao participante quanto ele reservou para si, com o número que o
+	 * próprio Control Plane usa: {@code total - diskMb}. Nulo quando o Control Plane não conhece o
+	 * tamanho — runtime que ainda não reportou —, e nunca igual a zero.</p>
+	 */
+	public record LimitsView(int cpuCores, int memoryMb, int diskMb, Long diskFreeMb, Long diskTotalMb,
+			int bandwidthMbps, List<String> storageBandwidth) {
 	}
 
 	/**

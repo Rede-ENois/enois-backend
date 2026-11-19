@@ -66,3 +66,104 @@ do mantenedor, não efeito colateral de código.
 
 O Storage (fase 1) **não** depende de nada deste documento; os dois seguem em paralelo sem colidir,
 porque o Storage acrescenta perfil e tipo de tarefa e o Cooperative mexe em captura e observação.
+## 5. Observabilidade §8.4 entregue: a distribuição do trabalho
+
+O §8.4 do brief pede o que nenhum painel respondia: *"identificar se a infraestrutura está realmente
+distribuindo o processamento ou se o Master continua absorvendo trabalho que poderia ser executado
+pelas réplicas"*. `GET /admin/network/nodes/dashboard` ganhou `load`:
+
+| campo | o que diz |
+|---|---|
+| `nodes[]` | por nó: `nodeId`, `displayName`, `status`, `done`, `failed`, `runningNow` |
+| `totalDone` / `totalFailed` | o agregado do catálogo |
+| `unassigned` | concluídas sem nó no registro — entram no total, não em nó nenhum |
+| `concentratedShare` | fatia (%) do nó que mais concluiu; **nula** quando não há conclusão |
+| `singleNode` | a maior fatia é de um nó, com **2+ réplicas ativas** |
+
+Decisões que os números carregam:
+
+- **nó que nunca executou aparece com zero**, não é omitido: é o dado do nó ocioso, e omiti-lo
+  faria "nó sem tarefa" e "nó inexistente" ficarem iguais;
+- **`concentratedShare` nula sem conclusão**: 0% e 100% seriam lidos como "distribui igual" e "tudo
+  num nó" para o mesmo caso vazio;
+- **`singleNode` exige 2+ réplicas ativas**: com uma só, 100% é a única opção, não falta de
+  distribuição — acusar aí culpava a topologia pelo que ela não podia fazer;
+- **`runningNow` usa o campo cru** do heartbeat (`observedRunningTasks`), não o getter
+  `runningTasks()` que converte nulo em zero: "não reportou" e "nenhuma rodando" são casos
+  diferentes, e o painel não pode decidir por ele;
+- **falhas definitivas** = `FAILED` + `DEAD`, que é a mesma falha depois de esgotar tentativas;
+  reprocessamento não entra (a tarefa continua viva e será contada quando terminar).
+
+A consulta `countDoneByNode` já existia no repositório **sem nenhum leitor**; esta entrega é o
+primeiro uso dela, e ganhou a irmã `countFailedByNode`.
+
+Provas: `NetworkDashboardDistributionTests` 8 e `NetworkNodesTests` 27 (1 novo pela rota). Mutações
+conferidas: fatia nula→0, uma réplica contando como concentração, órfãs ignoradas, `runningNow` pelo
+getter e falhas não contadas — cada uma derruba exatamente um teste. Suíte completa **3202**.
+
+## 6. §8.2 entregue: o Storage no painel
+
+`GET /admin/network/nodes/storage/overview` (admin) responde capacidade, uso, objetos e estado das
+cópias. A regra do brief — "indicadores devem refletir dados efetivamente coletados, nunca valores
+estimados" — virou três separações explícitas no contrato:
+
+| campo | o que é de verdade |
+|---|---|
+| `capacityMb` | disco **declarado** pelos nós de armazenamento vivos (a promessa que o runtime impõe como teto) |
+| `freeMb` | disco **livre medido** no heartbeat, somado. `null` quando **nenhum** nó mediu |
+| `unmeasuredNodes` | quantos nós ficaram fora dessa soma |
+| `usedBytes` | bytes das cópias **`OK`**, medidos pelo Control Plane ao receber o corpo |
+| `objectsByState` / `copiesByState` | contagem por estado — `DELETED` ainda ocupa chave, não ocupa disco |
+| `objectsUnderReplicated` + `replicasExpected` | a lacuna **com o alvo ao lado**, porque "3 abaixo" sem alvo não diz se é saudável |
+| `objectsByDurability` | contagem por nível **efetivamente observado** (`SINGLE_DOMAIN`, `CROSS_REGION_PARTIAL`, `CROSS_REGION`) — ver [`13-storage-fase-3-replicacao.md`](13-storage-fase-3-replicacao.md) §2.1 |
+| `buckets` + `usageByBucket` | quantos buckets têm objeto servível e quanto cada um ocupa (`{objects, bytes}`). Bucket não é tabela: existe enquanto tem objeto, então o número é o de chaves distintas no `group by` — uma consulta só, coberta pelo índice `(bucket, object_key)` da V319 |
+
+Quem fica fora da conta, e por quê:
+
+- **nó de processamento**: disco de transcodificação não é espaço de objeto (disco não dá
+  permissão);
+- **nó parado** (sem heartbeat há 180 s, o mesmo "vivo" do escalonador): não promete disco agora;
+- **região evacuada**: decisão humana, e o escalonamento já recusa objeto novo ali;
+- **cópia `PENDING_REMOTE`**: é obrigação, não byte em disco — somá-la inflaria o uso com algo que
+  não existe.
+
+O `usedBytes` vem de uma consulta de agregação em SQL (`sum(bytes) group by state`), não de varrer
+o catálogo linha a linha; e a lacuna vem da **mesma** varredura que o operador usa em `/storage/scrub`
+— dois números diferentes para "faltam cópias" seriam dois lugares para discordar.
+
+Este endpoint é leitura de catálogo. Reler bytes custa disco de quem contribui e continua sendo
+`scrub?readBodies=true`, opt-in.
+
+Provas: `StorageOverviewTests` 8, `NetworkStorageBalanceTests` 5 (2 novos pela rota, com nó real
+declarando 100 GB e reportando 4 GB). Mutações: disponível usando o declarado (derruba 4), sem
+medida virando zero, perfil qualquer somando disco, uso incluindo designação, nó parado somando e
+região evacuada somando — cada uma derruba o seu. Suíte completa **3212**.
+
+**O disco na página do nó (§17).** `GET /admin/network/nodes/{id}/storage` (admin) devolve o `Disco`
+daquele nó: `declaredMb` (espaço disponibilizado), `usedMb` (o que o Énóis ocupa, medido), `freeMb`
+(disponível), `totalMb`, `reservedMb` e `usedPercent`. Antes isso só existia em
+`/storage/overview` → `disks[]`, e o admin tinha de achar a linha do nó.
+
+A conta é a **mesma**: o serviço usa o mesmo método que monta a linha do painel geral. Duas contas
+para o mesmo disco dariam dois números na tela. Nó de processamento devolve corpo vazio (o mapa sem
+campos), não erro — a página do nó existe, só não tem disco de armazenamento. Nó desconhecido é 404,
+e a rota exige admin pelo `AdminRouteInterceptor`; o `admin()` no controller é defesa em
+profundidade (mutação que o remove continua verde, e isso é o esperado).
+**Nós online e offline (§17).** `onlineNodes`, `offlineNodes` e `offline[]` dizem quem está no ar.
+Até aqui o nó sem heartbeat saía da soma (correto — parado não promete disco) **e do painel** (errado
+— não havia como saber quem caiu). Agora ele aparece com `lastSeenAt` e `secondsSinceSeen`, e o disco
+dele continua fora de toda soma: a mudança é de visibilidade, não de conta.
+
+`lastSeenAt`/`secondsSinceSeen` são **nulos** para quem nunca bateu coração — é o nó recém-enrolado,
+e "ausente" não é "há 0 segundos". Nó de processamento não entra na lista: o critério é o mesmo da
+soma (`OBJECT_PUT.allowedFor`), não o nome do perfil.
+
+**Bucket e lápide.** `buckets` conta objetos **servíveis**: o bucket que só tem lápide não aparece,
+porque lápide não é conteúdo e o operador não "tem" aquele bucket. Objeto `PENDING` conta na
+quantidade e soma **zero** bytes — ele existe e ainda não ocupa espaço medido. `Fotos` e `fotos` são
+**dois** buckets: o bucket é a chave do catálogo, não texto livre de tela, e normalizar aqui juntaria
+dois espaços de nomes.
+
+O SQL é `group by bucket` numa consulta só, com índice, e é verificado contra o H2 em
+`StorageCatalogBucketsPersistenceTests` — os testes do serviço usam mock e provariam a ligação, não
+a consulta.

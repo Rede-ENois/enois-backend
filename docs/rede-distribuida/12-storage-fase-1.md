@@ -15,7 +15,7 @@ ficou fora e por quê, e como cada afirmação foi verificada.
 | **identificadores lógicos** | entregue | `StorageObject.id` (`sob_…`) estável, independente de qualquer nó; a chave S3 é do cliente e não é normalizada |
 | **colocação (onde está a cópia)** | entregue | `network_storage_placements` (V320) — `(object_id, replica)` → `node_id`, `bytes`, `sha256`, `state`, `verified_at` |
 | **upload por nó** | entregue | `PUT /network/storage/objects/{id}` — bytes crus, credencial de nó, perfil obrigatório |
-| **download por nó** | entregue | `GET /network/storage/objects/{id}` — `Content-Length`, `ETag` = sha-256, sem renderizar |
+| **download por nó** | entregue | `GET /network/storage/objects/{id}` — `Content-Length`, `ETag` = sha-256, sem renderizar; serve da raiz do CP e do diretório do nó local (13 §5.5) |
 | **medida antes do aceite** | entregue | o Control Plane calcula tamanho e SHA-256 **enquanto grava**; o declarado não é lido |
 | **teto de tamanho** | entregue | `rede.storage.max-object-bytes` (padrão 5 GiB); acima do teto o corpo é recusado |
 | **primeiro Storage Node** | parcial: o Control Plane faz esse papel | grava no diretório `rede.storage.root`; ver §3 |
@@ -45,6 +45,15 @@ bucket e a unicidade do banco esconderia a colisão.
 **Disco não é permissão.** Um nó com 10 TB e sem `NODE_STORAGE` recebe 403. É a mesma regra que já
 vale para CPU e memória: capacidade não autoriza nada.
 
+**Capacidade de disco se decide pelo medido, não pelo declarado.** Desde `V321` o nó reporta no
+heartbeat o disco livre que ele **mede** (`df -P -m` no diretório de estado), ao lado do
+`declared_disk_mb` do enroll, que é a promessa. Um nó que reporta menos de
+`StorageCatalogService.MIN_DISK_FREE_MB` (1 GiB) recebe **507 `STORAGE_NO_DISK_SPACE` antes de o
+corpo atravessar** — mesmo critério do teto de tamanho: não escrever o que já se sabe que não cabe.
+Sem medida (`null`, runtime anterior a V321) o nó **não** é recusado: não medir não é estar sem
+espaço, e recusar por falta de informação tiraria do caminho nós com terabytes livres. O piso é
+folga de sistema de arquivos (temporário do upload, journal), não o tamanho do objeto.
+
 ## 3. O que NÃO está entregue (e por quê)
 
 | do brief | por que não agora |
@@ -55,6 +64,7 @@ vale para CPU e memória: capacidade não autoriza nada.
 | **URLs assinadas** | exigem credencial de cliente (ver gateway) |
 | **redundância, replicação, healing** | fase 3. A tabela de colocação já nasce com `replica` na chave primária para que a fase 3 **insira** linhas e não altere o esquema |
 | **mTLS** | não existe na rede (fase 0 §3); o transporte é HTTPS com a API key do nó |
+| **escolher o nó de destino pelo espaço livre** | a fase 1 tem **um** destinatário (o CP); escolher entre nós é a fase 2, e ela agora tem a medida de que precisa — o que falta é o endereçamento, não o número |
 
 ## 4. Verificação
 
@@ -84,3 +94,48 @@ network/
   adapters/in/web/   NetworkStorageController (/network/storage/**)
 db/migration/        V319 (objetos), V320 (colocações)
 ```
+## A coleta da lápide (§14 do brief do Storage)
+
+Remover um objeto marca `DELETED` e mantém a linha — mas o objeto pode voltar a ter cópias depois
+disso: um upload que venceu a corrida, ou uma réplica da fase 3 que chegou atrasada. Enquanto essas
+cópias existirem, o objeto "removido" continua contando na durabilidade e pode ser servido por um
+caminho que não conhece a lápide.
+
+`POST /admin/network/nodes/storage/tombstones/collect?dryRun=true` (admin) recolhe as cópias de
+lápides **vencidas** (mais que `rede.storage.tombstone.retention-hours`, 72 h por padrão):
+
+- **A janela protege o desfazer.** Lápide recente não é tocada: o cliente pode desfazer, e apagar a
+  cópia agora tornaria o desfazer impossível sem um novo upload.
+- **O que muda é a cópia, não o objeto.** Cópia ativa vira `GONE`; a linha do objeto fica — a lápide é
+  rastro, não remoção de linha, e é ela que impede a chave de voltar a ser usada pelo mesmo objeto.
+- **`dryRun` é o padrão** e mostra o que sairia sem gravar. A coleta é **ato de operador**, nunca
+  agendador: cada execução muda a durabilidade de objetos removidos.
+- **Objeto que voltou a `STORED` é pulado.** A página é lida, e cada objeto é relido antes de decidir:
+  entre a página e a decisão, um upload pode ter marcado o objeto de volta, e recolher as cópias dele
+  apagaria o corpo que o cliente acabou de gravar.
+- **O cursor avança mesmo quando a página não rende.** Um lote inteiro de lápides vivas consumiria o
+  teto de páginas relendo a mesma linha (medido: 20 páginas para uma lápide, antes do conserto).
+- **Auditoria por operação**, não por cópia: `STORAGE_TOMBSTONES_COLLECT_RUN` diz quantas lápides e
+  em qual janela; uma linha por cópia seria centenas para dizer o que o relatório diz.
+
+### A durabilidade lê `copies`, não `placements`
+
+A coleta expôs um defeito mais grave que a própria coleta: **`catalog.placements(objectId)` devolve só
+cópias `OK`**, mas três leitores o usavam como "todas as cópias do objeto":
+
+| leitor | o que perguntava | resultado com `placements` |
+|---|---|---|
+| `StorageReplicationDispatcher` | há `PENDING_REMOTE` a despachar? | lista **sempre vazia**: a réplica designada pelo upload e pelo healing nunca virava tarefa |
+| `StorageHealer.temDesignacaoPendente` | já há um dono para a lacuna? | **sempre `false`**: a cura designava de novo, com um número novo |
+| `StorageHealer.heal` | qual é o maior número de réplica? | lia só `OK`: o número de uma cópia `GONE` seria reaproveitado e sobrescreveria a linha |
+
+A porta ganhou `copies(objectId)` (todos os estados) e `placements(objectId)` ficou com o nome do que
+faz — só `OK`. **Corrigir os três leitores um a um** deixaria o quarto nascer errado; o nome errado
+era a causa.
+
+**Verificação:** `NetworkStorageTombstoneTests` 6 (rota real: lápide vencida recolhida, recente
+intocada, `dryRun` sem gravar, objeto vivo fora, exige admin, **despacho envia a réplica pendente**) e
+`StorageTombstoneCollectorTests` 6 (corrida do objeto que voltou a vivo, cursor que avança, janela
+pedida ao banco, `dryRun` sem gravar nem auditar, coleta real grava `GONE` e audita). Mutações: o
+despacho voltar a ler `placements`; a janela de retenção ignorada; `dryRun` gravando; a coleta não
+reler o estado; o cursor preso na página pulada — **5 de 5 derrubam**.

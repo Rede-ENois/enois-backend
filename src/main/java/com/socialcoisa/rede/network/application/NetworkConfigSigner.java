@@ -50,7 +50,19 @@ final class NetworkConfigSigner {
 	 */
 	record SignedFields(int formatVersion, int configVersion, String nodeId, List<String> profiles, int cpuCores,
 			int memoryMb, int diskMb, int bandwidthMbps, List<String> allowedTasks, List<String> allowedRoutes,
-			String issuedAt, int ttlSeconds, int term) {
+			String issuedAt, int ttlSeconds, int term, Long diskFreeMb, Long diskTotalMb,
+			List<String> storageBandwidth) {
+
+		/**
+		 * Linha canônica de formato ≤ 6, sem a banda por tipo: existe para quem reconstrói um
+		 * documento antigo continuar conferindo a assinatura dele. Formato 7 é o do contrato atual.
+		 */
+		SignedFields(int formatVersion, int configVersion, String nodeId, List<String> profiles, int cpuCores,
+				int memoryMb, int diskMb, int bandwidthMbps, List<String> allowedTasks, List<String> allowedRoutes,
+				String issuedAt, int ttlSeconds, int term, Long diskFreeMb, Long diskTotalMb) {
+			this(formatVersion, configVersion, nodeId, profiles, cpuCores, memoryMb, diskMb, bandwidthMbps,
+				allowedTasks, allowedRoutes, issuedAt, ttlSeconds, term, diskFreeMb, diskTotalMb, List.of());
+		}
 
 		/**
 		 * A linha assinada. Listas vão ordenadas e em JSON compacto: a ordem do banco não é
@@ -61,12 +73,33 @@ final class NetworkConfigSigner {
 		 * {@code allowedRoutes} entrou no formato 4 e fica logo depois de {@code allowedTasks}: é a
 		 * lista de rotas que o nó pode chamar, e ela é assinada — sem assinatura, um intermediário
 		 * trocaria a rota autorizada por outra e o nó obedeceria (doc 02, linha SSRF).
+		 *
+		 * <p>{@code storageBandwidth} entrou no formato 7 e vai no FIM, depois do tamanho do volume:
+		 * é o teto de banda próprio de cada tipo de storage node (brief §6), que o runtime usa para
+		 * a transferência que o tipo dele faz. Assinada pelo mesmo motivo de {@code bandwidthMbps}:
+		 * um intermediário que a editasse dobraria a banda que o participante cedeu.</p>
 		 */
 		String canonical() {
-			return String.join("|", String.valueOf(formatVersion), String.valueOf(configVersion), nodeId,
+			String base = String.join("|", String.valueOf(formatVersion), String.valueOf(configVersion), nodeId,
 				jsonList(profiles), String.valueOf(cpuCores), String.valueOf(memoryMb), String.valueOf(diskMb),
 				String.valueOf(bandwidthMbps), jsonList(allowedTasks), jsonList(allowedRoutes), issuedAt,
-				String.valueOf(ttlSeconds), String.valueOf(term));
+				String.valueOf(ttlSeconds), String.valueOf(term), numberOrAbsent(diskFreeMb),
+				numberOrAbsent(diskTotalMb));
+			// Formato <= 6 não tinha a lista: omitir mantém a assinatura antiga verificável.
+			return formatVersion <= 6 ? base : base + "|" + jsonList(storageBandwidth);
+		}
+
+		/**
+		 * Número assinado, ou a marca de ausência.
+		 *
+		 * <p>{@code null} não vira {@code 0}: zero é "sem espaço livre" e nulo é "o nó não mediu".
+		 * Assinar os dois como a mesma string tornaria indistinguível, para quem verifica, um nó
+		 * prestes a encher o disco de um nó sobre o qual não se sabe nada — e é justamente a
+		 * diferença que o resto do módulo mantém. A marca é a palavra {@code ausente}, que não é
+		 * número e nunca colide com um valor medido.</p>
+		 */
+		static String numberOrAbsent(Long value) {
+			return value == null ? "ausente" : String.valueOf(value);
 		}
 
 		private static String jsonList(List<String> values) {

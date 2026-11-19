@@ -30,9 +30,19 @@ fail() { printf '[FAIL] %s\n' "$1" >&2; FAIL=$((FAIL + 1)); }
 
 # As duas migrações que este harness cobre, na ordem. Uma migração nova de storage entra aqui: o
 # harness acompanha o módulo, não uma lista fixa de arquivos que envelhece em silêncio.
-STORAGE_MIGRATIONS=(V319__network_storage_objects.sql V320__network_storage_placements.sql)
+STORAGE_MIGRATIONS=(V319__network_storage_objects.sql V320__network_storage_placements.sql
+  V323__network_storage_placement_pending_sha.sql)
 for migration in "${STORAGE_MIGRATIONS[@]}"; do
   [[ -f "$MIGRATIONS/$migration" ]] || { fail "migração ausente: $migration"; exit 1; }
+done
+
+# Toda migração V319..V329 do Storage gravada no repositório tem de estar nesta lista, senão uma
+# migração nova entra sem nunca passar pelo banco REAL — e é o banco real que recusa o que o H2
+# aceita. A lista é explícita (o harness escolhe o que aplica), então o guarda é a comparação.
+mapfile -t on_disk < <(ls "$MIGRATIONS" | grep -E '^V32[0-9]__.*storage' | sort)
+for file in "${on_disk[@]}"; do
+  [[ " ${STORAGE_MIGRATIONS[*]} " == *" $file "* ]] \
+    || fail "migração de Storage fora do harness: $file"
 done
 
 CONTAINER=""
@@ -203,6 +213,555 @@ index_exists network_storage_objects idx_network_storage_objects_bucket \
   && pass "índice de listagem por bucket presente" || fail "índice idx_network_storage_objects_bucket ausente"
 index_exists network_storage_placements idx_network_storage_placements_node \
   && pass "índice por nó presente" || fail "índice idx_network_storage_placements_node ausente"
+
+# V323: a designação de réplica (fase 3) existe antes de haver cópia, logo sha256 tem de aceitar
+# nulo. A prova não é ler o information_schema: é o banco REAL aceitar a linha de designação com
+# sha nulo e recusar a designação duplicada pela chave primária composta.
+nullable() {
+  local count
+  count=$(db -N -e "select count(*) from information_schema.columns
+    where table_schema = database() and table_name = '$1' and column_name = '$2' and is_nullable = 'YES'" \
+    2>/dev/null | tr -d '[:space:]')
+  [[ "$count" != "0" ]]
+}
+nullable network_storage_placements sha256 \
+  && pass "V323: sha256 aceita nulo (designação sem cópia)" || fail "V323: sha256 ainda NOT NULL — a designação não grava"
+
+if db -e "insert into network_storage_placements (object_id, replica, node_id, bytes, sha256, state, verified_at)
+  values ('sob_mig001', 2, 'nd_designado', 0, null, 'PENDING_REMOTE', now(3))" 2>/dev/null; then
+  pass "designação sem digest grava no banco real"
+else
+  fail "designação sem digest recusada pelo banco"
+fi
+
+if db -e "insert into network_storage_placements (object_id, replica, node_id, bytes, sha256, state, verified_at)
+  values ('sob_mig001', 2, 'nd_outro', 0, null, 'PENDING_REMOTE', now(3))" 2>/dev/null; then
+  fail "chave (object_id, replica) deixou de ser única"
+else
+  pass "designação duplicada recusada pela chave primária"
+fi
+
+# ---------------------------------------------------------------- V345: tráfego do nó (brief §18)
+# A migração do Storage que mexe em `network_nodes` — a tabela do ENROLL, não do catálogo. Ela entra
+# neste harness pelo mesmo motivo das outras: o H2 aceita `add column if not exists` em formas que o
+# MariaDB recusa, e a única prova que vale é o banco real. `network_nodes` é criada pela V305, que
+# já viveu em produção; aqui a tabela nasce no banco limpo do harness.
+NODE_TRAFFIC=V345__network_node_traffic.sql
+[[ -f "$MIGRATIONS/$NODE_TRAFFIC" ]] || fail "migração ausente: $NODE_TRAFFIC"
+
+if db < "$MIGRATIONS/V305__network_nodes.sql" >/dev/null 2>&1; then
+  pass "V305: network_nodes aplica em banco limpo (base da V345)"
+else
+  fail "V305: network_nodes não aplicou"
+fi
+
+if apply "$NODE_TRAFFIC" >/dev/null 2>&1; then
+  pass "V345: aplica sobre network_nodes no banco real"
+else
+  fail "1ª aplicação falhou: $NODE_TRAFFIC"
+  db < "$MIGRATIONS/$NODE_TRAFFIC" 2>&1 | head -3 >&2 || true
+fi
+
+# Um nó REAL entre as duas aplicações, com tráfego já medido: é o que "dados preservados" quer
+# dizer para uma migração de coluna — a linha existente não pode perder o que já tinha.
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_nodes (id, display_name, owner_user_id, status, profiles, declared_cpu_cores,
+  declared_memory_mb, declared_disk_mb, declared_bandwidth_mbps, observed_bytes_in_mb, observed_bytes_out_mb,
+  created_at, last_seen_at)
+values ('nd_traf001', 'no-do-trafego', 'user-mig', 'ACTIVE', 'NODE_STORAGE', 4, 8192, 102400, 100,
+  2048, 7168, now(3), now(3));
+SQL
+then
+  pass "nó com tráfego gravado entre as rodadas"
+else
+  fail "não foi possível gravar o nó de teste"
+fi
+
+if apply "$NODE_TRAFFIC" >/dev/null 2>&1; then
+  pass "V345: reaplicar não falha (idempotente)"
+else
+  fail "2ª aplicação falhou (não idempotente): $NODE_TRAFFIC"
+fi
+
+traffic=$(db -N -e "select concat(observed_bytes_in_mb, '/', observed_bytes_out_mb) from network_nodes
+  where id = 'nd_traf001'" 2>/dev/null | tr -d '[:space:]')
+[[ "$traffic" == "2048/7168" ]] && pass "o tráfego do nó sobreviveu à 2ª aplicação" \
+  || fail "esperava 2048/7168, achei '$traffic'"
+
+# Nulo é "não mediu", e a coluna TEM de aceitar: nó de runtime antigo não pode receber zero.
+nullable network_nodes observed_bytes_in_mb \
+  && pass "V345: observed_bytes_in_mb aceita nulo (runtime antigo)" \
+  || fail "V345: observed_bytes_in_mb NOT NULL — runtime antigo não conseguiria gravar"
+
+
+# ---------------------------------------------------------------- V348: banda por tipo (brief §6)
+# A tabela por (nó, tipo) tem PRIMARY KEY composta e FOREIGN KEY para `network_nodes` com
+# `on delete cascade`: o H2 aceita `on duplicate key update` em formas que o MariaDB recusa, e a
+# cascata só se prova apagando o nó num banco que a force. Mesmo motivo da V345 para estar aqui.
+NODE_KIND_BW=V348__network_node_storage_bandwidth.sql
+[[ -f "$MIGRATIONS/$NODE_KIND_BW" ]] || fail "migração ausente: $NODE_KIND_BW"
+
+if apply "$NODE_KIND_BW" >/dev/null 2>&1; then
+  pass "V348: aplica sobre network_nodes no banco real"
+else
+  fail "1ª aplicação falhou: $NODE_KIND_BW"
+  db < "$MIGRATIONS/$NODE_KIND_BW" 2>&1 | head -3 >&2 || true
+fi
+
+# Nó e banda REAIS entre as duas aplicações: a 2ª passa por `create table if not exists` e não
+# pode apagar nem a linha do nó nem a especialização que ele já tinha.
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_node_storage_bandwidth (node_id, kind, bandwidth_mbps, updated_at)
+values ('nd_traf001', 'MEDIA', 15, now(3));
+SQL
+then
+  pass "banda por tipo gravada entre as rodadas"
+else
+  fail "não foi possível gravar a banda do tipo"
+fi
+
+if apply "$NODE_KIND_BW" >/dev/null 2>&1; then
+  pass "V348: reaplicar não falha (idempotente)"
+else
+  fail "2ª aplicação falhou (não idempotente): $NODE_KIND_BW"
+fi
+
+kindbw=$(db -N -e "select bandwidth_mbps from network_node_storage_bandwidth
+  where node_id = 'nd_traf001' and kind = 'MEDIA'" 2>/dev/null | tr -d '[:space:]')
+[[ "$kindbw" == "15" ]] && pass "a banda por tipo sobreviveu à 2ª aplicação" \
+  || fail "esperava 15, achei '$kindbw'"
+
+# A chave é o PAR (nó, tipo): dois tipos no mesmo nó convivem, e repetir o par é recusado — é o
+# que uma coluna JSON não faria.
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_node_storage_bandwidth (node_id, kind, bandwidth_mbps, updated_at)
+values ('nd_traf001', 'ARCHIVE', 5, now(3));
+SQL
+then
+  pass "dois tipos no mesmo nó convivem"
+else
+  fail "o mesmo nó não aceitou um segundo tipo"
+fi
+
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_node_storage_bandwidth (node_id, kind, bandwidth_mbps, updated_at)
+values ('nd_traf001', 'MEDIA', 99, now(3));
+SQL
+then
+  fail "o par (nó, tipo) duplicado foi aceito — a chave primária composta não vale"
+else
+  pass "par (nó, tipo) duplicado recusado pela chave primária"
+fi
+
+# Apagar o nó leva a banda junto (cascade): linha órfã faria a config de um nó novo nascer com a
+# banda do antigo se o id fosse reciclado.
+if db >/dev/null 2>&1 <<'SQL'
+delete from network_node_storage_bandwidth where node_id = 'nd_casc001';
+insert into network_nodes (id, display_name, owner_user_id, status, profiles, declared_cpu_cores,
+  declared_memory_mb, declared_disk_mb, declared_bandwidth_mbps, created_at, last_seen_at)
+values ('nd_casc001', 'no-cascata', 'user-mig', 'ACTIVE', 'NODE_STORAGE_MEDIA', 2, 4096, 51200, 50,
+  now(3), now(3));
+insert into network_node_storage_bandwidth (node_id, kind, bandwidth_mbps, updated_at)
+values ('nd_casc001', 'MEDIA', 7, now(3));
+delete from network_nodes where id = 'nd_casc001';
+SQL
+then
+  left=$(db -N -e "select count(*) from network_node_storage_bandwidth where node_id = 'nd_casc001'" 2>/dev/null | tr -d '[:space:]')
+  [[ "$left" == "0" ]] && pass "apagar o nó apaga a banda (on delete cascade)" \
+    || fail "sobraram $left linha(s) de banda de um nó apagado"
+else
+  fail "não foi possível exercitar a cascata"
+fi
+
+
+# ---------------------------------------------------------------- V350: IP de origem (brief §5)
+# "Detecção de mudança de IP". Duas colunas na tabela do enroll, nulas por padrão: nulo em
+# `observed_ip` é "não medido" e nulo em `observed_ip_changed_at` é "nunca mudou" — a V350 não pode
+# gravar valor em linha existente, ou todo nó já cadastrado nasceria com um endereço inventado.
+NODE_IP=V350__network_node_observed_ip.sql
+VERSIONING=V352__network_storage_versioning.sql
+REBALANCE=V354__network_storage_rebalance.sql
+[[ -f "$MIGRATIONS/$NODE_IP" ]] || fail "migração ausente: $NODE_IP"
+
+if apply "$NODE_IP" >/dev/null 2>&1; then
+  pass "V350: aplica sobre network_nodes no banco real"
+else
+  fail "1ª aplicação falhou: $NODE_IP"
+  db < "$MIGRATIONS/$NODE_IP" 2>&1 | head -3 >&2 || true
+fi
+
+# A linha que já existia (nd_traf001, com tráfego gravado) fica com as duas colunas NULAS:
+# migração de coluna não inventa medição para quem não mediu.
+ipstate=$(db -N -e "select concat(ifnull(observed_ip,'nulo'), '/', ifnull(observed_ip_changed_at,'nulo'))
+  from network_nodes where id = 'nd_traf001'" 2>/dev/null | tr -d '[:space:]')
+[[ "$ipstate" == "nulo/nulo" ]] && pass "V350: nó existente nasce com IP e mudança nulos" \
+  || fail "esperava nulo/nulo, achei '$ipstate'"
+
+if db >/dev/null 2>&1 <<'SQL'
+update network_nodes set observed_ip = '203.0.113.10', observed_ip_changed_at = now(3)
+where id = 'nd_traf001';
+SQL
+then
+  pass "V350: colunas aceitam endereço e instante"
+else
+  fail "V350: não foi possível gravar IP e instante"
+fi
+
+if apply "$NODE_IP" >/dev/null 2>&1; then
+  pass "V350: reaplicar não falha (idempotente)"
+else
+  fail "2ª aplicação falhou (não idempotente): $NODE_IP"
+fi
+
+ipafter=$(db -N -e "select observed_ip from network_nodes where id = 'nd_traf001'" 2>/dev/null | tr -d '[:space:]')
+[[ "$ipafter" == "203.0.113.10" ]] && pass "o IP gravado sobreviveu à 2ª aplicação" \
+  || fail "esperava 203.0.113.10, achei '$ipafter'"
+
+# 45 caracteres cabem: o maior endereço textual é IPv6 com zona.
+if db >/dev/null 2>&1 <<'SQL'
+update network_nodes set observed_ip = '2001:0db8:85a3:0000:0000:8a2e:0370:7334'
+where id = 'nd_traf001';
+SQL
+then
+  pass "V350: observed_ip cabe um IPv6 completo"
+else
+  fail "V350: observed_ip não aceitou IPv6"
+fi
+
+
+# ---------------------------------------------------------------------------
+# V352 — versionamento e ciclo de vida (brief §14).
+#
+# A migração que exige cuidado: ela REMOVE a chave única (bucket, object_key) e a substitui por uma
+# unicidade condicional. O que este trecho prova:
+#   1. o objeto que já existia continua sendo a versão 1 da chave;
+#   2. duas versões correntes da mesma chave são RECUSADAS pelo banco;
+#   3. uma versão corrente e uma substituída da mesma chave convivem;
+#   4. a segunda aplicação não falha e não perde dado.
+# ---------------------------------------------------------------------------
+if apply "$VERSIONING" >/dev/null 2>&1; then
+  pass "V352: primeira aplicação"
+else
+  fail "V352: primeira aplicação falhou"
+  db < "$MIGRATIONS/$VERSIONING" 2>&1 | head -3 >&2 || true
+fi
+
+version=$(db -N -e "select concat(version, '/', ifnull(superseded_by,'nulo'), '/', ifnull(expires_at,'nulo'))
+  from network_storage_objects where id = 'sob_mig001'" 2>/dev/null | tr -d '[:space:]')
+[[ "$version" == "1/nulo/nulo" ]] && pass "V352: objeto existente vira versão 1, corrente e sem prazo" \
+  || fail "esperava 1/nulo/nulo, achei '$version'"
+
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_storage_objects (id, bucket, object_key, content_type, bytes, sha256, state, created_by, version)
+values ('sob_mig_v1', 'migracao', 'versao.bin', 'application/octet-stream', 10, repeat('a', 64), 'STORED', 'user-test', 1);
+SQL
+then
+  pass "V352: primeira versão de uma chave nova entra"
+else
+  fail "V352: não aceitou a primeira versão"
+fi
+
+# Duas correntes da mesma chave têm de ser recusadas: sem isso, `find(bucket, chave)` não sabe qual
+# devolver e o upload idempotente deixa de ser idempotente.
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_storage_objects (id, bucket, object_key, content_type, bytes, sha256, state, created_by, version)
+values ('sob_mig_v2', 'migracao', 'versao.bin', 'application/octet-stream', 10, repeat('b', 64), 'STORED', 'user-test', 2);
+SQL
+then
+  fail "V352: aceitou duas versões CORRENTES da mesma chave"
+else
+  pass "V352: a unicidade recusa duas versões correntes da mesma chave"
+fi
+
+# Marcando a primeira como substituída, a segunda entra: é o que o versionamento faz.
+if db >/dev/null 2>&1 <<'SQL'
+update network_storage_objects set superseded_by = 'sob_mig_v2' where id = 'sob_mig_v1';
+insert into network_storage_objects (id, bucket, object_key, content_type, bytes, sha256, state, created_by, version)
+values ('sob_mig_v2', 'migracao', 'versao.bin', 'application/octet-stream', 10, repeat('b', 64), 'STORED', 'user-test', 2);
+SQL
+then
+  pass "V352: versão substituída e versão corrente convivem na mesma chave"
+else
+  fail "V352: não aceitou a versão corrente depois de substituir a anterior"
+fi
+
+# A chave antiga saiu: a inserção idempotente tem de cair na unicidade nova, não numa restrição que
+# ainda exista com o nome antigo.
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_storage_objects (id, bucket, object_key, content_type, state, created_by)
+values ('sob_mig_v2', 'migracao', 'versao.bin', 'application/octet-stream', 'PENDING', 'user-test')
+on duplicate key update id = id;
+SQL
+then
+  pass "V352: insert-ou-noop da versão corrente não duplica"
+else
+  fail "V352: insert-ou-noop falhou (a unicidade nova não é alvo do on duplicate key)"
+fi
+
+if apply "$VERSIONING" >/dev/null 2>&1; then
+  pass "V352: reaplicar não falha (idempotente)"
+else
+  fail "V352: 2ª aplicação falhou (não idempotente)"
+fi
+
+versaoafter=$(db -N -e "select concat(count(*), '/', max(version)) from network_storage_objects
+  where bucket = 'migracao' and object_key = 'versao.bin'" 2>/dev/null | tr -d '[:space:]')
+[[ "$versaoafter" == "2/2" ]] && pass "V352: as duas versões sobreviveram à 2ª aplicação" \
+  || fail "esperava 2/2, achei '$versaoafter'"
+
+politica=$(db -N -e "select count(*) from network_storage_buckets" 2>/dev/null | tr -d '[:space:]')
+[[ "$politica" == "0" ]] && pass "V352: a tabela de política nasce vazia (ninguém configurou nada)" \
+  || fail "esperava 0 políticas, achei '$politica'"
+
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_storage_buckets (bucket, versioning, retain_superseded_days, expire_after_days, updated_by)
+values ('migracao', 1, 30, 90, 'user-test');
+SQL
+then
+  pass "V352: política do bucket grava versionamento, retenção e expiração"
+else
+  fail "V352: não gravou a política do bucket"
+fi
+
+# A check do banco é a última linha de defesa: expiração de zero dia é recusada aqui também.
+if db >/dev/null 2>&1 <<'SQL'
+update network_storage_buckets set expire_after_days = 0 where bucket = 'migracao';
+SQL
+then
+  fail "V352: aceitou expiração de zero dia"
+else
+  pass "V352: expiração de zero dia recusada pela check"
+fi
+
+# ---------------------------------------------------------------------------
+# V354 — rebalanceamento (brief §16).
+#
+# A tabela guarda a DECISÃO de mover uma réplica. O que importa provar no banco:
+#   1. a transferência grava e sobrevive à reaplicação;
+#   2. uma réplica de origem não tem duas transferências VIVAS ao mesmo tempo (clique duplo);
+#   3. concluídas, duas transferências da mesma réplica convivem (a segunda recuperação do mesmo
+#      objeto é legítima — é o que uma unicidade ingênua por estado proibiria para sempre);
+#   4. a transferência morre junto com o objeto (cascade).
+# ---------------------------------------------------------------------------
+if apply "$REBALANCE" >/dev/null 2>&1; then
+  pass "V354: primeira aplicação"
+else
+  fail "V354: primeira aplicação falhou"
+  db < "$MIGRATIONS/$REBALANCE" 2>&1 | head -3 >&2 || true
+fi
+
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_storage_rebalances (id, object_id, from_replica, from_node_id, to_replica, to_node_id,
+  state, bytes, bandwidth_limit_mbps, requested_by)
+values ('reb_t1', 'sob_mig_v2', 1, 'nd_cheio', 2, 'nd_novo', 'PENDING', 10, 5, 'user-test');
+SQL
+then
+  pass "V354: transferência viva grava"
+else
+  fail "V354: não gravou a transferência"
+fi
+
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_storage_rebalances (id, object_id, from_replica, from_node_id, to_replica, to_node_id,
+  state, bytes, bandwidth_limit_mbps, requested_by)
+values ('reb_t2', 'sob_mig_v2', 1, 'nd_cheio', 3, 'nd_outro', 'PENDING', 10, 5, 'user-test');
+SQL
+then
+  fail "V354: aceitou duas transferências VIVAS da mesma réplica"
+else
+  pass "V354: a unicidade recusa duas transferências vivas da mesma réplica"
+fi
+
+if db >/dev/null 2>&1 <<'SQL'
+update network_storage_rebalances set state = 'DONE', finished_at = now(3) where id = 'reb_t1';
+insert into network_storage_rebalances (id, object_id, from_replica, from_node_id, to_replica, to_node_id,
+  state, bytes, bandwidth_limit_mbps, requested_by)
+values ('reb_t2', 'sob_mig_v2', 1, 'nd_cheio', 3, 'nd_outro', 'PENDING', 10, 5, 'user-test');
+SQL
+then
+  pass "V354: concluída e viva da mesma réplica convivem (nova transferência entra)"
+else
+  fail "V354: não aceitou nova transferência depois de a anterior concluir"
+fi
+
+# Concluídas repetidas: o que a unicidade por estado proibiria para sempre.
+if db >/dev/null 2>&1 <<'SQL'
+update network_storage_rebalances set state = 'DONE', finished_at = now(3) where id = 'reb_t2';
+insert into network_storage_rebalances (id, object_id, from_replica, from_node_id, to_replica, to_node_id,
+  state, bytes, bandwidth_limit_mbps, requested_by)
+values ('reb_t3', 'sob_mig_v2', 1, 'nd_cheio', 4, 'nd_outro', 'DONE', 10, 5, 'user-test');
+SQL
+then
+  pass "V354: duas concluídas da mesma réplica convivem"
+else
+  fail "V354: recusou duas concluídas da mesma réplica"
+fi
+
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_storage_rebalances (id, object_id, from_replica, from_node_id, to_replica, to_node_id,
+  state, bytes, requested_by)
+values ('reb_t4', 'sob_mig_v2', 1, 'nd_cheio', 5, 'nd_novo', 'PENDING', 10, 'user-test')
+on duplicate key update id = id;
+SQL
+then
+  pass "V354: insert-ou-noop não duplica a transferência viva"
+else
+  fail "V354: insert-ou-noop falhou"
+fi
+
+if apply "$REBALANCE" >/dev/null 2>&1; then
+  pass "V354: reaplicar não falha (idempotente)"
+else
+  fail "V354: 2ª aplicação falhou (não idempotente)"
+fi
+
+linhas=$(db -N -e "select count(*) from network_storage_rebalances where object_id = 'sob_mig_v2'" 2>/dev/null | tr -d '[:space:]')
+[[ "$linhas" == "4" ]] && pass "V354: as quatro transferências sobreviveram à 2ª aplicação" \
+  || fail "esperava 4 transferências, achei '$linhas'"
+
+# Cascade: apagar o objeto leva as transferências dele.
+db >/dev/null 2>&1 <<'SQL'
+update network_storage_rebalances set state = 'DONE' where id = 'reb_t4';
+delete from network_storage_objects where id = 'sob_mig_v2';
+SQL
+restantes=$(db -N -e "select count(*) from network_storage_rebalances where object_id = 'sob_mig_v2'" 2>/dev/null | tr -d '[:space:]')
+[[ "$restantes" == "0" ]] && pass "V354: apagar o objeto leva as transferências (cascade)" \
+  || fail "esperava 0 transferências, achei '$restantes'"
+
+# ---------------------------------------------------------------------------
+# V357 — gateway S3 (brief §11).
+#
+# A credencial de cliente tem de sobreviver à reaplicação, ser única por Access
+# Key (o gateway busca por ela a cada requisição) e aceitar revogação terminal.
+# ---------------------------------------------------------------------------
+S3GATEWAY=V357__network_storage_s3_gateway.sql
+if apply "$S3GATEWAY" >/dev/null 2>&1; then
+  pass "V357: primeira aplicação"
+else
+  fail "V357: primeira aplicação falhou"
+  db < "$MIGRATIONS/$S3GATEWAY" 2>&1 | head -3 >&2 || true
+fi
+
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+  allowed_bucket, allowed_operations)
+values ('s3c_t1', 'AKIATESTE0000000001', repeat('a', 64), 'cifrado', 'user-test', null, 'GET PUT');
+SQL
+then
+  pass "V357: credencial de cliente grava"
+else
+  fail "V357: não gravou a credencial"
+fi
+
+# Access Key é o identificador de busca: duplicar faria uma credencial autenticar como outra.
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_storage_s3_credentials (id, access_key, secret_hash, owner_user_id, allowed_operations)
+values ('s3c_t2', 'AKIATESTE0000000001', repeat('b', 64), 'user-test', 'GET');
+SQL
+then
+  fail "V357: aceitou Access Key duplicada"
+else
+  pass "V357: a unicidade recusa Access Key duplicada"
+fi
+
+# Revogação: preenche revoked_at uma vez, e revogar de novo não sobrescreve a data original.
+db >/dev/null 2>&1 <<'SQL'
+update network_storage_s3_credentials set revoked_at = now(3) where id = 's3c_t1';
+SQL
+revogada=$(db -N -e "select count(*) from network_storage_s3_credentials where id = 's3c_t1' and revoked_at is not null" 2>/dev/null | tr -d '[:space:]')
+[[ "$revogada" == "1" ]] && pass "V357: revogação grava revoked_at" || fail "V357: revogação não gravou"
+
+# Operações vazias são credencial que não faz nada: a check recusa em vez de guardar silêncio.
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_storage_s3_credentials (id, access_key, secret_hash, owner_user_id, allowed_operations)
+values ('s3c_t3', 'AKIATESTE0000000003', repeat('c', 64), 'user-test', '');
+SQL
+then
+  fail "V357: aceitou credencial sem operação"
+else
+  pass "V357: a check recusa credencial sem operação"
+fi
+
+if apply "$S3GATEWAY" >/dev/null 2>&1; then
+  pass "V357: reaplicar não falha (idempotente)"
+else
+  fail "V357: 2ª aplicação falhou (não idempotente)"
+fi
+
+credenciais=$(db -N -e "select count(*) from network_storage_s3_credentials" 2>/dev/null | tr -d '[:space:]')
+[[ "$credenciais" == "1" ]] && pass "V357: a credencial sobreviveu à 2ª aplicação" \
+  || fail "esperava 1 credencial, achei '$credenciais'"
+# ---------------------------------------------------------------------------
+# V358 — certificado mTLS individual do nó (brief §10, doc 04 §1).
+#
+# A tabela guarda o certificado PÚBLICO e o estado dele; NÃO existe coluna de chave privada
+# (a do nó fica no keystore dele, a da CA na configuração do Control Plane). O que a migração
+# precisa garantir: o fingerprint é único (é o identificador que o painel confere), a revogação
+# é linha alterada e não apagada, e reaplicar não falha.
+# ---------------------------------------------------------------------------
+CERTIFICADO=V358__network_node_certificates.sql
+if apply "$CERTIFICADO" >/dev/null 2>&1; then
+  pass "V358: primeira aplicação"
+else
+  fail "V358: primeira aplicação falhou"
+  db < "$MIGRATIONS/$CERTIFICADO" 2>&1 | head -3 >&2 || true
+fi
+
+# Nenhuma coluna de segredo nesta tabela: o certificado é público por definição.
+segredos=$(db -N -e "select count(*) from information_schema.columns where table_schema = database() \
+  and table_name = 'network_node_certificates' and column_name in ('private_key', 'ca_key', 'secret')" 2>/dev/null | tr -d '[:space:]')
+[[ "$segredos" == "0" ]] && pass "V358: a tabela não guarda chave privada" \
+  || fail "V358: apareceu coluna de chave privada ('$segredos')"
+
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_node_certificates (id, node_id, serial, subject, pem, public_key, fingerprint_sha256,
+  not_before, not_after, created_at)
+values ('nct_t1', 'nd_mig_t1', '0a1b2c', 'CN=ENOIS-NODE-nd_mig_t1', '-----BEGIN CERTIFICATE-----AAA-----END CERTIFICATE-----',
+  'chave-publica', repeat('f', 64), now(3), now(3) + interval 90 day, now(3));
+SQL
+then
+  pass "V358: certificado grava"
+else
+  fail "V358: não gravou o certificado"
+fi
+
+# O fingerprint é o identificador do certificado: repetir dois iguais seria o mesmo certificado
+# contado duas vezes no painel.
+if db >/dev/null 2>&1 <<'SQL'
+insert into network_node_certificates (id, node_id, serial, subject, pem, public_key, fingerprint_sha256,
+  not_before, not_after, created_at)
+values ('nct_t2', 'nd_mig_t2', '0a1b2d', 'CN=ENOIS-NODE-nd_mig_t2', 'pem', 'chave', repeat('f', 64), now(3),
+  now(3) + interval 90 day, now(3));
+SQL
+then
+  fail "V358: aceitou fingerprint duplicado"
+else
+  pass "V358: a unicidade recusa fingerprint duplicado"
+fi
+
+# Rotação: o certificado anterior continua na tabela, revogado — o rastro não some.
+db >/dev/null 2>&1 <<'SQL'
+update network_node_certificates set revoked_at = now(3), revoked_by = 'nd_mig_t1', revoked_reason = 'rotacao'
+  where node_id = 'nd_mig_t1' and revoked_at is null;
+insert into network_node_certificates (id, node_id, serial, subject, pem, public_key, fingerprint_sha256,
+  not_before, not_after, created_at)
+values ('nct_t3', 'nd_mig_t1', '0a1b2e', 'CN=ENOIS-NODE-nd_mig_t1', 'pem2', 'chave2', repeat('e', 64), now(3),
+  now(3) + interval 90 day, now(3));
+SQL
+historico=$(db -N -e "select count(*) from network_node_certificates where node_id = 'nd_mig_t1'" 2>/dev/null | tr -d '[:space:]')
+vigente=$(db -N -e "select count(*) from network_node_certificates where node_id = 'nd_mig_t1' and revoked_at is null" 2>/dev/null | tr -d '[:space:]')
+[[ "$historico" == "2" && "$vigente" == "1" ]] && pass "V358: rotação mantém o histórico e deixa 1 vigente" \
+  || fail "V358: esperava 2 linhas com 1 vigente, achei '$histórico'/'$vigente'"
+
+if apply "$CERTIFICADO" >/dev/null 2>&1; then
+  pass "V358: reaplicar não falha (idempotente)"
+else
+  fail "V358: 2ª aplicação falhou (não idempotente)"
+fi
+
+certs=$(db -N -e "select count(*) from network_node_certificates" 2>/dev/null | tr -d '[:space:]')
+[[ "$certs" == "2" ]] && pass "V358: os certificados sobreviveram à 2ª aplicação" \
+  || fail "esperava 2 certificados, achei '$certs'"
 
 printf '\nStorage migration: PASS %d | FAIL %d\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))

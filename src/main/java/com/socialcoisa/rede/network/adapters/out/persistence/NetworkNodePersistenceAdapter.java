@@ -45,9 +45,13 @@ class NetworkNodePersistenceAdapter implements NetworkNodeRepository {
 	@Override
 	public void create(String id, String displayName, String ownerUserId, List<NodeProfile> profiles, String region,
 			String country, int cpuCores, int memoryMb, int diskMb, int bandwidthMbps, Instant now) {
-		repository.save(new NetworkNodeJpaEntity(id, displayName, ownerUserId, NodeStatus.PENDING_APPROVAL.name(),
-			NetworkNodeJpaEntity.NodeProfilesCsv.join(profiles), cpuCores, memoryMb, diskMb, bandwidthMbps, region,
-			country, now));
+		// saveAndFlush, não save: o enroll grava o nó e, na MESMA transação, a linha de responsável
+		// — que tem chave estrangeira para o nó. Com `save`, o insert do nó ficaria pendente no
+		// contexto de persistência e o insert do responsável chegaria antes dele, falhando na FK.
+		// O flush fixa a ordem que a chave exige.
+		repository.saveAndFlush(new NetworkNodeJpaEntity(id, displayName, ownerUserId,
+			NodeStatus.PENDING_APPROVAL.name(), NetworkNodeJpaEntity.NodeProfilesCsv.join(profiles), cpuCores,
+			memoryMb, diskMb, bandwidthMbps, region, country, now));
 	}
 
 	@Override
@@ -71,9 +75,22 @@ class NetworkNodePersistenceAdapter implements NetworkNodeRepository {
 	}
 
 	@Override
+	public void observeIp(String id, String ip, Instant now) {
+		// Ordem importa: a marca é decidida contra o endereço ANTIGO.
+		repository.markIpChanged(id, ip, now);
+		repository.setObservedIp(id, ip);
+	}
+
+	@Override
+	public void touchConfig(String id, Instant now) {
+		repository.touchConfig(id, now);
+	}
+
+	@Override
 	public void touch(String id, String runtimeVersion, Double cpuPercent, Integer memoryMb, Integer runningTasks,
-			Long diskFreeMb, Instant now) {
-		repository.heartbeat(id, runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, now);
+			Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Long bytesInMb, Long bytesOutMb, Instant now) {
+		repository.heartbeat(id, runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, diskTotalMb,
+			contentUsedMb, bytesInMb, bytesOutMb, now);
 	}
 
 	@Override

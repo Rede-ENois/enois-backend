@@ -204,6 +204,34 @@ class ScheduledPostTests {
 			.andExpect(jsonPath("$.length()").value(0));
 	}
 
+	@Test
+	void segundoPostIdentoParaOMesmoHorarioERecusadoNoAgendamento() throws Exception {
+		var owner = auth.authenticate("user_sched_flood");
+		Instant horario = Instant.now().plusSeconds(600);
+		schedule(owner, "sched-flood-1", "Post agendado repetido.", horario, null);
+
+		// Mesmo conteúdo normalizado (maiúsculas e espaços a mais não enganam), mesmo horário.
+		mockMvc.perform(post("/feed/scheduled")
+				.header("X-Session-Token", owner.token())
+				.header("Idempotency-Key", "sched-flood-2")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA", "type", "INSIGHT",
+					"content", "  post   AGENDADO  repetido. ",
+					"scheduledAt", horario.toString()))))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.code").value("SCHEDULED_DUPLICATE_CONTENT"));
+
+		// O mesmo conteúdo para OUTRO horário continua valendo (não é dedupe global).
+		mockMvc.perform(post("/feed/scheduled")
+				.header("X-Session-Token", owner.token())
+				.header("Idempotency-Key", "sched-flood-3")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA", "type", "INSIGHT",
+					"content", "Post agendado repetido.",
+					"scheduledAt", Instant.now().plusSeconds(3600).toString()))))
+			.andExpect(status().isCreated());
+	}
+
 	private String schedulePoll(TestAuthHelper.AuthSession session, String key, String content, List<String> options,
 			Instant quando) throws Exception {
 		Map<String, Object> body = Map.of("topic", "TECNOLOGIA", "type", "POLL", "content", content,

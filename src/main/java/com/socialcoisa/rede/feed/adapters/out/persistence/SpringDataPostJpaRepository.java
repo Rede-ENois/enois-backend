@@ -12,6 +12,7 @@ import org.springframework.data.repository.query.Param;
 import com.socialcoisa.rede.feed.domain.AuthorIdentity;
 import com.socialcoisa.rede.feed.domain.PostStatus;
 import com.socialcoisa.rede.feed.domain.PostType;
+import com.socialcoisa.rede.feed.domain.Visibility;
 
 interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, String> {
 
@@ -22,6 +23,13 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 		where p.authorId = :authorId and p.repostOf = :source and p.status = :status
 		""")
 	java.util.Optional<PostJpaEntity> findRepostByAuthorAndSource(@Param("authorId") String authorId,
+			@Param("source") String source, @Param("status") com.socialcoisa.rede.feed.domain.PostStatus status);
+
+	@Query("""
+		select count(p) from PostJpaEntity p
+		where p.authorId = :authorId and p.repostOf = :source and p.status = :status
+		""")
+	long countActiveRepostsByAuthorAndSource(@Param("authorId") String authorId,
 			@Param("source") String source, @Param("status") com.socialcoisa.rede.feed.domain.PostStatus status);
 
 	@Query("""
@@ -36,6 +44,33 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 	/** Posts que anexam a mídia — a checagem de conteúdo derruba tudo o que usa a mesma imagem. */
 	@Query("select p from PostJpaEntity p where :mediaId member of p.mediaIds")
 	List<PostJpaEntity> findByMediaId(@Param("mediaId") String mediaId);
+
+	/** Posts de texto do feed social num intervalo de criação (a janela de leitura do Termômetro). */
+	@Query("""
+			select p from PostJpaEntity p
+			where p.status = :status and p.type in :tipos and p.channelId is null
+			  and p.createdAt >= :de and p.createdAt < :ate
+			order by p.createdAt asc
+			""")
+	List<PostJpaEntity> findTextoSocialEntre(@Param("status") PostStatus status,
+			@Param("tipos") Collection<PostType> tipos, @Param("de") Instant de, @Param("ate") Instant ate,
+			Pageable pageable);
+
+	/**
+	 * Posts de texto social E PÚBLICOS num intervalo de criação (a janela do Papo Reto).
+	 * Post de CONNECTIONS é conversa de conexões: não entra no papo da rede, só no recorte
+	 * de quem tem acesso. Sem canal, como a leitura do Termômetro.
+	 */
+	@Query("""
+			select p from PostJpaEntity p
+			where p.status = :status and p.type in :tipos and p.channelId is null
+			  and p.visibility = :visibility
+			  and p.createdAt >= :de and p.createdAt < :ate
+			order by p.createdAt asc
+			""")
+	List<PostJpaEntity> findTextoSocialPublicoEntre(@Param("status") PostStatus status,
+			@Param("visibility") Visibility visibility, @Param("tipos") Collection<PostType> tipos,
+			@Param("de") Instant de, @Param("ate") Instant ate, Pageable pageable);
 
 	/** Posts ativos com link no corpo ou na mini página (a varredura da barreira de links). */
 	@Query("""
@@ -66,8 +101,9 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 	List<PostJpaEntity> findByChannelIdAndStatusAndCreatedAtBeforeOrderByCreatedAtDesc(String channelId,
 			PostStatus status, Instant before, Pageable pageable);
 
-	/** Momentos vencidos e ainda ativos — o worker aplica o soft-delete do fluxo normal. */
-	List<PostJpaEntity> findByTypeAndStatusAndExpiresAtBefore(PostType type, PostStatus status, Instant now);
+	/** Efêmeros vencidos e ainda ativos (Momento, Instante) — o worker aplica o soft-delete. */
+	List<PostJpaEntity> findByTypeInAndStatusAndExpiresAtBeforeOrderByExpiresAtAscIdAsc(Collection<PostType> types,
+			PostStatus status, Instant now, Pageable pageable);
 
 	// ---- Separação de identidades (perfil profissional): regras no backend, sempre ----
 
@@ -170,7 +206,8 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 			SELECT p FROM PostJpaEntity p
 			WHERE p.status = :status AND p.createdAt < :before
 			  AND (EXISTS (SELECT r.id FROM ReactionJpaEntity r WHERE r.postId = p.id AND r.userId = :reader)
-			    OR EXISTS (SELECT c.id FROM CommentJpaEntity c WHERE c.postId = p.id AND c.authorId = :reader))
+			    OR EXISTS (SELECT c.id FROM CommentJpaEntity c WHERE c.postId = p.id AND c.authorId = :reader)
+			    OR EXISTS (SELECT s.id FROM SavedPostJpaEntity s WHERE s.postId = p.id AND s.userId = :reader))
 			ORDER BY p.createdAt DESC""")
 	List<PostJpaEntity> findInteracted(@Param("status") PostStatus status, @Param("reader") String reader,
 			@Param("before") Instant before, Pageable pageable);

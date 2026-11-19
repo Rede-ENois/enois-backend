@@ -2,6 +2,8 @@ package com.socialcoisa.rede.jobs.domain;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+
+import com.socialcoisa.rede.shared.web.ApiException;
 import java.util.List;
 
 public class Job {
@@ -32,6 +34,8 @@ public class Job {
 	/** Estado do processo seletivo; comeca OPEN. */
 	private JobStatus status;
 	private Instant closedAt;
+	/** Prazo declarado para receber candidaturas (nulo = sem prazo). Depois dele, nao aplica. */
+	private Instant applicationDeadline;
 	/** The company page the job belongs to (null = not linked to a page). */
 	private final String companyId;
 
@@ -39,7 +43,7 @@ public class Job {
 			String salary, String currency, BigDecimal salaryMin, BigDecimal salaryMax, String salaryPeriod,
 			String description, List<String> skills, List<JobApplicationField> applicationFields,
 			String postedBy, Instant communityAgreedAt, JobStatus status, Instant closedAt, Instant postedAt,
-			Instant updatedAt, String companyId) {
+			Instant updatedAt, String companyId, Instant applicationDeadline) {
 		this.id = id;
 		this.title = title;
 		this.company = company;
@@ -62,25 +66,32 @@ public class Job {
 		this.status = status == null ? JobStatus.OPEN : status;
 		this.closedAt = closedAt;
 		this.companyId = companyId;
+		this.applicationDeadline = applicationDeadline;
 	}
 
 	public static Job create(String id, String title, String company, String logo, String location, String type,
 			String level, String salary, String currency, BigDecimal salaryMin, BigDecimal salaryMax,
 			String salaryPeriod, String description, List<String> skills,
-			List<JobApplicationField> applicationFields, String postedBy, Instant communityAgreedAt, Instant now) {
+			List<JobApplicationField> applicationFields, String postedBy, Instant communityAgreedAt, Instant now,
+			Instant applicationDeadline) {
+		if (applicationDeadline != null && !applicationDeadline.isAfter(now)) {
+			throw new ApiException(422, "INVALID_DEADLINE",
+				"O prazo para candidaturas precisa ser uma data futura.");
+		}
 		return new Job(id, title, company, logo, location, type, level, salary, currency, salaryMin, salaryMax,
 			salaryPeriod, description, List.copyOf(skills), applicationFields, postedBy, communityAgreedAt,
-			JobStatus.OPEN, null, now, now, null);
+			JobStatus.OPEN, null, now, now, null, applicationDeadline);
 	}
 
 	public static Job restore(String id, String title, String company, String logo, String location, String type,
 			String level, String salary, String currency, BigDecimal salaryMin, BigDecimal salaryMax,
 			String salaryPeriod, String description, List<String> skills,
 			List<JobApplicationField> applicationFields, String postedBy, Instant communityAgreedAt,
-			JobStatus status, Instant closedAt, Instant postedAt, Instant updatedAt, String companyId) {
+			JobStatus status, Instant closedAt, Instant postedAt, Instant updatedAt, String companyId,
+			Instant applicationDeadline) {
 		return new Job(id, title, company, logo, location, type, level, salary, currency, salaryMin, salaryMax,
 			salaryPeriod, description, skills, applicationFields, postedBy, communityAgreedAt, status, closedAt,
-			postedAt, updatedAt, companyId);
+			postedAt, updatedAt, companyId, applicationDeadline);
 	}
 
 	public String id() { return id; }
@@ -141,8 +152,39 @@ public class Job {
 	public Job closed(Instant at) {
 		return new Job(id, title, company, logo, location, type, level, salary, currency, salaryMin, salaryMax,
 			salaryPeriod, description, skills, applicationFields, postedBy, communityAgreedAt, JobStatus.CLOSED,
-			at, postedAt, updatedAt, companyId);
+			at, postedAt, updatedAt, companyId, applicationDeadline);
 	}
+
+	/**
+	 * Reabre a vaga encerrada: volta a OPEN, limpa closedAt e preserva tudo o que chegou.
+	 * Reabrir vaga que está aberta é erro de estado, não sucesso silencioso.
+	 */
+	public Job reopened(Instant at) {
+		if (isOpen()) {
+			throw new ApiException(409, "JOB_NOT_CLOSED", "Esta vaga já está aberta.");
+		}
+		return new Job(id, title, company, logo, location, type, level, salary, currency, salaryMin, salaryMax,
+			salaryPeriod, description, skills, applicationFields, postedBy, communityAgreedAt, JobStatus.OPEN,
+			null, postedAt, at, companyId, applicationDeadline);
+	}
+
+	/** Vaga aberta cujo prazo já passou não recebe candidatura (nulo = sem prazo). */
+	public boolean acceptingApplications(Instant now) {
+		return isOpen() && (applicationDeadline == null || now.isBefore(applicationDeadline));
+	}
+
+	/** Novo prazo para candidaturas (nulo = remover). Passado é recusa do domínio. */
+	public Job withDeadline(Instant deadline, Instant now) {
+		if (deadline != null && !deadline.isAfter(now)) {
+			throw new ApiException(422, "INVALID_DEADLINE",
+				"O prazo para candidaturas precisa ser uma data futura.");
+		}
+		return new Job(id, title, company, logo, location, type, level, salary, currency, salaryMin, salaryMax,
+			salaryPeriod, description, skills, applicationFields, postedBy, communityAgreedAt, status, closedAt,
+			postedAt, updatedAt, companyId, deadline);
+	}
+
+	public Instant applicationDeadline() { return applicationDeadline; }
 
 	public String companyId() { return companyId; }
 
@@ -150,7 +192,7 @@ public class Job {
 	public Job withCompany(String pageId) {
 		return new Job(id, title, company, logo, location, type, level, salary, currency, salaryMin, salaryMax,
 			salaryPeriod, description, skills, applicationFields, postedBy, communityAgreedAt, status, closedAt,
-			postedAt, updatedAt, pageId);
+			postedAt, updatedAt, pageId, applicationDeadline);
 	}
 
 }

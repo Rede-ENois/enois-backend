@@ -65,40 +65,39 @@ public class MessagingService {
 
 	@Transactional
 	public Conversation createConversation(String kind, String title, List<String> participantIds, String createdBy) {
-		// Validação comum a TODO kind (DIRECT, GROUP, SERVICE...). Antes, só o fluxo direct checava
-		// bloqueio; criar um "grupo" com kind=GROUP furava bloqueio e proteção de menores (EN-05/E-16).
-		if (participantIds == null || participantIds.isEmpty()) {
-			throw new com.socialcoisa.rede.shared.web.ApiException(400, "INVALID_PARTICIPANTS",
-				"Informe pelo menos um participante.");
-		}
-		java.util.LinkedHashSet<String> unique = new java.util.LinkedHashSet<>();
-		for (String raw : participantIds) {
-			if (org.springframework.util.StringUtils.hasText(raw)) {
-				unique.add(raw.trim());
-			}
-		}
-		if (unique.isEmpty()) {
-			throw new com.socialcoisa.rede.shared.web.ApiException(400, "INVALID_PARTICIPANTS",
-				"Informe pelo menos um participante.");
-		}
-		if (unique.size() > 100) {
-			throw new com.socialcoisa.rede.shared.web.ApiException(400, "TOO_MANY_PARTICIPANTS",
-				"Uma conversa pode ter no maximo 100 participantes.");
-		}
 		// JOB and SERVICE conversations are opened by their own flows (and exempt from the minor
-		// rule below); the generic endpoint only creates person-to-person conversations.
+		// rule); the generic endpoint only creates person-to-person conversations.
 		String normalizedKind = kind == null || kind.isBlank() ? "DIRECT" : kind.trim().toUpperCase(java.util.Locale.ROOT);
 		if (!"DIRECT".equals(normalizedKind) && !"GROUP".equals(normalizedKind)) {
 			throw new ApiException(400, "INVALID_CONVERSATION_KIND", "Tipo de conversa invalido.");
 		}
 		ageGate.requireCanWrite(createdBy);
-		unique.add(createdBy);
-		java.util.List<String> others = unique.stream().filter(pid -> !pid.equals(createdBy)).toList();
-		reach.requireMayOpen(createdBy, others);
+		if (participantIds == null || participantIds.isEmpty()) {
+			throw new ApiException(400, "INVALID_PARTICIPANTS", "Informe pelo menos um participante.");
+		}
+		// O limite é aplicado à lista crua, antes de qualquer consulta: 101 ids não podem virar
+		// 101 buscas. Depois disso, a política resolve o conjunto inteiro numa leitura em lote.
+		long distinct = participantIds.stream()
+			.filter(raw -> raw != null && !raw.isBlank())
+			.map(String::trim)
+			.distinct()
+			.count();
+		if (distinct == 0) {
+			throw new ApiException(400, "INVALID_PARTICIPANTS", "Informe pelo menos um participante.");
+		}
+		if (distinct > 100) {
+			throw new ApiException(400, "TOO_MANY_PARTICIPANTS",
+				"Uma conversa pode ter no maximo 100 participantes.");
+		}
+		// Validação comum a TODO kind (formato, existência, banimento, bloqueio, idade) e devolve o
+		// conjunto normalizado. Roda ANTES do primeiro save: antes, uma conversa era criada e só
+		// depois o destinatário era checado, então um id inexistente deixava uma conversa órfã.
+		List<String> unique = reach.resolveParticipants(normalizedKind, createdBy, participantIds);
 		// A DM 1:1 is one thread per pair: opening it again from the inbox search returns the same
 		// conversation instead of a duplicate (the /direct endpoint already worked this way).
-		if ("DIRECT".equals(normalizedKind) && others.size() == 1) {
-			var existing = repository.findPairByKind(createdBy, others.get(0), "DIRECT");
+		if ("DIRECT".equals(normalizedKind) && unique.size() == 2) {
+			String otherId = unique.stream().filter(pid -> !pid.equals(createdBy)).findFirst().orElseThrow();
+			var existing = repository.findPairByKind(createdBy, otherId, "DIRECT");
 			if (existing.isPresent()) {
 				return existing.get();
 			}
@@ -230,10 +229,11 @@ public class MessagingService {
 		// MessagingRepository#touchConversation). It also queues a double click behind the first
 		// send, so the duplicate check below sees the message it created.
 		repository.touchConversation(conversationId, clock.instant());
-		// Duplo clique/retry: a MESMA mensagem (texto + mídias) do mesmo remetente em até 2
-		// minutos devolve a linha já criada em vez de duplicar e notificar de novo.
+		// Duplo clique/retry: a MESMA mensagem (texto + mídias + citada) do mesmo remetente em até
+		// 2 minutos devolve a linha já criada em vez de duplicar e notificar de novo. O reply
+		// participa da igualdade: responder citados diferentes com o mesmo texto são envios novos.
 		var duplicate = repository.findRecentDuplicate(conversationId, senderId, corpo,
-			clock.instant().minusSeconds(DUPLICATE_WINDOW_SECONDS));
+			clock.instant().minusSeconds(DUPLICATE_WINDOW_SECONDS), replyToId);
 		if (duplicate.isPresent() && duplicate.get().mediaIds().equals(midias)
 				&& duplicate.get().mediaSpoiler() == mediaSpoiler) {
 			return duplicate.get();
@@ -304,8 +304,10 @@ public class MessagingService {
 		repository.touchConversation(conversationId, clock.instant());
 		// Duplo clique/retry: retry de transporte repete a mesma cifra e devolve a linha anterior
 		// em vez de duplicar e notificar de novo (o caminho em claro ja fazia; o E2E nao tinha).
+		// O reply participa da igualdade: reusar o mesmo envelope para citar outra mensagem e um
+		// envio novo, e o contexto do segundo não pode colapsar no primeiro.
 		var duplicate = repository.findRecentDuplicate(conversationId, senderId, ciphertext,
-			clock.instant().minusSeconds(DUPLICATE_WINDOW_SECONDS));
+			clock.instant().minusSeconds(DUPLICATE_WINDOW_SECONDS), replyToId);
 		if (duplicate.isPresent() && duplicate.get().e2e() && duplicate.get().mediaIds().equals(midias)
 				&& duplicate.get().mediaSpoiler() == mediaSpoiler) {
 			return duplicate.get();
@@ -411,7 +413,14 @@ public class MessagingService {
 		if (!repository.isParticipant(conversationId, userId)) {
 			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
 		}
-		repository.markRead(conversationId, userId, clock.instant());
+		// A leitura é monotônica: o desempate de mesmo segundo pode ter nascido mensagens À FRENTE
+		// do relógio, e gravar o relógio atual deixava o lastReadAt atrás delas — o badge não zerava
+		// (cf. auditoria de mensagens). Avança até a última mensagem da conversa quando ela passou.
+		java.time.Instant readAt = repository.findLastMessage(conversationId)
+			.map(Message::createdAt)
+			.map(last -> last.isAfter(clock.instant()) ? last : clock.instant())
+			.orElseGet(clock::instant);
+		repository.markRead(conversationId, userId, readAt);
 		// Read conversation, read notices: its message notifications leave the unread count too.
 		notificationService.markReadByHref(userId, conversationHref(conversationId));
 		// Read receipts: the other side sees "visto" without waiting for the next refetch.
@@ -597,10 +606,6 @@ public class MessagingService {
 		return repository.findReactionsByMessageId(messageId);
 	}
 
-	/** Mensagens por ids em batch (reply previews). */
-	public List<Message> findMessagesByIds(java.util.Collection<String> messageIds) {
-		return repository.findMessagesByIds(messageIds);
-	}
 
 	/**
 	 * Resumo das reações de VÁRIAS mensagens (contagem por tipo + a reação de quem está vendo),

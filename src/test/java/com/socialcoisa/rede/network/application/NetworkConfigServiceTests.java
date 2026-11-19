@@ -105,7 +105,23 @@ class NetworkConfigServiceTests {
 			}
 		};
 		return new NetworkConfigService(Clock.systemUTC(), repository, authorities, signingKey, publicKey,
-			ttlSeconds, allowedRoutes);
+			ttlSeconds, allowedRoutes, new com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository() {
+				@Override
+				public java.util.Map<com.socialcoisa.rede.network.domain.StorageNodeKind, Integer> findByNode(
+						String nodeId) {
+					return java.util.Map.of();
+				}
+
+				@Override
+				public void put(String nodeId, com.socialcoisa.rede.network.domain.StorageNodeKind kind, int mbps) {
+					throw new AssertionError("nao usado");
+				}
+
+				@Override
+				public void remove(String nodeId, com.socialcoisa.rede.network.domain.StorageNodeKind kind) {
+					throw new AssertionError("nao usado");
+				}
+			});
 	}
 
 	private static NetworkNode node(NodeStatus status, Set<NodeProfile> profiles) {
@@ -134,7 +150,7 @@ class NetworkConfigServiceTests {
 		var fields = new NetworkConfigSigner.SignedFields(view.formatVersion(), view.configVersion(), view.nodeId(),
 				view.profiles(), view.limits().cpuCores(), view.limits().memoryMb(), view.limits().diskMb(),
 				view.limits().bandwidthMbps(), view.allowedTasks(), view.allowedRoutes(), view.issuedAt(),
-				view.ttlSeconds(), view.term());
+				view.ttlSeconds(), view.term(), view.limits().diskFreeMb(), view.limits().diskTotalMb());
 		Signature verifier = Signature.getInstance("Ed25519");
 		verifier.initVerify(pin);
 		verifier.update(fields.canonical().getBytes(StandardCharsets.UTF_8));
@@ -288,7 +304,7 @@ class NetworkConfigServiceTests {
 		var fields = new NetworkConfigSigner.SignedFields(view.formatVersion(), view.configVersion(), view.nodeId(),
 			view.profiles(), view.limits().cpuCores(), view.limits().memoryMb(), view.limits().diskMb(),
 			view.limits().bandwidthMbps(), view.allowedTasks(), view.allowedRoutes(), view.issuedAt(),
-			view.ttlSeconds(), view.term());
+			view.ttlSeconds(), view.term(), view.limits().diskFreeMb(), view.limits().diskTotalMb());
 		Signature verifier = Signature.getInstance("Ed25519");
 		verifier.initVerify(pin);
 		verifier.update(fields.canonical().getBytes(StandardCharsets.UTF_8));
@@ -299,7 +315,7 @@ class NetworkConfigServiceTests {
 			view.profiles(), view.limits().cpuCores(), view.limits().memoryMb(), view.limits().diskMb(),
 			view.limits().bandwidthMbps(), view.allowedTasks(),
 			List.of("catalogo=http://169.254.169.254/latest/meta-data"), view.issuedAt(), view.ttlSeconds(),
-			view.term());
+			view.term(), view.limits().diskFreeMb(), view.limits().diskTotalMb());
 		Signature outra = Signature.getInstance("Ed25519");
 		outra.initVerify(pin);
 		outra.update(trocada.canonical().getBytes(StandardCharsets.UTF_8));
@@ -444,8 +460,19 @@ class NetworkConfigServiceTests {
 		}
 
 		@Override
+		public void observeIp(String id, String ip, Instant now) {
+			throw new AssertionError("nao usado");
+		}
+
+		@Override
+		public void touchConfig(String id, Instant now) {
+			throw new AssertionError("nao usado");
+		}
+
+		@Override
 		public void touch(String id, String runtimeVersion, Double cpuPercent, Integer memoryMb,
-				Integer runningTasks, Long diskFreeMb, Instant now) {
+				Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Long bytesInMb,
+				Long bytesOutMb, Instant now) {
 			throw new AssertionError("nao usado");
 		}
 

@@ -96,6 +96,17 @@ com notificações.
 - Área de recrutamento: vagas ativas/encerradas/pendentes, candidaturas (módulo existente) visíveis
   só a RECRUITER/SUPPORT/ADMIN da página.
 
+Vocabulário — duas axes de papel, que não se confundem:
+
+- **Papel na página** (`company_memberships.role`: OWNER/ADMIN/EDITOR/RECRUITER, ver Fase 1) —
+  agir *em nome da página* (publicar vaga, editar página). Não conduz processo por si só.
+- **Equipe de recrutamento** (`recruitment_members`, V328) — conduzir a seleção das vagas da
+  organização, por capability: `ORG_ADMIN` (tudo, incl. gerir a equipe; o dono da página vale
+  ORG_ADMIN sem registro), `RECRUITMENT_MANAGER` (configura etapas, tria, entrevistas),
+  `RECRUITER` (tria, vê candidatos, entrevistas), `INTERVIEWER` (vê candidatos/entrevistas),
+  `OBSERVER` (só vê). Rotas: `/empresas/{companyId}/recrutamento/equipe`. Documento de referência:
+  [SELECTION_PROCESS.md](SELECTION_PROCESS.md).
+
 ## Fase 5 — Métricas
 - Painel: visualizações da página, seguidores, desempenho de publicações e vagas — só métricas com
   dado real (ex.: contadores de visualização com mecanismo já existente); **sem rastrear pessoas**.

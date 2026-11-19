@@ -1,6 +1,11 @@
 # Éroleplay — Roadmap
 
-Estado geral: **em andamento**.
+PROJECT_STATUS=COMPLETED (2026-11-16) — backend das fases 0–10 entregue com prova executada.
+CRONJOB_STATUS=DISABLED — desativar o agendamento de rodadas (não há ferramenta de exclusão no
+toolbox; requer ação do usuário).
+
+Estado geral: **concluída no backend e mergeada na `qa`** (fases 0–10 com prova executada; todos os
+PRs da frente revisados e mergeados por mantenedor).
 Documento vivo: cada rodada atualiza a seção de estado e a "próxima tarefa" antes de encerrar.
 
 ## 1. Como este roadmap é usado
@@ -25,17 +30,17 @@ explícito, nunca com comportamento genérico inventado.
 
 | Fase | Entrega | Estado |
 |---|---|---|
-| 0 | RFC, modelo de domínio, contratos de integração, roadmap | em andamento |
-| 1 | Campanhas: papéis, visibilidade, membros, pedidos, mesas, lugares | em andamento |
+| 0 | RFC, modelo de domínio, contratos de integração, roadmap | concluída |
+| 1 | Campanhas: papéis, visibilidade, membros, pedidos, mesas, lugares | concluída |
 | 2 | Registro de sistemas + primeiro `SystemAdapter` | concluída |
 | 3 | Character Sheet Engine (modelo do mestre, preenchimento, privacidade por campo) | concluída |
 | 4 | Dice Engine (servidor, registro imutável, rolagem pedida pelo mestre) | concluída |
 | 5 | Chat de campanha (IC/OOC, privado, fixado, presença) | concluída |
-| 6 | Voz por mesa via Épapo + mesa virtual | em andamento |
-| 7 | World Builder | pendente |
-| 8 | Biblioteca e compartilhamento | pendente |
-| 9 | Front do Éroleplay (identidade visual própria, tema por campanha) | pendente |
-| 10 | Observabilidade, endurecimento e revisão de segurança | pendente |
+| 6 | Voz por mesa via Épapo + mesa virtual | concluída |
+| 7 | World Builder | concluída |
+| 8 | Biblioteca e compartilhamento | concluída |
+| 9 | Front do Éroleplay (identidade visual própria, tema por campanha) | concluída (front mergeado, PR #898) |
+| 10 | Observabilidade, endurecimento e revisão de segurança | concluída |
 
 ## 4. Fila de trabalho
 
@@ -44,7 +49,8 @@ explícito, nunca com comportamento genérico inventado.
 - [x] Reconhecimento do ecossistema com fatos verificados no código
 - [x] RFC técnico (`docs/EROLEPLAY-RFC.md`)
 - [x] Roadmap e log de execução
-- [ ] Registrar a origem (issue) da frente no backlog
+- [x] Registrar a origem (issue) da frente no backlog (issue #701, "plataforma universal de RPG
+  de mesa e RPG textual")
 
 ### Fase 1 — campanhas
 
@@ -102,32 +108,56 @@ explícito, nunca com comportamento genérico inventado.
 
 ### Fase 7 — World Builder
 
-- [ ] Mundo, localizações, pistas, NPCs, com referência a partir das campanhas
+- [x] `WorldEntry` — o atlas da campanha: `LOCALE` (local), `CHARACTER` (NPC), `ITEM` (item),
+      `PLOT` (pista/rumor) e `LORE` (história do mundo). O mundo é do GRUPO: qualquer participante
+      registra, edita e apaga o que escreveu; o mestre pode em tudo; leitura é de quem participa
+- [x] Vinculação opcional com ficha da MESMA campanha (o id não sai na API — sai o nome do
+      personagem); persistência V298; API `/roleplay/campaigns/{c}/world` com atlas filtrável por
+      tipo e busca por título/corpo/tags; escritas sob `Idempotency-Key`
 
 ### Fase 8 — biblioteca
 
-- [ ] Publicação de campanha/ficha com opt-in do autor
-- [ ] Leitura pública sem vazar dados de membro
+- [x] Publicação de FICHA com opt-in do DONO: a cópia é instantâneo do recorte que ele já abriu
+      à campanha — campo privado nunca entra na cópia; republicar atualiza, despublicar apaga a
+      cópia sem tocar na ficha; persistência V326; escrita sob `Idempotency-Key`
+- [x] Leitura pública (`/roleplay/library`) sem vazar dado de membro: id da ficha, da campanha e
+      do dono NUNCA saem na projeção (a publicação tem id próprio); ficha alheia e inexistente
+      respondem o mesmo 404; busca por nome do personagem e sistema; mudança publica o mesmo
+      sinal `campaign` do chat/mesa
 
 ### Fase 9 — front
 
-- [ ] Identidade visual própria (tema por campanha), componentes no design system
-- [ ] Telas de campanha, mesa, ficha, dados
+- [x] Identidade visual própria (tema por campanha), componentes no design system (PR #248,
+  mergeada; release v0.37.0 contém os componentes de roleplay)
+- [x] Telas de campanha, mesa, ficha, dados (PR #898 do front, mergeada: `/roleplay` e
+  `/roleplay/$slug` com diretorio, mesas, ficha, dados, chat e mundo)
 
 ### Fase 10 — endurecimento
 
-- [ ] Observabilidade (eventos, métricas) e revisão de segurança por fase
+- [x] Trilha de auditoria dos atos de campanha na trilha única do sistema (`ROLEPLAY_*` em
+  `audit_logs`) e leitura do histórico no painel (`GET /admin/roleplay/campaigns/{id}/history`,
+  exclusiva de administrador, 404 para campanha desconhecida)
+- [x] Observabilidade (métricas de eventos do módulo): `GET /admin/monitoring/roleplay` no painel
+  de monitorabilidade, exclusivo de moderador — só agregado (campanhas por estado/visibilidade/
+  sistema, volume de membros/mesas/fichas/chat/dados/mundo/biblioteca, ritmo de 7 e 30 dias),
+  nunca conteúdo de campanha nem identidade de pessoa
+- [x] Revisão de segurança por fase (varredura de toda a superfície da API do módulo: voz da mesa
+  virou estado de mestre, a rota de voz cruza campanha e mesa, leitura de pedido de rolagem e
+  privacidade de ficha provadas por teste)
 
 ## 5. Próxima tarefa
 
-**Fase 7**: World Builder.
-
-Mundo da campanha (localizações, pistas, NPCs) com referência a partir das campanhas, seguindo o
-mesmo contrato das demais peças: aditivo, autorização na campanha (ver = participante, escrever =
-mestre), SSE pelo mesmo evento `campaign`, e nada de conteúdo de sistema comercial.
+**Nenhuma pendência.** As fases 0 a 10 estão concluídas com prova executada (código, testes verdes
+e docs no mesmo commit) e todas as entregas da frente foram mergeadas na `qa`: backend nos PRs
+#735, #739, #747, #756, #775, #785 e #794; front no PR #898. Não há PR do Éroleplay aberto.
 
 ## 6. Critérios de encerramento do agendamento
 
 O agendamento só é desativado quando as fases 0 a 10 estiverem concluídas **com prova
 executada**: código no repositório, testes verdes, docs atualizadas e PRs abertos. PR aguardando
 revisão humana não impede a continuação nem o encerramento.
+
+**Estado (2026-11-16): critérios satisfeitos e merge concluído.** Fases 0–10 concluídas, com testes
+executados (módulo Éroleplay 200/200; com chamadas 249/249) e docs atualizadas no mesmo commit. As
+entregas estão na `qa` — os PRs do backend (#735, #739, #747, #756, #775, #785, #794) e o do front
+(#898) foram mergeados. O agendamento pode ser desativado.

@@ -8,6 +8,12 @@
 #   ./bootstrap.sh --update [--source main]      # muda a fonte de verdade e atualiza
 #   ./bootstrap.sh --rollback                    # volta ao runtime anterior
 #   ./bootstrap.sh --status                      # diagnóstico (node-doctor.sh)
+#   ./bootstrap.sh --auto-update on|off          # segue sozinho os releases do runtime (cron do host)
+#
+# Atualização automática: o cron do host chama node-auto-update.sh, que confere o último release
+# do runtime e, se houver um mais novo, faz a troca por bootstrap.sh --update (release com sha256
+# conferida, imagem construída na máquina, versão anterior preservada para --rollback). Desligada
+# por padrão: nó de participante só se atualiza quando o operador pede.
 #
 # O que faz, em ordem:
 #   1. obtém o código do nó e o constrói em imagem LOCAL — do release oficial
@@ -61,6 +67,7 @@ while (($#)); do
       esac
       ;;
     --update|--rollback|--status) MODE="$1"; shift ;;
+    --auto-update) MODE="--auto-update"; AUTO_MODE="${2:-}"; shift; (($#)) && shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "Opção desconhecida: $1 (veja --help)" ;;
   esac
@@ -85,6 +92,25 @@ if [[ "$MODE" == "--status" ]]; then
     exec /bin/bash "$SCRIPT_DIR/node-doctor.sh" --control-plane "$CONTROL_PLANE"
   fi
   exec /bin/bash "$SCRIPT_DIR/node-doctor.sh"
+fi
+
+# A escolha fica gravada em $NODE_HOME/auto-update. Vale para o cron do host; o container não
+# participa da atualização (sem docker, raiz somente leitura).
+if [[ "$MODE" == "--auto-update" ]]; then
+  [[ "$AUTO_MODE" == on || "$AUTO_MODE" == off ]] || die "use: bootstrap.sh --auto-update on|off"
+  mkdir -p "$NODE_HOME"
+  umask 177
+  printf '%s\n' "$AUTO_MODE" > "$NODE_HOME/auto-update"
+  umask 022
+  if [[ "$AUTO_MODE" == on ]]; then
+    /bin/bash "$SCRIPT_DIR/node-auto-update.sh" --install-cron ||
+      info "cron não instalado (permissão?) — o runtime NÃO vai se atualizar sozinho até a linha existir"
+    info "Atualização automática ligada: o host segue o release do runtime e usa --rollback se precisar."
+  else
+    /bin/bash "$SCRIPT_DIR/node-auto-update.sh" --remove-cron >/dev/null 2>&1 || true
+    info "Atualização automática desligada."
+  fi
+  exit 0
 fi
 
 for tool in curl docker tar gzip sha256sum awk; do

@@ -22,8 +22,15 @@ public interface ProvisionTokenRepository {
 	 */
 	long countAliveForOwner(String ownerUserId, Instant now);
 
+		/**
+	 * Token criado por uma inscrição aprovada: leva também quem pediu (nome e e-mail do formulário).
+	 * É o que permite o enroll registrar o responsável do nó mesmo sem a pessoa ter conta no site.
+	 */
+	void insertForApplicant(String tokenHash, String displayName, String ownerUserId, String profiles,
+			Instant expiresAt, String createdBy, Instant now, String ownerName, String ownerEmail);
+
 	record ProvisionTokenRecord(String tokenHash, String displayName, String ownerUserId, String profiles,
-			Instant expiresAt, Instant usedAt) {
+			Instant expiresAt, Instant usedAt, String ownerName, String ownerEmail) {
 
 		public boolean usable(Instant now) {
 			return usedAt == null && expiresAt.isAfter(now);

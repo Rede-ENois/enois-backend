@@ -4,7 +4,9 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
+import com.socialcoisa.rede.network.domain.StorageBucketPolicy;
 import com.socialcoisa.rede.network.domain.StorageObject;
+import com.socialcoisa.rede.network.domain.StorageRebalance;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
 
 /**
@@ -16,11 +18,22 @@ import com.socialcoisa.rede.network.domain.StoragePlacement;
  */
 public interface StorageCatalogRepository {
 
-	/** O objeto por bucket e chave, inclusive lapidado — a lápide também precisa responder "já existiu". */
+	/**
+	 * O objeto por bucket e chave: a versão <b>corrente</b>, inclusive lapidada — a lápide também
+	 * precisa responder "já existiu".
+	 */
 	Optional<StorageObject> find(String bucket, String key);
 
 	/** O objeto por id, para as operações que já o resolveram (upload, download, remoção). */
 	Optional<StorageObject> findById(String id);
+
+	/**
+	 * O objeto pelo sha-256 do conteúdo (fase 3), para a réplica que conhece a cópia pelo digest e
+	 * não pelo id lógico. Só objetos com conteúdo medido têm digest único: dois {@code PENDING} não
+	 * têm {@code sha256}, e dois objetos distintos com o mesmo conteúdo compartilham o digest — o
+	 * que é próprio do identificador de conteúdo.
+	 */
+	Optional<StorageObject> findByDigest(String sha256);
 
 	/**
 	 * Cria o objeto em {@code PENDING}, ou devolve o existente. A segunda chamada do mesmo cliente
@@ -36,20 +49,158 @@ public interface StorageCatalogRepository {
 	boolean markDeleted(String id, Instant now);
 
 	/**
+	 * Apaga a linha de um objeto <b>que nunca chegou a existir para o dono</b>: uma gravação desfeita
+	 * porque o bucket era de outra conta.
+	 *
+	 * <p>Não é a lápide, e a diferença é o que mantém o bucket do dono de pé: a lápide
+	 * ({@code state = 'DELETED'}) **sai** do {@code bucketsOf}, então apagar o último objeto de uma conta
+	 * com lápide faria o bucket deixar de ser dela. Esta remoção some da tabela sem deixar estado — é a
+	 * inversão de um {@code createPending}, não uma operação do dono.</p>
+	 */
+	boolean discardPending(String id);
+
+	/**
+	 * Devolve ao estado de espera um objeto que teve a gravação desfeita: {@code STORED → PENDING}.
+	 *
+	 * <p>É o par de {@link #markStored} na direção contrária, e existe para a recusa por donagem de um
+	 * {@code PUT} que <b>reescreveu</b> uma chave: apagar a linha seria apagar o objeto do dono. Só o
+	 * estado mudal — o corpo que a gravação recusada deixou no disco fica, e a próxima gravação o
+	 * substitui; os bytes e o digest saem, porque o catálogo não promete mais nada sobre uma cópia que a
+	 * resposta recusou.</p>
+	 */
+	boolean restorePending(String id);
+
+	/**
 	 * Listagem por prefixo de chave, ordenada por chave. {@code limit + 1} linhas é o que o chamador
 	 * pede para saber se há próxima página sem uma segunda consulta de contagem.
 	 */
 	List<StorageObject> list(String bucket, String prefix, String afterKey, int limit);
 
+	/**
+	 * Os buckets com pelo menos um objeto do dono, em ordem alfabética — o ListBuckets do gateway S3.
+	 *
+	 * <p>Por <b>dono</b> e não por instalação: um cliente S3 não pode listar o bucket de outra conta.
+	 * Buckets do Storage não têm tabela própria (o nome nasce no primeiro upload), então a lista sai
+	 * dos objetos que existem.</p>
+	 */
+	List<String> bucketsOf(String ownerUserId);
+
+	/**
+	 * Todos os objetos servíveis, ordenados por {@code bucket, object_key} — a paginação da varredura
+	 * percorre o catálogo inteiro, não um bucket. O cursor é a chave: dois buckets podem ter a mesma
+	 * chave, e o cursor por chave visita as duas na mesma página — o que não perde nem duplica
+	 * objeto, porque a ordenação é total por {@code bucket, object_key}.
+	 */
+	List<StorageObject> listAll(String afterKey, int limit);
+
 	/** Grava (ou substitui) a cópia {@code replica} deste objeto neste nó. */
 	void savePlacement(StoragePlacement placement);
 
-	/** As cópias deste objeto ainda servíveis (estado {@code OK}), em ordem de réplica. */
+	/**
+	 * Todas as cópias deste objeto em <b>qualquer</b> estado, em ordem de réplica.
+	 *
+	 * <p>É a leitura que a durabilidade usa, e o nome diz isso: uma cópia {@code GONE} ainda conta
+	 * como réplica existente. Quem pergunta "quantas cópias o objeto tem" precisa deste número —
+	 * {@code placements} descreve o que é <i>servível</i>, que é outra pergunta.</p>
+	 */
+	List<StoragePlacement> copies(String objectId);
+
+	/**
+	 * As cópias deste objeto ainda servíveis (estado {@code OK}), em ordem de réplica.
+	 *
+	 * <p>Uso de leitura/serving: objeto que voltou a ter cópia confirmada. Para durabilidade use
+	 * {@link #copies(String)}.</p>
+	 */
 	List<StoragePlacement> placements(String objectId);
 
+	/**
+	 * Lápides vencidas, em ordem total {@code (bucket, object_key)}, estritamente <b>depois</b> do
+	 * cursor. O cursor é o par {@code (bucket, chave)} e não só a chave: a mesma chave em dois
+	 * buckets é legítima, e um cursor só pela chave oscilaria entre as duas linhas para sempre.
+	 *
+	 * <p>Cada linha devolvida está além do cursor, então uma página que não rendeu (todos os objetos
+	 * pulados) ainda avança — nenhuma chamada repete o que já foi decidido.</p>
+	 */
+	List<StorageObject> listDeletedBefore(Instant before, String afterBucket, String afterKey, int limit);
+
 	/** A cópia servível deste objeto num nó específico, se existir. */
+	/**
+	 * A cópia deste objeto neste nó em qualquer estado vivo ({@code OK} ou {@code PENDING_REMOTE}).
+	 * A fase 3 usa esta leitura para a própria designação se confirmar; filtrar por {@code OK} aqui
+	 * esconderia a linha que a designação acabou de criar.
+	 */
 	Optional<StoragePlacement> placementOn(String objectId, String nodeId);
+
+	/**
+	 * Objetos do catálogo inteiro por estado: {@code {quantidade, bytes}} cada. Uma consulta só, para
+	 * o painel — varrer o catálogo para somar seria contar linha a linha o que o banco já sabe.
+	 *
+	 * <p>Estado ausente no mapa é "nenhum objeto naquele estado", que é diferente de zero objetos
+	 * encontrados. Quem consome deve tratar a ausência como zero explícito na soma, nunca como
+	 * "não medido".</p>
+	 */
+	java.util.Map<String, long[]> summarizeObjects();
+
+	/** Cópias por estado: {@code {quantidade, bytes}} cada. Mesma regra de ausência acima. */
+	java.util.Map<String, long[]> summarizePlacements();
+
+	/**
+	 * Objetos servíveis por bucket: {@code {quantidade, bytes}} cada, em ordem de bucket.
+	 *
+	 * <p>O tamanho do mapa é a resposta do "quantidade de buckets" do painel (§17) — uma consulta
+	 * agregada em vez de uma por bucket. Objeto {@code DELETED} não entra: lápide não é conteúdo,
+	 * e contar o bucket dela mostraria um bucket que o operador não tem.</p>
+	 */
+	java.util.Map<String, long[]> summarizeBuckets();
 
 	/** O que este nó hospeda, para o painel e para o nó saber o que tem. */
 	List<StoragePlacement> placementsOnNode(String nodeId);
+
+	/**
+	 * Cria a <b>versão nova</b> de uma chave. Diferente de {@link #createPending}: nunca reaproveita
+	 * linha. A versão corrente anterior tem de já ter sido marcada por {@link #markSuperseded} — o
+	 * índice único condicional recusa duas correntes da mesma chave.
+	 */
+	StorageObject insertVersion(String id, String bucket, String key, String contentType, String createdBy,
+			Instant now, long version);
+
+	/**
+	 * Marca a versão corrente de {@code bucket/key} como substituída por {@code supersededBy}.
+	 * Devolve {@code false} quando não havia corrente (concorrência: outra gravação chegou antes).
+	 */
+	boolean markSuperseded(String bucket, String key, String supersededBy, Instant now);
+
+	/** Prazo de vida do objeto; nulo remove o prazo. */
+	void setExpiresAt(String id, Instant expiresAt);
+
+	/** Todas as versões da chave em ordem crescente — o histórico, incluindo a corrente. */
+	List<StorageObject> versions(String bucket, String key);
+
+	/** Versões correntes, servíveis e vencidas até {@code now}, em ordem de vencimento. */
+	List<StorageObject> expired(Instant now, int limit);
+
+	/** Versões substituídas antes de {@code cutoff} e ainda sem lápide — o que a retenção libera. */
+	List<StorageObject> supersededBefore(Instant cutoff, int limit);
+
+	/** Política do bucket; vazio quando ninguém a configurou (os padrões valem). */
+	Optional<StorageBucketPolicy> bucketPolicy(String bucket);
+
+	/** Grava (ou substitui) a política do bucket e devolve o que ficou gravado. */
+	StorageBucketPolicy saveBucketPolicy(StorageBucketPolicy policy);
+
+	/** Grava a transferência de rebalanceamento (brief §16). */
+	void saveRebalance(StorageRebalance rebalance);
+
+	/** A transferência viva (PENDING) de uma réplica de origem, se houver. */
+	Optional<StorageRebalance> activeRebalance(String objectId, int fromReplica);
+
+	/** Uma transferência pelo id. */
+	Optional<StorageRebalance> findRebalance(String id);
+
+	/** Transferências vivas, em ordem de criação — o que o operador pausa ou retoma. */
+	List<StorageRebalance> activeRebalances(int limit);
+
+	/** Mudança de estado de uma transferência, condicional ao estado de origem. */
+	boolean transitionRebalance(String id, StorageRebalance.State from, StorageRebalance.State to,
+			String failureReason, Instant now);
 }

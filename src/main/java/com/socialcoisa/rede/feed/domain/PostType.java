@@ -22,6 +22,12 @@ public enum PostType {
 	DIVERTIDO,
 	/** Momento: some sozinho em 24 horas (o texto fica em 500). */
 	MOMENT,
+	/**
+	 * Instante: efêmero curto — some sozinho em 1 hora a partir da publicação efetiva (o texto fica
+	 * em 500, igual ao Momento). Aparece nos feeds comuns como qualquer post; o prazo é a única
+	 * diferença.
+	 */
+	INSTANTE,
 	/** Enquete: o titulo fica no content (ate 400) e as alternativas/votos em tabelas proprias. */
 	POLL,
 	/**
@@ -34,5 +40,25 @@ public enum PostType {
 	 * (AuthorIdentity.CORPORATE) e exibida apenas no feed corporativo e no perfil profissional —
 	 * nunca no feed Tudo nem nos feeds sociais. A regra vive no backend (ver GetFeedService).
 	 */
-	BUSINESS
+	BUSINESS,
+	/** Reclamação: desabafo/denúncia de problema (pedido do painel de suporte). Texto padrão. */
+	COMPLAINT;
+
+	/**
+	 * Tipos efêmeros nascem com prazo de vida e se apagam sozinhos (o worker de expiração cobre os
+	 * dois). Qualquer novo tipo efêmero entra aqui E em {@link #ephemeralDuration()} — as duas
+	 * respostas têm de ser consistentes entre si.
+	 */
+	public boolean isEphemeral() {
+		return this == MOMENT || this == INSTANTE;
+	}
+
+	/** Prazo de vida do tipo efêmero, contado da publicação efetiva. Nunca chamado em tipo fixo. */
+	public java.time.Duration ephemeralDuration() {
+		return switch (this) {
+			case MOMENT -> java.time.Duration.ofHours(24);
+			case INSTANTE -> java.time.Duration.ofHours(1);
+			default -> throw new IllegalStateException("Tipo " + this + " não é efêmero.");
+		};
+	}
 }

@@ -102,7 +102,9 @@ class NotificationPreferenceTests {
 			.andExpect(jsonPath("$.pushMessages").value(true))
 			.andExpect(jsonPath("$.pushGroups").value(true))
 			.andExpect(jsonPath("$.pushJobs").value(true))
-			.andExpect(jsonPath("$.pushSystem").value(true));
+			.andExpect(jsonPath("$.pushSystem").value(true))
+			.andExpect(jsonPath("$.muteReactions").value(false))
+			.andExpect(jsonPath("$.mutePostComments").value(false));
 
 		mockMvc.perform(put("/me/notification-preferences").header("X-Session-Token", user.token())
 				.contentType(MediaType.APPLICATION_JSON).content("{\"pushSocial\":false,\"weeklyDigest\":false}"))
@@ -173,11 +175,11 @@ class NotificationPreferenceTests {
 				var inicio = new CountDownLatch(1);
 				var projetos = executor.submit(() -> {
 					if (!inicio.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("Atualização não iniciou no prazo");
-					return preferencias.update(conta.userId(), null, null, null, null, null, null, true);
+					return preferencias.update(conta.userId(), null, null, null, null, null, null, true, null, null);
 				});
 				var social = executor.submit(() -> {
 					if (!inicio.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("Atualização não iniciou no prazo");
-					return preferencias.update(conta.userId(), null, false, null, null, null, null, null);
+					return preferencias.update(conta.userId(), null, false, null, null, null, null, null, null, null);
 				});
 				inicio.countDown();
 				projetos.get(20, TimeUnit.SECONDS);
@@ -209,6 +211,62 @@ class NotificationPreferenceTests {
 			.andExpect(status().isOk()).andExpect(jsonPath("$.communityProjects").value(true));
 		mockMvc.perform(get("/me/notification-preferences").header("X-Session-Token", existing.token()))
 			.andExpect(status().isOk()).andExpect(jsonPath("$.communityProjects").value(false));
+	}
+
+	/** O silêncio nasce desligado, ativa por escolha e sobrevive a atualização parcial de outros campos. */
+	@Test
+	void silencioNasceDesligadoEAtivacaoSobreviveAtualizacaoParcial() throws Exception {
+		var user = auth.authenticate("npref_silencio");
+		projectPreferenceUsers.add(user.userId());
+
+		mockMvc.perform(get("/me/notification-preferences").header("X-Session-Token", user.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.muteReactions").value(false))
+			.andExpect(jsonPath("$.mutePostComments").value(false));
+
+		// Liga os dois separadamente.
+		mockMvc.perform(put("/me/notification-preferences").header("X-Session-Token", user.token())
+				.contentType(MediaType.APPLICATION_JSON).content("{\"muteReactions\":true}"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.muteReactions").value(true))
+			.andExpect(jsonPath("$.mutePostComments").value(false));
+		mockMvc.perform(put("/me/notification-preferences").header("X-Session-Token", user.token())
+				.contentType(MediaType.APPLICATION_JSON).content("{\"mutePostComments\":true}"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.muteReactions").value(true))
+			.andExpect(jsonPath("$.mutePostComments").value(true));
+
+		// Atualização parcial de categoria não mexe no silêncio.
+		mockMvc.perform(put("/me/notification-preferences").header("X-Session-Token", user.token())
+				.contentType(MediaType.APPLICATION_JSON).content("{\"pushSocial\":false}"))
+			.andExpect(status().isOk());
+		mockMvc.perform(get("/me/notification-preferences").header("X-Session-Token", user.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.muteReactions").value(true))
+			.andExpect(jsonPath("$.mutePostComments").value(true))
+			.andExpect(jsonPath("$.pushSocial").value(false));
+
+		// Desligar um deles deixa o outro ligado.
+		mockMvc.perform(put("/me/notification-preferences").header("X-Session-Token", user.token())
+				.contentType(MediaType.APPLICATION_JSON).content("{\"muteReactions\":false}"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.muteReactions").value(false))
+			.andExpect(jsonPath("$.mutePostComments").value(true));
+	}
+
+	@Test
+	void projetoComunitarioContinuaIgualComOSilencioLigado() throws Exception {
+		var user = auth.authenticate("npref_silencio_projetos");
+		projectPreferenceUsers.add(user.userId());
+		mockMvc.perform(put("/me/notification-preferences").header("X-Session-Token", user.token())
+				.contentType(MediaType.APPLICATION_JSON).content("{\"muteReactions\":true,\"communityProjects\":true}"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.muteReactions").value(true))
+			.andExpect(jsonPath("$.communityProjects").value(true));
+		mockMvc.perform(get("/me/notification-preferences").header("X-Session-Token", user.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.muteReactions").value(true))
+			.andExpect(jsonPath("$.communityProjects").value(true));
 	}
 
 	@Test

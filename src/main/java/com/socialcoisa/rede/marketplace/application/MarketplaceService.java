@@ -132,6 +132,22 @@ public class MarketplaceService {
 	public record PurchasedItem(MarketplaceListing.ItemKind kind, String title, String itemId, String content) {
 	}
 
+	/**
+	 * Baixa de um tema pelo proprio autor: nao ha compra nem escrow — o autor ja e dono do
+	 * pacote. Somente leitura, porque so valida; quem conta a instalacao e a galeria (#901).
+	 */
+	@Transactional(readOnly = true)
+	public void ownerDownload(String listingId, String ownerId) {
+		MarketplaceListing listing = listings.findListingById(listingId)
+			.orElseThrow(() -> new ApiException(404, "LISTING_NOT_FOUND", "Listagem não encontrada."));
+		if (!listing.ownedBy(ownerId)) {
+			throw new ApiException(403, "NOT_THE_OWNER", "Só quem publicou o item baixa sem comprar.");
+		}
+		if (listing.itemKind() != MarketplaceListing.ItemKind.THEME) {
+			throw new ApiException(400, "NOT_A_THEME", "A baixa do autor vale para temas da galeria.");
+		}
+	}
+
 	@Transactional
 	public MarketplacePurchase buy(String listingId, String buyerId) {
 		MarketplaceListing listing = listings.findListingByIdForUpdate(listingId)

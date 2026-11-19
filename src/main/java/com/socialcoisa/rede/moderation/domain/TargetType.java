@@ -20,5 +20,23 @@ public enum TargetType {
 	 * Chamada de audio/video. O alvo é a SALA; quem foi denunciado é um participante apontado por
 	 * quem denuncia (a denúncia guarda quem estava dentro e o print do momento).
 	 */
-	CALL
+	CALL,
+	/** Foto da Colagem (o feed fotográfico do Explorar). */
+	COLLAGEM_POST,
+	/** Comentário (texto ou foto) de uma foto da Colagem. */
+	COLLAGEM_COMMENT,
+	/** Mural do Explorar (a coleção cai; as publicações coladas continuam no feed). */
+	MURAL,
+	/** Desabafo do Explorar (o texto cai do feed próprio junto com as acolhidas). */
+	DESABAFO_POST,
+	/** Comentário de acolhida num desabafo. */
+	DESABAFO_COMMENT,
+	/** Confissão do Confessionário (a história cai do feed próprio junto com as reações). */
+	CONFESSIONARIO_POST,
+	/** Comentário de reação numa confissão. */
+	CONFESSIONARIO_COMMENT,
+	/** Desafio do Explorar (o convite cai do feed próprio junto com as participações). */
+	DESAFIO_POST,
+	/** Participação (resultado publicado) num desafio. */
+	DESAFIO_PARTICIPACAO
 }

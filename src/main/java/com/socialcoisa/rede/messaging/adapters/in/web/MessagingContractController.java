@@ -25,6 +25,8 @@ import com.socialcoisa.rede.corporate.domain.CorporateProfile;
 import com.socialcoisa.rede.feed.domain.ReactionType;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
+import com.socialcoisa.rede.messaging.application.ConversationReachPolicy;
+import com.socialcoisa.rede.messaging.application.MessageReplyReader;
 import com.socialcoisa.rede.messaging.application.MessagingService;
 import com.socialcoisa.rede.messaging.application.port.out.MessagingRepository;
 import com.socialcoisa.rede.messaging.domain.Conversation;
@@ -45,19 +47,21 @@ class MessagingContractController {
 	private final IdempotencyApplicationService idempotency;
 	private final CurrentUserResolver currentUserResolver;
 	private final MessagingService messagingService;
+	private final MessageReplyReader messageReplyReader;
 	private final CursorCodec cursorCodec;
-	private final com.socialcoisa.rede.shared.blocks.BlockedUsersReader blockedUsersReader;
+	private final ConversationReachPolicy reachPolicy;
 	private final CorporateProfileService corporateProfiles;
 
 	MessagingContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
 			MessagingService messagingService, CursorCodec cursorCodec,
-			com.socialcoisa.rede.shared.blocks.BlockedUsersReader blockedUsersReader,
-			CorporateProfileService corporateProfiles) {
+			ConversationReachPolicy reachPolicy,
+			CorporateProfileService corporateProfiles, MessageReplyReader messageReplyReader) {
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.messagingService = messagingService;
+		this.messageReplyReader = messageReplyReader;
 		this.cursorCodec = cursorCodec;
-		this.blockedUsersReader = blockedUsersReader;
+		this.reachPolicy = reachPolicy;
 		this.corporateProfiles = corporateProfiles;
 	}
 
@@ -71,6 +75,15 @@ class MessagingContractController {
 		var participantsByConversation = messagingService.getParticipantsByConversation(conversationIds);
 		var unreadByConversation = messagingService.countUnreadByConversation(conversationIds, userId);
 		var lastMessages = messagingService.getLastMessagePreviewByConversation(conversationIds, userId);
+		// Identidades profissionais da pagina inteira em UMA consulta: antes cada conversa
+		// profissional chamava activeByUserIds na propria linha, repetindo o mesmo SELECT por item.
+		var professionalIds = conversations.stream()
+			.filter(c -> ConversationContext.of(c.kind()) == ConversationContext.PROFESSIONAL)
+			.flatMap(c -> participantsByConversation.getOrDefault(c.id(), List.of()).stream())
+			.map(ConversationParticipant::userId)
+			.distinct()
+			.toList();
+		var identities = identitiesOf(professionalIds);
 		return conversations.stream()
 			.map(c -> {
 				var participants = participantsByConversation.getOrDefault(c.id(), List.of());
@@ -80,7 +93,8 @@ class MessagingContractController {
 				return toView(c.id(), userId, c.kind(), c.title(), pIds,
 					unreadByConversation.getOrDefault(c.id(), 0),
 					otherLastReadAt(participants, userId),
-					lastMessages.getOrDefault(c.id(), MessagingService.LastMessagePreview.EMPTY));
+					lastMessages.getOrDefault(c.id(), MessagingService.LastMessagePreview.EMPTY),
+					identities);
 			})
 			.toList();
 	}
@@ -159,9 +173,9 @@ class MessagingContractController {
 		// Carrega em batch as mensagens citadas (reply) da página, sem N+1.
 		java.util.Set<String> replyIds = msgs.stream()
 			.map(Message::replyToId).filter(java.util.Objects::nonNull).collect(java.util.stream.Collectors.toSet());
-		java.util.Map<String, Message> repliedMessages = replyIds.isEmpty() ? java.util.Map.of()
-			: messagingService.findMessagesByIds(replyIds).stream()
-				.collect(java.util.stream.Collectors.toMap(Message::id, java.util.function.Function.identity()));
+		java.util.Map<String, Message> repliedMessages = messageReplyReader
+			.findVisible(conversationId, user.id().value(), replyIds).stream()
+			.collect(java.util.stream.Collectors.toMap(Message::id, java.util.function.Function.identity()));
 		var items = msgs.stream()
 			.map(m -> {
 				var summary = summaries.get(m.id());
@@ -169,9 +183,11 @@ class MessagingContractController {
 				if (m.replyToId() != null) {
 					Message replied = repliedMessages.get(m.replyToId());
 					if (replied != null) {
-						String replyText = replied.text().length() > 100
+						// Ciphertext precisa chegar inteiro para o cliente conseguir decifrar.
+						String replyText = !replied.e2e() && replied.text().length() > 100
 							? replied.text().substring(0, 97) + "..." : replied.text();
-						replyView = new ReplyView(replied.id(), replied.senderId(), replyText, replied.e2e());
+						replyView = new ReplyView(replied.id(), replied.senderId(), replyText, replied.e2e(),
+							replied.iv(), replied.encryptedKeys(), replied.mediaIds(), replied.mediaSpoiler());
 					}
 				}
 				return new MessageView(m.id(), m.conversationId(), m.senderId(), m.text(), m.mediaIds(),
@@ -298,7 +314,7 @@ class MessagingContractController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@RequestBody DirectConversationRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		String otherId = resolveRecipient(user, request.userId());
+		String otherId = resolveRecipient("DIRECT", user, request.userId());
 		Map<String, Object> payload = Map.of("direct", otherId);
 		String hash = idempotency.hash(payload);
 		return idempotency.execute(user.id(), "POST", "/api/conversations/direct", idempotencyKey, hash, () -> {
@@ -322,7 +338,7 @@ class MessagingContractController {
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@RequestBody DirectConversationRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		String otherId = resolveRecipient(user, request.userId());
+		String otherId = resolveRecipient("BUSINESS_DIRECT", user, request.userId());
 		Map<String, Object> payload = Map.of("business-direct", otherId);
 		String hash = idempotency.hash(payload);
 		return idempotency.execute(user.id(), "POST", "/api/conversations/business-direct", idempotencyKey, hash, () -> {
@@ -467,10 +483,10 @@ class MessagingContractController {
 
 	private ConversationView toView(String convId, String userId, String kind, String title,
 			List<String> participantIds, int unread, String otherLastReadAt,
-			MessagingService.LastMessagePreview preview) {
+			MessagingService.LastMessagePreview preview, Map<String, IdentityView> identities) {
 		ConversationContext context = ConversationContext.of(kind);
 		return new ConversationView(convId, userId, kind, context.name(), title, participantIds,
-			identitiesOf(context, participantIds), preview.text(),
+			identitiesFor(context, participantIds, identities), preview.text(),
 			preview.time() != null ? preview.time().toString() : null, unread,
 			otherLastReadAt, preview.e2e(), preview.iv(), preview.encryptedKeys(), preview.from());
 	}
@@ -484,20 +500,12 @@ class MessagingContractController {
 			lm.encryptedKeys(), lm.from());
 	}
 
-	/** Valida o destinatario: obrigatorio, nao pode ser voce, nao pode estar bloqueado. */
-	private String resolveRecipient(CurrentUser user, String rawUserId) {
-		String otherId = rawUserId == null ? "" : rawUserId.trim();
-		if (otherId.isEmpty()) {
-			throw new ApiException(400, "INVALID_RECIPIENT", "Destinatario obrigatorio.");
-		}
-		if (otherId.equals(user.id().value())) {
-			throw new ApiException(400, "INVALID_RECIPIENT", "Nao da para abrir uma conversa consigo mesmo.");
-		}
-		if (blockedUsersReader.hiddenIdsFor(user.id().value()).contains(otherId)
-				|| blockedUsersReader.hiddenIdsFor(otherId).contains(user.id().value())) {
-			throw new ApiException(403, "USER_BLOCKED", "Nao e possivel conversar com este usuario.");
-		}
-		return otherId;
+	/**
+	 * Resolve o destinatário pela política única de alcance. Antes esta rota só olhava bloqueio:
+	 * um id inexistente, excluído ou banido virava participante de uma conversa criada.
+	 */
+	private String resolveRecipient(String kind, CurrentUser user, String rawUserId) {
+		return reachPolicy.resolveRecipient(kind, user.id().value(), rawUserId);
 	}
 
 	/**
@@ -510,8 +518,24 @@ class MessagingContractController {
 		if (context != ConversationContext.PROFESSIONAL) {
 			return Map.of();
 		}
-		return corporateProfiles.activeByUserIds(participantIds).values().stream()
+		return identitiesOf(participantIds);
+	}
+
+	/** Lote da página inteira: uma ida ao banco para todas as conversas profissionais. */
+	private Map<String, IdentityView> identitiesOf(List<String> userIds) {
+		return corporateProfiles.activeByUserIds(userIds).values().stream()
 			.collect(Collectors.toMap(CorporateProfile::userId, IdentityView::from));
+	}
+
+	/** Filtra do lote da página as identidades da conversa; conversa social não carrega nenhuma. */
+	private Map<String, IdentityView> identitiesFor(ConversationContext context,
+			List<String> participantIds, Map<String, IdentityView> pageIdentities) {
+		if (context != ConversationContext.PROFESSIONAL) {
+			return Map.of();
+		}
+		return participantIds.stream()
+			.filter(pageIdentities::containsKey)
+			.collect(Collectors.toMap(id -> id, pageIdentities::get));
 	}
 
 	/** Blank keeps every context (older clients); anything else must be SOCIAL or PROFESSIONAL. */
@@ -551,7 +575,8 @@ class MessagingContractController {
 			boolean e2e, String iv, String encryptedKeys, String replyToId, ReplyView replyTo) {
 	}
 
-	record ReplyView(String id, String from, String text, boolean e2e) {
+	record ReplyView(String id, String from, String text, boolean e2e, String iv, String encryptedKeys,
+			List<String> mediaIds, boolean mediaSpoiler) {
 	}
 
 	record CreateConversationRequest(String kind, String title, List<String> participantIds) {

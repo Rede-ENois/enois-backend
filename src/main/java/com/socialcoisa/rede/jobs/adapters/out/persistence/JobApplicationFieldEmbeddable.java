@@ -27,6 +27,12 @@ class JobApplicationFieldEmbeddable {
 	@Column(nullable = false)
 	private int position;
 
+	@Column(name = "visible_if_field_id", length = 255)
+	private String visibleIfFieldId;
+
+	@Column(name = "visible_if_value", length = 200)
+	private String visibleIfValue;
+
 	protected JobApplicationFieldEmbeddable() {
 	}
 
@@ -37,10 +43,16 @@ class JobApplicationFieldEmbeddable {
 		embeddable.fieldType = field.type();
 		embeddable.required = field.required();
 		embeddable.position = field.position();
+		embeddable.visibleIfFieldId = field.visibleIfFieldId();
+		embeddable.visibleIfValue = field.visibleIfValue();
 		return embeddable;
 	}
 
 	JobApplicationField toDomain() {
-		return JobApplicationField.create(id, null, label, fieldType, required, position);
+		return visibleIfFieldId == null
+			? JobApplicationField.create(id, null, label, fieldType, required, position)
+			// Origem já foi validada quando a condicional foi criada; restaurar sem reverificar.
+			: JobApplicationField.restore(id, null, label, fieldType, required, position,
+				visibleIfFieldId, visibleIfValue);
 	}
 }
