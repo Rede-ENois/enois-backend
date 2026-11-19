@@ -31,9 +31,15 @@ Então o nó **empurra** a observação no heartbeat que ele já faz a cada cicl
 ```json
 POST /network/nodes/heartbeat
 { "runtimeVersion": "…",
-  "observed": { "cpuPercent": 12.5, "memoryMb": 2048, "runningTasks": 0, "diskFreeMb": 9000, "diskTotalMb": 40000, "usedMb": 12000 },
+  "observed": { "cpuPercent": 12.5, "memoryMb": 2048, "runningTasks": 0, "diskFreeMb": 9000, "diskTotalMb": 40000, "usedMb": 12000,
+                "bytesInMb": 18342, "bytesOutMb": 4207 },
   "logs": [ { "level": "INFO", "message": "tarefa tk_1 concluida", "at": "2026-11-12T12:00:00Z" } ] }
 ```
+
+`bytesInMb`/`bytesOutMb` são o **tráfego acumulado** das interfaces desde o boot (fora o loopback),
+em MiB, lido de `/proc/net/dev`. O Control Plane já tinha as colunas (`V345`) e o heartbeat já
+aceitava os campos desde então — mas o runtime não os media, e o painel não mostrava tráfego nenhum.
+Sem `/proc/net/dev` os dois campos **não vão**: ausente é "não medido", nunca zero.
 
 O efeito visível é o de um quadro ao vivo (atualizado a cada heartbeat, e a tela recarrega a rota);
 o caminho é o que a arquitetura permite. `logs` é opcional: um runtime anterior a esta fase
