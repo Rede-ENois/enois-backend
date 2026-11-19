@@ -150,6 +150,10 @@ que o §18 quer mostrar. Nulo é "não mediu" (runtime anterior); zero é "medid
 A proporção de saída (`outboundSharePercent`) é calculada aqui, nunca enviada pelo nó — senão um nó
 poderia dizer 90% de saída com 1 GB contra 10 GB de entrada.
 
+O mesmo número aparece no **painel de admin**: `GET /admin/network/nodes` devolve `trafficInMb` e
+`trafficOutMb` por nó (campos que o `NetworkNode` já carregava e o `NodeView` não expunha), e a linha
+do nó mostra entrada e saída — `null` como "sem medição", nunca zero.
+
 **Disponibilidade: medida pela rede.** A rede registra *transições*, não cada heartbeat (uma linha
 por ciclo por nó afogaria a trilha — ver `registrarReconexao`). O que ela consegue afirmar é o que a
 trilha prova: quantas vezes o nó voltou de uma ausência (`outages`, contados em

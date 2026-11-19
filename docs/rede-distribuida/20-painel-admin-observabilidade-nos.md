@@ -66,3 +66,20 @@ Se a aba **Rede** não aparece no painel, as causas testáveis, em ordem:
 
 Nenhuma dessas quatro é "a aba não existe". O próximo passo de código é o item do §3 deste documento
 (tráfego no heartbeat), que fecha a parte visualmente perceptível da lacuna.
+
+## 6. O tráfego passou a aparecer (ciclo 58)
+
+O elo do §3 deste documento foi fechado nos três lados:
+
+| lado | o que passa a existir |
+|---|---|
+| runtime | mede `/proc/net/dev` (fora loopback) e manda `bytesInMb`/`bytesOutMb` no heartbeat |
+| backend | `GET /admin/network/nodes` devolve `trafficInMb`/`trafficOutMb` (antes: campo `NetworkNode` já populado, nunca exposto no `NodeView`) |
+| design system | linha do nó mostra "Tráfego" (`↓ 2.0 GiB · ↑ 512 MiB`); nulo ou metade medida é "Sem medição" |
+
+Provas: `NetworkParticipantTrafficTests` (2 casos novos no painel de admin — medido e nulo);
+`network-nodes-section` do DS (2 casos: medido e ausência/metade).
+
+**O que continua faltando do §8.2 do brief** (medido, não estimado): swap, pressão de memória, IOPS,
+latência de disco, temperatura, GC/threads do runtime (o runtime não é JVM — é shell), p95/p99 de
+requisição, DLQ por fila. Nenhum desses existe no heartbeat nem no painel.
