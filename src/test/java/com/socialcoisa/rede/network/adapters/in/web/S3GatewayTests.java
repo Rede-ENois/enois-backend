@@ -69,6 +69,9 @@ class S3GatewayTests {
 	private JdbcTemplate jdbc;
 
 	@Autowired
+	private com.socialcoisa.rede.shared.security.IpRateLimiter tentativas;
+
+	@Autowired
 	private SecretCipher cipher;
 
 	@Autowired
@@ -80,6 +83,9 @@ class S3GatewayTests {
 
 	@BeforeEach
 	void setUp() throws Exception {
+		// O teto de assinatura errada é um bean único: a conta de um teste não pode escolher o
+		// resultado do próximo.
+		tentativas.limpar();
 		jdbc.update("delete from network_storage_s3_credentials");
 		// O dono da credencial S3 do cenário é a conta de EMISSÃO das requisições: o bucket nasce com
 		// o primeiro objeto `created_by` dela, e a donagem do bucket agora é conferida em todo verbo.
@@ -390,6 +396,26 @@ class S3GatewayTests {
 
 		assertThat(result.getResponse().getStatus()).isEqualTo(403);
 		assertThat(result.getResponse().getContentAsString()).contains("SignatureDoesNotMatch");
+	}
+
+	/**
+	 * Assinatura errada tem teto por Access Key. Sem ele, a Access Key — que é pública — vira um
+	 * alvo de força bruta na velocidade da rede, e cada teste custa um HMAC ao gateway.
+	 */
+	@Test
+	void assinatura_errada_chega_ao_teto_e_o_sdk_legitimo_continua_entrando() throws Exception {
+		for (int i = 0; i < 20; i++) {
+			MockHttpServletRequestBuilder list = get("/s3/" + bucket).queryParam("list-type", "2");
+			assinar(list, "segredo-errado", shaVazio());
+			assertThat(mockMvc.perform(list).andReturn().getResponse().getStatus()).isEqualTo(403);
+		}
+		MockHttpServletRequestBuilder barrada = get("/s3/" + bucket).queryParam("list-type", "2");
+		assinar(barrada, SECRET, shaVazio());
+		var resultado = mockMvc.perform(barrada).andReturn();
+
+		// 429 com o código do S3: o SDK entende "espere", não "chave errada".
+		assertThat(resultado.getResponse().getStatus()).isEqualTo(429);
+		assertThat(resultado.getResponse().getContentAsString()).contains("<Code>SlowDown</Code>");
 	}
 
 	/** O caminho completo: PUT grava, GET devolve o corpo com o ETag, HEAD responde o tamanho. */
