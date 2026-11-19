@@ -170,6 +170,13 @@ assert_contains 'heartbeat carrega as linhas do painel (logs)' "$hb_line" '"logs
 assert_contains 'linha do painel tem nivel' "$hb_line" '"level":"INFO"'
 assert_contains 'a decisao de aceite vira linha do painel' "$hb_line" 'aceito pela rede'
 assert_contains 'linha do painel leva o instante' "$hb_line" '"at":"'
+# O tráfego de rede (brief §8.2) vai no mesmo heartbeat: é a única saída do nó. O runtime mede
+# /proc/net/dev do PRÓPRIO host (não dá para forjar num harness), então o que se prende aqui é a
+# forma do contrato que o Control Plane já aceita (V345): os dois campos como inteiros em MiB.
+assert_contains 'heartbeat leva o trafego de entrada em MiB' "$hb_line" '"bytesInMb":'
+assert_contains 'heartbeat leva o trafego de saida em MiB' "$hb_line" '"bytesOutMb":'
+assert_not_contains 'trafego medido nao e nulo nem negativo' \
+  "$(/bin/grep -oE '"bytes(In|Out)Mb":-?[0-9]+' <<<"$hb_line")" '-'
 
 # ------------------------------------------------- cenário 2: tarefa fora da config
 out=$(run_one_cycle "$TASK_FORBIDDEN")

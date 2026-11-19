@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.network.adapters.in.web;
 
+import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -107,6 +108,44 @@ class NetworkParticipantTrafficTests {
 		mockMvc.perform(get("/network/participant/nodes/" + nodeId).header("X-Session-Token", dono.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.trafficTotalMb").value(nullValue()));
+	}
+
+	/**
+	 * O painel de ADMIN também enxerga o tráfego do nó (brief §8.2, "uso de rede").
+	 *
+	 * <p>Antes, `GET /admin/network/nodes` devolvia o declarado (bytes/s que o participante cede)
+	 * e nunca o medido: a administração só sabia o que o nó <b>prometeu</b> transferir. O número
+	 * que a rede tem é do nó (ele mede as próprias interfaces), e é este que a tela precisa ver.</p>
+	 */
+	@Test
+	void painel_admin_enxerga_o_trafego_medido_do_no() throws Exception {
+		var dono = auth.authenticate("net_dono_admin_trafego");
+		String admin = adminToken();
+		String nodeId = storageNodeFor(admin, dono.userId());
+		String key = issueKey(admin, nodeId);
+
+		heartbeat(nodeId, key, 250L, 75L);
+
+		mockMvc.perform(get("/admin/network/nodes").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[?(@.id == '" + nodeId + "')].trafficInMb").value(250))
+			.andExpect(jsonPath("$[?(@.id == '" + nodeId + "')].trafficOutMb").value(75));
+	}
+
+	/** Nó que só não mede: nulo no painel de admin, nunca zero — zero afirmaria "não transferiu". */
+	@Test
+	void painel_admin_mostra_nulo_quando_o_no_nao_mediu() throws Exception {
+		var dono = auth.authenticate("net_dono_admin_sem_trafego");
+		String admin = adminToken();
+		String nodeId = storageNodeFor(admin, dono.userId());
+		String key = issueKey(admin, nodeId);
+
+		heartbeat(nodeId, key, null, null);
+
+		mockMvc.perform(get("/admin/network/nodes").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[?(@.id == '" + nodeId + "')].trafficInMb").value(hasItem(nullValue())))
+			.andExpect(jsonPath("$[?(@.id == '" + nodeId + "')].trafficOutMb").value(hasItem(nullValue())));
 	}
 
 	/**
