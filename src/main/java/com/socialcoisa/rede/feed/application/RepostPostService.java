@@ -86,6 +86,12 @@ public class RepostPostService {
 		if (posts.findActiveRepostByAuthorAndSource(new UserId(userId), root.id().value()).isPresent()) {
 			throw new ApiException(409, "ALREADY_REPOSTED", "Voce ja republicou este post.");
 		}
+		// E com o repost com opinião: ele é outro post, mas o ponteiro do feed mostra o original — a
+		// citação teria um "Repostar" extra ao lado do repost puro, e o banco aceita um segundo
+		// ponteiro.
+		if (posts.findActiveRepostContentByAuthorAndSource(new UserId(userId), root.id().value()).isPresent()) {
+			throw new ApiException(409, "ALREADY_REPOSTED", "Voce ja republicou este post.");
+		}
 
 		reposts.save(PostRepost.create(userId, root.id().value(), clock.instant()));
 		posts.adjustCounter(root.id(), PostCounter.REPOSTS, 1);
@@ -105,7 +111,15 @@ public class RepostPostService {
 		}
 	}
 
-	/** Repost com opinião: cria post novo do repostador citando o original. */
+	/**
+	 * Repost com opinião: cria post novo do repostador citando a publicação que a pessoa repostou.
+	 *
+	 * A citação é a própria publicação escolhida, não o original raiz: quem reposta o repost com
+	 * opinião de outra pessoa está concordando ou discordando dela, então o card precisa mostrar
+	 * essa opinião. O dedupe também é por ela — o mesmo texto sobre o mesmo post já existe; outro
+	 * texto é outra opinião e pode entrar. Antes o dedupe olhava o original raiz para todo mundo, e
+	 * quem já tinha repostado o post deixava de conseguir comentar as opiniões dos outros.
+	 */
 	@Transactional
 	public Post repostWithOpinion(String userId, String postId, String opinion) {
 		ageGate.requireCanWrite(userId);
@@ -113,10 +127,6 @@ public class RepostPostService {
 
 		Post root = resolveRoot(postId);
 		validateRepostable(root);
-
-		if (posts.findActiveRepostByAuthorAndSource(new UserId(userId), root.id().value()).isPresent()) {
-			throw new ApiException(409, "ALREADY_REPOSTED", "Voce ja republicou este post.");
-		}
 
 		String cleanOpinion = opinion == null ? "" : PlainText.defuse(opinion.trim());
 		if (cleanOpinion.isBlank()) {
@@ -127,6 +137,20 @@ public class RepostPostService {
 				"A opiniao do repost deve ter no maximo 600 caracteres.");
 		}
 
+		// Mesmo texto sobre o mesmo post: repetir não acrescenta nada ao feed. Há mais de uma
+		// publicação com o nome repostado (o caso da issue #755): não dá para dizer qual é a
+		// repetida, e duas linhas com o mesmo par autor+posto quebram a leitura de dedupe. Recusa em
+		// vez de gravar — o problema é de dados, não da pessoa.
+		if (posts.countActiveRepostsByAuthorAndSource(new UserId(userId), postId) > 1) {
+			throw new ApiException(409, "REPOST_AMBIGUOUS",
+				"Ja existe mais de uma republicacao sua deste post. Edite a que quiser manter.");
+		}
+		boolean sameText = posts.findActiveRepostContentByAuthorAndSource(new UserId(userId), postId)
+			.map(cleanOpinion::equals).orElse(false);
+		if (sameText) {
+			throw new ApiException(409, "ALREADY_REPOSTED", "Voce ja republicou este post.");
+		}
+
 		String username = profiles.findById(root.authorId().value())
 			.map(profile -> profile.username())
 			.orElse(null);
@@ -135,7 +159,7 @@ public class RepostPostService {
 			new UserId(userId), opinionOnly ? PostType.INSIGHT : root.type(),
 			cleanOpinion, null, List.of(), List.of(), null,
 			null, clock.instant(), AuthorIdentity.SOCIAL)
-			.markRepostOf(root.id().value(), username, true);
+			.markRepostOf(postId, username, true);
 		Post saved = posts.save(copy);
 		notifyOriginalAuthor(root, userId, "/api/feed/posts/" + saved.id().value());
 		return saved;
