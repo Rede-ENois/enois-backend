@@ -69,12 +69,12 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 
 	/**
 	 * Types that may be served by the CDN, each with the extension of the server-generated object
-	 * name. HTML/SVG/active JS stay out on purpose.
+	 * name. HTML/active JS stay out on purpose; SVG is sanitized before storage.
 	 */
 	private static final java.util.Map<String, String> ALLOWED_MIME_TYPES = java.util.Map.ofEntries(
 		java.util.Map.entry("image/jpeg", ".jpg"), java.util.Map.entry("image/png", ".png"),
 		java.util.Map.entry("image/gif", ".gif"), java.util.Map.entry("image/webp", ".webp"),
-		java.util.Map.entry("image/avif", ".avif"),
+		java.util.Map.entry("image/avif", ".avif"), java.util.Map.entry("image/svg+xml", ".svg"),
 		java.util.Map.entry("video/mp4", ".mp4"), java.util.Map.entry("video/webm", ".webm"),
 		java.util.Map.entry("video/quicktime", ".mov"),
 		java.util.Map.entry("audio/mpeg", ".mp3"), java.util.Map.entry("audio/ogg", ".ogg"),

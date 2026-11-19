@@ -125,6 +125,9 @@ class MediaStorageProxyController {
 			// A captura de denúncia é a exceção: prova de moderação não fica em cache público.
 			.header(HttpHeaders.CACHE_CONTROL, moderatorOnly ? "private, no-store"
 				: "public, max-age=31536000, immutable");
+		if (inline && "image/svg+xml".equalsIgnoreCase(mime)) {
+			response.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+		}
 		if (object.contentRange() != null) {
 			response.header(HttpHeaders.CONTENT_RANGE, object.contentRange());
 		}
