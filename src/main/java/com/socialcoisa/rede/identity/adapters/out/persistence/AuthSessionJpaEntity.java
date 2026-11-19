@@ -109,6 +109,10 @@ class AuthSessionJpaEntity {
 		return revokedAt == null && expiresAt.isAfter(now);
 	}
 
+	boolean revoked() {
+		return revokedAt != null;
+	}
+
 	/** Validade do refresh: usa a janela propria (30 dias); sessoes antigas caem no fallback. */
 	boolean activeRefreshAt(Instant now) {
 		Instant limit = refreshExpiresAt != null ? refreshExpiresAt : expiresAt;

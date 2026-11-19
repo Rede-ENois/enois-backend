@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.StringUtils;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.http.converter.HttpMessageNotWritableException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
@@ -73,7 +74,25 @@ public class GlobalExceptionHandler {
 		if (exception.retryAfterSeconds() > 0) {
 			response.header("Retry-After", Long.toString(exception.retryAfterSeconds()));
 		}
-		return response.body(new ErrorResponse(exception.code(), exception.getMessage(), Instant.now()));
+		return response.body(new ErrorResponse(exception.code(), exception.getMessage(), Instant.now(),
+			exception.detail() != null ? exception.detail() : sessionDetail(exception, request)));
+	}
+
+	/**
+	 * O 401 de sessao invalidado por troca de senha ou de e-mail. O corpo continua sendo um 401
+	 * comum; o detalhe e o que deixa o app dizer "sua senha mudou, entre com a nova" em vez de
+	 * mandar a pessoa desconfiar do proprio login.
+	 *
+	 * <p>So pergunta quando o token chegou COM este pedido: no cabecalho ou (transformado em cabecalho
+	 * pelo {@code SessionCookieFilter}) no cookie. Sem nenhum dos dois, o 401 e de token que se
+	 * perdeu no caminho — e a resposta nao deve contar nada sobre ele.</p>
+	 */
+	private static String sessionDetail(ApiException exception, jakarta.servlet.http.HttpServletRequest request) {
+		if (exception.status() != 401 || !"UNAUTHENTICATED".equals(exception.code()) || request == null) {
+			return null;
+		}
+		String token = request.getHeader(SessionCookieFilter.SESSION_HEADER);
+		return CurrentUserResolver.unauthenticated(token, StringUtils.hasText(token)).detail();
 	}
 
 	/**
