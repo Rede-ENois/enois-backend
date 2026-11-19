@@ -546,6 +546,19 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 		if (!StringUtils.hasText(password) || !passwordHasher.matches(password, credential.passwordHash())) {
 			throw new ApiException(401, "INVALID_CREDENTIALS", "Senha incorreta.");
 		}
+		anonymizeAccount(userId);
+	}
+
+	/**
+	 * A conta sai do banco de gente: sessões revogadas, credencial e identidades externas fora,
+	 * perfil anonimizado e consentimento do banco de talentos apagado.
+	 *
+	 * <p>É o ÚNICO jeito de excluir conta. O dono chega por {@link #deleteAccount} (senha conferida);
+	 * a administração da plataforma, pela exclusão administrativa — que chama este mesmo método,
+	 * sem nascer um segundo caminho que apague o perfil de outro jeito.</p>
+	 */
+	@Transactional
+	public void anonymizeAccount(String userId) {
 		UserProfile profile = userProfileRepository.findById(userId)
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
 		Instant now = clock.instant();

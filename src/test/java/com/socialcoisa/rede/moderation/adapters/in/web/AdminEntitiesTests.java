@@ -107,6 +107,117 @@ class AdminEntitiesTests {
 			+ "and target_id = ? order by created_at desc limit 1", communityId)).contains(REASON);
 	}
 
+	/**
+	 * Exclusão administrativa de conta: a pessoa não sabe a senha, e o admin decide sem ela. A conta
+	 * sai pelo MESMO caminho da auto-exclusão (perfil anonimizado, sessões revogadas), o motivo fica
+	 * na auditoria e ninguém apaga a própria conta nem a de outro administrador.
+	 */
+	@Test
+	void exclusaoAdministrativaDeContaAnonimizaERevogaSemSenha() throws Exception {
+		var admin = admin("aent_del_admin");
+		var alvo = auth().authenticate("aent_del_alvo");
+		String username = one("select username from users where id = ?", alvo.userId());
+
+		mockMvc.perform(post("/admin/moderation/users/" + username + "/delete")
+				.header("X-Session-Token", admin.token())
+				.header("Idempotency-Key", "aent-del-1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("reason", REASON))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.outcome").value("DELETED"));
+
+		assertThat(one("select username from users where id = ?", alvo.userId()))
+			.as("perfil anonimizado")
+			.startsWith("removed-");
+		assertThat(count("select count(*) from auth_sessions where user_id = ? and revoked_at is null",
+			alvo.userId())).as("sessões do alvo revogadas").isZero();
+		assertThat(count("select count(*) from audit_logs where action = 'ADMIN_ACCOUNT_DELETED' "
+			+ "and target_id = ?", alvo.userId())).isEqualTo(1);
+
+		// Sem motivo não há decisão: a recusa vem antes de qualquer escrita.
+		var outra = auth().authenticate("aent_del_outra");
+		String outraUsername = one("select username from users where id = ?", outra.userId());
+		mockMvc.perform(post("/admin/moderation/users/" + outraUsername + "/delete")
+				.header("X-Session-Token", admin.token())
+				.header("Idempotency-Key", "aent-del-2")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("reason", "curto"))))
+			.andExpect(status().isBadRequest());
+		assertThat(count("select count(*) from users where id = ? and username = ?",
+			outra.userId(), outraUsername)).as("sem motivo, nada muda").isEqualTo(1);
+
+		// A própria conta e a de outro administrador ficam de fora.
+		String adminUsername = one("select username from users where id = ?", admin.userId());
+		mockMvc.perform(post("/admin/moderation/users/" + adminUsername + "/delete")
+				.header("X-Session-Token", admin.token())
+				.header("Idempotency-Key", "aent-del-3")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("reason", REASON))))
+			.andExpect(status().isBadRequest());
+		var outroAdmin = admin("aent_del_admin2");
+		String outroAdminUsername = one("select username from users where id = ?", outroAdmin.userId());
+		mockMvc.perform(post("/admin/moderation/users/" + outroAdminUsername + "/delete")
+				.header("X-Session-Token", admin.token())
+				.header("Idempotency-Key", "aent-del-4")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("reason", REASON))))
+			.andExpect(status().isConflict());
+		assertThat(one("select username from users where id = ?", outroAdmin.userId()))
+			.as("conta admin intacta")
+			.isEqualTo(outroAdminUsername);
+	}
+
+	/**
+	 * A exclusão administrativa não pode deixar vínculo para trás: canal, publicação de canal, fixado e
+	 * favorito não têm chave estrangeira para `communities` (V33, V97, V139), então só a limpeza
+	 * explícita dentro da transação os leva embora. Antes desta cobertura, excluir deixava canal e
+	 * fixado órfãos no banco.
+	 */
+	@Test
+	void exclusaoAdministrativaDeComunidadeNaoDeixaVinculoOrfao() throws Exception {
+		var admin = admin("aent_orf_admin");
+		var dono = auth().authenticate("aent_orf_dono");
+		var fa = auth().authenticate("aent_orf_fa");
+		String communityId = createCommunity(dono, "Comunidade com canal", "aent-orf-1");
+		joinCommunity(fa, communityId, "aent-orf-join-1");
+		MvcResult channel = mockMvc.perform(post("/communities/" + communityId + "/channels")
+				.header("X-Session-Token", dono.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("name", "Geral"))))
+			.andExpect(status().is2xxSuccessful())
+			.andReturn();
+		String channelId = objectMapper.readTree(channel.getResponse().getContentAsString()).get("id").asText();
+		MvcResult post = mockMvc.perform(post("/feed/posts")
+				.header("X-Session-Token", dono.token())
+				.header("Idempotency-Key", "aent-orf-post-1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("type", "INSIGHT",
+					"content", "Publicação que fica órfã se o canal não sair junto com a comunidade.",
+					"tags", List.of(), "mediaIds", List.of(), "communityId", communityId,
+					"channelId", channelId))))
+			.andExpect(status().isCreated())
+			.andReturn();
+		String postId = objectMapper.readTree(post.getResponse().getContentAsString()).get("id").asText();
+		jdbc.update("insert into community_pinned_posts (community_id, post_id, pinned_by, pinned_at) "
+			+ "values (?, ?, ?, now())", communityId, postId, dono.userId());
+		jdbc.update("insert into favorite_communities (id, user_id, community_id, created_at) "
+			+ "values (?, ?, ?, now())", "fav_orf_" + communityId, fa.userId(), communityId);
+
+		mockMvc.perform(post("/admin/moderation/communities/" + communityId + "/delete")
+				.header("X-Session-Token", admin.token())
+				.header("Idempotency-Key", "aent-orf-del-1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("reason", REASON))))
+			.andExpect(status().isOk());
+
+		assertThat(count("select count(*) from community_channels where community_id = ?", communityId)).isZero();
+		assertThat(count("select count(*) from community_pinned_posts where community_id = ?", communityId)).isZero();
+		assertThat(count("select count(*) from favorite_communities where community_id = ?", communityId)).isZero();
+		assertThat(count("select count(*) from posts where community_id = ?", communityId)).isZero();
+		assertThat(count("select count(*) from posts where id = ?", postId)).isZero();
+		assertThat(count("select count(*) from community_members where community_id = ?", communityId)).isZero();
+	}
+
 	@Test
 	void exclusaoAdministrativaDeComunidadeRecusaQuemNaoEAdmin() throws Exception {
 		var dono = auth().authenticate("aent_neg_dono");

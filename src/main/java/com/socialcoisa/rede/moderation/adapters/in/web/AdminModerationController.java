@@ -18,6 +18,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
+import com.socialcoisa.rede.moderation.application.AdminAccountDeletionService;
 import com.socialcoisa.rede.moderation.application.AdminModerationService;
 import com.socialcoisa.rede.moderation.application.UserWarningService;
 import com.socialcoisa.rede.moderation.domain.SanctionType;
@@ -49,6 +50,7 @@ class AdminModerationController {
 
 	private final AdminModerationService admin;
 	private final UserWarningService warnings;
+	private final AdminAccountDeletionService accountDeletion;
 	private final CurrentUserResolver currentUserResolver;
 	private final AdminGuard adminGuard;
 	private final IdempotencyApplicationService idempotency;
@@ -56,10 +58,12 @@ class AdminModerationController {
 	private final ObjectMapper objectMapper;
 
 	AdminModerationController(AdminModerationService admin, UserWarningService warnings,
-			CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
-			IdempotencyApplicationService idempotency, ProfileService profileService, ObjectMapper objectMapper) {
+			AdminAccountDeletionService accountDeletion, CurrentUserResolver currentUserResolver,
+			AdminGuard adminGuard, IdempotencyApplicationService idempotency,
+			ProfileService profileService, ObjectMapper objectMapper) {
 		this.admin = admin;
 		this.warnings = warnings;
+		this.accountDeletion = accountDeletion;
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
 		this.idempotency = idempotency;
@@ -152,6 +156,22 @@ class AdminModerationController {
 	}
 
 	/**
+	 * Exclusão administrativa da CONTA, sem a senha da pessoa (o caminho do dono continua sendo
+	 * `POST /auth/account/delete`). Reusa a mesma anonimização da auto-exclusão; o motivo fica na
+	 * auditoria. Conta admin e a própria conta são recusadas.
+	 */
+	@PostMapping("/admin/moderation/users/{username}/delete")
+	Object deleteAccount(@RequestHeader(value = "X-Session-Token", required = false) String token,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@PathVariable String username, @RequestBody(required = false) ReasonRequest request) {
+		CurrentUser user = requireAdmin(token);
+		String reason = text(request);
+		return write(user, "POST", "/api/admin/moderation/users/{username}/delete", idempotencyKey,
+			Map.of("username", username, "reason", reason == null ? "" : reason), 200,
+			() -> accountDeletion.deleteByAdmin(user.id().value(), username, reason));
+	}
+
+	/**
 	 * Remoção administrativa de publicação com motivo obrigatório, independente de denúncia.
 	 * A resposta diz o que aconteceu: {@code REMOVED}, {@code NOT_FOUND} ou {@code ALREADY_OFFLINE} —
 	 * e id inexistente continua 404, nunca um sucesso que esconde que nada foi removido.
@@ -165,6 +185,25 @@ class AdminModerationController {
 		return write(user, "POST", "/api/admin/moderation/posts/{postId}/remove", idempotencyKey,
 			Map.of("postId", postId, "reason", reason == null ? "" : reason), () -> {
 				AdminModerationService.PostRemoval result = admin.removePost(user.id().value(), postId, reason);
+				return new CommandResponse("NOT_FOUND".equals(result.status()) ? 404 : 200, result);
+			});
+	}
+
+	/**
+	 * Remoção administrativa de COMENTÁRIO com motivo obrigatório, independente de denúncia.
+	 * A resposta diz o que aconteceu: {@code REMOVED}, {@code ALREADY_REMOVED} (já estava fora)
+	 * ou {@code NOT_FOUND}.
+	 */
+	@PostMapping("/admin/moderation/comments/{commentId}/remove")
+	Object removeComment(@RequestHeader(value = "X-Session-Token", required = false) String token,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@PathVariable String commentId, @RequestBody(required = false) ReasonRequest request) {
+		CurrentUser user = requireAdmin(token);
+		String reason = text(request);
+		return write(user, "POST", "/api/admin/moderation/comments/{commentId}/remove", idempotencyKey,
+			Map.of("commentId", commentId, "reason", reason == null ? "" : reason), () -> {
+				AdminModerationService.CommentRemoval result =
+					admin.removeComment(user.id().value(), commentId, reason);
 				return new CommandResponse("NOT_FOUND".equals(result.status()) ? 404 : 200, result);
 			});
 	}
