@@ -162,6 +162,18 @@ public class PapoRetoPersistenceAdapter implements PapoRetoRepository {
 	}
 
 	@Override
+	public List<PublicacaoDaFala> publicacoesDoAssunto(String escopo, String subject, Instant de, Instant ate,
+			int limite) {
+		List<PublicacaoDaFala> lidas = new ArrayList<>();
+		for (PapoPublicacaoProjecao linha : falas.publicacoesDoAssunto(escopo, subject, de, ate,
+				PageRequest.of(0, Math.max(1, limite)))) {
+			lidas.add(new PublicacaoDaFala(linha.getPublicacaoId(), linha.getFonte(), linha.getCommunityId(),
+					linha.getHora()));
+		}
+		return lidas;
+	}
+
+	@Override
 	public long falasTotais(Instant de, Instant ate) {
 		return falas.falasTotais(de, ate);
 	}

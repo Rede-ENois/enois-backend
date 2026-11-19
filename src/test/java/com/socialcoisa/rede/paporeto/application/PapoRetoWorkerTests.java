@@ -50,6 +50,11 @@ class PapoRetoWorkerTests {
 		}
 
 		@Override
+		public List<PapoPublicacaoReader.Detalhe> detalhes(java.util.Collection<String> publicacaoIds) {
+			return List.of();
+		}
+
+		@Override
 		public String fonte() {
 			return "POST";
 		}
@@ -132,6 +137,21 @@ class PapoRetoWorkerTests {
 		}
 
 		@Override
+		public List<PublicacaoDaFala> publicacoesDoAssunto(String escopo, String subject, Instant de, Instant ate,
+				int limite) {
+			return falas.stream()
+				.filter(f -> f.expressao().equals(subject) && !f.hora().isBefore(de) && f.hora().isBefore(ate))
+				.filter(f -> escopo.isEmpty() || escopo.equals(f.communityId()))
+				.collect(Collectors.toMap(Fala::publicacaoId,
+						f -> new PublicacaoDaFala(f.publicacaoId(), f.fonte(), f.communityId(), f.hora()),
+						(primeira, segunda) -> primeira))
+				.values()
+				.stream()
+				.limit(limite)
+				.toList();
+		}
+
+		@Override
 		public long falasTotais(Instant de, Instant ate) {
 			return falasEntre(de, ate).size();
 		}
@@ -155,11 +175,36 @@ class PapoRetoWorkerTests {
 		workerNo(T0.plusSeconds(300)).corte();
 
 		assertThat(repositorio.falas).isNotEmpty();
+		// A fala é o assunto do cluster: o bigrama cobre os seus unigramas na publicação.
 		assertThat(repositorio.falas.stream().map(PapoRetoRepository.Fala::expressao))
-			.contains("inteligencia artificial", "inteligencia", "artificial", "trabalho");
+			.contains("inteligencia artificial", "trabalho");
 		// Nenhuma fala guarda o texto original nem um pedaço dele.
 		assertThat(repositorio.falas.stream().map(PapoRetoRepository.Fala::expressao))
 			.noneMatch(expressao -> expressao.contains("mudou meu"));
+	}
+
+	@Test
+	void tagDaPublicacaoViraAssuntoDeclarado() {
+		fonte.publicacoes = List.of(new PapoPublicacaoReader.Publicacao("foto do setup novo", "autor_1", T0, null,
+				"pub_1", List.of("Home Office", "http://exemplo.com")));
+
+		workerNo(T0.plusSeconds(300)).corte();
+
+		// A tag é assunto declarado pelo autor — entra mesmo sem aparecer no texto; a tag de
+		// link é ruído e não nasce fala.
+		assertThat(repositorio.falas.stream().map(PapoRetoRepository.Fala::expressao))
+			.contains("home office")
+			.doesNotContain("http");
+	}
+
+	@Test
+	void linkEComemoracaoNaoViramAssunto() {
+		fonte.publicacoes = List.of(new PapoPublicacaoReader.Publicacao(
+				"https://enois.ia.br/papo?utm=abc kkkkk :KEKW:", "autor_1", T0, null, "pub_1"));
+
+		workerNo(T0.plusSeconds(300)).corte();
+
+		assertThat(repositorio.falas).isEmpty();
 	}
 
 	@Test
@@ -248,6 +293,11 @@ class PapoRetoWorkerTests {
 					publicacoes.add(new PapoPublicacaoReader.Publicacao("meetup de rust", "comentador_" + i, T0, null, "cmt_" + i));
 				}
 				return publicacoes;
+			}
+
+			@Override
+			public List<PapoPublicacaoReader.Detalhe> detalhes(java.util.Collection<String> publicacaoIds) {
+				return List.of();
 			}
 
 			@Override

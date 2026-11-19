@@ -76,4 +76,43 @@ class PapoAssuntoExtractorTests {
 			.doesNotContain("feei meetup");
 	}
 
+	@Test
+	void linkMencaoEmoteERisoNaoViramAssunto() {
+		// Foi o bug de produção: o "http" do endereço colado virava alta da rede.
+		List<PapoAssuntoExtractor.Fala> falas = extractor.extrair(
+				"olha http://enois.ia.br/papo?utm=abc @mel :KEKW: kkkkk hahaha 2026", "POST");
+
+		assertThat(falas).isEmpty();
+	}
+
+	@Test
+	void rotuloDoLinkEhConteudoMasOEnderecoSai() {
+		List<PapoAssuntoExtractor.Fala> falas = extractor.extrair("[guia de rust](https://enois.ia.br/rust)",
+				"POST");
+
+		assertThat(falas).extracting(PapoAssuntoExtractor.Fala::expressao)
+			.contains("guia", "rust")
+			.doesNotContain("enois");
+	}
+
+	@Test
+	void tagDeclaradaViraAssuntoDobrado() {
+		List<PapoAssuntoExtractor.Fala> falas = extractor.extrair("foto do setup", "POST",
+				List.of("Home Office", "http://exemplo.com"));
+
+		assertThat(falas).extracting(PapoAssuntoExtractor.Fala::expressao)
+			.contains("home office")
+			.doesNotContain("http");
+	}
+
+	@Test
+	void assuntoValidoRecusaRuidoNaLeitura() {
+		assertThat(extractor.assuntoValido("http")).isFalse();
+		assertThat(extractor.assuntoValido("kkkk")).isFalse();
+		assertThat(extractor.assuntoValido("2026")).isFalse();
+		assertThat(extractor.assuntoValido("")).isFalse();
+		assertThat(extractor.assuntoValido("inteligencia artificial")).isTrue();
+		assertThat(extractor.assuntoValido("home office")).isTrue();
+	}
+
 }
