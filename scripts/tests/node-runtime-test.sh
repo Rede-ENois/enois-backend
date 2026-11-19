@@ -478,6 +478,10 @@ printf '%s\n' "$out" > "$TMP/doctor-out"
 assert_eq 'doctor sem FAIL sai 0' '0' "$exit_code"
 assert_contains 'doctor lista o nó' "$out" 'nd_teste123'
 assert_contains 'doctor avisa container ausente' "$out" '[WARN]'
+# Sem node.key o doctor AVISA em vez de ficar em silêncio: o nó instalado antes do §5.1
+# opera só com a API key, e "sem identidade criptográfica" é o estado que existe.
+assert_contains 'doctor avisa a falta da chave do nó' "$out" 'Sem chave do nó (node.key)'
+assert_not_contains 'e não inventa identidade que não há' "$out" 'Chave do nó presente'
 
 # Sem node.json é FAIL (exit 1).
 rm "$NH2/node.json"
@@ -521,6 +525,18 @@ rm -f "$NH2/config.json" "$NH2/config-verified-at"
 # PENDING_APPROVAL passava com PASS em tudo (chave 600, pino 600, container up) e o operador
 # concluía que estava tudo bem num nó que nunca receberia tarefa.
 make_command docker 'case "$*" in *"ps --format"*) echo enois-node ;; esac; exit 0'
+
+# C0 — a chave do nó: presente com 600 é PASS; 644 é WARN com o chmod a rodar.
+openssl genpkey -algorithm ED25519 -out "$NH2/node.key" 2>/dev/null
+chmod 600 "$NH2/node.key"
+out=$(NODE_HOME="$NH2" PATH="$TMP" /bin/bash "$NODE_DIR/node-doctor.sh" 2>&1) || true
+assert_contains 'doctor reconhece a chave do nó com 600' "$out" 'Chave do nó presente com permissão 600'
+chmod 644 "$NH2/node.key"
+out=$(NODE_HOME="$NH2" PATH="$TMP" /bin/bash "$NODE_DIR/node-doctor.sh" 2>&1) || true
+assert_contains 'chave legível por outros é WARN, não silêncio' "$out" 'Chave do nó com permissão 644 — rode: chmod 600'
+chmod 640 "$NH2/node.key"
+out=$(NODE_HOME="$NH2" PATH="$TMP" /bin/bash "$NODE_DIR/node-doctor.sh" 2>&1) || true
+assert_contains '640 (uid do container) é aceito' "$out" 'Chave do nó presente com permissão 640'
 
 # C1 — aceito: acceptTasks=true vira PASS com status e modo.
 printf '%s' '{"nodeId":"nd_teste123","status":"ACTIVE","mode":"NORMAL","acceptTasks":true}' > "$TMP/hb-aceito"
