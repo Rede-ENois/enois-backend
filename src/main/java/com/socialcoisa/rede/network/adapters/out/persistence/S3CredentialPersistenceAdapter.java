@@ -42,10 +42,21 @@ class S3CredentialPersistenceAdapter implements S3CredentialRepository {
 
 	private static final String SELECT_SECRET = "select secret_encrypted from network_storage_s3_credentials where id = ?";
 
+	/**
+	 * A revogação em UMA instrução, com o dono no `where`.
+	 *
+	 * <p>Antes: o serviço listava as credenciais do dono para decidir se podia revogar, e depois
+	 * mandava o `update` só pelo id. Agora: a decisão e a alteração são a mesma instrução — o dono vê 0
+	 * linhas afetadas, e nenhuma corrida entre listar e atualizar pode revogar credencial de outra
+	 * conta.</p>
+	 */
 	private static final String REVOKE = """
 		update network_storage_s3_credentials set revoked_at = ?
-		where id = ? and revoked_at is null
+		where id = ? and owner_user_id = ? and revoked_at is null
 		""";
+
+	private static final String SELECT_BY_ID = "select " + COLUMNS
+		+ " from network_storage_s3_credentials where id = ? and owner_user_id = ?";
 
 	private static final RowMapper<S3CredentialRow> MAPPER = (ResultSet rs, int rowNum) -> new S3CredentialRow(
 		new S3Credential(rs.getString("id"), rs.getString("access_key"), rs.getString("owner_user_id"),
@@ -95,8 +106,14 @@ class S3CredentialPersistenceAdapter implements S3CredentialRepository {
 	}
 
 	@Override
-	public boolean revoke(String id, Instant now) {
-		return jdbc.update(REVOKE, Timestamp.from(now), id) == 1;
+	public boolean revoke(String id, String ownerUserId, Instant now) {
+		return jdbc.update(REVOKE, Timestamp.from(now), id, ownerUserId) == 1;
+	}
+
+	@Override
+	public Optional<S3Credential> findForOwner(String ownerUserId, String id) {
+		return jdbc.query(SELECT_BY_ID, MAPPER, id, ownerUserId).stream().findFirst()
+			.map(S3CredentialRow::credential);
 	}
 
 	private static Instant instant(ResultSet rs, String column) throws java.sql.SQLException {

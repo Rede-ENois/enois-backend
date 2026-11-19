@@ -61,13 +61,16 @@ contra o vetor externo é o que separa "implementei" de "assinei comigo mesmo e 
 | ListObjects (v1) | `GET /s3/{bucket}` | ✅ `marker` |
 | ListBuckets | `GET /s3` | ✅ só os buckets do dono |
 | DeleteBucket | `DELETE /s3/{bucket}` | ⚠️ recusa 409 se houver objeto; **501** para bucket vazio (não há tabela de buckets vazios) |
+| CreateMultipartUpload | `POST /s3/{bucket}/{key}?uploads` | ✅ devolve `UploadId` |
+| UploadPart | `PUT /s3/{bucket}/{key}?partNumber=&uploadId=` | ✅ fora de ordem; reenvio substitui |
+| CompleteMultipartUpload | `POST /s3/{bucket}/{key}?uploadId=` | ✅ monta o corpo na ordem pedida; parte ausente recusa |
+| AbortMultipartUpload | `DELETE /s3/{bucket}/{key}?uploadId=` | ✅ apaga partes e registro |
+| ListParts | `GET /s3/{bucket}/{key}?uploadId=` | ✅ o que já chegou |
 | Emitir URL pré-assinada | `POST /s3/{bucket}/presign?key=&method=GET\|PUT&expires=` | ✅ sessão do dono; devolve `url`, `method`, `expiresIn`, `expiresAt` |
 | Usar URL pré-assinada | `GET`/`PUT /s3/{bucket}/{key}?X-Amz-Signature=…` | ✅ sem `Authorization`, sem sessão |
 
 **Não implementado**, e o brief manda não anunciar como se existisse:
 
-- **Multipart Upload** — recusado. Um "multipart" que grava o arquivo inteiro perde dados no retomado,
-  e é exatamente o que o brief pede para não fazer.
 - **CopyObject**, **ACL**, **tagging**, **`versionId`**, **bucket policy**, **`POST` de formulário**.
 - **Regiões múltiplas**, **classes de armazenamento na resposta** (sempre `STANDARD`; a classe real é a
   da §8 e não é escolhida por requisição).
@@ -77,7 +80,7 @@ comportamento do S3 em bucket versionado — mas num bucket **sem** versionament
 escolha aqui é a do módulo inteiro: apagar byte é coletado pelo nó, nunca por requisição de cliente
 (§14 e §16 da doc do Storage). Um cliente que espere "liberou espaço na hora" se engana.
 
-## 4.0 Donagem do bucket — por verbo
+### 4.0 Donagem do bucket — por verbo
 
 `allowedBucket = null` (o padrão de toda credencial) significa **todos os buckets do dono**, nunca "todos
 os buckets da rede". O escopo da credencial e a donagem do bucket são duas perguntas independentes, e
@@ -123,7 +126,7 @@ contrato).
 aceita duas cópias correntes da mesma chave — o mesmo gate da rota do nó. A recusa não toca no objeto
 que já estava lá.
 
-## 4.1 URLs pré-assinadas
+### 4.1 URLs pré-assinadas
 
 `POST /s3/{bucket}/presign?key=fotos%2Fgato.jpg&method=GET&expires=900` com `X-Session-Token` do dono
 devolve:
@@ -152,6 +155,81 @@ receber credencial. Regras, todas com teste:
 A chave vai em parâmetro (`?key=`), não no caminho: `/{bucket}/{*key}` engole o resto do caminho no mesmo
 verbo, e uma rota `/{bucket}/{*key}/presigned` colide com ela.
 
+### 4.2 Multipart Upload (V361)
+
+Até a V361 o gateway recusava `CreateMultipartUpload` com 501 — e isso **quebrava cliente real**: todo
+SDK usa multipart por padrão acima de 5–8 MB (boto3: 8 MB; SDK Java: 5 MiB), então um vídeo enviado
+pelo SDK falhava num arquivo que o protocolo inteiro sabe enviar.
+
+O desenho, em três decisões:
+
+| decisão | por quê |
+|---|---|
+| **nada vira objeto antes da conclusão** | a chave só entra no catálogo no `Complete`, e a conclusão grava pelo mesmo `beginUpload`/`finishUpload` do PUT simples; um upload pela metade nunca é servível por `GET` |
+| **parte ausente recusa a conclusão** (`InvalidPart`) e o upload **continua aberto** | concluir "com o que existe" serviria um arquivo truncado como se estivesse completo; aberto, o cliente reenvia só ela |
+| **as partes moram em `storageRoot/multipart/<uploadId>/`** | o catálogo não tem onde guardar "parte de um objeto que ainda não é objeto"; é o mesmo volume do corpo, não um segundo depósito |
+
+Regras do S3 que o gateway aplica: número de parte 1..10000; toda parte que não é a última tem
+**5 MiB mínimo** (conferido na conclusão, que é quem sabe qual é a última — recusar no envio faria
+falhar quem manda a última primeiro); parte vazia recusada; reenvio da mesma parte substitui; ordem de
+chegada não importa, o número é a ordem.
+
+**ETag.** O ETag do objeto é o **sha-256 do corpo montado** — o mesmo valor de um `PUT` simples com o
+mesmo conteúdo. O S3 clássico usa um ETag próprio do multipart (`md5(digests)-N`), legado do MD5 que
+este gateway não usa. A escolha é consciente: a identidade do objeto no Storage é o sha-256 do que o
+cliente enviou, e um objeto multipart tem de ser o mesmo objeto, compare o cliente por qualquer
+caminho.
+
+**Credencial.** A donagem do bucket é provada no `Create` (é ele que cria o bucket do dono); cada parte
+carrega a credencial do upload, e upload de outra conta responde 404 `NoSuchUpload` — não "403", porque
+para ela o upload não existe.
+
+**Abandono.** Partes de upload esquecido ocupam disco no nó. O prazo é gravado no início
+(`rede.storage.multipart.ttl-hours`, padrão 24 h; o cliente pode pedir menos) e `sweep()` descarta o
+vencido.
+
+**Prova:** `S3MultipartTests` (7) — arquivo montado volta inteiro no GET; fora de ordem + reenvio;
+parte ausente recusa e o upload segue aberto; parte pequena que não é a última recusa; chave não
+existe no catálogo antes da conclusão; outra conta não usa; abort apaga. Mutações conferidas: aceitar
+parte ausente ou ignorar o mínimo de 5 MiB derrubam o teste correspondente.
+
+### 4.3 Access Keys pelo painel
+
+Criar credencial S3 era SQL direto no banco: o segredo passava por histórico de terminal e só quem
+tinha acesso ao banco abria um bucket. Agora três rotas, autenticadas por **sessão** (não por admin —
+a credencial é do dono logado; um admin criando credencial de outra conta emprestaria a sessão):
+
+| rota | o que faz |
+|---|---|
+| `POST /network/storage/access-keys` | cria; o corpo é `{bucket?, operations?}` (nulo = todos os buckets do dono; `operations` padrão `GET`) |
+| `GET /network/storage/access-keys` | lista as do dono — **sem segredo** |
+| `DELETE /network/storage/access-keys/{id}` | revoga; idempotente |
+
+**O segredo volta uma vez.** A resposta do `POST` é `{credential:{...}, secretKey:"..."}`; ele é
+gravado cifrado (AES-GCM do `SecretCipher`) e não é recuperável — a listagem mostra access key, escopo e
+estado, nunca o segredo. É o que permite o dono saber o que tem sem que a credencial vaze por tela,
+log ou histórico.
+
+**Escopo validado.** Verbo fora de `GET PUT DELETE LIST HEAD` é `400 InvalidArgument` e **nada é
+gravado**: uma credencial que "tem permissão" para um verbo que o gateway não entende seria uma
+credencial que falha depois, na primeira requisição do SDK. `operations` vazio é recusado por omissão
+(padrão `GET`), porque credencial sem verbo não faz nada e quem a cria acha que criou acesso.
+
+**Revogação com o dono na instrução.** O `UPDATE` leva `owner_user_id` no `WHERE` (`revoke(id,
+owner, agora)`): credencial de outra conta responde `404` e não é tocada — nem por uma corrida entre
+listar e alterar. É o defeito que o teste pegou antes: um `where id = ?` sozinho revogava o id de
+qualquer conta. Revogar duas vezes é o mesmo estado final, não erro.
+
+**Teto.** 20 ativas por conta (`409 STORAGE_ACCESS_KEY_LIMIT`). Revogadas não contam e não são podadas
+— são a trilha de quem usou o quê.
+
+**Prova:** `StorageAccessKeysTests` (6) — a credencial criada autentica no gateway (assinatura SigV4
+passa e a recusa é de autorização, nunca `SignatureDoesNotMatch`/`InvalidAccessKeyId`); listagem sem
+segredo e banco sem claro; revogada para de autenticar (`403 InvalidAccessKeyId`); credencial de outra
+conta não é revogada e continua viva; verbo desconhecido não grava; sem sessão é `401`. Mutação
+conferida: tirar o dono do `SELECT` da revogação derruba o teste da outra conta (antes: 404 → depois:
+200, a conta errada revogando).
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
@@ -166,13 +244,8 @@ Códigos: `AccessDenied`, `InvalidAccessKeyId`, `SignatureDoesNotMatch`, `NotImp
 
 ## 6. O que NÃO está entregue
 
-- **Multipart** — o maior item ausente; arquivos grandes por SDK que usa multipart por padrão
-  (>8 MB no boto3, >5 MiB no SDK Java) **falham**. Documentado aqui para que ninguém descubra em
-  produção.
 - **Presigned URLs para `GET` e `PUT` existem**; `DELETE`/`LIST` por URL não são emitidos de
-  propósito (link vazado não apaga nem lista). URL pré-assinada para **multipart** não existe porque
-  multipart não existe.
-- **Access Keys administradas pelo painel** — a tabela e o repositório existem; não há ainda rota de
-  painel para criar/revogar (a criação hoje é por SQL/admin direto). Lacuna declarada.
+  propósito (link vazado não apaga nem lista). URL pré-assinada **por parte** do multipart não existe:
+  o upload multipart é feito com credencial, não por link.
 - **Credenciais temporárias (STS)** — `X-Amz-Security-Token` não é processado.
 - **Quotas e rate limiting por credencial** — a rota herda o limitador global, não um por Access Key.
