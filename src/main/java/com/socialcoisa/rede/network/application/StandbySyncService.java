@@ -50,12 +50,24 @@ public class StandbySyncService {
 	private final Clock clock;
 	private final Duration refreshInterval;
 	private final long minBytes;
+	private final Duration cacheDuration;
+
+	/**
+	 * O último dump gerado e o instante em que ele foi gerado. #953 item 4: cada
+	 * {@code GET /network/standby/dump} rodava o dump inteiro do zero — um nó que perdia a conexão e
+	 * retomava fazia o banco de produção ser lido outra vez do começo. Agora o dump fica aqui por
+	 * {@code rede.network.standby.dump.cache-seconds} (10 min por padrão) e a retomada devolve <b>o
+	 * mesmo arquivo</b>; o digest da confirmação também sai daqui, então a retomada nunca junta metades
+	 * de dois dumps diferentes.
+	 */
+	private volatile CachedDump cached;
 
 	public StandbySyncService(StandbySnapshotRepository snapshots, NetworkAuthorityRepository authorities,
 			NetworkNodeRepository nodes, StandbyDumpSource source, StandbyFailureRecorder failures, AuditTrail audit,
 			Clock clock,
 			@Value("${rede.network.standby.refresh-hours:6}") long refreshHours,
-			@Value("${rede.network.standby.min-bytes:64}") long minBytes) {
+			@Value("${rede.network.standby.min-bytes:64}") long minBytes,
+			@Value("${rede.network.standby.dump.cache-seconds:600}") long cacheSeconds) {
 		this.snapshots = snapshots;
 		this.authorities = authorities;
 		this.nodes = nodes;
@@ -65,6 +77,11 @@ public class StandbySyncService {
 		this.clock = clock;
 		this.refreshInterval = Duration.ofHours(Math.max(1, refreshHours));
 		this.minBytes = Math.max(1, minBytes);
+		this.cacheDuration = Duration.ofSeconds(Math.max(0, cacheSeconds));
+	}
+
+	/** O dump em memória e quando ele foi gerado (relógio do serviço — o mesmo da cópia). */
+	private record CachedDump(byte[] bytes, String sha256, java.time.Instant at) {
 	}
 
 	/**
@@ -209,7 +226,9 @@ public class StandbySyncService {
 		}
 		byte[] dump;
 		try {
-			dump = source.dump(offset);
+			Trecho trecho = dumpCached(offset);
+			dump = trecho.body();
+			lastDigest.put(nodeId, trecho.sha256());
 		}
 		catch (RuntimeException unavailable) {
 			// Trabalho que FALHOU tem de sobreviver ao rollback, senão o painel mostraria "copiando"
@@ -278,16 +297,58 @@ public class StandbySyncService {
 	 */
 	@Transactional
 	public StandbySyncService.Copy download(String actorId, String nodeId, long offset) {
-		// A cópia COMEÇA aqui (offset 0 = o dump inteiro no servidor): sempre do primeiro byte,
-		// porque o digest é do dump inteiro. A retomada do nó grava o trecho a partir do que falta.
-		byte[] start = dump(actorId, nodeId, 0L);
-		byte[] body = offset <= 0 ? start : java.util.Arrays.copyOfRange(start, (int) Math.min(offset, start.length), start.length);
-		if (body.length == 0 && offset > 0) {
+		// A cópia COMEÇA aqui: o dump gerado (ou o cacheado) é a referência, e o trecho pedido sai dele.
+		// O digest é sempre o do dump INTEIRO, porque a retomada do nó junta os trechos num arquivo só.
+		byte[] body = dump(actorId, nodeId, offset);
+		// A referência é o dump do cache — o trecho veio dele, então o digest e o tamanho são os mesmos
+		// para o dump inteiro e para a retomada. Sem cache (fonte síncrona em teste) o que veio é tudo.
+		CachedDump referencia = cached;
+		String digest = referencia != null ? referencia.sha256() : sha256(body);
+		int total = referencia != null ? referencia.bytes().length : body.length;
+		lastDigest.putIfAbsent(nodeId, digest);
+		return new Copy(body, digest, total, (int) Math.min(Math.max(offset, 0), total),
+			snapshots.find(nodeId, currentAuthority()).orElse(null));
+	}
+
+	/**
+	 * O dump inteiro, do cache se ele ainda vale. A primeira leitura da janela gera e confere; as
+	 * retomadas seguintes devolvem o mesmo arquivo — mesmo digest, mesmos bytes.
+	 *
+	 * <p>Confiar no cache tem o custo que importa: entre dois pedidos dentro da janela, uma escrita nova
+	 * no banco não aparece. O teto é curto de propósito (10 min) e menor que o intervalo de refresh
+	 * (6 h); o que ele evita é o banco de produção sendo lido inteiro a cada tentativa de retomada.</p>
+	 */
+	private Trecho dumpCached(long offset) {
+		CachedDump atual = cached;
+		boolean valido = atual != null && cacheDuration.toMillis() > 0
+			&& Duration.between(atual.at(), clock.instant()).compareTo(cacheDuration) < 0;
+		CachedDump usar = atual;
+		if (!valido) {
+			byte[] gerado = source.dump(0L);
+			if (!source.verify()) {
+				throw new IllegalStateException(source.lastFailure() == null
+					? "o dump gerado nao carrega" : source.lastFailure());
+			}
+			usar = new CachedDump(gerado, sha256(gerado), clock.instant());
+			cached = usar;
+		}
+		if (offset <= 0) {
+			return new Trecho(usar.bytes(), usar.sha256(), usar.bytes().length);
+		}
+		if (offset >= usar.bytes().length) {
 			throw new ApiException(416, "STANDBY_OFFSET_BEYOND_DUMP", "A retomada começou depois do fim do dump.");
 		}
-		lastDigest.put(nodeId, sha256(start));
-		return new Copy(body, sha256(start), start.length, (int) Math.min(Math.max(offset, 0), start.length),
-			snapshots.find(nodeId, currentAuthority()).orElse(null));
+		return new Trecho(java.util.Arrays.copyOfRange(usar.bytes(), (int) offset, usar.bytes().length),
+			usar.sha256(), usar.bytes().length);
+	}
+
+	/** O que o nó pediu (a partir do offset) e a referência do dump inteiro de onde ele saiu. */
+	record Trecho(byte[] body, String sha256, int totalBytes) {
+	}
+
+	/** Descarta o dump em memória (teste e diagnóstico: forçar leitura nova do banco). */
+	public void forgetCachedDump() {
+		cached = null;
 	}
 
 	/** Digest SHA-256 em hex minúsculo — o formato que o nó compara e a tabela guarda. */

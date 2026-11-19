@@ -12,6 +12,7 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
+import com.socialcoisa.rede.network.domain.ObjectMetadata;
 import com.socialcoisa.rede.network.domain.StorageBucketPolicy;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StorageRebalance;
@@ -39,7 +40,7 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 
 	private static final String OBJECT_COLUMNS = """
 		id, bucket, object_key, content_type, bytes, sha256, state, created_by, created_at, updated_at, deleted_at,
-		version, superseded_by, expires_at
+		version, superseded_by, expires_at, metadata_json, cache_control, content_disposition
 		""";
 
 	/**
@@ -91,6 +92,17 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 
 	private static final String SET_EXPIRES = """
 		update network_storage_objects set expires_at = ? where id = ?
+		""";
+
+	/**
+	 * O que o cliente declarou no começo do upload. Escrever aqui, e não no {@code markStored}, é o
+	 * que faz o reenvio de um PUT interrompido (que reaproveita a linha PENDING) não herdar o
+	 * metadado da gravação anterior: cada upload declara o seu.
+	 */
+	private static final String SET_CLIENT_HEADERS = """
+		update network_storage_objects
+		set metadata_json = ?, cache_control = ?, content_disposition = ?
+		where id = ? and state = 'PENDING'
 		""";
 
 	private static final String SELECT_BUCKET_POLICY = """
@@ -314,6 +326,13 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		jdbc.update(INSERT_VERSION, id, bucket, key, contentType, createdBy, stamp, stamp, version);
 		return jdbc.query(SELECT_BY_ID, OBJECT_MAPPER, id).stream().findFirst().orElseThrow(
 			() -> new IllegalStateException("versao " + bucket + "/" + key + "#" + version + " invisivel apos inserir"));
+	}
+
+	@Override
+	public void setClientHeaders(String id, ObjectMetadata metadata, String cacheControl, String contentDisposition) {
+		// Nulo é "não declarou" e a leitura cai na política do tipo; o metadado vazio é gravado como
+		// JSON vazio para o reenvio limpar o da gravação anterior em vez de deixá-lo para trás.
+		jdbc.update(SET_CLIENT_HEADERS, metadata.toJson(), cacheControl, contentDisposition, id);
 	}
 
 	@Override
@@ -558,7 +577,8 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		nullableLong(rs, "bytes"), rs.getString("sha256"), StorageObjectState.valueOf(rs.getString("state")),
 		rs.getString("created_by"), instant(rs, "created_at"), instant(rs, "updated_at"),
 		instant(rs, "deleted_at"), rs.getLong("version"), rs.getString("superseded_by"),
-		instant(rs, "expires_at"));
+		instant(rs, "expires_at"), ObjectMetadata.fromJson(rs.getString("metadata_json")),
+		rs.getString("cache_control"), rs.getString("content_disposition"));
 
 	private static final RowMapper<StoragePlacement> PLACEMENT_MAPPER = (ResultSet rs, int rowNum) ->
 		new StoragePlacement(rs.getString("object_id"), rs.getInt("replica"), rs.getString("node_id"),

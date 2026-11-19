@@ -10,6 +10,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,10 +35,19 @@ import com.socialcoisa.rede.paporeto.domain.PapoTemaFala;
 @Transactional
 public class PapoRetoPersistenceAdapter implements PapoRetoRepository {
 
+	private static final Logger LOG = LoggerFactory.getLogger(PapoRetoPersistenceAdapter.class);
+
 	private static final String PREFIXO_FALA = "papo_f_";
 
 	/** Por página de leitura; o corte normal lê a janela de 7 dias de falas em poucas páginas. */
 	private static final int PAGINA = 2000;
+
+	/**
+	 * O freio de segurança da leitura da janela: a 2000 falas por página, o corte lê até 400 mil
+	 * falas — muito acima do volume da rede. É um TETO DE PROTEÇÃO, não um recorte de negócio: se
+	 * ele for atingido, o agregado sai incompleto e o corte grita no log.
+	 */
+	private static final int PAGINAS_MAXIMAS = 200;
 
 	private final SpringDataPapoFalaJpaRepository falas;
 
@@ -65,11 +76,17 @@ public class PapoRetoPersistenceAdapter implements PapoRetoRepository {
 		falas.saveAll(entidades);
 	}
 
+	/**
+	 * As falas da janela, em páginas, da mais antiga para a mais nova. A leitura vai até o fim
+	 * da janela (a página curta) e para no freio de segurança, avisando no log quando para por
+	 * ele: antes, a leitura parava em dez páginas em silêncio e as falas mais NOVAS ficavam de
+	 * fora — o agregado perdia justamente a matéria da recência.
+	 */
 	@Override
 	public List<Fala> falasEntre(Instant de, Instant ate) {
 		List<Fala> lidas = new ArrayList<>();
 		Set<String> idsVistos = new HashSet<>();
-		for (int pagina = 0; pagina < 10; pagina++) {
+		for (int pagina = 0; pagina < PAGINAS_MAXIMAS; pagina++) {
 			List<PapoFalaJpaEntity> lote = falas.falasEntre(de, ate, PageRequest.of(pagina, PAGINA));
 			for (PapoFalaJpaEntity entidade : lote) {
 				Fala fala = new Fala(entidade.hora(), entidade.expressao(), entidade.fonte(), entidade.autorId(),
@@ -79,9 +96,11 @@ public class PapoRetoPersistenceAdapter implements PapoRetoRepository {
 				}
 			}
 			if (lote.size() < PAGINA) {
-				break;
+				return lidas;
 			}
 		}
+		LOG.warn("Leitura da janela do Papo Reto parou no teto de {} páginas ({} falas lidas): o agregado "
+				+ "sai incompleto e pede janela menor ou teto maior", PAGINAS_MAXIMAS, lidas.size());
 		return lidas;
 	}
 

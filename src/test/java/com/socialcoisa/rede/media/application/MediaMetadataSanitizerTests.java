@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.zip.CRC32;
 
 import javax.imageio.ImageIO;
@@ -17,6 +19,7 @@ import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -70,11 +73,12 @@ class MediaMetadataSanitizerTests {
 	}
 
 	@Test
-	void videoSemPastaTemporariaNaoSobeComOsMetadados() {
+	void videoSemPastaTemporariaNaoSobeComOsMetadados(@TempDir Path dir) throws Exception {
 		// Sem onde gravar o temporario, o video pequeno nao pode voltar "como veio": isso publicaria
 		// os metadados que a limpeza existe para tirar.
-		var semPasta = sanitizer("ffmpeg", new MediaTemporaryFiles("/dev/null/nao-e-pasta", "/dev/null/nao-e-dados",
-			"/dev/null/nao-e-tmp", null));
+		Path arquivo = Files.createFile(dir.resolve("arquivo-nao-e-pasta"));
+		var semPasta = sanitizer("ffmpeg", new MediaTemporaryFiles(arquivo.resolve("configurada").toString(),
+			arquivo.resolve("dados").toString(), arquivo.resolve("tmp").toString(), null));
 		byte[] video = "ftypisom-corpo-de-video".getBytes(StandardCharsets.UTF_8);
 
 		MediaTemporaryFiles.UnavailableException failure = assertThrows(
@@ -212,10 +216,28 @@ class MediaMetadataSanitizerTests {
 		String out = new String(clean, java.nio.charset.StandardCharsets.UTF_8);
 
 		assertTrue(out.contains("<svg"));
+		assertTrue(out.contains("xmlns=\"http://www.w3.org/2000/svg\""));
 		assertTrue(out.contains("<circle"));
 		assertFalse(out.contains("<script"));
 		assertFalse(out.contains("onload"));
 		assertFalse(out.contains("alert("));
+	}
+
+	@Test
+	void preservesXlinkNamespaceOnSvgWhenXlinkHrefIsUsed() throws Exception {
+		byte[] svgWithXlink = """
+			<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 10 10">
+			  <defs><circle id="dot" cx="5" cy="5" r="2"/></defs>
+			  <use xlink:href="#dot"/>
+			</svg>
+			""".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+		byte[] clean = sanitizer.sanitize(svgWithXlink, "image/svg+xml", "xlink.svg");
+		String out = new String(clean, java.nio.charset.StandardCharsets.UTF_8);
+
+		assertTrue(out.contains("xmlns=\"http://www.w3.org/2000/svg\""));
+		assertTrue(out.contains("xmlns:xlink=\"http://www.w3.org/1999/xlink\""));
+		assertTrue(out.contains("xlink:href=\"#dot\""));
 	}
 
 	@Test

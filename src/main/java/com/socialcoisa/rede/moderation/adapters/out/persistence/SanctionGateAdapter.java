@@ -32,6 +32,12 @@ class SanctionGateAdapter implements SanctionGateReader {
 	}
 
 	@Override
+	public boolean suspended(String userId) {
+		return sanctions.findActiveByUser(userId)
+			.filter(s -> s.type() == com.socialcoisa.rede.moderation.domain.SanctionType.SUSPENDED).isPresent();
+	}
+
+	@Override
 	public Set<String> bannedAmong(Collection<String> userIds) {
 		// At most one active sanction per account, so "any active one blocks" is the same answer as
 		// banned(userId) for each id.

@@ -35,7 +35,10 @@ class AuthCookieAdvice implements ResponseBodyAdvice<Object> {
 			Class<? extends HttpMessageConverter<?>> selectedConverterType, ServerHttpRequest request,
 			ServerHttpResponse response) {
 		if (body instanceof AuthResponse auth) {
-			cookies.issue(auth.token(), auth.expiresAt(), auth.refreshToken(), auth.refreshExpiresAt())
+			var valores = auth.twoFactor() == null
+				? cookies.issue(auth.token(), auth.expiresAt(), auth.refreshToken(), auth.refreshExpiresAt())
+				: cookies.challenge(auth.twoFactor().challengeId(), auth.twoFactor().expiresAt());
+			valores
 				.forEach(value -> response.getHeaders().add(HttpHeaders.SET_COOKIE, value));
 		}
 		return body;

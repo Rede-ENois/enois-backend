@@ -1,0 +1,2 @@
+org.springframework.test.context.TestExecutionListener=\
+com.socialcoisa.rede.shared.web.TestDatabaseContextListener

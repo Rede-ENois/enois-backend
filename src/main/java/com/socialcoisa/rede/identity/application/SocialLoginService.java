@@ -25,7 +25,6 @@ import com.socialcoisa.rede.identity.adapters.out.oauth.OAuthProperties;
 import com.socialcoisa.rede.identity.application.port.in.LinkedProviderView;
 import com.socialcoisa.rede.identity.application.port.in.OAuthStartResponse;
 import com.socialcoisa.rede.identity.application.port.in.OAuthUseCase;
-import com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository;
 import com.socialcoisa.rede.identity.application.port.out.CredentialRepository;
 import com.socialcoisa.rede.identity.application.port.out.OAuthAuthorizationRequestRepository;
 import com.socialcoisa.rede.identity.application.port.out.StoredCredential;
@@ -56,15 +55,13 @@ public class SocialLoginService implements OAuthUseCase {
 	/** Tempo que o usuario tem para concluir a tela do provedor. */
 	private static final Duration STATE_TTL = Duration.ofMinutes(15);
 
-	private final Duration accessTokenTtl;
-	private final Duration refreshTokenTtl;
+	private final EmissorSessaoService emissorSessao;
 
 	private final List<TokenValidator> tokenValidators;
 	private final UserExternalIdentityRepository externalIdentityRepository;
 	private final OAuthAuthorizationRequestRepository authorizationRequestRepository;
 	private final UserProfileRepository userProfileRepository;
 	private final CredentialRepository credentialRepository;
-	private final AuthSessionRepository authSessionRepository;
 	private final PasswordHasher passwordHasher;
 	private final OAuthProperties oAuthProperties;
 	private final SiteDomains siteDomains;
@@ -77,28 +74,24 @@ public class SocialLoginService implements OAuthUseCase {
 	private final boolean signupEnabled;
 	private final SecureRandom secureRandom = new SecureRandom();
 
-	public SocialLoginService(@Value("${rede.auth.access-token-ttl-minutes:60}") int accessTokenTtlMinutes,
-			@Value("${rede.auth.refresh-token-ttl-days:30}") int refreshTokenTtlDays,
-			List<TokenValidator> tokenValidators,
+	public SocialLoginService(List<TokenValidator> tokenValidators,
 			UserExternalIdentityRepository externalIdentityRepository,
 			OAuthAuthorizationRequestRepository authorizationRequestRepository,
 			UserProfileRepository userProfileRepository,
 			CredentialRepository credentialRepository,
-			AuthSessionRepository authSessionRepository,
+			EmissorSessaoService emissorSessao,
 			PasswordHasher passwordHasher,
 			OAuthProperties oAuthProperties, SiteDomains siteDomains,
 			com.socialcoisa.rede.linkedin.application.LinkedInIntegrationService linkedin,
 			GitHubIdentityService githubIdentity, GitHubUserTokenService githubTokens,
 			ApplicationEventPublisher events, Clock clock,
 			@Value("${rede.auth.signup-enabled:true}") boolean signupEnabled) {
-		this.accessTokenTtl = Duration.ofMinutes(accessTokenTtlMinutes);
-		this.refreshTokenTtl = Duration.ofDays(refreshTokenTtlDays);
+		this.emissorSessao = emissorSessao;
 		this.tokenValidators = tokenValidators;
 		this.externalIdentityRepository = externalIdentityRepository;
 		this.authorizationRequestRepository = authorizationRequestRepository;
 		this.userProfileRepository = userProfileRepository;
 		this.credentialRepository = credentialRepository;
-		this.authSessionRepository = authSessionRepository;
 		this.passwordHasher = passwordHasher;
 		this.oAuthProperties = oAuthProperties;
 		this.siteDomains = siteDomains;
@@ -240,7 +233,7 @@ public class SocialLoginService implements OAuthUseCase {
 		AuthResponse response = request.isLinkRequest()
 			? attachIdentity(request.userId(), provider, validation)
 			: login(provider, validation, appleUserPayload);
-		rememberLinkedInAccess(provider, response, validation);
+		rememberLinkedInAccess(provider, validation);
 		return response;
 	}
 
@@ -257,7 +250,7 @@ public class SocialLoginService implements OAuthUseCase {
 		AuthResponse response = request.isLinkRequest()
 			? attachIdentity(request.userId(), provider, validation)
 			: login(provider, validation, null);
-		rememberLinkedInAccess(provider, response, validation);
+		rememberLinkedInAccess(provider, validation);
 		return response;
 	}
 
@@ -275,10 +268,11 @@ public class SocialLoginService implements OAuthUseCase {
 		events.publishEvent(new GitHubIdentityLinkedEvent(userId, validation.externalUserId()));
 	}
 
-	private void rememberLinkedInAccess(OAuthProvider provider, AuthResponse response,
-			TokenValidationResult validation) {
+	private void rememberLinkedInAccess(OAuthProvider provider, TokenValidationResult validation) {
 		if (provider == OAuthProvider.LINKEDIN && StringUtils.hasText(validation.accessToken())) {
-			linkedin.remember(response.user().id(), validation.externalUserId(), validation.accessToken(),
+			String userId = externalIdentityRepository.findUserIdByProviderAndExternalId(provider.name(), validation.externalUserId())
+				.orElseThrow(() -> new ApiException(409, "OAUTH_NOT_LINKED", "O vinculo do provedor nao foi encontrado."));
+			linkedin.remember(userId, validation.externalUserId(), validation.accessToken(),
 				validation.accessTokenExpiresAt());
 		}
 	}
@@ -524,21 +518,9 @@ public class SocialLoginService implements OAuthUseCase {
 	}
 
 	private AuthResponse createSession(String userId) {
-		Instant now = clock.instant();
-		Instant expiresAt = now.plus(accessTokenTtl);
-		Instant refreshExpiresAt = now.plus(refreshTokenTtl);
-		String token = randomToken();
-		String refreshToken = randomToken();
-		authSessionRepository.save(token, refreshToken, userId, now, expiresAt, refreshExpiresAt, null);
 		UserProfile profile = userProfileRepository.findById(userId)
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
-		// Quem entrou pelo provedor pode ja ter criado uma senha depois; a tela pergunta por ela
-		// quando existe, e pede para criar quando nao.
-		boolean hasPassword = credentialRepository.findByUserId(userId)
-			.map(StoredCredential::passwordUsable)
-			.orElse(false);
-		return new AuthResponse(token, refreshToken, expiresAt, refreshExpiresAt,
-			AuthUserView.from(profile, hasPassword));
+		return emissorSessao.emitir(profile, null);
 	}
 
 	private String randomToken() {

@@ -1,22 +1,30 @@
 package com.socialcoisa.rede.moderation.adapters.in.web;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.doReturn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -46,6 +54,14 @@ class SanctionFlowTests {
 
 	@Autowired
 	private AiVerdictApplicationService verdictApplication;
+
+	@Autowired
+	private JdbcTemplate jdbc;
+
+	private static final Instant INSTANTE_REVISAO = Instant.parse("2026-11-14T12:00:00Z");
+
+	@MockitoSpyBean
+	private Clock clock;
 
 	@DynamicPropertySource
 	static void adminAllowlist(DynamicPropertyRegistry registry) {
@@ -210,6 +226,107 @@ class SanctionFlowTests {
 		mockMvc.perform(get("/reports/mine").header("X-Session-Token", viewer.token()))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$[?(@.id == '" + reportId + "')].status").value("AUTO_PENALIZED"));
+	}
+
+	@ParameterizedTest
+	@CsvSource({"penalize,AUTO_PENALIZED,RESTRICTION", "warn,APPROVED,NONE", "ban,APPROVED,BAN"})
+	void acoesDiretasRetornamJsonERecusamRepeticao(String action, String reportStatus, String sanctionType)
+			throws Exception {
+		var auth = new TestAuthHelper(mockMvc, objectMapper);
+		var author = auth.authenticate("sflow_direct_" + action);
+		var viewer = auth.authenticate("sflow_direct_view_" + action);
+		var admin = auth.authenticate("sflow_admin");
+		String postId = publish(author, "Publicacao do contrato administrativo.", "sflow-direct-" + action);
+		String reportId = report(viewer, postId);
+		String path = "/admin/reports/" + reportId + "/" + action;
+
+		mockMvc.perform(post(path).header("X-Session-Token", admin.token()))
+			.andExpect(status().isOk())
+			.andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+			.andExpect(jsonPath("$.id").value(reportId))
+			.andExpect(jsonPath("$.reporterId").value(viewer.userId()))
+			.andExpect(jsonPath("$.targetType").value("POST"))
+			.andExpect(jsonPath("$.targetId").value(postId))
+			.andExpect(jsonPath("$.reason").value("DISCRIMINATION"))
+			.andExpect(jsonPath("$.status").value(reportStatus))
+			.andExpect(jsonPath("$.description").value("ofensa direcionada"))
+			.andExpect(jsonPath("$.createdAt").isString());
+
+		long expectedSanctions = "NONE".equals(sanctionType) ? 0L : 1L;
+		assertThat(sanctionCount(reportId)).isEqualTo(expectedSanctions);
+		if (expectedSanctions > 0) {
+			assertThat(jdbc.queryForObject("select type from user_sanctions where report_id = ?",
+				String.class, reportId)).isEqualTo(sanctionType);
+		}
+		mockMvc.perform(get("/feed/posts/" + postId).header("X-Session-Token", viewer.token()))
+			.andExpect("warn".equals(action) ? status().isOk() : status().isNotFound());
+		int auditCount = jdbc.queryForObject("select count(*) from audit_logs where target_id = ?",
+			Integer.class, postId);
+		int notificationCount = jdbc.queryForObject(
+			"select count(*) from notifications where user_id = ? and actor_id = ?",
+			Integer.class, author.userId(), admin.userId());
+
+		mockMvc.perform(post(path).header("X-Session-Token", admin.token()))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.code").value("ALREADY_REVIEWED"));
+		assertThat(sanctionCount(reportId)).isEqualTo(expectedSanctions);
+		assertThat(jdbc.queryForObject("select count(*) from audit_logs where target_id = ?",
+			Integer.class, postId)).isEqualTo(auditCount);
+		assertThat(jdbc.queryForObject(
+			"select count(*) from notifications where user_id = ? and actor_id = ?",
+			Integer.class, author.userId(), admin.userId())).isEqualTo(notificationCount);
+	}
+
+	@Test
+	void penalizacaoDiretaPersisteAutoriaHumana() throws Exception {
+		var auth = new TestAuthHelper(mockMvc, objectMapper);
+		var author = auth.authenticate("sflow_human_author");
+		var viewer = auth.authenticate("sflow_human_viewer");
+		var admin = auth.authenticate("sflow_admin");
+		String postId = publish(author, "Publicacao para verificar a autoria da decisao.", "sflow-human");
+		String reportId = report(viewer, postId);
+
+		// O relógio fixo vale só para esta decisão, sem envelhecer a fila dos outros cenários.
+		doReturn(INSTANTE_REVISAO).when(clock).instant();
+
+		mockMvc.perform(post("/admin/reports/" + reportId + "/penalize")
+				.header("X-Session-Token", admin.token()))
+			.andExpect(status().isOk());
+
+		var saved = reports.findById(reportId).orElseThrow();
+		assertThat(saved.reviewedBy()).isEqualTo(admin.userId());
+		assertThat(saved.reviewedAt()).isEqualTo(INSTANTE_REVISAO);
+		assertThat(saved.status().name()).isEqualTo("AUTO_PENALIZED");
+		assertThat(saved.resolutionNote()).contains("Penalização manual");
+		assertThat(jdbc.queryForObject(
+			"select count(*) from audit_logs where target_id = ? and actor_id = ? and metadata = ?",
+			Integer.class, postId, admin.userId(), "HUMAN:DISCRIMINATION")).isEqualTo(1);
+		String notification = jdbc.queryForObject(
+			"select body from notifications where user_id = ? and actor_id = ? and kind = 'SANCAO'",
+			String.class, author.userId(), admin.userId());
+		assertThat(notification).contains("por uma pessoa do time", "recorrer").doesNotContain("automatica");
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = {"penalize", "warn", "ban"})
+	void acoesDiretasRecusamNaoAdminSemEfeito(String action) throws Exception {
+		var auth = new TestAuthHelper(mockMvc, objectMapper);
+		var author = auth.authenticate("sflow_denied_" + action);
+		var viewer = auth.authenticate("sflow_denied_view_" + action);
+		String postId = publish(author, "Publicacao que continua disponivel.", "sflow-denied-" + action);
+		String reportId = report(viewer, postId);
+
+		mockMvc.perform(post("/admin/reports/" + reportId + "/" + action)
+				.header("X-Session-Token", viewer.token()))
+			.andExpect(status().isForbidden());
+		assertThat(reports.findById(reportId).orElseThrow().status().name()).isEqualTo("PENDING");
+		assertThat(sanctionCount(reportId)).isZero();
+		mockMvc.perform(get("/feed/posts/" + postId).header("X-Session-Token", viewer.token()))
+			.andExpect(status().isOk());
+	}
+
+	private long sanctionCount(String reportId) {
+		return jdbc.queryForObject("select count(*) from user_sanctions where report_id = ?", Long.class, reportId);
 	}
 
 	// --- helpers ---

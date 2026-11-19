@@ -31,9 +31,12 @@ import com.socialcoisa.rede.shared.blocks.BlockedUsersReader;
  * exibição deles valendo aqui — bloqueio do visitante esconde, desabafo e confissão não
  * revelam autor.
  *
- * A régua do extrator também vale na LEITURA: assunto que não nomeia conversa (o "http" que
- * entrou antes da correção) não aparece no ranking nem abre publicações — não é preciso
- * esperar a janela de 7 dias expirar para a tela ficar limpa.
+ * A pontuação do ranking NÃO é recalculada aqui: ela vem medida do corte, junto com a potência
+ * da véspera — é essa diferença de verdade que dá o status e o crescimento. A leitura só julga
+ * o que já está gravado, e por três réguas: o chão de pessoas distintas, a palavra onipresente
+ * (que o corte marcou como fala comum da rede) e a régua do extrator — assunto que não nomeia
+ * conversa (o "http" que entrou antes da correção) não aparece no ranking nem abre publicações,
+ * sem esperar a janela de 7 dias expirar para a tela ficar limpa.
  */
 @Component
 public class PapoRetoService {
@@ -109,25 +112,43 @@ public class PapoRetoService {
 		Instant agora = clock.instant();
 		Instant antes = agora.minus(PapoAssunto.MEIA_VIDA);
 
-		record Classificado(PapoAssunto assunto, double pontuacao, double antes) {
+		// A ORDEM sai da pontuação (a potência já ajustada pela discriminação); a TRAJETÓRIA sai
+		// da potência crua das duas pontas — são perguntas diferentes ("o que é relevante agora"
+		// e "como isso está se movendo") e por isso os dois números não se misturam.
+		record Classificado(PapoAssunto assunto, double pontuacao, double potencia, double potenciaAntes) {
 		}
 		List<Classificado> classificados = new ArrayList<>();
 		for (PapoAssunto assunto : repository.assuntosDoEscopo(escopo)) {
-			if (assunto.pessoas() < PapoAssunto.MINIMO_PESSOAS || !extractor.assuntoValido(assunto.subject())) {
+			if (assunto.pessoas() < PapoAssunto.MINIMO_PESSOAS || assunto.onipresente()
+					|| !extractor.assuntoValido(assunto.subject())) {
 				continue;
 			}
-			double pontuacao = worker.pontuacaoDe(assunto, agora);
-			double antesDaPotencia = worker.pontuacaoDe(assunto, antes);
-			classificados.add(new Classificado(assunto, pontuacao, antesDaPotencia));
+			// A linha do corte já traz a pontuação e a potência da véspera medidas pelo worker.
+			// A linha gravada antes da virada ainda não tem as duas: ela é pontuada pela régua
+			// antiga até o primeiro corte reescrevê-la.
+			double pontuacao;
+			double potencia;
+			double potenciaAntes;
+			if (assunto.legado()) {
+				pontuacao = worker.pontuacaoLegadaDe(assunto, agora);
+				potencia = pontuacao;
+				potenciaAntes = worker.pontuacaoLegadaDe(assunto, antes);
+			}
+			else {
+				pontuacao = assunto.pontuacao();
+				potencia = assunto.potencia();
+				potenciaAntes = assunto.potenciaAntes();
+			}
+			classificados.add(new Classificado(assunto, pontuacao, potencia, potenciaAntes));
 		}
 
 		List<SubjectView> ranking = new ArrayList<>();
 		for (Classificado classificado : classificados) {
-			PapoStatus status = PapoStatus.de(classificado.pontuacao(), classificado.antes());
+			PapoStatus status = PapoStatus.de(classificado.potencia(), classificado.potenciaAntes());
 			ranking.add(new SubjectView(classificado.assunto().subject(), status.name(), classificado.pontuacao(),
 					classificado.assunto().falasPost(), classificado.assunto().falasComentario(),
 					classificado.assunto().pessoas(), classificado.assunto().falasUltimaHora(),
-					crescimento(classificado.pontuacao(), classificado.antes())));
+					crescimento(classificado.potencia(), classificado.potenciaAntes())));
 		}
 		ranking.sort((a, b) -> Double.compare(b.pontuacao(), a.pontuacao()) != 0
 				? Double.compare(b.pontuacao(), a.pontuacao()) : a.subject().compareToIgnoreCase(b.subject()));
@@ -218,7 +239,7 @@ public class PapoRetoService {
 		return repository.falasTotais(agora.minus(Duration.ofDays(7)), agora);
 	}
 
-	/** O crescimento relativo: quanto a pontuação subiu desde a véspera (0 quando não subiu). */
+	/** O crescimento relativo: quanto a potência subiu desde a véspera (0 quando não subiu). */
 	private double crescimento(double agora, double antes) {
 		if (antes <= 0) {
 			return agora > 0 ? 100.0 : 0.0;

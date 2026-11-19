@@ -2,13 +2,11 @@ package com.socialcoisa.rede.media.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
-import java.util.List;
 
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -19,8 +17,8 @@ import com.socialcoisa.rede.shared.web.ApiException;
  * ({@code -c copy}). Depois desta etapa ele é reencodado no tamanho que o feed mostra, e o arquivo
  * menor é o que vai para o bucket.
  *
- * <p>A prova usa um script no lugar do binário, para rodar em todo ambiente (o CI não instala
- * ffmpeg): o script registra a invocação e grava um arquivo do tamanho que o teste manda. Assim dá
+ * <p>A prova usa um launcher nativo gerado pelo JDK no lugar do ffmpeg (o CI não o instala).
+ * A JVM do dublê registra a invocação e grava um arquivo do tamanho que o teste manda. Assim dá
  * para afirmar as três coisas que são o contrato desta etapa — quais argumentos chegam, qual saída
  * fica em disco e o que acontece quando a compressão não vale a pena.</p>
  */
@@ -28,6 +26,16 @@ class MediaFfmpegTranscodeTests {
 
 	/** 8 MB de entrada, acima do mínimo de 4 MB: o corte de 10% fica em 7,2 MB, então 7 MB salva e 7,9 MB não. */
 	private static final int INPUT_BYTES = 8_000_000;
+
+	@TempDir
+	static Path launchers;
+
+	private static FfmpegProcessoDeTeste processos;
+
+	@BeforeAll
+	static void prepararLaunchers() throws Exception {
+		processos = FfmpegProcessoDeTeste.criar(launchers);
+	}
 
 	@TempDir
 	Path dir;
@@ -39,11 +47,7 @@ class MediaFfmpegTranscodeTests {
 	@Test
 	void compressesTheVideoAndKeepsTheSmallerFile() throws Exception {
 		Path args = dir.resolve("args.txt");
-		Path ffmpeg = script("""
-			printf '%%s\\n' "$@" > '%s'
-			for last; do :; done
-			head -c 1000000 /dev/zero > "${last#file:}"
-			""".formatted(args));
+		Path ffmpeg = processos.ffmpeg(dir, args, 1_000_000, 1_000_000);
 		Path input = Files.write(dir.resolve("in.bin"), new byte[INPUT_BYTES]);
 		Path output = Files.createFile(dir.resolve("out.bin"));
 
@@ -69,15 +73,7 @@ class MediaFfmpegTranscodeTests {
 	@Test
 	void keepsTheRemuxWhenTheTranscodeDoesNotShrinkEnough() throws Exception {
 		Path args = dir.resolve("args.txt");
-		Path ffmpeg = script("""
-			printf '%%s\\n' "$@" >> '%s'
-			for last; do :; done
-			out="${last#file:}"
-			case "$*" in
-				*scale=*) head -c 7900000 /dev/zero > "$out" ;;
-				*) head -c 7000000 /dev/zero > "$out" ;;
-			esac
-			""".formatted(args));
+		Path ffmpeg = processos.ffmpeg(dir, args, 7_900_000, 7_000_000);
 		Path input = Files.write(dir.resolve("in.bin"), new byte[INPUT_BYTES]);
 		Path output = Files.createFile(dir.resolve("out.bin"));
 
@@ -94,15 +90,7 @@ class MediaFfmpegTranscodeTests {
 	@Test
 	void fallsBackToTheRemuxWhenTheTranscodeFails() throws Exception {
 		Path args = dir.resolve("args.txt");
-		Path ffmpeg = script("""
-			printf '%%s\\n' "$@" >> '%s'
-			for last; do :; done
-			out="${last#file:}"
-			case "$*" in
-				*scale=*) exit 1 ;;
-				*) head -c 7000000 /dev/zero > "$out" ;;
-			esac
-			""".formatted(args));
+		Path ffmpeg = processos.ffmpeg(dir, args, -1, 7_000_000);
 		Path input = Files.write(dir.resolve("in.bin"), new byte[INPUT_BYTES]);
 		Path output = Files.createFile(dir.resolve("out.bin"));
 
@@ -117,11 +105,7 @@ class MediaFfmpegTranscodeTests {
 	@Test
 	void doesNotTryToScaleAudio() throws Exception {
 		Path args = dir.resolve("args.txt");
-		Path ffmpeg = script("""
-			printf '%%s\\n' "$@" > '%s'
-			for last; do :; done
-			head -c 7000000 /dev/zero > "${last#file:}"
-			""".formatted(args));
+		Path ffmpeg = processos.ffmpeg(dir, args, 7_000_000, 7_000_000);
 		Path input = Files.write(dir.resolve("in.bin"), new byte[INPUT_BYTES]);
 		Path output = Files.createFile(dir.resolve("out.bin"));
 
@@ -136,11 +120,7 @@ class MediaFfmpegTranscodeTests {
 	@Test
 	void skipsTheTranscodeAboveTheConfiguredLimit() throws Exception {
 		Path args = dir.resolve("args.txt");
-		Path ffmpeg = script("""
-			printf '%%s\\n' "$@" > '%s'
-			for last; do :; done
-			head -c 7000000 /dev/zero > "${last#file:}"
-			""".formatted(args));
+		Path ffmpeg = processos.ffmpeg(dir, args, 7_000_000, 7_000_000);
 		Path input = Files.write(dir.resolve("in.bin"), new byte[INPUT_BYTES]);
 		Path output = Files.createFile(dir.resolve("out.bin"));
 
@@ -154,11 +134,7 @@ class MediaFfmpegTranscodeTests {
 	@Test
 	void aZeroLimitDisablesCompression() throws Exception {
 		Path args = dir.resolve("args.txt");
-		Path ffmpeg = script("""
-			printf '%%s\\n' "$@" > '%s'
-			for last; do :; done
-			head -c 7000000 /dev/zero > "${last#file:}"
-			""".formatted(args));
+		Path ffmpeg = processos.ffmpeg(dir, args, 7_000_000, 7_000_000);
 		Path input = Files.write(dir.resolve("in.bin"), new byte[INPUT_BYTES]);
 		Path output = Files.createFile(dir.resolve("out.bin"));
 
@@ -172,11 +148,7 @@ class MediaFfmpegTranscodeTests {
 	@Test
 	void skipsFilesAlreadySmallEnough() throws Exception {
 		Path args = dir.resolve("args.txt");
-		Path ffmpeg = script("""
-			printf '%%s\\n' "$@" > '%s'
-			for last; do :; done
-			head -c 1000000 /dev/zero > "${last#file:}"
-			""".formatted(args));
+		Path ffmpeg = processos.ffmpeg(dir, args, 1_000_000, 1_000_000);
 		Path input = Files.write(dir.resolve("in.bin"), new byte[1024]);
 		Path output = Files.createFile(dir.resolve("out.bin"));
 
@@ -204,15 +176,7 @@ class MediaFfmpegTranscodeTests {
 	@Test
 	void theTranscodeBudgetLeavesRoomForTheRemux() throws Exception {
 		Path args = dir.resolve("args.txt");
-		Path ffmpeg = script("""
-			printf '%%s\\n' "$@" >> '%s'
-			for last; do :; done
-			out="${last#file:}"
-			case "$*" in
-				*scale=*) sleep 30; head -c 1000000 /dev/zero > "$out" ;;
-				*) head -c 7000000 /dev/zero > "$out" ;;
-			esac
-			""".formatted(args));
+		Path ffmpeg = processos.demorado(dir, args, null, true);
 		Path input = Files.write(dir.resolve("in.bin"), new byte[INPUT_BYTES]);
 		Path output = Files.createFile(dir.resolve("out.bin"));
 
@@ -228,24 +192,17 @@ class MediaFfmpegTranscodeTests {
 			.isLessThan(20_000L);
 	}
 
-	private static MediaFfmpegRunner runner(Path ffmpeg, long transcodeMaxBytes) throws Exception {
-		// O probe lê a duração de um arquivo fixo (60s); os testes de duração usam o outro overload.
-		Path probeOutput = Files.createTempFile("probe-", ".txt");
-		Files.writeString(probeOutput, "60.0");
-		probeOutput.toFile().deleteOnExit();
+	private MediaFfmpegRunner runner(Path ffmpeg, long transcodeMaxBytes) throws Exception {
+		Path probeOutput = Files.writeString(dir.resolve("probe.txt"), "60.0");
 		return runner(ffmpeg, probeOutput, transcodeMaxBytes);
 	}
 
 	/**
-	 * Runner com o ffprobe apontando para {@code probeOutput}: o script {@code cat} devolve a
+	 * Runner com o ffprobe apontando para {@code probeOutput}: o processo Java devolve a
 	 * duração que o teste escreveu lá, simulando o ffprobe real sem depender de binário.
 	 */
-	private static MediaFfmpegRunner runner(Path ffmpeg, Path probeOutput, long transcodeMaxBytes) throws Exception {
-		Path probe = Files.createTempFile("ffprobe-", ".sh");
-		Files.writeString(probe, "#!/bin/sh\ncat '%s'\n".formatted(probeOutput.toAbsolutePath()),
-			StandardCharsets.UTF_8);
-		Files.setPosixFilePermissions(probe, PosixFilePermissions.fromString("rwx------"));
-		probe.toFile().deleteOnExit();
+	private MediaFfmpegRunner runner(Path ffmpeg, Path probeOutput, long transcodeMaxBytes) throws Exception {
+		Path probe = processos.probe(dir, null, probeOutput);
 		return new MediaFfmpegRunner(ffmpeg.toString(), probe.toString(), 1, transcodeMaxBytes,
 			Duration.ofSeconds(90));
 	}
@@ -259,11 +216,7 @@ class MediaFfmpegTranscodeTests {
 		Path args = dir.resolve("args-too-long.txt");
 		Path probeOutput = dir.resolve("probe-too-long.txt");
 		Files.writeString(probeOutput, "181.0");
-		Path ffmpeg = script("""
-			printf '%%s\\n' "$@" > '%s'
-			for last; do :; done
-			head -c 7000000 /dev/zero > "${last#file:}"
-			""".formatted(args));
+		Path ffmpeg = processos.ffmpeg(dir, args, 7_000_000, 7_000_000);
 		Path input = Files.write(dir.resolve("in-too-long.bin"), new byte[INPUT_BYTES]);
 		Path output = Files.createFile(dir.resolve("out-too-long.bin"));
 
@@ -309,11 +262,7 @@ class MediaFfmpegTranscodeTests {
 		Path probeArgs = dir.resolve("probe-args.txt");
 		Path probeOutput = dir.resolve("probe-audio.txt");
 		Files.writeString(probeOutput, "99999.0");
-		Path probe = Files.createTempFile("ffprobe-", ".sh");
-		Files.writeString(probe, "#!/bin/sh\nprintf '%%s\\n' \"$@\" > '%s'\ncat '%s'\n"
-			.formatted(probeArgs.toAbsolutePath(), probeOutput.toAbsolutePath()), StandardCharsets.UTF_8);
-		Files.setPosixFilePermissions(probe, PosixFilePermissions.fromString("rwx------"));
-		probe.toFile().deleteOnExit();
+		Path probe = processos.probe(dir, probeArgs, probeOutput);
 		Path input = Files.write(dir.resolve("in-audio.bin"), new byte[INPUT_BYTES]);
 		Path output = Files.createFile(dir.resolve("out-audio.bin"));
 
@@ -323,15 +272,9 @@ class MediaFfmpegTranscodeTests {
 		assertThat(Files.exists(probeArgs)).as("o probe não roda para áudio").isFalse();
 	}
 
-	private Path script(String body) throws Exception {
-		Path script = dir.resolve("ffmpeg-" + System.nanoTime() + ".sh");
-		Files.writeString(script, "#!/bin/sh\n" + body, StandardCharsets.UTF_8);
-		Files.setPosixFilePermissions(script, PosixFilePermissions.fromString("rwx------"));
-		return script;
-	}
 
 	/** ffmpeg dos testes de fluxo: grava 7MB no último argumento, como o remux faria. */
 	private Path script() throws Exception {
-		return script("for last; do :; done\nhead -c 7000000 /dev/zero > \"${last#file:}\"\n");
+		return processos.ffmpeg(dir, null, 7_000_000, 7_000_000);
 	}
 }

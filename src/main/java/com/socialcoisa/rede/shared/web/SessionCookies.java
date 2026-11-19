@@ -20,6 +20,7 @@ public class SessionCookies {
 
 	public static final String SESSION = "enois_session";
 	public static final String REFRESH = "enois_refresh";
+	public static final String TWO_FACTOR = "enois_2fa_challenge";
 
 	private final boolean secure;
 	private final Clock clock;
@@ -34,12 +35,19 @@ public class SessionCookies {
 		Instant now = clock.instant();
 		return List.of(
 			cookie(SESSION, token, "Lax", Duration.between(now, expiresAt)),
-			cookie(REFRESH, refreshToken, "Strict", Duration.between(now, refreshExpiresAt)));
+			cookie(REFRESH, refreshToken, "Strict", refreshExpiresAt == null ? Duration.ZERO : Duration.between(now, refreshExpiresAt)),
+			cookie(TWO_FACTOR, "", "Lax", Duration.ZERO));
+	}
+
+	public List<String> challenge(String id, Instant expiresAt) {
+		return List.of(cookie(SESSION, "", "Lax", Duration.ZERO), cookie(REFRESH, "", "Strict", Duration.ZERO),
+			cookie(TWO_FACTOR, id, "Lax", Duration.between(clock.instant(), expiresAt)));
 	}
 
 	/** Set-Cookie values that delete both cookies. */
 	public List<String> clear() {
-		return List.of(cookie(SESSION, "", "Lax", Duration.ZERO), cookie(REFRESH, "", "Strict", Duration.ZERO));
+		return List.of(cookie(SESSION, "", "Lax", Duration.ZERO), cookie(REFRESH, "", "Strict", Duration.ZERO),
+			cookie(TWO_FACTOR, "", "Lax", Duration.ZERO));
 	}
 
 	private String cookie(String name, String value, String sameSite, Duration maxAge) {

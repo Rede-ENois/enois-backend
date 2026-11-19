@@ -14,15 +14,21 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -65,6 +71,7 @@ import tools.jackson.databind.ObjectMapper;
 @SpringBootTest(properties = { "rede.media.storage=s3", "rede.media.s3.bucket=bucket-de-teste",
 		"rede.media.s3.publicBaseUrl=https://enois.exemplo.com/api/storage" })
 @AutoConfigureMockMvc
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class NetworkMediaTests {
 
 	static {
@@ -95,6 +102,50 @@ class NetworkMediaTests {
 
 	private TestAuthHelper auth;
 
+	private final String midiaOutraClasseId = "media_" + java.util.UUID.randomUUID();
+
+	private final String exclusaoOutraClasseId = "deletion_" + java.util.UUID.randomUUID();
+
+	@BeforeAll
+	void prepararMidiaDeOutraClasseComExclusaoPendente() {
+		// Simula estado deixado por outra classe antes de setUp; datas futuras impedem consumo por workers.
+		Instant futuro = Instant.now().plus(Duration.ofDays(3650));
+		jdbc.update("""
+			insert into media_assets (id, owner_id, file_name, mime_type, size_bytes, purpose, object_key,
+				cdn_url, status, delete_status, created_at, expires_at)
+			values (?, 'fixture-outra-classe', 'fixture.bin', 'application/octet-stream', 1, 'POST_VIDEO',
+				?, ?, 'READY', 'REQUESTED', ?, ?)
+			""", midiaOutraClasseId, midiaOutraClasseId + "/fixture.bin",
+			"https://cdn.test/" + midiaOutraClasseId + "/fixture.bin", futuro, futuro);
+		jdbc.update("""
+			insert into media_deletion_jobs (id, media_id, owner_id, status, attempts, created_at, next_attempt_at)
+			values (?, ?, 'fixture-outra-classe', 'REQUESTED', 0, ?, ?)
+			""", exclusaoOutraClasseId, midiaOutraClasseId, futuro, futuro);
+	}
+
+	@AfterAll
+	void limparSomenteMidiaEExclusaoDaRegressao() {
+		jdbc.update("delete from media_deletion_jobs where id = ? and media_id = ?",
+			exclusaoOutraClasseId, midiaOutraClasseId);
+		jdbc.update("delete from media_assets where id = ?", midiaOutraClasseId);
+		assertThat(jdbc.queryForObject("select count(*) from media_deletion_jobs where id = ?",
+			Integer.class, exclusaoOutraClasseId)).isZero();
+		assertThat(jdbc.queryForObject("select count(*) from media_assets where id = ?",
+			Integer.class, midiaOutraClasseId)).isZero();
+	}
+
+	@Test
+	void preparacaoPreservaMidiaDeOutraClasseComExclusaoPendente() {
+		assertThat(jdbc.queryForObject("select owner_id from media_assets where id = ?",
+			String.class, midiaOutraClasseId)).isEqualTo("fixture-outra-classe");
+		assertThat(jdbc.queryForObject("select delete_status from media_assets where id = ?",
+			String.class, midiaOutraClasseId)).isEqualTo("REQUESTED");
+		assertThat(jdbc.queryForObject("select media_id from media_deletion_jobs where id = ?",
+			String.class, exclusaoOutraClasseId)).isEqualTo(midiaOutraClasseId);
+		assertThat(jdbc.queryForObject("select status from media_deletion_jobs where id = ?",
+			String.class, exclusaoOutraClasseId)).isEqualTo("REQUESTED");
+	}
+
 	@BeforeEach
 	void setUp() {
 		auth = new TestAuthHelper(mockMvc, objectMapper);
@@ -104,11 +155,18 @@ class NetworkMediaTests {
 		jdbc.update("delete from network_node_keys");
 		jdbc.update("delete from network_provision_tokens");
 		jdbc.update("delete from network_nodes");
-		jdbc.update("delete from media_assets");
+		// Cada asset tem UUID próprio; mídias de outras classes podem ter jobs protegidos por FK.
 	}
 
 	@TestConfiguration
 	static class FakeStore {
+
+		// H2 persiste TIMESTAMP em micros: exigir despacho imediato não pode depender de arredondamento.
+		@Bean
+		@Primary
+		Clock relogioDaFixture() {
+			return Clock.fixed(Instant.now().truncatedTo(ChronoUnit.MICROS), ZoneOffset.UTC);
+		}
 
 		@Bean
 		@Primary

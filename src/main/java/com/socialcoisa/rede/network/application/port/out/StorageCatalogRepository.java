@@ -173,6 +173,10 @@ public interface StorageCatalogRepository {
 	/** Prazo de vida do objeto; nulo remove o prazo. */
 	void setExpiresAt(String id, Instant expiresAt);
 
+	/** Grava o metadado e os cabeçalhos que o cliente declarou no upload (V367). */
+	void setClientHeaders(String id, com.socialcoisa.rede.network.domain.ObjectMetadata metadata,
+			String cacheControl, String contentDisposition);
+
 	/** Todas as versões da chave em ordem crescente — o histórico, incluindo a corrente. */
 	List<StorageObject> versions(String bucket, String key);
 

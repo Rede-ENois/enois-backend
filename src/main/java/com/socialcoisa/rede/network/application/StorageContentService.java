@@ -121,22 +121,52 @@ public class StorageContentService {
 				"O catalogo diz que o objeto existe, mas nao ha copia registrada em no nenhum.");
 		}
 		CachePolicy policy = CachePolicy.forContentType(object.contentType());
-		return ResponseEntity.ok()
-			.header(HttpHeaders.CONTENT_TYPE, object.contentType())
-			.header(HttpHeaders.CACHE_CONTROL, policy.headerValue())
+		ResponseEntity.BodyBuilder builder = ResponseEntity.ok()
 			.header(HttpHeaders.CONTENT_LENGTH, String.valueOf(object.bytes()))
-			.header(HttpHeaders.ACCEPT_RANGES, "bytes")
-			.eTag(etag(object))
-			.lastModified(object.updatedAt() == null ? null : object.updatedAt().toEpochMilli())
-			.build();
+			.header(HttpHeaders.ACCEPT_RANGES, "bytes");
+		return finish(builder, object, policy, etag(object)).build();
 	}
 
+	/**
+	 * O {@code Content-Disposition} e o metadado do objeto (V367).
+	 *
+	 * <p>O {@code Content-Disposition} é o que faz {@code GET} devolver o nome de arquivo que o cliente
+	 * escolheu — antes o anexo vinha sem nome. O {@code Cache-Control} fica em {@link #cacheControl},
+	 * porque é lá que ele disputa com a política do tipo e um dos dois tem de vencer.</p>
+	 */
+	private static void declarados(ResponseEntity.BodyBuilder builder, StorageObject object) {
+		if (object.contentDisposition() != null && !object.contentDisposition().isBlank()) {
+			builder.header(HttpHeaders.CONTENT_DISPOSITION, object.contentDisposition());
+		}
+		for (java.util.Map.Entry<String, String> meta : object.metadata().values().entrySet()) {
+			// O nome já foi validado no upload (alfabeto do cabeçalho); o valor é o que o cliente
+			// guardou, e o que voltou no PUT é o que ele procura no HEAD.
+			builder.header("x-amz-meta-" + meta.getKey(), meta.getValue());
+		}
+	}
+
+	/**
+	 * Os cabeçalhos comuns ao GET (200 e 206) e ao HEAD: o que o cliente declarou e, por cima, o tipo,
+	 * o cache, o {@code ETag} e a data. Um lugar só porque um deles esquecer o metadado é o cliente
+	 * receber o objeto diferente no HEAD e no GET — e é o HEAD que o SDK usa para decidir.
+	 */
 	private static ResponseEntity.BodyBuilder finish(ResponseEntity.BodyBuilder builder, StorageObject object,
 			CachePolicy policy, String etag) {
+		declarados(builder, object);
 		return builder.header(HttpHeaders.CONTENT_TYPE, object.contentType())
-			.header(HttpHeaders.CACHE_CONTROL, policy.headerValue())
+			.header(HttpHeaders.CACHE_CONTROL, cacheControl(object, policy))
 			.eTag(etag)
 			.lastModified(object.updatedAt() == null ? null : object.updatedAt().toEpochMilli());
+	}
+
+	/**
+	 * O {@code Cache-Control} que sai: o declarado pelo cliente, ou a política do tipo.
+	 *
+	 * <p>Um valor só, nunca os dois: cabeçalho repetido deixa o cache escolher o que quiser, e o
+	 * declarado só perde quando não existe.</p>
+	 */
+	private static String cacheControl(StorageObject object, CachePolicy policy) {
+		return object.cacheControlOrNull() != null ? object.cacheControlOrNull() : policy.headerValue();
 	}
 
 	/** {@code If-None-Match} contra o ETag; {@code *} e a lista separada por vírgula valem. */

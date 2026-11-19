@@ -183,6 +183,8 @@ class NetworkStandbyTests {
 		// A fonte em uso pelo app passa a recusar: é o caso do dump desligado / banco fora. A
 		// cópia do início em diante usa esta mesma fonte, então a recusa acontece no primeiro
 		// byte lido pelo servidor.
+		// O cache do dump é descartado: um dump gerado antes deste teste não pode mascarar a falha.
+		servico().forgetCachedDump();
 		FailingSource failing = context.getBean(FailingSource.class);
 		failing.fail = true;
 		try {
@@ -299,7 +301,7 @@ class NetworkStandbyTests {
 			offset -> "abc".getBytes(StandardCharsets.UTF_8),
 			context.getBean(com.socialcoisa.rede.network.application.StandbyFailureRecorder.class),
 			context.getBean(com.socialcoisa.rede.shared.audit.AuditTrail.class),
-			java.time.Clock.systemUTC(), 6, 64);
+			java.time.Clock.systemUTC(), 6, 64, 600);
 
 		org.assertj.core.api.Assertions.assertThatThrownBy(() -> shortSource.download(admin.userId(), node.id(), 0))
 			.isInstanceOf(com.socialcoisa.rede.shared.web.ApiException.class)
@@ -325,6 +327,50 @@ class NetworkStandbyTests {
 				"sha256", sha256(DUMP)))))
 			.andExpect(status().isForbidden())
 			.andExpect(jsonPath("$.code").value("STANDBY_NODE_MISMATCH"));
+	}
+
+	/**
+	 * #953 item 4: o nó que não consegue gravar/restaurar conta o motivo, e a linha vira {@code FAILED}
+	 * em vez de ficar {@code SYNCING} para sempre. E a retomada sai do MESMO dump que a primeira leitura
+	 * gerou — entre duas leituras o banco é lido uma vez só.
+	 */
+	@Test
+	void noReportaFalhaERetomadaUsaOMesmoDumpEmCache() throws Exception {
+		var admin = adminSession();
+		declareQuorum(admin.userId());
+		var node = activeNode(admin.token(), "no-reserva-falha-" + admin.userId());
+		requestCopy(admin.token(), node.id());
+		servico().forgetCachedDump();
+
+		var inteiro = mockMvc.perform(get("/network/standby/dump").header("X-Node-Id", node.id())
+			.header("X-Node-Key", node.key()))
+			.andExpect(status().isOk())
+			.andReturn();
+		byte[] corpo = inteiro.getResponse().getContentAsByteArray();
+		String digest = inteiro.getResponse().getHeader("X-Standby-Sha256");
+
+		// A retomada sai do MESMO dump: digest igual e trecho igual à cauda dele.
+		var cauda = mockMvc.perform(get("/network/standby/dump").header("X-Node-Id", node.id())
+			.header("X-Node-Key", node.key()).param("offset", "20"))
+			.andExpect(status().isOk())
+			.andReturn();
+		assertThat(cauda.getResponse().getHeader("X-Standby-Sha256")).isEqualTo(digest);
+		assertThat(cauda.getResponse().getContentAsByteArray())
+			.isEqualTo(java.util.Arrays.copyOfRange(corpo, 20, corpo.length));
+
+		mockMvc.perform(post("/network/standby/failed").header("X-Node-Id", node.id())
+			.header("X-Node-Key", node.key()).contentType(MediaType.APPLICATION_JSON)
+			.content(objectMapper.writeValueAsString(Map.of("reason", "disco cheio no no"))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.state").value("FAILED"))
+			.andExpect(jsonPath("$.reason").value("disco cheio no no"));
+
+		// Chave de outro nó não reporta falha no nome deste.
+		var outro = activeNode(admin.token(), "no-reserva-outro-" + admin.userId());
+		mockMvc.perform(post("/network/standby/failed").header("X-Node-Id", outro.id())
+			.header("X-Node-Key", "chave-errada").contentType(MediaType.APPLICATION_JSON)
+			.content(objectMapper.writeValueAsString(Map.of("reason", "x"))))
+			.andExpect(status().is4xxClientError());
 	}
 
 	// ---------------------------------------------------------------- promoção com a cópia
@@ -439,6 +485,11 @@ class NetworkStandbyTests {
 
 	@Autowired
 	private org.springframework.context.ApplicationContext context;
+
+	/** O serviço real do contexto: descartar o cache do dump não pode ser um estado vazado entre testes. */
+	private com.socialcoisa.rede.network.application.StandbySyncService servico() {
+		return context.getBean(com.socialcoisa.rede.network.application.StandbySyncService.class);
+	}
 
 	@Autowired
 	private FailingSource dumpSource;

@@ -46,7 +46,7 @@ public class RiskEngine {
 	private static final Logger LOG = LoggerFactory.getLogger(RiskEngine.class);
 
 	/** Versão da política: entra em toda avaliação, para reconstruir a decisão depois. */
-	private static final String RULE_VERSION = "v1";
+	private static final String RULE_VERSION = "v2";
 
 	/** Intervalo entre duas ocorrências automáticas do mesmo caso (1 hora). */
 	private static final long ESCALATION_COOLDOWN_SECONDS = 3_600L;
@@ -106,13 +106,13 @@ public class RiskEngine {
 	 * "os controles fundamentais [...] devem continuar funcionando mesmo quando componentes de
 	 * análise avançada estiverem indisponíveis").
 	 */
-	public RiskAssessment assess(String userId, String action, String content) {
+	public RiskAssessment assess(String userId, String action, String content, String... contexto) {
 		try {
 			List<RiskSignal> sinais = new ArrayList<>();
 			if (timing.looksAutomated(userId)) {
 				sinais.add(RiskSignal.ROBOTIC_CADENCE);
 			}
-			if (content != null && duplication.isDuplicate(userId, content)) {
+			if (content != null && duplication.isDuplicate(userId, content, contexto)) {
 				sinais.add(RiskSignal.DUPLICATE_CONTENT);
 			}
 			if (sinais.isEmpty()) {

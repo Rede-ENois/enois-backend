@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -37,11 +38,21 @@ import com.socialcoisa.rede.paporeto.domain.PapoTemaFala;
  *   bucket da timeline volta sempre ao mesmo número.
  *
  * A pontuação soma os pesos configuráveis (30% posts, 25% comentários, 25% pessoas distintas,
- * 20% crescimento na última hora, por propriedade) com decaimento pela idade da última fala.
- * O chão de pessoas distintas trava a manipulação: expressão que só uma mão de contas
- * publicou não vira alta. O agregado existe por ESCOPO (global e uma por comunidade com fala
- * nova); a fala entra no escopo da sua comunidade e no global (o assunto do feed geral também
- * é papo da rede).
+ * 20% crescimento na última hora, por propriedade) com decaimento FALA A FALA pela idade dela —
+ * o assunto vale pelo que está vivo agora, e não pelo que acumulou. O corte também grava a
+ * potência do mesmo assunto avaliada 24 horas antes, nas falas que já existiam então: é a
+ * trajetória de verdade, e é dela que saem o status e o crescimento da tela.
+ *
+ * Três réguas seguram a qualidade do ranking, todas no corte:
+ * - TETO POR AUTOR: cada pessoa soma no máximo {@link PapoAssunto#TETO_FALAS_POR_AUTOR} falas do
+ *   assunto, então repetição não infla;
+ * - CHÃO DE PESSOAS: o assunto precisa de {@link PapoAssunto#MINIMO_PESSOAS} pessoas distintas;
+ * - DISCRIMINAÇÃO: o agregado grava quantas PUBLICAÇÕES distintas falam do assunto e quantas
+ *   publicações o escopo tem na janela; a fração é o que separa a conversa da fala comum, e é
+ *   o domínio que aplica a peneira na leitura.
+ *
+ * O agregado existe por ESCOPO (global e uma por comunidade com fala nova); a fala entra no
+ * escopo da sua comunidade e no global (o assunto do feed geral também é papo da rede).
  */
 @Component
 public class PapoRetoWorker {
@@ -56,6 +67,9 @@ public class PapoRetoWorker {
 
 	/** A janela agregada: quanto tempo o assunto continua "em alta" depois da última fala. */
 	private static final Duration JANELA = Duration.ofDays(7);
+
+	/** A última hora do corte: a matéria do termo de crescimento. */
+	private static final Duration HORA = Duration.ofHours(1);
 
 	private final List<PapoPublicacaoReader> fontes;
 
@@ -175,12 +189,10 @@ public class PapoRetoWorker {
 			porSubject.computeIfAbsent(fala.expressao(), chave -> new ArrayList<>()).add(fala);
 		}
 
-		Map<String, Long> falasUltimaHora = new HashMap<>();
-		for (PapoRetoRepository.Fala fala : falas) {
-			if (!fala.hora().isBefore(agora.minus(Duration.ofHours(1)))) {
-				falasUltimaHora.merge(fala.expressao(), 1L, Long::sum);
-			}
-		}
+		// O denominador da discriminação: quantas publicações o escopo tem na janela. É o que
+		// transforma "quantas falas" em "em quantas publicações esse assunto aparece".
+		long publicacoesDaJanela = falas.stream().map(PapoRetoRepository.Fala::publicacaoId).distinct().count();
+		Instant antesDoCorte = agora.minus(PapoAssunto.MEIA_VIDA);
 
 		List<PapoAssunto> assuntos = new ArrayList<>();
 		for (Map.Entry<String, List<PapoRetoRepository.Fala>> entry : porSubject.entrySet()) {
@@ -193,9 +205,21 @@ public class PapoRetoWorker {
 			doSubject.forEach(f -> autores.add(f.autorId()));
 			Instant ultimaFala = doSubject.stream().map(PapoRetoRepository.Fala::hora).max(Instant::compareTo)
 					.orElse(inicioDaJanela);
+			long publicacoes = doSubject.stream().map(PapoRetoRepository.Fala::publicacaoId).distinct().count();
+			long falasUltimaHora = contarEntre(doSubject, agora.minus(HORA), agora);
 
-			assuntos.add(new PapoAssunto(subject, falasPost, falasComentario, autores.size(),
-					falasUltimaHora.getOrDefault(subject, 0L), ultimaFala));
+			// A trajetória é medida, não deduzida: a potência de agora usa as falas de agora, a
+			// potência de 24 horas atrás usa as falas que existiam então, com o decaimento
+			// avaliado naquele instante. Todas as contagens da potência passam pelo teto por
+			// autor — o crescimento também, senão quem repete ainda infla um quinto da conta.
+			double potencia = PapoAssunto.potenciaDe(fontesPesadas(doSubject, agora), autores.size(),
+					contarComTeto(doSubject, agora.minus(HORA), agora), pesoPessoas, pesoCrescimento);
+			long pessoasAntes = pessoasAte(doSubject, antesDoCorte);
+			double potenciaAntes = PapoAssunto.potenciaDe(fontesPesadas(doSubject, antesDoCorte), pessoasAntes,
+					contarComTeto(doSubject, antesDoCorte.minus(HORA), antesDoCorte), pesoPessoas, pesoCrescimento);
+
+			assuntos.add(new PapoAssunto(subject, falasPost, falasComentario, autores.size(), falasUltimaHora,
+					ultimaFala, publicacoes, publicacoesDaJanela, potencia, potenciaAntes));
 		}
 		repository.salvarAssuntos(escopo, assuntos);
 		repository.apagarAssuntosSemFala(escopo);
@@ -216,9 +240,74 @@ public class PapoRetoWorker {
 		repository.reconciliarIntervalos(escopo, intervalos);
 	}
 
-	/** A pontuação do subject, exposta para o ranking e para teste (mesma fórmula do corte). */
-	public double pontuacaoDe(PapoAssunto assunto, Instant agora) {
-		return assunto.potencia(pesoPosts, pesoComentarios, pesoPessoas, pesoCrescimento, agora);
+	/**
+	 * As fontes pesadas do assunto no instante de referência, com o teto por autor: cada pessoa
+	 * contribui com as suas falas mais recentes até {@link PapoAssunto#TETO_FALAS_POR_AUTOR}, e
+	 * cada fala vale o peso da sua fonte decaído pela idade dela. Fala que ainda não existia no
+	 * instante de referência não conta — é assim que a potência de 24 horas atrás é medida.
+	 */
+	private double fontesPesadas(List<PapoRetoRepository.Fala> falas, Instant referencia) {
+		Map<String, List<PapoRetoRepository.Fala>> porAutor = new HashMap<>();
+		for (PapoRetoRepository.Fala fala : falas) {
+			if (!fala.hora().isAfter(referencia)) {
+				porAutor.computeIfAbsent(fala.autorId(), chave -> new ArrayList<>()).add(fala);
+			}
+		}
+		double fontes = 0;
+		for (List<PapoRetoRepository.Fala> doAutor : porAutor.values()) {
+			List<PapoRetoRepository.Fala> contadas = doAutor.stream()
+				.sorted(Comparator.comparing(PapoRetoRepository.Fala::hora).reversed())
+				.limit(PapoAssunto.TETO_FALAS_POR_AUTOR)
+				.toList();
+			for (PapoRetoRepository.Fala fala : contadas) {
+				fontes += pesoDaFonte(fala.fonte()) * PapoAssunto.decaimento(fala.hora(), referencia);
+			}
+		}
+		return fontes;
+	}
+
+	/** Quantas falas do assunto existem na faixa (de, ate] — é a contagem que a tela mostra. */
+	private static long contarEntre(List<PapoRetoRepository.Fala> falas, Instant de, Instant ate) {
+		return falas.stream().filter(f -> f.hora().isAfter(de) && !f.hora().isAfter(ate)).count();
+	}
+
+	/**
+	 * Quantas falas da faixa (de, ate] contam para a potência: a mesma contagem, com o teto por
+	 * autor. É esta a última hora do termo de crescimento.
+	 */
+	private static long contarComTeto(List<PapoRetoRepository.Fala> falas, Instant de, Instant ate) {
+		Map<String, Long> porAutor = new HashMap<>();
+		for (PapoRetoRepository.Fala fala : falas) {
+			if (fala.hora().isAfter(de) && !fala.hora().isAfter(ate)) {
+				porAutor.merge(fala.autorId(), 1L, Long::sum);
+			}
+		}
+		return porAutor.values()
+			.stream()
+			.mapToLong(contagem -> Math.min(contagem, PapoAssunto.TETO_FALAS_POR_AUTOR))
+			.sum();
+	}
+
+	/** Quantas pessoas distintas já tinham falado o assunto até o instante de referência. */
+	private static long pessoasAte(List<PapoRetoRepository.Fala> falas, Instant referencia) {
+		return falas.stream()
+			.filter(f -> !f.hora().isAfter(referencia))
+			.map(PapoRetoRepository.Fala::autorId)
+			.distinct()
+			.count();
+	}
+
+	/** O peso da fonte da fala: comentário e publicação pesam diferente, como na configuração. */
+	private double pesoDaFonte(String fonte) {
+		return "COMMENT".equals(fonte) ? pesoComentarios : pesoPosts;
+	}
+
+	/**
+	 * A potência pela régua ANTIGA, exposta para a leitura tolerar a linha gravada antes da
+	 * virada (até o primeiro corte reescrevê-la). Não é usada por linha nova nenhuma.
+	 */
+	public double pontuacaoLegadaDe(PapoAssunto assunto, Instant agora) {
+		return assunto.potenciaLegada(pesoPosts, pesoComentarios, pesoPessoas, pesoCrescimento, agora);
 	}
 
 	/** A hora cheia em UTC em que a publicação foi feita (o bucket). */

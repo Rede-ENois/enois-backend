@@ -94,9 +94,32 @@ public class StorageMultipartService {
 		this.root = Path.of(storageRoot).resolve("multipart");
 	}
 
-	/** O upload aberto, como o cliente o vê. */
+	/**
+	 * O upload aberto, como o cliente o vê.
+	 *
+	 * <p>{@code cabecalhos} é o que o cliente declarou no {@code CreateMultipartUpload} (V367):
+	 * metadado, {@code Cache-Control} e {@code Content-Disposition}. Vive só na memória desta resposta
+	 * e da conclusão, porque a tabela de uploads não precisa de coluna nova — o metadado só tem valor
+	 * quando o objeto nasce, na conclusão. Upload lido do banco (retomada) vem com
+	 * {@link StorageCatalogService.ClientHeaders#NONE}: é o que o cliente declarou ao começar e já
+	 * teria sido gravado se a conclusão já tivesse acontecido.</p>
+	 */
 	public record Upload(String uploadId, String bucket, String key, String contentType, String ownerUserId,
-			String credentialId, Instant createdAt, Instant expiresAt) {
+			String credentialId, Instant createdAt, Instant expiresAt,
+			StorageCatalogService.ClientHeaders cabecalhos) {
+
+		/** A mesma linha sem o que o cliente declarou — o formato de tudo que existia antes do V367. */
+		public Upload(String uploadId, String bucket, String key, String contentType, String ownerUserId,
+				String credentialId, Instant createdAt, Instant expiresAt) {
+			this(uploadId, bucket, key, contentType, ownerUserId, credentialId, createdAt, expiresAt,
+				StorageCatalogService.ClientHeaders.NONE);
+		}
+
+		/** Uma cópia com os cabeçalhos declarados pelo cliente (V367) — a linha do banco não muda. */
+		public Upload comCabeçalhos(StorageCatalogService.ClientHeaders declarados) {
+			return new Upload(uploadId, bucket, key, contentType, ownerUserId, credentialId, createdAt,
+				expiresAt, declarados == null ? StorageCatalogService.ClientHeaders.NONE : declarados);
+		}
 	}
 
 	/** Uma parte recebida. */
@@ -279,6 +302,9 @@ public class StorageMultipartService {
 
 		com.socialcoisa.rede.network.domain.StorageObject pendente = storage.beginUpload(upload.ownerUserId(),
 			upload.bucket(), upload.key(), upload.contentType());
+		// O metadado do CreateMultipartUpload vai para o objeto, como o do PUT simples: o cliente
+		// declarou uma vez, no começo, e espera reencontrá-lo no HEAD e no GET (V367).
+		storage.saveClientHeaders(pendente, upload.cabecalhos());
 		com.socialcoisa.rede.network.domain.StorageObject gravado;
 		try (InputStream corpo = Files.newInputStream(montado)) {
 			gravado = storage.finishUpload(pendente.id(), corpo, upload.ownerUserId());

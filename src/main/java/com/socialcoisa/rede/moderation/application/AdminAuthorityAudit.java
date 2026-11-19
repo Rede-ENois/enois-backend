@@ -51,6 +51,8 @@ public class AdminAuthorityAudit {
 	public static final String MODERATOR_ONLY = "MODERATOR_ONLY";
 	/** Motivos: sem sessão válida — o 401 do interceptor. */
 	public static final String SESSION_MISSING = "SESSION_MISSING";
+	/** Motivos: sessao limitada a consulta da decisao e ao recurso. */
+	public static final String SESSION_RESTRICTED = "SESSION_RESTRICTED";
 
 	private static final int MAX_TRACKED_USERS = 5_000;
 	private static final long MINUTE = 60_000L;
