@@ -1,11 +1,21 @@
 package com.socialcoisa.rede.profile.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.verify;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.IntStream;
 
 import org.hibernate.resource.jdbc.spi.StatementInspector;
 import org.junit.jupiter.api.Test;
@@ -14,6 +24,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 /**
  * O job do ranking roda a cada 30 minutos em cada instância e recalcula TODAS as contas: o custo
@@ -41,7 +52,7 @@ class ReputationRefreshQueryCountTests {
 	private static final int BASE_USERS = 8;
 
 	/** A varredura de ids de uma página — a única consulta da passada que não lê métrica. */
-	private static final String ID_SCAN = "SELECT ID FROM USERS ORDER BY ID LIMIT ? OFFSET ?";
+	private static final String ID_SCAN = "SELECT ID FROM USERS ";
 
 	@TestConfiguration
 	static class InspectorConfig {
@@ -93,6 +104,9 @@ class ReputationRefreshQueryCountTests {
 	@Autowired
 	private ReputationRefreshWorker worker;
 
+	@MockitoSpyBean
+	private ReputationService reputation;
+
 	@Autowired
 	private CountingInspector inspector;
 
@@ -112,7 +126,7 @@ class ReputationRefreshQueryCountTests {
 
 	/**
 	 * Consultas de MÉTRICA por página de dados. A varredura de ids fica de fora do numerador: o
-	 * worker pagina com `limit/offset` e só para quando uma página volta com menos de 500 ids,
+	 * worker pagina por id, com limite, e só para quando uma página volta com menos de 500 ids,
 	 * então quando o total de contas é múltiplo de 500 ele faz uma varredura a mais só para
 	 * descobrir que acabou. Essa sondagem não é custo por conta, e contá-la fazia a razão depender
 	 * de o total cair ou não num múltiplo de 500 — a base H2 é compartilhada e o total varia entre
@@ -131,7 +145,7 @@ class ReputationRefreshQueryCountTests {
 			if (!normalized.startsWith("SELECT")) {
 				continue;
 			}
-			if (ID_SCAN.equals(normalized)) {
+			if (normalized.startsWith(ID_SCAN)) {
 				idScans++;
 			}
 			else {
@@ -187,5 +201,71 @@ class ReputationRefreshQueryCountTests {
 		Integer written = jdbc.queryForObject(
 			"select count(*) from users where id like 'user_rankq_%' and reputation >= 0", Integer.class);
 		assertThat(written).isEqualTo(3 * BASE_USERS);
+	}
+
+	@Test
+	void percorreIdsSemOffsetMesmoComExclusaoEFalha() {
+		String prefixo = "r6" + UUID.randomUUID().toString().replace("-", "");
+		List<String> ids = IntStream.range(0, 501)
+			.mapToObj(i -> prefixo + "%04d".formatted(i))
+			.toList();
+		List<String> percorridos = new ArrayList<>();
+		List<Integer> tamanhos = new ArrayList<>();
+		AtomicBoolean removido = new AtomicBoolean();
+		Thread threadTeste = Thread.currentThread();
+
+		try {
+			for (String id : ids) {
+				jdbc.update("""
+						insert into users (id, username, name, email, is_admin, open_to_work, is_mentor,
+							email_verified_at, created_at, updated_at, reputation)
+						values (?, ?, 'Conta de teste', ?, false, false, false, current_timestamp,
+							current_timestamp, current_timestamp, -1)""",
+					id, id, id + "@ranking.test");
+			}
+
+			doAnswer(chamada -> {
+				@SuppressWarnings("unchecked")
+				Map<String, Integer> notas = new HashMap<>((Map<String, Integer>) chamada.callRealMethod());
+				if (Thread.currentThread() == threadTeste) {
+					Collection<String> lote = chamada.getArgument(0);
+					tamanhos.add(lote.size());
+					lote.stream().filter(id -> id.startsWith(prefixo)).forEach(percorridos::add);
+					if (lote.contains(ids.getFirst()) && removido.compareAndSet(false, true)) {
+						jdbc.update("delete from users where id = ?", ids.getFirst());
+						notas.remove(ids.getFirst());
+					}
+				}
+				return notas;
+			}).when(reputation).reputationsOf(anyCollection());
+			doThrow(new IllegalStateException("Falha simulada"))
+				.when(reputation).reputationOf(ids.getFirst());
+
+			inspector.reset();
+			worker.refreshRankingColumn();
+
+			List<String> varreduras = inspector.statements().stream()
+				.map(String::strip)
+				.map(String::toUpperCase)
+				.filter(sql -> sql.startsWith(ID_SCAN))
+				.toList();
+			assertThat(varreduras).hasSizeGreaterThanOrEqualTo(2);
+			assertThat(varreduras.getFirst()).isEqualTo("SELECT ID FROM USERS ORDER BY ID LIMIT ?");
+			assertThat(varreduras.subList(1, varreduras.size())).allSatisfy(sql ->
+				assertThat(sql).isEqualTo("SELECT ID FROM USERS WHERE ID > ? ORDER BY ID LIMIT ?"));
+			assertThat(tamanhos).contains(500).allMatch(tamanho -> tamanho > 0 && tamanho <= 500);
+			assertThat(percorridos).containsExactlyElementsOf(ids);
+			verify(reputation).reputationOf(ids.getFirst());
+			Integer atualizados = jdbc.queryForObject(
+				"select count(*) from users where id like ? and reputation >= 0", Integer.class, prefixo + "%");
+			assertThat(atualizados).isEqualTo(500);
+
+			percorridos.clear();
+			worker.refreshRankingColumn();
+			assertThat(percorridos).containsExactlyElementsOf(ids.subList(1, ids.size()));
+		}
+		finally {
+			jdbc.update("delete from users where id like ?", prefixo + "%");
+		}
 	}
 }

@@ -7,6 +7,7 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Component;
 
 import com.socialcoisa.rede.githubprofile.application.port.out.GitHubProfileGateway;
+import com.socialcoisa.rede.githubprofile.application.port.out.GitHubProfileGateway.GitHubOrganization;
 import com.socialcoisa.rede.githubprofile.application.port.out.GitHubProfileGateway.GitHubProfileReadme;
 import com.socialcoisa.rede.githubprofile.application.port.out.GitHubProfileGateway.GitHubUserRepository;
 
@@ -38,5 +39,15 @@ public class CachedGitHubProfileReader {
 	@Cacheable(cacheNames = "githubReadme", key = "#login.toLowerCase()", unless = "#result == null")
 	public Optional<GitHubProfileReadme> profileReadme(String login) {
 		return gateway.profileReadme(login);
+	}
+
+	@Cacheable(cacheNames = "githubRepositories", key = "'orgs-' + #login.toLowerCase()")
+	public List<GitHubOrganization> organizations(String login) {
+		return gateway.listUserOrganizations(login, MAX_PAGES);
+	}
+
+	@Cacheable(cacheNames = "githubRepositories", key = "'orgrepos-' + #login.toLowerCase() + '-' + #org.toLowerCase()")
+	public List<GitHubUserRepository> organizationRepositoryDetails(String login, String org) {
+		return gateway.listOrganizationRepositoryDetails(org, MAX_PAGES);
 	}
 }

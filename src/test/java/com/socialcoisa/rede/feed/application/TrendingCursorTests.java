@@ -64,6 +64,19 @@ class TrendingCursorTests {
 		assertInvalid(Base64.getUrlEncoder().encodeToString(value.getBytes(StandardCharsets.UTF_8)));
 	}
 
+	@Test
+	void rejectsCursorOverTheLengthCapBeforeDecoding() {
+		String huge = Base64.getUrlEncoder().encodeToString(new byte[4096]);
+		assertThat(huge.length()).isGreaterThan(TrendingCursor.MAX_CURSOR_LENGTH);
+		assertInvalid(huge);
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = { "não-é-base64url!", "<x>", "a b c", "%00" })
+	void rejectsNonBase64UrlAlphabetBeforeDecoding(String value) {
+		assertInvalid(value);
+	}
+
 	private void assertInvalid(String value) {
 		assertThatThrownBy(() -> TrendingCursor.decode(value)).isInstanceOfSatisfying(ApiException.class, error -> {
 			assertThat(error.status()).isEqualTo(400);

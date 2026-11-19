@@ -58,7 +58,8 @@ class HideRepostsCursorTests {
 	private final GetFeedService feed = new GetFeedService(posts, null, null, connections, profiles, seals,
 		interactions, null, new CursorCodec(), blockedUsers, communities, null, blogs, null, preferences, notes,
 		polls, reposts, media, mock(com.socialcoisa.rede.shared.sanctions.SanctionGateReader.class),
-		mock(com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository.class));
+		mock(com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository.class),
+		java.time.Clock.systemUTC());
 
 	private static final UserId READER = new UserId("synthetic_reader");
 	private static final Instant NEWEST = Instant.parse("2030-01-01T12:00:00Z");
@@ -160,6 +161,18 @@ class HideRepostsCursorTests {
 
 	private static Post repost(String id, Instant createdAt) {
 		return post(id, createdAt).markRepostOf("post_original", "autor_original", true);
+	}
+
+	@Test
+	void authorWithoutProfileShowsGenericLabelNotTheRawId() {
+		// Autor banido/anonimizado: nenhum perfil vem do repositório (autor "author" sem stub).
+		when(preferences.blockedTopics("synthetic_reader")).thenReturn(List.of());
+		when(posts.findActiveAll(any(), eq(2))).thenReturn(List.of(post("p1", NEWEST)));
+
+		FeedPage page = feed.getFeed(new GetFeedQuery(READER, Optional.empty(), 2, FeedTab.ALL));
+
+		assertThat(page.items()).hasSize(1);
+		assertThat(page.items().get(0).authorName()).isEqualTo("Usuário");
 	}
 
 	private static Post post(String id, Instant createdAt) {

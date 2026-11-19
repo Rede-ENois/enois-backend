@@ -69,6 +69,62 @@ class StorageOverviewTests {
 		return node(id, NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_STORAGE), declaredMb, freeMb, NOW);
 	}
 
+	/** Nó de armazenamento com o TAMANHO do volume medido, além do livre. */
+	private static NetworkNode storageComTotal(String id, int declaredMb, Long freeMb, Long totalMb) {
+		return new NetworkNode(id, "no-" + id, "user-" + id, NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_STORAGE),
+			"sudeste", "BR", "1.0.0", NOW, 4, 4096, declaredMb, 100, null, null, null, null, freeMb, totalMb, null,
+			0, null, null);
+	}
+
+	/**
+	 * §17 pede "nós online e offline". Antes, o nó parado saía da soma (correto) e também do
+	 * painel (errado): não havia como saber QUEM caiu. O declarado dele continua fora da capacidade
+	 * — o teste usa um declarado GIGANTE no nó offline justamente para provar que ele não vaza para
+	 * a soma enquanto aparece na lista.
+	 */
+	@Test
+	void no_offline_aparece_na_lista_e_nao_soma_capacidade() {
+		NetworkNode vivo = storage("nd_vivo", 1000, 500L);
+		NetworkNode morto = node("nd_morto", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_STORAGE), 9_000_000,
+			800L, NOW.minusSeconds(600));
+		when(nodes.list(anyInt())).thenReturn(List.of(vivo, morto));
+
+		var c = overviewNodes.capacity();
+
+		assertThat(c.onlineNodes()).isEqualTo(1);
+		assertThat(c.offlineNodes()).isEqualTo(1);
+		assertThat(c.offline()).extracting(StorageOverviewNodes.OfflineNode::nodeId).containsExactly("nd_morto");
+		assertThat(c.offline().get(0).secondsSinceSeen()).isEqualTo(600);
+		// O disco do offline não entra: a capacidade é a do vivo.
+		assertThat(c.declaredMb()).isEqualTo(1000);
+		assertThat(c.freeMb()).isEqualTo(500L);
+	}
+
+	/** Nó que nunca bateu coração: ausente é diferente de "há 0 segundos". */
+	@Test
+	void no_que_nunca_apareceu_tem_ausencia_nula_nao_zero() {
+		when(nodes.list(anyInt())).thenReturn(List.of(storage("nd_ok", 1000, 500L),
+			node("nd_nunca", NodeStatus.PENDING_APPROVAL, Set.of(NodeProfile.NODE_STORAGE), 10, null, null)));
+
+		var c = overviewNodes.capacity();
+
+		assertThat(c.offline()).extracting(StorageOverviewNodes.OfflineNode::nodeId).containsExactly("nd_nunca");
+		assertThat(c.offline().get(0).secondsSinceSeen()).isNull();
+		assertThat(c.offline().get(0).lastSeenAt()).isNull();
+	}
+
+	/** Nó de processamento não é storage: não entra na conta de online/offline do Storage. */
+	@Test
+	void no_de_processamento_nao_entra_no_online_offline() {
+		when(nodes.list(anyInt())).thenReturn(List.of(storage("nd_ok", 1000, 500L),
+			node("nd_worker", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_WORKER), 10, 10L, NOW.minusSeconds(600))));
+
+		var c = overviewNodes.capacity();
+
+		assertThat(c.onlineNodes()).isEqualTo(1);
+		assertThat(c.offline()).isEmpty();
+	}
+
 	@Test
 	void disponivel_e_o_medido_no_heartbeat_nao_o_declarado() {
 		when(nodes.list(anyInt())).thenReturn(List.of(storage("nd_a", 102400, 5000L), storage("nd_b", 204800, 3000L)));
@@ -160,6 +216,107 @@ class StorageOverviewTests {
 		assertThat(c.declaringNodes()).isEqualTo(2);
 	}
 
+	/**
+	 * Brief §7: "2 TB de disco, 500 GB reservados pessoalmente, 1,5 TB oferecidos".
+	 *
+	 * <p>A reserva é {@code total - declarado}. Sem o total medido, ela não existe — e o teste com os
+	 * DOIS nós distintos prova que a conta é de cada volume, não uma soma: 2 TB com 1,5 TB cedidos
+	 * reserva 0,5 TB, e 500 GB com 500 GB cedidos reserva zero. Somar os totais daria 2,5 TB e
+	 * somar declarados 2 TB, e o resultado seria o mesmo por acidente — é por isso que os lados são
+	 * desiguais.</p>
+	 */
+	@Test
+	void a_reserva_e_a_conta_de_cada_volume_total_menos_declarado() {
+		when(nodes.list(anyInt())).thenReturn(List.of(
+			storageComTotal("nd_grande", 1536000, 900000L, 2097152L),
+			storageComTotal("nd_pequeno", 512000, 400000L, 512000L)));
+
+		StorageOverviewNodes.Capacity c = overviewNodes.capacity();
+
+		assertThat(c.disks()).extracting(StorageOverviewNodes.Disco::nodeId).containsExactly("nd_grande", "nd_pequeno");
+		assertThat(c.disks().get(0).reservedMb()).isEqualTo(2097152L - 1536000L);
+		assertThat(c.disks().get(1).reservedMb()).isZero();
+		assertThat(c.unmeasuredDiskTotals()).isZero();
+	}
+
+	@Test
+	void sem_total_medido_a_reserva_e_desconhecida_e_nao_zero() {
+		// Runtime anterior à V341: conhece o livre, não o tamanho. Zero diria "não reservou nada".
+		when(nodes.list(anyInt())).thenReturn(List.of(storage("nd_a", 102400, 5000L)));
+
+		StorageOverviewNodes.Capacity c = overviewNodes.capacity();
+
+		assertThat(c.disks()).hasSize(1);
+		assertThat(c.disks().get(0).totalMb()).isNull();
+		assertThat(c.disks().get(0).reservedMb()).isNull();
+		assertThat(c.unmeasuredDiskTotals()).isEqualTo(1);
+		// O livre continua sendo conhecido: os dois "sem medida" não se confundem.
+		assertThat(c.unmeasuredNodes()).isZero();
+	}
+
+	@Test
+	void participante_que_cedeu_mais_que_o_volume_tem_reserva_zero_e_nao_negativa() {
+		// Divergência entre prometido e medido é diagnóstico; reserva negativa esconderia o erro.
+		when(nodes.list(anyInt())).thenReturn(List.of(storageComTotal("nd_a", 2048000, 50000L, 512000L)));
+
+		StorageOverviewNodes.Capacity c = overviewNodes.capacity();
+
+		assertThat(c.disks().get(0).reservedMb()).isZero();
+		assertThat(c.disks().get(0).totalMb()).isEqualTo(512000L);
+	}
+
+	/** Nó de armazenamento com o uso do conteúdo medido, além do declarado. */
+	private static NetworkNode storageComUso(String id, int declaredMb, Long usedMb) {
+		return new NetworkNode(id, "no-" + id, "user-" + id, NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_STORAGE),
+			"sudeste", "BR", "1.0.0", NOW, 4, 4096, declaredMb, 100, null, null, null, null, null, null, usedMb, 0,
+			null, null);
+	}
+
+	/**
+	 * Brief §7, "capacidade utilizada pelo Énóis" e "limite máximo de utilização": o uso é medido no
+	 * NÓ, e o percentual sai contra o que ele cedeu. Dois nós com lados desiguais — um em metade, um
+	 * acima do teto — provam que o percentual é de cada um e que passar de 100 aparece em vez de ser
+	 * cortado.
+	 */
+	@Test
+	void uso_do_conteudo_e_percentual_por_no_e_acima_do_teto_aparece() {
+		when(nodes.list(anyInt())).thenReturn(List.of(
+			storageComUso("nd_metade", 100000, 50000L),
+			storageComUso("nd_acima", 20000, 22000L)));
+
+		StorageOverviewNodes.Capacity c = overviewNodes.capacity();
+
+		assertThat(c.unmeasuredUsage()).isZero();
+		assertThat(c.disks().get(0).usedMb()).isEqualTo(50000L);
+		assertThat(c.disks().get(0).usedPercent()).isEqualTo(50.0);
+		assertThat(c.disks().get(1).usedMb()).isEqualTo(22000L);
+		// Acima do teto: 110%, não 100. Cortar esconderia justamente o nó que consome além do prometido.
+		assertThat(c.disks().get(1).usedPercent()).isEqualTo(110.0);
+	}
+
+	@Test
+	void uso_nao_medido_e_desconhecido_e_nao_zero() {
+		// Zero é resposta legítima (nó sem conteúdo); sem medida é outra coisa.
+		when(nodes.list(anyInt())).thenReturn(List.of(storage("nd_a", 102400, 5000L)));
+
+		StorageOverviewNodes.Capacity c = overviewNodes.capacity();
+
+		assertThat(c.disks().get(0).usedMb()).isNull();
+		assertThat(c.disks().get(0).usedPercent()).isNull();
+		assertThat(c.unmeasuredUsage()).isEqualTo(1);
+	}
+
+	@Test
+	void teto_zero_nao_vira_divisao_por_zero() {
+		// 0 no contrato significa "sem teto", não "teto de zero": não há percentual a calcular.
+		when(nodes.list(anyInt())).thenReturn(List.of(storageComUso("nd_sem_teto", 0, 5000L)));
+
+		StorageOverviewNodes.Capacity c = overviewNodes.capacity();
+
+		assertThat(c.disks().get(0).usedMb()).isEqualTo(5000L);
+		assertThat(c.disks().get(0).usedPercent()).isNull();
+	}
+
 	@Test
 	void uso_conta_so_copia_confirmada_e_nao_designacao() {
 		catalog = mock(StorageCatalogRepository.class);
@@ -172,7 +329,7 @@ class StorageOverviewTests {
 			"PENDING_REMOTE", new long[] { 1, 60 }));
 
 		scrubber = mock(StorageScrubber.class);
-		when(scrubber.scan(isNull(), anyInt())).thenReturn(new StorageScrubber.Report(2, 3, List.of(), 0, List.of()));
+		when(scrubber.scan(isNull(), anyInt())).thenReturn(new StorageScrubber.Report(2, 3, List.of(), 0, List.of(), Map.of()));
 		StoragePlacementService placement = mock(StoragePlacementService.class);
 		when(placement.targetReplicas()).thenReturn(2);
 
@@ -186,6 +343,52 @@ class StorageOverviewTests {
 		assertThat(o.replicasExpected()).isEqualTo(2);
 	}
 
+	/**
+	 * O painel do §17 pede "quantidade de buckets" e o uso por bucket. Bucket não é tabela: ele
+	 * existe enquanto tem objeto. O número é o tamanho do mapa, e por isso o teste usa dois buckets
+	 * com tamanhos DIFERENTES — uma implementação que devolvesse só a contagem total daria 2 para
+	 * qualquer um e passaria sem provar que a separação existe.
+	 */
+	@Test
+	void painel_traz_a_quantidade_e_o_uso_por_bucket() {
+		catalog = mock(StorageCatalogRepository.class);
+		when(catalog.summarizeObjects()).thenReturn(Map.of());
+		when(catalog.summarizePlacements()).thenReturn(Map.of());
+		when(catalog.summarizeBuckets()).thenReturn(Map.of(
+			"fotos", new long[] { 3, 700 },
+			"midia", new long[] { 1, 4000 }));
+		scrubber = mock(StorageScrubber.class);
+		when(scrubber.scan(isNull(), anyInt())).thenReturn(new StorageScrubber.Report(2, 0, List.of(), 0, List.of(), Map.of()));
+		StoragePlacementService placement = mock(StoragePlacementService.class);
+		when(placement.targetReplicas()).thenReturn(2);
+
+		var service = new StorageOverviewService(catalog, placement, overviewNodes, scrubber,
+			Clock.fixed(NOW, ZoneOffset.UTC));
+		var o = service.overview();
+
+		assertThat(o.buckets()).isEqualTo(2);
+		assertThat(o.usageByBucket()).containsEntry("fotos", new StorageOverviewService.BucketUsage(3, 700))
+			.containsEntry("midia", new StorageOverviewService.BucketUsage(1, 4000));
+	}
+
+	@Test
+	void painel_sem_bucket_mostra_zero_e_mapa_vazio() {
+		catalog = mock(StorageCatalogRepository.class);
+		when(catalog.summarizeObjects()).thenReturn(Map.of());
+		when(catalog.summarizePlacements()).thenReturn(Map.of());
+		when(catalog.summarizeBuckets()).thenReturn(Map.of());
+		scrubber = mock(StorageScrubber.class);
+		when(scrubber.scan(isNull(), anyInt())).thenReturn(new StorageScrubber.Report(2, 0, List.of(), 0, List.of(), Map.of()));
+		StoragePlacementService placement = mock(StoragePlacementService.class);
+		when(placement.targetReplicas()).thenReturn(2);
+
+		var o = new StorageOverviewService(catalog, placement, overviewNodes, scrubber,
+			Clock.fixed(NOW, ZoneOffset.UTC)).overview();
+
+		assertThat(o.buckets()).isZero();
+		assertThat(o.usageByBucket()).isEmpty();
+	}
+
 	@Test
 	void lacuna_de_copias_vem_da_mesma_varredura_do_operador() {
 		catalog = mock(StorageCatalogRepository.class);
@@ -193,7 +396,8 @@ class StorageOverviewTests {
 		when(catalog.summarizePlacements()).thenReturn(Map.of());
 		scrubber = mock(StorageScrubber.class);
 		when(scrubber.scan(isNull(), anyInt())).thenReturn(new StorageScrubber.Report(2, 3,
-			List.of(new StorageScrubber.Report.UnderReplicated("sob_1", 1, 1, List.of("nd_a"))), 0, List.of()));
+			List.of(new StorageScrubber.Report.UnderReplicated("sob_1", 1, 1, List.of("nd_a"))), 0, List.of(),
+			Map.of("SINGLE_DOMAIN", 1L)));
 		StoragePlacementService placement = mock(StoragePlacementService.class);
 		when(placement.targetReplicas()).thenReturn(2);
 

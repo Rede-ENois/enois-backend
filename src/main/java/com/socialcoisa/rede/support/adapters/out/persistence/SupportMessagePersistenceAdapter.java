@@ -37,4 +37,10 @@ class SupportMessagePersistenceAdapter implements SupportMessageRepository {
 	public SupportMessage save(SupportMessage message) {
 		return repository.save(SupportMessageJpaEntity.fromDomain(message)).toDomain();
 	}
+
+	@Override
+	public void deleteById(String id) {
+		repository.deleteById(id);
+		repository.flush();
+	}
 }

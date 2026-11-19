@@ -80,6 +80,21 @@ else
   warn "Sem pino da config assinada — o executor recusa toda config; rode install.sh --start para pinar"
 fi
 
+# 4b. Chave do nó (brief §10): a privada que o instalador gera no enroll. Sem ela o nó
+# fica com o certificado emitido para uma chave que não tem, e não consegue renovar com
+# o mesmo par. Não é FAIL: nó instalado antes desta versão não tem a chave e continua
+# operando com a API key — o aviso é para o operador não achar que a identidade existe.
+if [[ -s "$NODE_HOME/node.key" ]]; then
+  perms=$(stat -c '%a' "$NODE_HOME/node.key" 2>/dev/null || stat -f '%Lp' "$NODE_HOME/node.key" 2>/dev/null)
+  if [[ "$perms" =~ ^(600|640)$ ]]; then
+    pass "Chave do nó presente com permissão $perms"
+  else
+    warn "Chave do nó com permissão $perms — rode: chmod 600 $NODE_HOME/node.key"
+  fi
+else
+  warn "Sem chave do nó (node.key) — o nó opera só com a API key; reinstale com o install.sh atual para emitir o certificado"
+fi
+
 # 5. Permissões do diretório de estado
 dir_perms=$(stat -c '%a' "$NODE_HOME" 2>/dev/null || echo '?')
 if [[ "$dir_perms" == "700" ]]; then

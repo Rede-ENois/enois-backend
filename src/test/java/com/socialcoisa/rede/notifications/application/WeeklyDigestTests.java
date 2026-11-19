@@ -154,7 +154,7 @@ class WeeklyDigestTests {
 		String community = community("digest-optout", reader.userId());
 		communityPost(community, author.userId(), "Post um", 1);
 		communityPost(community, author.userId(), "Post dois", 1);
-		preferences.update(reader.userId(), false, null, null, null, null, null, null);
+		preferences.update(reader.userId(), false, null, null, null, null, null, null, null, null);
 
 		assertThat(digest.sendTo(reader.userId())).isEqualTo(Outcome.NOT_ELIGIBLE);
 		assertThat(digests.eligibleUserIds(digest.weekKey(), "", 1_000_000)).doesNotContain(reader.userId());
@@ -192,7 +192,7 @@ class WeeklyDigestTests {
 	void unsubscribeKeepsTheCommunityProjectOptIn() throws Exception {
 		var reader = auth.authenticate("digest_projects_reader");
 		try {
-			preferences.update(reader.userId(), null, null, null, null, null, null, true);
+			preferences.update(reader.userId(), null, null, null, null, null, null, true, null, null);
 			mockMvc.perform(get("/notifications/digest/unsubscribe").param("token", digest.unsubscribeToken(reader.userId())))
 				.andExpect(status().isOk());
 			assertThat(preferences.of(reader.userId()).weeklyDigest()).isFalse();

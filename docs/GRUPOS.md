@@ -285,6 +285,8 @@ existente foi alterada para suportar Grupos.
 sem os encerrados: filtro e limite na consulta e a contagem de membros numa consulta só para a
 página inteira. Como `mine` é rota fixa, o nome que geraria esse slug recebe sufixo numérico
 (`mine-2`), do mesmo jeito que um slug já em uso.
+`GET /groups` consulta contagens, papéis e pedidos pendentes em lote por página; os dados do leitor
+são resolvidos a cada requisição.
 
 **Frontend.** `/grupos` (descoberta pública e criação com logo/banner), `/grupos/$slug` (página
 pública, ingresso, edição com logo/banner foto ou HTML, tópicos, feed, comentários, reações,
@@ -376,6 +378,9 @@ de publicação está duplicado em `routes/feed.tsx` e `routes/comunidades.$comm
   também resolve mídia do feed principal e de comunidades de uma vez).
 - **Contadores desnormalizados** (`member_count`, `post_count`, `reactions`, `comments`): existem
   para o feed não fazer `count` a cada leitura; precisam ser atualizados na mesma transação da escrita.
+  Saída e remoção descontam um membro somente quando o `DELETE` da associação afeta uma linha.
+  Se ambas disputarem o mesmo membro, só a vencedora desconta; a notificação de remoção também
+  depende de uma associação efetivamente excluída.
 - **Composer duplicado no front**: na Etapa 5, extrair um `PostComposer` em vez de copiar a terceira vez.
 - **O pod do backend está atrás**: nada de backend novo chega ao ar enquanto o rollout não acontecer.
   A validação de migração é feita na bancada MariaDB (`enois-bench66`, porta 3411) — a V81 foi

@@ -19,6 +19,8 @@ public final class PostContentLimits {
 	private static final Map<PostType, Integer> POR_TIPO = Map.of(
 		PostType.DIVERTIDO, 400,
 		PostType.MOMENT, 500,
+		// Instante: efêmero de 1h — mesma leveza do Momento.
+		PostType.INSTANTE, 500,
 		// Enquete: o titulo da enquete (as alternativas têm limite proprio no PublishPostService).
 		PostType.POLL, 400,
 		PostType.REVIEW, 600,

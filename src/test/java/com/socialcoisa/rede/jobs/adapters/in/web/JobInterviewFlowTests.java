@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.jobs.adapters.in.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -12,6 +13,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -21,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -32,6 +35,8 @@ import com.socialcoisa.rede.calendar.domain.CalendarEntrySource;
 import com.socialcoisa.rede.calendar.domain.CalendarKind;
 import com.socialcoisa.rede.calendar.domain.CalendarScope;
 import com.socialcoisa.rede.identity.application.EmailService;
+import com.socialcoisa.rede.jobs.application.port.out.JobInterviewRepository;
+import com.socialcoisa.rede.jobs.domain.JobInterview;
 import com.socialcoisa.rede.profile.application.ReputationService;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
@@ -53,6 +58,7 @@ class JobInterviewFlowTests {
 	@Autowired MockMvc mockMvc;
 	@Autowired ObjectMapper objectMapper;
 	@Autowired CalendarEntryRepository entries;
+	@Autowired JobInterviewRepository interviews;
 
 	@MockitoBean ReputationService reputationService;
 	@MockitoBean EmailService emailService;
@@ -231,6 +237,53 @@ class JobInterviewFlowTests {
 		assertThat(entryOf(candidate.userId(), first).startsAt()).isEqualTo(moved);
 	}
 
+	@Test
+	void cancellingASecondInterviewOfTheSameApplicationKeepsBothInTheHistory() throws Exception {
+		var employer = auth.authenticate("int_again_employer");
+		var candidate = auth.authenticate("int_again_candidate");
+		auth.activateProfessional(candidate);
+
+		String jobId = createJob(employer);
+		String applicationId = apply(jobId, candidate);
+
+		String first = schedule(jobId, applicationId, employer, STARTS, ENDS);
+		cancel(jobId, applicationId, first, employer);
+
+		Instant later = STARTS.plus(Duration.ofDays(2));
+		String second = schedule(jobId, applicationId, employer, later, later.plus(Duration.ofHours(1)));
+		assertThat(second).isNotEqualTo(first);
+
+		cancel(jobId, applicationId, second, employer);
+
+		mockMvc.perform(get(interviewPath(jobId, applicationId)).header("X-Session-Token", employer.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.length()").value(2))
+			.andExpect(jsonPath("$[0].status").value("CANCELLED"))
+			.andExpect(jsonPath("$[1].status").value("CANCELLED"));
+		assertThat(entryOf(candidate.userId(), second).active()).isFalse();
+		assertThat(entryOf(employer.userId(), second).active()).isFalse();
+
+		// Com as duas canceladas, a candidatura volta a aceitar uma entrevista nova.
+		String third = schedule(jobId, applicationId, employer, later, later.plus(Duration.ofHours(1)));
+		assertThat(third).isNotIn(first, second);
+	}
+
+	@Test
+	void theDatabaseRefusesASecondScheduledInterviewForTheSameApplication() throws Exception {
+		var employer = auth.authenticate("int_dup_employer");
+		var candidate = auth.authenticate("int_dup_candidate");
+		auth.activateProfessional(candidate);
+
+		String jobId = createJob(employer);
+		String applicationId = apply(jobId, candidate);
+		schedule(jobId, applicationId, employer, STARTS, ENDS);
+
+		JobInterview duplicate = JobInterview.schedule("jint_dup_" + applicationId, applicationId, jobId,
+			candidate.userId(), employer.userId(), STARTS, ENDS, ZoneId.of(ZONE), null, Instant.now());
+
+		assertThatThrownBy(() -> interviews.save(duplicate)).isInstanceOf(DataIntegrityViolationException.class);
+	}
+
 	private String interviewPath(String jobId, String applicationId) {
 		return "/jobs/" + jobId + "/applications/" + applicationId + "/interview";
 	}
@@ -249,6 +302,14 @@ class JobInterviewFlowTests {
 			.andExpect(status().isCreated())
 			.andReturn();
 		return objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asText();
+	}
+
+	private void cancel(String jobId, String applicationId, String interviewId, TestAuthHelper.AuthSession employer)
+			throws Exception {
+		mockMvc.perform(delete(interviewPath(jobId, applicationId) + "/" + interviewId)
+				.header("X-Session-Token", employer.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("CANCELLED"));
 	}
 
 	private CalendarEntry entryOf(String ownerId, String interviewId) {

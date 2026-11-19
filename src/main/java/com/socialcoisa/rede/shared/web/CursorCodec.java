@@ -11,6 +11,17 @@ import org.springframework.util.StringUtils;
 @Component
 public class CursorCodec {
 
+	/**
+	 * Teto do cursor aceito. O cursor legitimo e um ISO-8601 (20-24 chars) ou o par
+	 * instante|desempate em base64url (pouco mais de 50). 256 da folga larga e mantem a
+	 * entrada longe de qualquer buffer grande no stub intrinseco de decode Base64
+	 * (CVE-2026-114938).
+	 */
+	static final int MAX_CURSOR_LENGTH = 256;
+
+	/** Alfabeto base64url; recusar antes do decode evita passar lixo ao decoder nativo. */
+	private static final java.util.regex.Pattern BASE64URL = java.util.regex.Pattern.compile("[A-Za-z0-9_-]+={0,2}");
+
 	public Optional<Instant> decode(String cursor) {
 		return decodePage(cursor).map(PageCursor::instant);
 	}
@@ -31,11 +42,17 @@ public class CursorCodec {
 		if (!StringUtils.hasText(cursor)) {
 			return Optional.empty();
 		}
+		if (cursor.length() > MAX_CURSOR_LENGTH) {
+			throw new ApiException(400, "INVALID_CURSOR", "Cursor invalido.");
+		}
 		try {
 			return Optional.of(new PageCursor(Instant.parse(cursor), null));
 		}
 		catch (RuntimeException notAnInstant) {
 			// Formato composto; se tambem nao decodificar, o cursor e invalido.
+			if (!BASE64URL.matcher(cursor).matches()) {
+				throw new ApiException(400, "INVALID_CURSOR", "Cursor invalido.");
+			}
 			try {
 				String decoded = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8);
 				int separator = decoded.indexOf('|');

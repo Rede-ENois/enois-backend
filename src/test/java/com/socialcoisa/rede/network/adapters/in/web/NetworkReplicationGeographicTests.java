@@ -14,6 +14,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -70,7 +71,7 @@ class NetworkReplicationGeographicTests {
 	@BeforeEach
 	void setUp() {
 		auth = new TestAuthHelper(mockMvc, objectMapper);
-		jdbc.update("delete from network_region_states");
+		limparEstadoRegional();
 		jdbc.update("delete from network_content_snapshots");
 		jdbc.update("delete from network_content_versions");
 		jdbc.update("delete from network_node_keys");
@@ -78,6 +79,17 @@ class NetworkReplicationGeographicTests {
 		jdbc.update("delete from network_nodes");
 		jdbc.update("delete from audit_logs where action like 'NETWORK_REGION_%' "
 				+ "or action in ('SYNC_DIVERGENCE', 'SYNC_RECOVERED')");
+	}
+
+	/**
+	 * A base H2 é compartilhada entre as classes de teste: região declarada fora de serviço aqui
+	 * muda o resultado de quem roda depois (nó em região fora de serviço não soma capacidade nem
+	 * recebe despacho). Limpar só antes do próprio teste deixa a declaração para o próximo —
+	 * o mesmo conserto da NetworkRegionTests.
+	 */
+	@AfterEach
+	void limparEstadoRegional() {
+		jdbc.update("delete from network_region_states");
 	}
 
 	// ---------------------------------------------------------------- a fila da varredura

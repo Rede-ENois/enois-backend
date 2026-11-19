@@ -259,7 +259,7 @@ term_regressao() {
 # recortar e ordenar, não reinterpretar o documento.
 config_signature() {
   # config_signature <config-json>: imprime "canonical<TAB>assinatura"; 1 se faltar campo.
-  local format_version config_version node_id profiles cpu memory disk bandwidth tasks routes issued_at ttl term disk_free signature
+  local format_version config_version node_id profiles cpu memory disk bandwidth tasks routes issued_at ttl term disk_free disk_total signature
   format_version=$(json_number "$1" formatVersion)
   config_version=$(json_number "$1" configVersion)
   node_id=$(json_field "$1" nodeId)
@@ -289,12 +289,29 @@ config_signature() {
     disk_free='ausente'
   fi
   signature=$(json_field "$1" signature)
+  # diskTotalMb (formato 6) vem DEPOIS do disco livre: o tamanho do volume, ao lado do que está
+  # livre nele. Sem ele o nó não sabe quanto o participante reservou para si -- só o livre, que
+  # muda a cada arquivo gravado. Mesma regra de ausência do formato 5: "0" diria um volume de
+  # tamanho zero, e "ausente" diz que este Control Plane ainda não mede o total.
+  if grep -q '"diskTotalMb":[0-9]' <<< "$1"; then
+    disk_total=$(json_number "$1" diskTotalMb)
+  else
+    disk_total='ausente'
+  fi
   [[ -n "$format_version" && -n "$config_version" && -n "$node_id" && -n "$cpu" \
       && -n "$memory" && -n "$disk" && -n "$bandwidth" && -n "$issued_at" \
       && -n "$ttl" && -n "$term" && -n "$signature" ]] || return 1
-  printf '%s|%s|%s|[%s]|%s|%s|%s|%s|[%s]|[%s]|%s|%s|%s|%s\t%s' \
+  local canonical
+  canonical=$(printf '%s|%s|%s|[%s]|%s|%s|%s|%s|[%s]|[%s]|%s|%s|%s|%s|%s' \
     "$format_version" "$config_version" "$node_id" "$profiles" "$cpu" "$memory" "$disk" \
-    "$bandwidth" "$tasks" "$routes" "$issued_at" "$ttl" "$term" "$disk_free" "$signature"
+    "$bandwidth" "$tasks" "$routes" "$issued_at" "$ttl" "$term" "$disk_free" "$disk_total")
+  # storageBandwidth (formato 7) vem DEPOIS do tamanho do volume: a banda própria de cada tipo
+  # de storage node (brief §6). Formato <= 6 não tinha a lista e não pode ganhá-la aqui --
+  # acrescentá-la mudaria a linha de uma config antiga e a assinatura deixaria de conferir.
+  if [[ "$format_version" -ge 7 ]]; then
+    canonical="$canonical|[$(json_list_sorted "$1" storageBandwidth)]"
+  fi
+  printf '%s\t%s' "$canonical" "$signature"
 }
 
 json_list_sorted() {
@@ -657,7 +674,7 @@ config_disk_mb() {
 }
 
 bandwidth_args() {
-  # bandwidth_args <config-json>: argumento de limite de taxa do curl, um por linha;
+  # bandwidth_args <config-json> [payload-json]: argumento de limite de taxa do curl, um por linha;
   # vazio quando o participante não declarou banda (0 = sem teto). O limite declarado
   # é o que ele aceitou ceder de REDE, e o runtime é quem transfere: baixar corpo de
   # conteúdo e subir resultado de mídia passam todos pelo mesmo teto, em
@@ -667,9 +684,47 @@ bandwidth_args() {
   # concorrentes competindo pelo mesmo teto.
   local mbps kbps
   mbps=$(json_number "$1" bandwidthMbps)
+  # Teto POR TRANSFERENCIA (brief §16): o rebalanceamento pede quanto ceder para um objeto
+  # especifico, e o nó aplica o MENOR entre ele e o que declarou. Sem este passo o teto da
+  # transferência era gravado pelo CP e nunca chegava ao nó.
+  local transfer_mbps
+  transfer_mbps=$(json_number "$2" bandwidthLimitMbps)
+  if [[ -n "$transfer_mbps" && "$transfer_mbps" != 0 ]]; then
+    if [[ -z "$mbps" || "$mbps" == 0 ]] || (( transfer_mbps < mbps )); then
+      mbps="$transfer_mbps"
+    fi
+  fi
+  # O teto do TIPO (formato 7, brief §6) vence a banda geral: é o que o participante reservou
+  # para este tipo de máquina. Tipo sem limite próprio cai na banda do nó -- ausência é
+  # "não especializou", nunca zero, e zero mantém a regra de "sem teto".
+  local kind_mbps
+  kind_mbps=$(storage_kind_bandwidth "$1")
+  [[ -z "$kind_mbps" ]] || mbps="$kind_mbps"
   [[ -n "$mbps" && "$mbps" != 0 ]] || return 0
   kbps=$((mbps * 125))
   printf '%s\n%s\n' --limit-rate "${kbps}k"
+}
+
+storage_kind_bandwidth() {
+  # storage_kind_bandwidth <config-json>: o menor limite de banda entre os tipos de storage
+  # declarados na config (formato 7, brief §6), em Mbps; vazio quando não há lista. O runtime
+  # executa uma tarefa por ciclo e o tipo de storage de um nó não muda entre tarefas, então o
+  # teto aplicado é o do tipo dele. Com vários tipos, o MENOR: ceder mais do que qualquer tipo
+  # declarou nunca é o que o participante aceitou.
+  local list="$1" entry kind mbps menor=""
+  # A lista é ["TIPO=mbps", ...]; cada entrada é separada por '","'.
+  local entries
+  entries=$(json_list_sorted "$list" storageBandwidth)
+  [[ -n "$entries" ]] || return 0
+  while IFS= read -r entry; do
+    kind=${entry%%=*}
+    mbps=${entry#*=}
+    [[ "$mbps" =~ ^[0-9]+$ ]] || continue
+    if [[ -z "$menor" ]] || (( mbps < menor )); then
+      menor="$mbps"
+    fi
+  done < <(tr ',' '\n' <<< "$entries" | tr -d '"' | sed 's/^ *//;s/ *$//')
+  printf '%s' "$menor"
 }
 
 content_bytes() {
@@ -1066,9 +1121,11 @@ exec_object_put() {
   local next="$1" task_id="$2" attempt="$3" config="${4:-}"
   local payload object_id expect_sha expect_bytes replica tmp got_sha got_bytes resp code
   local -a bw=()
-  mapfile -t bw < <(bandwidth_args "$config")
 
   payload=$(task_payload "$next")
+  # O payload entra no teto: uma transferência de rebalanceamento pede quanto ceder para ESTE
+  # objeto, e vale o menor entre esse pedido e a banda declarada (bandwidth_args).
+  mapfile -t bw < <(bandwidth_args "$config" "$payload")
   object_id=$(json_field "$payload" objectId)
   expect_sha=$(json_field "$payload" sha256)
   expect_bytes=$(json_number "$payload" bytes)
@@ -1147,6 +1204,59 @@ exec_object_put() {
   result "$task_id" "${attempt:-1}" DONE \
     "{\"objectId\":\"$object_id\",\"replica\":${replica:-0},\"bytes\":$got_bytes,\"sha256\":\"$got_sha\"}" ''
   printf '[executor] DONE %s (replica %s de %s, %s bytes)\n' "$task_id" "${replica:-?}" "$object_id" "$got_bytes"
+}
+
+exec_storage_scrub() {
+  # exec_storage_scrub: confere o que este no guarda no proprio disco e devolve o que nao confere.
+  #
+  # O Control Plane so rele o corpo do disco da instalacao em que roda (doc 13 §5.7). A copia daqui
+  # so este no pode conferir: ele e o unico com acesso ao arquivo (o CP nao abre conexao para o no).
+  # Antes, um corpo trocado neste disco continuava contando como durabilidade no catalogo.
+  #
+  # Roda DEPOIS do heartbeat e ANTES de pedir tarefa: uma varredura longa num disco grande nao pode
+  # atrasar o heartbeat, que e a unica saida do no. Sem objetos, a saida e imediata.
+  local permitted="${1:-}" objects_dir="$NODE_HOME/objects" f id sha lote primeiro resp stale
+  [[ -d "$objects_dir" ]] || return 0
+  # Quem guarda objeto e no de armazenamento. Rodar em no que nao guarda mandaria relatorio vazio
+  # todo ciclo e so faria volume no log do Control Plane.
+  grep -q '"OBJECT_PUT"' <<<"[$permitted]" || return 0
+
+  lote=''
+  primeiro=1
+  enviar() {
+    [[ -n "$lote" ]] || return 0
+    resp=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 60 \
+      "${auth[@]}" -d "[$lote]" "$CONTROL_PLANE/network/storage/scrub") || {
+      # Nao e transitorio no sentido de repetir agora: a proxima volta reenvia. O estado do
+      # catalogo so muda quando o CP ACEITA o relatorio -- um no que falha em entregar nao pode
+      # declarar que a copia esta boa.
+      event warn 'varredura do disco nao foi entregue ao Control Plane'
+      return 0; }
+    stale=$(json_number "$resp" stale)
+    (( ${stale:-0} > 0 )) && event warn "varredura: ${stale} copia(s) deste no nao conferem (marcadas STALE)"
+    lote=''
+    primeiro=1
+  }
+
+  for f in "$objects_dir"/*.bin; do
+    [[ -f "$f" ]] || continue
+    id="${f##*/}"
+    id="${id%.bin}"
+    sha=$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)
+    # Arquivo ilegivel: NAO entra no relatorio. "Nao consegui ler" e diferente de "leu e divergiu";
+    # declarar divergencia aqui derrubaria uma copia boa por um erro de I/O passageiro.
+    [[ -n "$sha" ]] || continue
+    [[ "$primeiro" == 1 ]] || lote+=','
+    lote+="{\"objectId\":\"$id\",\"actualSha256\":\"$sha\"}"
+    primeiro=0
+    # Lote pequeno: o corpo de cada item e curto, e um relatorio gigante numa request so pode
+    # estourar o limite do servidor no meio -- reenviar tudo de novo seria pior.
+    if [[ $((${#lote} / 128)) -ge 200 ]]; then
+      enviar
+    fi
+  done
+  enviar
+  return 0
 }
 
 exec_api_request() {
@@ -1231,6 +1341,13 @@ cycle() {
   # linha para nomes com espaço.
   observed_disk=$(df -P -m "$NODE_HOME" 2>/dev/null | awk 'NR==2 {print $4}')
   [[ "$observed_disk" =~ ^[0-9]+$ ]] || observed_disk=''
+  # Tamanho do volume medido na MESMA chamada do livre: os dois saem da mesma linha do `df`, então
+  # um não pode estar descrevendo um sistema de arquivos diferente do outro. É o que permite ao
+  # Control Plane separar "espaço reservado pelo participante" (total - declarado) do "oferecido"
+  # (brief do Storage §7); com só o livre, a reserva era impossível de calcular. Mesma regra de
+  # ausência: vazio quando o `df` não responde, nunca 0.
+  observed_disk_total=$(df -P -m "$NODE_HOME" 2>/dev/null | awk 'NR==2 {print $2}')
+  [[ "$observed_disk_total" =~ ^[0-9]+$ ]] || observed_disk_total=''
   # O termo aceito vai no heartbeat (doc 06 §4, regra 5): é assim que o Control Plane
   # descobre que este nó viu um controlador de mando maior que o dele. Nó que ainda não
   # aceitou config nenhuma não reporta termo — zero afirmaria "vi o termo zero", que é
@@ -1241,6 +1358,25 @@ cycle() {
   [[ -n "$observed_term" ]] && term_part=",\"observedTerm\":$observed_term"
   disk_part=''
   [[ -n "$observed_disk" ]] && disk_part=",\"diskFreeMb\":$observed_disk"
+  [[ -n "$observed_disk_total" ]] && disk_part="$disk_part,\"diskTotalMb\":$observed_disk_total"
+  # Uso do ESTADO DE CONTEÚDO (edge/ + replica/ + objects/), o mesmo que o teto mede. Sem ele o
+  # Control Plane só sabia somar o catálogo e nunca comparava, nó por nó, "quanto ele usa" com
+  # "quanto ele prometeu" -- a pergunta do §7 do brief do Storage. Zero é resposta legítima (nó
+  # sem conteúdo), então o campo vai sempre que o cálculo roda; `df` que falhou não afeta.
+  disk_part="$disk_part,\"usedMb\":$(( $(content_bytes) / 1048576 ))"
+  # Tráfego ACUMULADO das interfaces desde o boot (brief §8.2, "uso de rede"): o Control Plane já
+  # tem as colunas `observed_bytes_in_mb` / `observed_bytes_out_mb` (V345) e o heartbeat já aceita
+  # os campos — mas o runtime nunca os mediu, e o painel do nó não mostrava tráfego nenhum. Vai em
+  # MiB, como as outras medidas de tamanho; loopback fica de fora. Sem `/proc/net/dev` os campos
+  # NÃO vão: ausente é "não medido", nunca zero, que afirmaria "não transferiu nada".
+  net_part=''
+  if [[ -r /proc/net/dev ]]; then
+    net_medido=$(awk -F'[: ]+' '/^[ ]*[a-z]/ && $2 != "lo" { rx += $3; tx += $11 } END { printf "%d %d", rx / 1048576, tx / 1048576 }' /proc/net/dev)
+    read -r net_rx_mb net_tx_mb <<< "$net_medido"
+    if [[ "$net_rx_mb" =~ ^[0-9]+$ && "$net_tx_mb" =~ ^[0-9]+$ ]]; then
+      net_part=",\"bytesInMb\":$net_rx_mb,\"bytesOutMb\":$net_tx_mb"
+    fi
+  fi
   # Linhas do ciclo vão JUNTO do heartbeat: é a única saída do nó (ele não abre porta), e o
   # Control Plane guarda uma janela curta para o painel do nó. O buffer é esvaziado depois de
   # enviado; se o heartbeat falhar, as linhas ficam para a próxima volta.
@@ -1248,7 +1384,7 @@ cycle() {
   events=$(events_json)
   [[ -n "$events" ]] && logs_part=",\"logs\":[$events]"
   hb=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
-    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"memoryMb\":$observed_mem,\"runningTasks\":0$disk_part}$term_part$logs_part}" \
+    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"memoryMb\":$observed_mem,\"runningTasks\":0$disk_part$net_part}$term_part$logs_part}" \
     "$CONTROL_PLANE/network/nodes/heartbeat") || { printf '[executor] heartbeat falhou\n' >&2; return 1; }
   : > "$EVENTS_FILE" 2>/dev/null || true
   mode=$(json_field "$hb" mode)
@@ -1290,6 +1426,10 @@ cycle() {
   config=$(allowed_tasks) || return 1
   allowed=$(allowed_tasks_list <<<"$config")
   printf '[executor] allowedTasks=%s\n' "$allowed"
+
+  # 3.5 a varredura do proprio disco: a copia daqui so o dono pode conferir, e o Control Plane nao
+  # abre conexao para o no (doc 13 §5.8).
+  exec_storage_scrub "$allowed"
 
   # 4. fila designada a este nó.
   local next tasks_list

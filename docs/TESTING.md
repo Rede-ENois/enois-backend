@@ -49,6 +49,18 @@ de outros contextos disputem os claims. Nesses contextos, a ponte de fixtures `T
 é substituída para não redirecionar o helper estático de autenticação; os repositórios e workers
 continuam reais.
 
+**Estado global de rede precisa ser devolvido.** A base H2 é compartilhada entre classes: quem
+deixa um estado que muda o resultado de outro (aqui, uma região declarada fora de serviço, que
+zera a capacidade e o despacho) precisa limpá-lo **ao fim** do próprio teste, não só no começo.
+Limpar no `@BeforeEach` deixa o resíduo para a classe que roda depois. `NetworkRegionTests` e
+`NetworkReplicationGeographicTests` são os exemplos: `network_region_states` é estado global, e
+a declaração sobrevivia ao fim da classe em ambas.
+
+Para reproduzir um vazamento assim, lembre que a ordem padrão do JUnit não é a ordem do arquivo:
+o resíduo só aparece se o método que **declara** o estado rodar por último — e métodos sem
+`@Order` (default 1000) rodam depois de todos os anotados, com o próprio `@BeforeEach` deles
+apagando o resíduo. Ordene explicitamente **todos** os métodos antes de julgar.
+
 A economia automática fica desligada em `src/test/resources/application.properties`: um cron
 não pode alterar a cotação compartilhada entre asserções de carteira e serviços. Os cenários de
 `CoinEconomyIsolationTests` chamam os dois jobs reais em um H2 próprio para garantir esse contrato;

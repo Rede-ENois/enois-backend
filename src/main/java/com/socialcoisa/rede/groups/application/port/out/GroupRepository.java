@@ -5,11 +5,13 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import com.socialcoisa.rede.groups.domain.Group;
 import com.socialcoisa.rede.groups.domain.GroupJoinRequest;
 import com.socialcoisa.rede.groups.domain.GroupMember;
 import com.socialcoisa.rede.groups.domain.GroupMembership;
+import com.socialcoisa.rede.groups.domain.GroupRole;
 import com.socialcoisa.rede.groups.domain.JoinRequestStatus;
 
 /** Persistência dos grupos. Tudo aqui é do domínio de Grupos — nada de comunidades nem de posts. */
@@ -38,6 +40,8 @@ public interface GroupRepository {
 	/** Membros de cada grupo, numa consulta só (grupo sem membro não aparece no mapa). */
 	Map<String, Long> countMembers(Collection<String> groupIds);
 
+	Map<String, GroupRole> findRoles(Collection<String> groupIds, String userId);
+
 	void saveMember(GroupMember member);
 
 	Optional<GroupMember> findMember(String groupId, String userId);
@@ -46,7 +50,8 @@ public interface GroupRepository {
 
 	long countMembers(String groupId);
 
-	void removeMember(String groupId, String userId);
+	/** Remove a associação e devolve a quantidade de linhas efetivamente excluídas. */
+	int removeMember(String groupId, String userId);
 
 	/** Mantém o contador desnormalizado do grupo (usado na listagem, para não contar a cada card). */
 	void adjustMemberCount(String groupId, int delta);
@@ -54,6 +59,8 @@ public interface GroupRepository {
 	void saveJoinRequest(GroupJoinRequest request);
 
 	Optional<GroupJoinRequest> findPendingRequest(String groupId, String userId);
+
+	Set<String> findPendingGroupIds(Collection<String> groupIds, String userId);
 
 	Optional<GroupJoinRequest> findRequestById(String id);
 
@@ -64,4 +71,21 @@ public interface GroupRepository {
 	 * decidiu antes — é o que impede duas aprovações simultâneas de virarem duas associações.
 	 */
 	int markDecided(String requestId, JoinRequestStatus status, String actorId, Instant now);
+
+	/**
+	 * Apaga de fato o grupo, mas só quando o conteúdo dele já não existe: membros, pedidos de
+	 * ingresso, tópicos, publicações, comentários e reações precisam ter sido removidos antes.
+	 *
+	 * <p>O comportamento normal é encerrar (CLOSED) e preservar o conteúdo de quem participava; este
+	 * caminho existe para a remoção FÍSICA pela plataforma, quando a preservação não se aplica —
+	 * conteúdo ilegal que precisa sair do banco, por exemplo. Quem chama já decidiu que o grupo não
+	 * deve continuar existindo, mesmo desligado.</p>
+	 */
+	void deleteRow(String groupId);
+
+	/** Remove todos os pedidos de ingresso do grupo (só a exclusão física pela plataforma). */
+	void deleteJoinRequests(String groupId);
+
+	/** Remove todas as associações de membro do grupo (só a exclusão física pela plataforma). */
+	void deleteMembers(String groupId);
 }

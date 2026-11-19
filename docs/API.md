@@ -183,6 +183,7 @@ Cidade e UF (`city`, `state`) são estruturadas e separadas do `location` livre,
 | GET | `/api/feed` | Feed principal | Sim |
 | POST | `/api/feed/seen` | Avança o marcador "Você está em dia" | Sim |
 | GET | `/api/users/{username}/posts` | Posts do usuário | Sim |
+| GET | `/api/users/{username}/diario` | Diário de atividade do perfil (linha do tempo unificada) | Sim |
 | DELETE | `/api/feed/posts/{postId}` | Deletar post | Sim |
 | POST | `/api/feed/posts/bulk-delete` | Deletar posts em lote | Sim |
 | POST | `/api/feed/posts/{postId}/comments` | Comentar em post | Sim |
@@ -199,6 +200,9 @@ Cidade e UF (`city`, `state`) são estruturadas e separadas do `location` livre,
 | GET | `/api/feed/posts/{postId}/comments/{commentId}/reactions` | Reações do comentário | Sim |
 | POST | `/api/feed/posts/{postId}/accepted-answer` | Aceitar a resposta de uma dúvida | Sim |
 | DELETE | `/api/feed/posts/{postId}/accepted-answer` | Desfazer a resposta aceita | Sim |
+| GET | `/api/feed/draft` | Ver meu rascunho do compositor | Sim |
+| PUT | `/api/feed/draft` | Salvar meu rascunho (substitui) | Sim |
+| DELETE | `/api/feed/draft` | Descartar meu rascunho | Sim |
 
 ### POST /api/feed/posts
 
@@ -214,7 +218,13 @@ Cidade e UF (`city`, `state`) são estruturadas e separadas do `location` livre,
 ```
 
 Tipos: `INSIGHT`, `ARTICLE`, `QUESTION`, `PROJECT`, `OPPORTUNITY`, `PAGE`, `NEWS`, `TUTORIAL`,
-`REVIEW`, `DIVERTIDO`, `MOMENT`, `BLOG`, `BUSINESS`, `POLL`, `COMPLAINT`
+`REVIEW`, `DIVERTIDO`, `MOMENT`, `INSTANTE`, `BLOG`, `BUSINESS`, `POLL`, `COMPLAINT`
+
+Efêmeros: `MOMENT` se apaga sozinho em 24 horas e `INSTANTE` em 1 hora, contados da publicação
+efetiva (agendado conta da hora em que o worker o publica). A resposta carrega `expiresAt`; vencido,
+o post sai das listagens e responde 404 em consulta direta, e o worker de expiração aplica o
+soft-delete do fluxo normal (`MomentExpiryScheduler`, a cada 5 min). Efêmero não é republicável
+(`400 NOT_REPOSTABLE`) nem vai para o LinkedIn.
 
 Assunto (`topic`): obrigatório em post avulso, um da taxonomia (`ContentTaxonomy.TOPICS`). Sem ele,
 `400 TOPIC_REQUIRED`; fora da lista, `400 INVALID_TOPIC`. Post de comunidade ou canal herda o assunto
@@ -233,18 +243,30 @@ transação desfeita não impede a tentativa corrigida. O contrato e os limites 
 #### Enquete (`type: "POLL"`)
 
 `content` é o **título da enquete** (até 400 caracteres) e `pollOptions` traz as alternativas: de
-**2 a 6**, cada uma com até 120 caracteres, sem repetição (a comparação ignora maiúsculas).
+**2 a 6**, cada uma com até 120 caracteres, sem repetição (a comparação ignora maiúsculas). Dois
+campos opcionais estendem a enquete (V331):
+
+- `pollMultipleChoice` (boolean): **múltipla escolha** — cada pessoa marca várias alternativas; o
+  total continua contando **pessoas**, não marcações.
+- `pollEndsAt` (ISO-8601): **prazo de encerramento** — precisa ser futuro e de no máximo **30
+  dias**; passado o instante, ninguém vota mais e o resultado congela.
 
 ```json
 {
   "type": "POLL",
   "content": "Qual linguagem você usa no trabalho?",
-  "pollOptions": ["Java", "Kotlin", "Go", "TypeScript"]
+  "pollOptions": ["Java", "Kotlin", "Go", "TypeScript"],
+  "pollMultipleChoice": true,
+  "pollEndsAt": "2026-11-25T12:00:00Z"
 }
 ```
 
-Fora de `POLL` o campo `pollOptions` é ignorado (não vira linha no banco). O post volta com
-`poll: { options: [...], counts: [0,0,0,0], myVote: null, totalVotes: 0 }`.
+Fora de `POLL` os campos de enquete são ignorados (não viram linha no banco). Prazo no passado
+responde 400 `POLL_DEADLINE_IN_PAST`; além do teto de 30 dias, 400 `POLL_DEADLINE_TOO_FAR`. O post
+volta com
+`poll: { options: [...], counts: [0,...], myVotes: [], totalVotes: 0, multipleChoice: false, endsAt: null }`.
+Enquetes criadas antes das extensões (sem linha em `poll_configs`) leem como escolha única e sem
+prazo. A enquete **agendada** nasce simples (sem múltipla escolha nem prazo).
 
 ### POST /api/feed/posts/{postId}/poll/vote
 
@@ -252,18 +274,110 @@ Fora de `POLL` o campo `pollOptions` é ignorado (não vira linha no banco). O p
 { "option": 2 }
 ```
 
-`option` é a **posição** da alternativa (0..5). Uma pessoa, um voto — mas o voto **pode ser
-trocado**: enviar outra posição move o voto (a contagem antiga cai, a nova sobe, o total não
-cresce), e repetir a mesma posição é idempotente, sem mudar nada. Alternativa fora do intervalo
-(ou corpo sem `option`) responde 400 `INVALID_POLL_OPTION`; post que não é enquete responde
-400 `NOT_A_POLL`. Sem sessão: 401. A resposta é o estado atualizado da enquete:
+Na **escolha única**, `option` é a **posição** da alternativa (0..5). Na **múltipla escolha**, o
+corpo traz a lista:
 
 ```json
-{ "options": ["Java","Kotlin","Go","TypeScript"], "counts": [1,0,0,0], "myVote": 0, "totalVotes": 1 }
+{ "options": [0, 2] }
+```
+
+O voto pode ser **trocado** enquanto a enquete está aberta: na escolha única o novo voto
+substitui o anterior; na múltipla a lista passada vira a seleção inteira (sai o que removeu,
+entra o que somou). O total segue contando pessoas. Depois do prazo a enquete responde
+**409 `POLL_CLOSED`** e a contagem não muda. Alternativa fora do intervalo (ou corpo inválido
+para o tipo da enquete) responde 400 `INVALID_POLL_OPTION`; múltipla sem nenhuma alternativa
+responde 400 `POLL_OPTION_REQUIRED`; post que não é enquete responde 400 `NOT_A_POLL`.
+Sem sessão: 401. A resposta é o estado atualizado da enquete:
+
+```json
+{
+  "options": ["Java","Kotlin","Go","TypeScript"],
+  "counts": [1,0,1,0],
+  "myVotes": [0, 2],
+  "totalVotes": 1,
+  "multipleChoice": true,
+  "endsAt": "2026-11-25T12:00:00Z"
+}
 ```
 
 Todo `PostView` de um post `POLL` traz o campo `poll` (nas leituras de feed e de post único); a
 contagem é derivada de `poll_votes`, nunca um contador acumulado.
+
+### GET / PUT / DELETE /api/feed/draft
+
+O rascunho do compositor (V332): um **por pessoa**, atualizado a cada salvamento — é onde a
+pessoa parou de escrever, e não um post: nunca aparece em feed, perfil nem busca. Publicar e
+agendar seguem pelos endpoints de sempre (`POST /api/feed/posts`, `POST /api/feed/scheduled`);
+o compositor apaga o rascunho quando uma das duas dá certo. Tudo exige sessão; sem ela, 401.
+
+- `GET /api/feed/draft` → `200` com `{"draft": {...}}` ou `{"draft": null}` quando não há
+  rascunho (ausência não é erro).
+- `PUT /api/feed/draft` → salva (substitui o que havia; o `id` e o `createdAt` se preservam).
+- `DELETE /api/feed/draft` → descarta; sem rascunho, continua `200` (idempotente).
+
+Corpo do `PUT` (todos os campos opcionais exceto `type`):
+
+```json
+{
+  "type": "POLL",
+  "content": "pesquisa da semana",
+  "pageHtml": null,
+  "articleBody": null,
+  "topic": "TECNOLOGIA",
+  "pollOptions": ["cafe", "cha"],
+  "pollMultipleChoice": true,
+  "pollEndsAt": "2030-01-01T10:00:00Z",
+  "mentionedUserIds": ["usr_xxx"]
+}
+```
+
+Regras:
+
+- A validação aqui é a **mínima** para valer a pena restaurar: tipo válido e algo escrito
+  (`400 TIPO_OBRIGATORIO` / `400 CONTEUDO_OBRIGATORIO`). As regras completas — tamanho,
+  antiflood, conta restrita, enquete inteira — valem na publicação, pelo caso de uso de sempre.
+  Alternativas de enquete pela metade são aceitas (é um rascunho).
+- `pollEndsAt` inválido responde `400 DATA_INVALIDA` (ISO-8601); `type` desconhecido,
+  `400 TIPO_INVALIDO`.
+- **Mídia anexada não entra no rascunho**: os arquivos só sobem no momento de publicar — o
+  rascunho guarda texto e estrutura (`mediaIds` do rascunho não existe), e a mídia é reanexada
+  ao retomar.
+- As extensões da enquete viajam com o rascunho; no **agendamento** a enquete nasce simples
+  (regra atual do agendado, sem múltipla escolha nem prazo).
+
+### GET /api/users/{username}/diario
+
+Diário de atividade do perfil: linha do tempo unificada do que a pessoa publicou (`PUBLICACAO`),
+repostou (`REPOST`) e — somente quando quem lê é o próprio dono — comentou (`COMENTARIO`), mesma
+regra de privacidade da aba de respostas. Derivado dos dados existentes (nada é gravado para o
+diário); leitura pública como as demais abas do perfil, com autor banido respondendo 404
+`USER_NOT_FOUND`. Query params: `cursor=<base64>`, `limit=<1-50>` (padrão 20).
+
+```json
+{
+  "itens": [
+    {
+      "tipo": "COMENTARIO",
+      "quando": "2026-11-15T18:03:00Z",
+      "postId": "post_123",
+      "trecho": "opinião no post do outro",
+      "contexto": { "autorNome": "Ana", "autorUsername": "ana", "trecho": "conteúdo do post original" }
+    },
+    {
+      "tipo": "PUBLICACAO",
+      "quando": "2026-11-15T17:00:00Z",
+      "postId": "post_456",
+      "trecho": "conteúdo da própria publicação",
+      "contexto": null
+    }
+  ],
+  "nextCursor": "…"
+}
+```
+
+`contexto` descreve o post original por trás de comentário e repost e vem `null` em publicações;
+repost de post apagado e comentário apagado saem da linha. O cliente agrupa os eventos por dia
+para montar a linha do tempo.
 
 ### GET /api/feed
 
@@ -396,7 +510,21 @@ responde `{ "postId": "post_xxx", "acceptedCommentId": null, "resolved": false }
 }
 ```
 
-Tipos de reação: `LIKE`, `LOVE`, `CONGRATS`, `INSIGHTFUL`, `CURIOUS`
+Tipos de reação (o enum central é `ReactionType`, compartilhado por post, comentário, grupo,
+desabafo, colagem, confessionário e mensagem): são as **76 expressões do pacote É Nóis**, na ordem
+do seletor. As primeiras são as originais — `LIKE`, `LOVE`, `LAUGH`, `ROFL`, `SKULL`, `WOW`, `SAD`,
+`SOB`, `CELEBRATE`, `SUPPORT`, `INSIGHTFUL`, `ANGRY`, `DISGUST`, `SKEPTICAL`, `EYES`, `NOTE`, `FIRE`,
+`CLAP`, `CLOWN`, `NAILS` — e as **contextuais** (`USEFUL` a dica serviu, `RELATABLE` me identifiquei,
+`HYPE` empolgação com lançamento/projeto, `THANKS` pela ajuda que resolveu, `VIBE` a estética do
+post, `SALUTE` respeito pelo gesto); depois vêm `COOL`, `SLEEP`, `THINK`, `NERD`, `PARTY`, `COFFEE`,
+`SELFIE`, `THERMOMETER`, `PIRATE`, `HERO`, `ZANY`, `SCREAM`, `GRIMACE`, `MELTING`, `CRYING`,
+`MINDBLOWN`, `VOMIT`, `FUMING`, `EYEROLL`, `ROBOT`, `WIZARD`, `CHEF`, `SURF`, `MAGIC`, `REBEL`,
+`WINK`, `ALIEN`, `RAGE`, `MONEY`, `FEAR`, `WAVE`, `PEACE`, `OK`, `ROCK`, `DISLIKE`, `RAISED`, `GASP`,
+`POOP`, `TONGUE`, `KISS`, `DROOL`, `STARSTRUCK`, `VULCAN`, `CROSSED`, `POINT_RIGHT`, `FISTBUMP`,
+`MASK`, `COWBOY`, `SMIRK` e `GHOST`. Nenhuma reação existe fora do pacote, e cada tipo tem um ícone
+próprio (`ReactionIcons`, sem repetição). O tipo é gravado pelo nome, então acrescentar um tipo
+novo não mexe no que já foi gravado; tipo desconhecido continua recusado (400).
+Uma reação por pessoa — trocar o tipo substitui, sem somar no total.
 
 ### POST /api/feed/posts/bulk-delete
 
@@ -406,6 +534,127 @@ Tipos de reação: `LIKE`, `LOVE`, `CONGRATS`, `INSIGHTFUL`, `CURIOUS`
   "reason": "Conteúdo duplicado"
 }
 ```
+
+---
+
+## Colagem
+
+O feed fotográfico que vive no Explorar. É um espaço próprio: **nada publicado aqui aparece em
+`/api/feed`**. Regras completas em [COLAGEM.md](COLAGEM.md).
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/colagem` | feed próprio (grade), `cursor`/`limit` (≤ 48) | Sim |
+| POST | `/api/colagem/posts` | publica exatamente uma fotografia (`mediaId`, `description?`, `mediaSpoiler?`) | Sim + idempotência |
+| GET | `/api/colagem/posts/{postId}` | foto única com autor, reações e contagem de comentários | Sim |
+| DELETE | `/api/colagem/posts/{postId}` | o autor remove a própria foto | Sim + idempotência |
+| GET | `/api/colagem/posts/{postId}/comments` | contribuições crônicas (`after`, `limit`) | Sim |
+| POST | `/api/colagem/posts/{postId}/comments` | texto e/ou UMA foto; resposta de foto não pode ter foto | Sim + idempotência |
+| DELETE | `/api/colagem/posts/{postId}/comments/{commentId}` | o autor do comentário remove o próprio | Sim + idempotência |
+| POST | `/api/colagem/posts/{postId}/reactions` | `{ "reaction": "LIKE" }` — uma por pessoa, trocável | Sim + idempotência |
+| DELETE | `/api/colagem/posts/{postId}/reactions` | remove a reação de quem pediu | Sim + idempotência |
+
+Erros: `400 MEDIA_REQUIRED`, `400 NOT_IMAGE`, `400 CONTENT_TOO_LONG` (legenda 500),
+`400 COMMENT_TOO_LONG` (800), `400 COMMENT_EMPTY`, `400 PHOTO_REPLY_NOT_ALLOWED`,
+`400 INVALID_REACTION`, `403 MEDIA_OWNER_MISMATCH`, `403 NOT_AUTHORIZED`, `404 MEDIA_NOT_FOUND`,
+`404 POST_NOT_FOUND`, `404 COMMENT_NOT_FOUND`.
+
+---
+
+## Desabafos
+
+O feed de texto acolhedor que vive no Explorar. Espaço próprio com tabelas próprias (fora de
+`posts`): **nada publicado aqui aparece em `/api/feed`, no perfil, no diário ou na busca**. É
+só texto — sem mídia, sem enquete, sem página. Sem gamificação: o feed é cronológico, sem
+pontos e sem ranking. Reação é **contada, nunca nominada** — não existe endpoint nem campo que
+liste quem apoiou; a interface oferece as reações de apoio (LOVE, SUPPORT), mas o backend aceita
+qualquer `ReactionType` conhecido. Comentários (acolhidas) são planos: respondem o desabafo
+direto, sem comentário de comentário. Os mesmos gates da plataforma (idade, sanção, ritmo de
+publicação), bloqueios, denúncias (alvos `DESABAFO_POST`/`DESABAFO_COMMENT`) e idempotência se
+aplicam.
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/desabafos` | feed próprio cronológico, `cursor`/`limit` (≤ 48) | Sim |
+| POST | `/api/desabafos/posts` | publica o desabafo (`content`, ≤ 3000) | Sim + idempotência |
+| GET | `/api/desabafos/posts/{postId}` | desabafo com autor, contagens e `myReaction` | Sim |
+| DELETE | `/api/desabafos/posts/{postId}` | o autor remove o próprio desabafo | Sim + idempotência |
+| GET | `/api/desabafos/posts/{postId}/comments` | acolhidas crônicas | Sim |
+| POST | `/api/desabafos/posts/{postId}/comments` | acolhida em texto (`content`, ≤ 800) | Sim + idempotência |
+| DELETE | `/api/desabafos/posts/{postId}/comments/{commentId}` | o autor da acolhida remove a própria | Sim + idempotência |
+| POST | `/api/desabafos/posts/{postId}/reactions` | `{ "reaction": "SUPPORT" }` — uma por pessoa, trocável; resposta = contagens | Sim + idempotência |
+| DELETE | `/api/desabafos/posts/{postId}/reactions` | remove a reação de quem pediu | Sim + idempotência |
+
+Exemplo de desabafo no feed:
+
+```json
+{
+  "items": [
+    {
+      "id": "desabafo_9f2c...",
+      "author": { "id": "user_...", "name": "Ana", "username": "ana" },
+      "content": "Estou cansado de fingir que está tudo bem hoje",
+      "createdAt": "2026-11-16T03:00:00Z",
+      "reactions": 3,
+      "reactionSummary": { "LOVE": 2, "SUPPORT": 1 },
+      "myReaction": "SUPPORT",
+      "comments": 4
+    }
+  ],
+  "nextCursor": "MjAyNi0xMS0xNlQwMjo1OTo1OVox..."
+}
+```
+
+Notificação: comentário gera `DESABAFOS_COMMENTED` para o autor do desabafo (categoria SOCIAL).
+Reação não gera notificação — é apoio silencioso, contado.
+
+Erros: `400 CONTENT_REQUIRED`, `400 CONTENT_TOO_LONG` (3000), `400 COMMENT_EMPTY`,
+`400 COMMENT_TOO_LONG` (800), `400 INVALID_REACTION`, `403 NOT_AUTHORIZED`,
+`404 POST_NOT_FOUND`, `404 COMMENT_NOT_FOUND`.
+
+---
+
+## Murais
+
+Coleções **colaborativas** no Explorar: o mural é só o quadro; quem cola aponta publicações que
+**JÁ existem no feed**. Regras completas em [MURAIS.md](MURAIS.md).
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/murais` | murais ativos, `cursor`/`limit` (≤ 48) | Sim |
+| POST | `/api/murais` | cria o quadro (`title`, `description?`) | Sim + idempotência |
+| GET | `/api/murais/{muralId}` | quadro único com dono e contagem | Sim |
+| PATCH | `/api/murais/{muralId}` | dono edita título/descrição | Sim |
+| DELETE | `/api/murais/{muralId}` | dono remove o quadro (posts ficam no feed) | Sim + idempotência |
+| GET | `/api/murais/{muralId}/contribuicoes` | página crônica com posts enriquecidos | Sim |
+| POST | `/api/murais/{muralId}/contribuicoes` | cola post existente (`postId`) → 201 | Sim + idempotência |
+| DELETE | `/api/murais/{muralId}/contribuicoes/{postId}` | quem colou ou o dono tira o elo | Sim + idempotência |
+
+Erros: `400 MURAL_TITLE_REQUIRED`, `400 MURAL_TITLE_TOO_LONG`, `400 CONTENT_TOO_LONG`,
+`403 NOT_AUTHORIZED`, `404 MURAL_NOT_FOUND`, `404 POST_NOT_FOUND`, `404 CONTRIBUICAO_NOT_FOUND`,
+`409 JA_NO_MURAL`.
+
+---
+
+## Coleções pessoais
+
+Pastas **privadas** com os posts que você **JÁ salvou**: só o dono vê e mexe; guardar exige o post
+salvo no perfil e visível. Regras completas em [COLECOES.md](COLECOES.md).
+
+| Método | Rota | Descrição | Autenticação |
+|---|---|---|---|
+| GET | `/api/colecoes` | as SUAS coleções, `cursor`/`limit` (≤ 48) | Sim |
+| POST | `/api/colecoes` | cria a pasta (`title`, `description?`) | Sim + idempotência |
+| GET | `/api/colecoes/{colecaoId}` | pasta única com contagem (dono; alheia = 404) | Sim |
+| PATCH | `/api/colecoes/{colecaoId}` | edita título/descrição | Sim |
+| DELETE | `/api/colecoes/{colecaoId}` | apaga a pasta e os elos de verdade | Sim + idempotência |
+| GET | `/api/colecoes/{colecaoId}/posts` | página crônica com posts enriquecidos | Sim |
+| POST | `/api/colecoes/{colecaoId}/posts` | guarda post salvo (`postId`) → 201 | Sim + idempotência |
+| DELETE | `/api/colecoes/{colecaoId}/posts/{postId}` | tira o elo; o post segue salvo | Sim + idempotência |
+
+Erros: `400 COLECAO_TITLE_REQUIRED`, `400 COLECAO_TITLE_TOO_LONG`, `400 CONTENT_TOO_LONG`,
+`404 COLECAO_NOT_FOUND`, `404 POST_NOT_FOUND`, `404 POST_NAO_NA_COLECAO`, `409 NAO_SALVO`,
+`409 JA_NA_COLECAO`.
 
 ---
 
@@ -888,6 +1137,7 @@ entrada na sala é autorizada no servidor com token assinado — detalhes em
 | POST | `/api/calls/{callId}/decline` | Recusar | Sim |
 | POST | `/api/calls/{callId}/cancel` | Quem iniciou desiste | Sim |
 | POST | `/api/calls/{callId}/join` | Autoriza e devolve `host`, `room`, `jwt` (emitido pelo gateway da Epapo) e `call` | Sim |
+| POST | `/api/calls/{callId}/presence` | Sinal de vida de quem está na sala: mantém a presença contada e a sala ao vivo | Sim |
 | POST | `/api/calls/{callId}/leave` | Sair (no grupo a chamada continua) | Sim |
 | POST | `/api/calls/{callId}/end` | Encerrar para todos | Sim |
 | POST | `/api/calls/{callId}/fail` | A tela perdeu a mídia: falha explícita em vez de sessão pendurada | Sim |
@@ -1659,7 +1909,7 @@ tokens de cenário) é do mestre. Toda escrita exige `Idempotency-Key`.
 | `POST` | `/tokens` | mestre (cenário); dono (personagem) | Cria token; corpo `{ "ownerId"?, "label", "color", "posX", "posY" }` |
 | `POST` | `/tokens/{tokenId}/move` | dono; mestre | Move o token para outra célula `{ "posX", "posY" }` |
 | `POST` | `/tokens/{tokenId}/remove` | dono; mestre | Remove o token |
-| `POST` | `/voice` | participante | Abre (ou devolve) a chamada do Épapo da mesa; corpo `{ "kind"? }` (`AUDIO` padrão) |
+| `POST` | `/voice` | mestre | Abre (ou devolve) a chamada do Épapo da mesa; corpo `{ "kind"? }` (`AUDIO` padrão) |
 | `GET` | `/voice/open` | participante | A chamada aberta da mesa (corpo vazio quando ninguém está na voz) |
 
 ### Regras
@@ -1668,9 +1918,14 @@ tokens de cenário) é do mestre. Toda escrita exige `Idempotency-Key`.
   (espelho do vínculo de encontro). A resposta é o `CallView` da mesa dentro da abertura — o
   `voice/open` devolve a chamada "ao vivo", e a entrada é o `POST /calls/{id}/join` de sempre,
   que assina o token e reavalia a autorização. A mesa guarda só o id da chamada.
-- **Público da voz é a campanha.** Participante entra; quem não participa leva 403 no join e não
+- **Abrir a voz é estado da mesa, então é do mestre** (403 `FORBIDDEN` para participante); a
+  consulta da sala aberta é leitura de participante. Quem não participa leva 403 no join e não
   vê a sala em `/voice/open`. Quem abre já está dentro; a segunda abertura devolve a MESMA
   chamada.
+- **O path cruza campanha com mesa.** As rotas de voz reavaliam que a mesa pertence à campanha
+  informada antes de delegar ao serviço de chamadas: mesa desconhecida ou de outra campanha é
+  404 — o id da mesa sozinho não autoriza. A leitura da sala é tolerante (não-participante lê
+  corpo vazio, como toda leitura pública); a recusa de entrada é do join, que reavalia o papel.
 - **Aviso de mesa ao vivo:** os participantes (menos quem abriu) recebem `CALL_TABLE_LIVE`, uma
   vez por chamada (contada por `call_live:<callId>`), na preferência de push de grupos. Ninguém
   é chamado com `CALL_INCOMING`: a mesa avisa, não toca.
@@ -1802,3 +2057,83 @@ continua na campanha.
 | `LIBRARY_EMPTY` | 400 | Nada aberto à campanha — a cópia ficaria vazia |
 | `LIBRARY_NOT_FOUND` | 404 | Publicação inexistente, ou de outra pessoa para despublicar |
 | `SHEET_NOT_FOUND` | 404 | Ficha inexistente nesta campanha (inclui a de outro jogador) |
+
+## Éroleplay — histórico de auditoria da campanha (Fase 10)
+
+Os atos de campanha ficam na trilha única de auditoria do sistema (`audit_logs`), com ação com
+prefixo `ROLEPLAY_*` e a campanha como alvo. A leitura do histórico é do painel administrativo e
+segue o mesmo padrão do histórico de rede: dupla trava (interceptador de `/admin/**` +
+`requireAdmin`), sem trilha própria do módulo e sem conteúdo da campanha no metadata.
+
+### Rotas
+
+| Método | Rota | Quem pode | O que faz |
+|---|---|---|---|
+| GET | `/api/admin/roleplay/campaigns/{id}/history` | Admin | O histórico de atos da campanha, do mais novo para o mais antigo (`?limit=`, padrão 50, teto 200, piso 1) |
+
+Cada entrada devolve `{ "id", "actorId", "action", "metadata", "createdAt" }`, com `metadata` como
+JSON mínimo (identificadores e mudanças de estado — a criação traz também `name`, `slug`,
+`visibility` e `system` para identificar a campanha no painel; descrição e ambientação nunca
+entram).
+
+### Regras
+
+- Sem sessão é 401; sessão válida sem ser admin é 403; campanha desconhecida é 404 — não é uma
+  lista vazia.
+- Ações gravadas: `ROLEPLAY_CAMPAIGN_CREATED`, `ROLEPLAY_CAMPAIGN_UPDATED`,
+  `ROLEPLAY_CAMPAIGN_MEMBER_JOINED`, `ROLEPLAY_CAMPAIGN_JOIN_REQUESTED`,
+  `ROLEPLAY_CAMPAIGN_JOIN_REQUEST_APPROVED`, `ROLEPLAY_CAMPAIGN_JOIN_REQUEST_REJECTED`,
+  `ROLEPLAY_CAMPAIGN_MEMBER_INVITED`, `ROLEPLAY_CAMPAIGN_MEMBER_LEFT`,
+  `ROLEPLAY_CAMPAIGN_MEMBER_REMOVED`, `ROLEPLAY_CAMPAIGN_MASTERSHIP_TRANSFERRED`,
+  `ROLEPLAY_CAMPAIGN_ARCHIVED`, `ROLEPLAY_TABLE_CREATED`.
+- A trilha é a mesma de todo o sistema; não há rota para participantes — o histórico é do painel.
+
+## Éroleplay — métricas do módulo no painel (Fase 10)
+
+A observabilidade do Éroleplay vive no painel de monitorabilidade, não num painel próprio: o
+mesmo gate de `/admin/monitoring/**` (interceptador + `requireModerator`) protege a leitura, e o
+que sai é só agregado — número de campanhas por estado e visibilidade, distribuição por sistema,
+volume de dados guardados pelo módulo e ritmo de criação. Nunca conteúdo de campanha, slug,
+descrição ou identidade de pessoa.
+
+### Rotas
+
+| Método | Rota | Quem pode | O que faz |
+|---|---|---|---|
+| GET | `/api/admin/monitoring/roleplay` | Moderador ou admin | O agregado do módulo, calculado na hora (cache de 1 minuto) |
+
+### Resposta
+
+```json
+{
+  "generatedAt": "2026-11-16T03:12:00Z",
+  "campaigns": 12,
+  "activeCampaigns": 10,
+  "archivedCampaigns": 2,
+  "publicCampaigns": 6,
+  "inviteOnlyCampaigns": 4,
+  "privateCampaigns": 2,
+  "bySystem": { "d20-generico": 12 },
+  "campaignsLast7Days": 3,
+  "campaignsLast30Days": 9,
+  "members": 40,
+  "pendingJoinRequests": 1,
+  "tables": 15,
+  "seats": 55,
+  "characterSheets": 22,
+  "sheetTemplates": 4,
+  "chatMessages": 310,
+  "diceRolls": 180,
+  "rollRequests": 12,
+  "worldEntries": 35,
+  "publishedSheets": 8
+}
+```
+
+### Regras
+
+- Sem sessão é 401; sessão válida sem ser moderador é 403.
+- O cache (`rede.monitoring.roleplay-cache-ms`, padrão 60000) serve leituras repetidas do painel;
+  `0` rele o agregado a cada leitura.
+- Só agregado: nenhuma consulta toca conteúdo livre da campanha e nenhuma linha devolve id de
+  pessoa — o mesmo recorte de privacidade do histórico de auditoria.

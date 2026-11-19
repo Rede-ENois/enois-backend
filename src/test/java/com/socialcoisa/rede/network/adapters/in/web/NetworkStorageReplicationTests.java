@@ -46,7 +46,7 @@ import tools.jackson.databind.ObjectMapper;
  * de quem opera.</li>
  * </ul>
  */
-@SpringBootTest
+@SpringBootTest(properties = "rede.storage.node-body-root=target/test-node-bodies")
 @AutoConfigureMockMvc
 class NetworkStorageReplicationTests {
 
@@ -302,6 +302,49 @@ class NetworkStorageReplicationTests {
 		assertThat(divergent.get(0).get("objectId").asString()).isEqualTo(quebrado.id());
 		assertThat(divergent.get(0).get("expectedSha256").asString()).isEqualTo(quebrado.sha256());
 		assertThat(divergent.get(0).get("actualSha256").asString()).isEqualTo(sha256(body("CONTEUDO ORIGINAL")));
+	}
+
+	@Test
+	void o_corpo_que_so_esta_no_disco_do_no_local_e_baixado() throws Exception {
+		Node local = node(List.of("NODE_STORAGE"));
+		String bucket = "repl-local-" + UUID.randomUUID().toString().substring(0, 8);
+		// O catálogo existe, mas a raiz do Control Plane não tem o corpo: é o que acontece quando o
+		// objeto foi replicado para o nó que roda na mesma máquina e a cópia local do CP sumiu.
+		StoredObject object = storedObject(bucket, "local.jpg", body("conteudo local"), local.id());
+		java.nio.file.Path noDir = java.nio.file.Path.of("target", "test-node-bodies");
+		java.nio.file.Files.createDirectories(noDir);
+		java.nio.file.Files.write(noDir.resolve(object.id() + ".bin"), body("conteudo local"));
+
+		try {
+			var result = mockMvc
+				.perform(get("/network/storage/objects/" + object.id()).header("X-Node-Id", local.id())
+					.header("X-Node-Key", local.key()))
+				.andExpect(status().isOk())
+				.andReturn();
+
+			// O corpo sai na thread de streaming: espera o buffer encher, como nos testes de mídia.
+			// Ler direto devolve vazio e o teste passaria a depender de sorte de agendamento.
+			byte[] recebido;
+			long limite = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+			do {
+				recebido = result.getResponse().getContentAsByteArray();
+				if (recebido.length == object.bytes() || System.nanoTime() > limite) {
+					break;
+				}
+				Thread.sleep(10);
+			}
+			while (true);
+
+			assertThat(new String(recebido, StandardCharsets.UTF_8)).isEqualTo("conteudo local");
+			// O comprimento é o medido no upload, não o que o arquivo por acaso tem.
+			assertThat(result.getResponse().getHeader("Content-Length")).isEqualTo("14");
+			// O corpo veio do diretório do nó local: a raiz deste Control Plane nunca teve o arquivo.
+			assertThat(java.nio.file.Files.exists(java.nio.file.Path
+				.of(System.getProperty("java.io.tmpdir"), "enois-storage", object.id()))).isFalse();
+		}
+		finally {
+			java.nio.file.Files.deleteIfExists(noDir.resolve(object.id() + ".bin"));
+		}
 	}
 
 	private void designate(String objectId, int replica, String nodeId) {

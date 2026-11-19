@@ -82,7 +82,7 @@ public class GlobalApiRateLimitFilter extends OncePerRequestFilter {
 		// Only a live session earns its own bucket, keyed by the user; anything else counts against the IP
 		// (decided by the resolved address, never by whether the client sent a header).
 		long now = clock.millis();
-		String ip = clientIpResolver.resolve(request);
+		String ip = clientIpResolver.resolveNetwork(request);
 		String key = "ip:" + ip;
 		int limit = clientIpResolver.isTrustedProxy(ip) ? perMinute * sharedMultiplier : perMinute;
 		String session = request.getHeader("X-Session-Token");

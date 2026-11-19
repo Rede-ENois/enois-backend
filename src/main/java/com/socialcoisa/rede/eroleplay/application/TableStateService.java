@@ -176,7 +176,9 @@ public class TableStateService {
 	@Transactional
 	public GameTable openVoice(String tableId, String actorId, VoiceOpener opener) {
 		GameTable table = requireTable(tableId);
-		validateViewer(table.campaignId(), actorId);
+		// A voz é estado da mesa como cena e ordem: convocar (ou encerrar para todos) é do mestre,
+		// não de qualquer participante — o mesmo guarda de stateForWrite.
+		validateMaster(table.campaignId(), actorId);
 		if (table.hasVoiceRoom()) {
 			return table;
 		}
@@ -237,6 +239,21 @@ public class TableStateService {
 	private GameTable requireTable(String tableId) {
 		return repository.findTableById(tableId)
 			.orElseThrow(() -> new ApiException(404, "TABLE_NOT_FOUND", "Mesa nao encontrada."));
+	}
+
+	/**
+	 * A rota de voz recebe campanha e mesa no path: a mesa tem de pertencer à campanha informada —
+	 * sem a cruz, um id de mesa de outra campanha seria confirmado pelo serviço de chamadas para
+	 * quem participa das duas. Mesa desconhecida ou de outra campanha é 404. Quem não participa da
+	 * campanha continua no caminho tolerante da leitura (corpo vazio), como toda leitura pública —
+	 * a recusa de entrada é do join, que assina token.
+	 */
+	@Transactional(readOnly = true)
+	public void requireTableOfCampaign(String campaignId, String tableId) {
+		GameTable table = requireTable(tableId);
+		if (!table.campaignId().equals(campaignId)) {
+			throw new ApiException(404, "TABLE_NOT_FOUND", "Mesa nao encontrada.");
+		}
 	}
 
 	private static String newId(String prefix) {

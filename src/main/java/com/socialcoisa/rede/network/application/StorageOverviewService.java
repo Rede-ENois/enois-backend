@@ -2,6 +2,7 @@ package com.socialcoisa.rede.network.application;
 
 import java.time.Clock;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.springframework.stereotype.Service;
@@ -19,6 +20,11 @@ import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepositor
  *
  * <ul>
  * <li><b>capacidade</b> é o que os nós <b>declararam</b> ceder ({@code declaredDiskMb}), somado;</li>
+ * <li><b>reservado</b> é a conta de cada volume que ficou fora do Énóis por decisão do participante
+ * ({@code total - declarado}, brief §7), uma linha em {@code disks} por nó. Não é somado: reserva
+ * é conta de um disco, e a soma entre nós não responde pergunta nenhuma. {@code null} por nó
+ * quando ele não reportou o tamanho (runtime anterior à V341), e {@code unmeasuredDiskTotals} diz
+ * quantos ficaram de fora;</li>
  * <li><b>disponível</b> é o disco livre <b>medido</b> no heartbeat ({@code observedDiskFreeMb}). Nó
  * sem medida entra em {@code unmeasuredNodes} e <b>não</b> soma zero — não medir não é estar sem
  * espaço;</li>
@@ -40,8 +46,15 @@ public class StorageOverviewService {
 	 * não ocupa disco) e cópia {@code OK} de {@code STALE}.
 	 */
 	public record Overview(long capacityMb, Long freeMb, int nodesDeclaringCapacity, int unmeasuredNodes,
+			int unmeasuredDiskTotals, int unmeasuredUsage, List<StorageOverviewNodes.Disco> disks,
 			long usedBytes, Map<String, Long> objectsByState, Map<String, Long> copiesByState,
-			int objectsUnderReplicated, int replicasExpected) {
+			int objectsUnderReplicated, int replicasExpected, Map<String, Long> objectsByDurability, int onlineNodes,
+			int offlineNodes, List<StorageOverviewNodes.OfflineNode> offline, int buckets,
+			Map<String, BucketUsage> usageByBucket) {
+	}
+
+	/** O que um bucket tem: objetos servíveis e bytes medidos. */
+	public record BucketUsage(long objects, long bytes) {
 	}
 
 	private final StorageCatalogRepository catalog;
@@ -59,9 +72,19 @@ public class StorageOverviewService {
 		this.clock = clock;
 	}
 
+	/** O disco de um nó: a mesma conta do painel geral, para a página do nó. */
+	@Transactional(readOnly = true)
+	public StorageOverviewNodes.Disco diskOf(String nodeId) {
+		return nodes.diskOf(nodeId);
+	}
+
 	@Transactional(readOnly = true)
 	public Overview overview() {
 		Map<String, long[]> objetos = catalog.summarizeObjects();
+		// Por bucket: o numero de buckets e o tamanho deste mapa. Bucket nao e uma tabela -- existe
+		// enquanto tiver objeto --, entao perguntar "quantos buckets" e contar as chaves distintas.
+		Map<String, BucketUsage> porBucket = new LinkedHashMap<>();
+		catalog.summarizeBuckets().forEach((nome, par) -> porBucket.put(nome, new BucketUsage(par[0], par[1])));
 		Map<String, long[]> copias = catalog.summarizePlacements();
 
 		Map<String, Long> objetosPorEstado = new LinkedHashMap<>();
@@ -78,7 +101,10 @@ public class StorageOverviewService {
 		var lacuna = scrubber.scan(null, 1000);
 
 		return new Overview(capacidade.declaredMb(), capacidade.freeMb(), capacidade.declaringNodes(),
-			capacidade.unmeasuredNodes(), usado, objetosPorEstado, copiasPorEstado,
-			lacuna.underReplicated().size(), placement.targetReplicas());
+			capacidade.unmeasuredNodes(), capacidade.unmeasuredDiskTotals(), capacidade.unmeasuredUsage(),
+			capacidade.disks(), usado,
+			objetosPorEstado, copiasPorEstado, lacuna.underReplicated().size(), placement.targetReplicas(),
+			lacuna.byDurability(), capacidade.onlineNodes(), capacidade.offlineNodes(), capacidade.offline(),
+			porBucket.size(), porBucket);
 	}
 }

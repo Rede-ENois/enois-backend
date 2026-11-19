@@ -134,3 +134,18 @@ feed/application/DeletePostService.java                      quarantine()/releas
 moderation/adapters/out/persistence/JdbcContentAutomationCheckAdapter.java
 moderation/adapters/in/web/ModeratorController.java          rotas /moderation/quarantine
 ```
+
+## Ações administrativas diretas
+
+Ao lado da fila de votação, o administrador decide direto sobre uma conta ou uma publicação:
+advertir, sancionar e remover publicação — sem denúncia e sem quórum (`AdminModerationService`,
+`UserWarningService`; rotas `POST /api/admin/moderation/**`). A separação é por papel: moderador
+aprovado continua decidindo denúncia por votação (`ModeratorService.vote`,
+`SanctionProposalService`), que não mudou, e não acessa as rotas diretas. Toda decisão direta exige
+motivo, é auditada (`ADMIN_WARNING_ISSUED`, `ADMIN_WARNING_REVOKED`, `ADMIN_SANCTION_APPLIED`,
+`ADMIN_POST_REMOVED`) e reaproveita os mesmos efeitos da moderação: ban revoga as sessões e purga o
+conteúdo (`SanctionService.banAuthor`), remoção de post é o soft delete com fila de mídia.
+
+A remoção administrativa de post é o mesmo efeito da revisão humana de quarentena (soft delete,
+cache, fila de mídia, republicações e auditoria `POST_DELETED_BY_MODERATION`): quem decidiu aparece
+na linha de auditoria (`ADMIN_POST_REMOVED`, com o motivo do painel).

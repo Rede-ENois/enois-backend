@@ -104,16 +104,15 @@ public interface UserProfileRepository {
 	/** Grava a reputação na coluna de ranking (a busca de perfis ordena por ela). */
 	void updateReputation(String userId, int reputation);
 
-	/** Ids em páginas estáveis, para o job de atualização do ranking. */
-	List<String> findAllIds(int offset, int limit);
+	/** Ids em ordem crescente após afterId (exclusivo); nulo inicia a varredura. */
+	List<String> findAllIds(String afterId, int limit);
 
 	/**
 	 * Uma página de perfis elegíveis para a réplica de leitura, ordenada por (criado em, id).
 	 *
-	 * <p>Chave e não posição: o job do ranking percorre uma tabela que só cresce e pode usar
-	 * `offset`; a réplica percorre-a enquanto contas nascem e morrem, e `offset` pularia ou
-	 * repetiria itens entre páginas. A chave é o par de retorno: {@code createdAt} desempata pelo id,
-	 * que é único.</p>
+	 * <p>Chave e não posição: a réplica percorre contas enquanto nascem e morrem, e `offset`
+	 * pularia ou repetiria itens entre páginas. A chave é o par de retorno: {@code createdAt}
+	 * desempata pelo id, que é único.</p>
 	 *
 	 * <p>"Elegível" é decidido aqui, no módulo dono: conta removida (anônima, {@code removed-}) nunca
 	 * entra, e nunca entra uma conta sem {@code @} utilizável. O critério de suspensão fica no

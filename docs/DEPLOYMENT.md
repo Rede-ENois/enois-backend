@@ -309,6 +309,33 @@ depois em `/app/data` (o volume gravável do pod) e por último no temporário d
 | `TURNSTILE_TEST_KEY_POLICY` | O que fazer com chaves de teste `1x000…`: `degrade` (padrão — sobe com o captcha externo desligado e ERROR no log) ou `fatal` (recusa o boot). Chave de teste nunca conta como captcha ativo |
 | `REDE_VERSION_DETAILS_TOKEN` | Token do header `X-Version-Details` para ver uptime/Flyway/storage em `/version` |
 
+## Banco de dados: rede e TLS (E-08)
+
+O banco (MariaDB) só é acessível pela aplicação e pelo IP de administração, com TLS. A porta do
+banco não é publicada na internet — nem no host do container, nem no firewall do provedor.
+
+Requisitos, conferidos a cada implantação:
+
+- [ ] A porta do banco (3306) **não** aceita conexão da internet: um `nc -vz <host> 3306` de uma
+      máquina fora da rede de administração falha por timeout ou recusa.
+- [ ] A regra de firewall do provedor libera a porta apenas para o IP de saída da aplicação e para o
+      IP de administração, e é revisada quando qualquer um dos dois muda.
+- [ ] O usuário da aplicação conecta com TLS (`sslMode=REQUIRED` ou `sslMode=VERIFY_CA` no driver
+      MariaDB; `sslMode=VERIFY_IDENTITY` no driver MySQL), e o servidor tem certificado válido.
+      Hoje a URL do perfil QA (`application-qa.properties`) desliga o TLS (`sslMode=DISABLED`) porque
+      o banco só é alcançado pela rede interna; enquanto o acesso for estritamente interno, o
+      requisito é mantido por firewall, e ao abrir o acesso para fora da rede ele passa a ser
+      obrigatório.
+- [ ] O usuário da aplicação não tem `GRANT` administrativo (`SUPER`, `FILE`, `PROCESS`,
+      `RELOAD`, `CREATE USER`); administração usa outra credencial.
+- [ ] Nenhuma configuração do ambiente depende da porta aberta: fechar a porta não muda
+      `application-qa.properties` nem `application-prd.properties`.
+- [ ] A exportação/importação de banco local (`scripts/db-export.sh`, `scripts/db-import.sh`) usa
+      túnel SSH ou conexão de dentro da rede de administração, nunca a porta pública.
+
+Fechar a porta do banco é tarefa de quem administra o servidor — não é feita pelo código nem por
+este repositório.
+
 ## Migrações de Banco
 
 As migrações Flyway em `src/main/resources/db/migration/` são executadas automaticamente na inicialização da aplicação.

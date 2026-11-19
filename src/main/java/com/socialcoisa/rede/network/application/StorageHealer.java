@@ -144,7 +144,9 @@ public class StorageHealer {
 				continue;
 			}
 			// As cópias que sobraram: só as OK servem de origem. As demais são contadas, não usadas.
-			List<StoragePlacement> copias = catalog.placements(objeto.id());
+			// `copies` (todos os estados), não `placements` (só OK): o número da réplica nova sai do
+			// máximo de TODAS, e ler só as OK reaproveitaria o número de uma GONE.
+			List<StoragePlacement> copias = catalog.copies(objeto.id());
 			Set<String> nosComCopiaBoa = copias.stream()
 				.filter(p -> p.state() == StoragePlacement.State.OK)
 				.map(StoragePlacement::nodeId)
@@ -178,9 +180,15 @@ public class StorageHealer {
 		return new Report(dryRun, varredura.replicasExpected(), List.copyOf(designados), List.copyOf(pulados));
 	}
 
-	/** Já existe cópia designada a alguém esperando confirmação? Então a lacuna tem dono. */
+	/**
+	 * Já existe cópia designada a alguém esperando confirmação? Então a lacuna tem dono.
+	 *
+	 * <p>Lê {@code copies}, não {@code placements}: a pergunta é por {@code PENDING_REMOTE}, e
+	 * {@code placements} devolve só {@code OK} — a resposta era sempre "não há dono", e a cura
+	 * designava de novo uma réplica que já estava a caminho, com o mesmo objeto e um número novo.</p>
+	 */
 	private boolean temDesignacaoPendente(String objectId) {
-		return catalog.placements(objectId).stream()
+		return catalog.copies(objectId).stream()
 			.anyMatch(p -> p.state() == StoragePlacement.State.PENDING_REMOTE);
 	}
 

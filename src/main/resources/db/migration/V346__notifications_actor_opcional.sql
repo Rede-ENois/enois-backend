@@ -1,0 +1,21 @@
+-- Desabafos anônimos: o aviso de acolhida não carrega autor, então a coluna de ator passa a
+-- aceitar nulo.
+--
+-- Até aqui toda notificação tinha um ator identificado: alguém reagiu, comentou, seguiu, convidou.
+-- O Desabafo rompe esse molde de propósito — quem acolhe é anônimo como quem desabafa, e o aviso
+-- não pode desfazer o anonimato pelo caminho mais óbvio: dizer no nome de quem veio.
+--
+-- Com `actor_id not null`, gravar o aviso sem ator era impossível: a inserção estourava
+-- `NULL not allowed for column "ACTOR_ID"`, que o tradutor de exceções devolvia como 409 genérico
+-- — a acolhida não era salva e quem tentava acolher via um erro sem relação com o que fez.
+--
+-- Nulo aqui não é dado faltando: é a afirmação de que a notificação não tem autor a mostrar. O
+-- caminho de leitura já trata os dois casos (`resolveActors` filtra nulos antes de buscar perfis,
+-- a listagem aceita `actorId == null`, o resumo de não lidas idem), então nenhuma tela quebra com
+-- a mudança. O vínculo real entre a acolhida e quem a escreveu continua na tabela de comentários,
+-- intacto para moderação e auditoria — o anonimato é do contrato de leitura, não do dado.
+--
+-- Aditiva e idempotente, como as demais: a coluna ganha permissão, não valor. Nenhuma linha
+-- existente muda e nenhuma notificação antiga perde o ator que já tinha.
+
+alter table notifications modify column actor_id varchar(255) null;

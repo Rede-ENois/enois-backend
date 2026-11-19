@@ -37,13 +37,18 @@ class SanctionController {
 	private final ModeratorGuard moderatorGuard;
 	private final AuthSessionRepository sessions;
 
+	/** Mesma graça configurada do worker que converte a suspensão expirada em ban. */
+	private final java.time.Duration grace;
+
 	SanctionController(SanctionService sanctions, CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
-			ModeratorGuard moderatorGuard, AuthSessionRepository sessions) {
+			ModeratorGuard moderatorGuard, AuthSessionRepository sessions,
+			@org.springframework.beans.factory.annotation.Value("${rede.moderation.suspension.grace-days:7}") int graceDays) {
 		this.sanctions = sanctions;
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
 		this.moderatorGuard = moderatorGuard;
 		this.sessions = sessions;
+		this.grace = java.time.Duration.ofDays(Math.max(1, Math.min(graceDays, 365)));
 	}
 
 	/** Penalidades do proprio usuario (o que a conta carrega e o historico). */
@@ -51,7 +56,7 @@ class SanctionController {
 	Map<String, Object> mine(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		return Map.of(
-			"sanctions", sanctions.sanctionsOf(user.id().value()).stream().map(SanctionView::from).toList(),
+			"sanctions", sanctions.sanctionsOf(user.id().value()).stream().map(s -> SanctionView.from(s, grace)).toList(),
 			"appeals", sanctions.appealsOf(user.id().value()).stream().map(AppealView::from).toList());
 	}
 
@@ -80,7 +85,7 @@ class SanctionController {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		moderatorGuard.requireModerator(user);
 		UserSanction sanction = sanctions.approveAppeal(appealId, user.id().value());
-		return Map.of("status", "APPROVED", "sanction", SanctionView.from(sanction));
+		return Map.of("status", "APPROVED", "sanction", SanctionView.from(sanction, grace));
 	}
 
 	/** Recurso negado: conta banida (sessoes revogadas na hora). */
@@ -90,7 +95,7 @@ class SanctionController {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		moderatorGuard.requireModerator(user);
 		UserSanction sanction = sanctions.denyAppeal(appealId, user.id().value(), sessions);
-		return Map.of("status", "DENIED", "sanction", SanctionView.from(sanction));
+		return Map.of("status", "DENIED", "sanction", SanctionView.from(sanction, grace));
 	}
 
 
@@ -118,7 +123,7 @@ class SanctionController {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		adminGuard.requireAdmin(user);
 		UserSanction removed = sanctions.revokeSanction(user.id().value(), sanctionId, request.reason());
-		return Map.of("status", "REVOKED", "sanction", SanctionView.from(removed));
+		return Map.of("status", "REVOKED", "sanction", SanctionView.from(removed, grace));
 	}
 
 	/** Corrige a penalidade sem removê-la: troca o tipo e o motivo, mantendo o mesmo registro. */
@@ -136,7 +141,7 @@ class SanctionController {
 		}
 		UserSanction updated = sanctions.editSanction(user.id().value(), sanctionId, type, request.reason(),
 			sessions);
-		return Map.of("status", "UPDATED", "sanction", SanctionView.from(updated));
+		return Map.of("status", "UPDATED", "sanction", SanctionView.from(updated, grace));
 	}
 
 	record CreateAppealRequest(String message) {
@@ -159,11 +164,15 @@ class SanctionController {
 	}
 
 	record SanctionView(String id, String userId, String reportId, String type, String reason, String status,
-			String createdAt, String removedAt) {
-		static SanctionView from(UserSanction s) {
+			String createdAt, String removedAt, String dueAt) {
+		static SanctionView from(UserSanction s, java.time.Duration grace) {
+			// O prazo so existe na suspensao ativa: e o unico tipo com reversão por tempo. É o que
+			// o usuário punido tem direito de ver — punição invisível vira ticket de suporte.
+			String dueAt = s.isActive() && s.type() == SanctionType.SUSPENDED
+				? s.createdAt().plus(grace).toString() : null;
 			return new SanctionView(s.id(), s.userId(), s.reportId(), s.type().name(), s.reason(),
 				s.status().name(), s.createdAt().toString(),
-				s.removedAt() != null ? s.removedAt().toString() : null);
+				s.removedAt() != null ? s.removedAt().toString() : null, dueAt);
 		}
 	}
 

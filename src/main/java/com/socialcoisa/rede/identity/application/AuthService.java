@@ -570,6 +570,8 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 		String suffix = userId.startsWith("user_") ? userId.substring("user_".length()) : userId;
 		profile.anonymize("removed+" + suffix + "@enois.invalid", UserProfile.REMOVED_USERNAME_PREFIX + suffix, now);
 		userProfileRepository.save(profile);
+		// Consentimento do banco de talentos morre com a conta: sem a linha, nenhuma empresa o lista.
+		jdbc.update("delete from talent_pool_opt_ins where candidate_id = ?", userId);
 	}
 
 	/**
