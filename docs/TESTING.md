@@ -85,6 +85,14 @@ Isso não altera a configuração de produção.
 
 ## Estrutura de Testes
 
+`NetworkMediaTests` preserva os assets de outras classes: os assets do cenário têm UUID próprio
+e uma remoção global viola a FK de jobs de exclusão alheios. `NetworkReplicaTests` posiciona as
+datas somente das suas contas após o maior `created_at` persistido, antes de capturar ou avançar
+o cursor. Assim a travessia não depende de fixtures futuras de outras classes. As datas originais
+são restauradas em `@AfterEach`. O @ da conta banida é capturado antes do banimento: consultar
+`/me` depois usa uma sessão que deve estar revogada. Paginação, autorização e contagens SQL
+continuam com as mesmas asserções e o servidor não muda.
+
 Os testes estão em `src/test/java/com/socialcoisa/rede/` e seguem a mesma estrutura de pacotes do código fonte.
 
 ### Testes de Controller (Integration)

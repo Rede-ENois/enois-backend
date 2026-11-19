@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository;
 import com.socialcoisa.rede.moderation.application.SanctionService;
+import com.socialcoisa.rede.moderation.application.TransparenciaSancaoService;
 import com.socialcoisa.rede.moderation.application.SanctionService.SanctionEntry;
 import com.socialcoisa.rede.moderation.domain.Appeal;
 import com.socialcoisa.rede.moderation.domain.SanctionStatus;
@@ -36,27 +37,30 @@ class SanctionController {
 	private final AdminGuard adminGuard;
 	private final ModeratorGuard moderatorGuard;
 	private final AuthSessionRepository sessions;
+	private final TransparenciaSancaoService transparencia;
 
 	/** Mesma graça configurada do worker que converte a suspensão expirada em ban. */
 	private final java.time.Duration grace;
 
 	SanctionController(SanctionService sanctions, CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
-			ModeratorGuard moderatorGuard, AuthSessionRepository sessions,
+			ModeratorGuard moderatorGuard, AuthSessionRepository sessions, TransparenciaSancaoService transparencia,
 			@org.springframework.beans.factory.annotation.Value("${rede.moderation.suspension.grace-days:7}") int graceDays) {
 		this.sanctions = sanctions;
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
 		this.moderatorGuard = moderatorGuard;
 		this.sessions = sessions;
+		this.transparencia = transparencia;
 		this.grace = java.time.Duration.ofDays(Math.max(1, Math.min(graceDays, 365)));
 	}
 
 	/** Penalidades do proprio usuario (o que a conta carrega e o historico). */
 	@GetMapping("/me/sanctions")
 	Map<String, Object> mine(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
-		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		CurrentUser user = currentUserResolver.resolveSanctions(sessionToken);
 		return Map.of(
-			"sanctions", sanctions.sanctionsOf(user.id().value()).stream().map(s -> SanctionView.from(s, grace)).toList(),
+			"serverNow", transparencia.serverNow(),
+			"sanctions", transparencia.decisoesDoTitular(user.id().value()),
 			"appeals", sanctions.appealsOf(user.id().value()).stream().map(AppealView::from).toList());
 	}
 
@@ -64,7 +68,7 @@ class SanctionController {
 	@PostMapping("/me/sanctions/appeals")
 	Map<String, Object> appeal(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestBody CreateAppealRequest request) {
-		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		CurrentUser user = currentUserResolver.resolveSanctions(sessionToken);
 		Appeal created = sanctions.appeal(user.id().value(), request.message());
 		return Map.of("status", "PENDING", "id", created.id());
 	}
@@ -166,8 +170,7 @@ class SanctionController {
 	record SanctionView(String id, String userId, String reportId, String type, String reason, String status,
 			String createdAt, String removedAt, String dueAt) {
 		static SanctionView from(UserSanction s, java.time.Duration grace) {
-			// O prazo so existe na suspensao ativa: e o unico tipo com reversão por tempo. É o que
-			// o usuário punido tem direito de ver — punição invisível vira ticket de suporte.
+			// Campo legado: prazo de recurso da suspensão ativa, nunca promessa de liberação.
 			String dueAt = s.isActive() && s.type() == SanctionType.SUSPENDED
 				? s.createdAt().plus(grace).toString() : null;
 			return new SanctionView(s.id(), s.userId(), s.reportId(), s.type().name(), s.reason(),

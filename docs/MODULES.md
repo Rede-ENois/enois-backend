@@ -2071,5 +2071,3 @@ publicação); despublicar apaga a cópia e nunca toca na ficha — ela continua
 Persistência V326 (`roleplay_published_sheets`), uma linha por cópia, sem FK. A busca é por nome do
 personagem ou pelo sistema de jogo, em JPQL sobre colunas curtas — o corpo da cópia fica em
 `longtext` e não participa de `lower()` JPQL.
-
-

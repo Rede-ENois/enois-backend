@@ -9,6 +9,12 @@ public interface AuthSessionRepository {
 	void save(String token, String refreshToken, String userId, Instant createdAt, Instant expiresAt,
 			Instant refreshExpiresAt, String ip);
 
+	void saveSanctionsOnly(String token, String userId, Instant createdAt, Instant expiresAt, String ip);
+
+	Optional<String> findActiveSanctionsUserId(String token, Instant now);
+
+	boolean isSanctionsOnly(String token, Instant now);
+
 	Optional<String> findActiveUserId(String token, Instant now);
 
 	Optional<String> findActiveUserIdByRefreshToken(String refreshToken, Instant now);

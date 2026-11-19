@@ -135,7 +135,15 @@ class WriteRouteInterceptor implements HandlerInterceptor {
 		if (isS3Gateway(path)) {
 			return true;
 		}
-		currentUserResolver.resolve(request.getHeader("X-Session-Token"));
+
+		// O recurso da sanção tem resolução própria: a pessoa suspensa continua lendo as decisões
+		// dela e o token é conferido sem exigir o que a suspensão bloqueia.
+		if ("POST".equals(request.getMethod()) && "/me/sanctions/appeals".equals(path)) {
+			currentUserResolver.resolveSanctions(request.getHeader("X-Session-Token"));
+		}
+		else {
+			currentUserResolver.resolve(request.getHeader("X-Session-Token"));
+		}
 		return true;
 	}
 

@@ -155,6 +155,7 @@ class NetworkMediaTests {
 		jdbc.update("delete from network_node_keys");
 		jdbc.update("delete from network_provision_tokens");
 		jdbc.update("delete from network_nodes");
+		// Cada asset tem UUID próprio; mídias de outras classes podem ter jobs protegidos por FK.
 	}
 
 	@TestConfiguration

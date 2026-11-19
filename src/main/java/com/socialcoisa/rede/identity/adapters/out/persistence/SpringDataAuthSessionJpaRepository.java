@@ -54,7 +54,7 @@ interface SpringDataAuthSessionJpaRepository extends JpaRepository<AuthSessionJp
 	 * do corte. Revogada ou nao, a linha nao autentica mais ninguem.
 	 */
 	@Query("SELECT s.token FROM AuthSessionJpaEntity s WHERE "
-		+ "COALESCE(s.refreshExpiresAt, s.expiresAt) < :cutoff")
+		+ "COALESCE(s.sanctionsExpiresAt, s.refreshExpiresAt, s.expiresAt) < :cutoff")
 	List<String> findTokensExpiredBefore(@Param("cutoff") Instant cutoff,
 			org.springframework.data.domain.Pageable page);
 
@@ -63,6 +63,6 @@ interface SpringDataAuthSessionJpaRepository extends JpaRepository<AuthSessionJp
 
 	/** Quantas sessoes estao elegiveis agora, sem apagar nada (diagnostico e teste). */
 	@Query("SELECT count(s) FROM AuthSessionJpaEntity s WHERE "
-		+ "COALESCE(s.refreshExpiresAt, s.expiresAt) < :cutoff")
+		+ "COALESCE(s.sanctionsExpiresAt, s.refreshExpiresAt, s.expiresAt) < :cutoff")
 	long countExpiredBefore(@Param("cutoff") Instant cutoff);
 }
