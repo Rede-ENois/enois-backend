@@ -61,8 +61,22 @@ class NotificationOutboxPreviewTests {
 
 		ArgumentCaptor<String> preview = ArgumentCaptor.forClass(String.class);
 		verify(notifications).create(eq(AUTOR), eq("NEW_COMMENT"), eq(OUTRA), eq("Novo comentário"), anyString(),
-			eq("/api/feed/posts/post_1"), eq("Ver"), preview.capture());
+			eq("/api/feed/posts/post_1?comentario=comment_1"), eq("Ver"), preview.capture());
 		assertThat(preview.getValue()).isEqualTo("muito bom, parabéns!");
+	}
+
+	/** O clique abre O COMENTÁRIO, não o post inteiro (issue #1022). */
+	@Test
+	void commentNotificationLinksToTheComment() {
+		when(posts.findById(new PostId("post_1"))).thenReturn(Optional.of(post("texto do post")));
+		when(comments.findById("comment_1")).thenReturn(Optional.of(new Comment("comment_1", new PostId("post_1"),
+			new UserId(OUTRA), null, "achei útil", List.of(), NOW, CommentStatus.ACTIVE, null, false, false)));
+
+		handler.handle("PostCommented", "post_1",
+			"{\"postId\":\"post_1\",\"commentId\":\"comment_1\",\"authorId\":\"outra\"}");
+
+		verify(notifications).create(eq(AUTOR), eq("NEW_COMMENT"), eq(OUTRA), anyString(), anyString(),
+			eq("/api/feed/posts/post_1?comentario=comment_1"), anyString(), anyString());
 	}
 
 	@Test

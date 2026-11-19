@@ -34,5 +34,9 @@ public enum TargetType {
 	/** Confissão do Confessionário (a história cai do feed próprio junto com as reações). */
 	CONFESSIONARIO_POST,
 	/** Comentário de reação numa confissão. */
-	CONFESSIONARIO_COMMENT
+	CONFESSIONARIO_COMMENT,
+	/** Desafio do Explorar (o convite cai do feed próprio junto com as participações). */
+	DESAFIO_POST,
+	/** Participação (resultado publicado) num desafio. */
+	DESAFIO_PARTICIPACAO
 }

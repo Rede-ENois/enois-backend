@@ -248,6 +248,7 @@ public class LazyUrlMigrationService {
 			case "gif" -> "image/gif";
 			case "webp" -> "image/webp";
 			case "avif" -> "image/avif";
+			case "svg" -> "image/svg+xml";
 			case "mp4" -> "video/mp4";
 			case "webm" -> "video/webm";
 			case "mov" -> "video/quicktime";
