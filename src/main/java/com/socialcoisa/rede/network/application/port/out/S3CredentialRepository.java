@@ -26,6 +26,15 @@ public interface S3CredentialRepository {
 	 */
 	S3Credential save(S3Credential credential, String secretPlain);
 
-	/** Revogação é terminal: a credencial deixa de autenticar e não é reativada. */
-	boolean revoke(String id, java.time.Instant now);
+	/** A credencial pelo id, <b>do dono informado</b>: credencial de outra conta não é encontrada. */
+	Optional<S3Credential> findForOwner(String ownerUserId, String id);
+
+	/**
+	 * Revogação é terminal: a credencial deixa de autenticar e não é reativada.
+	 *
+	 * <p>O dono vai no `where` junto com o id: quem chama não precisa listar antes para decidir, e
+	 * não existe janela entre listar e alterar em que a credencial mude de dono. Devolve {@code false}
+	 * quando a credencial não é do dono ou já estava revogada — os dois casos são "nada a fazer".</p>
+	 */
+	boolean revoke(String id, String ownerUserId, java.time.Instant now);
 }

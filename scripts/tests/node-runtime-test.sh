@@ -11,7 +11,7 @@ TMP="$(mktemp -d)"
 
 # mktemp: o ramo do openssl (chave do nó) roda FORA deste teste, em $TMP2.
 # openssl: o instalador gera a chave do nó e o CSR; openssl simulado não prova nada.
-for tool in bash head sed grep dirname pwd mkdir stat chmod read nproc awk date tar gzip cat sha256sum tr rm mktemp openssl; do
+for tool in bash head sed grep dirname pwd mkdir stat chmod read nproc awk date tar gzip cat sha256sum tr rm mktemp openssl install env; do
   location="$(command -v "$tool")"
   ln -s "$location" "$TMP/$tool" 2>/dev/null || true
 done
@@ -585,5 +585,147 @@ NODE_HOME="$NH2" PATH="$TMP" /bin/bash "$NODE_DIR/node-doctor.sh" --control-plan
 /bin/grep -Fq 'enk_abcdef0123456789' "$TMP/doctor-hb-out" && {
   printf '[FAIL] doctor vazou a API key no heartbeat\n' >&2; exit 1; }
 PASS=$((PASS + 1)); printf '[PASS] %s\n' 'doctor não imprime a API key no heartbeat'
+
+# ---------------------------------------------------------------- --auto-update (cron do host)
+# O slot de reserva ficava na versão antiga quando saía release: nada na máquina chamava o
+# --update. Agora o cron do host segue o release publicado por node-auto-update.sh.
+CRON_FAKE="$TMP/cron-fake"
+rm -f "$TMP/curl"
+NODE_HOME="$NH" PATH="$TMP" NODE_CRON_FILE="$CRON_FAKE" /bin/bash "$NODE_DIR/install.sh" --auto-update on >/dev/null 2>&1 || true
+assert_eq 'auto-update on grava a escolha' 'on' "$(cat "$NH/auto-update" 2>/dev/null)"
+assert_contains 'auto-update on instala o cron do host' "$(cat "$CRON_FAKE" 2>/dev/null)" 'node-auto-update.sh'
+NODE_HOME="$NH" PATH="$TMP" NODE_CRON_FILE="$CRON_FAKE" /bin/bash "$NODE_DIR/install.sh" --auto-update off >/dev/null 2>&1 || true
+assert_eq 'auto-update off grava a escolha' 'off' "$(cat "$NH/auto-update" 2>/dev/null)"
+[[ -f "$CRON_FAKE" ]] && { printf '[FAIL] auto-update off deixou o cron instalado\n' >&2; exit 1; }
+PASS=$((PASS + 1)); printf '[PASS] %s\n' 'auto-update off remove o cron'
+out=$(NODE_HOME="$NH" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" --auto-update talvez 2>&1) && rc=0 || rc=$?
+[[ "$rc" -ne 0 ]] && assert_contains 'auto-update recusa valor desconhecido' "$out" 'on|off'
+
+# O bootstrap oferece a mesma escolha (ligada antes de o nó existir, numa máquina recém-preparada).
+out=$(NODE_HOME="$NHB" PATH="$TMP" NODE_CRON_FILE="$CRON_FAKE" /bin/bash "$NODE_DIR/bootstrap.sh" --auto-update on 2>&1) ||
+  { printf '[FAIL] bootstrap --auto-update on falhou:\n%s\n' "$out" >&2; exit 1; }
+assert_eq 'bootstrap --auto-update on grava a escolha' 'on' "$(cat "$NHB/auto-update" 2>/dev/null)"
+
+# --------------------------------------------- node-auto-update.sh (quem troca a versão)
+# O script roda no HOST. O bootstrap é substituído por um stub: o que se prova aqui é a decisão
+# (quando chamar, o que fazer com a falha, travamento e relógio), não a troca de código em si, que
+# o harness acima já cobre.
+mkdir -p "$TMP/dir-auto"
+cp "$NODE_DIR/node-auto-update.sh" "$TMP/dir-auto/node-auto-update.sh"
+chmod +x "$TMP/dir-auto/node-auto-update.sh"
+NHA="$TMP/node-auto"
+mkdir -p "$NHA"
+printf '%s\n' '{"nodeId":"nd_auto1234"}' > "$NHA/node.json"
+printf 'qa@00000000\n' > "$NHA/runtime-version"
+printf 'https://cp.test\n' > "$NHA/control-plane"
+: > "$TMP/bsp"
+# O stub do bootstrap registra o argumento e "atualiza" o runtime-version para BSP_NOVA. Partir do
+# arquivo em uso pelo próprio stub é o que torna a asserção discriminante: se o stub não rodar, a
+# versão continua a de antes; se rodar, vira a nova.
+printf '%s\n' '#!/bin/bash' \
+  'printf "%s\\n" "$*" >> "'"$TMP/bsp"'"' \
+  'if [ -n "${BSP_NOVA:-}" ]; then printf "%s\\n" "$BSP_NOVA" > "'"$NHA/runtime-version"'"; fi' \
+  'exit "${BSP_RC:-0}"' > "$TMP/dir-auto/bootstrap.sh"
+chmod +x "$TMP/dir-auto/bootstrap.sh"
+# curl stub do relógio: responde o cabeçalho Date com o valor de FAKE_DATE.
+# `printf "%s\n" "HTTP/2 200\ndate: ..."`: uma string de formato com \n no SCRIPT geraria só a
+# primeira linha, e o relógio cairia sempre no ramo "sem a data do servidor".
+make_command curl 'if [ -n "${FAKE_DATE:-}" ]; then printf "HTTP/2 200\ndate: %s\n" "$FAKE_DATE"; fi; exit 0'
+
+# auto_run usa o ambiente do chamador (VAR=valor antes do comando); o NODE_HOME é fixo do teste.
+# As variáveis de cenário vão numa linha PRÓPRIA de export, nunca separadas por `;` antes de
+# $(auto_run): o `;` fecha a lista do `export` e a atribuição seguinte vira comando DO SHELL do
+# teste — o script rodaria sem FAKE_DATE (falso verde no cenário do relógio).
+#
+# Cada cenário de atualização parte de uma versão conhecida — os stubs deixam o arquivo no estado
+# do cenário anterior, e um "não rodou" com o arquivo já na versão nova seria falso verde.
+semear_versao() { printf 'qa@00000000\n' > "$NHA/runtime-version"; }
+
+auto_run() {
+  # Contenção de `; linha solta na função vira argumento da linha seguinte — a variável tem de ficar
+  # no prefixo do comando, nunca numa linha própria.
+  NODE_HOME="$NHA" NODE_AUTO_UPDATE_LOG="$TMP/auto.log" NODE_RELEASE_API="https://api.github.test" PATH="$TMP" \
+    /bin/bash "$TMP/dir-auto/node-auto-update.sh" 2>&1
+}
+
+: > "$TMP/bsp"
+export BSP_NOVA='qa@11111111' BSP_RC=0 FAKE_DATE="$(date -u '+%a, %d %b %Y %H:%M:%S GMT')"
+out=$(auto_run) || \
+  { printf '[FAIL] auto-update falhou no caminho feliz:\n%s\n' "$out" >&2; exit 1; }
+assert_contains 'auto-update chama o bootstrap com --update' "$(cat "$TMP/bsp")" '--update'
+assert_contains 'auto-update relata a troca de versão' "$out" 'qa@00000000'
+assert_contains 'e diz para onde foi' "$out" 'qa@11111111'
+assert_eq 'a versão em uso é a que o bootstrap gravou' 'qa@11111111' "$(cat "$NHA/runtime-version")"
+
+# Versão já no release: o bootstrap roda e diz que não há nada — nada de resultado "atualizado". O
+# registro de chamadas é aberto aqui: cada cenário começa de um arquivo vazio — o de dentro da
+# função termina antes do comando e o prefixo com `;` não chegava ao bootstrap (falso verde em
+# "não chama o bootstrap": o --update do cenário anterior ficava no arquivo).
+printf 'qa@11111111\n' > "$NHA/runtime-version"
+: > "$TMP/bsp"
+export BSP_NOVA='' BSP_RC=0 FAKE_DATE="$(date -u '+%a, %d %b %Y %H:%M:%S GMT')"
+out=$(auto_run) || true
+assert_contains 'versão igual ao release não é anunciada como atualização' "$out" 'nada a atualizar'
+
+# Falha na troca: o runtime atual continua, o script sai não-zero e a trava não fica presa.
+printf 'qa@11111111\n' > "$NHA/runtime-version"
+: > "$TMP/bsp"
+export BSP_NOVA='' BSP_RC=1 FAKE_DATE="$(date -u '+%a, %d %b %Y %H:%M:%S GMT')"
+auto_run >/dev/null 2>&1 && rc=0 || rc=$?
+assert_eq 'falha do bootstrap sai não-zero' '1' "$rc"
+assert_eq 'falha não troca a versão em uso' 'qa@11111111' "$(cat "$NHA/runtime-version")"
+[[ -d "$NHA/update.lock" ]] && { printf '[FAIL] trava ficou presa depois da falha\n' >&2; exit 1; }
+PASS=$((PASS + 1)); printf '[PASS] %s\n' 'trava liberada depois da falha'
+
+# Relógio torto: o release é escolhido por data, e atualizar com o relógio fora é escolher a versão
+# errada. O teste não torce o relógio do host (ele não é do teste): torce a DATA DO SERVIDOR, que
+# chega pelo stub. Um falso de 1970 deixa o local meses adiantado — o caso perigoso: a máquina
+# "sabe" mais que o servidor. O stub do bootstrap avisa com a linha "bootstrap rodou", e a versão
+# que ele gravaria é distinta da que está em uso. O stub registra a chamada em $TMP/bsp.
+semear_versao
+: > "$TMP/bsp"
+export BSP_NOVA='qa@22222222' BSP_RC=0 FAKE_DATE="Thu, 01 Jan 1970 00:00:00 GMT"
+out=$(auto_run) || true
+assert_contains 'relógio fora do servidor recusa a atualização' "$out" 'relógio local'
+assert_not_contains 'e o bootstrap não roda com o relógio torto' "$(cat "$TMP/bsp")" '--update'
+assert_eq 'a versão em uso ficou na de partida' 'qa@00000000' "$(cat "$NHA/runtime-version")"
+assert_eq 'e a versão fica na de partida' 'qa@00000000' "$(cat "$NHA/runtime-version")"
+
+# O relógio certo é o caso de controle: a partir da MESMA versão de partida, com a data do
+# servidor igual à local, o bootstrap roda e a versão vira a nova. Sem este par, "não mudou a
+# versão" com relógio torto não provaria nada.
+unset FAKE_DATE   # sem resposta do servidor: o script segue com o relógio local
+: > "$TMP/bsp"
+export BSP_NOVA='qa@22222222' BSP_RC=0
+out=$(auto_run) || true
+assert_contains 'com o relógio certo o bootstrap roda' "$(cat "$TMP/bsp")" '--update'
+assert_eq 'e a versão vira a nova' 'qa@22222222' "$(cat "$NHA/runtime-version")"
+
+semear_versao
+# Trava de outra execução: não roda duas atualizações ao mesmo tempo.
+mkdir "$NHA/update.lock"
+: > "$TMP/bsp"
+export BSP_NOVA='qa@33333333' BSP_RC=0 FAKE_DATE="$(date -u '+%a, %d %b %Y %H:%M:%S GMT')"
+out=$(auto_run) || true
+assert_eq 'a trava não deixa trocar a versão' 'qa@00000000' "$(cat "$NHA/runtime-version")"
+assert_contains 'execução concorrente espera a próxima' "$out" 'outra atualização em andamento'
+assert_not_contains 'e não chama o bootstrap em paralelo' "$(cat "$TMP/bsp")" '--update'
+rm -rf "$NHA/update.lock"
+
+# Máquina sem nó instalado: o cron não pode "atualizar" o que não existe.
+rm -f "$NHA/node.json"
+auto_run >/dev/null 2>&1 && rc=0 || rc=$?
+assert_eq 'sem node.json recusa' '1' "$rc"
+printf '%s\n' '{"nodeId":"nd_auto1234"}' > "$NHA/node.json"
+
+# runtime-version fora do formato <fonte>@<sha8>: não troca o que não sabe o que é.
+printf 'qa-deadbeef\n' > "$NHA/runtime-version"
+: > "$TMP/bsp"
+auto_run >/dev/null 2>&1 && rc=0 || rc=$?
+assert_eq 'runtime-version inválida recusa' '1' "$rc"
+assert_not_contains 'e não chama o bootstrap' "$(cat "$TMP/bsp")" '--update'
+printf 'qa@11111111\n' > "$NHA/runtime-version"
+
+trap - EXIT
 
 printf '\nTodos os cenários passaram (%d asserções).\n' "$PASS"
