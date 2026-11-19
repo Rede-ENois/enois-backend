@@ -260,6 +260,12 @@ class StorageScrubberReadBackTests {
 		private final List<StoragePlacement> placements = new ArrayList<>();
 
 		@Override
+		public long bytesOwnedBy(String ownerUserId) {
+			// A varredura não cobra cota: só o upload cobra, e o teste de cota é o do serviço.
+			return 0L;
+		}
+
+		@Override
 		public Optional<StorageObject> find(String bucket, String key) {
 			return objects.stream().filter(o -> o.bucket().equals(bucket) && o.key().equals(key)).findFirst();
 		}

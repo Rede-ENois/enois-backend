@@ -325,3 +325,6 @@ retenção). Mutações conferidas: média das médias, "sem dado" virando a jan
   o upload multipart é feito com credencial, não por link.
 - **Credenciais temporárias (STS)** — `X-Amz-Security-Token` não é processado.
 - **Quotas e rate limiting por credencial** — a rota herda o limitador global, não um por Access Key.
+  A **cota de espaço por participante** existe desde o ciclo 66 (`rede.storage.max-bytes-per-owner`,
+  doc 12 §2.3): o upload que estoura responde `507 QuotaExceeded` no XML do S3, com o número na
+  mensagem.

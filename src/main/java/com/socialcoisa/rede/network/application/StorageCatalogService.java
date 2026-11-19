@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -107,6 +108,21 @@ public class StorageCatalogService {
 	private final StorageOperationMetrics metrics;
 
 	/**
+	 * Cota de bytes por participante ({@code created_by}); {@code 0} desliga (doc 20 §10).
+	 *
+	 * <p>O teto de espaço que existia era o de quem <b>cede</b> (o nó). Sem a cota de quem
+	 * <b>usa</b>, um participante com credencial S3 enche o disco e a cota dos nós, e o upload dos
+	 * outros passa a responder {@code 507} — o vizinho paga pelo vizinho.</p>
+	 */
+	private final long maxBytesPerOwner;
+
+	/**
+	 * O que cada participante já ocupa, <b>nesta instância</b>, a partir do que o banco respondeu na
+	 * primeira leitura. É cache, não fonte da verdade: a fonte é {@code bytesOwnedBy}.
+	 */
+	private final Map<String, Long> usadoPorDono = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/**
 	 * A forma anterior, sem chave: instalação que ainda não configurou a mestra grava em claro. Os
 	 * testes de outros assuntos do catálogo não passam a depender do envelope por causa disto.
 	 */
@@ -125,16 +141,28 @@ public class StorageCatalogService {
 	}
 
 	/**
-	 * Com o contador de operação: é esta a forma que o Spring injeta (o {@code @Autowired} fica neste
-	 * construtor). A delegação acima mantém os testes de outros assuntos com a assinatura que já usavam.
+	 * Com o contador de operação, sem cota de participante. A delegação acima mantém os testes de
+	 * outros assuntos com a assinatura que já usavam; a cota fica no construtor de baixo.
 	 */
-	@org.springframework.beans.factory.annotation.Autowired
 	StorageCatalogService(StorageCatalogRepository catalog, AuditTrail audit, Clock clock,
 			@Value("${rede.storage.max-object-bytes:5368709120}") long maxObjectBytes,
 			@Value("${rede.storage.root:${java.io.tmpdir}/enois-storage}") String storageRoot,
 			@Value("${rede.security.encryption-key:}") String encryptionKey,
 			StoragePlacementService placement, @Nullable NodeBodyStore nodeBodies,
 			@Nullable StorageOperationMetrics metrics) {
+		this(catalog, audit, clock, maxObjectBytes, storageRoot, encryptionKey, placement, nodeBodies, metrics, 0L);
+	}
+
+	/** A forma com cota por participante — é a que o Spring injeta (doc 20 §10). */
+	@org.springframework.beans.factory.annotation.Autowired
+	StorageCatalogService(StorageCatalogRepository catalog, AuditTrail audit, Clock clock,
+			@Value("${rede.storage.max-object-bytes:5368709120}") long maxObjectBytes,
+			@Value("${rede.storage.root:${java.io.tmpdir}/enois-storage}") String storageRoot,
+			@Value("${rede.security.encryption-key:}") String encryptionKey,
+			StoragePlacementService placement, @Nullable NodeBodyStore nodeBodies,
+			@Nullable StorageOperationMetrics metrics,
+			@Value("${rede.storage.max-bytes-per-owner:0}") long maxBytesPerOwner) {
+		this.maxBytesPerOwner = Math.max(0, maxBytesPerOwner);
 		this.catalog = catalog;
 		this.audit = audit;
 		this.clock = clock;
@@ -157,6 +185,10 @@ public class StorageCatalogService {
 		validateKey(key);
 		String type = contentType == null || contentType.isBlank() ? "application/octet-stream" : contentType;
 		Instant now = clock.instant();
+		// A cota é cobrada <b>antes</b> de tudo: um objeto PENDING derrubado pela cota deixaria a
+		// chave ocupada até virar lápide, e o upload seguinte do mesmo participante não poderia
+		// reusar a chave.
+		exigirCotaDoParticipante(actorId);
 		StorageBucketPolicy policy = bucketPolicy(bucket);
 
 		if (policy.versioning()) {
@@ -337,6 +369,14 @@ public class StorageCatalogService {
 			throw new ApiException(413, "STORAGE_OBJECT_TOO_LARGE",
 				"O objeto excede o teto desta instalacao (" + maxObjectBytes + " bytes).");
 		}
+		try {
+			// O corpo já foi medido: a cota cobra o tamanho, e não só o que já está gravado.
+			exigirCotaDoParticipante(actorId, measured.bytes());
+		}
+		catch (RuntimeException semCota) {
+			deleteQuietly(measured.temp());
+			throw semCota;
+		}
 		Path destination = bodyPath(object.id());
 		try {
 			if (envelope == null) {
@@ -362,11 +402,75 @@ public class StorageCatalogService {
 		// A réplica 0 é a do Control Plane — a mesma convenção do upload pelo nó.
 		catalog.savePlacement(new StoragePlacement(object.id(), 0, "control-plane", measured.bytes(),
 			measured.sha256(), StoragePlacement.State.OK, now));
+		// A cota conta o que o participante tem: a gravação que passou aumenta a conta dele.
+		somarUsoDoParticipante(actorId, measured.bytes());
 		designReplicas(object.id(), measured.bytes(), measured.sha256(), now);
 		audit.record(actorId, "STORAGE_OBJECT_STORED", object.id(),
 			"{\"bucket\":\"" + escape(object.bucket()) + "\",\"key\":\"" + escape(object.key()) + "\",\"bytes\":"
 				+ measured.bytes() + ",\"sha256\":\"" + measured.sha256() + "\",\"via\":\"s3\"}");
 		return catalog.findById(object.id()).orElse(object);
+	}
+
+	/**
+	 * Cota de bytes por participante (brief §10, "quotas"; §7, "não permitir que o armazenamento do
+	 * Énóis consuma espaço além do limite configurado").
+	 *
+	 * <p><b>Antes:</b> o teto de espaço existia do lado de quem <b>cede</b> (o nó: disco livre,
+	 * espaço declarado, §7) e não do lado de quem <b>usa</b>. Um único participante com credencial S3
+	 * enchia o disco, enchia a cota dos nós e os uploads dos outros passavam a responder
+	 * {@code 507 STORAGE_NO_CEDENT_SPACE} — o vizinho pagava pelo vizinho.</p>
+	 *
+	 * <p><b>Agora:</b> o que {@code actorId} já tem no catálogo ({@code created_by}, somando só as
+	 * versões correntes e sem as lápides) é comparado com {@code rede.storage.max-bytes-per-owner}.
+	 * Estourado, a resposta é {@code 507 STORAGE_OWNER_QUOTA_EXCEEDED} com o número que acabou.</p>
+	 *
+	 * <p><b>O que este número não é:</b> a cota do <b>objeto individual</b> continua sendo
+	 * {@code rede.storage.max-object-bytes}, e a conta da cota é por participante, não por bucket —
+	 * um participante com dez buckets tem dez vezes o espaço, ou nenhum, e dizer o contrário seria
+	 * uma segunda regra de espaço para quem opera descobrir.</p>
+	 */
+	void exigirCotaDoParticipante(String actorId) {
+		if (maxBytesPerOwner <= 0 || actorId == null || actorId.isBlank()) {
+			return;
+		}
+		long usado = usadoPorDono.computeIfAbsent(actorId, catalog::bytesOwnedBy);
+		if (usado >= maxBytesPerOwner) {
+			throw new ApiException(507, "STORAGE_OWNER_QUOTA_EXCEEDED",
+				"O participante ja ocupa " + usado + " bytes e a cota desta instalacao e "
+					+ maxBytesPerOwner + " bytes.");
+		}
+	}
+
+	/**
+	 * A cota com o tamanho da gravação já na conta.
+	 *
+	 * <p><b>Por que o acréscimo.</b> Conferir só o que já está gravado deixa o participante entrar a
+	 * 1 byte da cota e gravar o objeto máximo: o teto vira conselho. O corpo só é medido <b>depois</b>
+	 * de atravessar o fluxo, então quem cobra o tamanho é quem já o mediu — o {@code finishUpload} e o
+	 * {@code store}, que recusam antes de gravar e deixam o objeto {@code PENDING} (o retry do cliente
+	 * continua válido).</p>
+	 */
+	void exigirCotaDoParticipante(String actorId, long acrescimo) {
+		if (maxBytesPerOwner <= 0 || actorId == null || actorId.isBlank()) {
+			return;
+		}
+		long usado = usadoPorDono.computeIfAbsent(actorId, catalog::bytesOwnedBy);
+		if (usado + acrescimo > maxBytesPerOwner) {
+			throw new ApiException(507, "STORAGE_OWNER_QUOTA_EXCEEDED",
+				"O participante ja ocupa " + usado + " bytes, esta gravacao soma " + acrescimo
+					+ " e a cota desta instalacao e " + maxBytesPerOwner + " bytes.");
+		}
+	}
+
+	/**
+	 * O que o participante passou a ocupar. Chamado só quando o corpo foi de fato gravado e medido —
+	 * a cota segue os bytes do catálogo, não os tentados.
+	 */
+	private void somarUsoDoParticipante(String actorId, long bytes) {
+		if (maxBytesPerOwner <= 0 || actorId == null || actorId.isBlank()) {
+			return;
+		}
+		usadoPorDono.merge(actorId, bytes, Long::sum);
 	}
 
 	/** A política do bucket, ou os padrões quando ninguém configurou. */
@@ -512,6 +616,14 @@ public class StorageCatalogService {
 			throw new ApiException(413, "STORAGE_OBJECT_TOO_LARGE",
 				"O objeto excede o teto desta instalacao (" + maxObjectBytes + " bytes).");
 		}
+		try {
+			// Quem paga a cota é quem criou o objeto (`created_by`), não o nó que guardou os bytes.
+			exigirCotaDoParticipante(object.createdBy(), measured.bytes());
+		}
+		catch (RuntimeException semCota) {
+			deleteQuietly(measured.temp());
+			throw semCota;
+		}
 		// O arquivo vai para o destino ANTES do catálogo: registrar "tem cópia" apontando para um
 		// arquivo que ainda não existe daria um objeto servível sem bytes.
 		Path destination = bodyPath(object.id());
@@ -541,6 +653,8 @@ public class StorageCatalogService {
 		}
 		catalog.savePlacement(new StoragePlacement(object.id(), 0, node.id(), measured.bytes(), measured.sha256(),
 			StoragePlacement.State.OK, now));
+		// Quem pagou a cota foi quem criou o objeto (`created_by`), não o nó que guardou os bytes.
+		somarUsoDoParticipante(object.createdBy(), measured.bytes());
 		// A replica 0 e a do Control Plane. As demais sao DESIGNACAO, nao copia: o objeto entra no
 		// catalogo do no escolhido como PENDING_REMOTE e so vira OK quando o no confirmar o que
 		// gravou (markReplicaStored). Contar a designacao como durabilidade seria dizer que o

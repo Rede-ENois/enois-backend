@@ -141,6 +141,13 @@ public interface StorageCatalogRepository {
 	 */
 	java.util.Map<String, long[]> summarizeObjects();
 
+	/**
+	 * Os bytes que o participante ocupa no catálogo: soma de {@code bytes} das versões <b>correntes</b>
+	 * que ele criou, sem lápide. É a base da cota por participante (doc 20 §10) — versão substituída já
+	 * não é conteúdo que o download entrega, e lápide não é conteúdo nenhum.
+	 */
+	long bytesOwnedBy(String ownerUserId);
+
 	/** Cópias por estado: {@code {quantidade, bytes}} cada. Mesma regra de ausência acima. */
 	java.util.Map<String, long[]> summarizePlacements();
 
