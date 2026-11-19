@@ -47,15 +47,21 @@ class NotificationOutboxEventHandler implements OutboxEventHandler {
 	private void handlePostCommented(String payload) {
 		String postId = extractValue(payload, "postId");
 		String authorId = extractValue(payload, "authorId");
+		String commentId = extractValue(payload, "commentId");
 		if (postId == null || authorId == null) return;
 		Post post = postRepository.findById(new PostId(postId)).orElse(null);
 		if (post == null) return;
 		if (post.authorId().value().equals(authorId)) return;
 		String actorName = userProfileRepository.findById(authorId)
 			.map(p -> p.name()).orElse("Alguém");
+		// O clique tem que abrir O COMENTÁRIO, não o post inteiro (relato: "não perde tempo
+		// procurando entre vários comentários"). O deep link carrega o id na query; o front
+		// rola até a linha e destaca.
+		String href = commentId == null ? "/api/feed/posts/" + postId
+			: "/api/feed/posts/" + postId + "?comentario=" + commentId;
 		notificationService.create(post.authorId().value(), "NEW_COMMENT", authorId,
 			"Novo comentário", actorName + " comentou no seu post.",
-			"/api/feed/posts/" + postId, "Ver", previewOfComment(extractValue(payload, "commentId"), post));
+			href, "Ver", previewOfComment(commentId, post));
 	}
 
 	private void handlePostReacted(String payload) {

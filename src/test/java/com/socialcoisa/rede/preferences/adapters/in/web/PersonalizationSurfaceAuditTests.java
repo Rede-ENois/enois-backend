@@ -178,7 +178,10 @@ class PersonalizationSurfaceAuditTests {
 			}
 		}
 		assertThat(found).as("notificação de comentário no post BUSINESS").isNotNull();
-		assertThat(found.path("href").asText()).isEqualTo("/api/feed/posts/" + businessId);
+		// O aviso de comentário ancora na linha do comentário (?comentario=<id>); sem o id, é o post.
+		assertThat(found.path("href").asText())
+				.startsWith("/api/feed/posts/" + businessId)
+				.contains("?comentario=");
 	}
 
 	@Test

@@ -674,7 +674,7 @@ config_disk_mb() {
 }
 
 bandwidth_args() {
-  # bandwidth_args <config-json>: argumento de limite de taxa do curl, um por linha;
+  # bandwidth_args <config-json> [payload-json]: argumento de limite de taxa do curl, um por linha;
   # vazio quando o participante não declarou banda (0 = sem teto). O limite declarado
   # é o que ele aceitou ceder de REDE, e o runtime é quem transfere: baixar corpo de
   # conteúdo e subir resultado de mídia passam todos pelo mesmo teto, em
@@ -684,6 +684,16 @@ bandwidth_args() {
   # concorrentes competindo pelo mesmo teto.
   local mbps kbps
   mbps=$(json_number "$1" bandwidthMbps)
+  # Teto POR TRANSFERENCIA (brief §16): o rebalanceamento pede quanto ceder para um objeto
+  # especifico, e o nó aplica o MENOR entre ele e o que declarou. Sem este passo o teto da
+  # transferência era gravado pelo CP e nunca chegava ao nó.
+  local transfer_mbps
+  transfer_mbps=$(json_number "$2" bandwidthLimitMbps)
+  if [[ -n "$transfer_mbps" && "$transfer_mbps" != 0 ]]; then
+    if [[ -z "$mbps" || "$mbps" == 0 ]] || (( transfer_mbps < mbps )); then
+      mbps="$transfer_mbps"
+    fi
+  fi
   # O teto do TIPO (formato 7, brief §6) vence a banda geral: é o que o participante reservou
   # para este tipo de máquina. Tipo sem limite próprio cai na banda do nó -- ausência é
   # "não especializou", nunca zero, e zero mantém a regra de "sem teto".
@@ -1111,9 +1121,11 @@ exec_object_put() {
   local next="$1" task_id="$2" attempt="$3" config="${4:-}"
   local payload object_id expect_sha expect_bytes replica tmp got_sha got_bytes resp code
   local -a bw=()
-  mapfile -t bw < <(bandwidth_args "$config")
 
   payload=$(task_payload "$next")
+  # O payload entra no teto: uma transferência de rebalanceamento pede quanto ceder para ESTE
+  # objeto, e vale o menor entre esse pedido e a banda declarada (bandwidth_args).
+  mapfile -t bw < <(bandwidth_args "$config" "$payload")
   object_id=$(json_field "$payload" objectId)
   expect_sha=$(json_field "$payload" sha256)
   expect_bytes=$(json_number "$payload" bytes)

@@ -65,11 +65,29 @@ e distinto — a rede sabe que ele tem cópia, não que ele está onde outro est
 O painel (`GET /admin/network/nodes/storage/overview`) devolve `objectsByDurability`, a contagem de
 objetos por nível **efetivamente observado** — nunca a política pedida.
 
+## 2.2 Replicação automática (`StorageReplicationWorker`)
+
+Ligado por `REDE_STORAGE_REPLICATION_AUTO_HEAL_ENABLED=true`, o worker roda a cada `delay-ms` (15 min
+de padrão) e faz uma passada:
+
+1. **solta as designações vencidas** — `PENDING_REMOTE` sem confirmação por
+   `rede.storage.replication.pending-max-age-minutes` (60) vira `GONE`. Antes, essa pendência durava
+   para sempre e o healer a lia como "a lacuna tem dono" (`ALREADY_DESIGNATED`): o operador não
+   conseguia curar aquele objeto nem manualmente, e a cópia "a caminho" nunca chegava. A idade é a de
+   `verified_at`, que `savePlacement` grava como o instante da designação;
+2. **cura** até 25 objetos por passada pelo mesmo `StorageHealer` (mesma colocação, mesmo teto de lote);
+3. **despacha** cada objeto designado pelo `StorageReplicationDispatcher` — uma tarefa `OBJECT_PUT`
+   por colocação, idempotente por `storage:<objectId>:<replica>`.
+
+Ele **não** grava corpo, **não** apaga e **não** confirma cópia: a confirmação continua sendo do nó,
+com bytes e sha-256 conferidos. `GONE` não é apagado — o histórico mostra que houve uma tentativa, e
+o scrub segue contando a linha como réplica existente (o que ela é).
+
 ## 3. O que NÃO está entregue (e por quê)
 
 | item | por que não |
 |---|---|
-| **healing automático (agendado)** | o healing **existe** como ato de operador — `POST /admin/network/nodes/storage/heal` designa a lacuna a nós (ver §5.1). O que não existe é agendador: designar gera tráfego de corpo, e o custo de disco e banda é de quem contribui |
+| **healing automático ligado de fábrica** | o agendador **existe** (`StorageReplicationWorker`), mas nasce **desligado** (`rede.storage.replication.auto-heal-enabled`, padrão `false`): ligar é decisão de quem opera a rede, porque designar gera tráfego de corpo no disco e na banda do participante. Desligado, o comportamento é o de antes — só o ato de operador |
 | **scrubbing que relê o corpo de OUTRO nó** | o Control Plane não inicia conexão para o nó (NAT e a proibição de cadastrar endereço). O que existe hoje é a releitura do que está **neste** CP: `GET /admin/network/nodes/storage/scrub?readBodies=true` compara tamanho e sha-256 do arquivo com o medido e devolve `divergent[]` — ver §4.1 |
 | **domínio de falha maior que o nó** | o cadastro não tem host físico, rack nem operadora. Derivar isso de região/cidade seria deduzir topologia. "Mesmo nó" é o que o dado permite afirmar |
 | **erasure coding** | da fase 4 do brief (§ distribuição inteligente), não da 3 |
@@ -82,11 +100,13 @@ objetos por nível **efetivamente observado** — nunca a política pedida.
 | suíte completa | 3111 testes (R123) |
 | `StoragePlacementServiceTests` (novo) | 8 — folga, não-repetição, nó pronto, disco, estável |
 | `NetworkStorageReplicationTests` (novo) | 6 — designação ≠ durabilidade, confirmação conferida, digest, varredura |
+| `StorageReplicationWorkerTests` (novo) | 3 — designação vencida vira `GONE` e volta a ser curável (com despacho), designação recente **não** é solta, desligado não toca em nada |
 | `storage-migration-test` | **29** asserções em MariaDB 11.4 real, migrações 2× com dados |
 
 Mutações conferidas: confirmação sem conferir digest derruba `designacaoNaoContaComoDurabilidade…`;
 aceitar `PENDING_REMOTE` como confirmável derruba o mesmo teste; varredura contando
-`PENDING_REMOTE` como cópia derruba `varreduraApontaObjetoComMenosCopiasQueOPedido`.
+`PENDING_REMOTE` como cópia derruba `varreduraApontaObjetoComMenosCopiasQueOPedido`. No worker:
+soltar toda `PENDING_REMOTE` sem olhar a idade derruba `designacao_recente_nao_e_solta`.
 
 ## 5. Migração
 
@@ -209,7 +229,7 @@ ser recusado (o que já era correto), mas a réplica nunca acontecia. Agora exis
 | passo | o que faz |
 |---|---|
 | 1 | lê `objectId`, `sha256`, `bytes` e `replica` do payload; payload incompleto → `STORAGE_TASK_PAYLOAD_INVALID` |
-| 2 | baixa por `GET /network/storage/objects/{id}` com a **mesma** chave de nó e o mesmo `--limit-rate` do teto de banda declarado |
+| 2 | baixa por `GET /network/storage/objects/{id}` com a **mesma** chave de nó e `--limit-rate` do **menor** entre o teto da transferência (`bandwidthLimitMbps` do payload, quando existe) e a banda declarada |
 | 3 | **mede o que veio** (`sha256sum` + `stat`) e compara com o medido pelo Control Plane. Divergência → `STORAGE_REPLICA_MISMATCH`, e **não confirma** |
 | 4 | confere o teto de disco cedido **antes** de confirmar. Acima → `STORAGE_OBJECT_TOO_LARGE` (o temporário sai; `diskMb=0` é "sem teto declarado", não "zero bytes") |
 | 5 | confirma em `POST .../replica` com **as medidas que ele mesmo calculou** |

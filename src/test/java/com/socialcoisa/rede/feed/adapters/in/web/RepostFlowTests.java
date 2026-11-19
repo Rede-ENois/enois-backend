@@ -23,7 +23,10 @@ import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 import tools.jackson.databind.ObjectMapper;
 
-/** Republicar: ponteiro sem opinião ou citação com opinião, sem duplicata, sempre no original. */
+/**
+ * Republicar: ponteiro sem opinião ou citação com opinião, sem duplicata,
+ * sempre no original.
+ */
 @SpringBootTest
 @AutoConfigureMockMvc
 class RepostFlowTests {
@@ -53,31 +56,31 @@ class RepostFlowTests {
 		// Sem opinião não nasce post novo: a resposta é o próprio original.
 		mockMvc.perform(post("/feed/posts/{id}/repost", originalId)
 				.header("X-Session-Token", reposter.token()))
-			.andExpect(status().isCreated())
-			.andExpect(jsonPath("$.id").value(originalId))
-			.andExpect(jsonPath("$.repostOf").doesNotExist())
-			.andExpect(jsonPath("$.content").value("Conteúdo original que vale republicar."));
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.id").value(originalId))
+				.andExpect(jsonPath("$.repostOf").doesNotExist())
+				.andExpect(jsonPath("$.content").value("Conteúdo original que vale republicar."));
 
 		// A mesma pessoa não republica o mesmo post duas vezes.
 		mockMvc.perform(post("/feed/posts/{id}/repost", originalId)
 				.header("X-Session-Token", reposter.token()))
-			.andExpect(status().isConflict())
-			.andExpect(jsonPath("$.code").value("ALREADY_REPOSTED"));
+				.andExpect(status().isConflict())
+				.andExpect(jsonPath("$.code").value("ALREADY_REPOSTED"));
 
 		// Republicar uma citação aponta para o ORIGINAL (sem corrente de créditos).
 		String quoteId = quote(quoter, originalId, "Assino embaixo.");
 		mockMvc.perform(post("/feed/posts/{id}/repost", quoteId)
 				.header("X-Session-Token", other.token()))
-			.andExpect(status().isCreated())
-			.andExpect(jsonPath("$.id").value(originalId));
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.id").value(originalId));
 
 		// Desfazer libera republicar de novo.
 		mockMvc.perform(delete("/feed/posts/{id}/repost", originalId)
 				.header("X-Session-Token", reposter.token()))
-			.andExpect(status().isOk());
+				.andExpect(status().isOk());
 		mockMvc.perform(post("/feed/posts/{id}/repost", originalId)
 				.header("X-Session-Token", reposter.token()))
-			.andExpect(status().isCreated());
+				.andExpect(status().isCreated());
 	}
 
 	@Test
@@ -92,22 +95,24 @@ class RepostFlowTests {
 				.header("X-Session-Token", reposter.token())
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("opinion", opinion))))
-			.andExpect(status().isCreated())
-			.andExpect(jsonPath("$.repostOf").value(originalId))
-			.andExpect(jsonPath("$.repostWithOpinion").value(true))
-			.andExpect(jsonPath("$.content").value(opinion))
-			.andReturn();
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.repostOf").value(originalId))
+				.andExpect(jsonPath("$.repostWithOpinion").value(true))
+				.andExpect(jsonPath("$.content").value(opinion))
+				.andReturn();
 		String repostId = objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asString();
 
-		// Na leitura, o original vem citado (conteúdo e mídias) para o card montar a citação.
+		// Na leitura, o original vem citado (conteúdo e mídias) para o card montar a
+		// citação.
 		mockMvc.perform(get("/feed/posts/{id}", repostId))
-			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.repostWithOpinion").value(true))
-			.andExpect(jsonPath("$.repostOfContent")
-				.value("Texto original que será citado no repost com opinião."))
-			.andExpect(jsonPath("$.repostOfMediaIds").isArray());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.repostWithOpinion").value(true))
+				.andExpect(jsonPath("$.repostOfContent")
+						.value("Texto original que será citado no repost com opinião."))
+				.andExpect(jsonPath("$.repostOfMediaIds").isArray());
 
-		// Opinião acima de 600 caracteres é recusada com mensagem própria. (Texto variado:
+		// Opinião acima de 600 caracteres é recusada com mensagem própria. (Texto
+		// variado:
 		// PlainText.defuse colapsa corridas de 13+ do mesmo caractere.)
 		String longOpinion = ("Esta e uma opiniao longa sobre o post e o contexto. ").repeat(20).substring(0, 601);
 		var another = auth.authenticate("repost_quote_long_" + System.nanoTime());
@@ -115,8 +120,8 @@ class RepostFlowTests {
 				.header("X-Session-Token", another.token())
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("opinion", longOpinion))))
-			.andExpect(status().isBadRequest())
-			.andExpect(jsonPath("$.code").value("OPINION_TOO_LONG"));
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("OPINION_TOO_LONG"));
 	}
 
 	@Test
@@ -134,19 +139,19 @@ class RepostFlowTests {
 				.header("Idempotency-Key", "repost-edit-" + System.nanoTime())
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("content", "Comentário depois de editar."))))
-			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.content").value("Comentário depois de editar."))
-			.andExpect(jsonPath("$.repostOf").value(originalId))
-			.andExpect(jsonPath("$.repostOfAuthor").value(username(author)))
-			.andExpect(jsonPath("$.repostWithOpinion").value(true));
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.content").value("Comentário depois de editar."))
+				.andExpect(jsonPath("$.repostOf").value(originalId))
+				.andExpect(jsonPath("$.repostOfAuthor").value(username(author)))
+				.andExpect(jsonPath("$.repostWithOpinion").value(true));
 
 		// E a leitura seguinte (do banco) continua com o original citado.
 		mockMvc.perform(get("/feed/posts/{id}", repostId))
-			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.content").value("Comentário depois de editar."))
-			.andExpect(jsonPath("$.repostOf").value(originalId))
-			.andExpect(jsonPath("$.repostWithOpinion").value(true))
-			.andExpect(jsonPath("$.repostOfContent").value(originalContent));
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.content").value("Comentário depois de editar."))
+				.andExpect(jsonPath("$.repostOf").value(originalId))
+				.andExpect(jsonPath("$.repostWithOpinion").value(true))
+				.andExpect(jsonPath("$.repostOfContent").value(originalContent));
 	}
 
 	@Test
@@ -159,16 +164,16 @@ class RepostFlowTests {
 				.header("Idempotency-Key", "repost-moment-" + System.nanoTime())
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
-					"type", "MOMENT", "content", "Um momento que some em 24h.", "tags", List.of(),
-					"mediaIds", List.of()))))
-			.andExpect(status().isCreated())
-			.andReturn();
+						"type", "MOMENT", "content", "Um momento que some em 24h.", "tags", List.of(),
+						"mediaIds", List.of()))))
+				.andExpect(status().isCreated())
+				.andReturn();
 		String momentId = objectMapper.readTree(moment.getResponse().getContentAsString()).get("id").asString();
 
 		mockMvc.perform(post("/feed/posts/{id}/repost", momentId)
 				.header("X-Session-Token", reposter.token()))
-			.andExpect(status().isBadRequest())
-			.andExpect(jsonPath("$.code").value("NOT_REPOSTABLE"));
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("NOT_REPOSTABLE"));
 	}
 
 	@Test
@@ -177,22 +182,24 @@ class RepostFlowTests {
 		var reposter = auth.authenticate("repost_article_user_" + System.nanoTime());
 		var other = auth.authenticate("repost_article_other_" + System.nanoTime());
 
-		String articleId = publishType(author, Map.of("topic", "TECNOLOGIA", "type", "ARTICLE", "content", "Titulo do artigo citado",
-			"articleBody", "Corpo que mora em outra tabela.", "tags", List.of(), "mediaIds", List.of()));
+		String articleId = publishType(author,
+				Map.of("topic", "TECNOLOGIA", "type", "ARTICLE", "content", "Titulo do artigo citado",
+						"articleBody", "Corpo que mora em outra tabela.", "tags", List.of(), "mediaIds", List.of()));
 
-		// Repost sem opinião é ponteiro para o original, então o artigo circula com o corpo inteiro.
+		// Repost sem opinião é ponteiro para o original, então o artigo circula com o
+		// corpo inteiro.
 		mockMvc.perform(post("/feed/posts/{id}/repost", articleId)
 				.header("X-Session-Token", reposter.token()))
-			.andExpect(status().isCreated())
-			.andExpect(jsonPath("$.id").value(articleId));
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.id").value(articleId));
 
 		String quoteId = quote(reposter, articleId, "Vale a leitura.");
 		mockMvc.perform(get("/feed/posts/{id}", quoteId))
-			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.type").value("INSIGHT"))
-			.andExpect(jsonPath("$.content").value("Vale a leitura."))
-			.andExpect(jsonPath("$.repostOf").value(articleId))
-			.andExpect(jsonPath("$.repostOfContent").value("Titulo do artigo citado"));
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.type").value("INSIGHT"))
+				.andExpect(jsonPath("$.content").value("Vale a leitura."))
+				.andExpect(jsonPath("$.repostOf").value(articleId))
+				.andExpect(jsonPath("$.repostOfContent").value("Titulo do artigo citado"));
 
 		// A mesma opinião repetida continua recusada.
 		mockMvc.perform(post("/feed/posts/{id}/repost", articleId)
@@ -202,11 +209,12 @@ class RepostFlowTests {
 			.andExpect(status().isConflict())
 			.andExpect(jsonPath("$.code").value("ALREADY_REPOSTED"));
 
-		// A citação é INSIGHT, mas republicá-la sem opinião aponta para o artigo original.
+		// A citação é INSIGHT, mas republicá-la sem opinião aponta para o artigo
+		// original.
 		mockMvc.perform(post("/feed/posts/{id}/repost", quoteId)
 				.header("X-Session-Token", other.token()))
-			.andExpect(status().isCreated())
-			.andExpect(jsonPath("$.id").value(articleId));
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.id").value(articleId));
 	}
 
 	@Test
@@ -215,26 +223,28 @@ class RepostFlowTests {
 		var reposter = auth.authenticate("repost_page_user_" + System.nanoTime());
 
 		String pageId = publishType(author, Map.of("topic", "TECNOLOGIA", "type", "PAGE", "content", "",
-			"pageHtml", "<p>Mini pagina</p>", "tags", List.of(), "mediaIds", List.of()));
-		String blogId = publishType(author, Map.of("topic", "TECNOLOGIA", "type", "BLOG", "content", "Post do blog citado",
-			"tags", List.of(), "mediaIds", List.of()));
+				"pageHtml", "<p>Mini pagina</p>", "tags", List.of(), "mediaIds", List.of()));
+		String blogId = publishType(author,
+				Map.of("topic", "TECNOLOGIA", "type", "BLOG", "content", "Post do blog citado",
+						"tags", List.of(), "mediaIds", List.of()));
 
 		for (String id : List.of(pageId, blogId)) {
 			mockMvc.perform(post("/feed/posts/{id}/repost", id)
 					.header("X-Session-Token", reposter.token()))
-				.andExpect(status().isCreated())
-				.andExpect(jsonPath("$.id").value(id));
+					.andExpect(status().isCreated())
+					.andExpect(jsonPath("$.id").value(id));
 
 			String quoteId = quote(reposter, id, "Olha isso aqui " + id);
 			mockMvc.perform(get("/feed/posts/{id}", quoteId))
-				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.type").value("INSIGHT"))
-				.andExpect(jsonPath("$.repostOf").value(id));
+					.andExpect(status().isOk())
+					.andExpect(jsonPath("$.type").value("INSIGHT"))
+					.andExpect(jsonPath("$.repostOf").value(id));
 		}
 	}
 
 	/**
-	 * Republicar avisa quem escreveu o original — nos dois caminhos, nunca a si mesmo. Antes, o
+	 * Republicar avisa quem escreveu o original — nos dois caminhos, nunca a si
+	 * mesmo. Antes, o
 	 * contador de reposts subia em silêncio e o autor não ficava sabendo.
 	 */
 	@Test
@@ -245,29 +255,30 @@ class RepostFlowTests {
 
 		mockMvc.perform(post("/feed/posts/{id}/repost", originalId)
 				.header("X-Session-Token", reposter.token()))
-			.andExpect(status().isCreated());
+				.andExpect(status().isCreated());
 
 		mockMvc.perform(get("/notifications")
 				.header("X-Session-Token", author.token())
 				.param("limit", "10"))
-			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.items[0].kind").value("POST_REPOSTED"))
-			.andExpect(jsonPath("$.items[0].actorId").value(reposter.userId()))
-			.andExpect(jsonPath("$.items[0].href").value("/api/feed/posts/" + originalId))
-			.andExpect(jsonPath("$.items[0].read").value(false));
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.items[0].kind").value("POST_REPOSTED"))
+				.andExpect(jsonPath("$.items[0].actorId").value(reposter.userId()))
+				.andExpect(jsonPath("$.items[0].href").value("/api/feed/posts/" + originalId))
+				.andExpect(jsonPath("$.items[0].read").value(false));
 
-		// Repost com opinião avisa também, e o link leva à citação (o que aparece no feed).
+		// Repost com opinião avisa também, e o link leva à citação (o que aparece no
+		// feed).
 		var quoter = auth.authenticate("repost_notify_quoter_" + System.nanoTime());
 		String quoteId = quote(quoter, originalId, "Concordo com o autor.");
 
 		mockMvc.perform(get("/notifications")
 				.header("X-Session-Token", author.token())
 				.param("limit", "10"))
-			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.items[0].kind").value("POST_REPOSTED"))
-			.andExpect(jsonPath("$.items[0].actorId").value(quoter.userId()))
-			.andExpect(jsonPath("$.items[0].href").value("/api/feed/posts/" + quoteId))
-			.andExpect(jsonPath("$.items[1].kind").value("POST_REPOSTED"));
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.items[0].kind").value("POST_REPOSTED"))
+				.andExpect(jsonPath("$.items[0].actorId").value(quoter.userId()))
+				.andExpect(jsonPath("$.items[0].href").value("/api/feed/posts/" + quoteId))
+				.andExpect(jsonPath("$.items[1].kind").value("POST_REPOSTED"));
 
 		// Citar o próprio post não gera aviso para si mesmo.
 		var selfQuoter = auth.authenticate("repost_notify_self_" + System.nanoTime());
@@ -276,8 +287,8 @@ class RepostFlowTests {
 		mockMvc.perform(get("/notifications")
 				.header("X-Session-Token", selfQuoter.token())
 				.param("limit", "10"))
-			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.items[?(@.kind == 'POST_REPOSTED')]").isEmpty());
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.items[?(@.kind == 'POST_REPOSTED')]").isEmpty());
 	}
 
 	/**
@@ -329,8 +340,8 @@ class RepostFlowTests {
 				.header("X-Session-Token", session.token())
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("opinion", opinion))))
-			.andExpect(status().isCreated())
-			.andReturn();
+				.andExpect(status().isCreated())
+				.andReturn();
 		return objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asString();
 	}
 
@@ -345,19 +356,21 @@ class RepostFlowTests {
 		// Reposter publica o proprio post (mais recente que o do autor).
 		String ownPostId = publish(reposter, "Meu post proprio, mais recente.");
 
-		// Reposter republica o post antigo do autor (a data do repost e a mais recente de todas).
+		// Reposter republica o post antigo do autor (a data do repost e a mais recente
+		// de todas).
 		mockMvc.perform(post("/feed/posts/{id}/repost", oldPostId)
 				.header("X-Session-Token", reposter.token()))
-			.andExpect(status().isCreated());
+				.andExpect(status().isCreated());
 
-		// No perfil do reposter, o post republicado deve vir PRIMEIRO (data do repost > data do post proprio).
+		// No perfil do reposter, o post republicado deve vir PRIMEIRO (data do repost >
+		// data do post proprio).
 		mockMvc.perform(get("/users/{username}/posts", username(reposter))
 				.header("X-Session-Token", reposter.token()))
-			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.items[0].id").value(oldPostId))
-			.andExpect(jsonPath("$.items[0].repostedBy").exists())
-			.andExpect(jsonPath("$.items[0].repostedBy.at").exists())
-			.andExpect(jsonPath("$.items[1].id").value(ownPostId));
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.items[0].id").value(oldPostId))
+				.andExpect(jsonPath("$.items[0].repostedBy").exists())
+				.andExpect(jsonPath("$.items[0].repostedBy.at").exists())
+				.andExpect(jsonPath("$.items[1].id").value(ownPostId));
 	}
 
 	private String publishType(TestAuthHelper.AuthSession session, Map<String, Object> body) throws Exception {
@@ -366,8 +379,8 @@ class RepostFlowTests {
 				.header("Idempotency-Key", "repost-type-" + System.nanoTime())
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(body)))
-			.andExpect(status().isCreated())
-			.andReturn();
+				.andExpect(status().isCreated())
+				.andReturn();
 		return objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asString();
 	}
 
@@ -377,16 +390,83 @@ class RepostFlowTests {
 				.header("Idempotency-Key", "repost-pub-" + System.nanoTime())
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("topic", "TECNOLOGIA",
-					"type", "INSIGHT", "content", content, "tags", List.of(), "mediaIds", List.of()))))
-			.andExpect(status().isCreated())
-			.andReturn();
+						"type", "INSIGHT", "content", content, "tags", List.of(), "mediaIds", List.of()))))
+				.andExpect(status().isCreated())
+				.andReturn();
 		return objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asString();
 	}
 
 	private String username(TestAuthHelper.AuthSession session) throws Exception {
 		MvcResult me = mockMvc.perform(get("/me").header("X-Session-Token", session.token()))
-			.andExpect(status().isOk())
-			.andReturn();
+				.andExpect(status().isOk())
+				.andReturn();
 		return objectMapper.readTree(me.getResponse().getContentAsString()).get("username").asString();
 	}
+
+	@Test
+	void repostToCommunityRejectedWhenUserIsNotMember() throws Exception {
+		var author = auth.authenticate("repost_comm_author_" + System.nanoTime());
+		var nonMember = auth.authenticate("repost_comm_nonmember_" + System.nanoTime());
+		String postId = publish(author, "Post publico para teste de comunidade.");
+
+		// Criar uma comunidade com o autor (ele e o membro/dono)
+		MvcResult commResult = mockMvc.perform(post("/communities")
+				.header("X-Session-Token", author.token())
+				.header("Idempotency-Key", "comm-create-" + System.nanoTime())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+						"name", "Comunidade Teste " + System.nanoTime(),
+						"description", "Descricao da comunidade",
+						"topic", "TECNOLOGIA"))))
+				.andExpect(status().isCreated())
+				.andReturn();
+		String communityId = objectMapper.readTree(commResult.getResponse().getContentAsString()).get("id").asString();
+
+		// Nao-membro tenta republicar na comunidade -> deve ser bloqueado com 403
+		mockMvc.perform(post("/feed/posts/{id}/repost", postId)
+				.header("X-Session-Token", nonMember.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+						"opinion", "Tentando republicar sem ser membro",
+						"communityId", communityId))))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.code").value("NOT_A_MEMBER"));
+	}
+
+	@Test
+	void repostWithOpinionToCommunitySucceedsWhenUserIsMember() throws Exception {
+		var author = auth.authenticate("repost_comm_ok_author_" + System.nanoTime());
+		String postId = publish(author, "Post original interessante sobre programacao.");
+
+		// Criar a comunidade com o autor (ele e o criador e membro)
+		MvcResult commResult = mockMvc.perform(post("/communities")
+				.header("X-Session-Token", author.token())
+				.header("Idempotency-Key", "comm-create-ok-" + System.nanoTime())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of(
+						"name", "Comunidade Membros " + System.nanoTime(),
+						"description", "Descricao da comunidade",
+						"topic", "TECNOLOGIA"))))
+				.andExpect(status().isCreated())
+				.andReturn();
+		String communityId = objectMapper.readTree(commResult.getResponse().getContentAsString()).get("id").asString();
+
+		// O autor (que e membro) republica o post com opiniao dentro da sua comunidade
+		mockMvc.perform(post("/communities/{id}/join", communityId)
+				.header("X-Session-Token", author.token()))
+				.andExpect(status().isOk());
+
+		// Membro republica o post com opiniao dentro da comunidade
+		mockMvc.perform(post("/feed/posts/{id}/repost", postId)
+                .header("X-Session-Token", author.token())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(Map.of(
+                    "opinion", "Olha que post bacana pra nossa comunidade!",
+                    "communityId", communityId))))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.repostOf").value(postId))
+            .andExpect(jsonPath("$.communityId").value(communityId))
+            .andExpect(jsonPath("$.content").value("Olha que post bacana pra nossa comunidade!"));
+    }
+
 }

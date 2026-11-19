@@ -440,6 +440,25 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	}
 
 	@Override
+	public boolean discardPending(String id) {
+		// Apaga a LINHA, inclusive a já STORED: a gravação que a criou acabou de ser recusada por donagem
+		// (o bucket é de outra conta), e a linha do invasor não pode ficar — ela é justamente o que daria
+		// o bucket a ele. O que não se apaga é o objeto do DONO: quem chama só passa o id de um objeto que
+		// não existia antes do {@code PUT} recusado ({@code desfazer} em S3GatewayController), nunca o de
+		// uma chave que ele reescreveu — esse caminho é o {@code restorePending}.
+		jdbc.update("delete from network_storage_placements where object_id = ?", id);
+		return jdbc.update("delete from network_storage_objects where id = ?", id) == 1;
+	}
+
+	@Override
+	public boolean restorePending(String id) {
+		return jdbc.update("""
+			update network_storage_objects set state = 'PENDING', bytes = null, sha256 = null, updated_at = ?
+			where id = ? and state = 'STORED'
+			""", Timestamp.from(Instant.now()), id) == 1;
+	}
+
+	@Override
 	public List<StorageObject> list(String bucket, String prefix, String afterKey, int limit) {
 		// O LIKE é prefixo literal: o '%' do cliente seria curinga e listaria outra coisa.
 		String pattern = escapeLike(prefix == null ? "" : prefix) + "%";
