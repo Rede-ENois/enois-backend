@@ -51,6 +51,9 @@ import com.socialcoisa.rede.shared.web.CursorCodec;
 @Service
 public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, GetPostUseCase, GetPostsUseCase {
 
+	/** Rótulo do autor sem perfil (conta anonimizada ou banida): o conteúdo fica, o nome não. */
+	static final String AUTOR_REMOVIDO = "Usuário";
+
 	private final PostRepository postRepository;
 	private final ArticleRepository articleRepository;
 	private final FeedCacheRepository feedCacheRepository;
@@ -677,11 +680,15 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 			.map(post -> {
 				UserProfile profile = allProfiles.get(post.authorId().value());
 				var corporateProfile = corporate.get(post.authorId().value());
+				// Conta anonimizada ou banida: sem perfil, o nome cai para o rótulo genérico —
+				// nunca para o id cru (#1021), que expõe o identificador interno na tela.
+				boolean autorSemPerfil = corporateProfile == null && profile == null;
 				PostView view = PostView.from(post,
 					corporateProfile != null ? corporateProfile.username()
 						: profile != null ? profile.username() : null,
-					corporateProfile != null ? corporateProfile.name()
-						: profile != null ? profile.displayWithNickname() : post.authorId().value(),
+					autorSemPerfil ? AUTOR_REMOVIDO
+						: corporateProfile != null ? corporateProfile.name()
+						: profile.displayWithNickname(),
 					corporateProfile != null ? corporateProfile.avatar()
 						: profile != null ? profile.avatar() : null,
 					profile != null ? profile.allBadges() : List.of())
