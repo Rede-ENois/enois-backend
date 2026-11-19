@@ -275,6 +275,17 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		""";
 
 	/**
+	 * Ocupacao de um participante: bytes das versoes CORRENTES que ele criou, sem lapide. E a leitura
+	 * da cota (doc 20 §10). {@code coalesce} e obrigatorio: sem linha devolve NULL, e um NULL que vira
+	 * zero por acidente e a diferenca entre "nao ocupa nada" e "nao medido".
+	 */
+	private static final String BYTES_OWNED_BY = """
+		select coalesce(sum(bytes), 0)
+		from network_storage_objects
+		where created_by = ? and superseded_by is null and state <> 'DELETED'
+		""";
+
+	/**
 	 * Por bucket (§17 do brief): quantos objetos SERVIVEIS e quantos bytes MEDIDOS eles somam.
 	 *
 	 * <p>Serve o "quantidade de buckets" do painel sem uma segunda consulta — o numero de linhas
@@ -537,6 +548,12 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	@Override
 	public Optional<StoragePlacement> placementOn(String objectId, String nodeId) {
 		return jdbc.query(SELECT_PLACEMENT_ON, PLACEMENT_MAPPER, objectId, nodeId).stream().findFirst();
+	}
+
+	@Override
+	public long bytesOwnedBy(String ownerUserId) {
+		Long total = jdbc.queryForObject(BYTES_OWNED_BY, Long.class, ownerUserId);
+		return total == null ? 0L : total;
 	}
 
 	@Override

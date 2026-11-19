@@ -1,5 +1,7 @@
 package com.socialcoisa.rede.network.application;
 
+import com.socialcoisa.rede.network.application.testsupport.CatalogoEmMemoria;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -385,7 +387,7 @@ class StorageCatalogServiceTests {
 	}
 
 	/** Catálogo em memória: a porta é o que importa aqui, não o SQL (coberto pelos testes de schema). */
-	private static final class InMemoryCatalog implements StorageCatalogRepository {
+	private static final class InMemoryCatalog extends CatalogoEmMemoria {
 
 		private final java.util.Map<String, StorageObject> byKey = new java.util.LinkedHashMap<>();
 		private final java.util.Map<String, StoragePlacement> placements = new java.util.LinkedHashMap<>();
@@ -537,6 +539,15 @@ class StorageCatalogServiceTests {
 				par[1] += o.bytes() == null ? 0 : o.bytes();
 			}
 			return porEstado;
+		}
+
+		@Override
+		public long bytesOwnedBy(String ownerUserId) {
+			return byKey.values().stream()
+				.filter(o -> ownerUserId.equals(o.createdBy()) && o.supersededBy() == null
+						&& o.state() != StorageObjectState.DELETED)
+				.mapToLong(o -> o.bytes() == null ? 0 : o.bytes())
+				.sum();
 		}
 
 		@Override

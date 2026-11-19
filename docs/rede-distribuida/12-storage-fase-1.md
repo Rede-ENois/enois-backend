@@ -54,6 +54,40 @@ Sem medida (`null`, runtime anterior a V321) o nó **não** é recusado: não me
 espaço, e recusar por falta de informação tiraria do caminho nós com terabytes livres. O piso é
 folga de sistema de arquivos (temporário do upload, journal), não o tamanho do objeto.
 
+## 2.3 Cota de espaço por participante (doc 20 §10 / brief §10)
+
+O teto de espaço que existia era o de quem **cede** — o disco livre e o espaço declarado do nó
+(§7 do brief). Faltava o de quem **usa**: quantos bytes um participante pode ocupar no catálogo.
+Sem ele, um único participante com credencial S3 enchia o disco e a cota dos nós, e o upload dos
+outros passava a responder `507 STORAGE_NO_CEDENT_SPACE` — o vizinho pagava pelo vizinho.
+
+| | antes | agora |
+|---|---|---|
+| abertura do upload (`beginUpload`) | nada | **`507 STORAGE_OWNER_QUOTA_EXCEEDED`** quando `bytesOwnedBy(actorId) >= cota` — recusa antes de o objeto nascer, para a chave não ficar presa num `PENDING` |
+| fim do upload (`finishUpload`, rota S3) e gravação do nó (`store`) | nada | **`507`** quando `usado + bytes medidos > cota` — o corpo já foi medido, e recusar depois de gravar seria gravar o que não cabe |
+| rota do gateway S3 | — | o mesmo `507` traduzido para **`<Code>QuotaExceeded</Code>`**, o código que o SDK entende |
+
+A conta é `sum(bytes)` de `network_storage_objects` para o `created_by`, das versões **correntes** e
+sem lápide (`StorageCatalogPersistenceAdapter.bytesOwnedBy`): versão substituída não é conteúdo que o
+download entrega, lápide não é conteúdo nenhum. **Não é** por bucket — quem tem dez buckets não tem
+dez vezes o espaço. `rede.storage.max-bytes-per-owner=0` (padrão) **desliga** a cota, que é o
+comportamento que existia: a instalação que confia no limite do nó não muda de comportamento ao
+atualizar.
+
+A contagem é **somada em memória por instância** — a primeira leitura vem do banco, e cada gravação
+desta instância acrescenta. Com várias instâncias de API, a conta de cada uma começa no banco
+(numeração do momento em que foi lida) e a do outro não aparece até reiniciar: o teto é honesto
+sozinho (uma instância vê o que ela gravou) e **não** é um teto global exato com várias instâncias.
+O que realmente impede o abuso é o **`507` na abertura** consultando o banco uma vez por
+participante; o que depende da memória é só o tamanho do corpo que chega logo depois. Compartilhar a
+conta exige o Redis que a rede ainda não usa para limitador (a mesma nota do doc 19 §3.2).
+
+**Verificação:** `StorageOwnerQuotaTests` **4** (cheio é recusado antes de o objeto nascer; o vizinho
+não paga; cota `0` desliga; a mensagem traz os três números), `S3OwnerQuotaTests` **1** pela rota real
+de PUT do gateway (primeiro objeto 200, segundo 507 `QuotaExceeded`, vizinho 200). Mutações: cota
+global em vez de por participante, sem o acréscimo do tamanho, `beginUpload` sem a checagem, a soma
+que nunca acontece — **4 de 4 derrubam**.
+
 ## 3. O que NÃO está entregue (e por quê)
 
 | do brief | por que não agora |

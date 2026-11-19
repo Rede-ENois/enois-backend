@@ -229,7 +229,19 @@ class S3GatewayController {
 			throw s3Error(409, "ObjectAlreadyStored", "A chave ja tem copia confirmada; use outro nome de chave.");
 		}
 		// O catálogo mede o digest em pedaços de 64 KiB e grava; é o mesmo caminho da rota do nó.
-		StorageObject stored = storage.finishUpload(pending.id(), body(request), credential.ownerUserId());
+		// A recusa por cota de participante é 507 <b>no formato do S3</b> com o código interno: o SDK
+		// não conhece "STORAGE_OWNER_QUOTA_EXCEEDED", e um XML sem `Code` que ele entenda viraria
+		// falha opaca do cliente em vez de "seu espaço acabou".
+		StorageObject stored;
+		try {
+			stored = storage.finishUpload(pending.id(), body(request), credential.ownerUserId());
+		}
+		catch (ApiException recusado) {
+			if (recusado.status() == 507 && "STORAGE_OWNER_QUOTA_EXCEEDED".equals(recusado.code())) {
+				throw s3Error(507, "QuotaExceeded", recusado.getMessage());
+			}
+			throw recusado;
+		}
 		if (!bucketSemDono(bucket, credential.ownerUserId())) {
 			desfazer(stored, antes);
 			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
