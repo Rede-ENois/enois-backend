@@ -38,7 +38,7 @@ são construídos no Control Plane; o cliente não escolhe o nome do próprio ce
 
 | chave | onde | quem lê |
 |---|---|---|
-| privada do **nó** | keystore do nó (gerada lá) | ninguém mais — nunca viaja |
+| privada do **nó** | `$NODE_HOME/node.key` (gerada lá pelo `install.sh`, §5.1) | ninguém mais — nunca viaja |
 | privada da **CA** | `REDE_NETWORK_CA_KEY` (PKCS#8 Ed25519 em base64) | só o emissor, no Control Plane |
 | pública da **CA** | `REDE_NETWORK_CA_PUBLIC` (SPKI Ed25519 em base64) | emissor (conferir) e nós (pino) |
 
@@ -105,6 +105,28 @@ POST /network/nodes/me/certificate   (X-Node-Id + X-Node-Key)
 { "csr": "-----BEGIN CERTIFICATE REQUEST-----..." }
 ```
 
+### 5.1 O instalador gera a chave e leva o CSR
+
+O passo 3 acima é executado pelo `install.sh`, não pelo operador:
+
+| arquivo em `$NODE_HOME` | o que é | permissão |
+|---|---|---|
+| `node.key` | chave privada Ed25519 do nó (PKCS#8), gerada na primeira instalação | `600` até o `--start`, depois `640` (uid 10001 do container) |
+| `node.csr` | o CSR Ed25519 enviado no enroll (público; pode ser recriado do `node.key`) | `600` |
+
+- **A privada nunca sai da máquina.** O corpo do enroll leva só a pública, dentro do CSR; a chave
+  privada não é serializada em lugar nenhum.
+- **A chave é preservada** se já existir (`install.sh` não gera outra): gerar uma nova a cada execução
+  trocaria a identidade por baixo do certificado vigente.
+- **`--backup` arquiva `node.key` junto com `node.json` e `api-key`** e o `--restore` a devolve com
+  `600`. Restaurar a identidade sem a chave daria um certificado que o nó não consegue usar.
+- **`openssl` é pré-requisito do enroll** e o instalador recusa sem ele, com o nome do comando — em
+  vez de enrolar sem CSR e deixar o nó sem identidade criptográfica.
+
+O que **não** existe: verificação da combinação `node.key` × certificado guardado no nó (o
+`node.json` traz o PEM e a série, mas nada confere que a chave corresponde) e uso da chave pelo
+runtime (`node-runtime.sh` ainda não assina nem decifra com ela — é o passo do envelope em §7.1).
+
 `REDE_NETWORK_CA_PUBLIC` ausente com a privada presente **derruba o boot** com mensagem explícita:
 emitir certificado que não se consegue conferir depois recusaria todos os nós no handshake, e o
 motivo apareceria longe da causa.
@@ -122,6 +144,13 @@ motivo apareceria longe da causa.
 - `scripts/tests/storage-migration-test.sh` em **MariaDB 11.4 real**: **82 PASS / 0 FAIL**, aplicação 2×,
   incluindo "a tabela não guarda chave privada", unicidade do fingerprint, rotação com histórico e
   preservação dos dados entre as duas aplicações.
+- `scripts/tests/node-runtime-test.sh` — **103 asserções** (94 + 9 desta rodada), com `openssl` real no
+  PATH (um openssl simulado não provaria CSR nenhum): `node.key` nasce `600` e é Ed25519, o CSR
+  autoassina e é Ed25519, o enroll leva o CSR como PEM e **nunca** leva `PRIVATE KEY`, e o `--restore`
+  devolve a **mesma** chave (comparação da pública, não só da existência).
+  Mutações conferidas, cada uma derrubando **só** a asserção dela: tirar o `csr` do corpo do enroll
+  (`enroll não levou o CSR`); tirar `node.key` do `--backup` (`a chave do nó volta com o restore`);
+  gerar uma chave que não é Ed25519 (`a chave do nó é Ed25519`).
 
 ## 7. Criptografia em repouso do corpo do nó
 
@@ -182,6 +211,25 @@ DEK própria do objeto**, embrulhada pela chave mestra (`EnvelopeBodyCrypto`):
    uma DEK embrulhada pelo Control Plane. A DEK não desce ao nó; o que desce é o corpo em claro pelo
    canal autenticado (§1–§6). Envelope fim-a-fim até o nó exigiria embrulhar a DEK para a chave pública
    do nó — é o passo seguinte, e depende da rotação de certificado que já existe ser usada para isso.
+
+**O que o envelope fim-a-fim até o nó exigiria, e onde ele está.** A chave pública do nó já existe
+(`network_node_certificates.public_key`, DER SPKI, provada pela posse do CSR) e a privada correspondente
+agora nasce no instalador (§5.1). Falta a parte criptográfica:
+
+- o emissor deriva um segredo ECDH entre uma chave efêmera e a pública do nó, cifra a DEK com ele e manda
+  o cabeçalho junto com o corpo;
+- o nó deriva o mesmo segredo com a privada e abre a DEK;
+- o runtime guarda o corpo com **essa** DEK, não com a chave da instalação, e o `scrub` passa a cobrir a
+  chave do envelope.
+
+Uma investigação foi feita e **não** foi entregue, porque a primeira versão estava errada: ela lia os
+bytes da chave Ed25519 do nó como se fossem um ponto de curva de troca, o que produz uma chave com
+formato válido e segredo diferente — o nó nunca abriria o corpo, e o erro só apareceria em execução.
+O caminho correto é a conversão birracional Ed25519 → X25519 (derivada da semente com SHA-512 e
+clamp) para o lado privado e o mapeamento do ponto para o público, ou um segundo par X25519 no nó,
+que muda o contrato do certificado. É **decisão de arquitetura**, não de implementação, e não foi
+tomada aqui. Até ela existir, o corpo continua descendo em claro pelo canal autenticado e o nó cifra
+com a própria chave — que é o estado atual, declarado.
 
 Evidência: `EnvelopeBodyCryptoTests` — 7 casos, incluindo **dois objetos do mesmo conteúdo com DEKs
 diferentes**, **a DEK de um objeto não abrindo outro** e **outra mestra não decifrando**.

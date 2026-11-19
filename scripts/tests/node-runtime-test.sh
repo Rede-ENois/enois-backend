@@ -9,7 +9,9 @@ NODE_DIR="$ROOT/deploy/node-runtime"
 TMP="$(mktemp -d)"
 
 
-for tool in bash head sed grep dirname pwd mkdir stat chmod read nproc awk date tar gzip cat sha256sum tr rm; do
+# mktemp: o ramo do openssl (chave do nó) roda FORA deste teste, em $TMP2.
+# openssl: o instalador gera a chave do nó e o CSR; openssl simulado não prova nada.
+for tool in bash head sed grep dirname pwd mkdir stat chmod read nproc awk date tar gzip cat sha256sum tr rm mktemp openssl; do
   location="$(command -v "$tool")"
   ln -s "$location" "$TMP/$tool" 2>/dev/null || true
 done
@@ -98,6 +100,20 @@ assert_eq 'NODE_HOME atravessável pelo container, não por outros usuários (71
 assert_contains 'enroll pede a API key' "$out" '--set-key'
 assert_contains 'região vai aninhada em location, como o contrato documenta' \
   "$(cat "$TMP/curl-calls")" '"location":{"region":"sa-east-1","country":"BR"}'
+# A chave do nó (brief §10) nasce no enroll: o Control Plane emite o certificado a partir do
+# CSR e guarda a pública. Antes disto a chave nunca era gerada — `node.key` não existia — e a
+# emissão recusava todo enrolamento por falta de CSR, embora a rota já o aceitassem.
+assert_eq 'a chave privada do nó nasce só para o dono (600)' '600' "$(stat -c '%a' "$NH/node.key")"
+assert_contains 'a chave do nó é Ed25519' "$(openssl pkey -in "$NH/node.key" -noout -text 2>/dev/null)" 'ED25519'
+assert_contains 'o CSR do nó confere consigo mesmo' \
+  "$(openssl req -in "$NH/node.csr" -noout -verify 2>&1)" 'self-signature verify OK'
+assert_contains 'o CSR é Ed25519' "$(openssl req -in "$NH/node.csr" -noout -text 2>/dev/null)" 'ED25519'
+csr_enviado=$(sed -n 's/.*"csr":"\([^"]*\)".*/\1/p' "$TMP/curl-calls")
+[[ -n "$csr_enviado" ]] || { printf '[FAIL] enroll não levou o CSR:\n%s\n' "$(cat "$TMP/curl-calls")" >&2; exit 1; }
+# O CSR viaja como string JSON (quebras escapadas): desfaz antes de conferir o formato.
+assert_contains 'o CSR enviado é PEM' "$(printf '%b' "$csr_enviado")" '-----BEGIN CERTIFICATE REQUEST-----'
+assert_not_contains 'a chave privada do nó nunca vai no enroll' "$TMP/curl-calls" 'PRIVATE KEY'
+assert_not_contains 'nem a pública em claro fora do CSR' "$TMP/curl-calls" 'PUBLIC KEY'
 
 # O pino da config assinada é gravado no enroll: o executor confere toda config contra ele.
 assert_eq 'pinning-key gravada com 600' '600' "$(stat -c '%a' "$NH/pinning-key")"
@@ -166,6 +182,9 @@ assert_contains 'start sem enroll recusa' "$out" 'rode o enroll primeiro'
 # Backup de identidade completa: arquivo nasce 600, e o nome carrega o nodeId.
 # O --backup grava no diretório corrente: o teste roda dentro de $TMP/cwd.
 mkdir -p "$TMP/cwd"
+# Cópia da chave antes do restore: o restore recria o NODE_HOME do zero, e a prova é
+# que a chave volta IGUAL — não que existe uma chave qualquer.
+mkdir -p "$TMP/backup-origem"; cp -p "$NH/node.key" "$TMP/backup-origem/node.key"
 backup_file=$(cd "$TMP/cwd" && NODE_HOME="$NH" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" --backup >/dev/null; find . -maxdepth 1 -name 'enois-node-nd_teste123-*.tar.gz' | head -n 1)
 [[ -n "$backup_file" ]] || { printf '[FAIL] backup não encontrado em %s\n' "$TMP/cwd" >&2; exit 1; }
 backup_file="$TMP/cwd/$backup_file"
@@ -188,6 +207,12 @@ assert_contains 'restore com identidade presente recusa' "$out" 'restaurar por c
 rm -rf "$NH"; mkdir -p "$NH"; chmod 700 "$NH"
 out=$(NODE_HOME="$NH" PATH="$TMP" /bin/bash "$NODE_DIR/install.sh" --restore "$backup_file" 2>&1)
 assert_contains 'restore devolve o mesmo nodeId' "$out" 'nd_teste123'
+# A chave do nó faz parte da identidade: restaurada sem ela, o certificado do nó vira
+# um documento de outra chave — ele não abre o que foi selado para ele.
+assert_eq 'a chave do nó volta com o restore (600)' '600' "$(stat -c '%a' "$NH/node.key")"
+assert_eq 'e é a mesma chave (não uma nova)' \
+  "$(openssl pkey -in "$NH/node.key" -pubout 2>/dev/null | sha256sum)" \
+  "$(openssl pkey -in "$TMP/backup-origem/node.key" -pubout 2>/dev/null | sha256sum)"
 assert_eq 'node.json restaurado com 600' '600' "$(stat -c '%a' "$NH/node.json")"
 assert_eq 'api-key restaurada com 600' '600' "$(stat -c '%a' "$NH/api-key")"
 make_command curl "case \"\${@: -1}\" in */network/nodes/heartbeat) printf '%s' '$HB_BODY' ;; *) exit 22 ;; esac"
