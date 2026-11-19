@@ -221,6 +221,12 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	private static final String SELECT_PLACEMENTS = "select " + PLACEMENT_COLUMNS
 		+ " from network_storage_placements where object_id = ? and state = 'OK' order by replica asc";
 
+	/** Cópias num estado, das mais antigas para as mais novas: a que está parada há mais tempo vem
+	 * primeiro. */
+	private static final String SELECT_PLACEMENTS_BY_STATE = "select " + PLACEMENT_COLUMNS
+		+ " from network_storage_placements where state = ? "
+		+ "order by verified_at asc, object_id asc, replica asc";
+
 	/**
 	 * Lápides vencidas em ordem total (bucket, chave), estritamente depois do cursor. O índice
 	 * {@code (state, updated_at)} da V319 filtra o estado; a ordenação vem do índice do bucket.
@@ -510,6 +516,11 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	@Override
 	public List<StoragePlacement> placements(String objectId) {
 		return jdbc.query(SELECT_PLACEMENTS, PLACEMENT_MAPPER, objectId);
+	}
+
+	@Override
+	public List<StoragePlacement> placementsInState(StoragePlacement.State state) {
+		return jdbc.query(SELECT_PLACEMENTS_BY_STATE, PLACEMENT_MAPPER, state.name());
 	}
 
 	@Override

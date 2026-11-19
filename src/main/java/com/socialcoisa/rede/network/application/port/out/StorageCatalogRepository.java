@@ -157,6 +157,16 @@ public interface StorageCatalogRepository {
 	List<StoragePlacement> placementsOnNode(String nodeId);
 
 	/**
+	 * As cópias de <b>todos</b> os objetos num estado, em ordem estável.
+	 *
+	 * <p>É a leitura que a cura precisa para achar as {@code STALE} que a varredura do próprio
+	 * disco não vê: a cópia de outro nó nunca passa por este disco, e o sentido dela só existe no
+	 * catálogo. A ordem é {@code (verified_at, object_id, replica)} — a mais antiga primeiro, que
+	 * é a que está parada há mais tempo.</p>
+	 */
+	List<StoragePlacement> placementsInState(StoragePlacement.State state);
+
+	/**
 	 * Cria a <b>versão nova</b> de uma chave. Diferente de {@link #createPending}: nunca reaproveita
 	 * linha. A versão corrente anterior tem de já ter sido marcada por {@link #markSuperseded} — o
 	 * índice único condicional recusa duas correntes da mesma chave.

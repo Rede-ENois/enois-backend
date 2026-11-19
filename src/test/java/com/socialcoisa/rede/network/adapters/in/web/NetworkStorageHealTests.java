@@ -226,6 +226,43 @@ class NetworkStorageHealTests {
 		return json.contains(objectId);
 	}
 
+	/**
+	 * A cópia que existe e <b>não confere</b> é lacuna para a cura, e não só para o relatório.
+	 *
+	 * <p>Antes, a cura varria sem reler corpo e sem olhar o catálogo: a cópia ficava {@code STALE}
+	 * para sempre, o espaço dela continuava contando como ocupado e cada rodada designava uma
+	 * réplica nova ao lado da queimada.</p>
+	 */
+	@Test
+	void copiaDivergenteViraEspacoLivreNaCura() throws Exception {
+		String admin = adminToken();
+		byte[] content = "conteudo-divergente".getBytes();
+		String objectId = storedObjectWithoutReplica("heal", "foto.jpg", content);
+		Node storage = node("NODE_STORAGE");
+		mockMvc.perform(post("/admin/network/nodes/storage/heal").header("X-Session-Token", admin))
+			.andExpect(status().isOk());
+		// O nó grava a cópia com OUTRO conteúdo e confirma: o catálogo registra divergência e a
+		// colocação vai para STALE.
+		mockMvc
+			.perform(post("/network/storage/objects/" + objectId + "/replica").header("X-Node-Id", storage.id())
+				.header("X-Node-Key", storage.key()).contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(
+					Map.of("bytes", content.length, "sha256", sha256("outro-conteudo".getBytes())))))
+			.andExpect(status().isConflict());
+		assertThat(placements(objectId).stream().filter(p -> "STALE".equals(p.get("state")))).hasSize(1);
+
+		mockMvc.perform(post("/admin/network/nodes/storage/heal").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.repostos.length()").value(1))
+			.andExpect(jsonPath("$.repostos[0].action").value("SERIALIZED"))
+			.andExpect(jsonPath("$.designated.length()").value(1));
+		// A queimada saiu do caminho: o espaço é devolvido e a réplica nova sai depois da maior.
+		var depois = placements(objectId);
+		assertThat(depois.stream().filter(p -> "STALE".equals(p.get("state")))).isEmpty();
+		assertThat(depois.stream().filter(p -> "GONE".equals(p.get("state")))).hasSize(1);
+		assertThat(depois.stream().filter(p -> "PENDING_REMOTE".equals(p.get("state")))).hasSize(1);
+	}
+
 	@Test
 	void objetoQueJaTemDesignacaoPendenteNaoEReescolhido() throws Exception {
 		String admin = adminToken();

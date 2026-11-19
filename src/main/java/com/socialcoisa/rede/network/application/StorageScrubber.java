@@ -231,6 +231,16 @@ public class StorageScrubber {
 						if (!replicaZero && !noLocal) {
 							continue;
 						}
+						// Instalação sem corpo local (o catálogo tem uma réplica 0 que este processo
+						// não hospeda — é o caso do Control Plane servido sem disco de corpo): não há
+						// o que reler, e isso NÃO é divergência. Antes o `catch` abaixo transformava
+						// a ausência do serviço de corpo em "a cópia do CP não confere".
+						if (replicaZero && bodies == null) {
+							continue;
+						}
+						if (!replicaZero && nodeBodies == null) {
+							continue;
+						}
 						relidos++;
 						try (InputStream body = replicaZero
 								? bodies.openReplicaZeroBody(id)
