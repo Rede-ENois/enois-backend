@@ -415,23 +415,48 @@ public class MediaFfmpegRunner {
 		long startedAt = System.nanoTime();
 		Process process;
 		try {
-			// Output is discarded: nobody reads it, and a verbose ffmpeg would fill the pipe and stall.
-			process = new ProcessBuilder(command).redirectErrorStream(true)
-				.redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+			// A saída (stderr do ffmpeg) é capturada em vez de descartada: sem ela, um timeout fica
+			// indistinguível entre "o processo não chegou a produzir nada" e "o processo rodou e
+			// recusou", que é o que torna essa falha indepurável (#960). A drenagem numa thread
+			// separada evita o outro problema do DESCARD — um ffmpeg verboso enchendo o pipe e
+			// travando por isso, não por trabalho.
+			process = new ProcessBuilder(command).redirectErrorStream(true).start();
 		}
 		catch (IOException failure) {
 			LOG.error("media_ffmpeg_unavailable mime={} error={}", mimeType, failure.getClass().getSimpleName());
 			throw unavailable(failure);
 		}
+		java.util.concurrent.atomic.AtomicReference<String> saida = new java.util.concurrent.atomic.AtomicReference<>("");
+		Thread drenagem = Thread.ofVirtual().start(() -> {
+			try (java.io.InputStream stream = process.getInputStream()) {
+				byte[] buffer = new byte[DIAGNOSTIC_BYTES];
+				int lidos = stream.readNBytes(buffer, 0, buffer.length);
+				if (lidos > 0) {
+					saida.set(new String(buffer, 0, lidos, java.nio.charset.StandardCharsets.UTF_8));
+				}
+				stream.transferTo(java.io.OutputStream.nullOutputStream());
+			}
+			catch (IOException ignored) {
+				// A drenagem é best-effort: perder a saída não pode virar falha do upload.
+			}
+		});
 		try {
 			if (!process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
 				process.destroyForcibly();
-				LOG.warn("media_ffmpeg_rejected reason=timeout mime={} elapsedMs={}", mimeType, elapsedMs(startedAt));
+				process.waitFor(2, TimeUnit.SECONDS);
+				aguardarDrenagem(drenagem);
+				LOG.warn("media_ffmpeg_rejected reason=timeout mime={} elapsedMs={} producedOutput={} output={}",
+					mimeType, elapsedMs(startedAt), !saida.get().isBlank(), resumo(saida.get()));
 				throw rejected(null);
 			}
-			if (process.exitValue() != 0 || Files.size(output) == 0) {
-				LOG.warn("media_ffmpeg_rejected reason=exit mime={} exit={} elapsedMs={}", mimeType,
-					process.exitValue(), elapsedMs(startedAt));
+			// O processo terminou, mas a thread de drenagem pode ainda estar lendo o que ele escreveu:
+			// juntar antes de avaliar garante que a causa técnica já esteja na mão quando o log sai.
+			aguardarDrenagem(drenagem);
+			boolean semSaida = Files.size(output) == 0;
+			if (process.exitValue() != 0 || semSaida) {
+				LOG.warn("media_ffmpeg_rejected reason={} mime={} exit={} elapsedMs={} output={}",
+					semSaida && process.exitValue() == 0 ? "empty_output" : "exit", mimeType,
+					process.exitValue(), elapsedMs(startedAt), resumo(saida.get()));
 				throw rejected(null);
 			}
 		}
@@ -445,6 +470,30 @@ public class MediaFfmpegRunner {
 			LOG.error("media_ffmpeg_output_unreadable mime={} error={}", mimeType, failure.getClass().getSimpleName());
 			throw unavailable(failure);
 		}
+		finally {
+			aguardarDrenagem(drenagem);
+		}
+	}
+
+	/** A drenagem é best-effort, mas a leitura da saída precede o log: espera-se por ela sem risco. */
+	private static void aguardarDrenagem(Thread drenagem) {
+		try {
+			drenagem.join(1_000);
+		}
+		catch (InterruptedException interrupted) {
+			Thread.currentThread().interrupt();
+		}
+	}
+
+	/** Bytes da saída guardados para diagnóstico; o resto é descartado para não inchar o log. */
+	static final int DIAGNOSTIC_BYTES = 2_048;
+
+	/** Uma linha só no log: a causa técnica que o ffmpeg escreveu, sem o caminho do arquivo. */
+	private static String resumo(String saida) {
+		if (saida == null || saida.isBlank()) {
+			return "(sem saida)";
+		}
+		return saida.replaceAll("\\s+", " ").trim();
 	}
 
 	private static long elapsedMs(long startedAt) {

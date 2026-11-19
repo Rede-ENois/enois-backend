@@ -12,11 +12,18 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.LoggerFactory;
 
 import com.socialcoisa.rede.shared.web.ApiException;
+
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 
 /** The ffmpeg step either cleans the file or rejects the upload; it never hands back the original. */
 class MediaFfmpegRunnerTests {
@@ -33,6 +40,26 @@ class MediaFfmpegRunnerTests {
 
 	@TempDir
 	Path dir;
+
+	private final ListAppender<ILoggingEvent> logs = new ListAppender<>();
+
+	@BeforeEach
+	void capturarLogDoRunner() {
+		logs.start();
+		((Logger) LoggerFactory.getLogger(MediaFfmpegRunner.class)).addAppender(logs);
+	}
+
+	@AfterEach
+	void soltarLogDoRunner() {
+		((Logger) LoggerFactory.getLogger(MediaFfmpegRunner.class)).detachAppender(logs);
+		logs.stop();
+	}
+
+	/** Todas as linhas que o runner escreveu, juntas, para procurar a causa técnica. */
+	private String linhasDoRunner() {
+		return logs.list.stream().map(ILoggingEvent::getFormattedMessage)
+			.reduce("", (acumulado, linha) -> acumulado + linha + "\n");
+	}
 
 	@Test
 	void pinsTheFormatsAndTheProtocolFromTheValidatedType() throws Exception {
@@ -93,6 +120,52 @@ class MediaFfmpegRunnerTests {
 		assertThatThrownBy(() -> new MediaFfmpegRunner(ffmpeg.toString(), 1).strip(input, output, "video/webm",
 			Duration.ofSeconds(10))).isInstanceOf(ApiException.class).extracting("code")
 			.isEqualTo("MEDIA_PROCESSING_FAILED");
+	}
+
+	/**
+	 * A causa técnica sai no log mesmo quando a resposta ao cliente é a mesma (#960): sem isso, o
+	 * timeout de um arquivo que o ffmpeg recusou é indistinguível do processo que não subiu, e o
+	 * suporte fica sem o que ler no evento.
+	 */
+	@Test
+	void recordsTheFfmpegOutputWhenTheRunRefusesTheFile() throws Exception {
+		Path ffmpeg = processos.falhaComMensagem(dir, "Invalid data found when processing input");
+		Path input = Files.writeString(dir.resolve("in.bin"), "video");
+		Path output = Files.createFile(dir.resolve("out.bin"));
+
+		assertThatThrownBy(() -> new MediaFfmpegRunner(ffmpeg.toString(), 1).strip(input, output, "video/mp4",
+			Duration.ofSeconds(10))).isInstanceOf(ApiException.class).extracting("code")
+			.isEqualTo("MEDIA_PROCESSING_FAILED");
+		assertThat(linhasDoRunner()).contains("reason=exit").contains("Invalid data found when processing input");
+	}
+
+	/** Sem saída nenhuma, o log diz isso em vez de fingir uma causa que o processo não escreveu. */
+	@Test
+	void recordsThatTheRunProducedNoOutputAtAll() throws Exception {
+		Path ffmpeg = processos.ffmpeg(dir, null, -1, -1);
+		Path input = Files.writeString(dir.resolve("in.bin"), "video");
+		Path output = Files.createFile(dir.resolve("out.bin"));
+
+		assertThatThrownBy(() -> new MediaFfmpegRunner(ffmpeg.toString(), 1).strip(input, output, "audio/ogg",
+			Duration.ofSeconds(10))).isInstanceOf(ApiException.class).extracting("code")
+			.isEqualTo("MEDIA_PROCESSING_FAILED");
+		assertThat(linhasDoRunner()).contains("reason=exit").contains("output=(sem saida)");
+	}
+
+	/**
+	 * Timeout legítimo continua recusando com o mesmo código (#960): a captura da saída é
+	 * diagnóstico, não uma porta nova para o upload passar.
+	 */
+	@Test
+	void keepsTimingOutAsARejectedUploadEvenWithPartialOutput() throws Exception {
+		Path ffmpeg = processos.demoradoComMensagem(dir, "frame= 1 fps=0.0 q=0.0");
+		Path input = Files.writeString(dir.resolve("in.bin"), "video");
+		Path output = Files.createFile(dir.resolve("out.bin"));
+
+		assertThatThrownBy(() -> new MediaFfmpegRunner(ffmpeg.toString(), 1).strip(input, output, "video/mp4",
+			Duration.ofSeconds(1))).isInstanceOf(ApiException.class).extracting("code")
+			.isEqualTo("MEDIA_PROCESSING_FAILED");
+		assertThat(linhasDoRunner()).contains("reason=timeout");
 	}
 
 	@Test
