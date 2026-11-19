@@ -190,6 +190,25 @@ class AdminModerationController {
 	}
 
 	/**
+	 * Remoção administrativa de COMENTÁRIO com motivo obrigatório, independente de denúncia.
+	 * A resposta diz o que aconteceu: {@code REMOVED}, {@code ALREADY_REMOVED} (já estava fora)
+	 * ou {@code NOT_FOUND}.
+	 */
+	@PostMapping("/admin/moderation/comments/{commentId}/remove")
+	Object removeComment(@RequestHeader(value = "X-Session-Token", required = false) String token,
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@PathVariable String commentId, @RequestBody(required = false) ReasonRequest request) {
+		CurrentUser user = requireAdmin(token);
+		String reason = text(request);
+		return write(user, "POST", "/api/admin/moderation/comments/{commentId}/remove", idempotencyKey,
+			Map.of("commentId", commentId, "reason", reason == null ? "" : reason), () -> {
+				AdminModerationService.CommentRemoval result =
+					admin.removeComment(user.id().value(), commentId, reason);
+				return new CommandResponse("NOT_FOUND".equals(result.status()) ? 404 : 200, result);
+			});
+	}
+
+	/**
 	 * Executa a escrita como o resto da API faz. Com {@code Idempotency-Key}, o mesmo pedido devolve a
 	 * mesma resposta (replay) e a decisão acontece uma única vez; sem chave, a decisão acontece uma vez
 	 * e o registro ganha id próprio. Nos dois casos o corpo é o JSON da decisão, sem envelope.
