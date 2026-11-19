@@ -40,7 +40,7 @@ import com.socialcoisa.rede.shared.web.TestDatabaseSupport;
 		"rede.media.deletion-worker-initial-delay-ms=3600000" })
 class MediaDeletionWorkerTransactionTests {
 
-	/** O H2 próprio não deve substituir a ponte estática usada por testes autenticados. */
+	/** Evita a associação no boot; o listener vincula o helper somente ao contexto do teste atual. */
 	@MockitoBean private TestDatabaseSupport testDatabaseSupport;
 
 	/** Conta, por chamada, se havia transacao ativa no thread. */
@@ -49,6 +49,13 @@ class MediaDeletionWorkerTransactionTests {
 
 	@TestConfiguration
 	static class InspectingGatewayConfig {
+
+		@Bean
+		@Primary
+		java.time.Clock relogioDoCenario() {
+			return java.time.Clock.fixed(java.time.Instant.parse("2026-11-01T12:00:00.123456789Z"),
+				java.time.ZoneOffset.UTC);
+		}
 
 		@Bean
 		@Primary
@@ -75,10 +82,14 @@ class MediaDeletionWorkerTransactionTests {
 	@Autowired
 	private JdbcTemplate jdbc;
 
+	@Autowired
+	private java.time.Clock clock;
+
 	@Test
 	void networkCallsRunOutsideTheDatabaseTransaction() {
 		String mediaId = "med_tx_" + UUID.randomUUID().toString().substring(0, 8);
 		seedPendingJob(mediaId);
+		verificarElegibilidade(mediaId);
 		INSIDE_TRANSACTION.clear();
 		CALLS.clear();
 
@@ -94,11 +105,13 @@ class MediaDeletionWorkerTransactionTests {
 	void theJobStillCompletesAndPurgesItsObject() {
 		String mediaId = "med_done_" + UUID.randomUUID().toString().substring(0, 8);
 		seedPendingJob(mediaId);
+		verificarElegibilidade(mediaId);
 		CALLS.clear();
 
 		worker.processPendingJobs();
 
-		assertThat(CALLS).as("purge e delete acontecem, na ordem")
+		assertThat(CALLS).as("purge e delete acontecem, na ordem; estado: %s",
+			jdbc.queryForMap("select status, error_message, next_attempt_at from media_deletion_jobs where media_id = ?", mediaId))
 			.containsExactly("purge:" + mediaId, "delete:" + mediaId);
 		assertThat(jobStatus(mediaId)).as("o job sai de REQUESTED").isEqualTo("COMPLETED");
 		assertThat(deleteStatus(mediaId)).as("o asset fica marcado como apagado").isEqualTo("OBJECT_DELETED");
@@ -112,7 +125,14 @@ class MediaDeletionWorkerTransactionTests {
 		return jdbc.queryForObject("select delete_status from media_assets where id = ?", String.class, mediaId);
 	}
 
+	private void verificarElegibilidade(String mediaId) {
+		java.time.Instant tentativa = jdbc.queryForObject("select next_attempt_at from media_deletion_jobs where media_id = ?",
+			java.sql.Timestamp.class, mediaId).toInstant();
+		assertThat(tentativa).as("fixture deve estar elegivel antes de rodar o worker").isBeforeOrEqualTo(clock.instant());
+	}
+
 	private void seedPendingJob(String mediaId) {
+		var elegivel = java.sql.Timestamp.from(clock.instant().minusSeconds(1));
 		jdbc.update("""
 			insert into media_assets (id, owner_id, file_name, mime_type, size_bytes, object_key, cdn_url,
 				status, delete_status, created_at, expires_at)
@@ -121,7 +141,7 @@ class MediaDeletionWorkerTransactionTests {
 			""", mediaId, "medias/" + mediaId);
 		jdbc.update("""
 			insert into media_deletion_jobs (id, media_id, owner_id, status, attempts, created_at, next_attempt_at)
-			values (?, ?, 'med_tx_owner', 'REQUESTED', 0, now(), now())
-			""", mediaId + "_job", mediaId);
+			values (?, ?, 'med_tx_owner', 'REQUESTED', 0, ?, ?)
+			""", mediaId + "_job", mediaId, elegivel, elegivel);
 	}
 }

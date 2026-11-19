@@ -78,21 +78,42 @@ public class SanctionService {
 	 */
 	@Transactional
 	public boolean applyForReport(Report report, String motive, String authorId) {
+		return applyReportRestriction(report, motive, authorId, null);
+	}
+
+	/** Mesma restrição da triagem, mas com decisão e remoção atribuídas à pessoa revisora. */
+	@Transactional
+	public boolean applyForReportByHuman(Report report, String motive, String reviewerId) {
+		if (!StringUtils.hasText(reviewerId)) {
+			throw new ApiException(400, "REVIEWER_REQUIRED", "A pessoa revisora é obrigatória.");
+		}
+		return applyReportRestriction(report, motive, contentAuthors.authorOf(report).orElse(null), reviewerId);
+	}
+
+	private boolean applyReportRestriction(Report report, String motive, String authorId, String reviewerId) {
 		if (report.status() != ReportStatus.PENDING) {
 			return false;
 		}
 		if (authorId == null) {
 			return false; // alvo sem autor claro (perfil, vaga): revisao humana decide
 		}
-		contentRemover.remove(report, "ia-triagem", "IA");
+		boolean human = reviewerId != null;
+		Instant now = Instant.now(clock);
+		contentRemover.remove(report, human ? reviewerId : "ia-triagem", human ? "HUMAN" : "IA");
 		if (sanctions.findActiveByUser(authorId).isEmpty()) {
 			String id = "sanc_" + UUID.randomUUID().toString().replace("-", "");
-			sanctions.save(UserSanction.create(id, authorId, report.id(), motive, Instant.now(clock)));
+			sanctions.save(UserSanction.create(id, authorId, report.id(), motive, now));
 		}
-		report.autoPenalize(motive);
+		if (human) {
+			report.penalize(reviewerId, motive, now);
+		}
+		else {
+			report.autoPenalize(motive);
+		}
 		reports.save(report);
-		notificationService.create(authorId, "SANCAO", "sistema", "Conta restrita",
-			"Sua conta foi restringida apos analise automatica de uma denuncia: " + motive
+		notificationService.create(authorId, "SANCAO", human ? reviewerId : "sistema", "Conta restrita",
+			(human ? "Sua conta foi restringida apos revisao de uma denuncia por uma pessoa do time: "
+				: "Sua conta foi restringida apos analise automatica de uma denuncia: ") + motive
 				+ ". Se foi um erro, voce pode recorrer e uma pessoa do time vai revisar.",
 			"/api/penalidades", "Recorrer");
 		return true;

@@ -83,6 +83,7 @@ class AutomatedWritePathsTests {
 		// fluxo de escrita nascido do interceptor sem entrada aqui — o teste varre a lista real e
 		// acusou a divergência (antes: só em PUBLIC_WRITES → agora: nos dois lugares).
 		"/network/standby/complete",
+		"/network/standby/failed",
 		// Fase 2: resultado de tarefa devolvido pelo nó, com a mesma credencial de nó.
 		"/network/tasks/*/result",
 		// Fase 3: nó de borda confirmando o que sincronizou e pedindo reconciliação.

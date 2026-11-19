@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
 import com.socialcoisa.rede.network.domain.StorageBucketPolicy;
+import com.socialcoisa.rede.network.domain.ObjectMetadata;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StorageObjectState;
 import com.socialcoisa.rede.shared.audit.AuditTrail;
@@ -168,12 +169,14 @@ class StorageLifecycleTests {
 	private static StorageObject objeto(String id, String bucket, String key, StorageObjectState state,
 			String supersededBy, Instant expiresAt) {
 		return new StorageObject(id, bucket, key, "application/octet-stream", 10L, "a".repeat(64), state, "user",
-			NOW.minusSeconds(86400), NOW.minusSeconds(86400), null, 1L, supersededBy, expiresAt);
+			NOW.minusSeconds(86400), NOW.minusSeconds(86400), null, 1L, supersededBy, expiresAt,
+			ObjectMetadata.EMPTY, null, null);
 	}
 
 	private static StorageObject comAtualizada(StorageObject o, Instant updatedAt) {
 		return new StorageObject(o.id(), o.bucket(), o.key(), o.contentType(), o.bytes(), o.sha256(), o.state(),
-			o.createdBy(), o.createdAt(), updatedAt, o.deletedAt(), o.version(), o.supersededBy(), o.expiresAt());
+			o.createdBy(), o.createdAt(), updatedAt, o.deletedAt(), o.version(), o.supersededBy(), o.expiresAt(),
+			o.metadata(), o.cacheControl(), o.contentDisposition());
 	}
 
 	/** O serviço com os colaboradores mínimos — a política não precisa do resto para ser validada. */

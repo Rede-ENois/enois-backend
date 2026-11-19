@@ -135,6 +135,18 @@ class RiskEngineTests {
 	}
 
 	@Test
+	void contextoDiferenteNaoGeraSinalDeDuplicacao() {
+		String userId = "risco-contextual";
+		duplicationGuard.require(userId, "Parabens!", "comment", "post-a");
+		assertThat(riskEngine.assess(userId, "comment", "Parabens!", "comment", "post-b")).isNull();
+		assertThat(jdbc.queryForList("select id from risk_assessments where user_id = ?", userId)).isEmpty();
+		RiskAssessment repetida = riskEngine.assess(userId, "comment", "Parabens!", "comment", "post-a");
+		assertThat(repetida).isNotNull();
+		assertThat(repetida.signals()).containsExactly(RiskSignal.DUPLICATE_CONTENT);
+		assertThat(repetida.ruleVersion()).isEqualTo("v2");
+	}
+
+	@Test
 	void modoDeObservacaoNaoBarraNinguem() {
 		String userId = "risco-observacao";
 		for (int i = 0; i < 12; i++) {

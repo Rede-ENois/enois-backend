@@ -27,7 +27,6 @@ import com.socialcoisa.rede.shared.security.BehavioralTimingGuard;
 import com.socialcoisa.rede.shared.security.ContentDuplicationGuard;
 import com.socialcoisa.rede.shared.security.NewAccountCooldown;
 import com.socialcoisa.rede.shared.security.UserRateLimiter;
-import com.socialcoisa.rede.shared.security.UserRateLimiter;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 @Service
@@ -125,9 +124,6 @@ public class PublishPostService implements PublishPostUseCase {
 		newAccountCooldown.require(command.authorId().value());
 		userRateLimiter.require(command.authorId().value(), UserRateLimiter.CREATE_POST);
 		behavioralTimingGuard.record(command.authorId().value());
-		// Motor de risco (plano mestre, item 7): avalia e registra o risco desta escrita. Em modo
-		// de observacao ele nao bloqueia nada — so devolve a linha de base que faltava.
-		riskEngine.assess(command.authorId().value(), "publish", command.content());
 		validate(command);
 		List<String> tags = command.tags() == null ? List.of() : command.tags().stream()
 			.filter(StringUtils::hasText)
@@ -204,14 +200,17 @@ public class PublishPostService implements PublishPostUseCase {
 		} else {
 			topic = null;
 		}
-		if (StringUtils.hasText(command.content())) {
-			duplicationGuard.require(command.authorId().value(), command.content());
-		}
 		Post post = Post.publish(idGenerator.newPostId(), command.authorId(), command.type(), textOf(command),
 			pageHtml(command), tags, mediaIds, communityId, topic, channelId, clock.instant(), authorIdentity,
 			command.mediaSpoiler());
-		Post saved = postRepository.save(post);
 		String articleBody = articleBody(command);
+		List<String> alternativas = pollOptions(command);
+		var midiasVisiveis = mediaSummaries.visibleByIds(mediaIds);
+		String[] contexto = ContextoDuplicacaoFeed.publicacao(post, articleBody, alternativas,
+			midiasVisiveis.keySet());
+		riskEngine.assess(command.authorId().value(), "publish", post.content(), contexto);
+		duplicationGuard.require(command.authorId().value(), post.content(), contexto);
+		Post saved = postRepository.save(post);
 		if (articleBody != null) {
 			// Corpo do artigo em tabela propria: nao pesa na linha que o feed le e nao viaja na
 			// listagem (ver PostView.from). Mesma transacao do post: ou nasce inteiro, ou nao nasce.
@@ -219,7 +218,9 @@ public class PublishPostService implements PublishPostUseCase {
 		}
 		if (saved.type() == PostType.POLL) {
 			// Alternativas em tabela propria, na mesma transacao: enquete sem alternativa nao existe.
-			polls.saveOptions(saved.id(), pollOptions(command));
+			// As alternativas saem de `alternativas` (calculadas uma vez e usadas no contexto da
+			// deduplicação) e a configuração vem da `qa`.
+			polls.saveOptions(saved.id(), alternativas);
 			// Configuracao (multipla escolha e prazo) na mesma transacao das alternativas.
 			polls.saveConfig(saved.id(),
 				new com.socialcoisa.rede.feed.domain.PollConfig(Boolean.TRUE.equals(command.pollMultipleChoice()),
@@ -232,7 +233,7 @@ public class PublishPostService implements PublishPostUseCase {
 		events.publishEvent(new PostPublishedEvent(saved.id().value(), saved.authorId().value()));
 		notifyMentions(command.mentionedUserIds(), command.authorId().value(), saved.id().value(), "post");
 		UserProfile author = userProfileRepository.findById(command.authorId().value()).orElse(null);
-		return withAuthor(saved, author).withMedia(mediaSummaries.visibleByIds(saved.mediaIds()));
+		return withAuthor(saved, author).withMedia(midiasVisiveis);
 	}
 
 	private PostView withAuthor(Post saved, UserProfile author) {

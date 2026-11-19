@@ -346,8 +346,9 @@ public class ModerationService {
 			throw new ApiException(400, "COMPANY_TARGET",
 				"Pagina empresarial se remove pela acao própria, nao se penaliza o dono por isso.");
 		}
-		boolean applied = sanctionService.applyForReport(report,
-			"Penalização manual por uma pessoa do time (motivo da denúncia: " + report.reason().name() + ")");
+		boolean applied = sanctionService.applyForReportByHuman(report,
+			"Penalização manual por uma pessoa do time (motivo da denúncia: " + report.reason().name() + ")",
+			reviewerId);
 		if (!applied) {
 			throw new ApiException(409, "CANNOT_PENALIZE", "Esta denúncia não pode mais ser penalizada.");
 		}

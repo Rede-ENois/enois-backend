@@ -92,6 +92,14 @@ public class Report {
 		this.resolutionNote = motive;
 	}
 
+	/** Penalidade humana preserva o status legado dos consumidores; a autoria fica na revisão. */
+	public void penalize(String reviewerId, String motive, Instant at) {
+		this.status = ReportStatus.AUTO_PENALIZED;
+		this.reviewedBy = reviewerId;
+		this.reviewedAt = at;
+		this.resolutionNote = motive;
+	}
+
 	public String id() { return id; }
 	public String reporterId() { return reporterId; }
 	public TargetType targetType() { return targetType; }

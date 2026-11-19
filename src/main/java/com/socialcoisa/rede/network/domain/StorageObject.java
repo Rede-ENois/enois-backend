@@ -16,17 +16,28 @@ import java.time.Instant;
  * o {@code id} que o cliente usa continua apontando para o conteúdo que ele gravou, e a versão
  * nova não herda esse nome. {@code supersededBy} nulo é a versão <b>corrente</b> — a única que o
  * bucket resolve por chave. {@code expiresAt} nulo é "não expira".</p>
+ *
+ * <p><b>Metadado e cabeçalhos do cliente (brief §11, V367).</b> {@code metadata}, {@code cacheControl}
+ * e {@code contentDisposition} são o que o cliente declarou no PUT e espera reencontrar no HEAD/GET.
+ * Nulo é "não declarou", e aí a leitura cai na política do tipo de conteúdo — é o comportamento de
+ * tudo que existia antes do V367.</p>
  */
 public record StorageObject(String id, String bucket, String key, String contentType, Long bytes,
 		String sha256, StorageObjectState state, String createdBy, Instant createdAt, Instant updatedAt,
-		Instant deletedAt, long version, String supersededBy, Instant expiresAt) {
+		Instant deletedAt, long version, String supersededBy, Instant expiresAt, ObjectMetadata metadata,
+		String cacheControl, String contentDisposition) {
 
-	/** Objeto sem versionamento nem prazo: o formato de tudo que existia antes do V352. */
+	/** Objeto sem versionamento, prazo nem metadado: o formato de tudo que existia antes do V352. */
 	public static StorageObject current(String id, String bucket, String key, String contentType, Long bytes,
 			String sha256, StorageObjectState state, String createdBy, Instant createdAt, Instant updatedAt,
 			Instant deletedAt) {
 		return new StorageObject(id, bucket, key, contentType, bytes, sha256, state, createdBy, createdAt,
-			updatedAt, deletedAt, 1L, null, null);
+			updatedAt, deletedAt, 1L, null, null, ObjectMetadata.EMPTY, null, null);
+	}
+
+	/** Metadado nunca é nulo na leitura: objeto antigo tem {@link ObjectMetadata#EMPTY}. */
+	public StorageObject {
+		metadata = metadata == null ? ObjectMetadata.EMPTY : metadata;
 	}
 
 	/** O objeto tem cópia inteira e conferida por algum nó? Só então o download é possível. */
@@ -52,5 +63,10 @@ public record StorageObject(String id, String bucket, String key, String content
 	/** O nome completo com a versão, para log e auditoria de versão. */
 	public String versionPath() {
 		return path() + "#v" + version;
+	}
+
+	/** O {@code Cache-Control} do objeto: o que o cliente declarou, ou nulo para a política do tipo. */
+	public String cacheControlOrNull() {
+		return cacheControl == null || cacheControl.isBlank() ? null : cacheControl;
 	}
 }

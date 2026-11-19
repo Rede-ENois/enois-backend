@@ -27,6 +27,7 @@ import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepositor
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NodeProfile;
 import com.socialcoisa.rede.network.domain.NodeStatus;
+import com.socialcoisa.rede.network.domain.ObjectMetadata;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StorageRebalance;
 import com.socialcoisa.rede.network.domain.StorageObjectState;
@@ -429,7 +430,8 @@ class StorageScrubberReadBackTests {
 		public StorageObject insertVersion(String id, String bucket, String key, String contentType, String createdBy,
 				Instant now, long version) {
 			StorageObject object = new StorageObject(id, bucket, key, contentType, null, null,
-				StorageObjectState.PENDING, createdBy, now, now, null, version, null, null);
+				StorageObjectState.PENDING, createdBy, now, now, null, version, null, null, ObjectMetadata.EMPTY,
+				null, null);
 			objects.add(object);
 			return object;
 		}
@@ -441,7 +443,7 @@ class StorageScrubberReadBackTests {
 				if (o.bucket().equals(bucket) && o.key().equals(key) && o.currentVersion()) {
 					objects.set(i, new StorageObject(o.id(), o.bucket(), o.key(), o.contentType(), o.bytes(),
 						o.sha256(), o.state(), o.createdBy(), o.createdAt(), now, o.deletedAt(), o.version(),
-						supersededBy, o.expiresAt()));
+						supersededBy, o.expiresAt(), o.metadata(), o.cacheControl(), o.contentDisposition()));
 					return true;
 				}
 			}
@@ -449,13 +451,26 @@ class StorageScrubberReadBackTests {
 		}
 
 		@Override
+		public void setClientHeaders(String id, com.socialcoisa.rede.network.domain.ObjectMetadata metadata,
+				String cacheControl, String contentDisposition) {
+			for (int i = 0; i < objects.size(); i++) {
+				StorageObject o = objects.get(i);
+				if (o.id().equals(id)) {
+					objects.set(i, new StorageObject(o.id(), o.bucket(), o.key(), o.contentType(), o.bytes(),
+						o.sha256(), o.state(), o.createdBy(), o.createdAt(), o.updatedAt(), o.deletedAt(),
+						o.version(), o.supersededBy(), o.expiresAt(), metadata, cacheControl, contentDisposition));
+				}
+			}
+		}
+
 		public void setExpiresAt(String id, Instant expiresAt) {
 			for (int i = 0; i < objects.size(); i++) {
 				StorageObject o = objects.get(i);
 				if (o.id().equals(id)) {
 					objects.set(i, new StorageObject(o.id(), o.bucket(), o.key(), o.contentType(), o.bytes(),
 						o.sha256(), o.state(), o.createdBy(), o.createdAt(), o.updatedAt(), o.deletedAt(),
-						o.version(), o.supersededBy(), expiresAt));
+						o.version(), o.supersededBy(), expiresAt, o.metadata(), o.cacheControl(),
+						o.contentDisposition()));
 				}
 			}
 		}

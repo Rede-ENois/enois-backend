@@ -40,6 +40,7 @@ import com.socialcoisa.rede.shared.blocks.BlockedUsersReader;
 import com.socialcoisa.rede.shared.risk.RiskEngine;
 import com.socialcoisa.rede.shared.sanctions.SanctionGate;
 import com.socialcoisa.rede.shared.sanctions.SanctionGateReader;
+import com.socialcoisa.rede.media.application.port.in.GetMediaSummariesUseCase;
 import com.socialcoisa.rede.shared.security.BehavioralTimingGuard;
 import com.socialcoisa.rede.shared.security.ContentDuplicationGuard;
 import com.socialcoisa.rede.shared.security.NewAccountCooldown;
@@ -62,7 +63,7 @@ UserSealRepository userSeals = mock(UserSealRepository.class);
 BlockedUsersReader blockedUsersReader = mock(BlockedUsersReader.class);
 ValidateMediaOwnershipUseCase validateMediaOwnership = mock(ValidateMediaOwnershipUseCase.class);
 SanctionGate sanctionGate = mock(SanctionGate.class);
-		SanctionGateReader sanctionGateReader = mock(SanctionGateReader.class);
+SanctionGateReader sanctionGateReader = mock(SanctionGateReader.class);
 RiskEngine riskEngine = mock(RiskEngine.class);
 CoinService coins = mock(CoinService.class);
 NewAccountCooldown newAccountCooldown = mock(NewAccountCooldown.class);
@@ -71,13 +72,15 @@ ContentDuplicationGuard duplicationGuard = mock(ContentDuplicationGuard.class);
 BehavioralTimingGuard behavioralTimingGuard = mock(BehavioralTimingGuard.class);
 AgeGate agePolicy = mock(AgeGate.class);
 IdentityVerificationRepository identityVerifications = mock(IdentityVerificationRepository.class);
+// A `qa` pediu as mídias do post (nome/URL no comentário): o teste só precisa do port.
+GetMediaSummariesUseCase mediaSummaries = mock(GetMediaSummariesUseCase.class);
 
 PostInteractionService service = new PostInteractionService(
 postRepository, commentRepository, postInteractionRepository, outboxEventRepository,
 cursorCodec, clock, notificationService, userProfileRepository, userSeals,
 blockedUsersReader, validateMediaOwnership, sanctionGate, sanctionGateReader, riskEngine, coins,
 newAccountCooldown, userRateLimiter, duplicationGuard, behavioralTimingGuard,
-agePolicy, identityVerifications
+agePolicy, identityVerifications, mediaSummaries
 );
 
 String marker = UUID.randomUUID().toString().replace("-", "");

@@ -73,7 +73,30 @@ class NetworkStandbyController {
 			snapshot.sha256(), snapshot.failureReason());
 	}
 
+	/**
+	 * "Tentei e não deu" — o nó conta que <b>não</b> conseguiu gravar ou restaurar (#953 item 4).
+	 *
+	 * <p>Antes não havia rota: o nó que falhava no {@code mysql < dump} deixava a linha em
+	 * {@code SYNCING} para sempre, e o painel mostrava uma cópia que nunca ia ficar pronta. Agora a linha
+	 * vira {@code FAILED} com o motivo — o mesmo destino da falha no lado do servidor, com a causa que
+	 * só o nó sabe (disco cheio, MariaDB local fora, SQL que não carrega).</p>
+	 */
+	@PostMapping("/failed")
+	CopyResult failed(@RequestHeader(value = "X-Node-Id", required = false) String nodeId,
+			@RequestHeader(value = "X-Node-Key", required = false) String nodeKey,
+			@RequestBody(required = false) FailedRequest request) {
+		NetworkNode node = keys.authenticate(nodeId, nodeKey);
+		String motivo = request == null || request.reason() == null || request.reason().isBlank()
+			? "o no nao declarou o motivo" : request.reason().trim();
+		var snapshot = standby.fail(node.id(), node.id(), request == null ? null : request.authorityId(),
+			motivo.length() > 500 ? motivo.substring(0, 500) : motivo);
+		return CopyResult.of(snapshot);
+	}
+
 	record CompleteRequest(String nodeId, String authorityId, Long bytes, String sha256) {
+	}
+
+	record FailedRequest(String authorityId, String reason) {
 	}
 
 	record CopyResult(String nodeId, String authorityId, String state, Long bytes, String sha256,
