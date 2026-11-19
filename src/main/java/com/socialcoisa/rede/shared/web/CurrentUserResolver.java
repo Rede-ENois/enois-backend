@@ -18,22 +18,11 @@ public class CurrentUserResolver {
 	private final UserProfileRepository userProfileRepository;
 	private final Clock clock;
 
-	/**
-	 * O tratamento global de excecoes nao pode injetar este bean sem quebrar o boot (bean web
-	 * resolvido antes do contexto completar), mas precisa distinguir sessao encerrada de token
-	 * inexistente. Sao as mesmas dependencias que o proprio handler ja injeta por construtor.
-	 */
-	private static final ThreadLocal<AuthSessionRepository> AUTH_SESSIONS = new ThreadLocal<>();
-	private static final ThreadLocal<Clock> CLOCK = new ThreadLocal<>();
-
-
 	public CurrentUserResolver(AuthSessionRepository authSessionRepository, UserProfileRepository userProfileRepository,
 			Clock clock) {
 		this.authSessionRepository = authSessionRepository;
 		this.userProfileRepository = userProfileRepository;
 		this.clock = clock;
-		AUTH_SESSIONS.set(authSessionRepository);
-		CLOCK.set(clock);
 	}
 
 	public CurrentUser resolve(String sessionToken) {
@@ -73,12 +62,21 @@ public class CurrentUserResolver {
 	 * Nesse caso o banco ja responde certo, e por isso o motivo vem sempre de uma leitura sem cache.</p>
 	 */
 	static ApiException unauthenticated(String sessionToken, boolean tokenDoPedido) {
+		return unauthenticated(sessionToken, tokenDoPedido, null, null);
+	}
+
+	/**
+	 * A recusa com o motivo, para quem ja tem as dependencias em maos — o tratamento global de
+	 * excecoes, que as recebe por {@code ObjectProvider} e as resolve no thread do pedido. Sem elas,
+	 * a recusa sai generica: e melhor nao dizer nada do que dizer errado.
+	 */
+	static ApiException unauthenticated(String sessionToken, boolean tokenDoPedido,
+			AuthSessionRepository authSessions, Clock clock) {
 		ApiException refusal = new ApiException(401, "UNAUTHENTICATED", "Sessao invalida ou expirada.");
-		if (!tokenDoPedido || !StringUtils.hasText(sessionToken) || AUTH_SESSIONS.get() == null) {
+		if (!tokenDoPedido || !StringUtils.hasText(sessionToken) || authSessions == null || clock == null) {
 			return refusal;
 		}
-		boolean revoked = AUTH_SESSIONS.get()
-			.findInactiveReason(sessionToken.trim(), CLOCK.get().instant())
+		boolean revoked = authSessions.findInactiveReason(sessionToken.trim(), clock.instant())
 			.filter(reason -> reason == AuthSessionRepository.InactiveSession.REVOKED)
 			.isPresent();
 		return revoked ? refusal.withDetail("SESSION_REVOKED") : refusal;

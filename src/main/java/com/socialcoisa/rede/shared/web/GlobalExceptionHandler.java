@@ -37,8 +37,21 @@ public class GlobalExceptionHandler {
 
 	private final com.socialcoisa.rede.ops.monitoring.MonitoringService monitoring;
 
-	GlobalExceptionHandler(com.socialcoisa.rede.ops.monitoring.MonitoringService monitoring) {
+	/**
+	 * Este bean web e criado cedo, antes de o contexto completar; a sessao e o relogio so existem
+	 * quando chega o primeiro pedido. Por isso o provider: a busca acontece no thread do pedido, e
+	 * nao no do boot — que e onde um campo injetado ficaria preso.
+	 */
+	private final org.springframework.beans.factory.ObjectProvider<com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository> authSessions;
+
+	private final org.springframework.beans.factory.ObjectProvider<java.time.Clock> clock;
+
+	GlobalExceptionHandler(com.socialcoisa.rede.ops.monitoring.MonitoringService monitoring,
+			org.springframework.beans.factory.ObjectProvider<com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository> authSessions,
+			org.springframework.beans.factory.ObjectProvider<java.time.Clock> clock) {
 		this.monitoring = monitoring;
+		this.authSessions = authSessions;
+		this.clock = clock;
 	}
 
 	/**
@@ -87,12 +100,14 @@ public class GlobalExceptionHandler {
 	 * pelo {@code SessionCookieFilter}) no cookie. Sem nenhum dos dois, o 401 e de token que se
 	 * perdeu no caminho — e a resposta nao deve contar nada sobre ele.</p>
 	 */
-	private static String sessionDetail(ApiException exception, jakarta.servlet.http.HttpServletRequest request) {
+	private String sessionDetail(ApiException exception, jakarta.servlet.http.HttpServletRequest request) {
 		if (exception.status() != 401 || !"UNAUTHENTICATED".equals(exception.code()) || request == null) {
 			return null;
 		}
 		String token = request.getHeader(SessionCookieFilter.SESSION_HEADER);
-		return CurrentUserResolver.unauthenticated(token, StringUtils.hasText(token)).detail();
+		return CurrentUserResolver
+			.unauthenticated(token, StringUtils.hasText(token), authSessions.getIfAvailable(), clock.getIfAvailable())
+			.detail();
 	}
 
 	/**

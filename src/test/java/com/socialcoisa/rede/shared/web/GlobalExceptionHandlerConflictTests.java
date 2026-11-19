@@ -17,8 +17,13 @@ import org.springframework.dao.DataIntegrityViolationException;
  */
 class GlobalExceptionHandlerConflictTests {
 
-	private final GlobalExceptionHandler handler =
-		new GlobalExceptionHandler(org.mockito.Mockito.mock(com.socialcoisa.rede.ops.monitoring.MonitoringService.class));
+	private final org.springframework.beans.factory.support.StaticListableBeanFactory beans =
+		new org.springframework.beans.factory.support.StaticListableBeanFactory();
+
+	private final GlobalExceptionHandler handler = new GlobalExceptionHandler(
+		org.mockito.Mockito.mock(com.socialcoisa.rede.ops.monitoring.MonitoringService.class),
+		beans.getBeanProvider(com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository.class),
+		beans.getBeanProvider(java.time.Clock.class));
 
 	private ErrorResponse handle(String cause) {
 		var response = handler.handleConflict(new DataIntegrityViolationException(cause));
