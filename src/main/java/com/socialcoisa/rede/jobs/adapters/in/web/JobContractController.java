@@ -30,6 +30,7 @@ import com.socialcoisa.rede.jobs.domain.Job;
 import com.socialcoisa.rede.jobs.domain.JobInterview;
 import com.socialcoisa.rede.jobs.domain.JobApplicationStatus;
 import com.socialcoisa.rede.jobs.domain.JobApplication;
+import com.socialcoisa.rede.jobs.domain.JobApplicationDraft;
 import com.socialcoisa.rede.profile.application.NameStyleView;
 import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.CurrentUser;
@@ -58,7 +59,9 @@ class JobContractController {
 	private final tools.jackson.databind.ObjectMapper objectMapper;
 	private final com.socialcoisa.rede.companies.application.CompanyService companyService;
 	private final JobInterviewService interviewService;
+	private final com.socialcoisa.rede.jobs.application.InterviewSlotService interviewSlots;
 	private final com.socialcoisa.rede.jobs.application.JobCompatibilityService compatibility;
+	private final com.socialcoisa.rede.jobs.application.SelectionProcessService process;
 
 	JobContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
 			JobService jobService, CursorCodec cursorCodec,
@@ -74,10 +77,14 @@ class JobContractController {
 			com.socialcoisa.rede.jobs.application.ExternalJobApplicationService externalJobApplication,
 			com.socialcoisa.rede.companies.application.CompanyService companyService,
 			JobInterviewService interviewService,
-			com.socialcoisa.rede.jobs.application.JobCompatibilityService compatibility) {
+			com.socialcoisa.rede.jobs.application.InterviewSlotService interviewSlots,
+			com.socialcoisa.rede.jobs.application.JobCompatibilityService compatibility,
+			com.socialcoisa.rede.jobs.application.SelectionProcessService process) {
 		this.companyService = companyService;
 		this.interviewService = interviewService;
+		this.interviewSlots = interviewSlots;
 		this.compatibility = compatibility;
+		this.process = process;
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.jobService = jobService;
@@ -344,9 +351,12 @@ class JobContractController {
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		limit = pageLimit(limit);
-		Instant before = cursorCodec.decode(cursor).orElse(null);
-		List<Job> jobs = jobService.listApplications(user.id().value(), before, limit);
-		return page(jobs, limit, user.id().value(), PageKind.APPLICATIONS, false, null);
+		var pageCursor = cursorCodec.decodePage(cursor);
+		var applications = jobService.listApplications(user.id().value(),
+			pageCursor.map(CursorCodec.PageCursor::instant).orElse(null),
+			pageCursor.map(decoded -> parseCursorId(decoded.tieBreak())).orElse(null), limit);
+		return page(applications.jobs(), user.id().value(), PageKind.APPLICATIONS, false, null,
+			cursorCodec.encodePage(applications.lastAppliedAt(), String.valueOf(applications.lastId())));
 	}
 
 	@GetMapping("/companies")
@@ -413,12 +423,15 @@ class JobContractController {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		var applications = jobService.myApplications(user.id().value(), Math.min(limit, 100));
 		java.util.Map<String, JobInterview> interviews = interviewService.scheduledForCandidate(applications);
+		// O nome da etapa vem da mesma fonte do board (último movimento): o candidato vê "Entrevista
+		// técnica", não só "IN_REVIEW" — a lista deixa de ser um enum que não diz onde ele está.
+		java.util.Map<String, String> stageNames = process.currentStageNames(applications);
 		return applications.stream()
 			.map(application -> {
 				Job job = jobService.getById(application.jobId());
 				JobInterview interview = interviews.get(application.id());
 				return new MyApplicationView(application.id(), application.jobId(), job.title(), job.company(),
-					application.status().name(), application.feedback(),
+					application.status().name(), stageNames.get(application.id()), application.feedback(),
 					application.reviewedAt() != null ? application.reviewedAt().toString() : null,
 					application.appliedAt().toString(),
 					interview != null ? InterviewView.of(interview) : null);
@@ -426,9 +439,51 @@ class JobContractController {
 			.toList();
 	}
 
-	/** Uma candidatura como o CANDIDATO a ve, com a entrevista marcada quando houver. */
+	/**
+	 * A jornada da candidatura como o CANDIDATO a acompanha: o fluxo da vaga (etapas nomeadas, na
+	 * ordem), o histórico em ordem e a etapa atual. Quem vê é quem participa — o próprio candidato
+	 * e quem comanda a vaga; terceiro recebe 403. Nota interna e avaliação nunca entram aqui; o
+	 * retorno que o candidato tem direito já vem em {@code feedback}.
+	 */
+	@GetMapping("/{jobId}/applications/{applicationId}/journey")
+	JourneyView journey(@PathVariable String jobId, @PathVariable String applicationId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return JourneyView.of(process.journey(jobId, applicationId, user.id().value()));
+	}
+
+	/** Uma candidatura como o CANDIDATO a ve, com a etapa atual e a entrevista quando houver. */
 	record MyApplicationView(String id, String jobId, String jobTitle, String jobCompany, String status,
-			String feedback, String reviewedAt, String appliedAt, InterviewView interview) {
+			String stageName, String feedback, String reviewedAt, String appliedAt, InterviewView interview) {
+	}
+
+	/** O fluxo da vaga e o histórico da candidatura, sem nota interna nem avaliação. */
+	record JourneyView(String applicationId, String jobId, String status, String feedback, String currentStageId,
+			List<JourneyStageView> stages, List<JourneyStepView> steps) {
+
+		static JourneyView of(com.socialcoisa.rede.jobs.application.SelectionProcessService.StageJourney journey) {
+			return new JourneyView(journey.applicationId(), journey.jobId(), journey.status().name(),
+				journey.feedback(), journey.currentStageId(),
+				journey.flow().stream().map(JourneyStageView::of).toList(),
+				journey.history().stream().map(JourneyStepView::of).toList());
+		}
+	}
+
+	/** Uma etapa do fluxo como o candidato a vê: nome e ordem, sem id interno de outro recurso. */
+	record JourneyStageView(String id, String name, int position) {
+
+		static JourneyStageView of(com.socialcoisa.rede.jobs.domain.SelectionStage stage) {
+			return new JourneyStageView(stage.id(), stage.name(), stage.position());
+		}
+	}
+
+	/** Um passo do histórico do candidato: para onde foi, de que espécie, quando e com que contexto. */
+	record JourneyStepView(String fromStageId, String toStageId, String kind, String note, String movedAt) {
+
+		static JourneyStepView of(com.socialcoisa.rede.jobs.domain.StageMovement movement) {
+			return new JourneyStepView(movement.fromStageId(), movement.toStageId(), movement.kind().name(),
+				movement.note(), movement.movedAt().toString());
+		}
 	}
 
 	@PatchMapping("/{jobId}/applications/{applicationId}")
@@ -459,7 +514,8 @@ class JobContractController {
 			parseInstant(body == null ? null : body.startsAt(), "startsAt"),
 			parseInstant(body == null ? null : body.endsAt(), "endsAt"),
 			body == null ? null : body.timeZoneId(), body == null ? null : body.notes());
-		return ResponseEntity.status(HttpStatus.CREATED).body(InterviewView.of(interview));
+		return ResponseEntity.status(HttpStatus.CREATED)
+			.body(InterviewView.withConflicts(interview, interviewSlots.conflictsOf(user.id().value(), interview)));
 	}
 
 	/** Reagenda uma entrevista existente. A origem não muda, então as duas entradas da agenda movem. */
@@ -473,7 +529,8 @@ class JobContractController {
 			parseInstant(body == null ? null : body.startsAt(), "startsAt"),
 			parseInstant(body == null ? null : body.endsAt(), "endsAt"),
 			body == null ? null : body.timeZoneId(), body == null ? null : body.notes());
-		return ResponseEntity.ok(InterviewView.of(interview));
+		return ResponseEntity.ok(
+			InterviewView.withConflicts(interview, interviewSlots.conflictsOf(user.id().value(), interview)));
 	}
 
 	/** Desmarca a entrevista e cancela os dois compromissos da agenda. */
@@ -595,6 +652,30 @@ class JobContractController {
 			});
 	}
 
+	/**
+	 * Autosave do rascunho da candidatura: grava o que foi digitado até agora, sem validar
+	 * obrigatórios (isso é do envio). Rascunho não é candidatura — o board não vê.
+	 */
+	@org.springframework.web.bind.annotation.PutMapping("/{jobId}/applications/draft")
+	DraftView saveDraft(@PathVariable String jobId,
+			@org.springframework.web.bind.annotation.RequestBody(required = false) DraftRequest body,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		JobApplicationDraft draft = jobService.saveDraft(jobId, user.id().value(),
+			body == null || body.answers() == null ? Map.of() : body.answers());
+		return new DraftView(draft.updatedAt().toString());
+	}
+
+	/** O rascunho de quem pede nesta vaga; sem rascunho devolve 200 vazio, não 404. */
+	@org.springframework.web.bind.annotation.GetMapping("/{jobId}/applications/draft")
+	Object draft(@PathVariable String jobId,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return jobService.draftOf(jobId, user.id().value())
+			.map(draft -> (Object) new DraftBodyView(draft.answers(), draft.updatedAt().toString()))
+			.orElse(Map.of());
+	}
+
 	@PostMapping("/{jobId}/saves")
 	ResponseEntity<String> save(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
@@ -630,8 +711,24 @@ class JobContractController {
 		return Math.clamp(limit, 1, 100);
 	}
 
+	private static Long parseCursorId(String tieBreak) {
+		try {
+			return tieBreak == null ? null : Long.valueOf(tieBreak);
+		}
+		catch (NumberFormatException invalid) {
+			throw new ApiException(400, "INVALID_CURSOR", "Cursor inválido.");
+		}
+	}
+
 	private PageResponse<JobView> page(List<Job> jobs, int limit, String viewer, PageKind kind,
 			boolean includeExternal, String externalQuery) {
+		String nextCursor = jobs.size() == limit
+			? cursorCodec.encode(jobs.get(jobs.size() - 1).postedAt()) : null;
+		return page(jobs, viewer, kind, includeExternal, externalQuery, nextCursor);
+	}
+
+	private PageResponse<JobView> page(List<Job> jobs, String viewer, PageKind kind,
+			boolean includeExternal, String externalQuery, String nextCursor) {
 		List<String> ids = jobs.stream().map(Job::id).toList();
 		boolean authenticated = viewer != null;
 		Set<String> appliedIds = switch (kind) {
@@ -663,8 +760,6 @@ class JobContractController {
 					job.applicationDeadline() != null ? job.applicationDeadline().toString() : null, null);
 			})
 			.toList();
-		String nextCursor = jobs.size() == limit
-			? cursorCodec.encode(jobs.get(jobs.size() - 1).postedAt()) : null;
 		// Vagas externas entram DEPOIS das internas, so na 1a pagina da busca publica, e respeitando
 		// a pesquisa por titulo (elas nao tem tipo/nivel/local para filtrar).
 		if (!includeExternal || !externalListingEnabled) {
@@ -935,7 +1030,8 @@ class JobContractController {
 
 	private List<ApplicationFieldView> fieldViews(Job job) {
 		return job.applicationFields().stream()
-			.map(field -> new ApplicationFieldView(field.id(), field.label(), field.type().name(), field.required()))
+			.map(field -> new ApplicationFieldView(field.id(), field.label(), field.type().name(), field.required(),
+				field.visibleIfFieldId(), field.visibleIfValue()))
 			.toList();
 	}
 
@@ -998,7 +1094,9 @@ class JobContractController {
 			boolean identityVerified, NameStyleView nameStyle) {
 	}
 
-	record ApplicationFieldView(String id, String label, String type, boolean required) {
+	/** Condição vai junto: é o front que monta o formulário escondendo o campo não revelado. */
+	record ApplicationFieldView(String id, String label, String type, boolean required, String visibleIfFieldId,
+			String visibleIfValue) {
 	}
 
 	record CreateJobRequest(String title, String company, String logo, String location, String type, String level,
@@ -1032,10 +1130,26 @@ class JobContractController {
 			boolean resumeAttached, String resumeName, String status, String appliedAt) {
 	}
 
-	record ApplicationFieldRequest(String label, String type, boolean required) {
+	/** `visibleIfFieldId`/`visibleIfValue` tornam o campo condicional (aparece quando a origem casa). */
+	record ApplicationFieldRequest(String label, String type, boolean required, String visibleIfFieldId,
+			String visibleIfValue) {
+
+		ApplicationFieldRequest(String label, String type, boolean required) {
+			this(label, type, required, null, null);
+		}
 	}
 
 	record ApplyRequest(String message, List<AnswerRequest> answers) {
+	}
+
+	/** Corpo do autosave: as respostas digitadas até agora, por fieldId. */
+	record DraftRequest(Map<String, String> answers) {
+	}
+
+	record DraftView(String updatedAt) {
+	}
+
+	record DraftBodyView(Map<String, String> answers, String updatedAt) {
 	}
 
 	/** `feedback` e obrigatorio ao reprovar (o dominio recusa sem ele). */
@@ -1045,17 +1159,42 @@ class JobContractController {
 	record InterviewRequest(String startsAt, String endsAt, String timeZoneId, String notes) {
 	}
 
-	/** Entrevista como a API devolve: instantes em ISO-8601 UTC e o fuso de quem marcou. */
+	/**
+	 * Entrevista como a API devolve: instantes em ISO-8601 UTC e o fuso de quem marcou.
+	 *
+	 * <p>{@code conflicts} só vem preenchido no ato de marcar/reagendar: é o aviso do que já ocupa
+	 * o horário na agenda de quem marcou. `null` quer dizer "não avaliado" (nas listas), distinto de
+	 * lista vazia ("avaliado, nada conflita").
+	 */
 	record InterviewView(String id, String applicationId, String jobId, String candidateId, String status,
 			String startsAt, String endsAt, String timeZoneId, String notes, String createdAt, String updatedAt,
-			String cancelledAt) {
+			String cancelledAt, List<ConflictView> conflicts) {
 
 		static InterviewView of(JobInterview interview) {
 			return new InterviewView(interview.id(), interview.applicationId(), interview.jobId(),
 				interview.candidateId(), interview.status().name(), interview.startsAt().toString(),
 				interview.endsAt().toString(), interview.zone().getId(), interview.notes(),
 				interview.createdAt().toString(), interview.updatedAt().toString(),
-				interview.cancelledAt() == null ? null : interview.cancelledAt().toString());
+				interview.cancelledAt() == null ? null : interview.cancelledAt().toString(), null);
+		}
+
+		static InterviewView withConflicts(JobInterview interview,
+				List<com.socialcoisa.rede.calendar.application.CalendarAgendaItem> conflicts) {
+			return new InterviewView(interview.id(), interview.applicationId(), interview.jobId(),
+				interview.candidateId(), interview.status().name(), interview.startsAt().toString(),
+				interview.endsAt().toString(), interview.zone().getId(), interview.notes(),
+				interview.createdAt().toString(), interview.updatedAt().toString(),
+				interview.cancelledAt() == null ? null : interview.cancelledAt().toString(),
+				conflicts.stream().map(ConflictView::of).toList());
+		}
+	}
+
+	/** Um compromisso que já ocupa o horário da entrevista, na agenda de quem marcou. */
+	record ConflictView(String entryId, String title, String startsAt, String endsAt) {
+
+		static ConflictView of(com.socialcoisa.rede.calendar.application.CalendarAgendaItem item) {
+			return new ConflictView(item.entry().id(), item.entry().title(), item.entry().startsAt().toString(),
+				item.entry().endsAt().toString());
 		}
 	}
 
@@ -1090,7 +1229,8 @@ class JobContractController {
 			return List.of();
 		}
 		return fields.stream()
-			.map(field -> new JobService.JobFieldInput(field.label(), field.type(), field.required()))
+			.map(field -> new JobService.JobFieldInput(field.label(), field.type(), field.required(),
+				field.visibleIfFieldId(), field.visibleIfValue()))
 			.toList();
 	}
 

@@ -1,4 +1,4 @@
-FROM eclipse-temurin:25-jdk-alpine@sha256:1e20ead9eec7234db293f1913438090d533ed47c0b9e12dc8c7627a802a44ed6 AS builder
+FROM eclipse-temurin:25-jdk-alpine@sha256:c7c3d0bdf7f2bbc5a05a6712ed334d198360105634ea9adf76fca94f381b1e3f AS builder
 WORKDIR /app
 RUN apk add --no-cache ca-certificates curl
 ARG OPENNSFW_MODEL_COMMIT=1cbe63c555cb147fb04668e2568517c9bd2379e2
@@ -13,7 +13,7 @@ RUN ./mvnw dependency:go-offline -q || true
 COPY src src
 RUN ./mvnw package -DskipTests -q
 
-FROM eclipse-temurin:25-jre-noble@sha256:a98128a57de944a72bd31fbc79b898edd5a5864d3652071d5bbd2160ab7d7dce
+FROM eclipse-temurin:25-jre-noble@sha256:e3b6f7887a50f20d8f07abf279d8a81a5953fb398a9555bd9edd56b9bd15968c
 WORKDIR /app
 COPY --from=builder /app/target/rede-0.0.1-SNAPSHOT.jar app.jar
 COPY --from=builder /app/model/open-nsfw.onnx /app/data/open-nsfw.onnx

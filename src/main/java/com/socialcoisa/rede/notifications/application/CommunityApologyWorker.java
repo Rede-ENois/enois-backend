@@ -63,9 +63,9 @@ public class CommunityApologyWorker {
 			return;
 		}
 		int announced = 0;
-		int offset = 0;
+		String afterId = null;
 		while (true) {
-			List<String> ids = profiles.findAllIds(offset, PAGE);
+			List<String> ids = profiles.findAllIds(afterId, PAGE);
 			if (ids.isEmpty()) {
 				break;
 			}
@@ -92,7 +92,7 @@ public class CommunityApologyWorker {
 			if (ids.size() < PAGE) {
 				break;
 			}
-			offset += PAGE;
+			afterId = ids.getLast();
 		}
 		announcements.markSent(ANNOUNCEMENT_KEY, clock.instant());
 		LOG.info("Comunicado de desculpas enviado: {} usuários, {} faíscas cada.", announced,

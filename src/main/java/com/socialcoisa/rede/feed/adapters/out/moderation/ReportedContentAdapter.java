@@ -7,6 +7,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import com.socialcoisa.rede.calls.domain.CallReportContext;
+import com.socialcoisa.rede.colagem.application.port.out.ColagemRepository;
+import com.socialcoisa.rede.confessionario.application.port.out.ConfessionarioRepository;
+import com.socialcoisa.rede.desabafos.application.port.out.DesabafosRepository;
 import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.PostId;
@@ -14,6 +17,7 @@ import com.socialcoisa.rede.groups.application.port.out.GroupContentRepository;
 import com.socialcoisa.rede.groups.domain.GroupComment;
 import com.socialcoisa.rede.groups.domain.GroupPost;
 import com.socialcoisa.rede.moderation.application.port.out.CallReportContextRepository;
+import com.socialcoisa.rede.murais.application.port.out.MuraisRepository;
 import com.socialcoisa.rede.moderation.application.port.out.ReportedContentReader;
 import com.socialcoisa.rede.moderation.domain.Report;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
@@ -38,14 +42,23 @@ class ReportedContentAdapter implements ReportedContentReader {
 	private final UserProfileRepository profiles;
 	private final GroupContentRepository groupContent;
 	private final CallReportContextRepository callReports;
+	private final ColagemRepository colagem;
+	private final MuraisRepository murais;
+	private final DesabafosRepository desabafos;
+	private final ConfessionarioRepository confessionario;
 
 	ReportedContentAdapter(PostRepository posts, CommentRepository comments, UserProfileRepository profiles,
-			GroupContentRepository groupContent, CallReportContextRepository callReports) {
+			GroupContentRepository groupContent, CallReportContextRepository callReports, ColagemRepository colagem,
+			MuraisRepository murais, DesabafosRepository desabafos, ConfessionarioRepository confessionario) {
 		this.posts = posts;
 		this.comments = comments;
 		this.profiles = profiles;
 		this.groupContent = groupContent;
 		this.callReports = callReports;
+		this.colagem = colagem;
+		this.murais = murais;
+		this.desabafos = desabafos;
+		this.confessionario = confessionario;
 	}
 
 	@Override
@@ -56,6 +69,24 @@ class ReportedContentAdapter implements ReportedContentReader {
 			case "USER" -> profiles.findById(targetId).map(this::profileText);
 			case "GROUP_POST" -> groupContent.findPost(targetId).map(GroupPost::content);
 			case "GROUP_COMMENT" -> groupContent.findComment(targetId).map(GroupComment::content);
+			case "COLLAGEM_POST" -> colagem.findPostById(targetId).map(post -> colagemPostText(post));
+			case "COLLAGEM_COMMENT" -> colagem.findCommentById(targetId)
+				.map(comment -> colagemCommentText(comment));
+			case "MURAL" -> murais.findMuralById(targetId).map(mural -> muralText(mural));
+			// Desabafos e Confessionário: espaços anônimos de texto — o que a triagem julga é o
+			// texto (sem autor, que o contrato público não carrega mesmo para a moderação ler).
+			case "DESABAFO_POST" -> desabafos.findPostById(targetId)
+				.filter(com.socialcoisa.rede.desabafos.domain.DesabafoPost::isActive)
+				.map(com.socialcoisa.rede.desabafos.domain.DesabafoPost::content);
+			case "DESABAFO_COMMENT" -> desabafos.findCommentById(targetId)
+				.filter(com.socialcoisa.rede.desabafos.domain.DesabafoComment::isActive)
+				.map(com.socialcoisa.rede.desabafos.domain.DesabafoComment::content);
+			case "CONFESSIONARIO_POST" -> confessionario.findPostById(targetId)
+				.filter(com.socialcoisa.rede.confessionario.domain.ConfissaoPost::isActive)
+				.map(com.socialcoisa.rede.confessionario.domain.ConfissaoPost::content);
+			case "CONFESSIONARIO_COMMENT" -> confessionario.findCommentById(targetId)
+				.filter(com.socialcoisa.rede.confessionario.domain.ConfissaoComment::isActive)
+				.map(com.socialcoisa.rede.confessionario.domain.ConfissaoComment::content);
 			default -> Optional.empty();
 		};
 		return content.map(this::shorten).filter(StringUtils::hasText);
@@ -109,8 +140,29 @@ class ReportedContentAdapter implements ReportedContentReader {
 			.orElse("");
 	}
 
+	// Colagem: o texto vem da legenda (a foto em si vai à triagem de mídia); indicamos que é foto
+	// para o modelo não estranhar a frase curta.
+	private String colagemPostText(com.socialcoisa.rede.colagem.domain.ColagemPost post) {
+		return post.description() == null ? "[foto da Colagem sem legenda]" : post.description();
+	}
+
+	private String colagemCommentText(com.socialcoisa.rede.colagem.domain.ColagemComment comment) {
+		if (comment.content() != null) {
+			return comment.content();
+		}
+		return comment.hasPhoto() ? "[comentário fotográfico na Colagem]" : null;
+	}
+
 	private String shorten(String content) {
 		String trimmed = content.trim();
 		return trimmed.length() <= MAX_CHARS ? trimmed : trimmed.substring(0, MAX_CHARS);
+	}
+
+	// Mural: o quadro denunciável é título e descrição — o que a pessoa escreveu nele.
+	private String muralText(com.socialcoisa.rede.murais.domain.Mural mural) {
+		return Stream.of(mural.title(), mural.description())
+			.filter(StringUtils::hasText)
+			.reduce((first, second) -> first + "\n" + second)
+			.orElse("");
 	}
 }

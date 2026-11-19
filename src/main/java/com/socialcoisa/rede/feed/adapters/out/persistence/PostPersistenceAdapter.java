@@ -36,9 +36,12 @@ class PostPersistenceAdapter implements PostRepository, SocialPostCountReader {
 	}
 
 	@Override
-	public List<Post> findExpiredMoments(Instant now, int limit) {
-		return repository.findByTypeAndStatusAndExpiresAtBefore(PostType.MOMENT, PostStatus.ACTIVE, now).stream()
-			.limit(Math.max(1, limit))
+	public List<Post> findExpiredEphemeral(Instant now, int limit) {
+		return repository
+			.findByTypeInAndStatusAndExpiresAtBeforeOrderByExpiresAtAscIdAsc(
+				java.util.Arrays.stream(PostType.values()).filter(PostType::isEphemeral).toList(),
+				PostStatus.ACTIVE, now, PageRequest.of(0, Math.max(1, limit)))
+			.stream()
 			.map(PostJpaEntity::toDomain).toList();
 	}
 
@@ -95,6 +98,18 @@ class PostPersistenceAdapter implements PostRepository, SocialPostCountReader {
 	public java.util.Optional<Post> findActiveRepostByAuthorAndSource(UserId authorId, String sourcePostId) {
 		return repository.findRepostByAuthorAndSource(authorId.value(), sourcePostId,
 			com.socialcoisa.rede.feed.domain.PostStatus.ACTIVE).map(PostJpaEntity::toDomain);
+	}
+
+	@Override
+	public Optional<String> findActiveRepostContentByAuthorAndSource(UserId authorId, String sourcePostId) {
+		return repository.findRepostByAuthorAndSource(authorId.value(), sourcePostId,
+			com.socialcoisa.rede.feed.domain.PostStatus.ACTIVE).map(PostJpaEntity::content);
+	}
+
+	@Override
+	public long countActiveRepostsByAuthorAndSource(UserId authorId, String sourcePostId) {
+		return repository.countActiveRepostsByAuthorAndSource(authorId.value(), sourcePostId,
+			com.socialcoisa.rede.feed.domain.PostStatus.ACTIVE);
 	}
 
 	@Override

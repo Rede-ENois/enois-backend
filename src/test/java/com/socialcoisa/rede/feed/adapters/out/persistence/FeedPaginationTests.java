@@ -39,6 +39,7 @@ class FeedPaginationTests {
 	@Autowired private PostPersistenceAdapter posts;
 	@Autowired private SpringDataReactionJpaRepository reactions;
 	@Autowired private SpringDataCommentJpaRepository comments;
+	@Autowired private SpringDataSavedPostJpaRepository savedPosts;
 	@PersistenceContext private EntityManager entityManager;
 
 	private final String prefix = "pagination_" + UUID.randomUUID().toString().substring(0, 8);
@@ -82,6 +83,20 @@ class FeedPaginationTests {
 		comment(second, 2);
 		assertThat(readAll(FeedTab.INTERACTED, base.plusSeconds(1).toString(), 1))
 			.containsExactly(first.id().value(), second.id().value())
+			.doesNotContain(untouched.id().value());
+	}
+
+	/** O guardado é uma interação: a aba "Interações" tem que reencontrar o post que a pessoa salvou. */
+	@Test
+	void interactedIncludesSavedPosts() {
+		Post saved = save(0, base.minusSeconds(2));
+		Post reacted = save(1, base.minusSeconds(1));
+		Post untouched = save(2, base);
+		savedPosts.save(new SavedPostJpaEntity(prefix + "_save_0", saved.id().value(), reader.value(),
+			base.minusSeconds(10)));
+		react(reacted, 1);
+		assertThat(readAll(FeedTab.INTERACTED, base.plusSeconds(1).toString(), 10))
+			.contains(saved.id().value(), reacted.id().value())
 			.doesNotContain(untouched.id().value());
 	}
 

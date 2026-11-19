@@ -8,7 +8,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.socialcoisa.rede.notifications.application.port.out.NotificationPreferenceRepository;
 import com.socialcoisa.rede.notifications.domain.NotificationPreferences;
 
-/** Push categories, weekly digest and project opt-in (GET/PUT /me/notification-preferences). */
+/** Push categories, weekly digest, project opt-in and the reaction/comment silence (GET/PUT /me/notification-preferences). */
 @Service
 public class NotificationPreferenceService {
 
@@ -26,15 +26,21 @@ public class NotificationPreferenceService {
 
 	@Transactional
 	public NotificationPreferences update(String userId, Boolean weeklyDigest, Boolean pushSocial,
-			Boolean pushMessages, Boolean pushGroups, Boolean pushJobs, Boolean pushSystem, Boolean communityProjects) {
+			Boolean pushMessages, Boolean pushGroups, Boolean pushJobs, Boolean pushSystem, Boolean communityProjects,
+			Boolean muteReactions, Boolean mutePostComments) {
 		repository.lockForUpdate(userId);
 		NotificationPreferences updated = of(userId).with(weeklyDigest, pushSocial, pushMessages, pushGroups,
-			pushJobs, pushSystem, communityProjects, clock.instant());
+			pushJobs, pushSystem, communityProjects, muteReactions, mutePostComments, clock.instant());
 		repository.save(userId, updated);
 		return updated;
 	}
 
 	public boolean allowsPush(String userId, String kind) {
 		return of(userId).allowsPush(kind);
+	}
+
+	/** O aviso nem nasce: vale para a caixa e para o push. */
+	public boolean silences(String userId, String kind) {
+		return of(userId).silences(kind);
 	}
 }

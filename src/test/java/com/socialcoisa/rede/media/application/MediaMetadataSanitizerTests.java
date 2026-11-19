@@ -202,4 +202,44 @@ class MediaMetadataSanitizerTests {
 		}
 		return data.length;
 	}
+
+	@Test
+	void sanitizesSvgRemovingScriptsAndEventHandlersWhilePreservingShapes() throws Exception {
+		byte[] dirtySvg = """
+			<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" onload="alert(1)">
+			  <script>alert(2)</script>
+			  <circle cx="5" cy="5" r="4" fill="#7c3aed" />
+			</svg>
+			""".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+		byte[] clean = sanitizer.sanitize(dirtySvg, "image/svg+xml", "icon.svg");
+		String out = new String(clean, java.nio.charset.StandardCharsets.UTF_8);
+
+		assertTrue(out.contains("<svg"));
+		assertTrue(out.contains("<circle"));
+		assertFalse(out.contains("<script"));
+		assertFalse(out.contains("onload"));
+		assertFalse(out.contains("alert("));
+	}
+
+	@Test
+	void stripsSmilAnimationsTargetingHrefOrXlinkHrefInSvg() throws Exception {
+		byte[] smilAttack = """
+			<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
+			  <use href="#ok">
+			    <animate attributeName="href" begin="2s" to="https://malicioso.example/track.svg"/>
+			    <set attributeName="xlink:href" to="https://malicioso.example/track2.svg"/>
+			    <animate attributeName="opacity" from="0" to="1" dur="1s"/>
+			  </use>
+			</svg>
+			""".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+		byte[] clean = sanitizer.sanitize(smilAttack, "image/svg+xml", "smil.svg");
+		String out = new String(clean, java.nio.charset.StandardCharsets.UTF_8);
+
+		assertTrue(out.contains("href=\"#ok\""));
+		assertTrue(out.contains("attributeName=\"opacity\"") || out.contains("attributename=\"opacity\""));
+		assertFalse(out.toLowerCase().contains("attributename=\"href\""));
+		assertFalse(out.toLowerCase().contains("attributename=\"xlink:href\""));
+	}
 }

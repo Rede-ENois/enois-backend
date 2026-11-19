@@ -148,7 +148,7 @@ class LinkedInShareOutboxEventHandlerTests {
 		}
 
 		@Override
-		public List<Post> findExpiredMoments(Instant now, int limit) {
+		public List<Post> findExpiredEphemeral(Instant now, int limit) {
 			throw new UnsupportedOperationException();
 		}
 
@@ -175,6 +175,16 @@ class LinkedInShareOutboxEventHandlerTests {
 		@Override
 		public Optional<Post> findActiveRepostByAuthorAndSource(UserId authorId, String sourcePostId) {
 			return Optional.empty();
+		}
+
+		@Override
+		public Optional<String> findActiveRepostContentByAuthorAndSource(UserId authorId, String sourcePostId) {
+			return Optional.empty();
+		}
+
+		@Override
+		public long countActiveRepostsByAuthorAndSource(UserId authorId, String sourcePostId) {
+			return 0;
 		}
 
 		@Override

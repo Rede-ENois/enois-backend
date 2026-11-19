@@ -18,6 +18,9 @@ import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.messaging.application.port.out.MessagingRepository;
 import com.socialcoisa.rede.network.application.port.out.ConnectionRepository;
+import com.socialcoisa.rede.profile.application.port.out.AccountIdentity;
+import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
+import com.socialcoisa.rede.shared.sanctions.SanctionGateReader;
 import com.socialcoisa.rede.shared.age.AgeGate;
 import com.socialcoisa.rede.shared.age.AgePolicyReader;
 import com.socialcoisa.rede.shared.blocks.BlockedUsersReader;
@@ -29,17 +32,26 @@ class GroupCreationQueryCountTests {
 	private final AgePolicyReader agePolicy = mock(AgePolicyReader.class);
 	private final ConnectionRepository connections = mock(ConnectionRepository.class);
 	private final BlockedUsersReader blockedUsers = mock(BlockedUsersReader.class);
+	private final SanctionGateReader sanctions = mock(SanctionGateReader.class);
+	private final UserProfileRepository profiles = mock(UserProfileRepository.class);
 	private final MessagingService service = new MessagingService(mock(MessagingRepository.class),
 		mock(com.socialcoisa.rede.notifications.application.NotificationService.class), Clock.systemUTC(),
 		mock(com.socialcoisa.rede.shared.security.UserRateLimiter.class),
 		mock(com.socialcoisa.rede.shared.security.BehavioralTimingGuard.class), mock(AgeGate.class),
 		mock(com.socialcoisa.rede.shared.sanctions.SanctionGate.class),
-		new ConversationReachPolicy(agePolicy, connections, blockedUsers),
+		new ConversationReachPolicy(agePolicy, connections, blockedUsers, sanctions, profiles),
 		mock(com.socialcoisa.rede.corporate.application.CorporateProfileService.class),
 		mock(com.socialcoisa.rede.coin.application.CoinService.class),
 		mock(org.springframework.context.ApplicationEventPublisher.class), new ConversationViewers(Clock.systemUTC()));
 
 	private final List<String> members = IntStream.range(0, 99).mapToObj(i -> "member-" + i).toList();
+
+	@org.junit.jupiter.api.BeforeEach
+	void everyMemberExists() {
+		// A política passou a exigir conta existente: o cenário aqui é de grupo válido.
+		when(profiles.identitiesOf(any())).thenReturn(
+			members.stream().map(id -> new AccountIdentity(id, id, id)).toList());
+	}
 
 	@Test
 	void largeGroupIsCheckedWithOneReadPerKind() {

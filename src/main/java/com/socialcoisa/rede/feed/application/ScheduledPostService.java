@@ -9,9 +9,12 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
+import com.socialcoisa.rede.coin.application.CoinService;
 import com.socialcoisa.rede.feed.application.port.out.ScheduledPostRepository;
 import com.socialcoisa.rede.feed.domain.PostType;
 import com.socialcoisa.rede.feed.domain.ScheduledPost;
@@ -40,15 +43,17 @@ public class ScheduledPostService {
 	private final ScheduledPostRepository repository;
 	private final PublishPostUseCase publishPost;
 	private final Clock clock;
+	private final TransactionTemplate itemTransaction;
 
-	private final com.socialcoisa.rede.coin.application.CoinService coins;
+	private final CoinService coins;
 
 	public ScheduledPostService(ScheduledPostRepository repository, PublishPostUseCase publishPost, Clock clock,
-			com.socialcoisa.rede.coin.application.CoinService coins) {
+			CoinService coins, PlatformTransactionManager transactionManager) {
 		this.coins = coins;
 		this.repository = repository;
 		this.publishPost = publishPost;
 		this.clock = clock;
+		this.itemTransaction = new TransactionTemplate(transactionManager);
 	}
 
 	public record ScheduleCommand(PostType type, String content, String pageHtml, String articleBody,
@@ -86,9 +91,26 @@ public class ScheduledPostService {
 		// A enquete é o caso em que conteúdo sem alternativas é um post que falharia na hora
 		// marcada: as mesmas regras da publicação direta valem aqui, para o erro aparecer agora.
 		List<String> pollOptions = type == PostType.POLL ? pollOptions(command.pollOptions()) : List.of();
-		if (repository.findByUser(userId).size() >= MAX_PENDING) {
+		List<ScheduledPost> pendentes = repository.findByUser(userId);
+		if (pendentes.size() >= MAX_PENDING) {
 			throw new ApiException(409, "TOO_MANY_SCHEDULED",
 				"Você já tem " + MAX_PENDING + " posts agendados. Cancele algum para criar outro.");
+		}
+		// Flood pelo agendamento (issue da fila de suporte): dois agendados do mesmo autor para o
+		// mesmo minuto com o mesmo conteúdo publicariam em sequência no mesmo tick do worker — a
+		// janela de duplicados da publicação direta não cobre porque publica tudo de uma vez.
+		// Recusa na marcação, com o motivo visível na hora, como as demais regras daqui.
+		if (StringUtils.hasText(command.content())) {
+			String conteudo = command.content().strip().toLowerCase().replaceAll("\\s+", " ");
+			String minuto = String.valueOf(scheduledAt.getEpochSecond() / 60);
+			boolean repetido = pendentes.stream()
+				.anyMatch(item -> item.scheduledAt().getEpochSecond() / 60 == Long.parseLong(minuto)
+					&& item.content() != null
+					&& item.content().strip().toLowerCase().replaceAll("\\s+", " ").equals(conteudo));
+			if (repetido) {
+				throw new ApiException(409, "SCHEDULED_DUPLICATE_CONTENT",
+					"Você já tem um post agendado com este conteúdo para este horário.");
+			}
 		}
 		// Mesma regra da publicação direta, aplicada cedo para o erro aparecer no agendamento:
 		// post de comunidade herda o assunto dela; post avulso declara um da taxonomia (obrigatório).
@@ -137,31 +159,46 @@ public class ScheduledPostService {
 	 * Publica o que venceu. Cada item tem o seu próprio try: uma recusa não pode travar a fila
 	 * dos demais. O retorno é quantos entraram no ar nesta rodada.
 	 *
-	 * SEM @Transactional de propósito: a publicação é um caso de uso com transação PRÓPRIA; se o
-	 * lote inteiro compartilhasse uma transação, a primeira recusa a marcaria rollback-only e
-	 * derrubaria até as publicações que deram certo (UnexpectedRollbackException).
+	 * O lote não tem transação: cada item é bloqueado e publicado na própria transação, para que
+	 * uma recusa não desfaça os demais.
 	 */
 	public int publishDue() {
-		List<ScheduledPost> due = repository.findDue(clock.instant(), MAX_ATTEMPTS, 20);
+		Instant now = clock.instant();
+		List<ScheduledPost> due = repository.findDue(now, MAX_ATTEMPTS, 20);
 		int published = 0;
 		for (ScheduledPost post : due) {
 			try {
 				// As menções valem no momento da PUBLICAÇÃO: quem foi marcado é avisado quando o
 				// post entra no ar, não quando ele foi agendado.
-				publishPost.publish(new PublishPostCommand(new UserId(post.userId()), post.type(), post.content(),
-					post.pageHtml(), post.articleBody(), post.tags(), post.mediaIds(), post.communityId(),
-					post.mentionedUserIds(), post.topic(), null, false, post.pollOptions()));
-				repository.delete(post.id());
-				published++;
+				// Enquete agendada nasce simples (sem multipla escolha nem prazo): a extensao da
+				// enquete e configurada na hora da criacao direta, nao no agendamento.
+				Boolean entrou = itemTransaction.execute(status -> {
+					ScheduledPost atual = repository.findByIdForUpdate(post.id()).orElse(null);
+					if (atual == null || atual.scheduledAt().isAfter(now) || atual.attempts() >= MAX_ATTEMPTS) {
+						return false;
+					}
+					publishPost.publish(new PublishPostCommand(new UserId(atual.userId()), atual.type(), atual.content(),
+						atual.pageHtml(), atual.articleBody(), atual.tags(), atual.mediaIds(), atual.communityId(),
+						atual.mentionedUserIds(), atual.topic(), null, false, atual.pollOptions(), false, null));
+					repository.delete(atual.id());
+					return true;
+				});
+				if (Boolean.TRUE.equals(entrou)) {
+					published++;
+				}
 			}
 			catch (RuntimeException error) {
 				String motivo = error instanceof ApiException api && StringUtils.hasText(api.getMessage())
 					? api.getMessage()
 					: "Não foi possível publicar no horário marcado.";
 				String limitado = motivo.length() > 500 ? motivo.substring(0, 500) : motivo;
-				repository.save(post.failed(limitado));
-				LOG.warn("Post agendado {} recusado na publicação (tentativa {}): {}", post.id(), post.attempts() + 1,
-					limitado);
+				itemTransaction.executeWithoutResult(status -> repository.findByIdForUpdate(post.id())
+					.filter(atual -> !atual.scheduledAt().isAfter(now) && atual.attempts() < MAX_ATTEMPTS)
+					.ifPresent(atual -> {
+						repository.save(atual.failed(limitado));
+						LOG.warn("Post agendado {} recusado na publicação (tentativa {}): {}", atual.id(),
+							atual.attempts() + 1, limitado);
+					}));
 			}
 		}
 		return published;

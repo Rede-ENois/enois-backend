@@ -44,13 +44,15 @@ public class CampaignService {
 	private final EroleplayRepository repository;
 	private final CampaignNotifier notifier;
 	private final GameSystemRegistry systems;
+	private final CampaignAuditTrail audits;
 	private final Clock clock;
 
 	public CampaignService(EroleplayRepository repository, CampaignNotifier notifier, GameSystemRegistry systems,
-			Clock clock) {
+			CampaignAuditTrail audits, Clock clock) {
 		this.repository = repository;
 		this.notifier = notifier;
 		this.systems = systems;
+		this.audits = audits;
 		this.clock = clock;
 	}
 
@@ -80,6 +82,7 @@ public class CampaignService {
 		repository.saveCampaign(campaign);
 		repository.saveMember(CampaignMember.join(campaign.id(), ownerId, CampaignRole.GAME_MASTER, now));
 		repository.adjustMemberCount(campaign.id(), 1);
+		audits.created(campaign, ownerId);
 		return campaign;
 	}
 
@@ -111,6 +114,7 @@ public class CampaignService {
 		Campaign updated = campaign.update(finalName, trimToNull(description), trimToNull(setting), nextSystem,
 			nextFamily, visibility, clock.instant());
 		repository.saveCampaign(updated);
+		audits.updated(campaignId, actorId);
 		return updated;
 	}
 
@@ -172,11 +176,13 @@ public class CampaignService {
 			repository.saveJoinRequest(CampaignJoinRequest.create(newId("roleplay_request"), campaignId, userId,
 				null, clock.instant()));
 			notifier.joinRequested(campaign, userId);
+			audits.joinRequested(campaignId, userId);
 			return JoinOutcome.PENDING;
 		}
 		repository.saveMember(CampaignMember.join(campaignId, userId, CampaignRole.PLAYER, clock.instant()));
 		repository.adjustMemberCount(campaignId, 1);
 		notifier.memberJoined(campaign, userId);
+		audits.memberJoined(campaignId, userId);
 		return JoinOutcome.MEMBER;
 	}
 
@@ -191,6 +197,7 @@ public class CampaignService {
 		repository.saveMember(CampaignMember.join(campaignId, targetUserId, CampaignRole.PLAYER, clock.instant()));
 		repository.adjustMemberCount(campaignId, 1);
 		notifier.memberInvited(campaign, targetUserId, actorId);
+		audits.memberInvited(campaignId, actorId, targetUserId);
 	}
 
 	/** Sai da campanha. O mestre precisa transferir o comando antes — uma campanha sem mestre não existe. */
@@ -204,6 +211,7 @@ public class CampaignService {
 		}
 		repository.removeMember(campaignId, userId);
 		repository.adjustMemberCount(campaignId, -1);
+		audits.memberLeft(campaignId, userId);
 	}
 
 	/** O mestre remove um participante. */
@@ -217,6 +225,7 @@ public class CampaignService {
 		}
 		repository.removeMember(campaignId, targetUserId);
 		repository.adjustMemberCount(campaignId, -1);
+		audits.memberRemoved(campaignId, actorId, targetUserId);
 	}
 
 	/** Passa o comando da campanha para outro participante. O antigo mestre continua como jogador. */
@@ -235,6 +244,7 @@ public class CampaignService {
 		repository.saveMember(target.withRole(CampaignRole.GAME_MASTER));
 		repository.saveMember(current.withRole(CampaignRole.PLAYER));
 		notifier.masterTransferred(campaign, targetUserId, actorId);
+		audits.mastershipTransferred(campaignId, actorId, targetUserId);
 	}
 
 	@Transactional(readOnly = true)
@@ -268,6 +278,7 @@ public class CampaignService {
 			repository.adjustMemberCount(campaignId, 1);
 		}
 		notifier.requestDecided(campaign, request.userId(), actorId, approve);
+		audits.joinRequestDecided(campaignId, actorId, requestId, request.userId(), approve);
 		return repository.findRequestById(requestId).orElse(request);
 	}
 
@@ -278,6 +289,7 @@ public class CampaignService {
 		require(roleOf(campaignId, actorId), CampaignCapability.MANAGE_CAMPAIGN);
 		Campaign archived = campaign.withStatus(CampaignStatus.ARCHIVED, clock.instant());
 		repository.saveCampaign(archived);
+		audits.archived(campaignId, actorId, campaign.status().name());
 		return archived;
 	}
 
@@ -298,6 +310,7 @@ public class CampaignService {
 		repository.saveTable(table);
 		// O criador já senta: uma mesa sem ninguém não é mesa.
 		repository.saveSeat(TableSeat.seat(table.id(), actorId, now));
+		audits.tableCreated(campaignId, actorId, table.id());
 		return table;
 	}
 
@@ -361,6 +374,16 @@ public class CampaignService {
 	public List<String> tableAudience(String tableId) {
 		GameTable table = requireTable(tableId);
 		return repository.listMembers(table.campaignId()).stream().map(CampaignMember::userId).toList();
+	}
+
+	/**
+	 * Confere que a campanha existe sem devolvê-la: a leitura administrativa do histórico só
+	 * precisa da resposta existe/não-existe (desconhecida é 404, não histórico vazio) e o
+	 * controller não tem por que carregar a entidade.
+	 */
+	@Transactional(readOnly = true)
+	public void requireExists(String campaignId) {
+		requireCampaign(campaignId);
 	}
 
 	private Campaign requireCampaign(String campaignId) {

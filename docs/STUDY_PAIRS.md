@@ -14,6 +14,15 @@ sequência, ranking nem métrica pública. O módulo é `studypairs` (migração
   chave, do mais antigo para o mais novo (FIFO), e casa com o primeiro elegível. Sem candidato, o
   pedido fica `OPEN`. A reivindicação do pedido da fila é atômica
   (`update ... where status = 'OPEN'`): dois pedidos simultâneos não levam a mesma pessoa.
+- **Proposta (V360)**: o casamento não abre o par — nasce `PENDING` com prazo de 7 dias. Cada lado
+  responde o quebra-gelo guiado (catálogo em `study_pair_icebreakers`; "por que esse objetivo
+  agora?" é obrigatória) e aceita (`POST /study-pairs/{id}/accept`); os dois aceites viram o par
+  `ACTIVE` e a semana do check-in passa a contar do aceite mútuo. Recusa (`POST
+  /study-pairs/{id}/decline`) ou prazo vencido encerra a proposta: quem não recusou volta para a
+  fila na posição original (o `createdAt` do pedido não muda) e a mesma dupla não volta a casar
+  enquanto o vínculo vive (a chave única `active_pair_key` cobre `ACTIVE` **e** `PENDING`). A
+  proposta pendente conta no teto de 2 pares. Cron horário (17 minutos depois da hora,
+  `rede.study-pairs.expiry-cron`, `-` desliga) vence propostas passadas do prazo.
 - **Concorrência (V228)**: dois cliques no mesmo botão (ou duas réplicas) passavam pelas checagens
   antes de qualquer escrita e criavam pedido/par duplicado. Agora `POST /study-pairs/requests`
   trava a linha da pessoa (`select ... for update`) antes de contar pares e pedidos: a segunda
@@ -64,8 +73,10 @@ Todas apontam para `/par-de-estudo`.
 
 | kind | Para quem | Quando |
 |---|---|---|
-| `STUDY_PAIR_MATCHED` | Os dois | O par foi formado (ator: a outra pessoa) |
+| `STUDY_PAIR_PROPOSED` | Os dois | Proposta formada (ator: a outra pessoa) |
+| `STUDY_PAIR_ACTIVE` | Os dois | Os dois aceitaram; o par está aberto |
 | `STUDY_PAIR_CHECKIN` | O par | Primeiro check-in da semana do outro |
+| `STUDY_PAIR_DECLINED` | Quem não recusou | Recusa ou prazo vencido; o pedido voltou para a fila |
 | `STUDY_PAIR_ENDED` | O outro | Um membro encerrou |
 | `STUDY_PAIR_REMINDER` | Quem falta | Lembrete semanal (ator `sistema`) |
 
@@ -84,6 +95,8 @@ Corpo `{ "goal": string, "topic": string | null }`. Resposta `201`:
 { "requestId": "spr_...", "status": "OPEN" | "MATCHED", "pairId": "sp_..." | null }
 ```
 
+`MATCHED` devolve `pairId` de uma **proposta** `PENDING` (não de um par aberto).
+
 Erros: `400 STUDY_GOAL_REQUIRED`, `400 STUDY_GOAL_TOO_LONG`, `400 INVALID_TOPIC`,
 `403 STUDY_PAIRS_ADULTS_ONLY`, `403 BIRTH_DATE_REQUIRED`, `403 EMAIL_NOT_VERIFIED`,
 `403 ACCOUNT_RESTRICTED`, `409 STUDY_PAIRS_DISABLED`, `409 STUDY_REQUEST_ALREADY_OPEN`, `409 STUDY_PAIR_LIMIT`.
@@ -99,6 +112,13 @@ Resposta `200 { "id": "spr_...", "status": "CANCELLED" }`. Sem pedido aberto:
 {
   "openRequest": { "id": "spr_...", "goal": "Aprender Rust", "goalKey": "aprender-rust",
                    "topic": "TECNOLOGIA" | null, "createdAt": "ISO-8601" } | null,
+  "proposals": [{
+    "id": "sp_...", "goal": "Aprender Rust", "goalKey": "aprender-rust", "topic": null,
+    "partner": { "id": "...", "username": "...", "name": "...", "avatar": "..." | null },
+    "myAccepted": false, "partnerAccepted": true,
+    "partnerIcebreaker": { "ice_why_now": "..." } | null,
+    "deadline": "ISO-8601"
+  }],
   "pairs": [{
     "id": "sp_...", "goal": "Aprender Rust", "goalKey": "aprender-rust", "topic": null,
     "startedAt": "ISO-8601", "weekKey": "2026-W44",
@@ -110,7 +130,25 @@ Resposta `200 { "id": "spr_...", "status": "CANCELLED" }`. Sem pedido aberto:
 }
 ```
 
-`checkins` cobre a semana atual e as 3 anteriores, da mais recente para a mais antiga.
+`checkins` cobre a semana atual e as 3 anteriores, da mais recente para a mais antiga. O
+`partnerIcebreaker` só sai depois do meu aceite (revelação simétrica); antes disso é `null`.
+
+### `GET /study-pairs/icebreakers`
+
+`{ "items": [{ "id": "ice_why_now", "position": 1, "question": "Por que esse objetivo agora?",
+"required": true, "kind": "TEXT", "options": [] }] }` — catálogo do quebra-gelo guiado.
+
+### `POST /study-pairs/{pairId}/accept`
+
+Corpo `{ "answers": { "ice_why_now": "...", ... } }` — resposta `200 { "pairActive": boolean }`
+(`true` quando o aceite foi o segundo e o par abriu). Erros: `409 STUDY_PAIR_NOT_PENDING`,
+`409 STUDY_PAIR_EXPIRED`, `409 STUDY_PAIR_ALREADY_ACCEPTED`, `400 STUDY_ICEBREAKER_REQUIRED`,
+`400 STUDY_ICEBREAKER_TOO_LONG`.
+
+### `POST /study-pairs/{pairId}/decline`
+
+Resposta `200 { "id": "sp_...", "status": "DECLINED" }`. Quem não recusou volta para a fila.
+Erros: `409 STUDY_PAIR_NOT_PENDING`.
 
 ### `POST /study-pairs/{pairId}/checkins`
 
@@ -141,6 +179,7 @@ devolve lista vazia; acima de 80 letras: `400 STUDY_SEARCH_TOO_LONG`.
 ## Dados
 
 - `study_pair_requests(id, user_id, goal_key, goal_text, topic, status OPEN|MATCHED|CANCELLED, created_at)`
-- `study_pairs(id, user_a, user_b, goal_key, goal_text, topic, status ACTIVE|ENDED, started_at, ended_at)`
+- `study_pairs(id, user_a, user_b, goal_key, goal_text, topic, status PENDING|ACTIVE|ENDED, started_at, ended_at, icebreaker_a, icebreaker_b, accepted_a, accepted_b, proposed_at, deadline)`
+- `study_pair_icebreakers(id, position, question, required, kind TEXT|CHOICE|MULTI, options)`: catálogo do quebra-gelo
 - `study_checkins(pair_id, user_id, week_key, note, created_at, updated_at)`, PK `(pair_id, user_id, week_key)`
 - `study_pair_reminders(pair_id, user_id, week_key, created_at)`, PK `(pair_id, user_id, week_key)`: um lembrete por semana

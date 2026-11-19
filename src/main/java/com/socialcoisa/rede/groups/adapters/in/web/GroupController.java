@@ -76,7 +76,14 @@ class GroupController {
 		CurrentUser viewer = resolveSafely(sessionToken);
 		Instant before = cursorCodec.decode(cursor).orElse(null);
 		List<Group> groups = groupService.list(query, before, limit);
-		var items = groups.stream().map(group -> view(group, viewer)).toList();
+		List<String> ids = groups.stream().map(Group::id).toList();
+		Map<String, Long> counts = groupService.countMembers(ids);
+		Map<String, GroupRole> roles = viewer == null ? Map.of() : groupService.rolesOf(ids, viewer.id().value());
+		Set<String> pending = viewer == null ? Set.of() : groupService.pendingRequestsOf(ids, viewer.id().value());
+		var items = groups.stream().map(group -> {
+			GroupRole role = roles.get(group.id());
+			return view(group, counts.getOrDefault(group.id(), 0L), role, role == null && pending.contains(group.id()));
+		}).toList();
 		String nextCursor = groups.size() == limit
 			? cursorCodec.encode(groups.get(groups.size() - 1).createdAt()) : null;
 		return new PageResponse<>(items, nextCursor);

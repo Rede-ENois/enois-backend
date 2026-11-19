@@ -19,6 +19,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -82,7 +83,7 @@ class StorageHealerTests {
 	}
 
 	private static StorageObject stored(String id, long bytes) {
-		return new StorageObject(id, "fotos", id + ".jpg", "image/jpeg", bytes, "a".repeat(64),
+		return StorageObject.current(id, "fotos", id + ".jpg", "image/jpeg", bytes, "a".repeat(64),
 			StorageObjectState.STORED, "u", NOW, NOW, null);
 	}
 
@@ -91,7 +92,7 @@ class StorageHealerTests {
 		for (String id : objectIds) {
 			lacunas.add(new StorageScrubber.Report.UnderReplicated(id, 1, 1, List.of("nd_cp")));
 		}
-		return new StorageScrubber.Report(2, objectIds.length, lacunas, 0, List.of());
+		return new StorageScrubber.Report(2, objectIds.length, lacunas, 0, List.of(), Map.of());
 	}
 
 	private void expectSaved() {
@@ -105,7 +106,7 @@ class StorageHealerTests {
 	void lacuna_vira_designacao_pendente_para_o_no_escolhido() {
 		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(gap("sob_1"));
 		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
-		when(catalog.placements("sob_1")).thenReturn(List.of());
+		when(catalog.copies("sob_1")).thenReturn(List.of());
 		NetworkNode no = storageNode("nd_a", "sudeste");
 		when(placement.chooseReplicas(eq("sob_1"), anyLong(), any(Instant.class))).thenReturn(List.of(no));
 		expectSaved();
@@ -127,7 +128,7 @@ class StorageHealerTests {
 	void dry_run_mostra_o_que_seria_feito_e_nao_grava_nada() {
 		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(gap("sob_1"));
 		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
-		when(catalog.placements("sob_1")).thenReturn(List.of());
+		when(catalog.copies("sob_1")).thenReturn(List.of());
 		when(placement.chooseReplicas(eq("sob_1"), anyLong(), any(Instant.class)))
 			.thenReturn(List.of(storageNode("nd_a", "sudeste")));
 
@@ -145,7 +146,7 @@ class StorageHealerTests {
 		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(gap("sob_1"));
 		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
 		// A réplica 1 já tem dono num nó que a perdeu (STALE): a nova não pode ser a 1.
-		when(catalog.placements("sob_1")).thenReturn(List.of(
+		when(catalog.copies("sob_1")).thenReturn(List.of(
 			new StoragePlacement("sob_1", 0, "nd_cp", 2048, "a".repeat(64), StoragePlacement.State.OK, NOW),
 			new StoragePlacement("sob_1", 2, "nd_velho", 2048, "a".repeat(64), StoragePlacement.State.STALE, NOW)));
 		when(placement.chooseReplicas(eq("sob_1"), anyLong(), any(Instant.class)))
@@ -162,7 +163,7 @@ class StorageHealerTests {
 	void so_copia_stale_nao_e_origem_para_replicar() {
 		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(gap("sob_1"));
 		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
-		when(catalog.placements("sob_1")).thenReturn(List.of(
+		when(catalog.copies("sob_1")).thenReturn(List.of(
 			new StoragePlacement("sob_1", 1, "nd_x", 2048, "b".repeat(64), StoragePlacement.State.STALE, NOW)));
 		// Nenhum nó: sem isso o motivo diria NO_CANDIDATE, escondendo que há cópia suspeita.
 		when(placement.chooseReplicas(eq("sob_1"), anyLong(), any(Instant.class))).thenReturn(List.of());
@@ -179,7 +180,7 @@ class StorageHealerTests {
 	void sem_no_livre_a_lacuna_fica_com_motivo_proprio() {
 		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(gap("sob_1"));
 		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
-		when(catalog.placements("sob_1")).thenReturn(List.of(
+		when(catalog.copies("sob_1")).thenReturn(List.of(
 			new StoragePlacement("sob_1", 0, "nd_cp", 2048, "a".repeat(64), StoragePlacement.State.OK, NOW)));
 		when(placement.chooseReplicas(eq("sob_1"), anyLong(), any(Instant.class))).thenReturn(List.of());
 
@@ -193,7 +194,7 @@ class StorageHealerTests {
 	void designacao_pendente_ja_tem_dono_e_nao_e_reescolhida() {
 		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(gap("sob_1"));
 		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
-		when(catalog.placements("sob_1")).thenReturn(List.of(
+		when(catalog.copies("sob_1")).thenReturn(List.of(
 			new StoragePlacement("sob_1", 1, "nd_a", 2048, "a".repeat(64),
 				StoragePlacement.State.PENDING_REMOTE, NOW)));
 
@@ -207,7 +208,7 @@ class StorageHealerTests {
 	@Test
 	void objeto_lapidado_entre_a_varredura_e_a_cura_nao_vira_designacao() {
 		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(gap("sob_1"));
-		when(catalog.findById("sob_1")).thenReturn(Optional.of(new StorageObject("sob_1", "fotos", "a.jpg",
+		when(catalog.findById("sob_1")).thenReturn(Optional.of(StorageObject.current("sob_1", "fotos", "a.jpg",
 			"image/jpeg", 10L, "a".repeat(64), StorageObjectState.DELETED, "u", NOW, NOW, NOW)));
 
 		StorageHealer.Report relatorio = healer.heal("adm_1", null, 100, false);
@@ -220,7 +221,7 @@ class StorageHealerTests {
 	void designa_no_maximo_o_que_falta_mesmo_com_mais_candidatos() {
 		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(gap("sob_1"));
 		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
-		when(catalog.placements("sob_1")).thenReturn(List.of());
+		when(catalog.copies("sob_1")).thenReturn(List.of());
 		// Três nós livres, mas só falta UMA cópia: designar as três criaria duplicidade que o
 		// alvo não pediu e o relatório de equilíbrio acusaria como desbalanceamento.
 		when(placement.chooseReplicas(eq("sob_1"), anyLong(), any(Instant.class))).thenReturn(List.of(

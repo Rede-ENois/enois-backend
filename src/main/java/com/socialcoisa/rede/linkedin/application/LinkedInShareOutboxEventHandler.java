@@ -17,8 +17,8 @@ import com.socialcoisa.rede.shared.outbox.OutboxEventHandler;
  * e a vida social no Enois nao vaza para la (regra de produto da separacao das interfaces).
  *
  * Roda no worker do outbox (depois do commit da publicacao): o post ja existe, e o envio ao
- * LinkedIn nao segura a requisicao de quem publicou. MOMENT fica de fora de proposito — ele some
- * em 24h no Enois e viraria um post permanente no LinkedIn.
+ * LinkedIn nao segura a requisicao de quem publicou. Efêmeros (MOMENT 24h, INSTANTE 1h) ficam de
+ * fora de proposito — eles somem no Enois e virariam um post permanente no LinkedIn.
  */
 @Component
 class LinkedInShareOutboxEventHandler implements OutboxEventHandler {
@@ -37,7 +37,7 @@ class LinkedInShareOutboxEventHandler implements OutboxEventHandler {
 			return;
 		}
 		Post post = posts.findById(new PostId(aggregateId)).orElse(null);
-		if (post == null || post.status() != PostStatus.ACTIVE || post.type() == PostType.MOMENT
+		if (post == null || post.status() != PostStatus.ACTIVE || post.type().isEphemeral()
 				|| post.authorIdentity() != AuthorIdentity.CORPORATE) {
 			return;
 		}

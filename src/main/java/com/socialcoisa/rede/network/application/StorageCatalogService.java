@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,6 +27,7 @@ import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StorageObjectState;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
 import com.socialcoisa.rede.network.domain.TaskType;
+import com.socialcoisa.rede.network.domain.StorageBucketPolicy;
 import com.socialcoisa.rede.shared.audit.AuditTrail;
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -83,17 +85,43 @@ public class StorageCatalogService {
 	 * segundo momento em que o objeto já seria servível sem saber quem o tem.
 	 */
 	private final StoragePlacementService placement;
+	/**
+	 * O corpo que o nó que roda <b>nesta mesma máquina</b> guarda no próprio disco
+	 * ({@code rede.storage.node-body-root}). Nulo = esta instalação não tem nó local de corpos; é o
+	 * caso do Control Plane puro e da suíte.
+	 */
+	private final NodeBodyStore nodeBodies;
+	/**
+	 * Envelope do corpo (brief §10): chave de dados por objeto, embrulhada pela chave mestra.
+	 * Nulo = instalação sem chave; nesse caso o corpo é guardado em claro, e o doc 19 declara.
+	 */
+	private final EnvelopeBodyCrypto envelope;
 
+	/**
+	 * A forma anterior, sem chave: instalação que ainda não configurou a mestra grava em claro. Os
+	 * testes de outros assuntos do catálogo não passam a depender do envelope por causa disto.
+	 */
+	StorageCatalogService(StorageCatalogRepository catalog, AuditTrail audit, Clock clock,
+			long maxObjectBytes, String storageRoot, StoragePlacementService placement,
+			@Nullable NodeBodyStore nodeBodies) {
+		this(catalog, audit, clock, maxObjectBytes, storageRoot, "", placement, nodeBodies);
+	}
+
+	@org.springframework.beans.factory.annotation.Autowired
 	StorageCatalogService(StorageCatalogRepository catalog, AuditTrail audit, Clock clock,
 			@Value("${rede.storage.max-object-bytes:5368709120}") long maxObjectBytes,
 			@Value("${rede.storage.root:${java.io.tmpdir}/enois-storage}") String storageRoot,
-			StoragePlacementService placement) {
+			@Value("${rede.security.encryption-key:}") String encryptionKey,
+			StoragePlacementService placement, @Nullable NodeBodyStore nodeBodies) {
 		this.catalog = catalog;
 		this.audit = audit;
 		this.clock = clock;
 		this.maxObjectBytes = maxObjectBytes;
 		this.storageRoot = storageRoot;
 		this.placement = placement;
+		this.nodeBodies = nodeBodies;
+		this.envelope = encryptionKey == null || encryptionKey.isBlank() ? null
+			: new EnvelopeBodyCrypto(java.util.Base64.getDecoder().decode(encryptionKey.trim()));
 	}
 
 	/**
@@ -106,6 +134,16 @@ public class StorageCatalogService {
 		validateKey(key);
 		String type = contentType == null || contentType.isBlank() ? "application/octet-stream" : contentType;
 		Instant now = clock.instant();
+		StorageBucketPolicy policy = bucketPolicy(bucket);
+
+		if (policy.versioning()) {
+			// Bucket com versionamento: cada upload é uma versão nova. A corrente anterior sai da
+			// frente ANTES, porque o índice único condicional só aceita uma corrente por chave; se
+			// outra gravação venceu a corrida, esta tenta de novo com o próximo número em vez de
+			// derrubar a chave inteira.
+			return beginVersionedUpload(actorId, bucket, key, type, now, policy);
+		}
+
 		StorageObject object = catalog.createPending(OBJECT_ID_PREFIX + NodeIds.next(""), bucket, key, type,
 			actorId, now);
 		if (object.state() == StorageObjectState.DELETED) {
@@ -114,7 +152,201 @@ public class StorageCatalogService {
 			throw new ApiException(409, "STORAGE_KEY_DELETED",
 				"Esta chave foi removida e ainda espera coleta no no; remova a lapide ou use outra chave.");
 		}
+		Instant expiresAt = policy.expiresAtFor(now);
+		if (expiresAt != null && object.expiresAt() == null && object.version() == 1L) {
+			// O prazo é do bucket no momento da gravação; objeto que já existe mantém o que tinha.
+			catalog.setExpiresAt(object.id(), expiresAt);
+			object = catalog.findById(object.id()).orElse(object);
+		}
 		return object;
+	}
+
+	/** Quantas vezes a gravação versionada tenta de novo quando outra requisição venceu a corrida. */
+	private static final int VERSIONED_ATTEMPTS = 3;
+
+	private StorageObject beginVersionedUpload(String actorId, String bucket, String key, String type, Instant now,
+			StorageBucketPolicy policy) {
+		// Idempotência do versionamento: o MESMO cliente repetindo o upload do mesmo conteúdo ainda
+		// não confirmado tem de receber a mesma versão. Sem isso, retry de rede criaria v2, v3, v4 de
+		// um arquivo que nunca mudou, e a retenção guardaria tudo.
+		for (int attempt = 0; attempt < VERSIONED_ATTEMPTS; attempt++) {
+			Optional<StorageObject> current = catalog.find(bucket, key);
+			if (current.isPresent() && current.get().state() == StorageObjectState.PENDING) {
+				return current.get();
+			}
+			long version = current.map(o -> o.version() + 1).orElse(1L);
+			String id = OBJECT_ID_PREFIX + NodeIds.next("");
+			if (current.isPresent() && current.get().state() == StorageObjectState.DELETED
+					&& !policy.versioning()) {
+				throw new ApiException(409, "STORAGE_KEY_DELETED",
+					"Esta chave foi removida e ainda espera coleta no no; remova a lapide ou use outra chave.");
+			}
+			if (current.isPresent() && !catalog.markSuperseded(bucket, key, id, now)) {
+				// Outra gravação chegou primeiro: esta versão não é a próxima, e o número precisa ser
+				// relido. Recomeçar é mais seguro do que adivinhar.
+				continue;
+			}
+			StorageObject created = catalog.insertVersion(id, bucket, key, type, actorId, now, version);
+			Instant expiresAt = policy.expiresAtFor(now);
+			if (expiresAt != null) {
+				catalog.setExpiresAt(created.id(), expiresAt);
+				created = catalog.findById(created.id()).orElse(created);
+			}
+			audit.record(actorId, "STORAGE_VERSION_CREATED", created.id(),
+				"{\"bucket\":\"" + escape(bucket) + "\",\"key\":\"" + escape(key) + "\",\"version\":"
+					+ version + "}");
+			return created;
+		}
+		throw new ApiException(409, "STORAGE_VERSION_RACE",
+			"Outra gravacao desta chave chegou ao mesmo tempo; tente novamente.");
+	}
+
+	/**
+	 * O upload do cliente S3 (brief §11): o corpo chega pelo gateway, não por um nó.
+	 *
+	 * <p><b>É o mesmo caminho do {@link #store}</b>, com uma diferença de origem: aqui quem grava a
+	 * réplica 0 é o Control Plane, e o nó recebe a designação como sempre. Duplicar o registro do
+	 * catálogo seria criar um segundo Storage — o que o contrato proíbe.</p>
+	 *
+	 * <p>Diferente do {@link #store}, que recebe um nó já autorizado, este ponto expõe o teto de
+	 * tamanho e o corpo vazio ao cliente — porque é o cliente que erra, e o erro tem de ser 413/400,
+	 * não 500.</p>
+	 */
+	public StorageObject finishUpload(String objectId, InputStream body, String actorId) {
+		StorageObject object = catalog.findById(objectId)
+			.orElseThrow(() -> new ApiException(404, "STORAGE_OBJECT_UNKNOWN", "Objeto nao encontrado no catalogo."));
+		if (object.state() != StorageObjectState.PENDING) {
+			throw new ApiException(409, "STORAGE_ALREADY_STORED", "O objeto ja tem copia confirmada.");
+		}
+		Spooled measured = measure(body);
+		if (measured.bytes() == 0) {
+			deleteQuietly(measured.temp());
+			throw new ApiException(400, "STORAGE_EMPTY_BODY", "O corpo enviado esta vazio.");
+		}
+		if (measured.bytes() > maxObjectBytes) {
+			deleteQuietly(measured.temp());
+			throw new ApiException(413, "STORAGE_OBJECT_TOO_LARGE",
+				"O objeto excede o teto desta instalacao (" + maxObjectBytes + " bytes).");
+		}
+		Path destination = bodyPath(object.id());
+		try {
+			if (envelope == null) {
+				Files.move(measured.temp(), destination, StandardCopyOption.REPLACE_EXISTING);
+			}
+			else {
+				// O digest medido é do TEXTO CLARO, e continua sendo: o catálogo promete o sha-256 do
+				// que o cliente mandou, não do que está no disco. O arquivo é cifrado com a DEK deste
+				// objeto; o texto claro só existe no temporário, que sai logo abaixo.
+				envelope.encryptTo(measured.temp(), destination, root());
+				deleteQuietly(measured.temp());
+			}
+		}
+		catch (IOException unwritable) {
+			deleteQuietly(measured.temp());
+			throw new ApiException(500, "STORAGE_ROOT_UNAVAILABLE", "Nao foi possivel gravar o objeto.");
+		}
+		Instant now = clock.instant();
+		if (!catalog.markStored(object.id(), measured.bytes(), measured.sha256(), now)) {
+			deleteQuietly(destination);
+			throw new ApiException(409, "STORAGE_ALREADY_STORED", "O objeto ja tem copia confirmada.");
+		}
+		// A réplica 0 é a do Control Plane — a mesma convenção do upload pelo nó.
+		catalog.savePlacement(new StoragePlacement(object.id(), 0, "control-plane", measured.bytes(),
+			measured.sha256(), StoragePlacement.State.OK, now));
+		designReplicas(object.id(), measured.bytes(), measured.sha256(), now);
+		audit.record(actorId, "STORAGE_OBJECT_STORED", object.id(),
+			"{\"bucket\":\"" + escape(object.bucket()) + "\",\"key\":\"" + escape(object.key()) + "\",\"bytes\":"
+				+ measured.bytes() + ",\"sha256\":\"" + measured.sha256() + "\",\"via\":\"s3\"}");
+		return catalog.findById(object.id()).orElse(object);
+	}
+
+	/** A política do bucket, ou os padrões quando ninguém configurou. */
+	public StorageBucketPolicy bucketPolicy(String bucket) {
+		validateBucket(bucket);
+		return catalog.bucketPolicy(bucket).orElseGet(() -> StorageBucketPolicy.padrao(bucket));
+	}
+
+	/**
+	 * Configura o ciclo de vida do bucket (brief §14). Retenção e expiração são validadas aqui, não
+	 * só no banco: a <code>check</code> do banco devolve erro de SQL, e o cliente precisa de um 400
+	 * com o campo errado.
+	 */
+	@Transactional
+	public StorageBucketPolicy putBucketPolicy(String actorId, String bucket, boolean versioning,
+			Integer retainSupersededDays, Integer expireAfterDays) {
+		validateBucket(bucket);
+		if (retainSupersededDays != null && retainSupersededDays < 0) {
+			throw new ApiException(400, "STORAGE_POLICY_INVALID", "A retencao nao pode ser negativa.");
+		}
+		if (expireAfterDays != null && expireAfterDays <= 0) {
+			throw new ApiException(400, "STORAGE_POLICY_INVALID", "A expiracao precisa ser de ao menos um dia.");
+		}
+		if (!versioning && retainSupersededDays != null) {
+			// Retenção existe para versão substituída. Guardar o número num bucket sem versionamento
+			// seria configurar algo que nunca vai agir — aceitar calado é o pior dos dois mundos.
+			throw new ApiException(400, "STORAGE_POLICY_INVALID",
+				"Retencao so faz sentido em bucket com versionamento.");
+		}
+		Instant now = clock.instant();
+		StorageBucketPolicy saved = catalog.saveBucketPolicy(new StorageBucketPolicy(bucket, versioning,
+			retainSupersededDays, expireAfterDays, actorId, now));
+		audit.record(actorId, "STORAGE_BUCKET_POLICY", bucket,
+			"{\"versioning\":" + versioning + ",\"retainSupersededDays\":" + json(retainSupersededDays)
+				+ ",\"expireAfterDays\":" + json(expireAfterDays) + "}");
+		return saved;
+	}
+
+	/** O histórico da chave, da versão mais antiga para a mais nova. */
+	public List<StorageObject> versions(String bucket, String key) {
+		validateBucket(bucket);
+		validateKey(key);
+		return catalog.versions(bucket, key);
+	}
+
+	/**
+	 * Volta a chave para uma versão anterior: a versão escolhida vira uma <b>versão nova</b>, com
+	 * conteúdo copiado da antiga, e a versão que estava na frente é substituída.
+	 *
+	 * <p>Não há "des-substituir" porque isso mudaria o passado: quem baixou a versão corrente
+	 * continua com o que baixou, e o histórico segue contando o que aconteceu. Restaurar é uma
+	 * gravação nova, com o conteúdo da antiga.</p>
+	 */
+	@Transactional
+	public StorageObject restore(String actorId, String bucket, String key, long version) {
+		StorageObject old = catalog.versions(bucket, key).stream().filter(o -> o.version() == version).findFirst()
+			.orElseThrow(() -> new ApiException(404, "STORAGE_VERSION_UNKNOWN",
+				"Esta chave nao tem a versao pedida."));
+		if (!old.servable()) {
+			throw new ApiException(409, "STORAGE_VERSION_NOT_SERVABLE",
+				"Esta versao nao tem copia conferida para restaurar.");
+		}
+		if (old.currentVersion() && old.state() != StorageObjectState.DELETED) {
+			throw new ApiException(409, "STORAGE_VERSION_CURRENT", "Esta e a versao corrente da chave.");
+		}
+		Instant now = clock.instant();
+		long next = catalog.versions(bucket, key).stream().mapToLong(StorageObject::version).max().orElse(0L) + 1;
+		String id = OBJECT_ID_PREFIX + NodeIds.next("");
+		Optional<StorageObject> current = catalog.find(bucket, key);
+		if (current.isPresent() && current.get().currentVersion() && current.get().state() != StorageObjectState.DELETED
+				&& !catalog.markSuperseded(bucket, key, id, now)) {
+			throw new ApiException(409, "STORAGE_VERSION_RACE", "A chave mudou durante a restauracao.");
+		}
+		catalog.insertVersion(id, bucket, key, old.contentType(), actorId, now, next);
+		// O conteúdo é o da versão antiga, e o conferido é o medido nela: a restauração não relê o
+		// disco, então o digest que vale é o que o catálogo já guardava.
+		if (!catalog.markStored(id, old.bytes(), old.sha256(), now)) {
+			throw new ApiException(409, "STORAGE_VERSION_RACE", "A chave mudou durante a restauracao.");
+		}
+		catalog.setExpiresAt(id, bucketPolicy(bucket).expiresAtFor(now));
+		audit.record(actorId, "STORAGE_VERSION_RESTORED", id,
+			"{\"bucket\":\"" + escape(bucket) + "\",\"key\":\"" + escape(key) + "\",\"restoredFrom\":"
+				+ version + ",\"version\":" + next + "}");
+		return catalog.findById(id).orElseThrow(() -> new ApiException(500, "STORAGE_VERSION_LOST",
+			"A versao restaurada desapareceu do catalogo."));
+	}
+
+	private static String json(Integer value) {
+		return value == null ? "null" : value.toString();
 	}
 
 	/**
@@ -136,10 +368,30 @@ public class StorageCatalogService {
 		// arquivo pela metade e as tarefas seguintes falham por um espaço que já se sabia escasso.
 		// Recusar antes é o mesmo critério do teto de tamanho: não escrever o que se sabe que não
 		// cabe. Sem medida (runtime antigo) não há o que comparar e o caminho segue como antes.
+		// Isto é o disco da máquina. Abaixo, a recusa pelo que ESTE recebedor cedeu: são duas
+		// réguas e a menor das duas manda, porque declarar 1,5 TB num disco de 2 TB com 500 GB de
+		// uso alheio não é espaço livre para o Énóis.
 		if (node.observedDiskFreeMb() != null && node.observedDiskFreeMb() < MIN_DISK_FREE_MB) {
 			throw new ApiException(507, "STORAGE_NO_DISK_SPACE",
 				"O no informa " + node.observedDiskFreeMb() + " MB livres, abaixo do minimo de "
 					+ MIN_DISK_FREE_MB + " MB para receber objeto.");
+		}
+		// O que o Énóis já ocupa aqui, pelo MAIOR entre o confirmado no catálogo e o medido pelo nó:
+		// os dois são limites de baixo e usar o menor esconderia o que um deles já viu ocupado.
+		long confirmadoMb = 0;
+		for (StoragePlacement placement : catalog.placementsOnNode(node.id())) {
+			if (placement.state() == StoragePlacement.State.OK) {
+				confirmadoMb += (placement.bytes() / (1024 * 1024)) + 1;
+			}
+		}
+		long usadoMb = node.observedContentUsedMb() == null ? 0 : node.observedContentUsedMb();
+		long ocupadoMb = Math.max(confirmadoMb, usadoMb);
+		// O teto só existe quando o participante declarou: declarado use zero para dizer "nada"
+		// seria recusar toda gravação a quem só não informou, e é o cadastro do enroll (V305).
+		if (node.declaredDiskMb() > 0 && node.declaredDiskMb() - ocupadoMb < MIN_DISK_FREE_MB) {
+			throw new ApiException(507, "STORAGE_NO_CEDENT_SPACE",
+				"O no cedeu " + node.declaredDiskMb() + " MB e ja ocupa " + ocupadoMb
+					+ " MB, abaixo do minimo de " + MIN_DISK_FREE_MB + " MB de folga para receber objeto.");
 		}
 		Spooled measured = measure(body);
 		if (measured.bytes() == 0) {
@@ -155,7 +407,16 @@ public class StorageCatalogService {
 		// arquivo que ainda não existe daria um objeto servível sem bytes.
 		Path destination = bodyPath(object.id());
 		try {
-			Files.move(measured.temp(), destination, StandardCopyOption.REPLACE_EXISTING);
+			if (envelope == null) {
+				Files.move(measured.temp(), destination, StandardCopyOption.REPLACE_EXISTING);
+			}
+			else {
+				// O digest medido é do TEXTO CLARO, e continua sendo: o catálogo promete o sha-256 do
+				// que o cliente mandou, não do que está no disco. O arquivo é cifrado com a DEK deste
+				// objeto; o texto claro só existe no temporário, que sai logo abaixo.
+				envelope.encryptTo(measured.temp(), destination, root());
+				deleteQuietly(measured.temp());
+			}
 		}
 		catch (IOException unwritable) {
 			deleteQuietly(measured.temp());
@@ -222,6 +483,53 @@ public class StorageCatalogService {
 	}
 
 	/**
+	 * O nó relê o próprio disco e devolve o que mediu: a lista de cópias suas que <b>não</b> conferem
+	 * com o catálogo.
+	 *
+	 * <p>É o fecho do último ponto cego da varredura. A varredura do Control Plane só relê o disco
+	 * <b>desta</b> instalação (§5.7): as cópias dos demais nós só podem ser conferidas pelo próprio
+	 * nó, que é o único que tem acesso ao disco delas (NAT — o brief proíbe cadastrar endereço).</p>
+	 *
+	 * <p>O nó declara o medido; o Control Plane <b>confere</b> contra a colocação e só marca as
+	 * cópias que <b>são</b> dele. Um nó não rebaixa a cópia de outro: a lista é filtrada por
+	 * {@code node.id()} antes de qualquer escrita. O estado vai para {@code STALE} pelo mesmo caminho
+	 * da confirmação divergente — a ação é a mesma (re-replicar, nunca apagar).</p>
+	 *
+	 * <p>Idempotente: cópia já {@code STALE} ou {@code GONE} não é regravada nem re-auditada. Um nó
+	 * que reenvia o mesmo relatório não infla a auditoria nem muda o estado de novo.</p>
+	 *
+	 * @return quantas cópias foram marcadas {@code STALE} nesta chamada
+	 */
+	public int reportDirtyReplicas(NetworkNode node, List<Divergente> declaradas) {
+		requireStorage(node);
+		if (declaradas == null) {
+			return 0;
+		}
+		int marcadas = 0;
+		for (Divergente declarada : declaradas) {
+			if (declarada == null || declarada.objectId() == null || declarada.objectId().isBlank()) {
+				continue;
+			}
+			// Só a cópia DESTE nó. O filtro por dono é o que impede um nó de rebaixar a cópia de
+			// outro: sem ele, a lista de entradas de qualquer nó serviria para derrubar o cluster.
+			StoragePlacement minha = catalog.placementOn(declarada.objectId(), node.id()).orElse(null);
+			if (minha == null || minha.state() != StoragePlacement.State.OK) {
+				continue;
+			}
+			// O nó declara o que mediu; o digest esperado vem do catálogo, nunca do relatório. Um
+			// nó não escolhe contra o que é comparado.
+			marcarDivergente(declarada.objectId(), minha, node.id(), minha.bytes(),
+				declarada.actualSha256() == null ? "" : declarada.actualSha256());
+			marcadas++;
+		}
+		return marcadas;
+	}
+
+	/** O que um nó mediu no próprio disco e que não confere com o catálogo. */
+	public record Divergente(String objectId, String actualSha256) {
+	}
+
+	/**
 	 * Grava a cópia como divergente numa transação <b>própria</b> ({@code REQUIRES_NEW}): o chamador
 	 * lança logo em seguida, e sem transação separada o rollback apagaria este registro. É a mesma
 	 * razão pela qual o desfecho de tarefa do módulo grava antes de responder erro — o que deu errado
@@ -253,11 +561,18 @@ public class StorageCatalogService {
 		}
 	}
 
-	/** O objeto só é servível com cópia conferida; {@code PENDING} responde 404 como se não existisse. */
+	/**
+	 * O objeto só é servível com cópia conferida; {@code PENDING} e vencido respondem 404 como se não
+	 * existisse.
+	 *
+	 * <p>O vencido vale aqui <b>na leitura</b>, e não só quando a varredura passa: o brief §14 pede
+	 * expiração automática, e um arquivo continuar servível entre o vencimento e a próxima varredura
+	 * significa que "expirou" era só um campo na tabela.</p>
+	 */
 	public StorageObject requireDownloadable(String bucket, String key) {
 		StorageObject object = catalog.find(bucket, key)
 			.orElseThrow(() -> new ApiException(404, "STORAGE_NOT_FOUND", "Objeto nao encontrado."));
-		if (!object.servable()) {
+		if (!object.servable() || object.expired(clock.instant())) {
 			throw new ApiException(404, "STORAGE_NOT_FOUND", "Objeto nao encontrado.");
 		}
 		return object;
@@ -444,24 +759,188 @@ public class StorageCatalogService {
 	 * catálogo diz que existe e o arquivo não está lá — divergência de metadado, não "não existe".</p>
 	 */
 	public InputStream readBody(String objectId) {
-		// Fase 3: o corpo nao e replicado no proprio Control Plane -- ele identifica a copia pelo
-		// SHA-256 e devolve 409 com o digest, para o chamador designar a replica que de fato tem o
-		// objeto. Entregar bytes de um arquivo que se sabe ausente seria a pior forma de falha:
-		// um download que responde 200 e entrega nada (ou lixo) so aparece muito depois.
-		if (!Files.isReadable(bodyPath(objectId))) {
-			Optional<StorageObject> object = catalog.findById(objectId);
-			if (object.isPresent() && object.get().sha256() != null) {
-				throw new ApiException(409, "STORAGE_REPLICA_ELSEWHERE",
-					"Esta copia nao esta neste no; use o digest " + object.get().sha256()
-						+ " para identifica-la numa replica.");
-			}
+		// O corpo é servido do disco DESTA instalação, nas duas formas que ela pode ter sem pedir
+		// nada a outro nó:
+		//   1. a raiz do Control Plane — onde o upload grava a réplica 0;
+		//   2. o diretório de corpos do nó local (`rede.storage.node-body-root`) — onde o
+		//      OBJECT_PUT deixa o corpo que este nó guarda.
+		// Antes só a primeira existia: objeto replicado para o nó local respondia 409 mesmo com os
+		// bytes a um diretório de distância, e "guardar no próprio disco" não servia para nada.
+		Optional<StorageObject> object = catalog.findById(objectId);
+		// A raiz SEM o `createDirectories` do `root()`: ler é leitura. Criar o diretório aqui faria
+		// um GET num Control Plane que nunca recebeu upload escrever em disco, e fariam uma falha de
+		// disco virar 500 num download em vez de "não está aqui" (409/410).
+		Path cpBody = Path.of(storageRoot).resolve(objectId);
+		if (Files.isReadable(cpBody)) {
+			return openVerified(cpBody, object);
+		}
+		if (nodeBodies != null && nodeBodies.has(objectId)) {
+			// O `pathOf` + `openVerified` só reconhece o envelope (`ENOISENV1`); o arquivo que o
+			// NodeBodyStore grava é `ENOISENC1`, outro cabeçalho. Servir o caminho cru devolveria os
+			// bytes CIFRADOS com 200 — o cliente receberia bytes que só quem tem a chave entende.
+			// Quem sabe decifrar o corpo do nó é o próprio NodeBodyStore.
+			return openVerifiedDecifrado(nodeBodies, object);
+		}
+		// Nem aqui nem ali: continua sendo 409 com o digest, para o chamador designar a réplica que
+		// tem o objeto. Entregar bytes de um arquivo que se sabe ausente seria a pior forma de
+		// falha: um download que responde 200 e entrega nada (ou lixo) só aparece muito depois.
+		if (object.isPresent() && object.get().sha256() != null) {
+			throw new ApiException(409, "STORAGE_REPLICA_ELSEWHERE",
+				"Esta copia nao esta neste no; use o digest " + object.get().sha256()
+					+ " para identifica-la numa replica.");
+		}
+		throw new ApiException(410, "STORAGE_BODY_MISSING",
+			"O catalogo registra a copia, mas o corpo nao esta neste no.");
+	}
+
+	/**
+	 * O corpo da <b>réplica 0</b> — o arquivo da raiz deste Control Plane, <b>sem</b> cair para o
+	 * diretório do nó local.
+	 *
+	 * <p>É o que a varredura relê. Se ela usasse {@link #readBody}, achar o corpo no nó local faria
+	 * o sumiço da réplica 0 passar em silêncio: o relatório diria "conferido" sobre um arquivo que
+	 * o catálogo não atribui a esta instalação.</p>
+	 */
+	public InputStream openReplicaZeroBody(String objectId) {
+		return openVerified(bodyPath(objectId), catalog.findById(objectId));
+	}
+
+	/**
+	 * O corpo guardado por <b>este</b> nó, no disco dele ({@code rede.storage.node-body-root}),
+	 * <b>sem</b> cair para a raiz do Control Plane.
+	 *
+	 * <p>É o que a varredura relê quando a cópia pertence ao nó local. Sem ele, a varredura só
+	 * conferia a réplica 0: um arquivo trocado no diretório do nó continuava contando como cópia
+	 * confirmada, e o catálogo prometia durabilidade que não tinha.</p>
+	 *
+	 * <p>Falha ao abrir é 410, como na réplica 0: o catálogo diz que existe e o disco não tem —
+	 * divergência de metadado, não "não existe".</p>
+	 */
+	public InputStream openNodeBody(String objectId) {
+		if (nodeBodies == null || !nodeBodies.has(objectId)) {
+			throw new ApiException(410, "STORAGE_BODY_MISSING",
+				"O catalogo registra a copia neste no, mas o corpo nao esta no disco dele.");
+		}
+		return openVerified(nodeBodies.pathOf(objectId), catalog.findById(objectId));
+	}
+
+	/**
+	 * Abre o corpo da réplica local pelo leitor do {@code NodeBodyStore}, conferindo o tamanho do que
+	 * ele <b>entrega</b> — já decifrado.
+	 *
+	 * <p>A conferência é sobre o fluxo decifrado, não sobre o arquivo: o arquivo cifrado é maior que o
+	 * objeto (cabeçalho `ENOISENC1` + tag), então medir o arquivo daria 410 em toda réplica cifrada.
+	 * Aqui o tamanho medido é o do texto claro, que é justamente o que o catálogo promete.</p>
+	 */
+	private InputStream openVerifiedDecifrado(NodeBodyStore store, Optional<StorageObject> object) {
+		InputStream clear;
+		try {
+			clear = store.read(object.map(StorageObject::id).orElse(null));
+		}
+		catch (IOException unreadable) {
 			throw new ApiException(410, "STORAGE_BODY_MISSING",
 				"O catalogo registra a copia, mas o corpo nao esta neste no.");
 		}
-		try {
-			return Files.newInputStream(bodyPath(objectId));
+		Long expected = object.map(StorageObject::bytes).orElse(null);
+		if (expected == null) {
+			return clear;
 		}
-		catch (IOException missing) {
+		// Confere o tamanho ANTES de entregar o fluxo, sem reter o objeto: o arquivo local já está no
+		// disco, então a conferência é o tamanho medido no disco MENOS o que o cabeçalho cifrado e a
+		// tag do GCM acrescentam — do mesmo jeito que o caminho do envelope confere o arquivo. O que
+		// percorre o fluxo e segura o objeto na memória não é opção: o teto é 5 GiB.
+		try {
+			long textoClaro = store.plainBytesOf(object.map(StorageObject::id).orElse(null));
+			if (textoClaro != expected) {
+				throw new ApiException(410, "STORAGE_BODY_SIZE_MISMATCH",
+					"O corpo tem " + textoClaro + " bytes, mas o catalogo registra " + expected + ".");
+			}
+		}
+		catch (IOException semTamanho) {
+			throw new ApiException(410, "STORAGE_BODY_MISSING",
+				"O catalogo registra a copia, mas o corpo nao esta neste no.");
+		}
+		// O contador fica de guarda mesmo assim: se o arquivo tiver o tamanho certo mas a decifra
+		// entregar mais que o prometido, o cliente não recebe o excedente.
+		return new TamanhoConferido(clear, expected);
+	}
+
+	private static final class TamanhoConferido extends java.io.FilterInputStream {
+
+		private final long limite;
+		private long entregues;
+
+		TamanhoConferido(InputStream fonte, long limite) {
+			super(fonte);
+			this.limite = limite;
+		}
+
+		@Override
+		public int read() throws IOException {
+			int byteLido = super.read();
+			if (byteLido >= 0) {
+				excedeu(1);
+			}
+			return byteLido;
+		}
+
+		@Override
+		public int read(byte[] buffer, int inicio, int tamanho) throws IOException {
+			int lidos = super.read(buffer, inicio, tamanho);
+			if (lidos > 0) {
+				excedeu(lidos);
+			}
+			return lidos;
+		}
+
+		private void excedeu(int bytes) throws IOException {
+			entregues += bytes;
+			if (entregues > limite) {
+				throw new IOException("corpo maior que os " + limite + " bytes registrados no catalogo");
+			}
+		}
+	}
+
+	/**
+	 * Abre o corpo depois de conferir que ele tem o tamanho que o catálogo promete.
+	 *
+	 * <p>O download responde com o {@code Content-Length} medido no upload. Servir um arquivo
+	 * truncado com esse comprimento é um 200 que se rompe no fim — e o cliente não tem como saber
+	 * se perdeu bytes da rede ou do disco. Divergência de tamanho responde 410, com os dois números
+	 * no erro; divergência de conteúdo com o mesmo tamanho é o que a varredura encontra pelo
+	 * sha-256, não o caminho de download.</p>
+	 */
+	private InputStream openVerified(Path body, Optional<StorageObject> object) {
+		try {
+			long size = Files.size(body);
+			Long expected = object.map(StorageObject::bytes).orElse(null);
+			if (expected != null) {
+				if (envelope != null && envelope.isEnvelope(body)) {
+					// Corpo cifrado: o arquivo carrega cabeçalho do envelope + tag do GCM, e o tamanho
+					// prometido é o do texto claro. Comparar os dois diretamente daria 410 em todo
+					// objeto cifrado. O que se confere aqui é que o arquivo não é MENOR do que o
+					// possível para o tamanho prometido: truncamento aparece, e a integridade real é a
+					// tag do GCM, conferida ao fim do fluxo.
+					long minimo = expected + EnvelopeBodyCrypto.headerBytes() + 16;
+					if (size < minimo) {
+						throw new ApiException(410, "STORAGE_BODY_SIZE_MISMATCH",
+							"O corpo cifrado tem " + size + " bytes, menos que o minimo " + minimo
+								+ " para o objeto de " + expected + " bytes.");
+					}
+				}
+				else if (expected != size) {
+					throw new ApiException(410, "STORAGE_BODY_SIZE_MISMATCH",
+						"O corpo tem " + size + " bytes, mas o catalogo registra " + expected + ".");
+				}
+			}
+			if (envelope != null) {
+				// Envelope = DEK própria deste objeto. Arquivo em claro (gravado antes da chave)
+				// continua legível: ligar o envelope não pode reprovar o que já existe.
+				return envelope.isEnvelope(body) ? envelope.decrypt(body) : Files.newInputStream(body);
+			}
+			return Files.newInputStream(body);
+		}
+		catch (IOException unreadable) {
 			throw new ApiException(410, "STORAGE_BODY_MISSING",
 				"O catalogo registra a copia, mas o corpo nao esta neste no.");
 		}

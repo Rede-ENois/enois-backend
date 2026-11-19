@@ -36,6 +36,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 	private final com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications;
 	private final com.socialcoisa.rede.shared.security.ActionThrottle actionThrottle;
 	private final CacheInvalidator cacheInvalidator;
+	private final com.socialcoisa.rede.media.application.MediaPublicHost media;
 	private final int updatesPerHour;
 	private final Clock clock;
 
@@ -46,6 +47,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 			com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications,
 			com.socialcoisa.rede.shared.security.ActionThrottle actionThrottle,
 			CacheInvalidator cacheInvalidator,
+			com.socialcoisa.rede.media.application.MediaPublicHost media,
 			@org.springframework.beans.factory.annotation.Value("${rede.profile.updates-per-hour:30}") int updatesPerHour,
 			Clock clock) {
 		this.repository = repository;
@@ -58,6 +60,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 		this.identityVerifications = identityVerifications;
 		this.actionThrottle = actionThrottle;
 		this.cacheInvalidator = cacheInvalidator;
+		this.media = media;
 		this.updatesPerHour = updatesPerHour;
 		this.clock = clock;
 	}
@@ -77,7 +80,8 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 			.map(this::populateCounts)
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
 		// A bio em HTML so vai na leitura (ver OwnProfileView.withBioHtml).
-		return OwnProfileView.from(profile).withBioHtml(profile.bioHtml()).withBannerHtml(profile.bannerHtml());
+		return OwnProfileView.from(profile).withAvatarUrl(media.localize(profile.avatar()))
+			.withBioHtml(profile.bioHtml()).withBannerHtml(profile.bannerHtml());
 	}
 
 	/**
@@ -105,6 +109,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 		}
 		agendarMigracaoDeMidia(profile);
 		return comSelo(UserProfileView.from(profile))
+			.withAvatarUrl(media.localize(profile.avatar()))
 			.withBioHtml(profile.bioHtml()).withBannerHtml(profile.bannerHtml());
 	}
 
@@ -152,6 +157,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 			.map(this::populateCounts)
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
 		return comSelo(UserProfileView.from(profile))
+			.withAvatarUrl(media.localize(profile.avatar()))
 			.withBioHtml(profile.bioHtml()).withBannerHtml(profile.bannerHtml());
 	}
 
@@ -217,8 +223,10 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 
 	/** Busca pública de perfis: conta banida não é sugestão de conexão (mesma regra da vitrine). */
 	public List<UserProfileView> search(String query) {
-		return repository.searchByQuery(query).stream()
-			.filter(profile -> !sanctionGate.banned(profile.id()))
+		List<UserProfile> profiles = repository.searchByQuery(query);
+		var visible = accountsVisible(profiles.stream().map(UserProfile::id).toList());
+		return profiles.stream()
+			.filter(profile -> visible.contains(profile.id()))
 			.map(UserProfileView::from)
 			.toList();
 	}
@@ -239,8 +247,10 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 	public List<UserProfileView> getRanking(int limit) {
 		int wanted = Math.max(1, limit);
 		// A vitrine é curta: buscar um pouco além do pedido cobre as banidas sem varrer a tabela.
-		return repository.findNewestProfiles(wanted * 3).stream()
-			.filter(profile -> !sanctionGate.banned(profile.id()))
+		List<UserProfile> profiles = repository.findNewestProfiles(wanted * 3);
+		var visible = accountsVisible(profiles.stream().map(UserProfile::id).toList());
+		return profiles.stream()
+			.filter(profile -> visible.contains(profile.id()))
 			.limit(wanted)
 			.map(UserProfileView::from)
 			.toList();
@@ -410,7 +420,8 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 				profile.declareBirthDate(date, clock.instant());
 			}
 		}
-		OwnProfileView saved = OwnProfileView.from(repository.save(profile));
+		UserProfile persisted = repository.save(profile);
+		OwnProfileView saved = OwnProfileView.from(persisted).withAvatarUrl(media.localize(persisted.avatar()));
 		invalidarPerfilPublico(profile, nomeAnterior);
 		return saved;
 	}

@@ -44,6 +44,8 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 		SavePostUseCase, SharePostUseCase {
 
 	private static final Instant DEFAULT_BEFORE = Instant.parse("9999-12-31T23:59:59Z");
+	/** Rotulo exibido quando o perfil do autor foi removido ou banido (issue 1021). */
+	private static final String AUTOR_REMOVIDO = "Usuário";
 
 	private final PostRepository postRepository;
 	private final CommentRepository commentRepository;
@@ -57,11 +59,18 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 	private final BlockedUsersReader blockedUsersReader;
 	private final com.socialcoisa.rede.media.application.port.in.ValidateMediaOwnershipUseCase validateMediaOwnership;
 	private final com.socialcoisa.rede.shared.sanctions.SanctionGate sanctionGate;
+	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGateReader;
 	private final com.socialcoisa.rede.shared.risk.RiskEngine riskEngine;
 	private final com.socialcoisa.rede.shared.age.AgeGate agePolicy;
 	private final com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications;
 	private final com.socialcoisa.rede.coin.application.CoinService coins;
 	private final NewAccountCooldown newAccountCooldown;
+	/**
+	 * Nome de exibição de conta banida (issue #1021): o comentário fica, a identidade não.
+	 * Mesma convenção do feed (GetFeedService#BANNED_DISPLAY_NAME).
+	 */
+	static final String BANNED_DISPLAY_NAME = "Usuário";
+
 	/** Rate limit por usuário e dedup de conteúdo (PR #28). */
 	private final UserRateLimiter userRateLimiter;
 	private final ContentDuplicationGuard duplicationGuard;
@@ -77,6 +86,7 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 			BlockedUsersReader blockedUsersReader,
 			com.socialcoisa.rede.media.application.port.in.ValidateMediaOwnershipUseCase validateMediaOwnership,
 			com.socialcoisa.rede.shared.sanctions.SanctionGate sanctionGate,
+			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGateReader,
 			com.socialcoisa.rede.shared.risk.RiskEngine riskEngine,
 			com.socialcoisa.rede.coin.application.CoinService coins,
 			NewAccountCooldown newAccountCooldown,
@@ -97,6 +107,7 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 		this.blockedUsersReader = blockedUsersReader;
 		this.validateMediaOwnership = validateMediaOwnership;
 		this.sanctionGate = sanctionGate;
+		this.sanctionGateReader = sanctionGateReader;
 		this.riskEngine = riskEngine;
 		this.agePolicy = agePolicy;
 		this.identityVerifications = identityVerifications;
@@ -132,8 +143,9 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 		notifyMentions(command.mentionedUserIds(), command.authorId().value(), post.id().value());
 		coins.recordPresence(command.authorId().value());
 		var profile = userProfileRepository.findById(command.authorId().value()).orElse(null);
+		String authorDisplayName = profile != null ? profile.displayWithNickname() : AUTOR_REMOVIDO;
 		return CommentView.from(saved,
-			profile != null ? profile.displayWithNickname() : null,
+			authorDisplayName,
 			profile != null ? profile.username() : null,
 			profile != null ? profile.avatar() : null,
 			profile != null ? profile.allBadges() : java.util.List.of())
@@ -158,7 +170,7 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 		if (parentAuthorId.equals(actorId)) return;
 		if (parentAuthorId.equals(post.authorId().value())) return;
 		var actor = userProfileRepository.findById(actorId).orElse(null);
-		String actorName = actor != null && actor.displayWithNickname() != null ? actor.displayWithNickname() : "Alguem";
+		String actorName = actor != null && actor.displayWithNickname() != null ? actor.displayWithNickname() : AUTOR_REMOVIDO;
 		notificationService.create(parentAuthorId, "NEW_REPLY", actorId, "Nova resposta",
 			actorName + " respondeu ao seu comentario.", "/api/feed/posts/" + post.id().value(), "Ver");
 	}
@@ -200,20 +212,24 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 		// One query for the page's authors instead of one per comment.
 		var authors = userProfileRepository.findAllByIds(commentAuthorIds).stream()
 			.collect(java.util.stream.Collectors.toMap(UserProfile::id, java.util.function.Function.identity()));
+		// Banido vira "Usuário" (issue #1021): o comentário continua — sumir deixava o fio
+		// desconexo — mas sem nome, @, avatar nem badges. Uma consulta por página.
+		Set<String> bannedAuthors = sanctionGateReader.bannedAmong(commentAuthorIds);
 		var comments = allComments.stream()
 			.filter(c -> !hidden.contains(c.authorId().value()))
 			.map(c -> {
 				var p = authors.get(c.authorId().value());
-				return CommentView.from(c,
-					p != null ? p.displayWithNickname() : null,
-					p != null ? p.username() : null,
-					p != null ? p.avatar() : null,
-					p != null ? p.allBadges() : java.util.List.of())
-					.withAvatarFrame(p != null ? p.avatarFrame() : null)
-					.withAuthorStyle(NameStyleView.from(p))
-					.withContributor(contributorIds.contains(c.authorId().value())
-						? ContributorTagView.from(p) : null)
-					.withAuthorHumanityVerified(humanityVerified.contains(c.authorId().value()))
+								boolean hiddenAuthor = bannedAuthors.contains(c.authorId().value()) || p == null;
+								return CommentView.from(c,
+									hiddenAuthor ? BANNED_DISPLAY_NAME : p.displayWithNickname(),
+									hiddenAuthor ? null : p.username(),
+									hiddenAuthor ? null : p.avatar(),
+									hiddenAuthor ? java.util.List.of() : p.allBadges())
+									.withAvatarFrame(hiddenAuthor ? null : p.avatarFrame())
+									.withAuthorStyle(hiddenAuthor ? null : NameStyleView.from(p))
+									.withContributor(!hiddenAuthor && contributorIds.contains(c.authorId().value())
+											? ContributorTagView.from(p) : null)
+									.withAuthorHumanityVerified(!hiddenAuthor && humanityVerified.contains(c.authorId().value()))
 					.withAccepted(c.id().equals(acceptedCommentId));
 			})
 			.toList();

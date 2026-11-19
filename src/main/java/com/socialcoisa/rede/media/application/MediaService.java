@@ -69,12 +69,12 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 
 	/**
 	 * Types that may be served by the CDN, each with the extension of the server-generated object
-	 * name. HTML/SVG/active JS stay out on purpose.
+	 * name. HTML/active JS stay out on purpose; SVG is sanitized before storage.
 	 */
 	private static final java.util.Map<String, String> ALLOWED_MIME_TYPES = java.util.Map.ofEntries(
 		java.util.Map.entry("image/jpeg", ".jpg"), java.util.Map.entry("image/png", ".png"),
 		java.util.Map.entry("image/gif", ".gif"), java.util.Map.entry("image/webp", ".webp"),
-		java.util.Map.entry("image/avif", ".avif"),
+		java.util.Map.entry("image/avif", ".avif"), java.util.Map.entry("image/svg+xml", ".svg"),
 		java.util.Map.entry("video/mp4", ".mp4"), java.util.Map.entry("video/webm", ".webm"),
 		java.util.Map.entry("video/quicktime", ".mov"),
 		java.util.Map.entry("audio/mpeg", ".mp3"), java.util.Map.entry("audio/ogg", ".ogg"),
@@ -101,16 +101,19 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 	private final java.util.Optional<MediaUploadSigner> uploadSigner;
 	/** Só existe com a migração ligada; presente aqui para a leitura agendar a cópia oportunista. */
 	private final org.springframework.beans.factory.ObjectProvider<LazyMediaCopyTrigger> lazyCopy;
+	private final ReportAttachments reportAttachments;
 	private final Clock clock;
 
 	public MediaService(MediaAssetRepository mediaAssetRepository, MediaDeletionJobRepository mediaDeletionJobRepository,
 			StorageUrlFactory storageUrlFactory, java.util.Optional<MediaUploadSigner> uploadSigner,
-			org.springframework.beans.factory.ObjectProvider<LazyMediaCopyTrigger> lazyCopy, Clock clock) {
+			org.springframework.beans.factory.ObjectProvider<LazyMediaCopyTrigger> lazyCopy,
+			ReportAttachments reportAttachments, Clock clock) {
 		this.mediaAssetRepository = mediaAssetRepository;
 		this.mediaDeletionJobRepository = mediaDeletionJobRepository;
 		this.storageUrlFactory = storageUrlFactory;
 		this.uploadSigner = uploadSigner;
 		this.lazyCopy = lazyCopy;
+		this.reportAttachments = reportAttachments;
 		this.clock = clock;
 	}
 
@@ -124,12 +127,20 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 		MediaUploadSigner signer = uploadSigner.orElseThrow(() -> new ApiException(503, "UPLOADS_DISABLED",
 			"O envio de midia esta temporariamente desativado enquanto o armazenamento e migrado."));
 		String mediaId = newId("media");
+		String purpose = normalize(command.purpose());
 		// The object name is generated here: the client filename is kept as metadata only and never
 		// becomes part of the storage key or the public URL.
 		String objectKey = storageUrlFactory.objectKey(mediaId, "file" + ALLOWED_MIME_TYPES.get(mimeType));
+		// Prova de denúncia: o objeto nasce em chave própria, fora do prefixo que a CDN serve ao
+		// público (ver {@link ReportAttachments}). Como o endereço do asset é onde o objeto ESTÁ (e é
+		// por ele que a subida pelo proxy autoriza), o endereço público do asset é a chave privada; o
+		// link para quem denunciou sai pelo endereço assinado, com o mesmo caminho.
+		String located = REPORT_CAPTURE_PURPOSE.equals(purpose)
+			? reportAttachments.keyFor(mediaId, objectKey)
+			: objectKey;
+		String cdnUrl = storageUrlFactory.cdnUrl(located);
 		MediaAsset asset = MediaAsset.pending(mediaId, command.ownerId(), command.fileName().trim(),
-			mimeType, command.size(), normalize(command.purpose()), objectKey,
-			storageUrlFactory.cdnUrl(objectKey), clock.instant(), clock.instant().plus(UPLOAD_WINDOW),
+			mimeType, command.size(), purpose, located, cdnUrl, clock.instant(), clock.instant().plus(UPLOAD_WINDOW),
 			storageUrlFactory.provider());
 		MediaAsset saved = mediaAssetRepository.save(asset);
 		try {

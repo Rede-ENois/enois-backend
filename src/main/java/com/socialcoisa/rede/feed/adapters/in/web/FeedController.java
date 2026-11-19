@@ -73,6 +73,7 @@ class FeedController {
 	private final GetFeedUseCase getFeedUseCase;
 	private final GetPostUseCase getPostUseCase;
 	private final GetProfilePostsUseCase getProfilePostsUseCase;
+	private final com.socialcoisa.rede.feed.application.port.in.GetDiarioUseCase getDiario;
 	private final DeletePostUseCase deletePostUseCase;
 	private final EditPostUseCase editPostUseCase;
 	private final RestorePostUseCase restorePostUseCase;
@@ -102,7 +103,9 @@ class FeedController {
 	private final tools.jackson.databind.ObjectMapper pollJson = new tools.jackson.databind.ObjectMapper();
 
 	FeedController(PublishPostUseCase publishPostUseCase, GetFeedUseCase getFeedUseCase, GetPostUseCase getPostUseCase,
-			GetProfilePostsUseCase getProfilePostsUseCase, DeletePostUseCase deletePostUseCase,
+			GetProfilePostsUseCase getProfilePostsUseCase,
+			com.socialcoisa.rede.feed.application.port.in.GetDiarioUseCase getDiario,
+			DeletePostUseCase deletePostUseCase,
 			EditPostUseCase editPostUseCase, RestorePostUseCase restorePostUseCase,
 			BulkDeletePostsUseCase bulkDeletePostsUseCase, CommentOnPostUseCase commentOnPostUseCase,
 			GetCommentsUseCase getCommentsUseCase, ReactToPostUseCase reactToPostUseCase,
@@ -124,6 +127,7 @@ class FeedController {
 		this.getFeedUseCase = getFeedUseCase;
 		this.getPostUseCase = getPostUseCase;
 		this.getProfilePostsUseCase = getProfilePostsUseCase;
+		this.getDiario = getDiario;
 		this.deletePostUseCase = deletePostUseCase;
 		this.editPostUseCase = editPostUseCase;
 		this.restorePostUseCase = restorePostUseCase;
@@ -173,7 +177,7 @@ class FeedController {
 			var published = publishPostUseCase.publish(new PublishPostCommand(user.id(), request.type(), request.content(),
 				request.pageHtml(), request.articleBody(), request.tags(), request.mediaIds(), request.communityId(),
 				request.mentionedUserIds(), request.topic(), request.channelId(), Boolean.TRUE.equals(request.mediaSpoiler()),
-				request.pollOptions()));
+				request.pollOptions(), Boolean.TRUE.equals(request.pollMultipleChoice()), request.pollEndsAt()));
 			// Presence counts here and not inside PublishPostService: the scheduler also publishes
 			// through it, and a scheduled post going live is not the person being here today.
 			coins.recordPresence(user.id().value());
@@ -236,6 +240,20 @@ class FeedController {
 			@RequestParam(required = false) String cursor,
 			@RequestParam(defaultValue = "20") int limit) {
 		return getProfilePostsUseCase.getProfileReplies(
+			viewerIdOrNull(sessionToken), username, cursorCodec.decode(cursor), limit);
+	}
+
+	/**
+	 * Diario de atividade do perfil: linha do tempo unificada (publicacoes, reposts e, para o
+	 * proprio dono, comentarios). Leitura publica como as demais abas do perfil; o dono e
+	 * reconhecido pela sessao pra incluir os comentarios, que continuam privados pra visitantes.
+	 */
+	@GetMapping("/users/{username}/diario")
+	Object profileDiario(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String username,
+			@RequestParam(required = false) String cursor,
+			@RequestParam(defaultValue = "20") int limit) {
+		return getDiario.getDiario(
 			viewerIdOrNull(sessionToken), username, cursorCodec.decode(cursor), limit);
 	}
 
@@ -585,15 +603,16 @@ class FeedController {
 	}
 
 	/**
-	 * Voto da enquete: uma alternativa, um voto por pessoa, definitivo. Votar de novo (na mesma ou
-	 * em outra) responde 409 ALREADY_VOTED.
+	 * Voto da enquete: enquanto ela estiver aberta, a pessoa escolhe e pode trocar a selecao
+	 * (a escolha unica substitui; a multipla soma e remove alternativas). Depois do prazo
+	 * responde 409 POLL_CLOSED e o resultado fica congelado.
 	 */
 	@PostMapping("/feed/posts/{postId}/poll/vote")
 	ResponseEntity<String> votePoll(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String postId, @RequestBody PollVoteRequest request) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		requireVisible(postId, user.id());
-		var poll = votePoll.vote(new PostId(postId), user.id(), request.option() == null ? -1 : request.option());
+		var poll = votePoll.vote(new PostId(postId), user.id(), request.option(), request.options());
 		return ResponseEntity.ok().body(pollJson.writeValueAsString(poll));
 	}
 
@@ -642,7 +661,8 @@ class FeedController {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		requireVisible(postId, user.id());
 		String opinion = body == null ? null : body.opinion();
-		Post result = repostPostService.repost(user.id().value(), postId, opinion);
+		String communityId = body == null ? null : body.communityId();
+		Post result = repostPostService.repost(user.id().value(), postId, opinion, communityId);
 		return PostView.from(result);
 	}
 
@@ -656,7 +676,7 @@ class FeedController {
 		return ResponseEntity.ok("{\"status\":\"REMOVED\"}");
 	}
 
-	record RepostRequest(String opinion) {
+	record RepostRequest(String opinion, String communityId) {
 	}
 
 	/** Ate 4 midias na edicao, do proprio autor (mesma regra do comentario novo). */

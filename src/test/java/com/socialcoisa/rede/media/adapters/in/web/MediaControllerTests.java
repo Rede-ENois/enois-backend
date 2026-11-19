@@ -244,7 +244,7 @@ class MediaControllerTests {
 	void rejectsActiveContentTypesEvenWhenTheyClaimToBeImages() throws Exception {
 		var session = auth.authenticate("user_media_mime");
 
-		for (String mime : List.of("text/html", "image/svg+xml", "application/javascript")) {
+		for (String mime : List.of("text/html", "application/javascript")) {
 			String payload = objectMapper.writeValueAsString(Map.of(
 				"fileName", "arquivo.html",
 				"mimeType", mime,
@@ -259,5 +259,24 @@ class MediaControllerTests {
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.code").value("MEDIA_TYPE_NOT_ALLOWED"));
 		}
+	}
+
+	@Test
+	void acceptsSvgImageUploadRequestsForPostsAndPages() throws Exception {
+		var session = auth.authenticate("user_media_svg");
+
+		String payload = objectMapper.writeValueAsString(Map.of(
+			"fileName", "diagrama.svg",
+			"mimeType", "image/svg+xml",
+			"size", 1024,
+			"purpose", "POST_IMAGE"));
+
+		mockMvc.perform(post("/media/uploads")
+				.header("X-Session-Token", session.token())
+				.header("Idempotency-Key", "media-mime-svg")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(payload))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.mimeType").value("image/svg+xml"));
 	}
 }

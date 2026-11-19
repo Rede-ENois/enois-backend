@@ -11,6 +11,7 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialcoisa.rede.media.application.MediaPublicHost;
 import com.socialcoisa.rede.profile.application.port.in.ListProfileNetworkUseCase;
 import com.socialcoisa.rede.profile.application.port.out.ProfileNetworkReader;
 import com.socialcoisa.rede.profile.application.port.out.ProfileNetworkReader.NetworkPeer;
@@ -39,13 +40,16 @@ public class ProfileNetworkService implements ListProfileNetworkUseCase {
 	private final ProfileNetworkReader network;
 	private final SanctionGateReader sanctionGate;
 	private final BlockedUsersReader blocks;
+	/** Endereco da foto no host deste ambiente. */
+	private final MediaPublicHost media;
 
 	public ProfileNetworkService(UserProfileRepository profiles, ProfileNetworkReader network,
-			SanctionGateReader sanctionGate, BlockedUsersReader blocks) {
+			SanctionGateReader sanctionGate, BlockedUsersReader blocks, MediaPublicHost media) {
 		this.profiles = profiles;
 		this.network = network;
 		this.sanctionGate = sanctionGate;
 		this.blocks = blocks;
+		this.media = media;
 	}
 
 	@Override
@@ -93,7 +97,7 @@ public class ProfileNetworkService implements ListProfileNetworkUseCase {
 				return;
 			}
 			if (profile != null && !profile.removed() && !banned.contains(id)) {
-				result.add(ProfileNetworkUserView.from(profile));
+				result.add(ProfileNetworkUserView.from(profile, media));
 			}
 		}
 	}
