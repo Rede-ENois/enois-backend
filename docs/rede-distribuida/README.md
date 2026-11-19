@@ -10,6 +10,12 @@ arquitetura distribuída com Control Plane, Data Plane e Node Runtime.
 **Fase 0 — em andamento.** Nada vai para `qa` até o plano estar completo (fases 0–6 entregues e
 testadas). O trabalho vive na branch de longa duração `feat/rede-distribuida`, criada de `origin/qa`.
 
+## Integração com enois-distributed
+
+O [inventário J0](j0/README.md) registra a superfície Java e a baseline
+de migração para o novo control plane. As fases abaixo descrevem a rede
+legada.
+
 ## Documentos
 
 | # | Documento | O que responde |

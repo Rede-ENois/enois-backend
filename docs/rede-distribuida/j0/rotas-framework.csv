@@ -1,0 +1,6 @@
+rota_java,metodo,classe,metodo_java,condicao_parametros,condicao_cabecalhos,consumes,produces,dono
+/actuator,GET,org.springframework.boot.webmvc.actuate.endpoint.web.WebMvcEndpointHandlerMapping$WebMvcLinksHandler,links,[],[],[],[application/vnd.spring-boot.actuator.v3+json || application/vnd.spring-boot.actuator.v2+json || application/json],Operações / Spring
+/actuator/health,GET,org.springframework.boot.webmvc.actuate.endpoint.web.AbstractWebMvcEndpointHandlerMapping$OperationHandler,handle,[],[],[],[application/vnd.spring-boot.actuator.v3+json || application/vnd.spring-boot.actuator.v2+json || application/json],Operações / Spring
+/actuator/health/**,GET,org.springframework.boot.webmvc.actuate.endpoint.web.AbstractWebMvcEndpointHandlerMapping$OperationHandler,handle,[],[],[],[application/vnd.spring-boot.actuator.v3+json || application/vnd.spring-boot.actuator.v2+json || application/json],Operações / Spring
+/error,*,org.springframework.boot.webmvc.autoconfigure.error.BasicErrorController,error,[],[],[],[],HTTP / Spring
+/error,*,org.springframework.boot.webmvc.autoconfigure.error.BasicErrorController,errorHtml,[],[],[],[text/html],HTTP / Spring
