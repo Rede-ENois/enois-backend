@@ -216,10 +216,28 @@ class MediaMetadataSanitizerTests {
 		String out = new String(clean, java.nio.charset.StandardCharsets.UTF_8);
 
 		assertTrue(out.contains("<svg"));
+		assertTrue(out.contains("xmlns=\"http://www.w3.org/2000/svg\""));
 		assertTrue(out.contains("<circle"));
 		assertFalse(out.contains("<script"));
 		assertFalse(out.contains("onload"));
 		assertFalse(out.contains("alert("));
+	}
+
+	@Test
+	void preservesXlinkNamespaceOnSvgWhenXlinkHrefIsUsed() throws Exception {
+		byte[] svgWithXlink = """
+			<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 10 10">
+			  <defs><circle id="dot" cx="5" cy="5" r="2"/></defs>
+			  <use xlink:href="#dot"/>
+			</svg>
+			""".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+		byte[] clean = sanitizer.sanitize(svgWithXlink, "image/svg+xml", "xlink.svg");
+		String out = new String(clean, java.nio.charset.StandardCharsets.UTF_8);
+
+		assertTrue(out.contains("xmlns=\"http://www.w3.org/2000/svg\""));
+		assertTrue(out.contains("xmlns:xlink=\"http://www.w3.org/1999/xlink\""));
+		assertTrue(out.contains("xlink:href=\"#dot\""));
 	}
 
 	@Test
