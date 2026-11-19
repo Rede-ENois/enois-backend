@@ -561,7 +561,8 @@ class StorageCatalogServiceTests {
 		public StorageObject insertVersion(String id, String bucket, String key, String contentType, String createdBy,
 				Instant now, long version) {
 			StorageObject object = new StorageObject(id, bucket, key, contentType, null, null,
-				StorageObjectState.PENDING, createdBy, now, now, null, version, null, null);
+				StorageObjectState.PENDING, createdBy, now, now, null, version, null, null,
+				com.socialcoisa.rede.network.domain.ObjectMetadata.EMPTY, null, null);
 			byKey.put(bucket + "/" + key, object);
 			return object;
 		}
@@ -575,7 +576,7 @@ class StorageCatalogServiceTests {
 			byKey.put(bucket + "/" + key, new StorageObject(corrente.id(), corrente.bucket(), corrente.key(),
 				corrente.contentType(), corrente.bytes(), corrente.sha256(), corrente.state(), corrente.createdBy(),
 				corrente.createdAt(), now, corrente.deletedAt(), corrente.version(), supersededBy,
-				corrente.expiresAt()));
+				corrente.expiresAt(), corrente.metadata(), corrente.cacheControl(), corrente.contentDisposition()));
 			return true;
 		}
 
@@ -583,7 +584,16 @@ class StorageCatalogServiceTests {
 		public void setExpiresAt(String id, Instant expiresAt) {
 			replace(id, o -> true, o -> new StorageObject(o.id(), o.bucket(), o.key(), o.contentType(), o.bytes(),
 				o.sha256(), o.state(), o.createdBy(), o.createdAt(), o.updatedAt(), o.deletedAt(), o.version(),
-				o.supersededBy(), expiresAt));
+				o.supersededBy(), expiresAt, o.metadata(), o.cacheControl(), o.contentDisposition()));
+		}
+
+		@Override
+		public void setClientHeaders(String id, com.socialcoisa.rede.network.domain.ObjectMetadata metadata,
+				String cacheControl, String contentDisposition) {
+			replace(id, o -> o.state() == StorageObjectState.PENDING,
+				o -> new StorageObject(o.id(), o.bucket(), o.key(), o.contentType(), o.bytes(), o.sha256(),
+					o.state(), o.createdBy(), o.createdAt(), o.updatedAt(), o.deletedAt(), o.version(),
+					o.supersededBy(), o.expiresAt(), metadata, cacheControl, contentDisposition));
 		}
 
 		@Override
