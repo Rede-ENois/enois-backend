@@ -21,13 +21,16 @@ class NotificationOutboxEventHandler implements OutboxEventHandler {
 	private final PostRepository postRepository;
 	private final CommentRepository commentRepository;
 	private final UserProfileRepository userProfileRepository;
+	private final NotificationPreferenceService preferences;
 
 	NotificationOutboxEventHandler(NotificationService notificationService, PostRepository postRepository,
-			CommentRepository commentRepository, UserProfileRepository userProfileRepository) {
+			CommentRepository commentRepository, UserProfileRepository userProfileRepository,
+			NotificationPreferenceService preferences) {
 		this.notificationService = notificationService;
 		this.postRepository = postRepository;
 		this.commentRepository = commentRepository;
 		this.userProfileRepository = userProfileRepository;
+		this.preferences = preferences;
 	}
 
 	/**
@@ -52,6 +55,7 @@ class NotificationOutboxEventHandler implements OutboxEventHandler {
 		Post post = postRepository.findById(new PostId(postId)).orElse(null);
 		if (post == null) return;
 		if (post.authorId().value().equals(authorId)) return;
+		if (preferences.silences(post.authorId().value(), "NEW_COMMENT")) return;
 		String actorName = userProfileRepository.findById(authorId)
 			.map(p -> p.name()).orElse("Alguém");
 		// O clique tem que abrir O COMENTÁRIO, não o post inteiro (relato: "não perde tempo
@@ -71,6 +75,7 @@ class NotificationOutboxEventHandler implements OutboxEventHandler {
 		Post post = postRepository.findById(new PostId(postId)).orElse(null);
 		if (post == null) return;
 		if (post.authorId().value().equals(authorId)) return;
+		if (preferences.silences(post.authorId().value(), "NEW_REACTION")) return;
 		String actorName = userProfileRepository.findById(authorId)
 			.map(p -> p.name()).orElse("Alguém");
 		notificationService.createGrouped(post.authorId().value(), "NEW_REACTION", "NEW_REACTION:post:" + postId,
@@ -88,6 +93,7 @@ class NotificationOutboxEventHandler implements OutboxEventHandler {
 		Comment comment = commentRepository.findById(commentId).orElse(null);
 		if (comment == null) return;
 		if (comment.authorId().value().equals(authorId)) return;
+		if (preferences.silences(comment.authorId().value(), "COMMENT_REACTION")) return;
 		String actorName = userProfileRepository.findById(authorId)
 			.map(p -> p.name()).orElse("Alguém");
 		notificationService.createGrouped(comment.authorId().value(), "COMMENT_REACTION",

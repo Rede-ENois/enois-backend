@@ -24,10 +24,11 @@ class NotificationPreferencePersistenceAdapter implements NotificationPreference
 	public Optional<NotificationPreferences> find(String userId) {
 		return jdbc.query("""
 				select weekly_digest, push_social, push_messages, push_groups, push_jobs, push_system,
-				community_projects, updated_at
+				community_projects, mute_reactions, mute_post_comments, updated_at
 				from notification_preferences where user_id = ?""",
 			(rs, row) -> new NotificationPreferences(rs.getBoolean(1), rs.getBoolean(2), rs.getBoolean(3),
-				rs.getBoolean(4), rs.getBoolean(5), rs.getBoolean(6), rs.getBoolean(7), rs.getTimestamp(8).toInstant()),
+				rs.getBoolean(4), rs.getBoolean(5), rs.getBoolean(6), rs.getBoolean(7), rs.getBoolean(8),
+				rs.getBoolean(9), rs.getTimestamp(10).toInstant()),
 			userId).stream().findFirst();
 	}
 
@@ -52,9 +53,11 @@ class NotificationPreferencePersistenceAdapter implements NotificationPreference
 		try {
 			jdbc.update("""
 					insert into notification_preferences (user_id, weekly_digest, push_social, push_messages,
-					push_groups, push_jobs, push_system, community_projects, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+					push_groups, push_jobs, push_system, community_projects, mute_reactions, mute_post_comments,
+					updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
 				userId, p.weeklyDigest(), p.pushSocial(), p.pushMessages(), p.pushGroups(), p.pushJobs(),
-				p.pushSystem(), p.communityProjects(), Timestamp.from(p.updatedAt()));
+				p.pushSystem(), p.communityProjects(), p.muteReactions(), p.mutePostComments(),
+				Timestamp.from(p.updatedAt()));
 		}
 		catch (DuplicateKeyException concurrentInsert) {
 			// Another request created the row first: last write wins, as with any other update.
@@ -65,8 +68,9 @@ class NotificationPreferencePersistenceAdapter implements NotificationPreference
 	private int update(String userId, NotificationPreferences p) {
 		return jdbc.update("""
 				update notification_preferences set weekly_digest = ?, push_social = ?, push_messages = ?,
-				push_groups = ?, push_jobs = ?, push_system = ?, community_projects = ?, updated_at = ? where user_id = ?""",
+				push_groups = ?, push_jobs = ?, push_system = ?, community_projects = ?, mute_reactions = ?,
+				mute_post_comments = ?, updated_at = ? where user_id = ?""",
 			p.weeklyDigest(), p.pushSocial(), p.pushMessages(), p.pushGroups(), p.pushJobs(), p.pushSystem(),
-			p.communityProjects(), Timestamp.from(p.updatedAt()), userId);
+			p.communityProjects(), p.muteReactions(), p.mutePostComments(), Timestamp.from(p.updatedAt()), userId);
 	}
 }
