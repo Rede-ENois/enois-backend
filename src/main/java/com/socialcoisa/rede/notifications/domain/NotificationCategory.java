@@ -73,6 +73,9 @@ public enum NotificationCategory {
 		// Remarcação/cancelamento do evento avisa quem confirmou presença: convivência do evento,
 		// mesma família do lembrete de ocorrência — desligar "grupos" silencia o aviso também.
 		Map.entry("EVENT", GROUPS),
+		Map.entry("STUDY_PAIR_PROPOSED", SOCIAL),
+		Map.entry("STUDY_PAIR_ACTIVE", SOCIAL),
+		Map.entry("STUDY_PAIR_DECLINED", SOCIAL),
 		Map.entry("STUDY_PAIR_MATCHED", SOCIAL),
 		Map.entry("STUDY_PAIR_CHECKIN", SOCIAL),
 		Map.entry("STUDY_PAIR_ENDED", SOCIAL),
