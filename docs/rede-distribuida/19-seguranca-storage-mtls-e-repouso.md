@@ -123,6 +123,11 @@ O passo 3 acima é executado pelo `install.sh`, não pelo operador:
 - **`openssl` é pré-requisito do enroll** e o instalador recusa sem ele, com o nome do comando — em
   vez de enrolar sem CSR e deixar o nó sem identidade criptográfica.
 
+`node-doctor.sh` checa a chave como checa a API key e o pino: presente com `600` (ou `640`, o que o
+`--start` deixa para o uid do container) é PASS; outra permissão é WARN com o `chmod` a rodar; ausente
+é WARN — nó instalado antes desta versão opera só com a API key, e o doctor diz isso em vez de deixar o
+operador achar que a identidade criptográfica existe.
+
 O que **não** existe: verificação da combinação `node.key` × certificado guardado no nó (o
 `node.json` traz o PEM e a série, mas nada confere que a chave corresponde) e uso da chave pelo
 runtime (`node-runtime.sh` ainda não assina nem decifra com ela — é o passo do envelope em §7.1).
@@ -150,7 +155,9 @@ motivo apareceria longe da causa.
   devolve a **mesma** chave (comparação da pública, não só da existência).
   Mutações conferidas, cada uma derrubando **só** a asserção dela: tirar o `csr` do corpo do enroll
   (`enroll não levou o CSR`); tirar `node.key` do `--backup` (`a chave do nó volta com o restore`);
-  gerar uma chave que não é Ed25519 (`a chave do nó é Ed25519`).
+  gerar uma chave que não é Ed25519 (`a chave do nó é Ed25519`). Do doctor (108 asserções): sem o ramo
+  da chave (`doctor avisa a falta da chave do nó`), aceitando só `600` (`640 (uid do container) é
+  aceito`) e sem ler a permissão (`chave legível por outros é WARN, não silêncio`).
 
 ## 7. Criptografia em repouso do corpo do nó
 
