@@ -354,6 +354,29 @@ vencimento é por objeto, não por bucket.
 a listagem de objeto dele já vinha vazia; bucket com um vivo e um vencido fica; bucket sem prazo fica;
 bucket de outra conta não aparece). Mutações: `bucketsOf` sem o filtro de prazo; filtro invertido;
 `bucketsOf` ignorando o dono — **3 de 3 derrubam**.
+## 4.5 O `LastModified` da listagem no formato que o SDK lê (ciclo 83)
+
+A S3 manda `LastModified` como `yyyy-MM-dd'T'HH:mm:ss.SSS'Z'` — **sempre** três casas decimais e
+sempre `Z`. O gateway emitia `Instant.toString()`, que:
+
+| instante gravado | antes (na resposta) |
+|---|---|
+| `2026-11-01T08:00:00Z` (fração zero) | `2026-11-01T08:00:00Z` — **sem** as três casas |
+| `2026-11-01T08:00:00.123456789Z` | `2026-11-01T08:00:00.123456789Z` — **nove** casas |
+
+Os dois são instantes válidos em Java, e é por isso que passaram: o SDK da AWS desserializa o campo com
+um formatter de milissegundos e recusa o documento inteiro — a listagem que abre no navegador falha no
+cliente. O instante com fração zero é o caso **comum** de um item recém-gravado cujo carimbo veio do
+relógio em segundo redondo.
+
+Agora o gateway formata com um `DateTimeFormatter` fixo (`S3_INSTANT`), com o milissegundo
+**truncado** — truncar e não arredondar: `999999` ns não pode virar o segundo seguinte e dar a um
+objeto a data de outro. A fonte é `updatedAt` quando existe, senão `createdAt`.
+
+**Verificação:** `S3ListLastModifiedTests` **2** pela rota real (instante redondo sai
+`2026-11-01T08:00:00.000Z`; instante com nanossegundos sai `2026-11-01T08:00:00.123Z`) — o par é o
+discriminante, porque cada um cobre um extremo diferente do defeito. Mutações: voltar o
+`Instant.toString()`, formato sem as casas, formato com nanossegundos — **3 de 3 derrubam**.
 
 ## 5. Erros
 
