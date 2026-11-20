@@ -612,6 +612,12 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		return jdbc.query(SELECT_NODE_PLACEMENTS, PLACEMENT_MAPPER, nodeId);
 	}
 
+	@Override
+	public List<StoragePlacement> copiesOnNode(String nodeId) {
+		// Em qualquer estado: a colocação precisa ver também a designação pendente, que reserva folga.
+		return jdbc.query(SELECT_NODE_PLACEMENTS, PLACEMENT_MAPPER, nodeId);
+	}
+
 	/** {@code %}, {@code _} e {@code \} do prefixo são literais numa chave S3, não padrão de busca. */
 	static String escapeLike(String raw) {
 		StringBuilder escaped = new StringBuilder(raw.length() + 8);

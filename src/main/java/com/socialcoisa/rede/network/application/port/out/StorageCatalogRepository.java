@@ -106,6 +106,12 @@ public interface StorageCatalogRepository {
 	List<StoragePlacement> copies(String objectId);
 
 	/**
+	 * Todas as colocações de um nó, em qualquer estado. É o que a colocação lê para saber o que o nó
+	 * já reservou (designação pendente) além do que confirmou.
+	 */
+	List<StoragePlacement> copiesOnNode(String nodeId);
+
+	/**
 	 * As cópias deste objeto ainda servíveis (estado {@code OK}), em ordem de réplica.
 	 *
 	 * <p>Uso de leitura/serving: objeto que voltou a ter cópia confirmada. Para durabilidade use

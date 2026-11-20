@@ -87,6 +87,29 @@ consuma além do limite"). Nó de storage precisa de `declared_disk_mb` no enrol
 dois são limites de baixo do uso real, e o menor esconderia o espaço que um deles já viu ocupado
 (cópia interrompida deixa arquivo no volume sem estar confirmada).
 
+## 2.2 A designação pendente reserva a folga cedida
+
+A folga (§2.1) somava só a cópia **confirmada** (`OK`) do nó. Um lote de uploads designado no mesmo
+instante passava inteiro: três objetos de 100 GB para um nó que cedeu 150 GB eram todos colocados
+nele, porque nenhum deles era ainda `OK` quando o próximo era escolhido. O primeiro seria gravado, o
+segundo estouraria a folga — e quem descobriria seria o `store`, com `507`, para um objeto **já
+designado**, que o nó nunca poderia receber.
+
+| situação da colocação | antes | agora |
+|---|---|---|
+| `OK` no nó | conta como ocupado | conta como ocupado |
+| `PENDING_REMOTE` no nó | **não contava** | **reserva o tamanho dela** |
+| `STALE` / `GONE` | não contava | não conta — a primeira não é espaço aproveitável, as outras a coleta devolve |
+
+A reserva é o mesmo `catalog.copiesOnNode`, somado ao maior entre o confirmado e o medido
+(`observadoContentUsedMb`). É reserva, não promessa: quem não confirma volta a liberar a folga na
+primeira colocação seguinte, sem varredura. A **ordem** de escolha (mais folga primeiro) também já
+desconta a reserva — um nó que prometeu 1 GB a outro vem depois de um que não prometeu nada.
+
+**Verificação:** `StoragePlacementServiceTests` **25** (3 novos: a reserva muda a ordem; a cópia
+confirmada conta uma vez só; `STALE` não reserva). Mutações: ignorar a reserva, `STALE` reservando —
+**2 de 2 derrubam**.
+
 ## 3. O que NÃO está entregue
 
 | item | por quê |

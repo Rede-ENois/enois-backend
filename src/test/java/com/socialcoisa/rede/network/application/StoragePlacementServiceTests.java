@@ -53,6 +53,10 @@ class StoragePlacementServiceTests {
 		nodes = mock(NetworkNodeRepository.class);
 		catalog = mock(StorageCatalogRepository.class);
 		when(catalog.placements("sob_1")).thenReturn(List.of());
+		// Stub padrão de "sem nada reservado": a colocação agora consulta a reserva de cada nó.
+		// Lista mutável: o stub `any()` é consumido pelas chamadas de `reservadoEmMb` (a ordem de nó
+		// vem antes de `storageReady`, e uma lista imutável faria terminá-la).
+		when(catalog.copiesOnNode(any())).thenAnswer(invocacao -> new java.util.ArrayList<StoragePlacement>());
 		service = new StoragePlacementService(nodes, catalog, 3, 90);
 	}
 
@@ -208,6 +212,66 @@ class StoragePlacementServiceTests {
 		assertThat(chosen).extracting(NetworkNode::id).containsExactly("nd_b", "nd_a");
 	}
 
+	/**
+	 * A designação PENDENTE reserva a folga cedida: o nó que já prometeu 120 GB de 150 GB não recebe
+	 * outro objeto de 40 GB. Antes, só a cópia {@code OK} contava, e três objetos grandes designados
+	 * no mesmo lote caberiam todos — até o {@code store} recusar o segundo com 507.
+	 */
+	@Test
+	void a_designacao_pendente_reserva_a_folga_cedida() {
+		// Os dois nós cedem 300 GB; a reserva é 4,6 MB e o objeto pedido é 4,6 MB, com 1 GiB de piso
+		// a exigir folga depois. nd_a já prometeu 80 GB a outro objeto: sobra 220 GB, e os 1 GiB de
+		// piso consomem a diferença — sem a reserva ele apareceria como o de MAIOR folga (300 GB) e
+		// seria escolhido primeiro; com ela, é nd_b.
+		when(catalog.copiesOnNode("nd_a")).thenReturn(List.of(
+			new StoragePlacement("sob_outro", 1, "nd_a", 1024L * 1024 * 1024, "abc",
+				StoragePlacement.State.PENDING_REMOTE, NOW)));
+		when(catalog.copiesOnNode("nd_b")).thenReturn(List.of());
+		candidates(regionNodeComTeto("nd_a", null, 102400, 300_000), regionNodeComTeto("nd_b", null, 102400, 300_000));
+
+		// 3 GB + 1 GiB de piso = 4152 MB; nd_a tem 300000 − 1025 = 298975 e nd_b 300000, e os dois
+		// cabem — o que muda é a ORDEM: a reserva faz nd_a valer 1 GB menos.
+		List<NetworkNode> chosen = service.chooseReplicas("sob_1", 3L * 1024 * MB, NOW);
+
+		assertThat(chosen).extracting(NetworkNode::id).as("mais folga primeiro, já descontada a reserva")
+			.containsExactly("nd_b", "nd_a");
+	}
+
+	@Test
+	void a_copia_confirmada_conta_uma_vez_so_na_folga() {
+		// O nó confirmou 120 GB e a designação pendente é o mesmo objeto de outro caso: a folga é
+		// 300 GB − 120 GB − 1 GiB de piso do objeto pedido = 178 GB, e não "uma vez pelo confirmado e
+		// outra pela reserva". O que este teste trava: a régua do confirmado e a da reserva não
+		// somam o mesmo espaço duas vezes.
+		when(catalog.copiesOnNode("nd_a")).thenReturn(List.of(
+			new StoragePlacement("sob_outro", 1, "nd_a", 120L * 1024 * MB, "abc", StoragePlacement.State.OK, NOW)));
+		when(catalog.copiesOnNode("nd_b")).thenReturn(List.of());
+		candidates(regionNodeComTeto("nd_a", null, 102400, 300_000), regionNodeComTeto("nd_b", null, 102400, 300_000));
+
+		List<NetworkNode> chosen = service.chooseReplicas("sob_1", 3L * 1024 * MB, NOW);
+
+		assertThat(chosen).extracting(NetworkNode::id).contains("nd_b");
+		assertThat(chosen.stream().filter(n -> n.id().equals("nd_a")).map(NetworkNode::id))
+			.as("nd_a ainda cabe: 178 GB de folga para 3 GB").hasSize(1);
+	}
+
+	@Test
+	void designacao_stale_nao_reserva() {
+		// Um objeto STALE de 250 GB num nó que cedeu 300 GB. Se STALE reservasse, a folga dele cairia
+		// para 50 GB e ele seria o ÚLTIMO na ordem (nd_b, sem reserva, vem primeiro). Sem reserva,
+		// nd_a tem 300 GB e vem primeiro — a ordem é o discriminante.
+		when(catalog.copiesOnNode("nd_a")).thenReturn(List.of(
+			new StoragePlacement("sob_outro", 1, "nd_a", 250L * 1024 * 1024 * 1024L, "abc",
+				StoragePlacement.State.STALE, NOW)));
+		when(catalog.copiesOnNode("nd_b")).thenReturn(List.of());
+		candidates(regionNodeComTeto("nd_a", null, 102400, 400_000), regionNodeComTeto("nd_b", null, 102400, 400_000));
+
+		List<NetworkNode> chosen = service.chooseReplicas("sob_1", 3L * 1024 * MB, NOW);
+
+		assertThat(chosen).extracting(NetworkNode::id)
+			.as("STALE não é espaço ocupado nem espaço prometido").containsExactly("nd_a", "nd_b");
+	}
+
 	/** A grafia não cria domínio: "Sudeste" e "sudeste" são a mesma região. */
 	@Test
 	void grafiaDaRegiaoNaoCriaDominioDiferente() {
@@ -218,6 +282,11 @@ class StoragePlacementServiceTests {
 
 		// Todas a mesma região: usa a mesma região quando não há outra disponível.
 		assertThat(chosen).extracting(NetworkNode::id).containsExactly("nd_a", "nd_b");
+	}
+
+	private static NetworkNode regionNodeComTeto(String id, String region, long diskFreeMb, int declaredMb) {
+		return new NetworkNode(id, id, "owner", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_STORAGE), region, "BR",
+			"0.1.0", NOW.minusSeconds(5), 4, 8192, declaredMb, 100, null, null, null, null, diskFreeMb, null, null, 0, null, null);
 	}
 
 	private static NetworkNode regionNode(String id, String region, long diskFreeMb) {

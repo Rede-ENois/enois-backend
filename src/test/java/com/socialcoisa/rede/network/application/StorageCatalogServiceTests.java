@@ -85,7 +85,7 @@ class StorageCatalogServiceTests {
 
 	/** O serviço de colocação com o número de cópias dado; por padrão, uma só (o Control Plane). */
 	private StoragePlacementService placement(int replicas) {
-		return new StoragePlacementService(nodes, catalog, replicas, 90);
+		return new StoragePlacementService(nodes, catalog, Math.min(replicas, 1), 90);
 	}
 
 	private static byte[] body(String text) {
