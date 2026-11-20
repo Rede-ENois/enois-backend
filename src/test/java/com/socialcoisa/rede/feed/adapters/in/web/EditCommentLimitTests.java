@@ -78,11 +78,9 @@ class EditCommentLimitTests {
 	}
 
 	/**
-	 * O teto exato nao esta provado: o banco guarda 1024 e a coluna encolhe o texto na gravacao desta
-	 * suite, entao a edicao de 800 sai truncada mesmo com o codigo novo. Reabrir quando houver a
-	 * medida real do que o banco guarda.
+	 * O teto e inclusivo: 800 entra inteiro. O texto do fixture nao pode terminar em espaco, porque a
+	 * aparada das bordas do normalizeCommentText corta o espaco final e o comentario fica com 799.
 	 */
-	@org.junit.jupiter.api.Disabled("truncamento de 800 no banco — reabrir com a medida real")
 	@Test
 	void edicaoAceita800() throws Exception {
 		var author = auth.authenticate("ecl_author800");
@@ -123,7 +121,8 @@ class EditCommentLimitTests {
 
 	private static String textoVario(int tamanho) {
 		String base = "Texto de comentario sem nada suspeito, so letras e espacos. ";
-		return base.repeat(tamanho / base.length() + 1).substring(0, tamanho);
+		String texto = base.repeat(tamanho / base.length() + 1).substring(0, tamanho);
+		return texto.charAt(tamanho - 1) == ' ' ? texto.substring(0, tamanho - 1) + "x" : texto;
 	}
 
 	private String createComment(TestAuthHelper.AuthSession session, String postId, String content) throws Exception {
