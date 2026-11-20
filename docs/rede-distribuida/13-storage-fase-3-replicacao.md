@@ -582,5 +582,56 @@ que falta — o CP pedir o corpo ao nó que tem a cópia — é o mesmo que o re
 pede, e depende da rota de leitura por chave de nó. Fica declarado aqui para não ser redescoberto.
 
 **Como conferir sem adivinhar:** `StorageScrubberReadBackTests`, `NetworkStorageReplicationTests` e o
+
+## 5.10 A cópia que só existe na réplica 0 ganha uma cópia de nó
+
+A fase 3 tem a colocação, o `OBJECT_PUT`, a confirmação e o healing das cópias ruins. Faltava a
+pergunta mais simples: **quem pede a primeira cópia de um objeto que acabou de ser gravado só na
+réplica 0?** Quando o upload termina sem nó elegível — nenhum nó com folga cedida naquele instante,
+nenhum ativo, ou o objeto é anterior à colocação — o objeto fica com a réplica 0 (o disco do Control
+Plane) e nada volta a pedir a cópia. O painel de durabilidade mede cópia de nó: o objeto aparece como
+"sem redundância" e ninguém tem a mão para resolver, e desde o §5.9.2 o download também responde 409
+quando quem atende não é o dono da réplica 0.
+
+| rota (admin) | o que faz |
+|---|---|
+| `GET /admin/network/storage/replica-zero` | lista o que hoje está **só** na réplica 0, com o motivo de cada objeto que ficou sem destino |
+| `POST /admin/network/storage/replica-zero?dryRun=false` | designa **uma** cópia (réplica 1) para cada um, `PENDING_REMOTE` |
+
+**Quem é candidato** (`StorageCatalogPersistenceAdapter.withOnlyReplicaZero`): `STORED`, corrente
+(`superseded_by is null`), com `sha256` e `bytes`, não vencido, **sem nenhuma colocação de réplica
+diferente de 0**. Objeto sem colocação nenhuma também entra — é o caso mais comum. Cópia `STALE`,
+`GONE` ou `PENDING_REMOTE` o tira da lista: essas já têm o healing de cópia ruim (§5.1.1), e pedir
+outra réplica por cima duplicaria a transferência.
+
+**A régua do destino é a da colocação, não uma segunda.** `StoragePlacementService.chooseReplica`:
+folga **cedida** medida, região/domínio de falha, preferência de tipo de nó. Nó sem teto de disco
+cedido não é escolhido (é a mesma recusa do `store`, §2.1 do doc 17).
+
+**Idempotente de dois jeitos.** O objeto com qualquer colocação de nó sai da lista; e dentro da
+chamada a trava é `catalog.copies(objectId)` não vazio — que pega o caso de duas instâncias pedindo
+ao mesmo tempo, ou o objeto repetido na página. Sem a segunda, duas chamadas concorrentes gravariam
+duas `PENDING_REMOTE` com a réplica 1 e a confirmação da segunda cairia em "já foi confirmada".
+
+**O que ela não faz:** não move réplica existente, não substitui cópia `STALE`/`GONE`, e não dispara
+o `OBJECT_PUT` — quem manda gravar é o despacho da réplica, como em toda designação. O padrão da rota
+é **seco**, e o que foi adotado é auditado (`STORAGE_REPLICA_ADOPTED`).
+
+**Efeito medido (e aceito), do §5.9.2:** a adoção cria a **designação**, não a cópia. Até o nó
+confirmar, o objeto continua sem cópia `OK` e o download de um Control Plane que não é dono da réplica 0
+continua respondendo 409. Adotar alivia a durabilidade; o caminho de leitura remota continua pendente.
+
+**Verificação:** `StorageReplicaAdoptionTests` **8** (objeto só na réplica 0 ganha nó; a segunda
+chamada não pede outra; objeto que já tem cópia não é candidato; sem nó elegível aparece com o motivo;
+dry run mostra o destino e não grava; vencido e lapidado ficam fora; a escolha é a da colocação e não
+"o primeiro da lista"; objeto repetido na consulta já designado não ganha outra designação).
+`StorageReplicaAdoptionPersistenceTests` **5** no SQL real (sem colocação é candidato; réplica 0 não
+conta como cópia de nó; `OK`/`PENDING_REMOTE`/`STALE` tiram da lista; vencido/lapidado/PENDING ficam
+fora e prazo futuro ainda vale; o limite é respeitado). `AdminStorageReplicaAdoptionTests` **3** pela
+rota (conta comum é recusada na leitura e na adoção; admin vê {considered, adopted, skipped}; o seco
+mostra o nome do objeto com `NO_NODE_ELIGIBLE` e nada é gravado). Mutações: sem a trava de `copies`,
+`dryRun` gravando, a consulta contando a réplica 0 como cópia de nó, o filtro de vencido virando
+no-op, a consulta com `cross join` — **5 de 5 derrubam**.
+
 harness `storage-migration-test` cobrem o caminho local; o caso remoto não tem teste porque o caminho
 não existe.

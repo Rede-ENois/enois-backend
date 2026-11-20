@@ -114,6 +114,13 @@ public interface StorageCatalogRepository {
 	List<StoragePlacement> placements(String objectId);
 
 	/**
+	 * Objetos servíveis que têm <b>só a réplica 0</b> na colocação: nada de nó, nem cópia nem
+	 * designação. É a candidata do healing de "réplica única" (doc 13 §5.10): a réplica 0 é o disco
+	 * do Control Plane, e durabilidade é cópia de nó.
+	 */
+	List<StorageObject> withOnlyReplicaZero(int limit);
+
+	/**
 	 * Lápides vencidas, em ordem total {@code (bucket, object_key)}, estritamente <b>depois</b> do
 	 * cursor. O cursor é o par {@code (bucket, chave)} e não só a chave: a mesma chave em dois
 	 * buckets é legítima, e um cursor só pela chave oscilaria entre as duas linhas para sempre.

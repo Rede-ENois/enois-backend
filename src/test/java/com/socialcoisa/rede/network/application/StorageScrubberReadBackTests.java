@@ -428,6 +428,11 @@ class StorageScrubberReadBackTests {
 		}
 
 		@Override
+		public List<StorageObject> withOnlyReplicaZero(int limit) {
+			throw new UnsupportedOperationException("adocao de replica nao usada neste teste");
+		}
+
+		@Override
 		public List<StoragePlacement> placementsInState(StoragePlacement.State state) {
 			return placements.stream().filter(p -> p.state() == state).toList();
 		}
