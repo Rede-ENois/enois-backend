@@ -230,8 +230,16 @@ class S3GatewayController {
 		// Metadado e cabeçalhos declarados junto do corpo (V367): lidos ANTES da gravação, porque cabeçalho
 		// recusado não pode deixar objeto criado — nem um PENDING decorado com o que não foi aceito.
 		StorageCatalogService.ClientHeaders declarados = clientHeaders(request);
-		StorageObject pending = storage.beginUpload(credential.ownerUserId(), bucket, key,
-			contentType == null ? "application/octet-stream" : contentType);
+		StorageObject pending;
+		try {
+			pending = storage.beginUpload(credential.ownerUserId(), bucket, key,
+				contentType == null ? "application/octet-stream" : contentType);
+		}
+		catch (ApiException recusado) {
+			// A cota também recusa aqui, e no mesmo vocabulário do S3: o SDK lê `Code`, não o JSON
+			// do Control Plane. A abertura traduzia pelo `catch` da gravação, que ela nunca alcança.
+			throw noVocabularioDoS3(recusado);
+		}
 		storage.saveClientHeaders(pending, declarados);
 		boolean iaCriar = antes == null || !antes.id().equals(pending.id());
 		if (!iaCriar && antes.state() != StorageObjectState.PENDING) {
