@@ -17,7 +17,7 @@ ficou fora e por quê, e como cada afirmação foi verificada.
 | **upload por nó** | entregue | `PUT /network/storage/objects/{id}` — bytes crus, credencial de nó, perfil obrigatório |
 | **download por nó** | entregue | `GET /network/storage/objects/{id}` — `Content-Length`, `ETag` = sha-256, sem renderizar; serve da raiz do CP e do diretório do nó local (13 §5.5) |
 | **medida antes do aceite** | entregue | o Control Plane calcula tamanho e SHA-256 **enquanto grava**; o declarado não é lido |
-| **teto de tamanho** | entregue | `rede.storage.max-object-bytes` (padrão 5 GiB); acima do teto o corpo é recusado |
+| **teto de tamanho** | entregue | `rede.storage.max-object-bytes` (padrão 5 GiB); acima do teto o corpo é recusado **durante a leitura** — a gravação para no teto mais um byte e o temporário sai do disco (ciclo 86) |
 | **primeiro Storage Node** | parcial: o Control Plane faz esse papel | grava no diretório `rede.storage.root`; ver §3 |
 | **API S3 básica / gateway** | **não entregue** | ver §3 |
 
@@ -53,6 +53,19 @@ corpo atravessar** — mesmo critério do teto de tamanho: não escrever o que j
 Sem medida (`null`, runtime anterior a V321) o nó **não** é recusado: não medir não é estar sem
 espaço, e recusar por falta de informação tiraria do caminho nós com terabytes livres. O piso é
 folga de sistema de arquivos (temporário do upload, journal), não o tamanho do objeto.
+
+**O teto para a leitura, e não só a resposta** (ciclo 86). Antes, o corpo inteiro era copiado para o
+temporário em disco e o teto só era conferido depois: um cliente que mandasse 50 GiB num limite de 5 GiB
+fazia o servidor **escrever 50 GiB em `/tmp`** para então responder `413`. Agora a conta é feita ao longo
+da leitura, e o primeiro byte além do teto interrompe — o temporário é apagado e a resposta é
+`413 STORAGE_OBJECT_TOO_LARGE` antes de qualquer byte virar corpo. A leitura pede no máximo o que falta
+até "teto + 1": um byte além basta para saber que passou, e o servidor não puxa um bloco de 64 KiB a mais
+do cliente só para recusar.
+
+**Verificação:** `StorageObjectCeilingTests` **3** — corpo 200× o teto para de ser lido em exatamente
+`teto + 1` bytes e não deixa temporário; corpo no teto passa e é gravado; corpo vazio é recusado sem
+temporário. Mutações: ler o corpo inteiro; pedir bloco inteiro; recusar só depois de tudo — **3 de 3
+derrubam**.
 
 ## 2.3 Cota de espaço por participante (doc 20 §10 / brief §10)
 
