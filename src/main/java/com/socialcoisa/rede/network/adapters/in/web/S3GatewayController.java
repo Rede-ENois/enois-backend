@@ -156,8 +156,12 @@ class S3GatewayController {
 		int maxKeys = parseMaxKeys(query.get("max-keys"));
 		// `continuation-token` (v2) e `marker` (v1) são a mesma coisa: a chave da última página.
 		String after = v2 ? query.get("continuation-token") : query.get("marker");
-		List<StorageObject> found = storage.list(bucket, query.get("prefix"), after, maxKeys);
-		boolean truncated = found.size() == maxKeys;
+		// Uma linha a mais do que a página: é ela que diz se há próxima. "Página cheia" e "há mais"
+		// eram a mesma conta antes, e um bucket com exatamente `max-keys` objetos saía truncado com
+		// token, mandando o cliente pedir uma página que não existia.
+		List<StorageObject> achados = storage.list(bucket, query.get("prefix"), after, maxKeys, true);
+		boolean truncated = achados.size() > maxKeys;
+		List<StorageObject> found = truncated ? achados.subList(0, maxKeys) : achados;
 		String lastKey = found.isEmpty() ? null : found.get(found.size() - 1).key();
 
 		S3Xml xml = new S3Xml();

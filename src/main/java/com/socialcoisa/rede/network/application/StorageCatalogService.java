@@ -957,11 +957,24 @@ public class StorageCatalogService {
 
 	/** Listagem de um bucket por prefixo, com paginação por chave. */
 	public List<StorageObject> list(String bucket, String prefix, String afterKey, int limit) {
+		return list(bucket, prefix, afterKey, limit, false);
+	}
+
+	/**
+	 * Listagem com a linha a mais que diz se há próxima página.
+	 *
+	 * <p><b>Antes:</b> o gateway decidia {@code IsTruncated} por {@code found.size() == maxKeys}, que
+	 * confunde "página cheia" com "há mais": um bucket com exatamente {@code max-keys} objetos saía
+	 * truncado, com token, e o cliente pedia uma página vazia. Agora o serviço pede {@code limit + 1}
+	 * linha ao banco — uma consulta indexada a mais de folga, não uma consulta extra — e quem chama
+	 * olha se veio a extra.</p>
+	 */
+	public List<StorageObject> list(String bucket, String prefix, String afterKey, int limit, boolean espiar) {
 		long inicio = System.nanoTime();
 		try {
 			validateBucket(bucket);
 			int bounded = Math.max(1, Math.min(limit <= 0 ? MAX_LIST_LIMIT : limit, MAX_LIST_LIMIT));
-			List<StorageObject> achados = catalog.list(bucket, prefix, afterKey, bounded);
+			List<StorageObject> achados = catalog.list(bucket, prefix, afterKey, espiar ? bounded + 1 : bounded);
 			conta("LIST", StorageOperationMetrics.Resultado.OK, inicio);
 			return achados;
 		}
@@ -969,6 +982,11 @@ public class StorageCatalogService {
 			conta("LIST", resultadoDe(recusado), inicio);
 			throw recusado;
 		}
+	}
+
+	/** O teto efetivo de uma listagem: {@code limit <= 0} é o padrão, e nada passa de {@link #MAX_LIST_LIMIT}. */
+	private static int limiteDe(int limit) {
+		return Math.max(1, Math.min(limit <= 0 ? MAX_LIST_LIMIT : limit, MAX_LIST_LIMIT));
 	}
 
 	/** Lápide: idempotente, auditada, e não apaga a linha — as cópias nos nós ainda precisam ser coletadas. */

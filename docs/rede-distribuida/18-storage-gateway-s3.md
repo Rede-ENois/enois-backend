@@ -404,6 +404,31 @@ e da chave errada é `404 NoSuchUpload`; o `Abort` da chave errada é `404` e o 
 (as partes seguem lá e o `Complete` funciona). Mutações: helper conferindo só o bucket; helper nunca
 recusando — **2 de 2 derrubam**.
 
+### 4.6 `IsTruncated` diz "há mais", não "página cheia" (ciclo 85)
+
+O S3 trunca quando **há mais**, não quando a página veio cheia. O gateway decidia por
+`found.size() == maxKeys`, que confunde as duas coisas: um bucket com exatamente `max-keys` objetos
+saía com `IsTruncated=true` e `NextContinuationToken`, e o cliente — SDK, sincronizador, `aws s3 sync`
+— pedia a página seguinte e recebia zero. O custo é uma requisição a mais em todo diretório do tamanho
+exato da página; o preço é o cliente não saber quando terminou.
+
+Agora o serviço pede `maxKeys + 1` linha ao banco (`list(..., espiar=true)`) e o gateway olha se veio a
+extra:
+
+| linhas que voltaram | `IsTruncated` | o que sai |
+|---|---|---|
+| menos que `maxKeys + 1` | `false` | todas |
+| `maxKeys + 1` | `true` | as `maxKeys` primeiras, com o token da última entregue |
+
+A linha de folga é **uma linha a mais na mesma consulta indexada** — não uma consulta extra, e não um
+`count(*)`. `max-keys` inválido ou `<= 0` cai no padrão de 1000, e nada passa de 1000 (o teto da S3).
+
+**Verificação:** `S3ListPaginationTests` **3** pela rota real — três objetos com `max-keys=3`:
+`IsTruncated=false`, sem token; quatro objetos com `max-keys=3`: primeira página truncada com token, a
+seguinte conclui com um objeto e sem token; um objeto com `max-keys=10`: última página. Mutações:
+voltar `found.size() == maxKeys`; nunca truncar; espiar mas devolver a linha extra — **3 de 3
+derrubam**.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
