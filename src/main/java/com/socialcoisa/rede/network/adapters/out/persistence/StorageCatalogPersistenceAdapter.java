@@ -131,9 +131,22 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	 * Objetos correntes, servíveis e vencidos. O {@code expires_at is not null} é redundante com a
 	 * comparação, mas deixa o índice usar a árvore: as linhas sem prazo são a maioria.
 	 */
+	/**
+	 * Objetos com prazo vencido, corrente <b>ou substituído</b>.
+	 *
+	 * <p>O prazo é do objeto, e cada versão é um objeto com id próprio (doc 17 §11.1) — a versão nova
+	 * não herda o prazo nem o anula. Exigir {@code superseded_by is null} aqui fazia o prazo de
+	 * qualquer versão que deixou de ser corrente ser ignorado: gravado com sete dias e substituído no
+	 * segundo, o conteúdo nunca vencia, nunca virava lápide, nunca era coletado, e sem política de
+	 * retenção (§11.3, "sem política o padrão é guardar") ficava para sempre — na conta do dono e no
+	 * disco dos nós.</p>
+	 *
+	 * <p>O {@code state = 'STORED'} continua: a lápide já feita não volta à varredura, e
+	 * {@code PENDING} ainda não tem corpo para expirar.</p>
+	 */
 	private static final String SELECT_EXPIRED = """
 		select %s from network_storage_objects
-		where expires_at is not null and expires_at <= ? and state = 'STORED' and superseded_by is null
+		where expires_at is not null and expires_at <= ? and state = 'STORED'
 		order by expires_at asc
 		limit ?
 		""".formatted(OBJECT_COLUMNS);
@@ -177,16 +190,39 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		limit ?
 		""".formatted(OBJECT_COLUMNS);
 
-	/** Os buckets do dono: distintos e alfabéticos, sem as lápides (que não são conteúdo). */
+	/**
+	 * Os buckets do dono: distintos e alfabéticos, sem as lápides (que não são conteúdo) e
+	 * <b>sem o que já venceu</b>.
+	 *
+	 * <p>A régua é a mesma da listagem de objeto e do download: bucket cujo conteúdo inteiro venceu
+	 * não aparece aqui, porque no {@code ListObjects} ele sai vazio e no {@code GET} qualquer objeto
+	 * dele dá {@code 404}. Antes ele continuava listado com o critério antigo (só lápide fora), e o
+	 * cliente via um nome que não abria para nada — e que o {@code DELETE} recusava com {@code 409}
+	 * "ainda tem objetos". Três respostas contraditórias sobre o mesmo nome.</p>
+	 */
 	private static final String BUCKETS_OF = """
 		select distinct bucket from network_storage_objects
 		where created_by = ? and state <> 'DELETED'
+		  and (expires_at is null or expires_at > ?)
 		order by bucket asc
 		""";
 
+	/**
+	 * A listagem de bucket, <b>sem o que já venceu</b>.
+	 *
+	 * <p>O download de um objeto vencido responde {@code 404} desde a fase 1 (a leitura filtra o
+	 * prazo). A listagem só excluía lápide, então mostrava uma chave que o cliente não consegue
+	 * baixar: para um sincronizador de diretório, "existe" e "some quando você pede" é o pior dos
+	 * dois — ele pede, recebe 404 e repete, ou apaga a cópia local achando que o remoto venceu.</p>
+	 *
+	 * <p>O predicado é o mesmo do {@code GET} ({@code expires_at} nulo ou no futuro), escrito aqui
+	 * porque a listagem é por página e filtrar depois de ler faria {@code KeyCount} e
+	 * {@code IsTruncated} mentirem.</p>
+	 */
 	private static final String LIST = """
 		select %s from network_storage_objects
 		where bucket = ? and object_key like ? and object_key > ? and state <> 'DELETED'
+		  and (expires_at is null or expires_at > ?)
 		order by object_key asc
 		limit ?
 		""".formatted(OBJECT_COLUMNS);
@@ -215,11 +251,34 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	 * continua existindo ao lado, nomeado, porque são perguntas diferentes — e três leitores fazendo
 	 * o filtro por conta própria já tinham divergido sobre "o objeto tem cópia".
 	 */
+	/**
+	 * Objetos servíveis cuja colocação é só a réplica 0 — ou seja, nenhuma linha de nó.
+	 *
+	 * <p>{@code not exists} em qualquer colocação, e não {@code count(o) = 1}: objeto sem colocação
+	 * nenhuma (upload anterior à colocação) também está só na réplica 0 e é candidato. O que não
+	 * entra é objeto com cópia {@code STALE}/{@code GONE}/{@code PENDING_REMOTE} — esses têm o healing
+	 * da cópia ruim, e pedir outra réplica por cima duplicaria a transferência.</p>
+	 */
+	private static final String WITH_ONLY_REPLICA_ZERO = """
+		select %s from network_storage_objects o
+		where o.state = 'STORED' and o.superseded_by is null and o.sha256 is not null and o.bytes is not null
+		and (o.expires_at is null or o.expires_at > ?)
+		and not exists (select 1 from network_storage_placements p where p.object_id = o.id and p.replica <> 0)
+		order by o.created_at asc, o.id asc
+		limit ?
+		""".formatted(OBJECT_COLUMNS);
+
 	private static final String SELECT_COPIES = "select " + PLACEMENT_COLUMNS
 		+ " from network_storage_placements where object_id = ? order by replica asc";
 
 	private static final String SELECT_PLACEMENTS = "select " + PLACEMENT_COLUMNS
 		+ " from network_storage_placements where object_id = ? and state = 'OK' order by replica asc";
+
+	/** Cópias num estado, das mais antigas para as mais novas: a que está parada há mais tempo vem
+	 * primeiro. */
+	private static final String SELECT_PLACEMENTS_BY_STATE = "select " + PLACEMENT_COLUMNS
+		+ " from network_storage_placements where state = ? "
+		+ "order by verified_at asc, object_id asc, replica asc";
 
 	/**
 	 * Lápides vencidas em ordem total (bucket, chave), estritamente depois do cursor. O índice
@@ -266,6 +325,17 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		select state, count(*) as copias, coalesce(sum(bytes), 0) as bytes
 		from network_storage_placements
 		group by state
+		""";
+
+	/**
+	 * Ocupacao de um participante: bytes das versoes CORRENTES que ele criou, sem lapide. E a leitura
+	 * da cota (doc 20 §10). {@code coalesce} e obrigatorio: sem linha devolve NULL, e um NULL que vira
+	 * zero por acidente e a diferenca entre "nao ocupa nada" e "nao medido".
+	 */
+	private static final String BYTES_OWNED_BY = """
+		select coalesce(sum(bytes), 0)
+		from network_storage_objects
+		where created_by = ? and superseded_by is null and state <> 'DELETED'
 		""";
 
 	/**
@@ -482,12 +552,12 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		// O LIKE é prefixo literal: o '%' do cliente seria curinga e listaria outra coisa.
 		String pattern = escapeLike(prefix == null ? "" : prefix) + "%";
 		String after = afterKey == null ? "" : afterKey;
-		return jdbc.query(LIST, OBJECT_MAPPER, bucket, pattern, after, limit);
+		return jdbc.query(LIST, OBJECT_MAPPER, bucket, pattern, after, Timestamp.from(Instant.now()), limit);
 	}
 
 	@Override
 	public List<String> bucketsOf(String ownerUserId) {
-		return jdbc.query(BUCKETS_OF, (rs, row) -> rs.getString(1), ownerUserId);
+		return jdbc.query(BUCKETS_OF, (rs, row) -> rs.getString(1), ownerUserId, Timestamp.from(Instant.now()));
 	}
 
 	@Override
@@ -513,6 +583,18 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	}
 
 	@Override
+	public List<StorageObject> withOnlyReplicaZero(int limit) {
+		// O "agora" vem do Java, não do relógio do banco: é o mesmo instante em que a varredura e a
+		// leitura decidem que um objeto venceu, e um fuso do servidor não muda a resposta.
+		return jdbc.query(WITH_ONLY_REPLICA_ZERO, OBJECT_MAPPER, Timestamp.from(Instant.now()), limit);
+	}
+
+	@Override
+	public List<StoragePlacement> placementsInState(StoragePlacement.State state) {
+		return jdbc.query(SELECT_PLACEMENTS_BY_STATE, PLACEMENT_MAPPER, state.name());
+	}
+
+	@Override
 	public List<StorageObject> listDeletedBefore(Instant before, String afterBucket, String afterKey, int limit) {
 		// Cursor nulo vira par vazio: `? = ''` desliga o filtro e a primeira página começa do início
 		// de todos os buckets, inclusive de bucket que começa com o menor byte.
@@ -526,6 +608,12 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	@Override
 	public Optional<StoragePlacement> placementOn(String objectId, String nodeId) {
 		return jdbc.query(SELECT_PLACEMENT_ON, PLACEMENT_MAPPER, objectId, nodeId).stream().findFirst();
+	}
+
+	@Override
+	public long bytesOwnedBy(String ownerUserId) {
+		Long total = jdbc.queryForObject(BYTES_OWNED_BY, Long.class, ownerUserId);
+		return total == null ? 0L : total;
 	}
 
 	@Override
@@ -557,6 +645,12 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 
 	@Override
 	public List<StoragePlacement> placementsOnNode(String nodeId) {
+		return jdbc.query(SELECT_NODE_PLACEMENTS, PLACEMENT_MAPPER, nodeId);
+	}
+
+	@Override
+	public List<StoragePlacement> copiesOnNode(String nodeId) {
+		// Em qualquer estado: a colocação precisa ver também a designação pendente, que reserva folga.
 		return jdbc.query(SELECT_NODE_PLACEMENTS, PLACEMENT_MAPPER, nodeId);
 	}
 

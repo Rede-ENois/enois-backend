@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.StringUtils;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.http.converter.HttpMessageNotWritableException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
@@ -36,8 +37,21 @@ public class GlobalExceptionHandler {
 
 	private final com.socialcoisa.rede.ops.monitoring.MonitoringService monitoring;
 
-	GlobalExceptionHandler(com.socialcoisa.rede.ops.monitoring.MonitoringService monitoring) {
+	/**
+	 * Este bean web e criado cedo, antes de o contexto completar; a sessao e o relogio so existem
+	 * quando chega o primeiro pedido. Por isso o provider: a busca acontece no thread do pedido, e
+	 * nao no do boot — que e onde um campo injetado ficaria preso.
+	 */
+	private final org.springframework.beans.factory.ObjectProvider<com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository> authSessions;
+
+	private final org.springframework.beans.factory.ObjectProvider<java.time.Clock> clock;
+
+	GlobalExceptionHandler(com.socialcoisa.rede.ops.monitoring.MonitoringService monitoring,
+			org.springframework.beans.factory.ObjectProvider<com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository> authSessions,
+			org.springframework.beans.factory.ObjectProvider<java.time.Clock> clock) {
 		this.monitoring = monitoring;
+		this.authSessions = authSessions;
+		this.clock = clock;
 	}
 
 	/**
@@ -73,7 +87,27 @@ public class GlobalExceptionHandler {
 		if (exception.retryAfterSeconds() > 0) {
 			response.header("Retry-After", Long.toString(exception.retryAfterSeconds()));
 		}
-		return response.body(new ErrorResponse(exception.code(), exception.getMessage(), Instant.now()));
+		return response.body(new ErrorResponse(exception.code(), exception.getMessage(), Instant.now(),
+			exception.detail() != null ? exception.detail() : sessionDetail(exception, request)));
+	}
+
+	/**
+	 * O 401 de sessao invalidado por troca de senha ou de e-mail. O corpo continua sendo um 401
+	 * comum; o detalhe e o que deixa o app dizer "sua senha mudou, entre com a nova" em vez de
+	 * mandar a pessoa desconfiar do proprio login.
+	 *
+	 * <p>So pergunta quando o token chegou COM este pedido: no cabecalho ou (transformado em cabecalho
+	 * pelo {@code SessionCookieFilter}) no cookie. Sem nenhum dos dois, o 401 e de token que se
+	 * perdeu no caminho — e a resposta nao deve contar nada sobre ele.</p>
+	 */
+	private String sessionDetail(ApiException exception, jakarta.servlet.http.HttpServletRequest request) {
+		if (exception.status() != 401 || !"UNAUTHENTICATED".equals(exception.code()) || request == null) {
+			return null;
+		}
+		String token = request.getHeader(SessionCookieFilter.SESSION_HEADER);
+		return CurrentUserResolver
+			.unauthenticated(token, StringUtils.hasText(token), authSessions.getIfAvailable(), clock.getIfAvailable())
+			.detail();
 	}
 
 	/**

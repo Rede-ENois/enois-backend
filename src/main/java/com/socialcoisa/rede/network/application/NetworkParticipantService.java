@@ -17,6 +17,7 @@ import com.socialcoisa.rede.feed.application.port.out.AuditLogRepository;
 import com.socialcoisa.rede.feed.domain.UserId;
 import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
+import com.socialcoisa.rede.network.domain.NodeAvailability;
 import com.socialcoisa.rede.network.domain.StorageNodeKind;
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -34,9 +35,6 @@ import com.socialcoisa.rede.shared.web.ApiException;
 public class NetworkParticipantService {
 
 	private static final int MAX_LIST = 200;
-
-	/** Quantas reconexões recentes entram na soma da disponibilidade. */
-	private static final int RECONNECT_SAMPLE = 200;
 
 	/**
 	 * A ação de auditoria em que o NÓ é o ator: o resultado que ele entregou foi recusado pela
@@ -57,12 +55,14 @@ public class NetworkParticipantService {
 	private final AuditLogRepository audit;
 	private final NetworkNodeService lifecycle;
 	private final com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository storageBandwidth;
+	private final NodeUptimeService uptime;
 	private final Clock clock;
 	private final long staleSeconds;
 
 	NetworkParticipantService(NetworkNodeRepository nodes, NetworkTaskRepository tasks, AuditLogRepository audit,
 			NetworkNodeService lifecycle,
 			com.socialcoisa.rede.network.application.port.out.NodeStorageBandwidthRepository storageBandwidth,
+			NodeUptimeService uptime,
 			Clock clock,
 			// Mesma janela de "vivo" do painel, do scheduler e da reconexão: um nó "online" aqui e
 			// "fora" no painel seria o participante vendo dois números para a mesma coisa.
@@ -72,6 +72,7 @@ public class NetworkParticipantService {
 		this.audit = audit;
 		this.lifecycle = lifecycle;
 		this.storageBandwidth = storageBandwidth;
+		this.uptime = uptime;
 		this.clock = clock;
 		this.staleSeconds = staleSeconds;
 	}
@@ -82,7 +83,7 @@ public class NetworkParticipantService {
 		Map<String, Long> done = tasks.countDoneByNode(found.stream().map(NetworkNode::id).toList());
 		return found.stream()
 			.map(node -> new NodeWithContribution(node, done.getOrDefault(node.id(), 0L), requeued(node.id()),
-				availability(node), storageBandwidth.findByNode(node.id())))
+				availability(node), storageBandwidth.findByNode(node.id()), uptime.last(node, NodeUptimeService.DEFAULT_WINDOW_DAYS)))
 			.toList();
 	}
 
@@ -94,7 +95,8 @@ public class NetworkParticipantService {
 			throw new ApiException(404, "NODE_UNKNOWN", "No nao encontrado.");
 		}
 		return new NodeWithContribution(node, tasks.countDoneByNode(List.of(nodeId)).getOrDefault(nodeId, 0L),
-			requeued(nodeId), availability(node), storageBandwidth.findByNode(nodeId));
+			requeued(nodeId), availability(node), storageBandwidth.findByNode(nodeId),
+			uptime.last(node, NodeUptimeService.DEFAULT_WINDOW_DAYS));
 	}
 
 	/**
@@ -169,6 +171,12 @@ public class NetworkParticipantService {
 		return myNode(ownerUserId, lifecycle.resumeParticipation(nodeId, ownerUserId).id());
 	}
 
+	/** A disponibilidade do nó do participante numa janela de dias — 404 quando não é dele. */
+	@Transactional(readOnly = true)
+	public NodeAvailability uptime(String ownerUserId, String nodeId, int days) {
+		return uptime.last(myNode(ownerUserId, nodeId).node(), days);
+	}
+
 	/** Solicitação de ingresso: o token nasce com o próprio participante como dono e criador. */
 	@Transactional
 	public NetworkNodeService.IssuedToken requestJoin(String ownerUserId, String displayName) {
@@ -180,32 +188,35 @@ public class NetworkParticipantService {
 	 * guardam {@code offlineForSeconds} no metadado.
 	 */
 	private Availability availability(NetworkNode node) {
-		List<AuditLog> rows = audit.findByTargetAndAction(node.id(), NODE_RECONNECTED, RECONNECT_SAMPLE);
-		int quedas = (int) audit.countByActorAndAction(new UserId(node.id()), NODE_RECONNECTED);
+		// Antes: a soma vinha de uma AMOSTRA de 200 linhas e era comparada com o total de quedas.
+		// A partir da 201ª, `completo` virava `false` para sempre e o tempo fora ficava um piso.
+		// Agora: a soma é sobre TODAS as linhas da ação — o número é o total, e `completo` não
+		// depende mais do tamanho do histórico.
+		List<String> metadados = audit.allMetadataFor(node.id(), NODE_RECONNECTED);
 		long soma = 0;
 		int somadas = 0;
 		Long ultima = null;
-		for (AuditLog row : rows) {
-			Long fora = offlineSeconds(row.metadata());
+		// A consulta não promete ordem; a última ausência é a da linha mais NOVA, e ela só é
+		// conhecida depois de percorrer todas.
+		for (String metadata : metadados) {
+			Long fora = offlineSeconds(metadata);
 			if (fora == null) {
-				// Linha ilegível continua CONTANDO como queda — ela prova que houve uma —, mas não
-				// entra na soma: somar zero diria "voltou no mesmo instante", que é outra coisa.
+				// Linha legível como queda (ela está na lista) mas sem o intervalo: não entra na soma,
+				// porque somar zero diria "voltou no mesmo instante", que é outra coisa.
 				continue;
 			}
 			soma += fora;
 			somadas++;
-			if (ultima == null) {
-				// A consulta vem ordenada do mais recente para o mais antigo: a primeira que se lê é
-				// a última ausência.
-				ultima = fora;
-			}
+		}
+		List<AuditLog> recentes = audit.findByTargetAndAction(node.id(), NODE_RECONNECTED, 1);
+		if (!recentes.isEmpty()) {
+			ultima = offlineSeconds(recentes.get(0).metadata());
 		}
 		boolean online = node.alive(clock.instant(), Duration.ofSeconds(staleSeconds));
-		// `offlineSeconds` cobre `quedas` ausências, ou só as que couberam na amostra? A tela do
-		// participante tem de dizer isso: uma soma que para no 200º registro e não avisa faria um
-		// nó com histórico longo aparecer mais disponível do que foi.
-		boolean completo = somadas == quedas;
-		return new Availability(quedas, somadas, soma, ultima, online, completo);
+		int quedas = metadados.size();
+		// `complete` agora quer dizer o que o nome promete: a soma é o total. `measuredOutages` diz
+		// quantas das quedas tinham o intervalo gravado — as duas perguntas são diferentes.
+		return new Availability(quedas, somadas, soma, ultima, online, true);
 	}
 
 	/** Ler o {@code offlineForSeconds} do metadado — {@code null} quando a linha não tem o campo. */
@@ -237,8 +248,12 @@ public class NetworkParticipantService {
 	 * tipo de storage (brief §6): tipo ausente do mapa usa a banda geral do nó, e um mapa vazio diz
 	 * "não especializou nenhum" — nunca "zero".
 	 */
+	/**
+	 * @param uptime a disponibilidade por DIA dos últimos sete dias (V369); a {@code availability}
+	 *               continua sendo as transições da trilha, que é o fato de curto prazo
+	 */
 	public record NodeWithContribution(NetworkNode node, long tasksDone, long tasksRequeued, Availability availability,
-			Map<StorageNodeKind, Integer> storageBandwidth) {
+			Map<StorageNodeKind, Integer> storageBandwidth, NodeAvailability uptime) {
 	}
 
 	/**
@@ -255,9 +270,10 @@ public class NetworkParticipantService {
 	 * @param offlineSeconds     soma do tempo que ele passou fora, somando os intervalos medidos
 	 * @param lastOfflineSeconds a última ausência conhecida — o caso recente que ele vai querer olhar
 	 * @param online             se ele está dentro da janela agora (mesmo critério do painel)
-	 * @param complete           {@code false} quando {@code offlineSeconds} soma menos ausências do que
-	 *                           {@code outages}. O número deixa de ser o total e a tela precisa dizer
-	 *                           que é um piso, não o tempo fora de verdade.
+	 * @param complete           a soma cobre todas as ausências. Sempre {@code true} desde o V369: a
+	 *                           soma passou a ler a trilha inteira, e uma amostra que para no 200º
+	 *                           registro não é um total. O campo fica porque é contrato de tela —
+	 *                           cliente antigo que o lê continua vendo a verdade.
 	 */
 	public record Availability(int outages, int measuredOutages, long offlineSeconds, Long lastOfflineSeconds,
 			boolean online, boolean complete) {

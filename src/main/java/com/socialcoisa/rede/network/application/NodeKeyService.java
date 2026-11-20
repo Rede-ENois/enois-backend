@@ -16,6 +16,7 @@ import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NodeStatus;
 import com.socialcoisa.rede.shared.audit.AuditTrail;
 import com.socialcoisa.rede.shared.security.Hashes;
+import com.socialcoisa.rede.shared.security.IpRateLimiter;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 /**
@@ -43,11 +44,21 @@ public class NodeKeyService {
 	private final NetworkNodeRepository nodes;
 	private final AuditTrail audit;
 	private final Clock clock;
+	/** Teto de chave errada por nó. Nulo = sem teto (testes e leitores que não montam o limiter). */
+	private final IpRateLimiter tentativas;
 
 	NodeKeyService(NodeKeyRepository keys, NetworkNodeRepository nodes, AuditTrail audit, Clock clock) {
+		this(keys, nodes, audit, clock, null);
+	}
+
+	/** O construtor do Spring: dois construtores e nenhum marcado é "no default constructor found". */
+	@org.springframework.beans.factory.annotation.Autowired
+	NodeKeyService(NodeKeyRepository keys, NetworkNodeRepository nodes, AuditTrail audit, Clock clock,
+			IpRateLimiter tentativas) {
 		this.keys = keys;
 		this.nodes = nodes;
 		this.audit = audit;
+		this.tentativas = tentativas;
 		this.clock = clock;
 	}
 
@@ -105,15 +116,23 @@ public class NodeKeyService {
 	/**
 	 * Autentica uma requisição de nó. Devolve o nó só quando a chave confere, está vigente e o nó
 	 * não está revogado — qualquer outra combinação é 401, sem dizer qual parte falhou.
+	 *
+	 * <p>A chave errada conta para o teto do <b>nó</b> ({@link IpRateLimiter#NODE_AUTH}): o id do
+	 * nó é público, então quem o conhece testaria segredos sem limite. O acerto não gasta o
+	 * orçamento — quem acertou é o dono. Estourado o teto, a resposta é {@code 429} com o mesmo
+	 * texto: dizer "chave inválida" ali esconderia que o bloqueio é de tentativas.</p>
 	 */
 	@Transactional
 	public NetworkNode authenticate(String nodeId, String presentedKey) {
+		exigirOrcamentoDeTentativas(nodeId);
 		if (nodeId == null || nodeId.isBlank() || presentedKey == null || presentedKey.isBlank()) {
+			contaFalha(nodeId);
 			throw new ApiException(401, "NODE_KEY_INVALID", "Credencial de no ausente.");
 		}
 		Optional<NodeKeyRepository.NodeKeyRecord> match = keyMatching(nodeId, presentedKey)
 			.filter(NodeKeyRepository.NodeKeyRecord::active);
 		if (match.isEmpty()) {
+			contaFalha(nodeId);
 			throw new ApiException(401, "NODE_KEY_INVALID", "Credencial de no invalida.");
 		}
 		NetworkNode node = requireNode(nodeId.trim());
@@ -139,10 +158,13 @@ public class NodeKeyService {
 	 */
 	@Transactional
 	public ResultCredential authenticateForResult(String nodeId, String presentedKey) {
+		exigirOrcamentoDeTentativas(nodeId);
 		if (nodeId == null || nodeId.isBlank() || presentedKey == null || presentedKey.isBlank()) {
+			contaFalha(nodeId);
 			throw new ApiException(401, "NODE_KEY_INVALID", "Credencial de no ausente.");
 		}
 		if (keyMatching(nodeId, presentedKey).isEmpty()) {
+			contaFalha(nodeId);
 			throw new ApiException(401, "NODE_KEY_INVALID", "Credencial de no invalida.");
 		}
 		NetworkNode node = requireNode(nodeId.trim());
@@ -155,6 +177,24 @@ public class NodeKeyService {
 	}
 
 	/** A chave que confere com o hash apresentado e pertence ao nó informado. Não olha revogação. */
+	/**
+	 * Sem orçamento, nem a comparação acontece: o custo de recusar antes é o que mantém o
+	 * Control Plane respondendo a quem tem a chave certa enquanto alguém testa a errada.
+	 */
+	private void exigirOrcamentoDeTentativas(String nodeId) {
+		if (tentativas != null && nodeId != null && !nodeId.isBlank()
+				&& !tentativas.permiteTentarAutenticacao(IpRateLimiter.NODE_AUTH, nodeId.trim())) {
+			throw new ApiException(429, "NODE_AUTH_RATE_LIMITED",
+				"Muitas credenciais de no invalidas para este no. Tente de novo mais tarde.");
+		}
+	}
+
+	private void contaFalha(String nodeId) {
+		if (tentativas != null && nodeId != null && !nodeId.isBlank()) {
+			tentativas.registraFalhaDeAutenticacao(IpRateLimiter.NODE_AUTH, nodeId.trim());
+		}
+	}
+
 	private Optional<NodeKeyRepository.NodeKeyRecord> keyMatching(String nodeId, String presentedKey) {
 		return keys.findByHash(Hashes.sha256Hex(presentedKey.trim()))
 			.filter(record -> record.nodeId().equals(nodeId.trim()));

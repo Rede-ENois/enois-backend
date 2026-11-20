@@ -47,7 +47,7 @@ class SharedFrontRateLimitTests {
 
 	private IdentityRateLimitFilter identityFilter(int signupLimit) {
 		IpRateLimiter limiter = new IpRateLimiter(clock, signupLimit, 60, 20, 15, 5, 15, 5, 15, 20, 15, 5, 60,
-			120, 15, 30, 60, 3, 60, 10, 15);
+			120, 15, 30, 60, 3, 60, 10, 15, 10, 5, 20, 5, 600, 1);
 		return new IdentityRateLimitFilter(limiter, resolver);
 	}
 

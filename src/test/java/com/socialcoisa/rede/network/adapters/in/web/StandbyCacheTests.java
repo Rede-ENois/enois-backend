@@ -12,6 +12,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 
+import com.socialcoisa.rede.network.application.StandbyDumpSnapshotProvider;
 import com.socialcoisa.rede.network.application.StandbyDumpSource;
 import com.socialcoisa.rede.network.application.StandbyFailureRecorder;
 import com.socialcoisa.rede.network.application.StandbySyncService;
@@ -81,8 +82,10 @@ class StandbyCacheTests {
 		NetworkNode node = org.mockito.Mockito.mock(NetworkNode.class);
 		when(node.id()).thenReturn("nd_1");
 		when(nodes.findById(anyString())).thenReturn(Optional.of(node));
-		return new StandbySyncService(snapshots, authorities, nodes, fonte, mock(StandbyFailureRecorder.class),
-			mock(AuditTrail.class), Clock.fixed(agora, ZoneOffset.UTC), 6, 4, cacheSeconds);
+		Clock relogio = Clock.fixed(agora, ZoneOffset.UTC);
+		return new StandbySyncService(snapshots, authorities, nodes,
+			new StandbyDumpSnapshotProvider(fonte, relogio, cacheSeconds), mock(StandbyFailureRecorder.class),
+			mock(AuditTrail.class), relogio, 6, 4);
 	}
 
 	@Test

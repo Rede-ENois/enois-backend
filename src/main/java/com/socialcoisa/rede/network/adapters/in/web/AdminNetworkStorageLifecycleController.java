@@ -15,9 +15,13 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.network.application.StorageCatalogService;
 import com.socialcoisa.rede.network.application.StorageLifecycle;
+import com.socialcoisa.rede.network.application.StorageMultipartSweeper;
+import com.socialcoisa.rede.network.application.StoragePendingRelease;
 import com.socialcoisa.rede.network.domain.StorageBucketPolicy;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.shared.web.AdminGuard;
+import com.socialcoisa.rede.network.application.StorageReplicaAdoption;
+import com.socialcoisa.rede.shared.audit.AuditTrail;
 import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
@@ -36,15 +40,100 @@ class AdminNetworkStorageLifecycleController {
 
 	private final StorageCatalogService storage;
 	private final StorageLifecycle lifecycle;
+	private final StorageReplicaAdoption replicaAdoption;
+	private final StoragePendingRelease pendingRelease;
+	private final StorageMultipartSweeper multipartSweeper;
 	private final CurrentUserResolver currentUserResolver;
 	private final AdminGuard adminGuard;
+	private final AuditTrail audit;
 
 	AdminNetworkStorageLifecycleController(StorageCatalogService storage, StorageLifecycle lifecycle,
-			CurrentUserResolver currentUserResolver, AdminGuard adminGuard) {
+			StorageReplicaAdoption replicaAdoption, StoragePendingRelease pendingRelease,
+			StorageMultipartSweeper multipartSweeper, CurrentUserResolver currentUserResolver,
+			AdminGuard adminGuard, AuditTrail audit) {
 		this.storage = storage;
 		this.lifecycle = lifecycle;
+		this.replicaAdoption = replicaAdoption;
+		this.pendingRelease = pendingRelease;
+		this.multipartSweeper = multipartSweeper;
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
+		this.audit = audit;
+	}
+
+	/**
+	 * Os uploads multipart ainda abertos e as partes que eles têm (doc 18 §4.2): o que um cliente que
+	 * morreu no meio deixa para trás. {@code dryRun}, sem gravar.
+	 */
+	@GetMapping("/multipart")
+	StorageMultipartSweeper.Report multipart(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(defaultValue = "0") int limit) {
+		admin(sessionToken);
+		return multipartSweeper.report(limit);
+	}
+
+	/**
+	 * Coleta os uploads multipart vencidos — o {@code sweep()} que o doc 18 §4.2 prometia e não
+	 * existia. Vence o prazo gravado no início de cada upload ({@code expires_at}), não o da
+	 * instalação; o vencido tem partes, linha e diretório apagados pelo mesmo {@code abort} do
+	 * cliente, e o que sobra de diretório sem linha é recolhido na mesma passada. {@code dryRun} é o
+	 * padrão.
+	 */
+	@PostMapping("/multipart/sweep")
+	StorageMultipartSweeper.Report sweepMultipart(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(name = "limit", defaultValue = "0") int limit,
+			@RequestParam(name = "dryRun", defaultValue = "true") boolean dryRun) {
+		CurrentUser admin = admin(sessionToken);
+		StorageMultipartSweeper.Report relatorio = multipartSweeper.collect(limit, dryRun);
+		if (!dryRun && !relatorio.removed().isEmpty()) {
+			audit.record(admin.id().value(), "STORAGE_MULTIPART_SWEEP_RUN", "storage",
+				"{\"removed\":" + relatorio.removed().size() + ",\"orphans\":" + relatorio.orphansRemoved().size()
+					+ "}");
+		}
+		return relatorio;
+	}
+
+	/**
+	 * As designações que ainda esperam confirmação, da mais antiga para a mais nova, com a idade e se
+	 * já passaram do prazo (doc 13 §5.11).
+	 *
+	 * <p>É a leitura que faltava para uma {@code PENDING_REMOTE} perdida: o healer a responde
+	 * {@code ALREADY_DESIGNATED} e a adoção de réplica única a pula, então sem esta lista o operador
+	 * não tinha como saber <b>qual</b> designação está segurando a lacuna.</p>
+	 */
+	@GetMapping("/pending")
+	StoragePendingRelease.Report pending(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(defaultValue = "0") int limit) {
+		admin(sessionToken);
+		return pendingRelease.pending(limit);
+	}
+
+	/**
+	 * Solta as designações vencidas: {@code PENDING_REMOTE} sem confirmação há mais que
+	 * {@code maxAgeMinutes} (padrão {@code rede.storage.replication.pending-max-age-minutes}) vira
+	 * {@code GONE}, e a lacuna volta a ser curável pelo {@code /storage/heal} e pela adoção de réplica
+	 * única. O padrão é <b>seco</b>.
+	 *
+	 * <p>Não liga o auto-heal: é o ato de operador que antes só existia dentro do worker, que nasce
+	 * desligado. Não apaga corpo de nó e não designa a cópia nova — só devolve a lacuna a quem cura.</p>
+	 */
+	@PostMapping("/pending/release")
+	StoragePendingRelease.Report releasePending(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(name = "maxAgeMinutes", required = false) Integer maxAgeMinutes,
+			@RequestParam(name = "limit", defaultValue = "0") int limit,
+			@RequestParam(name = "dryRun", defaultValue = "true") boolean dryRun) {
+		CurrentUser admin = admin(sessionToken);
+		StoragePendingRelease.Report relatorio = pendingRelease.releaseExpired(admin.id().value(), maxAgeMinutes,
+			limit, dryRun);
+		if (!dryRun && !relatorio.pending().isEmpty()) {
+			audit.record(admin.id().value(), "STORAGE_PENDING_RELEASE_RUN", "storage",
+				"{\"released\":" + relatorio.pending().size() + ",\"maxAgeMinutes\":" + relatorio.maxAgeMinutes()
+					+ "}");
+		}
+		return relatorio;
 	}
 
 	/** A política vigente do bucket. Bucket sem linha responde os padrões, com {@code configured=false}. */
@@ -97,6 +186,38 @@ class AdminNetworkStorageLifecycleController {
 			@RequestParam(defaultValue = "true") boolean dryRun) {
 		admin(sessionToken);
 		return LifecycleView.of(lifecycle.run(dryRun));
+	}
+
+	/**
+	 * O que hoje está <b>só</b> na réplica 0 (doc 13 §5.10): gravado e servível, sem cópia nem designação
+	 * de nó. É a leitura que o operador faz antes de pedir a cópia.
+	 */
+	@GetMapping("/replica-zero")
+	StorageReplicaAdoption.Report replicaZero(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		admin(sessionToken);
+		return replicaAdoption.preview();
+	}
+
+	/**
+	 * Pede a cópia de cada objeto que só tem a réplica 0, designando um nó com a mesma régua de
+	 * colocação do upload. O padrão é <b>seco</b>: pedir transferência de banda de um participante é
+	 * ato de operador, com o número na mão.
+	 *
+	 * <p>A designação nasce {@code PENDING_REMOTE} e só vira cópia quando o nó confirma — quem manda
+	 * gravar é o despacho da réplica, não esta rota. Idempotente: objeto que já tem qualquer colocação
+	 * de nó (inclusive pendente) não é tocado.</p>
+	 */
+	@PostMapping("/replica-zero")
+	StorageReplicaAdoption.Report adoptReplicaZero(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(name = "dryRun", defaultValue = "true") boolean dryRun) {
+		CurrentUser admin = admin(sessionToken);
+		StorageReplicaAdoption.Report relatorio = replicaAdoption.run(dryRun);
+		if (!dryRun && !relatorio.adopted().isEmpty()) {
+			audit.record(admin.id().value(), "STORAGE_REPLICA_ADOPTED", "storage",
+				"{\"objects\":" + relatorio.adopted().size() + "}");
+		}
+		return relatorio;
 	}
 
 	private CurrentUser admin(String sessionToken) {

@@ -64,11 +64,15 @@ class NetworkStandbyTests {
 
 		volatile boolean fail;
 
+		/** Quantas vezes o banco foi lido — uma leitura por cópia que recebe ramo, não por pedido. */
+		final java.util.concurrent.atomic.AtomicInteger leituras = new java.util.concurrent.atomic.AtomicInteger();
+
 		@Override
 		public byte[] dump(long offset) {
 			if (fail) {
 				throw new IllegalStateException("banco fora");
 			}
+			leituras.incrementAndGet();
 			return offset <= 0 ? DUMP.clone() : java.util.Arrays.copyOfRange(DUMP, (int) offset, DUMP.length);
 		}
 	}
@@ -298,15 +302,20 @@ class NetworkStandbyTests {
 			context.getBean(com.socialcoisa.rede.network.application.port.out.StandbySnapshotRepository.class),
 			context.getBean(com.socialcoisa.rede.network.application.port.out.NetworkAuthorityRepository.class),
 			context.getBean(com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository.class),
-			offset -> "abc".getBytes(StandardCharsets.UTF_8),
+			new com.socialcoisa.rede.network.application.StandbyDumpSnapshotProvider(
+				offset -> "abc".getBytes(StandardCharsets.UTF_8), java.time.Clock.systemUTC(), 600),
 			context.getBean(com.socialcoisa.rede.network.application.StandbyFailureRecorder.class),
 			context.getBean(com.socialcoisa.rede.shared.audit.AuditTrail.class),
-			java.time.Clock.systemUTC(), 6, 64, 600);
+			java.time.Clock.systemUTC(), 6, 64);
 
+		// Sem transação (o serviço invocado direto): a falha é gravada na hora, não no commit.
 		org.assertj.core.api.Assertions.assertThatThrownBy(() -> shortSource.download(admin.userId(), node.id(), 0))
 			.isInstanceOf(com.socialcoisa.rede.shared.web.ApiException.class)
 			.satisfies(error -> assertThat(((com.socialcoisa.rede.shared.web.ApiException) error).code())
 				.isEqualTo("STANDBY_DUMP_UNAVAILABLE"));
+		assertThat(jdbc.queryForObject(
+			"select state from network_standby_snapshots where node_id = ?", String.class, node.id()))
+			.isEqualTo("FAILED");
 		assertThat(jdbc.queryForObject(
 			"select state from network_standby_snapshots where node_id = ?", String.class, node.id()))
 			.isEqualTo("FAILED");
@@ -371,6 +380,81 @@ class NetworkStandbyTests {
 			.header("X-Node-Key", "chave-errada").contentType(MediaType.APPLICATION_JSON)
 			.content(objectMapper.writeValueAsString(Map.of("reason", "x"))))
 			.andExpect(status().is4xxClientError());
+	}
+
+	/**
+	 * A cópia que o nó perdeu para sempre (gravou? restaurou?) chega pelo corpo vazio ou com motivo
+	 * longo, e nenhum deles pode deixar a linha em {@code SYNCING}.
+	 */
+	@Test
+	void noSemMotivoEReasonLongaNaoDeixamACopiaCopiando() throws Exception {
+		var admin = adminSession();
+		declareQuorum(admin.userId());
+		var node = activeNode(admin.token(), "no-reserva-sem-motivo-" + admin.userId());
+		requestCopy(admin.token(), node.id());
+
+		mockMvc.perform(post("/network/standby/failed").header("X-Node-Id", node.id())
+			.header("X-Node-Key", node.key()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.state").value("FAILED"))
+			.andExpect(jsonPath("$.reason").value("o no nao declarou o motivo"));
+
+		requestCopy(admin.token(), node.id());
+		mockMvc.perform(post("/network/standby/failed").header("X-Node-Id", node.id())
+			.header("X-Node-Key", node.key()).contentType(MediaType.APPLICATION_JSON)
+			.content(objectMapper.writeValueAsString(Map.of("reason", "x".repeat(900)))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.state").value("FAILED"));
+		assertThat(jdbc.queryForObject(
+			"select length(failure_reason) from network_standby_snapshots where node_id = ?", Integer.class,
+			node.id())).isEqualTo(200);
+		assertThat(standby().status(node.id()).canTakeOver()).isFalse();
+	}
+
+	/**
+	 * A referência do digest é a linha da cópia, não a chegada do pedido: uma cópia nova começando com
+	 * um dump da janela na mão NÃO herda o arquivo da anterior, e a confirmação dela cobra o arquivo
+	 * dela. Com a instância vendo os dois nós, isto é o que separa uma correção de um `digest==null`.
+	 */
+	@Test
+	void copiaNovaNaoHerdaODumpDaAnteriorEConfirmaSOComOProprioArquivo() throws Exception {
+		var admin = adminSession();
+		declareQuorum(admin.userId());
+		var a = activeNode(admin.token(), "no-reserva-herda-a-" + admin.userId());
+		var b = activeNode(admin.token(), "no-reserva-herda-b-" + admin.userId());
+		var provider = context.getBean(com.socialcoisa.rede.network.application.StandbyDumpSnapshotProvider.class);
+		provider.forget();
+		dumpSource.leituras.set(0);
+
+		requestCopy(admin.token(), a.id());
+		mockMvc.perform(get("/network/standby/dump").header("X-Node-Id", a.id()).header("X-Node-Key", a.key()))
+			.andExpect(status().isOk());
+
+		// Cópia nova do OUTRO nó: o arquivo dela é o que ela recebeu, e não o da primeira.
+		requestCopy(admin.token(), b.id());
+		var doB = mockMvc.perform(get("/network/standby/dump").header("X-Node-Id", b.id())
+			.header("X-Node-Key", b.key()))
+			.andExpect(status().isOk())
+			.andReturn();
+		byte[] corpoB = doB.getResponse().getContentAsByteArray();
+		String digestDoB = doB.getResponse().getHeader("X-Standby-Sha256");
+		assertThat(corpoB).isEqualTo(DUMP);
+
+		// Com um digest que NÃO é o do arquivo que este nó recebeu, a confirmação é recusada: o valor do
+		// digest não pode ser o que a linha guardou (aceitar tudo) nem o de um arquivo que ele não leu.
+		mockMvc.perform(post("/network/standby/complete").header("X-Node-Id", b.id())
+			.header("X-Node-Key", b.key()).contentType(MediaType.APPLICATION_JSON)
+			.content(objectMapper.writeValueAsString(Map.of("bytes", DUMP.length, "sha256", "0".repeat(64)))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.state").value("FAILED"));
+		assertThat(digestDoB).isEqualTo(sha256(DUMP));
+
+		// E a primeira cópia ainda termina: a confirmação dela cobra o arquivo dela, não o do segundo nó.
+		mockMvc.perform(post("/network/standby/complete").header("X-Node-Id", a.id())
+			.header("X-Node-Key", a.key()).contentType(MediaType.APPLICATION_JSON)
+			.content(objectMapper.writeValueAsString(Map.of("bytes", DUMP.length, "sha256", sha256(DUMP)))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.state").value("READY"));
 	}
 
 	// ---------------------------------------------------------------- promoção com a cópia

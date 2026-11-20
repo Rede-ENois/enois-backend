@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
 import com.socialcoisa.rede.network.domain.NetworkNode;
+import com.socialcoisa.rede.network.domain.NodeStatus;
 import com.socialcoisa.rede.network.domain.NetworkRegions;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
@@ -130,7 +131,24 @@ public class StorageScrubber {
 
 	/** O que a varredura encontrou, incluindo os objetos que precisam de cópia nova. */
 	public record Report(int replicasExpected, int objectsScanned, List<UnderReplicated> underReplicated,
-			int bodiesRelidos, List<Divergent> divergent, Map<String, Long> byDurability) {
+			int bodiesRelidos, List<Divergent> divergent, Map<String, Long> byDurability,
+			List<OnRevokedNode> onRevokedNode) {
+
+		/** Compatível com quem montava o relatório antes do ciclo 73. */
+		public Report(int replicasExpected, int objectsScanned, List<UnderReplicated> underReplicated,
+				int bodiesRelidos, List<Divergent> divergent, Map<String, Long> byDurability) {
+			this(replicasExpected, objectsScanned, underReplicated, bodiesRelidos, divergent, byDurability,
+				List.of());
+		}
+
+		/**
+		 * Uma cópia <b>confirmada</b> num nó que foi revogado e não volta. Ela não conta como
+		 * durabilidade (o nó não autentica mais) e o objeto aparece também em
+		 * {@link UnderReplicated}, para o healing repor. Este campo existe para o operador ver o que
+		 * <b>saiu</b> da conta: um objeto que "tinha 2 cópias" e agora tem 1 quase sempre é isto.
+		 */
+		public record OnRevokedNode(String objectId, int replica, String nodeId) {
+		}
 
 		/** Objeto com menos cópias confirmadas que o pedido, e quantas faltam. */
 		public record UnderReplicated(String objectId, int confirmed, int missing, List<String> nodesWithCopy) {
@@ -177,6 +195,7 @@ public class StorageScrubber {
 		int expected = placement.targetReplicas();
 		List<Report.UnderReplicated> gaps = new ArrayList<>();
 		List<Report.Divergent> divergentes = new ArrayList<>();
+		List<Report.OnRevokedNode> emNoRevogado = new ArrayList<>();
 		// Quantos objetos por nível, para o painel dizer a durabilidade EFETIVA (§9) sem afirmar a
 		// que a política pede: dois objetos com 2 cópias podem estar em níveis diferentes.
 		Map<String, Long> porNivel = new LinkedHashMap<>();
@@ -201,9 +220,24 @@ public class StorageScrubber {
 				}
 				// Durabilidade lê `copies` (todos os estados), não `placements` (só OK): a pergunta é
 				// quantas cópias o objeto tem, e uma cópia GONE ainda conta como réplica existente.
-				List<StoragePlacement> confirmed = catalog.copies(id)
+				List<StoragePlacement> ok = catalog.copies(id)
 					.stream()
 					.filter(p -> p.state() == StoragePlacement.State.OK)
+					.toList();
+				// Cópia num nó REVOGADO não é durabilidade: o nó não volta, não autentica mais e as
+				// chaves dele foram revogadas. Contá-la dizia "duas cópias" para um objeto que tem
+				// uma, e o healing nunca recebia a lacuna — o objeto ficava com durabilidade que
+				// existe só no catálogo. O placement já não escolhe nó revogado (`storageReady` exige
+				// ACTIVE); quem faltava era a leitura.
+				List<StoragePlacement> revogadas = ok.stream()
+					.filter(p -> nodes.findById(p.nodeId()).map(n -> n.status() == NodeStatus.REVOKED).orElse(false))
+					.toList();
+				if (!revogadas.isEmpty()) {
+					emNoRevogado.addAll(revogadas.stream().map(p -> new Report.OnRevokedNode(id, p.replica(),
+						p.nodeId())).toList());
+				}
+				List<StoragePlacement> confirmed = ok.stream()
+					.filter(p -> !revogadas.contains(p))
 					.toList();
 				Durability nivel = durability(id, confirmed, expected);
 				porNivel.merge(nivel.name(), 1L, Long::sum);
@@ -229,6 +263,16 @@ public class StorageScrubber {
 						boolean replicaZero = copia.replica() == 0;
 						boolean noLocal = donoDesteDisco != null && copia.nodeId().equals(donoDesteDisco);
 						if (!replicaZero && !noLocal) {
+							continue;
+						}
+						// Instalação sem corpo local (o catálogo tem uma réplica 0 que este processo
+						// não hospeda — é o caso do Control Plane servido sem disco de corpo): não há
+						// o que reler, e isso NÃO é divergência. Antes o `catch` abaixo transformava
+						// a ausência do serviço de corpo em "a cópia do CP não confere".
+						if (replicaZero && bodies == null) {
+							continue;
+						}
+						if (!replicaZero && nodeBodies == null) {
 							continue;
 						}
 						relidos++;
@@ -270,7 +314,8 @@ public class StorageScrubber {
 			audit.record("system", "STORAGE_SCRUB_DIVERGENT", bucket == null ? "*" : bucket,
 				"{\"copies\":" + divergentes.size() + ",\"at\":\"" + clock.instant() + "\"}");
 		}
-		return new Report(expected, scanned, List.copyOf(gaps), relidos, List.copyOf(divergentes), porNivel);
+		return new Report(expected, scanned, List.copyOf(gaps), relidos, List.copyOf(divergentes), porNivel,
+			List.copyOf(emNoRevogado));
 	}
 
 }

@@ -185,13 +185,62 @@ carrega a credencial do upload, e upload de outra conta responde 404 `NoSuchUplo
 para ela o upload não existe.
 
 **Abandono.** Partes de upload esquecido ocupam disco no nó. O prazo é gravado no início
-(`rede.storage.multipart.ttl-hours`, padrão 24 h; o cliente pode pedir menos) e `sweep()` descarta o
-vencido.
+(`rede.storage.multipart.ttl-hours`, padrão 24 h; o cliente pode pedir menos) — e até o ciclo 72
+nada o aplicava a um cliente que morresse no meio: o prazo só era conferido na **próxima parte**,
+que esse cliente nunca manda. A coleta existe agora, e está no §4.2.1.
 
 **Prova:** `S3MultipartTests` (7) — arquivo montado volta inteiro no GET; fora de ordem + reenvio;
 parte ausente recusa e o upload segue aberto; parte pequena que não é a última recusa; chave não
 existe no catálogo antes da conclusão; outra conta não usa; abort apaga. Mutações conferidas: aceitar
 parte ausente ou ignorar o mínimo de 5 MiB derrubam o teste correspondente.
+
+### 4.2.1 Coleta do upload abandonado (ciclo 72)
+
+**Antes:** a frase do §4.2 dizia que `sweep()` descartava o vencido, e o `sweep()` não existia. Um
+cliente que cai no meio do upload deixava, para sempre, a linha em
+`network_storage_multipart_uploads`, as partes em `network_storage_multipart_parts` e os bytes em
+`storageRoot/multipart/<uploadId>/`. Nada tinha prazo: o disco de quem contribui só crescia, e o
+painel não mostrava a conta.
+
+**Agora há duas rotas de admin e uma varredura automática:**
+
+| rota / gatilho | o que faz |
+|---|---|
+| `GET /admin/network/storage/multipart?limit=` | quantos uploads estão abertos, quantos venceram, quais venceram (com `ageMinutes`) e o total de partes. **Só lê** |
+| `POST /admin/network/storage/multipart/sweep?dryRun=&limit=` | coleta as vencidas; padrão **seco** |
+| `@Scheduled` (1 h, ligado de fábrica) | a mesma coleta, sem ninguém pedir |
+
+As decisões que valem estar ditas:
+
+- **vence o prazo gravado no início, não o da instalação.** O varredor lê `expires_at` de cada linha
+  e não recalcula nada: um upload começado com 1 h de prazo vence em 1 h, e um de 24 h não é apagado
+  por quem configurou menos. O `ttl-hours` continua sendo só o padrão do início;
+- **o vencido é apagado pelo mesmo `abort` do cliente.** Não há segunda forma de remover um upload:
+  partes (o `ON DELETE CASCADE` da V365 leva as que restarem), linha e o diretório inteiro;
+- **diretório sem linha é recolhido na mesma passada.** É a sobra de uma passada interrompida (linha
+  apagada, processo caiu antes do disco). Só o diretório **imediatamente** dentro de `multipart/` e
+  com o padrão do id é candidato — o varredor não desce por recursão para descobrir alvos, então não
+  tem como chegar a um caminho que o serviço não criou. Um nome fora do padrão (com `.`, por exemplo)
+  nunca é tocado;
+- **a coleta nasce ligada, ao contrário do auto-heal do Storage.** Ela não gera tráfego nem escolhe
+  o que replicar: só apaga o que o próprio cliente declarou vencido. Desligada, volta a ser o buraco;
+- **nada aqui toca o catálogo.** Um upload multipart que vence nunca virou objeto — é o desenho
+  ("nada vira objeto antes da conclusão") —, então não há cópia, durabilidade nem réplica a repor;
+- **uma auditoria por upload apagado** (`STORAGE_MULTIPART_EXPIRED`, com bucket, chave, dono e idade)
+  e uma por passada com algo removido (`STORAGE_MULTIPART_SWEEP_RUN`). Bucket e chave vêm do cliente:
+  entram escapados no JSON.
+
+**Prova:** `AdminStorageMultipartSweepTests` (4) — o seco mostra o vencido e não apaga; o real apaga
+só os vencidos (o do prazo curto sai, o do prazo normal fica) e os bytes saem do disco enquanto os do
+upload vivo ficam; o diretório sem linha é recolhido e o de upload vivo e o de nome fora do padrão não
+são; conta comum recebe `401`/`403`. Mutações vermelhas: o seco apagando; sem filtro de vencimento;
+órfão recolhido sem consultar o banco; sem o filtro de nome; a rota sem recolher órfão; vencido
+contado como zero; leitura marcando tudo vivo.
+
+**Mutação equivalente, registrada:** fazer o `discard` não limpar o disco fica **verde**, porque a
+varredura de órfãos da mesma passada recolhe o diretório que sobra. O efeito observável (bytes fora do
+disco, linha fora do banco) é o mesmo; os dois chamadores de `abort` do gateway passam pelo `discard`,
+que apaga a árvore — a limpeza em dois lugares é redundância, não defeito.
 
 ### 4.3 Access Keys pelo painel
 
@@ -263,6 +312,49 @@ Prova: `S3GatewayTests.o_metadado_e_os_cabecalhos_declarados_no_put_voltem_no_he
 `V367` aplicada duas vezes em MariaDB 11.4 por `scripts/tests/storage-metadata-migration-test.sh`
 (PASS 14), com um objeto gravado antes da migração preservado.
 
+## 4.3 A listagem não mostra o que o `GET` nega (ciclo 81)
+
+O download de um objeto vencido responde `404` desde a fase 1 — a leitura filtra o prazo. O
+`ListObjects` (v1 e v2) não: o `SELECT` da listagem só excluía lápide, então a chave vencida aparecia
+ali e sumia no `GET`. Para quem espera a varredura, é "existe mas dá 404"; para um sincronizador de
+diretório é o pior dos dois mundos — ele pede, recebe `404` e repete, ou apaga a cópia local achando
+que o remoto venceu.
+
+Agora o `SELECT` da listagem tem o **mesmo predicado da leitura** (`expires_at` nulo ou no futuro).
+Ele fica no `where`, não é filtrado depois: a listagem é por página, e descartar linhas depois de ler
+faria `KeyCount` e `IsTruncated` mentirem (o cliente receberia página "cheia" vazia).
+
+Quem consome a mesma consulta herda a régua: o `GET /network/storage/buckets/{bucket}` do Control
+Plane (a listagem interna, usada pelo painel) e a varredura de durabilidade por bucket — que já
+pulava o objeto não servível, e agora nem o visita.
+
+**Verificação:** `S3ListExpiryTests` **3** pela rota real (vencido sai da lista e o `GET` responde
+`404`; dentro do prazo continua; sem prazo continua). Mutações: sem o filtro de prazo, e o filtro
+invertido (listar só os vencidos) — **2 de 2 derrubam**.
+
+## 4.4 O `ListBuckets` não mostra o bucket que não abre (ciclo 82)
+
+O ciclo 81 fez a listagem de objeto esconder o vencido. O `ListBuckets` (`GET /s3`), que lista os
+**buckets** do dono, seguiu com o critério antigo (só lápide fora). Um bucket cujo único objeto venceu
+continuava aparecendo, e aí o nome não fechava com nada:
+
+| pedido | resposta |
+|---|---|
+| `GET /s3` | o bucket aparece |
+| `GET /s3/{bucket}` | lista **vazia** (`KeyCount=0`) |
+| `GET /s3/{bucket}/chave.jpg` | **404** |
+| `DELETE /s3/{bucket}` | **409** — "ainda tem objetos" |
+
+Agora `bucketsOf` usa o **mesmo predicado** da listagem de objeto (`expires_at` nulo ou no futuro):
+bucket sem nenhum objeto vivo sai do `ListBuckets`, que passa a concordar com o que as outras três
+rotas já diziam. O bucket com **um** objeto vivo (mesmo tendo outro vencido ao lado) continua listado —
+vencimento é por objeto, não por bucket.
+
+**Verificação:** `S3ListBucketsExpiryTests` **4** pela rota real (bucket inteiro vencido sai da lista e
+a listagem de objeto dele já vinha vazia; bucket com um vivo e um vencido fica; bucket sem prazo fica;
+bucket de outra conta não aparece). Mutações: `bucketsOf` sem o filtro de prazo; filtro invertido;
+`bucketsOf` ignorando o dono — **3 de 3 derrubam**.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
@@ -318,10 +410,49 @@ UPSERT somando 10 gravações no mesmo minuto, `max_ms` preservado, média ponde
 retenção). Mutações conferidas: média das médias, "sem dado" virando a janela inteira, 500 contado como
 `CLIENT`, `LIST` sem contagem e chave primária sem `outcome` — todas derrubam.
 
+## 5.2 Teto de requisição por Access Key (ciclo 74)
+
+O doc 19 §3.2 já limitava **assinatura que falhou** (`s3-auth`, 20 por 5 min): protege o segredo
+contra chute. Nada limitava o consumo de quem **provou** o segredo — e todo upload e download do
+gateway passa pelo mesmo Control Plane. Uma credencial vazada, ou um cliente em laço, ocupava a
+instalação inteira para todo mundo.
+
+Agora há uma segunda conta, separada de propósito:
+
+| ação | chave da conta | padrão | o que conta |
+|---|---|---|---|
+| `s3-request` | Access Key | 600 / minuto | requisição **assinada e válida** (cabeçalho **ou** URL pré-assinada) |
+
+- **Contas separadas, não uma só.** A `s3-auth` só soma falha — se o acerto gastasse o mesmo balde, o
+  cliente legítimo seria barrado pelo próprio sucesso. A `s3-request` soma a requisição aceita.
+- **O ritmo é conferido depois da assinatura**, nunca antes: uma assinatura inválida não consome o
+  orçamento de quem é legítimo, e a recusa por assinatura continua com o código do protocolo (`403`),
+  não com o do teto.
+- **O balde é da credencial, não do IP.** Quem ataca troca de IP; a Access Key, não. E um escritório
+  atrás do mesmo IP não paga pelos vizinhos.
+- **A URL pré-assinada entra na mesma conta.** Ela é a credencial portada por quem recebeu o link;
+  fora da conta, bastaria emitir um link para furar o teto.
+- **`503 SlowDown`**, que é o código do S3 para "reduza o ritmo" — o mesmo que a AWS devolve. Passada a
+  janela, o cliente volta a ser servido sem intervenção.
+- **Padrão folgado (600/min) e desligável (`0`).** Um SDK em multipart manda uma parte por requisição;
+  barrar cliente são custa mais que o laço que se quer impedir. É proteção contra desperdício, não
+  contra um atacante que já tem o segredo legítimo — para esse, o caminho é revogar a credencial.
+
+**Verificação:** `AuthAttemptRateLimitTests` +2 (o teto é da credencial: outra Access Key continua
+servida e a conta de assinatura não foi gasta; passada a janela, volta). `S3RateLimitTests` **5** pela
+rota, com `s3-request.limit=3` (a credencial recebe `503 SlowDown` e a vizinha continua servida; a
+requisição válida não gasta o orçamento de assinatura; a URL pré-assinada entra na conta; o `GET`
+também entra; assinatura inválida continua na conta própria). Mutações (**6 de 6 derrubam**): sem
+ritmo no cabeçalho; sem ritmo na URL; ritmo antes da validação; um balde só para toda credencial; `503`
+trocado por `403`; e ritmo só no caminho do cabeçalho.
+
 ## 6. O que NÃO está entregue
 
 - **Presigned URLs para `GET` e `PUT` existem**; `DELETE`/`LIST` por URL não são emitidos de
   propósito (link vazado não apaga nem lista). URL pré-assinada **por parte** do multipart não existe:
   o upload multipart é feito com credencial, não por link.
 - **Credenciais temporárias (STS)** — `X-Amz-Security-Token` não é processado.
-- **Quotas e rate limiting por credencial** — a rota herda o limitador global, não um por Access Key.
+- **Cota de espaço por credencial** — a cota é **por participante**, não por Access Key
+  (`rede.storage.max-bytes-per-owner`, doc 12 §2.3): o upload que estoura responde `507 QuotaExceeded`
+  no XML do S3, com o número na mensagem. Duas credenciais do mesmo dono dividem a mesma cota.
+  O **rate limiting por credencial existe** desde o ciclo 74 (§5.2).

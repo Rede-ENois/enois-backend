@@ -50,7 +50,13 @@ import com.socialcoisa.rede.shared.audit.AuditTrail;
  * <li><b>o número da réplica continua depois do maior existente</b> — reaproveitar um número
  * colidiria com a chave {@code (object_id, replica)} e sobrescreveria a cópia antiga;</li>
  * <li><b>{@code ALREADY_DESIGNATED}</b> — designação pendente tem dono; designar de novo é só
- * reiniciar o relógio do retry.</li>
+ * reiniciar o relógio do retry;</li>
+ * <li><b>cópia divergente de nó vira {@code GONE}</b> — o espaço é devolvido para uma cópia nova;
+ * deixá-la {@code STALE} fazia o catálogo continuar apontando um corpo que não confere e a cura
+ * rodar para sempre sem efeito;</li>
+ * <li><b>divergência da réplica 0 não é tocada</b> — o corpo do próprio Control Plane não se apaga
+ * em caminho de cura;</li>
+ * <li><b>a releitura é pedida à varredura</b> — sem ela, divergente nunca aparecia na cura.</li>
  * </ul>
  */
 class StorageHealerTests {
@@ -214,6 +220,84 @@ class StorageHealerTests {
 		StorageHealer.Report relatorio = healer.heal("adm_1", null, 100, false);
 
 		assertThat(relatorio.skipped().get(0).reason()).isEqualTo("BODY_MISSING");
+		verify(catalog, never()).savePlacement(any());
+	}
+
+	private static StorageScrubber.Report comDivergente(String objectId, int replica, String nodeId) {
+		return new StorageScrubber.Report(2, 1, List.of(), 1,
+			List.of(new StorageScrubber.Report.Divergent(objectId, replica, nodeId, "a".repeat(64), "b".repeat(64))),
+			Map.of());
+	}
+
+	@Test
+	void copia_divergente_de_no_vira_gone_e_o_espaco_e_devolvido() {
+		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(comDivergente("sob_1", 1, "nd_x"));
+		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
+		expectSaved();
+
+		StorageHealer.Report relatorio = healer.heal("adm_1", null, 100, false);
+
+		assertThat(relatorio.repostos()).hasSize(1);
+		assertThat(((StorageHealer.Reposted) relatorio.repostos().get(0)).action()).isEqualTo("SERIALIZED");
+		StoragePlacement p = gravadas.get(0);
+		assertThat(p.state()).isEqualTo(StoragePlacement.State.GONE);
+		assertThat(p.nodeId()).isEqualTo("nd_x");
+		// O digest esperado vem do catálogo, e não do que o nó declarou: é o corpo certo que a
+		// cópia nova vai ter de reproduzir.
+		assertThat(p.sha256()).isEqualTo("a".repeat(64));
+		verify(audit).record(eq("adm_1"), eq("STORAGE_REPLICA_REPLACED"), eq("sob_1"), anyString());
+	}
+
+	@Test
+	void a_copia_stale_do_catalogo_e_liberada_mesmo_sem_divergente_da_varredura() {
+		// O Control Plane não hospeda corpo nenhum: a varredura com releitura não tem o que comparar
+		// e `divergent` volta vazio. A cópia do nó, porém, já está STALE no catálogo — é a única
+		// testemunha que existe. Antes, a cura não a via e o objeto acumulava réplica nova a cada
+		// rodada sem que o espaço antigo voltasse.
+		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(
+			new StorageScrubber.Report(2, 1, List.of(), 0, List.of(), Map.of()));
+		when(catalog.placementsInState(StoragePlacement.State.STALE)).thenReturn(List.of(
+			new StoragePlacement("sob_1", 1, "nd_x", 2048, "b".repeat(64), StoragePlacement.State.STALE, NOW)));
+		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
+		expectSaved();
+
+		StorageHealer.Report relatorio = healer.heal("adm_1", null, 100, false);
+
+		assertThat(relatorio.repostos()).hasSize(1);
+		assertThat(gravadas.get(0).state()).isEqualTo(StoragePlacement.State.GONE);
+		assertThat(gravadas.get(0).nodeId()).isEqualTo("nd_x");
+	}
+
+	@Test
+	void divergencia_da_replica_zero_nao_apaga_a_copia_do_control_plane() {
+		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(comDivergente("sob_1", 0, "nd_cp"));
+		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
+
+		StorageHealer.Report relatorio = healer.heal("adm_1", null, 100, false);
+
+		assertThat(((StorageHealer.Reposted) relatorio.repostos().get(0)).action()).isEqualTo("REPLICA_ZERO");
+		verify(catalog, never()).savePlacement(any());
+		verify(audit).record(eq("adm_1"), eq("STORAGE_REPLICA_ZERO_DIVERGENT"), eq("sob_1"), anyString());
+	}
+
+	@Test
+	void a_cura_pede_a_releitura_do_proprio_disco_a_varredura() {
+		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(gap("sob_1"));
+		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
+		when(catalog.copies("sob_1")).thenReturn(List.of());
+
+		healer.heal("adm_1", null, 100, true);
+
+		verify(scrubber).scan(isNull(), anyInt(), eq(true));
+	}
+
+	@Test
+	void divergente_com_dry_run_nao_grava_nada() {
+		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(comDivergente("sob_1", 1, "nd_x"));
+		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
+
+		healer.heal("adm_1", null, 100, true);
+
 		verify(catalog, never()).savePlacement(any());
 	}
 

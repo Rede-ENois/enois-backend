@@ -104,11 +104,14 @@ class S3GatewayController {
 	private final com.socialcoisa.rede.network.application.StorageMultipartService multipart;
 	private final Clock clock;
 	private final com.socialcoisa.rede.shared.web.CurrentUserResolver currentUserResolver;
+	/** Teto de assinatura errada por Access Key — a Access Key é pública, o segredo não. */
+	private final com.socialcoisa.rede.shared.security.IpRateLimiter tentativas;
 
 	S3GatewayController(S3CredentialRepository credentials, StorageCatalogRepository catalog,
 			StorageCatalogService storage, StorageContentService content, Clock clock,
 			com.socialcoisa.rede.shared.web.CurrentUserResolver currentUserResolver,
-			com.socialcoisa.rede.network.application.StorageMultipartService multipart) {
+			com.socialcoisa.rede.network.application.StorageMultipartService multipart,
+			com.socialcoisa.rede.shared.security.IpRateLimiter tentativas) {
 		this.credentials = credentials;
 		this.catalog = catalog;
 		this.storage = storage;
@@ -116,6 +119,7 @@ class S3GatewayController {
 		this.clock = clock;
 		this.currentUserResolver = currentUserResolver;
 		this.multipart = multipart;
+		this.tentativas = tentativas;
 	}
 
 	// ---------------------------------------------------------------- listagem de buckets
@@ -225,7 +229,19 @@ class S3GatewayController {
 			throw s3Error(409, "ObjectAlreadyStored", "A chave ja tem copia confirmada; use outro nome de chave.");
 		}
 		// O catálogo mede o digest em pedaços de 64 KiB e grava; é o mesmo caminho da rota do nó.
-		StorageObject stored = storage.finishUpload(pending.id(), body(request), credential.ownerUserId());
+		// A recusa por cota de participante é 507 <b>no formato do S3</b> com o código interno: o SDK
+		// não conhece "STORAGE_OWNER_QUOTA_EXCEEDED", e um XML sem `Code` que ele entenda viraria
+		// falha opaca do cliente em vez de "seu espaço acabou".
+		StorageObject stored;
+		try {
+			stored = storage.finishUpload(pending.id(), body(request), credential.ownerUserId());
+		}
+		catch (ApiException recusado) {
+			if (recusado.status() == 507 && "STORAGE_OWNER_QUOTA_EXCEEDED".equals(recusado.code())) {
+				throw s3Error(507, "QuotaExceeded", recusado.getMessage());
+			}
+			throw recusado;
+		}
 		if (!bucketSemDono(bucket, credential.ownerUserId())) {
 			desfazer(stored, antes);
 			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
@@ -471,16 +487,20 @@ class S3GatewayController {
 		if (presigned == null) {
 			return null;
 		}
+		exigirOrcamento(presigned.parsed().accessKey());
 		S3Credential credential = credentials.findByAccessKey(presigned.parsed().accessKey())
 			.filter(c -> c.revokedAt() == null)
-			.orElseThrow(() -> s3Error(403, "InvalidAccessKeyId",
-				"A credencial da URL nao existe ou foi revogada."));
+			.orElseThrow(() -> {
+				contaFalha(presigned.parsed().accessKey());
+				return s3Error(403, "InvalidAccessKeyId", "A credencial da URL nao existe ou foi revogada.");
+			});
 		String secret = credentials.secretFor(credential.id());
 		if (secret == null) {
 			throw s3Error(403, "SignatureDoesNotMatch",
 				"Credencial sem segredo guardado nao pode assinar; gere uma nova.");
 		}
 		if (!SigV4Verifier.verifyPresigned(presigned, secret, clock.instant())) {
+			contaFalha(presigned.parsed().accessKey());
 			// Um só código para URL expirada e assinatura errada, como na AWS quando o prazo passou:
 			// dizer qual dos dois é ajudaria a descobrir o segredo, e o cliente resolve os dois do
 			// mesmo jeito — pedindo outra URL.
@@ -492,6 +512,9 @@ class S3GatewayController {
 		if (!credential.allows(operation)) {
 			throw s3Error(403, "AccessDenied", "A credencial da URL nao permite " + operation + ".");
 		}
+		// Mesma conta da assinatura por cabeçalho: a URL é a credencial, e portador de link também
+		// consome o Control Plane.
+		exigirRitmo(credential.accessKey());
 		return credential;
 	}
 
@@ -608,6 +631,29 @@ class S3GatewayController {
 			"expiresAt", clock.instant().plusSeconds(expires).toString());
 	}
 
+	/**
+	 * Sem orçamento, nem o segredo é buscado: a tentativa barrada é recusada antes do trabalho.
+	 *
+	 * <p>O teto é por Access Key, não por IP: a Access Key é o alvo do teste, e o atacante pode
+	 * trocar de IP. Limitar só por IP deixaria o ataque passar distribuído — e barraria um escritório
+	 * inteiro por causa de um vizinho.</p>
+	 */
+	private void exigirOrcamento(String accessKey) {
+		if (accessKey != null && !accessKey.isBlank() && tentativas != null
+				&& !tentativas.permiteTentarAutenticacao(com.socialcoisa.rede.shared.security.IpRateLimiter.S3_AUTH,
+					accessKey)) {
+			throw s3Error(429, "SlowDown",
+				"Muitas assinaturas invalidas para esta credencial. Tente de novo mais tarde.");
+		}
+	}
+
+	private void contaFalha(String accessKey) {
+		if (accessKey != null && !accessKey.isBlank() && tentativas != null) {
+			tentativas.registraFalhaDeAutenticacao(
+				com.socialcoisa.rede.shared.security.IpRateLimiter.S3_AUTH, accessKey);
+		}
+	}
+
 	private S3Credential authenticate(HttpServletRequest request, String operation) {
 		String authorization = request.getHeader(HttpHeaders.AUTHORIZATION);
 		SigV4Verifier.Parsed parsed = SigV4Verifier.parseAuthorization(authorization);
@@ -620,10 +666,13 @@ class S3GatewayController {
 			}
 			throw s3Error(403, "AccessDenied", "Assinatura AWS SigV4 ausente.");
 		}
+		exigirOrcamento(parsed.accessKey());
 		S3Credential credential = credentials.findByAccessKey(parsed.accessKey())
 			.filter(c -> c.revokedAt() == null)
-			.orElseThrow(() -> s3Error(403, "InvalidAccessKeyId",
-				"A credencial nao existe ou foi revogada."));
+			.orElseThrow(() -> {
+				contaFalha(parsed.accessKey());
+				return s3Error(403, "InvalidAccessKeyId", "A credencial nao existe ou foi revogada.");
+			});
 		String secret = credentials.secretFor(credential.id());
 		if (secret == null) {
 			// Lacuna declarada: o SigV4 exige o segredo em claro para recalcular o HMAC.
@@ -636,12 +685,32 @@ class S3GatewayController {
 		var signed = new SigV4Verifier.Request(request.getMethod(), s3Path(request),
 			query(request), signedHeaders(request, parsed.signedHeaders()), header(request, "x-amz-content-sha256"));
 		if (!SigV4Verifier.verify(signed, parsed, secret, clock.instant())) {
+			contaFalha(parsed.accessKey());
 			throw s3Error(403, "SignatureDoesNotMatch", "A assinatura nao confere.");
 		}
 		if (!credential.allows(operation)) {
 			throw s3Error(403, "AccessDenied", "A credencial nao permite " + operation + ".");
 		}
+		exigirRitmo(credential.accessKey());
 		return credential;
+	}
+
+	/**
+	 * Teto de requisição <b>válida</b> por credencial (brief §3.3, "controle de acesso").
+	 *
+	 * <p>Diferente de {@code exigirOrcamento}, que só soma assinatura que falhou: aqui entra a
+	 * requisição de quem provou o segredo. O que se limita não é a segurança da credencial, é o quanto
+	 * uma credencial consome do Control Plane — todo upload e download do gateway passa por este
+	 * processo, e um cliente em laço (ou a credencial vazada) ocupa a instalação inteira. Como o
+	 * balde é da Access Key, trocar de IP não zera a conta, que é o que um limitador por IP deixaria
+	 * passar.</p>
+	 */
+	private void exigirRitmo(String accessKey) {
+		if (accessKey != null && !accessKey.isBlank() && tentativas != null
+				&& !tentativas.permiteRequisicao(com.socialcoisa.rede.shared.security.IpRateLimiter.S3_REQUEST,
+					accessKey)) {
+			throw s3Error(503, "SlowDown", "Muitas requisicoes para esta credencial. Tente de novo mais tarde.");
+		}
 	}
 
 	/** O bucket pedido é o permitido pela credencial? {@code null} em allowedBucket = todos do dono. */

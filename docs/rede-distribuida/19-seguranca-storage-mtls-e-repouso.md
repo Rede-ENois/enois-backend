@@ -63,6 +63,58 @@ revogação do nó mataria a API key e deixaria o certificado vigente — e o ha
 por TLS, o nó que o admin derrubou. Revogar o nó também revoga o certificado na mesma transação
 (`NetworkNodeService`), então as duas barreiras concordam com o banco.
 
+## 3.2 Credencial errada tem teto (brief §10, "detecção de comportamento anormal")
+
+A API key do nó e a Access Key do S3 são **públicas por natureza**: o id do nó aparece no painel, no
+cadastro e no log; a Access Key é a metade pública do par SigV4. O segredo é a outra metade, e até
+aqui nada contava as tentativas erradas contra ele — o custo de um atacante era a banda, e o do
+Control Plane era uma comparação de hash por requisição.
+
+Duas contas novas em `IpRateLimiter`, separadas de tudo o que já existia:
+
+| ação | chave da conta | padrão |
+|---|---|---|
+| `node-auth` | `nodeId` | 10 falhas / 5 min |
+| `s3-auth` | Access Key | 20 falhas / 5 min |
+
+Regras que as duas carregam, e por quê:
+
+- **Só a falha conta.** `permiteTentarAutenticacao` consulta e `registraFalhaDeAutenticacao` soma —
+  o acerto não registra nada. Se o acerto gastasse o orçamento, o nó saudável (que consulta a fila
+  a cada poucos segundos) chegaria ao teto sozinho, e a correção de um cliente legítimo seria barrada
+  pelo próprio sucesso;
+- **é por credencial, não por IP.** Quem ataca troca de IP; o alvo do teste é a credencial. O teto
+  por IP já existe para as rotas públicas (`node-join`, `node-reveal`) e continua lá;
+- **sem orçamento, nem a comparação acontece.** A recusa é antes da busca por hash: é o que mantém o
+  Control Plane respondendo a quem tem a chave certa enquanto alguém testa a errada;
+- **a resposta diz que é teto, não que a chave está errada.** `429 NODE_AUTH_RATE_LIMITED` no nó e
+  `429 SlowDown` no S3 (o código que o SDK entende como "espere"). Responder 401 ali esconderia do
+  operador que o bloqueio é de tentativas e não de credencial;
+- **teto `0` desliga.** É a forma de desligar sem flag própria — a operação que confia na borda;
+- **a janela expira.** Cinco minutos depois, as falhas saem da conta. Um bloqueio permanente puniria
+  quem colou a chave errada.
+
+Os parâmetros são `rede.security.rate-limit.node-auth.{limit,window-minutes}` e
+`rede.security.rate-limit.s3-auth.{limit,window-minutes}`.
+
+Esta seção é o teto de **credencial errada**. A requisição **legítima** também tem teto, em conta
+separada (`s3-request`, 600 por minuto por Access Key, `503 SlowDown`) — o detalhe está no doc 18 §5.2.
+As duas contas não se misturam: o acerto não gasta o orçamento de quem errou, e vice-versa.
+
+**O que ainda falta nesta frente** (declarado, não escondido): o teto é **em memória e por
+instância** — com várias instâncias de API, cada uma tem a sua conta, e o atacante distribuído ganha
+o produto das contas. Uma conta compartilhada exige o Redis/`network_instance_signals` que a rede
+ainda não usa para limitador. E a falha **não é auditada como evento**: com 10 por 5 min e um id de
+nó público, cada varredura de log enche a trilha. O que se observa hoje é a contagem no limitador; o
+evento auditado ("muitas credenciais erradas para o nó X") é o passo seguinte.
+
+**Verificação:** `AuthAttemptRateLimitTests` **6** (teto exato, acerto não gasta, isolamento por
+credencial, contas separadas, janela expira, zero desliga), `NetworkNodeAuthRateLimitTests` **3**
+pela rota real (décima primeira chave errada é 429 com código próprio e o vizinho continua entrando;
+vinte acertos nunca barram; a chave certa depois de nove erros entra) e o caso novo de
+`S3GatewayTests` (vinte assinaturas erradas, a seguinte é `429 SlowDown`). Mutações: serviço sem teto,
+acerto gastando orçamento, gateway sem teto na assinatura, falha não contada — **4 de 4 derrubam**.
+
 ## 4. O que NÃO está implementado
 
 Esta entrega é a **identidade criptográfica**: o certificado existe, é emitido com prova de posse, é

@@ -164,11 +164,42 @@ O número da réplica continua depois do **maior existente**, nunca do 1: a chav
 Cada objeto é uma transação própria: um nó que entra em quarentena no meio do lote não desfaz as
 designações anteriores, que já são válidas.
 
-**Verificação:** `StorageHealerTests` 8 e `NetworkStorageHealTests` 4 (caminho real: objeto com
-lacuna → `scrub` acha → healing designa → nó confirma → `scrub` para de acusar). Mutações: `dryRun`
-gravando, réplica reaproveitando o número 1, `STALE` contando como origem, designar mais que a
-lacuna, pendente sendo reescolhida e designar já como `OK` — cada uma derruba o seu, e a de `OK`
-derruba 2 no teste de rota.
+### 5.1.1 A cópia que não confere volta a ser espaço
+
+**Antes:** a cura só andava em `underReplicated`. A cópia `STALE` — o objeto existe e o conteúdo não
+é o prometido — ficava assim **para sempre**: a cura a ignorava, ela continuava ocupando o espaço
+cedido em `StoragePlacementService`, e cada rodada designava mais uma réplica ao lado da queimada.
+A tela dizia "existe e não confere" e nada acontecia.
+
+**Agora** a cura olha as duas testemunhas de divergência:
+
+| testemunha | o que enxerga |
+|---|---|
+| `divergent[]` da varredura com releitura | o disco **desta** instalação: réplica 0 e o diretório do nó local |
+| cópias `STALE` do catálogo | a cópia de **qualquer** nó que o próprio nó marcou (`409` na confirmação) ou que o nó reportou em `/network/storage/scrub` |
+
+A segunda é a que fecha o buraco quando o Control Plane não hospeda corpo nenhum (é o caso da
+instalação que não tem réplica 0): a varredura com releitura não tem o que comparar, `divergent`
+volta vazio para sempre, e só o estado da colocação conta a história. As duas listas se somam sem
+repetir (a chave é `objectId#replica`).
+
+O que a cura faz com cada uma:
+
+- **réplica 0 divergente** → **nada é apagado**. É o corpo do próprio Control Plane; reler em
+  caminho de cura não pode escrever por cima nem marcar como perdida a única cópia que se sabe boa.
+  Fica auditado (`STORAGE_REPLICA_ZERO_DIVERGENT`) e o relatório devolve `REPLICA_ZERO`;
+- **cópia de nó** → vai para `GONE` (`STORAGE_REPLICA_REPLACED`), o que **devolve o espaço** na conta
+  de folga cedida; a rodada seguinte designa uma réplica nova (número depois da maior) e o nó puxa
+  o corpo do CP e confirma com o digest. O arquivo velho no disco dele deixa de estar atribuído a
+  ele e a poda do nó (`/network/storage/inventory/purge`) o recolhe — a cura não apaga disco de
+  terceiro.
+
+O relatório ganhou `repostos[]` (`objectId`, `replica`, `nodeId`, `action`), porque a cura que
+tratou uma cópia e a cura que não achou nada merecem respostas diferentes na tela de quem opera.
+
+**Verificação:** `StorageHealerTests` **13** e `NetworkStorageHealTests` **5**. As asserções novas
+são discriminantes — mutações: não olhar as `STALE` do catálogo, marcar `OK` em vez de `GONE`, tratar
+a réplica 0 como as demais, varrer sem reler o disco — **4 de 4 derrubam** o teste correspondente.
 
 ## 5.2 O `OBJECT_PUT` tem produtor, e o `DONE` dele é conferido
 
@@ -231,7 +262,7 @@ ser recusado (o que já era correto), mas a réplica nunca acontecia. Agora exis
 | 1 | lê `objectId`, `sha256`, `bytes` e `replica` do payload; payload incompleto → `STORAGE_TASK_PAYLOAD_INVALID` |
 | 2 | baixa por `GET /network/storage/objects/{id}` com a **mesma** chave de nó e `--limit-rate` do **menor** entre o teto da transferência (`bandwidthLimitMbps` do payload, quando existe) e a banda declarada |
 | 3 | **mede o que veio** (`sha256sum` + `stat`) e compara com o medido pelo Control Plane. Divergência → `STORAGE_REPLICA_MISMATCH`, e **não confirma** |
-| 4 | confere o teto de disco cedido **antes** de confirmar. Acima → `STORAGE_OBJECT_TOO_LARGE` (o temporário sai; `diskMb=0` é "sem teto declarado", não "zero bytes") |
+| 4 | confere o teto de disco cedido **antes** de confirmar, em **duas** contas: o objeto sozinho contra o teto → `STORAGE_OBJECT_TOO_LARGE`; e o objeto **somado ao que o nó já guarda**, por `disk_make_room` → `STORAGE_NO_DISK_ROOM` (§5.4.1). O temporário sai nos dois casos; `diskMb=0` é "sem teto declarado", não "zero bytes" |
 | 5 | confirma em `POST .../replica` com **as medidas que ele mesmo calculou** |
 | 6 | posta `DONE` com `{objectId, replica, bytes, sha256}` — que o Control Plane confere de novo |
 
@@ -269,6 +300,45 @@ seguinte.
 **O teto declarado conta.** `content_bytes` passou a somar `objects/*.bin`: sem isso o nó reportava
 2 MB de uso enquanto guardava 40 GB de réplica local, e o teto que o participante cedeu não valia
 nada.
+
+## 5.4.1 O teto é do conjunto, não de um objeto (ciclo 75)
+
+O passo 4 comparava **só** o tamanho do objeto com o teto. Dez réplicas de 700 MB passavam os dez
+testes num disco cedido de 1 GB: cada uma "cabia no teto", e o nó terminava guardando sete vezes o
+que o participante cedeu. O `content_bytes` do heartbeat mostrava o estouro, mas o nó **nunca
+recusava** — o brief §7 diz "não permitir que o armazenamento do Énóis consuma espaço além do limite
+configurado", e o limite é o do conjunto.
+
+Agora o `OBJECT_PUT` usa o **mesmo** `disk_make_room` que a réplica de projeção, o cache e a borda já
+usavam (`content_bytes` já contava `objects/*.bin` — o que faltava era cobrar a soma na hora de
+aceitar). Teto estourado → `STORAGE_NO_DISK_ROOM`, o temporário sai e a cópia **não** é confirmada; o
+Control Plane recebe a falha e designa outro nó.
+
+Não há evicção aqui de propósito: `replica/` e `objects/` são promessa de catálogo, não cache. Apagar
+uma cópia para caber outra quebraria a durabilidade em silêncio — quem cede pouco simplesmente
+recebe menos objeto.
+
+**Verificação:** `node-executor-test.sh` **+4** asserções (215 → **219**): o primeiro corpo de 700 KB
+cabe no disco de 1 MB; o segundo, que só não cabe **somado**, falha com `STORAGE_NO_DISK_ROOM`, não
+confirma a cópia, e o que está guardado continua dentro do teto. Mutação: sem o `disk_make_room` no
+`OBJECT_PUT`, o cenário novo derruba — 1 de 1.
+
+**No Control Plane, a confirmação também respeita o cede (ciclo 76).** O runtime recusa gravar
+acima do teto (§5.4.1), mas isso protege o **disco** de quem cede — não a verdade do catálogo. Um nó
+que recebeu a designação e depois teve o cede reduzido, ou um runtime antigo sem o `disk_make_room`,
+gravava e confirmava: o catálogo passava a afirmar durabilidade numa cópia fora do limite que o
+participante definiu, e o heal seguinte contava esse MB como ocupado sem nada devolver o espaço.
+
+`confirmReplica` agora chama `StoragePlacementService.cedentHeadroomMb` — a **mesma** conta da
+designação, não uma segunda régua. A colocação `PENDING_REMOTE` que está sendo confirmada já entra
+como reservada (`reservadoEmMb`, arredondada para cima), então a folga é a que sobra para **esta**
+cópia: negativa → `507 STORAGE_NO_CEDENT_SPACE`, e a colocação continua `PENDING_REMOTE`. Sem cede
+declarado (`declaredDiskMb = 0`) não há teto a cobrar, e o caminho segue como antes.
+
+**Verificação:** `NetworkStorageHealTests` **+1** (6 no total): o nó cede 1 MB, o objeto tem 2 MB, a
+confirmação pela rota real é recusada com `507` e a cópia não vira `OK`; devolvido o cede, a **mesma**
+confirmação passa — sem isso, "recusar tudo" passaria. Mutações: sem a checagem e recusando por
+qualquer folga — **2 de 2 derrubam**.
 
 **No Control Plane:** `NodeBodyStore` (`@ConditionalOnProperty rede.storage.node-body-root`) é a
 mesma ideia do lado servidor — gravação atômica (temporário + `ATOMIC_MOVE`), validação de
@@ -334,6 +404,37 @@ não é acusada); `NetworkStorageReplicationTests` 8 (1 novo pela rota real). Mu
 ordem invertida, sem conferência de tamanho, réplica 0 com fallback, varredura relendo todas as
 cópias, `readBody` voltando a chamar `bodyPath` — 6 de 6 derrubam.
 
+## 5.5.1 O download não serve cópia que o catálogo marcou como não-conferente
+
+O §5.5 fez o `readBody` cair para o corpo do nó local. O `STALE` já existia antes (confirmação com
+digest errado, poda de designação vencida) e ganhou mais um produtor nos §5.7/§5.8 (a varredura do
+próprio disco). Ficava um buraco entre eles: a leitura local olhava **só o arquivo**. Um nó marcado
+`STALE` — pela confirmação com digest errado, pela poda de designação vencida ou pela varredura do
+próprio nó (§5.7/§5.8) — continuava servindo o corpo em `GET /network/storage/objects/{objectId}`, e é por
+esse download que a réplica de **outro** nó recebe o objeto. O catálogo dizia "não confere" e a rota
+entregava assim mesmo.
+
+| situação da leitura local | antes | agora |
+|---|---|---|
+| réplica 0 (`rede.storage.root`), com ou sem corpo de nó | servia | **serve** (é o arquivo do upload; o CP é dono do disco) |
+| corpo do nó, linha `OK` para o dono do disco | servia | serve |
+| corpo do nó, linha `STALE`/`PENDING_REMOTE`/`GONE` | **servia** | **`409 STORAGE_REPLICA_STALE`** com o estado na mensagem |
+| corpo do nó, sem linha de colocação para ele | servia | serve — o PUT autenticado grava o corpo antes de confirmar, e recusar por ausência transformaria essa janela em 409 |
+| disco sem identidade de nó (`ownerNodeId()` nulo) | servia | serve — não há colocação a cobrar (instalação do CP, não um runtime) |
+| corpo só na raiz do CP **e** cópia de nó ao lado | servia a raiz | serve a raiz, sem exigir a cópia do nó |
+
+Quem decide é o dono do disco, não o id que veio na requisição: `exigirCopiaServivel` pergunta ao
+`NodeBodyStore` de quem é este disco (`node.json` + `api-key` 0600, §5.6) e cobra a colocação **desse**
+nó. O `409` não lista bytes nem digest: a cópia não é boa, e quem quer o objeto usa outro nó.
+
+**O que continua fora:** a leitura da réplica 0 **não** é cobrada, porque a réplica 0 não tem linha de colocação de nó — quem
+prova a integridade dela é a varredura (§4.1), que a relê.
+
+**Verificação:** `StorageLocalBodyServingTests` **14** (4 novos: `STALE` não é servida e o `409` traz o
+estado; `OK` continua servida; corpo sem linha continua servido; disco sem identidade não é cobrado).
+Mutações: leitura local deixando de exigir cópia `OK`, só `GONE` recusado, ausência de linha recusando
+— **3 de 3 derrubam**.
+
 ## 5.6 Inventário do disco do nó: o que ele tem contra o que o catálogo promete
 
 O §5.4 fez o nó guardar, e o §5.5 fez o Control Plane servir do disco local. Faltava a pergunta que
@@ -369,9 +470,31 @@ não lê o disco desta máquina.
 
 | campo | significado | o que se faz |
 |---|---|---|
-| `orphan` | arquivo no disco **sem colocação** para este nó | poda pode apagar (é o único caso) |
+| `orphan` | arquivo no disco que nenhuma colocação **viva** deste nó reivindica — sem linha nenhuma, ou com linha `GONE` (§5.6.1) | poda pode apagar (é o único caso) |
 | `missing` | colocado e **ausente** do disco; `state` diz se era `OK` (perda) ou `PENDING_REMOTE` (a tarefa ainda não rodou) | re-replicar / esperar |
 | `divergent` | no disco e o sha-256 **não confere** | re-replicar — **nunca** apagar aqui |
+
+### 5.6.1 A cópia `GONE` continua ocupando o disco — a poda passa a recolhê-la (ciclo 77)
+
+A coleta de lápides (§4) e a cura (§5.1.1) marcam a cópia `GONE` e **devolvem o espaço na conta de
+folga cedida**. No disco do participante, nada acontecia: o protocolo só tem `OBJECT_PUT` e
+`OBJECT_GET`, não existe tarefa de apagar, e a poda — que o doc dizia recolher — chamava de órfão
+apenas o arquivo **sem** linha de colocação. `GONE` tem linha, então nunca entrava. O participante
+cedia 100 GB, o objeto era excluído, o painel mostrava o espaço livre de volta e o disco dele seguia
+cheio.
+
+Agora o critério é **"nenhuma colocação viva reivindica o arquivo"**: `OK` e `PENDING_REMOTE` protegem
+(o catálogo promete a cópia), `STALE` também protege (pode ser a única cópia possivelmente boa —
+apagá-la antes de o Control Plane repor transformaria divergência em perda), e `GONE` não protege.
+`freedBytes` continua medido com `Files.size` do que de fato saiu.
+
+A poda continua sendo ato de **operador**, com `dryRun` como padrão (§5.1, mesmo critério do
+healing): o nó mostra o que é reclamaível e quem opera decide. Automatizar isso num ciclo do runtime
+seria apagar disco de quem contribui sem ninguém olhar.
+
+**Verificação:** `NodeStorageInventoryTests` **+1** (12 no total): `GONE` aparece como órfão e a poda
+o apaga; `OK` e `STALE` ficam no disco. Mutações: `GONE` voltando a ser intocável, e a lista intocável
+invertida (poda apagando o que o catálogo promete) — **2 de 2 derrubam**.
 
 A poda **só** apaga órfão. Cópia divergente é a única cópia possivelmente boa do objeto: apagá-la
 antes de o Control Plane re-replicar transformaria divergência em perda. E `dryRun` é o padrão: o
@@ -471,11 +594,218 @@ apagar), e o healing do §5.1 já sabe ler `STALE`.
 
 ### O que ainda não está entregue
 
-O nó **precisa** rodar esta varredura por conta própria (o runtime ainda não tem rotina periódica
-para ela); `POST /network/storage/scrub` é a rota pronta para ele chamar.
+O nó **roda** esta varredura por conta própria: `exec_storage_scrub` em `deploy/node-runtime/node-runtime.sh`
+mede o próprio disco a cada ciclo, **depois do heartbeat e antes de pedir tarefa** (uma varredura
+longa não pode atrasar o heartbeat, que é a única saída do nó), em lotes, e entrega por
+`POST /network/storage/scrub`. Nó sem `OBJECT_PUT` na config assinada não manda relatório vazio. A
+divergência que ele aponta agora **é tratada pela cura** (§5.1.1).
 
-**Verificação:** `StorageNodeScrubTests` **4** (cópia própria fica `STALE`; nó não rebaixa a cópia de
+**Verificação:** `scripts/tests/node-executor-test.sh` cobre o runtime (entrega o sha medido, não
+declara divergência por erro de I/O, não manda relatório de nó sem `OBJECT_PUT`). `StorageNodeScrubTests` **4** (cópia própria fica `STALE`; nó não rebaixa a cópia de
 outro; já `STALE` não é regravada nem re-auditada; digest esperado vem do catálogo) e
 `NetworkStorageNodeScrubTests` **3** pela rota real (cópia própria `STALE`; intruso não rebaixa a do
 dono; sem chave é 401). Mutações: sem filtro por dono, sem idempotência, rota fora do interceptor,
 relatório engolido (`stale` sempre zero) — **4 de 4 derrubam**.
+
+## 5.9 Investigação: o resumo de bucket somava versão substituída (corrigido); a cota conta o que o download não entrega (pendente)
+
+Duas contas do mesmo catálogo não fechavam. As duas foram medidas contra o SQL de verdade.
+
+### 5.9.1 O resumo por bucket somava o que o download não entrega — corrigido
+
+`summarizeBuckets` (§17, painel) usa `state <> 'DELETED' and superseded_by is null` — o que o
+download entrega. `bytesOwnedBy` (cota, §2.3 do doc 12) **também**: foi escrito assim de propósito e
+tem teste (`StorageOwnerQuotaTests`).
+
+O que estava errado era a **explicação**: ela dizia que a conta da cota cobria o que o participante
+ocupava. Não cobre — com versionamento, dez reescritas deixam nove versões no disco e só a corrente na
+conta; e a versão corrente substituída só sai do disco pela coleta. A cota é do **conteúdo entregue**,
+não do **espaço ocupado**. O doc 12 §2.3 diz isso agora.
+
+**Consequência medida e aceita:** reescrever a mesma chave com um corpo novo **acrescenta** à conta e
+não desconta a versão que saiu da corrente, então o PUT de reescrita pode receber 507 antes do objeto
+que só ele ocupa. É o preço de conferir a cota onde o corpo é medido (`S3OwnerQuotaTests`, o teste de
+reativação, registra o número).
+
+### 5.9.2 O download de uma cópia remota, e o `respond` sem a checagem do `head` — pendente
+
+Investigação registrada, não corrigida. O que está no código hoje:
+
+| ponto | o que faz |
+|---|---|
+| `StorageContentService.respond` | exige `location` não vazia (há cópia `OK` em algum nó) e chama `storage.readBody(objectId)` |
+| `StorageCatalogService.readBody` | lê o disco **desta** instalação (§5.5, §5.5.1); não busca no nó remoto |
+| resultado quando a cópia é só de outro nó | **`409`**, embora o catálogo afirme cópia íntegra e o `HEAD` responda `200` com `Content-Length` |
+| `StorageContentService.respond` × objeto vencido | o `respond` **não** filtra vencido; quem chama (`servable`) filtra. Chamada direta à rota pública de mídia já passa pelo `servable` antes, então hoje o 404 acontece — mas a regra mora em quem chama, não na resposta |
+
+Não é regressão: é a fase 3 dizendo que o Control Plane serve o que está no próprio disco. O caminho
+que falta — o CP pedir o corpo ao nó que tem a cópia — é o mesmo que o rebalanceamento ativo (§16)
+pede, e depende da rota de leitura por chave de nó. Fica declarado aqui para não ser redescoberto.
+
+**Como conferir sem adivinhar:** `StorageScrubberReadBackTests`, `NetworkStorageReplicationTests` e o
+
+## 5.10 A cópia que só existe na réplica 0 ganha uma cópia de nó
+
+A fase 3 tem a colocação, o `OBJECT_PUT`, a confirmação e o healing das cópias ruins. Faltava a
+pergunta mais simples: **quem pede a primeira cópia de um objeto que acabou de ser gravado só na
+réplica 0?** Quando o upload termina sem nó elegível — nenhum nó com folga cedida naquele instante,
+nenhum ativo, ou o objeto é anterior à colocação — o objeto fica com a réplica 0 (o disco do Control
+Plane) e nada volta a pedir a cópia. O painel de durabilidade mede cópia de nó: o objeto aparece como
+"sem redundância" e ninguém tem a mão para resolver, e desde o §5.9.2 o download também responde 409
+quando quem atende não é o dono da réplica 0.
+
+| rota (admin) | o que faz |
+|---|---|
+| `GET /admin/network/storage/replica-zero` | lista o que hoje está **só** na réplica 0, com o motivo de cada objeto que ficou sem destino |
+| `POST /admin/network/storage/replica-zero?dryRun=false` | designa **uma** cópia (réplica 1) para cada um, `PENDING_REMOTE` |
+
+A designação criada aqui **reserva** a folga cedida do nó na colocação (doc 17 §2.2): um objeto
+adotado não é escolhido por cima da folga que outro objeto já prometeu.
+
+**Quem é candidato** (`StorageCatalogPersistenceAdapter.withOnlyReplicaZero`): `STORED`, corrente
+(`superseded_by is null`), com `sha256` e `bytes`, não vencido, **sem nenhuma colocação de réplica
+diferente de 0**. Objeto sem colocação nenhuma também entra — é o caso mais comum. Cópia `STALE`,
+`GONE` ou `PENDING_REMOTE` o tira da lista: essas já têm o healing de cópia ruim (§5.1.1), e pedir
+outra réplica por cima duplicaria a transferência.
+
+**A régua do destino é a da colocação, não uma segunda.** `StoragePlacementService.chooseReplica`:
+folga **cedida** medida, região/domínio de falha, preferência de tipo de nó. Nó sem teto de disco
+cedido não é escolhido (é a mesma recusa do `store`, §2.1 do doc 17).
+
+**Idempotente de dois jeitos.** O objeto com qualquer colocação de nó sai da lista; e dentro da
+chamada a trava é `catalog.copies(objectId)` não vazio — que pega o caso de duas instâncias pedindo
+ao mesmo tempo, ou o objeto repetido na página. Sem a segunda, duas chamadas concorrentes gravariam
+duas `PENDING_REMOTE` com a réplica 1 e a confirmação da segunda cairia em "já foi confirmada".
+
+**O que ela não faz:** não move réplica existente, não substitui cópia `STALE`/`GONE`, e não dispara
+o `OBJECT_PUT` — quem manda gravar é o despacho da réplica, como em toda designação. O padrão da rota
+é **seco**, e o que foi adotado é auditado (`STORAGE_REPLICA_ADOPTED`).
+
+**Efeito medido (e aceito), do §5.9.2:** a adoção cria a **designação**, não a cópia. Até o nó
+confirmar, o objeto continua sem cópia `OK` e o download de um Control Plane que não é dono da réplica 0
+continua respondendo 409. Adotar alivia a durabilidade; o caminho de leitura remota continua pendente.
+
+**Verificação:** `StorageReplicaAdoptionTests` **8** (objeto só na réplica 0 ganha nó; a segunda
+chamada não pede outra; objeto que já tem cópia não é candidato; sem nó elegível aparece com o motivo;
+dry run mostra o destino e não grava; vencido e lapidado ficam fora; a escolha é a da colocação e não
+"o primeiro da lista"; objeto repetido na consulta já designado não ganha outra designação).
+`StorageReplicaAdoptionPersistenceTests` **5** no SQL real (sem colocação é candidato; réplica 0 não
+conta como cópia de nó; `OK`/`PENDING_REMOTE`/`STALE` tiram da lista; vencido/lapidado/PENDING ficam
+fora e prazo futuro ainda vale; o limite é respeitado). `AdminStorageReplicaAdoptionTests` **3** pela
+rota (conta comum é recusada na leitura e na adoção; admin vê {considered, adopted, skipped}; o seco
+mostra o nome do objeto com `NO_NODE_ELIGIBLE` e nada é gravado). Mutações: sem a trava de `copies`,
+`dryRun` gravando, a consulta contando a réplica 0 como cópia de nó, o filtro de vencido virando
+no-op, a consulta com `cross join` — **5 de 5 derrubam**.
+
+## 5.11 A designação que ninguém confirma pode ser solta sem ligar o auto-heal
+
+A soltura de `PENDING_REMOTE` vencida existe desde o §2.2 — mas morava **dentro** do
+`StorageReplicationWorker`, que nasce desligado (`rede.storage.replication.auto-heal-enabled=false`).
+Na instalação de fábrica, uma designação cujo nó sumiu depois do despacho (tarefa perdida, disco
+cheio, nó revogado) durava para sempre:
+
+| quem pergunta | o que respondia |
+|---|---|
+| `StorageHealer` | `ALREADY_DESIGNATED` — "a lacuna tem dono" (o dono não existe mais) |
+| adoção de réplica única (§5.10) | o objeto saía da lista, porque `PENDING_REMOTE` já conta como colocação de nó |
+| operador | nada: não havia rota de leitura nem de escrita para essa linha |
+
+O painel mostrava durabilidade baixa, o scrub apontava a lacuna e o qualificador da duplicidade
+(§5.1.1, que desconta a reserva) segurava espaço para uma cópia que não vinha.
+
+| rota (admin) | o que faz |
+|---|---|
+| `GET /admin/network/storage/pending?limit=` | as pendências, da mais antiga para a mais nova, com `objectId`, `bucket`, `key`, `replica`, `nodeId`, `designatedAt`, `ageMinutes` e `expired` |
+| `POST /admin/network/storage/pending/release?dryRun=false&maxAgeMinutes=&limit=` | as vencidas viram `GONE`, uma linha de auditoria `STORAGE_PENDING_RELEASED` por designação solta |
+
+**Uma regra só.** A varredura saiu do worker para `StoragePendingRelease`, e o worker passou a chamar
+este serviço — não há segunda cópia da lógica nem segundo prazo. O prazo é o mesmo
+`rede.storage.replication.pending-max-age-minutes` (60), e a rota aceita `maxAgeMinutes` para o ato
+pontual (piso de 1 minuto). A idade é a de `verified_at`, que `savePlacement` grava como o instante da
+designação. **Linha sem `verified_at` conta como vencida**: não dá para provar que é nova, e assumir
+"nova" deixaria a pendência eterna exatamente quando o dado está incompleto.
+
+**O que a soltura faz com a linha.** `GONE`, nunca apagada: o histórico continua mostrando que houve
+uma tentativa, e a linha deixa de contar como ocupação, como reserva de folga (doc 17 §2.2) e como
+dono da lacuna. O corpo no nó não é tocado — quem apaga arquivo de participante é a poda dele
+(`/network/storage/inventory/purge`), não o Control Plane.
+
+**O que a soltura não faz.** Não designa a cópia nova (isso é do `/storage/heal`, e da adoção de
+réplica única quando não há nenhuma cópia de nó), não liga o auto-heal e não confirma nada. Uma
+confirmação que chegue depois da soltura é recusada com `409 STORAGE_REPLICA_ALREADY_CONFIRMED`.
+
+**O caminho do operador, inteiro, sem worker:** a pendência fica vencida → `GET /pending` mostra qual
+é → `POST /pending/release?dryRun=false` a solta → `POST /nodes/storage/heal` volta a designar, com o
+número de réplica depois do maior existente.
+
+**Não há rota sem admin, e não é o controller que garante isso.** Toda rota `/admin/**` passa pelo
+`AdminRouteInterceptor` global: sem sessão é `401`, sessão válida sem o papel é `403`. A chamada de
+`requireAdmin` no controller continua como defesa em profundidade, como em todo controller de admin;
+uma mutação que a remove **não derruba teste nenhum**, e é o comportamento certo — o discriminante de
+autorização desta rota é o interceptor. O que os testes fixam é o `403` de sessão válida sem papel.
+
+**Verificação:** `StoragePendingReleaseTests` **8** (vencida vira `GONE` e a lacuna fica sem
+`PENDING_REMOTE`, com auditoria; recente não é solta; a leitura mostra as duas com a ordem e a idade,
+e o prazo da chamada muda a mesma régua; o seco mostra sem gravar; linha sem `verified_at` conta como
+vencida; o prazo da chamada vence o padrão; o teto limita o lote; a solta devolve a reserva de folga
+ao nó). `AdminStoragePendingReleaseTests` **5** pela rota (conta comum é recusada na leitura e na
+soltura; sessão válida **sem** o papel recebe `403` — não `401`; o seco mostra a vencida com `key` e
+`nodeId` e não grava; leitura e soltura real devolvem a mesma lista; e o caminho completo: antes da
+soltura o `/storage/heal` responde `ALREADY_DESIGNATED`, depois deixa de responder).
+`StorageReplicationWorkerTests` **3** seguem verdes com o worker chamando o serviço.
+Mutações (**8 de 8 derrubam**): soltar sem olhar a idade; `dryRun` gravando; soltar deixando a linha
+`PENDING_REMOTE`; linha sem `verified_at` nunca vencendo; a leitura marcando tudo como vencido; o
+`maxAgeMinutes` da chamada ignorado; o teto ignorado; a auditoria por linha removida.
+
+harness `storage-migration-test` cobrem o caminho local; o caso remoto não tem teste porque o caminho
+não existe.
+
+## 5.12 A cópia de um nó revogado não é durabilidade
+
+Revogar é a única transição de nó que **não tem volta**: as chaves caem na mesma transação
+(`transitions` → `keyService.revokeAllForNode` + certificados) e o `approve` recusa o retorno
+(`409 NODE_REVOKED`). O nó deixa de autenticar, de receber tarefa e de ser escolhido para réplica
+(`StoragePlacementService.storageReady` exige `ACTIVE`).
+
+**O que faltava era a leitura.** A varredura contava toda cópia `OK` — inclusive a de um nó revogado
+— como durabilidade confirmada. Um objeto com a réplica 0 e uma cópia só no nó revogado respondia
+"2 de 2": não entrava em `underReplicated`, o `healing` nunca recebia a lacuna, e o painel mostrava
+uma durabilidade que existia apenas no catálogo. O objeto ficava a **uma perda do disco do Control
+Plane** de sumir, e ninguém sabia.
+
+### Agora
+
+- **`GET /admin/network/nodes/storage/scrub`** não conta mais a cópia de nó revogado. O objeto aparece
+  em `underReplicated` (e o healing pode repor) e a cópia que saiu da conta aparece num campo próprio,
+  `onRevokedNode` (`objectId`, `replica`, `nodeId`) — é a explicação de um objeto que "tinha 2 cópias"
+  e agora tem 1;
+- **`GET /admin/network/nodes/{id}/removal-impact?planned=REVOKED`** diz, **antes** do ato, o que a
+  revogação leva junto: `objectsHeld` (cópias `OK` no nó), `objectsLosingLastNodeCopy` e a lista
+  `losesLastCopy` (`objectId`, `bucket`, `key`, `replica`, `bytes`). Teto de 500 objetos, com
+  `truncated` quando bate.
+
+As regras do impacto, e por quê:
+
+| item | regra | motivo |
+|---|---|---|
+| o que o nó guarda | só cópia `OK` | `STALE`/`PENDING_REMOTE`/`GONE` não é corpo bom no disco dele |
+| objeto contado | só `servable()` (não `DELETED`) | lápide não é algo que alguém baixe |
+| "sobra alguma?" | cópia `OK` de **outro** nó, que não esteja revogado | cópia num nó já revogado também não serve; a pergunta é o que resta **depois** |
+| réplica 0 | **não** conta como cópia de nó | o brief conta durabilidade por cópia de nó; o Control Plane é um domínio próprio, não um storage node |
+| `warning` | só com `planned=REVOKED`, nó ainda não revogado e ao menos um objeto perdido | depois de revogado o dano está feito; avisar de novo não ajuda |
+
+**Não é um passo da revogação.** Designar a cópia nova é do healing e da adoção, e o healing nasce
+desligado de fábrica (§2.2). Fazer a revogação disparar designação ligaria, por efeito colateral,
+transferência de corpo pela rede de quem participa. A ordem que o painel deve sugerir é: ler o
+impacto → `POST /admin/network/nodes/storage/heal` para o que importa → revogar.
+
+**Verificação:** `StorageDurabilityTests` (+3: cópia em nó revogado sai da conta e a lacuna aparece;
+cópia em nó ativo continua contando; nó fora do cadastro é desconhecido, não revogado).
+`NodeRemovalImpactTests` **10** pela rota (objeto sem outra cópia de nó aparece com `key` e `replica`;
+com outra cópia viva não aparece; cópia no outro nó só conta se o outro não estiver revogado; `STALE`
+não conta como guardada; lápide não entra; nó já revogado não avisa de novo; `SUSPENDED` não conta
+como saída; a réplica 0 não substitui cópia de nó; sem admin é `401`/`403`; nó inexistente é `404`).
+Mutações (**8 de 8 derrubam**): a cópia revogada voltar a contar; o nó revogado não ser detectado; a
+cópia de outro nó revogado contar como saída; lápide entrar na conta; `STALE` contar como guardada;
+réplica 0 contar como cópia de nó; `warning` sempre verdadeiro; `SUSPENDED` contar como saída.
+Sem migração nova.

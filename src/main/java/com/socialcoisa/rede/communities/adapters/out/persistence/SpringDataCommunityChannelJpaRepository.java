@@ -11,4 +11,6 @@ interface SpringDataCommunityChannelJpaRepository extends JpaRepository<Communit
 	boolean existsByCommunityIdAndSlug(String communityId, String slug);
 
 	int countByCommunityId(String communityId);
+
+	void deleteByCommunityId(String communityId);
 }

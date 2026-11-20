@@ -106,12 +106,25 @@ public interface StorageCatalogRepository {
 	List<StoragePlacement> copies(String objectId);
 
 	/**
+	 * Todas as colocações de um nó, em qualquer estado. É o que a colocação lê para saber o que o nó
+	 * já reservou (designação pendente) além do que confirmou.
+	 */
+	List<StoragePlacement> copiesOnNode(String nodeId);
+
+	/**
 	 * As cópias deste objeto ainda servíveis (estado {@code OK}), em ordem de réplica.
 	 *
 	 * <p>Uso de leitura/serving: objeto que voltou a ter cópia confirmada. Para durabilidade use
 	 * {@link #copies(String)}.</p>
 	 */
 	List<StoragePlacement> placements(String objectId);
+
+	/**
+	 * Objetos servíveis que têm <b>só a réplica 0</b> na colocação: nada de nó, nem cópia nem
+	 * designação. É a candidata do healing de "réplica única" (doc 13 §5.10): a réplica 0 é o disco
+	 * do Control Plane, e durabilidade é cópia de nó.
+	 */
+	List<StorageObject> withOnlyReplicaZero(int limit);
 
 	/**
 	 * Lápides vencidas, em ordem total {@code (bucket, object_key)}, estritamente <b>depois</b> do
@@ -141,6 +154,13 @@ public interface StorageCatalogRepository {
 	 */
 	java.util.Map<String, long[]> summarizeObjects();
 
+	/**
+	 * Os bytes que o participante ocupa no catálogo: soma de {@code bytes} das versões <b>correntes</b>
+	 * que ele criou, sem lápide. É a base da cota por participante (doc 20 §10) — versão substituída já
+	 * não é conteúdo que o download entrega, e lápide não é conteúdo nenhum.
+	 */
+	long bytesOwnedBy(String ownerUserId);
+
 	/** Cópias por estado: {@code {quantidade, bytes}} cada. Mesma regra de ausência acima. */
 	java.util.Map<String, long[]> summarizePlacements();
 
@@ -155,6 +175,16 @@ public interface StorageCatalogRepository {
 
 	/** O que este nó hospeda, para o painel e para o nó saber o que tem. */
 	List<StoragePlacement> placementsOnNode(String nodeId);
+
+	/**
+	 * As cópias de <b>todos</b> os objetos num estado, em ordem estável.
+	 *
+	 * <p>É a leitura que a cura precisa para achar as {@code STALE} que a varredura do próprio
+	 * disco não vê: a cópia de outro nó nunca passa por este disco, e o sentido dela só existe no
+	 * catálogo. A ordem é {@code (verified_at, object_id, replica)} — a mais antiga primeiro, que
+	 * é a que está parada há mais tempo.</p>
+	 */
+	List<StoragePlacement> placementsInState(StoragePlacement.State state);
 
 	/**
 	 * Cria a <b>versão nova</b> de uma chave. Diferente de {@link #createPending}: nunca reaproveita

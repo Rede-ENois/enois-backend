@@ -34,6 +34,11 @@ public final class TestDatabase {
 		require().update("update users set is_admin = true where id = ?", userId);
 	}
 
+	/** Tira o papel — para o teste do guarda, que precisa de uma sessão que deixa de ser admin. */
+	public static void clearAdmin(String userId) {
+		require().update("update users set is_admin = false where id = ?", userId);
+	}
+
 	/** Devolve a conta ao estado "sem e-mail confirmado" (para testar a regra de credibilidade). */
 	public static void clearEmailVerification(String userId) {
 		require().update("update users set email_verified_at = null where id = ?", userId);
@@ -55,6 +60,12 @@ public final class TestDatabase {
 	 */
 	public static void makePasswordUnusable(String userId) {
 		require().update("update user_credentials set password_usable = false where user_id = ?", userId);
+	}
+
+	/** Sessao que venceu sozinha, sem ninguem revogar — a tabela guarda o hash do token, como o app. */
+	public static int expirarSessao(String sessionToken, java.time.Instant expiresAt) {
+		return require().update("update auth_sessions set expires_at = ? where token = ? and revoked_at is null",
+			expiresAt, com.socialcoisa.rede.shared.security.Hashes.sha256Hex(sessionToken));
 	}
 
 

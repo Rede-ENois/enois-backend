@@ -182,6 +182,76 @@ class StorageDurabilityTests {
 		assertThat(outro.id()).isEqualTo("sob_2");
 	}
 
+	/**
+	 * Revogar um nó é a única ação de admin que tira um participante <b>para sempre</b> — as chaves
+	 * dele caem junto. Até o ciclo 73 a varredura continuava contando a cópia dele como confirmada:
+	 * um objeto com réplica 0 + cópia só no revogado dizia "2 de 2" e o healing nunca recebia a
+	 * lacuna. O objeto ficava com durabilidade que existe só no catálogo.
+	 */
+	@Test
+	void copiaEmNoRevogadoNaoContaComoDurabilidadeENaoEscondeALacuna() {
+		StorageObject objeto = StorageObject.current("sob_1", "fotos", "a.jpg", "image/jpeg", 10L, "abc",
+			StorageObjectState.STORED, "user_1", NOW, NOW, null);
+		when(catalog.listAll(any(), anyInt())).thenReturn(List.of(objeto));
+		when(catalog.copies("sob_1")).thenReturn(List.of(copia(0, "nd_ctrl"), copia(1, "nd_a")));
+		regiao("nd_ctrl", null);
+		when(nodes.findById("nd_a")).thenReturn(Optional.of(noComStatus("nd_a", "sul", NodeStatus.REVOKED)));
+
+		StorageScrubber.Report report = scrubber.scan(null, 10);
+
+		// A réplica 0 é a única durabilidade real; a lacuna aparece, e é o que o healer consome.
+		assertThat(report.underReplicated()).singleElement().satisfies(g -> {
+			assertThat(g.objectId()).isEqualTo("sob_1");
+			assertThat(g.confirmed()).as("só a réplica 0 conta").isEqualTo(1);
+			assertThat(g.missing()).as("alvo 3, uma cópia real").isEqualTo(2);
+			assertThat(g.nodesWithCopy()).containsExactly("nd_ctrl");
+		});
+		assertThat(report.onRevokedNode()).singleElement().satisfies(c -> {
+			assertThat(c.nodeId()).isEqualTo("nd_a");
+			assertThat(c.replica()).isEqualTo(1);
+		});
+		assertThat(report.byDurability()).containsExactly(entry("SINGLE_DOMAIN", 1L));
+	}
+
+	/** O mesmo objeto com o nó <b>ativo</b>: a cópia conta e não há lacuna nem "saiu da conta". */
+	@Test
+	void copiaEmNoAtivoContinuaContando() {
+		StorageObject objeto = StorageObject.current("sob_1", "fotos", "a.jpg", "image/jpeg", 10L, "abc",
+			StorageObjectState.STORED, "user_1", NOW, NOW, null);
+		when(catalog.listAll(any(), anyInt())).thenReturn(List.of(objeto));
+		when(catalog.copies("sob_1")).thenReturn(List.of(copia(0, "nd_ctrl"), copia(1, "nd_a")));
+		regiao("nd_ctrl", null);
+		when(nodes.findById("nd_a")).thenReturn(Optional.of(noComStatus("nd_a", "sul", NodeStatus.ACTIVE)));
+
+		StorageScrubber.Report report = scrubber.scan(null, 10);
+
+		assertThat(report.onRevokedNode()).isEmpty();
+		assertThat(report.underReplicated()).singleElement().satisfies(g -> {
+			assertThat(g.confirmed()).isEqualTo(2);
+			assertThat(g.missing()).isEqualTo(1);
+		});
+	}
+
+	/** Cópia de nó fora do cadastro (nem existe linha) nunca contou como durabilidade conhecida. */
+	@Test
+	void copiaDeNoForaDoCadastroNaoViraRevogado() {
+		StorageObject objeto = StorageObject.current("sob_1", "fotos", "a.jpg", "image/jpeg", 10L, "abc",
+			StorageObjectState.STORED, "user_1", NOW, NOW, null);
+		when(catalog.listAll(any(), anyInt())).thenReturn(List.of(objeto));
+		when(catalog.copies("sob_1")).thenReturn(List.of(copia(1, "nd_fantasma")));
+		regiao("nd_fantasma", "sul");
+
+		StorageScrubber.Report report = scrubber.scan(null, 10);
+
+		assertThat(report.onRevokedNode()).as("sem cadastro não é revogado: é desconhecido").isEmpty();
+		assertThat(report.underReplicated()).singleElement().satisfies(g -> assertThat(g.confirmed()).isEqualTo(1));
+	}
+
+	private static NetworkNode noComStatus(String id, String region, NodeStatus status) {
+		return new NetworkNode(id, id, "owner", status, Set.of(NodeProfile.NODE_STORAGE), region, "BR",
+			"0.1.0", NOW, 4, 8192, 102400, 100, null, null, null, null, 40960L, null, null, 0, null, null);
+	}
+
 	@Test
 	void varredura_de_rede_vazia_nao_inventa_niveis() {
 		assertThat(scrubber.scan(null, 10).byDurability()).isEmpty();

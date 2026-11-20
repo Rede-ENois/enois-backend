@@ -44,6 +44,15 @@ import com.socialcoisa.rede.network.domain.StoragePlacement;
  * mesma mentira que o contrato do Storage evita em todo o resto.</li>
  * </ul>
  *
+ * <h2>A cópia que não confere também é lacuna</h2>
+ * <p>{@code underReplicated} responde "faltam cópias"; {@code divergent} responde "a cópia existe e
+ * não é o que o catálogo promete". A segunda não entrava na cura: um corpo trocado no disco de um
+ * nó ficava {@code STALE} para sempre, mesmo com a cura rodando a cada rodada, porque a varredura
+ * sem releitura não o via. Agora o healer relê o disco desta instalação (o trabalho que ele já faz e
+ * é barato) e, para cada cópia divergente, <b>devolve o espaço</b> (a cópia vira {@code GONE}) para a
+ * rodada seguinte designar de novo. Também olha as cópias {@code STALE} do catálogo, que a releitura
+ * não alcança, e deixa a réplica 0 do Control Plane intacta — ver §5.1.1 do doc 13.</p>
+
  * <h2>É um ato de operador</h2>
  * <p>Designar dispara tráfego de corpo (o nó busca o objeto no Control Plane), e o brief é
  * explícito em que o custo de disco e banda é de quem contribui. Por isso não há agendador: é
@@ -66,7 +75,11 @@ public class StorageHealer {
 	 * tem o que fazer.
 	 */
 	public record Report(boolean dryRun, int replicasExpected, List<HealedObject> designated,
-			List<Skipped> skipped) {
+			List<Skipped> skipped, List<Object> repostos) {
+
+		public Report(boolean dryRun, int replicasExpected, List<HealedObject> designated, List<Skipped> skipped) {
+			this(dryRun, replicasExpected, designated, skipped, List.of());
+		}
 	}
 
 	/**
@@ -75,6 +88,19 @@ public class StorageHealer {
 	 * tarefa. Designar sem despachar deixava a cópia esperando um nó que a puxasse por conta própria.
 	 */
 	public record ReportWithDispatch(Report heal, List<Object> dispatched, List<Object> dispatchSkipped) {
+	}
+
+	/**
+	 * O que se fez com uma cópia divergente. {@code action}: {@code SERIALIZED} (a cópia virou
+	 * {@code GONE} e o espaço será designado de novo) ou {@code REPLICA_ZERO} (o corpo do CP não
+	 * confere; não se toca — reler em caminho de cura não pode apagar ou escrever por cima).
+	 */
+	public record Reposted(String objectId, int replica, String nodeId, String action) {
+	}
+
+	/** Digest em JSON: o valor vem de disco, e nunca é reescrito sem escape. */
+	private static String escape(String valor) {
+		return valor == null ? "" : valor.replace("\\", "\\\\").replace("\"", "\\\"");
 	}
 
 	/** Uma designação ({@code replica} e {@code nodeId}) para o objeto. */
@@ -124,9 +150,11 @@ public class StorageHealer {
 	 */
 	public Report heal(String actorId, String bucket, int maxObjects, boolean dryRun) {
 		int bounded = Math.max(1, Math.min(maxObjects <= 0 ? MAX_OBJECTS_LIMIT : maxObjects, MAX_OBJECTS_LIMIT));
-		// A varredura NÃO relê corpo: curar a partir de uma varredura que relê disco do nó seria
-		// pagar o custo de leitura sem precisar dele. O que a cura precisa é a lista de lacunas.
-		StorageScrubber.Report varredura = scrubber.scan(bucket, bounded, false);
+		// A releitura é só do disco DESTA instalação (réplica 0 e o diretório do nó local): é o único
+		// que o Control Plane alcança sem abrir conexão para o participante. É ela que revela a cópia
+		// trocada no próprio disco; sem isso, `divergent` só existia no relatório do operador e a cura
+		// nunca agia sobre ela.
+		StorageScrubber.Report varredura = scrubber.scan(bucket, bounded, true);
 		Instant now = clock.instant();
 		List<HealedObject> designados = new ArrayList<>();
 		List<Skipped> pulados = new ArrayList<>();
@@ -175,9 +203,103 @@ public class StorageHealer {
 			gravarDesignacoes(actorId, objeto, escolhidos.subList(0, limite), copias, bytes, designados);
 		}
 
-		LOG.info("storage heal dryRun={} objetos={} designados={} pulados={}", dryRun,
-			varredura.underReplicated().size(), designados.size(), pulados.size());
-		return new Report(dryRun, varredura.replicasExpected(), List.copyOf(designados), List.copyOf(pulados));
+		// Duas origens para a mesma pergunta. A varredura só relê o disco DESTA instalação, e o
+		// Control Plane pode não ter corpo nenhum no disco (é o caso da instalação que não hospeda
+		// réplica 0): aí `divergent` volta vazio para sempre, mesmo com a cópia de um nó já STALE.
+		// O estado da colocação é a outra testemunha — foi o próprio nó que declarou o digest errado
+		// ou a varredura dele que mediu. As duas listas se somam sem duplicar: a divergente sem
+		// linha STALE (o disco deste CP) é justamente a que só a releitura enxerga.
+		List<Object> repostos = new ArrayList<>();
+		java.util.Set<String> jaTratadas = new java.util.HashSet<>();
+		for (StorageScrubber.Report.Divergent divergente : varredura.divergent()) {
+			jaTratadas.add(divergente.objectId() + "#" + divergente.replica());
+			repostos.addAll(repor(actorId, divergente, dryRun));
+		}
+		for (StoragePlacement marcada : copiasStale(bucket, bounded)) {
+			if (jaTratadas.contains(marcada.objectId() + "#" + marcada.replica())) {
+				continue;
+			}
+			repostos.addAll(repor(actorId, new StorageScrubber.Report.Divergent(marcada.objectId(),
+				marcada.replica(), marcada.nodeId(), marcada.sha256(), ""), dryRun));
+		}
+
+		LOG.info("storage heal dryRun={} objetos={} designados={} pulados={} repostos={}", dryRun,
+			varredura.underReplicated().size(), designados.size(), pulados.size(), repostos.size());
+		return new Report(dryRun, varredura.replicasExpected(), List.copyOf(designados), List.copyOf(pulados),
+			List.copyOf(repostos));
+	}
+
+	/**
+	 * As cópias {@code STALE} que existem hoje no catálogo (limitadas ao teto da rodada).
+	 *
+	 * <p>É o que a varredura sem releitura <b>não</b> vê: as cópias que nunca passaram por este
+	 * disco mas foram marcadas quando o nó confirmou outro digest ({@code 409}) ou quando ele mesmo
+	 * reportou a divergência. Ler só {@code divergent} deixava a cura sem efeito nesses casos — a
+	 * rodada desenhava uma réplica nova a cada vez e as {@code STALE} antigas ficavam para sempre.</p>
+	 */
+	private List<StoragePlacement> copiasStale(String bucket, int limite) {
+		return catalog.placementsInState(StoragePlacement.State.STALE).stream()
+			.filter(p -> bucket == null || catalog.findById(p.objectId())
+				.map(o -> bucket.equals(o.bucket()))
+				.orElse(false))
+			.limit(limite)
+			.toList();
+	}
+
+	/**
+	 * A cópia que não confere vira {@code GONE} e o espaço é designado de novo.
+	 *
+	 * <p><b>Por que {@code GONE} e não {@code STALE}.</b> {@code STALE} diz "o catálogo aponta e o
+	 * disco tem outra coisa" — é o estado que a varredura encontra, e ele mantém o arquivo onde
+	 * está. A cura não pode apagar o arquivo de um nó (o CP não escreve no disco de participante), e
+	 * por isso marca {@code GONE}: o espaço está livre para outra cópia, e o arquivo velho deixa de
+	 * contar como espaço ocupado em {@code StoragePlacementService}. O nó limpa o órfão pela própria
+	 * poda ({@code /network/storage/inventory/purge}), que já apaga o que o catálogo não atribui a
+	 * ele.</p>
+	 *
+	 * <p><b>Por que o mesmo nó pode ser escolhido.</b> Quando a divergência é a réplica 0 (o disco
+	 * do próprio Control Plane), o corpo certo existe no catálogo e é reescrito por quem grava: a
+	 * réplica 0 não sai do lugar. Quando é a cópia de um nó local, o arquivo ruim é o que o nó tem,
+	 * e a designação nova pede a ele o corpo do CP — mesmo caminho do upload, mesmo digest conferido
+	 * na confirmação. A escolha continua sendo de {@link StoragePlacementService}.</p>
+	 */
+	private List<Object> repor(String actorId, StorageScrubber.Report.Divergent divergente, boolean dryRun) {
+		StorageObject objeto = catalog.findById(divergente.objectId()).orElse(null);
+		if (objeto == null || !objeto.servable()) {
+			// A varredura e a cura disputam o catálogo: entre uma e outra a versão pode ter sido
+			// substituída. Não é erro — a cópia divergente da versão antiga não vale mais.
+			return List.of();
+		}
+		// A cópia da réplica 0 é o disco do CP: o corpo certo está aqui e o objeto continua servível
+		// por ela. Marcar GONE derrubaria a única cópia que se sabe boa.
+		if (divergente.replica() == 0) {
+			if (!dryRun) {
+				audit.record(actorId, "STORAGE_REPLICA_ZERO_DIVERGENT", objeto.id(),
+					"{\"expected\":\"" + escape(divergente.expectedSha256()) + "\",\"actual\":\""
+						+ escape(divergente.actualSha256()) + "\"}");
+			}
+			return List.of(new Reposted(objeto.id(), 0, divergente.nodeId(), "REPLICA_ZERO"));
+		}
+		List<Object> acoes = new ArrayList<>();
+		if (dryRun) {
+			acoes.add(new Reposted(objeto.id(), divergente.replica(), divergente.nodeId(), "SERIALIZED"));
+			return acoes;
+		}
+		try {
+			tx.executeWithoutResult(semRetorno -> {
+				catalog.savePlacement(new StoragePlacement(objeto.id(), divergente.replica(), divergente.nodeId(),
+					objeto.bytes() == null ? 0 : objeto.bytes(), objeto.sha256(),
+					StoragePlacement.State.GONE, clock.instant()));
+				audit.record(actorId, "STORAGE_REPLICA_REPLACED", objeto.id(),
+					"{\"node\":\"" + divergente.nodeId() + "\",\"replica\":" + divergente.replica()
+						+ ",\"actual\":\"" + escape(divergente.actualSha256()) + "\"}");
+			});
+			acoes.add(new Reposted(objeto.id(), divergente.replica(), divergente.nodeId(), "SERIALIZED"));
+		}
+		catch (RuntimeException falha) {
+			LOG.warn("storage heal: falha ao repor a copia divergente de {}: {}", objeto.id(), falha.getMessage());
+		}
+		return acoes;
 	}
 
 	/**

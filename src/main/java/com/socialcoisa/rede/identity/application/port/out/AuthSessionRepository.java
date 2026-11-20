@@ -19,6 +19,20 @@ public interface AuthSessionRepository {
 
 	Optional<String> findActiveUserIdByRefreshToken(String refreshToken, Instant now);
 
+	/**
+	 * Por que uma sessao GRAVADA deixou de autenticar: {@link InactiveSession#REVOKED} quando alguem
+	 * a encerrou, {@link InactiveSession#EXPIRED} de outro modo. Vazio para token que o banco nao
+	 * conhece — quem responde nao expoe nada sobre valor inventado.
+	 *
+	 * <p>Le sempre do banco: a leitura em cache da requisicao pode ter acontecido antes da revogacao
+	 * (a troca de senha consulta a sessao para decidir quem esta pedindo).</p>
+	 */
+	Optional<InactiveSession> findInactiveReason(String token, Instant now);
+
+	enum InactiveSession {
+		REVOKED, EXPIRED
+	}
+
 	void revoke(String token, Instant revokedAt);
 
 	/** Revoga de forma atômica; false quando outra requisição concorrente já revogou (replay). */

@@ -1,5 +1,7 @@
 package com.socialcoisa.rede.network.application;
 
+import com.socialcoisa.rede.network.application.testsupport.CatalogoEmMemoria;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -83,7 +85,7 @@ class StorageCatalogServiceTests {
 
 	/** O serviço de colocação com o número de cópias dado; por padrão, uma só (o Control Plane). */
 	private StoragePlacementService placement(int replicas) {
-		return new StoragePlacementService(nodes, catalog, replicas, 90);
+		return new StoragePlacementService(nodes, catalog, Math.min(replicas, 1), 90);
 	}
 
 	private static byte[] body(String text) {
@@ -354,10 +356,15 @@ class StorageCatalogServiceTests {
 		service.store(storageNode(), object.id(), new ByteArrayInputStream(body("v1")));
 		service.delete("user_1", "fotos", "gato.jpg");
 
-		assertThatThrownBy(() -> service.beginUpload("user_1", "fotos", "gato.jpg", "image/jpeg"))
-			.isInstanceOf(ApiException.class)
-			.hasMessageContaining("removida");
-		assertThat(catalog.findById(object.id()).orElseThrow().state()).isEqualTo(StorageObjectState.DELETED);
+		// Antes: o upload pela chave lapidada respondia 409 "removida". Agora: a chave é um objeto
+		// NOVO — o cliente S3 espera que o PUT depois do DELETE funcione —, e o que não pode voltar
+		// é a linha antiga: ela continua lápide, e o download da chave não entrega o conteúdo dela.
+		StorageObject novo = service.beginUpload("user_1", "fotos", "gato.jpg", "image/jpeg");
+		assertThat(novo.id()).as("objeto novo, não a ressurreição do removido").isNotEqualTo(object.id());
+		// A lápide saiu da tabela (a linha morta não sobrevive ao PUT na mesma chave); o conteúdo que
+		// ela guardava não voltou: o novo nasce PENDING e bem-sucedido só depois do corpo.
+		assertThat(catalog.findById(object.id())).as("a lápide não fica para trás na chave").isEmpty();
+		assertThat(novo.state()).isEqualTo(StorageObjectState.PENDING);
 	}
 
 	@Test
@@ -385,7 +392,10 @@ class StorageCatalogServiceTests {
 	}
 
 	/** Catálogo em memória: a porta é o que importa aqui, não o SQL (coberto pelos testes de schema). */
-	private static final class InMemoryCatalog implements StorageCatalogRepository {
+	private static final class InMemoryCatalog extends CatalogoEmMemoria {
+
+		/** Ids das linhas mortas (§{@code delete}): é o que o descarte da lápide tira do caminho. */
+		private final java.util.Set<String> mortas = new java.util.LinkedHashSet<>();
 
 		private final java.util.Map<String, StorageObject> byKey = new java.util.LinkedHashMap<>();
 		private final java.util.Map<String, StoragePlacement> placements = new java.util.LinkedHashMap<>();
@@ -439,9 +449,13 @@ class StorageCatalogServiceTests {
 
 		@Override
 		public boolean markDeleted(String id, Instant now) {
-			return replace(id, o -> o.state() != StorageObjectState.DELETED,
+			boolean marcou = replace(id, o -> o.state() != StorageObjectState.DELETED,
 				o -> StorageObject.current(o.id(), o.bucket(), o.key(), o.contentType(), o.bytes(), o.sha256(),
 					StorageObjectState.DELETED, o.createdBy(), o.createdAt(), now, now));
+			if (marcou) {
+				mortas.add(id);
+			}
+			return marcou;
 		}
 
 		private boolean replace(String id, java.util.function.Predicate<StorageObject> when,
@@ -457,7 +471,9 @@ class StorageCatalogServiceTests {
 
 		@Override
 		public boolean discardPending(String id) {
-			throw new UnsupportedOperationException("nao usado neste teste");
+			boolean eraMorta = mortas.remove(id);
+			byKey.values().removeIf(o -> o.id().equals(id));
+			return eraMorta;
 		}
 		@Override
 		public boolean restorePending(String id) {
@@ -540,6 +556,15 @@ class StorageCatalogServiceTests {
 		}
 
 		@Override
+		public long bytesOwnedBy(String ownerUserId) {
+			return byKey.values().stream()
+				.filter(o -> ownerUserId.equals(o.createdBy()) && o.supersededBy() == null
+						&& o.state() != StorageObjectState.DELETED)
+				.mapToLong(o -> o.bytes() == null ? 0 : o.bytes())
+				.sum();
+		}
+
+		@Override
 		public java.util.Map<String, long[]> summarizePlacements() {
 			java.util.Map<String, long[]> porEstado = new java.util.LinkedHashMap<>();
 			for (StoragePlacement p : placements.values()) {
@@ -553,6 +578,11 @@ class StorageCatalogServiceTests {
 		@Override
 		public List<StoragePlacement> placementsOnNode(String nodeId) {
 			return placements.values().stream().filter(p -> p.nodeId().equals(nodeId)).toList();
+		}
+
+		@Override
+		public List<StoragePlacement> placementsInState(StoragePlacement.State state) {
+			return placements.values().stream().filter(p -> p.state() == state).toList();
 		}
 
 		// --- Ciclo de vida (§14, V352): o fake guarda o mínimo que os serviços leem ---

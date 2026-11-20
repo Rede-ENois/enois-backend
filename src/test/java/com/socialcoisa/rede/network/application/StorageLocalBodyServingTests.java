@@ -22,6 +22,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
 import com.socialcoisa.rede.network.domain.StorageObject;
+import com.socialcoisa.rede.network.domain.StoragePlacement;
 import com.socialcoisa.rede.network.domain.StorageObjectState;
 import com.socialcoisa.rede.shared.audit.AuditTrail;
 import com.socialcoisa.rede.shared.web.ApiException;
@@ -92,6 +93,30 @@ class StorageLocalBodyServingTests {
 		nodeBodies.write(objectId, new ByteArrayInputStream(bytes(content)));
 	}
 
+	/**
+	 * Dá identidade de nó ao diretório de corpos — o que o runtime faz ao provisionar (`node.json` +
+	 * `api-key` 0600 no diretório pai de {@code objects/}). Só com identidade a leitura local é
+	 * cobrada contra a colocação; sem ela, o disco é do Control Plane e não há linha a cobrar.
+	 */
+	private void discoDoNo(String nodeId) throws Exception {
+		Path home = nodeBodies.pathOf("qualquer").getParent().getParent();
+		Files.createDirectories(home);
+		Files.writeString(home.resolve("node.json"), "{\"nodeId\":\"" + nodeId + "\"}");
+		Path chave = home.resolve("api-key");
+		Files.writeString(chave, "enk_" + nodeId + "_segredo");
+		try {
+			Files.setPosixFilePermissions(chave, java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+		}
+		catch (UnsupportedOperationException semPosix) {
+			// Sistema sem POSIX: o store considera a credencial legível só pelo dono.
+		}
+	}
+
+	private void colocacao(String objectId, String nodeId, StoragePlacement.State estado) {
+		when(catalog.placementOn(objectId, nodeId)).thenReturn(java.util.Optional.of(
+			new StoragePlacement(objectId, 1, nodeId, 4L, "a".repeat(64), estado, NOW)));
+	}
+
 	private String ler(String objectId) throws Exception {
 		try (var body = service.readBody(objectId)) {
 			return new String(body.readAllBytes(), StandardCharsets.UTF_8);
@@ -128,6 +153,58 @@ class StorageLocalBodyServingTests {
 		corpoDoNoLocal(object.id(), "BBBBBBB");
 
 		assertThat(ler(object.id())).isEqualTo("AAAAAAA");
+	}
+
+	@Test
+	void copia_do_no_marcada_stale_nao_e_servida_a_quem_puxa_o_objeto() throws Exception {
+		// O download local é o caminho pelo qual a réplica de outro nó recebe o objeto. Servir daqui
+		// uma cópia que o catálogo já marcou como não-conferente espalha o corpo ruim — e o catálogo
+		// dizia uma coisa e a rota fazia outra.
+		StorageObject object = objeto("sob_a", "conteudo trocado");
+		discoDoNo("nd_dono");
+		corpoDoNoLocal(object.id(), "conteudo trocado");
+		colocacao(object.id(), "nd_dono", StoragePlacement.State.STALE);
+
+		assertThatThrownBy(() -> service.readBody(object.id()))
+			.isInstanceOf(ApiException.class)
+			.satisfies(erro -> {
+				ApiException api = (ApiException) erro;
+				assertThat(api.status()).isEqualTo(409);
+				assertThat(api.code()).isEqualTo("STORAGE_REPLICA_STALE");
+				assertThat(api.getMessage()).contains("STALE");
+			});
+	}
+
+	@Test
+	void copia_do_no_ok_continua_servida() throws Exception {
+		StorageObject object = objeto("sob_a", "conteudo bom");
+		discoDoNo("nd_dono");
+		corpoDoNoLocal(object.id(), "conteudo bom");
+		colocacao(object.id(), "nd_dono", StoragePlacement.State.OK);
+
+		assertThat(ler(object.id())).isEqualTo("conteudo bom");
+	}
+
+	@Test
+	void corpo_do_no_sem_linha_de_colocacao_continua_servido() throws Exception {
+		// O corpo pode estar no disco antes de a linha de colocação existir (o PUT autenticado grava
+		// e só depois confirma). Recusar por ausência de linha transformaria essa janela em 409 e
+		// faria o objeto sumir para quem o acabou de gravar.
+		StorageObject object = objeto("sob_a", "conteudo novo");
+		discoDoNo("nd_dono");
+		corpoDoNoLocal(object.id(), "conteudo novo");
+
+		assertThat(ler(object.id())).isEqualTo("conteudo novo");
+	}
+
+	@Test
+	void disco_sem_identidade_de_no_nao_e_cobrado_contra_colocacao() throws Exception {
+		// Instalação do Control Plane que também guarda corpo no diretório de nó, mas não é um nó
+		// provisionado: não há linha de colocação a cobrar, e a leitura continua valendo.
+		StorageObject object = objeto("sob_a", "conteudo do cp");
+		corpoDoNoLocal(object.id(), "conteudo do cp");
+
+		assertThat(ler(object.id())).isEqualTo("conteudo do cp");
 	}
 
 	@Test

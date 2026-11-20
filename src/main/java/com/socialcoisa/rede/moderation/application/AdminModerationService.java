@@ -12,7 +12,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialcoisa.rede.feed.application.port.in.ModerationRemoveCommentUseCase;
 import com.socialcoisa.rede.feed.application.port.in.ModerationRemovePostUseCase;
+import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
+import com.socialcoisa.rede.feed.domain.CommentStatus;
 import com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository;
 import com.socialcoisa.rede.moderation.application.port.out.SanctionRepository;
 import com.socialcoisa.rede.moderation.application.port.out.UserWarningRepository;
@@ -44,6 +47,7 @@ public class AdminModerationService {
 
 	static final String AUDIT_SANCTION = "ADMIN_SANCTION_APPLIED";
 	static final String AUDIT_POST_REMOVED = "ADMIN_POST_REMOVED";
+	static final String AUDIT_COMMENT_REMOVED = "ADMIN_COMMENT_REMOVED";
 	private static final int WARNING_HISTORY = 50;
 	private static final int HISTORY_LIMIT = 100;
 
@@ -52,6 +56,8 @@ public class AdminModerationService {
 	private final SanctionService sanctionService;
 	private final AuthSessionRepository sessions;
 	private final ModerationRemovePostUseCase posts;
+	private final ModerationRemoveCommentUseCase comments;
+	private final CommentRepository commentRepository;
 	private final UserProfileRepository profiles;
 	private final UserWarningRepository warnings;
 	private final NotificationService notifications;
@@ -61,6 +67,7 @@ public class AdminModerationService {
 
 	public AdminModerationService(ModeratorService moderators, SanctionRepository sanctions,
 			SanctionService sanctionService, AuthSessionRepository sessions, ModerationRemovePostUseCase posts,
+			ModerationRemoveCommentUseCase comments, CommentRepository commentRepository,
 			UserProfileRepository profiles, UserWarningRepository warnings, NotificationService notifications,
 			AuditTrail audit, Clock clock,
 			@Value("${rede.moderation.suspension.grace-days:7}") int graceDays) {
@@ -69,6 +76,8 @@ public class AdminModerationService {
 		this.sanctionService = sanctionService;
 		this.sessions = sessions;
 		this.posts = posts;
+		this.comments = comments;
+		this.commentRepository = commentRepository;
 		this.profiles = profiles;
 		this.warnings = warnings;
 		this.notifications = notifications;
@@ -126,6 +135,36 @@ public class AdminModerationService {
 	}
 
 	public record PostRemoval(String postId, String status) {
+	}
+
+	/**
+	 * Remoção administrativa de COMENTÁRIO, independente de denúncia. Usa a mesma remoção de
+	 * moderação do módulo de feed (soft delete: sai de toda lista, a linha fica para a auditoria e
+	 * o recurso) e registra o motivo na trilha administrativa.
+	 *
+	 * <p>Comentário inexistente ou já removido devolve {@code NOT_FOUND} / {@code ALREADY_REMOVED},
+	 * como a publicação — nunca "removido" para algo que não saiu.</p>
+	 */
+	@Transactional
+	public CommentRemoval removeComment(String adminId, String commentId, String reason) {
+		String cleanReason = UserWarning.requireReason(reason, "remoção do comentário");
+		if (commentId == null || commentId.isBlank()) {
+			throw new ApiException(400, "INVALID_COMMENT_ID", "Informe o comentário.");
+		}
+		String id = commentId.trim();
+		var existing = commentRepository.findById(id);
+		if (existing.isEmpty()) {
+			return new CommentRemoval(id, "NOT_FOUND");
+		}
+		if (existing.get().status() != CommentStatus.ACTIVE) {
+			return new CommentRemoval(id, "ALREADY_REMOVED");
+		}
+		comments.removeAsModerator(adminId, id, "ADMIN:" + cleanReason);
+		audit.record(adminId, AUDIT_COMMENT_REMOVED, id, "{\"reason\":\"" + quote(cleanReason) + "\"}");
+		return new CommentRemoval(id, "REMOVED");
+	}
+
+	public record CommentRemoval(String commentId, String status) {
 	}
 
 	/**

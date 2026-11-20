@@ -87,6 +87,29 @@ consuma além do limite"). Nó de storage precisa de `declared_disk_mb` no enrol
 dois são limites de baixo do uso real, e o menor esconderia o espaço que um deles já viu ocupado
 (cópia interrompida deixa arquivo no volume sem estar confirmada).
 
+## 2.2 A designação pendente reserva a folga cedida
+
+A folga (§2.1) somava só a cópia **confirmada** (`OK`) do nó. Um lote de uploads designado no mesmo
+instante passava inteiro: três objetos de 100 GB para um nó que cedeu 150 GB eram todos colocados
+nele, porque nenhum deles era ainda `OK` quando o próximo era escolhido. O primeiro seria gravado, o
+segundo estouraria a folga — e quem descobriria seria o `store`, com `507`, para um objeto **já
+designado**, que o nó nunca poderia receber.
+
+| situação da colocação | antes | agora |
+|---|---|---|
+| `OK` no nó | conta como ocupado | conta como ocupado |
+| `PENDING_REMOTE` no nó | **não contava** | **reserva o tamanho dela** |
+| `STALE` / `GONE` | não contava | não conta — a primeira não é espaço aproveitável, as outras a coleta devolve |
+
+A reserva é o mesmo `catalog.copiesOnNode`, somado ao maior entre o confirmado e o medido
+(`observadoContentUsedMb`). É reserva, não promessa: quem não confirma volta a liberar a folga na
+primeira colocação seguinte, sem varredura. A **ordem** de escolha (mais folga primeiro) também já
+desconta a reserva — um nó que prometeu 1 GB a outro vem depois de um que não prometeu nada.
+
+**Verificação:** `StoragePlacementServiceTests` **25** (3 novos: a reserva muda a ordem; a cópia
+confirmada conta uma vez só; `STALE` não reserva). Mutações: ignorar a reserva, `STALE` reservando —
+**2 de 2 derrubam**.
+
 ## 3. O que NÃO está entregue
 
 | item | por quê |
@@ -98,7 +121,6 @@ dois são limites de baixo do uso real, e o menor esconderia o espaço que um de
 | escolha por região na **tarefa** | já existe para despacho (`NetworkRegions`); no Storage só entrou na colocação |
 | velocidade de leitura/escrita e IOPS estimados (§7) | **não se estimam.** O brief é explícito no §8.3: indicadores refletem o coletado, nunca o estimado. Medir de verdade exige benchmark no disco do participante — que é carga de escrita num nó de terceiro — e o benchmark precisa de desenho (tamanho, duração, horário, quando repetir). Decisão de produto/infra |
 | estado dos discos (§7, SMART) | o runtime roda em contêiner sem acesso ao dispositivo; `smartctl` na máquina de um voluntário é requisição de confiança que hoje a rede não tem motivo para fazer. Decisão de produto |
-| disponibilidade histórica (§7) | as amostras por nó são **60 pontos de 1 minuto** (V325) e são tela, não retenção. "Disponibilidade" de verdade exige janela de dias e uma regra do que conta como "no ar" (heartbeat perdido é queda? nó em drenagem conta?). O único registro de histórico hoje é `NETWORK_NODE_RECONNECTED` na trilha de auditoria — transição, não série. Decisão de produto + retenção |
 
 Capacidade (§7) **está entregue** por nó em `GET /admin/network/nodes/storage/overview`: `disks[]`
 com `declaredMb`, `freeMb`, `totalMb`, `reservedMb`, `usedMb` e `usedPercent`.
@@ -483,12 +505,28 @@ arquivo continuaria sendo servido.
 A varredura (`POST /admin/network/storage/lifecycle/run`, `dryRun=true` por padrão) faz duas coisas,
 e as duas **marcam lápide, nunca apagam linha**:
 
-1. **expiração** — objeto corrente, servível e vencido vira `DELETED`;
+1. **expiração** — objeto servível e vencido vira `DELETED`, **corrente ou substituído**: o prazo é
+   da versão, e cada versão é um objeto com id próprio (§11.1). Até o ciclo 78 a varredura pedia
+   `superseded_by is null`, e o prazo de qualquer versão que deixou de ser corrente era ignorado —
+   gravado para expirar em sete dias e substituído no segundo, o conteúdo nunca vencia, e sem
+   `retain_superseded_days` (§11.3, "sem política o padrão é guardar") ficava para sempre, na conta
+   do dono e no disco dos nós;
 2. **retenção** — versão substituída além do prazo do bucket vira `DELETED`.
 
 A linha tem de continuar existindo: é ela que a coleta de lápides da fase 3 percorre para mandar
 cada nó soltar as cópias. Apagar a linha deixaria o disco do participante sem registro do que
 coletar.
+
+### 11.4.1 O prazo da versão substituída (ciclo 78)
+
+A falha era de **filtro no SQL**, não de regra: `SELECT_EXPIRED` exigia `superseded_by is null`. O
+teste de serviço não a via porque o filtro mora no `where`, e o serviço só recebia o que a consulta
+devolvia. A correção é uma linha de SQL; a prova é um teste contra o banco real.
+
+**Verificação:** `StorageLifecycleExpiryPersistenceTests` **4** (MariaDB embarcado, SQL de verdade):
+versão substituída com prazo vencido entra na varredura; a corrente vencida continua entrando;
+substituída **sem** prazo não entra (para não confundir prazo com retenção); substituída já lapidada
+não volta. Mutação: repor `superseded_by is null` — **1 de 1 derruba**.
 
 ### 11.5 Restaurar é gravar de novo, não voltar o passado
 
@@ -615,3 +653,100 @@ de operador com o próprio teto.
 - **Teto de banda aplicado pelo próprio nó além do `--limit-rate`**: o nó limita a **velocidade**;
   não há reserva nem fila de banda entre transferências concorrentes (o runtime executa uma tarefa
   por ciclo, então hoje não há concorrência a arbitrar).
+## 11. Disponibilidade histórica (brief §7, V369)
+
+**Entregue.** O §7 pede "disponibilidade histórica" na página do nó; até o V369 ela era a última
+linha da tabela do §3, porque a rede guardava **transições** (`NETWORK_NODE_RECONNECTED` na trilha)
+e **amostras** de 1 minuto (V325, 60 pontos) — nenhuma das duas responde "ficou no ar 99,2% dos
+últimos 7 dias".
+
+### 11.1 A série
+
+`network_node_uptime_daily`, uma linha por nó e por dia:
+
+| coluna | significado |
+|---|---|
+| `present_seconds` | segundos do dia em que o nó esteve dentro da janela de "vivo" |
+| `observed_seconds` | segundos do dia sobre os quais houve medida (entre o primeiro e o último heartbeat do dia) |
+| `first_seen_at` / `last_seen_at` | o menor e o maior contato do dia (a janela não encolhe) |
+| `received_at` | o fim do trecho que chegou **por último** — é contra ele que o reenvio é reconhecido |
+
+A proporção é **uma soma sobre uma soma** (`100 × present / observed`), nunca a média das proporções
+dos dias: um dia com uma hora de medida e um dia inteiro não pesam igual. Dia sem tempo observado
+devolve `percentage: null` — "sem dado", não "0% no ar".
+
+### 11.2 A regra do trecho
+
+Entre dois heartbeats consecutivos o Control Plane sabe uma coisa: o nó respondeu no primeiro e no
+segundo. O intervalo entre eles é **observado** inteiro, e conta como **no ar** até
+`rede.network.node-stale-seconds` (180 s por padrão) depois do primeiro contato — a mesma janela de
+"vivo" do painel e do scheduler, para não haver dois números sobre a mesma coisa. Depois dela, o
+resto do intervalo é tempo fora.
+
+- **Primeiro contato** não inventa trecho: o tempo antes dele não existia para a rede.
+- **Trecho fora de ordem** (chegou depois, terminando antes do último contato) **soma** — é tempo
+  observado que ainda não estava contado.
+- **Reenvio** (o mesmo fim de trecho que chegou por último) **não soma**: é o mesmo heartbeat
+  publicado de novo. A comparação é com `received_at`, a chegada, e não com `last_seen_at`, o maior
+  instante — senão o reenvio de um trecho fora de ordem passaria como novo.
+- O trecho vai inteiro para o **dia do último contato**, não é partido na meia-noite: partir exigiria
+  saber se o nó estava no ar às 00:00, e o que se mediu foram dois contatos. A consequência é
+  conservadora — uma ausência de três dias cai toda no dia da volta e não some da janela de 7 dias.
+
+### 11.3 Rotas
+
+| rota | quem | o que devolve |
+|---|---|---|
+| `GET /admin/network/nodes/{id}/uptime?days=7` | administrador | a série por dia, de 1 a 90 dias |
+| `GET /network/participant/nodes/{id}/uptime?days=7` | dono do nó | a mesma série; nó de outra conta é 404 |
+| campo `uptime` em `GET /network/participant/nodes` | dono do nó | a série de 7 dias de cada nó |
+
+O admin e o participante leem a **mesma** função (`NodeUptimeService.last`), para não divergirem.
+
+### 11.3.1 O participante vê a própria cota (ciclo 80)
+
+A cota por participante (doc 12 §2.3) só existia na **recusa**: quem recebia `507` ficava sabendo os
+números daquele instante, e mais ninguém. O brief §18 pede que o participante "consulte espaço
+utilizado" e que a interface informe "quais recursos estão sendo utilizados" — e ele não podia nem
+saber o próprio limite sem bater nele, nem pedir mais ao operador com o número na mão.
+
+| rota | quem | o que devolve |
+|---|---|---|
+| `GET /network/participant/storage/quota` | a própria conta | `limite`, `usado`, `livre` |
+
+- **Lido do banco, não do cache.** O cache do caminho de gravação conta só o que aquela instância
+  viu; um painel que respondesse por ele mostraria um número diferente do que a próxima recusa vai
+  usar, conforme a instância que atendeu. Aqui a conta é `bytesOwnedBy` (correntes, sem lápide) — a
+  mesma da recusa.
+- **Cota desligada (`limite = 0`) → `livre = null`.** "Sem limite" não é um número; `0` ali diria
+  "cheio" e mandaria o participante apagar arquivos que não precisam sair.
+- É a conta do dono, não do nó: quem tem dois nós paga uma cota só, e o vizinho não vê os números
+  dele.
+
+**Verificação:** `NetworkParticipantStorageQuotaTests` **3** pela rota (limite/usado/livre com lápide
+fora da conta; a cota é do dono e o vizinho vê zero; sem sessão é 401) e `StorageOwnerQuotaTests`
+**+1** (leitura com cota desligada devolve `livre = null`; com cota, os três números são os mesmos da
+recusa). Mutações: cota desligada devolvendo `livre = 0`; `livre` ignorando o usado; a rota lendo
+outra conta — **3 de 3 derrubam**.
+
+### 11.4 Defeito corrigido: a soma das ausências era um piso
+
+`NetworkParticipantService.availability` somava `offlineForSeconds` das **200 linhas mais recentes**
+de reconexão e comparava com o **total** de quedas. A partir da 201ª, `complete` virava `false` para
+sempre e o tempo fora deixava de ser total — virava piso, sem nunca mais ser o número certo. Agora a
+soma lê todas as linhas (`AuditLogRepository.allMetadataFor`, que projeta só o metadado) e
+`complete` é sempre `true`; `measuredOutages` continua dizendo quantas quedas tinham o intervalo
+gravado — são duas perguntas diferentes.
+
+### 11.5 Retenção
+
+`rede.network.uptime.retention-days` (365 por padrão) e a varredura diária
+`rede.network.uptime.retention.cron` (`0 20 4 * * *`). A rota lê no máximo 90 dias; o resto é
+retenção para quem quiser olhar o ano.
+
+### 11.6 O que NÃO está entregue
+
+- **"No ar" por serviço**: o contador mede o nó vivo, não se o processo que serve o Storage estava
+  respondendo. É a mesma medida do painel; separá-las exige um sinal de saúde por perfil.
+- **Disponibilidade por janela arbitrária** (um mês específico): a leitura é "últimos N dias até
+  hoje". Consultar um intervalo passado exigiria outra forma de rota.

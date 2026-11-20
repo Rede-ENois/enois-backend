@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -107,6 +108,21 @@ public class StorageCatalogService {
 	private final StorageOperationMetrics metrics;
 
 	/**
+	 * Cota de bytes por participante ({@code created_by}); {@code 0} desliga (doc 20 §10).
+	 *
+	 * <p>O teto de espaço que existia era o de quem <b>cede</b> (o nó). Sem a cota de quem
+	 * <b>usa</b>, um participante com credencial S3 enche o disco e a cota dos nós, e o upload dos
+	 * outros passa a responder {@code 507} — o vizinho paga pelo vizinho.</p>
+	 */
+	private final long maxBytesPerOwner;
+
+	/**
+	 * O que cada participante já ocupa, <b>nesta instância</b>, a partir do que o banco respondeu na
+	 * primeira leitura. É cache, não fonte da verdade: a fonte é {@code bytesOwnedBy}.
+	 */
+	private final Map<String, Long> usadoPorDono = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/**
 	 * A forma anterior, sem chave: instalação que ainda não configurou a mestra grava em claro. Os
 	 * testes de outros assuntos do catálogo não passam a depender do envelope por causa disto.
 	 */
@@ -125,16 +141,28 @@ public class StorageCatalogService {
 	}
 
 	/**
-	 * Com o contador de operação: é esta a forma que o Spring injeta (o {@code @Autowired} fica neste
-	 * construtor). A delegação acima mantém os testes de outros assuntos com a assinatura que já usavam.
+	 * Com o contador de operação, sem cota de participante. A delegação acima mantém os testes de
+	 * outros assuntos com a assinatura que já usavam; a cota fica no construtor de baixo.
 	 */
-	@org.springframework.beans.factory.annotation.Autowired
 	StorageCatalogService(StorageCatalogRepository catalog, AuditTrail audit, Clock clock,
 			@Value("${rede.storage.max-object-bytes:5368709120}") long maxObjectBytes,
 			@Value("${rede.storage.root:${java.io.tmpdir}/enois-storage}") String storageRoot,
 			@Value("${rede.security.encryption-key:}") String encryptionKey,
 			StoragePlacementService placement, @Nullable NodeBodyStore nodeBodies,
 			@Nullable StorageOperationMetrics metrics) {
+		this(catalog, audit, clock, maxObjectBytes, storageRoot, encryptionKey, placement, nodeBodies, metrics, 0L);
+	}
+
+	/** A forma com cota por participante — é a que o Spring injeta (doc 20 §10). */
+	@org.springframework.beans.factory.annotation.Autowired
+	StorageCatalogService(StorageCatalogRepository catalog, AuditTrail audit, Clock clock,
+			@Value("${rede.storage.max-object-bytes:5368709120}") long maxObjectBytes,
+			@Value("${rede.storage.root:${java.io.tmpdir}/enois-storage}") String storageRoot,
+			@Value("${rede.security.encryption-key:}") String encryptionKey,
+			StoragePlacementService placement, @Nullable NodeBodyStore nodeBodies,
+			@Nullable StorageOperationMetrics metrics,
+			@Value("${rede.storage.max-bytes-per-owner:0}") long maxBytesPerOwner) {
+		this.maxBytesPerOwner = Math.max(0, maxBytesPerOwner);
 		this.catalog = catalog;
 		this.audit = audit;
 		this.clock = clock;
@@ -157,6 +185,10 @@ public class StorageCatalogService {
 		validateKey(key);
 		String type = contentType == null || contentType.isBlank() ? "application/octet-stream" : contentType;
 		Instant now = clock.instant();
+		// A cota é cobrada <b>antes</b> de tudo: um objeto PENDING derrubado pela cota deixaria a
+		// chave ocupada até virar lápide, e o upload seguinte do mesmo participante não poderia
+		// reusar a chave.
+		exigirCotaDoParticipante(actorId);
 		StorageBucketPolicy policy = bucketPolicy(bucket);
 
 		if (policy.versioning()) {
@@ -167,11 +199,50 @@ public class StorageCatalogService {
 			return beginVersionedUpload(actorId, bucket, key, type, now, policy);
 		}
 
+		// A chave única do banco é (bucket, object_key) — e a linha viva é a única com
+		// `superseded_by is null`. O `createPending` é inserir-ou-ler, então uma chave que ainda tem
+		// linha devolve a linha, qualquer que seja o estado. Duas armadilhas, e as duas davam falha
+		// silenciosa:
+		//
+		//   - vencida que a coleta não passou: o `beginUpload` devolvia o objeto velho, com o prazo
+		//     velho, e o `finishUpload` respondia 409 "já tem cópia" para um objeto que o download já
+		//     tratava como 404;
+		//   - lápide de remoção: o 409 chegava para o cliente S3, para quem o DELETE é só um nome livre
+		//     de novo.
+		//
+		// O que sai da chave aqui não é lápide nova: nada que ainda tenha conteúdo é marcado como
+		// removido por causa de uma abertura de upload que pode não virar gravação.
+		//   - lápide existente (o cliente já removeu): a LINHA sai. Deixá-la como lápide aposentada a
+		//     faria ser achada de novo pelo `delete`, que apagaria o objeto novo no lugar do dela — e o
+		//     que ela guardava já está na cópia de cada nó, que é quem a coleta consulta;
+		//   - vencida: sai aposentada (`superseded_by` apontando para a linha nova), porque vencimento
+		//     não é remoção e a coleta precisa dela como expirada.
+		// O insert-ou-ler deixaria de engolir a chave nos dois casos.
+		StorageObject existente = catalog.find(bucket, key).orElse(null);
+		if (existente != null && existente.state() == StorageObjectState.DELETED) {
+			catalog.discardPending(existente.id());
+			existente = null;
+		}
+		if (existente != null && existente.expired(now)) {
+			// A versão vencida sai da chave sem virar lápide: vencimento não é remoção. Se fosse lápide,
+			// o corpo de um objeto só vencido deixaria de ser servido por quem tem cópia, e a coleta o
+			// trataria como removido em vez de expirado. O que ela aponta é a linha nova.
+			String novoId = OBJECT_ID_PREFIX + NodeIds.next("");
+			if (!catalog.markSuperseded(bucket, key, novoId, now)) {
+				throw new ApiException(409, "STORAGE_VERSION_RACE",
+					"A chave mudou durante a reabertura; tente novamente.");
+			}
+			// A versão corrente saiu da conta (`superseded_by is null`): a conta mudou de dono do
+			// número, e o cache do antigo e do novo precisa reler.
+			esquecerUsoDoParticipante(existente.createdBy());
+			esquecerUsoDoParticipante(actorId);
+			return catalog.createPending(novoId, bucket, key, type, actorId, now);
+		}
 		StorageObject object = catalog.createPending(OBJECT_ID_PREFIX + NodeIds.next(""), bucket, key, type,
 			actorId, now);
 		if (object.state() == StorageObjectState.DELETED) {
-			// A chave é um objeto novo depois da lápide: reabrir tem de ser explícito, senão o cliente
-			// reenvia o arquivo e nada aparece no download — falha silenciosa do pior tipo.
+			// Corrida: a lápide apareceu entre a leitura e o insert-ou-ler, e o insert-ou-ler devolveu
+			// a linha morta. Nada foi gravado, então a resposta pode ser a mesma de antes.
 			throw new ApiException(409, "STORAGE_KEY_DELETED",
 				"Esta chave foi removida e ainda espera coleta no no; remova a lapide ou use outra chave.");
 		}
@@ -280,6 +351,10 @@ public class StorageCatalogService {
 				// relido. Recomeçar é mais seguro do que adivinhar.
 				continue;
 			}
+			if (current.isPresent()) {
+				esquecerUsoDoParticipante(current.get().createdBy());
+			}
+			esquecerUsoDoParticipante(actorId);
 			StorageObject created = catalog.insertVersion(id, bucket, key, type, actorId, now, version);
 			Instant expiresAt = policy.expiresAtFor(now);
 			if (expiresAt != null) {
@@ -337,6 +412,14 @@ public class StorageCatalogService {
 			throw new ApiException(413, "STORAGE_OBJECT_TOO_LARGE",
 				"O objeto excede o teto desta instalacao (" + maxObjectBytes + " bytes).");
 		}
+		try {
+			// O corpo já foi medido: a cota cobra o tamanho, e não só o que já está gravado.
+			exigirCotaDoParticipante(actorId, measured.bytes());
+		}
+		catch (RuntimeException semCota) {
+			deleteQuietly(measured.temp());
+			throw semCota;
+		}
 		Path destination = bodyPath(object.id());
 		try {
 			if (envelope == null) {
@@ -362,11 +445,131 @@ public class StorageCatalogService {
 		// A réplica 0 é a do Control Plane — a mesma convenção do upload pelo nó.
 		catalog.savePlacement(new StoragePlacement(object.id(), 0, "control-plane", measured.bytes(),
 			measured.sha256(), StoragePlacement.State.OK, now));
+		// A cota conta o que o participante tem: a gravação que passou aumenta a conta dele.
+		somarUsoDoParticipante(actorId, measured.bytes());
 		designReplicas(object.id(), measured.bytes(), measured.sha256(), now);
 		audit.record(actorId, "STORAGE_OBJECT_STORED", object.id(),
 			"{\"bucket\":\"" + escape(object.bucket()) + "\",\"key\":\"" + escape(object.key()) + "\",\"bytes\":"
 				+ measured.bytes() + ",\"sha256\":\"" + measured.sha256() + "\",\"via\":\"s3\"}");
 		return catalog.findById(object.id()).orElse(object);
+	}
+
+	/**
+	 * Cota de bytes por participante (brief §10, "quotas"; §7, "não permitir que o armazenamento do
+	 * Énóis consuma espaço além do limite configurado").
+	 *
+	 * <p><b>Antes:</b> o teto de espaço existia do lado de quem <b>cede</b> (o nó: disco livre,
+	 * espaço declarado, §7) e não do lado de quem <b>usa</b>. Um único participante com credencial S3
+	 * enchia o disco, enchia a cota dos nós e os uploads dos outros passavam a responder
+	 * {@code 507 STORAGE_NO_CEDENT_SPACE} — o vizinho pagava pelo vizinho.</p>
+	 *
+	 * <p><b>Agora:</b> o que {@code actorId} já tem no catálogo ({@code created_by}, somando só as
+	 * versões correntes e sem as lápides) é comparado com {@code rede.storage.max-bytes-per-owner}.
+	 * Estourado, a resposta é {@code 507 STORAGE_OWNER_QUOTA_EXCEEDED} com o número que acabou.</p>
+	 *
+	 * <p><b>O que este número não é:</b> a cota do <b>objeto individual</b> continua sendo
+	 * {@code rede.storage.max-object-bytes}, e a conta da cota é por participante, não por bucket —
+	 * um participante com dez buckets tem dez vezes o espaço, ou nenhum, e dizer o contrário seria
+	 * uma segunda regra de espaço para quem opera descobrir.</p>
+	 */
+	void exigirCotaDoParticipante(String actorId) {
+		if (maxBytesPerOwner <= 0 || actorId == null || actorId.isBlank()) {
+			return;
+		}
+		long usado = usadoPorDono.computeIfAbsent(actorId, catalog::bytesOwnedBy);
+		if (usado >= maxBytesPerOwner) {
+			throw new ApiException(507, "STORAGE_OWNER_QUOTA_EXCEEDED",
+				"O participante ja ocupa " + usado + " bytes e a cota desta instalacao e "
+					+ maxBytesPerOwner + " bytes.");
+		}
+	}
+
+	/**
+	 * Quanto o participante ocupa e quanto pode ocupar — a leitura que faltava.
+	 *
+	 * <p>Até o ciclo 80 a cota só existia na <b>recusa</b>: quem recebia {@code 507} ficava sabendo os
+	 * números daquele instante, e mais ninguém. O brief §18 pede que o participante "consulte espaço
+	 * utilizado" e que a interface informe "quais recursos estão sendo utilizados"; sem esta leitura,
+	 * ele só descobria o limite ao bater nele, e não tinha como planejar (apagar antes de encher,
+	 * pedir mais cota ao operador).</p>
+	 *
+	 * <p><b>Lido do banco, não do cache.</b> O cache do {@link #usadoPorDono} é otimização do caminho
+	 * de gravação e conta só o que esta instância viu; um painel que respondesse por ele mostraria um
+	 * número diferente do que a próxima recusa vai usar, conforme a instância que atendeu. A leitura
+	 * é uma consulta indexada por {@code created_by}.</p>
+	 *
+	 * @param limite  a cota em bytes; {@code 0} quando desligada
+	 * @param usado   o que hoje conta contra ela ({@code bytesOwnedBy}: correntes, sem lápide)
+	 * @param livre   o que ainda cabe; {@code null} quando a cota está desligada, porque "sem limite"
+	 *                não é um número — {@code 0} ali diria "cheio"
+	 */
+	public record Cota(long limite, long usado, Long livre) {
+	}
+
+	/** A cota deste participante, para o painel. Ver {@link Cota}. */
+	public Cota cotaDe(String actorId) {
+		long usado = actorId == null || actorId.isBlank() ? 0L : catalog.bytesOwnedBy(actorId);
+		if (maxBytesPerOwner <= 0) {
+			return new Cota(0L, usado, null);
+		}
+		return new Cota(maxBytesPerOwner, usado, Math.max(0L, maxBytesPerOwner - usado));
+	}
+
+	/**
+	 * A cota com o tamanho da gravação já na conta.
+	 *
+	 * <p><b>Por que o acréscimo.</b> Conferir só o que já está gravado deixa o participante entrar a
+	 * 1 byte da cota e gravar o objeto máximo: o teto vira conselho. O corpo só é medido <b>depois</b>
+	 * de atravessar o fluxo, então quem cobra o tamanho é quem já o mediu — o {@code finishUpload} e o
+	 * {@code store}, que recusam antes de gravar e deixam o objeto {@code PENDING} (o retry do cliente
+	 * continua válido).</p>
+	 */
+	void exigirCotaDoParticipante(String actorId, long acrescimo) {
+		if (maxBytesPerOwner <= 0 || actorId == null || actorId.isBlank()) {
+			return;
+		}
+		long usado = usadoPorDono.computeIfAbsent(actorId, catalog::bytesOwnedBy);
+		if (usado + acrescimo > maxBytesPerOwner) {
+			throw new ApiException(507, "STORAGE_OWNER_QUOTA_EXCEEDED",
+				"O participante ja ocupa " + usado + " bytes, esta gravacao soma " + acrescimo
+					+ " e a cota desta instalacao e " + maxBytesPerOwner + " bytes.");
+		}
+	}
+
+	/**
+	 * O que o participante passou a ocupar. Chamado só quando o corpo foi de fato gravado e medido —
+	 * a cota segue os bytes do catálogo, não os tentados.
+	 */
+	private void somarUsoDoParticipante(String actorId, long bytes) {
+		if (maxBytesPerOwner <= 0 || actorId == null || actorId.isBlank()) {
+			return;
+		}
+		usadoPorDono.merge(actorId, bytes, Long::sum);
+	}
+
+	/**
+	 * O que o participante deixou de ocupar. Chamado quando o objeto sai da conta do banco — exclusão,
+	 * expiração, retenção ou versão substituída.
+	 *
+	 * <p><b>Antes:</b> o cache só somava. O número inicial vem de {@code bytesOwnedBy} (que exclui
+	 * lápide e versão substituída), mas a partir do primeiro upload ele era a única fonte, e nada o
+	 * descontava. Quem enchia a cota, apagava tudo e tentava de novo recebia {@code 507} até o
+	 * processo reiniciar, com o número do que já não existia.</p>
+	 *
+	 * <p>A conta nunca fica negativa: um {@code DELETED} marcado duas vezes (corrida com a varredura)
+	 * não pode transformar o desconto em crédito para um upload futuro. Negativo é "não sei", e é
+	 * melhor esquecer o valor e reler o banco na próxima vez ({@code remove}).</p>
+	 */
+	/** O ciclo de vida marca lápide por fora deste serviço; ele avisa aqui que a conta mudou. */
+	void esquecerUsoDoParticipante(String actorId) {
+		if (maxBytesPerOwner <= 0 || actorId == null || actorId.isBlank()) {
+			return;
+		}
+		// Esquecer é mais seguro do que descontar: o que sai da conta são as bytes daquela linha, e
+		// quem descontasse pelo tamanho da versão corrente erraria na versão substituída (tamanho
+		// diferente, dono diferente). A releitura no próximo upload é uma consulta indexada por
+		// `created_by`, e acontece uma vez por participante que acabou de mudar a própria conta.
+		usadoPorDono.remove(actorId);
 	}
 
 	/** A política do bucket, ou os padrões quando ninguém configurou. */
@@ -440,6 +643,10 @@ public class StorageCatalogService {
 				&& !catalog.markSuperseded(bucket, key, id, now)) {
 			throw new ApiException(409, "STORAGE_VERSION_RACE", "A chave mudou durante a restauracao.");
 		}
+		if (current.isPresent()) {
+			esquecerUsoDoParticipante(current.get().createdBy());
+		}
+		esquecerUsoDoParticipante(actorId);
 		catalog.insertVersion(id, bucket, key, old.contentType(), actorId, now, next);
 		// O conteúdo é o da versão antiga, e o conferido é o medido nela: a restauração não relê o
 		// disco, então o digest que vale é o que o catálogo já guardava.
@@ -512,6 +719,14 @@ public class StorageCatalogService {
 			throw new ApiException(413, "STORAGE_OBJECT_TOO_LARGE",
 				"O objeto excede o teto desta instalacao (" + maxObjectBytes + " bytes).");
 		}
+		try {
+			// Quem paga a cota é quem criou o objeto (`created_by`), não o nó que guardou os bytes.
+			exigirCotaDoParticipante(object.createdBy(), measured.bytes());
+		}
+		catch (RuntimeException semCota) {
+			deleteQuietly(measured.temp());
+			throw semCota;
+		}
 		// O arquivo vai para o destino ANTES do catálogo: registrar "tem cópia" apontando para um
 		// arquivo que ainda não existe daria um objeto servível sem bytes.
 		Path destination = bodyPath(object.id());
@@ -541,6 +756,8 @@ public class StorageCatalogService {
 		}
 		catalog.savePlacement(new StoragePlacement(object.id(), 0, node.id(), measured.bytes(), measured.sha256(),
 			StoragePlacement.State.OK, now));
+		// Quem pagou a cota foi quem criou o objeto (`created_by`), não o nó que guardou os bytes.
+		somarUsoDoParticipante(object.createdBy(), measured.bytes());
 		// A replica 0 e a do Control Plane. As demais sao DESIGNACAO, nao copia: o objeto entra no
 		// catalogo do no escolhido como PENDING_REMOTE e so vira OK quando o no confirmar o que
 		// gravou (markReplicaStored). Contar a designacao como durabilidade seria dizer que o
@@ -583,12 +800,36 @@ public class StorageCatalogService {
 				"A copia declarada nao confere com o medido no Control Plane.");
 		}
 		Instant now = clock.instant();
+		exigirCedeParaConfirmar(node, now);
 		StoragePlacement confirmed = new StoragePlacement(objectId, placement.replica(), node.id(), bytes,
 			object.sha256(), StoragePlacement.State.OK, now);
 		catalog.savePlacement(confirmed);
 		audit.record(node.id(), "STORAGE_REPLICA_CONFIRMED", objectId,
 			"{\"replica\":" + placement.replica() + ",\"bytes\":" + bytes + "}");
 		return confirmed;
+	}
+
+	/**
+	 * A confirmação respeita o teto que o nó declarou — a mesma régua da designação, aplicada no
+	 * lugar onde o dado é <b>registrado</b> (doc 13 §5.4.1).
+	 *
+	 * <p>A checagem do runtime do nó protege o <b>disco</b> de quem cede; esta protege a <b>verdade
+	 * do catálogo</b>. Sem ela, um nó que teve o cede reduzido depois da designação — ou um runtime
+	 * antigo, sem o `disk_make_room` do §5.4.1 — gravava e confirmava a cópia, e o catálogo passava
+	 * a afirmar durabilidade num espaço que o participante não autorizou. A colocação em
+	 * {@code PENDING_REMOTE} já conta como reservada, então a folga é a que sobra para esta
+	 * confirmação: acima de zero, cabe.</p>
+	 */
+	private void exigirCedeParaConfirmar(NetworkNode node, Instant now) {
+		if (placement == null) {
+			return;
+		}
+		Long folga = placement.cedentHeadroomMb(node, now);
+		if (folga != null && folga < 0) {
+			throw new ApiException(507, "STORAGE_NO_CEDENT_SPACE",
+				"O no cedeu " + node.declaredDiskMb() + " MB e esta copia nao cabe no que resta; "
+					+ "a copia nao foi confirmada.");
+		}
 	}
 
 	/**
@@ -751,6 +992,9 @@ public class StorageCatalogService {
 		Instant now = clock.instant();
 		boolean removed = catalog.markDeleted(object.id(), now);
 		if (removed) {
+			// A lápide sai da conta do banco (`bytesOwnedBy` exclui `DELETED`): o cache tem de
+			// esquecer o número dele, senão o participante que apagou continua barrado pela cota.
+			esquecerUsoDoParticipante(object.createdBy());
 			audit.record(actorId, "STORAGE_OBJECT_DELETED", object.id(),
 				"{\"bucket\":\"" + escape(object.bucket()) + "\",\"key\":\"" + escape(object.key()) + "\"}");
 		}
@@ -949,10 +1193,12 @@ public class StorageCatalogService {
 		// um GET num Control Plane que nunca recebeu upload escrever em disco, e fariam uma falha de
 		// disco virar 500 num download em vez de "não está aqui" (409/410).
 		Path cpBody = Path.of(storageRoot).resolve(objectId);
+		boolean localCopy = nodeBodies != null && nodeBodies.has(objectId);
 		if (Files.isReadable(cpBody)) {
 			return openVerified(cpBody, object);
 		}
-		if (nodeBodies != null && nodeBodies.has(objectId)) {
+		if (localCopy) {
+			exigirCopiaServivel(objectId);
 			// O `pathOf` + `openVerified` só reconhece o envelope (`ENOISENV1`); o arquivo que o
 			// NodeBodyStore grava é `ENOISENC1`, outro cabeçalho. Servir o caminho cru devolveria os
 			// bytes CIFRADOS com 200 — o cliente receberia bytes que só quem tem a chave entende.
@@ -969,6 +1215,36 @@ public class StorageCatalogService {
 		}
 		throw new ApiException(410, "STORAGE_BODY_MISSING",
 			"O catalogo registra a copia, mas o corpo nao esta neste no.");
+	}
+
+	/**
+	 * Serve só a cópia que o catálogo ainda considera <b>boa</b>.
+	 *
+	 * <p><b>Antes:</b> a leitura local olhava só o arquivo. Um nó marcado {@code STALE} — pela
+	 * confirmação com digest errado, pela varredura do próprio nó ou pela poda de designação vencida —
+	 * continuava servindo o corpo para qualquer download ali, e o download é como a réplica de outro
+	 * nó recebe o objeto. O catálogo dizia "não confere" e esta rota entregava o que o catálogo nega.</p>
+	 *
+	 * <p><b>Agora:</b> quando o corpo é a cópia de um nó ({@code NodeBodyStore} com dono identificado),
+	 * a leitura exige linha {@code OK} para esse nó. Sem linha — objeto que nunca foi designado a ele — a
+	 * leitura local segue valendo: é o caso do Control Plane que recebeu o upload e guarda o corpo sem
+	 * passar por colocação de nó. A réplica 0 na raiz do CP continua fora desta regra: ela não tem
+	 * linha de colocação de nó, e o CP é o próprio dono do disco.</p>
+	 */
+	private void exigirCopiaServivel(String objectId) {
+		if (nodeBodies == null) {
+			return;
+		}
+		String dono = nodeBodies.ownerNodeId();
+		if (dono == null) {
+			// Disco sem identidade de nó (instalação do CP, não um runtime): não há colocação a cobrar.
+			return;
+		}
+		StoragePlacement copia = catalog.placementOn(objectId, dono).orElse(null);
+		if (copia != null && copia.state() != StoragePlacement.State.OK) {
+			throw new ApiException(409, "STORAGE_REPLICA_STALE",
+				"A copia neste no nao confere (" + copia.state().name() + "); use uma copia OK.");
+		}
 	}
 
 	/**

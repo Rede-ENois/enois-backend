@@ -260,6 +260,12 @@ class StorageScrubberReadBackTests {
 		private final List<StoragePlacement> placements = new ArrayList<>();
 
 		@Override
+		public long bytesOwnedBy(String ownerUserId) {
+			// A varredura não cobra cota: só o upload cobra, e o teste de cota é o do serviço.
+			return 0L;
+		}
+
+		@Override
 		public Optional<StorageObject> find(String bucket, String key) {
 			return objects.stream().filter(o -> o.bucket().equals(bucket) && o.key().equals(key)).findFirst();
 		}
@@ -419,6 +425,21 @@ class StorageScrubberReadBackTests {
 		@Override
 		public List<StoragePlacement> placementsOnNode(String nodeId) {
 			return placements.stream().filter(p -> p.nodeId().equals(nodeId)).toList();
+		}
+
+		@Override
+		public List<StoragePlacement> copiesOnNode(String nodeId) {
+			throw new UnsupportedOperationException("reserva de folga nao usada neste teste");
+		}
+
+		@Override
+		public List<StorageObject> withOnlyReplicaZero(int limit) {
+			throw new UnsupportedOperationException("adocao de replica nao usada neste teste");
+		}
+
+		@Override
+		public List<StoragePlacement> placementsInState(StoragePlacement.State state) {
+			return placements.stream().filter(p -> p.state() == state).toList();
 		}
 
 		// --- Ciclo de vida (§14, V352): o fake guarda o mínimo que os serviços leem ---

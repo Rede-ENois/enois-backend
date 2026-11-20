@@ -54,6 +54,91 @@ Sem medida (`null`, runtime anterior a V321) o nó **não** é recusado: não me
 espaço, e recusar por falta de informação tiraria do caminho nós com terabytes livres. O piso é
 folga de sistema de arquivos (temporário do upload, journal), não o tamanho do objeto.
 
+## 2.3 Cota de espaço por participante (doc 20 §10 / brief §10)
+
+O teto de espaço que existia era o de quem **cede** — o disco livre e o espaço declarado do nó
+(§7 do brief). Faltava o de quem **usa**: quantos bytes um participante pode ocupar no catálogo.
+Sem ele, um único participante com credencial S3 enchia o disco e a cota dos nós, e o upload dos
+outros passava a responder `507 STORAGE_NO_CEDENT_SPACE` — o vizinho pagava pelo vizinho.
+
+| | antes | agora |
+|---|---|---|
+| abertura do upload (`beginUpload`) | nada | **`507 STORAGE_OWNER_QUOTA_EXCEEDED`** quando `bytesOwnedBy(actorId) >= cota` — recusa antes de o objeto nascer, para a chave não ficar presa num `PENDING` |
+| fim do upload (`finishUpload`, rota S3) e gravação do nó (`store`) | nada | **`507`** quando `usado + bytes medidos > cota` — o corpo já foi medido, e recusar depois de gravar seria gravar o que não cabe |
+| rota do gateway S3 | — | o mesmo `507` traduzido para **`<Code>QuotaExceeded</Code>`**, o código que o SDK entende |
+
+A conta é `sum(bytes)` de `network_storage_objects` para o `created_by`, das versões **correntes** e
+sem lápide (`StorageCatalogPersistenceAdapter.bytesOwnedBy`): versão substituída não é conteúdo que o
+download entrega, lápide não é conteúdo nenhum.
+
+**A cota é do conteúdo entregue, não do espaço ocupado** (doc 13 §5.9.1). Um objeto com
+versionamento que foi reescrito dez vezes tem nove versões antigas no disco e só a corrente na conta;
+e o PUT de reescrita **acrescenta** o corpo novo sem descontar a versão que saiu da corrente, então a
+mesma chave pode receber `507` antes do objeto que só ela ocupa. Contar o espaço real exigiria somar
+todas as versões ainda não coletadas — decisão de produto (a cota passaria a cair por reescrita de
+objeto que o cliente continua vendo com um só nome). **Não é** por bucket — quem tem dez buckets não tem
+dez vezes o espaço. `rede.storage.max-bytes-per-owner=0` (padrão) **desliga** a cota, que é o
+comportamento que existia: a instalação que confia no limite do nó não muda de comportamento ao
+atualizar.
+
+A contagem é **somada em memória por instância** — a primeira leitura vem do banco, e cada gravação
+desta instância acrescenta. Com várias instâncias de API, a conta de cada uma começa no banco
+(numeração do momento em que foi lida) e a do outro não aparece até reiniciar: o teto é honesto
+sozinho (uma instância vê o que ela gravou) e **não** é um teto global exato com várias instâncias.
+O que realmente impede o abuso é o **`507` na abertura** consultando o banco uma vez por
+participante; o que depende da memória é só o tamanho do corpo que chega logo depois. Compartilhar a
+conta exige o Redis que a rede ainda não usa para limitador (a mesma nota do doc 19 §3.2).
+
+**O que sai da conta também esquece o número** (ciclo 79). Antes, o cache só somava: o número inicial
+vinha do banco, e a partir do primeiro upload o cache era a única fonte. Excluir, deixar vencer ou ser
+substituído tirava o objeto de `bytesOwnedBy` e **não** do cache — quem enchia a cota, apagava tudo e
+tentava de novo recebia `507` com o número do que já não existia, até o processo reiniciar. Agora toda
+transição que muda a conta (lápide por `DELETE`, lápide por expiração/retenção, troca de versão
+corrente na reabertura, no upload versionado e na restauração) **esquece** a entrada do dono
+(`esquecerUsoDoParticipante`), e o próximo upload relê do banco. Esquecer é mais seguro do que
+descontar: o que sai são os bytes daquela linha, e descontar pelo tamanho da corrente erraria na
+versão substituída (tamanho e dono diferentes).
+
+**Verificação:** `StorageOwnerQuotaTests` **4** (cheio é recusado antes de o objeto nascer; o vizinho
+não paga; cota `0` desliga; a mensagem traz os três números), `S3OwnerQuotaTests` **2** pela rota real
+de PUT do gateway (primeiro objeto 200, segundo 507 `QuotaExceeded`, vizinho 200; e o que foi apagado
+sai da conta — cheio → `DELETE` → a mesma gravação passa). `StorageLifecycleTests` **9** (a expiração
+esquece a conta do dono). Mutações: cota
+global em vez de por participante, sem o acréscimo do tamanho, `beginUpload` sem a checagem, a soma
+que nunca acontece — **4 de 4 derrubam**.
+
+## 2.4 Chave vencida e chave removida recebem gravação nova
+
+A leitura já tratava o objeto vencido como inexistente (`requireDownloadable` responde 404), e o
+cliente S3 trata `DELETE` como "o nome está livre". O upload, não: `network_storage_objects` tem uma
+linha viva por `bucket + object_key` (o índice condicional `uq_network_storage_objects_current` do
+V352) e o `createPending` é **inserir-ou-ler** — ele devolvia a linha que já existia **qualquer que
+fosse o estado**. Duas falhas silenciosas saíam daí:
+
+| situação | antes | agora |
+|---|---|---|
+| chave vencida, coleta ainda não passou | o `beginUpload` devolvia o objeto velho, com o prazo velho; o `finishUpload` respondia `409 STORAGE_ALREADY_STORED` — e a chave não dava nem para baixar (404) nem para regravar | a versão vencida **sai aposentada** (`superseded_by` apontando para a linha nova) e a gravação segue numa linha nova, com id novo e prazo novo |
+| chave com lápide (removida pelo cliente ou pelo bucket) | `409 STORAGE_KEY_DELETED` — o cliente S3 reenviava o arquivo e recebia erro num nome que ele já tinha liberado | a linha da lápide é **descartada** e a gravação nasce numa linha nova |
+
+O que sai da chave não é lápide nova. Nada que ainda tenha conteúdo é marcado como removido por causa
+de uma **abertura** de upload — que roda em retry de rede e pode nunca virar gravação. E aposentar
+não é remover: a versão vencida continua `STORED`, e a coleta continua vendo nela um objeto
+**expirado**, não um removido, porque o corpo dela pode estar servido por quem tem cópia. A lápide, que
+já era remoção antes desta requisição, é apagada da tabela: o que ela guardava já está nas colocações
+de cada nó, que é o que a coleta consulta — apagar a linha não apaga byte nenhum de nó.
+
+O objeto vivo não muda: reenviar o mesmo `PUT` devolve o **mesmo** objeto (retry idempotente), e a
+rota S3 continua respondendo `409 ObjectAlreadyStored` quando o corpo tenta substituir uma cópia já
+confirmada.
+
+**Verificação:** `StorageExpiredKeyReuseTests` **6** (chave vencida recebe objeto novo sem herdar o
+prazo; a gravação nova termina e o download a devolve; o vencido não é apagado do disco do nó; o
+reenvio de objeto vivo não lapida nem aposenta; a chave lapidada recebe objeto novo sem ressuscitar o
+removido; objeto vivo segue recusando a gravação). `StorageCatalogCurrentKeyPersistenceTests` **4** no
+banco real (a versão aposentada libera a chave; a lápide que continua corrente impede a linha nova; a
+lápide descartada libera; a segunda corrente é barrada pelo índice). Mutações: sem a aposentadoria do
+vencido, vencido virando lápide, lápide voltando a dar 409 — **3 de 3 derrubam**.
+
 ## 3. O que NÃO está entregue (e por quê)
 
 | do brief | por que não agora |

@@ -43,4 +43,13 @@ public interface AuditLogRepository {
 	 * não se obtém de um {@code count}, o intervalo está no metadado de cada linha.</p>
 	 */
 	List<AuditLog> findByTargetAndAction(String targetId, String action, int limit);
+
+	/**
+	 * O metadado de <b>todas</b> as linhas do alvo com a ação.
+	 *
+	 * <p>Existe porque {@link #findByTargetAndAction} é uma amostra, e somar uma grandeza que cresce
+	 * com o histórico sobre a amostra dá um PISO, não o total. A tela do participante precisa do
+	 * total para dizer quanto tempo o nó ficou fora — e precisa saber que ele é total.</p>
+	 */
+	List<String> allMetadataFor(String targetId, String action);
 }
