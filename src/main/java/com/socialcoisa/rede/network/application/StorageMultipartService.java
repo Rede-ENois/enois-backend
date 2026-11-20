@@ -191,7 +191,15 @@ public class StorageMultipartService {
 	 * escrito num temporário e movido por cima: uma parte que cai pela metade durante a escrita nunca
 	 * fica com o nome da parte.</p>
 	 */
-	public Part receivePart(Upload upload, int partNumber, InputStream body) {
+	/**
+	 * Recebe uma parte.
+	 *
+	 * @param anunciado o {@code Content-Length} que o cliente mandou, quando mandou; é o único tamanho
+	 *                  conhecido <b>antes</b> de ler, e é o que deixa a cota recusar sem gravar nada.
+	 *                  {@code null} quando o corpo vem em chunks (sem tamanho declarado): aí a cota é
+	 *                  conferida depois da leitura, antes de o arquivo virar a parte
+	 */
+	public Part receivePart(Upload upload, int partNumber, InputStream body, Long anunciado) {
 		if (partNumber < 1 || partNumber > MAX_PART_NUMBER) {
 			throw new ApiException(400, "InvalidArgument",
 				"Numero de parte fora do intervalo 1.." + MAX_PART_NUMBER + ".");
@@ -214,9 +222,21 @@ public class StorageMultipartService {
 		MessageDigest digest = sha256();
 		long total = 0;
 		byte[] buffer = new byte[64 * 1024];
+		// A parte já substituída não conta duas vezes: o reenvio soma à conta e a antiga sai dela.
+		long jaNestaParte = jdbc.queryForObject(
+			"select coalesce(sum(bytes), 0) from network_storage_multipart_parts where upload_id = ? and part_number = ?",
+			Long.class, upload.uploadId(), partNumber);
+		// O que a cota vê é o que já está gravado nesta conta mais o que já está reservado em partes
+		// abertas — sem isto, 10 000 partes de 5 MiB passavam por baixo de uma cota de 1 MB.
+		long reservado = bytesInOpenParts(upload.ownerUserId()) - jaNestaParte;
+		// Com o tamanho anunciado, a recusa é antes de qualquer byte; sem ele, a conta fecha abaixo,
+		// depois de medir a parte e antes de ela virar parte do upload.
+		if (anunciado != null && anunciado > 0) {
+			storage.exigirCotaDasPartes(upload.ownerUserId(), reservado, anunciado);
+		}
 		try (InputStream input = body; OutputStream sink = Files.newOutputStream(temp)) {
 			int read;
-			while ((read = input.read(buffer)) != -1) {
+			while ((read = lerNoMaximo(input, buffer, maxObjectBytes - total + 1)) != -1) {
 				digest.update(buffer, 0, read);
 				sink.write(buffer, 0, read);
 				total += read;
@@ -233,6 +253,11 @@ public class StorageMultipartService {
 		catch (ApiException recusado) {
 			deleteQuietly(temp);
 			throw recusado;
+		}
+		if (anunciado == null || anunciado <= 0) {
+			// Corpo sem tamanho declarado: a conta fecha com o que a parte realmente mediu, ainda
+			// antes de o arquivo virar a parte — a recusa não deixa parte gravada.
+			storage.exigirCotaDasPartes(upload.ownerUserId(), reservado, total);
 		}
 		if (total == 0) {
 			// O S3 recusa parte vazia. Aceitar em silêncio criaria uma "parte" que não é dado.
@@ -324,6 +349,17 @@ public class StorageMultipartService {
 		discard(uploadId);
 	}
 
+	/**
+	 * Lê no máximo {@code limite} bytes: um byte além do teto basta para saber que passou.
+	 *
+	 * <p>O mesmo cuidado do {@code measure} do catálogo — sem ele, a parte recusada puxava mais um
+	 * bloco de 64 KiB do cliente só para responder {@code 413}.</p>
+	 */
+	private static int lerNoMaximo(InputStream input, byte[] buffer, long limite) throws IOException {
+		int pedido = (int) Math.min(buffer.length, Math.max(1, limite));
+		return input.read(buffer, 0, pedido);
+	}
+
 	// ------------------------------------------------------------------ coleta do vencido (§4.2)
 
 	/** Quantos uploads estão abertos agora (nenhum foi concluído nem abortado). */
@@ -356,6 +392,21 @@ public class StorageMultipartService {
 			rs.getString("content_type"), rs.getString("owner_user_id"), rs.getString("credential_id"),
 			rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("expires_at").toInstant()),
 			java.sql.Timestamp.from(now), limit);
+	}
+
+	/**
+	 * O que as partes <b>abertas</b> desta conta já ocupam: espaço reservado antes de virar objeto.
+	 *
+	 * <p>É o que a cota cobra no envio da parte. Só os uploads abertos contam — a linha sai quando o
+	 * upload é concluído ou abortado, e a conclusão já cobra a cota pelo {@code finishUpload}.</p>
+	 */
+	long bytesInOpenParts(String ownerUserId) {
+		Long total = jdbc.queryForObject("""
+			select coalesce(sum(p.bytes), 0) from network_storage_multipart_parts p
+			join network_storage_multipart_uploads u on u.upload_id = p.upload_id
+			where u.owner_user_id = ?
+			""", Long.class, ownerUserId);
+		return total == null ? 0 : total;
 	}
 
 	/** Quantas partes o upload recebeu — o que o relatório conta como espaço a recuperar. */

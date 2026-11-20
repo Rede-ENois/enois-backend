@@ -537,6 +537,32 @@ public class StorageCatalogService {
 	}
 
 	/**
+	 * A cota com as partes abertas de um multipart já na conta.
+	 *
+	 * <p><b>Por que existe.</b> A cota era conferida na abertura do upload e na conclusão, e nunca nas
+	 * partes: um participante com cota de 1 MB abria um multipart, mandava 10 000 partes de 5 MiB (o
+	 * máximo que o protocolo aceita) e nunca concluía — 50 GiB de disco reservados, com a cota só
+	 * olhando quando já era tarde. O {@code abort} existe, mas quem abusa não o chama.</p>
+	 *
+	 * <p><b>O que conta.</b> O que já está no catálogo ({@code bytesOwnedBy}) mais o que já está
+	 * reservado em partes abertas desta conta, menos a parte que este envio substitui. O espaço é
+	 * reservado no envio da parte, não na conclusão — é ali que ele passa a ocupar disco.</p>
+	 */
+	void exigirCotaDasPartes(String actorId, long reservedPartsBytes, long estaParte) {
+		if (maxBytesPerOwner <= 0 || actorId == null || actorId.isBlank()) {
+			return;
+		}
+		long usado = usadoPorDono.computeIfAbsent(actorId, catalog::bytesOwnedBy);
+		long reservado = Math.max(0, reservedPartsBytes) + Math.max(0, estaParte);
+		if (usado + reservado > maxBytesPerOwner) {
+			throw new ApiException(507, "STORAGE_OWNER_QUOTA_EXCEEDED",
+				"O participante ja ocupa " + usado + " bytes e tem " + Math.max(0, reservedPartsBytes)
+					+ " em partes abertas, e esta parte soma " + Math.max(0, estaParte)
+					+ "; a cota desta instalacao e " + maxBytesPerOwner + " bytes.");
+		}
+	}
+
+	/**
 	 * O que o participante passou a ocupar. Chamado só quando o corpo foi de fato gravado e medido —
 	 * a cota segue os bytes do catálogo, não os tentados.
 	 */

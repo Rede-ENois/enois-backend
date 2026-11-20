@@ -246,10 +246,7 @@ class S3GatewayController {
 			stored = storage.finishUpload(pending.id(), body(request), credential.ownerUserId());
 		}
 		catch (ApiException recusado) {
-			if (recusado.status() == 507 && "STORAGE_OWNER_QUOTA_EXCEEDED".equals(recusado.code())) {
-				throw s3Error(507, "QuotaExceeded", recusado.getMessage());
-			}
-			throw recusado;
+			throw noVocabularioDoS3(recusado);
 		}
 		if (!bucketSemDono(bucket, credential.ownerUserId())) {
 			desfazer(stored, antes);
@@ -326,7 +323,25 @@ class S3GatewayController {
 		catch (NumberFormatException notNumber) {
 			throw s3Error(400, "InvalidArgument", "partNumber invalido.");
 		}
-		var part = multipart.receivePart(upload, numero, body(request));
+		// O `Content-Length` é o único tamanho conhecido antes de ler: com ele a cota recusa a parte
+		// sem gravar nada; sem ele (corpo em chunks), a conta fecha depois de a parte ser medida.
+		String declarado = request.getHeader(HttpHeaders.CONTENT_LENGTH);
+		Long anunciado = null;
+		if (declarado != null && !declarado.isBlank()) {
+			try {
+				anunciado = Long.valueOf(declarado.trim());
+			}
+			catch (NumberFormatException invalido) {
+				anunciado = null;
+			}
+		}
+		com.socialcoisa.rede.network.application.StorageMultipartService.Part part;
+		try {
+			part = multipart.receivePart(upload, numero, body(request), anunciado);
+		}
+		catch (ApiException recusado) {
+			throw noVocabularioDoS3(recusado);
+		}
 		return ResponseEntity.ok().eTag("\"" + part.sha256() + "\"").header(HttpHeaders.CONTENT_LENGTH, "0")
 			.build();
 	}
@@ -920,6 +935,23 @@ class S3GatewayController {
 
 	private static ResponseEntity.BodyBuilder xml(HttpStatus status) {
 		return ResponseEntity.status(status).header(HttpHeaders.CONTENT_TYPE, "application/xml; charset=utf-8");
+	}
+
+	/**
+	 * A recusa do catálogo no <b>vocabulário do S3</b>.
+	 *
+	 * <p>O SDK não conhece {@code STORAGE_OWNER_QUOTA_EXCEEDED}: a cota tem de chegar como
+	 * {@code 507 QuotaExceeded}, no XML de erro do protocolo. Sem esta tradução, a recusa saía como o
+	 * JSON do Control Plane — {@code 507} que o cliente podia ler, mas não pelo código que ele trata.</p>
+	 *
+	 * <p>Um ponto só, para as rotas que gravam não divergirem: o {@code PUT} simples traduzia, o
+	 * {@code UploadPart} não.</p>
+	 */
+	static ApiException noVocabularioDoS3(ApiException recusado) {
+		if (recusado.status() == 507 && "STORAGE_OWNER_QUOTA_EXCEEDED".equals(recusado.code())) {
+			return s3Error(507, "QuotaExceeded", recusado.getMessage());
+		}
+		return recusado;
 	}
 
 	private static ApiException s3Error(int status, String code, String message) {
