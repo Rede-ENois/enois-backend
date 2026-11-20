@@ -72,6 +72,9 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 	 */
 	static final String BANNED_DISPLAY_NAME = "Usuário";
 
+	/** Teto do texto do comentario, igual na criacao e na edicao. */
+	public static final int MAX_COMMENT_LENGTH = 800;
+
 	/** Rate limit por usuário e dedup de conteúdo (PR #28). */
 	private final UserRateLimiter userRateLimiter;
 	private final ContentDuplicationGuard duplicationGuard;
@@ -381,10 +384,19 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 			}
 			throw new ApiException(400, "INVALID_COMMENT_CONTENT", "Conteudo obrigatorio.");
 		}
+		return normalizeCommentText(content);
+	}
+
+	/**
+	 * Texto do comentario ja com a defesa de entrada. Devolve vazio quando so ha midia; quem chama a
+	 * edicao decide se vazio ainda e valido (com midia) ou nao (sem).
+	 */
+	public static String normalizeCommentText(String content) {
 		// Mesma defesa do post (ver PlainText): comentario tambem e porta de entrada de texto.
-		String normalized = PlainText.defuse(content.trim());
-		if (normalized.length() > 800) {
-			throw new ApiException(400, "COMMENT_TOO_LONG", "Comentario deve ter no maximo 800 caracteres.");
+		String normalized = PlainText.defuse(content == null ? "" : content.trim());
+		if (normalized.length() > MAX_COMMENT_LENGTH) {
+			throw new ApiException(400, "COMMENT_TOO_LONG",
+				"Comentario deve ter no maximo " + MAX_COMMENT_LENGTH + " caracteres.");
 		}
 		return normalized;
 	}
