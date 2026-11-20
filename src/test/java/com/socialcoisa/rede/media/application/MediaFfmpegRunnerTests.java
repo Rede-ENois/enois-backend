@@ -153,8 +153,27 @@ class MediaFfmpegRunnerTests {
 	}
 
 	/**
+	 * Os dois lados de "não produziu nada": um processo que sai limpo mas deixa o arquivo vazio não
+	 * pode ser lido como sucesso só porque o código de saída foi 0 (#960, casos-limite).
+	 */
+	@Test
+	void recordsAnEmptyOutputFileEvenWhenTheExitIsZero() throws Exception {
+		Path ffmpeg = processos.ffmpeg(dir, null, 0, 0);
+		Path input = Files.writeString(dir.resolve("in.bin"), "video");
+		Path output = Files.createFile(dir.resolve("out.bin"));
+
+		assertThatThrownBy(() -> new MediaFfmpegRunner(ffmpeg.toString(), 1).strip(input, output, "video/mp4",
+			Duration.ofSeconds(10))).isInstanceOf(ApiException.class).extracting("code")
+			.isEqualTo("MEDIA_PROCESSING_FAILED");
+		assertThat(linhasDoRunner()).contains("reason=empty_output");
+		assertThat(Files.size(output)).isZero();
+	}
+
+	/**
 	 * Timeout legítimo continua recusando com o mesmo código (#960): a captura da saída é
-	 * diagnóstico, não uma porta nova para o upload passar.
+	 * diagnóstico, não uma porta nova para o upload passar. O prazo é folgado de propósito — a JVM
+	 * do dublê precisa largar e escrever a mensagem sob carga, e o processo dorme 30 s depois dela,
+	 * então o kill ainda chega bem antes de o processo terminar sozinho.
 	 */
 	@Test
 	void keepsTimingOutAsARejectedUploadEvenWithPartialOutput() throws Exception {
@@ -163,7 +182,7 @@ class MediaFfmpegRunnerTests {
 		Path output = Files.createFile(dir.resolve("out.bin"));
 
 		assertThatThrownBy(() -> new MediaFfmpegRunner(ffmpeg.toString(), 1).strip(input, output, "video/mp4",
-			Duration.ofSeconds(1))).isInstanceOf(ApiException.class).extracting("code")
+			Duration.ofSeconds(5))).isInstanceOf(ApiException.class).extracting("code")
 			.isEqualTo("MEDIA_PROCESSING_FAILED");
 		assertThat(linhasDoRunner()).contains("reason=timeout");
 	}
