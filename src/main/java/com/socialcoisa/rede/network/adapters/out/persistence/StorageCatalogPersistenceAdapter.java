@@ -177,10 +177,20 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		limit ?
 		""".formatted(OBJECT_COLUMNS);
 
-	/** Os buckets do dono: distintos e alfabéticos, sem as lápides (que não são conteúdo). */
+	/**
+	 * Os buckets do dono: distintos e alfabéticos, sem as lápides (que não são conteúdo) e
+	 * <b>sem o que já venceu</b>.
+	 *
+	 * <p>A régua é a mesma da listagem de objeto e do download: bucket cujo conteúdo inteiro venceu
+	 * não aparece aqui, porque no {@code ListObjects} ele sai vazio e no {@code GET} qualquer objeto
+	 * dele dá {@code 404}. Antes ele continuava listado com o critério antigo (só lápide fora), e o
+	 * cliente via um nome que não abria para nada — e que o {@code DELETE} recusava com {@code 409}
+	 * "ainda tem objetos". Três respostas contraditórias sobre o mesmo nome.</p>
+	 */
 	private static final String BUCKETS_OF = """
 		select distinct bucket from network_storage_objects
 		where created_by = ? and state <> 'DELETED'
+		  and (expires_at is null or expires_at > ?)
 		order by bucket asc
 		""";
 
@@ -521,7 +531,7 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 
 	@Override
 	public List<String> bucketsOf(String ownerUserId) {
-		return jdbc.query(BUCKETS_OF, (rs, row) -> rs.getString(1), ownerUserId);
+		return jdbc.query(BUCKETS_OF, (rs, row) -> rs.getString(1), ownerUserId, Timestamp.from(Instant.now()));
 	}
 
 	@Override
