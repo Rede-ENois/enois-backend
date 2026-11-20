@@ -71,11 +71,15 @@ class StorageOwnerQuotaTests {
 		service = comCota(12);
 	}
 
+	/**
+	 * A cota com partes abertas de multipart exige banco; aqui o que se prova é a conta do
+	 * <b>espaço gravado</b>, e o reservado é zero (o caso do banco tem teste de rota próprio).
+	 */
 	/** O serviço com a cota pedida, resto igual: colocação de uma cópia, sem nó local nem métrica. */
 	private StorageCatalogService comCota(long maxBytesPerOwner) {
 		return new StorageCatalogService(catalog, mock(AuditTrail.class), Clock.fixed(NOW, ZoneOffset.UTC),
 			10_000, root.toString(), "", new StoragePlacementService(nodes, catalog, 0, 90), null, null,
-			maxBytesPerOwner);
+			maxBytesPerOwner, null);
 	}
 
 	private static ByteArrayInputStream body(String text) {
