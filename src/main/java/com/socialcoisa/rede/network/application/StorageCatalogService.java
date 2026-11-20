@@ -732,12 +732,36 @@ public class StorageCatalogService {
 				"A copia declarada nao confere com o medido no Control Plane.");
 		}
 		Instant now = clock.instant();
+		exigirCedeParaConfirmar(node, now);
 		StoragePlacement confirmed = new StoragePlacement(objectId, placement.replica(), node.id(), bytes,
 			object.sha256(), StoragePlacement.State.OK, now);
 		catalog.savePlacement(confirmed);
 		audit.record(node.id(), "STORAGE_REPLICA_CONFIRMED", objectId,
 			"{\"replica\":" + placement.replica() + ",\"bytes\":" + bytes + "}");
 		return confirmed;
+	}
+
+	/**
+	 * A confirmação respeita o teto que o nó declarou — a mesma régua da designação, aplicada no
+	 * lugar onde o dado é <b>registrado</b> (doc 13 §5.4.1).
+	 *
+	 * <p>A checagem do runtime do nó protege o <b>disco</b> de quem cede; esta protege a <b>verdade
+	 * do catálogo</b>. Sem ela, um nó que teve o cede reduzido depois da designação — ou um runtime
+	 * antigo, sem o `disk_make_room` do §5.4.1 — gravava e confirmava a cópia, e o catálogo passava
+	 * a afirmar durabilidade num espaço que o participante não autorizou. A colocação em
+	 * {@code PENDING_REMOTE} já conta como reservada, então a folga é a que sobra para esta
+	 * confirmação: acima de zero, cabe.</p>
+	 */
+	private void exigirCedeParaConfirmar(NetworkNode node, Instant now) {
+		if (placement == null) {
+			return;
+		}
+		Long folga = placement.cedentHeadroomMb(node, now);
+		if (folga != null && folga < 0) {
+			throw new ApiException(507, "STORAGE_NO_CEDENT_SPACE",
+				"O no cedeu " + node.declaredDiskMb() + " MB e esta copia nao cabe no que resta; "
+					+ "a copia nao foi confirmada.");
+		}
 	}
 
 	/**
