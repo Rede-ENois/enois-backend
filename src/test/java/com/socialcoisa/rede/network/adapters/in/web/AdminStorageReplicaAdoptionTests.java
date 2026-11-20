@@ -40,18 +40,24 @@ class AdminStorageReplicaAdoptionTests {
 
 	private TestAuthHelper auth;
 
-	/**
-	 * O catálogo é limpo a cada teste, e por um motivo concreto: a enumeração de "só a réplica 0" é
-	 * global, então um objeto servível que OUTRA classe deixou no banco entra na conta e
-	 * {@code considered} deixa de ser 1. Antes isto passava por sorte de ordem — o teste só viu a
-	 * contaminação quando uma classe nova (o ciclo 74) passou a gravar objetos e a rodar antes.
-	 */
+	/** Segundo objeto do caso: o seco tem de contar o cenário, não o banco. */
+	private String objetoDeOutroCaso;
+
 	@org.junit.jupiter.api.BeforeEach
 	void setUp() {
 		auth = new TestAuthHelper(mockMvc, objectMapper);
-		jdbc.update("delete from network_storage_placements");
-		jdbc.update("delete from network_storage_objects");
-		jdbc.update("delete from network_nodes");
+		// O relatório é do catálogo inteiro, não do cenário: sem uma segunda linha viva ao lado da
+		// escolhida, `considered` não distingue "só o meu" de "o meu e o resto do banco". A limpeza
+		// atinge só os objetos que este teste criou — a colocação cai junto pelo cascade da FK.
+		jdbc.update("delete from network_storage_objects where id like 'rz!_%' escape '!'");
+		String sha = com.socialcoisa.rede.shared.security.Hashes.sha256Hex("vazamento");
+		objetoDeOutroCaso = "rz_outro_" + java.util.UUID.randomUUID().toString().substring(0, 8);
+		jdbc.update("""
+			insert into network_storage_objects
+				(id, bucket, object_key, content_type, bytes, sha256, state, created_by, created_at, updated_at)
+			values (?, 'fotos', 'outro.jpg', 'image/jpeg', 5, ?, 'STORED', 'user_1', ?, ?)
+			""", objetoDeOutroCaso, sha, java.sql.Timestamp.from(java.time.Instant.now()),
+			java.sql.Timestamp.from(java.time.Instant.now()));
 	}
 
 	@Test
@@ -76,11 +82,13 @@ class AdminStorageReplicaAdoptionTests {
 		// saber que nada foi gravado — daí o 200 mesmo com objeto na lista.
 		jdbc.update("delete from network_nodes");
 		String sha = com.socialcoisa.rede.shared.security.Hashes.sha256Hex("corpo");
+		String objeto = "rz_web_" + java.util.UUID.randomUUID().toString().substring(0, 8);
 		jdbc.update("""
 			insert into network_storage_objects
 				(id, bucket, object_key, content_type, bytes, sha256, state, created_by, created_at, updated_at)
-			values ('sob_replica_zero_web', 'fotos', 'gato.jpg', 'image/jpeg', 5, ?, 'STORED', 'user_1', ?, ?)
-			""", sha, java.sql.Timestamp.from(java.time.Instant.now()), java.sql.Timestamp.from(java.time.Instant.now()));
+			values (?, 'fotos', 'gato.jpg', 'image/jpeg', 5, ?, 'STORED', 'user_1', ?, ?)
+			""", objeto, sha, java.sql.Timestamp.from(java.time.Instant.now()),
+			java.sql.Timestamp.from(java.time.Instant.now()));
 		var sessao = auth.authenticate("adocao_admin_dry");
 		TestDatabase.setAdmin(sessao.userId());
 
@@ -89,10 +97,16 @@ class AdminStorageReplicaAdoptionTests {
 
 		assertThat(seco.getResponse().getStatus()).as(seco.getResponse().getContentAsString()).isEqualTo(200);
 		var corpo = objectMapper.readValue(seco.getResponse().getContentAsString(), Map.class);
-		assertThat(corpo.get("considered")).isEqualTo(1);
+		// O seco relata o catálogo inteiro, inclusive o que outras classes deixaram: o que este caso
+		// prova é que o objeto dele aparece com o motivo certo, não que seja o único no banco.
+		assertThat((Integer) corpo.get("considered")).isGreaterThanOrEqualTo(2);
 		var pulados = (java.util.List<Map<String, Object>>) corpo.get("skipped");
-		assertThat(pulados).extracting(p -> p.get("reason")).containsExactly("NO_NODE_ELIGIBLE");
-		assertThat(pulados.get(0).get("key")).isEqualTo("gato.jpg");
+		assertThat(pulados).filteredOn(p -> objeto.equals(p.get("objectId")))
+			.singleElement()
+			.satisfies(p -> {
+				assertThat(p.get("reason")).isEqualTo("NO_NODE_ELIGIBLE");
+				assertThat(p.get("key")).isEqualTo("gato.jpg");
+			});
 	}
 
 	@Test
