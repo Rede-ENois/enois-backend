@@ -636,5 +636,65 @@ mostra o nome do objeto com `NO_NODE_ELIGIBLE` e nada é gravado). Mutações: s
 `dryRun` gravando, a consulta contando a réplica 0 como cópia de nó, o filtro de vencido virando
 no-op, a consulta com `cross join` — **5 de 5 derrubam**.
 
+## 5.11 A designação que ninguém confirma pode ser solta sem ligar o auto-heal
+
+A soltura de `PENDING_REMOTE` vencida existe desde o §2.2 — mas morava **dentro** do
+`StorageReplicationWorker`, que nasce desligado (`rede.storage.replication.auto-heal-enabled=false`).
+Na instalação de fábrica, uma designação cujo nó sumiu depois do despacho (tarefa perdida, disco
+cheio, nó revogado) durava para sempre:
+
+| quem pergunta | o que respondia |
+|---|---|
+| `StorageHealer` | `ALREADY_DESIGNATED` — "a lacuna tem dono" (o dono não existe mais) |
+| adoção de réplica única (§5.10) | o objeto saía da lista, porque `PENDING_REMOTE` já conta como colocação de nó |
+| operador | nada: não havia rota de leitura nem de escrita para essa linha |
+
+O painel mostrava durabilidade baixa, o scrub apontava a lacuna e o qualificador da duplicidade
+(§5.1.1, que desconta a reserva) segurava espaço para uma cópia que não vinha.
+
+| rota (admin) | o que faz |
+|---|---|
+| `GET /admin/network/storage/pending?limit=` | as pendências, da mais antiga para a mais nova, com `objectId`, `bucket`, `key`, `replica`, `nodeId`, `designatedAt`, `ageMinutes` e `expired` |
+| `POST /admin/network/storage/pending/release?dryRun=false&maxAgeMinutes=&limit=` | as vencidas viram `GONE`, uma linha de auditoria `STORAGE_PENDING_RELEASED` por designação solta |
+
+**Uma regra só.** A varredura saiu do worker para `StoragePendingRelease`, e o worker passou a chamar
+este serviço — não há segunda cópia da lógica nem segundo prazo. O prazo é o mesmo
+`rede.storage.replication.pending-max-age-minutes` (60), e a rota aceita `maxAgeMinutes` para o ato
+pontual (piso de 1 minuto). A idade é a de `verified_at`, que `savePlacement` grava como o instante da
+designação. **Linha sem `verified_at` conta como vencida**: não dá para provar que é nova, e assumir
+"nova" deixaria a pendência eterna exatamente quando o dado está incompleto.
+
+**O que a soltura faz com a linha.** `GONE`, nunca apagada: o histórico continua mostrando que houve
+uma tentativa, e a linha deixa de contar como ocupação, como reserva de folga (doc 17 §2.2) e como
+dono da lacuna. O corpo no nó não é tocado — quem apaga arquivo de participante é a poda dele
+(`/network/storage/inventory/purge`), não o Control Plane.
+
+**O que a soltura não faz.** Não designa a cópia nova (isso é do `/storage/heal`, e da adoção de
+réplica única quando não há nenhuma cópia de nó), não liga o auto-heal e não confirma nada. Uma
+confirmação que chegue depois da soltura é recusada com `409 STORAGE_REPLICA_ALREADY_CONFIRMED`.
+
+**O caminho do operador, inteiro, sem worker:** a pendência fica vencida → `GET /pending` mostra qual
+é → `POST /pending/release?dryRun=false` a solta → `POST /nodes/storage/heal` volta a designar, com o
+número de réplica depois do maior existente.
+
+**Não há rota sem admin, e não é o controller que garante isso.** Toda rota `/admin/**` passa pelo
+`AdminRouteInterceptor` global: sem sessão é `401`, sessão válida sem o papel é `403`. A chamada de
+`requireAdmin` no controller continua como defesa em profundidade, como em todo controller de admin;
+uma mutação que a remove **não derruba teste nenhum**, e é o comportamento certo — o discriminante de
+autorização desta rota é o interceptor. O que os testes fixam é o `403` de sessão válida sem papel.
+
+**Verificação:** `StoragePendingReleaseTests` **8** (vencida vira `GONE` e a lacuna fica sem
+`PENDING_REMOTE`, com auditoria; recente não é solta; a leitura mostra as duas com a ordem e a idade,
+e o prazo da chamada muda a mesma régua; o seco mostra sem gravar; linha sem `verified_at` conta como
+vencida; o prazo da chamada vence o padrão; o teto limita o lote; a solta devolve a reserva de folga
+ao nó). `AdminStoragePendingReleaseTests` **5** pela rota (conta comum é recusada na leitura e na
+soltura; sessão válida **sem** o papel recebe `403` — não `401`; o seco mostra a vencida com `key` e
+`nodeId` e não grava; leitura e soltura real devolvem a mesma lista; e o caminho completo: antes da
+soltura o `/storage/heal` responde `ALREADY_DESIGNATED`, depois deixa de responder).
+`StorageReplicationWorkerTests` **3** seguem verdes com o worker chamando o serviço.
+Mutações (**8 de 8 derrubam**): soltar sem olhar a idade; `dryRun` gravando; soltar deixando a linha
+`PENDING_REMOTE`; linha sem `verified_at` nunca vencendo; a leitura marcando tudo como vencido; o
+`maxAgeMinutes` da chamada ignorado; o teto ignorado; a auditoria por linha removida.
+
 harness `storage-migration-test` cobrem o caminho local; o caso remoto não tem teste porque o caminho
 não existe.

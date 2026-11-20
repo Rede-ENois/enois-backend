@@ -51,7 +51,9 @@ class AdminStorageReplicaAdoptionTests {
 
 		int leitura = mockMvc.perform(get("/admin/network/storage/replica-zero")
 			.header("X-Session-Token", sessao.token())).andReturn().getResponse().getStatus();
-		int adocao = mockMvc.perform(post("/admin/network/storage/replica-zero")
+		// Com `dryRun=false`: a rota de escrita só passa pelo guarda quando vai gravar, e um seco sem
+		// alvo não prova que a recusa existe no caminho que grava.
+		int adocao = mockMvc.perform(post("/admin/network/storage/replica-zero?dryRun=false")
 			.header("X-Session-Token", sessao.token())).andReturn().getResponse().getStatus();
 
 		assertThat(leitura).as("conta comum não enumera o que está só na réplica 0").isIn(401, 403);

@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.network.application.StorageCatalogService;
 import com.socialcoisa.rede.network.application.StorageLifecycle;
+import com.socialcoisa.rede.network.application.StoragePendingRelease;
 import com.socialcoisa.rede.network.domain.StorageBucketPolicy;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.shared.web.AdminGuard;
@@ -39,19 +40,28 @@ class AdminNetworkStorageLifecycleController {
 	private final StorageCatalogService storage;
 	private final StorageLifecycle lifecycle;
 	private final StorageReplicaAdoption replicaAdoption;
+	private final StoragePendingRelease pendingRelease;
 	private final CurrentUserResolver currentUserResolver;
 	private final AdminGuard adminGuard;
 	private final AuditTrail audit;
 
 	AdminNetworkStorageLifecycleController(StorageCatalogService storage, StorageLifecycle lifecycle,
-			StorageReplicaAdoption replicaAdoption, CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
-			AuditTrail audit) {
+			StorageReplicaAdoption replicaAdoption, StoragePendingRelease pendingRelease,
+			CurrentUserResolver currentUserResolver, AdminGuard adminGuard, AuditTrail audit) {
 		this.storage = storage;
 		this.lifecycle = lifecycle;
 		this.replicaAdoption = replicaAdoption;
+		this.pendingRelease = pendingRelease;
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
 		this.audit = audit;
+	}
+
+	/** Guarda de TODA rota deste controller: a recusa tem de ser de admin, não de sessão. */
+	private CurrentUser admin(String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		adminGuard.requireAdmin(user);
+		return user;
 	}
 
 	/** A política vigente do bucket. Bucket sem linha responde os padrões, com {@code configured=false}. */
@@ -138,10 +148,45 @@ class AdminNetworkStorageLifecycleController {
 		return relatorio;
 	}
 
-	private CurrentUser admin(String sessionToken) {
-		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		adminGuard.requireAdmin(user);
-		return user;
+	/**
+	 * As designações que ainda esperam confirmação, da mais antiga para a mais nova, com a idade e se
+	 * já passaram do prazo (doc 13 §5.11).
+	 *
+	 * <p>É a leitura que faltava para uma {@code PENDING_REMOTE} perdida: o healer a responde
+	 * {@code ALREADY_DESIGNATED} e a adoção de réplica única a pula, então sem esta lista o operador
+	 * não tinha como saber <b>qual</b> designação está segurando a lacuna.</p>
+	 */
+	@GetMapping("/pending")
+	StoragePendingRelease.Report pending(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(defaultValue = "0") int limit) {
+		admin(sessionToken);
+		return pendingRelease.pending(limit);
+	}
+
+	/**
+	 * Solta as designações vencidas: {@code PENDING_REMOTE} sem confirmação há mais que
+	 * {@code maxAgeMinutes} (padrão {@code rede.storage.replication.pending-max-age-minutes}) vira
+	 * {@code GONE}, e a lacuna volta a ser curável pelo {@code /storage/heal} e pela adoção de réplica
+	 * única. O padrão é <b>seco</b>.
+	 *
+	 * <p>Não liga o auto-heal: é o ato de operador que antes só existia dentro do worker, que nasce
+	 * desligado. Não apaga corpo de nó e não designa a cópia nova — só devolve a lacuna a quem cura.</p>
+	 */
+	@PostMapping("/pending/release")
+	StoragePendingRelease.Report releasePending(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(name = "maxAgeMinutes", required = false) Integer maxAgeMinutes,
+			@RequestParam(name = "limit", defaultValue = "0") int limit,
+			@RequestParam(name = "dryRun", defaultValue = "true") boolean dryRun) {
+		CurrentUser admin = admin(sessionToken);
+		StoragePendingRelease.Report relatorio = pendingRelease.releaseExpired(admin.id().value(), maxAgeMinutes,
+			limit, dryRun);
+		if (!dryRun && !relatorio.pending().isEmpty()) {
+			audit.record(admin.id().value(), "STORAGE_PENDING_RELEASE_RUN", "storage",
+				"{\"released\":" + relatorio.pending().size() + ",\"maxAgeMinutes\":" + relatorio.maxAgeMinutes()
+					+ "}");
+		}
+		return relatorio;
 	}
 
 	record PolicyRequest(boolean versioning, Integer retainSupersededDays, Integer expireAfterDays) {
