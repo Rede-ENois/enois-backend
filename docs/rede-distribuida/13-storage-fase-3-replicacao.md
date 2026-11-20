@@ -323,6 +323,23 @@ cabe no disco de 1 MB; o segundo, que só não cabe **somado**, falha com `STORA
 confirma a cópia, e o que está guardado continua dentro do teto. Mutação: sem o `disk_make_room` no
 `OBJECT_PUT`, o cenário novo derruba — 1 de 1.
 
+**No Control Plane, a confirmação também respeita o cede (ciclo 76).** O runtime recusa gravar
+acima do teto (§5.4.1), mas isso protege o **disco** de quem cede — não a verdade do catálogo. Um nó
+que recebeu a designação e depois teve o cede reduzido, ou um runtime antigo sem o `disk_make_room`,
+gravava e confirmava: o catálogo passava a afirmar durabilidade numa cópia fora do limite que o
+participante definiu, e o heal seguinte contava esse MB como ocupado sem nada devolver o espaço.
+
+`confirmReplica` agora chama `StoragePlacementService.cedentHeadroomMb` — a **mesma** conta da
+designação, não uma segunda régua. A colocação `PENDING_REMOTE` que está sendo confirmada já entra
+como reservada (`reservadoEmMb`, arredondada para cima), então a folga é a que sobra para **esta**
+cópia: negativa → `507 STORAGE_NO_CEDENT_SPACE`, e a colocação continua `PENDING_REMOTE`. Sem cede
+declarado (`declaredDiskMb = 0`) não há teto a cobrar, e o caminho segue como antes.
+
+**Verificação:** `NetworkStorageHealTests` **+1** (6 no total): o nó cede 1 MB, o objeto tem 2 MB, a
+confirmação pela rota real é recusada com `507` e a cópia não vira `OK`; devolvido o cede, a **mesma**
+confirmação passa — sem isso, "recusar tudo" passaria. Mutações: sem a checagem e recusando por
+qualquer folga — **2 de 2 derrubam**.
+
 **No Control Plane:** `NodeBodyStore` (`@ConditionalOnProperty rede.storage.node-body-root`) é a
 mesma ideia do lado servidor — gravação atômica (temporário + `ATOMIC_MOVE`), validação de
 `objectId` contra `..` e `/`, e `usedBytes()` que conta **só** `.bin` (temporário e lixo não inflam

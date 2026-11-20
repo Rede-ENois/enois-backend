@@ -315,7 +315,20 @@ public class StoragePlacementService {
 	 * {@code 0} diria "não tem espaço" a quem só não declarou. Zero declarado é uma resposta, não
 	 * uma ausência — e vale zero de folga.</p>
 	 */
-	private Long cedentHeadroomMb(NetworkNode node, Instant now) {
+	/**
+	 * Folga cedida do nó, em MB — a mesma conta que a designação usa, agora legível para quem
+	 * <b>confirma</b> a cópia.
+	 *
+	 * <p>A confirmação só provava que a colocação foi designada e que o SHA confere. Um nó que
+	 * recebeu a designação e depois teve o cede reduzido ainda confirmava, e o catálogo passava a
+	 * afirmar durabilidade numa cópia fora do limite que o participante definiu. A colocação
+	 * {@code PENDING_REMOTE} que está sendo confirmada já entra na conta ({@link #reservadoEmMb}),
+	 * então a folga calculada aqui é a que sobra <b>para esta</b> cópia: {@code >= 0} significa que
+	 * ela cabe no que o nó cedeu.</p>
+	 *
+	 * @return {@code null} quando o nó não declarou cede — sem teto não há folga a calcular
+	 */
+	public Long cedentHeadroomMb(NetworkNode node, Instant now) {
 		if (node.declaredDiskMb() <= 0) {
 			return null;
 		}

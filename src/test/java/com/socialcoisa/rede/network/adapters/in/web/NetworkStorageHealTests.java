@@ -216,6 +216,69 @@ class NetworkStorageHealTests {
 		assertThat(scrrubStillShows(objectId)).as("depois da confirmacao a lacuna fecha").isFalse();
 	}
 
+	/**
+	 * O teto que o participante cedeu vale no <b>Control Plane</b> também, na hora de aceitar a
+	 * confirmação — não só no runtime do nó (doc 13 §5.4.1).
+	 *
+	 * <p>O cenário é o de um nó que reduz o que cede: ele recebeu a designação quando tinha espaço,
+	 * e o participante baixou o limite (ou o runtime ficou desatualizado e não tem a checagem do
+	 * §5.4.1). Ele confirma a cópia, e o CP aceitava: o catálogo passava a afirmar durabilidade
+	 * numa cópia fora do limite cedido, e o número que o participante definiu não valia no lugar
+	 * onde o dado é registrado. O heal seguinte contava esse MB como ocupado e nada devolvia o
+	 * espaço — o participante ficava com um objeto a mais do que pediu.</p>
+	 *
+	 * <p>O discriminante: com o cede abaixo do que a cópia já ocupa, a confirmação é recusada
+	 * ({@code 507 STORAGE_NO_CEDENT_SPACE}) e a colocação continua {@code PENDING_REMOTE}; com
+	 * espaço, a mesma confirmação passa. Sem o segundo, "recusar tudo" passaria.</p>
+	 */
+	@Test
+	void aConfirmacaoDaReplicaNaoAceitaCopiaAcimaDoQueONoCedeu() throws Exception {
+		String admin = adminToken();
+		// 2 MB: acima do 1 MB que o nó ainda cede depois da redução. O tamanho tem de ser maior que
+		// o cede, e não o padrão de 50 bytes — com 50 bytes "cabe" seria verdade.
+		byte[] content = new byte[2 * 1024 * 1024];
+		java.util.Arrays.fill(content, (byte) 'a');
+		String objectId = storedObjectWithoutReplica("heal", "foto.jpg", content);
+		Node storage = node("NODE_STORAGE");
+		mockMvc.perform(post("/admin/network/nodes/storage/heal").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.designated.length()").value(1));
+
+		// O nó deixa de ceder espaço para novas réplicas. É o caso real de quem reduz o limite
+		// depois de a designação já ter saído, e o de um runtime antigo (sem a checagem do §5.4.1).
+		mockMvc.perform(post("/admin/network/nodes/" + storage.id() + "/capacity")
+			.header("X-Session-Token", admin).contentType(MediaType.APPLICATION_JSON)
+			.content(objectMapper.writeValueAsString(Map.of("diskMb", 1))))
+			.andExpect(status().isOk());
+
+		var recusa = mockMvc
+			.perform(post("/network/storage/objects/" + objectId + "/replica").header("X-Node-Id", storage.id())
+				.header("X-Node-Key", storage.key()).contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(
+					Map.of("bytes", content.length, "sha256", sha256(content)))))
+			.andReturn();
+		assertThat(recusa.getResponse().getStatus()).as(recusa.getResponse().getContentAsString()).isEqualTo(507);
+		assertThat(recusa.getResponse().getContentAsString()).contains("STORAGE_NO_CEDENT_SPACE");
+		// A réplica 0 (o CP) é outra história; aqui o que não pode virar OK é a cópia DESTE nó.
+		assertThat(placements(objectId).stream()
+			.filter(p -> storage.id().equals(p.get("node_id")))
+			.filter(p -> "OK".equals(p.get("state"))))
+			.as("copia fora do teto nao vira durabilidade").isEmpty();
+
+		// Devolve o espaço: a mesma confirmação passa, e o objeto volta a ter cópia OK.
+		mockMvc.perform(post("/admin/network/nodes/" + storage.id() + "/capacity")
+			.header("X-Session-Token", admin).contentType(MediaType.APPLICATION_JSON)
+			.content(objectMapper.writeValueAsString(Map.of("diskMb", 102400))))
+			.andExpect(status().isOk());
+		mockMvc
+			.perform(post("/network/storage/objects/" + objectId + "/replica").header("X-Node-Id", storage.id())
+				.header("X-Node-Key", storage.key()).contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(
+					Map.of("bytes", content.length, "sha256", sha256(content)))))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.state").value("OK"));
+	}
+
 	private boolean scrrubStillShows(String objectId) throws Exception {
 		String admin = adminToken();
 		String json = mockMvc.perform(get("/admin/network/nodes/storage/scrub").header("X-Session-Token", admin))
