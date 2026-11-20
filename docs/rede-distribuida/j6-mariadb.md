@@ -116,3 +116,15 @@ enoisctl data-service data-j6 https://data-j6.example.invalid:8090 1.0.0
 
 O teste automatizado local do J6 usa H2. Use este ambiente MariaDB para
 verificar o boot, o schema e os fluxos de aceite em staging.
+
+## Desenvolvimento no Foxxo Den
+
+O serviço Java de dados roda no host `enois_data01` e usa o endpoint MariaDB
+`gw.k8s.foxxo.den.int.florestaencantada.ia.br:3306` com `rede_dev`,
+`rede_enois` e `sslMode=verify-full`. O schema restaurado usa
+`utf8mb4_uca1400_ai_ci` e não tem histórico do Flyway. O Hibernate valida
+o schema com `SPRING_FLYWAY_ENABLED=false`. A cadeia de migrações chegou à
+V368 em uma instância descartável da mesma versão do MariaDB.
+
+O runbook de Ansible e do workflow fica em
+`enois-distributed-deploy/docs/j6-staging.md`.
