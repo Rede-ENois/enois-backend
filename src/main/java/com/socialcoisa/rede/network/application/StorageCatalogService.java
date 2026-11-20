@@ -477,6 +477,37 @@ public class StorageCatalogService {
 	}
 
 	/**
+	 * Quanto o participante ocupa e quanto pode ocupar — a leitura que faltava.
+	 *
+	 * <p>Até o ciclo 80 a cota só existia na <b>recusa</b>: quem recebia {@code 507} ficava sabendo os
+	 * números daquele instante, e mais ninguém. O brief §18 pede que o participante "consulte espaço
+	 * utilizado" e que a interface informe "quais recursos estão sendo utilizados"; sem esta leitura,
+	 * ele só descobria o limite ao bater nele, e não tinha como planejar (apagar antes de encher,
+	 * pedir mais cota ao operador).</p>
+	 *
+	 * <p><b>Lido do banco, não do cache.</b> O cache do {@link #usadoPorDono} é otimização do caminho
+	 * de gravação e conta só o que esta instância viu; um painel que respondesse por ele mostraria um
+	 * número diferente do que a próxima recusa vai usar, conforme a instância que atendeu. A leitura
+	 * é uma consulta indexada por {@code created_by}.</p>
+	 *
+	 * @param limite  a cota em bytes; {@code 0} quando desligada
+	 * @param usado   o que hoje conta contra ela ({@code bytesOwnedBy}: correntes, sem lápide)
+	 * @param livre   o que ainda cabe; {@code null} quando a cota está desligada, porque "sem limite"
+	 *                não é um número — {@code 0} ali diria "cheio"
+	 */
+	public record Cota(long limite, long usado, Long livre) {
+	}
+
+	/** A cota deste participante, para o painel. Ver {@link Cota}. */
+	public Cota cotaDe(String actorId) {
+		long usado = actorId == null || actorId.isBlank() ? 0L : catalog.bytesOwnedBy(actorId);
+		if (maxBytesPerOwner <= 0) {
+			return new Cota(0L, usado, null);
+		}
+		return new Cota(maxBytesPerOwner, usado, Math.max(0L, maxBytesPerOwner - usado));
+	}
+
+	/**
 	 * A cota com o tamanho da gravação já na conta.
 	 *
 	 * <p><b>Por que o acréscimo.</b> Conferir só o que já está gravado deixa o participante entrar a

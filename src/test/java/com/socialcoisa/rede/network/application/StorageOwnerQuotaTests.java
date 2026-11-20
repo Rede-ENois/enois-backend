@@ -123,6 +123,32 @@ class StorageOwnerQuotaTests {
 		assertThat(segundo).isNotBlank();
 	}
 
+	/**
+	 * A leitura do painel: o que o participante vê é o que a recusa vai usar.
+	 *
+	 * <p>O discriminante que importa é o do limite desligado ({@code 0}, o padrão da instalação):
+	 * {@code livre = null}, nunca {@code 0} — "sem limite" e "cheio" são coisas opostas, e um painel
+	 * que mostrasse zero mandaria o participante apagar arquivos que não precisam sair.</p>
+	 */
+	@Test
+	void a_leitura_da_cota_acompanha_o_que_a_recusa_usa() {
+		StorageCatalogService semCota = comCota(0);
+		var leitura = semCota.cotaDe("user_1");
+		assertThat(leitura.limite()).isZero();
+		assertThat(leitura.livre()).as("sem limite nao e zero livre").isNull();
+
+		StorageCatalogService apertado = comCota(40);
+		String id = apertado.beginUpload("user_1", "fotos", "a.jpg", null).id();
+		apertado.store(storageNode(), id, body("123456789012345678901234567890"));
+
+		var depois = apertado.cotaDe("user_1");
+		assertThat(depois.limite()).isEqualTo(40);
+		assertThat(depois.usado()).isEqualTo(30);
+		assertThat(depois.livre()).isEqualTo(10);
+		// A mesma conta da recusa: o que cabe é o que o próximo corpo pode ter.
+		assertThat(apertado.cotaDe("user_1").usado() + 11).isGreaterThan(apertado.cotaDe("user_1").limite());
+	}
+
 	@Test
 	void acima_do_teto_a_mensagem_diz_o_que_acabou() {
 		StorageCatalogService apertado = comCota(5);
