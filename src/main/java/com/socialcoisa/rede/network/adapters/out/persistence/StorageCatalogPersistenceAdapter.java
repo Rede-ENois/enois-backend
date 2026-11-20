@@ -131,9 +131,22 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	 * Objetos correntes, servíveis e vencidos. O {@code expires_at is not null} é redundante com a
 	 * comparação, mas deixa o índice usar a árvore: as linhas sem prazo são a maioria.
 	 */
+	/**
+	 * Objetos com prazo vencido, corrente <b>ou substituído</b>.
+	 *
+	 * <p>O prazo é do objeto, e cada versão é um objeto com id próprio (doc 17 §11.1) — a versão nova
+	 * não herda o prazo nem o anula. Exigir {@code superseded_by is null} aqui fazia o prazo de
+	 * qualquer versão que deixou de ser corrente ser ignorado: gravado com sete dias e substituído no
+	 * segundo, o conteúdo nunca vencia, nunca virava lápide, nunca era coletado, e sem política de
+	 * retenção (§11.3, "sem política o padrão é guardar") ficava para sempre — na conta do dono e no
+	 * disco dos nós.</p>
+	 *
+	 * <p>O {@code state = 'STORED'} continua: a lápide já feita não volta à varredura, e
+	 * {@code PENDING} ainda não tem corpo para expirar.</p>
+	 */
 	private static final String SELECT_EXPIRED = """
 		select %s from network_storage_objects
-		where expires_at is not null and expires_at <= ? and state = 'STORED' and superseded_by is null
+		where expires_at is not null and expires_at <= ? and state = 'STORED'
 		order by expires_at asc
 		limit ?
 		""".formatted(OBJECT_COLUMNS);
