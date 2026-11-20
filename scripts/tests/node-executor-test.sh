@@ -1591,6 +1591,37 @@ out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SE
 assert_contains 'teto de disco menor que o objeto recusa antes de confirmar' "$out" 'STORAGE_OBJECT_TOO_LARGE'
 assert_not_contains 'e nao confirma a copia' "$(cat "$TMP/curl-calls")" '/replica'
 rm -f "$TMP"/object-put.*
+# 3b. o teto e do CONJUNTO, nao de um objeto isolado (brief §7): dois corpos que cabem sozinhos
+# no disco cedido, mas nao somados. Antes o no comparava so o tamanho do objeto com o teto -- dez
+# replicas de 700KB passavam num disco cedido de 1MB, e o `content_bytes` (que ja contava objects/)
+# mostrava o estouro no heartbeat sem ninguem recusar.
+OBJ_MED=$(head -c 700000 /dev/zero | tr '\0' 'b')
+OBJ_MED_SHA=$(printf '%s' "$OBJ_MED" | sha256sum | cut -d' ' -f1)
+OBJ_MED_BYTES=${#OBJ_MED}
+OBJ_CONFIG_1MB='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":6,"ttlSeconds":300,"configVersion":11,"profiles":["NODE_STORAGE"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":1,"bandwidthMbps":100},"allowedTasks":["OBJECT_PUT"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 11 '["NODE_STORAGE"]' 4 8192 1 100 '["OBJECT_PUT"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+obj_med_task() {
+  # gera a tarefa OBJECT_PUT para o corpo de 700KB; o id entra no objectId e na chave
+  local id="$1"
+  printf '{"tasks":[{"taskId":"tk_%s","type":"OBJECT_PUT","attempt":1,"deadline":"2026-11-12T13:00:00Z","idempotencyKey":"storage:%s:1","payload":"{\\"objectId\\":\\"%s\\",\\"bucket\\":\\"fotos\\",\\"key\\":\\"%s.bin\\",\\"sha256\\":\\"%s\\",\\"bytes\\":%s,\\"replica\\":1}","dataClass":"PUBLIC_MEDIA"}],"mode":"NORMAL","serverTime":"now"}' \
+    "$id" "$id" "$id" "$id" "$OBJ_MED_SHA" "$OBJ_MED_BYTES"
+}
+rm -rf "$NH/objects"; mkdir -p "$NH/objects"
+OBJ_BODY="$OBJ_MED"
+TASK_NEXT_BODY="$(obj_med_task sob_med1)" OBJ_CONFIG_ATUAL="$OBJ_CONFIG_1MB" make_curl_storage
+out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SECONDS=1 \
+  /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true)
+assert_contains 'primeiro corpo de 700KB cabe no disco de 1MB' "$out" 'DONE tk_sob_med1'
+: > "$TMP/curl-calls"
+TASK_NEXT_BODY="$(obj_med_task sob_med2)" OBJ_CONFIG_ATUAL="$OBJ_CONFIG_1MB" make_curl_storage
+out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SECONDS=1 \
+  /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true)
+assert_contains 'segundo corpo que nao cabe SUMADO recusa com motivo proprio' "$out" 'STORAGE_NO_DISK_ROOM'
+assert_not_contains 'e nao confirma a copia que nao cabe' "$(cat "$TMP/curl-calls")" '/replica'
+guardado=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo content_bytes)" 2>/dev/null | tail -n 1)
+if (( guardado <= 1048576 )); then dentro=1; else dentro=0; fi
+assert_eq 'o disco guardado continua dentro do teto cedido' 1 "$dentro"
+rm -rf "$NH/objects"
+
 # O cenario 3 trocou o corpo do mock pelo grande; de volta ao pequeno (sha/bytes do OBJ_TASK).
 OBJ_BODY='corpo-do-objeto-1234567890'
 

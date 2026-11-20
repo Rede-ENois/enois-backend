@@ -1183,6 +1183,20 @@ exec_object_put() {
       "objeto de $got_bytes bytes excede os ${disk_mb}MB cedidos"
     return 0
   fi
+  # O teto não é "este objeto cabe no disco", é "o que o Énóis ocupa aqui, somando este objeto,
+  # continua dentro do que o participante cedeu" (brief §7, "não permitir que o armazenamento do
+  # Énóis consuma espaço além do limite configurado"). Antes só o tamanho do objeto era comparado
+  # com o teto: dez réplicas de 900MB passavam os dez testes num disco cedido de 1GB, e o
+  # `content_bytes` do nó — que já conta `objects/*.bin` — mostrava o estouro no heartbeat sem
+  # ninguém recusar. A réplica não é evictável (é promessa de catálogo), então aqui não há
+  # esvaziamento: se não cabe somado, a tarefa falha com motivo próprio e o CP designa outro nó.
+  local alvo="$objects_dir/$object_id.bin"
+  if ! disk_make_room "$disk_cap_bytes" "$got_bytes" "$alvo"; then
+    rm -f "$tmp"
+    fail_task "$task_id" "$attempt" STORAGE_NO_DISK_ROOM \
+      "objeto de $got_bytes bytes nao cabe no espaco cedido (${disk_mb}MB) somado ao que ja esta guardado"
+    return 0
+  fi
 
   # O corpo so ganha o nome final DEPOIS da confirmacao: o CP ja aceitou que este no guarda o
   # objeto, e um processo morto entre as duas etapas deixa um `.partial` (varrido no proximo
