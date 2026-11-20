@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.network.adapters.in.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -129,6 +130,46 @@ class S3OwnerQuotaTests {
 		String signature = SigV4Verifier.signature(request, parsed, SECRET, dateStamp);
 		return "AWS4-HMAC-SHA256 Credential=" + accessKey + "/" + dateStamp + "/" + REGIAO + "/s3/aws4_request, "
 			+ "SignedHeaders=" + signedHeaders + ", Signature=" + signature;
+	}
+
+	/**
+	 * O que o participante <b>apaga</b> sai da conta da cota.
+	 *
+	 * <p>A conta em memória ({@code usadoPorDono}) só somava. O número inicial vem do banco
+	 * ({@code bytesOwnedBy}, que exclui lápide e versão substituída), mas depois do primeiro upload o
+	 * cache era a única fonte — e a exclusão não o descontava. Quem enchia a cota, apagava tudo e
+	 * tentava de novo recebia {@code 507} até o processo reiniciar, com o número do que já não
+	 * existe. Entrava do jeito errado de duas formas ao mesmo tempo: a mensagem dizia que o
+	 * participante ocupa bytes que ele já apagou, e a cota virava permanente depois do primeiro uso.</p>
+	 *
+	 * <p>O discriminante: cheio → `DELETE` → o mesmo {@code 12} bytes passam. Sem o desconto, a
+	 * segunda gravação é 507.</p>
+	 */
+	@Test
+	void o_que_o_participante_apaga_sai_da_conta_da_cota() throws Exception {
+		var dono = auth.authenticate("quota_s3_apaga_" + UUID.randomUUID().toString().substring(0, 8));
+		String bucket = "qd" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		String cred = credencial(dono.userId());
+
+		mockMvc.perform(putAssinado(bucket, "a.txt", cred, "123456789012")).andExpect(status().isOk());
+		assertThat(mockMvc.perform(putAssinado(bucket, "b.txt", cred, "123456789012")).andReturn().getResponse()
+			.getStatus()).isEqualTo(507);
+
+		mockMvc.perform(deleteAssinado(bucket, "a.txt", cred)).andExpect(status().isNoContent());
+
+		// O espaço voltou: a mesma gravação que era 507 passa a entrar.
+		mockMvc.perform(putAssinado(bucket, "c.txt", cred, "123456789012")).andExpect(status().isOk());
+	}
+
+	/** O DELETE também vai assinado: é por ele que o participante libera espaço. */
+	private static MockHttpServletRequestBuilder deleteAssinado(String bucket, String key, String accessKey) {
+		MockHttpServletRequestBuilder del = delete("/s3/" + bucket + "/" + key);
+		String amzDate = AMZ.format(agora());
+		String dateStamp = amzDate.substring(0, 8);
+		String payloadHash = sha("");
+		del.header("host", "localhost").header("x-amz-date", amzDate).header("x-amz-content-sha256", payloadHash)
+			.header(HttpHeaders.AUTHORIZATION, assinar(del, payloadHash, accessKey, amzDate, dateStamp));
+		return del;
 	}
 
 	@Test

@@ -232,6 +232,10 @@ public class StorageCatalogService {
 				throw new ApiException(409, "STORAGE_VERSION_RACE",
 					"A chave mudou durante a reabertura; tente novamente.");
 			}
+			// A versão corrente saiu da conta (`superseded_by is null`): a conta mudou de dono do
+			// número, e o cache do antigo e do novo precisa reler.
+			esquecerUsoDoParticipante(existente.createdBy());
+			esquecerUsoDoParticipante(actorId);
 			return catalog.createPending(novoId, bucket, key, type, actorId, now);
 		}
 		StorageObject object = catalog.createPending(OBJECT_ID_PREFIX + NodeIds.next(""), bucket, key, type,
@@ -347,6 +351,10 @@ public class StorageCatalogService {
 				// relido. Recomeçar é mais seguro do que adivinhar.
 				continue;
 			}
+			if (current.isPresent()) {
+				esquecerUsoDoParticipante(current.get().createdBy());
+			}
+			esquecerUsoDoParticipante(actorId);
 			StorageObject created = catalog.insertVersion(id, bucket, key, type, actorId, now, version);
 			Instant expiresAt = policy.expiresAtFor(now);
 			if (expiresAt != null) {
@@ -508,6 +516,31 @@ public class StorageCatalogService {
 		usadoPorDono.merge(actorId, bytes, Long::sum);
 	}
 
+	/**
+	 * O que o participante deixou de ocupar. Chamado quando o objeto sai da conta do banco — exclusão,
+	 * expiração, retenção ou versão substituída.
+	 *
+	 * <p><b>Antes:</b> o cache só somava. O número inicial vem de {@code bytesOwnedBy} (que exclui
+	 * lápide e versão substituída), mas a partir do primeiro upload ele era a única fonte, e nada o
+	 * descontava. Quem enchia a cota, apagava tudo e tentava de novo recebia {@code 507} até o
+	 * processo reiniciar, com o número do que já não existia.</p>
+	 *
+	 * <p>A conta nunca fica negativa: um {@code DELETED} marcado duas vezes (corrida com a varredura)
+	 * não pode transformar o desconto em crédito para um upload futuro. Negativo é "não sei", e é
+	 * melhor esquecer o valor e reler o banco na próxima vez ({@code remove}).</p>
+	 */
+	/** O ciclo de vida marca lápide por fora deste serviço; ele avisa aqui que a conta mudou. */
+	void esquecerUsoDoParticipante(String actorId) {
+		if (maxBytesPerOwner <= 0 || actorId == null || actorId.isBlank()) {
+			return;
+		}
+		// Esquecer é mais seguro do que descontar: o que sai da conta são as bytes daquela linha, e
+		// quem descontasse pelo tamanho da versão corrente erraria na versão substituída (tamanho
+		// diferente, dono diferente). A releitura no próximo upload é uma consulta indexada por
+		// `created_by`, e acontece uma vez por participante que acabou de mudar a própria conta.
+		usadoPorDono.remove(actorId);
+	}
+
 	/** A política do bucket, ou os padrões quando ninguém configurou. */
 	public StorageBucketPolicy bucketPolicy(String bucket) {
 		validateBucket(bucket);
@@ -579,6 +612,10 @@ public class StorageCatalogService {
 				&& !catalog.markSuperseded(bucket, key, id, now)) {
 			throw new ApiException(409, "STORAGE_VERSION_RACE", "A chave mudou durante a restauracao.");
 		}
+		if (current.isPresent()) {
+			esquecerUsoDoParticipante(current.get().createdBy());
+		}
+		esquecerUsoDoParticipante(actorId);
 		catalog.insertVersion(id, bucket, key, old.contentType(), actorId, now, next);
 		// O conteúdo é o da versão antiga, e o conferido é o medido nela: a restauração não relê o
 		// disco, então o digest que vale é o que o catálogo já guardava.
@@ -924,6 +961,9 @@ public class StorageCatalogService {
 		Instant now = clock.instant();
 		boolean removed = catalog.markDeleted(object.id(), now);
 		if (removed) {
+			// A lápide sai da conta do banco (`bytesOwnedBy` exclui `DELETED`): o cache tem de
+			// esquecer o número dele, senão o participante que apagou continua barrado pela cota.
+			esquecerUsoDoParticipante(object.createdBy());
 			audit.record(actorId, "STORAGE_OBJECT_DELETED", object.id(),
 				"{\"bucket\":\"" + escape(object.bucket()) + "\",\"key\":\"" + escape(object.key()) + "\"}");
 		}
