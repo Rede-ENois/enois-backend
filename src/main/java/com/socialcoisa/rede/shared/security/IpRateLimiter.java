@@ -56,6 +56,15 @@ public class IpRateLimiter {
 	public static final String NODE_AUTH = "node-auth";
 	/** Assinatura S3 que falhou, por Access Key. Mesmo raciocínio: a Access Key é pública. */
 	public static final String S3_AUTH = "s3-auth";
+	/**
+	 * Requisição S3 <b>assinada e válida</b>, por Access Key (brief §3.3, "controle de acesso").
+	 *
+	 * <p>É conta diferente da {@link #S3_AUTH}: aquela protege o segredo contra chute de assinatura e
+	 * só soma falha; esta limita quanto uma credencial legítima pode consumir do Control Plane. Sem
+	 * ela, uma credencial vazada ou um cliente em laço ocupa a instalação inteira — todo upload e
+	 * download do gateway passa pelo mesmo processo.</p>
+	 */
+	public static final String S3_REQUEST = "s3-request";
 
 	/** Teto de chaves guardadas: passou disso, a limpeza roda na hora (evita crescer sem limite). */
 	private static final int MAX_KEYS = 20_000;
@@ -75,6 +84,7 @@ public class IpRateLimiter {
 	private final int nodeRevealLimit;
 	private final int nodeAuthLimit;
 	private final int s3AuthLimit;
+	private final int s3RequestLimit;
 	private final long signupWindowMs;
 	private final long loginWindowMs;
 	private final long passwordWindowMs;
@@ -87,6 +97,7 @@ public class IpRateLimiter {
 	private final long nodeRevealWindowMs;
 	private final long nodeAuthWindowMs;
 	private final long s3AuthWindowMs;
+	private final long s3RequestWindowMs;
 
 	public IpRateLimiter(Clock clock,
 			@Value("${rede.security.rate-limit.signup.limit:5}") int signupLimit,
@@ -114,7 +125,12 @@ public class IpRateLimiter {
 			@Value("${rede.security.rate-limit.node-auth.limit:10}") int nodeAuthLimit,
 			@Value("${rede.security.rate-limit.node-auth.window-minutes:5}") long nodeAuthWindowMinutes,
 			@Value("${rede.security.rate-limit.s3-auth.limit:20}") int s3AuthLimit,
-			@Value("${rede.security.rate-limit.s3-auth.window-minutes:5}") long s3AuthWindowMinutes) {
+			@Value("${rede.security.rate-limit.s3-auth.window-minutes:5}") long s3AuthWindowMinutes,
+			// Teto de requisição legítima por credencial. Padrão folgado de propósito: um SDK em
+			// multipart manda uma parte por requisição, e barrar cliente são custa mais que o laço
+			// que se quer impedir. `0` desliga.
+			@Value("${rede.security.rate-limit.s3-request.limit:600}") int s3RequestLimit,
+			@Value("${rede.security.rate-limit.s3-request.window-minutes:1}") long s3RequestWindowMinutes) {
 		this.clock = clock;
 		this.signupLimit = signupLimit;
 		this.loginLimit = loginLimit;
@@ -140,6 +156,8 @@ public class IpRateLimiter {
 		this.nodeAuthWindowMs = nodeAuthWindowMinutes * 60_000L;
 		this.s3AuthLimit = s3AuthLimit;
 		this.s3AuthWindowMs = s3AuthWindowMinutes * 60_000L;
+		this.s3RequestLimit = s3RequestLimit;
+		this.s3RequestWindowMs = s3RequestWindowMinutes * 60_000L;
 	}
 
 	/**
@@ -184,6 +202,7 @@ public class IpRateLimiter {
 			case NODE_REVEAL -> nodeRevealWindowMs;
 			case NODE_AUTH -> nodeAuthWindowMs;
 			case S3_AUTH -> s3AuthWindowMs;
+			case S3_REQUEST -> s3RequestWindowMs;
 			default -> 0L;
 		};
 	}
@@ -202,6 +221,7 @@ public class IpRateLimiter {
 			case NODE_REVEAL -> nodeRevealLimit;
 			case NODE_AUTH -> nodeAuthLimit;
 			case S3_AUTH -> s3AuthLimit;
+			case S3_REQUEST -> s3RequestLimit;
 			default -> 0;
 		};
 	}
@@ -228,6 +248,14 @@ public class IpRateLimiter {
 	 */
 	public void limpar() {
 		hits.clear();
+	}
+
+	/**
+	 * A requisição <b>legítima</b> entra na conta e passa? É o {@link #tryAcquire} com a chave sendo
+	 * a Access Key — o balde é da credencial, não do IP (o atacante troca de IP; a credencial, não).
+	 */
+	public boolean permiteRequisicao(String action, String chave) {
+		return tryAcquire(action, chave);
 	}
 
 	/** A tentativa de autenticação falhou: entra na conta da janela. */

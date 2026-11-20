@@ -97,6 +97,10 @@ Regras que as duas carregam, e por quê:
 Os parâmetros são `rede.security.rate-limit.node-auth.{limit,window-minutes}` e
 `rede.security.rate-limit.s3-auth.{limit,window-minutes}`.
 
+Esta seção é o teto de **credencial errada**. A requisição **legítima** também tem teto, em conta
+separada (`s3-request`, 600 por minuto por Access Key, `503 SlowDown`) — o detalhe está no doc 18 §5.2.
+As duas contas não se misturam: o acerto não gasta o orçamento de quem errou, e vice-versa.
+
 **O que ainda falta nesta frente** (declarado, não escondido): o teto é **em memória e por
 instância** — com várias instâncias de API, cada uma tem a sua conta, e o atacante distribuído ganha
 o produto das contas. Uma conta compartilhada exige o Redis/`network_instance_signals` que a rede

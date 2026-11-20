@@ -512,6 +512,9 @@ class S3GatewayController {
 		if (!credential.allows(operation)) {
 			throw s3Error(403, "AccessDenied", "A credencial da URL nao permite " + operation + ".");
 		}
+		// Mesma conta da assinatura por cabeçalho: a URL é a credencial, e portador de link também
+		// consome o Control Plane.
+		exigirRitmo(credential.accessKey());
 		return credential;
 	}
 
@@ -688,7 +691,26 @@ class S3GatewayController {
 		if (!credential.allows(operation)) {
 			throw s3Error(403, "AccessDenied", "A credencial nao permite " + operation + ".");
 		}
+		exigirRitmo(credential.accessKey());
 		return credential;
+	}
+
+	/**
+	 * Teto de requisição <b>válida</b> por credencial (brief §3.3, "controle de acesso").
+	 *
+	 * <p>Diferente de {@code exigirOrcamento}, que só soma assinatura que falhou: aqui entra a
+	 * requisição de quem provou o segredo. O que se limita não é a segurança da credencial, é o quanto
+	 * uma credencial consome do Control Plane — todo upload e download do gateway passa por este
+	 * processo, e um cliente em laço (ou a credencial vazada) ocupa a instalação inteira. Como o
+	 * balde é da Access Key, trocar de IP não zera a conta, que é o que um limitador por IP deixaria
+	 * passar.</p>
+	 */
+	private void exigirRitmo(String accessKey) {
+		if (accessKey != null && !accessKey.isBlank() && tentativas != null
+				&& !tentativas.permiteRequisicao(com.socialcoisa.rede.shared.security.IpRateLimiter.S3_REQUEST,
+					accessKey)) {
+			throw s3Error(503, "SlowDown", "Muitas requisicoes para esta credencial. Tente de novo mais tarde.");
+		}
 	}
 
 	/** O bucket pedido é o permitido pela credencial? {@code null} em allowedBucket = todos do dono. */
