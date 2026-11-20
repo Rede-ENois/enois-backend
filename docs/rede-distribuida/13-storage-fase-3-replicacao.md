@@ -470,9 +470,31 @@ não lê o disco desta máquina.
 
 | campo | significado | o que se faz |
 |---|---|---|
-| `orphan` | arquivo no disco **sem colocação** para este nó | poda pode apagar (é o único caso) |
+| `orphan` | arquivo no disco que nenhuma colocação **viva** deste nó reivindica — sem linha nenhuma, ou com linha `GONE` (§5.6.1) | poda pode apagar (é o único caso) |
 | `missing` | colocado e **ausente** do disco; `state` diz se era `OK` (perda) ou `PENDING_REMOTE` (a tarefa ainda não rodou) | re-replicar / esperar |
 | `divergent` | no disco e o sha-256 **não confere** | re-replicar — **nunca** apagar aqui |
+
+### 5.6.1 A cópia `GONE` continua ocupando o disco — a poda passa a recolhê-la (ciclo 77)
+
+A coleta de lápides (§4) e a cura (§5.1.1) marcam a cópia `GONE` e **devolvem o espaço na conta de
+folga cedida**. No disco do participante, nada acontecia: o protocolo só tem `OBJECT_PUT` e
+`OBJECT_GET`, não existe tarefa de apagar, e a poda — que o doc dizia recolher — chamava de órfão
+apenas o arquivo **sem** linha de colocação. `GONE` tem linha, então nunca entrava. O participante
+cedia 100 GB, o objeto era excluído, o painel mostrava o espaço livre de volta e o disco dele seguia
+cheio.
+
+Agora o critério é **"nenhuma colocação viva reivindica o arquivo"**: `OK` e `PENDING_REMOTE` protegem
+(o catálogo promete a cópia), `STALE` também protege (pode ser a única cópia possivelmente boa —
+apagá-la antes de o Control Plane repor transformaria divergência em perda), e `GONE` não protege.
+`freedBytes` continua medido com `Files.size` do que de fato saiu.
+
+A poda continua sendo ato de **operador**, com `dryRun` como padrão (§5.1, mesmo critério do
+healing): o nó mostra o que é reclamaível e quem opera decide. Automatizar isso num ciclo do runtime
+seria apagar disco de quem contribui sem ninguém olhar.
+
+**Verificação:** `NodeStorageInventoryTests` **+1** (12 no total): `GONE` aparece como órfão e a poda
+o apaga; `OK` e `STALE` ficam no disco. Mutações: `GONE` voltando a ser intocável, e a lista intocável
+invertida (poda apagando o que o catálogo promete) — **2 de 2 derrubam**.
 
 A poda **só** apaga órfão. Cópia divergente é a única cópia possivelmente boa do objeto: apagá-la
 antes de o Control Plane re-replicar transformaria divergência em perda. E `dryRun` é o padrão: o
