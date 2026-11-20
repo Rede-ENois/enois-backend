@@ -4,6 +4,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -94,6 +95,10 @@ class S3GatewayController {
 	/** Teto de chaves por página, igual ao S3. */
 	private static final int MAX_KEYS = 1000;
 
+	/** O formato de instante da S3: sempre três casas decimais e sempre {@code Z}. */
+	private static final DateTimeFormatter S3_INSTANT = DateTimeFormatter
+		.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(java.time.ZoneOffset.UTC);
+
 	/** O prefixo do metadado declarado pelo cliente no PUT; volta como cabeçalho no HEAD e no GET. */
 	static final String META_PREFIX = "x-amz-meta-";
 
@@ -167,7 +172,7 @@ class S3GatewayController {
 		}
 		for (StorageObject object : found) {
 			xml.open("Contents").element("Key", object.key())
-				.element("LastModified", String.valueOf(object.createdAt()))
+				.element("LastModified", lastModified(object))
 				.element("ETag", "\"" + (object.sha256() == null ? "" : object.sha256()) + "\"")
 				.element("Size", object.bytes() == null ? 0 : object.bytes()).element("StorageClass", "STANDARD")
 				.close("Contents");
@@ -861,6 +866,23 @@ class S3GatewayController {
 		catch (java.io.IOException falha) {
 			throw new ApiException(400, "InvalidRequest", "Nao foi possivel ler o corpo.");
 		}
+	}
+
+	/**
+	 * O {@code LastModified} da listagem, no formato que a S3 manda: {@code yyyy-MM-dd'T'HH:mm:ss.SSS'Z'}.
+	 *
+	 * <p><b>Antes:</b> saía {@code String.valueOf(createdAt)}, isto é {@code Instant.toString()} — que
+	 * <b>omite</b> a fração quando ela é zero ({@code ...T08:00:00Z}) e emite até <b>nove</b> casas quando
+	 * não é ({@code ...T08:00:00.123456789Z}). Os dois são instantes válidos em Java, e é por isso que
+	 * passaram: o SDK da AWS desserializa o campo com um formatter de milissegundos e recusa o documento
+	 * inteiro — a listagem que abre no navegador falha no cliente.</p>
+	 *
+	 * <p>O milissegundo é truncado, não arredondado: {@code 999999} ns não pode virar o segundo seguinte
+	 * e dar a um objeto a data de outro.</p>
+	 */
+	static String lastModified(StorageObject object) {
+		Instant quando = object.updatedAt() != null ? object.updatedAt() : object.createdAt();
+		return S3_INSTANT.format(quando);
 	}
 
 	private static int parseMaxKeys(String value) {
