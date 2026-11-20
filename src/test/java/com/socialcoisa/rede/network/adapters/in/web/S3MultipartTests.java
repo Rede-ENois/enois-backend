@@ -234,6 +234,61 @@ class S3MultipartTests {
 		assertThat(depois.getResponse().getStatus()).isEqualTo(404);
 	}
 
+	/**
+	 * O {@code ListParts} de um {@code uploadId} só responde pela chave daquele upload.
+	 *
+	 * <p><b>Antes:</b> a rota conferia o dono do upload e a donagem do bucket, e mais nada — o
+	 * {@code key} da URL nunca era comparado com o {@code key} gravado no upload. Um cliente que
+	 * trocasse a chave (bug de concatenação, retomada com a chave errada) recebia as partes de
+	 * <b>outro</b> arquivo com 200, e nada no documento denunciava a troca. A S3 responde
+	 * {@code 404 NoSuchUpload}: para a chave pedida, aquele upload não existe.</p>
+	 *
+	 * <p>O discriminante é o par: a chave certa devolve as partes; a chave errada, com o mesmo
+	 * {@code uploadId} e a mesma credencial, é {@code 404}.</p>
+	 */
+	@Test
+	void listar_partes_de_outra_chave_e_recusado() throws Exception {
+		String chave = "outros/%s.bin".formatted(sufixo());
+		String uploadId = abrir(chave);
+		enviarParte(chave, uploadId, 1, "conteudo".getBytes(StandardCharsets.UTF_8));
+
+		var certo = mockMvc.perform(assinar(get("/s3/" + bucket + "/" + chave).param("uploadId", uploadId),
+			shaVazio())).andReturn();
+		assertThat(certo.getResponse().getStatus()).as(certo.getResponse().getContentAsString()).isEqualTo(200);
+		assertThat(certo.getResponse().getContentAsString()).contains("<PartNumber>1</PartNumber>");
+
+		var trocado = mockMvc.perform(assinar(get("/s3/" + bucket + "/outros/outra.bin").param("uploadId", uploadId),
+			shaVazio())).andReturn();
+		assertThat(trocado.getResponse().getStatus()).as("chave de outro arquivo nao pode ver as partes")
+			.isEqualTo(404);
+		assertThat(trocado.getResponse().getContentAsString()).contains("NoSuchUpload");
+	}
+
+	/**
+	 * O {@code AbortMultipartUpload} com a chave errada <b>não</b> apaga o upload.
+	 *
+	 * <p>É o caso mais caro do defeito: {@code ListParts} da chave errada mostrava o que não devia,
+	 * mas o {@code Abort} da chave errada destruía o trabalho de outro arquivo — um cliente que
+	 * concatena a chave errada perdia as partes já enviadas sem nunca ter pedido isso.</p>
+	 */
+	@Test
+	void abortar_pela_chave_errada_nao_apaga_o_upload() throws Exception {
+		String chave = "outros/%s.bin".formatted(sufixo());
+		String uploadId = abrir(chave);
+		enviarParte(chave, uploadId, 1, "conteudo".getBytes(StandardCharsets.UTF_8));
+
+		var errado = mockMvc.perform(assinar(delete("/s3/" + bucket + "/outros/outra.bin")
+			.param("uploadId", uploadId), shaVazio())).andReturn();
+		assertThat(errado.getResponse().getStatus()).as(errado.getResponse().getContentAsString()).isEqualTo(404);
+
+		// O upload continua inteiro: as partes continuam lá e a conclusão funciona.
+		var partes = mockMvc.perform(assinar(get("/s3/" + bucket + "/" + chave).param("uploadId", uploadId),
+			shaVazio())).andReturn();
+		assertThat(partes.getResponse().getStatus()).isEqualTo(200);
+		assertThat(partes.getResponse().getContentAsString()).contains("<PartNumber>1</PartNumber>");
+		concluir(chave, uploadId, 1);
+	}
+
 	// ------------------------------------------------------------------ apoio
 
 	private String abrir(String chave) throws Exception {
