@@ -194,9 +194,22 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		order by bucket asc
 		""";
 
+	/**
+	 * A listagem de bucket, <b>sem o que já venceu</b>.
+	 *
+	 * <p>O download de um objeto vencido responde {@code 404} desde a fase 1 (a leitura filtra o
+	 * prazo). A listagem só excluía lápide, então mostrava uma chave que o cliente não consegue
+	 * baixar: para um sincronizador de diretório, "existe" e "some quando você pede" é o pior dos
+	 * dois — ele pede, recebe 404 e repete, ou apaga a cópia local achando que o remoto venceu.</p>
+	 *
+	 * <p>O predicado é o mesmo do {@code GET} ({@code expires_at} nulo ou no futuro), escrito aqui
+	 * porque a listagem é por página e filtrar depois de ler faria {@code KeyCount} e
+	 * {@code IsTruncated} mentirem.</p>
+	 */
 	private static final String LIST = """
 		select %s from network_storage_objects
 		where bucket = ? and object_key like ? and object_key > ? and state <> 'DELETED'
+		  and (expires_at is null or expires_at > ?)
 		order by object_key asc
 		limit ?
 		""".formatted(OBJECT_COLUMNS);
@@ -526,7 +539,7 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		// O LIKE é prefixo literal: o '%' do cliente seria curinga e listaria outra coisa.
 		String pattern = escapeLike(prefix == null ? "" : prefix) + "%";
 		String after = afterKey == null ? "" : afterKey;
-		return jdbc.query(LIST, OBJECT_MAPPER, bucket, pattern, after, limit);
+		return jdbc.query(LIST, OBJECT_MAPPER, bucket, pattern, after, Timestamp.from(Instant.now()), limit);
 	}
 
 	@Override

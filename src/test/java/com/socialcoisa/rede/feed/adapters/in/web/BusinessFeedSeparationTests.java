@@ -255,4 +255,41 @@ class BusinessFeedSeparationTests {
 			.andExpect(jsonPath("$.items[?(@.id == '" + businessId + "')].content")
 				.value("Post corporativo visível sem sessão."));
 	}
+
+	@Test
+	void alsoCorporateMirrorsSocialPostToCorporateFeedWhenProfileIsActive() throws Exception {
+		var withoutProfile = auth.authenticate("bizmirror_sem_perfil");
+		mockMvc.perform(post("/feed/posts")
+				.header("X-Session-Token", withoutProfile.token())
+				.header("Idempotency-Key", "bizmirror-sem-perfil")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of("topic", "TECNOLOGIA",
+					"type", "INSIGHT", "content", "Tentativa sem perfil profissional.",
+					"alsoCorporate", true, "tags", java.util.List.of(), "mediaIds", java.util.List.of()))))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("NO_ACTIVE_CORPORATE_PROFILE"));
+
+		var author = auth.authenticate("bizmirror_author");
+		createAndActivate(author, "bizmirror.pro", "Espelho Profissional");
+
+		mockMvc.perform(post("/feed/posts")
+				.header("X-Session-Token", author.token())
+				.header("Idempotency-Key", "bizmirror-com-perfil")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(java.util.Map.of("topic", "TECNOLOGIA",
+					"type", "INSIGHT", "content", "Post compartilhado nos dois feeds.",
+					"alsoCorporate", true, "tags", java.util.List.of(), "mediaIds", java.util.List.of()))))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.authorIdentity").value("SOCIAL"));
+
+		mockMvc.perform(get("/feed").param("tab", "ALL").header("X-Session-Token", author.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.content == 'Post compartilhado nos dois feeds.')].authorIdentity")
+				.value("SOCIAL"));
+
+		mockMvc.perform(get("/feed/corporate").header("X-Session-Token", author.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.items[?(@.content == 'Post compartilhado nos dois feeds.')].authorIdentity")
+				.value("CORPORATE"));
+	}
 }
