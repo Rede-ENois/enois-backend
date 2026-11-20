@@ -89,9 +89,21 @@ O que realmente impede o abuso é o **`507` na abertura** consultando o banco um
 participante; o que depende da memória é só o tamanho do corpo que chega logo depois. Compartilhar a
 conta exige o Redis que a rede ainda não usa para limitador (a mesma nota do doc 19 §3.2).
 
+**O que sai da conta também esquece o número** (ciclo 79). Antes, o cache só somava: o número inicial
+vinha do banco, e a partir do primeiro upload o cache era a única fonte. Excluir, deixar vencer ou ser
+substituído tirava o objeto de `bytesOwnedBy` e **não** do cache — quem enchia a cota, apagava tudo e
+tentava de novo recebia `507` com o número do que já não existia, até o processo reiniciar. Agora toda
+transição que muda a conta (lápide por `DELETE`, lápide por expiração/retenção, troca de versão
+corrente na reabertura, no upload versionado e na restauração) **esquece** a entrada do dono
+(`esquecerUsoDoParticipante`), e o próximo upload relê do banco. Esquecer é mais seguro do que
+descontar: o que sai são os bytes daquela linha, e descontar pelo tamanho da corrente erraria na
+versão substituída (tamanho e dono diferentes).
+
 **Verificação:** `StorageOwnerQuotaTests` **4** (cheio é recusado antes de o objeto nascer; o vizinho
-não paga; cota `0` desliga; a mensagem traz os três números), `S3OwnerQuotaTests` **1** pela rota real
-de PUT do gateway (primeiro objeto 200, segundo 507 `QuotaExceeded`, vizinho 200). Mutações: cota
+não paga; cota `0` desliga; a mensagem traz os três números), `S3OwnerQuotaTests` **2** pela rota real
+de PUT do gateway (primeiro objeto 200, segundo 507 `QuotaExceeded`, vizinho 200; e o que foi apagado
+sai da conta — cheio → `DELETE` → a mesma gravação passa). `StorageLifecycleTests` **9** (a expiração
+esquece a conta do dono). Mutações: cota
 global em vez de por participante, sem o acréscimo do tamanho, `beginUpload` sem a checagem, a soma
 que nunca acontece — **4 de 4 derrubam**.
 
