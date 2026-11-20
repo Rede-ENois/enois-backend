@@ -1064,6 +1064,21 @@ public class StorageCatalogService {
 	 * memória: 5 GB passariam em pedaços de 64 KiB. O temporário só vira o arquivo do objeto se
 	 * tudo der certo — upload interrompido deixa lixo apagável, nunca um objeto pela metade.
 	 */
+	/**
+	 * Lê o corpo para um temporário, medindo o digest e o tamanho — <b>parando no teto</b>.
+	 *
+	 * <p><b>Antes:</b> o corpo inteiro era copiado para o disco e o teto só era conferido depois, em
+	 * {@code doFinishUpload}. Um cliente que mandasse 50 GiB num limite de 5 GiB fazia o servidor
+	 * <b>escrever 50 GiB em {@code /tmp}</b> para então responder {@code 413}. O custo não é só o
+	 * espaço: é o upload longo que já ia ser recusado ocupando o disco de quem está gravando de
+	 * verdade.</p>
+	 *
+	 * <p><b>Agora:</b> a conta é feita ao longo da leitura, e a primeira leitura que passar do teto
+	 * interrompe — o temporário é apagado e a resposta é {@code 413 STORAGE_OBJECT_TOO_LARGE}, antes
+	 * de qualquer byte virar corpo. O limite é lido no começo do corpo, mais o tamanho de um bloco:
+	 * ler "só o teto" e parar deixaria passar um corpo de exatamente {@code teto + 1} como se fosse
+	 * o teto.</p>
+	 */
 	private Spooled measure(InputStream body) {
 		MessageDigest digest = sha256();
 		long total = 0;
@@ -1077,10 +1092,17 @@ public class StorageCatalogService {
 		byte[] buffer = new byte[64 * 1024];
 		try (InputStream input = body; OutputStream sink = Files.newOutputStream(temp)) {
 			int read;
-			while ((read = input.read(buffer)) != -1) {
+			while ((read = lerNoMaximo(input, buffer, maxObjectBytes - total + 1)) != -1) {
+				total += read;
+				if (total > maxObjectBytes) {
+					// O corpo passou do teto: nada dele será guardado, e continuar lendo só gastaria
+					// disco para a mesma recusa.
+					deleteQuietly(temp);
+					throw new ApiException(413, "STORAGE_OBJECT_TOO_LARGE",
+						"O objeto excede o teto desta instalacao (" + maxObjectBytes + " bytes).");
+				}
 				digest.update(buffer, 0, read);
 				sink.write(buffer, 0, read);
-				total += read;
 			}
 		}
 		catch (IOException unreadable) {
@@ -1169,6 +1191,18 @@ public class StorageCatalogService {
 	}
 
 	/** O temporário recém-gravado e o que foi medido nele. O declarado não é lido. */
+	/**
+	 * Lê no máximo {@code limite} bytes — um byte além do teto basta para saber que ele passou.
+	 *
+	 * <p>Sem isto, um bloco de 64 KiB inteiro era lido (e descartado) mesmo quando só faltavam dois
+	 * bytes para o teto. Não é o custo do disco — nada dele era escrito —, é o do corpo: o servidor
+	 * pede 64 KiB a mais ao cliente para recusar.</p>
+	 */
+	private static int lerNoMaximo(InputStream input, byte[] buffer, long limite) throws IOException {
+		int pedido = (int) Math.min(buffer.length, Math.max(1, limite));
+		return input.read(buffer, 0, pedido);
+	}
+
 	private record Spooled(Path temp, long bytes, String sha256) {
 	}
 
