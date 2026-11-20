@@ -146,9 +146,18 @@ public class PublishPostService implements PublishPostUseCase {
 		AuthorIdentity authorIdentity = command.type() == PostType.BUSINESS
 			? requireActiveCorporateProfile(command.authorId().value())
 			: AuthorIdentity.SOCIAL;
-		if (command.type() == PostType.BUSINESS && communityId != null) {
+		boolean mirrorCorporate = command.alsoCorporate() && command.type() != PostType.BUSINESS;
+		if ((command.type() == PostType.BUSINESS || mirrorCorporate) && communityId != null) {
 			throw new ApiException(400, "BUSINESS_NOT_IN_COMMUNITY",
 				"Publicação corporativa não vai para comunidades. Publique no seu feed corporativo.");
+		}
+		if (mirrorCorporate) {
+			requireActiveCorporateProfile(command.authorId().value());
+			int businessLimit = com.socialcoisa.rede.feed.domain.PostContentLimits.of(PostType.BUSINESS);
+			if (command.content() != null && command.content().trim().length() > businessLimit) {
+				throw new ApiException(400, "CONTENT_TOO_LONG",
+					"Publicação no feed corporativo aceita no maximo " + businessLimit + " caracteres.");
+			}
 		}
 		String topic;
 		PostCommunityReader.CommunityRef community = null;
@@ -231,6 +240,16 @@ public class PublishPostService implements PublishPostUseCase {
 		// repetição e posts muito curtos passam pela IA sem depender de denúncia.
 		events.publishEvent(new PostPublishedEvent(saved.id().value(), saved.authorId().value()));
 		notifyMentions(command.mentionedUserIds(), command.authorId().value(), saved.id().value(), "post");
+		if (mirrorCorporate && StringUtils.hasText(saved.content())) {
+			Post corporateCopy = Post.publish(idGenerator.newPostId(), command.authorId(), PostType.BUSINESS,
+				saved.content(), null, tags, mediaIds, null, topic, null, clock.instant(), AuthorIdentity.CORPORATE,
+				command.mediaSpoiler());
+			Post savedCorporate = postRepository.save(corporateCopy);
+			feedDistributionService.distribute(savedCorporate);
+			outboxEventRepository.append("PostPublished", savedCorporate.id().value(),
+				"{\"postId\":\"" + savedCorporate.id().value() + "\"}");
+			events.publishEvent(new PostPublishedEvent(savedCorporate.id().value(), savedCorporate.authorId().value()));
+		}
 		UserProfile author = userProfileRepository.findById(command.authorId().value()).orElse(null);
 		return withAuthor(saved, author).withMedia(mediaSummaries.visibleByIds(saved.mediaIds()));
 	}

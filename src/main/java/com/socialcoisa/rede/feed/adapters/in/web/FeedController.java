@@ -177,7 +177,8 @@ class FeedController {
 			var published = publishPostUseCase.publish(new PublishPostCommand(user.id(), request.type(), request.content(),
 				request.pageHtml(), request.articleBody(), request.tags(), request.mediaIds(), request.communityId(),
 				request.mentionedUserIds(), request.topic(), request.channelId(), Boolean.TRUE.equals(request.mediaSpoiler()),
-				request.pollOptions(), Boolean.TRUE.equals(request.pollMultipleChoice()), request.pollEndsAt()));
+				request.pollOptions(), Boolean.TRUE.equals(request.pollMultipleChoice()), request.pollEndsAt(),
+				Boolean.TRUE.equals(request.alsoCorporate())));
 			// Presence counts here and not inside PublishPostService: the scheduler also publishes
 			// through it, and a scheduled post going live is not the person being here today.
 			coins.recordPresence(user.id().value());
