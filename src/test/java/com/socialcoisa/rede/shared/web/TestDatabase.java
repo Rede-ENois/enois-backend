@@ -34,6 +34,11 @@ public final class TestDatabase {
 		require().update("update users set is_admin = true where id = ?", userId);
 	}
 
+	/** Tira o papel — para o teste do guarda, que precisa de uma sessão que deixa de ser admin. */
+	public static void clearAdmin(String userId) {
+		require().update("update users set is_admin = false where id = ?", userId);
+	}
+
 	/** Devolve a conta ao estado "sem e-mail confirmado" (para testar a regra de credibilidade). */
 	public static void clearEmailVerification(String userId) {
 		require().update("update users set email_verified_at = null where id = ?", userId);

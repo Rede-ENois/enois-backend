@@ -52,11 +52,13 @@ class StorageReplicationWorkerTests {
 	private final List<NetworkNode> candidatos = new ArrayList<>();
 	private final List<String> despachados = new ArrayList<>();
 	private StorageHealer healer;
+	/** O catálogo do teste: a soltura vencida lê e grava por aqui, não por um mock. */
+	private StorageCatalogRepository catalog;
 	private StorageReplicationWorker worker;
 
 	@BeforeEach
 	void setUp() {
-		StorageCatalogRepository catalog = catalogo();
+		catalog = catalogo();
 		NetworkNodeRepository nodes = mock(NetworkNodeRepository.class);
 		// Respondido no momento da chamada: `thenReturn` guardaria a lista vazia de quando o `setUp`
 		// rodou, e os nós que o teste adiciona depois nunca apareceriam.
@@ -78,7 +80,11 @@ class StorageReplicationWorkerTests {
 			despachados.add(objectId);
 			return new StorageReplicationDispatcher.Report(1, List.of(), List.of());
 		});
-		worker = new StorageReplicationWorker(healer, dispatcher, catalog, Clock.fixed(NOW, ZoneOffset.UTC), true, 60);
+		// A soltura vencida deixou de morar no worker: ele chama o mesmo serviço que a rota do
+		// operador, e o prazo vive lá. O teste constrói o serviço com o prazo de 60 min do padrão.
+		StoragePendingRelease releases = new StoragePendingRelease(catalog, audit, Clock.fixed(NOW, ZoneOffset.UTC),
+			60);
+		worker = new StorageReplicationWorker(healer, dispatcher, releases, Clock.fixed(NOW, ZoneOffset.UTC), true);
 	}
 
 	@Test
@@ -133,8 +139,9 @@ class StorageReplicationWorkerTests {
 		copias.add(new StoragePlacement("sob_c", 1, "node_z", 10L, "hash", StoragePlacement.State.PENDING_REMOTE,
 			NOW.minusSeconds(10800)));
 		candidatos.add(no("node_w"));
-		var desligado = new StorageReplicationWorker(healer, mock(StorageReplicationDispatcher.class), null,
-			Clock.fixed(NOW, ZoneOffset.UTC), false, 60);
+		var desligado = new StorageReplicationWorker(healer, mock(StorageReplicationDispatcher.class),
+			new StoragePendingRelease(catalog, mock(AuditTrail.class), Clock.fixed(NOW, ZoneOffset.UTC), 60),
+			Clock.fixed(NOW, ZoneOffset.UTC), false);
 
 		// O agendador chama `run()`; desligado, ele não deve nem tocar no catálogo.
 		desligado.run();
@@ -180,6 +187,13 @@ class StorageReplicationWorkerTests {
 		when(catalog.findById(anyString())).thenAnswer(inv -> objetos.stream()
 			.filter(o -> o.id().equals(inv.getArgument(0))).findFirst());
 		when(catalog.placementsOnNode(anyString())).thenReturn(List.of());
+		// A soltura vencida lê por estado (o serviço que o worker chama), não por objeto.
+		when(catalog.placementsInState(any())).thenAnswer(inv -> copias.stream()
+			.filter(c -> c.state() == inv.getArgument(0))
+			.sorted(java.util.Comparator.comparing(StoragePlacement::verifiedAt,
+				java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder()))
+				.thenComparing(StoragePlacement::objectId).thenComparingInt(StoragePlacement::replica))
+			.toList());
 		when(catalog.copies(anyString())).thenAnswer(inv -> copias.stream()
 			.filter(c -> c.objectId().equals(inv.getArgument(0)))
 			.sorted(java.util.Comparator.comparingInt(StoragePlacement::replica)).toList());

@@ -1,7 +1,6 @@
 package com.socialcoisa.rede.network.application;
 
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 
@@ -10,10 +9,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-
-import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
-import com.socialcoisa.rede.network.domain.StorageObject;
-import com.socialcoisa.rede.network.domain.StoragePlacement;
 
 /**
  * O relógio da fase 3: designa a lacuna de durabilidade sem ninguém apertar o botão.
@@ -31,18 +26,13 @@ import com.socialcoisa.rede.network.domain.StoragePlacement;
  * conferidos. O custo de disco e banda é de quem contribui, e é por isso que o lote é pequeno e o
  * intervalo é longo.</p>
  *
- * <h2>O problema que o operador não tinha como ver</h2>
+ * <h2>A designação que ninguém confirma</h2>
  * <p>Uma designação que o nó nunca confirma — nó sumiu depois do despacho, task perdida, disco cheio —
- * ficava {@code PENDING_REMOTE} para sempre, e duas consequências ruins vinham juntas:</p>
- * <ul>
- *   <li>{@code StorageHealer.temDesignacaoPendente} tratava a pendência eterna como "a lacuna tem
- *   dono", e o operador não conseguia curar aquilo nem manualmente;</li>
- *   <li>a cópia "a caminho" nunca chegava, e a durabilidade continuava baixa sem ninguém saber por quê.</li>
- * </ul>
- * <p>Passado o prazo ({@code rede.storage.replication.pending-max-age-minutes}), a designação vira
- * {@code GONE} — não apagada, para o histórico mostrar que houve uma tentativa — e a lacuna volta a
- * ser curável. {@code GONE} não é servível e não conta para a durabilidade, que é exatamente a
- * verdade: aquele nó não tem a cópia.</p>
+ * ficava {@code PENDING_REMOTE} para sempre, e {@code StorageHealer.temDesignacaoPendente} tratava a
+ * pendência eterna como "a lacuna tem dono". Por isso a passada começa soltando as vencidas. A regra
+ * em si mora em {@link StoragePendingRelease}, porque o operador precisa dela <b>sem</b> ligar este
+ * worker: a rota {@code POST /admin/network/storage/pending/release} chama o mesmo serviço. Aqui não
+ * há uma segunda cópia da varredura nem um segundo prazo.</p>
  *
  * <h2>Desligado por padrão</h2>
  * <p>{@code rede.storage.replication.auto-heal-enabled=false} de fábrica. Ligar é decisão de quem
@@ -65,22 +55,18 @@ public class StorageReplicationWorker {
 
 	private final StorageHealer healer;
 	private final StorageReplicationDispatcher dispatcher;
-	private final StorageCatalogRepository catalog;
+	private final StoragePendingRelease releases;
 	private final Clock clock;
 	private final boolean enabled;
-	private final Duration pendingMaxAge;
 
 	StorageReplicationWorker(StorageHealer healer, StorageReplicationDispatcher dispatcher,
-			StorageCatalogRepository catalog, Clock clock,
-			@Value("${rede.storage.replication.auto-heal-enabled:false}") boolean enabled,
-			@Value("${rede.storage.replication.pending-max-age-minutes:60}") int pendingMaxAgeMinutes) {
+			StoragePendingRelease releases, Clock clock,
+			@Value("${rede.storage.replication.auto-heal-enabled:false}") boolean enabled) {
 		this.healer = healer;
 		this.dispatcher = dispatcher;
-		this.catalog = catalog;
+		this.releases = releases;
 		this.clock = clock;
 		this.enabled = enabled;
-		// Zero ou negativo seria uma designação vencendo no instante em que nasce: o piso é um minuto.
-		this.pendingMaxAge = Duration.ofMinutes(Math.max(1, pendingMaxAgeMinutes));
 	}
 
 	@Scheduled(initialDelayString = "${rede.storage.replication.initial-delay-ms:300000}",
@@ -103,7 +89,7 @@ public class StorageReplicationWorker {
 	 * Uma passada: solta as designações vencidas e depois cura. Devolve o que fez, para teste e log.
 	 */
 	public Result tick(Instant now) {
-		int soltas = soltarDesignacoesVencidas(now);
+		int soltas = soltarDesignacoesVencidas();
 		var relatorio = healer.heal(ATOR, null, MAX_OBJECTS_PER_RUN, false);
 
 		// Designar sem despachar deixava a cópia esperando um nó que a puxasse sozinho — o mesmo
@@ -124,50 +110,17 @@ public class StorageReplicationWorker {
 	}
 
 	/**
-	 * {@code PENDING_REMOTE} velho demais vira {@code GONE}.
+	 * {@code PENDING_REMOTE} velho demais vira {@code GONE} — pela regra de
+	 * {@link StoragePendingRelease} (o mesmo serviço que a rota do operador chama), com o prazo
+	 * configurado.
 	 *
-	 * <p>A idade é da <b>designação</b>, não da cópia: o catálogo não guarda quando a linha nasceu, e
-	 * {@code verified_at} de uma pendente é o instante em que foi designada ({@code savePlacement} a
-	 * grava com {@code now}). Uma pendência que já ficou mais que o prazo sem confirmação não vai
-	 * confirmar sozinha — o despacho já aconteceu e o nó não respondeu, ou a tarefa se perdeu.</p>
-	 *
-	 * <p>Varre o catálogo em páginas: o worker não pode segurar todos os objetos na memória nem fazer
-	 * uma consulta por objeto. Só linha {@code STORED} interessa — objeto pendente ou removido não tem
-	 * durabilidade a medir.</p>
+	 * <p>O prazo não é lido aqui: ele mora no serviço, junto com a varredura. Duas cópias da regra
+	 * seriam duas respostas para "esta designação ainda vai confirmar?" — e a que o worker usasse
+	 * poderia discordar da que o operador viu na tela.</p>
 	 */
-	private int soltarDesignacoesVencidas(Instant now) {
-		Instant limite = now.minus(pendingMaxAge);
-		int soltas = 0;
-		String afterKey = null;
-		while (true) {
-			List<StorageObject> pagina = catalog.listAll(afterKey, StorageCatalogService.MAX_LIST_LIMIT);
-			if (pagina.isEmpty()) {
-				break;
-			}
-			for (StorageObject objeto : pagina) {
-				afterKey = objeto.key();
-				if (!objeto.servable()) {
-					continue;
-				}
-				for (StoragePlacement copia : catalog.copies(objeto.id())) {
-					if (copia.state() != StoragePlacement.State.PENDING_REMOTE) {
-						continue;
-					}
-					Instant designada = copia.verifiedAt();
-					if (designada != null && designada.isAfter(limite)) {
-						continue;
-					}
-					catalog.savePlacement(new StoragePlacement(copia.objectId(), copia.replica(), copia.nodeId(),
-						copia.bytes(), copia.sha256(), StoragePlacement.State.GONE, now));
-					soltas++;
-					// Sem a marcação, a passada seguinte tenta soltar o que já soltou — a linha desta
-					// passada mudou de estado no banco, mas a lista em memória leria a linha de novo.
-				}
-			}
-			if (pagina.size() < StorageCatalogService.MAX_LIST_LIMIT) {
-				break;
-			}
-		}
+	private int soltarDesignacoesVencidas() {
+		int soltas = releases.releaseExpired(ATOR, null, StoragePendingRelease.MAX_RELEASES, false)
+			.pending().size();
 		if (soltas > 0) {
 			LOG.warn("storage replication: {} designacao(oes) sem confirmacao viraram GONE", soltas);
 		}
