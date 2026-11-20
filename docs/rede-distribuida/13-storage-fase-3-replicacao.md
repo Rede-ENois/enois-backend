@@ -545,3 +545,42 @@ outro; já `STALE` não é regravada nem re-auditada; digest esperado vem do cat
 `NetworkStorageNodeScrubTests` **3** pela rota real (cópia própria `STALE`; intruso não rebaixa a do
 dono; sem chave é 401). Mutações: sem filtro por dono, sem idempotência, rota fora do interceptor,
 relatório engolido (`stale` sempre zero) — **4 de 4 derrubam**.
+
+## 5.9 Investigação: o resumo de bucket somava versão substituída (corrigido); a cota conta o que o download não entrega (pendente)
+
+Duas contas do mesmo catálogo não fechavam. As duas foram medidas contra o SQL de verdade.
+
+### 5.9.1 O resumo por bucket somava o que o download não entrega — corrigido
+
+`summarizeBuckets` (§17, painel) usa `state <> 'DELETED' and superseded_by is null` — o que o
+download entrega. `bytesOwnedBy` (cota, §2.3 do doc 12) **também**: foi escrito assim de propósito e
+tem teste (`StorageOwnerQuotaTests`).
+
+O que estava errado era a **explicação**: ela dizia que a conta da cota cobria o que o participante
+ocupava. Não cobre — com versionamento, dez reescritas deixam nove versões no disco e só a corrente na
+conta; e a versão corrente substituída só sai do disco pela coleta. A cota é do **conteúdo entregue**,
+não do **espaço ocupado**. O doc 12 §2.3 diz isso agora.
+
+**Consequência medida e aceita:** reescrever a mesma chave com um corpo novo **acrescenta** à conta e
+não desconta a versão que saiu da corrente, então o PUT de reescrita pode receber 507 antes do objeto
+que só ele ocupa. É o preço de conferir a cota onde o corpo é medido (`S3OwnerQuotaTests`, o teste de
+reativação, registra o número).
+
+### 5.9.2 O download de uma cópia remota, e o `respond` sem a checagem do `head` — pendente
+
+Investigação registrada, não corrigida. O que está no código hoje:
+
+| ponto | o que faz |
+|---|---|
+| `StorageContentService.respond` | exige `location` não vazia (há cópia `OK` em algum nó) e chama `storage.readBody(objectId)` |
+| `StorageCatalogService.readBody` | lê o disco **desta** instalação (§5.5, §5.5.1); não busca no nó remoto |
+| resultado quando a cópia é só de outro nó | **`409`**, embora o catálogo afirme cópia íntegra e o `HEAD` responda `200` com `Content-Length` |
+| `StorageContentService.respond` × objeto vencido | o `respond` **não** filtra vencido; quem chama (`servable`) filtra. Chamada direta à rota pública de mídia já passa pelo `servable` antes, então hoje o 404 acontece — mas a regra mora em quem chama, não na resposta |
+
+Não é regressão: é a fase 3 dizendo que o Control Plane serve o que está no próprio disco. O caminho
+que falta — o CP pedir o corpo ao nó que tem a cópia — é o mesmo que o rebalanceamento ativo (§16)
+pede, e depende da rota de leitura por chave de nó. Fica declarado aqui para não ser redescoberto.
+
+**Como conferir sem adivinhar:** `StorageScrubberReadBackTests`, `NetworkStorageReplicationTests` e o
+harness `storage-migration-test` cobrem o caminho local; o caso remoto não tem teste porque o caminho
+não existe.

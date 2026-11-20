@@ -70,7 +70,6 @@ class S3OwnerQuotaTests {
 	@Autowired
 	private com.socialcoisa.rede.shared.security.SecretCipher cipher;
 
-
 	private TestAuthHelper auth;
 
 	@BeforeEach
