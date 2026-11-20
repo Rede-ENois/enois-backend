@@ -687,6 +687,32 @@ resto do intervalo é tempo fora.
 
 O admin e o participante leem a **mesma** função (`NodeUptimeService.last`), para não divergirem.
 
+### 11.3.1 O participante vê a própria cota (ciclo 80)
+
+A cota por participante (doc 12 §2.3) só existia na **recusa**: quem recebia `507` ficava sabendo os
+números daquele instante, e mais ninguém. O brief §18 pede que o participante "consulte espaço
+utilizado" e que a interface informe "quais recursos estão sendo utilizados" — e ele não podia nem
+saber o próprio limite sem bater nele, nem pedir mais ao operador com o número na mão.
+
+| rota | quem | o que devolve |
+|---|---|---|
+| `GET /network/participant/storage/quota` | a própria conta | `limite`, `usado`, `livre` |
+
+- **Lido do banco, não do cache.** O cache do caminho de gravação conta só o que aquela instância
+  viu; um painel que respondesse por ele mostraria um número diferente do que a próxima recusa vai
+  usar, conforme a instância que atendeu. Aqui a conta é `bytesOwnedBy` (correntes, sem lápide) — a
+  mesma da recusa.
+- **Cota desligada (`limite = 0`) → `livre = null`.** "Sem limite" não é um número; `0` ali diria
+  "cheio" e mandaria o participante apagar arquivos que não precisam sair.
+- É a conta do dono, não do nó: quem tem dois nós paga uma cota só, e o vizinho não vê os números
+  dele.
+
+**Verificação:** `NetworkParticipantStorageQuotaTests` **3** pela rota (limite/usado/livre com lápide
+fora da conta; a cota é do dono e o vizinho vê zero; sem sessão é 401) e `StorageOwnerQuotaTests`
+**+1** (leitura com cota desligada devolve `livre = null`; com cota, os três números são os mesmos da
+recusa). Mutações: cota desligada devolvendo `livre = 0`; `livre` ignorando o usado; a rota lendo
+outra conta — **3 de 3 derrubam**.
+
 ### 11.4 Defeito corrigido: a soma das ausências era um piso
 
 `NetworkParticipantService.availability` somava `offlineForSeconds` das **200 linhas mais recentes**
