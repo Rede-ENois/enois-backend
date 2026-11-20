@@ -698,3 +698,53 @@ Mutações (**8 de 8 derrubam**): soltar sem olhar a idade; `dryRun` gravando; s
 
 harness `storage-migration-test` cobrem o caminho local; o caso remoto não tem teste porque o caminho
 não existe.
+
+## 5.12 A cópia de um nó revogado não é durabilidade
+
+Revogar é a única transição de nó que **não tem volta**: as chaves caem na mesma transação
+(`transitions` → `keyService.revokeAllForNode` + certificados) e o `approve` recusa o retorno
+(`409 NODE_REVOKED`). O nó deixa de autenticar, de receber tarefa e de ser escolhido para réplica
+(`StoragePlacementService.storageReady` exige `ACTIVE`).
+
+**O que faltava era a leitura.** A varredura contava toda cópia `OK` — inclusive a de um nó revogado
+— como durabilidade confirmada. Um objeto com a réplica 0 e uma cópia só no nó revogado respondia
+"2 de 2": não entrava em `underReplicated`, o `healing` nunca recebia a lacuna, e o painel mostrava
+uma durabilidade que existia apenas no catálogo. O objeto ficava a **uma perda do disco do Control
+Plane** de sumir, e ninguém sabia.
+
+### Agora
+
+- **`GET /admin/network/nodes/storage/scrub`** não conta mais a cópia de nó revogado. O objeto aparece
+  em `underReplicated` (e o healing pode repor) e a cópia que saiu da conta aparece num campo próprio,
+  `onRevokedNode` (`objectId`, `replica`, `nodeId`) — é a explicação de um objeto que "tinha 2 cópias"
+  e agora tem 1;
+- **`GET /admin/network/nodes/{id}/removal-impact?planned=REVOKED`** diz, **antes** do ato, o que a
+  revogação leva junto: `objectsHeld` (cópias `OK` no nó), `objectsLosingLastNodeCopy` e a lista
+  `losesLastCopy` (`objectId`, `bucket`, `key`, `replica`, `bytes`). Teto de 500 objetos, com
+  `truncated` quando bate.
+
+As regras do impacto, e por quê:
+
+| item | regra | motivo |
+|---|---|---|
+| o que o nó guarda | só cópia `OK` | `STALE`/`PENDING_REMOTE`/`GONE` não é corpo bom no disco dele |
+| objeto contado | só `servable()` (não `DELETED`) | lápide não é algo que alguém baixe |
+| "sobra alguma?" | cópia `OK` de **outro** nó, que não esteja revogado | cópia num nó já revogado também não serve; a pergunta é o que resta **depois** |
+| réplica 0 | **não** conta como cópia de nó | o brief conta durabilidade por cópia de nó; o Control Plane é um domínio próprio, não um storage node |
+| `warning` | só com `planned=REVOKED`, nó ainda não revogado e ao menos um objeto perdido | depois de revogado o dano está feito; avisar de novo não ajuda |
+
+**Não é um passo da revogação.** Designar a cópia nova é do healing e da adoção, e o healing nasce
+desligado de fábrica (§2.2). Fazer a revogação disparar designação ligaria, por efeito colateral,
+transferência de corpo pela rede de quem participa. A ordem que o painel deve sugerir é: ler o
+impacto → `POST /admin/network/nodes/storage/heal` para o que importa → revogar.
+
+**Verificação:** `StorageDurabilityTests` (+3: cópia em nó revogado sai da conta e a lacuna aparece;
+cópia em nó ativo continua contando; nó fora do cadastro é desconhecido, não revogado).
+`NodeRemovalImpactTests` **10** pela rota (objeto sem outra cópia de nó aparece com `key` e `replica`;
+com outra cópia viva não aparece; cópia no outro nó só conta se o outro não estiver revogado; `STALE`
+não conta como guardada; lápide não entra; nó já revogado não avisa de novo; `SUSPENDED` não conta
+como saída; a réplica 0 não substitui cópia de nó; sem admin é `401`/`403`; nó inexistente é `404`).
+Mutações (**8 de 8 derrubam**): a cópia revogada voltar a contar; o nó revogado não ser detectado; a
+cópia de outro nó revogado contar como saída; lápide entrar na conta; `STALE` contar como guardada;
+réplica 0 contar como cópia de nó; `warning` sempre verdadeiro; `SUSPENDED` contar como saída.
+Sem migração nova.

@@ -40,9 +40,18 @@ class AdminStorageReplicaAdoptionTests {
 
 	private TestAuthHelper auth;
 
+	/**
+	 * O catálogo é limpo a cada teste, e por um motivo concreto: a enumeração de "só a réplica 0" é
+	 * global, então um objeto servível que OUTRA classe deixou no banco entra na conta e
+	 * {@code considered} deixa de ser 1. Antes isto passava por sorte de ordem — o teste só viu a
+	 * contaminação quando uma classe nova (o ciclo 74) passou a gravar objetos e a rodar antes.
+	 */
 	@org.junit.jupiter.api.BeforeEach
 	void setUp() {
 		auth = new TestAuthHelper(mockMvc, objectMapper);
+		jdbc.update("delete from network_storage_placements");
+		jdbc.update("delete from network_storage_objects");
+		jdbc.update("delete from network_nodes");
 	}
 
 	@Test

@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.socialcoisa.rede.network.application.NetworkDashboardService;
 import com.socialcoisa.rede.network.application.ChangeCaptureReadinessService;
 import com.socialcoisa.rede.network.application.NetworkNodeService;
+import com.socialcoisa.rede.network.application.NodeStorageImpact;
 import com.socialcoisa.rede.network.application.StorageHealer;
 import com.socialcoisa.rede.network.application.StorageOverviewService;
 import com.socialcoisa.rede.network.application.StorageReplicationDispatcher;
@@ -67,6 +68,7 @@ class AdminNetworkController {
 	private final com.socialcoisa.rede.network.application.NetworkTopologyService topology;
 	private final StorageTombstoneCollector tombstones;
 	private final com.socialcoisa.rede.network.application.NodeUptimeService uptime;
+	private final NodeStorageImpact nodeStorageImpact;
 
 	AdminNetworkController(NetworkNodeService nodes, NodeKeyService keys, NetworkDashboardService dashboard,
 			AuditTrail audit, CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
@@ -78,7 +80,8 @@ class AdminNetworkController {
 			StorageHealer healer, StorageReplicationDispatcher dispatcher, NetworkTaskRepository tasks,
 			com.socialcoisa.rede.network.application.NetworkTopologyService topology,
 			StorageTombstoneCollector tombstones,
-			com.socialcoisa.rede.network.application.NodeUptimeService uptime) {
+			com.socialcoisa.rede.network.application.NodeUptimeService uptime,
+			NodeStorageImpact nodeStorageImpact) {
 		this.nodes = nodes;
 		this.keys = keys;
 		this.dashboard = dashboard;
@@ -98,6 +101,7 @@ class AdminNetworkController {
 		this.topology = topology;
 		this.tombstones = tombstones;
 		this.uptime = uptime;
+		this.nodeStorageImpact = nodeStorageImpact;
 	}
 
 	/**
@@ -466,6 +470,32 @@ class AdminNetworkController {
 			throw new ApiException(400, "NODE_STATUS_INVALID", "Status desconhecido.");
 		}
 		return view(nodes.transitions(id, next, admin.id().value()));
+	}
+
+	/**
+	 * O que a revogação deste nó leva junto (brief §17, "remover nó da rede").
+	 *
+	 * <p>Leitura, sem efeito. Lista os objetos cuja <b>última</b> cópia de nó está neste nó: revogado,
+	 * eles ficam só com a réplica 0 — o disco do Control Plane — e a varredura seguinte os aponta em
+	 * {@code onRevokedNode}, para o healing repor. A ordem que o painel deve sugerir é ler aqui,
+	 * repor o que importa, e só então revogar.</p>
+	 *
+	 * <p>{@code planned} é o status pretendido (padrão {@code REVOKED}); {@code warning} só é
+	 * verdadeiro quando a revogação aconteceria de fato (nó ainda não revogado) e há objeto a
+	 * perder.</p>
+	 */
+	@GetMapping("/{id}/removal-impact")
+	NodeStorageImpact.Impact removalImpact(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String id, @RequestParam(name = "planned", defaultValue = "REVOKED") String planned) {
+		admin(sessionToken);
+		NodeStatus pretendido;
+		try {
+			pretendido = NodeStatus.valueOf(planned.trim().toUpperCase(java.util.Locale.ROOT));
+		}
+		catch (IllegalArgumentException unknown) {
+			throw new ApiException(400, "NODE_STATUS_INVALID", "Status desconhecido.");
+		}
+		return nodeStorageImpact.impact(id, pretendido);
 	}
 
 	/** Redefine o que o participante cede (campo ausente = mantém). Mudança de permissão: compõe versão. */

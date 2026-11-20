@@ -185,13 +185,62 @@ carrega a credencial do upload, e upload de outra conta responde 404 `NoSuchUplo
 para ela o upload não existe.
 
 **Abandono.** Partes de upload esquecido ocupam disco no nó. O prazo é gravado no início
-(`rede.storage.multipart.ttl-hours`, padrão 24 h; o cliente pode pedir menos) e `sweep()` descarta o
-vencido.
+(`rede.storage.multipart.ttl-hours`, padrão 24 h; o cliente pode pedir menos) — e até o ciclo 72
+nada o aplicava a um cliente que morresse no meio: o prazo só era conferido na **próxima parte**,
+que esse cliente nunca manda. A coleta existe agora, e está no §4.2.1.
 
 **Prova:** `S3MultipartTests` (7) — arquivo montado volta inteiro no GET; fora de ordem + reenvio;
 parte ausente recusa e o upload segue aberto; parte pequena que não é a última recusa; chave não
 existe no catálogo antes da conclusão; outra conta não usa; abort apaga. Mutações conferidas: aceitar
 parte ausente ou ignorar o mínimo de 5 MiB derrubam o teste correspondente.
+
+### 4.2.1 Coleta do upload abandonado (ciclo 72)
+
+**Antes:** a frase do §4.2 dizia que `sweep()` descartava o vencido, e o `sweep()` não existia. Um
+cliente que cai no meio do upload deixava, para sempre, a linha em
+`network_storage_multipart_uploads`, as partes em `network_storage_multipart_parts` e os bytes em
+`storageRoot/multipart/<uploadId>/`. Nada tinha prazo: o disco de quem contribui só crescia, e o
+painel não mostrava a conta.
+
+**Agora há duas rotas de admin e uma varredura automática:**
+
+| rota / gatilho | o que faz |
+|---|---|
+| `GET /admin/network/storage/multipart?limit=` | quantos uploads estão abertos, quantos venceram, quais venceram (com `ageMinutes`) e o total de partes. **Só lê** |
+| `POST /admin/network/storage/multipart/sweep?dryRun=&limit=` | coleta as vencidas; padrão **seco** |
+| `@Scheduled` (1 h, ligado de fábrica) | a mesma coleta, sem ninguém pedir |
+
+As decisões que valem estar ditas:
+
+- **vence o prazo gravado no início, não o da instalação.** O varredor lê `expires_at` de cada linha
+  e não recalcula nada: um upload começado com 1 h de prazo vence em 1 h, e um de 24 h não é apagado
+  por quem configurou menos. O `ttl-hours` continua sendo só o padrão do início;
+- **o vencido é apagado pelo mesmo `abort` do cliente.** Não há segunda forma de remover um upload:
+  partes (o `ON DELETE CASCADE` da V365 leva as que restarem), linha e o diretório inteiro;
+- **diretório sem linha é recolhido na mesma passada.** É a sobra de uma passada interrompida (linha
+  apagada, processo caiu antes do disco). Só o diretório **imediatamente** dentro de `multipart/` e
+  com o padrão do id é candidato — o varredor não desce por recursão para descobrir alvos, então não
+  tem como chegar a um caminho que o serviço não criou. Um nome fora do padrão (com `.`, por exemplo)
+  nunca é tocado;
+- **a coleta nasce ligada, ao contrário do auto-heal do Storage.** Ela não gera tráfego nem escolhe
+  o que replicar: só apaga o que o próprio cliente declarou vencido. Desligada, volta a ser o buraco;
+- **nada aqui toca o catálogo.** Um upload multipart que vence nunca virou objeto — é o desenho
+  ("nada vira objeto antes da conclusão") —, então não há cópia, durabilidade nem réplica a repor;
+- **uma auditoria por upload apagado** (`STORAGE_MULTIPART_EXPIRED`, com bucket, chave, dono e idade)
+  e uma por passada com algo removido (`STORAGE_MULTIPART_SWEEP_RUN`). Bucket e chave vêm do cliente:
+  entram escapados no JSON.
+
+**Prova:** `AdminStorageMultipartSweepTests` (4) — o seco mostra o vencido e não apaga; o real apaga
+só os vencidos (o do prazo curto sai, o do prazo normal fica) e os bytes saem do disco enquanto os do
+upload vivo ficam; o diretório sem linha é recolhido e o de upload vivo e o de nome fora do padrão não
+são; conta comum recebe `401`/`403`. Mutações vermelhas: o seco apagando; sem filtro de vencimento;
+órfão recolhido sem consultar o banco; sem o filtro de nome; a rota sem recolher órfão; vencido
+contado como zero; leitura marcando tudo vivo.
+
+**Mutação equivalente, registrada:** fazer o `discard` não limpar o disco fica **verde**, porque a
+varredura de órfãos da mesma passada recolhe o diretório que sobra. O efeito observável (bytes fora do
+disco, linha fora do banco) é o mesmo; os dois chamadores de `abort` do gateway passam pelo `discard`,
+que apaga a árvore — a limpeza em dois lugares é redundância, não defeito.
 
 ### 4.3 Access Keys pelo painel
 
@@ -318,13 +367,49 @@ UPSERT somando 10 gravações no mesmo minuto, `max_ms` preservado, média ponde
 retenção). Mutações conferidas: média das médias, "sem dado" virando a janela inteira, 500 contado como
 `CLIENT`, `LIST` sem contagem e chave primária sem `outcome` — todas derrubam.
 
+## 5.2 Teto de requisição por Access Key (ciclo 74)
+
+O doc 19 §3.2 já limitava **assinatura que falhou** (`s3-auth`, 20 por 5 min): protege o segredo
+contra chute. Nada limitava o consumo de quem **provou** o segredo — e todo upload e download do
+gateway passa pelo mesmo Control Plane. Uma credencial vazada, ou um cliente em laço, ocupava a
+instalação inteira para todo mundo.
+
+Agora há uma segunda conta, separada de propósito:
+
+| ação | chave da conta | padrão | o que conta |
+|---|---|---|---|
+| `s3-request` | Access Key | 600 / minuto | requisição **assinada e válida** (cabeçalho **ou** URL pré-assinada) |
+
+- **Contas separadas, não uma só.** A `s3-auth` só soma falha — se o acerto gastasse o mesmo balde, o
+  cliente legítimo seria barrado pelo próprio sucesso. A `s3-request` soma a requisição aceita.
+- **O ritmo é conferido depois da assinatura**, nunca antes: uma assinatura inválida não consome o
+  orçamento de quem é legítimo, e a recusa por assinatura continua com o código do protocolo (`403`),
+  não com o do teto.
+- **O balde é da credencial, não do IP.** Quem ataca troca de IP; a Access Key, não. E um escritório
+  atrás do mesmo IP não paga pelos vizinhos.
+- **A URL pré-assinada entra na mesma conta.** Ela é a credencial portada por quem recebeu o link;
+  fora da conta, bastaria emitir um link para furar o teto.
+- **`503 SlowDown`**, que é o código do S3 para "reduza o ritmo" — o mesmo que a AWS devolve. Passada a
+  janela, o cliente volta a ser servido sem intervenção.
+- **Padrão folgado (600/min) e desligável (`0`).** Um SDK em multipart manda uma parte por requisição;
+  barrar cliente são custa mais que o laço que se quer impedir. É proteção contra desperdício, não
+  contra um atacante que já tem o segredo legítimo — para esse, o caminho é revogar a credencial.
+
+**Verificação:** `AuthAttemptRateLimitTests` +2 (o teto é da credencial: outra Access Key continua
+servida e a conta de assinatura não foi gasta; passada a janela, volta). `S3RateLimitTests` **5** pela
+rota, com `s3-request.limit=3` (a credencial recebe `503 SlowDown` e a vizinha continua servida; a
+requisição válida não gasta o orçamento de assinatura; a URL pré-assinada entra na conta; o `GET`
+também entra; assinatura inválida continua na conta própria). Mutações (**6 de 6 derrubam**): sem
+ritmo no cabeçalho; sem ritmo na URL; ritmo antes da validação; um balde só para toda credencial; `503`
+trocado por `403`; e ritmo só no caminho do cabeçalho.
+
 ## 6. O que NÃO está entregue
 
 - **Presigned URLs para `GET` e `PUT` existem**; `DELETE`/`LIST` por URL não são emitidos de
   propósito (link vazado não apaga nem lista). URL pré-assinada **por parte** do multipart não existe:
   o upload multipart é feito com credencial, não por link.
 - **Credenciais temporárias (STS)** — `X-Amz-Security-Token` não é processado.
-- **Quotas e rate limiting por credencial** — a rota herda o limitador global, não um por Access Key.
-  A **cota de espaço por participante** existe desde o ciclo 66 (`rede.storage.max-bytes-per-owner`,
-  doc 12 §2.3): o upload que estoura responde `507 QuotaExceeded` no XML do S3, com o número na
-  mensagem.
+- **Cota de espaço por credencial** — a cota é **por participante**, não por Access Key
+  (`rede.storage.max-bytes-per-owner`, doc 12 §2.3): o upload que estoura responde `507 QuotaExceeded`
+  no XML do S3, com o número na mensagem. Duas credenciais do mesmo dono dividem a mesma cota.
+  O **rate limiting por credencial existe** desde o ciclo 74 (§5.2).

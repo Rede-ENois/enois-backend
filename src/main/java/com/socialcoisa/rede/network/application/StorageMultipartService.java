@@ -324,6 +324,88 @@ public class StorageMultipartService {
 		discard(uploadId);
 	}
 
+	// ------------------------------------------------------------------ coleta do vencido (§4.2)
+
+	/** Quantos uploads estão abertos agora (nenhum foi concluído nem abortado). */
+	int uploadsOpen() {
+		Integer total = jdbc.queryForObject("select count(*) from network_storage_multipart_uploads",
+			Integer.class);
+		return total == null ? 0 : total;
+	}
+
+	/** Quantos uploads já passaram do prazo gravado no início. */
+	int expiredCount(java.time.Instant now) {
+		Integer total = jdbc.queryForObject(
+			"select count(*) from network_storage_multipart_uploads where expires_at <= ?", Integer.class,
+			java.sql.Timestamp.from(now));
+		return total == null ? 0 : total;
+	}
+
+	/**
+	 * As linhas vencidas, da que venceu faz mais tempo para a mais recente.
+	 *
+	 * <p>O prazo é o de {@code expires_at}, gravado no {@code CreateMultipartUpload} e possivelmente
+	 * menor que o padrão da instalação: quem coleta não recalcula nada.</p>
+	 */
+	List<Upload> expiredUploads(java.time.Instant now, int limit) {
+		return jdbc.query("""
+			select upload_id, bucket, `key`, content_type, owner_user_id, credential_id, created_at, expires_at
+			from network_storage_multipart_uploads where expires_at <= ?
+			order by expires_at asc, upload_id asc limit ?
+			""", (rs, i) -> new Upload(rs.getString("upload_id"), rs.getString("bucket"), rs.getString("key"),
+			rs.getString("content_type"), rs.getString("owner_user_id"), rs.getString("credential_id"),
+			rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("expires_at").toInstant()),
+			java.sql.Timestamp.from(now), limit);
+	}
+
+	/** Quantas partes o upload recebeu — o que o relatório conta como espaço a recuperar. */
+	long partCount(String uploadId) {
+		Long total = jdbc.queryForObject(
+			"select count(*) from network_storage_multipart_parts where upload_id = ?", Long.class, uploadId);
+		return total == null ? 0 : total;
+	}
+
+	/**
+	 * Apaga os diretórios de partes que não têm upload correspondente e devolve os ids recolhidos.
+	 *
+	 * <p>Sobra de passada interrompida: um {@code discard} que apagou a linha e caiu antes do disco, ou
+	 * um varredor que parou no meio do lote. Só o diretório <b>imediatamente</b> dentro de
+	 * {@code multipart/} e com o padrão do id é candidato — nada abaixo é descoberto por
+	 * recursão, então o varredor não tem como chegar a um caminho que este serviço não criou. O
+	 * caminho devolvido é o que o relatório mostra.</p>
+	 */
+	java.util.List<Path> removeOrphanDirectories() {
+		if (!Files.isDirectory(root)) {
+			return java.util.List.of();
+		}
+		java.util.List<Path> recolhidos = new java.util.ArrayList<>();
+		// Um nível só, sem recursão: nada abaixo de `multipart/` é descoberto pelo varredor, então ele
+		// não tem como chegar a um caminho que este serviço não criou.
+		try (Stream<Path> dirs = Files.list(root)) {
+			for (Path dir : dirs.toList()) {
+				String nome = dir.getFileName().toString();
+				if (!Files.isDirectory(dir) || !nome.matches("[A-Za-z0-9_-]{1,64}")) {
+					continue;
+				}
+				Integer existe = jdbc.queryForObject(
+					"select count(*) from network_storage_multipart_uploads where upload_id = ?", Integer.class,
+					nome);
+				if (existe != null && existe > 0) {
+					continue;
+				}
+				try (Stream<Path> arquivos = Files.walk(dir)) {
+					arquivos.sorted(java.util.Comparator.reverseOrder())
+						.forEach(StorageMultipartService::deleteQuietly);
+				}
+				recolhidos.add(dir);
+			}
+		}
+		catch (IOException failed) {
+			LOG.warn("multipart: nao foi possivel varrer {}: {}", root, failed.getMessage());
+		}
+		return recolhidos;
+	}
+
 
 	// ------------------------------------------------------------------ corpo montado
 
@@ -374,6 +456,11 @@ public class StorageMultipartService {
 		catch (IOException ignored) {
 			LOG.warn("multipart: nao foi possivel limpar {}", dir);
 		}
+	}
+
+	/** O diretório de partes deste processo — o que a varredura de sobras e a rota leem. */
+	public Path root() {
+		return this.root;
 	}
 
 	private Path dirOf(String uploadId) {
