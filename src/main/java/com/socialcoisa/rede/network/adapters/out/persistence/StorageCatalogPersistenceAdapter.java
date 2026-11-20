@@ -208,6 +208,20 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		""";
 
 	/**
+	 * A listagem de bucket, <b>sem o que já venceu</b> e <b>sem o que ainda não chegou</b>.
+	 *
+	 * <p><b>Ciclo 88:</b> até aqui o filtro era {@code state <> 'DELETED'}, que deixava passar as
+	 * duas linhas de uma chave regravada — a versão corrente e a nova, ainda {@code PENDING} — e o
+	 * {@code ListObjects} devolvia a <b>mesma chave duas vezes</b> na mesma página. Como o cursor da
+	 * paginação é a chave, um cliente que seguisse o token podia nunca terminar o laço.</p>
+	 *
+	 * <p>A régua agora é a mesma do {@code GET}: representa a chave só o {@code STORED} — {@code
+	 * PENDING} é gravação em curso (ou versão antiga que ainda vai ser colhida), e não existe para
+	 * quem lista, como não existe para quem baixa. {@code superseded_by is null} garante uma linha
+	 * por chave mesmo que o estado divergisse. ({@code PENDING_REMOTE} é estado de <b>colocação</b>,
+	 * não de objeto: uma cópia remota ainda a caminho não muda o que o catálogo tem.)</p>
+	 */
+	/**
 	 * A listagem de bucket, <b>sem o que já venceu</b>.
 	 *
 	 * <p>O download de um objeto vencido responde {@code 404} desde a fase 1 (a leitura filtra o
@@ -221,8 +235,8 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	 */
 	private static final String LIST = """
 		select %s from network_storage_objects
-		where bucket = ? and object_key like ? and object_key > ? and state <> 'DELETED'
-		  and (expires_at is null or expires_at > ?)
+		where bucket = ? and object_key like ? and object_key > ? and state = 'STORED'
+		  and superseded_by is null and (expires_at is null or expires_at > ?)
 		order by object_key asc
 		limit ?
 		""".formatted(OBJECT_COLUMNS);

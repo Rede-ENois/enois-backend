@@ -147,6 +147,60 @@ class S3ListPaginationTests {
 		return out;
 	}
 
+	/**
+	 * Listar <b>arquivando</b> a mesma chave no meio da paginação: o cursor é a chave, então a chave
+	 * gravada de novo muda de lugar na ordem e uma chave pode cair antes do cursor.
+	 *
+	 * <p><b>Antes:</b> a listagem só excluía lápide ({@code state <> 'DELETED'}), e a chave
+	 * reescrita volta a {@code PENDING} — servível na listagem, mas ainda não dá para baixar. Se isso
+	 * acontece com uma chave <b>antes</b> do cursor, ela sai <b>depois</b> dele na ordem, e a página
+	 * seguinte nunca a alcança: o sincronizador termina o laço e a chave fica fora da cópia local até
+	 * a próxima passada inteira. Registro que chegou pela metade é o que uma sincronização não pode
+	 * ter.</p>
+	 *
+	 * <p><b>Agora:</b> {@code PENDING} fica de fora da listagem, como o {@code GET} já recusava. A
+	 * chave reaparece quando a gravação termina, e nenhuma página entrega o que não abre.</p>
+	 */
+	@Test
+	void chave_reescrita_no_meio_da_paginacao_nao_escapa_da_listagem() throws Exception {
+		for (String nome : List.of("a.jpg", "b.jpg", "c.jpg", "d.jpg")) {
+			gravar(nome);
+		}
+
+		// `a.jpg` é regravada como o `beginUpload` faz: a linha nova chega em PENDING e a antiga sai
+		// da chave com `superseded_by`, sem virar lápide. O cursor da primeira página é `b.jpg`,
+		// então `a.jpg` está na ordem ANTES do cursor.
+		String idNovo = "sto_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+		String autor = jdbc.queryForObject(
+			"select created_by from network_storage_objects where object_key = 'a.jpg' and bucket = ?",
+			String.class, bucket);
+		// A versão corrente sai da chave primeiro (uma corrente por chave), e a nova entra em PENDING.
+		jdbc.update("update network_storage_objects set superseded_by = ?, updated_at = now()"
+			+ " where bucket = ? and object_key = 'a.jpg'", idNovo, bucket);
+		jdbc.update("""
+			insert into network_storage_objects (id, bucket, object_key, content_type, state, created_by, created_at, updated_at)
+			values (?, ?, 'a.jpg', 'application/octet-stream', 'PENDING', ?, now(), now())
+			""", idNovo, bucket, autor);
+
+		String primeira = pagina("2", null);
+		assertThat(chaves(primeira)).containsExactly("b.jpg", "c.jpg");
+		String segunda = pagina("2", tokenDe(primeira));
+
+		// Nenhuma página entrega a chave que não abre — nem em lugar nenhum depois do cursor — e
+		// nenhuma chave aparece duas vezes na mesma página (o que travava o laço do cliente).
+		assertThat(chaves(primeira)).containsExactly("b.jpg", "c.jpg");
+		assertThat(chaves(segunda)).containsExactly("d.jpg");
+		assertThat(segunda).contains("<IsTruncated>false</IsTruncated>");
+
+		// O que reapareceu não é só a linha: o download da chave listada tem de funcionar. (A linha
+		// gravada aqui é sintética, então o GET acusa a cópia ausente — o que se prova é que a
+		// listagem nunca entrega o que o GET recusaria por *ainda não existir*.)
+		jdbc.update("update network_storage_objects set state = 'STORED', bytes = 3, sha256 = sha256"
+			+ " where state = 'PENDING' and bucket = ? and object_key = 'a.jpg'", bucket);
+		var completo = pagina("10", null);
+		assertThat(chaves(completo)).containsExactly("a.jpg", "b.jpg", "c.jpg", "d.jpg");
+	}
+
 	private String pagina(String maxKeys, String token) throws Exception {
 		MockHttpServletRequestBuilder pedido = get("/s3/" + bucket).param("list-type", "2")
 			.param("max-keys", maxKeys);
