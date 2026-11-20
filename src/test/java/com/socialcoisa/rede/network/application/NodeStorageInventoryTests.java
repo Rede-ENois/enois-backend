@@ -193,6 +193,43 @@ class NodeStorageInventoryTests {
 		verify(audit).record(eq("nd_local"), eq("STORAGE_ORPHANS_PURGED"), eq("nd_local"), anyString());
 	}
 
+	/**
+	 * A cópia que o catálogo já <b>recolheu</b> ({@code GONE}) não é mais atribuída a este nó, mas o
+	 * arquivo continua no disco dele — e antes ficava lá para sempre.
+	 *
+	 * <p>O doc 13 §5.1.1 diz que a poda "o recolhe". Não recolhia: o inventário só chamava de órfão
+	 * o arquivo <b>sem</b> linha de colocação, e a coleta de lápides (§4) e a cura marcam
+	 * {@code GONE} mantendo a linha. O participante cedia 100 GB, o objeto era excluído, o catálogo
+	 * devolvia o espaço na conta de <b>folga cedida</b> — e o disco dele seguia com os bytes, sem
+	 * nenhuma tarefa de apagar existir (o protocolo só tem {@code OBJECT_PUT}/{@code OBJECT_GET}).
+	 * O espaço voltava na contabilidade e não na máquina.</p>
+	 *
+	 * <p>O discriminante: {@code GONE} aparece como reclamaível e a poda o apaga; {@code OK} e
+	 * {@code STALE} continuam intactos (o primeiro é promessa, o segundo pode ser a única cópia boa).</p>
+	 */
+	@Test
+	void poda_recolhe_o_corpo_de_copia_que_o_catalogo_ja_mandou_guardar_para_trilha() throws Exception {
+		bodies.write("sob_ok", corpo("vivo"));
+		bodies.write("sob_gone", corpo("excluido"));
+		bodies.write("sob_stale", corpo("talvez"));
+		when(storage.placementsOn("nd_local")).thenReturn(List.of(
+			new StoragePlacement("sob_ok", 1, "nd_local", 4L, sha("vivo"), StoragePlacement.State.OK, Instant.now()),
+			new StoragePlacement("sob_gone", 1, "nd_local", 8L, sha("excluido"), StoragePlacement.State.GONE,
+				Instant.now()),
+			new StoragePlacement("sob_stale", 1, "nd_local", 6L, sha("talvez"), StoragePlacement.State.STALE,
+				Instant.now())));
+
+		var relatorio = inventory.inventory(node("nd_local"));
+		assertThat(relatorio.orphan()).extracting(NodeStorageInventory.Orphan::objectId).containsExactly("sob_gone");
+		assertThat(relatorio.orphanBytes()).isEqualTo(8);
+
+		var p = inventory.purgeOrphans(node("nd_local"), false);
+		assertThat(p.removed()).containsExactly("sob_gone");
+		assertThat(bodies.has("sob_gone")).isFalse();
+		assertThat(bodies.has("sob_ok")).as("a promessa do catalogo fica").isTrue();
+		assertThat(bodies.has("sob_stale")).as("a unica copia possivelmente boa fica").isTrue();
+	}
+
 	@Test
 	void poda_nao_apaga_corpo_divergente_porque_e_a_unica_copia_possivelmente_boa() throws Exception {
 		bodies.write("sob_trocado", corpo("CONTEUDO"));

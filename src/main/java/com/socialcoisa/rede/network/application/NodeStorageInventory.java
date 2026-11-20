@@ -140,12 +140,28 @@ public class NodeStorageInventory {
 			}
 			held.add(new Entry(p.objectId(), p.replica(), tamanho, real));
 		}
-		java.util.Set<String> conhecidos = colocados.stream().map(StoragePlacement::objectId)
+		// `GONE` não é mais atribuído a este nó: o catálogo já recolheu a cópia (lápide coletada,
+		// §4, ou cura que repôs a réplica em outro nó, §5.1.1). O arquivo, porém, continua no disco,
+		// e nada mais o apagava — o protocolo só tem OBJECT_PUT/OBJECT_GET. O espaço voltava na
+		// conta de folga cedida e não na máquina de quem contribui. Fora da lista de "conhecidos",
+		// ele cai na poda junto com o órfão de verdade.
+		//
+		// `STALE` fica de fora de propósito: pode ser a única cópia possivelmente boa, e apagá-la
+		// antes de o Control Plane repor transformaria divergência em perda.
+		// Quem o nó NÃO pode apagar: o que está atribuído (`colocados`, acima) e a cópia `STALE` —
+		// esta pode ser a única cópia possivelmente boa, e apagá-la antes de o Control Plane repor
+		// transformaria divergência em perda. `GONE` é o contrário: o catálogo já recolheu a cópia
+		// (lápide coletada no §4, cura que repôs a réplica em outro nó no §5.1.1) e o arquivo
+		// continua no disco sem ninguém mandar apagar — o protocolo só tem OBJECT_PUT/OBJECT_GET. O
+		// espaço voltava na conta de folga cedida e não na máquina de quem contribui.
+		java.util.Set<String> intocaveis = storage.placementsOn(nodeId).stream()
+			.filter(p -> p.state() != StoragePlacement.State.GONE)
+			.map(StoragePlacement::objectId)
 			.collect(java.util.stream.Collectors.toSet());
 		List<Orphan> orphan = new java.util.ArrayList<>();
 		long orphanBytes = 0;
 		for (String noDisco : bodies.objectIds()) {
-			if (conhecidos.contains(noDisco)) {
+			if (intocaveis.contains(noDisco)) {
 				continue;
 			}
 			long tamanho = sizeOf(bodies.pathOf(noDisco));
