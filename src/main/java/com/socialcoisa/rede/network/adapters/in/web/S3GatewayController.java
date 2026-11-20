@@ -314,10 +314,7 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "PUT");
 		requireBucket(credential, bucket);
 		java.util.Map<String, String> query = query(request);
-		var upload = multipart.require(query.get("uploadId"), credential.ownerUserId());
-		if (!upload.bucket().equals(bucket) || !upload.key().equals(keyOf(request))) {
-			throw s3Error(404, "NoSuchUpload", "O upload informado nao e desta chave.");
-		}
+		var upload = uploadDaChave(credential, bucket, request);
 		int numero;
 		try {
 			numero = Integer.parseInt(query.get("partNumber"));
@@ -341,10 +338,7 @@ class S3GatewayController {
 			throws java.io.IOException {
 		S3Credential credential = authenticate(request, "PUT");
 		requireBucket(credential, bucket);
-		var upload = multipart.require(query(request).get("uploadId"), credential.ownerUserId());
-		if (!upload.bucket().equals(bucket) || !upload.key().equals(keyOf(request))) {
-			throw s3Error(404, "NoSuchUpload", "O upload informado nao e desta chave.");
-		}
+		var upload = uploadDaChave(credential, bucket, request);
 		java.util.List<Integer> pedidas = partesDoXml(body(request));
 		var concluido = multipart.complete(upload, pedidas);
 		S3Xml xml = new S3Xml();
@@ -358,9 +352,31 @@ class S3GatewayController {
 	ResponseEntity<Void> abortMultipart(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "DELETE");
 		requireBucket(credential, bucket);
-		var upload = multipart.require(query(request).get("uploadId"), credential.ownerUserId());
+		var upload = uploadDaChave(credential, bucket, request);
 		multipart.abort(upload.uploadId());
 		return ResponseEntity.noContent().build();
+	}
+
+	/**
+	 * O upload do {@code uploadId}, <b>conferindo que é desta chave</b>.
+	 *
+	 * <p>O {@code uploadId} identifica o upload; a rota identifica o objeto. As duas coisas têm de
+	 * coincidir, e a S3 responde {@code 404 NoSuchUpload} quando não coincidem — para a chave pedida,
+	 * aquele upload não existe.</p>
+	 *
+	 * <p><b>Antes:</b> {@code UploadPart} e {@code CompleteMultipartUpload} conferiam; {@code ListParts}
+	 * e {@code AbortMultipartUpload} não. O {@code ListParts} de uma chave errada devolvia as partes de
+	 * <b>outro</b> arquivo com {@code 200}, e o {@code Abort} de uma chave errada <b>apagava</b> o upload
+	 * — um bug de concatenação de chave no cliente destruía o trabalho de outro arquivo. Reunir a
+	 * conferência num só ponto é o que impede a divergência de voltar pela terceira rota.</p>
+	 */
+	private com.socialcoisa.rede.network.application.StorageMultipartService.Upload uploadDaChave(S3Credential credential, String bucket,
+			HttpServletRequest request) {
+		var upload = multipart.require(query(request).get("uploadId"), credential.ownerUserId());
+		if (!upload.bucket().equals(bucket) || !upload.key().equals(keyOf(request))) {
+			throw s3Error(404, "NoSuchUpload", "O upload informado nao e desta chave.");
+		}
+		return upload;
 	}
 
 	/** ListParts: {@code GET /{bucket}/{key}?uploadId=...} — o cliente confere o que já chegou. */
@@ -368,7 +384,7 @@ class S3GatewayController {
 	ResponseEntity<String> listParts(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "LIST");
 		requireBucket(credential, bucket);
-		var upload = multipart.require(query(request).get("uploadId"), credential.ownerUserId());
+		var upload = uploadDaChave(credential, bucket, request);
 		S3Xml xml = new S3Xml();
 		xml.root("ListPartsResult").element("Bucket", bucket).element("Key", upload.key())
 			.element("UploadId", upload.uploadId());

@@ -312,7 +312,7 @@ Prova: `S3GatewayTests.o_metadado_e_os_cabecalhos_declarados_no_put_voltem_no_he
 `V367` aplicada duas vezes em MariaDB 11.4 por `scripts/tests/storage-metadata-migration-test.sh`
 (PASS 14), com um objeto gravado antes da migração preservado.
 
-## 4.3 A listagem não mostra o que o `GET` nega (ciclo 81)
+### 4.3.1 A listagem não mostra o que o `GET` nega (ciclo 81)
 
 O download de um objeto vencido responde `404` desde a fase 1 — a leitura filtra o prazo. O
 `ListObjects` (v1 e v2) não: o `SELECT` da listagem só excluía lápide, então a chave vencida aparecia
@@ -332,7 +332,7 @@ pulava o objeto não servível, e agora nem o visita.
 `404`; dentro do prazo continua; sem prazo continua). Mutações: sem o filtro de prazo, e o filtro
 invertido (listar só os vencidos) — **2 de 2 derrubam**.
 
-## 4.4 O `ListBuckets` não mostra o bucket que não abre (ciclo 82)
+### 4.3.2 O `ListBuckets` não mostra o bucket que não abre (ciclo 82)
 
 O ciclo 81 fez a listagem de objeto esconder o vencido. O `ListBuckets` (`GET /s3`), que lista os
 **buckets** do dono, seguiu com o critério antigo (só lápide fora). Um bucket cujo único objeto venceu
@@ -354,7 +354,7 @@ vencimento é por objeto, não por bucket.
 a listagem de objeto dele já vinha vazia; bucket com um vivo e um vencido fica; bucket sem prazo fica;
 bucket de outra conta não aparece). Mutações: `bucketsOf` sem o filtro de prazo; filtro invertido;
 `bucketsOf` ignorando o dono — **3 de 3 derrubam**.
-## 4.5 O `LastModified` da listagem no formato que o SDK lê (ciclo 83)
+### 4.3.3 O `LastModified` da listagem no formato que o SDK lê (ciclo 83)
 
 A S3 manda `LastModified` como `yyyy-MM-dd'T'HH:mm:ss.SSS'Z'` — **sempre** três casas decimais e
 sempre `Z`. O gateway emitia `Instant.toString()`, que:
@@ -377,6 +377,32 @@ objeto a data de outro. A fonte é `updatedAt` quando existe, senão `createdAt`
 `2026-11-01T08:00:00.000Z`; instante com nanossegundos sai `2026-11-01T08:00:00.123Z`) — o par é o
 discriminante, porque cada um cobre um extremo diferente do defeito. Mutações: voltar o
 `Instant.toString()`, formato sem as casas, formato com nanossegundos — **3 de 3 derrubam**.
+
+### 4.5 O `uploadId` tem de ser desta chave — nas quatro rotas (ciclo 84)
+
+O `uploadId` identifica o upload; a rota identifica o objeto. As duas coisas têm de coincidir, e a S3
+responde **`404 NoSuchUpload`** quando não coincidem: para a chave pedida, aquele upload não existe.
+
+**Antes**, só metade das rotas conferia:
+
+| rota | conferia a chave? | consequência com a chave errada |
+|---|---|---|
+| `UploadPart` | sim | `404` (certo) |
+| `CompleteMultipartUpload` | sim | `404` (certo) |
+| `ListParts` | **não** | `200` com as partes de **outro** arquivo |
+| `AbortMultipartUpload` | **não** | **apagava** o upload |
+
+O `Abort` é o caro: um cliente que concatena a chave errada (bug de retomada) perdia as partes já
+enviadas sem nunca ter pedido isso, e só descobria no `Complete` seguinte.
+
+**Agora** as quatro passam por `uploadDaChave(credential, bucket, request)`, que confere bucket e chave
+num único ponto. Reunir é o que impede a divergência de voltar pela quinta rota: a conferência existe
+uma vez e toda rota nova que recebe `uploadId` a chama.
+
+**Verificação:** `S3MultipartTests` **+2** pela rota real — `ListParts` da chave certa devolve as partes
+e da chave errada é `404 NoSuchUpload`; o `Abort` da chave errada é `404` e o upload continua inteiro
+(as partes seguem lá e o `Complete` funciona). Mutações: helper conferindo só o bucket; helper nunca
+recusando — **2 de 2 derrubam**.
 
 ## 5. Erros
 
