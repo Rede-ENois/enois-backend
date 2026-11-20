@@ -69,7 +69,7 @@ class StorageExpiredKeyReuseTests {
 		when(nodes.findCandidates(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyInt()))
 			.thenReturn(List.of());
 		service = new StorageCatalogService(catalogo, mock(AuditTrail.class), Clock.fixed(AGORA, ZoneOffset.UTC),
-			10_000, root.toString(), "", new StoragePlacementService(nodes, catalogo, 1, 90), null);
+			10_000, root.toString(), "", new StoragePlacementService(nodes, catalogo, 0, 90), null);
 	}
 
 	private static byte[] body(String texto) {

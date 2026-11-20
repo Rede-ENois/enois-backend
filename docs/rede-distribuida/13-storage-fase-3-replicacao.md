@@ -598,6 +598,9 @@ quando quem atende não é o dono da réplica 0.
 | `GET /admin/network/storage/replica-zero` | lista o que hoje está **só** na réplica 0, com o motivo de cada objeto que ficou sem destino |
 | `POST /admin/network/storage/replica-zero?dryRun=false` | designa **uma** cópia (réplica 1) para cada um, `PENDING_REMOTE` |
 
+A designação criada aqui **reserva** a folga cedida do nó na colocação (doc 17 §2.2): um objeto
+adotado não é escolhido por cima da folga que outro objeto já prometeu.
+
 **Quem é candidato** (`StorageCatalogPersistenceAdapter.withOnlyReplicaZero`): `STORED`, corrente
 (`superseded_by is null`), com `sha256` e `bytes`, não vencido, **sem nenhuma colocação de réplica
 diferente de 0**. Objeto sem colocação nenhuma também entra — é o caso mais comum. Cópia `STALE`,

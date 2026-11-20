@@ -428,6 +428,11 @@ class StorageScrubberReadBackTests {
 		}
 
 		@Override
+		public List<StoragePlacement> copiesOnNode(String nodeId) {
+			throw new UnsupportedOperationException("reserva de folga nao usada neste teste");
+		}
+
+		@Override
 		public List<StorageObject> withOnlyReplicaZero(int limit) {
 			throw new UnsupportedOperationException("adocao de replica nao usada neste teste");
 		}

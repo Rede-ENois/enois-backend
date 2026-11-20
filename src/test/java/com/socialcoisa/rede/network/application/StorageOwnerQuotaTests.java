@@ -74,7 +74,7 @@ class StorageOwnerQuotaTests {
 	/** O serviço com a cota pedida, resto igual: colocação de uma cópia, sem nó local nem métrica. */
 	private StorageCatalogService comCota(long maxBytesPerOwner) {
 		return new StorageCatalogService(catalog, mock(AuditTrail.class), Clock.fixed(NOW, ZoneOffset.UTC),
-			10_000, root.toString(), "", new StoragePlacementService(nodes, catalog, 1, 90), null, null,
+			10_000, root.toString(), "", new StoragePlacementService(nodes, catalog, 0, 90), null, null,
 			maxBytesPerOwner);
 	}
 

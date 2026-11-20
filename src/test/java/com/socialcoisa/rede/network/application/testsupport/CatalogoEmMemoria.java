@@ -140,6 +140,11 @@ public abstract class CatalogoEmMemoria implements StorageCatalogRepository {
 	}
 
 	@Override
+	public java.util.List<StoragePlacement> copiesOnNode(String nodeId) {
+		return placements.values().stream().filter(p -> p.nodeId().equals(nodeId)).toList();
+	}
+
+	@Override
 	public java.util.List<StorageObject> withOnlyReplicaZero(int limit) {
 		return porId.values().stream()
 			.filter(o -> o.state() == StorageObjectState.STORED && o.currentVersion() && o.sha256() != null
