@@ -456,6 +456,36 @@ Dois detalhes que o ciclo fechou junto:
 **Verificação:** `S3MultipartTests` **+1** com cota de 20 MiB: três partes de 6 MiB passam, a quarta recebe
 `507 QuotaExceeded`, e o upload continua inteiro (as partes 1–3 seguem lá). Mutações: a parte não
 confere a cota; a cota ignora as partes abertas; sem a tradução ao SDK — **3 de 3 derrubam**.
+### 4.8 A listagem mostra a chave <b>uma vez</b>, e só o que abre (ciclo 88)
+
+O filtro da listagem era `state <> 'DELETED'`. Uma chave regravada tem **duas linhas** — a versão
+corrente e a nova, ainda `PENDING` —, e as duas passavam. O `ListObjects` devolvia então:
+
+- a **mesma chave duas vezes na mesma página** (`["a.jpg", "a.jpg"]` na primeira página, com exatamente
+  a cardinalidade da página, o que fazia o `IsTruncated` e o `KeyCount` contarem a chave em dobro); e
+- a chave em `PENDING`, que o `GET` recusa — a listagem entregava o que o download não abre.
+
+Como **o cursor da paginação é a chave**, a duplicata é pior que um resultado errado: um cliente que
+segue o `NextContinuationToken` comparando chaves pode não convergir, e um sincronizador de diretório
+pode ver a mesma chave em duas páginas seguidas. Se a regravação é de uma chave **antes** do cursor, a
+chave sai depois dele na ordem e a página seguinte nunca a alcança — o laço termina e a chave fica fora
+da cópia local até a próxima passada inteira.
+
+Agora a listagem usa **a régua do `GET`**:
+
+```sql
+state = 'STORED' and superseded_by is null and (expires_at is null or expires_at > ?)
+```
+
+`PENDING` é gravação em curso: não existe para quem lista, como não existe para quem baixa. A chave
+reaparece quando a gravação termina. `superseded_by is null` é a garantia de **uma linha por chave**,
+que o cursor exige. É a mesma régua da varredura (`listAll`) e do painel, que já filtravam assim.
+
+**Verificação:** `S3ListPaginationTests` **+1** — quatro objetos, `a.jpg` regravada (linha nova
+`PENDING`, antiga `superseded_by`) com o cursor em `b.jpg`: primeira página `["b.jpg", "c.jpg"]`, segunda
+`["d.jpg"]` e fim, `a.jpg` em nenhuma delas; terminada a gravação, `["a.jpg", "b.jpg", "c.jpg", "d.jpg"]`
+numa página só. Mutações: voltar `state <> 'DELETED'`; aceitar `PENDING` sem a conferência de versão —
+**as duas derrubam**.
 
 ## 5. Erros
 
