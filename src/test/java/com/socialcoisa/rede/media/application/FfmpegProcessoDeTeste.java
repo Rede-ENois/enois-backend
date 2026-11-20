@@ -70,8 +70,23 @@ public final class FfmpegProcessoDeTeste {
 		return preparar(pasta, argumentos, 0, 0, 0, null, resultado);
 	}
 
+	/** Cena que escreve uma mensagem de erro e falha, para provar o diagnóstico do runner (#960). */
+	Path falhaComMensagem(Path pasta, String mensagem) throws Exception {
+		return preparar(pasta, null, -1, -1, 0, null, null, mensagem);
+	}
+
+	/** Cena que escreve no stderr e demora além do prazo: timeout com saída parcial (#960). */
+	Path demoradoComMensagem(Path pasta, String mensagem) throws Exception {
+		return preparar(pasta, null, 1_000_000, 7_000_000, 2, null, null, mensagem);
+	}
+
 	private Path preparar(Path pasta, Path argumentos, int transcodeBytes, int remuxBytes, int demora,
 			Path pids, Path resultado) throws Exception {
+		return preparar(pasta, argumentos, transcodeBytes, remuxBytes, demora, pids, resultado, null);
+	}
+
+	private Path preparar(Path pasta, Path argumentos, int transcodeBytes, int remuxBytes, int demora,
+			Path pids, Path resultado, String erroMsg) throws Exception {
 		Properties opcoes = new Properties();
 		opcoes.setProperty("transcodeBytes", Integer.toString(transcodeBytes));
 		opcoes.setProperty("remuxBytes", Integer.toString(remuxBytes));
@@ -84,6 +99,9 @@ public final class FfmpegProcessoDeTeste {
 		}
 		if (resultado != null) {
 			opcoes.setProperty("probe", resultado.toString());
+		}
+		if (erroMsg != null) {
+			opcoes.setProperty("erroMsg", erroMsg);
 		}
 		Path cenario = pasta.resolve("cenario-" + UUID.randomUUID() + ".properties");
 		try (OutputStream arquivo = Files.newOutputStream(cenario)) {
@@ -116,6 +134,11 @@ public final class FfmpegProcessoDeTeste {
 		if (opcoes.containsKey("pids")) {
 			Files.writeString(Path.of(opcoes.getProperty("pids")), ProcessHandle.current().pid() + "\n",
 				StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+		}
+		// Mensagem no stderr antes de decidir o desfecho: é o que o runner precisa para separar
+		// "não produziu nada" de "rodou e recusou" (#960).
+		if (opcoes.containsKey("erroMsg")) {
+			System.err.println(opcoes.getProperty("erroMsg"));
 		}
 		if (demora == 2 || (demora == 1 && transcode)) {
 			Thread.sleep(30_000);
