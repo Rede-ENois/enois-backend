@@ -15,6 +15,7 @@ public class Message {
 	private final String iv;
 	private String encryptedKeys;
 	private final String replyToId;
+	private String topicId;
 	private final Instant createdAt;
 
 	private Message(String id, String conversationId, String senderId, String text, List<String> mediaIds,
@@ -124,6 +125,15 @@ public class Message {
 	public String encryptedKeys() { return encryptedKeys; }
 
 	public String replyToId() { return replyToId; }
+
+	/** Topico do grupo de conversa em que a mensagem foi enviada; null fora de grupo ou sem topico. */
+	public String topicId() { return topicId; }
+
+	/** Liga a mensagem ao topico ja validado pelo servico (o topico e da mesma conversa). */
+	public Message inTopic(String topicId) {
+		this.topicId = topicId;
+		return this;
+	}
 
 	public Instant createdAt() { return createdAt; }
 

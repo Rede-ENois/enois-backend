@@ -1084,8 +1084,8 @@ Contrato completo, regras e códigos de erro em [`STUDY_PAIRS.md`](STUDY_PAIRS.m
 | POST | `/api/conversations` | Criar conversa | Sim |
 | GET | `/api/conversations/search` | Buscar conversas | Sim |
 | GET | `/api/conversations/{conversationId}` | Detalhes da conversa | Sim |
-| POST | `/api/conversations/{conversationId}/messages` | Enviar mensagem | Sim |
-| GET | `/api/conversations/{conversationId}/messages` | Listar mensagens | Sim |
+| POST | `/api/conversations/{conversationId}/messages` | Enviar mensagem; `topicId` opcional coloca a mensagem num tópico do grupo | Sim |
+| GET | `/api/conversations/{conversationId}/messages` | Listar mensagens; `?topicId=` restringe ao tópico do grupo (cada item traz `topicId`, `null` fora de tópico) | Sim |
 | POST | `/api/conversations/{conversationId}/read` | Marcar como lida (as notificações de mensagem da conversa também ficam lidas) | Sim |
 | POST | `/api/conversations/{conversationId}/viewing` | Heartbeat da conversa aberta na tela (a cada ~20s): enquanto vale (45s), mensagens novas dela não notificam nem mandam push para quem está olhando. 204 | Sim |
 | DELETE | `/api/conversations/{conversationId}/viewing` | A conversa saiu da tela: volta a notificar. 204 | Sim |
@@ -1096,6 +1096,11 @@ Contrato completo, regras e códigos de erro em [`STUDY_PAIRS.md`](STUDY_PAIRS.m
 | DELETE | `/api/conversations/{conversationId}/group/participants/{userId}` | Remover alguém do grupo; 200 com `{"status":"REMOVED"}` | Sim |
 | PATCH | `/api/conversations/{conversationId}/group/participants/{userId}` | Promover a administrador ou voltar a membro (`{role: "ADMIN"\|"MEMBER"}`) | Sim |
 | POST | `/api/conversations/{conversationId}/group/participants/{userId}/history-keys` | Conceder a quem entrou depois a chave das mensagens antigas (`{keys: {"<messageId>": "<chave cifrada>"}}`); 200 com `{"granted": n}` | Sim |
+| GET | `/api/conversations/{conversationId}/group/topics` | Tópicos do grupo, na ordem do grupo (`{items, nextCursor}`) | Sim (participante) |
+| POST | `/api/conversations/{conversationId}/group/topics` | Criar tópico (`{name}`); 201 com o tópico | Sim (dono/admin) |
+| PATCH | `/api/conversations/{conversationId}/group/topics/{topicId}` | Renomear (`{name}`); sem nome, nada muda | Sim (dono/admin) |
+| POST | `/api/conversations/{conversationId}/group/topics/{topicId}/archive` | Arquivar: para de receber mensagem, o histórico continua | Sim (dono/admin) |
+| POST | `/api/conversations/{conversationId}/group/topics/reorder` | Nova ordem (`{topicIds}` com todos os tópicos, uma vez cada) | Sim (dono/admin) |
 | GET | `/api/conversations/stream` | Stream SSE (`text/event-stream`) da caixa de entrada: evento `conversation` com `{"conversationId"}` a cada mensagem nova, leitura ou reação; comentário `ping` a cada 25s | Sim (cookie) |
 
 O stream só avisa **qual** conversa mudou; o conteúdo (cifrado ou não) é buscado pelas rotas acima,
@@ -1149,6 +1154,24 @@ no grupo.
   `HISTORY_KEYS_NOT_SUPPORTED`.
 - Conceder de novo é seguro: as mensagens que já têm a chave da pessoa não são reescritas e não
   contam no `granted`.
+
+### Tópicos dentro do grupo (issue #915)
+
+Um grupo grande misturava todos os assuntos numa conversa só. O tópico organiza as mensagens por
+assunto, como o grupo de conteúdo faz com os próprios tópicos — mas aqui ele é do chat.
+
+- Qualquer participante lê os tópicos; dono ou administrador criam, renomeam, arquivam e reordenam
+  (403 `GROUP_ADMIN_REQUIRED` para os demais). Quem não participa recebe 403 `NOT_PARTICIPANT`, e
+  conversa direta responde 400 `INVALID_CONVERSATION_KIND`.
+- Nome obrigatório de até 60 caracteres, 400 `INVALID_TOPIC_NAME`; repetido (a comparação da coluna
+  não distingue maiúsculas nem acento) é 409 `TOPIC_EXISTS`; até 30 tópicos por grupo, 400
+  `TOO_MANY_TOPICS`.
+- Enviar mensagem com `topicId` exige tópico daquele grupo e aberto: de outro grupo é 404
+  `TOPIC_NOT_FOUND`, arquivado é 409 `TOPIC_ARCHIVED`. Sem `topicId` a mensagem entra na conversa
+  como sempre — e todas as mensagens anteriores continuam assim.
+- `GET .../messages?topicId=` filtra na consulta (com o mesmo cursor e o mesmo "apagar para mim"),
+  então `nextCursor` nunca pula mensagem nem mente sobre haver mais.
+- Reordenar exige a lista completa dos tópicos da conversa, uma vez cada: 400 `INVALID_ORDER`.
 
 ### Citações no histórico de mensagens
 

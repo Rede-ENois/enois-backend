@@ -527,7 +527,20 @@ UNIQUE: (requester_user_id, receiver_user_id)
 | conversation_id | VARCHAR(36) FK → conversations.id |
 | sender_id | VARCHAR(36) FK → users.id |
 | text | TEXT |
+| topic_id | VARCHAR(64) (V371) — tópico do grupo de conversa em que a mensagem foi enviada; nulo fora de tópico e em todas as mensagens anteriores |
 | created_at | TIMESTAMP |
+
+### `conversation_group_topics` (V371)
+
+| Coluna | Tipo |
+|---|---|
+| id | VARCHAR(64) PK |
+| conversation_id | VARCHAR(255) — conversa `GROUP` dona do tópico (sem FK, como o resto do projeto) |
+| name | VARCHAR(80), único por conversa (collation sem acento) |
+| position | INT — ordem no grupo |
+| status | VARCHAR(16) — `OPEN` recebe mensagem, `ARCHIVED` só mantém o histórico |
+| created_at | TIMESTAMP |
+| updated_at | TIMESTAMP |
 
 ---
 

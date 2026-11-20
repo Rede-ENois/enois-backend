@@ -26,6 +26,7 @@ import com.socialcoisa.rede.feed.domain.ReactionType;
 import com.socialcoisa.rede.idempotency.application.CommandResponse;
 import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
 import com.socialcoisa.rede.messaging.application.ConversationReachPolicy;
+import com.socialcoisa.rede.messaging.application.ConversationTopicService;
 import com.socialcoisa.rede.messaging.application.MessageReplyReader;
 import com.socialcoisa.rede.messaging.application.MessagingService;
 import com.socialcoisa.rede.messaging.application.port.out.MessagingRepository;
@@ -48,6 +49,7 @@ class MessagingContractController {
 	private final CurrentUserResolver currentUserResolver;
 	private final MessagingService messagingService;
 	private final MessageReplyReader messageReplyReader;
+	private final ConversationTopicService topicService;
 	private final CursorCodec cursorCodec;
 	private final ConversationReachPolicy reachPolicy;
 	private final CorporateProfileService corporateProfiles;
@@ -55,11 +57,13 @@ class MessagingContractController {
 	MessagingContractController(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
 			MessagingService messagingService, CursorCodec cursorCodec,
 			ConversationReachPolicy reachPolicy,
-			CorporateProfileService corporateProfiles, MessageReplyReader messageReplyReader) {
+			CorporateProfileService corporateProfiles, MessageReplyReader messageReplyReader,
+			ConversationTopicService topicService) {
 		this.idempotency = idempotency;
 		this.currentUserResolver = currentUserResolver;
 		this.messagingService = messagingService;
 		this.messageReplyReader = messageReplyReader;
+		this.topicService = topicService;
 		this.cursorCodec = cursorCodec;
 		this.reachPolicy = reachPolicy;
 		this.corporateProfiles = corporateProfiles;
@@ -158,7 +162,7 @@ class MessagingContractController {
 	@GetMapping("/{conversationId}/messages")
 	PageResponse<MessageView> messages(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String conversationId, @RequestParam(required = false) String cursor,
-			@RequestParam(defaultValue = "50") int limit) {
+			@RequestParam(defaultValue = "50") int limit, @RequestParam(required = false) String topicId) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		if (!messagingService.isParticipant(conversationId, user.id().value())) {
 			throw new ApiException(403, "NOT_PARTICIPANT", "Voce nao participa desta conversa.");
@@ -167,7 +171,10 @@ class MessagingContractController {
 		var pageCursor = cursorCodec.decodePage(cursor);
 		Instant before = pageCursor.map(CursorCodec.PageCursor::instant).orElse(null);
 		String beforeId = pageCursor.map(CursorCodec.PageCursor::tieBreak).orElse(null);
-		List<Message> msgs = messagingService.getMessages(conversationId, user.id().value(), before, beforeId, limit);
+		List<Message> msgs = topicId == null || topicId.isBlank()
+			? messagingService.getMessages(conversationId, user.id().value(), before, beforeId, limit)
+			: messagingService.getMessagesInTopic(conversationId, user.id().value(), topicId.trim(), before, beforeId,
+				limit);
 		var summaries = messagingService.reactionSummaries(msgs.stream().map(Message::id).toList(),
 			user.id().value());
 		// Carrega em batch as mensagens citadas (reply) da página, sem N+1.
@@ -194,7 +201,7 @@ class MessagingContractController {
 					m.createdAt() != null ? m.createdAt().toString() : null,
 					summary == null ? java.util.Map.of() : summary.counts(),
 					summary == null ? null : summary.myReaction(), m.mediaSpoiler(),
-					m.e2e(), m.iv(), m.encryptedKeys(), m.replyToId(), replyView);
+					m.e2e(), m.iv(), m.encryptedKeys(), m.replyToId(), replyView, m.topicId());
 			})
 			.toList();
 		// Pagina cheia => ainda ha mensagens mais antigas: o cursor aponta para a mais antiga desta pagina,
@@ -248,25 +255,30 @@ class MessagingContractController {
 		payload.put("iv", request.iv() == null ? "" : request.iv());
 		payload.put("encryptedKeys", request.encryptedKeys() == null ? "" : request.encryptedKeys());
 		payload.put("replyToId", request.replyToId() == null ? "" : request.replyToId());
+		payload.put("topicId", request.topicId() == null ? "" : request.topicId());
 		String hash = idempotency.hash(payload);
 		return idempotency.execute(user.id(), "POST", "/api/conversations/{conversationId}/messages", idempotencyKey,
 			hash, () -> {
 				Message msg;
 				String replyTo = request.replyToId() != null && !request.replyToId().isBlank()
 					? request.replyToId().trim() : null;
+				// O topico precisa ser da conversa e estar aberto; sem topico, a mensagem entra na
+				// conversa como antes (e todas as mensagens anteriores seguem assim).
+				String topic = topicService.requireUsableTopic(conversationId, request.topicId());
 				if (Boolean.TRUE.equals(request.e2e())) {
 					msg = messagingService.sendE2eMessage(conversationId, user.id().value(), request.text(),
 						request.iv(), request.encryptedKeys(), request.mediaIds(),
-						Boolean.TRUE.equals(request.mediaSpoiler()), replyTo);
+						Boolean.TRUE.equals(request.mediaSpoiler()), replyTo, topic);
 				}
 				else {
 					msg = messagingService.sendMessage(conversationId, user.id().value(), request.text(),
-						request.mediaIds(), Boolean.TRUE.equals(request.mediaSpoiler()), replyTo);
+						request.mediaIds(), Boolean.TRUE.equals(request.mediaSpoiler()), replyTo, topic);
 				}
 				return new CommandResponse(201, new MessageView(msg.id(), msg.conversationId(), msg.senderId(),
 					msg.text(), msg.mediaIds(),
 					msg.createdAt() != null ? msg.createdAt().toString() : null, java.util.Map.of(), null,
-					msg.mediaSpoiler(), msg.e2e(), msg.iv(), msg.encryptedKeys(), msg.replyToId(), null));
+					msg.mediaSpoiler(), msg.e2e(), msg.iv(), msg.encryptedKeys(), msg.replyToId(), null,
+					msg.topicId()));
 			});
 	}
 
@@ -572,7 +584,7 @@ class MessagingContractController {
 
 	record MessageView(String id, String conversationId, String from, String text, List<String> mediaIds,
 			String time, java.util.Map<String, Integer> reactions, String myReaction, boolean mediaSpoiler,
-			boolean e2e, String iv, String encryptedKeys, String replyToId, ReplyView replyTo) {
+			boolean e2e, String iv, String encryptedKeys, String replyToId, ReplyView replyTo, String topicId) {
 	}
 
 	record ReplyView(String id, String from, String text, boolean e2e, String iv, String encryptedKeys,
@@ -589,7 +601,7 @@ class MessagingContractController {
 	}
 
 	record SendMessageRequest(String text, List<String> mediaIds, Boolean mediaSpoiler,
-			Boolean e2e, String iv, String encryptedKeys, String replyToId) {
+			Boolean e2e, String iv, String encryptedKeys, String replyToId, String topicId) {
 	}
 
 }
