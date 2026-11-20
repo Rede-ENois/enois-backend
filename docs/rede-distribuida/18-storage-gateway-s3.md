@@ -312,6 +312,26 @@ Prova: `S3GatewayTests.o_metadado_e_os_cabecalhos_declarados_no_put_voltem_no_he
 `V367` aplicada duas vezes em MariaDB 11.4 por `scripts/tests/storage-metadata-migration-test.sh`
 (PASS 14), com um objeto gravado antes da migração preservado.
 
+## 4.3 A listagem não mostra o que o `GET` nega (ciclo 81)
+
+O download de um objeto vencido responde `404` desde a fase 1 — a leitura filtra o prazo. O
+`ListObjects` (v1 e v2) não: o `SELECT` da listagem só excluía lápide, então a chave vencida aparecia
+ali e sumia no `GET`. Para quem espera a varredura, é "existe mas dá 404"; para um sincronizador de
+diretório é o pior dos dois mundos — ele pede, recebe `404` e repete, ou apaga a cópia local achando
+que o remoto venceu.
+
+Agora o `SELECT` da listagem tem o **mesmo predicado da leitura** (`expires_at` nulo ou no futuro).
+Ele fica no `where`, não é filtrado depois: a listagem é por página, e descartar linhas depois de ler
+faria `KeyCount` e `IsTruncated` mentirem (o cliente receberia página "cheia" vazia).
+
+Quem consome a mesma consulta herda a régua: o `GET /network/storage/buckets/{bucket}` do Control
+Plane (a listagem interna, usada pelo painel) e a varredura de durabilidade por bucket — que já
+pulava o objeto não servível, e agora nem o visita.
+
+**Verificação:** `S3ListExpiryTests` **3** pela rota real (vencido sai da lista e o `GET` responde
+`404`; dentro do prazo continua; sem prazo continua). Mutações: sem o filtro de prazo, e o filtro
+invertido (listar só os vencidos) — **2 de 2 derrubam**.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
