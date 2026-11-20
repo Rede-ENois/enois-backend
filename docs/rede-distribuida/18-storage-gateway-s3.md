@@ -332,6 +332,29 @@ pulava o objeto não servível, e agora nem o visita.
 `404`; dentro do prazo continua; sem prazo continua). Mutações: sem o filtro de prazo, e o filtro
 invertido (listar só os vencidos) — **2 de 2 derrubam**.
 
+## 4.4 O `ListBuckets` não mostra o bucket que não abre (ciclo 82)
+
+O ciclo 81 fez a listagem de objeto esconder o vencido. O `ListBuckets` (`GET /s3`), que lista os
+**buckets** do dono, seguiu com o critério antigo (só lápide fora). Um bucket cujo único objeto venceu
+continuava aparecendo, e aí o nome não fechava com nada:
+
+| pedido | resposta |
+|---|---|
+| `GET /s3` | o bucket aparece |
+| `GET /s3/{bucket}` | lista **vazia** (`KeyCount=0`) |
+| `GET /s3/{bucket}/chave.jpg` | **404** |
+| `DELETE /s3/{bucket}` | **409** — "ainda tem objetos" |
+
+Agora `bucketsOf` usa o **mesmo predicado** da listagem de objeto (`expires_at` nulo ou no futuro):
+bucket sem nenhum objeto vivo sai do `ListBuckets`, que passa a concordar com o que as outras três
+rotas já diziam. O bucket com **um** objeto vivo (mesmo tendo outro vencido ao lado) continua listado —
+vencimento é por objeto, não por bucket.
+
+**Verificação:** `S3ListBucketsExpiryTests` **4** pela rota real (bucket inteiro vencido sai da lista e
+a listagem de objeto dele já vinha vazia; bucket com um vivo e um vencido fica; bucket sem prazo fica;
+bucket de outra conta não aparece). Mutações: `bucketsOf` sem o filtro de prazo; filtro invertido;
+`bucketsOf` ignorando o dono — **3 de 3 derrubam**.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
