@@ -262,7 +262,7 @@ ser recusado (o que já era correto), mas a réplica nunca acontecia. Agora exis
 | 1 | lê `objectId`, `sha256`, `bytes` e `replica` do payload; payload incompleto → `STORAGE_TASK_PAYLOAD_INVALID` |
 | 2 | baixa por `GET /network/storage/objects/{id}` com a **mesma** chave de nó e `--limit-rate` do **menor** entre o teto da transferência (`bandwidthLimitMbps` do payload, quando existe) e a banda declarada |
 | 3 | **mede o que veio** (`sha256sum` + `stat`) e compara com o medido pelo Control Plane. Divergência → `STORAGE_REPLICA_MISMATCH`, e **não confirma** |
-| 4 | confere o teto de disco cedido **antes** de confirmar. Acima → `STORAGE_OBJECT_TOO_LARGE` (o temporário sai; `diskMb=0` é "sem teto declarado", não "zero bytes") |
+| 4 | confere o teto de disco cedido **antes** de confirmar, em **duas** contas: o objeto sozinho contra o teto → `STORAGE_OBJECT_TOO_LARGE`; e o objeto **somado ao que o nó já guarda**, por `disk_make_room` → `STORAGE_NO_DISK_ROOM` (§5.4.1). O temporário sai nos dois casos; `diskMb=0` é "sem teto declarado", não "zero bytes" |
 | 5 | confirma em `POST .../replica` com **as medidas que ele mesmo calculou** |
 | 6 | posta `DONE` com `{objectId, replica, bytes, sha256}` — que o Control Plane confere de novo |
 
@@ -300,6 +300,28 @@ seguinte.
 **O teto declarado conta.** `content_bytes` passou a somar `objects/*.bin`: sem isso o nó reportava
 2 MB de uso enquanto guardava 40 GB de réplica local, e o teto que o participante cedeu não valia
 nada.
+
+## 5.4.1 O teto é do conjunto, não de um objeto (ciclo 75)
+
+O passo 4 comparava **só** o tamanho do objeto com o teto. Dez réplicas de 700 MB passavam os dez
+testes num disco cedido de 1 GB: cada uma "cabia no teto", e o nó terminava guardando sete vezes o
+que o participante cedeu. O `content_bytes` do heartbeat mostrava o estouro, mas o nó **nunca
+recusava** — o brief §7 diz "não permitir que o armazenamento do Énóis consuma espaço além do limite
+configurado", e o limite é o do conjunto.
+
+Agora o `OBJECT_PUT` usa o **mesmo** `disk_make_room` que a réplica de projeção, o cache e a borda já
+usavam (`content_bytes` já contava `objects/*.bin` — o que faltava era cobrar a soma na hora de
+aceitar). Teto estourado → `STORAGE_NO_DISK_ROOM`, o temporário sai e a cópia **não** é confirmada; o
+Control Plane recebe a falha e designa outro nó.
+
+Não há evicção aqui de propósito: `replica/` e `objects/` são promessa de catálogo, não cache. Apagar
+uma cópia para caber outra quebraria a durabilidade em silêncio — quem cede pouco simplesmente
+recebe menos objeto.
+
+**Verificação:** `node-executor-test.sh` **+4** asserções (215 → **219**): o primeiro corpo de 700 KB
+cabe no disco de 1 MB; o segundo, que só não cabe **somado**, falha com `STORAGE_NO_DISK_ROOM`, não
+confirma a cópia, e o que está guardado continua dentro do teto. Mutação: sem o `disk_make_room` no
+`OBJECT_PUT`, o cenário novo derruba — 1 de 1.
 
 **No Control Plane:** `NodeBodyStore` (`@ConditionalOnProperty rede.storage.node-body-root`) é a
 mesma ideia do lado servidor — gravação atômica (temporário + `ATOMIC_MOVE`), validação de
