@@ -40,7 +40,7 @@ public abstract class CatalogoEmMemoria implements StorageCatalogRepository {
 	}
 
 	/** Grava a linha: por id sempre, e na chave só se for a corrente (o índice único do V352). */
-	private void guardar(StorageObject object) {
+	protected final void guardar(StorageObject object) {
 		porId.put(object.id(), object);
 		if (object.currentVersion()) {
 			byKey.put(object.bucket() + "/" + object.key(), object);
@@ -135,6 +135,19 @@ public abstract class CatalogoEmMemoria implements StorageCatalogRepository {
 			.filter(o -> afterKey == null || o.key().compareTo(afterKey) > 0)
 			.filter(o -> o.state() != StorageObjectState.DELETED)
 			.sorted((a, b) -> a.key().compareTo(b.key()))
+			.limit(limit)
+			.toList();
+	}
+
+	@Override
+	public java.util.List<StorageObject> withOnlyReplicaZero(int limit) {
+		return porId.values().stream()
+			.filter(o -> o.state() == StorageObjectState.STORED && o.currentVersion() && o.sha256() != null
+				&& o.bytes() != null)
+			.filter(o -> !o.expired(java.time.Instant.now()))
+			.filter(o -> placements.values().stream()
+				.noneMatch(p -> p.objectId().equals(o.id()) && p.replica() != 0))
+			.sorted(java.util.Comparator.comparing(StorageObject::createdAt).thenComparing(StorageObject::id))
 			.limit(limit)
 			.toList();
 	}

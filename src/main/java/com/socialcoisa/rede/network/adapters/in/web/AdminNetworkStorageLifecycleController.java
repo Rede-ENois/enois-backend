@@ -18,6 +18,8 @@ import com.socialcoisa.rede.network.application.StorageLifecycle;
 import com.socialcoisa.rede.network.domain.StorageBucketPolicy;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.shared.web.AdminGuard;
+import com.socialcoisa.rede.network.application.StorageReplicaAdoption;
+import com.socialcoisa.rede.shared.audit.AuditTrail;
 import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
@@ -36,15 +38,20 @@ class AdminNetworkStorageLifecycleController {
 
 	private final StorageCatalogService storage;
 	private final StorageLifecycle lifecycle;
+	private final StorageReplicaAdoption replicaAdoption;
 	private final CurrentUserResolver currentUserResolver;
 	private final AdminGuard adminGuard;
+	private final AuditTrail audit;
 
 	AdminNetworkStorageLifecycleController(StorageCatalogService storage, StorageLifecycle lifecycle,
-			CurrentUserResolver currentUserResolver, AdminGuard adminGuard) {
+			StorageReplicaAdoption replicaAdoption, CurrentUserResolver currentUserResolver, AdminGuard adminGuard,
+			AuditTrail audit) {
 		this.storage = storage;
 		this.lifecycle = lifecycle;
+		this.replicaAdoption = replicaAdoption;
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
+		this.audit = audit;
 	}
 
 	/** A política vigente do bucket. Bucket sem linha responde os padrões, com {@code configured=false}. */
@@ -97,6 +104,38 @@ class AdminNetworkStorageLifecycleController {
 			@RequestParam(defaultValue = "true") boolean dryRun) {
 		admin(sessionToken);
 		return LifecycleView.of(lifecycle.run(dryRun));
+	}
+
+	/**
+	 * O que hoje está <b>só</b> na réplica 0 (doc 13 §5.10): gravado e servível, sem cópia nem designação
+	 * de nó. É a leitura que o operador faz antes de pedir a cópia.
+	 */
+	@GetMapping("/replica-zero")
+	StorageReplicaAdoption.Report replicaZero(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		admin(sessionToken);
+		return replicaAdoption.preview();
+	}
+
+	/**
+	 * Pede a cópia de cada objeto que só tem a réplica 0, designando um nó com a mesma régua de
+	 * colocação do upload. O padrão é <b>seco</b>: pedir transferência de banda de um participante é
+	 * ato de operador, com o número na mão.
+	 *
+	 * <p>A designação nasce {@code PENDING_REMOTE} e só vira cópia quando o nó confirma — quem manda
+	 * gravar é o despacho da réplica, não esta rota. Idempotente: objeto que já tem qualquer colocação
+	 * de nó (inclusive pendente) não é tocado.</p>
+	 */
+	@PostMapping("/replica-zero")
+	StorageReplicaAdoption.Report adoptReplicaZero(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(name = "dryRun", defaultValue = "true") boolean dryRun) {
+		CurrentUser admin = admin(sessionToken);
+		StorageReplicaAdoption.Report relatorio = replicaAdoption.run(dryRun);
+		if (!dryRun && !relatorio.adopted().isEmpty()) {
+			audit.record(admin.id().value(), "STORAGE_REPLICA_ADOPTED", "storage",
+				"{\"objects\":" + relatorio.adopted().size() + "}");
+		}
+		return relatorio;
 	}
 
 	private CurrentUser admin(String sessionToken) {

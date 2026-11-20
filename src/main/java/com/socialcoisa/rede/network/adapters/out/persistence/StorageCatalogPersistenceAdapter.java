@@ -215,6 +215,23 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	 * continua existindo ao lado, nomeado, porque são perguntas diferentes — e três leitores fazendo
 	 * o filtro por conta própria já tinham divergido sobre "o objeto tem cópia".
 	 */
+	/**
+	 * Objetos servíveis cuja colocação é só a réplica 0 — ou seja, nenhuma linha de nó.
+	 *
+	 * <p>{@code not exists} em qualquer colocação, e não {@code count(o) = 1}: objeto sem colocação
+	 * nenhuma (upload anterior à colocação) também está só na réplica 0 e é candidato. O que não
+	 * entra é objeto com cópia {@code STALE}/{@code GONE}/{@code PENDING_REMOTE} — esses têm o healing
+	 * da cópia ruim, e pedir outra réplica por cima duplicaria a transferência.</p>
+	 */
+	private static final String WITH_ONLY_REPLICA_ZERO = """
+		select %s from network_storage_objects o
+		where o.state = 'STORED' and o.superseded_by is null and o.sha256 is not null and o.bytes is not null
+		and (o.expires_at is null or o.expires_at > ?)
+		and not exists (select 1 from network_storage_placements p where p.object_id = o.id and p.replica <> 0)
+		order by o.created_at asc, o.id asc
+		limit ?
+		""".formatted(OBJECT_COLUMNS);
+
 	private static final String SELECT_COPIES = "select " + PLACEMENT_COLUMNS
 		+ " from network_storage_placements where object_id = ? order by replica asc";
 
@@ -527,6 +544,13 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	@Override
 	public List<StoragePlacement> placements(String objectId) {
 		return jdbc.query(SELECT_PLACEMENTS, PLACEMENT_MAPPER, objectId);
+	}
+
+	@Override
+	public List<StorageObject> withOnlyReplicaZero(int limit) {
+		// O "agora" vem do Java, não do relógio do banco: é o mesmo instante em que a varredura e a
+		// leitura decidem que um objeto venceu, e um fuso do servidor não muda a resposta.
+		return jdbc.query(WITH_ONLY_REPLICA_ZERO, OBJECT_MAPPER, Timestamp.from(Instant.now()), limit);
 	}
 
 	@Override
