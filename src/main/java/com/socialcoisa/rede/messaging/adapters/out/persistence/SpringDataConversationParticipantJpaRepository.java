@@ -46,6 +46,26 @@ interface SpringDataConversationParticipantJpaRepository extends JpaRepository<C
 	boolean existsByConversationIdAndUserId(String conversationId, String userId);
 
 	/**
+	 * Tira a pessoa do grupo. A conversa sai da caixa dela porque a listagem do app entra pelo
+	 * participante; a conversa em si continua existindo para quem ficou.
+	 */
+	@org.springframework.data.jpa.repository.Modifying
+	@org.springframework.data.jpa.repository.Query("""
+			DELETE FROM ConversationParticipantJpaEntity cp
+			WHERE cp.conversationId = :conversationId AND cp.userId = :userId""")
+	int deleteParticipant(@org.springframework.data.repository.query.Param("conversationId") String conversationId,
+			@org.springframework.data.repository.query.Param("userId") String userId);
+
+	/** Promocao (ou volta a membro) de quem participa do grupo. */
+	@org.springframework.data.jpa.repository.Modifying
+	@org.springframework.data.jpa.repository.Query("""
+			UPDATE ConversationParticipantJpaEntity cp SET cp.role = :role
+			WHERE cp.conversationId = :conversationId AND cp.userId = :userId""")
+	int updateRole(@org.springframework.data.repository.query.Param("conversationId") String conversationId,
+			@org.springframework.data.repository.query.Param("userId") String userId,
+			@org.springframework.data.repository.query.Param("role") String role);
+
+	/**
 	 * Total de mensagens nao lidas em TODAS as conversas ativas do usuario (uma query so), opcionalmente
 	 * so as de um contexto (caixa social ou profissional).
 	 *

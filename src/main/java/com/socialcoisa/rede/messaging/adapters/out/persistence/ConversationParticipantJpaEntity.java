@@ -3,6 +3,7 @@ package com.socialcoisa.rede.messaging.adapters.out.persistence;
 import java.time.Instant;
 
 import com.socialcoisa.rede.messaging.domain.ConversationParticipant;
+import com.socialcoisa.rede.messaging.domain.ConversationRole;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -41,6 +42,13 @@ class ConversationParticipantJpaEntity {
 	@Column(name = "hidden_at")
 	private Instant hiddenAt;
 
+	/**
+	 * Papel no grupo: ADMIN ou MEMBER. O dono da conversa nao e gravado aqui (e o criador da
+	 * conversa), entao o valor nunca e OWNER.
+	 */
+	@Column(name = "role", nullable = false, length = 16)
+	private String role;
+
 	protected ConversationParticipantJpaEntity() {
 	}
 
@@ -51,6 +59,7 @@ class ConversationParticipantJpaEntity {
 		e.userId = participant.userId();
 		e.lastReadAt = participant.lastReadAt();
 		e.joinedAt = participant.joinedAt();
+		e.role = participant.role() == null ? ConversationRole.MEMBER.name() : participant.role().name();
 		return e;
 	}
 
@@ -63,7 +72,8 @@ class ConversationParticipantJpaEntity {
 	}
 
 	ConversationParticipant toDomain() {
-		return ConversationParticipant.restore(id, conversationId, userId, lastReadAt, joinedAt);
+		return ConversationParticipant.restore(id, conversationId, userId, ConversationRole.fromStored(role),
+			lastReadAt, joinedAt);
 	}
 
 }

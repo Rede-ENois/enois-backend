@@ -1005,8 +1005,50 @@ a cada mensagem enviada, não só na criação:
 | Classe | Descrição |
 |---|---|
 | `Conversation` | Entidade: id, kind (DIRECT/GROUP), title, createdBy |
-| `ConversationParticipant` | Entidade: conversationId, userId, lastReadAt |
+| `ConversationParticipant` | Entidade: conversationId, userId, role (OWNER/ADMIN/MEMBER), lastReadAt |
 | `Message` | Entidade: id, conversationId, senderId, text, createdAt |
+
+O papel `OWNER` é **derivado** de `Conversation.createdBy` e não é gravado: a coluna
+`conversation_participants.role` (V370) guarda a promoção a `ADMIN`, e quem não tem valor
+gravado é `MEMBER`. Guardar o dono em dois lugares deixaria a linha do participante e a conversa
+discordarem sobre quem manda no grupo.
+
+### ConversationGroupService
+
+**Arquivo**: `src/main/java/com/socialcoisa/rede/messaging/application/ConversationGroupService.java`
+
+Gestão do grupo de chat (issue #915): quem participa, quem administra, e a concessão do histórico
+a quem entrou depois. Fica num serviço próprio porque `MessagingService` já carrega o contrato
+inteiro da conversa e o painel de grupo tem guardas diferentes (só dono ou administrador mexe).
+
+| Função | Descrição |
+|---|---|
+| `listParticipants(conversationId, actorId)` | Participantes com o papel de cada um (`OWNER`/`ADMIN`/`MEMBER`) |
+| `addParticipant(conversationId, actorId, targetId)` | Convida alguém (dono ou administrador), passando pelas mesmas regras de alcance da criação da conversa; notifica e avisa osstreams |
+| `removeParticipant(conversationId, actorId, targetId)` | Remove alguém: apaga a linha, revoga a chave da conversa guardada no servidor, notifica; o dono é protegido e o administrador não remove outro administrador |
+| `changeRole(conversationId, actorId, targetId, role)` | Promove a `ADMIN` ou rebaixa a `MEMBER` — só o dono |
+| `grantHistoryKeys(conversationId, actorId, targetId, keys)` | Acrescenta ao mapa de chaves de cada mensagem a chave cifrada da pessoa que entrou depois (chave chega pronta: o servidor não decifra); devolve quantas mensagens receberam a chave |
+
+A concessão de histórico é o que faz quem entra depois ver o grupo inteiro: a chave de cada
+mensagem antiga é gerada pelo aparelho de quem administra e entregue já cifrada para a chave
+pública da pessoa nova. O servidor só guarda a cópia cifrada, sem tocar nas chaves de quem já
+estava no grupo e sem reescrever as mensagens que já têm a chave.
+
+### ConversationGroupAdminController
+
+**Arquivo**: `src/main/java/com/socialcoisa/rede/messaging/adapters/in/web/ConversationGroupAdminController.java`
+
+| Função | Rota |
+|---|---|
+| `participants(...)` | GET /api/conversations/{conversationId}/group/participants |
+| `addParticipant(...)` | POST /api/conversations/{conversationId}/group/participants |
+| `removeParticipant(...)` | DELETE /api/conversations/{conversationId}/group/participants/{userId} |
+| `changeRole(...)` | PATCH /api/conversations/{conversationId}/group/participants/{userId} |
+| `grantHistoryKeys(...)` | POST /api/conversations/{conversationId}/group/participants/{userId}/history-keys |
+
+As rotas de escrita exigem chave de idempotência. A remoção responde 200 com
+`{"status":"REMOVED"}` (e não 204) porque a resposta de comando precisa ter corpo para ser
+repetida no replay da idempotência.
 
 ### MessagingContractController
 

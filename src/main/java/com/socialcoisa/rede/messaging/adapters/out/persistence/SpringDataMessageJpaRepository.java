@@ -5,6 +5,7 @@ import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -99,6 +100,16 @@ interface SpringDataMessageJpaRepository extends JpaRepository<MessageJpaEntity,
 			@Param("userId") String userId);
 
 	List<MessageJpaEntity> findBySenderId(String senderId);
+
+	/**
+	 * Grava o mapa de chaves cifradas da mensagem (JSON) sem tocar no resto da linha. Existe para a
+	 * concessao de historico: quem entra depois no grupo recebe a chave de cada mensagem antiga, e
+	 * o mapa precisa crescer sem reescrever a mensagem (que traria o texto cifrado de volta).
+	 */
+	@Modifying
+	@Query("UPDATE MessageJpaEntity m SET m.encryptedKeys = :encryptedKeys WHERE m.id = :messageId")
+	int updateEncryptedKeys(@Param("messageId") String messageId,
+			@Param("encryptedKeys") String encryptedKeys);
 
 	/**
 	 * A última mensagem de cada conversa do lote, em UMA consulta: a lista de conversas do app
