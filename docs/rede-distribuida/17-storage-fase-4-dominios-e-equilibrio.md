@@ -505,12 +505,28 @@ arquivo continuaria sendo servido.
 A varredura (`POST /admin/network/storage/lifecycle/run`, `dryRun=true` por padrão) faz duas coisas,
 e as duas **marcam lápide, nunca apagam linha**:
 
-1. **expiração** — objeto corrente, servível e vencido vira `DELETED`;
+1. **expiração** — objeto servível e vencido vira `DELETED`, **corrente ou substituído**: o prazo é
+   da versão, e cada versão é um objeto com id próprio (§11.1). Até o ciclo 78 a varredura pedia
+   `superseded_by is null`, e o prazo de qualquer versão que deixou de ser corrente era ignorado —
+   gravado para expirar em sete dias e substituído no segundo, o conteúdo nunca vencia, e sem
+   `retain_superseded_days` (§11.3, "sem política o padrão é guardar") ficava para sempre, na conta
+   do dono e no disco dos nós;
 2. **retenção** — versão substituída além do prazo do bucket vira `DELETED`.
 
 A linha tem de continuar existindo: é ela que a coleta de lápides da fase 3 percorre para mandar
 cada nó soltar as cópias. Apagar a linha deixaria o disco do participante sem registro do que
 coletar.
+
+### 11.4.1 O prazo da versão substituída (ciclo 78)
+
+A falha era de **filtro no SQL**, não de regra: `SELECT_EXPIRED` exigia `superseded_by is null`. O
+teste de serviço não a via porque o filtro mora no `where`, e o serviço só recebia o que a consulta
+devolvia. A correção é uma linha de SQL; a prova é um teste contra o banco real.
+
+**Verificação:** `StorageLifecycleExpiryPersistenceTests` **4** (MariaDB embarcado, SQL de verdade):
+versão substituída com prazo vencido entra na varredura; a corrente vencida continua entrando;
+substituída **sem** prazo não entra (para não confundir prazo com retenção); substituída já lapidada
+não volta. Mutação: repor `superseded_by is null` — **1 de 1 derruba**.
 
 ### 11.5 Restaurar é gravar de novo, não voltar o passado
 

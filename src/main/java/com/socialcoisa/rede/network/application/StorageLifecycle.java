@@ -74,9 +74,10 @@ public class StorageLifecycle {
 					object.expiresAt()));
 				continue;
 			}
-			// Condicional no estado dentro do repositório: se uma gravação nova substituiu esta
-			// versão entre a leitura e a marcação, o objeto não vira lápide por um prazo que já não
-			// é dele.
+			// A marcação é por `id`, e cada versão é um objeto com id próprio (doc 17 §11.1): o
+			// prazo vencido da versão ANTIGA lapida aquela versão, nunca a corrente que a substituiu.
+			// Condicional no estado dentro do repositório: um upload que termine depois da leitura
+			// (`PENDING` → `STORED`) não pode ser lapidado por um prazo de outra versão.
 			if (catalog.markDeleted(object.id(), now)) {
 				esqueceuAConta(object);
 				expirados.add(new Expired(object.id(), object.bucket(), object.key(), object.version(),
