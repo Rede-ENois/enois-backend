@@ -233,6 +233,30 @@ public class StoragePlacementService {
 	 * não é conhecido como sem espaço. A ordem dos filtros é a do despacho de tarefa, para que uma
 	 * recusa aqui signifique o mesmo que significaria lá.
 	 */
+	/**
+	 * A folga que a colocação promete e a gravação honra: cada designação <b>pendente</b> deste nó
+	 * reserva o tamanho dela antes de existir cópia confirmada.
+	 *
+	 * <p><b>Antes:</b> só a cópia {@code OK} contava como ocupada. Três objetos de 100 GB designados
+	 * no mesmo minuto para um nó que cedeu 150 GB passavam os três na colocação: o primeiro seria
+	 * gravado, o segundo já estouraria a folga — e o operador descobriria pelo 507 do {@code store},
+	 * com o objeto já designado. O objeto que o nó "nunca vai poder" receber tinha sido colocado nele.</p>
+	 *
+	 * <p><b>Agora:</b> {@code PENDING_REMOTE} reserva. {@code STALE}, {@code GONE} e a designação
+	 * vencida não reservam — a primeira não é espaço aproveitável e as outras a coleta já devolve.
+	 * É reserva, não promessa: quem não confirma libera na próxima chamada de quem for designar.</p>
+	 */
+	public long reservadoEmMb(String nodeId) {
+		long reservadoMb = 0;
+		var copias = catalog.copiesOnNode(nodeId);
+		for (StoragePlacement placement : copias) {
+			if (placement.state() == StoragePlacement.State.PENDING_REMOTE) {
+				reservadoMb += (placement.bytes() / (1024 * 1024)) + 1;
+			}
+		}
+		return reservadoMb;
+	}
+
 	private boolean storageReady(NetworkNode node, long bytes, Instant now) {
 		return node.status() == NodeStatus.ACTIVE
 			&& node.alive(now, nodeStaleAfter)
@@ -302,7 +326,9 @@ public class StoragePlacementService {
 			}
 		}
 		long medidoMb = node.observedContentUsedMb() == null ? 0 : node.observedContentUsedMb();
-		long ocupadoMb = Math.max(confirmadoMb, medidoMb);
+		// A designação pendente já é espaço prometido a um objeto que vai chegar: somar só as
+		// confirmações deixaria a colocação repetir o mesmo MB para vários objetos no mesmo lote.
+		long ocupadoMb = Math.max(confirmadoMb, medidoMb) + reservadoEmMb(node.id());
 		return node.declaredDiskMb() - ocupadoMb;
 	}
 
