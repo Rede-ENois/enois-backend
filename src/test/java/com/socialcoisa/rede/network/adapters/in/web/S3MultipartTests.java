@@ -26,6 +26,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.HttpHeaders;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -49,7 +50,11 @@ import com.socialcoisa.rede.shared.web.TestAuthHelper;
  */
 @SpringBootTest
 @AutoConfigureMockMvc
+@TestPropertySource(properties = "rede.storage.max-bytes-per-owner=" + S3MultipartTests.COTA)
 class S3MultipartTests {
+
+	/** Cota de 20 MiB: três partes de 6 MiB cabem, a quarta não. */
+	static final long COTA = 20L * 1024 * 1024;
 
 	private static final String SECRET = "segredo-do-cenario-multipart";
 	private static final String ACCESS_KEY_PREFIX = "AKIAENOISMPU";
@@ -287,6 +292,45 @@ class S3MultipartTests {
 		assertThat(partes.getResponse().getStatus()).isEqualTo(200);
 		assertThat(partes.getResponse().getContentAsString()).contains("<PartNumber>1</PartNumber>");
 		concluir(chave, uploadId, 1);
+	}
+
+	/**
+	 * As partes de um multipart <b>contam contra a cota do participante antes de a conclusão chegar</b>.
+	 *
+	 * <p><b>Antes:</b> a cota era conferida na abertura do upload e na conclusão, e <b>nunca</b> nas
+	 * partes. Um participante com cota de 1 MB podia abrir um multipart, mandar 10 000 partes de 5 MiB
+	 * (o teto de número de parte) e nunca concluir: 50 GiB em disco, com a cota só olhando quando já
+	 * era tarde demais. O {@code abort} existe, mas depende de quem enviou querer — e quem abusa não
+	 * quer.</p>
+	 *
+	 * <p><b>Agora:</b> cada parte confere {@code usado + bytes das partes abertas + esta parte} contra
+	 * a cota, com o mesmo {@code 507} da conclusão. O que o teste discrimina é o <b>momento</b>: a
+	 * recusa chega no envio da parte, com o upload ainda aberto — não na conclusão, e não depois.</p>
+	 */
+	@Test
+	void parte_que_estoura_a_cota_e_recusada_no_envio() throws Exception {
+		String chave = "grande/%s.bin".formatted(sufixo());
+		String uploadId = abrir(chave);
+
+		// Duas partes de 6 MiB caberiam no teto do objeto; a cota (20 MiB) não as aceita juntas.
+		enviarParte(chave, uploadId, 1, bytes('a', 6 * 1024 * 1024));
+
+		// 3 partes de 6 MiB = 18 MiB; outra de 6 MiB passa de 20 MiB.
+		enviarParte(chave, uploadId, 2, bytes('b', 6 * 1024 * 1024));
+		enviarParte(chave, uploadId, 3, bytes('c', 6 * 1024 * 1024));
+		byte[] quarta = bytes('d', 6 * 1024 * 1024);
+		var estouro = mockMvc.perform(assinar(put("/s3/" + bucket + "/" + chave)
+			.param("partNumber", "4").param("uploadId", uploadId).content(quarta), shaOfBytes(quarta)))
+			.andReturn();
+		assertThat(estouro.getResponse().getStatus()).as("a cota tem de morder no envio da parte")
+			.isEqualTo(507);
+		assertThat(estouro.getResponse().getContentAsString()).contains("QuotaExceeded");
+
+		// O upload continua aberto e o que já chegou continua lá: recusar uma parte não apaga as outras.
+		var partes = mockMvc.perform(assinar(get("/s3/" + bucket + "/" + chave).param("uploadId", uploadId),
+			shaVazio())).andReturn();
+		assertThat(partes.getResponse().getContentAsString()).contains("<PartNumber>3</PartNumber>")
+			.doesNotContain("<PartNumber>4</PartNumber>");
 	}
 
 	// ------------------------------------------------------------------ apoio

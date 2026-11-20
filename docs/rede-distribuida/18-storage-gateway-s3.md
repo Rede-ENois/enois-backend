@@ -429,6 +429,34 @@ seguinte conclui com um objeto e sem token; um objeto com `max-keys=10`: última
 voltar `found.size() == maxKeys`; nunca truncar; espiar mas devolver a linha extra — **3 de 3
 derrubam**.
 
+### 4.7 A parte multipart conta contra a cota <b>no envio</b> (ciclo 87)
+
+A cota por participante era conferida na abertura do upload (`beginUpload`) e na conclusão
+(`finishUpload`) — e **nunca nas partes**. Um participante com cota de 1 MB abria um multipart, mandava
+10 000 partes de 5 MiB (o máximo de numeração do protocolo) e nunca concluía: **50 GiB de disco
+reservados**, com a cota só olhando quando já era tarde. O `AbortMultipartUpload` existe, mas quem abusa
+não o chama, e o coletor de vencidos só age depois do TTL.
+
+Agora `UploadPart` confere `usado + partes abertas da conta + esta parte` contra a cota, com o `507` da
+conclusão:
+
+| quando | o que é conferido |
+|---|---|
+| parte com `Content-Length` | a conta fecha **antes** de ler — nada é gravado para depois ser recusado |
+| parte sem tamanho declarado (chunks) | a conta fecha com o tamanho **medido**, antes de o temporário virar a parte |
+| reenvio da mesma parte | a parte anterior sai da conta, então reenviar não soma duas vezes |
+
+Dois detalhes que o ciclo fechou junto:
+
+- **o teto de objeto para de ler** no multipart, como no `PUT` simples (ciclo 86): `lerNoMaximo` pede no
+  máximo o que falta até "teto + 1", em vez de puxar mais um bloco de 64 KiB para responder `413`;
+- **a recusa sai no vocabulário do S3**: `507 QuotaExceeded` em XML, não o JSON do Control Plane. O `PUT`
+  simples traduzia e o `UploadPart` não; a tradução virou um ponto único (`noVocabularioDoS3`).
+
+**Verificação:** `S3MultipartTests` **+1** com cota de 20 MiB: três partes de 6 MiB passam, a quarta recebe
+`507 QuotaExceeded`, e o upload continua inteiro (as partes 1–3 seguem lá). Mutações: a parte não
+confere a cota; a cota ignora as partes abertas; sem a tradução ao SDK — **3 de 3 derrubam**.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
