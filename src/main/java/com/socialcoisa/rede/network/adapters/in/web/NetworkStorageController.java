@@ -9,7 +9,7 @@ import java.util.Map;
 import jakarta.servlet.http.HttpServletRequest;
 
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -25,6 +25,7 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 import com.socialcoisa.rede.network.application.NodeKeyService;
 import com.socialcoisa.rede.network.application.NodeStorageInventory;
 import com.socialcoisa.rede.network.application.StorageCatalogService;
+import com.socialcoisa.rede.network.application.StorageContentService;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.ByteRange;
 import com.socialcoisa.rede.network.domain.CachePolicy;
@@ -94,7 +95,9 @@ class NetworkStorageController {
 			throw new ApiException(409, "STORAGE_PLACEMENT_MISSING",
 				"O catalogo diz que o objeto existe, mas nao ha copia registrada em no nenhum.");
 		}
-		ResponseEntity.BodyBuilder response = ResponseEntity.ok()
+		// Status explícito e corpo livre: com `StreamingResponseBody` o Spring não intercede no
+		// 304 (ver a nota em `StorageContentService`).
+		ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatusCode.valueOf(200))
 			.header(HttpHeaders.CONTENT_TYPE, object.contentType())
 			.header(HttpHeaders.CONTENT_LENGTH, String.valueOf(object.bytes()))
 			// Entrega a um NÓ, não a um cliente: cache no caminho não tem a quem servir e guardaria
@@ -137,10 +140,13 @@ class NetworkStorageController {
 		CachePolicy policy = CachePolicy.forContentType(object.contentType());
 		String etag = "\"" + object.sha256() + "\"";
 
-		// Pedido condicional: o cliente que já tem o conteúdo não paga o corpo de novo. Comparado
-		// pelo digest, porque o objeto do catálogo é imutável — o sha-256 É a identidade do conteúdo.
-		if (matches(etag, request == null ? null : request.getHeader(HttpHeaders.IF_NONE_MATCH))) {
-			ResponseEntity.BodyBuilder notModified = ResponseEntity.status(HttpStatus.NOT_MODIFIED)
+		// Pedido condicional: o cliente que já tem o conteúdo não paga o corpo de novo. Por ETag
+		// (o sha-256 É a identidade do conteúdo, que é imutável) ou, sem If-None-Match, por data —
+		// é a regra de `StorageContentService`, a mesma do gateway S3.
+		if (StorageContentService.notModified(object, etag,
+				request == null ? null : request.getHeader(HttpHeaders.IF_NONE_MATCH),
+				request == null ? null : request.getHeader(HttpHeaders.IF_MODIFIED_SINCE))) {
+			ResponseEntity.BodyBuilder notModified = ResponseEntity.status(HttpStatusCode.valueOf(304))
 				.header(HttpHeaders.ETAG, etag)
 				.header(HttpHeaders.CACHE_CONTROL, policy.headerValue());
 			if (object.updatedAt() != null) {
@@ -155,28 +161,29 @@ class NetworkStorageController {
 			range = ByteRange.parse(rangeHeader, total);
 		}
 		catch (ByteRange.Unsatisifiable impossible) {
-			return ResponseEntity.status(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+			return ResponseEntity.status(HttpStatusCode.valueOf(416))
 				.header(HttpHeaders.CONTENT_RANGE, "bytes */" + total)
 				.header(HttpHeaders.ETAG, etag)
 				.build();
 		}
 		if (range.isPresent()) {
 			ByteRange bytes = range.get();
-			response = ResponseEntity.status(HttpStatus.PARTIAL_CONTENT)
+			response = ResponseEntity.status(HttpStatusCode.valueOf(206))
 				.header(HttpHeaders.CONTENT_RANGE, bytes.contentRange())
 				.header(HttpHeaders.CONTENT_LENGTH, String.valueOf(bytes.length()))
 				.header(HttpHeaders.ACCEPT_RANGES, "bytes");
 			long skip = bytes.start();
 			long limit = bytes.length();
-			ResponseEntity.BodyBuilder partial = response;
-			return finish(partial, object, policy, etag).body(output -> writeSlice(storage.readBody(object.id()),
-				output, skip, limit));
+			ResponseEntity.BodyBuilder parcial = response;
+			return finish(parcial, object, policy, etag)
+				.body((StreamingResponseBody) output -> writeSlice(storage.readBody(object.id()), output, skip, limit));
 		}
 		// Corpo inteiro: 200 com Accept-Ranges para o cliente saber que pode pedir faixas depois.
-		ResponseEntity.BodyBuilder whole = ResponseEntity.ok()
+		ResponseEntity.BodyBuilder inteiro = ResponseEntity.ok()
 			.header(HttpHeaders.CONTENT_LENGTH, String.valueOf(total))
 			.header(HttpHeaders.ACCEPT_RANGES, "bytes");
-		return finish(whole, object, policy, etag).body(output -> writeBody(storage.readBody(object.id()), output));
+		return finish(inteiro, object, policy, etag)
+			.body((StreamingResponseBody) output -> writeBody(storage.readBody(object.id()), output));
 	}
 
 	private static ResponseEntity.BodyBuilder finish(ResponseEntity.BodyBuilder builder, StorageObject object,
@@ -185,25 +192,6 @@ class NetworkStorageController {
 			.header(HttpHeaders.CACHE_CONTROL, policy.headerValue())
 			.eTag(etag)
 			.lastModified(object.updatedAt() == null ? null : object.updatedAt().toEpochMilli());
-	}
-
-	/**
-	 * O {@code If-None-Match} bate com o {@code ETag}? Aceita {@code *} e lista, como a RFC manda.
-	 * A comparação é <b>fraca</b> ({@code W/} ignorado) porque o digest identifica o conteúdo, não a
-	 * representação de transporte.
-	 */
-	private static boolean matches(String etag, String ifNoneMatch) {
-		if (ifNoneMatch == null || ifNoneMatch.isBlank()) {
-			return false;
-		}
-		String wanted = etag.replace("W/", "");
-		for (String candidate : ifNoneMatch.split(",")) {
-			String item = candidate.trim().replace("W/", "");
-			if ("*".equals(item) || item.equals(wanted)) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 	/** Escreve só a faixa pedida: pular até o início e copiar o número de bytes da faixa. */
