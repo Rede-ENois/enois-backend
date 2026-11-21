@@ -443,6 +443,30 @@ class S3MultipartTests {
 			+ " and object_key = ?", Long.class, bucket, chave)).isEqualTo(6L * 1024 * 1024 + 1);
 	}
 
+	/**
+	 * UploadPartCopy também não é implementado: a parte com {@code x-amz-copy-source} é recusada.
+	 *
+	 * <p><b>Antes:</b> o {@code UploadPart} aceitava o cabeçalho de cópia e gravava uma parte de 0
+	 * byte com {@code 200}. O {@code CompleteMultipartUpload} montava um objeto menor do que o
+	 * cliente pediu, e a cópia "concluída" não tinha os bytes da origem.</p>
+	 */
+	@Test
+	void parte_de_copia_e_recusada_e_nao_vira_parte_vazia() throws Exception {
+		String chave = "copia/%s.bin".formatted(sufixo());
+		String uploadId = abrir(chave);
+
+		MockHttpServletRequestBuilder requisicao = put("/s3/" + bucket + "/" + chave)
+			.param("partNumber", "1").param("uploadId", uploadId)
+			.header("x-amz-copy-source", "/" + bucket + "/origem.bin")
+			.content(new byte[0]);
+		var resposta = mockMvc.perform(assinar(requisicao, shaVazio())).andReturn();
+
+		assertThat(resposta.getResponse().getStatus()).isEqualTo(501);
+		assertThat(resposta.getResponse().getContentAsString()).contains("<Code>NotImplemented</Code>");
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_multipart_parts where upload_id = ?",
+			Integer.class, uploadId)).isZero();
+	}
+
 	// ------------------------------------------------------------------ apoio
 
 	private String abrir(String chave) throws Exception {
