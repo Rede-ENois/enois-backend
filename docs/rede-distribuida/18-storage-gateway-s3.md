@@ -540,6 +540,27 @@ com `<Code>NotImplemented</Code>`, a chave de destino não existe (`HEAD` 404) e
 `network_storage_multipart_parts` continua vazia. Mutações: tirar a guarda do `PUT` e tirar a guarda
 do `UploadPart` — **2 de 2 derrubam**.
 
+### 4.11 O corpo montado sai do disco quando a conclusão falha (ciclo 91)
+
+A conclusão do multipart monta as partes num arquivo só, dentro de
+`<storageRoot>/multipart/<uploadId>/`, e só então chama o `finishUpload`. O `finally` que apagava
+esse temporário cobria apenas a releitura do arquivo. Quando a **gravação** recusava — cota do
+participante, falha de I/O do catálogo, disco cheio —, a exceção subia por fora dele e o corpo
+inteiro, em claro, ficava no diretório do upload.
+
+O varredor de sobras não o recolhia: ele só apaga diretório **sem** upload correspondente, e a linha
+do upload existe (o cliente ainda pode enviar outra parte). O upload aberto passava a ocupar o dobro
+do próprio tamanho, sem que a cota, o catálogo ou o relatório soubessem.
+
+Agora a montagem, o sha do arquivo, a abertura e a gravação estão num `try` só, com a limpeza no
+`catch` (qualquer `RuntimeException`) e no caminho de sucesso. O diretório do upload fica com as
+partes — e só com elas — até o cliente concluir ou abortar.
+
+**Verificação:** `StorageMultipartBodyCleanupTests` **+2** — a conclusão com a gravação recusando
+deixa o diretório com `part-1` e nenhum `.montado-*.tmp`; a conclusão recusada antes da montagem
+(parte que não chegou) nem cria o diretório. Mutação: devolver o `finally` só na releitura (sem a
+limpeza no `catch`) — **derruba** ("but some elements were not expected": o `.montado-0xxx.tmp`).
+
 ### 4.12 A lista de partes da conclusão é estritamente crescente (ciclo 92)
 
 O `CompleteMultipartUpload` recebe a lista de partes na ordem em que elas formam o arquivo. A
