@@ -16,7 +16,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -121,6 +123,17 @@ public class StorageCatalogService {
 	 * primeira leitura. É cache, não fonte da verdade: a fonte é {@code bytesOwnedBy}.
 	 */
 	private final Map<String, Long> usadoPorDono = new java.util.concurrent.ConcurrentHashMap<>();
+	/**
+	 * O banco, para a única conta de cota que o catálogo não consegue fazer sozinho: o que o
+	 * multipart tem <b>reservado</b> por conta, em partes abertas.
+	 *
+	 * <p>A abertura do upload precisa dessa conta: sem ela, quem já ocupou a cota em partes passava
+	 * pela abertura e só descobria na conclusão (o ciclo 87 cobrou as partes no envio; o ciclo 89
+	 * fecha a outra ponta). Nulo = instalação sem banco para essa conta (teste unitário), e aí o
+	 * reservado é zero.</p>
+	 */
+	@Nullable
+	private final JdbcTemplate jdbc;
 
 	/**
 	 * A forma anterior, sem chave: instalação que ainda não configurou a mestra grava em claro. Os
@@ -150,19 +163,22 @@ public class StorageCatalogService {
 			@Value("${rede.security.encryption-key:}") String encryptionKey,
 			StoragePlacementService placement, @Nullable NodeBodyStore nodeBodies,
 			@Nullable StorageOperationMetrics metrics) {
-		this(catalog, audit, clock, maxObjectBytes, storageRoot, encryptionKey, placement, nodeBodies, metrics, 0L);
+		this(catalog, audit, clock, maxObjectBytes, storageRoot, encryptionKey, placement, nodeBodies, metrics, 0L,
+			null);
 	}
 
 	/** A forma com cota por participante — é a que o Spring injeta (doc 20 §10). */
-	@org.springframework.beans.factory.annotation.Autowired
+	@Autowired
 	StorageCatalogService(StorageCatalogRepository catalog, AuditTrail audit, Clock clock,
 			@Value("${rede.storage.max-object-bytes:5368709120}") long maxObjectBytes,
 			@Value("${rede.storage.root:${java.io.tmpdir}/enois-storage}") String storageRoot,
 			@Value("${rede.security.encryption-key:}") String encryptionKey,
 			StoragePlacementService placement, @Nullable NodeBodyStore nodeBodies,
 			@Nullable StorageOperationMetrics metrics,
-			@Value("${rede.storage.max-bytes-per-owner:0}") long maxBytesPerOwner) {
+			@Value("${rede.storage.max-bytes-per-owner:0}") long maxBytesPerOwner,
+			@Nullable JdbcTemplate jdbc) {
 		this.maxBytesPerOwner = Math.max(0, maxBytesPerOwner);
+		this.jdbc = jdbc;
 		this.catalog = catalog;
 		this.audit = audit;
 		this.clock = clock;
@@ -181,6 +197,21 @@ public class StorageCatalogService {
 	 */
 	@Transactional
 	public StorageObject beginUpload(String actorId, String bucket, String key, String contentType) {
+		return beginUpload(actorId, bucket, key, contentType, true);
+	}
+
+	/**
+	 * A abertura do upload, com a conta da cota <b>já feita por quem chamou</b>.
+	 *
+	 * <p>A multipart conclui passando {@code false}: as partes daquele upload <b>são</b> o corpo que
+	 * está chegando. Cobrá-las outra vez na conclusão fazia um objeto de 4 partes acima do mínimo
+	 * de 5 MiB cada (mais de 20 MiB — tudo o que o SDK manda) nunca concluir numa cota de 20 MiB,
+	 * mesmo com o corpo já reservado. A conclusão cobra uma conta só: o corpo montado (<code>
+	 * finishUpload</code>), que é o objeto que vai nascer.</p>
+	 */
+	@Transactional
+	public StorageObject beginUpload(String actorId, String bucket, String key, String contentType,
+			boolean cobrarPartesReservadas) {
 		validateBucket(bucket);
 		validateKey(key);
 		String type = contentType == null || contentType.isBlank() ? "application/octet-stream" : contentType;
@@ -188,7 +219,10 @@ public class StorageCatalogService {
 		// A cota é cobrada <b>antes</b> de tudo: um objeto PENDING derrubado pela cota deixaria a
 		// chave ocupada até virar lápide, e o upload seguinte do mesmo participante não poderia
 		// reusar a chave.
-		exigirCotaDoParticipante(actorId);
+		//
+		// A conta inclui as partes de multipart abertas: quem já reservou espaço em partes não
+		// passa por aqui só porque ainda não ganhou um byte no catálogo.
+		exigirCotaDoParticipante(actorId, 0, cobrarPartesReservadas ? reservadoEmPartes(actorId) : 0);
 		StorageBucketPolicy policy = bucketPolicy(bucket);
 
 		if (policy.versioning()) {
@@ -381,6 +415,20 @@ public class StorageCatalogService {
 	 * tamanho e o corpo vazio ao cliente — porque é o cliente que erra, e o erro tem de ser 413/400,
 	 * não 500.</p>
 	 */
+	public StorageObject finishUpload(String objectId, InputStream body, String actorId,
+			boolean cobrarPartesReservadas) {
+		long inicio = System.nanoTime();
+		try {
+			StorageObject gravado = doFinishUpload(objectId, body, actorId, cobrarPartesReservadas);
+			conta("PUT", StorageOperationMetrics.Resultado.OK, inicio);
+			return gravado;
+		}
+		catch (RuntimeException recusado) {
+			conta("PUT", resultadoDe(recusado), inicio);
+			throw recusado;
+		}
+	}
+
 	public StorageObject finishUpload(String objectId, InputStream body, String actorId) {
 		long inicio = System.nanoTime();
 		try {
@@ -397,6 +445,19 @@ public class StorageCatalogService {
 	}
 
 	private StorageObject doFinishUpload(String objectId, InputStream body, String actorId) {
+		return doFinishUpload(objectId, body, actorId, true);
+	}
+
+	/**
+	 * A gravação do corpo, com a conta da cota escolhida por quem chama.
+	 *
+	 * <p>{@code cobrarPartesReservadas=false} é a conclusão do multipart: as partes daquele upload
+	 * <b>são</b> o corpo que está chegando, já cobradas no envio de cada uma. Somá-las de novo na
+	 * conclusão fazia o objeto nunca nascer numa cota apertada, embora o espaço já estivesse
+	 * reservado.</p>
+	 */
+	private StorageObject doFinishUpload(String objectId, InputStream body, String actorId,
+			boolean cobrarPartesReservadas) {
 		StorageObject object = catalog.findById(objectId)
 			.orElseThrow(() -> new ApiException(404, "STORAGE_OBJECT_UNKNOWN", "Objeto nao encontrado no catalogo."));
 		if (object.state() != StorageObjectState.PENDING) {
@@ -414,7 +475,8 @@ public class StorageCatalogService {
 		}
 		try {
 			// O corpo já foi medido: a cota cobra o tamanho, e não só o que já está gravado.
-			exigirCotaDoParticipante(actorId, measured.bytes());
+			exigirCotaDoParticipante(actorId, measured.bytes(),
+				cobrarPartesReservadas ? reservadoEmPartes(actorId) : 0);
 		}
 		catch (RuntimeException semCota) {
 			deleteQuietly(measured.temp());
@@ -473,14 +535,53 @@ public class StorageCatalogService {
 	 * uma segunda regra de espaço para quem opera descobrir.</p>
 	 */
 	void exigirCotaDoParticipante(String actorId) {
+		exigirCotaDoParticipante(actorId, 0, reservadoEmPartes(actorId));
+	}
+
+	/** O reservado em partes abertas desta conta — zero quando a instalação não tem multipart. */
+	private long reservadoEmPartes(String actorId) {
+		if (jdbc == null || maxBytesPerOwner <= 0 || actorId == null || actorId.isBlank()) {
+			return 0;
+		}
+		Long valor = jdbc.queryForObject("""
+			select coalesce(sum(p.bytes), 0) from network_storage_multipart_parts p
+			join network_storage_multipart_uploads u on u.upload_id = p.upload_id
+			where u.owner_user_id = ?
+			""", Long.class, actorId);
+		return valor == null ? 0 : Math.max(0, valor);
+	}
+
+	/**
+	 * A cota de uma conta, com o que ela ocupa e o que ela reserva.
+	 *
+	 * <p><b>Antes</b> a abertura ({@code beginUpload}) só perguntava {@code usado >= limite}: o espaço
+	 * reservado em partes de multipart aberto era invisível ali, então quem tinha a cota inteira em
+	 * partes ainda abria um upload e só descobria na conclusão — depois de o corpo ter percorrido a
+	 * rede e sido montado em disco. O {@code >=} também deixava passar a abertura de uma conta
+	 * exatamente no limite, que só podia terminar em {@code 507} de qualquer forma.</p>
+	 *
+	 * <p><b>Agora</b> a mesma conta ({@code usado + reservado + esta parte}) vale na abertura e no
+	 * envio da parte, e a abertura recusa já quando o reservado sozinho não deixa espaço. A mensagem
+	 * carrega os dois números quando há reservado — o participante precisa saber que o espaço que
+	 * falta está num upload aberto, e não em objeto gravado.</p>
+	 */
+	void exigirCotaDoParticipante(String actorId, long acrescimo, long reservado) {
 		if (maxBytesPerOwner <= 0 || actorId == null || actorId.isBlank()) {
 			return;
 		}
 		long usado = usadoPorDono.computeIfAbsent(actorId, catalog::bytesOwnedBy);
-		if (usado >= maxBytesPerOwner) {
+		// `>=` no que não cresce: uma conta já cheia — ou com o espaço todo reservado em partes —
+		// não abre upload que só pode terminar em 507. Com uma gravação em curso, a conta é `>`:
+		// cabe exatamente o que sobra.
+		boolean cheio = acrescimo <= 0 ? usado + Math.max(0, reservado) >= maxBytesPerOwner
+			: usado + Math.max(0, reservado) + acrescimo > maxBytesPerOwner;
+		if (cheio) {
+			String emPartes = reservado > 0
+				? ", tem " + reservado + " em partes abertas" : "";
 			throw new ApiException(507, "STORAGE_OWNER_QUOTA_EXCEEDED",
-				"O participante ja ocupa " + usado + " bytes e a cota desta instalacao e "
-					+ maxBytesPerOwner + " bytes.");
+				"O participante ja ocupa " + usado + " bytes" + emPartes + (acrescimo > 0
+					? ", esta gravacao soma " + acrescimo : "")
+					+ " e a cota desta instalacao e " + maxBytesPerOwner + " bytes.");
 		}
 	}
 
@@ -525,15 +626,7 @@ public class StorageCatalogService {
 	 * continua válido).</p>
 	 */
 	void exigirCotaDoParticipante(String actorId, long acrescimo) {
-		if (maxBytesPerOwner <= 0 || actorId == null || actorId.isBlank()) {
-			return;
-		}
-		long usado = usadoPorDono.computeIfAbsent(actorId, catalog::bytesOwnedBy);
-		if (usado + acrescimo > maxBytesPerOwner) {
-			throw new ApiException(507, "STORAGE_OWNER_QUOTA_EXCEEDED",
-				"O participante ja ocupa " + usado + " bytes, esta gravacao soma " + acrescimo
-					+ " e a cota desta instalacao e " + maxBytesPerOwner + " bytes.");
-		}
+		exigirCotaDoParticipante(actorId, acrescimo, reservadoEmPartes(actorId));
 	}
 
 	/**
@@ -549,17 +642,8 @@ public class StorageCatalogService {
 	 * reservado no envio da parte, não na conclusão — é ali que ele passa a ocupar disco.</p>
 	 */
 	void exigirCotaDasPartes(String actorId, long reservedPartsBytes, long estaParte) {
-		if (maxBytesPerOwner <= 0 || actorId == null || actorId.isBlank()) {
-			return;
-		}
-		long usado = usadoPorDono.computeIfAbsent(actorId, catalog::bytesOwnedBy);
-		long reservado = Math.max(0, reservedPartsBytes) + Math.max(0, estaParte);
-		if (usado + reservado > maxBytesPerOwner) {
-			throw new ApiException(507, "STORAGE_OWNER_QUOTA_EXCEEDED",
-				"O participante ja ocupa " + usado + " bytes e tem " + Math.max(0, reservedPartsBytes)
-					+ " em partes abertas, e esta parte soma " + Math.max(0, estaParte)
-					+ "; a cota desta instalacao e " + maxBytesPerOwner + " bytes.");
-		}
+		// A conta é a mesma da abertura e da conclusão — um ponto só, para as três não divergirem.
+		exigirCotaDoParticipante(actorId, Math.max(0, estaParte), Math.max(0, reservedPartsBytes));
 	}
 
 	/**

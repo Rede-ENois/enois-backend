@@ -96,7 +96,7 @@ class StorageObjectCeilingTests {
 		when(nodes.findCandidates(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyInt()))
 			.thenReturn(List.of());
 		service = new StorageCatalogService(catalog, mock(AuditTrail.class), Clock.fixed(NOW, ZoneOffset.UTC),
-			TETO, root.toString(), "", new StoragePlacementService(nodes, catalog, 0, 90), null, null, 0);
+			TETO, root.toString(), "", new StoragePlacementService(nodes, catalog, 0, 90), null, null, 0, null);
 	}
 
 	private static long temporariosNo(Path root) throws Exception {

@@ -325,14 +325,17 @@ public class StorageMultipartService {
 		// novo — o que a conclusão devolve é o que foi gravado, não o que ela calculou.
 		String etag = sha256DoArquivo(montado);
 
+		// A cota das partes já foi cobrada no envio de cada uma: na conclusão, o reservado deste
+		// upload É o corpo que está chegando, e cobrá-lo duas vezes faria a conclusão falhar sempre
+		// que o objeto não fosse minúsculo. Quem cobra agora é o `finishUpload`, pelo corpo montado.
 		com.socialcoisa.rede.network.domain.StorageObject pendente = storage.beginUpload(upload.ownerUserId(),
-			upload.bucket(), upload.key(), upload.contentType());
+			upload.bucket(), upload.key(), upload.contentType(), false);
 		// O metadado do CreateMultipartUpload vai para o objeto, como o do PUT simples: o cliente
 		// declarou uma vez, no começo, e espera reencontrá-lo no HEAD e no GET (V367).
 		storage.saveClientHeaders(pendente, upload.cabecalhos());
 		com.socialcoisa.rede.network.domain.StorageObject gravado;
 		try (InputStream corpo = Files.newInputStream(montado)) {
-			gravado = storage.finishUpload(pendente.id(), corpo, upload.ownerUserId());
+			gravado = storage.finishUpload(pendente.id(), corpo, upload.ownerUserId(), false);
 		}
 		catch (IOException unreadable) {
 			throw new ApiException(500, "InternalError", "Nao foi possivel reler o corpo montado.");

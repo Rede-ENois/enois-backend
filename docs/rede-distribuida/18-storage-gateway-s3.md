@@ -488,6 +488,39 @@ que o cursor exige. É a mesma régua da varredura (`listAll`) e do painel, que 
 numa página só. Mutações: voltar `state <> 'DELETED'`; aceitar `PENDING` sem a conferência de versão —
 **as duas derrubam**.
 
+### 4.9 O espaço reservado em partes conta na abertura, não só na gravação (ciclo 89)
+
+O ciclo 87 fez a cota morder no **envio** de cada parte. Faltava a outra ponta: a **abertura** do
+próximo upload (`beginUpload`) olhava só o que já havia virado objeto. Quem tinha a cota inteira em
+partes de multiparts abertos abria outro upload sem recusa — a chave nascia `PENDING`, o corpo
+atravessava a rede e só a gravação recusava, depois de o participante ter pago o upload inteiro. O
+limite deixava de ser um limite.
+
+Agora as três medidas do multipart usam **uma conta só** (`exigirCotaDoParticipante`):
+
+| momento | a conta | para quê |
+|---|---|---|
+| abertura (`beginUpload`) | `usado + partes abertas` **≥** cota → recusa | a chave nem nasce; o corpo nem vem |
+| envio da parte (`UploadPart`) | `usado + partes abertas + esta parte` > cota → recusa | antes de ler (`Content-Length`) ou de gravar |
+| conclusão (`CompleteMultipartUpload`) | `usado + corpo montado` > cota → recusa | **sem** somar as partes deste upload |
+
+O `>=` na abertura é o da regra original: uma conta exatamente no limite não abre upload que só pode
+terminar em `507`. Com uma gravação em curso, a conta é `>` — cabe exatamente o que sobra.
+
+**A conclusão não soma as próprias partes.** Elas **são** o corpo que está chegando, já cobradas no
+envio. Somá-las outra vez fazia dois multiparts de 10 MiB numa cota de 20 MiB nunca concluírem: o
+primeiro somava 10 (seu) + 10 (o outro) contra a cota e recusava, com o corpo inteiro já montado em
+disco. `beginUpload(..., cobrarPartesReservadas=false)` e `finishUpload(..., false)` existem para isso.
+
+**A recusa da abertura fala S3.** O `PUT` simples traduzia a cota no `catch` da *gravação*, que a
+abertura nunca alcança: o `507` de lá saía no JSON do Control Plane, e o SDK não reconhece o `Code`.
+
+**Verificação:** `S3MultipartTests` **+2** — 20 MiB reservados em dois multiparts: o `PUT` de 4 MiB
+recebe `507 QuotaExceeded` com `20971520 em partes abertas` e **a chave não nasce**; abortado um, a
+mesma gravação passa. Dois multiparts de 10 MiB: o primeiro **conclui** com o corpo de 10 MiB gravado.
+Mutações: a abertura ignora o reservado; a conclusão cobra as partes de novo; a abertura sem a tradução
+ao S3 — **3 de 3 derrubam**.
+
 ### 4.10 Cópia no servidor é recusada antes de virar objeto (ciclo 90)
 
 `CopyObject` e `UploadPartCopy` não existem neste gateway. O cabeçalho que os pede,
