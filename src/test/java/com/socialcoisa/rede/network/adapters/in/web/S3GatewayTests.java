@@ -637,6 +637,87 @@ class S3GatewayTests {
 		assertThat(xml).contains("xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"");
 	}
 
+	/**
+	 * {@code delimiter=/} agrupa as chaves em {@code CommonPrefixes}, como o S3 — e o grupo conta
+	 * como <b>uma</b> entrada no {@code MaxKeys}.
+	 *
+	 * <p><b>Antes:</b> o parâmetro era aceito e ignorado. Um cliente que navega "pastas" (rclone,
+	 * boto3, aws-cli, a maioria dos SDKs pede {@code delimiter=/} por padrão) recebia
+	 * {@code a/x/y.jpg} como {@code <Key>} em vez de ver a pasta {@code a/x/}. A navegação aparecia
+	 * como centenas de arquivos soltos e as subpastas nunca eram oferecidas.</p>
+	 *
+	 * <p><b>Agora:</b> chave que tem o delimitador depois do prefixo não vira {@code Contents}; o
+	 * trecho até o delimitador vira {@code <CommonPrefixes><Prefix>…</Prefix></CommonPrefixes>}, uma
+	 * vez por grupo, em ordem. O que está direto no prefixo continua {@code Contents}.</p>
+	 */
+	@Test
+	void delimiter_agrupa_subpastas_em_common_prefixes() throws Exception {
+		gravar("fotos/raiz.jpg", "r");
+		gravar("fotos/2025/um.jpg", "um");
+		gravar("fotos/2025/dois.jpg", "dois");
+		gravar("fotos/2026/tres.jpg", "tres");
+
+		MockHttpServletRequestBuilder list = get("/s3/" + bucket).queryParam("list-type", "2")
+			.queryParam("prefix", "fotos/").queryParam("delimiter", "/");
+		assinar(list, SECRET, shaVazio());
+		var result = mockMvc.perform(list).andExpect(status().isOk()).andReturn();
+
+		String xml = result.getResponse().getContentAsString();
+		// O que está direto no prefixo continua sendo chave.
+		assertThat(xml).contains("<Key>fotos/raiz.jpg</Key>");
+		// As subpastas viram prefixos, uma vez cada, e as chaves delas NÃO aparecem.
+		assertThat(xml).contains("<CommonPrefixes><Prefix>fotos/2025/</Prefix></CommonPrefixes>");
+		assertThat(xml).contains("<CommonPrefixes><Prefix>fotos/2026/</Prefix></CommonPrefixes>");
+		assertThat(xml).doesNotContain("fotos/2025/um.jpg").doesNotContain("fotos/2026/tres.jpg");
+		// 1 chave + 2 prefixos.
+		assertThat(xml).contains("<KeyCount>3</KeyCount>");
+	}
+
+	/**
+	 * Com {@code delimiter}, cada subpasta é <b>uma</b> entrada do {@code MaxKeys} — e a segunda
+	 * página continua de onde a primeira parou.
+	 *
+	 * <p>Sem esta conta, uma página com {@code max-keys=2} que tivesse dez arquivos dentro de
+	 * {@code fotos/} não caberia: ou estouraria o teto (o cliente pediu 2 e recebia 10) ou o token
+	 * apontaria para a última chave lida, e o cliente repetiria o mesmo grupo na página seguinte —
+	 * em ambos os casos um cliente que pagina nunca termina.</p>
+	 */
+	@Test
+	void delimiter_pagina_contando_cada_grupo_uma_vez() throws Exception {
+		gravar("p/a.txt", "a");
+		gravar("p/sub/1.txt", "1");
+		gravar("p/sub/2.txt", "2");
+		gravar("p/z.txt", "z");
+
+		MockHttpServletRequestBuilder primeiro = get("/s3/" + bucket).queryParam("list-type", "2")
+			.queryParam("prefix", "p/").queryParam("delimiter", "/").queryParam("max-keys", "2");
+		assinar(primeiro, SECRET, shaVazio());
+		String xml1 = mockMvc.perform(primeiro).andExpect(status().isOk()).andReturn()
+			.getResponse().getContentAsString()
+			.replaceAll("<\\?xml[^>]*>", "")
+			.replace("xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"", "");
+		// A ordem é a das chaves: `p/a.txt`, depois o grupo `p/sub/`.
+		assertThat(xml1).contains("<Key>p/a.txt</Key>");
+		assertThat(xml1).contains("<CommonPrefixes><Prefix>p/sub/</Prefix></CommonPrefixes>");
+		assertThat(xml1).doesNotContain("<Key>p/z.txt</Key>");
+		assertThat(xml1).contains("<IsTruncated>true</IsTruncated>");
+
+		var doc = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder()
+			.parse(new java.io.ByteArrayInputStream(xml1.getBytes(StandardCharsets.UTF_8)));
+		String token = doc.getElementsByTagName("NextContinuationToken").item(0).getTextContent();
+		assertThat(token).isEqualTo("p/sub/");
+
+		MockHttpServletRequestBuilder segundo = get("/s3/" + bucket).queryParam("list-type", "2")
+			.queryParam("prefix", "p/").queryParam("delimiter", "/").queryParam("max-keys", "2")
+			.queryParam("continuation-token", token);
+		assinar(segundo, SECRET, shaVazio());
+		String xml2 = mockMvc.perform(segundo).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+
+		assertThat(xml2).contains("<Key>p/z.txt</Key>");
+		assertThat(xml2).doesNotContain("<Key>p/a.txt</Key>");
+		assertThat(xml2).contains("<IsTruncated>false</IsTruncated>");
+	}
+
 	/** DeleteObject responde 204 e a chave deixa de ser servível — a lápide, como no S3 versionado. */
 	@Test
 	void delete_vira_lapide() throws Exception {

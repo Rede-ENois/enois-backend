@@ -595,6 +595,36 @@ tente de novo" — que é o que o cliente precisa para tentar outra vez em vez d
 `GET` e do `HEAD` — **2 de 2 derrubam**. Estado real de onde vem: a falha que o registro da cópia pode
 deixar depois de o objeto ser confirmado.
 
+## 4.14 `delimiter` agrupa em `CommonPrefixes` (ciclo 98)
+
+`GET /{bucket}?list-type=2&delimiter=/` era aceito e **ignorado**: toda chave saía como
+`<Contents><Key>…</Key></Contents>`, inclusive as de dentro de subpasta. A maioria dos clientes
+(rclone, boto3, aws-cli e os SDKs em geral) pede `delimiter=/` por padrão para navegar "pastas"; com
+o parâmetro ignorado, o que devia ser a pasta `fotos/2025/` aparecia como centenas de arquivos soltos,
+e a navegação nunca oferecia a subpasta.
+
+### Agora
+
+- chave que tem o delimitador **depois do `prefix`** não vira `Contents`: o trecho até a primeira
+  ocorrência vira `<CommonPrefixes><Prefix>…</Prefix></CommonPrefixes>`, uma vez por grupo, na ordem
+  das chaves;
+- o que está direto no `prefixo` continua `Contents` (`prefix=fotos/&delimiter=/` e a chave
+  `fotos/raiz.jpg` é chave, não grupo);
+- o `<Delimiter>` ecoa na resposta;
+- **cada grupo conta como uma entrada do `MaxKeys`**, como no S3, e o `NextContinuationToken`/
+  `NextMarker` é o último emitido — chave ou prefixo. Sem essa conta, uma página de `max-keys=2`
+  com dez arquivos dentro do mesmo grupo estouraria o teto, e o token repetiria o grupo na página
+  seguinte: um cliente que pagina nunca termina. Por isso a leitura do banco pede mais linhas quando
+  há agrupamento (cada grupo pode consumir várias), limitada a `MAX_LIST_LIMIT`.
+
+`delimiter` vazio equivale a ausente, e qualquer delimitador de um caractere vale (`/` é o comum).
+
+**Verificação:** `S3GatewayTests` **+2** — `prefix=fotos/&delimiter=/` devolve o grupo `fotos/2025/` e
+`fotos/2026/` uma vez cada (e as chaves deles fora de `Contents`), com `KeyCount` contando chave +
+prefixo; e a paginação com `max-keys=2` entrega `p/a.txt` + `p/sub/` na primeira página
+(`IsTruncated=true`, token `p/sub/`) e `p/z.txt` na segunda. Mutações: grupo não consumindo entrada do
+`MaxKeys`, e o grupo não agrupando (comportamento antigo) — **2 de 2 derrubam**.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:

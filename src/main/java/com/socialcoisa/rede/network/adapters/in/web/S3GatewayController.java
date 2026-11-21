@@ -161,33 +161,94 @@ class S3GatewayController {
 		int maxKeys = parseMaxKeys(query.get("max-keys"));
 		// `continuation-token` (v2) e `marker` (v1) são a mesma coisa: a chave da última página.
 		String after = v2 ? query.get("continuation-token") : query.get("marker");
+		String prefix = query.get("prefix");
+		String delimiter = query.get("delimiter");
+		// `delimiter` vazio é "sem agrupamento" na prática; o parâmetro do S3 é de um caractere.
+		if (delimiter != null && delimiter.isEmpty()) {
+			delimiter = null;
+		}
 		// Uma linha a mais do que a página: é ela que diz se há próxima. "Página cheia" e "há mais"
 		// eram a mesma conta antes, e um bucket com exatamente `max-keys` objetos saía truncado com
 		// token, mandando o cliente pedir uma página que não existia.
-		List<StorageObject> achados = storage.list(bucket, query.get("prefix"), after, maxKeys, true);
-		boolean truncated = achados.size() > maxKeys;
-		List<StorageObject> found = truncated ? achados.subList(0, maxKeys) : achados;
-		String lastKey = found.isEmpty() ? null : found.get(found.size() - 1).key();
+		//
+		// Com `delimiter`, cada grupo de subpasta conta como UMA entrada no `MaxKeys` — é assim no
+		// S3. Um grupo consome várias linhas do banco, então a leitura pede mais linhas quando há
+		// agrupamento: pedir só `maxKeys + 1` faria uma página curta com `IsTruncated=false` mesmo
+		// havendo objetos depois do último grupo lido.
+		int busca = delimiter == null ? maxKeys + 1 : Math.min(StorageCatalogService.MAX_LIST_LIMIT, (maxKeys + 1) * 10);
+		List<StorageObject> achados = storage.list(bucket, prefix, after, busca, true);
+		boolean talvezMais = achados.size() > (delimiter == null ? maxKeys : busca - 1);
+
+		List<StorageObject> chaves = new ArrayList<>();
+		java.util.LinkedHashSet<String> grupos = new java.util.LinkedHashSet<>();
+		int contados = 0;
+		String ultimoEmitido = null;
+		boolean truncated = false;
+		for (StorageObject object : achados) {
+			String grupo = delimiter == null ? null : grupoDe(object.key(), prefix, delimiter);
+			// O grupo já emitido não gasta entrada: todas as chaves dele só confirmam o mesmo prefixo.
+			if (grupo != null && grupos.contains(grupo)) {
+				ultimoEmitido = grupo;
+				continue;
+			}
+			if (contados >= maxKeys) {
+				truncated = true;
+				break;
+			}
+			contados++;
+			ultimoEmitido = grupo == null ? object.key() : grupo;
+			if (grupo == null) {
+				chaves.add(object);
+			}
+			else {
+				grupos.add(grupo);
+			}
+		}
+		// Sem linha extra e já no teto de linhas lidas: pode haver mais depois.
+		if (!truncated && chaves.size() + grupos.size() >= maxKeys && talvezMais) {
+			truncated = true;
+		}
 
 		S3Xml xml = new S3Xml();
 		xml.root("ListBucketResult").element("Name", bucket);
-		String prefix = query.get("prefix");
 		if (prefix != null) {
 			xml.element("Prefix", prefix);
 		}
-		xml.element("MaxKeys", maxKeys).element("KeyCount", found.size()).element("IsTruncated", truncated);
-		if (truncated && lastKey != null) {
-			xml.element(v2 ? "NextContinuationToken" : "NextMarker", lastKey);
+		if (delimiter != null) {
+			xml.element("Delimiter", delimiter);
 		}
-		for (StorageObject object : found) {
+		xml.element("MaxKeys", maxKeys).element("KeyCount", contados).element("IsTruncated", truncated);
+		if (truncated && ultimoEmitido != null) {
+			xml.element(v2 ? "NextContinuationToken" : "NextMarker", ultimoEmitido);
+		}
+		for (StorageObject object : chaves) {
 			xml.open("Contents").element("Key", object.key())
 				.element("LastModified", lastModified(object))
 				.element("ETag", "\"" + (object.sha256() == null ? "" : object.sha256()) + "\"")
 				.element("Size", object.bytes() == null ? 0 : object.bytes()).element("StorageClass", "STANDARD")
 				.close("Contents");
 		}
+		for (String grupo : grupos) {
+			xml.open("CommonPrefixes").element("Prefix", grupo).close("CommonPrefixes");
+		}
 		xml.close("ListBucketResult");
 		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/**
+	 * O prefixo comum de uma chave com {@code delimiter}: o trecho até a <b>primeira</b> ocorrência
+	 * do delimitador depois do {@code prefix} pedido, inclusive.
+	 *
+	 * <p>Chave que não tem o delimitador depois do prefixo não forma grupo — ela é conteúdo do
+	 * prefixo (é o caso de {@code fotos/raiz.jpg} pedindo {@code prefix=fotos/&delimiter=/}).</p>
+	 */
+	static String grupoDe(String key, String prefix, String delimiter) {
+		int inicio = prefix == null ? 0 : prefix.length();
+		if (key.length() <= inicio) {
+			return null;
+		}
+		int achado = key.indexOf(delimiter, inicio);
+		return achado < 0 ? null : key.substring(0, achado + delimiter.length());
 	}
 
 	/** DeleteBucket: recusa com 409 se ainda houver objeto, como o S3. */
