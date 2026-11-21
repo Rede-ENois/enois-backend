@@ -685,6 +685,28 @@ O `POST ?uploads` também passou a traduzir a recusa do `create` e a recusar `ex
 `uploadDaChave` (`require` cru), e devolver a `ApiException` crua na tradução geral — **3 de 3
 derrubam**.
 
+## 4.17 Objeto de zero byte é aceito (ciclo 105)
+
+O `PUT` com corpo vazio respondia **`400 STORAGE_EMPTY_BODY`**. A regra é da fase 1 (doc 12 §2.2):
+o upload **do nó** com corpo vazio é sinal de gravação que não aconteceu, e recusá-lo evita objeto
+sem conteúdo no catálogo. Mas o gateway S3 é compatível com o S3, e o S3 **aceita** 0 byte: é o
+marcador de "pasta" que `aws s3 cp --recursive` e `rclone` criam, e o resultado de uma escrita vazia
+legítima. Um cliente que sincronizava uma árvore inteira recebia `400` em cada marcador — e tratava a
+sincronização toda como falha, com todos os arquivos já gravados.
+
+### Agora
+
+- `PUT` com corpo vazio pelo **gateway** grava o objeto com `bytes = 0`, ETag do corpo vazio
+  (`sha256("")`), réplica 0 `OK` e designação de cópia como qualquer outro;
+- o upload **do nó** (rota do nó, `store`) continua recusando `STORAGE_EMPTY_BODY` — ali o corpo
+  vazio é falha de transporte, não um arquivo;
+- `HEAD` responde `200` com `Content-Length: 0`; `GET` responde `200` com corpo vazio.
+
+**Verificação:** `S3GatewayTests` **+1** — `PUT` de 0 byte é `200`, `HEAD` devolve `Content-Length: 0`
+e `GET` devolve `200` sem bytes. Mutações: o gateway voltar a recusar 0 byte (derrubada pelo teste
+novo) e a regra do vazio ser liberada também para o nó (derrubada por `StorageObjectCeilingTests`) —
+**2 de 2 derrubam**.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:

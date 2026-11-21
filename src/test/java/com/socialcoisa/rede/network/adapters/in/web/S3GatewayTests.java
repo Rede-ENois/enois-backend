@@ -780,6 +780,37 @@ class S3GatewayTests {
 		assertThat(resultado.getResponse().getContentAsString()).contains("BucketNotEmpty");
 	}
 
+	/**
+	 * Objeto de <b>zero byte</b> é aceito, como no S3: é o marcador de "pasta" que
+	 * {@code aws s3 cp --recursive} cria, e o resultado de uma escrita vazia legítima.
+	 *
+	 * <p><b>Antes:</b> o gateway repassava o corpo ao catálogo, e o catálogo recusa
+	 * {@code STORAGE_EMPTY_BODY} (regra da fase 1, para não gravar objeto sem conteúdo). Um cliente
+	 * que sincroniza uma árvore inteira — que sempre cria os marcadores de pasta — recebia
+	 * {@code 400} em cada um deles e tratava a sincronização como falha, mesmo com todos os arquivos
+	 * gravados. A regra era do módulo, mas o gateway S3 é compatível com o S3, e o S3 aceita 0 byte.</p>
+	 */
+	@Test
+	void put_de_corpo_vazio_e_aceito_como_no_s3() throws Exception {
+		MockHttpServletRequestBuilder put = put("/s3/" + bucket + "/marcador-vazio/")
+			.content(new byte[0]).contentType("application/octet-stream");
+		assinar(put, SECRET, shaVazio());
+		mockMvc.perform(put).andExpect(status().isOk());
+
+		MockHttpServletRequestBuilder head = head("/s3/" + bucket + "/marcador-vazio/");
+		assinar(head, SECRET, shaVazio());
+		var resposta = mockMvc.perform(head).andReturn();
+		assertThat(resposta.getResponse().getStatus()).isEqualTo(200);
+		assertThat(resposta.getResponse().getHeader("Content-Length")).isEqualTo("0");
+
+		// O GET devolve corpo vazio com 200 — não 404 nem 416.
+		MockHttpServletRequestBuilder get = get("/s3/" + bucket + "/marcador-vazio/");
+		assinar(get, SECRET, shaVazio());
+		var leitura = mockMvc.perform(get).andReturn();
+		assertThat(leitura.getResponse().getStatus()).isEqualTo(200);
+		assertThat(leitura.getResponse().getContentAsByteArray()).isEmpty();
+	}
+
 	/** DeleteObject responde 204 e a chave deixa de ser servível — a lápide, como no S3 versionado. */
 	@Test
 	void delete_vira_lapide() throws Exception {

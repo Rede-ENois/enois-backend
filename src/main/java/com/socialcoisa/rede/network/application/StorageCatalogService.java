@@ -429,6 +429,28 @@ public class StorageCatalogService {
 		}
 	}
 
+	/**
+	 * O mesmo upload, com o corpo vazio permitido: é o caminho do <b>cliente S3</b>.
+	 *
+	 * <p>O S3 aceita objeto de 0 byte — é o marcador de "pasta" que {@code aws s3 cp --recursive}
+	 * cria e o resultado de uma escrita vazia legítima. Recusá-lo fazia um cliente que sincroniza uma
+	 * árvore inteira tratar a sincronização como falha em cada marcador, com todos os arquivos já
+	 * gravados. A recusa continua valendo para o upload <b>do nó</b> ({@link #store}): ali o corpo
+	 * vazio é sinal de gravação que não aconteceu.</p>
+	 */
+	public StorageObject finishUploadPermitindoVazio(String objectId, InputStream body, String actorId) {
+		long inicio = System.nanoTime();
+		try {
+			StorageObject gravado = doFinishUpload(objectId, body, actorId, true, true);
+			conta("PUT", StorageOperationMetrics.Resultado.OK, inicio);
+			return gravado;
+		}
+		catch (RuntimeException recusado) {
+			conta("PUT", resultadoDe(recusado), inicio);
+			throw recusado;
+		}
+	}
+
 	public StorageObject finishUpload(String objectId, InputStream body, String actorId) {
 		long inicio = System.nanoTime();
 		try {
@@ -458,13 +480,18 @@ public class StorageCatalogService {
 	 */
 	private StorageObject doFinishUpload(String objectId, InputStream body, String actorId,
 			boolean cobrarPartesReservadas) {
+		return doFinishUpload(objectId, body, actorId, cobrarPartesReservadas, false);
+	}
+
+	private StorageObject doFinishUpload(String objectId, InputStream body, String actorId,
+			boolean cobrarPartesReservadas, boolean aceitaVazio) {
 		StorageObject object = catalog.findById(objectId)
 			.orElseThrow(() -> new ApiException(404, "STORAGE_OBJECT_UNKNOWN", "Objeto nao encontrado no catalogo."));
 		if (object.state() != StorageObjectState.PENDING) {
 			throw new ApiException(409, "STORAGE_ALREADY_STORED", "O objeto ja tem copia confirmada.");
 		}
 		Spooled measured = measure(body);
-		if (measured.bytes() == 0) {
+		if (measured.bytes() == 0 && !aceitaVazio) {
 			deleteQuietly(measured.temp());
 			throw new ApiException(400, "STORAGE_EMPTY_BODY", "O corpo enviado esta vazio.");
 		}
