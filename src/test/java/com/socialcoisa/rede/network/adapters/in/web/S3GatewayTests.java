@@ -351,6 +351,60 @@ class S3GatewayTests {
 			.isEqualTo("versao um");
 	}
 
+	/**
+	 * Objeto confirmado <b>sem cópia registrada</b> responde no vocabulário do S3.
+	 *
+	 * <p><b>Antes:</b> o {@code GET} e o {@code HEAD} devolviam o erro interno do control plane —
+	 * {@code STORAGE_PLACEMENT_MISSING} no corpo JSON do Énóis — quando o catálogo dizia que o objeto
+	 * existe e nenhuma cópia estava registrada. O SDK lê o {@code Code} do XML do S3; um código que
+	 * ele não conhece vira falha opaca, e o cliente não distingue "tente de novo" de "não existe".
+	 * A tradução só cobria o {@code PUT}.</p>
+	 *
+	 * <p><b>Agora:</b> a tradução vale nas três rotas de leitura. O discriminante é o corpo: sem a
+	 * correção ele traz o código interno e não é XML do S3.</p>
+	 */
+	@Test
+	void objeto_sem_copia_registrada_responde_no_vocabulario_do_s3() throws Exception {
+		var dono = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_sem_copia");
+		String minhaChave = "AKIAENOISSEM" + UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase();
+		jdbc.update("""
+			insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+				allowed_bucket, allowed_operations, created_at)
+			values (?, ?, ?, ?, ?, null, 'GET PUT LIST DELETE', ?)
+			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), minhaChave,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET), dono.userId(),
+			java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+		byte[] corpo = "sem copia registrada".getBytes(StandardCharsets.UTF_8);
+		MockHttpServletRequestBuilder put = put("/s3/" + bucket + "/orfa.jpg").content(corpo)
+			.contentType("text/plain");
+		assinar(put, SECRET, shaDe("sem copia registrada"), minhaChave);
+		mockMvc.perform(put).andExpect(status().isOk());
+		// O estado que a falha no registro da cópia deixa: o objeto confirmado e nenhuma localização.
+		jdbc.update("delete from network_storage_placements where object_id in"
+			+ " (select id from network_storage_objects where bucket = ? and object_key = ?)", bucket, "orfa.jpg");
+
+		// Uma rota por vez: o `HEAD` também passa pelo mesmo caminho, e um `for` que só falhasse no
+		// `GET` deixaria o `HEAD` carregando a prova de uma tradução que não existe nele.
+		MockHttpServletRequestBuilder leitura = get("/s3/" + bucket + "/orfa.jpg");
+		assinar(leitura, SECRET, shaVazio(), minhaChave);
+		var resposta = mockMvc.perform(leitura).andReturn();
+		if (resposta.getRequest().isAsyncStarted()) {
+			resposta = mockMvc.perform(asyncDispatch(resposta)).andReturn();
+		}
+		String visto = resposta.getResponse().getContentAsString();
+		assertThat(resposta.getResponse().getStatus()).as(visto).isEqualTo(409);
+		assertThat(visto).as("o corpo e o XML do S3").contains("<Code>").doesNotContain("STORAGE_PLACEMENT_MISSING");
+
+		// O `HEAD` não tem corpo: o que prova a tradução é o tipo da resposta. Sem ela o handler
+		// genérico devolve JSON do Énóis; com ela, o documento XML que o SDK espera.
+		MockHttpServletRequestBuilder cabecalho = head("/s3/" + bucket + "/orfa.jpg");
+		assinar(cabecalho, SECRET, shaVazio(), minhaChave);
+		var semCorpo = mockMvc.perform(cabecalho).andReturn().getResponse();
+		assertThat(semCorpo.getStatus()).isEqualTo(409);
+		assertThat(semCorpo.getContentType()).as("o HEAD tambem responde no formato do S3")
+			.startsWith("application/xml");
+	}
+
 	/** DELETE por URL não é emitido: a lápide não vai para um link que pode vazar. */
 	@Test
 	void url_pre_assinada_de_delete_e_recusada_na_emissao() throws Exception {

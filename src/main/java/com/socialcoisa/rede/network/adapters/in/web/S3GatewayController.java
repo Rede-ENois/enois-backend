@@ -458,9 +458,9 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "GET");
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
-		StorageObject object = storage.requireDownloadable(bucket, keyOf(request));
-		return content.respond(object, request.getHeader(HttpHeaders.RANGE),
-			request.getHeader(HttpHeaders.IF_NONE_MATCH));
+		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request)));
+		return comVocabularioDoS3(() -> content.respond(object, request.getHeader(HttpHeaders.RANGE),
+			request.getHeader(HttpHeaders.IF_NONE_MATCH)));
 	}
 
 	/** HeadObject: mesmos cabeçalhos do GetObject, sem corpo. */
@@ -469,8 +469,8 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "GET");
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
-		StorageObject object = storage.requireDownloadable(bucket, keyOf(request), "HEAD");
-		return content.head(object);
+		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request), "HEAD"));
+		return comVocabularioDoS3(() -> content.head(object));
 	}
 
 	/** DeleteObject: lápide no catálogo. A resposta é 204 mesmo se a chave não existir (igual ao S3). */
@@ -982,9 +982,32 @@ class S3GatewayController {
 	 * <p>Um ponto só, para as rotas que gravam não divergirem: o {@code PUT} simples traduzia, o
 	 * {@code UploadPart} não.</p>
 	 */
+	/**
+	 * A recusa de uma rota de leitura traduzida do vocabulário do control plane para o do S3.
+	 *
+	 * <p>O objeto confirmado sem cópia registrada é um estado do catálogo que o cliente do S3 não
+	 * conhece: a leitura respondia o JSON interno {@code STORAGE_PLACEMENT_MISSING}, e o SDK, que lê
+	 * o {@code Code} do XML, caía numa falha opaca. A tradução do {@code PUT} não alcançava o
+	 * {@code GET} nem o {@code HEAD}, porque a recusa nasce dentro do serviço de conteúdo.</p>
+	 */
+	static <T> T comVocabularioDoS3(java.util.function.Supplier<T> leitura) {
+		try {
+			return leitura.get();
+		}
+		catch (ApiException recusado) {
+			throw noVocabularioDoS3(recusado);
+		}
+	}
+
 	static ApiException noVocabularioDoS3(ApiException recusado) {
 		if (recusado.status() == 507 && "STORAGE_OWNER_QUOTA_EXCEEDED".equals(recusado.code())) {
 			return s3Error(507, "QuotaExceeded", recusado.getMessage());
+		}
+		if ("STORAGE_PLACEMENT_MISSING".equals(recusado.code())) {
+			// O catálogo diz que existe e não há cópia: para o cliente do S3 é um conflito
+			// transitório do lado do servidor, não um erro de pedido — e ele sabe tentar de novo.
+			return s3Error(409, "InternalError", "O objeto esta confirmado no catalogo mas sem copia"
+				+ " registrada em no nenhum; tente de novo.");
 		}
 		return recusado;
 	}
