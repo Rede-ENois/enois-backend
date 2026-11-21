@@ -1078,7 +1078,7 @@ mensagem confere isso antes de gravar, porque o id existir não basta.
 | `archive(...)` | POST /api/conversations/{conversationId}/group/topics/{topicId}/archive |
 | `reorder(...)` | POST /api/conversations/{conversationId}/group/topics/reorder |
 
-A mensagem guarda o tópico em `messages.topic_id` (V374, nula fora de tópico e em todas as
+A mensagem guarda o tópico em `messages.topic_id` (V371, nula fora de tópico e em todas as
 mensagens anteriores) e `GET .../messages?topicId=` filtra na consulta, junto com o cursor e o
 "apagar para mim".
 

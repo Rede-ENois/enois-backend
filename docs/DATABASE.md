@@ -527,10 +527,10 @@ UNIQUE: (requester_user_id, receiver_user_id)
 | conversation_id | VARCHAR(36) FK → conversations.id |
 | sender_id | VARCHAR(36) FK → users.id |
 | text | TEXT |
-| topic_id | VARCHAR(64) (V374) — tópico do grupo de conversa em que a mensagem foi enviada; nulo fora de tópico e em todas as mensagens anteriores |
+| topic_id | VARCHAR(64) (V371) — tópico do grupo de conversa em que a mensagem foi enviada; nulo fora de tópico e em todas as mensagens anteriores |
 | created_at | TIMESTAMP |
 
-### `conversation_group_topics` (V374)
+### `conversation_group_topics` (V371)
 
 | Coluna | Tipo |
 |---|---|
