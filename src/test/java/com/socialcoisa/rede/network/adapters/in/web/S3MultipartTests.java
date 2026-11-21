@@ -222,6 +222,55 @@ class S3MultipartTests {
 		}
 	}
 
+	/**
+	 * O {@code NoSuchUpload} sai no formato do S3 — <b>XML com {@code Content-Type:
+	 * application/xml}</b> —, não no JSON do resto da API.
+	 *
+	 * <p>Um SDK (boto3, aws-cli, MinIO) deserializa o corpo pelo {@code Content-Type}: JSON aqui
+	 * chega como corpo irreconhecível, e o cliente trata como falha de rede ou erro genérico em vez
+	 * de "este upload não existe, recomece". A rota respondia 404 com o código certo num documento
+	 * que o SDK não sabe ler.</p>
+	 */
+	@Test
+	void upload_inexistente_responde_xml_do_s3_e_nao_json() throws Exception {
+		MockHttpServletRequestBuilder pedido = get("/s3/" + bucket + "/" + "qualquer.bin")
+			.param("uploadId", "up_nao_existe_000000");
+		var recusa = mockMvc.perform(assinar(pedido, shaVazio())).andReturn();
+
+		assertThat(recusa.getResponse().getStatus()).isEqualTo(404);
+		assertThat(recusa.getResponse().getContentType()).startsWith("application/xml");
+		String corpo = recusa.getResponse().getContentAsString();
+		assertThat(corpo).startsWith("<?xml").contains("<Code>NoSuchUpload</Code>");
+		assertThat(corpo).doesNotContain("\"code\"");
+	}
+
+	/**
+	 * Toda recusa que nasce nos serviços do Storage chega ao cliente do S3 em <b>XML</b> — inclusive
+	 * as que nunca passaram por tradução, como o {@code expires} fora do intervalo do {@code POST
+	 * ?uploads} e o {@code InvalidPartOrder} da conclusão.
+	 *
+	 * <p>Antes, só `QuotaExceeded` e `STORAGE_PLACEMENT_MISSING` eram traduzidos; o resto saía como
+	 * JSON do Control Plane, corpo que o SDK não deserializa. O cliente via "erro de rede" em vez de
+	 * "o prazo pedido é longo demais" ou "as partes estão fora de ordem".</p>
+	 */
+	@Test
+	void recusas_do_multipart_saem_em_xml() throws Exception {
+		MockHttpServletRequestBuilder prazo = post("/s3/" + bucket + "/" + "grande.bin")
+			.queryParam("uploads", "").queryParam("expires", "99999999");
+		var prazoRuim = mockMvc.perform(assinar(prazo, shaVazio())).andReturn();
+		assertThat(prazoRuim.getResponse().getStatus()).isEqualTo(400);
+		assertThat(prazoRuim.getResponse().getContentType()).startsWith("application/xml");
+		assertThat(prazoRuim.getResponse().getContentAsString()).startsWith("<?xml")
+			.contains("<Code>InvalidArgument</Code>");
+
+		MockHttpServletRequestBuilder naoNumero = post("/s3/" + bucket + "/" + "grande.bin")
+			.queryParam("uploads", "").queryParam("expires", "abc");
+		var naoEhNumero = mockMvc.perform(assinar(naoNumero, shaVazio())).andReturn();
+		assertThat(naoEhNumero.getResponse().getStatus()).isEqualTo(400);
+		assertThat(naoEhNumero.getResponse().getContentAsString()).startsWith("<?xml")
+			.contains("<Code>InvalidArgument</Code>");
+	}
+
 	@Test
 	void abortar_apaga_as_partes_e_o_upload_deixa_de_existir() throws Exception {
 		String chave = "outros/%s.bin".formatted(sufixo());

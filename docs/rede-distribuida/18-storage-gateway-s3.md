@@ -655,6 +655,36 @@ nome some de `ListBuckets`; bucket com objeto vivo responde `409 BucketNotEmpty`
 nunca gravou responde `403 AccessDenied`. Mutações: voltar ao `501` incondicional, conferir donagem só
 pela lista de vivos, e remover a recusa `409` — **3 de 3 derrubam**.
 
+## 4.16 Toda recusa do Storage sai em XML (ciclo 101)
+
+O gateway traduzia **duas** recusas vindas dos serviços (`QuotaExceeded` e
+`STORAGE_PLACEMENT_MISSING`); todas as outras saíam como o **JSON do Control Plane**. O SDK escolhe o
+deserializador pelo `Content-Type`: JSON num gateway S3 chega como corpo irreconhecível, e o cliente
+trata como falha de rede ou erro opaco em vez de agir — `NoSuchUpload` (recomece o upload),
+`InvalidArgument` (o `expires` pedido é longo demais), `InvalidPartOrder` (reenvie na ordem), etc.
+
+Rotas afetadas, na prática: `ListParts`/`AbortMultipartUpload` de upload inexistente ou vencido,
+`UploadPart` de upload vencido, `CompleteMultipartUpload` sem parte / fora de ordem, e o `POST
+?uploads` com `expires` fora do intervalo (ou não numérico).
+
+### Agora
+
+`noVocabularioDoS3` traduz **qualquer** `ApiException` que não seja uma das duas específicas para
+`S3ApiException` mantendo o status e o `Code`. Os códigos internos dos serviços de Storage são, na
+maioria, os próprios do S3 (`NoSuchUpload`, `InvalidArgument`, `MalformedXML`, `InvalidPart`,
+`InvalidPartOrder`), então o cliente os reconhece. Os que não são (`STORAGE_*`) saem com o status certo
+e um `Code` que ele não conhece — ainda assim XML, e o status diz se vale retentar.
+
+O `POST ?uploads` também passou a traduzir a recusa do `create` e a recusar `expires` não numérico com
+`400 InvalidArgument` no XML (antes era um `NumberFormatException` → `500`).
+
+**Verificação:** `S3MultipartTests` **+2** — `ListParts` de upload inexistente responde `404` com
+`Content-Type: application/xml`, corpo começando em `<?xml` e `<Code>NoSuchUpload</Code>` (e sem
+`"code"`); `POST ?uploads` com `expires=99999999` e com `expires=abc` responde `400
+<Code>InvalidArgument</Code>` em XML. Mutações: remover o `catch` do `create`, remover o `catch` do
+`uploadDaChave` (`require` cru), e devolver a `ApiException` crua na tradução geral — **3 de 3
+derrubam**.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
