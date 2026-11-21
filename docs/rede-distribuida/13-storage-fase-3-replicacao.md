@@ -839,3 +839,37 @@ nó que estava ocupado pela cópia ruim. O que **não** mudou:
 **Verificação:** `StorageHealerTests` **+1** — `nd_x` com cópia divergente e `nd_y` livre: a mesma
 rodada grava `nd_x` → `GONE` **e** `nd_y` → `PENDING_REMOTE`, nessa ordem. Mutação: devolver a
 lacuna para antes da divergência — **derruba**.
+
+## 5.14 A réplica 0 divergente pára de servir — e de ser reescrita a cada cura (ciclo 97)
+
+A réplica 0 é o disco do próprio Control Plane. A varredura relê esse disco (§5.7), acha o corpo
+trocado e o healing só **auditava** `STORAGE_REPLICA_ZERO_DIVERGENT`: a linha continuava `OK` no
+catálogo. Duas consequências:
+
+1. **`StorageCatalogService.readBody` servia o corpo divergente.** A leitura da raiz do CP era
+   decidida por `Files.isReadable`, sem olhar o estado da colocação. Essa rota é de onde o destino
+   de uma replicação **puxa** o objeto (`GET /network/storage/objects/{id}`), então mandar replicar
+   um objeto cuja réplica 0 não confere espalhava o corpo que o catálogo já negava. O `STALE` da
+   cópia de nó já era cobrado ali (`exigirCopiaServivel`, §5.5.1); a réplica 0 ficava de fora
+   porque não tem `NodeBodyStore`.
+2. **A mesma linha seria reescrita em toda rodada.** A réplica 0 `STALE` entra em `copiasStale()`, e
+   `repor` a gravaria `STALE` outra vez: uma escrita e um registro de auditoria por objeto por
+   `heal`, sem mudar estado nenhum.
+
+### Agora
+
+- o healing da réplica 0 grava `STALE` — **nunca** `GONE`: o arquivo fica na raiz e a cura não apaga
+  disco do Control Plane. O digest esperado fica na linha, que é contra ele que a próxima releitura
+  compara;
+- `readBody` passa a cobrar a linha da réplica 0 (`copies(...)` com `replica = 0`), seja qual for o
+  dono — `control-plane` ou o id do nó que gravou. `STALE`/`GONE` → `409 STORAGE_REPLICA_STALE`.
+  Sem linha, a leitura continua valendo: objeto gravado antes da colocação do Control Plane existir
+  nunca foi declarado divergente por ninguém;
+- a réplica 0 sai do laço de cura de `STALE`: ela não é designada e não tem nó para onde ir. Quem a
+  resolve é reescrevê-la; a lacuna que o `STALE` abre já é tratada pela designação de cópia de nó no
+  mesmo `heal`.
+
+**Verificação:** `StorageLocalBodyServingTests` **+1** (réplica 0 `STALE` → `409` em vez do corpo);
+`StorageHealerTests` **+1** e um reescrito (a réplica 0 divergente vira `STALE` com o digest do
+catálogo; a réplica 0 já `STALE` não é reescrita nem re-auditada). Mutações: tirar a guarda do
+`readBody` e devolver a réplica 0 ao laço de `STALE` — **2 de 2 derrubam**.

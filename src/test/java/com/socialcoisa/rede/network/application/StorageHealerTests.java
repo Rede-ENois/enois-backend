@@ -307,16 +307,61 @@ class StorageHealerTests {
 		assertThat(relatorio.designated()).extracting(StorageHealer.HealedObject::nodeId).containsExactly("nd_y");
 	}
 
+	/**
+	 * A réplica 0 divergente vira {@code STALE} — o arquivo fica, o catálogo para de afirmá-lo.
+	 *
+	 * <p><b>Antes:</b> só audiava. A linha da réplica 0 continuava {@code OK} no catálogo, e como o
+	 * {@code readBody} serve a raiz do CP por "arquivo legível", o corpo divergente continuava sendo
+	 * entregue a quem puxa o objeto para replicar — o catálogo e a rota discordavam.</p>
+	 *
+	 * <p><b>Agora:</b> {@code STALE}, e nunca {@code GONE}: o arquivo está na raiz e a cura não apaga
+	 * disco do Control Plane. O {@code STALE} é o único sinal que a réplica 0 tem para dizer "não
+	 * confere", e é ele que a leitura cobra (doc 13 §5.14).</p>
+	 */
 	@Test
-	void divergencia_da_replica_zero_nao_apaga_a_copia_do_control_plane() {
+	void divergencia_da_replica_zero_marca_stale_sem_apagar_a_copia_do_control_plane() {
 		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(comDivergente("sob_1", 0, "nd_cp"));
 		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
+		expectSaved();
 
 		StorageHealer.Report relatorio = healer.heal("adm_1", null, 100, false);
 
 		assertThat(((StorageHealer.Reposted) relatorio.repostos().get(0)).action()).isEqualTo("REPLICA_ZERO");
-		verify(catalog, never()).savePlacement(any());
+		StoragePlacement p = gravadas.get(0);
+		assertThat(p.replica()).isEqualTo(0);
+		assertThat(p.nodeId()).isEqualTo("nd_cp");
+		assertThat(p.state()).isEqualTo(StoragePlacement.State.STALE);
+		// O digest do catálogo fica: é contra ele que a próxima releitura compara.
+		assertThat(p.sha256()).isEqualTo("a".repeat(64));
 		verify(audit).record(eq("adm_1"), eq("STORAGE_REPLICA_ZERO_DIVERGENT"), eq("sob_1"), anyString());
+	}
+
+	/**
+	 * A réplica 0 {@code STALE} não é reescrita nem re-auditada a cada rodada.
+	 *
+	 * <p>Ela não sai de {@code STALE} por cura de cópia de nó — não é designada e não tem nó para
+	 * onde ir. Sem a guarda, todo {@code heal} gravava a mesma linha e auditava
+	 * {@code STORAGE_REPLICA_ZERO_DIVERGENT} outra vez, sem mudar nada: ruído na trilha e uma
+	 * escrita por objeto em cada rodada. O que resolve a réplica 0 é reescrevê-la; a lacuna que o
+	 * {@code STALE} abre já é tratada pela designação de cópia de nó.</p>
+	 */
+	@Test
+	void replica_zero_stale_do_catalogo_nao_e_reescrita_pela_cura() {
+		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(new StorageScrubber.Report(2, 1,
+			List.of(), 0, List.of(), Map.of()));
+		// O objeto tem de existir e ser servível: sem isso o `repor` devolve cedo e o teste não
+		// prova nada — foi assim que a primeira versão deste caso passou "verde" com a guarda
+		// mutada, porque nada era gravado por motivo nenhum.
+		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
+		StoragePlacement zeroStale = new StoragePlacement("sob_1", 0, "nd_cp", 2048, "a".repeat(64),
+			StoragePlacement.State.STALE, NOW);
+		when(catalog.placementsInState(StoragePlacement.State.STALE)).thenReturn(List.of(zeroStale));
+
+		StorageHealer.Report relatorio = healer.heal("adm_1", null, 100, false);
+
+		assertThat(relatorio.repostos()).isEmpty();
+		verify(catalog, never()).savePlacement(any());
+		verify(audit, never()).record(any(), eq("STORAGE_REPLICA_ZERO_DIVERGENT"), any(), any());
 	}
 
 	@Test

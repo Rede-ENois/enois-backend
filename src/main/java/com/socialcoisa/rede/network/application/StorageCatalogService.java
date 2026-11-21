@@ -1376,6 +1376,12 @@ public class StorageCatalogService {
 		Path cpBody = Path.of(storageRoot).resolve(objectId);
 		boolean localCopy = nodeBodies != null && nodeBodies.has(objectId);
 		if (Files.isReadable(cpBody)) {
+			// A réplica 0 tem linha de colocação (nó `control-plane` no upload, ou o nó dono do disco
+			// deste runtime). Ela passa pela MESMA régua da cópia de nó: `STALE`/`GONE` no catálogo
+			// não é servida a quem puxa o objeto para replicar. Antes, bastava o arquivo ser legível
+			// na raiz: o nó que relatou o próprio disco divergente a marcava `STALE`, e esta rota
+			// — a origem de toda replicação — continuava entregando o corpo que o catálogo negava.
+			exigirReplicaZeroServivel(objectId);
 			return openVerified(cpBody, object);
 		}
 		if (localCopy) {
@@ -1412,6 +1418,29 @@ public class StorageCatalogService {
 	 * passar por colocação de nó. A réplica 0 na raiz do CP continua fora desta regra: ela não tem
 	 * linha de colocação de nó, e o CP é o próprio dono do disco.</p>
 	 */
+	/**
+	 * A réplica 0 só sai da raiz do Control Plane quando o catálogo não a marcou como divergente.
+	 *
+	 * <p>Sem linha de colocação a leitura continua valendo: objeto gravado antes de a colocação do
+	 * Control Plane existir nunca foi declarado divergente por ninguém. Com linha, só {@code OK}
+	 * serve — o mesmo que a cópia de nó. A réplica 0 não vira {@code GONE} no healing (§5.13, o
+	 * corpo certo é reescrito por quem grava), então {@code STALE} é o único sinal que ela tem, e é
+	 * ele que esta guarda cobra.</p>
+	 */
+	private void exigirReplicaZeroServivel(String objectId) {
+		// O dono da linha é `control-plane` quando quem gravou foi o CP, e o id do nó quando quem
+		// gravou foi um runtime. Quem responde é a linha, não o nome: perguntar por um dono fixo
+		// deixaria de fora justamente a réplica 0 de um nó.
+		catalog.copies(objectId).stream()
+			.filter(copia -> copia.replica() == 0)
+			.filter(copia -> copia.state() != StoragePlacement.State.OK)
+			.findFirst()
+			.ifPresent(copia -> {
+				throw new ApiException(409, "STORAGE_REPLICA_STALE",
+					"A copia na replica 0 nao confere (" + copia.state().name() + "); use uma copia OK.");
+			});
+	}
+
 	private void exigirCopiaServivel(String objectId) {
 		if (nodeBodies == null) {
 			return;

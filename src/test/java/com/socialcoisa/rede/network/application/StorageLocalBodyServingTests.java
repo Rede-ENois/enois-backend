@@ -14,6 +14,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -172,6 +173,37 @@ class StorageLocalBodyServingTests {
 				assertThat(api.status()).isEqualTo(409);
 				assertThat(api.code()).isEqualTo("STORAGE_REPLICA_STALE");
 				assertThat(api.getMessage()).contains("STALE");
+			});
+	}
+
+	/**
+	 * A réplica 0 marcada {@code STALE} no catálogo não é servida a quem replica.
+	 *
+	 * <p><b>Antes:</b> a leitura preferia a raiz do Control Plane por {@code Files.isReadable}, sem
+	 * olhar o estado da colocação. A linha da réplica 0 existe no catálogo (nó {@code control-plane}),
+	 * e o nó que relatou o próprio disco divergente a marcava {@code STALE}. O catálogo dizia
+	 * "não confere" e o {@code GET /network/storage/objects/{id}} — que é de onde o destino de uma
+	 * replicação puxa o corpo — entregava o arquivo mesmo assim. Mandar o destino replicar esta cópia
+	 * a espalha; o caminho bom é recompor a réplica 0, não servir o que o catálogo nega.</p>
+	 *
+	 * <p><b>Agora:</b> a raiz do Control Plane passa pela mesma régua da cópia de nó: linha
+	 * {@code STALE}/{@code GONE} da réplica 0 → {@code 409 STORAGE_REPLICA_STALE}. Sem linha (upload
+	 * anterior à colocação) a leitura continua valendo — é o caso legítimo.</p>
+	 */
+	@Test
+	void replica_zero_marcada_stale_nao_e_servida_a_quem_puxa_o_objeto() throws Exception {
+		StorageObject object = objeto("sob_a", "conteudo trocado");
+		Files.write(service.bodyPath(object.id()), bytes("conteudo trocado"));
+		when(catalog.copies(object.id())).thenReturn(List.of(
+			new StoragePlacement(object.id(), 0, "control-plane", 15L, object.sha256(),
+				StoragePlacement.State.STALE, NOW)));
+
+		assertThatThrownBy(() -> service.readBody(object.id()))
+			.isInstanceOf(ApiException.class)
+			.satisfies(erro -> {
+				ApiException api = (ApiException) erro;
+				assertThat(api.status()).isEqualTo(409);
+				assertThat(api.code()).isEqualTo("STORAGE_REPLICA_STALE");
 			});
 	}
 
