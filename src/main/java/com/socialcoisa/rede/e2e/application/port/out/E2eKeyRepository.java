@@ -16,4 +16,10 @@ public interface E2eKeyRepository {
 	void saveConversationKey(ConversationKey key);
 	Optional<ConversationKey> findConversationKey(String conversationId, String userId);
 	List<ConversationKey> findConversationKeys(String conversationId);
+
+	/**
+	 * Apaga a copia da chave da conversa que a pessoa tinha. Usada quando ela sai do grupo: a chave
+	 * guardada no servidor nao pode continuar valendo para quem nao participa mais.
+	 */
+	void deleteConversationKey(String conversationId, String userId);
 }

@@ -515,6 +515,7 @@ UNIQUE: (requester_user_id, receiver_user_id)
 | id | BIGINT AUTO_INCREMENT PK |
 | conversation_id | VARCHAR(36) FK → conversations.id |
 | user_id | VARCHAR(36) FK → users.id |
+| role | VARCHAR(16) NOT NULL DEFAULT 'MEMBER' (V370) — `ADMIN` para quem foi promovido; o dono do grupo é quem criou a conversa (`conversations.created_by`) e não é gravado aqui |
 | last_read_at | TIMESTAMP |
 | joined_at | TIMESTAMP |
 

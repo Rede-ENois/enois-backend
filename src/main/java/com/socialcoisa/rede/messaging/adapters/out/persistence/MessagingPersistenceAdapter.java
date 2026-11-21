@@ -16,6 +16,7 @@ import com.socialcoisa.rede.messaging.application.port.out.MessagingRepository;
 import com.socialcoisa.rede.messaging.domain.Conversation;
 import com.socialcoisa.rede.messaging.domain.ConversationContext;
 import com.socialcoisa.rede.messaging.domain.ConversationParticipant;
+import com.socialcoisa.rede.messaging.domain.ConversationRole;
 import com.socialcoisa.rede.messaging.domain.Message;
 import com.socialcoisa.rede.shared.web.CursorCodec;
 
@@ -53,6 +54,16 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 	@Override
 	public void saveParticipant(ConversationParticipant participant) {
 		participantRepo.save(ConversationParticipantJpaEntity.fromDomain(participant));
+	}
+
+	@Override
+	public void deleteParticipant(String conversationId, String userId) {
+		participantRepo.deleteParticipant(conversationId, userId);
+	}
+
+	@Override
+	public void updateParticipantRole(String conversationId, String userId, ConversationRole role) {
+		participantRepo.updateRole(conversationId, userId, role.name());
 	}
 
 	@Override
@@ -171,6 +182,11 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 	@Override
 	public void saveMessage(Message message) {
 		messageRepo.save(MessageJpaEntity.fromDomain(message));
+	}
+
+	@Override
+	public void updateMessageEncryptedKeys(String messageId, String encryptedKeys) {
+		messageRepo.updateEncryptedKeys(messageId, encryptedKeys);
 	}
 
 	@Override

@@ -25,6 +25,12 @@ public interface MessagingRepository {
 
 	void saveParticipant(ConversationParticipant participant);
 
+	/** Tira a pessoa do grupo: a conversa sai da caixa dela e ela perde o acesso as mensagens. */
+	void deleteParticipant(String conversationId, String userId);
+
+	/** Troca o papel gravado na linha do participante (ADMIN ou MEMBER). */
+	void updateParticipantRole(String conversationId, String userId, com.socialcoisa.rede.messaging.domain.ConversationRole role);
+
 	Optional<Conversation> findConversationById(String id);
 
 	/** Inbox page; a null context keeps every conversation. */
@@ -110,6 +116,13 @@ public interface MessagingRepository {
 
 	/** A mensagem por id (para conferir de qual conversa ela e antes de mexer nela). */
 	Optional<Message> findMessageById(String messageId);
+
+	/**
+	 * Grava o mapa de chaves cifradas da mensagem (JSON). Existe para a concessao de historico:
+	 * quem entra depois no grupo precisa da chave de cada mensagem antiga, e o servidor so
+	 * acrescenta a chave nova ao mapa que ja estava la.
+	 */
+	void updateMessageEncryptedKeys(String messageId, String encryptedKeys);
 
 	/** Mensagens por ids em batch (para montar os previews de reply sem N+1). */
 	List<Message> findMessagesByIds(Collection<String> messageIds);
