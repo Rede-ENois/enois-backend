@@ -873,3 +873,31 @@ catálogo. Duas consequências:
 `StorageHealerTests` **+1** e um reescrito (a réplica 0 divergente vira `STALE` com o digest do
 catálogo; a réplica 0 já `STALE` não é reescrita nem re-auditada). Mutações: tirar a guarda do
 `readBody` e devolver a réplica 0 ao laço de `STALE` — **2 de 2 derrubam**.
+
+## 5.15 A varredura pagina por `(bucket, object_key)`, não só pela chave (ciclo 102)
+
+A varredura de durabilidade sem bucket (`GET /admin/network/nodes/storage/scrub`) lê o catálogo
+inteiro em páginas de até 200. A consulta ordenava por `(bucket, object_key)` e a página seguinte
+pedia `object_key >= última_lida` — **sem o bucket**. A ordenação era total; o filtro não era.
+
+O efeito: com `fotos` cheio de `gato-*.jpg`, o fim da página mandava a próxima procurar chave
+`>= gato-…`, e `midia/a.mp4` (bucket posterior, chave menor) era **pulado para sempre**. A varredura
+nunca o visitava, e um corpo corrompido ali nunca aparecia em `divergent` — a durabilidade que o painel
+mostra para esses objetos era a do catálogo, sem ninguém ter relido o disco.
+
+### Agora
+
+- o cursor é o **par** `(bucket, object_key)`, na mesma ordem do `order by`, e é **exclusivo**: o item
+  do cursor não volta (`>` no par; a primeira página é uma consulta sem cursor);
+- `listAll(afterBucket, afterKey, limit)` — o port deixou de receber só a chave. O javadoc antigo
+  afirmava "não perde nem duplica"; a ordenação era total, mas o filtro pulava;
+- o `StorageScrubber` guarda `afterBucket` junto de `after`.
+
+**Verificação:** `StorageCatalogBucketsPersistenceTests` **+1** no SQL real (páginas de 2 sobre
+`fotos/m`, `fotos/z`, `midia/a`, `midia/b` devolvem cada objeto uma vez); `StorageScrubberReadBackTests`
+**+1** com **201 objetos** (200 em `fotos` e `a.mp4` em `midia`), porque o scrubber lê páginas de 200 e
+com menos objetos o cursor nem é usado. Mutações: cursor só por chave; cursor inclusivo (`>=` no par);
+scrubber sem o bucket no cursor — **3 de 3 derrubam**.
+
+Um cursor inclusivo não quebra uma asserção de conteúdo: ele **repete** o último item e a varredura
+entra em laço. O teste de SQL tem guarda de iteração para falhar rápido em vez de estourar a memória.

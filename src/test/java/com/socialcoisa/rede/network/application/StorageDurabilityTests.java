@@ -169,7 +169,7 @@ class StorageDurabilityTests {
 			StorageObjectState.STORED, "user_1", NOW, NOW, null);
 		StorageObject outro = StorageObject.current("sob_2", "fotos", "b.jpg", "image/jpeg", 10L, "def",
 			StorageObjectState.STORED, "user_1", NOW, NOW, null);
-		when(catalog.listAll(any(), anyInt())).thenReturn(List.of(objeto));
+		when(catalog.listAll(any(), any(), anyInt())).thenReturn(List.of(objeto));
 		when(catalog.copies("sob_1")).thenReturn(List.of(copia(1, "nd_a"), copia(2, "nd_b")));
 		regiao("nd_a", "sudeste");
 		regiao("nd_b", "sul");
@@ -192,7 +192,7 @@ class StorageDurabilityTests {
 	void copiaEmNoRevogadoNaoContaComoDurabilidadeENaoEscondeALacuna() {
 		StorageObject objeto = StorageObject.current("sob_1", "fotos", "a.jpg", "image/jpeg", 10L, "abc",
 			StorageObjectState.STORED, "user_1", NOW, NOW, null);
-		when(catalog.listAll(any(), anyInt())).thenReturn(List.of(objeto));
+		when(catalog.listAll(any(), any(), anyInt())).thenReturn(List.of(objeto));
 		when(catalog.copies("sob_1")).thenReturn(List.of(copia(0, "nd_ctrl"), copia(1, "nd_a")));
 		regiao("nd_ctrl", null);
 		when(nodes.findById("nd_a")).thenReturn(Optional.of(noComStatus("nd_a", "sul", NodeStatus.REVOKED)));
@@ -218,7 +218,7 @@ class StorageDurabilityTests {
 	void copiaEmNoAtivoContinuaContando() {
 		StorageObject objeto = StorageObject.current("sob_1", "fotos", "a.jpg", "image/jpeg", 10L, "abc",
 			StorageObjectState.STORED, "user_1", NOW, NOW, null);
-		when(catalog.listAll(any(), anyInt())).thenReturn(List.of(objeto));
+		when(catalog.listAll(any(), any(), anyInt())).thenReturn(List.of(objeto));
 		when(catalog.copies("sob_1")).thenReturn(List.of(copia(0, "nd_ctrl"), copia(1, "nd_a")));
 		regiao("nd_ctrl", null);
 		when(nodes.findById("nd_a")).thenReturn(Optional.of(noComStatus("nd_a", "sul", NodeStatus.ACTIVE)));
@@ -237,7 +237,7 @@ class StorageDurabilityTests {
 	void copiaDeNoForaDoCadastroNaoViraRevogado() {
 		StorageObject objeto = StorageObject.current("sob_1", "fotos", "a.jpg", "image/jpeg", 10L, "abc",
 			StorageObjectState.STORED, "user_1", NOW, NOW, null);
-		when(catalog.listAll(any(), anyInt())).thenReturn(List.of(objeto));
+		when(catalog.listAll(any(), any(), anyInt())).thenReturn(List.of(objeto));
 		when(catalog.copies("sob_1")).thenReturn(List.of(copia(1, "nd_fantasma")));
 		regiao("nd_fantasma", "sul");
 
