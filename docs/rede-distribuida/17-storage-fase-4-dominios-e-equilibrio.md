@@ -689,6 +689,26 @@ de operador com o próprio teto.
 - **Teto de banda aplicado pelo próprio nó além do `--limit-rate`**: o nó limita a **velocidade**;
   não há reserva nem fila de banda entre transferências concorrentes (o runtime executa uma tarefa
   por ciclo, então hoje não há concorrência a arbitrar).
+## 10.5 O prazo da transferência acompanha o teto de banda (ciclo 104)
+
+O `bandwidthLimitMbps` do rebalanceamento (§12) chega ao nó e vira `--limit-rate`, como o §16 pede.
+Mas o prazo da tarefa `OBJECT_PUT` era **sempre `agora + 1 h`**, sem olhar o tamanho do objeto nem o
+teto: com 8 Mbps e um objeto de 100 GiB, o tempo mínimo de transferência é ~28 h, e a tarefa expirava
+**no meio**. O nó perdia o trabalho, a réplica nunca era confirmada, e o operador repetia a mesma
+transferência com o mesmo teto sem ligar uma coisa à outra.
+
+### Agora
+
+- o prazo é o **maior** entre 1 h e o tempo mínimo no teto pedido (`bytes / (mbps × 125 kB/s)`), com
+  folga de 20% para o nó conferir o digest;
+- **sem teto declarado**, vale 1 h: não há estimativa honesta da banda real do nó — ela é declarada
+  por ele e pode mudar com a rede — e inventar um número longo só adiaria a descoberta de um nó lento;
+- objeto pequeno sob teto baixo continua com 1 h: o prazo só cresce quando precisa.
+
+**Verificação:** `StorageReplicationDispatcherTests` **+3** — 100 GiB a 8 Mbps recebe prazo > 28 h;
+sem teto, prazo exatamente `agora + 1 h`; objeto de 1 KiB a 8 Mbps, `agora + 1 h`. Mutações: voltar ao
+prazo fixo, e ignorar o teto no cálculo — **2 de 2 derrubam**.
+
 ## 11. Disponibilidade histórica (brief §7, V369)
 
 **Entregue.** O §7 pede "disponibilidade histórica" na página do nó; até o V369 ela era a última
