@@ -1009,7 +1009,7 @@ a cada mensagem enviada, não só na criação:
 | `Message` | Entidade: id, conversationId, senderId, text, createdAt |
 
 O papel `OWNER` é **derivado** de `Conversation.createdBy` e não é gravado: a coluna
-`conversation_participants.role` (V373) guarda a promoção a `ADMIN`, e quem não tem valor
+`conversation_participants.role` (V370) guarda a promoção a `ADMIN`, e quem não tem valor
 gravado é `MEMBER`. Guardar o dono em dois lugares deixaria a linha do participante e a conversa
 discordarem sobre quem manda no grupo.
 
