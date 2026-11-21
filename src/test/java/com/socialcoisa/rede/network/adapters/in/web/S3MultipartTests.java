@@ -231,6 +231,46 @@ class S3MultipartTests {
 	 * de "este upload não existe, recomece". A rota respondia 404 com o código certo num documento
 	 * que o SDK não sabe ler.</p>
 	 */
+	/**
+	 * O upload multipart <b>aparece no painel de operações</b>: abrir, enviar parte, listar e
+	 * concluir todas geram amostra no mesmo contador do catálogo.
+	 *
+	 * <p><b>Antes:</b> só o catálogo de objetos contava (`PUT`/`GET`/`HEAD`/`DELETE`/`LIST`). O
+	 * {@code StorageMultipartService} — que serve justamente os arquivos grandes — não registrava
+	 * nada: o painel dizia "multipart nunca acontece" enquanto um cliente enviava gigabytes. E o teto
+	 * de requisição por Access Key conta as mesmas rotas, então a operação que mais consome banda era
+	 * a que não aparecia.</p>
+	 *
+	 * <p><b>Agora:</b> abrir conta {@code PUT} (é a criação do upload), cada parte conta {@code PUT},
+	 * {@code ListParts} conta {@code LIST} e a conclusão conta {@code PUT} — os mesmos verbos do S3,
+	 * para o número ser comparável ao de um cliente de verdade.</p>
+	 */
+	@Test
+	void upload_multipart_conta_no_painel_de_operacoes() throws Exception {
+		String chave = "grande/%s.bin".formatted(sufixo());
+		long antes = amostras();
+
+		String uploadId = abrir(chave);
+		enviarParte(chave, uploadId, 1, "conteudo".getBytes(StandardCharsets.UTF_8));
+		mockMvc.perform(assinar(get("/s3/" + bucket + "/" + chave).param("uploadId", uploadId), shaVazio()))
+			.andExpect(status().isOk());
+		concluir(chave, uploadId, 1);
+
+		// abrir (PUT) + parte (PUT) + listar (LIST) + concluir (PUT) = 4 amostras novas. Sem a
+		// instrumentação são zero: o multipart serve arquivos grandes e não aparecia em lugar nenhum.
+		assertThat(amostras() - antes).isEqualTo(4);
+		var verbos = jdbc.queryForList("select distinct operation from network_storage_operation_metrics",
+			String.class);
+		assertThat(verbos).contains("PUT", "LIST");
+	}
+
+	/** O total de requisições que o painel de operações já tem gravado. */
+	private long amostras() {
+		Long total = jdbc.queryForObject("select coalesce(sum(req_count), 0) from network_storage_operation_metrics",
+			Long.class);
+		return total == null ? 0 : total;
+	}
+
 	@Test
 	void upload_inexistente_responde_xml_do_s3_e_nao_json() throws Exception {
 		MockHttpServletRequestBuilder pedido = get("/s3/" + bucket + "/" + "qualquer.bin")

@@ -740,6 +740,35 @@ UPSERT somando 10 gravações no mesmo minuto, `max_ms` preservado, média ponde
 retenção). Mutações conferidas: média das médias, "sem dado" virando a janela inteira, 500 contado como
 `CLIENT`, `LIST` sem contagem e chave primária sem `outcome` — todas derrubam.
 
+## 5.1.1 O multipart conta no mesmo painel (ciclo 103)
+
+Até aqui só o catálogo de objetos registrava operação (`PUT`/`GET`/`HEAD`/`DELETE`/`LIST`). O
+`StorageMultipartService` — que serve justamente os arquivos grandes — **não registrava nada**: um
+cliente enviando gigabytes em partes aparecia no painel com "sem operação", e a operação que mais
+consome banda era a única invisível. O teto de requisição por Access Key §5.2 conta as mesmas rotas.
+
+### Agora
+
+| rota | verbo contado |
+|---|---|
+| `POST /{bucket}/{key}?uploads` (abrir) | `PUT` |
+| `PUT /{bucket}/{key}?partNumber=` (cada parte) | `PUT` |
+| `GET /{bucket}/{key}?uploadId=` (ListParts) | `LIST` |
+| `DELETE /{bucket}/{key}?uploadId=` (Abort) | `DELETE` |
+| `POST /{bucket}/{key}?uploadId=` (concluir) | **não conta no sucesso** |
+
+A conclusão não conta em separado porque a gravação do objeto já conta `PUT` no catálogo — contar de
+novo faria todo upload grande valer dois. Ela conta **quando falha**, que é o que o painel precisa ver.
+A leitura interna das partes na conclusão usa `doParts` (sem contagem): `LIST` ali seria uma listagem
+que ninguém pediu.
+
+Resultado é `OK`, `CLIENT` (4xx) ou `SERVER` (5xx), como no catálogo. Serviço construído sem contador
+continua servindo.
+
+**Verificação:** `S3MultipartTests` **+1** — abrir + uma parte + `ListParts` + concluir produzem
+**4** amostras novas (antes: **1**, só a do catálogo na conclusão). Mutações: abrir sem contar, ListParts
+sem contar, parte sem contar — **3 de 3 derrubam**.
+
 ## 5.2 Teto de requisição por Access Key (ciclo 74)
 
 O doc 19 §3.2 já limitava **assinatura que falhou** (`s3-auth`, 20 por 5 min): protege o segredo
