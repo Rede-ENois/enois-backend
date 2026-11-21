@@ -1050,6 +1050,38 @@ As rotas de escrita exigem chave de idempotência. A remoção responde 200 com
 `{"status":"REMOVED"}` (e não 204) porque a resposta de comando precisa ter corpo para ser
 repetida no replay da idempotência.
 
+### ConversationTopicService e ConversationTopicController
+
+**Arquivo**: `src/main/java/com/socialcoisa/rede/messaging/application/ConversationTopicService.java`
+
+Tópicos do grupo de conversa (issue #915): organizam as mensagens por assunto. Qualquer
+participante lê; dono ou administrador criam, renomeam, arquivam e reordenam — a mesma derivação de
+papel da gestão de participantes (dono = criador da conversa). O tópico pertence a uma conversa e a
+mensagem confere isso antes de gravar, porque o id existir não basta.
+
+| Função | Descrição |
+|---|---|
+| `listTopics(conversationId, actorId)` | Tópicos da conversa, na ordem do grupo |
+| `createTopic(conversationId, actorId, name)` | Cria (até 30 por grupo, nome único, até 60 caracteres) |
+| `renameTopic(...)` | Renomeia; nome nulo mantém |
+| `archiveTopic(...)` | Para de receber mensagem nova; o histórico continua legível |
+| `reorderTopics(conversationId, actorId, orderedTopicIds)` | A lista enviada precisa ser a lista inteira |
+| `requireUsableTopic(conversationId, rawTopicId)` | Confere o tópico de uma mensagem nova: da conversa e aberto; devolve `null` sem tópico |
+
+**Arquivo**: `src/main/java/com/socialcoisa/rede/messaging/adapters/in/web/ConversationTopicController.java`
+
+| Função | Rota |
+|---|---|
+| `list(...)` | GET /api/conversations/{conversationId}/group/topics |
+| `create(...)` | POST /api/conversations/{conversationId}/group/topics |
+| `rename(...)` | PATCH /api/conversations/{conversationId}/group/topics/{topicId} |
+| `archive(...)` | POST /api/conversations/{conversationId}/group/topics/{topicId}/archive |
+| `reorder(...)` | POST /api/conversations/{conversationId}/group/topics/reorder |
+
+A mensagem guarda o tópico em `messages.topic_id` (V371, nula fora de tópico e em todas as
+mensagens anteriores) e `GET .../messages?topicId=` filtra na consulta, junto com o cursor e o
+"apagar para mim".
+
 ### MessagingContractController
 
 **Arquivo**: `src/main/java/com/socialcoisa/rede/messaging/adapters/in/web/MessagingContractController.java`

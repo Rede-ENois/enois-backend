@@ -200,6 +200,16 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 	}
 
 	@Override
+	public List<Message> findMessagesByConversationAndTopic(String conversationId, String viewerId, String topicId,
+			java.time.Instant before, String beforeId, int limit) {
+		var page = PageRequest.of(0, limit);
+		var messages = before == null
+			? messageRepo.visibleMessagesInTopic(conversationId, topicId, viewerId, page)
+			: messageRepo.visibleMessagesInTopicBefore(conversationId, topicId, viewerId, before, beforeId, page);
+		return messages.stream().map(MessageJpaEntity::toDomain).toList();
+	}
+
+	@Override
 	public Optional<Message> findRecentDuplicate(String conversationId, String senderId, String text,
 			java.time.Instant since, String replyToId) {
 		return messageRepo.findRecentDuplicate(conversationId, senderId, text, since, replyToId)

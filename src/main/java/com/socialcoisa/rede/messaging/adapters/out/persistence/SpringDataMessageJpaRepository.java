@@ -71,6 +71,30 @@ interface SpringDataMessageJpaRepository extends JpaRepository<MessageJpaEntity,
 			@Param("viewerId") String viewerId, @Param("before") java.time.Instant before,
 			@Param("beforeId") String beforeId, Pageable pageable);
 
+	/** Mesma pagina de {@link #visibleMessages}, restrita a um topico do grupo. */
+	@Query("""
+			SELECT m FROM MessageJpaEntity m
+			WHERE m.conversationId = :conversationId
+			AND m.topicId = :topicId
+			AND NOT EXISTS (SELECT h FROM MessageHiddenJpaEntity h
+				WHERE h.messageId = m.id AND h.userId = :viewerId)
+			ORDER BY m.createdAt DESC, m.id DESC""")
+	List<MessageJpaEntity> visibleMessagesInTopic(@Param("conversationId") String conversationId,
+			@Param("topicId") String topicId, @Param("viewerId") String viewerId, Pageable pageable);
+
+	/** Pagina anterior dentro de um topico, com o mesmo desempate por id. */
+	@Query("""
+			SELECT m FROM MessageJpaEntity m
+			WHERE m.conversationId = :conversationId
+			AND m.topicId = :topicId
+			AND (m.createdAt < :before OR (m.createdAt = :before AND m.id < :beforeId))
+			AND NOT EXISTS (SELECT h FROM MessageHiddenJpaEntity h
+				WHERE h.messageId = m.id AND h.userId = :viewerId)
+			ORDER BY m.createdAt DESC, m.id DESC""")
+	List<MessageJpaEntity> visibleMessagesInTopicBefore(@Param("conversationId") String conversationId,
+			@Param("topicId") String topicId, @Param("viewerId") String viewerId,
+			@Param("before") java.time.Instant before, @Param("beforeId") String beforeId, Pageable pageable);
+
 	/**
 	 * Nao-lidas de UMA conversa depois do ultimo read. A mensagem que o leitor apagou para si nao
 	 * conta (mesma regra da consulta em lote, senao o detalhe e a lista discordam).
