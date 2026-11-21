@@ -201,10 +201,11 @@ public class StorageScrubber {
 		Map<String, Long> porNivel = new LinkedHashMap<>();
 		int relidos = 0;
 		int scanned = 0;
+		String afterBucket = null;
 		String after = null;
 		while (scanned < Math.max(1, maxObjects)) {
 			List<StorageObject> page = bucket == null
-				? catalog.listAll(after, Math.min(200, Math.max(1, maxObjects) - scanned))
+				? catalog.listAll(afterBucket, after, Math.min(200, Math.max(1, maxObjects) - scanned))
 				: catalog.list(bucket, "", after, Math.min(200, Math.max(1, maxObjects) - scanned));
 			if (page.isEmpty()) {
 				break;
@@ -212,6 +213,8 @@ public class StorageScrubber {
 			for (StorageObject object : page) {
 				scanned++;
 				String id = object.id();
+				// O cursor é o par: paginar só pela chave pulava bucket posterior com chave menor.
+				afterBucket = object.bucket();
 				after = object.key();
 				// Só objeto servível tem durabilidade a medir: PENDING ainda não tem corpo, DELETED
 				// foi removido de propósito.

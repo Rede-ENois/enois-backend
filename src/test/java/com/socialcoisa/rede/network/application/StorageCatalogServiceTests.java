@@ -418,10 +418,11 @@ class StorageCatalogServiceTests {
 		}
 
 		@Override
-		public java.util.List<StorageObject> listAll(String afterKey, int limit) {
+		public java.util.List<StorageObject> listAll(String afterBucket, String afterKey, int limit) {
 			return byKey.values().stream()
 				.filter(o -> o.state() != StorageObjectState.DELETED)
-				.filter(o -> afterKey == null || o.key().compareTo(afterKey) >= 0)
+				.filter(o -> afterBucket == null || o.bucket().compareTo(afterBucket) > 0
+					|| (o.bucket().equals(afterBucket) && o.key().compareTo(afterKey) >= 0))
 				.sorted(java.util.Comparator.comparing(StorageObject::bucket).thenComparing(StorageObject::key))
 				.limit(limit)
 				.toList();

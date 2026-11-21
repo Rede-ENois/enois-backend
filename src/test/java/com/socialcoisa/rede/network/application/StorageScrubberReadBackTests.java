@@ -242,6 +242,31 @@ class StorageScrubberReadBackTests {
 		Files.setPosixFilePermissions(chave, java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
 	}
 
+	/**
+	 * A varredura <b>inteira</b> ({@code bucket = null}) percorre todos os buckets, mesmo quando a
+	 * chave de um é menor que a do último lido no anterior.
+	 *
+	 * <p><b>Antes:</b> a página seguinte pedia {@code object_key >= última}, sem o bucket. O fim da
+	 * página em {@code fotos/z.jpg} pulava {@code midia/a.mp4} para sempre — e um objeto corrompido
+	 * ali nunca entrava no relatório de durabilidade. Com a página pequena aqui, o pulo acontece
+	 * sempre.</p>
+	 */
+	@Test
+	void varredura_inteira_pagina_por_bucket_e_nao_pula_objeto_de_bucket_posterior() throws Exception {
+		// O scrubber lê páginas de até 200, então o cursor só é exercitado com mais de 200 objetos.
+		// "fotos" fica com 200 chaves `gato-*.jpg` e "midia" com `a.mp4` — alfabeticamente MENOR que a
+		// última de "fotos". Um cursor sem bucket procura `key >= gato-…` e nunca chega em `a.mp4`.
+		for (int i = 0; i < 200; i++) {
+			gravado(body("arquivo grande o bastante".repeat(40 + i)));
+		}
+		StorageObject deMidia = service.beginUpload("user_1", "midia", "a.mp4", "video/mp4");
+		service.store(node(), deMidia.id(), new ByteArrayInputStream(body("video")));
+
+		StorageScrubber.Report report = scrubber.scan(null, 300);
+
+		assertThat(report.objectsScanned()).isEqualTo(201);
+	}
+
 	@Test
 	void sem_releitura_a_varredura_nao_le_o_disco_e_nao_relata_divergencia() throws Exception {
 		StorageObject object = gravado(body("conteudo do arquivo"));
@@ -340,11 +365,14 @@ class StorageScrubberReadBackTests {
 		}
 
 		@Override
-		public List<StorageObject> listAll(String afterKey, int limit) {
+		public List<StorageObject> listAll(String afterBucket, String afterKey, int limit) {
+			// A MESMA ordem e o MESMO cursor do SQL: par (bucket, object_key), exclusivo. Um dublê
+			// que ordena só pela chave esconde o pulo de bucket e a varredura parece passar.
 			return objects.stream()
 				.filter(o -> o.state() == StorageObjectState.STORED)
-				.filter(o -> afterKey == null || o.key().compareTo(afterKey) > 0)
-				.sorted((a, b) -> a.key().compareTo(b.key()))
+				.filter(o -> afterBucket == null || o.bucket().compareTo(afterBucket) > 0
+					|| (o.bucket().equals(afterBucket) && o.key().compareTo(afterKey) > 0))
+				.sorted(java.util.Comparator.comparing(StorageObject::bucket).thenComparing(StorageObject::key))
 				.limit(limit)
 				.toList();
 		}
