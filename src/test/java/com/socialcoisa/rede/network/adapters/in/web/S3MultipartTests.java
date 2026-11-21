@@ -410,6 +410,39 @@ class S3MultipartTests {
 			.isEqualTo(10L * 1024 * 1024);
 	}
 
+	/**
+	 * A lista de partes da conclusão não pode repetir nem voltar um número.
+	 *
+	 * <p><b>Antes:</b> a conclusão aceitava qualquer sequência que existisse. {@code [1, 1]} montava
+	 * {@code part-1} <b>duas vezes</b> e gravava um objeto com o dobro do conteúdo do upload — o cliente
+	 * recebia 200 e um arquivo que ele não mandou. O S3 recusa com {@code InvalidPartOrder}.</p>
+	 *
+	 * <p>O discriminante é o par: a lista com repetição recusa <b>e</b> o upload continua com a parte
+	 * dele (a conclusão que falha não apaga nada); depois, a lista certa conclui com o tamanho da parte,
+	 * não com o dobro.</p>
+	 */
+	@Test
+	void conclusao_com_parte_repetida_e_recusada_sem_gravar_em_dobro() throws Exception {
+		String chave = "ordem/%s.bin".formatted(sufixo());
+		String uploadId = abrir(chave);
+		enviarParte(chave, uploadId, 1, bytes('a', 6 * 1024 * 1024));
+		enviarParte(chave, uploadId, 2, bytes('b', 1));
+
+		String xml = xmlDePartes(1, 1);
+		String sha = shaOfBytes(xml.getBytes(StandardCharsets.UTF_8));
+		var recusa = mockMvc.perform(assinar(post("/s3/" + bucket + "/" + chave).param("uploadId", uploadId)
+			.contentType("application/xml").content(xml), sha)).andReturn();
+		assertThat(recusa.getResponse().getStatus()).as(recusa.getResponse().getContentAsString())
+			.isEqualTo(400);
+		assertThat(recusa.getResponse().getContentAsString()).contains("InvalidPartOrder");
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_objects where bucket = ?"
+			+ " and object_key = ?", Integer.class, bucket, chave)).as("nada foi gravado").isZero();
+
+		concluir(chave, uploadId, 1, 2);
+		assertThat(jdbc.queryForObject("select bytes from network_storage_objects where bucket = ?"
+			+ " and object_key = ?", Long.class, bucket, chave)).isEqualTo(6L * 1024 * 1024 + 1);
+	}
+
 	// ------------------------------------------------------------------ apoio
 
 	private String abrir(String chave) throws Exception {
