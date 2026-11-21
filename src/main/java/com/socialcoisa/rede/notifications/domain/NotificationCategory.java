@@ -36,6 +36,11 @@ public enum NotificationCategory {
 		Map.entry("MENTION", SOCIAL),
 		Map.entry("NEW_MESSAGE", MESSAGES),
 		Map.entry("NEW_WORK_MESSAGE", MESSAGES),
+		// Grupo de conversa (issue #915): entrada e saída no grupo de chat. MESSAGES porque o
+		// assunto é a conversa — o grupo de conteúdo tem kinds próprios (GROUP_MEMBER_JOINED e
+		// GROUP_MEMBER_REMOVED).
+		Map.entry("CHAT_GROUP_MEMBER_ADDED", MESSAGES),
+		Map.entry("CHAT_GROUP_MEMBER_REMOVED", MESSAGES),
 		Map.entry("CALL_INCOMING", MESSAGES),
 		Map.entry("CALL_MISSED", MESSAGES),
 		Map.entry("CALL_ENDED", MESSAGES),
