@@ -71,8 +71,10 @@ import jakarta.servlet.http.HttpServletRequest;
  * mesmo caminho do PUT simples: nada vira objeto antes de o arquivo inteiro existir. Detalhes em
  * {@code StorageMultipartService} e em {@code 18-storage-gateway-s3.md} §4.2.</p>
  *
- * <p><b>Não implementado, e recusado com 501 em vez de "fazer parecer":</b> CopyObject, ACL, tagging,
- * versionId, bucket policy e {@code POST} de formulário.</p>
+ * <p><b>Não implementado:</b> CopyObject e UploadPartCopy são <b>recusados com 501</b> antes de
+ * qualquer escrita — um PUT com {@code x-amz-copy-source} não grava objeto nem parte vazia. ACL,
+ * tagging, {@code versionId}, bucket policy e {@code POST} de formulário não têm suporte e não são
+ * anunciados; a doc 18 é a lista do que existe.</p>
  *
  * <p><b>Documento em XML:</b> o gateway serializa à mão, sem {@code ListBucketResult.class}. O motivo
  * é controle de namespace e de ordem dos elementos: um JAXB muda a ordem e o SDK não protesta, mas
@@ -94,6 +96,9 @@ class S3GatewayController {
 
 	/** Teto de chaves por página, igual ao S3. */
 	private static final int MAX_KEYS = 1000;
+
+	/** O cabeçalho do S3 para copiar no servidor. CopyObject e UploadPartCopy não existem aqui. */
+	private static final String COPY_SOURCE = "x-amz-copy-source";
 
 	/** O formato de instante da S3: sempre três casas decimais e sempre {@code Z}. */
 	private static final DateTimeFormatter S3_INSTANT = DateTimeFormatter
@@ -220,6 +225,7 @@ class S3GatewayController {
 	ResponseEntity<Void> putObject(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "PUT");
 		requireBucket(credential, bucket);
+		recusarCopiaNoServidor(request);
 		String key = keyOf(request);
 		// O tipo é o que o SDK manda; sem ele, o mesmo padrão do resto do módulo.
 		String contentType = request.getContentType();
@@ -322,6 +328,7 @@ class S3GatewayController {
 	ResponseEntity<Void> uploadPart(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "PUT");
 		requireBucket(credential, bucket);
+		recusarCopiaNoServidor(request);
 		java.util.Map<String, String> query = query(request);
 		var upload = uploadDaChave(credential, bucket, request);
 		int numero;
@@ -943,6 +950,26 @@ class S3GatewayController {
 
 	private static ResponseEntity.BodyBuilder xml(HttpStatus status) {
 		return ResponseEntity.status(status).header(HttpHeaders.CONTENT_TYPE, "application/xml; charset=utf-8");
+	}
+
+	/**
+	 * CopyObject e UploadPartCopy chegam como um PUT com {@code x-amz-copy-source} e corpo vazio.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho era ignorado e o PUT comum seguia até a gravação. Com o corpo
+	 * vazio da cópia, a resposta era {@code 400 STORAGE_EMPTY_BODY} — como se o cliente tivesse
+	 * mandado um arquivo vazio — e a abertura deixava uma linha {@code PENDING} no catálogo. Com
+	 * corpo, os bytes do cliente eram gravados no destino e a resposta dizia 200: uma "cópia" que
+	 * não copiou nada.</p>
+	 *
+	 * <p>Operação ausente responde {@code 501 NotImplemented} no XML do S3, antes de
+	 * {@code beginUpload}/{@code receivePart}: nada é escrito — nem objeto, nem parte, nem linha.</p>
+	 */
+	private static void recusarCopiaNoServidor(HttpServletRequest request) {
+		String origem = request.getHeader(COPY_SOURCE);
+		if (origem != null && !origem.isBlank()) {
+			throw s3Error(501, "NotImplemented",
+				"CopyObject e UploadPartCopy nao sao suportados; envie os bytes no corpo do PUT.");
+		}
 	}
 
 	/**

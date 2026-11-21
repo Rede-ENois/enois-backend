@@ -71,7 +71,8 @@ contra o vetor externo é o que separa "implementei" de "assinei comigo mesmo e 
 
 **Não implementado**, e o brief manda não anunciar como se existisse:
 
-- **CopyObject**, **ACL**, **tagging**, **`versionId`**, **bucket policy**, **`POST` de formulário**.
+- **CopyObject** e **UploadPartCopy** — recusados com `501 NotImplemented` **antes de qualquer
+  escrita** (§4.10); **ACL**, **tagging**, **`versionId`**, **bucket policy**, **`POST` de formulário**.
 - **Regiões múltiplas**, **classes de armazenamento na resposta** (sempre `STANDARD`; a classe real é a
   da §8 e não é escolhida por requisição).
 
@@ -519,6 +520,25 @@ recebe `507 QuotaExceeded` com `20971520 em partes abertas` e **a chave não nas
 mesma gravação passa. Dois multiparts de 10 MiB: o primeiro **conclui** com o corpo de 10 MiB gravado.
 Mutações: a abertura ignora o reservado; a conclusão cobra as partes de novo; a abertura sem a tradução
 ao S3 — **3 de 3 derrubam**.
+
+### 4.10 Cópia no servidor é recusada antes de virar objeto (ciclo 90)
+
+`CopyObject` e `UploadPartCopy` não existem neste gateway. O cabeçalho que os pede,
+`x-amz-copy-source`, era **ignorado**: o `PUT` comum seguia até a gravação com o corpo vazio que o
+cliente manda na cópia. O resultado era `400 STORAGE_EMPTY_BODY` — como se o cliente tivesse enviado
+um arquivo vazio — e a abertura deixava uma linha `PENDING` no catálogo para a chave de destino. Com
+corpo, os bytes do cliente eram gravados sob o nome do destino e a resposta dizia `200`: uma "cópia"
+que não copiou nada. O javadoc do controller prometia `501`, mas não havia guarda nenhuma.
+
+Agora o cabeçalho é reconhecido **antes** de `beginUpload` (`PUT /{bucket}/{key}`) e de
+`receivePart` (`PUT ?partNumber=&uploadId=`), e a resposta é `501 NotImplemented` no XML do S3. Nada é
+escrito: nem objeto, nem parte, nem linha no catálogo.
+
+**Verificação:** `S3GatewayTests` **+1** — `PUT` com `x-amz-copy-source` e corpo vazio recebe `501`
+com `<Code>NotImplemented</Code>`, a chave de destino não existe (`HEAD` 404) e não há linha em
+`network_storage_objects`; `S3MultipartTests` **+1** — a parte com o mesmo cabeçalho recebe `501` e
+`network_storage_multipart_parts` continua vazia. Mutações: tirar a guarda do `PUT` e tirar a guarda
+do `UploadPart` — **2 de 2 derrubam**.
 
 ### 4.11 O corpo montado sai do disco quando a conclusão falha (ciclo 91)
 

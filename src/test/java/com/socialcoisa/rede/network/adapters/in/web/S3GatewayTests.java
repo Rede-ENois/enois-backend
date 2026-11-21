@@ -418,6 +418,37 @@ class S3GatewayTests {
 		assertThat(resultado.getResponse().getContentAsString()).contains("<Code>SlowDown</Code>");
 	}
 
+	/**
+	 * CopyObject não é implementado: o {@code PUT} com {@code x-amz-copy-source} é recusado, não
+	 * gravado vazio.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho era ignorado e o PUT comum gravava o corpo vazio que o cliente
+	 * manda na cópia — {@code 200} com um objeto de 0 byte no destino. O {@code aws s3 cp} interno
+	 * respondia sucesso e o arquivo "copiado" estava vazio: pior que a operação não existir.</p>
+	 *
+	 * <p>O discriminante é o par: {@code 501} <b>e</b> a chave de destino inexistente. Só o status
+	 * passaria se a gravação falhasse por outro motivo.</p>
+	 */
+	@Test
+	void put_com_cabecalho_de_copia_e_recusado_e_nao_cria_objeto() throws Exception {
+		gravar("copias/origem.txt", "conteudo que nao pode virar copia vazia");
+
+		MockHttpServletRequestBuilder copia = put("/s3/" + bucket + "/copias/destino.txt")
+			.header("x-amz-copy-source", "/" + bucket + "/copias/origem.txt")
+			.content(new byte[0]);
+		assinar(copia, SECRET, shaVazio());
+		var resposta = mockMvc.perform(copia).andReturn();
+
+		assertThat(resposta.getResponse().getStatus()).isEqualTo(501);
+		assertThat(resposta.getResponse().getContentAsString()).contains("<Code>NotImplemented</Code>");
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_objects where bucket = ?"
+			+ " and object_key = ?", Integer.class, bucket, "copias/destino.txt")).isZero();
+
+		MockHttpServletRequestBuilder conferencia = head("/s3/" + bucket + "/copias/destino.txt");
+		assinar(conferencia, SECRET, shaVazio());
+		assertThat(mockMvc.perform(conferencia).andReturn().getResponse().getStatus()).isEqualTo(404);
+	}
+
 	/** O caminho completo: PUT grava, GET devolve o corpo com o ETag, HEAD responde o tamanho. */
 	@Test
 	void put_get_e_head_de_um_objeto() throws Exception {
