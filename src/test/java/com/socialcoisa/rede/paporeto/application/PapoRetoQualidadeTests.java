@@ -103,7 +103,7 @@ class PapoRetoQualidadeTests {
 		// A palavra que está em toda parte sem nomear conversa: vinte e cinco publicações na janela.
 		publicadas("vida", 25, "vida", atras(6));
 		// As conversas de verdade: gente diferente, publicações de agora.
-		publicadas("mercado de trabalho hoje pra gente", 8, "mercado", atras(0));
+		publicadas("mercado de precos hoje pra gente", 8, "mercado", atras(0));
 		publicadas("seguranca digital hoje", 7, "seguranca", atras(0));
 		publicadas("java hoje", 6, "java", atras(0));
 		publicadas("linux hoje", 6, "linux", atras(0));
@@ -111,8 +111,8 @@ class PapoRetoQualidadeTests {
 		// O autor que repete: vinte publicações da mesma pessoa sobre o mesmo assunto.
 		publicadasDoMesmoAutor("promocao do meu curso de ingles", 20, "vendedor", "vend", atras(0));
 		// A conversa de três dias atrás, com uma fala de agora.
-		publicadas("mutirao da horta hoje", 12, "mutirao", atras(72));
-		publicadas("mutirao da horta hoje", 1, "mutirao_agora", atras(0));
+		publicadas("mutirao hoje", 12, "mutirao", atras(72));
+		publicadas("mutirao hoje", 1, "mutirao_agora", atras(0));
 		// O assunto que nasceu agora.
 		publicadas("black friday hoje", 12, "black", atras(0));
 	}
@@ -126,7 +126,7 @@ class PapoRetoQualidadeTests {
 		// Nenhuma palavra de conversa fiada aparece como tendência própria...
 		assertThat(ranking).doesNotContain("gente", "sei", "tenho", "mundo", "ate", "enois", "galera", "coisa");
 		// ...e o que aparece é conversa de verdade, tirada do texto do corpus.
-		assertThat(ranking).contains("mercado de trabalho", "seguranca digital", "java", "linux", "black friday");
+		assertThat(ranking).contains("mercado de precos", "seguranca digital", "java", "linux", "black friday");
 	}
 
 	@Test
@@ -174,9 +174,9 @@ class PapoRetoQualidadeTests {
 
 		// O que nasceu agora vale pelo que está vivo agora; a conversa de três dias atrás, com
 		// uma fala nova, não volta ao topo por causa dela.
-		assertThat(ranking.indexOf("black friday")).isLessThan(ranking.indexOf("mutirao da horta"));
+		assertThat(ranking.indexOf("black friday")).isLessThan(ranking.indexOf("mutirao"));
 		assertThat(statusDe(views, "black friday")).isEqualTo("EMERGENTE");
-		assertThat(statusDe(views, "mutirao da horta")).isEqualTo("PERSISTENTE");
+		assertThat(statusDe(views, "mutirao")).isEqualTo("PERSISTENTE");
 	}
 
 	@Test
@@ -186,7 +186,7 @@ class PapoRetoQualidadeTests {
 		List<String> ranking = subjects(rankingDoCorte());
 
 		// Treze pessoas falaram do mutirão na janela: ele perde a liderança, não o histórico.
-		assertThat(ranking).contains("mutirao da horta");
+		assertThat(ranking).contains("mutirao");
 	}
 
 	@Test
@@ -202,6 +202,27 @@ class PapoRetoQualidadeTests {
 		// vinte e sete falas de uma pessoa valiam mais que doze publicações de doze pessoas.
 		assertThat(antes.indexOf("curso de ingles")).isLessThan(antes.indexOf("black friday"));
 		assertThat(agora.indexOf("black friday")).isLessThan(agora.indexOf("curso de ingles"));
+	}
+
+	@Test
+	void basePequenaMostraOAssuntoMarcadoComoAmostragemMenor() {
+		// Rede pequena: nove publicações no escopo, três delas sobre o mutirão. Na base grande,
+		// três pessoas não passariam do chão de cinco — aqui, com a amostra pequena, o assunto
+		// aparece e vem marcado, com o número de pessoas e o tamanho da base para a tela.
+		publicadas("mutirao da horta", 3, "mutirao", atras(0));
+		publicadas("festa de aniversario", 2, "festa", atras(0));
+		publicadas("aquele filme", 4, "filme", atras(0));
+
+		List<PapoRetoService.SubjectView> ranking = rankingDoCorte();
+
+		assertThat(subjects(ranking)).contains("mutirao da horta");
+		PapoRetoService.SubjectView mutirao = ranking.stream()
+			.filter(view -> view.subject().equals("mutirao da horta"))
+			.findFirst()
+			.orElseThrow();
+		assertThat(mutirao.pessoas()).isEqualTo(3);
+		assertThat(mutirao.amostragemMenor()).isTrue();
+		assertThat(mutirao.janelaPublicacoes()).isEqualTo(9);
 	}
 
 	/**

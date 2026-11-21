@@ -50,8 +50,30 @@ public class PapoAssunto {
 	/** A meia-vida do decaimento temporal: uma fala de 24 horas atrás vale metade. */
 	public static final Duration MEIA_VIDA = Duration.ofHours(24);
 
-	/** Quantas pessoas distintas, no mínimo, para o assunto aparecer na lista. */
+	/**
+	 * Quantas pessoas distintas, no mínimo, para o assunto aparecer na lista.
+	 *
+	 * O chão é ADAPTATIVO: numa base com gente de sobra, cinco pessoas separam a conversa da
+	 * repetição de uma mão de contas; numa rede do tamanho de hoje, cinco pessoas na mesma
+	 * semana tornam a lista quase vazia. Quando o escopo tem menos de
+	 * {@link #BASE_PARA_CHAO_CHEIO} PUBLICAÇÕES na janela — a mesma massa em que a régua de
+	 * discriminação já não julga —, o chão cai para {@link #MINIMO_PESSOAS_BASE_MENOR}; o assunto
+	 * que só passa pela porta estreita aparece marcado como amostragem menor na tela, com o
+	 * número de pessoas. O chão nunca desce abaixo de dois: uma pessoa repetindo não é conversa.
+	 */
 	public static final int MINIMO_PESSOAS = 5;
+
+	/** O chão da base pequena: com pouca gente publicando, dois já estão conversando. */
+	public static final int MINIMO_PESSOAS_BASE_MENOR = 2;
+
+	/**
+	 * O chão de pessoas do assunto, dado o tamanho da base (publicações distintas no escopo na
+	 * janela): cinco pessoas quando o escopo tem massa de dados, dois quando tem pouco — e o
+	 * assunto que só passa pela porta estreita aparece marcado como amostragem menor.
+	 */
+	public static int chaoDePessoas(long publicacoesNaBase) {
+		return publicacoesNaBase >= BASE_PARA_CHAO_CHEIO ? MINIMO_PESSOAS : MINIMO_PESSOAS_BASE_MENOR;
+	}
 
 	/**
 	 * O teto de falas que UMA pessoa soma no assunto: repetir a mesma palavra na mesma conversa
@@ -74,6 +96,13 @@ public class PapoAssunto {
 
 	/** Sem esta massa de publicações na janela, a fração de publicações distintas não julga. */
 	public static final int MINIMO_PUBLICACOES_REGUA = 20;
+
+	/**
+	 * A partir de quantas publicações distintas no escopo a base é grande o bastante para o
+	 * chão cheio. Abaixo disso a amostragem é menor e o chão é o de
+	 * {@link #MINIMO_PESSOAS_BASE_MENOR} — a mesma massa de {@link #MINIMO_PUBLICACOES_REGUA}.
+	 */
+	public static final int BASE_PARA_CHAO_CHEIO = MINIMO_PUBLICACOES_REGUA;
 
 	private final String subject;
 
@@ -229,6 +258,15 @@ public class PapoAssunto {
 	/** A pontuação do assunto: a potência do corte ajustada pela discriminação. */
 	public double pontuacao() {
 		return potencia * discriminacao();
+	}
+
+	/**
+	 * O assunto passou pela porta estreita: tem gente de verdade, mas menos que o chão cheio —
+	 * a tela mostra o marcador de amostragem menor com o número de pessoas. Também cobre a base
+	 * pequena, onde dois já são conversa por falta de gente, não por excesso de ruído.
+	 */
+	public boolean amostragemMenor() {
+		return pessoas >= MINIMO_PESSOAS_BASE_MENOR && pessoas < MINIMO_PESSOAS;
 	}
 
 	/**
