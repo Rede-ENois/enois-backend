@@ -809,3 +809,33 @@ Mutações (**8 de 8 derrubam**): a cópia revogada voltar a contar; o nó revog
 cópia de outro nó revogado contar como saída; lápide entrar na conta; `STALE` contar como guardada;
 réplica 0 contar como cópia de nó; `warning` sempre verdadeiro; `SUSPENDED` contar como saída.
 Sem migração nova.
+
+## 5.13 A cópia divergente é devolvida antes de a lacuna ser reposta (ciclo 94)
+
+A cura fazia a lacuna primeiro e a divergência depois. No caminho da lacuna o
+`StoragePlacementService.chooseReplicas` conta como **ocupado** todo nó com cópia `OK` — inclusive o
+nó cuja cópia está divergente, porque ela ainda está `OK` no catálogo naquele instante. O resultado
+de uma rodada que encontrava as duas coisas para o mesmo objeto era este:
+
+1. a lacuna não achava candidato (o único nó livre estava "ocupado" pela cópia ruim);
+2. a divergência virava `GONE` logo em seguida e o espaço era devolvido;
+3. a rodada **terminava** com o objeto em uma cópia só e nada a caminho.
+
+O objeto só era reposto na rodada seguinte — e rodada de healing é operada, não contínua. Entre as
+duas ele ficava com a durabilidade de um disco só, que é exatamente o estado que o §9 do brief chama
+de sem redundância externa.
+
+### Agora
+
+A divergência é tratada **antes** da lacuna, na mesma rodada e no mesmo `heal`. Devolver o espaço
+primeiro tira o nó da conta de `chooseReplicas`, e a designação que vem logo depois já pode escolher o
+nó que estava ocupado pela cópia ruim. O que **não** mudou:
+
+- a cópia divergente vira `GONE`, nunca é apagada do disco de participante;
+- a réplica 0 continua intocada quando é ela que diverge (`REPLICA_ZERO` só audita);
+- a réplica nova entra `PENDING_REMOTE`: quem diz "a cópia existe" é o nó, com o digest que mediu;
+- nada é removido antes de a cópia nova ser confirmada — a `GONE` só deixa de contar como espaço.
+
+**Verificação:** `StorageHealerTests` **+1** — `nd_x` com cópia divergente e `nd_y` livre: a mesma
+rodada grava `nd_x` → `GONE` **e** `nd_y` → `PENDING_REMOTE`, nessa ordem. Mutação: devolver a
+lacuna para antes da divergência — **derruba**.

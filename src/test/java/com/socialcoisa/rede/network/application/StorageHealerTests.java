@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.network.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -266,6 +267,44 @@ class StorageHealerTests {
 		assertThat(relatorio.repostos()).hasSize(1);
 		assertThat(gravadas.get(0).state()).isEqualTo(StoragePlacement.State.GONE);
 		assertThat(gravadas.get(0).nodeId()).isEqualTo("nd_x");
+	}
+
+	/**
+	 * A cópia divergente de nó é <b>devolvida</b> e o espaço é <b>reposto</b> na mesma rodada.
+	 *
+	 * <p><b>Antes:</b> a lacuna era resolvida primeiro e a divergência depois. No caminho da
+	 * lacuna o placement já contava a cópia divergente como ocupada — ela ainda era {@code OK} no
+	 * catálogo —, então não havia candidato; a divergência virava {@code GONE} logo em seguida e a
+	 * rodada terminava com o objeto em <b>uma</b> cópia só, sem nada a caminho. A próxima rodada
+	 * via a lacuna, mas só depois de o espaço ter passado a noite devolvido.</p>
+	 *
+	 * <p><b>Agora:</b> a divergência é tratada antes, com o nó dela já fora da conta do placement.
+	 * O discriminante é o par: {@code nd_x} fica {@code GONE} <b>e</b> a réplica nova é designada
+	 * ao outro nó na mesma rodada.</p>
+	 */
+	@Test
+	void copia_divergente_e_devolvida_e_o_espaco_e_reposto_na_mesma_rodada() {
+		// A varredura real devolve as duas coisas para o mesmo objeto: a cópia que não confere e a
+		// lacuna que ela deixa. O catálogo ainda diz que `nd_x` está OK quando a rodada começa.
+		when(scrubber.scan(isNull(), anyInt(), anyBoolean())).thenReturn(
+			new StorageScrubber.Report(2, 1,
+				List.of(new StorageScrubber.Report.UnderReplicated("sob_1", 1, 1, List.of("nd_cp"))), 1,
+				List.of(new StorageScrubber.Report.Divergent("sob_1", 1, "nd_x", "a".repeat(64), "b".repeat(64))),
+				Map.of()));
+		when(catalog.findById("sob_1")).thenReturn(Optional.of(stored("sob_1", 2048)));
+		when(catalog.copies("sob_1")).thenReturn(List.of(
+			new StoragePlacement("sob_1", 0, "nd_cp", 2048, "a".repeat(64), StoragePlacement.State.OK, NOW),
+			new StoragePlacement("sob_1", 1, "nd_x", 2048, "a".repeat(64), StoragePlacement.State.OK, NOW)));
+		NetworkNode sadio = storageNode("nd_y", "sul");
+		when(placement.chooseReplicas(eq("sob_1"), anyLong(), any(Instant.class))).thenReturn(List.of(sadio));
+		expectSaved();
+
+		StorageHealer.Report relatorio = healer.heal("adm_1", null, 100, false);
+
+		assertThat(gravadas).extracting(StoragePlacement::nodeId, StoragePlacement::state).containsExactly(
+			tuple("nd_x", StoragePlacement.State.GONE),
+			tuple("nd_y", StoragePlacement.State.PENDING_REMOTE));
+		assertThat(relatorio.designated()).extracting(StorageHealer.HealedObject::nodeId).containsExactly("nd_y");
 	}
 
 	@Test
