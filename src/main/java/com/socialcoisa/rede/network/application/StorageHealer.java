@@ -159,6 +159,25 @@ public class StorageHealer {
 		List<HealedObject> designados = new ArrayList<>();
 		List<Skipped> pulados = new ArrayList<>();
 
+		// A divergência vem ANTES da lacuna, e a ordem é o que faz a rodada fechar: a cópia
+		// divergente ainda é `OK` no catálogo quando a lacuna é calculada, e o placement a conta como
+		// ocupada. Resolver a lacuna primeiro não achava candidato; a divergência virava `GONE` logo
+		// depois e o objeto ficava com uma cópia só, sem nada a caminho. Devolvendo o espaço antes, a
+		// designação da mesma rodada já pode escolher o nó que estava ocupado.
+		List<Object> repostos = new ArrayList<>();
+		java.util.Set<String> jaTratadas = new java.util.HashSet<>();
+		for (StorageScrubber.Report.Divergent divergente : varredura.divergent()) {
+			jaTratadas.add(divergente.objectId() + "#" + divergente.replica());
+			repostos.addAll(repor(actorId, divergente, dryRun));
+		}
+		for (StoragePlacement marcada : copiasStale(bucket, bounded)) {
+			if (jaTratadas.contains(marcada.objectId() + "#" + marcada.replica())) {
+				continue;
+			}
+			repostos.addAll(repor(actorId, new StorageScrubber.Report.Divergent(marcada.objectId(),
+				marcada.replica(), marcada.nodeId(), marcada.sha256(), ""), dryRun));
+		}
+
 		for (StorageScrubber.Report.UnderReplicated lacuna : varredura.underReplicated()) {
 			StorageObject objeto = catalog.findById(lacuna.objectId()).orElse(null);
 			if (objeto == null || !objeto.servable()) {
@@ -201,26 +220,6 @@ public class StorageHealer {
 				continue;
 			}
 			gravarDesignacoes(actorId, objeto, escolhidos.subList(0, limite), copias, bytes, designados);
-		}
-
-		// Duas origens para a mesma pergunta. A varredura só relê o disco DESTA instalação, e o
-		// Control Plane pode não ter corpo nenhum no disco (é o caso da instalação que não hospeda
-		// réplica 0): aí `divergent` volta vazio para sempre, mesmo com a cópia de um nó já STALE.
-		// O estado da colocação é a outra testemunha — foi o próprio nó que declarou o digest errado
-		// ou a varredura dele que mediu. As duas listas se somam sem duplicar: a divergente sem
-		// linha STALE (o disco deste CP) é justamente a que só a releitura enxerga.
-		List<Object> repostos = new ArrayList<>();
-		java.util.Set<String> jaTratadas = new java.util.HashSet<>();
-		for (StorageScrubber.Report.Divergent divergente : varredura.divergent()) {
-			jaTratadas.add(divergente.objectId() + "#" + divergente.replica());
-			repostos.addAll(repor(actorId, divergente, dryRun));
-		}
-		for (StoragePlacement marcada : copiasStale(bucket, bounded)) {
-			if (jaTratadas.contains(marcada.objectId() + "#" + marcada.replica())) {
-				continue;
-			}
-			repostos.addAll(repor(actorId, new StorageScrubber.Report.Divergent(marcada.objectId(),
-				marcada.replica(), marcada.nodeId(), marcada.sha256(), ""), dryRun));
 		}
 
 		LOG.info("storage heal dryRun={} objetos={} designados={} pulados={} repostos={}", dryRun,
