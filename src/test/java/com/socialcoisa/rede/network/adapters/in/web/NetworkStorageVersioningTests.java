@@ -166,6 +166,32 @@ class NetworkStorageVersioningTests {
 			current.id());
 	}
 
+	/**
+	 * A versão restaurada é <b>baixável</b>: tem corpo de verdade, não só o digest do catálogo.
+	 *
+	 * <p><b>Antes:</b> o {@code restore} criava a versão nova e a marcava {@code STORED} com o
+	 * digest da antiga, mas não gravava cópia nenhuma — nem a réplica 0. O catálogo dizia que a
+	 * chave voltou a ter conteúdo; o download respondia {@code 409} sem cópia registrada, e a
+	 * varredura acusava divergência num objeto que nunca chegou a um disco.</p>
+	 *
+	 * <p><b>Agora:</b> a restauração grava a réplica 0 com o corpo da versão antiga, e o digest
+	 * sai do que foi efetivamente escrito — o mesmo caminho do upload.</p>
+	 */
+	@Test
+	void versao_restaurada_e_baixavel_com_o_corpo_da_antiga() throws Exception {
+		String bucket = "fotos-restaura-corpo";
+		policy(bucket, true, null, null);
+		StorageObject v1 = armazena(bucket, "h.jpg", "conteudo da versao um");
+		armazena(bucket, "h.jpg", "conteudo da versao dois");
+
+		StorageObject restaurada = storage.restore("adm_1", bucket, "h.jpg", 1);
+
+		assertThat(restaurada.sha256()).isEqualTo(v1.sha256());
+		MockHttpServletResponse resposta = content(restaurada.id());
+		assertThat(resposta.getStatus()).as("a versao restaurada tem corpo").isEqualTo(200);
+		assertThat(resposta.getContentAsString(StandardCharsets.UTF_8)).isEqualTo("conteudo da versao um");
+	}
+
 	/** Restaurar a versão que já está na frente é erro explícito, não operação vazia. */
 	@Test
 	void restaurar_a_versao_corrente_e_recusado() throws Exception {

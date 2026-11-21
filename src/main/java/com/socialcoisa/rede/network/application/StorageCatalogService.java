@@ -758,10 +758,29 @@ public class StorageCatalogService {
 		}
 		esquecerUsoDoParticipante(actorId);
 		catalog.insertVersion(id, bucket, key, old.contentType(), actorId, now, next);
-		// O conteúdo é o da versão antiga, e o conferido é o medido nela: a restauração não relê o
-		// disco, então o digest que vale é o que o catálogo já guardava.
-		if (!catalog.markStored(id, old.bytes(), old.sha256(), now)) {
-			throw new ApiException(409, "STORAGE_VERSION_RACE", "A chave mudou durante a restauracao.");
+		// A versão restaurada é um objeto NOVO, e precisa do corpo dela. Antes, a linha era marcada
+		// STORED com o digest da antiga sem nada ser gravado: o catálogo dizia que a chave voltou a
+		// ter conteúdo e o download respondia 409 sem cópia — a restauração devolvia um objeto que
+		// nenhum disco tinha. O corpo vem da versão antiga, pela mesma leitura do download, e é
+		// gravado pelo caminho do upload: o digest que fica é o do que foi escrito, não o prometido.
+		try (InputStream corpo = openReplicaZeroBody(old.id())) {
+			// Sem `requireStorage`: quem restaura é o Control Plane, e a réplica 0 é dele. A conta
+			// da cota é do participante, e a restauração não passa por ela — o espaço já era dele
+			// na versão antiga e a nova ocupação é a mesma dos bytes.
+			boolean gravou = doFinishUpload(id, corpo, actorId, false) != null;
+			if (!gravou) {
+				throw new ApiException(409, "STORAGE_VERSION_RACE", "A chave mudou durante a restauracao.");
+			}
+		}
+		catch (java.io.IOException fechou) {
+			throw new ApiException(409, "STORAGE_VERSION_NOT_SERVABLE",
+				"A copia da versao antiga nao pode ser lida para restaurar.");
+		}
+		catch (ApiException recusado) {
+			// A versão nova já está no catálogo como PENDING e sem corpo: sai da chave para não
+			// deixar um objeto que ninguém consegue baixar e que barra a próxima restauração.
+			catalog.discardPending(id);
+			throw recusado;
 		}
 		catalog.setExpiresAt(id, bucketPolicy(bucket).expiresAtFor(now));
 		audit.record(actorId, "STORAGE_VERSION_RESTORED", id,

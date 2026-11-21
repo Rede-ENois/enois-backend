@@ -535,7 +535,19 @@ versão que estava na frente é substituída, não apagada: quem baixou a versã
 que baixou, e o histórico continua contando o que aconteceu. Restaurar a versão que já está na frente
 é 409, não operação vazia.
 
-O digest restaurado é o que o catálogo guardava da versão antiga — a restauração não relê o disco.
+**A versão restaurada é um objeto novo, e tem corpo próprio (ciclo 95).** Até o ciclo 94 a linha era
+marcada `STORED` com o digest da antiga sem nada ser gravado: o catálogo dizia que a chave voltou a
+ter conteúdo e o download respondia `409` sem cópia, e a varredura acusava divergência num objeto que
+nunca chegou a um disco. A restauração devolvia um objeto que nenhum nó tinha.
+
+Agora o corpo é lido da versão antiga (`openReplicaZeroBody`) e gravado pelo **mesmo caminho do
+upload** (`doFinishUpload`): o digest que a versão nova carrega é o do que foi escrito, medido ao
+atravessar o fluxo, e a réplica 0 fica com os bytes no disco do Control Plane. Se a leitura da antiga
+ou a gravação falhar, a versão nova é descartada da chave — não fica um objeto sem corpo nem que
+barre a próxima tentativa.
+
+**Verificação:** `NetworkStorageVersioningTests` **+1** — restaurar v1 e baixar a v3 devolve `200` com
+o texto da v1. Mutação: voltar ao `markStored` sem gravar — **derruba**.
 
 ### 11.6 Rotas (admin)
 
