@@ -2,7 +2,6 @@ package com.socialcoisa.rede.paporeto.application;
 
 import java.text.Normalizer;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -27,17 +26,20 @@ import org.springframework.stereotype.Component;
  *   — é o "que", "de", "pra" saindo; riso ("kkkk", "hahaha"), número puro ("2026") e letra
  *   repetida ("assssss") também não; a lista fecha as falas da rede que não nomeiam conversa
  *   nenhuma ("gente", "tipo", "coisa", "sei", "tenho") — foi o bug do "gente" em alta;
- * - o extrator usa UNIGRAMAS e EXPRESSÕES de palavras elegíveis VIZINHAS no texto: o par é de
- *   palavras vizinhas ("inteligencia artificial") ou de palavras separadas por UM conector de
- *   expressão composta ("mercado de trabalho", "curso de ingles") — pontuação, palavra vazia
- *   fora da lista de conectores ("feei o meetup" não cola) ou distância maior que um token
- *   quebram o par, e palavra repetida não vira par consigo mesma ("praia praia" é um assunto só);
- * - o pareamento é guloso e NÃO SOBREPÕE: cada palavra entra em uma única expressão, da
+ * - o extrator usa UNIGRAMAS e EXPRESSÕES com CONTEXTO: o par é de palavras vizinhas
+ *   ("inteligencia artificial", "carro quebrou") ou de palavras separadas por um conector —
+ *   preposição de tema, posse ou lugar ("mercado de trabalho", "meetup na sexta", "aula de
+ *   violao", "palestra sobre rust"). Pontuação, "com", "que" ou distância maior que um token
+ *   quebram o par ("praia com o cachorro" não cola), e palavra repetida não vira par consigo
+ *   mesma ("praia praia" é um assunto só);
+ * - verbo de intenção ao lado de conector não forma par ("vou pra casa", "quero de presente"):
+ *   é frase, não conversa;
+ * - o pareamento é guloso e NÃO SOBREPOE: cada palavra entra em uma única expressão, da
  *   esquerda para a direita, e o par vence a palavra solta — assim "meetup de rust na sexta"
  *   vira "meetup de rust" + "sexta" (a mesma conversa não é contada duas vezes sob dois pares);
- * - o assunto do texto funde a expressão com os seus unigramas: quando "inteligencia artificial"
- *   aparece junto, ela cobre "inteligencia" e "artificial" — o mais específico nomeia a
- *   conversa; unigrama que não entrou em expressão nenhuma é assunto próprio;
+ * - o assunto do texto é o CLUSTER já decidido na extração: a palavra que entrou num par não
+ *   sai solta (é o contexto que nomeia a conversa — "mercado de trabalho" e não "mercado"), e
+ *   só a palavra que não entrou em par nenhum é assunto próprio;
  * - as TAGS da publicação são assunto declarado pelo autor e entram como fala própria, sem
  *   depender de aparecerem no texto; o assunto da taxonomia (TECNOLOGIA, DESIGN…) fica de
  *   fora de propósito: é amplo demais e viraria alta de todo mundo;
@@ -83,12 +85,23 @@ public class PapoAssuntoExtractor {
 	private static final Set<String> PALAVRAS_VAZIAS = palavrasVazias();
 
 	/**
-	 * Os conectores de expressão composta: entre duas palavras elegíveis, um destes (e só um
-	 * destes, e só um token) mantém a expressão viva — "mercado de trabalho", "curso de
-	 * ingles", "trabalho em equipe". Fora daqui nada cola: vírgula, "com o", "que" e afins
-	 * separam de verdade duas conversas.
+	 * Os conectores de expressão composta: o que fica entre as duas palavras do par e as cola
+	 * numa conversa só — "mercado de trabalho", "aula de violao", "meetup na sexta", "mutirao da
+	 * horta", "curso pra iniciante", "palestra sobre rust". São as preposições que o português
+	 * usa para dizer "sobre o quê" — a posse, o lugar e o tema. Contrações ("do", "da", "no",
+	 * "na") também colam: "mutirao do bairro" é uma conversa.
 	 */
-	private static final Set<String> CONECTORES = Set.of("de", "da", "do", "das", "dos", "em", "no", "na", "nos", "nas");
+	private static final Set<String> CONECTORES = Set.of("de", "do", "da", "dos", "das", "na", "no", "nas", "nos",
+			"pra", "pro", "para", "sobre");
+
+	/**
+	 * Os verbos de intenção: a palavra da esquerda é verbo e a da direita vem logo depois de um
+	 * conector ("vou pra casa", "quero de presente", "preciso na sexta")? Então é FRASE, não
+	 * expressão composta — o sujeito que age e o lugar da ação não são a mesma conversa. É a
+	 * regra por SENTIDO; a do conector é por ESCRITA.
+	 */
+	private static final Set<String> VERBOS = Set.of("vou", "vamos", "vai", "vao", "quero", "queria", "queremos",
+			"pretendo", "pretende", "decidi", "tentei", "tentar", "consegui", "preciso", "embarquei", "participei");
 
 	/** Link inteiro: endereço, domínio e caminho não nomeiam conversa. */
 	private static final Pattern LINK = Pattern.compile("(?iu)\\b(?:https?://|ftp://|www\\.)\\S+");
@@ -164,6 +177,11 @@ public class PapoAssuntoExtractor {
 				"negocios", "bagulho", "bora", "sla", "pdc", "pdp", "vlw", "flw", "obg", "blz", "eita", "vish",
 				"poxa", "caramba", "putz", "puts", "opa", "rsrs", "risos", "hahaha", "realmente", "basicamente",
 				"literalmente", "sinceramente", "certamente", "praticamente",
+				// O comentário da publicação e o tempo relativo: "promocao do meu curso de ingles"
+				// fala de "curso de ingles" (o assunto) e de "promocao" (o tom) — e "mutirao HOJE"
+				// fala do mutirao. Fica na lista a dedo porque o par descolou a palavra do contexto
+				// e a régua do agregado só alcança o que aparece em muitos textos.
+				"promocao", "promocoes", "divulgacao", "novidade", "novidades", "urgente", "importante", "lembrete",
 				// Sobra de endereço quando o link já saiu: nada disso nomeia conversa.
 				"http", "https", "www", "ftp", "html", "htm", "php", "jsp", "utm", "href", "src", "cdn", "amp",
 				"nbsp", "link", "links"));
@@ -199,7 +217,7 @@ public class PapoAssuntoExtractor {
 		for (String expressao : expressoes(tokens, elegiveis)) {
 			unicas.putIfAbsent(expressao, true);
 		}
-		for (String expressao : unicas.keySet()) {
+		for (String expressao : assuntosDoTexto(unicas.keySet())) {
 			falas.add(new Fala(expressao, fonte));
 		}
 		if (assuntosDeclarados != null) {
@@ -228,12 +246,23 @@ public class PapoAssuntoExtractor {
 		while (i < elegiveis.size()) {
 			String atual = tokens.get(elegiveis.get(i)).texto();
 			if (i + 1 < elegiveis.size()) {
-				String proxima = tokens.get(elegiveis.get(i + 1)).texto();
-				String conector = conectorEntre(tokens, elegiveis.get(i), elegiveis.get(i + 1));
-				if (conector != null && !atual.equals(proxima)) {
+				int posicaoAtual = elegiveis.get(i);
+				int posicaoProxima = elegiveis.get(i + 1);
+				String proxima = tokens.get(posicaoProxima).texto();
+				// O conector pode estar entre as duas OU depois da próxima ("vou pra ... casa"):
+				// verbo e conector não formam par em nenhuma das duas escritas.
+				boolean conectorDepoisDaProxima = posicaoProxima + 1 < tokens.size()
+						&& CONECTORES.contains(tokens.get(posicaoProxima + 1).texto());
+				boolean verboAntesDoConector = posicaoAtual + 1 < tokens.size()
+						&& CONECTORES.contains(tokens.get(posicaoAtual + 1).texto());
+				String conector = conectorEntre(tokens, posicaoAtual, posicaoProxima);
+				if (conector != null && !atual.equals(proxima)
+						&& !(ligaVerboATema(atual, verboAntesDoConector) || ligaVerboATema(proxima,
+								conectorDepoisDaProxima))) {
 					expressoes.add(atual + conector + proxima);
-					expressoes.add(atual);
-					expressoes.add(proxima);
+					// A palavra do par NÃO entra solta depois dele: é o contexto que nomeia a
+					// conversa, e a palavra sozinha ("mercado") seria a mesma conversa contada de
+					// novo sem o contexto que a define.
 					i += 2;
 					continue;
 				}
@@ -242,6 +271,15 @@ public class PapoAssuntoExtractor {
 			i++;
 		}
 		return expressoes;
+	}
+
+	/**
+	 * A palavra é verbo de intenção e o conector está logo ao lado dela ("vou pra casa", "quero
+	 * de presente")? Então não é expressão composta: é frase — o verbo diz quem age, não sobre
+	 * o que se fala.
+	 */
+	private static boolean ligaVerboATema(String palavra, boolean conectorAoLado) {
+		return conectorAoLado && VERBOS.contains(palavra);
 	}
 
 	/**
@@ -261,28 +299,23 @@ public class PapoAssuntoExtractor {
 	}
 
 	/**
-	 * O clustering das falas de um texto: cada expressão composta funde as suas palavras no
-	 * cluster dela e o assunto do cluster é a expressão inteira (o mais específico vence).
-	 * Unigrama que não entrou em expressão nenhuma é cluster próprio. É o método que decide se
-	 * "inteligencia" e "inteligencia artificial" contam juntos — e o conector da expressão
-	 * ("mercado DE trabalho") não é palavra do cluster, é o que cola as duas.
+	 * A ordem dos assuntos de um texto: primeiro a expressão composta, depois a palavra solta,
+	 * na ordem em que apareceram. Serve para quem monta as falas na mão (tag declarada, leitura
+	 * de teste) na mesma ordem em que a extração as grava.
 	 */
-	public List<String> assuntos(List<Fala> falas) {
-		Set<String> cobertas = new HashSet<>();
-		Set<String> compostas = new LinkedHashSet<>();
+	public static List<String> assuntos(List<Fala> falas) {
+		List<String> assuntos = new ArrayList<>();
 		for (Fala fala : falas) {
 			if (composta(fala.expressao())) {
-				compostas.add(fala.expressao());
-				cobertas.addAll(palavrasValidas(fala.expressao()));
-			}
-		}
-		Set<String> assuntos = new LinkedHashSet<>(compostas);
-		for (Fala fala : falas) {
-			if (!cobertas.contains(fala.expressao())) {
 				assuntos.add(fala.expressao());
 			}
 		}
-		return List.copyOf(assuntos);
+		for (Fala fala : falas) {
+			if (!composta(fala.expressao())) {
+				assuntos.add(fala.expressao());
+			}
+		}
+		return List.copyOf(new LinkedHashSet<>(assuntos));
 	}
 
 	/**
@@ -331,6 +364,20 @@ public class PapoAssuntoExtractor {
 			}
 		}
 		return validas > 0 && validas <= MAXIMO_PALAVRAS;
+	}
+
+	/**
+	 * O cluster do texto, decidido na extração: a expressão composta vence e cobre as suas
+	 * palavras; a palavra solta só continua assunto quando nenhum par a usou. É o mesmo critério
+	 * de {@link #assuntos(List)}, aplicado cedo — o assunto que vai para a linha gravada é o que
+	 * a leitura lê, e o painel não mostra "cafeteira" e "cafeteira nesse" como duas conversas.
+	 */
+	private static List<String> assuntosDoTexto(Set<String> expressoes) {
+		List<Fala> falas = new ArrayList<>();
+		for (String expressao : expressoes) {
+			falas.add(new Fala(expressao, ""));
+		}
+		return assuntos(falas);
 	}
 
 	/** As palavras do texto dobradas, sem as vazias e com o tamanho mínimo. */

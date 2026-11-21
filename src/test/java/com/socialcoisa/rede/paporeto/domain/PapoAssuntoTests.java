@@ -20,6 +20,10 @@ class PapoAssuntoTests {
 		return new PapoAssunto(subject, 40, 0, 12, 3, AGORA, publicacoes, publicacoesDoEscopo, 20.0, 10.0);
 	}
 
+	private static PapoAssunto assuntoDePessoas(long pessoas) {
+		return new PapoAssunto("meetup", 10, 0, pessoas, 1, AGORA, pessoas, 10, 9.0, 9.0);
+	}
+
 	@Test
 	void decaimentoEhPorFalaEComMeiaVidaDeUmDia() {
 		assertThat(PapoAssunto.decaimento(AGORA, AGORA)).isEqualTo(1.0);
@@ -27,6 +31,23 @@ class PapoAssuntoTests {
 		assertThat(PapoAssunto.decaimento(AGORA.minus(PapoAssunto.MEIA_VIDA.multipliedBy(3)), AGORA)).isEqualTo(0.125);
 		// Fala "do futuro" (relógio torto da fonte) não vale mais que a fala de agora.
 		assertThat(PapoAssunto.decaimento(AGORA.plusSeconds(600), AGORA)).isEqualTo(1.0);
+	}
+
+	@Test
+	void chaoDePessoasCaiQuandoABaseEhPequenaEMarcaAAmostragem() {
+		// Base com massa de dados: o chão é o de sempre (cinco pessoas).
+		assertThat(PapoAssunto.chaoDePessoas(25)).isEqualTo(PapoAssunto.MINIMO_PESSOAS);
+		assertThat(PapoAssunto.chaoDePessoas(PapoAssunto.MINIMO_PUBLICACOES_REGUA))
+			.isEqualTo(PapoAssunto.MINIMO_PESSOAS);
+		// Base pequena: dois já estão conversando, e o assunto entre dois e quatro aparece
+		// marcado como amostragem menor — a tela diz quantas pessoas falaram.
+		assertThat(PapoAssunto.chaoDePessoas(0)).isEqualTo(PapoAssunto.MINIMO_PESSOAS_BASE_MENOR);
+		assertThat(PapoAssunto.chaoDePessoas(19)).isEqualTo(PapoAssunto.MINIMO_PESSOAS_BASE_MENOR);
+		assertThat(assuntoDePessoas(2).amostragemMenor()).isTrue();
+		assertThat(assuntoDePessoas(4).amostragemMenor()).isTrue();
+		assertThat(assuntoDePessoas(5).amostragemMenor()).isFalse();
+		// O chão nunca desce abaixo de dois: uma pessoa repetindo não é conversa.
+		assertThat(PapoAssunto.MINIMO_PESSOAS_BASE_MENOR).isGreaterThan(1);
 	}
 
 	@Test

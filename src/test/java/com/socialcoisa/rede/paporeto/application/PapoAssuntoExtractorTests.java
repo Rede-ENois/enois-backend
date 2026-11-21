@@ -20,8 +20,9 @@ class PapoAssuntoExtractorTests {
 		List<PapoAssuntoExtractor.Fala> falas = extractor.extrair("Inteligência Artificial mudou tudo",
 				"POST");
 
+		// O par é a conversa: a palavra que entrou nele não sai solta.
 		assertThat(falas).extracting(PapoAssuntoExtractor.Fala::expressao)
-			.contains("inteligencia artificial", "inteligencia", "artificial");
+			.containsExactly("inteligencia artificial", "mudou");
 	}
 
 	@Test
@@ -90,19 +91,18 @@ class PapoAssuntoExtractorTests {
 		List<PapoAssuntoExtractor.Fala> falas = extractor.extrair("[guia de rust](https://enois.ia.br/rust)",
 				"POST");
 
+		// O rótulo é a conversa com contexto: "guia de rust" é uma só; o endereço sai inteiro.
 		assertThat(falas).extracting(PapoAssuntoExtractor.Fala::expressao)
-			.contains("guia", "rust")
-			.doesNotContain("enois");
+			.contains("guia de rust")
+			.doesNotContain("enois", "guia", "rust");
 	}
 
 	@Test
 	void tagDeclaradaViraAssuntoDobrado() {
-		List<PapoAssuntoExtractor.Fala> falas = extractor.extrair("foto do setup", "POST",
-				List.of("Home Office", "http://exemplo.com"));
+		List<String> assuntos = extractor.assuntos(extractor.extrair("foto do setup", "POST",
+				List.of("Home Office", "http://exemplo.com")));
 
-		assertThat(falas).extracting(PapoAssuntoExtractor.Fala::expressao)
-			.contains("home office")
-			.doesNotContain("http");
+		assertThat(assuntos).contains("home office", "foto do setup").doesNotContain("http", "foto", "setup");
 	}
 
 	@Test
@@ -125,12 +125,43 @@ class PapoAssuntoExtractorTests {
 
 	@Test
 	void expressaoCompostaAtravessaOConectorEOLiga() {
-		// "mercado de trabalho" é UMA conversa: o "de" cola as duas palavras, e os unigramas
-		// ficam cobertos pela expressão (a tela não lista a mesma conversa três vezes).
+		// "mercado de trabalho" é UMA conversa: o "de" cola as duas palavras, e as palavras do
+		// par NÃO saem soltas — é o contexto que nomeia a conversa.
 		List<String> assuntos = extractor.assuntos(
 				extractor.extrair("mercado de trabalho na minha cidade", "POST"));
 
 		assertThat(assuntos).containsExactly("mercado de trabalho", "cidade");
+	}
+
+	@Test
+	void palavraDoParNaoSaiSemOContexto() {
+		// O bug da tela: o ranking pegava "mercado", "conta", "trabalho" soltos. Toda palavra
+		// que entrou num par fica coberta por ele e não vira assunto próprio.
+		List<String> assuntos = extractor.assuntos(
+				extractor.extrair("mutirao do bairro, conta de luz e ferramenta nova", "POST"));
+
+		assertThat(assuntos).containsExactly("mutirao do bairro", "conta de luz", "ferramenta nova");
+	}
+
+	@Test
+	void conectorColaSoOQueVemLogoDepoisDele() {
+		// "na praia com o cachorro na sexta": o "com" quebra o par, então "praia" fica sozinha —
+		// mas "cachorro" e "sexta" colam, porque o "na" está logo depois do cachorro.
+		List<String> assuntos = extractor.assuntos(
+				extractor.extrair("dia na praia com o cachorro na sexta", "POST"));
+
+		assertThat(assuntos).containsExactly("cachorro na sexta", "praia");
+	}
+
+	@Test
+	void verboComConectorNaFrenteNaoFormaPar() {
+		// "quero na sexta" é o desejo de alguém, não a conversa da sexta: o verbo diz quem age,
+		// e o conector só cola quando o tema vem antes dele. Na cadeia, o conector depois do
+		// verbo não o liga à palavra da esquerda.
+		assertThat(extractor.assuntos(extractor.extrair("quero na sexta ver ao vivo", "POST")))
+			.containsExactly("sexta", "vivo");
+		assertThat(extractor.assuntos(extractor.extrair("vou pra casa de praia", "POST")))
+			.containsExactly("casa de praia");
 	}
 
 	@Test
