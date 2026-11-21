@@ -218,6 +218,11 @@ class E2eKeyServiceTests {
 			return conversationKeys.values().stream()
 				.filter(k -> k.conversationId().equals(conversationId)).toList();
 		}
+
+		@Override
+		public void deleteConversationKey(String conversationId, String userId) {
+			conversationKeys.remove(conversationId + ":" + userId);
+		}
 	}
 
 	static class FakeParticipantReader implements ConversationParticipantReader {

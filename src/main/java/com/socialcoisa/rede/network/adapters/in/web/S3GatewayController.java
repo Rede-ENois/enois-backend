@@ -4,6 +4,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -70,8 +71,10 @@ import jakarta.servlet.http.HttpServletRequest;
  * mesmo caminho do PUT simples: nada vira objeto antes de o arquivo inteiro existir. Detalhes em
  * {@code StorageMultipartService} e em {@code 18-storage-gateway-s3.md} §4.2.</p>
  *
- * <p><b>Não implementado, e recusado com 501 em vez de "fazer parecer":</b> CopyObject, ACL, tagging,
- * versionId, bucket policy e {@code POST} de formulário.</p>
+ * <p><b>Não implementado:</b> CopyObject e UploadPartCopy são <b>recusados com 501</b> antes de
+ * qualquer escrita — um PUT com {@code x-amz-copy-source} não grava objeto nem parte vazia. ACL,
+ * tagging, {@code versionId}, bucket policy e {@code POST} de formulário não têm suporte e não são
+ * anunciados; a doc 18 é a lista do que existe.</p>
  *
  * <p><b>Documento em XML:</b> o gateway serializa à mão, sem {@code ListBucketResult.class}. O motivo
  * é controle de namespace e de ordem dos elementos: um JAXB muda a ordem e o SDK não protesta, mas
@@ -93,6 +96,13 @@ class S3GatewayController {
 
 	/** Teto de chaves por página, igual ao S3. */
 	private static final int MAX_KEYS = 1000;
+
+	/** O cabeçalho do S3 para copiar no servidor. CopyObject e UploadPartCopy não existem aqui. */
+	private static final String COPY_SOURCE = "x-amz-copy-source";
+
+	/** O formato de instante da S3: sempre três casas decimais e sempre {@code Z}. */
+	private static final DateTimeFormatter S3_INSTANT = DateTimeFormatter
+		.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(java.time.ZoneOffset.UTC);
 
 	/** O prefixo do metadado declarado pelo cliente no PUT; volta como cabeçalho no HEAD e no GET. */
 	static final String META_PREFIX = "x-amz-meta-";
@@ -151,42 +161,138 @@ class S3GatewayController {
 		int maxKeys = parseMaxKeys(query.get("max-keys"));
 		// `continuation-token` (v2) e `marker` (v1) são a mesma coisa: a chave da última página.
 		String after = v2 ? query.get("continuation-token") : query.get("marker");
-		List<StorageObject> found = storage.list(bucket, query.get("prefix"), after, maxKeys);
-		boolean truncated = found.size() == maxKeys;
-		String lastKey = found.isEmpty() ? null : found.get(found.size() - 1).key();
+		String prefix = query.get("prefix");
+		String delimiter = query.get("delimiter");
+		// `delimiter` vazio é "sem agrupamento" na prática; o parâmetro do S3 é de um caractere.
+		if (delimiter != null && delimiter.isEmpty()) {
+			delimiter = null;
+		}
+		// Uma linha a mais do que a página: é ela que diz se há próxima. "Página cheia" e "há mais"
+		// eram a mesma conta antes, e um bucket com exatamente `max-keys` objetos saía truncado com
+		// token, mandando o cliente pedir uma página que não existia.
+		//
+		// Com `delimiter`, cada grupo de subpasta conta como UMA entrada no `MaxKeys` — é assim no
+		// S3. Um grupo consome várias linhas do banco, então a leitura pede mais linhas quando há
+		// agrupamento: pedir só `maxKeys + 1` faria uma página curta com `IsTruncated=false` mesmo
+		// havendo objetos depois do último grupo lido.
+		int busca = delimiter == null ? maxKeys + 1 : Math.min(StorageCatalogService.MAX_LIST_LIMIT, (maxKeys + 1) * 10);
+		List<StorageObject> achados = storage.list(bucket, prefix, after, busca, true);
+		boolean talvezMais = achados.size() > (delimiter == null ? maxKeys : busca - 1);
+
+		List<StorageObject> chaves = new ArrayList<>();
+		java.util.LinkedHashSet<String> grupos = new java.util.LinkedHashSet<>();
+		int contados = 0;
+		String ultimoEmitido = null;
+		boolean truncated = false;
+		for (StorageObject object : achados) {
+			String grupo = delimiter == null ? null : grupoDe(object.key(), prefix, delimiter);
+			// O grupo já emitido não gasta entrada: todas as chaves dele só confirmam o mesmo prefixo.
+			if (grupo != null && grupos.contains(grupo)) {
+				ultimoEmitido = grupo;
+				continue;
+			}
+			if (contados >= maxKeys) {
+				truncated = true;
+				break;
+			}
+			contados++;
+			ultimoEmitido = grupo == null ? object.key() : grupo;
+			if (grupo == null) {
+				chaves.add(object);
+			}
+			else {
+				grupos.add(grupo);
+			}
+		}
+		// Sem linha extra e já no teto de linhas lidas: pode haver mais depois.
+		if (!truncated && chaves.size() + grupos.size() >= maxKeys && talvezMais) {
+			truncated = true;
+		}
 
 		S3Xml xml = new S3Xml();
 		xml.root("ListBucketResult").element("Name", bucket);
-		String prefix = query.get("prefix");
 		if (prefix != null) {
 			xml.element("Prefix", prefix);
 		}
-		xml.element("MaxKeys", maxKeys).element("KeyCount", found.size()).element("IsTruncated", truncated);
-		if (truncated && lastKey != null) {
-			xml.element(v2 ? "NextContinuationToken" : "NextMarker", lastKey);
+		if (delimiter != null) {
+			xml.element("Delimiter", delimiter);
 		}
-		for (StorageObject object : found) {
+		xml.element("MaxKeys", maxKeys).element("KeyCount", contados).element("IsTruncated", truncated);
+		if (truncated && ultimoEmitido != null) {
+			xml.element(v2 ? "NextContinuationToken" : "NextMarker", ultimoEmitido);
+		}
+		for (StorageObject object : chaves) {
 			xml.open("Contents").element("Key", object.key())
-				.element("LastModified", String.valueOf(object.createdAt()))
+				.element("LastModified", lastModified(object))
 				.element("ETag", "\"" + (object.sha256() == null ? "" : object.sha256()) + "\"")
 				.element("Size", object.bytes() == null ? 0 : object.bytes()).element("StorageClass", "STANDARD")
 				.close("Contents");
+		}
+		for (String grupo : grupos) {
+			xml.open("CommonPrefixes").element("Prefix", grupo).close("CommonPrefixes");
 		}
 		xml.close("ListBucketResult");
 		return xml(HttpStatus.OK).body(xml.toString());
 	}
 
-	/** DeleteBucket: recusa com 409 se ainda houver objeto, como o S3. */
+	/**
+	 * O prefixo comum de uma chave com {@code delimiter}: o trecho até a <b>primeira</b> ocorrência
+	 * do delimitador depois do {@code prefix} pedido, inclusive.
+	 *
+	 * <p>Chave que não tem o delimitador depois do prefixo não forma grupo — ela é conteúdo do
+	 * prefixo (é o caso de {@code fotos/raiz.jpg} pedindo {@code prefix=fotos/&delimiter=/}).</p>
+	 */
+	static String grupoDe(String key, String prefix, String delimiter) {
+		int inicio = prefix == null ? 0 : prefix.length();
+		if (key.length() <= inicio) {
+			return null;
+		}
+		int achado = key.indexOf(delimiter, inicio);
+		return achado < 0 ? null : key.substring(0, achado + delimiter.length());
+	}
+
+	/**
+	 * DeleteBucket: {@code 204} quando o bucket não tem objeto vivo; {@code 409 BucketNotEmpty} quando
+	 * tem, como o S3.
+	 *
+	 * <p><b>Antes:</b> respondia {@code 501 NotImplemented} em <b>todos</b> os casos, com a
+	 * justificativa "não há bucket vazio a apagar". A premissa estava errada: bucket existe enquanto
+	 * tem objeto <b>vivo</b> ({@code bucketsOf} filtra {@code state <> 'DELETED'}), então um bucket
+	 * cujas chaves foram todas removidas continuava em {@code ListBuckets} e o cliente não tinha como
+	 * tirá-lo. A rota também recusava com {@code 403} um bucket que só tinha lápides, porque a
+	 * conferência de dono usa a mesma lista de vivos: o dono "perdia" o próprio bucket ao esvaziá-lo.</p>
+	 *
+	 * <p><b>Agora:</b> a donagem de um bucket <b>esvaziado</b> é provada pelo que sobrou no catálogo
+	 * (as lápides), não só pelos vivos. Sem nada vivo e com lápides do dono → {@code 204}. Bucket
+	 * que o dono nunca gravou continua {@code 403}: não é dele.</p>
+	 */
 	@DeleteMapping("/{bucket}")
 	ResponseEntity<Void> deleteBucket(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "DELETE");
 		requireBucket(credential, bucket);
-		requireBucketDoDono(credential, bucket);
-		List<StorageObject> any = storage.list(bucket, null, null, 1);
-		if (!any.isEmpty()) {
+		requireBucketDoDonoOuEsvaziado(credential, bucket);
+		List<StorageObject> vivos = storage.list(bucket, null, null, 1);
+		if (!vivos.isEmpty()) {
 			throw new ApiException(409, "BucketNotEmpty", "O bucket ainda tem objetos.");
 		}
-		throw new ApiException(501, "NotImplemented", "Remocao de bucket nao e suportada: nao ha bucket vazio a apagar.");
+		// O bucket já "não existe" para o dono: nada vivo, nada listado. O 204 é a confirmação do S3.
+		return ResponseEntity.noContent().build();
+	}
+
+	/**
+	 * Donagem para o {@code DELETE} do bucket: vale o bucket que o dono tem <b>hoje</b> ou o que ele
+	 * <b>esvaziou</b>.
+	 *
+	 * <p>{@code bucketsOf} conta só objeto vivo — é a resposta certa para ler e gravar, mas errada
+	 * para apagar: depois da última lápide o dono deixaria de ver o próprio bucket e receberia
+	 * {@code 403} ao tentar removê-lo. O que prova a donagem aqui é a autoria do que está no
+	 * catálogo, vivo ou como lápide.</p>
+	 */
+	private void requireBucketDoDonoOuEsvaziado(S3Credential credential, String bucket) {
+		if (catalog.bucketHasObjectsOf(bucket, credential.ownerUserId())) {
+			return;
+		}
+		throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
 	}
 
 	// ---------------------------------------------------------------- objeto
@@ -211,6 +317,7 @@ class S3GatewayController {
 	ResponseEntity<Void> putObject(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "PUT");
 		requireBucket(credential, bucket);
+		recusarCopiaNoServidor(request);
 		String key = keyOf(request);
 		// O tipo é o que o SDK manda; sem ele, o mesmo padrão do resto do módulo.
 		String contentType = request.getContentType();
@@ -221,8 +328,16 @@ class S3GatewayController {
 		// Metadado e cabeçalhos declarados junto do corpo (V367): lidos ANTES da gravação, porque cabeçalho
 		// recusado não pode deixar objeto criado — nem um PENDING decorado com o que não foi aceito.
 		StorageCatalogService.ClientHeaders declarados = clientHeaders(request);
-		StorageObject pending = storage.beginUpload(credential.ownerUserId(), bucket, key,
-			contentType == null ? "application/octet-stream" : contentType);
+		StorageObject pending;
+		try {
+			pending = storage.beginUpload(credential.ownerUserId(), bucket, key,
+				contentType == null ? "application/octet-stream" : contentType);
+		}
+		catch (ApiException recusado) {
+			// A cota também recusa aqui, e no mesmo vocabulário do S3: o SDK lê `Code`, não o JSON
+			// do Control Plane. A abertura traduzia pelo `catch` da gravação, que ela nunca alcança.
+			throw noVocabularioDoS3(recusado);
+		}
 		storage.saveClientHeaders(pending, declarados);
 		boolean iaCriar = antes == null || !antes.id().equals(pending.id());
 		if (!iaCriar && antes.state() != StorageObjectState.PENDING) {
@@ -237,10 +352,7 @@ class S3GatewayController {
 			stored = storage.finishUpload(pending.id(), body(request), credential.ownerUserId());
 		}
 		catch (ApiException recusado) {
-			if (recusado.status() == 507 && "STORAGE_OWNER_QUOTA_EXCEEDED".equals(recusado.code())) {
-				throw s3Error(507, "QuotaExceeded", recusado.getMessage());
-			}
-			throw recusado;
+			throw noVocabularioDoS3(recusado);
 		}
 		if (!bucketSemDono(bucket, credential.ownerUserId())) {
 			desfazer(stored, antes);
@@ -284,16 +396,30 @@ class S3GatewayController {
 		requireBucket(credential, bucket);
 		String key = keyOf(request);
 		String expires = query(request).get("expires");
-		var upload = multipart.create(credential.ownerUserId(), credential.id(), bucket, key,
-			request.getContentType(), expires == null ? null : Long.valueOf(expires))
-			.comCabeçalhos(clientHeaders(request));
+		Long validade;
+		try {
+			validade = expires == null ? null : Long.valueOf(expires);
+		}
+		catch (NumberFormatException naoEhNumero) {
+			throw s3Error(400, "InvalidArgument", "expires precisa ser um numero de segundos.");
+		}
+		com.socialcoisa.rede.network.application.StorageMultipartService.Upload upload;
+		try {
+			upload = multipart.create(credential.ownerUserId(), credential.id(), bucket, key,
+				request.getContentType(), validade);
+		}
+		catch (ApiException recusado) {
+			// `expires` fora do intervalo é recusa do serviço; sem tradução, saía JSON no gateway.
+			throw noVocabularioDoS3(recusado);
+		}
+		var comCabecalhos = upload.comCabeçalhos(clientHeaders(request));
 		if (!bucketSemDono(bucket, credential.ownerUserId())) {
-			multipart.abort(upload.uploadId());
+			multipart.abort(comCabecalhos.uploadId());
 			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
 		}
 		S3Xml xml = new S3Xml();
 		xml.root("InitiateMultipartUploadResult").element("Bucket", bucket).element("Key", key)
-			.element("UploadId", upload.uploadId());
+			.element("UploadId", comCabecalhos.uploadId());
 		return xml(HttpStatus.OK).body(xml.toString());
 	}
 
@@ -308,11 +434,9 @@ class S3GatewayController {
 	ResponseEntity<Void> uploadPart(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "PUT");
 		requireBucket(credential, bucket);
+		recusarCopiaNoServidor(request);
 		java.util.Map<String, String> query = query(request);
-		var upload = multipart.require(query.get("uploadId"), credential.ownerUserId());
-		if (!upload.bucket().equals(bucket) || !upload.key().equals(keyOf(request))) {
-			throw s3Error(404, "NoSuchUpload", "O upload informado nao e desta chave.");
-		}
+		var upload = uploadDaChave(credential, bucket, request);
 		int numero;
 		try {
 			numero = Integer.parseInt(query.get("partNumber"));
@@ -320,7 +444,25 @@ class S3GatewayController {
 		catch (NumberFormatException notNumber) {
 			throw s3Error(400, "InvalidArgument", "partNumber invalido.");
 		}
-		var part = multipart.receivePart(upload, numero, body(request));
+		// O `Content-Length` é o único tamanho conhecido antes de ler: com ele a cota recusa a parte
+		// sem gravar nada; sem ele (corpo em chunks), a conta fecha depois de a parte ser medida.
+		String declarado = request.getHeader(HttpHeaders.CONTENT_LENGTH);
+		Long anunciado = null;
+		if (declarado != null && !declarado.isBlank()) {
+			try {
+				anunciado = Long.valueOf(declarado.trim());
+			}
+			catch (NumberFormatException invalido) {
+				anunciado = null;
+			}
+		}
+		com.socialcoisa.rede.network.application.StorageMultipartService.Part part;
+		try {
+			part = multipart.receivePart(upload, numero, body(request), anunciado);
+		}
+		catch (ApiException recusado) {
+			throw noVocabularioDoS3(recusado);
+		}
 		return ResponseEntity.ok().eTag("\"" + part.sha256() + "\"").header(HttpHeaders.CONTENT_LENGTH, "0")
 			.build();
 	}
@@ -336,10 +478,7 @@ class S3GatewayController {
 			throws java.io.IOException {
 		S3Credential credential = authenticate(request, "PUT");
 		requireBucket(credential, bucket);
-		var upload = multipart.require(query(request).get("uploadId"), credential.ownerUserId());
-		if (!upload.bucket().equals(bucket) || !upload.key().equals(keyOf(request))) {
-			throw s3Error(404, "NoSuchUpload", "O upload informado nao e desta chave.");
-		}
+		var upload = uploadDaChave(credential, bucket, request);
 		java.util.List<Integer> pedidas = partesDoXml(body(request));
 		var concluido = multipart.complete(upload, pedidas);
 		S3Xml xml = new S3Xml();
@@ -353,9 +492,39 @@ class S3GatewayController {
 	ResponseEntity<Void> abortMultipart(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "DELETE");
 		requireBucket(credential, bucket);
-		var upload = multipart.require(query(request).get("uploadId"), credential.ownerUserId());
+		var upload = uploadDaChave(credential, bucket, request);
 		multipart.abort(upload.uploadId());
 		return ResponseEntity.noContent().build();
+	}
+
+	/**
+	 * O upload do {@code uploadId}, <b>conferindo que é desta chave</b>.
+	 *
+	 * <p>O {@code uploadId} identifica o upload; a rota identifica o objeto. As duas coisas têm de
+	 * coincidir, e a S3 responde {@code 404 NoSuchUpload} quando não coincidem — para a chave pedida,
+	 * aquele upload não existe.</p>
+	 *
+	 * <p><b>Antes:</b> {@code UploadPart} e {@code CompleteMultipartUpload} conferiam; {@code ListParts}
+	 * e {@code AbortMultipartUpload} não. O {@code ListParts} de uma chave errada devolvia as partes de
+	 * <b>outro</b> arquivo com {@code 200}, e o {@code Abort} de uma chave errada <b>apagava</b> o upload
+	 * — um bug de concatenação de chave no cliente destruía o trabalho de outro arquivo. Reunir a
+	 * conferência num só ponto é o que impede a divergência de voltar pela terceira rota.</p>
+	 */
+	private com.socialcoisa.rede.network.application.StorageMultipartService.Upload uploadDaChave(S3Credential credential, String bucket,
+			HttpServletRequest request) {
+		com.socialcoisa.rede.network.application.StorageMultipartService.Upload upload;
+		try {
+			upload = multipart.require(query(request).get("uploadId"), credential.ownerUserId());
+		}
+		catch (ApiException recusado) {
+			// Upload inexistente, de outra conta ou vencido: o SDK precisa do XML para saber que é
+			// `NoSuchUpload` e recomeçar — em JSON ele trata como falha de rede.
+			throw noVocabularioDoS3(recusado);
+		}
+		if (!upload.bucket().equals(bucket) || !upload.key().equals(keyOf(request))) {
+			throw s3Error(404, "NoSuchUpload", "O upload informado nao e desta chave.");
+		}
+		return upload;
 	}
 
 	/** ListParts: {@code GET /{bucket}/{key}?uploadId=...} — o cliente confere o que já chegou. */
@@ -363,7 +532,7 @@ class S3GatewayController {
 	ResponseEntity<String> listParts(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "LIST");
 		requireBucket(credential, bucket);
-		var upload = multipart.require(query(request).get("uploadId"), credential.ownerUserId());
+		var upload = uploadDaChave(credential, bucket, request);
 		S3Xml xml = new S3Xml();
 		xml.root("ListPartsResult").element("Bucket", bucket).element("Key", upload.key())
 			.element("UploadId", upload.uploadId());
@@ -403,9 +572,9 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "GET");
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
-		StorageObject object = storage.requireDownloadable(bucket, keyOf(request));
-		return content.respond(object, request.getHeader(HttpHeaders.RANGE),
-			request.getHeader(HttpHeaders.IF_NONE_MATCH));
+		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request)));
+		return comVocabularioDoS3(() -> content.respond(object, request.getHeader(HttpHeaders.RANGE),
+			request.getHeader(HttpHeaders.IF_NONE_MATCH)));
 	}
 
 	/** HeadObject: mesmos cabeçalhos do GetObject, sem corpo. */
@@ -414,8 +583,8 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "GET");
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
-		StorageObject object = storage.requireDownloadable(bucket, keyOf(request), "HEAD");
-		return content.head(object);
+		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request), "HEAD"));
+		return comVocabularioDoS3(() -> content.head(object));
 	}
 
 	/** DeleteObject: lápide no catálogo. A resposta é 204 mesmo se a chave não existir (igual ao S3). */
@@ -863,6 +1032,23 @@ class S3GatewayController {
 		}
 	}
 
+	/**
+	 * O {@code LastModified} da listagem, no formato que a S3 manda: {@code yyyy-MM-dd'T'HH:mm:ss.SSS'Z'}.
+	 *
+	 * <p><b>Antes:</b> saía {@code String.valueOf(createdAt)}, isto é {@code Instant.toString()} — que
+	 * <b>omite</b> a fração quando ela é zero ({@code ...T08:00:00Z}) e emite até <b>nove</b> casas quando
+	 * não é ({@code ...T08:00:00.123456789Z}). Os dois são instantes válidos em Java, e é por isso que
+	 * passaram: o SDK da AWS desserializa o campo com um formatter de milissegundos e recusa o documento
+	 * inteiro — a listagem que abre no navegador falha no cliente.</p>
+	 *
+	 * <p>O milissegundo é truncado, não arredondado: {@code 999999} ns não pode virar o segundo seguinte
+	 * e dar a um objeto a data de outro.</p>
+	 */
+	static String lastModified(StorageObject object) {
+		Instant quando = object.updatedAt() != null ? object.updatedAt() : object.createdAt();
+		return S3_INSTANT.format(quando);
+	}
+
 	private static int parseMaxKeys(String value) {
 		if (value == null || value.isBlank()) {
 			return MAX_KEYS;
@@ -878,6 +1064,70 @@ class S3GatewayController {
 
 	private static ResponseEntity.BodyBuilder xml(HttpStatus status) {
 		return ResponseEntity.status(status).header(HttpHeaders.CONTENT_TYPE, "application/xml; charset=utf-8");
+	}
+
+	/**
+	 * CopyObject e UploadPartCopy chegam como um PUT com {@code x-amz-copy-source} e corpo vazio.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho era ignorado e o PUT comum seguia até a gravação. Com o corpo
+	 * vazio da cópia, a resposta era {@code 400 STORAGE_EMPTY_BODY} — como se o cliente tivesse
+	 * mandado um arquivo vazio — e a abertura deixava uma linha {@code PENDING} no catálogo. Com
+	 * corpo, os bytes do cliente eram gravados no destino e a resposta dizia 200: uma "cópia" que
+	 * não copiou nada.</p>
+	 *
+	 * <p>Operação ausente responde {@code 501 NotImplemented} no XML do S3, antes de
+	 * {@code beginUpload}/{@code receivePart}: nada é escrito — nem objeto, nem parte, nem linha.</p>
+	 */
+	private static void recusarCopiaNoServidor(HttpServletRequest request) {
+		String origem = request.getHeader(COPY_SOURCE);
+		if (origem != null && !origem.isBlank()) {
+			throw s3Error(501, "NotImplemented",
+				"CopyObject e UploadPartCopy nao sao suportados; envie os bytes no corpo do PUT.");
+		}
+	}
+
+	/**
+	 * A recusa do catálogo no <b>vocabulário do S3</b>.
+	 *
+	 * <p>O SDK não conhece {@code STORAGE_OWNER_QUOTA_EXCEEDED}: a cota tem de chegar como
+	 * {@code 507 QuotaExceeded}, no XML de erro do protocolo. Sem esta tradução, a recusa saía como o
+	 * JSON do Control Plane — {@code 507} que o cliente podia ler, mas não pelo código que ele trata.</p>
+	 *
+	 * <p>Um ponto só, para as rotas que gravam não divergirem: o {@code PUT} simples traduzia, o
+	 * {@code UploadPart} não.</p>
+	 */
+	/**
+	 * A recusa de uma rota de leitura traduzida do vocabulário do control plane para o do S3.
+	 *
+	 * <p>O objeto confirmado sem cópia registrada é um estado do catálogo que o cliente do S3 não
+	 * conhece: a leitura respondia o JSON interno {@code STORAGE_PLACEMENT_MISSING}, e o SDK, que lê
+	 * o {@code Code} do XML, caía numa falha opaca. A tradução do {@code PUT} não alcançava o
+	 * {@code GET} nem o {@code HEAD}, porque a recusa nasce dentro do serviço de conteúdo.</p>
+	 */
+	static <T> T comVocabularioDoS3(java.util.function.Supplier<T> leitura) {
+		try {
+			return leitura.get();
+		}
+		catch (ApiException recusado) {
+			throw noVocabularioDoS3(recusado);
+		}
+	}
+
+	static ApiException noVocabularioDoS3(ApiException recusado) {
+		if (recusado.status() == 507 && "STORAGE_OWNER_QUOTA_EXCEEDED".equals(recusado.code())) {
+			return s3Error(507, "QuotaExceeded", recusado.getMessage());
+		}
+		if ("STORAGE_PLACEMENT_MISSING".equals(recusado.code())) {
+			// O catálogo diz que existe e não há cópia: para o cliente do S3 é um conflito
+			// transitório do lado do servidor, não um erro de pedido — e ele sabe tentar de novo.
+			return s3Error(409, "InternalError", "O objeto esta confirmado no catalogo mas sem copia"
+				+ " registrada em no nenhum; tente de novo.");
+		}
+		// Qualquer outra recusa que nasceu nos serviços do Storage vira XML: o código interno do
+		// Énóis é legível o bastante (`NoSuchUpload`, `InvalidArgument`, `MalformedXML`, `InvalidPart`
+		// são os do S3) e o `Code` é o que o SDK lê. Antes, só os dois casos acima eram traduzidos e
+		// o resto saía como JSON do Control Plane — corpo que o SDK não sabe deserializar.
+		return s3Error(recusado.status(), recusado.code(), recusado.getMessage());
 	}
 
 	private static ApiException s3Error(int status, String code, String message) {

@@ -243,6 +243,48 @@ public class StorageRebalanceService {
 		return List.copyOf(orfas);
 	}
 
+	/**
+	 * Solta as transferências órfãs: as que perderam a designação fecham como {@code FAILED}, sem
+	 * tocar a cópia antiga.
+	 *
+	 * <p><b>Por que esta rota passou a existir.</b> {@link #stale()} e {@link #fail} existiam desde o
+	 * V354, e <b>nenhum caminho</b> os chamava: a página do painel listava as vivas, o operador via a
+	 * transferência de ontem, e não havia ato que a fechasse. Uma designação recolhida por outra rota
+	 * (o healing devolveu o espaço, a soltura de pendência venceu) deixava a transferência em
+	 * {@code PENDING} para sempre — o doc §12.3 promete {@code FAILED}, e o estado nunca era alcançado.</p>
+	 *
+	 * <p><b>Por que só seca por padrão.</b> É o mesmo desenho de {@code /storage/pending/release}: a
+	 * leitura é segura, a escrita é ato do operador. Fechar é irreversível na direção do {@code DONE}
+	 * (transferência {@code FAILED} não completa mais), e quem decide é quem leu a lista.</p>
+	 *
+	 * <p><b>O que não faz.</b> Não recolhe a designação (quem recolhe é a soltura, com o prazo dela),
+	 * não completa, não apaga corpo e não toca a cópia antiga: a transferência só para de esperar.</p>
+	 */
+	@Transactional
+	public Release releaseStale(String actorId, boolean dryRun) {
+		List<StorageRebalance> orfas = stale();
+		List<StorageRebalance> liberadas = new ArrayList<>();
+		if (!dryRun) {
+			for (StorageRebalance orfa : orfas) {
+				// A varredura e a escrita são transações diferentes: entre uma e outra, a confirmação
+				// do destino pode ter chegado e a transferência já não estar viva. `fail` só muda
+				// PENDING, e o falso não conta como liberada — é a mesma regra do ato unitário, não
+				// uma segunda cópia dela.
+				if (fail(actorId, orfa.id(), REASON_STALE)) {
+					liberadas.add(orfa);
+				}
+			}
+		}
+		return new Release(dryRun, dryRun ? orfas : List.copyOf(liberadas));
+	}
+
+	/** Motivo gravado na transferência órfã, na coluna de 120 caracteres. */
+	static final String REASON_STALE = "designacao ausente: o destino nao tem mais copia pendente";
+
+	/** O que está órfão (seca) ou o que foi fechado (escrita). */
+	public record Release(boolean dryRun, List<StorageRebalance> stale) {
+	}
+
 	/** Fecha como {@code FAILED} a transferência que perdeu a designação, sem tocar a cópia antiga. */
 	@Transactional
 	public boolean fail(String actorId, String rebalanceId, String reason) {

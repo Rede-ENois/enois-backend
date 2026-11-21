@@ -16,7 +16,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -121,6 +123,17 @@ public class StorageCatalogService {
 	 * primeira leitura. É cache, não fonte da verdade: a fonte é {@code bytesOwnedBy}.
 	 */
 	private final Map<String, Long> usadoPorDono = new java.util.concurrent.ConcurrentHashMap<>();
+	/**
+	 * O banco, para a única conta de cota que o catálogo não consegue fazer sozinho: o que o
+	 * multipart tem <b>reservado</b> por conta, em partes abertas.
+	 *
+	 * <p>A abertura do upload precisa dessa conta: sem ela, quem já ocupou a cota em partes passava
+	 * pela abertura e só descobria na conclusão (o ciclo 87 cobrou as partes no envio; o ciclo 89
+	 * fecha a outra ponta). Nulo = instalação sem banco para essa conta (teste unitário), e aí o
+	 * reservado é zero.</p>
+	 */
+	@Nullable
+	private final JdbcTemplate jdbc;
 
 	/**
 	 * A forma anterior, sem chave: instalação que ainda não configurou a mestra grava em claro. Os
@@ -150,19 +163,22 @@ public class StorageCatalogService {
 			@Value("${rede.security.encryption-key:}") String encryptionKey,
 			StoragePlacementService placement, @Nullable NodeBodyStore nodeBodies,
 			@Nullable StorageOperationMetrics metrics) {
-		this(catalog, audit, clock, maxObjectBytes, storageRoot, encryptionKey, placement, nodeBodies, metrics, 0L);
+		this(catalog, audit, clock, maxObjectBytes, storageRoot, encryptionKey, placement, nodeBodies, metrics, 0L,
+			null);
 	}
 
 	/** A forma com cota por participante — é a que o Spring injeta (doc 20 §10). */
-	@org.springframework.beans.factory.annotation.Autowired
+	@Autowired
 	StorageCatalogService(StorageCatalogRepository catalog, AuditTrail audit, Clock clock,
 			@Value("${rede.storage.max-object-bytes:5368709120}") long maxObjectBytes,
 			@Value("${rede.storage.root:${java.io.tmpdir}/enois-storage}") String storageRoot,
 			@Value("${rede.security.encryption-key:}") String encryptionKey,
 			StoragePlacementService placement, @Nullable NodeBodyStore nodeBodies,
 			@Nullable StorageOperationMetrics metrics,
-			@Value("${rede.storage.max-bytes-per-owner:0}") long maxBytesPerOwner) {
+			@Value("${rede.storage.max-bytes-per-owner:0}") long maxBytesPerOwner,
+			@Nullable JdbcTemplate jdbc) {
 		this.maxBytesPerOwner = Math.max(0, maxBytesPerOwner);
+		this.jdbc = jdbc;
 		this.catalog = catalog;
 		this.audit = audit;
 		this.clock = clock;
@@ -181,6 +197,21 @@ public class StorageCatalogService {
 	 */
 	@Transactional
 	public StorageObject beginUpload(String actorId, String bucket, String key, String contentType) {
+		return beginUpload(actorId, bucket, key, contentType, true);
+	}
+
+	/**
+	 * A abertura do upload, com a conta da cota <b>já feita por quem chamou</b>.
+	 *
+	 * <p>A multipart conclui passando {@code false}: as partes daquele upload <b>são</b> o corpo que
+	 * está chegando. Cobrá-las outra vez na conclusão fazia um objeto de 4 partes acima do mínimo
+	 * de 5 MiB cada (mais de 20 MiB — tudo o que o SDK manda) nunca concluir numa cota de 20 MiB,
+	 * mesmo com o corpo já reservado. A conclusão cobra uma conta só: o corpo montado (<code>
+	 * finishUpload</code>), que é o objeto que vai nascer.</p>
+	 */
+	@Transactional
+	public StorageObject beginUpload(String actorId, String bucket, String key, String contentType,
+			boolean cobrarPartesReservadas) {
 		validateBucket(bucket);
 		validateKey(key);
 		String type = contentType == null || contentType.isBlank() ? "application/octet-stream" : contentType;
@@ -188,7 +219,10 @@ public class StorageCatalogService {
 		// A cota é cobrada <b>antes</b> de tudo: um objeto PENDING derrubado pela cota deixaria a
 		// chave ocupada até virar lápide, e o upload seguinte do mesmo participante não poderia
 		// reusar a chave.
-		exigirCotaDoParticipante(actorId);
+		//
+		// A conta inclui as partes de multipart abertas: quem já reservou espaço em partes não
+		// passa por aqui só porque ainda não ganhou um byte no catálogo.
+		exigirCotaDoParticipante(actorId, 0, cobrarPartesReservadas ? reservadoEmPartes(actorId) : 0);
 		StorageBucketPolicy policy = bucketPolicy(bucket);
 
 		if (policy.versioning()) {
@@ -381,6 +415,20 @@ public class StorageCatalogService {
 	 * tamanho e o corpo vazio ao cliente — porque é o cliente que erra, e o erro tem de ser 413/400,
 	 * não 500.</p>
 	 */
+	public StorageObject finishUpload(String objectId, InputStream body, String actorId,
+			boolean cobrarPartesReservadas) {
+		long inicio = System.nanoTime();
+		try {
+			StorageObject gravado = doFinishUpload(objectId, body, actorId, cobrarPartesReservadas);
+			conta("PUT", StorageOperationMetrics.Resultado.OK, inicio);
+			return gravado;
+		}
+		catch (RuntimeException recusado) {
+			conta("PUT", resultadoDe(recusado), inicio);
+			throw recusado;
+		}
+	}
+
 	public StorageObject finishUpload(String objectId, InputStream body, String actorId) {
 		long inicio = System.nanoTime();
 		try {
@@ -397,6 +445,19 @@ public class StorageCatalogService {
 	}
 
 	private StorageObject doFinishUpload(String objectId, InputStream body, String actorId) {
+		return doFinishUpload(objectId, body, actorId, true);
+	}
+
+	/**
+	 * A gravação do corpo, com a conta da cota escolhida por quem chama.
+	 *
+	 * <p>{@code cobrarPartesReservadas=false} é a conclusão do multipart: as partes daquele upload
+	 * <b>são</b> o corpo que está chegando, já cobradas no envio de cada uma. Somá-las de novo na
+	 * conclusão fazia o objeto nunca nascer numa cota apertada, embora o espaço já estivesse
+	 * reservado.</p>
+	 */
+	private StorageObject doFinishUpload(String objectId, InputStream body, String actorId,
+			boolean cobrarPartesReservadas) {
 		StorageObject object = catalog.findById(objectId)
 			.orElseThrow(() -> new ApiException(404, "STORAGE_OBJECT_UNKNOWN", "Objeto nao encontrado no catalogo."));
 		if (object.state() != StorageObjectState.PENDING) {
@@ -414,7 +475,8 @@ public class StorageCatalogService {
 		}
 		try {
 			// O corpo já foi medido: a cota cobra o tamanho, e não só o que já está gravado.
-			exigirCotaDoParticipante(actorId, measured.bytes());
+			exigirCotaDoParticipante(actorId, measured.bytes(),
+				cobrarPartesReservadas ? reservadoEmPartes(actorId) : 0);
 		}
 		catch (RuntimeException semCota) {
 			deleteQuietly(measured.temp());
@@ -473,14 +535,53 @@ public class StorageCatalogService {
 	 * uma segunda regra de espaço para quem opera descobrir.</p>
 	 */
 	void exigirCotaDoParticipante(String actorId) {
+		exigirCotaDoParticipante(actorId, 0, reservadoEmPartes(actorId));
+	}
+
+	/** O reservado em partes abertas desta conta — zero quando a instalação não tem multipart. */
+	private long reservadoEmPartes(String actorId) {
+		if (jdbc == null || maxBytesPerOwner <= 0 || actorId == null || actorId.isBlank()) {
+			return 0;
+		}
+		Long valor = jdbc.queryForObject("""
+			select coalesce(sum(p.bytes), 0) from network_storage_multipart_parts p
+			join network_storage_multipart_uploads u on u.upload_id = p.upload_id
+			where u.owner_user_id = ?
+			""", Long.class, actorId);
+		return valor == null ? 0 : Math.max(0, valor);
+	}
+
+	/**
+	 * A cota de uma conta, com o que ela ocupa e o que ela reserva.
+	 *
+	 * <p><b>Antes</b> a abertura ({@code beginUpload}) só perguntava {@code usado >= limite}: o espaço
+	 * reservado em partes de multipart aberto era invisível ali, então quem tinha a cota inteira em
+	 * partes ainda abria um upload e só descobria na conclusão — depois de o corpo ter percorrido a
+	 * rede e sido montado em disco. O {@code >=} também deixava passar a abertura de uma conta
+	 * exatamente no limite, que só podia terminar em {@code 507} de qualquer forma.</p>
+	 *
+	 * <p><b>Agora</b> a mesma conta ({@code usado + reservado + esta parte}) vale na abertura e no
+	 * envio da parte, e a abertura recusa já quando o reservado sozinho não deixa espaço. A mensagem
+	 * carrega os dois números quando há reservado — o participante precisa saber que o espaço que
+	 * falta está num upload aberto, e não em objeto gravado.</p>
+	 */
+	void exigirCotaDoParticipante(String actorId, long acrescimo, long reservado) {
 		if (maxBytesPerOwner <= 0 || actorId == null || actorId.isBlank()) {
 			return;
 		}
 		long usado = usadoPorDono.computeIfAbsent(actorId, catalog::bytesOwnedBy);
-		if (usado >= maxBytesPerOwner) {
+		// `>=` no que não cresce: uma conta já cheia — ou com o espaço todo reservado em partes —
+		// não abre upload que só pode terminar em 507. Com uma gravação em curso, a conta é `>`:
+		// cabe exatamente o que sobra.
+		boolean cheio = acrescimo <= 0 ? usado + Math.max(0, reservado) >= maxBytesPerOwner
+			: usado + Math.max(0, reservado) + acrescimo > maxBytesPerOwner;
+		if (cheio) {
+			String emPartes = reservado > 0
+				? ", tem " + reservado + " em partes abertas" : "";
 			throw new ApiException(507, "STORAGE_OWNER_QUOTA_EXCEEDED",
-				"O participante ja ocupa " + usado + " bytes e a cota desta instalacao e "
-					+ maxBytesPerOwner + " bytes.");
+				"O participante ja ocupa " + usado + " bytes" + emPartes + (acrescimo > 0
+					? ", esta gravacao soma " + acrescimo : "")
+					+ " e a cota desta instalacao e " + maxBytesPerOwner + " bytes.");
 		}
 	}
 
@@ -525,15 +626,24 @@ public class StorageCatalogService {
 	 * continua válido).</p>
 	 */
 	void exigirCotaDoParticipante(String actorId, long acrescimo) {
-		if (maxBytesPerOwner <= 0 || actorId == null || actorId.isBlank()) {
-			return;
-		}
-		long usado = usadoPorDono.computeIfAbsent(actorId, catalog::bytesOwnedBy);
-		if (usado + acrescimo > maxBytesPerOwner) {
-			throw new ApiException(507, "STORAGE_OWNER_QUOTA_EXCEEDED",
-				"O participante ja ocupa " + usado + " bytes, esta gravacao soma " + acrescimo
-					+ " e a cota desta instalacao e " + maxBytesPerOwner + " bytes.");
-		}
+		exigirCotaDoParticipante(actorId, acrescimo, reservadoEmPartes(actorId));
+	}
+
+	/**
+	 * A cota com as partes abertas de um multipart já na conta.
+	 *
+	 * <p><b>Por que existe.</b> A cota era conferida na abertura do upload e na conclusão, e nunca nas
+	 * partes: um participante com cota de 1 MB abria um multipart, mandava 10 000 partes de 5 MiB (o
+	 * máximo que o protocolo aceita) e nunca concluía — 50 GiB de disco reservados, com a cota só
+	 * olhando quando já era tarde. O {@code abort} existe, mas quem abusa não o chama.</p>
+	 *
+	 * <p><b>O que conta.</b> O que já está no catálogo ({@code bytesOwnedBy}) mais o que já está
+	 * reservado em partes abertas desta conta, menos a parte que este envio substitui. O espaço é
+	 * reservado no envio da parte, não na conclusão — é ali que ele passa a ocupar disco.</p>
+	 */
+	void exigirCotaDasPartes(String actorId, long reservedPartsBytes, long estaParte) {
+		// A conta é a mesma da abertura e da conclusão — um ponto só, para as três não divergirem.
+		exigirCotaDoParticipante(actorId, Math.max(0, estaParte), Math.max(0, reservedPartsBytes));
 	}
 
 	/**
@@ -648,10 +758,29 @@ public class StorageCatalogService {
 		}
 		esquecerUsoDoParticipante(actorId);
 		catalog.insertVersion(id, bucket, key, old.contentType(), actorId, now, next);
-		// O conteúdo é o da versão antiga, e o conferido é o medido nela: a restauração não relê o
-		// disco, então o digest que vale é o que o catálogo já guardava.
-		if (!catalog.markStored(id, old.bytes(), old.sha256(), now)) {
-			throw new ApiException(409, "STORAGE_VERSION_RACE", "A chave mudou durante a restauracao.");
+		// A versão restaurada é um objeto NOVO, e precisa do corpo dela. Antes, a linha era marcada
+		// STORED com o digest da antiga sem nada ser gravado: o catálogo dizia que a chave voltou a
+		// ter conteúdo e o download respondia 409 sem cópia — a restauração devolvia um objeto que
+		// nenhum disco tinha. O corpo vem da versão antiga, pela mesma leitura do download, e é
+		// gravado pelo caminho do upload: o digest que fica é o do que foi escrito, não o prometido.
+		try (InputStream corpo = openReplicaZeroBody(old.id())) {
+			// Sem `requireStorage`: quem restaura é o Control Plane, e a réplica 0 é dele. A conta
+			// da cota é do participante, e a restauração não passa por ela — o espaço já era dele
+			// na versão antiga e a nova ocupação é a mesma dos bytes.
+			boolean gravou = doFinishUpload(id, corpo, actorId, false) != null;
+			if (!gravou) {
+				throw new ApiException(409, "STORAGE_VERSION_RACE", "A chave mudou durante a restauracao.");
+			}
+		}
+		catch (java.io.IOException fechou) {
+			throw new ApiException(409, "STORAGE_VERSION_NOT_SERVABLE",
+				"A copia da versao antiga nao pode ser lida para restaurar.");
+		}
+		catch (ApiException recusado) {
+			// A versão nova já está no catálogo como PENDING e sem corpo: sai da chave para não
+			// deixar um objeto que ninguém consegue baixar e que barra a próxima restauração.
+			catalog.discardPending(id);
+			throw recusado;
 		}
 		catalog.setExpiresAt(id, bucketPolicy(bucket).expiresAtFor(now));
 		audit.record(actorId, "STORAGE_VERSION_RESTORED", id,
@@ -957,11 +1086,24 @@ public class StorageCatalogService {
 
 	/** Listagem de um bucket por prefixo, com paginação por chave. */
 	public List<StorageObject> list(String bucket, String prefix, String afterKey, int limit) {
+		return list(bucket, prefix, afterKey, limit, false);
+	}
+
+	/**
+	 * Listagem com a linha a mais que diz se há próxima página.
+	 *
+	 * <p><b>Antes:</b> o gateway decidia {@code IsTruncated} por {@code found.size() == maxKeys}, que
+	 * confunde "página cheia" com "há mais": um bucket com exatamente {@code max-keys} objetos saía
+	 * truncado, com token, e o cliente pedia uma página vazia. Agora o serviço pede {@code limit + 1}
+	 * linha ao banco — uma consulta indexada a mais de folga, não uma consulta extra — e quem chama
+	 * olha se veio a extra.</p>
+	 */
+	public List<StorageObject> list(String bucket, String prefix, String afterKey, int limit, boolean espiar) {
 		long inicio = System.nanoTime();
 		try {
 			validateBucket(bucket);
 			int bounded = Math.max(1, Math.min(limit <= 0 ? MAX_LIST_LIMIT : limit, MAX_LIST_LIMIT));
-			List<StorageObject> achados = catalog.list(bucket, prefix, afterKey, bounded);
+			List<StorageObject> achados = catalog.list(bucket, prefix, afterKey, espiar ? bounded + 1 : bounded);
 			conta("LIST", StorageOperationMetrics.Resultado.OK, inicio);
 			return achados;
 		}
@@ -969,6 +1111,11 @@ public class StorageCatalogService {
 			conta("LIST", resultadoDe(recusado), inicio);
 			throw recusado;
 		}
+	}
+
+	/** O teto efetivo de uma listagem: {@code limit <= 0} é o padrão, e nada passa de {@link #MAX_LIST_LIMIT}. */
+	private static int limiteDe(int limit) {
+		return Math.max(1, Math.min(limit <= 0 ? MAX_LIST_LIMIT : limit, MAX_LIST_LIMIT));
 	}
 
 	/** Lápide: idempotente, auditada, e não apaga a linha — as cópias nos nós ainda precisam ser coletadas. */
@@ -1046,6 +1193,21 @@ public class StorageCatalogService {
 	 * memória: 5 GB passariam em pedaços de 64 KiB. O temporário só vira o arquivo do objeto se
 	 * tudo der certo — upload interrompido deixa lixo apagável, nunca um objeto pela metade.
 	 */
+	/**
+	 * Lê o corpo para um temporário, medindo o digest e o tamanho — <b>parando no teto</b>.
+	 *
+	 * <p><b>Antes:</b> o corpo inteiro era copiado para o disco e o teto só era conferido depois, em
+	 * {@code doFinishUpload}. Um cliente que mandasse 50 GiB num limite de 5 GiB fazia o servidor
+	 * <b>escrever 50 GiB em {@code /tmp}</b> para então responder {@code 413}. O custo não é só o
+	 * espaço: é o upload longo que já ia ser recusado ocupando o disco de quem está gravando de
+	 * verdade.</p>
+	 *
+	 * <p><b>Agora:</b> a conta é feita ao longo da leitura, e a primeira leitura que passar do teto
+	 * interrompe — o temporário é apagado e a resposta é {@code 413 STORAGE_OBJECT_TOO_LARGE}, antes
+	 * de qualquer byte virar corpo. O limite é lido no começo do corpo, mais o tamanho de um bloco:
+	 * ler "só o teto" e parar deixaria passar um corpo de exatamente {@code teto + 1} como se fosse
+	 * o teto.</p>
+	 */
 	private Spooled measure(InputStream body) {
 		MessageDigest digest = sha256();
 		long total = 0;
@@ -1059,10 +1221,17 @@ public class StorageCatalogService {
 		byte[] buffer = new byte[64 * 1024];
 		try (InputStream input = body; OutputStream sink = Files.newOutputStream(temp)) {
 			int read;
-			while ((read = input.read(buffer)) != -1) {
+			while ((read = lerNoMaximo(input, buffer, maxObjectBytes - total + 1)) != -1) {
+				total += read;
+				if (total > maxObjectBytes) {
+					// O corpo passou do teto: nada dele será guardado, e continuar lendo só gastaria
+					// disco para a mesma recusa.
+					deleteQuietly(temp);
+					throw new ApiException(413, "STORAGE_OBJECT_TOO_LARGE",
+						"O objeto excede o teto desta instalacao (" + maxObjectBytes + " bytes).");
+				}
 				digest.update(buffer, 0, read);
 				sink.write(buffer, 0, read);
-				total += read;
 			}
 		}
 		catch (IOException unreadable) {
@@ -1151,6 +1320,18 @@ public class StorageCatalogService {
 	}
 
 	/** O temporário recém-gravado e o que foi medido nele. O declarado não é lido. */
+	/**
+	 * Lê no máximo {@code limite} bytes — um byte além do teto basta para saber que ele passou.
+	 *
+	 * <p>Sem isto, um bloco de 64 KiB inteiro era lido (e descartado) mesmo quando só faltavam dois
+	 * bytes para o teto. Não é o custo do disco — nada dele era escrito —, é o do corpo: o servidor
+	 * pede 64 KiB a mais ao cliente para recusar.</p>
+	 */
+	private static int lerNoMaximo(InputStream input, byte[] buffer, long limite) throws IOException {
+		int pedido = (int) Math.min(buffer.length, Math.max(1, limite));
+		return input.read(buffer, 0, pedido);
+	}
+
 	private record Spooled(Path temp, long bytes, String sha256) {
 	}
 
@@ -1195,6 +1376,12 @@ public class StorageCatalogService {
 		Path cpBody = Path.of(storageRoot).resolve(objectId);
 		boolean localCopy = nodeBodies != null && nodeBodies.has(objectId);
 		if (Files.isReadable(cpBody)) {
+			// A réplica 0 tem linha de colocação (nó `control-plane` no upload, ou o nó dono do disco
+			// deste runtime). Ela passa pela MESMA régua da cópia de nó: `STALE`/`GONE` no catálogo
+			// não é servida a quem puxa o objeto para replicar. Antes, bastava o arquivo ser legível
+			// na raiz: o nó que relatou o próprio disco divergente a marcava `STALE`, e esta rota
+			// — a origem de toda replicação — continuava entregando o corpo que o catálogo negava.
+			exigirReplicaZeroServivel(objectId);
 			return openVerified(cpBody, object);
 		}
 		if (localCopy) {
@@ -1231,6 +1418,29 @@ public class StorageCatalogService {
 	 * passar por colocação de nó. A réplica 0 na raiz do CP continua fora desta regra: ela não tem
 	 * linha de colocação de nó, e o CP é o próprio dono do disco.</p>
 	 */
+	/**
+	 * A réplica 0 só sai da raiz do Control Plane quando o catálogo não a marcou como divergente.
+	 *
+	 * <p>Sem linha de colocação a leitura continua valendo: objeto gravado antes de a colocação do
+	 * Control Plane existir nunca foi declarado divergente por ninguém. Com linha, só {@code OK}
+	 * serve — o mesmo que a cópia de nó. A réplica 0 não vira {@code GONE} no healing (§5.13, o
+	 * corpo certo é reescrito por quem grava), então {@code STALE} é o único sinal que ela tem, e é
+	 * ele que esta guarda cobra.</p>
+	 */
+	private void exigirReplicaZeroServivel(String objectId) {
+		// O dono da linha é `control-plane` quando quem gravou foi o CP, e o id do nó quando quem
+		// gravou foi um runtime. Quem responde é a linha, não o nome: perguntar por um dono fixo
+		// deixaria de fora justamente a réplica 0 de um nó.
+		catalog.copies(objectId).stream()
+			.filter(copia -> copia.replica() == 0)
+			.filter(copia -> copia.state() != StoragePlacement.State.OK)
+			.findFirst()
+			.ifPresent(copia -> {
+				throw new ApiException(409, "STORAGE_REPLICA_STALE",
+					"A copia na replica 0 nao confere (" + copia.state().name() + "); use uma copia OK.");
+			});
+	}
+
 	private void exigirCopiaServivel(String objectId) {
 		if (nodeBodies == null) {
 			return;

@@ -177,11 +177,13 @@ class StorageReplicationWorkerTests {
 	 */
 	private StorageCatalogRepository catalogo() {
 		StorageCatalogRepository catalog = mock(StorageCatalogRepository.class);
-		when(catalog.listAll(any(), any(Integer.class))).thenAnswer(inv -> {
-			String afterKey = inv.getArgument(0);
-			return objetos.stream().filter(o -> afterKey == null || o.key().compareTo(afterKey) > 0)
+		when(catalog.listAll(any(), any(), any(Integer.class))).thenAnswer(inv -> {
+			String afterBucket = inv.getArgument(0);
+			String afterKey = inv.getArgument(1);
+			return objetos.stream().filter(o -> afterBucket == null || o.bucket().compareTo(afterBucket) > 0
+					|| (o.bucket().equals(afterBucket) && o.key().compareTo(afterKey) > 0))
 				.sorted(java.util.Comparator.comparing(StorageObject::bucket).thenComparing(StorageObject::key))
-				.limit((Integer) inv.getArgument(1))
+				.limit((Integer) inv.getArgument(2))
 				.toList();
 		});
 		when(catalog.findById(anyString())).thenAnswer(inv -> objetos.stream()

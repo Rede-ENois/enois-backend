@@ -4,7 +4,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -183,11 +185,25 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	 * chave em dois buckets aparece na mesma pagina, e como a ordem e total nenhuma linha se perde
 	 * entre paginas.
 	 */
+	// O cursor é (bucket, object_key) — a MESMA ordem do `order by`. Paginar só por chave pulava
+	// todo objeto de bucket posterior cuja chave fosse menor que a última lida (fotos/z.jpg seguido
+	// de midia/a.mp4): a varredura de durabilidade nunca os via.
+	//
+	// O cursor é EXCLUSIVO (`>` no par): o último item da página não volta na seguinte. Com `>=`, a
+	// página repetia o último item e a varredura em laço recontava o mesmo objeto para sempre.
 	private static final String LIST_ALL = """
 		select %s from network_storage_objects
-		where object_key >= ? and state <> 'DELETED'
+		where (bucket > :bucket or (bucket = :bucket and object_key > :chave)) and state <> 'DELETED'
 		order by bucket asc, object_key asc
-		limit ?
+		limit :limite
+		""".formatted(OBJECT_COLUMNS);
+
+	/** A primeira página: tudo, sem cursor. Bucket negativo/da chave inicial é o começo do catálogo. */
+	private static final String LIST_ALL_INICIO = """
+		select %s from network_storage_objects
+		where state <> 'DELETED'
+		order by bucket asc, object_key asc
+		limit :limite
 		""".formatted(OBJECT_COLUMNS);
 
 	/**
@@ -200,6 +216,12 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	 * cliente via um nome que não abria para nada — e que o {@code DELETE} recusava com {@code 409}
 	 * "ainda tem objetos". Três respostas contraditórias sobre o mesmo nome.</p>
 	 */
+	// Donagem do DeleteBucket: conta vivo e lápide. `bucketsOf` (só vivo) é a resposta certa para ler
+	// e gravar, e errada para apagar — depois da última lápide o dono perderia o próprio bucket.
+	private static final String BUCKET_HAS_OBJECTS_OF = """
+		select count(*) from network_storage_objects where bucket = ? and created_by = ?
+		""";
+
 	private static final String BUCKETS_OF = """
 		select distinct bucket from network_storage_objects
 		where created_by = ? and state <> 'DELETED'
@@ -207,6 +229,20 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		order by bucket asc
 		""";
 
+	/**
+	 * A listagem de bucket, <b>sem o que já venceu</b> e <b>sem o que ainda não chegou</b>.
+	 *
+	 * <p><b>Ciclo 88:</b> até aqui o filtro era {@code state <> 'DELETED'}, que deixava passar as
+	 * duas linhas de uma chave regravada — a versão corrente e a nova, ainda {@code PENDING} — e o
+	 * {@code ListObjects} devolvia a <b>mesma chave duas vezes</b> na mesma página. Como o cursor da
+	 * paginação é a chave, um cliente que seguisse o token podia nunca terminar o laço.</p>
+	 *
+	 * <p>A régua agora é a mesma do {@code GET}: representa a chave só o {@code STORED} — {@code
+	 * PENDING} é gravação em curso (ou versão antiga que ainda vai ser colhida), e não existe para
+	 * quem lista, como não existe para quem baixa. {@code superseded_by is null} garante uma linha
+	 * por chave mesmo que o estado divergisse. ({@code PENDING_REMOTE} é estado de <b>colocação</b>,
+	 * não de objeto: uma cópia remota ainda a caminho não muda o que o catálogo tem.)</p>
+	 */
 	/**
 	 * A listagem de bucket, <b>sem o que já venceu</b>.
 	 *
@@ -221,8 +257,8 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	 */
 	private static final String LIST = """
 		select %s from network_storage_objects
-		where bucket = ? and object_key like ? and object_key > ? and state <> 'DELETED'
-		  and (expires_at is null or expires_at > ?)
+		where bucket = ? and object_key like ? and object_key > ? and state = 'STORED'
+		  and superseded_by is null and (expires_at is null or expires_at > ?)
 		order by object_key asc
 		limit ?
 		""".formatted(OBJECT_COLUMNS);
@@ -349,8 +385,13 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	 * objeto removido nao e um bucket que o operador tem. {@code PENDING} entra com zero bytes —
 	 * ele existe no bucket e ainda nao ocupa espaco medido.</p>
 	 */
+	// Só a versão CORRENTE soma. A substituída continua ocupando disco (fica no histórico), mas o
+	// "uso do bucket" é o que ele guarda hoje — e é o mesmo critério do `usedBytes` do painel, que
+	// soma cópia OK. Somar a substituída fazia os dois números do resumo discordarem. A quantidade
+	// continua contando as duas: a chave existe no bucket nas duas versões.
 	private static final String SUMMARIZE_BUCKETS = """
-		select bucket, count(*) as objetos, coalesce(sum(bytes), 0) as bytes
+		select bucket, count(*) as objetos,
+			coalesce(sum(case when superseded_by is null then bytes end), 0) as bytes
 		from network_storage_objects
 		where state <> 'DELETED'
 		group by bucket
@@ -561,8 +602,24 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	}
 
 	@Override
-	public List<StorageObject> listAll(String afterKey, int limit) {
-		return jdbc.query(LIST_ALL, OBJECT_MAPPER, afterKey == null ? "" : afterKey, limit);
+	public boolean bucketHasObjectsOf(String bucket, String ownerUserId) {
+		Integer total = jdbc.queryForObject(BUCKET_HAS_OBJECTS_OF, Integer.class, bucket, ownerUserId);
+		return total != null && total > 0;
+	}
+
+	@Override
+	public List<StorageObject> listAll(String afterBucket, String afterKey, int limit) {
+		// Parâmetros NOMEADOS: o mesmo bucket aparece duas vezes na condição, e posicional o H2 recebia
+		// os binds fora de ordem — a página repetia o último item e a varredura entrava em laço.
+		Map<String, Object> params = new HashMap<>();
+		params.put("limite", limit);
+		var nomeado = new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate(jdbc);
+		if (afterBucket == null) {
+			return nomeado.query(LIST_ALL_INICIO, params, OBJECT_MAPPER);
+		}
+		params.put("bucket", afterBucket);
+		params.put("chave", afterKey == null ? "" : afterKey);
+		return nomeado.query(LIST_ALL, params, OBJECT_MAPPER);
 	}
 
 	@Override

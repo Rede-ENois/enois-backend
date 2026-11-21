@@ -32,6 +32,7 @@ import com.socialcoisa.rede.feed.application.GetFeedQuery;
 import com.socialcoisa.rede.feed.application.GetCommentsQuery;
 import com.socialcoisa.rede.feed.application.GetProfilePostsQuery;
 import com.socialcoisa.rede.feed.application.PostActionCommand;
+import com.socialcoisa.rede.feed.application.PostInteractionService;
 import com.socialcoisa.rede.feed.application.PublishPostCommand;
 import com.socialcoisa.rede.feed.application.ReactToPostCommand;
 import com.socialcoisa.rede.feed.domain.FeedTab;
@@ -66,8 +67,6 @@ import com.socialcoisa.rede.shared.web.CursorCodec;
 
 @RestController
 class FeedController {
-
-	private static final int MAX_COMMENT_LENGTH = 1024;
 
 	private final PublishPostUseCase publishPostUseCase;
 	private final GetFeedUseCase getFeedUseCase;
@@ -555,10 +554,13 @@ class FeedController {
 				// mediaIds null = "nao mexi na midia"; lista (mesmo vazia) = substitui.
 				List<String> mediaIds = request.mediaIds() == null ? comment.mediaIds()
 					: normalizeEditMedia(request.mediaIds(), user.id());
-				String content = request.content() == null ? "" : request.content().trim();
-				if ((content.isEmpty() && mediaIds.isEmpty()) || content.length() > MAX_COMMENT_LENGTH) {
+				// O teto e o mesmo do comentario novo: editar nao e porta larga para texto que a
+				// criacao recusaria.
+				String content = PostInteractionService.normalizeCommentText(request.content());
+				if (content.isEmpty() && mediaIds.isEmpty()) {
 					throw new ApiException(422, "INVALID_COMMENT",
-						"O comentario precisa ter de 1 a " + MAX_COMMENT_LENGTH + " caracteres.");
+						"O comentario precisa ter de 1 a " + PostInteractionService.MAX_COMMENT_LENGTH
+							+ " caracteres.");
 				}
 				var saved = commentRepository.save(comment.edited(content, mediaIds, clock.instant()));
 				return new CommandResponse(200, Map.of("status", "COMMENT_EDITED", "content", saved.content(),

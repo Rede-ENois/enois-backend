@@ -178,6 +178,51 @@ class NetworkStorageRebalanceTests {
 			.andExpect(jsonPath("$[0].toNodeId").value("nd_destino"));
 	}
 
+	/**
+	 * A transferência que perdeu a designação aparece como órfã e é fechada pela rota — e a cópia
+	 * antiga continua {@code OK}.
+	 *
+	 * <p><b>Antes:</b> {@code stale()} e {@code fail()} existiam no serviço e <b>nenhuma rota</b> os
+	 * chamava. A designação do destino era recolhida por outra rota (a soltura de pendência, o
+	 * healing), a transferência ficava {@code PENDING} para sempre, e a §12.3 da doc 17 prometia um
+	 * {@code FAILED} que nenhum caminho alcançava.</p>
+	 *
+	 * <p><b>Agora:</b> a órfã aparece em {@code GET /stale}, o {@code POST} seco não grava, e o
+	 * {@code POST} com {@code dryRun=false} fecha em {@code FAILED} com a cópia antiga intocada.</p>
+	 */
+	@Test
+	void transferencia_orfa_e_listada_e_fechada_sem_tocar_a_antiga() throws Exception {
+		String id = mover();
+		// A designação do destino sai como a soltura de pendência a deixaria.
+		jdbc.update("delete from network_storage_placements where object_id = ? and replica = 3", objectId);
+
+		mockMvc.perform(get("/admin/network/storage/rebalance/stale").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.length()").value(1))
+			.andExpect(jsonPath("$[0].id").value(id));
+
+		// Seco por padrão: a lista mostra, nada é gravado.
+		mockMvc.perform(post("/admin/network/storage/rebalance/stale/release").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.dryRun").value(true))
+			.andExpect(jsonPath("$.stale.length()").value(1));
+		assertThat(estadoDaTransferencia(id)).isEqualTo("PENDING");
+
+		mockMvc.perform(post("/admin/network/storage/rebalance/stale/release").header("X-Session-Token", admin)
+			.param("dryRun", "false"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.dryRun").value(false))
+			.andExpect(jsonPath("$.stale.length()").value(1));
+
+		assertThat(estadoDaTransferencia(id)).isEqualTo("FAILED");
+		assertThat(estadoDaCopia(1)).isEqualTo("OK");
+	}
+
+	private String estadoDaTransferencia(String id) {
+		return jdbc.queryForObject("select state from network_storage_rebalances where id = ?",
+			(rs, row) -> rs.getString(1), id);
+	}
+
 	/** Sem admin não se move arquivo de nó nenhum. */
 	@Test
 	void sem_admin_nao_rebalanceia() throws Exception {

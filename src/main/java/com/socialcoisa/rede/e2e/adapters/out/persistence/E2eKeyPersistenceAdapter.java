@@ -54,6 +54,11 @@ class E2eKeyPersistenceAdapter implements E2eKeyRepository {
 	}
 
 	@Override
+	public void deleteConversationKey(String conversationId, String userId) {
+		conversationKeys.deleteConversationKey(conversationId, userId);
+	}
+
+	@Override
 	public List<ConversationKey> findConversationKeys(String conversationId) {
 		return conversationKeys.findByConversationId(conversationId).stream()
 			.map(ConversationKeyJpaEntity::toDomain).toList();

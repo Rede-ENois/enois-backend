@@ -2,6 +2,7 @@ package com.socialcoisa.rede.network.adapters.in.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -351,6 +352,60 @@ class S3GatewayTests {
 			.isEqualTo("versao um");
 	}
 
+	/**
+	 * Objeto confirmado <b>sem cópia registrada</b> responde no vocabulário do S3.
+	 *
+	 * <p><b>Antes:</b> o {@code GET} e o {@code HEAD} devolviam o erro interno do control plane —
+	 * {@code STORAGE_PLACEMENT_MISSING} no corpo JSON do Énóis — quando o catálogo dizia que o objeto
+	 * existe e nenhuma cópia estava registrada. O SDK lê o {@code Code} do XML do S3; um código que
+	 * ele não conhece vira falha opaca, e o cliente não distingue "tente de novo" de "não existe".
+	 * A tradução só cobria o {@code PUT}.</p>
+	 *
+	 * <p><b>Agora:</b> a tradução vale nas três rotas de leitura. O discriminante é o corpo: sem a
+	 * correção ele traz o código interno e não é XML do S3.</p>
+	 */
+	@Test
+	void objeto_sem_copia_registrada_responde_no_vocabulario_do_s3() throws Exception {
+		var dono = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_sem_copia");
+		String minhaChave = "AKIAENOISSEM" + UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase();
+		jdbc.update("""
+			insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+				allowed_bucket, allowed_operations, created_at)
+			values (?, ?, ?, ?, ?, null, 'GET PUT LIST DELETE', ?)
+			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), minhaChave,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET), dono.userId(),
+			java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+		byte[] corpo = "sem copia registrada".getBytes(StandardCharsets.UTF_8);
+		MockHttpServletRequestBuilder put = put("/s3/" + bucket + "/orfa.jpg").content(corpo)
+			.contentType("text/plain");
+		assinar(put, SECRET, shaDe("sem copia registrada"), minhaChave);
+		mockMvc.perform(put).andExpect(status().isOk());
+		// O estado que a falha no registro da cópia deixa: o objeto confirmado e nenhuma localização.
+		jdbc.update("delete from network_storage_placements where object_id in"
+			+ " (select id from network_storage_objects where bucket = ? and object_key = ?)", bucket, "orfa.jpg");
+
+		// Uma rota por vez: o `HEAD` também passa pelo mesmo caminho, e um `for` que só falhasse no
+		// `GET` deixaria o `HEAD` carregando a prova de uma tradução que não existe nele.
+		MockHttpServletRequestBuilder leitura = get("/s3/" + bucket + "/orfa.jpg");
+		assinar(leitura, SECRET, shaVazio(), minhaChave);
+		var resposta = mockMvc.perform(leitura).andReturn();
+		if (resposta.getRequest().isAsyncStarted()) {
+			resposta = mockMvc.perform(asyncDispatch(resposta)).andReturn();
+		}
+		String visto = resposta.getResponse().getContentAsString();
+		assertThat(resposta.getResponse().getStatus()).as(visto).isEqualTo(409);
+		assertThat(visto).as("o corpo e o XML do S3").contains("<Code>").doesNotContain("STORAGE_PLACEMENT_MISSING");
+
+		// O `HEAD` não tem corpo: o que prova a tradução é o tipo da resposta. Sem ela o handler
+		// genérico devolve JSON do Énóis; com ela, o documento XML que o SDK espera.
+		MockHttpServletRequestBuilder cabecalho = head("/s3/" + bucket + "/orfa.jpg");
+		assinar(cabecalho, SECRET, shaVazio(), minhaChave);
+		var semCorpo = mockMvc.perform(cabecalho).andReturn().getResponse();
+		assertThat(semCorpo.getStatus()).isEqualTo(409);
+		assertThat(semCorpo.getContentType()).as("o HEAD tambem responde no formato do S3")
+			.startsWith("application/xml");
+	}
+
 	/** DELETE por URL não é emitido: a lápide não vai para um link que pode vazar. */
 	@Test
 	void url_pre_assinada_de_delete_e_recusada_na_emissao() throws Exception {
@@ -416,6 +471,37 @@ class S3GatewayTests {
 		// 429 com o código do S3: o SDK entende "espere", não "chave errada".
 		assertThat(resultado.getResponse().getStatus()).isEqualTo(429);
 		assertThat(resultado.getResponse().getContentAsString()).contains("<Code>SlowDown</Code>");
+	}
+
+	/**
+	 * CopyObject não é implementado: o {@code PUT} com {@code x-amz-copy-source} é recusado, não
+	 * gravado vazio.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho era ignorado e o PUT comum gravava o corpo vazio que o cliente
+	 * manda na cópia — {@code 200} com um objeto de 0 byte no destino. O {@code aws s3 cp} interno
+	 * respondia sucesso e o arquivo "copiado" estava vazio: pior que a operação não existir.</p>
+	 *
+	 * <p>O discriminante é o par: {@code 501} <b>e</b> a chave de destino inexistente. Só o status
+	 * passaria se a gravação falhasse por outro motivo.</p>
+	 */
+	@Test
+	void put_com_cabecalho_de_copia_e_recusado_e_nao_cria_objeto() throws Exception {
+		gravar("copias/origem.txt", "conteudo que nao pode virar copia vazia");
+
+		MockHttpServletRequestBuilder copia = put("/s3/" + bucket + "/copias/destino.txt")
+			.header("x-amz-copy-source", "/" + bucket + "/copias/origem.txt")
+			.content(new byte[0]);
+		assinar(copia, SECRET, shaVazio());
+		var resposta = mockMvc.perform(copia).andReturn();
+
+		assertThat(resposta.getResponse().getStatus()).isEqualTo(501);
+		assertThat(resposta.getResponse().getContentAsString()).contains("<Code>NotImplemented</Code>");
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_objects where bucket = ?"
+			+ " and object_key = ?", Integer.class, bucket, "copias/destino.txt")).isZero();
+
+		MockHttpServletRequestBuilder conferencia = head("/s3/" + bucket + "/copias/destino.txt");
+		assinar(conferencia, SECRET, shaVazio());
+		assertThat(mockMvc.perform(conferencia).andReturn().getResponse().getStatus()).isEqualTo(404);
 	}
 
 	/** O caminho completo: PUT grava, GET devolve o corpo com o ETag, HEAD responde o tamanho. */
@@ -550,6 +636,148 @@ class S3GatewayTests {
 		assertThat(xml).contains("<Key>a/um.txt</Key>").contains("<Key>a/dois.txt</Key>");
 		assertThat(xml).doesNotContain("b/tres.txt");
 		assertThat(xml).contains("xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"");
+	}
+
+	/**
+	 * {@code delimiter=/} agrupa as chaves em {@code CommonPrefixes}, como o S3 — e o grupo conta
+	 * como <b>uma</b> entrada no {@code MaxKeys}.
+	 *
+	 * <p><b>Antes:</b> o parâmetro era aceito e ignorado. Um cliente que navega "pastas" (rclone,
+	 * boto3, aws-cli, a maioria dos SDKs pede {@code delimiter=/} por padrão) recebia
+	 * {@code a/x/y.jpg} como {@code <Key>} em vez de ver a pasta {@code a/x/}. A navegação aparecia
+	 * como centenas de arquivos soltos e as subpastas nunca eram oferecidas.</p>
+	 *
+	 * <p><b>Agora:</b> chave que tem o delimitador depois do prefixo não vira {@code Contents}; o
+	 * trecho até o delimitador vira {@code <CommonPrefixes><Prefix>…</Prefix></CommonPrefixes>}, uma
+	 * vez por grupo, em ordem. O que está direto no prefixo continua {@code Contents}.</p>
+	 */
+	@Test
+	void delimiter_agrupa_subpastas_em_common_prefixes() throws Exception {
+		gravar("fotos/raiz.jpg", "r");
+		gravar("fotos/2025/um.jpg", "um");
+		gravar("fotos/2025/dois.jpg", "dois");
+		gravar("fotos/2026/tres.jpg", "tres");
+
+		MockHttpServletRequestBuilder list = get("/s3/" + bucket).queryParam("list-type", "2")
+			.queryParam("prefix", "fotos/").queryParam("delimiter", "/");
+		assinar(list, SECRET, shaVazio());
+		var result = mockMvc.perform(list).andExpect(status().isOk()).andReturn();
+
+		String xml = result.getResponse().getContentAsString();
+		// O que está direto no prefixo continua sendo chave.
+		assertThat(xml).contains("<Key>fotos/raiz.jpg</Key>");
+		// As subpastas viram prefixos, uma vez cada, e as chaves delas NÃO aparecem.
+		assertThat(xml).contains("<CommonPrefixes><Prefix>fotos/2025/</Prefix></CommonPrefixes>");
+		assertThat(xml).contains("<CommonPrefixes><Prefix>fotos/2026/</Prefix></CommonPrefixes>");
+		assertThat(xml).doesNotContain("fotos/2025/um.jpg").doesNotContain("fotos/2026/tres.jpg");
+		// 1 chave + 2 prefixos.
+		assertThat(xml).contains("<KeyCount>3</KeyCount>");
+	}
+
+	/**
+	 * Com {@code delimiter}, cada subpasta é <b>uma</b> entrada do {@code MaxKeys} — e a segunda
+	 * página continua de onde a primeira parou.
+	 *
+	 * <p>Sem esta conta, uma página com {@code max-keys=2} que tivesse dez arquivos dentro de
+	 * {@code fotos/} não caberia: ou estouraria o teto (o cliente pediu 2 e recebia 10) ou o token
+	 * apontaria para a última chave lida, e o cliente repetiria o mesmo grupo na página seguinte —
+	 * em ambos os casos um cliente que pagina nunca termina.</p>
+	 */
+	@Test
+	void delimiter_pagina_contando_cada_grupo_uma_vez() throws Exception {
+		gravar("p/a.txt", "a");
+		gravar("p/sub/1.txt", "1");
+		gravar("p/sub/2.txt", "2");
+		gravar("p/z.txt", "z");
+
+		MockHttpServletRequestBuilder primeiro = get("/s3/" + bucket).queryParam("list-type", "2")
+			.queryParam("prefix", "p/").queryParam("delimiter", "/").queryParam("max-keys", "2");
+		assinar(primeiro, SECRET, shaVazio());
+		String xml1 = mockMvc.perform(primeiro).andExpect(status().isOk()).andReturn()
+			.getResponse().getContentAsString()
+			.replaceAll("<\\?xml[^>]*>", "")
+			.replace("xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"", "");
+		// A ordem é a das chaves: `p/a.txt`, depois o grupo `p/sub/`.
+		assertThat(xml1).contains("<Key>p/a.txt</Key>");
+		assertThat(xml1).contains("<CommonPrefixes><Prefix>p/sub/</Prefix></CommonPrefixes>");
+		assertThat(xml1).doesNotContain("<Key>p/z.txt</Key>");
+		assertThat(xml1).contains("<IsTruncated>true</IsTruncated>");
+
+		var doc = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder()
+			.parse(new java.io.ByteArrayInputStream(xml1.getBytes(StandardCharsets.UTF_8)));
+		String token = doc.getElementsByTagName("NextContinuationToken").item(0).getTextContent();
+		assertThat(token).isEqualTo("p/sub/");
+
+		MockHttpServletRequestBuilder segundo = get("/s3/" + bucket).queryParam("list-type", "2")
+			.queryParam("prefix", "p/").queryParam("delimiter", "/").queryParam("max-keys", "2")
+			.queryParam("continuation-token", token);
+		assinar(segundo, SECRET, shaVazio());
+		String xml2 = mockMvc.perform(segundo).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+
+		assertThat(xml2).contains("<Key>p/z.txt</Key>");
+		assertThat(xml2).doesNotContain("<Key>p/a.txt</Key>");
+		assertThat(xml2).contains("<IsTruncated>false</IsTruncated>");
+	}
+
+	/**
+	 * DeleteBucket de um bucket <b>sem objeto vivo</b> responde {@code 204} — e ele deixa de existir
+	 * para o dono.
+	 *
+	 * <p><b>Antes:</b> a rota respondia {@code 501 NotImplemented} em <b>todos</b> os casos, com a
+	 * justificativa "não há bucket vazio a apagar". A premissa estava errada: bucket existe enquanto
+	 * tem objeto vivo ({@code bucketsOf} filtra {@code state <> 'DELETED'}), então um bucket cujas
+	 * chaves foram todas removidas continua aparecendo em {@code ListBuckets} e o cliente não tinha
+	 * como tirá-lo. Nenhum teste cobria a rota.</p>
+	 *
+	 * <p><b>Agora:</b> bucket sem objeto vivo e do dono → {@code 204} e o nome sai de
+	 * {@code ListBuckets}; com objeto vivo → {@code 409 BucketNotEmpty}, como o S3.</p>
+	 */
+	@Test
+	void delete_de_bucket_sem_objeto_vivo_responde_204() throws Exception {
+		gravar("velho.txt", "x");
+		MockHttpServletRequestBuilder delObjeto = delete("/s3/" + bucket + "/velho.txt");
+		assinar(delObjeto, SECRET, shaVazio());
+		mockMvc.perform(delObjeto).andExpect(status().isNoContent());
+
+		MockHttpServletRequestBuilder delBucket = delete("/s3/" + bucket);
+		assinar(delBucket, SECRET, shaVazio());
+		mockMvc.perform(delBucket).andExpect(status().isNoContent());
+
+		MockHttpServletRequestBuilder listar = get("/s3");
+		assinar(listar, SECRET, shaVazio());
+		var resultado = mockMvc.perform(listar).andExpect(status().isOk()).andReturn();
+		assertThat(resultado.getResponse().getContentAsString()).doesNotContain("<Name>" + bucket + "</Name>");
+	}
+
+	/**
+	 * Bucket que o dono da credencial <b>nunca gravou</b> continua {@code 403} — a regra nova de
+	 * donagem não pode virar "qualquer bucket é apagável".
+	 *
+	 * <p>A prova é o catálogo, vivo ou lápide: aqui não há nem um nem outro para este dono. Sem esta
+	 * guarda, o caminho do {@code 204} (bucket já esvaziado) abriria a porta para uma credencial
+	 * apagar o nome de um bucket alheio que por acaso também está vazio.</p>
+	 */
+	@Test
+	void delete_de_bucket_de_outro_dono_responde_403() throws Exception {
+		MockHttpServletRequestBuilder delBucket = delete("/s3/" + bucket);
+		assinar(delBucket, SECRET, shaVazio());
+		var resultado = mockMvc.perform(delBucket).andReturn();
+
+		assertThat(resultado.getResponse().getStatus()).isEqualTo(403);
+		assertThat(resultado.getResponse().getContentAsString()).contains("AccessDenied");
+	}
+
+	/** Com objeto vivo o bucket não sai: 409 {@code BucketNotEmpty}, como o S3. */
+	@Test
+	void delete_de_bucket_com_objeto_responde_409() throws Exception {
+		gravar("fica.txt", "x");
+
+		MockHttpServletRequestBuilder delBucket = delete("/s3/" + bucket);
+		assinar(delBucket, SECRET, shaVazio());
+		var resultado = mockMvc.perform(delBucket).andReturn();
+
+		assertThat(resultado.getResponse().getStatus()).isEqualTo(409);
+		assertThat(resultado.getResponse().getContentAsString()).contains("BucketNotEmpty");
 	}
 
 	/** DeleteObject responde 204 e a chave deixa de ser servível — a lápide, como no S3 versionado. */

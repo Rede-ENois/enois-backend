@@ -58,10 +58,13 @@ public abstract class CatalogoEmMemoria implements StorageCatalogRepository {
 	}
 
 	@Override
-	public java.util.List<StorageObject> listAll(String afterKey, int limit) {
+	public java.util.List<StorageObject> listAll(String afterBucket, String afterKey, int limit) {
+		java.util.function.Predicate<StorageObject> depois = o -> afterBucket != null
+			&& (o.bucket().compareTo(afterBucket) > 0
+				|| (o.bucket().equals(afterBucket) && (afterKey == null || o.key().compareTo(afterKey) >= 0)));
 		return byKey.values().stream()
 			.filter(o -> o.state() != StorageObjectState.DELETED)
-			.filter(o -> afterKey == null || o.key().compareTo(afterKey) >= 0)
+			.filter(o -> afterBucket == null || depois.test(o))
 			.sorted(java.util.Comparator.comparing(StorageObject::bucket).thenComparing(StorageObject::key))
 			.limit(limit)
 			.toList();
@@ -373,5 +376,12 @@ public abstract class CatalogoEmMemoria implements StorageCatalogRepository {
 			.distinct()
 			.sorted()
 			.toList();
+	}
+
+	@Override
+	public boolean bucketHasObjectsOf(String bucket, String ownerUserId) {
+		// Vivo e lápide: é o que sobra depois que o dono esvazia o bucket.
+		return byKey.values().stream()
+			.anyMatch(o -> o.bucket().equals(bucket) && ownerUserId.equals(o.createdBy()));
 	}
 }

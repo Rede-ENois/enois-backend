@@ -809,3 +809,95 @@ Mutações (**8 de 8 derrubam**): a cópia revogada voltar a contar; o nó revog
 cópia de outro nó revogado contar como saída; lápide entrar na conta; `STALE` contar como guardada;
 réplica 0 contar como cópia de nó; `warning` sempre verdadeiro; `SUSPENDED` contar como saída.
 Sem migração nova.
+
+## 5.13 A cópia divergente é devolvida antes de a lacuna ser reposta (ciclo 94)
+
+A cura fazia a lacuna primeiro e a divergência depois. No caminho da lacuna o
+`StoragePlacementService.chooseReplicas` conta como **ocupado** todo nó com cópia `OK` — inclusive o
+nó cuja cópia está divergente, porque ela ainda está `OK` no catálogo naquele instante. O resultado
+de uma rodada que encontrava as duas coisas para o mesmo objeto era este:
+
+1. a lacuna não achava candidato (o único nó livre estava "ocupado" pela cópia ruim);
+2. a divergência virava `GONE` logo em seguida e o espaço era devolvido;
+3. a rodada **terminava** com o objeto em uma cópia só e nada a caminho.
+
+O objeto só era reposto na rodada seguinte — e rodada de healing é operada, não contínua. Entre as
+duas ele ficava com a durabilidade de um disco só, que é exatamente o estado que o §9 do brief chama
+de sem redundância externa.
+
+### Agora
+
+A divergência é tratada **antes** da lacuna, na mesma rodada e no mesmo `heal`. Devolver o espaço
+primeiro tira o nó da conta de `chooseReplicas`, e a designação que vem logo depois já pode escolher o
+nó que estava ocupado pela cópia ruim. O que **não** mudou:
+
+- a cópia divergente vira `GONE`, nunca é apagada do disco de participante;
+- a réplica 0 continua intocada quando é ela que diverge (`REPLICA_ZERO` só audita);
+- a réplica nova entra `PENDING_REMOTE`: quem diz "a cópia existe" é o nó, com o digest que mediu;
+- nada é removido antes de a cópia nova ser confirmada — a `GONE` só deixa de contar como espaço.
+
+**Verificação:** `StorageHealerTests` **+1** — `nd_x` com cópia divergente e `nd_y` livre: a mesma
+rodada grava `nd_x` → `GONE` **e** `nd_y` → `PENDING_REMOTE`, nessa ordem. Mutação: devolver a
+lacuna para antes da divergência — **derruba**.
+
+## 5.14 A réplica 0 divergente pára de servir — e de ser reescrita a cada cura (ciclo 97)
+
+A réplica 0 é o disco do próprio Control Plane. A varredura relê esse disco (§5.7), acha o corpo
+trocado e o healing só **auditava** `STORAGE_REPLICA_ZERO_DIVERGENT`: a linha continuava `OK` no
+catálogo. Duas consequências:
+
+1. **`StorageCatalogService.readBody` servia o corpo divergente.** A leitura da raiz do CP era
+   decidida por `Files.isReadable`, sem olhar o estado da colocação. Essa rota é de onde o destino
+   de uma replicação **puxa** o objeto (`GET /network/storage/objects/{id}`), então mandar replicar
+   um objeto cuja réplica 0 não confere espalhava o corpo que o catálogo já negava. O `STALE` da
+   cópia de nó já era cobrado ali (`exigirCopiaServivel`, §5.5.1); a réplica 0 ficava de fora
+   porque não tem `NodeBodyStore`.
+2. **A mesma linha seria reescrita em toda rodada.** A réplica 0 `STALE` entra em `copiasStale()`, e
+   `repor` a gravaria `STALE` outra vez: uma escrita e um registro de auditoria por objeto por
+   `heal`, sem mudar estado nenhum.
+
+### Agora
+
+- o healing da réplica 0 grava `STALE` — **nunca** `GONE`: o arquivo fica na raiz e a cura não apaga
+  disco do Control Plane. O digest esperado fica na linha, que é contra ele que a próxima releitura
+  compara;
+- `readBody` passa a cobrar a linha da réplica 0 (`copies(...)` com `replica = 0`), seja qual for o
+  dono — `control-plane` ou o id do nó que gravou. `STALE`/`GONE` → `409 STORAGE_REPLICA_STALE`.
+  Sem linha, a leitura continua valendo: objeto gravado antes da colocação do Control Plane existir
+  nunca foi declarado divergente por ninguém;
+- a réplica 0 sai do laço de cura de `STALE`: ela não é designada e não tem nó para onde ir. Quem a
+  resolve é reescrevê-la; a lacuna que o `STALE` abre já é tratada pela designação de cópia de nó no
+  mesmo `heal`.
+
+**Verificação:** `StorageLocalBodyServingTests` **+1** (réplica 0 `STALE` → `409` em vez do corpo);
+`StorageHealerTests` **+1** e um reescrito (a réplica 0 divergente vira `STALE` com o digest do
+catálogo; a réplica 0 já `STALE` não é reescrita nem re-auditada). Mutações: tirar a guarda do
+`readBody` e devolver a réplica 0 ao laço de `STALE` — **2 de 2 derrubam**.
+
+## 5.15 A varredura pagina por `(bucket, object_key)`, não só pela chave (ciclo 102)
+
+A varredura de durabilidade sem bucket (`GET /admin/network/nodes/storage/scrub`) lê o catálogo
+inteiro em páginas de até 200. A consulta ordenava por `(bucket, object_key)` e a página seguinte
+pedia `object_key >= última_lida` — **sem o bucket**. A ordenação era total; o filtro não era.
+
+O efeito: com `fotos` cheio de `gato-*.jpg`, o fim da página mandava a próxima procurar chave
+`>= gato-…`, e `midia/a.mp4` (bucket posterior, chave menor) era **pulado para sempre**. A varredura
+nunca o visitava, e um corpo corrompido ali nunca aparecia em `divergent` — a durabilidade que o painel
+mostra para esses objetos era a do catálogo, sem ninguém ter relido o disco.
+
+### Agora
+
+- o cursor é o **par** `(bucket, object_key)`, na mesma ordem do `order by`, e é **exclusivo**: o item
+  do cursor não volta (`>` no par; a primeira página é uma consulta sem cursor);
+- `listAll(afterBucket, afterKey, limit)` — o port deixou de receber só a chave. O javadoc antigo
+  afirmava "não perde nem duplica"; a ordenação era total, mas o filtro pulava;
+- o `StorageScrubber` guarda `afterBucket` junto de `after`.
+
+**Verificação:** `StorageCatalogBucketsPersistenceTests` **+1** no SQL real (páginas de 2 sobre
+`fotos/m`, `fotos/z`, `midia/a`, `midia/b` devolvem cada objeto uma vez); `StorageScrubberReadBackTests`
+**+1** com **201 objetos** (200 em `fotos` e `a.mp4` em `midia`), porque o scrubber lê páginas de 200 e
+com menos objetos o cursor nem é usado. Mutações: cursor só por chave; cursor inclusivo (`>=` no par);
+scrubber sem o bucket no cursor — **3 de 3 derrubam**.
+
+Um cursor inclusivo não quebra uma asserção de conteúdo: ele **repete** o último item e a varredura
+entra em laço. O teste de SQL tem guarda de iteração para falhar rápido em vez de estourar a memória.

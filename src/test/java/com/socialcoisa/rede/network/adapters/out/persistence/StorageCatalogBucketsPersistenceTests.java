@@ -87,6 +87,71 @@ class StorageCatalogBucketsPersistenceTests {
 		assertThat(catalog.summarizeBuckets().get("fotos")).containsExactly(2L, 100L);
 	}
 
+	/**
+	 * Versão <b>substituída</b> não ocupa o "espaço utilizado" do bucket.
+	 *
+	 * <p><b>Antes:</b> o {@code group by} somava {@code bytes} de toda linha com
+	 * {@code state <> 'DELETED'} — inclusive a versão que já foi substituída por outra. O
+	 * {@code usedBytes} do mesmo painel conta só cópia {@code OK} (a versão corrente), então os dois
+	 * números do resumo discordavam: o bucket "ocupava" o dobro do que o topo dizia estar em uso, e
+	 * o operador não sabia qual acreditar.</p>
+	 *
+	 * <p><b>Agora:</b> só a versão <b>corrente</b> ({@code superseded_by is null}) conta. A antiga
+	 * continua no histórico e continua ocupando <b>disco</b> — o que ela não é é "o que este bucket
+	 * guarda hoje".</p>
+	 */
+	@Test
+	void versao_substituida_nao_soma_no_uso_do_bucket() {
+		objeto("o1", "fotos", "a.jpg", 100L, "STORED");
+		objeto("o2", "fotos", "b.jpg", 250L, "STORED");
+		jdbc.update("update network_storage_objects set superseded_by = 'o2' where id = 'o1'");
+
+		assertThat(catalog.summarizeBuckets().get("fotos")).containsExactly(2L, 250L);
+	}
+
+	/**
+	 * A varredura do catálogo inteiro <b>paginada</b> devolve cada objeto uma vez só, e nenhum some
+	 * entre as páginas.
+	 *
+	 * <p><b>Antes:</b> {@code listAll} ordenava por {@code (bucket, object_key)} e paginava só por
+	 * {@code object_key >= after} — o cursor da página não carregava o bucket. Com dois buckets, o
+	 * fim da página em {@code fotos/z.jpg} mandava a próxima procurar chave {@code >= z.jpg}, e
+	 * {@code midia/a.mp4} (chave menor, bucket posterior) era <b>pulado para sempre</b>: a varredura
+	 * de durabilidade nunca o via, e um objeto corrompido ali nunca aparecia no relatório.</p>
+	 *
+	 * <p><b>Agora:</b> o cursor é o par {@code (bucket, object_key)} e a comparação é por par, na
+	 * mesma ordem do {@code order by}.</p>
+	 */
+	@Test
+	void listAll_paginado_nao_pula_objeto_de_outro_bucket() {
+		objeto("o1", "fotos", "m.jpg", 10L, "STORED");
+		objeto("o2", "fotos", "z.jpg", 10L, "STORED");
+		objeto("o3", "midia", "a.mp4", 10L, "STORED");
+		objeto("o4", "midia", "b.mp4", 10L, "STORED");
+
+		var primeira = catalog.listAll(null, null, 2);
+		var vistos = new java.util.ArrayList<String>();
+		String bucket = null;
+		String chave = null;
+		while (true) {
+			var pagina = catalog.listAll(bucket, chave, 2);
+			if (pagina.isEmpty()) {
+				break;
+			}
+			pagina.forEach(o -> vistos.add(o.bucket() + "/" + o.key()));
+			if (vistos.size() > 8) {
+				// Laço infinito é o defeito que este teste pega: cursor que não avança não quebra
+				// uma asserção, ele trava a varredura.
+				throw new AssertionError("a paginacao nao avancou: vistos=" + vistos);
+			}
+			var ultimo = pagina.get(pagina.size() - 1);
+			bucket = ultimo.bucket();
+			chave = ultimo.key();
+		}
+
+		assertThat(vistos).containsExactly("fotos/m.jpg", "fotos/z.jpg", "midia/a.mp4", "midia/b.mp4");
+	}
+
 	/** Catálogo vazio não inventa bucket: mapa vazio, e o painel mostra zero. */
 	@Test
 	void catalogo_vazio_nao_inventa_bucket() {

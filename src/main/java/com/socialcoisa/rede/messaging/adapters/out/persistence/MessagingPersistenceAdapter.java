@@ -16,6 +16,7 @@ import com.socialcoisa.rede.messaging.application.port.out.MessagingRepository;
 import com.socialcoisa.rede.messaging.domain.Conversation;
 import com.socialcoisa.rede.messaging.domain.ConversationContext;
 import com.socialcoisa.rede.messaging.domain.ConversationParticipant;
+import com.socialcoisa.rede.messaging.domain.ConversationRole;
 import com.socialcoisa.rede.messaging.domain.Message;
 import com.socialcoisa.rede.shared.web.CursorCodec;
 
@@ -53,6 +54,16 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 	@Override
 	public void saveParticipant(ConversationParticipant participant) {
 		participantRepo.save(ConversationParticipantJpaEntity.fromDomain(participant));
+	}
+
+	@Override
+	public void deleteParticipant(String conversationId, String userId) {
+		participantRepo.deleteParticipant(conversationId, userId);
+	}
+
+	@Override
+	public void updateParticipantRole(String conversationId, String userId, ConversationRole role) {
+		participantRepo.updateRole(conversationId, userId, role.name());
 	}
 
 	@Override
@@ -174,12 +185,27 @@ class MessagingPersistenceAdapter implements MessagingRepository {
 	}
 
 	@Override
+	public void updateMessageEncryptedKeys(String messageId, String encryptedKeys) {
+		messageRepo.updateEncryptedKeys(messageId, encryptedKeys);
+	}
+
+	@Override
 	public List<Message> findMessagesByConversation(String conversationId, String viewerId,
 			java.time.Instant before, String beforeId, int limit) {
 		var page = PageRequest.of(0, limit);
 		var messages = before == null
 			? messageRepo.visibleMessages(conversationId, viewerId, page)
 			: messageRepo.visibleMessagesBefore(conversationId, viewerId, before, beforeId, page);
+		return messages.stream().map(MessageJpaEntity::toDomain).toList();
+	}
+
+	@Override
+	public List<Message> findMessagesByConversationAndTopic(String conversationId, String viewerId, String topicId,
+			java.time.Instant before, String beforeId, int limit) {
+		var page = PageRequest.of(0, limit);
+		var messages = before == null
+			? messageRepo.visibleMessagesInTopic(conversationId, topicId, viewerId, page)
+			: messageRepo.visibleMessagesInTopicBefore(conversationId, topicId, viewerId, before, beforeId, page);
 		return messages.stream().map(MessageJpaEntity::toDomain).toList();
 	}
 

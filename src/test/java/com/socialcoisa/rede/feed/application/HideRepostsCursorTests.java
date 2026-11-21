@@ -59,6 +59,7 @@ class HideRepostsCursorTests {
 		interactions, null, new CursorCodec(), blockedUsers, communities, null, blogs, null, preferences, notes,
 		polls, reposts, media, mock(com.socialcoisa.rede.shared.sanctions.SanctionGateReader.class),
 		mock(com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository.class),
+		mock(com.socialcoisa.rede.doacoes.application.port.out.DoacaoRepository.class),
 		java.time.Clock.systemUTC());
 
 	private static final UserId READER = new UserId("synthetic_reader");
