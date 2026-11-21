@@ -577,6 +577,24 @@ upload segue aberto, com as partes dele.
 (`network_storage_objects` sem a chave) e o upload continua com a parte; a conclusão correta depois
 grava o tamanho certo (6 MiB + 1 byte, não o dobro). Mutação: tirar a guarda de ordem — **derruba**.
 
+### 4.13 A leitura de objeto confirma o formato do S3 também quando falta a cópia (ciclo 93)
+
+O `GET` e o `HEAD` respondiam com o JSON interno do control plane quando o catálogo dizia que o objeto
+existe e **nenhuma cópia estava registrada** (`STORAGE_PLACEMENT_MISSING`). O SDK S3 lê o `Code` do
+XML; um documento que ele não reconhece vira falha opaca, e o cliente não distingue "tente de novo" de
+"não existe". A tradução de vocabulário só cobria o `PUT`, porque nas outras rotas a recusa nasce
+dentro do serviço de conteúdo, não no controller.
+
+Agora as três rotas passam a recusa pela mesma tradução (`comVocabularioDoS3`), e esse estado responde
+`409` com `<Code>InternalError</Code>` e a mensagem de "confirmado no catálogo, sem cópia registrada;
+tente de novo" — que é o que o cliente precisa para tentar outra vez em vez de desistir.
+
+**Verificação:** `S3GatewayTests` **+1** — objeto confirmado com as localizações removidas responde
+`409` com `<Code>` no `GET` (sem `STORAGE_PLACEMENT_MISSING` no corpo) e `409` com
+`Content-Type: application/xml` no `HEAD`, que não tem corpo. Mutações: tirar a tradução inteira do
+`GET` e do `HEAD` — **2 de 2 derrubam**. Estado real de onde vem: a falha que o registro da cópia pode
+deixar depois de o objeto ser confirmado.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
