@@ -254,6 +254,29 @@ class ColecoesFlowTests {
 	}
 
 	@Test
+	void removeColecaoUtilizadaEmOutroAparelhoEOLinkAntigoViraNaoEncontrado() throws Exception {
+		var owner = auth("colecao_doisaparelhos");
+		String colecaoId = createColecao(owner, "Coleção que vai sumir");
+
+		// Primeiro aparelho remove; segundo aparelho remove a mesma pasta com um link antigo.
+		mockMvc.perform(delete("/colecoes/" + colecaoId)
+				.header("X-Session-Token", owner.token())
+				.header("Idempotency-Key", "colecao-del-a-" + UUID.randomUUID()))
+			.andExpect(status().isOk());
+		mockMvc.perform(delete("/colecoes/" + colecaoId)
+				.header("X-Session-Token", owner.token())
+				.header("Idempotency-Key", "colecao-del-b-" + UUID.randomUUID()))
+			.andExpect(status().isNotFound())
+			.andExpect(jsonPath("$.code").value("COLECAO_NOT_FOUND"));
+
+		// E a listagem não traz mais nada dela.
+		MvcResult lista = mockMvc.perform(get("/colecoes").header("X-Session-Token", owner.token()))
+			.andExpect(status().isOk())
+			.andReturn();
+		org.assertj.core.api.Assertions.assertThat(lista.getResponse().getContentAsString()).doesNotContain(colecaoId);
+	}
+
+	@Test
 	void deletedPostDropsOutOfCollectionButOthersStay() throws Exception {
 		var author = auth("colecao_rauthor");
 		var owner = auth("colecao_rownner");
