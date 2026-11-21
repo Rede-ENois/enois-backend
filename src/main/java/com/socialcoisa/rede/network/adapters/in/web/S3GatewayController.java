@@ -349,7 +349,9 @@ class S3GatewayController {
 		// falha opaca do cliente em vez de "seu espaço acabou".
 		StorageObject stored;
 		try {
-			stored = storage.finishUpload(pending.id(), body(request), credential.ownerUserId());
+			// Corpo vazio é objeto válido no S3 (marcador de "pasta" do `aws s3 cp --recursive`):
+			// o caminho do cliente aceita 0 byte, o do nó continua recusando.
+			stored = storage.finishUploadPermitindoVazio(pending.id(), body(request), credential.ownerUserId());
 		}
 		catch (ApiException recusado) {
 			throw noVocabularioDoS3(recusado);
