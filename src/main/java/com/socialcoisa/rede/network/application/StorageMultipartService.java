@@ -303,6 +303,14 @@ public class StorageMultipartService {
 		long total = 0;
 		for (int i = 0; i < pedidas.size(); i++) {
 			Part part = porNumero.get(pedidas.get(i));
+			// A lista é a ordem do arquivo, e o S3 exige estritamente crescente. Repetir um número
+			// montava a mesma parte duas vezes: o cliente recebia 200 e um objeto com o dobro do que
+			// enviou. Numeração fora de ordem é a mesma recusa — o corpo não é o que ela descreve.
+			if (i > 0 && pedidas.get(i) <= pedidas.get(i - 1)) {
+				throw new ApiException(400, "InvalidPartOrder",
+					"A conclusao pediu a parte " + pedidas.get(i) + " depois da "
+						+ pedidas.get(i - 1) + "; os numeros tem de ser crescentes e sem repeticao.");
+			}
 			if (part == null) {
 				throw new ApiException(400, "InvalidPart",
 					"A parte " + pedidas.get(i) + " nao chegou; reenvie-a antes de concluir.");

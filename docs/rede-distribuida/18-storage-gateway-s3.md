@@ -561,6 +561,22 @@ deixa o diretório com `part-1` e nenhum `.montado-*.tmp`; a conclusão recusada
 (parte que não chegou) nem cria o diretório. Mutação: devolver o `finally` só na releitura (sem a
 limpeza no `catch`) — **derruba** ("but some elements were not expected": o `.montado-0xxx.tmp`).
 
+### 4.12 A lista de partes da conclusão é estritamente crescente (ciclo 92)
+
+O `CompleteMultipartUpload` recebe a lista de partes na ordem em que elas formam o arquivo. A
+conclusão aceitava **qualquer** sequência cujos números existissem. Com `[1, 1]` ela montava
+`part-1` duas vezes e gravava um objeto com o dobro do conteúdo do upload: o cliente recebia `200` e
+um arquivo que não mandou. Numeração fora de ordem (`[2, 1]`) era aceita do mesmo jeito e montava o
+corpo em ordem diferente da que a lista descreve.
+
+O S3 exige lista **estritamente crescente** e recusa com `InvalidPartOrder`. Agora é o mesmo: número
+que não cresce em relação ao anterior recebe `400 InvalidPartOrder`, antes de qualquer montagem — o
+upload segue aberto, com as partes dele.
+
+**Verificação:** `S3MultipartTests` **+1** — `[1, 1]` recebe `400 InvalidPartOrder`, nada é gravado
+(`network_storage_objects` sem a chave) e o upload continua com a parte; a conclusão correta depois
+grava o tamanho certo (6 MiB + 1 byte, não o dobro). Mutação: tirar a guarda de ordem — **derruba**.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
