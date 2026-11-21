@@ -38,13 +38,15 @@ class StorageLifecycleTests {
 	private static final Instant NOW = Instant.parse("2026-11-18T12:00:00Z");
 
 	private StorageCatalogRepository catalog;
+	private StorageCatalogService cota;
 	private StorageLifecycle lifecycle;
 
 	@BeforeEach
 	void setUp() {
 		catalog = mock(StorageCatalogRepository.class);
+		cota = mock(StorageCatalogService.class);
 		lifecycle = new StorageLifecycle(catalog, mock(AuditTrail.class),
-			Clock.fixed(NOW, ZoneOffset.UTC));
+			Clock.fixed(NOW, ZoneOffset.UTC), cota);
 	}
 
 	@Test
@@ -128,6 +130,25 @@ class StorageLifecycleTests {
 
 		assertThat(report.retained()).isZero();
 		verify(catalog, never()).markDeleted(eq("sob_1"), any());
+	}
+
+	/**
+	 * A expiração tira o objeto da conta do banco; o cache da cota tem de esquecer o dono.
+	 *
+	 * <p>Antes, quem deixava um objeto vencer continuava barrado pela cota até o processo
+	 * reiniciar — o banco já não contava o objeto e o cache ainda contava.</p>
+	 */
+	@Test
+	void expirar_esquece_a_conta_do_dono() {
+		StorageObject vencido = objeto("sob_v", "fotos", "a.jpg", StorageObjectState.STORED, null,
+			NOW.minusSeconds(60));
+		when(catalog.expired(NOW, StorageLifecycle.MAX_OBJECTS)).thenReturn(List.of(vencido));
+		when(catalog.supersededBefore(NOW, StorageLifecycle.MAX_OBJECTS)).thenReturn(List.of());
+		when(catalog.markDeleted("sob_v", NOW)).thenReturn(true);
+
+		lifecycle.run(false);
+
+		verify(cota).esquecerUsoDoParticipante("user");
 	}
 
 	/** {@code dryRun} relata sem gravar: é a primeira coisa que um operador faz num incidente. */

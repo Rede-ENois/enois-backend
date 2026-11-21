@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.network.application.NetworkNodeService;
 import com.socialcoisa.rede.network.application.NetworkParticipantService;
+import com.socialcoisa.rede.network.application.StorageCatalogService;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NodeAvailability;
 import com.socialcoisa.rede.shared.web.CurrentUser;
@@ -36,10 +37,32 @@ class NetworkParticipantController {
 
 	private final NetworkParticipantService participant;
 	private final CurrentUserResolver currentUserResolver;
+	private final StorageCatalogService storage;
 
-	NetworkParticipantController(NetworkParticipantService participant, CurrentUserResolver currentUserResolver) {
+	NetworkParticipantController(NetworkParticipantService participant, CurrentUserResolver currentUserResolver,
+			StorageCatalogService storage) {
 		this.participant = participant;
 		this.currentUserResolver = currentUserResolver;
+		this.storage = storage;
+	}
+
+	/**
+	 * Quanto o participante usa do Storage e quanto pode usar (brief §18, "consultar espaço
+	 * utilizado" / "consultar sua contribuição").
+	 *
+	 * <p>A cota só existia na recusa: quem recebia {@code 507} ficava sabendo os números daquele
+	 * instante, e mais ninguém. Sem esta leitura ele só descobria o próprio limite ao bater nele —
+	 * não dava para apagar antes de encher nem pedir mais ao operador com o número na mão.</p>
+	 *
+	 * <p>{@code limite = 0} significa que a instalação não cobra cota, e {@code livre} vem
+	 * {@code null}: "sem limite" não é um número, e {@code 0} ali diria "cheio". A conta é lida do
+	 * banco, não do cache do caminho de gravação — o painel tem de mostrar o mesmo número que a
+	 * próxima recusa vai usar.</p>
+	 */
+	@GetMapping("/storage/quota")
+	StorageCatalogService.Cota myQuota(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return storage.cotaDe(user.id().value());
 	}
 
 	/**

@@ -26,6 +26,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.HttpHeaders;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -49,7 +50,11 @@ import com.socialcoisa.rede.shared.web.TestAuthHelper;
  */
 @SpringBootTest
 @AutoConfigureMockMvc
+@TestPropertySource(properties = "rede.storage.max-bytes-per-owner=" + S3MultipartTests.COTA)
 class S3MultipartTests {
+
+	/** Cota de 20 MiB: três partes de 6 MiB cabem, a quarta não. */
+	static final long COTA = 20L * 1024 * 1024;
 
 	private static final String SECRET = "segredo-do-cenario-multipart";
 	private static final String ACCESS_KEY_PREFIX = "AKIAENOISMPU";
@@ -234,6 +239,234 @@ class S3MultipartTests {
 		assertThat(depois.getResponse().getStatus()).isEqualTo(404);
 	}
 
+	/**
+	 * O {@code ListParts} de um {@code uploadId} só responde pela chave daquele upload.
+	 *
+	 * <p><b>Antes:</b> a rota conferia o dono do upload e a donagem do bucket, e mais nada — o
+	 * {@code key} da URL nunca era comparado com o {@code key} gravado no upload. Um cliente que
+	 * trocasse a chave (bug de concatenação, retomada com a chave errada) recebia as partes de
+	 * <b>outro</b> arquivo com 200, e nada no documento denunciava a troca. A S3 responde
+	 * {@code 404 NoSuchUpload}: para a chave pedida, aquele upload não existe.</p>
+	 *
+	 * <p>O discriminante é o par: a chave certa devolve as partes; a chave errada, com o mesmo
+	 * {@code uploadId} e a mesma credencial, é {@code 404}.</p>
+	 */
+	@Test
+	void listar_partes_de_outra_chave_e_recusado() throws Exception {
+		String chave = "outros/%s.bin".formatted(sufixo());
+		String uploadId = abrir(chave);
+		enviarParte(chave, uploadId, 1, "conteudo".getBytes(StandardCharsets.UTF_8));
+
+		var certo = mockMvc.perform(assinar(get("/s3/" + bucket + "/" + chave).param("uploadId", uploadId),
+			shaVazio())).andReturn();
+		assertThat(certo.getResponse().getStatus()).as(certo.getResponse().getContentAsString()).isEqualTo(200);
+		assertThat(certo.getResponse().getContentAsString()).contains("<PartNumber>1</PartNumber>");
+
+		var trocado = mockMvc.perform(assinar(get("/s3/" + bucket + "/outros/outra.bin").param("uploadId", uploadId),
+			shaVazio())).andReturn();
+		assertThat(trocado.getResponse().getStatus()).as("chave de outro arquivo nao pode ver as partes")
+			.isEqualTo(404);
+		assertThat(trocado.getResponse().getContentAsString()).contains("NoSuchUpload");
+	}
+
+	/**
+	 * O {@code AbortMultipartUpload} com a chave errada <b>não</b> apaga o upload.
+	 *
+	 * <p>É o caso mais caro do defeito: {@code ListParts} da chave errada mostrava o que não devia,
+	 * mas o {@code Abort} da chave errada destruía o trabalho de outro arquivo — um cliente que
+	 * concatena a chave errada perdia as partes já enviadas sem nunca ter pedido isso.</p>
+	 */
+	@Test
+	void abortar_pela_chave_errada_nao_apaga_o_upload() throws Exception {
+		String chave = "outros/%s.bin".formatted(sufixo());
+		String uploadId = abrir(chave);
+		enviarParte(chave, uploadId, 1, "conteudo".getBytes(StandardCharsets.UTF_8));
+
+		var errado = mockMvc.perform(assinar(delete("/s3/" + bucket + "/outros/outra.bin")
+			.param("uploadId", uploadId), shaVazio())).andReturn();
+		assertThat(errado.getResponse().getStatus()).as(errado.getResponse().getContentAsString()).isEqualTo(404);
+
+		// O upload continua inteiro: as partes continuam lá e a conclusão funciona.
+		var partes = mockMvc.perform(assinar(get("/s3/" + bucket + "/" + chave).param("uploadId", uploadId),
+			shaVazio())).andReturn();
+		assertThat(partes.getResponse().getStatus()).isEqualTo(200);
+		assertThat(partes.getResponse().getContentAsString()).contains("<PartNumber>1</PartNumber>");
+		concluir(chave, uploadId, 1);
+	}
+
+	/**
+	 * As partes de um multipart <b>contam contra a cota do participante antes de a conclusão chegar</b>.
+	 *
+	 * <p><b>Antes:</b> a cota era conferida na abertura do upload e na conclusão, e <b>nunca</b> nas
+	 * partes. Um participante com cota de 1 MB podia abrir um multipart, mandar 10 000 partes de 5 MiB
+	 * (o teto de número de parte) e nunca concluir: 50 GiB em disco, com a cota só olhando quando já
+	 * era tarde demais. O {@code abort} existe, mas depende de quem enviou querer — e quem abusa não
+	 * quer.</p>
+	 *
+	 * <p><b>Agora:</b> cada parte confere {@code usado + bytes das partes abertas + esta parte} contra
+	 * a cota, com o mesmo {@code 507} da conclusão. O que o teste discrimina é o <b>momento</b>: a
+	 * recusa chega no envio da parte, com o upload ainda aberto — não na conclusão, e não depois.</p>
+	 */
+	@Test
+	void parte_que_estoura_a_cota_e_recusada_no_envio() throws Exception {
+		String chave = "grande/%s.bin".formatted(sufixo());
+		String uploadId = abrir(chave);
+
+		// Duas partes de 6 MiB caberiam no teto do objeto; a cota (20 MiB) não as aceita juntas.
+		enviarParte(chave, uploadId, 1, bytes('a', 6 * 1024 * 1024));
+
+		// 3 partes de 6 MiB = 18 MiB; outra de 6 MiB passa de 20 MiB.
+		enviarParte(chave, uploadId, 2, bytes('b', 6 * 1024 * 1024));
+		enviarParte(chave, uploadId, 3, bytes('c', 6 * 1024 * 1024));
+		byte[] quarta = bytes('d', 6 * 1024 * 1024);
+		var estouro = mockMvc.perform(assinar(put("/s3/" + bucket + "/" + chave)
+			.param("partNumber", "4").param("uploadId", uploadId).content(quarta), shaOfBytes(quarta)))
+			.andReturn();
+		assertThat(estouro.getResponse().getStatus()).as("a cota tem de morder no envio da parte")
+			.isEqualTo(507);
+		assertThat(estouro.getResponse().getContentAsString()).contains("QuotaExceeded");
+
+		// O upload continua aberto e o que já chegou continua lá: recusar uma parte não apaga as outras.
+		var partes = mockMvc.perform(assinar(get("/s3/" + bucket + "/" + chave).param("uploadId", uploadId),
+			shaVazio())).andReturn();
+		assertThat(partes.getResponse().getContentAsString()).contains("<PartNumber>3</PartNumber>")
+			.doesNotContain("<PartNumber>4</PartNumber>");
+	}
+
+	/**
+	 * O espaço <b>reservado</b> em partes abertas conta na abertura do próximo upload.
+	 *
+	 * <p><b>Antes:</b> a cota na abertura ({@code beginUpload}) olhava só o que já havia virado
+	 * objeto. Quem tinha a cota inteira em partes de multiparts abertos abria outro upload sem
+	 * recusa: a chave nascia {@code PENDING}, o corpo atravessava a rede, e só a gravação recusava
+	 * — depois de o participante ter pago o upload. O limite deixava de ser um limite.</p>
+	 *
+	 * <p><b>Agora:</b> a abertura soma o reservado e recusa antes de a chave nascer, com o mesmo
+	 * {@code 507} e dizendo <b>onde</b> está o espaço — em partes abertas, não em objeto gravado. O
+	 * que o teste discrimina é o <b>momento</b>: a recusa com a chave ainda inexistente.</p>
+	 */
+	@Test
+	void espaco_reservado_em_partes_conta_na_abertura_do_proximo_upload() throws Exception {
+		// Dois multiparts de 10 MiB numa cota de 20 MiB: o reservado chega exatamente à cota sem
+		// nenhum byte virado objeto.
+		String chave = "reserva/%s.bin".formatted(sufixo());
+		String uploadId = abrir(chave);
+		enviarParte(chave, uploadId, 1, bytes('a', 10 * 1024 * 1024));
+		String reservado = "reserva/%s-outro.bin".formatted(sufixo());
+		String outro = abrir(reservado);
+		enviarParte(reservado, outro, 1, bytes('r', 10 * 1024 * 1024));
+
+		// O PUT simples abre a gravação pelo `beginUpload`, que não conhece o tamanho do corpo: com o
+		// reservado acima da cota, nem um byte novo cabe, e a recusa tem de ser já na abertura.
+		byte[] corpo = bytes('z', 4 * 1024 * 1024);
+		String terceira = "reserva/%s-terceira.bin".formatted(sufixo());
+		var resposta = mockMvc.perform(assinar(put("/s3/" + bucket + "/" + terceira).content(corpo),
+			shaOfBytes(corpo))).andReturn();
+
+		assertThat(resposta.getResponse().getStatus()).as("o reservado em partes tem de contar")
+			.isEqualTo(507);
+		assertThat(resposta.getResponse().getContentAsString()).contains("QuotaExceeded").contains("20971520")
+			.contains("em partes abertas");
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_objects where object_key = ?",
+			Integer.class, terceira)).as("recusou antes de a chave nascer").isZero();
+
+		// Abortado o segundo, o reservado cai para 10 de 20 MiB e a mesma abertura passa.
+		var f = mockMvc.perform(assinar(delete("/s3/" + bucket + "/" + reservado).param("uploadId", outro),
+			shaVazio())).andReturn();
+		assertThat(f.getResponse().getStatus()).isEqualTo(204);
+		var depois = mockMvc.perform(assinar(put("/s3/" + bucket + "/" + terceira).content(corpo),
+			shaOfBytes(corpo))).andReturn();
+		assertThat(depois.getResponse().getStatus()).as(depois.getResponse().getContentAsString())
+			.isEqualTo(200);
+	}
+
+	/**
+	 * A conclusão de um multipart <b>não</b> cobra as partes de novo.
+	 *
+	 * <p><b>Antes:</b> a conclusão chama {@code beginUpload}, que passou a somar o que está reservado
+	 * em partes (ciclo 89). Mas as partes daquele upload <b>são</b> o corpo que está chegando, já
+	 * cobradas no envio. Somadas outra vez, um objeto que cabe na cota falhava na conclusão sempre que
+	 * houvesse <b>outro</b> upload reservando o resto: dois multiparts de 10 MiB numa cota de 20 MiB, e
+	 * o primeiro a concluir somava 10 (o seu) + 10 (o outro) contra a cota, e recusava — embora o corpo
+	 * dele coubesse sozinho.</p>
+	 */
+	@Test
+	void conclusao_nao_cobra_as_partes_de_novo() throws Exception {
+		// Dois multiparts de 10 MiB: o reservado total é a cota inteira.
+		String chave = "conclusao/%s.bin".formatted(sufixo());
+		String uploadId = abrir(chave);
+		enviarParte(chave, uploadId, 1, bytes('a', 10 * 1024 * 1024));
+		String segunda = "conclusao/%s-outro.bin".formatted(sufixo());
+		String outroId = abrir(segunda);
+		enviarParte(segunda, outroId, 1, bytes('b', 10 * 1024 * 1024));
+
+		// O primeiro conclui: o corpo (10 MiB) cabe; somar as partes dele ao outro upload (10) daria
+		// 20 MiB e a conclusão recusaria.
+		String resposta = concluir(chave, uploadId, 1);
+
+		assertThat(resposta).contains("<CompleteMultipartUploadResult");
+		assertThat(jdbc.queryForObject("select bytes from network_storage_objects where bucket = ?"
+			+ " and object_key = ? and state = 'STORED'", Long.class, bucket, chave))
+			.isEqualTo(10L * 1024 * 1024);
+	}
+
+	/**
+	 * A lista de partes da conclusão não pode repetir nem voltar um número.
+	 *
+	 * <p><b>Antes:</b> a conclusão aceitava qualquer sequência que existisse. {@code [1, 1]} montava
+	 * {@code part-1} <b>duas vezes</b> e gravava um objeto com o dobro do conteúdo do upload — o cliente
+	 * recebia 200 e um arquivo que ele não mandou. O S3 recusa com {@code InvalidPartOrder}.</p>
+	 *
+	 * <p>O discriminante é o par: a lista com repetição recusa <b>e</b> o upload continua com a parte
+	 * dele (a conclusão que falha não apaga nada); depois, a lista certa conclui com o tamanho da parte,
+	 * não com o dobro.</p>
+	 */
+	@Test
+	void conclusao_com_parte_repetida_e_recusada_sem_gravar_em_dobro() throws Exception {
+		String chave = "ordem/%s.bin".formatted(sufixo());
+		String uploadId = abrir(chave);
+		enviarParte(chave, uploadId, 1, bytes('a', 6 * 1024 * 1024));
+		enviarParte(chave, uploadId, 2, bytes('b', 1));
+
+		String xml = xmlDePartes(1, 1);
+		String sha = shaOfBytes(xml.getBytes(StandardCharsets.UTF_8));
+		var recusa = mockMvc.perform(assinar(post("/s3/" + bucket + "/" + chave).param("uploadId", uploadId)
+			.contentType("application/xml").content(xml), sha)).andReturn();
+		assertThat(recusa.getResponse().getStatus()).as(recusa.getResponse().getContentAsString())
+			.isEqualTo(400);
+		assertThat(recusa.getResponse().getContentAsString()).contains("InvalidPartOrder");
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_objects where bucket = ?"
+			+ " and object_key = ?", Integer.class, bucket, chave)).as("nada foi gravado").isZero();
+
+		concluir(chave, uploadId, 1, 2);
+		assertThat(jdbc.queryForObject("select bytes from network_storage_objects where bucket = ?"
+			+ " and object_key = ?", Long.class, bucket, chave)).isEqualTo(6L * 1024 * 1024 + 1);
+	}
+
+	/**
+	 * UploadPartCopy também não é implementado: a parte com {@code x-amz-copy-source} é recusada.
+	 *
+	 * <p><b>Antes:</b> o {@code UploadPart} aceitava o cabeçalho de cópia e gravava uma parte de 0
+	 * byte com {@code 200}. O {@code CompleteMultipartUpload} montava um objeto menor do que o
+	 * cliente pediu, e a cópia "concluída" não tinha os bytes da origem.</p>
+	 */
+	@Test
+	void parte_de_copia_e_recusada_e_nao_vira_parte_vazia() throws Exception {
+		String chave = "copia/%s.bin".formatted(sufixo());
+		String uploadId = abrir(chave);
+
+		MockHttpServletRequestBuilder requisicao = put("/s3/" + bucket + "/" + chave)
+			.param("partNumber", "1").param("uploadId", uploadId)
+			.header("x-amz-copy-source", "/" + bucket + "/origem.bin")
+			.content(new byte[0]);
+		var resposta = mockMvc.perform(assinar(requisicao, shaVazio())).andReturn();
+
+		assertThat(resposta.getResponse().getStatus()).isEqualTo(501);
+		assertThat(resposta.getResponse().getContentAsString()).contains("<Code>NotImplemented</Code>");
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_multipart_parts where upload_id = ?",
+			Integer.class, uploadId)).isZero();
+	}
+
 	// ------------------------------------------------------------------ apoio
 
 	private String abrir(String chave) throws Exception {
@@ -266,7 +499,8 @@ class S3MultipartTests {
 			.digest(xml.getBytes(StandardCharsets.UTF_8)));
 		var resposta = mockMvc.perform(assinar(post("/s3/" + bucket + "/" + chave).param("uploadId", uploadId)
 			.contentType("application/xml").content(xml), sha)).andReturn();
-		assertThat(resposta.getResponse().getStatus()).isEqualTo(200);
+		assertThat(resposta.getResponse().getStatus()).as(resposta.getResponse().getContentAsString())
+			.isEqualTo(200);
 		return resposta.getResponse().getContentAsString();
 	}
 

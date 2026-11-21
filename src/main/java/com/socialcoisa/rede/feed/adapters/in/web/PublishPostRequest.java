@@ -17,5 +17,7 @@ public record PublishPostRequest(PostType type, String content, String pageHtml,
 		/** Enquete de multipla escolha (POLL): varias alternativas por pessoa. */
 		Boolean pollMultipleChoice,
 		/** Prazo de encerramento da enquete (POLL), em ISO-8601; ausente = sem prazo. */
-		Instant pollEndsAt) {
+		Instant pollEndsAt,
+		/** Quando true, publica também uma cópia BUSINESS no feed profissional (exige perfil ativo). */
+		Boolean alsoCorporate) {
 }

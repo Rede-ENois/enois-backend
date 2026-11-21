@@ -36,11 +36,28 @@ public class StorageLifecycle {
 	private final StorageCatalogRepository catalog;
 	private final AuditTrail audit;
 	private final Clock clock;
+	private final StorageCatalogService cota;
 
-	StorageLifecycle(StorageCatalogRepository catalog, AuditTrail audit, Clock clock) {
+	/**
+	 * @param cota o serviço que mantém a conta do participante em memória; {@code null} nos testes
+	 *             que só medem a decisão de lapidar
+	 */
+	StorageLifecycle(StorageCatalogRepository catalog, AuditTrail audit, Clock clock,
+			@org.springframework.lang.Nullable StorageCatalogService cota) {
 		this.catalog = catalog;
 		this.audit = audit;
 		this.clock = clock;
+		this.cota = cota;
+	}
+
+	/**
+	 * A lápide tira o objeto da conta do banco ({@code bytesOwnedBy} exclui {@code DELETED}); o cache
+	 * da cota tem de esquecer o número do dono, senão quem deixou vencer continua barrado.
+	 */
+	private void esqueceuAConta(StorageObject object) {
+		if (cota != null) {
+			cota.esquecerUsoDoParticipante(object.createdBy());
+		}
 	}
 
 	/**
@@ -57,10 +74,12 @@ public class StorageLifecycle {
 					object.expiresAt()));
 				continue;
 			}
-			// Condicional no estado dentro do repositório: se uma gravação nova substituiu esta
-			// versão entre a leitura e a marcação, o objeto não vira lápide por um prazo que já não
-			// é dele.
+			// A marcação é por `id`, e cada versão é um objeto com id próprio (doc 17 §11.1): o
+			// prazo vencido da versão ANTIGA lapida aquela versão, nunca a corrente que a substituiu.
+			// Condicional no estado dentro do repositório: um upload que termine depois da leitura
+			// (`PENDING` → `STORED`) não pode ser lapidado por um prazo de outra versão.
 			if (catalog.markDeleted(object.id(), now)) {
+				esqueceuAConta(object);
 				expirados.add(new Expired(object.id(), object.bucket(), object.key(), object.version(),
 					object.expiresAt()));
 			}
@@ -81,6 +100,7 @@ public class StorageLifecycle {
 				continue;
 			}
 			if (catalog.markDeleted(version.id(), now)) {
+				esqueceuAConta(version);
 				liberados.add(new Purged(version.id(), version.bucket(), version.key(), version.version()));
 			}
 		}

@@ -71,7 +71,8 @@ contra o vetor externo é o que separa "implementei" de "assinei comigo mesmo e 
 
 **Não implementado**, e o brief manda não anunciar como se existisse:
 
-- **CopyObject**, **ACL**, **tagging**, **`versionId`**, **bucket policy**, **`POST` de formulário**.
+- **CopyObject** e **UploadPartCopy** — recusados com `501 NotImplemented` **antes de qualquer
+  escrita** (§4.10); **ACL**, **tagging**, **`versionId`**, **bucket policy**, **`POST` de formulário**.
 - **Regiões múltiplas**, **classes de armazenamento na resposta** (sempre `STANDARD`; a classe real é a
   da §8 e não é escolhida por requisição).
 
@@ -311,6 +312,288 @@ Prova: `S3GatewayTests.o_metadado_e_os_cabecalhos_declarados_no_put_voltem_no_he
 `cabecalho_declarado_com_quebra_de_linha_e_recusado`, `ObjectMetadataTests` (6) e a migração
 `V367` aplicada duas vezes em MariaDB 11.4 por `scripts/tests/storage-metadata-migration-test.sh`
 (PASS 14), com um objeto gravado antes da migração preservado.
+
+### 4.3.1 A listagem não mostra o que o `GET` nega (ciclo 81)
+
+O download de um objeto vencido responde `404` desde a fase 1 — a leitura filtra o prazo. O
+`ListObjects` (v1 e v2) não: o `SELECT` da listagem só excluía lápide, então a chave vencida aparecia
+ali e sumia no `GET`. Para quem espera a varredura, é "existe mas dá 404"; para um sincronizador de
+diretório é o pior dos dois mundos — ele pede, recebe `404` e repete, ou apaga a cópia local achando
+que o remoto venceu.
+
+Agora o `SELECT` da listagem tem o **mesmo predicado da leitura** (`expires_at` nulo ou no futuro).
+Ele fica no `where`, não é filtrado depois: a listagem é por página, e descartar linhas depois de ler
+faria `KeyCount` e `IsTruncated` mentirem (o cliente receberia página "cheia" vazia).
+
+Quem consome a mesma consulta herda a régua: o `GET /network/storage/buckets/{bucket}` do Control
+Plane (a listagem interna, usada pelo painel) e a varredura de durabilidade por bucket — que já
+pulava o objeto não servível, e agora nem o visita.
+
+**Verificação:** `S3ListExpiryTests` **3** pela rota real (vencido sai da lista e o `GET` responde
+`404`; dentro do prazo continua; sem prazo continua). Mutações: sem o filtro de prazo, e o filtro
+invertido (listar só os vencidos) — **2 de 2 derrubam**.
+
+### 4.3.2 O `ListBuckets` não mostra o bucket que não abre (ciclo 82)
+
+O ciclo 81 fez a listagem de objeto esconder o vencido. O `ListBuckets` (`GET /s3`), que lista os
+**buckets** do dono, seguiu com o critério antigo (só lápide fora). Um bucket cujo único objeto venceu
+continuava aparecendo, e aí o nome não fechava com nada:
+
+| pedido | resposta |
+|---|---|
+| `GET /s3` | o bucket aparece |
+| `GET /s3/{bucket}` | lista **vazia** (`KeyCount=0`) |
+| `GET /s3/{bucket}/chave.jpg` | **404** |
+| `DELETE /s3/{bucket}` | **409** — "ainda tem objetos" |
+
+Agora `bucketsOf` usa o **mesmo predicado** da listagem de objeto (`expires_at` nulo ou no futuro):
+bucket sem nenhum objeto vivo sai do `ListBuckets`, que passa a concordar com o que as outras três
+rotas já diziam. O bucket com **um** objeto vivo (mesmo tendo outro vencido ao lado) continua listado —
+vencimento é por objeto, não por bucket.
+
+**Verificação:** `S3ListBucketsExpiryTests` **4** pela rota real (bucket inteiro vencido sai da lista e
+a listagem de objeto dele já vinha vazia; bucket com um vivo e um vencido fica; bucket sem prazo fica;
+bucket de outra conta não aparece). Mutações: `bucketsOf` sem o filtro de prazo; filtro invertido;
+`bucketsOf` ignorando o dono — **3 de 3 derrubam**.
+### 4.3.3 O `LastModified` da listagem no formato que o SDK lê (ciclo 83)
+
+A S3 manda `LastModified` como `yyyy-MM-dd'T'HH:mm:ss.SSS'Z'` — **sempre** três casas decimais e
+sempre `Z`. O gateway emitia `Instant.toString()`, que:
+
+| instante gravado | antes (na resposta) |
+|---|---|
+| `2026-11-01T08:00:00Z` (fração zero) | `2026-11-01T08:00:00Z` — **sem** as três casas |
+| `2026-11-01T08:00:00.123456789Z` | `2026-11-01T08:00:00.123456789Z` — **nove** casas |
+
+Os dois são instantes válidos em Java, e é por isso que passaram: o SDK da AWS desserializa o campo com
+um formatter de milissegundos e recusa o documento inteiro — a listagem que abre no navegador falha no
+cliente. O instante com fração zero é o caso **comum** de um item recém-gravado cujo carimbo veio do
+relógio em segundo redondo.
+
+Agora o gateway formata com um `DateTimeFormatter` fixo (`S3_INSTANT`), com o milissegundo
+**truncado** — truncar e não arredondar: `999999` ns não pode virar o segundo seguinte e dar a um
+objeto a data de outro. A fonte é `updatedAt` quando existe, senão `createdAt`.
+
+**Verificação:** `S3ListLastModifiedTests` **2** pela rota real (instante redondo sai
+`2026-11-01T08:00:00.000Z`; instante com nanossegundos sai `2026-11-01T08:00:00.123Z`) — o par é o
+discriminante, porque cada um cobre um extremo diferente do defeito. Mutações: voltar o
+`Instant.toString()`, formato sem as casas, formato com nanossegundos — **3 de 3 derrubam**.
+
+### 4.5 O `uploadId` tem de ser desta chave — nas quatro rotas (ciclo 84)
+
+O `uploadId` identifica o upload; a rota identifica o objeto. As duas coisas têm de coincidir, e a S3
+responde **`404 NoSuchUpload`** quando não coincidem: para a chave pedida, aquele upload não existe.
+
+**Antes**, só metade das rotas conferia:
+
+| rota | conferia a chave? | consequência com a chave errada |
+|---|---|---|
+| `UploadPart` | sim | `404` (certo) |
+| `CompleteMultipartUpload` | sim | `404` (certo) |
+| `ListParts` | **não** | `200` com as partes de **outro** arquivo |
+| `AbortMultipartUpload` | **não** | **apagava** o upload |
+
+O `Abort` é o caro: um cliente que concatena a chave errada (bug de retomada) perdia as partes já
+enviadas sem nunca ter pedido isso, e só descobria no `Complete` seguinte.
+
+**Agora** as quatro passam por `uploadDaChave(credential, bucket, request)`, que confere bucket e chave
+num único ponto. Reunir é o que impede a divergência de voltar pela quinta rota: a conferência existe
+uma vez e toda rota nova que recebe `uploadId` a chama.
+
+**Verificação:** `S3MultipartTests` **+2** pela rota real — `ListParts` da chave certa devolve as partes
+e da chave errada é `404 NoSuchUpload`; o `Abort` da chave errada é `404` e o upload continua inteiro
+(as partes seguem lá e o `Complete` funciona). Mutações: helper conferindo só o bucket; helper nunca
+recusando — **2 de 2 derrubam**.
+
+### 4.6 `IsTruncated` diz "há mais", não "página cheia" (ciclo 85)
+
+O S3 trunca quando **há mais**, não quando a página veio cheia. O gateway decidia por
+`found.size() == maxKeys`, que confunde as duas coisas: um bucket com exatamente `max-keys` objetos
+saía com `IsTruncated=true` e `NextContinuationToken`, e o cliente — SDK, sincronizador, `aws s3 sync`
+— pedia a página seguinte e recebia zero. O custo é uma requisição a mais em todo diretório do tamanho
+exato da página; o preço é o cliente não saber quando terminou.
+
+Agora o serviço pede `maxKeys + 1` linha ao banco (`list(..., espiar=true)`) e o gateway olha se veio a
+extra:
+
+| linhas que voltaram | `IsTruncated` | o que sai |
+|---|---|---|
+| menos que `maxKeys + 1` | `false` | todas |
+| `maxKeys + 1` | `true` | as `maxKeys` primeiras, com o token da última entregue |
+
+A linha de folga é **uma linha a mais na mesma consulta indexada** — não uma consulta extra, e não um
+`count(*)`. `max-keys` inválido ou `<= 0` cai no padrão de 1000, e nada passa de 1000 (o teto da S3).
+
+**Verificação:** `S3ListPaginationTests` **3** pela rota real — três objetos com `max-keys=3`:
+`IsTruncated=false`, sem token; quatro objetos com `max-keys=3`: primeira página truncada com token, a
+seguinte conclui com um objeto e sem token; um objeto com `max-keys=10`: última página. Mutações:
+voltar `found.size() == maxKeys`; nunca truncar; espiar mas devolver a linha extra — **3 de 3
+derrubam**.
+
+### 4.7 A parte multipart conta contra a cota <b>no envio</b> (ciclo 87)
+
+A cota por participante era conferida na abertura do upload (`beginUpload`) e na conclusão
+(`finishUpload`) — e **nunca nas partes**. Um participante com cota de 1 MB abria um multipart, mandava
+10 000 partes de 5 MiB (o máximo de numeração do protocolo) e nunca concluía: **50 GiB de disco
+reservados**, com a cota só olhando quando já era tarde. O `AbortMultipartUpload` existe, mas quem abusa
+não o chama, e o coletor de vencidos só age depois do TTL.
+
+Agora `UploadPart` confere `usado + partes abertas da conta + esta parte` contra a cota, com o `507` da
+conclusão:
+
+| quando | o que é conferido |
+|---|---|
+| parte com `Content-Length` | a conta fecha **antes** de ler — nada é gravado para depois ser recusado |
+| parte sem tamanho declarado (chunks) | a conta fecha com o tamanho **medido**, antes de o temporário virar a parte |
+| reenvio da mesma parte | a parte anterior sai da conta, então reenviar não soma duas vezes |
+
+Dois detalhes que o ciclo fechou junto:
+
+- **o teto de objeto para de ler** no multipart, como no `PUT` simples (ciclo 86): `lerNoMaximo` pede no
+  máximo o que falta até "teto + 1", em vez de puxar mais um bloco de 64 KiB para responder `413`;
+- **a recusa sai no vocabulário do S3**: `507 QuotaExceeded` em XML, não o JSON do Control Plane. O `PUT`
+  simples traduzia e o `UploadPart` não; a tradução virou um ponto único (`noVocabularioDoS3`).
+
+**Verificação:** `S3MultipartTests` **+1** com cota de 20 MiB: três partes de 6 MiB passam, a quarta recebe
+`507 QuotaExceeded`, e o upload continua inteiro (as partes 1–3 seguem lá). Mutações: a parte não
+confere a cota; a cota ignora as partes abertas; sem a tradução ao SDK — **3 de 3 derrubam**.
+### 4.8 A listagem mostra a chave <b>uma vez</b>, e só o que abre (ciclo 88)
+
+O filtro da listagem era `state <> 'DELETED'`. Uma chave regravada tem **duas linhas** — a versão
+corrente e a nova, ainda `PENDING` —, e as duas passavam. O `ListObjects` devolvia então:
+
+- a **mesma chave duas vezes na mesma página** (`["a.jpg", "a.jpg"]` na primeira página, com exatamente
+  a cardinalidade da página, o que fazia o `IsTruncated` e o `KeyCount` contarem a chave em dobro); e
+- a chave em `PENDING`, que o `GET` recusa — a listagem entregava o que o download não abre.
+
+Como **o cursor da paginação é a chave**, a duplicata é pior que um resultado errado: um cliente que
+segue o `NextContinuationToken` comparando chaves pode não convergir, e um sincronizador de diretório
+pode ver a mesma chave em duas páginas seguidas. Se a regravação é de uma chave **antes** do cursor, a
+chave sai depois dele na ordem e a página seguinte nunca a alcança — o laço termina e a chave fica fora
+da cópia local até a próxima passada inteira.
+
+Agora a listagem usa **a régua do `GET`**:
+
+```sql
+state = 'STORED' and superseded_by is null and (expires_at is null or expires_at > ?)
+```
+
+`PENDING` é gravação em curso: não existe para quem lista, como não existe para quem baixa. A chave
+reaparece quando a gravação termina. `superseded_by is null` é a garantia de **uma linha por chave**,
+que o cursor exige. É a mesma régua da varredura (`listAll`) e do painel, que já filtravam assim.
+
+**Verificação:** `S3ListPaginationTests` **+1** — quatro objetos, `a.jpg` regravada (linha nova
+`PENDING`, antiga `superseded_by`) com o cursor em `b.jpg`: primeira página `["b.jpg", "c.jpg"]`, segunda
+`["d.jpg"]` e fim, `a.jpg` em nenhuma delas; terminada a gravação, `["a.jpg", "b.jpg", "c.jpg", "d.jpg"]`
+numa página só. Mutações: voltar `state <> 'DELETED'`; aceitar `PENDING` sem a conferência de versão —
+**as duas derrubam**.
+
+### 4.9 O espaço reservado em partes conta na abertura, não só na gravação (ciclo 89)
+
+O ciclo 87 fez a cota morder no **envio** de cada parte. Faltava a outra ponta: a **abertura** do
+próximo upload (`beginUpload`) olhava só o que já havia virado objeto. Quem tinha a cota inteira em
+partes de multiparts abertos abria outro upload sem recusa — a chave nascia `PENDING`, o corpo
+atravessava a rede e só a gravação recusava, depois de o participante ter pago o upload inteiro. O
+limite deixava de ser um limite.
+
+Agora as três medidas do multipart usam **uma conta só** (`exigirCotaDoParticipante`):
+
+| momento | a conta | para quê |
+|---|---|---|
+| abertura (`beginUpload`) | `usado + partes abertas` **≥** cota → recusa | a chave nem nasce; o corpo nem vem |
+| envio da parte (`UploadPart`) | `usado + partes abertas + esta parte` > cota → recusa | antes de ler (`Content-Length`) ou de gravar |
+| conclusão (`CompleteMultipartUpload`) | `usado + corpo montado` > cota → recusa | **sem** somar as partes deste upload |
+
+O `>=` na abertura é o da regra original: uma conta exatamente no limite não abre upload que só pode
+terminar em `507`. Com uma gravação em curso, a conta é `>` — cabe exatamente o que sobra.
+
+**A conclusão não soma as próprias partes.** Elas **são** o corpo que está chegando, já cobradas no
+envio. Somá-las outra vez fazia dois multiparts de 10 MiB numa cota de 20 MiB nunca concluírem: o
+primeiro somava 10 (seu) + 10 (o outro) contra a cota e recusava, com o corpo inteiro já montado em
+disco. `beginUpload(..., cobrarPartesReservadas=false)` e `finishUpload(..., false)` existem para isso.
+
+**A recusa da abertura fala S3.** O `PUT` simples traduzia a cota no `catch` da *gravação*, que a
+abertura nunca alcança: o `507` de lá saía no JSON do Control Plane, e o SDK não reconhece o `Code`.
+
+**Verificação:** `S3MultipartTests` **+2** — 20 MiB reservados em dois multiparts: o `PUT` de 4 MiB
+recebe `507 QuotaExceeded` com `20971520 em partes abertas` e **a chave não nasce**; abortado um, a
+mesma gravação passa. Dois multiparts de 10 MiB: o primeiro **conclui** com o corpo de 10 MiB gravado.
+Mutações: a abertura ignora o reservado; a conclusão cobra as partes de novo; a abertura sem a tradução
+ao S3 — **3 de 3 derrubam**.
+
+### 4.10 Cópia no servidor é recusada antes de virar objeto (ciclo 90)
+
+`CopyObject` e `UploadPartCopy` não existem neste gateway. O cabeçalho que os pede,
+`x-amz-copy-source`, era **ignorado**: o `PUT` comum seguia até a gravação com o corpo vazio que o
+cliente manda na cópia. O resultado era `400 STORAGE_EMPTY_BODY` — como se o cliente tivesse enviado
+um arquivo vazio — e a abertura deixava uma linha `PENDING` no catálogo para a chave de destino. Com
+corpo, os bytes do cliente eram gravados sob o nome do destino e a resposta dizia `200`: uma "cópia"
+que não copiou nada. O javadoc do controller prometia `501`, mas não havia guarda nenhuma.
+
+Agora o cabeçalho é reconhecido **antes** de `beginUpload` (`PUT /{bucket}/{key}`) e de
+`receivePart` (`PUT ?partNumber=&uploadId=`), e a resposta é `501 NotImplemented` no XML do S3. Nada é
+escrito: nem objeto, nem parte, nem linha no catálogo.
+
+**Verificação:** `S3GatewayTests` **+1** — `PUT` com `x-amz-copy-source` e corpo vazio recebe `501`
+com `<Code>NotImplemented</Code>`, a chave de destino não existe (`HEAD` 404) e não há linha em
+`network_storage_objects`; `S3MultipartTests` **+1** — a parte com o mesmo cabeçalho recebe `501` e
+`network_storage_multipart_parts` continua vazia. Mutações: tirar a guarda do `PUT` e tirar a guarda
+do `UploadPart` — **2 de 2 derrubam**.
+
+### 4.11 O corpo montado sai do disco quando a conclusão falha (ciclo 91)
+
+A conclusão do multipart monta as partes num arquivo só, dentro de
+`<storageRoot>/multipart/<uploadId>/`, e só então chama o `finishUpload`. O `finally` que apagava
+esse temporário cobria apenas a releitura do arquivo. Quando a **gravação** recusava — cota do
+participante, falha de I/O do catálogo, disco cheio —, a exceção subia por fora dele e o corpo
+inteiro, em claro, ficava no diretório do upload.
+
+O varredor de sobras não o recolhia: ele só apaga diretório **sem** upload correspondente, e a linha
+do upload existe (o cliente ainda pode enviar outra parte). O upload aberto passava a ocupar o dobro
+do próprio tamanho, sem que a cota, o catálogo ou o relatório soubessem.
+
+Agora a montagem, o sha do arquivo, a abertura e a gravação estão num `try` só, com a limpeza no
+`catch` (qualquer `RuntimeException`) e no caminho de sucesso. O diretório do upload fica com as
+partes — e só com elas — até o cliente concluir ou abortar.
+
+**Verificação:** `StorageMultipartBodyCleanupTests` **+2** — a conclusão com a gravação recusando
+deixa o diretório com `part-1` e nenhum `.montado-*.tmp`; a conclusão recusada antes da montagem
+(parte que não chegou) nem cria o diretório. Mutação: devolver o `finally` só na releitura (sem a
+limpeza no `catch`) — **derruba** ("but some elements were not expected": o `.montado-0xxx.tmp`).
+
+### 4.12 A lista de partes da conclusão é estritamente crescente (ciclo 92)
+
+O `CompleteMultipartUpload` recebe a lista de partes na ordem em que elas formam o arquivo. A
+conclusão aceitava **qualquer** sequência cujos números existissem. Com `[1, 1]` ela montava
+`part-1` duas vezes e gravava um objeto com o dobro do conteúdo do upload: o cliente recebia `200` e
+um arquivo que não mandou. Numeração fora de ordem (`[2, 1]`) era aceita do mesmo jeito e montava o
+corpo em ordem diferente da que a lista descreve.
+
+O S3 exige lista **estritamente crescente** e recusa com `InvalidPartOrder`. Agora é o mesmo: número
+que não cresce em relação ao anterior recebe `400 InvalidPartOrder`, antes de qualquer montagem — o
+upload segue aberto, com as partes dele.
+
+**Verificação:** `S3MultipartTests` **+1** — `[1, 1]` recebe `400 InvalidPartOrder`, nada é gravado
+(`network_storage_objects` sem a chave) e o upload continua com a parte; a conclusão correta depois
+grava o tamanho certo (6 MiB + 1 byte, não o dobro). Mutação: tirar a guarda de ordem — **derruba**.
+
+### 4.13 A leitura de objeto confirma o formato do S3 também quando falta a cópia (ciclo 93)
+
+O `GET` e o `HEAD` respondiam com o JSON interno do control plane quando o catálogo dizia que o objeto
+existe e **nenhuma cópia estava registrada** (`STORAGE_PLACEMENT_MISSING`). O SDK S3 lê o `Code` do
+XML; um documento que ele não reconhece vira falha opaca, e o cliente não distingue "tente de novo" de
+"não existe". A tradução de vocabulário só cobria o `PUT`, porque nas outras rotas a recusa nasce
+dentro do serviço de conteúdo, não no controller.
+
+Agora as três rotas passam a recusa pela mesma tradução (`comVocabularioDoS3`), e esse estado responde
+`409` com `<Code>InternalError</Code>` e a mensagem de "confirmado no catálogo, sem cópia registrada;
+tente de novo" — que é o que o cliente precisa para tentar outra vez em vez de desistir.
+
+**Verificação:** `S3GatewayTests` **+1** — objeto confirmado com as localizações removidas responde
+`409` com `<Code>` no `GET` (sem `STORAGE_PLACEMENT_MISSING` no corpo) e `409` com
+`Content-Type: application/xml` no `HEAD`, que não tem corpo. Mutações: tirar a tradução inteira do
+`GET` e do `HEAD` — **2 de 2 derrubam**. Estado real de onde vem: a falha que o registro da cópia pode
+deixar depois de o objeto ser confirmado.
 
 ## 5. Erros
 

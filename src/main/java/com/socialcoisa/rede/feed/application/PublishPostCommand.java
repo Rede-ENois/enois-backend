@@ -15,7 +15,18 @@ public record PublishPostCommand(UserId authorId, PostType type, String content,
 		/** Enquete de multipla escolha (POLL): varias alternativas por pessoa. */
 		boolean pollMultipleChoice,
 		/** Prazo de encerramento da enquete (POLL); nulo = sem prazo. */
-		Instant pollEndsAt) {
+		Instant pollEndsAt,
+		/** Publica também uma cópia BUSINESS no feed corporativo quando o autor tem perfil ativo. */
+		boolean alsoCorporate) {
+
+	/** Publicação com enquete e sem espelhamento corporativo. */
+	public PublishPostCommand(UserId authorId, PostType type, String content, String pageHtml, String articleBody,
+			List<String> tags, List<String> mediaIds, String communityId, List<String> mentionedUserIds, String topic,
+			String channelId, boolean mediaSpoiler, List<String> pollOptions, boolean pollMultipleChoice,
+			Instant pollEndsAt) {
+		this(authorId, type, content, pageHtml, articleBody, tags, mediaIds, communityId, mentionedUserIds, topic,
+			channelId, mediaSpoiler, pollOptions, pollMultipleChoice, pollEndsAt, false);
+	}
 
 	/** Publicação com canal/assunto e sem enquete. */
 	public PublishPostCommand(UserId authorId, PostType type, String content, String pageHtml, String articleBody,

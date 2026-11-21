@@ -51,6 +51,7 @@ class SavedFeedOrderingTests {
 		mock(GetMediaSummariesUseCase.class),
 		mock(com.socialcoisa.rede.shared.sanctions.SanctionGateReader.class),
 		mock(IdentityVerificationRepository.class),
+		mock(com.socialcoisa.rede.doacoes.application.port.out.DoacaoRepository.class),
 		Clock.fixed(AGORA, ZoneOffset.UTC));
 
 	@Test
