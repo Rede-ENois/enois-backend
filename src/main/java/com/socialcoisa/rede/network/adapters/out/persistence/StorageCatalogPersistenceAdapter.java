@@ -200,6 +200,12 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	 * cliente via um nome que não abria para nada — e que o {@code DELETE} recusava com {@code 409}
 	 * "ainda tem objetos". Três respostas contraditórias sobre o mesmo nome.</p>
 	 */
+	// Donagem do DeleteBucket: conta vivo e lápide. `bucketsOf` (só vivo) é a resposta certa para ler
+	// e gravar, e errada para apagar — depois da última lápide o dono perderia o próprio bucket.
+	private static final String BUCKET_HAS_OBJECTS_OF = """
+		select count(*) from network_storage_objects where bucket = ? and created_by = ?
+		""";
+
 	private static final String BUCKETS_OF = """
 		select distinct bucket from network_storage_objects
 		where created_by = ? and state <> 'DELETED'
@@ -577,6 +583,12 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	@Override
 	public List<String> bucketsOf(String ownerUserId) {
 		return jdbc.query(BUCKETS_OF, (rs, row) -> rs.getString(1), ownerUserId, Timestamp.from(Instant.now()));
+	}
+
+	@Override
+	public boolean bucketHasObjectsOf(String bucket, String ownerUserId) {
+		Integer total = jdbc.queryForObject(BUCKET_HAS_OBJECTS_OF, Integer.class, bucket, ownerUserId);
+		return total != null && total > 0;
 	}
 
 	@Override

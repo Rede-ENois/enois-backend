@@ -86,6 +86,15 @@ public interface StorageCatalogRepository {
 	List<String> bucketsOf(String ownerUserId);
 
 	/**
+	 * O bucket tem objeto no catálogo (vivo ou lápide) e <b>algum</b> é deste dono?
+	 *
+	 * <p>É a donagem do {@code DeleteBucket}: {@link #bucketsOf} conta só o vivo, e depois da última
+	 * lápide o dono deixaria de ver o próprio bucket. Vivo, a resposta é a mesma; esvaziado, é a
+	 * única prova que sobra.</p>
+	 */
+	boolean bucketHasObjectsOf(String bucket, String ownerUserId);
+
+	/**
 	 * Todos os objetos servíveis, ordenados por {@code bucket, object_key} — a paginação da varredura
 	 * percorre o catálogo inteiro, não um bucket. O cursor é a chave: dois buckets podem ter a mesma
 	 * chave, e o cursor por chave visita as duas na mesma página — o que não perde nem duplica

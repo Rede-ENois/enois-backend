@@ -2,6 +2,7 @@ package com.socialcoisa.rede.network.adapters.in.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -716,6 +717,67 @@ class S3GatewayTests {
 		assertThat(xml2).contains("<Key>p/z.txt</Key>");
 		assertThat(xml2).doesNotContain("<Key>p/a.txt</Key>");
 		assertThat(xml2).contains("<IsTruncated>false</IsTruncated>");
+	}
+
+	/**
+	 * DeleteBucket de um bucket <b>sem objeto vivo</b> responde {@code 204} — e ele deixa de existir
+	 * para o dono.
+	 *
+	 * <p><b>Antes:</b> a rota respondia {@code 501 NotImplemented} em <b>todos</b> os casos, com a
+	 * justificativa "não há bucket vazio a apagar". A premissa estava errada: bucket existe enquanto
+	 * tem objeto vivo ({@code bucketsOf} filtra {@code state <> 'DELETED'}), então um bucket cujas
+	 * chaves foram todas removidas continua aparecendo em {@code ListBuckets} e o cliente não tinha
+	 * como tirá-lo. Nenhum teste cobria a rota.</p>
+	 *
+	 * <p><b>Agora:</b> bucket sem objeto vivo e do dono → {@code 204} e o nome sai de
+	 * {@code ListBuckets}; com objeto vivo → {@code 409 BucketNotEmpty}, como o S3.</p>
+	 */
+	@Test
+	void delete_de_bucket_sem_objeto_vivo_responde_204() throws Exception {
+		gravar("velho.txt", "x");
+		MockHttpServletRequestBuilder delObjeto = delete("/s3/" + bucket + "/velho.txt");
+		assinar(delObjeto, SECRET, shaVazio());
+		mockMvc.perform(delObjeto).andExpect(status().isNoContent());
+
+		MockHttpServletRequestBuilder delBucket = delete("/s3/" + bucket);
+		assinar(delBucket, SECRET, shaVazio());
+		mockMvc.perform(delBucket).andExpect(status().isNoContent());
+
+		MockHttpServletRequestBuilder listar = get("/s3");
+		assinar(listar, SECRET, shaVazio());
+		var resultado = mockMvc.perform(listar).andExpect(status().isOk()).andReturn();
+		assertThat(resultado.getResponse().getContentAsString()).doesNotContain("<Name>" + bucket + "</Name>");
+	}
+
+	/**
+	 * Bucket que o dono da credencial <b>nunca gravou</b> continua {@code 403} — a regra nova de
+	 * donagem não pode virar "qualquer bucket é apagável".
+	 *
+	 * <p>A prova é o catálogo, vivo ou lápide: aqui não há nem um nem outro para este dono. Sem esta
+	 * guarda, o caminho do {@code 204} (bucket já esvaziado) abriria a porta para uma credencial
+	 * apagar o nome de um bucket alheio que por acaso também está vazio.</p>
+	 */
+	@Test
+	void delete_de_bucket_de_outro_dono_responde_403() throws Exception {
+		MockHttpServletRequestBuilder delBucket = delete("/s3/" + bucket);
+		assinar(delBucket, SECRET, shaVazio());
+		var resultado = mockMvc.perform(delBucket).andReturn();
+
+		assertThat(resultado.getResponse().getStatus()).isEqualTo(403);
+		assertThat(resultado.getResponse().getContentAsString()).contains("AccessDenied");
+	}
+
+	/** Com objeto vivo o bucket não sai: 409 {@code BucketNotEmpty}, como o S3. */
+	@Test
+	void delete_de_bucket_com_objeto_responde_409() throws Exception {
+		gravar("fica.txt", "x");
+
+		MockHttpServletRequestBuilder delBucket = delete("/s3/" + bucket);
+		assinar(delBucket, SECRET, shaVazio());
+		var resultado = mockMvc.perform(delBucket).andReturn();
+
+		assertThat(resultado.getResponse().getStatus()).isEqualTo(409);
+		assertThat(resultado.getResponse().getContentAsString()).contains("BucketNotEmpty");
 	}
 
 	/** DeleteObject responde 204 e a chave deixa de ser servível — a lápide, como no S3 versionado. */

@@ -577,5 +577,11 @@ class StorageScrubberReadBackTests {
 				.sorted()
 				.toList();
 		}
+
+		@Override
+		public boolean bucketHasObjectsOf(String bucket, String ownerUserId) {
+			return objects.stream()
+				.anyMatch(o -> o.bucket().equals(bucket) && ownerUserId.equals(o.createdBy()));
+		}
 	}
 }

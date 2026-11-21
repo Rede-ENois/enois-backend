@@ -374,4 +374,11 @@ public abstract class CatalogoEmMemoria implements StorageCatalogRepository {
 			.sorted()
 			.toList();
 	}
+
+	@Override
+	public boolean bucketHasObjectsOf(String bucket, String ownerUserId) {
+		// Vivo e lápide: é o que sobra depois que o dono esvazia o bucket.
+		return byKey.values().stream()
+			.anyMatch(o -> o.bucket().equals(bucket) && ownerUserId.equals(o.createdBy()));
+	}
 }
