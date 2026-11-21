@@ -515,7 +515,7 @@ UNIQUE: (requester_user_id, receiver_user_id)
 | id | BIGINT AUTO_INCREMENT PK |
 | conversation_id | VARCHAR(36) FK → conversations.id |
 | user_id | VARCHAR(36) FK → users.id |
-| role | VARCHAR(16) NOT NULL DEFAULT 'MEMBER' (V370) — `ADMIN` para quem foi promovido; o dono do grupo é quem criou a conversa (`conversations.created_by`) e não é gravado aqui |
+| role | VARCHAR(16) NOT NULL DEFAULT 'MEMBER' (V373) — `ADMIN` para quem foi promovido; o dono do grupo é quem criou a conversa (`conversations.created_by`) e não é gravado aqui |
 | last_read_at | TIMESTAMP |
 | joined_at | TIMESTAMP |
 
@@ -527,7 +527,20 @@ UNIQUE: (requester_user_id, receiver_user_id)
 | conversation_id | VARCHAR(36) FK → conversations.id |
 | sender_id | VARCHAR(36) FK → users.id |
 | text | TEXT |
+| topic_id | VARCHAR(64) (V374) — tópico do grupo de conversa em que a mensagem foi enviada; nulo fora de tópico e em todas as mensagens anteriores |
 | created_at | TIMESTAMP |
+
+### `conversation_group_topics` (V374)
+
+| Coluna | Tipo |
+|---|---|
+| id | VARCHAR(64) PK |
+| conversation_id | VARCHAR(255) — conversa `GROUP` dona do tópico (sem FK, como o resto do projeto) |
+| name | VARCHAR(80), único por conversa (collation sem acento) |
+| position | INT — ordem no grupo |
+| status | VARCHAR(16) — `OPEN` recebe mensagem, `ARCHIVED` só mantém o histórico |
+| created_at | TIMESTAMP |
+| updated_at | TIMESTAMP |
 
 ---
 

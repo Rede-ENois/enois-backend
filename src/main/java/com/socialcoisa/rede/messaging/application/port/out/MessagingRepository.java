@@ -89,6 +89,13 @@ public interface MessagingRepository {
 	List<Message> findMessagesByConversation(String conversationId, String viewerId, java.time.Instant before,
 			String beforeId, int limit);
 
+	/**
+	 * Mesma pagina, restrita a um topico do grupo. O filtro mora na consulta pelo mesmo motivo do
+	 * "apagar para mim": filtrar depois da pagina deixaria buracos e `nextCursor` mentindo.
+	 */
+	List<Message> findMessagesByConversationAndTopic(String conversationId, String viewerId, String topicId,
+			java.time.Instant before, String beforeId, int limit);
+
 	Optional<Message> findLastMessage(String conversationId);
 
 	/**
