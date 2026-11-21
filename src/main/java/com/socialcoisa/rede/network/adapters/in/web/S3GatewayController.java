@@ -396,16 +396,30 @@ class S3GatewayController {
 		requireBucket(credential, bucket);
 		String key = keyOf(request);
 		String expires = query(request).get("expires");
-		var upload = multipart.create(credential.ownerUserId(), credential.id(), bucket, key,
-			request.getContentType(), expires == null ? null : Long.valueOf(expires))
-			.comCabeçalhos(clientHeaders(request));
+		Long validade;
+		try {
+			validade = expires == null ? null : Long.valueOf(expires);
+		}
+		catch (NumberFormatException naoEhNumero) {
+			throw s3Error(400, "InvalidArgument", "expires precisa ser um numero de segundos.");
+		}
+		com.socialcoisa.rede.network.application.StorageMultipartService.Upload upload;
+		try {
+			upload = multipart.create(credential.ownerUserId(), credential.id(), bucket, key,
+				request.getContentType(), validade);
+		}
+		catch (ApiException recusado) {
+			// `expires` fora do intervalo é recusa do serviço; sem tradução, saía JSON no gateway.
+			throw noVocabularioDoS3(recusado);
+		}
+		var comCabecalhos = upload.comCabeçalhos(clientHeaders(request));
 		if (!bucketSemDono(bucket, credential.ownerUserId())) {
-			multipart.abort(upload.uploadId());
+			multipart.abort(comCabecalhos.uploadId());
 			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
 		}
 		S3Xml xml = new S3Xml();
 		xml.root("InitiateMultipartUploadResult").element("Bucket", bucket).element("Key", key)
-			.element("UploadId", upload.uploadId());
+			.element("UploadId", comCabecalhos.uploadId());
 		return xml(HttpStatus.OK).body(xml.toString());
 	}
 
@@ -498,7 +512,15 @@ class S3GatewayController {
 	 */
 	private com.socialcoisa.rede.network.application.StorageMultipartService.Upload uploadDaChave(S3Credential credential, String bucket,
 			HttpServletRequest request) {
-		var upload = multipart.require(query(request).get("uploadId"), credential.ownerUserId());
+		com.socialcoisa.rede.network.application.StorageMultipartService.Upload upload;
+		try {
+			upload = multipart.require(query(request).get("uploadId"), credential.ownerUserId());
+		}
+		catch (ApiException recusado) {
+			// Upload inexistente, de outra conta ou vencido: o SDK precisa do XML para saber que é
+			// `NoSuchUpload` e recomeçar — em JSON ele trata como falha de rede.
+			throw noVocabularioDoS3(recusado);
+		}
 		if (!upload.bucket().equals(bucket) || !upload.key().equals(keyOf(request))) {
 			throw s3Error(404, "NoSuchUpload", "O upload informado nao e desta chave.");
 		}
@@ -1101,7 +1123,11 @@ class S3GatewayController {
 			return s3Error(409, "InternalError", "O objeto esta confirmado no catalogo mas sem copia"
 				+ " registrada em no nenhum; tente de novo.");
 		}
-		return recusado;
+		// Qualquer outra recusa que nasceu nos serviços do Storage vira XML: o código interno do
+		// Énóis é legível o bastante (`NoSuchUpload`, `InvalidArgument`, `MalformedXML`, `InvalidPart`
+		// são os do S3) e o `Code` é o que o SDK lê. Antes, só os dois casos acima eram traduzidos e
+		// o resto saía como JSON do Control Plane — corpo que o SDK não sabe deserializar.
+		return s3Error(recusado.status(), recusado.code(), recusado.getMessage());
 	}
 
 	private static ApiException s3Error(int status, String code, String message) {
