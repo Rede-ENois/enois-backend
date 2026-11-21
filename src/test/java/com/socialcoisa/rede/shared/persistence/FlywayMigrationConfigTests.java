@@ -1,6 +1,7 @@
 package com.socialcoisa.rede.shared.persistence;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -47,10 +48,13 @@ class FlywayMigrationConfigTests {
 	@Mock
 	private MigrationInfo applied;
 
+	@Mock
+	private MigrationInfo stillFailed;
+
 	@Test
-	void repairsTheFailedMarkerBeforeMigrating() {
+	void repairsTheFailedMarkerAndBootsWhenTheMigrationIsApplied() {
 		when(flyway.info()).thenReturn(info);
-		when(info.all()).thenReturn(new MigrationInfo[] { failed, applied });
+		when(info.all()).thenReturn(new MigrationInfo[] { failed, applied }, new MigrationInfo[] { applied });
 		when(failed.getState()).thenReturn(MigrationState.FAILED);
 		when(failed.getVersion()).thenReturn(MigrationVersion.fromVersion("17"));
 		when(failed.getDescription()).thenReturn("support and terms");
@@ -61,6 +65,38 @@ class FlywayMigrationConfigTests {
 		InOrder order = inOrder(flyway);
 		order.verify(flyway).repair();
 		order.verify(flyway).migrate();
+	}
+
+	@Test
+	void refusesToBootWhenTheRepairedMigrationFailsAgain() {
+		when(flyway.info()).thenReturn(info);
+		when(info.all()).thenReturn(new MigrationInfo[] { failed, applied }, new MigrationInfo[] { stillFailed, applied });
+		when(failed.getState()).thenReturn(MigrationState.FAILED);
+		when(failed.getVersion()).thenReturn(MigrationVersion.fromVersion("17"));
+		when(failed.getDescription()).thenReturn("support and terms");
+		when(applied.getState()).thenReturn(MigrationState.SUCCESS);
+		when(stillFailed.getState()).thenReturn(MigrationState.FAILED);
+		when(stillFailed.getVersion()).thenReturn(MigrationVersion.fromVersion("17"));
+		when(stillFailed.getDescription()).thenReturn("support and terms");
+
+		assertThatThrownBy(() -> FlywayMigrationConfig.migrateWithRepair(flyway))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("17 - support and terms")
+			.hasMessageContaining("schema antigo");
+	}
+
+	@Test
+	void refusesToBootWhenTheRepairedMigrationStaysPending() {
+		when(flyway.info()).thenReturn(info);
+		when(info.all()).thenReturn(new MigrationInfo[] { failed, applied }, new MigrationInfo[] { failed, applied });
+		when(failed.getState()).thenReturn(MigrationState.FAILED);
+		when(failed.getVersion()).thenReturn(MigrationVersion.fromVersion("17"));
+		when(failed.getDescription()).thenReturn("support and terms");
+		when(applied.getState()).thenReturn(MigrationState.SUCCESS);
+
+		assertThatThrownBy(() -> FlywayMigrationConfig.migrateWithRepair(flyway))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("17 - support and terms");
 	}
 
 	@Test
