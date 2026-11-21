@@ -1009,7 +1009,7 @@ a cada mensagem enviada, não só na criação:
 | `Message` | Entidade: id, conversationId, senderId, text, createdAt |
 
 O papel `OWNER` é **derivado** de `Conversation.createdBy` e não é gravado: a coluna
-`conversation_participants.role` (V370) guarda a promoção a `ADMIN`, e quem não tem valor
+`conversation_participants.role` (V373) guarda a promoção a `ADMIN`, e quem não tem valor
 gravado é `MEMBER`. Guardar o dono em dois lugares deixaria a linha do participante e a conversa
 discordarem sobre quem manda no grupo.
 
@@ -1078,7 +1078,7 @@ mensagem confere isso antes de gravar, porque o id existir não basta.
 | `archive(...)` | POST /api/conversations/{conversationId}/group/topics/{topicId}/archive |
 | `reorder(...)` | POST /api/conversations/{conversationId}/group/topics/reorder |
 
-A mensagem guarda o tópico em `messages.topic_id` (V371, nula fora de tópico e em todas as
+A mensagem guarda o tópico em `messages.topic_id` (V374, nula fora de tópico e em todas as
 mensagens anteriores) e `GET .../messages?topicId=` filtra na consulta, junto com o cursor e o
 "apagar para mim".
 

@@ -515,7 +515,7 @@ UNIQUE: (requester_user_id, receiver_user_id)
 | id | BIGINT AUTO_INCREMENT PK |
 | conversation_id | VARCHAR(36) FK → conversations.id |
 | user_id | VARCHAR(36) FK → users.id |
-| role | VARCHAR(16) NOT NULL DEFAULT 'MEMBER' (V370) — `ADMIN` para quem foi promovido; o dono do grupo é quem criou a conversa (`conversations.created_by`) e não é gravado aqui |
+| role | VARCHAR(16) NOT NULL DEFAULT 'MEMBER' (V373) — `ADMIN` para quem foi promovido; o dono do grupo é quem criou a conversa (`conversations.created_by`) e não é gravado aqui |
 | last_read_at | TIMESTAMP |
 | joined_at | TIMESTAMP |
 
@@ -527,10 +527,10 @@ UNIQUE: (requester_user_id, receiver_user_id)
 | conversation_id | VARCHAR(36) FK → conversations.id |
 | sender_id | VARCHAR(36) FK → users.id |
 | text | TEXT |
-| topic_id | VARCHAR(64) (V371) — tópico do grupo de conversa em que a mensagem foi enviada; nulo fora de tópico e em todas as mensagens anteriores |
+| topic_id | VARCHAR(64) (V374) — tópico do grupo de conversa em que a mensagem foi enviada; nulo fora de tópico e em todas as mensagens anteriores |
 | created_at | TIMESTAMP |
 
-### `conversation_group_topics` (V371)
+### `conversation_group_topics` (V374)
 
 | Coluna | Tipo |
 |---|---|
