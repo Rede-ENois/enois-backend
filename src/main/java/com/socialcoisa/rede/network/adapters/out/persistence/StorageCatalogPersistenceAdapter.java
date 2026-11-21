@@ -363,8 +363,13 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	 * objeto removido nao e um bucket que o operador tem. {@code PENDING} entra com zero bytes —
 	 * ele existe no bucket e ainda nao ocupa espaco medido.</p>
 	 */
+	// Só a versão CORRENTE soma. A substituída continua ocupando disco (fica no histórico), mas o
+	// "uso do bucket" é o que ele guarda hoje — e é o mesmo critério do `usedBytes` do painel, que
+	// soma cópia OK. Somar a substituída fazia os dois números do resumo discordarem. A quantidade
+	// continua contando as duas: a chave existe no bucket nas duas versões.
 	private static final String SUMMARIZE_BUCKETS = """
-		select bucket, count(*) as objetos, coalesce(sum(bytes), 0) as bytes
+		select bucket, count(*) as objetos,
+			coalesce(sum(case when superseded_by is null then bytes end), 0) as bytes
 		from network_storage_objects
 		where state <> 'DELETED'
 		group by bucket

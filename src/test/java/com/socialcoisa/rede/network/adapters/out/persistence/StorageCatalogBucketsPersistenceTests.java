@@ -87,6 +87,28 @@ class StorageCatalogBucketsPersistenceTests {
 		assertThat(catalog.summarizeBuckets().get("fotos")).containsExactly(2L, 100L);
 	}
 
+	/**
+	 * Versão <b>substituída</b> não ocupa o "espaço utilizado" do bucket.
+	 *
+	 * <p><b>Antes:</b> o {@code group by} somava {@code bytes} de toda linha com
+	 * {@code state <> 'DELETED'} — inclusive a versão que já foi substituída por outra. O
+	 * {@code usedBytes} do mesmo painel conta só cópia {@code OK} (a versão corrente), então os dois
+	 * números do resumo discordavam: o bucket "ocupava" o dobro do que o topo dizia estar em uso, e
+	 * o operador não sabia qual acreditar.</p>
+	 *
+	 * <p><b>Agora:</b> só a versão <b>corrente</b> ({@code superseded_by is null}) conta. A antiga
+	 * continua no histórico e continua ocupando <b>disco</b> — o que ela não é é "o que este bucket
+	 * guarda hoje".</p>
+	 */
+	@Test
+	void versao_substituida_nao_soma_no_uso_do_bucket() {
+		objeto("o1", "fotos", "a.jpg", 100L, "STORED");
+		objeto("o2", "fotos", "b.jpg", 250L, "STORED");
+		jdbc.update("update network_storage_objects set superseded_by = 'o2' where id = 'o1'");
+
+		assertThat(catalog.summarizeBuckets().get("fotos")).containsExactly(2L, 250L);
+	}
+
 	/** Catálogo vazio não inventa bucket: mapa vazio, e o painel mostra zero. */
 	@Test
 	void catalogo_vazio_nao_inventa_bucket() {

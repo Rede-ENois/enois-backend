@@ -116,7 +116,7 @@ estimados" — virou três separações explícitas no contrato:
 | `objectsByState` / `copiesByState` | contagem por estado — `DELETED` ainda ocupa chave, não ocupa disco |
 | `objectsUnderReplicated` + `replicasExpected` | a lacuna **com o alvo ao lado**, porque "3 abaixo" sem alvo não diz se é saudável |
 | `objectsByDurability` | contagem por nível **efetivamente observado** (`SINGLE_DOMAIN`, `CROSS_REGION_PARTIAL`, `CROSS_REGION`) — ver [`13-storage-fase-3-replicacao.md`](13-storage-fase-3-replicacao.md) §2.1 |
-| `buckets` + `usageByBucket` | quantos buckets têm objeto servível e quanto cada um ocupa (`{objects, bytes}`). Bucket não é tabela: existe enquanto tem objeto, então o número é o de chaves distintas no `group by` — uma consulta só, coberta pelo índice `(bucket, object_key)` da V319 |
+| `buckets` + `usageByBucket` | quantos buckets têm objeto servível e quanto cada um ocupa (`{objects, bytes}`). Bucket não é tabela: existe enquanto tem objeto, então o número é o de chaves distintas no `group by` — uma consulta só, coberta pelo índice `(bucket, object_key)` da V319. **Os bytes são da versão corrente** (`superseded_by is null`, ciclo 99): a substituída continua no histórico e continua ocupando disco — o que ela não é é "o que o bucket guarda hoje". A contagem conta as duas, porque a chave existe no bucket nas duas |
 
 Quem fica fora da conta, e por quê:
 
