@@ -613,6 +613,30 @@ nova depois de a antiga ter saído — o único caminho que deixaria o objeto se
 removido): a antiga continua, e o operador vê o motivo em `failureReason`, em vez de uma
 transferência viva para sempre.
 
+### 12.3.1 A órfã tem leitura e ato (ciclo 96)
+
+`stale()` e `fail()` existiam desde o V354 e **nenhuma rota os chamava**: a listagem mostrava só as
+vivas, e uma designação recolhida por outra rota (o healing devolveu o espaço, a soltura de
+pendência venceu) deixava a transferência `PENDING` para sempre. O `FAILED` que esta seção descreve
+nunca era alcançado — o operador via a transferência de ontem e não tinha o que fazer com ela.
+
+Agora existem as duas rotas, no mesmo desenho de `/storage/pending/release`: a leitura é segura e a
+escrita é ato do operador, **seca por padrão**.
+
+| rota | o que faz |
+|---|---|
+| `GET /admin/network/storage/rebalance/stale` | transferências vivas **sem** designação pendente do destino |
+| `POST /admin/network/storage/rebalance/stale/release?dryRun=` | fecha as órfãs como `FAILED`, sem tocar a cópia antiga |
+
+Fechar é irreversível na direção do `DONE` (transferência `FAILED` não completa mais), e por isso
+quem decide é quem leu a lista. A soltura **reaproveita** o `fail()` unitário — não há uma segunda
+regra de "esta transferência pode fechar?" —, e o `fail()` só muda linha `PENDING`: uma confirmação
+que chegue entre a varredura e a escrita não é sobrescrita, e a transferência não entra na lista.
+
+**Verificação:** `NetworkStorageRebalanceTests` **+1** — réplica de destino apagada: a órfã aparece no
+`GET`, o `POST` seco não grava (`PENDING`), o `POST` com `dryRun=false` grava `FAILED` e a cópia
+antiga fica `OK`. Mutação: a soltura só listar, sem gravar — **derruba**.
+
 ### 12.4 Unicidade: uma transferência viva por réplica
 
 A mesma coluna gerada do V352: `live_key` vale `object_id:from_replica` **só em `PENDING`** e NULL nos
