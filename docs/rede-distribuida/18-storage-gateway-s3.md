@@ -54,8 +54,8 @@ contra o vetor externo é o que separa "implementei" de "assinei comigo mesmo e 
 | operação | rota | estado |
 |---|---|---|
 | PutObject | `PUT /s3/{bucket}/{key}` | ✅ mesmo caminho do catálogo; ETag = digest |
-| GetObject | `GET /s3/{bucket}/{key}` | ✅ `Range`/206/416, `304` por `If-None-Match` |
-| HeadObject | `HEAD /s3/{bucket}/{key}` | ✅ |
+| GetObject | `GET /s3/{bucket}/{key}` | ✅ `Range`/206/416, `304` por `If-None-Match` ou `If-Modified-Since` |
+| HeadObject | `HEAD /s3/{bucket}/{key}` | ✅ `304` por `If-None-Match` / `If-Modified-Since` |
 | DeleteObject | `DELETE /s3/{bucket}/{key}` | ✅ **lápide** (como o S3 com versionamento), 204 |
 | ListObjectsV2 | `GET /s3/{bucket}?list-type=2` | ✅ `prefix`, `max-keys` (teto 1000), `continuation-token` |
 | ListObjects (v1) | `GET /s3/{bucket}` | ✅ `marker` |

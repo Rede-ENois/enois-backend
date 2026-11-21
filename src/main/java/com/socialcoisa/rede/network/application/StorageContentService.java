@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Optional;
 
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
@@ -57,12 +57,33 @@ public class StorageContentService {
 		return "\"" + object.sha256() + "\"";
 	}
 
-	/**
-	 * Resposta completa: {@code 304} se {@code ifNoneMatch} bater, {@code 206}/{@code 416} pelo
-	 * {@code Range}, senão {@code 200}.
+	/*
+	 * ------------------------------------------------------------------------------------------
+	 * Contrato dos métodos abaixo, e por que ele não é o do Spring:
+	 *
+	 * `ResponseEntity<...>` do Spring MVC faz 304 SOZINHO quando a requisição é GET/HEAD, removendo
+	 * ETag e Last-Modified da resposta antes de comparar. Com um corpo `StreamingResponseBody` isso
+	 * mata a resposta SEM despacho assíncrono: o cliente recebe 304 sem `ETag` nem `Last-Modified`,
+	 * e um teste que lê a resposta antes do despacho vê um 200. E só existe para If-None-Match /
+	 * If-Modified-Since na forma que ele sabe comparar, sem as regras do S3 (por exemplo, um ETag
+	 * diferente deve desligar a data).
+	 *
+	 * Por isso as respostas de objeto saem em `ResponseEntity<Object>` com STATUS EXPLÍCITO
+	 * (`HttpStatusCode`, que o Spring não intercede), e quem compara os condicionais é esta classe —
+	 * o mesmo código para a rota pública e para o gateway S3. A regra do 304 fica num lugar só.
+	 * ------------------------------------------------------------------------------------------
 	 */
-	public ResponseEntity<StreamingResponseBody> respond(StorageObject object, String rangeHeader,
-			String ifNoneMatch) {
+
+	/**
+	 * A resposta HTTP pronta, com status já decidido: {@code 304}, {@code 206}, {@code 416} ou
+	 * {@code 200}, e o corpo por streaming. O status é numérico de propósito — ver {@link #resposta}.
+	 *
+	 * <p><b>Ordem dos validadores (RFC 9110 §13.1.3):</b> quando o pedido traz {@code If-None-Match},
+	 * só o ETag decide — o {@code If-Modified-Since} é <b>ignorado</b>. Sem {@code If-None-Match}, a
+	 * data decide.</p>
+	 */
+	public ResponseEntity<StreamingResponseBody> respond(StorageObject object, String rangeHeader, String ifNoneMatch,
+			String ifModifiedSince) {
 		List<StoragePlacement> location = storage.location(object.id());
 		if (location.isEmpty()) {
 			throw new ApiException(409, "STORAGE_PLACEMENT_MISSING",
@@ -73,14 +94,8 @@ public class StorageContentService {
 		String etag = etag(object);
 
 		// Pedido condicional: o cliente que já tem o conteúdo não paga o corpo de novo.
-		if (matches(etag, ifNoneMatch)) {
-			ResponseEntity.BodyBuilder notModified = ResponseEntity.status(HttpStatus.NOT_MODIFIED)
-				.header(HttpHeaders.ETAG, etag)
-				.header(HttpHeaders.CACHE_CONTROL, policy.headerValue());
-			if (object.updatedAt() != null) {
-				notModified.lastModified(object.updatedAt().toEpochMilli());
-			}
-			return notModified.build();
+		if (notModified(object, etag, ifNoneMatch, ifModifiedSince)) {
+			return respostaEncontrada(object, etag, policy).build();
 		}
 
 		ResponseEntity.BodyBuilder response;
@@ -89,42 +104,51 @@ public class StorageContentService {
 			range = ByteRange.parse(rangeHeader, total);
 		}
 		catch (ByteRange.Unsatisifiable impossible) {
-			return ResponseEntity.status(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
-				.header(HttpHeaders.CONTENT_RANGE, "bytes */" + total)
+			return resposta(416).header(HttpHeaders.CONTENT_RANGE, "bytes */" + total)
 				.header(HttpHeaders.ETAG, etag)
 				.build();
 		}
 		if (range.isPresent()) {
 			ByteRange bytes = range.get();
-			response = ResponseEntity.status(HttpStatus.PARTIAL_CONTENT)
+			response = ResponseEntity.status(HttpStatusCode.valueOf(206))
 				.header(HttpHeaders.CONTENT_RANGE, bytes.contentRange())
 				.header(HttpHeaders.CONTENT_LENGTH, String.valueOf(bytes.length()))
 				.header(HttpHeaders.ACCEPT_RANGES, "bytes");
 			long skip = bytes.start();
 			long limit = bytes.length();
-			ResponseEntity.BodyBuilder partial = response;
-			return finish(partial, object, policy, etag)
-				.body(output -> writeSlice(storage.readBody(object.id()), output, skip, limit));
+			ResponseEntity.BodyBuilder parcial = response;
+			return finish(parcial, object, policy, etag)
+				.body((StreamingResponseBody) output -> writeSlice(storage.readBody(object.id()), output, skip, limit));
 		}
 		// Corpo inteiro: 200 com Accept-Ranges para o cliente saber que pode pedir faixas depois.
-		ResponseEntity.BodyBuilder whole = ResponseEntity.ok()
+		ResponseEntity.BodyBuilder inteiro = resposta(200)
 			.header(HttpHeaders.CONTENT_LENGTH, String.valueOf(total))
 			.header(HttpHeaders.ACCEPT_RANGES, "bytes");
-		return finish(whole, object, policy, etag).body(output -> writeBody(storage.readBody(object.id()), output));
+		return finish(inteiro, object, policy, etag)
+			.body((StreamingResponseBody) output -> writeBody(storage.readBody(object.id()), output));
 	}
 
-	/** Só as informações de cabeçalho — o que o {@code HEAD} do S3 precisa, sem corpo. */
-	public ResponseEntity<Void> head(StorageObject object) {
+	/**
+	 * Só as informações de cabeçalho — o que o {@code HEAD} do S3 precisa, sem corpo.
+	 *
+	 * <p>Condicional também: <b>304</b> quando o validador do cliente já corresponde. O SDK usa o
+	 * HEAD para decidir se baixa o objeto; 200 sempre é "baixe de novo", mesmo com os bytes em mãos.</p>
+	 */
+	public ResponseEntity<StreamingResponseBody> head(StorageObject object, String ifNoneMatch, String ifModifiedSince) {
 		List<StoragePlacement> location = storage.location(object.id());
 		if (location.isEmpty()) {
 			throw new ApiException(409, "STORAGE_PLACEMENT_MISSING",
 				"O catalogo diz que o objeto existe, mas nao ha copia registrada em no nenhum.");
 		}
 		CachePolicy policy = CachePolicy.forContentType(object.contentType());
-		ResponseEntity.BodyBuilder builder = ResponseEntity.ok()
+		String etag = etag(object);
+		if (notModified(object, etag, ifNoneMatch, ifModifiedSince)) {
+			return respostaEncontrada(object, etag, policy).build();
+		}
+		ResponseEntity.BodyBuilder builder = resposta(200)
 			.header(HttpHeaders.CONTENT_LENGTH, String.valueOf(object.bytes()))
 			.header(HttpHeaders.ACCEPT_RANGES, "bytes");
-		return finish(builder, object, policy, etag(object)).build();
+		return finish(builder, object, policy, etag).build();
 	}
 
 	/**
@@ -167,6 +191,65 @@ public class StorageContentService {
 	 */
 	private static String cacheControl(StorageObject object, CachePolicy policy) {
 		return object.cacheControlOrNull() != null ? object.cacheControlOrNull() : policy.headerValue();
+	}
+
+	/**
+	 * Builder com STATUS EXPLÍCITO ({@code HttpStatusCode}), não com os atalhos {@code ok()}/{@code
+	 * notModified()}.
+	 *
+	 * <p>O Spring MVC faz 304 sozinho em GET/HEAD comparando as requisições internamente, e nesse
+	 * caminho remove {@code ETag} e {@code Last-Modified} e não despacha um corpo
+	 * {@code StreamingResponseBody} — a resposta condicional sai sem despacho. Com o status explícito
+	 * o Spring não intercede, e quem decide o 304 é {@link #notModified}, com as regras do S3.
+	 * Por isso toda resposta de objeto desta classe nasce aqui.</p>
+	 */
+	static ResponseEntity.BodyBuilder resposta(int status) {
+		return ResponseEntity.status(HttpStatusCode.valueOf(status));
+	}
+
+	/** O 304 completo: {@code ETag}, a mesma política de cache e o {@code Last-Modified}. */
+	private static ResponseEntity.BodyBuilder respostaEncontrada(StorageObject object, String etag,
+			CachePolicy policy) {
+		ResponseEntity.BodyBuilder notModified = resposta(304)
+			.header(HttpHeaders.ETAG, etag)
+			.header(HttpHeaders.CACHE_CONTROL, policy.headerValue());
+		if (object.updatedAt() != null) {
+			notModified.lastModified(object.updatedAt().toEpochMilli());
+		}
+		return notModified;
+	}
+
+	/**
+	 * O pedido condicional bate? {@code If-None-Match} primeiro; sem ele, {@code If-Modified-Since}.
+	 *
+	 * <p><b>A data é comparada em segundos</b>, a granularidade do HTTP-date: o {@code updated_at} tem
+	 * milissegundos, e um cliente devolve exatamente o {@code Last-Modified} que recebeu. Comparar
+	 * sem truncar diria "mudou" sempre — o 304 por data nunca aconteceria.</p>
+	 *
+	 * <p>Data malformada <b>não</b> dá erro: é ignorada, como um cabeçalho ausente (RFC 9110 §13.1.3
+	 * manda ignorar campo de data que não é data). Recusar a leitura por causa de um validador torto
+	 * quebraria o cliente que, de todo modo, receberia o corpo inteiro.</p>
+	 */
+	public static boolean notModified(StorageObject object, String etag, String ifNoneMatch,
+			String ifModifiedSince) {
+		if (ifNoneMatch != null && !ifNoneMatch.isBlank()) {
+			// Com If-None-Match presente, a data é ignorada — inclusive quando o ETag não bate.
+			return matches(etag, ifNoneMatch);
+		}
+		if (object.updatedAt() == null || ifModifiedSince == null || ifModifiedSince.isBlank()) {
+			return false;
+		}
+		java.time.Instant pedido;
+		try {
+			pedido = java.time.ZonedDateTime
+				.parse(ifModifiedSince.trim(), java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME)
+				.toInstant();
+		}
+		catch (java.time.format.DateTimeParseException invalida) {
+			return false;
+		}
+		return !object.updatedAt().truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+			.isAfter(pedido.truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
 	}
 
 	/** {@code If-None-Match} contra o ETag; {@code *} e a lista separada por vírgula valem. */

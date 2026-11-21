@@ -562,7 +562,7 @@ class S3GatewayController {
 	}
 
 	/**
-	 * GetObject: Range/206/416, 304 por If-None-Match, ETag = digest.
+	 * GetObject: Range/206/416, 304 por If-None-Match ou If-Modified-Since, ETag = digest.
 	 *
 	 * <p><b>Ordem deliberada:</b> donagem antes da existência. O S3 responde 404 a um bucket que o
 	 * chamador não pode ver; aqui a resposta é 403. O motivo é que um 404 para quem tem credencial válida
@@ -576,17 +576,18 @@ class S3GatewayController {
 		requireBucketDoDono(credential, bucket);
 		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request)));
 		return comVocabularioDoS3(() -> content.respond(object, request.getHeader(HttpHeaders.RANGE),
-			request.getHeader(HttpHeaders.IF_NONE_MATCH)));
+			request.getHeader(HttpHeaders.IF_NONE_MATCH), request.getHeader(HttpHeaders.IF_MODIFIED_SINCE)));
 	}
 
 	/** HeadObject: mesmos cabeçalhos do GetObject, sem corpo. */
 	@RequestMapping(value = "/{bucket}/{*key}", method = RequestMethod.HEAD)
-	ResponseEntity<Void> headObject(@PathVariable String bucket, HttpServletRequest request) {
+	ResponseEntity<StreamingResponseBody> headObject(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "GET");
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
 		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request), "HEAD"));
-		return comVocabularioDoS3(() -> content.head(object));
+		return comVocabularioDoS3(() -> content.head(object, request.getHeader(HttpHeaders.IF_NONE_MATCH),
+			request.getHeader(HttpHeaders.IF_MODIFIED_SINCE)));
 	}
 
 	/** DeleteObject: lápide no catálogo. A resposta é 204 mesmo se a chave não existir (igual ao S3). */

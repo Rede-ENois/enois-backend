@@ -539,6 +539,99 @@ class S3GatewayTests {
 	}
 
 	/**
+	 * {@code If-Modified-Since} com a data que o próprio gateway devolveu em {@code Last-Modified}
+	 * dá <b>304</b>, e data anterior dá o corpo.
+	 *
+	 * <p><b>Antes:</b> o GetObject só olhava {@code If-None-Match}. Um SDK que revalida por data
+	 * (ou um cliente atrás de CDN que normaliza o validador para {@code Last-Modified}) recebia o
+	 * objeto inteiro de novo; num vídeo de gigabytes, é a transferência toda por nada.</p>
+	 *
+	 * <p><b>Agora:</b> a data é comparada em <b>segundos</b>, a granularidade do HTTP-date. O teste
+	 * devolve o cabeçalho recebido com {@code updated_at} em milissegundos ({@code .750}): sem
+	 * truncar, a comparação diria "mudou" sempre.</p>
+	 */
+	@Test
+	void get_condicional_por_data_devolve_304() throws Exception {
+		gravar("cache/revalidado.txt", "conteudo cacheavel");
+		String id = jdbc.queryForObject(
+			"select id from network_storage_objects where bucket = ? and object_key = ?", String.class, bucket,
+			"cache/revalidado.txt");
+		jdbc.update("update network_storage_objects set updated_at = ? where id = ?",
+			java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00.750Z")), id);
+
+		MockHttpServletRequestBuilder primeiro = get("/s3/" + bucket + "/cache/revalidado.txt");
+		assinar(primeiro, SECRET, shaVazio());
+		var resultado = mockMvc.perform(primeiro).andReturn();
+		if (resultado.getRequest().isAsyncStarted()) {
+			resultado = mockMvc.perform(asyncDispatch(resultado)).andReturn();
+		}
+		String modificadoEm = resultado.getResponse().getHeader(HttpHeaders.LAST_MODIFIED);
+		assertThat(resultado.getResponse().getStatus()).isEqualTo(200);
+		assertThat(modificadoEm).isNotBlank();
+
+		MockHttpServletRequestBuilder revalidacao = get("/s3/" + bucket + "/cache/revalidado.txt")
+			.header(HttpHeaders.IF_MODIFIED_SINCE, modificadoEm);
+		assinar(revalidacao, SECRET, shaVazio());
+		mockMvc.perform(revalidacao)
+			.andExpect(status().isNotModified())
+			.andExpect(header().string(HttpHeaders.ETAG, "\"" + shaDe("conteudo cacheavel") + "\""));
+
+		MockHttpServletRequestBuilder antiga = get("/s3/" + bucket + "/cache/revalidado.txt")
+			.header(HttpHeaders.IF_MODIFIED_SINCE, "Sat, 31 Oct 2026 00:00:00 GMT");
+		assinar(antiga, SECRET, shaVazio());
+		var comCorpo = mockMvc.perform(antiga).andReturn();
+		if (comCorpo.getRequest().isAsyncStarted()) {
+			comCorpo = mockMvc.perform(asyncDispatch(comCorpo)).andReturn();
+		}
+		assertThat(comCorpo.getResponse().getStatus()).isEqualTo(200);
+		assertThat(comCorpo.getResponse().getContentAsString()).isEqualTo("conteudo cacheavel");
+	}
+
+	/**
+	 * O HEAD condicional também responde <b>304</b> — por ETag ou por data.
+	 *
+	 * <p><b>Antes:</b> o HeadObject ignorava os dois condicionais e sempre devolvia 200 com os
+	 * cabeçalhos. O SDK usa o HEAD para decidir se baixa o objeto; 200 aqui é "baixe de novo", mesmo
+	 * quando o cliente já tem os bytes.</p>
+	 *
+	 * <p>E o {@code If-None-Match}, quando presente, <b>desliga</b> o {@code If-Modified-Since}: se o
+	 * ETag não bate, a resposta é 200, ainda que a data diga "não mudou" (RFC 9110 §13.1.3).</p>
+	 */
+	@Test
+	void head_condicional_responde_304() throws Exception {
+		gravar("cache/cabecalho.txt", "conteudo do cabecalho");
+		String id = jdbc.queryForObject(
+			"select id from network_storage_objects where bucket = ? and object_key = ?", String.class, bucket,
+			"cache/cabecalho.txt");
+		jdbc.update("update network_storage_objects set updated_at = ? where id = ?",
+			java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00.750Z")), id);
+		String sha = shaDe("conteudo do cabecalho");
+
+		MockHttpServletRequestBuilder semCondicional = head("/s3/" + bucket + "/cache/cabecalho.txt");
+		assinar(semCondicional, SECRET, shaVazio());
+		String modificadoEm = mockMvc.perform(semCondicional).andReturn().getResponse()
+			.getHeader(HttpHeaders.LAST_MODIFIED);
+		assertThat(modificadoEm).isNotBlank();
+
+		MockHttpServletRequestBuilder porEtag = head("/s3/" + bucket + "/cache/cabecalho.txt")
+			.header(HttpHeaders.IF_NONE_MATCH, "\"" + sha + "\"");
+		assinar(porEtag, SECRET, shaVazio());
+		mockMvc.perform(porEtag).andExpect(status().isNotModified());
+
+		MockHttpServletRequestBuilder porData = head("/s3/" + bucket + "/cache/cabecalho.txt")
+			.header(HttpHeaders.IF_MODIFIED_SINCE, modificadoEm);
+		assinar(porData, SECRET, shaVazio());
+		mockMvc.perform(porData).andExpect(status().isNotModified());
+
+		// ETag diferente + data igual: o If-None-Match manda sozinho e a resposta é 200.
+		MockHttpServletRequestBuilder etagErrado = head("/s3/" + bucket + "/cache/cabecalho.txt")
+			.header(HttpHeaders.IF_NONE_MATCH, "\"outro-digest\"")
+			.header(HttpHeaders.IF_MODIFIED_SINCE, modificadoEm);
+		assinar(etagErrado, SECRET, shaVazio());
+		mockMvc.perform(etagErrado).andExpect(status().isOk());
+	}
+
+	/**
 	 * V367: o que o cliente declara no PUT volta no HEAD e no GET.
 	 *
 	 * <p><b>Antes:</b> o gateway guardava tipo, tamanho e digest e descartava o resto — o
