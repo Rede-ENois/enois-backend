@@ -520,6 +520,27 @@ mesma gravação passa. Dois multiparts de 10 MiB: o primeiro **conclui** com o 
 Mutações: a abertura ignora o reservado; a conclusão cobra as partes de novo; a abertura sem a tradução
 ao S3 — **3 de 3 derrubam**.
 
+### 4.11 O corpo montado sai do disco quando a conclusão falha (ciclo 91)
+
+A conclusão do multipart monta as partes num arquivo só, dentro de
+`<storageRoot>/multipart/<uploadId>/`, e só então chama o `finishUpload`. O `finally` que apagava
+esse temporário cobria apenas a releitura do arquivo. Quando a **gravação** recusava — cota do
+participante, falha de I/O do catálogo, disco cheio —, a exceção subia por fora dele e o corpo
+inteiro, em claro, ficava no diretório do upload.
+
+O varredor de sobras não o recolhia: ele só apaga diretório **sem** upload correspondente, e a linha
+do upload existe (o cliente ainda pode enviar outra parte). O upload aberto passava a ocupar o dobro
+do próprio tamanho, sem que a cota, o catálogo ou o relatório soubessem.
+
+Agora a montagem, o sha do arquivo, a abertura e a gravação estão num `try` só, com a limpeza no
+`catch` (qualquer `RuntimeException`) e no caminho de sucesso. O diretório do upload fica com as
+partes — e só com elas — até o cliente concluir ou abortar.
+
+**Verificação:** `StorageMultipartBodyCleanupTests` **+2** — a conclusão com a gravação recusando
+deixa o diretório com `part-1` e nenhum `.montado-*.tmp`; a conclusão recusada antes da montagem
+(parte que não chegou) nem cria o diretório. Mutação: devolver o `finally` só na releitura (sem a
+limpeza no `catch`) — **derruba** ("but some elements were not expected": o `.montado-0xxx.tmp`).
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
