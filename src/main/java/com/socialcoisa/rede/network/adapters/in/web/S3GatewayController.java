@@ -251,17 +251,48 @@ class S3GatewayController {
 		return achado < 0 ? null : key.substring(0, achado + delimiter.length());
 	}
 
-	/** DeleteBucket: recusa com 409 se ainda houver objeto, como o S3. */
+	/**
+	 * DeleteBucket: {@code 204} quando o bucket não tem objeto vivo; {@code 409 BucketNotEmpty} quando
+	 * tem, como o S3.
+	 *
+	 * <p><b>Antes:</b> respondia {@code 501 NotImplemented} em <b>todos</b> os casos, com a
+	 * justificativa "não há bucket vazio a apagar". A premissa estava errada: bucket existe enquanto
+	 * tem objeto <b>vivo</b> ({@code bucketsOf} filtra {@code state <> 'DELETED'}), então um bucket
+	 * cujas chaves foram todas removidas continuava em {@code ListBuckets} e o cliente não tinha como
+	 * tirá-lo. A rota também recusava com {@code 403} um bucket que só tinha lápides, porque a
+	 * conferência de dono usa a mesma lista de vivos: o dono "perdia" o próprio bucket ao esvaziá-lo.</p>
+	 *
+	 * <p><b>Agora:</b> a donagem de um bucket <b>esvaziado</b> é provada pelo que sobrou no catálogo
+	 * (as lápides), não só pelos vivos. Sem nada vivo e com lápides do dono → {@code 204}. Bucket
+	 * que o dono nunca gravou continua {@code 403}: não é dele.</p>
+	 */
 	@DeleteMapping("/{bucket}")
 	ResponseEntity<Void> deleteBucket(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "DELETE");
 		requireBucket(credential, bucket);
-		requireBucketDoDono(credential, bucket);
-		List<StorageObject> any = storage.list(bucket, null, null, 1);
-		if (!any.isEmpty()) {
+		requireBucketDoDonoOuEsvaziado(credential, bucket);
+		List<StorageObject> vivos = storage.list(bucket, null, null, 1);
+		if (!vivos.isEmpty()) {
 			throw new ApiException(409, "BucketNotEmpty", "O bucket ainda tem objetos.");
 		}
-		throw new ApiException(501, "NotImplemented", "Remocao de bucket nao e suportada: nao ha bucket vazio a apagar.");
+		// O bucket já "não existe" para o dono: nada vivo, nada listado. O 204 é a confirmação do S3.
+		return ResponseEntity.noContent().build();
+	}
+
+	/**
+	 * Donagem para o {@code DELETE} do bucket: vale o bucket que o dono tem <b>hoje</b> ou o que ele
+	 * <b>esvaziou</b>.
+	 *
+	 * <p>{@code bucketsOf} conta só objeto vivo — é a resposta certa para ler e gravar, mas errada
+	 * para apagar: depois da última lápide o dono deixaria de ver o próprio bucket e receberia
+	 * {@code 403} ao tentar removê-lo. O que prova a donagem aqui é a autoria do que está no
+	 * catálogo, vivo ou como lápide.</p>
+	 */
+	private void requireBucketDoDonoOuEsvaziado(S3Credential credential, String bucket) {
+		if (catalog.bucketHasObjectsOf(bucket, credential.ownerUserId())) {
+			return;
+		}
+		throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
 	}
 
 	// ---------------------------------------------------------------- objeto

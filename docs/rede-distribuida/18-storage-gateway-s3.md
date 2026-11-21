@@ -60,7 +60,7 @@ contra o vetor externo é o que separa "implementei" de "assinei comigo mesmo e 
 | ListObjectsV2 | `GET /s3/{bucket}?list-type=2` | ✅ `prefix`, `max-keys` (teto 1000), `continuation-token` |
 | ListObjects (v1) | `GET /s3/{bucket}` | ✅ `marker` |
 | ListBuckets | `GET /s3` | ✅ só os buckets do dono |
-| DeleteBucket | `DELETE /s3/{bucket}` | ⚠️ recusa 409 se houver objeto; **501** para bucket vazio (não há tabela de buckets vazios) |
+| DeleteBucket | `DELETE /s3/{bucket}` | ✅ `409 BucketNotEmpty` se houver objeto **vivo**; `204` se não houver (§4.15) |
 | CreateMultipartUpload | `POST /s3/{bucket}/{key}?uploads` | ✅ devolve `UploadId` |
 | UploadPart | `PUT /s3/{bucket}/{key}?partNumber=&uploadId=` | ✅ fora de ordem; reenvio substitui |
 | CompleteMultipartUpload | `POST /s3/{bucket}/{key}?uploadId=` | ✅ monta o corpo na ordem pedida; parte ausente recusa |
@@ -93,7 +93,7 @@ as duas precisam de "sim":
 | ListObjects `GET /s3/{bucket}` | ✅ | ✅ | antes |
 | GetObject / HeadObject | ✅ | ✅ | antes |
 | DeleteObject | ✅ | ✅ | antes |
-| DeleteBucket | ✅ | ✅ | antes |
+| DeleteBucket | ✅ | ✅ (vivo **ou** lápide, §4.15) | antes |
 | PutObject | ✅ | ✅ | **depois da gravação** |
 
 **Por que o `PUT` é o único fora de ordem.** O Storage não tem tabela de buckets: o nome nasce do
@@ -624,6 +624,36 @@ e a navegação nunca oferecia a subpasta.
 prefixo; e a paginação com `max-keys=2` entrega `p/a.txt` + `p/sub/` na primeira página
 (`IsTruncated=true`, token `p/sub/`) e `p/z.txt` na segunda. Mutações: grupo não consumindo entrada do
 `MaxKeys`, e o grupo não agrupando (comportamento antigo) — **2 de 2 derrubam**.
+
+## 4.15 `DeleteBucket` apaga de verdade (ciclo 100)
+
+Até aqui a rota respondia **`501 NotImplemented` em todos os casos**, com a justificativa "não há bucket
+vazio a apagar". A premissa estava errada: o Storage não tem tabela de buckets — o nome **existe
+enquanto tem objeto vivo** (`bucketsOf` filtra `state <> 'DELETED'`) —, então um bucket cujas chaves
+foram todas removidas continuava aparecendo em `ListBuckets` e o cliente não tinha como tirá-lo. Pior:
+depois da última lápide, o dono recebia `403 AccessDenied`, porque a conferência de donagem usava a
+mesma lista de vivos — ele **perdia o próprio bucket** ao esvaziá-lo. A rota não tinha nenhum teste.
+
+### Agora
+
+| situação | resposta |
+|---|---|
+| bucket com objeto **vivo** | `409 <Code>BucketNotEmpty</Code>` |
+| bucket **sem objeto vivo**, com objetos do dono no catálogo (vivo ou lápide) | `204`, e o nome sai de `ListBuckets` |
+| bucket que o dono da credencial **nunca gravou** | `403 <Code>AccessDenied</Code>` |
+
+A donagem do `DELETE` é provada por `bucketHasObjectsOf(bucket, dono)`, que conta **vivo e lápide**:
+é o que sobra depois que o dono esvazia o bucket. O `bucketsOf` (só vivo) continua sendo a resposta
+certa para ler e gravar, e a errada para apagar.
+
+O `204` não apaga linha do catálogo: o bucket "deixou de existir" no instante em que ficou sem objeto
+vivo, que é a mesma regra que o esconde do `ListBuckets`. Não há tabela de bucket a remover — e não
+precisa haver.
+
+**Verificação:** `S3GatewayTests` **+3** — `DeleteObject` seguido de `DeleteBucket` responde `204` e o
+nome some de `ListBuckets`; bucket com objeto vivo responde `409 BucketNotEmpty`; bucket que o dono
+nunca gravou responde `403 AccessDenied`. Mutações: voltar ao `501` incondicional, conferir donagem só
+pela lista de vivos, e remover a recusa `409` — **3 de 3 derrubam**.
 
 ## 5. Erros
 
