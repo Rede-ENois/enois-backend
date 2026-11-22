@@ -1,6 +1,8 @@
 package com.socialcoisa.rede.network.adapters.in.web;
 
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
@@ -11,6 +13,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -99,6 +102,19 @@ class S3GatewayController {
 
 	/** O cabeçalho do S3 para copiar no servidor: CopyObject e UploadPartCopy existem. */
 	private static final String COPY_SOURCE = "x-amz-copy-source";
+
+	/**
+	 * Subrecursos do objeto que o S3 implementa com um {@code PUT} e que este gateway <b>não</b>: a
+	 * etiqueta, a ACL, o bloqueio de objeto e a retenção. Estão juntos porque a consequência de não
+	 * recusá-los é a mesma — o XML da operação viraria o conteúdo do objeto.
+	 */
+	/**
+	 * Subrecursos do PUT que gravaria o XML deles no corpo do objeto. Lista e não {@code Set}: a
+	 * mensagem cita <b>um</b> subrecurso, e com dois na mesma requisição ({@code ?tagging&acl}) a ordem
+	 * de um {@code Set.of} não é contrato — a mesma requisição responderia uma coisa ou outra.
+	 */
+	private static final List<String> SUBRECURSOS_QUE_GRAVARIAM = List.of("tagging", "acl", "retention",
+		"legal-hold", "object-lock");
 
 	/** O formato de instante da S3: sempre três casas decimais e sempre {@code Z}. */
 	private static final DateTimeFormatter S3_INSTANT = DateTimeFormatter
@@ -295,6 +311,45 @@ class S3GatewayController {
 		throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
 	}
 
+	/**
+	 * Subrecurso da consulta que o gateway não implementa e que, sem esta guarda, seria gravado.
+	 *
+	 * <p><b>Antes:</b> o {@code PUT} era despachado pela chave da rota, sem olhar a consulta. Um
+	 * {@code PUT ?tagging}, {@code ?acl}, {@code ?retention}, {@code ?legal-hold} ou {@code ?object-lock}
+	 * abria um upload da chave, gravava o <b>XML daquela operação</b> como corpo, substituía o arquivo
+	 * de verdade e respondia {@code 200} — que é o "sucesso" de várias operações do S3 que este gateway
+	 * não implementa. O cliente via sucesso e o objeto ficava com o XML dentro.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 501 NotImplemented} no XML do S3, devolvendo o subrecurso não suportado,
+	 * e nada é gravado. A lista vizinha (ecoada em {@code 200} sem gravar) já fazia isso para
+	 * {@code ?versioning}, {@code ?encryption}, {@code ?logging} e companhia; o que distingue os dois
+	 * grupos é justamente o que acontece sem a guarda — ali, um corpo vazio confundido com objeto;
+	 * aqui, o objeto sobrescrito.</p>
+	 */
+	private static void recusarSubrecurso(HttpServletRequest request, String chaveDoObjeto) throws IOException {
+		Set<String> pedidos = query(request).keySet();
+		for (String naoImplementado : SUBRECURSOS_QUE_GRAVARIAM) {
+			if (pedidos.contains(naoImplementado)) {
+				// A recusa acontece antes de o corpo ser lido, e o corpo do `?tagging` é o XML da
+				// etiqueta. Em conexão persistente, responder 501 com o corpo pendente faz o servidor
+				// fechar a conexão no meio de um pedido; drenar (e descartar) deixa a próxima
+				// requisição da mesma conexão chegar inteira. RFC 9110 §15.6.2.
+				drenarCorpo(request);
+				throw s3Error(501, "NotImplemented", "O subrecurso '" + naoImplementado + "' nao e suportado; "
+					+ chaveDoObjeto + " nao foi alterado.");
+			}
+		}
+	}
+
+	/** Lê e descarta o corpo já enviado, sem guardar. Sem corpo, não há nada a drenar. */
+	static void drenarCorpo(HttpServletRequest request) throws IOException {
+		try (InputStream corpo = request.getInputStream()) {
+			corpo.transferTo(OutputStream.nullOutputStream());
+		} catch (IOException recusado) {
+			// O cliente pode já ter cortado o envio ao receber a recusa; a resposta é a mesma.
+		}
+	}
+
 	// ---------------------------------------------------------------- objeto
 
 	/**
@@ -314,10 +369,13 @@ class S3GatewayController {
 	 * esta gravação criou e devolve o objeto que ela substituiu ao estado em que estava.</p>
 	 */
 	@RequestMapping(value = "/{bucket}/{*key}", method = RequestMethod.PUT)
-	ResponseEntity<?> putObject(@PathVariable String bucket, HttpServletRequest request) {
+	ResponseEntity<?> putObject(@PathVariable String bucket, HttpServletRequest request) throws IOException {
 		S3Credential credential = authenticate(request, "PUT");
 		requireBucket(credential, bucket);
 		String key = keyOf(request);
+		// Subrecurso que este gateway não implementa NÃO é PutObject: recusa antes de tocar no
+		// catálogo e antes do desvio para a cópia. Ver `recusarSubrecurso`.
+		recusarSubrecurso(request, "/" + bucket + "/" + key);
 		String origemDaCopia = request.getHeader(COPY_SOURCE);
 		if (origemDaCopia != null && !origemDaCopia.isBlank()) {
 			return copiarObjeto(credential, bucket, key, origemDaCopia, request);
@@ -912,10 +970,14 @@ class S3GatewayController {
 	 * privado": ou é do dono, ou não existe para ele.</p>
 	 */
 	@GetMapping("/{bucket}/{*key}")
-	ResponseEntity<StreamingResponseBody> getObject(@PathVariable String bucket, HttpServletRequest request) {
+	ResponseEntity<StreamingResponseBody> getObject(@PathVariable String bucket, HttpServletRequest request)
+		throws IOException {
 		S3Credential credential = authenticate(request, "GET");
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
+		// `GET ?acl` é a leitura da ACL do objeto, não do objeto: sem esta recusa, a rota servia o
+		// arquivo em 200, e o cliente lia "a ACL é o conteúdo do arquivo". Mesma lista do PUT.
+		recusarSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request)));
 		return comVocabularioDoS3(() -> content.respond(object, request.getHeader(HttpHeaders.RANGE),
 			request.getHeader(HttpHeaders.IF_NONE_MATCH), request.getHeader(HttpHeaders.IF_MODIFIED_SINCE)));

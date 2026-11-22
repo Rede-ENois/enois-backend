@@ -74,7 +74,7 @@ contra o vetor externo é o que separa "implementei" de "assinei comigo mesmo e 
 **Não implementado**, e o brief manda não anunciar como se existisse:
 
 - **ACL**, **tagging**, **`versionId`**, **bucket policy**, **`POST` de formulário** — sem suporte e
-  não anunciados.
+  não anunciados (o `PUT` que os gravaria responde `501` e não altera o objeto — §4.21).
 - **Regiões múltiplas**, **classes de armazenamento na resposta** (sempre `STANDARD`; a classe real é a
   da §8 e não é escolhida por requisição).
 
@@ -787,6 +787,52 @@ arquivo que o `CopyObject` já copiava de uma vez não podia ser copiado em peda
 `400 InvalidArgument` sem parte. Mutações: ignorar o início do intervalo; ignorar o fim (gravar o
 resto da origem); não conferir o limite superior; responder só o `ETag` sem o XML — **4 de 4
 derrubam**.
+
+## 4.21 Subrecurso que gravaria vira `501` (ciclo 107)
+
+O `PUT` era despachado pela **chave da rota**, sem olhar a consulta. Um `PUT ?tagging` — a operação
+com que o S3 grava etiquetas — abria um upload da chave, gravava o **XML da etiqueta** como corpo,
+substituía o arquivo de verdade e respondia `200`, que é o "sucesso" da etiquetagem no S3. O cliente
+via sucesso e o objeto ficava com o XML dentro. O mesmo valia para `?acl`, `?retention`, `?legal-hold`
+e `?object-lock`.
+
+### Agora
+
+| pedido | resposta |
+|---|---|
+| `PUT ?tagging`, `?acl`, `?retention`, `?legal-hold`, `?object-lock` | **`501 NotImplemented`** (XML do S3, com o subrecurso), **nada gravado** |
+| `GET ?acl`, `?tagging`, `?retention`, `?legal-hold`, `?object-lock` | **`501 NotImplemented`**, nenhum byte servido |
+| `DELETE ?tagging` (e os demais da lista) | já respondia `501`: o `DeleteObject` apaga o objeto, não a etiqueta |
+
+A recusa vem **antes** do catálogo: nem linha `PENDING`, nem corpo medido. A lista vizinha (ecoada em
+`200` sem gravar — `?versioning`, `?encryption`, `?logging`…) continua como era: o que distingue os dois
+grupos é o que acontece sem guarda. Ali um corpo vazio é confundido com objeto; aqui o objeto é
+sobrescrito.
+
+**O `GET` tinha a mesma porta.** `GET ?acl` é a leitura da ACL do objeto, mas a rota servia o
+**arquivo** em `200`: o cliente lia "a ACL é o conteúdo do arquivo". O `GET` passou a usar a mesma
+lista do `PUT`, antes da leitura do objeto.
+
+**A lista é ordenada.** A mensagem cita **um** subrecurso; com dois na mesma requisição
+(`?tagging&acl`), a ordem de um `Set.of` não é contrato — a mesma requisição responderia uma coisa ou
+outra. Agora é `List` fixa e o primeiro da ordem responde.
+
+**O corpo do pedido é drenado.** A recusa acontece antes de o corpo ser lido, e o corpo do `?tagging`
+é o XML da etiqueta. Responder `501` com o corpo pendente, em conexão persistente, faz o servidor
+fechar a conexão no meio de um pedido (RFC 9110 §15.6.2); `drenarCorpo` lê e descarta o corpo antes da
+resposta. Um cliente que já cortou o envio ao receber a recusa não muda a resposta.
+
+**Verificação:** `S3GatewayTests` **+5** — (1) `PUT ?tagging` é `501` e o `HEAD` seguinte devolve o
+**mesmo ETag**; (2) `PUT ?tagging` **com** `x-amz-copy-source` também é `501`, com o destino
+inexistente; (3) `?tagging&acl` responde citando `tagging` (ordem determinística); (4) `GET ?acl`
+é `501` e o objeto fica com o mesmo ETag; (5) `drenarCorpo` lê o corpo inteiro (fluxo que conta as
+leituras). Mutações: tirar a guarda do `PUT` (1 e 2 derrubam), pôr a guarda **depois** do desvio para
+o `CopyObject` (2 derruba) e tirar a guarda do `GET` (4 derruba: responde `200`).
+
+A guarda roda **antes** do desvio para o `CopyObject` (§4.19): um `PUT ?tagging` com
+`x-amz-copy-source` não copia — o subrecurso continua `501`, e nada é gravado no destino. A guarda de
+cópia que o ciclo 90 tinha no `PUT` foi substituída pela operação de verdade (§4.19); a do
+`UploadPartCopy` ficou só no caminho da parte.
 
 ## 5. Erros
 
