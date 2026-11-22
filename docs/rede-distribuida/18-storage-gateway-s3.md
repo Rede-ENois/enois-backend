@@ -787,6 +787,7 @@ arquivo que o `CopyObject` já copiava de uma vez não podia ser copiado em peda
 `400 InvalidArgument` sem parte. Mutações: ignorar o início do intervalo; ignorar o fim (gravar o
 resto da origem); não conferir o limite superior; responder só o `ETag` sem o XML — **4 de 4
 derrubam**.
+
 ## 4.21 Subrecurso que gravaria vira `501` (ciclo 107)
 
 O `PUT` era despachado pela **chave da rota**, sem olhar a consulta. Um `PUT ?tagging` — a operação
@@ -814,7 +815,9 @@ seguinte devolve o **mesmo ETag** (o objeto não foi reescrito com o XML); e `PU
 porque a cópia responderia `200`.
 
 A guarda roda **antes** do desvio para o `CopyObject` (§4.19): um `PUT ?tagging` com
-`x-amz-copy-source` não copia — o subrecurso continua `501`, e nada é gravado no destino.
+`x-amz-copy-source` não copia — o subrecurso continua `501`, e nada é gravado no destino. A guarda de
+cópia que o ciclo 90 tinha no `PUT` foi substituída pela operação de verdade (§4.19); a do
+`UploadPartCopy` ficou só no caminho da parte.
 
 ## 5. Erros
 

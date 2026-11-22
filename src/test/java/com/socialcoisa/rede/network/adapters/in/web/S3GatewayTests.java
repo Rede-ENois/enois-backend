@@ -594,6 +594,62 @@ class S3GatewayTests {
 			+ " and object_key = ?", Integer.class, bucket, "copias/roubada.txt")).isZero();
 	}
 
+	/**
+	 * Subrecurso que gravaria é {@code 501} e <b>o objeto fica como estava</b>.
+	 *
+	 * <p><b>Antes:</b> o {@code PUT} era despachado só pela chave da rota. Um {@code PUT ?tagging}
+	 * — a operação com que o S3 grava etiquetas — abria um upload da chave, gravava o XML da etiqueta
+	 * como corpo, substituía o arquivo e respondia {@code 200}, que é o "sucesso" da etiquetagem.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 501 NotImplemented} no XML do S3, antes do catálogo. O discriminante é o
+	 * par: o status <b>e</b> o {@code HEAD} seguinte devolvendo o mesmo ETag — o ETag é o que prova
+	 * que nada foi reescrito, e o {@code GET} prova que o corpo é o de antes.</p>
+	 */
+	@Test
+	void put_de_subrecurso_que_gravaria_responde_501_sem_alterar_o_objeto() throws Exception {
+		gravar("subrecurso/alvo.txt", "conteudo que nao pode virar etiqueta");
+		String shaOriginal = shaDe("conteudo que nao pode virar etiqueta");
+		String etiqueta = "<Tagging><TagSet><Tag><Key>a</Key><Value>b</Value></Tag></TagSet></Tagging>";
+		MockHttpServletRequestBuilder etiquetar = put("/s3/" + bucket + "/subrecurso/alvo.txt")
+			.queryParam("tagging").content(etiqueta.getBytes(StandardCharsets.UTF_8))
+			.contentType("application/xml");
+		assinar(etiquetar, SECRET, shaDe(etiqueta));
+
+		var resposta = mockMvc.perform(etiquetar).andReturn().getResponse();
+
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(501);
+		assertThat(resposta.getContentAsString()).as(resposta.getContentAsString())
+			.contains("<Code>NotImplemented</Code>")
+			.contains("tagging");
+		assertThat(cabecalhosDe("subrecurso/alvo.txt").getHeader(HttpHeaders.ETAG))
+			.as("o objeto nao pode ter sido reescrito com o XML da etiqueta").isEqualTo("\"" + shaOriginal + "\"");
+		assertThat(ler("subrecurso/alvo.txt")).isEqualTo("conteudo que nao pode virar etiqueta");
+	}
+
+	/**
+	 * A guarda roda <b>antes</b> do desvio para o {@code CopyObject}: {@code PUT ?tagging} com
+	 * {@code x-amz-copy-source} não copia.
+	 *
+	 * <p>Sem a ordem, o cabeçalho de cópia capturaria a requisição de etiqueta e a cópia responderia
+	 * {@code 200} — o cliente via sucesso na etiquetagem e ganhava um objeto novo no destino. O
+	 * discriminante é o par: {@code 501} <b>e</b> o destino inexistente.</p>
+	 */
+	@Test
+	void subrecurso_de_etiqueta_com_cabecalho_de_copia_nao_vira_copia() throws Exception {
+		gravar("subrecurso/origem.txt", "origem");
+		MockHttpServletRequestBuilder mistura = put("/s3/" + bucket + "/subrecurso/etiquetado.txt")
+			.queryParam("tagging").header("x-amz-copy-source", "/" + bucket + "/subrecurso/origem.txt")
+			.content(new byte[0]);
+		assinar(mistura, SECRET, shaVazio());
+
+		var resposta = mockMvc.perform(mistura).andReturn().getResponse();
+
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(501);
+		assertThat(resposta.getContentAsString()).contains("<Code>NotImplemented</Code>");
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_objects where bucket = ?"
+			+ " and object_key = ?", Integer.class, bucket, "subrecurso/etiquetado.txt")).isZero();
+	}
+
 	/** Copiar sobre o próprio objeto sem trocar o conteúdo é {@code 400}, e nada é tocado. */
 	@Test
 	void copia_do_objeto_sobre_ele_mesmo_responde_400_e_preserva_o_conteudo() throws Exception {
