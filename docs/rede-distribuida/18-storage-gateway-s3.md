@@ -55,6 +55,7 @@ contra o vetor externo é o que separa "implementei" de "assinei comigo mesmo e 
 |---|---|---|
 | PutObject | `PUT /s3/{bucket}/{key}` | ✅ mesmo caminho do catálogo; ETag = digest |
 | CopyObject | `PUT /s3/{bucket}/{key}` + `x-amz-copy-source` | ✅ cópia no servidor, sem o cliente enviar o corpo (§4.19) |
+| UploadPartCopy | `PUT /s3/{bucket}/{key}?partNumber=&uploadId=` + `x-amz-copy-source` | ✅ parte a partir de um intervalo da origem (§4.20) |
 | GetObject | `GET /s3/{bucket}/{key}` | ✅ `Range`/206/416, `304` por `If-None-Match` ou `If-Modified-Since` |
 | HeadObject | `HEAD /s3/{bucket}/{key}` | ✅ `304` por `If-None-Match` / `If-Modified-Since` |
 | DeleteObject | `DELETE /s3/{bucket}/{key}` | ✅ **lápide** (como o S3 com versionamento), 204 |
@@ -72,8 +73,8 @@ contra o vetor externo é o que separa "implementei" de "assinei comigo mesmo e 
 
 **Não implementado**, e o brief manda não anunciar como se existisse:
 
-- **UploadPartCopy** — recusado com `501 NotImplemented` **antes de qualquer escrita** (§4.10);
-  **ACL**, **tagging**, **`versionId`**, **bucket policy**, **`POST` de formulário**.
+- **ACL**, **tagging**, **`versionId`**, **bucket policy**, **`POST` de formulário** — sem suporte e
+  não anunciados.
 - **Regiões múltiplas**, **classes de armazenamento na resposta** (sempre `STANDARD`; a classe real é a
   da §8 e não é escolhida por requisição).
 
@@ -522,19 +523,17 @@ mesma gravação passa. Dois multiparts de 10 MiB: o primeiro **conclui** com o 
 Mutações: a abertura ignora o reservado; a conclusão cobra as partes de novo; a abertura sem a tradução
 ao S3 — **3 de 3 derrubam**.
 
-### 4.10 UploadPartCopy é recusado antes de virar parte (ciclo 90)
+### 4.10 A guarda de cópia do ciclo 90 (histórico)
 
-`UploadPartCopy` não existe neste gateway. O cabeçalho que o pede, `x-amz-copy-source`, era
-**ignorado** no `PUT ?partNumber=&uploadId=`: com o corpo vazio da cópia, a resposta era `400` — como
-se o cliente tivesse enviado uma parte vazia — e, com corpo, os bytes do cliente viravam a "cópia".
-Uma parte que não copiou nada é pior que a operação não existir.
+Até o ciclo 90, o cabeçalho `x-amz-copy-source` era **ignorado** no `PUT` e no
+`PUT ?partNumber=&uploadId=`: com o corpo vazio da cópia, a resposta era `400` — como se o cliente
+tivesse enviado um arquivo ou uma parte vazia — e, com corpo, os bytes do cliente viravam a "cópia".
+O ciclo 90 fez o gateway recusar com `501 NotImplemented` o que ainda não sabia fazer; os ciclos 108 e
+109 implementaram as duas operações — `CopyObject` (§4.19) e `UploadPartCopy` (§4.20). **A guarda não
+existe mais**, e os testes que a fixavam foram substituídos pelos das duas operações.
 
-Agora o cabeçalho é reconhecido **antes** de `receivePart`, e a resposta é `501 NotImplemented` no XML
-do S3. Nada é escrito: nem parte, nem linha. O `CopyObject` — o mesmo cabeçalho no `PUT` simples — é
-implementado desde o ciclo 108 (§4.19); a guarda daqui vale só para o caminho da parte.
-
-**Verificação:** `S3MultipartTests` **+1** — a parte com `x-amz-copy-source` recebe `501` e
-`network_storage_multipart_parts` continua vazia. Mutação: tirar a guarda do `UploadPart` — derruba.
+**Verificação:** `S3GatewayTests` cobre a cópia inteira (§4.19) e `S3MultipartTests` cobre a parte
+copiada com e sem intervalo (§4.20).
 
 ### 4.11 O corpo montado sai do disco quando a conclusão falha (ciclo 91)
 
@@ -756,6 +755,37 @@ divergente é `412` sem gravar; chave já confirmada é `409` e o objeto mantém
 Mutações: corpo da cópia vazio (o teste do conteúdo derruba), dono da origem não conferido (o teste
 das duas contas derruba), `REPLACE` ignorado (o teste do metadado derruba) e a tradução de
 `STORAGE_NOT_FOUND` para `NoSuchKey` removida (o teste da origem ausente derruba) — **4 de 4
+derrubam**.
+
+## 4.20 UploadPartCopy copia um intervalo para dentro do multipart (ciclo 109)
+
+O `aws s3 cp` acima de 8 MB e o `rclone` copiam arquivos grandes em partes: cada `UploadPart` pode vir
+da origem em vez do corpo do cliente. Até o ciclo 108 essa parte respondia `501` (§4.10) — o mesmo
+arquivo que o `CopyObject` já copiava de uma vez não podia ser copiado em pedaços.
+
+### Agora
+
+- `PUT /s3/{bucket}/{chave}?partNumber=&uploadId=` com `x-amz-copy-source` grava a parte a partir da
+  origem. `x-amz-copy-source-range: bytes=primeiro-ultimo` (inclusive, base zero) recorta o intervalo;
+  sem o cabeçalho, a parte é o objeto inteiro.
+- O recorte é lido por `readBody` (mesma régua do download: réplica 0 servível) e entra pelo mesmo
+  `receivePart` do envio direto — cota pelo tamanho anunciado, digest, temporário e reenvio da mesma
+  parte substituindo. Nada é carregado em memória: o fluxo é limitado ao intervalo e lido em blocos de
+  64 KiB.
+- A resposta é o `CopyPartResult` do S3:
+  `<ETag>"sha-256 da parte"</ETag><LastModified>...</LastModified>`.
+- A origem segue a mesma régua do `CopyObject` (§4.19): dono da credencial, escopo `allowedBucket`,
+  `if-match`/`if-none-match` → `412`, condições por data e `versionId` → `501`. Origem ausente é
+  `404 NoSuchKey`.
+- Intervalo fora do objeto, invertido ou malformado é `400 InvalidArgument`, e **nenhuma parte** é
+  gravada. A conclusão continua aplicando o mínimo de 5 MiB às partes intermediárias — um intervalo
+  menor que isso só vale como última parte.
+
+**Verificação:** `S3MultipartTests` **+4** — intervalo `bytes=2-5` de `0123456789` conclui o objeto
+`2345` e o XML traz o ETag do recorte; sem intervalo, a parte é o objeto inteiro; origem ausente é
+`404 NoSuchKey` sem linha em `network_storage_multipart_parts`; `bytes=5-99` e `bytes=9-2` são
+`400 InvalidArgument` sem parte. Mutações: ignorar o início do intervalo; ignorar o fim (gravar o
+resto da origem); não conferir o limite superior; responder só o `ETag` sem o XML — **4 de 4
 derrubam**.
 
 ## 5. Erros
