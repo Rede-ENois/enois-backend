@@ -1172,7 +1172,15 @@ class S3GatewayController {
 		// A assinatura usa o `Host` que o portador mandará ao usar a URL — sem o prefixo do gateway:
 		// o `PREFIX` é da instalação, não do protocolo, e entra só na URL como caminho.
 		String hostAssinado = hostBase;
-		String path = "/" + bucket + "/" + key;
+		// O caminho assinado é o da URL que vai sair: cada segmento codificado como o `uriEncode`
+		// aplica (e como o `canonicalUri` do verificador recodifica). Assinar a chave CRUA fazia uma
+		// chave com espaço ou acento emitir uma URL cuja assinatura não era a dela — e o portador
+		// recebia 403 numa URL recém-emitida.
+		StringBuilder pathCodificado = new StringBuilder("/").append(SigV4Verifier.uriEncode(bucket));
+		for (String segment : key.split("/")) {
+			pathCodificado.append('/').append(SigV4Verifier.uriEncode(segment));
+		}
+		String path = pathCodificado.toString();
 
 		// Os parâmetros da URL: datas e escopo, na forma que a AWS usa. `X-Amz-Credential` leva
 		// `/`, codificado duas vezes porque é dado DENTRO de um parâmetro.

@@ -1330,6 +1330,53 @@ class S3GatewayTests {
 		assertThat(depoisDaLapide.getResponse().getStatus()).isIn(403, 404);
 	}
 
+	/**
+	 * URL pré-assinada abre a chave com espaço e acento — o caminho assinado é o que a URL carrega.
+	 *
+	 * <p><b>Antes:</b> o emissor assinava {@code "/" + bucket + "/" + key} com a chave <b>crua</b> e
+	 * emitia a URL com cada segmento passado por {@code uriEncode}. Chave com espaço, acento, {@code +}
+	 * ou {@code %} fazia a assinatura do emissor não ser a da URL: o portador recebia
+	 * {@code 403 AccessDenied "expirou ou a assinatura nao confere"} numa URL recém-emitida. Nome de
+	 * arquivo com espaço é o caso comum, e o teste antigo só usava {@code fotos/url.jpg}.</p>
+	 *
+	 * <p><b>Agora:</b> o caminho assinado é o mesmo texto que a URL carrega (segmentos codificados),
+	 * e a URL emitida abre.</p>
+	 */
+	@Test
+	void url_pre_assinada_abre_chave_com_espaco_e_acento() throws Exception {
+		String chave = "fotos/meu arquivo ção.jpg";
+		var dono = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_presign_espaco");
+		String acesso = ACCESS_KEY_PREFIX + UUID.randomUUID().toString().replace("-", "").substring(0, 10)
+			.toUpperCase();
+		jdbc.update("""
+			insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+				allowed_bucket, allowed_operations, created_at)
+			values (?, ?, ?, ?, ?, null, 'GET PUT LIST DELETE', ?)
+			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), acesso,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET),
+			dono.userId(), java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+		MockHttpServletRequestBuilder put = put("/s3/" + bucket + "/" + chave)
+			.content("com acento".getBytes(StandardCharsets.UTF_8)).contentType("image/jpeg");
+		assinar(put, SECRET, shaDe("com acento"), acesso);
+		mockMvc.perform(put).andExpect(status().isOk());
+
+		var emissao = mockMvc.perform(MockMvcRequestBuilders.post("/s3/" + bucket + "/presign")
+			.param("key", chave).param("method", "GET").param("expires", "600")
+			.header("X-Session-Token", dono.token())).andReturn().getResponse();
+		assertThat(emissao.getStatus()).as(emissao.getContentAsString()).isEqualTo(200);
+		String url = objectMapper.readTree(emissao.getContentAsString()).get("url").asText();
+
+		var leitura = MockMvcRequestBuilders.get(java.net.URI.create(url)).header("host", "localhost");
+		var resposta = mockMvc.perform(leitura).andReturn();
+		if (resposta.getRequest().isAsyncStarted()) {
+			resposta = mockMvc.perform(asyncDispatch(resposta)).andReturn();
+		}
+		assertThat(resposta.getResponse().getStatus()).as(resposta.getResponse().getContentAsString())
+			.isEqualTo(200);
+		assertThat(resposta.getResponse().getContentAsByteArray())
+			.isEqualTo("com acento".getBytes(StandardCharsets.UTF_8));
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {
