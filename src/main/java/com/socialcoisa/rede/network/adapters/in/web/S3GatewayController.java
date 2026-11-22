@@ -386,6 +386,12 @@ class S3GatewayController {
 		// existe, que pode estar STORED. Guardar o estado de antes é o que permite devolvê-lo intacto
 		// se a gravação for recusada por donagem.
 		StorageObject antes = catalog.find(bucket, key).orElse(null);
+		// `If-None-Match`/`If-Match` no PUT: o cliente pediu uma CONDIÇÃO, e a resposta de "a chave
+		// existe" é `412 PreconditionFailed`, não `409 ObjectAlreadyStored` (que é a confissão de que
+		// o gateway não sobrescreve). Antes os dois cabeçalhos eram ignorados: `--if-none-match '*'`
+		// — o jeito de criar sem sobrescrever — recebia a recusa da sobrescrita ou, com o objeto
+		// PENDING, gravava por cima. A conferência vem antes de abrir upload.
+		exigirPrecondicoesDoPut(request, antes);
 		// Metadado e cabeçalhos declarados junto do corpo (V367): lidos ANTES da gravação, porque cabeçalho
 		// recusado não pode deixar objeto criado — nem um PENDING decorado com o que não foi aceito.
 		StorageCatalogService.ClientHeaders declarados = clientHeaders(request);
@@ -615,6 +621,31 @@ class S3GatewayController {
 		String ifNoneMatch = request.getHeader("x-amz-copy-source-if-none-match");
 		if (ifNoneMatch != null && etagNaLista(ifNoneMatch, fonte)) {
 			throw s3Error(412, "PreconditionFailed", "O ETag da origem confere com If-None-Match.");
+		}
+	}
+
+	/**
+	 * As condições do PUT contra o objeto que já está na chave (pode ser {@code null}).
+	 *
+	 * <p>{@code If-None-Match: *} é "só se não existir"; {@code If-Match} é "só se for esta versão".
+	 * As de data não são implementadas e respondem {@code 501} em vez de serem ignoradas, como as da
+	 * cópia. Chave livre com {@code If-Match} não confere: não há versão para casar.</p>
+	 */
+	private static void exigirPrecondicoesDoPut(HttpServletRequest request, StorageObject existente) {
+		if (request.getHeader("If-Modified-Since") != null || request.getHeader("If-Unmodified-Since") != null) {
+			throw s3Error(501, "NotImplemented",
+				"As condicoes de data no PUT nao sao suportadas; use If-Match ou If-None-Match.");
+		}
+		String ifMatch = request.getHeader("If-Match");
+		if (ifMatch != null && !ifMatch.isBlank()) {
+			if (existente == null || !etagNaLista(ifMatch, existente)) {
+				throw s3Error(412, "PreconditionFailed", "O objeto nao confere com If-Match.");
+			}
+		}
+		String ifNoneMatch = request.getHeader("If-None-Match");
+		if (ifNoneMatch != null && !ifNoneMatch.isBlank() && existente != null
+				&& etagNaLista(ifNoneMatch, existente)) {
+			throw s3Error(412, "PreconditionFailed", "A chave ja existe (If-None-Match).");
 		}
 	}
 
@@ -1172,7 +1203,15 @@ class S3GatewayController {
 		// A assinatura usa o `Host` que o portador mandará ao usar a URL — sem o prefixo do gateway:
 		// o `PREFIX` é da instalação, não do protocolo, e entra só na URL como caminho.
 		String hostAssinado = hostBase;
-		String path = "/" + bucket + "/" + key;
+		// O caminho assinado é o da URL que vai sair: cada segmento codificado como o `uriEncode`
+		// aplica (e como o `canonicalUri` do verificador recodifica). Assinar a chave CRUA fazia uma
+		// chave com espaço ou acento emitir uma URL cuja assinatura não era a dela — e o portador
+		// recebia 403 numa URL recém-emitida.
+		StringBuilder pathCodificado = new StringBuilder("/").append(SigV4Verifier.uriEncode(bucket));
+		for (String segment : key.split("/")) {
+			pathCodificado.append('/').append(SigV4Verifier.uriEncode(segment));
+		}
+		String path = pathCodificado.toString();
 
 		// Os parâmetros da URL: datas e escopo, na forma que a AWS usa. `X-Amz-Credential` leva
 		// `/`, codificado duas vezes porque é dado DENTRO de um parâmetro.
