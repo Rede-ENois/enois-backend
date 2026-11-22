@@ -533,30 +533,118 @@ class S3MultipartTests {
 	}
 
 	/**
-	 * UploadPartCopy também não é implementado: a parte com {@code x-amz-copy-source} é recusada.
+	 * UploadPartCopy: a parte é o <b>intervalo</b> pedido da origem, sem o cliente enviar os bytes.
 	 *
-	 * <p><b>Antes:</b> o {@code UploadPart} aceitava o cabeçalho de cópia e gravava uma parte de 0
-	 * byte com {@code 200}. O {@code CompleteMultipartUpload} montava um objeto menor do que o
-	 * cliente pediu, e a cópia "concluída" não tinha os bytes da origem.</p>
+	 * <p><b>Antes:</b> a parte com {@code x-amz-copy-source} respondia {@code 501} — o cliente que
+	 * copia um arquivo grande em partes (o caminho do {@code rclone} e do {@code aws s3 cp} acima de
+	 * 8 MB) não tinha como. O destino só existia depois da conclusão, e nenhuma parte era gravada.</p>
+	 *
+	 * <p><b>Agora:</b> o intervalo {@code bytes=primeiro-ultimo} é lido da origem pelo mesmo
+	 * {@code readBody} do download e entra pelo mesmo {@code receivePart} do envio direto. A resposta é
+	 * o {@code CopyPartResult} do S3, com o ETag do que foi gravado. O discriminante é o par:
+	 * {@code 200} com o XML <b>e</b> o objeto concluído com exatamente o intervalo — copiar a origem
+	 * inteira passaria pelo status.</p>
 	 */
 	@Test
-	void parte_de_copia_e_recusada_e_nao_vira_parte_vazia() throws Exception {
-		String chave = "copia/%s.bin".formatted(sufixo());
+	void parte_de_copia_grava_o_intervalo_pedido_da_origem() throws Exception {
+		gravar("copias/origem.txt", "0123456789");
+		String chave = "copias/recorte-%s.txt".formatted(sufixo());
 		String uploadId = abrir(chave);
 
-		MockHttpServletRequestBuilder requisicao = put("/s3/" + bucket + "/" + chave)
-			.param("partNumber", "1").param("uploadId", uploadId)
-			.header("x-amz-copy-source", "/" + bucket + "/origem.bin")
-			.content(new byte[0]);
-		var resposta = mockMvc.perform(assinar(requisicao, shaVazio())).andReturn();
+		var resposta = copiarParte(chave, uploadId, 1, "copias/origem.txt", "bytes=2-5");
 
-		assertThat(resposta.getResponse().getStatus()).isEqualTo(501);
-		assertThat(resposta.getResponse().getContentAsString()).contains("<Code>NotImplemented</Code>");
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(200);
+		assertThat(resposta.getContentAsString())
+			.contains("<CopyPartResult")
+			.contains("<ETag>\"" + shaDe("2345") + "\"</ETag>")
+			.contains("<LastModified>");
+
+		concluir(chave, uploadId, 1);
+		assertThat(ler(chave)).isEqualTo("2345");
+	}
+
+	/** Sem {@code x-amz-copy-source-range}, a parte é o objeto inteiro — o caso do arquivo pequeno. */
+	@Test
+	void parte_de_copia_sem_intervalo_copia_o_objeto_inteiro() throws Exception {
+		gravar("copias/inteira.txt", "conteudo inteiro da origem");
+		String chave = "copias/inteira-copia-%s.txt".formatted(sufixo());
+		String uploadId = abrir(chave);
+
+		var resposta = copiarParte(chave, uploadId, 1, "copias/inteira.txt", null);
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(200);
+
+		concluir(chave, uploadId, 1);
+		assertThat(ler(chave)).isEqualTo("conteudo inteiro da origem");
+	}
+
+	/** Origem que não existe: {@code 404 NoSuchKey} e nenhuma parte gravada. */
+	@Test
+	void parte_de_copia_de_origem_inexistente_responde_404_sem_gravar_parte() throws Exception {
+		String chave = "copias/orfa-%s.txt".formatted(sufixo());
+		String uploadId = abrir(chave);
+
+		var resposta = copiarParte(chave, uploadId, 1, "copias/nao-existe.txt", null);
+
+		assertThat(resposta.getStatus()).isEqualTo(404);
+		assertThat(resposta.getContentAsString()).contains("<Code>NoSuchKey</Code>");
 		assertThat(jdbc.queryForObject("select count(*) from network_storage_multipart_parts where upload_id = ?",
 			Integer.class, uploadId)).isZero();
 	}
 
-	// ------------------------------------------------------------------ apoio
+	/** Intervalo fora do objeto (ou invertido) é {@code 400} e não grava parte. */
+	@Test
+	void parte_de_copia_com_intervalo_invalido_responde_400_sem_gravar_parte() throws Exception {
+		gravar("copias/dez.txt", "0123456789");
+		String chave = "copias/intervalo-%s.txt".formatted(sufixo());
+		String uploadId = abrir(chave);
+
+		var alemDoFim = copiarParte(chave, uploadId, 1, "copias/dez.txt", "bytes=5-99");
+		assertThat(alemDoFim.getStatus()).isEqualTo(400);
+		assertThat(alemDoFim.getContentAsString()).contains("<Code>InvalidArgument</Code>");
+
+		var invertido = copiarParte(chave, uploadId, 2, "copias/dez.txt", "bytes=9-2");
+		assertThat(invertido.getStatus()).isEqualTo(400);
+		assertThat(invertido.getContentAsString()).contains("<Code>InvalidArgument</Code>");
+
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_multipart_parts where upload_id = ?",
+			Integer.class, uploadId)).isZero();
+	}
+
+	// ------------------------------------------------------------------ apoio	// ------------------------------------------------------------------ apoio
+
+	/** Um CopyObject de parte: {@code PUT ?partNumber=&uploadId=} com a origem no cabeçalho. */
+	private org.springframework.mock.web.MockHttpServletResponse copiarParte(String chave, String uploadId,
+			int numero, String origem, String faixa) throws Exception {
+		MockHttpServletRequestBuilder requisicao = put("/s3/" + bucket + "/" + chave)
+			.param("partNumber", String.valueOf(numero)).param("uploadId", uploadId)
+			.header("x-amz-copy-source", "/" + bucket + "/" + origem)
+			.content(new byte[0]);
+		if (faixa != null) {
+			requisicao.header("x-amz-copy-source-range", faixa);
+		}
+		return mockMvc.perform(assinar(requisicao, shaVazio())).andReturn().getResponse();
+	}
+
+	/** Grava um objeto pelo PUT simples, para servir de origem da cópia. */
+	private void gravar(String chave, String conteudo) throws Exception {
+		byte[] bytes = conteudo.getBytes(StandardCharsets.UTF_8);
+		MockHttpServletRequestBuilder requisicao = put("/s3/" + bucket + "/" + chave).content(bytes)
+			.contentType("text/plain");
+		var resposta = mockMvc.perform(assinar(requisicao, shaOfBytes(bytes))).andReturn();
+		assertThat(resposta.getResponse().getStatus()).as(resposta.getResponse().getContentAsString())
+			.isEqualTo(200);
+	}
+
+	/** O corpo do objeto concluído, com o {@code asyncDispatch} do {@code StreamingResponseBody}. */
+	private String ler(String chave) throws Exception {
+		var resultado = mockMvc.perform(assinar(get("/s3/" + bucket + "/" + chave), shaVazio())).andReturn();
+		if (resultado.getRequest().isAsyncStarted()) {
+			resultado = mockMvc.perform(asyncDispatch(resultado)).andReturn();
+		}
+		assertThat(resultado.getResponse().getStatus())
+			.as("GET " + chave + ": " + resultado.getResponse().getContentAsString()).isEqualTo(200);
+		return resultado.getResponse().getContentAsString();
+	}
 
 	private String abrir(String chave) throws Exception {
 		var resposta = mockMvc.perform(assinar(post("/s3/" + bucket + "/" + chave).param("uploads", "")

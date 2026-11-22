@@ -56,6 +56,7 @@ import jakarta.servlet.http.HttpServletRequest;
  * <tr><th>operação</th><th>rota</th><th>semântica</th></tr>
  * <tr><td>PutObject</td><td>{@code PUT /{bucket}/{key}}</td><td>igual</td></tr>
  * <tr><td>CopyObject</td><td>{@code PUT /{bucket}/{key}} + {@code x-amz-copy-source}</td><td>copia no servidor, sem trafegar os bytes</td></tr>
+ * <tr><td>UploadPartCopy</td><td>{@code PUT /{bucket}/{key}?partNumber=&uploadId=} + {@code x-amz-copy-source}</td><td>parte a partir de um intervalo da origem</td></tr>
  * <tr><td>GetObject</td><td>{@code GET /{bucket}/{key}}</td><td>igual; Range/206/416 e 304 por ETag</td></tr>
  * <tr><td>HeadObject</td><td>{@code HEAD /{bucket}/{key}}</td><td>igual</td></tr>
  * <tr><td>DeleteObject</td><td>{@code DELETE /{bucket}/{key}}</td><td><b>lápide</b>, não remoção imediata (igual ao S3 com versionamento)</td></tr>
@@ -72,10 +73,8 @@ import jakarta.servlet.http.HttpServletRequest;
  * mesmo caminho do PUT simples: nada vira objeto antes de o arquivo inteiro existir. Detalhes em
  * {@code StorageMultipartService} e em {@code 18-storage-gateway-s3.md} §4.2.</p>
  *
- * <p><b>Não implementado:</b> UploadPartCopy é <b>recusado com 501</b> antes de qualquer escrita —
- * uma parte com {@code x-amz-copy-source} não grava parte vazia. ACL, tagging, {@code versionId},
- * bucket policy e {@code POST} de formulário não têm suporte e não são anunciados; a doc 18 é a lista
- * do que existe.</p>
+ * <p><b>Não implementado:</b> ACL, tagging, {@code versionId}, bucket policy e {@code POST} de
+ * formulário não têm suporte e não são anunciados; a doc 18 é a lista do que existe.</p>
  *
  * <p><b>Documento em XML:</b> o gateway serializa à mão, sem {@code ListBucketResult.class}. O motivo
  * é controle de namespace e de ordem dos elementos: um JAXB muda a ordem e o SDK não protesta, mas
@@ -98,7 +97,7 @@ class S3GatewayController {
 	/** Teto de chaves por página, igual ao S3. */
 	private static final int MAX_KEYS = 1000;
 
-	/** O cabeçalho do S3 para copiar no servidor: CopyObject existe, UploadPartCopy não. */
+	/** O cabeçalho do S3 para copiar no servidor: CopyObject e UploadPartCopy existem. */
 	private static final String COPY_SOURCE = "x-amz-copy-source";
 
 	/** O formato de instante da S3: sempre três casas decimais e sempre {@code Z}. */
@@ -400,39 +399,7 @@ class S3GatewayController {
 	private ResponseEntity<?> copiarObjeto(S3Credential credential, String bucket, String key,
 			String cabecalhoDaOrigem, HttpServletRequest request) {
 		OrigemDaCopia origem = origemDaCopia(cabecalhoDaOrigem);
-		// O escopo da credencial vale para a origem também: ler de um bucket fora do escopo não é
-		// uma operação que a credencial autoriza, ainda que o dono seja o mesmo.
-		requireBucket(credential, origem.bucket());
-		// `bucketsOf` só conhece bucket que já tem objeto vivo. Um bucket vazio (inclusive o que
-		// ainda não existe) não tem dono, e a resposta certa para a origem ausente é 404, não 403 —
-		// `bucketSemDono` é verdadeiro para ele e a busca abaixo decide.
-		boolean bucketDaOrigemEhNossa = catalog.bucketsOf(credential.ownerUserId()).contains(origem.bucket())
-			|| bucketSemDono(origem.bucket(), credential.ownerUserId());
-		if (!bucketDaOrigemEhNossa) {
-			throw s3Error(403, "AccessDenied", "O bucket de origem nao e do dono da credencial.");
-		}
-		StorageObject fonte;
-		try {
-			fonte = storage.requireDownloadable(origem.bucket(), origem.key(), "GET");
-		}
-		catch (ApiException naoAchou) {
-			// Duas formas de chave convivem na instalação: o caminho do PUT guarda o que veio na URI
-			// (percent-encoded) e um cliente pode mandar a chave já decodificada no cabeçalho. Tentar
-			// as duas é o que faz a cópia encontrar o objeto nas duas.
-			if (origem.key().equals(origem.chaveBruta())) {
-				throw noVocabularioDoS3(naoAchou);
-			}
-			try {
-				fonte = storage.requireDownloadable(origem.bucket(), origem.chaveBruta(), "GET");
-			}
-			catch (ApiException tambemNaoAchou) {
-				throw noVocabularioDoS3(tambemNaoAchou);
-			}
-		}
-		if (!credential.ownerUserId().equals(fonte.createdBy())) {
-			// A donagem do bucket pode ter mudado entre a lista e a leitura; o objeto é a verdade.
-			throw s3Error(403, "AccessDenied", "O objeto de origem nao e do dono da credencial.");
-		}
+		StorageObject fonte = origemServivel(credential, origem);
 		exigirPrecondicoesDaCopia(request, fonte);
 
 		boolean mesmoObjeto = origem.bucket().equals(bucket)
@@ -492,7 +459,48 @@ class S3GatewayController {
 		return xml(HttpStatus.OK).eTag("\"" + stored.sha256() + "\"").body(xml.toString());
 	}
 
-	/** A origem de um CopyObject, com a chave como veio e a chave decodificada. */
+	/**
+	 * A origem de uma cópia: do dono da credencial, dentro do escopo e servível.
+	 *
+	 * <p>É a mesma régua do {@code CopyObject} e do {@code UploadPartCopy} — um lugar só para as duas
+	 * operações. `bucketsOf` só conhece bucket que já tem objeto vivo; um bucket vazio (inclusive o
+	 * que ainda não existe) não tem dono, e a resposta certa para a origem ausente é 404, não 403.</p>
+	 */
+	private StorageObject origemServivel(S3Credential credential, OrigemDaCopia origem) {
+		// O escopo da credencial vale para a origem também: ler de um bucket fora do escopo não é
+		// uma operação que a credencial autoriza, ainda que o dono seja o mesmo.
+		requireBucket(credential, origem.bucket());
+		boolean bucketDaOrigemEhNossa = catalog.bucketsOf(credential.ownerUserId()).contains(origem.bucket())
+			|| bucketSemDono(origem.bucket(), credential.ownerUserId());
+		if (!bucketDaOrigemEhNossa) {
+			throw s3Error(403, "AccessDenied", "O bucket de origem nao e do dono da credencial.");
+		}
+		StorageObject fonte;
+		try {
+			fonte = storage.requireDownloadable(origem.bucket(), origem.key(), "GET");
+		}
+		catch (ApiException naoAchou) {
+			// Duas formas de chave convivem na instalação: o caminho do PUT guarda o que veio na URI
+			// (percent-encoded) e um cliente pode mandar a chave já decodificada no cabeçalho. Tentar
+			// as duas é o que faz a cópia encontrar o objeto nas duas.
+			if (origem.key().equals(origem.chaveBruta())) {
+				throw noVocabularioDoS3(naoAchou);
+			}
+			try {
+				fonte = storage.requireDownloadable(origem.bucket(), origem.chaveBruta(), "GET");
+			}
+			catch (ApiException tambemNaoAchou) {
+				throw noVocabularioDoS3(tambemNaoAchou);
+			}
+		}
+		if (!credential.ownerUserId().equals(fonte.createdBy())) {
+			// A donagem do bucket pode ter mudado entre a lista e a leitura; o objeto é a verdade.
+			throw s3Error(403, "AccessDenied", "O objeto de origem nao e do dono da credencial.");
+		}
+		return fonte;
+	}
+
+	/** A origem de uma cópia, com a chave como veio e a chave decodificada. */
 	private record OrigemDaCopia(String bucket, String key, String chaveBruta) {
 	}
 
@@ -640,15 +648,17 @@ class S3GatewayController {
 	/**
 	 * UploadPart: {@code PUT /{bucket}/{key}?partNumber=N&uploadId=...}.
 	 *
+	 * <p>Com {@code x-amz-copy-source} é o <b>UploadPartCopy</b>: a parte vem de um intervalo da
+	 * origem, não do corpo da requisição ({@link #copiarParte}).</p>
+	 *
 	 * <p>A credencial é a do upload aberto (e do dono dela) — não uma assinatura nova. É o que impede
 	 * que uma parte entre no upload por uma conta que não abriu nenhum.</p>
 	 */
 	@RequestMapping(value = "/{bucket}/{*key}", method = RequestMethod.PUT, params = {
 			"partNumber", "uploadId" })
-	ResponseEntity<Void> uploadPart(@PathVariable String bucket, HttpServletRequest request) {
+	ResponseEntity<?> uploadPart(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "PUT");
 		requireBucket(credential, bucket);
-		recusarCopiaNoServidor(request);
 		java.util.Map<String, String> query = query(request);
 		var upload = uploadDaChave(credential, bucket, request);
 		int numero;
@@ -657,6 +667,10 @@ class S3GatewayController {
 		}
 		catch (NumberFormatException notNumber) {
 			throw s3Error(400, "InvalidArgument", "partNumber invalido.");
+		}
+		String origemDaCopia = request.getHeader(COPY_SOURCE);
+		if (origemDaCopia != null && !origemDaCopia.isBlank()) {
+			return copiarParte(credential, upload, numero, origemDaCopia, request);
 		}
 		// O `Content-Length` é o único tamanho conhecido antes de ler: com ele a cota recusa a parte
 		// sem gravar nada; sem ele (corpo em chunks), a conta fecha depois de a parte ser medida.
@@ -679,6 +693,122 @@ class S3GatewayController {
 		}
 		return ResponseEntity.ok().eTag("\"" + part.sha256() + "\"").header(HttpHeaders.CONTENT_LENGTH, "0")
 			.build();
+	}
+
+	/**
+	 * UploadPartCopy: {@code PUT ?partNumber=&uploadId=} com {@code x-amz-copy-source} copia um
+	 * <b>intervalo</b> da origem para dentro do upload aberto.
+	 *
+	 * <p><b>Antes:</b> a parte com o cabeçalho respondia {@code 501}; copiar um arquivo grande em
+	 * partes (o caminho de {@code rclone} e do {@code aws s3 cp} acima de 8 MB) não existia.</p>
+	 *
+	 * <p><b>Agora:</b> {@code x-amz-copy-source-range: bytes=primeiro-ultimo} (inclusive, base zero)
+	 * recorta a origem; sem o cabeçalho, a parte é o objeto inteiro. O recorte é lido pelo mesmo
+	 * {@code readBody} do download e entra pelo mesmo {@code receivePart} do envio direto — cota,
+	 * digest, temporário e substituição de parte reenviada são os mesmos. A conclusão continua
+	 * aplicando o mínimo de 5 MiB às partes intermediárias. A resposta é o {@code CopyPartResult} do
+	 * S3, com o ETag do que foi gravado.</p>
+	 */
+	private ResponseEntity<?> copiarParte(S3Credential credential,
+			com.socialcoisa.rede.network.application.StorageMultipartService.Upload upload, int numero,
+			String cabecalhoDaOrigem, HttpServletRequest request) {
+		OrigemDaCopia origem = origemDaCopia(cabecalhoDaOrigem);
+		StorageObject fonte = origemServivel(credential, origem);
+		exigirPrecondicoesDaCopia(request, fonte);
+		long inicio = 0;
+		long tamanho = fonte.bytes();
+		String faixa = request.getHeader("x-amz-copy-source-range");
+		if (faixa != null && !faixa.isBlank()) {
+			long[] intervalo = intervaloDaCopia(faixa, fonte.bytes());
+			inicio = intervalo[0];
+			tamanho = intervalo[1];
+		}
+		com.socialcoisa.rede.network.application.StorageMultipartService.Part parte;
+		try (InputStream corpo = storage.readBody(fonte.id())) {
+			corpo.skipNBytes(inicio);
+			// O tamanho vai como `anunciado`: a cota recusa a parte antes de qualquer byte, como no
+			// envio direto com Content-Length.
+			parte = multipart.receivePart(upload, numero, limite(corpo, tamanho), tamanho);
+		}
+		catch (ApiException recusado) {
+			throw noVocabularioDoS3(recusado);
+		}
+		catch (java.io.IOException falhou) {
+			throw s3Error(500, "InternalError", "A origem nao pode ser lida para a copia da parte.");
+		}
+		S3Xml xml = new S3Xml();
+		xml.root("CopyPartResult").element("ETag", "\"" + parte.sha256() + "\"")
+			.element("LastModified", S3_INSTANT.format(clock.instant()));
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/**
+	 * {@code bytes=primeiro-ultimo}, inclusive, base zero. Fora do objeto, invertido ou malformado é
+	 * {@code 400 InvalidArgument}: copiar um intervalo que não existe gravaria uma parte que o cliente
+	 * não pediu.
+	 */
+	private static long[] intervaloDaCopia(String cabecalho, long tamanhoDaOrigem) {
+		String valor = cabecalho.trim();
+		if (!valor.startsWith("bytes=")) {
+			throw s3Error(400, "InvalidArgument",
+				"x-amz-copy-source-range precisa ser bytes=primeiro-ultimo.");
+		}
+		String[] limites = valor.substring("bytes=".length()).split("-", -1);
+		if (limites.length != 2 || limites[0].isBlank() || limites[1].isBlank()) {
+			throw s3Error(400, "InvalidArgument",
+				"x-amz-copy-source-range precisa ser bytes=primeiro-ultimo.");
+		}
+		long primeiro;
+		long ultimo;
+		try {
+			primeiro = Long.parseLong(limites[0].trim());
+			ultimo = Long.parseLong(limites[1].trim());
+		}
+		catch (NumberFormatException invalido) {
+			throw s3Error(400, "InvalidArgument", "x-amz-copy-source-range tem numero invalido.");
+		}
+		if (primeiro < 0 || ultimo < primeiro || ultimo >= tamanhoDaOrigem) {
+			throw s3Error(400, "InvalidArgument",
+				"O intervalo pedido nao cabe na origem de " + tamanhoDaOrigem + " bytes.");
+		}
+		return new long[] { primeiro, ultimo - primeiro + 1 };
+	}
+
+	/** Um fluxo que entrega no máximo {@code tamanho} bytes do fluxo da origem. */
+	private static InputStream limite(InputStream origem, long tamanho) {
+		return new InputStream() {
+
+			private long entregues;
+
+			@Override
+			public int read() throws java.io.IOException {
+				if (entregues >= tamanho) {
+					return -1;
+				}
+				int lido = origem.read();
+				if (lido >= 0) {
+					entregues++;
+				}
+				return lido;
+			}
+
+			@Override
+			public int read(byte[] destino, int inicio, int quantidade) throws java.io.IOException {
+				if (entregues >= tamanho) {
+					return -1;
+				}
+				int lido = origem.read(destino, inicio, (int) Math.min(quantidade, tamanho - entregues));
+				if (lido > 0) {
+					entregues += lido;
+				}
+				return lido;
+			}
+
+			@Override
+			public void close() throws java.io.IOException {
+				origem.close();
+			}
+		};
 	}
 
 	/**
@@ -1279,26 +1409,6 @@ class S3GatewayController {
 
 	private static ResponseEntity.BodyBuilder xml(HttpStatus status) {
 		return ResponseEntity.status(status).header(HttpHeaders.CONTENT_TYPE, "application/xml; charset=utf-8");
-	}
-
-	/**
-	 * UploadPartCopy chega como um UploadPart com {@code x-amz-copy-source} e corpo vazio.
-	 *
-	 * <p><b>Antes:</b> o cabeçalho era ignorado e a parte seguia até a gravação. Com o corpo vazio da
-	 * cópia, a resposta era {@code 400} — como se o cliente tivesse mandado uma parte vazia — e, com
-	 * corpo, os bytes do cliente viravam a "cópia". Uma cópia que não copiou nada é pior que a
-	 * operação não existir.</p>
-	 *
-	 * <p>Operação ausente responde {@code 501 NotImplemented} no XML do S3, antes do
-	 * {@code receivePart}: nada é escrito — nem parte, nem linha. CopyObject (o mesmo cabeçalho no PUT
-	 * simples) é implementado em {@link #copiarObjeto}.</p>
-	 */
-	private static void recusarCopiaNoServidor(HttpServletRequest request) {
-		String origem = request.getHeader(COPY_SOURCE);
-		if (origem != null && !origem.isBlank()) {
-			throw s3Error(501, "NotImplemented",
-				"UploadPartCopy nao e suportado; envie os bytes da parte no corpo do PUT.");
-		}
 	}
 
 	/**
