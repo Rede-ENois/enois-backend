@@ -581,11 +581,20 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	}
 
 	@Override
-	public boolean restorePending(String id) {
+	public boolean restorePending(String id, String contentType, Long bytes, String sha256, ObjectMetadata metadata,
+			String cacheControl, String contentDisposition, Instant expiresAt) {
+		// O retrato lido ANTES da gravação volta inteiro, e o estado também: a linha, depois do
+		// `finishUpload`, tem o conteúdo e o metadado que a gravação recusada deixou, mas o que ela era
+		// antes é o que a recusa devolve. Voltar a `STORED` com o conteúdo de antes é o que a deixa
+		// servível de novo; `PENDING` a tirava da listagem e do GET (e o HEAD da donagem a apagava).
 		return jdbc.update("""
-			update network_storage_objects set state = 'PENDING', bytes = null, sha256 = null, updated_at = ?
+			update network_storage_objects
+			set state = case when ? is null then 'PENDING' else 'STORED' end,
+			  content_type = ?, bytes = ?, sha256 = ?, metadata_json = ?, cache_control = ?,
+			  content_disposition = ?, expires_at = ?, updated_at = ?
 			where id = ? and state = 'STORED'
-			""", Timestamp.from(Instant.now()), id) == 1;
+			""", sha256, contentType, bytes, sha256, metadata.toJson(), cacheControl, contentDisposition,
+			expiresAt == null ? null : Timestamp.from(expiresAt), Timestamp.from(Instant.now()), id) == 1;
 	}
 
 	@Override
