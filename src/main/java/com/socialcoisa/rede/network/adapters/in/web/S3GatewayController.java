@@ -1315,17 +1315,18 @@ class S3GatewayController {
 	 * <p>O Storage não tem tabela de buckets: o nome nasce no primeiro upload, então "bucket do dono" é
 	 * "o dono já gravou algo nele". <b>Ordem:</b> no {@code PUT} a conferência vem DEPOIS da gravação —
 	 * é a gravação que cria o bucket do dono. Nos demais verbos, antes, com o dado já no catálogo.</p>
-	 */
-	/**
-	 * O bucket pertence ao dono da credencial.
 	 *
-	 * <p>{@code allowedBucket} nulo significa "todos os buckets <b>do dono</b>", nunca "todos os buckets
-	 * da rede". Sem esta conferência, uma credencial de escopo nulo — o padrão — lia, gravava e apagava
-	 * em bucket de qualquer outra conta cuja chave conhecesse. O catálogo sempre soube o dono; o gateway
-	 * é que não perguntava.</p>
+	 * <p><b>A lápide conta.</b> A régua é o bucket do dono ({@code bucketsOf}, só vivo) <b>ou</b> o
+	 * bucket em que ele tem linha no catálogo, vivo ou lápide ({@code bucketHasObjectsOf}) — a mesma do
+	 * {@code DeleteBucket} (§4.15). Só pelos vivos, o dono que apagava a última chave do bucket perdia o
+	 * bucket para a própria leitura: o {@code GET} e o {@code HEAD} da lápide respondiam
+	 * {@code 403 AccessDenied} ("não é do dono"), em vez do {@code 404 NoSuchKey} que a chave apagada
+	 * merece (§4.23). Quem nunca gravou nada num bucket alheio continua barrado: a lápide é de quem a
+	 * criou.</p>
 	 */
 	private void requireBucketDoDono(S3Credential credential, String bucket) {
-		if (!catalog.bucketsOf(credential.ownerUserId()).contains(bucket)) {
+		if (!catalog.bucketsOf(credential.ownerUserId()).contains(bucket)
+				&& !catalog.bucketHasObjectsOf(bucket, credential.ownerUserId())) {
 			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
 		}
 	}
