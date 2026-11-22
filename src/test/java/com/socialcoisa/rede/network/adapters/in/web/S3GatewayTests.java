@@ -474,34 +474,196 @@ class S3GatewayTests {
 	}
 
 	/**
-	 * CopyObject não é implementado: o {@code PUT} com {@code x-amz-copy-source} é recusado, não
-	 * gravado vazio.
+	 * CopyObject: o {@code PUT} com {@code x-amz-copy-source} copia os bytes da origem no servidor.
 	 *
-	 * <p><b>Antes:</b> o cabeçalho era ignorado e o PUT comum gravava o corpo vazio que o cliente
-	 * manda na cópia — {@code 200} com um objeto de 0 byte no destino. O {@code aws s3 cp} interno
-	 * respondia sucesso e o arquivo "copiado" estava vazio: pior que a operação não existir.</p>
+	 * <p><b>Antes:</b> o cabeçalho era recusado com {@code 501 NotImplemented} — a operação não
+	 * existia, e {@code aws s3 cp --recursive} / {@code rclone copy} não tinham como copiar sem baixar
+	 * e reenviar cada arquivo.</p>
 	 *
-	 * <p>O discriminante é o par: {@code 501} <b>e</b> a chave de destino inexistente. Só o status
-	 * passaria se a gravação falhasse por outro motivo.</p>
+	 * <p><b>Agora:</b> o destino é gravado pelo mesmo caminho do PUT, com o corpo lido da origem, e a
+	 * resposta é o {@code CopyObjectResult} do S3. O discriminante é o par: {@code 200} com o XML
+	 * <b>e</b> o {@code GET} do destino devolvendo exatamente os bytes da origem — um 200 sem
+	 * gravação passaria só pelo status.</p>
 	 */
 	@Test
-	void put_com_cabecalho_de_copia_e_recusado_e_nao_cria_objeto() throws Exception {
-		gravar("copias/origem.txt", "conteudo que nao pode virar copia vazia");
+	void copia_de_objeto_grava_os_bytes_da_origem_no_destino() throws Exception {
+		gravar("copias/origem.txt", "conteudo que a copia precisa levar");
+		String sha = shaDe("conteudo que a copia precisa levar");
 
-		MockHttpServletRequestBuilder copia = put("/s3/" + bucket + "/copias/destino.txt")
-			.header("x-amz-copy-source", "/" + bucket + "/copias/origem.txt")
+		var resposta = copiar("copias/origem.txt", "copias/destino.txt", null);
+
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(200);
+		assertThat(resposta.getContentAsString())
+			.contains("<CopyObjectResult")
+			.contains("<ETag>\"" + sha + "\"</ETag>")
+			.contains("<LastModified>");
+		assertThat(resposta.getHeader(HttpHeaders.ETAG)).isEqualTo("\"" + sha + "\"");
+
+		assertThat(ler("copias/destino.txt")).isEqualTo("conteudo que a copia precisa levar");
+		assertThat(ler("copias/origem.txt")).as("a origem continua intacta")
+			.isEqualTo("conteudo que a copia precisa levar");
+		assertThat(cabecalhosDe("copias/destino.txt").getHeader(HttpHeaders.CONTENT_LENGTH))
+			.isEqualTo(String.valueOf("conteudo que a copia precisa levar".getBytes(StandardCharsets.UTF_8).length));
+	}
+
+	/**
+	 * O metadado acompanha a cópia; {@code REPLACE} usa o que veio na requisição de cópia.
+	 *
+	 * <p>É o que o SDK usa para copiar um arquivo mudando o {@code Content-Type} ou o nome de anexo
+	 * sem baixar o corpo. O {@code COPY} é o padrão do protocolo e não pode ser confundido com "copiar
+	 * só o metadado": o corpo é o mesmo nos dois.</p>
+	 */
+	@Test
+	void copia_traz_o_metadado_da_origem_e_replace_troca_pelo_do_pedido() throws Exception {
+		byte[] corpo = "foto".getBytes(StandardCharsets.UTF_8);
+		MockHttpServletRequestBuilder origem = put("/s3/" + bucket + "/copias/gato.jpg")
+			.content(corpo).contentType("image/jpeg")
+			.header("Cache-Control", "max-age=120")
+			.header("Content-Disposition", "attachment; filename=\"gato.jpg\"")
+			.header("x-amz-meta-dono", "luna");
+		assinar(origem, SECRET, shaDe("foto"));
+		mockMvc.perform(origem).andExpect(status().isOk());
+
+		var copia = copiar("copias/gato.jpg", "copias/gato-copia.jpg", null);
+		assertThat(copia.getStatus()).as(copia.getContentAsString()).isEqualTo(200);
+
+		var herdados = cabecalhosDe("copias/gato-copia.jpg");
+		assertThat(herdados.getContentType()).isEqualTo("image/jpeg");
+		assertThat(herdados.getHeader(HttpHeaders.CACHE_CONTROL)).isEqualTo("max-age=120");
+		assertThat(herdados.getHeader(HttpHeaders.CONTENT_DISPOSITION))
+			.isEqualTo("attachment; filename=\"gato.jpg\"");
+		assertThat(herdados.getHeader("x-amz-meta-dono")).isEqualTo("luna");
+		assertThat(ler("copias/gato-copia.jpg")).isEqualTo("foto");
+
+		var substituida = copiar("copias/gato.jpg", "copias/gato-novo.jpg", "REPLACE",
+			"Content-Type", "text/plain", "x-amz-meta-dono", "outro");
+		assertThat(substituida.getStatus()).as(substituida.getContentAsString()).isEqualTo(200);
+
+		var novos = cabecalhosDe("copias/gato-novo.jpg");
+		assertThat(novos.getContentType()).isEqualTo("text/plain");
+		assertThat(novos.getHeader("x-amz-meta-dono")).isEqualTo("outro");
+		assertThat(novos.getHeader(HttpHeaders.CACHE_CONTROL))
+			.as("o Cache-Control da origem nao foi herdado no REPLACE").isNotEqualTo("max-age=120");
+		// O corpo é o mesmo nos dois caminhos: REPLACE troca o declarado, não o conteúdo.
+		assertThat(ler("copias/gato-novo.jpg")).isEqualTo("foto");
+	}
+
+	/** Origem que não existe: {@code 404 NoSuchKey} no XML do S3 e nenhuma chave de destino criada. */
+	@Test
+	void copia_de_origem_inexistente_responde_404_sem_criar_destino() throws Exception {
+		var resposta = copiar("copias/nao-existe.txt", "copias/orfao.txt", null);
+
+		assertThat(resposta.getStatus()).isEqualTo(404);
+		assertThat(resposta.getContentAsString()).contains("<Code>NoSuchKey</Code>");
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_objects where bucket = ?"
+			+ " and object_key = ?", Integer.class, bucket, "copias/orfao.txt")).isZero();
+	}
+
+	/**
+	 * A origem também é do dono da credencial: copiar de bucket de outra conta é {@code 403} e não
+	 * grava destino nenhum.
+	 */
+	@Test
+	void copia_de_bucket_de_outra_conta_e_recusada_sem_gravar() throws Exception {
+		var alheio = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_copia_alheia");
+		String chaveAlheia = ACCESS_KEY_PREFIX + UUID.randomUUID().toString().replace("-", "")
+			.substring(0, 10).toUpperCase();
+		jdbc.update("""
+			insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+				allowed_bucket, allowed_operations, created_at)
+			values (?, ?, ?, ?, ?, null, 'GET PUT LIST DELETE', ?)
+			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), chaveAlheia,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET),
+			alheio.userId(), java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+		String bucketAlheio = "bkt" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		byte[] segredo = "segredo de outra conta".getBytes(StandardCharsets.UTF_8);
+		MockHttpServletRequestBuilder putAlheio = put("/s3/" + bucketAlheio + "/segredo.txt")
+			.content(segredo).contentType("text/plain");
+		assinar(putAlheio, SECRET, shaDe("segredo de outra conta"), chaveAlheia);
+		mockMvc.perform(putAlheio).andExpect(status().isOk());
+
+		MockHttpServletRequestBuilder copia = put("/s3/" + bucket + "/copias/roubada.txt")
+			.header("x-amz-copy-source", "/" + bucketAlheio + "/segredo.txt")
 			.content(new byte[0]);
 		assinar(copia, SECRET, shaVazio());
-		var resposta = mockMvc.perform(copia).andReturn();
+		var resposta = mockMvc.perform(copia).andReturn().getResponse();
 
-		assertThat(resposta.getResponse().getStatus()).isEqualTo(501);
-		assertThat(resposta.getResponse().getContentAsString()).contains("<Code>NotImplemented</Code>");
+		assertThat(resposta.getStatus()).isEqualTo(403);
+		assertThat(resposta.getContentAsString()).contains("<Code>AccessDenied</Code>");
 		assertThat(jdbc.queryForObject("select count(*) from network_storage_objects where bucket = ?"
-			+ " and object_key = ?", Integer.class, bucket, "copias/destino.txt")).isZero();
+			+ " and object_key = ?", Integer.class, bucket, "copias/roubada.txt")).isZero();
+	}
 
-		MockHttpServletRequestBuilder conferencia = head("/s3/" + bucket + "/copias/destino.txt");
-		assinar(conferencia, SECRET, shaVazio());
-		assertThat(mockMvc.perform(conferencia).andReturn().getResponse().getStatus()).isEqualTo(404);
+	/** Copiar sobre o próprio objeto sem trocar o conteúdo é {@code 400}, e nada é tocado. */
+	@Test
+	void copia_do_objeto_sobre_ele_mesmo_responde_400_e_preserva_o_conteudo() throws Exception {
+		gravar("copias/eu.txt", "eu mesmo");
+
+		var resposta = copiar("copias/eu.txt", "copias/eu.txt", null);
+
+		assertThat(resposta.getStatus()).isEqualTo(400);
+		assertThat(resposta.getContentAsString()).contains("<Code>InvalidRequest</Code>");
+		assertThat(ler("copias/eu.txt")).isEqualTo("eu mesmo");
+	}
+
+	/**
+	 * {@code x-amz-copy-source} é caminho, não query: {@code +} é {@code +}.
+	 *
+	 * <p>Um decodificador de query transformaria o {@code +} literal em espaço e a cópia procuraria
+	 * uma chave que ninguém gravou. O SDK manda {@code %2B} para a mesma chave; as duas formas
+	 * precisam chegar nela.</p>
+	 */
+	@Test
+	void copia_aceita_mais_literal_e_mais_percent_encoded_na_origem() throws Exception {
+		gravar("copias/a+b.txt", "mais literal");
+
+		assertThat(copiar("copias/a+b.txt", "copias/mais-literal.txt", null).getStatus()).isEqualTo(200);
+		assertThat(ler("copias/mais-literal.txt")).isEqualTo("mais literal");
+
+		assertThat(copiar("copias/a%2Bb.txt", "copias/mais-codificado.txt", null).getStatus()).isEqualTo(200);
+		assertThat(ler("copias/mais-codificado.txt")).isEqualTo("mais literal");
+	}
+
+	/**
+	 * {@code if-match} divergente é {@code 412} e não grava. A condição é do protocolo: o cliente
+	 * pediu a cópia <b>só se</b> a origem ainda fosse a que ele viu; copiar mesmo assim seria uma
+	 * resposta errada com cara de certa.
+	 */
+	@Test
+	void copia_com_if_match_divergente_responde_412_e_nao_grava() throws Exception {
+		gravar("copias/condicional.txt", "condicional");
+
+		var resposta = copiar("copias/condicional.txt", "copias/condicional-destino.txt", null,
+			"x-amz-copy-source-if-match", "\"0000000000000000000000000000000000000000000000000000000000000000\"");
+
+		assertThat(resposta.getStatus()).isEqualTo(412);
+		assertThat(resposta.getContentAsString()).contains("<Code>PreconditionFailed</Code>");
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_objects where bucket = ?"
+			+ " and object_key = ?", Integer.class, bucket, "copias/condicional-destino.txt")).isZero();
+	}
+
+	/**
+	 * Copiar para uma chave já confirmada responde {@code 409}, como o PUT, e o objeto que estava lá
+	 * continua com o <b>conteúdo e o metadado</b> de antes — a recusa não pode decorar a vítima.
+	 */
+	@Test
+	void copia_para_chave_confirmada_responde_409_sem_tocar_no_objeto() throws Exception {
+		byte[] original = "original".getBytes(StandardCharsets.UTF_8);
+		MockHttpServletRequestBuilder ocupada = put("/s3/" + bucket + "/copias/ocupada.png")
+			.content(original).contentType("image/png").header("x-amz-meta-dono", "original");
+		assinar(ocupada, SECRET, shaDe("original"));
+		mockMvc.perform(ocupada).andExpect(status().isOk());
+		gravar("copias/fonte.txt", "fonte da copia");
+
+		var resposta = copiar("copias/fonte.txt", "copias/ocupada.png", "REPLACE",
+			"Content-Type", "text/plain", "x-amz-meta-dono", "invasor");
+
+		assertThat(resposta.getStatus()).isEqualTo(409);
+		assertThat(resposta.getContentAsString()).contains("<Code>ObjectAlreadyStored</Code>");
+		var cabecalhos = cabecalhosDe("copias/ocupada.png");
+		assertThat(cabecalhos.getContentType()).isEqualTo("image/png");
+		assertThat(cabecalhos.getHeader("x-amz-meta-dono")).isEqualTo("original");
+		assertThat(ler("copias/ocupada.png")).isEqualTo("original");
 	}
 
 	/** O caminho completo: PUT grava, GET devolve o corpo com o ETag, HEAD responde o tamanho. */
@@ -1001,6 +1163,42 @@ class S3GatewayTests {
 		mockMvc.perform(put).andExpect(status().isOk());
 	}
 
+	/** Executa um CopyObject de {@code origem} para {@code destino}, opcionalmente com REPLACE. */
+	private org.springframework.mock.web.MockHttpServletResponse copiar(String origem, String destino,
+			String diretiva, String... cabecalhos) throws Exception {
+		MockHttpServletRequestBuilder copia = put("/s3/" + bucket + "/" + destino)
+			.header("x-amz-copy-source", "/" + bucket + "/" + origem)
+			.content(new byte[0]);
+		if (diretiva != null) {
+			copia.header("x-amz-metadata-directive", diretiva);
+		}
+		for (int i = 0; i + 1 < cabecalhos.length; i += 2) {
+			copia.header(cabecalhos[i], cabecalhos[i + 1]);
+		}
+		assinar(copia, SECRET, shaVazio());
+		return mockMvc.perform(copia).andReturn().getResponse();
+	}
+
+	/** O corpo do objeto, com o {@code asyncDispatch} que o {@code StreamingResponseBody} exige. */
+	private String ler(String chave) throws Exception {
+		MockHttpServletRequestBuilder leitura = get("/s3/" + bucket + "/" + chave);
+		assinar(leitura, SECRET, shaVazio());
+		var resultado = mockMvc.perform(leitura).andReturn();
+		if (resultado.getRequest().isAsyncStarted()) {
+			resultado = mockMvc.perform(asyncDispatch(resultado)).andReturn();
+		}
+		assertThat(resultado.getResponse().getStatus())
+			.as("GET " + chave + ": " + resultado.getResponse().getContentAsString()).isEqualTo(200);
+		return resultado.getResponse().getContentAsString();
+	}
+
+	/** Os cabeçalhos e o status de um HEAD, sem corpo para drenar. */
+	private org.springframework.mock.web.MockHttpServletResponse cabecalhosDe(String chave) throws Exception {
+		MockHttpServletRequestBuilder requisicao = head("/s3/" + bucket + "/" + chave);
+		assinar(requisicao, SECRET, shaVazio());
+		return mockMvc.perform(requisicao).andReturn().getResponse();
+	}
+
 	private void gravar(String key, String conteudo) throws Exception {
 		byte[] bytes = conteudo.getBytes(StandardCharsets.UTF_8);
 		String sha = shaDe(conteudo);
@@ -1087,4 +1285,5 @@ class S3GatewayTests {
 			throw new IllegalStateException(falha);
 		}
 	}
+
 }

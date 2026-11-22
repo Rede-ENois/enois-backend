@@ -54,6 +54,7 @@ contra o vetor externo é o que separa "implementei" de "assinei comigo mesmo e 
 | operação | rota | estado |
 |---|---|---|
 | PutObject | `PUT /s3/{bucket}/{key}` | ✅ mesmo caminho do catálogo; ETag = digest |
+| CopyObject | `PUT /s3/{bucket}/{key}` + `x-amz-copy-source` | ✅ cópia no servidor, sem o cliente enviar o corpo (§4.19) |
 | GetObject | `GET /s3/{bucket}/{key}` | ✅ `Range`/206/416, `304` por `If-None-Match` ou `If-Modified-Since` |
 | HeadObject | `HEAD /s3/{bucket}/{key}` | ✅ `304` por `If-None-Match` / `If-Modified-Since` |
 | DeleteObject | `DELETE /s3/{bucket}/{key}` | ✅ **lápide** (como o S3 com versionamento), 204 |
@@ -71,8 +72,8 @@ contra o vetor externo é o que separa "implementei" de "assinei comigo mesmo e 
 
 **Não implementado**, e o brief manda não anunciar como se existisse:
 
-- **CopyObject** e **UploadPartCopy** — recusados com `501 NotImplemented` **antes de qualquer
-  escrita** (§4.10); **ACL**, **tagging**, **`versionId`**, **bucket policy**, **`POST` de formulário**.
+- **UploadPartCopy** — recusado com `501 NotImplemented` **antes de qualquer escrita** (§4.10);
+  **ACL**, **tagging**, **`versionId`**, **bucket policy**, **`POST` de formulário**.
 - **Regiões múltiplas**, **classes de armazenamento na resposta** (sempre `STANDARD`; a classe real é a
   da §8 e não é escolhida por requisição).
 
@@ -521,24 +522,19 @@ mesma gravação passa. Dois multiparts de 10 MiB: o primeiro **conclui** com o 
 Mutações: a abertura ignora o reservado; a conclusão cobra as partes de novo; a abertura sem a tradução
 ao S3 — **3 de 3 derrubam**.
 
-### 4.10 Cópia no servidor é recusada antes de virar objeto (ciclo 90)
+### 4.10 UploadPartCopy é recusado antes de virar parte (ciclo 90)
 
-`CopyObject` e `UploadPartCopy` não existem neste gateway. O cabeçalho que os pede,
-`x-amz-copy-source`, era **ignorado**: o `PUT` comum seguia até a gravação com o corpo vazio que o
-cliente manda na cópia. O resultado era `400 STORAGE_EMPTY_BODY` — como se o cliente tivesse enviado
-um arquivo vazio — e a abertura deixava uma linha `PENDING` no catálogo para a chave de destino. Com
-corpo, os bytes do cliente eram gravados sob o nome do destino e a resposta dizia `200`: uma "cópia"
-que não copiou nada. O javadoc do controller prometia `501`, mas não havia guarda nenhuma.
+`UploadPartCopy` não existe neste gateway. O cabeçalho que o pede, `x-amz-copy-source`, era
+**ignorado** no `PUT ?partNumber=&uploadId=`: com o corpo vazio da cópia, a resposta era `400` — como
+se o cliente tivesse enviado uma parte vazia — e, com corpo, os bytes do cliente viravam a "cópia".
+Uma parte que não copiou nada é pior que a operação não existir.
 
-Agora o cabeçalho é reconhecido **antes** de `beginUpload` (`PUT /{bucket}/{key}`) e de
-`receivePart` (`PUT ?partNumber=&uploadId=`), e a resposta é `501 NotImplemented` no XML do S3. Nada é
-escrito: nem objeto, nem parte, nem linha no catálogo.
+Agora o cabeçalho é reconhecido **antes** de `receivePart`, e a resposta é `501 NotImplemented` no XML
+do S3. Nada é escrito: nem parte, nem linha. O `CopyObject` — o mesmo cabeçalho no `PUT` simples — é
+implementado desde o ciclo 108 (§4.19); a guarda daqui vale só para o caminho da parte.
 
-**Verificação:** `S3GatewayTests` **+1** — `PUT` com `x-amz-copy-source` e corpo vazio recebe `501`
-com `<Code>NotImplemented</Code>`, a chave de destino não existe (`HEAD` 404) e não há linha em
-`network_storage_objects`; `S3MultipartTests` **+1** — a parte com o mesmo cabeçalho recebe `501` e
-`network_storage_multipart_parts` continua vazia. Mutações: tirar a guarda do `PUT` e tirar a guarda
-do `UploadPart` — **2 de 2 derrubam**.
+**Verificação:** `S3MultipartTests` **+1** — a parte com `x-amz-copy-source` recebe `501` e
+`network_storage_multipart_parts` continua vazia. Mutação: tirar a guarda do `UploadPart` — derruba.
 
 ### 4.11 O corpo montado sai do disco quando a conclusão falha (ciclo 91)
 
@@ -707,6 +703,61 @@ e `GET` devolve `200` sem bytes. Mutações: o gateway voltar a recusar 0 byte (
 novo) e a regra do vazio ser liberada também para o nó (derrubada por `StorageObjectCeilingTests`) —
 **2 de 2 derrubam**.
 
+## 4.19 CopyObject copia no servidor (ciclo 108)
+
+`aws s3 cp --recursive`, o `rclone copy` e o `aws s3 sync` copiam **no servidor**: o cliente manda só
+o nome da origem e o do destino, e os bytes não passam pela rede até ele. Até o ciclo 107 o gateway
+recusava o cabeçalho com `501 NotImplemented` (§4.10), então copiar sem baixar e reenviar não existia:
+quem não caía para o caminho lento falhava no item, e quem caía gastava a banda duas vezes.
+
+### Agora
+
+- `PUT /s3/{bucket}/{chave}` com `x-amz-copy-source: /{bucket}/{origem}` e corpo vazio copia o objeto.
+  A origem é lida por `readBody` — o mesmo caminho do download, que só entrega o que o catálogo tem
+  como servível e confere a réplica 0 — e atravessa o **mesmo** `finishUpload` do `PUT`. Nada é
+  carregado em memória: o corpo vai do disco de origem ao temporário da gravação em blocos de 64 KiB.
+- A resposta é o XML do S3:
+
+  ```xml
+  <CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+    <ETag>"sha256 do destino"</ETag><LastModified>...</LastModified>
+  </CopyObjectResult>
+  ```
+
+  O ETag é o **do que foi escrito**, não uma promessa copiada da origem.
+- **Metadado:** `x-amz-metadata-directive: COPY` (padrão) traz `Content-Type`, `x-amz-meta-*`,
+  `Cache-Control` e `Content-Disposition` da origem; `REPLACE` usa o que veio na requisição de cópia.
+  Em `REPLACE`, `Cache-Control` e `Content-Disposition` ausentes voltam à política do tipo — não herdam
+  os da origem.
+- **Condições da origem:** `x-amz-copy-source-if-match` e `-if-none-match` são conferidos contra o
+  ETag; divergência é `412 PreconditionFailed` e nada é gravado. As condições por data respondem `501`
+  em vez de serem ignoradas — uma condição aceita e não aplicada seria uma resposta errada com cara de
+  certa. `?versionId=` também é `501`: a versão corrente é a única que o gateway endereça.
+- **Donos:** a origem tem de ser do dono da credencial (mesma regra do destino). Origem de outra conta
+  é `403 AccessDenied` **sem** reservar a chave de destino; origem inexistente é `404 NoSuchKey`
+  (o código do S3, não o interno `STORAGE_NOT_FOUND`).
+- **Mesmo objeto:** copiar a chave sobre ela mesma é `400 InvalidRequest` — o S3 só permite com troca
+  de metadado, e aqui a troca é um `PUT`.
+- **Chave ocupada:** copiar para uma chave com cópia confirmada é `409 ObjectAlreadyStored`, como no
+  `PUT`. A recusa acontece **antes** de `saveClientHeaders`: o objeto que a resposta diz não ter sido
+  tocado continua com o conteúdo **e o metadado** de antes. Em bucket versionado, a cópia cria a
+  versão nova, também como o `PUT`.
+- **Origem codificada:** o cabeçalho é um caminho, não uma query — `%2B` e `+` literal são os dois a
+  chave com mais, e `%20` é espaço. A instalação aceita as duas formas de chave (a que o `PUT` guardou
+  na URI e a já decodificada) e procura as duas antes de responder `404`.
+- **Contabilidade:** a leitura da origem conta `GET` e a gravação do destino conta `PUT` no painel
+  (§5.1); não é uma operação nova, é um `GET` e um `PUT` que o cliente não precisou trafegar.
+
+**Verificação:** `S3GatewayTests` **+8** — cópia grava os bytes e devolve o `CopyObjectResult` com o
+ETag do destino; `COPY` traz metadado e `REPLACE` troca o declarado sem trocar o corpo; origem
+inexistente é `404 NoSuchKey` sem linha de destino; origem de outra conta é `403` sem gravar; cópia
+sobre si mesma é `400` e preserva o conteúdo; `+` literal e `%2B` chegam à mesma chave; `if-match`
+divergente é `412` sem gravar; chave já confirmada é `409` e o objeto mantém conteúdo e metadado.
+Mutações: corpo da cópia vazio (o teste do conteúdo derruba), dono da origem não conferido (o teste
+das duas contas derruba), `REPLACE` ignorado (o teste do metadado derruba) e a tradução de
+`STORAGE_NOT_FOUND` para `NoSuchKey` removida (o teste da origem ausente derruba) — **4 de 4
+derrubam**.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
@@ -717,7 +768,8 @@ O corpo é XML no formato do S3, com o `Code` que o SDK lê:
 </Error>
 ```
 
-Códigos: `AccessDenied`, `InvalidAccessKeyId`, `SignatureDoesNotMatch`, `NotImplemented`.
+Códigos: `AccessDenied`, `InvalidAccessKeyId`, `SignatureDoesNotMatch`, `NotImplemented`,
+`InvalidArgument`, `InvalidRequest`, `NoSuchKey`, `PreconditionFailed` e `ObjectAlreadyStored`.
 
 ## 5.1 Indicadores de operação no painel (V366)
 

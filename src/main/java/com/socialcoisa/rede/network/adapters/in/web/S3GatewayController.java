@@ -55,6 +55,7 @@ import jakarta.servlet.http.HttpServletRequest;
  * <table>
  * <tr><th>operação</th><th>rota</th><th>semântica</th></tr>
  * <tr><td>PutObject</td><td>{@code PUT /{bucket}/{key}}</td><td>igual</td></tr>
+ * <tr><td>CopyObject</td><td>{@code PUT /{bucket}/{key}} + {@code x-amz-copy-source}</td><td>copia no servidor, sem trafegar os bytes</td></tr>
  * <tr><td>GetObject</td><td>{@code GET /{bucket}/{key}}</td><td>igual; Range/206/416 e 304 por ETag</td></tr>
  * <tr><td>HeadObject</td><td>{@code HEAD /{bucket}/{key}}</td><td>igual</td></tr>
  * <tr><td>DeleteObject</td><td>{@code DELETE /{bucket}/{key}}</td><td><b>lápide</b>, não remoção imediata (igual ao S3 com versionamento)</td></tr>
@@ -71,10 +72,10 @@ import jakarta.servlet.http.HttpServletRequest;
  * mesmo caminho do PUT simples: nada vira objeto antes de o arquivo inteiro existir. Detalhes em
  * {@code StorageMultipartService} e em {@code 18-storage-gateway-s3.md} §4.2.</p>
  *
- * <p><b>Não implementado:</b> CopyObject e UploadPartCopy são <b>recusados com 501</b> antes de
- * qualquer escrita — um PUT com {@code x-amz-copy-source} não grava objeto nem parte vazia. ACL,
- * tagging, {@code versionId}, bucket policy e {@code POST} de formulário não têm suporte e não são
- * anunciados; a doc 18 é a lista do que existe.</p>
+ * <p><b>Não implementado:</b> UploadPartCopy é <b>recusado com 501</b> antes de qualquer escrita —
+ * uma parte com {@code x-amz-copy-source} não grava parte vazia. ACL, tagging, {@code versionId},
+ * bucket policy e {@code POST} de formulário não têm suporte e não são anunciados; a doc 18 é a lista
+ * do que existe.</p>
  *
  * <p><b>Documento em XML:</b> o gateway serializa à mão, sem {@code ListBucketResult.class}. O motivo
  * é controle de namespace e de ordem dos elementos: um JAXB muda a ordem e o SDK não protesta, mas
@@ -97,7 +98,7 @@ class S3GatewayController {
 	/** Teto de chaves por página, igual ao S3. */
 	private static final int MAX_KEYS = 1000;
 
-	/** O cabeçalho do S3 para copiar no servidor. CopyObject e UploadPartCopy não existem aqui. */
+	/** O cabeçalho do S3 para copiar no servidor: CopyObject existe, UploadPartCopy não. */
 	private static final String COPY_SOURCE = "x-amz-copy-source";
 
 	/** O formato de instante da S3: sempre três casas decimais e sempre {@code Z}. */
@@ -314,11 +315,14 @@ class S3GatewayController {
 	 * esta gravação criou e devolve o objeto que ela substituiu ao estado em que estava.</p>
 	 */
 	@RequestMapping(value = "/{bucket}/{*key}", method = RequestMethod.PUT)
-	ResponseEntity<Void> putObject(@PathVariable String bucket, HttpServletRequest request) {
+	ResponseEntity<?> putObject(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "PUT");
 		requireBucket(credential, bucket);
-		recusarCopiaNoServidor(request);
 		String key = keyOf(request);
+		String origemDaCopia = request.getHeader(COPY_SOURCE);
+		if (origemDaCopia != null && !origemDaCopia.isBlank()) {
+			return copiarObjeto(credential, bucket, key, origemDaCopia, request);
+		}
 		// O tipo é o que o SDK manda; sem ele, o mesmo padrão do resto do módulo.
 		String contentType = request.getContentType();
 		// Refazer um PUT na mesma chave é o caso normal do S3: `beginUpload` devolve o objeto que já
@@ -364,6 +368,214 @@ class S3GatewayController {
 			.eTag("\"" + stored.sha256() + "\"")
 			.header(HttpHeaders.CONTENT_LENGTH, "0")
 			.build();
+	}
+
+	/**
+	 * CopyObject: {@code PUT /{bucket}/{key}} com {@code x-amz-copy-source} copia os bytes da origem
+	 * para o destino <b>sem o cliente enviar o arquivo</b>.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho era recusado com {@code 501 NotImplemented} — a operação não existia.
+	 * {@code aws s3 cp --recursive} e {@code rclone copy} usam a cópia no servidor para não baixar e
+	 * reenviar cada arquivo; sem ela, um cliente que não cai para o caminho lento (baixar e mandar de
+	 * novo) falha no item, e o que cai gasta a banda duas vezes.</p>
+	 *
+	 * <p><b>Agora:</b> a origem é lida pelo mesmo caminho de download ({@code readBody}, que só entrega
+	 * o que o catálogo tem como servível e confere a réplica 0) e atravessa o mesmo
+	 * {@code finishUpload} do PUT. Nada é carregado em memória: o corpo vai do disco de origem ao
+	 * temporário da gravação em blocos de 64 KiB. O destino é um objeto novo do mesmo dono da
+	 * credencial; o ETag devolvido é o sha-256 do que foi escrito, não o da origem — se os dois
+	 * divergirem, o que vale é o que está no disco.</p>
+	 *
+	 * <p><b>Cabeçalhos:</b> {@code x-amz-metadata-directive} aceita {@code COPY} (padrão: content-type,
+	 * metadado, Cache-Control e Content-Disposition da origem) e {@code REPLACE} (o que veio nesta
+	 * requisição). {@code x-amz-copy-source-if-match} e {@code -if-none-match} são conferidos contra o
+	 * ETag da origem; as condições por data respondem {@code 501} em vez de serem ignoradas — uma
+	 * condição aceita e não aplicada é uma resposta errada com cara de certa. {@code versionId} fica
+	 * de fora: a versão corrente é a única que o gateway endereça.</p>
+	 *
+	 * <p><b>Semântica herdada do PUT:</b> copiar para uma chave que já tem cópia confirmada responde
+	 * {@code 409 ObjectAlreadyStored} (o gateway não sobrescreve; um bucket versionado cria a versão
+	 * nova, como no PUT) e copiar um objeto sobre ele mesmo responde {@code 400 InvalidRequest}.</p>
+	 */
+	private ResponseEntity<?> copiarObjeto(S3Credential credential, String bucket, String key,
+			String cabecalhoDaOrigem, HttpServletRequest request) {
+		OrigemDaCopia origem = origemDaCopia(cabecalhoDaOrigem);
+		// O escopo da credencial vale para a origem também: ler de um bucket fora do escopo não é
+		// uma operação que a credencial autoriza, ainda que o dono seja o mesmo.
+		requireBucket(credential, origem.bucket());
+		// `bucketsOf` só conhece bucket que já tem objeto vivo. Um bucket vazio (inclusive o que
+		// ainda não existe) não tem dono, e a resposta certa para a origem ausente é 404, não 403 —
+		// `bucketSemDono` é verdadeiro para ele e a busca abaixo decide.
+		boolean bucketDaOrigemEhNossa = catalog.bucketsOf(credential.ownerUserId()).contains(origem.bucket())
+			|| bucketSemDono(origem.bucket(), credential.ownerUserId());
+		if (!bucketDaOrigemEhNossa) {
+			throw s3Error(403, "AccessDenied", "O bucket de origem nao e do dono da credencial.");
+		}
+		StorageObject fonte;
+		try {
+			fonte = storage.requireDownloadable(origem.bucket(), origem.key(), "GET");
+		}
+		catch (ApiException naoAchou) {
+			// Duas formas de chave convivem na instalação: o caminho do PUT guarda o que veio na URI
+			// (percent-encoded) e um cliente pode mandar a chave já decodificada no cabeçalho. Tentar
+			// as duas é o que faz a cópia encontrar o objeto nas duas.
+			if (origem.key().equals(origem.chaveBruta())) {
+				throw noVocabularioDoS3(naoAchou);
+			}
+			try {
+				fonte = storage.requireDownloadable(origem.bucket(), origem.chaveBruta(), "GET");
+			}
+			catch (ApiException tambemNaoAchou) {
+				throw noVocabularioDoS3(tambemNaoAchou);
+			}
+		}
+		if (!credential.ownerUserId().equals(fonte.createdBy())) {
+			// A donagem do bucket pode ter mudado entre a lista e a leitura; o objeto é a verdade.
+			throw s3Error(403, "AccessDenied", "O objeto de origem nao e do dono da credencial.");
+		}
+		exigirPrecondicoesDaCopia(request, fonte);
+
+		boolean mesmoObjeto = origem.bucket().equals(bucket)
+			&& (origem.key().equals(key) || origem.chaveBruta().equals(key));
+		if (mesmoObjeto) {
+			throw s3Error(400, "InvalidRequest",
+				"Copiar um objeto sobre ele mesmo nao e suportado; use PUT para trocar o conteudo.");
+		}
+		// A donagem do destino é conferida ANTES da abertura: uma cópia para bucket de outra conta não
+		// chega a reservar chave. O PUT precisa gravar primeiro (um bucket novo nasce do primeiro
+		// objeto); a cópia já sabe que o destino existe e de quem é.
+		if (!bucketSemDono(bucket, credential.ownerUserId())) {
+			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
+		}
+
+		boolean substituirMetadado = diretivaDeMetadadoSubstitui(request);
+		StorageCatalogService.ClientHeaders cabecalhos = substituirMetadado ? clientHeaders(request)
+			: new StorageCatalogService.ClientHeaders(fonte.metadata(), fonte.cacheControl(),
+				fonte.contentDisposition());
+		// O tipo do destino é o da origem no COPY e o declarado na requisição no REPLACE. O
+		// `beginUpload` é quem grava o content-type; `saveClientHeaders` não o carrega.
+		String tipoDoDestino = substituirMetadado ? request.getContentType() : fonte.contentType();
+		StorageObject antes = catalog.find(bucket, key).orElse(null);
+		StorageObject pending;
+		try {
+			pending = storage.beginUpload(credential.ownerUserId(), bucket, key, tipoDoDestino);
+		}
+		catch (ApiException recusado) {
+			throw noVocabularioDoS3(recusado);
+		}
+		boolean iaCriar = antes == null || !antes.id().equals(pending.id());
+		if (!iaCriar && antes.state() != StorageObjectState.PENDING) {
+			// A recusa vem antes de `saveClientHeaders`: reescrever metadado de um objeto confirmado
+			// que a resposta diz não ter sido tocado deixaria o catálogo mentindo sobre o conteúdo.
+			throw s3Error(409, "ObjectAlreadyStored",
+				"A chave ja tem copia confirmada; use outro nome de chave.");
+		}
+		storage.saveClientHeaders(pending, cabecalhos);
+		StorageObject stored;
+		try (InputStream corpoDaOrigem = storage.readBody(fonte.id())) {
+			stored = storage.finishUploadPermitindoVazio(pending.id(), corpoDaOrigem, credential.ownerUserId());
+		}
+		catch (ApiException recusado) {
+			throw noVocabularioDoS3(recusado);
+		}
+		catch (java.io.IOException fechou) {
+			throw s3Error(500, "InternalError", "A origem nao pode ser lida para a copia.");
+		}
+		if (!bucketSemDono(bucket, credential.ownerUserId())) {
+			// Corrida: o bucket passou a ter objeto de outra conta entre a conferência e a gravação.
+			desfazer(stored, antes);
+			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
+		}
+		S3Xml xml = new S3Xml();
+		xml.root("CopyObjectResult").element("ETag", "\"" + stored.sha256() + "\"")
+			.element("LastModified", lastModified(stored));
+		return xml(HttpStatus.OK).eTag("\"" + stored.sha256() + "\"").body(xml.toString());
+	}
+
+	/** A origem de um CopyObject, com a chave como veio e a chave decodificada. */
+	private record OrigemDaCopia(String bucket, String key, String chaveBruta) {
+	}
+
+	/**
+	 * {@code x-amz-copy-source} é um <b>caminho</b>: {@code /bucket/chave}, com percent-encoding.
+	 *
+	 * <p>{@code +} não vira espaço — essa regra é de query string. O SDK manda {@code %2B} para uma
+	 * chave com mais, mas um {@code +} literal também é uma chave com mais; tratar os dois como espaço
+	 * faria a cópia procurar um objeto que não existe.</p>
+	 */
+	private static OrigemDaCopia origemDaCopia(String cabecalho) {
+		String valor = cabecalho.trim();
+		if (valor.startsWith("/")) {
+			valor = valor.substring(1);
+		}
+		if (valor.indexOf('?') >= 0) {
+			// `?versionId=` não é endereçável pelo gateway (a versão corrente é a única que ele serve).
+			throw s3Error(501, "NotImplemented",
+				"Copiar uma versao especifica (versionId) nao e suportado.");
+		}
+		int barra = valor.indexOf('/');
+		if (barra <= 0 || barra == valor.length() - 1) {
+			throw s3Error(400, "InvalidArgument", "x-amz-copy-source precisa ser /bucket/chave.");
+		}
+		String bruta = valor.substring(barra + 1);
+		return new OrigemDaCopia(decodificaCaminho(valor.substring(0, barra)), decodificaCaminho(bruta), bruta);
+	}
+
+	private static String decodificaCaminho(String valor) {
+		try {
+			// `%2B` é o mais; `+` literal também. Trocar o literal por `%2B` antes de decodificar
+			// preserva os dois e ainda aceita `%20` para espaço.
+			return java.net.URLDecoder.decode(valor.replace("+", "%2B"), StandardCharsets.UTF_8);
+		}
+		catch (IllegalArgumentException invalido) {
+			throw s3Error(400, "InvalidArgument", "x-amz-copy-source tem percent-encoding invalido.");
+		}
+	}
+
+	/**
+	 * As condições da origem. As de ETag são aplicadas; as de data são recusadas com {@code 501} em vez
+	 * de ignoradas — aceitar o cabeçalho e copiar mesmo assim seria uma resposta que mente.
+	 */
+	private static void exigirPrecondicoesDaCopia(HttpServletRequest request, StorageObject fonte) {
+		if (request.getHeader("x-amz-copy-source-if-modified-since") != null
+				|| request.getHeader("x-amz-copy-source-if-unmodified-since") != null) {
+			throw s3Error(501, "NotImplemented",
+				"As condicoes de data da copia nao sao suportadas; use if-match ou if-none-match.");
+		}
+		String ifMatch = request.getHeader("x-amz-copy-source-if-match");
+		if (ifMatch != null && !etagNaLista(ifMatch, fonte)) {
+			throw s3Error(412, "PreconditionFailed", "O ETag da origem nao confere com If-Match.");
+		}
+		String ifNoneMatch = request.getHeader("x-amz-copy-source-if-none-match");
+		if (ifNoneMatch != null && etagNaLista(ifNoneMatch, fonte)) {
+			throw s3Error(412, "PreconditionFailed", "O ETag da origem confere com If-None-Match.");
+		}
+	}
+
+	private static boolean etagNaLista(String cabecalho, StorageObject fonte) {
+		String comAspas = "\"" + fonte.sha256() + "\"";
+		for (String candidato : cabecalho.split(",")) {
+			String valor = candidato.trim();
+			if ("*".equals(valor) || comAspas.equals(valor) || fonte.sha256().equals(valor)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** {@code COPY} (padrão) mantém o metadado da origem; {@code REPLACE} usa o da requisição. */
+	private static boolean diretivaDeMetadadoSubstitui(HttpServletRequest request) {
+		String diretiva = request.getHeader("x-amz-metadata-directive");
+		if (diretiva == null || diretiva.isBlank()) {
+			return false;
+		}
+		if ("REPLACE".equalsIgnoreCase(diretiva.trim())) {
+			return true;
+		}
+		if ("COPY".equalsIgnoreCase(diretiva.trim())) {
+			return false;
+		}
+		throw s3Error(400, "InvalidArgument", "x-amz-metadata-directive aceita COPY ou REPLACE.");
 	}
 
 	/**
@@ -1070,22 +1282,22 @@ class S3GatewayController {
 	}
 
 	/**
-	 * CopyObject e UploadPartCopy chegam como um PUT com {@code x-amz-copy-source} e corpo vazio.
+	 * UploadPartCopy chega como um UploadPart com {@code x-amz-copy-source} e corpo vazio.
 	 *
-	 * <p><b>Antes:</b> o cabeçalho era ignorado e o PUT comum seguia até a gravação. Com o corpo
-	 * vazio da cópia, a resposta era {@code 400 STORAGE_EMPTY_BODY} — como se o cliente tivesse
-	 * mandado um arquivo vazio — e a abertura deixava uma linha {@code PENDING} no catálogo. Com
-	 * corpo, os bytes do cliente eram gravados no destino e a resposta dizia 200: uma "cópia" que
-	 * não copiou nada.</p>
+	 * <p><b>Antes:</b> o cabeçalho era ignorado e a parte seguia até a gravação. Com o corpo vazio da
+	 * cópia, a resposta era {@code 400} — como se o cliente tivesse mandado uma parte vazia — e, com
+	 * corpo, os bytes do cliente viravam a "cópia". Uma cópia que não copiou nada é pior que a
+	 * operação não existir.</p>
 	 *
-	 * <p>Operação ausente responde {@code 501 NotImplemented} no XML do S3, antes de
-	 * {@code beginUpload}/{@code receivePart}: nada é escrito — nem objeto, nem parte, nem linha.</p>
+	 * <p>Operação ausente responde {@code 501 NotImplemented} no XML do S3, antes do
+	 * {@code receivePart}: nada é escrito — nem parte, nem linha. CopyObject (o mesmo cabeçalho no PUT
+	 * simples) é implementado em {@link #copiarObjeto}.</p>
 	 */
 	private static void recusarCopiaNoServidor(HttpServletRequest request) {
 		String origem = request.getHeader(COPY_SOURCE);
 		if (origem != null && !origem.isBlank()) {
 			throw s3Error(501, "NotImplemented",
-				"CopyObject e UploadPartCopy nao sao suportados; envie os bytes no corpo do PUT.");
+				"UploadPartCopy nao e suportado; envie os bytes da parte no corpo do PUT.");
 		}
 	}
 
@@ -1119,6 +1331,11 @@ class S3GatewayController {
 	static ApiException noVocabularioDoS3(ApiException recusado) {
 		if (recusado.status() == 507 && "STORAGE_OWNER_QUOTA_EXCEEDED".equals(recusado.code())) {
 			return s3Error(507, "QuotaExceeded", recusado.getMessage());
+		}
+		if (recusado.status() == 404 && "STORAGE_NOT_FOUND".equals(recusado.code())) {
+			// O código do S3 para chave ausente é o que o SDK procura para distinguir "não existe"
+			// de "sem permissão". O interno (`STORAGE_NOT_FOUND`) vazava para o cliente.
+			return s3Error(404, "NoSuchKey", recusado.getMessage());
 		}
 		if ("STORAGE_PLACEMENT_MISSING".equals(recusado.code())) {
 			// O catálogo diz que existe e não há cópia: para o cliente do S3 é um conflito
