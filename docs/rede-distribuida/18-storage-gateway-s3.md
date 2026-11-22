@@ -74,7 +74,7 @@ contra o vetor externo é o que separa "implementei" de "assinei comigo mesmo e 
 **Não implementado**, e o brief manda não anunciar como se existisse:
 
 - **ACL**, **tagging**, **`versionId`**, **bucket policy**, **`POST` de formulário** — sem suporte e
-  não anunciados.
+  não anunciados (o `PUT` que os gravaria responde `501` e não altera o objeto — §4.21).
 - **Regiões múltiplas**, **classes de armazenamento na resposta** (sempre `STANDARD`; a classe real é a
   da §8 e não é escolhida por requisição).
 
@@ -787,6 +787,34 @@ arquivo que o `CopyObject` já copiava de uma vez não podia ser copiado em peda
 `400 InvalidArgument` sem parte. Mutações: ignorar o início do intervalo; ignorar o fim (gravar o
 resto da origem); não conferir o limite superior; responder só o `ETag` sem o XML — **4 de 4
 derrubam**.
+## 4.21 Subrecurso que gravaria vira `501` (ciclo 107)
+
+O `PUT` era despachado pela **chave da rota**, sem olhar a consulta. Um `PUT ?tagging` — a operação
+com que o S3 grava etiquetas — abria um upload da chave, gravava o **XML da etiqueta** como corpo,
+substituía o arquivo de verdade e respondia `200`, que é o "sucesso" da etiquetagem no S3. O cliente
+via sucesso e o objeto ficava com o XML dentro. O mesmo valia para `?acl`, `?retention`, `?legal-hold`
+e `?object-lock`.
+
+### Agora
+
+| pedido | resposta |
+|---|---|
+| `PUT ?tagging`, `?acl`, `?retention`, `?legal-hold`, `?object-lock` | **`501 NotImplemented`** (XML do S3, com o subrecurso), **nada gravado** |
+| `GET ?tagging`, `DELETE ?tagging` | já respondiam `501` pelo `DeleteObject`/`GetObject` não conhecerem o subrecurso |
+
+A recusa vem **antes** do catálogo: nem linha `PENDING`, nem corpo medido. A lista vizinha (ecoada em
+`200` sem gravar — `?versioning`, `?encryption`, `?logging`…) continua como era: o que distingue os dois
+grupos é o que acontece sem guarda. Ali um corpo vazio é confundido com objeto; aqui o objeto é
+sobrescrito.
+
+**Verificação:** `S3GatewayTests` **+2** — `PUT ?tagging` responde `501 NotImplemented` e o `HEAD`
+seguinte devolve o **mesmo ETag** (o objeto não foi reescrito com o XML); e `PUT ?tagging` **com**
+`x-amz-copy-source` também é `501`, com o destino inexistente. Mutações: tirar a guarda do `PUT`
+(as duas derrubam) e pôr a guarda **depois** do desvio para o `CopyObject` — o segundo teste derruba,
+porque a cópia responderia `200`.
+
+A guarda roda **antes** do desvio para o `CopyObject` (§4.19): um `PUT ?tagging` com
+`x-amz-copy-source` não copia — o subrecurso continua `501`, e nada é gravado no destino.
 
 ## 5. Erros
 

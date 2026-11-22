@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -99,6 +100,14 @@ class S3GatewayController {
 
 	/** O cabeçalho do S3 para copiar no servidor: CopyObject e UploadPartCopy existem. */
 	private static final String COPY_SOURCE = "x-amz-copy-source";
+
+	/**
+	 * Subrecursos do objeto que o S3 implementa com um {@code PUT} e que este gateway <b>não</b>: a
+	 * etiqueta, a ACL, o bloqueio de objeto e a retenção. Estão juntos porque a consequência de não
+	 * recusá-los é a mesma — o XML da operação viraria o conteúdo do objeto.
+	 */
+	private static final Set<String> SUBRECURSOS_QUE_GRAVARIAM = Set.of("tagging", "acl", "retention",
+		"legal-hold", "object-lock");
 
 	/** O formato de instante da S3: sempre três casas decimais e sempre {@code Z}. */
 	private static final DateTimeFormatter S3_INSTANT = DateTimeFormatter
@@ -295,6 +304,31 @@ class S3GatewayController {
 		throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
 	}
 
+	/**
+	 * Subrecurso da consulta que o gateway não implementa e que, sem esta guarda, seria gravado.
+	 *
+	 * <p><b>Antes:</b> o {@code PUT} era despachado pela chave da rota, sem olhar a consulta. Um
+	 * {@code PUT ?tagging}, {@code ?acl}, {@code ?retention}, {@code ?legal-hold} ou {@code ?object-lock}
+	 * abria um upload da chave, gravava o <b>XML daquela operação</b> como corpo, substituía o arquivo
+	 * de verdade e respondia {@code 200} — que é o "sucesso" de várias operações do S3 que este gateway
+	 * não implementa. O cliente via sucesso e o objeto ficava com o XML dentro.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 501 NotImplemented} no XML do S3, devolvendo o subrecurso não suportado,
+	 * e nada é gravado. A lista vizinha (ecoada em {@code 200} sem gravar) já fazia isso para
+	 * {@code ?versioning}, {@code ?encryption}, {@code ?logging} e companhia; o que distingue os dois
+	 * grupos é justamente o que acontece sem a guarda — ali, um corpo vazio confundido com objeto;
+	 * aqui, o objeto sobrescrito.</p>
+	 */
+	private static void recusarSubrecurso(HttpServletRequest request, String chaveDoObjeto) {
+		Set<String> pedidos = query(request).keySet();
+		for (String naoImplementado : SUBRECURSOS_QUE_GRAVARIAM) {
+			if (pedidos.contains(naoImplementado)) {
+				throw s3Error(501, "NotImplemented", "O subrecurso '" + naoImplementado + "' nao e suportado; "
+					+ chaveDoObjeto + " nao foi alterado.");
+			}
+		}
+	}
+
 	// ---------------------------------------------------------------- objeto
 
 	/**
@@ -318,6 +352,9 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "PUT");
 		requireBucket(credential, bucket);
 		String key = keyOf(request);
+		// Subrecurso que este gateway não implementa NÃO é PutObject: recusa antes de tocar no
+		// catálogo e antes do desvio para a cópia. Ver `recusarSubrecurso`.
+		recusarSubrecurso(request, "/" + bucket + "/" + key);
 		String origemDaCopia = request.getHeader(COPY_SOURCE);
 		if (origemDaCopia != null && !origemDaCopia.isBlank()) {
 			return copiarObjeto(credential, bucket, key, origemDaCopia, request);
