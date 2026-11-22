@@ -834,6 +834,44 @@ A guarda roda **antes** do desvio para o `CopyObject` (§4.19): um `PUT ?tagging
 cópia que o ciclo 90 tinha no `PUT` foi substituída pela operação de verdade (§4.19); a do
 `UploadPartCopy` ficou só no caminho da parte.
 
+## 4.24 Objeto cuja cópia está em outro nó: `503 SlowDown` (ciclo 112)
+
+A cópia era procurada **dentro** do corpo da resposta (`StreamingResponseBody`), depois de os `200` e
+os cabeçalhos terem saído. Duas consequências:
+
+1. **Download truncado com `200`.** Se a cópia não podia ser aberta, o cliente recebia
+   `200 Content-Length: 12` e **zero bytes** — sem erro, sem código, só o arquivo faltando no fim.
+2. **A recusa real saía no vocabulário do control plane.** Com a réplica 0 podada e a colocação num
+   outro nó, `readBody` recusa `409 STORAGE_REPLICA_ELSEWHERE` — que existe para o control plane, que
+   usa o digest para designar o nó. O gateway repassava o **JSON do Énóis**: o SDK do S3 não
+   deserializa isso, não reconhece o código e não tenta de novo.
+
+### Agora
+
+| situação | resposta |
+|---|---|
+| cópia **desta** instalação | `200`/`206`, como antes |
+| cópia **em outro nó** (`STORAGE_REPLICA_ELSEWHERE`) | **`503 SlowDown`** em XML, com `Retry-After: 1` |
+| objeto confirmado **sem cópia nenhuma** | `409 InternalError` em XML (como antes) |
+| falha ao abrir a cópia | recusa **antes** do corpo (nunca `200` truncado) |
+
+- O corpo é aberto **antes** do primeiro byte, no `GET` **e** no `HEAD` (o `HEAD` só confirma que a
+  cópia pode ser aberta e fecha o stream; o `304` também fecha o que já abriu). Uma falha vira
+  recusa, não download curto.
+- `503 SlowDown` é o `ClientException` literal que o `S3Exception.retryable` do SDK repete;
+  `Retry-After` é o que diz quando. O `GlobalExceptionHandler` do S3 passou a emitir esse cabeçalho
+  (antes o `withRetryAfter` não aparecia no formato XML).
+
+**Verificação:** `S3GatewayTests` **+2**.
+
+- `copia_fora_deste_no_responde_503_em_xml` — a colocação aponta para outro nó e a réplica 0 sai da
+  raiz: `GET` e `HEAD` respondem `503` com `<Code>SlowDown</Code>` e `Retry-After`. Mutações que a
+  derrubam (todas verificadas): devolver a recusa crua (`409` JSON); sem `Retry-After`; procurar o
+  corpo dentro do `StreamingResponseBody` (volta o `200` truncado).
+- `range_com_mais_de_um_intervalo_responde_o_corpo_inteiro` — `Range: bytes=0-1,5-6` devolve `200`
+  com os 12 bytes e sem `Content-Range`. **Verdadeiro antes da mudança** (o MockMvc não aplica o
+  `Range`); fica como guarda do contrato declarado, não como prova da correção.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:

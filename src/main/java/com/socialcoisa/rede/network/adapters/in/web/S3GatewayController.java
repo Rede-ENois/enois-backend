@@ -1515,6 +1515,14 @@ class S3GatewayController {
 			return s3Error(409, "InternalError", "O objeto esta confirmado no catalogo mas sem copia"
 				+ " registrada em no nenhum; tente de novo.");
 		}
+		if ("STORAGE_REPLICA_ELSEWHERE".equals(recusado.code())) {
+			// A cópia existe, mas em outro nó: é o caso "tenta de novo em instantes" do S3. O XML do
+			// `SlowDown` é o `ClientException` literal que o `S3Exception.retryable` do SDK repete; o
+			// `409` do control plane (que usa o digest para designar o nó) não serve ao cliente do S3 —
+			// e, sem esta tradução, ele saía como JSON do Énóis. O `Retry-After` diz quando voltar.
+			return s3Error(503, "SlowDown", "A copia deste objeto esta em outro no; tente de novo.")
+				.withRetryAfter(1);
+		}
 		// Qualquer outra recusa que nasceu nos serviços do Storage vira XML: o código interno do
 		// Énóis é legível o bastante (`NoSuchUpload`, `InvalidArgument`, `MalformedXML`, `InvalidPart`
 		// são os do S3) e o `Code` é o que o SDK lê. Antes, só os dois casos acima eram traduzidos e
