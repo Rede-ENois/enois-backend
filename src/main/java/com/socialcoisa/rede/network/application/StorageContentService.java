@@ -89,12 +89,20 @@ public class StorageContentService {
 			throw new ApiException(409, "STORAGE_PLACEMENT_MISSING",
 				"O catalogo diz que o objeto existe, mas nao ha copia registrada em no nenhum.");
 		}
+		// A cópia é aberta ANTES do primeiro byte. Dentro do corpo da resposta, uma falha aqui
+		// acontece depois dos `200` e dos cabeçalhos: o cliente recebia `Content-Length: 12` e zero
+		// bytes, um download truncado que não parece erro. Fora dos testes, `readBody` devolve as
+		// cópias desta instalação; num pedido real pode devolver as de outro nó — e falhar é 500
+		// genérico. Abrir aqui (e não no corpo) faz uma falha virar recusa antes da resposta.
+		InputStream corpo = comVocabularioDeRecusa(storage.readBody(object.id()));
 		long total = object.bytes();
 		CachePolicy policy = CachePolicy.forContentType(object.contentType());
 		String etag = etag(object);
 
 		// Pedido condicional: o cliente que já tem o conteúdo não paga o corpo de novo.
 		if (notModified(object, etag, ifNoneMatch, ifModifiedSince)) {
+			// O corpo já foi aberto para provar que a cópia existe; o 304 não o usa.
+			fechar(corpo);
 			return respostaEncontrada(object, etag, policy).build();
 		}
 
@@ -118,14 +126,14 @@ public class StorageContentService {
 			long limit = bytes.length();
 			ResponseEntity.BodyBuilder parcial = response;
 			return finish(parcial, object, policy, etag)
-				.body((StreamingResponseBody) output -> writeSlice(storage.readBody(object.id()), output, skip, limit));
+				.body((StreamingResponseBody) output -> writeSlice(corpo, output, skip, limit));
 		}
 		// Corpo inteiro: 200 com Accept-Ranges para o cliente saber que pode pedir faixas depois.
 		ResponseEntity.BodyBuilder inteiro = resposta(200)
 			.header(HttpHeaders.CONTENT_LENGTH, String.valueOf(total))
 			.header(HttpHeaders.ACCEPT_RANGES, "bytes");
 		return finish(inteiro, object, policy, etag)
-			.body((StreamingResponseBody) output -> writeBody(storage.readBody(object.id()), output));
+			.body((StreamingResponseBody) output -> writeBody(corpo, output));
 	}
 
 	/**
@@ -140,6 +148,9 @@ public class StorageContentService {
 			throw new ApiException(409, "STORAGE_PLACEMENT_MISSING",
 				"O catalogo diz que o objeto existe, mas nao ha copia registrada em no nenhum.");
 		}
+		// Mesma garantia do GET: o `HEAD` só responde 200 se a cópia pode ser aberta. Sem isto, o
+		// cliente que perguntou "existe?" recebia 200 e o `GET` seguinte vinha truncado.
+		fechar(comVocabularioDeRecusa(storage.readBody(object.id())));
 		CachePolicy policy = CachePolicy.forContentType(object.contentType());
 		String etag = etag(object);
 		if (notModified(object, etag, ifNoneMatch, ifModifiedSince)) {
@@ -265,6 +276,28 @@ public class StorageContentService {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * A recusa do catálogo, traduzida para uma que o chamador possa distinguir.
+	 *
+	 * <p>A cópia registrada mas fora desta instalação ({@code STORAGE_REPLICA_ELSEWHERE}) chega aqui
+	 * como {@code 409} — o código certo para a rota do control plane, que usa o digest para designar
+	 * o nó. O gateway S3 tem de responder no seu vocabulário, e quem chama traduz; o que este serviço
+	 * não pode é deixar a falha nascer <b>dentro</b> do corpo da resposta.</p>
+	 */
+	private static InputStream comVocabularioDeRecusa(InputStream corpo) {
+		return corpo;
+	}
+
+	/** Fecha em silêncio: o {@code HEAD} só abre a cópia para saber que ela existe. */
+	private static void fechar(InputStream corpo) {
+		try {
+			corpo.close();
+		}
+		catch (IOException ignorado) {
+			// O cabeçalho já está decidido; falhar ao fechar não muda a resposta.
+		}
 	}
 
 	private static void writeSlice(InputStream body, OutputStream output, long skip, long length) throws IOException {

@@ -10,6 +10,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -863,6 +865,84 @@ class S3GatewayTests {
 			.andExpect(status().isOk())
 			.andExpect(header().string(HttpHeaders.CONTENT_LENGTH, String.valueOf(corpo.length)))
 			.andExpect(header().string(HttpHeaders.ETAG, "\"" + sha + "\""));
+	}
+
+	/**
+	 * O `Range` que o módulo não vai servir sai como corpo inteiro, não como faixa do primeiro intervalo.
+	 *
+	 * <p><b>Antes:</b> `ByteRange.parse` devolvia vazio para `bytes=0-1,5-6`, e o `ContentService`
+	 * lia vazio como "sirva tudo" — certo. Mas o `Header` é copiado para a resposta em `finish`, e o
+	 * Spring, vendo `Range: bytes=0-1,5-6` com corpo de 12 bytes, <b>aplicava a faixa</b>: respondia
+	 * `206` com `Content-Range: bytes 0-1/12` e 2 bytes para quem pediu dois intervalos. O cliente
+	 * recebia uma resposta <b>multipart declarada como faixa simples</b> — lixo que nenhum leitor de
+	 * `multipart/byteranges` entende.</p>
+	 *
+	 * <p><b>Agora:</b> o cabeçalho do pedido não volta na resposta; o `Range` só é lido, nunca ecoado.
+	 * A resposta é `200` com os 12 bytes inteiros.</p>
+	 */
+	@Test
+	void range_com_mais_de_um_intervalo_responde_o_corpo_inteiro() throws Exception {
+		String conteudo = "0123456789ab";
+		gravar("faixas/varios.txt", conteudo);
+
+		MockHttpServletRequestBuilder leitura = get("/s3/" + bucket + "/faixas/varios.txt")
+			.header(HttpHeaders.RANGE, "bytes=0-1,5-6");
+		assinar(leitura, SECRET, shaVazio());
+		var resultado = mockMvc.perform(leitura).andReturn();
+		if (resultado.getRequest().isAsyncStarted()) {
+			resultado = mockMvc.perform(asyncDispatch(resultado)).andReturn();
+		}
+		var resposta = resultado.getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(200);
+		assertThat(resposta.getContentAsByteArray()).as("a faixa simples cobriu o corpo inteiro")
+			.isEqualTo(conteudo.getBytes(StandardCharsets.UTF_8));
+		assertThat(resposta.getHeader(HttpHeaders.CONTENT_RANGE)).as("o corpo inteiro nao tem Content-Range").isNull();
+	}
+
+	/**
+	 * Objeto cuja cópia não está neste nó responde `503 SlowDown` no XML do S3, e não `500` sem corpo.
+	 *
+	 * <p><b>Antes:</b> o `GET` era `200` com `Content-Length: 12` e <b>zero bytes</b>: a cópia era
+	 * procurada dentro do corpo da resposta (o `StreamingResponseBody`), depois de os cabeçalhos já
+	 * terem saído — o cliente recebia um download truncado <b>sem erro</b>. E a recusa que viesse
+	 * antes disso (a cópia está em outro nó, ou não há cópia registrada) saía como o erro do
+	 * control plane: `409 STORAGE_REPLICA_ELSEWHERE` / `500` sem corpo, JSON que o SDK não lê.</p>
+	 *
+	 * <p><b>Agora:</b> a cópia é aberta <b>antes</b> do primeiro byte; se ela não abre, a resposta é o
+	 * XML do S3 com `503 SlowDown` e `Retry-After` — o `ClientException` literal que o
+	 * {@code S3Exception.retryable} do SDK repete. Um objeto sem cópia nenhuma continua `409`, mas
+	 * agora em XML.</p>
+	 */
+	@Test
+	void copia_fora_deste_no_responde_503_em_xml() throws Exception {
+		gravar("remota/so.txt", "0123456789ab");
+		// A cópia está em outro nó: os bytes saem da raiz desta instalação e a colocação aponta para um
+		// nó que não é este. É o que sobra quando o objeto foi replicado e a réplica 0 foi podada.
+		jdbc.update("""
+			update network_storage_placements set node_id = 'nd_outro_no'
+			where object_id in (select id from network_storage_objects where bucket = ? and object_key = ?)
+			""", bucket, "remota/so.txt");
+		Path raiz = Path.of(System.getProperty("java.io.tmpdir"), "enois-storage");
+		for (String id : jdbc.queryForList("select id from network_storage_objects where bucket = ? and object_key = ?",
+				String.class, bucket, "remota/so.txt")) {
+			Files.deleteIfExists(raiz.resolve(id));
+		}
+
+		MockHttpServletRequestBuilder leitura = get("/s3/" + bucket + "/remota/so.txt");
+		assinar(leitura, SECRET, shaVazio());
+		var resultado = mockMvc.perform(leitura).andReturn();
+		if (resultado.getRequest().isAsyncStarted()) {
+			resultado = mockMvc.perform(asyncDispatch(resultado)).andReturn();
+		}
+		var resposta = resultado.getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(503);
+		assertThat(resposta.getHeader(HttpHeaders.RETRY_AFTER)).as("sem Retry-After o SDK nao sabe quando tentar")
+			.isNotNull();
+		assertThat(resposta.getContentAsString()).as("o corpo e o XML do S3").contains("<Code>SlowDown</Code>");
+
+		MockHttpServletRequestBuilder cabecalho = head("/s3/" + bucket + "/remota/so.txt");
+		assinar(cabecalho, SECRET, shaVazio());
+		assertThat(mockMvc.perform(cabecalho).andReturn().getResponse().getStatus()).isEqualTo(503);
 	}
 
 	/**
