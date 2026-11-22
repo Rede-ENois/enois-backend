@@ -801,18 +801,33 @@ e `?object-lock`.
 | pedido | resposta |
 |---|---|
 | `PUT ?tagging`, `?acl`, `?retention`, `?legal-hold`, `?object-lock` | **`501 NotImplemented`** (XML do S3, com o subrecurso), **nada gravado** |
-| `GET ?tagging`, `DELETE ?tagging` | já respondiam `501` pelo `DeleteObject`/`GetObject` não conhecerem o subrecurso |
+| `GET ?acl`, `?tagging`, `?retention`, `?legal-hold`, `?object-lock` | **`501 NotImplemented`**, nenhum byte servido |
+| `DELETE ?tagging` (e os demais da lista) | já respondia `501`: o `DeleteObject` apaga o objeto, não a etiqueta |
 
 A recusa vem **antes** do catálogo: nem linha `PENDING`, nem corpo medido. A lista vizinha (ecoada em
 `200` sem gravar — `?versioning`, `?encryption`, `?logging`…) continua como era: o que distingue os dois
 grupos é o que acontece sem guarda. Ali um corpo vazio é confundido com objeto; aqui o objeto é
 sobrescrito.
 
-**Verificação:** `S3GatewayTests` **+2** — `PUT ?tagging` responde `501 NotImplemented` e o `HEAD`
-seguinte devolve o **mesmo ETag** (o objeto não foi reescrito com o XML); e `PUT ?tagging` **com**
-`x-amz-copy-source` também é `501`, com o destino inexistente. Mutações: tirar a guarda do `PUT`
-(as duas derrubam) e pôr a guarda **depois** do desvio para o `CopyObject` — o segundo teste derruba,
-porque a cópia responderia `200`.
+**O `GET` tinha a mesma porta.** `GET ?acl` é a leitura da ACL do objeto, mas a rota servia o
+**arquivo** em `200`: o cliente lia "a ACL é o conteúdo do arquivo". O `GET` passou a usar a mesma
+lista do `PUT`, antes da leitura do objeto.
+
+**A lista é ordenada.** A mensagem cita **um** subrecurso; com dois na mesma requisição
+(`?tagging&acl`), a ordem de um `Set.of` não é contrato — a mesma requisição responderia uma coisa ou
+outra. Agora é `List` fixa e o primeiro da ordem responde.
+
+**O corpo do pedido é drenado.** A recusa acontece antes de o corpo ser lido, e o corpo do `?tagging`
+é o XML da etiqueta. Responder `501` com o corpo pendente, em conexão persistente, faz o servidor
+fechar a conexão no meio de um pedido (RFC 9110 §15.6.2); `drenarCorpo` lê e descarta o corpo antes da
+resposta. Um cliente que já cortou o envio ao receber a recusa não muda a resposta.
+
+**Verificação:** `S3GatewayTests` **+5** — (1) `PUT ?tagging` é `501` e o `HEAD` seguinte devolve o
+**mesmo ETag**; (2) `PUT ?tagging` **com** `x-amz-copy-source` também é `501`, com o destino
+inexistente; (3) `?tagging&acl` responde citando `tagging` (ordem determinística); (4) `GET ?acl`
+é `501` e o objeto fica com o mesmo ETag; (5) `drenarCorpo` lê o corpo inteiro (fluxo que conta as
+leituras). Mutações: tirar a guarda do `PUT` (1 e 2 derrubam), pôr a guarda **depois** do desvio para
+o `CopyObject` (2 derruba) e tirar a guarda do `GET` (4 derruba: responde `200`).
 
 A guarda roda **antes** do desvio para o `CopyObject` (§4.19): um `PUT ?tagging` com
 `x-amz-copy-source` não copia — o subrecurso continua `501`, e nada é gravado no destino. A guarda de

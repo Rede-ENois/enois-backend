@@ -1,6 +1,8 @@
 package com.socialcoisa.rede.network.adapters.in.web;
 
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
@@ -106,7 +108,12 @@ class S3GatewayController {
 	 * etiqueta, a ACL, o bloqueio de objeto e a retenção. Estão juntos porque a consequência de não
 	 * recusá-los é a mesma — o XML da operação viraria o conteúdo do objeto.
 	 */
-	private static final Set<String> SUBRECURSOS_QUE_GRAVARIAM = Set.of("tagging", "acl", "retention",
+	/**
+	 * Subrecursos do PUT que gravaria o XML deles no corpo do objeto. Lista e não {@code Set}: a
+	 * mensagem cita <b>um</b> subrecurso, e com dois na mesma requisição ({@code ?tagging&acl}) a ordem
+	 * de um {@code Set.of} não é contrato — a mesma requisição responderia uma coisa ou outra.
+	 */
+	private static final List<String> SUBRECURSOS_QUE_GRAVARIAM = List.of("tagging", "acl", "retention",
 		"legal-hold", "object-lock");
 
 	/** O formato de instante da S3: sempre três casas decimais e sempre {@code Z}. */
@@ -319,13 +326,27 @@ class S3GatewayController {
 	 * grupos é justamente o que acontece sem a guarda — ali, um corpo vazio confundido com objeto;
 	 * aqui, o objeto sobrescrito.</p>
 	 */
-	private static void recusarSubrecurso(HttpServletRequest request, String chaveDoObjeto) {
+	private static void recusarSubrecurso(HttpServletRequest request, String chaveDoObjeto) throws IOException {
 		Set<String> pedidos = query(request).keySet();
 		for (String naoImplementado : SUBRECURSOS_QUE_GRAVARIAM) {
 			if (pedidos.contains(naoImplementado)) {
+				// A recusa acontece antes de o corpo ser lido, e o corpo do `?tagging` é o XML da
+				// etiqueta. Em conexão persistente, responder 501 com o corpo pendente faz o servidor
+				// fechar a conexão no meio de um pedido; drenar (e descartar) deixa a próxima
+				// requisição da mesma conexão chegar inteira. RFC 9110 §15.6.2.
+				drenarCorpo(request);
 				throw s3Error(501, "NotImplemented", "O subrecurso '" + naoImplementado + "' nao e suportado; "
 					+ chaveDoObjeto + " nao foi alterado.");
 			}
+		}
+	}
+
+	/** Lê e descarta o corpo já enviado, sem guardar. Sem corpo, não há nada a drenar. */
+	static void drenarCorpo(HttpServletRequest request) throws IOException {
+		try (InputStream corpo = request.getInputStream()) {
+			corpo.transferTo(OutputStream.nullOutputStream());
+		} catch (IOException recusado) {
+			// O cliente pode já ter cortado o envio ao receber a recusa; a resposta é a mesma.
 		}
 	}
 
@@ -348,7 +369,7 @@ class S3GatewayController {
 	 * esta gravação criou e devolve o objeto que ela substituiu ao estado em que estava.</p>
 	 */
 	@RequestMapping(value = "/{bucket}/{*key}", method = RequestMethod.PUT)
-	ResponseEntity<?> putObject(@PathVariable String bucket, HttpServletRequest request) {
+	ResponseEntity<?> putObject(@PathVariable String bucket, HttpServletRequest request) throws IOException {
 		S3Credential credential = authenticate(request, "PUT");
 		requireBucket(credential, bucket);
 		String key = keyOf(request);
@@ -949,10 +970,14 @@ class S3GatewayController {
 	 * privado": ou é do dono, ou não existe para ele.</p>
 	 */
 	@GetMapping("/{bucket}/{*key}")
-	ResponseEntity<StreamingResponseBody> getObject(@PathVariable String bucket, HttpServletRequest request) {
+	ResponseEntity<StreamingResponseBody> getObject(@PathVariable String bucket, HttpServletRequest request)
+		throws IOException {
 		S3Credential credential = authenticate(request, "GET");
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
+		// `GET ?acl` é a leitura da ACL do objeto, não do objeto: sem esta recusa, a rota servia o
+		// arquivo em 200, e o cliente lia "a ACL é o conteúdo do arquivo". Mesma lista do PUT.
+		recusarSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request)));
 		return comVocabularioDoS3(() -> content.respond(object, request.getHeader(HttpHeaders.RANGE),
 			request.getHeader(HttpHeaders.IF_NONE_MATCH), request.getHeader(HttpHeaders.IF_MODIFIED_SINCE)));

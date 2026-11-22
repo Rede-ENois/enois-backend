@@ -18,6 +18,10 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import jakarta.servlet.ServletInputStream;
+import jakarta.servlet.http.HttpServletRequest;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,6 +30,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.HttpHeaders;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
@@ -624,6 +629,110 @@ class S3GatewayTests {
 		assertThat(cabecalhosDe("subrecurso/alvo.txt").getHeader(HttpHeaders.ETAG))
 			.as("o objeto nao pode ter sido reescrito com o XML da etiqueta").isEqualTo("\"" + shaOriginal + "\"");
 		assertThat(ler("subrecurso/alvo.txt")).isEqualTo("conteudo que nao pode virar etiqueta");
+	}
+
+	/**
+	 * Dois subrecursos na mesma requisição ({@code ?tagging&acl}): a mensagem é determinística.
+	 *
+	 * <p>Com um {@code Set.of}, a ordem de iteração não é contrato — a mesma requisição responderia
+	 * {@code tagging} numa execução e {@code acl} em outra. A lista fixa garante que a primeira da
+	 * ordem responde, e o teste trava a ordem, não só o status.</p>
+	 */
+	@Test
+	void dois_subrecursos_que_gravariam_respondem_o_primeiro_da_ordem() throws Exception {
+		gravar("subrecurso/dois.txt", "intacto");
+
+		MockHttpServletRequestBuilder dois = put("/s3/" + bucket + "/subrecurso/dois.txt")
+			.queryParam("acl").queryParam("tagging").content(new byte[0]);
+		assinar(dois, SECRET, shaVazio());
+
+		var resposta = mockMvc.perform(dois).andReturn().getResponse();
+
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(501);
+		assertThat(resposta.getContentAsString()).contains("O subrecurso 'tagging' nao e suportado");
+		assertThat(ler("subrecurso/dois.txt")).isEqualTo("intacto");
+	}
+
+	/**
+	 * O corpo do {@code PUT ?tagging} é <b>consumido</b> antes do {@code 501}.
+	 *
+	 * <p>Em conexão persistente, responder não-2xx deixando o corpo do pedido pendente faz o servidor
+	 * fechar a conexão no meio de um pedido (RFC 9110 §15.6.2). O {@code MockMvc} não simula a borda
+	 * HTTP, então o discriminante é aqui e não no pedido inteiro: o fluxo de entrada do pedido é
+	 * substituído por um que conta os bytes lidos, e o corpo tem que sair inteiro dele.</p>
+	 */
+	@Test
+	void subrecurso_que_gravaria_consome_o_corpo_antes_do_501() throws Exception {
+		byte[] corpo = "<Tagging><TagSet/></Tagging>".getBytes(StandardCharsets.UTF_8);
+		AtomicInteger lidos = new AtomicInteger();
+		MockHttpServletRequest pedido = new MockHttpServletRequest("PUT", "/s3/" + bucket + "/subrecurso/drenar.txt") {
+			@Override
+			public String getQueryString() {
+				return "tagging";
+			}
+
+			@Override
+			public ServletInputStream getInputStream() {
+				ServletInputStream original = super.getInputStream();
+				return new ServletInputStream() {
+					@Override
+					public int read() throws java.io.IOException {
+						int b = original.read();
+						if (b >= 0) {
+							lidos.incrementAndGet();
+						}
+						return b;
+					}
+
+					@Override
+					public int read(byte[] destino, int inicio, int quantidade) throws java.io.IOException {
+						int n = original.read(destino, inicio, quantidade);
+						if (n > 0) {
+							lidos.addAndGet(n);
+						}
+						return n;
+					}
+
+					@Override
+					public boolean isFinished() {
+						return original.isFinished();
+					}
+
+					@Override
+					public boolean isReady() {
+						return original.isReady();
+					}
+
+					@Override
+					public void setReadListener(jakarta.servlet.ReadListener ouvinte) {
+						original.setReadListener(ouvinte);
+					}
+				};
+			}
+		};
+		pedido.setContent(corpo);
+
+		S3GatewayController.drenarCorpo(pedido);
+
+		assertThat(lidos.get()).as("o corpo inteiro tem que sair do fluxo de entrada").isEqualTo(corpo.length);
+	}
+
+	/** {@code GET ?acl} também é {@code 501}, e o objeto não muda. */
+	@Test
+	void get_de_acl_responde_501_sem_alterar_o_objeto() throws Exception {
+		gravar("subrecurso/acl-get.txt", "com acl intacta");
+		String shaOriginal = shaDe("com acl intacta");
+
+		MockHttpServletRequestBuilder consultar = get("/s3/" + bucket + "/subrecurso/acl-get.txt")
+			.queryParam("acl");
+		assinar(consultar, SECRET, "");
+
+		var resposta = mockMvc.perform(consultar).andReturn().getResponse();
+
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(501);
+		assertThat(resposta.getContentAsString()).contains("<Code>NotImplemented</Code>");
+		assertThat(cabecalhosDe("subrecurso/acl-get.txt").getHeader(HttpHeaders.ETAG))
+			.isEqualTo("\"" + shaOriginal + "\"");
 	}
 
 	/**
