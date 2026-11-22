@@ -41,9 +41,13 @@ import com.socialcoisa.rede.shared.blocks.BlockedUsersReader;
 @Component
 public class PapoRetoService {
 
-	/** O assunto pronto para a tela: subject, status de trajetória, pontuação e números. */
+	/**
+	 * O assunto pronto para a tela: subject, status de trajetória, pontuação e números. O
+	 * crescimento é nulo quando o assunto não tem véspera comparável (novo em alta) — a tela
+	 * diz "novo", não inventa percentual.
+	 */
 	public record SubjectView(String subject, String status, double pontuacao, long falasPost,
-			long falasComentario, long pessoas, long falasUltimaHora, double crescimento) {
+			long falasComentario, long pessoas, long falasUltimaHora, Double crescimento) {
 	}
 
 	/** O ponto da timeline: bucket de hora e quantas falas o assunto teve ali. */
@@ -148,7 +152,7 @@ public class PapoRetoService {
 			ranking.add(new SubjectView(classificado.assunto().subject(), status.name(), classificado.pontuacao(),
 					classificado.assunto().falasPost(), classificado.assunto().falasComentario(),
 					classificado.assunto().pessoas(), classificado.assunto().falasUltimaHora(),
-					crescimento(classificado.potencia(), classificado.potenciaAntes())));
+					crescimento(classificado.assunto().falasDia(), classificado.assunto().falasDiaAnterior())));
 		}
 		ranking.sort((a, b) -> Double.compare(b.pontuacao(), a.pontuacao()) != 0
 				? Double.compare(b.pontuacao(), a.pontuacao()) : a.subject().compareToIgnoreCase(b.subject()));
@@ -239,12 +243,16 @@ public class PapoRetoService {
 		return repository.falasTotais(agora.minus(Duration.ofDays(7)), agora);
 	}
 
-	/** O crescimento relativo: quanto a potência subiu desde a véspera (0 quando não subiu). */
-	private double crescimento(double agora, double antes) {
-		if (antes <= 0) {
-			return agora > 0 ? 100.0 : 0.0;
+	/**
+	 * O crescimento exibido é proporção de VOLUME real: as falas das últimas 24 horas contra as
+	 * da véspera (as duas com teto por autor, medidas no corte). Sem véspera comparável, é
+	 * nulo — o assunto é novo em alta, e não "+100%" inventado. Queda exibe estável (0).
+	 */
+	private Double crescimento(long dia, long diaAnterior) {
+		if (diaAnterior > 0) {
+			return Math.max(0.0, ((dia - diaAnterior) / (double) diaAnterior) * 100.0);
 		}
-		return Math.max(0, ((agora - antes) / antes) * 100.0);
+		return dia > 0 ? null : 0.0;
 	}
 
 	/**

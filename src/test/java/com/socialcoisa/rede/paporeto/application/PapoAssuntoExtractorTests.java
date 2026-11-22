@@ -183,4 +183,51 @@ class PapoAssuntoExtractorTests {
 		assertThat(extractor.assuntoValido("de")).isFalse();
 	}
 
+	@Test
+	void verboNoGerundioIsoladoNaoViraAssunto() {
+		// Foi o bug do "fazendo" em alta: a terminação é o que decide (regra da língua), e não
+		// uma lista de conjugações — cobre "ando", "endo" e "indo" de qualquer verbo.
+		assertThat(extractor.assuntoValido("fazendo")).isFalse();
+		assertThat(extractor.assuntoValido("dando")).isFalse();
+		assertThat(extractor.assuntoValido("trabalhando")).isFalse();
+		assertThat(extractor.extrair("o que voce esta fazendo", "POST")).isEmpty();
+		assertThat(extractor.extrair("dando voltas sem parar", "POST"))
+			.extracting(PapoAssuntoExtractor.Fala::expressao)
+			.containsExactly("voltas", "parar");
+		// O substantivo ao lado do verbo continua nomeando a conversa: só o gerúndio sai.
+		assertThat(extractor.extrair("todo mundo dando palpite", "POST"))
+			.extracting(PapoAssuntoExtractor.Fala::expressao)
+			.containsExactly("palpite");
+	}
+
+	@Test
+	void gerundioNaoColaBigramaNemSobraNaLeitura() {
+		// O verbo no gerúndio sai e o que sobra segue elegível: a conversa real não morre com ele.
+		List<PapoAssuntoExtractor.Fala> falas = extractor.extrair("estou crescendo a horta coletiva", "POST");
+
+		assertThat(falas).extracting(PapoAssuntoExtractor.Fala::expressao).contains("horta", "coletiva");
+	}
+
+	@Test
+	void siglaEPalavraCurtaLegitimaContinuamElegiveis() {
+		// O conserto do ruído não pode matar a sigla legítima: "java", "sql" e "dev" são nomes
+		// reais de conversa, mesmo curtos.
+		List<PapoAssuntoExtractor.Fala> falas = extractor.extrair("java sql dev na comunidade", "POST");
+
+		// As siglas viram fala (e o cluster cola o par vizinho); nada sumiu pela régua.
+		assertThat(falas).extracting(PapoAssuntoExtractor.Fala::expressao).contains("java", "sql", "dev");
+		assertThat(extractor.assuntos(falas)).contains("java sql");
+	}
+
+	@Test
+	void palavraGenericaDeProducaoNaoViraAssunto() {
+		// O que a produção colocou em alta e não nomeia conversa: "cara", "dar", "pessoa".
+		List<PapoAssuntoExtractor.Fala> falas = extractor.extrair("cara, dar valor a cada pessoa", "POST");
+
+		assertThat(extractor.assuntos(falas)).doesNotContain("cara", "dar", "pessoa");
+		assertThat(extractor.assuntoValido("cara")).isFalse();
+		assertThat(extractor.assuntoValido("dar")).isFalse();
+		assertThat(extractor.assuntoValido("pessoas")).isFalse();
+	}
+
 }

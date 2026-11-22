@@ -26,7 +26,9 @@ import org.springframework.stereotype.Component;
  *   de verbo de ligação, "muito", "tô") e tokens pequenos (menos de 3 letras) não viram assunto
  *   — é o "que", "de", "pra" saindo; riso ("kkkk", "hahaha"), número puro ("2026") e letra
  *   repetida ("assssss") também não; a lista fecha as falas da rede que não nomeiam conversa
- *   nenhuma ("gente", "tipo", "coisa", "sei", "tenho") — foi o bug do "gente" em alta;
+	 *   nenhuma ("gente", "tipo", "coisa", "sei", "tenho") — foi o bug do "gente" em alta; e
+	 *   verbo no gerúndio ("fazendo", "dando", "trabalhando") é ação em curso, não assunto —
+	 *   a terminação fixa da língua decide, sem lista de conjugações;
  * - o extrator usa UNIGRAMAS e EXPRESSÕES de palavras elegíveis VIZINHAS no texto: o par é de
  *   palavras vizinhas ("inteligencia artificial") ou de palavras separadas por UM conector de
  *   expressão composta ("mercado de trabalho", "curso de ingles") — pontuação, palavra vazia
@@ -117,6 +119,14 @@ public class PapoAssuntoExtractor {
 	private static final Pattern RUISO = Pattern.compile(
 			"(?u)^(?:k{2,}|(?:ha){2,}h?|(?:rs){2,}|(?:hu){2,}h?|(?:kkj)+k?|(.)\\1{2,})$");
 
+	/**
+	 * Verbo no gerúndio: a terminação é fixa na língua ("fazendo", "dando", "trabalhando",
+	 * "crescendo"), então a regra é estrutural e cobre a conjugação inteira sem lista — foi o
+	 * bug do "fazendo" em alta. A palavra pode colar num assunto real ("crescendo a rede" perde
+	 * o verbo e fica com "rede"); verbo solto não nomeia conversa nenhuma.
+	 */
+	private static final Pattern GERUNDIO = Pattern.compile("(?u)^(?:.+)?(?:ando|endo|indo)$");
+
 	/** A fala extraída: a expressão dobrada e a fonte de onde ela veio (POST ou COMMENT). */
 	public record Fala(String expressao, String fonte) {
 	}
@@ -162,8 +172,11 @@ public class PapoAssuntoExtractor {
 				// Foi a lista que faltava no bug do "gente", do "mundo" e do "enois" em alta.
 				"gente", "galera", "pessoal", "mundo", "enois", "nois", "tipo", "coisa", "coisas", "negocio",
 				"negocios", "bagulho", "bora", "sla", "pdc", "pdp", "vlw", "flw", "obg", "blz", "eita", "vish",
-				"poxa", "caramba", "putz", "puts", "opa", "rsrs", "risos", "hahaha", "realmente", "basicamente",
-				"literalmente", "sinceramente", "certamente", "praticamente",
+					"poxa", "caramba", "putz", "puts", "opa", "rsrs", "risos", "hahaha", "realmente", "basicamente",
+					"literalmente", "sinceramente", "certamente", "praticamente",
+					// Palavra genérica demais para nomear assunto (foi o bug do "cara" e do "dar"
+					// em alta na produção).
+					"cara", "dar", "pessoa", "pessoas", "vez", "vezes",
 				// Sobra de endereço quando o link já saiu: nada disso nomeia conversa.
 				"http", "https", "www", "ftp", "html", "htm", "php", "jsp", "utm", "href", "src", "cdn", "amp",
 				"nbsp", "link", "links"));
@@ -350,6 +363,9 @@ public class PapoAssuntoExtractor {
 			return false;
 		}
 		if (PALAVRAS_VAZIAS.contains(palavra)) {
+			return false;
+		}
+		if (GERUNDIO.matcher(palavra).matches()) {
 			return false;
 		}
 		if (palavra.chars().allMatch(Character::isDigit)) {

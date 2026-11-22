@@ -483,4 +483,50 @@ class PapoRetoWorkerTests {
 		assertThat(PapoStatus.de(100.0, 120.0)).isEqualTo(PapoStatus.PERSISTENTE);
 	}
 
+	@Test
+	void janelasDoCrescimentoContamVolumeRealDasDuasVesperas() {
+		// Quatro falas de quatro pessoas há meia hora e duas de duas pessoas há 25 horas: as
+		// janelas do crescimento medem cada véspera pela faixa que é dela — (agora−24h, agora]
+		// pega as quatro, e (agora−48h, agora−24h] pega as duas.
+		List<PapoPublicacaoReader.Publicacao> publicacoes = new ArrayList<>();
+		for (int i = 1; i <= 4; i++) {
+			// A fala no instante do corte: o bucket da hora cai em T0, dentro até da janela da
+			// última hora (o limite de trás é exclusivo).
+			publicacoes.add(new PapoPublicacaoReader.Publicacao("meetup com a galera", "autor_" + i, T0, null,
+					"pub_" + i));
+		}
+		for (int i = 1; i <= 2; i++) {
+			publicacoes.add(new PapoPublicacaoReader.Publicacao("meetup com a galera", "autor_velho_" + i,
+					T0.minus(Duration.ofHours(25)), null, "pub_velha_" + i));
+		}
+		fonte.publicacoes = publicacoes;
+
+		// O primeiro corte lê tudo; é o segundo (uma hora depois) que mede as duas vésperas com
+		// as falas já gravadas.
+		workerNo(T0.minus(Duration.ofHours(3))).corte();
+		workerNo(T0.plusSeconds(1)).corte();
+
+		PapoAssunto meetup = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "meetup").orElseThrow();
+		assertThat(meetup.falasDia()).isEqualTo(4);
+		assertThat(meetup.falasDiaAnterior()).isEqualTo(2);
+		assertThat(meetup.falasUltimaHora()).isEqualTo(4);
+	}
+
+	@Test
+	void repeticaoNumaJanelaDoCrescimentoPassaPeloTetoPorAutor() {
+		// A mesma régua da potência vale para o crescimento: quem repete quatro vezes em 24 horas
+		// soma o teto (3), e não as quatro — a repetição não infla o percentual da tela.
+		List<PapoPublicacaoReader.Publicacao> publicacoes = new ArrayList<>();
+		for (int i = 1; i <= 4; i++) {
+			publicacoes.add(new PapoPublicacaoReader.Publicacao("meetup com a galera", "repetidor",
+					T0.minus(Duration.ofMinutes(30 * i)), null, "pub_" + i));
+		}
+		fonte.publicacoes = publicacoes;
+
+		workerNo(T0.plusSeconds(1)).corte();
+
+		assertThat(repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "meetup").orElseThrow().falasDia())
+			.isEqualTo(PapoAssunto.TETO_FALAS_POR_AUTOR);
+	}
+
 }

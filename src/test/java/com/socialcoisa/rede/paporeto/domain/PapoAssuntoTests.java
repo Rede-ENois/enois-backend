@@ -89,7 +89,27 @@ class PapoAssuntoTests {
 		assertThat(lido.janelaPublicacoes()).isEqualTo(400);
 		assertThat(lido.potencia()).isCloseTo(20.0, within(0.000001));
 		assertThat(lido.potenciaAntes()).isCloseTo(10.0, within(0.000001));
+		// A sobrecarga sem janelas é do teste e da linha legada: sem véspera comparável.
+		assertThat(lido.falasDia()).isZero();
+		assertThat(lido.falasDiaAnterior()).isZero();
 		assertThat(lido.legado()).isFalse();
+	}
+
+	@Test
+	void janelasDoCrescimentoSobrevivemAoJson() {
+		PapoAssunto original = new PapoAssunto("meetup", 14, 0, 9, 4, AGORA, 9, 400, 30.0, 12.0, 14, 6);
+
+		PapoAssunto lido = PapoAssunto.de("meetup", original.estadoComoJson());
+
+		assertThat(lido.falasDia()).isEqualTo(14);
+		assertThat(lido.falasDiaAnterior()).isEqualTo(6);
+		assertThat(lido.legado()).isFalse();
+		// A linha gravada antes da janela existir (e sem potência) lê zero: é nova em alta até o
+		// primeiro corte medir as duas vésperas dela.
+		PapoAssunto antiga = PapoAssunto.de("meetup", "{\"falasPost\":10,\"falasComentario\":0,\"pessoas\":9,"
+				+ "\"falasUltimaHora\":0,\"ultimaFalaEpoch\":" + AGORA.getEpochSecond() + "}");
+		assertThat(antiga.falasDia()).isZero();
+		assertThat(antiga.falasDiaAnterior()).isZero();
 	}
 
 	@Test
