@@ -54,7 +54,7 @@ contra o vetor externo é o que separa "implementei" de "assinei comigo mesmo e 
 | operação | rota | estado |
 |---|---|---|
 | PutObject | `PUT /s3/{bucket}/{key}` | ✅ mesmo caminho do catálogo; ETag = digest |
-| CopyObject | `PUT /s3/{bucket}/{key}` + `x-amz-copy-source` | ✅ cópia no servidor, sem o cliente enviar o corpo (§4.18) |
+| CopyObject | `PUT /s3/{bucket}/{key}` + `x-amz-copy-source` | ✅ cópia no servidor, sem o cliente enviar o corpo (§4.19) |
 | GetObject | `GET /s3/{bucket}/{key}` | ✅ `Range`/206/416, `304` por `If-None-Match` ou `If-Modified-Since` |
 | HeadObject | `HEAD /s3/{bucket}/{key}` | ✅ `304` por `If-None-Match` / `If-Modified-Since` |
 | DeleteObject | `DELETE /s3/{bucket}/{key}` | ✅ **lápide** (como o S3 com versionamento), 204 |
@@ -531,7 +531,7 @@ Uma parte que não copiou nada é pior que a operação não existir.
 
 Agora o cabeçalho é reconhecido **antes** de `receivePart`, e a resposta é `501 NotImplemented` no XML
 do S3. Nada é escrito: nem parte, nem linha. O `CopyObject` — o mesmo cabeçalho no `PUT` simples — é
-implementado desde o ciclo 108 (§4.18); a guarda daqui vale só para o caminho da parte.
+implementado desde o ciclo 108 (§4.19); a guarda daqui vale só para o caminho da parte.
 
 **Verificação:** `S3MultipartTests` **+1** — a parte com `x-amz-copy-source` recebe `501` e
 `network_storage_multipart_parts` continua vazia. Mutação: tirar a guarda do `UploadPart` — derruba.
@@ -703,7 +703,7 @@ e `GET` devolve `200` sem bytes. Mutações: o gateway voltar a recusar 0 byte (
 novo) e a regra do vazio ser liberada também para o nó (derrubada por `StorageObjectCeilingTests`) —
 **2 de 2 derrubam**.
 
-## 4.18 CopyObject copia no servidor (ciclo 108)
+## 4.19 CopyObject copia no servidor (ciclo 108)
 
 `aws s3 cp --recursive`, o `rclone copy` e o `aws s3 sync` copiam **no servidor**: o cliente manda só
 o nome da origem e o do destino, e os bytes não passam pela rede até ele. Até o ciclo 107 o gateway
