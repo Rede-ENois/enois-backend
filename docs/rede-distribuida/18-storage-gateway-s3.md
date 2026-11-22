@@ -872,6 +872,29 @@ os cabeçalhos terem saído. Duas consequências:
   com os 12 bytes e sem `Content-Range`. **Verdadeiro antes da mudança** (o MockMvc não aplica o
   `Range`); fica como guarda do contrato declarado, não como prova da correção.
 
+## 4.26 `ListParts` pagina como o S3 (ciclo 114)
+
+A rota devolvia **todas** as partes, ignorava `max-parts` e `part-number-marker` e não mandava
+`IsTruncated` nem `NextPartNumberMarker`. O SDK pagina o `ListParts` para descobrir o que já chegou num
+upload interrompido; sem `IsTruncated` ele o tratava como `false` e parava na primeira página — os
+números que ele não viu passam a não existir para ele, e o cliente reenvia tudo ou conclui uma lista
+incompleta.
+
+### Agora
+
+- `max-parts` (padrão e teto **1000**) e `part-number-marker` (**exclusivo**, como no S3) recortam a
+  página; a consulta pede `max-parts + 1` linha, e a extra decide o `IsTruncated`.
+- A resposta traz `PartNumberMarker` (o pedido), `MaxParts`, `IsTruncated` e, quando truncada,
+  `NextPartNumberMarker` (o número da última parte da página).
+- A página conta como `LIST` no painel: saía pelo `parts` instrumentado, e o caminho novo não pode
+  desaparecer da métrica.
+
+**Verificação:** `S3MultipartTests` **+1** (`listar_partes_pagina_com_marcador_e_diz_se_ha_mais`: três
+partes; `max-parts=2` → `IsTruncated=true`, `NextPartNumberMarker=2`, sem a parte 3; a segunda página
+com o marcador → `IsTruncated=false` e só a parte 3; `max-parts=3` → página cheia, `IsTruncated=false`
+e **sem** `NextPartNumberMarker`). Mutações: marcador com `>=` (repete a parte); sem
+`NextPartNumberMarker` — **2 de 2 derrubam**.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
