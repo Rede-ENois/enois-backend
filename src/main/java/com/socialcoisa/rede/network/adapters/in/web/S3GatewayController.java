@@ -176,7 +176,13 @@ class S3GatewayController {
 		boolean v2 = "2".equals(query.get("list-type"));
 		int maxKeys = parseMaxKeys(query.get("max-keys"));
 		// `continuation-token` (v2) e `marker` (v1) são a mesma coisa: a chave da última página.
-		String after = v2 ? query.get("continuation-token") : query.get("marker");
+		// `start-after` (só no V2) é a chave de partida de quem começa a varredura no meio; era
+		// ignorado, e o cliente que retomava a partir de uma chave relistava tudo o que já tinha.
+		// Quando há `continuation-token`, ele manda: o token já diz onde continuar, e o S3 ignora o
+		// `start-after` nesse caso.
+		String after = v2
+			? (query.get("continuation-token") != null ? query.get("continuation-token") : query.get("start-after"))
+			: query.get("marker");
 		String prefix = query.get("prefix");
 		String delimiter = query.get("delimiter");
 		// `delimiter` vazio é "sem agrupamento" na prática; o parâmetro do S3 é de um caractere.

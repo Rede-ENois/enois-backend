@@ -872,6 +872,30 @@ os cabeçalhos terem saído. Duas consequências:
   com os 12 bytes e sem `Content-Range`. **Verdadeiro antes da mudança** (o MockMvc não aplica o
   `Range`); fica como guarda do contrato declarado, não como prova da correção.
 
+## 4.27 `list-type=2` com `start-after` (ciclo 115)
+
+O gateway só conhecia `marker` (V1) e `continuation-token` (V2). O `start-after` — a forma do
+**ListObjectsV2** de começar a listagem depois de uma chave — era ignorado: `aws s3api
+list-objects-v2 --start-after b` e `listObjectsV2(... .startAfter("b"))` recebiam a listagem **desde o
+começo**, com `200`. Quem retoma uma varredura a partir da última chave processada relista o bucket
+inteiro, sem sinal de que o parâmetro foi descartado.
+
+### Agora
+
+| pedido (V2) | chave de partida |
+|---|---|
+| `continuation-token` e `start-after` | o **token** (o token já diz onde continuar; o S3 ignora o `start-after`) |
+| só `start-after` | a chave pedida, **exclusiva** |
+| nenhum dos dois | começo do prefixo |
+| V1 (`marker`) | como antes; `start-after` não é parâmetro do V1 |
+
+**Verificação:** `S3GatewayTests` **+1** (`list_v2_start_after_comeca_depois_da_chave`: três chaves,
+`start-after=inicio/b.txt` → só `c.txt`, `KeyCount=1`; com `continuation-token=inicio/a.txt` **e**
+`start-after=inicio/c.txt` → `b.txt` e `c.txt`, porque **os dois valores são diferentes** — com o mesmo
+valor o teste não distinguiria quem venceu). Mutações: ignorar o `start-after`; inverter a precedência
+para o `start-after` — **2 de 2 derrubam** (a segunda só depois de corrigir o teste, que passava verde
+com os dois parâmetros iguais).
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:

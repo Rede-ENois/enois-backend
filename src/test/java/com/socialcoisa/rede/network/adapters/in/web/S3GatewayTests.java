@@ -1330,6 +1330,50 @@ class S3GatewayTests {
 		assertThat(depoisDaLapide.getResponse().getStatus()).isIn(403, 404);
 	}
 
+	/**
+	 * `start-after` do ListObjectsV2 começa a listagem **depois** daquela chave.
+	 *
+	 * <p><b>Antes:</b> o parâmetro era ignorado. `aws s3api list-objects-v2 --start-after b` e o
+	 * `listObjectsV2(... .startAfter("b"))` do SDK recebiam a listagem <b>desde o começo</b>, com
+	 * `200` — o cliente que retoma uma varredura a partir de uma chave reescreve tudo o que já
+	 * processou, e num bucket grande isso é a listagem inteira de novo. O `marker` (v1) e o
+	 * `continuation-token` (v2) funcionam; o `start-after` — a forma que o V2 usa para começar no
+	 * meio — não existia.</p>
+	 *
+	 * <p><b>Agora:</b> `start-after` é a chave de partida do V2, e tem precedência sobre o
+	 * `continuation-token` (o S3 o ignora quando há token: o token já diz onde continuar). Só vale
+	 * no `list-type=2`; no V1 o parâmetro não é dele.</p>
+	 */
+	@Test
+	void list_v2_start_after_comeca_depois_da_chave() throws Exception {
+		gravar("inicio/a.txt", "a");
+		gravar("inicio/b.txt", "b");
+		gravar("inicio/c.txt", "c");
+
+		MockHttpServletRequestBuilder lista = get("/s3/" + bucket).queryParam("list-type", "2")
+			.queryParam("prefix", "inicio/").queryParam("start-after", "inicio/b.txt");
+		assinar(lista, SECRET, shaVazio());
+		var resposta = mockMvc.perform(lista).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(200);
+		String corpo = resposta.getContentAsString();
+		assertThat(corpo).as("a chave de partida nao pode vir na listagem").doesNotContain("<Key>inicio/a.txt</Key>")
+			.doesNotContain("<Key>inicio/b.txt</Key>");
+		assertThat(corpo).contains("<Key>inicio/c.txt</Key>");
+		assertThat(corpo).contains("<KeyCount>1</KeyCount>");
+
+		// Com `continuation-token`, o token manda — e os dois valores são DIFERENTES, senão o teste
+		// não distingue "token venceu" de "start-after venceu": seria a mesma chave de partida.
+		MockHttpServletRequestBuilder comToken = get("/s3/" + bucket).queryParam("list-type", "2")
+			.queryParam("prefix", "inicio/").queryParam("start-after", "inicio/c.txt")
+			.queryParam("continuation-token", "inicio/a.txt");
+		assinar(comToken, SECRET, shaVazio());
+		var comTokenResposta = mockMvc.perform(comToken).andReturn().getResponse();
+		assertThat(comTokenResposta.getStatus()).isEqualTo(200);
+		String comTokenCorpo = comTokenResposta.getContentAsString();
+		assertThat(comTokenCorpo).as("o token tem de vencer o start-after").contains("<Key>inicio/b.txt</Key>")
+			.contains("<Key>inicio/c.txt</Key>").doesNotContain("<Key>inicio/a.txt</Key>");
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {
