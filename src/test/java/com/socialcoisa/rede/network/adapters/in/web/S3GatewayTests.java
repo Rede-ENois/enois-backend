@@ -2189,7 +2189,91 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(dentroResposta.getStatus()).as(dentroResposta.getContentAsString()).isEqualTo(200);
 		assertThat(dentroResposta.getContentAsString()).contains("<Key>versoes/a.txt</Key>")
 			.doesNotContain("versoes/b.txt");
+	}
 
+	/**
+	 * `PutBucketVersioning` / `GetBucketVersioning` (`PUT` e `GET /{bucket}?versioning`).
+	 *
+	 * <p><b>Antes:</b> nenhuma das duas existia. O {@code PUT} caía no {@code PutObject} e respondia
+	 * {@code 400 InvalidRequest "Informe o bucket e a chave"}; o {@code GET} caía no
+	 * {@code ListObjects} e respondia um {@code <ListBucketResult>}. O Storage <b>tem</b> versionamento
+	 * por bucket — a política guarda isso desde o V352 e o {@code restore} depende dele — mas o cliente
+	 * S3 não tinha como ligá-lo: `aws s3api put-bucket-versioning` não convencia ninguém, e
+	 * `get-bucket-versioning` dizia uma coisa falsa.</p>
+	 *
+	 * <p><b>Agora:</b> {@code PUT ?versioning} liga ({@code Status>Enabled}) e desliga
+	 * ({@code Suspended}) o versionamento do bucket do dono, grava na política e responde {@code 200};
+	 * {@code GET ?versioning} devolve {@code <VersioningConfiguration>}. {@code Suspended} não apaga o
+	 * histórico: as versões antigas continuam listáveis (§4.34) e o {@code restore} segue possível —
+	 * "suspenso" é parar de criar versão nova, como no S3.</p>
+	 */
+	@Test
+	void versionamento_do_bucket_liga_le_e_suspende() throws Exception {
+		gravar("versionamento/a.txt", "a");
+
+		// Sem configuração: o S3 responde 200 com <VersioningConfiguration/> vazio.
+		MockHttpServletRequestBuilder antes = get("/s3/" + bucket + "?versioning");
+		assinar(antes, SECRET, shaVazio());
+		var antesResposta = mockMvc.perform(antes).andReturn().getResponse();
+		assertThat(antesResposta.getStatus()).as(antesResposta.getContentAsString()).isEqualTo(200);
+		assertThat(antesResposta.getContentAsString()).startsWith("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+			+ "<VersioningConfiguration");
+		assertThat(antesResposta.getContentAsString()).doesNotContain("<Status>");
+
+		// Liga.
+		String liga = "<VersioningConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"
+			+ "<Status>Enabled</Status></VersioningConfiguration>";
+		MockHttpServletRequestBuilder ligar = put("/s3/" + bucket + "?versioning")
+			.content(liga.getBytes(StandardCharsets.UTF_8));
+		assinar(ligar, SECRET, shaDe(liga));
+		var ligado = mockMvc.perform(ligar).andReturn().getResponse();
+		assertThat(ligado.getStatus()).as(ligado.getContentAsString()).isEqualTo(200);
+		assertThat(jdbc.queryForObject("select versioning from network_storage_buckets where bucket = ?",
+			Boolean.class, bucket)).isTrue();
+		// O `<Status>` que vale é o do `VersioningConfiguration`, não o último `<Status>` do documento:
+		// a regex gulosa casava um `<Status>` de regra de ciclo de vida vindo depois dele.
+		String comOutroStatusDepois = "<VersioningConfiguration><Status>Enabled</Status>"
+			+ "</VersioningConfiguration><Rule><Status>Suspended</Status></Rule>";
+		MockHttpServletRequestBuilder comRegra = put("/s3/" + bucket + "?versioning")
+			.content(comOutroStatusDepois.getBytes(StandardCharsets.UTF_8));
+		assinar(comRegra, SECRET, shaDe(comOutroStatusDepois));
+		assertThat(mockMvc.perform(comRegra).andReturn().getResponse().getStatus()).isEqualTo(200);
+		assertThat(jdbc.queryForObject("select versioning from network_storage_buckets where bucket = ?",
+			Boolean.class, bucket)).as("o <Status> de fora do VersioningConfiguration foi lido").isTrue();
+
+		// Lê: Enabled.
+		MockHttpServletRequestBuilder le = get("/s3/" + bucket + "?versioning");
+		assinar(le, SECRET, shaVazio());
+		assertThat(mockMvc.perform(le).andReturn().getResponse().getContentAsString())
+			.contains("<Status>Enabled</Status>");
+
+		// Valor que não é Enabled nem Suspended é MalformedXML — e não muda a configuração.
+		String invalido = "<VersioningConfiguration><Status>Ligado</Status></VersioningConfiguration>";
+		MockHttpServletRequestBuilder bogus = put("/s3/" + bucket + "?versioning")
+			.content(invalido.getBytes(StandardCharsets.UTF_8));
+		assinar(bogus, SECRET, shaDe(invalido));
+		var recusa = mockMvc.perform(bogus).andReturn().getResponse();
+		assertThat(recusa.getStatus()).as(recusa.getContentAsString()).isEqualTo(400);
+		assertThat(recusa.getContentAsString()).contains("<Code>MalformedXML</Code>");
+		assertThat(jdbc.queryForObject("select versioning from network_storage_buckets where bucket = ?",
+			Boolean.class, bucket)).isTrue();
+
+		// Suspende: para de criar versão, mas o histórico fica.
+		String suspende = "<VersioningConfiguration><Status>Suspended</Status></VersioningConfiguration>";
+		MockHttpServletRequestBuilder suspender = put("/s3/" + bucket + "?versioning")
+			.content(suspende.getBytes(StandardCharsets.UTF_8));
+		assinar(suspender, SECRET, shaDe(suspende));
+		assertThat(mockMvc.perform(suspender).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder depois = get("/s3/" + bucket + "?versioning");
+		assinar(depois, SECRET, shaVazio());
+		assertThat(mockMvc.perform(depois).andReturn().getResponse().getContentAsString())
+			.contains("<Status>Suspended</Status>");
+		// Suspender não apaga o histórico: o versionamento sai, a retenção é zerada (regra do
+		// serviço), e o prazo de expiração que já existia continua.
+		assertThat(jdbc.queryForObject("select versioning from network_storage_buckets where bucket = ?",
+			Boolean.class, bucket)).isFalse();
+		assertThat(jdbc.queryForObject("select retain_superseded_days from network_storage_buckets where bucket = ?",
+			Integer.class, bucket)).isNull();
 
 	}
 
