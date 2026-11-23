@@ -1112,6 +1112,37 @@ Mutações **4/4** derrubam: não conferir donagem; `<Owner>` extra no fim; `?po
 `<DisplayName>` trocado por valor fixo. A 2ª **sobreviveu** à primeira versão da asserção (que só
 procurava `<Owner><ID>`), por isso ela passou a fixar ordem e fecho do documento.
 
+## 4.38 `DELETE` de subrecurso não é `DeleteBucket`, e o criador registrado apaga o próprio bucket (ciclo 129)
+
+O `DELETE /{bucket}` não olhava a consulta:
+
+| antes | agora |
+|---|---|
+| `DELETE /{bucket}?cors` (bucket com objetos) → `409 BucketNotEmpty` | `501 NotImplemented`, nada alterado |
+| `DELETE /{bucket}?cors` (bucket vazio) → `204` e o bucket some | `501 NotImplemented` |
+| `DELETE /{bucket}` de bucket criado por `CreateBucket`, sem objeto → `403 AccessDenied` | `204` |
+| `DELETE /{bucket}` depois de apagar a última chave → `403 AccessDenied` | `204` |
+
+- **Apagar a CORS não apaga o bucket.** Sem a guarda, um bucket vazio respondia `204` a
+  `DELETE /{bucket}?cors` e sumia — num bucket com objeto o `409` mentia sobre o motivo. A lista
+  `SUBRECURSOS_DE_BUCKET_NAO_IMPLEMENTADOS` (`cors`, `tagging`, `policy`, `website`, `notification`,
+  `logging`, `replication`, `encryption`, `accelerate`, `requestPayment`, `publicAccessBlock`,
+  `ownershipControls`, `analytics`, `intelligent-tiering`, `metrics`, `inventory`, `object-lock`) é
+  recusada com `501`, como o `PUT` de subrecurso que gravaria (§4.21).
+- `?versioning` **não** está na lista: é suportado (`PUT` com `Suspended` desliga). `?lifecycle` também
+  não — é a política do varredor.
+- **Donagem do `DeleteBucket`:** `bucketHasObjectsOf` contava só objeto **vivo**. O bucket criado por
+  `CreateBucket` (§4.32) não tem objeto nenhum — o criador recebia `403` ("não é do dono") no próprio
+  bucket; e o dono que apagou a última chave também, porque a lápide não contava. Agora conta uma linha
+  de qualquer estado **ou** a linha de política com `updated_by` igual ao dono.
+
+**Verificação:** `S3GatewayTests` **+1**
+(`delete_de_subrecurso_nao_apaga_o_bucket_e_o_dono_esvaziado_pode_apagar`): as 17 entradas recusadas com
+objeto vivo; o objeto continua lá; o dono apaga a última chave e o bucket (`204`); o criador registrado
+apaga o bucket que nunca teve objeto. Vermelho antes: `409 BucketNotEmpty`. Mutações **3/3** derrubam:
+sem a guarda; sem o `updated_by` na conta; `object-lock` fora da lista (esta **sobreviveu** à primeira
+versão do teste, que só exercia quatro entradas — o teste passou a percorrer a lista inteira).
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:

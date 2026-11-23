@@ -218,8 +218,31 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	 */
 	// Donagem do DeleteBucket: conta vivo e lápide. `bucketsOf` (só vivo) é a resposta certa para ler
 	// e gravar, e errada para apagar — depois da última lápide o dono perderia o próprio bucket.
+	/**
+	 * O dono tem uma <b>linha</b> no bucket — viva ou lápide — ou é o criador registrado na política.
+	 *
+	 * <p><b>Antes:</b> contava só objetos vivos ({@code branch "matéria}}}). O dono registrado por
+	 * {@code CreateBucket} (§4.32) não tem objeto nenhum: o {@code DELETE} do próprio bucket
+	 * respondia {@code 403 AccessDenied} ("não é do dono") e o bucket ficava inapagável. O mesmo
+	 * valia para o dono que apagou a última chave: a lápide existe, mas não era contada.</p>
+	 *
+	 * <p><b>Agora:</b> basta uma linha de qualquer estado, ou a linha de política com
+	 * {@code updated_by} igual ao dono. Quem nunca gravou nada continua de fora.</p>
+	 */
+	/**
+	 * O dono tem <b>linha</b> no bucket: objeto de qualquer estado (vivo ou lapide) ou a linha de
+	 * politica que o {@code CreateBucket} grava com o criador.
+	 *
+	 * <p><b>Antes:</b> contava so objeto vivo. O dono registrado por {@code CreateBucket} (§4.32) nao
+	 * tem objeto nenhum, e o {@code DELETE} do proprio bucket respondia {@code 403 AccessDenied} ("nao
+	 * e do dono"): o bucket ficava inapagavel por quem o criou.</p>
+	 *
+	 * <p><b>Agora:</b> a linha de politica com {@code updated_by} igual ao dono tambem conta. Quem
+	 * nunca gravou nem criou nada num bucket alheio continua de fora.</p>
+	 */
 	private static final String BUCKET_HAS_OBJECTS_OF = """
-		select count(*) from network_storage_objects where bucket = ? and created_by = ?
+		select (select count(*) from network_storage_objects where bucket = ? and created_by = ?)
+			+ (select count(*) from network_storage_buckets where bucket = ? and updated_by = ?)
 		""";
 
 	private static final String BUCKETS_OF = """
@@ -612,7 +635,8 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 
 	@Override
 	public boolean bucketHasObjectsOf(String bucket, String ownerUserId) {
-		Integer total = jdbc.queryForObject(BUCKET_HAS_OBJECTS_OF, Integer.class, bucket, ownerUserId);
+		Integer total = jdbc.queryForObject(BUCKET_HAS_OBJECTS_OF, Integer.class, bucket, ownerUserId, bucket,
+			ownerUserId);
 		return total != null && total > 0;
 	}
 

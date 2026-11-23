@@ -132,6 +132,16 @@ class S3GatewayController {
 	private static final List<String> SUBRECURSOS_DE_LEITURA_NAO_ENDERECADOS = List.of("versionId", "torrent",
 		"partNumber");
 
+	/**
+	 * Subrecurso de <b>bucket</b> que e politica no S3 e aqui nao existe (a unica que age e a do
+	 * varredor, {@code ?lifecycle}). Recusados no {@code DELETE}, onde sem a guarda viravam
+	 * {@code DeleteBucket} — e num bucket vazio apagavam o bucket.
+	 */
+	private static final List<String> SUBRECURSOS_DE_BUCKET_NAO_IMPLEMENTADOS = List.of("cors", "tagging",
+		"policy", "website", "notification", "logging", "replication", "encryption", "accelerate",
+		"requestPayment", "publicAccessBlock", "ownershipControls", "analytics", "intelligent-tiering",
+		"metrics", "inventory", "object-lock");
+
 	/** O formato de instante da S3: sempre três casas decimais e sempre {@code Z}. */
 	private static final DateTimeFormatter S3_INSTANT = DateTimeFormatter
 		.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(java.time.ZoneOffset.UTC);
@@ -484,6 +494,8 @@ class S3GatewayController {
 	@DeleteMapping("/{bucket}")
 	ResponseEntity<Void> deleteBucket(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "DELETE");
+		// `DELETE ?cors`, `?tagging`, `?policy` e apagar a politica daquele subrecurso, nao o bucket.
+		recusarSubrecursoNoBucket(request, bucket);
 		requireBucket(credential, bucket);
 		requireBucketDoDonoOuEsvaziado(credential, bucket);
 		List<StorageObject> vivos = storage.list(bucket, null, null, 1);
@@ -523,6 +535,25 @@ class S3GatewayController {
 			if (query(request).containsKey(naoImplementado)) {
 				throw s3Error(501, "NotImplemented", "O subrecurso '" + naoImplementado
 					+ "' nao e suportado; " + chaveDoObjeto + " nao foi lido.");
+			}
+		}
+	}
+
+	/**
+	 * O {@code DELETE} de subrecurso no <b>bucket</b> nao e {@code DeleteBucket}.
+	 *
+	 * <p>{@code ?cors}, {@code ?tagging}, {@code ?policy}, {@code ?website} e os demais sao
+	 * politicas do bucket no S3. Aqui a unica que age e a do varredor ({@code ?lifecycle}, §4.36).
+	 * Sem a guarda, {@code DELETE /{bucket}?cors} entrava no {@code DeleteBucket}: com objeto vivo
+	 * respondia {@code 409 BucketNotEmpty} (mentindo sobre o motivo) e num bucket vazio apagaria o
+	 * bucket em resposta a "remova a CORS". A recusa e {@code 501}, como no {@code PUT} de
+	 * subrecurso que gravaria (§4.21).</p>
+	 */
+	private static void recusarSubrecursoNoBucket(HttpServletRequest request, String bucket) {
+		for (String subrecurso : SUBRECURSOS_DE_BUCKET_NAO_IMPLEMENTADOS) {
+			if (query(request).containsKey(subrecurso)) {
+				throw s3Error(501, "NotImplemented", "O subrecurso de bucket '" + subrecurso
+					+ "' nao e suportado; o bucket " + bucket + " nao foi alterado.");
 			}
 		}
 	}
