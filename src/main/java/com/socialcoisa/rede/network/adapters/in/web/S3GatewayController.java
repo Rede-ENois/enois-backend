@@ -559,17 +559,19 @@ class S3GatewayController {
 			throws IOException {
 		S3Credential credential = authenticate(request, "DELETE");
 		requireBucket(credential, bucket);
+		// A mesma guarda do DELETE de uma chave: num bucket de outra conta, nada é apagado — nem as
+		// chaves que a credencial criou lá antes de o bucket mudar de dono.
+		requireBucketDoDonoOuEsvaziado(credential, bucket);
 		String texto = new String(body(request).readAllBytes(), StandardCharsets.UTF_8);
-		boolean quieto = java.util.regex.Pattern.compile("<Quiet>\\s*true\\s*</Quiet>", java.util.regex.Pattern.CASE_INSENSITIVE)
-			.matcher(texto).find();
+		String quietoXml = entre(texto, "<Quiet>", "</Quiet>");
+		boolean quieto = quietoXml != null && "true".equalsIgnoreCase(quietoXml.trim());
+		// Varredura linear: `<Object>(.*?)</Object>` sobre o corpo do chamador é o ReDoS que o CodeQL
+		// marca, e o recorte por `indexOf` é O(n) por construção.
 		java.util.List<String> chaves = new java.util.ArrayList<>();
-		java.util.regex.Matcher objeto = java.util.regex.Pattern
-			.compile("<Object>(.*?)</Object>", java.util.regex.Pattern.DOTALL).matcher(texto);
-		while (objeto.find()) {
-			java.util.regex.Matcher chave = java.util.regex.Pattern
-				.compile("<Key>(.*?)</Key>", java.util.regex.Pattern.DOTALL).matcher(objeto.group(1));
-			if (chave.find()) {
-				chaves.add(decodeXml(chave.group(1)));
+		for (String objeto : trechosDe(texto, "Object")) {
+			String chave = entre(objeto, "<Key>", "</Key>");
+			if (chave != null) {
+				chaves.add(decodeXml(chave));
 			}
 		}
 		if (chaves.isEmpty()) {

@@ -2106,6 +2106,9 @@ void delete_objects_apaga_em_lote_e_reporta_cada_chave() throws Exception {
 	/** `DeleteObjects` sem nenhuma chave é `MalformedXML`, como o S3 — não um `200` vazio. */
 	@Test
 void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
+		// A guarda do dono do bucket vem antes do XML: sem um objeto, o bucket não é do dono para o
+		// `requireBucketDoDonoOuEsvaziado`, e o 403 mascararia o `MalformedXML` que este teste mede.
+		gravar("sem-objetos/dono.txt", "x");
 		String xml = "<Delete></Delete>";
 		MockHttpServletRequestBuilder vazio = MockMvcRequestBuilders.post("/s3/" + bucket + "?delete")
 			.content(xml.getBytes(StandardCharsets.UTF_8)).contentType("application/xml");
