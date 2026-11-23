@@ -261,6 +261,10 @@ public class StorageCatalogService {
 			// A versão vencida sai da chave sem virar lápide: vencimento não é remoção. Se fosse lápide,
 			// o corpo de um objeto só vencido deixaria de ser servido por quem tem cópia, e a coleta o
 			// trataria como removido em vez de expirado. O que ela aponta é a linha nova.
+			//
+			// A linha nova NASCE com o retrato da vencida (V367 e o conteúdo): o reenvio na mesma chave
+			// é o caso normal, e abrir em branco fazia a gravação recusada, ao devolver o objeto, voltar
+			// um objeto sem tipo, sem metadado e sem prazo — o dono perdia o que tinha declarado.
 			String novoId = OBJECT_ID_PREFIX + NodeIds.next("");
 			if (!catalog.markSuperseded(bucket, key, novoId, now)) {
 				throw new ApiException(409, "STORAGE_VERSION_RACE",
@@ -270,7 +274,10 @@ public class StorageCatalogService {
 			// número, e o cache do antigo e do novo precisa reler.
 			esquecerUsoDoParticipante(existente.createdBy());
 			esquecerUsoDoParticipante(actorId);
-			return catalog.createPending(novoId, bucket, key, type, actorId, now);
+			StorageObject aberta = catalog.createPending(novoId, bucket, key, type, actorId, now);
+			catalog.setClientHeaders(aberta.id(), existente.metadata(), existente.cacheControl(),
+				existente.contentDisposition());
+			return catalog.findById(aberta.id()).orElse(aberta);
 		}
 		StorageObject object = catalog.createPending(OBJECT_ID_PREFIX + NodeIds.next(""), bucket, key, type,
 			actorId, now);
@@ -358,6 +365,18 @@ public class StorageCatalogService {
 		}
 		catalog.setClientHeaders(object.id(), headers.metadata(), headers.cacheControl(),
 			headers.contentDisposition());
+	}
+
+	/**
+	 * O que a linha <b>já tem</b> declarado: o metadado, o {@code Cache-Control} e o
+	 * {@code Content-Disposition}.
+	 *
+	 * <p>É o que o {@code PUT} precisa <b>antes</b> de {@link #saveClientHeaders}: a gravação nova
+	 * declara o que o cliente mandou, e a recusa por donagem tem de devolver o retrato de antes — o valor
+	 * que estava na linha, e não o da requisição recusada.</p>
+	 */
+	public ClientHeaders declaredHeaders(StorageObject object) {
+		return new ClientHeaders(object.metadata(), object.cacheControl(), object.contentDisposition());
 	}
 
 	/** Quantas vezes a gravação versionada tenta de novo quando outra requisição venceu a corrida. */
