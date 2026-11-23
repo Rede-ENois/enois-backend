@@ -901,6 +901,12 @@ class S3GatewayController {
 	 */
 	private ResponseEntity<?> copiarObjeto(S3Credential credential, String bucket, String key,
 			String cabecalhoDaOrigem, HttpServletRequest request) {
+		// O `x-amz-copy-source-range` é do UploadPartCopy; no CopyObject o S3 não o aceita. Antes ele
+		// caía no vazio e a cópia gravava a origem INTEIRA com 200 — quem pedia 5 bytes recebia 10.
+		if (request.getHeader("x-amz-copy-source-range") != null) {
+			throw s3Error(400, "InvalidArgument",
+				"x-amz-copy-source-range nao vale no CopyObject; use UploadPartCopy (PUT com partNumber e uploadId).");
+		}
 		OrigemDaCopia origem = origemDaCopia(cabecalhoDaOrigem);
 		StorageObject fonte = origemServivel(credential, origem);
 		exigirPrecondicoesDaCopia(request, fonte);

@@ -1290,6 +1290,30 @@ dos 8 subrecursos, o `GET` responde `501` e o `HEAD` responde o mesmo, sem vazar
 Mutações: sem a recusa dos subrecursos que gravariam (`a`) e sem a de leitura (`c`) derrubam; trocar a
 ordem das duas (`b`) **não** derruba — é equivalência real, cada uma é idempotente e independente.
 
+## 4.43 `x-amz-copy-source-range` no `CopyObject` é `400`, não ignorado (ciclo 133)
+
+O cabeçalho é do `UploadPartCopy`. No `CopyObject` ele não era lido nem recusado — caía no vazio:
+
+```
+PUT /s3/<b>/d.txt   x-amz-copy-source: /<b>/o.txt   x-amz-copy-source-range: bytes=0-4
+→ 200 <CopyObjectResult>  e o destino com os 10 bytes da origem
+```
+
+Quem pedia 5 bytes recebia os 10, com `200` e cara de certo — o destino ficava com o conteúdo errado.
+O S3 não aceita esse cabeçalho nessa operação.
+
+### Agora
+
+- `400 InvalidArgument` nomeando o cabeçalho e dizendo qual operação o aceita
+  (`UploadPartCopy`: `PUT ?partNumber=&uploadId=`). O corpo é XML como qualquer recusa.
+- O destino **não** é criado pela cópia recusada (o erro sai antes da abertura).
+- No `UploadPartCopy` o cabeçalho continua valendo, com o intervalo conferido contra a origem (§4.20).
+
+**Verificação:** `S3GatewayTests` **+1** (`copy_object_recusa_o_cabecalho_de_faixa_do_upload_part_copy`):
+`400 InvalidArgument` citando o cabeçalho, sem `<CopyObjectResult`; `GET` do destino `404`; sem o
+cabeçalho a cópia funciona e o destino tem os 10 bytes. Vermelho antes: `200` com `<CopyObjectResult>`.
+Mutações **2/2**: sem a guarda; guarda que só pega uma faixa específica.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
