@@ -117,6 +117,21 @@ class S3GatewayController {
 	private static final List<String> SUBRECURSOS_QUE_GRAVARIAM = List.of("tagging", "acl", "retention",
 		"legal-hold", "object-lock");
 
+	/**
+	 * Subrecursos de <b>leitura</b> do objeto que este gateway nao endereca.
+	 *
+	 * <p>{@code versionId} e a versao especifica (o gateway so serve a corrente, e devolver outra
+	 * com {@code 200} e conteudo errado com cara de certo); {@code torrent} e {@code partNumber}
+	 * so fazem sentido junto de operacoes que aqui nao existem. Sem a recusa, os tres serviam o
+	 * corpo do arquivo — e a URL pre-assinada de {@code ?torrent} baixava o objeto.</p>
+	 *
+	 * <p>{@code response-content-*} fica de fora: entra na assinatura da URL pre-assinada (§4.28),
+	 * entao adulterar e recusado, mas o gateway <b>nao</b> aplica o cabecalho (o
+	 * {@code Content-Disposition} e o declarado no {@code PUT}).</p>
+	 */
+	private static final List<String> SUBRECURSOS_DE_LEITURA_NAO_ENDERECADOS = List.of("versionId", "torrent",
+		"partNumber");
+
 	/** O formato de instante da S3: sempre três casas decimais e sempre {@code Z}. */
 	private static final DateTimeFormatter S3_INSTANT = DateTimeFormatter
 		.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(java.time.ZoneOffset.UTC);
@@ -493,6 +508,23 @@ class S3GatewayController {
 			return;
 		}
 		throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
+	}
+
+	/**
+	 * Recusa, antes de abrir o objeto, o subrecurso de leitura que nao e {@code GetObject}.
+	 *
+	 * <p>O {@code GET} do objeto nao olhava a consulta: {@code ?versionId=} pedia uma versao e
+	 * recebia a corrente com {@code 200} — o SDK que acabou de listar versoes lia outro conteudo
+	 * como sucesso. {@code ?torrent} e {@code ?partNumber} so tem sentido com operacoes que aqui
+	 * nao existem.</p>
+	 */
+	private static void recusarLeituraDeSubrecurso(HttpServletRequest request, String chaveDoObjeto) {
+		for (String naoImplementado : SUBRECURSOS_DE_LEITURA_NAO_ENDERECADOS) {
+			if (query(request).containsKey(naoImplementado)) {
+				throw s3Error(501, "NotImplemented", "O subrecurso '" + naoImplementado
+					+ "' nao e suportado; " + chaveDoObjeto + " nao foi lido.");
+			}
+		}
 	}
 
 	/**
@@ -1318,6 +1350,7 @@ class S3GatewayController {
 		// `GET ?acl` é a leitura da ACL do objeto, não do objeto: sem esta recusa, a rota servia o
 		// arquivo em 200, e o cliente lia "a ACL é o conteúdo do arquivo". Mesma lista do PUT.
 		recusarSubrecurso(request, "/" + bucket + "/" + keyOf(request));
+		recusarLeituraDeSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request)));
 		return comVocabularioDoS3(() -> content.respond(object, request.getHeader(HttpHeaders.RANGE),
 			request.getHeader(HttpHeaders.IF_NONE_MATCH), request.getHeader(HttpHeaders.IF_MODIFIED_SINCE)));
@@ -1329,6 +1362,8 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "GET");
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
+		// O `HEAD` e o `GET` sem corpo: a mesma pergunta tem a mesma recusa.
+		recusarLeituraDeSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request), "HEAD"));
 		return comVocabularioDoS3(() -> content.head(object, request.getHeader(HttpHeaders.IF_NONE_MATCH),
 			request.getHeader(HttpHeaders.IF_MODIFIED_SINCE)));
