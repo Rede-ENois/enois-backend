@@ -97,7 +97,8 @@ class ProfileController {
 
 	@GetMapping("/users/{username}")
 	Object user(@PathVariable String username) {
-		return getUserProfileUseCase.getByUsername(username);
+		var view = getUserProfileUseCase.getByUsername(username);
+		return profileService.comAniversario(view);
 	}
 
 	/** Pessoas ligadas ao perfil visitado; apenas conexoes aceitas entram na leitura publica. */
@@ -176,7 +177,8 @@ class ProfileController {
 	Object userById(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@PathVariable String userId) {
 		currentUserResolver.resolve(sessionToken);
-		return getUserProfileUseCase.getById(userId);
+		var view = getUserProfileUseCase.getById(userId);
+		return profileService.comAniversario(view);
 	}
 
 	@GetMapping("/users/search")

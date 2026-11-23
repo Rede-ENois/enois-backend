@@ -2189,8 +2189,186 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(dentroResposta.getStatus()).as(dentroResposta.getContentAsString()).isEqualTo(200);
 		assertThat(dentroResposta.getContentAsString()).contains("<Key>versoes/a.txt</Key>")
 			.doesNotContain("versoes/b.txt");
+	}
+
+	/**
+	 * `PutBucketVersioning` / `GetBucketVersioning` (`PUT` e `GET /{bucket}?versioning`).
+	 *
+	 * <p><b>Antes:</b> nenhuma das duas existia. O {@code PUT} caía no {@code PutObject} e respondia
+	 * {@code 400 InvalidRequest "Informe o bucket e a chave"}; o {@code GET} caía no
+	 * {@code ListObjects} e respondia um {@code <ListBucketResult>}. O Storage <b>tem</b> versionamento
+	 * por bucket — a política guarda isso desde o V352 e o {@code restore} depende dele — mas o cliente
+	 * S3 não tinha como ligá-lo: `aws s3api put-bucket-versioning` não convencia ninguém, e
+	 * `get-bucket-versioning` dizia uma coisa falsa.</p>
+	 *
+	 * <p><b>Agora:</b> {@code PUT ?versioning} liga ({@code Status>Enabled}) e desliga
+	 * ({@code Suspended}) o versionamento do bucket do dono, grava na política e responde {@code 200};
+	 * {@code GET ?versioning} devolve {@code <VersioningConfiguration>}. {@code Suspended} não apaga o
+	 * histórico: as versões antigas continuam listáveis (§4.34) e o {@code restore} segue possível —
+	 * "suspenso" é parar de criar versão nova, como no S3.</p>
+	 */
+	@Test
+	void versionamento_do_bucket_liga_le_e_suspende() throws Exception {
+		gravar("versionamento/a.txt", "a");
+
+		// Sem configuração: o S3 responde 200 com <VersioningConfiguration/> vazio.
+		MockHttpServletRequestBuilder antes = get("/s3/" + bucket + "?versioning");
+		assinar(antes, SECRET, shaVazio());
+		var antesResposta = mockMvc.perform(antes).andReturn().getResponse();
+		assertThat(antesResposta.getStatus()).as(antesResposta.getContentAsString()).isEqualTo(200);
+		assertThat(antesResposta.getContentAsString()).startsWith("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+			+ "<VersioningConfiguration");
+		assertThat(antesResposta.getContentAsString()).doesNotContain("<Status>");
+
+		// Liga.
+		String liga = "<VersioningConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"
+			+ "<Status>Enabled</Status></VersioningConfiguration>";
+		MockHttpServletRequestBuilder ligar = put("/s3/" + bucket + "?versioning")
+			.content(liga.getBytes(StandardCharsets.UTF_8));
+		assinar(ligar, SECRET, shaDe(liga));
+		var ligado = mockMvc.perform(ligar).andReturn().getResponse();
+		assertThat(ligado.getStatus()).as(ligado.getContentAsString()).isEqualTo(200);
+		assertThat(jdbc.queryForObject("select versioning from network_storage_buckets where bucket = ?",
+			Boolean.class, bucket)).isTrue();
+		// O `<Status>` que vale é o do `VersioningConfiguration`, não o último `<Status>` do documento:
+		// a regex gulosa casava um `<Status>` de regra de ciclo de vida vindo depois dele.
+		String comOutroStatusDepois = "<VersioningConfiguration><Status>Enabled</Status>"
+			+ "</VersioningConfiguration><Rule><Status>Suspended</Status></Rule>";
+		MockHttpServletRequestBuilder comRegra = put("/s3/" + bucket + "?versioning")
+			.content(comOutroStatusDepois.getBytes(StandardCharsets.UTF_8));
+		assinar(comRegra, SECRET, shaDe(comOutroStatusDepois));
+		assertThat(mockMvc.perform(comRegra).andReturn().getResponse().getStatus()).isEqualTo(200);
+		assertThat(jdbc.queryForObject("select versioning from network_storage_buckets where bucket = ?",
+			Boolean.class, bucket)).as("o <Status> de fora do VersioningConfiguration foi lido").isTrue();
+
+		// Lê: Enabled.
+		MockHttpServletRequestBuilder le = get("/s3/" + bucket + "?versioning");
+		assinar(le, SECRET, shaVazio());
+		assertThat(mockMvc.perform(le).andReturn().getResponse().getContentAsString())
+			.contains("<Status>Enabled</Status>");
+
+		// Valor que não é Enabled nem Suspended é MalformedXML — e não muda a configuração.
+		String invalido = "<VersioningConfiguration><Status>Ligado</Status></VersioningConfiguration>";
+		MockHttpServletRequestBuilder bogus = put("/s3/" + bucket + "?versioning")
+			.content(invalido.getBytes(StandardCharsets.UTF_8));
+		assinar(bogus, SECRET, shaDe(invalido));
+		var recusa = mockMvc.perform(bogus).andReturn().getResponse();
+		assertThat(recusa.getStatus()).as(recusa.getContentAsString()).isEqualTo(400);
+		assertThat(recusa.getContentAsString()).contains("<Code>MalformedXML</Code>");
+		assertThat(jdbc.queryForObject("select versioning from network_storage_buckets where bucket = ?",
+			Boolean.class, bucket)).isTrue();
+
+		// Suspende: para de criar versão, mas o histórico fica.
+		String suspende = "<VersioningConfiguration><Status>Suspended</Status></VersioningConfiguration>";
+		MockHttpServletRequestBuilder suspender = put("/s3/" + bucket + "?versioning")
+			.content(suspende.getBytes(StandardCharsets.UTF_8));
+		assinar(suspender, SECRET, shaDe(suspende));
+		assertThat(mockMvc.perform(suspender).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder depois = get("/s3/" + bucket + "?versioning");
+		assinar(depois, SECRET, shaVazio());
+		assertThat(mockMvc.perform(depois).andReturn().getResponse().getContentAsString())
+			.contains("<Status>Suspended</Status>");
+		// Suspender não apaga o histórico: o versionamento sai, a retenção é zerada (regra do
+		// serviço), e o prazo de expiração que já existia continua.
+		assertThat(jdbc.queryForObject("select versioning from network_storage_buckets where bucket = ?",
+			Boolean.class, bucket)).isFalse();
+		assertThat(jdbc.queryForObject("select retain_superseded_days from network_storage_buckets where bucket = ?",
+			Integer.class, bucket)).isNull();
+
+	}
 
 
+	/**
+	 * `max-keys` inválido é recusado, e `max-keys=0` é uma página vazia — não "1000".
+	 *
+	 * <p><b>Antes:</b> {@code parseMaxKeys} trocava qualquer entrada por 1000: {@code max-keys=abc}
+	 * respondia {@code 200} com três objetos e {@code <MaxKeys>1000</MaxKeys>} (o S3 responde
+	 * {@code 400 InvalidArgument}), e {@code max-keys=0} — a página vazia que o paginador usa para
+	 * sondar o total — respondia os três objetos. O cliente que pedia zero recebia dados e, pior,
+	 * quem digitava errado no {@code aws s3 ls --max-items} achava que a listagem tinha funcionado.</p>
+	 *
+	 * <p><b>Agora:</b> vazio continua o padrão de 1000; {@code 0} é aceito (lista vazia,
+	 * {@code KeyCount 0}); negativo e não numérico são {@code 400 InvalidArgument} em XML. O teto de
+	 * 1000 é mantido para cima.</p>
+	 */
+	@Test
+	void max_keys_invalido_e_recusado_e_zero_e_pagina_vazia() throws Exception {
+		gravar("mk/a.txt", "a");
+		gravar("mk/b.txt", "b");
+
+		for (String ruim : new String[] { "abc", "-1", "1.5" }) {
+			MockHttpServletRequestBuilder r = get("/s3/" + bucket + "?prefix=mk/&max-keys=" + ruim);
+			assinar(r, SECRET, shaVazio());
+			var resposta = mockMvc.perform(r).andReturn().getResponse();
+			assertThat(resposta.getStatus()).as("max-keys=" + ruim).isEqualTo(400);
+			assertThat(resposta.getContentAsString()).contains("<Code>InvalidArgument</Code>")
+				.doesNotContain("<Key>mk/a.txt</Key>");
+		}
+
+		MockHttpServletRequestBuilder zero = get("/s3/" + bucket + "?prefix=mk/&max-keys=0");
+		assinar(zero, SECRET, shaVazio());
+		String corpoZero = mockMvc.perform(zero).andReturn().getResponse().getContentAsString();
+		assertThat(corpoZero).contains("<KeyCount>0</KeyCount>").doesNotContain("<Key>mk/a.txt</Key>");
+
+		// O teto continua: pedir mais que 1000 lista o que cabe, sem virar erro.
+		MockHttpServletRequestBuilder grande = get("/s3/" + bucket + "?prefix=mk/&max-keys=1001");
+		assinar(grande, SECRET, shaVazio());
+		var doGrande = mockMvc.perform(grande).andReturn().getResponse();
+		assertThat(doGrande.getStatus()).isEqualTo(200);
+		assertThat(doGrande.getContentAsString()).contains("<MaxKeys>1000</MaxKeys>");
+
+		// E o padrão (sem o parâmetro) segue listando.
+		MockHttpServletRequestBuilder sem = get("/s3/" + bucket + "?prefix=mk/");
+		assinar(sem, SECRET, shaVazio());
+		assertThat(mockMvc.perform(sem).andReturn().getResponse().getContentAsString())
+			.contains("<Key>mk/a.txt</Key>");
+	}
+
+	/**
+	 * `x-amz-copy-source-range` no `CopyObject` é recusado, não ignorado.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho só era lido no {@code UploadPartCopy}; no {@code CopyObject} caía no
+	 * vazio e a cópia gravava a origem <b>inteira</b> com {@code 200 CopyObjectResult}. O S3 não
+	 * aceita esse cabeçalho nessa operação — quem manda {@code bytes=0-4} esperando 5 bytes recebia os
+	 * 10, com sucesso, e o destino ficava com o conteúdo errado e cara de certo.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 400 InvalidArgument} nomeando o cabeçalho e dizendo qual operação o
+	 * aceita; o destino não é criado. No {@code UploadPartCopy} ele continua valendo (§4.20).</p>
+	 */
+	@Test
+	void copy_object_recusa_o_cabecalho_de_faixa_do_upload_part_copy() throws Exception {
+		gravar("cpr/o.txt", "0123456789");
+
+		MockHttpServletRequestBuilder r = put("/s3/" + bucket + "/cpr/d.txt")
+			.header("x-amz-copy-source", "/" + bucket + "/cpr/o.txt")
+			.header("x-amz-copy-source-range", "bytes=0-4");
+		assinar(r, SECRET, shaVazio());
+		var resposta = mockMvc.perform(r).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(400);
+		assertThat(resposta.getContentAsString())
+			.contains("<Code>InvalidArgument</Code>")
+			.contains("x-amz-copy-source-range")
+			.doesNotContain("<CopyObjectResult");
+
+		// O destino não foi criado pela cópia recusada.
+		MockHttpServletRequestBuilder g = get("/s3/" + bucket + "/cpr/d.txt");
+		assinar(g, SECRET, shaVazio());
+		var lido = mockMvc.perform(g).andReturn();
+		var doLido = lido.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lido)).andReturn().getResponse() : lido.getResponse();
+		assertThat(doLido.getStatus()).isEqualTo(404);
+
+		// Sem o cabeçalho, a cópia continua copiando a origem inteira.
+		MockHttpServletRequestBuilder ok = put("/s3/" + bucket + "/cpr/d.txt")
+			.header("x-amz-copy-source", "/" + bucket + "/cpr/o.txt");
+		assinar(ok, SECRET, shaVazio());
+		assertThat(mockMvc.perform(ok).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder g2 = get("/s3/" + bucket + "/cpr/d.txt");
+		assinar(g2, SECRET, shaVazio());
+		var l2 = mockMvc.perform(g2).andReturn();
+		var do2 = l2.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(l2)).andReturn().getResponse() : l2.getResponse();
+		assertThat(do2.getContentAsString()).isEqualTo("0123456789");
 	}
 
 	/**
