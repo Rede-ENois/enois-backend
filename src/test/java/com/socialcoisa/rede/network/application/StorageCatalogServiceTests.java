@@ -28,6 +28,7 @@ import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepositor
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NodeProfile;
 import com.socialcoisa.rede.network.domain.NodeStatus;
+import com.socialcoisa.rede.network.domain.ObjectMetadata;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StorageRebalance;
 import com.socialcoisa.rede.network.domain.StorageObjectState;
@@ -476,11 +477,15 @@ class StorageCatalogServiceTests {
 			byKey.values().removeIf(o -> o.id().equals(id));
 			return eraMorta;
 		}
+
 		@Override
-		public boolean restorePending(String id) {
+		public boolean restorePending(String id, String contentType, Long bytes, String sha256,
+				ObjectMetadata metadata, String cacheControl, String contentDisposition, java.time.Instant expiresAt) {
 			return replace(id, o -> o.state() == StorageObjectState.STORED,
-				o -> StorageObject.current(o.id(), o.bucket(), o.key(), o.contentType(), null, null,
-					StorageObjectState.PENDING, o.createdBy(), o.createdAt(), java.time.Instant.now(), null));
+				o -> new StorageObject(o.id(), o.bucket(), o.key(), contentType, bytes, sha256,
+					sha256 == null ? StorageObjectState.PENDING : StorageObjectState.STORED, o.createdBy(),
+					o.createdAt(), java.time.Instant.now(), o.deletedAt(), o.version(), o.supersededBy(), expiresAt,
+					metadata == null ? ObjectMetadata.EMPTY : metadata, cacheControl, contentDisposition));
 		}
 
 
