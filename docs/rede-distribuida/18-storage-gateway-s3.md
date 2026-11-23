@@ -1216,6 +1216,32 @@ Toda chamada do SDK ao S3 pode trazer um id de requisição. O gateway não traz
 `404` com id no cabeçalho e no corpo, iguais; ids de duas requisições diferentes. Vermelho antes:
 `200 sem x-amz-request-id`. Mutações **3/3** derrubam: sem o cabeçalho; `<RequestId>` fixo; id fixo.
 
+## 4.41 `HEAD` de objeto recusa os mesmos subrecursos que o `GET` (ciclo 131)
+
+O `HEAD` de objeto chamava **só** a recusa dos subrecursos de leitura (`versionId`, `torrent`,
+`partNumber`, §4.37). A dos subrecursos que **gravariam** (`acl`, `tagging`, `retention`,
+`legal-hold`, `object-lock`, §4.21) ficava só no `GET`:
+
+| pedido | antes | agora |
+|---|---|---|
+| `HEAD ?acl` (idem `?tagging`, `?retention`, `?legal-hold`, `?object-lock`) | `200`, `Content-Length: 3`, `Content-Type` do arquivo | `501 NotImplemented` |
+| `HEAD ?versionId=` / `?torrent` / `?partNumber=` | `501` | `501` |
+| `HEAD ?response-content-type=` | `200` | `200`, tipo **gravável** (igual ao `GET`) |
+
+- `200` no `HEAD ?acl` é a pergunta errada com cara de certa: o cliente que consulta a ACL pelo
+  `HEAD` — o caminho de quem quer só o tamanho antes de baixar — lê "existe, 3 bytes, `text/plain`" e
+  conclui que a ACL do objeto é o próprio arquivo.
+- O `headObject` passou a chamar **as duas** recusas, como o `getObject`, e declara `IOException`
+  (a recusa dos subrecursos que gravariam lê o corpo do pedido).
+- O `?response-content-*` continua aceito e **não aplicado** nos dois (§4.28), então `HEAD` e `GET` da
+  mesma URL dizem o mesmo `Content-Type`.
+
+**Verificação:** `S3GatewayTests` **+1** (`head_recusa_os_mesmos_subrecursos_que_o_get`): para cada um
+dos 8 subrecursos, o `GET` responde `501` e o `HEAD` responde o mesmo, sem vazar o tamanho do arquivo;
+`?response-content-type=text/html` sai `200` sem `text/html`. Vermelho antes: `HEAD ?acl` → `200`.
+Mutações: sem a recusa dos subrecursos que gravariam (`a`) e sem a de leitura (`c`) derrubam; trocar a
+ordem das duas (`b`) **não** derruba — é equivalência real, cada uma é idempotente e independente.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:

@@ -1420,11 +1420,15 @@ class S3GatewayController {
 
 	/** HeadObject: mesmos cabeçalhos do GetObject, sem corpo. */
 	@RequestMapping(value = "/{bucket}/{*key}", method = RequestMethod.HEAD)
-	ResponseEntity<StreamingResponseBody> headObject(@PathVariable String bucket, HttpServletRequest request) {
+	ResponseEntity<StreamingResponseBody> headObject(@PathVariable String bucket, HttpServletRequest request)
+			throws IOException {
 		S3Credential credential = authenticate(request, "GET");
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
-		// O `HEAD` e o `GET` sem corpo: a mesma pergunta tem a mesma recusa.
+		// O `HEAD` e o `GET` sem corpo: a mesma pergunta tem a mesma recusa — as duas listas, não só a
+		// dos subrecursos de leitura. Sem a primeira, `HEAD ?acl` respondia 200 com o tamanho e o tipo
+		// do arquivo, que é a pergunta errada com cara de certa (§4.41).
+		recusarSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		recusarLeituraDeSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request), "HEAD"));
 		return comVocabularioDoS3(() -> content.head(object, request.getHeader(HttpHeaders.IF_NONE_MATCH),
