@@ -103,8 +103,14 @@ public interface StorageCatalogRepository {
 	 * objeto mais antigo: a mesma régua do {@code bucketsOf}.</p>
 	 */
 	default java.util.Optional<String> ownerDoBucket(String bucket) {
-		// O dono é de quem já tem objeto vivo no bucket: a mesma régua do `bucketsOf`, que o
-		// CreateBucket usa quando o bucket nasce do primeiro upload.
+		// O criador registrado na linha do bucket manda, e nunca é reescrito (`V373`). Sem ele —
+		// bucket anterior à coluna — vale o dono do primeiro objeto vivo: a régua do `bucketsOf`,
+		// que o CreateBucket usa quando o bucket nasce do primeiro upload.
+		java.util.Optional<String> criador = bucketPolicy(bucket).map(StorageBucketPolicy::ownerUserId)
+			.filter(id -> id != null && !id.isBlank());
+		if (criador.isPresent()) {
+			return criador;
+		}
 		return list(bucket, null, null, 1000).stream()
 			.filter(o -> !"DELETED".equals(o.state()))
 			.map(StorageObject::createdBy)

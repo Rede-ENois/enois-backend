@@ -845,8 +845,10 @@ public class StorageCatalogService {
 				"Retencao so faz sentido em bucket com versionamento.");
 		}
 		Instant now = clock.instant();
+		// `ownerUserId` só é gravado se a coluna ainda estiver vazia (o `coalesce` do UPSERT): o
+		// primeiro a tocar na linha é o criador do bucket, e as políticas seguintes não o trocam.
 		StorageBucketPolicy saved = catalog.saveBucketPolicy(new StorageBucketPolicy(bucket, versioning,
-			retainSupersededDays, expireAfterDays, actorId, now));
+			retainSupersededDays, expireAfterDays, actorId, now, actorId));
 		audit.record(actorId, "STORAGE_BUCKET_POLICY", bucket,
 			"{\"versioning\":" + versioning + ",\"retainSupersededDays\":" + json(retainSupersededDays)
 				+ ",\"expireAfterDays\":" + json(expireAfterDays) + "}");

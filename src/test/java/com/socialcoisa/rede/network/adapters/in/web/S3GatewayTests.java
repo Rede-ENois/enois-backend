@@ -2020,8 +2020,42 @@ void lifecycle_do_bucket_le_e_grava_a_mesma_politica_do_varredor() throws Except
 		var localResposta = mockMvc.perform(local).andReturn().getResponse();
 		assertThat(localResposta.getStatus()).as(localResposta.getContentAsString()).isEqualTo(200);
 		assertThat(localResposta.getContentAsString()).contains(">enois-1</LocationConstraint>");
-
 	}
+
+	/**
+	 * O criador do bucket é o dono, e continua sendo depois de perder o último objeto.
+	 *
+	 * <p>A posse vinha de {@code updated_by} — que muda a cada {@code putBucketPolicy}, então quem
+	 * configurasse o ciclo de vida virava "dono" — e, sem política, do primeiro objeto vivo, que muda
+	 * quando todos são apagados e outra conta grava. Agora o criador fica em {@code owner_user_id},
+	 * gravado no {@code CreateBucket} e nunca reescrito.</p>
+	 */
+	@Test
+	void o_criador_e_o_dono_do_bucket_mesmo_depois_de_esvaziar() throws Exception {
+		String meuBuckete = "criado-" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder cria = put("/s3/" + meuBuckete);
+		assinar(cria, SECRET, shaVazio());
+		assertThat(mockMvc.perform(cria).andReturn().getResponse().getStatus()).isEqualTo(200);
+		assertThat(jdbc.queryForObject("select owner_user_id from network_storage_buckets where bucket = ?",
+			String.class, meuBuckete)).as("o criador nao foi gravado").isEqualTo(admin);
+
+		// Outra conta (o admin de outro teste não é esta credencial) tenta criar o mesmo nome.
+		jdbc.update("update network_storage_buckets set updated_by = 's3_quem_configurou' where bucket = ?",
+			meuBuckete);
+		// O `updated_by` mudou, mas o dono não: a política não rouba o bucket.
+		assertThat(jdbc.queryForObject("select owner_user_id from network_storage_buckets where bucket = ?",
+			String.class, meuBuckete)).as("o criador foi reescrito pela politica").isEqualTo(admin);
+
+		MockHttpServletRequestBuilder criaDeNovo = put("/s3/" + meuBuckete);
+		assinar(criaDeNovo, SECRET, shaVazio());
+		assertThat(mockMvc.perform(criaDeNovo).andReturn().getResponse().getStatus())
+			.as("o dono deixou de reconhecer o proprio bucket").isEqualTo(200);
+
+		MockHttpServletRequestBuilder head = head("/s3/" + meuBuckete);
+		assinar(head, SECRET, shaVazio());
+		assertThat(mockMvc.perform(head).andReturn().getResponse().getStatus()).isEqualTo(200);
+	}
+
 
 
 	/** Credencial presa a um bucket não alcança outro, mesmo do mesmo dono. */

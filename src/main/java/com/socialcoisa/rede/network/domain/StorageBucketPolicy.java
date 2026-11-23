@@ -22,11 +22,11 @@ import java.time.Instant;
  * substituição, ou um bucket sem versionamento nunca coletar lixo.</p>
  */
 public record StorageBucketPolicy(String bucket, boolean versioning, Integer retainSupersededDays,
-		Integer expireAfterDays, String updatedBy, Instant updatedAt) {
+		Integer expireAfterDays, String updatedBy, Instant updatedAt, String ownerUserId) {
 
 	/** Bucket que ninguém configurou: sem versão, sem prazo. */
 	public static StorageBucketPolicy padrao(String bucket) {
-		return new StorageBucketPolicy(bucket, false, null, null, null, null);
+		return new StorageBucketPolicy(bucket, false, null, null, null, null, null);
 	}
 
 	/** O instante em que um objeto gravado agora vence ({@code null} = nunca). */

@@ -93,7 +93,7 @@ class StorageLifecycleTests {
 		when(catalog.expired(NOW, StorageLifecycle.MAX_OBJECTS)).thenReturn(List.of());
 		when(catalog.supersededBefore(NOW, StorageLifecycle.MAX_OBJECTS)).thenReturn(List.of(antiga));
 		when(catalog.bucketPolicy("fotos"))
-			.thenReturn(Optional.of(new StorageBucketPolicy("fotos", true, 30, null, "admin", substituida)));
+			.thenReturn(Optional.of(new StorageBucketPolicy("fotos", true, 30, null, "admin", substituida, "admin")));
 
 		StorageLifecycle.Report report = lifecycle.run(false);
 
@@ -108,7 +108,7 @@ class StorageLifecycleTests {
 		when(catalog.expired(NOW, StorageLifecycle.MAX_OBJECTS)).thenReturn(List.of());
 		when(catalog.supersededBefore(NOW, StorageLifecycle.MAX_OBJECTS)).thenReturn(List.of(antiga));
 		when(catalog.bucketPolicy("fotos"))
-			.thenReturn(Optional.of(new StorageBucketPolicy("fotos", true, 30, null, "admin", NOW)));
+			.thenReturn(Optional.of(new StorageBucketPolicy("fotos", true, 30, null, "admin", NOW, "admin")));
 		when(catalog.markDeleted("sob_1", NOW)).thenReturn(true);
 
 		StorageLifecycle.Report report = lifecycle.run(false);

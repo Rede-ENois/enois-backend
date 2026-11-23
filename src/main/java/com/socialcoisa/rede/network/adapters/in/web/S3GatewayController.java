@@ -2020,12 +2020,13 @@ class S3GatewayController {
 	}
 
 	/**
-	 * O dono registrado do bucket: o criador (a linha de política grava o criador em
-	 * {@code updated_by}) ou, sem registro, o dono do primeiro objeto vivo — o bucket nasce do
-	 * primeiro upload para quem só sobe objeto sem {@code CreateBucket}.
+	 * O dono registrado do bucket: o <b>criador</b>, gravado em {@code owner_user_id} no
+	 * {@code CreateBucket} e nunca reescrito — quem configura a política depois não vira dono. Sem
+	 * criador registrado (bucket anterior à coluna), o dono do primeiro objeto vivo: o bucket que
+	 * nasceu do primeiro upload, de quem só sobe objeto sem {@code CreateBucket}.
 	 */
 	private String donoDoBucketRegistrado(String bucket) {
-		return catalog.bucketPolicy(bucket).map(StorageBucketPolicy::updatedBy)
+		return catalog.bucketPolicy(bucket).map(StorageBucketPolicy::ownerUserId)
 			.filter(criador -> criador != null && !criador.isBlank())
 			.or(() -> catalog.ownerDoBucket(bucket))
 			.orElse(null);
