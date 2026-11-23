@@ -1040,6 +1040,7 @@ certo → `409`; com outro → `412`). Mutações: sem a conferência; `If-None-
 asterisco; `If-Match` só olhando o asterisco — **3 de 3 derrubam** (a 2ª e a 3ª só depois de o teste
 distinguir o ETag certo do errado).
 
+
 ## 4.30 `x-amz-expected-bucket-owner` é conferido (ciclo 118)
 
 O cabeçalho era ignorado por todas as rotas. Ele existe para o caso em que duas contas têm bucket com
@@ -1065,6 +1066,54 @@ assinou.
 `PUT` e listagem com o dono certo → `200`, objeto legível). Mutações: sem a guarda; aceitar qualquer
 valor — **2 de 2 derrubam**.
 
+
+## 4.33 `ListMultipartUploads`: `?uploads` mostra o que ficou aberto (ciclo 122)
+
+`GET /{bucket}?uploads` caía no `ListObjects`, que ignora o subrecurso e responde um
+`<ListBucketResult>` com os objetos — o cliente que pede os multiparts recebia uma lista
+**silenciosamente errada**, e as partes órfãs (processo que morreu, rede que caiu) seguiam ocupando
+disco até a varredura de lixo, sem rota para o operador vê-las.
+
+## 4.34 `ListObjectVersions`: `?versions` mostra o histórico do bucket (ciclo 123)
+
+`GET /{bucket}?versions` caía no `ListObjects`, que ignora o subrecurso e responde
+`200 <ListBucketResult>` com os objetos **correntes**. O `aws s3api list-object-versions` mostrava
+cada chave uma vez só e o operador não tinha como ver as versões substituídas ocupando disco. Só
+existia o histórico **de uma chave** (`StorageCatalogService.versions`).
+
+### Agora
+
+| pedido | resposta |
+|---|---|
+
+| `GET /{bucket}?uploads` | `200` `<ListMultipartUploadsResult>` com `<Upload><Key/><UploadId/><Initiated/>` por upload aberto **do dono** |
+| `?uploads&prefix=p` | só as chaves que começam com `p` (`%` e `_` escapados no SQL) |
+| upload de outra conta | omitido (não vira erro) |
+
+`StorageMultipartService.abertos(bucket, ownerUserId, prefix)`; ordem `created_at asc, upload_id asc`.
+
+**Verificação:** `S3GatewayTests` **+1** (`listar_uploads_abertos_do_dono`: abre um upload, ele
+aparece com chave e id, `prefix` que não casa não o traz). Vermelho antes: `ListBucketResult` com
+os objetos, sem o `<UploadId>` — o cliente não via upload nenhum. Mutações: tirar o filtro por dono;
+ignorar o `prefix` — **2 de 2 derrubam**.
+
+| `GET /{bucket}?versions` | `200 <ListVersionsResult>` com `<Version>` por versão e `<DeleteMarker>` para a lápide |
+| campos | `Key`, `VersionId`, `IsLatest`, `LastModified`, `ETag`, `Size` |
+| `?versions&prefix=p` | só as chaves que começam com `p` (`%`, `_`, `\` escapados) |
+| versão de outra conta no mesmo bucket | omitida |
+
+`StorageCatalogService.versionsNoBucket(bucket, prefix)` →
+`StorageCatalogRepository.versionsNoBucket` (ordem `object_key asc, version asc`, teto de 10 000
+linhas). Versão só existe em bucket com `versioning` ligado — sem ele, reescrever a chave é `409` e
+o histórico tem uma linha só.
+
+**Verificação:** `S3GatewayTests` **+1** (`listar_versoes_do_bucket`: duas versões da chave
+reescrita e uma da outra, todas com `VersionId`; uma linha de outra conta **plantada no mesmo
+bucket** não aparece; `prefix` que não casa não traz nada). Vermelho antes: `<ListBucketResult>`.
+Mutações: tirar o filtro por dono (a primeira rodada **passou verde** porque o teste não tinha
+objeto alheio — a asserção foi tornada discriminante com a linha plantada); ignorar o `prefix`;
+listar só `version > 1` — **3 de 3 derrubam**.
+
 ## 4.36 `?lifecycle` fala a mesma política que o varredor (ciclo 125)
 
 O Storage **expira objeto de verdade** pelo `expire_after_days` da política (o varredor apaga) e
@@ -1089,6 +1138,157 @@ vazio antes; grava 30 dias e 7 dias não correntes e confere **as colunas do ban
 as mesmas regras; `<Transition>` → `400` sem mudar o prazo). Vermelho antes: `<ListBucketResult>`.
 Mutações: não gravar a política; não emitir `<Expiration>` na leitura; aceitar `<Transition>` —
 **3 de 3 derrubam**.
+
+## 4.32 `CreateBucket`, `HeadBucket` e `GetBucketLocation` (ciclo 121)
+
+As três chamadas que **todo cliente faz antes de subir o primeiro objeto** não existiam.
+
+| antes | agora |
+|---|---|
+| `PUT /{bucket}` caía no `PutObject` → `400 InvalidRequest "Informe o bucket e a chave"` | `200` e o bucket registrado para o dono |
+| `HEAD /{bucket}` sem handler | `200` para bucket do dono, `404` para o que ele não tem |
+| `GET /{bucket}?location` sem handler | `200` com `<LocationConstraint>enois-1</LocationConstraint>` |
+
+- Criar de novo o **mesmo** bucket do **mesmo** dono é `200` idempotente
+  (`BucketAlreadyOwnedByYou` é sucesso no S3).
+- Nome que já é de **outra conta** é `409 BucketAlreadyExists` e não muda o dono.
+- O Storage não tem tabela de donos de bucket: o `CreateBucket` grava o criador em
+  `network_storage_buckets.updated_by` (a linha de política, que já existia), e o dono sem
+  registro sai do primeiro objeto vivo (`StorageCatalogRepository.ownerDoBucket`, `default`).
+- `?location` aceita o criador registrado **antes** do primeiro objeto; depois disso vale
+  `requireBucketDoDono` como no resto do gateway.
+- O `HeadBucket` responde `404` (não `403`) ao bucket alheio: o S3 não revela existência.
+
+**Verificação:** `S3GatewayTests` **+2** (`create_head_e_location_do_bucket`: criar, recriar
+idempotente, `HEAD` do dono, `HEAD` alheio `404`, `?location`;
+`create_de_bucket_de_outra_conta_e_409`). Mutações: não registrar; aceitar sobrescrever o dono;
+`HEAD` aceitar qualquer bucket — **3 de 3 derrubam**.
+
+
+## 4.37 `GetBucketAcl` e `GetBucketPolicy` dizem a verdade do gateway (ciclo 127)
+
+Os dois subrecursos de **leitura** do bucket não tinham rota e caíam no `ListObjects`:
+
+| antes | agora |
+|---|---|
+| `GET /{bucket}?acl` → `200 <ListBucketResult>` | `200 <AccessControlPolicy>` com `<Owner>` e um `<Grant>` `FULL_CONTROL` |
+| `GET /{bucket}?policy` → `200 <ListBucketResult>` | `404 NoSuchBucketPolicy` |
+| bucket de outra conta | `403 AccessDenied` nas duas |
+
+- O `<Owner><ID>` é a conta dona da credencial — o Storage tem **um** dono por bucket e nenhuma ACL
+  por usuário; expor isso é mais honesto que inventar `Grantee`.
+- `?policy` recusa por ausência declarada: o gateway não aceita política de recurso (quem manda é a
+  donagem). Devolver documento vazio/inventado faria o operador achar que há política.
+- `S3Xml` ganhou `attribute(prefix, namespace, name, value)`: o `<Grantee xsi:type="CanonicalUser">`
+  precisa do prefixo declarado no próprio elemento, senão o documento não é XML válido.
+
+**Verificação:** `S3GatewayTests` **+1** (`acl_e_policy_do_bucket`). Vermelho antes: `<ListBucketResult>`.
+Mutações **4/4** derrubam: não conferir donagem; `<Owner>` extra no fim; `?policy` responder `200`;
+`<DisplayName>` trocado por valor fixo. A 2ª **sobreviveu** à primeira versão da asserção (que só
+procurava `<Owner><ID>`), por isso ela passou a fixar ordem e fecho do documento.
+
+## 4.38 `DELETE` de subrecurso não é `DeleteBucket`, e o criador registrado apaga o próprio bucket (ciclo 129)
+
+O `DELETE /{bucket}` não olhava a consulta:
+
+| antes | agora |
+|---|---|
+| `DELETE /{bucket}?cors` (bucket com objetos) → `409 BucketNotEmpty` | `501 NotImplemented`, nada alterado |
+| `DELETE /{bucket}?cors` (bucket vazio) → `204` e o bucket some | `501 NotImplemented` |
+| `DELETE /{bucket}` de bucket criado por `CreateBucket`, sem objeto → `403 AccessDenied` | `204` |
+| `DELETE /{bucket}` depois de apagar a última chave → `403 AccessDenied` | `204` |
+
+- **Apagar a CORS não apaga o bucket.** Sem a guarda, um bucket vazio respondia `204` a
+  `DELETE /{bucket}?cors` e sumia — num bucket com objeto o `409` mentia sobre o motivo. A lista
+  `SUBRECURSOS_DE_BUCKET_NAO_IMPLEMENTADOS` (`cors`, `tagging`, `policy`, `website`, `notification`,
+  `logging`, `replication`, `encryption`, `accelerate`, `requestPayment`, `publicAccessBlock`,
+  `ownershipControls`, `analytics`, `intelligent-tiering`, `metrics`, `inventory`, `object-lock`) é
+  recusada com `501`, como o `PUT` de subrecurso que gravaria (§4.21).
+- `?versioning` **não** está na lista: é suportado (`PUT` com `Suspended` desliga). `?lifecycle` também
+  não — é a política do varredor.
+- **Donagem do `DeleteBucket`:** `bucketHasObjectsOf` contava só objeto **vivo**. O bucket criado por
+  `CreateBucket` (§4.32) não tem objeto nenhum — o criador recebia `403` ("não é do dono") no próprio
+  bucket; e o dono que apagou a última chave também, porque a lápide não contava. Agora conta uma linha
+  de qualquer estado **ou** a linha de política com `updated_by` igual ao dono.
+
+**Verificação:** `S3GatewayTests` **+1**
+(`delete_de_subrecurso_nao_apaga_o_bucket_e_o_dono_esvaziado_pode_apagar`): as 17 entradas recusadas com
+objeto vivo; o objeto continua lá; o dono apaga a última chave e o bucket (`204`); o criador registrado
+apaga o bucket que nunca teve objeto. Vermelho antes: `409 BucketNotEmpty`. Mutações **3/3** derrubam:
+sem a guarda; sem o `updated_by` na conta; `object-lock` fora da lista (esta **sobreviveu** à primeira
+versão do teste, que só exercia quatro entradas — o teste passou a percorrer a lista inteira).
+
+## 4.39 `DeleteObjects` apaga em lote (ciclo 120)
+
+A rota `POST /{bucket}?delete` não existia. `aws s3 rm --recursive` e o `rclone delete` mandam **um**
+POST com até 1000 chaves no corpo e esperam `200` com um `<Deleted>` por chave; o gateway respondia
+`500 INTERNAL_ERROR` (nenhum handler para o verbo naquele caminho). Pagar uma requisição por chave num
+bucket grande é justamente o que o protocolo evita.
+
+### Agora
+
+| corpo | resposta |
+|---|---|
+| `<Delete><Object><Key>k</Key></Object>…` | `200` com `<Deleted><Key>k</Key></Deleted>` por chave |
+| chave que não existe | `<Deleted>` (apagar o que não há é sucesso no S3) |
+| chave de outra conta | `<Error><Code>AccessDenied</Code>` e a chave **não** é tocada |
+| `<Quiet>true</Quiet>` | apaga e omite os `<Deleted>` |
+| sem `<Object>`, ou mais de 1000 | `400 MalformedXML` |
+
+**Verificação:** `S3GatewayTests` **+2** (`delete_objects_apaga_em_lote_e_reporta_cada_chave`: lote de
+três chaves, duas apagadas e a terceira legível, e o mesmo com `Quiet`;
+`delete_objects_sem_objetos_e_malformed_xml`). Mutações: não apagar; responder `200` ao corpo vazio —
+**2 de 2 derrubam**.
+
+## 4.40 `x-amz-request-id` em toda resposta, e o mesmo id no `<RequestId>` do erro (ciclo 130)
+
+Toda chamada do SDK ao S3 pode trazer um id de requisição. O gateway não trazia nenhum:
+
+| antes | agora |
+|---|---|
+| `200` sem `x-amz-request-id` | `200` com o cabeçalho |
+| `404 NoSuchKey` / `403 AccessDenied` sem o cabeçalho | idem, com o cabeçalho |
+| XML de erro **sem** `<RequestId>` | `<RequestId>` com o **mesmo** valor do cabeçalho |
+
+- O `errorXml` do controller preenchia `<RequestId>`, mas **não era o caminho usado**: o handler de
+  exceção monta o corpo por `S3ApiException.toXml`, que saía sem id — e o cabeçalho não existia em
+  lugar nenhum.
+- O id é sorteado **uma vez** por requisição no `S3RequestIdFilter` (16 hexadecimais maiúsculos, a
+  forma da AWS), guardado no atributo do pedido e escrito no cabeçalho antes da resposta começar. O
+  handler lê o mesmo atributo, então as duas metades concordam.
+- Fora de `/s3` nenhuma resposta muda: o filtro se anula (`shouldNotFilter`).
+- Ids de requisições diferentes são diferentes — um valor fixo não correlaciona nada, e o teste
+  afirma isso.
+
+**Verificação:** `S3GatewayTests` **+1** (`request_id_no_cabecalho_e_no_corpo_do_erro`): `200` com id;
+`404` com id no cabeçalho e no corpo, iguais; ids de duas requisições diferentes. Vermelho antes:
+`200 sem x-amz-request-id`. Mutações **3/3** derrubam: sem o cabeçalho; `<RequestId>` fixo; id fixo.
+
+## 4.41 `HEAD` de objeto recusa os mesmos subrecursos que o `GET` (ciclo 131)
+
+O `HEAD` de objeto chamava **só** a recusa dos subrecursos de leitura (`versionId`, `torrent`,
+`partNumber`, §4.37). A dos subrecursos que **gravariam** (`acl`, `tagging`, `retention`,
+`legal-hold`, `object-lock`, §4.21) ficava só no `GET`:
+
+| pedido | antes | agora |
+|---|---|---|
+| `HEAD ?acl` (idem `?tagging`, `?retention`, `?legal-hold`, `?object-lock`) | `200`, `Content-Length: 3`, `Content-Type` do arquivo | `501 NotImplemented` |
+| `HEAD ?versionId=` / `?torrent` / `?partNumber=` | `501` | `501` |
+| `HEAD ?response-content-type=` | `200` | `200`, tipo **gravável** (igual ao `GET`) |
+
+- `200` no `HEAD ?acl` é a pergunta errada com cara de certa: o cliente que consulta a ACL pelo
+  `HEAD` — o caminho de quem quer só o tamanho antes de baixar — lê "existe, 3 bytes, `text/plain`" e
+  conclui que a ACL do objeto é o próprio arquivo.
+- O `headObject` passou a chamar **as duas** recusas, como o `getObject`, e declara `IOException`
+  (a recusa dos subrecursos que gravariam lê o corpo do pedido).
+- O `?response-content-*` continua aceito e **não aplicado** nos dois (§4.28), então `HEAD` e `GET` da
+  mesma URL dizem o mesmo `Content-Type`.
+
+**Verificação:** `S3GatewayTests` **+1** (`head_recusa_os_mesmos_subrecursos_que_o_get`): para cada um
+dos 8 subrecursos, o `GET` responde `501` e o `HEAD` responde o mesmo, sem vazar o tamanho do arquivo;
+`?response-content-type=text/html` sai `200` sem `text/html`. Vermelho antes: `HEAD ?acl` → `200`.
+Mutações: sem a recusa dos subrecursos que gravariam (`a`) e sem a de leitura (`c`) derrubam; trocar a
+ordem das duas (`b`) **não** derruba — é equivalência real, cada uma é idempotente e independente.
 
 ## 5. Erros
 

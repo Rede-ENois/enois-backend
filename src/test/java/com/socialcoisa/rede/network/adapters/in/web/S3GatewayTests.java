@@ -1714,6 +1714,7 @@ void put_com_if_none_match_nao_sobrescreve_chave_ocupada() throws Exception {
 	}
 
 
+
 	/**
 	 * `x-amz-expected-bucket-owner`: o cliente diz de quem ele acha que é o bucket.
 	 *
@@ -1886,6 +1887,312 @@ void lifecycle_do_bucket_le_e_grava_a_mesma_politica_do_varredor() throws Except
 		}
 	}
 
+	/**
+	 * "Ler uma versão" não é "baixar o arquivo": `GET ?versionId=` responde `501`, não um `200` com o
+	 * conteúdo errado.
+	 *
+	 * <p><b>Antes:</b> o {@code GET} do objeto passava pela rota sem olhar a consulta e servia o corpo
+	 * para {@code ?versionId=}, {@code ?torrent} e {@code ?partNumber=1}. O gateway endereça só a versão
+	 * corrente, então quem pedia uma versão específica — o SDK depois de um {@code list-object-versions}
+	 * — recebia <b>outra</b> cópia, com {@code 200}; o cliente lia isso como sucesso e processava o
+	 * conteúdo errado. Pior: a URL pré-assinada de {@code ?torrent} baixava o arquivo.</p>
+	 *
+	 * <p><b>Agora:</b> os três são {@code 501 NotImplemented} sem corpo, no {@code GET} e no
+	 * {@code HEAD}, e o objeto continua intacto. {@code ?response-content-disposition} continua
+	 * aceito: entra na assinatura da URL pré-assinada.</p>
+	 */
+	@Test
+	void get_de_subrecurso_nao_serve_o_objeto() throws Exception {
+		gravar("versoes/a.txt", "corrente");
+
+		for (String sub : new String[] { "versionId=abc", "torrent", "partNumber=1" }) {
+			MockHttpServletRequestBuilder leitura = get("/s3/" + bucket + "/versoes/a.txt?" + sub);
+			assinar(leitura, SECRET, shaVazio());
+			var resposta = mockMvc.perform(leitura).andReturn().getResponse();
+			assertThat(resposta.getStatus()).as(sub + ": " + resposta.getContentAsString()).isEqualTo(501);
+			assertThat(resposta.getContentAsString()).contains("<Code>NotImplemented</Code>");
+			assertThat(resposta.getContentAsString()).doesNotContain("corrente");
+
+			// O HEAD é o GET sem corpo: mesma pergunta, mesma recusa.
+			MockHttpServletRequestBuilder cabecalho = MockMvcRequestBuilders
+				.head("/s3/" + bucket + "/versoes/a.txt?" + sub);
+			assinar(cabecalho, SECRET, shaVazio());
+			assertThat(mockMvc.perform(cabecalho).andReturn().getResponse().getStatus())
+				.as("HEAD " + sub).isEqualTo(501);
+		}
+
+		// O `GET` normal continua servindo o objeto: a recusa é do subrecurso, não da rota.
+		MockHttpServletRequestBuilder normal = get("/s3/" + bucket + "/versoes/a.txt");
+		assinar(normal, SECRET, shaVazio());
+		var lido = mockMvc.perform(normal).andReturn();
+		var corpoNormal = lido.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lido)).andReturn().getResponse() : lido.getResponse();
+		assertThat(corpoNormal.getStatus()).isEqualTo(200);
+		assertThat(corpoNormal.getContentAsString()).isEqualTo("corrente");
+	}
+
+	/** Criar um bucket que já é de outra conta é {@code 409 BucketAlreadyExists}, sem mexer no dono. */
+	@Test
+	void create_de_bucket_de_outra_conta_e_409() throws Exception {
+		String nome = "bkt" + UUID.randomUUID().toString().replace("-", "").substring(0, 10);
+		var outro = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_outro_dono_bucket");
+		String acessoOutro = "AKIAENOISOUTR" + UUID.randomUUID().toString().replace("-", "").substring(0, 6).toUpperCase();
+		jdbc.update("""
+			insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+				allowed_bucket, allowed_operations, created_at)
+			values (?, ?, ?, ?, ?, null, 'GET PUT LIST DELETE', ?)
+			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), acessoOutro,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET),
+			outro.userId(), java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+
+		MockHttpServletRequestBuilder dele = put("/s3/" + nome).content(new byte[0]);
+		assinar(dele, SECRET, shaVazio(), acessoOutro);
+		mockMvc.perform(dele).andExpect(status().isOk());
+
+		MockHttpServletRequestBuilder eu = put("/s3/" + nome).content(new byte[0]);
+		assinar(eu, SECRET, shaVazio());
+		var resposta = mockMvc.perform(eu).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(409);
+		assertThat(resposta.getContentAsString()).contains("<Code>BucketAlreadyExists</Code>");
+	}
+
+	/**
+	 * Toda resposta traz {@code x-amz-request-id} e o erro carrega o mesmo id em {@code <RequestId>}.
+	 *
+	 * <p><b>Antes:</b> nenhuma resposta tinha o cabeçalho, e o XML de erro do gateway
+	 * ({@link S3ApiException#toXml}) saía sem {@code <RequestId>} — o {@code errorXml} do controller,
+	 * que preenchia, não era o caminho usado. Todo SDK mostra esse id na mensagem de erro
+	 * ({@code An error occurred (AccessDenied) when calling ... (Request ID: ...)}) e é por ele que o
+	 * suporte acha a requisição no log; sem id no cabeçalho, nem o corpo e o cabeçalho da
+	 * <b>mesma</b> resposta concordam.</p>
+	 *
+	 * <p><b>Agora:</b> o id é sorteado uma vez por requisição e sai nos dois lugares: cabeçalho
+	 * {@code x-amz-request-id} em sucesso e erro, {@code <RequestId>} no corpo do erro. Nunca o
+	 * {@code null} que o SDK não sabe interpretar.</p>
+	 */
+	@Test
+	void request_id_no_cabecalho_e_no_corpo_do_erro() throws Exception {
+		gravar("rid/a.txt", "abc");
+
+		MockHttpServletRequestBuilder ok = get("/s3/" + bucket + "/rid/a.txt");
+		assinar(ok, SECRET, shaVazio());
+		var r = mockMvc.perform(ok).andReturn();
+		var sucesso = r.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(r)).andReturn().getResponse() : r.getResponse();
+		String idDoSucesso = sucesso.getHeader("x-amz-request-id");
+		assertThat(sucesso.getStatus()).isEqualTo(200);
+		assertThat(idDoSucesso).as("200 sem x-amz-request-id").isNotNull().isNotBlank();
+
+		MockHttpServletRequestBuilder erro = get("/s3/" + bucket + "/rid/nao-existe");
+		assinar(erro, SECRET, shaVazio());
+		var resposta = mockMvc.perform(erro).andReturn().getResponse();
+		String idDoErro = resposta.getHeader("x-amz-request-id");
+		assertThat(resposta.getStatus()).isEqualTo(404);
+		assertThat(idDoErro).as("404 sem x-amz-request-id").isNotNull().isNotBlank();
+		// O mesmo id nos dois lugares: é o que permite achar a requisição pelo que o cliente reporta.
+		assertThat(resposta.getContentAsString())
+			.contains("<Code>NoSuchKey</Code>")
+			.contains("<RequestId>" + idDoErro + "</RequestId>");
+
+		// Ids de requisições diferentes são diferentes: um valor fixo não correlaciona nada.
+		assertThat(idDoErro).isNotEqualTo(idDoSucesso);	}
+
+	/**
+	 * O {@code HEAD} recusa os mesmos subrecursos que o {@code GET}, e não promete cabeçalho que o
+	 * {@code GET} não entrega.
+	 *
+	 * <p><b>Antes:</b> o {@code HEAD} só chamava a recusa dos subrecursos de <b>leitura</b>
+	 * ({@code versionId}, {@code torrent}, {@code partNumber}); a dos subrecursos que <b>gravariam</b>
+	 * ({@code acl}, {@code tagging}, {@code retention}, {@code legal-hold}, {@code object-lock}) ficava
+	 * só no {@code GET}. O cliente que perguntava a ACL pelo {@code HEAD} — o caminho de quem quer só o
+	 * tamanho antes de baixar — recebia {@code 200} com o {@code Content-Length} do <b>arquivo</b> e o
+	 * {@code Content-Type} do arquivo: {@code ?acl} respondia "existe, 3 bytes, text/plain", que é
+	 * exatamente a pergunta errada respondida com cara de certa.</p>
+	 *
+	 * <p>E o {@code HEAD} do {@code ?response-content-type=} devolvia {@code 200} enquanto o
+	 * {@code GET} correspondente servia o {@code Content-Type} gravado (§4.28): as duas metades da
+	 * mesma pergunta discordavam. Os dois agora respondem igual — o cabeçalho entra na assinatura e
+	 * não é aplicado, nos dois.</p>
+	 */
+	@Test
+	void head_recusa_os_mesmos_subrecursos_que_o_get() throws Exception {
+		gravar("head/h.txt", "abc");
+
+		for (String sub : new String[] { "acl", "tagging", "retention", "legal-hold", "object-lock",
+				"versionId=1", "torrent", "partNumber=1" }) {
+			// O GET é a referência: o que ele recusa, o HEAD recusa.
+			MockHttpServletRequestBuilder leitura = get("/s3/" + bucket + "/head/h.txt?" + sub);
+			assinar(leitura, SECRET, shaVazio());
+			var r = mockMvc.perform(leitura).andReturn();
+			var doGet = r.getRequest().isAsyncStarted()
+				? mockMvc.perform(asyncDispatch(r)).andReturn().getResponse() : r.getResponse();
+
+			MockHttpServletRequestBuilder cabecalho = MockMvcRequestBuilders
+				.head("/s3/" + bucket + "/head/h.txt?" + sub);
+			assinar(cabecalho, SECRET, shaVazio());
+			var doHead = mockMvc.perform(cabecalho).andReturn().getResponse();
+
+			assertThat(doGet.getStatus()).as("GET ?" + sub).isEqualTo(501);
+			assertThat(doHead.getStatus()).as("HEAD ?" + sub).isEqualTo(501);
+			// O tamanho do arquivo não vaza num 501: é o que fazia parecer "existe e tem 3 bytes".
+			assertThat(doHead.getHeader("Content-Length")).as("HEAD ?" + sub).isNotEqualTo("3");
+		}
+
+		// `response-content-type` entra na assinatura mas não é aplicado no GET; o `HEAD` diz o mesmo.
+		MockHttpServletRequestBuilder comTipo = MockMvcRequestBuilders
+			.head("/s3/" + bucket + "/head/h.txt?response-content-type=text/html");
+		assinar(comTipo, SECRET, shaVazio());
+		var tipoDoHead = mockMvc.perform(comTipo).andReturn().getResponse();
+		assertThat(tipoDoHead.getStatus()).isEqualTo(200);
+		assertThat(tipoDoHead.getContentType()).doesNotContain("text/html");
+	}
+
+
+	/**
+	 * `DeleteObjects` (POST `/{bucket}?delete`) apaga em lote e devolve o `Deleted` de cada chave.
+	 *
+	 * <p><b>Antes:</b> a rota não existia. `aws s3 rm --recursive` e o `rclone delete` mandam um único
+	 * POST com até 1000 chaves no corpo e esperam `200` com um {@code <Deleted>} por chave; aqui o
+	 * cliente recebia um erro de rota/método e a limpeza em massa falhava — ou, pior, o cliente
+	 * entendia que nada foi apagado e repetia para sempre.</p>
+	 *
+	 * <p><b>Agora:</b> cada {@code <Object><Key>} do XML vira uma lápide pelo mesmo {@code delete} do
+	 * {@code DELETE}; {@code <Quiet>true</Quiet>} omite os {@code <Deleted>}; chave que não existe sai
+	 * em {@code <Deleted>} (o S3 é idempotente: apagar o que não há é sucesso); chave de outra conta
+	 * sai em {@code <Error>} com {@code AccessDenied} e <b>não</b> é apagada. Mais de 1000 chaves →
+	 * {@code 400 MalformedXML}, como no S3; XML sem {@code <Object>} também.</p>
+	 */
+	@Test
+void delete_objects_apaga_em_lote_e_reporta_cada_chave() throws Exception {
+		gravar("lote/a.txt", "a");
+		gravar("lote/b.txt", "b");
+		gravar("lote/fica.txt", "fica");
+
+		String xml = "<Delete><Object><Key>lote/a.txt</Key></Object>"
+			+ "<Object><Key>lote/b.txt</Key></Object>"
+			+ "<Object><Key>lote/nao-existe.txt</Key></Object></Delete>";
+		MockHttpServletRequestBuilder lote = MockMvcRequestBuilders.post("/s3/" + bucket + "?delete")
+			.content(xml.getBytes(StandardCharsets.UTF_8)).contentType("application/xml");
+		assinar(lote, SECRET, shaDe(xml));
+		var resposta = mockMvc.perform(lote).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(200);
+		String corpo = resposta.getContentAsString();
+		assertThat(corpo).contains("<Deleted><Key>lote/a.txt</Key>");
+		assertThat(corpo).contains("<Deleted><Key>lote/b.txt</Key>");
+		assertThat(corpo).contains("<Deleted><Key>lote/nao-existe.txt</Key>");
+
+		// As duas sumiram (lápide) e a que não estava no lote continua legível. A busca pela chave
+		// apagada pode dar 403: se era a última do bucket, o bucket deixa de existir para o dono
+		// (a mesma régua do DELETE de uma chave, doc §4.23).
+		MockHttpServletRequestBuilder buscaA = get("/s3/" + bucket + "/lote/a.txt");
+		assinar(buscaA, SECRET, shaVazio());
+		assertThat(mockMvc.perform(buscaA).andReturn().getResponse().getStatus()).isIn(403, 404);
+		assertThat(ler("lote/fica.txt")).isEqualTo("fica");
+
+		// Quiet: omite os <Deleted>, mas apaga.
+		String quiet = "<Delete><Quiet>true</Quiet><Object><Key>lote/fica.txt</Key></Object></Delete>";
+		MockHttpServletRequestBuilder silencioso = MockMvcRequestBuilders.post("/s3/" + bucket + "?delete")
+			.content(quiet.getBytes(StandardCharsets.UTF_8))
+			.contentType("application/xml");
+		assinar(silencioso, SECRET, shaDe(quiet));
+		String corpoQuiet = mockMvc.perform(silencioso).andReturn().getResponse().getContentAsString();
+		assertThat(corpoQuiet).doesNotContain("<Deleted>");
+		MockHttpServletRequestBuilder buscaFica = get("/s3/" + bucket + "/lote/fica.txt");
+		assinar(buscaFica, SECRET, shaVazio());
+		assertThat(mockMvc.perform(buscaFica).andReturn().getResponse().getStatus()).isIn(403, 404);
+	}
+
+
+	/** `DeleteObjects` sem nenhuma chave é `MalformedXML`, como o S3 — não um `200` vazio. */
+	@Test
+void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
+		// A guarda do dono do bucket vem antes do XML: sem um objeto, o bucket não é do dono para o
+		// `requireBucketDoDonoOuEsvaziado`, e o 403 mascararia o `MalformedXML` que este teste mede.
+		gravar("sem-objetos/dono.txt", "x");
+		String xml = "<Delete></Delete>";
+		MockHttpServletRequestBuilder vazio = MockMvcRequestBuilders.post("/s3/" + bucket + "?delete")
+			.content(xml.getBytes(StandardCharsets.UTF_8)).contentType("application/xml");
+		assinar(vazio, SECRET, shaDe(xml));
+		var resposta = mockMvc.perform(vazio).andReturn().getResponse();
+		assertThat(resposta.getStatus()).isEqualTo(400);
+		assertThat(resposta.getContentAsString()).contains("<Code>MalformedXML</Code>");
+	}
+
+	/**
+	 * `ListObjectVersions` (`GET /{bucket}?versions`) lista o histórico das chaves do dono.
+	 *
+	 * <p><b>Antes:</b> a rota caía no {@code ListObjects}, que ignora o subrecurso e responde um
+	 * {@code <ListBucketResult>} com os objetos correntes. O cliente que pede o histórico recebia
+	 * <b>uma lista de objetos e um {@code 200} válido</b> — nem erro, nem versão. O
+	 * {@code aws s3api list-object-versions} e o {@code rclone lsf --s3-versions} mostravam cada chave
+	 * uma vez só, e o operador não tinha como ver que existiam versões anteriores ocupando disco.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 200} {@code <ListVersionsResult>} com um {@code <Version>} por versão
+	 * (a corrente e as substituídas) e um {@code <DeleteMarker>} para a lápide, cada um com chave,
+	 * {@code VersionId}, tamanho, ETag e data. Só do dono da credencial; {@code prefix} filtra.</p>
+	 */
+	@Test
+	void listar_versoes_do_bucket() throws Exception {
+		// Versão só existe em bucket com versionamento ligado: sem ele, reescrever a chave é 409 e
+		// não há histórico para listar. A política entra pela sessão do dono.
+		// A política entra direto na tabela: esta é a régua do ListObjectVersions, não da autorização
+		// de política (que tem o próprio teste).
+		jdbc.update("""
+			insert into network_storage_buckets (bucket, versioning, retain_superseded_days, expire_after_days,
+				updated_by, updated_at)
+			values (?, true, 30, null, ?, current_timestamp(3))
+			on duplicate key update versioning = true, retain_superseded_days = 30, expire_after_days = null
+			""", bucket, admin);
+
+		// Duas gravações na mesma chave: a primeira vira versão substituída da segunda. Cada
+		// gravação numa chave distinta também entra no histórico.
+		gravar("versoes/a.txt", "primeira");
+		gravar("versoes/a.txt", "segunda");
+		gravar("versoes/b.txt", "b");
+
+		// Uma linha de OUTRA conta no mesmo bucket: só o filtro por dono a esconde. Plantar a linha
+		// direto é a única forma de pôr um objeto alheio num bucket que já tem dono (o PUT recusa),
+		// e é exatamente o estado que a listagem tem de saber ignorar.
+		jdbc.update("""
+			insert into network_storage_objects (id, bucket, object_key, bytes, sha256, state, created_by,
+				created_at, updated_at)
+			values (?, ?, 'versoes/do-outro.txt', 5, ?, 'STORED', 's3_versions_outro', current_timestamp(3),
+				current_timestamp(3))
+			""", "sobj_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16), bucket,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex("outro"));
+
+		MockHttpServletRequestBuilder lista = get("/s3/" + bucket + "?versions");
+		assinar(lista, SECRET, shaVazio());
+		var resposta = mockMvc.perform(lista).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(200);
+		String corpo = resposta.getContentAsString();
+		assertThat(corpo).startsWith("<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListVersionsResult");
+		// Duas versões da chave reescrita e uma da outra.
+		assertThat(corpo.split("<Key>versoes/a.txt</Key>", -1).length - 1).isEqualTo(2);
+		assertThat(corpo).contains("<Key>versoes/b.txt</Key>");
+		assertThat(corpo).contains("<VersionId>");
+		// O histórico da outra conta no mesmo bucket não aparece.
+		assertThat(corpo).doesNotContain("versoes/do-outro.txt");
+
+		// `prefix` que não casa não traz nada do histórico — e responde `200`: o filtro entra antes do
+		// `limit`, e a asserção só no corpo deixava um erro 500 passar como "não contém".
+		MockHttpServletRequestBuilder fora = get("/s3/" + bucket + "?versions&prefix=outra");
+		assinar(fora, SECRET, shaVazio());
+		var foraResposta = mockMvc.perform(fora).andReturn().getResponse();
+		assertThat(foraResposta.getStatus()).as(foraResposta.getContentAsString()).isEqualTo(200);
+		assertThat(foraResposta.getContentAsString()).doesNotContain("<Key>versoes/");
+
+		// `prefix` que casa traz só o que casa, com as duas versões da mesma chave.
+		MockHttpServletRequestBuilder dentro = get("/s3/" + bucket + "?versions&prefix=versoes/a");
+		assinar(dentro, SECRET, shaVazio());
+		var dentroResposta = mockMvc.perform(dentro).andReturn().getResponse();
+		assertThat(dentroResposta.getStatus()).as(dentroResposta.getContentAsString()).isEqualTo(200);
+		assertThat(dentroResposta.getContentAsString()).contains("<Key>versoes/a.txt</Key>")
+			.doesNotContain("versoes/b.txt");
+
+
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {
@@ -1900,6 +2207,93 @@ void lifecycle_do_bucket_le_e_grava_a_mesma_politica_do_varredor() throws Except
 		assertThat(result.getResponse().getStatus()).isEqualTo(403);
 		assertThat(result.getResponse().getContentAsString()).contains("<Code>AccessDenied</Code>");
 	}
+
+
+	/**
+	 * `CreateBucket` / `HeadBucket` / `GetBucketLocation` — as três chamadas que o SDK faz primeiro.
+	 *
+	 * <p><b>Antes:</b> nenhuma existia. {@code PUT /{bucket}} caía no {@code PutObject} e respondia
+	 * {@code 400 InvalidRequest "Informe o bucket e a chave"}; {@code HEAD /{bucket}} e
+	 * {@code GET /{bucket}?location} não tinham handler. O {@code aws s3 mb s3://nome} e o
+	 * {@code rclone mkdir} falhavam no primeiro comando, e o cliente que confirma o bucket antes de
+	 * subir (todo SDK: {@code headBucket} antes do primeiro {@code putObject}) não tinha por onde.</p>
+	 *
+	 * <p><b>Agora:</b> {@code CreateBucket} registra o bucket no catálogo para o dono e responde
+	 * {@code 200}; criar de novo o mesmo bucket <b>do mesmo dono</b> é {@code 200} idempotente
+	 * ({@code BucketAlreadyOwnedByYou}); nome que já é de <b>outra conta</b> é
+	 * {@code 409 BucketAlreadyExists}. O {@code HeadBucket} responde {@code 200} para bucket do dono e
+	 * {@code 404} para o que ele não tem. {@code ?location} devolve a região do gateway.</p>
+	 */
+	@Test
+	void create_head_e_location_do_bucket() throws Exception {
+		String novo = "bkt" + UUID.randomUUID().toString().replace("-", "").substring(0, 10);
+
+		MockHttpServletRequestBuilder criar = put("/s3/" + novo).content(new byte[0]);
+		assinar(criar, SECRET, shaVazio());
+		var criado = mockMvc.perform(criar).andReturn().getResponse();
+		assertThat(criado.getStatus()).as(criado.getContentAsString()).isEqualTo(200);
+		assertThat(jdbc.queryForList("select bucket from network_storage_buckets where bucket = ?",
+			String.class, novo)).contains(novo);
+
+		// Criar de novo pelo mesmo dono: 200 (BucketAlreadyOwnedByYou é sucesso no S3).
+		MockHttpServletRequestBuilder denovo = put("/s3/" + novo).content(new byte[0]);
+		assinar(denovo, SECRET, shaVazio());
+		assertThat(mockMvc.perform(denovo).andReturn().getResponse().getStatus()).isEqualTo(200);
+
+		// HeadBucket: 200 no do dono.
+		MockHttpServletRequestBuilder head = MockMvcRequestBuilders.head("/s3/" + novo);
+		assinar(head, SECRET, shaVazio());
+		assertThat(mockMvc.perform(head).andReturn().getResponse().getStatus()).isEqualTo(200);
+
+		// HeadBucket de bucket que não é do dono: 404 (o S3 não revela existência de bucket alheio).
+		MockHttpServletRequestBuilder headAlheio = MockMvcRequestBuilders
+			.head("/s3/bkt" + UUID.randomUUID().toString().replace("-", "").substring(0, 10));
+		assinar(headAlheio, SECRET, shaVazio());
+		assertThat(mockMvc.perform(headAlheio).andReturn().getResponse().getStatus()).isEqualTo(404);
+
+		// GetBucketLocation: a região do gateway.
+		MockHttpServletRequestBuilder local = get("/s3/" + novo + "?location");
+		assinar(local, SECRET, shaVazio());
+		var localResposta = mockMvc.perform(local).andReturn().getResponse();
+		assertThat(localResposta.getStatus()).as(localResposta.getContentAsString()).isEqualTo(200);
+		assertThat(localResposta.getContentAsString()).contains(">enois-1</LocationConstraint>");
+	}
+
+	/**
+	 * O criador do bucket é o dono, e continua sendo depois de perder o último objeto.
+	 *
+	 * <p>A posse vinha de {@code updated_by} — que muda a cada {@code putBucketPolicy}, então quem
+	 * configurasse o ciclo de vida virava "dono" — e, sem política, do primeiro objeto vivo, que muda
+	 * quando todos são apagados e outra conta grava. Agora o criador fica em {@code owner_user_id},
+	 * gravado no {@code CreateBucket} e nunca reescrito.</p>
+	 */
+	@Test
+	void o_criador_e_o_dono_do_bucket_mesmo_depois_de_esvaziar() throws Exception {
+		String meuBuckete = "criado-" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder cria = put("/s3/" + meuBuckete);
+		assinar(cria, SECRET, shaVazio());
+		assertThat(mockMvc.perform(cria).andReturn().getResponse().getStatus()).isEqualTo(200);
+		assertThat(jdbc.queryForObject("select owner_user_id from network_storage_buckets where bucket = ?",
+			String.class, meuBuckete)).as("o criador nao foi gravado").isEqualTo(admin);
+
+		// Outra conta (o admin de outro teste não é esta credencial) tenta criar o mesmo nome.
+		jdbc.update("update network_storage_buckets set updated_by = 's3_quem_configurou' where bucket = ?",
+			meuBuckete);
+		// O `updated_by` mudou, mas o dono não: a política não rouba o bucket.
+		assertThat(jdbc.queryForObject("select owner_user_id from network_storage_buckets where bucket = ?",
+			String.class, meuBuckete)).as("o criador foi reescrito pela politica").isEqualTo(admin);
+
+		MockHttpServletRequestBuilder criaDeNovo = put("/s3/" + meuBuckete);
+		assinar(criaDeNovo, SECRET, shaVazio());
+		assertThat(mockMvc.perform(criaDeNovo).andReturn().getResponse().getStatus())
+			.as("o dono deixou de reconhecer o proprio bucket").isEqualTo(200);
+
+		MockHttpServletRequestBuilder head = head("/s3/" + meuBuckete);
+		assinar(head, SECRET, shaVazio());
+		assertThat(mockMvc.perform(head).andReturn().getResponse().getStatus()).isEqualTo(200);
+	}
+
+
 
 	/** Credencial presa a um bucket não alcança outro, mesmo do mesmo dono. */
 	@Test

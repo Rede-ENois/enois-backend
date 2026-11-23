@@ -74,7 +74,9 @@ public class GlobalExceptionHandler {
 		}
 		return resposta
 			.body(exception.toXml(request == null ? null
-				: request.getMethod() + " " + request.getRequestURI()));
+				: request.getMethod() + " " + request.getRequestURI(),
+				request == null ? null
+					: com.socialcoisa.rede.network.adapters.in.web.S3RequestIdFilter.idDa(request)));
 	}
 
 	@ExceptionHandler(ApiException.class)

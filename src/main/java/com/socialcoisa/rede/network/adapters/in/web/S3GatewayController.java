@@ -114,8 +114,36 @@ class S3GatewayController {
 	 * mensagem cita <b>um</b> subrecurso, e com dois na mesma requisição ({@code ?tagging&acl}) a ordem
 	 * de um {@code Set.of} não é contrato — a mesma requisição responderia uma coisa ou outra.
 	 */
+	/** O teto do `DeleteObjects` do S3: mais de mil chaves num POST é recusa do protocolo. */
+	private static final int MAX_DELETE_OBJECTS = 1000;
+
 	private static final List<String> SUBRECURSOS_QUE_GRAVARIAM = List.of("tagging", "acl", "retention",
 		"legal-hold", "object-lock");
+
+	/**
+	 * Subrecursos de <b>leitura</b> do objeto que este gateway nao endereca.
+	 *
+	 * <p>{@code versionId} e a versao especifica (o gateway so serve a corrente, e devolver outra
+	 * com {@code 200} e conteudo errado com cara de certo); {@code torrent} e {@code partNumber}
+	 * so fazem sentido junto de operacoes que aqui nao existem. Sem a recusa, os tres serviam o
+	 * corpo do arquivo — e a URL pre-assinada de {@code ?torrent} baixava o objeto.</p>
+	 *
+	 * <p>{@code response-content-*} fica de fora: entra na assinatura da URL pre-assinada (§4.28),
+	 * entao adulterar e recusado, mas o gateway <b>nao</b> aplica o cabecalho (o
+	 * {@code Content-Disposition} e o declarado no {@code PUT}).</p>
+	 */
+	private static final List<String> SUBRECURSOS_DE_LEITURA_NAO_ENDERECADOS = List.of("versionId", "torrent",
+		"partNumber");
+
+	/**
+	 * Subrecurso de <b>bucket</b> que e politica no S3 e aqui nao existe (a unica que age e a do
+	 * varredor, {@code ?lifecycle}). Recusados no {@code DELETE}, onde sem a guarda viravam
+	 * {@code DeleteBucket} — e num bucket vazio apagavam o bucket.
+	 */
+	private static final List<String> SUBRECURSOS_DE_BUCKET_NAO_IMPLEMENTADOS = List.of("cors", "tagging",
+		"policy", "website", "notification", "logging", "replication", "encryption", "accelerate",
+		"requestPayment", "publicAccessBlock", "ownershipControls", "analytics", "intelligent-tiering",
+		"metrics", "inventory", "object-lock");
 
 	/** O formato de instante da S3: sempre três casas decimais e sempre {@code Z}. */
 	private static final DateTimeFormatter S3_INSTANT = DateTimeFormatter
@@ -204,6 +232,76 @@ class S3GatewayController {
 	}
 
 	/**
+	 * ListMultipartUploads: {@code GET /{bucket}?uploads} — o que ficou aberto no bucket.
+	 *
+	 * <p><b>Antes:</b> a rota caía no {@code ListObjects}, que ignora o subrecurso e responde um
+	 * {@code <ListBucketResult>} com os objetos. O cliente que pede os multiparts recebia uma lista de
+	 * objetos <b>silenciosamente errada</b> — `aws s3api list-multipart-uploads` e o `rclone` que
+	 * procuram upload órfão não achavam nada, e as partes abandonadas seguiam ocupando disco até a
+	 * varredura de lixo.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 200} com {@code <Upload><Key>…</Key><UploadId>…</UploadId><Initiated>…}
+	 * por upload em aberto <b>do dono da credencial</b>; {@code prefix} filtra. Upload de outra conta
+	 * não aparece — é omitido, não vira erro.</p>
+	 */
+	@GetMapping(value = "/{bucket}", params = "uploads")
+	ResponseEntity<String> listMultipartUploads(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		S3Xml xml = new S3Xml();
+		xml.root("ListMultipartUploadsResult").element("Bucket", bucket)
+			.element("IsTruncated", "false");
+		for (var upload : multipart.abertos(bucket, credential.ownerUserId(), query(request).get("prefix"))) {
+			xml.open("Upload")
+				.element("Key", upload.key())
+				.element("UploadId", upload.uploadId())
+				.element("Initiated", S3_INSTANT.format(upload.createdAt()))
+				.close("Upload");
+		}
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/**
+	 * ListObjectVersions: {@code GET /{bucket}?versions} — o histórico das chaves do dono.
+	 *
+	 * <p><b>Antes:</b> a rota caía no {@code ListObjects} e respondia um {@code <ListBucketResult>}
+	 * com os objetos correntes e {@code 200}. O {@code aws s3api list-object-versions} mostrava cada
+	 * chave uma vez só, e o operador não tinha como ver as versões substituídas ocupando disco.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 200 <ListVersionsResult>} com um {@code <Version>} por versão e um
+	 * {@code <DeleteMarker>} para a lápide — chave, {@code VersionId}, {@code IsLatest}, tamanho,
+	 * ETag e data. Só do dono da credencial; {@code prefix} filtra.</p>
+	 */
+	@GetMapping(value = "/{bucket}", params = "versions")
+	ResponseEntity<String> listObjectVersions(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		S3Xml xml = new S3Xml();
+		xml.root("ListVersionsResult").element("Name", bucket)
+			.element("IsTruncated", "false")
+			.element("MaxKeys", "1000");
+		for (StorageObject objeto : storage.versionsNoBucket(bucket, query(request).get("prefix"))) {
+			if (!credential.ownerUserId().equals(objeto.createdBy())) {
+				continue;
+			}
+			// Lápide não tem tamanho nem ETag: vira <DeleteMarker>, como no S3.
+			boolean lapide = objeto.state() == StorageObjectState.DELETED;
+			String tag = lapide ? "DeleteMarker" : "Version";
+			xml.open(tag)
+				.element("Key", objeto.key())
+				.element("VersionId", String.valueOf(objeto.version()))
+				.element("IsLatest", String.valueOf(objeto.currentVersion()))
+				.element("LastModified", S3_INSTANT.format(objeto.createdAt()))
+				.element("ETag", "\"" + objeto.sha256() + "\"")
+				.element("Size", String.valueOf(objeto.bytes() == null ? 0 : objeto.bytes()));
+			xml.close(tag);
+		}
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/**
 	 * PutBucketLifecycleConfiguration: {@code PUT /{bucket}?lifecycle}.
 	 *
 	 * <p><b>Antes:</b> caía no {@code PutObject} e respondia
@@ -252,6 +350,55 @@ class S3GatewayController {
 		storage.putBucketPolicy(credential.ownerUserId(), bucket, atual.versioning(),
 			diasNaoCorrente, dias);
 		return ResponseEntity.ok().build();
+	}
+
+	/**
+	 * GetBucketAcl: {@code GET /{bucket}?acl}.
+	 *
+	 * <p><b>Antes:</b> caía no {@code ListObjects} e respondia {@code 200 <ListBucketResult>}. O
+	 * {@code aws s3api get-bucket-acl} lia uma lista de arquivos como se fosse a ACL do bucket.</p>
+	 *
+	 * <p><b>Agora:</b> {@code <AccessControlPolicy>} com o dono da credencial e um grant
+	 * {@code FULL_CONTROL} para ele. É a verdade do Storage: um bucket tem <b>um</b> dono, sem ACL por
+	 * usuário — expor isso é mais honesto que inventar grantees.</p>
+	 */
+	@GetMapping(value = "/{bucket}", params = "acl")
+	ResponseEntity<String> getBucketAcl(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		S3Xml xml = new S3Xml();
+		xml.root("AccessControlPolicy").open("Owner")
+			.element("ID", credential.ownerUserId())
+			.element("DisplayName", credential.ownerUserId())
+			.close("Owner")
+			.open("AccessControlList").open("Grant")
+			.open("Grantee").attribute("xsi", "http://www.w3.org/2001/XMLSchema-instance", "type", "CanonicalUser")
+			.element("ID", credential.ownerUserId())
+			.element("DisplayName", credential.ownerUserId())
+			.close("Grantee")
+			.element("Permission", "FULL_CONTROL")
+			.close("Grant").close("AccessControlList");
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/**
+	 * GetBucketPolicy: {@code GET /{bucket}?policy}.
+	 *
+	 * <p><b>Antes:</b> caía no {@code ListObjects} e respondia {@code 200 <ListBucketResult>} — o
+	 * {@code get-bucket-policy} lia objetos como política.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 404 NoSuchBucketPolicy}, o "não há política" do S3. O gateway não aceita
+	 * política de recurso: quem manda é a donagem (§4 do brief), e devolver um documento vazio ou
+	 * inventado seria pior que a ausência declarada.</p>
+	 */
+	@GetMapping(value = "/{bucket}", params = "policy")
+	ResponseEntity<Void> getBucketPolicy(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		throw s3Error(404, "NoSuchBucketPolicy",
+			"Este bucket nao tem politica de recurso; o acesso e do dono da credencial.");
 	}
 
 	/** O inteiro de {@code <Bloco><Campo>N</Campo></Bloco>} no XML, ou {@code null} se ausente. */
@@ -420,6 +567,8 @@ class S3GatewayController {
 	@DeleteMapping("/{bucket}")
 	ResponseEntity<Void> deleteBucket(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "DELETE");
+		// `DELETE ?cors`, `?tagging`, `?policy` e apagar a politica daquele subrecurso, nao o bucket.
+		recusarSubrecursoNoBucket(request, bucket);
 		requireBucket(credential, bucket);
 		requireBucketDoDonoOuEsvaziado(credential, bucket);
 		List<StorageObject> vivos = storage.list(bucket, null, null, 1);
@@ -428,6 +577,83 @@ class S3GatewayController {
 		}
 		// O bucket já "não existe" para o dono: nada vivo, nada listado. O 204 é a confirmação do S3.
 		return ResponseEntity.noContent().build();
+	}
+
+	/**
+	 * DeleteObjects: {@code POST /{bucket}?delete} apaga até 1000 chaves num único pedido.
+	 *
+	 * <p><b>Antes:</b> a rota não existia — `aws s3 rm --recursive` e o `rclone delete` mandam um POST
+	 * com o XML das chaves e o gateway respondia {@code 500 INTERNAL_ERROR} (nenhum handler para o
+	 * verbo naquele caminho). A limpeza em massa não tinha como acontecer: pagar uma requisição por
+	 * chave num bucket grande é o caminho que o protocolo evita de propósito.</p>
+	 *
+	 * <p><b>Agora:</b> cada {@code <Object><Key>} vira uma lápide pelo mesmo {@code delete} do
+	 * {@code DELETE}; chave inexistente sai como {@code <Deleted>} (apagar o que não há é sucesso no
+	 * S3); chave de outra conta sai em {@code <Error>} com {@code AccessDenied} e não é tocada;
+	 * {@code <Quiet>true</Quiet>} silencia os {@code <Deleted>}. Mais de 1000 chaves, ou nenhuma, é
+	 * {@code 400 MalformedXML}.</p>
+	 */
+	@RequestMapping(value = "/{bucket}", method = RequestMethod.POST, params = "delete")
+	ResponseEntity<String> deleteObjects(@PathVariable String bucket, HttpServletRequest request)
+			throws IOException {
+		S3Credential credential = authenticate(request, "DELETE");
+		requireBucket(credential, bucket);
+		// A mesma guarda do DELETE de uma chave: num bucket de outra conta, nada é apagado — nem as
+		// chaves que a credencial criou lá antes de o bucket mudar de dono.
+		requireBucketDoDonoOuEsvaziado(credential, bucket);
+		String texto = new String(body(request).readAllBytes(), StandardCharsets.UTF_8);
+		String quietoXml = entre(texto, "<Quiet>", "</Quiet>");
+		boolean quieto = quietoXml != null && "true".equalsIgnoreCase(quietoXml.trim());
+		// Varredura linear: `<Object>(.*?)</Object>` sobre o corpo do chamador é o ReDoS que o CodeQL
+		// marca, e o recorte por `indexOf` é O(n) por construção.
+		java.util.List<String> chaves = new java.util.ArrayList<>();
+		for (String objeto : trechosDe(texto, "Object")) {
+			String chave = entre(objeto, "<Key>", "</Key>");
+			if (chave != null) {
+				chaves.add(decodeXml(chave));
+			}
+		}
+		if (chaves.isEmpty()) {
+			throw s3Error(400, "MalformedXML", "DeleteObjects sem objetos.");
+		}
+		if (chaves.size() > MAX_DELETE_OBJECTS) {
+			throw s3Error(400, "MalformedXML",
+				"DeleteObjects aceita no maximo " + MAX_DELETE_OBJECTS + " chaves por pedido.");
+		}
+		S3Xml xml = new S3Xml();
+		xml.root("DeleteResult");
+		for (String chave : chaves) {
+			try {
+				// A mesma régua do DELETE de uma chave: só o objeto do dono da credencial sai.
+				StorageObject objeto_ = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, chave, "DELETE"));
+				if (!credential.ownerUserId().equals(objeto_.createdBy())) {
+					throw s3Error(403, "AccessDenied", "O objeto nao e do dono da credencial.");
+				}
+				storage.delete(credential.ownerUserId(), bucket, chave);
+				if (!quieto) {
+					xml.open("Deleted").element("Key", chave).close("Deleted");
+				}
+			}
+			catch (ApiException recusado) {
+				if (recusado.status() == 404) {
+					// Idempotência: apagar o que já não existe é sucesso, e o S3 responde assim.
+					if (!quieto) {
+						xml.open("Deleted").element("Key", chave).close("Deleted");
+					}
+					continue;
+				}
+				xml.open("Error").element("Key", chave).element("Code", "AccessDenied")
+					.element("Message", "O objeto nao pode ser apagado por esta credencial.").close("Error");
+			}
+		}
+		xml.close("DeleteResult");
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/** Desfaz o escape XML dos nomes de chave que vieram no corpo (o SDK os escapa). */
+	private static String decodeXml(String valor) {
+		return valor.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"")
+			.replace("&apos;", "'").replace("&amp;", "&");
 	}
 
 	/**
@@ -444,6 +670,42 @@ class S3GatewayController {
 			return;
 		}
 		throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
+	}
+
+	/**
+	 * Recusa, antes de abrir o objeto, o subrecurso de leitura que nao e {@code GetObject}.
+	 *
+	 * <p>O {@code GET} do objeto nao olhava a consulta: {@code ?versionId=} pedia uma versao e
+	 * recebia a corrente com {@code 200} — o SDK que acabou de listar versoes lia outro conteudo
+	 * como sucesso. {@code ?torrent} e {@code ?partNumber} so tem sentido com operacoes que aqui
+	 * nao existem.</p>
+	 */
+	private static void recusarLeituraDeSubrecurso(HttpServletRequest request, String chaveDoObjeto) {
+		for (String naoImplementado : SUBRECURSOS_DE_LEITURA_NAO_ENDERECADOS) {
+			if (query(request).containsKey(naoImplementado)) {
+				throw s3Error(501, "NotImplemented", "O subrecurso '" + naoImplementado
+					+ "' nao e suportado; " + chaveDoObjeto + " nao foi lido.");
+			}
+		}
+	}
+
+	/**
+	 * O {@code DELETE} de subrecurso no <b>bucket</b> nao e {@code DeleteBucket}.
+	 *
+	 * <p>{@code ?cors}, {@code ?tagging}, {@code ?policy}, {@code ?website} e os demais sao
+	 * politicas do bucket no S3. Aqui a unica que age e a do varredor ({@code ?lifecycle}, §4.36).
+	 * Sem a guarda, {@code DELETE /{bucket}?cors} entrava no {@code DeleteBucket}: com objeto vivo
+	 * respondia {@code 409 BucketNotEmpty} (mentindo sobre o motivo) e num bucket vazio apagaria o
+	 * bucket em resposta a "remova a CORS". A recusa e {@code 501}, como no {@code PUT} de
+	 * subrecurso que gravaria (§4.21).</p>
+	 */
+	private static void recusarSubrecursoNoBucket(HttpServletRequest request, String bucket) {
+		for (String subrecurso : SUBRECURSOS_DE_BUCKET_NAO_IMPLEMENTADOS) {
+			if (query(request).containsKey(subrecurso)) {
+				throw s3Error(501, "NotImplemented", "O subrecurso de bucket '" + subrecurso
+					+ "' nao e suportado; o bucket " + bucket + " nao foi alterado.");
+			}
+		}
 	}
 
 	/**
@@ -1269,6 +1531,7 @@ class S3GatewayController {
 		// `GET ?acl` é a leitura da ACL do objeto, não do objeto: sem esta recusa, a rota servia o
 		// arquivo em 200, e o cliente lia "a ACL é o conteúdo do arquivo". Mesma lista do PUT.
 		recusarSubrecurso(request, "/" + bucket + "/" + keyOf(request));
+		recusarLeituraDeSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request)));
 		return comVocabularioDoS3(() -> content.respond(object, request.getHeader(HttpHeaders.RANGE),
 			request.getHeader(HttpHeaders.IF_NONE_MATCH), request.getHeader(HttpHeaders.IF_MODIFIED_SINCE)));
@@ -1276,10 +1539,16 @@ class S3GatewayController {
 
 	/** HeadObject: mesmos cabeçalhos do GetObject, sem corpo. */
 	@RequestMapping(value = "/{bucket}/{*key}", method = RequestMethod.HEAD)
-	ResponseEntity<StreamingResponseBody> headObject(@PathVariable String bucket, HttpServletRequest request) {
+	ResponseEntity<StreamingResponseBody> headObject(@PathVariable String bucket, HttpServletRequest request)
+			throws IOException {
 		S3Credential credential = authenticate(request, "GET");
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
+		// O `HEAD` e o `GET` sem corpo: a mesma pergunta tem a mesma recusa — as duas listas, não só a
+		// dos subrecursos de leitura. Sem a primeira, `HEAD ?acl` respondia 200 com o tamanho e o tipo
+		// do arquivo, que é a pergunta errada com cara de certa (§4.41).
+		recusarSubrecurso(request, "/" + bucket + "/" + keyOf(request));
+		recusarLeituraDeSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request), "HEAD"));
 		return comVocabularioDoS3(() -> content.head(object, request.getHeader(HttpHeaders.IF_NONE_MATCH),
 			request.getHeader(HttpHeaders.IF_MODIFIED_SINCE)));
@@ -1879,4 +2148,73 @@ class S3GatewayController {
 			.element("Resource", resource == null ? "" : resource)
 			.element("RequestId", java.util.UUID.randomUUID().toString()).close("Error").toString();
 	}
+	/**
+	 * CreateBucket: {@code PUT /{bucket}}, o `aws s3 mb` e o `rclone mkdir`.
+	 *
+	 * <p><b>Antes:</b> a rota caía no {@code PutObject} e respondia
+	 * {@code 400 InvalidRequest "Informe o bucket e a chave"}. O primeiro comando de qualquer fluxo de
+	 * upload falhava, e o cliente que cria o bucket antes de gravá-lo (o jeito normal do S3) não tinha
+	 * caminho.</p>
+	 *
+	 * <p><b>Agora:</b> registra o bucket no catálogo para o dono da credencial. Criar de novo o mesmo
+	 * bucket do mesmo dono é <b>200</b> idempotente ({@code BucketAlreadyOwnedByYou} é sucesso no S3);
+	 * nome que já é de outra conta é {@code 409 BucketAlreadyExists} e não muda o dono.</p>
+	 *
+	 * <p>O Storage não tem tabela de donos de bucket: o dono vem dos objetos ({@code bucketsOf}), e a
+	 * linha em {@code network_storage_buckets} leva o criador em {@code updated_by} — é o que permite
+	 * responder 409 antes de o bucket ter o primeiro objeto.</p>
+	 */
+	@RequestMapping(value = "/{bucket}", method = RequestMethod.PUT)
+	ResponseEntity<Void> createBucket(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "PUT");
+		requireBucket(credential, bucket);
+		String donoAtual = donoDoBucketRegistrado(bucket);
+		if (donoAtual != null && !donoAtual.equals(credential.ownerUserId())) {
+			throw s3Error(409, "BucketAlreadyExists",
+				"O bucket ja existe em outra conta.");
+		}
+		if (donoAtual == null) {
+			storage.putBucketPolicy(credential.ownerUserId(), bucket, false, null, null);
+		}
+		return ResponseEntity.ok().build();
+	}
+
+	/** HeadBucket: {@code HEAD /{bucket}} — o SDK confirma o bucket antes de gravar. */
+	@RequestMapping(value = "/{bucket}", method = RequestMethod.HEAD)
+	ResponseEntity<Void> headBucket(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		// 404 para o que não é do dono, como o S3: o HEAD não revela a existência de bucket alheio.
+		boolean nosso = credential.ownerUserId().equals(donoDoBucketRegistrado(bucket));
+		return nosso ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
+	}
+
+	/** GetBucketLocation: {@code GET /{bucket}?location} — a região do gateway. */
+	@GetMapping(value = "/{bucket}", params = "location")
+	ResponseEntity<String> bucketLocation(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		// O criador registrado conta como dono mesmo antes do primeiro objeto (o bucket nasce no
+		// CreateBucket); depois disso vale a mesma régua do resto do gateway.
+		if (!credential.ownerUserId().equals(donoDoBucketRegistrado(bucket))) {
+			requireBucketDoDono(credential, bucket);
+		}
+		S3Xml xml = new S3Xml();
+		xml.root("LocationConstraint").text(REGION);
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/**
+	 * O dono registrado do bucket: o <b>criador</b>, gravado em {@code owner_user_id} no
+	 * {@code CreateBucket} e nunca reescrito — quem configura a política depois não vira dono. Sem
+	 * criador registrado (bucket anterior à coluna), o dono do primeiro objeto vivo: o bucket que
+	 * nasceu do primeiro upload, de quem só sobe objeto sem {@code CreateBucket}.
+	 */
+	private String donoDoBucketRegistrado(String bucket) {
+		return catalog.bucketPolicy(bucket).map(StorageBucketPolicy::ownerUserId)
+			.filter(criador -> criador != null && !criador.isBlank())
+			.or(() -> catalog.ownerDoBucket(bucket))
+			.orElse(null);
+	}
+
 }

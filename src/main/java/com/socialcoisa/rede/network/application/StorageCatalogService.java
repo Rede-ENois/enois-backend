@@ -845,12 +845,26 @@ public class StorageCatalogService {
 				"Retencao so faz sentido em bucket com versionamento.");
 		}
 		Instant now = clock.instant();
+		// `ownerUserId` só é gravado se a coluna ainda estiver vazia (o `coalesce` do UPSERT): o
+		// primeiro a tocar na linha é o criador do bucket, e as políticas seguintes não o trocam.
 		StorageBucketPolicy saved = catalog.saveBucketPolicy(new StorageBucketPolicy(bucket, versioning,
-			retainSupersededDays, expireAfterDays, actorId, now));
+			retainSupersededDays, expireAfterDays, actorId, now, actorId));
 		audit.record(actorId, "STORAGE_BUCKET_POLICY", bucket,
 			"{\"versioning\":" + versioning + ",\"retainSupersededDays\":" + json(retainSupersededDays)
 				+ ",\"expireAfterDays\":" + json(expireAfterDays) + "}");
 		return saved;
+	}
+
+	/**
+	 * O histórico de <b>todas</b> as chaves do bucket — o {@code ListObjectVersions} do gateway S3.
+	 *
+	 * <p><b>Antes:</b> só existia o histórico de uma chave. O {@code GET /{bucket}?versions} caía no
+	 * {@code ListObjects}, que ignora o subrecurso, e o cliente recebia os objetos correntes com
+	 * {@code 200} — nem erro, nem versão.</p>
+	 */
+	public List<StorageObject> versionsNoBucket(String bucket, String prefix) {
+		validateBucket(bucket);
+		return catalog.versionsNoBucket(bucket, prefix);
 	}
 
 	/** O histórico da chave, da versão mais antiga para a mais nova. */

@@ -45,16 +45,21 @@ interface SpringDataPostJpaRepository extends JpaRepository<PostJpaEntity, Strin
 	@Query("select p from PostJpaEntity p where :mediaId member of p.mediaIds")
 	List<PostJpaEntity> findByMediaId(@Param("mediaId") String mediaId);
 
-	/** Posts de texto do feed social num intervalo de criação (a janela de leitura do Termômetro). */
+	/**
+	 * Posts de texto do feed social num intervalo de criação (a janela de leitura do Termômetro),
+	 * por chave: de `inicio` (inclusivo) em diante quando `depois` está vazio — o começo da janela
+	 * — e, no instante do cursor, só os ids a partir de `depois` (a página seguinte).
+	 */
 	@Query("""
 			select p from PostJpaEntity p
 			where p.status = :status and p.type in :tipos and p.channelId is null
-			  and p.createdAt >= :de and p.createdAt < :ate
-			order by p.createdAt asc
+			  and p.createdAt < :ate
+			  and (p.createdAt > :inicio or (p.createdAt = :inicio and p.id >= :depois))
+			order by p.createdAt asc, p.id asc
 			""")
 	List<PostJpaEntity> findTextoSocialEntre(@Param("status") PostStatus status,
-			@Param("tipos") Collection<PostType> tipos, @Param("de") Instant de, @Param("ate") Instant ate,
-			Pageable pageable);
+			@Param("tipos") Collection<PostType> tipos, @Param("ate") Instant ate,
+			@Param("inicio") Instant inicio, @Param("depois") String depois, Pageable pageable);
 
 	/**
 	 * Posts de texto social E PÚBLICOS num intervalo de criação (a janela do Papo Reto).

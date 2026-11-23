@@ -23,8 +23,18 @@ interface SpringDataConfissaoPostJpaRepository extends JpaRepository<ConfissaoPo
 	@Query("""
 		select p from ConfissaoPostJpaEntity p
 		where p.status = :status and p.createdAt >= :de and p.createdAt < :ate
-		order by p.createdAt asc
+		order by p.createdAt asc, p.id asc
 		""")
-	List<ConfissaoPostJpaEntity> findAtivosEntre(@Param("status") ConfissaoStatus status, @Param("de") Instant de,
-		@Param("ate") Instant ate, Pageable pageable);
+	List<ConfissaoPostJpaEntity> findAtivosEntre(@Param("status") ConfissaoStatus status,
+		@Param("de") Instant de, @Param("ate") Instant ate, Pageable pageable);
+
+	@Query("""
+		select p from ConfissaoPostJpaEntity p
+		where p.status = :status and p.createdAt < :ate
+		  and (p.createdAt > :inicio or (p.createdAt = :inicio and p.id >= :depois))
+		order by p.createdAt asc, p.id asc
+		""")
+	List<ConfissaoPostJpaEntity> findAtivosDaChave(@Param("status") ConfissaoStatus status,
+		@Param("inicio") Instant inicio, @Param("depois") String depois, @Param("ate") Instant ate,
+		Pageable pageable);
 }
