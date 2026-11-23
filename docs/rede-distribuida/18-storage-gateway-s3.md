@@ -946,29 +946,29 @@ os cabeçalhos terem saído. Duas consequências:
   com os 12 bytes e sem `Content-Range`. **Verdadeiro antes da mudança** (o MockMvc não aplica o
   `Range`); fica como guarda do contrato declarado, não como prova da correção.
 
-## 4.27 `list-type=2` com `start-after` (ciclo 115)
+## 4.28 A URL pré-assinada assina o caminho que ela carrega (ciclo 116)
 
-O gateway só conhecia `marker` (V1) e `continuation-token` (V2). O `start-after` — a forma do
-**ListObjectsV2** de começar a listagem depois de uma chave — era ignorado: `aws s3api
-list-objects-v2 --start-after b` e `listObjectsV2(... .startAfter("b"))` recebiam a listagem **desde o
-começo**, com `200`. Quem retoma uma varredura a partir da última chave processada relista o bucket
-inteiro, sem sinal de que o parâmetro foi descartado.
+O emissor assinava `"/" + bucket + "/" + key` com a chave **crua** e emitia a URL com cada segmento
+passado por `uriEncode`. Numa chave com espaço, acento, `+` ou `%`, a assinatura não era a da URL
+emitida: o portador recebia, numa URL recém-emitida,
+
+```
+GET /s3/<bucket>/fotos/meu%20arquivo%20%C3%A7%C3%A3o.jpg?X-Amz-Signature=…
+403 AccessDenied "A URL pre-assinada expirou ou a assinatura nao confere."
+```
+
+A mensagem manda o cliente procurar relógio ou validade; o defeito era a codificação. Nome de arquivo
+com espaço é o caso comum, e todos os testes de URL usavam `fotos/url.jpg`, que não tem caractere a
+codificar.
 
 ### Agora
 
-| pedido (V2) | chave de partida |
-|---|---|
-| `continuation-token` e `start-after` | o **token** (o token já diz onde continuar; o S3 ignora o `start-after`) |
-| só `start-after` | a chave pedida, **exclusiva** |
-| nenhum dos dois | começo do prefixo |
-| V1 (`marker`) | como antes; `start-after` não é parâmetro do V1 |
+O caminho assinado é montado com o mesmo `uriEncode` por segmento que a URL carrega — e é o mesmo
+texto que o `canonicalUri` do verificador produz ao recodificar o caminho recebido.
 
-**Verificação:** `S3GatewayTests` **+1** (`list_v2_start_after_comeca_depois_da_chave`: três chaves,
-`start-after=inicio/b.txt` → só `c.txt`, `KeyCount=1`; com `continuation-token=inicio/a.txt` **e**
-`start-after=inicio/c.txt` → `b.txt` e `c.txt`, porque **os dois valores são diferentes** — com o mesmo
-valor o teste não distinguiria quem venceu). Mutações: ignorar o `start-after`; inverter a precedência
-para o `start-after` — **2 de 2 derrubam** (a segunda só depois de corrigir o teste, que passava verde
-com os dois parâmetros iguais).
+**Verificação:** `S3GatewayTests` **+1** (`url_pre_assinada_abre_chave_com_espaco_e_acento`: grava e
+emite para `fotos/meu arquivo ção.jpg`, confere `%20`/`%C3%A7` na URL e abre → `200` com o corpo).
+Mutação: voltar a assinar a chave crua — **derruba**.
 
 ## 5. Erros
 
