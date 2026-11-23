@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.socialcoisa.rede.desabafos.domain.DesabafoComment;
 import com.socialcoisa.rede.desabafos.domain.DesabafoPost;
 import com.socialcoisa.rede.desabafos.domain.DesabafoStatus;
+import com.socialcoisa.rede.termometro.application.port.out.ChaveDaJanela;
 import com.socialcoisa.rede.termometro.application.port.out.ManifestacaoReader;
 
 /**
@@ -18,12 +19,16 @@ import com.socialcoisa.rede.termometro.application.port.out.ManifestacaoReader;
  *
  * Vive no pacote do módulo (entidades package-private) e entrega o triplo mínimo do port —
  * o acolhimento é conteúdo público do espaço dele, e entra na medição como qualquer texto.
+ * A leitura é por chave (instante, id), página a página, até o fim do intervalo.
  */
 @Component
 @Transactional(readOnly = true)
 class DesabafosManifestacaoReader implements ManifestacaoReader {
 
 	private static final int PAGINA = 500;
+
+	/** Freio de segurança da leitura inteira: o intervalo de 25 horas nunca chega perto. */
+	private static final int LIMITE_DE_LOTES = 40;
 
 	private final SpringDataDesabafoPostJpaRepository posts;
 	private final SpringDataDesabafoCommentJpaRepository comments;
@@ -37,22 +42,22 @@ class DesabafosManifestacaoReader implements ManifestacaoReader {
 	@Override
 	public List<Manifestacao> desde(Instant de, Instant ate) {
 		List<Manifestacao> manifestacoes = new ArrayList<>();
-		for (DesabafoPostJpaEntity entidade : posts.findAtivosEntre(DesabafoStatus.ACTIVE, de, ate,
-				PageRequest.of(0, PAGINA))) {
-			DesabafoPost post = entidade.toDomain();
-			if (post.content().isBlank()) {
-				continue;
-			}
-			manifestacoes.add(new Manifestacao(post.content(), post.authorId().value(), post.createdAt()));
-		}
-		for (DesabafoCommentJpaEntity entidade : comments.findAtivosEntre(DesabafoStatus.ACTIVE, de, ate,
-				PageRequest.of(0, PAGINA))) {
-			DesabafoComment comment = entidade.toDomain();
-			if (comment.content().isBlank()) {
-				continue;
-			}
-			manifestacoes.add(new Manifestacao(comment.content(), comment.authorId().value(), comment.createdAt()));
-		}
+		manifestacoes.addAll(ChaveDaJanela.ler(de, PAGINA, LIMITE_DE_LOTES,
+				(chave, tamanho) -> posts.findAtivosDepois(DesabafoStatus.ACTIVE, chave.instante(), chave.id(), ate,
+						PageRequest.of(0, tamanho)),
+				entidade -> new ChaveDaJanela.Chave(entidade.getCreatedAt(), entidade.getId()), entidade -> {
+					DesabafoPost post = entidade.toDomain();
+					return new Manifestacao(post.content() == null ? "" : post.content(),
+							post.authorId().value(), post.createdAt(), post.id());
+				}));
+		manifestacoes.addAll(ChaveDaJanela.ler(de, PAGINA, LIMITE_DE_LOTES,
+				(chave, tamanho) -> comments.findAtivosDepois(DesabafoStatus.ACTIVE, chave.instante(), chave.id(), ate,
+						PageRequest.of(0, tamanho)),
+				entidade -> new ChaveDaJanela.Chave(entidade.getCreatedAt(), entidade.getId()), entidade -> {
+					DesabafoComment comment = entidade.toDomain();
+					return new Manifestacao(comment.content() == null ? "" : comment.content(),
+							comment.authorId().value(), comment.createdAt(), comment.id());
+				}));
 		return manifestacoes;
 	}
 

@@ -89,4 +89,13 @@ class CommentJpaEntity {
 	}
 
 	String getPostId() { return postId; }
+
+	String getId() {
+		return id;
+	}
+
+	Instant getCreatedAt() {
+		return createdAt;
+	}
+
 }

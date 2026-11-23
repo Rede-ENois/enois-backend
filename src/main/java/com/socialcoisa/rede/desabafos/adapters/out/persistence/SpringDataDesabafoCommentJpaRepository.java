@@ -27,10 +27,25 @@ interface SpringDataDesabafoCommentJpaRepository extends JpaRepository<DesabafoC
 	@Query("""
 		select c from DesabafoCommentJpaEntity c
 		where c.status = :status and c.createdAt >= :de and c.createdAt < :ate
-		order by c.createdAt asc
+		order by c.createdAt asc, c.id asc
 		""")
 	List<DesabafoCommentJpaEntity> findAtivosEntre(@Param("status") DesabafoStatus status, @Param("de") Instant de,
 		@Param("ate") Instant ate, Pageable pageable);
+
+	/**
+	 * A mesma janela, por chave (a leitura do Termômetro): de `inicio` (inclusivo) em diante
+	 * quando `depois` está vazio — o começo da janela — e, no instante do cursor, só os ids a
+	 * partir de `depois` (a página seguinte).
+	 */
+	@Query("""
+		select c from DesabafoCommentJpaEntity c
+		where c.status = :status and c.createdAt < :ate
+		  and (c.createdAt > :inicio or (c.createdAt = :inicio and c.id >= :depois))
+		order by c.createdAt asc, c.id asc
+		""")
+	List<DesabafoCommentJpaEntity> findAtivosDepois(@Param("status") DesabafoStatus status,
+		@Param("inicio") Instant inicio, @Param("depois") String depois, @Param("ate") Instant ate,
+		Pageable pageable);
 
 	interface CommentCountProjection {
 
