@@ -162,8 +162,13 @@ class GroupContentController {
 			.visibleByIds(posts.stream().flatMap(post -> post.mediaIds().stream()).collect(Collectors.toSet()));
 		Set<String> humanityVerified = identityVerifications
 			.verifiedAmong(posts.stream().map(GroupPost::authorId).collect(Collectors.toSet()));
+		// O aniversário é lido em lote com o resto da página: uma leitura por autor seria uma
+		// consulta por linha, que o teste conta.
+		Set<String> aniversariantes = aniversarios.aniversariantes(
+			posts.stream().map(GroupPost::authorId).collect(Collectors.toSet()));
 		var items = posts.stream()
-			.map(post -> postView(post, mine.get(post.id()), authors.get(post.authorId()), media, humanityVerified))
+			.map(post -> postView(post, mine.get(post.id()), authors.get(post.authorId()), media, humanityVerified,
+				aniversariantes.contains(post.authorId())))
 			.toList();
 		String nextCursor = posts.size() == limit
 			? cursorCodec.encode(posts.get(posts.size() - 1).createdAt()) : null;
@@ -230,9 +235,11 @@ class GroupContentController {
 		Map<String, UserProfile> authors = authorsOf(comments.stream().map(GroupComment::authorId).toList());
 		Set<String> humanityVerified = identityVerifications
 			.verifiedAmong(comments.stream().map(GroupComment::authorId).collect(Collectors.toSet()));
+		Set<String> aniversariantes = aniversarios.aniversariantes(
+			comments.stream().map(GroupComment::authorId).collect(Collectors.toSet()));
 		var items = comments.stream()
 			.map(comment -> commentView(comment, authors.get(comment.authorId()),
-				humanityVerified.contains(comment.authorId())))
+				humanityVerified.contains(comment.authorId()), aniversariantes.contains(comment.authorId())))
 			.toList();
 		return new PageResponse<>(items, null);
 	}
@@ -317,31 +324,37 @@ class GroupContentController {
 	}
 
 	private CommentView commentView(GroupComment comment, UserProfile author) {
-		return commentView(comment, author, identityVerifications.isVerified(comment.authorId()));
+		// A criacao devolve UM comentario: aqui a leitura propria do aniversario e a unica, nao ha
+		// lista para agrupar.
+		return commentView(comment, author, identityVerifications.isVerified(comment.authorId()),
+			aniversarios.fazAniversarioHoje(author == null ? null : author.id()));
 	}
 
-	private CommentView commentView(GroupComment comment, UserProfile author, boolean humanityVerified) {
+	private CommentView commentView(GroupComment comment, UserProfile author, boolean humanityVerified,
+			boolean aniversariante) {
 		return new CommentView(comment.id(), comment.postId(), comment.authorId(),
 			author == null ? null : author.displayWithNickname(),
 			author == null ? null : author.username(),
 			author == null ? null : author.avatar(),
 			author == null ? List.of() : author.allBadges(),
 			comment.parentId(), comment.content(), comment.createdAt(), author == null ? null : author.avatarFrame(), NameStyleView.from(author),
-			humanityVerified, aniversarios.fazAniversarioHoje(author == null ? null : author.id()));
+			humanityVerified, aniversariante);
 	}
 
 	private GroupPostView postView(GroupPost post, ReactionType myReaction, UserProfile author) {
-		return postView(post, myReaction, author, mediaSummaries.visibleByIds(post.mediaIds()));
+		return postView(post, myReaction, author, mediaSummaries.visibleByIds(post.mediaIds()), Set.of(),
+			aniversarios.fazAniversarioHoje(author == null ? null : author.id()));
 	}
 
 	private GroupPostView postView(GroupPost post, ReactionType myReaction, UserProfile author,
 			Map<String, MediaSummaryView> media) {
-		return postView(post, myReaction, author, media, Set.of());
+		return postView(post, myReaction, author, media, Set.of(),
+			aniversarios.fazAniversarioHoje(author == null ? null : author.id()));
 	}
 
 	/** Com o conjunto de autores selados da pagina (uma consulta por pagina, nunca uma por post). */
 	private GroupPostView postView(GroupPost post, ReactionType myReaction, UserProfile author,
-			Map<String, MediaSummaryView> media, Set<String> humanityVerified) {
+			Map<String, MediaSummaryView> media, Set<String> humanityVerified, boolean aniversariante) {
 		List<String> badges = author == null ? List.of() : author.allBadges();
 		return new GroupPostView(post.id(), post.groupId(), post.topicId(), post.authorId(),
 			author == null ? null : author.displayWithNickname(),
@@ -351,7 +364,7 @@ class GroupContentController {
 			post.content(), post.mediaIds(), post.pinned(), post.reactions(), post.comments(),
 			myReaction == null ? null : myReaction.name(), post.createdAt(), author == null ? null : author.avatarFrame(), NameStyleView.from(author),
 			MediaSummaryView.inOrder(post.mediaIds(), media), humanityVerified.contains(post.authorId()),
-			aniversarios.fazAniversarioHoje(author == null ? null : author.id()));
+			aniversariante);
 	}
 
 	private static TopicView topicView(GroupTopic topic) {
