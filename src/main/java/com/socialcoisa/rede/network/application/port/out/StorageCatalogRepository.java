@@ -260,6 +260,18 @@ public interface StorageCatalogRepository {
 	/** Todas as versões da chave em ordem crescente — o histórico, incluindo a corrente. */
 	List<StorageObject> versions(String bucket, String key);
 
+	/**
+	 * Todas as versões de todas as chaves do bucket — o {@code ListObjectVersions} do gateway S3.
+	 *
+	 * <p>Ordem por chave e por versão ascendente, como o histórico de uma chave: a listagem por
+	 * bucket mantém a mesma régua para que paginar por chave continue estável. {@code prefix}
+	 * {@code null} ou vazio é "todas".</p>
+	 */
+	default List<StorageObject> versionsNoBucket(String bucket, String prefix) {
+		throw new UnsupportedOperationException(
+			"versionsNoBucket: o catalogo em memoria nao implementa o historico por bucket");
+	}
+
 	/** Versões correntes, servíveis e vencidas até {@code now}, em ordem de vencimento. */
 	List<StorageObject> expired(Instant now, int limit);
 

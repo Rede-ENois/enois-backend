@@ -2118,6 +2118,81 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(resposta.getContentAsString()).contains("<Code>MalformedXML</Code>");
 	}
 
+	/**
+	 * `ListObjectVersions` (`GET /{bucket}?versions`) lista o histórico das chaves do dono.
+	 *
+	 * <p><b>Antes:</b> a rota caía no {@code ListObjects}, que ignora o subrecurso e responde um
+	 * {@code <ListBucketResult>} com os objetos correntes. O cliente que pede o histórico recebia
+	 * <b>uma lista de objetos e um {@code 200} válido</b> — nem erro, nem versão. O
+	 * {@code aws s3api list-object-versions} e o {@code rclone lsf --s3-versions} mostravam cada chave
+	 * uma vez só, e o operador não tinha como ver que existiam versões anteriores ocupando disco.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 200} {@code <ListVersionsResult>} com um {@code <Version>} por versão
+	 * (a corrente e as substituídas) e um {@code <DeleteMarker>} para a lápide, cada um com chave,
+	 * {@code VersionId}, tamanho, ETag e data. Só do dono da credencial; {@code prefix} filtra.</p>
+	 */
+	@Test
+	void listar_versoes_do_bucket() throws Exception {
+		// Versão só existe em bucket com versionamento ligado: sem ele, reescrever a chave é 409 e
+		// não há histórico para listar. A política entra pela sessão do dono.
+		// A política entra direto na tabela: esta é a régua do ListObjectVersions, não da autorização
+		// de política (que tem o próprio teste).
+		jdbc.update("""
+			insert into network_storage_buckets (bucket, versioning, retain_superseded_days, expire_after_days,
+				updated_by, updated_at)
+			values (?, true, 30, null, ?, current_timestamp(3))
+			on duplicate key update versioning = true, retain_superseded_days = 30, expire_after_days = null
+			""", bucket, admin);
+
+		// Duas gravações na mesma chave: a primeira vira versão substituída da segunda. Cada
+		// gravação numa chave distinta também entra no histórico.
+		gravar("versoes/a.txt", "primeira");
+		gravar("versoes/a.txt", "segunda");
+		gravar("versoes/b.txt", "b");
+
+		// Uma linha de OUTRA conta no mesmo bucket: só o filtro por dono a esconde. Plantar a linha
+		// direto é a única forma de pôr um objeto alheio num bucket que já tem dono (o PUT recusa),
+		// e é exatamente o estado que a listagem tem de saber ignorar.
+		jdbc.update("""
+			insert into network_storage_objects (id, bucket, object_key, bytes, sha256, state, created_by,
+				created_at, updated_at)
+			values (?, ?, 'versoes/do-outro.txt', 5, ?, 'STORED', 's3_versions_outro', current_timestamp(3),
+				current_timestamp(3))
+			""", "sobj_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16), bucket,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex("outro"));
+
+		MockHttpServletRequestBuilder lista = get("/s3/" + bucket + "?versions");
+		assinar(lista, SECRET, shaVazio());
+		var resposta = mockMvc.perform(lista).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(200);
+		String corpo = resposta.getContentAsString();
+		assertThat(corpo).startsWith("<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListVersionsResult");
+		// Duas versões da chave reescrita e uma da outra.
+		assertThat(corpo.split("<Key>versoes/a.txt</Key>", -1).length - 1).isEqualTo(2);
+		assertThat(corpo).contains("<Key>versoes/b.txt</Key>");
+		assertThat(corpo).contains("<VersionId>");
+		// O histórico da outra conta no mesmo bucket não aparece.
+		assertThat(corpo).doesNotContain("versoes/do-outro.txt");
+
+		// `prefix` que não casa não traz nada do histórico — e responde `200`: o filtro entra antes do
+		// `limit`, e a asserção só no corpo deixava um erro 500 passar como "não contém".
+		MockHttpServletRequestBuilder fora = get("/s3/" + bucket + "?versions&prefix=outra");
+		assinar(fora, SECRET, shaVazio());
+		var foraResposta = mockMvc.perform(fora).andReturn().getResponse();
+		assertThat(foraResposta.getStatus()).as(foraResposta.getContentAsString()).isEqualTo(200);
+		assertThat(foraResposta.getContentAsString()).doesNotContain("<Key>versoes/");
+
+		// `prefix` que casa traz só o que casa, com as duas versões da mesma chave.
+		MockHttpServletRequestBuilder dentro = get("/s3/" + bucket + "?versions&prefix=versoes/a");
+		assinar(dentro, SECRET, shaVazio());
+		var dentroResposta = mockMvc.perform(dentro).andReturn().getResponse();
+		assertThat(dentroResposta.getStatus()).as(dentroResposta.getContentAsString()).isEqualTo(200);
+		assertThat(dentroResposta.getContentAsString()).contains("<Key>versoes/a.txt</Key>")
+			.doesNotContain("versoes/b.txt");
+
+
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {

@@ -263,6 +263,45 @@ class S3GatewayController {
 	}
 
 	/**
+	 * ListObjectVersions: {@code GET /{bucket}?versions} — o histórico das chaves do dono.
+	 *
+	 * <p><b>Antes:</b> a rota caía no {@code ListObjects} e respondia um {@code <ListBucketResult>}
+	 * com os objetos correntes e {@code 200}. O {@code aws s3api list-object-versions} mostrava cada
+	 * chave uma vez só, e o operador não tinha como ver as versões substituídas ocupando disco.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 200 <ListVersionsResult>} com um {@code <Version>} por versão e um
+	 * {@code <DeleteMarker>} para a lápide — chave, {@code VersionId}, {@code IsLatest}, tamanho,
+	 * ETag e data. Só do dono da credencial; {@code prefix} filtra.</p>
+	 */
+	@GetMapping(value = "/{bucket}", params = "versions")
+	ResponseEntity<String> listObjectVersions(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		S3Xml xml = new S3Xml();
+		xml.root("ListVersionsResult").element("Name", bucket)
+			.element("IsTruncated", "false")
+			.element("MaxKeys", "1000");
+		for (StorageObject objeto : storage.versionsNoBucket(bucket, query(request).get("prefix"))) {
+			if (!credential.ownerUserId().equals(objeto.createdBy())) {
+				continue;
+			}
+			// Lápide não tem tamanho nem ETag: vira <DeleteMarker>, como no S3.
+			boolean lapide = objeto.state() == StorageObjectState.DELETED;
+			String tag = lapide ? "DeleteMarker" : "Version";
+			xml.open(tag)
+				.element("Key", objeto.key())
+				.element("VersionId", String.valueOf(objeto.version()))
+				.element("IsLatest", String.valueOf(objeto.currentVersion()))
+				.element("LastModified", S3_INSTANT.format(objeto.createdAt()))
+				.element("ETag", "\"" + objeto.sha256() + "\"")
+				.element("Size", String.valueOf(objeto.bytes() == null ? 0 : objeto.bytes()));
+			xml.close(tag);
+		}
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/**
 	 * PutBucketLifecycleConfiguration: {@code PUT /{bucket}?lifecycle}.
 	 *
 	 * <p><b>Antes:</b> caía no {@code PutObject} e respondia
