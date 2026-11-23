@@ -979,12 +979,24 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "LIST");
 		requireBucket(credential, bucket);
 		var upload = uploadDaChave(credential, bucket, request);
+		Map<String, String> query = query(request);
+		// `part-number-marker` é EXCLUSIVO no S3: a próxima página começa depois dele. Sem isso o
+		// cliente que pagina recebia a mesma parte na primeira e na segunda página, e a lista sem
+		// `IsTruncated` fazia ele parar convencido de que tinha visto tudo.
+		int depoisDe = inteiroOu(query.get("part-number-marker"), 0);
+		int maxParts = inteiroOu(query.get("max-parts"), 1000);
+		var pagina = multipart.paginaDePartes(upload.uploadId(), depoisDe, maxParts);
 		S3Xml xml = new S3Xml();
 		xml.root("ListPartsResult").element("Bucket", bucket).element("Key", upload.key())
-			.element("UploadId", upload.uploadId());
-		for (var part : multipart.parts(upload.uploadId())) {
+			.element("UploadId", upload.uploadId())
+			.element("PartNumberMarker", depoisDe).element("MaxParts", Math.max(1, Math.min(maxParts, 1000)))
+			.element("IsTruncated", pagina.truncada());
+		for (var part : pagina.partes()) {
 			xml.open("Part").element("PartNumber", part.number()).element("ETag", "\"" + part.sha256() + "\"")
 				.element("Size", part.bytes()).close("Part");
+		}
+		if (pagina.truncada() && !pagina.partes().isEmpty()) {
+			xml.element("NextPartNumberMarker", pagina.partes().get(pagina.partes().size() - 1).number());
 		}
 		xml.close("ListPartsResult");
 		return xml(HttpStatus.OK).body(xml.toString());
@@ -1499,6 +1511,19 @@ class S3GatewayController {
 	static String lastModified(StorageObject object) {
 		Instant quando = object.updatedAt() != null ? object.updatedAt() : object.createdAt();
 		return S3_INSTANT.format(quando);
+	}
+
+	/** Parâmetro numérico de consulta; ausente ou inválido vale o padrão. */
+	private static int inteiroOu(String valor, int padrao) {
+		if (valor == null || valor.isBlank()) {
+			return padrao;
+		}
+		try {
+			return Integer.parseInt(valor.trim());
+		}
+		catch (NumberFormatException invalido) {
+			return padrao;
+		}
 	}
 
 	private static int parseMaxKeys(String value) {
