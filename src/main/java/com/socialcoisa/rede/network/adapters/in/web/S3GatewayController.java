@@ -2061,17 +2061,34 @@ class S3GatewayController {
 		}
 	}
 
+	/**
+	 * {@code max-keys}: ausente é o padrão de 1000, {@code 0} é a página vazia, e o que não é um
+	 * inteiro de zero para cima é {@code 400 InvalidArgument}.
+	 *
+	 * <p><b>Antes:</b> qualquer entrada inválida — {@code abc}, {@code -1}, {@code 1.5} — virava
+	 * 1000 em silêncio, e {@code max-keys=0} também. O cliente recebia dados que não pediu e lia
+	 * {@code 200}: {@code aws s3 ls --max-items} com valor errado "funcionava".</p>
+	 *
+	 * <p><b>Agora:</b> só o vazio é padrão; o resto ou é um inteiro válido (limitado ao teto de
+	 * {@value #MAX_KEYS}) ou é recusa — inclusive o zero aceito, que é o que o paginador usa para
+	 * sondar.</p>
+	 */
 	private static int parseMaxKeys(String value) {
 		if (value == null || value.isBlank()) {
 			return MAX_KEYS;
 		}
+		int parsed;
 		try {
-			int parsed = Integer.parseInt(value.trim());
-			return parsed <= 0 ? MAX_KEYS : Math.min(parsed, MAX_KEYS);
+			parsed = Integer.parseInt(value.trim());
 		}
 		catch (NumberFormatException invalido) {
-			return MAX_KEYS;
+			throw s3Error(400, "InvalidArgument",
+				"max-keys precisa ser um inteiro de 0 em diante; veio \'" + value + "\'.");
 		}
+		if (parsed < 0) {
+			throw s3Error(400, "InvalidArgument", "max-keys nao pode ser negativo; veio " + parsed + ".");
+		}
+		return Math.min(parsed, MAX_KEYS);
 	}
 
 	private static ResponseEntity.BodyBuilder xml(HttpStatus status) {
