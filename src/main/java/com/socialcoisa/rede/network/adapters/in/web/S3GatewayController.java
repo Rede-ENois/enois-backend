@@ -1246,6 +1246,7 @@ class S3GatewayController {
 		}
 		// Mesma conta da assinatura por cabeçalho: a URL é a credencial, e portador de link também
 		// consome o Control Plane.
+		exigirDonoEsperado(request, credential);
 		exigirRitmo(credential.accessKey());
 		return credential;
 	}
@@ -1431,8 +1432,30 @@ class S3GatewayController {
 		if (!credential.allows(operation)) {
 			throw s3Error(403, "AccessDenied", "A credencial nao permite " + operation + ".");
 		}
+		exigirDonoEsperado(request, credential);
 		exigirRitmo(credential.accessKey());
 		return credential;
+	}
+
+	/**
+	 * {@code x-amz-expected-bucket-owner}: o cliente diz de quem ele acha que é o bucket.
+	 *
+	 * <p>Existe para o caso em que duas contas têm bucket com o mesmo nome — o SDK manda o dono que
+	 * espera e o S3 recusa se o bucket for de outro. Sem isto, o {@code PUT} para um bucket novo (que
+	 * nasce do primeiro objeto, sem dono ainda) grava na conta de quem chega primeiro, e o
+	 * {@code --expected-bucket-owner} do {@code aws s3api} não protege nada. A conferência é a
+	 * <b>última</b> do {@code authenticate}: antes dela, a assinatura e o escopo da credencial já
+	 * foram provados, então a resposta não revela nada a quem não assinou.</p>
+	 */
+	private void exigirDonoEsperado(HttpServletRequest request, S3Credential credential) {
+		String esperado = request.getHeader("x-amz-expected-bucket-owner");
+		if (esperado == null || esperado.isBlank()) {
+			return;
+		}
+		if (!esperado.trim().equals(credential.ownerUserId())) {
+			throw s3Error(403, "AccessDenied",
+				"O bucket esperado nao e do dono da credencial (x-amz-expected-bucket-owner).");
+		}
 	}
 
 	/**

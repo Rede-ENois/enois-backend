@@ -1035,6 +1035,31 @@ certo → `409`; com outro → `412`). Mutações: sem a conferência; `If-None-
 asterisco; `If-Match` só olhando o asterisco — **3 de 3 derrubam** (a 2ª e a 3ª só depois de o teste
 distinguir o ETag certo do errado).
 
+## 4.30 `x-amz-expected-bucket-owner` é conferido (ciclo 118)
+
+O cabeçalho era ignorado por todas as rotas. Ele existe para o caso em que duas contas têm bucket com
+o mesmo nome — comum em multi-tenant: o SDK manda o dono que espera e o S3 recusa se o bucket for de
+outra conta. Aqui o cliente recebia `200` e, pior, **gravava na conta errada**: o `PUT` só confere a
+donagem quando o bucket já tem objeto, e um bucket novo nasce do primeiro objeto de quem chega
+primeiro. O `--expected-bucket-owner` do `aws s3api` não protegia nada.
+
+### Agora
+
+| cabeçalho | resposta |
+|---|---|
+| ausente | nada muda |
+| igual ao dono do bucket (`ownerUserId` da credencial) | segue o fluxo normal |
+| outro valor | **`403 AccessDenied`**, antes de qualquer gravação ou leitura |
+
+A conferência é a última do `authenticate` — nos dois caminhos (assinatura por cabeçalho e URL
+pré-assinada): assinatura e escopo já foram provados, então a recusa não revela nada a quem não
+assinou.
+
+**Verificação:** `S3GatewayTests` **+1** (`expected_bucket_owner_divergente_recusa_antes_de_gravar`:
+`PUT` com dono errado → `403` e nenhuma linha no catálogo; `ListObjectsV2` com dono errado → `403`;
+`PUT` e listagem com o dono certo → `200`, objeto legível). Mutações: sem a guarda; aceitar qualquer
+valor — **2 de 2 derrubam**.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
