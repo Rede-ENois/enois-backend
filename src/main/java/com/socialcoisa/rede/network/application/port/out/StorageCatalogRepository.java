@@ -86,12 +86,28 @@ public interface StorageCatalogRepository {
 	List<String> bucketsOf(String ownerUserId);
 
 	/**
-	 * Todos os objetos servíveis, ordenados por {@code bucket, object_key} — a paginação da varredura
-	 * percorre o catálogo inteiro, não um bucket. O cursor é a chave: dois buckets podem ter a mesma
-	 * chave, e o cursor por chave visita as duas na mesma página — o que não perde nem duplica
-	 * objeto, porque a ordenação é total por {@code bucket, object_key}.
+	 * O bucket tem objeto no catálogo (vivo ou lápide) e <b>algum</b> é deste dono?
+	 *
+	 * <p>É a donagem do {@code DeleteBucket}: {@link #bucketsOf} conta só o vivo, e depois da última
+	 * lápide o dono deixaria de ver o próprio bucket. Vivo, a resposta é a mesma; esvaziado, é a
+	 * única prova que sobra.</p>
 	 */
-	List<StorageObject> listAll(String afterKey, int limit);
+	boolean bucketHasObjectsOf(String bucket, String ownerUserId);
+
+	/**
+	 * Todos os objetos servíveis, ordenados por {@code (bucket, object_key)} — a paginação da
+	 * varredura percorre o catálogo inteiro, não um bucket.
+	 *
+	 * <p><b>Ciclo 102:</b> o cursor é o <b>par</b>, não a chave. Ordenar por
+	 * {@code (bucket, object_key)} e paginar por chave só fazia a página seguinte procurar
+	 * {@code key >= última} em <i>qualquer</i> bucket: depois de {@code fotos/z.jpg}, um
+	 * {@code midia/a.mp4} (chave menor, bucket posterior) era pulado para sempre. O javadoc antigo
+	 * dizia que "não perde nem duplica" — a ordenação era total, mas o filtro não era.</p>
+	 *
+	 * <p>{@code afterBucket} nulo começa do começo. O par do último item da página é o cursor da
+	 * próxima, e o cursor é <b>exclusivo</b>: o item do cursor não volta.</p>
+	 */
+	List<StorageObject> listAll(String afterBucket, String afterKey, int limit);
 
 	/** Grava (ou substitui) a cópia {@code replica} deste objeto neste nó. */
 	void savePlacement(StoragePlacement placement);

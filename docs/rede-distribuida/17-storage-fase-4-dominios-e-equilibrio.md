@@ -398,6 +398,39 @@ quando o tipo é imagem.
 - `If-None-Match` bate (ou é `*`) → **304**, sem corpo, com `ETag` e a mesma política de cache. A
   comparação é fraca (`W/` ignorado) e aceita lista, como a RFC 9110 manda.
 
+### 10.3.1 `If-Modified-Since` e o `HEAD` condicional (ciclo 106)
+
+Até aqui o `304` existia **só** por `If-None-Match`, e o `HEAD` ignorava qualquer condicional. Navegador,
+CDN e proxy revalidam muito por **data** — é o segundo validador que guardam junto do ETag — e um SDK
+usa o `HEAD` para decidir se baixa o objeto. Na prática: a imagem voltava do Control Plane mesmo sem ter
+mudado, e um `HEAD` com os bytes em mãos sempre dizia "baixe de novo".
+
+#### Agora
+
+| pedido | resposta |
+|---|---|
+| `If-None-Match` bate (ou é `*`) | **304**, com `ETag`, `Cache-Control` e `Last-Modified` |
+| `If-None-Match` presente e **não** bate | o corpo (200/206) — a data é ignorada |
+| sem `If-None-Match`, `If-Modified-Since` ≥ `updated_at` | **304** |
+| sem `If-None-Match`, `If-Modified-Since` < `updated_at` | o corpo |
+| data malformada | ignorada, como cabeçalho ausente |
+| `HEAD` com o mesmo pedido condicional | **304** |
+
+A comparação da data é em **segundos** (a granularidade do HTTP-date): `updated_at` tem milissegundos e
+um cliente devolve exatamente o `Last-Modified` recebido — comparar sem truncar diria "mudou" sempre.
+
+A regra inteira mora em `StorageContentService.notModified`, que a rota pública e o gateway S3 usam. **É
+por isso que ela não pode depender do Spring:** a resposta do `ResponseEntity` do MVC, em GET/HEAD,
+gera o 304 sozinho — removendo `ETag` e `Last-Modified` e **sem despachar** um corpo
+`StreamingResponseBody`. As respostas de objeto saem com **status explícito** (`resposta(304)`, `resposta(206)`),
+que o Spring não intercede, e o `304` sai sempre com os cabeçalhos de validação.
+
+**Verificação:** `NetworkStorageDeliveryTests` **+3** (data igual → 304; data anterior → corpo;
+`If-None-Match` diferente com data igual → corpo) e `S3GatewayTests` **+2** (`GET` condicional por data;
+`HEAD` por ETag, por data e com ETag diferente). Os casos usam `updated_at` com `.750` ms, devolvendo o
+`Last-Modified` que o servidor emitiu. Mutações: comparar a data sem truncar; deixar a data decidir
+mesmo com `If-None-Match` presente; `HEAD` sem condicional — **3 de 3 derrubam**.
+
 ### 10.4 `Range`
 
 `ByteRange.parse` aceita `bytes=a-b`, `bytes=a-` (o que o player manda ao retomar) e `bytes=-n` (os n
@@ -535,7 +568,19 @@ versão que estava na frente é substituída, não apagada: quem baixou a versã
 que baixou, e o histórico continua contando o que aconteceu. Restaurar a versão que já está na frente
 é 409, não operação vazia.
 
-O digest restaurado é o que o catálogo guardava da versão antiga — a restauração não relê o disco.
+**A versão restaurada é um objeto novo, e tem corpo próprio (ciclo 95).** Até o ciclo 94 a linha era
+marcada `STORED` com o digest da antiga sem nada ser gravado: o catálogo dizia que a chave voltou a
+ter conteúdo e o download respondia `409` sem cópia, e a varredura acusava divergência num objeto que
+nunca chegou a um disco. A restauração devolvia um objeto que nenhum nó tinha.
+
+Agora o corpo é lido da versão antiga (`openReplicaZeroBody`) e gravado pelo **mesmo caminho do
+upload** (`doFinishUpload`): o digest que a versão nova carrega é o do que foi escrito, medido ao
+atravessar o fluxo, e a réplica 0 fica com os bytes no disco do Control Plane. Se a leitura da antiga
+ou a gravação falhar, a versão nova é descartada da chave — não fica um objeto sem corpo nem que
+barre a próxima tentativa.
+
+**Verificação:** `NetworkStorageVersioningTests` **+1** — restaurar v1 e baixar a v3 devolve `200` com
+o texto da v1. Mutação: voltar ao `markStored` sem gravar — **derruba**.
 
 ### 11.6 Rotas (admin)
 
@@ -601,6 +646,30 @@ nova depois de a antiga ter saído — o único caminho que deixaria o objeto se
 removido): a antiga continua, e o operador vê o motivo em `failureReason`, em vez de uma
 transferência viva para sempre.
 
+### 12.3.1 A órfã tem leitura e ato (ciclo 96)
+
+`stale()` e `fail()` existiam desde o V354 e **nenhuma rota os chamava**: a listagem mostrava só as
+vivas, e uma designação recolhida por outra rota (o healing devolveu o espaço, a soltura de
+pendência venceu) deixava a transferência `PENDING` para sempre. O `FAILED` que esta seção descreve
+nunca era alcançado — o operador via a transferência de ontem e não tinha o que fazer com ela.
+
+Agora existem as duas rotas, no mesmo desenho de `/storage/pending/release`: a leitura é segura e a
+escrita é ato do operador, **seca por padrão**.
+
+| rota | o que faz |
+|---|---|
+| `GET /admin/network/storage/rebalance/stale` | transferências vivas **sem** designação pendente do destino |
+| `POST /admin/network/storage/rebalance/stale/release?dryRun=` | fecha as órfãs como `FAILED`, sem tocar a cópia antiga |
+
+Fechar é irreversível na direção do `DONE` (transferência `FAILED` não completa mais), e por isso
+quem decide é quem leu a lista. A soltura **reaproveita** o `fail()` unitário — não há uma segunda
+regra de "esta transferência pode fechar?" —, e o `fail()` só muda linha `PENDING`: uma confirmação
+que chegue entre a varredura e a escrita não é sobrescrita, e a transferência não entra na lista.
+
+**Verificação:** `NetworkStorageRebalanceTests` **+1** — réplica de destino apagada: a órfã aparece no
+`GET`, o `POST` seco não grava (`PENDING`), o `POST` com `dryRun=false` grava `FAILED` e a cópia
+antiga fica `OK`. Mutação: a soltura só listar, sem gravar — **derruba**.
+
 ### 12.4 Unicidade: uma transferência viva por réplica
 
 A mesma coluna gerada do V352: `live_key` vale `object_id:from_replica` **só em `PENDING`** e NULL nos
@@ -653,6 +722,26 @@ de operador com o próprio teto.
 - **Teto de banda aplicado pelo próprio nó além do `--limit-rate`**: o nó limita a **velocidade**;
   não há reserva nem fila de banda entre transferências concorrentes (o runtime executa uma tarefa
   por ciclo, então hoje não há concorrência a arbitrar).
+## 10.5 O prazo da transferência acompanha o teto de banda (ciclo 104)
+
+O `bandwidthLimitMbps` do rebalanceamento (§12) chega ao nó e vira `--limit-rate`, como o §16 pede.
+Mas o prazo da tarefa `OBJECT_PUT` era **sempre `agora + 1 h`**, sem olhar o tamanho do objeto nem o
+teto: com 8 Mbps e um objeto de 100 GiB, o tempo mínimo de transferência é ~28 h, e a tarefa expirava
+**no meio**. O nó perdia o trabalho, a réplica nunca era confirmada, e o operador repetia a mesma
+transferência com o mesmo teto sem ligar uma coisa à outra.
+
+### Agora
+
+- o prazo é o **maior** entre 1 h e o tempo mínimo no teto pedido (`bytes / (mbps × 125 kB/s)`), com
+  folga de 20% para o nó conferir o digest;
+- **sem teto declarado**, vale 1 h: não há estimativa honesta da banda real do nó — ela é declarada
+  por ele e pode mudar com a rede — e inventar um número longo só adiaria a descoberta de um nó lento;
+- objeto pequeno sob teto baixo continua com 1 h: o prazo só cresce quando precisa.
+
+**Verificação:** `StorageReplicationDispatcherTests` **+3** — 100 GiB a 8 Mbps recebe prazo > 28 h;
+sem teto, prazo exatamente `agora + 1 h`; objeto de 1 KiB a 8 Mbps, `agora + 1 h`. Mutações: voltar ao
+prazo fixo, e ignorar o teto no cálculo — **2 de 2 derrubam**.
+
 ## 11. Disponibilidade histórica (brief §7, V369)
 
 **Entregue.** O §7 pede "disponibilidade histórica" na página do nó; até o V369 ela era a última

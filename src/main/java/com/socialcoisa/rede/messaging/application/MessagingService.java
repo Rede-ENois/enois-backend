@@ -192,6 +192,12 @@ public class MessagingService {
 	@Transactional
 	public Message sendMessage(String conversationId, String senderId, String text,
 			java.util.List<String> mediaIds, boolean mediaSpoiler, String replyToId) {
+		return sendMessage(conversationId, senderId, text, mediaIds, mediaSpoiler, replyToId, null);
+	}
+
+	@Transactional
+	public Message sendMessage(String conversationId, String senderId, String text,
+			java.util.List<String> mediaIds, boolean mediaSpoiler, String replyToId, String topicId) {
 		// ECA Digital: sem data de nascimento declarada, nao envia mensagem (tela de regularizacao).
 		ageGate.requireCanWrite(senderId);
 		// Sancao de moderacao: conta restrita nao manda mensagem. O canal privado e onde a
@@ -241,6 +247,9 @@ public class MessagingService {
 		String id = "message_" + UUID.randomUUID().toString().replace("-", "");
 		Message message = Message.create(id, conversationId, senderId, corpo, midias, mediaSpoiler, replyToId,
 			nextMessageInstant(conversationId));
+		if (topicId != null) {
+			message.inTopic(topicId);
+		}
 		repository.saveMessage(message);
 		// Ao enviar, a conversa fica lida para QUEM ENVIOU (PR #15) — antes o contador continuava
 		// aceso mesmo com a conversa aberta. O read usa o instante DA mensagem: nextMessageInstant
@@ -267,6 +276,14 @@ public class MessagingService {
 	@Transactional
 	public Message sendE2eMessage(String conversationId, String senderId, String ciphertext,
 			String iv, String encryptedKeys, java.util.List<String> mediaIds, boolean mediaSpoiler, String replyToId) {
+		return sendE2eMessage(conversationId, senderId, ciphertext, iv, encryptedKeys, mediaIds, mediaSpoiler,
+			replyToId, null);
+	}
+
+	@Transactional
+	public Message sendE2eMessage(String conversationId, String senderId, String ciphertext,
+			String iv, String encryptedKeys, java.util.List<String> mediaIds, boolean mediaSpoiler, String replyToId,
+			String topicId) {
 		ageGate.requireCanWrite(senderId);
 		sanctionGate.requireNotRestricted(senderId);
 		userRateLimiter.require(senderId, UserRateLimiter.SEND_MESSAGE);
@@ -318,6 +335,9 @@ public class MessagingService {
 				midias, mediaSpoiler, replyToId, nextMessageInstant(conversationId))
 			: Message.createE2e(id, conversationId, senderId, ciphertext, iv, midias, mediaSpoiler,
 				replyToId, nextMessageInstant(conversationId));
+		if (topicId != null) {
+			message.inTopic(topicId);
+		}
 		repository.saveMessage(message);
 		// Ao enviar, a conversa fica lida para QUEM ENVIOU (PR #15). Mesma regra do caminho em
 		// claro: o read usa o instante da mensagem, que pode estar à frente do relógio.
@@ -520,6 +540,16 @@ public class MessagingService {
 		}
 		// O leitor entra na consulta: a mensagem que ELE apagou nao volta (para o outro continua).
 		return repository.findMessagesByConversation(conversationId, viewerId, before, beforeId, limit);
+	}
+
+	/** A pagina de mensagens restrita a um topico do grupo (o filtro mora na consulta). */
+	public List<Message> getMessagesInTopic(String conversationId, String viewerId, String topicId,
+			java.time.Instant before, String beforeId, int limit) {
+		limit = pageLimit(limit);
+		if (!repository.findConversationById(conversationId).isPresent()) {
+			throw new ApiException(404, "CONVERSATION_NOT_FOUND", "Conversa nao encontrada.");
+		}
+		return repository.findMessagesByConversationAndTopic(conversationId, viewerId, topicId, before, beforeId, limit);
 	}
 
 	/** "Apagar para mim" por mensagem: some so para quem apagou. */

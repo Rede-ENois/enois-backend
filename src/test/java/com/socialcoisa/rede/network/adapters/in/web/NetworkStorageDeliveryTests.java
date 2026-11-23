@@ -158,6 +158,72 @@ class NetworkStorageDeliveryTests {
 		assertThat(response.getContentAsByteArray()).isEqualTo(VIDEO);
 	}
 
+	/**
+	 * {@code If-Modified-Since} com a data que o servidor devolveu em {@code Last-Modified} dá
+	 * <b>304</b> — o cliente que já tem a imagem não paga os bytes de novo.
+	 *
+	 * <p><b>Antes:</b> a entrega pública só olhava {@code If-None-Match}. Navegador, CDN e proxy que
+	 * revalidam por <b>data</b> (o validador que todo cache HTTP guarda junto do ETag) recebiam o
+	 * corpo inteiro a cada revalidação: a imagem de perfil voltava do Control Plane mesmo sem ter
+	 * mudado, gastando banda de quem serve e de quem assiste.</p>
+	 *
+	 * <p><b>Agora:</b> o {@code If-Modified-Since} é comparado com o {@code updated_at} em
+	 * <b>segundos</b> — a granularidade do cabeçalho HTTP. O teste devolve exatamente o
+	 * {@code Last-Modified} recebido com um {@code updated_at} de milissegundos ({@code .750}):
+	 * comparar sem truncar diria "mudou" sempre e o 304 nunca aconteceria.</p>
+	 */
+	@Test
+	void data_de_modificacao_igual_devolve_304() throws Exception {
+		Stored stored = store("cache-data.png", "image/png");
+		jdbc.update("update network_storage_objects set updated_at = ? where id = ?",
+			java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00.750Z")), stored.id());
+
+		MockHttpServletResponse primeiro = content(stored.id(), Map.of());
+		String modificadoEm = primeiro.getHeader(HttpHeaders.LAST_MODIFIED);
+		assertThat(primeiro.getStatus()).isEqualTo(200);
+		assertThat(modificadoEm).isNotBlank();
+
+		MockHttpServletResponse revalidado = content(stored.id(),
+			Map.of(HttpHeaders.IF_MODIFIED_SINCE, modificadoEm));
+
+		assertThat(revalidado.getStatus()).isEqualTo(304);
+		assertThat(revalidado.getContentAsByteArray()).isEmpty();
+		assertThat(revalidado.getHeader(HttpHeaders.ETAG)).isEqualTo("\"" + stored.sha256() + "\"");
+	}
+
+	/** Data anterior à gravação: o cliente NÃO tem a versão atual e recebe o corpo. */
+	@Test
+	void data_anterior_devolve_o_corpo() throws Exception {
+		Stored stored = store("cache-data-antiga.png", "image/png");
+		jdbc.update("update network_storage_objects set updated_at = ? where id = ?",
+			java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00.750Z")), stored.id());
+
+		MockHttpServletResponse response = content(stored.id(),
+			Map.of(HttpHeaders.IF_MODIFIED_SINCE, "Sat, 31 Oct 2026 00:00:00 GMT"));
+
+		assertThat(response.getStatus()).isEqualTo(200);
+		assertThat(response.getContentAsByteArray()).isEqualTo(VIDEO);
+	}
+
+	/**
+	 * RFC 9110: com {@code If-None-Match} presente, o {@code If-Modified-Since} é <b>ignorado</b>.
+	 * Se o ETag não bate, a resposta é o corpo — mesmo que a data diga "não mudou".
+	 */
+	@Test
+	void etag_diferente_desliga_o_if_modified_since() throws Exception {
+		Stored stored = store("cache-data-etag.png", "image/png");
+		jdbc.update("update network_storage_objects set updated_at = ? where id = ?",
+			java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00.750Z")), stored.id());
+		String modificadoEm = content(stored.id(), Map.of()).getHeader(HttpHeaders.LAST_MODIFIED);
+
+		MockHttpServletResponse response = content(stored.id(), Map.of(
+			HttpHeaders.IF_NONE_MATCH, "\"outro-digest-qualquer\"",
+			HttpHeaders.IF_MODIFIED_SINCE, modificadoEm));
+
+		assertThat(response.getStatus()).isEqualTo(200);
+		assertThat(response.getContentAsByteArray()).isEqualTo(VIDEO);
+	}
+
 	private record Stored(String id, String sha256) {
 	}
 

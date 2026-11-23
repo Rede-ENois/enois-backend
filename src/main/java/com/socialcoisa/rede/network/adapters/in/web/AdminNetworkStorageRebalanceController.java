@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.network.application.StorageRebalanceService;
@@ -73,6 +74,35 @@ class AdminNetworkStorageRebalanceController {
 			@PathVariable String id) {
 		CurrentUser admin = admin(sessionToken);
 		return View.of(rebalances.complete(admin.id().value(), id));
+	}
+
+	/**
+	 * As transferências <b>órfãs</b>: vivas, mas sem designação pendente do destino.
+	 *
+	 * <p>É a diferença entre "ainda a caminho" e "morreu no meio". A lista de {@code GET} mostra só as
+	 * vivas; esta diz <b>quais</b> vivas não têm como terminar, para o operador fechar pelo
+	 * {@code POST stale/release}.</p>
+	 */
+	@GetMapping("/stale")
+	List<View> stale(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		admin(sessionToken);
+		return rebalances.stale().stream().map(View::of).toList();
+	}
+
+	/**
+	 * Fecha as órfãs como {@code FAILED}, sem tocar a cópia antiga. O padrão é <b>seco</b>.
+	 *
+	 * <p>Mesmo desenho de {@code /storage/pending/release}: a leitura é segura e a escrita é ato do
+	 * operador. Fechar é irreversível na direção do {@code DONE} — transferência {@code FAILED} não
+	 * completa mais —, então quem decide é quem leu a lista. Não recolhe a designação, não completa,
+	 * não apaga corpo e não mexe na cópia antiga.</p>
+	 */
+	@PostMapping("/stale/release")
+	StorageRebalanceService.Release releaseStale(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(name = "dryRun", defaultValue = "true") boolean dryRun) {
+		CurrentUser admin = admin(sessionToken);
+		return rebalances.releaseStale(admin.id().value(), dryRun);
 	}
 
 	/** Desfaz antes da confirmação; a cópia antiga nunca é tocada. */

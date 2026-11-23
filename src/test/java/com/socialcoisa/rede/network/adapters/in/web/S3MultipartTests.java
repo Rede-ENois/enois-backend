@@ -222,6 +222,95 @@ class S3MultipartTests {
 		}
 	}
 
+	/**
+	 * O {@code NoSuchUpload} sai no formato do S3 — <b>XML com {@code Content-Type:
+	 * application/xml}</b> —, não no JSON do resto da API.
+	 *
+	 * <p>Um SDK (boto3, aws-cli, MinIO) deserializa o corpo pelo {@code Content-Type}: JSON aqui
+	 * chega como corpo irreconhecível, e o cliente trata como falha de rede ou erro genérico em vez
+	 * de "este upload não existe, recomece". A rota respondia 404 com o código certo num documento
+	 * que o SDK não sabe ler.</p>
+	 */
+	/**
+	 * O upload multipart <b>aparece no painel de operações</b>: abrir, enviar parte, listar e
+	 * concluir todas geram amostra no mesmo contador do catálogo.
+	 *
+	 * <p><b>Antes:</b> só o catálogo de objetos contava (`PUT`/`GET`/`HEAD`/`DELETE`/`LIST`). O
+	 * {@code StorageMultipartService} — que serve justamente os arquivos grandes — não registrava
+	 * nada: o painel dizia "multipart nunca acontece" enquanto um cliente enviava gigabytes. E o teto
+	 * de requisição por Access Key conta as mesmas rotas, então a operação que mais consome banda era
+	 * a que não aparecia.</p>
+	 *
+	 * <p><b>Agora:</b> abrir conta {@code PUT} (é a criação do upload), cada parte conta {@code PUT},
+	 * {@code ListParts} conta {@code LIST} e a conclusão conta {@code PUT} — os mesmos verbos do S3,
+	 * para o número ser comparável ao de um cliente de verdade.</p>
+	 */
+	@Test
+	void upload_multipart_conta_no_painel_de_operacoes() throws Exception {
+		String chave = "grande/%s.bin".formatted(sufixo());
+		long antes = amostras();
+
+		String uploadId = abrir(chave);
+		enviarParte(chave, uploadId, 1, "conteudo".getBytes(StandardCharsets.UTF_8));
+		mockMvc.perform(assinar(get("/s3/" + bucket + "/" + chave).param("uploadId", uploadId), shaVazio()))
+			.andExpect(status().isOk());
+		concluir(chave, uploadId, 1);
+
+		// abrir (PUT) + parte (PUT) + listar (LIST) + concluir (PUT) = 4 amostras novas. Sem a
+		// instrumentação são zero: o multipart serve arquivos grandes e não aparecia em lugar nenhum.
+		assertThat(amostras() - antes).isEqualTo(4);
+		var verbos = jdbc.queryForList("select distinct operation from network_storage_operation_metrics",
+			String.class);
+		assertThat(verbos).contains("PUT", "LIST");
+	}
+
+	/** O total de requisições que o painel de operações já tem gravado. */
+	private long amostras() {
+		Long total = jdbc.queryForObject("select coalesce(sum(req_count), 0) from network_storage_operation_metrics",
+			Long.class);
+		return total == null ? 0 : total;
+	}
+
+	@Test
+	void upload_inexistente_responde_xml_do_s3_e_nao_json() throws Exception {
+		MockHttpServletRequestBuilder pedido = get("/s3/" + bucket + "/" + "qualquer.bin")
+			.param("uploadId", "up_nao_existe_000000");
+		var recusa = mockMvc.perform(assinar(pedido, shaVazio())).andReturn();
+
+		assertThat(recusa.getResponse().getStatus()).isEqualTo(404);
+		assertThat(recusa.getResponse().getContentType()).startsWith("application/xml");
+		String corpo = recusa.getResponse().getContentAsString();
+		assertThat(corpo).startsWith("<?xml").contains("<Code>NoSuchUpload</Code>");
+		assertThat(corpo).doesNotContain("\"code\"");
+	}
+
+	/**
+	 * Toda recusa que nasce nos serviços do Storage chega ao cliente do S3 em <b>XML</b> — inclusive
+	 * as que nunca passaram por tradução, como o {@code expires} fora do intervalo do {@code POST
+	 * ?uploads} e o {@code InvalidPartOrder} da conclusão.
+	 *
+	 * <p>Antes, só `QuotaExceeded` e `STORAGE_PLACEMENT_MISSING` eram traduzidos; o resto saía como
+	 * JSON do Control Plane, corpo que o SDK não deserializa. O cliente via "erro de rede" em vez de
+	 * "o prazo pedido é longo demais" ou "as partes estão fora de ordem".</p>
+	 */
+	@Test
+	void recusas_do_multipart_saem_em_xml() throws Exception {
+		MockHttpServletRequestBuilder prazo = post("/s3/" + bucket + "/" + "grande.bin")
+			.queryParam("uploads", "").queryParam("expires", "99999999");
+		var prazoRuim = mockMvc.perform(assinar(prazo, shaVazio())).andReturn();
+		assertThat(prazoRuim.getResponse().getStatus()).isEqualTo(400);
+		assertThat(prazoRuim.getResponse().getContentType()).startsWith("application/xml");
+		assertThat(prazoRuim.getResponse().getContentAsString()).startsWith("<?xml")
+			.contains("<Code>InvalidArgument</Code>");
+
+		MockHttpServletRequestBuilder naoNumero = post("/s3/" + bucket + "/" + "grande.bin")
+			.queryParam("uploads", "").queryParam("expires", "abc");
+		var naoEhNumero = mockMvc.perform(assinar(naoNumero, shaVazio())).andReturn();
+		assertThat(naoEhNumero.getResponse().getStatus()).isEqualTo(400);
+		assertThat(naoEhNumero.getResponse().getContentAsString()).startsWith("<?xml")
+			.contains("<Code>InvalidArgument</Code>");
+	}
+
 	@Test
 	void abortar_apaga_as_partes_e_o_upload_deixa_de_existir() throws Exception {
 		String chave = "outros/%s.bin".formatted(sufixo());
@@ -410,7 +499,152 @@ class S3MultipartTests {
 			.isEqualTo(10L * 1024 * 1024);
 	}
 
-	// ------------------------------------------------------------------ apoio
+	/**
+	 * A lista de partes da conclusão não pode repetir nem voltar um número.
+	 *
+	 * <p><b>Antes:</b> a conclusão aceitava qualquer sequência que existisse. {@code [1, 1]} montava
+	 * {@code part-1} <b>duas vezes</b> e gravava um objeto com o dobro do conteúdo do upload — o cliente
+	 * recebia 200 e um arquivo que ele não mandou. O S3 recusa com {@code InvalidPartOrder}.</p>
+	 *
+	 * <p>O discriminante é o par: a lista com repetição recusa <b>e</b> o upload continua com a parte
+	 * dele (a conclusão que falha não apaga nada); depois, a lista certa conclui com o tamanho da parte,
+	 * não com o dobro.</p>
+	 */
+	@Test
+	void conclusao_com_parte_repetida_e_recusada_sem_gravar_em_dobro() throws Exception {
+		String chave = "ordem/%s.bin".formatted(sufixo());
+		String uploadId = abrir(chave);
+		enviarParte(chave, uploadId, 1, bytes('a', 6 * 1024 * 1024));
+		enviarParte(chave, uploadId, 2, bytes('b', 1));
+
+		String xml = xmlDePartes(1, 1);
+		String sha = shaOfBytes(xml.getBytes(StandardCharsets.UTF_8));
+		var recusa = mockMvc.perform(assinar(post("/s3/" + bucket + "/" + chave).param("uploadId", uploadId)
+			.contentType("application/xml").content(xml), sha)).andReturn();
+		assertThat(recusa.getResponse().getStatus()).as(recusa.getResponse().getContentAsString())
+			.isEqualTo(400);
+		assertThat(recusa.getResponse().getContentAsString()).contains("InvalidPartOrder");
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_objects where bucket = ?"
+			+ " and object_key = ?", Integer.class, bucket, chave)).as("nada foi gravado").isZero();
+
+		concluir(chave, uploadId, 1, 2);
+		assertThat(jdbc.queryForObject("select bytes from network_storage_objects where bucket = ?"
+			+ " and object_key = ?", Long.class, bucket, chave)).isEqualTo(6L * 1024 * 1024 + 1);
+	}
+
+	/**
+	 * UploadPartCopy: a parte é o <b>intervalo</b> pedido da origem, sem o cliente enviar os bytes.
+	 *
+	 * <p><b>Antes:</b> a parte com {@code x-amz-copy-source} respondia {@code 501} — o cliente que
+	 * copia um arquivo grande em partes (o caminho do {@code rclone} e do {@code aws s3 cp} acima de
+	 * 8 MB) não tinha como. O destino só existia depois da conclusão, e nenhuma parte era gravada.</p>
+	 *
+	 * <p><b>Agora:</b> o intervalo {@code bytes=primeiro-ultimo} é lido da origem pelo mesmo
+	 * {@code readBody} do download e entra pelo mesmo {@code receivePart} do envio direto. A resposta é
+	 * o {@code CopyPartResult} do S3, com o ETag do que foi gravado. O discriminante é o par:
+	 * {@code 200} com o XML <b>e</b> o objeto concluído com exatamente o intervalo — copiar a origem
+	 * inteira passaria pelo status.</p>
+	 */
+	@Test
+	void parte_de_copia_grava_o_intervalo_pedido_da_origem() throws Exception {
+		gravar("copias/origem.txt", "0123456789");
+		String chave = "copias/recorte-%s.txt".formatted(sufixo());
+		String uploadId = abrir(chave);
+
+		var resposta = copiarParte(chave, uploadId, 1, "copias/origem.txt", "bytes=2-5");
+
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(200);
+		assertThat(resposta.getContentAsString())
+			.contains("<CopyPartResult")
+			.contains("<ETag>\"" + shaDe("2345") + "\"</ETag>")
+			.contains("<LastModified>");
+
+		concluir(chave, uploadId, 1);
+		assertThat(ler(chave)).isEqualTo("2345");
+	}
+
+	/** Sem {@code x-amz-copy-source-range}, a parte é o objeto inteiro — o caso do arquivo pequeno. */
+	@Test
+	void parte_de_copia_sem_intervalo_copia_o_objeto_inteiro() throws Exception {
+		gravar("copias/inteira.txt", "conteudo inteiro da origem");
+		String chave = "copias/inteira-copia-%s.txt".formatted(sufixo());
+		String uploadId = abrir(chave);
+
+		var resposta = copiarParte(chave, uploadId, 1, "copias/inteira.txt", null);
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(200);
+
+		concluir(chave, uploadId, 1);
+		assertThat(ler(chave)).isEqualTo("conteudo inteiro da origem");
+	}
+
+	/** Origem que não existe: {@code 404 NoSuchKey} e nenhuma parte gravada. */
+	@Test
+	void parte_de_copia_de_origem_inexistente_responde_404_sem_gravar_parte() throws Exception {
+		String chave = "copias/orfa-%s.txt".formatted(sufixo());
+		String uploadId = abrir(chave);
+
+		var resposta = copiarParte(chave, uploadId, 1, "copias/nao-existe.txt", null);
+
+		assertThat(resposta.getStatus()).isEqualTo(404);
+		assertThat(resposta.getContentAsString()).contains("<Code>NoSuchKey</Code>");
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_multipart_parts where upload_id = ?",
+			Integer.class, uploadId)).isZero();
+	}
+
+	/** Intervalo fora do objeto (ou invertido) é {@code 400} e não grava parte. */
+	@Test
+	void parte_de_copia_com_intervalo_invalido_responde_400_sem_gravar_parte() throws Exception {
+		gravar("copias/dez.txt", "0123456789");
+		String chave = "copias/intervalo-%s.txt".formatted(sufixo());
+		String uploadId = abrir(chave);
+
+		var alemDoFim = copiarParte(chave, uploadId, 1, "copias/dez.txt", "bytes=5-99");
+		assertThat(alemDoFim.getStatus()).isEqualTo(400);
+		assertThat(alemDoFim.getContentAsString()).contains("<Code>InvalidArgument</Code>");
+
+		var invertido = copiarParte(chave, uploadId, 2, "copias/dez.txt", "bytes=9-2");
+		assertThat(invertido.getStatus()).isEqualTo(400);
+		assertThat(invertido.getContentAsString()).contains("<Code>InvalidArgument</Code>");
+
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_multipart_parts where upload_id = ?",
+			Integer.class, uploadId)).isZero();
+	}
+
+	// ------------------------------------------------------------------ apoio	// ------------------------------------------------------------------ apoio
+
+	/** Um CopyObject de parte: {@code PUT ?partNumber=&uploadId=} com a origem no cabeçalho. */
+	private org.springframework.mock.web.MockHttpServletResponse copiarParte(String chave, String uploadId,
+			int numero, String origem, String faixa) throws Exception {
+		MockHttpServletRequestBuilder requisicao = put("/s3/" + bucket + "/" + chave)
+			.param("partNumber", String.valueOf(numero)).param("uploadId", uploadId)
+			.header("x-amz-copy-source", "/" + bucket + "/" + origem)
+			.content(new byte[0]);
+		if (faixa != null) {
+			requisicao.header("x-amz-copy-source-range", faixa);
+		}
+		return mockMvc.perform(assinar(requisicao, shaVazio())).andReturn().getResponse();
+	}
+
+	/** Grava um objeto pelo PUT simples, para servir de origem da cópia. */
+	private void gravar(String chave, String conteudo) throws Exception {
+		byte[] bytes = conteudo.getBytes(StandardCharsets.UTF_8);
+		MockHttpServletRequestBuilder requisicao = put("/s3/" + bucket + "/" + chave).content(bytes)
+			.contentType("text/plain");
+		var resposta = mockMvc.perform(assinar(requisicao, shaOfBytes(bytes))).andReturn();
+		assertThat(resposta.getResponse().getStatus()).as(resposta.getResponse().getContentAsString())
+			.isEqualTo(200);
+	}
+
+	/** O corpo do objeto concluído, com o {@code asyncDispatch} do {@code StreamingResponseBody}. */
+	private String ler(String chave) throws Exception {
+		var resultado = mockMvc.perform(assinar(get("/s3/" + bucket + "/" + chave), shaVazio())).andReturn();
+		if (resultado.getRequest().isAsyncStarted()) {
+			resultado = mockMvc.perform(asyncDispatch(resultado)).andReturn();
+		}
+		assertThat(resultado.getResponse().getStatus())
+			.as("GET " + chave + ": " + resultado.getResponse().getContentAsString()).isEqualTo(200);
+		return resultado.getResponse().getContentAsString();
+	}
 
 	private String abrir(String chave) throws Exception {
 		var resposta = mockMvc.perform(assinar(post("/s3/" + bucket + "/" + chave).param("uploads", "")

@@ -75,6 +75,13 @@ class PapoRetoServiceTests {
 		return new PapoAssunto(subject, 10, 0, 10, 0, AGORA, 10, 400, 40.0, 39.0, falasDia, falasDiaAnterior);
 	}
 
+	/** O assunto com o tamanho REAL da base do escopo — é ele que decide o chão de pessoas. */
+	private static PapoAssunto agregadoComBase(String subject, long falasPost, long pessoas, double potencia,
+			double potenciaAntes, long publicacoesDoEscopo) {
+		return new PapoAssunto(subject, falasPost, 0, pessoas, 0, AGORA, pessoas, publicacoesDoEscopo, potencia,
+				potenciaAntes);
+	}
+
 	@Test
 	void assuntoSemGenteSuficienteNaoEntraNoRanking() {
 		repositorio.assuntos.add(agregado("meetup", 10, 4, 9, 9));
@@ -85,6 +92,37 @@ class PapoRetoServiceTests {
 		// 4 pessoas é menos que o chão (5): só o violão passa.
 		assertThat(ranking).hasSize(1);
 		assertThat(ranking.get(0).subject()).isEqualTo("violao");
+	}
+
+	@Test
+	void basePequenaBaixaOChaoEMarcaOAmostragemMenor() {
+		// Escopo com dez publicações na janela: menos que a massa da régua, então cinco pessoas
+		// não são o chão — dois já são conversa. O assunto que só passou pela porta estreita vem
+		// marcado, com o número de pessoas e o tamanho da base para a tela dizer a amostra.
+		repositorio.assuntos.add(agregadoComBase("meetup", 6, 3, 9, 9, 10));
+		repositorio.assuntos.add(agregadoComBase("violao", 6, 1, 9, 9, 10));
+
+		List<PapoRetoService.SubjectView> ranking = service().ranking();
+
+		// Uma pessoa repetindo não é conversa: o violão fica de fora mesmo com a base pequena.
+		assertThat(ranking).extracting(PapoRetoService.SubjectView::subject).containsExactly("meetup");
+		PapoRetoService.SubjectView meetup = ranking.get(0);
+		assertThat(meetup.amostragemMenor()).isTrue();
+		assertThat(meetup.pessoas()).isEqualTo(3);
+		assertThat(meetup.janelaPublicacoes()).isEqualTo(10);
+	}
+
+	@Test
+	void baseGrandeMantemOCincoEPOuAmostragemNaoEhMenor() {
+		// Com massa de dados no escopo, o chão volta a ser cinco pessoas — e o assunto que o
+		// passa é uma conversa inteira, não amostra pequena.
+		repositorio.assuntos.add(agregadoComBase("meetup", 10, 4, 9, 9, 400));
+		repositorio.assuntos.add(agregadoComBase("violao", 10, 6, 9, 9, 400));
+
+		List<PapoRetoService.SubjectView> ranking = service().ranking();
+
+		assertThat(ranking).extracting(PapoRetoService.SubjectView::subject).containsExactly("violao");
+		assertThat(ranking.get(0).amostragemMenor()).isFalse();
 	}
 
 	@Test
@@ -199,7 +237,7 @@ class PapoRetoServiceTests {
 	void crescimentoNuloQuandoNaoHaVesperaComparavel() {
 		// O assunto nasceu hoje: a véspera é zero e o denominador seria zero — dividir inventaria
 		// "+100%" (foi o "+127%" da produção). Nulo diz "novo em alta".
-		repositorio.assuntos.add(agregadoComJanelas("novidade", 6, 0));
+		repositorio.assuntos.add(agregadoComJanelas("foguete", 6, 0));
 
 		List<PapoRetoService.SubjectView> ranking = service().ranking();
 

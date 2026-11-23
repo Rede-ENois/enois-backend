@@ -429,6 +429,28 @@ public class StorageCatalogService {
 		}
 	}
 
+	/**
+	 * O mesmo upload, com o corpo vazio permitido: é o caminho do <b>cliente S3</b>.
+	 *
+	 * <p>O S3 aceita objeto de 0 byte — é o marcador de "pasta" que {@code aws s3 cp --recursive}
+	 * cria e o resultado de uma escrita vazia legítima. Recusá-lo fazia um cliente que sincroniza uma
+	 * árvore inteira tratar a sincronização como falha em cada marcador, com todos os arquivos já
+	 * gravados. A recusa continua valendo para o upload <b>do nó</b> ({@link #store}): ali o corpo
+	 * vazio é sinal de gravação que não aconteceu.</p>
+	 */
+	public StorageObject finishUploadPermitindoVazio(String objectId, InputStream body, String actorId) {
+		long inicio = System.nanoTime();
+		try {
+			StorageObject gravado = doFinishUpload(objectId, body, actorId, true, true);
+			conta("PUT", StorageOperationMetrics.Resultado.OK, inicio);
+			return gravado;
+		}
+		catch (RuntimeException recusado) {
+			conta("PUT", resultadoDe(recusado), inicio);
+			throw recusado;
+		}
+	}
+
 	public StorageObject finishUpload(String objectId, InputStream body, String actorId) {
 		long inicio = System.nanoTime();
 		try {
@@ -458,13 +480,18 @@ public class StorageCatalogService {
 	 */
 	private StorageObject doFinishUpload(String objectId, InputStream body, String actorId,
 			boolean cobrarPartesReservadas) {
+		return doFinishUpload(objectId, body, actorId, cobrarPartesReservadas, false);
+	}
+
+	private StorageObject doFinishUpload(String objectId, InputStream body, String actorId,
+			boolean cobrarPartesReservadas, boolean aceitaVazio) {
 		StorageObject object = catalog.findById(objectId)
 			.orElseThrow(() -> new ApiException(404, "STORAGE_OBJECT_UNKNOWN", "Objeto nao encontrado no catalogo."));
 		if (object.state() != StorageObjectState.PENDING) {
 			throw new ApiException(409, "STORAGE_ALREADY_STORED", "O objeto ja tem copia confirmada.");
 		}
 		Spooled measured = measure(body);
-		if (measured.bytes() == 0) {
+		if (measured.bytes() == 0 && !aceitaVazio) {
 			deleteQuietly(measured.temp());
 			throw new ApiException(400, "STORAGE_EMPTY_BODY", "O corpo enviado esta vazio.");
 		}
@@ -758,10 +785,29 @@ public class StorageCatalogService {
 		}
 		esquecerUsoDoParticipante(actorId);
 		catalog.insertVersion(id, bucket, key, old.contentType(), actorId, now, next);
-		// O conteúdo é o da versão antiga, e o conferido é o medido nela: a restauração não relê o
-		// disco, então o digest que vale é o que o catálogo já guardava.
-		if (!catalog.markStored(id, old.bytes(), old.sha256(), now)) {
-			throw new ApiException(409, "STORAGE_VERSION_RACE", "A chave mudou durante a restauracao.");
+		// A versão restaurada é um objeto NOVO, e precisa do corpo dela. Antes, a linha era marcada
+		// STORED com o digest da antiga sem nada ser gravado: o catálogo dizia que a chave voltou a
+		// ter conteúdo e o download respondia 409 sem cópia — a restauração devolvia um objeto que
+		// nenhum disco tinha. O corpo vem da versão antiga, pela mesma leitura do download, e é
+		// gravado pelo caminho do upload: o digest que fica é o do que foi escrito, não o prometido.
+		try (InputStream corpo = openReplicaZeroBody(old.id())) {
+			// Sem `requireStorage`: quem restaura é o Control Plane, e a réplica 0 é dele. A conta
+			// da cota é do participante, e a restauração não passa por ela — o espaço já era dele
+			// na versão antiga e a nova ocupação é a mesma dos bytes.
+			boolean gravou = doFinishUpload(id, corpo, actorId, false) != null;
+			if (!gravou) {
+				throw new ApiException(409, "STORAGE_VERSION_RACE", "A chave mudou durante a restauracao.");
+			}
+		}
+		catch (java.io.IOException fechou) {
+			throw new ApiException(409, "STORAGE_VERSION_NOT_SERVABLE",
+				"A copia da versao antiga nao pode ser lida para restaurar.");
+		}
+		catch (ApiException recusado) {
+			// A versão nova já está no catálogo como PENDING e sem corpo: sai da chave para não
+			// deixar um objeto que ninguém consegue baixar e que barra a próxima restauração.
+			catalog.discardPending(id);
+			throw recusado;
 		}
 		catalog.setExpiresAt(id, bucketPolicy(bucket).expiresAtFor(now));
 		audit.record(actorId, "STORAGE_VERSION_RESTORED", id,
@@ -1357,6 +1403,12 @@ public class StorageCatalogService {
 		Path cpBody = Path.of(storageRoot).resolve(objectId);
 		boolean localCopy = nodeBodies != null && nodeBodies.has(objectId);
 		if (Files.isReadable(cpBody)) {
+			// A réplica 0 tem linha de colocação (nó `control-plane` no upload, ou o nó dono do disco
+			// deste runtime). Ela passa pela MESMA régua da cópia de nó: `STALE`/`GONE` no catálogo
+			// não é servida a quem puxa o objeto para replicar. Antes, bastava o arquivo ser legível
+			// na raiz: o nó que relatou o próprio disco divergente a marcava `STALE`, e esta rota
+			// — a origem de toda replicação — continuava entregando o corpo que o catálogo negava.
+			exigirReplicaZeroServivel(objectId);
 			return openVerified(cpBody, object);
 		}
 		if (localCopy) {
@@ -1393,6 +1445,29 @@ public class StorageCatalogService {
 	 * passar por colocação de nó. A réplica 0 na raiz do CP continua fora desta regra: ela não tem
 	 * linha de colocação de nó, e o CP é o próprio dono do disco.</p>
 	 */
+	/**
+	 * A réplica 0 só sai da raiz do Control Plane quando o catálogo não a marcou como divergente.
+	 *
+	 * <p>Sem linha de colocação a leitura continua valendo: objeto gravado antes de a colocação do
+	 * Control Plane existir nunca foi declarado divergente por ninguém. Com linha, só {@code OK}
+	 * serve — o mesmo que a cópia de nó. A réplica 0 não vira {@code GONE} no healing (§5.13, o
+	 * corpo certo é reescrito por quem grava), então {@code STALE} é o único sinal que ela tem, e é
+	 * ele que esta guarda cobra.</p>
+	 */
+	private void exigirReplicaZeroServivel(String objectId) {
+		// O dono da linha é `control-plane` quando quem gravou foi o CP, e o id do nó quando quem
+		// gravou foi um runtime. Quem responde é a linha, não o nome: perguntar por um dono fixo
+		// deixaria de fora justamente a réplica 0 de um nó.
+		catalog.copies(objectId).stream()
+			.filter(copia -> copia.replica() == 0)
+			.filter(copia -> copia.state() != StoragePlacement.State.OK)
+			.findFirst()
+			.ifPresent(copia -> {
+				throw new ApiException(409, "STORAGE_REPLICA_STALE",
+					"A copia na replica 0 nao confere (" + copia.state().name() + "); use uma copia OK.");
+			});
+	}
+
 	private void exigirCopiaServivel(String objectId) {
 		if (nodeBodies == null) {
 			return;

@@ -1084,13 +1084,23 @@ Contrato completo, regras e códigos de erro em [`STUDY_PAIRS.md`](STUDY_PAIRS.m
 | POST | `/api/conversations` | Criar conversa | Sim |
 | GET | `/api/conversations/search` | Buscar conversas | Sim |
 | GET | `/api/conversations/{conversationId}` | Detalhes da conversa | Sim |
-| POST | `/api/conversations/{conversationId}/messages` | Enviar mensagem | Sim |
-| GET | `/api/conversations/{conversationId}/messages` | Listar mensagens | Sim |
+| POST | `/api/conversations/{conversationId}/messages` | Enviar mensagem; `topicId` opcional coloca a mensagem num tópico do grupo | Sim |
+| GET | `/api/conversations/{conversationId}/messages` | Listar mensagens; `?topicId=` restringe ao tópico do grupo (cada item traz `topicId`, `null` fora de tópico) | Sim |
 | POST | `/api/conversations/{conversationId}/read` | Marcar como lida (as notificações de mensagem da conversa também ficam lidas) | Sim |
 | POST | `/api/conversations/{conversationId}/viewing` | Heartbeat da conversa aberta na tela (a cada ~20s): enquanto vale (45s), mensagens novas dela não notificam nem mandam push para quem está olhando. 204 | Sim |
 | DELETE | `/api/conversations/{conversationId}/viewing` | A conversa saiu da tela: volta a notificar. 204 | Sim |
 | POST | `/api/conversations/{conversationId}/messages/{messageId}/reactions` | Reagir a mensagem | Sim |
 | GET | `/api/conversations/{conversationId}/messages/{messageId}/reactions` | Reações da mensagem | Sim |
+| GET | `/api/conversations/{conversationId}/group/participants` | Painel do grupo: `{conversationId, myRole, participants}` (quem participa e o papel de cada um) | Sim |
+| POST | `/api/conversations/{conversationId}/group/participants` | Convidar alguém para o grupo (`{userId}`); 201 com o participante | Sim |
+| DELETE | `/api/conversations/{conversationId}/group/participants/{userId}` | Remover alguém do grupo; 200 com `{"status":"REMOVED"}` | Sim |
+| PATCH | `/api/conversations/{conversationId}/group/participants/{userId}` | Promover a administrador ou voltar a membro (`{role: "ADMIN"\|"MEMBER"}`) | Sim |
+| POST | `/api/conversations/{conversationId}/group/participants/{userId}/history-keys` | Conceder a quem entrou depois a chave das mensagens antigas (`{keys: {"<messageId>": "<chave cifrada>"}}`); 200 com `{"granted": n}` | Sim |
+| GET | `/api/conversations/{conversationId}/group/topics` | Tópicos do grupo, na ordem do grupo (`{items, nextCursor}`) | Sim (participante) |
+| POST | `/api/conversations/{conversationId}/group/topics` | Criar tópico (`{name}`); 201 com o tópico | Sim (dono/admin) |
+| PATCH | `/api/conversations/{conversationId}/group/topics/{topicId}` | Renomear (`{name}`); sem nome, nada muda | Sim (dono/admin) |
+| POST | `/api/conversations/{conversationId}/group/topics/{topicId}/archive` | Arquivar: para de receber mensagem, o histórico continua | Sim (dono/admin) |
+| POST | `/api/conversations/{conversationId}/group/topics/reorder` | Nova ordem (`{topicIds}` com todos os tópicos, uma vez cada) | Sim (dono/admin) |
 | GET | `/api/conversations/stream` | Stream SSE (`text/event-stream`) da caixa de entrada: evento `conversation` com `{"conversationId"}` a cada mensagem nova, leitura ou reação; comentário `ping` a cada 25s | Sim (cookie) |
 
 O stream só avisa **qual** conversa mudou; o conteúdo (cifrado ou não) é buscado pelas rotas acima,
@@ -1098,6 +1108,70 @@ com a autorização de sempre. O aviso sai depois do commit, então o refetch j�
 5 streams por usuário (abas/aparelhos); o sexto fecha o mais antigo. Sem sessão a resposta é o status
 puro (401), sem corpo. O registro de streams vive na memória da instância: correto enquanto a
 produção roda um backend só; uma segunda instância exige difusão entre instâncias antes de escalar.
+
+### Painel de admin do grupo (issue #915)
+
+Conversa de grupo aqui é a conversa de chat (`kind=GROUP`), não o grupo de conteúdo. As rotas de
+`/api/conversations/{conversationId}/group/...` só existem para conversa de grupo: em conversa
+direta o servidor responde 400 `INVALID_CONVERSATION_KIND`.
+
+**Papéis.** O dono é quem criou a conversa (`conversations.created_by`) e o papel gravado na linha
+do participante (`conversation_participants.role`) só guarda a promoção a `ADMIN`. São duas
+fontes de verdade que discordam entre si. O dono promove e rebaixa administradores e remove
+administradores; o administrador convida e remove membros comuns, mas não mexe em outro
+administrador nem no dono; o dono não sai do próprio grupo (não há transferência de dono).
+
+Quem não participa da conversa não enxerga o painel: 403 `NOT_PARTICIPANT`. Quem participa e não
+administra recebe 403 `GROUP_ADMIN_REQUIRED` ao tentar convidar ou remover. Mudar papel é do dono
+e só do dono: 403 `GROUP_OWNER_REQUIRED` para qualquer outra pessoa.
+
+| Situação | Resposta |
+|---|---|
+| Convidar quem já está no grupo | 409 `ALREADY_PARTICIPANT` |
+| Remover quem não está no grupo | 404 `PARTICIPANT_NOT_FOUND` |
+| Remover o dono | 403 `GROUP_OWNER_PROTECTED` |
+| Administrador remover outro administrador | 403 `GROUP_ADMIN_PROTECTED` |
+| Papel fora de `ADMIN`/`MEMBER` | 400 `INVALID_ROLE` |
+| Grupo com 100 participantes | 400 `TOO_MANY_PARTICIPANTS` |
+
+Remover alguém apaga a linha de participante e revoga a chave da conversa guardada no servidor
+para essa pessoa: ela perde o acesso às mensagens e a conversa sai da caixa dela, enquanto quem
+ficou continua com o histórico. A pessoa removida recebe notificação
+(`CHAT_GROUP_MEMBER_REMOVED`) e quem entrou recebe `CHAT_GROUP_MEMBER_ADDED`.
+
+**Quem entra depois vê o histórico inteiro.** A chave de cada mensagem é gerada por quem enviou e
+chega cifrada para cada participante; o servidor guarda só essa cópia cifrada e não decifra nada.
+Por isso a concessão de histórico recebe de quem administra a chave de cada mensagem antiga **já
+cifrada para a chave pública de quem entrou**: quem administra abre a chave da mensagem com a
+própria chave privada e fecha a chave da pessoa nova com a chave pública dela. O servidor
+acrescenta essa chave ao mapa da mensagem (`encryptedKeys`) sem tocar nas chaves de quem já estava
+no grupo.
+
+- A concessão aceita no máximo 200 mensagens por vez; o mapa de chaves da mensagem tem limite de
+  16.000 caracteres (400 `ENCRYPTED_KEYS_TOO_LONG`).
+- Mensagem de outra conversa: 404 `MESSAGE_NOT_FOUND`. Mensagem que não foi cifrada: 409
+  `MESSAGE_NOT_ENCRYPTED`. Mensagem no formato legado (sem mapa de chaves): 409
+  `HISTORY_KEYS_NOT_SUPPORTED`.
+- Conceder de novo é seguro: as mensagens que já têm a chave da pessoa não são reescritas e não
+  contam no `granted`.
+
+### Tópicos dentro do grupo (issue #915)
+
+Um grupo grande misturava todos os assuntos numa conversa só. O tópico organiza as mensagens por
+assunto, como o grupo de conteúdo faz com os próprios tópicos — mas aqui ele é do chat.
+
+- Qualquer participante lê os tópicos; dono ou administrador criam, renomeam, arquivam e reordenam
+  (403 `GROUP_ADMIN_REQUIRED` para os demais). Quem não participa recebe 403 `NOT_PARTICIPANT`, e
+  conversa direta responde 400 `INVALID_CONVERSATION_KIND`.
+- Nome obrigatório de até 60 caracteres, 400 `INVALID_TOPIC_NAME`; repetido (a comparação da coluna
+  não distingue maiúsculas nem acento) é 409 `TOPIC_EXISTS`; até 30 tópicos por grupo, 400
+  `TOO_MANY_TOPICS`.
+- Enviar mensagem com `topicId` exige tópico daquele grupo e aberto: de outro grupo é 404
+  `TOPIC_NOT_FOUND`, arquivado é 409 `TOPIC_ARCHIVED`. Sem `topicId` a mensagem entra na conversa
+  como sempre — e todas as mensagens anteriores continuam assim.
+- `GET .../messages?topicId=` filtra na consulta (com o mesmo cursor e o mesmo "apagar para mim"),
+  então `nextCursor` nunca pula mensagem nem mente sobre haver mais.
+- Reordenar exige a lista completa dos tópicos da conversa, uma vez cada: 400 `INVALID_ORDER`.
 
 ### Citações no histórico de mensagens
 

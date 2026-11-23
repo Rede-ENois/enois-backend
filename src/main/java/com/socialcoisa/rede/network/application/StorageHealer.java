@@ -159,6 +159,30 @@ public class StorageHealer {
 		List<HealedObject> designados = new ArrayList<>();
 		List<Skipped> pulados = new ArrayList<>();
 
+		// A divergência vem ANTES da lacuna, e a ordem é o que faz a rodada fechar: a cópia
+		// divergente ainda é `OK` no catálogo quando a lacuna é calculada, e o placement a conta como
+		// ocupada. Resolver a lacuna primeiro não achava candidato; a divergência virava `GONE` logo
+		// depois e o objeto ficava com uma cópia só, sem nada a caminho. Devolvendo o espaço antes, a
+		// designação da mesma rodada já pode escolher o nó que estava ocupado.
+		List<Object> repostos = new ArrayList<>();
+		java.util.Set<String> jaTratadas = new java.util.HashSet<>();
+		for (StorageScrubber.Report.Divergent divergente : varredura.divergent()) {
+			jaTratadas.add(divergente.objectId() + "#" + divergente.replica());
+			repostos.addAll(repor(actorId, divergente, dryRun));
+		}
+		for (StoragePlacement marcada : copiasStale(bucket, bounded)) {
+			// A réplica 0 não entra na cura de cópia de nó: ela não é designada, não vira GONE nem
+			// tem nó para onde ser reposta. O `STALE` dela é o sinal de "o corpo do Control Plane não
+			// confere", e quem o resolve é reescrever a réplica 0 — a lacuna que ele abre já é tratada
+			// no laço abaixo, que designa cópia de nó. Sem esta guarda, todo `heal` a reescreveria e
+			// re-auditaria para sempre: ela nunca sai de `STALE` por aqui.
+			if (marcada.replica() == 0 || jaTratadas.contains(marcada.objectId() + "#" + marcada.replica())) {
+				continue;
+			}
+			repostos.addAll(repor(actorId, new StorageScrubber.Report.Divergent(marcada.objectId(),
+				marcada.replica(), marcada.nodeId(), marcada.sha256(), ""), dryRun));
+		}
+
 		for (StorageScrubber.Report.UnderReplicated lacuna : varredura.underReplicated()) {
 			StorageObject objeto = catalog.findById(lacuna.objectId()).orElse(null);
 			if (objeto == null || !objeto.servable()) {
@@ -201,26 +225,6 @@ public class StorageHealer {
 				continue;
 			}
 			gravarDesignacoes(actorId, objeto, escolhidos.subList(0, limite), copias, bytes, designados);
-		}
-
-		// Duas origens para a mesma pergunta. A varredura só relê o disco DESTA instalação, e o
-		// Control Plane pode não ter corpo nenhum no disco (é o caso da instalação que não hospeda
-		// réplica 0): aí `divergent` volta vazio para sempre, mesmo com a cópia de um nó já STALE.
-		// O estado da colocação é a outra testemunha — foi o próprio nó que declarou o digest errado
-		// ou a varredura dele que mediu. As duas listas se somam sem duplicar: a divergente sem
-		// linha STALE (o disco deste CP) é justamente a que só a releitura enxerga.
-		List<Object> repostos = new ArrayList<>();
-		java.util.Set<String> jaTratadas = new java.util.HashSet<>();
-		for (StorageScrubber.Report.Divergent divergente : varredura.divergent()) {
-			jaTratadas.add(divergente.objectId() + "#" + divergente.replica());
-			repostos.addAll(repor(actorId, divergente, dryRun));
-		}
-		for (StoragePlacement marcada : copiasStale(bucket, bounded)) {
-			if (jaTratadas.contains(marcada.objectId() + "#" + marcada.replica())) {
-				continue;
-			}
-			repostos.addAll(repor(actorId, new StorageScrubber.Report.Divergent(marcada.objectId(),
-				marcada.replica(), marcada.nodeId(), marcada.sha256(), ""), dryRun));
 		}
 
 		LOG.info("storage heal dryRun={} objetos={} designados={} pulados={} repostos={}", dryRun,
@@ -270,13 +274,26 @@ public class StorageHealer {
 			// substituída. Não é erro — a cópia divergente da versão antiga não vale mais.
 			return List.of();
 		}
-		// A cópia da réplica 0 é o disco do CP: o corpo certo está aqui e o objeto continua servível
-		// por ela. Marcar GONE derrubaria a única cópia que se sabe boa.
+		// A cópia da réplica 0 é o disco do CP: o arquivo fica (a cura não apaga disco do Control
+		// Plane), mas o catálogo tem de parar de afirmá-la. Antes só auditava, e a linha continuava
+		// OK: o `readBody` serve a raiz do CP por "arquivo legível", então o corpo divergente seguia
+		// sendo entregue a quem puxa o objeto para replicar. `STALE` — nunca `GONE` — é o sinal que
+		// a réplica 0 tem, e é ele que a leitura cobra (doc 13 §5.14).
 		if (divergente.replica() == 0) {
 			if (!dryRun) {
-				audit.record(actorId, "STORAGE_REPLICA_ZERO_DIVERGENT", objeto.id(),
-					"{\"expected\":\"" + escape(divergente.expectedSha256()) + "\",\"actual\":\""
-						+ escape(divergente.actualSha256()) + "\"}");
+				try {
+					tx.executeWithoutResult(semRetorno -> {
+						catalog.savePlacement(new StoragePlacement(objeto.id(), 0, divergente.nodeId(),
+							objeto.bytes() == null ? 0 : objeto.bytes(), objeto.sha256(),
+							StoragePlacement.State.STALE, clock.instant()));
+						audit.record(actorId, "STORAGE_REPLICA_ZERO_DIVERGENT", objeto.id(),
+							"{\"expected\":\"" + escape(divergente.expectedSha256()) + "\",\"actual\":\""
+								+ escape(divergente.actualSha256()) + "\"}");
+					});
+				}
+				catch (RuntimeException falha) {
+					LOG.warn("storage heal: falha ao marcar a replica 0 de {}: {}", objeto.id(), falha.getMessage());
+				}
 			}
 			return List.of(new Reposted(objeto.id(), 0, divergente.nodeId(), "REPLICA_ZERO"));
 		}

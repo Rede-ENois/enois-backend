@@ -64,8 +64,15 @@ public class GlobalExceptionHandler {
 	ResponseEntity<String> handleS3Exception(com.socialcoisa.rede.network.adapters.in.web.S3ApiException exception,
 			jakarta.servlet.http.HttpServletRequest request) {
 		LOGGER.debug("s3_gateway_error status={} code={}", exception.status(), exception.code());
-		return ResponseEntity.status(exception.status())
-			.header(org.springframework.http.HttpHeaders.CONTENT_TYPE, "application/xml; charset=utf-8")
+		var resposta = ResponseEntity.status(exception.status())
+			.header(org.springframework.http.HttpHeaders.CONTENT_TYPE, "application/xml; charset=utf-8");
+		// O `SlowDown` do S3 vem com `Retry-After`: é o que diz ao SDK quando voltar. Sem ele, o
+		// `s3Error(503, "SlowDown", …).withRetryAfter(1)` perderia a parte que o torna acionável.
+		if (exception.retryAfterSeconds() > 0) {
+			resposta.header(org.springframework.http.HttpHeaders.RETRY_AFTER,
+				Long.toString(exception.retryAfterSeconds()));
+		}
+		return resposta
 			.body(exception.toXml(request == null ? null
 				: request.getMethod() + " " + request.getRequestURI()));
 	}

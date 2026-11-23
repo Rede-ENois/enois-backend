@@ -54,13 +54,15 @@ contra o vetor externo é o que separa "implementei" de "assinei comigo mesmo e 
 | operação | rota | estado |
 |---|---|---|
 | PutObject | `PUT /s3/{bucket}/{key}` | ✅ mesmo caminho do catálogo; ETag = digest |
-| GetObject | `GET /s3/{bucket}/{key}` | ✅ `Range`/206/416, `304` por `If-None-Match` |
-| HeadObject | `HEAD /s3/{bucket}/{key}` | ✅ |
+| CopyObject | `PUT /s3/{bucket}/{key}` + `x-amz-copy-source` | ✅ cópia no servidor, sem o cliente enviar o corpo (§4.19) |
+| UploadPartCopy | `PUT /s3/{bucket}/{key}?partNumber=&uploadId=` + `x-amz-copy-source` | ✅ parte a partir de um intervalo da origem (§4.20) |
+| GetObject | `GET /s3/{bucket}/{key}` | ✅ `Range`/206/416, `304` por `If-None-Match` ou `If-Modified-Since` |
+| HeadObject | `HEAD /s3/{bucket}/{key}` | ✅ `304` por `If-None-Match` / `If-Modified-Since` |
 | DeleteObject | `DELETE /s3/{bucket}/{key}` | ✅ **lápide** (como o S3 com versionamento), 204 |
 | ListObjectsV2 | `GET /s3/{bucket}?list-type=2` | ✅ `prefix`, `max-keys` (teto 1000), `continuation-token` |
 | ListObjects (v1) | `GET /s3/{bucket}` | ✅ `marker` |
 | ListBuckets | `GET /s3` | ✅ só os buckets do dono |
-| DeleteBucket | `DELETE /s3/{bucket}` | ⚠️ recusa 409 se houver objeto; **501** para bucket vazio (não há tabela de buckets vazios) |
+| DeleteBucket | `DELETE /s3/{bucket}` | ✅ `409 BucketNotEmpty` se houver objeto **vivo**; `204` se não houver (§4.15) |
 | CreateMultipartUpload | `POST /s3/{bucket}/{key}?uploads` | ✅ devolve `UploadId` |
 | UploadPart | `PUT /s3/{bucket}/{key}?partNumber=&uploadId=` | ✅ fora de ordem; reenvio substitui |
 | CompleteMultipartUpload | `POST /s3/{bucket}/{key}?uploadId=` | ✅ monta o corpo na ordem pedida; parte ausente recusa |
@@ -71,7 +73,8 @@ contra o vetor externo é o que separa "implementei" de "assinei comigo mesmo e 
 
 **Não implementado**, e o brief manda não anunciar como se existisse:
 
-- **CopyObject**, **ACL**, **tagging**, **`versionId`**, **bucket policy**, **`POST` de formulário**.
+- **ACL**, **tagging**, **`versionId`**, **bucket policy**, **`POST` de formulário** — sem suporte e
+  não anunciados (o `PUT` que os gravaria responde `501` e não altera o objeto — §4.21).
 - **Regiões múltiplas**, **classes de armazenamento na resposta** (sempre `STANDARD`; a classe real é a
   da §8 e não é escolhida por requisição).
 
@@ -92,7 +95,7 @@ as duas precisam de "sim":
 | ListObjects `GET /s3/{bucket}` | ✅ | ✅ | antes |
 | GetObject / HeadObject | ✅ | ✅ | antes |
 | DeleteObject | ✅ | ✅ | antes |
-| DeleteBucket | ✅ | ✅ | antes |
+| DeleteBucket | ✅ | ✅ (vivo **ou** lápide, §4.15) | antes |
 | PutObject | ✅ | ✅ | **depois da gravação** |
 
 **Por que o `PUT` é o único fora de ordem.** O Storage não tem tabela de buckets: o nome nasce do
@@ -520,6 +523,385 @@ mesma gravação passa. Dois multiparts de 10 MiB: o primeiro **conclui** com o 
 Mutações: a abertura ignora o reservado; a conclusão cobra as partes de novo; a abertura sem a tradução
 ao S3 — **3 de 3 derrubam**.
 
+### 4.10 A guarda de cópia do ciclo 90 (histórico)
+
+Até o ciclo 90, o cabeçalho `x-amz-copy-source` era **ignorado** no `PUT` e no
+`PUT ?partNumber=&uploadId=`: com o corpo vazio da cópia, a resposta era `400` — como se o cliente
+tivesse enviado um arquivo ou uma parte vazia — e, com corpo, os bytes do cliente viravam a "cópia".
+O ciclo 90 fez o gateway recusar com `501 NotImplemented` o que ainda não sabia fazer; os ciclos 108 e
+109 implementaram as duas operações — `CopyObject` (§4.19) e `UploadPartCopy` (§4.20). **A guarda não
+existe mais**, e os testes que a fixavam foram substituídos pelos das duas operações.
+
+**Verificação:** `S3GatewayTests` cobre a cópia inteira (§4.19) e `S3MultipartTests` cobre a parte
+copiada com e sem intervalo (§4.20).
+
+### 4.11 O corpo montado sai do disco quando a conclusão falha (ciclo 91)
+
+A conclusão do multipart monta as partes num arquivo só, dentro de
+`<storageRoot>/multipart/<uploadId>/`, e só então chama o `finishUpload`. O `finally` que apagava
+esse temporário cobria apenas a releitura do arquivo. Quando a **gravação** recusava — cota do
+participante, falha de I/O do catálogo, disco cheio —, a exceção subia por fora dele e o corpo
+inteiro, em claro, ficava no diretório do upload.
+
+O varredor de sobras não o recolhia: ele só apaga diretório **sem** upload correspondente, e a linha
+do upload existe (o cliente ainda pode enviar outra parte). O upload aberto passava a ocupar o dobro
+do próprio tamanho, sem que a cota, o catálogo ou o relatório soubessem.
+
+Agora a montagem, o sha do arquivo, a abertura e a gravação estão num `try` só, com a limpeza no
+`catch` (qualquer `RuntimeException`) e no caminho de sucesso. O diretório do upload fica com as
+partes — e só com elas — até o cliente concluir ou abortar.
+
+**Verificação:** `StorageMultipartBodyCleanupTests` **+2** — a conclusão com a gravação recusando
+deixa o diretório com `part-1` e nenhum `.montado-*.tmp`; a conclusão recusada antes da montagem
+(parte que não chegou) nem cria o diretório. Mutação: devolver o `finally` só na releitura (sem a
+limpeza no `catch`) — **derruba** ("but some elements were not expected": o `.montado-0xxx.tmp`).
+
+### 4.12 A lista de partes da conclusão é estritamente crescente (ciclo 92)
+
+O `CompleteMultipartUpload` recebe a lista de partes na ordem em que elas formam o arquivo. A
+conclusão aceitava **qualquer** sequência cujos números existissem. Com `[1, 1]` ela montava
+`part-1` duas vezes e gravava um objeto com o dobro do conteúdo do upload: o cliente recebia `200` e
+um arquivo que não mandou. Numeração fora de ordem (`[2, 1]`) era aceita do mesmo jeito e montava o
+corpo em ordem diferente da que a lista descreve.
+
+O S3 exige lista **estritamente crescente** e recusa com `InvalidPartOrder`. Agora é o mesmo: número
+que não cresce em relação ao anterior recebe `400 InvalidPartOrder`, antes de qualquer montagem — o
+upload segue aberto, com as partes dele.
+
+**Verificação:** `S3MultipartTests` **+1** — `[1, 1]` recebe `400 InvalidPartOrder`, nada é gravado
+(`network_storage_objects` sem a chave) e o upload continua com a parte; a conclusão correta depois
+grava o tamanho certo (6 MiB + 1 byte, não o dobro). Mutação: tirar a guarda de ordem — **derruba**.
+
+### 4.13 A leitura de objeto confirma o formato do S3 também quando falta a cópia (ciclo 93)
+
+O `GET` e o `HEAD` respondiam com o JSON interno do control plane quando o catálogo dizia que o objeto
+existe e **nenhuma cópia estava registrada** (`STORAGE_PLACEMENT_MISSING`). O SDK S3 lê o `Code` do
+XML; um documento que ele não reconhece vira falha opaca, e o cliente não distingue "tente de novo" de
+"não existe". A tradução de vocabulário só cobria o `PUT`, porque nas outras rotas a recusa nasce
+dentro do serviço de conteúdo, não no controller.
+
+Agora as três rotas passam a recusa pela mesma tradução (`comVocabularioDoS3`), e esse estado responde
+`409` com `<Code>InternalError</Code>` e a mensagem de "confirmado no catálogo, sem cópia registrada;
+tente de novo" — que é o que o cliente precisa para tentar outra vez em vez de desistir.
+
+**Verificação:** `S3GatewayTests` **+1** — objeto confirmado com as localizações removidas responde
+`409` com `<Code>` no `GET` (sem `STORAGE_PLACEMENT_MISSING` no corpo) e `409` com
+`Content-Type: application/xml` no `HEAD`, que não tem corpo. Mutações: tirar a tradução inteira do
+`GET` e do `HEAD` — **2 de 2 derrubam**. Estado real de onde vem: a falha que o registro da cópia pode
+deixar depois de o objeto ser confirmado.
+
+## 4.14 `delimiter` agrupa em `CommonPrefixes` (ciclo 98)
+
+`GET /{bucket}?list-type=2&delimiter=/` era aceito e **ignorado**: toda chave saía como
+`<Contents><Key>…</Key></Contents>`, inclusive as de dentro de subpasta. A maioria dos clientes
+(rclone, boto3, aws-cli e os SDKs em geral) pede `delimiter=/` por padrão para navegar "pastas"; com
+o parâmetro ignorado, o que devia ser a pasta `fotos/2025/` aparecia como centenas de arquivos soltos,
+e a navegação nunca oferecia a subpasta.
+
+### Agora
+
+- chave que tem o delimitador **depois do `prefix`** não vira `Contents`: o trecho até a primeira
+  ocorrência vira `<CommonPrefixes><Prefix>…</Prefix></CommonPrefixes>`, uma vez por grupo, na ordem
+  das chaves;
+- o que está direto no `prefixo` continua `Contents` (`prefix=fotos/&delimiter=/` e a chave
+  `fotos/raiz.jpg` é chave, não grupo);
+- o `<Delimiter>` ecoa na resposta;
+- **cada grupo conta como uma entrada do `MaxKeys`**, como no S3, e o `NextContinuationToken`/
+  `NextMarker` é o último emitido — chave ou prefixo. Sem essa conta, uma página de `max-keys=2`
+  com dez arquivos dentro do mesmo grupo estouraria o teto, e o token repetiria o grupo na página
+  seguinte: um cliente que pagina nunca termina. Por isso a leitura do banco pede mais linhas quando
+  há agrupamento (cada grupo pode consumir várias), limitada a `MAX_LIST_LIMIT`.
+
+`delimiter` vazio equivale a ausente, e qualquer delimitador de um caractere vale (`/` é o comum).
+
+**Verificação:** `S3GatewayTests` **+2** — `prefix=fotos/&delimiter=/` devolve o grupo `fotos/2025/` e
+`fotos/2026/` uma vez cada (e as chaves deles fora de `Contents`), com `KeyCount` contando chave +
+prefixo; e a paginação com `max-keys=2` entrega `p/a.txt` + `p/sub/` na primeira página
+(`IsTruncated=true`, token `p/sub/`) e `p/z.txt` na segunda. Mutações: grupo não consumindo entrada do
+`MaxKeys`, e o grupo não agrupando (comportamento antigo) — **2 de 2 derrubam**.
+
+## 4.15 `DeleteBucket` apaga de verdade (ciclo 100)
+
+Até aqui a rota respondia **`501 NotImplemented` em todos os casos**, com a justificativa "não há bucket
+vazio a apagar". A premissa estava errada: o Storage não tem tabela de buckets — o nome **existe
+enquanto tem objeto vivo** (`bucketsOf` filtra `state <> 'DELETED'`) —, então um bucket cujas chaves
+foram todas removidas continuava aparecendo em `ListBuckets` e o cliente não tinha como tirá-lo. Pior:
+depois da última lápide, o dono recebia `403 AccessDenied`, porque a conferência de donagem usava a
+mesma lista de vivos — ele **perdia o próprio bucket** ao esvaziá-lo. A rota não tinha nenhum teste.
+
+### Agora
+
+| situação | resposta |
+|---|---|
+| bucket com objeto **vivo** | `409 <Code>BucketNotEmpty</Code>` |
+| bucket **sem objeto vivo**, com objetos do dono no catálogo (vivo ou lápide) | `204`, e o nome sai de `ListBuckets` |
+| bucket que o dono da credencial **nunca gravou** | `403 <Code>AccessDenied</Code>` |
+
+A donagem do `DELETE` é provada por `bucketHasObjectsOf(bucket, dono)`, que conta **vivo e lápide**:
+é o que sobra depois que o dono esvazia o bucket. O `bucketsOf` (só vivo) continua sendo a resposta
+certa para ler e gravar, e a errada para apagar.
+
+O `204` não apaga linha do catálogo: o bucket "deixou de existir" no instante em que ficou sem objeto
+vivo, que é a mesma regra que o esconde do `ListBuckets`. Não há tabela de bucket a remover — e não
+precisa haver.
+
+**Verificação:** `S3GatewayTests` **+3** — `DeleteObject` seguido de `DeleteBucket` responde `204` e o
+nome some de `ListBuckets`; bucket com objeto vivo responde `409 BucketNotEmpty`; bucket que o dono
+nunca gravou responde `403 AccessDenied`. Mutações: voltar ao `501` incondicional, conferir donagem só
+pela lista de vivos, e remover a recusa `409` — **3 de 3 derrubam**.
+
+## 4.16 Toda recusa do Storage sai em XML (ciclo 101)
+
+O gateway traduzia **duas** recusas vindas dos serviços (`QuotaExceeded` e
+`STORAGE_PLACEMENT_MISSING`); todas as outras saíam como o **JSON do Control Plane**. O SDK escolhe o
+deserializador pelo `Content-Type`: JSON num gateway S3 chega como corpo irreconhecível, e o cliente
+trata como falha de rede ou erro opaco em vez de agir — `NoSuchUpload` (recomece o upload),
+`InvalidArgument` (o `expires` pedido é longo demais), `InvalidPartOrder` (reenvie na ordem), etc.
+
+Rotas afetadas, na prática: `ListParts`/`AbortMultipartUpload` de upload inexistente ou vencido,
+`UploadPart` de upload vencido, `CompleteMultipartUpload` sem parte / fora de ordem, e o `POST
+?uploads` com `expires` fora do intervalo (ou não numérico).
+
+### Agora
+
+`noVocabularioDoS3` traduz **qualquer** `ApiException` que não seja uma das duas específicas para
+`S3ApiException` mantendo o status e o `Code`. Os códigos internos dos serviços de Storage são, na
+maioria, os próprios do S3 (`NoSuchUpload`, `InvalidArgument`, `MalformedXML`, `InvalidPart`,
+`InvalidPartOrder`), então o cliente os reconhece. Os que não são (`STORAGE_*`) saem com o status certo
+e um `Code` que ele não conhece — ainda assim XML, e o status diz se vale retentar.
+
+O `POST ?uploads` também passou a traduzir a recusa do `create` e a recusar `expires` não numérico com
+`400 InvalidArgument` no XML (antes era um `NumberFormatException` → `500`).
+
+**Verificação:** `S3MultipartTests` **+2** — `ListParts` de upload inexistente responde `404` com
+`Content-Type: application/xml`, corpo começando em `<?xml` e `<Code>NoSuchUpload</Code>` (e sem
+`"code"`); `POST ?uploads` com `expires=99999999` e com `expires=abc` responde `400
+<Code>InvalidArgument</Code>` em XML. Mutações: remover o `catch` do `create`, remover o `catch` do
+`uploadDaChave` (`require` cru), e devolver a `ApiException` crua na tradução geral — **3 de 3
+derrubam**.
+
+## 4.17 Objeto de zero byte é aceito (ciclo 105)
+
+O `PUT` com corpo vazio respondia **`400 STORAGE_EMPTY_BODY`**. A regra é da fase 1 (doc 12 §2.2):
+o upload **do nó** com corpo vazio é sinal de gravação que não aconteceu, e recusá-lo evita objeto
+sem conteúdo no catálogo. Mas o gateway S3 é compatível com o S3, e o S3 **aceita** 0 byte: é o
+marcador de "pasta" que `aws s3 cp --recursive` e `rclone` criam, e o resultado de uma escrita vazia
+legítima. Um cliente que sincronizava uma árvore inteira recebia `400` em cada marcador — e tratava a
+sincronização toda como falha, com todos os arquivos já gravados.
+
+### Agora
+
+- `PUT` com corpo vazio pelo **gateway** grava o objeto com `bytes = 0`, ETag do corpo vazio
+  (`sha256("")`), réplica 0 `OK` e designação de cópia como qualquer outro;
+- o upload **do nó** (rota do nó, `store`) continua recusando `STORAGE_EMPTY_BODY` — ali o corpo
+  vazio é falha de transporte, não um arquivo;
+- `HEAD` responde `200` com `Content-Length: 0`; `GET` responde `200` com corpo vazio.
+
+**Verificação:** `S3GatewayTests` **+1** — `PUT` de 0 byte é `200`, `HEAD` devolve `Content-Length: 0`
+e `GET` devolve `200` sem bytes. Mutações: o gateway voltar a recusar 0 byte (derrubada pelo teste
+novo) e a regra do vazio ser liberada também para o nó (derrubada por `StorageObjectCeilingTests`) —
+**2 de 2 derrubam**.
+
+## 4.19 CopyObject copia no servidor (ciclo 108)
+
+`aws s3 cp --recursive`, o `rclone copy` e o `aws s3 sync` copiam **no servidor**: o cliente manda só
+o nome da origem e o do destino, e os bytes não passam pela rede até ele. Até o ciclo 107 o gateway
+recusava o cabeçalho com `501 NotImplemented` (§4.10), então copiar sem baixar e reenviar não existia:
+quem não caía para o caminho lento falhava no item, e quem caía gastava a banda duas vezes.
+
+### Agora
+
+- `PUT /s3/{bucket}/{chave}` com `x-amz-copy-source: /{bucket}/{origem}` e corpo vazio copia o objeto.
+  A origem é lida por `readBody` — o mesmo caminho do download, que só entrega o que o catálogo tem
+  como servível e confere a réplica 0 — e atravessa o **mesmo** `finishUpload` do `PUT`. Nada é
+  carregado em memória: o corpo vai do disco de origem ao temporário da gravação em blocos de 64 KiB.
+- A resposta é o XML do S3:
+
+  ```xml
+  <CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+    <ETag>"sha256 do destino"</ETag><LastModified>...</LastModified>
+  </CopyObjectResult>
+  ```
+
+  O ETag é o **do que foi escrito**, não uma promessa copiada da origem.
+- **Metadado:** `x-amz-metadata-directive: COPY` (padrão) traz `Content-Type`, `x-amz-meta-*`,
+  `Cache-Control` e `Content-Disposition` da origem; `REPLACE` usa o que veio na requisição de cópia.
+  Em `REPLACE`, `Cache-Control` e `Content-Disposition` ausentes voltam à política do tipo — não herdam
+  os da origem.
+- **Condições da origem:** `x-amz-copy-source-if-match` e `-if-none-match` são conferidos contra o
+  ETag; divergência é `412 PreconditionFailed` e nada é gravado. As condições por data respondem `501`
+  em vez de serem ignoradas — uma condição aceita e não aplicada seria uma resposta errada com cara de
+  certa. `?versionId=` também é `501`: a versão corrente é a única que o gateway endereça.
+- **Donos:** a origem tem de ser do dono da credencial (mesma regra do destino). Origem de outra conta
+  é `403 AccessDenied` **sem** reservar a chave de destino; origem inexistente é `404 NoSuchKey`
+  (o código do S3, não o interno `STORAGE_NOT_FOUND`).
+- **Mesmo objeto:** copiar a chave sobre ela mesma é `400 InvalidRequest` — o S3 só permite com troca
+  de metadado, e aqui a troca é um `PUT`.
+- **Chave ocupada:** copiar para uma chave com cópia confirmada é `409 ObjectAlreadyStored`, como no
+  `PUT`. A recusa acontece **antes** de `saveClientHeaders`: o objeto que a resposta diz não ter sido
+  tocado continua com o conteúdo **e o metadado** de antes. Em bucket versionado, a cópia cria a
+  versão nova, também como o `PUT`.
+- **Origem codificada:** o cabeçalho é um caminho, não uma query — `%2B` e `+` literal são os dois a
+  chave com mais, e `%20` é espaço. A instalação aceita as duas formas de chave (a que o `PUT` guardou
+  na URI e a já decodificada) e procura as duas antes de responder `404`.
+- **Contabilidade:** a leitura da origem conta `GET` e a gravação do destino conta `PUT` no painel
+  (§5.1); não é uma operação nova, é um `GET` e um `PUT` que o cliente não precisou trafegar.
+
+**Verificação:** `S3GatewayTests` **+8** — cópia grava os bytes e devolve o `CopyObjectResult` com o
+ETag do destino; `COPY` traz metadado e `REPLACE` troca o declarado sem trocar o corpo; origem
+inexistente é `404 NoSuchKey` sem linha de destino; origem de outra conta é `403` sem gravar; cópia
+sobre si mesma é `400` e preserva o conteúdo; `+` literal e `%2B` chegam à mesma chave; `if-match`
+divergente é `412` sem gravar; chave já confirmada é `409` e o objeto mantém conteúdo e metadado.
+Mutações: corpo da cópia vazio (o teste do conteúdo derruba), dono da origem não conferido (o teste
+das duas contas derruba), `REPLACE` ignorado (o teste do metadado derruba) e a tradução de
+`STORAGE_NOT_FOUND` para `NoSuchKey` removida (o teste da origem ausente derruba) — **4 de 4
+derrubam**.
+
+## 4.20 UploadPartCopy copia um intervalo para dentro do multipart (ciclo 109)
+
+O `aws s3 cp` acima de 8 MB e o `rclone` copiam arquivos grandes em partes: cada `UploadPart` pode vir
+da origem em vez do corpo do cliente. Até o ciclo 108 essa parte respondia `501` (§4.10) — o mesmo
+arquivo que o `CopyObject` já copiava de uma vez não podia ser copiado em pedaços.
+
+### Agora
+
+- `PUT /s3/{bucket}/{chave}?partNumber=&uploadId=` com `x-amz-copy-source` grava a parte a partir da
+  origem. `x-amz-copy-source-range: bytes=primeiro-ultimo` (inclusive, base zero) recorta o intervalo;
+  sem o cabeçalho, a parte é o objeto inteiro.
+- O recorte é lido por `readBody` (mesma régua do download: réplica 0 servível) e entra pelo mesmo
+  `receivePart` do envio direto — cota pelo tamanho anunciado, digest, temporário e reenvio da mesma
+  parte substituindo. Nada é carregado em memória: o fluxo é limitado ao intervalo e lido em blocos de
+  64 KiB.
+- A resposta é o `CopyPartResult` do S3:
+  `<ETag>"sha-256 da parte"</ETag><LastModified>...</LastModified>`.
+- A origem segue a mesma régua do `CopyObject` (§4.19): dono da credencial, escopo `allowedBucket`,
+  `if-match`/`if-none-match` → `412`, condições por data e `versionId` → `501`. Origem ausente é
+  `404 NoSuchKey`.
+- Intervalo fora do objeto, invertido ou malformado é `400 InvalidArgument`, e **nenhuma parte** é
+  gravada. A conclusão continua aplicando o mínimo de 5 MiB às partes intermediárias — um intervalo
+  menor que isso só vale como última parte.
+
+**Verificação:** `S3MultipartTests` **+4** — intervalo `bytes=2-5` de `0123456789` conclui o objeto
+`2345` e o XML traz o ETag do recorte; sem intervalo, a parte é o objeto inteiro; origem ausente é
+`404 NoSuchKey` sem linha em `network_storage_multipart_parts`; `bytes=5-99` e `bytes=9-2` são
+`400 InvalidArgument` sem parte. Mutações: ignorar o início do intervalo; ignorar o fim (gravar o
+resto da origem); não conferir o limite superior; responder só o `ETag` sem o XML — **4 de 4
+derrubam**.
+
+## 4.21 Subrecurso que gravaria vira `501` (ciclo 107)
+
+O `PUT` era despachado pela **chave da rota**, sem olhar a consulta. Um `PUT ?tagging` — a operação
+com que o S3 grava etiquetas — abria um upload da chave, gravava o **XML da etiqueta** como corpo,
+substituía o arquivo de verdade e respondia `200`, que é o "sucesso" da etiquetagem no S3. O cliente
+via sucesso e o objeto ficava com o XML dentro. O mesmo valia para `?acl`, `?retention`, `?legal-hold`
+e `?object-lock`.
+
+### Agora
+
+| pedido | resposta |
+|---|---|
+| `PUT ?tagging`, `?acl`, `?retention`, `?legal-hold`, `?object-lock` | **`501 NotImplemented`** (XML do S3, com o subrecurso), **nada gravado** |
+| `GET ?acl`, `?tagging`, `?retention`, `?legal-hold`, `?object-lock` | **`501 NotImplemented`**, nenhum byte servido |
+| `DELETE ?tagging` (e os demais da lista) | já respondia `501`: o `DeleteObject` apaga o objeto, não a etiqueta |
+
+A recusa vem **antes** do catálogo: nem linha `PENDING`, nem corpo medido. A lista vizinha (ecoada em
+`200` sem gravar — `?versioning`, `?encryption`, `?logging`…) continua como era: o que distingue os dois
+grupos é o que acontece sem guarda. Ali um corpo vazio é confundido com objeto; aqui o objeto é
+sobrescrito.
+
+**O `GET` tinha a mesma porta.** `GET ?acl` é a leitura da ACL do objeto, mas a rota servia o
+**arquivo** em `200`: o cliente lia "a ACL é o conteúdo do arquivo". O `GET` passou a usar a mesma
+lista do `PUT`, antes da leitura do objeto.
+
+**A lista é ordenada.** A mensagem cita **um** subrecurso; com dois na mesma requisição
+(`?tagging&acl`), a ordem de um `Set.of` não é contrato — a mesma requisição responderia uma coisa ou
+outra. Agora é `List` fixa e o primeiro da ordem responde.
+
+**O corpo do pedido é drenado.** A recusa acontece antes de o corpo ser lido, e o corpo do `?tagging`
+é o XML da etiqueta. Responder `501` com o corpo pendente, em conexão persistente, faz o servidor
+fechar a conexão no meio de um pedido (RFC 9110 §15.6.2); `drenarCorpo` lê e descarta o corpo antes da
+resposta. Um cliente que já cortou o envio ao receber a recusa não muda a resposta.
+
+**Verificação:** `S3GatewayTests` **+5** — (1) `PUT ?tagging` é `501` e o `HEAD` seguinte devolve o
+**mesmo ETag**; (2) `PUT ?tagging` **com** `x-amz-copy-source` também é `501`, com o destino
+inexistente; (3) `?tagging&acl` responde citando `tagging` (ordem determinística); (4) `GET ?acl`
+é `501` e o objeto fica com o mesmo ETag; (5) `drenarCorpo` lê o corpo inteiro (fluxo que conta as
+leituras). Mutações: tirar a guarda do `PUT` (1 e 2 derrubam), pôr a guarda **depois** do desvio para
+o `CopyObject` (2 derruba) e tirar a guarda do `GET` (4 derruba: responde `200`).
+
+A guarda roda **antes** do desvio para o `CopyObject` (§4.19): um `PUT ?tagging` com
+`x-amz-copy-source` não copia — o subrecurso continua `501`, e nada é gravado no destino. A guarda de
+cópia que o ciclo 90 tinha no `PUT` foi substituída pela operação de verdade (§4.19); a do
+`UploadPartCopy` ficou só no caminho da parte.
+
+## 4.23 A lápide própria lê `404`, não `403` (ciclo 111)
+
+O `GET` e o `HEAD` provavam donagem por `bucketsOf`, que filtra `state <> 'DELETED'`. O `DELETE`
+grava **lápide** (`DELETED`), então apagar a **última** chave viva do bucket tirava o bucket do dono
+para a leitura dele mesmo: o `GET` e o `HEAD` da chave apagada respondiam
+**`403 AccessDenied` — "Este bucket nao e do dono da credencial"**, como se o bucket fosse de outra
+conta. O dono perdia o próprio objeto pelo nome errado, e só o `DeleteBucket` (ciclo 100) usava a régua
+certa. O teste que existia aceitava `403` **e** `404` (`isIn(403, 404)`), então a regressão passava.
+
+### Agora
+
+`requireBucketDoDono` aceita o bucket do dono (`bucketsOf`, só vivo) **ou** o bucket em que ele tem
+linha no catálogo, vivo ou lápide (`bucketHasObjectsOf`) — a mesma régua do `DeleteBucket` (§4.15).
+
+| situação | resposta |
+|---|---|
+| leitura de chave **viva** do dono | `200` |
+| leitura de **lápide** do dono | `404 NoSuchKey` |
+| leitura em bucket que o dono **nunca** gravou | `403 AccessDenied` |
+| `PUT` na lápide **de outra conta** | `403 AccessDenied` (§4.22, quando mergeado) |
+
+A lápide é de quem a criou: a régua nova não abre bucket alheio, e o dono continua regravando a chave
+que ele mesmo apagou.
+
+**Verificação:** `S3GatewayTests` **+1** (`lapide_propria_le_404_e_nao_403`: grava, apaga a única
+chave, e exige `404 NoSuchKey` no `GET` e no `HEAD`, `200` com `<KeyCount>0</KeyCount>` na listagem e o
+regrave funcionando). O `delete_vira_lapide`, que aceitava `isIn(403, 404)`, passa a exigir `404`.
+Mutações: voltar à régua só de vivos (`403`); aceitar qualquer bucket
+(`escopo_nulo_nao_alcanca_bucket_de_outra_conta_por_cabecalho` cai) — **2 de 2 derrubam**.
+
+## 4.24 Objeto cuja cópia está em outro nó: `503 SlowDown` (ciclo 112)
+
+A cópia era procurada **dentro** do corpo da resposta (`StreamingResponseBody`), depois de os `200` e
+os cabeçalhos terem saído. Duas consequências:
+
+1. **Download truncado com `200`.** Se a cópia não podia ser aberta, o cliente recebia
+   `200 Content-Length: 12` e **zero bytes** — sem erro, sem código, só o arquivo faltando no fim.
+2. **A recusa real saía no vocabulário do control plane.** Com a réplica 0 podada e a colocação num
+   outro nó, `readBody` recusa `409 STORAGE_REPLICA_ELSEWHERE` — que existe para o control plane, que
+   usa o digest para designar o nó. O gateway repassava o **JSON do Énóis**: o SDK do S3 não
+   deserializa isso, não reconhece o código e não tenta de novo.
+
+### Agora
+
+| situação | resposta |
+|---|---|
+| cópia **desta** instalação | `200`/`206`, como antes |
+| cópia **em outro nó** (`STORAGE_REPLICA_ELSEWHERE`) | **`503 SlowDown`** em XML, com `Retry-After: 1` |
+| objeto confirmado **sem cópia nenhuma** | `409 InternalError` em XML (como antes) |
+| falha ao abrir a cópia | recusa **antes** do corpo (nunca `200` truncado) |
+
+- O corpo é aberto **antes** do primeiro byte, no `GET` **e** no `HEAD` (o `HEAD` só confirma que a
+  cópia pode ser aberta e fecha o stream; o `304` também fecha o que já abriu). Uma falha vira
+  recusa, não download curto.
+- `503 SlowDown` é o `ClientException` literal que o `S3Exception.retryable` do SDK repete;
+  `Retry-After` é o que diz quando. O `GlobalExceptionHandler` do S3 passou a emitir esse cabeçalho
+  (antes o `withRetryAfter` não aparecia no formato XML).
+
+**Verificação:** `S3GatewayTests` **+2**.
+
+- `copia_fora_deste_no_responde_503_em_xml` — a colocação aponta para outro nó e a réplica 0 sai da
+  raiz: `GET` e `HEAD` respondem `503` com `<Code>SlowDown</Code>` e `Retry-After`. Mutações que a
+  derrubam (todas verificadas): devolver a recusa crua (`409` JSON); sem `Retry-After`; procurar o
+  corpo dentro do `StreamingResponseBody` (volta o `200` truncado).
+- `range_com_mais_de_um_intervalo_responde_o_corpo_inteiro` — `Range: bytes=0-1,5-6` devolve `200`
+  com os 12 bytes e sem `Content-Range`. **Verdadeiro antes da mudança** (o MockMvc não aplica o
+  `Range`); fica como guarda do contrato declarado, não como prova da correção.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
@@ -530,7 +912,8 @@ O corpo é XML no formato do S3, com o `Code` que o SDK lê:
 </Error>
 ```
 
-Códigos: `AccessDenied`, `InvalidAccessKeyId`, `SignatureDoesNotMatch`, `NotImplemented`.
+Códigos: `AccessDenied`, `InvalidAccessKeyId`, `SignatureDoesNotMatch`, `NotImplemented`,
+`InvalidArgument`, `InvalidRequest`, `NoSuchKey`, `PreconditionFailed` e `ObjectAlreadyStored`.
 
 ## 5.1 Indicadores de operação no painel (V366)
 
@@ -574,6 +957,35 @@ como `SERVER` e nunca `OK`, catálogo sem contador continua servindo),
 UPSERT somando 10 gravações no mesmo minuto, `max_ms` preservado, média ponderada na consulta,
 retenção). Mutações conferidas: média das médias, "sem dado" virando a janela inteira, 500 contado como
 `CLIENT`, `LIST` sem contagem e chave primária sem `outcome` — todas derrubam.
+
+## 5.1.1 O multipart conta no mesmo painel (ciclo 103)
+
+Até aqui só o catálogo de objetos registrava operação (`PUT`/`GET`/`HEAD`/`DELETE`/`LIST`). O
+`StorageMultipartService` — que serve justamente os arquivos grandes — **não registrava nada**: um
+cliente enviando gigabytes em partes aparecia no painel com "sem operação", e a operação que mais
+consome banda era a única invisível. O teto de requisição por Access Key §5.2 conta as mesmas rotas.
+
+### Agora
+
+| rota | verbo contado |
+|---|---|
+| `POST /{bucket}/{key}?uploads` (abrir) | `PUT` |
+| `PUT /{bucket}/{key}?partNumber=` (cada parte) | `PUT` |
+| `GET /{bucket}/{key}?uploadId=` (ListParts) | `LIST` |
+| `DELETE /{bucket}/{key}?uploadId=` (Abort) | `DELETE` |
+| `POST /{bucket}/{key}?uploadId=` (concluir) | **não conta no sucesso** |
+
+A conclusão não conta em separado porque a gravação do objeto já conta `PUT` no catálogo — contar de
+novo faria todo upload grande valer dois. Ela conta **quando falha**, que é o que o painel precisa ver.
+A leitura interna das partes na conclusão usa `doParts` (sem contagem): `LIST` ali seria uma listagem
+que ninguém pediu.
+
+Resultado é `OK`, `CLIENT` (4xx) ou `SERVER` (5xx), como no catálogo. Serviço construído sem contador
+continua servindo.
+
+**Verificação:** `S3MultipartTests` **+1** — abrir + uma parte + `ListParts` + concluir produzem
+**4** amostras novas (antes: **1**, só a do catálogo na conclusão). Mutações: abrir sem contar, ListParts
+sem contar, parte sem contar — **3 de 3 derrubam**.
 
 ## 5.2 Teto de requisição por Access Key (ciclo 74)
 

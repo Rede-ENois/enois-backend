@@ -18,9 +18,12 @@ import java.util.stream.Stream;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+
+import org.springframework.lang.Nullable;
 
 import com.socialcoisa.rede.shared.web.ApiException;
 
@@ -81,17 +84,27 @@ public class StorageMultipartService {
 	private final Duration defaultTtl;
 	private final long maxObjectBytes;
 	private final Path root;
+	private final StorageOperationMetrics metrics;
 
+	/** Sem contador de operação: o multipart continua servindo (a métrica é observação, não pré-requisito). */
+	public StorageMultipartService(JdbcTemplate jdbc, StorageCatalogService storage, Clock clock, long ttlHours,
+			long maxObjectBytes, String storageRoot) {
+		this(jdbc, storage, clock, ttlHours, maxObjectBytes, storageRoot, null);
+	}
+
+	@Autowired
 	public StorageMultipartService(JdbcTemplate jdbc, StorageCatalogService storage, Clock clock,
 			@Value("${rede.storage.multipart.ttl-hours:24}") long ttlHours,
 			@Value("${rede.storage.max-object-bytes:5368709120}") long maxObjectBytes,
-			@Value("${rede.storage.root:${java.io.tmpdir}/enois-storage}") String storageRoot) {
+			@Value("${rede.storage.root:${java.io.tmpdir}/enois-storage}") String storageRoot,
+			@Nullable StorageOperationMetrics metrics) {
 		this.jdbc = jdbc;
 		this.storage = storage;
 		this.clock = clock;
 		this.defaultTtl = Duration.ofHours(Math.max(1, ttlHours));
 		this.maxObjectBytes = maxObjectBytes;
 		this.root = Path.of(storageRoot).resolve("multipart");
+		this.metrics = metrics;
 	}
 
 	/**
@@ -138,6 +151,20 @@ public class StorageMultipartService {
 	 */
 	public Upload create(String ownerUserId, String credentialId, String bucket, String key, String contentType,
 			Long expiresInSeconds) {
+		long inicio = System.nanoTime();
+		try {
+			Upload upload = doCreate(ownerUserId, credentialId, bucket, key, contentType, expiresInSeconds);
+			conta("PUT", inicio, null);
+			return upload;
+		}
+		catch (RuntimeException recusado) {
+			conta("PUT", inicio, recusado);
+			throw recusado;
+		}
+	}
+
+	private Upload doCreate(String ownerUserId, String credentialId, String bucket, String key, String contentType,
+			Long expiresInSeconds) {
 		Instant now = clock.instant();
 		Duration ttl = defaultTtl;
 		if (expiresInSeconds != null) {
@@ -165,6 +192,22 @@ public class StorageMultipartService {
 				"Upload multipart inexistente, concluido ou de outra conta."));
 	}
 
+	/**
+	 * Registra a operação no painel (doc 18 §5.3). O multipart serve os arquivos grandes e não
+	 * contava nada: o painel dizia "multipart nunca acontece" com um cliente enviando gigabytes.
+	 * Os verbos são os do S3 — abrir e cada parte são {@code PUT}, listar é {@code LIST}.
+	 */
+	private void conta(String operacao, long inicioNanos, RuntimeException falha) {
+		if (metrics == null) {
+			return;
+		}
+		StorageOperationMetrics.Resultado resultado = falha == null ? StorageOperationMetrics.Resultado.OK
+			: falha instanceof com.socialcoisa.rede.shared.web.ApiException api && api.status() < 500
+				? StorageOperationMetrics.Resultado.CLIENT
+				: StorageOperationMetrics.Resultado.SERVER;
+		metrics.record(operacao, resultado, Math.max(0, (System.nanoTime() - inicioNanos) / 1_000_000));
+	}
+
 	public Optional<Upload> find(String uploadId) {
 		return jdbc.query("""
 			select upload_id, bucket, `key`, content_type, owner_user_id, credential_id, created_at, expires_at
@@ -177,6 +220,19 @@ public class StorageMultipartService {
 	}
 
 	public List<Part> parts(String uploadId) {
+		long inicio = System.nanoTime();
+		try {
+			List<Part> lista = doParts(uploadId);
+			conta("LIST", inicio, null);
+			return lista;
+		}
+		catch (RuntimeException recusado) {
+			conta("LIST", inicio, recusado);
+			throw recusado;
+		}
+	}
+
+	private List<Part> doParts(String uploadId) {
 		return jdbc.query("""
 			select part_number, bytes, sha256 from network_storage_multipart_parts
 			where upload_id = ? order by part_number
@@ -200,6 +256,19 @@ public class StorageMultipartService {
 	 *                  conferida depois da leitura, antes de o arquivo virar a parte
 	 */
 	public Part receivePart(Upload upload, int partNumber, InputStream body, Long anunciado) {
+		long inicio = System.nanoTime();
+		try {
+			Part parte = doReceivePart(upload, partNumber, body, anunciado);
+			conta("PUT", inicio, null);
+			return parte;
+		}
+		catch (RuntimeException recusado) {
+			conta("PUT", inicio, recusado);
+			throw recusado;
+		}
+	}
+
+	private Part doReceivePart(Upload upload, int partNumber, InputStream body, Long anunciado) {
 		if (partNumber < 1 || partNumber > MAX_PART_NUMBER) {
 			throw new ApiException(400, "InvalidArgument",
 				"Numero de parte fora do intervalo 1.." + MAX_PART_NUMBER + ".");
@@ -289,6 +358,20 @@ public class StorageMultipartService {
 	 * Os dois têm de bater.</p>
 	 */
 	public Completed complete(Upload upload, List<Integer> pedidas) {
+		long inicio = System.nanoTime();
+		try {
+			Completed pronto = doComplete(upload, pedidas);
+			// A gravação do objeto já contou `PUT` no catálogo; contar aqui de novo faria todo upload
+			// grande valer dois. A conclusão conta só quando falha — é ela que o painel precisa ver.
+			return pronto;
+		}
+		catch (RuntimeException recusado) {
+			conta("PUT", inicio, recusado);
+			throw recusado;
+		}
+	}
+
+	private Completed doComplete(Upload upload, List<Integer> pedidas) {
 		Instant now = clock.instant();
 		if (now.isAfter(upload.expiresAt())) {
 			discard(upload.uploadId());
@@ -297,12 +380,22 @@ public class StorageMultipartService {
 		if (pedidas.isEmpty()) {
 			throw new ApiException(400, "MalformedXML", "A conclusao precisa listar ao menos uma parte.");
 		}
-		List<Part> existentes = parts(upload.uploadId());
+		// A leitura das partes aqui é parte da conclusão: contar como `LIST` inflaria o painel com
+		// uma listagem que ninguém pediu.
+		List<Part> existentes = doParts(upload.uploadId());
 		java.util.Map<Integer, Part> porNumero = existentes.stream()
 			.collect(java.util.stream.Collectors.toMap(Part::number, p -> p));
 		long total = 0;
 		for (int i = 0; i < pedidas.size(); i++) {
 			Part part = porNumero.get(pedidas.get(i));
+			// A lista é a ordem do arquivo, e o S3 exige estritamente crescente. Repetir um número
+			// montava a mesma parte duas vezes: o cliente recebia 200 e um objeto com o dobro do que
+			// enviou. Numeração fora de ordem é a mesma recusa — o corpo não é o que ela descreve.
+			if (i > 0 && pedidas.get(i) <= pedidas.get(i - 1)) {
+				throw new ApiException(400, "InvalidPartOrder",
+					"A conclusao pediu a parte " + pedidas.get(i) + " depois da "
+						+ pedidas.get(i - 1) + "; os numeros tem de ser crescentes e sem repeticao.");
+			}
 			if (part == null) {
 				throw new ApiException(400, "InvalidPart",
 					"A parte " + pedidas.get(i) + " nao chegou; reenvie-a antes de concluir.");
@@ -319,36 +412,57 @@ public class StorageMultipartService {
 			}
 		}
 		Path montado = montar(upload.uploadId(), pedidas, porNumero);
-		// A integridade de cada parte é conferida no envio (o digest é do arquivo gravado) e a montagem
-		// não altera byte: entre a parte e o corpo montado não há transformação que possa divergir do
-		// sha-256 das partes. O digest do objeto é o do corpo montado, e é o `finishUpload` que mede de
-		// novo — o que a conclusão devolve é o que foi gravado, não o que ela calculou.
-		String etag = sha256DoArquivo(montado);
-
-		// A cota das partes já foi cobrada no envio de cada uma: na conclusão, o reservado deste
-		// upload É o corpo que está chegando, e cobrá-lo duas vezes faria a conclusão falhar sempre
-		// que o objeto não fosse minúsculo. Quem cobra agora é o `finishUpload`, pelo corpo montado.
-		com.socialcoisa.rede.network.domain.StorageObject pendente = storage.beginUpload(upload.ownerUserId(),
-			upload.bucket(), upload.key(), upload.contentType(), false);
-		// O metadado do CreateMultipartUpload vai para o objeto, como o do PUT simples: o cliente
-		// declarou uma vez, no começo, e espera reencontrá-lo no HEAD e no GET (V367).
-		storage.saveClientHeaders(pendente, upload.cabecalhos());
+		// O temporário é apagado em QUALQUER saída daqui até a gravação dar certo: a recusa por cota,
+		// a falha do catálogo e a releitura. Antes o `finally` cobria só a releitura, e uma conclusão
+		// recusada depois da montagem deixava o corpo inteiro no diretório do upload — que continua
+		// aberto, então o varredor de sobras não recolhe — cobrando disco duas vezes pelo mesmo upload.
 		com.socialcoisa.rede.network.domain.StorageObject gravado;
-		try (InputStream corpo = Files.newInputStream(montado)) {
-			gravado = storage.finishUpload(pendente.id(), corpo, upload.ownerUserId(), false);
+		try {
+			// A integridade de cada parte é conferida no envio (o digest é do arquivo gravado) e a
+			// montagem não altera byte: entre a parte e o corpo montado não há transformação que possa
+			// divergir do sha-256 das partes. O digest do objeto é o do corpo montado, e é o
+			// `finishUpload` que mede de novo — o que a conclusão devolve é o que foi gravado, não o
+			// que ela calculou.
+			String etag = sha256DoArquivo(montado);
+
+			// A cota das partes já foi cobrada no envio de cada uma: na conclusão, o reservado deste
+			// upload É o corpo que está chegando, e cobrá-lo duas vezes faria a conclusão falhar sempre
+			// que o objeto não fosse minúsculo. Quem cobra agora é o `finishUpload`, pelo corpo montado.
+			com.socialcoisa.rede.network.domain.StorageObject pendente = storage.beginUpload(
+				upload.ownerUserId(), upload.bucket(), upload.key(), upload.contentType(), false);
+			// O metadado do CreateMultipartUpload vai para o objeto, como o do PUT simples: o cliente
+			// declarou uma vez, no começo, e espera reencontrá-lo no HEAD e no GET (V367).
+			storage.saveClientHeaders(pendente, upload.cabecalhos());
+			try (InputStream corpo = Files.newInputStream(montado)) {
+				gravado = storage.finishUpload(pendente.id(), corpo, upload.ownerUserId(), false);
+			}
+			catch (IOException unreadable) {
+				throw new ApiException(500, "InternalError", "Nao foi possivel reler o corpo montado.");
+			}
 		}
-		catch (IOException unreadable) {
-			throw new ApiException(500, "InternalError", "Nao foi possivel reler o corpo montado.");
-		}
-		finally {
+		catch (RuntimeException recusado) {
 			deleteQuietly(montado);
+			throw recusado;
 		}
+		deleteQuietly(montado);
 		discard(upload.uploadId());
 		return new Completed(upload.bucket(), upload.key(), gravado.id(), gravado.bytes(), gravado.sha256());
 	}
 
 	/** Aborta: apaga as partes e o registro. Idempotente — abortar duas vezes é a mesma coisa. */
 	public void abort(String uploadId) {
+		long inicio = System.nanoTime();
+		try {
+			doAbort(uploadId);
+			conta("DELETE", inicio, null);
+		}
+		catch (RuntimeException recusado) {
+			conta("DELETE", inicio, recusado);
+			throw recusado;
+		}
+	}
+
+	private void doAbort(String uploadId) {
 		discard(uploadId);
 	}
 

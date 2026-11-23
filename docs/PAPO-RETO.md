@@ -35,10 +35,20 @@ Uma palavra só entra se passar por todas as peneiras:
 | Riso e tecla presa | `kkkk`, `hahaha`, `assssss`, `kkjkkj` |
 | Palavra vazia | lista fechada em `PALAVRAS_VAZIAS` (artigos, preposições, pronomes, verbos de ligação, contrações, fala da rede: `gente`, `tipo`, `coisa`, `mundo`, `enois`, `sei`, `tenho`) |
 
-**Expressões.** Duas palavras elegíveis formam par quando são **vizinhas** (`inteligencia
-artificial`) ou quando há **um conector** entre elas (`mercado de trabalho`, `curso de ingles`). Os
-conectores são só: `de, da, do, das, dos, em, no, na, nos, nas`. O pareamento é guloso, da esquerda
-para a direita, e **não sobrepõe**: "meetup de rust na sexta" vira `meetup de rust` + `sexta`.
+**Expressões com contexto.** Duas palavras elegíveis formam par quando são **vizinhas**
+(`inteligencia artificial`) ou quando há **um conector** entre elas (`mercado de trabalho`,
+`meetup na sexta`, `aula de violao`, `mutirao do bairro`, `palestra sobre rust`). Os conectores
+são: `de, da, do, das, dos, na, no, nas, nos, pra, pro, para, sobre`. "Com", "que" e a pontuação
+quebram o par (`praia com o cachorro` são duas palavras, não uma expressão), e um verbo de intenção
+ao lado de um conector não forma par (`vou pra casa`, `quero na sexta` são frases, não conversas).
+
+O pareamento é guloso, da esquerda para a direita, e **não sobrepõe**: "meetup de rust na sexta"
+vira `meetup de rust` + `sexta`.
+
+**A palavra do par não sai solta.** O assunto é o cluster já decidido na extração: a palavra que
+entrou num par fica coberta por ele e não vira assunto próprio — a lista mostra `mercado de
+trabalho`, e não `mercado`, `trabalho` e `mercado de trabalho`. Só as palavras que não couberam em
+par nenhum entram sozinhas.
 
 ## Pontuação: dois fatores, e os dois são necessários
 
@@ -98,8 +108,20 @@ está se movendo" — e por isso os números não se misturam.
 
 ## Chão de entrada
 
-Independente de tudo: o assunto precisa de **5 pessoas distintas** na janela. Repetição de uma conta
-só nunca chega à lista.
+Independente de tudo: o assunto precisa de **pessoas distintas** na janela. Repetição de uma conta
+só nunca chega à lista — o chão nunca desce abaixo de **2 pessoas**.
+
+O chão é **adaptativo** e acompanha o tamanho da base do escopo (`chaoDePessoas` em `PapoAssunto`):
+
+| Publicações distintas no escopo (na janela) | Chão | Leitura |
+| --- | --- | --- |
+| 20 ou mais | **5 pessoas** | base com gente de sobra: cinco separam a conversa da repetição |
+| menos de 20 | **2 pessoas** | rede pequena: dois já estão conversando; o assunto aparece **marcado como amostragem menor** |
+
+O assunto marcado como amostragem menor (`amostragemMenor` na resposta do ranking) leva o tamanho da
+amostra para a tela: junto vão `pessoas` (quem falou) e `janelaPublicacoes` (o tamanho da base). A régua é a mesma massa da discriminação (`MINIMO_PUBLICACOES_REGUA`): abaixo dela, nem a
+fração de publicações nem o chão cheio julgam — e a tela diz que a amostra é pequena em vez de
+esconder a conversa.
 
 Regras extras da leitura: o assunto passa pela mesma régua do extrator (`assuntoValido`), então
 ruído antigo gravado antes de uma correção (`http`, `kkkk`, resto de URL) sai da tela sem esperar a
@@ -118,10 +140,13 @@ carrega mais campos.
   motivo no grupo certo. A lista é a primeira peneira, não a única: palavra de conversa que escapar
   dela cai na régua de publicações distintas.
 - **Conector novo**: `CONECTORES` no extrator. Cuidado: conector aceito aqui cola palavras —
-  "trabalho em equipe" é expressão, "post com foto" não é.
+  "trabalho de equipe" e "meetup na sexta" são expressão, "post com foto" não é. Conector curto
+  ("na", "de") cola o que vem logo depois dele; verbo de intenção ao lado de conector (`VERBOS`)
+  não forma par.
 - **Limiar, teto ou piso**: constantes em `PapoAssunto` (`LIMIAR_ONIPRESENTE`,
   `TETO_FALAS_POR_AUTOR`, `TETO_DISCRIMINACAO`, `PISO_ONIPRESENTE_COMPOSTO`,
-  `MINIMO_PUBLICACOES_REGUA`, `MINIMO_PESSOAS`, `MEIA_VIDA`).
+  `MINIMO_PUBLICACOES_REGUA`, `MINIMO_PESSOAS`, `MINIMO_PESSOAS_BASE_MENOR`, `BASE_PARA_CHAO_CHEIO`,
+  `MEIA_VIDA`).
 - **Testes**: `PapoAssuntoExtractorTests` (extração), `PapoAssuntoTests` (domínio),
   `PapoRetoWorkerTests` (corte), `PapoRetoServiceTests` (leitura), `PapoRetoQualidadeTests` (corpus
   sintético ponta a ponta, com o comparativo da régua anterior).
