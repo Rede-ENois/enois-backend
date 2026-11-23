@@ -20,9 +20,24 @@ public class S3ApiException extends ApiException {
 		super(status, code, message);
 	}
 
-	/** O documento XML de erro, do jeito que a S3 manda. */
-	public String toXml(String resource) {
+	/**
+	 * O documento XML de erro, do jeito que a S3 manda.
+	 *
+	 * <p><b>Antes:</b> saía sem {@code <RequestId>} — o {@code errorXml} do controller, que o
+	 * preenchia, não era o caminho usado, e nenhuma resposta tinha o cabeçalho. O SDK imprime o id
+	 * na mensagem de erro e o suporte procura a requisição por ele.</p>
+	 *
+	 * <p><b>Agora:</b> o {@code requestId} do cabeçalho (sorteado pelo {@link S3RequestIdFilter})
+	 * entra no corpo, então as duas metades da mesma resposta dizem o mesmo id.</p>
+	 *
+	 * @param requestId o id da requisição; {@code null} sorteia um — o corpo nunca fica sem id.
+	 */
+	public String toXml(String resource, String requestId) {
+		String id = requestId == null || requestId.isBlank()
+			? java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 16).toUpperCase()
+			: requestId;
 		return new S3Xml().open("Error").element("Code", code()).element("Message", getMessage())
-			.element("Resource", resource == null ? "" : resource).close("Error").toString();
+			.element("Resource", resource == null ? "" : resource).element("RequestId", id)
+			.close("Error").toString();
 	}
 }

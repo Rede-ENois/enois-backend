@@ -1170,6 +1170,30 @@ apaga o bucket que nunca teve objeto. Vermelho antes: `409 BucketNotEmpty`. Muta
 sem a guarda; sem o `updated_by` na conta; `object-lock` fora da lista (esta **sobreviveu** à primeira
 versão do teste, que só exercia quatro entradas — o teste passou a percorrer a lista inteira).
 
+## 4.40 `x-amz-request-id` em toda resposta, e o mesmo id no `<RequestId>` do erro (ciclo 130)
+
+Toda chamada do SDK ao S3 pode trazer um id de requisição. O gateway não trazia nenhum:
+
+| antes | agora |
+|---|---|
+| `200` sem `x-amz-request-id` | `200` com o cabeçalho |
+| `404 NoSuchKey` / `403 AccessDenied` sem o cabeçalho | idem, com o cabeçalho |
+| XML de erro **sem** `<RequestId>` | `<RequestId>` com o **mesmo** valor do cabeçalho |
+
+- O `errorXml` do controller preenchia `<RequestId>`, mas **não era o caminho usado**: o handler de
+  exceção monta o corpo por `S3ApiException.toXml`, que saía sem id — e o cabeçalho não existia em
+  lugar nenhum.
+- O id é sorteado **uma vez** por requisição no `S3RequestIdFilter` (16 hexadecimais maiúsculos, a
+  forma da AWS), guardado no atributo do pedido e escrito no cabeçalho antes da resposta começar. O
+  handler lê o mesmo atributo, então as duas metades concordam.
+- Fora de `/s3` nenhuma resposta muda: o filtro se anula (`shouldNotFilter`).
+- Ids de requisições diferentes são diferentes — um valor fixo não correlaciona nada, e o teste
+  afirma isso.
+
+**Verificação:** `S3GatewayTests` **+1** (`request_id_no_cabecalho_e_no_corpo_do_erro`): `200` com id;
+`404` com id no cabeçalho e no corpo, iguais; ids de duas requisições diferentes. Vermelho antes:
+`200 sem x-amz-request-id`. Mutações **3/3** derrubam: sem o cabeçalho; `<RequestId>` fixo; id fixo.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
